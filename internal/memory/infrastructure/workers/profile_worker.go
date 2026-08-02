@@ -66,6 +66,7 @@ func (w *ProfileWorker) RunOnce(ctx context.Context) {
 			w.logger.Error("memory.profile_worker.panic",
 				zap.Any("panic", r),
 				zap.Stack("stack"))
+			incWorkerPanics("profile_worker")
 		}
 	}()
 
@@ -75,10 +76,14 @@ func (w *ProfileWorker) RunOnce(ctx context.Context) {
 	entities, err := w.entityRepo.ListProfiles(ctx, domain.ScopeFilter{TenantID: w.tenantID, IncludeUserScope: true, IncludeAgentScope: true}, constants.MemoryProfileBatchSize)
 	if err != nil {
 		w.logger.Error("memory.profile_worker.list_profiles_failed", zap.Error(err))
+		incWorkerMessages("profile", w.tenantID, "error")
+		observeWorkerDuration("profile", w.tenantID, time.Since(start).Seconds())
 		return
 	}
 
 	if len(entities) == 0 {
+		incWorkerMessages("profile", w.tenantID, "success")
+		observeWorkerDuration("profile", w.tenantID, time.Since(start).Seconds())
 		return
 	}
 
@@ -103,6 +108,8 @@ func (w *ProfileWorker) RunOnce(ctx context.Context) {
 			zap.Int("rebuild_count", rebuildCount),
 			zap.Int64("latency_ms", time.Since(start).Milliseconds()))
 	}
+	incWorkerMessages("profile", w.tenantID, "success")
+	observeWorkerDuration("profile", w.tenantID, time.Since(start).Seconds())
 }
 
 // rebuildProfile rebuilds profile for a single entity.

@@ -7,6 +7,7 @@ import (
 var (
 	WorkerMessagesProcessed  *prometheus.CounterVec
 	WorkerProcessingDuration *prometheus.HistogramVec
+	workerPanics             *prometheus.CounterVec
 )
 
 func incWorkerMessages(worker, tenant, status string) {
@@ -18,6 +19,12 @@ func incWorkerMessages(worker, tenant, status string) {
 func observeWorkerDuration(worker, tenant string, secs float64) {
 	if WorkerProcessingDuration != nil {
 		WorkerProcessingDuration.WithLabelValues(worker, tenant).Observe(secs)
+	}
+}
+
+func incWorkerPanics(worker string) {
+	if workerPanics != nil {
+		workerPanics.WithLabelValues(worker).Inc()
 	}
 }
 
@@ -38,5 +45,12 @@ func RegisterMetrics(reg prometheus.Registerer) {
 		},
 		[]string{"worker", "tenant_id"},
 	)
-	reg.MustRegister(WorkerMessagesProcessed, WorkerProcessingDuration)
+	workerPanics = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "memory_worker_panics_total",
+			Help: "Total goroutine panics recovered in memory workers",
+		},
+		[]string{"worker"},
+	)
+	reg.MustRegister(WorkerMessagesProcessed, WorkerProcessingDuration, workerPanics)
 }

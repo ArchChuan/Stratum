@@ -14,6 +14,7 @@ import (
 	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
 	mcpport "github.com/byteBuilderX/stratum/internal/mcp/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 )
 
@@ -32,6 +33,7 @@ type InternalRouterDeps struct {
 	MCPForward   mcpport.ServerManager
 	Logger       *zap.Logger
 	Metrics      handler.PlatformMCPExchangeMetrics
+	AuthMetrics  observability.MetricsProvider
 }
 
 func NewInternalRouter(deps InternalRouterDeps) (*gin.Engine, error) {
@@ -60,7 +62,7 @@ func NewInternalRouter(deps InternalRouterDeps) (*gin.Engine, error) {
 		return nil, err
 	}
 	router.POST("/internal/platform-mcp/token/exchange", exchange.Exchange)
-	delegated := router.Group("", middleware.RequireDelegatedScope(deps.Tokens))
+	delegated := router.Group("", middleware.RequireDelegatedScope(deps.Tokens, deps.AuthMetrics))
 	delegated.POST("/internal/platform-assistant/docs/search", capabilities.SearchDocs)
 	delegated.POST("/internal/platform-assistant/diagnostics", capabilities.DiagnoseTenant)
 	delegated.POST("/internal/platform-assistant/proposals", capabilities.ProposeResourceChange)

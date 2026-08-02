@@ -14,6 +14,7 @@ import (
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 	"github.com/golang-jwt/jwt/v5"
 	"go.uber.org/zap"
@@ -55,7 +56,7 @@ func TestInternalRouterTokenExchangeRequiresPlatformMCPIdentity(t *testing.T) {
 }
 
 func TestInternalRouterRejectsMissingTokenExchange(t *testing.T) {
-	_, err := NewInternalRouter(InternalRouterDeps{Logger: zap.NewNop()})
+	_, err := NewInternalRouter(InternalRouterDeps{Logger: zap.NewNop(), AuthMetrics: observability.NoopMetrics{}})
 	if err == nil {
 		t.Fatal("expected missing token exchange dependency to fail")
 	}
@@ -131,7 +132,7 @@ func (internalProposalsFake) Create(
 
 func internalRouterTestDeps(exchange internalTokenExchanger) InternalRouterDeps {
 	return InternalRouterDeps{
-		Exchange: exchange, Tokens: internalTokensFake{}, Logger: zap.NewNop(),
+		Exchange: exchange, Tokens: internalTokensFake{}, Logger: zap.NewNop(), AuthMetrics: observability.NoopMetrics{},
 		Capabilities: handler.PlatformAssistantCapabilityDeps{
 			Docs: internalDocsFake{}, Diagnostics: internalDiagnosticsFake{}, Proposals: internalProposalsFake{},
 		},

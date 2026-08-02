@@ -144,6 +144,7 @@ func buildInternalRouter(container *wiring.Container) (http.Handler, error) {
 		Capabilities: container.PlatformMCP.Capabilities,
 		Logger:       container.Logger,
 		Metrics:      container.Platform.Metrics,
+		AuthMetrics:  container.Platform.Metrics,
 	}
 	if container.MCP != nil && container.MCP.Manager != nil {
 		deps.MCPForward = container.MCP.Manager

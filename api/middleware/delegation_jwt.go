@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
@@ -14,10 +15,16 @@ type delegationVerifier interface {
 	VerifyAPIDelegation(string) (*platformmcp.APIDelegationClaims, error)
 }
 
-func RequireDelegatedScope(verifier delegationVerifier) gin.HandlerFunc {
+func RequireDelegatedScope(verifier delegationVerifier, metrics observability.MetricsProvider) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		claims, ok := verifiedDelegation(c, verifier)
-		if !ok || !matchesDelegatedScope(c, claims) {
+		if !ok {
+			metrics.IncAuthFailure("delegation_verify_failed")
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "delegated scope denied"})
+			return
+		}
+		if !matchesDelegatedScope(c, claims) {
+			metrics.IncAuthFailure("delegation_scope_mismatch")
 			abortDelegatedScope(c)
 			return
 		}

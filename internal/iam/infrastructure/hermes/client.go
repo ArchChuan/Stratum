@@ -8,6 +8,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"go.uber.org/zap"
+
+	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 
 type Event struct {
@@ -24,9 +26,10 @@ type Client struct {
 	handlers map[string][]EventHandler
 	mu       sync.RWMutex
 	logger   *zap.Logger
+	metrics  observability.MetricsProvider
 }
 
-func NewClient(url string, logger *zap.Logger) (*Client, error) {
+func NewClient(url string, logger *zap.Logger, metrics observability.MetricsProvider) (*Client, error) {
 	conn, err := nats.Connect(url)
 	if err != nil {
 		return nil, err
@@ -35,6 +38,7 @@ func NewClient(url string, logger *zap.Logger) (*Client, error) {
 		conn:     conn,
 		handlers: make(map[string][]EventHandler),
 		logger:   logger,
+		metrics:  metrics,
 	}, nil
 }
 
@@ -48,9 +52,11 @@ func (c *Client) Publish(event *Event) error {
 	subject := fmt.Sprintf("events.%s", event.Type)
 	if err := c.conn.Publish(subject, data); err != nil {
 		c.logger.Error("failed to publish event", zap.String("type", event.Type), zap.Error(err))
+		c.metrics.IncHermesEventProcessed(event.Type, "publish_error")
 		return err
 	}
 
+	c.metrics.IncHermesEvent(event.Type)
 	c.logger.Debug("event published", zap.String("type", event.Type), zap.String("source", event.Source))
 	return nil
 }
@@ -65,6 +71,7 @@ func (c *Client) Subscribe(eventType string, handler EventHandler) error {
 		var event Event
 		if err := json.Unmarshal(msg.Data, &event); err != nil {
 			c.logger.Error("failed to unmarshal event", zap.Error(err))
+			c.metrics.IncHermesEventProcessed(eventType, "unmarshal_error")
 			return
 		}
 
@@ -75,6 +82,9 @@ func (c *Client) Subscribe(eventType string, handler EventHandler) error {
 		for _, h := range handlers {
 			if err := h(&event); err != nil {
 				c.logger.Error("event handler error", zap.String("type", eventType), zap.Error(err))
+				c.metrics.IncHermesEventProcessed(eventType, "handler_error")
+			} else {
+				c.metrics.IncHermesEventProcessed(eventType, "ok")
 			}
 		}
 	})

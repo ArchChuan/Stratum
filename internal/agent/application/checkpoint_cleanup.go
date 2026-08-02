@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -19,6 +20,7 @@ type CheckpointCleanupWorker struct {
 	repo     port.CheckpointRepo
 	interval time.Duration
 	logger   *zap.Logger
+	metrics  observability.MetricsProvider
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
@@ -31,12 +33,14 @@ func NewCheckpointCleanupWorker(
 	repo port.CheckpointRepo,
 	interval time.Duration,
 	logger *zap.Logger,
+	metrics observability.MetricsProvider,
 ) *CheckpointCleanupWorker {
 	return &CheckpointCleanupWorker{
 		tenants:  tenants,
 		repo:     repo,
 		interval: interval,
 		logger:   logger,
+		metrics:  metrics,
 		stopCh:   make(chan struct{}),
 	}
 }
@@ -69,9 +73,13 @@ func (w *CheckpointCleanupWorker) Stop() {
 }
 
 func (w *CheckpointCleanupWorker) cleanupExpired(ctx context.Context) {
+	timestamp := float64(time.Now().Unix())
+	w.metrics.SetComponentCycleTimestamp("checkpoint-cleanup", timestamp)
+
 	tenantIDs, err := w.tenants(ctx)
 	if err != nil {
 		w.logger.Error("checkpoint cleanup: list tenants failed", zap.Error(err))
+		w.metrics.IncComponentError("checkpoint-cleanup", "list_tenants")
 		return
 	}
 	logger := w.logger
@@ -88,10 +96,12 @@ func (w *CheckpointCleanupWorker) cleanupExpired(ctx context.Context) {
 				zap.String("tenant_id", tenantID),
 				zap.Error(err),
 			)
+			w.metrics.IncComponentError("checkpoint-cleanup", "delete")
 			continue
 		}
 		total += deleted
 	}
+	w.metrics.RecordComponentCycle("checkpoint-cleanup")
 	if total > 0 {
 		logger.Info("checkpoint cleanup: deleted expired rows",
 			zap.String("worker_id", workerID),

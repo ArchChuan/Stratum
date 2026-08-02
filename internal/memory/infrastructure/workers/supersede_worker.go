@@ -63,6 +63,7 @@ func (w *SupersedeWorker) RunOnce(ctx context.Context) {
 			w.logger.Error("memory.supersede_worker.panic",
 				zap.Any("panic", r),
 				zap.Stack("stack"))
+			incWorkerPanics("supersede_worker")
 		}
 	}()
 
@@ -73,10 +74,14 @@ func (w *SupersedeWorker) RunOnce(ctx context.Context) {
 	recentFacts, err := w.factRepo.ListActive(ctx, w.tenantID, domain.ScopeFilter{IncludeUserScope: true, IncludeAgentScope: true}, constants.MemorySupersedeBatchSize)
 	if err != nil {
 		w.logger.Error("memory.supersede_worker.list_active_failed", zap.Error(err))
+		incWorkerMessages("supersede", w.tenantID, "error")
+		observeWorkerDuration("supersede", w.tenantID, time.Since(start).Seconds())
 		return
 	}
 
 	if len(recentFacts) == 0 {
+		incWorkerMessages("supersede", w.tenantID, "success")
+		observeWorkerDuration("supersede", w.tenantID, time.Since(start).Seconds())
 		return
 	}
 
@@ -153,6 +158,8 @@ outer:
 		w.logger.Info("memory.supersede_worker.batch_complete",
 			zap.Int("superseded_count", supersededCount),
 			zap.Int64("latency_ms", time.Since(start).Milliseconds()))
+		incWorkerMessages("supersede", w.tenantID, "success")
+		observeWorkerDuration("supersede", w.tenantID, time.Since(start).Seconds())
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/gin-gonic/gin"
 )
 
@@ -25,20 +26,23 @@ const (
 
 // JWTMiddleware validates the Bearer token and injects claims into the
 // Gin context. Returns 401 on missing or invalid token.
-func JWTMiddleware(svc iamport.TokenService) gin.HandlerFunc {
+func JWTMiddleware(svc iamport.TokenService, metrics observability.MetricsProvider) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if svc == nil {
+			metrics.IncAuthFailure("jwt_svc_nil")
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
 			return
 		}
 		authHeader := c.GetHeader("Authorization")
 		if !strings.HasPrefix(authHeader, "Bearer ") {
+			metrics.IncAuthFailure("missing_bearer")
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
 			return
 		}
 		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
 		claims, err := svc.Verify(tokenStr)
 		if err != nil || claims == nil {
+			metrics.IncAuthFailure("jwt_verify_failed")
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
 			return
 		}

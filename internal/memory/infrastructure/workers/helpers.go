@@ -39,6 +39,7 @@ func runWithRestart(ctx context.Context, stopCh chan struct{}, logger *zap.Logge
 			defer func() {
 				if r := recover(); r != nil {
 					logger.Error(name+".panic", zap.Any("panic", r), zap.Stack("stack"))
+					incWorkerPanics(name)
 				}
 			}()
 			fn(ctx)

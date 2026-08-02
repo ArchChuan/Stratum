@@ -8,6 +8,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/workflow/application"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,7 +83,7 @@ func (a *runAdvancerFake) execute(ctx context.Context) error {
 func TestDurableWorkerClaimsAndAdvancesWithoutRequestContext(t *testing.T) {
 	runtime := &runtimeFake{run: &domain.Run{ID: "run-1", Status: domain.RunStatusQueued, Generation: 1}, tenant: "tenant-1"}
 	advancer := &runAdvancerFake{}
-	worker := application.NewWorker("worker-1", runtime, advancer, 100*time.Millisecond)
+	worker := application.NewWorker("worker-1", runtime, advancer, 100*time.Millisecond, observability.NoopMetrics{})
 	require.True(t, worker.RunOnce(context.Background()))
 	require.Equal(t, 1, advancer.calls)
 }
@@ -90,7 +91,7 @@ func TestDurableWorkerClaimsAndAdvancesWithoutRequestContext(t *testing.T) {
 func TestWorkerRenewsLeaseDuringLongNode(t *testing.T) {
 	runtime := &runtimeFake{run: &domain.Run{ID: "run-1", Status: domain.RunStatusQueued, Generation: 1}, tenant: "tenant-1"}
 	advancer := &runAdvancerFake{run: func(context.Context) error { time.Sleep(45 * time.Millisecond); return nil }}
-	worker := application.NewWorker("worker-1", runtime, advancer, 20*time.Millisecond)
+	worker := application.NewWorker("worker-1", runtime, advancer, 20*time.Millisecond, observability.NoopMetrics{})
 	require.True(t, worker.RunOnce(context.Background()))
 	runtime.mu.Lock()
 	renewals := runtime.renewals
@@ -102,7 +103,7 @@ func TestWorkerCancelsExecutionContextWhenPersistentCancelObserved(t *testing.T)
 	runtime := &runtimeFake{run: &domain.Run{ID: "run-1", Status: domain.RunStatusQueued, Generation: 1}, tenant: "tenant-1"}
 	started := make(chan struct{})
 	advancer := &runAdvancerFake{run: func(ctx context.Context) error { close(started); <-ctx.Done(); return ctx.Err() }}
-	worker := application.NewWorker("worker-1", runtime, advancer, 20*time.Millisecond)
+	worker := application.NewWorker("worker-1", runtime, advancer, 20*time.Millisecond, observability.NoopMetrics{})
 	done := make(chan bool, 1)
 	go func() { done <- worker.RunOnce(context.Background()) }()
 	<-started
@@ -115,7 +116,7 @@ func TestWorkerCancelsExecutionContextWhenPersistentCancelObserved(t *testing.T)
 func TestTwoWorkersCannotClaimSameRunGeneration(t *testing.T) {
 	runtime := &runtimeFake{run: &domain.Run{ID: "run-1", Status: domain.RunStatusQueued, Generation: 1}, tenant: "tenant-1"}
 	a, b := &runAdvancerFake{}, &runAdvancerFake{}
-	workers := []*application.Worker{application.NewWorker("a", runtime, a, time.Second), application.NewWorker("b", runtime, b, time.Second)}
+	workers := []*application.Worker{application.NewWorker("a", runtime, a, time.Second, observability.NoopMetrics{}), application.NewWorker("b", runtime, b, time.Second, observability.NoopMetrics{})}
 	var wg sync.WaitGroup
 	for _, worker := range workers {
 		wg.Add(1)

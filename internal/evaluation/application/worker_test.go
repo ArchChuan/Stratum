@@ -4,11 +4,13 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 
 func TestWorkerPollOnceProcessesEachTenant(t *testing.T) {
 	runner := &fakeTenantJobRunner{}
-	worker := NewWorker(fakeTenantLister{ids: []string{"tenant-a", "tenant-b"}}, runner, time.Second)
+	worker := NewWorker(fakeTenantLister{ids: []string{"tenant-a", "tenant-b"}}, runner, time.Second, observability.NoopMetrics{})
 
 	if err := worker.PollOnce(context.Background()); err != nil {
 		t.Fatalf("PollOnce returned error: %v", err)

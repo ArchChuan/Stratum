@@ -21,6 +21,7 @@ import (
 	workflowdomain "github.com/byteBuilderX/stratum/internal/workflow/domain"
 	workflowport "github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	workflowpersist "github.com/byteBuilderX/stratum/internal/workflow/infrastructure/persistence"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/gin-gonic/gin"
@@ -226,7 +227,7 @@ func TestWorkflowHTTPPostgresWorkerApprovalRestartAndSSEE2E(t *testing.T) {
 	require.NoError(t, json.Unmarshal(adminListBody, &adminList))
 	require.Equal(t, 1, adminList.Total)
 
-	workerA := workflowapp.NewWorker("workflow-e2e-worker-a", store, runsA, 10*time.Second)
+	workerA := workflowapp.NewWorker("workflow-e2e-worker-a", store, runsA, 10*time.Second, observability.NoopMetrics{})
 	require.True(t, workerA.RunOnce(ctx))
 
 	pausedBody := workflowRequestAs(t, router, http.MethodGet, "/workflow-runs/"+started.RunID, nil, http.StatusOK, "member-a", "member")
@@ -275,7 +276,7 @@ func TestWorkflowHTTPPostgresWorkerApprovalRestartAndSSEE2E(t *testing.T) {
 	// Rebuild the run service and worker from PostgreSQL only to simulate restart.
 	executorB := &workflowE2EExecutor{}
 	runsB := workflowapp.NewRunServiceWithRegistry(store, store, executorB, newID)
-	workerB := workflowapp.NewWorker("workflow-e2e-worker-b", store, runsB, 10*time.Second)
+	workerB := workflowapp.NewWorker("workflow-e2e-worker-b", store, runsB, 10*time.Second, observability.NoopMetrics{})
 	require.True(t, workerB.RunOnce(ctx))
 
 	completedBody := workflowRequest(t, router, http.MethodGet, "/workflow-runs/"+started.RunID, nil, http.StatusOK)
