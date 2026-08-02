@@ -65,6 +65,7 @@ type Agent struct {
 	SkillLookup         agentport.SkillLookup
 	DiagnosticProvider  agentport.DiagnosticEvidenceProvider
 	ProposalService     *agent.ResourceChangeProposalService
+	PromptResolver      *agent.PromptResolver
 }
 
 // ragSearchAdapter wraps *knowledge.RAGService to satisfy
@@ -183,13 +184,12 @@ func (r publishedSkillActivationResolver) ResolveSkills(
 func (c *Container) buildAgent(ctx context.Context) error {
 	db := c.dbOrNil()
 
-	var registry *agent.Registry
 	systemAssistantProfile := agent.BuiltinSystemAssistantProfileSource()
+	var repo agentport.AgentRepo
 	if db != nil {
-		registry = agent.NewRegistry(persistence.NewPgAgentRepo(db), systemAssistantProfile, c.Logger)
-	} else {
-		registry = agent.NewRegistry(nil, systemAssistantProfile, c.Logger)
+		repo = persistence.NewPgAgentRepo(db)
 	}
+	registry := agent.NewRegistry(repo, systemAssistantProfile, c.Logger)
 	if c.Memory != nil && c.Memory.Injector != nil {
 		registry.SetMemoryInjector(c.Memory.Injector)
 	}
@@ -297,6 +297,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		tenantRoleAdapter{service: tenantMemberService(c)}, systemAssistantDiagnosticCollectors(c, a),
 	)
 	deps.OfficialDocsSearch = officialdocs.Search
+	wirePromptResolver(c, a)
 	deps.DiagnosticProvider = a.DiagnosticProvider
 	a.Service = agent.NewAgentService(deps)
 	if db != nil && c.Skill != nil && c.MCP != nil && c.Knowledge != nil &&
@@ -338,4 +339,13 @@ func tenantModelCatalog(resolver agentport.TenantCapabilityResolver) agentport.T
 func modelContextProvider(resolver agentport.TenantCapabilityResolver) agentport.ModelContextProvider {
 	provider, _ := resolver.(agentport.ModelContextProvider)
 	return provider
+}
+
+// wirePromptResolver constructs the PromptResolver and injects the
+// centralized prompt registry for versioned prompt resolution.
+func wirePromptResolver(c *Container, a *Agent) {
+	a.PromptResolver = agent.NewPromptResolver(nil)
+	if c.Prompt != nil && c.Prompt.Registry != nil {
+		a.PromptResolver.SetRegistry(c.Prompt.Registry)
+	}
 }

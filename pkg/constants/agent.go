@@ -76,6 +76,10 @@ const (
 	CompactionMaxTokensFloor = 400
 	// CompactionMaxTokensCeiling caps the compaction output regardless of window.
 	CompactionMaxTokensCeiling = 800
+
+	// MaxFingerprintPayloadBytes caps the serialised ExecutionFingerprint
+	// before it is truncated in span attributes (F1).
+	MaxFingerprintPayloadBytes = 4096
 )
 
 // DynamicRecentGroups returns the number of recent message groups to preserve

@@ -108,6 +108,7 @@ func Run(ctx context.Context, cfg *config.Config, c *wiring.Container, logger *z
 	registerChatCleanup(appHarness, c, logger)
 	registerGuestReaper(appHarness, c, logger)
 	registerWorkflowWorker(appHarness, c, logger)
+	registerAuditCleanup(appHarness, c, logger)
 	c.ReadinessCheck = withPostgresReadiness(appHarness.HealthCheck, func(ctx context.Context) error {
 		db := c.DB()
 		if db == nil {
@@ -150,6 +151,20 @@ func normalizeHarnessError(err error) error {
 		return nil
 	}
 	return fmt.Errorf("run application harness: %w", err)
+}
+
+func registerAuditCleanup(appHarness *harnesspkg.Harness, c *wiring.Container, logger *zap.Logger) {
+	if c.Audit == nil {
+		return
+	}
+	worker := wiring.NewAuditCleanupWorker(c.Audit.Recorder, c.Audit.QueryService, logger)
+	mustRegister(appHarness, harnesspkg.NewSimpleComponent("audit-cleanup", logger,
+		harnesspkg.WithStartFunc(func(ctx context.Context) error {
+			go worker.Run(ctx)
+			return nil
+		}),
+		harnesspkg.WithStopFunc(func(context.Context) error { return nil }),
+	), logger)
 }
 
 func registerWorkflowWorker(appHarness *harnesspkg.Harness, c *wiring.Container, logger *zap.Logger) {

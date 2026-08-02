@@ -60,6 +60,43 @@ type PrometheusMetrics struct {
 	hermesEventsTotal     *prometheus.CounterVec
 	hermesEventsProcessed *prometheus.CounterVec
 
+	// Agent KPI (F3)
+	agentTaskCompletedTotal *prometheus.CounterVec
+	agentTaskDuration       *prometheus.HistogramVec
+	agentCostPerTask        *prometheus.HistogramVec
+	agentEvalScore          *prometheus.GaugeVec
+	agentConversationTurns  *prometheus.HistogramVec
+
+	// Scheduler (F3)
+	scheduledFireTotal *prometheus.CounterVec
+
+	// Reranker (F3)
+	rerankRequestTotal    *prometheus.CounterVec
+	rerankDurationSeconds *prometheus.HistogramVec
+
+	// Model Router (F3)
+	routeFallbackTotal *prometheus.CounterVec
+	budgetRatio        *prometheus.GaugeVec
+
+	// Audit (F3)
+	auditEventTotal      *prometheus.CounterVec
+	auditWriteQueueDepth prometheus.Gauge
+
+	// Collab (F3)
+	collabPlanTotal    *prometheus.CounterVec
+	collabTaskDuration *prometheus.HistogramVec
+
+	// Optimizer (F3)
+	optimizerCandidateTotal *prometheus.CounterVec
+	optimizerCycleDuration  prometheus.Histogram
+
+	// Operation Gate (F3)
+	operationProposalTotal *prometheus.CounterVec
+	approvalLatency        *prometheus.HistogramVec
+
+	// Schedule skew (F3)
+	scheduleSkewSeconds prometheus.Histogram
+
 	logger *zap.Logger
 }
 
@@ -135,7 +172,7 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 	reg := prometheus.NewRegistry()
 	factory := promauto.With(reg)
 
-	return &PrometheusMetrics{
+	m := &PrometheusMetrics{
 		reg: reg,
 		// HTTP
 		httpRequestsTotal: factory.NewCounterVec(
@@ -283,6 +320,85 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 
 		logger: logger,
 	}
+	m.registerF3Metrics(factory, latencyBuckets)
+	return m
+}
+
+// registerF3Metrics initializes the Phase 1 KPI / observability metrics.
+func (m *PrometheusMetrics) registerF3Metrics(factory promauto.Factory, latencyBuckets []float64) {
+	m.agentTaskCompletedTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "agent_task_completed_total", Help: "Agent tasks completed by type and outcome"},
+		[]string{"agent_id", "agent_type", "task_kind", "outcome", "tenant_id"},
+	)
+	m.agentTaskDuration = factory.NewHistogramVec(
+		prometheus.HistogramOpts{Name: "agent_task_duration_seconds", Help: "Agent task wall-clock duration", Buckets: []float64{0.5, 1, 2, 5, 10, 30, 60, 120, 300}},
+		[]string{"agent_id", "task_kind"},
+	)
+	m.agentCostPerTask = factory.NewHistogramVec(
+		prometheus.HistogramOpts{Name: "agent_cost_per_task_usd", Help: "Agent task cost in USD", Buckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5}},
+		[]string{"agent_id", "task_kind"},
+	)
+	m.agentEvalScore = factory.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "agent_eval_score", Help: "Latest agent evaluation score per metric"},
+		[]string{"agent_id", "metric"},
+	)
+	m.agentConversationTurns = factory.NewHistogramVec(
+		prometheus.HistogramOpts{Name: "agent_conversation_turns", Help: "Conversation turn count per execution", Buckets: []float64{1, 2, 3, 5, 8, 13, 21, 34}},
+		[]string{"agent_id"},
+	)
+	m.scheduledFireTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "scheduled_fire_total", Help: "Schedule fires by type and status"},
+		[]string{"schedule_type", "status"},
+	)
+	m.rerankRequestTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "rerank_request_total", Help: "Rerank requests by model and status"},
+		[]string{"model", "status"},
+	)
+	m.rerankDurationSeconds = factory.NewHistogramVec(
+		prometheus.HistogramOpts{Name: "rerank_duration_seconds", Help: "Rerank request duration", Buckets: latencyBuckets},
+		[]string{"model"},
+	)
+	m.routeFallbackTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "route_fallback_total", Help: "Model route fallback events"},
+		[]string{"from_model", "to_model"},
+	)
+	m.budgetRatio = factory.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "budget_ratio", Help: "Current budget consumption ratio"},
+		[]string{"scope"},
+	)
+	m.auditEventTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "audit_event_total", Help: "Audit events by risk level and outcome"},
+		[]string{"risk", "outcome"},
+	)
+	m.auditWriteQueueDepth = factory.NewGauge(
+		prometheus.GaugeOpts{Name: "audit_write_queue_depth", Help: "Current audit write buffer queue depth"},
+	)
+	m.collabPlanTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "collab_plan_total", Help: "Collaboration plans created by strategy"},
+		[]string{"strategy"},
+	)
+	m.collabTaskDuration = factory.NewHistogramVec(
+		prometheus.HistogramOpts{Name: "collab_task_duration_seconds", Help: "Collaboration task execution duration", Buckets: latencyBuckets},
+		[]string{"strategy"},
+	)
+	m.optimizerCandidateTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "optimizer_candidate_total", Help: "Optimization candidates by strategy and outcome"},
+		[]string{"strategy", "outcome"},
+	)
+	m.optimizerCycleDuration = factory.NewHistogram(
+		prometheus.HistogramOpts{Name: "optimizer_cycle_duration_seconds", Help: "Optimizer cycle wall-clock duration", Buckets: []float64{1, 5, 15, 30, 60, 120, 300, 600}},
+	)
+	m.operationProposalTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "operation_proposal_total", Help: "Operation proposals by kind and outcome"},
+		[]string{"kind", "outcome"},
+	)
+	m.approvalLatency = factory.NewHistogramVec(
+		prometheus.HistogramOpts{Name: "approval_latency_seconds", Help: "Approval decision latency", Buckets: latencyBuckets},
+		[]string{"kind"},
+	)
+	m.scheduleSkewSeconds = factory.NewHistogram(
+		prometheus.HistogramOpts{Name: "schedule_skew_seconds", Help: "Schedule fire time skew", Buckets: []float64{0.1, 0.5, 1, 5, 10, 30, 60, 300}},
+	)
 }
 
 // Registerer returns the private prometheus.Registerer so callers (e.g. pipeline)
@@ -509,4 +625,98 @@ func (m *PrometheusMetrics) IncHermesEvent(eventType string) {
 
 func (m *PrometheusMetrics) IncHermesEventProcessed(eventType, status string) {
 	m.hermesEventsProcessed.WithLabelValues(eventType, status).Inc()
+}
+
+// --- Agent KPI (F3) ---
+
+func (m *PrometheusMetrics) IncAgentTaskCompleted(agentID, agentType, taskKind, outcome string) {
+	m.agentTaskCompletedTotal.WithLabelValues(agentID, agentType, taskKind, outcome, "").Inc()
+}
+
+func (m *PrometheusMetrics) RecordAgentTaskLatency(agentID, taskKind string, seconds float64) {
+	m.agentTaskDuration.WithLabelValues(agentID, taskKind).Observe(seconds)
+}
+
+func (m *PrometheusMetrics) RecordAgentCostPerTask(agentID, taskKind string, costUSD float64) {
+	m.agentCostPerTask.WithLabelValues(agentID, taskKind).Observe(costUSD)
+}
+
+func (m *PrometheusMetrics) RecordAgentEvalScore(agentID, metric string, score float64) {
+	m.agentEvalScore.WithLabelValues(agentID, metric).Set(score)
+}
+
+func (m *PrometheusMetrics) RecordAgentConversationTurn(agentID string, turnCount int) {
+	m.agentConversationTurns.WithLabelValues(agentID).Observe(float64(turnCount))
+}
+
+// --- Scheduler (F3) ---
+
+func (m *PrometheusMetrics) IncScheduledFire(scheduleType, status string) {
+	m.scheduledFireTotal.WithLabelValues(scheduleType, status).Inc()
+}
+
+// --- Reranker (F3) ---
+
+func (m *PrometheusMetrics) IncRerankRequest(model, status string) {
+	m.rerankRequestTotal.WithLabelValues(model, status).Inc()
+}
+
+func (m *PrometheusMetrics) RecordRerankDuration(model string, seconds float64) {
+	m.rerankDurationSeconds.WithLabelValues(model).Observe(seconds)
+}
+
+// --- Model Router (F3) ---
+
+func (m *PrometheusMetrics) IncRouteFallback(fromModel, toModel string) {
+	m.routeFallbackTotal.WithLabelValues(fromModel, toModel).Inc()
+}
+
+func (m *PrometheusMetrics) RecordBudgetRatio(scope string, pct float64) {
+	m.budgetRatio.WithLabelValues(scope).Set(pct)
+}
+
+// --- Audit (F3) ---
+
+func (m *PrometheusMetrics) IncAuditEvent(risk, outcome string) {
+	m.auditEventTotal.WithLabelValues(risk, outcome).Inc()
+}
+
+func (m *PrometheusMetrics) RecordAuditWriteQueueDepth(depth int) {
+	m.auditWriteQueueDepth.Set(float64(depth))
+}
+
+// --- Collab (F3) ---
+
+func (m *PrometheusMetrics) IncCollabPlan(strategy string) {
+	m.collabPlanTotal.WithLabelValues(strategy).Inc()
+}
+
+func (m *PrometheusMetrics) RecordCollabTaskDuration(strategy string, seconds float64) {
+	m.collabTaskDuration.WithLabelValues(strategy).Observe(seconds)
+}
+
+// --- Optimizer (F3) ---
+
+func (m *PrometheusMetrics) IncOptimizerCandidate(strategy, outcome string) {
+	m.optimizerCandidateTotal.WithLabelValues(strategy, outcome).Inc()
+}
+
+func (m *PrometheusMetrics) RecordOptimizerCycleDuration(seconds float64) {
+	m.optimizerCycleDuration.Observe(seconds)
+}
+
+// --- Operation Gate (F3) ---
+
+func (m *PrometheusMetrics) IncOperationProposal(kind, outcome string) {
+	m.operationProposalTotal.WithLabelValues(kind, outcome).Inc()
+}
+
+func (m *PrometheusMetrics) RecordApprovalLatency(kind string, seconds float64) {
+	m.approvalLatency.WithLabelValues(kind).Observe(seconds)
+}
+
+// --- Schedule skew (F3) ---
+
+func (m *PrometheusMetrics) RecordScheduleSkew(skewSeconds float64) {
+	m.scheduleSkewSeconds.Observe(skewSeconds)
 }
