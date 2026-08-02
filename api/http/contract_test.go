@@ -27,6 +27,8 @@ import (
 	"github.com/byteBuilderX/stratum/config"
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
+	auditapp "github.com/byteBuilderX/stratum/internal/audit/application"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
@@ -90,6 +92,7 @@ func TestContracts(t *testing.T) {
 	contractAdminTR := contractAdminTenantRepo{}
 	contractTenantR := contractTenantRepo{}
 	contractInvR := contractInvitationRepo{}
+	contractAuditRepo := contractAuditRepo{}
 
 	dddRouter := apihttp.NewRouter(&wiring.Container{
 		Config: cfg, Logger: logger,
@@ -123,6 +126,10 @@ func TestContracts(t *testing.T) {
 			AdminService:      iamapp.NewAdminService(contractAdminTR),
 			TenantService:     iamapp.NewTenantService(contractTenantR, logger),
 			InvitationService: iamapp.NewInvitationService(contractInvR),
+		},
+		Audit: &wiring.Audit{
+			Recorder:     auditapp.NewAuditService(contractAuditRepo, observability.NoopMetrics{}, logger),
+			QueryService: auditapp.NewAuditService(contractAuditRepo, observability.NoopMetrics{}, logger),
 		},
 	})
 
@@ -496,6 +503,21 @@ type contractCandidateRepo struct{}
 func (contractCandidateRepo) Reject(context.Context, string, string, domain.CandidateCommand) (domain.CandidateSummary, error) {
 	return domain.CandidateSummary{}, domain.ErrCandidateCommandConflict
 }
+
+// ── Audit stub ─────────────────────────────────────────────────────────────
+
+type contractAuditRepo struct{}
+
+func (contractAuditRepo) InsertBatch(_ context.Context, _ []auditdomain.AuditEvent) error {
+	return nil
+}
+func (contractAuditRepo) Query(_ context.Context, _ auditdomain.AuditFilter) ([]auditdomain.AuditEvent, error) {
+	return nil, nil
+}
+func (contractAuditRepo) GetByID(_ context.Context, _ string) (*auditdomain.AuditEvent, error) {
+	return nil, nil
+}
+func (contractAuditRepo) DeleteOlderThan(_ context.Context, _ time.Time) error { return nil }
 
 func mustGeneratePEM(t *testing.T) string {
 	t.Helper()
