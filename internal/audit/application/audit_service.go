@@ -43,6 +43,9 @@ var (
 
 // NewAuditService creates the audit service and starts the batch writer.
 func NewAuditService(repo AuditRepo, metrics observability.MetricsProvider, logger *zap.Logger) *AuditService {
+	if metrics == nil {
+		metrics = observability.NoopMetrics{}
+	}
 	s := &AuditService{
 		repo:    repo,
 		metrics: metrics,

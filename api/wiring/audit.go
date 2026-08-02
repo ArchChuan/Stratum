@@ -7,6 +7,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/audit/application"
 	"github.com/byteBuilderX/stratum/internal/audit/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
@@ -22,9 +23,7 @@ func buildAudit(db *pgxpool.Pool, logger *zap.Logger) *Audit {
 		return nil
 	}
 	repo := persistence.NewPgAuditRepo(db)
-	// Use NoopMetrics for now — metrics provider is injected later at the
-	// agent level. Audit metrics use the platform-level provider wired separately.
-	svc := application.NewAuditService(repo, nil, logger)
+	svc := application.NewAuditService(repo, observability.NoopMetrics{}, logger)
 	return &Audit{
 		Recorder:     svc,
 		QueryService: svc,
