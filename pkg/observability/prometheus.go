@@ -60,6 +60,12 @@ type PrometheusMetrics struct {
 	hermesEventsTotal     *prometheus.CounterVec
 	hermesEventsProcessed *prometheus.CounterVec
 
+	// Reaper
+	reaperCyclesTotal    *prometheus.CounterVec
+	reaperGuestsDeleted  prometheus.Counter
+	reaperDeleteErrors   *prometheus.CounterVec
+	reaperCycleTimestamp prometheus.Gauge
+
 	logger *zap.Logger
 }
 
@@ -279,6 +285,22 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 		hermesEventsProcessed: factory.NewCounterVec(
 			prometheus.CounterOpts{Name: "hermes_events_processed_total", Help: "Total Hermes events processed"},
 			[]string{"event_type", "status"},
+		),
+
+		// Reaper
+		reaperCyclesTotal: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "reaper_cycles_total", Help: "Guest reaper cycles by outcome"},
+			[]string{"outcome"},
+		),
+		reaperGuestsDeleted: factory.NewCounter(
+			prometheus.CounterOpts{Name: "reaper_guests_deleted_total", Help: "Total expired guests deleted"},
+		),
+		reaperDeleteErrors: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "reaper_delete_errors_total", Help: "Reaper delete errors by phase"},
+			[]string{"phase"},
+		),
+		reaperCycleTimestamp: factory.NewGauge(
+			prometheus.GaugeOpts{Name: "reaper_last_cycle_timestamp_seconds", Help: "Unix timestamp of last reaper cycle"},
 		),
 
 		logger: logger,
@@ -509,4 +531,22 @@ func (m *PrometheusMetrics) IncHermesEvent(eventType string) {
 
 func (m *PrometheusMetrics) IncHermesEventProcessed(eventType, status string) {
 	m.hermesEventsProcessed.WithLabelValues(eventType, status).Inc()
+}
+
+// --- Reaper ---
+
+func (m *PrometheusMetrics) IncReaperCycle(outcome string) {
+	m.reaperCyclesTotal.WithLabelValues(outcome).Inc()
+}
+
+func (m *PrometheusMetrics) SetReaperCycleTimestamp(ts float64) {
+	m.reaperCycleTimestamp.Set(ts)
+}
+
+func (m *PrometheusMetrics) IncReaperGuestDeleted() {
+	m.reaperGuestsDeleted.Inc()
+}
+
+func (m *PrometheusMetrics) IncReaperDeleteError(phase string) {
+	m.reaperDeleteErrors.WithLabelValues(phase).Inc()
 }

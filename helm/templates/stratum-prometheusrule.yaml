@@ -1,0 +1,58 @@
+{{- if .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stratum-ai
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: stratum-ai
+      rules:
+        - alert: StratumReaperDown
+          expr: (time() - reaper_last_cycle_timestamp_seconds) > 7200
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: 'Guest reaper 超过 2h 未运行 (last={{ `{{ $value | humanizeDuration }}` }} ago)'
+            description: >
+              Instance: {{ `{{ $labels.instance }}` }},
+              Pod: {{ `{{ $labels.pod }}` }},
+              LastCycle: {{ `{{ $value | humanizeDuration }}` }} ago,
+              Threshold: 7200s (2h)
+
+        - alert: StratumReaperDeleteErrors
+          expr: increase(reaper_delete_errors_total[1h]) > 0
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: 'Guest reaper 删除错误 (1h 增加 {{ `{{ $value }}` }})'
+            description: >
+              Increase1h: {{ `{{ $value }}` }},
+              Phase: {{ `{{ $labels.phase }}` }},
+              Pod: {{ `{{ $labels.pod }}` }}
+
+        - alert: StratumReaperDeleteErrorsCritical
+          expr: increase(reaper_delete_errors_total[4h]) > 20
+          for: 15m
+          labels: { severity: critical }
+          annotations:
+            summary: 'Guest reaper 4h 错误累积 {{ `{{ $value }}` }} 告警'
+            description: >
+              Increase4h: {{ `{{ $value }}` }},
+              Phase: {{ `{{ $labels.phase }}` }},
+              Pod: {{ `{{ $labels.pod }}` }}
+
+        - alert: StratumReaperCycleErrors
+          expr: increase(reaper_cycles_total{outcome="error"}[1h]) >= 3
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: 'Guest reaper 最近 1h 有 {{ `{{ $value }}` }} 次错误周期'
+            description: >
+              ErrorCycles: {{ `{{ $value }}` }} (1h),
+              Pod: {{ `{{ $labels.pod }}` }}
+{{- end }}

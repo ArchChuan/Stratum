@@ -62,6 +62,12 @@ type MetricsProvider interface {
 	// Hermes
 	IncHermesEvent(eventType string)
 	IncHermesEventProcessed(eventType, status string)
+
+	// Reaper
+	IncReaperCycle(outcome string)
+	SetReaperCycleTimestamp(ts float64)
+	IncReaperGuestDeleted()
+	IncReaperDeleteError(phase string)
 }
 
 // NoopMetrics satisfies MetricsProvider with no-ops. Safe for tests and disabled mode.
@@ -111,3 +117,7 @@ func (NoopMetrics) IncKnowledgeIngestInFlight()                                 
 func (NoopMetrics) DecKnowledgeIngestInFlight()                                   {}
 func (NoopMetrics) IncHermesEvent(_ string)                                       {}
 func (NoopMetrics) IncHermesEventProcessed(_, _ string)                           {}
+func (NoopMetrics) IncReaperCycle(_ string)                                       {}
+func (NoopMetrics) SetReaperCycleTimestamp(_ float64)                             {}
+func (NoopMetrics) IncReaperGuestDeleted()                                        {}
+func (NoopMetrics) IncReaperDeleteError(_ string)                                 {}
