@@ -952,3 +952,55 @@ tests:
       - eval_time: 28m
         alertname: StratumCriticalHTTPP95Latency
         exp_alerts: []
+
+  - name: workload rules detect slow repeated unhealthy exits
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="stratum",pod="slow-crash-pod",container="stratum"}'
+        values: '0x61 1x60 2x10'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="stratum",pod="slow-crash-pod",container="stratum",reason="Error"}'
+        values: '1x131'
+      - series: 'kube_pod_info{namespace="stratum",pod="slow-crash-pod",node="remote-node"}'
+        values: '1x131'
+      - series: 'kube_pod_owner{namespace="stratum",pod="slow-crash-pod",owner_kind="ReplicaSet",owner_name="slow-crash-rs"}'
+        values: '1x131'
+      - series: 'kube_replicaset_owner{namespace="stratum",replicaset="slow-crash-rs",owner_kind="Deployment",owner_name="stratum"}'
+        values: '1x131'
+    alert_rule_test:
+      - eval_time: 130m
+        alertname: StratumPodUnhealthyExit
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum
+              environment: remote-test
+              component: workload
+              alert_family: pod-health
+              namespace: stratum
+              deployment: stratum
+              node: remote-node
+              pod: slow-crash-pod
+              container: stratum
+            exp_annotations:
+              summary: Stratum container exits with non-zero status repeatedly
+              description: A container restarted at least twice in two hours with a non-zero exit reason (current value 2).
+              dashboard_url: /d/stratum-resources
+              runbook_url: /docs/operations/alerts/workloads.md#pod-unhealthy-exit
+
+  - name: workload rules do not alert on a single rollout restart
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="stratum",pod="rollout-pod",container="stratum"}'
+        values: '0x61 1x69'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="stratum",pod="rollout-pod",container="stratum",reason="Error"}'
+        values: '1x130'
+      - series: 'kube_pod_info{namespace="stratum",pod="rollout-pod",node="remote-node"}'
+        values: '1x130'
+      - series: 'kube_pod_owner{namespace="stratum",pod="rollout-pod",owner_kind="ReplicaSet",owner_name="rollout-rs"}'
+        values: '1x130'
+      - series: 'kube_replicaset_owner{namespace="stratum",replicaset="rollout-rs",owner_kind="Deployment",owner_name="stratum"}'
+        values: '1x130'
+    alert_rule_test:
+      - eval_time: 130m
+        alertname: StratumPodUnhealthyExit
+        exp_alerts: []

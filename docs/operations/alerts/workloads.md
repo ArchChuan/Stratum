@@ -55,3 +55,14 @@ probe 和发布顺序定位；若新版本相关则回滚，恢复后观察重�
 影响：期望副本无法启动、冗余下降；紧急度：warning。查询
 `kube_pod_status_phase{namespace="stratum",phase="Pending"}`。先看 scheduler events，再查节点资源、PVC 和
 image pull；按证据扩容/修复调度约束，禁止盲目反复重建。
+
+<a id="pod-unhealthy-exit"></a>
+
+## StratumPodUnhealthyExit
+
+影响：容器以非零退出码反复崩溃，可能伴随功能间歇不可用；紧急度：warning。查询
+`kube_pod_container_status_last_terminated_reason{namespace="stratum",reason=~"Error|OOMKilled"}` 定位
+最近终止原因（如 panic 栈、OOM），再对照 `kubectl logs -n stratum <pod> --previous --tail=200` 与
+events。此告警覆盖“每小时一次”的低频崩溃——`StratumPodRestartingFrequently`（10 分钟 3 次）和
+`StratumPodCumulativeRestarts`（30 分钟 5 次）均可能漏报。若是新版本相关则回滚 revision；若是应用
+panic，按栈定位并修复后重新发布。恢复后观察 2 小时窗口重启增量归零且 resolved 已送达。

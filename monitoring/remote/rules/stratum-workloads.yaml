@@ -79,3 +79,22 @@ groups:
           description: The pod has remained pending for fifteen minutes (current value {{ $value }}).
           dashboard_url: /d/stratum-resources
           runbook_url: /docs/operations/alerts/workloads.md#pod-pending-too-long
+
+      - alert: StratumPodUnhealthyExit
+        expr: |
+          (increase(kube_pod_container_status_restarts_total{namespace="stratum"}[2h]) >= 2
+            and on (namespace, pod, container)
+              kube_pod_container_status_last_terminated_reason{namespace="stratum",reason=~"Error|OOMKilled"})
+            * on (namespace, pod) group_left (node, deployment) stratum:kube_pod:placement
+        for: 5m
+        labels:
+          severity: warning
+          service: stratum
+          environment: remote-test
+          component: workload
+          alert_family: pod-health
+        annotations:
+          summary: Stratum container exits with non-zero status repeatedly
+          description: A container restarted at least twice in two hours with a non-zero exit reason (current value {{ $value }}).
+          dashboard_url: /d/stratum-resources
+          runbook_url: /docs/operations/alerts/workloads.md#pod-unhealthy-exit
