@@ -25,6 +25,8 @@ require 'release-verification\.schema\.json' 'release receipt is not schema vali
 require 'migration_check:\$migration' 'release receipt does not record migration status'
 require 'health_check:\$health' 'release receipt does not record health status'
 require 'rollback_check:\$rollback' 'release receipt does not record rollback status'
+require 'prior_digests:' 'release receipt does not record prior digests'
+require 'rollback_basis:\$rollback_basis' 'release receipt does not record rollback basis'
 
 if grep -Eq 'type=raw,value=\$\{\{[[:space:]]*github\.sha|tags:.*\$\{\{[[:space:]]*github\.sha' "$workflow"; then
   fail 'image tags still use the workflow file SHA'
