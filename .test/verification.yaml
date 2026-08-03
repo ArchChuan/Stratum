@@ -48,6 +48,13 @@ risk:
         - pkg/storage/milvus/**
         - pkg/storage/redis/**
         - internal/llmgateway/**
+    - id: dependency-upgrade
+      level: R3
+      paths:
+        - go.mod
+        - go.sum
+        - web/package.json
+        - web/package-lock.json
     - id: deployment
       level: R3
       paths: [.github/workflows/**, helm/**, k8s/**]

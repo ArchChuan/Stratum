@@ -9,7 +9,7 @@
 	k8s-deploy k8s-delete k8s-logs \
 	helm-install helm-upgrade helm-uninstall helm-diff helm-lint \
 	migration-guardrails e2e-attestation-check test-verify-plan test-verify-fast test-verify-before-pr test-verify-local test-verify-ci \
-	test-verify-attestation test-verify-report ci-backend ci-frontend ci-docker \
+	test-verify-attestation test-verify-report full-regression ci-backend ci-frontend ci-docker \
 	cd-deploy-dev cd-deploy-staging cd-deploy-prod cd-validate ci-cd-full \
 	agent-instructions agent-instructions-check \
 	code-quality code-quality-baseline risk-guardrails \
@@ -265,6 +265,10 @@ test-verify-report:
 	bash scripts/quality/check-local-verification-report.sh
 
 test-verify-ci: test-verify-local test-verify-report
+
+# ─── 全量回归：依赖升级或发布前强制按 R3（含 soak）跑全链路 ──────────
+full-regression:
+	TEST_VERIFY_RISK_LEVEL=R3 $(MAKE) test-verify-before-pr
 
 tool-permission-test:
 	bash scripts/quality/tool-permission-test.sh
