@@ -110,6 +110,23 @@ EOF
     [[ "${file}" == 99-* ]] && id=99
     write_category "${out}/reports/${file}" "${id}"
   done
+  cat >"${out}/reports/00-question-bank-index.md" <<'EOF'
+# 题库索引（按题号）
+
+## 分类速览
+
+测试索引速览表。
+
+## 按题号索引
+
+| 题号 | 题目 | 位置 |
+|---|---|---|
+| Q01 | 测试题 | [09-architecture-and-production-readiness.md](09-architecture-and-production-readiness.md) |
+
+## 维护说明
+
+- 最近更新：2026-07-09
+EOF
   cat >"${out}/reports/99-unclassified.md" <<'EOF'
 # 待分类
 
@@ -144,10 +161,9 @@ run_task() {
   local out="$1" mode="${2:-success}"
   STRATUM_ROOT="${ROOT}" \
     AGENT_INTERVIEW_OUT_DIR="${out}" \
-    AGENT_INTERVIEW_CODEX_MODEL='' \
     AGENT_INTERVIEW_RUN_ID=20260724-080000 \
     AGENT_INTERVIEW_REPORT_DATE=2026-07-24 \
-    CODEX_BIN="${FAKE_CODEX}" \
+    AGENT_INTERVIEW_BIN="${FAKE_CODEX}" \
     FAKE_CODEX_MODE="${mode}" \
     "${TASK}" --fuse-only
 }
@@ -161,7 +177,26 @@ run_task "${out}"
 "${VALIDATOR}" --library "${out}/reports"
 grep -Fq 'Q-1-generated' "${out}/reports/01-agent-runtime-and-workflow.md" || \
   fail 'successful fusion did not publish generated question'
+grep -Fq 'Q-1-base' "${out}/reports/01-agent-runtime-and-workflow.md" || \
+  fail 'full reconstruction dropped pre-existing stable entries instead of merging'
+grep -Fq '## 3. 热门面试题与结合项目的答案' "${out}/reports/01-agent-runtime-and-workflow.md" || \
+  fail 'full reconstruction did not emit the 0-7 article structure'
 [[ ! -e "${out}/reports/inbox/20260724-080000.md" ]] || fail 'successful fusion retained consumed input'
+
+generate_out="${TEST_ROOT}/generate"
+build_library "${generate_out}"
+if ! STRATUM_ROOT="${ROOT}" \
+  AGENT_INTERVIEW_OUT_DIR="${generate_out}" \
+  AGENT_INTERVIEW_RUN_ID=20260724-080000 \
+  AGENT_INTERVIEW_REPORT_DATE=2026-07-24 \
+  AGENT_INTERVIEW_BIN="${FAKE_CODEX}" \
+  "${TASK}" --generate-and-fuse \
+  >"${TEST_ROOT}/generate.out" 2>&1; then
+  cat "${TEST_ROOT}/generate.out" >&2
+  fail 'generate-and-fuse with fake researcher failed'
+fi
+grep -Fq 'Q-1-generated' "${generate_out}/reports/01-agent-runtime-and-workflow.md" || \
+  fail 'generate-and-fuse did not fuse the generated report'
 
 find "${out}/reports" -maxdepth 1 -type f -name '*.md' -print0 | sort -z | \
   xargs -0 sha256sum >"${TEST_ROOT}/before-repeat.sha"
@@ -214,7 +249,7 @@ mkdir -p "${deployed_dir}"
 cp "${TASK}" "${deployed_dir}/daily-agent-interview.sh"
 if ! STRATUM_ROOT="${ROOT}" \
   AGENT_INTERVIEW_OUT_DIR="${out}" \
-  CODEX_BIN="${FAKE_CODEX}" \
+  AGENT_INTERVIEW_BIN="${FAKE_CODEX}" \
   "${deployed_dir}/daily-agent-interview.sh" --dry-run \
   >"${TEST_ROOT}/deployed-dry-run.out" 2>&1; then
   cat "${TEST_ROOT}/deployed-dry-run.out" >&2

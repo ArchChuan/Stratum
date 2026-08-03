@@ -65,7 +65,7 @@ done < <(find "${library}" -maxdepth 1 -type l -print | sort)
 
 for category in "${AGENT_INTERVIEW_CATEGORY_FILES[@]}"; do
   for heading in "${AGENT_INTERVIEW_REQUIRED_HEADINGS[@]}"; do
-    count="$(grep -Fxc "${heading}" "${library}/${category}" || true)"
+    count="$(grep -cE "^## .*${heading}" "${library}/${category}" || true)"
     [[ "${count}" -eq 1 ]] || fail "missing required heading '${heading}' in ${category}"
   done
 done
