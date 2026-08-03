@@ -113,6 +113,23 @@ EOF
     [[ "${file}" == 99-* ]] && id=99
     write_category "${library}/${file}" "${id}"
   done
+  cat >"${library}/00-question-bank-index.md" <<'EOF'
+# 题库索引（按题号）
+
+## 分类速览
+
+测试索引速览表。
+
+## 按题号索引
+
+| 题号 | 题目 | 位置 |
+|---|---|---|
+| Q01 | 测试题 | [09-architecture-and-production-readiness.md](09-architecture-and-production-readiness.md) |
+
+## 维护说明
+
+- 最近更新：2026-07-23
+EOF
   rm -f "${library}/99-unclassified.md"
   cat >"${library}/99-unclassified.md" <<'EOF'
 # 待分类
@@ -159,6 +176,129 @@ assert_rejected() {
   }
 }
 
+# 全量重构版式（## 0. 分类边界与融合说明 … ## 7. 参考来源）也必须是合法库。
+write_reconstructed_category() {
+  local path="$1" id="$2"
+  cat >"${path}" <<EOF
+# Test Category（全量重构）
+
+## 0. 分类边界与融合说明
+
+重构版式边界。
+
+## 1. 项目关键知识
+
+重构版式项目知识。
+
+## 2. 流程与架构图
+
+重构版式架构图。
+
+## 3. 热门面试题与结合项目的答案
+
+### Q-${id}-question 测试问题
+
+- 作答要点：测试答案。
+- 深挖问题：测试追问。
+- Stratum 实现与边界：测试边界。
+- 相关源码/文档：\`docs/agent/agent.md\`
+- 来源：SRC-test
+- 首次收录：2026-07-09
+- 最近更新：2026-07-23
+
+## 4. 趋势与观点
+
+### T-${id}-trend 测试趋势
+
+测试趋势正文。
+
+## 5. Stratum 可补强点
+
+### G-${id}-gap 测试补强点
+
+测试建议。
+
+## 6. 跟踪关键词
+
+- test keyword
+
+## 7. 参考来源
+
+### SRC-test
+
+- URL: https://example.com/test
+- 标题: Test Source
+- 类型: official
+- 首次收录: 2026-07-09
+- 最近核验: 2026-07-23
+EOF
+}
+
+build_reconstructed_library() {
+  local library="$1" file id
+  mkdir -p "${library}/inbox"
+  cp "${valid_library}/README.md" "${library}/README.md"
+  ln -s README.md "${library}/latest.md"
+  for file in "${CATEGORY_FILES[@]}"; do
+    id="${file%%-*}"
+    id="${id#0}"
+    [[ "${file}" == 99-* ]] && id=99
+    write_reconstructed_category "${library}/${file}" "${id}"
+  done
+  cat >"${library}/00-question-bank-index.md" <<'EOF'
+# 题库索引（按题号）
+
+## 分类速览
+
+重构版式索引速览表。
+
+## 按题号索引
+
+| 题号 | 题目 | 位置 |
+|---|---|---|
+| Q01 | 测试题 | [09-architecture-and-production-readiness.md](09-architecture-and-production-readiness.md) |
+
+## 维护说明
+
+- 最近更新：2026-07-23
+EOF
+  cat >"${library}/99-unclassified.md" <<'EOF'
+# 待分类
+
+## 0. 分类边界与融合说明
+
+只承载不能唯一分类的条目。
+
+## 1. 项目关键知识
+
+当前无。
+
+## 2. 流程与架构图
+
+当前无。
+
+## 3. 热门面试题与结合项目的答案
+
+当前无。
+
+## 4. 趋势与观点
+
+当前无。
+
+## 5. Stratum 可补强点
+
+当前无。
+
+## 6. 跟踪关键词
+
+当前无。
+
+## 7. 参考来源
+
+当前无。
+EOF
+}
+
 add_extra_file() { printf '# extra\n' >"$1/10-extra.md"; }
 remove_heading() { sed -i '/^## 参考来源$/d' "$1/01-agent-runtime-and-workflow.md"; }
 duplicate_id() {
@@ -169,6 +309,10 @@ break_unclassified_count() { sed -i 's/待分类条目数：0/待分类条目数
 valid_library="${TEST_ROOT}/valid"
 build_valid_library "${valid_library}"
 "${VALIDATOR}" --library "${valid_library}"
+
+reconstructed_library="${TEST_ROOT}/reconstructed"
+build_reconstructed_library "${reconstructed_library}"
+"${VALIDATOR}" --library "${reconstructed_library}"
 
 assert_rejected extra-file 'unexpected Markdown file' add_extra_file
 assert_rejected missing-heading 'missing required heading' remove_heading
