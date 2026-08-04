@@ -146,6 +146,15 @@ func (r *evaluationExperimentRepoFake) ApplyCommand(_ context.Context, tenantID,
 func (*evaluationExperimentRepoFake) ResolveDeployment(context.Context, string, string, string) (domain.Deployment, bool, error) {
 	return domain.Deployment{}, false, nil
 }
+func (*evaluationExperimentRepoFake) HasRunningExperiment(context.Context, string, string, string) (bool, error) {
+	return false, nil
+}
+func (*evaluationExperimentRepoFake) ListPendingExperiments(context.Context, string, string, string) ([]domain.Experiment, error) {
+	return nil, nil
+}
+func (*evaluationExperimentRepoFake) ListRunningExperiments(context.Context, string) ([]domain.Experiment, error) {
+	return nil, nil
+}
 
 func signEvaluationToken(t *testing.T, svc iamport.TokenService, tenantID, role string) string {
 	t.Helper()

@@ -695,7 +695,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	}
 	if c.Agent != nil && sharedRevisionService != nil {
 		agentAdapter := agentEvaluationAdapter{
-			revisions: sharedRevisionService, agents: c.Agent.Service,
+			revisions: sharedRevisionService, agents: c.Agent.Service, modelValidator: tenantModelValidator(c.Agent.TenantResolver),
 			agentUpdater: c.Agent.Service, actorID: "evaluation-worker",
 		}
 		resourceAdapters[evaldomain.ResourceKindAgent] = agentAdapter
@@ -724,7 +724,11 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		knowledgeProvider = knowledgeAdapter
 		runtimeKnowledgeAdapter = &knowledgeAdapter
 	}
-	service := evalapp.NewService(evaluationResourceRouter{adapters: resourceAdapters}, runRepo, suiteRepo)
+	var traceReader evalport.TraceEvidenceReader
+	if c.Agent != nil {
+		traceReader = evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider}
+	}
+	service := evalapp.NewService(evaluationResourceRouter{adapters: resourceAdapters}, runRepo, traceReader, suiteRepo)
 	jobService := evalapp.NewJobService(jobRepo, service)
 	var rewriter evalapp.PromptRewriter
 	if c.Agent != nil && c.Agent.TenantResolver != nil {
@@ -737,7 +741,13 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	feedbackService := evalapp.NewFeedbackService(
 		feedbackRepo, experimentService, evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider},
 	)
-	worker := evalapp.NewWorker(evaluationTenantLister{pool: db}, jobService, time.Second, c.platformMetrics())
+	experimentRunner := evalapp.NewExperimentRunner(experimentService, experimentRepo, feedbackRepo)
+	worker := evalapp.NewWorker(
+		evaluationTenantLister{pool: db},
+		evalapp.NewMultiRunner(jobService, experimentRunner),
+		time.Second,
+		c.platformMetrics(),
+	)
 	worker.Start(ctx)
 	c.shutdown = append(c.shutdown, func(context.Context) error { worker.Stop(); return nil })
 	baselineService := newEvaluationBaselineService(manager, agentProvider, mcpProvider, knowledgeProvider)
@@ -761,33 +771,48 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		BaselineService:      baselineService,
 		AgentRevisionApplier: agentRevisionApplier,
 	}
-	if c.Agent != nil && c.Agent.Service != nil {
-		c.Agent.Service.SetSkillRevisionResolver(experimentSkillRevisionResolver{service: experimentService})
-		if runtimeAgentAdapter != nil {
-			c.Agent.Service.SetAgentRevisionResolver(experimentAgentRevisionResolver{
-				service: experimentService, adapter: *runtimeAgentAdapter,
-			})
-		}
-		if runtimeMCPAdapter != nil && c.MCP != nil && c.MCP.Manager != nil {
-			resolver := experimentMCPRevisionResolver{service: experimentService, adapter: *runtimeMCPAdapter}
-			c.Agent.Service.SetMCPRevisionResolver(resolver)
-			c.Agent.Service.SetMCPToolExecutor(agentMCPExecutor{
-				clients: c.MCP.Manager, revisionRuntime: c.MCP.Manager, revisions: resolver,
-			})
-		}
-		if runtimeKnowledgeAdapter != nil {
-			c.Agent.Service.SetKnowledgeRevisionResolver(experimentKnowledgeRevisionResolver{
-				service: experimentService, adapter: *runtimeKnowledgeAdapter,
-			})
-		}
-	}
-	if c.Agent != nil && c.Skill != nil && c.Skill.VersionService != nil {
-		if diagnostics, ok := c.Agent.DiagnosticProvider.(*systemAssistantDiagnosticAdapter); ok {
-			diagnostics.setSkillEvaluationReader(
-				c.Skill.VersionService, skillEvaluationRepositoryAdapter{repo: experimentRepo},
-				traceAgentBindingResolver{evidence: c.Agent.EvidenceProvider, registry: c.Agent.Registry},
-			)
-		}
-	}
+	c.applyAgentRevisionResolvers(experimentService, runtimeAgentAdapter, runtimeMCPAdapter, runtimeKnowledgeAdapter)
+	c.applySkillEvaluationReader(experimentRepo)
 	return nil
+}
+
+func (c *Container) applyAgentRevisionResolvers(
+	experimentService *evalapp.ExperimentService,
+	runtimeAgentAdapter *agentEvaluationAdapter,
+	runtimeMCPAdapter *mcpEvaluationAdapter,
+	runtimeKnowledgeAdapter *knowledgeEvaluationAdapter,
+) {
+	if c.Agent == nil || c.Agent.Service == nil {
+		return
+	}
+	c.Agent.Service.SetSkillRevisionResolver(experimentSkillRevisionResolver{service: experimentService})
+	if runtimeAgentAdapter != nil {
+		c.Agent.Service.SetAgentRevisionResolver(experimentAgentRevisionResolver{
+			service: experimentService, adapter: *runtimeAgentAdapter,
+		})
+	}
+	if runtimeMCPAdapter != nil && c.MCP != nil && c.MCP.Manager != nil {
+		resolver := experimentMCPRevisionResolver{service: experimentService, adapter: *runtimeMCPAdapter}
+		c.Agent.Service.SetMCPRevisionResolver(resolver)
+		c.Agent.Service.SetMCPToolExecutor(agentMCPExecutor{
+			clients: c.MCP.Manager, revisionRuntime: c.MCP.Manager, revisions: resolver,
+		})
+	}
+	if runtimeKnowledgeAdapter != nil {
+		c.Agent.Service.SetKnowledgeRevisionResolver(experimentKnowledgeRevisionResolver{
+			service: experimentService, adapter: *runtimeKnowledgeAdapter,
+		})
+	}
+}
+
+func (c *Container) applySkillEvaluationReader(experimentRepo evalport.ExperimentRepository) {
+	if c.Agent == nil || c.Skill == nil || c.Skill.VersionService == nil {
+		return
+	}
+	if diagnostics, ok := c.Agent.DiagnosticProvider.(*systemAssistantDiagnosticAdapter); ok {
+		diagnostics.setSkillEvaluationReader(
+			c.Skill.VersionService, skillEvaluationRepositoryAdapter{repo: experimentRepo},
+			traceAgentBindingResolver{evidence: c.Agent.EvidenceProvider, registry: c.Agent.Registry},
+		)
+	}
 }

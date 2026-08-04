@@ -261,34 +261,15 @@ func (r *PgExperimentRepository) ApplyCommand(
 ) (domain.Experiment, error) {
 	var updated domain.Experiment
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		fingerprint := command.Fingerprint(action)
-		current, found, err := getExperimentTx(ctx, tx, experimentID, true)
+		current, fingerprint, cached, err := r.loadAndCheckIdempotency(ctx, tx, experimentID, action, command)
 		if err != nil {
 			return err
 		}
-		if !found {
-			return pgx.ErrNoRows
-		}
-		var priorMetadata []byte
-		err = tx.QueryRow(ctx, `SELECT metrics FROM experiment_decisions
-			WHERE experiment_id=$1 AND idempotency_key=$2`, experimentID, command.IdempotencyKey).Scan(&priorMetadata)
-		if err == nil {
-			var prior struct {
-				Fingerprint string            `json:"fingerprint"`
-				Result      domain.Experiment `json:"result"`
-			}
-			if err := json.Unmarshal(priorMetadata, &prior); err != nil {
-				return err
-			}
-			if prior.Fingerprint != fingerprint {
-				return domain.ErrExperimentCommandConflict
-			}
-			updated = prior.Result
+		if cached != nil {
+			updated = *cached
 			return nil
 		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return err
-		}
+
 		if current.StateVersion != command.ExpectedStateVersion {
 			return domain.ErrExperimentStateConflict
 		}
@@ -297,69 +278,165 @@ func (r *PgExperimentRepository) ApplyCommand(
 			return domain.ErrExperimentCommandNotAllowed
 		}
 
-		newStatus := domain.ExperimentPaused
-		switch action {
-		case domain.CommandPromote:
-			newStatus = domain.ExperimentCompleted
-		case domain.CommandRollback:
-			newStatus = domain.ExperimentRolledBack
-		case domain.CommandPause:
-		default:
-			return domain.ErrExperimentCommandNotAllowed
+		newStatus, err := experimentCommandTargetStatus(action)
+		if err != nil {
+			return err
 		}
 		newVersion := current.StateVersion + 1
-		_, err = tx.Exec(ctx, `UPDATE evaluation_experiments
-			SET status=$2, state_version=$3, recommendation='hold', updated_at=NOW(),
-			completed_at=CASE WHEN $2 IN ('completed','rolled_back') THEN NOW() ELSE NULL END WHERE id=$1`,
-			experimentID, string(newStatus), newVersion)
-		if err != nil {
+		if err := r.updateExperimentAndDeployment(ctx, tx, experimentID, action, *current, newStatus, newVersion); err != nil {
 			return err
 		}
-		var deploymentResult pgconn.CommandTag
-		switch action {
-		case domain.CommandPause:
-			deploymentResult, err = tx.Exec(ctx, `UPDATE evaluation_deployments SET canary_percent=0, updated_at=NOW()
-				WHERE experiment_id=$1`, experimentID)
-		case domain.CommandPromote:
-			if err := promoteCandidateTx(ctx, tx, current); err != nil {
-				return err
-			}
-			deploymentResult, err = tx.Exec(ctx, `UPDATE evaluation_deployments
-				SET stable_revision_id=$2, canary_revision_id=NULL, canary_percent=0, experiment_id=NULL,
-				policy_version=policy_version+1, updated_at=NOW() WHERE experiment_id=$1`,
-				experimentID, current.CanaryRevisionID)
-		case domain.CommandRollback:
-			deploymentResult, err = tx.Exec(ctx, `UPDATE evaluation_deployments
-				SET canary_revision_id=NULL, canary_percent=0, experiment_id=NULL, updated_at=NOW()
-				WHERE experiment_id=$1`, experimentID)
-		}
-		if err != nil {
-			return err
-		}
-		if deploymentResult.RowsAffected() != 1 {
-			return domain.ErrExperimentStateConflict
-		}
-		resultSnapshot := current
+
+		resultSnapshot := *current
 		resultSnapshot.Status = newStatus
 		resultSnapshot.StateVersion = newVersion
 		resultSnapshot.Recommendation = domain.DecisionHold
-		metadata, err := json.Marshal(map[string]any{"fingerprint": fingerprint, "result": resultSnapshot})
-		if err != nil {
-			return err
-		}
-		_, err = tx.Exec(ctx, `INSERT INTO experiment_decisions
-			(id, experiment_id, action, actor_type, actor_id, prior_status, new_status,
-			 recommendation, metrics, reason, idempotency_key)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,'hold',$8,$9,$10)`, uuid.Must(uuid.NewV7()).String(), experimentID,
-			string(action), string(command.ActorType), command.ActorID, string(current.Status), string(newStatus),
-			string(metadata), command.Reason, command.IdempotencyKey)
-		if err != nil {
+		if err := recordExperimentDecisionTx(ctx, tx, experimentID, action, command,
+			current.Status, newStatus, fingerprint, resultSnapshot); err != nil {
 			return err
 		}
 		updated = resultSnapshot
 		return nil
 	})
 	return updated, err
+}
+
+// loadAndCheckIdempotency fetches the experiment and checks idempotency.
+// Returns (current, fingerprint, cached, error). When cached is non-nil the
+// caller must use it directly (idempotent replay); current will be nil.
+func (r *PgExperimentRepository) loadAndCheckIdempotency(
+	ctx context.Context, tx pgx.Tx,
+	experimentID string,
+	action domain.ExperimentCommandAction,
+	command domain.ExperimentCommand,
+) (*domain.Experiment, string, *domain.Experiment, error) {
+	fingerprint := command.Fingerprint(action)
+	current, found, err := getExperimentTx(ctx, tx, experimentID, true)
+	if err != nil {
+		return nil, fingerprint, nil, err
+	}
+	if !found {
+		return nil, fingerprint, nil, pgx.ErrNoRows
+	}
+
+	var prior []byte
+	err = tx.QueryRow(ctx, `SELECT metrics FROM experiment_decisions
+		WHERE experiment_id=$1 AND idempotency_key=$2`, experimentID, command.IdempotencyKey).Scan(&prior)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return &current, fingerprint, nil, nil
+	}
+	if err != nil {
+		return nil, fingerprint, nil, err
+	}
+	var cached struct {
+		Fingerprint string            `json:"fingerprint"`
+		Result      domain.Experiment `json:"result"`
+	}
+	if err := json.Unmarshal(prior, &cached); err != nil {
+		return nil, fingerprint, nil, err
+	}
+	if cached.Fingerprint != fingerprint {
+		return nil, fingerprint, nil, domain.ErrExperimentCommandConflict
+	}
+	return nil, fingerprint, &cached.Result, nil
+}
+
+// experimentCommandTargetStatus maps an action to its target experiment status.
+func experimentCommandTargetStatus(action domain.ExperimentCommandAction) (domain.ExperimentStatus, error) {
+	switch action {
+	case domain.CommandActivate:
+		return domain.ExperimentRunning, nil
+	case domain.CommandReject:
+		return domain.ExperimentRejected, nil
+	case domain.CommandPause:
+		return domain.ExperimentPaused, nil
+	case domain.CommandPromote:
+		return domain.ExperimentCompleted, nil
+	case domain.CommandRollback:
+		return domain.ExperimentRolledBack, nil
+	default:
+		return "", domain.ErrExperimentCommandNotAllowed
+	}
+}
+
+// updateExperimentAndDeployment updates the experiment row and (when applicable)
+// the linked deployment row inside the same transaction.
+func (r *PgExperimentRepository) updateExperimentAndDeployment(
+	ctx context.Context, tx pgx.Tx,
+	experimentID string,
+	action domain.ExperimentCommandAction,
+	current domain.Experiment,
+	newStatus domain.ExperimentStatus,
+	newVersion int64,
+) error {
+	_, err := tx.Exec(ctx, `UPDATE evaluation_experiments
+		SET status=$2, state_version=$3, recommendation='hold', updated_at=NOW(),
+		stage_started_at=CASE WHEN $2='running' THEN NOW() ELSE stage_started_at END,
+		completed_at=CASE WHEN $2 IN ('completed','rolled_back','rejected') THEN NOW() ELSE NULL END
+		WHERE id=$1`, experimentID, string(newStatus), newVersion)
+	if err != nil {
+		return err
+	}
+
+	switch action {
+	case domain.CommandPause:
+		return r.applyDeploymentUpdate(ctx, tx, experimentID, `UPDATE evaluation_deployments
+			SET canary_percent=0, updated_at=NOW() WHERE experiment_id=$1`)
+	case domain.CommandPromote:
+		if err := promoteCandidateTx(ctx, tx, current); err != nil {
+			return err
+		}
+		return r.applyDeploymentUpdate(ctx, tx, experimentID,
+			`UPDATE evaluation_deployments
+			 SET stable_revision_id=$2, canary_revision_id=NULL, canary_percent=0,
+			 experiment_id=NULL, policy_version=policy_version+1, updated_at=NOW()
+			 WHERE experiment_id=$1`, current.CanaryRevisionID)
+	case domain.CommandRollback:
+		return r.applyDeploymentUpdate(ctx, tx, experimentID, `UPDATE evaluation_deployments
+			SET canary_revision_id=NULL, canary_percent=0, experiment_id=NULL, updated_at=NOW()
+			WHERE experiment_id=$1`)
+	default:
+		return nil // Activate / Reject: no deployment change.
+	}
+}
+
+func (r *PgExperimentRepository) applyDeploymentUpdate(
+	ctx context.Context, tx pgx.Tx, experimentID, query string, args ...any,
+) error {
+	args = append([]any{experimentID}, args...)
+	result, err := tx.Exec(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return domain.ErrExperimentStateConflict
+	}
+	return nil
+}
+
+func recordExperimentDecisionTx(
+	ctx context.Context, tx pgx.Tx,
+	experimentID string,
+	action domain.ExperimentCommandAction,
+	command domain.ExperimentCommand,
+	priorStatus domain.ExperimentStatus,
+	newStatus domain.ExperimentStatus,
+	fingerprint string,
+	resultSnapshot domain.Experiment,
+) error {
+	metadata, err := json.Marshal(map[string]any{"fingerprint": fingerprint, "result": resultSnapshot})
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO experiment_decisions
+		(id, experiment_id, action, actor_type, actor_id, prior_status, new_status,
+		 recommendation, metrics, reason, idempotency_key)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,'hold',$8,$9,$10)`,
+		uuid.Must(uuid.NewV7()).String(), experimentID,
+		string(action), string(command.ActorType), command.ActorID,
+		string(priorStatus), string(newStatus),
+		string(metadata), command.Reason, command.IdempotencyKey)
+	return err
 }
 
 func promoteCandidateTx(ctx context.Context, tx pgx.Tx, experiment domain.Experiment) error {
@@ -458,6 +535,99 @@ func (r *PgExperimentRepository) ResolveDeployment(
 		return nil
 	})
 	return deployment, found, err
+}
+
+func (r *PgExperimentRepository) HasRunningExperiment(
+	ctx context.Context,
+	tenantID, resourceKind, resourceID string,
+) (bool, error) {
+	var active bool
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT EXISTS(
+			SELECT 1 FROM evaluation_experiments
+			WHERE resource_kind=$1 AND resource_id=$2 AND status IN ('running','paused')
+		)`, resourceKind, resourceID).Scan(&active)
+	})
+	return active, err
+}
+
+func (r *PgExperimentRepository) ListPendingExperiments(
+	ctx context.Context,
+	tenantID, resourceKind, resourceID string,
+) ([]domain.Experiment, error) {
+	var experiments []domain.Experiment
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		query := `SELECT id, resource_kind, resource_id, stable_revision_id, canary_revision_id,
+			suite_revision_id, status, stage_percent, policy, state_version, recommendation, safety_stopped
+			FROM evaluation_experiments WHERE status='pending'`
+		args := []any{}
+		if resourceKind != "" {
+			args = append(args, resourceKind)
+			query += fmt.Sprintf(" AND resource_kind=$%d", len(args))
+		}
+		if resourceID != "" {
+			args = append(args, resourceID)
+			query += fmt.Sprintf(" AND resource_id=$%d", len(args))
+		}
+		query += ` ORDER BY created_at ASC`
+		rows, err := tx.Query(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			exp, err := scanExperiment(rows)
+			if err != nil {
+				return err
+			}
+			experiments = append(experiments, exp)
+		}
+		return rows.Err()
+	})
+	return experiments, err
+}
+
+func (r *PgExperimentRepository) ListRunningExperiments(
+	ctx context.Context,
+	tenantID string,
+) ([]domain.Experiment, error) {
+	var experiments []domain.Experiment
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT id, resource_kind, resource_id, stable_revision_id, canary_revision_id,
+			suite_revision_id, status, stage_percent, policy, state_version, recommendation, safety_stopped
+			FROM evaluation_experiments WHERE status='running' ORDER BY created_at ASC`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			exp, err := scanExperiment(rows)
+			if err != nil {
+				return err
+			}
+			experiments = append(experiments, exp)
+		}
+		return rows.Err()
+	})
+	return experiments, err
+}
+
+func scanExperiment(row pgx.Row) (domain.Experiment, error) {
+	var exp domain.Experiment
+	var kind, status string
+	var policyJSON []byte
+	err := row.Scan(&exp.ID, &kind, &exp.ResourceID, &exp.StableRevisionID, &exp.CanaryRevisionID,
+		&exp.SuiteRevisionID, &status, &exp.Stage, &policyJSON, &exp.StateVersion,
+		&exp.Recommendation, &exp.SafetyStopped)
+	if err != nil {
+		return domain.Experiment{}, err
+	}
+	exp.ResourceKind = domain.ResourceKind(kind)
+	exp.Status = domain.ExperimentStatus(status)
+	if err := json.Unmarshal(policyJSON, &exp.Policy); err != nil {
+		return domain.Experiment{}, err
+	}
+	return exp, nil
 }
 
 func (r *PgExperimentRepository) execTenant(

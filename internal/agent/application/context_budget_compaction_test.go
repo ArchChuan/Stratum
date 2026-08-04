@@ -10,6 +10,9 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 )
 
+// marker 是压缩摘要注入测试共用的标记，需在包级可见（多个测试函数引用）。
+const marker = "【压缩摘要标记】"
+
 // fakeCompactor 是测试用的 HistoryCompactor：可注入固定摘要或错误，
 // 并记录被传入的消息数，用于断言“哪些历史进了压缩”。
 type fakeCompactor struct {
@@ -49,8 +52,6 @@ func systemContent(msgs []port.LLMMessage) (string, bool) {
 }
 
 func TestBuildContextMessagesWithCompaction(t *testing.T) {
-	const marker = "【压缩摘要标记】"
-
 	tests := []struct {
 		name           string
 		historyLen     int
@@ -155,6 +156,66 @@ func TestCompaction_BackwardCompatible(t *testing.T) {
 		if legacy[i].Role != viaCompaction[i].Role || legacy[i].Content != viaCompaction[i].Content {
 			t.Errorf("第 %d 条不一致: %+v vs %+v", i, legacy[i], viaCompaction[i])
 		}
+	}
+}
+
+// 提取注入的摘要正文（marker 之后、system 结尾之前）。
+func summaryBody(sys string) string {
+	idx := strings.Index(sys, marker)
+	if idx < 0 {
+		return ""
+	}
+	return sys[idx+len(marker):]
+}
+
+// TestCompaction_SummaryReserveScalesWithBudget 验证摘要预留额度从固定
+// min(budget/4, 400) 改为 5% 联动（40000 tokens 预算 → 1989 tokens 预留）：
+// 超大摘要被精确截断到预留额度，且明显大于旧逻辑的 400-token 上限。
+func TestCompaction_SummaryReserveScalesWithBudget(t *testing.T) {
+	const maxTokens = 40000
+	fc := &fakeCompactor{summary: marker + strings.Repeat("摘", 20000)}
+	msgs := application.BuildContextMessagesWithCompaction(
+		context.Background(), "你是助手", "", makeHistory(30), "当前问题",
+		maxTokens, 5, fc,
+	)
+	if fc.callCount == 0 {
+		t.Fatal("expected compactor to be invoked on overflow history")
+	}
+	sys, hasSys := systemContent(msgs)
+	if !hasSys || !strings.Contains(sys, marker) {
+		t.Fatalf("summary not injected: %q", sys)
+	}
+	// budget = 40000 − input(4) − sysReserve(200) = 39796; reserve = 5% = 1989
+	// tokens. The whole summary (marker included) is truncated to the reserve,
+	// so the marker-stripped body must be 1989*3 − len(marker) bytes.
+	const wantBytes = 1989 * 3
+	if got := len(summaryBody(sys)) + len(marker); got != wantBytes {
+		t.Fatalf("summary reserve = %d bytes, want %d (5%% of remaining budget)", got, wantBytes)
+	}
+}
+
+// TestCompaction_SummaryReserveCappedAtBudget 验证小窗口下预留额度被 cap 于
+// 剩余预算而非固定 200-token floor：maxTokens=400 时剩余 196，旧逻辑只预留
+// 49 tokens（budget/4），新逻辑预留全部 196。
+func TestCompaction_SummaryReserveCappedAtBudget(t *testing.T) {
+	const maxTokens = 400
+	fc := &fakeCompactor{summary: marker + strings.Repeat("摘", 20000)}
+	msgs := application.BuildContextMessagesWithCompaction(
+		context.Background(), "你是助手", "", makeHistory(30), "当前问题",
+		maxTokens, 5, fc,
+	)
+	if fc.callCount == 0 {
+		t.Fatal("expected compactor to be invoked on overflow history")
+	}
+	sys, hasSys := systemContent(msgs)
+	if !hasSys || !strings.Contains(sys, marker) {
+		t.Fatalf("summary not injected: %q", sys)
+	}
+	// budget = 400 − 4 − 200 = 196; reserve = min(5% floor 200, 196) = 196
+	// tokens, capped at the remaining budget.
+	const wantBytes = 196 * 3
+	if got := len(summaryBody(sys)) + len(marker); got != wantBytes {
+		t.Fatalf("summary reserve = %d bytes, want %d (capped at remaining budget)", got, wantBytes)
 	}
 }
 

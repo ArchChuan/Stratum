@@ -43,9 +43,15 @@ type (
 // in the application layer because it references port.ToolDefinition and
 // function types that depend on cross-context ports.
 type ExecutionConfig struct {
-	MaxSteps                 int
-	Timeout                  time.Duration
-	Temperature              float32
+	MaxSteps    int
+	Timeout     time.Duration
+	Temperature float32
+	MaxTokens   int
+	// CompactionRecentGroups overrides in-loop compaction recent groups.
+	// 0 = auto-derive from MaxContextTokens.
+	CompactionRecentGroups int
+	// CompactionSafetyRatio overrides the compaction safety ratio. 0 = default.
+	CompactionSafetyRatio    float32
 	EnableTools              bool
 	AvailableTools           []string
 	Stream                   bool
@@ -227,6 +233,75 @@ type agentExecContext struct {
 }
 
 // Execute implements the Agent interface - base implementation with ReAct pattern
+// agentExecSnapshot is the immutable view of the mutable agent configuration
+// taken under lock at execution start, released before the long LLM call.
+type agentExecSnapshot struct {
+	agentID          string
+	agentName        string
+	agentType        domain.AgentType
+	systemPrompt     string
+	llmModel         string
+	capGW            port.CapabilityGateway
+	historyCompactor port.HistoryCompactor
+	chatStore        ChatStore
+	metrics          observability.MetricsProvider
+	workspaceNames   []string
+	workspaceDescs   []string
+	maxContextTokens int
+	memoryScope      string
+}
+
+// snapshotExecutionConfig copies the mutable configuration under lock and
+// backfills unset execution options: explicit options win, agent-config values
+// fill in fields the caller left at zero so the revision → execution path
+// carries temperature / max_tokens / compaction through.
+func (a *BaseAgent) snapshotExecutionConfig(cfg *ExecutionConfig) agentExecSnapshot {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if cfg.MaxSteps == 0 {
+		cfg.MaxSteps = a.MaxIterations
+	}
+	// cfg.Timeout stays 0 (no deadline) unless the client explicitly passes a
+	// timeout option. Step limits + per-operation timeouts bound execution;
+	// a wall-clock deadline is optional and client-controlled.
+	if cfg.Temperature == 0 {
+		cfg.Temperature = a.Temperature
+	}
+	if cfg.MaxTokens == 0 {
+		cfg.MaxTokens = a.MaxTokens
+	}
+	if cfg.CompactionRecentGroups == 0 {
+		cfg.CompactionRecentGroups = a.CompactionRecentGroups
+	}
+	if cfg.CompactionSafetyRatio == 0 {
+		cfg.CompactionSafetyRatio = a.CompactionSafetyRatio
+	}
+	return agentExecSnapshot{
+		agentID:          a.ID,
+		agentName:        a.Name,
+		agentType:        domain.ReActAgent,
+		systemPrompt:     a.SystemPrompt + globalSystemSuffix(a.GlobalSystemSuffix),
+		llmModel:         a.LLMModel,
+		capGW:            a.CapGateway,
+		historyCompactor: a.HistoryCompactor,
+		chatStore:        a.ChatStore,
+		metrics:          a.metrics,
+		workspaceNames:   a.KnowledgeWorkspaceNames,
+		workspaceDescs:   a.KnowledgeWorkspaceDescriptions,
+		maxContextTokens: a.MaxContextTokens,
+		memoryScope:      a.MemoryScope,
+	}
+}
+
+// globalSystemSuffix appends the global suffix to the agent system prompt,
+// or nothing when unset.
+func globalSystemSuffix(suffix string) string {
+	if suffix == "" {
+		return ""
+	}
+	return "\n\n" + suffix
+}
+
 func (a *BaseAgent) Execute(ctx context.Context, input string, options ...ExecutionOption) (*AgentResult, error) {
 	startTime := time.Now()
 
@@ -234,33 +309,10 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	cfg.ApplyOptions(options)
 
 	// Snapshot mutable fields under lock, then release before the long LLM call.
-	a.mu.Lock()
-	if cfg.MaxSteps == 0 {
-		cfg.MaxSteps = a.MaxIterations
-	}
-	// cfg.Timeout stays 0 (no deadline) unless the client explicitly passes a
-	// timeout option. Step limits + per-operation timeouts bound execution;
-	// a wall-clock deadline is optional and client-controlled.
-	agentID := a.ID
-	agentName := a.Name
-	agentType := domain.ReActAgent
-	systemPrompt := a.SystemPrompt
-	if a.GlobalSystemSuffix != "" {
-		systemPrompt += "\n\n" + a.GlobalSystemSuffix
-	}
-	llmModel := a.LLMModel
-	capGW := a.CapGateway
-	historyCompactor := a.HistoryCompactor
-	chatStore := a.ChatStore
-	metrics := a.metrics
-	workspaceNames := a.KnowledgeWorkspaceNames
-	workspaceDescs := a.KnowledgeWorkspaceDescriptions
-	maxContextTokens := a.MaxContextTokens
-	memoryScope := a.MemoryScope
-	a.mu.Unlock()
+	snap := a.snapshotExecutionConfig(cfg)
 
 	tracer := otel.Tracer("stratum/agent")
-	executionAttrs := agentExecutionAttributes(agentID, agentName, agentType, *cfg)
+	executionAttrs := agentExecutionAttributes(snap.agentID, snap.agentName, snap.agentType, *cfg)
 	requestSpan := oteltrace.SpanFromContext(ctx)
 	requestSpan.SetAttributes(executionAttrs...)
 	ctx, execSpan := tracer.Start(ctx, "agent.execute",
@@ -268,33 +320,33 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	)
 	defer execSpan.End()
 
-	memCtx := a.injectMemoryContext(ctx, tracer, cfg, agentID, memoryScope, input)
+	memCtx := a.injectMemoryContext(ctx, tracer, cfg, snap.agentID, snap.memoryScope, input)
 
 	a.Logger.Info("agent execution started",
-		zap.String("agent_id", agentID),
+		zap.String("agent_id", snap.agentID),
 		zap.String("trace_id", cfg.TraceID),
 		zap.String("conversation_id", cfg.ConversationID),
-		zap.String("type", string(agentType)))
+		zap.String("type", string(snap.agentType)))
 
 	result := &AgentResult{
-		AgentID:  agentID,
+		AgentID:  snap.agentID,
 		Input:    input,
 		Metadata: map[string]interface{}{},
 	}
 
-	history := a.loadConversationHistory(ctx, tracer, chatStore, cfg)
+	history := a.loadConversationHistory(ctx, tracer, snap.chatStore, cfg)
 
 	ec := agentExecContext{
-		cfg: cfg, tracer: tracer, agentID: agentID, agentName: agentName,
-		systemPrompt: systemPrompt, llmModel: llmModel, capGW: capGW,
-		historyCompactor: historyCompactor, maxContextTokens: maxContextTokens,
-		memoryScope: memoryScope, workspaceNames: workspaceNames,
-		workspaceDescs: workspaceDescs, memCtx: memCtx, history: history,
+		cfg: cfg, tracer: tracer, agentID: snap.agentID, agentName: snap.agentName,
+		systemPrompt: snap.systemPrompt, llmModel: snap.llmModel, capGW: snap.capGW,
+		historyCompactor: snap.historyCompactor, maxContextTokens: snap.maxContextTokens,
+		memoryScope: snap.memoryScope, workspaceNames: snap.workspaceNames,
+		workspaceDescs: snap.workspaceDescs, memCtx: memCtx, history: history,
 		input: input,
 	}
 
 	var execErr error
-	switch agentType {
+	switch snap.agentType {
 	case ReActAgent:
 		execErr = a.executeReAct(ctx, ec, result)
 	case CoTAgent:
@@ -303,16 +355,16 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		execErr = a.executePlanning(ctx, ec, result)
 
 	case ToolCallingAgent, RAGAgent, SwarmAgent:
-		result.Output = fmt.Sprintf("%s agent type not yet implemented", string(agentType))
-		execErr = fmt.Errorf("agent type %s not implemented", agentType)
+		result.Output = fmt.Sprintf("%s agent type not yet implemented", string(snap.agentType))
+		execErr = fmt.Errorf("agent type %s not implemented", snap.agentType)
 
 	default:
 		result.Output = "Unknown agent type"
-		execErr = fmt.Errorf("unknown agent type: %s", agentType)
+		execErr = fmt.Errorf("unknown agent type: %s", snap.agentType)
 	}
 	result.Artifacts = buildExecutionArtifacts(result.AssistantToolArtifacts, cfg.EvolutionTrace.ResourceManifest["system-assistant-profile"])
 
-	a.persistChatMessages(ctx, tracer, chatStore, cfg, result, input, agentID, memoryScope, execErr)
+	a.persistChatMessages(ctx, tracer, snap.chatStore, cfg, result, input, snap.agentID, snap.memoryScope, execErr)
 
 	result.Duration = time.Since(startTime)
 	a.mu.Lock()
@@ -331,11 +383,11 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	}
 	execSpan.SetAttributes(completionAttrs...)
 	requestSpan.SetAttributes(completionAttrs...)
-	metrics.IncAgentExecution(agentID, string(agentType), status)
-	metrics.RecordAgentExecutionDuration(agentID, string(agentType), result.Duration.Seconds())
-	metrics.RecordAgentStepCount(agentID, string(agentType), result.Steps)
+	snap.metrics.IncAgentExecution(snap.agentID, string(snap.agentType), status)
+	snap.metrics.RecordAgentExecutionDuration(snap.agentID, string(snap.agentType), result.Duration.Seconds())
+	snap.metrics.RecordAgentStepCount(snap.agentID, string(snap.agentType), result.Steps)
 
-	recordFingerprintAndKPI(metrics, execSpan, requestSpan, agentID, string(agentType), llmModel, systemPrompt, cfg, result, status)
+	recordFingerprintAndKPI(snap.metrics, execSpan, requestSpan, snap.agentID, string(snap.agentType), snap.llmModel, snap.systemPrompt, cfg, snap.maxContextTokens, result, status)
 
 	return result, execErr
 }
@@ -345,6 +397,7 @@ func recordFingerprintAndKPI(
 	execSpan, requestSpan oteltrace.Span,
 	agentID, taskKind, llmModel, systemPrompt string,
 	cfg *ExecutionConfig,
+	maxContextTokens int,
 	result *AgentResult,
 	status string,
 ) {
@@ -352,10 +405,29 @@ func recordFingerprintAndKPI(
 	metrics.RecordAgentTaskLatency(agentID, taskKind, result.Duration.Seconds())
 	metrics.RecordAgentCostPerTask(agentID, taskKind, result.CostUSD)
 	metrics.RecordAgentConversationTurn(agentID, result.Steps)
-	fp := CaptureFingerprint(llmModel, nil, systemPrompt, skillRevisionHashes(cfg.SkillCatalog), nil, 0)
+	// 指纹记录实际解析模型与路由链：fallback 降级后 ModelResolved 为实际
+	// 成功模型，ModelRoutedVia 为尝试过的模型链；未降级时保持配置模型。
+	resolved := llmModel
+	if result.ModelResolved != "" {
+		resolved = result.ModelResolved
+	}
+	fp := CaptureFingerprint(resolved, result.ModelRoutedVia, systemPrompt, skillRevisionHashes(cfg.SkillCatalog),
+		tunableSnapshot(cfg, maxContextTokens), 0)
 	fpAttrs := fingerprintAttributes(fp)
 	execSpan.SetAttributes(fpAttrs...)
 	requestSpan.SetAttributes(fpAttrs...)
+}
+
+// tunableSnapshot records the effective tunable values applied to this
+// execution so the fingerprint attributes attribute runs to their tunables.
+func tunableSnapshot(cfg *ExecutionConfig, maxContextTokens int) map[string]any {
+	return map[string]any{
+		"temperature":              cfg.Temperature,
+		"max_tokens":               cfg.MaxTokens,
+		"max_context_tokens":       maxContextTokens,
+		"compaction_recent_groups": cfg.CompactionRecentGroups,
+		"compaction_safety_ratio":  cfg.CompactionSafetyRatio,
+	}
 }
 
 func (a *BaseAgent) injectMemoryContext(ctx context.Context, tracer oteltrace.Tracer, cfg *ExecutionConfig, agentID, memoryScope, input string) string {
@@ -579,10 +651,17 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		availableTools = nil
 	}
 	return agentgraph.ReActState{
-		TenantID:                   ec.cfg.TenantID,
-		TraceID:                    ec.cfg.TraceID,
-		ConversationID:             ec.cfg.ConversationID,
-		Model:                      ec.llmModel,
+		TenantID:               ec.cfg.TenantID,
+		TraceID:                ec.cfg.TraceID,
+		ConversationID:         ec.cfg.ConversationID,
+		Model:                  ec.llmModel,
+		Temperature:            ec.cfg.Temperature,
+		MaxTokens:              ec.cfg.MaxTokens,
+		CompactionRecentGroups: ec.cfg.CompactionRecentGroups,
+		CompactionSafetyRatio:  ec.cfg.CompactionSafetyRatio,
+		// TokenCorrection must start at 1.0: the zero value would divide the
+		// compaction threshold by zero on the first step.
+		TokenCorrection:            1.0,
 		Messages:                   initMessages,
 		OnToken:                    ec.cfg.TokenCallback,
 		AvailableTools:             mergeTools(availableTools, ec.cfg.ExtraTools, a.Logger),
@@ -643,6 +722,8 @@ func (a *BaseAgent) collectGraphResult(result *AgentResult, finalState agentgrap
 	result.Steps = finalState.Steps
 	result.TokensUsed = finalState.TotalTokens
 	result.CostUSD = finalState.TotalCostUSD
+	result.ModelResolved = finalState.ModelResolved
+	result.ModelRoutedVia = finalState.ModelRoutedVia
 	result.ToolObservations = enrichToolObservations(finalState.ToolObservations, ec.cfg.TraceID, ec.cfg.ExecutionID, ec.cfg.ConversationID, ec.agentID, ec.cfg.UserID)
 	result.TraceEvents = enrichTraceEvents(finalState.TraceEvents, ec.cfg.TraceID, ec.cfg.ExecutionID, ec.cfg.ConversationID, ec.agentID, ec.cfg.UserID)
 	result.AssistantToolArtifacts = append([]domain.SystemAssistantToolArtifact(nil), finalState.AssistantToolArtifacts...)
@@ -834,6 +915,28 @@ func WithTimeout(timeout time.Duration) ExecutionOption {
 func WithTemperature(temperature float32) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.Temperature = temperature
+	}
+}
+
+// WithMaxTokens sets the max output tokens for each LLM request. 0 = unset.
+func WithMaxTokens(maxTokens int) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.MaxTokens = maxTokens
+	}
+}
+
+// WithCompactionRecentGroups overrides in-loop compaction recent groups.
+// 0 = auto-derive from MaxContextTokens.
+func WithCompactionRecentGroups(recentGroups int) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.CompactionRecentGroups = recentGroups
+	}
+}
+
+// WithCompactionSafetyRatio overrides the compaction safety ratio. 0 = default.
+func WithCompactionSafetyRatio(ratio float32) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.CompactionSafetyRatio = ratio
 	}
 }
 

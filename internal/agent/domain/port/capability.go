@@ -64,6 +64,12 @@ type CapabilityResponse struct {
 	ToolCalls []ToolCall
 	Usage     TokenUsage
 	Output    any
+	// ModelResolved 是实际成功调用的模型名。未降级时与 LLMCapRequest.Model
+	// 相同，降级后为 fallback 候选名。
+	ModelResolved string
+	// ModelRoutedVia 是实际尝试过的模型链（主模型在前）。单次成功时为
+	// 仅含主模型。
+	ModelRoutedVia []string
 }
 
 type ToolDefinition struct {

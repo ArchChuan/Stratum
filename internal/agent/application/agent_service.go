@@ -113,56 +113,68 @@ func (s *AgentService) SetMCPToolExecutor(executor port.MCPToolExecutor) {
 // CreateAgentInput is the create-agent payload application receives from
 // transport.
 type CreateAgentInput struct {
-	TenantID              string
-	Name                  string
-	Type                  string
-	Description           string
-	SystemPrompt          string
-	LLMModel              string
-	MaxIterations         int
-	MaxContextTokens      int
-	AllowedSkills         []string
-	MCPToolIDs            []string
-	KnowledgeWorkspaceIDs []string
-	MemoryScope           string
-	CheckpointEnabled     bool
+	TenantID               string
+	Name                   string
+	Type                   string
+	Description            string
+	SystemPrompt           string
+	LLMModel               string
+	MaxIterations          int
+	MaxContextTokens       int
+	Temperature            float32
+	MaxTokens              int
+	CompactionRecentGroups int
+	CompactionSafetyRatio  float32
+	AllowedSkills          []string
+	MCPToolIDs             []string
+	KnowledgeWorkspaceIDs  []string
+	MemoryScope            string
+	CheckpointEnabled      bool
 }
 
 type UpdateAgentInput struct {
-	Name                  string
-	Type                  string
-	Description           string
-	SystemPrompt          string
-	LLMModel              string
-	MaxIterations         int
-	MaxContextTokens      int
-	AllowedSkills         []string
-	MCPToolIDs            []string
-	KnowledgeWorkspaceIDs []string
-	MemoryScope           string
-	CheckpointEnabled     bool
+	Name                   string
+	Type                   string
+	Description            string
+	SystemPrompt           string
+	LLMModel               string
+	MaxIterations          int
+	MaxContextTokens       int
+	Temperature            float32
+	MaxTokens              int
+	CompactionRecentGroups int
+	CompactionSafetyRatio  float32
+	AllowedSkills          []string
+	MCPToolIDs             []string
+	KnowledgeWorkspaceIDs  []string
+	MemoryScope            string
+	CheckpointEnabled      bool
 }
 
 // AgentDTO is the wire shape returned by AgentService for transport
 // rendering. Strings only — handler reuses field-for-field.
 type AgentDTO struct {
-	ID                    string
-	Name                  string
-	Type                  string
-	Description           string
-	SystemPrompt          string
-	LLMModel              string
-	MaxIterations         int
-	MaxContextTokens      int
-	AllowedSkills         []string
-	MCPToolIDs            []string
-	KnowledgeWorkspaceIDs []string
-	CreatedAt             string
-	MemoryScope           string
-	SystemKey             string
-	IsSystem              bool
-	ManagementMode        string
-	CheckpointEnabled     bool
+	ID                     string
+	Name                   string
+	Type                   string
+	Description            string
+	SystemPrompt           string
+	LLMModel               string
+	MaxIterations          int
+	MaxContextTokens       int
+	Temperature            float32
+	MaxTokens              int
+	CompactionRecentGroups int
+	CompactionSafetyRatio  float32
+	AllowedSkills          []string
+	MCPToolIDs             []string
+	KnowledgeWorkspaceIDs  []string
+	CreatedAt              string
+	MemoryScope            string
+	SystemKey              string
+	IsSystem               bool
+	ManagementMode         string
+	CheckpointEnabled      bool
 }
 
 type SystemAssistantSettings struct {
@@ -183,20 +195,24 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		maxCtxTokens = s.deriveMaxContextTokens(ctx, in.TenantID, in.LLMModel)
 	}
 	cfg := &domain.AgentConfig{
-		ID:                    id,
-		Name:                  in.Name,
-		Type:                  parseAgentTypeWire(in.Type),
-		Description:           in.Description,
-		SystemPrompt:          in.SystemPrompt,
-		LLMModel:              in.LLMModel,
-		MaxIterations:         in.MaxIterations,
-		MaxContextTokens:      maxCtxTokens,
-		AllowedSkills:         in.AllowedSkills,
-		MCPToolIDs:            in.MCPToolIDs,
-		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
-		MemoryScope:           in.MemoryScope,
-		CheckpointEnabled:     in.CheckpointEnabled,
-		Capabilities:          []domain.AgentCapability{},
+		ID:                     id,
+		Name:                   in.Name,
+		Type:                   parseAgentTypeWire(in.Type),
+		Description:            in.Description,
+		SystemPrompt:           in.SystemPrompt,
+		LLMModel:               in.LLMModel,
+		MaxIterations:          in.MaxIterations,
+		MaxContextTokens:       maxCtxTokens,
+		Temperature:            in.Temperature,
+		MaxTokens:              in.MaxTokens,
+		CompactionRecentGroups: in.CompactionRecentGroups,
+		CompactionSafetyRatio:  in.CompactionSafetyRatio,
+		AllowedSkills:          in.AllowedSkills,
+		MCPToolIDs:             in.MCPToolIDs,
+		KnowledgeWorkspaceIDs:  in.KnowledgeWorkspaceIDs,
+		MemoryScope:            in.MemoryScope,
+		CheckpointEnabled:      in.CheckpointEnabled,
+		Capabilities:           []domain.AgentCapability{},
 	}
 
 	a := NewBaseAgent(cfg, s.deps.Logger)
@@ -245,7 +261,13 @@ func (s *AgentService) SnapshotRevision(ctx context.Context, tenantID, id string
 		MaxIterations: cfg.MaxIterations, MemoryScope: cfg.MemoryScope,
 		CheckpointEnabled: cfg.CheckpointEnabled,
 		StuckThreshold:    cfg.StuckThreshold,
-		ModelParameters:   domain.ModelParameters{MaxContextTokens: cfg.MaxContextTokens},
+		ModelParameters: domain.ModelParameters{
+			MaxContextTokens:       cfg.MaxContextTokens,
+			Temperature:            cfg.Temperature,
+			MaxTokens:              cfg.MaxTokens,
+			CompactionRecentGroups: cfg.CompactionRecentGroups,
+			CompactionSafetyRatio:  cfg.CompactionSafetyRatio,
+		},
 		Bindings: make([]domain.AgentBinding, 0,
 			len(cfg.AllowedSkills)+len(cfg.MCPToolIDs)+len(cfg.KnowledgeWorkspaceIDs)),
 	}
@@ -343,9 +365,14 @@ func revisionConfig(revision domain.AgentRevision) *domain.AgentConfig {
 	cfg := &domain.AgentConfig{
 		ID: revision.AgentID, Type: revision.Type, SystemPrompt: revision.SystemPrompt,
 		LLMModel: revision.Model, MaxIterations: revision.MaxIterations,
-		MaxContextTokens: revision.ModelParameters.MaxContextTokens, MemoryScope: revision.MemoryScope,
-		CheckpointEnabled: revision.CheckpointEnabled,
-		StuckThreshold:    revision.StuckThreshold,
+		MaxContextTokens:       revision.ModelParameters.MaxContextTokens,
+		Temperature:            revision.ModelParameters.Temperature,
+		MaxTokens:              revision.ModelParameters.MaxTokens,
+		CompactionRecentGroups: revision.ModelParameters.CompactionRecentGroups,
+		CompactionSafetyRatio:  revision.ModelParameters.CompactionSafetyRatio,
+		MemoryScope:            revision.MemoryScope,
+		CheckpointEnabled:      revision.CheckpointEnabled,
+		StuckThreshold:         revision.StuckThreshold,
 	}
 	for _, binding := range revision.Bindings {
 		if !binding.Enabled {
@@ -505,19 +532,23 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 		maxCtxTokens = s.deriveMaxContextTokens(ctx, tenantID, in.LLMModel)
 	}
 	cfg := &domain.AgentConfig{
-		ID:                    id,
-		Name:                  in.Name,
-		Type:                  parseAgentTypeWire(in.Type),
-		Description:           in.Description,
-		SystemPrompt:          in.SystemPrompt,
-		LLMModel:              in.LLMModel,
-		MaxIterations:         in.MaxIterations,
-		MaxContextTokens:      maxCtxTokens,
-		AllowedSkills:         skills,
-		MCPToolIDs:            in.MCPToolIDs,
-		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
-		MemoryScope:           in.MemoryScope,
-		CheckpointEnabled:     in.CheckpointEnabled,
+		ID:                     id,
+		Name:                   in.Name,
+		Type:                   parseAgentTypeWire(in.Type),
+		Description:            in.Description,
+		SystemPrompt:           in.SystemPrompt,
+		LLMModel:               in.LLMModel,
+		MaxIterations:          in.MaxIterations,
+		MaxContextTokens:       maxCtxTokens,
+		Temperature:            in.Temperature,
+		MaxTokens:              in.MaxTokens,
+		CompactionRecentGroups: in.CompactionRecentGroups,
+		CompactionSafetyRatio:  in.CompactionSafetyRatio,
+		AllowedSkills:          skills,
+		MCPToolIDs:             in.MCPToolIDs,
+		KnowledgeWorkspaceIDs:  in.KnowledgeWorkspaceIDs,
+		MemoryScope:            in.MemoryScope,
+		CheckpointEnabled:      in.CheckpointEnabled,
 	}
 	if err := s.deps.Registry.Update(ctx, cfg); err != nil {
 		return AgentDTO{}, err
@@ -618,23 +649,27 @@ func parseAgentTypeWire(t string) domain.AgentType {
 
 func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 	return AgentDTO{
-		ID:                    cfg.ID,
-		Name:                  cfg.Name,
-		Type:                  string(domain.ReActAgent),
-		Description:           cfg.Description,
-		SystemPrompt:          cfg.SystemPrompt,
-		LLMModel:              cfg.LLMModel,
-		MaxIterations:         cfg.MaxIterations,
-		MaxContextTokens:      cfg.MaxContextTokens,
-		AllowedSkills:         cfg.AllowedSkills,
-		MCPToolIDs:            cfg.MCPToolIDs,
-		KnowledgeWorkspaceIDs: cfg.KnowledgeWorkspaceIDs,
-		CreatedAt:             time.Now().Format(time.RFC3339),
-		MemoryScope:           cfg.MemoryScope,
-		SystemKey:             cfg.SystemKey,
-		IsSystem:              cfg.IsSystem,
-		CheckpointEnabled:     cfg.CheckpointEnabled,
-		ManagementMode:        cfg.ManagementMode,
+		ID:                     cfg.ID,
+		Name:                   cfg.Name,
+		Type:                   string(domain.ReActAgent),
+		Description:            cfg.Description,
+		SystemPrompt:           cfg.SystemPrompt,
+		LLMModel:               cfg.LLMModel,
+		MaxIterations:          cfg.MaxIterations,
+		MaxContextTokens:       cfg.MaxContextTokens,
+		Temperature:            cfg.Temperature,
+		MaxTokens:              cfg.MaxTokens,
+		CompactionRecentGroups: cfg.CompactionRecentGroups,
+		CompactionSafetyRatio:  cfg.CompactionSafetyRatio,
+		AllowedSkills:          cfg.AllowedSkills,
+		MCPToolIDs:             cfg.MCPToolIDs,
+		KnowledgeWorkspaceIDs:  cfg.KnowledgeWorkspaceIDs,
+		CreatedAt:              time.Now().Format(time.RFC3339),
+		MemoryScope:            cfg.MemoryScope,
+		SystemKey:              cfg.SystemKey,
+		IsSystem:               cfg.IsSystem,
+		CheckpointEnabled:      cfg.CheckpointEnabled,
+		ManagementMode:         cfg.ManagementMode,
 	}
 }
 

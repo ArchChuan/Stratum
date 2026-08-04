@@ -116,10 +116,10 @@ groups:
           runbook_url: /docs/operations/alerts/capacity.md#pvc-usage-critical
 
       - record: stratum:pvc_exhaustion_within_4d
-        expr: ((predict_linear(kubelet_volume_stats_available_bytes{namespace="stratum"}[6h], 4 * 24 * 60 * 60) < bool 0) == 1) and on (namespace, persistentvolumeclaim) (deriv(kubelet_volume_stats_used_bytes{namespace="stratum"}[6h]) > 0) and on (namespace, persistentvolumeclaim) kubelet_volume_stats_available_bytes{namespace="stratum"} and on (namespace, persistentvolumeclaim) kubelet_volume_stats_available_bytes{namespace="stratum"} offset 6h
+        expr: ((predict_linear(kubelet_volume_stats_available_bytes{namespace="stratum"}[6h], 4 * 24 * 60 * 60) < bool 0) == 1) and on (namespace, persistentvolumeclaim) (deriv(kubelet_volume_stats_used_bytes{namespace="stratum"}[6h]) > 0) and on (namespace, persistentvolumeclaim) kubelet_volume_stats_available_bytes{namespace="stratum"} and on (namespace, persistentvolumeclaim) kubelet_volume_stats_available_bytes{namespace="stratum"} offset 6h and on (namespace, persistentvolumeclaim) kube_persistentvolumeclaim_info{storageclass!="local-path"}
 
       - record: stratum:pvc_exhaustion_within_1d
-        expr: ((predict_linear(kubelet_volume_stats_available_bytes{namespace="stratum"}[6h], 24 * 60 * 60) < bool 0) == 1) and on (namespace, persistentvolumeclaim) (deriv(kubelet_volume_stats_used_bytes{namespace="stratum"}[6h]) > 0) and on (namespace, persistentvolumeclaim) kubelet_volume_stats_available_bytes{namespace="stratum"} and on (namespace, persistentvolumeclaim) kubelet_volume_stats_available_bytes{namespace="stratum"} offset 6h
+        expr: ((predict_linear(kubelet_volume_stats_available_bytes{namespace="stratum"}[6h], 24 * 60 * 60) < bool 0) == 1) and on (namespace, persistentvolumeclaim) (deriv(kubelet_volume_stats_used_bytes{namespace="stratum"}[6h]) > 0) and on (namespace, persistentvolumeclaim) kubelet_volume_stats_available_bytes{namespace="stratum"} and on (namespace, persistentvolumeclaim) kubelet_volume_stats_available_bytes{namespace="stratum"} offset 6h and on (namespace, persistentvolumeclaim) kube_persistentvolumeclaim_info{storageclass!="local-path"}
 
       - alert: StratumPVCExhaustionPredicted
         expr: stratum:pvc_exhaustion_within_4d == 1

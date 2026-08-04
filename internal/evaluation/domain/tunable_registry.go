@@ -15,8 +15,19 @@ func NewTunableRegistry() *TunableRegistry {
 		byCategory: make(map[TunableCategory][]Tunable),
 	}
 	r.registerModelConfig()
+	r.registerContextAndCompaction()
 	r.registerPrompts()
 	return r
+}
+
+func (r *TunableRegistry) registerContextAndCompaction() {
+	for _, t := range []Tunable{
+		maxContextTokensTunable{},
+		compactionRecentGroupsTunable{},
+		compactionSafetyRatioTunable{},
+	} {
+		r.Register(t)
+	}
 }
 
 func (r *TunableRegistry) registerModelConfig() {
