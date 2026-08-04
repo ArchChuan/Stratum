@@ -21,5 +21,6 @@ type ChunkRepo interface {
 	GetParentByID(ctx context.Context, tenantID, workspaceID, parentID string) (*ParentChunk, error)
 	GetChunksByIDs(ctx context.Context, tenantID, workspaceID string, ids []string) ([]domain.Chunk, error)
 	KeywordSearch(ctx context.Context, tenantID, workspaceID, query string, topK int) ([]domain.Chunk, error)
+	CountByWorkspace(ctx context.Context, tenantID, workspaceID string) (int64, error)
 	DeleteByWorkspace(ctx context.Context, tenantID, workspaceID string) error
 }

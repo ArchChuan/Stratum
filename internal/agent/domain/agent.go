@@ -346,6 +346,10 @@ type AgentResult struct {
 	Metadata               map[string]interface{}
 	AssistantToolArtifacts []SystemAssistantToolArtifact
 	Artifacts              []ExecutionArtifact
+	// ModelResolved 是本次执行最后一次 LLM 调用实际成功的模型名（fallback
+	// 降级后与配置模型不同）；ModelRoutedVia 是实际尝试过的模型链。
+	ModelResolved  string
+	ModelRoutedVia []string
 }
 
 // AgentState tracks mutable execution progress during a single run.
