@@ -27,7 +27,7 @@ func SystemAssistantToolDefinitions() []port.ToolDefinition {
 			InputSchema: map[string]any{
 				"type": "object", "additionalProperties": false,
 				"properties": map[string]any{"query": map[string]any{"type": "string", "minLength": 1, "maxLength": constants.SystemAssistantQueryMaxRunes}},
-				"required":   []string{"query"},
+				"required":   []any{"query"},
 			},
 		},
 		{
@@ -38,9 +38,9 @@ func SystemAssistantToolDefinitions() []port.ToolDefinition {
 				"type": "object", "additionalProperties": false,
 				"properties": map[string]any{"areas": map[string]any{
 					"type": "array", "minItems": 1, "maxItems": constants.SystemAssistantAreasMaxCount, "uniqueItems": true,
-					"items": map[string]any{"type": "string", "enum": []string{"agent", "skill", "mcp", "knowledge", "model"}},
+					"items": map[string]any{"type": "string", "enum": []any{"agent", "skill", "mcp", "knowledge", "model"}},
 				}},
-				"required": []string{"areas"},
+				"required": []any{"areas"},
 			},
 		},
 	}
@@ -73,7 +73,7 @@ func proposalToolSchema() map[string]any {
 				"mcpToolIds":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "uniqueItems": true},
 				"workspaceIds":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "uniqueItems": true},
 			},
-			"required": []string{"name", "description", "model", "maxIterations", "maxContextTokens"},
+			"required": []any{"name", "description", "model", "maxIterations", "maxContextTokens"},
 		},
 		domain.ResourceSkillDraft: {
 			"type": "object", "additionalProperties": false,
@@ -82,14 +82,14 @@ func proposalToolSchema() map[string]any {
 				"description":  map[string]any{"type": "string"},
 				"instructions": map[string]any{"type": "string", "minLength": 1},
 			},
-			"required": []string{"name", "description", "instructions"},
+			"required": []any{"name", "description", "instructions"},
 		},
 		domain.ResourceMCPConfig: {
 			"type": "object", "additionalProperties": false,
 			"properties": map[string]any{
 				"name":         map[string]any{"type": "string", "minLength": 1},
 				"version":      map[string]any{"type": "string"},
-				"transport":    map[string]any{"type": "string", "enum": []string{"stdio", "streamable-http"}},
+				"transport":    map[string]any{"type": "string", "enum": []any{"stdio", "streamable-http"}},
 				"command":      map[string]any{"type": "string"},
 				"args":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 				"url":          map[string]any{"type": "string"},
@@ -99,7 +99,7 @@ func proposalToolSchema() map[string]any {
 				},
 				"retry": proposalRetrySchema(),
 			},
-			"required": []string{"name", "version", "transport", "timeoutSec"},
+			"required": []any{"name", "version", "transport", "timeoutSec"},
 		},
 		domain.ResourceKnowledgeWorkspace: {
 			"type": "object", "additionalProperties": false,
@@ -108,7 +108,7 @@ func proposalToolSchema() map[string]any {
 				"description":    map[string]any{"type": "string", "minLength": 1},
 				"embeddingModel": map[string]any{"type": "string"},
 			},
-			"required": []string{"name", "description", "embeddingModel"},
+			"required": []any{"name", "description", "embeddingModel"},
 		},
 	}
 	kinds := []domain.ResourceKind{
@@ -122,7 +122,7 @@ func proposalToolSchema() map[string]any {
 				"operation":    map[string]any{"const": string(operation)},
 				"payload":      payloads[kind],
 			}
-			required := []string{"resourceKind", "operation", "payload"}
+			required := []any{"resourceKind", "operation", "payload"}
 			if operation == domain.OperationUpdate {
 				properties["resourceId"] = map[string]any{"type": "string", "minLength": 1}
 				required = append(required, "resourceId")
@@ -157,7 +157,7 @@ func proposalRetrySchema() map[string]any {
 				"maximum": maxProposalMCPRetryBackoffFactor,
 			},
 		},
-		"required": []string{"enabled", "maxRetries", "initialDelayMs", "maxDelayMs", "backoffFactor"},
+		"required": []any{"enabled", "maxRetries", "initialDelayMs", "maxDelayMs", "backoffFactor"},
 	}
 }
 

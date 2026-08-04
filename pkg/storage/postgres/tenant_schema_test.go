@@ -12,24 +12,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTenantSchemaContainsPlatformMCPIdentityAndSeed(t *testing.T) {
+func TestTenantSchemaCleansUpPlatformMCPRows(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	require.NoError(t, err)
 	sql := string(data)
 
 	require.Contains(t, sql, "system_key TEXT")
 	require.Contains(t, sql, "management_mode TEXT NOT NULL DEFAULT 'tenant_managed'")
-	require.Contains(t, sql, "stratum.platform_mcp")
 	require.Contains(t, sql, "stratum-platform-assistant")
-	require.Contains(t, sql, "CREATE TABLE IF NOT EXISTS mcp_invocation_jtis")
-	require.Contains(t, sql, "CREATE INDEX IF NOT EXISTS idx_mcp_invocation_jtis_expiry")
-	for _, toolName := range []string{
-		"stratum_search_official_docs",
-		"stratum_diagnose_tenant",
-		"stratum_propose_resource_change",
-	} {
-		require.Contains(t, sql, toolName)
-	}
+	require.Contains(t, sql, "DELETE FROM agent_mcp_tool_links WHERE server_id = 'stratum-platform-mcp'")
+	require.Contains(t, sql, "DELETE FROM mcp_configs WHERE id = 'stratum-platform-mcp'")
+	require.Contains(t, sql, "DROP TABLE IF EXISTS mcp_invocation_jtis")
+	require.NotContains(t, sql, "CREATE TABLE IF NOT EXISTS mcp_invocation_jtis")
+	require.NotContains(t, sql, "INSERT INTO agent_mcp_tool_links")
 }
 
 func TestTenantSchemaPlatformMCPDomainIdentityFieldsAreProtected(t *testing.T) {

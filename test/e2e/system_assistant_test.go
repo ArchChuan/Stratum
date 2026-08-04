@@ -21,7 +21,6 @@ import (
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/internal/agent/infrastructure/officialdocs"
 	agentpersist "github.com/byteBuilderX/stratum/internal/agent/infrastructure/persistence"
-	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 	pgstorage "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
@@ -47,8 +46,8 @@ func (g *deterministicAssistantGateway) Route(_ context.Context, request agentpo
 	switch g.call {
 	case 1:
 		return agentport.CapabilityResponse{ToolCalls: []agentport.ToolCall{
-			{ID: "official-1", Name: platformToolID(platformmcp.ToolSearchOfficialDocs), Arguments: map[string]any{"query": "Agent 使用"}},
-			{ID: "diagnose-1", Name: platformToolID(platformmcp.ToolDiagnoseTenant), Arguments: map[string]any{"areas": []any{"agent", "mcp"}}},
+			{ID: "official-1", Name: domain.SystemAssistantToolSearchOfficialDocs, Arguments: map[string]any{"query": "Agent 使用"}},
+			{ID: "diagnose-1", Name: domain.SystemAssistantToolDiagnoseTenant, Arguments: map[string]any{"areas": []any{"agent", "mcp"}}},
 		}}, nil
 	case 2:
 		return agentport.CapabilityResponse{Content: "已完成官方检索和租户诊断。", Usage: agentport.TokenUsage{Total: 12}}, nil
@@ -69,48 +68,6 @@ func (r deterministicTenantResolver) InjectCompleter(ctx context.Context, _ stri
 
 type deterministicDiagnostics struct{}
 
-type deterministicPlatformMCP struct{}
-
-func (deterministicPlatformMCP) ToolsForServer(_ context.Context, serverID string) []agentport.ToolDefinition {
-	if serverID != platformmcp.SystemServerID {
-		return nil
-	}
-	contracts := platformmcp.NewPhase1Contracts()
-	tools := make([]agentport.ToolDefinition, 0, len(platformmcp.Phase1ToolNames))
-	for _, name := range platformmcp.Phase1ToolNames {
-		contract, _ := contracts.Lookup(name)
-		schema, _ := platformmcp.InputSchema(name)
-		tools = append(tools, agentport.ToolDefinition{
-			Name: platformToolID(name), ProviderType: domain.ProviderTypeMCP,
-			ServerID: serverID, CapabilityID: name, InputSchema: schema,
-			Metadata: map[string]any{"risk_level": string(contract.Risk), "policy_resolved": true},
-		})
-	}
-	return tools
-}
-
-func (deterministicPlatformMCP) ExecuteMCPTool(
-	ctx context.Context,
-	serverID, toolName string,
-	input map[string]any,
-) (agentport.MCPToolResult, error) {
-	if serverID != platformmcp.SystemServerID {
-		return agentport.MCPToolResult{}, errors.New("unexpected MCP server")
-	}
-	switch toolName {
-	case platformmcp.ToolSearchOfficialDocs:
-		citations, err := officialdocs.Search(ctx, input["query"].(string))
-		if err != nil {
-			return agentport.MCPToolResult{}, err
-		}
-		return structuredMCPResult(map[string]any{"citations": citations})
-	case platformmcp.ToolDiagnoseTenant:
-		return structuredMCPResult(map[string]any{"evidence": deterministicDiagnosticEvidence()})
-	default:
-		return agentport.MCPToolResult{}, errors.New("unexpected MCP tool")
-	}
-}
-
 type allowPlatformToolScope struct{}
 
 func (allowPlatformToolScope) ResolveToolUserScope(
@@ -118,18 +75,6 @@ func (allowPlatformToolScope) ResolveToolUserScope(
 	string, string, string, string,
 ) (agentport.ToolUserScope, error) {
 	return agentport.ToolUserScope{UserActive: true, AllowsTool: true}, nil
-}
-
-func structuredMCPResult(content map[string]any) (agentport.MCPToolResult, error) {
-	encoded, err := json.Marshal(content)
-	if err != nil {
-		return agentport.MCPToolResult{}, fmt.Errorf("encode deterministic MCP result: %w", err)
-	}
-	var structured map[string]any
-	if err := json.Unmarshal(encoded, &structured); err != nil {
-		return agentport.MCPToolResult{}, fmt.Errorf("decode deterministic MCP result: %w", err)
-	}
-	return agentport.MCPToolResult{StructuredContent: structured}, nil
 }
 
 func deterministicDiagnosticEvidence() domain.DiagnosticEvidence {
@@ -145,18 +90,6 @@ func deterministicDiagnosticEvidence() domain.DiagnosticEvidence {
 		},
 		CollectedAt: time.Now().UTC(),
 	}
-}
-
-func platformToolID(name string) string {
-	return "mcp:" + platformmcp.SystemServerID + ":" + name
-}
-
-func platformToolIDs() []string {
-	ids := make([]string, 0, len(platformmcp.Phase1ToolNames))
-	for _, name := range platformmcp.Phase1ToolNames {
-		ids = append(ids, platformToolID(name))
-	}
-	return ids
 }
 
 type deterministicModelValidator struct{}
@@ -305,7 +238,7 @@ func TestSystemAssistantTenantIsolationAndRoleScope(t *testing.T) {
 	require.Equal(t, domain.CurrentSystemAssistantProfileVersion,
 		agentapp.BuiltinSystemAssistantProfileSource().Version())
 	require.Equal(t, []string{"builtin:platform-guide", "builtin:tenant-diagnostic"}, profile.AllowedSkills)
-	require.Equal(t, platformToolIDs(), profile.MCPToolIDs)
+	require.Empty(t, profile.MCPToolIDs)
 	require.Equal(t, []string{"a0a0a0a0-0000-0000-0000-000000000001"}, profile.KnowledgeWorkspaceIDs)
 
 	roles := systemAssistantRoleResolver{roles: map[string]string{
@@ -353,8 +286,8 @@ func TestSystemAssistantOfficialDocsArtifactsAndAreaGap(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrOfficialEvidenceNotFound)
 
 	report := domain.BuildDiagnosticReport([]domain.SystemAssistantToolArtifact{
-		{Tool: platformmcp.ToolSearchOfficialDocs, Outcome: "success", Citations: citations, LatencyMs: 2},
-		{Tool: platformmcp.ToolDiagnoseTenant, Outcome: "gap", Evidence: &domain.DiagnosticEvidence{
+		{Tool: domain.SystemAssistantToolSearchOfficialDocs, Outcome: "success", Citations: citations, LatencyMs: 2},
+		{Tool: domain.SystemAssistantToolDiagnoseTenant, Outcome: "gap", Evidence: &domain.DiagnosticEvidence{
 			Scope: domain.DiagnosticScopeTenant,
 			Facts: []domain.DiagnosticFact{{Area: domain.DiagnosticAreaAgent, ObjectID: "tenant-a-agent",
 				Statement: "Agent 状态可读取", Source: "agent_execution", ObservedAt: time.Now().UTC()}},
@@ -396,11 +329,10 @@ func TestSystemAssistantOfficialDocsArtifactsAndAreaGap(t *testing.T) {
 	require.NotContains(t, string(gotJSON), tenantB)
 	require.NotContains(t, string(gotJSON), userB)
 
-	tools := deterministicPlatformMCP{}.ToolsForServer(context.Background(), platformmcp.SystemServerID)
-	require.Len(t, tools, len(platformmcp.Phase1ToolNames))
+	tools := agentapp.SystemAssistantToolDefinitionsForRole("admin")
+	require.Len(t, tools, 3)
 	for _, tool := range tools {
-		require.Equal(t, domain.ProviderTypeMCP, tool.ProviderType)
-		require.Equal(t, platformmcp.SystemServerID, tool.ServerID)
+		require.Equal(t, domain.ProviderTypeInternal, tool.ProviderType)
 		require.NotEmpty(t, tool.InputSchema)
 	}
 }
@@ -423,8 +355,7 @@ func TestSystemAssistantDeterministicAgentLoopPersistsTypedArtifacts(t *testing.
 	service := agentapp.NewAgentService(agentapp.AgentServiceDeps{
 		Registry: registry, TenantResolver: deterministicTenantResolver{gateway: gateway},
 		TenantModelValidator: deterministicModelValidator{}, TenantModelCatalog: deterministicModelValidator{}, ChatStore: chat,
-		MCPTools: deterministicPlatformMCP{}, MCPToolExecutor: deterministicPlatformMCP{},
-		ToolAuthorizer:     agentapp.NewToolAuthorizer(allowPlatformToolScope{}),
+		OfficialDocsSearch: officialdocs.Search,
 		DiagnosticProvider: deterministicDiagnostics{}, Logger: zap.NewNop(),
 	})
 	conversation, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, userID, "确定性 Agent Loop")
@@ -437,10 +368,10 @@ func TestSystemAssistantDeterministicAgentLoopPersistsTypedArtifacts(t *testing.
 	require.Equal(t, "已完成官方检索和租户诊断。", result.Output)
 	require.Equal(t, 2, result.Steps)
 	require.Len(t, result.ToolCalls, 2)
-	require.Equal(t, platformToolID(platformmcp.ToolSearchOfficialDocs), result.ToolCalls[0].ToolName)
-	require.Equal(t, platformToolID(platformmcp.ToolDiagnoseTenant), result.ToolCalls[1].ToolName)
+	require.Equal(t, domain.SystemAssistantToolSearchOfficialDocs, result.ToolCalls[0].ToolName)
+	require.Equal(t, domain.SystemAssistantToolDiagnoseTenant, result.ToolCalls[1].ToolName)
 	require.Len(t, result.AssistantToolArtifacts, 2, "typed MCP evidence must survive the shared tool loop")
-	require.Equal(t, platformmcp.ToolSearchOfficialDocs, result.AssistantToolArtifacts[0].Tool)
+	require.Equal(t, domain.SystemAssistantToolSearchOfficialDocs, result.AssistantToolArtifacts[0].Tool)
 	require.Equal(t, "success", result.AssistantToolArtifacts[0].Outcome)
 	require.Empty(t, result.AssistantToolArtifacts[0].ErrorCode)
 	require.NotEmpty(t, result.AssistantToolArtifacts[0].Citations)
@@ -451,9 +382,9 @@ func TestSystemAssistantDeterministicAgentLoopPersistsTypedArtifacts(t *testing.
 		require.Equal(t, domain.CurrentSystemAssistantProfileVersion, artifact.ProfileVersion)
 	}
 	require.Len(t, gateway.requests, 2)
-	require.Len(t, gateway.requests[0].LLM.Tools, len(platformmcp.Phase1ToolNames))
-	for i, name := range platformmcp.Phase1ToolNames {
-		require.Equal(t, platformToolID(name), gateway.requests[0].LLM.Tools[i].Name)
+	require.Len(t, gateway.requests[0].LLM.Tools, 2)
+	for i, name := range []string{domain.SystemAssistantToolSearchOfficialDocs, domain.SystemAssistantToolDiagnoseTenant} {
+		require.Equal(t, name, gateway.requests[0].LLM.Tools[i].Name)
 	}
 
 	messages, err := chat.ListMessages(ctx, tenantID, conversation.ID, userID)
@@ -541,7 +472,7 @@ func TestSystemAssistantHTTPContractsUseRealHandlerServiceAndPostgres(t *testing
 	require.Equal(t, domain.SystemAssistantID, persisted.ID)
 	require.Equal(t, domain.SystemAssistantKey, persisted.SystemKey)
 	require.Equal(t, []string{"builtin:platform-guide", "builtin:tenant-diagnostic"}, persisted.AllowedSkills)
-	require.Equal(t, platformToolIDs(), persisted.MCPToolIDs)
+	require.Empty(t, persisted.MCPToolIDs)
 	require.Equal(t, []string{"a0a0a0a0-0000-0000-0000-000000000001"}, persisted.KnowledgeWorkspaceIDs)
 	require.Equal(t, http.StatusConflict,
 		request(http.MethodDelete, "/agents/"+domain.SystemAssistantID, "admin", "").Code)
@@ -551,6 +482,4 @@ var _ agentport.TenantRoleResolver = systemAssistantRoleResolver{}
 var _ agentport.TenantCapabilityResolver = deterministicTenantResolver{}
 var _ agentport.DiagnosticEvidenceProvider = deterministicDiagnostics{}
 var _ agentport.TenantChatModelValidator = deterministicModelValidator{}
-var _ agentport.MCPToolProvider = deterministicPlatformMCP{}
-var _ agentport.MCPToolExecutor = deterministicPlatformMCP{}
 var _ agentport.ToolUserScopeResolver = allowPlatformToolScope{}

@@ -70,10 +70,10 @@ func releaseReport() map[string]any {
 	return map[string]any{
 		"version": 2, "status": "deployed", "commit": hex(40),
 		"images": map[string]any{
-			"backend": digest, "frontend": digest, "platform_mcp": digest, "feishu_adapter": digest,
+			"backend": digest, "frontend": digest, "feishu_adapter": digest,
 		},
 		"prior_digests": map[string]any{
-			"backend": "none", "frontend": "none", "platform_mcp": "none", "feishu_adapter": "none",
+			"backend": "none", "frontend": "none", "feishu_adapter": "none",
 		},
 		"rollback_basis":  "first_deploy",
 		"migration_check": "passed", "health_check": "passed", "rollback_check": "pending",

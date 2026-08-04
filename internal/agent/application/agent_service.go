@@ -20,7 +20,6 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
-	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
@@ -1702,12 +1701,6 @@ func (s *AgentService) resolveMCPToolRisk(
 ) (port.ToolRiskLevel, bool) {
 	risk := port.ToolRiskUnclassified
 	resolved := false
-	if serverID == platformmcp.SystemServerID {
-		if contract, ok := platformmcp.NewPhase1Contracts().Lookup(capabilityID); ok {
-			risk = platformMCPRisk(contract.Risk)
-			resolved = true
-		}
-	}
 	if s.deps.MCPToolPolicy == nil {
 		return risk, resolved
 	}
@@ -1774,13 +1767,6 @@ func applySkillAssignments(
 		activation.Variant = assignment.Variant
 		catalog[skillID] = activation
 	}
-}
-
-func platformMCPRisk(risk platformmcp.RiskLevel) port.ToolRiskLevel {
-	if risk == platformmcp.RiskWriteReversible {
-		return port.ToolRiskWriteReversible
-	}
-	return port.ToolRiskRead
 }
 
 func stricterToolRisk(left, right port.ToolRiskLevel) port.ToolRiskLevel {

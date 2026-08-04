@@ -120,9 +120,6 @@ func Run(ctx context.Context, cfg *config.Config, c *wiring.Container, logger *z
 		return postgresstorage.CheckDefaultTenantReadiness(ctx, db)
 	})
 	registerHTTPServer(appHarness, cfg, c, logger)
-	if err := registerInternalHTTPServer(appHarness, cfg, c, logger); err != nil {
-		return fmt.Errorf("register internal HTTP server: %w", err)
-	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

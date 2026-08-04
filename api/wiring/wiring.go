@@ -41,7 +41,6 @@ type Container struct {
 	Memory               *Memory
 	IAM                  *IAM
 	Agent                *Agent
-	PlatformMCP          *PlatformMCP
 	Workflow             *Workflow
 	Audit                *Audit
 	Prompt               *Prompt
@@ -81,7 +80,6 @@ func BuildContainer(ctx context.Context, cfg *config.Config, logger *zap.Logger)
 		{"memory", c.buildMemory},
 		{"iam", c.buildIAM},
 		{"agent", c.buildAgent},
-		{"platform-mcp", c.buildPlatformMCP},
 		{"workflow", c.buildWorkflow},
 		{"evaluation", c.buildEvaluation},
 	}
@@ -224,7 +222,6 @@ func (c *Container) buildExistingRuntime(ctx context.Context, memPipeline *mempi
 	return runBuildSteps(ctx, []buildStep{
 		{"iam", c.buildIAM},
 		{"agent", c.buildAgent},
-		{"platform-mcp", c.buildPlatformMCP},
 		{"evaluation", c.buildEvaluation},
 	})
 }

@@ -462,80 +462,19 @@ ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS management_mode TEXT NOT NULL D
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_configs_system_key
     ON mcp_configs(system_key) WHERE system_key IS NOT NULL;
 
-DO $$
-DECLARE
-    server_name TEXT := '__stratum_platform_mcp__';
-    suffix INTEGER := 0;
-BEGIN
-    WHILE EXISTS (
-        SELECT 1 FROM mcp_configs
-        WHERE name = server_name
-          AND id <> 'stratum-platform-mcp'
-    ) LOOP
-        suffix := suffix + 1;
-        server_name := '__stratum_platform_mcp__' || suffix::TEXT;
-    END LOOP;
-
-    INSERT INTO mcp_configs (
-        id, name, transport, command, url, args, env, capabilities,
-        timeout_sec, enabled, system_key, management_mode
-    ) VALUES (
-        'stratum-platform-mcp', server_name, 'streamable-http', '',
-        'https://stratum-platform-mcp:8443/mcp', '[]'::jsonb, '{}'::jsonb, '[]'::jsonb,
-        30, true, 'stratum.platform_mcp', 'platform_managed'
-    )
-    ON CONFLICT DO NOTHING;
-END $$;
-
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM mcp_configs
-        WHERE id = 'stratum-platform-mcp'
-          AND system_key = 'stratum.platform_mcp'
-          AND management_mode = 'platform_managed'
-    ) THEN
-        RAISE EXCEPTION 'stratum platform MCP identity conflict requires operator action';
-    END IF;
-END $$;
-
 CREATE TABLE IF NOT EXISTS agent_mcp_tool_links (
     agent_id  TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     server_id TEXT NOT NULL REFERENCES mcp_configs(id) ON DELETE CASCADE,
     tool_name TEXT NOT NULL,
     PRIMARY KEY (agent_id, server_id, tool_name)
 );
+-- platform-mcp 已废弃（2026-08-04）：清理存量种子行，避免旧租户残留
+-- 外部 MCP server 与系统助手工具绑定。
+DELETE FROM agent_mcp_tool_links WHERE server_id = 'stratum-platform-mcp';
+DELETE FROM mcp_configs WHERE id = 'stratum-platform-mcp';
 
-INSERT INTO agent_mcp_tool_links (agent_id, server_id, tool_name)
-VALUES
-    ('stratum-platform-assistant', 'stratum-platform-mcp', 'stratum_search_official_docs'),
-    ('stratum-platform-assistant', 'stratum-platform-mcp', 'stratum_diagnose_tenant'),
-    ('stratum-platform-assistant', 'stratum-platform-mcp', 'stratum_propose_resource_change')
-ON CONFLICT DO NOTHING;
-
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM agent_mcp_tool_links
-        WHERE agent_id = 'stratum-platform-assistant'
-          AND server_id = 'stratum-platform-mcp'
-          AND tool_name NOT IN (
-              'stratum_search_official_docs',
-              'stratum_diagnose_tenant',
-              'stratum_propose_resource_change'
-          )
-    ) THEN
-        RAISE EXCEPTION 'stratum platform MCP tool binding conflict requires operator action';
-    END IF;
-END $$;
-
-CREATE TABLE IF NOT EXISTS mcp_invocation_jtis (
-    jti         TEXT PRIMARY KEY,
-    expires_at  TIMESTAMPTZ NOT NULL,
-    consumed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_mcp_invocation_jtis_expiry
-    ON mcp_invocation_jtis(expires_at);
+-- platform-mcp 一次性调用令牌重放表已废弃。
+DROP TABLE IF EXISTS mcp_invocation_jtis;
 
 -- Tool risk is tenant-owned policy. MCP servers may describe tools but cannot
 -- assign themselves a trusted risk level.
