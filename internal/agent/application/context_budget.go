@@ -118,9 +118,10 @@ func BuildContextMessagesWithCompaction(
 	}
 
 	// 为摘要预留额度（仅当有压缩器时），封顶避免吃满预算。
+	// 使用与窗口规模联动的 5% 比例（下限 200t），而非固定的 budget/4。
 	summaryReserve := 0
 	if compactor != nil {
-		summaryReserve = min(budget/4, constants.MinSystemPromptTokens*2)
+		summaryReserve = min(constants.DynamicSummaryReserve(budget), budget)
 	}
 	histBudget := max(budget-summaryReserve, 0)
 	for len(histMsgs) > 0 && estimateMessagesTokens(histMsgs) > histBudget {

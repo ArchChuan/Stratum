@@ -11,8 +11,10 @@ import (
 
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
+	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
 )
@@ -36,10 +38,26 @@ type agentReadWriter interface {
 }
 
 type agentEvaluationAdapter struct {
-	revisions    agentRevisionService
-	agents       agentRevisionExecutor
-	agentUpdater agentReadWriter
-	actorID      string
+	revisions      agentRevisionService
+	agents         agentRevisionExecutor
+	agentUpdater   agentReadWriter
+	modelValidator agentport.TenantChatModelValidator
+	actorID        string
+}
+
+// validateCandidateModel fails closed: a candidate model that cannot be
+// resolved for the tenant must never be created or applied.
+func (a agentEvaluationAdapter) validateCandidateModel(ctx context.Context, tenantID, model string) error {
+	if strings.TrimSpace(model) == "" {
+		return errors.New("evaluation Agent adapter: model required")
+	}
+	if a.modelValidator == nil {
+		return errors.New("evaluation Agent adapter: model validator unavailable")
+	}
+	if err := a.modelValidator.ValidateTenantChatModel(ctx, tenantID, model); err != nil {
+		return fmt.Errorf("evaluation Agent adapter: validate candidate model %q: %w", model, err)
+	}
+	return nil
 }
 
 func (a agentEvaluationAdapter) CreatePublishedBaseline(
@@ -107,24 +125,31 @@ func (a agentEvaluationAdapter) ApplyPublishedRevision(
 	if !found {
 		return fmt.Errorf("evaluation Agent adapter: revision %s not found", revisionID)
 	}
+	if err := a.validateCandidateModel(ctx, tenantID, snapshot.Model); err != nil {
+		return err
+	}
 	existing, err := a.agentUpdater.Get(ctx, agentID)
 	if err != nil {
 		return fmt.Errorf("evaluation Agent adapter: get agent: %w", err)
 	}
 	// Preserve every field except those the optimization pipeline is authorized to change.
 	_, err = a.agentUpdater.Update(ctx, agentID, agentapp.UpdateAgentInput{
-		Name:                  existing.Name,
-		Type:                  existing.Type,
-		Description:           existing.Description,
-		SystemPrompt:          snapshot.SystemPrompt,
-		LLMModel:              snapshot.Model,
-		MaxIterations:         snapshot.MaxIterations,
-		MaxContextTokens:      snapshot.ModelParameters.MaxContextTokens,
-		AllowedSkills:         existing.AllowedSkills,
-		MCPToolIDs:            existing.MCPToolIDs,
-		KnowledgeWorkspaceIDs: existing.KnowledgeWorkspaceIDs,
-		MemoryScope:           existing.MemoryScope,
-		CheckpointEnabled:     existing.CheckpointEnabled,
+		Name:                   existing.Name,
+		Type:                   existing.Type,
+		Description:            existing.Description,
+		SystemPrompt:           snapshot.SystemPrompt,
+		LLMModel:               snapshot.Model,
+		MaxIterations:          snapshot.MaxIterations,
+		MaxContextTokens:       snapshot.ModelParameters.MaxContextTokens,
+		Temperature:            snapshot.ModelParameters.Temperature,
+		MaxTokens:              snapshot.ModelParameters.MaxTokens,
+		CompactionRecentGroups: snapshot.ModelParameters.CompactionRecentGroups,
+		CompactionSafetyRatio:  snapshot.ModelParameters.CompactionSafetyRatio,
+		AllowedSkills:          existing.AllowedSkills,
+		MCPToolIDs:             existing.MCPToolIDs,
+		KnowledgeWorkspaceIDs:  existing.KnowledgeWorkspaceIDs,
+		MemoryScope:            existing.MemoryScope,
+		CheckpointEnabled:      existing.CheckpointEnabled,
 	})
 	if err != nil {
 		return fmt.Errorf("evaluation Agent adapter: apply to agent: %w", err)
@@ -160,6 +185,11 @@ func (a agentEvaluationAdapter) CreateCandidate(
 	candidatePatch, err := parseAgentCandidatePatch(snapshot, patch)
 	if err != nil {
 		return evaldomain.ResourceRef{}, err
+	}
+	if candidatePatch.Model != "" {
+		if err := a.validateCandidateModel(ctx, tenantID, candidatePatch.Model); err != nil {
+			return evaldomain.ResourceRef{}, err
+		}
 	}
 	candidate, err := snapshot.ApplyCandidate(candidatePatch)
 	if err != nil {
@@ -333,17 +363,16 @@ func parseAgentCandidatePatch(
 	parametersChanged := false
 	for key, value := range patch.ParameterPatch {
 		switch key {
-		case "model":
-			result.Model, _ = value.(string)
-			if strings.TrimSpace(result.Model) == "" {
-				return result, errors.New("evaluation Agent adapter: model must be non-empty")
+		case "model", "max_context_tokens", "temperature", "max_tokens",
+			"compaction_recent_groups", "compaction_safety_ratio":
+			model, changed, err := parseModelParameterPatch(key, value, &params)
+			if err != nil {
+				return result, err
 			}
-		case "max_context_tokens":
-			parsed, ok := integer(value)
-			if !ok {
-				return result, errors.New("evaluation Agent adapter: max_context_tokens must be an integer")
+			if model != "" {
+				result.Model = model
 			}
-			params.MaxContextTokens, parametersChanged = parsed, true
+			parametersChanged = parametersChanged || changed
 		case "max_iterations":
 			parsed, ok := integer(value)
 			if !ok {
@@ -364,6 +393,131 @@ func parseAgentCandidatePatch(
 		result.ModelParameters = &params
 	}
 	return result, nil
+}
+
+// parseModelParameterPatch applies one model-config parameter patch key
+// (model, max_context_tokens, temperature, max_tokens) into params. It returns
+// the patched model name (empty when unchanged) and whether any parameter
+// value was modified. Kept separate so the candidate patch parser stays within
+// the code-quality complexity budget.
+func parseModelParameterPatch(key string, value any, params *agentdomain.ModelParameters) (string, bool, error) {
+	switch key {
+	case "model":
+		model, _ := value.(string)
+		if strings.TrimSpace(model) == "" {
+			return "", false, errors.New("evaluation Agent adapter: model must be non-empty")
+		}
+		return model, false, nil
+	case "max_context_tokens":
+		changed, err := applyNumericPatch(key, value, parseInteger, func(v any) error {
+			params.MaxContextTokens = v.(int)
+			return nil
+		}, "max_context_tokens")
+		return "", changed, err
+	case "temperature":
+		changed, err := applyNumericPatch(key, value, parseFloat, func(v any) error {
+			params.Temperature = float32(v.(float64))
+			return nil
+		}, "temperature")
+		return "", changed, err
+	case "max_tokens":
+		changed, err := applyNumericPatch(key, value, parseInteger, func(v any) error {
+			params.MaxTokens = v.(int)
+			return nil
+		}, "max_tokens")
+		return "", changed, err
+	case "compaction_recent_groups":
+		changed, err := applyNumericPatch(key, value, parseInteger, func(v any) error {
+			params.CompactionRecentGroups = v.(int)
+			return nil
+		}, "compaction_recent_groups")
+		return "", changed, err
+	case "compaction_safety_ratio":
+		changed, err := applyNumericPatch(key, value, parseFloat, func(v any) error {
+			params.CompactionSafetyRatio = float32(v.(float64))
+			return nil
+		}, "compaction_safety_ratio")
+		return "", changed, err
+	}
+	return "", false, nil
+}
+
+// applyNumericPatch runs the shared parse → range-validate → assign sequence
+// for every numeric model-config patch key, keeping the per-key cases one line
+// each and the failure mode identical across keys (fail closed before apply).
+func applyNumericPatch(key string, value any, parse func(any) (any, bool), apply func(any) error, what string) (bool, error) {
+	parsed, ok := parse(value)
+	if !ok {
+		return false, fmt.Errorf("evaluation Agent adapter: %s must be a number", what)
+	}
+	if err := validateParameterRange(key, parsed); err != nil {
+		return false, err
+	}
+	return true, apply(parsed)
+}
+
+func parseInteger(value any) (any, bool) {
+	i, ok := integer(value)
+	return i, ok
+}
+
+func parseFloat(value any) (any, bool) {
+	f, ok := floatValue(value)
+	return f, ok
+}
+
+// validateParameterRange fails closed at parse time for every model-config
+// patch key: out-of-range candidates are rejected before they reach the
+// revision pipeline, matching the domain-side validateModelParameters bounds.
+// 0 keeps its "unset / auto" semantics everywhere it is meaningful.
+func validateParameterRange(key string, parsed any) error {
+	switch key {
+	case "max_context_tokens":
+		return validateIntRange(key, parsed.(int),
+			constants.TunableMaxContextTokensMin, constants.TunableMaxContextTokensMax)
+	case "temperature":
+		return validateFloatRange(key, parsed.(float64),
+			constants.TunableTemperatureMin, constants.TunableTemperatureMax)
+	case "max_tokens":
+		return validateIntRange(key, parsed.(int),
+			constants.TunableMaxTokensMin, constants.TunableMaxTokensMax)
+	case "compaction_recent_groups":
+		return validateDiscrete(key, parsed.(int), 0, 2, 3, 5)
+	case "compaction_safety_ratio":
+		return validateFloatRangeOrZero(key, parsed.(float64),
+			constants.TunableSafetyRatioMin, constants.TunableSafetyRatioMax)
+	}
+	return nil
+}
+
+func validateIntRange(key string, v, min, max int) error {
+	if v < min || v > max {
+		return fmt.Errorf("evaluation Agent adapter: %s must be in [%d, %d]", key, min, max)
+	}
+	return nil
+}
+
+func validateFloatRange(key string, v, min, max float64) error {
+	if v < min || v > max {
+		return fmt.Errorf("evaluation Agent adapter: %s must be in [%v, %v]", key, min, max)
+	}
+	return nil
+}
+
+func validateFloatRangeOrZero(key string, v, min, max float64) error {
+	if v != 0 && (v < min || v > max) {
+		return fmt.Errorf("evaluation Agent adapter: %s must be 0 or in [%v, %v]", key, min, max)
+	}
+	return nil
+}
+
+func validateDiscrete(key string, v int, allowed ...int) error {
+	for _, a := range allowed {
+		if v == a {
+			return nil
+		}
+	}
+	return fmt.Errorf("evaluation Agent adapter: %s must be one of %v", key, allowed)
 }
 
 func bindingPatch(value any) ([]agentdomain.AgentBinding, error) {
@@ -390,6 +544,19 @@ func integer(value any) (int, bool) {
 	case float64:
 		converted := int(typed)
 		return converted, float64(converted) == typed
+	default:
+		return 0, false
+	}
+}
+
+func floatValue(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case int:
+		return float64(typed), true
 	default:
 		return 0, false
 	}

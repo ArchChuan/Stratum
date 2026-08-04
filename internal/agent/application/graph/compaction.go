@@ -99,22 +99,29 @@ func compactLoopMessagesWithReserve(
 	recentGroups int,
 	compactor port.HistoryCompactor,
 ) []port.LLMMessage {
-	return compactLoopMessagesWithProtectedUsers(ctx, msgs, budget, reservedTokens, recentGroups, 1, compactor)
+	return compactLoopMessagesWithPolicy(ctx, msgs, budget, reservedTokens, recentGroups,
+		1, 1.0, constants.LoopCompactionSafetyRatio, compactor)
 }
 
-func compactLoopMessagesWithProtectedUsers(
+// compactLoopMessagesWithPolicy is the full compaction core. The threshold is
+// budget·safety/correction: a correction > 1 (the token estimate under-counted
+// the previous request) lowers the threshold and compacts earlier; < 1 later.
+// correction ≤ 0 is treated as 1 (no correction).
+func compactLoopMessagesWithPolicy(
 	ctx context.Context,
 	msgs []port.LLMMessage,
 	budget int,
 	reservedTokens int,
 	recentGroups int,
 	protectedUsers int,
+	correction float64,
+	safetyRatio float64,
 	compactor port.HistoryCompactor,
 ) []port.LLMMessage {
 	if budget <= 0 {
 		return msgs
 	}
-	threshold := max(int(float64(budget)*constants.LoopCompactionSafetyRatio)-reservedTokens, 0)
+	threshold := compactionThreshold(budget, reservedTokens, correction, safetyRatio)
 	if tokenutil.EstimateMessages(toEstimate(msgs)) <= threshold {
 		return msgs // lazy: still fits, do nothing
 	}
@@ -124,15 +131,38 @@ func compactLoopMessagesWithProtectedUsers(
 	if recentGroups < 0 {
 		recentGroups = 0
 	}
+	rebuilt := rebuildProtectedSegments(ctx, groups, headEnd, recentGroups, protectedUsers, compactor)
+	rebuilt = evictUntilFit(rebuilt, threshold)
+	rebuilt = truncateProtectedUntilFit(rebuilt, threshold)
+	return flatten(rebuilt)
+}
 
-	// Build the evictable sequence without the current request. The latest user
-	// message is the active task; preceding user messages belong to chat history.
+// compactionThreshold normalizes the policy parameters and derives the budget
+// threshold: correction > 1 (previous estimate under-counted) lowers it, so the
+// next step compacts earlier; safetyRatio scales the usable fraction of budget.
+func compactionThreshold(budget, reservedTokens int, correction, safetyRatio float64) int {
+	if correction <= 0 {
+		correction = 1
+	}
+	if safetyRatio <= 0 {
+		safetyRatio = constants.LoopCompactionSafetyRatio
+	}
+	return max(int(float64(budget)*safetyRatio/correction)-reservedTokens, 0)
+}
+
+// rebuildProtectedSegments re-joins the anchor head, breadcrumb-compacted middle
+// segments, and the protected user turns. The latest user message is the active
+// task; preceding user messages belong to chat history and are protected in
+// order of recency when protectedUsers > 0.
+func rebuildProtectedSegments(ctx context.Context, groups []msgGroup, headEnd, recentGroups, protectedUsers int, compactor port.HistoryCompactor) []msgGroup {
 	protectedUserIdx := make(map[int]struct{}, max(protectedUsers, 0))
 	for i := len(groups) - 1; i >= headEnd && len(protectedUserIdx) < protectedUsers; i-- {
 		if groups[i].role0 == "user" {
 			protectedUserIdx[i] = struct{}{}
 		}
 	}
+	latestProtected := latestProtectedUserIndex(protectedUserIdx)
+
 	rebuilt := append([]msgGroup(nil), groups[:headEnd]...)
 	segmentStart := headEnd
 	seenProtectedUser := false
@@ -148,18 +178,14 @@ func compactLoopMessagesWithProtectedUsers(
 		protectedUser := groups[i]
 		protectedUser.anchorHdr = true
 		protectedUser.priority = 2
-		if protectedUsers > 1 && i == latestProtectedUserIndex(protectedUserIdx) {
+		if protectedUsers > 1 && i == latestProtected {
 			protectedUser.priority = 1
 		}
 		rebuilt = append(rebuilt, protectedUser)
 		segmentStart = i + 1
 		seenProtectedUser = true
 	}
-	rebuilt = appendCompactedSegment(ctx, rebuilt, groups[segmentStart:], recentGroups, compactor)
-
-	rebuilt = evictUntilFit(rebuilt, threshold)
-	rebuilt = truncateProtectedUntilFit(rebuilt, threshold)
-	return flatten(rebuilt)
+	return appendCompactedSegment(ctx, rebuilt, groups[segmentStart:], recentGroups, compactor)
 }
 
 func latestProtectedUserIndex(indices map[int]struct{}) int {
