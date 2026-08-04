@@ -30,7 +30,8 @@ classify_acceptance_path() {
 	    cmd/feishu-alert-adapter|cmd/feishu-alert-adapter/*|cmd/remote-health-monitor|cmd/remote-health-monitor/*|\
 	    cmd/e2e-*|cmd/e2e-*/*|internal/platform/e2eattestation/*|internal/platform/e2erunscope/*|\
 	    scripts/e2e/*|scripts/quality/test-verification-*|.agents/skills/stratum-e2e-development/*|test/e2e/*|\
-	    scripts/deploy-remote-monitoring.sh|.github/workflows/deploy.yml|.github/workflows/remote-health-monitor.yml)
+	    scripts/deploy-remote-monitoring.sh|.github/workflows/deploy.yml|.github/workflows/reconcile-monitoring.yml|\
+	    .github/workflows/remote-health-monitor.yml)
       acceptance_mode=soak
       ;;
   esac
@@ -61,7 +62,7 @@ select_for_path() {
       ;;
   esac
   case "${path}" in
-    helm/*|k8s/*|.github/workflows/deploy.yml|scripts/quality/check-deployment-safety*)
+    helm/*|k8s/*|.github/workflows/deploy.yml|.github/workflows/reconcile-monitoring.yml|scripts/quality/check-deployment-safety*)
       selected[deployment]=1
       ;;
   esac
