@@ -87,6 +87,8 @@ gh pr create --base main
 
 CI 全绿后合并，再用 `git worktree remove ../stratum-<feature>` 清理。Commit/PR 标题格式为 `[type](scope): description`，type 使用 `feat|fix|refactor|perf|test|docs|chore|ci`；PR 描述包含 What、Why、HowToTest。
 
+push 触发 CI 后的等待期间，必须先检查 PR base 是否落后于最新 `origin/main`（`git fetch origin main` 后比较 base commit）。若落后：先把最新 main 合入分支，本地验证无冲突且测试通过后 push（merge commit 关联提交者），再继续等 CI。禁止在 base 落后状态下依赖当前 CI 结果或合并 PR——CI 的 merge ref 是 head+base 的动态合并，base 前进会改变实际合并结果。
+
 ## Development and end-to-end verification
 
 - 编码前运行 `bash scripts/quality/risk-regression-guard.sh --explain`。后端快速验证：`go vet && go test -short ./...`；PR 前：`go test -v -race -timeout 30s ./...`。前端 PR 前：`make fe-lint && make fe-build`。依赖服务可用 `make infra-up`。
