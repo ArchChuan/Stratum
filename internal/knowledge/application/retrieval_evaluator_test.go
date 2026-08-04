@@ -12,14 +12,15 @@ import (
 )
 
 func TestEvaluateRetrievalAppliesExactRevisionConfigWithoutLeakingContent(t *testing.T) {
+	// The fake retriever stands in for RAGService.Query, which applies rerank,
+	// threshold, and narrowing; it returns the strategy-applied result.
 	retriever := &fakeEvaluationRetriever{result: &RAGQueryResult{Sources: []Source{
-		{DocumentID: "doc-low", Content: "private low content", Score: 0.40},
 		{DocumentID: "doc-high", Content: "private high content", Score: 0.95},
 	}}}
 	evaluator := NewRetrievalEvaluator(retriever)
 	result, err := evaluator.EvaluateRetrieval(reqctx.WithTenantID(context.Background(), "tenant-1"), RetrievalSnapshot{
 		WorkspaceID: "workspace-1", WorkspaceName: "support", EmbeddingModel: "embedding-3",
-		QueryMode: "vector", TopK: 1, ScoreThreshold: 0.80, Reranking: "score_desc",
+		QueryMode: "vector", TopK: 1, ScoreThreshold: 0.80, Reranking: RerankIdentityBuiltin,
 		QueryRewrite: "lowercase_trim",
 	}, RetrievalCase{Query: "  REFUND POLICY  ", RelevantDocumentIDs: []string{"doc-high"},
 		CitationDocumentIDs: []string{"doc-high"}})
@@ -28,8 +29,10 @@ func TestEvaluateRetrievalAppliesExactRevisionConfigWithoutLeakingContent(t *tes
 	}
 	if retriever.request.Question != "refund policy" || retriever.request.TenantID != "tenant-1" ||
 		retriever.request.WorkspaceID != "workspace-1" ||
-		retriever.request.EmbeddingModel != "embedding-3" || retriever.request.TopK != 1 {
-		t.Fatalf("exact snapshot was not executed: %+v", retriever.request)
+		retriever.request.EmbeddingModel != "embedding-3" || retriever.request.TopK != 1 ||
+		retriever.request.Reranking != RerankIdentityBuiltin || retriever.request.ScoreThreshold != 0.80 ||
+		retriever.request.RerankTopK != 1 {
+		t.Fatalf("exact snapshot was not delegated: %+v", retriever.request)
 	}
 	if !result.Relevant || !result.CitationCorrect || result.NoAnswer || result.RetrievedCount != 1 {
 		t.Fatalf("unexpected evaluation: %+v", result)
@@ -43,16 +46,15 @@ func TestEvaluateRetrievalAppliesExactRevisionConfigWithoutLeakingContent(t *tes
 	}
 }
 
-func TestRetrieveContextAppliesSnapshotOrderThresholdAndLimit(t *testing.T) {
+func TestRetrieveContextDelegatesSnapshotToRetriever(t *testing.T) {
 	retriever := &fakeEvaluationRetriever{result: &RAGQueryResult{Sources: []Source{
-		{DocumentID: "low", Content: "low", Score: 0.4},
-		{DocumentID: "second", Content: "second", Score: 0.8},
 		{DocumentID: "first", Content: "first", Score: 0.9},
+		{DocumentID: "second", Content: "second", Score: 0.8},
 	}}}
 	snapshot := RetrievalSnapshot{
 		WorkspaceID: "workspace-1", WorkspaceName: "support", EmbeddingModel: "embedding-3",
 		QueryMode: "hybrid", TopK: 2, ScoreThreshold: 0.7,
-		Reranking: RerankingScoreDesc, QueryRewrite: QueryRewriteLowercaseTrim,
+		Reranking: RerankIdentityBuiltin, QueryRewrite: QueryRewriteLowercaseTrim,
 	}
 
 	content, err := NewRetrievalEvaluator(retriever).RetrieveContext(
@@ -60,18 +62,20 @@ func TestRetrieveContextAppliesSnapshotOrderThresholdAndLimit(t *testing.T) {
 	)
 
 	if err != nil || content != "first\n---\nsecond\n---\n" || retriever.request.Question != "query" ||
-		retriever.request.TopK != 2 || retriever.request.Mode != "hybrid" {
+		retriever.request.TopK != 2 || retriever.request.Mode != "hybrid" ||
+		retriever.request.Reranking != RerankIdentityBuiltin || retriever.request.ScoreThreshold != 0.7 ||
+		retriever.request.RerankTopK != 2 {
 		t.Fatalf("content=%q request=%+v err=%v", content, retriever.request, err)
 	}
 }
 
 func TestEvaluateRetrievalCoversNoAnswerAndDependencyFailure(t *testing.T) {
-	evaluator := NewRetrievalEvaluator(&fakeEvaluationRetriever{result: &RAGQueryResult{Sources: []Source{
-		{DocumentID: "doc-low", Content: "private", Score: 0.2},
-	}}})
+	// The fake retriever applies the threshold (0.9) and returns nothing, so
+	// the evaluator observes an empty result set -> no_answer.
+	evaluator := NewRetrievalEvaluator(&fakeEvaluationRetriever{result: &RAGQueryResult{Sources: nil}})
 	result, err := evaluator.EvaluateRetrieval(context.Background(), RetrievalSnapshot{
 		WorkspaceID: "workspace-1", WorkspaceName: "support", EmbeddingModel: "embedding-3",
-		QueryMode: "vector", TopK: 5, ScoreThreshold: 0.9, Reranking: "none", QueryRewrite: "none",
+		QueryMode: "vector", TopK: 5, ScoreThreshold: 0.9, Reranking: RerankingNone, QueryRewrite: "none",
 	}, RetrievalCase{Query: "unknown", ExpectNoAnswer: true})
 	if err != nil || !result.NoAnswer || !result.Relevant || !result.CitationCorrect {
 		t.Fatalf("result=%+v err=%v", result, err)
@@ -80,7 +84,7 @@ func TestEvaluateRetrievalCoversNoAnswerAndDependencyFailure(t *testing.T) {
 	wantErr := errors.New("milvus unavailable")
 	_, err = NewRetrievalEvaluator(&fakeEvaluationRetriever{err: wantErr}).EvaluateRetrieval(
 		context.Background(), RetrievalSnapshot{WorkspaceID: "workspace-1", WorkspaceName: "support",
-			EmbeddingModel: "embedding-3", QueryMode: "vector", TopK: 5, Reranking: "none", QueryRewrite: "none"},
+			EmbeddingModel: "embedding-3", QueryMode: "vector", TopK: 5, Reranking: RerankingNone, QueryRewrite: "none"},
 		RetrievalCase{Query: "query"})
 	if !errors.Is(err, ErrRetrievalDependency) || errors.Is(err, wantErr) {
 		t.Fatalf("dependency failure must be safely classified, got %v", err)
@@ -93,7 +97,7 @@ func TestEvaluateRetrievalSanitizesSensitiveDependencyFailure(t *testing.T) {
 	_, err := NewRetrievalEvaluator(&fakeEvaluationRetriever{err: sensitive}).EvaluateRetrieval(
 		reqctx.WithTenantID(context.Background(), "tenant-1"), RetrievalSnapshot{
 			WorkspaceID: "workspace-1", WorkspaceName: "support", EmbeddingModel: "embedding-3",
-			QueryMode: "vector", TopK: 5, Reranking: "none", QueryRewrite: "none",
+			QueryMode: "vector", TopK: 5, Reranking: RerankingNone, QueryRewrite: "none",
 		}, RetrievalCase{Query: "query"})
 	if !errors.Is(err, ErrRetrievalDependency) || errors.Is(err, sensitive) {
 		t.Fatalf("dependency error classification/cause exposure mismatch: %v", err)
@@ -108,13 +112,16 @@ func TestEvaluateRetrievalSanitizesSensitiveDependencyFailure(t *testing.T) {
 
 func TestRetrievalSnapshotValidationRejectsUnsupportedRuntime(t *testing.T) {
 	base := RetrievalSnapshot{WorkspaceID: "workspace-1", WorkspaceName: "support", EmbeddingModel: "embedding-3",
-		QueryMode: domain.DefaultQueryMode, TopK: 5, Reranking: "none", QueryRewrite: "none"}
+		QueryMode: domain.DefaultQueryMode, TopK: 5, Reranking: RerankingNone, QueryRewrite: "none"}
 	for _, mutate := range []func(*RetrievalSnapshot){
 		func(s *RetrievalSnapshot) { s.TopK = 0 },
 		func(s *RetrievalSnapshot) { s.TopK = 101 },
 		func(s *RetrievalSnapshot) { s.ScoreThreshold = -0.1 },
 		func(s *RetrievalSnapshot) { s.ScoreThreshold = 1.1 },
 		func(s *RetrievalSnapshot) { s.Reranking = "external-provider" },
+		func(s *RetrievalSnapshot) { s.Reranking = "cohere" },
+		func(s *RetrievalSnapshot) { s.Reranking = "none" },
+		func(s *RetrievalSnapshot) { s.Reranking = "score_desc" },
 		func(s *RetrievalSnapshot) { s.QueryRewrite = "llm" },
 	} {
 		snapshot := base

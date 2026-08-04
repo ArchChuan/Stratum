@@ -10,6 +10,8 @@ import (
 func newTestMetrics(t *testing.T) *PrometheusMetrics {
 	t.Helper()
 	m := NewPrometheusMetrics(zap.NewNop())
+	// cmd/server 装配路径会显式注册 reaper 指标；冒烟测试覆盖该路径。
+	m.RegisterReaperMetrics()
 	t.Cleanup(func() { _ = m.reg.Unregister(m.reg) })
 	return m
 }
@@ -64,7 +66,7 @@ func TestPrometheusAllMethodsSmoke(t *testing.T) {
 	m.RecordAgentConversationTurn("a1", 5)
 
 	m.IncScheduledFire("cron", "ok")
-	m.IncRerankRequest("bge-reranker", "ok")
+	m.IncRerankRequest("tenant-1", "bge-reranker", "ok")
 	m.RecordRerankDuration("bge-reranker", 0.2)
 	m.IncRouteFallback("deepseek-v4-flash", "qwen-max")
 	m.RecordBudgetRatio("monthly", 0.4)
@@ -192,7 +194,7 @@ func TestNoopMetricsSafeForAllMethods(t *testing.T) {
 	nm.RecordAgentEvalScore("a", "m", 1)
 	nm.RecordAgentConversationTurn("a", 1)
 	nm.IncScheduledFire("s", "ok")
-	nm.IncRerankRequest("m", "ok")
+	nm.IncRerankRequest("tenant-1", "m", "ok")
 	nm.RecordRerankDuration("m", 1)
 	nm.IncRouteFallback("a", "b")
 	nm.RecordBudgetRatio("s", 1)

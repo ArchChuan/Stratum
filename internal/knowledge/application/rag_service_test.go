@@ -308,6 +308,10 @@ func (r *recordingChunkRepo) GetChunksByIDs(_ context.Context, _, _ string, _ []
 	return nil, nil
 }
 
+func (r *recordingChunkRepo) CountByWorkspace(context.Context, string, string) (int64, error) {
+	return 0, nil
+}
+
 type recordingWorkspaceRepo struct {
 	workspace *domain.Workspace
 }

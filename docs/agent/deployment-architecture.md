@@ -407,6 +407,12 @@ flowchart LR
     helm --> verify["kubectl rollout status<br/>kubectl get pods"]
 ```
 
+远端监控 reconcile 不在 deploy 内联执行：`.github/workflows/reconcile-monitoring.yml` 通过
+`workflow_run` 在 "Build and Deploy" 完成后触发（另加每日 schedule 与手动触发），与 deploy 共享
+`stratum-production` concurrency group，避免两个工作流同时访问集群。reconcile 消费的 Feishu
+adapter 镜像优先读集群内已部署的 digest 形式，缺失时按 head SHA 从镜像仓库解析并校验
+`sha256:` digest，保证永不回退到可变 tag。
+
 现在后端和前端部署使用完整 commit SHA 作为镜像 tag：
 
 ```yaml

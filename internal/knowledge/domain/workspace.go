@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -11,6 +12,8 @@ var (
 	ErrInvalidEmbeddingModel     = errors.New("unsupported embedding model")
 	ErrInvalidQueryMode          = errors.New("invalid query_mode")
 	ErrInvalidChunkingStrategy   = errors.New("invalid chunking_strategy")
+	ErrInvalidRerankIdentity     = errors.New("invalid reranking identity")
+	ErrInvalidScoreThreshold     = errors.New("score_threshold must be within [0, 1]")
 	ErrEmbeddingModelImmutable   = errors.New("embedding_model is immutable after creation")
 	ErrChunkSizeImmutable        = errors.New("chunk_size is immutable after creation")
 	ErrChunkOverlapImmutable     = errors.New("chunk_overlap is immutable after creation")
@@ -50,6 +53,24 @@ var AllowedQueryModes = map[string]bool{
 	"hybrid": true,
 }
 
+// AllowedRerankIdentities enumerates rerank strategies recognised by
+// RAGService: "" (none), the local builtin scorer, and external providers in
+// "provider:model" form. Extend here when a new reranker is wired up.
+var AllowedRerankIdentities = map[string]bool{
+	"":                 true,
+	"builtin-score-v1": true,
+	"cohere":           true,
+}
+
+// SplitRerankIdentity splits "provider:model" style rerank identities;
+// bare strings are provider-only (e.g. builtin-score-v1).
+func SplitRerankIdentity(identity string) (provider, model string) {
+	if i := strings.Index(identity, ":"); i >= 0 {
+		return identity[:i], identity[i+1:]
+	}
+	return identity, ""
+}
+
 // Workspace is a knowledge RAG workspace owned by a tenant.
 type Workspace struct {
 	ID             string
@@ -70,6 +91,14 @@ type WorkspaceConfig struct {
 	QueryMode        string
 	TopK             int
 	ChunkingStrategy string
+	// Reranking is the rerank strategy identity: "" (none),
+	// "builtin-score-v1" (local score desc), or "provider:model" for an
+	// external reranker. ScoreThreshold keeps only results with sim >=
+	// threshold (0 disables); RerankTopK is the final count after external
+	// reranking (0 uses TopK).
+	Reranking      string
+	ScoreThreshold float32
+	RerankTopK     int
 }
 
 // NewWorkspace constructs a Workspace, applying defaults to cfg and validating it.
@@ -86,7 +115,8 @@ func NewWorkspace(name, description string, cfg WorkspaceConfig, defaultChunkSiz
 	}, nil
 }
 
-// Validate checks that EmbeddingModel, QueryMode, and ChunkingStrategy fall within the allowed sets.
+// Validate checks that EmbeddingModel, QueryMode, ChunkingStrategy, and the
+// rerank settings fall within the allowed sets.
 func (c WorkspaceConfig) Validate() error {
 	if !AllowedEmbeddingModels[c.EmbeddingModel] {
 		return ErrInvalidEmbeddingModel
@@ -96,6 +126,13 @@ func (c WorkspaceConfig) Validate() error {
 	}
 	if !AllowedChunkingStrategies[c.ChunkingStrategy] {
 		return ErrInvalidChunkingStrategy
+	}
+	provider, model := SplitRerankIdentity(c.Reranking)
+	if !AllowedRerankIdentities[provider] || (provider == "cohere" && model == "") {
+		return ErrInvalidRerankIdentity
+	}
+	if c.ScoreThreshold < 0 || c.ScoreThreshold > 1 {
+		return ErrInvalidScoreThreshold
 	}
 	return nil
 }
@@ -124,20 +161,11 @@ func applyDefaults(c WorkspaceConfig, defaultChunkSize, defaultTopK int) Workspa
 
 // MergeUpdate returns the result of applying a partial update to the current
 // config. It enforces immutability of embedding_model / chunk_size / chunk_overlap
-// and validates the resulting query_mode.
+// and validates the resulting query_mode and rerank settings.
 func (c WorkspaceConfig) MergeUpdate(partial WorkspaceConfig) (WorkspaceConfig, error) {
 	out := c
-	if partial.EmbeddingModel != "" && partial.EmbeddingModel != c.EmbeddingModel {
-		return c, ErrEmbeddingModelImmutable
-	}
-	if partial.ChunkSize > 0 && partial.ChunkSize != c.ChunkSize {
-		return c, ErrChunkSizeImmutable
-	}
-	if partial.ChunkOverlap > 0 && partial.ChunkOverlap != c.ChunkOverlap {
-		return c, ErrChunkOverlapImmutable
-	}
-	if partial.ChunkingStrategy != "" && partial.ChunkingStrategy != c.ChunkingStrategy {
-		return c, ErrChunkingStrategyImmutable
+	if err := c.applyImmutableSettings(partial); err != nil {
+		return c, err
 	}
 	if partial.QueryMode != "" {
 		if !AllowedQueryModes[partial.QueryMode] {
@@ -147,6 +175,51 @@ func (c WorkspaceConfig) MergeUpdate(partial WorkspaceConfig) (WorkspaceConfig, 
 	}
 	if partial.TopK > 0 {
 		out.TopK = partial.TopK
+	}
+	merged, err := out.applyRerankSettings(partial)
+	if err != nil {
+		return c, err
+	}
+	return merged, nil
+}
+
+// applyImmutableSettings rejects updates to fields that are fixed after
+// workspace creation.
+func (c WorkspaceConfig) applyImmutableSettings(partial WorkspaceConfig) error {
+	if partial.EmbeddingModel != "" && partial.EmbeddingModel != c.EmbeddingModel {
+		return ErrEmbeddingModelImmutable
+	}
+	if partial.ChunkSize > 0 && partial.ChunkSize != c.ChunkSize {
+		return ErrChunkSizeImmutable
+	}
+	if partial.ChunkOverlap > 0 && partial.ChunkOverlap != c.ChunkOverlap {
+		return ErrChunkOverlapImmutable
+	}
+	if partial.ChunkingStrategy != "" && partial.ChunkingStrategy != c.ChunkingStrategy {
+		return ErrChunkingStrategyImmutable
+	}
+	return nil
+}
+
+// applyRerankSettings merges the rerank fields, validating the identity and
+// score threshold before applying.
+func (c WorkspaceConfig) applyRerankSettings(partial WorkspaceConfig) (WorkspaceConfig, error) {
+	out := c
+	if partial.Reranking != "" {
+		provider, model := SplitRerankIdentity(partial.Reranking)
+		if !AllowedRerankIdentities[provider] || (provider == "cohere" && model == "") {
+			return c, ErrInvalidRerankIdentity
+		}
+		out.Reranking = partial.Reranking
+	}
+	if partial.ScoreThreshold > 0 {
+		if partial.ScoreThreshold > 1 {
+			return c, ErrInvalidScoreThreshold
+		}
+		out.ScoreThreshold = partial.ScoreThreshold
+	}
+	if partial.RerankTopK > 0 {
+		out.RerankTopK = partial.RerankTopK
 	}
 	return out, nil
 }

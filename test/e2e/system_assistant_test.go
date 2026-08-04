@@ -237,7 +237,7 @@ func TestSystemAssistantTenantIsolationAndRoleScope(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, domain.CurrentSystemAssistantProfileVersion,
 		agentapp.BuiltinSystemAssistantProfileSource().Version())
-	require.Equal(t, []string{"builtin:platform-guide", "builtin:tenant-diagnostic"}, profile.AllowedSkills)
+	require.Equal(t, []string{"builtin:platform-guide", "builtin:tenant-diagnostic", "builtin:resource-change", "builtin:tool-execution"}, profile.AllowedSkills)
 	require.Empty(t, profile.MCPToolIDs)
 	require.Equal(t, []string{"a0a0a0a0-0000-0000-0000-000000000001"}, profile.KnowledgeWorkspaceIDs)
 
@@ -471,7 +471,7 @@ func TestSystemAssistantHTTPContractsUseRealHandlerServiceAndPostgres(t *testing
 	require.True(t, found)
 	require.Equal(t, domain.SystemAssistantID, persisted.ID)
 	require.Equal(t, domain.SystemAssistantKey, persisted.SystemKey)
-	require.Equal(t, []string{"builtin:platform-guide", "builtin:tenant-diagnostic"}, persisted.AllowedSkills)
+	require.Equal(t, []string{"builtin:platform-guide", "builtin:tenant-diagnostic", "builtin:resource-change", "builtin:tool-execution"}, persisted.AllowedSkills)
 	require.Empty(t, persisted.MCPToolIDs)
 	require.Equal(t, []string{"a0a0a0a0-0000-0000-0000-000000000001"}, persisted.KnowledgeWorkspaceIDs)
 	require.Equal(t, http.StatusConflict,

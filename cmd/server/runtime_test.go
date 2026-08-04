@@ -4,15 +4,59 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/byteBuilderX/stratum/api/wiring"
+	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
+	"github.com/byteBuilderX/stratum/internal/iam/domain/port"
 	harnesspkg "github.com/byteBuilderX/stratum/internal/platform/harness"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+// panicOnceOnboardRepo panics on the first ListExpiredGuests call, then succeeds.
+// Used to verify that runGuestReaper recovers from tick panics and continues.
+type panicOnceOnboardRepo struct {
+	port.OnboardRepo // nil embed — only ListExpiredGuests is called
+	panicked         atomic.Bool
+	recovered        chan struct{}
+}
+
+func (r *panicOnceOnboardRepo) ListExpiredGuests(context.Context, time.Time) ([]string, error) {
+	if !r.panicked.Swap(true) {
+		panic("injected test panic")
+	}
+	select {
+	case r.recovered <- struct{}{}:
+	default:
+	}
+	return nil, nil
+}
+
+// stubAdminTenantRepo satisfies port.AdminTenantRepo with a nil embed.
+// DeleteTenant is never called because ListExpiredGuests returns empty after recovery.
+type stubAdminTenantRepo struct{ port.AdminTenantRepo }
+
+// spyMetrics counts reaper panic-related metric calls.
+type spyMetrics struct {
+	observability.NoopMetrics
+	panicCycles     atomic.Int32
+	goroutinePanics atomic.Int32
+}
+
+func (m *spyMetrics) IncReaperCycle(outcome string) {
+	if outcome == "panic" {
+		m.panicCycles.Add(1)
+	}
+}
+
+func (m *spyMetrics) IncGoroutinePanic(_ string) {
+	m.goroutinePanics.Add(1)
+}
 
 func TestWithPostgresReadinessIncludesDatabaseFailure(t *testing.T) {
 	wantErr := errors.New("database not ready")
@@ -122,5 +166,41 @@ func TestBootstrapTenantSchemasPropagatesProvisionAllFailure(t *testing.T) {
 	err := bootstrapTenantSchemas(context.Background(), nil, zap.NewNop(), deps)
 	if !errors.Is(err, wantErr) || !strings.Contains(err.Error(), "tenant schemas") {
 		t.Fatalf("error = %v, want wrapped provision-all failure", err)
+	}
+}
+
+// TestRunGuestReaperSurvivesTickPanic verifies that the guest reaper recovers
+// from a panic inside a tick body and continues running subsequent ticks. Without
+// this recovery, a single panic (e.g. pgx pool exhaustion, nil deref) kills the
+// goroutine silently, causing StratumReaperDown to fire after 2h.
+func TestRunGuestReaperSurvivesTickPanic(t *testing.T) {
+	recovered := make(chan struct{}, 5)
+	onboardRepo := &panicOnceOnboardRepo{recovered: recovered}
+	onboard := iamapp.NewOnboardService(onboardRepo)
+	admin := iamapp.NewAdminService(&stubAdminTenantRepo{})
+	metrics := &spyMetrics{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go runGuestReaper(ctx, onboard, admin, metrics, 20*time.Millisecond, zap.NewNop())
+
+	// Wait for several successful ticks — each proves the loop survived the
+	// initial panic and continues firing on schedule.
+	for range 3 {
+		select {
+		case <-recovered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("reaper did not survive panic — timed out waiting for post-panic tick")
+		}
+	}
+
+	cancel()
+
+	if n := metrics.panicCycles.Load(); n == 0 {
+		t.Error("IncReaperCycle('panic') was not called after recovery")
+	}
+	if n := metrics.goroutinePanics.Load(); n == 0 {
+		t.Error("IncGoroutinePanic was not called after recovery")
 	}
 }

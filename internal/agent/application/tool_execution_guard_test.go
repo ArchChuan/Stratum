@@ -89,6 +89,76 @@ func TestToolExecutionGuardRequestsApprovalBeforeDestructiveExecution(t *testing
 	require.Zero(t, executor.calls)
 }
 
+func TestToolExecutionGuardSystemAssistantApprovalBoundaries(t *testing.T) {
+	// Platform assistant applies the strict L3b risk model (spec 2026-08-04
+	// §4.4): write_reversible needs approval; destructive and unclassified
+	// tools are refused. Ordinary agents keep the shared model.
+	t.Run("write reversible requires approval", func(t *testing.T) {
+		executor := &countingMCPExecutor{}
+		requests := 0
+		guard := NewToolExecutionGuard(ToolExecutionGuardDeps{
+			Authorizer: NewToolAuthorizer(stubToolUserScopeResolver{
+				scope: port.ToolUserScope{UserActive: true, AllowsTool: true},
+			}),
+			Executor: executor,
+			RequestApproval: func(_ context.Context, request port.ToolApprovalRequest) (string, error) {
+				requests++
+				require.Equal(t, "call-1", request.ToolCallID)
+				return "approval-sa-1", nil
+			},
+		})
+		req := authorizedToolExecutionRequest()
+		req.AgentID = domain.SystemAssistantID
+		req.Tool.Metadata["risk_level"] = "write_reversible"
+
+		_, err := guard.Execute(context.Background(), req)
+
+		var approvalErr *port.ToolApprovalRequiredError
+		require.ErrorAs(t, err, &approvalErr)
+		require.Equal(t, "approval-sa-1", approvalErr.ApprovalID)
+		require.Equal(t, 1, requests)
+		require.Zero(t, executor.calls)
+	})
+
+	t.Run("destructive refused before executor", func(t *testing.T) {
+		executor := &countingMCPExecutor{}
+		guard := NewToolExecutionGuard(ToolExecutionGuardDeps{
+			Authorizer: NewToolAuthorizer(stubToolUserScopeResolver{
+				scope: port.ToolUserScope{UserActive: true, AllowsTool: true},
+			}),
+			Executor: executor,
+		})
+		req := authorizedToolExecutionRequest()
+		req.AgentID = domain.SystemAssistantID
+		req.Tool.Metadata["risk_level"] = "destructive"
+
+		_, err := guard.Execute(context.Background(), req)
+
+		require.ErrorIs(t, err, ErrToolAuthorizationDenied)
+		require.Contains(t, err.Error(), string(domain.ToolReasonDestructiveForbidden))
+		require.Zero(t, executor.calls)
+	})
+
+	t.Run("unclassified refused before executor", func(t *testing.T) {
+		executor := &countingMCPExecutor{}
+		guard := NewToolExecutionGuard(ToolExecutionGuardDeps{
+			Authorizer: NewToolAuthorizer(stubToolUserScopeResolver{
+				scope: port.ToolUserScope{UserActive: true, AllowsTool: true},
+			}),
+			Executor: executor,
+		})
+		req := authorizedToolExecutionRequest()
+		req.AgentID = domain.SystemAssistantID
+		req.Tool.Metadata["risk_level"] = "unclassified"
+
+		_, err := guard.Execute(context.Background(), req)
+
+		require.ErrorIs(t, err, ErrToolAuthorizationDenied)
+		require.Contains(t, err.Error(), string(domain.ToolReasonToolUnclassified))
+		require.Zero(t, executor.calls)
+	})
+}
+
 func TestToolExecutionGuardReauthorizesApprovedCall(t *testing.T) {
 	executor := &countingMCPExecutor{}
 	approvedCalls := 0

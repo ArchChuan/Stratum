@@ -12,6 +12,9 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
+    // 限 2 worker：多 worktree 并行跑测试时防止 vitest 吃满 CPU
+    // （与 scripts/quality/risk-regression-guard.sh 的 --maxWorkers=2 一致）
+    maxWorkers: 2,
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
     coverage: {

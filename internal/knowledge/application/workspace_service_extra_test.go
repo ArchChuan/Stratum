@@ -420,6 +420,10 @@ func (v *vectorStoreFailing) Search(context.Context, string, []float32, int) ([]
 	return nil, nil
 }
 
+func (v *vectorStoreFailing) DescribeCollection(context.Context, string) (port.CollectionInfo, error) {
+	return port.CollectionInfo{}, nil
+}
+
 func (v *vectorStoreFailing) Flush(context.Context, string) error { return nil }
 
 func (v *vectorStoreFailing) DeleteCollection(context.Context, string) error {

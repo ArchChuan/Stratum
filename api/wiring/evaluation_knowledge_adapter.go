@@ -50,10 +50,26 @@ type knowledgeRetrievalSnapshot struct {
 	QueryRewrite      string  `json:"query_rewrite"`
 }
 
+// legacyRerankingValue maps rerank values persisted by earlier revisions to
+// their current identity forms. Historical snapshots stored "none" and
+// "score_desc"; new snapshots write identity values only ("" /
+// "builtin-score-v1" / "provider:model"). Unknown values pass through so
+// validation can reject them.
+func legacyRerankingValue(v string) string {
+	switch v {
+	case knowledgeapp.RerankingNone:
+		return ""
+	case knowledgeapp.RerankingScoreDesc:
+		return knowledgeapp.RerankIdentityBuiltin
+	}
+	return v
+}
+
 func (s knowledgeRetrievalSnapshot) evaluationSnapshot() knowledgeapp.RetrievalSnapshot {
 	return knowledgeapp.RetrievalSnapshot{WorkspaceID: s.WorkspaceID, WorkspaceName: s.WorkspaceName,
 		EmbeddingModel: s.EmbeddingIdentity, QueryMode: s.QueryMode, TopK: s.TopK,
-		ScoreThreshold: s.ScoreThreshold, Reranking: s.Reranking, QueryRewrite: s.QueryRewrite}
+		ScoreThreshold: s.ScoreThreshold, Reranking: legacyRerankingValue(s.Reranking),
+		QueryRewrite: s.QueryRewrite}
 }
 
 func (s knowledgeRetrievalSnapshot) validate() error {
@@ -69,6 +85,10 @@ type knowledgeEvaluationAdapter struct {
 	source    knowledgeSnapshotSource
 	evaluator *knowledgeapp.RetrievalEvaluator
 	actorID   string
+	// rerankAvailable reports whether the platform-level external reranker is
+	// wired. Execution fails closed when a snapshot selects an external
+	// identity but no backend is configured.
+	rerankAvailable func() bool
 }
 
 func (a knowledgeEvaluationAdapter) CreatePublishedBaseline(
@@ -137,7 +157,7 @@ func (a knowledgeEvaluationAdapter) LoadOptimizableSnapshot(
 		return nil, err
 	}
 	return map[string]any{"top_k": snapshot.TopK, "score_threshold": snapshot.ScoreThreshold,
-		"reranking": snapshot.Reranking, "query_rewrite": snapshot.QueryRewrite}, nil
+		"reranking": legacyRerankingValue(snapshot.Reranking), "query_rewrite": snapshot.QueryRewrite}, nil
 }
 
 func (a knowledgeEvaluationAdapter) CreateCandidate(
@@ -206,20 +226,9 @@ func (a knowledgeEvaluationAdapter) ExecuteRevision(
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
-	_, snapshot, err := a.loadRevision(ctx, tenantID, ref, true)
+	snapshot, err := a.loadVerifiedSnapshot(ctx, tenantID, ref)
 	if err != nil {
 		return evalport.ExecutionResult{}, err
-	}
-	documents, err := a.source.ListSnapshotDocuments(ctx, tenantID, snapshot.WorkspaceID)
-	if err != nil {
-		return evalport.ExecutionResult{}, fmt.Errorf("evaluation Knowledge adapter: verify documents: %w", err)
-	}
-	currentHash, err := knowledgeDocumentSetHash(documents)
-	if err != nil {
-		return evalport.ExecutionResult{}, err
-	}
-	if currentHash != snapshot.DocumentSetHash {
-		return evalport.ExecutionResult{}, errors.New("evaluation Knowledge adapter: document set changed")
 	}
 	retrievalCase, err := parseKnowledgeRetrievalCase(testCase)
 	if err != nil {
@@ -230,6 +239,45 @@ func (a knowledgeEvaluationAdapter) ExecuteRevision(
 		return evalport.ExecutionResult{}, err
 	}
 	return evalport.ExecutionResult{Output: result}, nil
+}
+
+// loadVerifiedSnapshot loads the revision and verifies its document set is
+// unchanged and its rerank backend is available before evaluation runs.
+func (a knowledgeEvaluationAdapter) loadVerifiedSnapshot(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
+) (knowledgeRetrievalSnapshot, error) {
+	_, snapshot, err := a.loadRevision(ctx, tenantID, ref, true)
+	if err != nil {
+		return knowledgeRetrievalSnapshot{}, err
+	}
+	documents, err := a.source.ListSnapshotDocuments(ctx, tenantID, snapshot.WorkspaceID)
+	if err != nil {
+		return knowledgeRetrievalSnapshot{}, fmt.Errorf("evaluation Knowledge adapter: verify documents: %w", err)
+	}
+	currentHash, err := knowledgeDocumentSetHash(documents)
+	if err != nil {
+		return knowledgeRetrievalSnapshot{}, err
+	}
+	if currentHash != snapshot.DocumentSetHash {
+		return knowledgeRetrievalSnapshot{}, errors.New("evaluation Knowledge adapter: document set changed")
+	}
+	if err := a.preflightRerank(snapshot); err != nil {
+		return knowledgeRetrievalSnapshot{}, err
+	}
+	return snapshot, nil
+}
+
+// preflightRerank fails closed when a revision selects an external rerank
+// identity but the platform-level reranker is not wired.
+func (a knowledgeEvaluationAdapter) preflightRerank(snapshot knowledgeRetrievalSnapshot) error {
+	provider, _ := knowledgedomain.SplitRerankIdentity(legacyRerankingValue(snapshot.Reranking))
+	if provider == "" || provider == knowledgeapp.RerankIdentityBuiltin {
+		return nil
+	}
+	if a.rerankAvailable == nil || !a.rerankAvailable() {
+		return errors.New("evaluation Knowledge adapter: external reranker requested but not configured")
+	}
+	return nil
 }
 
 func (a knowledgeEvaluationAdapter) loadRevision(
@@ -342,7 +390,9 @@ func applyKnowledgeCandidatePatch(snapshot *knowledgeRetrievalSnapshot, patch ev
 			if !ok {
 				return nil, errors.New("evaluation Knowledge adapter: reranking must be string")
 			}
-			snapshot.Reranking = parsed
+			// Normalise legacy optimizer outputs ("none"/"score_desc") so new
+			// revisions persist identity values only.
+			snapshot.Reranking = legacyRerankingValue(parsed)
 		case "query_rewrite":
 			parsed, ok := value.(string)
 			if !ok {

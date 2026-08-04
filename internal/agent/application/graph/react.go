@@ -28,12 +28,16 @@ const (
 
 // ReActState is the mutable state threaded through the ReAct graph.
 type ReActState struct {
-	TenantID                   string
-	TraceID                    string
-	ConversationID             string
-	Model                      string
-	Temperature                float32 // 0 = provider default
-	MaxTokens                  int     // 0 = unset
+	TenantID       string
+	TraceID        string
+	ConversationID string
+	Model          string
+	Temperature    float32 // 0 = provider default
+	MaxTokens      int     // 0 = unset
+	// ModelResolved 是本次执行最后一次 LLM 调用实际成功的模型名（fallback
+	// 降级后与 Model 不同）；ModelRoutedVia 是实际尝试过的模型链。
+	ModelResolved              string
+	ModelRoutedVia             []string
 	AvailableTools             []port.ToolDefinition
 	SkillCatalog               map[string]port.SkillActivation
 	ActiveSkill                *port.SkillActivation
@@ -245,7 +249,7 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 			return s, fmt.Errorf("react llm node: %w", err)
 		}
 		s.Steps++
-		total, cost := ledger.Record(ctx, s.Model, resp.Usage)
+		total, cost := recordModelResolution(ctx, &s, resp, ledger)
 		s.TotalTokens += total
 		s.TotalCostUSD += cost
 		s.TokenCorrection = updateTokenCorrection(s.TokenCorrection, s.LastEstimatedTokens, resp.Usage.Prompt)
@@ -343,6 +347,18 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 		}
 		return s, nil
 	}
+}
+
+// recordModelResolution 回写模型解析结果（fallback 降级后与配置模型不同）
+// 并按实际解析模型记账（价格不同），返回累计 token 与成本。
+func recordModelResolution(ctx context.Context, s *ReActState, resp port.CapabilityResponse, ledger TokenRecorder) (int, float64) {
+	s.ModelResolved = resp.ModelResolved
+	s.ModelRoutedVia = resp.ModelRoutedVia
+	ledgerModel := s.Model
+	if resp.ModelResolved != "" {
+		ledgerModel = resp.ModelResolved
+	}
+	return ledger.Record(ctx, ledgerModel, resp.Usage)
 }
 
 // loopPolicy resolves the in-loop compaction tunables from the run state:

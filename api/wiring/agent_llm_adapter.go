@@ -77,7 +77,9 @@ func buildAgentCapabilityResponse(traceID string, raw *llmdomain.CompletionRespo
 	}
 	return agentport.CapabilityResponse{
 		TraceID: traceID, Type: agentport.CapLLM, Duration: duration, Content: raw.Content, ToolCalls: toolCalls,
-		Usage: agentport.TokenUsage{Prompt: raw.Usage.PromptTokens, Completion: raw.Usage.CompletionTokens, Total: raw.Usage.TotalTokens},
+		Usage:          agentport.TokenUsage{Prompt: raw.Usage.PromptTokens, Completion: raw.Usage.CompletionTokens, Total: raw.Usage.TotalTokens},
+		ModelResolved:  raw.ModelResolved,
+		ModelRoutedVia: raw.ModelRoutedVia,
 	}
 }
 

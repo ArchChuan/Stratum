@@ -44,7 +44,7 @@ func TestKnowledgeEvaluationAdapterCreatesPublishedImmutableBaseline(t *testing.
 func TestKnowledgeEvaluationAdapterCandidateIsBoundedIdempotentAndExact(t *testing.T) {
 	snapshot := knowledgeRetrievalSnapshot{TenantID: "tenant-1", WorkspaceID: "workspace-id", WorkspaceName: "support",
 		DocumentSetHash: "documents", EmbeddingIdentity: "embedding-3", QueryMode: "hybrid", TopK: 5,
-		ScoreThreshold: 0.2, RerankingIdentity: knowledgeRerankingIdentity, Reranking: "none", QueryRewrite: "none"}
+		ScoreThreshold: 0.2, RerankingIdentity: knowledgeRerankingIdentity, Reranking: knowledgeapp.RerankingNone, QueryRewrite: "none"}
 	revisions := publishedKnowledgeRevisions(t, snapshot)
 	adapter := knowledgeEvaluationAdapter{revisions: revisions, evaluator: knowledgeapp.NewRetrievalEvaluator(
 		&fakeKnowledgeRetriever{result: &knowledgeapp.RAGQueryResult{}})}
@@ -65,6 +65,9 @@ func TestKnowledgeEvaluationAdapterCandidateIsBoundedIdempotentAndExact(t *testi
 		candidate.RerankingIdentity != snapshot.RerankingIdentity || candidate.TopK != 8 {
 		t.Fatalf("immutable state changed: %+v", candidate)
 	}
+	if candidate.Reranking != knowledgeapp.RerankIdentityBuiltin {
+		t.Fatalf("legacy patch value was not normalised to identity: %+v", candidate)
+	}
 	for _, unsafe := range []map[string]any{{"workspace_id": "other"}, {"tenant_id": "other"},
 		{"embedding_identity": "other"}, {"documents": []any{}}, {"top_k": float64(101)}, {"query_rewrite": "llm"}} {
 		if _, err := adapter.CreateCandidate(context.Background(), "tenant-1", knowledgeRef("published-1"),
@@ -82,7 +85,7 @@ func TestKnowledgeEvaluationAdapterRequiresPublishedTenantRevisionAndSafeOutput(
 	}
 	snapshot := knowledgeRetrievalSnapshot{TenantID: "tenant-1", WorkspaceID: "workspace-id", WorkspaceName: "support",
 		DocumentSetHash: documentSetHash, EmbeddingIdentity: "embedding-3", QueryMode: "vector", TopK: 5,
-		RerankingIdentity: knowledgeRerankingIdentity, Reranking: "none", QueryRewrite: "none"}
+		RerankingIdentity: knowledgeRerankingIdentity, Reranking: knowledgeapp.RerankingNone, QueryRewrite: "none"}
 	retriever := &fakeKnowledgeRetriever{result: &knowledgeapp.RAGQueryResult{Sources: []knowledgeapp.Source{
 		{DocumentID: "doc-1", Content: "raw secret document", Score: 0.9},
 	}}}
@@ -116,7 +119,7 @@ func TestKnowledgeEvaluationAdapterRejectsReassociatedCrossTenantPayload(t *test
 	snapshot := knowledgeRetrievalSnapshot{TenantID: "tenant-1", WorkspaceID: "workspace-id",
 		WorkspaceName: "support", DocumentSetHash: "documents", EmbeddingIdentity: "embedding-3",
 		RerankingIdentity: knowledgeRerankingIdentity, QueryMode: "vector", TopK: 5,
-		Reranking: "none", QueryRewrite: "none"}
+		Reranking: knowledgeapp.RerankingNone, QueryRewrite: "none"}
 	revisions := publishedKnowledgeRevisions(t, snapshot)
 	adapter := knowledgeEvaluationAdapter{revisions: revisions}
 
@@ -133,13 +136,79 @@ func TestKnowledgeEvaluationAdapterCandidatePreservesTenantOwnership(t *testing.
 	snapshot := knowledgeRetrievalSnapshot{TenantID: "tenant-1", WorkspaceID: "workspace-id",
 		WorkspaceName: "support", DocumentSetHash: "documents", EmbeddingIdentity: "embedding-3",
 		RerankingIdentity: knowledgeRerankingIdentity, QueryMode: "vector", TopK: 5,
-		Reranking: "none", QueryRewrite: "none"}
+		Reranking: knowledgeapp.RerankingNone, QueryRewrite: "none"}
 	revisions := publishedKnowledgeRevisions(t, snapshot)
 	adapter := knowledgeEvaluationAdapter{revisions: revisions}
 	_, err := adapter.CreateCandidate(context.Background(), "tenant-1", knowledgeRef("published-1"),
 		evaldomain.CandidatePatch{ParameterPatch: map[string]any{"tenant_id": "tenant-2"}})
 	if err == nil {
 		t.Fatal("candidate changed immutable tenant ownership")
+	}
+}
+
+func TestKnowledgeEvaluationAdapterPreflightRerankFailsClosed(t *testing.T) {
+	documents := []*knowledgedomain.Document{{ID: "doc-1", ContentHash: "hash-1", IngestStatus: "completed"}}
+	documentSetHash, err := knowledgeDocumentSetHash(documents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := knowledgeRetrievalSnapshot{TenantID: "tenant-1", WorkspaceID: "workspace-id",
+		WorkspaceName: "support", DocumentSetHash: documentSetHash, EmbeddingIdentity: "embedding-3",
+		RerankingIdentity: knowledgeRerankingIdentity, QueryMode: "vector", TopK: 5,
+		Reranking: "cohere:rerank-v3.0", QueryRewrite: "none"}
+	executionCase := evaldomain.EvalCase{Input: map[string]any{"query": "refund"}}
+	ref := knowledgeRef("published-1")
+
+	for _, tc := range []struct {
+		name            string
+		rerankAvailable func() bool
+		wantErr         bool
+	}{
+		{name: "unwired backend fails closed", rerankAvailable: nil, wantErr: true},
+		{name: "disabled backend fails closed", rerankAvailable: func() bool { return false }, wantErr: true},
+		{name: "wired backend proceeds", rerankAvailable: func() bool { return true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter := knowledgeEvaluationAdapter{
+				revisions:       publishedKnowledgeRevisions(t, snapshot),
+				evaluator:       knowledgeapp.NewRetrievalEvaluator(&fakeKnowledgeRetriever{result: &knowledgeapp.RAGQueryResult{}}),
+				source:          &fakeKnowledgeSnapshotSource{documents: documents},
+				rerankAvailable: tc.rerankAvailable,
+			}
+			_, err := adapter.ExecuteRevision(context.Background(), "tenant-1", "user-1", ref, executionCase)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "external reranker requested but not configured") {
+					t.Fatalf("expected fail-closed preflight error, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestKnowledgeEvaluationAdapterPreflightRerankSkipsBuiltinAndNone(t *testing.T) {
+	for _, identity := range []string{"", "builtin-score-v1"} {
+		documents := []*knowledgedomain.Document{{ID: "doc-1", ContentHash: "hash-1", IngestStatus: "completed"}}
+		documentSetHash, err := knowledgeDocumentSetHash(documents)
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot := knowledgeRetrievalSnapshot{TenantID: "tenant-1", WorkspaceID: "workspace-id",
+			WorkspaceName: "support", DocumentSetHash: documentSetHash, EmbeddingIdentity: "embedding-3",
+			RerankingIdentity: knowledgeRerankingIdentity, QueryMode: "vector", TopK: 5,
+			Reranking: identity, QueryRewrite: "none"}
+		adapter := knowledgeEvaluationAdapter{
+			revisions: publishedKnowledgeRevisions(t, snapshot),
+			evaluator: knowledgeapp.NewRetrievalEvaluator(&fakeKnowledgeRetriever{result: &knowledgeapp.RAGQueryResult{}}),
+			source:    &fakeKnowledgeSnapshotSource{documents: documents},
+		}
+		if _, err := adapter.ExecuteRevision(context.Background(), "tenant-1", "user-1",
+			knowledgeRef("published-1"), evaldomain.EvalCase{Input: map[string]any{"query": "refund"}}); err != nil {
+			t.Fatalf("identity %q must not require an external backend, got %v", identity, err)
+		}
 	}
 }
 
@@ -210,7 +279,7 @@ func TestKnowledgeEvaluationAdapterResolvesOptimizationCandidateForOfflineEvalua
 	snapshot := knowledgeRetrievalSnapshot{TenantID: "tenant-1", WorkspaceID: "workspace-id",
 		WorkspaceName: "support", DocumentSetHash: "documents", EmbeddingIdentity: "embedding",
 		RerankingIdentity: knowledgeRerankingIdentity, QueryMode: "vector", TopK: 5,
-		Reranking: "none", QueryRewrite: "none"}
+		Reranking: knowledgeapp.RerankingNone, QueryRewrite: "none"}
 	revisions := publishedKnowledgeRevisions(t, snapshot)
 	revisions.revision.Status = evaldomain.RevisionStatusDraft
 	revisions.revision.Source = evaldomain.RevisionSourceOptimization
@@ -243,7 +312,8 @@ func TestExperimentKnowledgeRevisionResolverLoadsExactRuntimeAndRejectsDocumentD
 		context.Background(), "tenant-1", "support", "published-1",
 	)
 	if err != nil || revision.RevisionID != "published-1" || revision.WorkspaceID != "workspace-id" ||
-		revision.TopK != 2 || revision.ScoreThreshold != 0.7 || revision.QueryRewrite != "lowercase_trim" {
+		revision.TopK != 2 || revision.ScoreThreshold != 0.7 || revision.QueryRewrite != "lowercase_trim" ||
+		revision.Reranking != knowledgeapp.RerankIdentityBuiltin {
 		t.Fatalf("revision=%+v err=%v", revision, err)
 	}
 	source.documents = append(source.documents,

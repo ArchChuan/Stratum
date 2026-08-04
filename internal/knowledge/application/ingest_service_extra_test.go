@@ -39,6 +39,10 @@ func (m *mockChunkRepo) KeywordSearch(context.Context, string, string, string, i
 	return nil, nil
 }
 
+func (m *mockChunkRepo) CountByWorkspace(context.Context, string, string) (int64, error) {
+	return 0, nil
+}
+
 func (m *mockChunkRepo) DeleteByWorkspace(_ context.Context, tenantID, workspaceID string) error {
 	if m.deleteErr != nil {
 		return m.deleteErr

@@ -2,7 +2,7 @@ groups:
   - name: stratum-reaper
     rules:
       - alert: StratumReaperDown
-        expr: (time() - reaper_last_cycle_timestamp_seconds) > 7200
+        expr: (time() - reaper_last_cycle_timestamp_seconds) > 7200 and reaper_last_cycle_timestamp_seconds > 0
         for: 10m
         labels:
           severity: warning

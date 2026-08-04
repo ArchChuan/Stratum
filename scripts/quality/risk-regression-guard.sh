@@ -21,6 +21,8 @@ labels=(
 )
 declare -A selected=()
 acceptance_mode=short
+# go 工具链并行度：负载感知降级，多 worktree 并行 guard 时防止 CPU 打满
+PARALLELISM="$(bash scripts/quality/go-parallelism.sh)"
 
 classify_acceptance_path() {
   case "${1#./}" in
@@ -30,7 +32,8 @@ classify_acceptance_path() {
 	    cmd/feishu-alert-adapter|cmd/feishu-alert-adapter/*|cmd/remote-health-monitor|cmd/remote-health-monitor/*|\
 	    cmd/e2e-*|cmd/e2e-*/*|internal/platform/e2eattestation/*|internal/platform/e2erunscope/*|\
 	    scripts/e2e/*|scripts/quality/test-verification-*|.agents/skills/stratum-e2e-development/*|test/e2e/*|\
-	    scripts/deploy-remote-monitoring.sh|.github/workflows/deploy.yml|.github/workflows/remote-health-monitor.yml)
+	    scripts/deploy-remote-monitoring.sh|.github/workflows/deploy.yml|.github/workflows/reconcile-monitoring.yml|\
+	    .github/workflows/remote-health-monitor.yml)
       acceptance_mode=soak
       ;;
   esac
@@ -61,7 +64,7 @@ select_for_path() {
       ;;
   esac
   case "${path}" in
-    helm/*|k8s/*|.github/workflows/deploy.yml|scripts/quality/check-deployment-safety*)
+    helm/*|k8s/*|.github/workflows/deploy.yml|.github/workflows/reconcile-monitoring.yml|scripts/quality/check-deployment-safety*)
       selected[deployment]=1
       ;;
   esac
@@ -179,26 +182,26 @@ for label in "${labels[@]}"; do
       ;;
     migration)
       run_check "${label}" /bin/bash -c \
-        'bash scripts/quality/check-migration-boundaries-test.sh && bash scripts/quality/check-migration-boundaries.sh && go test ./pkg/storage/postgres ./pkg/tenantdb'
+        "bash scripts/quality/check-migration-boundaries-test.sh && bash scripts/quality/check-migration-boundaries.sh && go test -p ${PARALLELISM} ./pkg/storage/postgres ./pkg/tenantdb"
       ;;
     deployment)
       run_check "${label}" /bin/bash -c \
         'bash scripts/quality/check-deployment-safety-test.sh && bash scripts/quality/release-verification-test.sh'
       ;;
     auth-http)
-      run_check "${label}" go test ./api/http/... ./internal/iam/...
+      run_check "${label}" go test -p "${PARALLELISM}" ./api/http/... ./internal/iam/...
       ;;
     knowledge)
-      run_check "${label}" go test ./internal/knowledge/... ./pkg/storage/milvus
+      run_check "${label}" go test -p "${PARALLELISM}" ./internal/knowledge/... ./pkg/storage/milvus
       ;;
     memory)
-      run_check "${label}" go test ./internal/memory/...
+      run_check "${label}" go test -p "${PARALLELISM}" ./internal/memory/...
       ;;
     mcp)
-      run_check "${label}" go test ./internal/mcp/...
+      run_check "${label}" go test -p "${PARALLELISM}" ./internal/mcp/...
       ;;
     runtime-governance)
-      run_check "${label}" go test ./api/middleware ./api/http ./cmd/server
+      run_check "${label}" go test -p "${PARALLELISM}" ./api/middleware ./api/http ./cmd/server
       ;;
     frontend-auth)
       run_check "${label}" /bin/bash -c \

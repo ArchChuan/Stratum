@@ -20,8 +20,18 @@ Approved | 2026-07-28
 ## Non-Goals
 
 - 多模型并行调用编排（单次请求仍用单一模型）
-- 模型 fallback / 自动切换
 - 平台级预设 provider（每个租户自行配置）
+
+## 修订记录
+
+- 2026-08-04：模型 fallback / 自动切换移出 Non-Goals——模型级 fallback 链
+  已实现（随本修订 PR 同提）：chat 调用（Complete/CompleteStream）在瞬态错误
+  （429/5xx/超时/连接错误）下沿 `[primary] + 有序列举候选（同 provider 优先
+  → Recommended desc → name asc，上限 3）` 降级，主模型失败立即重试 1 次；
+  `context.Canceled` 永不触发降级；流式仅首 token 发出前失败可降级；
+  链耗尽返回包装全部尝试的 permanent 错误（agent 层 RetryFn 对
+  permanent 标记跳过重试，防放大）；指纹 `ModelResolved`/`ModelRoutedVia`
+  贯通。能力画像路由（请求能力而非模型名）仍为非目标，延后。
 
 ---
 
