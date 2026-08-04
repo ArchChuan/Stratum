@@ -7,14 +7,13 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
-	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type PgFeedbackRepository struct {
-	pool *pgxpool.Pool
+	pool poolIface
 }
 
 func NewPgFeedbackRepository(pool *pgxpool.Pool) *PgFeedbackRepository {
@@ -113,7 +112,7 @@ func (r *PgFeedbackRepository) ActiveExperiment(
 	if err != nil || !found {
 		return domain.Experiment{}, found, err
 	}
-	return NewPgExperimentRepository(r.pool).Get(ctx, tenantID, experimentID)
+	return (&PgExperimentRepository{pool: r.pool}).Get(ctx, tenantID, experimentID)
 }
 
 func (r *PgFeedbackRepository) StageFeedback(
@@ -181,5 +180,5 @@ func (r *PgFeedbackRepository) execTenant(
 	fn func(context.Context, pgx.Tx) error,
 ) error {
 	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
-	return tenantdb.ExecTenant(ctx, r.pool, fn)
+	return execTenantTx(ctx, r.pool, tenantID, fn)
 }

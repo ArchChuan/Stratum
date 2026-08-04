@@ -65,6 +65,7 @@ func (c *A2AClient) AnnounceCapabilities(ctx context.Context, capabilities []Cap
 	c.capabilities = capabilities
 
 	msg := &Message{
+		ID:        generateMessageID(),
 		Type:      MessageTypeCapabilityAnnouncement,
 		From:      AgentIdentity{ID: c.agentID, Name: c.agentName},
 		Timestamp: time.Now(),
@@ -102,6 +103,7 @@ func (c *A2AClient) DiscoverAgents(ctx context.Context, requiredCapabilities []s
 // ProposeTask proposes a task to another agent
 func (c *A2AClient) ProposeTask(ctx context.Context, to AgentIdentity, taskDescription string, requirements []string) (string, error) {
 	msg := &Message{
+		ID:        generateMessageID(),
 		Type:      MessageTypeTaskProposal,
 		From:      AgentIdentity{ID: c.agentID, Name: c.agentName},
 		To:        to,
@@ -157,6 +159,7 @@ func (c *A2AClient) ProposeTask(ctx context.Context, to AgentIdentity, taskDescr
 // AcceptTask accepts a proposed task
 func (c *A2AClient) AcceptTask(ctx context.Context, proposalID string) error {
 	msg := &Message{
+		ID:        generateMessageID(),
 		Type:      MessageTypeTaskResponse,
 		From:      AgentIdentity{ID: c.agentID, Name: c.agentName},
 		Timestamp: time.Now(),
@@ -175,6 +178,7 @@ func (c *A2AClient) AcceptTask(ctx context.Context, proposalID string) error {
 // RejectTask rejects a proposed task
 func (c *A2AClient) RejectTask(ctx context.Context, proposalID string, reason string) error {
 	msg := &Message{
+		ID:        generateMessageID(),
 		Type:      MessageTypeTaskResponse,
 		From:      AgentIdentity{ID: c.agentID, Name: c.agentName},
 		Timestamp: time.Now(),
@@ -197,6 +201,7 @@ func (c *A2AClient) RequestCollaboration(ctx context.Context, participants []Age
 	collabID := generateMessageID()
 
 	msg := &Message{
+		ID:        generateMessageID(),
 		Type:      MessageTypeCollaborationProposal,
 		From:      AgentIdentity{ID: c.agentID, Name: c.agentName},
 		To:        AgentIdentity{ID: "broadcast"},
@@ -225,6 +230,7 @@ func (c *A2AClient) RequestCollaboration(ctx context.Context, participants []Age
 // JoinCollaboration joins an existing collaboration
 func (c *A2AClient) JoinCollaboration(ctx context.Context, collaborationID string) error {
 	msg := &Message{
+		ID:        generateMessageID(),
 		Type:      MessageTypeJoinCollaboration,
 		From:      AgentIdentity{ID: c.agentID, Name: c.agentName},
 		To:        AgentIdentity{ID: "broadcast"},
@@ -244,6 +250,7 @@ func (c *A2AClient) JoinCollaboration(ctx context.Context, collaborationID strin
 // LeaveCollaboration leaves a collaboration
 func (c *A2AClient) LeaveCollaboration(ctx context.Context, collaborationID string) error {
 	msg := &Message{
+		ID:        generateMessageID(),
 		Type:      MessageTypeLeaveCollaboration,
 		From:      AgentIdentity{ID: c.agentID, Name: c.agentName},
 		To:        AgentIdentity{ID: "broadcast"},
@@ -267,6 +274,7 @@ func (c *A2AClient) LeaveCollaboration(ctx context.Context, collaborationID stri
 // ReportProgress reports progress on a task
 func (c *A2AClient) ReportProgress(ctx context.Context, taskID string, progress int, details string) error {
 	msg := &Message{
+		ID:        generateMessageID(),
 		Type:      MessageTypeProgressUpdate,
 		From:      AgentIdentity{ID: c.agentID, Name: c.agentName},
 		To:        AgentIdentity{ID: "broadcast"},
@@ -289,6 +297,7 @@ func (c *A2AClient) ReportProgress(ctx context.Context, taskID string, progress 
 // SendData sends data to another agent
 func (c *A2AClient) SendData(ctx context.Context, to AgentIdentity, dataType string, data interface{}) (string, error) {
 	msg := &Message{
+		ID:        generateMessageID(),
 		Type:      MessageTypeDataExchange,
 		From:      AgentIdentity{ID: c.agentID, Name: c.agentName},
 		To:        to,
@@ -313,6 +322,7 @@ func (c *A2AClient) SendData(ctx context.Context, to AgentIdentity, dataType str
 // RequestData requests data from another agent
 func (c *A2AClient) RequestData(ctx context.Context, from AgentIdentity, dataType string, parameters map[string]interface{}) (interface{}, error) {
 	msg := &Message{
+		ID:        generateMessageID(),
 		Type:      MessageTypeDataRequest,
 		From:      AgentIdentity{ID: c.agentID, Name: c.agentName},
 		To:        from,
@@ -364,6 +374,7 @@ func (c *A2AClient) RequestData(ctx context.Context, from AgentIdentity, dataTyp
 // Broadcast broadcasts a message to all agents
 func (c *A2AClient) Broadcast(ctx context.Context, messageType MessageType, payload map[string]interface{}) error {
 	msg := &Message{
+		ID:        generateMessageID(),
 		Type:      messageType,
 		From:      AgentIdentity{ID: c.agentID, Name: c.agentName},
 		To:        AgentIdentity{ID: "broadcast"},
@@ -641,6 +652,7 @@ func (c *A2AClient) Stop(ctx context.Context) error {
 
 	// Announce departure
 	msg := &Message{
+		ID:        generateMessageID(),
 		Type:      MessageTypeAgentDeparture,
 		From:      AgentIdentity{ID: c.agentID, Name: c.agentName},
 		To:        AgentIdentity{ID: "broadcast"},

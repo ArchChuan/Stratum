@@ -6,16 +6,15 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 )
 
 type DocRepo struct {
-	db *pgxpool.Pool
+	db poolIface
 }
 
-func NewDocRepo(db *pgxpool.Pool) *DocRepo {
+func NewDocRepo(db poolIface) *DocRepo {
 	return &DocRepo{db: db}
 }
 

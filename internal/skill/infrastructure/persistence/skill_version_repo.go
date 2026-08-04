@@ -7,12 +7,30 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/byteBuilderX/stratum/internal/skill/domain/port"
+	pgstore "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type PgSkillRevisionRepo struct{ pool *pgxpool.Pool }
+// poolIface allows pgxmock injection in tests.
+type poolIface interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
+var _ poolIface = (*pgxpool.Pool)(nil)
+
+type PgSkillRevisionRepo struct{ pool poolIface }
+
+// execTenant runs fn in a transaction with search_path set to the tenant
+// schema from ctx. Fails closed when the tenant context is missing or empty.
+func (r *PgSkillRevisionRepo) execTenant(ctx context.Context, fn func(ctx context.Context, tx pgx.Tx) error) error {
+	tc, ok := tenantdb.FromContext(ctx)
+	if !ok || tc.TenantID == "" {
+		return fmt.Errorf("skill_revision_repo: missing tenant context")
+	}
+	return pgstore.ExecTenantWith(ctx, r.pool, tc.TenantID, fn)
+}
 
 func NewPgSkillRevisionRepo(pool *pgxpool.Pool) *PgSkillRevisionRepo {
 	return &PgSkillRevisionRepo{pool: pool}
@@ -21,7 +39,7 @@ func NewPgSkillRevisionRepo(pool *pgxpool.Pool) *PgSkillRevisionRepo {
 func (r *PgSkillRevisionRepo) InsertSkillWithDraft(
 	ctx context.Context, skill port.SkillProductRow, draft domain.SkillRevision,
 ) error {
-	return tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO skills (id, name, description, status, draft_revision_id)
 			 VALUES ($1, $2, $3, 'draft', $4)`,
@@ -36,7 +54,7 @@ func (r *PgSkillRevisionRepo) InsertSkillWithDraft(
 func (r *PgSkillRevisionRepo) GetSkill(ctx context.Context, skillID string) (port.SkillProductRow, bool, error) {
 	var row port.SkillProductRow
 	found := false
-	err := tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		err := tx.QueryRow(ctx,
 			`SELECT id, name, description, status,
 			        COALESCE(active_revision_id, ''), COALESCE(draft_revision_id, '')
@@ -56,7 +74,7 @@ func (r *PgSkillRevisionRepo) GetSkill(ctx context.Context, skillID string) (por
 
 func (r *PgSkillRevisionRepo) ListSkills(ctx context.Context) ([]port.SkillProductRow, error) {
 	var result []port.SkillProductRow
-	err := tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id, name, description, status,
 			COALESCE(active_revision_id, ''), COALESCE(draft_revision_id, '') FROM skills ORDER BY name`)
 		if err != nil {
@@ -77,7 +95,7 @@ func (r *PgSkillRevisionRepo) ListSkills(ctx context.Context) ([]port.SkillProdu
 }
 
 func (r *PgSkillRevisionRepo) DeleteSkill(ctx context.Context, skillID string) error {
-	return tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `DELETE FROM skills WHERE id=$1`, skillID)
 		if err != nil {
 			return err
@@ -108,7 +126,7 @@ func (r *PgSkillRevisionRepo) GetRevision(ctx context.Context, skillID, revision
 func (r *PgSkillRevisionRepo) getRevision(ctx context.Context, query string, args ...any) (domain.SkillRevision, bool, error) {
 	var revision domain.SkillRevision
 	found := false
-	err := tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		value, err := scanSkillRevision(tx.QueryRow(ctx, query, args...))
 		if err == pgx.ErrNoRows {
 			return nil
@@ -123,7 +141,7 @@ func (r *PgSkillRevisionRepo) getRevision(ctx context.Context, query string, arg
 }
 
 func (r *PgSkillRevisionRepo) InsertCandidate(ctx context.Context, candidate domain.SkillRevision) error {
-	return tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		return insertSkillRevision(ctx, tx, candidate)
 	})
 }
@@ -139,7 +157,7 @@ func (r *PgSkillRevisionRepo) UpdateDraftCapability(
 	if err != nil {
 		return domain.SkillRevision{}, err
 	}
-	_ = tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+	_ = r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE skills SET description=$2, updated_at=NOW() WHERE id=$1`, skillID, capability.Goal)
 		return err
 	})
@@ -185,7 +203,7 @@ func (r *PgSkillRevisionRepo) UpdateDraftBundle(
 		return domain.SkillRevision{}, fmt.Errorf("skill_revision_repo: marshal requirements: %w", err)
 	}
 	var updated domain.SkillRevision
-	err = tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		value, updateErr := scanSkillRevision(tx.QueryRow(ctx, `UPDATE skill_revisions
 			SET capability=$3::jsonb, activation_contract=$4::jsonb, instructions=$5,
 			    requirements=$6::jsonb, content_hash=$7, updated_at=NOW()
@@ -219,7 +237,7 @@ func (r *PgSkillRevisionRepo) updateDraft(
 	ctx context.Context, skillID, assignments string, values []any, contentHash string,
 ) (domain.SkillRevision, error) {
 	var revision domain.SkillRevision
-	err := tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		args := append([]any{skillID}, values...)
 		args = append(args, contentHash)
 		hashArg := len(args)
@@ -237,7 +255,7 @@ func (r *PgSkillRevisionRepo) updateDraft(
 
 func (r *PgSkillRevisionRepo) NextRevisionNo(ctx context.Context, skillID string) (int, error) {
 	var next int
-	err := tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
 			`SELECT COALESCE(MAX(revision_no), 0) + 1 FROM skill_revisions WHERE skill_id=$1`, skillID,
 		).Scan(&next)
@@ -249,7 +267,7 @@ func (r *PgSkillRevisionRepo) PublishDraft(
 	ctx context.Context, skillID, draftRevisionID string, nextRevisionNo int, checks map[string]any,
 ) (domain.SkillRevision, error) {
 	var revision domain.SkillRevision
-	err := tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		checksJSON, err := json.Marshal(checks)
 		if err != nil {
 			return err
