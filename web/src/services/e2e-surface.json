@@ -4,7 +4,8 @@
     "/agents", "/agents/create", "/agents/:id/edit", "/chat", "/skills", "/skills/create",
     "/skills/:id/workspace", "/mcp", "/mcp/create", "/mcp/:id/edit", "/knowledge", "/knowledge/:name",
     "/evaluations", "/workflows", "/workflows/new", "/workflows/:id/edit",
-    "/workflows/:id/versions/:versionId", "/workflows/:id/run", "/workflow-runs", "/workflow-runs/:runId"
+    "/workflows/:id/versions/:versionId", "/workflows/:id/run", "/workflow-runs", "/workflow-runs/:runId",
+    "/operation-proposals", "/collaborations"
   ],
   "mutations": [
     "POST /auth/refresh", "POST /auth/oauth/exchange", "POST /auth/logout", "POST /auth/guest",
@@ -14,7 +15,11 @@
     "DELETE /admin/tenants/:tenantId", "DELETE /tenant", "POST /agents", "PUT /agents/:id",
     "DELETE /agents/:id", "POST /agents/:id/execute", "POST /agents/:id/execute/stream",
     "POST /agents/tool-approvals/:id/decision",
-    "POST /agents/tool-approvals/:id/resume", "POST /agents/:agentId/conversations",
+    "POST /agents/tool-approvals/:id/resume", "POST /agents/:id/self-modify",
+    "POST /operation-proposals/:id/review", "POST /operation-proposals/:id/approve",
+    "POST /operation-proposals/:id/reject",
+    "POST /collaborations", "POST /collaborations/:id/start", "POST /collaborations/:id/cancel",
+    "POST /agents/:agentId/conversations",
     "PATCH /conversations/:convId", "DELETE /conversations/:convId", "POST /conversations/:convId/messages",
     "POST /skills", "PATCH /skills/:id/draft/capability", "PATCH /skills/:id/draft/activation",
     "PATCH /skills/:id/draft/instructions", "DELETE /skills/:id", "POST /skills/:id/publish",

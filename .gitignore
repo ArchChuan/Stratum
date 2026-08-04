@@ -150,6 +150,9 @@ charts/*/charts/
 
 # Web frontend
 web/node_modules/
+# worktree 下 web/node_modules 是指向主 checkout 依赖的 symlink（git 视作文件，
+# 目录模式不匹配），必须显式忽略，防止误提交
+web/node_modules
 web/dist/
 web/.env.local
 web/coverage/

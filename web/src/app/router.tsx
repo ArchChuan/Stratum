@@ -3,12 +3,14 @@ import { Routes, useLocation } from 'react-router-dom';
 import { AppShell } from './layout/AppShell';
 
 import { agentRoutes } from '@/modules/agent';
+import { collabRoutes } from '@/modules/collab';
 import { dashboardRoutes } from '@/modules/dashboard';
 import { evaluationRoutes } from '@/modules/evaluation';
 import { iamPublicRoutes, iamPrivateRoutes, useAuth } from '@/modules/iam';
 import { knowledgeRoutes } from '@/modules/knowledge';
 import { llmRoutes } from '@/modules/llm';
 import { mcpRoutes } from '@/modules/mcp';
+import { operationGateRoutes } from '@/modules/operation-gate';
 import { skillRoutes } from '@/modules/skill';
 import { workflowRoutes } from '@/modules/workflow';
 import systemE2ESurface from '@/services/e2e-surface.json';
@@ -37,6 +39,8 @@ export const AppRouter = () => {
         {agentRoutes}
         {llmRoutes}
         {workflowRoutes}
+        {operationGateRoutes}
+        {collabRoutes}
         {iamPrivateRoutes}
         {iamPublicRoutes}
       </Routes>

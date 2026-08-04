@@ -51,21 +51,23 @@ func (l agentCheckpointTenantLister) list(ctx context.Context) ([]string, error)
 // so agents resolved from DB inherit those capabilities at construction
 // time. Service is the orchestration façade handlers consume.
 type Agent struct {
-	Registry            *agent.Registry
-	Service             *agent.AgentService
-	ChatStore           agent.ChatStore
-	EvidenceProvider    agentport.TraceEvidenceProvider
-	TracePayloadStore   agentport.TracePayloadStore
-	RevisionObjectStore pkgobjectstore.Store
-	CheckpointStore     agent.CheckpointStore
-	CheckpointCleanup   *agent.CheckpointCleanupWorker
-	ApprovalStore       agentport.ToolApprovalRepo
-	ApprovalService     *agent.ToolApprovalService
-	TenantResolver      agentport.TenantCapabilityResolver
-	SkillLookup         agentport.SkillLookup
-	DiagnosticProvider  agentport.DiagnosticEvidenceProvider
-	ProposalService     *agent.ResourceChangeProposalService
-	PromptResolver      *agent.PromptResolver
+	Registry             *agent.Registry
+	Service              *agent.AgentService
+	ChatStore            agent.ChatStore
+	EvidenceProvider     agentport.TraceEvidenceProvider
+	TracePayloadStore    agentport.TracePayloadStore
+	RevisionObjectStore  pkgobjectstore.Store
+	CheckpointStore      agent.CheckpointStore
+	CheckpointCleanup    *agent.CheckpointCleanupWorker
+	ApprovalStore        agentport.ToolApprovalRepo
+	ApprovalService      *agent.ToolApprovalService
+	TenantResolver       agentport.TenantCapabilityResolver
+	SkillLookup          agentport.SkillLookup
+	DiagnosticProvider   agentport.DiagnosticEvidenceProvider
+	ProposalService      *agent.ResourceChangeProposalService
+	OperationGateService *agent.OperationGateService
+	OperationProposalSvc *agent.OperationProposalService
+	PromptResolver       *agent.PromptResolver
 }
 
 // ragSearchAdapter wraps *knowledge.RAGService to satisfy
@@ -322,9 +324,34 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		)
 		a.Service.SetResourceChangeProposalService(a.ProposalService)
 	}
-
+	wireOperationGate(c, a, deps.Metrics)
 	c.Agent = a
 	return nil
+}
+
+// wireOperationGate wires the T8 operation approval chain: the gate service
+// plus the reviewer-facing proposal service, and injects the gate into the
+// agent service. Skipped without a database.
+func wireOperationGate(c *Container, a *Agent, metrics observability.MetricsProvider) {
+	db := c.dbOrNil()
+	if db == nil {
+		return
+	}
+	if metrics == nil {
+		metrics = observability.NoopMetrics{}
+	}
+	roles := tenantRoleAdapter{service: tenantMemberService(c)}
+	a.OperationGateService = agent.NewOperationGateService(
+		persistence.NewPgOperationProposalRepo(db),
+		persistence.NewPgOperationUsageRepo(db),
+		metrics,
+	)
+	a.OperationProposalSvc = agent.NewOperationProposalService(
+		persistence.NewPgOperationProposalRepo(db),
+		roles,
+		metrics,
+	)
+	a.Service.SetOperationGate(a.OperationGateService)
 }
 
 func tenantModelValidator(resolver agentport.TenantCapabilityResolver) agentport.TenantChatModelValidator {

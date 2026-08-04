@@ -63,7 +63,7 @@ func exerciseAllMetrics(m MetricsProvider) {
 	// Audit / Collab / Optimizer / Operation Gate / Schedule skew
 	m.IncAuditEvent("high", "allowed")
 	m.RecordAuditWriteQueueDepth(3)
-	m.IncCollabPlan("parallel")
+	m.IncCollabPlan("parallel", "created")
 	m.RecordCollabTaskDuration("parallel", 2.0)
 	m.IncOptimizerCandidate("proposal", "accepted")
 	m.RecordOptimizerCycleDuration(3.0)

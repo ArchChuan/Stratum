@@ -1,0 +1,75 @@
+{
+  "schema_version": 2,
+  "source_digest": "c28415f563073796aa85e46f80021ab38cc041e912a81780246223d7d8501b73",
+  "manifest_digest": "0e00cfebd1b29aea775378e626b03fa0655e89fc86dcb9fb1ebc0bbe7bc7c122",
+  "policy_manifest_digest": "6665d1ccc906cadbd70bcd863261cf8562f58c87aa05a85588c8f4408cc82f0c",
+  "tested_git_parent": "b4dee27127855e581534d31981cf88eac8484162",
+  "browser": {
+    "name": "chromium",
+    "version": "149.0.7827.55"
+  },
+  "mode": "soak",
+  "acceptance_profile": "test",
+  "seed": 1,
+  "started_at": "2026-08-04T12:34:00.725Z",
+  "duration_seconds": 606,
+  "host_class": "developer",
+  "packs": [
+    {
+      "id": "collab",
+      "status": "passed"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "collab.mutation.post.collaborations",
+      "status": "passed"
+    },
+    {
+      "id": "collab.mutation.post.collaborations.id.cancel",
+      "status": "passed"
+    },
+    {
+      "id": "collab.mutation.post.collaborations.id.start",
+      "status": "passed"
+    },
+    {
+      "id": "collab.route.collaborations",
+      "status": "passed"
+    }
+  ],
+  "action_count": 228,
+  "sequence_digest": "08b2d489f3a113db7232134cd40b46602120ae60fbe4be456f12dacaaaf47427",
+  "evidence": {
+    "ui": 285,
+    "http": 285,
+    "database": 285,
+    "reconciled": 228
+  },
+  "artifacts": [],
+  "cleanup": {
+    "passed": true,
+    "residual_entity_ids": []
+  },
+  "unverified_capabilities": [],
+  "risk_classification": "soak",
+  "status": "passed",
+  "run_topology": {
+    "run_id": "20260804t123354z-b24c42f5a2b2b3ee",
+    "host": "127.0.0.1",
+    "ports": {
+      "backend": 36269,
+      "fixture": 36603,
+      "frontend": 39467,
+      "internal_api": 34499,
+      "oauth": 46255,
+      "platform_mcp": 40887
+    },
+    "database_name": "stratum_e2e_20260804t123354z_b24c42f5a2b2b3ee"
+  },
+  "owned_cleanup": {
+    "database_dropped": true,
+    "lease_removed": true
+  },
+  "expires_at": "2026-08-07T12:44:13.77864124Z"
+}

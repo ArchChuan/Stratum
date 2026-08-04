@@ -20,6 +20,7 @@ import { dashboardActions } from './stateful/packs/dashboard';
 import { executeAgentPack } from './stateful/packs/agent';
 import { executeAgentContextPack } from './stateful/packs/agent-context';
 import { executeAgentSkillMCPPack } from './stateful/packs/agent-skill-mcp';
+import { executeCollabPack } from './stateful/packs/collab';
 import { executeEvaluationPack } from './stateful/packs/evaluation';
 import { executeEvaluationPromotionPack } from './stateful/packs/evaluation-promotion';
 import { executeIAMPack } from './stateful/packs/iam';
@@ -27,6 +28,7 @@ import { executeKnowledgePack } from './stateful/packs/knowledge';
 import { executeLLMAdminPack } from './stateful/packs/llm-admin';
 import { executeMCPPack } from './stateful/packs/mcp';
 import { executeMemoryPack } from './stateful/packs/memory';
+import { executeOperationGatePack } from './stateful/packs/operation-gate';
 import { executeSkillPack } from './stateful/packs/skill';
 import { executeWorkflowPack } from './stateful/packs/workflow';
 
@@ -212,6 +214,18 @@ const executePack = async (
   }
   if (pack === 'llm-admin') {
     completedActions.push(...await executeLLMAdminPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL }));
+    return;
+  }
+  if (pack === 'operation-gate') {
+    completedActions.push(...await executeOperationGatePack({
+      actor: actors.memberA, adminActor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL,
+    }));
+    return;
+  }
+  if (pack === 'collab') {
+    completedActions.push(...await executeCollabPack({
+      actor: actors.memberA, adminActor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL,
+    }));
     return;
   }
   if (pack !== 'dashboard') throw new Error(`stateful pack ${pack} is not implemented`);

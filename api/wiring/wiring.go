@@ -42,6 +42,7 @@ type Container struct {
 	IAM                  *IAM
 	Agent                *Agent
 	Workflow             *Workflow
+	Collab               *Collab
 	Audit                *Audit
 	Prompt               *Prompt
 	ReadinessCheck       func(context.Context) map[string]error
@@ -81,6 +82,7 @@ func BuildContainer(ctx context.Context, cfg *config.Config, logger *zap.Logger)
 		{"iam", c.buildIAM},
 		{"agent", c.buildAgent},
 		{"workflow", c.buildWorkflow},
+		{"collab", c.buildCollab},
 		{"evaluation", c.buildEvaluation},
 	}
 

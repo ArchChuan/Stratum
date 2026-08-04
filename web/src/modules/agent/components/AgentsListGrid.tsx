@@ -12,6 +12,7 @@ interface AgentsListGridProps {
   onExecute: (a: Agent) => void;
   onEdit: (a: Agent) => void;
   onDelete: (id: string, name: string) => void;
+  onSelfModify?: (a: Agent) => void;
   onCreate: () => void;
   /** 仅管理员可见创建/编辑/删除入口。 */
   canManage?: boolean;
@@ -24,6 +25,7 @@ export const AgentsListGrid = ({
   onExecute,
   onEdit,
   onDelete,
+  onSelfModify,
   onCreate,
   canManage = false,
 }: AgentsListGridProps) => {
@@ -75,6 +77,7 @@ export const AgentsListGrid = ({
             onExecute={onExecute}
             onDelete={onDelete}
             onEdit={onEdit}
+            onSelfModify={onSelfModify}
             canManage={canManage}
           />
         </Col>
