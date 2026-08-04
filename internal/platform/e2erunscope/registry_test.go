@@ -450,6 +450,44 @@ func TestRegistryStaleRetainsInfrastructureOwner(t *testing.T) {
 	}
 }
 
+func TestRegistryStaleSkipsForeignFormatLease(t *testing.T) {
+	now := time.Date(2026, time.July, 31, 12, 0, 0, 0, time.UTC)
+	r := Registry{Root: filepath.Join(t.TempDir(), "registry")}
+	expired := registryTestScopeAt(t, "20260730t120102z-a1b2c3d4e5f60718", 101, now.Add(-25*time.Hour))
+	if err := r.Register(expired); err != nil {
+		t.Fatal(err)
+	}
+	// A foreign lease written by an older code version that included the
+	// platform_mcp/internal_api ports; the strict decoder must skip it.
+	foreign := registryTestScopeAt(t, "20260730t120103z-b1b2c3d4e5f60718", 102, now.Add(-25*time.Hour))
+	raw, err := json.Marshal(foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := make(map[string]any)
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	ports := legacy["ports"].(map[string]any)
+	ports["platform_mcp"] = 22005
+	ports["internal_api"] = 22006
+	legacyJSON, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.Root, "runs", foreign.RunID+".json"), legacyJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stale, err := r.Stale(now, func(int, string) bool { return false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stale) != 1 || stale[0].RunID != expired.RunID {
+		t.Fatalf("Stale() = %+v, want only expired %q", stale, expired.RunID)
+	}
+}
+
 func TestRegistryReleaseLifecycle(t *testing.T) {
 	r := Registry{Root: filepath.Join(t.TempDir(), "registry")}
 	a := registryTestScope(t, "20260730t120102z-a1b2c3d4e5f60718", 101)

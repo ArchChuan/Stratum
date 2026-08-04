@@ -446,7 +446,15 @@ func readAllLeasesAt(runs *os.File) ([]Scope, error) {
 		}
 		lease, err := readLeaseAt(runs, name, runID)
 		if err != nil {
-			return nil, err
+			// The registry is shared across worktrees. A lease written by a
+			// different code version (e.g. before platform-mcp removal) may
+			// contain fields unknown to the current schema. Such a lease is not
+			// ours to reap, so skip it; genuinely malformed metadata still
+			// fails closed below.
+			if !errors.Is(err, errForeignMetadata) {
+				return nil, err
+			}
+			continue
 		}
 		leases = append(leases, lease)
 	}
@@ -504,6 +512,9 @@ func decodeMetadataAt(directory *os.File, name string, destination any) error {
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()
 	decodeErr := decoder.Decode(destination)
+	if decodeErr != nil && strings.Contains(decodeErr.Error(), "json: unknown field") {
+		decodeErr = errForeignMetadata
+	}
 	if decodeErr == nil {
 		var trailing any
 		if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
@@ -512,6 +523,11 @@ func decodeMetadataAt(directory *os.File, name string, destination any) error {
 	}
 	return errors.Join(decodeErr, file.Close())
 }
+
+// errForeignMetadata marks lease metadata written by a different code version
+// (extra fields unknown to the current schema). Such leases cannot be validated
+// by this version and are skipped during reap instead of blocking every run.
+var errForeignMetadata = errors.New("registry: lease metadata belongs to a foreign schema version")
 
 func openMetadataAt(directory *os.File, name string) (*os.File, error) {
 	how := &unix.OpenHow{
