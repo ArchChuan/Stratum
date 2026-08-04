@@ -45,7 +45,7 @@ func (a *ToolAuthorizer) Authorize(ctx context.Context, input ToolAuthorizationI
 		return deniedToolAuthorization(input.RiskLevel, domain.ToolReasonPolicyLookupFailed)
 	}
 
-	return domain.AuthorizeTool(domain.ToolAuthorizationRequest{
+	req := domain.ToolAuthorizationRequest{
 		TenantID:          input.TenantID,
 		UserID:            input.UserID,
 		ToolID:            input.ToolID,
@@ -56,7 +56,14 @@ func (a *ToolAuthorizer) Authorize(ctx context.Context, input ToolAuthorizationI
 		ActiveSkillAllows: input.ActiveSkillAllows,
 		PolicyResolved:    input.PolicyResolved,
 		RiskLevel:         input.RiskLevel,
-	})
+	}
+	if input.AgentID == domain.SystemAssistantID {
+		// Platform assistant applies the strict L3b risk model (spec
+		// 2026-08-04 §4.4): write_reversible needs approval, destructive and
+		// unclassified tools are refused, policy lookup failure fails closed.
+		return domain.AuthorizeSystemAssistantTool(req)
+	}
+	return domain.AuthorizeTool(req)
 }
 
 func deniedToolAuthorization(
