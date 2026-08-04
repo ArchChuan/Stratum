@@ -10,6 +10,8 @@ import (
 func newTestMetrics(t *testing.T) *PrometheusMetrics {
 	t.Helper()
 	m := NewPrometheusMetrics(zap.NewNop())
+	// cmd/server 装配路径会显式注册 reaper 指标；冒烟测试覆盖该路径。
+	m.RegisterReaperMetrics()
 	t.Cleanup(func() { _ = m.reg.Unregister(m.reg) })
 	return m
 }

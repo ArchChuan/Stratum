@@ -350,19 +350,13 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 	}
 	m.registerF3Metrics(factory, latencyBuckets)
 	m.registerExtendedMetrics(factory)
-	m.registerReaperMetrics(factory)
 	return m
 }
 
 // registerReaperMetrics registers the reaper metric family. Must not be
 // inlined into registerExtendedMetrics: the reaper is a background component
 // with its own alerting rules (see helm stratum-prometheusrule.yaml).
-//
-// Upstream main already registers the same family (same fqName, help and
-// label names) inside registerExtendedMetrics. Re-registering an identical
-// descriptor from a second collector would trip the registry's duplicate
-// collector check (checkCollectorID runs before the descID check), so skip
-// when the fields are already populated by the upstream registration.
+// Registration is idempotent so callers may invoke it safely more than once.
 func (m *PrometheusMetrics) registerReaperMetrics(factory promauto.Factory) {
 	if m.reaperCyclesTotal != nil {
 		return
@@ -381,6 +375,14 @@ func (m *PrometheusMetrics) registerReaperMetrics(factory promauto.Factory) {
 	m.reaperCycleTimestamp = factory.NewGauge(
 		prometheus.GaugeOpts{Name: "reaper_last_cycle_timestamp_seconds", Help: "Unix timestamp of the last guest reaper cycle"},
 	)
+}
+
+// RegisterReaperMetrics registers the guest reaper metric family. Only the
+// server process (cmd/server) hosts the guest reaper, so only it should
+// export these metrics; platform-mcp and other processes must not. The method
+// is safe to call repeatedly.
+func (m *PrometheusMetrics) RegisterReaperMetrics() {
+	m.registerReaperMetrics(promauto.With(m.reg))
 }
 
 // registerF3Metrics initializes the Phase 1 KPI / observability metrics.
@@ -503,20 +505,6 @@ func (m *PrometheusMetrics) registerExtendedMetrics(factory promauto.Factory) {
 	m.authFailuresTotal = factory.NewCounterVec(
 		prometheus.CounterOpts{Name: "auth_failures_total", Help: "Auth failures by reason"},
 		[]string{"reason"},
-	)
-	m.reaperCyclesTotal = factory.NewCounterVec(
-		prometheus.CounterOpts{Name: "reaper_cycles_total", Help: "Guest reaper cycles by outcome"},
-		[]string{"outcome"},
-	)
-	m.reaperGuestsDeleted = factory.NewCounter(
-		prometheus.CounterOpts{Name: "reaper_guests_deleted_total", Help: "Expired guests deleted by the guest reaper"},
-	)
-	m.reaperDeleteErrors = factory.NewCounterVec(
-		prometheus.CounterOpts{Name: "reaper_delete_errors_total", Help: "Guest reaper delete errors by phase"},
-		[]string{"phase"},
-	)
-	m.reaperCycleTimestamp = factory.NewGauge(
-		prometheus.GaugeOpts{Name: "reaper_last_cycle_timestamp_seconds", Help: "Unix timestamp of the last guest reaper cycle"},
 	)
 }
 
