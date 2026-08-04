@@ -24,7 +24,7 @@ registry_root=${STATEFUL_E2E_REGISTRY_ROOT:-${TMPDIR:-/tmp}/stratum-stateful-e2e
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/stratum-stateful-run.XXXXXX")
 scope_file=$work_dir/scope.json; results_path=${STATEFUL_E2E_RESULTS_PATH:-$work_dir/safe-results.json}
 scope_command=${STATEFUL_E2E_SCOPE_COMMAND:-"go run ./cmd/e2e-run-scope"}
-oauth_pid= mcp_pid= platform_mcp_pid= backend_pid= frontend_pid=; lease_registered=false; database_created=false
+oauth_pid= mcp_pid= backend_pid= frontend_pid=; lease_registered=false; database_created=false
 database_dropped=false; lease_removed=false; cleanup_done=false
 infra_started_unmarked=false
 infra_up_command=${STATEFUL_E2E_INFRA_UP_COMMAND:-"make -C '$repo_dir' infra-up"}
@@ -49,7 +49,7 @@ export_failure_logs() {
   local target=${STATEFUL_E2E_FAILURE_LOG_DIR:-} log
   [[ -n "$target" ]] || return 0
   mkdir -p "$target"; chmod 700 "$target"
-  for log in oauth mcp platform-mcp backend frontend; do
+  for log in oauth mcp backend frontend; do
     [[ -f "$work_dir/$log.log" ]] && install -m 600 "$work_dir/$log.log" "$target/$log.log"
   done
 }
@@ -66,7 +66,7 @@ infra_ready() {
 cleanup_owned() {
   [[ "$cleanup_done" == true ]] && return 0
   local status=0 release_json=$work_dir/release.json
-  stop_process "$frontend_pid"; stop_process "$backend_pid"; stop_process "$platform_mcp_pid"
+  stop_process "$frontend_pid"; stop_process "$backend_pid"
   stop_process "$mcp_pid"; stop_process "$oauth_pid"
   if [[ "$database_created" == true && "$database_dropped" != true ]]; then
     if ! run_scope "drop-database --scope '$scope_file' --base-dsn-env TEST_DATABASE_URL"; then
@@ -115,7 +115,7 @@ trap on_exit EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
 trap 'status=$?; printf "stateful E2E failed during %s\n" "$phase" >&2; exit "$status"' ERR
 
 reset_attempt() {
-  oauth_pid=; mcp_pid=; platform_mcp_pid=; backend_pid=; frontend_pid=
+  oauth_pid=; mcp_pid=; backend_pid=; frontend_pid=
   lease_registered=false; database_created=false; database_dropped=false; lease_removed=false; cleanup_done=false
 }
 allocate_scope() {
@@ -152,41 +152,16 @@ allocate_scope() {
 load_scope() {
   phase=scope-validation
   run_scope "validate --scope '$scope_file'"
-  jq -e '.schema_version == 2 and (.run_id|type=="string") and (.database_name|type=="string") and ([.ports[]]|length==6) and ([.ports[]]|unique|length==6)' "$scope_file" >/dev/null
+  jq -e '.schema_version == 2 and (.run_id|type=="string") and (.database_name|type=="string") and ([.ports[]]|length==4) and ([.ports[]]|unique|length==4)' "$scope_file" >/dev/null
   run_id=$(jq -er .run_id "$scope_file"); database_name=$(jq -er .database_name "$scope_file")
   frontend_port=$(jq -er .ports.frontend "$scope_file"); backend_port=$(jq -er .ports.backend "$scope_file")
   oauth_port=$(jq -er .ports.oauth "$scope_file"); fixture_port=$(jq -er .ports.fixture "$scope_file")
-  platform_mcp_port=$(jq -er .ports.platform_mcp "$scope_file"); internal_api_port=$(jq -er .ports.internal_api "$scope_file")
   export E2E_API_URL="http://127.0.0.1:$backend_port" E2E_WEB_URL="http://127.0.0.1:$frontend_port"
   export E2E_FIXTURE_URL="http://127.0.0.1:$fixture_port" E2E_RUN_INSTANCE_ID=$run_id
   export GITHUB_CALLBACK_URL="$E2E_API_URL/auth/github/callback"
   export GITHUB_AUTHORIZE_URL="http://127.0.0.1:$oauth_port/login/oauth/authorize"
   export GITHUB_TOKEN_URL="http://127.0.0.1:$oauth_port/login/oauth/access_token" GITHUB_USER_URL="http://127.0.0.1:$oauth_port/user"
   export QWEN_BASE_URL="$E2E_FIXTURE_URL/v1" E2E_GITHUB_LISTEN_ADDRESS="127.0.0.1:$oauth_port" E2E_MCP_LISTEN_ADDRESS="127.0.0.1:$fixture_port"
-}
-configure_tls() {
-  tls_dir=$work_dir/tls-$attempt; mkdir -p "$tls_dir"; chmod 700 "$tls_dir"
-openssl req -x509 -newkey rsa:2048 -nodes -days 2 -sha256 \
-  -keyout "$tls_dir/ca.key" -out "$tls_dir/ca.crt" -subj '/CN=Stratum Stateful E2E CA' >/dev/null 2>&1
-for workload in backend platform-mcp; do
-  openssl req -new -newkey rsa:2048 -nodes -keyout "$tls_dir/$workload.key" \
-    -out "$tls_dir/$workload.csr" -subj "/CN=stratum-$workload" >/dev/null 2>&1
-done
-printf '%s\n' 'subjectAltName=DNS:stratum-internal,URI:spiffe://stratum.local/ns/stratum/sa/stratum-backend' \
-  'extendedKeyUsage=serverAuth,clientAuth' >"$tls_dir/backend.ext"
-printf '%s\n' 'subjectAltName=DNS:stratum-platform-mcp,URI:spiffe://stratum.local/ns/stratum/sa/stratum-platform-mcp' \
-  'extendedKeyUsage=serverAuth,clientAuth' >"$tls_dir/platform-mcp.ext"
-for workload in backend platform-mcp; do
-  openssl x509 -req -in "$tls_dir/$workload.csr" -CA "$tls_dir/ca.crt" -CAkey "$tls_dir/ca.key" \
-    -CAcreateserial -days 2 -sha256 -extfile "$tls_dir/$workload.ext" -out "$tls_dir/$workload.crt" >/dev/null 2>&1
-done
-chmod 600 "$tls_dir"/*
-export INTERNAL_API_PORT=$internal_api_port INTERNAL_API_TLS_CERT_FILE="$tls_dir/backend.crt"
-export INTERNAL_API_TLS_KEY_FILE="$tls_dir/backend.key" INTERNAL_API_CLIENT_CA_FILE="$tls_dir/ca.crt"
-export PLATFORM_MCP_DIAL_ADDRESS="127.0.0.1:$platform_mcp_port" PLATFORM_MCP_PORT=$platform_mcp_port
-export PLATFORM_MCP_TLS_CERT_FILE="$tls_dir/platform-mcp.crt" PLATFORM_MCP_TLS_KEY_FILE="$tls_dir/platform-mcp.key"
-export PLATFORM_MCP_CLIENT_CA_FILE="$tls_dir/ca.crt" STRATUM_INTERNAL_BASE_URL="https://127.0.0.1:$internal_api_port"
-export STRATUM_INTERNAL_SERVER_NAME=stratum-internal
 }
 prepare_database() {
   phase=database-creation
@@ -203,17 +178,14 @@ start_services() {
 start_child() { local variable=$1 command=$2 log=$3 pid; setsid bash -c "$command" >"$log" 2>&1 & pid=$!; printf -v "$variable" '%s' "$pid"; }
 start_child oauth_pid "${STATEFUL_E2E_OAUTH_COMMAND:-cd '$repo_dir' && go run ./cmd/e2e-github-oauth}" "$work_dir/oauth.log"
 start_child mcp_pid "${STATEFUL_E2E_MCP_COMMAND:-cd '$repo_dir' && go run ./cmd/e2e-mcp-server}" "$work_dir/mcp.log"
-start_child platform_mcp_pid "${STATEFUL_E2E_PLATFORM_MCP_COMMAND:-cd '$repo_dir' && go run ./cmd/platform-mcp}" "$work_dir/platform-mcp.log"
 start_child backend_pid "${STATEFUL_E2E_BACKEND_COMMAND:-cd '$repo_dir' && FRONTEND_URL='$E2E_WEB_URL' OPIK_URL='$E2E_FIXTURE_URL/opik' PORT='$backend_port' SECURE_COOKIES=false go run ./cmd/server}" "$work_dir/backend.log"
 start_child frontend_pid "${STATEFUL_E2E_FRONTEND_COMMAND:-cd '$repo_dir/web' && CI=1 VITE_API_BASE_URL='$E2E_API_URL' npm run dev -- --host 127.0.0.1 --port '$frontend_port' --strictPort}" "$work_dir/frontend.log"
 poll() { local label=$1 command=$2; for _ in $(seq 1 "${STATEFUL_E2E_HEALTH_ATTEMPTS:-120}"); do bash -c "$command" >/dev/null 2>&1 && return 0; sleep 1; done; printf '%s failed health check\n' "$label" >&2; return 1; }
 poll oauth "${STATEFUL_E2E_OAUTH_HEALTH_COMMAND:-curl -fsS -D - -H 'X-Stratum-E2E-Instance: $run_id' 'http://127.0.0.1:$oauth_port/health' | grep -Fi 'X-Stratum-E2E-Instance: $run_id'}" || return 1
 poll MCP "${STATEFUL_E2E_MCP_HEALTH_COMMAND:-curl -fsS -D - -H 'X-Stratum-E2E-Instance: $run_id' '$E2E_FIXTURE_URL/health' | grep -Fi 'X-Stratum-E2E-Instance: $run_id'}" || return 1
-poll 'Platform MCP' "${STATEFUL_E2E_PLATFORM_MCP_HEALTH_COMMAND:-curl -fsS --noproxy stratum-platform-mcp --cacert '$tls_dir/ca.crt' --cert '$tls_dir/backend.crt' --key '$tls_dir/backend.key' --resolve 'stratum-platform-mcp:$platform_mcp_port:127.0.0.1' 'https://stratum-platform-mcp:$platform_mcp_port/healthz'}" || return 1
-poll 'Internal API' "${STATEFUL_E2E_INTERNAL_API_HEALTH_COMMAND:-curl -fsS --noproxy stratum-internal --cacert '$tls_dir/ca.crt' --cert '$tls_dir/platform-mcp.crt' --key '$tls_dir/platform-mcp.key' --resolve 'stratum-internal:$internal_api_port:127.0.0.1' 'https://stratum-internal:$internal_api_port/internal/livez'}" || return 1
 poll backend "${STATEFUL_E2E_BACKEND_HEALTH_COMMAND:-curl -fsS '$E2E_API_URL/health'}" || return 1
 poll frontend "${STATEFUL_E2E_FRONTEND_HEALTH_COMMAND:-curl -fsS '$E2E_WEB_URL/'}" || return 1
-for pid in "$oauth_pid" "$mcp_pid" "$platform_mcp_pid" "$backend_pid" "$frontend_pid"; do
+for pid in "$oauth_pid" "$mcp_pid" "$backend_pid" "$frontend_pid"; do
   kill -0 "$pid" 2>/dev/null || { printf 'stateful E2E child exited before browser execution\n' >&2; return 1; }
 done
 }
@@ -236,7 +208,6 @@ for attempt in $(seq 1 "$port_attempts"); do
   reset_attempt
   allocate_scope
   load_scope
-  configure_tls
   export E2E_GITHUB_ID=${E2E_GITHUB_ID:-730001} E2E_GITHUB_LOGIN=stateful-oauth-$run_id E2E_GITHUB_EMAIL=stateful-oauth-$run_id@example.test
   prepare_database
   if start_services; then break; fi
@@ -256,8 +227,8 @@ cleanup_owned
 source_after=$(cd "$repo_dir" && bash -c "$digest_command")
 [[ "$source_before" == "$source_after" ]] || { printf 'covered source changed during stateful E2E execution\n' >&2; exit 1; }
 jq --arg run "$run_id" --arg db "$database_name" --argjson fp "$frontend_port" --argjson bp "$backend_port" \
-  --argjson op "$oauth_port" --argjson xp "$fixture_port" --argjson mp "$platform_mcp_port" --argjson ip "$internal_api_port" \
-  '. + {run_topology:{run_id:$run,host:"127.0.0.1",ports:{frontend:$fp,backend:$bp,oauth:$op,fixture:$xp,platform_mcp:$mp,internal_api:$ip},database_name:$db},owned_cleanup:{database_dropped:true,lease_removed:true}}' \
+  --argjson op "$oauth_port" --argjson xp "$fixture_port" \
+  '. + {run_topology:{run_id:$run,host:"127.0.0.1",ports:{frontend:$fp,backend:$bp,oauth:$op,fixture:$xp},database_name:$db},owned_cleanup:{database_dropped:true,lease_removed:true}}' \
   "$results_path" >"$work_dir/results-v2.json"
 mv "$work_dir/results-v2.json" "$results_path"
 phase=attestation

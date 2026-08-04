@@ -18,7 +18,6 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
-	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 	"github.com/byteBuilderX/stratum/pkg/tokenutil"
 )
 
@@ -60,6 +59,10 @@ type ReActState struct {
 	OnToken                    func(string) // if non-nil, stream tokens from the final LLM response
 	RAGSearchFn                func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
 	RecallMemoryFn             func(ctx context.Context, input map[string]any) (string, error)
+	OfficialDocsSearchFn       func(context.Context, string) ([]domain.Citation, error)
+	DiagnosticFn               func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)
+	ProposalCreateFn           func(context.Context, map[string]any) (domain.ResourceChangeProposalArtifact, error)
+	InternalToolResultGuardFn  func(any) (port.GuardedToolResult, error)
 	// MaxLLMSteps caps LLM-node invocations; on the last allowed call tools are
 	// stripped and the model is asked to produce a final answer from collected context.
 	MaxLLMSteps int
@@ -580,8 +583,100 @@ func dispatchToolCall(toolCtx context.Context, tc port.ToolCall, s *ReActState, 
 		return execSearchKnowledgeTool(toolCtx, tc, s, toolStart, logger)
 	case "stratum_recall_memory":
 		return execRecallMemoryTool(toolCtx, tc, s, toolStart, logger)
+	case domain.SystemAssistantToolSearchOfficialDocs:
+		return execOfficialDocsSearchTool(toolCtx, tc, s, toolStart)
+	case domain.SystemAssistantToolDiagnoseTenant:
+		return execDiagnoseTenantTool(toolCtx, tc, s, toolStart)
+	case domain.SystemAssistantToolProposeResourceChange:
+		return execProposeResourceChangeTool(toolCtx, tc, s, toolStart)
 	default:
 		return execMCPTool(toolCtx, tc, s, toolStart, provider, logger)
+	}
+}
+
+func execOfficialDocsSearchTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
+	if !s.GovernedAssistant || s.OfficialDocsSearchFn == nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "official docs tool unavailable", content: "error: tool unavailable"}
+	}
+	query, parseErr := domain.ParseOfficialDocsToolArguments(tc.Arguments)
+	if parseErr != nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: parseErr.Error(), content: "error: invalid tool arguments"}
+	}
+	callCtx, cancel := context.WithTimeout(toolCtx, constants.SystemAssistantToolTimeout)
+	citations, callErr := s.OfficialDocsSearchFn(callCtx, query)
+	cancel()
+	if callErr != nil {
+		message := safeAssistantToolError(callErr)
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: message, content: "error: " + message}
+	}
+	citations = domain.BoundCitations(citations)
+	content, guardErr := guardInternalAssistantEvidence(s.InternalToolResultGuardFn, map[string]any{"citations": citations})
+	if guardErr != nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: guardErr.Error(), content: "error: tool result exceeded safe bounds"}
+	}
+	return toolExecResult{
+		content: content,
+		status:  domain.ToolTraceStatusSuccess,
+		artifact: &domain.SystemAssistantToolArtifact{
+			Tool: tc.Name, Citations: citations, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "success",
+		},
+	}
+}
+
+func execDiagnoseTenantTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
+	if !s.GovernedAssistant || s.DiagnosticFn == nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "diagnostic tool unavailable", content: "error: tool unavailable"}
+	}
+	areas, parseErr := domain.ParseDiagnosticToolArguments(tc.Arguments)
+	if parseErr != nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: parseErr.Error(), content: "error: invalid tool arguments"}
+	}
+	callCtx, cancel := context.WithTimeout(toolCtx, constants.SystemAssistantToolTimeout)
+	evidence, callErr := s.DiagnosticFn(callCtx, areas)
+	cancel()
+	if callErr != nil {
+		message := safeAssistantToolError(callErr)
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: message, content: "error: " + message}
+	}
+	evidence = domain.BoundDiagnosticEvidence(evidence)
+	content, guardErr := guardInternalAssistantEvidence(s.InternalToolResultGuardFn, map[string]any{"evidence": evidence})
+	if guardErr != nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: guardErr.Error(), content: "error: tool result exceeded safe bounds"}
+	}
+	return toolExecResult{
+		content: content,
+		status:  domain.ToolTraceStatusSuccess,
+		artifact: &domain.SystemAssistantToolArtifact{
+			Tool: tc.Name, Evidence: &evidence, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "success",
+		},
+	}
+}
+
+func execProposeResourceChangeTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
+	if !s.GovernedAssistant || s.ProposalCreateFn == nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "proposal tool unavailable", content: "error: tool unavailable"}
+	}
+	proposal, callErr := s.ProposalCreateFn(toolCtx, tc.Arguments)
+	if callErr != nil {
+		message := safeAssistantToolError(callErr)
+		if proposal.ID != "" {
+			s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, domain.SystemAssistantToolArtifact{
+				Tool: tc.Name, Proposal: &proposal, LatencyMs: time.Since(toolStart).Milliseconds(),
+				Outcome: "error", ErrorCode: assistantToolErrorCode(callErr.Error()),
+			})
+		}
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: message, content: "error: " + message}
+	}
+	content, guardErr := guardInternalAssistantEvidence(s.InternalToolResultGuardFn, map[string]any{"proposal": proposal})
+	if guardErr != nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: guardErr.Error(), content: "error: tool result exceeded safe bounds"}
+	}
+	return toolExecResult{
+		content: content,
+		status:  domain.ToolTraceStatusSuccess,
+		artifact: &domain.SystemAssistantToolArtifact{
+			Tool: tc.Name, Proposal: &proposal, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "success",
+		},
 	}
 }
 
@@ -707,11 +802,6 @@ func execMCPTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolS
 		return toolExecResult{
 			content: guarded.ModelContent,
 			status:  domain.ToolTraceStatusSuccess,
-			artifact: platformMCPArtifact(
-				provider.CapabilityID,
-				guarded.StructuredContent,
-				toolLatencyMs,
-			),
 		}
 	default:
 		logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
@@ -722,69 +812,52 @@ func execMCPTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolS
 }
 
 func recordToolErrorArtifact(s *ReActState, capabilityID string, toolStart time.Time, result toolExecResult) {
-	if result.status == domain.ToolTraceStatusError && isPlatformMCPTool(capabilityID) {
+	if result.status == domain.ToolTraceStatusError && isSystemAssistantTool(capabilityID) {
 		s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, domain.SystemAssistantToolArtifact{
 			Tool: capabilityID, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "error", ErrorCode: assistantToolErrorCode(result.errMsg),
 		})
 	}
 }
 
-func platformMCPArtifact(
-	toolName string,
-	structured map[string]any,
-	latencyMs int64,
-) *domain.SystemAssistantToolArtifact {
-	artifact := &domain.SystemAssistantToolArtifact{
-		Tool: toolName, LatencyMs: latencyMs, Outcome: "success",
-	}
+func isSystemAssistantTool(toolName string) bool {
 	switch toolName {
-	case platformmcp.ToolSearchOfficialDocs:
-		var response struct {
-			Citations []domain.Citation `json:"citations"`
-		}
-		if !decodeStructuredContent(structured, &response) {
-			return nil
-		}
-		artifact.Citations = domain.BoundCitations(response.Citations)
-	case platformmcp.ToolDiagnoseTenant:
-		var response struct {
-			Evidence domain.DiagnosticEvidence `json:"evidence"`
-		}
-		if !decodeStructuredContent(structured, &response) {
-			return nil
-		}
-		evidence := domain.BoundDiagnosticEvidence(response.Evidence)
-		artifact.Evidence = &evidence
-	case platformmcp.ToolProposeResourceChange:
-		var proposal domain.ResourceChangeProposalArtifact
-		if !decodeStructuredContent(structured, &proposal) || proposal.ID == "" {
-			return nil
-		}
-		artifact.Proposal = &proposal
+	case domain.SystemAssistantToolSearchOfficialDocs,
+		domain.SystemAssistantToolDiagnoseTenant,
+		domain.SystemAssistantToolProposeResourceChange:
+		return true
 	default:
-		return nil
-	}
-	return artifact
-}
-
-func decodeStructuredContent(content map[string]any, target any) bool {
-	if content == nil {
 		return false
 	}
-	encoded, err := json.Marshal(content)
+}
+
+func guardInternalAssistantEvidence(fn func(any) (port.GuardedToolResult, error), value any) (string, error) {
+	raw, err := json.Marshal(value)
+	if err != nil || len(raw) > constants.SystemAssistantToolMaxJSONBytes {
+		return "", domain.ErrSystemAssistantEvidenceTooLarge
+	}
+	if fn == nil {
+		return "", errors.New("internal tool result guard unavailable")
+	}
+	guarded, err := fn(value)
 	if err != nil {
-		return false
+		return "", err
 	}
-	return json.Unmarshal(encoded, target) == nil
+	return guarded.ModelContent, nil
 }
 
-func isPlatformMCPTool(toolName string) bool {
-	for _, name := range platformmcp.Phase1ToolNames {
-		if toolName == name {
-			return true
-		}
+func safeAssistantToolError(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "tool timeout"
+	case errors.Is(err, context.Canceled):
+		return "tool cancelled"
+	case errors.Is(err, domain.ErrOfficialEvidenceNotFound):
+		return "official evidence not found"
+	case errors.Is(err, domain.ErrDiagnosticForbidden):
+		return "diagnostic forbidden"
+	default:
+		return "evidence unavailable"
 	}
-	return false
 }
 
 func recordToolSpanResult(toolSpan oteltrace.Span, errMsg, content string, toolLatencyMs int64) {
@@ -925,7 +998,9 @@ type toolProviderRef struct {
 
 func classifyToolProvider(name string, tools []port.ToolDefinition) toolProviderRef {
 	switch name {
-	case "stratum_search_official_docs", "stratum_diagnose_tenant", "stratum_propose_resource_change":
+	case domain.SystemAssistantToolSearchOfficialDocs,
+		domain.SystemAssistantToolDiagnoseTenant,
+		domain.SystemAssistantToolProposeResourceChange:
 		return toolProviderRef{ToolType: domain.ToolTypeInternal, ProviderType: domain.ProviderTypeInternal,
 			ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
 	case "stratum_continue_reasoning":

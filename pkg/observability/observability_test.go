@@ -38,41 +38,6 @@ func TestSystemAssistantMetricsUseOnlyBoundedLabels(t *testing.T) {
 	}
 }
 
-func TestPlatformMCPMetricsUseOnlyBoundedLabels(t *testing.T) {
-	m := NewPrometheusMetrics(zap.NewNop())
-	m.InitPlatformMCPMetrics()
-	m.IncPlatformMCPRequest("diagnostic", "read", "success")
-	m.RecordPlatformMCPRequestDuration("diagnostic", "success", 0.1)
-	m.IncPlatformMCPRequestsInFlight()
-	m.DecPlatformMCPRequestsInFlight()
-	m.IncPlatformMCPAuthDenial("4xx")
-	m.IncPlatformMCPTokenExchange("success")
-	m.IncPlatformMCPReplayDenial("4xx")
-	m.IncPlatformMCPBackendRequest("diagnostic", "2xx")
-	m.IncPlatformMCPUnknownOutcome("proposal")
-	m.IncPlatformMCPContractMismatch("proposal")
-	m.SetPlatformMCPCertificateExpiry(86400)
-	m.SetPlatformMCPCertificateRotation("success", 1)
-
-	families, err := m.reg.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
-	allowed := map[string]bool{"tool_class": true, "risk_level": true, "outcome": true, "status_class": true}
-	for _, family := range families {
-		if !strings.HasPrefix(family.GetName(), "platform_mcp_") {
-			continue
-		}
-		for _, metric := range family.Metric {
-			for _, label := range metric.Label {
-				if !allowed[label.GetName()] {
-					t.Fatalf("unbounded Platform MCP label %q on %s", label.GetName(), family.GetName())
-				}
-			}
-		}
-	}
-}
-
 func TestResourceProposalDraftEditsRecordsOneObservation(t *testing.T) {
 	m := NewPrometheusMetrics(zap.NewNop())
 	m.RecordResourceProposalDraftEdits("knowledge_workspace", "update", 2)

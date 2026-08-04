@@ -151,9 +151,6 @@ func TestVerifyRunTopologyRequiresAllRuntimePorts(t *testing.T) {
 		mutate func(map[string]int)
 	}{
 		{name: "valid", mutate: func(map[string]int) {}},
-		{name: "missing Platform MCP", mutate: func(ports map[string]int) { delete(ports, "platform_mcp") }},
-		{name: "missing internal API", mutate: func(ports map[string]int) { delete(ports, "internal_api") }},
-		{name: "duplicate internal API", mutate: func(ports map[string]int) { ports["internal_api"] = ports["backend"] }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -259,7 +256,6 @@ func validResults(now time.Time) SafeResults {
 			DatabaseName: "stratum_e2e_20260730t120102z_a1b2c3d4e5f60718",
 			Ports: map[string]int{
 				"frontend": 15174, "backend": 18081, "oauth": 19092, "fixture": 19093,
-				"platform_mcp": 18443, "internal_api": 18444,
 			},
 		},
 		OwnedCleanup: &OwnedCleanup{DatabaseDropped: true, LeaseRemoved: true},

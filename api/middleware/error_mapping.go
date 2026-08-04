@@ -147,7 +147,6 @@ var errorStatusTable = map[error]int{
 	iamapp.ErrForbiddenAdminRemove:                http.StatusForbidden,
 	memorydomain.ErrAgentMemoryDisabled:           http.StatusForbidden,
 	memorydomain.ErrScopeMismatch:                 http.StatusForbidden,
-	agentapp.ErrPlatformMCPBindingForbidden:       http.StatusForbidden,
 	workflowdomain.ErrForbidden:                   http.StatusForbidden,
 	iamapp.ErrInvalidSettings:                     http.StatusBadRequest,
 	agentdomain.ErrProposalInvalid:                http.StatusBadRequest,

@@ -20,7 +20,6 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
-	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
@@ -28,11 +27,6 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
-
-// ErrPlatformMCPBindingForbidden prevents ordinary tenant agents from acquiring platform control-plane tools.
-var ErrPlatformMCPBindingForbidden = errors.New("platform MCP tools may only bind to the platform assistant")
-
-const platformMCPToolIDPrefix = "mcp:stratum-platform-mcp:"
 
 // AgentServiceDeps groups the consumer-side dependencies of AgentService.
 // Everything is an interface or value type — no concrete infrastructure
@@ -193,9 +187,6 @@ type SystemAssistantSettings struct {
 
 // Create persists a new agent for the tenant.
 func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDTO, error) {
-	if containsPlatformMCPToolID(in.MCPToolIDs) {
-		return AgentDTO{}, ErrPlatformMCPBindingForbidden
-	}
 	id := uuid.Must(uuid.NewV7()).String()
 	maxCtxTokens := in.MaxContextTokens
 	if maxCtxTokens <= 0 {
@@ -526,9 +517,6 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	if existing.GetConfig().SystemKey != "" {
 		return s.updateSystemAssistant(ctx, existing.GetConfig(), in)
 	}
-	if containsPlatformMCPToolID(in.MCPToolIDs) {
-		return AgentDTO{}, ErrPlatformMCPBindingForbidden
-	}
 	skills := in.AllowedSkills
 	if skills == nil {
 		skills = []string{}
@@ -607,15 +595,6 @@ func (s *AgentService) updateSystemAssistant(ctx context.Context, cfg *domain.Ag
 	}
 	s.deps.Logger.Info("system assistant updated", zap.String("id", cfg.ID))
 	return cfgToDTO(updated.GetConfig()), nil
-}
-
-func containsPlatformMCPToolID(toolIDs []string) bool {
-	for _, toolID := range toolIDs {
-		if strings.HasPrefix(toolID, platformMCPToolIDPrefix) {
-			return true
-		}
-	}
-	return false
 }
 
 // Delete removes an agent and cascades deletion to conversations and memories.
@@ -1036,10 +1015,21 @@ func hasFailedAssistantArtifact(result *AgentResult) bool {
 }
 
 func boundedAssistantRoleClass(role string) string {
-	if role == "admin" || role == "member" {
+	switch role {
+	case "member", "admin", "owner":
 		return role
+	default:
+		return "unknown"
 	}
-	return "unknown"
+}
+
+func boundedAssistantOutcome(outcome string) string {
+	switch outcome {
+	case "success", "gap", "error", "evidence_error", "matched":
+		return outcome
+	default:
+		return "unknown"
+	}
 }
 
 // ListExecutions paginates the per-tenant execution history.
@@ -1285,16 +1275,24 @@ func (s *AgentService) assembleOptions(
 	var skillCatalog map[string]port.SkillActivation
 	mcpAssignments := make(map[string]port.MCPRevisionAssignment)
 	knowledgeAssignments := make(map[string]port.KnowledgeRevisionAssignment)
-	mcpToolIDs := a.GetConfig().MCPToolIDs
-	if !isSystemAssistant {
-		mcpToolIDs = withoutPlatformMCPTools(mcpToolIDs)
-	}
-	var resolveErr error
-	extraTools, skillCatalog, resolveErr = s.buildExtraToolsChecked(
-		ctx, meta.TenantID, subjectID, mcpToolIDs, a.GetConfig().AllowedSkills,
-	)
-	if resolveErr != nil {
-		return ctx, nil, fmt.Errorf("resolve experiment resources: %w", resolveErr)
+	roleClass := "unknown"
+	var authorization domain.DiagnosticAuthorization
+	if isSystemAssistant {
+		var toolingErr error
+		extraTools, skillCatalog, roleClass, toolingErr = s.resolveSystemAssistantTooling(
+			ctx, meta, req, a, subjectID, &authorization,
+		)
+		if toolingErr != nil {
+			return ctx, nil, toolingErr
+		}
+	} else {
+		var resolveErr error
+		extraTools, skillCatalog, resolveErr = s.buildExtraToolsChecked(
+			ctx, meta.TenantID, subjectID, a.GetConfig().MCPToolIDs, a.GetConfig().AllowedSkills,
+		)
+		if resolveErr != nil {
+			return ctx, nil, fmt.Errorf("resolve experiment resources: %w", resolveErr)
+		}
 	}
 	evolutionTrace := meta.EvolutionTrace
 	if evolutionTrace.ResourceManifest == nil {
@@ -1412,18 +1410,9 @@ func (s *AgentService) assembleOptions(
 		WithEvolutionTraceMetadata(evolutionTrace),
 	)
 	if isSystemAssistant {
-		roleClass := "unknown"
-		if s.deps.DiagnosticProvider != nil {
-			authorization, authorizeErr := s.deps.DiagnosticProvider.Authorize(ctx, domain.DiagnosticRequest{
-				TenantID: meta.TenantID, UserID: req.UserID,
-				Areas: []domain.DiagnosticArea{domain.DiagnosticAreaAgent, domain.DiagnosticAreaSkill, domain.DiagnosticAreaMCP, domain.DiagnosticAreaKnowledge, domain.DiagnosticAreaModel},
-			})
-			if authorizeErr != nil {
-				return ctx, nil, authorizeErr
-			}
-			roleClass = boundedAssistantRoleClass(authorization.RoleClass)
-		}
-		options = append(options, WithSystemAssistantMode(), withSystemAssistantRoleClass(roleClass))
+		profileVersion := evolutionTrace.ResourceManifest["system-assistant-profile"]
+		options = append(options, s.systemAssistantExecutionOptions(ctx, meta, req, roleClass, authorization, profileVersion)...)
+		return ctx, options, nil
 	}
 	if s.deps.ToolAuthorizer != nil {
 		agentID, userID, conversationID, query := a.GetConfig().ID, req.UserID, req.ConversationID, req.Query
@@ -1504,16 +1493,6 @@ func (s *AgentService) assembleOptions(
 	return ctx, options, nil
 }
 
-func withoutPlatformMCPTools(toolIDs []string) []string {
-	filtered := make([]string, 0, len(toolIDs))
-	for _, toolID := range toolIDs {
-		if !strings.HasPrefix(toolID, platformMCPToolIDPrefix) {
-			filtered = append(filtered, toolID)
-		}
-	}
-	return filtered
-}
-
 // attachChatStore wires the configured ChatStore onto the running agent
 // when the agent type supports it.
 func (s *AgentService) attachChatStore(a Agent) {
@@ -1537,6 +1516,112 @@ func (s *AgentService) attachCheckpointStore(a Agent) {
 			setter.SetCheckpointStore(s.deps.CheckpointStore)
 		}
 	}
+}
+
+// resolveSystemAssistantTooling authorizes the current member, derives the
+// bounded role class, and builds the in-process platform tools plus the skill
+// catalog for the system assistant.
+func (s *AgentService) resolveSystemAssistantTooling(
+	ctx context.Context,
+	meta ExecMeta,
+	req ExecRequest,
+	a Agent,
+	subjectID string,
+	authorization *domain.DiagnosticAuthorization,
+) ([]port.ToolDefinition, map[string]port.SkillActivation, string, error) {
+	roleClass := "unknown"
+	if s.deps.DiagnosticProvider != nil {
+		var authorizeErr error
+		*authorization, authorizeErr = s.deps.DiagnosticProvider.Authorize(ctx, domain.DiagnosticRequest{
+			TenantID: meta.TenantID, UserID: req.UserID,
+			Areas: []domain.DiagnosticArea{domain.DiagnosticAreaAgent, domain.DiagnosticAreaSkill, domain.DiagnosticAreaMCP, domain.DiagnosticAreaKnowledge, domain.DiagnosticAreaModel},
+		})
+		if authorizeErr != nil {
+			return nil, nil, "", authorizeErr
+		}
+		roleClass = boundedAssistantRoleClass(authorization.RoleClass)
+	}
+	extraTools := SystemAssistantToolDefinitions()
+	if (roleClass == "admin" || roleClass == "owner") && s.deps.ProposalService != nil {
+		extraTools = SystemAssistantToolDefinitionsForRole(roleClass)
+	}
+	skillCatalog, catalogErr := s.buildSkillCatalog(ctx, meta.TenantID, subjectID, a.GetConfig().AllowedSkills)
+	if catalogErr != nil {
+		return nil, nil, "", fmt.Errorf("resolve experiment resources: %w", catalogErr)
+	}
+	return extraTools, skillCatalog, roleClass, nil
+}
+
+// systemAssistantExecutionOptions attaches the in-process capability callbacks
+// (official docs search, tenant diagnostics, governed proposals) plus the
+// bounded result guard for the system assistant execution.
+func (s *AgentService) systemAssistantExecutionOptions(
+	ctx context.Context,
+	meta ExecMeta,
+	req ExecRequest,
+	roleClass string,
+	authorization domain.DiagnosticAuthorization,
+	profileVersion string,
+) []ExecutionOption {
+	var options []ExecutionOption
+	if s.deps.OfficialDocsSearch != nil {
+		search := s.deps.OfficialDocsSearch
+		options = append(options, WithOfficialDocsSearchFn(func(callCtx context.Context, query string) ([]domain.Citation, error) {
+			citations, searchErr := search(callCtx, query)
+			if s.deps.Metrics != nil {
+				outcome := "matched"
+				if searchErr != nil {
+					outcome = "error"
+				}
+				s.deps.Metrics.RecordOfficialDocsSearchResults(profileVersion, outcome, len(citations))
+			}
+			return citations, searchErr
+		}))
+	}
+	if s.deps.DiagnosticProvider != nil {
+		provider, authorized := s.deps.DiagnosticProvider, authorization.Request
+		options = append(options, WithDiagnosticFn(func(callCtx context.Context, areas []domain.DiagnosticArea) (domain.DiagnosticEvidence, error) {
+			request := authorized
+			request.Areas = append([]domain.DiagnosticArea(nil), areas...)
+			evidence, diagnosticErr := provider.CollectAuthorized(callCtx, request)
+			if s.deps.Metrics != nil {
+				for _, result := range evidence.AreaResults {
+					s.deps.Metrics.RecordSystemAssistantDiagnosticArea(roleClass, string(result.Area), boundedAssistantOutcome(result.Outcome), float64(result.DurationMs)/1000)
+				}
+				s.deps.Metrics.RecordSystemAssistantEvidenceGaps(roleClass, profileVersion, len(evidence.Gaps))
+			}
+			return evidence, diagnosticErr
+		}))
+	}
+	guard := NewToolResultGuard()
+	if (roleClass == "admin" || roleClass == "owner") && s.deps.ProposalService != nil {
+		proposalService := s.deps.ProposalService
+		tenantID, actorID, conversationID := meta.TenantID, req.UserID, req.ConversationID
+		options = append(options, withProposalCreateFn(func(callCtx context.Context, args map[string]any) (domain.ResourceChangeProposalArtifact, error) {
+			kind, operation, resourceID, payload, parseErr := parseProposalArguments(args)
+			if parseErr != nil {
+				return domain.ResourceChangeProposalArtifact{}, parseErr
+			}
+			proposal, createErr := proposalService.CreateProposal(callCtx, CreateProposalInput{
+				TenantID: tenantID, ConversationID: conversationID, ActorID: actorID,
+				Kind: kind, Operation: operation, ResourceID: resourceID, Payload: payload,
+			})
+			artifact := domain.ResourceChangeProposalArtifact{
+				ID: proposal.ID, ResourceKind: proposal.ResourceKind, Operation: proposal.Operation,
+				Status: proposal.Status, Summary: proposal.Summary, ExpiresAt: proposal.ExpiresAt,
+			}
+			return artifact, createErr
+		}))
+	}
+	options = append(options, WithSystemAssistantMode(), withSystemAssistantRoleClass(roleClass),
+		withInternalToolResultGuard(func(value any) (port.GuardedToolResult, error) {
+			structured, ok := value.(map[string]any)
+			if !ok {
+				return port.GuardedToolResult{}, ErrMCPToolResultSchema
+			}
+			return guard.Validate(port.MCPToolResult{StructuredContent: structured}, nil)
+		}))
+	return options
 }
 
 // buildExtraTools converts MCPToolIDs and AllowedSkills into ToolDefinitions
@@ -1623,12 +1708,6 @@ func (s *AgentService) resolveMCPToolRisk(
 ) (port.ToolRiskLevel, bool) {
 	risk := port.ToolRiskUnclassified
 	resolved := false
-	if serverID == platformmcp.SystemServerID {
-		if contract, ok := platformmcp.NewPhase1Contracts().Lookup(capabilityID); ok {
-			risk = platformMCPRisk(contract.Risk)
-			resolved = true
-		}
-	}
 	if s.deps.MCPToolPolicy == nil {
 		return risk, resolved
 	}
@@ -1695,13 +1774,6 @@ func applySkillAssignments(
 		activation.Variant = assignment.Variant
 		catalog[skillID] = activation
 	}
-}
-
-func platformMCPRisk(risk platformmcp.RiskLevel) port.ToolRiskLevel {
-	if risk == platformmcp.RiskWriteReversible {
-		return port.ToolRiskWriteReversible
-	}
-	return port.ToolRiskRead
 }
 
 func stricterToolRisk(left, right port.ToolRiskLevel) port.ToolRiskLevel {

@@ -129,13 +129,10 @@ fake_env=(
   STATEFUL_E2E_MIGRATION_COMMAND=true
   STATEFUL_E2E_OAUTH_COMMAND='while :; do sleep 1; done'
   STATEFUL_E2E_MCP_COMMAND='while :; do sleep 1; done'
-  STATEFUL_E2E_PLATFORM_MCP_COMMAND='while :; do sleep 1; done'
   STATEFUL_E2E_BACKEND_COMMAND='while :; do sleep 1; done'
   STATEFUL_E2E_FRONTEND_COMMAND='while :; do sleep 1; done'
   STATEFUL_E2E_OAUTH_HEALTH_COMMAND=true
   STATEFUL_E2E_MCP_HEALTH_COMMAND=true
-  STATEFUL_E2E_PLATFORM_MCP_HEALTH_COMMAND=true
-  STATEFUL_E2E_INTERNAL_API_HEALTH_COMMAND=true
   STATEFUL_E2E_BACKEND_HEALTH_COMMAND=true
   STATEFUL_E2E_FRONTEND_HEALTH_COMMAND=true
   STATEFUL_E2E_DIGEST_COMMAND='printf digest'
@@ -229,7 +226,7 @@ rm -rf "$test_dir/term-registry"; rm -f "$test_dir/infra-ready"
 set +e
 timeout 12 env "${fake_env[@]}" STATEFUL_E2E_REGISTRY_ROOT="$test_dir/term-registry" \
   STATEFUL_E2E_OAUTH_COMMAND="$test_dir/ignore-term" STATEFUL_E2E_MCP_COMMAND="$test_dir/ignore-term" \
-  STATEFUL_E2E_PLATFORM_MCP_COMMAND="$test_dir/ignore-term" STATEFUL_E2E_BACKEND_COMMAND="$test_dir/ignore-term" \
+  STATEFUL_E2E_BACKEND_COMMAND="$test_dir/ignore-term" \
   STATEFUL_E2E_FRONTEND_COMMAND="$test_dir/ignore-term" STATEFUL_E2E_CHILD_TERM_TIMEOUT_SEC=1 \
   STATEFUL_E2E_PLAYWRIGHT_COMMAND="$test_dir/playwright-pass" bash "$runner" short >"$test_dir/term.log" 2>&1
 status=$?
@@ -241,7 +238,6 @@ rm -rf "$test_dir/descendant-registry"; rm -f "$test_dir/infra-ready" "$test_dir
 set +e
 timeout 12 env "${fake_env[@]}" STATEFUL_E2E_REGISTRY_ROOT="$test_dir/descendant-registry" \
   STATEFUL_E2E_OAUTH_COMMAND="$test_dir/term-descendant" STATEFUL_E2E_MCP_COMMAND="$test_dir/term-descendant" \
-  STATEFUL_E2E_PLATFORM_MCP_COMMAND="$test_dir/term-descendant" \
   STATEFUL_E2E_BACKEND_COMMAND="$test_dir/term-descendant" \
   STATEFUL_E2E_FRONTEND_COMMAND="$test_dir/term-descendant" STATEFUL_E2E_CHILD_TERM_TIMEOUT_SEC=1 \
   STATEFUL_E2E_PLAYWRIGHT_COMMAND="$test_dir/playwright-pass" \

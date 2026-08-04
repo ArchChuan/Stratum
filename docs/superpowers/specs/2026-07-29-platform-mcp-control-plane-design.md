@@ -1,5 +1,7 @@
 # Stratum 平台助手统一 MCP 控制面设计
 
+> **已废弃 (2026-08-04)：** platform-mcp 控制面整体移除，系统助手三个平台工具恢复为进程内直调（`stratum_search_official_docs` / `stratum_diagnose_tenant` / `stratum_propose_resource_change`）。本设计仅作历史参考。
+
 **状态：已确认，待用户复核文档**
 
 ## 1. 背景

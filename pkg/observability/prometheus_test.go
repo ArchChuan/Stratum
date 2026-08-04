@@ -131,54 +131,6 @@ func TestPrometheusIncHTTPRequestNormalizesStatus(t *testing.T) {
 	}
 }
 
-func TestPrometheusPlatformMCPNilGuard(t *testing.T) {
-	// 极端情况：未调用 InitPlatformMCPMetrics 时，所有 MCP 方法必须安全 no-op。
-	m := newTestMetrics(t)
-	m.IncPlatformMCPRequest("tool", "high", "ok")
-	m.RecordPlatformMCPRequestDuration("tool", "ok", 0.1)
-	m.IncPlatformMCPRequestsInFlight()
-	m.DecPlatformMCPRequestsInFlight()
-	m.IncPlatformMCPAuthDenial("denied")
-	m.IncPlatformMCPTokenExchange("ok")
-	m.IncPlatformMCPReplayDenial("denied")
-	m.IncPlatformMCPBackendRequest("tool", "ok")
-	m.IncPlatformMCPUnknownOutcome("tool")
-	m.IncPlatformMCPContractMismatch("tool")
-	m.SetPlatformMCPCertificateExpiry(3600)
-	m.SetPlatformMCPCertificateRotation("ok", 1)
-}
-
-func TestPrometheusPlatformMCPAfterInit(t *testing.T) {
-	m := newTestMetrics(t)
-	m.InitPlatformMCPMetrics()
-	m.IncPlatformMCPRequest("tool", "high", "ok")
-	m.RecordPlatformMCPRequestDuration("tool", "ok", 0.1)
-	m.IncPlatformMCPRequestsInFlight()
-	m.DecPlatformMCPRequestsInFlight()
-	m.IncPlatformMCPAuthDenial("denied")
-	m.IncPlatformMCPTokenExchange("ok")
-	m.IncPlatformMCPReplayDenial("denied")
-	m.IncPlatformMCPBackendRequest("tool", "ok")
-	m.IncPlatformMCPUnknownOutcome("tool")
-	m.IncPlatformMCPContractMismatch("tool")
-	m.SetPlatformMCPCertificateExpiry(3600)
-	m.SetPlatformMCPCertificateRotation("ok", 1)
-
-	families, err := m.reg.Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-	found := false
-	for _, f := range families {
-		if f.GetName() == "platform_mcp_requests_total" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("platform MCP metrics missing after init")
-	}
-}
-
 func TestPrometheusRegistererAndHandler(t *testing.T) {
 	m := newTestMetrics(t)
 	if m.Registerer() == nil {
@@ -222,18 +174,6 @@ func TestNoopMetricsSafeForAllMethods(t *testing.T) {
 	nm.IncResourceProposal("k", "op", "ok")
 	nm.RecordResourceProposalReviewDuration("k", "op", 1)
 	nm.RecordResourceProposalDraftEdits("k", "op", 1)
-	nm.IncPlatformMCPRequest("t", "h", "ok")
-	nm.RecordPlatformMCPRequestDuration("t", "ok", 1)
-	nm.IncPlatformMCPRequestsInFlight()
-	nm.DecPlatformMCPRequestsInFlight()
-	nm.IncPlatformMCPAuthDenial("d")
-	nm.IncPlatformMCPTokenExchange("ok")
-	nm.IncPlatformMCPReplayDenial("d")
-	nm.IncPlatformMCPBackendRequest("t", "ok")
-	nm.IncPlatformMCPUnknownOutcome("t")
-	nm.IncPlatformMCPContractMismatch("t")
-	nm.SetPlatformMCPCertificateExpiry(1)
-	nm.SetPlatformMCPCertificateRotation("ok", 1)
 	nm.IncLLMRequest("m", "p", "ok")
 	nm.RecordLLMRequestDuration("m", "p", 1)
 	nm.IncLLMTokenUsage("m", "t", 1)

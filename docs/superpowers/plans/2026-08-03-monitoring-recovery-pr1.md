@@ -1,5 +1,7 @@
 # Monitoring Recovery PR1 Implementation Plan
 
+> **NOTE (2026-08-04):** `StratumPlatformMCP*` 告警规则已随 platform-mcp 移除；`StratumReaperDown` 中 platform-mcp 实例的常驻误报随之消失。
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 修复 guest reaper 指标注册缺陷、把 `stratum-ai` 21 条规则迁入 `monitoring/remote`、新增进程级崩溃告警，并把 release receipt 升级为诚实的 v2（`prior_digests` + `rollback_check=pending`）。

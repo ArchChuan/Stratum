@@ -18,9 +18,3 @@ func newMockPool(t *testing.T) pgxmock.PgxPoolIface {
 	require.NoError(t, err)
 	return mock
 }
-
-// expectTenantTx 模拟 ExecTenantWith 的事务骨架：Begin → SET LOCAL search_path → Commit。
-func expectTenantTx(mock pgxmock.PgxPoolIface) {
-	mock.ExpectBegin()
-	mock.ExpectExec(`SET LOCAL search_path`).WillReturnResult(pgxmock.NewResult("SET", 0))
-}

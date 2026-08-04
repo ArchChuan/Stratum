@@ -1,5 +1,7 @@
 # Parallel Stateful E2E Phase One Implementation Plan
 
+> **DEPRECATED (2026-08-04):** 其中 platform-mcp / internal API 相关端口、TLS 证书与启动编排已随 platform-mcp 移除，剩余并行 E2E 能力继续有效。
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Allow multiple Stratum worktrees to run stateful browser E2E concurrently with per-run ports and PostgreSQL databases while sharing PostgreSQL, Redis, NATS, and Milvus processes.

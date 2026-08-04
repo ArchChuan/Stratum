@@ -19,8 +19,8 @@ every required dependency result is `success`.
 
 For a `workflow_run` deployment, the candidate is `github.event.workflow_run.head_sha`. It must be a successful CI run
 for `main` and must still equal the current `main` tip before any image is built. All checkouts and image tags use this
-candidate. Deployment pins registry digests and records the actual backend, frontend, Platform MCP, and adapter image
-digests observed from the cluster together with migration, health, and rollback results.
+candidate. Deployment pins registry digests and records the actual backend, frontend, and adapter image digests
+observed from the cluster together with migration, health, and rollback results.
 
 The release record may be attested by GitHub because it is produced inside the release control plane. That attestation
 does not retroactively make local browser evidence a GitHub trust boundary.

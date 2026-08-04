@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -73,9 +74,30 @@ func initDigestRepository(t *testing.T) string {
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".gitignore"), []byte("*.log\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("tracked"), 0o600))
 	for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qm", "init"}} {
-		command := exec.Command("git", args...)
-		command.Dir = root
+		command := gitCommand(root, args...)
 		require.NoError(t, command.Run())
 	}
 	return root
+}
+
+// gitCommand runs git inside a throwaway test repository. Pre-commit hooks set
+// GIT_DIR/GIT_INDEX_FILE/... for the real repository; inheriting those would
+// make subprocess git commands operate on the wrong repository.
+func gitCommand(dir string, args ...string) *exec.Cmd {
+	command := exec.Command("git", args...)
+	command.Dir = dir
+	var env []string
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "GIT_DIR=") ||
+			strings.HasPrefix(entry, "GIT_INDEX_FILE=") ||
+			strings.HasPrefix(entry, "GIT_WORK_TREE=") ||
+			strings.HasPrefix(entry, "GIT_OBJECT_DIRECTORY=") ||
+			strings.HasPrefix(entry, "GIT_COMMON_DIR=") ||
+			strings.HasPrefix(entry, "GIT_CEILING_DIRECTORIES=") {
+			continue
+		}
+		env = append(env, entry)
+	}
+	command.Env = env
+	return command
 }

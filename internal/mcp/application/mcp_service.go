@@ -7,7 +7,6 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/byteBuilderX/stratum/internal/mcp/domain/port"
-	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 	"go.uber.org/zap"
 )
 
@@ -225,8 +224,8 @@ func (s *MCPService) rejectPlatformManaged(ctx context.Context, serverID string)
 }
 
 func isPlatformManaged(cfg *domain.ServerConfig) bool {
-	return cfg != nil && (cfg.SystemKey == platformmcp.SystemServerKey ||
-		cfg.ManagementMode == platformmcp.ManagementPlatform)
+	return cfg != nil && (cfg.SystemKey != "" ||
+		cfg.ManagementMode == "platform_managed")
 }
 
 func mergeProtectedConfig(stored, incoming *domain.ServerConfig) *domain.ServerConfig {

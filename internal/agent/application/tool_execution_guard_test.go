@@ -7,7 +7,6 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
-	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 	"github.com/stretchr/testify/require"
 )
 
@@ -224,22 +223,27 @@ func TestToolExecutionGuardValidatesArgumentsBeforeExecution(t *testing.T) {
 	require.Zero(t, executor.calls)
 }
 
-func TestPlatformMCPInputSchemasCompileForSharedExecutionGuard(t *testing.T) {
+func TestSystemAssistantToolInputSchemasCompileForSharedExecutionGuard(t *testing.T) {
 	tests := []struct {
 		name      string
 		arguments map[string]any
 	}{
-		{name: platformmcp.ToolSearchOfficialDocs, arguments: map[string]any{"query": "Agent 使用"}},
-		{name: platformmcp.ToolDiagnoseTenant, arguments: map[string]any{"areas": []any{"agent", "mcp"}}},
-		{name: platformmcp.ToolProposeResourceChange, arguments: map[string]any{
+		{name: ToolSearchOfficialDocs, arguments: map[string]any{"query": "Agent 使用"}},
+		{name: ToolDiagnoseTenant, arguments: map[string]any{"areas": []any{"agent", "mcp"}}},
+		{name: ToolProposeResourceChange, arguments: map[string]any{
 			"resourceKind": "skill_draft", "operation": "create",
 			"payload": map[string]any{"name": "草稿", "description": "", "instructions": "执行步骤"},
 		}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			schema, ok := platformmcp.InputSchema(tc.name)
-			require.True(t, ok)
+			var schema map[string]any
+			for _, tool := range SystemAssistantToolDefinitionsForRole("admin") {
+				if tool.Name == tc.name {
+					schema = tool.InputSchema
+				}
+			}
+			require.NotNil(t, schema)
 			require.NoError(t, validateToolArguments(schema, tc.arguments))
 		})
 	}
