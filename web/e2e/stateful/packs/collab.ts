@@ -36,6 +36,10 @@ const clickModalOK = (page: Page) => page.locator('.ant-modal-content')
 // rc-virtual-list 不渲染列表底部的 option，直接 toBeVisible 必然超时；输入
 // UUID 过滤后结果唯一，必在可视区（等价真实用户搜索参与者）。
 const selectParticipant = async (page: Page, agentID: string) => {
+  // 先点 selector 打开面板：antd 关闭态下搜索框带 readonly 属性，fill 会
+  // 报 "element is not editable"（20s 超时）——打开后 readonly 移除才可输入
+  await page.locator('.ant-form-item').filter({ hasText: '参与者' })
+    .locator('.ant-select-selector').click();
   // Form.Item 必填标记使 combobox 可访问名为 "* 参与者"，用 regex 匹配
   await page.getByLabel(/参与者/).fill(agentID);
   const option = page.locator('.ant-select-item-option').filter({ hasText: agentID });
