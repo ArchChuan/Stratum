@@ -8,8 +8,8 @@ import (
 // deterministic, non-empty content hash.
 func TestBuiltinSkillsContentHash(t *testing.T) {
 	skills := BuiltinSkills()
-	if len(skills) != 2 {
-		t.Fatalf("expected 2 built-in skills, got %d", len(skills))
+	if len(skills) != 4 {
+		t.Fatalf("expected 4 built-in skills, got %d", len(skills))
 	}
 	for _, sk := range skills {
 		t.Run(sk.ID, func(t *testing.T) {
@@ -65,8 +65,12 @@ func TestBuiltinSkillsSQLGolden(t *testing.T) {
 	for _, want := range []string{
 		"builtin:platform-guide",
 		"builtin:tenant-diagnostic",
+		"builtin:resource-change",
+		"builtin:tool-execution",
 		"rev-builtin-platform-guide-v1",
 		"rev-builtin-tenant-diagnostic-v1",
+		"rev-builtin-resource-change-v1",
+		"rev-builtin-tool-execution-v1",
 		"stratum-platform-assistant",
 		"ON CONFLICT (id) DO NOTHING",
 		"WHERE NOT EXISTS",

@@ -51,6 +51,11 @@ Knowledge 仍没有统一资源版本模型。因此本设计保留完整产品�
 - 不使用平台共享模型或共享凭据兜底。
 - 一期不开放租户提示词、Skill、MCP 或 Knowledge 扩展。
 - 二期不删除资源、不发布 Skill、不部署优化候选、不执行 MCP 工具、不上传 Knowledge 文档。
+
+> 边界更新标注（2026-08-04）：本设计"不执行 MCP 工具"的非目标由后续两份 spec 共同扩展——平台业务工具
+> 执行见 2026-07-29 platform-mcp-control-plane-design；租户外部 MCP 工具执行见 2026-08-04
+> platform-assistant-carrier-architecture-design。
+
 - 对话、提案、trace 和通用日志不得采集、保存或回显密钥。
 - 不让模型决定授权、字段可见性、审批、状态流转、重试、冲突处理或回滚。
 
