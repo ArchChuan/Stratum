@@ -10,6 +10,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -531,7 +532,15 @@ func (s *PgStore) CreateApproval(ctx context.Context, tenantID string, approval 
 			return err
 		}
 		if tag.RowsAffected() != 1 {
-			return domain.ErrGenerationConflict
+			// 同批并行 approval:首个 approval 已把 run 置为 paused 并推进到目标 generation,
+			// 后续 approval 幂等接受,避免右分支 approval 静默丢失导致 run 卡死在 paused
+			var ready bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM workflow_runs WHERE id=$1 AND status='paused' AND generation=$2)`, approval.RunID, approval.RunGeneration).Scan(&ready); err != nil {
+				return err
+			}
+			if !ready {
+				return domain.ErrGenerationConflict
+			}
 		}
 		return appendEventTx(ctx, tx, &event)
 	})
@@ -608,7 +617,13 @@ func (s *PgStore) DecideApproval(ctx context.Context, tenantID, id string, gener
 			if tag.RowsAffected() != 1 {
 				return domain.ErrGenerationConflict
 			}
+			// 拒绝即终态:与 run 状态转换同一事务内补齐 run_failed 事件,保持事件链完整
 			event.Status = string(domain.RunStatusFailed)
+			if err := appendEventTx(ctx, tx, &event); err != nil {
+				return err
+			}
+			failedEvent := domain.Event{ID: uuid.NewString(), RunID: runID, Type: "workflow.run_failed", Status: string(domain.RunStatusFailed), Summary: "approval rejected: " + comment, OccurredAt: time.Now().UTC()}
+			return appendEventTx(ctx, tx, &failedEvent)
 		}
 		return appendEventTx(ctx, tx, &event)
 	})

@@ -162,6 +162,10 @@ func TestPgStore_CreateApproval_generationConflict(t *testing.T) {
 	mock.ExpectExec("UPDATE workflow_runs SET status='paused'").
 		WithArgs(int64(5), "high risk", "r1", int64(4)).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	// 幂等分支:UPDATE 未命中时检查 run 是否已由同批首个 approval 置为 paused
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs("r1", int64(5)).
+		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectRollback()
 
 	err := store.CreateApproval(context.Background(), "t1",
@@ -272,6 +276,14 @@ func TestPgStore_DecideApproval_reject(t *testing.T) {
 		ID: "e1", RunID: "r1", Type: "approval.decided", Status: "failed",
 		OccurredAt: fixedTime,
 	})
+	// run_failed 事件:ID 与 OccurredAt 由生产代码生成,业务字段精确断言
+	mock.ExpectQuery("next_event_sequence=next_event_sequence\\+1").
+		WithArgs("r1").
+		WillReturnRows(pgxmock.NewRows([]string{"seq"}).AddRow(int64(7)))
+	mock.ExpectExec("INSERT INTO workflow_events").
+		WithArgs(pgxmock.AnyArg(), "r1", int64(7), "workflow.run_failed", "", int(0),
+			"failed", "system", "", "approval rejected: no", "null", pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
 	require.NoError(t, store.DecideApproval(context.Background(), "t1", "a1", 5, "att-1",
