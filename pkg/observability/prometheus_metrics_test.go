@@ -69,7 +69,7 @@ func exerciseAllMetrics(m MetricsProvider) {
 	m.RecordAgentConversationTurn("agent-1", 5)
 	// Scheduler / Reranker / Router
 	m.IncScheduledFire("cron", "ok")
-	m.IncRerankRequest("bge-m3", "ok")
+	m.IncRerankRequest("tenant-1", "bge-m3", "ok")
 	m.RecordRerankDuration("bge-m3", 0.2)
 	m.IncRouteFallback("qwen-plus", "qwen-turbo")
 	m.RecordBudgetRatio("tenant-1", 42)

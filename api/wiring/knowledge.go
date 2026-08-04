@@ -8,11 +8,14 @@ import (
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/persistence"
+	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/rerank"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/seeds"
 	knowledgevector "github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/vectorstore"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
+	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/httpclient"
 	"github.com/byteBuilderX/stratum/pkg/textchunk"
 	vectorstore "github.com/byteBuilderX/stratum/pkg/vector"
 )
@@ -70,6 +73,19 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 	}
 	if c.Platform != nil && c.Platform.Metrics != nil {
 		ingest.SetMetrics(c.Platform.Metrics)
+		rag.SetMetrics(c.Platform.Metrics)
+		if c.Config.RerankConfigured() {
+			// RerankHTTPRetryMax is the retry budget; WithRetry counts total
+			// attempts, hence +1.
+			doer := httpclient.New(
+				httpclient.WithTimeout(constants.RerankHTTPTimeout),
+				httpclient.WithRetry(constants.RerankHTTPRetryMax+1),
+			)
+			rag.SetReranker(rerank.NewCohereReranker(
+				c.Config.RerankBaseURL, c.Config.RerankAPIKey, c.Config.RerankModel,
+				doer, c.Platform.Metrics, c.Logger,
+			))
+		}
 	}
 	c.shutdown = append(c.shutdown, ingest.Shutdown)
 

@@ -75,6 +75,12 @@ type CompletionResponse struct {
 	Model     string     `json:"model"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 	Usage     TokenUsage `json:"usage"`
+	// ModelResolved 是本次请求实际成功调用的模型名。未降级时与请求 Model
+	// 相同，降级后为 fallback 候选名。
+	ModelResolved string `json:"model_resolved,omitempty"`
+	// ModelRoutedVia 是本次请求实际尝试过的模型链（主模型在前，仅含失败
+	// 尝试与最终成功者）。单次成功时为仅含主模型。
+	ModelRoutedVia []string `json:"model_routed_via,omitempty"`
 }
 
 type EmbeddingRequest struct {

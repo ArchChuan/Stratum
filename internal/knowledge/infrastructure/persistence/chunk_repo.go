@@ -142,6 +142,23 @@ func (r *ChunkRepo) KeywordSearch(ctx context.Context, tenantID, workspaceID, qu
 	return out, nil
 }
 
+// CountByWorkspace reports how many chunks exist for a workspace in PG.
+// RAG uses it to distinguish a legitimately empty workspace (0 chunks,
+// collection missing is expected) from drift (chunks exist but the Milvus
+// collection is gone).
+func (r *ChunkRepo) CountByWorkspace(ctx context.Context, tenantID, workspaceID string) (int64, error) {
+	var count int64
+	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT count(*) FROM knowledge_chunks WHERE workspace_id = $1`,
+			workspaceID).Scan(&count)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("chunk_repo: count by workspace: %w", err)
+	}
+	return count, nil
+}
+
 func (r *ChunkRepo) DeleteByWorkspace(ctx context.Context, tenantID, workspaceID string) error {
 	// Leaf chunks first: their parent_id FK is ON DELETE SET NULL, so deleting
 	// leaves does not cascade to parents. Both tables must be purged explicitly

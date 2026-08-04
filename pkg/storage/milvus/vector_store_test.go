@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/milvus-io/milvus-sdk-go/v2/entity"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -303,5 +304,35 @@ func TestSearchResultMultiple(t *testing.T) {
 
 	if results[0].Score < results[1].Score {
 		t.Error("expected results sorted by score descending")
+	}
+}
+
+func TestCollectionInfoFromSchema(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		schema *entity.Schema
+		want   CollectionInfo
+	}{
+		{name: "nil schema is empty info", want: CollectionInfo{}},
+		{name: "empty schema", schema: &entity.Schema{}, want: CollectionInfo{}},
+		{name: "dim parsed from type params", schema: &entity.Schema{Fields: []*entity.Field{
+			{Name: "vector", TypeParams: map[string]string{"dim": "1536"}},
+		}}, want: CollectionInfo{Dim: 1536}},
+		{name: "invalid dim is ignored", schema: &entity.Schema{Fields: []*entity.Field{
+			{Name: "vector", TypeParams: map[string]string{"dim": "not-a-number"}},
+		}}, want: CollectionInfo{}},
+		{name: "optional field presence", schema: &entity.Schema{Fields: []*entity.Field{
+			{Name: "vector", TypeParams: map[string]string{"dim": "1024"}},
+			{Name: "agent_id"}, {Name: "user_id"},
+		}}, want: CollectionInfo{Dim: 1024, HasAgentID: true, HasUserID: true}},
+		{name: "legacy schema without optional columns", schema: &entity.Schema{Fields: []*entity.Field{
+			{Name: "vector", TypeParams: map[string]string{"dim": "2048"}},
+		}}, want: CollectionInfo{Dim: 2048}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := collectionInfoFromSchema(tc.schema); got != tc.want {
+				t.Errorf("expected %+v, got %+v", tc.want, got)
+			}
+		})
 	}
 }

@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+// permanentMarker 由下游实现（如 llmgateway 的 permanent 错误）标记
+// 不值得重试的错误：fallback 链已耗尽或错误为永久性时，重试只会放大
+// 上游调用次数。通过方法探测鸭子类型识别，避免跨包类型依赖。
+type permanentMarker interface {
+	Permanent() bool
+}
+
 // RetryConfig controls retry behaviour.
 type RetryConfig struct {
 	Attempts int
@@ -31,17 +38,38 @@ func RetryFn[T any](ctx context.Context, cfg RetryConfig, fn func() (T, error)) 
 			return result, nil
 		}
 		lastErr = err
+		if isPermanent(err) {
+			return zero, err
+		}
 		if i < cfg.Attempts-1 {
-			select {
-			case <-ctx.Done():
+			abort, next := backoffDelay(ctx, delay, cfg.Max)
+			if abort {
 				return zero, errors.Join(lastErr, ctx.Err())
-			case <-time.After(delay):
 			}
-			delay *= 2
-			if delay > cfg.Max {
-				delay = cfg.Max
-			}
+			delay = next
 		}
 	}
 	return zero, lastErr
+}
+
+// isPermanent 探测 permanent 标记（fallback 耗尽 / 永久错误）并跳过重试，
+// 避免与下游自有重试机制叠加放大上游调用。
+func isPermanent(err error) bool {
+	var perm permanentMarker
+	return errors.As(err, &perm) && perm.Permanent()
+}
+
+// backoffDelay 等待 delay 后返回下一次退避时长（倍增，cap 于 max）。
+// ctx 取消时返回 abort=true，调用方应立即中止。
+func backoffDelay(ctx context.Context, delay, max time.Duration) (abort bool, next time.Duration) {
+	select {
+	case <-ctx.Done():
+		return true, delay
+	case <-time.After(delay):
+	}
+	delay *= 2
+	if delay > max {
+		delay = max
+	}
+	return false, delay
 }

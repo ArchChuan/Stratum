@@ -405,7 +405,13 @@ func recordFingerprintAndKPI(
 	metrics.RecordAgentTaskLatency(agentID, taskKind, result.Duration.Seconds())
 	metrics.RecordAgentCostPerTask(agentID, taskKind, result.CostUSD)
 	metrics.RecordAgentConversationTurn(agentID, result.Steps)
-	fp := CaptureFingerprint(llmModel, nil, systemPrompt, skillRevisionHashes(cfg.SkillCatalog),
+	// 指纹记录实际解析模型与路由链：fallback 降级后 ModelResolved 为实际
+	// 成功模型，ModelRoutedVia 为尝试过的模型链；未降级时保持配置模型。
+	resolved := llmModel
+	if result.ModelResolved != "" {
+		resolved = result.ModelResolved
+	}
+	fp := CaptureFingerprint(resolved, result.ModelRoutedVia, systemPrompt, skillRevisionHashes(cfg.SkillCatalog),
 		tunableSnapshot(cfg, maxContextTokens), 0)
 	fpAttrs := fingerprintAttributes(fp)
 	execSpan.SetAttributes(fpAttrs...)
@@ -716,6 +722,8 @@ func (a *BaseAgent) collectGraphResult(result *AgentResult, finalState agentgrap
 	result.Steps = finalState.Steps
 	result.TokensUsed = finalState.TotalTokens
 	result.CostUSD = finalState.TotalCostUSD
+	result.ModelResolved = finalState.ModelResolved
+	result.ModelRoutedVia = finalState.ModelRoutedVia
 	result.ToolObservations = enrichToolObservations(finalState.ToolObservations, ec.cfg.TraceID, ec.cfg.ExecutionID, ec.cfg.ConversationID, ec.agentID, ec.cfg.UserID)
 	result.TraceEvents = enrichTraceEvents(finalState.TraceEvents, ec.cfg.TraceID, ec.cfg.ExecutionID, ec.cfg.ConversationID, ec.agentID, ec.cfg.UserID)
 	result.AssistantToolArtifacts = append([]domain.SystemAssistantToolArtifact(nil), finalState.AssistantToolArtifacts...)
