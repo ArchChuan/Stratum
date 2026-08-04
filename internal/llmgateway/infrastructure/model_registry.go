@@ -9,6 +9,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 type resolvedEntry struct {
@@ -126,6 +127,97 @@ func (r *ModelRegistry) resolveModelFromDB(
 		}
 	}
 	return ProviderConfig{}, domain.Provider{}, fmt.Errorf("model registry: model %q not found for tenant %s", modelName, tenantID)
+}
+
+// FallbackCandidate 是已解析的 fallback 候选：模型名 + 可直接调用的
+// provider 配置与 chat 协议。
+type FallbackCandidate struct {
+	Model    string
+	Config   ProviderConfig
+	Protocol ChatProtocol
+}
+
+// ResolveFallbackCandidates 有序列举主模型之外的可用 chat 模型（上限
+// constants.MaxModelFallbackCandidates），供 Gateway 在瞬态失败时降级。
+// 排序：与主模型同 provider 优先 → Recommended desc → name asc；
+// 跳过 disabled provider 与不支持 chat 协议的模型。primary 必须可解析，
+// 否则调用方无法发起主调用，直接返回解析错误。
+func (r *ModelRegistry) ResolveFallbackCandidates(ctx context.Context, tenantID, primary string) ([]FallbackCandidate, error) {
+	primaryCfg, _, err := r.Resolve(ctx, tenantID, primary)
+	if err != nil {
+		return nil, err
+	}
+	cands, err := r.listFallbackCandidates(ctx, tenantID, primary, primaryCfg.Name)
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(cands, func(i, j int) bool { return candidateLess(cands[i], cands[j]) })
+	if len(cands) > constants.MaxModelFallbackCandidates {
+		cands = cands[:constants.MaxModelFallbackCandidates]
+	}
+	result := make([]FallbackCandidate, 0, len(cands))
+	for _, c := range cands {
+		cfg := ProviderConfig{
+			Name:        c.provider.Name,
+			BaseURL:     c.provider.BaseURL,
+			APIKey:      c.provider.APIKey,
+			HealthModel: c.provider.DefaultModel,
+			Models:      []string{c.model.Name},
+		}
+		// 复用 TTL 缓存语义：WarmTenant/Resolve 已缓存的 entry 保持有效，
+		// 这里与缓存数据同源（同 modelRepo/providerRepo），直接写回。
+		r.cacheSet(tenantID, "chat:"+c.model.Name, cfg, c.provider)
+		proto, ok := r.chatProtos[c.provider.Kind]
+		if !ok {
+			continue
+		}
+		result = append(result, FallbackCandidate{Model: c.model.Name, Config: cfg, Protocol: proto})
+	}
+	return result, nil
+}
+
+// fallbackCand 是候选模型及其 provider（samePrimary 标记与主模型同 provider）。
+type fallbackCand struct {
+	model       domain.Model
+	provider    domain.Provider
+	samePrimary bool
+}
+
+// listFallbackCandidates 列举主模型之外的 enabled chat 模型，跳过 disabled
+// provider 与不支持 chat 协议的模型。
+func (r *ModelRegistry) listFallbackCandidates(ctx context.Context, tenantID, primary, primaryProviderName string) ([]fallbackCand, error) {
+	enabled := true
+	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled, Capability: domain.CapChat})
+	if err != nil {
+		return nil, fmt.Errorf("model registry: list models: %w", err)
+	}
+	cands := make([]fallbackCand, 0, len(models))
+	for _, m := range models {
+		if m.Name == primary {
+			continue
+		}
+		provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
+		if err != nil {
+			return nil, fmt.Errorf("model registry: get provider: %w", err)
+		}
+		if !provider.Enabled || !r.supports(provider.Kind, domain.CapChat) {
+			continue
+		}
+		cands = append(cands, fallbackCand{model: m, provider: *provider, samePrimary: provider.Name == primaryProviderName})
+	}
+	return cands, nil
+}
+
+// candidateLess 是 fallback 候选的排序比较：同 provider 优先 → Recommended
+// desc → name asc。
+func candidateLess(a, b fallbackCand) bool {
+	if a.samePrimary != b.samePrimary {
+		return a.samePrimary
+	}
+	if a.model.Recommended != b.model.Recommended {
+		return a.model.Recommended
+	}
+	return a.model.Name < b.model.Name
 }
 
 // ListChatModelsByTenant returns sorted enabled chat model names for a tenant.
