@@ -66,8 +66,7 @@ require 'cancel-in-progress:[[:space:]]*false' 'non-cancelling active deployment
 require '^  build-backend:' 'parallel backend image build job'
 require '^  build-frontend:' 'parallel frontend image build job'
 require '^  build-feishu-adapter:' 'parallel Feishu adapter image build job'
-require '^  build-platform-mcp:' 'parallel platform MCP image build job'
-require 'needs:[[:space:]]*\[candidate,[[:space:]]*build-backend,[[:space:]]*build-frontend,[[:space:]]*build-feishu-adapter,[[:space:]]*build-platform-mcp\]' \
+require 'needs:[[:space:]]*\[candidate,[[:space:]]*build-backend,[[:space:]]*build-frontend,[[:space:]]*build-feishu-adapter\]' \
     'image build fan-in dependencies'
 
 # Test dependency is satisfied at workflow level via workflow_run (deploy waits for CI)
@@ -80,7 +79,7 @@ if grep -Eq 'workflow_run:' "${WORKFLOW}" && grep -Eq 'workflows:[[:space:]]*\[C
     require '\$WORKFLOW_CONCLUSION.*==.*success' 'workflow_run CI success gate'
 fi
 
-for job_scope in build-backend:backend build-feishu-adapter:feishu-alert-adapter build-platform-mcp:platform-mcp; do
+for job_scope in build-backend:backend build-feishu-adapter:feishu-alert-adapter; do
     job=${job_scope%%:*}
     scope=${job_scope#*:}
     if [[ "${has_workflow_run_ci}" != "true" ]]; then
@@ -113,7 +112,7 @@ require 'adapter_digest="\$\{\{ needs\.build-and-push\.outputs\.adapter-digest \
 require '\$adapter_digest.*\^sha256:\[0-9a-f\]\{64\}\$' 'adapter digest validation missing'
 require 'feishu_adapter=\$\(kubectl get deployment stratum-feishu-alert-adapter -n monitoring' \
     'deployment receipt does not read the deployed Feishu adapter image'
-require 'images:\{backend:\$backend,frontend:\$frontend,platform_mcp:\$platform_mcp,feishu_adapter:\$feishu_adapter\}' \
+require 'images:\{backend:\$backend,frontend:\$frontend,feishu_adapter:\$feishu_adapter\}' \
     'deployment receipt does not bind the Feishu adapter image'
 
 # Monitoring reconciliation runs from reconcile-monitoring.yml (after deploy via

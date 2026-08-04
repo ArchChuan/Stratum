@@ -83,7 +83,6 @@ jobs:
           echo "=== Waiting for rollout ==="
           kubectl rollout status deployment/stratum -n "${{ inputs.namespace }}" --timeout=5m
           kubectl rollout status deployment/stratum-frontend -n "${{ inputs.namespace }}" --timeout=5m
-          kubectl rollout status deployment/stratum-platform-mcp -n "${{ inputs.namespace }}" --timeout=5m || true
           echo ""
           echo "=== Post-rollback state ==="
           kubectl get deployments -n "${{ inputs.namespace }}" -o wide
