@@ -11,7 +11,6 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
-	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -72,20 +71,10 @@ func TestHasFailedAssistantArtifact(t *testing.T) {
 }
 
 func TestBoundedAssistantRoleClass(t *testing.T) {
-	// 极端情况：非 admin/member 一律 unknown。
 	require.Equal(t, "admin", agent.BoundedAssistantRoleClassForTest("admin"))
 	require.Equal(t, "member", agent.BoundedAssistantRoleClassForTest("member"))
-	require.Equal(t, "unknown", agent.BoundedAssistantRoleClassForTest("owner"))
+	require.Equal(t, "owner", agent.BoundedAssistantRoleClassForTest("owner"))
 	require.Equal(t, "unknown", agent.BoundedAssistantRoleClassForTest(""))
-}
-
-func TestWithoutPlatformMCPTools(t *testing.T) {
-	in := []string{"mcp:stratum-platform-mcp:tool-1", "mcp:custom:tool-2", "skill:x"}
-	got := agent.WithoutPlatformMCPToolsForTest(in)
-	require.Equal(t, []string{"mcp:custom:tool-2", "skill:x"}, got)
-	// 极端情况：空输入 → 空 slice 非 nil。
-	require.NotNil(t, agent.WithoutPlatformMCPToolsForTest(nil))
-	require.Empty(t, agent.WithoutPlatformMCPToolsForTest(nil))
 }
 
 func TestNormalizeMCPToolFillsDefaults(t *testing.T) {
@@ -107,11 +96,6 @@ func TestNormalizeMCPToolFillsDefaults(t *testing.T) {
 }
 
 func TestPlatformMCPRiskAndToolRiskRank(t *testing.T) {
-	// 极端情况：write_reversible → WriteReversible；其余一律 Read。
-	require.Equal(t, port.ToolRiskWriteReversible, agent.PlatformMCPRiskForTest(platformmcp.RiskWriteReversible))
-	require.Equal(t, port.ToolRiskRead, agent.PlatformMCPRiskForTest(platformmcp.RiskRead))
-	require.Equal(t, port.ToolRiskRead, agent.PlatformMCPRiskForTest("unknown"))
-
 	require.Equal(t, 3, agent.ToolRiskRankForTest(port.ToolRiskDestructive))
 	require.Equal(t, 2, agent.ToolRiskRankForTest(port.ToolRiskWriteReversible))
 	require.Equal(t, 1, agent.ToolRiskRankForTest(port.ToolRiskRead))

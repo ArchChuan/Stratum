@@ -51,26 +51,30 @@ type ExecutionConfig struct {
 	// 0 = auto-derive from MaxContextTokens.
 	CompactionRecentGroups int
 	// CompactionSafetyRatio overrides the compaction safety ratio. 0 = default.
-	CompactionSafetyRatio    float32
-	EnableTools              bool
-	AvailableTools           []string
-	Stream                   bool
-	TokenCallback            func(string)
-	TenantID                 string
-	TraceID                  string
-	ExecutionID              string
-	RAGSearchFn              func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
-	ExtraTools               []port.ToolDefinition
-	SkillCatalog             map[string]port.SkillActivation
-	ToolExecutionFn          port.ToolExecutionFn
-	ActiveSkill              *port.SkillActivation
-	TracePayloadStore        port.TracePayloadStore
-	ConversationID           string
-	UserID                   string
-	HistoryWindow            int
-	EvolutionTrace           EvolutionTraceMetadata
-	SystemAssistantMode      bool
-	SystemAssistantRoleClass string
+	CompactionSafetyRatio     float32
+	EnableTools               bool
+	AvailableTools            []string
+	Stream                    bool
+	TokenCallback             func(string)
+	TenantID                  string
+	TraceID                   string
+	ExecutionID               string
+	RAGSearchFn               func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
+	ExtraTools                []port.ToolDefinition
+	SkillCatalog              map[string]port.SkillActivation
+	ToolExecutionFn           port.ToolExecutionFn
+	ActiveSkill               *port.SkillActivation
+	TracePayloadStore         port.TracePayloadStore
+	ConversationID            string
+	UserID                    string
+	HistoryWindow             int
+	EvolutionTrace            EvolutionTraceMetadata
+	SystemAssistantMode       bool
+	SystemAssistantRoleClass  string
+	OfficialDocsSearchFn      func(context.Context, string) ([]domain.Citation, error)
+	DiagnosticFn              func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)
+	ProposalCreateFn          func(context.Context, map[string]any) (domain.ResourceChangeProposalArtifact, error)
+	InternalToolResultGuardFn func(any) (port.GuardedToolResult, error)
 }
 
 // EvolutionTraceMetadata attributes an execution to evaluation and rollout evidence.
@@ -668,6 +672,10 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		AgentKnowledgeWorkspaceIDs: ec.workspaceNames,
 		AgentMemoryScope:           ec.memoryScope,
 		RAGSearchFn:                ec.cfg.RAGSearchFn,
+		OfficialDocsSearchFn:       ec.cfg.OfficialDocsSearchFn,
+		DiagnosticFn:               ec.cfg.DiagnosticFn,
+		ProposalCreateFn:           ec.cfg.ProposalCreateFn,
+		InternalToolResultGuardFn:  ec.cfg.InternalToolResultGuardFn,
 		MaxLLMSteps:                ec.cfg.MaxSteps,
 		MaxContextTokens:           maxTokens,
 		CheckpointEnabled:          a.CheckpointEnabled,
@@ -1047,6 +1055,26 @@ func WithSystemAssistantMode() ExecutionOption {
 
 func withSystemAssistantRoleClass(roleClass string) ExecutionOption {
 	return func(cfg *ExecutionConfig) { cfg.SystemAssistantRoleClass = roleClass }
+}
+
+// WithOfficialDocsSearchFn attaches the in-process official docs search
+// capability used by the system assistant tool.
+func WithOfficialDocsSearchFn(fn func(context.Context, string) ([]domain.Citation, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.OfficialDocsSearchFn = fn }
+}
+
+// WithDiagnosticFn attaches the in-process tenant diagnostics capability used
+// by the system assistant tool.
+func WithDiagnosticFn(fn func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.DiagnosticFn = fn }
+}
+
+func withProposalCreateFn(fn func(context.Context, map[string]any) (domain.ResourceChangeProposalArtifact, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.ProposalCreateFn = fn }
+}
+
+func withInternalToolResultGuard(fn func(any) (port.GuardedToolResult, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.InternalToolResultGuardFn = fn }
 }
 
 func agentExecutionAttributes(agentID, agentName string, agentType AgentType, cfg ExecutionConfig) []attribute.KeyValue {
