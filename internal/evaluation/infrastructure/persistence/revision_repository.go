@@ -11,7 +11,6 @@ import (
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/storage/objectstore"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
-	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -33,7 +32,7 @@ func (a RevisionObjectStoreAdapter) Delete(ctx context.Context, r port.RevisionP
 }
 
 type PgRevisionRepository struct {
-	pool *pgxpool.Pool
+	pool poolIface
 }
 
 func NewPgRevisionRepository(pool *pgxpool.Pool) *PgRevisionRepository {
@@ -54,7 +53,7 @@ func (r *PgRevisionRepository) Create(
 	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
 	stored := domain.ResourceRevision{}
 	created := false
-	err = tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+	err = execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		result, err := tx.Exec(ctx,
 			`INSERT INTO resource_revisions
 			 (id, resource_kind, resource_id, parent_revision_id, source, status, content_hash,
@@ -114,7 +113,7 @@ func (r *PgRevisionRepository) Get(
 	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
 	var revision domain.ResourceRevision
 	found := false
-	err := tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+	err := execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var err error
 		revision, err = scanRevision(tx.QueryRow(ctx,
 			`SELECT id, resource_kind, resource_id, COALESCE(parent_revision_id, ''), source, status,
@@ -138,7 +137,7 @@ func (r *PgRevisionRepository) Publish(
 ) (domain.ResourceRevision, error) {
 	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
 	var published domain.ResourceRevision
-	err := tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+	err := execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var err error
 		published, err = scanRevision(tx.QueryRow(ctx,
 			`UPDATE resource_revisions SET status='published'

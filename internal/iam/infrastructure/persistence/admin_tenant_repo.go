@@ -13,12 +13,12 @@ import (
 
 // AdminTenantRepo persists public.tenants rows for platform-admin flows.
 type AdminTenantRepo struct {
-	pool *pgxpool.Pool
+	pool pgxPool
 }
 
 // NewAdminTenantRepo wires the pool. The pool may be nil in unit tests; methods
 // will return a sentinel when called without a backing DB.
-func NewAdminTenantRepo(pool *pgxpool.Pool) *AdminTenantRepo {
+func NewAdminTenantRepo(pool pgxPool) *AdminTenantRepo {
 	return &AdminTenantRepo{pool: pool}
 }
 
@@ -144,7 +144,11 @@ func (r *AdminTenantRepo) ProvisionSchema(ctx context.Context, tenantID string) 
 	if r.pool == nil {
 		return nil
 	}
-	return tenantdb.ProvisionTenantSchema(ctx, r.pool, tenantID)
+	pool, ok := r.pool.(*pgxpool.Pool)
+	if !ok {
+		return errors.New("admin_tenant_repo: provision schema requires a real pgx pool")
+	}
+	return tenantdb.ProvisionTenantSchema(ctx, pool, tenantID)
 }
 
 func (r *AdminTenantRepo) ActivateTenant(ctx context.Context, tenantID string) error {

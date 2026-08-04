@@ -10,12 +10,23 @@ import (
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type PgStore struct{ pool *pgxpool.Pool }
+// poolIface allows pgxmock injection in tests.
+type poolIface interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+var _ poolIface = (*pgxpool.Pool)(nil)
+
+type PgStore struct{ pool poolIface }
 
 const runSelectColumns = `SELECT id,definition_id,version_id,version_no,status,snapshot_json,input_json,
 	output_text,error_message,idempotency_key,request_hash,generation,scheduler_owner,lease_expires_at,
@@ -41,7 +52,7 @@ func (s *PgStore) exec(ctx context.Context, tenantID string, fn func(context.Con
 	if !ok {
 		ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
 	}
-	return postgres.ExecTenant(ctx, s.pool, fn)
+	return postgres.ExecTenantWith(ctx, s.pool, tenantID, fn)
 }
 
 func (s *PgStore) CreateDefinition(ctx context.Context, tenantID string, d *domain.Definition) error {
@@ -411,7 +422,7 @@ func (s *PgStore) ClaimRun(ctx context.Context, owner string, lease time.Duratio
 	for _, tenantID := range tenantIDs {
 		tenantCtx := postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
 		var runID string
-		err := postgres.ExecTenant(tenantCtx, s.pool, func(ctx context.Context, tx pgx.Tx) error {
+		err := postgres.ExecTenantWith(tenantCtx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 			if _, lockErr := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext(current_schema()))`); lockErr != nil {
 				return lockErr
 			}
@@ -521,7 +532,15 @@ func (s *PgStore) CreateApproval(ctx context.Context, tenantID string, approval 
 			return err
 		}
 		if tag.RowsAffected() != 1 {
-			return domain.ErrGenerationConflict
+			// 同批并行 approval:首个 approval 已把 run 置为 paused 并推进到目标 generation,
+			// 后续 approval 幂等接受,避免右分支 approval 静默丢失导致 run 卡死在 paused
+			var ready bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM workflow_runs WHERE id=$1 AND status='paused' AND generation=$2)`, approval.RunID, approval.RunGeneration).Scan(&ready); err != nil {
+				return err
+			}
+			if !ready {
+				return domain.ErrGenerationConflict
+			}
 		}
 		return appendEventTx(ctx, tx, &event)
 	})
@@ -598,7 +617,13 @@ func (s *PgStore) DecideApproval(ctx context.Context, tenantID, id string, gener
 			if tag.RowsAffected() != 1 {
 				return domain.ErrGenerationConflict
 			}
+			// 拒绝即终态:与 run 状态转换同一事务内补齐 run_failed 事件,保持事件链完整
 			event.Status = string(domain.RunStatusFailed)
+			if err := appendEventTx(ctx, tx, &event); err != nil {
+				return err
+			}
+			failedEvent := domain.Event{ID: uuid.NewString(), RunID: runID, Type: "workflow.run_failed", Status: string(domain.RunStatusFailed), Summary: "approval rejected: " + comment, OccurredAt: time.Now().UTC()}
+			return appendEventTx(ctx, tx, &failedEvent)
 		}
 		return appendEventTx(ctx, tx, &event)
 	})
@@ -723,7 +748,7 @@ func (s *PgStore) ResolveEffect(ctx context.Context, tenantID, id string, genera
 
 func (s *PgStore) ReleaseRun(ctx context.Context, tenantID, runID, owner string, generation int64) error {
 	tenantCtx := postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
-	return postgres.ExecTenant(tenantCtx, s.pool, func(ctx context.Context, tx pgx.Tx) error {
+	return postgres.ExecTenantWith(tenantCtx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE workflow_runs SET scheduler_owner='',lease_expires_at=NULL,updated_at=NOW() WHERE id=$1 AND scheduler_owner=$2 AND generation=$3`, runID, owner, generation)
 		if err != nil {
 			return err

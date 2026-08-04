@@ -93,15 +93,15 @@ const historyRelevanceQuery = `SELECT summary,tier FROM memory_summaries
 	  AND (scope = 'user' OR (scope='agent' AND agent_id = $2))
 	ORDER BY similarity(summary, $3) DESC, importance DESC, confidence DESC, period_end DESC LIMIT $4`
 
-type HistoryRepo struct{ pool *pgxpool.Pool }
+type HistoryRepo struct{ pool tenantPool }
 
 func NewHistoryRepo(pool *pgxpool.Pool) *HistoryRepo { return &HistoryRepo{pool: pool} }
 
 func (r *HistoryRepo) execTenant(ctx context.Context, tenantID string, fn func(context.Context, pgx.Tx) error) error {
-	if r.pool == nil || tenantID == "" {
+	if isNilPool(r.pool) || tenantID == "" {
 		return nil
 	}
-	return pgstore.Wrap(r.pool).ExecTenant(ctx, tenantID, fn)
+	return pgstore.ExecTenantWith(ctx, r.pool, tenantID, fn)
 }
 
 func (r *HistoryRepo) NextBatch(ctx context.Context, tenantID string, minEntries, limit int) (*domain.HistoryBatch, error) {

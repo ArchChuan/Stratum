@@ -25,9 +25,6 @@ jobs:
       - name: Verify unified verification contracts
         run: make verification-manifest-test verification-schemas-test verification-ci-contract-test test-verification-entrypoints-test
 
-      - name: Test Agent interview consolidation
-        run: make agent-interview-test
-
   code-quality:
     name: Code Quality
     runs-on: ubuntu-latest

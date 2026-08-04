@@ -13,7 +13,7 @@ import (
 
 // EntityRepo implements domain/port.EntityRepo using PostgreSQL with tenant isolation.
 type EntityRepo struct {
-	pool *pgxpool.Pool
+	pool tenantPool
 }
 
 // NewEntityRepo creates a new entity repository.
@@ -218,7 +218,7 @@ func (r *EntityRepo) CountByUser(ctx context.Context, tenantID, userID string) (
 }
 
 func (r *EntityRepo) execTenant(ctx context.Context, tenantID string, fn func(context.Context, pgx.Tx) error) error {
-	return pgstore.Wrap(r.pool).ExecTenant(ctx, tenantID, fn)
+	return pgstore.ExecTenantWith(ctx, r.pool, tenantID, fn)
 }
 
 // DeleteAllByUser hard-deletes every memory_entities row owned by userID within the tenant schema.

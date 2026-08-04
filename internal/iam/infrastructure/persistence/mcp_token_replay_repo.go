@@ -5,13 +5,19 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 )
 
+// tenantPool 是 pgxmock 可替换的最小池接口，满足 postgres.ExecTenantWith。
+type tenantPool interface {
+	Begin(context.Context) (pgx.Tx, error)
+}
+
 type MCPTokenReplayRepo struct {
-	pool *pgxpool.Pool
+	pool tenantPool
 }
 
 func NewMCPTokenReplayRepo(pool *pgxpool.Pool) *MCPTokenReplayRepo {
@@ -45,9 +51,5 @@ func (r *MCPTokenReplayRepo) execTenant(
 	tenantID string,
 	fn func(context.Context, pgx.Tx) error,
 ) error {
-	tenantCtx := tenantdb.WithTenant(ctx, &tenantdb.TenantContext{
-		TenantID: tenantID,
-		Role:     tenantdb.RoleTenantAdmin,
-	})
-	return tenantdb.ExecTenant(tenantCtx, r.pool, fn)
+	return postgres.ExecTenantWith(ctx, r.pool, tenantID, fn)
 }

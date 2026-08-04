@@ -8,13 +8,12 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
-	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type PgOptimizationRepository struct {
-	pool *pgxpool.Pool
+	pool poolIface
 }
 
 func NewPgOptimizationRepository(pool *pgxpool.Pool) *PgOptimizationRepository {
@@ -25,7 +24,7 @@ func (r *PgOptimizationRepository) WithinTransaction(
 	ctx context.Context, tenantID string, fn func(context.Context) error,
 ) error {
 	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
-	return tenantdb.ExecTenant(ctx, r.pool, func(txCtx context.Context, _ pgx.Tx) error {
+	return execTenantTx(ctx, r.pool, tenantID, func(txCtx context.Context, _ pgx.Tx) error {
 		return fn(txCtx)
 	})
 }
@@ -38,7 +37,7 @@ func (r *PgOptimizationRepository) GetByIdempotencyKey(
 	var candidates []domain.OptimizationCandidate
 	var fingerprint, resourceKind, resourceID, searchJSON, rewriteJSON string
 	found := false
-	err := tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+	err := execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `SELECT id, resource_kind, resource_id, baseline_revision_id,
 			suite_revision_id, status, search_space, rewrite_config, request_fingerprint, created_at
 			FROM optimization_jobs WHERE idempotency_key=$1`, idempotencyKey).Scan(
@@ -108,7 +107,7 @@ func (r *PgOptimizationRepository) SaveJobWithCandidates(
 	}
 	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
 	created := false
-	err = tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+	err = execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx,
 			`INSERT INTO optimization_jobs
 				 (id, resource_kind, resource_id, baseline_revision_id, suite_revision_id, status,

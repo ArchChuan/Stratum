@@ -685,6 +685,20 @@ jobs:
             exit 1
           fi
 
+      - name: Prune stale node images after rollout
+        run: |
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -i ~/.ssh/deploy_key root@${{ secrets.SSH_DEPLOY_HOST }} bash -s <<'REMOTE'
+          used_pct=$(df --output=pcent /var/lib/rancher/k3s | tail -1 | tr -dc '0-9')
+          echo "node disk usage before prune: ${used_pct}%"
+          if (( used_pct >= 75 )); then
+            k3s ctr images prune
+            df -h /var/lib/rancher/k3s | tail -1
+          else
+            echo "node disk ${used_pct}% below 75% threshold; skipping image prune"
+          fi
+          REMOTE
+
       - name: Record deployed application digests
         id: deployment-evidence
         run: |
