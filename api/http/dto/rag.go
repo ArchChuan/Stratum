@@ -13,6 +13,12 @@ type WorkspaceConfig struct {
 	ChunkOverlap     int    `json:"chunk_overlap"`
 	QueryMode        string `json:"query_mode"`
 	TopK             int    `json:"top_k"`
+	// Reranking is the rerank strategy identity ("" / "builtin-score-v1" /
+	// "provider:model"). ScoreThreshold keeps results with sim >= threshold;
+	// RerankTopK is the final count after external reranking (0 = use TopK).
+	Reranking      string  `json:"reranking"`
+	ScoreThreshold float32 `json:"score_threshold"`
+	RerankTopK     int     `json:"rerank_top_k"`
 }
 
 // UploadDocumentRequest is bound from POST /knowledge/ingest multipart form.

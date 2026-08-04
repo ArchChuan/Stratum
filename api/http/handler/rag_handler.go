@@ -47,6 +47,9 @@ func toDTOConfig(c domain.WorkspaceConfig) dto.WorkspaceConfig {
 		ChunkOverlap:     c.ChunkOverlap,
 		QueryMode:        c.QueryMode,
 		TopK:             c.TopK,
+		Reranking:        c.Reranking,
+		ScoreThreshold:   c.ScoreThreshold,
+		RerankTopK:       c.RerankTopK,
 	}
 }
 
@@ -58,6 +61,9 @@ func fromDTOConfig(c dto.WorkspaceConfig) domain.WorkspaceConfig {
 		ChunkOverlap:     c.ChunkOverlap,
 		QueryMode:        c.QueryMode,
 		TopK:             c.TopK,
+		Reranking:        c.Reranking,
+		ScoreThreshold:   c.ScoreThreshold,
+		RerankTopK:       c.RerankTopK,
 	}
 }
 

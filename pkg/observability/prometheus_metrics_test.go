@@ -69,7 +69,7 @@ func exerciseAllMetrics(m MetricsProvider) {
 	m.RecordAgentConversationTurn("agent-1", 5)
 	// Scheduler / Reranker / Router
 	m.IncScheduledFire("cron", "ok")
-	m.IncRerankRequest("bge-m3", "ok")
+	m.IncRerankRequest("tenant-1", "bge-m3", "ok")
 	m.RecordRerankDuration("bge-m3", 0.2)
 	m.IncRouteFallback("qwen-plus", "qwen-turbo")
 	m.RecordBudgetRatio("tenant-1", 42)
@@ -103,9 +103,39 @@ func exerciseAllMetrics(m MetricsProvider) {
 
 func TestPrometheusMetricsAllMethodsRegistered(t *testing.T) {
 	m := NewPrometheusMetrics(zap.NewNop())
+	m.RegisterReaperMetrics() // cmd/server 装配路径会显式注册 reaper 指标
 	exerciseAllMetrics(m)
 }
 
 func TestNoopMetricsAllMethods(t *testing.T) {
 	exerciseAllMetrics(NoopMetrics{})
+}
+
+func TestReaperMetricsServerOnly(t *testing.T) {
+	m := NewPrometheusMetrics(zap.NewNop())
+	families, err := m.reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	for _, family := range families {
+		if family.GetName() == "reaper_last_cycle_timestamp_seconds" {
+			t.Fatal("reaper metrics must not be exported before RegisterReaperMetrics")
+		}
+	}
+
+	m.RegisterReaperMetrics()
+	families, err = m.reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	found := false
+	for _, family := range families {
+		if family.GetName() == "reaper_last_cycle_timestamp_seconds" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("reaper metric missing after RegisterReaperMetrics")
+	}
 }

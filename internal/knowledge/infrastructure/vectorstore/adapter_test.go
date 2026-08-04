@@ -20,6 +20,8 @@ type stubStore struct {
 	delErr    error
 	count     int64
 	countErr  error
+
+	collectionInfo storagemilvus.CollectionInfo
 }
 
 func (s *stubStore) CreateCollectionWithDim(context.Context, string, int) error { return s.createErr }
@@ -27,6 +29,10 @@ func (s *stubStore) Insert(_ context.Context, _ string, docs []storagemilvus.Doc
 	s.inserted = docs
 	return s.insertErr
 }
+func (s *stubStore) DescribeCollection(context.Context, string) (storagemilvus.CollectionInfo, error) {
+	return s.collectionInfo, nil
+}
+
 func (s *stubStore) Search(context.Context, string, []float32, int, ...string) ([]storagemilvus.SearchResult, error) {
 	return s.searchRes, s.searchErr
 }

@@ -25,12 +25,15 @@ func NewWorkspaceRepo(db poolIface) *WorkspaceRepo {
 
 // jsonbConfig matches the JSONB shape stored in rag_workspaces.config.
 type jsonbConfig struct {
-	EmbeddingModel   string `json:"embedding_model"`
-	ChunkSize        int    `json:"chunk_size"`
-	ChunkOverlap     int    `json:"chunk_overlap"`
-	QueryMode        string `json:"query_mode"`
-	TopK             int    `json:"top_k"`
-	ChunkingStrategy string `json:"chunking_strategy"`
+	EmbeddingModel   string  `json:"embedding_model"`
+	ChunkSize        int     `json:"chunk_size"`
+	ChunkOverlap     int     `json:"chunk_overlap"`
+	QueryMode        string  `json:"query_mode"`
+	TopK             int     `json:"top_k"`
+	ChunkingStrategy string  `json:"chunking_strategy"`
+	Reranking        string  `json:"reranking,omitempty"`
+	ScoreThreshold   float32 `json:"score_threshold,omitempty"`
+	RerankTopK       int     `json:"rerank_top_k,omitempty"`
 }
 
 func toJSONB(c domain.WorkspaceConfig) string {
@@ -41,6 +44,9 @@ func toJSONB(c domain.WorkspaceConfig) string {
 		QueryMode:        c.QueryMode,
 		TopK:             c.TopK,
 		ChunkingStrategy: c.ChunkingStrategy,
+		Reranking:        c.Reranking,
+		ScoreThreshold:   c.ScoreThreshold,
+		RerankTopK:       c.RerankTopK,
 	})
 	return string(b)
 }
@@ -53,6 +59,9 @@ func fromJSONB(c jsonbConfig) domain.WorkspaceConfig {
 		QueryMode:        c.QueryMode,
 		TopK:             c.TopK,
 		ChunkingStrategy: c.ChunkingStrategy,
+		Reranking:        c.Reranking,
+		ScoreThreshold:   c.ScoreThreshold,
+		RerankTopK:       c.RerankTopK,
 	}
 }
 

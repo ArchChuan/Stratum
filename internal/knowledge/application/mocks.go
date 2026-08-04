@@ -8,8 +8,10 @@ import (
 )
 
 type MockVectorStore struct {
-	searchResults []knowledgeport.VectorSearchResult
-	searchErr     error
+	searchResults  []knowledgeport.VectorSearchResult
+	searchErr      error
+	collectionInfo knowledgeport.CollectionInfo
+	collectionErr  error
 }
 
 func NewMockVectorStore() *MockVectorStore {
@@ -44,6 +46,18 @@ func (m *MockVectorStore) Search(ctx context.Context, collection string, vector 
 func (m *MockVectorStore) Delete(ctx context.Context, collection string, ids []string) error {
 	return nil
 }
+
+func (m *MockVectorStore) DescribeCollection(ctx context.Context, collection string) (knowledgeport.CollectionInfo, error) {
+	if m.collectionErr != nil {
+		return knowledgeport.CollectionInfo{}, m.collectionErr
+	}
+	return m.collectionInfo, nil
+}
+
+func (m *MockVectorStore) SetCollectionInfo(info knowledgeport.CollectionInfo) {
+	m.collectionInfo = info
+}
+func (m *MockVectorStore) SetCollectionErr(err error) { m.collectionErr = err }
 
 func (m *MockVectorStore) Flush(ctx context.Context, collection string) error {
 	return nil

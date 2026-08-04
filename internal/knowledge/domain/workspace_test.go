@@ -87,6 +87,10 @@ func TestWorkspaceConfigValidate(t *testing.T) {
 		{"bad mode", func(c *WorkspaceConfig) { c.QueryMode = "x" }, ErrInvalidQueryMode},
 		{"bad strategy", func(c *WorkspaceConfig) { c.ChunkingStrategy = "x" }, ErrInvalidChunkingStrategy},
 		{"empty model", func(c *WorkspaceConfig) { c.EmbeddingModel = "" }, ErrInvalidEmbeddingModel},
+		{"external provider without model", func(c *WorkspaceConfig) { c.Reranking = "cohere" }, ErrInvalidRerankIdentity},
+		{"unknown rerank provider", func(c *WorkspaceConfig) { c.Reranking = "unknown:model" }, ErrInvalidRerankIdentity},
+		{"threshold above range", func(c *WorkspaceConfig) { c.ScoreThreshold = 1.5 }, ErrInvalidScoreThreshold},
+		{"threshold below range", func(c *WorkspaceConfig) { c.ScoreThreshold = -0.1 }, ErrInvalidScoreThreshold},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := valid
@@ -136,6 +140,13 @@ func TestMergeUpdate(t *testing.T) {
 		{"chunk overlap immutable", WorkspaceConfig{ChunkOverlap: 100}, ErrChunkOverlapImmutable, base},
 		{"chunking strategy immutable", WorkspaceConfig{ChunkingStrategy: "semantic"}, ErrChunkingStrategyImmutable, base},
 		{"invalid query mode", WorkspaceConfig{QueryMode: "bad"}, ErrInvalidQueryMode, base},
+		{"external rerank identity", WorkspaceConfig{Reranking: "cohere:rerank-v3.0"}, nil, func() WorkspaceConfig { c := base; c.Reranking = "cohere:rerank-v3.0"; return c }()},
+		{"builtin rerank identity", WorkspaceConfig{Reranking: "builtin-score-v1"}, nil, func() WorkspaceConfig { c := base; c.Reranking = "builtin-score-v1"; return c }()},
+		{"external rerank without model", WorkspaceConfig{Reranking: "cohere"}, ErrInvalidRerankIdentity, base},
+		{"unknown rerank provider", WorkspaceConfig{Reranking: "unknown:model"}, ErrInvalidRerankIdentity, base},
+		{"score threshold applied", WorkspaceConfig{ScoreThreshold: 0.5}, nil, func() WorkspaceConfig { c := base; c.ScoreThreshold = 0.5; return c }()},
+		{"score threshold above range", WorkspaceConfig{ScoreThreshold: 1.5}, ErrInvalidScoreThreshold, base},
+		{"rerank topk applied", WorkspaceConfig{RerankTopK: 3}, nil, func() WorkspaceConfig { c := base; c.RerankTopK = 3; return c }()},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

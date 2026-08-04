@@ -35,10 +35,19 @@ type Config struct {
 	GlobalAgentSystemPrompt string
 	QwenBaseURL             string
 	ZhipuBaseURL            string
+	RerankBaseURL           string
+	RerankAPIKey            string
+	RerankModel             string
 	Opik                    OpikConfig
 	TracePayload            TracePayloadConfig
 	MemoryPipeline          MemoryPipelineConfig
 	InternalAPI             InternalAPIConfig
+}
+
+// RerankConfigured reports whether an external reranker backend is available.
+// BaseURL is the single switch: an empty base URL disables the backend.
+func (c Config) RerankConfigured() bool {
+	return c.RerankBaseURL != ""
 }
 
 type InternalAPIConfig struct {
@@ -148,6 +157,9 @@ func Load() (*Config, error) {
 		GlobalAgentSystemPrompt: getEnv("GLOBAL_AGENT_SYSTEM_PROMPT", ""),
 		QwenBaseURL:             getEnv("QWEN_BASE_URL", ""),
 		ZhipuBaseURL:            getEnv("ZHIPU_BASE_URL", ""),
+		RerankBaseURL:           getEnv("RERANK_BASE_URL", ""),
+		RerankAPIKey:            getEnv("RERANK_API_KEY", ""),
+		RerankModel:             getEnv("RERANK_MODEL", "rerank-v3.0"),
 		Opik: OpikConfig{
 			URL:       getEnv("OPIK_URL", ""),
 			Project:   getEnv("OPIK_PROJECT", "stratum"),

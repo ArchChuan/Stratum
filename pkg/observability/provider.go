@@ -74,7 +74,7 @@ type MetricsProvider interface {
 	IncScheduledFire(scheduleType, status string)
 
 	// Reranker (F3)
-	IncRerankRequest(model, status string)
+	IncRerankRequest(tenantID, model, status string)
 	RecordRerankDuration(model string, seconds float64)
 
 	// Model Router (F3)
@@ -182,7 +182,7 @@ func (NoopMetrics) RecordAgentCostPerTask(_, _ string, _ float64)               
 func (NoopMetrics) RecordAgentEvalScore(_, _ string, _ float64)                   {}
 func (NoopMetrics) RecordAgentConversationTurn(_ string, _ int)                   {}
 func (NoopMetrics) IncScheduledFire(_, _ string)                                  {}
-func (NoopMetrics) IncRerankRequest(_, _ string)                                  {}
+func (NoopMetrics) IncRerankRequest(_, _, _ string)                               {}
 func (NoopMetrics) RecordRerankDuration(_ string, _ float64)                      {}
 func (NoopMetrics) IncRouteFallback(_, _ string)                                  {}
 func (NoopMetrics) RecordBudgetRatio(_ string, _ float64)                         {}
