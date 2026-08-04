@@ -14,6 +14,7 @@ import (
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
 )
@@ -133,20 +134,22 @@ func (a agentEvaluationAdapter) ApplyPublishedRevision(
 	}
 	// Preserve every field except those the optimization pipeline is authorized to change.
 	_, err = a.agentUpdater.Update(ctx, agentID, agentapp.UpdateAgentInput{
-		Name:                  existing.Name,
-		Type:                  existing.Type,
-		Description:           existing.Description,
-		SystemPrompt:          snapshot.SystemPrompt,
-		LLMModel:              snapshot.Model,
-		MaxIterations:         snapshot.MaxIterations,
-		MaxContextTokens:      snapshot.ModelParameters.MaxContextTokens,
-		Temperature:           snapshot.ModelParameters.Temperature,
-		MaxTokens:             snapshot.ModelParameters.MaxTokens,
-		AllowedSkills:         existing.AllowedSkills,
-		MCPToolIDs:            existing.MCPToolIDs,
-		KnowledgeWorkspaceIDs: existing.KnowledgeWorkspaceIDs,
-		MemoryScope:           existing.MemoryScope,
-		CheckpointEnabled:     existing.CheckpointEnabled,
+		Name:                   existing.Name,
+		Type:                   existing.Type,
+		Description:            existing.Description,
+		SystemPrompt:           snapshot.SystemPrompt,
+		LLMModel:               snapshot.Model,
+		MaxIterations:          snapshot.MaxIterations,
+		MaxContextTokens:       snapshot.ModelParameters.MaxContextTokens,
+		Temperature:            snapshot.ModelParameters.Temperature,
+		MaxTokens:              snapshot.ModelParameters.MaxTokens,
+		CompactionRecentGroups: snapshot.ModelParameters.CompactionRecentGroups,
+		CompactionSafetyRatio:  snapshot.ModelParameters.CompactionSafetyRatio,
+		AllowedSkills:          existing.AllowedSkills,
+		MCPToolIDs:             existing.MCPToolIDs,
+		KnowledgeWorkspaceIDs:  existing.KnowledgeWorkspaceIDs,
+		MemoryScope:            existing.MemoryScope,
+		CheckpointEnabled:      existing.CheckpointEnabled,
 	})
 	if err != nil {
 		return fmt.Errorf("evaluation Agent adapter: apply to agent: %w", err)
@@ -360,7 +363,8 @@ func parseAgentCandidatePatch(
 	parametersChanged := false
 	for key, value := range patch.ParameterPatch {
 		switch key {
-		case "model", "max_context_tokens", "temperature", "max_tokens":
+		case "model", "max_context_tokens", "temperature", "max_tokens",
+			"compaction_recent_groups", "compaction_safety_ratio":
 			model, changed, err := parseModelParameterPatch(key, value, &params)
 			if err != nil {
 				return result, err
@@ -405,28 +409,115 @@ func parseModelParameterPatch(key string, value any, params *agentdomain.ModelPa
 		}
 		return model, false, nil
 	case "max_context_tokens":
-		parsed, ok := integer(value)
-		if !ok {
-			return "", false, errors.New("evaluation Agent adapter: max_context_tokens must be an integer")
-		}
-		params.MaxContextTokens = parsed
-		return "", true, nil
+		changed, err := applyNumericPatch(key, value, parseInteger, func(v any) error {
+			params.MaxContextTokens = v.(int)
+			return nil
+		}, "max_context_tokens")
+		return "", changed, err
 	case "temperature":
-		parsed, ok := floatValue(value)
-		if !ok {
-			return "", false, errors.New("evaluation Agent adapter: temperature must be a number")
-		}
-		params.Temperature = float32(parsed)
-		return "", true, nil
+		changed, err := applyNumericPatch(key, value, parseFloat, func(v any) error {
+			params.Temperature = float32(v.(float64))
+			return nil
+		}, "temperature")
+		return "", changed, err
 	case "max_tokens":
-		parsed, ok := integer(value)
-		if !ok {
-			return "", false, errors.New("evaluation Agent adapter: max_tokens must be an integer")
-		}
-		params.MaxTokens = parsed
-		return "", true, nil
+		changed, err := applyNumericPatch(key, value, parseInteger, func(v any) error {
+			params.MaxTokens = v.(int)
+			return nil
+		}, "max_tokens")
+		return "", changed, err
+	case "compaction_recent_groups":
+		changed, err := applyNumericPatch(key, value, parseInteger, func(v any) error {
+			params.CompactionRecentGroups = v.(int)
+			return nil
+		}, "compaction_recent_groups")
+		return "", changed, err
+	case "compaction_safety_ratio":
+		changed, err := applyNumericPatch(key, value, parseFloat, func(v any) error {
+			params.CompactionSafetyRatio = float32(v.(float64))
+			return nil
+		}, "compaction_safety_ratio")
+		return "", changed, err
 	}
 	return "", false, nil
+}
+
+// applyNumericPatch runs the shared parse → range-validate → assign sequence
+// for every numeric model-config patch key, keeping the per-key cases one line
+// each and the failure mode identical across keys (fail closed before apply).
+func applyNumericPatch(key string, value any, parse func(any) (any, bool), apply func(any) error, what string) (bool, error) {
+	parsed, ok := parse(value)
+	if !ok {
+		return false, fmt.Errorf("evaluation Agent adapter: %s must be a number", what)
+	}
+	if err := validateParameterRange(key, parsed); err != nil {
+		return false, err
+	}
+	return true, apply(parsed)
+}
+
+func parseInteger(value any) (any, bool) {
+	i, ok := integer(value)
+	return i, ok
+}
+
+func parseFloat(value any) (any, bool) {
+	f, ok := floatValue(value)
+	return f, ok
+}
+
+// validateParameterRange fails closed at parse time for every model-config
+// patch key: out-of-range candidates are rejected before they reach the
+// revision pipeline, matching the domain-side validateModelParameters bounds.
+// 0 keeps its "unset / auto" semantics everywhere it is meaningful.
+func validateParameterRange(key string, parsed any) error {
+	switch key {
+	case "max_context_tokens":
+		return validateIntRange(key, parsed.(int),
+			constants.TunableMaxContextTokensMin, constants.TunableMaxContextTokensMax)
+	case "temperature":
+		return validateFloatRange(key, parsed.(float64),
+			constants.TunableTemperatureMin, constants.TunableTemperatureMax)
+	case "max_tokens":
+		return validateIntRange(key, parsed.(int),
+			constants.TunableMaxTokensMin, constants.TunableMaxTokensMax)
+	case "compaction_recent_groups":
+		return validateDiscrete(key, parsed.(int), 0, 2, 3, 5)
+	case "compaction_safety_ratio":
+		return validateFloatRangeOrZero(key, parsed.(float64),
+			constants.TunableSafetyRatioMin, constants.TunableSafetyRatioMax)
+	}
+	return nil
+}
+
+func validateIntRange(key string, v, min, max int) error {
+	if v < min || v > max {
+		return fmt.Errorf("evaluation Agent adapter: %s must be in [%d, %d]", key, min, max)
+	}
+	return nil
+}
+
+func validateFloatRange(key string, v, min, max float64) error {
+	if v < min || v > max {
+		return fmt.Errorf("evaluation Agent adapter: %s must be in [%v, %v]", key, min, max)
+	}
+	return nil
+}
+
+func validateFloatRangeOrZero(key string, v, min, max float64) error {
+	if v != 0 && (v < min || v > max) {
+		return fmt.Errorf("evaluation Agent adapter: %s must be 0 or in [%v, %v]", key, min, max)
+	}
+	return nil
+}
+
+func validateDiscrete(key string, v int, allowed ...int) error {
+	for _, a := range allowed {
+		if v == a {
+			return nil
+		}
+	}
+	return fmt.Errorf("evaluation Agent adapter: %s must be one of %v", key, allowed)
 }
 
 func bindingPatch(value any) ([]agentdomain.AgentBinding, error) {

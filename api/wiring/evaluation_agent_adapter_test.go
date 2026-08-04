@@ -185,6 +185,55 @@ func TestAgentEvaluationAdapterParsesModelParameters(t *testing.T) {
 			}
 		}
 	})
+	t.Run("accepts compaction keys", func(t *testing.T) {
+		parsed, err := parseAgentCandidatePatch(baseline, evaldomain.CandidatePatch{
+			ParameterPatch: map[string]any{
+				"max_context_tokens":       16384,
+				"compaction_recent_groups": 5,
+				"compaction_safety_ratio":  0.85,
+			},
+		})
+		if err != nil {
+			t.Fatalf("expected compaction parameters to be accepted: %v", err)
+		}
+		if parsed.ModelParameters == nil ||
+			parsed.ModelParameters.MaxContextTokens != 16384 ||
+			parsed.ModelParameters.CompactionRecentGroups != 5 ||
+			parsed.ModelParameters.CompactionSafetyRatio != 0.85 {
+			t.Fatalf("compaction parameters not written back: %#v", parsed.ModelParameters)
+		}
+	})
+	t.Run("rejects invalid compaction values", func(t *testing.T) {
+		for _, patch := range []map[string]any{
+			{"compaction_recent_groups": 4},   // outside {0,2,3,5}
+			{"compaction_recent_groups": "3"}, // non-integer
+			{"compaction_safety_ratio": 0.3},  // below 0.5
+			{"compaction_safety_ratio": 1.2},  // above 0.95
+			{"max_context_tokens": -1},        // negative window
+			{"max_context_tokens": 40000},     // above 32768
+		} {
+			_, err := parseAgentCandidatePatch(baseline, evaldomain.CandidatePatch{
+				ParameterPatch: patch,
+			})
+			if err == nil {
+				t.Fatalf("expected patch %v to be rejected", patch)
+			}
+		}
+	})
+	t.Run("accepts zero compaction values as auto", func(t *testing.T) {
+		parsed, err := parseAgentCandidatePatch(baseline, evaldomain.CandidatePatch{
+			ParameterPatch: map[string]any{
+				"compaction_recent_groups": 0,
+				"compaction_safety_ratio":  0,
+			},
+		})
+		if err != nil {
+			t.Fatalf("expected zero/auto values to be accepted: %v", err)
+		}
+		if parsed.ModelParameters.CompactionRecentGroups != 0 || parsed.ModelParameters.CompactionSafetyRatio != 0 {
+			t.Fatalf("auto values not written back: %#v", parsed.ModelParameters)
+		}
+	})
 }
 
 func TestAgentEvaluationAdapterSummariesPassRealRevisionValidation(t *testing.T) {
