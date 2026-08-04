@@ -80,6 +80,14 @@ const (
 	// MaxFingerprintPayloadBytes caps the serialised ExecutionFingerprint
 	// before it is truncated in span attributes (F1).
 	MaxFingerprintPayloadBytes = 4096
+
+	// TokenCorrectionAlpha is the EMA smoothing factor for the compaction
+	// token-correction loop: correction = α·ratio + (1−α)·correction.
+	TokenCorrectionAlpha = 0.1
+	// TokenCorrectionMin/Max clamp the correction factor. 0.5 halves the
+	// effective budget (compacts earlier); 2.0 doubles it (compacts later).
+	TokenCorrectionMin = 0.5
+	TokenCorrectionMax = 2.0
 )
 
 // DynamicRecentGroups returns the number of recent message groups to preserve

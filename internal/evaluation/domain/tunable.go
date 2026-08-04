@@ -1,6 +1,10 @@
 package domain
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/byteBuilderX/stratum/pkg/constants"
+)
 
 // TunableCategory groups tunable parameters by domain area.
 type TunableCategory string
@@ -90,7 +94,7 @@ func (t temperatureTunable) DisplayName() string       { return "温度" }
 func (t temperatureTunable) Category() TunableCategory { return CatModelConfig }
 func (t temperatureTunable) DefaultValue() any         { return 0.7 }
 func (t temperatureTunable) VisualHint() VisualHint {
-	return VisualHint{Control: "slider", Min: 0.0, Max: 2.0, Step: 0.1, Unit: ""}
+	return VisualHint{Control: "slider", Min: constants.TunableTemperatureMin, Max: constants.TunableTemperatureMax, Step: 0.1, Unit: ""}
 }
 func (t temperatureTunable) Read(resource map[string]any) (any, error) {
 	params, _ := resource["model_parameters"].(map[string]any)
@@ -121,13 +125,14 @@ func (t temperatureTunable) Validate(value any) error {
 	if !ok {
 		return fmt.Errorf("temperature: expected float64")
 	}
-	if v < 0 || v > 2 {
-		return fmt.Errorf("temperature: must be in [0, 2]")
+	if v < constants.TunableTemperatureMin || v > constants.TunableTemperatureMax {
+		return fmt.Errorf("temperature: must be in [%v, %v]",
+			constants.TunableTemperatureMin, constants.TunableTemperatureMax)
 	}
 	return nil
 }
 func (t temperatureTunable) SearchSpace() SearchRange {
-	return SearchRange{Min: 0, Max: 2, Step: 0.1}
+	return SearchRange{Min: constants.TunableTemperatureMin, Max: constants.TunableTemperatureMax, Step: 0.1}
 }
 
 type maxTokensTunable struct{}
@@ -137,7 +142,7 @@ func (t maxTokensTunable) DisplayName() string       { return "最大 Token 数"
 func (t maxTokensTunable) Category() TunableCategory { return CatModelConfig }
 func (t maxTokensTunable) DefaultValue() any         { return 4096 }
 func (t maxTokensTunable) VisualHint() VisualHint {
-	return VisualHint{Control: "slider", Min: 256.0, Max: 131072.0, Step: 256.0, Unit: "tokens"}
+	return VisualHint{Control: "slider", Min: constants.TunableMaxTokensMin, Max: constants.TunableMaxTokensMax, Step: 256.0, Unit: "tokens"}
 }
 func (t maxTokensTunable) Read(resource map[string]any) (any, error) {
 	params, _ := resource["model_parameters"].(map[string]any)
@@ -163,18 +168,183 @@ func (t maxTokensTunable) Write(resource map[string]any, value any) error {
 	params["max_tokens"] = v
 	return nil
 }
+
+// Validate accepts 0 as "unset" — a candidate may always express unset to
+// leave the production value untouched.
 func (t maxTokensTunable) Validate(value any) error {
 	v, ok := value.(float64)
 	if !ok {
 		return fmt.Errorf("max_tokens: expected float64")
 	}
-	if v < 256 || v > 131072 {
-		return fmt.Errorf("max_tokens: must be in [256, 131072]")
+	if v < constants.TunableMaxTokensMin || v > constants.TunableMaxTokensMax {
+		return fmt.Errorf("max_tokens: must be in [%d, %d]",
+			constants.TunableMaxTokensMin, constants.TunableMaxTokensMax)
 	}
 	return nil
 }
 func (t maxTokensTunable) SearchSpace() SearchRange {
-	return SearchRange{Min: 256, Max: 131072, Step: 256}
+	return SearchRange{Min: constants.TunableMaxTokensMin, Max: constants.TunableMaxTokensMax, Step: 256}
+}
+
+// ——— Context memory tunables ———
+
+// maxContextTokensTunable tunes the agent's in-loop context window.
+// 0 = auto-derive from the model's window.
+type maxContextTokensTunable struct{}
+
+func (t maxContextTokensTunable) Key() string               { return "max_context_tokens" }
+func (t maxContextTokensTunable) DisplayName() string       { return "上下文窗口" }
+func (t maxContextTokensTunable) Category() TunableCategory { return CatContextMemory }
+func (t maxContextTokensTunable) DefaultValue() any         { return 0 }
+func (t maxContextTokensTunable) VisualHint() VisualHint {
+	return VisualHint{Control: "slider", Min: constants.TunableMaxContextTokensMin,
+		Max: constants.TunableMaxContextTokensMax, Step: constants.TunableMaxContextTokensStep, Unit: "tokens"}
+}
+func (t maxContextTokensTunable) Read(resource map[string]any) (any, error) {
+	params, _ := resource["model_parameters"].(map[string]any)
+	if params == nil {
+		return 0, nil
+	}
+	v, ok := params["max_context_tokens"]
+	if !ok {
+		return 0, nil
+	}
+	return v, nil
+}
+func (t maxContextTokensTunable) Write(resource map[string]any, value any) error {
+	v, ok := value.(float64)
+	if !ok {
+		return fmt.Errorf("max_context_tokens: expected float64, got %T", value)
+	}
+	params, _ := resource["model_parameters"].(map[string]any)
+	if params == nil {
+		params = map[string]any{}
+		resource["model_parameters"] = params
+	}
+	params["max_context_tokens"] = v
+	return nil
+}
+func (t maxContextTokensTunable) Validate(value any) error {
+	v, ok := value.(float64)
+	if !ok {
+		return fmt.Errorf("max_context_tokens: expected float64")
+	}
+	if v < constants.TunableMaxContextTokensMin || v > constants.TunableMaxContextTokensMax {
+		return fmt.Errorf("max_context_tokens: must be in [%d, %d]",
+			constants.TunableMaxContextTokensMin, constants.TunableMaxContextTokensMax)
+	}
+	return nil
+}
+func (t maxContextTokensTunable) SearchSpace() SearchRange {
+	return SearchRange{Min: constants.TunableMaxContextTokensMin, Max: constants.TunableMaxContextTokensMax,
+		Step: constants.TunableMaxContextTokensStep}
+}
+
+// ——— Compaction tunables ———
+
+// compactionRecentGroupsTunable tunes how many recent message groups stay
+// verbatim during in-loop compaction. 0 = auto-derive from the window.
+type compactionRecentGroupsTunable struct{}
+
+func (t compactionRecentGroupsTunable) Key() string               { return "compaction_recent_groups" }
+func (t compactionRecentGroupsTunable) DisplayName() string       { return "保留最近组数" }
+func (t compactionRecentGroupsTunable) Category() TunableCategory { return CatCompaction }
+func (t compactionRecentGroupsTunable) DefaultValue() any         { return 0 }
+func (t compactionRecentGroupsTunable) VisualHint() VisualHint {
+	return VisualHint{Control: "select", Options: []any{0, 2, 3, 5}}
+}
+func (t compactionRecentGroupsTunable) Read(resource map[string]any) (any, error) {
+	params, _ := resource["model_parameters"].(map[string]any)
+	if params == nil {
+		return 0, nil
+	}
+	v, ok := params["compaction_recent_groups"]
+	if !ok {
+		return 0, nil
+	}
+	return v, nil
+}
+func (t compactionRecentGroupsTunable) Write(resource map[string]any, value any) error {
+	v, ok := value.(float64)
+	if !ok {
+		return fmt.Errorf("compaction_recent_groups: expected float64, got %T", value)
+	}
+	params, _ := resource["model_parameters"].(map[string]any)
+	if params == nil {
+		params = map[string]any{}
+		resource["model_parameters"] = params
+	}
+	params["compaction_recent_groups"] = v
+	return nil
+}
+func (t compactionRecentGroupsTunable) Validate(value any) error {
+	v, ok := value.(float64)
+	if !ok {
+		return fmt.Errorf("compaction_recent_groups: expected float64")
+	}
+	switch v {
+	case 0, 2, 3, 5:
+		return nil
+	default:
+		return fmt.Errorf("compaction_recent_groups: must be one of {0, 2, 3, 5}")
+	}
+}
+func (t compactionRecentGroupsTunable) SearchSpace() SearchRange {
+	return SearchRange{Discrete: []any{0, 2, 3, 5}}
+}
+
+// compactionSafetyRatioTunable tunes the safety ratio that triggers compaction
+// before the hard window ceiling. 0 = default ratio.
+type compactionSafetyRatioTunable struct{}
+
+func (t compactionSafetyRatioTunable) Key() string               { return "compaction_safety_ratio" }
+func (t compactionSafetyRatioTunable) DisplayName() string       { return "压缩安全比例" }
+func (t compactionSafetyRatioTunable) Category() TunableCategory { return CatCompaction }
+func (t compactionSafetyRatioTunable) DefaultValue() any         { return 0 }
+func (t compactionSafetyRatioTunable) VisualHint() VisualHint {
+	return VisualHint{Control: "slider", Min: constants.TunableSafetyRatioMin,
+		Max: constants.TunableSafetyRatioMax, Step: 0.05}
+}
+func (t compactionSafetyRatioTunable) Read(resource map[string]any) (any, error) {
+	params, _ := resource["model_parameters"].(map[string]any)
+	if params == nil {
+		return 0, nil
+	}
+	v, ok := params["compaction_safety_ratio"]
+	if !ok {
+		return 0, nil
+	}
+	return v, nil
+}
+func (t compactionSafetyRatioTunable) Write(resource map[string]any, value any) error {
+	v, ok := value.(float64)
+	if !ok {
+		return fmt.Errorf("compaction_safety_ratio: expected float64, got %T", value)
+	}
+	params, _ := resource["model_parameters"].(map[string]any)
+	if params == nil {
+		params = map[string]any{}
+		resource["model_parameters"] = params
+	}
+	params["compaction_safety_ratio"] = v
+	return nil
+}
+func (t compactionSafetyRatioTunable) Validate(value any) error {
+	v, ok := value.(float64)
+	if !ok {
+		return fmt.Errorf("compaction_safety_ratio: expected float64")
+	}
+	if v == 0 {
+		return nil // 0 = default ratio
+	}
+	if v < constants.TunableSafetyRatioMin || v > constants.TunableSafetyRatioMax {
+		return fmt.Errorf("compaction_safety_ratio: must be 0 or in [%v, %v]",
+			constants.TunableSafetyRatioMin, constants.TunableSafetyRatioMax)
+	}
+	return nil
+}
+func (t compactionSafetyRatioTunable) SearchSpace() SearchRange {
+	return SearchRange{Min: constants.TunableSafetyRatioMin, Max: constants.TunableSafetyRatioMax, Step: 0.05}
 }
 
 // ——— Prompt tunable (LLM-rewritten, no grid search) ———

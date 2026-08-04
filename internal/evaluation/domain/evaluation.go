@@ -59,15 +59,28 @@ type EvalSuite struct {
 }
 
 type EvalCaseResult struct {
-	CaseID     string  `json:"case_id"`
-	Passed     bool    `json:"passed"`
-	Message    string  `json:"message,omitempty"`
-	Error      string  `json:"error,omitempty"`
-	Actual     any     `json:"actual,omitempty"`
-	TraceID    string  `json:"trace_id,omitempty"`
-	Tokens     int     `json:"tokens"`
-	CostUSD    float64 `json:"cost_usd"`
-	DurationMs int     `json:"duration_ms"`
+	CaseID        string                 `json:"case_id"`
+	Passed        bool                   `json:"passed"`
+	Message       string                 `json:"message,omitempty"`
+	Error         string                 `json:"error,omitempty"`
+	Actual        any                    `json:"actual,omitempty"`
+	TraceID       string                 `json:"trace_id,omitempty"`
+	Tokens        int                    `json:"tokens"`
+	CostUSD       float64                `json:"cost_usd"`
+	DurationMs    int                    `json:"duration_ms"`
+	TraceEvidence *ObservedTraceEvidence `json:"trace_evidence,omitempty"`
+}
+
+// ObservedTraceEvidence carries trace-level observability signals resolved
+// from the authoritative Agent evidence backend (Opik). All fields are
+// best-effort: a nil pointer means evidence was not available.
+type ObservedTraceEvidence struct {
+	CostUSD           float64 `json:"cost_usd"`
+	LatencyMs         int64   `json:"latency_ms"`
+	Success           bool    `json:"success"`
+	SecurityViolation bool    `json:"security_violation"`
+	ToolCallCount     int     `json:"tool_call_count"`
+	ToolErrorCount    int     `json:"tool_error_count"`
 }
 
 type EvalRun struct {
@@ -116,6 +129,8 @@ type CandidatePatch struct {
 	ParameterPatch map[string]any `json:"parameter_patch,omitempty"`
 	PromptPatch    map[string]any `json:"prompt_patch,omitempty"`
 	Rationale      string         `json:"rationale,omitempty"`
+	DiagnosisRef   string         `json:"diagnosis_ref,omitempty"`
+	RiskScore      float64        `json:"risk_score"`
 }
 
 type OptimizationJob struct {

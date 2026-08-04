@@ -33,6 +33,8 @@ type ReActState struct {
 	TraceID        string
 	ConversationID string
 	Model          string
+	Temperature    float32 // 0 = provider default
+	MaxTokens      int     // 0 = unset
 	// ModelResolved 是本次执行最后一次 LLM 调用实际成功的模型名（fallback
 	// 降级后与 Model 不同）；ModelRoutedVia 是实际尝试过的模型链。
 	ModelResolved              string
@@ -65,6 +67,19 @@ type ReActState struct {
 	// accumulated Messages exceed it, older tool-call/tool-result groups are compacted
 	// (summarized or dropped) before dispatch. Zero disables in-loop compaction.
 	MaxContextTokens int
+	// CompactionRecentGroups overrides the recent-groups count during in-loop
+	// compaction. 0 = auto-derive from MaxContextTokens.
+	CompactionRecentGroups int
+	// CompactionSafetyRatio overrides the compaction safety ratio. 0 = default.
+	CompactionSafetyRatio float32
+	// TokenCorrection is the EMA correction factor applied to the compaction
+	// threshold, learned from the previous step's estimated-vs-actual prompt
+	// token ratio. Must be > 0; buildReActInitState initializes it to 1.0.
+	TokenCorrection float64
+	// LastEstimatedTokens is the estimated token count of the previous
+	// dispatched request (post-compaction messages + tools). It is the ratio
+	// baseline for TokenCorrection; 0 until the first request is dispatched.
+	LastEstimatedTokens int
 	// HistoryCompactor optionally summarizes evicted groups into a breadcrumb; nil
 	// degrades to plain drop-with-marker. Never fails the loop.
 	HistoryCompactor port.HistoryCompactor
@@ -140,12 +155,18 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 		}
 		// In-loop compaction: bound the complete request, including any final-step
 		// instruction, without mutating s.Messages (trace/history stay complete).
-		tools = fitToolsToContextBudget(tools, messages, s.MaxContextTokens, protectedUsers)
+		// Tunable overrides resolve here: 0 means auto-derive from the window.
+		recentGroups, safetyRatio, correction := loopPolicy(s)
+		tools = fitToolsToContextBudget(tools, messages, s.MaxContextTokens, protectedUsers, correction, safetyRatio)
 		toolTokens := 0
 		if encodedTools, err := json.Marshal(tools); err == nil {
 			toolTokens = tokenutil.EstimateText(string(encodedTools))
 		}
-		messages = compactLoopMessagesWithProtectedUsers(ctx, messages, s.MaxContextTokens, toolTokens, constants.LoopCompactionRecentGroups, protectedUsers, s.HistoryCompactor)
+		messages = compactLoopMessagesWithPolicy(ctx, messages, s.MaxContextTokens, toolTokens, recentGroups, protectedUsers, correction, safetyRatio, s.HistoryCompactor)
+		// Baseline for the usage-feedback loop: the estimate of what is actually
+		// dispatched this step (post-compaction messages + tools), so the ratio
+		// stays on a consistent basis across steps.
+		s.LastEstimatedTokens = tokenutil.EstimateMessages(toEstimate(messages)) + toolTokens
 
 		tracer := otel.Tracer("stratum/agent")
 		inputPayload := observability.SafeTracePayload(map[string]any{"messages": messages, "tools": tools}, constants.AgentToolTraceMaxRawJSONBytes)
@@ -195,19 +216,7 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 
 		// Always stream: tool-decision turns typically produce empty content so no tokens
 		// reach the client; final-answer turns stream the output to the frontend as required.
-		resp, err := RetryFn(ctx, DefaultRetry, func() (port.CapabilityResponse, error) {
-			return capGW.Route(ctx, port.CapabilityRequest{
-				TraceID:     s.TraceID,
-				TenantID:    s.TenantID,
-				Type:        port.CapLLM,
-				TokenStream: s.OnToken,
-				LLM: &port.LLMCapRequest{
-					Model:    s.Model,
-					Messages: messages,
-					Tools:    tools,
-				},
-			})
-		})
+		resp, err := routeLLM(ctx, s, messages, tools, capGW)
 		latencyMs := time.Since(start).Milliseconds()
 		if err != nil {
 			llmSpan.SetAttributes(attribute.String("opik.metadata.stratum.status", domain.ToolTraceStatusError))
@@ -240,6 +249,7 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 		total, cost := recordModelResolution(ctx, &s, resp, ledger)
 		s.TotalTokens += total
 		s.TotalCostUSD += cost
+		s.TokenCorrection = updateTokenCorrection(s.TokenCorrection, s.LastEstimatedTokens, resp.Usage.Prompt)
 		llmSpan.SetAttributes(
 			attribute.Int("llm.prompt_tokens", resp.Usage.Prompt),
 			attribute.Int("llm.completion_tokens", resp.Usage.Completion),
@@ -348,28 +358,104 @@ func recordModelResolution(ctx context.Context, s *ReActState, resp port.Capabil
 	return ledger.Record(ctx, ledgerModel, resp.Usage)
 }
 
-func fitToolsToContextBudget(tools []port.ToolDefinition, messages []port.LLMMessage, budget, protectedUsers int) []port.ToolDefinition {
+// loopPolicy resolves the in-loop compaction tunables from the run state:
+// 0 means auto-derive (recent groups from the window size, safety ratio from
+// the constant default), and a zero correction is treated as 1 (no correction).
+func loopPolicy(s ReActState) (recentGroups int, safetyRatio, correction float64) {
+	recentGroups = s.CompactionRecentGroups
+	if recentGroups == 0 {
+		recentGroups = constants.DynamicRecentGroups(s.MaxContextTokens)
+	}
+	safetyRatio = float64(s.CompactionSafetyRatio)
+	if safetyRatio == 0 {
+		safetyRatio = constants.LoopCompactionSafetyRatio
+	}
+	correction = s.TokenCorrection
+	if correction <= 0 {
+		correction = 1
+	}
+	return recentGroups, safetyRatio, correction
+}
+
+// updateTokenCorrection folds the previous step's estimated-vs-actual prompt
+// token ratio into the EMA correction factor, clamped to [TokenCorrectionMin,
+// TokenCorrectionMax]. Without a baseline (first step) or a reported prompt
+// count the correction is left unchanged. Under-estimation (ratio > 1) raises
+// the correction, lowering the next compaction threshold so compaction starts
+// earlier.
+func updateTokenCorrection(correction float64, estimatedTokens, actualPrompt int) float64 {
+	if correction <= 0 {
+		// 零值 state（绕过 buildReActInitState 的调用方）按 1.0 处理，
+		// 与 compactLoopMessagesWithPolicy 的 correction≤0→1 同语义，
+		// 否则 0.9×0 会把 EMA 塌到 clamp 下限，低估反而变成更晚压缩。
+		correction = 1
+	}
+	if estimatedTokens <= 0 || actualPrompt <= 0 {
+		return correction
+	}
+	ratio := float64(actualPrompt) / float64(estimatedTokens)
+	smoothed := constants.TokenCorrectionAlpha*ratio + (1-constants.TokenCorrectionAlpha)*correction
+	return min(max(smoothed, constants.TokenCorrectionMin), constants.TokenCorrectionMax)
+}
+
+// routeLLM streams one LLM call with retry. Extracted from makeLLMNode so the
+// request construction and retry closure stay within the code-quality line and
+// complexity budgets of the node function.
+func routeLLM(ctx context.Context, s ReActState, messages []port.LLMMessage, tools []port.ToolDefinition, capGW port.CapabilityGateway) (port.CapabilityResponse, error) {
+	return RetryFn(ctx, DefaultRetry, func() (port.CapabilityResponse, error) {
+		return capGW.Route(ctx, port.CapabilityRequest{
+			TraceID:     s.TraceID,
+			TenantID:    s.TenantID,
+			Type:        port.CapLLM,
+			TokenStream: s.OnToken,
+			LLM: &port.LLMCapRequest{
+				Model:       s.Model,
+				Messages:    messages,
+				Tools:       tools,
+				Temperature: s.Temperature,
+				MaxTokens:   s.MaxTokens,
+			},
+		})
+	})
+}
+
+func fitToolsToContextBudget(tools []port.ToolDefinition, messages []port.LLMMessage, budget, protectedUsers int, correction, safetyRatio float64) []port.ToolDefinition {
 	if budget <= 0 || len(tools) == 0 {
 		return tools
 	}
-	threshold := int(float64(budget) * constants.LoopCompactionSafetyRatio)
+	threshold := compactionThreshold(budget, 0, correction, safetyRatio)
 	groups := groupMessages(messages)
 	protectedMessages := flatten(groups[:anchorCount(groups)])
+	protectedMessages = append(protectedMessages, protectedUserMessages(groups, protectedUsers)...)
+	toolAllowance := max(threshold-tokenutil.EstimateMessages(toEstimate(protectedMessages)), 0)
+	return fitToolList(tools, toolAllowance)
+}
+
+// protectedUserMessages collects the most recent protected user turns (the
+// active task and, when configured, earlier task history) so tools never crowd
+// out the messages that must survive compaction.
+func protectedUserMessages(groups []msgGroup, protectedUsers int) []port.LLMMessage {
+	var out []port.LLMMessage
 	usersKept := 0
 	for i := len(groups) - 1; i >= 0 && usersKept < protectedUsers; i-- {
 		if groups[i].role0 == "user" {
-			protectedMessages = append(protectedMessages, groups[i].msgs...)
+			out = append(out, groups[i].msgs...)
 			usersKept++
 		}
 	}
-	toolAllowance := max(threshold-tokenutil.EstimateMessages(toEstimate(protectedMessages)), 0)
+	return out
+}
+
+// fitToolList greedily packs tool schemas while the encoded definition list
+// stays within the token allowance, preserving declaration order.
+func fitToolList(tools []port.ToolDefinition, allowance int) []port.ToolDefinition {
 	fitted := make([]port.ToolDefinition, 0, len(tools))
 	for _, tool := range tools {
 		candidate := make([]port.ToolDefinition, len(fitted), len(fitted)+1)
 		copy(candidate, fitted)
 		candidate = append(candidate, tool)
 		encoded, err := json.Marshal(candidate)
-		if err == nil && tokenutil.EstimateText(string(encoded)) <= toolAllowance {
+		if err == nil && tokenutil.EstimateText(string(encoded)) <= allowance {
 			fitted = candidate
 		}
 	}
