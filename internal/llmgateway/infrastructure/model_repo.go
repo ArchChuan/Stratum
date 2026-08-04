@@ -11,12 +11,16 @@ import (
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
-	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 )
+
+// tenantPool 是 pgxmock 可替换的最小池接口，满足 postgres.ExecTenantWith。
+type tenantPool interface {
+	Begin(context.Context) (pgx.Tx, error)
+}
 
 // PgModelRepo implements port.ModelRepository backed by PostgreSQL.
 type PgModelRepo struct {
-	pool *pgxpool.Pool
+	pool tenantPool
 }
 
 // NewPgModelRepo returns a new PgModelRepo.
@@ -26,7 +30,7 @@ func NewPgModelRepo(pool *pgxpool.Pool) *PgModelRepo {
 
 func (r *PgModelRepo) execTenant(ctx context.Context, tenantID string, fn func(context.Context, pgx.Tx) error) error {
 	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
-	return tenantdb.ExecTenant(ctx, r.pool, fn)
+	return postgres.ExecTenantWith(ctx, r.pool, tenantID, fn)
 }
 
 // Create inserts a new model row and populates DB-generated timestamps on m.

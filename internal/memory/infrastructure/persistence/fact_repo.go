@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
@@ -16,7 +17,21 @@ import (
 )
 
 type FactRepo struct {
-	pool *pgxpool.Pool
+	pool tenantPool
+}
+
+// isNilPool reports whether p holds no usable beginner, including a
+// typed-nil *pgxpool.Pool stored through NewFactRepo(nil).
+func isNilPool(p tenantPool) bool {
+	if p == nil {
+		return true
+	}
+	v := reflect.ValueOf(p)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return v.IsNil()
+	}
+	return false
 }
 
 // CreateExtracted atomically inserts one source-identified fact and applies its entity mutations.
@@ -190,13 +205,15 @@ func NewFactRepo(pool *pgxpool.Pool) *FactRepo {
 }
 
 func (r *FactRepo) execTenant(ctx context.Context, tenantID string, fn func(context.Context, pgx.Tx) error) error {
-	if r.pool == nil {
+	// NewFactRepo(nil) stores a typed-nil *pgxpool.Pool in the interface; a
+	// plain == nil check misses it, and Begin on a typed nil would panic.
+	if isNilPool(r.pool) {
 		return fmt.Errorf("memory: fact persistence pool is nil")
 	}
 	if tenantID == "" {
 		return fmt.Errorf("memory: tenant_id is empty")
 	}
-	return pgstore.Wrap(r.pool).ExecTenant(ctx, tenantID, fn)
+	return pgstore.ExecTenantWith(ctx, r.pool, tenantID, fn)
 }
 
 func (r *FactRepo) Create(ctx context.Context, tenantID string, fact *domain.MemoryFact) error {

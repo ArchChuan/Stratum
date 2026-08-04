@@ -9,12 +9,22 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/prompt/domain"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// poolIface allows pgxmock injection in tests.
+type poolIface interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+var _ poolIface = (*pgxpool.Pool)(nil)
+
 // PgPromptRepo persists prompt templates in public.prompt_templates.
 type PgPromptRepo struct {
-	pool *pgxpool.Pool
+	pool poolIface
 }
 
 // NewPgPromptRepo constructs a PostgreSQL-backed prompt repository.
@@ -131,7 +141,7 @@ func (r *PgPromptRepo) GetByHash(ctx context.Context, hash string) (*domain.Prom
 
 // PgBindingRepo persists prompt bindings in public.prompt_bindings.
 type PgBindingRepo struct {
-	pool *pgxpool.Pool
+	pool poolIface
 }
 
 // NewPgBindingRepo constructs a PostgreSQL-backed binding repository.

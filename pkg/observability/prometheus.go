@@ -350,7 +350,28 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 	}
 	m.registerF3Metrics(factory, latencyBuckets)
 	m.registerExtendedMetrics(factory)
+	m.registerReaperMetrics(factory)
 	return m
+}
+
+// registerReaperMetrics registers the reaper metric family. Must not be
+// inlined into registerExtendedMetrics: the reaper is a background component
+// with its own alerting rules (see helm stratum-prometheusrule.yaml).
+func (m *PrometheusMetrics) registerReaperMetrics(factory promauto.Factory) {
+	m.reaperCyclesTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "reaper_cycles_total", Help: "Reaper cycles by outcome"},
+		[]string{"outcome"},
+	)
+	m.reaperGuestsDeleted = factory.NewCounter(
+		prometheus.CounterOpts{Name: "reaper_guests_deleted_total", Help: "Total guest accounts deleted by the reaper"},
+	)
+	m.reaperDeleteErrors = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "reaper_delete_errors_total", Help: "Reaper delete errors by phase"},
+		[]string{"phase"},
+	)
+	m.reaperCycleTimestamp = factory.NewGauge(
+		prometheus.GaugeOpts{Name: "reaper_last_cycle_timestamp_seconds", Help: "Unix timestamp of the last reaper cycle"},
+	)
 }
 
 // registerF3Metrics initializes the Phase 1 KPI / observability metrics.

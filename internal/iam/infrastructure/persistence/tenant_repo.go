@@ -6,18 +6,17 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
 )
 
 // TenantRepo persists tenant members and settings in PostgreSQL (public schema).
 type TenantRepo struct {
-	db *pgxpool.Pool
+	db pgxPool
 }
 
 // NewTenantRepo creates a TenantRepo backed by the given pool.
-func NewTenantRepo(db *pgxpool.Pool) *TenantRepo {
+func NewTenantRepo(db pgxPool) *TenantRepo {
 	return &TenantRepo{db: db}
 }
 

@@ -9,18 +9,17 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 )
 
 // WorkspaceRepo persists knowledge workspaces in per-tenant schemas.
 type WorkspaceRepo struct {
-	db *pgxpool.Pool
+	db poolIface
 }
 
 // NewWorkspaceRepo constructs a WorkspaceRepo backed by the given pool.
-func NewWorkspaceRepo(db *pgxpool.Pool) *WorkspaceRepo {
+func NewWorkspaceRepo(db poolIface) *WorkspaceRepo {
 	return &WorkspaceRepo{db: db}
 }
 
