@@ -468,6 +468,9 @@ type executionOutcome struct {
 	result  port.NodeExecutionResult
 	err     error
 	effect  *domain.EffectIntent
+	// approvalGeneration 是 approval 节点所在批的基准 generation,
+	// 同批并行 approval 共享同一值,保证乐观锁目标一致
+	approvalGeneration int64
 }
 
 type nodeOutputBuffer struct {
@@ -556,6 +559,9 @@ func (s *RunService) executeReadyBatch(ctx context.Context, tenantID string, run
 	}
 	sem := make(chan struct{}, limit)
 	outcomes := make([]executionOutcome, len(ready))
+	// 批基准 generation:同批并行 approval 共享同一期望 generation,
+	// 避免第一个 approval 提交后内存 run.Generation 漂移导致后续 approval 乐观锁失败
+	batchGeneration := run.Generation
 	var wg sync.WaitGroup
 	for index, node := range ready {
 		attemptNo := nextAttemptNo(attempts, node.ID)
@@ -568,7 +574,7 @@ func (s *RunService) executeReadyBatch(ctx context.Context, tenantID string, run
 			return err
 		}
 		if node.Type == domain.NodeTypeApproval {
-			outcomes[index] = executionOutcome{node: node, attempt: attempt, result: port.NodeExecutionResult{Paused: true, ErrorCode: "approval_required"}}
+			outcomes[index] = executionOutcome{node: node, attempt: attempt, result: port.NodeExecutionResult{Paused: true, ErrorCode: "approval_required"}, approvalGeneration: batchGeneration}
 			continue
 		}
 		wg.Add(1)
@@ -685,7 +691,7 @@ func (s *RunService) commitOutcome(ctx context.Context, tenantID string, run *do
 			return fmt.Errorf("workflow approval repository unavailable")
 		}
 		reason, risk := "human approval required", "high"
-		approval := domain.NewApproval(s.newID(), run.ID, attempt.NodeID, attempt.ID, run.Generation+1, reason, risk, attempt.Input)
+		approval := domain.NewApproval(s.newID(), run.ID, attempt.NodeID, attempt.ID, outcome.approvalGeneration+1, reason, risk, attempt.Input)
 		if err := approvals.CreateApproval(ctx, tenantID, approval, domain.Event{ID: s.newID(), RunID: run.ID, Type: "workflow.approval_requested", NodeID: attempt.NodeID, AttemptNo: attempt.AttemptNo, Status: string(domain.ApprovalStatusPending), Summary: reason, OccurredAt: time.Now().UTC()}); err != nil {
 			return err
 		}

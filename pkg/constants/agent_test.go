@@ -3,43 +3,87 @@ package constants
 import "testing"
 
 func TestDynamicRecentGroups(t *testing.T) {
-	tests := []struct {
-		name string
-		w    int
-		want int
+	cases := []struct {
+		name   string
+		tokens int
+		want   int
 	}{
-		{name: "zero window falls back to default", w: 0, want: LoopCompactionRecentGroups},
-		{name: "negative window falls back to default", w: -1, want: LoopCompactionRecentGroups},
-		{name: "small window keeps 2 groups", w: 8_000, want: CompactionRecentGroupsSmall},
-		{name: "window at small threshold boundary keeps 3", w: 16_000, want: LoopCompactionRecentGroups},
-		{name: "mid window keeps 3 groups", w: 32_000, want: LoopCompactionRecentGroups},
-		{name: "window at large threshold boundary keeps 3", w: 64_000, want: LoopCompactionRecentGroups},
-		{name: "large window keeps 5 groups", w: 96_000, want: CompactionRecentGroupsLarge},
+		{"zero uses default", 0, LoopCompactionRecentGroups},
+		{"negative uses default", -100, LoopCompactionRecentGroups},
+		{"below small threshold", 100, CompactionRecentGroupsSmall},
+		{"at small threshold is default", CompactionRecentGroupsThresholdSmall, LoopCompactionRecentGroups},
+		{"mid range default", 32_000, LoopCompactionRecentGroups},
+		{"at large threshold is default", CompactionRecentGroupsThresholdLarge, LoopCompactionRecentGroups},
+		{"above large threshold", 100_000, CompactionRecentGroupsLarge},
+		{"exactly one above threshold", CompactionRecentGroupsThresholdLarge + 1, CompactionRecentGroupsLarge},
 	}
-	for _, tc := range tests {
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := DynamicRecentGroups(tc.w); got != tc.want {
-				t.Fatalf("DynamicRecentGroups(%d) = %d, want %d", tc.w, got, tc.want)
+			if got := DynamicRecentGroups(tc.tokens); got != tc.want {
+				t.Errorf("DynamicRecentGroups(%d) = %d, want %d", tc.tokens, got, tc.want)
 			}
 		})
 	}
 }
 
 func TestDynamicSummaryReserve(t *testing.T) {
-	tests := []struct {
+	cases := []struct {
 		name   string
 		budget int
 		want   int
 	}{
-		{name: "tiny budget hits the floor", budget: 100, want: CompactionSummaryReserveFloor},
-		{name: "small budget hits the floor", budget: 4_000, want: CompactionSummaryReserveFloor},
-		{name: "mid budget scales at 5%", budget: 20_000, want: 1_000},
-		{name: "large budget scales at 5%", budget: 100_000, want: 5_000},
+		{"zero hits floor", 0, CompactionSummaryReserveFloor},
+		{"negative hits floor", -1, CompactionSummaryReserveFloor},
+		{"small budget hits floor", 1000, CompactionSummaryReserveFloor},                      // 5% of 1000 = 50 < 200
+		{"floor boundary", CompactionSummaryReserveFloor * 20, CompactionSummaryReserveFloor}, // 5% of 4000 = 200
+		{"linear above floor", 8000, 400},
 	}
-	for _, tc := range tests {
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := DynamicSummaryReserve(tc.budget); got != tc.want {
-				t.Fatalf("DynamicSummaryReserve(%d) = %d, want %d", tc.budget, got, tc.want)
+				t.Errorf("DynamicSummaryReserve(%d) = %d, want %d", tc.budget, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDynamicCompactionMaxTokens(t *testing.T) {
+	cases := []struct {
+		name   string
+		tokens int
+		want   int
+	}{
+		{"tiny hits floor", 100, CompactionMaxTokensFloor},
+		{"zero hits floor", 0, CompactionMaxTokensFloor},
+		{"negative hits floor", -5, CompactionMaxTokensFloor},
+		{"floor boundary", CompactionMaxTokensFloor * 10, CompactionMaxTokensFloor}, // 10% of 4000 = 400
+		{"mid linear", 5000, 500},
+		{"ceiling boundary", CompactionMaxTokensCeiling * 10, CompactionMaxTokensCeiling}, // 10% of 8000 = 800
+		{"above ceiling", 100_000, CompactionMaxTokensCeiling},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := DynamicCompactionMaxTokens(tc.tokens); got != tc.want {
+				t.Errorf("DynamicCompactionMaxTokens(%d) = %d, want %d", tc.tokens, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCollectionName(t *testing.T) {
+	cases := []struct {
+		name        string
+		workspaceID string
+		want        string
+	}{
+		{"uuid workspace", "019a1b2c-3d4e-5f60-7182-93a4b5c6d7e8", CollectionPrefix + "_019a1b2c_3d4e_5f60_7182_93a4b5c6d7e8"},
+		{"alnum only", "workspace1", CollectionPrefix + "_workspace1"},
+		{"unsafe chars replaced", "my workspace/中文!", CollectionPrefix + "_my_workspace____"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := CollectionName("tenant-ignored", tc.workspaceID); got != tc.want {
+				t.Errorf("CollectionName = %q, want %q", got, tc.want)
 			}
 		})
 	}

@@ -13,12 +13,23 @@ import (
 	"github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/pkg/safetext"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// poolIface allows pgxmock injection in tests.
+type poolIface interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults
+}
+
+var _ poolIface = (*pgxpool.Pool)(nil)
+
 // PgAuditRepo persists audit events in the public.audit_events table.
 type PgAuditRepo struct {
-	pool *pgxpool.Pool
+	pool poolIface
 }
 
 // NewPgAuditRepo constructs a PostgreSQL-backed audit repository.
@@ -107,10 +118,14 @@ func buildAuditFilter(f domain.AuditFilter) (string, []any) {
 		appendEq("outcome", f.Outcome)
 	}
 	if !f.From.IsZero() {
-		appendEq("occurred_at >=", f.From)
+		clauses = append(clauses, fmt.Sprintf("occurred_at >= $%d", argIdx))
+		args = append(args, f.From)
+		argIdx++
 	}
 	if !f.To.IsZero() {
-		appendEq("occurred_at <=", f.To)
+		clauses = append(clauses, fmt.Sprintf("occurred_at <= $%d", argIdx))
+		args = append(args, f.To)
+		argIdx++
 	}
 	return strings.Join(clauses, " AND "), args
 }

@@ -7,12 +7,11 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
-	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type PgCandidateCommandRepository struct{ pool *pgxpool.Pool }
+type PgCandidateCommandRepository struct{ pool poolIface }
 
 func NewPgCandidateCommandRepository(pool *pgxpool.Pool) *PgCandidateCommandRepository {
 	return &PgCandidateCommandRepository{pool: pool}
@@ -23,7 +22,7 @@ func (r *PgCandidateCommandRepository) Reject(
 ) (domain.CandidateSummary, error) {
 	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
 	var result domain.CandidateSummary
-	err := tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+	err := execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var key, fingerprint string
 		var version int64
 		var parent, candidate []byte

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 )
 
@@ -59,6 +60,160 @@ func TestAnthropicComplete(t *testing.T) {
 	require.Equal(t, 10, resp.Usage.PromptTokens)
 	require.Equal(t, 5, resp.Usage.CompletionTokens)
 	require.Equal(t, 15, resp.Usage.TotalTokens)
+}
+
+func TestAnthropicClient_Health_success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/messages", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"model":"claude-3-haiku","content":[{"type":"text","text":"ok"}],"usage":{}}`)
+	}))
+	defer srv.Close()
+
+	client := infrastructure.NewAnthropicClient(
+		infrastructure.ProviderConfig{Name: "test-anthropic", BaseURL: srv.URL, APIKey: "test-api-key", HealthModel: "claude-3-haiku"},
+		zap.NewNop(),
+	)
+	require.NoError(t, client.Health(context.Background()))
+}
+
+func TestAnthropicClient_Health_upstreamFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	client := infrastructure.NewAnthropicClient(
+		infrastructure.ProviderConfig{Name: "test-anthropic", BaseURL: srv.URL, APIKey: "test-api-key", HealthModel: "claude-3-haiku"},
+		zap.NewNop(),
+	)
+	require.Error(t, client.Health(context.Background()))
+}
+
+func TestAnthropicClient_ListModels_success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/v1/models", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"data":[
+			{"id":"claude-sonnet-4","context_window":200000},
+			{"id":"claude-haiku-4","context_window":100000}
+		]}`)
+	}))
+	defer srv.Close()
+
+	client := infrastructure.NewAnthropicClient(
+		infrastructure.ProviderConfig{Name: "test-anthropic", BaseURL: srv.URL, APIKey: "test-api-key"},
+		zap.NewNop(),
+	)
+	models, err := client.ListModels(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []infrastructure.DiscoveredModel{
+		{Name: "claude-sonnet-4", ContextWindow: 200000},
+		{Name: "claude-haiku-4", ContextWindow: 100000},
+	}, models)
+}
+
+func TestAnthropicClient_ListModels_nonOK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := infrastructure.NewAnthropicClient(
+		infrastructure.ProviderConfig{Name: "test-anthropic", BaseURL: srv.URL, APIKey: "test-api-key"},
+		zap.NewNop(),
+	)
+	_, err := client.ListModels(context.Background())
+	require.ErrorContains(t, err, "请检查 provider kind")
+	require.ErrorIs(t, err, domain.ErrUpstreamRequestFailed)
+}
+
+func TestAnthropicClient_ListModels_badJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"data": [broken`)
+	}))
+	defer srv.Close()
+
+	client := infrastructure.NewAnthropicClient(
+		infrastructure.ProviderConfig{Name: "test-anthropic", BaseURL: srv.URL, APIKey: "test-api-key"},
+		zap.NewNop(),
+	)
+	_, err := client.ListModels(context.Background())
+	require.ErrorContains(t, err, "decode models")
+}
+
+func TestAnthropicProtocol_Health_delegates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"model":"claude-3-haiku","content":[{"type":"text","text":"ok"}],"usage":{}}`)
+	}))
+	defer srv.Close()
+
+	client := infrastructure.NewAnthropicClient(
+		infrastructure.ProviderConfig{Name: "template", BaseURL: "http://template.test", APIKey: "k"},
+		zap.NewNop(),
+	)
+	protocol := infrastructure.NewAnthropicProtocol(client)
+	err := protocol.Health(context.Background(), infrastructure.ProviderConfig{
+		Name: "tenant-anthropic", BaseURL: srv.URL, APIKey: "tenant-key",
+	})
+	require.NoError(t, err)
+}
+
+func TestAnthropicProtocol_ListModels_delegates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/models", r.URL.Path)
+		require.Equal(t, "tenant-key", r.Header.Get("x-api-key"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"data":[{"id":"claude-sonnet-4"}]}`)
+	}))
+	defer srv.Close()
+
+	client := infrastructure.NewAnthropicClient(
+		infrastructure.ProviderConfig{Name: "template", BaseURL: "http://template.test", APIKey: "k"},
+		zap.NewNop(),
+	)
+	protocol := infrastructure.NewAnthropicProtocol(client)
+	models, err := protocol.ListModels(context.Background(), infrastructure.ProviderConfig{
+		Name: "tenant-anthropic", BaseURL: srv.URL, APIKey: "tenant-key",
+	})
+	require.NoError(t, err)
+	require.Equal(t, []infrastructure.DiscoveredModel{{Name: "claude-sonnet-4"}}, models)
+}
+
+func TestAnthropicProtocol_CompleteStream_delegates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected http.Flusher")
+		}
+		_, _ = fmt.Fprint(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_001\",\"model\":\"claude-haiku\"}}\n\n")
+		_, _ = fmt.Fprint(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+		_, _ = fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n")
+		_, _ = fmt.Fprint(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	client := infrastructure.NewAnthropicClient(
+		infrastructure.ProviderConfig{Name: "template", BaseURL: "http://template.test", APIKey: "k"},
+		zap.NewNop(),
+	)
+	protocol := infrastructure.NewAnthropicProtocol(client)
+
+	var tokens []string
+	resp, err := protocol.CompleteStream(context.Background(), infrastructure.ProviderConfig{
+		Name: "tenant-anthropic", BaseURL: srv.URL, APIKey: "tenant-key",
+	}, &infrastructure.CompletionRequest{
+		Model:    "claude-haiku",
+		Messages: []infrastructure.Message{{Role: "user", Content: "hi"}},
+	}, func(tok string) { tokens = append(tokens, tok) })
+	require.NoError(t, err)
+	require.Equal(t, "hi", resp.Content)
+	require.Equal(t, []string{"hi"}, tokens)
 }
 
 func TestAnthropicCompleteWithToolUse(t *testing.T) {

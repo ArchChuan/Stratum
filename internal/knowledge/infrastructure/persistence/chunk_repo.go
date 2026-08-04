@@ -5,17 +5,16 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 )
 
 type ChunkRepo struct {
-	db *pgxpool.Pool
+	db poolIface
 }
 
-func NewChunkRepo(db *pgxpool.Pool) *ChunkRepo {
+func NewChunkRepo(db poolIface) *ChunkRepo {
 	return &ChunkRepo{db: db}
 }
 
