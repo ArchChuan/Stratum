@@ -73,6 +73,69 @@ func (s *ExperimentService) Create(
 	return experiment, deployment, nil
 }
 
+// Enqueue creates an experiment in pending status. It fails when the resource
+// already has an active (running or paused) experiment — only one experiment
+// per resource can be active at a time.
+func (s *ExperimentService) Enqueue(
+	ctx context.Context,
+	tenantID string,
+	input CreateExperimentInput,
+) (domain.Experiment, domain.Deployment, error) {
+	if err := input.Stable.Validate(); err != nil {
+		return domain.Experiment{}, domain.Deployment{}, err
+	}
+	if err := input.Canary.Validate(); err != nil {
+		return domain.Experiment{}, domain.Deployment{}, err
+	}
+	if input.Stable.Kind != input.Canary.Kind || input.Stable.ResourceID != input.Canary.ResourceID ||
+		input.Stable.RevisionID == input.Canary.RevisionID {
+		return domain.Experiment{}, domain.Deployment{}, errors.New(
+			"stable and canary must be different revisions of the same resource")
+	}
+	active, err := s.repo.HasRunningExperiment(ctx, tenantID, string(input.Stable.Kind), input.Stable.ResourceID)
+	if err != nil {
+		return domain.Experiment{}, domain.Deployment{}, err
+	}
+	if active {
+		return domain.Experiment{}, domain.Deployment{},
+			errors.New("resource already has an active experiment")
+	}
+	if err := s.repo.ValidatePrerequisites(ctx, tenantID, input.Stable, input.Canary, input.SuiteRevisionID); err != nil {
+		return domain.Experiment{}, domain.Deployment{}, err
+	}
+	policy := domain.DefaultPromotionPolicy()
+	experiment := domain.Experiment{
+		ID: uuid.Must(uuid.NewV7()).String(), ResourceKind: input.Stable.Kind, ResourceID: input.Stable.ResourceID,
+		StableRevisionID: input.Stable.RevisionID, CanaryRevisionID: input.Canary.RevisionID,
+		SuiteRevisionID: input.SuiteRevisionID, Status: domain.ExperimentPending,
+		Stage: 0, Policy: policy, StateVersion: 1, Recommendation: domain.DecisionHold,
+	}
+	deployment := domain.Deployment{
+		ResourceKind: input.Stable.Kind, ResourceID: input.Stable.ResourceID,
+		StableRevisionID: input.Stable.RevisionID, CanaryRevisionID: input.Canary.RevisionID,
+		CanaryPercent: 0, ExperimentID: experiment.ID, PolicyVersion: 1,
+	}
+	if err := s.repo.Create(ctx, tenantID, experiment, deployment); err != nil {
+		return domain.Experiment{}, domain.Deployment{}, err
+	}
+	return experiment, deployment, nil
+}
+
+// Activate transitions a pending experiment to running and sets the canary
+// percentage to the first promotion stage.
+func (s *ExperimentService) Activate(
+	ctx context.Context, tenantID, experimentID string, command ExperimentCommandInput,
+) (domain.Experiment, error) {
+	return s.applyCommand(ctx, tenantID, experimentID, domain.CommandActivate, command)
+}
+
+// Reject rejects a pending experiment without activating it.
+func (s *ExperimentService) Reject(
+	ctx context.Context, tenantID, experimentID string, command ExperimentCommandInput,
+) (domain.Experiment, error) {
+	return s.applyCommand(ctx, tenantID, experimentID, domain.CommandReject, command)
+}
+
 func (s *ExperimentService) Pause(
 	ctx context.Context, tenantID, experimentID string, command ExperimentCommandInput,
 ) (domain.Experiment, error) {
