@@ -86,7 +86,7 @@ type MetricsProvider interface {
 	RecordAuditWriteQueueDepth(depth int)
 
 	// Collab (F3)
-	IncCollabPlan(strategy string)
+	IncCollabPlan(strategy, outcome string)
 	RecordCollabTaskDuration(strategy string, seconds float64)
 
 	// Optimizer (F3)
@@ -188,7 +188,7 @@ func (NoopMetrics) IncRouteFallback(_, _ string)                                
 func (NoopMetrics) RecordBudgetRatio(_ string, _ float64)                         {}
 func (NoopMetrics) IncAuditEvent(_, _ string)                                     {}
 func (NoopMetrics) RecordAuditWriteQueueDepth(_ int)                              {}
-func (NoopMetrics) IncCollabPlan(_ string)                                        {}
+func (NoopMetrics) IncCollabPlan(_, _ string)                                     {}
 func (NoopMetrics) RecordCollabTaskDuration(_ string, _ float64)                  {}
 func (NoopMetrics) IncOptimizerCandidate(_, _ string)                             {}
 func (NoopMetrics) RecordOptimizerCycleDuration(_ float64)                        {}

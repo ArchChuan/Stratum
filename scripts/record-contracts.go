@@ -28,6 +28,7 @@ import (
 	"github.com/byteBuilderX/stratum/config"
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
+	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
@@ -76,11 +77,27 @@ func buildDDDContainer(cfg *config.Config, key *rsa.PrivateKey, logger *zap.Logg
 			ModelMgmtService: llmapp.NewModelMgmtService(contractModRepo{}),
 		},
 		Skill: &wiring.Skill{}, MCP: &wiring.MCP{}, Memory: &wiring.Memory{},
-		Agent: &wiring.Agent{
-			ProposalService: agentapp.NewResourceChangeProposalService(
-				contractPropRepo{}, contractPropAuthorizer{}, nil, nil, metrics,
-			),
-		},
+		Agent: func() *wiring.Agent {
+			gate := agentapp.NewOperationGateService(
+				contractOpPropRepo{}, contractOpUsageRepo{}, metrics,
+			)
+			svc := agentapp.NewAgentService(agentapp.AgentServiceDeps{
+				Registry: agentapp.NewRegistry(contractAgentRepo{}, nil, logger),
+				Logger:   logger,
+				Metrics:  metrics,
+			})
+			svc.SetOperationGate(gate)
+			return &wiring.Agent{
+				ProposalService: agentapp.NewResourceChangeProposalService(
+					contractPropRepo{}, contractPropAuthorizer{}, nil, nil, metrics,
+				),
+				OperationGateService: gate,
+				OperationProposalSvc: agentapp.NewOperationProposalService(
+					contractOpPropRepo{}, contractTenantRole{}, metrics,
+				),
+				Service: svc,
+			}
+		}(),
 		Workflow: &wiring.Workflow{
 			DefinitionService: workflowapp.NewDefinitionService(contractDefRepo{}, contractVerRepo{}, nextID),
 			RunService:        workflowapp.NewRunService(contractVerRepo{}, contractRunStore{}, contractAgtExec{}, nextID),
@@ -110,7 +127,8 @@ func isDDDAuthOverride(routePath string) (bool, iamport.TokenClaims) {
 	case strings.HasPrefix(routePath, "/admin/providers"), strings.HasPrefix(routePath, "/admin/models"):
 		return true, adminClaims
 	case strings.HasPrefix(routePath, "/tenant/"), strings.HasPrefix(routePath, "/workflows"),
-		strings.HasPrefix(routePath, "/workflow-runs"), strings.HasPrefix(routePath, "/workflow-approvals"):
+		strings.HasPrefix(routePath, "/workflow-runs"), strings.HasPrefix(routePath, "/workflow-approvals"),
+		strings.HasPrefix(routePath, "/operation-proposals"):
 		return true, adminClaims
 	default:
 		return false, iamport.TokenClaims{}
@@ -170,6 +188,10 @@ func main() {
 		switch {
 		case evalWhitelist[routeKey]:
 			recordEvalRoute(ddRouter, jwtSvc, route.Method, route.Path, filename)
+		case routeKey == "POST /agents/:id/self-modify":
+			// Proposal ID is a random UUID: record a regex assertion instead
+			// of a byte-exact body so replay is deterministic.
+			recordSelfModifyRoute(ddRouter, jwtSvc, route.Path, filename)
 		default:
 			if ok, claims := isDDDAuthOverride(route.Path); ok {
 				recordAuthRoute(ddRouter, jwtSvc, claims, route.Method, route.Path, nil, filename)
@@ -239,6 +261,36 @@ func recordEvalRoute(router http.Handler, tokens iamport.TokenService, method, r
 	c.WantStatus = rec.Code
 	if json.Valid(rec.Body.Bytes()) {
 		c.WantBody = json.RawMessage(rec.Body.Bytes())
+	}
+	out, _ := json.MarshalIndent([]Case{c}, "", "  ")
+	if err := os.WriteFile(outPath, out, 0o644); err != nil {
+		panic(err)
+	}
+}
+
+func recordSelfModifyRoute(router http.Handler, tokens iamport.TokenService, routePath, outPath string) {
+	path := strings.ReplaceAll(routePath, ":id", "contract-id")
+	body := json.RawMessage(`{"name":"contract-renamed","description":"contract","systemPrompt":"prompt",
+"llmModel":"qwen-plus","maxIterations":10,"maxContextTokens":8000,"allowedSkills":[],
+"mcpToolIds":[],"knowledgeWorkspaceIds":[],"memoryScope":"user","checkpointEnabled":false}`)
+	c := Case{
+		Name: "authenticated-pending", Method: http.MethodPost, Path: path, Body: body,
+		WantStatus: http.StatusAccepted,
+		// proposalId is a random UUID at record time; assert shape only.
+		// Response is a gin.H map: encoding/json sorts map keys alphabetically.
+		WantBodyRE: `\{"proposalId":"[0-9a-f-]+","reason":"pending_approval","status":"pending_approval"\}`,
+	}
+	token, err := tokens.Sign(iamport.TokenClaims{Sub: "contract-admin", TenantID: "contract-tenant", Role: "admin"}, time.Hour)
+	if err != nil {
+		panic(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(c.Body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != c.WantStatus {
+		panic(fmt.Sprintf("self-modify: got status %d, want %d: %s", rec.Code, c.WantStatus, rec.Body.String()))
 	}
 	out, _ := json.MarshalIndent([]Case{c}, "", "  ")
 	if err := os.WriteFile(outPath, out, 0o644); err != nil {
@@ -560,6 +612,77 @@ func (contractPropAuthorizer) AuthorizeProposal(
 	context.Context, string, string, agentdomain.ResourceKind, agentdomain.ProposalOperation,
 ) error {
 	return nil
+}
+
+type contractAgentRepo struct{}
+
+func (contractAgentRepo) Register(context.Context, *agentdomain.AgentConfig) error {
+	return nil
+}
+func (contractAgentRepo) Get(context.Context, string) (*agentdomain.AgentConfig, bool, error) {
+	return nil, false, nil
+}
+func (contractAgentRepo) GetSystemAssistant(context.Context) (*agentdomain.AgentConfig, bool, error) {
+	return nil, false, nil
+}
+func (contractAgentRepo) GetAll(context.Context) ([]*agentdomain.AgentConfig, error) {
+	return nil, nil
+}
+func (contractAgentRepo) Remove(context.Context, string) error { return nil }
+func (contractAgentRepo) Update(context.Context, *agentdomain.AgentConfig) error {
+	return nil
+}
+func (contractAgentRepo) UpdateSystemAssistantModel(
+	context.Context, string, string, bool, int, int,
+) (*agentdomain.AgentConfig, error) {
+	return nil, nil
+}
+func (contractAgentRepo) UpdateSystemAssistantBindings(
+	context.Context, []string, []string, []string,
+) (*agentdomain.AgentConfig, error) {
+	return nil, nil
+}
+
+// Operation gate stubs: self-modify always lands as a pending proposal, so
+// the recorded response is the deterministic 202 pending_approval shape.
+type contractOpPropRepo struct{}
+
+func (contractOpPropRepo) Insert(context.Context, agentdomain.OperationProposal) error { return nil }
+func (contractOpPropRepo) GetByID(context.Context, string, string) (*agentdomain.OperationProposal, error) {
+	return nil, agentdomain.ErrOperationProposalNotFound
+}
+func (contractOpPropRepo) ListPending(context.Context, string) ([]agentdomain.OperationProposal, error) {
+	return nil, nil
+}
+func (contractOpPropRepo) UpdateStatus(
+	context.Context, string, string, agentdomain.OpProposalStatus, string, string,
+) error {
+	return nil
+}
+func (contractOpPropRepo) HasPending(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+func (contractOpPropRepo) ConsumeApproved(context.Context, string, string, string) (bool, error) {
+	return false, nil
+}
+
+type contractOpUsageRepo struct{}
+
+func (contractOpUsageRepo) AddUsage(
+	context.Context, string, string, agentport.OperationType, time.Time, float64, int,
+) error {
+	return nil
+}
+func (contractOpUsageRepo) DailyUsage(
+	context.Context, string, string, agentport.OperationType, time.Time,
+) (agentport.DailyOperationUsage, error) {
+	return agentport.DailyOperationUsage{}, nil
+}
+
+type contractTenantRole struct{}
+
+func (contractTenantRole) ResolveTenantRole(context.Context, string, string) (string, error) {
+	return "admin", nil
 }
 
 type contractDashboardRepo struct{}

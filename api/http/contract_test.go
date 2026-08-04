@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -27,6 +28,7 @@ import (
 	"github.com/byteBuilderX/stratum/config"
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
+	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditapp "github.com/byteBuilderX/stratum/internal/audit/application"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
@@ -55,6 +57,7 @@ type contractCase struct {
 	Headers    map[string]string `json:"headers,omitempty"`
 	Body       json.RawMessage   `json:"body,omitempty"`
 	WantBody   json.RawMessage   `json:"want_body,omitempty"`
+	WantBodyRE string            `json:"want_body_regex,omitempty"`
 	WantStatus int               `json:"want_status"`
 }
 
@@ -105,11 +108,27 @@ func TestContracts(t *testing.T) {
 			ModelMgmtService: llmapp.NewModelMgmtService(contractModRepo),
 		},
 		Skill: &wiring.Skill{}, MCP: &wiring.MCP{}, Memory: &wiring.Memory{},
-		Agent: &wiring.Agent{
-			ProposalService: agentapp.NewResourceChangeProposalService(
-				contractProposalRepo{}, contractProposalAuthorizer{}, nil, nil, metrics,
-			),
-		},
+		Agent: func() *wiring.Agent {
+			gate := agentapp.NewOperationGateService(
+				contractOpPropRepo{}, contractOpUsageRepo{}, metrics,
+			)
+			svc := agentapp.NewAgentService(agentapp.AgentServiceDeps{
+				Registry: agentapp.NewRegistry(contractAgentRepo{}, nil, logger),
+				Logger:   logger,
+				Metrics:  metrics,
+			})
+			svc.SetOperationGate(gate)
+			return &wiring.Agent{
+				ProposalService: agentapp.NewResourceChangeProposalService(
+					contractProposalRepo{}, contractProposalAuthorizer{}, nil, nil, metrics,
+				),
+				OperationGateService: gate,
+				OperationProposalSvc: agentapp.NewOperationProposalService(
+					contractOpPropRepo{}, contractTenantRole{}, metrics,
+				),
+				Service: svc,
+			}
+		}(),
 		Workflow: &wiring.Workflow{
 			DefinitionService: workflowapp.NewDefinitionService(contractDefRepo, contractVerRepo, nextID),
 			RunService:        workflowapp.NewRunService(contractVerRepo, contractRunStore, contractAgtExec, nextID),
@@ -140,6 +159,7 @@ func TestContracts(t *testing.T) {
 		"/evaluations/", "/dashboard/", "/resource-change-proposals/",
 		"/admin/providers", "/admin/models", "/admin/tenants",
 		"/tenant/", "/workflows", "/workflow-runs", "/workflow-approvals",
+		"/operation-proposals",
 	}
 
 	files, err := filepath.Glob("testdata/contracts/*.golden.json")
@@ -162,7 +182,7 @@ func TestContracts(t *testing.T) {
 			for _, c := range cases {
 				req := httptest.NewRequest(c.Method, c.Path, bytes.NewReader(c.Body))
 
-				useDDD := false
+				useDDD := strings.Contains(c.Path, "/self-modify")
 				for _, prefix := range dddPrefixes {
 					if strings.HasPrefix(c.Path, prefix) {
 						useDDD = true
@@ -198,7 +218,11 @@ func TestContracts(t *testing.T) {
 				if rec.Code != c.WantStatus {
 					t.Errorf("%s %s: got status %d, want %d", c.Method, c.Path, rec.Code, c.WantStatus)
 				}
-				if len(c.WantBody) > 0 && !jsonEquivalent(rec.Body.Bytes(), c.WantBody) {
+				if len(c.WantBodyRE) > 0 {
+					if !regexp.MustCompile(c.WantBodyRE).Match(rec.Body.Bytes()) {
+						t.Errorf("%s %s: body=%s does not match %s", c.Method, c.Path, rec.Body.String(), c.WantBodyRE)
+					}
+				} else if len(c.WantBody) > 0 && !jsonEquivalent(rec.Body.Bytes(), c.WantBody) {
 					t.Errorf("%s %s: body=%s want=%s", c.Method, c.Path, rec.Body.String(), c.WantBody)
 				}
 			}
@@ -408,6 +432,77 @@ type contractDashboardRepo struct{}
 
 func (contractDashboardRepo) Overview(context.Context, string) (platformdomain.DashboardOverview, error) {
 	return platformdomain.DashboardOverview{}, nil
+}
+
+type contractAgentRepo struct{}
+
+func (contractAgentRepo) Register(context.Context, *agentdomain.AgentConfig) error {
+	return nil
+}
+func (contractAgentRepo) Get(context.Context, string) (*agentdomain.AgentConfig, bool, error) {
+	return nil, false, nil
+}
+func (contractAgentRepo) GetSystemAssistant(context.Context) (*agentdomain.AgentConfig, bool, error) {
+	return nil, false, nil
+}
+func (contractAgentRepo) GetAll(context.Context) ([]*agentdomain.AgentConfig, error) {
+	return nil, nil
+}
+func (contractAgentRepo) Remove(context.Context, string) error { return nil }
+func (contractAgentRepo) Update(context.Context, *agentdomain.AgentConfig) error {
+	return nil
+}
+func (contractAgentRepo) UpdateSystemAssistantModel(
+	context.Context, string, string, bool, int, int,
+) (*agentdomain.AgentConfig, error) {
+	return nil, nil
+}
+func (contractAgentRepo) UpdateSystemAssistantBindings(
+	context.Context, []string, []string, []string,
+) (*agentdomain.AgentConfig, error) {
+	return nil, nil
+}
+
+// Operation gate stubs: self-modify always lands as a pending proposal, so
+// the recorded response is the deterministic 202 pending_approval shape.
+type contractOpPropRepo struct{}
+
+func (contractOpPropRepo) Insert(context.Context, agentdomain.OperationProposal) error { return nil }
+func (contractOpPropRepo) GetByID(context.Context, string, string) (*agentdomain.OperationProposal, error) {
+	return nil, agentdomain.ErrOperationProposalNotFound
+}
+func (contractOpPropRepo) ListPending(context.Context, string) ([]agentdomain.OperationProposal, error) {
+	return nil, nil
+}
+func (contractOpPropRepo) UpdateStatus(
+	context.Context, string, string, agentdomain.OpProposalStatus, string, string,
+) error {
+	return nil
+}
+func (contractOpPropRepo) HasPending(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+func (contractOpPropRepo) ConsumeApproved(context.Context, string, string, string) (bool, error) {
+	return false, nil
+}
+
+type contractOpUsageRepo struct{}
+
+func (contractOpUsageRepo) AddUsage(
+	context.Context, string, string, agentport.OperationType, time.Time, float64, int,
+) error {
+	return nil
+}
+func (contractOpUsageRepo) DailyUsage(
+	context.Context, string, string, agentport.OperationType, time.Time,
+) (agentport.DailyOperationUsage, error) {
+	return agentport.DailyOperationUsage{}, nil
+}
+
+type contractTenantRole struct{}
+
+func (contractTenantRole) ResolveTenantRole(context.Context, string, string) (string, error) {
+	return "admin", nil
 }
 
 type contractProposalRepo struct{}

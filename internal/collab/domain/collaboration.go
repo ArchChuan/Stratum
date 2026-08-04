@@ -38,6 +38,7 @@ const (
 	TaskRunning   TaskStatus = "running"
 	TaskCompleted TaskStatus = "completed"
 	TaskFailed    TaskStatus = "failed"
+	TaskCanceled  TaskStatus = "canceled"
 )
 
 // Collaboration is the root aggregate for a multi-agent plan.
@@ -47,9 +48,55 @@ type Collaboration struct {
 	TaskDescription string         `json:"task_description"`
 	Strategy        CollabStrategy `json:"strategy"`
 	Status          CollabStatus   `json:"status"`
+	CreatedBy       string         `json:"created_by"`
+	Participants    []string       `json:"participants"`
 	CreatedAt       time.Time      `json:"created_at"`
 	StartedAt       *time.Time     `json:"started_at,omitempty"`
 	CompletedAt     *time.Time     `json:"completed_at,omitempty"`
+}
+
+// Start transitions created → running and stamps StartedAt.
+func (c *Collaboration) Start(now time.Time) error {
+	if c.Status != CollabCreated {
+		return ErrCollabInvalidTransition
+	}
+	startedAt := now
+	c.Status = CollabRunning
+	c.StartedAt = &startedAt
+	return nil
+}
+
+// Complete transitions running → completed and stamps CompletedAt.
+func (c *Collaboration) Complete(now time.Time) error {
+	if c.Status != CollabRunning {
+		return ErrCollabInvalidTransition
+	}
+	completedAt := now
+	c.Status = CollabCompleted
+	c.CompletedAt = &completedAt
+	return nil
+}
+
+// Fail transitions running → failed and stamps CompletedAt.
+func (c *Collaboration) Fail(now time.Time) error {
+	if c.Status != CollabRunning {
+		return ErrCollabInvalidTransition
+	}
+	completedAt := now
+	c.Status = CollabFailed
+	c.CompletedAt = &completedAt
+	return nil
+}
+
+// Cancel transitions created | running → canceled and stamps CompletedAt.
+func (c *Collaboration) Cancel(now time.Time) error {
+	if c.Status != CollabCreated && c.Status != CollabRunning {
+		return ErrCollabInvalidTransition
+	}
+	completedAt := now
+	c.Status = CollabCanceled
+	c.CompletedAt = &completedAt
+	return nil
 }
 
 // TaskStep is a single agent task within a collaboration plan.
@@ -59,6 +106,7 @@ type TaskStep struct {
 	AgentID        string         `json:"agent_id"`
 	Dependencies   []string       `json:"dependencies"`
 	Status         TaskStatus     `json:"status"`
+	Generation     int64          `json:"generation"` // fenced by claim; stale writers rejected
 	Input          map[string]any `json:"input"`
 	Output         map[string]any `json:"output"`
 	Delegation     string         `json:"delegation"` // mirrors DelegationPolicy

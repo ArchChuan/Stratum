@@ -1,5 +1,7 @@
 package constants
 
+import "time"
+
 const (
 	DefaultAgentContextTokens                    = 8000
 	DefaultSystemAssistantModel                  = "glm-5.2"
@@ -80,6 +82,12 @@ const (
 	// MaxFingerprintPayloadBytes caps the serialised ExecutionFingerprint
 	// before it is truncated in span attributes (F1).
 	MaxFingerprintPayloadBytes = 4096
+
+	// OperationApprovalTTL bounds an approved operation proposal before its
+	// single-use replay expires. Lives here (not in the agent application
+	// package) because the tenant schema repository must parameterise the
+	// Approve UPDATE's expires_at interval without importing application.
+	OperationApprovalTTL = 24 * time.Hour
 )
 
 // DynamicRecentGroups returns the number of recent message groups to preserve

@@ -108,6 +108,7 @@ func Run(ctx context.Context, cfg *config.Config, c *wiring.Container, logger *z
 	registerChatCleanup(appHarness, c, logger)
 	registerGuestReaper(appHarness, c, logger)
 	registerWorkflowWorker(appHarness, c, logger)
+	registerCollabWorker(appHarness, c, logger)
 	registerAuditCleanup(appHarness, c, logger)
 	c.ReadinessCheck = withPostgresReadiness(appHarness.HealthCheck, func(ctx context.Context) error {
 		db := c.DB()
@@ -173,6 +174,20 @@ func registerWorkflowWorker(appHarness *harnesspkg.Harness, c *wiring.Container,
 	}
 	mustRegister(appHarness, harnesspkg.NewSimpleComponent("workflow-worker", logger,
 		harnesspkg.WithStartFunc(func(ctx context.Context) error { go c.Workflow.Worker.Run(ctx, 250*time.Millisecond); return nil }),
+		harnesspkg.WithStopFunc(func(context.Context) error { return nil }),
+		harnesspkg.WithHealthCheckFunc(func(context.Context) error { return nil }),
+	), logger)
+}
+
+func registerCollabWorker(appHarness *harnesspkg.Harness, c *wiring.Container, logger *zap.Logger) {
+	if c.Collab == nil || c.Collab.Worker == nil {
+		return
+	}
+	mustRegister(appHarness, harnesspkg.NewSimpleComponent("collab-worker", logger,
+		harnesspkg.WithStartFunc(func(ctx context.Context) error {
+			go c.Collab.Worker.Run(ctx, 250*time.Millisecond)
+			return nil
+		}),
 		harnesspkg.WithStopFunc(func(context.Context) error { return nil }),
 		harnesspkg.WithHealthCheckFunc(func(context.Context) error { return nil }),
 	), logger)

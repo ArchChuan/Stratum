@@ -25,4 +25,8 @@ var (
 	ErrProposalAlreadyClaimed             = errors.New("proposal already claimed")
 	ErrProposalApplyFailed                = errors.New("proposal apply failed")
 	ErrProposalUnknownOutcome             = errors.New("proposal outcome unknown")
+	ErrOperationProposalNotFound          = errors.New("operation proposal not found")
+	ErrOperationProposalResolved          = errors.New("operation proposal already resolved")
+	ErrOperationProposalPending           = errors.New("operation proposal already pending")
+	ErrOperationProposalExpired           = errors.New("operation proposal approval expired")
 )

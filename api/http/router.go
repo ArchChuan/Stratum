@@ -47,7 +47,9 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	registerEvaluations(r, c, requireActive)
 	registerAgents(r, c, requireActive)
 	registerResourceChangeProposals(r, c, requireActive)
+	registerOperationProposals(r, c, requireActive)
 	registerWorkflows(r, c, requireActive)
+	registerCollab(r, c, requireActive)
 	registerKnowledge(r, c, requireActive)
 	registerMCP(r, c, requireActive)
 	registerMemory(r, c, requireActive)
@@ -69,6 +71,28 @@ func registerDashboard(r *gin.Engine, c *wiring.Container) {
 	h := handler.NewDashboardHandler(c.Platform.DashboardService)
 	dashboard := r.Group("/dashboard", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	dashboard.GET("/overview", h.Overview)
+}
+
+func registerOperationProposals(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
+	if c.Agent == nil || c.Agent.OperationProposalSvc == nil || c.Agent.OperationGateService == nil {
+		return
+	}
+	h := handler.NewOperationProposalHandler(c.Agent.OperationProposalSvc, c.Agent.Service)
+	member := protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))
+	admin := protectedTenantMiddleware(c, middleware.RequireTenantRole("admin"))
+	routes := r.Group("/operation-proposals", admin...)
+	routes.Use(requireActive)
+	routes.GET("", h.List)
+	routes.GET("/:id", h.Get)
+	routes.POST("/:id/review", h.Review)
+	routes.POST("/:id/approve", h.Approve)
+	routes.POST("/:id/reject", h.Reject)
+	// The member-facing gated mutation channel sits on the agent resource;
+	// the operation gate always proposes for self-modify, so no budget or
+	// delegation fields are accepted here.
+	agents := r.Group("/agents/:id/self-modify", member...)
+	agents.Use(requireActive)
+	agents.POST("", h.SelfModify)
 }
 
 func registerResourceChangeProposals(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
@@ -366,6 +390,23 @@ func newRateLimiterStore(c *wiring.Container, limit rate.Limit, burst int) *midd
 		return middleware.NewRedisRateLimiterStore(c.Storage.Redis.Client(), limit, burst)
 	}
 	return middleware.NewRateLimiterStore(limit, burst)
+}
+
+// registerCollab wires /collaborations/* for all members. Start/cancel
+// authorization (creator vs admin/owner) is enforced by the service.
+func registerCollab(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
+	if c.Collab == nil || c.Collab.Service == nil {
+		return
+	}
+	h := handler.NewCollaborationHandler(c.Collab.Service)
+	member := protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))
+	routes := r.Group("/collaborations", member...)
+	routes.Use(requireActive)
+	routes.GET("", h.List)
+	routes.POST("", h.Create)
+	routes.GET("/:id", h.Get)
+	routes.POST("/:id/start", h.Start)
+	routes.POST("/:id/cancel", h.Cancel)
 }
 
 // registerKnowledge wires /knowledge/* under JWT + tenant context with

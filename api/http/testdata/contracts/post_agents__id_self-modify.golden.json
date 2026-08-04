@@ -1,0 +1,22 @@
+[
+  {
+    "name": "authenticated-pending",
+    "method": "POST",
+    "path": "/agents/contract-id/self-modify",
+    "body": {
+      "name": "contract-renamed",
+      "description": "contract",
+      "systemPrompt": "prompt",
+      "llmModel": "qwen-plus",
+      "maxIterations": 10,
+      "maxContextTokens": 8000,
+      "allowedSkills": [],
+      "mcpToolIds": [],
+      "knowledgeWorkspaceIds": [],
+      "memoryScope": "user",
+      "checkpointEnabled": false
+    },
+    "want_status": 202,
+    "want_body_regex": "\\{\"proposalId\":\"[0-9a-f-]+\",\"reason\":\"pending_approval\",\"status\":\"pending_approval\"\\}"
+  }
+]

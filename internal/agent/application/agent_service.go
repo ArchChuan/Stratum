@@ -68,6 +68,7 @@ type AgentServiceDeps struct {
 	OfficialDocsSearch        func(context.Context, string) ([]domain.Citation, error)
 	DiagnosticProvider        port.DiagnosticEvidenceProvider
 	ProposalService           *ResourceChangeProposalService
+	OperationGate             port.OperationGate
 	Logger                    *zap.Logger
 }
 
@@ -92,6 +93,12 @@ func (s *AgentService) SetSkillRevisionResolver(resolver port.SkillRevisionResol
 
 func (s *AgentService) SetResourceChangeProposalService(service *ResourceChangeProposalService) {
 	s.deps.ProposalService = service
+}
+
+// SetOperationGate injects the operation approval gate. Without a gate the
+// gated self-modify entry point fails closed.
+func (s *AgentService) SetOperationGate(gate port.OperationGate) {
+	s.deps.OperationGate = gate
 }
 
 func (s *AgentService) SetAgentRevisionResolver(resolver port.AgentRevisionResolver) {

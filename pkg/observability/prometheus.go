@@ -403,8 +403,8 @@ func (m *PrometheusMetrics) registerF3Metrics(factory promauto.Factory, latencyB
 		prometheus.GaugeOpts{Name: "audit_write_queue_depth", Help: "Current audit write buffer queue depth"},
 	)
 	m.collabPlanTotal = factory.NewCounterVec(
-		prometheus.CounterOpts{Name: "collab_plan_total", Help: "Collaboration plans created by strategy"},
-		[]string{"strategy"},
+		prometheus.CounterOpts{Name: "collab_plan_total", Help: "Collaboration plans by strategy and outcome"},
+		[]string{"strategy", "outcome"},
 	)
 	m.collabTaskDuration = factory.NewHistogramVec(
 		prometheus.HistogramOpts{Name: "collab_task_duration_seconds", Help: "Collaboration task execution duration", Buckets: latencyBuckets},
@@ -776,8 +776,8 @@ func (m *PrometheusMetrics) RecordAuditWriteQueueDepth(depth int) {
 
 // --- Collab (F3) ---
 
-func (m *PrometheusMetrics) IncCollabPlan(strategy string) {
-	m.collabPlanTotal.WithLabelValues(strategy).Inc()
+func (m *PrometheusMetrics) IncCollabPlan(strategy, outcome string) {
+	m.collabPlanTotal.WithLabelValues(strategy, outcome).Inc()
 }
 
 func (m *PrometheusMetrics) RecordCollabTaskDuration(strategy string, seconds float64) {

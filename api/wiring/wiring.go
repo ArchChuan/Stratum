@@ -43,6 +43,7 @@ type Container struct {
 	Agent                *Agent
 	PlatformMCP          *PlatformMCP
 	Workflow             *Workflow
+	Collab               *Collab
 	Audit                *Audit
 	Prompt               *Prompt
 	ReadinessCheck       func(context.Context) map[string]error
@@ -83,6 +84,7 @@ func BuildContainer(ctx context.Context, cfg *config.Config, logger *zap.Logger)
 		{"agent", c.buildAgent},
 		{"platform-mcp", c.buildPlatformMCP},
 		{"workflow", c.buildWorkflow},
+		{"collab", c.buildCollab},
 		{"evaluation", c.buildEvaluation},
 	}
 

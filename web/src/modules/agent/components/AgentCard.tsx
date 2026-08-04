@@ -3,6 +3,7 @@ import {
   EditOutlined,
   PlayCircleOutlined,
   RobotOutlined,
+  SettingOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { Button, Card, Popconfirm, Space, Tag, Tooltip, Typography } from 'antd';
@@ -27,6 +28,8 @@ interface AgentCardProps {
   onExecute: (a: Agent) => void;
   onEdit: (a: Agent) => void;
   onDelete: (id: string, name: string) => void;
+  /** 成员发起自修改（需审批）；管理员走编辑快速路径，不显示该入口。 */
+  onSelfModify?: (a: Agent) => void;
   /** 仅管理员可见编辑/删除，普通成员只能执行。 */
   canManage?: boolean;
 }
@@ -36,6 +39,7 @@ export const AgentCard = ({
   onExecute,
   onEdit,
   onDelete,
+  onSelfModify,
   canManage = false,
 }: AgentCardProps) => (
   <Card
@@ -124,6 +128,19 @@ export const AgentCard = ({
             style={{ color: '#1677ff' }}
           />
         </Tooltip>
+        {!canManage && onSelfModify && (
+          <Tooltip title="发起自修改（需审批）">
+            <Button
+              aria-label="发起自修改"
+              className="responsive-touch-target"
+              type="text"
+              size="small"
+              icon={<SettingOutlined />}
+              onClick={() => onSelfModify(agent)}
+              style={{ color: '#722ed1' }}
+            />
+          </Tooltip>
+        )}
         {canManage && (
           <>
             <Tooltip title="编辑">

@@ -1,4 +1,18 @@
 // Package a2a provides agent-to-agent communication and orchestration.
+//
+// SECURITY NOTICE — in-memory orchestration only:
+//   - No tenant isolation: this package has no notion of tenants and must not
+//     be exposed beyond the owning agent process (it is not registered on any
+//     HTTP route and is not reachable from the public API).
+//   - No identity verification: peers are in-process objects; messages carry
+//     no actor binding and must not be trusted as cross-agent credentials.
+//   - Replaced for tenant-scoped delegation: production multi-agent work must
+//     go through the collab bounded context (internal/collab), whose
+//     AgentRunner executes steps via AgentService.Execute with a plan-derived
+//     identity ("collab:"+planID) and is gated by the OperationGate proposal
+//     approval flow. New code must not extend this package's reach.
+//
+// Behavior of the package is intentionally unchanged.
 package a2a
 
 import (

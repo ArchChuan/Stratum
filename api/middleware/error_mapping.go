@@ -7,6 +7,7 @@ import (
 
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
+	collabdomain "github.com/byteBuilderX/stratum/internal/collab/domain"
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
@@ -130,6 +131,15 @@ var errorStatusTable = map[error]int{
 	knowledgedomain.ErrIngestQueueFull:            http.StatusTooManyRequests,
 	iamapp.ErrForbiddenAdminOrOwner:               http.StatusForbidden,
 	agentdomain.ErrProposalForbidden:              http.StatusForbidden,
+	agentdomain.ErrOperationProposalNotFound:      http.StatusNotFound,
+	agentdomain.ErrOperationProposalResolved:      http.StatusConflict,
+	agentdomain.ErrOperationProposalPending:       http.StatusConflict,
+	agentdomain.ErrOperationProposalExpired:       http.StatusConflict,
+	collabdomain.ErrCollabForbidden:               http.StatusForbidden,
+	collabdomain.ErrCollabNotFound:                http.StatusNotFound,
+	collabdomain.ErrCollabInvalidTransition:       http.StatusConflict,
+	collabdomain.ErrCollabInvalidInput:            http.StatusBadRequest,
+	collabdomain.ErrCollabConflict:                http.StatusConflict,
 	iamapp.ErrForbiddenOwner:                      http.StatusForbidden,
 	iamapp.ErrForbiddenSelfModify:                 http.StatusForbidden,
 	iamapp.ErrForbiddenOwnerRole:                  http.StatusForbidden,

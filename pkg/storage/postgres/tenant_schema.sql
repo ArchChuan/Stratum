@@ -116,6 +116,89 @@ CREATE TABLE IF NOT EXISTS resource_change_proposal_events (
 CREATE INDEX IF NOT EXISTS idx_resource_change_proposal_events_order
     ON resource_change_proposal_events(proposal_id, created_at, id);
 
+-- Operation-gate proposals gate member-initiated agent mutations (T8).
+-- fingerprint is the server-computed sha256(agentID|opType|canonicalJSON(payload));
+-- payload_summary is a de-sensitized typed diff shown to reviewers.
+-- Only one open proposal may exist per fingerprint (partial unique index).
+CREATE TABLE IF NOT EXISTS operation_proposals (
+    id                   TEXT PRIMARY KEY,
+    agent_id             TEXT NOT NULL,
+    target_agent_id      TEXT NOT NULL DEFAULT '',
+    op_type              TEXT NOT NULL CHECK (op_type IN ('revision_apply','cross_agent_delegate','schedule_create','self_modify')),
+    delegation           TEXT NOT NULL DEFAULT 'no_delegate' CHECK (delegation IN ('no_delegate','read_only','full')),
+    max_daily_cost_usd   NUMERIC(14,4) NOT NULL DEFAULT 0,
+    max_daily_executions INT  NOT NULL DEFAULT 0,
+    fingerprint          TEXT NOT NULL CHECK (fingerprint <> ''),
+    payload_summary      JSONB NOT NULL DEFAULT '{}',
+    status               TEXT NOT NULL CHECK (status IN ('proposed','reviewing','approved','rejected','executed')),
+    proposer_id          TEXT NOT NULL DEFAULT '',
+    reviewed_by          TEXT NOT NULL DEFAULT '',
+    review_note          TEXT NOT NULL DEFAULT '',
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    resolved_at          TIMESTAMPTZ,
+    expires_at           TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_operation_proposals_pending ON operation_proposals(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_operation_proposals_agent    ON operation_proposals(agent_id, op_type);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_operation_proposals_open_fingerprint
+    ON operation_proposals(fingerprint) WHERE status IN ('proposed','reviewing','approved');
+
+CREATE TABLE IF NOT EXISTS operation_usage (
+    agent_id   TEXT NOT NULL,
+    op_type    TEXT NOT NULL,
+    usage_date DATE NOT NULL,
+    cost_usd   NUMERIC(14,4) NOT NULL DEFAULT 0,
+    executions INT  NOT NULL DEFAULT 0,
+    PRIMARY KEY (agent_id, op_type, usage_date)
+);
+
+-- Collab (T6): multi-agent collaboration plans and task steps.
+-- task_steps.generation is a claim fence: every claim bumps it and finalize
+-- writes carry the generation they saw, so a stale worker cannot overwrite a
+-- step re-claimed by another worker (mirrors workflow_runs.generation).
+-- The canceled status lets plan cancellation release pending steps without
+-- deleting rows; the worker refuses to claim canceled steps.
+CREATE TABLE IF NOT EXISTS collaborations (
+    id               TEXT PRIMARY KEY,
+    task_description TEXT NOT NULL,
+    strategy         TEXT NOT NULL CHECK (strategy IN ('sequential','parallel','swarm','pipeline','hierarchical')),
+    status           TEXT NOT NULL CHECK (status IN ('created','running','completed','failed','canceled')),
+    created_by       TEXT NOT NULL,
+    participants     JSONB NOT NULL DEFAULT '[]',
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    started_at       TIMESTAMPTZ,
+    completed_at     TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_collaborations_status ON collaborations(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS task_steps (
+    id               TEXT PRIMARY KEY,
+    plan_id          TEXT NOT NULL REFERENCES collaborations(id),
+    agent_id         TEXT NOT NULL,
+    dependencies     JSONB NOT NULL DEFAULT '[]',
+    status           TEXT NOT NULL CHECK (status IN ('pending','claimed','running','completed','failed','canceled')),
+    input            JSONB NOT NULL DEFAULT '{}',
+    output           JSONB NOT NULL DEFAULT '{}',
+    delegation       TEXT NOT NULL DEFAULT 'no_delegate',
+    claimed_by       TEXT NOT NULL DEFAULT '',
+    lease_expires_at TIMESTAMPTZ,
+    retry_count      INT NOT NULL DEFAULT 0,
+    max_retries      INT NOT NULL DEFAULT 3,
+    generation       INT NOT NULL DEFAULT 0,
+    error            TEXT NOT NULL DEFAULT '',
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_task_steps_plan_status ON task_steps(plan_id, status);
+CREATE INDEX IF NOT EXISTS idx_task_steps_claimable   ON task_steps(status, lease_expires_at);
+
+CREATE TABLE IF NOT EXISTS shared_contexts (
+    plan_id TEXT PRIMARY KEY REFERENCES collaborations(id),
+    data    JSONB NOT NULL DEFAULT '{}',
+    version INT NOT NULL DEFAULT 0
+);
+
 DO $$
 BEGIN
     IF NOT EXISTS (

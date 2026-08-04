@@ -37,12 +37,32 @@ type OperationRequest struct {
 	OpType        OperationType
 	Delegation    DelegationPolicy
 	Budget        OperationBudget
-	Fingerprint   string // F1 content hash for attribution
+	Fingerprint   string // server-computed content hash (sha256(agentID|opType|canonicalJSON(payload)))
+	ProposerID    string // actor requesting the operation; binds approved replays to the proposer
 }
 
-// OperationGate is the central security gate for agent mutations.
-// Phase 2 implementations enforce delegation policies, budget caps,
-// and approval workflows.
+// OperationGate is the central security gate for agent mutations. It
+// enforces delegation policies, budget caps, and human approval workflows.
+// Fingerprints are always computed server-side; clients never supply them.
 type OperationGate interface {
+	// Check is the thin port entry for callers that pre-computed the
+	// fingerprint and have no reviewable payload (replay-only flows).
 	Check(ctx context.Context, req OperationRequest) (allowed bool, reason string)
+	// CheckWithProposal runs the full decision table, persisting a proposal
+	// (with de-sensitised payload summary) when human approval is required.
+	CheckWithProposal(ctx context.Context, req OperationRequest, payload any) (GateDecision, error)
+	// ComputeFingerprint derives sha256(agentID | opType | canonicalJSON(payload)).
+	ComputeFingerprint(agentID string, opType OperationType, payload any) (string, error)
+	// RecordUsage adds the daily usage counters after a gated operation ran.
+	// Failure is surfaced, not swallowed; the caller decides how to handle it.
+	RecordUsage(ctx context.Context, tenantID, agentID string, opType OperationType, costUSD float64) error
+}
+
+// GateDecision is the outcome of a gate check. Reason is one of the
+// GateReason* contract strings; ProposalID is set when a proposal was created
+// and the operation must wait for review.
+type GateDecision struct {
+	Allowed    bool
+	Reason     string
+	ProposalID string
 }

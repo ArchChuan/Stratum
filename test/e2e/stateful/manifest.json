@@ -2006,6 +2006,182 @@
       "http_evidence": "The browser observes the expected successful response for DELETE /admin/providers/:id",
       "db_evidence": "Persisted state is reconciled after DELETE /admin/providers/:id",
       "coverage": "short"
+    },
+    {
+      "id": "operation-gate.route.operation.proposals",
+      "domain": "agent",
+      "user_goal": "Open /operation-proposals and review pending operation proposals",
+      "route": "/operation-proposals",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /operation-proposals",
+      "browser_action_id": "operation-gate.route.operation.proposals",
+      "http_evidence": "The route and required read requests complete successfully for /operation-proposals",
+      "db_evidence": "Pending operation proposal rows agree with the rendered approval list",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.mutation.post.agents.id.self.modify",
+      "domain": "agent",
+      "user_goal": "Complete POST /agents/:id/self-modify with a proposal approval gate",
+      "route": "/agents",
+      "roles": {
+        "allowed": [
+          "member",
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /agents/:id/self-modify",
+      "browser_action_id": "agent.mutation.post.agents.id.self.modify",
+      "http_evidence": "The browser observes the pending_approval 202 or the approved replay 200 response for POST /agents/:id/self-modify",
+      "db_evidence": "An operation_proposals row is created or the proposal is consumed as executed",
+      "coverage": "short"
+    },
+    {
+      "id": "operation-gate.mutation.post.operation.proposals.id.review",
+      "domain": "agent",
+      "user_goal": "Start review of an operation proposal",
+      "route": "/operation-proposals",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /operation-proposals/:id/review",
+      "browser_action_id": "operation-gate.mutation.post.operation.proposals.id.review",
+      "http_evidence": "The browser observes the expected successful response for POST /operation-proposals/:id/review",
+      "db_evidence": "The proposal status transitions from proposed to reviewing",
+      "coverage": "short"
+    },
+    {
+      "id": "operation-gate.mutation.post.operation.proposals.id.approve",
+      "domain": "agent",
+      "user_goal": "Approve an operation proposal",
+      "route": "/operation-proposals",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /operation-proposals/:id/approve",
+      "browser_action_id": "operation-gate.mutation.post.operation.proposals.id.approve",
+      "http_evidence": "The browser observes the expected successful response for POST /operation-proposals/:id/approve",
+      "db_evidence": "The proposal status transitions to approved with an expires_at TTL",
+      "coverage": "short"
+    },
+    {
+      "id": "operation-gate.mutation.post.operation.proposals.id.reject",
+      "domain": "agent",
+      "user_goal": "Reject an operation proposal with a review note",
+      "route": "/operation-proposals",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /operation-proposals/:id/reject",
+      "browser_action_id": "operation-gate.mutation.post.operation.proposals.id.reject",
+      "http_evidence": "The browser observes the expected successful response for POST /operation-proposals/:id/reject",
+      "db_evidence": "The proposal status transitions to rejected with the review note persisted",
+      "coverage": "short"
+    },
+    {
+      "id": "collab.route.collaborations",
+      "domain": "collab",
+      "user_goal": "Open /collaborations and manage multi-agent collaboration plans",
+      "route": "/collaborations",
+      "roles": {
+        "allowed": [
+          "member",
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /collaborations",
+      "browser_action_id": "collab.route.collaborations",
+      "http_evidence": "The route and required read requests complete successfully for /collaborations",
+      "db_evidence": "Collaboration rows agree with the rendered collaboration list",
+      "coverage": "short"
+    },
+    {
+      "id": "collab.mutation.post.collaborations",
+      "domain": "collab",
+      "user_goal": "Create a multi-agent collaboration plan",
+      "route": "/collaborations",
+      "roles": {
+        "allowed": [
+          "member",
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /collaborations",
+      "browser_action_id": "collab.mutation.post.collaborations",
+      "http_evidence": "The browser observes the expected successful response for POST /collaborations",
+      "db_evidence": "A collaboration row with participants is persisted in the tenant schema",
+      "coverage": "short"
+    },
+    {
+      "id": "collab.mutation.post.collaborations.id.start",
+      "domain": "collab",
+      "user_goal": "Start a collaboration plan and generate task steps",
+      "route": "/collaborations",
+      "roles": {
+        "allowed": [
+          "member",
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /collaborations/:id/start",
+      "browser_action_id": "collab.mutation.post.collaborations.id.start",
+      "http_evidence": "The browser observes the expected successful response for POST /collaborations/:id/start",
+      "db_evidence": "The collaboration transitions to running and task step rows are inserted",
+      "coverage": "short"
+    },
+    {
+      "id": "collab.mutation.post.collaborations.id.cancel",
+      "domain": "collab",
+      "user_goal": "Cancel a collaboration plan and release pending steps",
+      "route": "/collaborations",
+      "roles": {
+        "allowed": [
+          "member",
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /collaborations/:id/cancel",
+      "browser_action_id": "collab.mutation.post.collaborations.id.cancel",
+      "http_evidence": "The browser observes the expected successful response for POST /collaborations/:id/cancel",
+      "db_evidence": "The collaboration transitions to canceled and pending steps are marked canceled",
+      "coverage": "short"
     }
   ]
 }
