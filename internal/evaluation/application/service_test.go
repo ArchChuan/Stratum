@@ -2,9 +2,11 @@ package application
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
+	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 )
 
 func TestServiceRunEvaluatesEnabledCasesAndPersistsResults(t *testing.T) {
@@ -13,7 +15,7 @@ func TestServiceRunEvaluatesEnabledCasesAndPersistsResults(t *testing.T) {
 		"case-2": map[string]any{"label": "refund"},
 	}}
 	repo := &fakeRunRepo{}
-	svc := NewService(adapter, repo)
+	svc := NewService(adapter, repo, nil)
 
 	run, err := svc.Run(context.Background(), RunInput{
 		TenantID: "tenant-1",
@@ -47,7 +49,7 @@ func TestServiceRunEvaluatesEnabledCasesAndPersistsResults(t *testing.T) {
 func TestServiceRunPersistsExecutionErrorsAsFailedCases(t *testing.T) {
 	adapter := &fakeAdapter{errCase: "case-1"}
 	repo := &fakeRunRepo{}
-	svc := NewService(adapter, repo)
+	svc := NewService(adapter, repo, nil)
 
 	run, err := svc.Run(context.Background(), RunInput{
 		TenantID: "tenant-1",
@@ -75,7 +77,7 @@ func TestServiceRunStoredLoadsPublishedSuiteRevision(t *testing.T) {
 		ResourceKind: domain.ResourceKindSkill,
 		Cases:        []domain.EvalCase{{ID: "case-1", Input: "快递没更新", ExpectedOutput: "物流", AssertionMode: domain.AssertionContains, Enabled: true}},
 	}}
-	svc := NewService(adapter, runRepo, suiteRepo)
+	svc := NewService(adapter, runRepo, nil, suiteRepo)
 
 	run, err := svc.RunStored(context.Background(), "tenant-1", "user-1", domain.ResourceRef{
 		Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2",
@@ -90,7 +92,7 @@ func TestServiceRunStoredLoadsPublishedSuiteRevision(t *testing.T) {
 
 func TestServiceGetRunReturnsPersistedRun(t *testing.T) {
 	repo := &fakeRunRepo{saved: domain.EvalRun{ID: "run-1", Passed: true}}
-	svc := NewService(&fakeAdapter{}, repo)
+	svc := NewService(&fakeAdapter{}, repo, nil)
 
 	run, err := svc.GetRun(context.Background(), "tenant-1", "run-1")
 	if err != nil {
@@ -145,3 +147,92 @@ type fakeError string
 func (e fakeError) Error() string { return string(e) }
 
 const errFakeExecution = fakeError("execution failed")
+
+// ——— Trace evidence tests ———
+
+func TestServiceRunCaseResolvesTraceEvidence(t *testing.T) {
+	adapter := &fakeAdapter{outputs: map[string]any{"case-1": "ok"}}
+	repo := &fakeRunRepo{}
+	traceReader := &fakeTraceEvidenceReader{
+		traces: map[string]port.ObservedTrace{
+			"trace-case-1": {
+				TraceID: "trace-case-1", CostUSD: 0.05, LatencyMs: 350,
+				Success: true, SecurityViolation: false,
+			},
+		},
+	}
+	svc := NewService(adapter, repo, traceReader)
+
+	run, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
+		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+			{ID: "case-1", Input: "x", ExpectedOutput: "ok", AssertionMode: domain.AssertionExact, Enabled: true},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	ev := run.Results[0].TraceEvidence
+	if ev == nil {
+		t.Fatal("expected trace evidence, got nil")
+	}
+	if ev.CostUSD != 0.05 || ev.LatencyMs != 350 || !ev.Success {
+		t.Fatalf("unexpected trace evidence: %+v", ev)
+	}
+}
+
+func TestServiceRunCaseGracefullyHandlesTraceReaderError(t *testing.T) {
+	adapter := &fakeAdapter{outputs: map[string]any{"case-1": "ok"}}
+	repo := &fakeRunRepo{}
+	traceReader := &fakeFailingTraceEvidenceReader{}
+	svc := NewService(adapter, repo, traceReader)
+
+	run, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
+		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+			{ID: "case-1", Input: "x", ExpectedOutput: "ok", AssertionMode: domain.AssertionExact, Enabled: true},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	// Opik unavailable must not block evaluation.
+	if !run.Passed {
+		t.Fatal("expected run to pass despite trace evidence error")
+	}
+	if run.Results[0].TraceEvidence != nil {
+		t.Fatal("expected nil trace evidence on resolve error")
+	}
+}
+
+func TestServiceRunCaseSkipsTraceEvidenceWhenReaderNil(t *testing.T) {
+	adapter := &fakeAdapter{outputs: map[string]any{"case-1": "ok"}}
+	repo := &fakeRunRepo{}
+	svc := NewService(adapter, repo, nil) // no trace reader configured
+
+	run, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
+		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+			{ID: "case-1", Input: "x", ExpectedOutput: "ok", AssertionMode: domain.AssertionExact, Enabled: true},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if run.Results[0].TraceEvidence != nil {
+		t.Fatal("expected nil trace evidence when reader is not configured")
+	}
+}
+
+type fakeFailingTraceEvidenceReader struct{}
+
+func (f *fakeFailingTraceEvidenceReader) Resolve(_ context.Context, _, _ string) (port.ObservedTrace, error) {
+	return port.ObservedTrace{}, errors.New("opik unavailable")
+}
+
+func (f *fakeFailingTraceEvidenceReader) ResolveBatch(_ context.Context, _ string, _ []string) (map[string]port.ObservedTrace, error) {
+	return nil, errors.New("opik unavailable")
+}

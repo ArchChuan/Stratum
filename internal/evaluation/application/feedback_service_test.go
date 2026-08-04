@@ -425,3 +425,15 @@ func (f *feedbackExperimentRepo) ApplyCommand(
 func (f *feedbackExperimentRepo) ResolveDeployment(context.Context, string, string, string) (domain.Deployment, bool, error) {
 	return domain.Deployment{}, false, nil
 }
+
+func (f *feedbackExperimentRepo) HasRunningExperiment(_ context.Context, _ string, _, _ string) (bool, error) {
+	return false, nil
+}
+
+func (f *feedbackExperimentRepo) ListPendingExperiments(_ context.Context, _ string, _, _ string) ([]domain.Experiment, error) {
+	return nil, nil
+}
+
+func (f *feedbackExperimentRepo) ListRunningExperiments(_ context.Context, _ string) ([]domain.Experiment, error) {
+	return nil, nil
+}

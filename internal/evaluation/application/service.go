@@ -23,17 +23,23 @@ type RunInput struct {
 }
 
 type Service struct {
-	adapter port.ResourceAdapter
-	repo    port.RunRepository
-	suites  port.SuiteRepository
+	adapter     port.ResourceAdapter
+	repo        port.RunRepository
+	suites      port.SuiteRepository
+	traceReader port.TraceEvidenceReader
 }
 
-func NewService(adapter port.ResourceAdapter, repo port.RunRepository, suites ...port.SuiteRepository) *Service {
+func NewService(
+	adapter port.ResourceAdapter,
+	repo port.RunRepository,
+	traceReader port.TraceEvidenceReader,
+	suites ...port.SuiteRepository,
+) *Service {
 	var suiteRepo port.SuiteRepository
 	if len(suites) > 0 {
 		suiteRepo = suites[0]
 	}
-	return &Service{adapter: adapter, repo: repo, suites: suiteRepo}
+	return &Service{adapter: adapter, repo: repo, suites: suiteRepo, traceReader: traceReader}
 }
 
 func (s *Service) RunStored(
@@ -114,6 +120,19 @@ func (s *Service) runCase(
 	result.Tokens = execution.Tokens
 	result.CostUSD = execution.CostUSD
 	result.DurationMs = execution.DurationMs
+
+	// Resolve trace evidence from Opik (best-effort: Opik unavailability must
+	// not block Agent execution or evaluation).
+	if execution.TraceID != "" && s.traceReader != nil {
+		trace, resolveErr := s.traceReader.Resolve(ctx, tenantID, execution.TraceID)
+		if resolveErr != nil {
+			// warn-only: trace evidence is supplementary, not critical
+			result.Message = "trace evidence unavailable"
+		} else {
+			result.TraceEvidence = observedTraceToEvidence(trace)
+		}
+	}
+
 	assertion, err := domain.EvaluateAssertion(testCase.AssertionMode, execution.Output, testCase.ExpectedOutput)
 	if err != nil {
 		result.Error = err.Error()
@@ -122,4 +141,13 @@ func (s *Service) runCase(
 	result.Passed = assertion.Passed
 	result.Message = assertion.Message
 	return result
+}
+
+func observedTraceToEvidence(t port.ObservedTrace) *domain.ObservedTraceEvidence {
+	return &domain.ObservedTraceEvidence{
+		CostUSD:           t.CostUSD,
+		LatencyMs:         t.LatencyMs,
+		Success:           t.Success,
+		SecurityViolation: t.SecurityViolation,
+	}
 }
