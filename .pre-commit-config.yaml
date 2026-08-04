@@ -9,12 +9,12 @@ repos:
         args: [-l, -w]
         types: [go]
 
-      # Go vet
+      # Go vet（-p 负载感知限流：多 worktree 并发 commit 时防止全仓库 vet 吃满 CPU）
       - id: go-vet
         name: go vet
         language: system
         entry: bash
-        args: [-c, "go vet ./..."]
+        args: [-c, "go vet -p $(bash scripts/quality/go-parallelism.sh) ./..."]
         pass_filenames: false
         types: [go]
 
