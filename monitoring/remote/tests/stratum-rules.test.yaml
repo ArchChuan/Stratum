@@ -5,6 +5,7 @@ rule_files:
   - ../rules/stratum-capacity.yaml
   - ../rules/stratum-dependencies.yaml
   - ../rules/stratum-monitoring.yaml
+  - ../rules/stratum-ai.yaml
 
 evaluation_interval: 1m
 
@@ -952,3 +953,129 @@ tests:
       - eval_time: 28m
         alertname: StratumCriticalHTTPP95Latency
         exp_alerts: []
+
+  - name: workload rules detect slow repeated unhealthy exits
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="stratum",pod="slow-crash-pod",container="stratum"}'
+        values: '0x61 1x60 2x10'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="stratum",pod="slow-crash-pod",container="stratum",reason="Error"}'
+        values: '1x131'
+      - series: 'kube_pod_info{namespace="stratum",pod="slow-crash-pod",node="remote-node"}'
+        values: '1x131'
+      - series: 'kube_pod_owner{namespace="stratum",pod="slow-crash-pod",owner_kind="ReplicaSet",owner_name="slow-crash-rs"}'
+        values: '1x131'
+      - series: 'kube_replicaset_owner{namespace="stratum",replicaset="slow-crash-rs",owner_kind="Deployment",owner_name="stratum"}'
+        values: '1x131'
+    alert_rule_test:
+      - eval_time: 130m
+        alertname: StratumPodUnhealthyExit
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum
+              environment: remote-test
+              component: workload
+              alert_family: pod-health
+              namespace: stratum
+              deployment: stratum
+              node: remote-node
+              pod: slow-crash-pod
+              container: stratum
+            exp_annotations:
+              summary: Stratum container exits with non-zero status repeatedly
+              description: A container restarted at least twice in two hours with a non-zero exit reason (current value 2).
+              dashboard_url: /d/stratum-resources
+              runbook_url: /docs/operations/alerts/workloads.md#pod-unhealthy-exit
+
+  - name: workload rules do not alert on a single rollout restart
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="stratum",pod="rollout-pod",container="stratum"}'
+        values: '0x61 1x69'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="stratum",pod="rollout-pod",container="stratum",reason="Error"}'
+        values: '1x130'
+      - series: 'kube_pod_info{namespace="stratum",pod="rollout-pod",node="remote-node"}'
+        values: '1x130'
+      - series: 'kube_pod_owner{namespace="stratum",pod="rollout-pod",owner_kind="ReplicaSet",owner_name="rollout-rs"}'
+        values: '1x130'
+      - series: 'kube_replicaset_owner{namespace="stratum",replicaset="rollout-rs",owner_kind="Deployment",owner_name="stratum"}'
+        values: '1x130'
+    alert_rule_test:
+      - eval_time: 130m
+        alertname: StratumPodUnhealthyExit
+        exp_alerts: []
+
+  - name: reaper down fires when the last cycle is stale
+    interval: 1m
+    input_series:
+      - series: 'reaper_last_cycle_timestamp_seconds{instance="10.0.0.1:8080",pod="stratum-abc"}'
+        values: '100x180'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: StratumReaperDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum
+              environment: remote-test
+              component: reaper
+              instance: 10.0.0.1:8080
+              pod: stratum-abc
+            exp_annotations:
+              summary: Guest reaper has not run for over two hours
+              description: The guest reaper last cycle is more than 7200s ago (current value 10700).
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/alerts/business.md#reaper-down
+
+  - name: reaper down does not fire on a fresh cycle
+    interval: 1m
+    input_series:
+      - series: 'reaper_last_cycle_timestamp_seconds{instance="10.0.0.1:8080",pod="stratum-abc"}'
+        values: '3000x60'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: StratumReaperDown
+        exp_alerts: []
+
+  - name: goroutine panic alert fires
+    interval: 1m
+    input_series:
+      - series: 'goroutine_panics_total{component="memory-worker"}'
+        values: '0+1x7'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: StratumGoroutinePanic
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum
+              environment: remote-test
+              component: panic
+            exp_annotations:
+              summary: Recovered goroutine panic in the last ten minutes
+              description: Component memory-worker panicked in the last ten minutes (increase 6).
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/alerts/business.md#goroutine-panic
+
+  - name: workflow run error alert fires
+    interval: 1m
+    input_series:
+      - series: 'workflow_runs_total{tenant_id="tenant-1",status="error"}'
+        values: '0+1x7'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: StratumWorkflowRunErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum
+              environment: remote-test
+              component: workflow
+              status: error
+              tenant_id: tenant-1
+            exp_annotations:
+              summary: Workflow run error in the last ten minutes
+              description: Tenant tenant-1 had workflow run errors in the last ten minutes (increase 6).
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/alerts/business.md#workflow-run-errors

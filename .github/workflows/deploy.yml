@@ -564,6 +564,25 @@ jobs:
           kubectl rollout status deployment/opik-otel-collector -n stratum --timeout=5m
           kubectl get service stratum-otel-collector -n stratum
 
+      - name: Capture prior deployment digests
+        id: prior-digests
+        run: |
+          capture_prior() {
+            if kubectl get deployment "$1" -n "$2" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null; then
+              return 0
+            fi
+            printf 'none'
+          }
+          prior_backend="$(capture_prior stratum stratum)"
+          prior_frontend="$(capture_prior stratum-frontend stratum)"
+          prior_platform_mcp="$(capture_prior stratum-platform-mcp stratum)"
+          prior_feishu_adapter="$(capture_prior stratum-feishu-alert-adapter monitoring)"
+          jq -n --arg backend "${prior_backend:-none}" --arg frontend "${prior_frontend:-none}" \
+            --arg platform_mcp "${prior_platform_mcp:-none}" --arg feishu_adapter "${prior_feishu_adapter:-none}" \
+            '{backend:$backend,frontend:$frontend,platform_mcp:$platform_mcp,feishu_adapter:$feishu_adapter}' \
+            > /tmp/prior-digests.json
+          jq -e . /tmp/prior-digests.json >/dev/null
+
       - name: Helm deploy
         id: helm-deploy
         run: |
@@ -676,12 +695,21 @@ jobs:
           feishu_adapter=$(kubectl get deployment stratum-feishu-alert-adapter -n monitoring -o jsonpath='{.spec.template.spec.containers[0].image}')
           migration=passed
           health=passed
-          rollback=passed
+          rollback=pending
+          prior_digests="$(cat /tmp/prior-digests.json)"
+          prior_count="$(jq -r '[.backend,.frontend,.platform_mcp,.feishu_adapter] | map(select(. != "none")) | length' /tmp/prior-digests.json)"
+          if [[ "$prior_count" -gt 0 ]]; then
+            rollback_basis="prior_digests_preserved"
+          else
+            rollback_basis="first_deploy"
+          fi
           jq -n --arg commit "${{ needs.candidate.outputs.sha }}" --arg backend "$backend" --arg frontend "$frontend" \
             --arg platform_mcp "$platform_mcp" --arg feishu_adapter "$feishu_adapter" \
+            --argjson prior_digests "$prior_digests" --arg rollback_basis "$rollback_basis" \
             --arg migration "$migration" --arg health "$health" --arg rollback "$rollback" \
-            '{version:1,status:"deployed",commit:$commit,
+            '{version:2,status:"deployed",commit:$commit,
               images:{backend:$backend,frontend:$frontend,platform_mcp:$platform_mcp,feishu_adapter:$feishu_adapter},
+              prior_digests:$prior_digests,rollback_basis:$rollback_basis,
               migration_check:$migration,health_check:$health,rollback_check:$rollback}' \
             > tmp/deployment-evidence/deployment-receipt.json
           go run ./cmd/verification-schema \
