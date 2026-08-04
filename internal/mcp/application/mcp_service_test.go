@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/mcp/domain"
-	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 	"go.uber.org/zap"
 )
 
@@ -44,11 +43,6 @@ func (f *lifecycleManagerFake) Delete(_ context.Context, serverID string) error 
 func (f *lifecycleManagerFake) GetServerConfig(context.Context, string) (*domain.ServerConfig, error) {
 	return f.stored, nil
 }
-func (f *lifecycleManagerFake) HandleForwardedToolCall(
-	context.Context, string, string, string, map[string]any,
-) (domain.ForwardedCallResult, error) {
-	return domain.ForwardedCallResult{}, nil
-}
 
 func TestPlatformManagedServerMutationsAreRejectedBeforeLifecycleChange(t *testing.T) {
 	t.Parallel()
@@ -58,23 +52,23 @@ func TestPlatformManagedServerMutationsAreRejectedBeforeLifecycleChange(t *testi
 		act  func(*MCPService) error
 	}{
 		{name: "connect overwrite", act: func(s *MCPService) error {
-			return s.ConnectServer(t.Context(), &domain.ServerConfig{ID: platformmcp.SystemServerID})
+			return s.ConnectServer(t.Context(), &domain.ServerConfig{ID: "stratum-platform-mcp"})
 		}},
 		{name: "update", act: func(s *MCPService) error {
-			return s.UpdateServer(t.Context(), &domain.ServerConfig{ID: platformmcp.SystemServerID})
+			return s.UpdateServer(t.Context(), &domain.ServerConfig{ID: "stratum-platform-mcp"})
 		}},
 		{name: "delete", act: func(s *MCPService) error {
-			return s.DeleteServer(t.Context(), platformmcp.SystemServerID)
+			return s.DeleteServer(t.Context(), "stratum-platform-mcp")
 		}},
 		{name: "disconnect", act: func(s *MCPService) error {
-			return s.DisconnectServer(t.Context(), platformmcp.SystemServerID)
+			return s.DisconnectServer(t.Context(), "stratum-platform-mcp")
 		}},
 		// Reconnect is intentionally allowed for platform-managed servers;
 		// it restores connectivity after idle eviction without modifying config.
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			manager := &lifecycleManagerFake{stored: &domain.ServerConfig{
-				ID: platformmcp.SystemServerID, ManagementMode: platformmcp.ManagementPlatform,
+				ID: "stratum-platform-mcp", ManagementMode: "platform_managed",
 			}}
 			service := NewMCPService(&lifecycleRegistryFake{}, manager, zap.NewNop())
 
@@ -92,11 +86,11 @@ func TestPlatformManagedServerMutationsAreRejectedBeforeLifecycleChange(t *testi
 
 func TestPlatformManagedServerSystemKeyFailsClosedWithoutManagementMode(t *testing.T) {
 	manager := &lifecycleManagerFake{stored: &domain.ServerConfig{
-		ID: platformmcp.SystemServerID, SystemKey: platformmcp.SystemServerKey,
+		ID: "stratum-platform-mcp", SystemKey: "stratum.platform_mcp",
 	}}
 	service := NewMCPService(&lifecycleRegistryFake{}, manager, zap.NewNop())
 
-	err := service.DeleteServer(t.Context(), platformmcp.SystemServerID)
+	err := service.DeleteServer(t.Context(), "stratum-platform-mcp")
 
 	if !errors.Is(err, domain.ErrPlatformManagedServer) {
 		t.Fatalf("error = %v, want ErrPlatformManagedServer", err)

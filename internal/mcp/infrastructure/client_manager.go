@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -26,19 +25,17 @@ const revisionClientCleanupTimeout = 5 * time.Second
 
 // ClientManager 管理多个 MCP 客户端
 type ClientManager struct {
-	clients     map[string]MCPClient
-	configs     map[string]*MCPServerConfig
-	connecting  map[string]struct{}
-	cache       *CapabilityCache
-	mu          sync.RWMutex
-	logger      *zap.Logger
-	poolConfig  *ConnectionPoolConfig
-	stopCh      chan struct{}
-	stopOnce    sync.Once
-	wg          sync.WaitGroup
-	pool        *pgxpool.Pool
-	credentials InvocationCredentialProvider
-	transport   ManagedHTTPTransportProvider
+	clients    map[string]MCPClient
+	configs    map[string]*MCPServerConfig
+	connecting map[string]struct{}
+	cache      *CapabilityCache
+	mu         sync.RWMutex
+	logger     *zap.Logger
+	poolConfig *ConnectionPoolConfig
+	stopCh     chan struct{}
+	stopOnce   sync.Once
+	wg         sync.WaitGroup
+	pool       *pgxpool.Pool
 
 	// serverCtx is the lifecycle context for spawned child processes.
 	// Cancelled only when the server shuts down, not on HTTP request end.
@@ -48,10 +45,6 @@ type ClientManager struct {
 	// nodeID identifies this instance in a multi-pod deployment. Only
 	// stdio servers owned by this node are restored/spawned locally.
 	nodeID string
-
-	// fwdTransport is the mTLS HTTP transport used for internal node-to-node
-	// forwarding. Injected by wiring when the internal API is configured.
-	fwdTransport *http.Transport
 
 	clientFactory func(*MCPServerConfig, *zap.Logger) MCPClient
 
@@ -89,10 +82,7 @@ func NewClientManager(
 	//nolint:gosec // serverCancel is called in Stop()
 	manager.serverCtx, manager.serverCancel = context.WithCancel(context.Background())
 	manager.clientFactory = func(cfg *MCPServerConfig, logger *zap.Logger) MCPClient {
-		client := NewBaseClient(cfg, logger)
-		client.SetInvocationCredentialProvider(manager.invocationCredentialProvider())
-		client.SetManagedHTTPTransportProvider(manager.managedHTTPTransportProvider())
-		return client
+		return NewBaseClient(cfg, logger)
 	}
 	return manager
 }
@@ -103,46 +93,6 @@ func (m *ClientManager) SetMetrics(metrics observability.MetricsProvider) {
 		metrics = observability.NoopMetrics{}
 	}
 	m.metrics = metrics
-}
-
-func (m *ClientManager) SetManagedHTTPTransportProvider(provider ManagedHTTPTransportProvider) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.transport = provider
-	for _, client := range m.clients {
-		configurable, ok := client.(interface {
-			SetManagedHTTPTransportProvider(ManagedHTTPTransportProvider)
-		})
-		if ok {
-			configurable.SetManagedHTTPTransportProvider(provider)
-		}
-	}
-}
-
-func (m *ClientManager) SetInvocationCredentialProvider(provider InvocationCredentialProvider) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.credentials = provider
-	for _, client := range m.clients {
-		configurable, ok := client.(interface {
-			SetInvocationCredentialProvider(InvocationCredentialProvider)
-		})
-		if ok {
-			configurable.SetInvocationCredentialProvider(provider)
-		}
-	}
-}
-
-func (m *ClientManager) invocationCredentialProvider() InvocationCredentialProvider {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.credentials
-}
-
-func (m *ClientManager) managedHTTPTransportProvider() ManagedHTTPTransportProvider {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.transport
 }
 
 // ErrNameConflict is the canonical sentinel for an MCP server name collision.

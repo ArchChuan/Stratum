@@ -204,13 +204,3 @@ func TestRunGuestReaperSurvivesTickPanic(t *testing.T) {
 		t.Error("IncGoroutinePanic was not called after recovery")
 	}
 }
-
-func TestBuildInternalRouterFailsWhenPlatformMCPIsMissing(t *testing.T) {
-	container := &wiring.Container{Logger: zap.NewNop()}
-
-	_, err := buildInternalRouter(container)
-
-	if err == nil {
-		t.Fatal("expected missing Platform MCP wiring to fail")
-	}
-}

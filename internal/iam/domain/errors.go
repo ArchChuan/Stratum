@@ -4,9 +4,8 @@ import "errors"
 
 // Sentinel errors for IAM tenant operations.
 var (
-	ErrMemberNotFound           = errors.New("iam: member not found")
-	ErrTenantNotFound           = errors.New("iam: tenant not found")
-	ErrDefaultTenantDelete      = errors.New("iam: default tenant cannot be deleted")
-	ErrPlatformMCPApprovalStale = errors.New("iam: platform MCP approval is stale")
-	ErrUsernameTaken            = errors.New("iam: username already taken")
+	ErrMemberNotFound      = errors.New("iam: member not found")
+	ErrTenantNotFound      = errors.New("iam: tenant not found")
+	ErrDefaultTenantDelete = errors.New("iam: default tenant cannot be deleted")
+	ErrUsernameTaken       = errors.New("iam: username already taken")
 )

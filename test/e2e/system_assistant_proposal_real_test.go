@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,7 +12,10 @@ import (
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/internal/agent/infrastructure/officialdocs"
 	agentpersist "github.com/byteBuilderX/stratum/internal/agent/infrastructure/persistence"
+	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
+	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
 	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	knowledgepersist "github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/persistence"
 	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
@@ -22,6 +26,7 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -29,6 +34,100 @@ import (
 type classifiedProposalApplier struct {
 	calls int
 	err   error
+}
+
+// realMemberProposalAuthorizer resolves the actor's actual tenant role from the
+// real public.tenant_members table through iam.TenantService — the same chain
+// production wiring uses (proposalAuthorizer → tenantRoleAdapter → TenantService).
+type realMemberProposalAuthorizer struct {
+	members *iamapp.TenantService
+}
+
+func (a realMemberProposalAuthorizer) AuthorizeProposal(
+	ctx context.Context,
+	tenantID, actorID string,
+	_ domain.ResourceKind,
+	_ domain.ProposalOperation,
+) error {
+	if a.members == nil {
+		return domain.ErrProposalForbidden
+	}
+	role, err := a.members.GetMemberRole(ctx, tenantID, actorID)
+	if err != nil {
+		return domain.ErrProposalForbidden
+	}
+	if role != "admin" && role != "owner" {
+		return domain.ErrProposalForbidden
+	}
+	return nil
+}
+
+type roleAwareAssistantDiagnostics struct{ role string }
+
+func (d roleAwareAssistantDiagnostics) Authorize(
+	_ context.Context,
+	req domain.DiagnosticRequest,
+) (domain.DiagnosticAuthorization, error) {
+	req.Scope = domain.DiagnosticScopeTenant
+	return domain.DiagnosticAuthorization{Request: req, RoleClass: d.role}, nil
+}
+
+func (roleAwareAssistantDiagnostics) CollectAuthorized(
+	context.Context,
+	domain.DiagnosticRequest,
+) (domain.DiagnosticEvidence, error) {
+	return domain.DiagnosticEvidence{}, nil
+}
+
+type proposalToolGateway struct{ call int }
+
+func (g *proposalToolGateway) Route(
+	_ context.Context,
+	request agentport.CapabilityRequest,
+) (agentport.CapabilityResponse, error) {
+	g.call++
+	switch g.call {
+	case 1:
+		return agentport.CapabilityResponse{ToolCalls: []agentport.ToolCall{{
+			ID: "proposal-1", Name: domain.SystemAssistantToolProposeResourceChange,
+			Arguments: map[string]any{
+				"resourceKind": "agent", "operation": "create",
+				"payload": map[string]any{
+					"name": "真实权限提案", "description": "real permission e2e",
+					"model": "e2e-model", "maxIterations": 4, "maxContextTokens": 4096,
+				},
+			},
+		}}}, nil
+	case 2:
+		return agentport.CapabilityResponse{Content: "已创建受治理提案。", Usage: agentport.TokenUsage{Total: 12}}, nil
+	default:
+		return agentport.CapabilityResponse{}, errors.New("unexpected deterministic model call")
+	}
+}
+
+func insertRealMember(t *testing.T, pool *pgxpool.Pool, tenantID, userID, role string) {
+	t.Helper()
+	ctx := context.Background()
+	suffix := strings.ReplaceAll(userID, "-", "")[:12]
+	_, err := pool.Exec(ctx,
+		`INSERT INTO public.tenants (id, name, slug) VALUES ($1, $2, $3)
+		 ON CONFLICT (id) DO NOTHING`,
+		tenantID, "e2e-"+suffix, "e2e-"+suffix)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx,
+		`INSERT INTO public.users (id, github_id, github_login) VALUES ($1, $2, $2)
+		 ON CONFLICT (id) DO NOTHING`,
+		userID, "e2e-github-"+suffix)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx,
+		`INSERT INTO public.tenant_members (tenant_id, user_id, role) VALUES ($1, $2, $3)`,
+		tenantID, userID, role)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM public.tenant_members WHERE tenant_id=$1`, tenantID)
+		_, _ = pool.Exec(ctx, `DELETE FROM public.users WHERE id=$1`, userID)
+		_, _ = pool.Exec(ctx, `DELETE FROM public.tenants WHERE id=$1`, tenantID)
+	})
 }
 
 func (a *classifiedProposalApplier) ApplyResourceChange(
@@ -323,4 +422,113 @@ func TestSystemAssistantProposalRealServices(t *testing.T) {
 			require.Equal(t, outcome.wantStatus, stored.Status)
 		})
 	}
+}
+
+// TestSystemAssistantProposalInProcessToolUsesRealMemberPermissions proves the
+// in-process proposal tool resolves the actor's ACTUAL tenant role from the
+// database at call time: an admin creates a real proposal through the agent
+// tool path, while a member is denied by the same real authorization chain.
+func TestSystemAssistantProposalInProcessToolUsesRealMemberPermissions(t *testing.T) {
+	pool, tenants := setupSystemAssistantPostgres(t)
+	tenantID := tenants[0]
+	adminID, memberID := uuid.NewString(), uuid.NewString()
+	insertRealMember(t, pool, tenantID, adminID, "admin")
+	insertRealMember(t, pool, tenantID, memberID, "member")
+
+	members := iamapp.NewTenantService(iampersistence.NewTenantRepo(pool), zap.NewNop())
+	repo := agentpersist.NewPgResourceChangeProposalRepo(pool)
+	proposalService := agentapp.NewResourceChangeProposalService(
+		repo,
+		realMemberProposalAuthorizer{members: members},
+		nil,
+		map[domain.ResourceKind]agentport.ResourceChangeApplier{
+			domain.ResourceAgent: &proposalE2EApplier{},
+		},
+		nil,
+	)
+
+	agentRepo := agentpersist.NewPgAgentRepo(pool)
+	ctx := assistantTenantContext(tenantID, adminID, tenantdb.RoleTenantAdmin)
+	existing, found, err := agentRepo.GetSystemAssistant(ctx)
+	require.NoError(t, err)
+	require.True(t, found)
+	existing.LLMModel = "deterministic-e2e-model"
+	_, err = agentRepo.UpdateSystemAssistantModel(
+		ctx, existing.LLMModel, existing.MemoryScope, existing.CheckpointEnabled,
+		existing.MaxIterations, existing.MaxContextTokens,
+	)
+	require.NoError(t, err)
+
+	chat := agentpersist.NewPgChatStore(pool, zap.NewNop())
+	gateway := &proposalToolGateway{}
+	service := agentapp.NewAgentService(agentapp.AgentServiceDeps{
+		Registry:             agentapp.NewRegistry(agentRepo, agentapp.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		TenantResolver:       deterministicTenantResolver{gateway: gateway},
+		TenantModelValidator: deterministicModelValidator{},
+		TenantModelCatalog:   deterministicModelValidator{},
+		ChatStore:            chat,
+		OfficialDocsSearch:   officialdocs.Search,
+		DiagnosticProvider:   roleAwareAssistantDiagnostics{role: "admin"},
+		ProposalService:      proposalService,
+		Logger:               zap.NewNop(),
+	})
+
+	conversation, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, adminID, "真实权限提案")
+	require.NoError(t, err)
+	result, _, err := service.Execute(ctx, domain.SystemAssistantID, agentapp.ExecRequest{
+		Query: "创建受治理的 Agent 提案", ConversationID: conversation.ID, UserID: adminID, MaxSteps: 5,
+	}, agentapp.ExecMeta{TenantID: tenantID, TraceID: uuid.NewString()})
+	require.NoError(t, err)
+	require.Len(t, result.ToolCalls, 1)
+	require.Equal(t, domain.SystemAssistantToolProposeResourceChange, result.ToolCalls[0].ToolName)
+	require.Len(t, result.AssistantToolArtifacts, 1)
+	require.NotNil(t, result.AssistantToolArtifacts[0].Proposal)
+	require.NotEmpty(t, result.AssistantToolArtifacts[0].Proposal.ID)
+
+	stored, err := repo.Get(ctx, result.AssistantToolArtifacts[0].Proposal.ID)
+	require.NoError(t, err)
+	require.Equal(t, tenantID, stored.TenantID)
+	require.Equal(t, adminID, stored.ProposerID)
+	require.Equal(t, domain.StatusReadyForReview, stored.Status)
+
+	// 同租户 member 走同一条真实授权链 → 拒绝创建。
+	memberCtx := assistantTenantContext(tenantID, memberID, tenantdb.RoleTenantUser)
+	_, err = proposalService.CreateProposal(memberCtx, agentapp.CreateProposalInput{
+		TenantID: tenantID, ActorID: memberID, Kind: domain.ResourceAgent,
+		Operation: domain.OperationCreate,
+		Payload: json.RawMessage(
+			`{"name":"member-denied","description":"x","model":"m","maxIterations":2,"maxContextTokens":1024}`,
+		),
+	})
+	require.ErrorIs(t, err, domain.ErrProposalForbidden)
+
+	// member 通过真实执行路径尝试调用提案工具：工具未暴露（ProposalCreateFn
+	// 未注入），调用以“tool unavailable”失败，且不会产生任何 DB 提案。
+	memberService := agentapp.NewAgentService(agentapp.AgentServiceDeps{
+		Registry:             agentapp.NewRegistry(agentRepo, agentapp.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		TenantResolver:       deterministicTenantResolver{gateway: &proposalToolGateway{}},
+		TenantModelValidator: deterministicModelValidator{},
+		TenantModelCatalog:   deterministicModelValidator{},
+		ChatStore:            chat,
+		OfficialDocsSearch:   officialdocs.Search,
+		DiagnosticProvider:   roleAwareAssistantDiagnostics{role: "member"},
+		ProposalService:      proposalService,
+		Logger:               zap.NewNop(),
+	})
+	memberConversation, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, memberID, "member 提案")
+	require.NoError(t, err)
+	memberResult, _, err := memberService.Execute(ctx, domain.SystemAssistantID, agentapp.ExecRequest{
+		Query: "创建提案", ConversationID: memberConversation.ID, UserID: memberID, MaxSteps: 5,
+	}, agentapp.ExecMeta{TenantID: tenantID, TraceID: uuid.NewString()})
+	require.NoError(t, err)
+	for _, artifact := range memberResult.AssistantToolArtifacts {
+		require.Nil(t, artifact.Proposal, "member must not produce a proposal artifact")
+	}
+
+	var memberProposals int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM "tenant_`+tenantID+`".resource_change_proposals WHERE proposer_id=$1`,
+		memberID,
+	).Scan(&memberProposals))
+	require.Zero(t, memberProposals)
 }

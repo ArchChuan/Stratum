@@ -59,12 +59,11 @@ func TestAllocateUsesInjectedDefaultsAndCanonicalJSON(t *testing.T) {
 	if scope.OwnerPID != 4242 || scope.RunID != "20260730t010203z-abababababababab" {
 		t.Fatalf("unexpected scope: %+v", scope)
 	}
-	ports := []int{scope.Ports.Frontend, scope.Ports.Backend, scope.Ports.OAuth, scope.Ports.Fixture,
-		scope.Ports.PlatformMCP, scope.Ports.InternalAPI}
+	ports := []int{scope.Ports.Frontend, scope.Ports.Backend, scope.Ports.OAuth, scope.Ports.Fixture}
 	unique := make(map[int]bool, len(ports))
 	for _, port := range ports {
 		if port <= 0 || unique[port] {
-			t.Fatalf("ports=%v, want six distinct non-zero ports", ports)
+			t.Fatalf("ports=%v, want four distinct non-zero ports", ports)
 		}
 		unique[port] = true
 	}

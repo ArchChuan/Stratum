@@ -35,11 +35,6 @@ func (m *secretTestManager) UpdateServer(_ context.Context, cfg *domain.ServerCo
 }
 func (m *secretTestManager) RemoveTenant(context.Context, string) error { return nil }
 func (m *secretTestManager) Quota(context.Context) domain.Quota         { return domain.Quota{} }
-func (m *secretTestManager) HandleForwardedToolCall(
-	context.Context, string, string, string, map[string]any,
-) (domain.ForwardedCallResult, error) {
-	return domain.ForwardedCallResult{}, nil
-}
 
 type secretTestRegistry struct{}
 

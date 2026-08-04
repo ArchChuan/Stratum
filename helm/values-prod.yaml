@@ -14,18 +14,6 @@ app:
       memory: "2Gi"
       cpu: "2000m"
 
-platformMCP:
-  enabled: true
-  replicaCount: 2
-  image:
-    repository: ghcr.io/bytebuilderx/stratum-platform-mcp
-    tag: latest
-  service:
-    port: 8443
-  tls:
-    issuerName: stratum-internal-ca
-    issuerKind: ClusterIssuer
-
 serviceMonitor:
   enabled: true
   additionalLabels:
@@ -106,5 +94,3 @@ autoscaling:
 requiredSecrets:
   enabled: true
   names: []
-  # Add TLS/mTLS secrets when enabled:
-  # - stratum-backend-internal-tls

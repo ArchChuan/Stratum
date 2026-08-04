@@ -228,14 +228,13 @@ func TestRegistryRegisterRejectsPortConflictWithExistingLease(t *testing.T) {
 	first := registryTestScope(t, "20260730t120102z-a1b2c3d4e5f60718", 101)
 	second := registryTestScope(t, "20260730t120103z-b1b2c3d4e5f60718", 102)
 	second.Ports = Ports{
-		Frontend: 22001, Backend: 22002, OAuth: 22003, Fixture: 22004,
-		PlatformMCP: 22005, InternalAPI: first.Ports.PlatformMCP,
+		Frontend: 22001, Backend: 22002, OAuth: 22003, Fixture: first.Ports.Backend,
 	}
 	if err := r.Register(first); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.Register(second); err == nil || !strings.Contains(err.Error(), "port conflict") {
-		t.Fatalf("Register() error = %v, want six-role port conflict", err)
+		t.Fatalf("Register() error = %v, want four-role port conflict", err)
 	}
 	if _, err := r.Read(second.RunID); err == nil {
 		t.Fatal("conflicting lease was published")
@@ -448,6 +447,44 @@ func TestRegistryStaleRetainsInfrastructureOwner(t *testing.T) {
 	}
 	if len(stale) != 1 || stale[0].RunID != peer.RunID {
 		t.Fatalf("Stale() = %+v, want only peer %q", stale, peer.RunID)
+	}
+}
+
+func TestRegistryStaleSkipsForeignFormatLease(t *testing.T) {
+	now := time.Date(2026, time.July, 31, 12, 0, 0, 0, time.UTC)
+	r := Registry{Root: filepath.Join(t.TempDir(), "registry")}
+	expired := registryTestScopeAt(t, "20260730t120102z-a1b2c3d4e5f60718", 101, now.Add(-25*time.Hour))
+	if err := r.Register(expired); err != nil {
+		t.Fatal(err)
+	}
+	// A foreign lease written by an older code version that included the
+	// platform_mcp/internal_api ports; the strict decoder must skip it.
+	foreign := registryTestScopeAt(t, "20260730t120103z-b1b2c3d4e5f60718", 102, now.Add(-25*time.Hour))
+	raw, err := json.Marshal(foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := make(map[string]any)
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	ports := legacy["ports"].(map[string]any)
+	ports["platform_mcp"] = 22005
+	ports["internal_api"] = 22006
+	legacyJSON, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.Root, "runs", foreign.RunID+".json"), legacyJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stale, err := r.Stale(now, func(int, string) bool { return false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stale) != 1 || stale[0].RunID != expired.RunID {
+		t.Fatalf("Stale() = %+v, want only expired %q", stale, expired.RunID)
 	}
 }
 
@@ -665,7 +702,6 @@ func registryTestScopeAt(t *testing.T, runID string, pid int, createdAt time.Tim
 		Repository: t.TempDir(), DatabaseName: "stratum_e2e_" + runID[:16] + "_" + runID[17:],
 		Ports: Ports{
 			Frontend: portBase + 1, Backend: portBase + 2, OAuth: portBase + 3, Fixture: portBase + 4,
-			PlatformMCP: portBase + 5, InternalAPI: portBase + 6,
 		},
 		Infrastructure: InfrastructureLease{LeaseID: runID},
 	}

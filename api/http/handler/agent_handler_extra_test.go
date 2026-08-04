@@ -241,11 +241,6 @@ func TestAgentHandlerCreateAgent(t *testing.T) {
 	require.Equal(t, http.StatusCreated, w.Code)
 	require.Contains(t, w.Body.String(), `"id"`)
 
-	// 极端情况：platform MCP 绑定 → 403。
-	platform := `{"name":"N","llmModel":"qwen-max","maxIterations":5,"mcpToolIds":["mcp:stratum-platform-mcp:x"]}`
-	w = doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents", platform)
-	require.Equal(t, http.StatusForbidden, w.Code)
-
 	// 极端情况：持久化失败 → 500。
 	h = newTestAgentHandler(t, &mockAgentRepo{registerErr: errors.New("write failed")}, nil, nil)
 	w = doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents", valid)

@@ -1,5 +1,7 @@
 # Platform MCP protocol evidence
 
+> **DEPRECATED (2026-08-04):** platform-mcp 已整体废弃并移除，系统助手改为进程内直调平台能力。本文仅作历史证据保留。
+
 - Verified on: 2026-07-29
 - Compatibility baseline: `2025-06-18`
 - Intermediate version compared: `2025-11-25`

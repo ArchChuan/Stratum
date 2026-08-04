@@ -61,31 +61,6 @@ app:
   # Active track when strategy=blueGreen. Ignored for rolling.
   track: stable
 
-platformMCP:
-  enabled: true
-  replicaCount: 1
-  image:
-    repository: ghcr.io/bytebuilderx/stratum-platform-mcp
-    tag: latest
-    digest: ""
-  service:
-    port: 8443
-  tls:
-    issuerName: stratum-internal-ca
-    issuerKind: ClusterIssuer
-  monitoring:
-    namespaceSelector:
-      kubernetes.io/metadata.name: monitoring
-    podSelector:
-      app.kubernetes.io/name: prometheus
-  resources:
-    requests:
-      cpu: "100m"
-      memory: "128Mi"
-    limits:
-      cpu: "500m"
-      memory: "512Mi"
-
 # Frontend settings
 frontend:
   enabled: true
@@ -307,5 +282,3 @@ requiredSecrets:
   # The credentials secret (secrets.name) and ingress TLS secrets
   # are checked automatically.
   names: []
-  # - stratum-backend-internal-tls
-  # - stratum-platform-mcp-tls

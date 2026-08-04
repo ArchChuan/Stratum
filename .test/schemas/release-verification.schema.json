@@ -21,22 +21,20 @@
     "images": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["backend", "frontend", "platform_mcp", "feishu_adapter"],
+      "required": ["backend", "frontend", "feishu_adapter"],
       "properties": {
         "backend": { "$ref": "#/$defs/image" },
         "frontend": { "$ref": "#/$defs/image" },
-        "platform_mcp": { "$ref": "#/$defs/image" },
         "feishu_adapter": { "$ref": "#/$defs/image" }
       }
     },
     "prior_digests": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["backend", "frontend", "platform_mcp", "feishu_adapter"],
+      "required": ["backend", "frontend", "feishu_adapter"],
       "properties": {
         "backend": { "$ref": "#/$defs/priorImage" },
         "frontend": { "$ref": "#/$defs/priorImage" },
-        "platform_mcp": { "$ref": "#/$defs/priorImage" },
         "feishu_adapter": { "$ref": "#/$defs/priorImage" }
       }
     },

@@ -106,15 +106,12 @@ func TestURLs(t *testing.T) {
 
 	got := URLs(Ports{
 		Frontend: 21001, Backend: 21002, OAuth: 21003, Fixture: 21004,
-		PlatformMCP: 21005, InternalAPI: 21006,
 	})
 	want := RuntimeURLs{
-		Frontend:    "http://127.0.0.1:21001",
-		Backend:     "http://127.0.0.1:21002",
-		OAuth:       "http://127.0.0.1:21003",
-		Fixture:     "http://127.0.0.1:21004",
-		PlatformMCP: "http://127.0.0.1:21005",
-		InternalAPI: "http://127.0.0.1:21006",
+		Frontend: "http://127.0.0.1:21001",
+		Backend:  "http://127.0.0.1:21002",
+		OAuth:    "http://127.0.0.1:21003",
+		Fixture:  "http://127.0.0.1:21004",
 	}
 	if got != want {
 		t.Errorf("URLs() = %+v, want %+v", got, want)
@@ -149,8 +146,6 @@ func TestValidate(t *testing.T) {
 		{name: "port below range", mutate: func(s *Scope) { s.Ports.Frontend = 0 }},
 		{name: "port above range", mutate: func(s *Scope) { s.Ports.Backend = 65536 }},
 		{name: "duplicate port", mutate: func(s *Scope) { s.Ports.OAuth = s.Ports.Backend }},
-		{name: "missing Platform MCP port", mutate: func(s *Scope) { s.Ports.PlatformMCP = 0 }},
-		{name: "duplicate internal API port", mutate: func(s *Scope) { s.Ports.InternalAPI = s.Ports.Backend }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -171,8 +166,6 @@ func TestValidateAcceptsLegacyFourPortLease(t *testing.T) {
 	t.Parallel()
 	scope := validTestScope(t)
 	scope.SchemaVersion = 1
-	scope.Ports.PlatformMCP = 0
-	scope.Ports.InternalAPI = 0
 	if err := Validate(scope); err != nil {
 		t.Fatalf("Validate() legacy scope error = %v", err)
 	}
@@ -305,7 +298,6 @@ func validTestScope(t *testing.T) Scope {
 		DatabaseName:  "stratum_e2e_20260730t120102z_a1b2c3d4e5f60718",
 		Ports: Ports{
 			Frontend: 21001, Backend: 21002, OAuth: 21003, Fixture: 21004,
-			PlatformMCP: 21005, InternalAPI: 21006,
 		},
 		Infrastructure: InfrastructureLease{
 			LeaseID: runID,
@@ -321,7 +313,6 @@ func assertValidPorts(t *testing.T, ports Ports) {
 	t.Helper()
 	values := []int{
 		ports.Frontend, ports.Backend, ports.OAuth, ports.Fixture,
-		ports.PlatformMCP, ports.InternalAPI,
 	}
 	seen := make(map[int]struct{}, len(values))
 	for _, port := range values {

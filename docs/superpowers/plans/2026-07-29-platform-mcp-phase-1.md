@@ -1,5 +1,7 @@
 # Platform MCP Phase 1 Implementation Plan
 
+> **DEPRECATED (2026-08-04):** 本计划方向已被反转 —— platform-mcp 整体废弃，系统助手工具改回进程内直调。计划内容仅作历史参考，不再执行。
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the platform assistant's code-injected internal tools with a tenant-provisioned, platform-managed MCP server that uses the same Agent/MCP execution path as ordinary Agents while enforcing service identity, scoped delegation, tenant isolation, and an independent platform-assistant UI tab.

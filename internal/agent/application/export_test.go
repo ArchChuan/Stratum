@@ -8,7 +8,6 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
-	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 )
 
 // BuildExtraToolsForTest exposes buildExtraTools to external test packages.
@@ -33,16 +32,8 @@ func HasFailedAssistantArtifactForTest(result *AgentResult) bool {
 
 func BoundedAssistantRoleClassForTest(role string) string { return boundedAssistantRoleClass(role) }
 
-func WithoutPlatformMCPToolsForTest(toolIDs []string) []string {
-	return withoutPlatformMCPTools(toolIDs)
-}
-
 func NormalizeMCPToolForTest(tool port.ToolDefinition, serverID string) port.ToolDefinition {
 	return normalizeMCPTool(tool, serverID)
-}
-
-func PlatformMCPRiskForTest(risk platformmcp.RiskLevel) port.ToolRiskLevel {
-	return platformMCPRisk(risk)
 }
 
 func StricterToolRiskForTest(left, right port.ToolRiskLevel) port.ToolRiskLevel {

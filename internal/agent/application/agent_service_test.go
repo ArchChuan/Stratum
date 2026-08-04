@@ -742,36 +742,12 @@ func TestAgentService_UpdateSystemAssistant_IgnoresName(t *testing.T) {
 	repo.AssertExpectations(t)
 }
 
-func TestAgentServiceOrdinaryAgentCannotBindPlatformMCP(t *testing.T) {
-	svc, repo := newTestService(t)
-	ctx := context.Background()
-	repo.On("Get", ctx, "agent-1").Return(&domain.AgentConfig{ID: "agent-1"}, true, nil)
-
-	_, err := svc.Update(ctx, "agent-1", application.UpdateAgentInput{
-		MCPToolIDs: []string{"mcp:stratum-platform-mcp:stratum_diagnose_tenant"},
-	})
-
-	assert.ErrorIs(t, err, application.ErrPlatformMCPBindingForbidden)
-	repo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
-}
-
-func TestAgentServiceCreateCannotBindPlatformMCP(t *testing.T) {
-	svc, repo := newTestService(t)
-
-	_, err := svc.Create(t.Context(), application.CreateAgentInput{
-		Name: "ordinary", MCPToolIDs: []string{"mcp:stratum-platform-mcp:stratum_diagnose_tenant"},
-	})
-
-	assert.ErrorIs(t, err, application.ErrPlatformMCPBindingForbidden)
-	repo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
-}
-
 func TestAgentServicePlatformAssistantModelOnlyUpdatePreservesSystemBindings(t *testing.T) {
 	svc, repo := newTestService(t)
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
 	cfg := &domain.AgentConfig{
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "old-model",
-		MCPToolIDs: []string{"mcp:stratum-platform-mcp:stratum_diagnose_tenant"},
+		MCPToolIDs: []string{"mcp:orders:get"},
 	}
 	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
 	repo.On("UpdateSystemAssistantModel", ctx, "new-model", "", false, 0, 0).Return(&domain.AgentConfig{
@@ -792,7 +768,7 @@ func TestAgentServicePlatformAssistantModelOnlyUpdatePreservesSystemBindings(t *
 func TestAgentServicePlatformAssistantRejectsBindingRemovalByPreservingManagedTools(t *testing.T) {
 	svc, repo := newTestService(t)
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
-	managedTools := []string{"mcp:stratum-platform-mcp:stratum_diagnose_tenant"}
+	managedTools := []string{"mcp:orders:get"}
 	cfg := &domain.AgentConfig{
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, MCPToolIDs: managedTools,
 	}
