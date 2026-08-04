@@ -78,6 +78,12 @@ Grafana 先看“Stratum 资源容量”。只读命令：`kubectl top nodes`、
 `predict_linear(kubelet_volume_stats_available_bytes[6h], 4 * 24 * 3600)`，并确认同标签 `offset 6h` 有历史。
 排除短时批处理后制定扩容/保留策略。
 
+> 注意：local-path 卷的 `kubelet_volume_stats_*` 上报的是整块根盘统计（bind mount 无独立设备），因此该告警
+> 对 local-path PVC 会随节点盘趋势集体触发。规则已通过 `kube_persistentvolumeclaim_info{storageclass!="local-path"}`
+> 排除 local-path，只对真实 volume-backed PVC 生效；节点盘容量由 `StratumFilesystemExhaustionPredicted/Imminent`
+> 覆盖。镜像/快照导致的节点盘增长由 k3s 镜像 GC（kubelet `image-gc-high/low-threshold`）与部署流水线
+> 上线后的 `k3s ctr images prune` 清理（deploy.yml `Prune stale node images after rollout` 步骤）。
+
 <a id="pvc-exhaustion-imminent"></a>
 
 ## StratumPVCExhaustionImminent
