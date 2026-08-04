@@ -1050,6 +1050,16 @@ tests:
         alertname: StratumReaperDown
         exp_alerts: []
 
+  - name: reaper down does not fire before the first cycle
+    interval: 1m
+    input_series:
+      - series: 'reaper_last_cycle_timestamp_seconds{instance="10.0.0.1:8080",pod="stratum-abc"}'
+        values: '0x180'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: StratumReaperDown
+        exp_alerts: []
+
   - name: goroutine panic alert fires
     interval: 1m
     input_series:
