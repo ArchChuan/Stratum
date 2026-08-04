@@ -32,6 +32,9 @@ WEB_DIR     := web
 DC          := docker compose
 HELM_DIR    := ./helm
 VALUES_FILE := $(HELM_DIR)/values.yaml
+# go 工具链并行度：负载感知降级（scripts/quality/go-parallelism.sh），
+# 多 worktree 并行验证时防止 CPU 打满；CI/CD 可用 GO_TEST_FLAGS 覆盖。
+GO_TEST_FLAGS ?= -p $(shell bash scripts/quality/go-parallelism.sh)
 
 # ─── 本地 zhparser 镜像构建（仅本地，与 CD 隔离）──────────────────────────────
 # 镜像名与 docker-compose.yml 的 postgres.image 一致，infra-up 直接复用，
@@ -69,7 +72,7 @@ be-lint:
 	golangci-lint run --timeout=5m ./...
 
 be-test:
-	go test -v -race -coverprofile=coverage.out ./... -timeout=5m
+	go test -v -race -coverprofile=coverage.out ./... -timeout=5m $(GO_TEST_FLAGS)
 	@COVERAGE=$$(go tool cover -func=coverage.out | tail -1 | awk '{print $$3}' | tr -d '%'); \
 	echo "Total coverage: $${COVERAGE}%"; \
 	if awk "BEGIN{exit !($${COVERAGE} < 80)}"; then \
@@ -78,7 +81,7 @@ be-test:
 	fi
 
 be-build:
-	go build -o bin/server ./cmd/server
+	go build -o bin/server ./cmd/server $(GO_TEST_FLAGS)
 
 be-docker-build:
 	docker build -t $(BE_IMAGE):$(IMAGE_TAG) -f Dockerfile .
@@ -256,7 +259,7 @@ test-verify-local: test-verify-plan
 	bash scripts/quality/system-e2e-instructions-test.sh
 	$(MAKE) risk-guardrails code-quality
 	go vet ./...
-	go test -short ./...
+	go test -short ./... $(GO_TEST_FLAGS)
 	$(MAKE) fe-lint fe-build
 
 test-verify-attestation: e2e-attestation-check
@@ -348,7 +351,7 @@ clean:
 # ─── HTTP 契约测试 ────────────────────────────────────────────────────────
 .PHONY: contract-test contract-enforce record-contracts
 contract-test:
-	go test -run TestContracts ./api/http/ -count=1
+	go test -run TestContracts ./api/http/ -count=1 $(GO_TEST_FLAGS)
 
 contract-enforce: contract-test
 	bash scripts/quality/camelcase-enforce.sh

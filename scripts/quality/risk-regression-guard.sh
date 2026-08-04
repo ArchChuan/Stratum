@@ -21,6 +21,8 @@ labels=(
 )
 declare -A selected=()
 acceptance_mode=short
+# go 工具链并行度：负载感知降级，多 worktree 并行 guard 时防止 CPU 打满
+PARALLELISM="$(bash scripts/quality/go-parallelism.sh)"
 
 classify_acceptance_path() {
   case "${1#./}" in
@@ -179,26 +181,26 @@ for label in "${labels[@]}"; do
       ;;
     migration)
       run_check "${label}" /bin/bash -c \
-        'bash scripts/quality/check-migration-boundaries-test.sh && bash scripts/quality/check-migration-boundaries.sh && go test ./pkg/storage/postgres ./pkg/tenantdb'
+        "bash scripts/quality/check-migration-boundaries-test.sh && bash scripts/quality/check-migration-boundaries.sh && go test -p ${PARALLELISM} ./pkg/storage/postgres ./pkg/tenantdb"
       ;;
     deployment)
       run_check "${label}" /bin/bash -c \
         'bash scripts/quality/check-deployment-safety-test.sh && bash scripts/quality/release-verification-test.sh'
       ;;
     auth-http)
-      run_check "${label}" go test ./api/http/... ./internal/iam/...
+      run_check "${label}" go test -p "${PARALLELISM}" ./api/http/... ./internal/iam/...
       ;;
     knowledge)
-      run_check "${label}" go test ./internal/knowledge/... ./pkg/storage/milvus
+      run_check "${label}" go test -p "${PARALLELISM}" ./internal/knowledge/... ./pkg/storage/milvus
       ;;
     memory)
-      run_check "${label}" go test ./internal/memory/...
+      run_check "${label}" go test -p "${PARALLELISM}" ./internal/memory/...
       ;;
     mcp)
-      run_check "${label}" go test ./internal/mcp/...
+      run_check "${label}" go test -p "${PARALLELISM}" ./internal/mcp/...
       ;;
     runtime-governance)
-      run_check "${label}" go test ./api/middleware ./api/http ./cmd/server
+      run_check "${label}" go test -p "${PARALLELISM}" ./api/middleware ./api/http ./cmd/server
       ;;
     frontend-auth)
       run_check "${label}" /bin/bash -c \

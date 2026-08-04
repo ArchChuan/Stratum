@@ -27,7 +27,7 @@ for pkg in $pkgs; do
   # 跳过需要基础设施的 e2e
   [[ "$pkg" == "test/e2e" ]] && continue
 
-  if ! go test -short -count=1 "./$pkg" 2>&1; then
+  if ! go test -short -count=1 -p "$(bash scripts/quality/go-parallelism.sh)" "./$pkg" 2>&1; then
     passed=false
   fi
 done
