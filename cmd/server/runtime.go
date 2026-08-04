@@ -282,6 +282,9 @@ func registerGuestReaper(appHarness *harnesspkg.Harness, c *wiring.Container, lo
 }
 
 func runGuestReaper(ctx context.Context, onboard *iamapp.OnboardService, admin *iamapp.AdminService, metrics observability.MetricsProvider, interval time.Duration, logger *zap.Logger) {
+	// Mark the component as started so the freshness alert does not treat the
+	// pre-first-cycle window as "reaper down".
+	metrics.SetReaperCycleTimestamp(float64(time.Now().Unix()))
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
