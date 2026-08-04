@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
+	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 )
 
@@ -16,8 +16,12 @@ const (
 	MinimumEvaluationTopK = 1
 	MaximumEvaluationTopK = 100
 
-	RerankingNone      = "none"
-	RerankingScoreDesc = "score_desc"
+	// RerankingNone is the identity form for "no reranking" (""). Snapshots
+	// written today persist identity values; the legacy values below were
+	// persisted by earlier revisions and are mapped on read.
+	RerankingNone         = ""
+	RerankingScoreDesc    = "score_desc" // legacy snapshot value, mapped to RerankIdentityBuiltin
+	RerankIdentityBuiltin = "builtin-score-v1"
 
 	QueryRewriteNone          = "none"
 	QueryRewriteLowercaseTrim = "lowercase_trim"
@@ -49,14 +53,30 @@ func (s RetrievalSnapshot) Validate() error {
 		return fmt.Errorf("knowledge retrieval snapshot: top_k must be between %d and %d",
 			MinimumEvaluationTopK, MaximumEvaluationTopK)
 	}
-	if s.ScoreThreshold < 0 || s.ScoreThreshold > 1 {
-		return errors.New("knowledge retrieval snapshot: score_threshold must be between 0 and 1")
+	if err := validateScoreThreshold(s.ScoreThreshold); err != nil {
+		return err
 	}
-	if s.Reranking != RerankingNone && s.Reranking != RerankingScoreDesc {
-		return fmt.Errorf("knowledge retrieval snapshot: unsupported reranking %q", s.Reranking)
+	if err := validateRerankIdentity(s.Reranking); err != nil {
+		return err
 	}
 	if s.QueryRewrite != QueryRewriteNone && s.QueryRewrite != QueryRewriteLowercaseTrim {
 		return fmt.Errorf("knowledge retrieval snapshot: unsupported query rewrite %q", s.QueryRewrite)
+	}
+	return nil
+}
+
+func validateScoreThreshold(threshold float64) error {
+	if threshold < 0 || threshold > 1 {
+		return errors.New("knowledge retrieval snapshot: score_threshold must be between 0 and 1")
+	}
+	return nil
+}
+
+func validateRerankIdentity(identity string) error {
+	provider, model := domain.SplitRerankIdentity(identity)
+	if !domain.AllowedRerankIdentities[provider] ||
+		(model == "" && provider != "" && provider != RerankIdentityBuiltin) {
+		return fmt.Errorf("knowledge retrieval snapshot: unsupported reranking %q", identity)
 	}
 	return nil
 }
@@ -137,6 +157,9 @@ func (e *RetrievalEvaluator) retrieveSources(
 		Question: query, Workspace: snapshot.WorkspaceName, WorkspaceID: snapshot.WorkspaceID,
 		TenantID: tenantIDFromContext(ctx), Mode: snapshot.QueryMode, TopK: snapshot.TopK,
 		EmbeddingModel: snapshot.EmbeddingModel,
+		Reranking:      snapshot.Reranking,
+		ScoreThreshold: float32(snapshot.ScoreThreshold),
+		RerankTopK:     snapshot.TopK,
 	})
 	if err != nil {
 		return nil, ErrRetrievalDependency
@@ -144,21 +167,9 @@ func (e *RetrievalEvaluator) retrieveSources(
 	if result == nil {
 		return nil, errors.New("knowledge retrieval evaluator: empty retrieval result")
 	}
-	sources := append([]Source(nil), result.Sources...)
-	if snapshot.Reranking == RerankingScoreDesc {
-		sort.SliceStable(sources, func(i, j int) bool { return sources[i].Score > sources[j].Score })
-	}
-	filtered := make([]Source, 0, min(snapshot.TopK, len(sources)))
-	for _, source := range sources {
-		if float64(source.Score) < snapshot.ScoreThreshold {
-			continue
-		}
-		filtered = append(filtered, source)
-		if len(filtered) == snapshot.TopK {
-			break
-		}
-	}
-	return filtered, nil
+	// Rerank, threshold filtering, and TopK narrowing are all performed inside
+	// RAGService.Query; the evaluator must not re-implement them locally.
+	return result.Sources, nil
 }
 
 func rewriteEvaluationQuery(query, mode string) string {

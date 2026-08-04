@@ -410,8 +410,8 @@ func (m *PrometheusMetrics) registerF3Metrics(factory promauto.Factory, latencyB
 		[]string{"schedule_type", "status"},
 	)
 	m.rerankRequestTotal = factory.NewCounterVec(
-		prometheus.CounterOpts{Name: "rerank_request_total", Help: "Rerank requests by model and status"},
-		[]string{"model", "status"},
+		prometheus.CounterOpts{Name: "rerank_request_total", Help: "Rerank requests by tenant, model and status"},
+		[]string{"tenant", "model", "status"},
 	)
 	m.rerankDurationSeconds = factory.NewHistogramVec(
 		prometheus.HistogramOpts{Name: "rerank_duration_seconds", Help: "Rerank request duration", Buckets: latencyBuckets},
@@ -776,8 +776,8 @@ func (m *PrometheusMetrics) IncScheduledFire(scheduleType, status string) {
 
 // --- Reranker (F3) ---
 
-func (m *PrometheusMetrics) IncRerankRequest(model, status string) {
-	m.rerankRequestTotal.WithLabelValues(model, status).Inc()
+func (m *PrometheusMetrics) IncRerankRequest(tenantID, model, status string) {
+	m.rerankRequestTotal.WithLabelValues(tenantID, model, status).Inc()
 }
 
 func (m *PrometheusMetrics) RecordRerankDuration(model string, seconds float64) {

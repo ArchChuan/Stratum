@@ -345,7 +345,7 @@ func (r experimentKnowledgeRevisionResolver) LoadKnowledgeRevision(
 	return agentport.KnowledgeRetrievalRevision{
 		RevisionID: revisionID, WorkspaceID: snapshot.WorkspaceID, WorkspaceName: snapshot.WorkspaceName,
 		EmbeddingModel: snapshot.EmbeddingIdentity, QueryMode: snapshot.QueryMode, TopK: snapshot.TopK,
-		ScoreThreshold: snapshot.ScoreThreshold, Reranking: snapshot.Reranking,
+		ScoreThreshold: snapshot.ScoreThreshold, Reranking: legacyRerankingValue(snapshot.Reranking),
 		QueryRewrite: snapshot.QueryRewrite,
 	}, nil
 }
@@ -716,7 +716,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	if c.Knowledge != nil && c.Knowledge.WorkspaceService != nil && c.Knowledge.RAGService != nil &&
 		sharedRevisionService != nil {
 		knowledgeAdapter := knowledgeEvaluationAdapter{
-			revisions: sharedRevisionService, source: c.Knowledge.WorkspaceService,
+			revisions: sharedRevisionService, source: c.Knowledge.WorkspaceService, rerankAvailable: c.Config.RerankConfigured,
 			evaluator: knowledgeapp.NewRetrievalEvaluator(c.Knowledge.RAGService), actorID: "evaluation-worker",
 		}
 		resourceAdapters[evaldomain.ResourceKindKnowledge] = knowledgeAdapter
