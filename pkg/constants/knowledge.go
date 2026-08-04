@@ -3,6 +3,7 @@ package constants
 import (
 	"fmt"
 	"regexp"
+	"time"
 )
 
 const (
@@ -29,6 +30,25 @@ const (
 	IngestStatusProcessing = "processing"
 	IngestStatusCompleted  = "completed"
 	IngestStatusFailed     = "failed"
+
+	// RerankHTTPTimeout bounds a single external reranker call (10s).
+	RerankHTTPTimeout = 10 * time.Second
+)
+
+const (
+	// RerankHTTPRetryMax is the retry budget for transient reranker failures.
+	RerankHTTPRetryMax = 2
+	// RerankMaxCandidates caps the documents sent to an external reranker.
+	RerankMaxCandidates = 50
+	// RerankWidenFactor widens the internal candidate pool before reranking:
+	// TopK × RerankWidenFactor candidates are recalled, then narrowed to TopK.
+	RerankWidenFactor = 4
+	// MinRerankCandidates is the minimum pool size below which reranking is
+	// skipped (a stable no-op) to avoid paying latency for tiny pools.
+	MinRerankCandidates = 3
+	// RerankDefaultTopN is the number of results requested from a reranker
+	// when the caller does not specify RerankTopK.
+	RerankDefaultTopN = 5
 )
 
 var milvusUnsafe = regexp.MustCompile(`[^a-zA-Z0-9_]`)

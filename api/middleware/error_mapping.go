@@ -146,6 +146,8 @@ var errorStatusTable = map[error]int{
 	iamdomain.ErrUsernameTaken:                    http.StatusConflict,
 	knowledgedomain.ErrInvalidEmbeddingModel:      http.StatusBadRequest,
 	knowledgedomain.ErrInvalidQueryMode:           http.StatusBadRequest,
+	knowledgedomain.ErrInvalidRerankIdentity:      http.StatusBadRequest,
+	knowledgedomain.ErrInvalidScoreThreshold:      http.StatusBadRequest,
 	knowledgedomain.ErrEmbeddingModelImmutable:    http.StatusBadRequest,
 	knowledgedomain.ErrChunkSizeImmutable:         http.StatusBadRequest,
 	knowledgedomain.ErrChunkOverlapImmutable:      http.StatusBadRequest,

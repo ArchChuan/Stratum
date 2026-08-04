@@ -11,6 +11,7 @@ import (
 	"math"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -256,6 +257,57 @@ func (vs *VectorStore) createCollectionWithDimLocked(ctx context.Context, collec
 	return nil
 }
 
+// CollectionInfo is the structural snapshot of a Milvus collection returned
+// by DescribeCollection. Missing optional fields (agent_id / user_id) are
+// reported as false rather than an error so callers can decide their own
+// tolerance for legacy schemas.
+type CollectionInfo struct {
+	Dim        int
+	HasAgentID bool
+	HasUserID  bool
+}
+
+// DescribeCollection inspects an existing collection's schema: vector
+// dimension and presence of the agent_id / user_id columns. It does not
+// create or mutate anything. Errors surface as availability-classified
+// errors via the standard helper.
+func (vs *VectorStore) DescribeCollection(ctx context.Context, collectionName string) (CollectionInfo, error) {
+	c, err := vs.getClient(ctx)
+	if err != nil {
+		return CollectionInfo{}, err
+	}
+	desc, err := c.DescribeCollection(ctx, collectionName)
+	if err != nil {
+		return CollectionInfo{}, classifyAvailabilityError("describe collection",
+			fmt.Errorf("failed to describe collection %s: %w", collectionName, err))
+	}
+	return collectionInfoFromSchema(desc.Schema), nil
+}
+
+// collectionInfoFromSchema extracts the structural snapshot from a Milvus
+// collection schema. Missing optional fields (agent_id / user_id) are
+// reported as false rather than an error so callers can decide their own
+// tolerance for legacy schemas.
+func collectionInfoFromSchema(schema *entity.Schema) CollectionInfo {
+	info := CollectionInfo{}
+	if schema == nil {
+		return info
+	}
+	for _, field := range schema.Fields {
+		switch field.Name {
+		case "vector":
+			if dim, ok := field.TypeParams["dim"]; ok {
+				info.Dim, _ = strconv.Atoi(dim)
+			}
+		case "agent_id":
+			info.HasAgentID = true
+		case "user_id":
+			info.HasUserID = true
+		}
+	}
+	return info
+}
+
 func validateCollectionCompatibility(existingDim, requiredDim int, hasAgentID bool) error {
 	if existingDim != requiredDim {
 		return fmt.Errorf("vector dimension mismatch: existing=%d required=%d", existingDim, requiredDim)
@@ -387,7 +439,21 @@ func (vs *VectorStore) Search(ctx context.Context, collectionName string, queryV
 
 // SearchWithFilter performs vector search with an optional Milvus boolean expression filter.
 // Pass expression="" for unfiltered search. partitions scopes the search to specific partitions.
+// Stale-schema tolerance: a collection missing the agent_id field yields an
+// empty result (legacy memory collections) instead of an error.
 func (vs *VectorStore) SearchWithFilter(ctx context.Context, collectionName string, queryVector []float32, topK int, expression string, partitions ...string) ([]SearchResult, error) {
+	return vs.searchWithFilter(ctx, collectionName, queryVector, topK, expression, false, partitions...)
+}
+
+// SearchWithFilterStrict is the fail-closed variant: a stale collection
+// missing agent_id is reported as an error instead of being silently
+// tolerated as an empty result. RAG retrieval paths use this because their
+// collections are created with the current schema; a mismatch signals drift.
+func (vs *VectorStore) SearchWithFilterStrict(ctx context.Context, collectionName string, queryVector []float32, topK int, expression string, partitions ...string) ([]SearchResult, error) {
+	return vs.searchWithFilter(ctx, collectionName, queryVector, topK, expression, true, partitions...)
+}
+
+func (vs *VectorStore) searchWithFilter(ctx context.Context, collectionName string, queryVector []float32, topK int, expression string, strict bool, partitions ...string) ([]SearchResult, error) {
 	c, err := vs.getClient(ctx)
 	if err != nil {
 		return nil, err
@@ -415,8 +481,34 @@ func (vs *VectorStore) SearchWithFilter(ctx context.Context, collectionName stri
 		return nil, fmt.Errorf("failed to create search params: %w", err)
 	}
 
-	// Execute search
-	results, searchErr := c.Search(
+	results, err := vs.searchWithParam(ctx, c, collectionName, partitions, expression, vectors, topK, sp, strict)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(results) == 0 {
+		return []SearchResult{}, nil
+	}
+	out := searchRowsToResults(results[0])
+	vs.logger.Debug("search completed", zap.Int("results", len(out)))
+	return out, nil
+}
+
+// searchWithParam executes the Milvus search and classifies errors. A stale
+// collection missing agent_id is tolerated as an empty result for the memory
+// path (strict=false); RAG retrieval paths pass strict=true to fail closed.
+func (vs *VectorStore) searchWithParam(
+	ctx context.Context,
+	c client.Client,
+	collectionName string,
+	partitions []string,
+	expression string,
+	vectors []entity.Vector,
+	topK int,
+	sp entity.SearchParam,
+	strict bool,
+) ([]client.SearchResult, error) {
+	results, err := c.Search(
 		ctx,
 		collectionName,
 		partitions,
@@ -428,91 +520,85 @@ func (vs *VectorStore) SearchWithFilter(ctx context.Context, collectionName stri
 		topK,
 		sp,
 	)
-	if searchErr != nil {
-		if strings.Contains(searchErr.Error(), "field agent_id not exist") {
-			vs.logger.Warn("memory collection has stale schema, returning empty results",
+	if err == nil {
+		return results, nil
+	}
+	if strings.Contains(err.Error(), "field agent_id not exist") {
+		if strict {
+			vs.logger.Error("collection schema drift: agent_id missing",
 				zap.String("collection", collectionName))
-			return nil, nil
+			return nil, classifyAvailabilityError("search",
+				fmt.Errorf("failed to search vectors: collection %s has stale schema (agent_id missing)", collectionName))
 		}
-		vs.logger.Error("failed to search vectors", zap.Error(searchErr))
-		return nil, classifyAvailabilityError("search", fmt.Errorf("failed to search vectors: %w", searchErr))
+		vs.logger.Warn("memory collection has stale schema, returning empty results",
+			zap.String("collection", collectionName))
+		return nil, nil
 	}
+	vs.logger.Error("failed to search vectors", zap.Error(err))
+	return nil, classifyAvailabilityError("search", fmt.Errorf("failed to search vectors: %w", err))
+}
 
-	// Process results - returns []client.SearchResult
-	searchResults := make([]SearchResult, 0)
-	if len(results) > 0 {
-		result := results[0]
+// searchRowsToResults maps one Milvus hit batch into SearchResults, skipping
+// rows whose id or content cell is unavailable.
+func searchRowsToResults(result client.SearchResult) []SearchResult {
+	idCol := result.Fields.GetColumn("id")
+	contentCol := result.Fields.GetColumn("content")
+	sourceCol := result.Fields.GetColumn("source_document")
+	chunkIdxCol := result.Fields.GetColumn("chunk_index")
+	scores := result.Scores
 
-		// Get columns from fields
-		idCol := result.Fields.GetColumn("id")
-		contentCol := result.Fields.GetColumn("content")
-		sourceCol := result.Fields.GetColumn("source_document")
-		chunkIdxCol := result.Fields.GetColumn("chunk_index")
-
-		// Get scores from the result
-		scores := result.Scores
-
-		// Process each result (each result is one search with topK matches)
-		for i := 0; i < result.ResultCount; i++ {
-			var id, content, sourceDocument string
-			var chunkIndex int64
-			var score float32 = 0
-
-			// Get ID
-			if idCol != nil && i < idCol.Len() {
-				if val, err := idCol.Get(i); err == nil {
-					if idStr, ok := val.(string); ok {
-						id = idStr
-					}
-				}
-			}
-
-			// Get content
-			if contentCol != nil && i < contentCol.Len() {
-				if val, err := contentCol.Get(i); err == nil {
-					if contentStr, ok := val.(string); ok {
-						content = contentStr
-					}
-				}
-			}
-
-			// Get source document
-			if sourceCol != nil && i < sourceCol.Len() {
-				if val, err := sourceCol.Get(i); err == nil {
-					if sourceStr, ok := val.(string); ok {
-						sourceDocument = sourceStr
-					}
-				}
-			}
-
-			// Get chunk index
-			if chunkIdxCol != nil && i < chunkIdxCol.Len() {
-				if val, err := chunkIdxCol.Get(i); err == nil {
-					if idx, ok := val.(int64); ok {
-						chunkIndex = idx
-					}
-				}
-			}
-
-			// Get score from result.Scores
-			if i < len(scores) {
-				score = float32(scores[i])
-			}
-
-			if id != "" && content != "" {
-				searchResults = append(searchResults, SearchResult{
-					ID:             id,
-					Content:        content,
-					SourceDocument: sourceDocument,
-					ChunkIndex:     chunkIndex,
-					Score:          score,
-				})
-			}
+	out := make([]SearchResult, 0, result.ResultCount)
+	for i := 0; i < result.ResultCount; i++ {
+		var score float32
+		if i < len(scores) {
+			score = float32(scores[i])
+		}
+		id := columnString(idCol, i)
+		content := columnString(contentCol, i)
+		if id != "" && content != "" {
+			out = append(out, SearchResult{
+				ID:             id,
+				Content:        content,
+				SourceDocument: columnString(sourceCol, i),
+				ChunkIndex:     columnChunkIndex(chunkIdxCol, i),
+				Score:          score,
+			})
 		}
 	}
+	return out
+}
 
-	vs.logger.Debug("search completed", zap.Int("results", len(searchResults)))
-	return searchResults, nil
+// columnString reads one string cell, tolerating missing columns and type
+// mismatches from stale schemas.
+func columnString(col entity.Column, i int) string {
+	if col == nil || i >= col.Len() {
+		return ""
+	}
+	val, err := col.Get(i)
+	if err != nil {
+		return ""
+	}
+	s, ok := val.(string)
+	if !ok {
+		return ""
+	}
+	return s
+}
+
+// columnChunkIndex reads one int64 cell; missing or mismatched cells yield 0.
+func columnChunkIndex(col entity.Column, i int) int64 {
+	if col == nil || i >= col.Len() {
+		return 0
+	}
+	val, err := col.Get(i)
+	if err != nil {
+		return 0
+	}
+	idx, ok := val.(int64)
+	if !ok {
+		return 0
+	}
+	return idx
 }
 
 func (vs *VectorStore) Flush(ctx context.Context, collectionName string) error {
