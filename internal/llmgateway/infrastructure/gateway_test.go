@@ -20,6 +20,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 )
 
@@ -290,6 +291,276 @@ func TestOpenAICompatProtocolListsProviderModels(t *testing.T) {
 			require.Equal(t, tc.want, models)
 		})
 	}
+}
+
+// zeroUsageChatProto succeeds but reports zero token usage.
+type zeroUsageChatProto struct{}
+
+func (zeroUsageChatProto) Complete(ctx context.Context, cfg infrastructure.ProviderConfig, req *infrastructure.CompletionRequest) (*infrastructure.CompletionResponse, error) {
+	return &infrastructure.CompletionResponse{Content: "ok", Usage: infrastructure.TokenUsage{}}, nil
+}
+func (zeroUsageChatProto) CompleteStream(ctx context.Context, cfg infrastructure.ProviderConfig, req *infrastructure.CompletionRequest, onToken func(string)) (*infrastructure.CompletionResponse, error) {
+	onToken("test")
+	return &infrastructure.CompletionResponse{Content: "test", Usage: infrastructure.TokenUsage{}}, nil
+}
+func (zeroUsageChatProto) Health(ctx context.Context, cfg infrastructure.ProviderConfig) error {
+	return nil
+}
+func (zeroUsageChatProto) ListModels(ctx context.Context, cfg infrastructure.ProviderConfig) ([]infrastructure.DiscoveredModel, error) {
+	return nil, nil
+}
+
+// multiTokenChatProto emits two tokens so TTFT should be recorded exactly once.
+type multiTokenChatProto struct{}
+
+func (multiTokenChatProto) Complete(ctx context.Context, cfg infrastructure.ProviderConfig, req *infrastructure.CompletionRequest) (*infrastructure.CompletionResponse, error) {
+	return &infrastructure.CompletionResponse{Content: "ok"}, nil
+}
+func (multiTokenChatProto) CompleteStream(ctx context.Context, cfg infrastructure.ProviderConfig, req *infrastructure.CompletionRequest, onToken func(string)) (*infrastructure.CompletionResponse, error) {
+	onToken("a")
+	onToken("b")
+	return &infrastructure.CompletionResponse{Content: "ab"}, nil
+}
+func (multiTokenChatProto) Health(ctx context.Context, cfg infrastructure.ProviderConfig) error {
+	return nil
+}
+func (multiTokenChatProto) ListModels(ctx context.Context, cfg infrastructure.ProviderConfig) ([]infrastructure.DiscoveredModel, error) {
+	return nil, nil
+}
+
+// successEmbedProto returns a fixed embedding vector.
+type successEmbedProto struct{}
+
+func (successEmbedProto) CreateEmbeddings(ctx context.Context, cfg infrastructure.ProviderConfig, req *infrastructure.EmbeddingRequest) (*infrastructure.EmbeddingResponse, error) {
+	return &infrastructure.EmbeddingResponse{Embeddings: [][]float32{{0.1, 0.2}}}, nil
+}
+func (successEmbedProto) BatchSize() int { return 8 }
+
+// errEmbedProto fails all embedding calls.
+type errEmbedProto struct{}
+
+func (errEmbedProto) CreateEmbeddings(ctx context.Context, cfg infrastructure.ProviderConfig, req *infrastructure.EmbeddingRequest) (*infrastructure.EmbeddingResponse, error) {
+	return nil, errors.New("embedding provider error")
+}
+func (errEmbedProto) BatchSize() int { return 8 }
+
+// llmMetricsSpy embeds NoopMetrics and records LLM metric calls.
+type llmMetricsSpy struct {
+	observability.NoopMetrics
+	requests   []string // model|provider|status
+	durations  int
+	tokenUsage []string // model|tokenType|count
+	ttft       int
+}
+
+func (s *llmMetricsSpy) IncLLMRequest(model, provider, status string) {
+	s.requests = append(s.requests, model+"|"+provider+"|"+status)
+}
+func (s *llmMetricsSpy) RecordLLMRequestDuration(model, provider string, duration float64) {
+	s.durations++
+}
+func (s *llmMetricsSpy) IncLLMTokenUsage(model, tokenType string, count int64) {
+	s.tokenUsage = append(s.tokenUsage, fmt.Sprintf("%s|%s|%d", model, tokenType, count))
+}
+func (s *llmMetricsSpy) RecordLLMTokenHistogram(model, tokenType string, count float64) {}
+func (s *llmMetricsSpy) RecordLLMFirstTokenLatency(model, provider string, latency float64) {
+	s.ttft++
+}
+
+// nonGatewayCompleter satisfies domain.LLMCompleter but is not a *Gateway.
+type nonGatewayCompleter struct{}
+
+func (nonGatewayCompleter) Complete(ctx context.Context, req *infrastructure.CompletionRequest) (*infrastructure.CompletionResponse, error) {
+	return nil, nil
+}
+func (nonGatewayCompleter) CompleteStream(ctx context.Context, req *infrastructure.CompletionRequest, onToken func(string)) (*infrastructure.CompletionResponse, error) {
+	return nil, nil
+}
+
+// gatewayFixture wires a registry with one enabled chat model ("qwen-turbo") and
+// one embedding model ("text-embed") so Gateway methods resolve successfully.
+func gatewayFixture(chat infrastructure.ChatProtocol, embed infrastructure.EmbedProtocol) (*infrastructure.Gateway, *llmMetricsSpy, *mockModelRepo) {
+	modelRepo := &mockModelRepo{
+		models: []domain.Model{
+			{ID: "m1", ProviderID: "p1", Name: "qwen-turbo", Enabled: true,
+				Capabilities: []domain.ModelCapability{domain.CapChat}},
+			{ID: "m2", ProviderID: "p2", Name: "text-embed", Enabled: true,
+				Capabilities: []domain.ModelCapability{domain.CapEmbedding}},
+		},
+	}
+	providerRepo := &mockProviderRepo{
+		providers: map[string]*domain.Provider{
+			"p1": {ID: "p1", Name: "Test Qwen", Kind: domain.ProviderOpenAICompat,
+				BaseURL: "https://api.test", APIKey: "sk-test", DefaultModel: "qwen-turbo", Enabled: true},
+			"p2": {ID: "p2", Name: "Test Embed", Kind: domain.ProviderOpenAICompat,
+				BaseURL: "https://api.test", APIKey: "sk-test", DefaultModel: "text-embed", Enabled: true},
+		},
+	}
+	chatProtos := map[domain.ProviderKind]infrastructure.ChatProtocol{domain.ProviderOpenAICompat: chat}
+	embedProtos := map[domain.ProviderKind]infrastructure.EmbedProtocol{domain.ProviderOpenAICompat: embed}
+	reg := infrastructure.NewModelRegistry(modelRepo, providerRepo, chatProtos, embedProtos, 5*time.Minute)
+	spy := &llmMetricsSpy{}
+	return infrastructure.NewGateway(reg, chatProtos, embedProtos).WithMetrics(spy), spy, modelRepo
+}
+
+func TestGatewayComplete_success(t *testing.T) {
+	gateway, _, _ := gatewayFixture(successChatProto{}, successEmbedProto{})
+	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
+
+	resp, err := gateway.Complete(ctx, &infrastructure.CompletionRequest{Model: "qwen-turbo"})
+	require.NoError(t, err)
+	require.Equal(t, "ok", resp.Content)
+	require.Equal(t, 1, resp.Usage.PromptTokens)
+}
+
+func TestGatewayComplete_resolveFails(t *testing.T) {
+	gateway, _, _ := gatewayFixture(successChatProto{}, successEmbedProto{})
+	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
+
+	_, err := gateway.Complete(ctx, &infrastructure.CompletionRequest{Model: "nope"})
+	require.ErrorContains(t, err, `resolve model "nope"`)
+}
+
+func TestGatewayComplete_providerErrorRecordsErrorStatus(t *testing.T) {
+	gateway, spy, _ := gatewayFixture(errChatProto{}, successEmbedProto{})
+	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
+
+	_, err := gateway.Complete(ctx, &infrastructure.CompletionRequest{Model: "qwen-turbo"})
+	require.ErrorContains(t, err, "provider error")
+	require.Equal(t, []string{"qwen-turbo|Test Qwen|error"}, spy.requests)
+}
+
+func TestGatewayComplete_recordsSuccessAndUsageMetrics(t *testing.T) {
+	gateway, spy, _ := gatewayFixture(successChatProto{}, successEmbedProto{})
+	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
+
+	resp, err := gateway.Complete(ctx, &infrastructure.CompletionRequest{Model: "qwen-turbo"})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, []string{"qwen-turbo|Test Qwen|success"}, spy.requests)
+	require.Equal(t, 1, spy.durations)
+	require.Equal(t, []string{"qwen-turbo|prompt|1", "qwen-turbo|completion|1"}, spy.tokenUsage)
+}
+
+func TestGatewayComplete_skipsZeroTokenUsageMetrics(t *testing.T) {
+	gateway, spy, _ := gatewayFixture(zeroUsageChatProto{}, successEmbedProto{})
+	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
+
+	resp, err := gateway.Complete(ctx, &infrastructure.CompletionRequest{Model: "qwen-turbo"})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Empty(t, spy.tokenUsage)
+	require.Equal(t, []string{"qwen-turbo|Test Qwen|success"}, spy.requests)
+}
+
+func TestGatewayCompleteStream_recordsTTFTOnce(t *testing.T) {
+	gateway, spy, _ := gatewayFixture(multiTokenChatProto{}, successEmbedProto{})
+	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
+
+	resp, err := gateway.CompleteStream(ctx, &infrastructure.CompletionRequest{Model: "qwen-turbo"}, func(string) {})
+	require.NoError(t, err)
+	require.Equal(t, "ab", resp.Content)
+	require.Equal(t, 1, spy.ttft)
+}
+
+func TestGatewayCompleteStream_resolveFails(t *testing.T) {
+	gateway, spy, _ := gatewayFixture(successChatProto{}, successEmbedProto{})
+	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
+
+	_, err := gateway.CompleteStream(ctx, &infrastructure.CompletionRequest{Model: "nope"}, func(string) {})
+	require.ErrorContains(t, err, `resolve model "nope"`)
+	require.Equal(t, []string{"nope|unknown|error"}, spy.requests)
+}
+
+func TestGatewayCreateEmbeddings_success(t *testing.T) {
+	gateway, _, _ := gatewayFixture(successChatProto{}, successEmbedProto{})
+	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
+
+	resp, err := gateway.CreateEmbeddings(ctx, &infrastructure.EmbeddingRequest{Model: "text-embed", Input: []string{"hello"}})
+	require.NoError(t, err)
+	require.Equal(t, [][]float32{{0.1, 0.2}}, resp.Embeddings)
+}
+
+func TestGatewayCreateEmbeddings_resolveFails(t *testing.T) {
+	gateway, _, _ := gatewayFixture(successChatProto{}, successEmbedProto{})
+	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
+
+	_, err := gateway.CreateEmbeddings(ctx, &infrastructure.EmbeddingRequest{Model: "nope"})
+	require.ErrorContains(t, err, `resolve embedding model "nope"`)
+}
+
+func TestGatewayCreateEmbeddings_providerError(t *testing.T) {
+	gateway, _, _ := gatewayFixture(successChatProto{}, errEmbedProto{})
+	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
+
+	_, err := gateway.CreateEmbeddings(ctx, &infrastructure.EmbeddingRequest{Model: "text-embed", Input: []string{"x"}})
+	require.ErrorContains(t, err, "embedding provider error")
+}
+
+func TestGatewayHealth(t *testing.T) {
+	gateway, _, _ := gatewayFixture(successChatProto{}, successEmbedProto{})
+	require.NoError(t, gateway.Health(context.Background()))
+}
+
+func TestGatewayListModelsReturnsEmptySlices(t *testing.T) {
+	gateway, _, _ := gatewayFixture(successChatProto{}, successEmbedProto{})
+	require.Empty(t, gateway.ListChatModels())
+	require.Empty(t, gateway.ListEmbeddingModels())
+}
+
+func TestGatewayListChatModelsByTenant(t *testing.T) {
+	gateway, _, _ := gatewayFixture(successChatProto{}, successEmbedProto{})
+	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
+
+	names, err := gateway.ListChatModelsByTenant(ctx, "test-tenant")
+	require.NoError(t, err)
+	require.Equal(t, []string{"qwen-turbo"}, names)
+}
+
+func TestGatewayListEmbeddingModelsByTenant(t *testing.T) {
+	gateway, _, _ := gatewayFixture(successChatProto{}, successEmbedProto{})
+	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
+
+	names, err := gateway.ListEmbeddingModelsByTenant(ctx, "test-tenant")
+	require.NoError(t, err)
+	require.Equal(t, []string{"text-embed"}, names)
+}
+
+func TestGatewayListModelsByTenant_repoFails(t *testing.T) {
+	gateway, _, modelRepo := gatewayFixture(successChatProto{}, successEmbedProto{})
+	modelRepo.err = errors.New("db down")
+	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
+
+	_, err := gateway.ListChatModelsByTenant(ctx, "test-tenant")
+	require.ErrorContains(t, err, "list models")
+	_, err = gateway.ListEmbeddingModelsByTenant(ctx, "test-tenant")
+	require.ErrorContains(t, err, "list models")
+}
+
+func TestGatewayWithMetricsReturnsGateway(t *testing.T) {
+	gateway, _, _ := gatewayFixture(successChatProto{}, successEmbedProto{})
+	require.Same(t, gateway, gateway.WithMetrics(&llmMetricsSpy{}))
+}
+
+func TestGatewayWithLoggerReturnsGateway(t *testing.T) {
+	gateway, _, _ := gatewayFixture(successChatProto{}, successEmbedProto{})
+	require.Same(t, gateway, gateway.WithLogger(zap.NewNop()))
+}
+
+func TestWithGatewayAndGatewayFromContext_roundTrip(t *testing.T) {
+	gateway, _, _ := gatewayFixture(successChatProto{}, successEmbedProto{})
+
+	ctx := infrastructure.WithGateway(context.Background(), gateway)
+	got, ok := infrastructure.GatewayFromContext(ctx)
+	require.True(t, ok)
+	require.Same(t, gateway, got)
+}
+
+func TestGatewayFromContext_wrongType(t *testing.T) {
+	ctx := domain.WithCompleter(context.Background(), nonGatewayCompleter{})
+	got, ok := infrastructure.GatewayFromContext(ctx)
+	require.False(t, ok)
+	require.Nil(t, got)
 }
 
 func TestZhipuComplete_ToolCalls(t *testing.T) {

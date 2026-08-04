@@ -15,7 +15,17 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type PgStore struct{ pool *pgxpool.Pool }
+// poolIface allows pgxmock injection in tests.
+type poolIface interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+var _ poolIface = (*pgxpool.Pool)(nil)
+
+type PgStore struct{ pool poolIface }
 
 const runSelectColumns = `SELECT id,definition_id,version_id,version_no,status,snapshot_json,input_json,
 	output_text,error_message,idempotency_key,request_hash,generation,scheduler_owner,lease_expires_at,
@@ -41,7 +51,7 @@ func (s *PgStore) exec(ctx context.Context, tenantID string, fn func(context.Con
 	if !ok {
 		ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
 	}
-	return postgres.ExecTenant(ctx, s.pool, fn)
+	return postgres.ExecTenantWith(ctx, s.pool, tenantID, fn)
 }
 
 func (s *PgStore) CreateDefinition(ctx context.Context, tenantID string, d *domain.Definition) error {
@@ -411,7 +421,7 @@ func (s *PgStore) ClaimRun(ctx context.Context, owner string, lease time.Duratio
 	for _, tenantID := range tenantIDs {
 		tenantCtx := postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
 		var runID string
-		err := postgres.ExecTenant(tenantCtx, s.pool, func(ctx context.Context, tx pgx.Tx) error {
+		err := postgres.ExecTenantWith(tenantCtx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 			if _, lockErr := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext(current_schema()))`); lockErr != nil {
 				return lockErr
 			}
@@ -723,7 +733,7 @@ func (s *PgStore) ResolveEffect(ctx context.Context, tenantID, id string, genera
 
 func (s *PgStore) ReleaseRun(ctx context.Context, tenantID, runID, owner string, generation int64) error {
 	tenantCtx := postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
-	return postgres.ExecTenant(tenantCtx, s.pool, func(ctx context.Context, tx pgx.Tx) error {
+	return postgres.ExecTenantWith(tenantCtx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE workflow_runs SET scheduler_owner='',lease_expires_at=NULL,updated_at=NOW() WHERE id=$1 AND scheduler_owner=$2 AND generation=$3`, runID, owner, generation)
 		if err != nil {
 			return err
