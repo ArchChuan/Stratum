@@ -359,18 +359,18 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 // with its own alerting rules (see helm stratum-prometheusrule.yaml).
 func (m *PrometheusMetrics) registerReaperMetrics(factory promauto.Factory) {
 	m.reaperCyclesTotal = factory.NewCounterVec(
-		prometheus.CounterOpts{Name: "reaper_cycles_total", Help: "Reaper cycles by outcome"},
+		prometheus.CounterOpts{Name: "reaper_cycles_total", Help: "Guest reaper cycles by outcome"},
 		[]string{"outcome"},
 	)
 	m.reaperGuestsDeleted = factory.NewCounter(
-		prometheus.CounterOpts{Name: "reaper_guests_deleted_total", Help: "Total guest accounts deleted by the reaper"},
+		prometheus.CounterOpts{Name: "reaper_guests_deleted_total", Help: "Expired guests deleted by the guest reaper"},
 	)
 	m.reaperDeleteErrors = factory.NewCounterVec(
-		prometheus.CounterOpts{Name: "reaper_delete_errors_total", Help: "Reaper delete errors by phase"},
+		prometheus.CounterOpts{Name: "reaper_delete_errors_total", Help: "Guest reaper delete errors by phase"},
 		[]string{"phase"},
 	)
 	m.reaperCycleTimestamp = factory.NewGauge(
-		prometheus.GaugeOpts{Name: "reaper_last_cycle_timestamp_seconds", Help: "Unix timestamp of the last reaper cycle"},
+		prometheus.GaugeOpts{Name: "reaper_last_cycle_timestamp_seconds", Help: "Unix timestamp of the last guest reaper cycle"},
 	)
 }
 
