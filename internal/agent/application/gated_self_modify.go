@@ -62,9 +62,12 @@ func (s *AgentService) GatedSelfModify(
 		return GatedSelfModifyResult{}, fmt.Errorf("compute self modify fingerprint: %w", err)
 	}
 	decision, err := s.deps.OperationGate.CheckWithProposal(ctx, port.OperationRequest{
-		TenantID:    tenantID,
-		AgentID:     agentID,
-		OpType:      port.OpSelfModify,
+		TenantID: tenantID,
+		AgentID:  agentID,
+		OpType:   port.OpSelfModify,
+		// self-modify 是内容变更通道：委托策略恒 no_delegate（服务端策略，
+		// 客户端不可自报），缺省空串会违反 delegation CHECK 约束
+		Delegation:  port.DelegationNone,
 		Fingerprint: fingerprint,
 		ProposerID:  actorID,
 	}, req)

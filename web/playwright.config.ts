@@ -16,6 +16,9 @@ export default defineConfig({
     headless: true,
     screenshot: 'off',
     trace: 'on-first-retry',
+    // soak 长跑（600s 循环）下 dev server 可能短暂卡顿（WSL2 内存压力），
+    // 单独放宽导航超时，避免页面 load 抖动误判失败；断言/点击仍保持默认灵敏度
+    navigationTimeout: 60_000,
   },
   webServer: {
     command: 'npm run dev -- --host 127.0.0.1 --port 5173',

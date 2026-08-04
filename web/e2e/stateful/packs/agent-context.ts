@@ -107,6 +107,10 @@ export const executeAgentContextPack = async ({
         if (!agentID) return;
 				await page.goto(`${webURL}/agents`);
         const card = page.locator('.ant-card').filter({ hasText: agentName });
+        // goto 后立即 count 会在列表未渲染完时误判 0 并静默跳过删除，
+        // 导致 agent 跨轮残留累积（下拉虚拟滚动随之被撑爆）——先等目标卡片
+        // 渲染（页面有平台助手卡，waitFor 可成功）再走 count 守卫
+        await card.first().waitFor({ state: 'visible', timeout: 15_000 }).catch(() => {});
         if (await card.count()) {
           await card.getByRole('button', { name: '删除 Agent' }).click();
           await page.locator('.ant-popconfirm').getByRole('button', { name: /删\s*除/ }).click();

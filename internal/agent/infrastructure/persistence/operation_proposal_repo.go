@@ -125,15 +125,17 @@ func (r *PgOperationProposalRepo) UpdateStatus(
 	reviewerID, note string,
 ) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		// tenant schema 隔离下无 tenant_id 列：schema 由 execTenant 切换，
+		// tenantID 仅用于寻址，不进 SQL（占位符须与参数严格对齐，pgx 不宽容多余参数）
 		tag, err := tx.Exec(ctx, `UPDATE operation_proposals SET
-            status = $3,
-            reviewed_by = $4,
-            review_note = $5,
+            status = $2,
+            reviewed_by = $3,
+            review_note = $4,
             updated_at = NOW(),
-            resolved_at = CASE WHEN $3 = 'rejected' THEN NOW() ELSE resolved_at END,
-            expires_at = CASE WHEN $3 = 'approved' THEN NOW() + $6::interval ELSE expires_at END
+            resolved_at = CASE WHEN $2 = 'rejected' THEN NOW() ELSE resolved_at END,
+            expires_at = CASE WHEN $2 = 'approved' THEN NOW() + $5::interval ELSE expires_at END
             WHERE id = $1 AND status IN ('proposed','reviewing')`,
-			id, tenantID, status, reviewerID, note, constants.OperationApprovalTTL.String())
+			id, status, reviewerID, note, constants.OperationApprovalTTL.String())
 		if err != nil {
 			return fmt.Errorf("update operation proposal status: %w", err)
 		}

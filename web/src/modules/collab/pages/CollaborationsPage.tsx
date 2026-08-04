@@ -68,15 +68,18 @@ export const CollaborationsPage = () => {
     }
   }, []);
 
+  const loadAgents = useCallback(async () => {
+    try {
+      setAgents((await agentApi.list()).map((a) => a.id));
+    } catch {
+      message.error({ content: '加载 Agent 列表失败', duration: 0 });
+    }
+  }, []);
+
   useEffect(() => {
     void load();
-    void agentApi
-      .list()
-      .then((list) => setAgents(list.map((a) => a.id)))
-      .catch(() => {
-        message.error({ content: '加载 Agent 列表失败', duration: 0 });
-      });
-  }, [load]);
+    void loadAgents();
+  }, [load, loadAgents]);
 
   const canControl = useCallback(
     (collab: Collaboration) => isAdmin || collab.createdBy === user?.sub,
@@ -85,8 +88,10 @@ export const CollaborationsPage = () => {
 
   const openCreate = useCallback(() => {
     form.resetFields();
+    // 初始拉取失败时（空列表）打开弹窗自动重试，避免参与者选项永久缺失
+    if (agents.length === 0) void loadAgents();
     setCreateOpen(true);
-  }, [form]);
+  }, [form, agents, loadAgents]);
 
   const handleCreate = useCallback(async () => {
     const values = await form.validateFields();
@@ -236,7 +241,15 @@ export const CollaborationsPage = () => {
             />
           </Form.Item>
           <Form.Item name="participants" label="参与者" rules={[{ required: true, message: '请选择参与者' }]}>
-            <Select mode="multiple" options={agents.map((a) => ({ value: a, label: a }))} placeholder="选择参与协作的 Agent" />
+            <Select
+              mode="multiple"
+              showSearch
+              options={agents.map((a) => ({ value: a, label: a }))}
+              placeholder="选择参与协作的 Agent"
+              filterOption={(input, option) =>
+                (option?.label as string).toLowerCase().includes(input.toLowerCase())
+              }
+            />
           </Form.Item>
         </Form>
       </Modal>

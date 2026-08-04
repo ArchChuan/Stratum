@@ -1,5 +1,5 @@
 import { Form, Input, InputNumber, Modal, Switch, message } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 
 import type { Agent, AgentFormValues } from '../model/agent';
 
@@ -22,24 +22,14 @@ export const AgentSelfModifyModal = ({ agent, open, onClose }: AgentSelfModifyMo
   const [form] = Form.useForm<AgentFormValues>();
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    if (open && agent) {
-      form.setFieldsValue({
-        name: agent.name,
-        description: agent.description,
-        systemPrompt: agent.systemPrompt,
-        llmModel: agent.llmModel,
-        maxIterations: agent.maxIterations ?? AGENT_DEFAULT_MAX_ITERATIONS,
-        maxContextTokens: agent.maxContextTokens ?? 8000,
-        memoryScope: agent.memoryScope || 'user',
-        checkpointEnabled: agent.checkpointEnabled ?? false,
-      });
-    }
-  }, [open, agent, form]);
-
   const handleSubmit = useCallback(async () => {
     if (!agent) return;
-    const values = await form.validateFields();
+    let values: AgentFormValues;
+    try {
+      values = await form.validateFields();
+    } catch {
+      return; // 校验失败：表单内已红字提示，不产生未捕获 rejection
+    }
     setLoading(true);
     try {
       const result = await operationProposalApi.selfModify(agent.id, {
@@ -75,8 +65,29 @@ export const AgentSelfModifyModal = ({ agent, open, onClose }: AgentSelfModifyMo
       okText="提交审批"
       cancelText="取消"
       width={520}
+      destroyOnClose
     >
-      <Form form={form} layout="vertical" preserve={false}>
+      {/* destroyOnClose + initialValues：预填随 Form mount 生效，与 store 时序无关
+          （rc-dialog children 延迟渲染会清掉 setFieldsValue 的写入） */}
+      <Form
+        form={form}
+        layout="vertical"
+        preserve={false}
+        initialValues={
+          agent
+            ? {
+                name: agent.name,
+                description: agent.description,
+                systemPrompt: agent.systemPrompt,
+                llmModel: agent.llmModel,
+                maxIterations: agent.maxIterations ?? AGENT_DEFAULT_MAX_ITERATIONS,
+                maxContextTokens: agent.maxContextTokens ?? 8000,
+                memoryScope: agent.memoryScope || 'user',
+                checkpointEnabled: agent.checkpointEnabled ?? false,
+              }
+            : undefined
+        }
+      >
         <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
           <Input maxLength={100} />
         </Form.Item>

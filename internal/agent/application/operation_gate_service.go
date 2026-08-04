@@ -170,9 +170,16 @@ func (s *OperationGateService) propose(ctx context.Context, req port.OperationRe
 		return port.GateDecision{}, err
 	}
 	now := s.now().UTC()
+	// 未声明委托的操作按 no_delegate 落库：delegation CHECK 约束只接受三枚举值，
+	// 空串会直接违约（self-modify 等非委托操作在策略层即已填 no_delegate，
+	// 此处兜底防未来调用方漏填）
+	delegation := string(req.Delegation)
+	if delegation == "" {
+		delegation = string(port.DelegationNone)
+	}
 	proposal := domain.OperationProposal{
 		ID: s.newID(), TenantID: req.TenantID, AgentID: req.AgentID, TargetAgentID: req.TargetAgentID,
-		OpType: string(req.OpType), Delegation: string(req.Delegation),
+		OpType: string(req.OpType), Delegation: delegation,
 		MaxDailyCostUSD: req.Budget.MaxDailyCostUSD, MaxDailyExecutions: req.Budget.MaxDailyExecutions,
 		Fingerprint: req.Fingerprint, PayloadSummary: summary, Status: domain.OpProposed,
 		ProposerID: req.ProposerID, CreatedAt: now, UpdatedAt: now,
