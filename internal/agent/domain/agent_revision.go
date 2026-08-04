@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 const maxAgentContextTokens = 1_000_000
@@ -21,7 +23,9 @@ const (
 )
 
 type ModelParameters struct {
-	MaxContextTokens int `json:"max_context_tokens,omitempty"`
+	MaxContextTokens int     `json:"max_context_tokens,omitempty"`
+	Temperature      float32 `json:"temperature,omitempty"`
+	MaxTokens        int     `json:"max_tokens,omitempty"`
 }
 
 type AgentBinding struct {
@@ -189,6 +193,14 @@ func bindingKey(kind AgentBindingKind, id string) string {
 func validateModelParameters(params ModelParameters) error {
 	if params.MaxContextTokens < 0 || params.MaxContextTokens > maxAgentContextTokens {
 		return fmt.Errorf("agent revision: max context tokens must be between 0 and %d", maxAgentContextTokens)
+	}
+	if params.Temperature < constants.TunableTemperatureMin || params.Temperature > constants.TunableTemperatureMax {
+		return fmt.Errorf("agent revision: temperature must be between %v and %v",
+			constants.TunableTemperatureMin, constants.TunableTemperatureMax)
+	}
+	if params.MaxTokens < constants.TunableMaxTokensMin || params.MaxTokens > constants.TunableMaxTokensMax {
+		return fmt.Errorf("agent revision: max tokens must be between %d and %d",
+			constants.TunableMaxTokensMin, constants.TunableMaxTokensMax)
 	}
 	return nil
 }

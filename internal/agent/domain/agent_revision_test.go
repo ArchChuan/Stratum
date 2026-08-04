@@ -79,3 +79,68 @@ func TestAgentRevisionRejectsUnboundedContextTokens(t *testing.T) {
 		t.Fatal("expected excessive context token limit to be rejected")
 	}
 }
+
+func TestAgentRevisionValidatesModelParameters(t *testing.T) {
+	tests := []struct {
+		name    string
+		params  ModelParameters
+		wantErr bool
+	}{
+		{name: "zero values are unset", params: ModelParameters{}},
+		{name: "temperature bounds inclusive", params: ModelParameters{Temperature: 0, MaxTokens: 0}},
+		{name: "temperature at max", params: ModelParameters{Temperature: 2, MaxTokens: 0}},
+		{name: "max_tokens at max", params: ModelParameters{MaxTokens: 131072}},
+		{name: "temperature below min rejected", params: ModelParameters{Temperature: -0.1}, wantErr: true},
+		{name: "temperature above max rejected", params: ModelParameters{Temperature: 2.1}, wantErr: true},
+		{name: "max_tokens below zero rejected", params: ModelParameters{MaxTokens: -1}, wantErr: true},
+		{name: "max_tokens above max rejected", params: ModelParameters{MaxTokens: 131073}, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			revision := AgentRevision{AgentID: "agent-1", Type: ReActAgent, SystemPrompt: "baseline",
+				Model: "qwen-plus", MaxIterations: 5, ModelParameters: tc.params}
+			err := revision.Validate()
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("Validate() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestAgentRevisionContentHashStableWhenParametersUnsetAndChangesWhenSet(t *testing.T) {
+	base := AgentRevision{AgentID: "agent-1", Type: ReActAgent, SystemPrompt: "be precise",
+		Model: "qwen-plus", MaxIterations: 8, ModelParameters: ModelParameters{MaxContextTokens: 2048}}
+	baseHash, err := base.ContentHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Zero-valued new fields must not change the hash of an existing revision.
+	withZeroFields := base
+	withZeroFields.ModelParameters.Temperature = 0
+	withZeroFields.ModelParameters.MaxTokens = 0
+	zeroHash, err := withZeroFields.ContentHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if baseHash != zeroHash {
+		t.Fatalf("zero-valued parameters changed content hash: %s != %s", baseHash, zeroHash)
+	}
+	// Setting values must change the hash, deterministically across rounds.
+	withValues := base
+	withValues.ModelParameters.Temperature = 0.9
+	withValues.ModelParameters.MaxTokens = 2048
+	valueHash1, err := withValues.ContentHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	valueHash2, err := withValues.ContentHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if valueHash1 != valueHash2 {
+		t.Fatalf("content hash not deterministic: %s != %s", valueHash1, valueHash2)
+	}
+	if valueHash1 == baseHash {
+		t.Fatal("setting temperature/max_tokens must change content hash")
+	}
+}

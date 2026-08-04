@@ -121,6 +121,8 @@ type CreateAgentInput struct {
 	LLMModel              string
 	MaxIterations         int
 	MaxContextTokens      int
+	Temperature           float32
+	MaxTokens             int
 	AllowedSkills         []string
 	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
@@ -136,6 +138,8 @@ type UpdateAgentInput struct {
 	LLMModel              string
 	MaxIterations         int
 	MaxContextTokens      int
+	Temperature           float32
+	MaxTokens             int
 	AllowedSkills         []string
 	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
@@ -154,6 +158,8 @@ type AgentDTO struct {
 	LLMModel              string
 	MaxIterations         int
 	MaxContextTokens      int
+	Temperature           float32
+	MaxTokens             int
 	AllowedSkills         []string
 	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
@@ -191,6 +197,8 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		LLMModel:              in.LLMModel,
 		MaxIterations:         in.MaxIterations,
 		MaxContextTokens:      maxCtxTokens,
+		Temperature:           in.Temperature,
+		MaxTokens:             in.MaxTokens,
 		AllowedSkills:         in.AllowedSkills,
 		MCPToolIDs:            in.MCPToolIDs,
 		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
@@ -245,7 +253,11 @@ func (s *AgentService) SnapshotRevision(ctx context.Context, tenantID, id string
 		MaxIterations: cfg.MaxIterations, MemoryScope: cfg.MemoryScope,
 		CheckpointEnabled: cfg.CheckpointEnabled,
 		StuckThreshold:    cfg.StuckThreshold,
-		ModelParameters:   domain.ModelParameters{MaxContextTokens: cfg.MaxContextTokens},
+		ModelParameters: domain.ModelParameters{
+			MaxContextTokens: cfg.MaxContextTokens,
+			Temperature:      cfg.Temperature,
+			MaxTokens:        cfg.MaxTokens,
+		},
 		Bindings: make([]domain.AgentBinding, 0,
 			len(cfg.AllowedSkills)+len(cfg.MCPToolIDs)+len(cfg.KnowledgeWorkspaceIDs)),
 	}
@@ -343,7 +355,10 @@ func revisionConfig(revision domain.AgentRevision) *domain.AgentConfig {
 	cfg := &domain.AgentConfig{
 		ID: revision.AgentID, Type: revision.Type, SystemPrompt: revision.SystemPrompt,
 		LLMModel: revision.Model, MaxIterations: revision.MaxIterations,
-		MaxContextTokens: revision.ModelParameters.MaxContextTokens, MemoryScope: revision.MemoryScope,
+		MaxContextTokens:  revision.ModelParameters.MaxContextTokens,
+		Temperature:       revision.ModelParameters.Temperature,
+		MaxTokens:         revision.ModelParameters.MaxTokens,
+		MemoryScope:       revision.MemoryScope,
 		CheckpointEnabled: revision.CheckpointEnabled,
 		StuckThreshold:    revision.StuckThreshold,
 	}
@@ -513,6 +528,8 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 		LLMModel:              in.LLMModel,
 		MaxIterations:         in.MaxIterations,
 		MaxContextTokens:      maxCtxTokens,
+		Temperature:           in.Temperature,
+		MaxTokens:             in.MaxTokens,
 		AllowedSkills:         skills,
 		MCPToolIDs:            in.MCPToolIDs,
 		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
@@ -626,6 +643,8 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		LLMModel:              cfg.LLMModel,
 		MaxIterations:         cfg.MaxIterations,
 		MaxContextTokens:      cfg.MaxContextTokens,
+		Temperature:           cfg.Temperature,
+		MaxTokens:             cfg.MaxTokens,
 		AllowedSkills:         cfg.AllowedSkills,
 		MCPToolIDs:            cfg.MCPToolIDs,
 		KnowledgeWorkspaceIDs: cfg.KnowledgeWorkspaceIDs,

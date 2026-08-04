@@ -11,6 +11,7 @@ import (
 
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
+	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
@@ -36,10 +37,26 @@ type agentReadWriter interface {
 }
 
 type agentEvaluationAdapter struct {
-	revisions    agentRevisionService
-	agents       agentRevisionExecutor
-	agentUpdater agentReadWriter
-	actorID      string
+	revisions      agentRevisionService
+	agents         agentRevisionExecutor
+	agentUpdater   agentReadWriter
+	modelValidator agentport.TenantChatModelValidator
+	actorID        string
+}
+
+// validateCandidateModel fails closed: a candidate model that cannot be
+// resolved for the tenant must never be created or applied.
+func (a agentEvaluationAdapter) validateCandidateModel(ctx context.Context, tenantID, model string) error {
+	if strings.TrimSpace(model) == "" {
+		return errors.New("evaluation Agent adapter: model required")
+	}
+	if a.modelValidator == nil {
+		return errors.New("evaluation Agent adapter: model validator unavailable")
+	}
+	if err := a.modelValidator.ValidateTenantChatModel(ctx, tenantID, model); err != nil {
+		return fmt.Errorf("evaluation Agent adapter: validate candidate model %q: %w", model, err)
+	}
+	return nil
 }
 
 func (a agentEvaluationAdapter) CreatePublishedBaseline(
@@ -107,6 +124,9 @@ func (a agentEvaluationAdapter) ApplyPublishedRevision(
 	if !found {
 		return fmt.Errorf("evaluation Agent adapter: revision %s not found", revisionID)
 	}
+	if err := a.validateCandidateModel(ctx, tenantID, snapshot.Model); err != nil {
+		return err
+	}
 	existing, err := a.agentUpdater.Get(ctx, agentID)
 	if err != nil {
 		return fmt.Errorf("evaluation Agent adapter: get agent: %w", err)
@@ -120,6 +140,8 @@ func (a agentEvaluationAdapter) ApplyPublishedRevision(
 		LLMModel:              snapshot.Model,
 		MaxIterations:         snapshot.MaxIterations,
 		MaxContextTokens:      snapshot.ModelParameters.MaxContextTokens,
+		Temperature:           snapshot.ModelParameters.Temperature,
+		MaxTokens:             snapshot.ModelParameters.MaxTokens,
 		AllowedSkills:         existing.AllowedSkills,
 		MCPToolIDs:            existing.MCPToolIDs,
 		KnowledgeWorkspaceIDs: existing.KnowledgeWorkspaceIDs,
@@ -160,6 +182,11 @@ func (a agentEvaluationAdapter) CreateCandidate(
 	candidatePatch, err := parseAgentCandidatePatch(snapshot, patch)
 	if err != nil {
 		return evaldomain.ResourceRef{}, err
+	}
+	if candidatePatch.Model != "" {
+		if err := a.validateCandidateModel(ctx, tenantID, candidatePatch.Model); err != nil {
+			return evaldomain.ResourceRef{}, err
+		}
 	}
 	candidate, err := snapshot.ApplyCandidate(candidatePatch)
 	if err != nil {
@@ -333,17 +360,15 @@ func parseAgentCandidatePatch(
 	parametersChanged := false
 	for key, value := range patch.ParameterPatch {
 		switch key {
-		case "model":
-			result.Model, _ = value.(string)
-			if strings.TrimSpace(result.Model) == "" {
-				return result, errors.New("evaluation Agent adapter: model must be non-empty")
+		case "model", "max_context_tokens", "temperature", "max_tokens":
+			model, changed, err := parseModelParameterPatch(key, value, &params)
+			if err != nil {
+				return result, err
 			}
-		case "max_context_tokens":
-			parsed, ok := integer(value)
-			if !ok {
-				return result, errors.New("evaluation Agent adapter: max_context_tokens must be an integer")
+			if model != "" {
+				result.Model = model
 			}
-			params.MaxContextTokens, parametersChanged = parsed, true
+			parametersChanged = parametersChanged || changed
 		case "max_iterations":
 			parsed, ok := integer(value)
 			if !ok {
@@ -364,6 +389,44 @@ func parseAgentCandidatePatch(
 		result.ModelParameters = &params
 	}
 	return result, nil
+}
+
+// parseModelParameterPatch applies one model-config parameter patch key
+// (model, max_context_tokens, temperature, max_tokens) into params. It returns
+// the patched model name (empty when unchanged) and whether any parameter
+// value was modified. Kept separate so the candidate patch parser stays within
+// the code-quality complexity budget.
+func parseModelParameterPatch(key string, value any, params *agentdomain.ModelParameters) (string, bool, error) {
+	switch key {
+	case "model":
+		model, _ := value.(string)
+		if strings.TrimSpace(model) == "" {
+			return "", false, errors.New("evaluation Agent adapter: model must be non-empty")
+		}
+		return model, false, nil
+	case "max_context_tokens":
+		parsed, ok := integer(value)
+		if !ok {
+			return "", false, errors.New("evaluation Agent adapter: max_context_tokens must be an integer")
+		}
+		params.MaxContextTokens = parsed
+		return "", true, nil
+	case "temperature":
+		parsed, ok := floatValue(value)
+		if !ok {
+			return "", false, errors.New("evaluation Agent adapter: temperature must be a number")
+		}
+		params.Temperature = float32(parsed)
+		return "", true, nil
+	case "max_tokens":
+		parsed, ok := integer(value)
+		if !ok {
+			return "", false, errors.New("evaluation Agent adapter: max_tokens must be an integer")
+		}
+		params.MaxTokens = parsed
+		return "", true, nil
+	}
+	return "", false, nil
 }
 
 func bindingPatch(value any) ([]agentdomain.AgentBinding, error) {
@@ -390,6 +453,19 @@ func integer(value any) (int, bool) {
 	case float64:
 		converted := int(typed)
 		return converted, float64(converted) == typed
+	default:
+		return 0, false
+	}
+}
+
+func floatValue(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case int:
+		return float64(typed), true
 	default:
 		return 0, false
 	}

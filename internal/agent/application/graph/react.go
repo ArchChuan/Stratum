@@ -33,6 +33,8 @@ type ReActState struct {
 	TraceID                    string
 	ConversationID             string
 	Model                      string
+	Temperature                float32 // 0 = provider default
+	MaxTokens                  int     // 0 = unset
 	AvailableTools             []port.ToolDefinition
 	SkillCatalog               map[string]port.SkillActivation
 	ActiveSkill                *port.SkillActivation
@@ -191,19 +193,7 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 
 		// Always stream: tool-decision turns typically produce empty content so no tokens
 		// reach the client; final-answer turns stream the output to the frontend as required.
-		resp, err := RetryFn(ctx, DefaultRetry, func() (port.CapabilityResponse, error) {
-			return capGW.Route(ctx, port.CapabilityRequest{
-				TraceID:     s.TraceID,
-				TenantID:    s.TenantID,
-				Type:        port.CapLLM,
-				TokenStream: s.OnToken,
-				LLM: &port.LLMCapRequest{
-					Model:    s.Model,
-					Messages: messages,
-					Tools:    tools,
-				},
-			})
-		})
+		resp, err := routeLLM(ctx, s, messages, tools, capGW)
 		latencyMs := time.Since(start).Milliseconds()
 		if err != nil {
 			llmSpan.SetAttributes(attribute.String("opik.metadata.stratum.status", domain.ToolTraceStatusError))
@@ -330,6 +320,27 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 		}
 		return s, nil
 	}
+}
+
+// routeLLM streams one LLM call with retry. Extracted from makeLLMNode so the
+// request construction and retry closure stay within the code-quality line and
+// complexity budgets of the node function.
+func routeLLM(ctx context.Context, s ReActState, messages []port.LLMMessage, tools []port.ToolDefinition, capGW port.CapabilityGateway) (port.CapabilityResponse, error) {
+	return RetryFn(ctx, DefaultRetry, func() (port.CapabilityResponse, error) {
+		return capGW.Route(ctx, port.CapabilityRequest{
+			TraceID:     s.TraceID,
+			TenantID:    s.TenantID,
+			Type:        port.CapLLM,
+			TokenStream: s.OnToken,
+			LLM: &port.LLMCapRequest{
+				Model:       s.Model,
+				Messages:    messages,
+				Tools:       tools,
+				Temperature: s.Temperature,
+				MaxTokens:   s.MaxTokens,
+			},
+		})
+	})
 }
 
 func fitToolsToContextBudget(tools []port.ToolDefinition, messages []port.LLMMessage, budget, protectedUsers int) []port.ToolDefinition {

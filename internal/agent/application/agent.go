@@ -46,6 +46,7 @@ type ExecutionConfig struct {
 	MaxSteps                 int
 	Timeout                  time.Duration
 	Temperature              float32
+	MaxTokens                int
 	EnableTools              bool
 	AvailableTools           []string
 	Stream                   bool
@@ -257,6 +258,14 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	workspaceDescs := a.KnowledgeWorkspaceDescriptions
 	maxContextTokens := a.MaxContextTokens
 	memoryScope := a.MemoryScope
+	// Explicit options win; agent-config values backfill unset fields so the
+	// revision → execution path carries temperature/max_tokens through.
+	if cfg.Temperature == 0 {
+		cfg.Temperature = a.Temperature
+	}
+	if cfg.MaxTokens == 0 {
+		cfg.MaxTokens = a.MaxTokens
+	}
 	a.mu.Unlock()
 
 	tracer := otel.Tracer("stratum/agent")
@@ -335,7 +344,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	metrics.RecordAgentExecutionDuration(agentID, string(agentType), result.Duration.Seconds())
 	metrics.RecordAgentStepCount(agentID, string(agentType), result.Steps)
 
-	recordFingerprintAndKPI(metrics, execSpan, requestSpan, agentID, string(agentType), llmModel, systemPrompt, cfg, result, status)
+	recordFingerprintAndKPI(metrics, execSpan, requestSpan, agentID, string(agentType), llmModel, systemPrompt, cfg, maxContextTokens, result, status)
 
 	return result, execErr
 }
@@ -345,6 +354,7 @@ func recordFingerprintAndKPI(
 	execSpan, requestSpan oteltrace.Span,
 	agentID, taskKind, llmModel, systemPrompt string,
 	cfg *ExecutionConfig,
+	maxContextTokens int,
 	result *AgentResult,
 	status string,
 ) {
@@ -352,10 +362,21 @@ func recordFingerprintAndKPI(
 	metrics.RecordAgentTaskLatency(agentID, taskKind, result.Duration.Seconds())
 	metrics.RecordAgentCostPerTask(agentID, taskKind, result.CostUSD)
 	metrics.RecordAgentConversationTurn(agentID, result.Steps)
-	fp := CaptureFingerprint(llmModel, nil, systemPrompt, skillRevisionHashes(cfg.SkillCatalog), nil, 0)
+	fp := CaptureFingerprint(llmModel, nil, systemPrompt, skillRevisionHashes(cfg.SkillCatalog),
+		tunableSnapshot(cfg, maxContextTokens), 0)
 	fpAttrs := fingerprintAttributes(fp)
 	execSpan.SetAttributes(fpAttrs...)
 	requestSpan.SetAttributes(fpAttrs...)
+}
+
+// tunableSnapshot records the effective tunable values applied to this
+// execution so the fingerprint attributes attribute runs to their tunables.
+func tunableSnapshot(cfg *ExecutionConfig, maxContextTokens int) map[string]any {
+	return map[string]any{
+		"temperature":        cfg.Temperature,
+		"max_tokens":         cfg.MaxTokens,
+		"max_context_tokens": maxContextTokens,
+	}
 }
 
 func (a *BaseAgent) injectMemoryContext(ctx context.Context, tracer oteltrace.Tracer, cfg *ExecutionConfig, agentID, memoryScope, input string) string {
@@ -583,6 +604,8 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		TraceID:                    ec.cfg.TraceID,
 		ConversationID:             ec.cfg.ConversationID,
 		Model:                      ec.llmModel,
+		Temperature:                ec.cfg.Temperature,
+		MaxTokens:                  ec.cfg.MaxTokens,
 		Messages:                   initMessages,
 		OnToken:                    ec.cfg.TokenCallback,
 		AvailableTools:             mergeTools(availableTools, ec.cfg.ExtraTools, a.Logger),
@@ -834,6 +857,13 @@ func WithTimeout(timeout time.Duration) ExecutionOption {
 func WithTemperature(temperature float32) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.Temperature = temperature
+	}
+}
+
+// WithMaxTokens sets the max output tokens for each LLM request. 0 = unset.
+func WithMaxTokens(maxTokens int) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.MaxTokens = maxTokens
 	}
 }
 

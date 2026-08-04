@@ -1,6 +1,10 @@
 package domain
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/byteBuilderX/stratum/pkg/constants"
+)
 
 // TunableCategory groups tunable parameters by domain area.
 type TunableCategory string
@@ -90,7 +94,7 @@ func (t temperatureTunable) DisplayName() string       { return "温度" }
 func (t temperatureTunable) Category() TunableCategory { return CatModelConfig }
 func (t temperatureTunable) DefaultValue() any         { return 0.7 }
 func (t temperatureTunable) VisualHint() VisualHint {
-	return VisualHint{Control: "slider", Min: 0.0, Max: 2.0, Step: 0.1, Unit: ""}
+	return VisualHint{Control: "slider", Min: constants.TunableTemperatureMin, Max: constants.TunableTemperatureMax, Step: 0.1, Unit: ""}
 }
 func (t temperatureTunable) Read(resource map[string]any) (any, error) {
 	params, _ := resource["model_parameters"].(map[string]any)
@@ -121,13 +125,14 @@ func (t temperatureTunable) Validate(value any) error {
 	if !ok {
 		return fmt.Errorf("temperature: expected float64")
 	}
-	if v < 0 || v > 2 {
-		return fmt.Errorf("temperature: must be in [0, 2]")
+	if v < constants.TunableTemperatureMin || v > constants.TunableTemperatureMax {
+		return fmt.Errorf("temperature: must be in [%v, %v]",
+			constants.TunableTemperatureMin, constants.TunableTemperatureMax)
 	}
 	return nil
 }
 func (t temperatureTunable) SearchSpace() SearchRange {
-	return SearchRange{Min: 0, Max: 2, Step: 0.1}
+	return SearchRange{Min: constants.TunableTemperatureMin, Max: constants.TunableTemperatureMax, Step: 0.1}
 }
 
 type maxTokensTunable struct{}
@@ -137,7 +142,7 @@ func (t maxTokensTunable) DisplayName() string       { return "最大 Token 数"
 func (t maxTokensTunable) Category() TunableCategory { return CatModelConfig }
 func (t maxTokensTunable) DefaultValue() any         { return 4096 }
 func (t maxTokensTunable) VisualHint() VisualHint {
-	return VisualHint{Control: "slider", Min: 256.0, Max: 131072.0, Step: 256.0, Unit: "tokens"}
+	return VisualHint{Control: "slider", Min: constants.TunableMaxTokensMin, Max: constants.TunableMaxTokensMax, Step: 256.0, Unit: "tokens"}
 }
 func (t maxTokensTunable) Read(resource map[string]any) (any, error) {
 	params, _ := resource["model_parameters"].(map[string]any)
@@ -163,18 +168,22 @@ func (t maxTokensTunable) Write(resource map[string]any, value any) error {
 	params["max_tokens"] = v
 	return nil
 }
+
+// Validate accepts 0 as "unset" — a candidate may always express unset to
+// leave the production value untouched.
 func (t maxTokensTunable) Validate(value any) error {
 	v, ok := value.(float64)
 	if !ok {
 		return fmt.Errorf("max_tokens: expected float64")
 	}
-	if v < 256 || v > 131072 {
-		return fmt.Errorf("max_tokens: must be in [256, 131072]")
+	if v < constants.TunableMaxTokensMin || v > constants.TunableMaxTokensMax {
+		return fmt.Errorf("max_tokens: must be in [%d, %d]",
+			constants.TunableMaxTokensMin, constants.TunableMaxTokensMax)
 	}
 	return nil
 }
 func (t maxTokensTunable) SearchSpace() SearchRange {
-	return SearchRange{Min: 256, Max: 131072, Step: 256}
+	return SearchRange{Min: constants.TunableMaxTokensMin, Max: constants.TunableMaxTokensMax, Step: 256}
 }
 
 // ——— Prompt tunable (LLM-rewritten, no grid search) ———
