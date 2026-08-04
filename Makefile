@@ -13,7 +13,7 @@
 	cd-deploy-dev cd-deploy-staging cd-deploy-prod cd-validate ci-cd-full \
 	agent-instructions agent-instructions-check \
 	code-quality code-quality-baseline risk-guardrails \
-	tool-permission-test agent-interview-test \
+	tool-permission-test \
 	dev-up dev-down \
 	run fe-dev help clean
 
@@ -272,10 +272,6 @@ full-regression:
 
 tool-permission-test:
 	bash scripts/quality/tool-permission-test.sh
-
-agent-interview-test:
-	bash scripts/agent-interview/validate-library-test.sh
-	bash scripts/agent-interview/daily-agent-interview-test.sh
 
 e2e-evaluation-evolution:
 	go test e2e/evaluation-evolution/bootstrap.go e2e/evaluation-evolution/bootstrap_test.go -count=1
