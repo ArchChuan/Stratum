@@ -17,7 +17,7 @@ import (
 
 // ExtractionQueue implements domain/port.ExtractionQueue using PostgreSQL with FOR UPDATE SKIP LOCKED.
 type ExtractionQueue struct {
-	pool *pgxpool.Pool
+	pool tenantPool
 }
 
 func NewExtractionQueue(pool *pgxpool.Pool) *ExtractionQueue {
@@ -25,7 +25,7 @@ func NewExtractionQueue(pool *pgxpool.Pool) *ExtractionQueue {
 }
 
 func (q *ExtractionQueue) execTenant(ctx context.Context, tenantID string, fn func(pgx.Tx) error) error {
-	return pgstore.Wrap(q.pool).ExecTenant(ctx, tenantID, func(_ context.Context, tx pgx.Tx) error {
+	return pgstore.ExecTenantWith(ctx, q.pool, tenantID, func(_ context.Context, tx pgx.Tx) error {
 		return fn(tx)
 	})
 }

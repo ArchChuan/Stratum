@@ -297,12 +297,26 @@ func registerGuestReaper(appHarness *harnesspkg.Harness, c *wiring.Container, lo
 }
 
 func runGuestReaper(ctx context.Context, onboard *iamapp.OnboardService, admin *iamapp.AdminService, metrics observability.MetricsProvider, interval time.Duration, logger *zap.Logger) {
+	// Mark the component as started so the freshness alert does not treat the
+	// pre-first-cycle window as "reaper down".
+	metrics.SetReaperCycleTimestamp(float64(time.Now().Unix()))
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			reapExpiredGuests(ctx, onboard, admin, metrics, logger)
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Error("guest-reaper.panic",
+							zap.Any("panic", r),
+							zap.Stack("stack"))
+						metrics.IncReaperCycle("panic")
+						metrics.IncGoroutinePanic("reaper")
+					}
+				}()
+				reapExpiredGuests(ctx, onboard, admin, metrics, logger)
+			}()
 		case <-ctx.Done():
 			return
 		}
@@ -389,28 +403,39 @@ func runChatCleanup(ctx context.Context, db *pgxpool.Pool, store chatCleaner, in
 	for {
 		select {
 		case <-ticker.C:
-			metrics.SetComponentCycleTimestamp("chat-cleanup", float64(time.Now().Unix()))
-			rows, err := db.Query(ctx, `SELECT id::text FROM tenants WHERE deleted_at IS NULL`)
-			if err != nil {
-				logger.Warn("chat-cleanup: list tenants", zap.Error(err))
-				metrics.IncComponentError("chat-cleanup", "list_tenants")
-				continue
-			}
-			var tenantIDs []string
-			for rows.Next() {
-				var tenantID string
-				if err := rows.Scan(&tenantID); err == nil {
-					tenantIDs = append(tenantIDs, tenantID)
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Error("chat-cleanup.panic",
+							zap.Any("panic", r),
+							zap.Stack("stack"))
+						metrics.IncComponentError("chat-cleanup", "panic")
+						metrics.IncGoroutinePanic("chat-cleanup")
+					}
+				}()
+				metrics.SetComponentCycleTimestamp("chat-cleanup", float64(time.Now().Unix()))
+				rows, err := db.Query(ctx, `SELECT id::text FROM tenants WHERE deleted_at IS NULL`)
+				if err != nil {
+					logger.Warn("chat-cleanup: list tenants", zap.Error(err))
+					metrics.IncComponentError("chat-cleanup", "list_tenants")
+					return
 				}
-			}
-			rows.Close()
-			for _, tenantID := range tenantIDs {
-				if err := store.CleanupExpired(ctx, tenantID); err != nil {
-					logger.Warn("chat-cleanup: cleanup tenant", zap.String("tenant_id", tenantID), zap.Error(err))
-					metrics.IncComponentError("chat-cleanup", "cleanup")
+				var tenantIDs []string
+				for rows.Next() {
+					var tenantID string
+					if err := rows.Scan(&tenantID); err == nil {
+						tenantIDs = append(tenantIDs, tenantID)
+					}
 				}
-			}
-			metrics.RecordComponentCycle("chat-cleanup")
+				rows.Close()
+				for _, tenantID := range tenantIDs {
+					if err := store.CleanupExpired(ctx, tenantID); err != nil {
+						logger.Warn("chat-cleanup: cleanup tenant", zap.String("tenant_id", tenantID), zap.Error(err))
+						metrics.IncComponentError("chat-cleanup", "cleanup")
+					}
+				}
+				metrics.RecordComponentCycle("chat-cleanup")
+			}()
 		case <-ctx.Done():
 			return
 		}

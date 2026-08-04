@@ -7,8 +7,22 @@ import (
 	storagemilvus "github.com/byteBuilderX/stratum/pkg/storage/milvus"
 )
 
+// storeIface narrows the Milvus-backed store to what the adapter needs so
+// tests can inject a stub without a live Milvus.
+type storeIface interface {
+	CreateCollectionWithDim(ctx context.Context, collectionName string, dimension int) error
+	Insert(ctx context.Context, collectionName string, docs []storagemilvus.DocumentChunk, partition string) error
+	Search(ctx context.Context, collectionName string, queryVector []float32, topK int, partitions ...string) ([]storagemilvus.SearchResult, error)
+	DescribeCollection(ctx context.Context, collectionName string) (storagemilvus.CollectionInfo, error)
+	Flush(ctx context.Context, collectionName string) error
+	DeleteCollection(ctx context.Context, collectionName string) error
+	CountVectors(ctx context.Context, collectionName, partition string) (int64, error)
+}
+
+var _ storeIface = (*storagemilvus.VectorStore)(nil)
+
 type Adapter struct {
-	store *storagemilvus.VectorStore
+	store storeIface
 }
 
 func New(store *storagemilvus.VectorStore) *Adapter {
@@ -43,6 +57,16 @@ func (a *Adapter) Search(ctx context.Context, collectionName string, queryVector
 		}
 	}
 	return converted, nil
+}
+
+func (a *Adapter) DescribeCollection(ctx context.Context, collectionName string) (knowledgeport.CollectionInfo, error) {
+	info, err := a.store.DescribeCollection(ctx, collectionName)
+	if err != nil {
+		return knowledgeport.CollectionInfo{}, err
+	}
+	return knowledgeport.CollectionInfo{
+		Dim: info.Dim, HasAgentID: info.HasAgentID, HasUserID: info.HasUserID,
+	}, nil
 }
 
 func (a *Adapter) Flush(ctx context.Context, collectionName string) error {

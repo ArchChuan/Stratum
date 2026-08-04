@@ -291,6 +291,7 @@ for monitoring_path in \
   cmd/remote-health-monitor/main.go \
   scripts/deploy-remote-monitoring.sh \
   .github/workflows/deploy.yml \
+  .github/workflows/reconcile-monitoring.yml \
   .github/workflows/remote-health-monitor.yml; do
   [[ "$(/bin/bash "${CHECKER}" --acceptance "${monitoring_path}")" == soak ]] || {
     echo "remote monitoring change must require soak acceptance: ${monitoring_path}" >&2

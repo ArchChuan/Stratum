@@ -5,6 +5,7 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 plan=${TEST_VERIFY_PLAN_PATH:-$root/tmp/test-verification/plan.json}
 make_command=${TEST_VERIFY_MAKE_COMMAND:-make}
 go_command=${TEST_VERIFY_GO_COMMAND:-go}
+go_parallelism=$(bash "$root/scripts/quality/go-parallelism.sh")
 clean_env=(env -u STRATUM_TEST_POSTGRES_URL -u TEST_DATABASE_URL -u POSTGRES_URL
   -u REDIS_URL -u NATS_URL -u MILVUS_HOST -u MILVUS_PORT)
 
@@ -21,11 +22,11 @@ run_go_tests() {
   local packages=()
   mapfile -t packages < <("$go_command" list ./... | grep -Ev '/test/e2e($|/)|/web/node_modules/')
   ((${#packages[@]} > 0)) || { printf 'no focused Go test packages selected\n' >&2; return 1; }
-  "${clean_env[@]}" "$go_command" test -short "${packages[@]}"
+  "${clean_env[@]}" "$go_command" test -short -p "$go_parallelism" "${packages[@]}"
 }
 
 run_build_checks() {
-  "$go_command" build ./cmd/server
+  "$go_command" build -p "$go_parallelism" ./cmd/server
   "$make_command" fe-lint fe-build
 }
 

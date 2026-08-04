@@ -9,29 +9,31 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 )
 
 // WorkspaceRepo persists knowledge workspaces in per-tenant schemas.
 type WorkspaceRepo struct {
-	db *pgxpool.Pool
+	db poolIface
 }
 
 // NewWorkspaceRepo constructs a WorkspaceRepo backed by the given pool.
-func NewWorkspaceRepo(db *pgxpool.Pool) *WorkspaceRepo {
+func NewWorkspaceRepo(db poolIface) *WorkspaceRepo {
 	return &WorkspaceRepo{db: db}
 }
 
 // jsonbConfig matches the JSONB shape stored in rag_workspaces.config.
 type jsonbConfig struct {
-	EmbeddingModel   string `json:"embedding_model"`
-	ChunkSize        int    `json:"chunk_size"`
-	ChunkOverlap     int    `json:"chunk_overlap"`
-	QueryMode        string `json:"query_mode"`
-	TopK             int    `json:"top_k"`
-	ChunkingStrategy string `json:"chunking_strategy"`
+	EmbeddingModel   string  `json:"embedding_model"`
+	ChunkSize        int     `json:"chunk_size"`
+	ChunkOverlap     int     `json:"chunk_overlap"`
+	QueryMode        string  `json:"query_mode"`
+	TopK             int     `json:"top_k"`
+	ChunkingStrategy string  `json:"chunking_strategy"`
+	Reranking        string  `json:"reranking,omitempty"`
+	ScoreThreshold   float32 `json:"score_threshold,omitempty"`
+	RerankTopK       int     `json:"rerank_top_k,omitempty"`
 }
 
 func toJSONB(c domain.WorkspaceConfig) string {
@@ -42,6 +44,9 @@ func toJSONB(c domain.WorkspaceConfig) string {
 		QueryMode:        c.QueryMode,
 		TopK:             c.TopK,
 		ChunkingStrategy: c.ChunkingStrategy,
+		Reranking:        c.Reranking,
+		ScoreThreshold:   c.ScoreThreshold,
+		RerankTopK:       c.RerankTopK,
 	})
 	return string(b)
 }
@@ -54,6 +59,9 @@ func fromJSONB(c jsonbConfig) domain.WorkspaceConfig {
 		QueryMode:        c.QueryMode,
 		TopK:             c.TopK,
 		ChunkingStrategy: c.ChunkingStrategy,
+		Reranking:        c.Reranking,
+		ScoreThreshold:   c.ScoreThreshold,
+		RerankTopK:       c.RerankTopK,
 	}
 }
 

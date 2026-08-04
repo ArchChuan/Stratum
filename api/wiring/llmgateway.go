@@ -44,6 +44,8 @@ func (c *Container) buildLLMGateway(_ context.Context) error {
 		return nil
 	}
 	metrics := observability.NewPrometheusMetrics(c.Logger)
+	// cmd/server 是唯一运行 guest reaper 的进程；只有它导出 reaper 指标。
+	metrics.RegisterReaperMetrics()
 
 	// Protocol singletons:
 	// - OpenAICompatProtocol wraps an OpenAICompatClient, satisfies ChatProtocol + EmbedProtocol.

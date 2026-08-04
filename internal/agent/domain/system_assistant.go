@@ -9,7 +9,7 @@ import (
 const (
 	SystemAssistantKey                   = "stratum.platform_assistant"
 	SystemAssistantID                    = "stratum-platform-assistant"
-	CurrentSystemAssistantProfileVersion = "2026-07-31.v2"
+	CurrentSystemAssistantProfileVersion = "2026-08-04.v2"
 )
 
 // SystemAssistantProfile is an immutable, code-reviewed runtime definition.

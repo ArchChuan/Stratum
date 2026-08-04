@@ -70,6 +70,7 @@ type A2AProtocol struct {
 	cancel       context.CancelFunc
 	running      bool
 	mu           sync.RWMutex
+	wg           sync.WaitGroup
 }
 
 // NewA2AProtocol creates a new A2A protocol instance
@@ -108,8 +109,15 @@ func (p *A2AProtocol) Start(ctx context.Context) error {
 	}
 
 	// Start background tasks
-	go p.runHeartbeatLoop(p.ctx)
-	go p.runCleanupLoop(p.ctx)
+	p.wg.Add(2)
+	go func() {
+		defer p.wg.Done()
+		p.runHeartbeatLoop(p.ctx)
+	}()
+	go func() {
+		defer p.wg.Done()
+		p.runCleanupLoop(p.ctx)
+	}()
 
 	p.running = true
 	p.logger.Info("A2A protocol started")
@@ -127,11 +135,14 @@ func (p *A2AProtocol) Stop() error {
 	}
 
 	p.cancel()
+	// 先等 background loops 退出，再关 handler channel：
+	// 否则心跳循环可能在 outbox close 后 SendMessage → panic。
+	p.wg.Wait()
 	p.handler.Stop()
 
-	p.mu.Lock()
+	// 修复死锁：defer 已持有 p.mu（sync.Mutex 不可重入），
+	// 此处直接赋值，禁止再次 Lock。
 	p.running = false
-	p.mu.Unlock()
 
 	p.logger.Info("A2A protocol stopped")
 	return nil

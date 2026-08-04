@@ -235,6 +235,35 @@ func TestBuildReActGraph_ApprovedDestructiveToolUsesExecutionGuardOnce(t *testin
 	require.Equal(t, 1, guardCalls)
 }
 
+func TestBuildReActGraph_PropagatesTemperatureAndMaxTokensToLLMRequest(t *testing.T) {
+	stub := &capGWSequence{responses: []port.CapabilityResponse{{Content: "done"}}}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+
+	_, err = cg.Invoke(context.Background(), graph.ReActState{
+		Model: "qwen", Temperature: 0.9, MaxTokens: 2048,
+		Messages: []port.LLMMessage{{Role: "user", Content: "hi"}},
+	}, graph.RunConfig[graph.ReActState]{MaxSteps: 2})
+	require.NoError(t, err)
+	require.Len(t, stub.llmReqs, 1)
+	require.Equal(t, float32(0.9), stub.llmReqs[0].Temperature)
+	require.Equal(t, 2048, stub.llmReqs[0].MaxTokens)
+}
+
+func TestBuildReActGraph_ZeroTemperatureAndMaxTokensStayUnset(t *testing.T) {
+	stub := &capGWSequence{responses: []port.CapabilityResponse{{Content: "done"}}}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+
+	_, err = cg.Invoke(context.Background(), graph.ReActState{
+		Model: "qwen", Messages: []port.LLMMessage{{Role: "user", Content: "hi"}},
+	}, graph.RunConfig[graph.ReActState]{MaxSteps: 2})
+	require.NoError(t, err)
+	require.Len(t, stub.llmReqs, 1)
+	require.Equal(t, float32(0), stub.llmReqs[0].Temperature)
+	require.Equal(t, 0, stub.llmReqs[0].MaxTokens)
+}
+
 // capGWSequence drives LLM responses in sequence; tool always returns fixed resp.
 type capGWSequence struct {
 	responses []port.CapabilityResponse

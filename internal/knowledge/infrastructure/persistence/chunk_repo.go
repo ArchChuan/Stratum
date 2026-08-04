@@ -5,17 +5,16 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 )
 
 type ChunkRepo struct {
-	db *pgxpool.Pool
+	db poolIface
 }
 
-func NewChunkRepo(db *pgxpool.Pool) *ChunkRepo {
+func NewChunkRepo(db poolIface) *ChunkRepo {
 	return &ChunkRepo{db: db}
 }
 
@@ -141,6 +140,23 @@ func (r *ChunkRepo) KeywordSearch(ctx context.Context, tenantID, workspaceID, qu
 		return nil, fmt.Errorf("chunk_repo: keyword search: %w", err)
 	}
 	return out, nil
+}
+
+// CountByWorkspace reports how many chunks exist for a workspace in PG.
+// RAG uses it to distinguish a legitimately empty workspace (0 chunks,
+// collection missing is expected) from drift (chunks exist but the Milvus
+// collection is gone).
+func (r *ChunkRepo) CountByWorkspace(ctx context.Context, tenantID, workspaceID string) (int64, error) {
+	var count int64
+	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT count(*) FROM knowledge_chunks WHERE workspace_id = $1`,
+			workspaceID).Scan(&count)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("chunk_repo: count by workspace: %w", err)
+	}
+	return count, nil
 }
 
 func (r *ChunkRepo) DeleteByWorkspace(ctx context.Context, tenantID, workspaceID string) error {

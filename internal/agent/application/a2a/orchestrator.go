@@ -305,10 +305,9 @@ func (o *Orchestrator) Cleanup(maxAge time.Duration) {
 
 		if old && completed {
 			delete(o.plans, id)
-			if ctx, exists := o.contexts[plan.CollaborationID]; exists {
-				o.contexts[plan.CollaborationID] = nil
-				_ = ctx // Use ctx to avoid unused error
-			}
+			// 删除而非置 nil：置 nil 会让 GetSharedContext 返回 (nil, nil)，
+			// 调用方解引用 nil ctx 会 panic。
+			delete(o.contexts, plan.CollaborationID)
 		}
 	}
 }

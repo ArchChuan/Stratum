@@ -9,7 +9,6 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
-	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,7 +19,7 @@ const redacted = "[REDACTED]"
 var sensitiveText = regexp.MustCompile(`(?i)\b(password|token|api_key|apikey|authorization|secret)=((bearer|basic)\s+)?\S+`)
 
 type PgRunRepository struct {
-	pool *pgxpool.Pool
+	pool poolIface
 }
 
 func NewPgRunRepository(pool *pgxpool.Pool) *PgRunRepository {
@@ -29,7 +28,7 @@ func NewPgRunRepository(pool *pgxpool.Pool) *PgRunRepository {
 
 func (r *PgRunRepository) SaveRun(ctx context.Context, tenantID string, run domain.EvalRun) error {
 	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
-	return tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+	return execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO eval_runs
 			 (id, resource_kind, resource_id, revision_id, suite_revision_id, status, passed,
@@ -67,7 +66,7 @@ func (r *PgRunRepository) GetRun(
 	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
 	var run domain.EvalRun
 	found := false
-	err := tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+	err := execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var kind string
 		err := tx.QueryRow(ctx,
 			`SELECT id, resource_kind, resource_id, revision_id, suite_revision_id,

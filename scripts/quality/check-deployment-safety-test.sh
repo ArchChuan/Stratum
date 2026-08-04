@@ -18,6 +18,7 @@ PLATFORM_ASSISTANT_REMOTE_VERIFY="${ROOT}/scripts/e2e/platform-assistant-remote-
 FEISHU_ADAPTER_MANIFEST="${ROOT}/monitoring/remote/resources/feishu-alert-adapter.yaml"
 FEISHU_ADAPTER_DOCKERFILE="${ROOT}/docker/feishu-alert-adapter.Dockerfile"
 REMOTE_MONITORING_DEPLOY="${ROOT}/scripts/deploy-remote-monitoring.sh"
+RECONCILE_WORKFLOW="${ROOT}/.github/workflows/reconcile-monitoring.yml"
 
 require() {
     local pattern="$1" description="$2"
@@ -110,16 +111,27 @@ require 'kubectl create secret docker-registry aliyun-registry' 'monitoring regi
 require 'adapter_digest="\$\{\{ needs\.build-and-push\.outputs\.adapter-digest \}\}"' \
     'adapter digest is not consumed from the build job'
 require '\$adapter_digest.*\^sha256:\[0-9a-f\]\{64\}\$' 'adapter digest validation missing'
-require 'FEISHU_ADAPTER_IMAGE:[[:space:]]*\$\{\{ env\.IMAGE_REPO \}\}/stratum-feishu-alert-adapter@\$\{\{ needs\.build-and-push\.outputs\.adapter-digest \}\}' \
-    'adapter immutable digest is not passed to monitoring reconciliation'
 require 'feishu_adapter=\$\(kubectl get deployment stratum-feishu-alert-adapter -n monitoring' \
     'deployment receipt does not read the deployed Feishu adapter image'
 require 'images:\{backend:\$backend,frontend:\$frontend,platform_mcp:\$platform_mcp,feishu_adapter:\$feishu_adapter\}' \
     'deployment receipt does not bind the Feishu adapter image'
-require 'PATH="\$validator_dir:\$PATH" bash scripts/deploy-remote-monitoring\.sh' \
+
+# Monitoring reconciliation runs from reconcile-monitoring.yml (after deploy via
+# workflow_run); the adapter image it consumes must be immutable-digest pinned.
+require_file "${RECONCILE_WORKFLOW}" 'adapter_image="\$\(kubectl get deployment stratum-feishu-alert-adapter -n monitoring' \
+    'reconciliation does not read the deployed Feishu adapter image first'
+require_file "${RECONCILE_WORKFLOW}" 'adapter_image.*@sha256:\[0-9a-f\]\{64\}\$' \
+    'reconciliation does not resolve an immutable adapter digest'
+require_file "${RECONCILE_WORKFLOW}" 'FEISHU_ADAPTER_IMAGE=\$adapter_image' \
+    'adapter immutable digest is not passed to monitoring reconciliation'
+require_file "${RECONCILE_WORKFLOW}" 'no deployed Feishu adapter found and no workflow_run context' \
+    'reconciliation does not fail closed without an adapter digest'
+require_file "${RECONCILE_WORKFLOW}" 'PATH="\$validator_dir:\$PATH" bash scripts/deploy-remote-monitoring\.sh' \
     'safe monitoring reconciliation entrypoint missing'
-require 'prom/prometheus:v3\.8\.1' 'pinned Prometheus validation tool image missing'
-require 'prom/alertmanager:v0\.33\.1' 'pinned Alertmanager validation tool image missing'
+require_file "${RECONCILE_WORKFLOW}" 'prom/prometheus:v3\.8\.1' \
+    'pinned Prometheus validation tool image missing'
+require_file "${RECONCILE_WORKFLOW}" 'prom/alertmanager:v0\.33\.1' \
+    'pinned Alertmanager validation tool image missing'
 require 'Resolve and verify immutable candidate' 'pre-build deployment candidate gate'
 require 'github\.event\.workflow_run\.head_sha' 'workflow-run head SHA binding'
 require 'ref:[[:space:]]*\$\{\{ needs\.candidate\.outputs\.sha \}\}' 'candidate-pinned checkout'
@@ -195,11 +207,20 @@ reject_file "${REMOTE_MONITORING_DEPLOY}" \
     'monitoring deployment contains destructive or stale operations'
 
 verify_step_line=$(grep -n 'name: Verify deployment' "${WORKFLOW}" | tail -1 | cut -d: -f1)
-monitoring_step_line=$(grep -n 'name: Reconcile remote monitoring' "${WORKFLOW}" | tail -1 | cut -d: -f1)
-if [[ -z "${verify_step_line}" || -z "${monitoring_step_line}" || ${monitoring_step_line} -le ${verify_step_line} ]]; then
-    echo 'deployment safety contract violated: monitoring reconciliation must follow healthy application rollout' >&2
+if [[ -z "${verify_step_line}" ]]; then
+    echo 'deployment safety contract missing: healthy application rollout verification' >&2
     exit 1
 fi
+# Monitoring reconciliation must run only after the deploy workflow completes.
+require_file "${RECONCILE_WORKFLOW}" 'workflow_run:' 'reconciliation workflow_run trigger missing'
+require_file "${RECONCILE_WORKFLOW}" 'workflows:[[:space:]]*\[Build and Deploy\]' \
+    'reconciliation does not follow the deploy workflow'
+require_file "${RECONCILE_WORKFLOW}" 'types:[[:space:]]*\[completed\]' \
+    'reconciliation does not await deploy completion'
+require_file "${RECONCILE_WORKFLOW}" 'group:[[:space:]]*stratum-production' \
+    'reconciliation bypasses the production concurrency group'
+require_file "${RECONCILE_WORKFLOW}" 'cancel-in-progress:[[:space:]]*false' \
+    'reconciliation cancels an active deployment'
 
 require_file "${FEISHU_ADAPTER_MANIFEST}" 'readOnlyRootFilesystem:[[:space:]]*true' \
     'adapter filesystem hardening missing'

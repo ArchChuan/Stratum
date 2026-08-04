@@ -198,9 +198,12 @@ func (c *Container) adoptExistingGateway(
 		return nil
 	}
 	if gateway != nil {
+		metrics := observability.NewPrometheusMetrics(c.Logger)
+		// cmd/server 装配路径：guest reaper 指标只在这里注册。
+		metrics.RegisterReaperMetrics()
 		c.LLMGateway = &LLMGateway{
 			Gateway: gateway,
-			Metrics: observability.NewPrometheusMetrics(c.Logger),
+			Metrics: metrics,
 		}
 	}
 	return nil

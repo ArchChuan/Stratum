@@ -1,0 +1,142 @@
+name: Reconcile remote monitoring
+
+on:
+  workflow_run:
+    workflows: [Build and Deploy]
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stratum-production
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ${{ secrets.DOCKER_REGISTRY_URL }}
+  IMAGE_REPO: ${{ secrets.DOCKER_REGISTRY_URL }}/stratum-demo
+  DOCKER_HUB_MIRROR: ${{ vars.DOCKER_HUB_MIRROR || 'https://docker.m.daocloud.io' }}
+
+jobs:
+  reconcile:
+    name: Reconcile monitoring stack
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: true
+
+      - name: Configure Docker Hub mirror
+        run: |
+          sudo bash -c 'cat > /etc/docker/daemon.json <<DAEMONEOF
+          {
+            "registry-mirrors": ["${{ env.DOCKER_HUB_MIRROR }}"]
+          }
+          DAEMONEOF'
+          sudo systemctl restart docker
+          sleep 2
+          docker info | grep -A5 "Registry Mirrors"
+
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.28.0'
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: 'v3.13.0'
+
+      - name: Setup SSH tunnel to K3s
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_DEPLOY_KEY }}" > ~/.ssh/deploy_key
+          echo "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/known_hosts
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -o ExitOnForwardFailure=yes \
+            -i ~/.ssh/deploy_key \
+            -fN -L 6443:127.0.0.1:6443 \
+            root@${{ secrets.SSH_DEPLOY_HOST }}
+          sleep 2
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+
+      - name: Verify cluster
+        run: kubectl get nodes
+
+      - name: Resolve deployed Feishu adapter image
+        run: |
+          adapter_image="$(kubectl get deployment stratum-feishu-alert-adapter -n monitoring \
+            -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+          if [[ "$adapter_image" =~ @sha256:[0-9a-f]{64}$ ]]; then
+            echo "resolved deployed adapter image from cluster: $adapter_image"
+          elif [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            adapter_image="${{ env.IMAGE_REPO }}/stratum-feishu-alert-adapter:${{ github.event.workflow_run.head_sha }}"
+            digest="$(docker buildx imagetools inspect "$adapter_image" --format '{{.Manifest.Digest}}')"
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "invalid registry digest for $adapter_image" >&2
+              exit 1
+            fi
+            adapter_image="$adapter_image@$digest"
+            echo "resolved adapter image from registry: $adapter_image"
+          else
+            echo 'no deployed Feishu adapter found and no workflow_run context' >&2
+            exit 1
+          fi
+          echo "FEISHU_ADAPTER_IMAGE=$adapter_image" >> "$GITHUB_ENV"
+
+      - name: Apply monitoring credentials
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          REGISTRY_SERVER: ${{ secrets.DOCKER_REGISTRY_URL }}
+          REGISTRY_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          test -n "$FEISHU_WEBHOOK_URL"
+          test -n "$REGISTRY_SERVER"
+          test -n "$REGISTRY_USERNAME"
+          test -n "$REGISTRY_PASSWORD"
+          kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret generic stratum-monitoring-secrets \
+            --namespace monitoring \
+            --from-literal=FEISHU_WEBHOOK_URL="$FEISHU_WEBHOOK_URL" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret docker-registry aliyun-registry \
+            --namespace monitoring \
+            --docker-server="$REGISTRY_SERVER" \
+            --docker-username="$REGISTRY_USERNAME" \
+            --docker-password="$REGISTRY_PASSWORD" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Reconcile monitoring stack
+        run: |
+          validator_dir=$(mktemp -d)
+          prometheus_container=""
+          alertmanager_container=""
+          cleanup_validators() {
+            if [[ -n "$prometheus_container" ]]; then
+              docker rm -f "$prometheus_container" >/dev/null 2>&1 || :
+            fi
+            if [[ -n "$alertmanager_container" ]]; then
+              docker rm -f "$alertmanager_container" >/dev/null 2>&1 || :
+            fi
+            /usr/bin/rm -rf -- "$validator_dir"
+          }
+          trap cleanup_validators EXIT
+          prometheus_container=$(docker create prom/prometheus:v3.8.1)
+          docker cp "$prometheus_container:/bin/promtool" "$validator_dir/promtool"
+          alertmanager_container=$(docker create prom/alertmanager:v0.33.1)
+          docker cp "$alertmanager_container:/bin/amtool" "$validator_dir/amtool"
+          chmod 0755 "$validator_dir/promtool" "$validator_dir/amtool"
+          PATH="$validator_dir:$PATH" bash scripts/deploy-remote-monitoring.sh

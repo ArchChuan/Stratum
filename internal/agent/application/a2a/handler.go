@@ -81,6 +81,11 @@ func (h *ProtocolHandler) Receive(msg *Message) {
 
 // SendMessage sends a message
 func (h *ProtocolHandler) SendMessage(ctx context.Context, msg *Message, replyTo string) error {
+	if msg.ID == "" {
+		// 修复：字面量构造的消息没有 ID，会导致回复路由
+		// 用空 key 命中 replyChans，并发消息互相串扰。
+		msg.ID = generateMessageID()
+	}
 	if replyTo != "" {
 		msg.InReplyTo = replyTo
 	}

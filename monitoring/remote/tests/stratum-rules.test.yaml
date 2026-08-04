@@ -281,6 +281,16 @@ tests:
         values: '1000000+1000000x724'
       - series: 'kubelet_volume_stats_available_bytes{namespace="stratum",persistentvolumeclaim="mismatched-pvc"}'
         values: '_x604 800000000-1000000x120'
+      - series: 'kube_persistentvolumeclaim_info{namespace="stratum",persistentvolumeclaim="growing-pvc",storageclass="ebs"}'
+        values: '1x724'
+      - series: 'kube_persistentvolumeclaim_info{namespace="stratum",persistentvolumeclaim="flat-pvc",storageclass="ebs"}'
+        values: '1x724'
+      - series: 'kube_persistentvolumeclaim_info{namespace="stratum",persistentvolumeclaim="shrinking-pvc",storageclass="ebs"}'
+        values: '1x724'
+      - series: 'kube_persistentvolumeclaim_info{namespace="stratum",persistentvolumeclaim="young-pvc",storageclass="ebs"}'
+        values: '1x724'
+      - series: 'kube_persistentvolumeclaim_info{namespace="stratum",persistentvolumeclaim="mismatched-pvc",storageclass="ebs"}'
+        values: '1x724'
     promql_expr_test:
       - expr: stratum:pvc_exhaustion_within_4d
         eval_time: 6h2m
@@ -294,6 +304,8 @@ tests:
         values: '100000000+100000000x7'
       - series: 'kubelet_volume_stats_available_bytes{namespace="stratum",persistentvolumeclaim="hourly-pvc"}'
         values: '800000000-100000000x7'
+      - series: 'kube_persistentvolumeclaim_info{namespace="stratum",persistentvolumeclaim="hourly-pvc",storageclass="ebs"}'
+        values: '1x7'
     promql_expr_test:
       - expr: stratum:pvc_exhaustion_within_4d
         eval_time: 6h
@@ -1035,6 +1047,16 @@ tests:
         values: '3000x60'
     alert_rule_test:
       - eval_time: 1h
+        alertname: StratumReaperDown
+        exp_alerts: []
+
+  - name: reaper down does not fire before the first cycle
+    interval: 1m
+    input_series:
+      - series: 'reaper_last_cycle_timestamp_seconds{instance="10.0.0.1:8080",pod="stratum-abc"}'
+        values: '0x180'
+    alert_rule_test:
+      - eval_time: 3h
         alertname: StratumReaperDown
         exp_alerts: []
 

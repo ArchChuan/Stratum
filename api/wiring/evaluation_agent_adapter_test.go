@@ -150,15 +150,90 @@ func TestAgentEvaluationAdapterDoesNotPublishFailedBaselinePersistence(t *testin
 	}
 }
 
-func TestAgentEvaluationAdapterRejectsUnsupportedModelParameters(t *testing.T) {
+func TestAgentEvaluationAdapterParsesModelParameters(t *testing.T) {
 	baseline := agentdomain.AgentRevision{AgentID: "agent-1", Type: agentdomain.ReActAgent,
 		SystemPrompt: "baseline", Model: "qwen-plus", MaxIterations: 5}
-	for _, field := range []string{"temperature", "maxTokens"} {
-		_, err := parseAgentCandidatePatch(baseline, evaldomain.CandidatePatch{ParameterPatch: map[string]any{field: 1}})
-		if err == nil {
-			t.Fatalf("expected unsupported %s to be rejected", field)
+	t.Run("accepts temperature and max_tokens", func(t *testing.T) {
+		parsed, err := parseAgentCandidatePatch(baseline, evaldomain.CandidatePatch{
+			ParameterPatch: map[string]any{"temperature": 0.9, "max_tokens": 2048},
+		})
+		if err != nil {
+			t.Fatalf("expected supported parameters to be accepted: %v", err)
 		}
-	}
+		if parsed.ModelParameters == nil ||
+			parsed.ModelParameters.Temperature != 0.9 || parsed.ModelParameters.MaxTokens != 2048 {
+			t.Fatalf("parameters not written back: %#v", parsed.ModelParameters)
+		}
+	})
+	t.Run("rejects unknown parameter fields", func(t *testing.T) {
+		for _, field := range []string{"maxTokens", "top_p"} {
+			_, err := parseAgentCandidatePatch(baseline, evaldomain.CandidatePatch{
+				ParameterPatch: map[string]any{field: 1},
+			})
+			if err == nil {
+				t.Fatalf("expected unsupported %s to be rejected", field)
+			}
+		}
+	})
+	t.Run("rejects non-numeric temperature and max_tokens", func(t *testing.T) {
+		for _, field := range []string{"temperature", "max_tokens"} {
+			_, err := parseAgentCandidatePatch(baseline, evaldomain.CandidatePatch{
+				ParameterPatch: map[string]any{field: "hot"},
+			})
+			if err == nil {
+				t.Fatalf("expected non-numeric %s to be rejected", field)
+			}
+		}
+	})
+	t.Run("accepts compaction keys", func(t *testing.T) {
+		parsed, err := parseAgentCandidatePatch(baseline, evaldomain.CandidatePatch{
+			ParameterPatch: map[string]any{
+				"max_context_tokens":       16384,
+				"compaction_recent_groups": 5,
+				"compaction_safety_ratio":  0.85,
+			},
+		})
+		if err != nil {
+			t.Fatalf("expected compaction parameters to be accepted: %v", err)
+		}
+		if parsed.ModelParameters == nil ||
+			parsed.ModelParameters.MaxContextTokens != 16384 ||
+			parsed.ModelParameters.CompactionRecentGroups != 5 ||
+			parsed.ModelParameters.CompactionSafetyRatio != 0.85 {
+			t.Fatalf("compaction parameters not written back: %#v", parsed.ModelParameters)
+		}
+	})
+	t.Run("rejects invalid compaction values", func(t *testing.T) {
+		for _, patch := range []map[string]any{
+			{"compaction_recent_groups": 4},   // outside {0,2,3,5}
+			{"compaction_recent_groups": "3"}, // non-integer
+			{"compaction_safety_ratio": 0.3},  // below 0.5
+			{"compaction_safety_ratio": 1.2},  // above 0.95
+			{"max_context_tokens": -1},        // negative window
+			{"max_context_tokens": 40000},     // above 32768
+		} {
+			_, err := parseAgentCandidatePatch(baseline, evaldomain.CandidatePatch{
+				ParameterPatch: patch,
+			})
+			if err == nil {
+				t.Fatalf("expected patch %v to be rejected", patch)
+			}
+		}
+	})
+	t.Run("accepts zero compaction values as auto", func(t *testing.T) {
+		parsed, err := parseAgentCandidatePatch(baseline, evaldomain.CandidatePatch{
+			ParameterPatch: map[string]any{
+				"compaction_recent_groups": 0,
+				"compaction_safety_ratio":  0,
+			},
+		})
+		if err != nil {
+			t.Fatalf("expected zero/auto values to be accepted: %v", err)
+		}
+		if parsed.ModelParameters.CompactionRecentGroups != 0 || parsed.ModelParameters.CompactionSafetyRatio != 0 {
+			t.Fatalf("auto values not written back: %#v", parsed.ModelParameters)
+		}
+	})
 }
 
 func TestAgentEvaluationAdapterSummariesPassRealRevisionValidation(t *testing.T) {
@@ -179,6 +254,96 @@ func TestAgentEvaluationAdapterSummariesPassRealRevisionValidation(t *testing.T)
 	}); err != nil {
 		t.Fatalf("candidate rejected by real RevisionService: %v", err)
 	}
+}
+
+func TestAgentEvaluationAdapterApplyPublishedRevisionFailsClosedOnModelValidation(t *testing.T) {
+	payload := []byte(`{"agent_id":"agent-1","type":"react","system_prompt":"baseline","model":"qwen-plus","max_iterations":5,"model_parameters":{"temperature":0.9,"max_tokens":2048}}`)
+	revisions := &fakeAgentRevisionService{revision: evaldomain.ResourceRevision{
+		ID: "published-1", ResourceKind: evaldomain.ResourceKindAgent, ResourceID: "agent-1",
+		Status: evaldomain.RevisionStatusPublished,
+	}, payload: payload, found: true}
+
+	t.Run("missing validator blocks apply", func(t *testing.T) {
+		updater := &recordingAgentUpdater{}
+		adapter := agentEvaluationAdapter{revisions: revisions, agentUpdater: updater}
+		if err := adapter.ApplyPublishedRevision(context.Background(), "tenant-1", "agent-1", "published-1"); err == nil {
+			t.Fatal("expected missing validator to fail closed")
+		}
+		if updater.updateCalls != 0 {
+			t.Fatalf("apply proceeded without validator: updateCalls=%d", updater.updateCalls)
+		}
+	})
+
+	t.Run("validator dependency failure fails closed", func(t *testing.T) {
+		wantErr := errors.New("model registry unavailable")
+		updater := &recordingAgentUpdater{}
+		adapter := agentEvaluationAdapter{
+			revisions: revisions, agentUpdater: updater,
+			modelValidator: fakeModelValidator{err: wantErr},
+		}
+		err := adapter.ApplyPublishedRevision(context.Background(), "tenant-1", "agent-1", "published-1")
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("expected validator failure, got %v", err)
+		}
+		if updater.updateCalls != 0 {
+			t.Fatalf("apply proceeded despite validator failure: updateCalls=%d", updater.updateCalls)
+		}
+	})
+
+	t.Run("valid model applies with routed parameters", func(t *testing.T) {
+		updater := &recordingAgentUpdater{}
+		adapter := agentEvaluationAdapter{
+			revisions: revisions, agentUpdater: updater,
+			modelValidator: fakeModelValidator{},
+		}
+		if err := adapter.ApplyPublishedRevision(context.Background(), "tenant-1", "agent-1", "published-1"); err != nil {
+			t.Fatal(err)
+		}
+		if updater.updateCalls != 1 {
+			t.Fatalf("expected exactly one update, got %d", updater.updateCalls)
+		}
+		if updater.input.Temperature != 0.9 || updater.input.MaxTokens != 2048 {
+			t.Fatalf("routed parameters not applied: %#v", updater.input)
+		}
+	})
+}
+
+func TestAgentEvaluationAdapterCreateCandidateValidatesPatchedModel(t *testing.T) {
+	revisions := &fakeAgentRevisionService{revision: evaldomain.ResourceRevision{
+		ID: "published-1", ResourceKind: evaldomain.ResourceKindAgent, ResourceID: "agent-1",
+		Status: evaldomain.RevisionStatusPublished,
+	}, payload: []byte(`{"agent_id":"agent-1","type":"react","system_prompt":"baseline","model":"qwen-plus","max_iterations":5}`), found: true}
+	adapter := agentEvaluationAdapter{
+		revisions: revisions, actorID: "evaluation-worker",
+		modelValidator: fakeModelValidator{err: errors.New("model not in tenant catalog")},
+	}
+	_, err := adapter.CreateCandidate(context.Background(), "tenant-1", agentRef("published-1"), evaldomain.CandidatePatch{
+		Source: "llm_rewrite", ParameterPatch: map[string]any{"model": "other-model"},
+	})
+	if err == nil {
+		t.Fatal("expected patched model to be validated and rejected")
+	}
+}
+
+type recordingAgentUpdater struct {
+	updateCalls int
+	input       agentapp.UpdateAgentInput
+}
+
+func (u *recordingAgentUpdater) Get(context.Context, string) (agentapp.AgentDTO, error) {
+	return agentapp.AgentDTO{}, nil
+}
+
+func (u *recordingAgentUpdater) Update(_ context.Context, _ string, input agentapp.UpdateAgentInput) (agentapp.AgentDTO, error) {
+	u.updateCalls++
+	u.input = input
+	return agentapp.AgentDTO{}, nil
+}
+
+type fakeModelValidator struct{ err error }
+
+func (f fakeModelValidator) ValidateTenantChatModel(context.Context, string, string) error {
+	return f.err
 }
 
 func TestAgentEvaluationAdapterExecutionReceivesTenantContext(t *testing.T) {

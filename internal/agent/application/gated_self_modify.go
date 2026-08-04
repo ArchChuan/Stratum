@@ -77,7 +77,23 @@ func (s *AgentService) GatedSelfModify(
 	if !decision.Allowed {
 		return GatedSelfModifyResult{Decision: decision}, nil
 	}
-	dto, err := s.Update(ctx, agentID, UpdateAgentInput(req))
+	// SelfModifyRequest 是 member 受控内容变更子集：Temperature/MaxTokens/
+	// Compaction* 等派生配置不在自改面内，显式构造留零值（Update 对
+	// MaxContextTokens<=0 有 derive 兜底，此处成员已显式传值不受影响）
+	dto, err := s.Update(ctx, agentID, UpdateAgentInput{
+		Name:                  req.Name,
+		Type:                  req.Type,
+		Description:           req.Description,
+		SystemPrompt:          req.SystemPrompt,
+		LLMModel:              req.LLMModel,
+		MaxIterations:         req.MaxIterations,
+		MaxContextTokens:      req.MaxContextTokens,
+		AllowedSkills:         req.AllowedSkills,
+		MCPToolIDs:            req.MCPToolIDs,
+		KnowledgeWorkspaceIDs: req.KnowledgeWorkspaceIDs,
+		MemoryScope:           req.MemoryScope,
+		CheckpointEnabled:     req.CheckpointEnabled,
+	})
 	if err != nil {
 		return GatedSelfModifyResult{Decision: decision}, err
 	}

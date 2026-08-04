@@ -592,6 +592,15 @@ func (contractExperimentRepo) ApplyCommand(context.Context, string, string, doma
 func (contractExperimentRepo) ResolveDeployment(context.Context, string, string, string) (domain.Deployment, bool, error) {
 	return domain.Deployment{}, false, nil
 }
+func (contractExperimentRepo) HasRunningExperiment(context.Context, string, string, string) (bool, error) {
+	return false, nil
+}
+func (contractExperimentRepo) ListPendingExperiments(context.Context, string, string, string) ([]domain.Experiment, error) {
+	return nil, nil
+}
+func (contractExperimentRepo) ListRunningExperiments(context.Context, string) ([]domain.Experiment, error) {
+	return nil, nil
+}
 
 type contractCandidateRepo struct{}
 
