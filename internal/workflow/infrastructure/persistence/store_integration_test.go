@@ -369,6 +369,57 @@ func TestPgStorePhase1CControlApprovalAndEffectAreTenantScopedAndFenced(t *testi
 	require.Equal(t, domain.EffectIntentStatusUnknown, intents[0].Status)
 }
 
+// 同批并行 approval:首个 approval 提交把 run 置为 paused 后,同批其余 approval 必须幂等成功,
+// 否则右分支 approval 静默丢失,run 卡死在 paused(run_failed 因状态非 running 不落库)
+func TestPgStoreParallelApprovalBatchBothRequestsSucceed(t *testing.T) {
+	url := os.Getenv("STRATUM_TEST_POSTGRES_URL")
+	if url == "" {
+		t.Fatal("STRATUM_TEST_POSTGRES_URL is required; this integration test must not skip")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, url)
+	require.NoError(t, err)
+	defer pool.Close()
+	require.NoError(t, postgres.ProvisionPublicSchema(ctx, pool, zap.NewNop()))
+	tenant := "workflow_" + uuid.NewString()[:8]
+	require.NoError(t, postgres.ProvisionTenantSchema(ctx, pool, tenant))
+	defer func() {
+		_, _ = pool.Exec(ctx, `DROP SCHEMA IF EXISTS "tenant_`+tenant+`" CASCADE`)
+	}()
+	store := workflowpersist.NewPgStore(pool)
+	tenantCtx := tenantdb.WithTenant(ctx, &tenantdb.TenantContext{TenantID: tenant})
+	spec := domain.Spec{Nodes: []domain.Node{{ID: "left-2", Type: domain.NodeTypeApproval}, {ID: "right-3", Type: domain.NodeTypeApproval}}, Edges: []domain.Edge{{ID: "e1", From: "left-2", To: "right-3"}}}
+	definition, _ := domain.NewDefinition(uuid.NewString(), "ParallelApproval", "", spec)
+	require.NoError(t, store.CreateDefinition(tenantCtx, tenant, definition))
+	version, err := definition.Publish(uuid.NewString(), 1)
+	require.NoError(t, err)
+	require.NoError(t, store.CreateVersion(tenantCtx, tenant, version))
+	run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{"task": "parallel"}, "parallel-key", "parallel-hash")
+	require.NoError(t, run.Start())
+	require.NoError(t, store.CreateRun(tenantCtx, tenant, run))
+
+	// 同一批(批基准 generation=run.Generation)创建两个并行 approval
+	batchGeneration := run.Generation
+	leftAttemptID, rightAttemptID := uuid.NewString(), uuid.NewString()
+	require.NoError(t, store.SaveAttempt(tenantCtx, tenant, domain.NodeAttempt{ID: leftAttemptID, RunID: run.ID, NodeID: "left-2", AttemptNo: 1, Status: domain.AttemptStatusRunning, FenceToken: batchGeneration, RunGeneration: batchGeneration}))
+	require.NoError(t, store.SaveAttempt(tenantCtx, tenant, domain.NodeAttempt{ID: rightAttemptID, RunID: run.ID, NodeID: "right-3", AttemptNo: 1, Status: domain.AttemptStatusRunning, FenceToken: batchGeneration, RunGeneration: batchGeneration}))
+	left := domain.NewApproval(uuid.NewString(), run.ID, "left-2", leftAttemptID, batchGeneration+1, "human approval required", "high", "left")
+	right := domain.NewApproval(uuid.NewString(), run.ID, "right-3", rightAttemptID, batchGeneration+1, "human approval required", "high", "right")
+	require.NoError(t, store.CreateApproval(tenantCtx, tenant, left, domain.Event{ID: uuid.NewString(), Type: "workflow.approval_requested", OccurredAt: time.Now().UTC()}))
+	// 第二个 approval 必须幂等成功,而不是 ErrGenerationConflict
+	require.NoError(t, store.CreateApproval(tenantCtx, tenant, right, domain.Event{ID: uuid.NewString(), Type: "workflow.approval_requested", OccurredAt: time.Now().UTC()}))
+
+	paused, err := store.GetRun(tenantCtx, tenant, run.ID)
+	require.NoError(t, err)
+	require.Equal(t, domain.RunStatusPaused, paused.Status)
+	require.Equal(t, batchGeneration+1, paused.Generation)
+	approvals, err := store.ListApprovals(tenantCtx, tenant, run.ID, true)
+	require.NoError(t, err)
+	require.Len(t, approvals, 2)
+	// 两个 approval 期望的 run generation 一致,decision 与 resume 均可用同一 expected_generation
+	require.Equal(t, left.RunGeneration, right.RunGeneration)
+}
+
 func TestPgStoreReclaimsExpiredRunAndRenewsLease(t *testing.T) {
 	url := os.Getenv("STRATUM_TEST_POSTGRES_URL")
 	if url == "" {
