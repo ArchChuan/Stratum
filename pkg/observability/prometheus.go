@@ -357,7 +357,16 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 // registerReaperMetrics registers the reaper metric family. Must not be
 // inlined into registerExtendedMetrics: the reaper is a background component
 // with its own alerting rules (see helm stratum-prometheusrule.yaml).
+//
+// Upstream main already registers the same family (same fqName, help and
+// label names) inside registerExtendedMetrics. Re-registering an identical
+// descriptor from a second collector would trip the registry's duplicate
+// collector check (checkCollectorID runs before the descID check), so skip
+// when the fields are already populated by the upstream registration.
 func (m *PrometheusMetrics) registerReaperMetrics(factory promauto.Factory) {
+	if m.reaperCyclesTotal != nil {
+		return
+	}
 	m.reaperCyclesTotal = factory.NewCounterVec(
 		prometheus.CounterOpts{Name: "reaper_cycles_total", Help: "Guest reaper cycles by outcome"},
 		[]string{"outcome"},
