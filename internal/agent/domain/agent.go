@@ -49,10 +49,19 @@ type AgentConfig struct {
 	KnowledgeWorkspaceNames        []string
 	KnowledgeWorkspaceDescriptions []string
 	MaxContextTokens               int
-	MemoryScope                    string
-	SystemKey                      string
-	IsSystem                       bool
-	ManagementMode                 string
+	// Temperature 0 means unset: the gateway/provider default applies.
+	Temperature float32
+	// MaxTokens 0 means unset: no explicit output cap.
+	MaxTokens int
+	// CompactionRecentGroups overrides in-loop compaction recent groups.
+	// 0 means auto-derive from MaxContextTokens.
+	CompactionRecentGroups int
+	// CompactionSafetyRatio overrides the compaction safety ratio. 0 = default.
+	CompactionSafetyRatio float32
+	MemoryScope           string
+	SystemKey             string
+	IsSystem              bool
+	ManagementMode        string
 	// StuckThreshold > 0 enables lazy planning: after this many LLM rounds with
 	// no final answer the agent transitions to Reflect→Plan→Execute.
 	// 0 disables the feature (pure ReAct).

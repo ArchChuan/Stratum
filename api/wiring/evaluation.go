@@ -695,7 +695,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	}
 	if c.Agent != nil && sharedRevisionService != nil {
 		agentAdapter := agentEvaluationAdapter{
-			revisions: sharedRevisionService, agents: c.Agent.Service,
+			revisions: sharedRevisionService, agents: c.Agent.Service, modelValidator: tenantModelValidator(c.Agent.TenantResolver),
 			agentUpdater: c.Agent.Service, actorID: "evaluation-worker",
 		}
 		resourceAdapters[evaldomain.ResourceKindAgent] = agentAdapter

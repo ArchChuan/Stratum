@@ -21,7 +21,7 @@ func tunablesUnderTest() []struct {
 		defaultV any
 	}{
 		{name: "temperature", tunable: temperatureTunable{}, valid: 0.7, invalid: []any{"hot", -1.0, 2.5}, defaultV: 0.7},
-		{name: "max_tokens", tunable: maxTokensTunable{}, valid: 4096.0, invalid: []any{"many", 100.0, 200000.0}, defaultV: 4096},
+		{name: "max_tokens", tunable: maxTokensTunable{}, valid: 4096.0, invalid: []any{"many", -1.0, 200000.0}, defaultV: 4096},
 	}
 }
 
@@ -107,7 +107,7 @@ func TestTemperatureAndMaxTokensValidate(t *testing.T) {
 		bad     []any
 	}{
 		{temperatureTunable{}, []any{0.0, 1.0, 2.0}, []any{"x", -0.1, 2.1, nil}},
-		{maxTokensTunable{}, []any{256.0, 65536.0, 131072.0}, []any{"x", 255.0, 131073.0, nil}},
+		{maxTokensTunable{}, []any{0.0, 256.0, 65536.0, 131072.0}, []any{"x", -0.1, 131073.0, nil}},
 	}
 	for _, tc := range cases {
 		for _, v := range tc.good {
@@ -129,7 +129,7 @@ func TestTunableSearchSpaces(t *testing.T) {
 	if got := temp.SearchSpace(); got.Min != 0 || got.Max != 2 || got.Step != 0.1 {
 		t.Fatalf("temperature space = %+v", got)
 	}
-	if got := maxTok.SearchSpace(); got.Min != 256 || got.Max != 131072 {
+	if got := maxTok.SearchSpace(); got.Min != 0 || got.Max != 131072 {
 		t.Fatalf("max_tokens space = %+v", got)
 	}
 	if got := prompt.SearchSpace(); got.Min != 0 || got.Max != 0 || got.Discrete != nil {
