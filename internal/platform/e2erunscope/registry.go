@@ -101,7 +101,7 @@ func rejectPortConflicts(candidate Scope, leases []Scope) error {
 
 func scopePorts(ports Ports) []int {
 	return []int{
-		ports.Frontend, ports.Backend, ports.OAuth, ports.Fixture, ports.PlatformMCP, ports.InternalAPI,
+		ports.Frontend, ports.Backend, ports.OAuth, ports.Fixture,
 	}
 }
 

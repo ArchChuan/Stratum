@@ -1,5 +1,7 @@
 # Stratum 监控告警与恢复回滚能力补齐设计
 
+> **NOTE (2026-08-04):** `StratumPlatformMCP*` 相关告警随 platform-mcp 整体移除，本文其余内容继续有效。
+
 日期：2026-08-03
 状态：待评审
 分支：`feat/monitoring-recovery`

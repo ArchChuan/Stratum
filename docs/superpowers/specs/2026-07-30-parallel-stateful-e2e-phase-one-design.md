@@ -1,5 +1,7 @@
 # Parallel Stateful E2E Phase One Design
 
+> **DEPRECATED (2026-08-04):** 运行拓扑中的 `platform_mcp` / `internal_api` 端口已随 platform-mcp 移除（现为 frontend/backend/oauth/fixture 四端口）。
+
 **Status:** Approved in conversation on 2026-07-30
 **Scope:** Stateful E2E runner process, port, PostgreSQL, and shared-infrastructure lifecycle isolation
 **Out of scope:** Redis key prefixes, NATS subject/consumer namespaces, and per-run Milvus collections

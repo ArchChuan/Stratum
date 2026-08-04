@@ -228,14 +228,13 @@ func TestRegistryRegisterRejectsPortConflictWithExistingLease(t *testing.T) {
 	first := registryTestScope(t, "20260730t120102z-a1b2c3d4e5f60718", 101)
 	second := registryTestScope(t, "20260730t120103z-b1b2c3d4e5f60718", 102)
 	second.Ports = Ports{
-		Frontend: 22001, Backend: 22002, OAuth: 22003, Fixture: 22004,
-		PlatformMCP: 22005, InternalAPI: first.Ports.PlatformMCP,
+		Frontend: 22001, Backend: 22002, OAuth: 22003, Fixture: first.Ports.Backend,
 	}
 	if err := r.Register(first); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.Register(second); err == nil || !strings.Contains(err.Error(), "port conflict") {
-		t.Fatalf("Register() error = %v, want six-role port conflict", err)
+		t.Fatalf("Register() error = %v, want four-role port conflict", err)
 	}
 	if _, err := r.Read(second.RunID); err == nil {
 		t.Fatal("conflicting lease was published")
@@ -665,7 +664,6 @@ func registryTestScopeAt(t *testing.T, runID string, pid int, createdAt time.Tim
 		Repository: t.TempDir(), DatabaseName: "stratum_e2e_" + runID[:16] + "_" + runID[17:],
 		Ports: Ports{
 			Frontend: portBase + 1, Backend: portBase + 2, OAuth: portBase + 3, Fixture: portBase + 4,
-			PlatformMCP: portBase + 5, InternalAPI: portBase + 6,
 		},
 		Infrastructure: InfrastructureLease{LeaseID: runID},
 	}
