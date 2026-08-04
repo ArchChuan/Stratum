@@ -80,3 +80,28 @@ func (w *Worker) PollOnce(ctx context.Context) error {
 	}
 	return errors.Join(failures...)
 }
+
+// NewMultiRunner returns a TenantJobRunner that delegates to each runner
+// in order, merging their results.
+func NewMultiRunner(runners ...TenantJobRunner) TenantJobRunner {
+	return &multiRunner{runners: runners}
+}
+
+type multiRunner struct {
+	runners []TenantJobRunner
+}
+
+func (m *multiRunner) RunOnce(ctx context.Context, tenantID, workerID string, lease time.Duration) (bool, error) {
+	anyWork := false
+	var failures []error
+	for _, runner := range m.runners {
+		didWork, err := runner.RunOnce(ctx, tenantID, workerID, lease)
+		if err != nil {
+			failures = append(failures, err)
+		}
+		if didWork {
+			anyWork = true
+		}
+	}
+	return anyWork, errors.Join(failures...)
+}

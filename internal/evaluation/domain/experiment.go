@@ -5,10 +5,12 @@ import "hash/fnv"
 type ExperimentStatus string
 
 const (
+	ExperimentPending    ExperimentStatus = "pending"
 	ExperimentRunning    ExperimentStatus = "running"
 	ExperimentPaused     ExperimentStatus = "paused"
 	ExperimentCompleted  ExperimentStatus = "completed"
 	ExperimentRolledBack ExperimentStatus = "rolled_back"
+	ExperimentRejected   ExperimentStatus = "rejected"
 )
 
 type Decision string
@@ -134,6 +136,8 @@ func (e Experiment) Decide(metrics StageMetrics, policy PromotionPolicy) (Experi
 
 func CanApplyExperimentCommand(status ExperimentStatus, action ExperimentCommandAction) bool {
 	switch status {
+	case ExperimentPending:
+		return action == CommandActivate || action == CommandReject
 	case ExperimentRunning:
 		return action == CommandPause || action == CommandPromote || action == CommandRollback
 	case ExperimentPaused:

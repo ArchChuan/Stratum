@@ -59,6 +59,8 @@ const (
 	CommandPause    ExperimentCommandAction = "pause"
 	CommandPromote  ExperimentCommandAction = "promote"
 	CommandRollback ExperimentCommandAction = "rollback"
+	CommandActivate ExperimentCommandAction = "activate"
+	CommandReject   ExperimentCommandAction = "reject"
 )
 
 type ActorType string

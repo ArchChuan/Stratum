@@ -146,6 +146,14 @@ type ExperimentRepository interface {
 	ApplyCommand(ctx context.Context, tenantID, experimentID string, action domain.ExperimentCommandAction,
 		command domain.ExperimentCommand) (domain.Experiment, error)
 	ResolveDeployment(ctx context.Context, tenantID, resourceKind, resourceID string) (domain.Deployment, bool, error)
+	// HasRunningExperiment returns true when the resource already has
+	// an active (running or paused) experiment.
+	HasRunningExperiment(ctx context.Context, tenantID string, resourceKind, resourceID string) (bool, error)
+	// ListPendingExperiments returns pending experiments ordered by creation time
+	// for a specific resource, or all resources when resourceID is empty.
+	ListPendingExperiments(ctx context.Context, tenantID, resourceKind, resourceID string) ([]domain.Experiment, error)
+	// ListRunningExperiments returns all running experiments across all resources.
+	ListRunningExperiments(ctx context.Context, tenantID string) ([]domain.Experiment, error)
 }
 
 type FeedbackRepository interface {

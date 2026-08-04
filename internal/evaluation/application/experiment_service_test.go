@@ -254,12 +254,16 @@ func (f *fakeExperimentRepo) ApplyCommand(
 	f.commandActorType = command.ActorType
 	f.experiment.StateVersion++
 	switch action {
+	case domain.CommandActivate:
+		f.experiment.Status = domain.ExperimentRunning
 	case domain.CommandPause:
 		f.experiment.Status = domain.ExperimentPaused
 	case domain.CommandPromote:
 		f.experiment.Status = domain.ExperimentCompleted
 	case domain.CommandRollback:
 		f.experiment.Status = domain.ExperimentRolledBack
+	case domain.CommandReject:
+		f.experiment.Status = domain.ExperimentRejected
 	}
 	return f.experiment, nil
 }
@@ -315,4 +319,104 @@ func (f *fakeExperimentRepo) SaveDecision(
 
 func (f *fakeExperimentRepo) ResolveDeployment(_ context.Context, _ string, _, _ string) (domain.Deployment, bool, error) {
 	return f.deployment, f.deployment.ResourceID != "", nil
+}
+
+func (f *fakeExperimentRepo) HasRunningExperiment(_ context.Context, _ string, _, _ string) (bool, error) {
+	return f.experiment.Status == domain.ExperimentRunning || f.experiment.Status == domain.ExperimentPaused, nil
+}
+
+func (f *fakeExperimentRepo) ListPendingExperiments(_ context.Context, _ string, _, _ string) ([]domain.Experiment, error) {
+	if f.experiment.Status == domain.ExperimentPending {
+		return []domain.Experiment{f.experiment}, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeExperimentRepo) ListRunningExperiments(_ context.Context, _ string) ([]domain.Experiment, error) {
+	if f.experiment.Status == domain.ExperimentRunning {
+		return []domain.Experiment{f.experiment}, nil
+	}
+	return nil, nil
+}
+
+// ——— ExperimentQueue tests ———
+
+func TestExperimentServiceEnqueueCreatesPendingExperiment(t *testing.T) {
+	repo := &fakeExperimentRepo{}
+	svc := NewExperimentService(repo)
+	experiment, deployment, err := svc.Enqueue(context.Background(), "tenant-1", CreateExperimentInput{
+		Stable:          domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "rev-stable"},
+		Canary:          domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "rev-canary"},
+		SuiteRevisionID: "suite-1",
+	})
+	if err != nil {
+		t.Fatalf("Enqueue returned error: %v", err)
+	}
+	if experiment.Status != domain.ExperimentPending {
+		t.Fatalf("expected pending status, got %s", experiment.Status)
+	}
+	if experiment.Stage != 0 {
+		t.Fatalf("expected stage 0, got %d", experiment.Stage)
+	}
+	if deployment.CanaryPercent != 0 {
+		t.Fatalf("expected canary_percent 0, got %d", deployment.CanaryPercent)
+	}
+}
+
+func TestExperimentServiceEnqueueRejectsDuplicateActiveExperiment(t *testing.T) {
+	repo := &fakeExperimentRepo{
+		experiment: domain.Experiment{Status: domain.ExperimentRunning},
+	}
+	svc := NewExperimentService(repo)
+	_, _, err := svc.Enqueue(context.Background(), "tenant-1", CreateExperimentInput{
+		Stable:          domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "rev-stable"},
+		Canary:          domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "rev-canary"},
+		SuiteRevisionID: "suite-1",
+	})
+	if err == nil {
+		t.Fatal("expected error when resource already has active experiment")
+	}
+}
+
+func TestExperimentServiceActivateTransitionsPendingToRunning(t *testing.T) {
+	repo := &fakeExperimentRepo{
+		experiment: domain.Experiment{
+			ID: "exp-1", Status: domain.ExperimentPending, StateVersion: 1,
+			ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		},
+	}
+	svc := NewExperimentService(repo)
+	updated, err := svc.Activate(context.Background(), "tenant-1", "exp-1", ExperimentCommandInput{
+		ActorID:              "admin",
+		Reason:               "start experiment",
+		IdempotencyKey:       "idem-1",
+		ExpectedStateVersion: 1,
+	})
+	if err != nil {
+		t.Fatalf("Activate returned error: %v", err)
+	}
+	if updated.Status != domain.ExperimentRunning {
+		t.Fatalf("expected running status, got %s", updated.Status)
+	}
+}
+
+func TestExperimentServiceRejectTransitionsPendingToRejected(t *testing.T) {
+	repo := &fakeExperimentRepo{
+		experiment: domain.Experiment{
+			ID: "exp-1", Status: domain.ExperimentPending, StateVersion: 1,
+		},
+	}
+	svc := NewExperimentService(repo)
+	updated, err := svc.Reject(context.Background(), "tenant-1", "exp-1", ExperimentCommandInput{
+		ActorID:              "admin",
+		Reason:               "not needed",
+		IdempotencyKey:       "idem-2",
+		ExpectedStateVersion: 1,
+	})
+	if err != nil {
+		t.Fatalf("Reject returned error: %v", err)
+	}
+	if updated.Status != domain.ExperimentRejected {
+		t.Fatalf("expected rejected status, got %s", updated.Status)
+	}
 }
