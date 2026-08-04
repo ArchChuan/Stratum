@@ -18,11 +18,12 @@ REPORT_DIR="${OUT_DIR}/reports"
 INBOX_DIR="${REPORT_DIR}/inbox"
 LOG_DIR="${OUT_DIR}/logs"
 LOCK_FILE="${AGENT_INTERVIEW_LOCK_FILE:-${OUT_DIR}/agent-interview.lock}"
-CODEX_BIN="${CODEX_BIN:-codex}"
-CODEX_MODEL="${AGENT_INTERVIEW_CODEX_MODEL:-}"
+AGENT_INTERVIEW_BIN="${AGENT_INTERVIEW_BIN:-claude}"
+AGENT_INTERVIEW_MODEL="${AGENT_INTERVIEW_MODEL:-deepseek-v4-pro}"
 TIMEOUT_SEC="${AGENT_INTERVIEW_TIMEOUT_SEC:-3600}"
 RUN_ID="${AGENT_INTERVIEW_RUN_ID:-$(date '+%Y%m%d-%H%M%S')}"
 REPORT_DATE="${AGENT_INTERVIEW_REPORT_DATE:-$(date +%F)}"
+REPO_DIGEST=''
 MODE=generate-and-fuse
 
 usage() {
@@ -48,20 +49,59 @@ log() {
   printf '[%s] %s\n' "$(date '+%F %T%z')" "$*" | tee -a "${LOG_FILE}"
 }
 
-run_codex() {
+run_researcher() {
   local output="$1" prompt="$2"
-  local -a args=(-a never)
-  [[ -n "${CODEX_MODEL}" ]] && args+=(-m "${CODEX_MODEL}")
-  args+=(exec -C "${STRATUM_ROOT}")
-  [[ -n "${output}" ]] && args+=(-o "${output}")
-  timeout "${TIMEOUT_SEC}" "${CODEX_BIN}" "${args[@]}" "${prompt}"
+  local -a args=(-p --model "${AGENT_INTERVIEW_MODEL}" \
+    --dangerously-skip-permissions --no-session-persistence)
+  # claude CLI 无 --cwd/--output-file：子 shell 切工作目录，stdout 重定向写报告，
+  # 输出路径经 env 透传给 fake 测试替身（AGENT_INTERVIEW_OUTPUT_FILE）。
+  if [[ -n "${output}" ]]; then
+    (
+      cd "${STRATUM_ROOT}"
+      AGENT_INTERVIEW_OUTPUT_FILE="${output}" \
+        timeout "${TIMEOUT_SEC}" "${AGENT_INTERVIEW_BIN}" "${args[@]}" \
+        "${prompt}" >"${output}"
+    )
+  else
+    (
+      cd "${STRATUM_ROOT}"
+      timeout "${TIMEOUT_SEC}" "${AGENT_INTERVIEW_BIN}" "${args[@]}" "${prompt}"
+    )
+  fi
+}
+
+repo_change_digest() {
+  local since_days="${AGENT_INTERVIEW_REPO_SINCE_DAYS:-14}" digest="${OUT_DIR}/repo-digest-${RUN_ID}.md"
+  {
+    printf '# Stratum 最近 %s 天仓库变更摘要（全量重构输入）\n\n' "${since_days}"
+    printf '## 提交\n\n'
+    if git -C "${STRATUM_ROOT}" log \
+      --since="${since_days} days ago" --no-merges \
+      --pretty=format:'- %h %ad %s' --date=short 2>/dev/null | head -200; then
+      :
+    else
+      printf -- '- git log 失败：仓库变更摘要不可用\n'
+    fi
+    printf '\n\n## 变更文件\n\n'
+    if git -C "${STRATUM_ROOT}" log --since="${since_days} days ago" \
+      --name-only --pretty=format: 2>/dev/null | sort -u | head -100; then
+      :
+    else
+      printf -- '- 变更文件列表不可用\n'
+    fi
+  } >"${digest}" || {
+    printf -- '- 仓库变更摘要生成失败\n' >"${digest}"
+    log "WARN: repo change digest generation failed: ${digest}"
+  }
+  REPO_DIGEST="${digest}"
+  log "repo change digest: ${digest}"
 }
 
 generation_prompt() {
   cat <<EOF
 You are the unattended daily Agent interview researcher for the Stratum repository.
 
-Write a Chinese report with 12-20 senior/staff-level questions. Research current public sources and ground answers in current repository code and documentation. Preserve source URLs, trends, Stratum gaps, follow-up questions, source paths, and tracking keywords. Do not print credentials, private URLs, tokens, API keys, or raw secrets.
+Write a Chinese report with 12-20 senior/staff-level questions. Research the latest hot and frontier topics from current public sources, and ground every answer in the CURRENT repository implementation and documentation. Read the repository change digest at ${REPO_DIGEST} when present; verify every cited source path against the current code and do not cite moved or removed paths. Preserve source URLs, trends, Stratum gaps, follow-up questions, source paths, and tracking keywords. Do not print credentials, private URLs, tokens, API keys, or raw secrets.
 
 Use exactly these top-level sections:
 # Agent 高级开发岗位每日面试题
@@ -81,19 +121,37 @@ EOF
 fusion_prompt() {
   local input="$1" hash="$2"
   cat <<EOF
-Fuse one new Agent interview report into the staged long-lived library.
+Fully reconstruct the staged long-lived library by fusing one new Agent interview report, the existing library, and the current repository evidence.
 
 Stage directory: ${AGENT_INTERVIEW_STAGE_LIBRARY}
 Input report: ${input}
 Input SHA-256: ${hash}
+Repository change digest: ${REPO_DIGEST}
 Coverage manifest to create: ${AGENT_INTERVIEW_COVERAGE_MANIFEST}
 
-The README is the machine classification contract. Modify files only inside the stage directory. Do not create category files. Preserve all source links, trends, questions and answers, Stratum gaps, follow-up questions, source paths, and keywords. Assign exactly one primary category to each item. Put content that cannot be classified confidently in 99-unclassified.md.
+This is a FULL RECONSTRUCTION, not an append. Rewrite every category file completely so each article is one coherent, merged, deduplicated whole:
 
-Deduplicate by normalized topic and semantics, not title spelling alone. Merge complementary evidence into the canonical entry. Do not silently overwrite conflicts or definition differences; retain the boundary or mark it pending review. A newer date alone is not evidence. Keep stable IDs unchanged for existing topics.
+- Integrate the new report's content INTO the canonical entries instead of adding anything to the end of an article. Do not leave new questions, trends, gaps, keywords or sources as an appended block at the bottom of any file.
+- Merge complementary evidence into the existing canonical entry and update its 最近更新 date. Create a new stable ID only for genuinely new topics.
+- Deduplicate by normalized topic and semantics across the whole library, not title spelling alone. Each topic appears once in exactly one primary category; remove or condense superseded entries while keeping their provenance (source IDs/URLs, source paths, keywords) when still relevant.
+- Keep stable IDs unchanged for topics that survive; do not renumber or recreate existing IDs.
+- Reconcile every Stratum-grounded claim against the repository change digest: cite current code and documentation paths, and drop or explicitly mark claims that are stale or conflicted. A newer report date alone is not evidence for overwriting existing claims.
+- Preserve all source links, trends, questions and answers, Stratum gaps, follow-up questions, source paths, and tracking keywords; merge keywords and sources as normalized sets.
 
-Append one processed-report ledger row containing run ID, report date, SHA-256, input count, created count, updated count, duplicate count, and unclassified count. Update fusion statistics and dates. Create the coverage manifest with one pipe-delimited row per source question:
+Use exactly this article structure in every category file (do not create new category files):
+## 0. 分类边界与融合说明
+## 1. 项目关键知识
+## 2. 流程与架构图
+## 3. 热门面试题与结合项目的答案
+## 4. 趋势与观点
+## 5. Stratum 可补强点
+## 6. 跟踪关键词
+## 7. 参考来源
+
+The README is the machine classification contract. Assign exactly one primary category to each item. Put content that cannot be classified confidently in 99-unclassified.md. Update the README: append one processed-report ledger row containing run ID, report date, SHA-256, input count, created count, updated count, duplicate count, and unclassified count; update fusion statistics and dates; add a line to the 稳定 ID 与去重规则 section stating that every fusion fully reconstructs and deduplicates all articles. Create the coverage manifest with one pipe-delimited row per source question:
 <input-basename>|<run-id>:Q<original-ordinal>|<stable-id>
+
+00-question-bank-index.md is a by-question-number index, not an article: keep its 分类速览/按题号索引 tables, refresh the 维护说明 timestamp, and update the question-to-document mapping when questions move between categories. Do not apply the 0-7 article structure to it.
 
 Do not delete the input. Deterministic code validates and publishes the result.
 EOF
@@ -169,7 +227,7 @@ fuse_input() {
   export AGENT_INTERVIEW_RUN_ID="${input_run_id}"
   export AGENT_INTERVIEW_REPORT_DATE="${input_report_date}"
 
-  if run_codex '' "$(fusion_prompt "${input}" "${hash}")"; then
+  if run_researcher '' "$(fusion_prompt "${input}" "${hash}")"; then
     :
   else
     status=$?
@@ -204,9 +262,13 @@ fi
 
 "${HELPER_DIR}/validate-library.sh" --library "${REPORT_DIR}"
 
+if [[ "${MODE}" == generate-and-fuse || "${MODE}" == fuse-only ]]; then
+  repo_change_digest
+fi
+
 case "${MODE}" in
   dry-run)
-    command -v "${CODEX_BIN}" >/dev/null
+    command -v "${AGENT_INTERVIEW_BIN}" >/dev/null
     log 'dry run complete'
     exit 0
     ;;
@@ -216,7 +278,7 @@ case "${MODE}" in
     ;;
   generate-and-fuse)
     generated="${INBOX_DIR}/${RUN_ID}.md"
-    run_codex "${generated}" "$(generation_prompt)"
+    run_researcher "${generated}" "$(generation_prompt)"
     [[ -s "${generated}" ]] || {
       log "research produced an empty report: ${generated}"
       exit 1

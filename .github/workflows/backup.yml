@@ -1,0 +1,105 @@
+name: Postgres backup and restore drill
+
+on:
+  schedule:
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stratum-postgres-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: Dump PostgreSQL
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.28.0'
+
+      - name: Setup SSH tunnel to K3s
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_DEPLOY_KEY }}" > ~/.ssh/deploy_key
+          echo "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/known_hosts
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -o ExitOnForwardFailure=yes \
+            -i ~/.ssh/deploy_key \
+            -fN -L 6443:127.0.0.1:6443 \
+            root@${{ secrets.SSH_DEPLOY_HOST }}
+          sleep 2
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+
+      - name: Verify cluster
+        run: kubectl cluster-info
+
+      - name: Dump PostgreSQL
+        run: |
+          mkdir -p backup-artifacts
+          BACKUP_OUTPUT="backup-artifacts/backup.sql.gz" bash scripts/backup/backup-postgres.sh
+
+      - name: Attach backup metadata
+        run: |
+          date -u +%Y-%m-%dT%H:%M:%SZ > backup-artifacts/timestamp.txt
+          cat backup-artifacts/backup.sql.gz.sha256
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stratum-postgres-backup
+          path: backup-artifacts/
+          retention-days: 30
+
+  restore-drill:
+    name: Restore drill
+    runs-on: ubuntu-latest
+    needs: backup
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: stratum-postgres-backup
+          path: backup-artifacts/
+
+      - name: Run restore drill
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: |
+          bash scripts/backup/restore-drill.sh backup-artifacts/backup.sql.gz backup-drill-report.txt
+
+      - name: Upload drill report
+        uses: actions/upload-artifact@v4
+        with:
+          name: stratum-backup-drill-report
+          path: backup-drill-report.txt
+          retention-days: 30
