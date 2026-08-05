@@ -189,6 +189,15 @@ services:
     volumes:
       - etcd_data:/etcd
     command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    # 崩溃根因: milvus 启动时 etcd 未就绪 → init with etcd failed → roles.go:127 裸 panic(SIGABRT exit 134)。
+    # healthcheck 让 depends_on condition: service_healthy 生效，milvus 只在 etcd ready 后启动。
+    # 注意: etcdctl v3.5 的 endpoint health 无 --timeout 标志，命令超时用全局 --command-timeout。
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health", "--command-timeout=3s"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     networks:
       - stratum
 
@@ -222,8 +231,12 @@ services:
     networks:
       - stratum
     depends_on:
-      - etcd
-      - minio
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    # 启动瞬态失败(网络/DNS 未就绪)兜底: 最多重试 2 次, 避免一次 134 panic 即死
+    restart: on-failure:2
 
   # PostgreSQL - 关系型数据库（多租户元数据）
   # 使用自建镜像内置 zhparser，支持 knowledge_chunks 中文全文分词；
