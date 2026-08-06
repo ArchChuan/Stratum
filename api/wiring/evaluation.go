@@ -588,7 +588,7 @@ func (a agentScenarioEvaluationAdapter) ExecuteRevision(
 				},
 			},
 		},
-		activation,
+		[]agentport.SkillActivation{activation},
 	)
 	if err != nil {
 		return evalport.ExecutionResult{}, err

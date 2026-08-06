@@ -1183,7 +1183,7 @@ func (s *AgentService) ResumeExecution(ctx context.Context, agentID string, req 
 	return s.Execute(ctx, agentID, req, meta)
 }
 
-func (s *AgentService) ExecuteSkillScenario(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, activation port.SkillActivation) (*AgentResult, int, error) {
+func (s *AgentService) ExecuteSkillScenario(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, activations []port.SkillActivation) (*AgentResult, int, error) {
 	a, ok, err := s.deps.Registry.Get(ctx, agentID)
 	if err != nil {
 		return nil, 0, fmt.Errorf("execute skill scenario: get agent: %w", err)
@@ -1196,11 +1196,28 @@ func (s *AgentService) ExecuteSkillScenario(ctx context.Context, agentID string,
 	if err != nil {
 		return nil, 0, fmt.Errorf("execute skill scenario: assemble options: %w", err)
 	}
-	options = append(options, WithExecutionID(executionID), WithSkillCatalog(map[string]port.SkillActivation{activation.SkillID: activation}), WithActiveSkill(activation))
+	options = append(options,
+		WithExecutionID(executionID),
+		WithSkillCatalog(catalogFromActivations(activations)),
+		WithActiveSkills(activations),
+	)
 	start := time.Now()
 	result, err := a.Execute(context.WithoutCancel(ctx), req.Query, options...)
 	duration := int(time.Since(start).Milliseconds())
 	return result, duration, err
+}
+
+// catalogFromActivations 从 scenario 固定激活列表构建 run 级 SkillCatalog。
+// 空 SkillID 跳过，重复 SkillID 后者覆盖；返回 map 供 WithSkillCatalog 使用。
+func catalogFromActivations(activations []port.SkillActivation) map[string]port.SkillActivation {
+	catalog := make(map[string]port.SkillActivation, len(activations))
+	for _, activation := range activations {
+		if activation.SkillID == "" {
+			continue
+		}
+		catalog[activation.SkillID] = activation
+	}
+	return catalog
 }
 
 // assembleOptions builds the ExecutionOption slice and resolves the

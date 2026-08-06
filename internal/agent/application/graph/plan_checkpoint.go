@@ -34,8 +34,16 @@ type PlanCheckpointPayload struct {
 	RemainingNodeBudget     int          `json:"remaining_node_budget"`
 	RemainingRevisionBudget int64        `json:"remaining_revision_budget"`
 	ActiveAttemptIDs        []string     `json:"active_attempt_ids,omitempty"`
-	ActiveSkillID           string       `json:"active_skill_id,omitempty"`
-	ActiveSkillRevisionID   string       `json:"active_skill_revision_id,omitempty"`
+	// 多 skill 叠加：全量激活数组优先；旧字段保留作单 skill 回退（新 payload 回填最后一条激活）。
+	ActiveSkills          []CheckpointSkillRef `json:"active_skills,omitempty"`
+	ActiveSkillID         string               `json:"active_skill_id,omitempty"`
+	ActiveSkillRevisionID string               `json:"active_skill_revision_id,omitempty"`
+}
+
+// CheckpointSkillRef 是激活 skill 的持久化引用（不携带指令内容，恢复时从 catalog 解析）。
+type CheckpointSkillRef struct {
+	SkillID    string `json:"skill_id"`
+	RevisionID string `json:"revision_id"`
 }
 
 type planCheckpointEnvelope struct {
@@ -135,16 +143,22 @@ func checkpointSnapshot(state *ReActState) *PersistPlanCheckpointSnapshot {
 	return snapshot
 }
 
-// buildReActRuntimeState encodes ReAct-only runtime state (ActiveSkill) into
+// buildReActRuntimeState encodes ReAct-only runtime state (Actives) into
 // the checkpoint's RuntimeStateJSON. Returns {} when there is nothing to persist.
 func buildReActRuntimeState(state *ReActState) json.RawMessage {
-	if state == nil || state.ActiveSkill == nil {
+	if state == nil || len(state.Actives) == 0 {
 		return json.RawMessage("{}")
 	}
-	payload := PlanCheckpointPayload{
-		ActiveSkillID:         state.ActiveSkill.SkillID,
-		ActiveSkillRevisionID: state.ActiveSkill.RevisionID,
+	payload := PlanCheckpointPayload{ActiveSkills: make([]CheckpointSkillRef, 0, len(state.Actives))}
+	for _, active := range state.Actives {
+		payload.ActiveSkills = append(payload.ActiveSkills, CheckpointSkillRef{
+			SkillID: active.SkillID, RevisionID: active.RevisionID,
+		})
 	}
+	// 旧字段回填最后一条激活，供旧二进制降级恢复。
+	last := state.Actives[len(state.Actives)-1]
+	payload.ActiveSkillID = last.SkillID
+	payload.ActiveSkillRevisionID = last.RevisionID
 	if encoded, err := EncodePlanCheckpoint(payload); err == nil {
 		return json.RawMessage(encoded)
 	}

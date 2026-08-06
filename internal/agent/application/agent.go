@@ -63,7 +63,7 @@ type ExecutionConfig struct {
 	ExtraTools                []port.ToolDefinition
 	SkillCatalog              map[string]port.SkillActivation
 	ToolExecutionFn           port.ToolExecutionFn
-	ActiveSkill               *port.SkillActivation
+	Actives                   []port.SkillActivation
 	TracePayloadStore         port.TracePayloadStore
 	ConversationID            string
 	UserID                    string
@@ -489,14 +489,14 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	)
 
 	// Resume from checkpoint if one exists.
-	activePlan, restoredActiveSkill, initMessages := a.resumeFromCheckpoint(
+	activePlan, restoredActives, initMessages := a.resumeFromCheckpoint(
 		ctx, ec, initMessages,
 	)
 
 	initState := a.buildReActInitState(ec, initMessages, maxTokens)
 	initState.ActivePlan = activePlan
-	if restoredActiveSkill != nil {
-		initState.ActiveSkill = restoredActiveSkill
+	if len(restoredActives) > 0 {
+		initState.Actives = restoredActives
 	}
 	initState.PlanNodeExecutor = a.buildPlanNodeExecutor(ec, ec.capGW)
 	if !ec.cfg.SystemAssistantMode && a.RecallMemoryFn != nil {
@@ -670,7 +670,7 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		OnToken:                    ec.cfg.TokenCallback,
 		AvailableTools:             mergeTools(availableTools, ec.cfg.ExtraTools, a.Logger),
 		SkillCatalog:               ec.cfg.SkillCatalog,
-		ActiveSkill:                ec.cfg.ActiveSkill,
+		Actives:                    ec.cfg.Actives,
 		TracePayloadStore:          ec.cfg.TracePayloadStore,
 		ToolExecutionFn:            ec.cfg.ToolExecutionFn,
 		GovernedAssistant:          ec.cfg.SystemAssistantMode,
@@ -1011,8 +1011,12 @@ func WithSkillCatalog(catalog map[string]port.SkillActivation) ExecutionOption {
 	}
 }
 
-func WithActiveSkill(skill port.SkillActivation) ExecutionOption {
-	return func(cfg *ExecutionConfig) { cfg.ActiveSkill = &skill }
+// WithActiveSkills pins the initial active skill activations for this run
+// (scenario path). The slice is copied to avoid aliasing the caller's storage.
+func WithActiveSkills(actives []port.SkillActivation) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.Actives = append([]port.SkillActivation(nil), actives...)
+	}
 }
 
 func WithToolExecutionFn(fn port.ToolExecutionFn) ExecutionOption {
@@ -1333,7 +1337,7 @@ func isResumableCheckpoint(s string) bool {
 // resumeFromCheckpoint restores execution state from the latest checkpoint.
 func (a *BaseAgent) resumeFromCheckpoint(
 	ctx context.Context, ec agentExecContext, msgs []port.LLMMessage,
-) (*domain.Plan, *port.SkillActivation, []port.LLMMessage) {
+) (*domain.Plan, []port.SkillActivation, []port.LLMMessage) {
 	if !a.CheckpointEnabled || a.CheckpointStore == nil || ec.cfg.ExecutionID == "" {
 		return nil, nil, msgs
 	}
@@ -1347,8 +1351,8 @@ func (a *BaseAgent) resumeFromCheckpoint(
 		zap.Int("step_index", resumeCp.StepIndex),
 	)
 	msgs = restoreMessages(resumeCp.MessagesSnapshotJSON, msgs)
-	plan, skill := restorePlanCheckpointState(resumeCp.RuntimeStateJSON, ec.cfg.SkillCatalog)
-	return plan, skill, msgs
+	plan, actives := restorePlanCheckpointState(resumeCp.RuntimeStateJSON, ec.cfg.SkillCatalog)
+	return plan, actives, msgs
 }
 
 func restoreMessages(raw json.RawMessage, fallback []port.LLMMessage) []port.LLMMessage {
@@ -1400,7 +1404,7 @@ func fingerprintAttributes(fp *domain.ExecutionFingerprint) []attribute.KeyValue
 	return attrs
 }
 
-func restorePlanCheckpointState(raw json.RawMessage, catalog map[string]port.SkillActivation) (*domain.Plan, *port.SkillActivation) {
+func restorePlanCheckpointState(raw json.RawMessage, catalog map[string]port.SkillActivation) (*domain.Plan, []port.SkillActivation) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
@@ -1412,12 +1416,40 @@ func restorePlanCheckpointState(raw json.RawMessage, catalog map[string]port.Ski
 	if decoded.Plan != nil {
 		plan = decoded.Plan
 	}
-	var skill *port.SkillActivation
-	if decoded.ActiveSkillID != "" {
-		if activation, ok := catalog[decoded.ActiveSkillID]; ok &&
-			(decoded.ActiveSkillRevisionID == "" || activation.RevisionID == decoded.ActiveSkillRevisionID) {
-			skill = &activation
-		}
+	if len(decoded.ActiveSkills) > 0 {
+		// 数组优先；逐条校验 revision、跳过 catalog 外条目并按 SkillID 去重。
+		return plan, restoreActivesFromRefs(decoded.ActiveSkills, catalog)
 	}
-	return plan, skill
+	return plan, restoreLegacyActiveSkill(decoded, catalog)
+}
+
+// restoreActivesFromRefs 将 checkpoint 中的 skill refs 还原为 catalog 中的激活
+// 快照。revision 不匹配或不在 catalog 的条目跳过；重复 SkillID 保留首个。
+func restoreActivesFromRefs(refs []agentgraph.CheckpointSkillRef, catalog map[string]port.SkillActivation) []port.SkillActivation {
+	seen := map[string]struct{}{}
+	var actives []port.SkillActivation
+	for _, ref := range refs {
+		activation, ok := catalog[ref.SkillID]
+		if !ok || (ref.RevisionID != "" && activation.RevisionID != ref.RevisionID) {
+			continue
+		}
+		if _, dup := seen[activation.SkillID]; dup {
+			continue
+		}
+		seen[activation.SkillID] = struct{}{}
+		actives = append(actives, activation)
+	}
+	return actives
+}
+
+// restoreLegacyActiveSkill 回退旧版单条 checkpoint 字段，供旧 payload 恢复。
+func restoreLegacyActiveSkill(decoded agentgraph.PlanCheckpointPayload, catalog map[string]port.SkillActivation) []port.SkillActivation {
+	if decoded.ActiveSkillID == "" {
+		return nil
+	}
+	activation, ok := catalog[decoded.ActiveSkillID]
+	if !ok || (decoded.ActiveSkillRevisionID != "" && activation.RevisionID != decoded.ActiveSkillRevisionID) {
+		return nil
+	}
+	return []port.SkillActivation{activation}
 }

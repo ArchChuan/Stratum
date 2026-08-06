@@ -23,7 +23,7 @@ type workflowAgentService interface {
 	ExecuteStream(context.Context, string, agentapp.ExecRequest, agentapp.ExecMeta, func(string)) (
 		context.Context, context.CancelFunc, func() (*agentapp.AgentResult, int, error), error,
 	)
-	ExecuteSkillScenario(context.Context, string, agentapp.ExecRequest, agentapp.ExecMeta, agentport.SkillActivation) (*agentapp.AgentResult, int, error)
+	ExecuteSkillScenario(context.Context, string, agentapp.ExecRequest, agentapp.ExecMeta, []agentport.SkillActivation) (*agentapp.AgentResult, int, error)
 }
 
 type workflowAgentExecutor struct{ agents workflowAgentService }
@@ -108,7 +108,7 @@ func (e workflowSkillExecutor) ExecuteSkill(ctx context.Context, tenantID, agent
 	}
 	activation := agentport.SkillActivation{SkillID: view.SkillID, RevisionID: view.RevisionID, Name: view.Name, Description: view.Description, Instructions: view.Instructions, InputSchema: view.InputSchema, OutputSchema: view.OutputSchema, MCPToolIDs: view.MCPToolIDs, KnowledgeWorkspaceIDs: view.KnowledgeWorkspaceIDs, MemoryScopes: view.MemoryScopes}
 	traceID := uuid.Must(uuid.NewV7()).String()
-	result, _, err := e.agents.ExecuteSkillScenario(ctx, agentID, agentapp.ExecRequest{Query: input, UserID: "workflow"}, agentapp.ExecMeta{TenantID: tenantID, TraceID: traceID}, activation)
+	result, _, err := e.agents.ExecuteSkillScenario(ctx, agentID, agentapp.ExecRequest{Query: input, UserID: "workflow"}, agentapp.ExecMeta{TenantID: tenantID, TraceID: traceID}, []agentport.SkillActivation{activation})
 	if err != nil {
 		return "", traceID, err
 	}

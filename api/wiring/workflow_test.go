@@ -28,9 +28,13 @@ func (f *workflowAgentServiceFake) Execute(_ context.Context, agentID string, re
 	return &agentapp.AgentResult{Output: "done"}, 10, nil
 }
 
-func (f *workflowAgentServiceFake) ExecuteSkillScenario(_ context.Context, agentID string, req agentapp.ExecRequest, meta agentapp.ExecMeta, activation agentport.SkillActivation) (*agentapp.AgentResult, int, error) {
+func (f *workflowAgentServiceFake) ExecuteSkillScenario(_ context.Context, agentID string, req agentapp.ExecRequest, meta agentapp.ExecMeta, activations []agentport.SkillActivation) (*agentapp.AgentResult, int, error) {
 	f.agentID, f.req, f.meta = agentID, req, meta
-	return &agentapp.AgentResult{Output: activation.RevisionID}, 10, nil
+	revision := ""
+	if len(activations) > 0 {
+		revision = activations[0].RevisionID
+	}
+	return &agentapp.AgentResult{Output: revision}, 10, nil
 }
 
 func (f *workflowAgentServiceFake) ExecuteStream(

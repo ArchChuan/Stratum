@@ -40,7 +40,7 @@ type ReActState struct {
 	ModelRoutedVia             []string
 	AvailableTools             []port.ToolDefinition
 	SkillCatalog               map[string]port.SkillActivation
-	ActiveSkill                *port.SkillActivation
+	Actives                    []port.SkillActivation
 	TracePayloadStore          port.TracePayloadStore
 	ToolExecutionFn            port.ToolExecutionFn
 	GovernedAssistant          bool
@@ -142,11 +142,11 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 	return func(ctx context.Context, s ReActState) (ReActState, error) {
 		start := time.Now()
 
-		tools := effectiveTools(s.AvailableTools, s.SkillCatalog, s.ActiveSkill, s.AgentKnowledgeWorkspaceIDs, s.AgentMemoryScope, s.GovernedAssistant)
+		tools := effectiveTools(s.AvailableTools, s.SkillCatalog, s.Actives, s.AgentKnowledgeWorkspaceIDs, s.AgentMemoryScope, s.GovernedAssistant)
 		if s.PlanToolsDisabled {
 			tools = withoutPlanTools(tools)
 		}
-		messages := messagesWithActiveSkill(s.Messages, s.ActiveSkill)
+		messages := messagesWithActiveSkills(s.Messages, s.Actives)
 		protectedUsers := 1
 		if s.MaxLLMSteps > 0 && s.Steps >= s.MaxLLMSteps-1 {
 			tools = nil
@@ -685,7 +685,7 @@ func execProposeResourceChangeTool(toolCtx context.Context, tc port.ToolCall, s 
 func dispatchSkillTool(tc port.ToolCall, s *ReActState) (toolExecResult, bool) {
 	for _, activation := range s.SkillCatalog {
 		if activation.Name == tc.Name || (activation.Name == "" && activation.SkillID == tc.Name) {
-			s.ActiveSkill = &activation
+			s.Actives = upsertActivation(s.Actives, activation)
 			return toolExecResult{
 				content: fmt.Sprintf("activated skill %s revision %s", activation.SkillID, activation.RevisionID),
 				status:  domain.ToolTraceStatusSuccess,
@@ -709,7 +709,7 @@ func execSearchKnowledgeTool(toolCtx context.Context, tc port.ToolCall, s *ReAct
 	}
 	workspaces := extractStringSliceArg(tc.Arguments, "workspaces")
 	query, _ := tc.Arguments["query"].(string)
-	workspaces = allowedKnowledgeWorkspaces(workspaces, s.AgentKnowledgeWorkspaceIDs, s.ActiveSkill)
+	workspaces = allowedKnowledgeWorkspaces(workspaces, s.AgentKnowledgeWorkspaceIDs, s.Actives)
 	if len(workspaces) == 0 {
 		msg := "error: no authorized knowledge workspace"
 		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: msg, content: msg}
@@ -736,7 +736,7 @@ func execSearchKnowledgeTool(toolCtx context.Context, tc port.ToolCall, s *ReAct
 
 func execRecallMemoryTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time, logger *zap.Logger) toolExecResult {
 	switch {
-	case s.ActiveSkill != nil && !containsString(s.ActiveSkill.MemoryScopes, s.AgentMemoryScope):
+	case len(s.Actives) > 0 && !anyActiveAllowsMemoryScope(s.Actives, s.AgentMemoryScope):
 		msg := "error: active skill does not permit this memory scope"
 		logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
 			zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
@@ -776,7 +776,7 @@ func execMCPTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolS
 	}
 	callCtx, cancel := context.WithTimeout(toolCtx, constants.AgentMCPToolCallTimeout)
 	toolOutput, callErr := s.ToolExecutionFn(callCtx, port.ToolExecutionRequest{
-		ToolCallID: tc.ID, Tool: tool, Arguments: tc.Arguments, ActiveSkill: s.ActiveSkill,
+		ToolCallID: tc.ID, Tool: tool, Arguments: tc.Arguments, Actives: s.Actives,
 	})
 	cancel()
 	var approvalRequired *port.ToolApprovalRequiredError
@@ -1062,13 +1062,13 @@ func findTool(name string, tools []port.ToolDefinition) (port.ToolDefinition, bo
 	return port.ToolDefinition{}, false
 }
 
-func allowedKnowledgeWorkspaces(requested, agentAllowed []string, active *port.SkillActivation) []string {
+func allowedKnowledgeWorkspaces(requested, agentAllowed []string, actives []port.SkillActivation) []string {
 	agentSet := make(map[string]struct{}, len(agentAllowed))
 	for _, id := range agentAllowed {
 		agentSet[id] = struct{}{}
 	}
 	skillSet := map[string]struct{}{}
-	if active != nil {
+	for _, active := range actives {
 		for _, id := range active.KnowledgeWorkspaceIDs {
 			skillSet[id] = struct{}{}
 		}
@@ -1082,7 +1082,7 @@ func allowedKnowledgeWorkspaces(requested, agentAllowed []string, active *port.S
 		if _, ok := agentSet[id]; !ok {
 			continue
 		}
-		if active != nil {
+		if len(actives) > 0 {
 			if _, ok := skillSet[id]; !ok {
 				continue
 			}
@@ -1137,7 +1137,7 @@ func buildSkillToolDefinitions(catalog map[string]port.SkillActivation) []port.T
 func effectiveTools(
 	available []port.ToolDefinition,
 	catalog map[string]port.SkillActivation,
-	active *port.SkillActivation,
+	actives []port.SkillActivation,
 	agentKnowledgeWorkspaceIDs []string,
 	agentMemoryScope string,
 	governedAssistant bool,
@@ -1149,7 +1149,7 @@ func effectiveTools(
 	out = append(out, PlanToolDefinitions()...)
 	out = append(out, buildSkillToolDefinitions(catalog)...)
 	allowedMCP := map[string]struct{}{}
-	if active != nil {
+	for _, active := range actives {
 		for _, id := range active.MCPToolIDs {
 			allowedMCP[id] = struct{}{}
 		}
@@ -1158,13 +1158,13 @@ func effectiveTools(
 		if isReservedPlanTool(tool.Name) {
 			continue
 		}
-		if active != nil && tool.Name == "stratum_recall_memory" && !containsString(active.MemoryScopes, agentMemoryScope) {
+		if len(actives) > 0 && tool.Name == "stratum_recall_memory" && !anyActiveAllowsMemoryScope(actives, agentMemoryScope) {
 			continue
 		}
-		if active != nil && tool.Name == "stratum_search_knowledge" && len(allowedKnowledgeWorkspaces(nil, agentKnowledgeWorkspaceIDs, active)) == 0 {
+		if len(actives) > 0 && tool.Name == "stratum_search_knowledge" && len(allowedKnowledgeWorkspaces(nil, agentKnowledgeWorkspaceIDs, actives)) == 0 {
 			continue
 		}
-		if tool.ProviderType == domain.ProviderTypeMCP && active != nil {
+		if tool.ProviderType == domain.ProviderTypeMCP && len(actives) > 0 {
 			if _, ok := allowedMCP[tool.Name]; !ok {
 				continue
 			}
@@ -1219,21 +1219,49 @@ func containsString(values []string, target string) bool {
 	return false
 }
 
-func messagesWithActiveSkill(messages []port.LLMMessage, active *port.SkillActivation) []port.LLMMessage {
-	if active == nil || active.Instructions == "" {
+// upsertActivation 按 SkillID 原位替换（保留激活顺序）或末尾追加。
+func upsertActivation(actives []port.SkillActivation, activation port.SkillActivation) []port.SkillActivation {
+	for i, active := range actives {
+		if active.SkillID == activation.SkillID {
+			actives[i] = activation
+			return actives
+		}
+	}
+	return append(actives, activation)
+}
+
+// anyActiveAllowsMemoryScope 报告任一 active skill 的 MemoryScopes 包含 scope。
+func anyActiveAllowsMemoryScope(actives []port.SkillActivation, scope string) bool {
+	for _, active := range actives {
+		if containsString(active.MemoryScopes, scope) {
+			return true
+		}
+	}
+	return false
+}
+
+func messagesWithActiveSkills(messages []port.LLMMessage, actives []port.SkillActivation) []port.LLMMessage {
+	var instructions []port.LLMMessage
+	for _, active := range actives {
+		if active.Instructions == "" {
+			continue
+		}
+		instructions = append(instructions, port.LLMMessage{
+			Role:    "system",
+			Content: fmt.Sprintf("Active Skill %s (revision %s):\n%s", active.Name, active.RevisionID, active.Instructions),
+		})
+	}
+	if len(instructions) == 0 {
 		return messages
 	}
-	instruction := port.LLMMessage{
-		Role:    "system",
-		Content: fmt.Sprintf("Active Skill %s (revision %s):\n%s", active.Name, active.RevisionID, active.Instructions),
-	}
-	out := make([]port.LLMMessage, 0, len(messages)+1)
+	// 多条指令作为连续块整体插入首个 system 消息之后；逐个插入会反转顺序。
+	out := make([]port.LLMMessage, 0, len(messages)+len(instructions))
 	if len(messages) > 0 && messages[0].Role == "system" {
-		out = append(out, messages[0], instruction)
-		out = append(out, messages[1:]...)
-		return out
+		out = append(out, messages[0])
+		out = append(out, instructions...)
+		return append(out, messages[1:]...)
 	}
-	out = append(out, instruction)
+	out = append(out, instructions...)
 	return append(out, messages...)
 }
 
