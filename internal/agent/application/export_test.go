@@ -5,6 +5,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
@@ -52,4 +53,12 @@ func ApplySkillAssignmentsForTest(catalog map[string]port.SkillActivation, assig
 
 func DeriveMaxContextTokensForTest(s *AgentService, ctx context.Context, tenantID, model string) int {
 	return s.deriveMaxContextTokens(ctx, tenantID, model)
+}
+
+func CatalogFromActivationsForTest(activations []port.SkillActivation) map[string]port.SkillActivation {
+	return catalogFromActivations(activations)
+}
+
+func RestorePlanCheckpointStateForTest(raw json.RawMessage, catalog map[string]port.SkillActivation) (*domain.Plan, []port.SkillActivation) {
+	return restorePlanCheckpointState(raw, catalog)
 }

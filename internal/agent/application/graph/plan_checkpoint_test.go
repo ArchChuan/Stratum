@@ -43,6 +43,35 @@ func TestPlanCheckpointCodecRoundTripsActiveSkill(t *testing.T) {
 	require.Nil(t, got.Plan, "Plan should be nil when only ActiveSkill is persisted")
 }
 
+func TestPlanCheckpointCodecRoundTripsActiveSkills(t *testing.T) {
+	want := graph.PlanCheckpointPayload{
+		ActiveSkills: []graph.CheckpointSkillRef{
+			{SkillID: "skill-a", RevisionID: "rev-1"},
+			{SkillID: "skill-b", RevisionID: "rev-2"},
+		},
+	}
+	encoded, err := graph.EncodePlanCheckpoint(want)
+	require.NoError(t, err)
+	got, err := graph.DecodePlanCheckpoint(encoded)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.Nil(t, got.Plan)
+}
+
+func TestPlanCheckpointCodecDecodesLegacyActiveSkillFallback(t *testing.T) {
+	// 旧版 payload 只有 active_skill_id/active_skill_revision_id，无 active_skills 数组。
+	encoded, err := graph.EncodePlanCheckpoint(graph.PlanCheckpointPayload{
+		ActiveSkillID:         "skill-a",
+		ActiveSkillRevisionID: "rev-1",
+	})
+	require.NoError(t, err)
+	got, err := graph.DecodePlanCheckpoint(encoded)
+	require.NoError(t, err)
+	require.Nil(t, got.ActiveSkills, "legacy payload must leave ActiveSkills nil")
+	require.Equal(t, "skill-a", got.ActiveSkillID)
+	require.Equal(t, "rev-1", got.ActiveSkillRevisionID)
+}
+
 func TestPlanCheckpointCodecRejectsUnsupportedVersion(t *testing.T) {
 	_, err := graph.DecodePlanCheckpoint([]byte(`{"version":99,"plan":{"id":"plan-1"}}`))
 	require.ErrorIs(t, err, graph.ErrUnsupportedPlanCheckpoint)
@@ -115,12 +144,15 @@ func TestPersistReActCheckpointAutoGeneratesIDWhenEmpty(t *testing.T) {
 	require.Equal(t, 1, writer.calls)
 }
 
-func TestPersistReActCheckpointEncodesActiveSkill(t *testing.T) {
+func TestPersistReActCheckpointEncodesActiveSkills(t *testing.T) {
 	writer := &checkpointWriterForPlanTest{}
 	state := &graph.ReActState{
 		TenantID: "tenant-1", ExecutionID: "exec-1", TraceID: "trace-1", ConversationID: "conv-1",
-		ActiveSkill: &port.SkillActivation{SkillID: "skill-a", RevisionID: "rev-1"},
-		Steps:       1,
+		Actives: []port.SkillActivation{
+			{SkillID: "skill-a", RevisionID: "rev-1"},
+			{SkillID: "skill-b", RevisionID: "rev-2"},
+		},
+		Steps: 1,
 	}
 	err := graph.PersistReActCheckpoint(
 		context.Background(), writer, "tenant-1",
@@ -138,8 +170,13 @@ func TestPersistReActCheckpointEncodesActiveSkill(t *testing.T) {
 
 	decoded, decErr := graph.DecodePlanCheckpoint(cp.RuntimeStateJSON)
 	require.NoError(t, decErr)
-	require.Equal(t, "skill-a", decoded.ActiveSkillID)
-	require.Equal(t, "rev-1", decoded.ActiveSkillRevisionID)
+	require.Equal(t, []graph.CheckpointSkillRef{
+		{SkillID: "skill-a", RevisionID: "rev-1"},
+		{SkillID: "skill-b", RevisionID: "rev-2"},
+	}, decoded.ActiveSkills)
+	// 旧字段回填最后一条激活，供旧二进制降级恢复。
+	require.Equal(t, "skill-b", decoded.ActiveSkillID)
+	require.Equal(t, "rev-2", decoded.ActiveSkillRevisionID)
 	require.Nil(t, decoded.Plan)
 }
 

@@ -82,9 +82,10 @@ type AgentConfig struct {
 ## Skill Activation
 
 - Run 启动时解析允许的 published/candidate Skill revision，并固定 revision ID。
-- 模型通过内置 `stratum_activate_skill` 激活一个 instruction bundle。
-- 同一时刻只允许一个 active Skill；再次激活会替换前一个。
-- 激活后 system messages 注入该 revision instructions。
+- 模型通过内置 `stratum_activate_skill` 激活一个或多个 instruction bundle；同一时刻允许多个 active Skill 叠加生效。
+- 同一 SkillID 再次激活原位替换该条目（保留原激活位置），不同 SkillID 激活则追加。
+- 激活后 system messages 按激活顺序注入全部已激活 revision 的 instructions（作为连续 system 消息块插在首条 system 消息之后）。
+- 权限保持 AND 边界：MCP 工具为 `Agent.mcpToolIds ∩ (∪ active Skill mcpToolIds)`（skill 维度取并集）；knowledge 为 `Agent workspaces ∩ (∪ active Skill workspaces)`；memory 为任一 active Skill 允许的 scope。
 - Skill 不生成可执行 ToolDefinition，也不经过 CapabilityGateway。
 - Agent 可以不激活 Skill，直接使用 Agent allowlist 中的 MCP 工具。
 
@@ -99,8 +100,8 @@ type AgentConfig struct {
 | 工具 | 权限 |
 |---|---|
 | `stratum_activate_skill` | 当前 Run 的 Skill catalog |
-| `stratum_search_knowledge` | Agent workspaces ∩ active Skill workspaces |
-| `stratum_recall_memory` | Agent memory scope ∩ active Skill memory scopes |
+| `stratum_search_knowledge` | Agent workspaces ∩ (∪ active Skill workspaces) |
+| `stratum_recall_memory` | 任一 active Skill 允许的 memory scope |
 | `stratum_continue_reasoning` | Agent Loop 内部控制 |
 
 ## Context Budget And Compaction

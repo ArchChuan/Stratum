@@ -1,0 +1,242 @@
+package application_test
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+
+	agent "github.com/byteBuilderX/stratum/internal/agent/application"
+	"github.com/byteBuilderX/stratum/internal/agent/application/graph"
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+)
+
+func TestCatalogFromActivations(t *testing.T) {
+	cases := []struct {
+		name        string
+		activations []port.SkillActivation
+		want        map[string]string // skillID → revisionID
+	}{
+		{
+			name: "all activations cataloged",
+			activations: []port.SkillActivation{
+				{SkillID: "skill-a", RevisionID: "rev-a"},
+				{SkillID: "skill-b", RevisionID: "rev-b"},
+			},
+			want: map[string]string{"skill-a": "rev-a", "skill-b": "rev-b"},
+		},
+		{
+			name: "duplicate skill id keeps the later activation",
+			activations: []port.SkillActivation{
+				{SkillID: "skill-a", RevisionID: "rev-1"},
+				{SkillID: "skill-a", RevisionID: "rev-2"},
+			},
+			want: map[string]string{"skill-a": "rev-2"},
+		},
+		{
+			name: "empty skill id skipped",
+			activations: []port.SkillActivation{
+				{SkillID: "", RevisionID: "rev-empty"},
+				{SkillID: "skill-a", RevisionID: "rev-a"},
+			},
+			want: map[string]string{"skill-a": "rev-a"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			catalog := agent.CatalogFromActivationsForTest(tc.activations)
+			require.Len(t, catalog, len(tc.want))
+			for skillID, revision := range tc.want {
+				activation, ok := catalog[skillID]
+				require.True(t, ok, "skill %s missing", skillID)
+				require.Equal(t, revision, activation.RevisionID)
+			}
+		})
+	}
+}
+
+func TestRestorePlanCheckpointStatePrefersActiveSkillsArray(t *testing.T) {
+	catalog := map[string]port.SkillActivation{
+		"skill-a": {SkillID: "skill-a", RevisionID: "rev-1"},
+		"skill-b": {SkillID: "skill-b", RevisionID: "rev-2"},
+		"skill-c": {SkillID: "skill-c", RevisionID: "rev-3"},
+	}
+	encode := func(p graph.PlanCheckpointPayload) json.RawMessage {
+		raw, err := graph.EncodePlanCheckpoint(p)
+		require.NoError(t, err)
+		return raw
+	}
+	cases := []struct {
+		name    string
+		raw     json.RawMessage
+		wantIDs []string
+	}{
+		{
+			name: "array preferred over legacy fields",
+			raw: encode(graph.PlanCheckpointPayload{
+				ActiveSkills: []graph.CheckpointSkillRef{
+					{SkillID: "skill-a", RevisionID: "rev-1"},
+					{SkillID: "skill-b", RevisionID: "rev-2"},
+				},
+				// 若错误回退旧字段会得到 skill-c。
+				ActiveSkillID: "skill-c", ActiveSkillRevisionID: "rev-3",
+			}),
+			wantIDs: []string{"skill-a", "skill-b"},
+		},
+		{
+			name: "revision mismatch entry skipped",
+			raw: encode(graph.PlanCheckpointPayload{
+				ActiveSkills: []graph.CheckpointSkillRef{
+					{SkillID: "skill-a", RevisionID: "rev-stale"},
+					{SkillID: "skill-b", RevisionID: "rev-2"},
+				},
+			}),
+			wantIDs: []string{"skill-b"},
+		},
+		{
+			name: "entry not in catalog skipped",
+			raw: encode(graph.PlanCheckpointPayload{
+				ActiveSkills: []graph.CheckpointSkillRef{
+					{SkillID: "skill-ghost", RevisionID: "rev-x"},
+					{SkillID: "skill-a", RevisionID: "rev-1"},
+				},
+			}),
+			wantIDs: []string{"skill-a"},
+		},
+		{
+			name: "duplicate skill ids deduplicated",
+			raw: encode(graph.PlanCheckpointPayload{
+				ActiveSkills: []graph.CheckpointSkillRef{
+					{SkillID: "skill-a", RevisionID: "rev-1"},
+					{SkillID: "skill-a", RevisionID: "rev-1"},
+					{SkillID: "skill-b", RevisionID: "rev-2"},
+				},
+			}),
+			wantIDs: []string{"skill-a", "skill-b"},
+		},
+		{
+			name: "no array falls back to legacy fields",
+			raw: encode(graph.PlanCheckpointPayload{
+				ActiveSkillID: "skill-c", ActiveSkillRevisionID: "rev-3",
+			}),
+			wantIDs: []string{"skill-c"},
+		},
+		{
+			name:    "empty payload restores nothing",
+			raw:     nil,
+			wantIDs: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, actives := agent.RestorePlanCheckpointStateForTest(tc.raw, catalog)
+			var got []string
+			for _, active := range actives {
+				got = append(got, active.SkillID)
+			}
+			require.Equal(t, tc.wantIDs, got)
+		})
+	}
+}
+
+func TestAgentService_ExecuteSkillScenarioActivatesMultipleSkills(t *testing.T) {
+	cfg := &domain.AgentConfig{
+		ID: "agent-scenario", Name: "scenario-agent", Type: domain.ReActAgent,
+		LLMModel: "qwen-turbo", SystemPrompt: "You are helpful.", MaxIterations: 5,
+	}
+	repo := new(mockAgentRepo)
+	repo.On("Get", mock.Anything, "agent-scenario").Return(cfg, true, nil)
+	gw := &mockCapGW{responses: []port.CapabilityResponse{{Content: "scenario done"}}}
+	svc := agent.NewAgentService(agent.AgentServiceDeps{
+		Registry:       agent.NewRegistry(repo, agent.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		TenantResolver: countingRevisionTenantResolver{gateway: gw},
+		Logger:         zap.NewNop(),
+	})
+
+	result, _, err := svc.ExecuteSkillScenario(context.Background(), "agent-scenario",
+		agent.ExecRequest{Query: "run scenario"},
+		agent.ExecMeta{TenantID: "tenant-1"},
+		[]port.SkillActivation{
+			{SkillID: "skill-a", Name: "skill-a", RevisionID: "rev-a", Instructions: "USE INSTRUCTION A", MCPToolIDs: []string{"mcp:orders:get"}},
+			{SkillID: "skill-b", Name: "skill-b", RevisionID: "rev-b", Instructions: "USE INSTRUCTION B", MCPToolIDs: []string{"mcp:orders:delete"}},
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "scenario done", result.Output)
+	require.Len(t, gw.requests, 1)
+	req := gw.requests[0]
+	require.NotNil(t, req.LLM)
+	encoded, err := json.Marshal(req.LLM.Messages)
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), "USE INSTRUCTION A")
+	require.Contains(t, string(encoded), "USE INSTRUCTION B")
+	// buildBuiltinTools 无条件追加 stratum_continue_reasoning；无 RAG/无 memory 时 available 仅此一项。
+	require.Equal(t, []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "skill-a", "skill-b", "stratum_continue_reasoning"}, scenarioToolNames(req.LLM.Tools))
+}
+
+type resumableCheckpointStore struct {
+	cp *domain.AgentExecutionCheckpoint
+}
+
+func (f *resumableCheckpointStore) GetLatest(context.Context, string, string) (*domain.AgentExecutionCheckpoint, error) {
+	return f.cp, nil
+}
+
+func (*resumableCheckpointStore) Upsert(context.Context, string, domain.AgentExecutionCheckpoint) error {
+	return nil
+}
+
+func (*resumableCheckpointStore) MarkCompleted(context.Context, string, string) error {
+	return nil
+}
+
+func (*resumableCheckpointStore) UpdateStatus(context.Context, string, string, string) error {
+	return nil
+}
+
+func (*resumableCheckpointStore) DeleteExpired(context.Context, string) (int64, error) {
+	return 0, nil
+}
+
+func TestBaseAgent_CheckpointRestoredActivesOverrideSeededActives(t *testing.T) {
+	a := newReActAgent()
+	a.CheckpointEnabled = true
+	payload, err := graph.EncodePlanCheckpoint(graph.PlanCheckpointPayload{
+		ActiveSkills: []graph.CheckpointSkillRef{{SkillID: "skill-restored", RevisionID: "rev-r"}},
+	})
+	require.NoError(t, err)
+	a.SetCheckpointStore(&resumableCheckpointStore{cp: &domain.AgentExecutionCheckpoint{
+		ID: "cp-1", ExecutionID: "exec-1", Status: "running",
+		RuntimeStateJSON: payload,
+	}})
+	gw := &mockCapGW{responses: []port.CapabilityResponse{{Content: "done"}}}
+	a.SetCapGateway(gw)
+
+	_, err = a.Execute(context.Background(), "resume task",
+		agent.WithTenantID("tenant-1"),
+		agent.WithExecutionID("exec-1"),
+		agent.WithSkillCatalog(map[string]port.SkillActivation{
+			"skill-restored": {SkillID: "skill-restored", Name: "skill-restored", RevisionID: "rev-r", Instructions: "RESTORED INSTRUCTION"},
+		}),
+		agent.WithActiveSkills([]port.SkillActivation{
+			{SkillID: "skill-seed", Name: "skill-seed", RevisionID: "rev-s", Instructions: "SEED INSTRUCTION"},
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, gw.requests, 1)
+	encoded, err := json.Marshal(gw.requests[0].LLM.Messages)
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), "RESTORED INSTRUCTION")
+	require.NotContains(t, string(encoded), "SEED INSTRUCTION")
+}
+
+func scenarioToolNames(tools []port.ToolDefinition) []string {
+	names := make([]string, len(tools))
+	for i := range tools {
+		names[i] = tools[i].Name
+	}
+	return names
+}
