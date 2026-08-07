@@ -40,6 +40,8 @@ type CreateWorkspaceRequest struct {
 	Name        string          `json:"name" binding:"required"`
 	Description string          `json:"description"`
 	Config      WorkspaceConfig `json:"config"`
+	// Editors is the initial editor set; each id must hold role admin or owner.
+	Editors []string `json:"editors"`
 }
 
 // UpdateWorkspaceRequest is bound from PATCH /knowledge/workspaces/:name JSON body.
@@ -65,4 +67,6 @@ type WorkspaceListItem struct {
 	Config      WorkspaceConfig `json:"config"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
+	// Editors is the current granted editor set, for form prefill.
+	Editors []string `json:"editors"`
 }

@@ -12,6 +12,7 @@ const Harness = ({ models }: { models: string[] }) => {
       loading={false}
       form={form}
       embeddingModels={models}
+      editorCandidates={[]}
       onClose={vi.fn()}
       onSubmit={vi.fn()}
     />

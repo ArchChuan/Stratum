@@ -40,6 +40,75 @@ func NewPgAgentRepo(pool *pgxpool.Pool) *PgAgentRepo {
 	return &PgAgentRepo{pool: pool}
 }
 
+// resourceEditorKind identifies agent rows in the shared resource_editors table.
+const resourceEditorKind = "agent"
+
+// editorEligible checks, inside the write transaction, that userID currently
+// holds role admin or owner in the tenant. Fail closed on any lookup error.
+// public.tenant_members is schema-qualified: the transaction search_path
+// points at the tenant schema.
+func editorEligible(ctx context.Context, tx pgx.Tx, tenantID, userID string) (bool, error) {
+	var ok bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS(
+			SELECT 1 FROM public.tenant_members
+			WHERE tenant_id=$1 AND user_id=$2 AND role IN ('admin','owner'))`,
+		tenantID, userID,
+	).Scan(&ok); err != nil {
+		return false, fmt.Errorf("editor role check: %w", err)
+	}
+	return ok, nil
+}
+
+// insertEditors validates and persists the editor set inside the write
+// transaction. A non-eligible id fails the whole transaction (fail closed),
+// so a forged editor can never be created alongside the resource.
+func insertEditors(ctx context.Context, tx pgx.Tx, tenantID, kind, resourceID string, editorIDs []string, createdBy string) error {
+	for _, id := range editorIDs {
+		eligible, err := editorEligible(ctx, tx, tenantID, id)
+		if err != nil {
+			return err
+		}
+		if !eligible {
+			return fmt.Errorf("%w: user %s", domain.ErrEditorNotEligible, id)
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO resource_editors (resource_kind, resource_id, editor_id, created_by)
+			 VALUES ($1,$2,$3,$4)`,
+			kind, resourceID, id, createdBy,
+		); err != nil {
+			return fmt.Errorf("insert editor %s: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// revalidateEditorAccess re-checks, inside the write transaction, that the
+// actor still qualifies as an editor of this resource: role admin/owner AND
+// present in resource_editors. Both checks share the transaction with the
+// business UPDATE, closing the check-then-write TOCTOU window.
+func revalidateEditorAccess(ctx context.Context, tx pgx.Tx, tenantID, kind, resourceID, actorID string) error {
+	eligible, err := editorEligible(ctx, tx, tenantID, actorID)
+	if err != nil {
+		return err
+	}
+	if !eligible {
+		return domain.ErrForbidden
+	}
+	var present bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM resource_editors
+		 WHERE resource_kind=$1 AND resource_id=$2 AND editor_id=$3)`,
+		kind, resourceID, actorID,
+	).Scan(&present); err != nil {
+		return fmt.Errorf("editor presence check: %w", err)
+	}
+	if !present {
+		return domain.ErrForbidden
+	}
+	return nil
+}
+
 // execTenant runs fn in a transaction with search_path set to the tenant schema from ctx.
 func (r *PgAgentRepo) execTenant(ctx context.Context, fn func(ctx context.Context, tx pgx.Tx) error) error {
 	tc, ok := tenantdb.FromContext(ctx)
@@ -202,7 +271,7 @@ func loadKnowledgeWorkspaces(ctx context.Context, tx pgx.Tx, agentID string) ([]
 
 // Register inserts a new agent row + relations, auditing the create in the
 // same transaction.
-func (r *PgAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
+func (r *PgAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editors []string) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
 			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope, system_key, checkpoint_enabled, created_by)
@@ -226,11 +295,42 @@ func (r *PgAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig, aud
 		if err := r.replaceKnowledgeWorkspaces(ctx, tx, cfg.ID, cfg.KnowledgeWorkspaceIDs); err != nil {
 			return err
 		}
+		if err := insertEditorsIfAny(ctx, tx, resourceEditorKind, cfg.ID, editors, cfg.CreatedBy); err != nil {
+			return err
+		}
 		if err := insertChangeAudit(ctx, tx, audit); err != nil {
 			return err
 		}
 		return nil
 	})
+}
+
+// insertEditorsIfAny persists the editor set only when non-empty, resolving
+// tenant context from the transaction. Editors are validated in-transaction
+// (fail closed), so a forged editor can never be created with the resource.
+func insertEditorsIfAny(ctx context.Context, tx pgx.Tx, kind, resourceID string, editorIDs []string, createdBy string) error {
+	if len(editorIDs) == 0 {
+		return nil
+	}
+	tc, ok := tenantdb.FromContext(ctx)
+	if !ok || tc.TenantID == "" {
+		return fmt.Errorf("agent_repo: missing tenant context")
+	}
+	return insertEditors(ctx, tx, tc.TenantID, kind, resourceID, editorIDs, createdBy)
+}
+
+// revalidateEditorIfActor re-checks editor eligibility only when an editor
+// actor is supplied; tenant context is resolved inside the transaction,
+// closing the check-then-write TOCTOU window.
+func revalidateEditorIfActor(ctx context.Context, tx pgx.Tx, kind, resourceID, actorID string) error {
+	if actorID == "" {
+		return nil
+	}
+	tc, ok := tenantdb.FromContext(ctx)
+	if !ok || tc.TenantID == "" {
+		return fmt.Errorf("agent_repo: missing tenant context")
+	}
+	return revalidateEditorAccess(ctx, tx, tc.TenantID, kind, resourceID, actorID)
 }
 
 // Get returns a populated AgentConfig (with relations) or (nil, false, nil) on miss.
@@ -461,6 +561,12 @@ func (r *PgAgentRepo) Remove(ctx context.Context, id string, audit *auditdomain.
 		if tag.RowsAffected() == 0 {
 			return fmt.Errorf("remove agent %s: %w", id, domain.ErrNotFound)
 		}
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM resource_editors WHERE resource_kind=$1 AND resource_id=$2`,
+			resourceEditorKind, id,
+		); err != nil {
+			return fmt.Errorf("remove agent %s editors: %w", id, err)
+		}
 		if err := insertChangeAudit(ctx, tx, audit); err != nil {
 			return err
 		}
@@ -471,10 +577,13 @@ func (r *PgAgentRepo) Remove(ctx context.Context, id string, audit *auditdomain.
 // Update replaces an agent's mutable fields in the tenant schema, auditing
 // the change in the same transaction. created_by is deliberately not in the
 // SET list — ownership never changes after creation.
-func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
+func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := rejectManagedAssistant(ctx, tx, cfg.ID); err != nil {
 			return err
+		}
+		if err := revalidateEditorIfActor(ctx, tx, resourceEditorKind, cfg.ID, editorActor); err != nil {
+			return fmt.Errorf("update agent %s: %w", cfg.ID, err)
 		}
 		tag, err := tx.Exec(ctx,
 			`UPDATE agents

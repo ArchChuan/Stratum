@@ -19,9 +19,10 @@ import (
 // audit event handed to a write method, so ownership tests can assert the
 // change-audit contract (mockAgentRepo discards the audit payload).
 type ownershipAgentRepoFake struct {
-	agents    map[string]*domain.AgentConfig
-	audits    []*auditdomain.ResourceChangeAuditEvent
-	updateErr error
+	agents          map[string]*domain.AgentConfig
+	audits          []*auditdomain.ResourceChangeAuditEvent
+	updateErr       error
+	lastEditorActor string
 }
 
 func newOwnershipAgentRepoFake() *ownershipAgentRepoFake {
@@ -34,7 +35,7 @@ func (f *ownershipAgentRepoFake) recordAudit(audit *auditdomain.ResourceChangeAu
 	}
 }
 
-func (f *ownershipAgentRepoFake) Register(_ context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
+func (f *ownershipAgentRepoFake) Register(_ context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, _ []string) error {
 	f.recordAudit(audit)
 	f.agents[cfg.ID] = cfg
 	return nil
@@ -54,12 +55,13 @@ func (f *ownershipAgentRepoFake) Remove(_ context.Context, id string, audit *aud
 	delete(f.agents, id)
 	return nil
 }
-func (f *ownershipAgentRepoFake) Update(_ context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
+func (f *ownershipAgentRepoFake) Update(_ context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string) error {
 	f.recordAudit(audit)
 	if f.updateErr != nil {
 		return f.updateErr
 	}
 	f.agents[cfg.ID] = cfg
+	f.lastEditorActor = editorActor
 	return nil
 }
 func (f *ownershipAgentRepoFake) UpdateSystemAssistantModel(_ context.Context, _ string, _ string, _ bool, _ int, _ int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
@@ -82,12 +84,16 @@ func (f failingTenantRoleResolver) ResolveTenantRole(context.Context, string, st
 }
 
 // newOwnershipAgentService wires a service around the audit-capturing fake;
-// the role resolver is injected per test row.
-func newOwnershipAgentService(repo port.AgentRepo) *application.AgentService {
-	return application.NewAgentService(application.AgentServiceDeps{
+// the role resolver and an optional editor repo are injected per test row.
+func newOwnershipAgentService(repo port.AgentRepo, editors ...port.ResourceEditorRepo) *application.AgentService {
+	deps := application.AgentServiceDeps{
 		Registry: application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
 		Logger:   zap.NewNop(),
-	})
+	}
+	if len(editors) > 0 {
+		deps.ResourceEditorRepo = editors[0]
+	}
+	return application.NewAgentService(deps)
 }
 
 // TestOwnershipMatrixAgentUpdate pins the ownership matrix for Update: owner
@@ -255,4 +261,197 @@ func TestAgentUpdateSystemActorBypassesOwnership(t *testing.T) {
 	require.Equal(t, auditdomain.ChangeSourceOptimization, audit.Source)
 	require.Equal(t, auditdomain.ChangeOpUpdate, audit.Operation)
 	require.Equal(t, "agent-1", audit.ResourceID)
+}
+
+// stubEditorRepo is an in-memory ResourceEditorRepo for editor-granted
+// ownership tests. It records the last replace (ids + creator) so tests can
+// assert the management-endpoint contract.
+type stubEditorRepo struct {
+	editors      map[string][]string
+	replaceErr   error
+	replaced     []string
+	replaceActor string
+	audits       []*auditdomain.ResourceChangeAuditEvent
+}
+
+func newStubEditorRepo() *stubEditorRepo {
+	return &stubEditorRepo{editors: map[string][]string{}}
+}
+
+func (s *stubEditorRepo) ListEditors(_ context.Context, _, resourceID string) ([]string, error) {
+	return append([]string(nil), s.editors[resourceID]...), nil
+}
+
+func (s *stubEditorRepo) ReplaceEditors(_ context.Context, _, resourceID string, editorIDs []string, createdBy string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	if s.replaceErr != nil {
+		return s.replaceErr
+	}
+	s.editors[resourceID] = append([]string(nil), editorIDs...)
+	s.replaced = editorIDs
+	s.replaceActor = createdBy
+	if audit != nil {
+		s.audits = append(s.audits, audit)
+	}
+	return nil
+}
+
+var _ port.ResourceEditorRepo = (*stubEditorRepo)(nil)
+
+// TestAgentUpdateEditorGranted pins the granted-editor row of the matrix: a
+// foreign admin in the editor set may update (update-only), and the resolved
+// editorActor is forwarded so the repository re-validates it inside the write
+// transaction (TOCTOU closure).
+func TestAgentUpdateEditorGranted(t *testing.T) {
+	repo := newOwnershipAgentRepoFake()
+	repo.agents["agent-1"] = &domain.AgentConfig{
+		ID: "agent-1", Name: "original", Type: domain.ReActAgent, CreatedBy: "owner-user",
+	}
+	editors := newStubEditorRepo()
+	editors.editors["agent-1"] = []string{"user-1"}
+	svc := newOwnershipAgentService(repo, editors)
+	svc.SetTenantRoleResolver(stubTenantRole{role: "admin"})
+
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	_, err := svc.Update(ctx, "agent-1", application.UpdateAgentInput{
+		ActorID: "user-1", Name: "renamed", Type: "react", MaxContextTokens: 4096,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "user-1", repo.lastEditorActor, "editorActor must be forwarded for in-transaction re-validation")
+	require.Len(t, repo.audits, 1)
+}
+
+// TestAgentUpdateEditorNotGranted pins the denial: a foreign admin outside the
+// editor set cannot update, even with an editor repo wired.
+func TestAgentUpdateEditorNotGranted(t *testing.T) {
+	repo := newOwnershipAgentRepoFake()
+	repo.agents["agent-1"] = &domain.AgentConfig{
+		ID: "agent-1", Name: "original", Type: domain.ReActAgent, CreatedBy: "owner-user",
+	}
+	svc := newOwnershipAgentService(repo, newStubEditorRepo())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "admin"})
+
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	_, err := svc.Update(ctx, "agent-1", application.UpdateAgentInput{
+		ActorID: "user-1", Name: "renamed", Type: "react", MaxContextTokens: 4096,
+	})
+	require.ErrorIs(t, err, domain.ErrForbidden)
+	require.Empty(t, repo.audits)
+}
+
+// TestAgentDeleteEditorDenied pins the delete column: editors never grant
+// delete rights — the creator passes, a granted editor is denied.
+func TestAgentDeleteEditorDenied(t *testing.T) {
+	repo := newOwnershipAgentRepoFake()
+	repo.agents["agent-1"] = &domain.AgentConfig{
+		ID: "agent-1", Name: "original", Type: domain.ReActAgent, CreatedBy: "user-1",
+	}
+	editors := newStubEditorRepo()
+	editors.editors["agent-1"] = []string{"editor-1"}
+	svc := newOwnershipAgentService(repo, editors)
+	svc.SetTenantRoleResolver(stubTenantRole{role: "admin"})
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+
+	err := svc.Delete(ctx, "tenant-1", "agent-1", "editor-1")
+	require.ErrorIs(t, err, domain.ErrForbidden)
+	_, ok := repo.agents["agent-1"]
+	require.True(t, ok, "editor must not delete the resource")
+
+	require.NoError(t, svc.Delete(ctx, "tenant-1", "agent-1", "user-1"))
+	_, ok = repo.agents["agent-1"]
+	require.False(t, ok, "creator deletes their own resource")
+}
+
+// TestAgentSetEditorsPinsManagementEndpoint covers the editor management
+// endpoint contract: creator/owner may replace the set; a granted editor
+// cannot delegate their own right; the replace is audited with before/after
+// projections carrying the editor diff; a missing editor repo fails closed.
+func TestAgentSetEditorsPinsManagementEndpoint(t *testing.T) {
+	t.Run("owner replaces editor set", func(t *testing.T) {
+		repo := newOwnershipAgentRepoFake()
+		repo.agents["agent-1"] = &domain.AgentConfig{
+			ID: "agent-1", Name: "original", Type: domain.ReActAgent, CreatedBy: "creator-1",
+		}
+		editors := newStubEditorRepo()
+		editors.editors["agent-1"] = []string{"old-editor"}
+		svc := newOwnershipAgentService(repo, editors)
+		svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+		ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+
+		require.NoError(t, svc.SetEditors(ctx, "agent-1", "owner-1", []string{"editor-a", "editor-b"}))
+		require.Equal(t, []string{"editor-a", "editor-b"}, editors.replaced)
+		require.Equal(t, "owner-1", editors.replaceActor)
+		require.Len(t, editors.audits, 1)
+
+		audit := editors.audits[0]
+		require.Equal(t, auditdomain.ChangeOpUpdate, audit.Operation)
+		var before, after map[string]any
+		require.NoError(t, json.Unmarshal(audit.Before, &before))
+		require.NoError(t, json.Unmarshal(audit.After, &after))
+		require.Equal(t, []any{"old-editor"}, before["editors"])
+		require.Equal(t, []any{"editor-a", "editor-b"}, after["editors"])
+	})
+
+	t.Run("granted editor cannot delegate", func(t *testing.T) {
+		repo := newOwnershipAgentRepoFake()
+		repo.agents["agent-1"] = &domain.AgentConfig{
+			ID: "agent-1", Name: "original", Type: domain.ReActAgent, CreatedBy: "creator-1",
+		}
+		editors := newStubEditorRepo()
+		editors.editors["agent-1"] = []string{"editor-1"}
+		svc := newOwnershipAgentService(repo, editors)
+		svc.SetTenantRoleResolver(stubTenantRole{role: "admin"})
+		ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+
+		err := svc.SetEditors(ctx, "agent-1", "editor-1", []string{"someone-else"})
+		require.ErrorIs(t, err, domain.ErrForbidden)
+		require.Nil(t, editors.replaced, "denied replace must not reach the repository")
+	})
+
+	t.Run("member cannot manage editors", func(t *testing.T) {
+		repo := newOwnershipAgentRepoFake()
+		repo.agents["agent-1"] = &domain.AgentConfig{
+			ID: "agent-1", Name: "original", Type: domain.ReActAgent, CreatedBy: "creator-1",
+		}
+		svc := newOwnershipAgentService(repo, newStubEditorRepo())
+		svc.SetTenantRoleResolver(stubTenantRole{role: "member"})
+		ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+
+		err := svc.SetEditors(ctx, "agent-1", "member-1", []string{"x"})
+		require.ErrorIs(t, err, domain.ErrForbidden)
+	})
+
+	t.Run("missing editor repo fails closed", func(t *testing.T) {
+		repo := newOwnershipAgentRepoFake()
+		repo.agents["agent-1"] = &domain.AgentConfig{
+			ID: "agent-1", Name: "original", Type: domain.ReActAgent, CreatedBy: "creator-1",
+		}
+		svc := newOwnershipAgentService(repo)
+		svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+		ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+
+		err := svc.SetEditors(ctx, "agent-1", "owner-1", []string{"x"})
+		require.Error(t, err)
+	})
+}
+
+// TestAgentGetInjectsEditors pins the detail projection: the current editor
+// set is read through the editor repo; a missing repo yields empty editors.
+func TestAgentGetInjectsEditors(t *testing.T) {
+	repo := newOwnershipAgentRepoFake()
+	repo.agents["agent-1"] = &domain.AgentConfig{
+		ID: "agent-1", Name: "original", Type: domain.ReActAgent, CreatedBy: "user-1",
+	}
+	editors := newStubEditorRepo()
+	editors.editors["agent-1"] = []string{"editor-a"}
+	svc := newOwnershipAgentService(repo, editors)
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+
+	dtoOut, err := svc.Get(ctx, "agent-1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"editor-a"}, dtoOut.Editors)
+
+	svcNoRepo := newOwnershipAgentService(repo)
+	dtoOut, err = svcNoRepo.Get(ctx, "agent-1")
+	require.NoError(t, err)
+	require.Empty(t, dtoOut.Editors)
 }

@@ -31,7 +31,11 @@ export const skillRevisionSchema = z.object({
 export type SkillRevision = z.infer<typeof skillRevisionSchema>;
 export type SkillVersion = SkillRevision;
 
-export const skillWorkspaceSchema = z.object({ skill: skillProductSchema, draft: skillRevisionSchema }).passthrough();
+export const skillWorkspaceSchema = z.object({
+  skill: skillProductSchema,
+  draft: skillRevisionSchema,
+  editors: z.array(z.string()).default([]),
+}).passthrough();
 export type SkillWorkspace = z.infer<typeof skillWorkspaceSchema>;
 
 export interface SkillFormValues {
@@ -44,6 +48,7 @@ export interface SkillFormValues {
   mcpToolIDs?: string;
   knowledgeWorkspaceIDs?: string;
   memoryScopes?: string[];
+  editors?: string[];
 }
 
 export interface CreateSkillDraftPayload {
@@ -54,6 +59,7 @@ export interface CreateSkillDraftPayload {
   expectedOutput: string;
   instructions: string;
   requirements: SkillRequirements;
+  editors?: string[];
 }
 
 const lines = (value?: string) => (value || '').split('\n').map((item) => item.trim()).filter(Boolean);
@@ -65,4 +71,5 @@ export const buildCreateSkillDraftPayload = (values: SkillFormValues): CreateSki
     mcpToolIds: lines(values.mcpToolIDs), knowledgeWorkspaceIds: lines(values.knowledgeWorkspaceIDs),
     memoryScopes: values.memoryScopes || [],
   },
+  editors: values.editors || [],
 });

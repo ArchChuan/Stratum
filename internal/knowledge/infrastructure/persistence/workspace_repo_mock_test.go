@@ -58,7 +58,7 @@ func TestWorkspaceRepo_Create_success(t *testing.T) {
 	mock.ExpectCommit()
 
 	ws := &domain.Workspace{Name: "ws", Description: "desc", Config: testConfig()}
-	require.NoError(t, repo.Create(context.Background(), "t1", ws, nil))
+	require.NoError(t, repo.Create(context.Background(), "t1", ws, nil, nil))
 	require.Equal(t, "ws-1", ws.ID)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -73,7 +73,7 @@ func TestWorkspaceRepo_Create_duplicate(t *testing.T) {
 		WillReturnError(&pgconn.PgError{Code: "23505", Message: `duplicate key value violates unique constraint "rag_workspaces_name_key"`})
 	mock.ExpectRollback()
 
-	err := repo.Create(context.Background(), "t1", &domain.Workspace{Name: "ws", Config: testConfig()}, nil)
+	err := repo.Create(context.Background(), "t1", &domain.Workspace{Name: "ws", Config: testConfig()}, nil, nil)
 	require.ErrorIs(t, err, domain.ErrWorkspaceConflict)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -88,7 +88,7 @@ func TestWorkspaceRepo_Create_otherErrorWrapped(t *testing.T) {
 		WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
-	err := repo.Create(context.Background(), "t1", &domain.Workspace{Name: "ws", Config: testConfig()}, nil)
+	err := repo.Create(context.Background(), "t1", &domain.Workspace{Name: "ws", Config: testConfig()}, nil, nil)
 	require.ErrorIs(t, err, pgx.ErrTxClosed)
 	require.ErrorContains(t, err, "workspace_repo: create")
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -202,7 +202,7 @@ func TestWorkspaceRepo_UpdateWorkspaceAll_nilRenameAndDescription(t *testing.T) 
 	mock.ExpectCommit()
 
 	// nil rename/description exercise the COALESCE($1/$2, column) branches.
-	require.NoError(t, repo.UpdateWorkspaceAll(context.Background(), "t1", "ws", nil, nil, testConfig(), nil))
+	require.NoError(t, repo.UpdateWorkspaceAll(context.Background(), "t1", "ws", nil, nil, testConfig(), "", nil))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -217,7 +217,7 @@ func TestWorkspaceRepo_UpdateWorkspaceAll_rename(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
-	require.NoError(t, repo.UpdateWorkspaceAll(context.Background(), "t1", "old", &newName, nil, testConfig(), nil))
+	require.NoError(t, repo.UpdateWorkspaceAll(context.Background(), "t1", "old", &newName, nil, testConfig(), "", nil))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -231,7 +231,7 @@ func TestWorkspaceRepo_UpdateWorkspaceAll_notFound(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectCommit()
 
-	err := repo.UpdateWorkspaceAll(context.Background(), "t1", "nope", nil, nil, testConfig(), nil)
+	err := repo.UpdateWorkspaceAll(context.Background(), "t1", "nope", nil, nil, testConfig(), "", nil)
 	require.ErrorIs(t, err, domain.ErrWorkspaceNotFound)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -246,7 +246,7 @@ func TestWorkspaceRepo_UpdateWorkspaceAll_conflict(t *testing.T) {
 		WillReturnError(&pgconn.PgError{Code: "23505"})
 	mock.ExpectRollback()
 
-	err := repo.UpdateWorkspaceAll(context.Background(), "t1", "old", nil, nil, testConfig(), nil)
+	err := repo.UpdateWorkspaceAll(context.Background(), "t1", "old", nil, nil, testConfig(), "", nil)
 	require.ErrorIs(t, err, domain.ErrWorkspaceConflict)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -256,9 +256,15 @@ func TestWorkspaceRepo_Delete_success(t *testing.T) {
 	repo := NewWorkspaceRepo(mock)
 
 	repoBeginTenant(mock)
+	mock.ExpectQuery("SELECT id FROM rag_workspaces WHERE name=\\$1").
+		WithArgs("ws").
+		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("ws-1"))
 	mock.ExpectExec("DELETE FROM rag_workspaces WHERE name = \\$1").
 		WithArgs("ws").
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectExec("DELETE FROM resource_editors WHERE resource_kind=\\$1 AND resource_id=\\$2").
+		WithArgs("knowledge", "ws-1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	mock.ExpectCommit()
 
 	require.NoError(t, repo.Delete(context.Background(), "t1", "ws", nil))
@@ -270,10 +276,10 @@ func TestWorkspaceRepo_Delete_notFound(t *testing.T) {
 	repo := NewWorkspaceRepo(mock)
 
 	repoBeginTenant(mock)
-	mock.ExpectExec("DELETE FROM rag_workspaces WHERE name = \\$1").
+	mock.ExpectQuery("SELECT id FROM rag_workspaces WHERE name=\\$1").
 		WithArgs("nope").
-		WillReturnResult(pgxmock.NewResult("DELETE", 0))
-	mock.ExpectCommit()
+		WillReturnError(pgx.ErrNoRows)
+	mock.ExpectRollback()
 
 	err := repo.Delete(context.Background(), "t1", "nope", nil)
 	require.ErrorIs(t, err, domain.ErrWorkspaceNotFound)
@@ -285,6 +291,9 @@ func TestWorkspaceRepo_Delete_linked(t *testing.T) {
 	repo := NewWorkspaceRepo(mock)
 
 	repoBeginTenant(mock)
+	mock.ExpectQuery("SELECT id FROM rag_workspaces WHERE name=\\$1").
+		WithArgs("ws").
+		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("ws-1"))
 	mock.ExpectExec("DELETE FROM rag_workspaces WHERE name = \\$1").
 		WithArgs("ws").
 		WillReturnError(&pgconn.PgError{Code: "23503"})

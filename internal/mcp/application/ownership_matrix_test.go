@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -31,7 +32,7 @@ func (f *connectServerFake) GetServerConfig(context.Context, string) (*domain.Se
 	return nil, f.getErr
 }
 
-func (f *connectServerFake) Connect(_ context.Context, cfg *domain.ServerConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
+func (f *connectServerFake) Connect(_ context.Context, cfg *domain.ServerConfig, _ []string, _ string, audit *auditdomain.ResourceChangeAuditEvent) error {
 	f.connected = cfg
 	f.audits = append(f.audits, audit)
 	return nil
@@ -157,7 +158,7 @@ func TestMCPServiceConnectServerNewAuditsCreate(t *testing.T) {
 	svc := NewMCPService(&lifecycleRegistryFake{}, manager, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
-	err := svc.ConnectServer(t.Context(), &domain.ServerConfig{ID: "orders", Name: "orders", Transport: "stdio"}, "user-1")
+	err := svc.ConnectServer(t.Context(), &domain.ServerConfig{ID: "orders", Name: "orders", Transport: "stdio"}, nil, "user-1")
 	require.NoError(t, err)
 
 	require.Len(t, manager.audits, 1)
@@ -172,4 +173,104 @@ func TestMCPServiceConnectServerNewAuditsCreate(t *testing.T) {
 	require.Contains(t, string(ev.After), "orders")
 	// 新建路径把创建者写回 cfg 成为属主。
 	require.Equal(t, "user-1", manager.connected.CreatedBy)
+}
+
+// TestMCPServiceUpdateServerEditorGranted pins the granted-editor row of the
+// matrix: a foreign admin in the editor set may update the server config
+// (update-only); the editorActor is forwarded to the lifecycle for
+// in-transaction re-validation.
+func TestMCPServiceUpdateServerEditorGranted(t *testing.T) {
+	t.Parallel()
+
+	manager := &lifecycleManagerFake{
+		stored:  &domain.ServerConfig{ID: "orders", Name: "orders", CreatedBy: "other-user"},
+		editors: []string{"user-1"},
+	}
+	svc := NewMCPService(&lifecycleRegistryFake{}, manager, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "admin"})
+	ctx := reqctx.WithTenantID(t.Context(), "tenant-1")
+
+	err := svc.UpdateServer(ctx, &domain.ServerConfig{ID: "orders", Name: "orders-v2"}, "user-1")
+	require.NoError(t, err)
+	require.True(t, manager.updated, "granted editor update must reach lifecycle")
+}
+
+// TestMCPServiceDeleteServerEditorDenied pins the delete column: editors never
+// grant delete rights; the creator passes.
+func TestMCPServiceDeleteServerEditorDenied(t *testing.T) {
+	t.Parallel()
+
+	manager := &lifecycleManagerFake{
+		stored:  &domain.ServerConfig{ID: "orders", Name: "orders", CreatedBy: "user-1"},
+		editors: []string{"editor-1"},
+	}
+	svc := NewMCPService(&lifecycleRegistryFake{}, manager, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "admin"})
+	ctx := reqctx.WithTenantID(t.Context(), "tenant-1")
+
+	err := svc.DeleteServer(ctx, "orders", "editor-1")
+	require.ErrorIs(t, err, domain.ErrForbidden)
+	require.Empty(t, manager.deleted, "editor must not reach lifecycle delete")
+
+	require.NoError(t, svc.DeleteServer(ctx, "orders", "user-1"))
+	require.Equal(t, "orders", manager.deleted)
+}
+
+// TestMCPServiceSetEditorsPinsManagementEndpoint covers the editor management
+// endpoint: owner/creator may replace the set with an audited before/after
+// projection; a granted editor cannot delegate their own right.
+func TestMCPServiceSetEditorsPinsManagementEndpoint(t *testing.T) {
+	t.Parallel()
+
+	t.Run("owner replaces editor set", func(t *testing.T) {
+		t.Parallel()
+		manager := &lifecycleManagerFake{
+			stored:  &domain.ServerConfig{ID: "orders", Name: "orders", CreatedBy: "creator-1"},
+			editors: []string{"old-editor"},
+		}
+		svc := NewMCPService(&lifecycleRegistryFake{}, manager, zap.NewNop())
+		svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+		ctx := reqctx.WithTenantID(t.Context(), "tenant-1")
+
+		require.NoError(t, svc.SetEditors(ctx, "orders", "owner-1", []string{"editor-a", "editor-b"}))
+		require.Equal(t, []string{"editor-a", "editor-b"}, manager.editors)
+		require.Equal(t, "owner-1", manager.replaceActor)
+		require.Len(t, manager.audits, 1)
+
+		var before, after map[string]any
+		require.NoError(t, json.Unmarshal(manager.audits[0].Before, &before))
+		require.NoError(t, json.Unmarshal(manager.audits[0].After, &after))
+		require.Equal(t, []any{"old-editor"}, before["editors"])
+		require.Equal(t, []any{"editor-a", "editor-b"}, after["editors"])
+	})
+
+	t.Run("granted editor cannot delegate", func(t *testing.T) {
+		t.Parallel()
+		manager := &lifecycleManagerFake{
+			stored:  &domain.ServerConfig{ID: "orders", Name: "orders", CreatedBy: "creator-1"},
+			editors: []string{"editor-1"},
+		}
+		svc := NewMCPService(&lifecycleRegistryFake{}, manager, zap.NewNop())
+		svc.SetTenantRoleResolver(stubTenantRole{role: "admin"})
+		ctx := reqctx.WithTenantID(t.Context(), "tenant-1")
+
+		err := svc.SetEditors(ctx, "orders", "editor-1", []string{"someone-else"})
+		require.ErrorIs(t, err, domain.ErrForbidden)
+		require.Equal(t, []string{"editor-1"}, manager.editors, "denied replace must not reach the repository")
+	})
+}
+
+// TestMCPServiceListEditorsWrapper pins the detail prefill path: the service
+// delegates straight to the manager.
+func TestMCPServiceListEditorsWrapper(t *testing.T) {
+	t.Parallel()
+	manager := &lifecycleManagerFake{
+		stored:  &domain.ServerConfig{ID: "orders", Name: "orders", CreatedBy: "creator-1"},
+		editors: []string{"editor-a"},
+	}
+	svc := NewMCPService(&lifecycleRegistryFake{}, manager, zap.NewNop())
+
+	editors, err := svc.ListEditors(t.Context(), "tenant-1", "orders")
+	require.NoError(t, err)
+	require.Equal(t, []string{"editor-a"}, editors)
 }

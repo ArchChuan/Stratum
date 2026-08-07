@@ -20,6 +20,9 @@ var (
 	ErrSkillNotPublishable = errors.New("skill not publishable")
 	ErrSkillDraftStale     = errors.New("skill draft stale")
 	ErrForbidden           = errors.New("resource ownership forbidden")
+	// ErrEditorNotEligible rejects a granted editor who does not hold role
+	// admin or owner at write time (fail closed, prevents forgery).
+	ErrEditorNotEligible = errors.New("editor must hold admin or owner role")
 	// ErrPlatformManagedSkill rejects tenant lifecycle changes to built-in skills.
 	ErrPlatformManagedSkill = errors.New("builtin skill is platform managed")
 )

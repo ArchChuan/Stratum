@@ -14,4 +14,7 @@ var (
 	ErrIngestQueueFull          = errors.New("ingest queue is full; please retry shortly")
 	ErrPlatformManagedWorkspace = errors.New("platform-managed workspace cannot be modified")
 	ErrForbidden                = errors.New("resource ownership forbidden")
+	// ErrEditorNotEligible rejects a granted editor who does not hold role
+	// admin or owner at write time (fail closed, prevents forgery).
+	ErrEditorNotEligible = errors.New("editor must hold admin or owner role")
 )

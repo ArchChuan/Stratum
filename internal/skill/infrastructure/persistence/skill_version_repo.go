@@ -38,6 +38,89 @@ func NewPgSkillRevisionRepo(pool *pgxpool.Pool) *PgSkillRevisionRepo {
 	return &PgSkillRevisionRepo{pool: pool}
 }
 
+// resourceEditorKind identifies skill rows in the shared resource_editors table.
+const resourceEditorKind = "skill"
+
+// editorEligible checks, inside the write transaction, that userID currently
+// holds role admin or owner in the tenant. Fail closed on any lookup error.
+// public.tenant_members is schema-qualified: the transaction search_path
+// points at the tenant schema.
+func editorEligible(ctx context.Context, tx pgx.Tx, tenantID, userID string) (bool, error) {
+	var ok bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS(
+			SELECT 1 FROM public.tenant_members
+			WHERE tenant_id=$1 AND user_id=$2 AND role IN ('admin','owner'))`,
+		tenantID, userID,
+	).Scan(&ok); err != nil {
+		return false, fmt.Errorf("editor role check: %w", err)
+	}
+	return ok, nil
+}
+
+// insertEditors validates and persists the editor set inside the write
+// transaction. A non-eligible id fails the whole transaction (fail closed),
+// so a forged editor can never be created alongside the resource.
+func insertEditors(ctx context.Context, tx pgx.Tx, tenantID, kind, resourceID string, editorIDs []string, createdBy string) error {
+	for _, id := range editorIDs {
+		eligible, err := editorEligible(ctx, tx, tenantID, id)
+		if err != nil {
+			return err
+		}
+		if !eligible {
+			return fmt.Errorf("%w: user %s", domain.ErrEditorNotEligible, id)
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO resource_editors (resource_kind, resource_id, editor_id, created_by)
+			 VALUES ($1,$2,$3,$4)`,
+			kind, resourceID, id, createdBy,
+		); err != nil {
+			return fmt.Errorf("insert editor %s: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// revalidateEditorAccess re-checks, inside the write transaction, that the
+// actor still qualifies as an editor of this resource: role admin/owner AND
+// present in resource_editors. Both checks share the transaction with the
+// business UPDATE, closing the check-then-write TOCTOU window.
+func revalidateEditorAccess(ctx context.Context, tx pgx.Tx, tenantID, kind, resourceID, actorID string) error {
+	eligible, err := editorEligible(ctx, tx, tenantID, actorID)
+	if err != nil {
+		return err
+	}
+	if !eligible {
+		return domain.ErrForbidden
+	}
+	var present bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM resource_editors
+			WHERE resource_kind=$1 AND resource_id=$2 AND editor_id=$3)`,
+		kind, resourceID, actorID,
+	).Scan(&present); err != nil {
+		return fmt.Errorf("editor membership check: %w", err)
+	}
+	if !present {
+		return domain.ErrForbidden
+	}
+	return nil
+}
+
+// revalidateEditorIfActor re-checks editor eligibility only when an editor
+// actor is supplied; tenant context is resolved inside the transaction,
+// closing the check-then-write TOCTOU window.
+func revalidateEditorIfActor(ctx context.Context, tx pgx.Tx, kind, resourceID, actorID string) error {
+	if actorID == "" {
+		return nil
+	}
+	tc, ok := tenantdb.FromContext(ctx)
+	if !ok || tc.TenantID == "" {
+		return fmt.Errorf("skill_revision_repo: missing tenant context")
+	}
+	return revalidateEditorAccess(ctx, tx, tc.TenantID, kind, resourceID, actorID)
+}
+
 // insertChangeAudit inserts the audit row in the SAME transaction as the
 // business write; an audit failure rolls the business change back (fail
 // closed). A nil event skips auditing — reserved for internal reentrant
@@ -66,7 +149,7 @@ func insertChangeAudit(ctx context.Context, tx pgx.Tx, ev *auditdomain.ResourceC
 }
 
 func (r *PgSkillRevisionRepo) InsertSkillWithDraft(
-	ctx context.Context, skill port.SkillProductRow, draft domain.SkillRevision, audit *auditdomain.ResourceChangeAuditEvent,
+	ctx context.Context, skill port.SkillProductRow, draft domain.SkillRevision, audit *auditdomain.ResourceChangeAuditEvent, editors []string,
 ) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
@@ -77,6 +160,13 @@ func (r *PgSkillRevisionRepo) InsertSkillWithDraft(
 			return err
 		}
 		if err := insertSkillRevision(ctx, tx, draft); err != nil {
+			return err
+		}
+		tc, ok := tenantdb.FromContext(ctx)
+		if !ok || tc.TenantID == "" {
+			return fmt.Errorf("skill_revision_repo: missing tenant context")
+		}
+		if err := insertEditors(ctx, tx, tc.TenantID, resourceEditorKind, skill.ID, editors, skill.CreatedBy); err != nil {
 			return err
 		}
 		return insertChangeAudit(ctx, tx, audit)
@@ -135,6 +225,13 @@ func (r *PgSkillRevisionRepo) DeleteSkill(ctx context.Context, skillID string, a
 		if tag.RowsAffected() == 0 {
 			return domain.ErrSkillNotFound
 		}
+		// Editors die with the resource, same transaction (idempotent).
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM resource_editors WHERE resource_kind=$1 AND resource_id=$2`,
+			resourceEditorKind, skillID,
+		); err != nil {
+			return fmt.Errorf("delete skill editors: %w", err)
+		}
 		return insertChangeAudit(ctx, tx, audit)
 	})
 }
@@ -182,13 +279,13 @@ func (r *PgSkillRevisionRepo) InsertCandidate(ctx context.Context, candidate dom
 }
 
 func (r *PgSkillRevisionRepo) UpdateDraftCapability(
-	ctx context.Context, skillID string, capability domain.Capability, contentHash string, audit *auditdomain.ResourceChangeAuditEvent,
+	ctx context.Context, skillID string, capability domain.Capability, contentHash string, audit *auditdomain.ResourceChangeAuditEvent, editorActor string,
 ) (domain.SkillRevision, error) {
 	payload, err := json.Marshal(capability)
 	if err != nil {
 		return domain.SkillRevision{}, fmt.Errorf("skill_revision_repo: marshal capability: %w", err)
 	}
-	revision, err := r.updateDraft(ctx, skillID, "capability=$2", []any{string(payload)}, contentHash, audit)
+	revision, err := r.updateDraft(ctx, skillID, "capability=$2", []any{string(payload)}, contentHash, audit, editorActor)
 	if err != nil {
 		return domain.SkillRevision{}, err
 	}
@@ -203,23 +300,23 @@ func (r *PgSkillRevisionRepo) UpdateDraftCapability(
 }
 
 func (r *PgSkillRevisionRepo) UpdateDraftActivation(
-	ctx context.Context, skillID string, contract domain.ActivationContract, contentHash string, audit *auditdomain.ResourceChangeAuditEvent,
+	ctx context.Context, skillID string, contract domain.ActivationContract, contentHash string, audit *auditdomain.ResourceChangeAuditEvent, editorActor string,
 ) (domain.SkillRevision, error) {
 	payload, err := json.Marshal(contract)
 	if err != nil {
 		return domain.SkillRevision{}, fmt.Errorf("skill_revision_repo: marshal activation contract: %w", err)
 	}
-	return r.updateDraft(ctx, skillID, "activation_contract=$2", []any{string(payload)}, contentHash, audit)
+	return r.updateDraft(ctx, skillID, "activation_contract=$2", []any{string(payload)}, contentHash, audit, editorActor)
 }
 
 func (r *PgSkillRevisionRepo) UpdateDraftInstructions(
-	ctx context.Context, skillID, instructions string, requirements domain.Requirements, contentHash string, audit *auditdomain.ResourceChangeAuditEvent,
+	ctx context.Context, skillID, instructions string, requirements domain.Requirements, contentHash string, audit *auditdomain.ResourceChangeAuditEvent, editorActor string,
 ) (domain.SkillRevision, error) {
 	payload, err := json.Marshal(requirements)
 	if err != nil {
 		return domain.SkillRevision{}, fmt.Errorf("skill_revision_repo: marshal requirements: %w", err)
 	}
-	return r.updateDraft(ctx, skillID, "instructions=$2, requirements=$3", []any{instructions, string(payload)}, contentHash, audit)
+	return r.updateDraft(ctx, skillID, "instructions=$2, requirements=$3", []any{instructions, string(payload)}, contentHash, audit, editorActor)
 }
 
 func (r *PgSkillRevisionRepo) UpdateDraftBundle(
@@ -228,6 +325,7 @@ func (r *PgSkillRevisionRepo) UpdateDraftBundle(
 	skill port.SkillProductRow,
 	draft domain.SkillRevision,
 	audit *auditdomain.ResourceChangeAuditEvent,
+	editorActor string,
 ) (domain.SkillRevision, error) {
 	capabilityJSON, err := json.Marshal(draft.Capability)
 	if err != nil {
@@ -243,12 +341,26 @@ func (r *PgSkillRevisionRepo) UpdateDraftBundle(
 	}
 	var updated domain.SkillRevision
 	err = r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		value, updateErr := scanSkillRevision(tx.QueryRow(ctx, `UPDATE skill_revisions
+		if err := revalidateEditorIfActor(ctx, tx, resourceEditorKind, skillID, editorActor); err != nil {
+			return err
+		}
+		// Optimistic concurrency applies to proposal applies only (they supply a
+		// baseline content hash). Direct writes carry no baseline — an empty hash
+		// must not be matched against the row, or every direct update would read
+		// as stale.
+		query := `UPDATE skill_revisions
 			SET capability=$3::jsonb, activation_contract=$4::jsonb, instructions=$5,
 			    requirements=$6::jsonb, content_hash=$7, updated_at=NOW()
-			WHERE skill_id=$1 AND status='draft' AND content_hash=$2
-			RETURNING `+revisionColumns, skillID, expectedContentHash, string(capabilityJSON), string(activationJSON),
-			draft.Instructions, string(requirementsJSON), draft.ContentHash))
+			WHERE skill_id=$1 AND status='draft'`
+		args := []any{skillID}
+		if expectedContentHash != "" {
+			query += ` AND content_hash=$2`
+			args = append(args, expectedContentHash)
+		}
+		query += ` RETURNING ` + revisionColumns
+		args = append(args, string(capabilityJSON), string(activationJSON),
+			draft.Instructions, string(requirementsJSON), draft.ContentHash)
+		value, updateErr := scanSkillRevision(tx.QueryRow(ctx, query, args...))
 		if updateErr != nil {
 			if updateErr != pgx.ErrNoRows {
 				return updateErr
@@ -273,10 +385,19 @@ func (r *PgSkillRevisionRepo) UpdateDraftBundle(
 }
 
 func (r *PgSkillRevisionRepo) updateDraft(
-	ctx context.Context, skillID, assignments string, values []any, contentHash string, audit *auditdomain.ResourceChangeAuditEvent,
+	ctx context.Context, skillID, assignments string, values []any, contentHash string, audit *auditdomain.ResourceChangeAuditEvent, editorActor string,
 ) (domain.SkillRevision, error) {
 	var revision domain.SkillRevision
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if editorActor != "" {
+			tc, ok := tenantdb.FromContext(ctx)
+			if !ok || tc.TenantID == "" {
+				return fmt.Errorf("skill_revision_repo: missing tenant context")
+			}
+			if err := revalidateEditorAccess(ctx, tx, tc.TenantID, resourceEditorKind, skillID, editorActor); err != nil {
+				return err
+			}
+		}
 		args := append([]any{skillID}, values...)
 		args = append(args, contentHash)
 		hashArg := len(args)
@@ -303,10 +424,19 @@ func (r *PgSkillRevisionRepo) NextRevisionNo(ctx context.Context, skillID string
 }
 
 func (r *PgSkillRevisionRepo) PublishDraft(
-	ctx context.Context, skillID, draftRevisionID string, nextRevisionNo int, checks map[string]any, audit *auditdomain.ResourceChangeAuditEvent,
+	ctx context.Context, skillID, draftRevisionID string, nextRevisionNo int, checks map[string]any, audit *auditdomain.ResourceChangeAuditEvent, editorActor string,
 ) (domain.SkillRevision, error) {
 	var revision domain.SkillRevision
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if editorActor != "" {
+			tc, ok := tenantdb.FromContext(ctx)
+			if !ok || tc.TenantID == "" {
+				return fmt.Errorf("skill_revision_repo: missing tenant context")
+			}
+			if err := revalidateEditorAccess(ctx, tx, tc.TenantID, resourceEditorKind, skillID, editorActor); err != nil {
+				return err
+			}
+		}
 		checksJSON, err := json.Marshal(checks)
 		if err != nil {
 			return err

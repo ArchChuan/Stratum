@@ -29,7 +29,7 @@ type mockAgentRepo struct {
 	updateErr   error
 }
 
-func (m *mockAgentRepo) Register(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
+func (m *mockAgentRepo) Register(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ []string) error {
 	return m.registerErr
 }
 func (m *mockAgentRepo) Get(_ context.Context, id string) (*domain.AgentConfig, bool, error) {
@@ -60,7 +60,7 @@ func (m *mockAgentRepo) GetAll(context.Context) ([]*domain.AgentConfig, error) {
 func (m *mockAgentRepo) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return m.removeErr
 }
-func (m *mockAgentRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
+func (m *mockAgentRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string) error {
 	return m.updateErr
 }
 func (m *mockAgentRepo) UpdateSystemAssistantModel(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {

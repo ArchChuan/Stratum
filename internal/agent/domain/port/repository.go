@@ -22,12 +22,20 @@ import (
 // construct the event on user-facing write paths; nil is reserved for
 // internal reentrant paths.
 type AgentRepo interface {
-	Register(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent) error
+	// Register creates an agent. editors (optional) are persisted in the same
+	// transaction; every id must hold role admin/owner at write time or the
+	// transaction fails with domain.ErrEditorNotEligible.
+	Register(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editors []string) error
 	Get(ctx context.Context, id string) (*domain.AgentConfig, bool, error)
 	GetSystemAssistant(ctx context.Context) (*domain.AgentConfig, bool, error)
 	GetAll(ctx context.Context) ([]*domain.AgentConfig, error)
 	Remove(ctx context.Context, id string, audit *auditdomain.ResourceChangeAuditEvent) error
-	Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent) error
+	// Update replaces an agent's mutable fields. When editorActor is non-empty
+	// the write re-validates, inside the same transaction, that the actor still
+	// holds role admin/owner AND appears in resource_editors — closing the
+	// check-then-write TOCTOU window for editors acting on someone else's
+	// resource. Empty means no editor re-validation (owner/creator path).
+	Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string) error
 	UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error)
 	UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, checkpointEnabled bool, maxIterations, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error)
 }

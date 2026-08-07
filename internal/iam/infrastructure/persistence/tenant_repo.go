@@ -58,6 +58,33 @@ func (r *TenantRepo) ListMembers(ctx context.Context, tenantID string, limit, of
 	return members, nil
 }
 
+// ListMembersByRole returns every member whose role is one of the given
+// roles. The caller (application layer) validates the role whitelist.
+func (r *TenantRepo) ListMembersByRole(ctx context.Context, tenantID string, roles []string) ([]domain.Member, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT tm.user_id, u.github_login, COALESCE(u.avatar_url,''), tm.role, tm.joined_at
+		 FROM public.tenant_members tm
+		 JOIN public.users u ON u.id = tm.user_id
+		 WHERE tm.tenant_id=$1 AND tm.role = ANY($2)
+		 ORDER BY tm.joined_at DESC`,
+		tenantID, roles,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("tenant_repo: list members by role: %w", err)
+	}
+	defer rows.Close()
+
+	var members []domain.Member
+	for rows.Next() {
+		var m domain.Member
+		if err := rows.Scan(&m.UserID, &m.GitHubLogin, &m.AvatarURL, &m.Role, &m.JoinedAt); err != nil {
+			return nil, fmt.Errorf("tenant_repo: scan member by role: %w", err)
+		}
+		members = append(members, m)
+	}
+	return members, nil
+}
+
 // GetMemberRole returns the role of a tenant member, or ErrMemberNotFound.
 func (r *TenantRepo) GetMemberRole(ctx context.Context, tenantID, userID string) (string, error) {
 	var role string

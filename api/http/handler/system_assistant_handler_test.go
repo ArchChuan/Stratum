@@ -23,7 +23,7 @@ type settingsAgentRepo struct {
 	updateErr error
 }
 
-func (r *settingsAgentRepo) Register(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
+func (r *settingsAgentRepo) Register(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ []string) error {
 	return nil
 }
 func (r *settingsAgentRepo) Get(context.Context, string) (*domain.AgentConfig, bool, error) {
@@ -36,7 +36,7 @@ func (r *settingsAgentRepo) GetAll(context.Context) ([]*domain.AgentConfig, erro
 func (r *settingsAgentRepo) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (r *settingsAgentRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
+func (r *settingsAgentRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string) error {
 	return nil
 }
 func (r *settingsAgentRepo) UpdateSystemAssistant(_ context.Context, cfg *domain.AgentConfig) error {

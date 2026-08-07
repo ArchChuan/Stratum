@@ -47,14 +47,25 @@ func newChangeAudit(ctx context.Context, kind, resourceID, op, actorID string, b
 	return ev, nil
 }
 
-// knowledgeSafeProjection is the credential-free projection of a knowledge
-// workspace. WorkspaceConfig carries no credentials; it is the chunking
-// contract, not storage keys.
-func KnowledgeSafeProjection(value *domain.Workspace) map[string]any {
+// knowledgeSafeProjectionWithEditors is the credential-free projection of a
+// knowledge workspace. WorkspaceConfig carries no credentials; it is the
+// chunking contract, not storage keys. editors is included when non-nil so
+// editor-set changes surface in the audit before/after diff.
+func knowledgeSafeProjectionWithEditors(value *domain.Workspace, editors []string) map[string]any {
 	if value == nil {
 		return map[string]any{}
 	}
-	return map[string]any{
+	proj := map[string]any{
 		"id": value.ID, "name": value.Name, "description": value.Description, "config": value.Config,
 	}
+	if editors != nil {
+		proj["editors"] = editors
+	}
+	return proj
+}
+
+// KnowledgeSafeProjection is the credential-free projection of a knowledge
+// workspace (audit write paths that do not involve the editor set).
+func KnowledgeSafeProjection(value *domain.Workspace) map[string]any {
+	return knowledgeSafeProjectionWithEditors(value, nil)
 }

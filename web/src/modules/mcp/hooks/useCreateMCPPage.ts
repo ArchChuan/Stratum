@@ -59,6 +59,7 @@ interface FormValues {
   retry_initial_delay_ms?: number;
   retry_max_delay_ms?: number;
   retry_backoff_factor?: number;
+  editors?: string[];
 }
 
 export const useCreateMCPPage = () => {
@@ -112,7 +113,7 @@ export const useCreateMCPPage = () => {
         };
       }
 
-      await mcpApi.connect(cfg);
+      await mcpApi.connect(cfg, values.editors);
       message.success('MCP 服务器已添加');
       navigate('/mcp');
     } catch (err) {

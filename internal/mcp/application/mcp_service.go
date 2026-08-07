@@ -4,10 +4,12 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/byteBuilderX/stratum/internal/mcp/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"go.uber.org/zap"
 )
 
@@ -138,28 +140,34 @@ func (s *MCPService) ServerStatus(ctx context.Context) ServerStatusBreakdown {
 
 // ConnectServer registers a new MCP server config and discovers its tools.
 // An existing id takes update semantics (upsert) and keeps the original
-// creator. Returns domain.ErrNameConflict on duplicate name.
-func (s *MCPService) ConnectServer(ctx context.Context, cfg *domain.ServerConfig, actorID string) error {
+// creator. Returns domain.ErrNameConflict on duplicate name. editors carries
+// the granted editor set on the create path (written in the same transaction,
+// each editor must hold role admin/owner); update paths ignore it.
+func (s *MCPService) ConnectServer(ctx context.Context, cfg *domain.ServerConfig, editors []string, actorID string) error {
 	stored, getErr := s.manager.GetServerConfig(ctx, cfg.ID)
 	if getErr != nil && !errors.Is(getErr, domain.ErrServerNotFound) {
 		return getErr
 	}
 	op := auditdomain.ChangeOpCreate
 	var before any
+	editorActor := ""
 	switch {
 	case getErr == nil && isPlatformManaged(stored):
 		return domain.ErrPlatformManagedServer
 	case getErr == nil:
-		// Update semantics on an existing row: ownership vs the original creator.
-		if err := s.checkOwnership(ctx, actorID, stored.CreatedBy); err != nil {
-			return err
+		// Update semantics on an existing row: creator/owner, or a granted
+		// editor (update only — editors never grant delete rights).
+		ea, resolveErr := s.resolveUpdateActor(ctx, actorID, stored)
+		if resolveErr != nil {
+			return resolveErr
 		}
+		editorActor = ea
 		cfg.CreatedBy = stored.CreatedBy
 		op = auditdomain.ChangeOpUpdate
 		before = MCPSafeProjection(stored)
 	default:
 		// New server: creator becomes owner; only owner/admin may create.
-		if err := s.checkOwnership(ctx, actorID, actorID); err != nil {
+		if err := s.checkOwnership(ctx, actorID, actorID, nil); err != nil {
 			return err
 		}
 		cfg.CreatedBy = actorID
@@ -168,7 +176,7 @@ func (s *MCPService) ConnectServer(ctx context.Context, cfg *domain.ServerConfig
 	if err != nil {
 		return err
 	}
-	if err := s.manager.Connect(ctx, cfg, audit); err != nil {
+	if err := s.manager.Connect(ctx, cfg, editors, editorActor, audit); err != nil {
 		return err
 	}
 	s.logger.Info("mcp.server_connected",
@@ -187,7 +195,7 @@ func (s *MCPService) DeleteServer(ctx context.Context, serverID, actorID string)
 	if err != nil {
 		return err
 	}
-	if err := s.checkOwnership(ctx, actorID, stored.CreatedBy); err != nil {
+	if err := s.checkOwnership(ctx, actorID, stored.CreatedBy, nil); err != nil {
 		return err
 	}
 	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindMCP, serverID, auditdomain.ChangeOpDelete, actorID,
@@ -239,7 +247,8 @@ func (s *MCPService) UpdateServer(ctx context.Context, cfg *domain.ServerConfig,
 	if isPlatformManaged(stored) {
 		return domain.ErrPlatformManagedServer
 	}
-	if err := s.checkOwnership(ctx, actorID, stored.CreatedBy); err != nil {
+	editorActor, err := s.resolveUpdateActor(ctx, actorID, stored)
+	if err != nil {
 		return err
 	}
 	merged := mergeProtectedConfig(stored, cfg)
@@ -249,7 +258,7 @@ func (s *MCPService) UpdateServer(ctx context.Context, cfg *domain.ServerConfig,
 	if err != nil {
 		return err
 	}
-	if err := s.manager.UpdateServer(ctx, merged, audit); err != nil {
+	if err := s.manager.UpdateServer(ctx, merged, editorActor, audit); err != nil {
 		return err
 	}
 	s.logger.Info("mcp.server_updated", zap.String("server_id", cfg.ID))
@@ -257,6 +266,56 @@ func (s *MCPService) UpdateServer(ctx context.Context, cfg *domain.ServerConfig,
 		s.logger.Warn("failed to re-register MCP tools", zap.String("server_id", cfg.ID), zap.Error(err))
 	}
 	return nil
+}
+
+// SetEditors replaces the granted editor set of an MCP server. Only the
+// creator or an owner may manage editors (an editor cannot delegate their own
+// right); each editor must hold role admin/owner at write time, enforced
+// inside the repository transaction (fail closed). The change is audited in
+// the same transaction with before/after projections.
+func (s *MCPService) SetEditors(ctx context.Context, serverID, actorID string, editorIDs []string) error {
+	stored, err := s.loadManagedServer(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	// Editors can never grant delete rights, so SetEditors reuses the
+	// creator/owner-only base matrix.
+	if err := s.checkOwnership(ctx, actorID, stored.CreatedBy, nil); err != nil {
+		return err
+	}
+	tenantID := reqctx.TenantIDFromContext(ctx)
+	before, err := s.manager.ListEditors(ctx, tenantID, serverID)
+	if err != nil {
+		return fmt.Errorf("mcp service set editors: list editors: %w", err)
+	}
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindMCP, serverID, auditdomain.ChangeOpUpdate, actorID,
+		MCPSafeProjectionWithEditors(stored, before), MCPSafeProjectionWithEditors(stored, editorIDs))
+	if err != nil {
+		return err
+	}
+	if err := s.manager.ReplaceEditors(ctx, tenantID, serverID, editorIDs, actorID, audit); err != nil {
+		return err
+	}
+	s.logger.Info("mcp editors updated", zap.String("server_id", serverID), zap.Int("count", len(editorIDs)))
+	return nil
+}
+
+// resolveUpdateActor returns the actor id when they are a granted editor of
+// the resource (update-only), or "" when they are the creator or an owner.
+// Any other actor gets domain.ErrForbidden.
+func (s *MCPService) resolveUpdateActor(ctx context.Context, actorID string, current *domain.ServerConfig) (string, error) {
+	if err := s.checkOwnership(ctx, actorID, current.CreatedBy, nil); err == nil {
+		return "", nil
+	}
+	tenantID := reqctx.TenantIDFromContext(ctx)
+	editors, err := s.manager.ListEditors(ctx, tenantID, current.ID)
+	if err != nil {
+		return "", err
+	}
+	if err := s.checkOwnership(ctx, actorID, current.CreatedBy, editors); err != nil {
+		return "", err
+	}
+	return actorID, nil
 }
 
 // loadManagedServer fetches a server config and rejects platform-managed rows.
@@ -344,6 +403,11 @@ func mergeSensitiveValues(target, stored map[string]string) {
 // GetServerConfig returns the full configuration for serverID.
 func (s *MCPService) GetServerConfig(ctx context.Context, serverID string) (*domain.ServerConfig, error) {
 	return s.manager.GetServerConfig(ctx, serverID)
+}
+
+// ListEditors returns the granted editor set of an MCP server.
+func (s *MCPService) ListEditors(ctx context.Context, tenantID, serverID string) ([]string, error) {
+	return s.manager.ListEditors(ctx, tenantID, serverID)
 }
 
 // IsNameConflict reports whether err is the canonical mcp name-conflict sentinel.

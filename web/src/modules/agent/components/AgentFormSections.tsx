@@ -6,6 +6,7 @@ import type { GroupedModelOption } from '../model/agent';
 import { AgentMemoryConfig } from './AgentMemoryConfig';
 
 import { AGENT_MAX_MAX_ITERATIONS, AGENT_MIN_MAX_ITERATIONS } from '@/constants';
+import type { Member } from '@/modules/iam';
 import type { Workspace } from '@/modules/knowledge';
 import type { MCPToolOption } from '@/modules/mcp';
 import type { Skill } from '@/modules/skill';
@@ -22,6 +23,10 @@ interface AgentFormSectionsProps {
   groupedModels: GroupedModelOption[];
   currentModel?: string;
   isSystem?: boolean;
+  // 创建路径才展示可编辑人多选：普通资源更新请求体不带 editors。
+  showEditors?: boolean;
+  editorCandidates?: Member[];
+  editorCandidatesLoading?: boolean;
 }
 
 export const AgentFormSections = ({
@@ -31,6 +36,9 @@ export const AgentFormSections = ({
   groupedModels,
   currentModel,
   isSystem = false,
+  showEditors = false,
+  editorCandidates = [],
+  editorCandidatesLoading = false,
 }: AgentFormSectionsProps) => {
   return (
     <>
@@ -170,6 +178,22 @@ export const AgentFormSections = ({
           ))}
         </Select>
       </Form.Item>
+      {showEditors && (
+        <Form.Item
+          label="可编辑人"
+          name="editors"
+          extra={isSystem ? '系统助手的可编辑人由平台统一管理，不可修改' : '可编辑人（租户管理员）可以修改此 Agent；删除仍仅限创建者或超级管理员'}
+          style={{ marginBottom: 0 }}
+        >
+          <Select mode="multiple" placeholder="选择可编辑的管理员" allowClear disabled={isSystem} loading={editorCandidatesLoading}>
+            {editorCandidates.map((member) => (
+              <Option key={member.user_id} value={member.user_id}>
+                {member.github_login || member.user_id}
+              </Option>
+            ))}
+          </Select>
+        </Form.Item>
+      )}
       <Collapse
         ghost
         size="small"

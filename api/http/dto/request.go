@@ -14,6 +14,8 @@ type CreateSkillRequest struct {
 	ExpectedOutput any               `json:"expectedOutput"`
 	Instructions   string            `json:"instructions" binding:"required"`
 	Requirements   SkillRequirements `json:"requirements"`
+	// Editors grants additional admins update rights, persisted with the skill.
+	Editors []string `json:"editors"`
 }
 
 type UpdateSkillCapabilityRequest struct {
@@ -37,8 +39,10 @@ type UpdateSkillInstructionBundleRequest struct {
 }
 
 type SkillWorkspaceResponse struct {
-	Skill SkillProductResponse  `json:"skill"`
-	Draft SkillRevisionResponse `json:"draft"`
+	// Editors is the current granted editor set, for form prefill.
+	Editors []string              `json:"editors"`
+	Skill   SkillProductResponse  `json:"skill"`
+	Draft   SkillRevisionResponse `json:"draft"`
 }
 
 type SkillProductResponse struct {

@@ -16,3 +16,7 @@ var ErrConnectionLimitExceeded = errors.New("MCP connection limit exceeded")
 
 // ErrForbidden is returned when the actor may not modify a resource they did not create.
 var ErrForbidden = errors.New("resource ownership forbidden")
+
+// ErrEditorNotEligible rejects a granted editor who does not hold role
+// admin or owner at write time (fail closed, prevents forgery).
+var ErrEditorNotEligible = errors.New("editor must hold admin or owner role")

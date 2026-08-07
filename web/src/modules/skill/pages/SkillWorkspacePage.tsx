@@ -1,5 +1,5 @@
 import { ArrowLeftOutlined, SendOutlined } from '@ant-design/icons';
-import { Alert, Button, Checkbox, Form, Input, Skeleton, Space, Switch, Tabs, Typography, message } from 'antd';
+import { Alert, Button, Checkbox, Form, Input, Select, Skeleton, Space, Switch, Tabs, Typography, message } from 'antd';
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -8,7 +8,7 @@ import { skillApi } from '../api/skill.api';
 import type { SkillRevision, SkillWorkspace } from '../model/skill';
 
 import { SkillEvaluationPanel } from '@/modules/evaluation/components/SkillEvaluationPanel';
-import { useTenantRole } from '@/modules/iam';
+import { useEditorCandidates, useTenantRole } from '@/modules/iam';
 import { extractErrorMessage } from '@/shared/lib';
 
 const { Title, Text, Paragraph } = Typography;
@@ -27,6 +27,8 @@ export const SkillWorkspacePage = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState('');
   const [error, setError] = useState('');
+  const [editorIDs, setEditorIDs] = useState<string[]>([]);
+  const { candidates: editorCandidates, loading: editorCandidatesLoading } = useEditorCandidates();
   const [capabilityForm] = Form.useForm<CapabilityValues>();
   const [activationForm] = Form.useForm<ActivationValues>();
   const [instructionForm] = Form.useForm<InstructionValues>();
@@ -34,7 +36,11 @@ export const SkillWorkspacePage = () => {
   useEffect(() => {
     let cancelled = false;
     skillApi.getWorkspace(id).then((data) => {
-      if (!cancelled) { setWorkspace(data); fillForms(data.draft, capabilityForm, activationForm, instructionForm); }
+      if (!cancelled) {
+        setWorkspace(data);
+        setEditorIDs(data.editors || []);
+        fillForms(data.draft, capabilityForm, activationForm, instructionForm);
+      }
     }).catch((err) => { if (!cancelled) setError(extractErrorMessage(err) || '加载技能工作台失败'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -108,6 +114,47 @@ export const SkillWorkspacePage = () => {
         <Form.Item label="记忆范围" name="memoryScopes"><Checkbox.Group options={[{ label: '当前会话', value: 'conversation' }, { label: '用户', value: 'user' }, { label: 'Agent', value: 'agent' }]} /></Form.Item>
         {canEdit && <ActionRow><Button type="primary" htmlType="submit" loading={saving === 'instructions'}>保存指令与权限</Button></ActionRow>}
       </Form> },
+      { key: 'editors', label: '可编辑人', children: (
+        <div style={{ maxWidth: 520 }}>
+          <Alert type="info" showIcon style={{ marginBottom: 16 }}
+            message="可编辑人（租户管理员）可以修改此技能草稿；删除仍仅限创建者或超级管理员。" />
+          <Select
+            mode="multiple"
+            placeholder="选择可编辑的管理员"
+            allowClear
+            loading={editorCandidatesLoading}
+            value={editorIDs}
+            onChange={setEditorIDs}
+            style={{ width: '100%' }}
+            options={editorCandidates.map((member) => ({
+              value: member.user_id,
+              label: member.github_login || member.user_id,
+            }))}
+          />
+          {isAdmin && (
+            <ActionRow>
+              <Button
+                type="primary"
+                loading={saving === 'editors'}
+                disabled={!canEdit}
+                onClick={async () => {
+                  setSaving('editors');
+                  try {
+                    await skillApi.setEditors(skill.id, editorIDs);
+                    message.success('编辑人已更新');
+                  } catch (err) {
+                    message.error({ content: extractErrorMessage(err) || '保存失败', duration: 0 });
+                  } finally {
+                    setSaving('');
+                  }
+                }}
+              >
+                保存编辑人
+              </Button>
+            </ActionRow>
+          )}
+        </div>
+      ) },
       { key: 'revision', label: 'Revision', children: <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <Alert type={draft.status === 'published' ? 'success' : 'warning'} showIcon message={draft.status === 'published' ? `已发布 Revision ${draft.revisionNo || 1}` : '发布后 Agent 才能激活此指令包。'} />
         {canEdit && !activationConfirmed && <Alert type="warning" showIcon message="发布前需要确认激活契约。" action={<Button onClick={() => setActiveTab('activation')}>去确认激活契约</Button>} />}

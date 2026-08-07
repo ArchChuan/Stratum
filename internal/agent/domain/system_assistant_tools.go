@@ -20,6 +20,7 @@ const (
 	SystemAssistantToolSearchOfficialDocs    = "stratum_search_official_docs"
 	SystemAssistantToolDiagnoseTenant        = "stratum_diagnose_tenant"
 	SystemAssistantToolProposeResourceChange = "stratum_propose_resource_change"
+	SystemAssistantToolApplyResourceChange   = "stratum_apply_resource_change"
 )
 
 // ParseOfficialDocsToolArguments validates and extracts the query argument of

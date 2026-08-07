@@ -70,9 +70,11 @@ func (r *Registry) systemAssistantProfileVersion() (string, error) {
 }
 
 // Register persists a new agent, auditing the create in the same transaction.
-func (r *Registry) Register(ctx context.Context, a Agent, audit *auditdomain.ResourceChangeAuditEvent) error {
+// editors are granted editor rights over the new resource (persisted in the
+// same transaction, role-checked).
+func (r *Registry) Register(ctx context.Context, a Agent, audit *auditdomain.ResourceChangeAuditEvent, editors []string) error {
 	cfg := a.GetConfig()
-	if err := r.repo.Register(ctx, cfg, audit); err != nil {
+	if err := r.repo.Register(ctx, cfg, audit, editors); err != nil {
 		return err
 	}
 	if r.logger != nil {
@@ -181,9 +183,10 @@ func (r *Registry) Remove(ctx context.Context, id string, audit *auditdomain.Res
 }
 
 // Update replaces mutable fields on an existing agent, auditing the change in
-// the same transaction.
-func (r *Registry) Update(ctx context.Context, cfg *AgentConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
-	if err := r.repo.Update(ctx, cfg, audit); err != nil {
+// the same transaction. editorActor, when non-empty, re-validates editor
+// eligibility inside the write transaction (see port.AgentRepo.Update).
+func (r *Registry) Update(ctx context.Context, cfg *AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string) error {
+	if err := r.repo.Update(ctx, cfg, audit, editorActor); err != nil {
 		return err
 	}
 	if r.logger != nil {

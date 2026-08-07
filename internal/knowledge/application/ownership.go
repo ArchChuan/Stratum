@@ -9,9 +9,12 @@ import (
 
 // enforceOwnership applies the ownership matrix. owner may manage the whole
 // tenant (including historical resources with empty created_by); admin may
-// only touch resources they created; every other role, resolution failure
-// and empty actor is denied. Fail closed.
-func enforceOwnership(role, actorID, createdBy string) error {
+// touch resources they created or that granted them editor rights (update
+// semantics only — delete still requires creator/owner); every other role,
+// resolution failure and empty actor is denied. Fail closed.
+// editors is the granted editor set used for the admin-editor row of the
+// matrix; pass nil to deny admin edits of foreign resources entirely.
+func enforceOwnership(role, actorID, createdBy string, editors []string) error {
 	if actorID == "" {
 		return domain.ErrForbidden
 	}
@@ -21,6 +24,11 @@ func enforceOwnership(role, actorID, createdBy string) error {
 	case "admin":
 		if createdBy == actorID {
 			return nil
+		}
+		for _, id := range editors {
+			if id == actorID {
+				return nil
+			}
 		}
 		return domain.ErrForbidden
 	default:
@@ -33,7 +41,7 @@ func enforceOwnership(role, actorID, createdBy string) error {
 // parameter. A system actor in ctx bypasses ownership checks (evaluation
 // worker path). resolver nil, resolution failure and empty actor all fail
 // closed.
-func (s *WorkspaceService) checkOwnership(ctx context.Context, tenantID, actorID, createdBy string) error {
+func (s *WorkspaceService) checkOwnership(ctx context.Context, tenantID, actorID, createdBy string, editors []string) error {
 	if reqctx.SystemActorFromContext(ctx) != "" {
 		return nil
 	}
@@ -44,5 +52,5 @@ func (s *WorkspaceService) checkOwnership(ctx context.Context, tenantID, actorID
 	if err != nil {
 		return domain.ErrForbidden
 	}
-	return enforceOwnership(role, actorID, createdBy)
+	return enforceOwnership(role, actorID, createdBy, editors)
 }

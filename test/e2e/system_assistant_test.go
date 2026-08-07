@@ -267,7 +267,7 @@ func TestSystemAssistantTenantIsolationAndRoleScope(t *testing.T) {
 	_, _, err = repo.GetSystemAssistant(assistantTenantContext("bad tenant!", users[tenants[0]][0], tenantdb.RoleTenantAdmin))
 	require.Error(t, err)
 	require.ErrorIs(t, repo.Remove(ctxA, domain.SystemAssistantID, nil), domain.ErrSystemAssistantManaged)
-	require.ErrorIs(t, repo.Update(ctxA, &domain.AgentConfig{ID: domain.SystemAssistantID}, nil), domain.ErrSystemAssistantManaged)
+	require.ErrorIs(t, repo.Update(ctxA, &domain.AgentConfig{ID: domain.SystemAssistantID}, nil, ""), domain.ErrSystemAssistantManaged)
 }
 
 func TestSystemAssistantOfficialDocsArtifactsAndAreaGap(t *testing.T) {
@@ -330,7 +330,7 @@ func TestSystemAssistantOfficialDocsArtifactsAndAreaGap(t *testing.T) {
 	require.NotContains(t, string(gotJSON), userB)
 
 	tools := agentapp.SystemAssistantToolDefinitionsForRole("admin")
-	require.Len(t, tools, 3)
+	require.Len(t, tools, 4)
 	for _, tool := range tools {
 		require.Equal(t, domain.ProviderTypeInternal, tool.ProviderType)
 		require.NotEmpty(t, tool.InputSchema)

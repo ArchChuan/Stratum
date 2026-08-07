@@ -48,6 +48,23 @@ func (r *memberTenantRepo) ListMembers(_ context.Context, _ string, limit, offse
 	return r.members, nil
 }
 
+func (r *memberTenantRepo) ListMembersByRole(_ context.Context, _ string, roles []string) ([]domain.Member, error) {
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
+	allowed := make(map[string]bool, len(roles))
+	for _, role := range roles {
+		allowed[role] = true
+	}
+	filtered := make([]domain.Member, 0, len(r.members))
+	for _, m := range r.members {
+		if allowed[m.Role] {
+			filtered = append(filtered, m)
+		}
+	}
+	return filtered, nil
+}
+
 func (r *memberTenantRepo) CountMembers(_ context.Context, _ string) (int, error) {
 	return r.total, r.countErr
 }
@@ -102,6 +119,41 @@ func TestListMembersNormalisesPagination(t *testing.T) {
 	}
 	if size != constants.DefaultPageSize {
 		t.Fatalf("oversize pageSize must fall back to default, got %d", size)
+	}
+}
+
+func TestListMembersByRoleWhitelist(t *testing.T) {
+	// 候选编辑人只允许 admin/owner;member、空列表和未知角色必须 fail closed。
+	repo := newMemberTenantRepo()
+	repo.members = []domain.Member{
+		{UserID: "u-admin", Role: "admin"},
+		{UserID: "u-owner", Role: "owner"},
+		{UserID: "u-member", Role: "member"},
+	}
+	svc := NewTenantService(repo, zap.NewNop())
+
+	got, err := svc.ListMembersByRole(context.Background(), "t1", []string{"admin", "owner"})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("members = %d, want 2", len(got))
+	}
+
+	cases := [][]string{{}, {"member"}, {"admin", "member"}, {"superuser"}}
+	for _, roles := range cases {
+		if _, err := svc.ListMembersByRole(context.Background(), "t1", roles); !errors.Is(err, ErrInvalidRoleFilter) {
+			t.Fatalf("roles %v: err = %v, want ErrInvalidRoleFilter", roles, err)
+		}
+	}
+}
+
+func TestListMembersByRolePropagatesRepoError(t *testing.T) {
+	repo := newMemberTenantRepo()
+	repo.listErr = errors.New("boom")
+	svc := NewTenantService(repo, zap.NewNop())
+	if _, err := svc.ListMembersByRole(context.Background(), "t1", []string{"admin"}); err == nil {
+		t.Fatal("repo error must propagate")
 	}
 }
 

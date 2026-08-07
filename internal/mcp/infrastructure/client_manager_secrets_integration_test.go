@@ -36,7 +36,7 @@ func TestPersistConnect_encryptsSecretsAtRest(t *testing.T) {
 		Timeout: 30 * time.Second,
 	}
 	// 本测试只验证落库加密；审计入参为 nil（persistConnect 对 nil 事件跳过审计）。
-	require.NoError(t, m.persistConnect(ctx, cfg, nil))
+	require.NoError(t, m.persistConnect(ctx, cfg, nil, "", nil))
 
 	var envJSON, hdrsJSON, authJSON string
 	require.NoError(t, pool.QueryRow(ctx,

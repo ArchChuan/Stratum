@@ -9,6 +9,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -154,7 +155,7 @@ type systemAssistantProfileRepo struct {
 	err  error
 }
 
-func (r systemAssistantProfileRepo) Register(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
+func (r systemAssistantProfileRepo) Register(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ []string) error {
 	return nil
 }
 func (r systemAssistantProfileRepo) Get(context.Context, string) (*domain.AgentConfig, bool, error) {
@@ -172,7 +173,7 @@ func (r systemAssistantProfileRepo) GetSystemAssistant(ctx context.Context) (*do
 func (r systemAssistantProfileRepo) GetAll(context.Context) ([]*domain.AgentConfig, error) {
 	return r.cfgs, r.err
 }
-func (r systemAssistantProfileRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
+func (r systemAssistantProfileRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string) error {
 	return nil
 }
 func (r systemAssistantProfileRepo) UpdateSystemAssistantModel(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
@@ -354,4 +355,36 @@ func TestSystemAssistantProfileRollbackSourceKeepsRuntimeAndTraceOnSameImmutable
 	if got := cfg.EvolutionTrace.ResourceManifest["system-assistant-profile"]; got != rollbackVersion {
 		t.Fatalf("trace profile version = %q, runtime source version = %q", got, rollbackVersion)
 	}
+}
+
+func TestSystemAssistantProfileV3RelaxesProposalBoundaryForDirectApply(t *testing.T) {
+	source, err := NewBuiltinSystemAssistantProfileSource(domain.CurrentSystemAssistantProfileVersion)
+	require.NoError(t, err)
+	require.Equal(t, "2026-08-08.v3", domain.CurrentSystemAssistantProfileVersion)
+	prompt := source.Profile().SystemPrompt
+
+	// The direct-apply tool boundary is now in the prompt.
+	require.Contains(t, prompt, "stratum_apply_resource_change")
+	require.Contains(t, prompt, "confirm the intent")
+	require.Contains(t, prompt, "Prefer the proposal workflow")
+	// The old blanket proposal-only ban is gone.
+	require.NotContains(t, prompt, "never modify tenant resources outside the proposal workflow")
+	// Delete, credential, IAM and publishing stays forbidden.
+	require.Contains(t, prompt, "Deletion, credential changes, IAM operations, and publishing remain forbidden")
+}
+
+func TestSystemAssistantProfileKeepsHistoricalVersions(t *testing.T) {
+	profiles := BuiltinSystemAssistantProfiles()
+	require.Contains(t, profiles, "2026-07-22.v0")
+	require.Contains(t, profiles, "2026-08-04.v2")
+	old, err := NewBuiltinSystemAssistantProfileSource("2026-08-04.v2")
+	require.NoError(t, err)
+	// Historical versions keep the proposal-only prompt, not the v3 text.
+	require.NotContains(t, old.Profile().SystemPrompt, "stratum_apply_resource_change")
+	require.Contains(t, old.Profile().SystemPrompt, "never modify tenant resources outside the proposal workflow")
+	require.Equal(t, "2026-08-04.v2", old.Profile().Version)
+	// The current version resolves through the active constant.
+	current := BuiltinSystemAssistantProfiles()[domain.CurrentSystemAssistantProfileVersion]
+	require.Equal(t, "2026-08-08.v3", current.Version)
+	require.NotEqual(t, old.Profile().SystemPrompt, current.SystemPrompt)
 }

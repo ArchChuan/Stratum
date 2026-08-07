@@ -9,7 +9,7 @@ import (
 const (
 	SystemAssistantKey                   = "stratum.platform_assistant"
 	SystemAssistantID                    = "stratum-platform-assistant"
-	CurrentSystemAssistantProfileVersion = "2026-08-04.v2"
+	CurrentSystemAssistantProfileVersion = "2026-08-08.v3"
 )
 
 // SystemAssistantProfile is an immutable, code-reviewed runtime definition.
@@ -103,13 +103,14 @@ type DiagnosticAuthorization struct {
 // SystemAssistantToolArtifact is typed evidence captured directly from a
 // governed internal tool. It is never reconstructed from model prose.
 type SystemAssistantToolArtifact struct {
-	Tool      string                          `json:"tool"`
-	Citations []Citation                      `json:"citations,omitempty"`
-	Evidence  *DiagnosticEvidence             `json:"evidence,omitempty"`
-	LatencyMs int64                           `json:"latencyMs"`
-	Outcome   string                          `json:"outcome"`
-	ErrorCode string                          `json:"errorCode,omitempty"`
-	Proposal  *ResourceChangeProposalArtifact `json:"proposal,omitempty"`
+	Tool        string                              `json:"tool"`
+	Citations   []Citation                          `json:"citations,omitempty"`
+	Evidence    *DiagnosticEvidence                 `json:"evidence,omitempty"`
+	LatencyMs   int64                               `json:"latencyMs"`
+	Outcome     string                              `json:"outcome"`
+	ErrorCode   string                              `json:"errorCode,omitempty"`
+	Proposal    *ResourceChangeProposalArtifact     `json:"proposal,omitempty"`
+	DirectApply *SystemAssistantDirectApplyArtifact `json:"directApply,omitempty"`
 }
 
 type ResourceChangeProposalArtifact struct {
@@ -119,6 +120,19 @@ type ResourceChangeProposalArtifact struct {
 	Status       ProposalStatus    `json:"status"`
 	Summary      string            `json:"summary"`
 	ExpiresAt    time.Time         `json:"expiresAt"`
+}
+
+// SystemAssistantDirectApplyArtifact is typed evidence captured from the
+// in-process direct-write tool (stratum_apply_resource_change). Unlike the
+// proposal artifact there is no proposal lifecycle: the change either landed
+// in the same transaction as the audit row or the tool reports a typed error.
+type SystemAssistantDirectApplyArtifact struct {
+	Tool         string            `json:"tool"`
+	ResourceKind ResourceKind      `json:"resourceKind"`
+	Operation    ProposalOperation `json:"operation"`
+	ResourceID   string            `json:"resourceId,omitempty"`
+	Outcome      string            `json:"outcome"`
+	ErrorCode    string            `json:"errorCode,omitempty"`
 }
 
 type DiagnosticReport struct {
@@ -138,11 +152,12 @@ type DiagnosticStep struct {
 }
 
 type ExecutionArtifact struct {
-	Type                   string                          `json:"type"`
-	ProfileVersion         string                          `json:"profileVersion,omitempty"`
-	Citations              []Citation                      `json:"citations,omitempty"`
-	DiagnosticReport       *DiagnosticReport               `json:"diagnosticReport,omitempty"`
-	ResourceChangeProposal *ResourceChangeProposalArtifact `json:"resourceChangeProposal,omitempty"`
+	Type                   string                              `json:"type"`
+	ProfileVersion         string                              `json:"profileVersion,omitempty"`
+	Citations              []Citation                          `json:"citations,omitempty"`
+	DiagnosticReport       *DiagnosticReport                   `json:"diagnosticReport,omitempty"`
+	ResourceChangeProposal *ResourceChangeProposalArtifact     `json:"resourceChangeProposal,omitempty"`
+	DirectApply            *SystemAssistantDirectApplyArtifact `json:"directApply,omitempty"`
 }
 
 var diagnosticRecommendedActions = map[string]string{

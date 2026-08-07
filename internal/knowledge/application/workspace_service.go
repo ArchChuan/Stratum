@@ -51,6 +51,9 @@ type CreateWorkspaceInput struct {
 	Name        string
 	Description string
 	Config      domain.WorkspaceConfig
+	// Editors are validated (role admin/owner) and persisted in the same
+	// transaction as the workspace row.
+	Editors []string
 }
 
 // UpdateWorkspaceInput carries the application-level shape of PATCH /knowledge/workspaces/:name.
@@ -86,6 +89,7 @@ type WorkspaceService struct {
 	docRepo     port.DocRepo
 	vectorStore collectionProvisioner
 	roles       port.TenantRoleResolver
+	editorRepo  port.ResourceEditorRepo
 	logger      *zap.Logger
 }
 
@@ -104,6 +108,11 @@ func (s *WorkspaceService) SetVectorStore(vs collectionProvisioner) { s.vectorSt
 // checks. A nil resolver fails all writes closed (ownership unverifiable).
 func (s *WorkspaceService) SetTenantRoleResolver(r port.TenantRoleResolver) { s.roles = r }
 
+// SetEditorRepo injects the resource editor repository used by the update
+// editor path and the SetEditors management endpoint. A nil repo denies
+// editor grants entirely (fail closed).
+func (s *WorkspaceService) SetEditorRepo(r port.ResourceEditorRepo) { s.editorRepo = r }
+
 // isPlatformManaged reports whether a workspace is owned by the platform and
 // must not be mutated through user-facing APIs.
 func isPlatformManaged(ws *domain.Workspace) bool {
@@ -114,7 +123,7 @@ func isPlatformManaged(ws *domain.Workspace) bool {
 // CreateWorkspace builds the aggregate via the domain factory then persists it.
 func (s *WorkspaceService) CreateWorkspace(ctx context.Context, tenantID string, in CreateWorkspaceInput, actorID string) (*domain.Workspace, error) {
 	// create encodes "the creator owns the resource": only owner/admin may create.
-	if err := s.checkOwnership(ctx, tenantID, actorID, actorID); err != nil {
+	if err := s.checkOwnership(ctx, tenantID, actorID, actorID, nil); err != nil {
 		return nil, err
 	}
 	ws, err := domain.NewWorkspace(in.Name, in.Description, in.Config, domain.DefaultChunkSize, domain.DefaultTopK)
@@ -127,7 +136,7 @@ func (s *WorkspaceService) CreateWorkspace(ctx context.Context, tenantID string,
 	if err != nil {
 		return nil, err
 	}
-	if err := s.repo.Create(ctx, tenantID, ws, audit); err != nil {
+	if err := s.repo.Create(ctx, tenantID, ws, in.Editors, audit); err != nil {
 		return nil, err
 	}
 	if s.vectorStore != nil {
@@ -163,7 +172,11 @@ func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, tenantID, name s
 	if isPlatformManaged(current) {
 		return nil, domain.ErrPlatformManagedWorkspace
 	}
-	if err := s.checkOwnership(ctx, tenantID, actorID, current.CreatedBy); err != nil {
+	// Base matrix: owner passes, creator-admin passes, everyone else needs the
+	// editor grant. editorActor is carried into the write transaction so the
+	// repo re-validates role + editor membership (TOCTOU closure).
+	editorActor, err := s.resolveUpdateActor(ctx, tenantID, actorID, current)
+	if err != nil {
 		return nil, err
 	}
 	before := KnowledgeSafeProjection(current)
@@ -182,11 +195,77 @@ func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, tenantID, name s
 	if err != nil {
 		return nil, err
 	}
-	if err := s.repo.UpdateWorkspaceAll(ctx, tenantID, name, renameTo, in.Description, newCfg, audit); err != nil {
+	if err := s.repo.UpdateWorkspaceAll(ctx, tenantID, name, renameTo, in.Description, newCfg, editorActor, audit); err != nil {
 		return nil, err
 	}
 	// after is the merged copy; no further in-memory sync needed.
 	return after, nil
+}
+
+// resolveUpdateActor applies the ownership matrix with the editor grant on
+// the update path. Owner and creator-admin pass with an empty editorActor
+// (the write proceeds without editor revalidation); an actor granted editor
+// rights passes with editorActor set, which the repo re-validates inside the
+// write transaction. Fail closed on missing repo, list failure or denial.
+func (s *WorkspaceService) resolveUpdateActor(ctx context.Context, tenantID, actorID string, current *domain.Workspace) (string, error) {
+	if err := s.checkOwnership(ctx, tenantID, actorID, current.CreatedBy, nil); err == nil {
+		return "", nil
+	}
+	if s.editorRepo == nil {
+		return "", domain.ErrForbidden
+	}
+	editors, err := s.editorRepo.ListEditors(ctx, tenantID, current.ID)
+	if err != nil {
+		return "", err
+	}
+	if err := s.checkOwnership(ctx, tenantID, actorID, current.CreatedBy, editors); err != nil {
+		return "", err
+	}
+	return actorID, nil
+}
+
+// ListEditors returns the granted editor set of a workspace (detail prefill).
+func (s *WorkspaceService) ListEditors(ctx context.Context, tenantID, workspaceID string) ([]string, error) {
+	if s.editorRepo == nil {
+		return nil, nil
+	}
+	return s.editorRepo.ListEditors(ctx, tenantID, workspaceID)
+}
+
+// SetEditors replaces the editor set of a workspace. Only creator/owner may
+// grant editors (an editor can never grant delete rights on a resource they
+// merely edit). The swap happens in one transaction with the audit row; each
+// editor id must hold role admin or owner at write time.
+func (s *WorkspaceService) SetEditors(ctx context.Context, tenantID, name string, editorIDs []string, actorID string) error {
+	if s.editorRepo == nil {
+		return fmt.Errorf("workspace service set editors: editor repo not wired")
+	}
+	current, err := s.repo.GetByName(ctx, tenantID, name)
+	if err != nil {
+		return err
+	}
+	if isPlatformManaged(current) {
+		return domain.ErrPlatformManagedWorkspace
+	}
+	// Editors can never grant delete rights, so SetEditors reuses the
+	// creator/owner-only base matrix.
+	if err := s.checkOwnership(ctx, tenantID, actorID, current.CreatedBy, nil); err != nil {
+		return err
+	}
+	before, err := s.editorRepo.ListEditors(ctx, tenantID, current.ID)
+	if err != nil {
+		return fmt.Errorf("workspace service set editors: list editors: %w", err)
+	}
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindKnowledge, current.ID, auditdomain.ChangeOpUpdate, actorID,
+		knowledgeSafeProjectionWithEditors(current, before), knowledgeSafeProjectionWithEditors(current, editorIDs))
+	if err != nil {
+		return err
+	}
+	if err := s.editorRepo.ReplaceEditors(ctx, tenantID, current.ID, editorIDs, actorID, audit); err != nil {
+		return err
+	}
+	s.logger.Info("knowledge editors updated", zap.String("workspace", name), zap.Int("count", len(editorIDs)))
+	return nil
 }
 
 // applyWorkspaceUpdate merges the partial input into a copy of current. It
@@ -248,7 +327,7 @@ func (s *WorkspaceService) DeleteWorkspace(ctx context.Context, tenantID, name, 
 	if isPlatformManaged(ws) {
 		return domain.ErrPlatformManagedWorkspace
 	}
-	if err := s.checkOwnership(ctx, tenantID, actorID, ws.CreatedBy); err != nil {
+	if err := s.checkOwnership(ctx, tenantID, actorID, ws.CreatedBy, nil); err != nil {
 		return err
 	}
 	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindKnowledge, ws.ID, auditdomain.ChangeOpDelete,

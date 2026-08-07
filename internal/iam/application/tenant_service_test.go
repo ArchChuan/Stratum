@@ -22,6 +22,9 @@ func (r *settingsTenantRepo) CountMembers(context.Context, string) (int, error) 
 func (r *settingsTenantRepo) ListMembers(context.Context, string, int, int) ([]domain.Member, error) {
 	return nil, nil
 }
+func (r *settingsTenantRepo) ListMembersByRole(context.Context, string, []string) ([]domain.Member, error) {
+	return nil, nil
+}
 func (r *settingsTenantRepo) GetMemberRole(context.Context, string, string) (string, error) {
 	return "", domain.ErrMemberNotFound
 }

@@ -26,7 +26,10 @@ const draftWorkspace = {
 };
 
 vi.mock('../api/skill.api', () => ({ skillApi: skillApiMock }));
-vi.mock('@/modules/iam', () => ({ useTenantRole: () => ({ isAdmin: true }) }));
+vi.mock('@/modules/iam', () => ({
+  useTenantRole: () => ({ isAdmin: true }),
+  useEditorCandidates: () => ({ candidates: [], loading: false }),
+}));
 Object.defineProperty(window, 'matchMedia', { writable: true, value: vi.fn(() => ({
   matches: false, addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(),
 })) });

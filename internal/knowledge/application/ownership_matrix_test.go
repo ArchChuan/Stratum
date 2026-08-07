@@ -2,11 +2,13 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
+	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/stretchr/testify/require"
 )
@@ -166,4 +168,154 @@ func TestWorkspaceUpdateSystemActorBypassesOwnership(t *testing.T) {
 	require.Equal(t, "evaluation-worker", ev.ActorID)
 	require.Equal(t, auditdomain.ChangeActorSystem, ev.ActorType)
 	require.Equal(t, auditdomain.ChangeSourceOptimization, ev.Source)
+}
+
+// stubKnowledgeEditorRepo is an in-memory ResourceEditorRepo for
+// editor-granted ownership tests. It records the last replace so tests can
+// assert the management-endpoint contract.
+type stubKnowledgeEditorRepo struct {
+	editors      map[string][]string
+	replaceErr   error
+	replaced     []string
+	replaceActor string
+	audits       []*auditdomain.ResourceChangeAuditEvent
+}
+
+func newStubKnowledgeEditorRepo() *stubKnowledgeEditorRepo {
+	return &stubKnowledgeEditorRepo{editors: map[string][]string{}}
+}
+
+func (s *stubKnowledgeEditorRepo) ListEditors(_ context.Context, _, resourceID string) ([]string, error) {
+	return append([]string(nil), s.editors[resourceID]...), nil
+}
+
+func (s *stubKnowledgeEditorRepo) ReplaceEditors(_ context.Context, _, resourceID string, editorIDs []string, createdBy string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	if s.replaceErr != nil {
+		return s.replaceErr
+	}
+	s.editors[resourceID] = append([]string(nil), editorIDs...)
+	s.replaced = editorIDs
+	s.replaceActor = createdBy
+	if audit != nil {
+		s.audits = append(s.audits, audit)
+	}
+	return nil
+}
+
+var _ port.ResourceEditorRepo = (*stubKnowledgeEditorRepo)(nil)
+
+// TestWorkspaceUpdateEditorGranted pins the granted-editor row of the matrix:
+// a foreign admin in the editor set may update the workspace (update-only).
+func TestWorkspaceUpdateEditorGranted(t *testing.T) {
+	t.Parallel()
+
+	repo := newFakeWorkspaceRepo()
+	ws := seedWorkspace(repo, "ws1", false)
+	ws.CreatedBy = "owner-user"
+	editors := newStubKnowledgeEditorRepo()
+	editors.editors[ws.ID] = []string{"user-1"}
+	svc, _ := buildWorkspaceService(repo)
+	svc.SetTenantRoleResolver(stubTenantRole{role: "admin"})
+	svc.SetEditorRepo(editors)
+	desc := "new desc"
+
+	_, err := svc.UpdateWorkspace(context.Background(), "t1", "ws1",
+		UpdateWorkspaceInput{Description: &desc}, "user-1")
+	require.NoError(t, err)
+	require.Len(t, repo.audits, 1)
+}
+
+// TestWorkspaceDeleteEditorDenied pins the delete column: editors never grant
+// delete rights — the creator passes, a granted editor is denied.
+func TestWorkspaceDeleteEditorDenied(t *testing.T) {
+	t.Parallel()
+
+	repo := newFakeWorkspaceRepo()
+	ws := seedWorkspace(repo, "ws1", false)
+	ws.CreatedBy = "user-1"
+	editors := newStubKnowledgeEditorRepo()
+	editors.editors[ws.ID] = []string{"editor-1"}
+	svc, _ := buildWorkspaceService(repo)
+	svc.SetTenantRoleResolver(stubTenantRole{role: "admin"})
+	svc.SetEditorRepo(editors)
+	ctx := reqctx.WithTenantID(context.Background(), "t1")
+
+	err := svc.DeleteWorkspace(ctx, "t1", "ws1", "editor-1")
+	require.ErrorIs(t, err, domain.ErrForbidden)
+	_, ok := repo.workspaces["ws1"]
+	require.True(t, ok, "editor must not delete the workspace")
+
+	require.NoError(t, svc.DeleteWorkspace(ctx, "t1", "ws1", "user-1"))
+	_, ok = repo.workspaces["ws1"]
+	require.False(t, ok, "creator deletes their own workspace")
+}
+
+// TestWorkspaceSetEditorsPinsManagementEndpoint covers the editor management
+// endpoint: creator/owner may replace the set with an audited before/after
+// projection; a granted editor cannot delegate their own right.
+func TestWorkspaceSetEditorsPinsManagementEndpoint(t *testing.T) {
+	t.Parallel()
+
+	t.Run("owner replaces editor set", func(t *testing.T) {
+		t.Parallel()
+		repo := newFakeWorkspaceRepo()
+		ws := seedWorkspace(repo, "ws1", false)
+		ws.CreatedBy = "creator-1"
+		editors := newStubKnowledgeEditorRepo()
+		editors.editors[ws.ID] = []string{"old-editor"}
+		svc, _ := buildWorkspaceService(repo)
+		svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+		svc.SetEditorRepo(editors)
+		ctx := reqctx.WithTenantID(context.Background(), "t1")
+
+		require.NoError(t, svc.SetEditors(ctx, "t1", "ws1", []string{"editor-a", "editor-b"}, "owner-1"))
+		require.Equal(t, []string{"editor-a", "editor-b"}, editors.replaced)
+		require.Equal(t, "owner-1", editors.replaceActor)
+		require.Len(t, editors.audits, 1)
+
+		var before, after map[string]any
+		require.NoError(t, json.Unmarshal(editors.audits[0].Before, &before))
+		require.NoError(t, json.Unmarshal(editors.audits[0].After, &after))
+		require.Equal(t, []any{"old-editor"}, before["editors"])
+		require.Equal(t, []any{"editor-a", "editor-b"}, after["editors"])
+	})
+
+	t.Run("granted editor cannot delegate", func(t *testing.T) {
+		t.Parallel()
+		repo := newFakeWorkspaceRepo()
+		ws := seedWorkspace(repo, "ws1", false)
+		ws.CreatedBy = "creator-1"
+		editors := newStubKnowledgeEditorRepo()
+		editors.editors[ws.ID] = []string{"editor-1"}
+		svc, _ := buildWorkspaceService(repo)
+		svc.SetTenantRoleResolver(stubTenantRole{role: "admin"})
+		svc.SetEditorRepo(editors)
+		ctx := reqctx.WithTenantID(context.Background(), "t1")
+
+		err := svc.SetEditors(ctx, "t1", "ws1", []string{"someone-else"}, "editor-1")
+		require.ErrorIs(t, err, domain.ErrForbidden)
+		require.Nil(t, editors.replaced, "denied replace must not reach the repository")
+	})
+}
+
+// TestWorkspaceListEditorsWrapper pins the detail prefill path: the service
+// delegates straight to the editor repo, skipping when not wired.
+func TestWorkspaceListEditorsWrapper(t *testing.T) {
+	t.Parallel()
+
+	repo := newFakeWorkspaceRepo()
+	ws := seedWorkspace(repo, "ws1", false)
+	editors := newStubKnowledgeEditorRepo()
+	editors.editors[ws.ID] = []string{"editor-a"}
+	svc, _ := buildWorkspaceService(repo)
+	svc.SetEditorRepo(editors)
+
+	got, err := svc.ListEditors(context.Background(), "t1", ws.ID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"editor-a"}, got)
+
+	svcNoRepo, _ := buildWorkspaceService(repo)
+	got, err = svcNoRepo.ListEditors(context.Background(), "t1", ws.ID)
+	require.NoError(t, err)
+	require.Empty(t, got)
 }

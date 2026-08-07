@@ -107,6 +107,7 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 		c.Knowledge.WorkspaceService = knowledge.NewWorkspaceService(repo, ingest, c.Logger)
 		c.Knowledge.WorkspaceService.SetDocRepo(docRepo)
 		c.Knowledge.WorkspaceService.SetVectorStore(vs)
+		c.Knowledge.WorkspaceService.SetEditorRepo(persistence.NewPgResourceEditorRepo(db))
 	}
 	return nil
 }

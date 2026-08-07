@@ -235,8 +235,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		var registry *llmgateway.ModelRegistry
 		var gw *llmgateway.Gateway
 		if c.LLMGateway != nil {
-			registry = c.LLMGateway.Registry
-			gw = c.LLMGateway.Gateway
+			registry, gw = c.LLMGateway.Registry, c.LLMGateway.Gateway
 		}
 		a.TenantResolver = newTenantCapabilityResolver(
 			registry, gw, c.Logger,
@@ -263,6 +262,9 @@ func (c *Container) buildAgent(ctx context.Context) error {
 			members: tenantMemberService(c),
 		}),
 		Logger: c.Logger,
+	}
+	if db != nil {
+		deps.ResourceEditorRepo = persistence.NewPgResourceEditorRepo(db)
 	}
 	if c.Memory != nil {
 		deps.MemoryInjector = c.Memory.Injector
@@ -320,6 +322,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 			deps.Metrics, // nil is normalized to NoopMetrics inside the constructor
 		)
 		a.Service.SetResourceChangeProposalService(a.ProposalService)
+		a.Service.SetResourceChangeApplier(adapters.ApplyDirectFromTool)
 	}
 	wireOperationGate(c, a, deps.Metrics)
 	c.Agent = a

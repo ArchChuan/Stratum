@@ -81,7 +81,7 @@ func TestClientManagerConnectRegistersClient(t *testing.T) {
 	m := newManagerWithFactory(t, func(*MCPServerConfig, *zap.Logger) MCPClient { return client })
 
 	cfg := &MCPServerConfig{ID: "s1", Name: "Server 1", Transport: "stdio", Version: "v1"}
-	err := m.Connect(tenantCtx(t, "t1"), cfg, nil)
+	err := m.Connect(tenantCtx(t, "t1"), cfg, nil, "", nil)
 	require.NoError(t, err)
 	require.Same(t, client, m.GetClient(tenantCtx(t, "t1"), "s1"))
 	// 能力已缓存。
@@ -89,7 +89,7 @@ func TestClientManagerConnectRegistersClient(t *testing.T) {
 	require.True(t, ok)
 
 	// 极端情况：重复连接 → 明确报错。
-	err = m.Connect(tenantCtx(t, "t1"), cfg, nil)
+	err = m.Connect(tenantCtx(t, "t1"), cfg, nil, "", nil)
 	require.ErrorContains(t, err, "already connected")
 }
 
@@ -97,14 +97,14 @@ func TestClientManagerConnectFailures(t *testing.T) {
 	// 极端情况：client 连接失败 → 错误返回且不注册。
 	client := &fakeMCPClient{connectErr: errors.New("refused")}
 	m := newManagerWithFactory(t, func(*MCPServerConfig, *zap.Logger) MCPClient { return client })
-	err := m.Connect(tenantCtx(t, "t1"), &MCPServerConfig{ID: "s1"}, nil)
+	err := m.Connect(tenantCtx(t, "t1"), &MCPServerConfig{ID: "s1"}, nil, "", nil)
 	require.Error(t, err)
 	require.Nil(t, m.GetClient(tenantCtx(t, "t1"), "s1"))
 
 	// 极端情况：scanCapabilities 失败（ListTools 出错）→ 错误返回且不注册。
 	badList := &fakeMCPClient{listErr: errors.New("discovery failed")}
 	m2 := newManagerWithFactory(t, func(*MCPServerConfig, *zap.Logger) MCPClient { return badList })
-	err = m2.Connect(tenantCtx(t, "t1"), &MCPServerConfig{ID: "s2"}, nil)
+	err = m2.Connect(tenantCtx(t, "t1"), &MCPServerConfig{ID: "s2"}, nil, "", nil)
 	require.ErrorContains(t, err, "discover MCP tools")
 	require.Nil(t, m2.GetClient(tenantCtx(t, "t1"), "s2"))
 
@@ -112,7 +112,7 @@ func TestClientManagerConnectFailures(t *testing.T) {
 	m3 := newManagerWithFactory(t, func(*MCPServerConfig, *zap.Logger) MCPClient { return client })
 	m3.poolConfig.MaxPerTenant = 1
 	m3.clients["t1:s3"] = &fakeMCPClient{}
-	err = m3.Connect(tenantCtx(t, "t1"), &MCPServerConfig{ID: "s4"}, nil)
+	err = m3.Connect(tenantCtx(t, "t1"), &MCPServerConfig{ID: "s4"}, nil, "", nil)
 	require.Error(t, err)
 	require.Nil(t, m3.GetClient(tenantCtx(t, "t1"), "s4"))
 }
@@ -219,7 +219,7 @@ func TestClientManagerUpdateServerSwapsClient(t *testing.T) {
 
 	// 换新 client：旧 client 必须被断开，新 client 注册。
 	current = newClient
-	err := m.UpdateServer(tenantCtx(t, "t1"), &MCPServerConfig{ID: "s1", Name: "New", Transport: "http"}, nil)
+	err := m.UpdateServer(tenantCtx(t, "t1"), &MCPServerConfig{ID: "s1", Name: "New", Transport: "http"}, "", nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, old.disconnectCalls)
 	require.Same(t, newClient, m.GetClient(tenantCtx(t, "t1"), "s1"))

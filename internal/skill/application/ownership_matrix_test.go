@@ -31,7 +31,7 @@ type failingVersionRepo struct {
 }
 
 func (f *failingVersionRepo) UpdateDraftBundle(
-	ctx context.Context, skillID, expected string, skill port.SkillProductRow, draft domain.SkillRevision, audit *auditdomain.ResourceChangeAuditEvent,
+	ctx context.Context, skillID, expected string, skill port.SkillProductRow, draft domain.SkillRevision, audit *auditdomain.ResourceChangeAuditEvent, _ string,
 ) (domain.SkillRevision, error) {
 	return domain.SkillRevision{}, f.failErr
 }
@@ -54,7 +54,7 @@ func seedOwnedSkill(t *testing.T, repo *fakeVersionRepo, skillID, createdBy stri
 		ID: skillID, Name: "skill-" + skillID, Description: "desc",
 		Status: "draft", DraftRevisionID: draft.ID, CreatedBy: createdBy,
 	}
-	require.NoError(t, repo.InsertSkillWithDraft(context.Background(), skill, draft, nil))
+	require.NoError(t, repo.InsertSkillWithDraft(context.Background(), skill, draft, nil, nil))
 	return skill, draft
 }
 
@@ -217,4 +217,178 @@ func TestSkillUpdateDraftBundleSystemActorBypassesOwnership(t *testing.T) {
 	require.Equal(t, auditdomain.ChangeSourceOptimization, audit.Source)
 	require.Equal(t, auditdomain.ChangeOpUpdate, audit.Operation)
 	require.Equal(t, skill.ID, audit.ResourceID)
+}
+
+// stubSkillEditorRepo is an in-memory SkillResourceEditorRepo for
+// editor-granted ownership tests. It records the last replace so tests can
+// assert the management-endpoint contract.
+type stubSkillEditorRepo struct {
+	editors      map[string][]string
+	replaceErr   error
+	replaced     []string
+	replaceActor string
+	audits       []*auditdomain.ResourceChangeAuditEvent
+}
+
+func newStubSkillEditorRepo() *stubSkillEditorRepo {
+	return &stubSkillEditorRepo{editors: map[string][]string{}}
+}
+
+func (s *stubSkillEditorRepo) ListEditors(_ context.Context, _, resourceID string) ([]string, error) {
+	return append([]string(nil), s.editors[resourceID]...), nil
+}
+
+func (s *stubSkillEditorRepo) ReplaceEditors(_ context.Context, _, resourceID string, editorIDs []string, createdBy string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	if s.replaceErr != nil {
+		return s.replaceErr
+	}
+	s.editors[resourceID] = append([]string(nil), editorIDs...)
+	s.replaced = editorIDs
+	s.replaceActor = createdBy
+	if audit != nil {
+		s.audits = append(s.audits, audit)
+	}
+	return nil
+}
+
+var _ port.SkillResourceEditorRepo = (*stubSkillEditorRepo)(nil)
+
+// TestVersionServiceEditorGrantedUpdate pins the granted-editor row of the
+// matrix: a foreign admin in the editor set may update the skill draft
+// (update-only, via loadOwnedDraft).
+func TestVersionServiceEditorGrantedUpdate(t *testing.T) {
+	repo := newFakeVersionRepo()
+	_, draft := seedOwnedSkill(t, repo, "skill-1", "owner-user")
+	require.NoError(t, repo.InsertCandidate(context.Background(), draft, nil))
+	editors := newStubSkillEditorRepo()
+	editors.editors["skill-1"] = []string{"user-1"}
+
+	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "admin"})
+	svc.SetEditorRepo(editors)
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+
+	_, err := svc.UpdateCapability(ctx, "skill-1", UpdateCapabilityInput{
+		ActorID: "user-1", Goal: "new goal", WhenToUse: "when", InputSpec: "", OutputSpec: "",
+	})
+	require.NoError(t, err)
+	require.Len(t, repo.audits, 1)
+}
+
+// TestVersionServiceDeleteSkillEditorDenied pins the delete column: editors
+// never grant delete rights — the creator passes, a granted editor is denied.
+func TestVersionServiceDeleteSkillEditorDenied(t *testing.T) {
+	repo := newFakeVersionRepo()
+	seedOwnedSkill(t, repo, "skill-1", "user-1")
+	editors := newStubSkillEditorRepo()
+	editors.editors["skill-1"] = []string{"editor-1"}
+
+	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "admin"})
+	svc.SetEditorRepo(editors)
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+
+	err := svc.DeleteSkill(ctx, "skill-1", "editor-1")
+	require.ErrorIs(t, err, domain.ErrForbidden)
+	_, ok := repo.skills["skill-1"]
+	require.True(t, ok, "editor must not delete the skill")
+
+	require.NoError(t, svc.DeleteSkill(ctx, "skill-1", "user-1"))
+	_, ok = repo.skills["skill-1"]
+	require.False(t, ok, "creator deletes their own skill")
+}
+
+// TestVersionServiceSetEditorsPinsManagementEndpoint covers the editor
+// management endpoint: creator/owner may replace the set with an audited
+// before/after projection; a granted editor cannot delegate their own right;
+// a missing editor repo fails closed.
+func TestVersionServiceSetEditorsPinsManagementEndpoint(t *testing.T) {
+	t.Run("owner replaces editor set", func(t *testing.T) {
+		repo := newFakeVersionRepo()
+		seedOwnedSkill(t, repo, "skill-1", "creator-1")
+		editors := newStubSkillEditorRepo()
+		editors.editors["skill-1"] = []string{"old-editor"}
+		svc := NewVersionService(repo, zap.NewNop())
+		svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+		svc.SetEditorRepo(editors)
+		ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+
+		require.NoError(t, svc.SetEditors(ctx, "skill-1", "owner-1", []string{"editor-a", "editor-b"}))
+		require.Equal(t, []string{"editor-a", "editor-b"}, editors.replaced)
+		require.Equal(t, "owner-1", editors.replaceActor)
+		require.Len(t, editors.audits, 1)
+
+		var before, after map[string]any
+		require.NoError(t, json.Unmarshal(editors.audits[0].Before, &before))
+		require.NoError(t, json.Unmarshal(editors.audits[0].After, &after))
+		require.Equal(t, []any{"old-editor"}, before["editors"])
+		require.Equal(t, []any{"editor-a", "editor-b"}, after["editors"])
+	})
+
+	t.Run("granted editor cannot delegate", func(t *testing.T) {
+		repo := newFakeVersionRepo()
+		seedOwnedSkill(t, repo, "skill-1", "creator-1")
+		editors := newStubSkillEditorRepo()
+		editors.editors["skill-1"] = []string{"editor-1"}
+		svc := NewVersionService(repo, zap.NewNop())
+		svc.SetTenantRoleResolver(stubTenantRole{role: "admin"})
+		svc.SetEditorRepo(editors)
+		ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+
+		err := svc.SetEditors(ctx, "skill-1", "editor-1", []string{"someone-else"})
+		require.ErrorIs(t, err, domain.ErrForbidden)
+		require.Nil(t, editors.replaced, "denied replace must not reach the repository")
+	})
+
+	t.Run("missing editor repo fails closed", func(t *testing.T) {
+		repo := newFakeVersionRepo()
+		seedOwnedSkill(t, repo, "skill-1", "creator-1")
+		svc := NewVersionService(repo, zap.NewNop())
+		svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+		ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+
+		err := svc.SetEditors(ctx, "skill-1", "owner-1", []string{"x"})
+		require.Error(t, err)
+	})
+}
+
+// TestVersionServiceGetWorkspaceInjectsEditors pins the detail projection:
+// the current editor set is read through the editor repo; a missing repo
+// yields empty editors.
+func TestVersionServiceGetWorkspaceInjectsEditors(t *testing.T) {
+	repo := newFakeVersionRepo()
+	seedOwnedSkill(t, repo, "skill-1", "user-1")
+	editors := newStubSkillEditorRepo()
+	editors.editors["skill-1"] = []string{"editor-a"}
+	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetEditorRepo(editors)
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+
+	view, err := svc.GetWorkspace(ctx, "skill-1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"editor-a"}, view.Editors)
+
+	svcNoRepo := NewVersionService(repo, zap.NewNop())
+	view, err = svcNoRepo.GetWorkspace(ctx, "skill-1")
+	require.NoError(t, err)
+	require.Empty(t, view.Editors)
+}
+
+// TestSkillUpdateDraftBundleEmptyFingerprintBypassesStaleness pins the direct
+// write contract: an empty baseline (system assistant direct write) skips
+// optimistic concurrency entirely — it must not read as stale — while the
+// write is still owned and audited.
+func TestSkillUpdateDraftBundleEmptyFingerprintBypassesStaleness(t *testing.T) {
+	repo := newFakeVersionRepo()
+	seedOwnedSkill(t, repo, "skill-1", "user-1")
+	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+
+	_, err := svc.UpdateDraftBundle(context.Background(), "skill-1", "", UpdateDraftBundleInput{
+		Name: "direct-update", Description: "desc", Instructions: "new instructions",
+		ActorID: "user-1",
+	})
+	require.NoError(t, err)
+	require.Len(t, repo.audits, 1)
+	require.Equal(t, auditdomain.ChangeOpUpdate, repo.audits[0].Operation)
 }

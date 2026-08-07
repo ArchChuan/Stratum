@@ -59,3 +59,14 @@ func AgentSafeProjection(cfg *domain.AgentConfig) map[string]any {
 		"skillIds": cfg.AllowedSkills, "mcpToolIds": cfg.MCPToolIDs, "workspaceIds": cfg.KnowledgeWorkspaceIDs,
 	}
 }
+
+// AgentSafeProjectionWithEditors extends the safe projection with the granted
+// editor set (used by the editor-management audit).
+func AgentSafeProjectionWithEditors(cfg *domain.AgentConfig, editors []string) map[string]any {
+	p := AgentSafeProjection(cfg)
+	if editors == nil {
+		editors = []string{}
+	}
+	p["editors"] = editors
+	return p
+}

@@ -27,9 +27,11 @@ type lifecycleManagerFake struct {
 	stored       *domain.ServerConfig
 	updateErr    error
 	audits       []*auditdomain.ResourceChangeAuditEvent
+	editors      []string
+	replaceActor string
 }
 
-func (f *lifecycleManagerFake) Connect(_ context.Context, _ *domain.ServerConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
+func (f *lifecycleManagerFake) Connect(_ context.Context, _ *domain.ServerConfig, _ []string, _ string, audit *auditdomain.ResourceChangeAuditEvent) error {
 	if audit != nil {
 		f.audits = append(f.audits, audit)
 	}
@@ -40,7 +42,7 @@ func (f *lifecycleManagerFake) Disconnect(_ context.Context, serverID string) er
 	return nil
 }
 func (f *lifecycleManagerFake) Reconnect(context.Context, string) error { return nil }
-func (f *lifecycleManagerFake) UpdateServer(_ context.Context, _ *domain.ServerConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
+func (f *lifecycleManagerFake) UpdateServer(_ context.Context, _ *domain.ServerConfig, _ string, audit *auditdomain.ResourceChangeAuditEvent) error {
 	f.updated = true
 	if audit != nil {
 		f.audits = append(f.audits, audit)
@@ -66,7 +68,7 @@ func TestPlatformManagedServerMutationsAreRejectedBeforeLifecycleChange(t *testi
 		act  func(*MCPService) error
 	}{
 		{name: "connect overwrite", act: func(s *MCPService) error {
-			return s.ConnectServer(t.Context(), &domain.ServerConfig{ID: "stratum-platform-mcp"}, "user-1")
+			return s.ConnectServer(t.Context(), &domain.ServerConfig{ID: "stratum-platform-mcp"}, nil, "user-1")
 		}},
 		{name: "update", act: func(s *MCPService) error {
 			return s.UpdateServer(t.Context(), &domain.ServerConfig{ID: "stratum-platform-mcp"}, "user-1")
@@ -117,6 +119,17 @@ func TestPlatformManagedServerSystemKeyFailsClosedWithoutManagementMode(t *testi
 }
 func (f *lifecycleManagerFake) ListTools(context.Context, string) ([]*domain.Tool, error) {
 	return nil, nil
+}
+func (f *lifecycleManagerFake) ListEditors(context.Context, string, string) ([]string, error) {
+	return append([]string(nil), f.editors...), nil
+}
+func (f *lifecycleManagerFake) ReplaceEditors(_ context.Context, _, _ string, editorIDs []string, createdBy string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	f.editors = append([]string(nil), editorIDs...)
+	f.replaceActor = createdBy
+	if audit != nil {
+		f.audits = append(f.audits, audit)
+	}
+	return nil
 }
 func (f *lifecycleManagerFake) ListResources(context.Context, string) ([]*domain.Resource, error) {
 	return nil, nil

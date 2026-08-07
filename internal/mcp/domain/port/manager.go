@@ -14,17 +14,31 @@ import (
 // business write (audit failure rolls the change back). Callers must always
 // construct the event on user-facing write paths; nil is reserved for
 // internal reentrant paths (restore/reconnect).
+//
+// editors (Connect) carries the granted editor set on the create path and is
+// written in the same transaction as the config row; editorActor (Connect and
+// UpdateServer) is non-empty when a granted editor performs the update — the
+// transaction then re-validates the actor's role and editor membership,
+// closing the check-then-write TOCTOU window.
 type ServerManager interface {
-	Connect(ctx context.Context, cfg *domain.ServerConfig, audit *auditdomain.ResourceChangeAuditEvent) error
+	Connect(ctx context.Context, cfg *domain.ServerConfig, editors []string, editorActor string, audit *auditdomain.ResourceChangeAuditEvent) error
 	Disconnect(ctx context.Context, serverID string) error
 	Reconnect(ctx context.Context, serverID string) error
-	UpdateServer(ctx context.Context, cfg *domain.ServerConfig, audit *auditdomain.ResourceChangeAuditEvent) error
+	UpdateServer(ctx context.Context, cfg *domain.ServerConfig, editorActor string, audit *auditdomain.ResourceChangeAuditEvent) error
 	Delete(ctx context.Context, serverID string, audit *auditdomain.ResourceChangeAuditEvent) error
 	GetServerConfig(ctx context.Context, serverID string) (*domain.ServerConfig, error)
 	ListTools(ctx context.Context, serverID string) ([]*domain.Tool, error)
 	ListResources(ctx context.Context, serverID string) ([]*domain.Resource, error)
 	GetServerInfo(ctx context.Context, serverID string) *domain.ServerInfo
 	GetAllServerInfo(ctx context.Context) []*domain.ServerInfo
+	// ListEditors returns the editor ids of a server config, or an empty slice.
+	ListEditors(ctx context.Context, tenantID, serverID string) ([]string, error)
+	// ReplaceEditors atomically swaps the editor set. Each editor must hold
+	// role admin or owner at write time (checked inside the transaction,
+	// fail closed); a non-eligible id returns domain.ErrEditorNotEligible.
+	// audit, when non-nil, is written in the SAME transaction (audit failure
+	// rolls the editor change back).
+	ReplaceEditors(ctx context.Context, tenantID, serverID string, editorIDs []string, createdBy string, audit *auditdomain.ResourceChangeAuditEvent) error
 	// RemoveTenant disconnects all connections belonging to tenantID.
 	RemoveTenant(ctx context.Context, tenantID string) error
 	// Quota returns connection accounting for the tenant derived from ctx.

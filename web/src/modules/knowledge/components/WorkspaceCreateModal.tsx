@@ -12,6 +12,7 @@ import {
   KNOWLEDGE_MIN_CHUNK_SIZE,
   KNOWLEDGE_MIN_TOP_K,
 } from '@/constants';
+import type { Member } from '@/modules/iam';
 
 export interface WorkspaceCreateValues {
   name: string;
@@ -22,6 +23,7 @@ export interface WorkspaceCreateValues {
   chunk_overlap?: number;
   query_mode?: string;
   top_k?: number;
+  editors?: string[];
 }
 
 interface WorkspaceCreateModalProps {
@@ -31,6 +33,8 @@ interface WorkspaceCreateModalProps {
   onClose: () => void;
   onSubmit: (values: WorkspaceCreateValues) => void;
   embeddingModels: string[];
+  editorCandidates: Member[];
+  editorCandidatesLoading?: boolean;
 }
 
 export function WorkspaceCreateModal({
@@ -40,6 +44,8 @@ export function WorkspaceCreateModal({
   onClose,
   onSubmit,
   embeddingModels,
+  editorCandidates,
+  editorCandidatesLoading = false,
 }: WorkspaceCreateModalProps) {
   return (
     <Modal
@@ -107,6 +113,25 @@ export function WorkspaceCreateModal({
             max={KNOWLEDGE_MAX_TOP_K}
             style={{ width: '100%' }}
           />
+        </Form.Item>
+        <Form.Item
+          label="可编辑人"
+          name="editors"
+          extra="可编辑人（租户管理员）可以修改此知识库；删除仍仅限创建者或超级管理员"
+        >
+          <Select
+            mode="multiple"
+            placeholder="选择可编辑的管理员"
+            allowClear
+            loading={editorCandidatesLoading}
+            style={{ width: '100%' }}
+          >
+            {editorCandidates.map((member) => (
+              <Select.Option key={member.user_id} value={member.user_id}>
+                {member.github_login || member.user_id}
+              </Select.Option>
+            ))}
+          </Select>
         </Form.Item>
         <Collapse
           ghost

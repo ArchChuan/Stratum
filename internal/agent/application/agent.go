@@ -74,6 +74,7 @@ type ExecutionConfig struct {
 	OfficialDocsSearchFn      func(context.Context, string) ([]domain.Citation, error)
 	DiagnosticFn              func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)
 	ProposalCreateFn          func(context.Context, map[string]any) (domain.ResourceChangeProposalArtifact, error)
+	ResourceChangeApplyFn     func(context.Context, map[string]any) (domain.ApplyResult, error)
 	InternalToolResultGuardFn func(any) (port.GuardedToolResult, error)
 }
 
@@ -703,6 +704,7 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		OfficialDocsSearchFn:       ec.cfg.OfficialDocsSearchFn,
 		DiagnosticFn:               ec.cfg.DiagnosticFn,
 		ProposalCreateFn:           ec.cfg.ProposalCreateFn,
+		ResourceChangeApplyFn:      ec.cfg.ResourceChangeApplyFn,
 		InternalToolResultGuardFn:  ec.cfg.InternalToolResultGuardFn,
 		MaxLLMSteps:                ec.cfg.MaxSteps,
 		MaxContextTokens:           maxTokens,
@@ -1107,6 +1109,12 @@ func withProposalCreateFn(fn func(context.Context, map[string]any) (domain.Resou
 	return func(cfg *ExecutionConfig) { cfg.ProposalCreateFn = fn }
 }
 
+// withResourceChangeApplyFn attaches the in-process direct-write capability
+// (stratum_apply_resource_change) used by the system assistant tool.
+func withResourceChangeApplyFn(fn func(context.Context, map[string]any) (domain.ApplyResult, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.ResourceChangeApplyFn = fn }
+}
+
 func withInternalToolResultGuard(fn func(any) (port.GuardedToolResult, error)) ExecutionOption {
 	return func(cfg *ExecutionConfig) { cfg.InternalToolResultGuardFn = fn }
 }
@@ -1288,26 +1296,9 @@ func buildExecutionArtifacts(toolArtifacts []domain.SystemAssistantToolArtifact,
 	hasReport := false
 	out := make([]domain.ExecutionArtifact, 0, 3)
 	for _, artifact := range toolArtifacts {
-		if artifact.Proposal != nil {
-			proposal := *artifact.Proposal
-			out = append(out, domain.ExecutionArtifact{Type: "resource_change_proposal", ProfileVersion: profileVersion, ResourceChangeProposal: &proposal})
-		}
-		if artifact.Tool == "stratum_search_official_docs" {
-			for _, citation := range domain.BoundCitations(artifact.Citations) {
-				key := citation.DocumentID + "\x00" + citation.Section + "\x00" + citation.URL
-				if _, ok := seenCitations[key]; ok {
-					continue
-				}
-				seenCitations[key] = struct{}{}
-				if len(citations) < constants.SystemAssistantCitationMaxCount {
-					citations = append(citations, citation)
-				}
-			}
-		}
-		if artifact.Evidence != nil || artifact.Tool == "stratum_diagnose_tenant" {
-			hasReport = true
-		}
-		if artifact.ErrorCode != "" {
+		out = append(out, resourceChangeExecutionArtifacts(artifact, profileVersion)...)
+		citations = appendUniqueExecutionCitations(citations, seenCitations, artifact.Citations)
+		if artifact.Evidence != nil || artifact.Tool == "stratum_diagnose_tenant" || artifact.ErrorCode != "" {
 			hasReport = true
 		}
 	}
@@ -1318,6 +1309,36 @@ func buildExecutionArtifacts(toolArtifacts []domain.SystemAssistantToolArtifact,
 		out = append(out, domain.ExecutionArtifact{Type: "diagnostic_report", ProfileVersion: profileVersion, DiagnosticReport: domain.BuildDiagnosticReport(toolArtifacts)})
 	}
 	return boundExecutionArtifactsJSON(out)
+}
+
+// resourceChangeExecutionArtifacts maps proposal and direct-apply evidence
+// onto their own execution artifact types.
+func resourceChangeExecutionArtifacts(artifact domain.SystemAssistantToolArtifact, profileVersion string) []domain.ExecutionArtifact {
+	out := make([]domain.ExecutionArtifact, 0, 2)
+	if artifact.Proposal != nil {
+		proposal := *artifact.Proposal
+		out = append(out, domain.ExecutionArtifact{Type: "resource_change_proposal", ProfileVersion: profileVersion, ResourceChangeProposal: &proposal})
+	}
+	if artifact.Tool == domain.SystemAssistantToolApplyResourceChange && artifact.DirectApply != nil {
+		apply := *artifact.DirectApply
+		out = append(out, domain.ExecutionArtifact{Type: "resource_change_direct_apply", ProfileVersion: profileVersion, DirectApply: &apply})
+	}
+	return out
+}
+
+// appendUniqueExecutionCitations dedups bounded citations within the catalog cap.
+func appendUniqueExecutionCitations(dst []domain.Citation, seen map[string]struct{}, values []domain.Citation) []domain.Citation {
+	for _, citation := range domain.BoundCitations(values) {
+		key := citation.DocumentID + "\x00" + citation.Section + "\x00" + citation.URL
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		if len(dst) < constants.SystemAssistantCitationMaxCount {
+			dst = append(dst, citation)
+		}
+	}
+	return dst
 }
 
 func boundExecutionArtifactsJSON(artifacts []domain.ExecutionArtifact) []domain.ExecutionArtifact {

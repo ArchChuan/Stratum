@@ -166,6 +166,75 @@ func (m *ClientManager) checkConnectionLimits(tenantID string) error {
 	return nil
 }
 
+// resourceEditorKind identifies mcp rows in the shared resource_editors table.
+const resourceEditorKind = "mcp"
+
+// editorEligible checks, inside the write transaction, that userID currently
+// holds role admin or owner in the tenant. Fail closed on any lookup error.
+// public.tenant_members is schema-qualified: the transaction search_path
+// points at the tenant schema.
+func editorEligible(ctx context.Context, tx pgx.Tx, tenantID, userID string) (bool, error) {
+	var ok bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS(
+			SELECT 1 FROM public.tenant_members
+			WHERE tenant_id=$1 AND user_id=$2 AND role IN ('admin','owner'))`,
+		tenantID, userID,
+	).Scan(&ok); err != nil {
+		return false, fmt.Errorf("editor role check: %w", err)
+	}
+	return ok, nil
+}
+
+// insertEditors validates and persists the editor set inside the write
+// transaction. A non-eligible id fails the whole transaction (fail closed),
+// so a forged editor can never be created alongside the resource.
+func insertEditors(ctx context.Context, tx pgx.Tx, tenantID, kind, resourceID string, editorIDs []string, createdBy string) error {
+	for _, id := range editorIDs {
+		eligible, err := editorEligible(ctx, tx, tenantID, id)
+		if err != nil {
+			return err
+		}
+		if !eligible {
+			return fmt.Errorf("%w: user %s", mcpdomain.ErrEditorNotEligible, id)
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO resource_editors (resource_kind, resource_id, editor_id, created_by)
+			 VALUES ($1,$2,$3,$4)`,
+			kind, resourceID, id, createdBy,
+		); err != nil {
+			return fmt.Errorf("insert editor %s: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// revalidateEditorAccess re-checks, inside the write transaction, that the
+// actor still qualifies as an editor of this resource: role admin/owner AND
+// present in resource_editors. Both checks share the transaction with the
+// business UPDATE, closing the check-then-write TOCTOU window.
+func revalidateEditorAccess(ctx context.Context, tx pgx.Tx, tenantID, kind, resourceID, actorID string) error {
+	eligible, err := editorEligible(ctx, tx, tenantID, actorID)
+	if err != nil {
+		return err
+	}
+	if !eligible {
+		return mcpdomain.ErrForbidden
+	}
+	var present bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM resource_editors
+			WHERE resource_kind=$1 AND resource_id=$2 AND editor_id=$3)`,
+		kind, resourceID, actorID,
+	).Scan(&present); err != nil {
+		return fmt.Errorf("editor membership check: %w", err)
+	}
+	if !present {
+		return mcpdomain.ErrForbidden
+	}
+	return nil
+}
+
 // insertChangeAudit inserts the audit row in the SAME transaction as the
 // business write; an audit failure rolls the business change back (fail
 // closed). A nil event skips auditing — reserved for internal reentrant
@@ -194,7 +263,7 @@ func insertChangeAudit(ctx context.Context, tx pgx.Tx, ev *auditdomain.ResourceC
 	return nil
 }
 
-func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
+func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig, editors []string, editorActor string, audit *auditdomain.ResourceChangeAuditEvent) error {
 	if m.pool == nil {
 		return nil
 	}
@@ -241,6 +310,23 @@ func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig
 		if execErr != nil {
 			return execErr
 		}
+		tc, ok := tenantdb.FromContext(ctx)
+		if !ok || tc.TenantID == "" {
+			return fmt.Errorf("persist mcp config %s: missing tenant context", cfg.ID)
+		}
+		// A granted editor performing an update is re-validated inside the
+		// write transaction (role + editor membership), closing the
+		// check-then-write TOCTOU window.
+		if editorActor != "" {
+			if err := revalidateEditorAccess(ctx, tx, tc.TenantID, resourceEditorKind, cfg.ID, editorActor); err != nil {
+				return err
+			}
+		}
+		// Create path: the granted editor set lands in the same transaction
+		// as the config row; update paths pass nil and leave it untouched.
+		if err := insertEditors(ctx, tx, tc.TenantID, resourceEditorKind, cfg.ID, editors, cfg.CreatedBy); err != nil {
+			return err
+		}
 		return insertChangeAudit(ctx, tx, audit)
 	})
 	if err != nil {
@@ -264,7 +350,7 @@ func (m *ClientManager) persistDisconnect(ctx context.Context, serverID string) 
 }
 
 // Connect 连接到 MCP 服务器
-func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
+func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig, editors []string, editorActor string, audit *auditdomain.ResourceChangeAuditEvent) error {
 	m.mu.Lock()
 	key := tenantKey(tenantIDFromCtx(ctx), config.ID)
 	if _, exists := m.clients[key]; exists {
@@ -307,7 +393,7 @@ func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig, au
 		return err
 	}
 
-	tools, resources, err := m.scanCapabilities(ctx, client, config, key, audit)
+	tools, resources, err := m.scanCapabilities(ctx, client, config, key, editors, editorActor, audit)
 	if err != nil {
 		_ = disconnectMCPClient(client)
 		m.mu.Lock()
@@ -340,7 +426,7 @@ func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig, au
 // scanCapabilities discovers tools and resources from a connected client,
 // caches them, and persists the config.
 func (m *ClientManager) scanCapabilities(
-	ctx context.Context, client MCPClient, config *MCPServerConfig, key string, audit *auditdomain.ResourceChangeAuditEvent,
+	ctx context.Context, client MCPClient, config *MCPServerConfig, key string, editors []string, editorActor string, audit *auditdomain.ResourceChangeAuditEvent,
 ) ([]*MCPTool, []*MCPResource, error) {
 	tools, err := client.ListTools(ctx)
 	if err != nil {
@@ -351,7 +437,7 @@ func (m *ClientManager) scanCapabilities(
 		return nil, nil, fmt.Errorf("discover MCP resources: %w", err)
 	}
 	m.cache.Store(key, tools, resources)
-	if err := m.persistConnect(ctx, config, audit); err != nil {
+	if err := m.persistConnect(ctx, config, editors, editorActor, audit); err != nil {
 		m.cache.Delete(key)
 		return nil, nil, err
 	}
@@ -411,7 +497,7 @@ func (m *ClientManager) getOrRestoreClient(ctx context.Context, serverID string)
 		return nil, fmt.Errorf("client not found: %s", serverID)
 	}
 
-	if err := m.Connect(ctx, cfg, nil); err != nil {
+	if err := m.Connect(ctx, cfg, nil, "", nil); err != nil {
 		// Re-check: concurrent goroutine may have just registered the client
 		// between our GetClient and Connect (Connect deduplicates via m.connecting).
 		if client := m.GetClient(ctx, serverID); client != nil {
@@ -861,7 +947,7 @@ func (m *ClientManager) restoreServer(ctx context.Context, tenantID string, cfg 
 	connectCtx := tenantdb.WithTenant(ctx, &tenantdb.TenantContext{
 		TenantID: tenantID, Role: tenantdb.RoleTenantAdmin,
 	})
-	if err := m.Connect(connectCtx, cfg, nil); err != nil {
+	if err := m.Connect(connectCtx, cfg, nil, "", nil); err != nil {
 		m.logger.Warn("RestoreFromDB: failed to reconnect MCP server",
 			zap.String("tenant_id", tenantID),
 			zap.String("server_id", cfg.ID),
@@ -1074,7 +1160,7 @@ func (m *ClientManager) scanOrphaned() {
 					_ = disconnectMCPClient(old)
 				}
 				m.mu.Unlock()
-				if connErr := m.Connect(ctx, cfg, nil); connErr != nil {
+				if connErr := m.Connect(ctx, cfg, nil, "", nil); connErr != nil {
 					m.logger.Warn("failover: connect failed",
 						zap.String("server_id", serverID),
 						zap.Error(connErr))
@@ -1181,7 +1267,7 @@ func (m *ClientManager) GetAllServerInfo(ctx context.Context) []*MCPServerInfo {
 }
 
 // UpdateServer disconnects the existing connection and reconnects with the new config.
-func (m *ClientManager) UpdateServer(ctx context.Context, cfg *MCPServerConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
+func (m *ClientManager) UpdateServer(ctx context.Context, cfg *MCPServerConfig, editorActor string, audit *auditdomain.ResourceChangeAuditEvent) error {
 	key := tenantKey(tenantIDFromCtx(ctx), cfg.ID)
 	m.mu.Lock()
 	var old MCPClient
@@ -1195,7 +1281,7 @@ func (m *ClientManager) UpdateServer(ctx context.Context, cfg *MCPServerConfig, 
 	if old != nil {
 		_ = old.Disconnect(ctx)
 	}
-	return m.Connect(ctx, cfg, audit)
+	return m.Connect(ctx, cfg, nil, editorActor, audit)
 }
 
 // Reconnect reads the saved config for serverID from DB and reconnects.
@@ -1204,7 +1290,7 @@ func (m *ClientManager) Reconnect(ctx context.Context, serverID string) error {
 	if err != nil {
 		return fmt.Errorf("reconnect %s: %w", serverID, err)
 	}
-	return m.Connect(ctx, cfg, nil)
+	return m.Connect(ctx, cfg, nil, "", nil)
 }
 
 // Delete disconnects the server if connected and hard-deletes its config from DB.
@@ -1229,6 +1315,69 @@ func (m *ClientManager) Delete(ctx context.Context, serverID string, audit *audi
 	}
 	return tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `DELETE FROM mcp_configs WHERE id=$1`, serverID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM resource_editors WHERE resource_kind=$1 AND resource_id=$2`,
+			resourceEditorKind, serverID,
+		); err != nil {
+			return fmt.Errorf("delete editors: %w", err)
+		}
+		return insertChangeAudit(ctx, tx, audit)
+	})
+}
+
+// ListEditors returns the editor ids of a server config, or an empty slice.
+func (m *ClientManager) ListEditors(ctx context.Context, tenantID, serverID string) ([]string, error) {
+	if m.pool == nil {
+		return []string{}, nil
+	}
+	out := make([]string, 0)
+	err := tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT editor_id FROM resource_editors
+			  WHERE resource_kind=$1 AND resource_id=$2
+			  ORDER BY created_at`,
+			resourceEditorKind, serverID,
+		)
+		if err != nil {
+			return fmt.Errorf("list editors: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return fmt.Errorf("scan editor: %w", err)
+			}
+			out = append(out, id)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = []string{}
+	}
+	return out, nil
+}
+
+// ReplaceEditors atomically swaps the editor set. Each editor must hold role
+// admin or owner at write time (checked inside the transaction, fail closed);
+// a non-eligible id returns mcpdomain.ErrEditorNotEligible. The audit event,
+// when non-nil, is written in the same transaction.
+func (m *ClientManager) ReplaceEditors(ctx context.Context, tenantID, serverID string, editorIDs []string, createdBy string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	if m.pool == nil {
+		return nil
+	}
+	return tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM resource_editors WHERE resource_kind=$1 AND resource_id=$2`,
+			resourceEditorKind, serverID,
+		); err != nil {
+			return fmt.Errorf("replace editors: clear: %w", err)
+		}
+		if err := insertEditors(ctx, tx, tenantID, resourceEditorKind, serverID, editorIDs, createdBy); err != nil {
 			return err
 		}
 		return insertChangeAudit(ctx, tx, audit)

@@ -17,7 +17,7 @@ type deleteWorkspaceRepo struct {
 	getByID   string
 }
 
-func (r *deleteWorkspaceRepo) Create(context.Context, string, *domain.Workspace, *auditdomain.ResourceChangeAuditEvent) error {
+func (r *deleteWorkspaceRepo) Create(context.Context, string, *domain.Workspace, []string, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (r *deleteWorkspaceRepo) List(context.Context, string) ([]*domain.Workspace, error) {
@@ -30,7 +30,7 @@ func (r *deleteWorkspaceRepo) GetByID(_ context.Context, _, id string) (*domain.
 	r.getByID = id
 	return r.workspace, nil
 }
-func (r *deleteWorkspaceRepo) UpdateWorkspaceAll(context.Context, string, string, *string, *string, domain.WorkspaceConfig, *auditdomain.ResourceChangeAuditEvent) error {
+func (r *deleteWorkspaceRepo) UpdateWorkspaceAll(context.Context, string, string, *string, *string, domain.WorkspaceConfig, string, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (r *deleteWorkspaceRepo) Delete(context.Context, string, string, *auditdomain.ResourceChangeAuditEvent) error {

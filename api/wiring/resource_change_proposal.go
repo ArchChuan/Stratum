@@ -37,7 +37,7 @@ type proposalSkillService interface {
 }
 
 type proposalMCPService interface {
-	ConnectServer(context.Context, *mcpdomain.ServerConfig, string) error
+	ConnectServer(context.Context, *mcpdomain.ServerConfig, []string, string) error
 	UpdateServer(context.Context, *mcpdomain.ServerConfig, string) error
 	GetServerConfig(context.Context, string) (*mcpdomain.ServerConfig, error)
 }
@@ -151,15 +151,82 @@ func (a *ResourceChangeProposalAdapters) ApplyResourceChange(
 	ctx context.Context,
 	envelope agentdomain.ProposalEnvelope,
 ) (agentdomain.ApplyResult, error) {
+	proposal := envelope.Proposal
 	switch payload := envelope.Payload.(type) {
 	case *agentdomain.AgentChange:
-		return a.applyAgent(ctx, envelope.Proposal, payload)
+		ctx, actorID := proposalApplyContext(ctx, proposal)
+		return a.applyAgentChange(ctx, proposal.TenantID, proposal.ResourceID, proposal.Operation, payload, actorID)
 	case *agentdomain.SkillDraftChange:
-		return a.applySkill(ctx, envelope.Proposal, payload)
+		ctx, actorID := proposalApplyContext(ctx, proposal)
+		return a.applySkillChange(ctx, proposal.TenantID, proposal.ResourceID, proposal.BaselineFingerprint,
+			proposal.Operation, payload, actorID)
 	case *agentdomain.MCPConfigChange:
-		return a.applyMCP(ctx, envelope.Proposal, payload)
+		ctx, actorID := proposalApplyContext(ctx, proposal)
+		return a.applyMCPChange(ctx, proposal.TenantID, proposal.ResourceID, proposal.Operation, payload, actorID)
 	case *agentdomain.KnowledgeWorkspaceChange:
-		return a.applyKnowledge(ctx, envelope.Proposal, payload)
+		ctx, actorID := proposalApplyContext(ctx, proposal)
+		return a.applyKnowledgeChange(ctx, proposal.TenantID, proposal.ResourceID, proposal.Operation, payload, actorID)
+	default:
+		return agentdomain.ApplyResult{}, definiteApplyError(agentdomain.ErrProposalInvalid)
+	}
+}
+
+// ApplyDirect applies a resource change immediately, bypassing the proposal
+// lifecycle. Used by the system assistant in-process direct-write tool:
+// payload is decoded strictly (unknown fields rejected), tenant identity is
+// stamped on ctx, and the audit row is written with source=system_assistant.
+// Ownership is still enforced by the service layer against actorID (the
+// conversation initiator) — the direct write is not an isolation bypass.
+// ApplyDirectFromTool adapts the system assistant tool argument map into the
+// typed ApplyDirect entry point. TenantID is read from the execution context;
+// actorID is the conversation initiator whose permissions are inherited.
+func (a *ResourceChangeProposalAdapters) ApplyDirectFromTool(
+	ctx context.Context,
+	actorID string,
+	args map[string]any,
+) (agentdomain.ApplyResult, error) {
+	tenantID := reqctx.TenantIDFromContext(ctx)
+	if tenantID == "" {
+		return agentdomain.ApplyResult{}, definiteApplyError(agentdomain.ErrProposalInvalid)
+	}
+	kind, operation, resourceID, payload, parseErr := agentapp.ParseResourceChangeToolArguments(args)
+	if parseErr != nil {
+		return agentdomain.ApplyResult{}, definiteApplyError(parseErr)
+	}
+	return a.ApplyDirect(ctx, tenantID, actorID, kind, operation, resourceID, payload)
+}
+
+func (a *ResourceChangeProposalAdapters) ApplyDirect(
+	ctx context.Context,
+	tenantID, actorID string,
+	kind agentdomain.ResourceKind,
+	operation agentdomain.ProposalOperation,
+	resourceID string,
+	payload []byte,
+) (agentdomain.ApplyResult, error) {
+	if operation == agentdomain.OperationUpdate && resourceID == "" {
+		return agentdomain.ApplyResult{}, definiteApplyError(agentdomain.ErrProposalInvalid)
+	}
+	if operation == agentdomain.OperationCreate && resourceID != "" {
+		return agentdomain.ApplyResult{}, definiteApplyError(agentdomain.ErrProposalInvalid)
+	}
+	decoded, err := agentdomain.DecodeProposalPayload(kind, operation, payload)
+	if err != nil {
+		return agentdomain.ApplyResult{}, definiteApplyError(err)
+	}
+	ctx = reqctx.WithTenantID(ctx, tenantID)
+	ctx = reqctx.WithChangeSource(ctx, auditdomain.ChangeSourceSystemAssistantDirect, "")
+	switch change := decoded.(type) {
+	case *agentdomain.AgentChange:
+		return a.applyAgentChange(ctx, tenantID, resourceID, operation, change, actorID)
+	case *agentdomain.SkillDraftChange:
+		// Direct writes have no baseline: the fingerprint is intentionally
+		// empty, matching the semantics of a plain API update.
+		return a.applySkillChange(ctx, tenantID, resourceID, "", operation, change, actorID)
+	case *agentdomain.MCPConfigChange:
+		return a.applyMCPChange(ctx, tenantID, resourceID, operation, change, actorID)
+	case *agentdomain.KnowledgeWorkspaceChange:
+		return a.applyKnowledgeChange(ctx, tenantID, resourceID, operation, change, actorID)
 	default:
 		return agentdomain.ApplyResult{}, definiteApplyError(agentdomain.ErrProposalInvalid)
 	}
@@ -181,31 +248,32 @@ func proposalApplyContext(ctx context.Context, proposal agentdomain.ResourceChan
 	return ctx, actorID
 }
 
-func (a *ResourceChangeProposalAdapters) applyAgent(
+func (a *ResourceChangeProposalAdapters) applyAgentChange(
 	ctx context.Context,
-	proposal agentdomain.ResourceChangeProposal,
+	tenantID, resourceID string,
+	operation agentdomain.ProposalOperation,
 	change *agentdomain.AgentChange,
+	actorID string,
 ) (agentdomain.ApplyResult, error) {
-	ctx, actorID := proposalApplyContext(ctx, proposal)
 	var value agentapp.AgentDTO
 	var err error
-	if proposal.Operation == agentdomain.OperationCreate {
+	if operation == agentdomain.OperationCreate {
 		value, err = a.agents.Create(ctx, agentapp.CreateAgentInput{
-			TenantID: proposal.TenantID, Name: change.Name, Type: "react", Description: change.Description,
+			TenantID: tenantID, Name: change.Name, Type: "react", Description: change.Description,
 			LLMModel: change.Model, MaxIterations: change.MaxIterations, MaxContextTokens: change.MaxContextTokens,
 			AllowedSkills: change.SkillIDs, MCPToolIDs: change.MCPToolIDs,
 			KnowledgeWorkspaceIDs: change.WorkspaceIDs, MemoryScope: "user",
 			ActorID: actorID,
 		})
 	} else {
-		existing, getErr := a.agents.Get(ctx, proposal.ResourceID)
+		existing, getErr := a.agents.Get(ctx, resourceID)
 		if getErr != nil {
 			return agentdomain.ApplyResult{}, definiteApplyError(getErr)
 		}
 		if existing.SystemKey != "" {
 			return agentdomain.ApplyResult{}, definiteApplyError(agentdomain.ErrSystemAssistantManaged)
 		}
-		value, err = a.agents.Update(ctx, proposal.ResourceID, agentapp.UpdateAgentInput{
+		value, err = a.agents.Update(ctx, resourceID, agentapp.UpdateAgentInput{
 			Name: change.Name, Type: existing.Type, Description: change.Description, SystemPrompt: existing.SystemPrompt,
 			LLMModel: change.Model, MaxIterations: change.MaxIterations, MaxContextTokens: change.MaxContextTokens,
 			AllowedSkills: change.SkillIDs, MCPToolIDs: change.MCPToolIDs,
@@ -219,21 +287,22 @@ func (a *ResourceChangeProposalAdapters) applyAgent(
 	return safeApplyResult(value.ID, agentSafeProjection(value))
 }
 
-func (a *ResourceChangeProposalAdapters) applySkill(
+func (a *ResourceChangeProposalAdapters) applySkillChange(
 	ctx context.Context,
-	proposal agentdomain.ResourceChangeProposal,
+	tenantID, resourceID, fingerprint string,
+	operation agentdomain.ProposalOperation,
 	change *agentdomain.SkillDraftChange,
+	actorID string,
 ) (agentdomain.ApplyResult, error) {
-	ctx, actorID := proposalApplyContext(ctx, proposal)
 	var value skillapp.SkillWorkspaceView
 	var err error
-	if proposal.Operation == agentdomain.OperationCreate {
+	if operation == agentdomain.OperationCreate {
 		value, err = a.skills.CreateSkillDraft(ctx, skillapp.CreateSkillDraftInput{
 			Name: change.Name, Goal: change.Description, WhenToUse: change.Description,
 			Instructions: change.Instructions, ActorID: actorID,
 		})
 	} else {
-		value, err = a.skills.UpdateDraftBundle(ctx, proposal.ResourceID, proposal.BaselineFingerprint,
+		value, err = a.skills.UpdateDraftBundle(ctx, resourceID, fingerprint,
 			skillapp.UpdateDraftBundleInput{
 				Name: change.Name, Description: change.Description, Instructions: change.Instructions, ActorID: actorID,
 			})
@@ -248,21 +317,22 @@ func (a *ResourceChangeProposalAdapters) applySkill(
 	return safeApplyResult(value.Skill.ID, projection)
 }
 
-func (a *ResourceChangeProposalAdapters) applyMCP(
+func (a *ResourceChangeProposalAdapters) applyMCPChange(
 	ctx context.Context,
-	proposal agentdomain.ResourceChangeProposal,
+	tenantID, resourceID string,
+	operation agentdomain.ProposalOperation,
 	change *agentdomain.MCPConfigChange,
+	actorID string,
 ) (agentdomain.ApplyResult, error) {
-	ctx, actorID := proposalApplyContext(ctx, proposal)
-	id := proposal.ResourceID
+	id := resourceID
 	config := mcpConfigFromChange(change)
-	if proposal.Operation == agentdomain.OperationCreate {
+	if operation == agentdomain.OperationCreate {
 		id = uuid.Must(uuid.NewV7()).String()
 		config.ID = id
 		config.Auth = &mcpdomain.AuthConfig{Type: mcpdomain.AuthTypeNone}
 		config.Env = map[string]string{}
 		config.Headers = map[string]string{}
-		if err := a.mcp.ConnectServer(ctx, config, actorID); err != nil {
+		if err := a.mcp.ConnectServer(ctx, config, nil, actorID); err != nil {
 			return agentdomain.ApplyResult{}, definiteApplyError(err)
 		}
 	} else {
@@ -291,17 +361,18 @@ func (a *ResourceChangeProposalAdapters) applyMCP(
 	return safeApplyResult(id, mcpapp.MCPSafeProjection(readback))
 }
 
-func (a *ResourceChangeProposalAdapters) applyKnowledge(
+func (a *ResourceChangeProposalAdapters) applyKnowledgeChange(
 	ctx context.Context,
-	proposal agentdomain.ResourceChangeProposal,
+	tenantID, resourceID string,
+	operation agentdomain.ProposalOperation,
 	change *agentdomain.KnowledgeWorkspaceChange,
+	actorID string,
 ) (agentdomain.ApplyResult, error) {
-	ctx, actorID := proposalApplyContext(ctx, proposal)
 	config := knowledgedomain.WorkspaceConfig{EmbeddingModel: change.EmbeddingModel}
 	var value *knowledgedomain.Workspace
 	var err error
-	if proposal.Operation == agentdomain.OperationCreate {
-		value, err = a.knowledge.CreateWorkspace(ctx, proposal.TenantID, knowledgeapp.CreateWorkspaceInput{
+	if operation == agentdomain.OperationCreate {
+		value, err = a.knowledge.CreateWorkspace(ctx, tenantID, knowledgeapp.CreateWorkspaceInput{
 			Name: change.Name, Description: change.Description, Config: config,
 		}, actorID)
 		if err != nil {
@@ -311,7 +382,7 @@ func (a *ResourceChangeProposalAdapters) applyKnowledge(
 			}
 		}
 	} else {
-		existing, getErr := a.knowledge.GetWorkspaceByID(ctx, proposal.TenantID, proposal.ResourceID)
+		existing, getErr := a.knowledge.GetWorkspaceByID(ctx, tenantID, resourceID)
 		if getErr != nil {
 			return agentdomain.ApplyResult{}, definiteApplyError(getErr)
 		}
@@ -319,7 +390,7 @@ func (a *ResourceChangeProposalAdapters) applyKnowledge(
 			return agentdomain.ApplyResult{}, definiteApplyError(agentdomain.ErrProposalInvalid)
 		}
 		description := change.Description
-		value, err = a.knowledge.UpdateWorkspace(ctx, proposal.TenantID, existing.Name, knowledgeapp.UpdateWorkspaceInput{
+		value, err = a.knowledge.UpdateWorkspace(ctx, tenantID, existing.Name, knowledgeapp.UpdateWorkspaceInput{
 			Description: &description, Config: &config,
 		}, actorID)
 	}

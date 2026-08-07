@@ -27,7 +27,7 @@ export const mcpApi = {
     const res = await api.get('/mcp/quota');
     return mcpQuotaSchema.parse(res.data);
   },
-  connect: (cfg: MCPServerConfig) => api.post('/mcp/servers', cfg),
+  connect: (cfg: MCPServerConfig, editors?: string[]) => api.post('/mcp/servers', editors?.length ? { ...cfg, editors } : cfg),
   update: (id: string, cfg: MCPServerConfig) => api.put(`/mcp/servers/${id}`, cfg),
   getConfig: async (id: string): Promise<MCPServerConfigResponse> => {
     const res = await api.get(`/mcp/servers/${id}/config`);

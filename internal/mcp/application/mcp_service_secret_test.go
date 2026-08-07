@@ -15,7 +15,7 @@ type secretTestManager struct {
 	updated *domain.ServerConfig
 }
 
-func (m *secretTestManager) Connect(context.Context, *domain.ServerConfig, *auditdomain.ResourceChangeAuditEvent) error {
+func (m *secretTestManager) Connect(context.Context, *domain.ServerConfig, []string, string, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (m *secretTestManager) Disconnect(context.Context, string) error { return nil }
@@ -34,8 +34,14 @@ func (m *secretTestManager) GetAllServerInfo(context.Context) []*domain.ServerIn
 func (m *secretTestManager) GetServerConfig(context.Context, string) (*domain.ServerConfig, error) {
 	return m.stored, nil
 }
-func (m *secretTestManager) UpdateServer(_ context.Context, cfg *domain.ServerConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
+func (m *secretTestManager) UpdateServer(_ context.Context, cfg *domain.ServerConfig, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	m.updated = cfg
+	return nil
+}
+func (m *secretTestManager) ListEditors(context.Context, string, string) ([]string, error) {
+	return nil, nil
+}
+func (m *secretTestManager) ReplaceEditors(context.Context, string, string, []string, string, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (m *secretTestManager) RemoveTenant(context.Context, string) error { return nil }
