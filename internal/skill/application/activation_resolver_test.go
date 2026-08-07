@@ -28,6 +28,7 @@ func TestResolveActivation_ActiveRevisionFallbackAndNameFallback(t *testing.T) {
 		},
 	)
 	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	// 空 revisionID → 解析 active revision。
 	view, found, err := svc.ResolveActivation(context.Background(), "sk1", "")
@@ -59,6 +60,7 @@ func TestResolveActivation_ContractNameTakesPrecedence(t *testing.T) {
 		},
 	)
 	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	view, found, err := svc.ResolveActivation(context.Background(), "sk1", "rev1")
 	if err != nil {
@@ -79,6 +81,7 @@ func TestResolveActivation_DraftRevisionNotActivatable(t *testing.T) {
 		domain.SkillRevision{ID: "rev1", SkillID: "sk1", Status: domain.VersionStatusDraft},
 	)
 	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	_, found, err := svc.ResolveActivation(context.Background(), "sk1", "rev1")
 	if err != nil {
@@ -91,6 +94,7 @@ func TestResolveActivation_DraftRevisionNotActivatable(t *testing.T) {
 
 func TestResolveActivation_MissingSkill(t *testing.T) {
 	svc := NewVersionService(newFakeVersionRepo(), zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	_, found, err := svc.ResolveActivation(context.Background(), "ghost", "")
 	if err != nil {
 		t.Fatal(err)
@@ -98,4 +102,12 @@ func TestResolveActivation_MissingSkill(t *testing.T) {
 	if found {
 		t.Fatal("missing skill must yield found=false")
 	}
+}
+
+// stubTenantRole resolves every actor as a fixed role so ownership tests
+// control authorization via the fake, not tenant membership.
+type stubTenantRole struct{ role string }
+
+func (s stubTenantRole) ResolveTenantRole(_ context.Context, _, _ string) (string, error) {
+	return s.role, nil
 }

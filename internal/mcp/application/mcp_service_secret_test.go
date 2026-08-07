@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/byteBuilderX/stratum/internal/mcp/domain/port"
 	"go.uber.org/zap"
@@ -14,10 +15,14 @@ type secretTestManager struct {
 	updated *domain.ServerConfig
 }
 
-func (m *secretTestManager) Connect(context.Context, *domain.ServerConfig) error { return nil }
-func (m *secretTestManager) Disconnect(context.Context, string) error            { return nil }
-func (m *secretTestManager) Reconnect(context.Context, string) error             { return nil }
-func (m *secretTestManager) Delete(context.Context, string) error                { return nil }
+func (m *secretTestManager) Connect(context.Context, *domain.ServerConfig, *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
+func (m *secretTestManager) Disconnect(context.Context, string) error { return nil }
+func (m *secretTestManager) Reconnect(context.Context, string) error  { return nil }
+func (m *secretTestManager) Delete(context.Context, string, *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (m *secretTestManager) ListTools(context.Context, string) ([]*domain.Tool, error) {
 	return nil, nil
 }
@@ -29,7 +34,7 @@ func (m *secretTestManager) GetAllServerInfo(context.Context) []*domain.ServerIn
 func (m *secretTestManager) GetServerConfig(context.Context, string) (*domain.ServerConfig, error) {
 	return m.stored, nil
 }
-func (m *secretTestManager) UpdateServer(_ context.Context, cfg *domain.ServerConfig) error {
+func (m *secretTestManager) UpdateServer(_ context.Context, cfg *domain.ServerConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
 	m.updated = cfg
 	return nil
 }
@@ -54,6 +59,7 @@ func TestUpdateServerPreservesOmittedSecrets(t *testing.T) {
 		Auth:      &domain.AuthConfig{Type: domain.AuthTypeAPIKey, APIKeyHeader: "X-API-Key", APIKeyValue: "auth-secret"},
 	}}
 	svc := NewMCPService(secretTestRegistry{}, manager, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	incoming := &domain.ServerConfig{
 		ID:        "server-1",
 		Transport: "http",
@@ -61,7 +67,7 @@ func TestUpdateServerPreservesOmittedSecrets(t *testing.T) {
 		Auth:      &domain.AuthConfig{Type: domain.AuthTypeAPIKey, APIKeyHeader: "X-API-Key"},
 	}
 
-	if err := svc.UpdateServer(context.Background(), incoming); err != nil {
+	if err := svc.UpdateServer(context.Background(), incoming, "user-1"); err != nil {
 		t.Fatalf("UpdateServer: %v", err)
 	}
 	if got := manager.updated.Auth.APIKeyValue; got != "auth-secret" {
@@ -82,11 +88,12 @@ func TestUpdateServerPreservesOmittedEnvironmentSecretForStdio(t *testing.T) {
 		ID: "server-1", Transport: "stdio", Env: map[string]string{"MODE": "old", "OPENAI_API_KEY": "env-secret"},
 	}}
 	svc := NewMCPService(secretTestRegistry{}, manager, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	incoming := &domain.ServerConfig{
 		ID: "server-1", Transport: "stdio", Env: map[string]string{"MODE": "new"},
 	}
 
-	if err := svc.UpdateServer(context.Background(), incoming); err != nil {
+	if err := svc.UpdateServer(context.Background(), incoming, "user-1"); err != nil {
 		t.Fatalf("UpdateServer: %v", err)
 	}
 	if got := manager.updated.Env["OPENAI_API_KEY"]; got != "env-secret" {
@@ -126,7 +133,8 @@ func TestUpdateServerReplacesOrClearsAuthSecrets(t *testing.T) {
 				ID: "server-1", Auth: &domain.AuthConfig{Type: domain.AuthTypeAPIKey, APIKeyValue: "old-secret"},
 			}}
 			svc := NewMCPService(secretTestRegistry{}, manager, zap.NewNop())
-			if err := svc.UpdateServer(context.Background(), &domain.ServerConfig{ID: "server-1", Auth: tt.auth}); err != nil {
+			svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+			if err := svc.UpdateServer(context.Background(), &domain.ServerConfig{ID: "server-1", Auth: tt.auth}, "user-1"); err != nil {
 				t.Fatalf("UpdateServer: %v", err)
 			}
 			if tt.want == nil {

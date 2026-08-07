@@ -40,7 +40,7 @@ func (f *fakeSkillRevisionService) GetWorkspace(ctx context.Context, _ string) (
 func (f *fakeSkillRevisionService) ListSkills(context.Context) ([]skillapp.SkillProduct, error) {
 	return []skillapp.SkillProduct{{ID: "skill-1", Name: "complaint", Status: "draft"}}, nil
 }
-func (f *fakeSkillRevisionService) DeleteSkill(context.Context, string) error { return nil }
+func (f *fakeSkillRevisionService) DeleteSkill(context.Context, string, string) error { return nil }
 func (f *fakeSkillRevisionService) UpdateCapability(_ context.Context, _ string, input skillapp.UpdateCapabilityInput) (skillapp.SkillRevision, error) {
 	return skillapp.SkillRevision{ID: "revision-1", Capability: domain.Capability{Goal: input.Goal}}, nil
 }
@@ -55,7 +55,7 @@ func (f *fakeSkillRevisionService) UpdateInstructionBundle(_ context.Context, _ 
 	f.bundle = input
 	return skillapp.SkillRevision{ID: "revision-1", Instructions: input.Instructions, Requirements: input.Requirements}, nil
 }
-func (f *fakeSkillRevisionService) PublishDraft(context.Context, string) (skillapp.SkillRevision, error) {
+func (f *fakeSkillRevisionService) PublishDraft(context.Context, string, string) (skillapp.SkillRevision, error) {
 	return skillapp.SkillRevision{ID: "revision-1", RevisionNo: 1, Status: domain.VersionStatusPublished}, nil
 }
 
@@ -63,6 +63,12 @@ func newSkillTestRouter(method, path string, handler gin.HandlerFunc) *gin.Engin
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(middleware.ErrorHandler(zap.NewNop()))
+	// Write handlers resolve the actor via ContextKeySub; without it they
+	// would all 401 before reaching the service fake.
+	router.Use(func(c *gin.Context) {
+		c.Set(middleware.ContextKeySub, "user-1")
+		c.Next()
+	})
 	switch method {
 	case http.MethodPost:
 		router.POST(path, handler)

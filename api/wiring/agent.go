@@ -305,13 +305,10 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	a.Service = agent.NewAgentService(deps)
 	if db != nil && c.Skill != nil && c.MCP != nil && c.Knowledge != nil &&
 		c.Skill.VersionService != nil && c.MCP.Service != nil && c.Knowledge.WorkspaceService != nil {
+		c.injectTenantRoleResolvers(a)
 		adapters := NewResourceChangeProposalAdapters(
 			a.Service, c.Skill.VersionService, c.MCP.Service, c.Knowledge.WorkspaceService,
 		)
-		metrics := deps.Metrics
-		if metrics == nil {
-			metrics = observability.NoopMetrics{}
-		}
 		a.ProposalService = agent.NewResourceChangeProposalService(
 			persistence.NewPgResourceChangeProposalRepo(db),
 			proposalAuthorizer{roles: tenantRoleAdapter{service: tenantMemberService(c)}},
@@ -320,13 +317,24 @@ func (c *Container) buildAgent(ctx context.Context) error {
 				domain.ResourceAgent: adapters, domain.ResourceSkillDraft: adapters,
 				domain.ResourceMCPConfig: adapters, domain.ResourceKnowledgeWorkspace: adapters,
 			},
-			metrics,
+			deps.Metrics, // nil is normalized to NoopMetrics inside the constructor
 		)
 		a.Service.SetResourceChangeProposalService(a.ProposalService)
 	}
 	wireOperationGate(c, a, deps.Metrics)
 	c.Agent = a
 	return nil
+}
+
+// injectTenantRoleResolvers hands one DB-backed role adapter to every service
+// whose ownership checks need it. Called only when the full resource stack is
+// wired; otherwise each service fails closed (nil resolver).
+func (c *Container) injectTenantRoleResolvers(a *Agent) {
+	roles := tenantRoleAdapter{service: tenantMemberService(c)}
+	a.Service.SetTenantRoleResolver(roles)
+	c.Skill.VersionService.SetTenantRoleResolver(roles)
+	c.MCP.Service.SetTenantRoleResolver(roles)
+	c.Knowledge.WorkspaceService.SetTenantRoleResolver(roles)
 }
 
 // wireOperationGate wires the T8 operation approval chain: the gate service

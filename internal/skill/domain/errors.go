@@ -19,6 +19,9 @@ var (
 	// Callers wrap the detail: fmt.Errorf("reason: %w", ErrSkillNotPublishable).
 	ErrSkillNotPublishable = errors.New("skill not publishable")
 	ErrSkillDraftStale     = errors.New("skill draft stale")
+	ErrForbidden           = errors.New("resource ownership forbidden")
+	// ErrPlatformManagedSkill rejects tenant lifecycle changes to built-in skills.
+	ErrPlatformManagedSkill = errors.New("builtin skill is platform managed")
 )
 
 // AnalysisError carries analyzer reasons for a static-analysis rejection.

@@ -46,7 +46,12 @@ func (h *AgentHandler) UpdateModel(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	settings, err := h.svc.UpdateSystemAssistantModel(c.Request.Context(), req.LLMModel)
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	settings, err := h.svc.UpdateSystemAssistantModel(c.Request.Context(), req.LLMModel, actorID)
 	if err != nil {
 		_ = c.Error(err)
 		return

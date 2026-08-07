@@ -12,6 +12,7 @@ import (
 
 	"go.uber.org/zap"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
@@ -29,10 +30,12 @@ type fakeWorkspaceRepo struct {
 	deleteErr error
 	updateErr error
 	configErr error
-	nameErr   error
 
 	deleted []string
 	renames []struct{ oldName, newName string }
+
+	// audits 捕获每次写方法收到的审计事件（nil 参数不记录）。
+	audits []*auditdomain.ResourceChangeAuditEvent
 }
 
 var _ port.WorkspaceRepo = (*fakeWorkspaceRepo)(nil)
@@ -41,7 +44,10 @@ func newFakeWorkspaceRepo() *fakeWorkspaceRepo {
 	return &fakeWorkspaceRepo{workspaces: map[string]*domain.Workspace{}}
 }
 
-func (f *fakeWorkspaceRepo) Create(_ context.Context, _ string, ws *domain.Workspace) error {
+func (f *fakeWorkspaceRepo) Create(_ context.Context, _ string, ws *domain.Workspace, audit *auditdomain.ResourceChangeAuditEvent) error {
+	if audit != nil {
+		f.audits = append(f.audits, audit)
+	}
 	if f.createErr != nil {
 		return f.createErr
 	}
@@ -86,13 +92,22 @@ func (f *fakeWorkspaceRepo) List(_ context.Context, _ string) ([]*domain.Workspa
 	return out, nil
 }
 
-func (f *fakeWorkspaceRepo) UpdateDescriptionAndConfig(_ context.Context, _, name string, description *string, cfg domain.WorkspaceConfig) error {
+func (f *fakeWorkspaceRepo) UpdateWorkspaceAll(_ context.Context, _, name string, renameTo, description *string, cfg domain.WorkspaceConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
+	if audit != nil {
+		f.audits = append(f.audits, audit)
+	}
 	if f.updateErr != nil {
 		return f.updateErr
 	}
 	ws, ok := f.workspaces[name]
 	if !ok {
 		return domain.ErrWorkspaceNotFound
+	}
+	if renameTo != nil {
+		delete(f.workspaces, name)
+		ws.Name = *renameTo
+		f.workspaces[*renameTo] = ws
+		f.renames = append(f.renames, struct{ oldName, newName string }{name, *renameTo})
 	}
 	if description != nil {
 		ws.Description = *description
@@ -101,22 +116,10 @@ func (f *fakeWorkspaceRepo) UpdateDescriptionAndConfig(_ context.Context, _, nam
 	return nil
 }
 
-func (f *fakeWorkspaceRepo) UpdateName(_ context.Context, _, oldName, newName string) error {
-	if f.nameErr != nil {
-		return f.nameErr
+func (f *fakeWorkspaceRepo) Delete(_ context.Context, _, name string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	if audit != nil {
+		f.audits = append(f.audits, audit)
 	}
-	ws, ok := f.workspaces[oldName]
-	if !ok {
-		return domain.ErrWorkspaceNotFound
-	}
-	delete(f.workspaces, oldName)
-	ws.Name = newName
-	f.workspaces[newName] = ws
-	f.renames = append(f.renames, struct{ oldName, newName string }{oldName, newName})
-	return nil
-}
-
-func (f *fakeWorkspaceRepo) Delete(_ context.Context, _, name string) error {
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}
@@ -183,6 +186,7 @@ func buildWorkspaceService(repo *fakeWorkspaceRepo) (*WorkspaceService, *Knowled
 	// parser 输出段落文本，确保 chunking 产生非空 chunks。
 	ki := NewKnowledgeIngest(&mockParser{out: paragraphInput(3)}, document.NewChunkingService(), &mockEmbedder{dim: 1024}, NewMockVectorStore(), zap.NewNop())
 	svc := NewWorkspaceService(repo, ki, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	return svc, ki
 }
 
@@ -226,7 +230,7 @@ func TestWorkspaceCreateSuccessAndCollection(t *testing.T) {
 
 	ws, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{
 		Name: "ws1", Description: "d", Config: domain.WorkspaceConfig{},
-	})
+	}, "user-1")
 	if err != nil {
 		t.Fatalf("create = %v", err)
 	}
@@ -245,7 +249,7 @@ func TestWorkspaceCreateSuccessAndCollection(t *testing.T) {
 	svc2.SetVectorStore(store2)
 	_, _ = svc2.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{
 		Name: "ws2", Config: domain.WorkspaceConfig{EmbeddingModel: "embedding-3"},
-	})
+	}, "user-1")
 	if store2.created[0].dim != 2048 {
 		t.Fatalf("dim = %d", store2.created[0].dim)
 	}
@@ -255,7 +259,7 @@ func TestWorkspaceCreateWithoutVectorStore(t *testing.T) {
 	// 极端情况：vectorStore 未注入时跳过 collection 创建。
 	repo := newFakeWorkspaceRepo()
 	svc, _ := buildWorkspaceService(repo)
-	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{Name: "ws1"}); err != nil {
+	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{Name: "ws1"}, "user-1"); err != nil {
 		t.Fatalf("create = %v", err)
 	}
 }
@@ -267,12 +271,12 @@ func TestWorkspaceCreateValidationAndErrors(t *testing.T) {
 	// 极端情况：非法 embedding model。
 	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{
 		Name: "ws", Config: domain.WorkspaceConfig{EmbeddingModel: "nope"},
-	}); !errors.Is(err, domain.ErrInvalidEmbeddingModel) {
+	}, "user-1"); !errors.Is(err, domain.ErrInvalidEmbeddingModel) {
 		t.Fatalf("invalid model err = %v", err)
 	}
 	// repo 错误传播。
 	repo.createErr = errors.New("db down")
-	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{Name: "ws"}); err == nil {
+	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{Name: "ws"}, "user-1"); err == nil {
 		t.Fatal("repo error must propagate")
 	}
 }
@@ -285,7 +289,7 @@ func TestWorkspaceCreateRollsBackOnCollectionFailure(t *testing.T) {
 	svc, _ := buildWorkspaceService(repo)
 	svc.SetVectorStore(store)
 
-	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{Name: "ws1"}); err == nil {
+	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{Name: "ws1"}, "user-1"); err == nil {
 		t.Fatal("collection failure must error")
 	}
 	if len(repo.deleted) != 1 || repo.deleted[0] != "ws1" {
@@ -327,7 +331,7 @@ func TestWorkspaceUpdate(t *testing.T) {
 		Name:        &newName,
 		Description: &desc,
 		Config:      &domain.WorkspaceConfig{TopK: topK, QueryMode: "vector"},
-	})
+	}, "user-1")
 	if err != nil {
 		t.Fatalf("update = %v", err)
 	}
@@ -349,24 +353,24 @@ func TestWorkspaceUpdateRejections(t *testing.T) {
 	seedWorkspace(repo, "ws1", false)
 
 	// 极端情况：不存在。
-	if _, err := svc.UpdateWorkspace(context.Background(), "t1", "ghost", UpdateWorkspaceInput{}); !errors.Is(err, domain.ErrWorkspaceNotFound) {
+	if _, err := svc.UpdateWorkspace(context.Background(), "t1", "ghost", UpdateWorkspaceInput{}, "user-1"); !errors.Is(err, domain.ErrWorkspaceNotFound) {
 		t.Fatalf("ghost err = %v", err)
 	}
 	// 极端情况：embedding model 不可变。
 	if _, err := svc.UpdateWorkspace(context.Background(), "t1", "ws1", UpdateWorkspaceInput{
 		Config: &domain.WorkspaceConfig{EmbeddingModel: "embedding-3"},
-	}); !errors.Is(err, domain.ErrEmbeddingModelImmutable) {
+	}, "user-1"); !errors.Is(err, domain.ErrEmbeddingModelImmutable) {
 		t.Fatalf("immutable err = %v", err)
 	}
 	// 极端情况：非法 query mode。
 	if _, err := svc.UpdateWorkspace(context.Background(), "t1", "ws1", UpdateWorkspaceInput{
 		Config: &domain.WorkspaceConfig{QueryMode: "bogus"},
-	}); !errors.Is(err, domain.ErrInvalidQueryMode) {
+	}, "user-1"); !errors.Is(err, domain.ErrInvalidQueryMode) {
 		t.Fatalf("invalid mode err = %v", err)
 	}
 	// 极端情况：platform-managed 拒绝。
 	seedWorkspace(repo, "managed", true)
-	if _, err := svc.UpdateWorkspace(context.Background(), "t1", "managed", UpdateWorkspaceInput{}); !errors.Is(err, domain.ErrPlatformManagedWorkspace) {
+	if _, err := svc.UpdateWorkspace(context.Background(), "t1", "managed", UpdateWorkspaceInput{}, "user-1"); !errors.Is(err, domain.ErrPlatformManagedWorkspace) {
 		t.Fatalf("platform err = %v", err)
 	}
 }
@@ -448,19 +452,19 @@ func TestWorkspaceDelete(t *testing.T) {
 	svc, _ := buildWorkspaceService(repo)
 	seedWorkspace(repo, "ws1", false)
 
-	if err := svc.DeleteWorkspace(context.Background(), "t1", "ws1"); err != nil {
+	if err := svc.DeleteWorkspace(context.Background(), "t1", "ws1", "user-1"); err != nil {
 		t.Fatalf("delete = %v", err)
 	}
 	if len(repo.deleted) != 1 || repo.deleted[0] != "ws1" {
 		t.Fatalf("deleted = %+v", repo.deleted)
 	}
 	// 极端情况：不存在。
-	if err := svc.DeleteWorkspace(context.Background(), "t1", "ghost"); !errors.Is(err, domain.ErrWorkspaceNotFound) {
+	if err := svc.DeleteWorkspace(context.Background(), "t1", "ghost", "user-1"); !errors.Is(err, domain.ErrWorkspaceNotFound) {
 		t.Fatalf("ghost err = %v", err)
 	}
 	// 极端情况：platform-managed 拒绝。
 	seedWorkspace(repo, "managed", true)
-	if err := svc.DeleteWorkspace(context.Background(), "t1", "managed"); !errors.Is(err, domain.ErrPlatformManagedWorkspace) {
+	if err := svc.DeleteWorkspace(context.Background(), "t1", "managed", "user-1"); !errors.Is(err, domain.ErrPlatformManagedWorkspace) {
 		t.Fatalf("platform err = %v", err)
 	}
 }
@@ -474,7 +478,7 @@ func TestWorkspaceDeleteStorageFailureBlocksDB(t *testing.T) {
 	ki.vectorStore = failing
 	svc.SetVectorStore(failing)
 
-	if err := svc.DeleteWorkspace(context.Background(), "t1", "ws1"); err == nil {
+	if err := svc.DeleteWorkspace(context.Background(), "t1", "ws1", "user-1"); err == nil {
 		t.Fatal("storage failure must error")
 	}
 	if len(repo.deleted) != 0 {
@@ -702,4 +706,12 @@ func timeNow() (t time.Time) { return time.Now() }
 func timePtr() *time.Time {
 	t := time.Now()
 	return &t
+}
+
+// stubTenantRole resolves every actor as a fixed role so ownership tests
+// control authorization via the fake, not tenant membership.
+type stubTenantRole struct{ role string }
+
+func (s stubTenantRole) ResolveTenantRole(_ context.Context, _, _ string) (string, error) {
+	return s.role, nil
 }

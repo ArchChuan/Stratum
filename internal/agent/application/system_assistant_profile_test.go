@@ -8,6 +8,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"go.uber.org/zap"
 )
 
@@ -153,7 +154,9 @@ type systemAssistantProfileRepo struct {
 	err  error
 }
 
-func (r systemAssistantProfileRepo) Register(context.Context, *domain.AgentConfig) error { return nil }
+func (r systemAssistantProfileRepo) Register(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (r systemAssistantProfileRepo) Get(context.Context, string) (*domain.AgentConfig, bool, error) {
 	if r.err != nil {
 		return nil, false, r.err
@@ -169,11 +172,18 @@ func (r systemAssistantProfileRepo) GetSystemAssistant(ctx context.Context) (*do
 func (r systemAssistantProfileRepo) GetAll(context.Context) ([]*domain.AgentConfig, error) {
 	return r.cfgs, r.err
 }
-func (r systemAssistantProfileRepo) Update(context.Context, *domain.AgentConfig) error { return nil }
-func (r systemAssistantProfileRepo) UpdateSystemAssistantModel(context.Context, string, string, bool, int, int) (*domain.AgentConfig, error) {
+func (r systemAssistantProfileRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
+func (r systemAssistantProfileRepo) UpdateSystemAssistantModel(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	return nil, nil
 }
-func (r systemAssistantProfileRepo) Remove(context.Context, string) error { return nil }
+func (r systemAssistantProfileRepo) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+	return nil, nil
+}
+func (r systemAssistantProfileRepo) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (r systemAssistantProfileRepo) UpdateSystemAssistantBindings(context.Context, []string, []string, []string) (*domain.AgentConfig, error) {
 	return nil, nil
 }

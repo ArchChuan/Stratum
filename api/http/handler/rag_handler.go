@@ -179,11 +179,16 @@ func (h *RAGHandler) CreateWorkspace(c *gin.Context) {
 		return
 	}
 
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
 	ws, err := h.wsService.CreateWorkspace(c.Request.Context(), tenantID, knowledge.CreateWorkspaceInput{
 		Name:        req.Name,
 		Description: req.Description,
 		Config:      fromDTOConfig(req.Config),
-	})
+	}, actorID)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -249,7 +254,12 @@ func (h *RAGHandler) UpdateWorkspace(c *gin.Context) {
 		in.Config = &cfg
 	}
 
-	ws, err := h.wsService.UpdateWorkspace(c.Request.Context(), tenantID, name, in)
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	ws, err := h.wsService.UpdateWorkspace(c.Request.Context(), tenantID, name, in, actorID)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -296,7 +306,12 @@ func (h *RAGHandler) DeleteWorkspace(c *gin.Context) {
 		return
 	}
 
-	if err := h.wsService.DeleteWorkspace(c.Request.Context(), tenantID, name); err != nil {
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	if err := h.wsService.DeleteWorkspace(c.Request.Context(), tenantID, name, actorID); err != nil {
 		_ = c.Error(err)
 		return
 	}

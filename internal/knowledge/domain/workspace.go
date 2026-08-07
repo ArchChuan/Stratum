@@ -79,8 +79,10 @@ type Workspace struct {
 	Config         WorkspaceConfig
 	SystemKey      string `json:"-"`
 	ManagementMode string `json:"management_mode"`
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// CreatedBy is the user who created the workspace ("" for historical/platform rows).
+	CreatedBy string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // WorkspaceConfig is the per-workspace RAG configuration persisted as JSONB.

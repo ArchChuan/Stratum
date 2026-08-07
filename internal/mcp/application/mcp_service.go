@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/byteBuilderX/stratum/internal/mcp/domain/port"
 	"go.uber.org/zap"
@@ -32,10 +33,15 @@ type MCPService struct {
 	toolRegistry port.ToolRegistry
 	manager      port.ServerManager
 	toolPolicies port.ToolPolicyRepo
+	roles        port.TenantRoleResolver
 	logger       *zap.Logger
 }
 
 func (s *MCPService) SetToolPolicyRepo(repo port.ToolPolicyRepo) { s.toolPolicies = repo }
+
+// SetTenantRoleResolver injects the tenant role resolver used by ownership
+// checks. A nil resolver fails all writes closed (ownership unverifiable).
+func (s *MCPService) SetTenantRoleResolver(r port.TenantRoleResolver) { s.roles = r }
 
 func (s *MCPService) GetToolRisk(ctx context.Context, serverID, toolName string) (domain.ToolRiskLevel, error) {
 	if s.toolPolicies == nil {
@@ -131,16 +137,38 @@ func (s *MCPService) ServerStatus(ctx context.Context) ServerStatusBreakdown {
 }
 
 // ConnectServer registers a new MCP server config and discovers its tools.
-// Returns domain.ErrNameConflict on duplicate name.
-func (s *MCPService) ConnectServer(ctx context.Context, cfg *domain.ServerConfig) error {
-	stored, err := s.manager.GetServerConfig(ctx, cfg.ID)
-	if err == nil && isPlatformManaged(stored) {
-		return domain.ErrPlatformManagedServer
+// An existing id takes update semantics (upsert) and keeps the original
+// creator. Returns domain.ErrNameConflict on duplicate name.
+func (s *MCPService) ConnectServer(ctx context.Context, cfg *domain.ServerConfig, actorID string) error {
+	stored, getErr := s.manager.GetServerConfig(ctx, cfg.ID)
+	if getErr != nil && !errors.Is(getErr, domain.ErrServerNotFound) {
+		return getErr
 	}
-	if err != nil && !errors.Is(err, domain.ErrServerNotFound) {
+	op := auditdomain.ChangeOpCreate
+	var before any
+	switch {
+	case getErr == nil && isPlatformManaged(stored):
+		return domain.ErrPlatformManagedServer
+	case getErr == nil:
+		// Update semantics on an existing row: ownership vs the original creator.
+		if err := s.checkOwnership(ctx, actorID, stored.CreatedBy); err != nil {
+			return err
+		}
+		cfg.CreatedBy = stored.CreatedBy
+		op = auditdomain.ChangeOpUpdate
+		before = MCPSafeProjection(stored)
+	default:
+		// New server: creator becomes owner; only owner/admin may create.
+		if err := s.checkOwnership(ctx, actorID, actorID); err != nil {
+			return err
+		}
+		cfg.CreatedBy = actorID
+	}
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindMCP, cfg.ID, op, actorID, before, MCPSafeProjection(cfg))
+	if err != nil {
 		return err
 	}
-	if err := s.manager.Connect(ctx, cfg); err != nil {
+	if err := s.manager.Connect(ctx, cfg, audit); err != nil {
 		return err
 	}
 	s.logger.Info("mcp.server_connected",
@@ -154,11 +182,20 @@ func (s *MCPService) ConnectServer(ctx context.Context, cfg *domain.ServerConfig
 }
 
 // DeleteServer permanently removes an MCP server config and cascades to agent relations.
-func (s *MCPService) DeleteServer(ctx context.Context, serverID string) error {
-	if err := s.rejectPlatformManaged(ctx, serverID); err != nil {
+func (s *MCPService) DeleteServer(ctx context.Context, serverID, actorID string) error {
+	stored, err := s.loadManagedServer(ctx, serverID)
+	if err != nil {
 		return err
 	}
-	if err := s.manager.Delete(ctx, serverID); err != nil {
+	if err := s.checkOwnership(ctx, actorID, stored.CreatedBy); err != nil {
+		return err
+	}
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindMCP, serverID, auditdomain.ChangeOpDelete, actorID,
+		MCPSafeProjection(stored), nil)
+	if err != nil {
+		return err
+	}
+	if err := s.manager.Delete(ctx, serverID, audit); err != nil {
 		return err
 	}
 	if err := s.toolRegistry.UnregisterServer(serverID); err != nil {
@@ -168,9 +205,10 @@ func (s *MCPService) DeleteServer(ctx context.Context, serverID string) error {
 	return nil
 }
 
-// DisconnectServer drops the connection to serverID.
+// DisconnectServer drops the connection to serverID (no audit: connection
+// state is not a configuration change).
 func (s *MCPService) DisconnectServer(ctx context.Context, serverID string) error {
-	if err := s.rejectPlatformManaged(ctx, serverID); err != nil {
+	if _, err := s.loadManagedServer(ctx, serverID); err != nil {
 		return err
 	}
 	if err := s.manager.Disconnect(ctx, serverID); err != nil {
@@ -193,7 +231,7 @@ func (s *MCPService) ReconnectServer(ctx context.Context, serverID string) error
 }
 
 // UpdateServer disconnects and reconnects an existing MCP server with new config.
-func (s *MCPService) UpdateServer(ctx context.Context, cfg *domain.ServerConfig) error {
+func (s *MCPService) UpdateServer(ctx context.Context, cfg *domain.ServerConfig, actorID string) error {
 	stored, err := s.manager.GetServerConfig(ctx, cfg.ID)
 	if err != nil {
 		return err
@@ -201,8 +239,17 @@ func (s *MCPService) UpdateServer(ctx context.Context, cfg *domain.ServerConfig)
 	if isPlatformManaged(stored) {
 		return domain.ErrPlatformManagedServer
 	}
+	if err := s.checkOwnership(ctx, actorID, stored.CreatedBy); err != nil {
+		return err
+	}
 	merged := mergeProtectedConfig(stored, cfg)
-	if err := s.manager.UpdateServer(ctx, merged); err != nil {
+	merged.CreatedBy = stored.CreatedBy
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindMCP, cfg.ID, auditdomain.ChangeOpUpdate, actorID,
+		MCPSafeProjection(stored), MCPSafeProjection(merged))
+	if err != nil {
+		return err
+	}
+	if err := s.manager.UpdateServer(ctx, merged, audit); err != nil {
 		return err
 	}
 	s.logger.Info("mcp.server_updated", zap.String("server_id", cfg.ID))
@@ -212,15 +259,16 @@ func (s *MCPService) UpdateServer(ctx context.Context, cfg *domain.ServerConfig)
 	return nil
 }
 
-func (s *MCPService) rejectPlatformManaged(ctx context.Context, serverID string) error {
+// loadManagedServer fetches a server config and rejects platform-managed rows.
+func (s *MCPService) loadManagedServer(ctx context.Context, serverID string) (*domain.ServerConfig, error) {
 	stored, err := s.manager.GetServerConfig(ctx, serverID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if isPlatformManaged(stored) {
-		return domain.ErrPlatformManagedServer
+		return nil, domain.ErrPlatformManagedServer
 	}
-	return nil
+	return stored, nil
 }
 
 func isPlatformManaged(cfg *domain.ServerConfig) bool {

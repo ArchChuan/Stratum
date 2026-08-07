@@ -478,6 +478,10 @@ func TestPgExperimentRepository_ApplyCommand_promote_success(t *testing.T) {
 	mock.ExpectExec("UPDATE optimization_candidates c SET status='promoted'").
 		WithArgs("canary-1", "prompt", "r-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec("INSERT INTO resource_change_audits").
+		WithArgs(pgxmock.AnyArg(), "t1", "agent", "r-1", "update", "evaluation-worker", "system", "optimization",
+			"", json.RawMessage(`{}`), json.RawMessage(`{}`)).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("UPDATE evaluation_deployments\n\t\t\tSET stable_revision_id").
 		WithArgs("exp-1", "canary-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
@@ -592,6 +596,10 @@ func TestPgExperimentRepository_ApplyCommand_promoteSkill(t *testing.T) {
 	mock.ExpectExec("UPDATE optimization_candidates c SET status='promoted'").
 		WithArgs("canary-1", "skill", "skill-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec("INSERT INTO resource_change_audits").
+		WithArgs(pgxmock.AnyArg(), "t1", "skill", "skill-1", "update", "evaluation-worker", "system", "optimization",
+			"", json.RawMessage(`{}`), json.RawMessage(`{}`)).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("UPDATE evaluation_deployments\n\t\t\tSET stable_revision_id").
 		WithArgs("exp-1", "canary-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))

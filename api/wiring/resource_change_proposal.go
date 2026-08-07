@@ -7,19 +7,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
-	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	knowledgedomain "github.com/byteBuilderX/stratum/internal/knowledge/domain"
+	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
-	"github.com/google/uuid"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 )
 
 type proposalAgentService interface {
@@ -35,14 +37,14 @@ type proposalSkillService interface {
 }
 
 type proposalMCPService interface {
-	ConnectServer(context.Context, *mcpdomain.ServerConfig) error
-	UpdateServer(context.Context, *mcpdomain.ServerConfig) error
+	ConnectServer(context.Context, *mcpdomain.ServerConfig, string) error
+	UpdateServer(context.Context, *mcpdomain.ServerConfig, string) error
 	GetServerConfig(context.Context, string) (*mcpdomain.ServerConfig, error)
 }
 
 type proposalKnowledgeService interface {
-	CreateWorkspace(context.Context, string, knowledgeapp.CreateWorkspaceInput) (*knowledgedomain.Workspace, error)
-	UpdateWorkspace(context.Context, string, string, knowledgeapp.UpdateWorkspaceInput) (*knowledgedomain.Workspace, error)
+	CreateWorkspace(context.Context, string, knowledgeapp.CreateWorkspaceInput, string) (*knowledgedomain.Workspace, error)
+	UpdateWorkspace(context.Context, string, string, knowledgeapp.UpdateWorkspaceInput, string) (*knowledgedomain.Workspace, error)
 	GetWorkspaceByID(context.Context, string, string) (*knowledgedomain.Workspace, error)
 }
 
@@ -163,11 +165,28 @@ func (a *ResourceChangeProposalAdapters) ApplyResourceChange(
 	}
 }
 
+// proposalApplyContext stamps the audit source/proposal on ctx and resolves
+// the acting user: the confirmer, falling back to the proposer. The service
+// layer re-validates ownership against this actor.
+func proposalApplyContext(ctx context.Context, proposal agentdomain.ResourceChangeProposal) (context.Context, string) {
+	// The apply path must carry tenant identity: ownership checks and audit
+	// reads resolve the tenant from ctx, and replays/worker-driven applies
+	// cannot rely on request-scoped middleware to have stamped it.
+	ctx = reqctx.WithTenantID(ctx, proposal.TenantID)
+	ctx = reqctx.WithChangeSource(ctx, auditdomain.ChangeSourceProposalApply, proposal.ID)
+	actorID := proposal.ConfirmerID
+	if actorID == "" {
+		actorID = proposal.ProposerID
+	}
+	return ctx, actorID
+}
+
 func (a *ResourceChangeProposalAdapters) applyAgent(
 	ctx context.Context,
 	proposal agentdomain.ResourceChangeProposal,
 	change *agentdomain.AgentChange,
 ) (agentdomain.ApplyResult, error) {
+	ctx, actorID := proposalApplyContext(ctx, proposal)
 	var value agentapp.AgentDTO
 	var err error
 	if proposal.Operation == agentdomain.OperationCreate {
@@ -176,6 +195,7 @@ func (a *ResourceChangeProposalAdapters) applyAgent(
 			LLMModel: change.Model, MaxIterations: change.MaxIterations, MaxContextTokens: change.MaxContextTokens,
 			AllowedSkills: change.SkillIDs, MCPToolIDs: change.MCPToolIDs,
 			KnowledgeWorkspaceIDs: change.WorkspaceIDs, MemoryScope: "user",
+			ActorID: actorID,
 		})
 	} else {
 		existing, getErr := a.agents.Get(ctx, proposal.ResourceID)
@@ -190,6 +210,7 @@ func (a *ResourceChangeProposalAdapters) applyAgent(
 			LLMModel: change.Model, MaxIterations: change.MaxIterations, MaxContextTokens: change.MaxContextTokens,
 			AllowedSkills: change.SkillIDs, MCPToolIDs: change.MCPToolIDs,
 			KnowledgeWorkspaceIDs: change.WorkspaceIDs, MemoryScope: existing.MemoryScope,
+			ActorID: actorID,
 		})
 	}
 	if err != nil {
@@ -203,16 +224,19 @@ func (a *ResourceChangeProposalAdapters) applySkill(
 	proposal agentdomain.ResourceChangeProposal,
 	change *agentdomain.SkillDraftChange,
 ) (agentdomain.ApplyResult, error) {
+	ctx, actorID := proposalApplyContext(ctx, proposal)
 	var value skillapp.SkillWorkspaceView
 	var err error
 	if proposal.Operation == agentdomain.OperationCreate {
 		value, err = a.skills.CreateSkillDraft(ctx, skillapp.CreateSkillDraftInput{
 			Name: change.Name, Goal: change.Description, WhenToUse: change.Description,
-			Instructions: change.Instructions,
+			Instructions: change.Instructions, ActorID: actorID,
 		})
 	} else {
 		value, err = a.skills.UpdateDraftBundle(ctx, proposal.ResourceID, proposal.BaselineFingerprint,
-			skillapp.UpdateDraftBundleInput{Name: change.Name, Description: change.Description, Instructions: change.Instructions})
+			skillapp.UpdateDraftBundleInput{
+				Name: change.Name, Description: change.Description, Instructions: change.Instructions, ActorID: actorID,
+			})
 	}
 	if err != nil {
 		return agentdomain.ApplyResult{}, definiteApplyError(err)
@@ -229,6 +253,7 @@ func (a *ResourceChangeProposalAdapters) applyMCP(
 	proposal agentdomain.ResourceChangeProposal,
 	change *agentdomain.MCPConfigChange,
 ) (agentdomain.ApplyResult, error) {
+	ctx, actorID := proposalApplyContext(ctx, proposal)
 	id := proposal.ResourceID
 	config := mcpConfigFromChange(change)
 	if proposal.Operation == agentdomain.OperationCreate {
@@ -237,7 +262,7 @@ func (a *ResourceChangeProposalAdapters) applyMCP(
 		config.Auth = &mcpdomain.AuthConfig{Type: mcpdomain.AuthTypeNone}
 		config.Env = map[string]string{}
 		config.Headers = map[string]string{}
-		if err := a.mcp.ConnectServer(ctx, config); err != nil {
+		if err := a.mcp.ConnectServer(ctx, config, actorID); err != nil {
 			return agentdomain.ApplyResult{}, definiteApplyError(err)
 		}
 	} else {
@@ -252,7 +277,7 @@ func (a *ResourceChangeProposalAdapters) applyMCP(
 		config.Env = cloneStringValues(stored.Env)
 		config.Headers = cloneStringValues(stored.Headers)
 		config.Auth = cloneMCPAuth(stored.Auth)
-		if err := a.mcp.UpdateServer(ctx, config); err != nil {
+		if err := a.mcp.UpdateServer(ctx, config, actorID); err != nil {
 			return agentdomain.ApplyResult{}, &agentport.ResourceApplyError{
 				Outcome: agentport.ResourceApplyUnknownOutcome,
 				Err:     err,
@@ -263,7 +288,7 @@ func (a *ResourceChangeProposalAdapters) applyMCP(
 	if err != nil {
 		return agentdomain.ApplyResult{}, &agentport.ResourceApplyError{Outcome: agentport.ResourceApplyUnknownOutcome, Err: err}
 	}
-	return safeApplyResult(id, mcpSafeProjection(readback))
+	return safeApplyResult(id, mcpapp.MCPSafeProjection(readback))
 }
 
 func (a *ResourceChangeProposalAdapters) applyKnowledge(
@@ -271,13 +296,14 @@ func (a *ResourceChangeProposalAdapters) applyKnowledge(
 	proposal agentdomain.ResourceChangeProposal,
 	change *agentdomain.KnowledgeWorkspaceChange,
 ) (agentdomain.ApplyResult, error) {
+	ctx, actorID := proposalApplyContext(ctx, proposal)
 	config := knowledgedomain.WorkspaceConfig{EmbeddingModel: change.EmbeddingModel}
 	var value *knowledgedomain.Workspace
 	var err error
 	if proposal.Operation == agentdomain.OperationCreate {
 		value, err = a.knowledge.CreateWorkspace(ctx, proposal.TenantID, knowledgeapp.CreateWorkspaceInput{
 			Name: change.Name, Description: change.Description, Config: config,
-		})
+		}, actorID)
 		if err != nil {
 			return agentdomain.ApplyResult{}, &agentport.ResourceApplyError{
 				Outcome: agentport.ResourceApplyUnknownOutcome,
@@ -295,20 +321,22 @@ func (a *ResourceChangeProposalAdapters) applyKnowledge(
 		description := change.Description
 		value, err = a.knowledge.UpdateWorkspace(ctx, proposal.TenantID, existing.Name, knowledgeapp.UpdateWorkspaceInput{
 			Description: &description, Config: &config,
-		})
+		}, actorID)
 	}
 	if err != nil {
 		return agentdomain.ApplyResult{}, definiteApplyError(err)
 	}
-	return safeApplyResult(value.ID, knowledgeSafeProjection(value))
+	return safeApplyResult(value.ID, knowledgeapp.KnowledgeSafeProjection(value))
 }
 
+// agentSafeProjection is the DTO shim over the application-layer projection;
+// both change audits and proposal readbacks share one field mapping.
 func agentSafeProjection(value agentapp.AgentDTO) map[string]any {
-	return map[string]any{
-		"id": value.ID, "name": value.Name, "type": value.Type, "description": value.Description,
-		"model": value.LLMModel, "maxIterations": value.MaxIterations, "maxContextTokens": value.MaxContextTokens,
-		"skillIds": value.AllowedSkills, "mcpToolIds": value.MCPToolIDs, "workspaceIds": value.KnowledgeWorkspaceIDs,
-	}
+	return agentapp.AgentSafeProjection(&agentdomain.AgentConfig{
+		ID: value.ID, Name: value.Name, Type: agentdomain.AgentType(value.Type), Description: value.Description,
+		LLMModel: value.LLMModel, MaxIterations: value.MaxIterations, MaxContextTokens: value.MaxContextTokens,
+		AllowedSkills: value.AllowedSkills, MCPToolIDs: value.MCPToolIDs, KnowledgeWorkspaceIDs: value.KnowledgeWorkspaceIDs,
+	})
 }
 
 func agentChangeProjection(value agentapp.AgentDTO) map[string]any {
@@ -334,7 +362,7 @@ func mcpChangeProjection(value *mcpdomain.ServerConfig) map[string]any {
 	if len(value.Args) > 0 {
 		projection["args"] = value.Args
 	}
-	if safeURL := mcpSafeURL(value.URL); safeURL != "" {
+	if safeURL := mcpapp.MCPSafeURL(value.URL); safeURL != "" {
 		projection["url"] = safeURL
 	}
 	if len(value.Capabilities) > 0 {
@@ -348,44 +376,6 @@ func mcpChangeProjection(value *mcpdomain.ServerConfig) map[string]any {
 		}
 	}
 	return projection
-}
-
-func mcpSafeProjection(value *mcpdomain.ServerConfig) map[string]any {
-	if value == nil {
-		return map[string]any{}
-	}
-	return map[string]any{
-		"id": value.ID, "name": value.Name, "version": value.Version, "transport": value.Transport,
-		"command": value.Command, "args": value.Args, "url": mcpSafeURL(value.URL), "capabilities": value.Capabilities,
-		"timeoutMs": value.Timeout.Milliseconds(), "retry": value.Retry,
-	}
-}
-
-func mcpSafeURL(raw string) string {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	parsed.User = nil
-	query := parsed.Query()
-	for key := range query {
-		normalized := strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(key))
-		for _, marker := range []string{"token", "apikey", "authorization", "password", "secret", "credential"} {
-			if strings.Contains(normalized, marker) {
-				query.Del(key)
-				break
-			}
-		}
-	}
-	parsed.RawQuery = query.Encode()
-	return parsed.String()
-}
-
-func knowledgeSafeProjection(value *knowledgedomain.Workspace) map[string]any {
-	if value == nil {
-		return map[string]any{}
-	}
-	return map[string]any{"id": value.ID, "name": value.Name, "description": value.Description, "config": value.Config}
 }
 
 func mcpConfigFromChange(change *agentdomain.MCPConfigChange) *mcpdomain.ServerConfig {

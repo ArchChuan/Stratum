@@ -12,6 +12,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -60,7 +61,7 @@ func (f failingPreparationMCPRevisionResolver) ResolveMCPRevision(
 	return port.MCPRevisionAssignment{}, false, f.err
 }
 
-func (m *mockAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig) error {
+func (m *mockAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return m.Called(ctx, cfg).Error(0)
 }
 func (m *mockAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig, bool, error) {
@@ -173,13 +174,18 @@ func (m *mockAgentRepo) GetAll(ctx context.Context) ([]*domain.AgentConfig, erro
 	cfgs, _ := args.Get(0).([]*domain.AgentConfig)
 	return cfgs, args.Error(1)
 }
-func (m *mockAgentRepo) Remove(ctx context.Context, id string) error {
+func (m *mockAgentRepo) Remove(ctx context.Context, id string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return m.Called(ctx, id).Error(0)
 }
-func (m *mockAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig) error {
+func (m *mockAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return m.Called(ctx, cfg).Error(0)
 }
-func (m *mockAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int) (*domain.AgentConfig, error) {
+func (m *mockAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+	args := m.Called(ctx, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens)
+	cfg, _ := args.Get(0).(*domain.AgentConfig)
+	return cfg, args.Error(1)
+}
+func (m *mockAgentRepo) UpdateSystemAssistantAll(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	args := m.Called(ctx, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens)
 	cfg, _ := args.Get(0).(*domain.AgentConfig)
 	return cfg, args.Error(1)
@@ -294,6 +300,7 @@ func newTestService(t *testing.T) (*application.AgentService, *mockAgentRepo) {
 		Registry: reg,
 		Logger:   zap.NewNop(),
 	})
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	return svc, repo
 }
 
@@ -588,7 +595,7 @@ func TestAgentService_UpdateSystemAssistantModelUsesAtomicReturnedConfig(t *test
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "qwen-plus",
 	}, nil).Once()
 
-	settings, err := svc.UpdateSystemAssistantModel(ctx, " qwen-plus ")
+	settings, err := svc.UpdateSystemAssistantModel(ctx, " qwen-plus ", "user-1")
 	assert.NoError(t, err)
 	assert.True(t, settings.Ready)
 	assert.Equal(t, "qwen-plus", settings.Model)
@@ -606,7 +613,7 @@ func TestAgentService_UpdateSystemAssistantModelDoesNotPersistWhenCatalogReadFai
 	})
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
 
-	_, err := svc.UpdateSystemAssistantModel(ctx, "qwen-plus")
+	_, err := svc.UpdateSystemAssistantModel(ctx, "qwen-plus", "user-1")
 	assert.ErrorIs(t, err, wantErr)
 	repo.AssertNotCalled(t, "UpdateSystemAssistantModel", mock.Anything, mock.Anything)
 }
@@ -628,7 +635,7 @@ func TestAgentService_UpdateSystemAssistantModelMarksUnexpectedReturnedModelNotR
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "qwen-plus-latest",
 	}, nil).Once()
 
-	settings, err := svc.UpdateSystemAssistantModel(ctx, "qwen-plus")
+	settings, err := svc.UpdateSystemAssistantModel(ctx, "qwen-plus", "user-1")
 	assert.NoError(t, err)
 	assert.Equal(t, "qwen-plus-latest", settings.Model)
 	assert.False(t, settings.Ready)
@@ -662,7 +669,7 @@ func TestAgentService_UpdateSystemAssistantModelConcurrentCallsKeepAtomicResults
 		wg.Add(1)
 		go func(model string) {
 			defer wg.Done()
-			settings, err := svc.UpdateSystemAssistantModel(ctx, model)
+			settings, err := svc.UpdateSystemAssistantModel(ctx, model, "user-1")
 			results <- settings
 			errs <- err
 		}(model)
@@ -696,9 +703,9 @@ func TestAgentService_UpdateSystemAssistantModelRejectsEmptyAndInvalid(t *testin
 	})
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
 
-	_, err := svc.UpdateSystemAssistantModel(ctx, " ")
+	_, err := svc.UpdateSystemAssistantModel(ctx, " ", "user-1")
 	assert.ErrorIs(t, err, domain.ErrInvalidSystemAssistantModel)
-	_, err = svc.UpdateSystemAssistantModel(ctx, "unknown")
+	_, err = svc.UpdateSystemAssistantModel(ctx, "unknown", "user-1")
 	assert.ErrorIs(t, err, domain.ErrInvalidSystemAssistantModel)
 	repo.AssertNotCalled(t, "UpdateSystemAssistantModel", mock.Anything, mock.Anything)
 }
@@ -719,7 +726,7 @@ func TestAgentService_UpdateSystemAssistantModelPropagatesPersistenceFailure(t *
 	}, true, nil)
 	repo.On("UpdateSystemAssistantModel", ctx, "qwen-plus", "", false, 0, 0).Return((*domain.AgentConfig)(nil), wantErr)
 
-	_, err := svc.UpdateSystemAssistantModel(ctx, "qwen-plus")
+	_, err := svc.UpdateSystemAssistantModel(ctx, "qwen-plus", "user-1")
 	assert.ErrorIs(t, err, wantErr)
 }
 
@@ -730,9 +737,7 @@ func TestAgentService_UpdateSystemAssistant_IgnoresName(t *testing.T) {
 	}
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
 	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
-	repo.On("UpdateSystemAssistantModel", ctx, "", "", false, 0, 0).Return(cfg, nil)
-	repo.On("UpdateSystemAssistantBindings", ctx, []string{}, []string{}, []string{}).
-		Return(cfg, nil)
+	repo.On("UpdateSystemAssistantAll", ctx, "", "", false, 0, 0).Return(cfg, nil)
 
 	dto, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{
 		Name: "ignored",
@@ -750,13 +755,9 @@ func TestAgentServicePlatformAssistantModelOnlyUpdatePreservesSystemBindings(t *
 		MCPToolIDs: []string{"mcp:orders:get"},
 	}
 	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
-	repo.On("UpdateSystemAssistantModel", ctx, "new-model", "", false, 0, 0).Return(&domain.AgentConfig{
+	repo.On("UpdateSystemAssistantAll", ctx, "new-model", "", false, 0, 0).Return(&domain.AgentConfig{
 		ID: cfg.ID, SystemKey: cfg.SystemKey, LLMModel: "new-model", MCPToolIDs: cfg.MCPToolIDs,
 	}, nil)
-	repo.On("UpdateSystemAssistantBindings", ctx, cfg.MCPToolIDs, []string{}, []string{}).
-		Return(&domain.AgentConfig{
-			ID: cfg.ID, SystemKey: cfg.SystemKey, LLMModel: "new-model", MCPToolIDs: cfg.MCPToolIDs,
-		}, nil)
 
 	got, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{LLMModel: "new-model"})
 
@@ -773,8 +774,7 @@ func TestAgentServicePlatformAssistantRejectsBindingRemovalByPreservingManagedTo
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, MCPToolIDs: managedTools,
 	}
 	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
-	repo.On("UpdateSystemAssistantModel", ctx, "", "", false, 0, 0).Return(cfg, nil)
-	repo.On("UpdateSystemAssistantBindings", ctx, managedTools, []string{}, []string{}).Return(cfg, nil)
+	repo.On("UpdateSystemAssistantAll", ctx, "", "", false, 0, 0).Return(cfg, nil)
 
 	got, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{MCPToolIDs: []string{}})
 
@@ -788,7 +788,7 @@ func TestAgentService_Delete(t *testing.T) {
 	repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{ID: "agent-1"}, true, nil)
 	repo.On("Remove", mock.Anything, "agent-1").Return(nil)
 
-	err := svc.Delete(context.Background(), "tenant-1", "agent-1")
+	err := svc.Delete(context.Background(), "tenant-1", "agent-1", "user-1")
 	assert.NoError(t, err)
 	repo.AssertExpectations(t)
 }
@@ -811,7 +811,7 @@ func TestAgentService_DeleteSystemAssistantRejectsBeforeCleanup(t *testing.T) {
 	}, true, nil)
 	repo.On("Remove", ctx, id).Return(domain.ErrSystemAssistantManaged).Maybe()
 
-	err := svc.Delete(ctx, "tenant-1", id)
+	err := svc.Delete(ctx, "tenant-1", id, "user-1")
 
 	assert.ErrorIs(t, err, domain.ErrSystemAssistantManaged)
 	assert.Zero(t, memoryCalls)
@@ -834,7 +834,7 @@ func TestAgentService_DeletePropagatesIdentityLookupFailureBeforeCleanup(t *test
 	wantErr := errors.New("identity lookup failed")
 	repo.On("Get", ctx, "agent-1").Return((*domain.AgentConfig)(nil), false, wantErr)
 
-	err := svc.Delete(ctx, "tenant-1", "agent-1")
+	err := svc.Delete(ctx, "tenant-1", "agent-1", "user-1")
 
 	assert.ErrorIs(t, err, wantErr)
 	assert.Zero(t, memoryCalls)
@@ -856,7 +856,7 @@ func TestAgentService_DeleteNotFoundRejectsBeforeCleanup(t *testing.T) {
 	ctx := context.Background()
 	repo.On("Get", ctx, "missing").Return((*domain.AgentConfig)(nil), false, nil)
 
-	err := svc.Delete(ctx, "tenant-1", "missing")
+	err := svc.Delete(ctx, "tenant-1", "missing", "user-1")
 
 	assert.ErrorIs(t, err, application.ErrNotFound)
 	assert.Zero(t, memoryCalls)
@@ -869,11 +869,12 @@ func TestAgentService_DeleteReturnsCleanupErrorBeforeRemovingRegistry(t *testing
 	wantErr := errors.New("memory cleanup failed")
 	svc := application.NewAgentService(application.AgentServiceDeps{
 		Registry:      application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
-		MemoryCleaner: stubMemoryCleaner{err: wantErr}, Logger: zap.NewNop(),
+		MemoryCleaner: stubMemoryCleaner{err: wantErr}, TenantRoleResolver: stubTenantRole{role: "owner"},
+		Logger: zap.NewNop(),
 	})
 	repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{ID: "agent-1"}, true, nil)
 
-	err := svc.Delete(context.Background(), "tenant-1", "agent-1")
+	err := svc.Delete(context.Background(), "tenant-1", "agent-1", "user-1")
 	assert.ErrorIs(t, err, wantErr)
 	repo.AssertNotCalled(t, "Remove", mock.Anything, mock.Anything)
 }
@@ -882,11 +883,13 @@ func TestAgentService_DeleteReturnsChatCleanupErrorBeforeRemovingRegistry(t *tes
 	repo := new(mockAgentRepo)
 	wantErr := errors.New("chat cleanup failed")
 	svc := application.NewAgentService(application.AgentServiceDeps{
-		Registry: application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()), ChatStore: stubChatRepo{err: wantErr}, Logger: zap.NewNop(),
+		Registry:  application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		ChatStore: stubChatRepo{err: wantErr}, TenantRoleResolver: stubTenantRole{role: "owner"},
+		Logger: zap.NewNop(),
 	})
 	repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{ID: "agent-1"}, true, nil)
 
-	err := svc.Delete(context.Background(), "tenant-1", "agent-1")
+	err := svc.Delete(context.Background(), "tenant-1", "agent-1", "user-1")
 	assert.ErrorIs(t, err, wantErr)
 	repo.AssertNotCalled(t, "Remove", mock.Anything, mock.Anything)
 }
@@ -950,4 +953,12 @@ func TestAgentService_Execute_NotFound(t *testing.T) {
 	})
 	_, _, err := svc.Execute(context.Background(), "missing", application.ExecRequest{Query: "hi"}, application.ExecMeta{TenantID: "t1"})
 	assert.ErrorIs(t, err, application.ErrNotFound)
+}
+
+// stubTenantRole resolves every actor as a fixed role so ownership tests
+// control authorization via the fake, not tenant membership.
+type stubTenantRole struct{ role string }
+
+func (s stubTenantRole) ResolveTenantRole(_ context.Context, _, _ string) (string, error) {
+	return s.role, nil
 }

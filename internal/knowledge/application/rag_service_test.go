@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
@@ -316,7 +317,7 @@ type recordingWorkspaceRepo struct {
 	workspace *domain.Workspace
 }
 
-func (r *recordingWorkspaceRepo) Create(ctx context.Context, tenantID string, ws *domain.Workspace) error {
+func (r *recordingWorkspaceRepo) Create(ctx context.Context, tenantID string, ws *domain.Workspace, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 
@@ -332,15 +333,11 @@ func (r *recordingWorkspaceRepo) List(ctx context.Context, tenantID string) ([]*
 	return nil, nil
 }
 
-func (r *recordingWorkspaceRepo) UpdateDescriptionAndConfig(ctx context.Context, tenantID, name string, description *string, cfg domain.WorkspaceConfig) error {
+func (r *recordingWorkspaceRepo) UpdateWorkspaceAll(ctx context.Context, tenantID, name string, renameTo, description *string, cfg domain.WorkspaceConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 
-func (r *recordingWorkspaceRepo) UpdateName(ctx context.Context, tenantID, oldName, newName string) error {
-	return nil
-}
-
-func (r *recordingWorkspaceRepo) Delete(ctx context.Context, tenantID, name string) error {
+func (r *recordingWorkspaceRepo) Delete(ctx context.Context, tenantID, name string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 

@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
+	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -439,6 +441,30 @@ func recordExperimentDecisionTx(
 	return err
 }
 
+// promoteChangeAuditTx records the evaluation worker's publish as a change
+// audit row in the SAME transaction as the promotion. The tenant comes from
+// the tenant context injected by execTenant; missing tenant context is a
+// caller bug and fails the promotion.
+func promoteChangeAuditTx(ctx context.Context, tx pgx.Tx, experiment domain.Experiment) error {
+	tc, ok := tenantdb.FromContext(ctx)
+	if !ok || tc.TenantID == "" {
+		return fmt.Errorf("experiment repository: promote change audit: missing tenant context")
+	}
+	kind := auditdomain.ResourceKindAgent
+	if experiment.ResourceKind == domain.ResourceKindSkill {
+		kind = auditdomain.ResourceKindSkill
+	}
+	_, err := tx.Exec(ctx, auditdomain.ChangeAuditInsertSQL,
+		uuid.Must(uuid.NewV7()).String(), tc.TenantID,
+		kind, experiment.ResourceID, auditdomain.ChangeOpUpdate,
+		"evaluation-worker", auditdomain.ChangeActorSystem, auditdomain.ChangeSourceOptimization,
+		"", json.RawMessage(`{}`), json.RawMessage(`{}`))
+	if err != nil {
+		return fmt.Errorf("experiment repository: insert promote change audit: %w", err)
+	}
+	return nil
+}
+
 func promoteCandidateTx(ctx context.Context, tx pgx.Tx, experiment domain.Experiment) error {
 	var revisionResult pgconn.CommandTag
 	var err error
@@ -480,7 +506,7 @@ func promoteCandidateTx(ctx context.Context, tx pgx.Tx, experiment domain.Experi
 	if candidateResult.RowsAffected() != 1 {
 		return domain.ErrExperimentInvalidCandidate
 	}
-	return nil
+	return promoteChangeAuditTx(ctx, tx, experiment)
 }
 
 func getExperimentTx(ctx context.Context, tx pgx.Tx, experimentID string, lock bool) (domain.Experiment, bool, error) {

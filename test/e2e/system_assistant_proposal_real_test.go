@@ -36,6 +36,20 @@ type classifiedProposalApplier struct {
 	err   error
 }
 
+// realTenantRoleResolver resolves the actor's actual tenant role from the real
+// public.tenant_members table — the same chain production wiring uses
+// (tenantRoleAdapter → TenantService).
+type realTenantRoleResolver struct {
+	members *iamapp.TenantService
+}
+
+func (r realTenantRoleResolver) ResolveTenantRole(ctx context.Context, tenantID, userID string) (string, error) {
+	if r.members == nil {
+		return "", errors.New("members service not wired")
+	}
+	return r.members.GetMemberRole(ctx, tenantID, userID)
+}
+
 // realMemberProposalAuthorizer resolves the actor's actual tenant role from the
 // real public.tenant_members table through iam.TenantService — the same chain
 // production wiring uses (proposalAuthorizer → tenantRoleAdapter → TenantService).
@@ -142,20 +156,26 @@ func TestSystemAssistantProposalRealServices(t *testing.T) {
 	pool, tenants := setupSystemAssistantPostgres(t)
 	tenantID := tenants[0]
 	actorID := uuid.NewString()
+	insertRealMember(t, pool, tenantID, actorID, "admin")
 	ctx := assistantTenantContext(tenantID, actorID, tenantdb.RoleTenantAdmin)
 	otherTenantCtx := assistantTenantContext(tenants[1], actorID, tenantdb.RoleTenantAdmin)
 
 	agentRepo := agentpersist.NewPgAgentRepo(pool)
+	members := iamapp.NewTenantService(iampersistence.NewTenantRepo(pool), zap.NewNop())
+	roles := realTenantRoleResolver{members: members}
 	agentSvc := agentapp.NewAgentService(agentapp.AgentServiceDeps{
 		Registry: agentapp.NewRegistry(
 			agentRepo,
 			agentapp.BuiltinSystemAssistantProfileSource(),
 			zap.NewNop(),
 		),
-		Logger: zap.NewNop(),
+		TenantRoleResolver: roles,
+		Logger:             zap.NewNop(),
 	})
 	skillSvc := skillapp.NewVersionService(skillpersist.NewPgSkillRevisionRepo(pool), zap.NewNop())
+	skillSvc.SetTenantRoleResolver(roles)
 	workspaceSvc := knowledgeapp.NewWorkspaceService(knowledgepersist.NewWorkspaceRepo(pool), nil, zap.NewNop())
+	workspaceSvc.SetTenantRoleResolver(roles)
 	mcpServer := testserver.New(t)
 	mcpServer.SetTools([]testserver.Tool{{
 		Name: "read_verified_docs", InputSchema: map[string]any{"type": "object"},
@@ -168,6 +188,7 @@ func TestSystemAssistantProposalRealServices(t *testing.T) {
 		mcpinfra.ServerManagerAsPort(manager),
 		zap.NewNop(),
 	)
+	mcpSvc.SetTenantRoleResolver(roles)
 	adapters := wiring.NewResourceChangeProposalAdapters(agentSvc, skillSvc, mcpSvc, workspaceSvc)
 	repo := agentpersist.NewPgResourceChangeProposalRepo(pool)
 	service := agentapp.NewResourceChangeProposalService(
@@ -455,7 +476,7 @@ func TestSystemAssistantProposalInProcessToolUsesRealMemberPermissions(t *testin
 	existing.LLMModel = "deterministic-e2e-model"
 	_, err = agentRepo.UpdateSystemAssistantModel(
 		ctx, existing.LLMModel, existing.MemoryScope, existing.CheckpointEnabled,
-		existing.MaxIterations, existing.MaxContextTokens,
+		existing.MaxIterations, existing.MaxContextTokens, nil,
 	)
 	require.NoError(t, err)
 

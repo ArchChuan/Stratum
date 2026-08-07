@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
@@ -155,11 +156,11 @@ func (r *evaluationSkillVersionRepo) GetRevision(ctx context.Context, skillID, r
 	}
 	return r.revision, r.revision.SkillID == skillID && r.revision.ID == revisionID, nil
 }
-func (r *evaluationSkillVersionRepo) InsertCandidate(_ context.Context, candidate skilldomain.SkillRevision) error {
+func (r *evaluationSkillVersionRepo) InsertCandidate(_ context.Context, candidate skilldomain.SkillRevision, _ *auditdomain.ResourceChangeAuditEvent) error {
 	r.revision = candidate
 	return nil
 }
-func (r *evaluationSkillVersionRepo) InsertSkillWithDraft(context.Context, skillport.SkillProductRow, skilldomain.SkillRevision) error {
+func (r *evaluationSkillVersionRepo) InsertSkillWithDraft(context.Context, skillport.SkillProductRow, skilldomain.SkillRevision, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (r *evaluationSkillVersionRepo) GetSkill(_ context.Context, skillID string) (skillport.SkillProductRow, bool, error) {
@@ -169,7 +170,9 @@ func (r *evaluationSkillVersionRepo) GetSkill(_ context.Context, skillID string)
 func (r *evaluationSkillVersionRepo) ListSkills(context.Context) ([]skillport.SkillProductRow, error) {
 	return nil, nil
 }
-func (r *evaluationSkillVersionRepo) DeleteSkill(context.Context, string) error { return nil }
+func (r *evaluationSkillVersionRepo) DeleteSkill(context.Context, string, *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (r *evaluationSkillVersionRepo) GetDraftRevision(context.Context, string) (skilldomain.SkillRevision, bool, error) {
 	return skilldomain.SkillRevision{}, false, nil
 }
@@ -180,19 +183,19 @@ func (r *evaluationSkillVersionRepo) GetActiveRevision(ctx context.Context, skil
 	}
 	return r.revision, r.revision.SkillID == skillID && r.revision.Status == skilldomain.VersionStatusPublished, nil
 }
-func (r *evaluationSkillVersionRepo) UpdateDraftCapability(context.Context, string, skilldomain.Capability, string) (skilldomain.SkillRevision, error) {
+func (r *evaluationSkillVersionRepo) UpdateDraftCapability(context.Context, string, skilldomain.Capability, string, *auditdomain.ResourceChangeAuditEvent) (skilldomain.SkillRevision, error) {
 	return skilldomain.SkillRevision{}, nil
 }
-func (r *evaluationSkillVersionRepo) UpdateDraftActivation(context.Context, string, skilldomain.ActivationContract, string) (skilldomain.SkillRevision, error) {
+func (r *evaluationSkillVersionRepo) UpdateDraftActivation(context.Context, string, skilldomain.ActivationContract, string, *auditdomain.ResourceChangeAuditEvent) (skilldomain.SkillRevision, error) {
 	return skilldomain.SkillRevision{}, nil
 }
-func (r *evaluationSkillVersionRepo) UpdateDraftInstructions(context.Context, string, string, skilldomain.Requirements, string) (skilldomain.SkillRevision, error) {
+func (r *evaluationSkillVersionRepo) UpdateDraftInstructions(context.Context, string, string, skilldomain.Requirements, string, *auditdomain.ResourceChangeAuditEvent) (skilldomain.SkillRevision, error) {
 	return skilldomain.SkillRevision{}, nil
 }
-func (r *evaluationSkillVersionRepo) UpdateDraftBundle(context.Context, string, string, skillport.SkillProductRow, skilldomain.SkillRevision) (skilldomain.SkillRevision, error) {
+func (r *evaluationSkillVersionRepo) UpdateDraftBundle(context.Context, string, string, skillport.SkillProductRow, skilldomain.SkillRevision, *auditdomain.ResourceChangeAuditEvent) (skilldomain.SkillRevision, error) {
 	return skilldomain.SkillRevision{}, nil
 }
-func (r *evaluationSkillVersionRepo) PublishDraft(context.Context, string, string, int, map[string]any) (skilldomain.SkillRevision, error) {
+func (r *evaluationSkillVersionRepo) PublishDraft(context.Context, string, string, int, map[string]any, *auditdomain.ResourceChangeAuditEvent) (skilldomain.SkillRevision, error) {
 	return skilldomain.SkillRevision{}, nil
 }
 func (r *evaluationSkillVersionRepo) NextRevisionNo(context.Context, string) (int, error) {

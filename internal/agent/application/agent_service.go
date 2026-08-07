@@ -18,6 +18,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
@@ -63,6 +64,7 @@ type AgentServiceDeps struct {
 	DiagnosticProvider        port.DiagnosticEvidenceProvider
 	ProposalService           *ResourceChangeProposalService
 	OperationGate             port.OperationGate
+	TenantRoleResolver        port.TenantRoleResolver
 	Logger                    *zap.Logger
 }
 
@@ -95,6 +97,10 @@ func (s *AgentService) SetOperationGate(gate port.OperationGate) {
 	s.deps.OperationGate = gate
 }
 
+func (s *AgentService) SetTenantRoleResolver(resolver port.TenantRoleResolver) {
+	s.deps.TenantRoleResolver = resolver
+}
+
 func (s *AgentService) SetAgentRevisionResolver(resolver port.AgentRevisionResolver) {
 	s.deps.AgentRevisionResolver = resolver
 }
@@ -115,6 +121,7 @@ func (s *AgentService) SetMCPToolExecutor(executor port.MCPToolExecutor) {
 // transport.
 type CreateAgentInput struct {
 	TenantID               string
+	ActorID                string
 	Name                   string
 	Type                   string
 	Description            string
@@ -134,6 +141,7 @@ type CreateAgentInput struct {
 }
 
 type UpdateAgentInput struct {
+	ActorID                string
 	Name                   string
 	Type                   string
 	Description            string
@@ -185,8 +193,12 @@ type SystemAssistantSettings struct {
 	AvailableModels []string
 }
 
-// Create persists a new agent for the tenant.
+// Create persists a new agent for the tenant. Only owner/admin roles may
+// create; the caller becomes the resource owner (created_by).
 func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDTO, error) {
+	if err := s.checkOwnership(ctx, in.ActorID, in.ActorID); err != nil {
+		return AgentDTO{}, err
+	}
 	id := uuid.Must(uuid.NewV7()).String()
 	maxCtxTokens := in.MaxContextTokens
 	if maxCtxTokens <= 0 {
@@ -211,13 +223,18 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		MemoryScope:            in.MemoryScope,
 		CheckpointEnabled:      in.CheckpointEnabled,
 		Capabilities:           []domain.AgentCapability{},
+		CreatedBy:              in.ActorID,
 	}
 
 	a := NewBaseAgent(cfg, s.deps.Logger)
 	if s.deps.Metrics != nil {
 		a = a.WithMetrics(s.deps.Metrics)
 	}
-	if err := s.deps.Registry.Register(ctx, a); err != nil {
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindAgent, id, auditdomain.ChangeOpCreate, in.ActorID, nil, AgentSafeProjection(cfg))
+	if err != nil {
+		return AgentDTO{}, err
+	}
+	if err := s.deps.Registry.Register(ctx, a, audit); err != nil {
 		return AgentDTO{}, err
 	}
 	s.deps.Logger.Info("agent created", zap.String("id", id), zap.String("name", in.Name))
@@ -444,7 +461,7 @@ func (s *AgentService) systemAssistantSettings(ctx context.Context, a Agent) (Sy
 	return settings, nil
 }
 
-func (s *AgentService) UpdateSystemAssistantModel(ctx context.Context, model string) (SystemAssistantSettings, error) {
+func (s *AgentService) UpdateSystemAssistantModel(ctx context.Context, model string, actorID string) (SystemAssistantSettings, error) {
 	model, tenantID, err := s.validateSystemAssistantModel(ctx, model)
 	if err != nil {
 		return SystemAssistantSettings{}, err
@@ -461,7 +478,12 @@ func (s *AgentService) UpdateSystemAssistantModel(ctx context.Context, model str
 		return SystemAssistantSettings{}, ErrNotFound
 	}
 	existingCfg := existing.GetConfig()
-	a, err := s.deps.Registry.UpdateSystemAssistantModel(ctx, model, existingCfg.MemoryScope, existingCfg.CheckpointEnabled, existingCfg.MaxIterations, existingCfg.MaxContextTokens)
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindAgent, existingCfg.ID, auditdomain.ChangeOpUpdate, actorID,
+		AgentSafeProjection(existingCfg), nil)
+	if err != nil {
+		return SystemAssistantSettings{}, err
+	}
+	a, err := s.deps.Registry.UpdateSystemAssistantModel(ctx, model, existingCfg.MemoryScope, existingCfg.CheckpointEnabled, existingCfg.MaxIterations, existingCfg.MaxContextTokens, audit)
 	if err != nil {
 		return SystemAssistantSettings{}, fmt.Errorf("agent service update system assistant model: %w", err)
 	}
@@ -517,6 +539,9 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	if existing.GetConfig().SystemKey != "" {
 		return s.updateSystemAssistant(ctx, existing.GetConfig(), in)
 	}
+	if err := s.checkOwnership(ctx, in.ActorID, existing.GetConfig().CreatedBy); err != nil {
+		return AgentDTO{}, err
+	}
 	skills := in.AllowedSkills
 	if skills == nil {
 		skills = []string{}
@@ -545,7 +570,12 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 		MemoryScope:            in.MemoryScope,
 		CheckpointEnabled:      in.CheckpointEnabled,
 	}
-	if err := s.deps.Registry.Update(ctx, cfg); err != nil {
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindAgent, id, auditdomain.ChangeOpUpdate, in.ActorID,
+		AgentSafeProjection(existing.GetConfig()), AgentSafeProjection(cfg))
+	if err != nil {
+		return AgentDTO{}, err
+	}
+	if err := s.deps.Registry.Update(ctx, cfg, audit); err != nil {
 		return AgentDTO{}, err
 	}
 	s.deps.Logger.Info("agent updated", zap.String("id", id), zap.String("name", in.Name))
@@ -581,24 +611,21 @@ func (s *AgentService) updateSystemAssistant(ctx context.Context, cfg *domain.Ag
 	if maxContextTokens <= 0 {
 		maxContextTokens = cfg.MaxContextTokens
 	}
-	updated, err := s.deps.Registry.UpdateSystemAssistantModel(ctx, model, memoryScope, in.CheckpointEnabled, maxIterations, maxContextTokens)
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindAgent, cfg.ID, auditdomain.ChangeOpUpdate, in.ActorID,
+		AgentSafeProjection(cfg), nil)
 	if err != nil {
-		return AgentDTO{}, fmt.Errorf("update system assistant model: %w", err)
+		return AgentDTO{}, err
 	}
-	cfg = updated.GetConfig()
-	skills := append([]string{}, cfg.AllowedSkills...)
-	mcpTools := append([]string{}, cfg.MCPToolIDs...)
-	knowledge := append([]string{}, cfg.KnowledgeWorkspaceIDs...)
-	updated, err = s.deps.Registry.UpdateSystemAssistantBindings(ctx, mcpTools, knowledge, skills)
+	updated, err := s.deps.Registry.UpdateSystemAssistantAll(ctx, model, memoryScope, in.CheckpointEnabled, maxIterations, maxContextTokens, audit)
 	if err != nil {
-		return AgentDTO{}, fmt.Errorf("update system assistant bindings: %w", err)
+		return AgentDTO{}, fmt.Errorf("update system assistant: %w", err)
 	}
 	s.deps.Logger.Info("system assistant updated", zap.String("id", cfg.ID))
 	return cfgToDTO(updated.GetConfig()), nil
 }
 
 // Delete removes an agent and cascades deletion to conversations and memories.
-func (s *AgentService) Delete(ctx context.Context, tenantID, id string) error {
+func (s *AgentService) Delete(ctx context.Context, tenantID, id, actorID string) error {
 	existing, ok, err := s.deps.Registry.Get(ctx, id)
 	if err != nil {
 		return fmt.Errorf("delete agent: load managed identity: %w", err)
@@ -609,6 +636,27 @@ func (s *AgentService) Delete(ctx context.Context, tenantID, id string) error {
 	if existing.GetConfig().SystemKey != "" {
 		return domain.ErrSystemAssistantManaged
 	}
+	if err := s.checkOwnership(ctx, actorID, existing.GetConfig().CreatedBy); err != nil {
+		return err
+	}
+	if err := s.deleteSideEffects(ctx, tenantID, id); err != nil {
+		return err
+	}
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindAgent, id, auditdomain.ChangeOpDelete, actorID,
+		AgentSafeProjection(existing.GetConfig()), nil)
+	if err != nil {
+		return err
+	}
+	if err := s.deps.Registry.Remove(ctx, id, audit); err != nil {
+		return err
+	}
+	s.deps.Logger.Info("agent deleted", zap.String("id", id))
+	return nil
+}
+
+// deleteSideEffects removes per-agent side data before the row deletion.
+// Both stores are optional; their failures abort the delete.
+func (s *AgentService) deleteSideEffects(ctx context.Context, tenantID, id string) error {
 	if s.deps.MemoryCleaner != nil {
 		if err := s.deps.MemoryCleaner.ClearAgentMemories(ctx, tenantID, id); err != nil {
 			return fmt.Errorf("clear agent memories: %w", err)
@@ -619,10 +667,6 @@ func (s *AgentService) Delete(ctx context.Context, tenantID, id string) error {
 			return fmt.Errorf("delete agent chats: %w", err)
 		}
 	}
-	if err := s.deps.Registry.Remove(ctx, id); err != nil {
-		return err
-	}
-	s.deps.Logger.Info("agent deleted", zap.String("id", id))
 	return nil
 }
 

@@ -59,6 +59,8 @@ type SkillRevision struct {
 	Instructions       string
 	Requirements       Requirements
 	PublishChecks      map[string]any
+	// CreatedBy traces who authored this revision (draft author, not ownership).
+	CreatedBy string
 }
 
 func (v SkillRevision) ComputeContentHash() (string, error) {

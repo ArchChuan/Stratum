@@ -93,6 +93,7 @@ func (s *AgentService) GatedSelfModify(
 		KnowledgeWorkspaceIDs: req.KnowledgeWorkspaceIDs,
 		MemoryScope:           req.MemoryScope,
 		CheckpointEnabled:     req.CheckpointEnabled,
+		ActorID:               actorID,
 	})
 	if err != nil {
 		return GatedSelfModifyResult{Decision: decision}, err

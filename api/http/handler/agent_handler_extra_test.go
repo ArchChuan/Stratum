@@ -13,6 +13,7 @@ import (
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -28,7 +29,9 @@ type mockAgentRepo struct {
 	updateErr   error
 }
 
-func (m *mockAgentRepo) Register(context.Context, *domain.AgentConfig) error { return m.registerErr }
+func (m *mockAgentRepo) Register(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return m.registerErr
+}
 func (m *mockAgentRepo) Get(_ context.Context, id string) (*domain.AgentConfig, bool, error) {
 	if m.err != nil {
 		return nil, false, m.err
@@ -54,10 +57,17 @@ func (m *mockAgentRepo) GetSystemAssistant(context.Context) (*domain.AgentConfig
 func (m *mockAgentRepo) GetAll(context.Context) ([]*domain.AgentConfig, error) {
 	return m.agents, m.err
 }
-func (m *mockAgentRepo) Remove(context.Context, string) error              { return m.removeErr }
-func (m *mockAgentRepo) Update(context.Context, *domain.AgentConfig) error { return m.updateErr }
-func (m *mockAgentRepo) UpdateSystemAssistantModel(context.Context, string, string, bool, int, int) (*domain.AgentConfig, error) {
+func (m *mockAgentRepo) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return m.removeErr
+}
+func (m *mockAgentRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return m.updateErr
+}
+func (m *mockAgentRepo) UpdateSystemAssistantModel(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	return nil, m.err
+}
+func (*mockAgentRepo) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+	return nil, nil
 }
 func (m *mockAgentRepo) UpdateSystemAssistantBindings(context.Context, []string, []string, []string) (*domain.AgentConfig, error) {
 	return nil, m.err
@@ -117,7 +127,9 @@ func newTestAgentHandler(t *testing.T, repo *mockAgentRepo, evidence port.TraceE
 	if mut != nil {
 		mut(&deps)
 	}
-	return NewAgentHandler(agent.NewAgentService(deps), zap.NewNop())
+	svc := agent.NewAgentService(deps)
+	svc.SetTenantRoleResolver(fixedTenantRole{role: "owner"})
+	return NewAgentHandler(svc, zap.NewNop())
 }
 
 // agentRoutes 注册本文件被测的全部路由，统一挂 ErrorHandler；
@@ -417,4 +429,12 @@ func TestAgentHandlerResumeToolApproval(t *testing.T) {
 	// Approval runtime 未配置 → 500。
 	w = doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents/a1/approvals/app-1/resume", "")
 	require.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// fixedTenantRole resolves every actor as owner so handler tests reach the
+// service write path; ownership specifics are covered in application tests.
+type fixedTenantRole struct{ role string }
+
+func (r fixedTenantRole) ResolveTenantRole(context.Context, string, string) (string, error) {
+	return r.role, nil
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -84,6 +85,7 @@ type WorkspaceService struct {
 	ingestSvc   *KnowledgeIngest
 	docRepo     port.DocRepo
 	vectorStore collectionProvisioner
+	roles       port.TenantRoleResolver
 	logger      *zap.Logger
 }
 
@@ -98,6 +100,10 @@ func (s *WorkspaceService) SetDocRepo(r port.DocRepo) { s.docRepo = r }
 // SetVectorStore injects vector collection management for workspace lifecycle.
 func (s *WorkspaceService) SetVectorStore(vs collectionProvisioner) { s.vectorStore = vs }
 
+// SetTenantRoleResolver injects the tenant role resolver used by ownership
+// checks. A nil resolver fails all writes closed (ownership unverifiable).
+func (s *WorkspaceService) SetTenantRoleResolver(r port.TenantRoleResolver) { s.roles = r }
+
 // isPlatformManaged reports whether a workspace is owned by the platform and
 // must not be mutated through user-facing APIs.
 func isPlatformManaged(ws *domain.Workspace) bool {
@@ -106,12 +112,22 @@ func isPlatformManaged(ws *domain.Workspace) bool {
 }
 
 // CreateWorkspace builds the aggregate via the domain factory then persists it.
-func (s *WorkspaceService) CreateWorkspace(ctx context.Context, tenantID string, in CreateWorkspaceInput) (*domain.Workspace, error) {
+func (s *WorkspaceService) CreateWorkspace(ctx context.Context, tenantID string, in CreateWorkspaceInput, actorID string) (*domain.Workspace, error) {
+	// create encodes "the creator owns the resource": only owner/admin may create.
+	if err := s.checkOwnership(ctx, tenantID, actorID, actorID); err != nil {
+		return nil, err
+	}
 	ws, err := domain.NewWorkspace(in.Name, in.Description, in.Config, domain.DefaultChunkSize, domain.DefaultTopK)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.repo.Create(ctx, tenantID, ws); err != nil {
+	ws.CreatedBy = actorID
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindKnowledge, ws.ID, auditdomain.ChangeOpCreate,
+		actorID, nil, KnowledgeSafeProjection(ws))
+	if err != nil {
+		return nil, err
+	}
+	if err := s.repo.Create(ctx, tenantID, ws, audit); err != nil {
 		return nil, err
 	}
 	if s.vectorStore != nil {
@@ -122,7 +138,7 @@ func (s *WorkspaceService) CreateWorkspace(ctx context.Context, tenantID string,
 				zap.String("workspace", in.Name),
 				zap.String("collection", col),
 				zap.Error(err))
-			_ = s.repo.Delete(ctx, tenantID, ws.Name)
+			_ = s.repo.Delete(ctx, tenantID, ws.Name, nil)
 			return nil, fmt.Errorf("failed to create vector collection: %w", err)
 		}
 		s.logger.Info("knowledge.workspace.collection_created",
@@ -139,7 +155,7 @@ func (s *WorkspaceService) ListWorkspaces(ctx context.Context, tenantID string) 
 
 // UpdateWorkspace loads the aggregate, applies a partial update via the domain
 // merge rule, then persists. Immutability/validation errors come from domain.
-func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, tenantID, name string, in UpdateWorkspaceInput) (*domain.Workspace, error) {
+func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, tenantID, name string, in UpdateWorkspaceInput, actorID string) (*domain.Workspace, error) {
 	current, err := s.repo.GetByName(ctx, tenantID, name)
 	if err != nil {
 		return nil, err
@@ -147,32 +163,53 @@ func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, tenantID, name s
 	if isPlatformManaged(current) {
 		return nil, domain.ErrPlatformManagedWorkspace
 	}
+	if err := s.checkOwnership(ctx, tenantID, actorID, current.CreatedBy); err != nil {
+		return nil, err
+	}
+	before := KnowledgeSafeProjection(current)
 
+	var renameTo *string
 	if in.Name != nil && *in.Name != name {
-		if err := s.repo.UpdateName(ctx, tenantID, name, *in.Name); err != nil {
-			return nil, err
-		}
-		current.Name = *in.Name
-		name = *in.Name
+		renameTo = in.Name
 	}
 
+	newCfg, after, err := applyWorkspaceUpdate(current, in, renameTo)
+	if err != nil {
+		return nil, err
+	}
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindKnowledge, current.ID, auditdomain.ChangeOpUpdate,
+		actorID, before, KnowledgeSafeProjection(after))
+	if err != nil {
+		return nil, err
+	}
+	if err := s.repo.UpdateWorkspaceAll(ctx, tenantID, name, renameTo, in.Description, newCfg, audit); err != nil {
+		return nil, err
+	}
+	// after is the merged copy; no further in-memory sync needed.
+	return after, nil
+}
+
+// applyWorkspaceUpdate merges the partial input into a copy of current. It
+// returns the merged config (for persistence) and the projected post-state
+// (for the audit after-projection) in one pass.
+func applyWorkspaceUpdate(current *domain.Workspace, in UpdateWorkspaceInput, renameTo *string) (domain.WorkspaceConfig, *domain.Workspace, error) {
 	newCfg := current.Config
 	if in.Config != nil {
-		merged, mergeErr := current.Config.MergeUpdate(*in.Config)
-		if mergeErr != nil {
-			return nil, mergeErr
+		merged, err := current.Config.MergeUpdate(*in.Config)
+		if err != nil {
+			return domain.WorkspaceConfig{}, nil, err
 		}
 		newCfg = merged
 	}
-
-	if err := s.repo.UpdateDescriptionAndConfig(ctx, tenantID, name, in.Description, newCfg); err != nil {
-		return nil, err
+	after := *current
+	if renameTo != nil {
+		after.Name = *renameTo
 	}
-	current.UpdateConfig(newCfg)
+	after.UpdateConfig(newCfg)
 	if in.Description != nil {
-		current.UpdateDescription(*in.Description)
+		after.UpdateDescription(*in.Description)
 	}
-	return current, nil
+	return newCfg, &after, nil
 }
 
 // GetWorkspaceStats fetches workspace metadata and milvus stats; stats errors degrade to {error: ...}.
@@ -203,7 +240,7 @@ func (s *WorkspaceService) GetWorkspaceStats(ctx context.Context, tenantID, name
 }
 
 // DeleteWorkspace cleans milvus + graph storage then removes the DB row.
-func (s *WorkspaceService) DeleteWorkspace(ctx context.Context, tenantID, name string) error {
+func (s *WorkspaceService) DeleteWorkspace(ctx context.Context, tenantID, name, actorID string) error {
 	ws, err := s.repo.GetByName(ctx, tenantID, name)
 	if err != nil {
 		return err
@@ -211,11 +248,19 @@ func (s *WorkspaceService) DeleteWorkspace(ctx context.Context, tenantID, name s
 	if isPlatformManaged(ws) {
 		return domain.ErrPlatformManagedWorkspace
 	}
+	if err := s.checkOwnership(ctx, tenantID, actorID, ws.CreatedBy); err != nil {
+		return err
+	}
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindKnowledge, ws.ID, auditdomain.ChangeOpDelete,
+		actorID, KnowledgeSafeProjection(ws), nil)
+	if err != nil {
+		return err
+	}
 	if err := s.ingestSvc.DeleteWorkspaceData(ctx, tenantID, ws.ID); err != nil {
 		s.logger.Error("failed to clean workspace storage resources", zap.String("name", name), zap.Error(err))
 		return fmt.Errorf("failed to clean storage: %w", err)
 	}
-	return s.repo.Delete(ctx, tenantID, name)
+	return s.repo.Delete(ctx, tenantID, name, audit)
 }
 
 func (s *WorkspaceService) GetConfig(ctx context.Context, tenantID, workspace string) (domain.WorkspaceConfig, error) {
