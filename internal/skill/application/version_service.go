@@ -154,7 +154,9 @@ func (s *VersionService) CreateSkillDraft(ctx context.Context, in CreateSkillDra
 		return SkillWorkspaceView{}, err
 	}
 	s.logger.Info("skill draft created", zap.String("skill_id", skillID), zap.String("draft_revision_id", draftID))
-	return SkillWorkspaceView{Skill: skill, Draft: draft}, nil
+	// Editors must be non-nil: JSON renders a nil slice as null, and the
+	// frontend schema default only covers a missing field, not null.
+	return SkillWorkspaceView{Skill: skill, Draft: draft, Editors: []string{}}, nil
 }
 
 func (s *VersionService) PublishDraft(ctx context.Context, skillID, actorID string) (domain.SkillRevision, error) {

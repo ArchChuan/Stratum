@@ -1332,7 +1332,7 @@ func (m *ClientManager) ListEditors(ctx context.Context, tenantID, serverID stri
 	if m.pool == nil {
 		return []string{}, nil
 	}
-	var out []string
+	out := make([]string, 0)
 	err := tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
 			`SELECT editor_id FROM resource_editors

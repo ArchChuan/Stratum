@@ -37,7 +37,7 @@ func (r *PgResourceEditorRepo) execTenant(ctx context.Context, fn func(ctx conte
 
 // ListEditors returns the editor ids of an agent resource, or an empty slice.
 func (r *PgResourceEditorRepo) ListEditors(ctx context.Context, tenantID, resourceID string) ([]string, error) {
-	var out []string
+	out := make([]string, 0)
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
 			`SELECT editor_id FROM resource_editors

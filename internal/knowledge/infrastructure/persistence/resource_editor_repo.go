@@ -27,7 +27,7 @@ func NewPgResourceEditorRepo(pool poolIface) *PgResourceEditorRepo {
 
 // ListEditors returns the editor ids of a workspace, or an empty slice.
 func (r *PgResourceEditorRepo) ListEditors(ctx context.Context, tenantID, resourceID string) ([]string, error) {
-	var out []string
+	out := make([]string, 0)
 	err := execTenant(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
 			`SELECT editor_id FROM resource_editors
