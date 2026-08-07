@@ -13,3 +13,6 @@ var ErrPlatformManagedServer = errors.New("platform-managed MCP server cannot be
 
 // ErrConnectionLimitExceeded is returned when the global or per-tenant MCP connection cap is hit.
 var ErrConnectionLimitExceeded = errors.New("MCP connection limit exceeded")
+
+// ErrForbidden is returned when the actor may not modify a resource they did not create.
+var ErrForbidden = errors.New("resource ownership forbidden")

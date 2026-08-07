@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS agents (
     max_iterations INT  NOT NULL DEFAULT 10,
     max_context_tokens INTEGER NOT NULL DEFAULT 8000,
     memory_scope   TEXT NOT NULL DEFAULT 'agent',
+    created_by     TEXT NOT NULL DEFAULT '',
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -38,6 +39,7 @@ ALTER TABLE agents DROP COLUMN IF EXISTS embed_model;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_scope TEXT NOT NULL DEFAULT 'agent';
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS system_key TEXT;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS checkpoint_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_system_key
     ON agents(system_key) WHERE system_key IS NOT NULL;
 
@@ -115,6 +117,28 @@ CREATE TABLE IF NOT EXISTS resource_change_proposal_events (
 );
 CREATE INDEX IF NOT EXISTS idx_resource_change_proposal_events_order
     ON resource_change_proposal_events(proposal_id, created_at, id);
+
+-- Semantic change audit for tenant-managed resources (agents, skills, mcp_configs,
+-- rag_workspaces). One row per committed create/update/delete, written in the same
+-- transaction as the business change. Projections are de-sensitized (no credentials).
+CREATE TABLE IF NOT EXISTS resource_change_audits (
+    id                TEXT PRIMARY KEY,
+    tenant_id         TEXT NOT NULL DEFAULT '',
+    resource_kind     TEXT NOT NULL,
+    resource_id       TEXT NOT NULL DEFAULT '',
+    operation         TEXT NOT NULL DEFAULT '',
+    actor_id          TEXT NOT NULL DEFAULT '',
+    actor_type        TEXT NOT NULL DEFAULT 'user',
+    source            TEXT NOT NULL DEFAULT 'api',
+    proposal_id       TEXT NOT NULL DEFAULT '',
+    before_projection JSONB NOT NULL DEFAULT '{}',
+    after_projection  JSONB NOT NULL DEFAULT '{}',
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_rca_kind
+    ON resource_change_audits (resource_kind, resource_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rca_tenant
+    ON resource_change_audits (tenant_id, created_at DESC);
 
 -- Operation-gate proposals gate member-initiated agent mutations (T8).
 -- fingerprint is the server-computed sha256(agentID|opType|canonicalJSON(payload));
@@ -217,6 +241,7 @@ CREATE TABLE IF NOT EXISTS skills (
     status             TEXT NOT NULL DEFAULT 'draft',
     active_revision_id TEXT,
     draft_revision_id  TEXT,
+    created_by         TEXT NOT NULL DEFAULT '',
     created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -226,6 +251,7 @@ ALTER TABLE skills ADD COLUMN IF NOT EXISTS active_revision_id TEXT;
 ALTER TABLE skills ADD COLUMN IF NOT EXISTS draft_revision_id TEXT;
 ALTER TABLE skills ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE skills ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS skill_revisions (
     id                  TEXT PRIMARY KEY,
@@ -537,11 +563,13 @@ CREATE TABLE IF NOT EXISTS mcp_configs (
     enabled         BOOL NOT NULL DEFAULT true,
     system_key      TEXT,
     management_mode TEXT NOT NULL DEFAULT 'tenant_managed',
+    created_by      TEXT NOT NULL DEFAULT '',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS system_key TEXT;
 ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS management_mode TEXT NOT NULL DEFAULT 'tenant_managed';
+ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_configs_system_key
     ON mcp_configs(system_key) WHERE system_key IS NOT NULL;
 
@@ -605,6 +633,7 @@ CREATE TABLE IF NOT EXISTS rag_workspaces (
     name        TEXT NOT NULL UNIQUE,
     description TEXT,
     config      JSONB NOT NULL DEFAULT '{}',
+    created_by  TEXT NOT NULL DEFAULT '',
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -612,6 +641,7 @@ CREATE TABLE IF NOT EXISTS rag_workspaces (
 -- Platform-managed workspace markers (self-healing backfill for legacy tenants).
 ALTER TABLE rag_workspaces ADD COLUMN IF NOT EXISTS system_key TEXT;
 ALTER TABLE rag_workspaces ADD COLUMN IF NOT EXISTS management_mode TEXT NOT NULL DEFAULT 'tenant_managed';
+ALTER TABLE rag_workspaces ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_rag_workspaces_system_key
     ON rag_workspaces(system_key) WHERE system_key IS NOT NULL;
 

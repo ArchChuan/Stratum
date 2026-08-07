@@ -14,8 +14,10 @@ import (
 	"strings"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	pgstore "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -45,6 +47,33 @@ func (r *PgAgentRepo) execTenant(ctx context.Context, fn func(ctx context.Contex
 		return fmt.Errorf("agent_repo: missing tenant context")
 	}
 	return pgstore.ExecTenantWith(ctx, r.pool, tc.TenantID, fn)
+}
+
+// insertChangeAudit persists one audit row inside the business transaction.
+// ev == nil skips the write (internal reentrant paths only); a non-nil event
+// must be complete — an empty resource id or operation is a caller bug and
+// fails the transaction closed.
+func insertChangeAudit(ctx context.Context, tx pgx.Tx, ev *auditdomain.ResourceChangeAuditEvent) error {
+	ev = ev.Normalized()
+	if ev == nil {
+		return nil
+	}
+	if ev.ResourceID == "" || ev.Operation == "" || ev.ResourceKind == "" {
+		return fmt.Errorf("change audit: incomplete event (kind=%s id=%q op=%q)",
+			ev.ResourceKind, ev.ResourceID, ev.Operation)
+	}
+	tc, ok := tenantdb.FromContext(ctx)
+	if !ok || tc.TenantID == "" {
+		return fmt.Errorf("change audit: missing tenant context")
+	}
+	_, err := tx.Exec(ctx, auditdomain.ChangeAuditInsertSQL,
+		uuid.Must(uuid.NewV7()).String(), tc.TenantID,
+		ev.ResourceKind, ev.ResourceID, ev.Operation, ev.ActorID, ev.ActorType, ev.Source,
+		ev.ProposalID, ev.Before, ev.After)
+	if err != nil {
+		return fmt.Errorf("insert change audit %s %s: %w", ev.ResourceKind, ev.ResourceID, err)
+	}
+	return nil
 }
 
 func (r *PgAgentRepo) replaceSkills(ctx context.Context, tx pgx.Tx, agentID string, skillIDs []string) error {
@@ -171,14 +200,15 @@ func loadKnowledgeWorkspaces(ctx context.Context, tx pgx.Tx, agentID string) ([]
 	return ids, names, descs, rows.Err()
 }
 
-// Register inserts a new agent row + relations.
-func (r *PgAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig) error {
+// Register inserts a new agent row + relations, auditing the create in the
+// same transaction.
+func (r *PgAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
-			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope, system_key, checkpoint_enabled)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10)`,
+			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope, system_key, checkpoint_enabled, created_by)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10,$11)`,
 			cfg.ID, cfg.Name, string(cfg.Type), cfg.Description,
-			cfg.SystemPrompt, cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, cfg.CheckpointEnabled,
+			cfg.SystemPrompt, cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, cfg.CheckpointEnabled, cfg.CreatedBy,
 		)
 		if err != nil {
 			var pgErr *pgconn.PgError
@@ -196,6 +226,9 @@ func (r *PgAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig) err
 		if err := r.replaceKnowledgeWorkspaces(ctx, tx, cfg.ID, cfg.KnowledgeWorkspaceIDs); err != nil {
 			return err
 		}
+		if err := insertChangeAudit(ctx, tx, audit); err != nil {
+			return err
+		}
 		return nil
 	})
 }
@@ -207,11 +240,11 @@ func (r *PgAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig, 
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
 			`SELECT id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope,
-			        COALESCE(system_key, ''), COALESCE(checkpoint_enabled, false)
+			        COALESCE(system_key, ''), COALESCE(checkpoint_enabled, false), COALESCE(created_by, '')
 			 FROM agents WHERE id = $1`, id).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
 				&cfg.SystemPrompt, &cfg.LLMModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope,
-				&cfg.SystemKey, &cfg.CheckpointEnabled); err != nil {
+				&cfg.SystemKey, &cfg.CheckpointEnabled, &cfg.CreatedBy); err != nil {
 			return err
 		}
 		skillIDs, err := loadSkillIDs(ctx, tx, id)
@@ -253,10 +286,10 @@ func (r *PgAgentRepo) GetSystemAssistant(ctx context.Context) (*domain.AgentConf
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
 			`SELECT id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens,
-			        memory_scope, system_key, COALESCE(checkpoint_enabled, false)
+			        memory_scope, system_key, COALESCE(checkpoint_enabled, false), COALESCE(created_by, '')
 			 FROM agents WHERE system_key = 'stratum.platform_assistant'`).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
-				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CheckpointEnabled); err != nil {
+				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CheckpointEnabled, &cfg.CreatedBy); err != nil {
 			return err
 		}
 		if err := loadAgentRelations(ctx, tx, &cfg); err != nil {
@@ -320,7 +353,7 @@ func (r *PgAgentRepo) GetAll(ctx context.Context) ([]*domain.AgentConfig, error)
 func scanAgents(ctx context.Context, tx pgx.Tx) ([]*domain.AgentConfig, []string, error) {
 	rows, err := tx.Query(ctx,
 		`SELECT id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope,
-		        COALESCE(system_key, ''), COALESCE(checkpoint_enabled, false)
+		        COALESCE(system_key, ''), COALESCE(checkpoint_enabled, false), COALESCE(created_by, '')
 		 FROM agents ORDER BY created_at`)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list agents: %w", err)
@@ -333,7 +366,7 @@ func scanAgents(ctx context.Context, tx pgx.Tx) ([]*domain.AgentConfig, []string
 		var agentType string
 		if err := rows.Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
 			&cfg.SystemPrompt, &cfg.LLMModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope,
-			&cfg.SystemKey, &cfg.CheckpointEnabled); err != nil {
+			&cfg.SystemKey, &cfg.CheckpointEnabled, &cfg.CreatedBy); err != nil {
 			return nil, nil, fmt.Errorf("scan agent row: %w", err)
 		}
 		cfg.Type = domain.AgentType(agentType)
@@ -414,8 +447,9 @@ func nonNil(s []string) []string {
 	return s
 }
 
-// Remove deletes an agent from the tenant schema.
-func (r *PgAgentRepo) Remove(ctx context.Context, id string) error {
+// Remove deletes an agent from the tenant schema, auditing the delete in the
+// same transaction.
+func (r *PgAgentRepo) Remove(ctx context.Context, id string, audit *auditdomain.ResourceChangeAuditEvent) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := rejectManagedAssistant(ctx, tx, id); err != nil {
 			return err
@@ -427,12 +461,17 @@ func (r *PgAgentRepo) Remove(ctx context.Context, id string) error {
 		if tag.RowsAffected() == 0 {
 			return fmt.Errorf("remove agent %s: %w", id, domain.ErrNotFound)
 		}
+		if err := insertChangeAudit(ctx, tx, audit); err != nil {
+			return err
+		}
 		return nil
 	})
 }
 
-// Update replaces an agent's mutable fields in the tenant schema.
-func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig) error {
+// Update replaces an agent's mutable fields in the tenant schema, auditing
+// the change in the same transaction. created_by is deliberately not in the
+// SET list — ownership never changes after creation.
+func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := rejectManagedAssistant(ctx, tx, cfg.ID); err != nil {
 			return err
@@ -461,11 +500,17 @@ func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig) error
 		if err := r.replaceKnowledgeWorkspaces(ctx, tx, cfg.ID, cfg.KnowledgeWorkspaceIDs); err != nil {
 			return err
 		}
+		if err := insertChangeAudit(ctx, tx, audit); err != nil {
+			return err
+		}
 		return nil
 	})
 }
 
-func (r *PgAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int) (*domain.AgentConfig, error) {
+// UpdateSystemAssistantModel updates the platform assistant's model fields in
+// a single transaction, auditing the change. Ownership checks do not apply —
+// the platform assistant is exempt — but every change is still recorded.
+func (r *PgAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	var cfg domain.AgentConfig
 	var agentType string
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -473,9 +518,9 @@ func (r *PgAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model stri
 			max_iterations=$4, max_context_tokens=$5, updated_at=NOW()
 			WHERE system_key='stratum.platform_assistant'
 			RETURNING id, name, type, description, system_prompt, llm_model,
-			          max_iterations, max_context_tokens, memory_scope, system_key, checkpoint_enabled`, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens).
+			          max_iterations, max_context_tokens, memory_scope, system_key, checkpoint_enabled, created_by`, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
-				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CheckpointEnabled); err != nil {
+				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CheckpointEnabled, &cfg.CreatedBy); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("update system assistant model: %w", domain.ErrNotFound)
 			}
@@ -483,6 +528,9 @@ func (r *PgAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model stri
 		}
 		if err := loadAgentRelations(ctx, tx, &cfg); err != nil {
 			return fmt.Errorf("update system assistant model relations: %w", err)
+		}
+		if err := insertChangeAudit(ctx, tx, audit); err != nil {
+			return err
 		}
 		return nil
 	})
@@ -497,34 +545,30 @@ func (r *PgAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model stri
 	return &cfg, nil
 }
 
-func (r *PgAgentRepo) UpdateSystemAssistantBindings(
-	ctx context.Context, mcpToolIDs, knowledgeWorkspaceIDs, allowedSkills []string,
-) (*domain.AgentConfig, error) {
+// UpdateSystemAssistantAll applies the platform assistant's model fields and
+// (unchanged) bindings in ONE transaction so the change audit lands with the
+// business write atomically. Formerly UpdateSystemAssistantModel +
+// UpdateSystemAssistantBindings in two separate transactions.
+func (r *PgAgentRepo) UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, checkpointEnabled bool, maxIterations, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	var cfg domain.AgentConfig
 	var agentType string
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx,
-			`UPDATE agents SET updated_at=NOW()
-			 WHERE system_key='stratum.platform_assistant'
-			 RETURNING id, name, type, description, system_prompt, llm_model,
-			           max_iterations, max_context_tokens, memory_scope, system_key, checkpoint_enabled`).
+		if err := tx.QueryRow(ctx, `UPDATE agents SET llm_model=$1, memory_scope=$2, checkpoint_enabled=$3,
+			max_iterations=$4, max_context_tokens=$5, updated_at=NOW()
+			WHERE system_key='stratum.platform_assistant'
+			RETURNING id, name, type, description, system_prompt, llm_model,
+			          max_iterations, max_context_tokens, memory_scope, system_key, checkpoint_enabled, created_by`, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
-				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CheckpointEnabled); err != nil {
+				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CheckpointEnabled, &cfg.CreatedBy); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return fmt.Errorf("update system assistant bindings: %w", domain.ErrNotFound)
+				return fmt.Errorf("update system assistant: %w", domain.ErrNotFound)
 			}
-			return fmt.Errorf("update system assistant bindings: %w", err)
-		}
-		if err := r.replaceSkills(ctx, tx, domain.SystemAssistantID, allowedSkills); err != nil {
-			return err
-		}
-		if err := r.replaceMCPTools(ctx, tx, domain.SystemAssistantID, mcpToolIDs); err != nil {
-			return err
-		}
-		if err := r.replaceKnowledgeWorkspaces(ctx, tx, domain.SystemAssistantID, knowledgeWorkspaceIDs); err != nil {
-			return err
+			return fmt.Errorf("update system assistant: %w", err)
 		}
 		if err := loadAgentRelations(ctx, tx, &cfg); err != nil {
+			return fmt.Errorf("update system assistant relations: %w", err)
+		}
+		if err := insertChangeAudit(ctx, tx, audit); err != nil {
 			return err
 		}
 		return nil

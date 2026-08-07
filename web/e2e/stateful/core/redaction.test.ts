@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createActorContexts, restoreActorSession, withRestoredContextCookies } from './actors';
 import {
+  addGeneratedActorMembership,
   assertSafeDatabaseURL,
   configureManagedModels,
   deleteGeneratedActors,
@@ -218,6 +219,42 @@ describe('stateful E2E security boundaries', () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it('adds a generated actor membership idempotently for cross-tenant fixtures', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 1, rows: [{ user_id: 'member-a-id' }] });
+    const release = vi.fn();
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release }) };
+
+    await addGeneratedActorMembership(
+      pool,
+      '123e4567-e89b-42d3-a456-426614174000',
+      '123e4567-e89b-42d3-a456-426614174001',
+      'member',
+    );
+
+    expect(query).toHaveBeenCalledWith(
+      `INSERT INTO public.tenant_members (tenant_id, user_id, role)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role
+       RETURNING user_id`,
+      ['123e4567-e89b-42d3-a456-426614174000', '123e4567-e89b-42d3-a456-426614174001', 'member'],
+    );
+    expect(release).toHaveBeenCalledOnce();
+
+    // 失败传播：rowCount 不为 1 时不得静默通过
+    const failedPool = {
+      connect: vi.fn().mockResolvedValue({
+        query: vi.fn().mockResolvedValue({ rowCount: 0 }),
+        release: vi.fn(),
+      }),
+    };
+    await expect(addGeneratedActorMembership(
+      failedPool,
+      '123e4567-e89b-42d3-a456-426614174000',
+      '123e4567-e89b-42d3-a456-426614174001',
+      'admin',
+    )).rejects.toThrow('generated actor membership setup did not affect exactly one row');
+  });
+
   it('configures the tenant model registry without legacy tenant settings', async () => {
     const tenantID = '123e4567-e89b-42d3-a456-426614174000';
     const query = vi.fn()
@@ -229,8 +266,10 @@ describe('stateful E2E security boundaries', () => {
       .mockResolvedValueOnce({});
     const release = vi.fn();
     const pool = { connect: vi.fn().mockResolvedValue({ query, release }) };
+    // #281 适配：SQL 直写明文 api_key 后经真实 provider PUT 让后端重加密。
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ status: 200 } as Response);
 
-    await configureManagedModels(pool, tenantID, 'http://127.0.0.1:39091');
+    await configureManagedModels(pool, tenantID, 'http://127.0.0.1:39091', 'owner-token', 'http://127.0.0.1:8080');
 
     expect(query).toHaveBeenNthCalledWith(1, 'BEGIN');
     expect(query).toHaveBeenNthCalledWith(2, "SELECT set_config('search_path', $1, true)", [
@@ -244,7 +283,12 @@ describe('stateful E2E security boundaries', () => {
       tenantID, 'stateful-qwen',
     ]);
     expect(query).toHaveBeenNthCalledWith(6, 'COMMIT');
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8080/admin/providers/stateful-qwen', expect.objectContaining({
+      method: 'PUT',
+      headers: expect.objectContaining({ Authorization: 'Bearer owner-token' }),
+    }));
     expect(release).toHaveBeenCalledOnce();
+    fetchMock.mockRestore();
   });
 
   it('cleans up exactly one generated oauth user by provider identity and email', async () => {

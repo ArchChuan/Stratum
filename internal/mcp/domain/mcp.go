@@ -76,6 +76,8 @@ type ServerConfig struct {
 	SystemKey      string            `json:"-"                  yaml:"-"`
 	ManagementMode string            `json:"management_mode"    yaml:"management_mode"`
 	Enabled        bool              `json:"-"                  yaml:"-"`
+	// CreatedBy is the user who created the server ("" for historical/platform rows).
+	CreatedBy string `json:"-" yaml:"-"`
 }
 
 // Resource represents an MCP resource in the domain.

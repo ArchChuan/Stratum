@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/byteBuilderX/stratum/internal/skill/domain/port"
 	pgstore "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -36,18 +38,48 @@ func NewPgSkillRevisionRepo(pool *pgxpool.Pool) *PgSkillRevisionRepo {
 	return &PgSkillRevisionRepo{pool: pool}
 }
 
+// insertChangeAudit inserts the audit row in the SAME transaction as the
+// business write; an audit failure rolls the business change back (fail
+// closed). A nil event skips auditing — reserved for internal reentrant
+// paths. Incomplete events are a caller bug and fail the transaction.
+func insertChangeAudit(ctx context.Context, tx pgx.Tx, ev *auditdomain.ResourceChangeAuditEvent) error {
+	ev = ev.Normalized()
+	if ev == nil {
+		return nil
+	}
+	if ev.ResourceID == "" || ev.Operation == "" || ev.ResourceKind == "" {
+		return fmt.Errorf("change audit: incomplete event (kind=%s id=%q op=%q)",
+			ev.ResourceKind, ev.ResourceID, ev.Operation)
+	}
+	tc, ok := tenantdb.FromContext(ctx)
+	if !ok || tc.TenantID == "" {
+		return fmt.Errorf("change audit: missing tenant context")
+	}
+	_, err := tx.Exec(ctx, auditdomain.ChangeAuditInsertSQL,
+		uuid.Must(uuid.NewV7()).String(), tc.TenantID,
+		ev.ResourceKind, ev.ResourceID, ev.Operation, ev.ActorID, ev.ActorType, ev.Source,
+		ev.ProposalID, ev.Before, ev.After)
+	if err != nil {
+		return fmt.Errorf("insert change audit %s %s: %w", ev.ResourceKind, ev.ResourceID, err)
+	}
+	return nil
+}
+
 func (r *PgSkillRevisionRepo) InsertSkillWithDraft(
-	ctx context.Context, skill port.SkillProductRow, draft domain.SkillRevision,
+	ctx context.Context, skill port.SkillProductRow, draft domain.SkillRevision, audit *auditdomain.ResourceChangeAuditEvent,
 ) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO skills (id, name, description, status, draft_revision_id)
-			 VALUES ($1, $2, $3, 'draft', $4)`,
-			skill.ID, skill.Name, skill.Description, draft.ID,
+			`INSERT INTO skills (id, name, description, status, draft_revision_id, created_by)
+			 VALUES ($1, $2, $3, 'draft', $4, $5)`,
+			skill.ID, skill.Name, skill.Description, draft.ID, skill.CreatedBy,
 		); err != nil {
 			return err
 		}
-		return insertSkillRevision(ctx, tx, draft)
+		if err := insertSkillRevision(ctx, tx, draft); err != nil {
+			return err
+		}
+		return insertChangeAudit(ctx, tx, audit)
 	})
 }
 
@@ -57,9 +89,9 @@ func (r *PgSkillRevisionRepo) GetSkill(ctx context.Context, skillID string) (por
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		err := tx.QueryRow(ctx,
 			`SELECT id, name, description, status,
-			        COALESCE(active_revision_id, ''), COALESCE(draft_revision_id, '')
+			        COALESCE(active_revision_id, ''), COALESCE(draft_revision_id, ''), COALESCE(created_by, '')
 			 FROM skills WHERE id=$1`, skillID,
-		).Scan(&row.ID, &row.Name, &row.Description, &row.Status, &row.ActiveRevisionID, &row.DraftRevisionID)
+		).Scan(&row.ID, &row.Name, &row.Description, &row.Status, &row.ActiveRevisionID, &row.DraftRevisionID, &row.CreatedBy)
 		if err == pgx.ErrNoRows {
 			return nil
 		}
@@ -76,7 +108,7 @@ func (r *PgSkillRevisionRepo) ListSkills(ctx context.Context) ([]port.SkillProdu
 	var result []port.SkillProductRow
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id, name, description, status,
-			COALESCE(active_revision_id, ''), COALESCE(draft_revision_id, '') FROM skills ORDER BY name`)
+			COALESCE(active_revision_id, ''), COALESCE(draft_revision_id, ''), COALESCE(created_by, '') FROM skills ORDER BY name`)
 		if err != nil {
 			return err
 		}
@@ -84,7 +116,7 @@ func (r *PgSkillRevisionRepo) ListSkills(ctx context.Context) ([]port.SkillProdu
 		for rows.Next() {
 			var item port.SkillProductRow
 			if err := rows.Scan(&item.ID, &item.Name, &item.Description, &item.Status,
-				&item.ActiveRevisionID, &item.DraftRevisionID); err != nil {
+				&item.ActiveRevisionID, &item.DraftRevisionID, &item.CreatedBy); err != nil {
 				return err
 			}
 			result = append(result, item)
@@ -94,7 +126,7 @@ func (r *PgSkillRevisionRepo) ListSkills(ctx context.Context) ([]port.SkillProdu
 	return result, err
 }
 
-func (r *PgSkillRevisionRepo) DeleteSkill(ctx context.Context, skillID string) error {
+func (r *PgSkillRevisionRepo) DeleteSkill(ctx context.Context, skillID string, audit *auditdomain.ResourceChangeAuditEvent) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `DELETE FROM skills WHERE id=$1`, skillID)
 		if err != nil {
@@ -103,7 +135,7 @@ func (r *PgSkillRevisionRepo) DeleteSkill(ctx context.Context, skillID string) e
 		if tag.RowsAffected() == 0 {
 			return domain.ErrSkillNotFound
 		}
-		return nil
+		return insertChangeAudit(ctx, tx, audit)
 	})
 }
 
@@ -140,48 +172,54 @@ func (r *PgSkillRevisionRepo) getRevision(ctx context.Context, query string, arg
 	return revision, found, err
 }
 
-func (r *PgSkillRevisionRepo) InsertCandidate(ctx context.Context, candidate domain.SkillRevision) error {
+func (r *PgSkillRevisionRepo) InsertCandidate(ctx context.Context, candidate domain.SkillRevision, audit *auditdomain.ResourceChangeAuditEvent) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		return insertSkillRevision(ctx, tx, candidate)
+		if err := insertSkillRevision(ctx, tx, candidate); err != nil {
+			return err
+		}
+		return insertChangeAudit(ctx, tx, audit)
 	})
 }
 
 func (r *PgSkillRevisionRepo) UpdateDraftCapability(
-	ctx context.Context, skillID string, capability domain.Capability, contentHash string,
+	ctx context.Context, skillID string, capability domain.Capability, contentHash string, audit *auditdomain.ResourceChangeAuditEvent,
 ) (domain.SkillRevision, error) {
 	payload, err := json.Marshal(capability)
 	if err != nil {
 		return domain.SkillRevision{}, fmt.Errorf("skill_revision_repo: marshal capability: %w", err)
 	}
-	revision, err := r.updateDraft(ctx, skillID, "capability=$2", []any{string(payload)}, contentHash)
+	revision, err := r.updateDraft(ctx, skillID, "capability=$2", []any{string(payload)}, contentHash, audit)
 	if err != nil {
 		return domain.SkillRevision{}, err
 	}
-	_ = r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE skills SET description=$2, updated_at=NOW() WHERE id=$1`, skillID, capability.Goal)
 		return err
 	})
+	if err != nil {
+		return domain.SkillRevision{}, err
+	}
 	return revision, nil
 }
 
 func (r *PgSkillRevisionRepo) UpdateDraftActivation(
-	ctx context.Context, skillID string, contract domain.ActivationContract, contentHash string,
+	ctx context.Context, skillID string, contract domain.ActivationContract, contentHash string, audit *auditdomain.ResourceChangeAuditEvent,
 ) (domain.SkillRevision, error) {
 	payload, err := json.Marshal(contract)
 	if err != nil {
 		return domain.SkillRevision{}, fmt.Errorf("skill_revision_repo: marshal activation contract: %w", err)
 	}
-	return r.updateDraft(ctx, skillID, "activation_contract=$2", []any{string(payload)}, contentHash)
+	return r.updateDraft(ctx, skillID, "activation_contract=$2", []any{string(payload)}, contentHash, audit)
 }
 
 func (r *PgSkillRevisionRepo) UpdateDraftInstructions(
-	ctx context.Context, skillID, instructions string, requirements domain.Requirements, contentHash string,
+	ctx context.Context, skillID, instructions string, requirements domain.Requirements, contentHash string, audit *auditdomain.ResourceChangeAuditEvent,
 ) (domain.SkillRevision, error) {
 	payload, err := json.Marshal(requirements)
 	if err != nil {
 		return domain.SkillRevision{}, fmt.Errorf("skill_revision_repo: marshal requirements: %w", err)
 	}
-	return r.updateDraft(ctx, skillID, "instructions=$2, requirements=$3", []any{instructions, string(payload)}, contentHash)
+	return r.updateDraft(ctx, skillID, "instructions=$2, requirements=$3", []any{instructions, string(payload)}, contentHash, audit)
 }
 
 func (r *PgSkillRevisionRepo) UpdateDraftBundle(
@@ -189,6 +227,7 @@ func (r *PgSkillRevisionRepo) UpdateDraftBundle(
 	skillID, expectedContentHash string,
 	skill port.SkillProductRow,
 	draft domain.SkillRevision,
+	audit *auditdomain.ResourceChangeAuditEvent,
 ) (domain.SkillRevision, error) {
 	capabilityJSON, err := json.Marshal(draft.Capability)
 	if err != nil {
@@ -228,13 +267,13 @@ func (r *PgSkillRevisionRepo) UpdateDraftBundle(
 			return err
 		}
 		updated = value
-		return nil
+		return insertChangeAudit(ctx, tx, audit)
 	})
 	return updated, err
 }
 
 func (r *PgSkillRevisionRepo) updateDraft(
-	ctx context.Context, skillID, assignments string, values []any, contentHash string,
+	ctx context.Context, skillID, assignments string, values []any, contentHash string, audit *auditdomain.ResourceChangeAuditEvent,
 ) (domain.SkillRevision, error) {
 	var revision domain.SkillRevision
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -248,7 +287,7 @@ func (r *PgSkillRevisionRepo) updateDraft(
 			return err
 		}
 		revision = value
-		return nil
+		return insertChangeAudit(ctx, tx, audit)
 	})
 	return revision, err
 }
@@ -264,7 +303,7 @@ func (r *PgSkillRevisionRepo) NextRevisionNo(ctx context.Context, skillID string
 }
 
 func (r *PgSkillRevisionRepo) PublishDraft(
-	ctx context.Context, skillID, draftRevisionID string, nextRevisionNo int, checks map[string]any,
+	ctx context.Context, skillID, draftRevisionID string, nextRevisionNo int, checks map[string]any, audit *auditdomain.ResourceChangeAuditEvent,
 ) (domain.SkillRevision, error) {
 	var revision domain.SkillRevision
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -287,11 +326,13 @@ func (r *PgSkillRevisionRepo) PublishDraft(
 			return err
 		}
 		revision = value
-		_, err = tx.Exec(ctx,
+		if _, err = tx.Exec(ctx,
 			`UPDATE skills SET status='published', active_revision_id=$2, draft_revision_id=NULL, updated_at=NOW() WHERE id=$1`,
 			skillID, draftRevisionID,
-		)
-		return err
+		); err != nil {
+			return err
+		}
+		return insertChangeAudit(ctx, tx, audit)
 	})
 	return revision, err
 }
@@ -324,11 +365,11 @@ func insertSkillRevision(ctx context.Context, tx pgx.Tx, revision domain.SkillRe
 	_, err = tx.Exec(ctx,
 		`INSERT INTO skill_revisions
 		 (id, skill_id, parent_revision_id, revision_no, status, source, content_hash,
-		  generation_metadata, capability, activation_contract, instructions, requirements, publish_checks)
-		 VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, 0), $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+		  generation_metadata, capability, activation_contract, instructions, requirements, publish_checks, created_by)
+		 VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, 0), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 		revision.ID, revision.SkillID, revision.ParentRevisionID, revision.RevisionNo, string(revision.Status), source,
 		revision.ContentHash, string(generationJSON), string(capabilityJSON), string(activationJSON),
-		revision.Instructions, string(requirementsJSON), string(checksJSON),
+		revision.Instructions, string(requirementsJSON), string(checksJSON), revision.CreatedBy,
 	)
 	return err
 }

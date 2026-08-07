@@ -1,9 +1,10 @@
 import { expect, type Page } from '@playwright/test';
 import type { QueryResultRow } from 'pg';
 
-import type { BrowserActor } from '../core/actors';
+import { restoreActorSession, type BrowserActor } from '../core/actors';
 import {
-  configureManagedModels, requireUUID, withTenantMutation, withTenantQuery, type DatabasePool,
+  addGeneratedActorMembership, configureManagedModels, requireUUID,
+  withTenantMutation, withTenantQuery, type DatabasePool,
 } from '../core/database';
 import type { EvidenceRecord } from '../core/evidence';
 
@@ -14,6 +15,7 @@ interface CollabPackContext {
   evidence: EvidenceRecord;
   webURL: string;
   fixtureURL: string;
+  backendURL: string;
 }
 
 const waitForMutation = (page: Page, path: string | RegExp, method: string) => page.waitForResponse((response) => {
@@ -79,8 +81,10 @@ const createAgentViaUI = async (page: Page, webURL: string, name: string): Promi
  * 态立即取消（无步骤，零竞争，验证 canceled 终态）→ 轮询第一个任务 completed
  * 后清理三表与参与 agent。
  */
-export const executeCollabPack = async ({ actor, adminActor, pool, evidence, webURL, fixtureURL }: CollabPackContext): Promise<string[]> => {
-  const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
+export const executeCollabPack = async ({ actor, adminActor, pool, evidence, webURL, fixtureURL, backendURL }: CollabPackContext): Promise<string[]> => {
+  // #281 后每个 guest 持有独立沙箱租户：跨 actor fixture 必须落在 admin 租户，
+  // 否则 memberA 看不到 tenantAdmin 创建的参与 agent。
+  const tenantID = requireUUID(adminActor.tenantID ?? '', 'tenant_id');
   const actorID = requireUUID(actor.userID ?? '', 'user_id');
   const completed: string[] = [];
   const page = await actor.context.newPage();
@@ -93,7 +97,14 @@ export const executeCollabPack = async ({ actor, adminActor, pool, evidence, web
   let startID = '';
   let cancelID = '';
   try {
-    await configureManagedModels(pool, tenantID, fixtureURL);
+    await configureManagedModels(pool, tenantID, fixtureURL, adminActor.accessToken ?? '', backendURL);
+
+    // ── 0. #281 适配：memberA 加入 admin 租户并换发 member claim 会话 ───────
+    // 幂等 SQL 落成员行 + 真实 switch-tenant 换发 JWT（参与者选项来自 GET
+    // /agents，跨沙箱租户必然为空）。
+    await addGeneratedActorMembership(pool, tenantID, actorID, 'member');
+    actor.tenantID = tenantID;
+    await restoreActorSession(actor, backendURL);
 
     // ── 1. 管理员创建 2 个参与 agent（模型目录是 admin 路由） ────────────────
     const agent1 = await createAgentViaUI(adminPage, webURL, agentName1);

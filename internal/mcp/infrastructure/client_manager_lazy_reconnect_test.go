@@ -41,7 +41,7 @@ func TestLazyReconnectAfterEviction(t *testing.T) {
 		ID: "lazy-test", Name: "lazy", Transport: "http",
 		URL: ts.URL(), Timeout: 2 * time.Second, Enabled: true,
 	}
-	require.NoError(t, manager.Connect(ctx, cfg))
+	require.NoError(t, manager.Connect(ctx, cfg, nil))
 
 	// Sanity check before eviction.
 	_, err := manager.CallTool(ctx, "lazy-test", "echo", map[string]any{"msg": "before"})
@@ -83,7 +83,7 @@ func TestLazyReconnectSkipsDisabledServer(t *testing.T) {
 		ID: "disabled-srv", Name: "disabled", Transport: "http",
 		URL: ts.URL(), Timeout: 2 * time.Second, Enabled: true,
 	}
-	require.NoError(t, manager.Connect(ctx, cfg))
+	require.NoError(t, manager.Connect(ctx, cfg, nil))
 
 	// Evict client, keep config but mark disabled.
 	manager.mu.Lock()
@@ -117,7 +117,7 @@ func TestLazyReconnectConcurrentBurst(t *testing.T) {
 		ID: "burst-srv", Name: "burst", Transport: "http",
 		URL: ts.URL(), Timeout: 2 * time.Second, Enabled: true,
 	}
-	require.NoError(t, manager.Connect(ctx, cfg))
+	require.NoError(t, manager.Connect(ctx, cfg, nil))
 
 	// Evict.
 	manager.mu.Lock()

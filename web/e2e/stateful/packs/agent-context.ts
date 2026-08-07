@@ -8,7 +8,7 @@ import {
 import type { EvidenceRecord } from '../core/evidence';
 import { runCleanupTasks } from '../core/errors';
 
-interface AgentContextPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string; fixtureURL: string }
+interface AgentContextPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string; fixtureURL: string; backendURL: string }
 const waitFor = (page: Page, path: string, method: string) => page.waitForResponse((response) => (
   new URL(response.url()).pathname === path && response.request().method() === method
 ));
@@ -17,11 +17,11 @@ const rows = async <R extends QueryResultRow>(pool: DatabasePool, tenantID: stri
 ).rows;
 
 export const executeAgentContextPack = async ({
-  actor, pool, evidence, webURL, fixtureURL,
+  actor, pool, evidence, webURL, fixtureURL, backendURL,
 }: AgentContextPackContext): Promise<string[]> => {
   const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
   const userID = requireUUID(actor.userID ?? '', 'user_id');
-  await configureManagedModels(pool, tenantID, fixtureURL);
+  await configureManagedModels(pool, tenantID, fixtureURL, actor.accessToken ?? '', backendURL);
   const page = await actor.context.newPage();
   const suffix = String(Date.now());
   const workspace = `e2e-context-${suffix}`;

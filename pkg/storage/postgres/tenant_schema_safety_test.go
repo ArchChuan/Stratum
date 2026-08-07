@@ -60,3 +60,32 @@ func TestTenantSchemaRevisionAndDecisionSafetyAvoidsPlaintextPayloads(t *testing
 		}
 	}
 }
+
+func TestTenantSchemaAuditProjectionsAreCredentialFreeColumns(t *testing.T) {
+	ddl, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(ddl)
+	start := strings.Index(text, "CREATE TABLE IF NOT EXISTS resource_change_audits")
+	if start == -1 {
+		t.Fatal("tenant schema missing resource_change_audits")
+	}
+	end := strings.Index(text[start:], ");")
+	if end == -1 {
+		t.Fatal("tenant schema has unterminated resource_change_audits DDL")
+	}
+	body := strings.ToLower(text[start : start+end])
+	for _, col := range []string{"before_projection", "after_projection", "actor_type", "source", "proposal_id"} {
+		if !strings.Contains(body, col+" ") && !strings.Contains(body, col+"\n") {
+			t.Fatalf("resource_change_audits missing %s column", col)
+		}
+	}
+	// Projections are marshalled from Go safe projections; the DDL must not
+	// hint at storing raw credential-bearing config blobs.
+	for _, forbidden := range []string{"auth_config", "headers", "\"env\""} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("resource_change_audits DDL references credential-bearing field %q", forbidden)
+		}
+	}
+}

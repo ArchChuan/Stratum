@@ -67,6 +67,8 @@ type AgentConfig struct {
 	// 0 disables the feature (pure ReAct).
 	StuckThreshold    int
 	CheckpointEnabled bool
+	// CreatedBy is the user who created the agent ("" for historical/platform rows).
+	CreatedBy string
 }
 
 // PlanStep is a single goal inside an agent execution plan.

@@ -172,7 +172,12 @@ func (h *MCPHandler) UpdateServer(c *gin.Context) {
 		return
 	}
 	cfg.ID = c.Param("id")
-	if err := h.svc.UpdateServer(c.Request.Context(), cfg); err != nil {
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	if err := h.svc.UpdateServer(c.Request.Context(), cfg, actorID); err != nil {
 		h.logger.Error("failed to update MCP server",
 			zap.String("trace_id", middleware.GetTraceID(c)),
 			zap.String("server_id", cfg.ID),
@@ -199,7 +204,12 @@ func (h *MCPHandler) ConnectServer(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	if err := h.svc.ConnectServer(context.WithoutCancel(c.Request.Context()), cfg); err != nil {
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	if err := h.svc.ConnectServer(context.WithoutCancel(c.Request.Context()), cfg, actorID); err != nil {
 		h.logger.Error("failed to connect MCP server",
 			zap.String("trace_id", middleware.GetTraceID(c)),
 			zap.String("server_id", cfg.ID),
@@ -235,7 +245,12 @@ func (h *MCPHandler) DeleteServerConfig(c *gin.Context) {
 		return
 	}
 	serverID := c.Param("id")
-	if err := h.svc.DeleteServer(c.Request.Context(), serverID); err != nil {
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	if err := h.svc.DeleteServer(c.Request.Context(), serverID, actorID); err != nil {
 		h.logger.Error("failed to delete MCP server",
 			zap.String("trace_id", middleware.GetTraceID(c)),
 			zap.String("server_id", serverID),

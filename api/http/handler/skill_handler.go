@@ -22,11 +22,11 @@ type skillRevisionService interface {
 	CreateSkillDraft(context.Context, skillapp.CreateSkillDraftInput) (skillapp.SkillWorkspaceView, error)
 	GetWorkspace(context.Context, string) (skillapp.SkillWorkspaceView, error)
 	ListSkills(context.Context) ([]skillapp.SkillProduct, error)
-	DeleteSkill(context.Context, string) error
+	DeleteSkill(context.Context, string, string) error
 	UpdateCapability(context.Context, string, skillapp.UpdateCapabilityInput) (skillapp.SkillRevision, error)
 	UpdateActivation(context.Context, string, skillapp.UpdateActivationInput) (skillapp.SkillRevision, error)
 	UpdateInstructionBundle(context.Context, string, skillapp.UpdateInstructionBundleInput) (skillapp.SkillRevision, error)
-	PublishDraft(context.Context, string) (skillapp.SkillRevision, error)
+	PublishDraft(context.Context, string, string) (skillapp.SkillRevision, error)
 }
 
 func NewSkillHandler(service skillRevisionService, logger *zap.Logger) *SkillHandler {
@@ -40,10 +40,16 @@ func (h *SkillHandler) CreateSkill(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
 	view, err := h.service.CreateSkillDraft(c.Request.Context(), skillapp.CreateSkillDraftInput{
 		Name: req.Name, Goal: req.Goal, WhenToUse: req.WhenToUse,
 		SampleInput: req.SampleInput, ExpectedOutput: req.ExpectedOutput,
 		Instructions: req.Instructions, Requirements: requirementsFromDTO(req.Requirements),
+		ActorID: actorID,
 	})
 	if err != nil {
 		_ = c.Error(err)
@@ -82,8 +88,14 @@ func (h *SkillHandler) UpdateDraftCapability(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
 	revision, err := h.service.UpdateCapability(c.Request.Context(), c.Param("id"), skillapp.UpdateCapabilityInput{
 		Goal: req.Goal, WhenToUse: req.WhenToUse, InputSpec: req.InputSpec, OutputSpec: req.OutputSpec,
+		ActorID: actorID,
 	})
 	if err != nil {
 		_ = c.Error(err)
@@ -98,9 +110,14 @@ func (h *SkillHandler) UpdateDraftActivation(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
 	revision, err := h.service.UpdateActivation(c.Request.Context(), c.Param("id"), skillapp.UpdateActivationInput{
 		Name: req.Name, Description: req.Description, InputSchema: req.InputSchema,
-		OutputSchema: req.OutputSchema, Confirmed: req.Confirmed,
+		OutputSchema: req.OutputSchema, Confirmed: req.Confirmed, ActorID: actorID,
 	})
 	if err != nil {
 		_ = c.Error(err)
@@ -115,8 +132,13 @@ func (h *SkillHandler) UpdateDraftInstructionBundle(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
 	revision, err := h.service.UpdateInstructionBundle(c.Request.Context(), c.Param("id"), skillapp.UpdateInstructionBundleInput{
-		Instructions: req.Instructions, Requirements: requirementsFromDTO(req.Requirements),
+		Instructions: req.Instructions, Requirements: requirementsFromDTO(req.Requirements), ActorID: actorID,
 	})
 	if err != nil {
 		_ = c.Error(err)
@@ -126,7 +148,12 @@ func (h *SkillHandler) UpdateDraftInstructionBundle(c *gin.Context) {
 }
 
 func (h *SkillHandler) PublishSkill(c *gin.Context) {
-	revision, err := h.service.PublishDraft(c.Request.Context(), c.Param("id"))
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	revision, err := h.service.PublishDraft(c.Request.Context(), c.Param("id"), actorID)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -135,7 +162,12 @@ func (h *SkillHandler) PublishSkill(c *gin.Context) {
 }
 
 func (h *SkillHandler) DeleteSkill(c *gin.Context) {
-	if err := h.service.DeleteSkill(c.Request.Context(), c.Param("id")); err != nil {
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	if err := h.service.DeleteSkill(c.Request.Context(), c.Param("id"), actorID); err != nil {
 		_ = c.Error(err)
 		return
 	}

@@ -24,6 +24,8 @@ func injectRAGTenant(tenantID string) gin.HandlerFunc {
 		ctx := tenantdb.WithTenant(c.Request.Context(), tc)
 		ctx = reqctx.WithTenantID(ctx, tenantID)
 		c.Request = c.Request.WithContext(ctx)
+		// Write handlers resolve the actor via ContextKeySub.
+		c.Set(middleware.ContextKeySub, "user-test")
 		c.Next()
 	}
 }
@@ -39,6 +41,7 @@ func newMinimalRAGHandler() *RAGHandler {
 // repo is ever called, so the nil repo is never dereferenced.
 func newValidationRAGHandler() *RAGHandler {
 	ws := knowledge.NewWorkspaceService(nil, nil, zap.NewNop())
+	ws.SetTenantRoleResolver(fixedTenantRole{role: "owner"})
 	return NewRAGHandler(nil, ws, zap.NewNop())
 }
 

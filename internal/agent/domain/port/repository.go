@@ -11,18 +11,25 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 )
 
 // AgentRepo persists agent configurations in the tenant schema.
+//
+// Write methods take an optional *auditdomain.ResourceChangeAuditEvent; when
+// non-nil the audit row is inserted in the SAME transaction as the business
+// write (audit failure rolls the business change back). Callers must always
+// construct the event on user-facing write paths; nil is reserved for
+// internal reentrant paths.
 type AgentRepo interface {
-	Register(ctx context.Context, cfg *domain.AgentConfig) error
+	Register(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent) error
 	Get(ctx context.Context, id string) (*domain.AgentConfig, bool, error)
 	GetSystemAssistant(ctx context.Context) (*domain.AgentConfig, bool, error)
 	GetAll(ctx context.Context) ([]*domain.AgentConfig, error)
-	Remove(ctx context.Context, id string) error
-	Update(ctx context.Context, cfg *domain.AgentConfig) error
-	UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int) (*domain.AgentConfig, error)
-	UpdateSystemAssistantBindings(ctx context.Context, mcpToolIDs, knowledgeWorkspaceIDs, allowedSkills []string) (*domain.AgentConfig, error)
+	Remove(ctx context.Context, id string, audit *auditdomain.ResourceChangeAuditEvent) error
+	Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent) error
+	UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error)
+	UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, checkpointEnabled bool, maxIterations, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error)
 }
 
 // AgentSkillBinding resolves which agent is wired to a given skill through the

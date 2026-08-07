@@ -168,11 +168,11 @@ type proposalMCPFake struct {
 	updateErr error
 }
 
-func (f *proposalMCPFake) ConnectServer(_ context.Context, cfg *mcpdomain.ServerConfig) error {
+func (f *proposalMCPFake) ConnectServer(_ context.Context, cfg *mcpdomain.ServerConfig, _ string) error {
 	f.configs[cfg.ID] = cloneMCPConfigForTest(cfg)
 	return nil
 }
-func (f *proposalMCPFake) UpdateServer(_ context.Context, cfg *mcpdomain.ServerConfig) error {
+func (f *proposalMCPFake) UpdateServer(_ context.Context, cfg *mcpdomain.ServerConfig, _ string) error {
 	if f.updateErr != nil {
 		return f.updateErr
 	}
@@ -195,11 +195,11 @@ type proposalKnowledgeFake struct {
 	lastUpdateName string
 }
 
-func (f *proposalKnowledgeFake) CreateWorkspace(_ context.Context, _ string, in knowledgeapp.CreateWorkspaceInput) (*knowledgedomain.Workspace, error) {
+func (f *proposalKnowledgeFake) CreateWorkspace(_ context.Context, _ string, in knowledgeapp.CreateWorkspaceInput, _ string) (*knowledgedomain.Workspace, error) {
 	f.value = &knowledgedomain.Workspace{ID: "ws-created", Name: in.Name, Description: in.Description, Config: in.Config}
 	return f.value, nil
 }
-func (f *proposalKnowledgeFake) UpdateWorkspace(_ context.Context, _, name string, in knowledgeapp.UpdateWorkspaceInput) (*knowledgedomain.Workspace, error) {
+func (f *proposalKnowledgeFake) UpdateWorkspace(_ context.Context, _, name string, in knowledgeapp.UpdateWorkspaceInput, _ string) (*knowledgedomain.Workspace, error) {
 	f.lastUpdateName = name
 	if in.Description != nil {
 		f.value.Description = *in.Description

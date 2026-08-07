@@ -7,6 +7,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -17,7 +18,9 @@ type gateAgentRepoFake struct {
 	agents map[string]*domain.AgentConfig
 }
 
-func (f *gateAgentRepoFake) Register(context.Context, *domain.AgentConfig) error { return nil }
+func (f *gateAgentRepoFake) Register(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (f *gateAgentRepoFake) Get(_ context.Context, id string) (*domain.AgentConfig, bool, error) {
 	cfg, ok := f.agents[id]
 	return cfg, ok, nil
@@ -26,12 +29,17 @@ func (f *gateAgentRepoFake) GetSystemAssistant(context.Context) (*domain.AgentCo
 	return nil, false, nil
 }
 func (f *gateAgentRepoFake) GetAll(context.Context) ([]*domain.AgentConfig, error) { return nil, nil }
-func (f *gateAgentRepoFake) Remove(context.Context, string) error                  { return nil }
-func (f *gateAgentRepoFake) Update(_ context.Context, cfg *domain.AgentConfig) error {
+func (f *gateAgentRepoFake) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
+func (f *gateAgentRepoFake) Update(_ context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
 	f.agents[cfg.ID] = cfg
 	return nil
 }
-func (f *gateAgentRepoFake) UpdateSystemAssistantModel(context.Context, string, string, bool, int, int) (*domain.AgentConfig, error) {
+func (f *gateAgentRepoFake) UpdateSystemAssistantModel(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+	return nil, nil
+}
+func (f *gateAgentRepoFake) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	return nil, nil
 }
 func (f *gateAgentRepoFake) UpdateSystemAssistantBindings(context.Context, []string, []string, []string) (*domain.AgentConfig, error) {
@@ -46,8 +54,9 @@ func newGatedServiceForTest(t *testing.T, repo *operationProposalRepoFake, usage
 	}
 	agentRepo := &gateAgentRepoFake{agents: agents}
 	svc := NewAgentService(AgentServiceDeps{
-		Registry: NewRegistry(agentRepo, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
-		Logger:   zap.NewNop(),
+		Registry:           NewRegistry(agentRepo, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		TenantRoleResolver: stubTenantRole{role: "owner"},
+		Logger:             zap.NewNop(),
 	})
 	metrics := &gateMetricsFake{}
 	gate := newGateServiceForTest(repo, usage, metrics)
@@ -121,6 +130,41 @@ func TestGatedSelfModifyReplayLandsMutationAndRecordsUsage(t *testing.T) {
 	require.Equal(t, GateReasonPendingApproval, result.Decision.Reason)
 }
 
+// TestGatedSelfModifyReplayLandsForMemberWithoutOwnership locks the operation
+// gate contract: a member (non-owner, non-admin) who is NOT the resource
+// owner may still land an approved replay. Ownership is adjudicated by the
+// human approver at proposal time; the replay executes as a system actor.
+func TestGatedSelfModifyReplayLandsForMemberWithoutOwnership(t *testing.T) {
+	repo := newOperationProposalRepoFake()
+	usage := newOperationUsageRepoFake()
+	// The agent belongs to an admin; the proposing member is unrelated.
+	seed := &domain.AgentConfig{ID: "agent-1", Name: "old", CreatedBy: "admin-1"}
+	agents := map[string]*domain.AgentConfig{"agent-1": seed}
+	svc := NewAgentService(AgentServiceDeps{
+		Registry:           NewRegistry(&gateAgentRepoFake{agents: agents}, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		TenantRoleResolver: stubTenantRole{role: "member"},
+		Logger:             zap.NewNop(),
+	})
+	gate := newGateServiceForTest(repo, usage, &gateMetricsFake{})
+	svc.SetOperationGate(gate)
+	ctx := context.Background()
+
+	req := selfModifyRequest("renamed")
+	fingerprint, err := svc.deps.OperationGate.ComputeFingerprint("agent-1", port.OpSelfModify, req)
+	require.NoError(t, err)
+	approved := seededProposal(t, repo)
+	approved.Fingerprint = fingerprint
+	repo.proposals[approved.ID] = approved
+	require.NoError(t, repo.UpdateStatus(ctx, "tenant-1", approved.ID, domain.OpApproved, "admin-1", "ok"))
+
+	result, err := svc.GatedSelfModify(ctx, "tenant-1", "member-1", "agent-1", req)
+	require.NoError(t, err)
+	require.True(t, result.Decision.Allowed)
+	require.Equal(t, GateReasonApprovedReplay, result.Decision.Reason)
+	require.Equal(t, "renamed", agents["agent-1"].Name)
+	require.Equal(t, domain.OpExecuted, repo.proposals[approved.ID].Status)
+}
+
 func TestGatedSelfModifyReplayBoundToProposer(t *testing.T) {
 	repo := newOperationProposalRepoFake()
 	seed := &domain.AgentConfig{ID: "agent-1", Name: "old"}
@@ -189,4 +233,12 @@ func TestGatedSelfModifyFingerprintBindsPayload(t *testing.T) {
 	require.False(t, result.Decision.Allowed)
 	require.Equal(t, GateReasonPendingApproval, result.Decision.Reason)
 	require.NotEqual(t, approved.ID, result.Decision.ProposalID)
+}
+
+// stubTenantRole resolves every actor as a fixed role so ownership tests
+// control authorization via the fake, not tenant membership.
+type stubTenantRole struct{ role string }
+
+func (s stubTenantRole) ResolveTenantRole(_ context.Context, _, _ string) (string, error) {
+	return s.role, nil
 }

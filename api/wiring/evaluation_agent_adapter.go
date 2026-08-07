@@ -15,6 +15,7 @@ import (
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
 )
@@ -109,6 +110,11 @@ func (a agentEvaluationAdapter) CreatePublishedBaseline(
 func (a agentEvaluationAdapter) ApplyPublishedRevision(
 	ctx context.Context, tenantID, agentID, revisionID string,
 ) error {
+	// The optimization pipeline is a system actor: ownership checks are
+	// bypassed, but the change is still audited with actor_type=system,
+	// source=optimization.
+	const evaluationWorker = "evaluation-worker"
+	ctx = reqctx.WithSystemActor(ctx, evaluationWorker)
 	if a.agentUpdater == nil {
 		return errors.New("evaluation Agent adapter: agent updater unavailable")
 	}
@@ -134,6 +140,7 @@ func (a agentEvaluationAdapter) ApplyPublishedRevision(
 	}
 	// Preserve every field except those the optimization pipeline is authorized to change.
 	_, err = a.agentUpdater.Update(ctx, agentID, agentapp.UpdateAgentInput{
+		ActorID:                evaluationWorker,
 		Name:                   existing.Name,
 		Type:                   existing.Type,
 		Description:            existing.Description,

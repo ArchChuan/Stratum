@@ -55,8 +55,14 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
 	dto, err := h.svc.Create(c.Request.Context(), agent.CreateAgentInput{
 		TenantID:              tenantID,
+		ActorID:               actorID,
 		Name:                  req.Name,
 		Type:                  req.Type,
 		Description:           req.Description,
@@ -87,7 +93,13 @@ func (h *AgentHandler) UpdateAgent(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
 	dto, err := h.svc.Update(c.Request.Context(), c.Param("id"), agent.UpdateAgentInput{
+		ActorID:               actorID,
 		Name:                  req.Name,
 		Type:                  req.Type,
 		Description:           req.Description,
@@ -114,7 +126,12 @@ func (h *AgentHandler) DeleteAgent(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	if err := h.svc.Delete(c.Request.Context(), tenantID, c.Param("id")); err != nil {
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	if err := h.svc.Delete(c.Request.Context(), tenantID, c.Param("id"), actorID); err != nil {
 		_ = c.Error(err)
 		return
 	}

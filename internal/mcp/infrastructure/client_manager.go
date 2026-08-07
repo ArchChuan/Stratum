@@ -10,11 +10,13 @@ import (
 	"sync"
 	"time"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/byteBuilderX/stratum/internal/mcp/infrastructure/mcpnode"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -164,7 +166,35 @@ func (m *ClientManager) checkConnectionLimits(tenantID string) error {
 	return nil
 }
 
-func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig) error {
+// insertChangeAudit inserts the audit row in the SAME transaction as the
+// business write; an audit failure rolls the business change back (fail
+// closed). A nil event skips auditing — reserved for internal reentrant
+// paths (restore/reconnect). Incomplete events are a caller bug and fail
+// the transaction.
+func insertChangeAudit(ctx context.Context, tx pgx.Tx, ev *auditdomain.ResourceChangeAuditEvent) error {
+	ev = ev.Normalized()
+	if ev == nil {
+		return nil
+	}
+	if ev.ResourceID == "" || ev.Operation == "" || ev.ResourceKind == "" {
+		return fmt.Errorf("change audit: incomplete event (kind=%s id=%q op=%q)",
+			ev.ResourceKind, ev.ResourceID, ev.Operation)
+	}
+	tc, ok := tenantdb.FromContext(ctx)
+	if !ok || tc.TenantID == "" {
+		return fmt.Errorf("change audit: missing tenant context")
+	}
+	_, err := tx.Exec(ctx, auditdomain.ChangeAuditInsertSQL,
+		uuid.Must(uuid.NewV7()).String(), tc.TenantID,
+		ev.ResourceKind, ev.ResourceID, ev.Operation, ev.ActorID, ev.ActorType, ev.Source,
+		ev.ProposalID, ev.Before, ev.After)
+	if err != nil {
+		return fmt.Errorf("insert change audit %s %s: %w", ev.ResourceKind, ev.ResourceID, err)
+	}
+	return nil
+}
+
+func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
 	if m.pool == nil {
 		return nil
 	}
@@ -198,8 +228,8 @@ func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig
 		_, execErr := tx.Exec(ctx, `
 			INSERT INTO mcp_configs
 				(id, name, transport, command, url, args, env, capabilities, timeout_sec,
-				 enabled, version, headers, auth_config, retry_config, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $11, $12, $13, NOW())
+				 enabled, version, headers, auth_config, retry_config, updated_at, created_by)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $11, $12, $13, NOW(), $14)
 			ON CONFLICT (id) DO UPDATE SET
 				name=$2, transport=$3, command=$4, url=$5,
 				args=$6, env=$7, capabilities=$8, timeout_sec=$9,
@@ -207,8 +237,11 @@ func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig
 				updated_at=NOW()`,
 			cfg.ID, cfg.Name, cfg.Transport, cfg.Command, cfg.URL,
 			argsJSON, envJSON, capsJSON, timeoutSec,
-			cfg.Version, hdrsJSON, authJSON, retryJSON)
-		return execErr
+			cfg.Version, hdrsJSON, authJSON, retryJSON, cfg.CreatedBy)
+		if execErr != nil {
+			return execErr
+		}
+		return insertChangeAudit(ctx, tx, audit)
 	})
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -231,7 +264,7 @@ func (m *ClientManager) persistDisconnect(ctx context.Context, serverID string) 
 }
 
 // Connect 连接到 MCP 服务器
-func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig) error {
+func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
 	m.mu.Lock()
 	key := tenantKey(tenantIDFromCtx(ctx), config.ID)
 	if _, exists := m.clients[key]; exists {
@@ -274,7 +307,7 @@ func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig) er
 		return err
 	}
 
-	tools, resources, err := m.scanCapabilities(ctx, client, config, key)
+	tools, resources, err := m.scanCapabilities(ctx, client, config, key, audit)
 	if err != nil {
 		_ = disconnectMCPClient(client)
 		m.mu.Lock()
@@ -307,7 +340,7 @@ func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig) er
 // scanCapabilities discovers tools and resources from a connected client,
 // caches them, and persists the config.
 func (m *ClientManager) scanCapabilities(
-	ctx context.Context, client MCPClient, config *MCPServerConfig, key string,
+	ctx context.Context, client MCPClient, config *MCPServerConfig, key string, audit *auditdomain.ResourceChangeAuditEvent,
 ) ([]*MCPTool, []*MCPResource, error) {
 	tools, err := client.ListTools(ctx)
 	if err != nil {
@@ -318,7 +351,7 @@ func (m *ClientManager) scanCapabilities(
 		return nil, nil, fmt.Errorf("discover MCP resources: %w", err)
 	}
 	m.cache.Store(key, tools, resources)
-	if err := m.persistConnect(ctx, config); err != nil {
+	if err := m.persistConnect(ctx, config, audit); err != nil {
 		m.cache.Delete(key)
 		return nil, nil, err
 	}
@@ -378,7 +411,7 @@ func (m *ClientManager) getOrRestoreClient(ctx context.Context, serverID string)
 		return nil, fmt.Errorf("client not found: %s", serverID)
 	}
 
-	if err := m.Connect(ctx, cfg); err != nil {
+	if err := m.Connect(ctx, cfg, nil); err != nil {
 		// Re-check: concurrent goroutine may have just registered the client
 		// between our GetClient and Connect (Connect deduplicates via m.connecting).
 		if client := m.GetClient(ctx, serverID); client != nil {
@@ -709,10 +742,10 @@ func (m *ClientManager) RestoreFromDB(ctx context.Context) error {
 }
 
 type mcpConfigRow struct {
-	id, name, transport, command, url, version  string
-	args, env, caps, headers, authCfg, retryCfg []byte
-	timeoutSec                                  int
-	systemKey, managementMode                   string
+	id, name, transport, command, url, version, createdBy string
+	args, env, caps, headers, authCfg, retryCfg           []byte
+	timeoutSec                                            int
+	systemKey, managementMode                             string
 }
 
 func (m *ClientManager) restoreTenantServers(ctx context.Context, tenantID string) error {
@@ -749,7 +782,7 @@ func (m *ClientManager) loadMCPConfigRows(ctx context.Context, _ string) ([]mcpC
 		pgRows, qErr := tx.Query(qctx, `
 			SELECT id, name, transport, command, url, version,
 			       args, env, capabilities, headers, auth_config, retry_config, timeout_sec,
-			       COALESCE(system_key, ''), management_mode
+			       COALESCE(system_key, ''), management_mode, COALESCE(created_by, '')
 			FROM mcp_configs WHERE enabled = true`)
 		if qErr != nil {
 			return fmt.Errorf("restore mcp_configs query: %w", qErr)
@@ -759,7 +792,7 @@ func (m *ClientManager) loadMCPConfigRows(ctx context.Context, _ string) ([]mcpC
 			var r mcpConfigRow
 			if sErr := pgRows.Scan(&r.id, &r.name, &r.transport, &r.command, &r.url, &r.version,
 				&r.args, &r.env, &r.caps, &r.headers, &r.authCfg, &r.retryCfg, &r.timeoutSec,
-				&r.systemKey, &r.managementMode); sErr != nil {
+				&r.systemKey, &r.managementMode, &r.createdBy); sErr != nil {
 				return fmt.Errorf("restore mcp_configs scan: %w", sErr)
 			}
 			rows = append(rows, r)
@@ -805,6 +838,7 @@ func (m *ClientManager) configFromDBRow(r mcpConfigRow) (*MCPServerConfig, error
 		Timeout:        time.Duration(r.timeoutSec) * time.Second,
 		SystemKey:      r.systemKey,
 		ManagementMode: r.managementMode,
+		CreatedBy:      r.createdBy,
 	}, nil
 }
 
@@ -827,7 +861,7 @@ func (m *ClientManager) restoreServer(ctx context.Context, tenantID string, cfg 
 	connectCtx := tenantdb.WithTenant(ctx, &tenantdb.TenantContext{
 		TenantID: tenantID, Role: tenantdb.RoleTenantAdmin,
 	})
-	if err := m.Connect(connectCtx, cfg); err != nil {
+	if err := m.Connect(connectCtx, cfg, nil); err != nil {
 		m.logger.Warn("RestoreFromDB: failed to reconnect MCP server",
 			zap.String("tenant_id", tenantID),
 			zap.String("server_id", cfg.ID),
@@ -1040,7 +1074,7 @@ func (m *ClientManager) scanOrphaned() {
 					_ = disconnectMCPClient(old)
 				}
 				m.mu.Unlock()
-				if connErr := m.Connect(ctx, cfg); connErr != nil {
+				if connErr := m.Connect(ctx, cfg, nil); connErr != nil {
 					m.logger.Warn("failover: connect failed",
 						zap.String("server_id", serverID),
 						zap.Error(connErr))
@@ -1147,7 +1181,7 @@ func (m *ClientManager) GetAllServerInfo(ctx context.Context) []*MCPServerInfo {
 }
 
 // UpdateServer disconnects the existing connection and reconnects with the new config.
-func (m *ClientManager) UpdateServer(ctx context.Context, cfg *MCPServerConfig) error {
+func (m *ClientManager) UpdateServer(ctx context.Context, cfg *MCPServerConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
 	key := tenantKey(tenantIDFromCtx(ctx), cfg.ID)
 	m.mu.Lock()
 	var old MCPClient
@@ -1161,7 +1195,7 @@ func (m *ClientManager) UpdateServer(ctx context.Context, cfg *MCPServerConfig) 
 	if old != nil {
 		_ = old.Disconnect(ctx)
 	}
-	return m.Connect(ctx, cfg)
+	return m.Connect(ctx, cfg, audit)
 }
 
 // Reconnect reads the saved config for serverID from DB and reconnects.
@@ -1170,12 +1204,12 @@ func (m *ClientManager) Reconnect(ctx context.Context, serverID string) error {
 	if err != nil {
 		return fmt.Errorf("reconnect %s: %w", serverID, err)
 	}
-	return m.Connect(ctx, cfg)
+	return m.Connect(ctx, cfg, nil)
 }
 
 // Delete disconnects the server if connected and hard-deletes its config from DB.
 // agent_mcp_servers is removed via ON DELETE CASCADE.
-func (m *ClientManager) Delete(ctx context.Context, serverID string) error {
+func (m *ClientManager) Delete(ctx context.Context, serverID string, audit *auditdomain.ResourceChangeAuditEvent) error {
 	m.mu.Lock()
 	key := tenantKey(tenantIDFromCtx(ctx), serverID)
 	var old MCPClient
@@ -1194,8 +1228,10 @@ func (m *ClientManager) Delete(ctx context.Context, serverID string) error {
 		return nil
 	}
 	return tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `DELETE FROM mcp_configs WHERE id=$1`, serverID)
-		return err
+		if _, err := tx.Exec(ctx, `DELETE FROM mcp_configs WHERE id=$1`, serverID); err != nil {
+			return err
+		}
+		return insertChangeAudit(ctx, tx, audit)
 	})
 }
 
@@ -1280,11 +1316,11 @@ func (m *ClientManager) GetServerConfig(ctx context.Context, serverID string) (*
 		return tx.QueryRow(ctx, `
 			SELECT id, name, transport, command, url, args, env, capabilities,
 			       timeout_sec, version, headers, auth_config, retry_config,
-			       COALESCE(system_key, ''), management_mode, enabled
+			       COALESCE(system_key, ''), management_mode, enabled, COALESCE(created_by, '')
 			FROM mcp_configs WHERE id=$1`, serverID).
 			Scan(&out.ID, &out.Name, &out.Transport, &out.Command, &out.URL,
 				&row.args, &row.env, &row.caps, &row.timeoutSec,
-				&out.Version, &row.headers, &row.authCfg, &row.retryCfg, &out.SystemKey, &out.ManagementMode, &out.Enabled)
+				&out.Version, &row.headers, &row.authCfg, &row.retryCfg, &out.SystemKey, &out.ManagementMode, &out.Enabled, &out.CreatedBy)
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

@@ -25,7 +25,7 @@ func TestAgentRepoRejectsInvalidTenantBeforeBeginningTransaction(t *testing.T) {
 	defer pool.Close()
 
 	repo := &PgAgentRepo{pool: pool}
-	err = repo.Register(tenantCtx(`bad"tenant`), &domain.AgentConfig{ID: "a1"})
+	err = repo.Register(tenantCtx(`bad"tenant`), &domain.AgentConfig{ID: "a1"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "postgres: invalid tenant_id") {
 		t.Fatalf("expected shared tenant validation error, got %v", err)
 	}
@@ -44,7 +44,7 @@ func TestAgentRepo_Register(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("INSERT INTO agents").
-		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "", false).
+		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "", false, "").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").
@@ -59,7 +59,7 @@ func TestAgentRepo_Register(t *testing.T) {
 
 	repo := &PgAgentRepo{pool: pool}
 	cfg := &domain.AgentConfig{ID: "a1", Name: "Alpha", Type: domain.ReActAgent, LLMModel: "gpt-4o", MaxIterations: 5}
-	if err := repo.Register(tenantCtx("t1"), cfg); err != nil {
+	if err := repo.Register(tenantCtx("t1"), cfg, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
@@ -77,7 +77,7 @@ func TestAgentRepo_Register_WithMCP(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("INSERT INTO agents").
-		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "", false).
+		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "", false, "").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").
@@ -99,7 +99,7 @@ func TestAgentRepo_Register_WithMCP(t *testing.T) {
 		LLMModel: "gpt-4o", MaxIterations: 5,
 		MCPToolIDs: []string{"mcp:srv1:search"},
 	}
-	if err := repo.Register(tenantCtx("t1"), cfg); err != nil {
+	if err := repo.Register(tenantCtx("t1"), cfg, nil); err != nil {
 		t.Fatalf("Register with MCP: %v", err)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
@@ -118,8 +118,8 @@ func TestAgentRepo_Get(t *testing.T) {
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("SELECT id, name").
 		WithArgs(pgxmock.AnyArg()).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "max_iterations", "max_context_tokens", "memory_scope", "system_key", "checkpoint_enabled"}).
-			AddRow("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 8000, "", "", false))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "max_iterations", "max_context_tokens", "memory_scope", "system_key", "checkpoint_enabled", "created_by"}).
+			AddRow("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 8000, "", "", false, ""))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs("a1").
 		WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
@@ -164,7 +164,7 @@ func TestAgentRepo_GetNotFound(t *testing.T) {
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("SELECT id, name").
 		WithArgs("missing").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "max_iterations", "max_context_tokens", "memory_scope", "system_key", "checkpoint_enabled"}))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "max_iterations", "max_context_tokens", "memory_scope", "system_key", "checkpoint_enabled", "created_by"}))
 	pool.ExpectRollback()
 
 	repo := &PgAgentRepo{pool: pool}
@@ -194,7 +194,7 @@ func TestAgentRepo_Remove(t *testing.T) {
 	pool.ExpectCommit()
 
 	repo := &PgAgentRepo{pool: pool}
-	if err := repo.Remove(tenantCtx("t1"), "a1"); err != nil {
+	if err := repo.Remove(tenantCtx("t1"), "a1", nil); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
@@ -217,7 +217,7 @@ func TestAgentRepo_RemoveSystemAssistantRollsBackBeforeDelete(t *testing.T) {
 	pool.ExpectRollback()
 
 	repo := &PgAgentRepo{pool: pool}
-	err = repo.Remove(tenantCtx("t1"), "stratum-platform-assistant")
+	err = repo.Remove(tenantCtx("t1"), "stratum-platform-assistant", nil)
 	if !errors.Is(err, domain.ErrSystemAssistantManaged) {
 		t.Fatalf("expected managed assistant error, got %v", err)
 	}
@@ -253,7 +253,7 @@ func TestAgentRepo_Update_Success(t *testing.T) {
 
 	repo := &PgAgentRepo{pool: pool}
 	cfg := &domain.AgentConfig{ID: "a1", Name: "Beta", LLMModel: "gpt-4o", MaxIterations: 5}
-	if err := repo.Update(tenantCtx("t1"), cfg); err != nil {
+	if err := repo.Update(tenantCtx("t1"), cfg, nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
@@ -276,7 +276,7 @@ func TestAgentRepo_Update_NotFound(t *testing.T) {
 
 	repo := &PgAgentRepo{pool: pool}
 	cfg := &domain.AgentConfig{ID: "missing", Name: "Beta", LLMModel: "gpt-4o", MaxIterations: 5}
-	err = repo.Update(tenantCtx("t1"), cfg)
+	err = repo.Update(tenantCtx("t1"), cfg, nil)
 	if err == nil {
 		t.Fatal("expected error for missing agent")
 	}
@@ -303,7 +303,7 @@ func TestAgentRepo_UpdateSystemAssistantRollsBackBeforeRelations(t *testing.T) {
 	pool.ExpectRollback()
 
 	repo := &PgAgentRepo{pool: pool}
-	err = repo.Update(tenantCtx("t1"), &domain.AgentConfig{ID: "stratum-platform-assistant"})
+	err = repo.Update(tenantCtx("t1"), &domain.AgentConfig{ID: "stratum-platform-assistant"}, nil)
 	if !errors.Is(err, domain.ErrSystemAssistantManaged) {
 		t.Fatalf("expected managed assistant error, got %v", err)
 	}
@@ -322,8 +322,8 @@ func TestAgentRepo_GetSystemAssistant(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("SELECT id, name").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "max_iterations", "max_context_tokens", "memory_scope", "system_key", "checkpoint_enabled"}).
-			AddRow("stratum-platform-assistant", "Stratum 系统助手", "react", "managed", "", "qwen-plus", 10, 8000, "user", "stratum.platform_assistant", false))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "max_iterations", "max_context_tokens", "memory_scope", "system_key", "checkpoint_enabled", "created_by"}).
+			AddRow("stratum-platform-assistant", "Stratum 系统助手", "react", "managed", "", "qwen-plus", 10, 8000, "user", "stratum.platform_assistant", false, ""))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs("stratum-platform-assistant").WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
 	pool.ExpectQuery("SELECT server_id, tool_name FROM agent_mcp_tool_links").
@@ -357,9 +357,9 @@ func TestAgentRepo_UpdateSystemAssistantModel(t *testing.T) {
 	pool.ExpectQuery("UPDATE agents SET llm_model=\\$1.*updated_at=NOW\\(\\).*RETURNING id").
 		WithArgs("qwen-plus", "user", false, 10, 8000).WillReturnRows(pgxmock.NewRows([]string{
 		"id", "name", "type", "description", "system_prompt", "llm_model",
-		"max_iterations", "max_context_tokens", "memory_scope", "system_key", "checkpoint_enabled",
+		"max_iterations", "max_context_tokens", "memory_scope", "system_key", "checkpoint_enabled", "created_by",
 	}).AddRow(domain.SystemAssistantID, "平台助手", string(domain.ReActAgent), "", "", "qwen-plus", 5, 0,
-		"", domain.SystemAssistantKey, false))
+		"", domain.SystemAssistantKey, false, ""))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs(domain.SystemAssistantID).WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
 	pool.ExpectQuery("SELECT server_id, tool_name FROM agent_mcp_tool_links").
@@ -369,7 +369,7 @@ func TestAgentRepo_UpdateSystemAssistantModel(t *testing.T) {
 	pool.ExpectCommit()
 
 	repo := &PgAgentRepo{pool: pool}
-	cfg, err := repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus", "user", false, 10, 8000)
+	cfg, err := repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus", "user", false, 10, 8000, nil)
 	if err != nil {
 		t.Fatalf("UpdateSystemAssistantModel: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestAgentRepo_UpdateSystemAssistantModelNotFound(t *testing.T) {
 	pool.ExpectRollback()
 
 	repo := &PgAgentRepo{pool: pool}
-	_, err = repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus", "user", false, 10, 8000)
+	_, err = repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus", "user", false, 10, 8000, nil)
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("expected not found, got %v", err)
 	}
@@ -416,15 +416,15 @@ func TestAgentRepo_UpdateSystemAssistantModelRelationFailureRollsBack(t *testing
 	pool.ExpectQuery("UPDATE agents SET llm_model=\\$1.*updated_at=NOW\\(\\).*RETURNING id").
 		WithArgs("qwen-plus", "user", false, 10, 8000).WillReturnRows(pgxmock.NewRows([]string{
 		"id", "name", "type", "description", "system_prompt", "llm_model",
-		"max_iterations", "max_context_tokens", "memory_scope", "system_key", "checkpoint_enabled",
+		"max_iterations", "max_context_tokens", "memory_scope", "system_key", "checkpoint_enabled", "created_by",
 	}).AddRow(domain.SystemAssistantID, "平台助手", string(domain.ReActAgent), "", "", "qwen-plus", 5, 0,
-		"", domain.SystemAssistantKey, false))
+		"", domain.SystemAssistantKey, false, ""))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs(domain.SystemAssistantID).WillReturnError(errors.New("relations unavailable"))
 	pool.ExpectRollback()
 
 	repo := &PgAgentRepo{pool: pool}
-	cfg, err := repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus", "user", false, 10, 8000)
+	cfg, err := repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus", "user", false, 10, 8000, nil)
 	if err == nil || cfg != nil || !strings.Contains(err.Error(), "relations unavailable") {
 		t.Fatalf("expected rollback relation error, cfg=%+v err=%v", cfg, err)
 	}

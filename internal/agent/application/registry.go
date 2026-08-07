@@ -8,6 +8,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"go.uber.org/zap"
 )
 
@@ -68,10 +69,10 @@ func (r *Registry) systemAssistantProfileVersion() (string, error) {
 	return r.systemProfile.Version(), nil
 }
 
-// Register persists a new agent.
-func (r *Registry) Register(ctx context.Context, a Agent) error {
+// Register persists a new agent, auditing the create in the same transaction.
+func (r *Registry) Register(ctx context.Context, a Agent, audit *auditdomain.ResourceChangeAuditEvent) error {
 	cfg := a.GetConfig()
-	if err := r.repo.Register(ctx, cfg); err != nil {
+	if err := r.repo.Register(ctx, cfg, audit); err != nil {
 		return err
 	}
 	if r.logger != nil {
@@ -129,8 +130,8 @@ func (r *Registry) GetSystemAssistant(ctx context.Context) (Agent, bool, error) 
 	return a, true, nil
 }
 
-func (r *Registry) UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int) (Agent, error) {
-	cfg, err := r.repo.UpdateSystemAssistantModel(ctx, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens)
+func (r *Registry) UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (Agent, error) {
+	cfg, err := r.repo.UpdateSystemAssistantModel(ctx, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens, audit)
 	if err != nil {
 		return nil, fmt.Errorf("registry update system assistant model: %w", err)
 	}
@@ -141,8 +142,25 @@ func (r *Registry) UpdateSystemAssistantModel(ctx context.Context, model string,
 	return a, nil
 }
 
+// UpdateSystemAssistantAll applies model fields + unchanged bindings in one
+// transaction, auditing once.
+func (r *Registry) UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, checkpointEnabled bool, maxIterations, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (Agent, error) {
+	cfg, err := r.repo.UpdateSystemAssistantAll(ctx, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens, audit)
+	if err != nil {
+		return nil, fmt.Errorf("registry update system assistant: %w", err)
+	}
+	a, err := r.hydrate(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("registry update system assistant: %w", err)
+	}
+	return a, nil
+}
+
+// UpdateSystemAssistant persists a system-assistant config (internal
+// reentrant path; no audit event — the platform seed/import callers are not
+// user-facing writes).
 func (r *Registry) UpdateSystemAssistant(ctx context.Context, cfg *domain.AgentConfig) error {
-	if _, err := r.repo.UpdateSystemAssistantModel(ctx, cfg.LLMModel, cfg.MemoryScope, cfg.CheckpointEnabled, cfg.MaxIterations, cfg.MaxContextTokens); err != nil {
+	if _, err := r.repo.UpdateSystemAssistantModel(ctx, cfg.LLMModel, cfg.MemoryScope, cfg.CheckpointEnabled, cfg.MaxIterations, cfg.MaxContextTokens, nil); err != nil {
 		return fmt.Errorf("registry update system assistant: %w", err)
 	}
 	if r.logger != nil {
@@ -151,19 +169,9 @@ func (r *Registry) UpdateSystemAssistant(ctx context.Context, cfg *domain.AgentC
 	return nil
 }
 
-func (r *Registry) UpdateSystemAssistantBindings(
-	ctx context.Context, mcpToolIDs, knowledgeWorkspaceIDs, allowedSkills []string,
-) (Agent, error) {
-	cfg, err := r.repo.UpdateSystemAssistantBindings(ctx, mcpToolIDs, knowledgeWorkspaceIDs, allowedSkills)
-	if err != nil {
-		return nil, fmt.Errorf("registry update system assistant bindings: %w", err)
-	}
-	return r.hydrate(cfg)
-}
-
-// Remove deletes an agent.
-func (r *Registry) Remove(ctx context.Context, id string) error {
-	if err := r.repo.Remove(ctx, id); err != nil {
+// Remove deletes an agent, auditing the delete in the same transaction.
+func (r *Registry) Remove(ctx context.Context, id string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	if err := r.repo.Remove(ctx, id, audit); err != nil {
 		return err
 	}
 	if r.logger != nil {
@@ -172,9 +180,10 @@ func (r *Registry) Remove(ctx context.Context, id string) error {
 	return nil
 }
 
-// Update replaces mutable fields on an existing agent.
-func (r *Registry) Update(ctx context.Context, cfg *AgentConfig) error {
-	if err := r.repo.Update(ctx, cfg); err != nil {
+// Update replaces mutable fields on an existing agent, auditing the change in
+// the same transaction.
+func (r *Registry) Update(ctx context.Context, cfg *AgentConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
+	if err := r.repo.Update(ctx, cfg, audit); err != nil {
 		return err
 	}
 	if r.logger != nil {

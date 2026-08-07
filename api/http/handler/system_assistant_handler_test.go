@@ -12,6 +12,7 @@ import (
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -22,7 +23,9 @@ type settingsAgentRepo struct {
 	updateErr error
 }
 
-func (r *settingsAgentRepo) Register(context.Context, *domain.AgentConfig) error { return nil }
+func (r *settingsAgentRepo) Register(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (r *settingsAgentRepo) Get(context.Context, string) (*domain.AgentConfig, bool, error) {
 	return r.cfg, r.cfg != nil, nil
 }
@@ -30,8 +33,12 @@ func (r *settingsAgentRepo) GetSystemAssistant(context.Context) (*domain.AgentCo
 	return r.cfg, r.cfg != nil, nil
 }
 func (r *settingsAgentRepo) GetAll(context.Context) ([]*domain.AgentConfig, error) { return nil, nil }
-func (r *settingsAgentRepo) Remove(context.Context, string) error                  { return nil }
-func (r *settingsAgentRepo) Update(context.Context, *domain.AgentConfig) error     { return nil }
+func (r *settingsAgentRepo) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
+func (r *settingsAgentRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (r *settingsAgentRepo) UpdateSystemAssistant(_ context.Context, cfg *domain.AgentConfig) error {
 	if r.updateErr != nil {
 		return r.updateErr
@@ -49,11 +56,14 @@ func (r *settingsAgentRepo) UpdateSystemAssistant(_ context.Context, cfg *domain
 	return nil
 }
 
-func (r *settingsAgentRepo) UpdateSystemAssistantModel(_ context.Context, model string, _ string, _ bool, _ int, _ int) (*domain.AgentConfig, error) {
+func (r *settingsAgentRepo) UpdateSystemAssistantModel(_ context.Context, model string, _ string, _ bool, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	if r.updateErr != nil {
 		return nil, r.updateErr
 	}
 	r.cfg.LLMModel = model
+	return r.cfg, nil
+}
+func (r *settingsAgentRepo) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	return r.cfg, nil
 }
 
@@ -89,6 +99,7 @@ func newSettingsRouter(repo *settingsAgentRepo, validator port.TenantChatModelVa
 	registry := agentapp.NewRegistry(repo, agentapp.BuiltinSystemAssistantProfileSource(), zap.NewNop())
 	svc := agentapp.NewAgentService(agentapp.AgentServiceDeps{
 		Registry: registry, TenantModelValidator: validator,
+		TenantRoleResolver: fixedTenantRole{role: "owner"},
 		TenantModelCatalog: settingsModelCatalog{models: []string{"qwen-plus"}}, Logger: zap.NewNop(),
 	})
 	h := NewAgentHandler(svc, zap.NewNop())
@@ -96,6 +107,7 @@ func newSettingsRouter(repo *settingsAgentRepo, validator port.TenantChatModelVa
 	r.Use(middleware.ErrorHandler(zap.NewNop()))
 	r.Use(func(c *gin.Context) {
 		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), "tenant-1"))
+		c.Set(middleware.ContextKeySub, "user-1")
 		c.Next()
 	})
 	r.GET("/agents/system/settings", h.GetSettings)

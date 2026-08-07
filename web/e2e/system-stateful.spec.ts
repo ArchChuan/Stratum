@@ -171,15 +171,15 @@ const executePack = async (
     return;
   }
   if (pack === 'agent') {
-    completedActions.push(...await executeAgentPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL }));
+    completedActions.push(...await executeAgentPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL, backendURL }));
     return;
   }
   if (pack === 'agent-context') {
-    completedActions.push(...await executeAgentContextPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL }));
+    completedActions.push(...await executeAgentContextPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL, backendURL }));
     return;
   }
   if (pack === 'agent-skill-mcp') {
-    completedActions.push(...await executeAgentSkillMCPPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL }));
+    completedActions.push(...await executeAgentSkillMCPPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL, backendURL }));
     return;
   }
   if (pack === 'workflow') {
@@ -195,16 +195,16 @@ const executePack = async (
     return;
   }
   if (pack === 'knowledge') {
-    completedActions.push(...await executeKnowledgePack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL }));
+    completedActions.push(...await executeKnowledgePack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL, backendURL }));
     return;
   }
   if (pack === 'evaluation') {
-    completedActions.push(...await executeEvaluationPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL }));
+    completedActions.push(...await executeEvaluationPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL, backendURL }));
     return;
   }
   if (pack === 'evaluation-promotion') {
     completedActions.push(...await executeEvaluationPromotionPack({
-      actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL,
+      actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL, backendURL,
     }));
     return;
   }
@@ -213,18 +213,18 @@ const executePack = async (
     return;
   }
   if (pack === 'llm-admin') {
-    completedActions.push(...await executeLLMAdminPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL }));
+    completedActions.push(...await executeLLMAdminPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL, backendURL }));
     return;
   }
   if (pack === 'operation-gate') {
     completedActions.push(...await executeOperationGatePack({
-      actor: actors.memberA, adminActor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL,
+      actor: actors.memberA, adminActor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL, backendURL,
     }));
     return;
   }
   if (pack === 'collab') {
     completedActions.push(...await executeCollabPack({
-      actor: actors.memberA, adminActor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL,
+      actor: actors.memberA, adminActor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL, backendURL,
     }));
     return;
   }

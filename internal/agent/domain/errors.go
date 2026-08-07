@@ -9,6 +9,7 @@ var (
 	ErrNameConflict                       = errors.New("agent name already exists")
 	ErrInvalidSkill                       = errors.New("skill not found")
 	ErrSystemAssistantManaged             = errors.New("system assistant is platform managed")
+	ErrForbidden                          = errors.New("resource ownership forbidden")
 	ErrInvalidOfficialEvidenceQuery       = errors.New("official evidence query is empty")
 	ErrOfficialEvidenceNotFound           = errors.New("official evidence not found")
 	ErrDiagnosticForbidden                = errors.New("diagnostic forbidden")

@@ -6,8 +6,16 @@ import (
 	"fmt"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"go.uber.org/zap"
 )
+
+// operationGateActor is the system actor recorded for approved replays. The
+// mutation is executed by the operation gate on behalf of the human approval,
+// so ownership is enforced at proposal time (member proposals are always
+// gated) and audited as a system execution with the member's proposal row
+// carrying proposer/reviewer provenance.
+const operationGateActor = "operation-gate"
 
 // ErrGateUnavailable fails closed when the operation gate was never injected
 // (misconfiguration); wiring registers the self-modify route only when the
@@ -77,6 +85,11 @@ func (s *AgentService) GatedSelfModify(
 	if !decision.Allowed {
 		return GatedSelfModifyResult{Decision: decision}, nil
 	}
+	// An approved replay is executed by the gate as a system actor: the member
+	// proposing it is not the resource owner, and ownership was already
+	// adjudicated by the human approver. The audit row still records the
+	// system actor with the proposal's proposer/reviewer carrying provenance.
+	ctx = reqctx.WithSystemActor(ctx, operationGateActor)
 	// SelfModifyRequest 是 member 受控内容变更子集：Temperature/MaxTokens/
 	// Compaction* 等派生配置不在自改面内，显式构造留零值（Update 对
 	// MaxContextTokens<=0 有 derive 兜底，此处成员已显式传值不受影响）
@@ -93,6 +106,7 @@ func (s *AgentService) GatedSelfModify(
 		KnowledgeWorkspaceIDs: req.KnowledgeWorkspaceIDs,
 		MemoryScope:           req.MemoryScope,
 		CheckpointEnabled:     req.CheckpointEnabled,
+		ActorID:               actorID,
 	})
 	if err != nil {
 		return GatedSelfModifyResult{Decision: decision}, err

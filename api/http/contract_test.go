@@ -444,7 +444,7 @@ func (contractDashboardRepo) Overview(context.Context, string) (platformdomain.D
 
 type contractAgentRepo struct{}
 
-func (contractAgentRepo) Register(context.Context, *agentdomain.AgentConfig) error {
+func (contractAgentRepo) Register(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (contractAgentRepo) Get(context.Context, string) (*agentdomain.AgentConfig, bool, error) {
@@ -456,17 +456,19 @@ func (contractAgentRepo) GetSystemAssistant(context.Context) (*agentdomain.Agent
 func (contractAgentRepo) GetAll(context.Context) ([]*agentdomain.AgentConfig, error) {
 	return nil, nil
 }
-func (contractAgentRepo) Remove(context.Context, string) error { return nil }
-func (contractAgentRepo) Update(context.Context, *agentdomain.AgentConfig) error {
+func (contractAgentRepo) Remove(context.Context, string, *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
+func (contractAgentRepo) Update(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (contractAgentRepo) UpdateSystemAssistantModel(
-	context.Context, string, string, bool, int, int,
+	context.Context, string, string, bool, int, int, *auditdomain.ResourceChangeAuditEvent,
 ) (*agentdomain.AgentConfig, error) {
 	return nil, nil
 }
-func (contractAgentRepo) UpdateSystemAssistantBindings(
-	context.Context, []string, []string, []string,
+func (contractAgentRepo) UpdateSystemAssistantAll(
+	context.Context, string, string, bool, int, int, *auditdomain.ResourceChangeAuditEvent,
 ) (*agentdomain.AgentConfig, error) {
 	return nil, nil
 }

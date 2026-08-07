@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"go.uber.org/zap"
 )
@@ -24,20 +25,33 @@ type lifecycleManagerFake struct {
 	disconnected string
 	updated      bool
 	stored       *domain.ServerConfig
+	updateErr    error
+	audits       []*auditdomain.ResourceChangeAuditEvent
 }
 
-func (f *lifecycleManagerFake) Connect(context.Context, *domain.ServerConfig) error { return nil }
+func (f *lifecycleManagerFake) Connect(_ context.Context, _ *domain.ServerConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
+	if audit != nil {
+		f.audits = append(f.audits, audit)
+	}
+	return nil
+}
 func (f *lifecycleManagerFake) Disconnect(_ context.Context, serverID string) error {
 	f.disconnected = serverID
 	return nil
 }
 func (f *lifecycleManagerFake) Reconnect(context.Context, string) error { return nil }
-func (f *lifecycleManagerFake) UpdateServer(context.Context, *domain.ServerConfig) error {
+func (f *lifecycleManagerFake) UpdateServer(_ context.Context, _ *domain.ServerConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
 	f.updated = true
-	return nil
+	if audit != nil {
+		f.audits = append(f.audits, audit)
+	}
+	return f.updateErr
 }
-func (f *lifecycleManagerFake) Delete(_ context.Context, serverID string) error {
+func (f *lifecycleManagerFake) Delete(_ context.Context, serverID string, audit *auditdomain.ResourceChangeAuditEvent) error {
 	f.deleted = serverID
+	if audit != nil {
+		f.audits = append(f.audits, audit)
+	}
 	return nil
 }
 func (f *lifecycleManagerFake) GetServerConfig(context.Context, string) (*domain.ServerConfig, error) {
@@ -52,13 +66,13 @@ func TestPlatformManagedServerMutationsAreRejectedBeforeLifecycleChange(t *testi
 		act  func(*MCPService) error
 	}{
 		{name: "connect overwrite", act: func(s *MCPService) error {
-			return s.ConnectServer(t.Context(), &domain.ServerConfig{ID: "stratum-platform-mcp"})
+			return s.ConnectServer(t.Context(), &domain.ServerConfig{ID: "stratum-platform-mcp"}, "user-1")
 		}},
 		{name: "update", act: func(s *MCPService) error {
-			return s.UpdateServer(t.Context(), &domain.ServerConfig{ID: "stratum-platform-mcp"})
+			return s.UpdateServer(t.Context(), &domain.ServerConfig{ID: "stratum-platform-mcp"}, "user-1")
 		}},
 		{name: "delete", act: func(s *MCPService) error {
-			return s.DeleteServer(t.Context(), "stratum-platform-mcp")
+			return s.DeleteServer(t.Context(), "stratum-platform-mcp", "user-1")
 		}},
 		{name: "disconnect", act: func(s *MCPService) error {
 			return s.DisconnectServer(t.Context(), "stratum-platform-mcp")
@@ -71,6 +85,7 @@ func TestPlatformManagedServerMutationsAreRejectedBeforeLifecycleChange(t *testi
 				ID: "stratum-platform-mcp", ManagementMode: "platform_managed",
 			}}
 			service := NewMCPService(&lifecycleRegistryFake{}, manager, zap.NewNop())
+			service.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 			err := tt.act(service)
 
@@ -89,8 +104,9 @@ func TestPlatformManagedServerSystemKeyFailsClosedWithoutManagementMode(t *testi
 		ID: "stratum-platform-mcp", SystemKey: "stratum.platform_mcp",
 	}}
 	service := NewMCPService(&lifecycleRegistryFake{}, manager, zap.NewNop())
+	service.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
-	err := service.DeleteServer(t.Context(), "stratum-platform-mcp")
+	err := service.DeleteServer(t.Context(), "stratum-platform-mcp", "user-1")
 
 	if !errors.Is(err, domain.ErrPlatformManagedServer) {
 		t.Fatalf("error = %v, want ErrPlatformManagedServer", err)
@@ -112,10 +128,11 @@ func (f *lifecycleManagerFake) Quota(context.Context) domain.Quota              
 
 func TestDeleteServerUnregistersDiscoveredTools(t *testing.T) {
 	registry := &lifecycleRegistryFake{}
-	manager := &lifecycleManagerFake{}
+	manager := &lifecycleManagerFake{stored: &domain.ServerConfig{ID: "orders", Name: "orders"}}
 	service := NewMCPService(registry, manager, zap.NewNop())
+	service.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
-	if err := service.DeleteServer(context.Background(), "orders"); err != nil {
+	if err := service.DeleteServer(context.Background(), "orders", "user-1"); err != nil {
 		t.Fatal(err)
 	}
 	if manager.deleted != "orders" {

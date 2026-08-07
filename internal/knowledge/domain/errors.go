@@ -13,4 +13,5 @@ var (
 	ErrChunkLimitExceeded       = errors.New("document exceeds maximum chunk count; please split into smaller files")
 	ErrIngestQueueFull          = errors.New("ingest queue is full; please retry shortly")
 	ErrPlatformManagedWorkspace = errors.New("platform-managed workspace cannot be modified")
+	ErrForbidden                = errors.New("resource ownership forbidden")
 )

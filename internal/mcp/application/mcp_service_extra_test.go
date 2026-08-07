@@ -71,6 +71,7 @@ func TestMCPServiceListAndGetServers(t *testing.T) {
 		},
 	}
 	svc := NewMCPService(&lifecycleRegistryFake{}, mgr, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	got := svc.ListServers(context.Background())
 	if len(got) != 2 {
@@ -92,6 +93,7 @@ func TestMCPServiceListToolsAndResources(t *testing.T) {
 		resources:            []*domain.Resource{{URI: "r1"}},
 	}
 	svc := NewMCPService(&lifecycleRegistryFake{}, mgr, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	tools, err := svc.ListTools(context.Background(), "s1")
 	if err != nil || len(tools) != 1 || tools[0].Name != "t1" {
@@ -114,6 +116,7 @@ func TestMCPServiceQuotaAndStatusBreakdown(t *testing.T) {
 		},
 	}
 	svc := NewMCPService(&lifecycleRegistryFake{}, mgr, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	q := svc.GetQuota(context.Background())
 	if q.TenantID != "t1" || q.Used != 3 || q.Limit != 5 || q.Healthy != 2 || q.Dead != 1 {
@@ -128,6 +131,7 @@ func TestMCPServiceQuotaAndStatusBreakdown(t *testing.T) {
 func TestMCPServiceGetServerConfigAndNameConflict(t *testing.T) {
 	mgr := &queryManagerFake{lifecycleManagerFake: &lifecycleManagerFake{}}
 	svc := NewMCPService(&lifecycleRegistryFake{}, mgr, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	if _, err := svc.GetServerConfig(context.Background(), "s1"); err != nil {
 		t.Fatalf("GetServerConfig = %v", err)
 	}
@@ -138,6 +142,7 @@ func TestMCPServiceGetServerConfigAndNameConflict(t *testing.T) {
 
 func TestMCPServiceGetToolRisk(t *testing.T) {
 	svc := NewMCPService(&lifecycleRegistryFake{}, &lifecycleManagerFake{}, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	// 未配置 repo → Unclassified。
 	level, err := svc.GetToolRisk(context.Background(), "s1", "tool")
@@ -172,6 +177,7 @@ func TestMCPServiceGetToolRisk(t *testing.T) {
 func TestMCPServiceListToolPoliciesNoRepo(t *testing.T) {
 	// 极端情况：nil repo 返回空列表而非 nil。
 	svc := NewMCPService(&lifecycleRegistryFake{}, &lifecycleManagerFake{}, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	policies, err := svc.ListToolPolicies(context.Background())
 	if err != nil || len(policies) != 0 || policies == nil {
 		t.Fatalf("ListToolPolicies = %v, %v", policies, err)
@@ -180,6 +186,7 @@ func TestMCPServiceListToolPoliciesNoRepo(t *testing.T) {
 
 func TestMCPServiceSetToolPolicyValidation(t *testing.T) {
 	svc := NewMCPService(&lifecycleRegistryFake{}, &lifecycleManagerFake{}, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	// 非法风险等级。
 	if err := svc.SetToolPolicy(context.Background(), domain.ToolPolicy{RiskLevel: "nope"}); err == nil {
@@ -213,7 +220,16 @@ func TestMCPServiceReconnectServer(t *testing.T) {
 	// 成功 + 注册失败仅告警（不阻断）。
 	mgr := &queryManagerFake{lifecycleManagerFake: &lifecycleManagerFake{}}
 	svc := NewMCPService(&lifecycleRegistryFake{}, mgr, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	if err := svc.ReconnectServer(context.Background(), "s1"); err != nil {
 		t.Fatalf("reconnect = %v", err)
 	}
+}
+
+// stubTenantRole resolves every actor as a fixed role so ownership tests
+// control authorization via the fake, not tenant membership.
+type stubTenantRole struct{ role string }
+
+func (s stubTenantRole) ResolveTenantRole(_ context.Context, _, _ string) (string, error) {
+	return s.role, nil
 }

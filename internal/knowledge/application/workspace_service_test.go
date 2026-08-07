@@ -8,6 +8,7 @@ import (
 
 	"go.uber.org/zap"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 )
 
@@ -16,7 +17,9 @@ type deleteWorkspaceRepo struct {
 	getByID   string
 }
 
-func (r *deleteWorkspaceRepo) Create(context.Context, string, *domain.Workspace) error { return nil }
+func (r *deleteWorkspaceRepo) Create(context.Context, string, *domain.Workspace, *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (r *deleteWorkspaceRepo) List(context.Context, string) ([]*domain.Workspace, error) {
 	return []*domain.Workspace{r.workspace}, nil
 }
@@ -27,11 +30,12 @@ func (r *deleteWorkspaceRepo) GetByID(_ context.Context, _, id string) (*domain.
 	r.getByID = id
 	return r.workspace, nil
 }
-func (r *deleteWorkspaceRepo) UpdateName(context.Context, string, string, string) error { return nil }
-func (r *deleteWorkspaceRepo) UpdateDescriptionAndConfig(context.Context, string, string, *string, domain.WorkspaceConfig) error {
+func (r *deleteWorkspaceRepo) UpdateWorkspaceAll(context.Context, string, string, *string, *string, domain.WorkspaceConfig, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (r *deleteWorkspaceRepo) Delete(context.Context, string, string) error { return nil }
+func (r *deleteWorkspaceRepo) Delete(context.Context, string, string, *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (r *deleteWorkspaceRepo) GetConfigForUpload(context.Context, string, string) (domain.WorkspaceConfig, error) {
 	return r.workspace.Config, nil
 }
@@ -80,6 +84,8 @@ func (s *deleteVectorStore) DeleteByDocumentIDs(_ context.Context, collection st
 func TestGetWorkspaceByIDUsesStableResourceID(t *testing.T) {
 	repo := &deleteWorkspaceRepo{workspace: &domain.Workspace{ID: "ws-1", Name: "docs"}}
 	service := NewWorkspaceService(repo, nil, zap.NewNop())
+	service.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	service.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	workspace, err := service.GetWorkspaceByID(context.Background(), "tenant-1", "ws-1")
 
@@ -95,6 +101,8 @@ func TestDeleteDocumentRejectsProcessingDocument(t *testing.T) {
 	docs := &deleteDocRepo{docs: []*domain.Document{{ID: "doc-1", IngestStatus: "processing"}}}
 	vectors := &deleteVectorStore{}
 	service := NewWorkspaceService(&deleteWorkspaceRepo{workspace: &domain.Workspace{ID: "ws-1", Name: "docs"}}, nil, zap.NewNop())
+	service.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	service.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	service.SetDocRepo(docs)
 	service.SetVectorStore(vectors)
 
@@ -114,6 +122,8 @@ func TestDeleteDocumentCleansVectorsBeforeDocumentRecord(t *testing.T) {
 			docs := &deleteDocRepo{docs: []*domain.Document{{ID: "doc-1", IngestStatus: status}}}
 			vectors := &deleteVectorStore{}
 			service := NewWorkspaceService(&deleteWorkspaceRepo{workspace: &domain.Workspace{ID: "ws-1", Name: "docs"}}, nil, zap.NewNop())
+			service.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+			service.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 			service.SetDocRepo(docs)
 			service.SetVectorStore(vectors)
 

@@ -39,7 +39,7 @@ func seedSkillDraft(t *testing.T, repo *fakeVersionRepo, status domain.VersionSt
 		skill.Status = "published"
 		skill.ActiveRevisionID = draft.ID
 	}
-	require.NoError(t, repo.InsertSkillWithDraft(context.Background(), skill, draft))
+	require.NoError(t, repo.InsertSkillWithDraft(context.Background(), skill, draft, nil))
 }
 
 func TestVersionServiceGetWorkspacePrefersDraft(t *testing.T) {
@@ -48,6 +48,7 @@ func TestVersionServiceGetWorkspacePrefersDraft(t *testing.T) {
 	seedSkillDraft(t, repo, domain.VersionStatusDraft, "s1", "rev-s1-draft")
 	seedSkillDraft(t, repo, domain.VersionStatusPublished, "s1", "rev-s1")
 	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	view, err := svc.GetWorkspace(context.Background(), "s1")
 	require.NoError(t, err)
@@ -60,6 +61,7 @@ func TestVersionServiceGetWorkspaceFallsBackToActive(t *testing.T) {
 	repo := newFakeVersionRepo()
 	seedSkillDraft(t, repo, domain.VersionStatusPublished, "s1", "rev-s1")
 	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	view, err := svc.GetWorkspace(context.Background(), "s1")
 	require.NoError(t, err)
@@ -69,6 +71,7 @@ func TestVersionServiceGetWorkspaceFallsBackToActive(t *testing.T) {
 func TestVersionServiceGetWorkspaceMissingSkill(t *testing.T) {
 	repo := newFakeVersionRepo()
 	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	_, err := svc.GetWorkspace(context.Background(), "ghost")
 	assert.ErrorIs(t, err, domain.ErrSkillNotFound)
 }
@@ -78,6 +81,7 @@ func TestVersionServiceGetWorkspaceNoActiveEither(t *testing.T) {
 	repo := newFakeVersionRepo()
 	repo.skills["s1"] = port.SkillProductRow{ID: "s1"}
 	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	_, err := svc.GetWorkspace(context.Background(), "s1")
 	assert.ErrorIs(t, err, domain.ErrSkillNotFound)
 }
@@ -87,12 +91,13 @@ func TestVersionServiceListAndDeleteSkills(t *testing.T) {
 	seedSkillDraft(t, repo, domain.VersionStatusDraft, "s1", "rev-s1")
 	seedSkillDraft(t, repo, domain.VersionStatusDraft, "s2", "rev-s2")
 	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	skills, err := svc.ListSkills(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, skills, 2)
 
-	require.NoError(t, svc.DeleteSkill(context.Background(), "s1"))
+	require.NoError(t, svc.DeleteSkill(context.Background(), "s1", "user-1"))
 	skills, err = svc.ListSkills(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, skills, 1)
@@ -114,6 +119,7 @@ func TestVersionServiceResolveEvaluableRevision(t *testing.T) {
 			repo := newFakeVersionRepo()
 			seedSkillDraft(t, repo, tc.status, "s1", "rev-s1")
 			svc := NewVersionService(repo, zap.NewNop())
+			svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 			rev, err := svc.ResolveEvaluableRevision(context.Background(), "s1", "rev-s1")
 			if tc.ok {
 				require.NoError(t, err)
@@ -129,6 +135,7 @@ func TestVersionServiceResolveEvaluableRevision(t *testing.T) {
 func TestVersionServiceResolveEvaluableRevisionMissing(t *testing.T) {
 	repo := newFakeVersionRepo()
 	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	_, err := svc.ResolveEvaluableRevision(context.Background(), "s1", "rev-x")
 	assert.ErrorIs(t, err, domain.ErrSkillNotFound)
 }
@@ -138,6 +145,7 @@ func TestVersionServiceResolveActivePublishedRevision(t *testing.T) {
 	repo := newFakeVersionRepo()
 	seedSkillDraft(t, repo, domain.VersionStatusPublished, "s1", "rev-s1")
 	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	rev, err := svc.ResolveActivePublishedRevision(context.Background(), "s1")
 	require.NoError(t, err)
@@ -147,6 +155,7 @@ func TestVersionServiceResolveActivePublishedRevision(t *testing.T) {
 	repo2 := newFakeVersionRepo()
 	seedSkillDraft(t, repo2, domain.VersionStatusDraft, "s2", "rev-s2")
 	svc2 := NewVersionService(repo2, zap.NewNop())
+	svc2.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	_, err = svc2.ResolveActivePublishedRevision(context.Background(), "s2")
 	assert.ErrorIs(t, err, domain.ErrSkillNotFound)
 
@@ -155,6 +164,7 @@ func TestVersionServiceResolveActivePublishedRevision(t *testing.T) {
 	seedSkillDraft(t, repo3, domain.VersionStatusDraft, "s3", "rev-s3")
 	repo3.skills["s3"] = port.SkillProductRow{ID: "s3", ActiveRevisionID: "rev-s3"}
 	svc3 := NewVersionService(repo3, zap.NewNop())
+	svc3.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	_, err = svc3.ResolveActivePublishedRevision(context.Background(), "s3")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not published")
@@ -164,6 +174,7 @@ func TestVersionServiceSafeSummaries(t *testing.T) {
 	repo := newFakeVersionRepo()
 	seedSkillDraft(t, repo, domain.VersionStatusPublished, "s1", "rev-s1")
 	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	pub, err := svc.PublishedRevisionSafeSummary(context.Background(), "s1", "rev-s1")
 	require.NoError(t, err)
@@ -179,6 +190,7 @@ func TestVersionServiceSafeSummariesRejectDraft(t *testing.T) {
 	repo := newFakeVersionRepo()
 	seedSkillDraft(t, repo, domain.VersionStatusDraft, "s1", "rev-s1")
 	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	if _, err := svc.PublishedRevisionSafeSummary(context.Background(), "s1", "rev-s1"); err == nil {
 		t.Fatal("draft must not be publishable summary")
@@ -193,16 +205,18 @@ func TestVersionServiceUpdateCapability(t *testing.T) {
 	repo := newFakeVersionRepo()
 	seedSkillDraft(t, repo, domain.VersionStatusDraft, "s1", "rev-s1")
 	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	rev, err := svc.UpdateCapability(context.Background(), "s1", UpdateCapabilityInput{
 		Goal: "new goal", WhenToUse: "new when", InputSpec: "in", OutputSpec: "out",
+		ActorID: "user-1",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "new goal", rev.Capability.Goal)
 	assert.Equal(t, "in", rev.Capability.InputSpec)
 
 	// 无 draft → ErrSkillNotFound。
-	_, err = svc.UpdateCapability(context.Background(), "ghost", UpdateCapabilityInput{})
+	_, err = svc.UpdateCapability(context.Background(), "ghost", UpdateCapabilityInput{ActorID: "user-1"})
 	assert.ErrorIs(t, err, domain.ErrSkillNotFound)
 }
 
@@ -211,8 +225,9 @@ func TestVersionServiceUpdateActivationDefaultsSchemas(t *testing.T) {
 	repo := newFakeVersionRepo()
 	seedSkillDraft(t, repo, domain.VersionStatusDraft, "s1", "rev-s1")
 	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
-	rev, err := svc.UpdateActivation(context.Background(), "s1", UpdateActivationInput{Name: "act"})
+	rev, err := svc.UpdateActivation(context.Background(), "s1", UpdateActivationInput{Name: "act", ActorID: "user-1"})
 	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"type": "object"}, rev.ActivationContract.InputSchema)
 	assert.Equal(t, map[string]any{"type": "object"}, rev.ActivationContract.OutputSchema)
@@ -221,6 +236,7 @@ func TestVersionServiceUpdateActivationDefaultsSchemas(t *testing.T) {
 	// 显式 schema 保留。
 	rev, err = svc.UpdateActivation(context.Background(), "s1", UpdateActivationInput{
 		Name: "act", InputSchema: map[string]any{"type": "string"}, Confirmed: true,
+		ActorID: "user-1",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"type": "string"}, rev.ActivationContract.InputSchema)
@@ -231,6 +247,7 @@ func TestVersionServiceCreateCandidateSuccess(t *testing.T) {
 	repo := newFakeVersionRepo()
 	seedSkillDraft(t, repo, domain.VersionStatusPublished, "s1", "rev-s1")
 	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	candidate, err := svc.CreateCandidate(context.Background(), "s1", "rev-s1", CandidateInput{
 		Source:             "llm_rewrite",
@@ -248,6 +265,7 @@ func TestVersionServiceCreateCandidateRejections(t *testing.T) {
 	repo := newFakeVersionRepo()
 	seedSkillDraft(t, repo, domain.VersionStatusPublished, "s1", "rev-s1")
 	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	// 不支持的 source。
 	_, err := svc.CreateCandidate(context.Background(), "s1", "rev-s1", CandidateInput{Source: "hand"})
@@ -282,15 +300,17 @@ func TestVersionServiceUpdateDraftBundleStaleHash(t *testing.T) {
 	repo := newFakeVersionRepo()
 	seedSkillDraft(t, repo, domain.VersionStatusDraft, "s1", "rev-s1")
 	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
-	_, err := svc.UpdateDraftBundle(context.Background(), "s1", "stale-hash", UpdateDraftBundleInput{Name: "x"})
+	_, err := svc.UpdateDraftBundle(context.Background(), "s1", "stale-hash", UpdateDraftBundleInput{Name: "x", ActorID: "user-1"})
 	assert.ErrorIs(t, err, domain.ErrSkillDraftStale)
 }
 
 func TestVersionServiceUpdateDraftBundleMissingSkill(t *testing.T) {
 	repo := newFakeVersionRepo()
 	svc := NewVersionService(repo, zap.NewNop())
-	_, err := svc.UpdateDraftBundle(context.Background(), "ghost", "", UpdateDraftBundleInput{})
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	_, err := svc.UpdateDraftBundle(context.Background(), "ghost", "", UpdateDraftBundleInput{ActorID: "user-1"})
 	assert.ErrorIs(t, err, domain.ErrSkillNotFound)
 }
 
@@ -317,14 +337,16 @@ func TestVersionServiceUpdateInstructionBundle(t *testing.T) {
 	repo := newFakeVersionRepo()
 	seedSkillDraft(t, repo, domain.VersionStatusDraft, "s1", "rev-s1")
 	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	rev, err := svc.UpdateInstructionBundle(context.Background(), "s1", UpdateInstructionBundleInput{
 		Instructions: "new instructions",
+		ActorID:      "user-1",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "new instructions", rev.Instructions)
 
-	_, err = svc.UpdateInstructionBundle(context.Background(), "ghost", UpdateInstructionBundleInput{})
+	_, err = svc.UpdateInstructionBundle(context.Background(), "ghost", UpdateInstructionBundleInput{ActorID: "user-1"})
 	assert.ErrorIs(t, err, domain.ErrSkillNotFound)
 }
 
