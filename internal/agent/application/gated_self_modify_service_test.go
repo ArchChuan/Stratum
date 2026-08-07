@@ -130,6 +130,41 @@ func TestGatedSelfModifyReplayLandsMutationAndRecordsUsage(t *testing.T) {
 	require.Equal(t, GateReasonPendingApproval, result.Decision.Reason)
 }
 
+// TestGatedSelfModifyReplayLandsForMemberWithoutOwnership locks the operation
+// gate contract: a member (non-owner, non-admin) who is NOT the resource
+// owner may still land an approved replay. Ownership is adjudicated by the
+// human approver at proposal time; the replay executes as a system actor.
+func TestGatedSelfModifyReplayLandsForMemberWithoutOwnership(t *testing.T) {
+	repo := newOperationProposalRepoFake()
+	usage := newOperationUsageRepoFake()
+	// The agent belongs to an admin; the proposing member is unrelated.
+	seed := &domain.AgentConfig{ID: "agent-1", Name: "old", CreatedBy: "admin-1"}
+	agents := map[string]*domain.AgentConfig{"agent-1": seed}
+	svc := NewAgentService(AgentServiceDeps{
+		Registry:           NewRegistry(&gateAgentRepoFake{agents: agents}, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		TenantRoleResolver: stubTenantRole{role: "member"},
+		Logger:             zap.NewNop(),
+	})
+	gate := newGateServiceForTest(repo, usage, &gateMetricsFake{})
+	svc.SetOperationGate(gate)
+	ctx := context.Background()
+
+	req := selfModifyRequest("renamed")
+	fingerprint, err := svc.deps.OperationGate.ComputeFingerprint("agent-1", port.OpSelfModify, req)
+	require.NoError(t, err)
+	approved := seededProposal(t, repo)
+	approved.Fingerprint = fingerprint
+	repo.proposals[approved.ID] = approved
+	require.NoError(t, repo.UpdateStatus(ctx, "tenant-1", approved.ID, domain.OpApproved, "admin-1", "ok"))
+
+	result, err := svc.GatedSelfModify(ctx, "tenant-1", "member-1", "agent-1", req)
+	require.NoError(t, err)
+	require.True(t, result.Decision.Allowed)
+	require.Equal(t, GateReasonApprovedReplay, result.Decision.Reason)
+	require.Equal(t, "renamed", agents["agent-1"].Name)
+	require.Equal(t, domain.OpExecuted, repo.proposals[approved.ID].Status)
+}
+
 func TestGatedSelfModifyReplayBoundToProposer(t *testing.T) {
 	repo := newOperationProposalRepoFake()
 	seed := &domain.AgentConfig{ID: "agent-1", Name: "old"}
