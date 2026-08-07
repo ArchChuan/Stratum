@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -87,7 +88,9 @@ func TestAnthropicClient_Health_upstreamFails(t *testing.T) {
 		infrastructure.ProviderConfig{Name: "test-anthropic", BaseURL: srv.URL, APIKey: "test-api-key", HealthModel: "claude-3-haiku"},
 		zap.NewNop(),
 	)
-	require.Error(t, client.Health(context.Background()))
+	err := client.Health(context.Background())
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), srv.URL, "upstream error must not leak internal BaseURL")
 }
 
 func TestAnthropicClient_ListModels_success(t *testing.T) {
@@ -127,6 +130,7 @@ func TestAnthropicClient_ListModels_nonOK(t *testing.T) {
 	_, err := client.ListModels(context.Background())
 	require.ErrorContains(t, err, "请检查 provider kind")
 	require.ErrorIs(t, err, domain.ErrUpstreamRequestFailed)
+	require.NotContains(t, err.Error(), srv.URL, "upstream error must not leak internal BaseURL")
 }
 
 func TestAnthropicClient_ListModels_badJSON(t *testing.T) {
@@ -214,6 +218,63 @@ func TestAnthropicProtocol_CompleteStream_delegates(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "hi", resp.Content)
 	require.Equal(t, []string{"hi"}, tokens)
+}
+
+// TestAnthropicCompleteStream_termination 覆盖 SSE 流三种收尾：
+// message_stop 正常终止成功；内容已输出但连接中断返回 ErrStreamTruncated；
+// 空响应返回普通错误（不是截断，不是成功）。
+func TestAnthropicCompleteStream_termination(t *testing.T) {
+	cases := []struct {
+		name    string
+		write   func(w http.ResponseWriter)
+		want    string // 成功时期望的内容
+		wantErr error  // 失败时 errors.Is 断言目标
+	}{
+		{
+			name: "message_stop terminates",
+			write: func(w http.ResponseWriter) {
+				fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n")
+				fmt.Fprint(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+			},
+			want: "hi",
+		},
+		{
+			name: "mid-stream disconnect is truncated",
+			write: func(w http.ResponseWriter) {
+				fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n")
+			},
+			wantErr: domain.ErrStreamTruncated,
+		},
+		{
+			name:    "empty response is an error",
+			write:   func(w http.ResponseWriter) {},
+			wantErr: io.EOF,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				tc.write(w)
+				w.(http.Flusher).Flush()
+			}))
+			defer srv.Close()
+
+			client := infrastructure.NewAnthropicClient(
+				infrastructure.ProviderConfig{Name: "test-anthropic", BaseURL: srv.URL, APIKey: "test-api-key"},
+				zap.NewNop(),
+			)
+			resp, err := client.CompleteStream(context.Background(),
+				&infrastructure.CompletionRequest{Model: "claude-haiku"},
+				func(string) {})
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, resp.Content)
+		})
+	}
 }
 
 func TestAnthropicCompleteWithToolUse(t *testing.T) {

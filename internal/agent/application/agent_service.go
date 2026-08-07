@@ -882,9 +882,12 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 	}
 
 	if err == nil && result != nil && s.deps.MemoryBuffer != nil && !assistantCfg.SystemAssistantMode {
+		// MemoryBuffer 是执行成功后的旁路异步摄取（Redis buffer，供后台记忆
+		// 提取）。答案已交付，缓冲失败不阻断响应——降级决策，但错误必须显式
+		// 处理并记录，禁止静默吞掉。
 		scope := a.GetConfig().MemoryScope
-		_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "user", req.Query)
-		_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "assistant", result.Output)
+		s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "user", req.Query)
+		s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "assistant", result.Output)
 	}
 	return result, durationMs, err
 }
@@ -979,14 +982,32 @@ func (s *AgentService) ExecuteStream(
 				zap.Int("duration_ms", durationMs),
 			)
 		}
-		if runErr == nil && res != nil && s.deps.MemoryBuffer != nil && !assistantCfg.SystemAssistantMode {
+		if runErr == nil && res != nil && !assistantCfg.SystemAssistantMode {
+			// 降级决策与 Execute 路径一致：答案已交付，旁路记忆缓冲失败只记日志。
 			scope := a.GetConfig().MemoryScope
-			_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "user", req.Query)
-			_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "assistant", res.Output)
+			s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "user", req.Query)
+			s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "assistant", res.Output)
 		}
 		return res, durationMs, runErr
 	}
 	return execCtx, cancel, run, nil
+}
+
+// bufferMemoryTurn feeds one turn into the async memory-extraction buffer.
+// The answer is already delivered, so a buffering failure is a degradable
+// side channel and must never fail the response — but the error is handled
+// explicitly and logged instead of being swallowed (no `_ =`).
+func (s *AgentService) bufferMemoryTurn(ctx context.Context, meta ExecMeta, req ExecRequest, agentID, scope, role, content string) {
+	if s.deps.MemoryBuffer == nil {
+		return
+	}
+	if err := s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, role, content); err != nil {
+		s.deps.Logger.Warn("agent.memory_buffer_failed",
+			zap.String("tenant_id", meta.TenantID),
+			zap.String("conversation_id", req.ConversationID),
+			zap.String("role", role),
+			zap.Error(err))
+	}
 }
 
 func (s *AgentService) recordSystemAssistantRequest(a Agent, roleClass, outcome string) {

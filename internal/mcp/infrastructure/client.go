@@ -27,6 +27,18 @@ import (
 
 const mcpProtocolVersion = constants.MCPProtocolVersion
 
+const (
+	// maxStdioReadBytes caps a single stdio response line to prevent memory exhaustion.
+	maxStdioReadBytes = 8 << 20
+	// processTerminateGrace is how long Disconnect waits for a stdio child to
+	// exit after SIGTERM before escalating to SIGKILL.
+	processTerminateGrace = 5 * time.Second
+)
+
+// ErrClientClosed is returned when an in-flight request races with Disconnect
+// (or is issued against a client whose transport is no longer available).
+var ErrClientClosed = errors.New("mcp client closed")
+
 // MCPClient 定义 MCP 客户端接口
 type MCPClient interface {
 	Connect(ctx context.Context) error
@@ -55,6 +67,8 @@ type BaseClient struct {
 	stdin      io.WriteCloser
 	stdout     io.ReadCloser
 	stdinLock  sync.Mutex // serialises writes to stdin
+	readMu     sync.Mutex // serialises reads on stdout (single-reader)
+	reqMu      sync.Mutex // serialises request periods (at most one in-flight request per client)
 	httpClient *http.Client
 	sessionID  string
 	// lastActivity records the wall time of the most recent CallTool / ListTools / ListResources.
@@ -177,7 +191,7 @@ func (c *BaseClient) Disconnect(ctx context.Context) error {
 		}
 		select {
 		case <-done:
-		case <-time.After(5 * time.Second):
+		case <-time.After(processTerminateGrace):
 			_ = syscall.Kill(pgid, syscall.SIGKILL)
 			<-done
 		}
@@ -374,7 +388,10 @@ func (c *BaseClient) connectHTTP(ctx context.Context) error {
 	}
 	c.negotiatedVersion = initializeResult.ProtocolVersion
 	initialized := MCPRequest{JSONRPC: "2.0", Method: "notifications/initialized", Params: map[string]any{}}
-	if err := c.sendHTTPNotification(ctx, &initialized); err != nil {
+	// 本函数由 ensureConnected 的写锁调用（doConnect），状态字段已受保护；
+	// 不能走 RLock 快照路径（Go RWMutex 不可重入，锁内再 RLock 自死锁），
+	// 因此直接传字段快照给请求内核。
+	if err := c.sendNotificationWith(c.httpClient, c.sessionID, c.negotiatedVersion, ctx, &initialized); err != nil {
 		c.sessionID = ""
 		c.negotiatedVersion = ""
 		return err
@@ -416,7 +433,7 @@ func (c *BaseClient) sendHTTPInitialize(ctx context.Context, initReq *MCPRequest
 	if err != nil {
 		return nil, errors.New("MCP HTTP initialize request invalid")
 	}
-	if err := c.applyHTTPHeaders(ctx, req, false); err != nil {
+	if err := c.applyHTTPHeaders(ctx, req, false, ""); err != nil {
 		return nil, err
 	}
 
@@ -475,6 +492,12 @@ func validateHTTPInitializeResult(result httpInitializeResult) error {
 }
 
 func (c *BaseClient) sendRequest(ctx context.Context, req *MCPRequest) (*MCPResponse, error) {
+	// At most one request may be in flight per client: stdio responses are
+	// consumed as the next line on a shared pipe, so concurrent requests would
+	// steal each other's responses. The lock spans the whole request period
+	// (write, read, timeout) but never connection lifecycle methods.
+	c.reqMu.Lock()
+	defer c.reqMu.Unlock()
 	var resp *MCPResponse
 	var err error
 	switch c.config.Transport {
@@ -495,8 +518,15 @@ func (c *BaseClient) sendRequest(ctx context.Context, req *MCPRequest) (*MCPResp
 }
 
 func (c *BaseClient) sendStdioRequest(ctx context.Context, req *MCPRequest) (*MCPResponse, error) {
-	if c.stdin == nil || c.stdout == nil {
-		return nil, fmt.Errorf("stdio connection not established")
+	// Capture the transport under the lock: Disconnect closes and nils the
+	// fields at any time, so checking the fields and using them without the
+	// lock would race and could panic on a nil interface.
+	c.mu.RLock()
+	stdin := c.stdin
+	stdout := c.stdout
+	c.mu.RUnlock()
+	if stdin == nil || stdout == nil {
+		return nil, ErrClientClosed
 	}
 
 	data, err := json.Marshal(req)
@@ -504,26 +534,44 @@ func (c *BaseClient) sendStdioRequest(ctx context.Context, req *MCPRequest) (*MC
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	// Serialise writes across concurrent goroutines.
+	// Serialise writes across concurrent goroutines. A write on a pipe closed
+	// by Disconnect surfaces as os.ErrClosed, never a panic.
 	c.stdinLock.Lock()
-	_, writeErr := c.stdin.Write(append(data, '\n'))
+	_, writeErr := stdin.Write(append(data, '\n'))
 	c.stdinLock.Unlock()
 	if writeErr != nil {
+		if errors.Is(writeErr, os.ErrClosed) {
+			return nil, fmt.Errorf("%w: stdin closed during request", ErrClientClosed)
+		}
 		return nil, fmt.Errorf("failed to write to stdin: %w", writeErr)
 	}
 
-	// Read response in a goroutine so ctx cancellation is honoured.
-	// Limit reads to 8 MiB to prevent memory exhaustion.
+	// Single-reader: at most one in-flight read on stdout at a time. The lock
+	// is held until the reader goroutine has exited, so a later request can
+	// never start reading while a previous reader is still blocked.
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
+
+	// Read response in a goroutine so ctx cancellation is honoured. The caller
+	// always waits for the goroutine (wg) before returning, so a timeout can
+	// never leak it.
 	type readResult struct {
 		resp *MCPResponse
 		err  error
 	}
 	ch := make(chan readResult, 1)
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
-		limitReader := io.LimitReader(c.stdout, 8<<20)
+		defer wg.Done()
+		limitReader := io.LimitReader(stdout, maxStdioReadBytes)
 		reader := bufio.NewReader(limitReader)
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
+			if errors.Is(err, os.ErrClosed) {
+				ch <- readResult{err: fmt.Errorf("%w: stdout closed during request", ErrClientClosed)}
+				return
+			}
 			ch <- readResult{err: fmt.Errorf("failed to read from stdout: %w", err)}
 			return
 		}
@@ -537,15 +585,35 @@ func (c *BaseClient) sendStdioRequest(ctx context.Context, req *MCPRequest) (*MC
 
 	select {
 	case <-ctx.Done():
+		// Wake the blocked read so the reader goroutine exits boundedly, then
+		// wait for it before releasing the single-reader lock. The stdout pipe
+		// is an *os.File in production (exec and os.Pipe), which supports read
+		// deadlines; the deadline is cleared so the next read is not cut short.
+		if f, ok := stdout.(*os.File); ok {
+			_ = f.SetReadDeadline(time.Now())
+		}
+		wg.Wait()
+		if f, ok := stdout.(*os.File); ok {
+			_ = f.SetReadDeadline(time.Time{})
+		}
 		return nil, ctx.Err()
 	case r := <-ch:
+		wg.Wait()
 		return r.resp, r.err
 	}
 }
 
 func (c *BaseClient) sendHTTPRequest(ctx context.Context, req *MCPRequest) (*MCPResponse, error) {
-	if c.httpClient == nil {
-		return nil, fmt.Errorf("HTTP client not initialized")
+	// Capture shared state under the lock: Disconnect nils httpClient and
+	// clears sessionID/negotiatedVersion, so lock-free use would race and
+	// could panic on a nil client.
+	c.mu.RLock()
+	httpClient := c.httpClient
+	sessionID := c.sessionID
+	negotiatedVersion := c.negotiatedVersion
+	c.mu.RUnlock()
+	if httpClient == nil {
+		return nil, ErrClientClosed
 	}
 
 	data, err := json.Marshal(req)
@@ -558,14 +626,14 @@ func (c *BaseClient) sendHTTPRequest(ctx context.Context, req *MCPRequest) (*MCP
 		return nil, errors.New("MCP HTTP request invalid")
 	}
 
-	if err := c.applyHTTPHeaders(ctx, httpReq, true); err != nil {
+	if err := c.applyHTTPHeaders(ctx, httpReq, true, negotiatedVersion); err != nil {
 		return nil, err
 	}
-	if c.sessionID != "" {
-		httpReq.Header.Set("Mcp-Session-Id", c.sessionID)
+	if sessionID != "" {
+		httpReq.Header.Set("Mcp-Session-Id", sessionID)
 	}
 
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return nil, errors.New("MCP HTTP transport failed")
 	}
@@ -578,7 +646,10 @@ func (c *BaseClient) sendHTTPRequest(ctx context.Context, req *MCPRequest) (*MCP
 	return decodeHTTPMCPResponse(resp)
 }
 
-func (c *BaseClient) sendHTTPNotification(ctx context.Context, notification *MCPRequest) error {
+// sendNotificationWith 是 notification 发送的请求内核。前三个参数必须是
+// 锁内快照：connectHTTP 初始化路径由 ensureConnected 的写锁保护，
+// 直接传字段值（见 connectHTTP）。
+func (c *BaseClient) sendNotificationWith(httpClient *http.Client, sessionID, negotiatedVersion string, ctx context.Context, notification *MCPRequest) error {
 	data, err := json.Marshal(notification)
 	if err != nil {
 		return fmt.Errorf("marshal MCP notification: %w", err)
@@ -587,13 +658,13 @@ func (c *BaseClient) sendHTTPNotification(ctx context.Context, notification *MCP
 	if err != nil {
 		return errors.New("MCP HTTP notification request invalid")
 	}
-	if err := c.applyHTTPHeaders(ctx, req, true); err != nil {
+	if err := c.applyHTTPHeaders(ctx, req, true, negotiatedVersion); err != nil {
 		return err
 	}
-	if c.sessionID != "" {
-		req.Header.Set("Mcp-Session-Id", c.sessionID)
+	if sessionID != "" {
+		req.Header.Set("Mcp-Session-Id", sessionID)
 	}
-	resp, err := c.httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return errors.New("MCP HTTP initialized notification transport failed")
 	}
@@ -629,6 +700,7 @@ func (c *BaseClient) applyHTTPHeaders(
 	ctx context.Context,
 	req *http.Request,
 	includeProtocolVersion bool,
+	negotiatedVersion string,
 ) error {
 	for name, value := range c.config.Headers {
 		req.Header.Set(name, value)
@@ -636,7 +708,7 @@ func (c *BaseClient) applyHTTPHeaders(
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	if includeProtocolVersion {
-		req.Header.Set("MCP-Protocol-Version", c.negotiatedVersion)
+		req.Header.Set("MCP-Protocol-Version", negotiatedVersion)
 	}
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 	return nil

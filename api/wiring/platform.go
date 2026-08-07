@@ -26,8 +26,9 @@ import (
 
 // Platform groups cross-cutting application services that other contexts
 // (skill, knowledge, agent, iam) depend on: auth (JWT, GitHub OAuth,
-// token store, onboarding), the per-tenant model registry, the AES key
-// derived from the JWT private key, and the shared metrics provider.
+// token store, onboarding), the per-tenant model registry, the at-rest
+// data encryption key (ResolveDataKey: DATA_ENCRYPTION_KEY 优先，回退
+// JWT 私钥派生以兼容存量密文), and the shared metrics provider.
 //
 // Fields are nil when their preconditions are not met (e.g. JWTService
 // nil if GitHub OAuth is not configured or the PEM cannot be parsed),
@@ -47,8 +48,15 @@ type Platform struct {
 }
 
 func (c *Container) buildPlatform(_ context.Context) error {
+	// at-rest 密钥独立于 JWT 签名密钥；两者皆空时 fail closed，禁止以
+	// sha256("") 公开常量密钥加密 OAuth exchange secret。错误必须先于
+	// 任何使用 AESKey 的路径（OAuthExchangeStore 构造）。
+	aesKey, err := pkgcrypto.ResolveDataKey(c.Config.DataEncryptionKey, c.Config.JWTPrivateKeyPEM)
+	if err != nil {
+		return fmt.Errorf("build platform: %w", err)
+	}
 	p := &Platform{
-		AESKey:  pkgcrypto.DeriveAESKey(c.Config.JWTPrivateKeyPEM),
+		AESKey:  aesKey,
 		Metrics: c.LLMGateway.Metrics,
 	}
 	if c.LLMGateway != nil {
@@ -60,6 +68,19 @@ func (c *Container) buildPlatform(_ context.Context) error {
 
 	c.initAvatarStore(p)
 
+	if err := c.buildPlatformAuth(p); err != nil {
+		return err
+	}
+
+	c.Platform = p
+	return nil
+}
+
+// buildPlatformAuth 装配 auth 相关字段：生产环境强制要求 GitHub OAuth 凭据
+// 与可解析的 JWT 私钥（fail closed）；GitHubClientID 未配置或私钥解析失败时
+// 相应字段保持 nil（auth routes disabled），与 api/router.go 的降级行为一致。
+// 提取自 buildPlatform 以收敛圈复杂度。
+func (c *Container) buildPlatformAuth(p *Platform) error {
 	production := os.Getenv("APP_ENV") == "production"
 	if production {
 		if c.Config.GitHubClientID == "" || c.Config.GitHubClientSecret == "" {
@@ -70,31 +91,30 @@ func (c *Container) buildPlatform(_ context.Context) error {
 		}
 	}
 
-	if c.Config.GitHubClientID != "" {
-		key, err := parseRSAPrivateKey(c.Config.JWTPrivateKeyPEM)
-		if err != nil {
-			c.Logger.Warn("JWT private key parse failed, auth routes disabled", zap.Error(err))
-		} else {
-			p.JWTService = iamtoken.NewJWTService(key)
-			p.GitHubClient = iamoauth.NewGitHubClient(
-				c.Config.GitHubClientID,
-				c.Config.GitHubClientSecret,
-				c.Config.GitHubTokenURL,
-				c.Config.GitHubUserURL,
-			)
-			if c.Storage != nil && c.Storage.PG != nil {
-				db := c.Storage.PG.DB()
-				if c.Storage.Redis != nil {
-					p.TokenStore = iampersistence.NewTokenStore(db, c.Storage.Redis.Client())
-				}
-				p.OnboardSvc = application.NewOnboardService(iampersistence.NewOnboardRepo(db))
-				p.OAuthExchangeStore = iampersistence.NewOAuthExchangeStore(db, p.AESKey)
-				p.SchemaProvisioner = iampersistence.NewAdminTenantRepo(db)
-			}
-		}
+	if c.Config.GitHubClientID == "" {
+		return nil
 	}
-
-	c.Platform = p
+	key, err := parseRSAPrivateKey(c.Config.JWTPrivateKeyPEM)
+	if err != nil {
+		c.Logger.Warn("JWT private key parse failed, auth routes disabled", zap.Error(err))
+		return nil
+	}
+	p.JWTService = iamtoken.NewJWTService(key)
+	p.GitHubClient = iamoauth.NewGitHubClient(
+		c.Config.GitHubClientID,
+		c.Config.GitHubClientSecret,
+		c.Config.GitHubTokenURL,
+		c.Config.GitHubUserURL,
+	)
+	if c.Storage != nil && c.Storage.PG != nil {
+		db := c.Storage.PG.DB()
+		if c.Storage.Redis != nil {
+			p.TokenStore = iampersistence.NewTokenStore(db, c.Storage.Redis.Client())
+		}
+		p.OnboardSvc = application.NewOnboardService(iampersistence.NewOnboardRepo(db))
+		p.OAuthExchangeStore = iampersistence.NewOAuthExchangeStore(db, p.AESKey)
+		p.SchemaProvisioner = iampersistence.NewAdminTenantRepo(db)
+	}
 	return nil
 }
 

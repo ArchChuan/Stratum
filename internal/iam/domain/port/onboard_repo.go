@@ -29,10 +29,13 @@ type OnboardRepo interface {
 	// IsMember reports whether userID is an active member of tenantID.
 	IsMember(ctx context.Context, userID, tenantID string) (bool, error)
 
-	// CreateGuestInDefaultTenant inserts a synthetic guest user with the given
-	// github_id/login/expiry and joins them to the default tenant as a member,
-	// all in one tx. Returns the new user UUID and the default tenant ID.
-	CreateGuestInDefaultTenant(ctx context.Context, githubID, githubLogin, avatarURL string, expiresAt time.Time) (userID, tenantID string, err error)
+	// CreateGuestSandboxTenant inserts a synthetic guest user with the given
+	// github_id/login/expiry and creates a dedicated per-guest sandbox tenant
+	// with the guest as owner (status 'provisioning'), all in one tx. The guest
+	// is never a member of the default tenant; caller must provision and
+	// activate the sandbox schema afterwards. Returns the new user UUID and
+	// sandbox tenant ID.
+	CreateGuestSandboxTenant(ctx context.Context, githubID, githubLogin, avatarURL string, expiresAt time.Time) (userID, tenantID string, err error)
 
 	// ListExpiredGuests returns UUIDs of guest users whose expires_at is in the past.
 	ListExpiredGuests(ctx context.Context, now time.Time) ([]string, error)

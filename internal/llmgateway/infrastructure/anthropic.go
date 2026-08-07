@@ -201,6 +201,8 @@ func (c *AnthropicClient) classifyStreamStatus(status int, header http.Header) (
 type sseParser struct {
 	result     CompletionResponse
 	toolUseAcc map[int]*toolUseBuilder
+	stopped    bool // message_stop 事件已收到（流式完成标志）
+	tokens     int  // 已收 text_delta 数量（截断日志用）
 }
 
 func newSSEParser() *sseParser {
@@ -218,6 +220,8 @@ func (p *sseParser) handleEvent(currentEvent string, evt anthropicSSEEvent, onTo
 		p.handleBlockDelta(evt, onToken)
 	case "message_delta":
 		p.handleMessageDelta(evt)
+	case "message_stop":
+		p.stopped = true
 	}
 }
 
@@ -245,6 +249,7 @@ func (p *sseParser) handleBlockDelta(evt anthropicSSEEvent, onToken func(string)
 	switch evt.Delta.Type {
 	case "text_delta":
 		p.result.Content += evt.Delta.Text
+		p.tokens++
 		onToken(evt.Delta.Text)
 	case "input_json_delta":
 		if b, ok := p.toolUseAcc[evt.Index]; ok && b != nil {
@@ -337,9 +342,9 @@ func (c *AnthropicClient) retryUntilOK(ctx context.Context, path string, body []
 
 		lastErr, retry = c.classifyStatus(status, header)
 		if !retry {
-			url := strings.TrimSuffix(c.cfg.BaseURL, "/") + path
+			// 错误链不进完整 URL：内部 BaseURL 不得出现在对外错误正文（中间件只脱敏，日志保留 status/body）。
 			lastErr = fmt.Errorf("%s: POST %s 返回 %d，请检查 API Key 与 Base URL 是否正确（当前 kind=anthropic）: %w",
-				c.cfg.Name, url, status, domain.ErrUpstreamRequestFailed)
+				c.cfg.Name, path, status, domain.ErrUpstreamRequestFailed)
 			c.logger.Error(c.cfg.Name+": http error (no retry)",
 				zap.Int("status", status), zap.String("body", truncateBodyPreview(raw)))
 
@@ -411,6 +416,20 @@ func (c *AnthropicClient) CompleteStream(ctx context.Context, req *CompletionReq
 		return nil, fmt.Errorf("%s: read stream: %w", c.cfg.Name, err)
 	}
 	result := sp.finalize()
+	if !sp.stopped {
+		c.breaker.recordFailure()
+		if result.Content == "" && len(sp.toolUseAcc) == 0 {
+			// 首个事件前断开：连接正常建立但未产出任何内容，视为普通错误。
+			c.logger.Warn(c.cfg.Name+": stream ended before any data",
+				zap.String("model", req.Model))
+			return nil, fmt.Errorf("%s: stream ended before any data: %w", c.cfg.Name, io.EOF)
+		}
+		// 内容已开始输出但未收 message_stop：截断，绝不 recordSuccess。
+		c.logger.Warn(c.cfg.Name+": stream truncated",
+			zap.String("model", req.Model),
+			zap.Int("tokens", sp.tokens))
+		return nil, fmt.Errorf("%s: stream truncated: %w", c.cfg.Name, domain.ErrStreamTruncated)
+	}
 	c.breaker.recordSuccess()
 	return &result, nil
 }
@@ -519,9 +538,9 @@ func (c *AnthropicClient) ListModels(ctx context.Context) ([]DiscoveredModel, er
 		return nil, fmt.Errorf("%s: read models body: %w", c.cfg.Name, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		url := strings.TrimSuffix(c.cfg.BaseURL, "/") + "/v1/models"
+		// 同 retryUntilOK：错误链不进完整 URL，内部 BaseURL 不出现在对外错误正文。
 		return nil, fmt.Errorf("%s: GET %s 返回 %d，请检查 provider kind 与 Base URL 是否正确（当前 kind=anthropic）: %w",
-			c.cfg.Name, url, resp.StatusCode, domain.ErrUpstreamRequestFailed)
+			c.cfg.Name, "/v1/models", resp.StatusCode, domain.ErrUpstreamRequestFailed)
 	}
 
 	var out anthropicModelsResponse

@@ -3,10 +3,12 @@ package hermes
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
@@ -70,8 +72,11 @@ func newNatsTestServer(t *testing.T) *server.Server {
 func newHermesTestClient(t *testing.T) (*Client, *metricsSpy) {
 	t.Helper()
 	ns := newNatsTestServer(t)
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(nc.Close)
 	spy := newMetricsSpy()
-	client, err := NewClient(ns.ClientURL(), zap.NewNop(), spy)
+	client, err := NewClient(nc, zap.NewNop(), spy)
 	require.NoError(t, err)
 	t.Cleanup(client.Close)
 	return client, spy
@@ -138,8 +143,98 @@ func TestHermes_MultipleHandlersForSameType(t *testing.T) {
 	require.Eventually(t, func() bool { return len(first) == 1 && len(second) == 1 }, 3*time.Second, 10*time.Millisecond)
 }
 
-func TestHermes_NewClientConnectFailure(t *testing.T) {
-	client, err := NewClient("nats://127.0.0.1:1", zap.NewNop(), observability.NoopMetrics{})
+func TestHermes_NewClientNilConn(t *testing.T) {
+	client, err := NewClient(nil, zap.NewNop(), observability.NoopMetrics{})
 	require.Error(t, err)
 	require.Nil(t, client)
+}
+
+func TestHermes_HandlerPanicRecovered(t *testing.T) {
+	client, spy := newHermesTestClient(t)
+
+	panicHandler := make(chan struct{}, 4)
+	require.NoError(t, client.Subscribe("risky.event", func(event *Event) error {
+		panicHandler <- struct{}{}
+		panic("handler blew up")
+	}))
+
+	healthy := make(chan *Event, 4)
+	require.NoError(t, client.Subscribe("risky.event", func(event *Event) error {
+		healthy <- event
+		return nil
+	}))
+
+	// 连续两条消息：panic 的 handler 被 recover 后订阅仍然存活，
+	// 且同类型的健康 handler 不受影响（每消息都收到）。
+	require.NoError(t, client.Publish(&Event{Type: "risky.event", Data: map[string]any{"id": 1}}))
+	require.NoError(t, client.Publish(&Event{Type: "risky.event", Data: map[string]any{"id": 2}}))
+
+	require.Eventually(t, func() bool { return len(panicHandler) == 2 }, 3*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return len(healthy) == 2 }, 3*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return spy.count(spy.errs, "risky.event:handler_panic") == 2 },
+		3*time.Second, 10*time.Millisecond)
+	require.Equal(t, 2, spy.count(spy.ok, "risky.event"))
+}
+
+func TestHermes_QueueSubscriptionUsesQueueGroup(t *testing.T) {
+	client, _ := newHermesTestClient(t)
+
+	require.NoError(t, client.Subscribe("q.evt", func(*Event) error { return nil }))
+
+	client.mu.RLock()
+	sub := client.subscriptions["q.evt"]
+	client.mu.RUnlock()
+	require.NotNil(t, sub)
+	require.Equal(t, "hermes.q.evt", sub.Queue)
+}
+
+func TestHermes_RepeatedSubscribeSharesSubscription(t *testing.T) {
+	client, _ := newHermesTestClient(t)
+
+	require.NoError(t, client.Subscribe("dup.evt", func(*Event) error { return nil }))
+	require.NoError(t, client.Subscribe("dup.evt", func(*Event) error { return nil }))
+
+	client.mu.RLock()
+	defer client.mu.RUnlock()
+	// 同类型只建一条 queue 订阅，handler 全部挂在同一条上
+	require.NotNil(t, client.subscriptions["dup.evt"])
+	require.Len(t, client.handlers["dup.evt"], 2)
+}
+
+func TestHermes_QueueGroupLoadBalances(t *testing.T) {
+	ns := newNatsTestServer(t)
+
+	ncA, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(ncA.Close)
+	ncB, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(ncB.Close)
+
+	clientA, err := NewClient(ncA, zap.NewNop(), newMetricsSpy())
+	require.NoError(t, err)
+	t.Cleanup(clientA.Close)
+	clientB, err := NewClient(ncB, zap.NewNop(), newMetricsSpy())
+	require.NoError(t, err)
+	t.Cleanup(clientB.Close)
+
+	var gotA, gotB atomic.Int32
+	require.NoError(t, clientA.Subscribe("queue.evt", func(*Event) error { gotA.Add(1); return nil }))
+	require.NoError(t, clientB.Subscribe("queue.evt", func(*Event) error { gotB.Add(1); return nil }))
+	// 等待两条订阅在服务端注册完成，避免消息先于 SUB 到达而丢失
+	require.NoError(t, ncA.Flush())
+	require.NoError(t, ncB.Flush())
+
+	const total = 10
+	for i := 0; i < total; i++ {
+		require.NoError(t, clientA.Publish(&Event{Type: "queue.evt"}))
+	}
+
+	// 队列组语义：每条消息只被一个成员消费（非广播），总量不丢不重
+	require.Eventually(t, func() bool { return gotA.Load()+gotB.Load() == total },
+		3*time.Second, 10*time.Millisecond)
+	require.Equal(t, int32(total), gotA.Load()+gotB.Load())
+	// 负载均衡：两个成员都有消费份额
+	require.GreaterOrEqual(t, gotA.Load(), int32(1))
+	require.GreaterOrEqual(t, gotB.Load(), int32(1))
 }

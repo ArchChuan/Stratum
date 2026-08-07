@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
+	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/prompt/application"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -29,7 +31,7 @@ func (h *PromptHandler) CreatePrompt(c *gin.Context) {
 		Content string `json:"content" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
 	userID, _ := c.Get("auth.sub")
@@ -40,8 +42,7 @@ func (h *PromptHandler) CreatePrompt(c *gin.Context) {
 	}
 	tmpl, err := h.registry.CreateTemplate(c.Request.Context(), req.Key, tid, req.Content, "user:"+userID.(string))
 	if err != nil {
-		h.logger.Error("prompt: create failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		_ = c.Error(err)
 		return
 	}
 	c.JSON(http.StatusCreated, tmpl)
@@ -58,8 +59,7 @@ func (h *PromptHandler) ListVersions(c *gin.Context) {
 	}
 	versions, err := h.registry.GetVersions(c.Request.Context(), key, tid)
 	if err != nil {
-		h.logger.Error("prompt: list versions failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		_ = c.Error(err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"versions": versions})
@@ -71,7 +71,7 @@ func (h *PromptHandler) PublishVersion(c *gin.Context) {
 	key := c.Param("key")
 	version, err := strconv.Atoi(c.Param("version"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid version"})
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("invalid version")))
 		return
 	}
 	tenantID, _ := c.Get("auth.tenant_id")
@@ -80,8 +80,7 @@ func (h *PromptHandler) PublishVersion(c *gin.Context) {
 		tid = &v
 	}
 	if err := h.registry.PublishVersion(c.Request.Context(), key, version, tid); err != nil {
-		h.logger.Error("prompt: publish failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		_ = c.Error(err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "published"})
@@ -98,14 +97,13 @@ func (h *PromptHandler) UpsertBinding(c *gin.Context) {
 		TrafficPercent  int    `json:"traffic_percent"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
 	if err := h.ab.BindExperiment(c.Request.Context(),
 		req.Key, req.Scope, req.StableVersionID, req.CanaryVersionID, req.TrafficPercent,
 	); err != nil {
-		h.logger.Error("prompt: upsert binding failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		_ = c.Error(err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -117,8 +115,7 @@ func (h *PromptHandler) DeleteBinding(c *gin.Context) {
 	key := c.Param("key")
 	scope := c.Param("scope")
 	if err := h.ab.ClearExperiment(c.Request.Context(), key, scope); err != nil {
-		h.logger.Error("prompt: delete binding failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		_ = c.Error(err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})

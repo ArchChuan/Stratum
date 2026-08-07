@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -114,6 +115,12 @@ type fakeMessageBufferStore struct {
 	lists   map[string][]string
 	hashes  map[string]map[string]string
 	deleted map[string]bool
+
+	hSetNXErr  error
+	hIncrByErr error
+	hSetErr    error
+	expireErr  error
+	delErr     error
 }
 
 func newFakeMessageBufferStore() *fakeMessageBufferStore {
@@ -130,10 +137,13 @@ func (s *fakeMessageBufferStore) RPush(_ context.Context, key string, value []by
 }
 
 func (s *fakeMessageBufferStore) Expire(_ context.Context, _ string, _ time.Duration) error {
-	return nil
+	return s.expireErr
 }
 
 func (s *fakeMessageBufferStore) HSetNX(_ context.Context, key, field string, value any) error {
+	if s.hSetNXErr != nil {
+		return s.hSetNXErr
+	}
 	if s.hashes[key] == nil {
 		s.hashes[key] = make(map[string]string)
 	}
@@ -144,6 +154,9 @@ func (s *fakeMessageBufferStore) HSetNX(_ context.Context, key, field string, va
 }
 
 func (s *fakeMessageBufferStore) HIncrBy(_ context.Context, key, field string, incr int64) (int64, error) {
+	if s.hIncrByErr != nil {
+		return 0, s.hIncrByErr
+	}
 	if s.hashes[key] == nil {
 		s.hashes[key] = make(map[string]string)
 	}
@@ -155,6 +168,9 @@ func (s *fakeMessageBufferStore) HIncrBy(_ context.Context, key, field string, i
 }
 
 func (s *fakeMessageBufferStore) HSet(_ context.Context, key string, values ...any) error {
+	if s.hSetErr != nil {
+		return s.hSetErr
+	}
 	if s.hashes[key] == nil {
 		s.hashes[key] = make(map[string]string)
 	}
@@ -183,6 +199,9 @@ func (s *fakeMessageBufferStore) LRange(_ context.Context, key string, start, st
 }
 
 func (s *fakeMessageBufferStore) Del(_ context.Context, keys ...string) error {
+	if s.delErr != nil {
+		return s.delErr
+	}
 	for _, key := range keys {
 		s.deleted[key] = true
 		delete(s.lists, key)
@@ -197,4 +216,61 @@ func (s *fakeMessageBufferStore) Scan(_ context.Context, _ uint64, _ string, _ i
 
 func (s *fakeMessageBufferStore) HGetAll(_ context.Context, key string) (map[string]string, error) {
 	return s.hashes[key], nil
+}
+
+// TestMessageBuffer_MetaWriteFailure_FailsClosed pins that every Redis meta
+// write (first_at, byte_size, last_at/scope, TTL) propagates its error: the
+// flush thresholds and key TTL are driven by this state, so a silent failure
+// would skew the counters or leak keys forever.
+func TestMessageBuffer_MetaWriteFailure_FailsClosed(t *testing.T) {
+	cases := []struct {
+		name    string
+		fail    func(*fakeMessageBufferStore)
+		wantErr string
+	}{
+		{"expire", func(s *fakeMessageBufferStore) { s.expireErr = errors.New("boom") }, "redis expire"},
+		{"hsetnx", func(s *fakeMessageBufferStore) { s.hSetNXErr = errors.New("boom") }, "redis hsetnx"},
+		{"hincrby", func(s *fakeMessageBufferStore) { s.hIncrByErr = errors.New("boom") }, "redis hincrby"},
+		{"hset", func(s *fakeMessageBufferStore) { s.hSetErr = errors.New("boom") }, "redis hset"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeMessageBufferStore()
+			tc.fail(store)
+			buffer := NewMessageBuffer(store, new(MockExtractionQueue))
+
+			err := buffer.BufferMessage(context.Background(), &BufferMessageRequest{
+				TenantID: "tenant1", UserID: "user1", AgentID: "agent1",
+				ConversationID: "conv1", MessageID: "msg1", Role: "user",
+				Content: "some content", CreatedAt: time.Now(),
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+// TestMessageBuffer_Flush_DeleteFailure_RetainsMessages pins that a failed
+// Redis DEL in the quality-gate flush path keeps the batch in place for the
+// next retry instead of silently dropping the low-value messages.
+func TestMessageBuffer_Flush_DeleteFailure_RetainsMessages(t *testing.T) {
+	store := newFakeMessageBufferStore()
+	store.delErr = errors.New("redis unavailable")
+	buffer := NewMessageBuffer(store, new(MockExtractionQueue))
+
+	var lastErr error
+	key := "memory:buffer:tenant1:user1:agent1:conv1"
+	for i := 1; i <= constants.MemoryBufferFlushSize; i++ {
+		lastErr = buffer.BufferMessage(context.Background(), &BufferMessageRequest{
+			TenantID: "tenant1", UserID: "user1", AgentID: "agent1",
+			ConversationID: "conv1", Scope: "session",
+			MessageID: fmt.Sprintf("msg%d", i), Role: "user",
+			Content: "ok", CreatedAt: time.Now(),
+		})
+	}
+	require.Error(t, lastErr)
+	assert.Contains(t, lastErr.Error(), "redis del")
+	assert.Len(t, store.lists[key], constants.MemoryBufferFlushSize,
+		"messages must stay in Redis after a failed delete")
+	assert.Empty(t, store.deleted)
 }

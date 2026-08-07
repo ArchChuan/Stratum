@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
+	"github.com/byteBuilderX/stratum/internal/iam/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
@@ -210,6 +211,44 @@ func TestGetSettingsRepoError(t *testing.T) {
 	svc := NewTenantService(repo, zap.NewNop())
 	if _, _, _, err := svc.GetSettings(context.Background(), "t1"); err == nil {
 		t.Fatal("repo error must propagate")
+	}
+}
+
+func TestUpdateSettingsFailClosedOnBrokenStoredSettings(t *testing.T) {
+	// 存量设置读取失败（DB 错误或非法 JSON）时必须 fail closed：返回错误且不写回。
+	cases := []struct {
+		name    string
+		newRepo func() (port.TenantRepo, func() int)
+	}{
+		{
+			name: "read error",
+			newRepo: func() (port.TenantRepo, func() int) {
+				r := &errSettingsRepo{settingsTenantRepo: &settingsTenantRepo{}}
+				return r, func() int { return r.settingsTenantRepo.updates }
+			},
+		},
+		{
+			name: "malformed json",
+			newRepo: func() (port.TenantRepo, func() int) {
+				r := &settingsTenantRepo{settings: []byte("{not json")}
+				return r, func() int { return r.updates }
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo, updates := tc.newRepo()
+			svc := NewTenantService(repo, zap.NewNop())
+			err := svc.UpdateSettings(context.Background(), "t1", "admin", UpdateSettingsInput{
+				Settings: map[string]interface{}{"locale": "zh-CN"},
+			})
+			if err == nil {
+				t.Fatal("stored settings read failure must propagate, not write back empty baseline")
+			}
+			if n := updates(); n != 0 {
+				t.Fatalf("settings updates = %d, want 0", n)
+			}
+		})
 	}
 }
 

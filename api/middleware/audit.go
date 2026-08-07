@@ -3,15 +3,21 @@ package middleware
 import (
 	"bytes"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/audit/domain"
 	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/safetext"
 	"github.com/gin-gonic/gin"
 )
 
 // maxAuditBodyBytes caps the request body captured in audit before/after snapshots.
 const maxAuditBodyBytes = 8192
+
+// authPathPrefix marks routes whose bodies carry credentials by design
+// (login, register, guest, refresh); their bodies are not audited at all.
+const authPathPrefix = "/auth/"
 
 // AuditMiddleware records non-GET mutating requests to the audit log.
 // It captures the authenticated actor from JWT claims, the request body
@@ -24,7 +30,7 @@ func AuditMiddleware(recorder auditport.AuditRecorder) gin.HandlerFunc {
 		}
 
 		actor := extractAuditActor(c)
-		body := readBodySnapshot(c)
+		body := auditBodySnapshot(c)
 
 		event := domain.AuditEvent{
 			TenantID:     tenantIDFromContext(c),
@@ -80,6 +86,24 @@ func traceIDFromContext(c *gin.Context) string {
 		return ""
 	}
 	return tid.(string)
+}
+
+// auditBodySnapshot reads the request body, redacts credentials from it, and
+// restores the original body for downstream handlers. Bodies of auth routes
+// are dropped entirely: they carry credentials by design (login, register,
+// guest) and have low audit value. The redacted snapshot is the only form
+// that ever leaves this function — never log or persist the raw body.
+func auditBodySnapshot(c *gin.Context) []byte {
+	if strings.HasPrefix(c.Request.URL.Path, authPathPrefix) {
+		// Drain the body so the downstream handler still sees it.
+		readBodySnapshot(c)
+		return nil
+	}
+	body := readBodySnapshot(c)
+	if len(body) == 0 {
+		return nil
+	}
+	return []byte(safetext.RedactCredentials(string(body)))
 }
 
 func readBodySnapshot(c *gin.Context) []byte {

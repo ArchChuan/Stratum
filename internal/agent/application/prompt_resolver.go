@@ -5,7 +5,7 @@ import (
 	"embed"
 	"fmt"
 
-	"github.com/byteBuilderX/stratum/internal/prompt/application"
+	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 )
 
 // PromptKey identifies a specific prompt component that can be overridden.
@@ -44,7 +44,7 @@ type PromptOverrideRepo interface {
 type PromptResolver struct {
 	defaults  map[string]string
 	overrides PromptOverrideRepo
-	registry  *application.RegistryService
+	registry  agentport.PromptRegistry
 }
 
 // NewPromptResolver loads default prompts from the embedded prompts/ directory
@@ -65,7 +65,7 @@ func NewPromptResolver(repo PromptOverrideRepo) *PromptResolver {
 }
 
 // SetRegistry injects the prompt registry for centralized version resolution.
-func (r *PromptResolver) SetRegistry(registry *application.RegistryService) {
+func (r *PromptResolver) SetRegistry(registry agentport.PromptRegistry) {
 	r.registry = registry
 }
 

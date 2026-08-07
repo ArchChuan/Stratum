@@ -2,9 +2,10 @@ package pipeline
 
 import "time"
 
+// Config 不含 NATS 地址：连接由 wiring 注入（平台共享连接），
+// pipeline 只使用不建立连接。
 type Config struct {
 	Enabled               bool          `mapstructure:"enabled"`
-	NatsURL               string        `mapstructure:"nats_url"`
 	PollInterval          time.Duration `mapstructure:"poll_interval"`
 	BatchSize             int           `mapstructure:"batch_size"`
 	EmbedWorkers          int           `mapstructure:"embed_workers"`

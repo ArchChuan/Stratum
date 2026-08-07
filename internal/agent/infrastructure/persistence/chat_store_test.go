@@ -402,3 +402,61 @@ func TestChatStore_InvalidTenantID(t *testing.T) {
 		t.Errorf("unmet: %v", err)
 	}
 }
+
+// TestChatStore_RejectsUnsafeTenantIDsBeforeTransaction pins the shared
+// pkg/storage/postgres validation ([a-z0-9_-] only). The old per-repo
+// execTenantID used unicode.IsLetter, which admitted uppercase and Unicode
+// tenant IDs into a quoted schema identifier — this must stay rejected before
+// any transaction begins.
+func TestChatStore_RejectsUnsafeTenantIDsBeforeTransaction(t *testing.T) {
+	tests := []struct {
+		name     string
+		tenantID string
+	}{
+		{name: "empty", tenantID: ""},
+		{name: "uppercase", tenantID: "TenantA"},
+		{name: "unicode", tenantID: "租户1"},
+		{name: "sql injection", tenantID: "t1; DROP TABLE"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store, mock := newChatStoreWithMock(t)
+			defer mock.Close()
+
+			_, err := store.GetConversation(context.Background(), tc.tenantID, "conv-1")
+			if err == nil {
+				t.Fatalf("expected error for invalid tenant_id %q", tc.tenantID)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("invalid tenant_id started a transaction: %v", err)
+			}
+		})
+	}
+}
+
+// TestChatStore_ValidTenantIDPassesUnifiedValidation proves the unified
+// entry accepts a legal [a-z0-9_-] tenant ID end to end.
+func TestChatStore_ValidTenantIDPassesUnifiedValidation(t *testing.T) {
+	store, mock := newChatStoreWithMock(t)
+	defer mock.Close()
+
+	now := time.Now()
+	expectTenantTx(mock)
+	mock.ExpectQuery("SELECT id, agent_id, user_id, name").
+		WithArgs("conv-1").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "agent_id", "user_id", "name", "created_at", "updated_at", "expires_at",
+		}).AddRow("conv-1", "agent-1", "user-1", "Chat", now, now, now.AddDate(0, 0, 30)))
+	mock.ExpectCommit()
+
+	conv, err := store.GetConversation(context.Background(), "t1-tenant_2", "conv-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if conv.ID != "conv-1" {
+		t.Errorf("want conv-1, got %s", conv.ID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet: %v", err)
+	}
+}

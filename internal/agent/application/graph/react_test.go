@@ -641,6 +641,65 @@ func TestBuildReActGraph_ContextTimeout(t *testing.T) {
 	require.Error(t, err)
 }
 
+// streamFailGateway fails the first failCount calls; emitBeforeFail streams one
+// token through the request's TokenStream before returning the error, so the
+// graph can distinguish「已输出 token 后失败」与「首 token 前失败」。
+type streamFailGateway struct {
+	failCount      int
+	emitBeforeFail bool
+	failErr        error
+	calls          int
+}
+
+func (s *streamFailGateway) Route(_ context.Context, req port.CapabilityRequest) (port.CapabilityResponse, error) {
+	s.calls++
+	if s.calls <= s.failCount {
+		if s.emitBeforeFail && req.TokenStream != nil {
+			req.TokenStream("partial")
+		}
+		return port.CapabilityResponse{}, s.failErr
+	}
+	return port.CapabilityResponse{Content: "ok"}, nil
+}
+
+// TestRouteLLM_ErrorAfterTokenEmit_DoesNotRetry pins that a failure after the
+// first token reached the client is treated as permanent: retrying would
+// replay the whole stream and corrupt the frontend content.
+func TestRouteLLM_ErrorAfterTokenEmit_DoesNotRetry(t *testing.T) {
+	origErr := errors.New("stream truncated before completion marker")
+	gw := &streamFailGateway{failCount: 1, emitBeforeFail: true, failErr: origErr}
+	var streamed []string
+	state := graph.ReActState{
+		TenantID: "t1", TraceID: "trace-1", Model: "qwen",
+		Messages: []port.LLMMessage{{Role: "user", Content: "hi"}},
+		OnToken:  func(tok string) { streamed = append(streamed, tok) },
+	}
+
+	_, err := graph.RouteLLMForTest(context.Background(), state, state.Messages, nil, gw)
+	require.Error(t, err)
+	// 原错误透传（errors.Is 可见），不吞错、不换包装语义。
+	require.ErrorIs(t, err, origErr)
+	require.Equal(t, 1, gw.calls, "已输出 token 的失败必须跳过图级重试")
+	require.Equal(t, []string{"partial"}, streamed, "token 只推流一次，不得重放")
+}
+
+// TestRouteLLM_FailureBeforeTokenEmit_Retries pins that a failure before any
+// token was emitted keeps the retry path: nothing reached the client, so a
+// retry cannot corrupt the stream.
+func TestRouteLLM_FailureBeforeTokenEmit_Retries(t *testing.T) {
+	gw := &streamFailGateway{failCount: 2, failErr: errors.New("transient upstream failure")}
+	state := graph.ReActState{
+		TenantID: "t1", TraceID: "trace-1", Model: "qwen",
+		Messages: []port.LLMMessage{{Role: "user", Content: "hi"}},
+		OnToken:  func(string) {},
+	}
+
+	resp, err := graph.RouteLLMForTest(context.Background(), state, state.Messages, nil, gw)
+	require.NoError(t, err)
+	require.Equal(t, "ok", resp.Content)
+	require.Equal(t, 3, gw.calls, "首 token 前失败应走完 DefaultRetry 的三次尝试")
+}
+
 func guardedToolOutput(content string) port.GuardedToolResult {
 	return port.GuardedToolResult{ModelContent: content, Summary: content, Untrusted: true}
 }

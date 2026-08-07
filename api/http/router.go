@@ -206,6 +206,7 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		FrontendURL:        cfg.FrontendURL,
 		GlobalAdmin:        cfg.GlobalAdminGitHubLogin,
 		SecureCookies:      cfg.SecureCookies,
+		GuestAuthEnabled:   cfg.GuestAuthEnabled,
 		AvatarStore:        c.Platform.AvatarStore,
 	})
 	authLimiter := newRateLimiterStore(c, middleware.AuthRate, middleware.AuthBurst)
