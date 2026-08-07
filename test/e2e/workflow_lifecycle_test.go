@@ -141,7 +141,7 @@ func TestWorkflowHTTPPostgresWorkerApprovalRestartAndSSEE2E(t *testing.T) {
 	newID := uuid.NewString
 	definitions := workflowapp.NewDefinitionService(store, store, newID)
 	executorA := &workflowE2EExecutor{}
-	runsA := workflowapp.NewRunServiceWithRegistry(store, store, executorA, newID)
+	runsA := workflowapp.NewRunServiceWithRegistry(store, store, executorA, newID, zap.NewNop())
 	controls := workflowapp.NewControlService(store, newID)
 	router := newWorkflowE2ERouter(tenantID, definitions, runsA, controls)
 
@@ -275,7 +275,7 @@ func TestWorkflowHTTPPostgresWorkerApprovalRestartAndSSEE2E(t *testing.T) {
 
 	// Rebuild the run service and worker from PostgreSQL only to simulate restart.
 	executorB := &workflowE2EExecutor{}
-	runsB := workflowapp.NewRunServiceWithRegistry(store, store, executorB, newID)
+	runsB := workflowapp.NewRunServiceWithRegistry(store, store, executorB, newID, zap.NewNop())
 	workerB := workflowapp.NewWorker("workflow-e2e-worker-b", store, runsB, 10*time.Second, observability.NoopMetrics{})
 	require.True(t, workerB.RunOnce(ctx))
 
