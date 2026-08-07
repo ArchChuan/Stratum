@@ -67,19 +67,6 @@ jobs:
     name: Restore drill
     runs-on: ubuntu-latest
     needs: backup
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -87,6 +74,26 @@ jobs:
         with:
           name: stratum-postgres-backup
           path: backup-artifacts/
+
+      # The production database runs the custom zhparser image (built from
+      # docker/postgres-zhparser.Dockerfile), so the dump contains the zhparser
+      # extension and the public.chinese_zh search config that depends on it.
+      # A stock postgres:16 cannot CREATE EXTENSION zhparser and the restore
+      # fails on knowledge_chunks. Restore onto the same image so the drill
+      # exercises the real production schema.
+      - name: Build zhparser postgres image
+        run: docker build -f docker/postgres-zhparser.Dockerfile -t stratum-postgres-zhparser:local .
+
+      - name: Start postgres
+        run: |
+          docker run -d --name drill-postgres \
+            -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=postgres \
+            -p 5432:5432 stratum-postgres-zhparser:local
+          for _ in $(seq 1 30); do
+            docker exec drill-postgres pg_isready -U postgres >/dev/null 2>&1 && break
+            sleep 2
+          done
+          docker exec drill-postgres pg_isready -U postgres
 
       - name: Run restore drill
         env:
