@@ -20,6 +20,8 @@ export const skillApi = {
     skillRevisionSchema.parse((await api.patch(`/skills/${id}/draft/activation`, data)).data),
   updateInstructions: async (id: string, data: { instructions: string; requirements: SkillRequirements }): Promise<SkillRevision> =>
     skillRevisionSchema.parse((await api.patch(`/skills/${id}/draft/instructions`, data)).data),
+  setEditors: (id: string, editorIds: string[]) =>
+    api.put(`/skills/${id}/editors`, { editorIds }),
   delete: (id: string) => api.delete(`/skills/${id}`),
   publish: async (id: string): Promise<SkillRevision> =>
     skillRevisionSchema.parse((await api.post(`/skills/${id}/publish`)).data),

@@ -4,7 +4,10 @@ import { WorkspaceListHeader } from '../components/WorkspaceListHeader';
 import { WorkspaceListSkeleton } from '../components/WorkspaceListSkeleton';
 import { useKnowledgePage } from '../hooks/useKnowledgePage';
 
+import { useEditorCandidates } from '@/modules/iam';
+
 export const KnowledgePage = () => {
+  const { candidates: editorCandidates, loading: editorCandidatesLoading } = useEditorCandidates();
   const {
     workspaces,
     loading,
@@ -48,6 +51,8 @@ export const KnowledgePage = () => {
         loading={createLoading}
         form={form}
         embeddingModels={embeddingModels}
+        editorCandidates={editorCandidates}
+        editorCandidatesLoading={editorCandidatesLoading}
         onClose={() => setCreateOpen(false)}
         onSubmit={handleCreate}
       />

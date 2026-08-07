@@ -17,6 +17,7 @@ describe('instruction Skill model', () => {
         mcpToolIds: ['mcp:orders:get', 'mcp:crm:lookup'],
         knowledgeWorkspaceIds: ['kb-1'], memoryScopes: ['conversation'],
       },
+      editors: [],
     });
   });
 

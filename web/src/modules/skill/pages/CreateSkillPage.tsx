@@ -1,10 +1,13 @@
 import { ArrowLeftOutlined } from '@ant-design/icons';
-import { Button, Checkbox, Form, Input, Typography } from 'antd';
+import { Button, Checkbox, Form, Input, Select, Typography } from 'antd';
 
 import { useCreateSkillPage } from '../hooks/useCreateSkillPage';
 
+import { useEditorCandidates } from '@/modules/iam';
+
 const { Title, Text } = Typography;
 const { TextArea } = Input;
+const { Option } = Select;
 
 export const CreateSkillPage = () => {
   const {
@@ -13,6 +16,7 @@ export const CreateSkillPage = () => {
     navigate,
     onFinish,
   } = useCreateSkillPage();
+  const { candidates, loading: editorCandidatesLoading } = useEditorCandidates();
 
   return (
     <div className="responsive-form-page">
@@ -91,6 +95,20 @@ export const CreateSkillPage = () => {
         </Form.Item>
         <Form.Item label="允许的记忆范围" name="memoryScopes">
           <Checkbox.Group options={[{ label: '当前会话', value: 'conversation' }, { label: '用户', value: 'user' }, { label: 'Agent', value: 'agent' }]} />
+        </Form.Item>
+        <Form.Item
+          label="可编辑人"
+          name="editors"
+          extra="可编辑人（租户管理员）可以修改此技能；删除仍仅限创建者或超级管理员"
+          style={{ marginBottom: 0 }}
+        >
+          <Select mode="multiple" placeholder="选择可编辑的管理员" allowClear loading={editorCandidatesLoading}>
+            {candidates.map((member) => (
+              <Option key={member.user_id} value={member.user_id}>
+                {member.github_login || member.user_id}
+              </Option>
+            ))}
+          </Select>
         </Form.Item>
 
         <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>

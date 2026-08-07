@@ -39,7 +39,7 @@ func seedSkillDraft(t *testing.T, repo *fakeVersionRepo, status domain.VersionSt
 		skill.Status = "published"
 		skill.ActiveRevisionID = draft.ID
 	}
-	require.NoError(t, repo.InsertSkillWithDraft(context.Background(), skill, draft, nil))
+	require.NoError(t, repo.InsertSkillWithDraft(context.Background(), skill, draft, nil, nil))
 }
 
 func TestVersionServiceGetWorkspacePrefersDraft(t *testing.T) {

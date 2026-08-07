@@ -28,6 +28,7 @@ var (
 	ErrForbiddenRemoveOwner  = errors.New("iam: cannot remove owner")
 	ErrForbiddenAdminRemove  = errors.New("iam: admin cannot remove another admin")
 	ErrInvalidSettings       = errors.New("iam: invalid settings")
+	ErrInvalidRoleFilter     = errors.New("iam: invalid role filter")
 )
 
 // TenantService orchestrates tenant member and settings operations.
@@ -58,6 +59,31 @@ func (s *TenantService) ListMembers(ctx context.Context, tenantID string, page, 
 		return nil, 0, page, pageSize, fmt.Errorf("tenant: list members: %w", err)
 	}
 	return members, total, page, pageSize, nil
+}
+
+// ListMembersByRole returns every member holding one of the given roles.
+// Only admin/owner are valid filters; the returned list is the candidate
+// set for "resource editors" (no pagination — the caller wants all).
+func (s *TenantService) ListMembersByRole(ctx context.Context, tenantID string, roles []string) ([]domain.Member, error) {
+	if len(roles) == 0 {
+		return nil, ErrInvalidRoleFilter
+	}
+	seen := make(map[string]bool, len(roles))
+	for _, r := range roles {
+		if r != "admin" && r != "owner" {
+			return nil, ErrInvalidRoleFilter
+		}
+		seen[r] = true
+	}
+	allowed := make([]string, 0, len(seen))
+	for r := range seen {
+		allowed = append(allowed, r)
+	}
+	members, err := s.repo.ListMembersByRole(ctx, tenantID, allowed)
+	if err != nil {
+		return nil, fmt.Errorf("tenant: list members by role: %w", err)
+	}
+	return members, nil
 }
 
 // UpdateMemberRole changes a member's role with full permission rules.

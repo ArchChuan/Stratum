@@ -404,6 +404,9 @@ func (contractTenantRepo) CountMembers(_ context.Context, _ string) (int, error)
 func (contractTenantRepo) ListMembers(_ context.Context, _ string, _ int, _ int) ([]iamdomain.Member, error) {
 	return nil, nil
 }
+func (contractTenantRepo) ListMembersByRole(_ context.Context, _ string, _ []string) ([]iamdomain.Member, error) {
+	return nil, nil
+}
 func (contractTenantRepo) GetMemberRole(_ context.Context, _ string, _ string) (string, error) {
 	return "member", nil
 }
@@ -444,7 +447,7 @@ func (contractDashboardRepo) Overview(context.Context, string) (platformdomain.D
 
 type contractAgentRepo struct{}
 
-func (contractAgentRepo) Register(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent) error {
+func (contractAgentRepo) Register(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, []string) error {
 	return nil
 }
 func (contractAgentRepo) Get(context.Context, string) (*agentdomain.AgentConfig, bool, error) {
@@ -459,7 +462,7 @@ func (contractAgentRepo) GetAll(context.Context) ([]*agentdomain.AgentConfig, er
 func (contractAgentRepo) Remove(context.Context, string, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (contractAgentRepo) Update(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent) error {
+func (contractAgentRepo) Update(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string) error {
 	return nil
 }
 func (contractAgentRepo) UpdateSystemAssistantModel(

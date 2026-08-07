@@ -44,7 +44,7 @@ func newFakeWorkspaceRepo() *fakeWorkspaceRepo {
 	return &fakeWorkspaceRepo{workspaces: map[string]*domain.Workspace{}}
 }
 
-func (f *fakeWorkspaceRepo) Create(_ context.Context, _ string, ws *domain.Workspace, audit *auditdomain.ResourceChangeAuditEvent) error {
+func (f *fakeWorkspaceRepo) Create(_ context.Context, _ string, ws *domain.Workspace, _ []string, audit *auditdomain.ResourceChangeAuditEvent) error {
 	if audit != nil {
 		f.audits = append(f.audits, audit)
 	}
@@ -92,7 +92,7 @@ func (f *fakeWorkspaceRepo) List(_ context.Context, _ string) ([]*domain.Workspa
 	return out, nil
 }
 
-func (f *fakeWorkspaceRepo) UpdateWorkspaceAll(_ context.Context, _, name string, renameTo, description *string, cfg domain.WorkspaceConfig, audit *auditdomain.ResourceChangeAuditEvent) error {
+func (f *fakeWorkspaceRepo) UpdateWorkspaceAll(_ context.Context, _, name string, renameTo, description *string, cfg domain.WorkspaceConfig, _ string, audit *auditdomain.ResourceChangeAuditEvent) error {
 	if audit != nil {
 		f.audits = append(f.audits, audit)
 	}

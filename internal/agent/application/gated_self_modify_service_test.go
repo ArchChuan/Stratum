@@ -18,7 +18,7 @@ type gateAgentRepoFake struct {
 	agents map[string]*domain.AgentConfig
 }
 
-func (f *gateAgentRepoFake) Register(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
+func (f *gateAgentRepoFake) Register(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ []string) error {
 	return nil
 }
 func (f *gateAgentRepoFake) Get(_ context.Context, id string) (*domain.AgentConfig, bool, error) {
@@ -32,7 +32,7 @@ func (f *gateAgentRepoFake) GetAll(context.Context) ([]*domain.AgentConfig, erro
 func (f *gateAgentRepoFake) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (f *gateAgentRepoFake) Update(_ context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
+func (f *gateAgentRepoFake) Update(_ context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string) error {
 	f.agents[cfg.ID] = cfg
 	return nil
 }

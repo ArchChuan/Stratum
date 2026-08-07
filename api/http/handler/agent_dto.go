@@ -22,6 +22,7 @@ type CreateAgentRequest struct {
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
 	MemoryScope           string   `json:"memoryScope"`
 	CheckpointEnabled     bool     `json:"checkpointEnabled"`
+	Editors               []string `json:"editors"`
 }
 
 // embedding model is immutable post-create.
@@ -57,6 +58,8 @@ type AgentResponse struct {
 	IsSystem              bool     `json:"isSystem"`
 	ManagementMode        string   `json:"managementMode"`
 	CheckpointEnabled     bool     `json:"checkpointEnabled"`
+	// Editors is the current granted editor set, for form prefill.
+	Editors []string `json:"editors"`
 }
 
 type ExecuteAgentRequest struct {
@@ -100,5 +103,6 @@ func dtoToResponse(d agent.AgentDTO) AgentResponse {
 		IsSystem:              d.IsSystem,
 		ManagementMode:        d.ManagementMode,
 		CheckpointEnabled:     d.CheckpointEnabled,
+		Editors:               d.Editors,
 	}
 }

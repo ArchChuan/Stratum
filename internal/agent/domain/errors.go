@@ -10,6 +10,7 @@ var (
 	ErrInvalidSkill                       = errors.New("skill not found")
 	ErrSystemAssistantManaged             = errors.New("system assistant is platform managed")
 	ErrForbidden                          = errors.New("resource ownership forbidden")
+	ErrEditorNotEligible                  = errors.New("editor must hold admin or owner role")
 	ErrInvalidOfficialEvidenceQuery       = errors.New("official evidence query is empty")
 	ErrOfficialEvidenceNotFound           = errors.New("official evidence not found")
 	ErrDiagnosticForbidden                = errors.New("diagnostic forbidden")

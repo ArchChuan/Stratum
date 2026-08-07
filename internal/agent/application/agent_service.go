@@ -64,6 +64,7 @@ type AgentServiceDeps struct {
 	DiagnosticProvider        port.DiagnosticEvidenceProvider
 	ProposalService           *ResourceChangeProposalService
 	ResourceChangeApplier     func(context.Context, string, map[string]any) (domain.ApplyResult, error)
+	ResourceEditorRepo        port.ResourceEditorRepo
 	OperationGate             port.OperationGate
 	TenantRoleResolver        port.TenantRoleResolver
 	Logger                    *zap.Logger
@@ -148,6 +149,7 @@ type CreateAgentInput struct {
 	KnowledgeWorkspaceIDs  []string
 	MemoryScope            string
 	CheckpointEnabled      bool
+	Editors                []string
 }
 
 type UpdateAgentInput struct {
@@ -194,6 +196,7 @@ type AgentDTO struct {
 	IsSystem               bool
 	ManagementMode         string
 	CheckpointEnabled      bool
+	Editors                []string
 }
 
 type SystemAssistantSettings struct {
@@ -206,7 +209,7 @@ type SystemAssistantSettings struct {
 // Create persists a new agent for the tenant. Only owner/admin roles may
 // create; the caller becomes the resource owner (created_by).
 func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDTO, error) {
-	if err := s.checkOwnership(ctx, in.ActorID, in.ActorID); err != nil {
+	if err := s.checkOwnership(ctx, in.ActorID, in.ActorID, nil); err != nil {
 		return AgentDTO{}, err
 	}
 	id := uuid.Must(uuid.NewV7()).String()
@@ -244,7 +247,7 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 	if err != nil {
 		return AgentDTO{}, err
 	}
-	if err := s.deps.Registry.Register(ctx, a, audit); err != nil {
+	if err := s.deps.Registry.Register(ctx, a, audit, in.Editors); err != nil {
 		return AgentDTO{}, err
 	}
 	s.deps.Logger.Info("agent created", zap.String("id", id), zap.String("name", in.Name))
@@ -260,7 +263,15 @@ func (s *AgentService) Get(ctx context.Context, id string) (AgentDTO, error) {
 	if !ok {
 		return AgentDTO{}, ErrNotFound
 	}
-	return cfgToDTO(a.GetConfig()), nil
+	dto := cfgToDTO(a.GetConfig())
+	if s.deps.ResourceEditorRepo != nil {
+		editors, listErr := s.deps.ResourceEditorRepo.ListEditors(ctx, reqctx.TenantIDFromContext(ctx), id)
+		if listErr != nil {
+			return AgentDTO{}, fmt.Errorf("agent service get: list editors: %w", listErr)
+		}
+		dto.Editors = editors
+	}
+	return dto, nil
 }
 
 // SnapshotRevision returns a deterministic, execution-ready snapshot of the
@@ -549,7 +560,8 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	if existing.GetConfig().SystemKey != "" {
 		return s.updateSystemAssistant(ctx, existing.GetConfig(), in)
 	}
-	if err := s.checkOwnership(ctx, in.ActorID, existing.GetConfig().CreatedBy); err != nil {
+	editorActor, err := s.resolveUpdateEditorActor(ctx, in.ActorID, id, existing.GetConfig().CreatedBy)
+	if err != nil {
 		return AgentDTO{}, err
 	}
 	skills := in.AllowedSkills
@@ -585,11 +597,34 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	if err != nil {
 		return AgentDTO{}, err
 	}
-	if err := s.deps.Registry.Update(ctx, cfg, audit); err != nil {
+	if err := s.deps.Registry.Update(ctx, cfg, audit, editorActor); err != nil {
 		return AgentDTO{}, err
 	}
 	s.deps.Logger.Info("agent updated", zap.String("id", id), zap.String("name", in.Name))
 	return cfgToDTO(cfg), nil
+}
+
+// resolveUpdateEditorActor decides whether the actor may act as an editor:
+// the base matrix pass yields no editor actor; a foreign admin granted as
+// editor yields the actor id, re-validated inside the write transaction
+// (editorActor) to close check-then-write TOCTOU.
+func (s *AgentService) resolveUpdateEditorActor(ctx context.Context, actorID, resourceID, createdBy string) (string, error) {
+	baseErr := s.checkOwnership(ctx, actorID, createdBy, nil)
+	if baseErr == nil {
+		return "", nil
+	}
+	if s.deps.ResourceEditorRepo == nil {
+		return "", baseErr
+	}
+	tenantID := reqctx.TenantIDFromContext(ctx)
+	editors, err := s.deps.ResourceEditorRepo.ListEditors(ctx, tenantID, resourceID)
+	if err != nil {
+		return "", fmt.Errorf("agent service update: list editors: %w", err)
+	}
+	if err := s.checkOwnership(ctx, actorID, createdBy, editors); err != nil {
+		return "", err
+	}
+	return actorID, nil
 }
 
 func (s *AgentService) updateSystemAssistant(ctx context.Context, cfg *domain.AgentConfig, in UpdateAgentInput) (AgentDTO, error) {
@@ -646,7 +681,8 @@ func (s *AgentService) Delete(ctx context.Context, tenantID, id, actorID string)
 	if existing.GetConfig().SystemKey != "" {
 		return domain.ErrSystemAssistantManaged
 	}
-	if err := s.checkOwnership(ctx, actorID, existing.GetConfig().CreatedBy); err != nil {
+	// Delete stays creator/owner-only: editors do not grant delete rights.
+	if err := s.checkOwnership(ctx, actorID, existing.GetConfig().CreatedBy, nil); err != nil {
 		return err
 	}
 	if err := s.deleteSideEffects(ctx, tenantID, id); err != nil {
@@ -661,6 +697,48 @@ func (s *AgentService) Delete(ctx context.Context, tenantID, id, actorID string)
 		return err
 	}
 	s.deps.Logger.Info("agent deleted", zap.String("id", id))
+	return nil
+}
+
+// SetEditors replaces the granted editor set of an agent resource. Only the
+// creator or an owner may manage editors (an editor cannot delegate their own
+// right); each editor must hold role admin/owner at write time, enforced
+// inside the repository transaction (fail closed). The change is audited in
+// the same transaction with before/after projections.
+func (s *AgentService) SetEditors(ctx context.Context, id, actorID string, editorIDs []string) error {
+	if s.deps.ResourceEditorRepo == nil {
+		return fmt.Errorf("agent service set editors: editor repo not wired")
+	}
+	existing, ok, err := s.deps.Registry.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("agent service set editors: %w", err)
+	}
+	if !ok {
+		return ErrNotFound
+	}
+	cfg := existing.GetConfig()
+	if cfg.SystemKey != "" {
+		return domain.ErrSystemAssistantManaged
+	}
+	// Editors can never grant delete rights, so SetEditors reuses the
+	// creator/owner-only base matrix.
+	if err := s.checkOwnership(ctx, actorID, cfg.CreatedBy, nil); err != nil {
+		return err
+	}
+	tenantID := reqctx.TenantIDFromContext(ctx)
+	before, err := s.deps.ResourceEditorRepo.ListEditors(ctx, tenantID, id)
+	if err != nil {
+		return fmt.Errorf("agent service set editors: list editors: %w", err)
+	}
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindAgent, id, auditdomain.ChangeOpUpdate, actorID,
+		AgentSafeProjectionWithEditors(cfg, before), AgentSafeProjectionWithEditors(cfg, editorIDs))
+	if err != nil {
+		return err
+	}
+	if err := s.deps.ResourceEditorRepo.ReplaceEditors(ctx, tenantID, id, editorIDs, actorID, audit); err != nil {
+		return err
+	}
+	s.deps.Logger.Info("agent editors updated", zap.String("id", id), zap.Int("count", len(editorIDs)))
 	return nil
 }
 

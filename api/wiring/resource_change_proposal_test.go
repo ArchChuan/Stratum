@@ -177,7 +177,7 @@ type proposalMCPFake struct {
 	updateErr error
 }
 
-func (f *proposalMCPFake) ConnectServer(_ context.Context, cfg *mcpdomain.ServerConfig, _ string) error {
+func (f *proposalMCPFake) ConnectServer(_ context.Context, cfg *mcpdomain.ServerConfig, _ []string, _ string) error {
 	f.configs[cfg.ID] = cloneMCPConfigForTest(cfg)
 	return nil
 }

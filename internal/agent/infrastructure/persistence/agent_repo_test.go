@@ -25,7 +25,7 @@ func TestAgentRepoRejectsInvalidTenantBeforeBeginningTransaction(t *testing.T) {
 	defer pool.Close()
 
 	repo := &PgAgentRepo{pool: pool}
-	err = repo.Register(tenantCtx(`bad"tenant`), &domain.AgentConfig{ID: "a1"}, nil)
+	err = repo.Register(tenantCtx(`bad"tenant`), &domain.AgentConfig{ID: "a1"}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "postgres: invalid tenant_id") {
 		t.Fatalf("expected shared tenant validation error, got %v", err)
 	}
@@ -59,7 +59,7 @@ func TestAgentRepo_Register(t *testing.T) {
 
 	repo := &PgAgentRepo{pool: pool}
 	cfg := &domain.AgentConfig{ID: "a1", Name: "Alpha", Type: domain.ReActAgent, LLMModel: "gpt-4o", MaxIterations: 5}
-	if err := repo.Register(tenantCtx("t1"), cfg, nil); err != nil {
+	if err := repo.Register(tenantCtx("t1"), cfg, nil, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
@@ -99,7 +99,7 @@ func TestAgentRepo_Register_WithMCP(t *testing.T) {
 		LLMModel: "gpt-4o", MaxIterations: 5,
 		MCPToolIDs: []string{"mcp:srv1:search"},
 	}
-	if err := repo.Register(tenantCtx("t1"), cfg, nil); err != nil {
+	if err := repo.Register(tenantCtx("t1"), cfg, nil, nil); err != nil {
 		t.Fatalf("Register with MCP: %v", err)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
@@ -191,6 +191,9 @@ func TestAgentRepo_Remove(t *testing.T) {
 	pool.ExpectExec("DELETE FROM agents").
 		WithArgs("a1").
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	pool.ExpectExec("DELETE FROM resource_editors").
+		WithArgs("agent", "a1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	pool.ExpectCommit()
 
 	repo := &PgAgentRepo{pool: pool}
@@ -253,7 +256,7 @@ func TestAgentRepo_Update_Success(t *testing.T) {
 
 	repo := &PgAgentRepo{pool: pool}
 	cfg := &domain.AgentConfig{ID: "a1", Name: "Beta", LLMModel: "gpt-4o", MaxIterations: 5}
-	if err := repo.Update(tenantCtx("t1"), cfg, nil); err != nil {
+	if err := repo.Update(tenantCtx("t1"), cfg, nil, ""); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
@@ -276,7 +279,7 @@ func TestAgentRepo_Update_NotFound(t *testing.T) {
 
 	repo := &PgAgentRepo{pool: pool}
 	cfg := &domain.AgentConfig{ID: "missing", Name: "Beta", LLMModel: "gpt-4o", MaxIterations: 5}
-	err = repo.Update(tenantCtx("t1"), cfg, nil)
+	err = repo.Update(tenantCtx("t1"), cfg, nil, "")
 	if err == nil {
 		t.Fatal("expected error for missing agent")
 	}
@@ -303,7 +306,7 @@ func TestAgentRepo_UpdateSystemAssistantRollsBackBeforeRelations(t *testing.T) {
 	pool.ExpectRollback()
 
 	repo := &PgAgentRepo{pool: pool}
-	err = repo.Update(tenantCtx("t1"), &domain.AgentConfig{ID: "stratum-platform-assistant"}, nil)
+	err = repo.Update(tenantCtx("t1"), &domain.AgentConfig{ID: "stratum-platform-assistant"}, nil, "")
 	if !errors.Is(err, domain.ErrSystemAssistantManaged) {
 		t.Fatalf("expected managed assistant error, got %v", err)
 	}
@@ -481,6 +484,170 @@ func TestAgentRepo_FindAgentBySkill_NotFound(t *testing.T) {
 	}
 	if found || agentID != "" {
 		t.Fatalf("want (\"\",false), got (%q,%v)", agentID, found)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestAgentRepo_Register_WithEditors(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	pool.ExpectExec("INSERT INTO agents").
+		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "", false, "creator-1").
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	pool.ExpectExec("DELETE FROM agent_skill_links").
+		WithArgs("a1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	pool.ExpectExec("DELETE FROM agent_mcp_tool_links").
+		WithArgs("a1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	pool.ExpectExec("DELETE FROM agent_workspaces").
+		WithArgs("a1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	// Editor eligibility is validated inside the same transaction (fail closed).
+	pool.ExpectQuery("SELECT EXISTS").
+		WithArgs("t1", "user-1").
+		WillReturnRows(pgxmock.NewRows([]string{"bool"}).AddRow(true))
+	pool.ExpectExec("INSERT INTO resource_editors").
+		WithArgs("agent", "a1", "user-1", "creator-1").
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	pool.ExpectCommit()
+
+	repo := &PgAgentRepo{pool: pool}
+	cfg := &domain.AgentConfig{
+		ID: "a1", Name: "Alpha", Type: domain.ReActAgent,
+		LLMModel: "gpt-4o", MaxIterations: 5, CreatedBy: "creator-1",
+	}
+	if err := repo.Register(tenantCtx("t1"), cfg, nil, []string{"user-1"}); err != nil {
+		t.Fatalf("Register with editors: %v", err)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// TestAgentRepo_Register_ForgedEditorRollsBack pins the fail-closed editor
+// eligibility: a non-admin/owner id fails the whole transaction, so the agent
+// row and the editor grant never coexist.
+func TestAgentRepo_Register_ForgedEditorRollsBack(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	pool.ExpectExec("INSERT INTO agents").
+		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "", false, "creator-1").
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	pool.ExpectExec("DELETE FROM agent_skill_links").
+		WithArgs("a1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	pool.ExpectExec("DELETE FROM agent_mcp_tool_links").
+		WithArgs("a1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	pool.ExpectExec("DELETE FROM agent_workspaces").
+		WithArgs("a1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	pool.ExpectQuery("SELECT EXISTS").
+		WithArgs("t1", "member-1").
+		WillReturnRows(pgxmock.NewRows([]string{"bool"}).AddRow(false))
+	pool.ExpectRollback()
+
+	repo := &PgAgentRepo{pool: pool}
+	cfg := &domain.AgentConfig{
+		ID: "a1", Name: "Alpha", Type: domain.ReActAgent,
+		LLMModel: "gpt-4o", MaxIterations: 5, CreatedBy: "creator-1",
+	}
+	err = repo.Register(tenantCtx("t1"), cfg, nil, []string{"member-1"})
+	if !errors.Is(err, domain.ErrEditorNotEligible) {
+		t.Fatalf("Register error = %v, want ErrEditorNotEligible", err)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// TestAgentRepo_Update_EditorActorRevalidates pins the in-transaction
+// re-validation: role admin/owner AND editor presence share the transaction
+// with the business UPDATE, closing the check-then-write TOCTOU window.
+func TestAgentRepo_Update_EditorActorRevalidates(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	pool.ExpectQuery("SELECT COALESCE\\(system_key").
+		WithArgs("a1").WillReturnRows(pgxmock.NewRows([]string{"system_key"}).AddRow(""))
+	pool.ExpectQuery("SELECT EXISTS").
+		WithArgs("t1", "editor-1").
+		WillReturnRows(pgxmock.NewRows([]string{"bool"}).AddRow(true))
+	pool.ExpectQuery("SELECT EXISTS").
+		WithArgs("agent", "a1", "editor-1").
+		WillReturnRows(pgxmock.NewRows([]string{"bool"}).AddRow(true))
+	pool.ExpectExec("UPDATE agents").
+		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", false, "a1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("DELETE FROM agent_skill_links").
+		WithArgs("a1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	pool.ExpectExec("DELETE FROM agent_mcp_tool_links").
+		WithArgs("a1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	pool.ExpectExec("DELETE FROM agent_workspaces").
+		WithArgs("a1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	pool.ExpectCommit()
+
+	repo := &PgAgentRepo{pool: pool}
+	cfg := &domain.AgentConfig{ID: "a1", Name: "Beta", LLMModel: "gpt-4o", MaxIterations: 5}
+	if err := repo.Update(tenantCtx("t1"), cfg, nil, "editor-1"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// TestAgentRepo_Update_EditorActorDeniedRollsBack pins fail-closed semantics:
+// an actor present in resource_editors but no longer eligible (role downgrade)
+// or whose grant was removed is rejected inside the transaction.
+func TestAgentRepo_Update_EditorActorDeniedRollsBack(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	pool.ExpectQuery("SELECT COALESCE\\(system_key").
+		WithArgs("a1").WillReturnRows(pgxmock.NewRows([]string{"system_key"}).AddRow(""))
+	pool.ExpectQuery("SELECT EXISTS").
+		WithArgs("t1", "editor-1").
+		WillReturnRows(pgxmock.NewRows([]string{"bool"}).AddRow(true))
+	// Grant was removed -> presence check fails closed.
+	pool.ExpectQuery("SELECT EXISTS").
+		WithArgs("agent", "a1", "editor-1").
+		WillReturnRows(pgxmock.NewRows([]string{"bool"}).AddRow(false))
+	pool.ExpectRollback()
+
+	repo := &PgAgentRepo{pool: pool}
+	cfg := &domain.AgentConfig{ID: "a1", Name: "Beta", LLMModel: "gpt-4o", MaxIterations: 5}
+	err = repo.Update(tenantCtx("t1"), cfg, nil, "editor-1")
+	if !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("Update error = %v, want ErrForbidden", err)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)

@@ -89,4 +89,5 @@ export interface MCPServerConfig {
 
 export interface MCPServerConfigResponse extends Omit<MCPServerConfig, 'auth'> {
   auth?: MCPAuthConfigResponse;
+  editors?: string[];
 }

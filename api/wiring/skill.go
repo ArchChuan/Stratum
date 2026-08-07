@@ -19,8 +19,8 @@ func (c *Container) buildSkill(_ context.Context) error {
 		c.Skill = &Skill{}
 		return nil
 	}
-	c.Skill = &Skill{
-		VersionService: skillapp.NewVersionService(skillpersist.NewPgSkillRevisionRepo(db), c.Logger),
-	}
+	svc := skillapp.NewVersionService(skillpersist.NewPgSkillRevisionRepo(db), c.Logger)
+	svc.SetEditorRepo(skillpersist.NewPgSkillResourceEditorRepo(db))
+	c.Skill = &Skill{VersionService: svc}
 	return nil
 }

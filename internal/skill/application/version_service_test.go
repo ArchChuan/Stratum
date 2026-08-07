@@ -228,7 +228,7 @@ func newFakeVersionRepo() *fakeVersionRepo {
 	return &fakeVersionRepo{skills: map[string]port.SkillProductRow{}, revisions: map[string]domain.SkillRevision{}}
 }
 
-func (r *fakeVersionRepo) InsertSkillWithDraft(_ context.Context, skill port.SkillProductRow, draft domain.SkillRevision, audit *auditdomain.ResourceChangeAuditEvent) error {
+func (r *fakeVersionRepo) InsertSkillWithDraft(_ context.Context, skill port.SkillProductRow, draft domain.SkillRevision, audit *auditdomain.ResourceChangeAuditEvent, _ []string) error {
 	r.recordAudit(audit)
 	r.skills[skill.ID], r.revisions[draft.ID] = skill, draft
 	return nil
@@ -286,28 +286,29 @@ func (r *fakeVersionRepo) updateDraft(skillID string, fn func(*domain.SkillRevis
 	}
 	return domain.SkillRevision{}, domain.ErrSkillNotFound
 }
-func (r *fakeVersionRepo) UpdateDraftCapability(_ context.Context, skillID string, value domain.Capability, hash string, audit *auditdomain.ResourceChangeAuditEvent) (domain.SkillRevision, error) {
+func (r *fakeVersionRepo) UpdateDraftCapability(_ context.Context, skillID string, value domain.Capability, hash string, audit *auditdomain.ResourceChangeAuditEvent, _ string) (domain.SkillRevision, error) {
 	r.recordAudit(audit)
 	return r.updateDraft(skillID, func(v *domain.SkillRevision) { v.Capability, v.ContentHash = value, hash })
 }
-func (r *fakeVersionRepo) UpdateDraftActivation(_ context.Context, skillID string, value domain.ActivationContract, hash string, audit *auditdomain.ResourceChangeAuditEvent) (domain.SkillRevision, error) {
+func (r *fakeVersionRepo) UpdateDraftActivation(_ context.Context, skillID string, value domain.ActivationContract, hash string, audit *auditdomain.ResourceChangeAuditEvent, _ string) (domain.SkillRevision, error) {
 	r.recordAudit(audit)
 	return r.updateDraft(skillID, func(v *domain.SkillRevision) { v.ActivationContract, v.ContentHash = value, hash })
 }
-func (r *fakeVersionRepo) UpdateDraftInstructions(_ context.Context, skillID, instructions string, requirements domain.Requirements, hash string, audit *auditdomain.ResourceChangeAuditEvent) (domain.SkillRevision, error) {
+func (r *fakeVersionRepo) UpdateDraftInstructions(_ context.Context, skillID, instructions string, requirements domain.Requirements, hash string, audit *auditdomain.ResourceChangeAuditEvent, _ string) (domain.SkillRevision, error) {
 	r.recordAudit(audit)
 	return r.updateDraft(skillID, func(v *domain.SkillRevision) {
 		v.Instructions, v.Requirements, v.ContentHash = instructions, requirements, hash
 	})
 }
 
-func (r *fakeVersionRepo) UpdateDraftBundle(_ context.Context, skillID, expected string, skill port.SkillProductRow, draft domain.SkillRevision, audit *auditdomain.ResourceChangeAuditEvent) (domain.SkillRevision, error) {
+func (r *fakeVersionRepo) UpdateDraftBundle(_ context.Context, skillID, expected string, skill port.SkillProductRow, draft domain.SkillRevision, audit *auditdomain.ResourceChangeAuditEvent, _ string) (domain.SkillRevision, error) {
 	r.recordAudit(audit)
 	for id, current := range r.revisions {
 		if current.SkillID != skillID || current.Status != domain.VersionStatusDraft {
 			continue
 		}
-		if current.ContentHash != expected {
+		// 与真实 repo 语义一致:空 expected(直写)跳过乐观并发校验。
+		if expected != "" && current.ContentHash != expected {
 			return domain.SkillRevision{}, domain.ErrSkillDraftStale
 		}
 		r.skills[skillID] = skill
@@ -325,7 +326,7 @@ func (r *fakeVersionRepo) NextRevisionNo(_ context.Context, skillID string) (int
 	}
 	return next, nil
 }
-func (r *fakeVersionRepo) PublishDraft(_ context.Context, skillID, draftID string, next int, checks map[string]any, audit *auditdomain.ResourceChangeAuditEvent) (domain.SkillRevision, error) {
+func (r *fakeVersionRepo) PublishDraft(_ context.Context, skillID, draftID string, next int, checks map[string]any, audit *auditdomain.ResourceChangeAuditEvent, _ string) (domain.SkillRevision, error) {
 	r.recordAudit(audit)
 	revision := r.revisions[draftID]
 	revision.Status, revision.RevisionNo, revision.PublishChecks = domain.VersionStatusPublished, next, checks

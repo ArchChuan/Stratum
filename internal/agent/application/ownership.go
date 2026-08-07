@@ -9,9 +9,11 @@ import (
 
 // enforceOwnership applies the ownership matrix. owner may manage the whole
 // tenant (including historical resources with empty created_by); admin may
-// only touch resources they created; every other role, resolution failure
-// and empty actor is denied. Fail closed.
-func enforceOwnership(role, actorID, createdBy string) error {
+// only touch resources they created, or — for updates only — resources they
+// were granted as editor (editors is only honored on the update path; delete
+// still requires creator/owner). Every other role, resolution failure and
+// empty actor is denied. Fail closed.
+func enforceOwnership(role, actorID, createdBy string, editors []string) error {
 	if actorID == "" {
 		return domain.ErrForbidden
 	}
@@ -22,6 +24,11 @@ func enforceOwnership(role, actorID, createdBy string) error {
 		if createdBy == actorID {
 			return nil
 		}
+		for _, id := range editors {
+			if id == actorID {
+				return nil
+			}
+		}
 		return domain.ErrForbidden
 	default:
 		return domain.ErrForbidden
@@ -31,7 +38,9 @@ func enforceOwnership(role, actorID, createdBy string) error {
 // checkOwnership resolves the actor's tenant role and applies the matrix.
 // A system actor in ctx bypasses ownership checks (evaluation worker path).
 // resolver nil, resolution failure and empty actor all fail closed.
-func (s *AgentService) checkOwnership(ctx context.Context, actorID, createdBy string) error {
+// editors is the granted editor set used for the admin-editor row of the
+// matrix; pass nil to deny admin edits of foreign resources entirely.
+func (s *AgentService) checkOwnership(ctx context.Context, actorID, createdBy string, editors []string) error {
 	if reqctx.SystemActorFromContext(ctx) != "" {
 		return nil
 	}
@@ -43,5 +52,5 @@ func (s *AgentService) checkOwnership(ctx context.Context, actorID, createdBy st
 	if err != nil {
 		return domain.ErrForbidden
 	}
-	return enforceOwnership(role, actorID, createdBy)
+	return enforceOwnership(role, actorID, createdBy, editors)
 }

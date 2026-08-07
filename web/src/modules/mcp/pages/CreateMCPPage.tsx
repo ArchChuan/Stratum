@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 
 import { MCPAuthSection } from '../components/MCPAuthSection';
 import { MCPBasicSection } from '../components/MCPBasicSection';
+import { MCPEditorSection } from '../components/MCPEditorSection';
 import { MCPRetrySection } from '../components/MCPRetrySection';
 import { MCPTransportSection } from '../components/MCPTransportSection';
 import { useCreateMCPPage } from '../hooks/useCreateMCPPage';
@@ -15,12 +16,14 @@ import {
   MCP_RETRY_MAX_DELAY_MS,
   MCP_RETRY_MAX_RETRIES,
 } from '@/constants';
+import { useEditorCandidates } from '@/modules/iam';
 
 const { Title, Text } = Typography;
 
 export const CreateMCPPage = () => {
   const [form] = Form.useForm();
   const { submitting, handleFinish } = useCreateMCPPage();
+  const { candidates, loading } = useEditorCandidates();
   const navigate = useNavigate();
 
   const transport = Form.useWatch('transport', form);
@@ -63,6 +66,7 @@ export const CreateMCPPage = () => {
         <MCPTransportSection transport={transport} />
         {isHTTP && <MCPAuthSection authType={authType} />}
         <MCPRetrySection retryEnabled={retryEnabled} />
+        <MCPEditorSection candidates={candidates} loading={loading} />
 
         <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <Button onClick={() => navigate('/mcp')}>取消</Button>

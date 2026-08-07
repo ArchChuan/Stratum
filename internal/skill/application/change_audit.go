@@ -63,6 +63,17 @@ func skillSafeProjection(skill port.SkillProductRow, draft *domain.SkillRevision
 	return out
 }
 
+// skillSafeProjectionWithEditors extends the safe projection with the granted
+// editor set, used by the editors-management endpoint's audit event.
+func skillSafeProjectionWithEditors(skill port.SkillProductRow, draft *domain.SkillRevision, editors []string) map[string]any {
+	out := skillSafeProjection(skill, draft)
+	if editors == nil {
+		editors = []string{}
+	}
+	out["editors"] = editors
+	return out
+}
+
 // isBuiltinSkill identifies platform-seeded skills. Their lifecycle is managed
 // by the platform; tenant writes are rejected.
 func isBuiltinSkill(skillID string) bool {

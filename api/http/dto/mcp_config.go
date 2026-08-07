@@ -24,6 +24,9 @@ type MCPServerConfigRequest struct {
 	Auth         *domain.AuthConfig  `json:"auth,omitempty"`
 	Retry        *domain.RetryConfig `json:"retry,omitempty"`
 	SystemKey    json.RawMessage     `json:"system_key"`
+	// Editors is the initial granted editor set (create path); each id must
+	// hold role admin or owner at write time.
+	Editors []string `json:"editors"`
 }
 
 func (r MCPServerConfigRequest) ServerConfig() (*domain.ServerConfig, error) {
@@ -63,6 +66,7 @@ type MCPServerConfigResponse struct {
 	Auth           *MCPAuthConfigResponse `json:"auth,omitempty"`
 	Retry          *domain.RetryConfig    `json:"retry,omitempty"`
 	ManagementMode string                 `json:"management_mode"`
+	Editors        []string               `json:"editors"`
 }
 
 func NewMCPServerConfigResponse(cfg *domain.ServerConfig) MCPServerConfigResponse {

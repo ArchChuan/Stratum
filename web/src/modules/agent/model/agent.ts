@@ -56,6 +56,7 @@ export interface AgentFormValues {
   knowledgeWorkspaceIds?: string[];
   memoryScope?: string;
   checkpointEnabled?: boolean;
+  editors?: string[];
 }
 
 export interface GroupedModelOption {

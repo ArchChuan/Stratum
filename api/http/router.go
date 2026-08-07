@@ -333,6 +333,7 @@ func registerSkills(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		skills.PATCH("/:id/draft/instructions", append(adminMW, requireActive, skillHandler.UpdateDraftInstructionBundle)...)
 		skills.POST("/:id/publish", append(adminMW, requireActive, skillHandler.PublishSkill)...)
 		skills.DELETE("/:id", append(adminMW, requireActive, skillHandler.DeleteSkill)...)
+		skills.PUT("/:id/editors", append(adminMW, requireActive, skillHandler.SetSkillEditors)...)
 	}
 }
 
@@ -373,6 +374,7 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		agents.POST("/:id/executions/:executionID/pause", requireActive, agentHandler.PauseExecution)
 		agents.POST("/:id/executions/:executionID/resume", requireActive, agentHandler.ResumeExecution)
 		agents.PUT("/:id", requireAdmin, requireActive, agentHandler.UpdateAgent)
+		agents.PUT("/:id/editors", requireAdmin, requireActive, agentHandler.SetAgentEditors)
 		agents.DELETE("/:id", requireAdmin, requireActive, agentHandler.DeleteAgent)
 		agents.POST("/:id/conversations", chatHandler.CreateConversation)
 		agents.GET("/:id/conversations", chatHandler.ListConversations)
@@ -429,6 +431,7 @@ func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 		knowledgeGroup.POST("/workspaces", append(adminMW, requireActive, ragHandler.CreateWorkspace)...)
 		knowledgeGroup.PATCH("/workspaces/:name", append(adminMW, requireActive, ragHandler.UpdateWorkspace)...)
 		knowledgeGroup.DELETE("/workspaces/:name", append(adminMW, requireActive, ragHandler.DeleteWorkspace)...)
+		knowledgeGroup.PUT("/workspaces/:name/editors", append(adminMW, requireActive, ragHandler.SetWorkspaceEditors)...)
 		knowledgeGroup.DELETE("/workspaces/:name/documents/:documentID", append(adminMW, requireActive, ragHandler.DeleteDocument)...)
 		knowledgeGroup.POST("/ingest", append(adminMW, requireActive, middleware.BodyLimit(constants.MaxUploadBytes), ragHandler.UploadDocument)...)
 	}

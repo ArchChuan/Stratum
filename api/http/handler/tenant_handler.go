@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/byteBuilderX/stratum/api/http/dto"
 	"github.com/byteBuilderX/stratum/api/middleware"
@@ -84,6 +85,9 @@ func (h *TenantHandler) JoinTenant(c *gin.Context) {
 }
 
 // ListMembers GET /tenant/members?page=1&page_size=20
+// An optional role filter (?role=admin,owner) returns every member holding
+// one of the given roles — the candidate set for resource editors. The
+// service rejects any role outside {admin, owner}.
 func (h *TenantHandler) ListMembers(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
@@ -93,17 +97,39 @@ func (h *TenantHandler) ListMembers(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", strconv.Itoa(constants.DefaultPageSize)))
 
-	members, total, normalizedPage, normalizedPageSize, err := h.svc.ListMembers(c.Request.Context(), tenantID, page, pageSize)
-	if err != nil {
-		_ = c.Error(err)
-		return
+	var members []domain.Member
+	total := 0
+	if rolesParam := c.Query("role"); rolesParam != "" {
+		rawRoles := strings.Split(rolesParam, ",")
+		roles := make([]string, 0, len(rawRoles))
+		for _, r := range rawRoles {
+			if r = strings.TrimSpace(r); r != "" {
+				roles = append(roles, r)
+			}
+		}
+		roleMembers, err := h.svc.ListMembersByRole(c.Request.Context(), tenantID, roles)
+		if err != nil {
+			_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+			return
+		}
+		members = roleMembers
+		total = len(members)
+	} else {
+		var err error
+		var normalizedPage, normalizedPageSize int
+		members, total, normalizedPage, normalizedPageSize, err = h.svc.ListMembers(c.Request.Context(), tenantID, page, pageSize)
+		if err != nil {
+			_ = c.Error(err)
+			return
+		}
+		page, pageSize = normalizedPage, normalizedPageSize
 	}
 
 	resp := dto.ListMembersResponse{
 		Members:  make([]dto.MemberResponse, 0, len(members)),
 		Total:    total,
-		Page:     normalizedPage,
-		PageSize: normalizedPageSize,
+		Page:     page,
+		PageSize: pageSize,
 	}
 	for _, m := range members {
 		resp.Members = append(resp.Members, dto.MemberResponse{

@@ -81,4 +81,5 @@ export interface CreateWorkspaceInput {
     query_mode: string;
     top_k: number;
   };
+  editors?: string[];
 }

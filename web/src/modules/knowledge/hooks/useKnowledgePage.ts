@@ -23,6 +23,7 @@ interface CreateValues {
   chunk_overlap?: number;
   query_mode?: string;
   top_k?: number;
+  editors?: string[];
 }
 
 export const useKnowledgePage = () => {
@@ -73,6 +74,7 @@ export const useKnowledgePage = () => {
             query_mode: values.query_mode || 'hybrid',
             top_k: values.top_k || KNOWLEDGE_DEFAULT_TOP_K,
           },
+          editors: values.editors || [],
         };
         await knowledgeApi.create(payload);
         message.success('知识库创建成功');

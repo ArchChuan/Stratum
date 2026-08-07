@@ -66,7 +66,7 @@ func TestPgSkillRevisionRepo_InsertSkillWithDraft_success(t *testing.T) {
 	mock.ExpectCommit()
 
 	err := repo.InsertSkillWithDraft(skillTenantCtx(), port.SkillProductRow{ID: "s-1", Name: "name", Description: "desc"},
-		testSkillRevision("r-1"), nil)
+		testSkillRevision("r-1"), nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -91,7 +91,7 @@ func TestPgSkillRevisionRepo_InsertSkillWithDraft_manualSourceFallback(t *testin
 	rev.Source = ""
 	rev.ParentRevisionID = ""
 	rev.RevisionNo = 0
-	err := repo.InsertSkillWithDraft(skillTenantCtx(), port.SkillProductRow{ID: "s-1", Name: "n", Description: "d"}, rev, nil)
+	err := repo.InsertSkillWithDraft(skillTenantCtx(), port.SkillProductRow{ID: "s-1", Name: "n", Description: "d"}, rev, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -106,7 +106,7 @@ func TestPgSkillRevisionRepo_InsertSkillWithDraft_skillInsertFails(t *testing.T)
 		WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
-	err := repo.InsertSkillWithDraft(skillTenantCtx(), port.SkillProductRow{ID: "s-1"}, testSkillRevision("r-1"), nil)
+	err := repo.InsertSkillWithDraft(skillTenantCtx(), port.SkillProductRow{ID: "s-1"}, testSkillRevision("r-1"), nil, nil)
 	require.ErrorIs(t, err, pgx.ErrTxClosed)
 }
 
@@ -125,7 +125,7 @@ func TestPgSkillRevisionRepo_InsertSkillWithDraft_revisionInsertFails(t *testing
 		WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
-	err := repo.InsertSkillWithDraft(skillTenantCtx(), port.SkillProductRow{ID: "s-1"}, testSkillRevision("r-1"), nil)
+	err := repo.InsertSkillWithDraft(skillTenantCtx(), port.SkillProductRow{ID: "s-1"}, testSkillRevision("r-1"), nil, nil)
 	require.ErrorIs(t, err, pgx.ErrTxClosed)
 }
 
@@ -216,6 +216,9 @@ func TestPgSkillRevisionRepo_DeleteSkill_success(t *testing.T) {
 	mock.ExpectExec("DELETE FROM skills WHERE id").
 		WithArgs("s-1").
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectExec("DELETE FROM resource_editors WHERE resource_kind=\\$1 AND resource_id=\\$2").
+		WithArgs("skill", "s-1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	mock.ExpectCommit()
 
 	require.NoError(t, repo.DeleteSkill(skillTenantCtx(), "s-1", nil))
@@ -336,7 +339,7 @@ func TestPgSkillRevisionRepo_UpdateDraftCapability_success(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
-	rev, err := repo.UpdateDraftCapability(skillTenantCtx(), "s-1", domain.Capability{Goal: "g"}, "h-2", nil)
+	rev, err := repo.UpdateDraftCapability(skillTenantCtx(), "s-1", domain.Capability{Goal: "g"}, "h-2", nil, "")
 	require.NoError(t, err)
 	require.Equal(t, "r-1", rev.ID)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -352,7 +355,7 @@ func TestPgSkillRevisionRepo_UpdateDraftCapability_queryFails(t *testing.T) {
 		WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
-	_, err := repo.UpdateDraftCapability(skillTenantCtx(), "s-1", domain.Capability{Goal: "g"}, "h-2", nil)
+	_, err := repo.UpdateDraftCapability(skillTenantCtx(), "s-1", domain.Capability{Goal: "g"}, "h-2", nil, "")
 	require.ErrorIs(t, err, pgx.ErrTxClosed)
 }
 
@@ -366,7 +369,7 @@ func TestPgSkillRevisionRepo_UpdateDraftActivation_success(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows(revisionCols).AddRow(skillRevisionRow()...))
 	mock.ExpectCommit()
 
-	rev, err := repo.UpdateDraftActivation(skillTenantCtx(), "s-1", domain.ActivationContract{Name: "ac"}, "h-3", nil)
+	rev, err := repo.UpdateDraftActivation(skillTenantCtx(), "s-1", domain.ActivationContract{Name: "ac"}, "h-3", nil, "")
 	require.NoError(t, err)
 	require.Equal(t, "r-1", rev.ID)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -383,7 +386,7 @@ func TestPgSkillRevisionRepo_UpdateDraftInstructions_success(t *testing.T) {
 	mock.ExpectCommit()
 
 	rev, err := repo.UpdateDraftInstructions(skillTenantCtx(), "s-1", "do it",
-		domain.Requirements{MCPToolIDs: []string{"t1"}}, "h-4", nil)
+		domain.Requirements{MCPToolIDs: []string{"t1"}}, "h-4", nil, "")
 	require.NoError(t, err)
 	require.Equal(t, "r-1", rev.ID)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -405,7 +408,7 @@ func TestPgSkillRevisionRepo_UpdateDraftBundle_success(t *testing.T) {
 
 	draft := testSkillRevision("r-1")
 	rev, err := repo.UpdateDraftBundle(skillTenantCtx(), "s-1", "h-1",
-		port.SkillProductRow{ID: "s-1", Name: "new-name", Description: "new-desc"}, draft, nil)
+		port.SkillProductRow{ID: "s-1", Name: "new-name", Description: "new-desc"}, draft, nil, "")
 	require.NoError(t, err)
 	require.Equal(t, "r-1", rev.ID)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -426,7 +429,7 @@ func TestPgSkillRevisionRepo_UpdateDraftBundle_stale(t *testing.T) {
 	mock.ExpectRollback()
 
 	_, err := repo.UpdateDraftBundle(skillTenantCtx(), "s-1", "stale-hash",
-		port.SkillProductRow{ID: "s-1"}, testSkillRevision("r-1"), nil)
+		port.SkillProductRow{ID: "s-1"}, testSkillRevision("r-1"), nil, "")
 	require.ErrorIs(t, err, domain.ErrSkillDraftStale)
 }
 
@@ -444,7 +447,7 @@ func TestPgSkillRevisionRepo_UpdateDraftBundle_noDraft(t *testing.T) {
 	mock.ExpectRollback()
 
 	_, err := repo.UpdateDraftBundle(skillTenantCtx(), "s-1", "h-1",
-		port.SkillProductRow{ID: "s-1"}, testSkillRevision("r-1"), nil)
+		port.SkillProductRow{ID: "s-1"}, testSkillRevision("r-1"), nil, "")
 	require.ErrorIs(t, err, domain.ErrSkillNotFound)
 }
 
@@ -480,7 +483,7 @@ func TestPgSkillRevisionRepo_PublishDraft_success(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
-	rev, err := repo.PublishDraft(skillTenantCtx(), "s-1", "r-1", 3, map[string]any{"ok": true}, nil)
+	rev, err := repo.PublishDraft(skillTenantCtx(), "s-1", "r-1", 3, map[string]any{"ok": true}, nil, "")
 	require.NoError(t, err)
 	require.Equal(t, "r-1", rev.ID)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -499,7 +502,7 @@ func TestPgSkillRevisionRepo_PublishDraft_updateFails(t *testing.T) {
 		WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
-	_, err := repo.PublishDraft(skillTenantCtx(), "s-1", "r-1", 3, map[string]any{"ok": true}, nil)
+	_, err := repo.PublishDraft(skillTenantCtx(), "s-1", "r-1", 3, map[string]any{"ok": true}, nil, "")
 	require.ErrorIs(t, err, pgx.ErrTxClosed)
 }
 
@@ -538,4 +541,29 @@ func testSkillRevision(id string) domain.SkillRevision {
 		Requirements:       domain.Requirements{MCPToolIDs: []string{"t1"}},
 		PublishChecks:      map[string]any{"ok": true},
 	}
+}
+
+// TestPgSkillRevisionRepo_UpdateDraftBundle_noBaseline pins the direct-write
+// contract: an empty expected hash drops the content_hash WHERE condition so
+// the update targets the draft row without optimistic concurrency.
+func TestPgSkillRevisionRepo_UpdateDraftBundle_noBaseline(t *testing.T) {
+	mock := newSkillMock(t)
+	repo := newSkillRepo(mock)
+	beginTenantTx(t, mock)
+
+	mock.ExpectQuery("UPDATE skill_revisions SET capability=\\$3::jsonb").
+		WithArgs("s-1", `{"goal":"g","whenToUse":""}`, `{"name":"ac","description":"","inputSchema":null,"outputSchema":null,"confirmed":false}`,
+			"do it", `{"mcpToolIds":["t1"]}`, "h-1").
+		WillReturnRows(pgxmock.NewRows(revisionCols).AddRow(skillRevisionRow()...))
+	mock.ExpectExec("UPDATE skills SET name=\\$2, description=\\$3").
+		WithArgs("s-1", "new-name", "new-desc").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
+
+	draft := testSkillRevision("r-1")
+	rev, err := repo.UpdateDraftBundle(skillTenantCtx(), "s-1", "",
+		port.SkillProductRow{ID: "s-1", Name: "new-name", Description: "new-desc"}, draft, nil, "")
+	require.NoError(t, err)
+	require.Equal(t, "r-1", rev.ID)
+	require.NoError(t, mock.ExpectationsWereMet())
 }

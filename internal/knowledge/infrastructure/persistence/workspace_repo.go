@@ -67,6 +67,75 @@ func fromJSONB(c jsonbConfig) domain.WorkspaceConfig {
 	}
 }
 
+// resourceEditorKind identifies knowledge rows in the shared resource_editors table.
+const resourceEditorKind = "knowledge"
+
+// editorEligible checks, inside the write transaction, that userID currently
+// holds role admin or owner in the tenant. Fail closed on any lookup error.
+// public.tenant_members is schema-qualified: the transaction search_path
+// points at the tenant schema.
+func editorEligible(ctx context.Context, tx pgx.Tx, tenantID, userID string) (bool, error) {
+	var ok bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS(
+			SELECT 1 FROM public.tenant_members
+			WHERE tenant_id=$1 AND user_id=$2 AND role IN ('admin','owner'))`,
+		tenantID, userID,
+	).Scan(&ok); err != nil {
+		return false, fmt.Errorf("editor role check: %w", err)
+	}
+	return ok, nil
+}
+
+// insertEditors validates and persists the editor set inside the write
+// transaction. A non-eligible id fails the whole transaction (fail closed),
+// so a forged editor can never be created alongside the resource.
+func insertEditors(ctx context.Context, tx pgx.Tx, tenantID, kind, resourceID string, editorIDs []string, createdBy string) error {
+	for _, id := range editorIDs {
+		eligible, err := editorEligible(ctx, tx, tenantID, id)
+		if err != nil {
+			return err
+		}
+		if !eligible {
+			return fmt.Errorf("%w: user %s", domain.ErrEditorNotEligible, id)
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO resource_editors (resource_kind, resource_id, editor_id, created_by)
+			 VALUES ($1,$2,$3,$4)`,
+			kind, resourceID, id, createdBy,
+		); err != nil {
+			return fmt.Errorf("insert editor %s: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// revalidateEditorAccess re-checks, inside the write transaction, that the
+// actor still qualifies as an editor of this resource: role admin/owner AND
+// present in resource_editors. Both checks share the transaction with the
+// business UPDATE, closing the check-then-write TOCTOU window.
+func revalidateEditorAccess(ctx context.Context, tx pgx.Tx, tenantID, kind, resourceID, actorID string) error {
+	eligible, err := editorEligible(ctx, tx, tenantID, actorID)
+	if err != nil {
+		return err
+	}
+	if !eligible {
+		return domain.ErrForbidden
+	}
+	var present bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM resource_editors
+			WHERE resource_kind=$1 AND resource_id=$2 AND editor_id=$3)`,
+		kind, resourceID, actorID,
+	).Scan(&present); err != nil {
+		return fmt.Errorf("editor membership check: %w", err)
+	}
+	if !present {
+		return domain.ErrForbidden
+	}
+	return nil
+}
+
 // insertChangeAudit inserts the audit row in the SAME transaction as the
 // business write; an audit failure rolls the business change back (fail
 // closed). A nil event skips auditing — reserved for internal reentrant
@@ -92,8 +161,10 @@ func insertChangeAudit(ctx context.Context, tx pgx.Tx, tenantID string, ev *audi
 	return nil
 }
 
-// Create inserts a workspace, returning ErrWorkspaceConflict on unique violation.
-func (r *WorkspaceRepo) Create(ctx context.Context, tenantID string, ws *domain.Workspace, audit *auditdomain.ResourceChangeAuditEvent) error {
+// Create inserts a workspace, returning ErrWorkspaceConflict on unique
+// violation. editors, when non-empty, is validated and persisted in the same
+// transaction.
+func (r *WorkspaceRepo) Create(ctx context.Context, tenantID string, ws *domain.Workspace, editors []string, audit *auditdomain.ResourceChangeAuditEvent) error {
 	var id string
 	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `INSERT INTO rag_workspaces (name, description, config, created_by)
@@ -106,6 +177,9 @@ func (r *WorkspaceRepo) Create(ctx context.Context, tenantID string, ws *domain.
 		// reference it after the INSERT returns it.
 		if audit != nil {
 			audit.ResourceID = id
+		}
+		if err := insertEditors(ctx, tx, tenantID, resourceEditorKind, id, editors, ws.CreatedBy); err != nil {
+			return err
 		}
 		return insertChangeAudit(ctx, tx, tenantID, audit)
 	})
@@ -204,15 +278,27 @@ func (r *WorkspaceRepo) List(ctx context.Context, tenantID string) ([]*domain.Wo
 // transaction, then writes the change audit in the same transaction. renameTo
 // and description may be nil to leave the column untouched; the config is
 // always written (callers pass the merged value). ErrWorkspaceNotFound on 0
-// rows, ErrWorkspaceConflict on duplicate rename.
+// rows, ErrWorkspaceConflict on duplicate rename. editorActor, when
+// non-empty, is re-validated inside the transaction (role + editor
+// membership) before the UPDATE, closing the check-then-write TOCTOU window.
 func (r *WorkspaceRepo) UpdateWorkspaceAll(
 	ctx context.Context, tenantID, name string,
 	renameTo, description *string,
 	cfg domain.WorkspaceConfig,
+	editorActor string,
 	audit *auditdomain.ResourceChangeAuditEvent,
 ) error {
 	var tag pgconn.CommandTag
 	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		if editorActor != "" {
+			var id string
+			if err := tx.QueryRow(ctx, `SELECT id FROM rag_workspaces WHERE name=$1`, name).Scan(&id); err != nil {
+				return err
+			}
+			if err := revalidateEditorAccess(ctx, tx, tenantID, resourceEditorKind, id, editorActor); err != nil {
+				return err
+			}
+		}
 		var err error
 		tag, err = tx.Exec(ctx, `UPDATE rag_workspaces
 	                     SET name = COALESCE($1, name),
@@ -241,10 +327,23 @@ func (r *WorkspaceRepo) UpdateWorkspaceAll(
 func (r *WorkspaceRepo) Delete(ctx context.Context, tenantID, name string, audit *auditdomain.ResourceChangeAuditEvent) error {
 	var tag pgconn.CommandTag
 	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// The workspace id (DB-generated UUID) is the resource_editors key;
+		// resolve it before deleting the editors rows.
+		var id string
+		if err := tx.QueryRow(ctx, `SELECT id FROM rag_workspaces WHERE name=$1`, name).Scan(&id); err != nil {
+			return err
+		}
 		var err error
 		tag, err = tx.Exec(ctx, `DELETE FROM rag_workspaces WHERE name = $1`, name)
 		if err != nil {
 			return err
+		}
+		// Editors die with the resource in the same transaction.
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM resource_editors WHERE resource_kind=$1 AND resource_id=$2`,
+			resourceEditorKind, id,
+		); err != nil {
+			return fmt.Errorf("delete editors: %w", err)
 		}
 		return insertChangeAudit(ctx, tx, tenantID, audit)
 	})
@@ -252,6 +351,9 @@ func (r *WorkspaceRepo) Delete(ctx context.Context, tenantID, name string, audit
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
 			return domain.ErrWorkspaceLinked
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrWorkspaceNotFound
 		}
 		return fmt.Errorf("workspace_repo: delete: %w", err)
 	}

@@ -57,8 +57,10 @@ export const tenantApi = {
     });
   },
   updateSettings: (patch: Record<string, unknown>) => api.patch('/tenant/settings', patch),
-  members: async (page: number, pageSize: number): Promise<MemberPage> => {
-    const res = await api.get('/tenant/members', { params: { page, page_size: pageSize } });
+  members: async (page: number, pageSize: number, role?: string): Promise<MemberPage> => {
+    const res = await api.get('/tenant/members', {
+      params: { page, page_size: pageSize, ...(role ? { role } : {}) },
+    });
     return memberPageSchema.parse(res.data);
   },
   inviteMember: async (data: { email: string; role: string }) => {

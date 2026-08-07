@@ -27,6 +27,7 @@ type skillRevisionService interface {
 	UpdateActivation(context.Context, string, skillapp.UpdateActivationInput) (skillapp.SkillRevision, error)
 	UpdateInstructionBundle(context.Context, string, skillapp.UpdateInstructionBundleInput) (skillapp.SkillRevision, error)
 	PublishDraft(context.Context, string, string) (skillapp.SkillRevision, error)
+	SetEditors(context.Context, string, string, []string) error
 }
 
 func NewSkillHandler(service skillRevisionService, logger *zap.Logger) *SkillHandler {
@@ -49,7 +50,7 @@ func (h *SkillHandler) CreateSkill(c *gin.Context) {
 		Name: req.Name, Goal: req.Goal, WhenToUse: req.WhenToUse,
 		SampleInput: req.SampleInput, ExpectedOutput: req.ExpectedOutput,
 		Instructions: req.Instructions, Requirements: requirementsFromDTO(req.Requirements),
-		ActorID: actorID,
+		ActorID: actorID, Editors: req.Editors,
 	})
 	if err != nil {
 		_ = c.Error(err)
@@ -174,6 +175,28 @@ func (h *SkillHandler) DeleteSkill(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "skill deleted successfully"})
 }
 
+// SetSkillEditors replaces the granted editor set of a skill resource
+// (creator/owner only, editor ids must hold role admin/owner).
+func (h *SkillHandler) SetSkillEditors(c *gin.Context) {
+	var req struct {
+		EditorIDs []string `json:"editorIds" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	if err := h.service.SetEditors(c.Request.Context(), c.Param("id"), actorID, req.EditorIDs); err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "editors updated"})
+}
+
 func requirementsFromDTO(value dto.SkillRequirements) skilldomain.Requirements {
 	return skilldomain.Requirements{
 		MCPToolIDs: value.MCPToolIDs, KnowledgeWorkspaceIDs: value.KnowledgeWorkspaceIDs,
@@ -189,7 +212,7 @@ func productToResponse(value skillapp.SkillProduct) dto.SkillProductResponse {
 }
 
 func workspaceToResponse(value skillapp.SkillWorkspaceView) dto.SkillWorkspaceResponse {
-	return dto.SkillWorkspaceResponse{Skill: productToResponse(value.Skill), Draft: revisionToResponse(value.Draft)}
+	return dto.SkillWorkspaceResponse{Skill: productToResponse(value.Skill), Draft: revisionToResponse(value.Draft), Editors: value.Editors}
 }
 
 func revisionToResponse(value skillapp.SkillRevision) dto.SkillRevisionResponse {

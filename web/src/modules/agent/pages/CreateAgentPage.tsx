@@ -5,12 +5,14 @@ import { AgentFormSections } from '../components/AgentFormSections';
 import { useCreateAgentPage } from '../hooks/useCreateAgentPage';
 
 import { AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
+import { useEditorCandidates } from '@/modules/iam';
 
 const { Title, Text } = Typography;
 
 export const CreateAgentPage = () => {
   const { form, loading, skills, mcpTools, workspaces, groupedModels, navigate, onFinish } =
     useCreateAgentPage();
+  const { candidates, loading: editorCandidatesLoading } = useEditorCandidates();
 
   return (
     <div className="responsive-form-page">
@@ -44,6 +46,9 @@ export const CreateAgentPage = () => {
           mcpTools={mcpTools}
           workspaces={workspaces}
           groupedModels={groupedModels}
+          showEditors
+          editorCandidates={candidates}
+          editorCandidatesLoading={editorCandidatesLoading}
         />
 
         <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>

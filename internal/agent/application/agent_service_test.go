@@ -61,7 +61,7 @@ func (f failingPreparationMCPRevisionResolver) ResolveMCPRevision(
 	return port.MCPRevisionAssignment{}, false, f.err
 }
 
-func (m *mockAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
+func (m *mockAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ []string) error {
 	return m.Called(ctx, cfg).Error(0)
 }
 func (m *mockAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig, bool, error) {
@@ -177,7 +177,7 @@ func (m *mockAgentRepo) GetAll(ctx context.Context) ([]*domain.AgentConfig, erro
 func (m *mockAgentRepo) Remove(ctx context.Context, id string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return m.Called(ctx, id).Error(0)
 }
-func (m *mockAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent) error {
+func (m *mockAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string) error {
 	return m.Called(ctx, cfg).Error(0)
 }
 func (m *mockAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {

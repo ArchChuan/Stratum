@@ -75,12 +75,40 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 		KnowledgeWorkspaceIDs: req.KnowledgeWorkspaceIDs,
 		MemoryScope:           req.MemoryScope,
 		CheckpointEnabled:     req.CheckpointEnabled,
+		Editors:               req.Editors,
 	})
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
 	c.JSON(http.StatusCreated, dtoToResponse(dto))
+}
+
+// SetAgentEditors replaces the granted editor set of an agent (PUT
+// /agents/:id/editors). Only creator/owner may call; eligibility of each
+// editor is enforced inside the repository transaction.
+func (h *AgentHandler) SetAgentEditors(c *gin.Context) {
+	if _, ok := tenantIDFromCtx(c); !ok {
+		respondMissingTenant(c)
+		return
+	}
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	var req struct {
+		EditorIDs []string `json:"editorIds" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	if err := h.svc.SetEditors(c.Request.Context(), c.Param("id"), actorID, req.EditorIDs); err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "editors updated"})
 }
 
 func (h *AgentHandler) UpdateAgent(c *gin.Context) {

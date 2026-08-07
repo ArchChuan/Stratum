@@ -58,6 +58,9 @@ func (f *fakeSkillRevisionService) UpdateInstructionBundle(_ context.Context, _ 
 func (f *fakeSkillRevisionService) PublishDraft(context.Context, string, string) (skillapp.SkillRevision, error) {
 	return skillapp.SkillRevision{ID: "revision-1", RevisionNo: 1, Status: domain.VersionStatusPublished}, nil
 }
+func (f *fakeSkillRevisionService) SetEditors(context.Context, string, string, []string) error {
+	return nil
+}
 
 func newSkillTestRouter(method, path string, handler gin.HandlerFunc) *gin.Engine {
 	gin.SetMode(gin.TestMode)
@@ -72,6 +75,8 @@ func newSkillTestRouter(method, path string, handler gin.HandlerFunc) *gin.Engin
 	switch method {
 	case http.MethodPost:
 		router.POST(path, handler)
+	case http.MethodPut:
+		router.PUT(path, handler)
 	case http.MethodPatch:
 		router.PATCH(path, handler)
 	}
@@ -108,6 +113,20 @@ func TestSkillHandlerRejectsLegacyExecutablePayload(t *testing.T) {
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected missing instruction contract to return 400, got %d", w.Code)
+	}
+}
+
+func TestSkillHandlerSetEditors(t *testing.T) {
+	service := &fakeSkillRevisionService{}
+	handler := NewSkillHandler(service, zap.NewNop())
+	router := newSkillTestRouter(http.MethodPut, "/skills/:id/editors", handler.SetSkillEditors)
+	body := bytes.NewBufferString(`{"editorIds":["user-2","user-3"]}`)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/skills/skill-1/editors", body)
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
 	}
 }
 

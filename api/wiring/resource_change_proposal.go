@@ -37,7 +37,7 @@ type proposalSkillService interface {
 }
 
 type proposalMCPService interface {
-	ConnectServer(context.Context, *mcpdomain.ServerConfig, string) error
+	ConnectServer(context.Context, *mcpdomain.ServerConfig, []string, string) error
 	UpdateServer(context.Context, *mcpdomain.ServerConfig, string) error
 	GetServerConfig(context.Context, string) (*mcpdomain.ServerConfig, error)
 }
@@ -332,7 +332,7 @@ func (a *ResourceChangeProposalAdapters) applyMCPChange(
 		config.Auth = &mcpdomain.AuthConfig{Type: mcpdomain.AuthTypeNone}
 		config.Env = map[string]string{}
 		config.Headers = map[string]string{}
-		if err := a.mcp.ConnectServer(ctx, config, actorID); err != nil {
+		if err := a.mcp.ConnectServer(ctx, config, nil, actorID); err != nil {
 			return agentdomain.ApplyResult{}, definiteApplyError(err)
 		}
 	} else {

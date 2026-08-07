@@ -140,6 +140,22 @@ CREATE INDEX IF NOT EXISTS idx_rca_kind
 CREATE INDEX IF NOT EXISTS idx_rca_tenant
     ON resource_change_audits (tenant_id, created_at DESC);
 
+-- Resource editors: named co-editors (tenant admins/owners) who may update a
+-- resource created by another admin. Only update is granted — delete stays
+-- with the creator/owner. Rows are replaced atomically by the owner-facing
+-- editor-management endpoint and removed in the same transaction as the
+-- resource delete.
+CREATE TABLE IF NOT EXISTS resource_editors (
+    resource_kind TEXT NOT NULL,                -- agent|skill|mcp|knowledge
+    resource_id  TEXT NOT NULL,
+    editor_id    TEXT NOT NULL,
+    created_by   TEXT NOT NULL DEFAULT '',      -- 授权人(creator/owner),审计溯源
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (resource_kind, resource_id, editor_id)
+);
+CREATE INDEX IF NOT EXISTS idx_re_editor
+    ON resource_editors (editor_id);
+
 -- Operation-gate proposals gate member-initiated agent mutations (T8).
 -- fingerprint is the server-computed sha256(agentID|opType|canonicalJSON(payload));
 -- payload_summary is a de-sensitized typed diff shown to reviewers.

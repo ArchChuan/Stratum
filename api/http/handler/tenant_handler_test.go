@@ -31,6 +31,7 @@ type fakeTenantRepo struct {
 	deleted        []string
 	tenantName     string
 	tenantSettings []byte
+	roleFilter     []string
 }
 
 type fakeInvitationRepo struct {
@@ -59,6 +60,19 @@ func (f *fakeTenantRepo) ListMembers(_ context.Context, _ string, limit, offset 
 	f.listLimit = limit
 	f.listOffset = offset
 	return f.members, nil
+}
+
+func (f *fakeTenantRepo) ListMembersByRole(_ context.Context, _ string, roles []string) ([]domain.Member, error) {
+	f.roleFilter = roles
+	var filtered []domain.Member
+	for _, m := range f.members {
+		for _, r := range roles {
+			if m.Role == r {
+				filtered = append(filtered, m)
+			}
+		}
+	}
+	return filtered, nil
 }
 
 func (f *fakeTenantRepo) GetMemberRole(_ context.Context, _, userID string) (string, error) {
@@ -258,6 +272,55 @@ func TestListMembers_appliesPaginationQuery(t *testing.T) {
 	}
 	if resp.Total != 25 || resp.Page != 2 || resp.PageSize != 10 {
 		t.Fatalf("unexpected pagination metadata: %+v", resp)
+	}
+}
+
+func TestListMembers_filtersByRole(t *testing.T) {
+	now := time.Now()
+	repo := &fakeTenantRepo{
+		members: []domain.Member{
+			{UserID: "user-1", GitHubLogin: "alice", Role: "admin", JoinedAt: now},
+			{UserID: "user-2", GitHubLogin: "bob", Role: "owner", JoinedAt: now},
+			{UserID: "user-3", GitHubLogin: "carol", Role: "member", JoinedAt: now},
+		},
+	}
+	h := newTenantHandler(repo)
+	r := setupTenantHandlerRouter(h)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/tenant/members?role=admin,%20owner", nil) //nolint:noctx
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(repo.roleFilter) != 2 {
+		t.Fatalf("expected roles [admin owner] forwarded, got %v", repo.roleFilter)
+	}
+	var resp dto.ListMembersResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	// Role-filtered listing is the editor-candidate set: members only, no pagination.
+	if len(resp.Members) != 2 {
+		t.Fatalf("expected 2 members, got %d", len(resp.Members))
+	}
+	if resp.Total != 2 {
+		t.Fatalf("expected total=2, got %d", resp.Total)
+	}
+}
+
+func TestListMembers_rejectsNonEditorRoleFilter(t *testing.T) {
+	repo := &fakeTenantRepo{members: []domain.Member{}}
+	h := newTenantHandler(repo)
+	r := setupTenantHandlerRouter(h)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/tenant/members?role=member", nil) //nolint:noctx
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

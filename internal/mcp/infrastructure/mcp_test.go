@@ -239,7 +239,7 @@ func TestClientManagerConnectDoesNotBlockReadersWhileDialing(t *testing.T) {
 			ID:        "slow-server",
 			Name:      "Slow Server",
 			Transport: "stdio",
-		}, nil)
+		}, nil, "", nil)
 	}()
 
 	select {
@@ -517,7 +517,7 @@ func TestClientManagerConnectFailsClosedWhenDiscoveryFails(t *testing.T) {
 	manager := NewClientManager(zap.NewNop(), nil, nil, "")
 	client := &revisionClientFake{listToolsErr: errors.New("discovery failed")}
 	manager.clientFactory = func(*MCPServerConfig, *zap.Logger) MCPClient { return client }
-	err := manager.Connect(context.Background(), &MCPServerConfig{ID: "server-1"}, nil)
+	err := manager.Connect(context.Background(), &MCPServerConfig{ID: "server-1"}, nil, "", nil)
 	if err == nil || client.disconnectCalls != 1 || manager.GetClient(context.Background(), "server-1") != nil {
 		t.Fatalf("client=%+v err=%v", client, err)
 	}
@@ -527,7 +527,7 @@ func TestClientManagerConnectFailureAlwaysDisconnects(t *testing.T) {
 	manager := NewClientManager(zap.NewNop(), nil, nil, "")
 	client := &revisionClientFake{connectErr: errors.New("initialize failed")}
 	manager.clientFactory = func(*MCPServerConfig, *zap.Logger) MCPClient { return client }
-	if err := manager.Connect(context.Background(), &MCPServerConfig{ID: "server-1"}, nil); err == nil {
+	if err := manager.Connect(context.Background(), &MCPServerConfig{ID: "server-1"}, nil, "", nil); err == nil {
 		t.Fatal("expected connect failure")
 	}
 	if client.disconnectCalls != 1 || manager.GetClient(context.Background(), "server-1") != nil {
@@ -548,7 +548,7 @@ func TestClientManagerHTTPInitializeFailureClosesPartialClient(t *testing.T) {
 	}
 	err := manager.Connect(context.Background(), &MCPServerConfig{
 		ID: "server-1", Transport: "http", URL: server.URL, Timeout: time.Second,
-	}, nil)
+	}, nil, "", nil)
 	if err == nil || client == nil || client.httpClient != nil || manager.GetClient(context.Background(), "server-1") != nil {
 		t.Fatalf("partial HTTP client not cleaned up: client=%+v err=%v", client, err)
 	}
@@ -761,7 +761,7 @@ func TestPersistConnectNilPool(t *testing.T) {
 		Capabilities: []string{"tools"},
 		Timeout:      30 * time.Second,
 	}
-	_ = m.persistConnect(context.Background(), cfg, nil) // pool=nil → must not panic
+	_ = m.persistConnect(context.Background(), cfg, nil, "", nil) // pool=nil → must not panic
 }
 
 func TestRestoreFromDB_NilPool(t *testing.T) {

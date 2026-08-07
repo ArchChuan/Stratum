@@ -137,6 +137,7 @@ func (h *MCPHandler) RegisterRoutes(router *gin.Engine, mw []gin.HandlerFunc, _ 
 	v1.GET("/servers/:id/resources", h.ListResources)
 	v1.POST("/servers", admin(h.ConnectServer)...)
 	v1.PUT("/servers/:id", admin(h.UpdateServer)...)
+	v1.PUT("/servers/:id/editors", admin(h.SetMCPServerEditors)...)
 	v1.GET("/servers/:id/config", admin(h.GetServerConfig)...)
 	v1.DELETE("/servers/:id", admin(h.DisconnectServer)...)
 	v1.DELETE("/servers/:id/config", admin(h.DeleteServerConfig)...)
@@ -152,7 +153,20 @@ func (h *MCPHandler) GetServerConfig(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.NewMCPServerConfigResponse(cfg))
+	response := dto.NewMCPServerConfigResponse(cfg)
+	if tenantID, ok := tenantIDFromCtx(c); ok {
+		editors, listErr := h.svc.ListEditors(c.Request.Context(), tenantID, c.Param("id"))
+		if listErr != nil {
+			h.logger.Error("failed to list MCP server editors",
+				zap.String("trace_id", middleware.GetTraceID(c)),
+				zap.String("server_id", c.Param("id")),
+				zap.Error(listErr))
+			_ = c.Error(listErr)
+			return
+		}
+		response.Editors = editors
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // UpdateServer PUT /mcp/servers/:id
@@ -209,7 +223,7 @@ func (h *MCPHandler) ConnectServer(c *gin.Context) {
 		respondMissingUser(c)
 		return
 	}
-	if err := h.svc.ConnectServer(context.WithoutCancel(c.Request.Context()), cfg, actorID); err != nil {
+	if err := h.svc.ConnectServer(context.WithoutCancel(c.Request.Context()), cfg, req.Editors, actorID); err != nil {
 		h.logger.Error("failed to connect MCP server",
 			zap.String("trace_id", middleware.GetTraceID(c)),
 			zap.String("server_id", cfg.ID),
@@ -259,6 +273,27 @@ func (h *MCPHandler) DeleteServerConfig(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+}
+
+// SetMCPServerEditors PUT /mcp/servers/:id/editors
+func (h *MCPHandler) SetMCPServerEditors(c *gin.Context) {
+	var req struct {
+		EditorIDs []string `json:"editorIds" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	if err := h.svc.SetEditors(c.Request.Context(), c.Param("id"), actorID, req.EditorIDs); err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "editors updated"})
 }
 
 // ReconnectServer POST /mcp/servers/:id/reconnect

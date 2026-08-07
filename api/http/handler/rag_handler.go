@@ -188,6 +188,7 @@ func (h *RAGHandler) CreateWorkspace(c *gin.Context) {
 		Name:        req.Name,
 		Description: req.Description,
 		Config:      fromDTOConfig(req.Config),
+		Editors:     req.Editors,
 	}, actorID)
 	if err != nil {
 		_ = c.Error(err)
@@ -218,14 +219,21 @@ func (h *RAGHandler) ListWorkspaces(c *gin.Context) {
 
 	out := make([]dto.WorkspaceListItem, 0, len(list))
 	for _, ws := range list {
-		out = append(out, dto.WorkspaceListItem{
+		item := dto.WorkspaceListItem{
 			ID:          ws.ID,
 			Name:        ws.Name,
 			Description: ws.Description,
 			Config:      toDTOConfig(ws.Config),
 			CreatedAt:   ws.CreatedAt,
 			UpdatedAt:   ws.UpdatedAt,
-		})
+		}
+		editors, listErr := h.wsService.ListEditors(c.Request.Context(), tenantID, ws.ID)
+		if listErr != nil {
+			_ = c.Error(listErr)
+			return
+		}
+		item.Editors = editors
+		out = append(out, item)
 	}
 	c.JSON(http.StatusOK, gin.H{"workspaces": out})
 }
@@ -292,6 +300,39 @@ func (h *RAGHandler) GetWorkspaceStats(c *gin.Context) {
 		"config":      toDTOConfig(res.Config),
 		"stats":       res.Stats,
 	})
+}
+
+// SetWorkspaceEditors replaces the editor set of a workspace (PUT
+// /knowledge/workspaces/:name/editors). Only creator/owner may grant editors;
+// each editor id must hold role admin or owner.
+func (h *RAGHandler) SetWorkspaceEditors(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	name := c.Param("name")
+	if name == "" {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("workspace name required")))
+		return
+	}
+	var req struct {
+		EditorIDs []string `json:"editorIds" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	if err := h.wsService.SetEditors(c.Request.Context(), tenantID, name, req.EditorIDs, actorID); err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "editors updated"})
 }
 
 func (h *RAGHandler) DeleteWorkspace(c *gin.Context) {
