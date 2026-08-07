@@ -48,10 +48,35 @@ func TestDecryptSecretMap_legacyPlaintextFailsClosed(t *testing.T) {
 	require.ErrorIs(t, err, crypto.ErrLegacyPlaintext)
 }
 
-func TestDecryptSecretMap_corruptedCiphertextFailsClosed(t *testing.T) {
+func TestDecryptSecretMap_badPrefixPayloadIsLegacy(t *testing.T) {
+	// 带前缀但 payload 不是合法 base64（业务值恰好以 "enc:v1:" 开头）：
+	// 与 crypto.DecryptSecret 语义一致，按无法识别的值返回 ErrLegacyPlaintext。
 	_, err := decryptSecretMap(mcpTestKey, map[string]string{"TOKEN": "enc:v1:garbage!!!"})
-	require.Error(t, err)
-	require.NotErrorIs(t, err, crypto.ErrLegacyPlaintext)
+	require.ErrorIs(t, err, crypto.ErrLegacyPlaintext)
+}
+
+func TestDecryptSecretMap_corruptedCiphertextFailsClosed(t *testing.T) {
+	// 带前缀且 base64 合法但解密失败（密文损坏或 key 不匹配）：必须报错，
+	// 且不得误报为 legacy 提示——legacy 提示意味着"可重新保存恢复"，而这里
+	// 是密文损坏，必须保持 fail closed。
+	var otherKey [32]byte
+	otherKey[0] = 0xFF
+	wrongKey, err := crypto.EncryptSecret(otherKey, "sk-secret")
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name   string
+		stored string
+	}{
+		{name: "valid base64 but truncated", stored: "enc:v1:aGVsbG8="},
+		{name: "wrong key", stored: wrongKey},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := decryptSecretMap(mcpTestKey, map[string]string{"TOKEN": tc.stored})
+			require.Error(t, err)
+			require.NotErrorIs(t, err, crypto.ErrLegacyPlaintext)
+		})
+	}
 }
 
 func TestEncryptAuthConfig_roundTrip(t *testing.T) {
