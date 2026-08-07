@@ -1,8 +1,10 @@
 import { expect, type Page } from '@playwright/test';
 import type { QueryResultRow } from 'pg';
 
-import type { BrowserActor } from '../core/actors';
-import { configureManagedModels, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
+import { restoreActorSession, type BrowserActor } from '../core/actors';
+import {
+  addGeneratedActorMembership, configureManagedModels, requireUUID, withTenantQuery, type DatabasePool,
+} from '../core/database';
 import type { EvidenceRecord } from '../core/evidence';
 
 interface OperationGatePackContext {
@@ -12,6 +14,7 @@ interface OperationGatePackContext {
   evidence: EvidenceRecord;
   webURL: string;
   fixtureURL: string;
+  backendURL: string;
 }
 
 const waitForMutation = (page: Page, path: string | RegExp, method: string) => page.waitForResponse((response) => {
@@ -65,8 +68,10 @@ const createAgentViaUI = async (page: Page, webURL: string, name: string): Promi
  * 消费落地 200 + proposal executed + agent 更新）→ 新内容再次发起（202）→
  * admin 带原因拒绝（rejected + review_note）。proposal 作为审计数据保留。
  */
-export const executeOperationGatePack = async ({ actor, adminActor, pool, evidence, webURL, fixtureURL }: OperationGatePackContext): Promise<string[]> => {
-  const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
+export const executeOperationGatePack = async ({ actor, adminActor, pool, evidence, webURL, fixtureURL, backendURL }: OperationGatePackContext): Promise<string[]> => {
+  // #281 后每个 guest 持有独立沙箱租户：跨 actor fixture 必须落在 admin 租户，
+  // 否则 memberA 看不到 tenantAdmin 创建的 agent。
+  const tenantID = requireUUID(adminActor.tenantID ?? '', 'tenant_id');
   const proposerID = requireUUID(actor.userID ?? '', 'user_id');
   const reviewerID = requireUUID(adminActor.userID ?? '', 'admin_user_id');
   const completed: string[] = [];
@@ -77,7 +82,15 @@ export const executeOperationGatePack = async ({ actor, adminActor, pool, eviden
   let firstProposalID = '';
   let secondProposalID = '';
   try {
-    await configureManagedModels(pool, tenantID, fixtureURL);
+    await configureManagedModels(pool, tenantID, fixtureURL, adminActor.accessToken ?? '', backendURL);
+
+    // ── 0. #281 适配：memberA 加入 admin 租户并换发 member claim 会话 ───────
+    // 幂等 SQL 落成员行（soak 重跑安全）+ 真实 switch-tenant 换发 JWT；owner
+    // claim 的会话会显示管理按钮，看不到"发起自修改"入口，故必须在 member
+    // 角色下发 self-modify 提案。
+    await addGeneratedActorMembership(pool, tenantID, proposerID, 'member');
+    actor.tenantID = tenantID;
+    await restoreActorSession(actor, backendURL);
 
     // ── 1. 管理员创建 E2E agent（模型目录是 admin 路由，member 无法创建） ──
     agentID = await createAgentViaUI(adminPage, webURL, agentName);

@@ -5,7 +5,7 @@ import type { BrowserActor } from '../core/actors';
 import { configureManagedModels, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
 import type { EvidenceRecord } from '../core/evidence';
 
-interface AgentPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string; fixtureURL: string }
+interface AgentPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string; fixtureURL: string; backendURL: string }
 const waitForMutation = (page: Page, path: string, method: string) => page.waitForResponse((response) => {
   const resourceType = response.request().resourceType();
   return (resourceType === 'xhr' || resourceType === 'fetch') &&
@@ -20,7 +20,7 @@ const recordEvidence = (evidence: EvidenceRecord, label: string) => {
   evidence.database.push(`${label} persisted state reconciled`);
 };
 
-export const executeAgentPack = async ({ actor, pool, evidence, webURL, fixtureURL }: AgentPackContext): Promise<string[]> => {
+export const executeAgentPack = async ({ actor, pool, evidence, webURL, fixtureURL, backendURL }: AgentPackContext): Promise<string[]> => {
   const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
   const completed: string[] = [];
   const page = await actor.context.newPage();
@@ -28,7 +28,7 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL, fixtureU
   let agentID = '';
   let conversationID = '';
   try {
-    await configureManagedModels(pool, tenantID, fixtureURL);
+    await configureManagedModels(pool, tenantID, fixtureURL, actor.accessToken ?? '', backendURL);
     const listResponse = waitForMutation(page, '/agents', 'GET');
     await page.goto(`${webURL}/agents`);
     expect((await listResponse).status()).toBe(200);

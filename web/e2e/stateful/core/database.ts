@@ -147,7 +147,60 @@ export const setGeneratedActorVerifiedEmail = async (
   }
 };
 
-export const configureManagedModels = async (pool: DatabasePool, tenantID: string, fixtureURL: string): Promise<void> => {
+// addGeneratedActorMembership makes the actor a member of the target tenant
+// (#281: every guest owns a private sandbox tenant, so cross-actor fixtures
+// must establish membership explicitly). Idempotent for soak re-runs; the
+// actor's session is switched by the caller through the real switch-tenant API.
+export const addGeneratedActorMembership = async (
+  pool: DatabasePool,
+  tenantID: string,
+  userID: string,
+  role: 'member' | 'admin' | 'owner' | 'root',
+): Promise<void> => {
+  requireUUID(tenantID, 'tenant_id');
+  requireUUID(userID, 'user_id');
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `INSERT INTO public.tenant_members (tenant_id, user_id, role)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role
+       RETURNING user_id`,
+      [tenantID, userID, role],
+    );
+    if (result.rowCount !== 1) throw new Error('generated actor membership setup did not affect exactly one row');
+  } finally {
+    client.release();
+  }
+};
+
+// reEncryptProviderKey saves the synthetic provider's api key through the real
+// admin API so the backend performs at-rest encryption itself (#281). Direct
+// SQL would leave a legacy plaintext row that the backend refuses to read.
+const reEncryptProviderKey = async (adminToken: string, backendURL: string, fixtureURL: string): Promise<void> => {
+  const response = await fetch(`${backendURL}/admin/providers/stateful-qwen`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'stateful-qwen',
+      kind: 'openai_compat',
+      baseUrl: `${fixtureURL}/v1`,
+      apiKey: 'stateful-local-provider-key',
+      defaultModel: 'qwen-max',
+    }),
+  });
+  if (response.status !== 200) {
+    throw new Error(`synthetic LLM provider api key resave failed with status ${response.status}`);
+  }
+};
+
+export const configureManagedModels = async (
+  pool: DatabasePool,
+  tenantID: string,
+  fixtureURL: string,
+  adminToken: string,
+  backendURL: string,
+): Promise<void> => {
   requireUUID(tenantID, 'tenant_id');
   const client = await pool.connect();
   let began = false;
@@ -197,6 +250,9 @@ export const configureManagedModels = async (pool: DatabasePool, tenantID: strin
   } finally {
     client.release();
   }
+  // 夹具直写明文 api_key 与 #281 读取端 fail-closed 冲突，须经真实 API 重加密
+  //（模拟用户"重新保存 provider api key"流程），否则 agent 执行读到 legacy plaintext 报错。
+  await reEncryptProviderKey(adminToken, backendURL, fixtureURL);
 };
 
 export const deleteGeneratedActors = async (pool: DatabasePool, userIDs: string[]): Promise<void> => {

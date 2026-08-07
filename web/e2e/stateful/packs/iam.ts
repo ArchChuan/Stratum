@@ -183,6 +183,44 @@ export const executeIAMPack = async ({
     expect(roleRows).toEqual([{ role: 'admin' }]);
     completed.push('iam.mutation.patch.tenant.members.userid.role');
 
+    // Guest 初始 token 的 role claim 是 owner（#281 沙箱租户语义，guest 是自己
+    // 沙箱的 owner）。要验证"member 无邀请权"，memberB 必须真实加入目标租户
+    // 成为 member 后，用 switch-tenant 换发的 member claim token 断言 403。
+    await tenantAdminPage.getByRole('button', { name: /邀请成员/ }).click();
+    await tenantAdminPage.getByLabel('邮箱').fill(actors.memberB.email!);
+    const memberBInviteResponse = waitForMutation(tenantAdminPage, '/tenant/members/invite', 'POST');
+    await tenantAdminPage.getByRole('button', { name: /发送邀请/ }).click();
+    expect((await memberBInviteResponse).status()).toBe(201);
+    const memberBInviteDialog = tenantAdminPage.locator('.ant-modal-content').filter({ hasText: '邀请码已生成' });
+    await expect(memberBInviteDialog).toBeVisible();
+    const memberBInvitationCode = (await memberBInviteDialog.locator('code').innerText()).trim();
+    expect(memberBInvitationCode.length).toBeGreaterThan(20);
+    await memberBInviteDialog.locator('button.ant-modal-close').click();
+    await expect(memberBInviteDialog).toHaveCount(0);
+
+    await memberBPage.goto(`${webURL}/onboarding`);
+    await memberBPage.getByRole('tab', { name: '加入已有租户' }).click();
+    await memberBPage.getByLabel('邀请码').fill(memberBInvitationCode);
+    const memberBJoinResponse = waitForMutation(memberBPage, '/tenant/join', 'POST');
+    const memberBSwitchResponse = waitForMutation(memberBPage, '/auth/switch-tenant', 'POST');
+    await memberBPage.getByRole('button', { name: /加入租户/ }).click();
+    expect((await memberBJoinResponse).status()).toBe(200);
+    expect((await memberBSwitchResponse).status()).toBe(200);
+    await expect(memberBPage).toHaveURL(`${webURL}/`);
+    const memberBMembershipRows = await publicQuery<{ role: string; consumed: boolean }>(pool,
+      `SELECT tm.role, i.consumed_at IS NOT NULL AS consumed
+       FROM public.tenant_members tm
+       JOIN public.tenant_invitations i ON i.tenant_id = tm.tenant_id AND i.consumed_by = tm.user_id
+       WHERE tm.tenant_id = $1 AND tm.user_id = $2`,
+      [targetTenantID, actors.memberB.userID]);
+    expect(memberBMembershipRows).toEqual([{ role: 'member', consumed: true }]);
+    const memberBSwitched = await (await memberBSwitchResponse).json() as { access_token: string };
+    actors.memberB.accessToken = memberBSwitched.access_token;
+    evidence.ui.push('memberB joined and switched tenant from onboarding');
+    evidence.http.push('memberB join and switch-tenant completed successfully');
+    evidence.database.push('memberB membership and atomic invitation consumption reconciled');
+    completed.push('iam.mutation.post.auth.switch.tenant.memberB');
+
     await memberBPage.goto(`${webURL}/tenant/members`);
     await expect(memberBPage.getByRole('button', { name: /邀请成员/ })).toHaveCount(0);
     const denied = await actors.memberB.context.request.post(`${backendURL}/tenant/members/invite`, {

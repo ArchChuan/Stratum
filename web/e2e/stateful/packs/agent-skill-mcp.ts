@@ -6,7 +6,7 @@ import { configureManagedModels, requireUUID, withTenantQuery, type DatabasePool
 import type { EvidenceRecord } from '../core/evidence';
 import { openAgentCreation } from '../core/navigation';
 
-interface CrossPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string; fixtureURL: string }
+interface CrossPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string; fixtureURL: string; backendURL: string }
 const waitForMutation = (page: Page, path: string, method: string) => page.waitForResponse((response) => (
   new URL(response.url()).pathname === path && response.request().method() === method
 ));
@@ -38,10 +38,10 @@ const findServerRow = async (page: Page, serverName: string) => {
 };
 
 export const executeAgentSkillMCPPack = async ({
-  actor, pool, evidence, webURL, fixtureURL,
+  actor, pool, evidence, webURL, fixtureURL, backendURL,
 }: CrossPackContext): Promise<string[]> => {
   const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
-  await configureManagedModels(pool, tenantID, fixtureURL);
+  await configureManagedModels(pool, tenantID, fixtureURL, actor.accessToken ?? '', backendURL);
   const page = await actor.context.newPage();
   const suffix = Date.now();
   const serverName = `E2E-Cross-MCP-${suffix}`;
