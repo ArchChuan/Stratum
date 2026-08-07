@@ -70,6 +70,15 @@ func (r *resolverProviderRepo) Get(_ context.Context, _, id string) (*llmdomain.
 	}
 	return provider, nil
 }
+func (r *resolverProviderRepo) GetMeta(ctx context.Context, tenantID, id string) (*llmdomain.Provider, error) {
+	provider, err := r.Get(ctx, tenantID, id)
+	if err != nil {
+		return nil, err
+	}
+	cp := *provider
+	cp.APIKey = ""
+	return &cp, nil
+}
 func (r *resolverProviderRepo) List(context.Context, string) ([]llmdomain.Provider, error) {
 	return nil, nil
 }

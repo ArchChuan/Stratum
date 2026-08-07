@@ -10,6 +10,30 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// ErrCollectionNotFound is returned when a Milvus collection does not exist.
+// Callers decide the business semantics with errors.Is: RAG retrieval paths
+// fail closed on it (a missing collection with documents in PG is drift),
+// while lazy-provisioned memory paths translate it to an empty result. The
+// message keeps the "collection not found" wording so legacy string-based
+// classification at callers still matches.
+var ErrCollectionNotFound = errors.New("milvus collection not found")
+
+// isCollectionNotFound reports whether err means the collection itself is
+// missing. "index not found" deliberately does not match: that means the
+// collection exists but cannot be loaded, which must surface as a real error
+// instead of masquerading as empty data.
+func isCollectionNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrCollectionNotFound) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "collection not found") ||
+		strings.Contains(msg, "does not exist")
+}
+
 // UnavailableError identifies a transient Milvus availability failure.
 type UnavailableError struct {
 	Op  string

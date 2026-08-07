@@ -59,6 +59,26 @@ func isPermanent(err error) bool {
 	return errors.As(err, &perm) && perm.Permanent()
 }
 
+// streamReplayError 标记「已向客户端输出过 token 后失败」的错误：图级重试会
+// 再次全量推流，前端得到重复/错乱内容（截断时 token 已逐 token 推给前端）。
+// 按永久错误处理，只允许「首 token 尚未输出」的失败重试。
+type streamReplayError struct{ err error }
+
+func (e *streamReplayError) Error() string { return e.err.Error() }
+func (e *streamReplayError) Unwrap() error { return e.err }
+
+// Permanent 实现 permanentMarker 接口，供 RetryFn 判定不重试。
+func (e *streamReplayError) Permanent() bool { return true }
+
+// markStreamReplayPermanent 包装 err 为永久错误（保留 errors.Is/As 语义），
+// 禁止 RetryFn 对已输出内容的流重试。
+func markStreamReplayPermanent(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &streamReplayError{err: err}
+}
+
 // backoffDelay 等待 delay 后返回下一次退避时长（倍增，cap 于 max）。
 // ctx 取消时返回 abort=true，调用方应立即中止。
 func backoffDelay(ctx context.Context, delay, max time.Duration) (abort bool, next time.Duration) {

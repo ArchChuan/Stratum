@@ -69,7 +69,9 @@ const (
 	MemoryFetchBackoffBase = 200 * time.Millisecond
 	// MemoryFetchBackoffMax 退避上限。
 	MemoryFetchBackoffMax = 10 * time.Second
-	// MemoryOutboxPublishTimeout 限制 NATS Publish 在 DB 事务内的最长阻塞时间，防止 NATS 慢/断连时事务持锁过久。
+	// MemoryOutboxPublishTimeout 限制单次 NATS Publish 的最长阻塞时间。
+	// Publish 在 outbox 取出行事务提交后执行（事务内禁止网络 IO），
+	// 该超时防止 NATS 慢/断连时 poll 循环卡死。
 	MemoryOutboxPublishTimeout = 3 * time.Second
 	// MemoryEnrichLLMTimeout 富化阶段 LLM 调用上限。
 	MemoryEnrichLLMTimeout = 30 * time.Second

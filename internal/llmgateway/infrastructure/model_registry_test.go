@@ -85,6 +85,19 @@ func (m *mockProviderRepo) Get(ctx context.Context, tenantID, id string) (*domai
 	return p, nil
 }
 
+func (m *mockProviderRepo) GetMeta(ctx context.Context, tenantID, id string) (*domain.Provider, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	p, ok := m.providers[id]
+	if !ok {
+		return nil, errors.New("provider not found")
+	}
+	cp := *p
+	cp.APIKey = ""
+	return &cp, nil
+}
+
 func (m *mockProviderRepo) Create(ctx context.Context, tenantID string, p *domain.Provider) error {
 	return m.err
 }

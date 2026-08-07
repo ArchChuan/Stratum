@@ -395,8 +395,16 @@ func (s *PgStore) getRun(ctx context.Context, tenantID, query, arg string) (*dom
 
 func (s *PgStore) UpdateRun(ctx context.Context, tenantID string, r *domain.Run) error {
 	return s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status=$1,output_text=$2,error_message=$3,generation=$4,pause_reason=$5,cancel_reason=$6,manual_reason=$7,updated_at=NOW(),started_at=CASE WHEN $1='running' THEN COALESCE(started_at,NOW()) ELSE started_at END,finished_at=CASE WHEN $1 IN ('completed','failed','canceled') THEN NOW() ELSE finished_at END WHERE id=$8`, r.Status, r.Output, r.ErrorMessage, r.Generation, r.PauseReason, r.CancelReason, r.ManualReason, r.ID)
-		return err
+		tag, err := tx.Exec(ctx, `UPDATE workflow_runs SET status=$1,output_text=$2,error_message=$3,pause_reason=$4,cancel_reason=$5,manual_reason=$6,updated_at=NOW(),generation=generation+1,started_at=CASE WHEN $1='running' THEN COALESCE(started_at,NOW()) ELSE started_at END,finished_at=CASE WHEN $1 IN ('completed','failed','canceled') THEN NOW() ELSE finished_at END WHERE id=$7 AND generation=$8`, r.Status, r.Output, r.ErrorMessage, r.PauseReason, r.CancelReason, r.ManualReason, r.ID, r.Generation)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			// 乐观锁：generation 不匹配说明并发 worker/控制操作已推进 run,
+			// 当前更新基于过期状态,必须显式失败由调用方决定重试或放弃。
+			return domain.ErrGenerationConflict
+		}
+		return nil
 	})
 }
 

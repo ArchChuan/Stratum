@@ -54,7 +54,7 @@ func (r *forwardingOnboardRepo) GetTenantRole(_ context.Context, userID, tenantI
 func (r *forwardingOnboardRepo) IsMember(_ context.Context, userID, tenantID string) (bool, error) {
 	return r.found, nil
 }
-func (r *forwardingOnboardRepo) CreateGuestInDefaultTenant(_ context.Context, githubID, githubLogin, avatarURL string, expiresAt time.Time) (string, string, error) {
+func (r *forwardingOnboardRepo) CreateGuestSandboxTenant(_ context.Context, githubID, githubLogin, avatarURL string, expiresAt time.Time) (string, string, error) {
 	r.guestID, r.guestLogin, r.guestExpiresAt = githubID, githubLogin, expiresAt
 	return "guest-uuid", "tenant-1", r.guestErr
 }

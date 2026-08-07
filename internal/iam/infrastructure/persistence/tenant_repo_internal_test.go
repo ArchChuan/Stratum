@@ -250,5 +250,44 @@ func TestTenantRepo_ListMembers_QueryFailsWrapped(t *testing.T) {
 	require.ErrorIs(t, err, errAny)
 }
 
+func TestTenantRepo_ListActiveTenantIDs(t *testing.T) {
+	repo, mock := newTenantRepo(t)
+	mock.ExpectQuery(`SELECT id FROM public.tenants WHERE deleted_at IS NULL`).
+		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("t1").AddRow("t2"))
+
+	ids, err := repo.ListActiveTenantIDs(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{"t1", "t2"}, ids)
+}
+
+func TestTenantRepo_ListActiveTenantIDs_EmptyIsNonNil(t *testing.T) {
+	repo, mock := newTenantRepo(t)
+	mock.ExpectQuery(`SELECT id FROM public.tenants WHERE deleted_at IS NULL`).
+		WillReturnRows(pgxmock.NewRows([]string{"id"}))
+
+	ids, err := repo.ListActiveTenantIDs(context.Background())
+	require.NoError(t, err)
+	require.Nil(t, ids) // 产品实现：零行返回 nil 切片
+	require.Empty(t, ids)
+}
+
+func TestTenantRepo_ListActiveTenantIDs_QueryFails(t *testing.T) {
+	repo, mock := newTenantRepo(t)
+	mock.ExpectQuery(`SELECT id FROM public.tenants WHERE deleted_at IS NULL`).
+		WillReturnError(errAny)
+
+	_, err := repo.ListActiveTenantIDs(context.Background())
+	require.ErrorContains(t, err, "list active tenant ids")
+}
+
+func TestTenantRepo_ListActiveTenantIDs_ScanFails(t *testing.T) {
+	repo, mock := newTenantRepo(t)
+	mock.ExpectQuery(`SELECT id FROM public.tenants WHERE deleted_at IS NULL`).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "extra"}).AddRow("t1", "x"))
+
+	_, err := repo.ListActiveTenantIDs(context.Background())
+	require.ErrorContains(t, err, "scan active tenant id")
+}
+
 // pgxErrNoRows 返回 pgx.ErrNoRows 本体，保证 errors.Is 分支被真实命中。
 func pgxErrNoRows() error { return pgx.ErrNoRows }

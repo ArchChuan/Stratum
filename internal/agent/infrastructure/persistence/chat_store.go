@@ -15,11 +15,11 @@ import (
 	"io"
 	"regexp"
 	"strings"
-	"unicode"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/safetext"
+	pgstore "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
@@ -31,6 +31,11 @@ type chatPoolIface interface {
 }
 
 // PgChatStore implements port.ChatRepo using pgxpool with per-tenant search_path.
+//
+// Tenant-scoped transactions go through pkg/storage/postgres.ExecTenantWith so
+// tenantID validation (only [a-z0-9_-], shared with every other repository) and
+// nested-transaction support are the single canonical implementation — no
+// per-repository copy of the boundary.
 type PgChatStore struct {
 	pool   chatPoolIface
 	logger *zap.Logger
@@ -44,41 +49,17 @@ func NewPgChatStore(pool *pgxpool.Pool, logger *zap.Logger) *PgChatStore {
 	return &PgChatStore{pool: pool, logger: logger}
 }
 
-// execTenantID runs fn in a transaction scoped to tenant_{id}'s search_path.
+// execTenantID is a thin package-level alias kept for checkpoint and
+// tool-approval stores that share this package. Validation and transaction
+// policy live in pkg/storage/postgres.ExecTenantWith only — this must stay a
+// one-line delegation, never a second implementation of the boundary.
 func execTenantID(ctx context.Context, pool chatPoolIface, tenantID string, fn func(context.Context, pgx.Tx) error) error {
-	if tenantID == "" {
-		return fmt.Errorf("chat_store: empty tenant_id")
-	}
-	for _, r := range tenantID {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' && r != '_' {
-			return fmt.Errorf("chat_store: invalid tenant_id %q", tenantID)
-		}
-	}
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("chat_store: begin tx: %w", err)
-	}
-	defer func() {
-		if p := recover(); p != nil {
-			_ = tx.Rollback(ctx)
-			panic(p)
-		}
-	}()
-	schema := "tenant_" + tenantID
-	if _, err = tx.Exec(ctx, fmt.Sprintf(`SET LOCAL search_path = "%s", public`, schema)); err != nil {
-		_ = tx.Rollback(ctx)
-		return fmt.Errorf("chat_store: set search_path: %w", err)
-	}
-	if err = fn(ctx, tx); err != nil {
-		_ = tx.Rollback(ctx)
-		return err
-	}
-	return tx.Commit(ctx)
+	return pgstore.ExecTenantWith(ctx, pool, tenantID, fn)
 }
 
 func (s *PgChatStore) GetConversation(ctx context.Context, tenantID, convID string) (*domain.ChatConversation, error) {
 	var conv domain.ChatConversation
-	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+	err := pgstore.ExecTenantWith(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
 			`SELECT id, agent_id, user_id, name, created_at, updated_at, expires_at
 			 FROM chat_conversations WHERE id = $1 AND deleted_at IS NULL`,
@@ -94,7 +75,7 @@ func (s *PgChatStore) GetConversation(ctx context.Context, tenantID, convID stri
 
 func (s *PgChatStore) CreateConversation(ctx context.Context, tenantID, agentID, userID, name string) (*domain.ChatConversation, error) {
 	var conv domain.ChatConversation
-	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+	err := pgstore.ExecTenantWith(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
 			`INSERT INTO chat_conversations (agent_id, user_id, name)
 			 VALUES ($1, $2, $3)
@@ -111,7 +92,7 @@ func (s *PgChatStore) CreateConversation(ctx context.Context, tenantID, agentID,
 
 func (s *PgChatStore) ListConversations(ctx context.Context, tenantID, agentID, userID string) ([]*domain.ChatConversation, error) {
 	var out []*domain.ChatConversation
-	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+	err := pgstore.ExecTenantWith(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
 			`SELECT id, agent_id, user_id, name, created_at, updated_at, expires_at
 			 FROM chat_conversations
@@ -140,7 +121,7 @@ func (s *PgChatStore) ListConversations(ctx context.Context, tenantID, agentID, 
 }
 
 func (s *PgChatStore) RenameConversation(ctx context.Context, tenantID, convID, userID, name string) error {
-	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+	err := pgstore.ExecTenantWith(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx,
 			`UPDATE chat_conversations SET name=$1, updated_at=NOW()
 			 WHERE id=$2 AND user_id=$3`,
@@ -164,7 +145,7 @@ func (s *PgChatStore) RenameConversation(ctx context.Context, tenantID, convID, 
 }
 
 func (s *PgChatStore) DeleteConversation(ctx context.Context, tenantID, convID, userID string) error {
-	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+	err := pgstore.ExecTenantWith(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
 			`DELETE FROM chat_messages WHERE conversation_id = $1`,
 			convID,
@@ -208,7 +189,7 @@ func (s *PgChatStore) AddMessage(ctx context.Context, tenantID string, msg *doma
 	}
 	var outboxQueued bool
 	var outboxSkipReason string
-	err = execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+	err = pgstore.ExecTenantWith(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
 			`UPDATE chat_conversations
 			 SET updated_at=NOW(), expires_at=NOW()+INTERVAL '30 days'
@@ -302,7 +283,7 @@ func describeOutboxSkip(role, content string) string {
 
 func (s *PgChatStore) ListMessages(ctx context.Context, tenantID, convID, userID string) ([]*domain.ChatMessage, error) {
 	var out []*domain.ChatMessage
-	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+	err := pgstore.ExecTenantWith(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
 			`SELECT m.id, m.conversation_id, m.role, m.content, m.steps_json, m.is_error, m.created_at, m.artifacts_json, m.visibility
 			 FROM chat_messages m
@@ -472,7 +453,7 @@ func normalizeDiagnosticReport(report *domain.DiagnosticReport) {
 }
 
 func (s *PgChatStore) DeleteByAgent(ctx context.Context, tenantID, agentID string) error {
-	return execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+	return pgstore.ExecTenantWith(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
 			`DELETE FROM chat_messages WHERE conversation_id IN (SELECT id FROM chat_conversations WHERE agent_id = $1)`,
 			agentID); err != nil {
@@ -484,7 +465,7 @@ func (s *PgChatStore) DeleteByAgent(ctx context.Context, tenantID, agentID strin
 }
 
 func (s *PgChatStore) CleanupExpired(ctx context.Context, tenantID string) error {
-	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+	err := pgstore.ExecTenantWith(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
 			`DELETE FROM chat_conversations
 			 WHERE expires_at < NOW()

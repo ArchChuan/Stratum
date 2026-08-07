@@ -48,11 +48,16 @@ func (r *PgAuditRepo) InsertBatch(ctx context.Context, events []domain.AuditEven
 		// Redact credentials from JSON snapshots before persisting.
 		before := redactJSON(e.Before)
 		after := redactJSON(e.After)
+		// ON CONFLICT DO NOTHING makes the write idempotent: the batch writer
+		// retries the whole batch after a failure, and a batch-level autocommit
+		// can be partially persisted before the connection drops. Without this,
+		// the retry would fail permanently on the already-inserted IDs.
 		batch.Queue(
 			`INSERT INTO public.audit_events
 			 (id, tenant_id, actor_id, actor_type, action, resource_type, resource_id,
 			  before, after, request_id, trace_id, risk_level, outcome, occurred_at)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+			 ON CONFLICT (id) DO NOTHING`,
 			e.ID, e.TenantID, e.Actor.ActorID, string(e.Actor.ActorType),
 			e.Action, e.ResourceType, e.ResourceID,
 			before, after, e.RequestID, e.TraceID,
@@ -168,14 +173,19 @@ func (r *PgAuditRepo) Query(ctx context.Context, f domain.AuditFilter) ([]domain
 	return events, rows.Err()
 }
 
-// GetByID returns a single event or nil.
-func (r *PgAuditRepo) GetByID(ctx context.Context, id string) (*domain.AuditEvent, error) {
+// GetByID returns a single event or nil, scoped to the caller's tenant.
+// An empty tenantID fails closed: a query without a tenant condition would
+// expose other tenants' audit events (cross-tenant IDOR).
+func (r *PgAuditRepo) GetByID(ctx context.Context, tenantID string, id string) (*domain.AuditEvent, error) {
+	if tenantID == "" {
+		return nil, fmt.Errorf("audit: get by id: tenant id required")
+	}
 	var e domain.AuditEvent
 	var actorType string
 	err := r.pool.QueryRow(ctx,
 		`SELECT id, tenant_id, actor_id, actor_type, action, resource_type, resource_id,
 		        before, after, request_id, trace_id, risk_level, outcome, occurred_at
-		 FROM public.audit_events WHERE id = $1`, id,
+		 FROM public.audit_events WHERE id = $1 AND tenant_id = $2`, id, tenantID,
 	).Scan(
 		&e.ID, &e.TenantID, &e.Actor.ActorID, &actorType,
 		&e.Action, &e.ResourceType, &e.ResourceID,

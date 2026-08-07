@@ -61,6 +61,11 @@ func (r *knowledgeProviderRepo) Get(context.Context, string, string) (*domain.Pr
 	provider := r.provider
 	return &provider, nil
 }
+func (r *knowledgeProviderRepo) GetMeta(ctx context.Context, tenantID, id string) (*domain.Provider, error) {
+	provider := r.provider
+	provider.APIKey = ""
+	return &provider, nil
+}
 func (r *knowledgeProviderRepo) Update(context.Context, string, *domain.Provider) error { return nil }
 func (r *knowledgeProviderRepo) List(context.Context, string) ([]domain.Provider, error) {
 	return []domain.Provider{r.provider}, nil

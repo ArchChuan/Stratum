@@ -18,7 +18,7 @@ import (
 
 type fakeAuditQueryService struct {
 	queryFn   func(ctx context.Context, filter domain.AuditFilter) ([]domain.AuditEvent, error)
-	getByIDFn func(ctx context.Context, id string) (*domain.AuditEvent, error)
+	getByIDFn func(ctx context.Context, tenantID, id string) (*domain.AuditEvent, error)
 }
 
 func (f *fakeAuditQueryService) Query(ctx context.Context, filter domain.AuditFilter) ([]domain.AuditEvent, error) {
@@ -28,9 +28,9 @@ func (f *fakeAuditQueryService) Query(ctx context.Context, filter domain.AuditFi
 	return nil, nil
 }
 
-func (f *fakeAuditQueryService) GetByID(ctx context.Context, id string) (*domain.AuditEvent, error) {
+func (f *fakeAuditQueryService) GetByID(ctx context.Context, tenantID, id string) (*domain.AuditEvent, error) {
 	if f.getByIDFn != nil {
-		return f.getByIDFn(ctx, id)
+		return f.getByIDFn(ctx, tenantID, id)
 	}
 	return nil, nil
 }
@@ -120,7 +120,10 @@ func TestAuditHandler_ListEvents_RepoError(t *testing.T) {
 
 func TestAuditHandler_GetEvent_Found(t *testing.T) {
 	q := &fakeAuditQueryService{
-		getByIDFn: func(_ context.Context, id string) (*domain.AuditEvent, error) {
+		getByIDFn: func(_ context.Context, tenantID, id string) (*domain.AuditEvent, error) {
+			if tenantID != "t1" {
+				t.Errorf("tenantID=%q, want t1 (caller tenant must scope the read)", tenantID)
+			}
 			return &domain.AuditEvent{ID: id, Action: "POST /test"}, nil
 		},
 	}
@@ -144,7 +147,7 @@ func TestAuditHandler_GetEvent_Found(t *testing.T) {
 
 func TestAuditHandler_GetEvent_NotFound(t *testing.T) {
 	q := &fakeAuditQueryService{
-		getByIDFn: func(_ context.Context, id string) (*domain.AuditEvent, error) {
+		getByIDFn: func(_ context.Context, _, id string) (*domain.AuditEvent, error) {
 			return nil, nil
 		},
 	}
@@ -161,7 +164,7 @@ func TestAuditHandler_GetEvent_NotFound(t *testing.T) {
 
 func TestAuditHandler_GetEvent_RepoError(t *testing.T) {
 	q := &fakeAuditQueryService{
-		getByIDFn: func(_ context.Context, id string) (*domain.AuditEvent, error) {
+		getByIDFn: func(_ context.Context, _, id string) (*domain.AuditEvent, error) {
 			return nil, errors.New("db down")
 		},
 	}
@@ -173,5 +176,52 @@ func TestAuditHandler_GetEvent_RepoError(t *testing.T) {
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d, want 500", w.Code)
+	}
+}
+
+// setupAuditRouterWithoutTenant 不写 auth.tenant_id（模拟 middleware 缺 key）：
+// handler 必须 fail closed 返回 401，而不是对 type assertion panic。
+func setupAuditRouterWithoutTenant(q auditport.AuditQueryService) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	h := handler.NewAuditHandler(q, zap.NewNop())
+	audit := r.Group("/audit")
+	{
+		audit.GET("/events", h.ListEvents)
+		audit.GET("/events/:id", h.GetEvent)
+	}
+	return r
+}
+
+func TestAuditHandler_MissingTenant_FailsClosed(t *testing.T) {
+	q := &fakeAuditQueryService{
+		queryFn: func(_ context.Context, _ domain.AuditFilter) ([]domain.AuditEvent, error) {
+			t.Error("Query must not be called without a tenant")
+			return nil, nil
+		},
+		getByIDFn: func(_ context.Context, _, _ string) (*domain.AuditEvent, error) {
+			t.Error("GetByID must not be called without a tenant")
+			return nil, nil
+		},
+	}
+	r := setupAuditRouterWithoutTenant(q)
+
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{name: "list", path: "/audit/events"},
+		{name: "get", path: "/audit/events/evt-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil) //nolint:noctx
+			w := httptest.NewRecorder()
+			// 断言不 panic：旧实现对 tid.(string) 直接断言，缺 key 时 panic。
+			r.ServeHTTP(w, req)
+			if w.Code != http.StatusUnauthorized {
+				t.Fatalf("status=%d, want 401 (fail closed)", w.Code)
+			}
+		})
 	}
 }

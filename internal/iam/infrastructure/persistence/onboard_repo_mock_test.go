@@ -567,9 +567,9 @@ func TestIsMember_queryFails(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// --- CreateGuestInDefaultTenant (with retry) ---
+// --- CreateGuestSandboxTenant (with retry) ---
 
-func TestCreateGuestInDefaultTenant_success(t *testing.T) {
+func TestCreateGuestSandboxTenant_success(t *testing.T) {
 	mock := newIAMMock(t)
 	repo := NewOnboardRepo(mock)
 
@@ -578,21 +578,22 @@ func TestCreateGuestInDefaultTenant_success(t *testing.T) {
 	mock.ExpectQuery("INSERT INTO users").
 		WithArgs("guest:g1", "guest-login", "http://avatar", expires).
 		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("g1"))
-	mock.ExpectQuery("WHERE is_default = true").
-		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("t1"))
+	mock.ExpectExec("INSERT INTO tenants").
+		WithArgs(pgxmock.AnyArg(), "guest-login", pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO tenant_members").
-		WithArgs("t1", "g1").
+		WithArgs(pgxmock.AnyArg(), "g1").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
-	uid, tid, err := repo.CreateGuestInDefaultTenant(context.Background(), "guest:g1", "guest-login", "http://avatar", expires)
+	uid, tid, err := repo.CreateGuestSandboxTenant(context.Background(), "guest:g1", "guest-login", "http://avatar", expires)
 	require.NoError(t, err)
 	require.Equal(t, "g1", uid)
-	require.Equal(t, "t1", tid)
+	require.NotEmpty(t, tid)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestCreateGuestInDefaultTenant_retriesOnSerialization(t *testing.T) {
+func TestCreateGuestSandboxTenant_retriesOnSerialization(t *testing.T) {
 	mock := newIAMMock(t)
 	repo := NewOnboardRepo(mock)
 
@@ -608,21 +609,22 @@ func TestCreateGuestInDefaultTenant_retriesOnSerialization(t *testing.T) {
 	mock.ExpectQuery("INSERT INTO users").
 		WithArgs("guest:g1", "guest-login", "http://avatar", expires).
 		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("g1"))
-	mock.ExpectQuery("WHERE is_default = true").
-		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("t1"))
+	mock.ExpectExec("INSERT INTO tenants").
+		WithArgs(pgxmock.AnyArg(), "guest-login", pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO tenant_members").
-		WithArgs("t1", "g1").
+		WithArgs(pgxmock.AnyArg(), "g1").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
-	uid, tid, err := repo.CreateGuestInDefaultTenant(context.Background(), "guest:g1", "guest-login", "http://avatar", expires)
+	uid, tid, err := repo.CreateGuestSandboxTenant(context.Background(), "guest:g1", "guest-login", "http://avatar", expires)
 	require.NoError(t, err)
 	require.Equal(t, "g1", uid)
-	require.Equal(t, "t1", tid)
+	require.NotEmpty(t, tid)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestCreateGuestInDefaultTenant_nonRetryable(t *testing.T) {
+func TestCreateGuestSandboxTenant_nonRetryable(t *testing.T) {
 	mock := newIAMMock(t)
 	repo := NewOnboardRepo(mock)
 
@@ -633,7 +635,7 @@ func TestCreateGuestInDefaultTenant_nonRetryable(t *testing.T) {
 		WillReturnError(pgErr("23505"))
 	mock.ExpectRollback()
 
-	_, _, err := repo.CreateGuestInDefaultTenant(context.Background(), "guest:g1", "l", "a", time.Now())
+	_, _, err := repo.CreateGuestSandboxTenant(context.Background(), "guest:g1", "l", "a", time.Now())
 	require.ErrorContains(t, err, "insert guest user")
 	require.NoError(t, mock.ExpectationsWereMet())
 }

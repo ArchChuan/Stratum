@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
+	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -38,6 +40,46 @@ func TestPublicErrorRetainsNonServerError(t *testing.T) {
 	want := PublicErrorDescriptor{Message: "invalid request"}
 	if got != want {
 		t.Fatalf("DescribePublicError() = %#v, want %#v", got, want)
+	}
+}
+
+func TestPublicErrorHidesUpstreamBaseURL(t *testing.T) {
+	// The wrapped error carries the internal provider BaseURL; the public
+	// message must be a fixed string that never echoes it back.
+	err := fmt.Errorf("anthropic: POST http://10.0.0.5:8080/v1/messages 返回 401，"+
+		"请检查 API Key 与 Base URL 是否正确: %w", llmgatewaydomain.ErrUpstreamRequestFailed)
+
+	got := DescribePublicError(err, http.StatusBadGateway)
+	want := PublicErrorDescriptor{Message: "上游模型服务请求失败，请稍后重试"}
+	if got != want {
+		t.Fatalf("DescribePublicError() = %#v, want %#v", got, want)
+	}
+	if strings.Contains(got.Message, "10.0.0.5") || strings.Contains(got.Message, "http") {
+		t.Fatalf("public message leaks internal URL: %q", got.Message)
+	}
+}
+
+func TestErrorHandlerDoesNotLeakUpstreamBaseURL(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(ErrorHandler(zap.NewNop()))
+	router.GET("/complete", func(c *gin.Context) {
+		_ = c.Error(fmt.Errorf("anthropic: POST http://10.0.0.5:8080/v1/messages 返回 401，"+
+			"请检查 API Key 与 Base URL 是否正确: %w", llmgatewaydomain.ErrUpstreamRequestFailed))
+	})
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/complete", nil))
+
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadGateway)
+	}
+	wantBody := "{\"error\":\"上游模型服务请求失败，请稍后重试\"}"
+	if response.Body.String() != wantBody {
+		t.Fatalf("body = %q, want %q", response.Body.String(), wantBody)
+	}
+	if strings.Contains(response.Body.String(), "10.0.0.5") {
+		t.Fatalf("response leaks internal BaseURL: %s", response.Body.String())
 	}
 }
 

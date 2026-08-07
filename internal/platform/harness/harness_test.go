@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -303,5 +304,65 @@ func TestHarnessRunStartError(t *testing.T) {
 
 	if err == nil {
 		t.Error("expected error from component start")
+	}
+}
+
+func TestHarnessRunStopUsesLiveContext(t *testing.T) {
+	// 回归：Run 曾把已取消的 run ctx 传给 Stop，导致组件关闭逻辑
+	// （http.Server.Shutdown、worker 等待等）立即失败/跳过。
+	logger := zap.NewNop()
+	h := New(logger)
+
+	stopResult := make(chan error, 1)
+	comp := NewSimpleComponent("live-stop-ctx", logger,
+		WithStopFunc(func(ctx context.Context) error {
+			stopResult <- ctx.Err()
+			return nil
+		}),
+	)
+	_ = h.Register(comp)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	start := time.Now()
+	if err := h.Run(ctx); err != context.Canceled {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("shutdown took %v, expected well within budget", elapsed)
+	}
+	select {
+	case err := <-stopResult:
+		if err != nil {
+			t.Fatalf("Stop received cancelled ctx: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop was never called")
+	}
+}
+
+func TestHarnessWaitForGroup(t *testing.T) {
+	ctx := context.Background()
+
+	// 已排空的 WaitGroup 立即返回 nil。
+	wgDrained := &sync.WaitGroup{}
+	if err := WaitForGroup(ctx, wgDrained); err != nil {
+		t.Fatalf("drained group: expected nil, got %v", err)
+	}
+
+	// 未排空且 ctx 到期 → 返回错误（关停预算耗尽被暴露）。
+	wgPending := &sync.WaitGroup{}
+	wgPending.Add(1)
+	go func() {
+		defer wgPending.Done()
+		time.Sleep(200 * time.Millisecond)
+	}()
+	deadlineCtx, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+	defer cancel()
+	if err := WaitForGroup(deadlineCtx, wgPending); err == nil {
+		t.Fatal("expected error when group not drained before ctx expiry")
 	}
 }

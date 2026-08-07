@@ -5,6 +5,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+
+	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 
 func TestNewQwenClient(t *testing.T) {
@@ -18,5 +20,5 @@ func TestNewQwenClient(t *testing.T) {
 
 func TestRepoConstructors(t *testing.T) {
 	require.NotNil(t, NewPgModelRepo(nil))
-	require.NotNil(t, NewPgProviderRepo(nil))
+	require.NotNil(t, NewPgProviderRepo(nil, testAESKey, zap.NewNop(), observability.NoopMetrics{}))
 }

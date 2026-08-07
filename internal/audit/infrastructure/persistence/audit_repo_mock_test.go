@@ -241,15 +241,16 @@ func TestPgAuditRepo_GetByID_found(t *testing.T) {
 	repo := &PgAuditRepo{pool: mock}
 	now := time.Now()
 
+	// The query must be scoped by tenant_id — an un-scoped read would be IDOR.
 	mock.ExpectQuery("FROM public.audit_events WHERE id").
-		WithArgs("ev-1").
+		WithArgs("ev-1", "t1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant_id", "actor_id", "actor_type", "action", "resource_type", "resource_id",
 			"before", "after", "request_id", "trace_id", "risk_level", "outcome", "occurred_at",
 		}).AddRow("ev-1", "t1", "a1", "service", "update", "prompt", "r1",
 			[]byte(`{}`), []byte(`{}`), "req-1", "trace-1", "high", "success", now))
 
-	e, err := repo.GetByID(context.Background(), "ev-1")
+	e, err := repo.GetByID(context.Background(), "t1", "ev-1")
 	require.NoError(t, err)
 	require.NotNil(t, e)
 	require.Equal(t, "ev-1", e.ID)
@@ -262,10 +263,10 @@ func TestPgAuditRepo_GetByID_notFound(t *testing.T) {
 	repo := &PgAuditRepo{pool: mock}
 
 	mock.ExpectQuery("FROM public.audit_events WHERE id").
-		WithArgs("missing").
+		WithArgs("missing", "t1").
 		WillReturnError(pgx.ErrNoRows)
 
-	e, err := repo.GetByID(context.Background(), "missing")
+	e, err := repo.GetByID(context.Background(), "t1", "missing")
 	require.NoError(t, err)
 	require.Nil(t, e)
 }
@@ -275,11 +276,23 @@ func TestPgAuditRepo_GetByID_queryFails(t *testing.T) {
 	repo := &PgAuditRepo{pool: mock}
 
 	mock.ExpectQuery("FROM public.audit_events WHERE id").
-		WithArgs("ev-1").
+		WithArgs("ev-1", "t1").
 		WillReturnError(pgx.ErrTxClosed)
 
-	_, err := repo.GetByID(context.Background(), "ev-1")
+	_, err := repo.GetByID(context.Background(), "t1", "ev-1")
 	require.ErrorContains(t, err, "audit: get by id")
+}
+
+// TestPgAuditRepo_GetByID_emptyTenantID_failsClosed guards against dropping
+// the tenant condition: an empty tenantID must refuse the query outright.
+func TestPgAuditRepo_GetByID_emptyTenantID_failsClosed(t *testing.T) {
+	mock := newAuditMock(t)
+	repo := &PgAuditRepo{pool: mock}
+
+	e, err := repo.GetByID(context.Background(), "", "ev-1")
+	require.ErrorContains(t, err, "tenant id required")
+	require.Nil(t, e)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestPgAuditRepo_DeleteOlderThan_success(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -126,11 +127,19 @@ func (h *Harness) GetComponent(name string) (Component, bool) {
 	return comp, exists
 }
 
-// stopStartedComponents stops the given components in reverse order.
-func (h *Harness) stopStartedComponents(ctx context.Context, started []string) {
+// stopStartedComponents stops the given components in reverse order. Each
+// component Stop gets its own fresh timeout budget from Background: a shared
+// budget would let an earlier component consume it all and starve later ones,
+// and inheriting the caller's (already cancelled run) deadline would make every
+// Stop return immediately.
+func (h *Harness) stopStartedComponents(_ context.Context, started []string) {
 	for i := len(started) - 1; i >= 0; i-- {
 		name := started[i]
-		if err := h.components[name].Stop(ctx); err != nil {
+		// 从 Background 派生，绝不继承调用方的 deadline。
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		err := h.components[name].Stop(ctx)
+		cancel()
+		if err != nil {
 			h.logger.Error("Failed to stop component", zap.String("component", name), zap.Error(err))
 		} else {
 			h.logger.Info("Component stopped", zap.String("component", name))
@@ -138,13 +147,45 @@ func (h *Harness) stopStartedComponents(ctx context.Context, started []string) {
 	}
 }
 
-// Run starts the harness and waits for context cancellation
+// shutdownTimeout bounds each individual component Stop call; components are
+// stopped sequentially with independent budgets so one stuck component cannot
+// starve the others.
+const shutdownTimeout = 10 * time.Second
+
+// Run starts the harness and waits for context cancellation.
 func (h *Harness) Run(ctx context.Context) error {
 	if err := h.Start(ctx); err != nil {
 		return err
 	}
-	defer h.Stop(ctx) //nolint:errcheck
 
 	<-ctx.Done()
+
+	// 关停使用独立 ctx：run ctx 此刻已取消，直接传给 Stop 会让组件关闭逻辑
+	// （http.Server.Shutdown、worker 等待等）立即返回。每个组件的 Stop 在
+	// stopStartedComponents 内各自持有 fresh 超时预算（见 shutdownTimeout）。
+	if err := h.Stop(context.Background()); err != nil {
+		h.logger.Error("Failed to stop harness", zap.Error(err))
+	}
 	return ctx.Err()
+}
+
+// WaitForGroup blocks until wg is drained or ctx expires. Component Stop funcs
+// use it to wait for tracked worker goroutines to exit within the shutdown
+// budget. On timeout the waiter goroutine may outlive the caller (it only
+// exits once wg drains — a worker stuck forever leaks one goroutine, which is
+// bounded by the shutdown budget rather than unbounded retries); the returned
+// error surfaces through the component's Stop so the harness logs the stuck
+// worker instead of hanging shutdown silently.
+func WaitForGroup(ctx context.Context, wg *sync.WaitGroup) error {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("wait for goroutines: %w", ctx.Err())
+	}
 }

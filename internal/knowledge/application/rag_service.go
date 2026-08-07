@@ -19,6 +19,12 @@ import (
 
 var ErrRAGDependency = errors.New("knowledge retrieval dependency unavailable")
 
+// hybridLegRecallFactor widens TopK for the hybrid retrieval legs: each leg
+// (vector, keyword) recalls TopK × hybridLegRecallFactor candidates before
+// reciprocal rank fusion narrows the pool back to TopK. External reranking
+// widens further via RerankWidenFactor.
+const hybridLegRecallFactor = 2
+
 // errCollectionNotFound distinguishes a missing Milvus collection from other
 // search failures so Query can decide between "legitimately empty workspace"
 // and "drift" via ChunkRepo.CountByWorkspace.
@@ -40,24 +46,30 @@ func rerankIdentity(identity string) (provider, model string) {
 }
 
 // NewRAGSearchFn returns a knowledge search function suitable for the agent's
-// WithRAGSearchFn hook. It fans out across workspaces concurrently and
-// concatenates results; the first error is returned only when no content was
-// produced.
+// WithRAGSearchFn hook. It fans out across workspaces concurrently, bounded
+// by MaxConcurrentWorkspaceSearch (a per-query cap protecting the embed
+// backend and DB pool), and concatenates results; the first error is returned
+// only when no content was produced (at-least-one semantics).
 func NewRAGSearchFn(rs *RAGService, tenantID string) func(
 	ctx context.Context, workspaces []string, query string, topK int,
 ) (string, error) {
 	return func(ctx context.Context, workspaces []string, query string, topK int) (string, error) {
 		results := make([]wsResult, len(workspaces))
+		sem := make(chan struct{}, constants.MaxConcurrentWorkspaceSearch)
 		var wg sync.WaitGroup
 		for i, ws := range workspaces {
+			// Acquire before spawning so at most MaxConcurrentWorkspaceSearch
+			// searches are in flight; the launch loop parks here otherwise.
+			sem <- struct{}{}
 			wg.Add(1)
 			go func(i int, ws string) {
 				defer wg.Done()
+				defer func() { <-sem }()
 				results[i] = searchWorkspace(ctx, rs, tenantID, ws, query, topK)
 			}(i, ws)
 		}
 		wg.Wait()
-		return mergeResults(results)
+		return rs.mergeResults(results)
 	}
 }
 
@@ -122,15 +134,31 @@ type wsResult struct {
 	err     error
 }
 
-func mergeResults(results []wsResult) (string, error) {
+// mergeResults concatenates per-workspace content with at-least-one
+// semantics: failed workspaces are skipped, successful ones contribute, and
+// the first error surfaces only when nothing was produced at all. Partial
+// failure is deliberately not fatal (one dead workspace must not blank the
+// whole answer) but it must not be silent either — a WARN with the failure
+// count and first error is emitted so operators can see the degraded fan-out.
+func (rs *RAGService) mergeResults(results []wsResult) (string, error) {
 	var combined strings.Builder
 	var firstErr error
+	failures := 0
 	for _, r := range results {
-		if r.err != nil && firstErr == nil {
-			firstErr = r.err
+		if r.err != nil {
+			failures++
+			if firstErr == nil {
+				firstErr = r.err
+			}
 			continue
 		}
 		combined.WriteString(r.content)
+	}
+	if failures > 0 {
+		rs.logger.Warn("knowledge.rag.partial_failure",
+			zap.Int("failed_workspaces", failures),
+			zap.Int("total_workspaces", len(results)),
+			zap.Error(firstErr))
 	}
 	if combined.Len() == 0 && firstErr != nil {
 		return "", firstErr
@@ -224,7 +252,7 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 	}
 
 	if req.TopK <= 0 {
-		req.TopK = 5
+		req.TopK = constants.DefaultRAGTopK
 	}
 
 	if req.WorkspaceID == "" && req.Workspace != "" && rs.wsRepo != nil {
@@ -296,7 +324,7 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 		if rs.chunkRepo == nil {
 			return nil, fmt.Errorf("hybrid search not available: chunk store not configured")
 		}
-		legTopK := req.TopK * 2
+		legTopK := req.TopK * hybridLegRecallFactor
 		if widensRecall(req.Reranking) {
 			legTopK = req.TopK * constants.RerankWidenFactor
 		}

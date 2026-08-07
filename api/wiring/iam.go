@@ -6,7 +6,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/byteBuilderX/stratum/config"
 	"github.com/byteBuilderX/stratum/internal/iam/application"
 	"github.com/byteBuilderX/stratum/internal/iam/infrastructure/hermes"
 	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
@@ -15,22 +14,27 @@ import (
 )
 
 // BuildHermesFuncs returns start/stop/healthCheck closures for the NATS
-// hermes component. Constructing the client here keeps platform/runtime
-// free of iam/infrastructure imports.
-func BuildHermesFuncs(cfg *config.Config, logger *zap.Logger) (
+// hermes component. It reuses the platform-wide NATS connection from
+// Storage（由 pkg/messaging/nats.Connect 创建，MaxReconnects(-1)），
+// 保证重连/超时配置与其余组件一致，且不重复建连。
+func BuildHermesFuncs(c *Container, logger *zap.Logger) (
 	start func(context.Context) error,
 	stop func(context.Context) error,
 	healthCheck func(context.Context) error,
 ) {
 	var client *hermes.Client
 	start = func(_ context.Context) error {
-		c, err := hermes.NewClient(cfg.NatsURL, logger, observability.NoopMetrics{})
-		if err != nil {
-			logger.Warn("Failed to connect to NATS", zap.Error(err))
+		if c.Storage == nil || c.Storage.NATS == nil {
+			logger.Warn("NATS not available, hermes disabled")
 			return nil
 		}
-		client = c
-		logger.Info("Connected to NATS", zap.String("url", cfg.NatsURL))
+		hermesClient, err := hermes.NewClient(c.Storage.NATS, logger, observability.NoopMetrics{})
+		if err != nil {
+			logger.Warn("Failed to create hermes client", zap.Error(err))
+			return nil
+		}
+		client = hermesClient
+		logger.Info("hermes client started")
 		return nil
 	}
 	stop = func(_ context.Context) error {
@@ -40,8 +44,8 @@ func BuildHermesFuncs(cfg *config.Config, logger *zap.Logger) (
 		return nil
 	}
 	healthCheck = func(_ context.Context) error {
-		if cfg.NatsURL == "" {
-			return fmt.Errorf("NATS URL not configured")
+		if c.Storage == nil || c.Storage.NATS == nil {
+			return fmt.Errorf("NATS not available")
 		}
 		return nil
 	}
@@ -53,6 +57,9 @@ type IAM struct {
 	TenantService     *application.TenantService
 	InvitationService *application.InvitationService
 	AdminService      *application.AdminService
+	// TenantRepo exposes public tenant-registry queries to other wiring
+	// consumers (e.g. knowledge startup iterates active tenants).
+	TenantRepo *iampersistence.TenantRepo
 }
 
 func (c *Container) buildIAM(_ context.Context) error {
@@ -60,6 +67,7 @@ func (c *Container) buildIAM(_ context.Context) error {
 	db := c.dbOrNil()
 	if db != nil && c.Platform != nil {
 		repo := iampersistence.NewTenantRepo(db)
+		iam.TenantRepo = repo
 		iam.TenantService = application.NewTenantService(
 			repo,
 			c.Logger,

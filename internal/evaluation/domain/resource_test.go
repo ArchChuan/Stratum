@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -179,6 +180,55 @@ func TestSensitiveSafeSummaryAliasesAndSafeMetadata(t *testing.T) {
 	}
 }
 
+func TestSensitiveSafeSummaryKeyDigitSuffixAndEmbeddedVariants(t *testing.T) {
+	for _, key := range []string{"X-Api-Key", "x-api-key", "oauth_token", "auth_token2", "secret1", "APIKey3"} {
+		if !IsSensitiveSafeSummaryKey(key) {
+			t.Errorf("sensitive variant %q was not classified", key)
+		}
+	}
+	for _, key := range []string{
+		"tokens", "tokenizer", "secretary", "resource_name", "token_count", "prompt_version", "model_token_limit",
+	} {
+		if IsSensitiveSafeSummaryKey(key) {
+			t.Errorf("safe key %q was classified as sensitive", key)
+		}
+	}
+}
+
+func TestResourceRevisionRejectsSensitiveKeyVariants(t *testing.T) {
+	for _, key := range []string{"X-Api-Key", "x-api-key", "oauth_token", "auth_token2", "secret1", "APIKey3"} {
+		t.Run(key, func(t *testing.T) {
+			revision := validResourceRevision()
+			revision.SafeSummary = map[string]any{key: "redacted"}
+			if err := revision.Validate(); err == nil {
+				t.Fatalf("expected sensitive key %q to be rejected", key)
+			}
+		})
+	}
+}
+
+func TestResourceRevisionAllowsTokenLikeSafeSummaryKeys(t *testing.T) {
+	revision := validResourceRevision()
+	revision.SafeSummary = map[string]any{
+		"resource_name": "classifier",
+		"tokens":        float64(5),
+		"tokenizer":     "x",
+		"secretary":     "y",
+	}
+	if err := revision.Validate(); err != nil {
+		t.Fatalf("token-like safe keys rejected: %v", err)
+	}
+}
+
+func TestSanitizeSafeSummaryStripsSensitiveKeyVariants(t *testing.T) {
+	result := SanitizeSafeSummary(map[string]any{
+		"X-Api-Key": "sk-1", "secret1": "s-2", "token2": "s-3", "label": "safe",
+	})
+	if len(result) != 1 || result["label"] != "safe" {
+		t.Fatalf("sanitized summary = %#v", result)
+	}
+}
+
 func TestSanitizeSafeSummaryOmitsUnsafeAndMalformedBranches(t *testing.T) {
 	deep := map[string]any{"safe": "value"}
 	for range 8 {
@@ -221,6 +271,70 @@ func TestResourceRevisionRejectsFreeTextSummaryEvenWhenSecretIsOnlyInValue(t *te
 	revision.SafeSummary = map[string]any{"description": "client_secret=synthetic-value"}
 	if err := revision.Validate(); err == nil {
 		t.Fatal("expected free-text safe summary field to be rejected")
+	}
+}
+
+// TestValidateSafeSummaryValue locks the per-type validation rules after the
+// validateSafeSummaryValue decomposition: same accept/reject and error text as
+// the original single function.
+func TestValidateSafeSummaryValue(t *testing.T) {
+	bigString := strings.Repeat("a", maxSafeSummaryStringLen)
+	tooLong := strings.Repeat("a", maxSafeSummaryStringLen+1)
+	deep := map[string]any{"safe": "value"}
+	for range maxSafeSummaryDepth {
+		deep = map[string]any{"nested": deep}
+	}
+	overFieldCap := map[string]any{}
+	for i := 0; i <= maxSafeSummaryItems; i++ {
+		overFieldCap[fmt.Sprintf("k%d", i)] = i
+	}
+
+	tests := []struct {
+		name    string
+		value   any
+		depth   int
+		wantErr string
+	}{
+		{name: "nil scalar", value: nil},
+		{name: "bool scalar", value: true},
+		{name: "float scalar", value: 1.5},
+		{name: "int scalar", value: 42},
+		{name: "int32 scalar", value: int32(42)},
+		{name: "int64 scalar", value: int64(42)},
+		{name: "plain string", value: "hello"},
+		{name: "string at length cap", value: bigString},
+		{name: "string over length cap", value: tooLong, wantErr: "string too long"},
+		{name: "string with secret marker", value: "api_key=secret", wantErr: "sensitive value"},
+		{name: "string slice", value: []string{"a", "b"}},
+		{name: "string slice over item cap", value: make([]string, maxSafeSummaryItems+1), wantErr: "too many items"},
+		{name: "string slice with secret item", value: []string{"safe", "access_token: secret"}, wantErr: "sensitive value"},
+		{name: "any slice", value: []any{float64(1), "two"}},
+		{name: "any slice over item cap", value: make([]any, maxSafeSummaryItems+1), wantErr: "too many items"},
+		{name: "any slice with nested secret key", value: []any{map[string]any{"token": "x"}}, wantErr: "sensitive key"},
+		{name: "string map", value: map[string]string{"label": "客服技能"}},
+		{name: "string map with sensitive key", value: map[string]string{"password": "x"}, wantErr: "sensitive key"},
+		{name: "any map", value: map[string]any{"capabilities": map[string]any{"tools": float64(3)}}},
+		{name: "any map with sensitive key", value: map[string]any{"api_key": "x"}, wantErr: "sensitive key"},
+		{name: "map over field cap", value: overFieldCap, wantErr: "too many fields"},
+		{name: "maximum depth exceeded", value: deep, wantErr: "maximum depth exceeded"},
+		{name: "depth limit respected", value: map[string]any{"nested": map[string]any{"nested": map[string]any{"safe": "v"}}}},
+		{name: "depth check precedes type check", value: "x", depth: maxSafeSummaryDepth + 1, wantErr: "maximum depth exceeded"},
+		{name: "non-JSON value", value: struct{}{}, wantErr: "not JSON-safe"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateSafeSummaryValue(tc.value, tc.depth)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateSafeSummaryValue() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("validateSafeSummaryValue() error = %v, want containing %q", err, tc.wantErr)
+			}
+		})
 	}
 }
 

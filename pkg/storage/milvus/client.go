@@ -7,6 +7,7 @@ package milvus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -357,8 +358,8 @@ func (vs *VectorStore) CountVectors(ctx context.Context, collectionName, partiti
 		return 0, err
 	}
 	if err := c.LoadCollection(ctx, collectionName, false); err != nil {
-		if strings.Contains(err.Error(), "does not exist") || strings.Contains(err.Error(), "not found") {
-			return 0, nil
+		if isCollectionNotFound(err) {
+			return 0, fmt.Errorf("failed to load collection: %w", ErrCollectionNotFound)
 		}
 		return 0, fmt.Errorf("failed to load collection: %w", err)
 	}
@@ -368,8 +369,8 @@ func (vs *VectorStore) CountVectors(ctx context.Context, collectionName, partiti
 	}
 	rows, err := c.Query(ctx, collectionName, partitions, `id != ""`, []string{"id"})
 	if err != nil {
-		if strings.Contains(err.Error(), "does not exist") || strings.Contains(err.Error(), "not found") {
-			return 0, nil
+		if isCollectionNotFound(err) {
+			return 0, fmt.Errorf("failed to query partition: %w", ErrCollectionNotFound)
 		}
 		return 0, fmt.Errorf("failed to query partition: %w", err)
 	}
@@ -461,9 +462,16 @@ func (vs *VectorStore) searchWithFilter(ctx context.Context, collectionName stri
 	vs.logger.Debug("searching vectors", zap.String("collection", collectionName), zap.Int("topK", topK))
 
 	if err := c.LoadCollection(ctx, collectionName, false); err != nil {
-		if strings.Contains(err.Error(), "index not found") ||
-			strings.Contains(err.Error(), "not found") ||
-			strings.Contains(err.Error(), "does not exist") {
+		if isCollectionNotFound(err) {
+			if strict {
+				// Fail closed for RAG retrieval: the caller distinguishes a
+				// legitimately empty workspace from drift via errors.Is.
+				return nil, fmt.Errorf("failed to load collection %s: %w", collectionName, ErrCollectionNotFound)
+			}
+			// Legal before first use: memory collections are provisioned
+			// lazily, so a missing collection means "nothing stored yet".
+			vs.logger.Warn("collection not found, returning empty results",
+				zap.String("collection", collectionName), zap.Error(err))
 			return []SearchResult{}, nil
 		}
 		vs.logger.Error("failed to load collection", zap.Error(err))
@@ -675,13 +683,16 @@ func (vs *VectorStore) CountDocuments(ctx context.Context, collectionName string
 		return 0, err
 	}
 	if err := c.LoadCollection(ctx, collectionName, false); err != nil {
-		if strings.Contains(err.Error(), "index not found") || strings.Contains(err.Error(), "does not exist") {
-			return 0, nil
+		if isCollectionNotFound(err) {
+			return 0, fmt.Errorf("failed to load collection: %w", ErrCollectionNotFound)
 		}
 		return 0, fmt.Errorf("failed to load collection: %w", err)
 	}
 	rows, err := c.Query(ctx, collectionName, []string{}, `id != ""`, []string{"source_document"})
 	if err != nil {
+		if isCollectionNotFound(err) {
+			return 0, fmt.Errorf("failed to query collection: %w", ErrCollectionNotFound)
+		}
 		return 0, fmt.Errorf("failed to query collection: %w", err)
 	}
 	col := rows.GetColumn("source_document")
@@ -740,12 +751,10 @@ func (vs *VectorStore) KeywordSearch(ctx context.Context, collectionName string,
 	vs.logger.Debug("keyword searching", zap.String("collection", collectionName), zap.String("query", query))
 
 	if err := c.LoadCollection(ctx, collectionName, false); err != nil {
-		if strings.Contains(err.Error(), "index not found") ||
-			strings.Contains(err.Error(), "not found") ||
-			strings.Contains(err.Error(), "does not exist") {
-			return []SearchResult{}, nil
+		if isCollectionNotFound(err) {
+			return nil, fmt.Errorf("failed to load collection %s: %w", collectionName, ErrCollectionNotFound)
 		}
-		return nil, fmt.Errorf("failed to load collection %s: %w", collectionName, err)
+		return nil, classifyAvailabilityError("load collection", fmt.Errorf("failed to load collection %s: %w", collectionName, err))
 	}
 	rows, err := c.Query(
 		ctx,
@@ -910,8 +919,9 @@ func (vs *VectorStore) HybridSearch(ctx context.Context, collectionName string, 
 	if vectorRes.err != nil {
 		return nil, fmt.Errorf("vector search failed: %w", vectorRes.err)
 	}
+	keywordRes.results, keywordRes.err = keywordSearchOutcome(keywordRes.results, keywordRes.err)
 	if keywordRes.err != nil {
-		return nil, fmt.Errorf("keyword search failed: %w", keywordRes.err)
+		return nil, keywordRes.err
 	}
 
 	// RRF fusion with k=60 (standard parameter)
@@ -963,6 +973,15 @@ func (vs *VectorStore) HybridSearch(ctx context.Context, collectionName string, 
 
 	vs.logger.Debug("hybrid search completed", zap.Int("results", len(results)))
 	return results, nil
+}
+
+// keywordSearchOutcome tolerates a missing collection (empty keyword leg, same
+// semantics as the vector leg) and fails closed on any other failure.
+func keywordSearchOutcome(results []SearchResult, err error) ([]SearchResult, error) {
+	if err == nil || errors.Is(err, ErrCollectionNotFound) {
+		return results, nil
+	}
+	return nil, fmt.Errorf("keyword search failed: %w", err)
 }
 
 // tokenize splits text into lowercase word tokens, filtering punctuation.

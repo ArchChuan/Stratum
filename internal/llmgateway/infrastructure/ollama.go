@@ -146,8 +146,12 @@ func (c *OllamaClient) httpDoStream(ctx context.Context, path string, body []byt
 }
 
 // parseNDJSONStream scans the NDJSON response and accumulates into result.
-func parseNDJSONStream(scanner *bufio.Scanner, onToken func(string)) CompletionResponse {
+// Returns the accumulated result, whether the terminal done:true marker was
+// received, and the number of content tokens emitted (截断日志用).
+func parseNDJSONStream(scanner *bufio.Scanner, onToken func(string)) (CompletionResponse, bool, int) {
 	var result CompletionResponse
+	var done bool
+	var tokens int
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -162,15 +166,17 @@ func parseNDJSONStream(scanner *bufio.Scanner, onToken func(string)) CompletionR
 		}
 		if token := chunk.Message.Content; token != "" {
 			result.Content += token
+			tokens++
 			onToken(token)
 		}
 		if chunk.Done {
+			done = true
 			result.Usage.PromptTokens = chunk.PromptEvalCount
 			result.Usage.CompletionTokens = chunk.EvalCount
 			result.Usage.TotalTokens = chunk.PromptEvalCount + chunk.EvalCount
 		}
 	}
-	return result
+	return result, done, tokens
 }
 
 // Complete sends a non-streaming chat request to /api/chat.
@@ -355,7 +361,7 @@ func (c *OllamaClient) CompleteStream(ctx context.Context, req *CompletionReques
 	defer resp.Body.Close()
 
 	scanner := bufio.NewScanner(resp.Body)
-	result := parseNDJSONStream(scanner, wrappedOnToken)
+	result, done, tokens := parseNDJSONStream(scanner, wrappedOnToken)
 	if err := scanner.Err(); err != nil {
 		if cause := context.Cause(idleCtx); cause != nil && !errors.Is(cause, context.Canceled) {
 			c.breaker.recordFailure()
@@ -363,6 +369,20 @@ func (c *OllamaClient) CompleteStream(ctx context.Context, req *CompletionReques
 		}
 		c.breaker.recordFailure()
 		return nil, fmt.Errorf("%s: read stream: %w", c.cfg.Name, err)
+	}
+	if !done {
+		c.breaker.recordFailure()
+		if result.Content == "" {
+			// 首个 chunk 前断开：连接正常建立但未产出任何内容，视为普通错误。
+			c.logger.Warn(c.cfg.Name+": stream ended before any data",
+				zap.String("model", req.Model))
+			return nil, fmt.Errorf("%s: stream ended before any data: %w", c.cfg.Name, io.EOF)
+		}
+		// 内容已开始输出但未收到 done:true：截断，绝不 recordSuccess。
+		c.logger.Warn(c.cfg.Name+": stream truncated",
+			zap.String("model", req.Model),
+			zap.Int("tokens", tokens))
+		return nil, fmt.Errorf("%s: stream truncated: %w", c.cfg.Name, domain.ErrStreamTruncated)
 	}
 	c.breaker.recordSuccess()
 	return &result, nil

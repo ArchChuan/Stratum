@@ -138,6 +138,17 @@ func (r ResourceRevision) Validate() error {
 	return nil
 }
 
+const (
+	maxSafeSummaryDepth     = 6    // 容器嵌套最大深度（与 sanitize 路径一致）
+	maxSafeSummaryItems     = 64   // slice / map 元素上限
+	maxSafeSummaryKeyLen    = 64   // 键名长度上限（sanitize 路径）
+	maxSafeSummaryStringLen = 2048 // 单个 string 值上限
+)
+
+// sensitiveSafeSummaryKeys 是敏感 token 种子集：键名 normalize 后，任一 token
+// 以串首/串尾、分隔符(_.-)或数字为边界出现在键名中即视为敏感，由此覆盖
+// x_api_key、oauth_token、secret1、APIKey3 等变体；tokens/tokenizer/secretary
+// 及 token_count/prompt_version 等元数据键因边界规则不命中。
 var sensitiveSafeSummaryKeys = map[string]struct{}{
 	"password":      {},
 	"token":         {},
@@ -167,7 +178,7 @@ var sensitiveSafeSummaryAuthorization = regexp.MustCompile(
 )
 
 func validateSafeSummary(summary map[string]any) error {
-	if len(summary) > 64 {
+	if len(summary) > maxSafeSummaryItems {
 		return errors.New("safe summary has too many fields")
 	}
 	for key, value := range summary {
@@ -216,46 +227,20 @@ func validateSafeSummary(summary map[string]any) error {
 }
 
 func validateSafeSummaryValue(value any, depth int) error {
-	if depth > 6 {
+	if depth > maxSafeSummaryDepth {
 		return errors.New("maximum depth exceeded")
 	}
 	switch typed := value.(type) {
 	case nil, bool, float64, int, int32, int64:
 		return nil
 	case string:
-		if len(typed) > 2048 {
-			return errors.New("string too long")
-		}
-		if IsSensitiveSafeSummaryValue(typed) {
-			return errors.New("sensitive value")
-		}
-		return nil
+		return validateSafeSummaryString(typed)
 	case []string:
-		if len(typed) > 64 {
-			return errors.New("too many items")
-		}
-		for _, item := range typed {
-			if err := validateSafeSummaryValue(item, depth+1); err != nil {
-				return err
-			}
-		}
-		return nil
+		return validateSafeSummaryStringSlice(typed, depth)
 	case []any:
-		if len(typed) > 64 {
-			return errors.New("too many items")
-		}
-		for _, item := range typed {
-			if err := validateSafeSummaryValue(item, depth+1); err != nil {
-				return err
-			}
-		}
-		return nil
+		return validateSafeSummaryAnySlice(typed, depth)
 	case map[string]string:
-		converted := make(map[string]any, len(typed))
-		for key, item := range typed {
-			converted[key] = item
-		}
-		return validateSafeSummaryMap(converted, depth+1)
+		return validateSafeSummaryMap(convertSafeSummaryStringMap(typed), depth+1)
 	case map[string]any:
 		return validateSafeSummaryMap(typed, depth+1)
 	default:
@@ -263,8 +248,50 @@ func validateSafeSummaryValue(value any, depth int) error {
 	}
 }
 
+func validateSafeSummaryString(value string) error {
+	if len(value) > maxSafeSummaryStringLen {
+		return errors.New("string too long")
+	}
+	if IsSensitiveSafeSummaryValue(value) {
+		return errors.New("sensitive value")
+	}
+	return nil
+}
+
+func validateSafeSummaryStringSlice(values []string, depth int) error {
+	if len(values) > maxSafeSummaryItems {
+		return errors.New("too many items")
+	}
+	for _, item := range values {
+		if err := validateSafeSummaryValue(item, depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateSafeSummaryAnySlice(values []any, depth int) error {
+	if len(values) > maxSafeSummaryItems {
+		return errors.New("too many items")
+	}
+	for _, item := range values {
+		if err := validateSafeSummaryValue(item, depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convertSafeSummaryStringMap(typed map[string]string) map[string]any {
+	converted := make(map[string]any, len(typed))
+	for key, item := range typed {
+		converted[key] = item
+	}
+	return converted
+}
+
 func validateSafeSummaryMap(value map[string]any, depth int) error {
-	if len(value) > 64 {
+	if len(value) > maxSafeSummaryItems {
 		return errors.New("too many fields")
 	}
 	for key, nested := range value {
@@ -279,8 +306,56 @@ func validateSafeSummaryMap(value map[string]any, depth int) error {
 }
 
 func IsSensitiveSafeSummaryKey(key string) bool {
-	_, sensitive := sensitiveSafeSummaryKeys[NormalizeSafeSummaryKey(key)]
-	return sensitive
+	return isSensitiveNormalizedKey(NormalizeSafeSummaryKey(key))
+}
+
+// isSensitiveNormalizedKey 报告 normalize 后的键名是否含敏感 token：任一种子
+// token 在键名中出现，且左侧边界为串首/分隔符/数字、右侧为串尾/数字。
+// 由此 x_api_key（api_key 前缀 x_）、oauth_token、auth_token2、secret1、
+// APIKey3 均命中；tokens/tokenizer/secretary 不命中（token 后跟字母），
+// token_count、prompt_version 等元数据键（token 后跟分隔符）也不命中。
+func isSensitiveNormalizedKey(normalized string) bool {
+	for token := range sensitiveSafeSummaryKeys {
+		if hasSensitiveToken(normalized, token) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasSensitiveToken 在 normalized 中扫描 token 的全部出现位置，任一位置
+// 两侧都是敏感边界即命中（如 secret_secret）。
+func hasSensitiveToken(normalized, token string) bool {
+	for offset := 0; ; {
+		index := strings.Index(normalized[offset:], token)
+		if index < 0 {
+			return false
+		}
+		index += offset
+		if isSensitiveTokenBoundary(normalized, index-1, true) &&
+			isSensitiveTokenBoundary(normalized, index+len(token), false) {
+			return true
+		}
+		offset = index + 1
+	}
+}
+
+// isSensitiveTokenBoundary 报告 token 一侧是否为敏感边界：串外恒为边界。
+// 左侧（left=true）还接受分隔符(_.-)或数字，覆盖 x_api_key、oauth_token
+// 等前缀组合；右侧只接受数字，分隔符不是边界——token_count、prompt_version
+// 等元数据键的 token 后跟分隔符，故不命中。字母两侧都不构成边界，
+// tokens/tokenizer/secretary 不被命中。
+func isSensitiveTokenBoundary(normalized string, position int, left bool) bool {
+	if position < 0 || position >= len(normalized) {
+		return true
+	}
+	switch current := normalized[position]; {
+	case current == '_' || current == '.' || current == '-':
+		return left
+	case current >= '0' && current <= '9':
+		return true
+	}
+	return false
 }
 
 func IsSensitiveSafeSummaryValue(value string) bool {
@@ -313,12 +388,12 @@ func SanitizeSafeSummary(summary map[string]any) map[string]any {
 }
 
 func sanitizeSafeSummaryMap(summary map[string]any, depth int) map[string]any {
-	if depth > 6 || len(summary) > 64 {
+	if depth > maxSafeSummaryDepth || len(summary) > maxSafeSummaryItems {
 		return map[string]any{}
 	}
 	result := make(map[string]any, len(summary))
 	for key, value := range summary {
-		if len(key) > 64 || IsSensitiveSafeSummaryKey(key) {
+		if len(key) > maxSafeSummaryKeyLen || IsSensitiveSafeSummaryKey(key) {
 			continue
 		}
 		if sanitized, ok := sanitizeSafeSummaryValue(value, depth); ok {
@@ -329,16 +404,16 @@ func sanitizeSafeSummaryMap(summary map[string]any, depth int) map[string]any {
 }
 
 func sanitizeSafeSummaryValue(value any, depth int) (any, bool) {
-	if depth > 6 {
+	if depth > maxSafeSummaryDepth {
 		return nil, false
 	}
 	switch typed := value.(type) {
 	case nil, bool, float64, int, int32, int64:
 		return typed, true
 	case string:
-		return typed, len(typed) <= 2048 && !IsSensitiveSafeSummaryValue(typed)
+		return typed, len(typed) <= maxSafeSummaryStringLen && !IsSensitiveSafeSummaryValue(typed)
 	case []any:
-		if len(typed) > 64 {
+		if len(typed) > maxSafeSummaryItems {
 			return nil, false
 		}
 		result := make([]any, 0, len(typed))

@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -32,7 +33,7 @@ type AuditService struct {
 type AuditRepo interface {
 	InsertBatch(ctx context.Context, events []domain.AuditEvent) error
 	Query(ctx context.Context, filter domain.AuditFilter) ([]domain.AuditEvent, error)
-	GetByID(ctx context.Context, id string) (*domain.AuditEvent, error)
+	GetByID(ctx context.Context, tenantID string, id string) (*domain.AuditEvent, error)
 	DeleteOlderThan(ctx context.Context, before time.Time) error
 }
 
@@ -94,9 +95,9 @@ func (s *AuditService) Query(ctx context.Context, filter domain.AuditFilter) ([]
 	return s.repo.Query(ctx, filter)
 }
 
-// GetByID retrieves a single audit event.
-func (s *AuditService) GetByID(ctx context.Context, id string) (*domain.AuditEvent, error) {
-	return s.repo.GetByID(ctx, id)
+// GetByID retrieves a single audit event, scoped to the caller's tenant.
+func (s *AuditService) GetByID(ctx context.Context, tenantID string, id string) (*domain.AuditEvent, error) {
+	return s.repo.GetByID(ctx, tenantID, id)
 }
 
 // Stop gracefully shuts down the batch writer, flushing remaining events.
@@ -150,32 +151,92 @@ func (s *AuditService) batchWriter() {
 		case evt := <-s.buf:
 			batch = append(batch, evt)
 			if len(batch) >= constants.AuditBatchSize {
-				s.flush(&batch)
+				// 失败已在 flush 内记录日志/metrics，batch 保留供下次重试。
+				_ = s.flush(&batch)
 			}
 		case <-ticker.C:
-			s.flushIfNotEmpty(&batch)
+			_ = s.flushIfNotEmpty(&batch)
 		case <-s.closeCh:
-			s.flushIfNotEmpty(&batch)
+			s.flushOrRequeueOnShutdown(&batch)
 			return
 		}
 	}
 }
 
-func (s *AuditService) flushIfNotEmpty(batch *[]domain.AuditEvent) {
-	if len(*batch) > 0 {
-		s.flush(batch)
+// flushOrRequeueOnShutdown flushes the final batch once at shutdown. On
+// failure the retained events are handed back to the channel so Stop's drain
+// retries them instead of dropping them with the goroutine.
+func (s *AuditService) flushOrRequeueOnShutdown(batch *[]domain.AuditEvent) {
+	if err := s.flushIfNotEmpty(batch); err != nil {
+		for _, evt := range *batch {
+			select {
+			case s.buf <- evt:
+			default:
+				// Buffer full at shutdown; nothing else can be done.
+				s.logger.Error("audit: buffer full during shutdown, dropping event",
+					zap.String("action", evt.Action))
+			}
+		}
 	}
 }
 
-func (s *AuditService) flush(batch *[]domain.AuditEvent) {
-	toWrite := *batch
-	*batch = (*batch)[:0]
+func (s *AuditService) flushIfNotEmpty(batch *[]domain.AuditEvent) error {
+	if len(*batch) > 0 {
+		return s.flush(batch)
+	}
+	return nil
+}
+
+// flush persists the accumulated batch. The batch is only cleared after a
+// successful insert: on failure the events stay in place so the next flush
+// (next event or ticker tick) retries them. Events must never vanish from
+// memory before the database acknowledged them — a dropped batch is a
+// permanent audit gap. The write is idempotent (INSERT ... ON CONFLICT DO
+// NOTHING in the repo), so a retry after a partial write only fills the
+// remaining rows instead of failing on duplicate IDs.
+//
+// The retry must not grow the batch without bound: capBatch bounds the
+// in-memory footprint during a store outage (bounded memory wins over not
+// losing events; the newest events are kept).
+func (s *AuditService) flush(batch *[]domain.AuditEvent) error {
+	if len(*batch) == 0 {
+		return nil
+	}
+	toWrite := s.capBatch(batch)
 	if s.metrics != nil {
 		s.metrics.RecordAuditWriteQueueDepth(len(toWrite))
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), constants.AuditFlushTimeout)
 	defer cancel()
 	if err := s.repo.InsertBatch(ctx, toWrite); err != nil {
-		s.logger.Error("audit: batch insert failed", zap.Int("count", len(toWrite)), zap.Error(err))
+		s.logger.Error("audit: batch insert failed, events retained for retry",
+			zap.Int("count", len(toWrite)), zap.Error(err))
+		if s.metrics != nil {
+			s.metrics.IncComponentError("audit-batch-writer", "flush")
+		}
+		return fmt.Errorf("audit: flush: %w", err)
 	}
+	*batch = (*batch)[:0]
+	return nil
+}
+
+// capBatch bounds the retained batch at MaxAuditBatchPending. On overflow the
+// oldest events are dropped (the head of the slice) and the newest kept: with
+// the store down, recent events matter most and the process must not OOM.
+// 只影响「待重试的内存 batch」，不影响「成功才清空」的契约——被丢弃的是
+// 内存上限之外的最旧事件，不是已确认写入的事件。
+func (s *AuditService) capBatch(batch *[]domain.AuditEvent) []domain.AuditEvent {
+	events := *batch
+	overflow := len(events) - constants.MaxAuditBatchPending
+	if overflow <= 0 {
+		return events
+	}
+	*batch = events[overflow:]
+	s.logger.Error("audit: batch overflow, dropping oldest events",
+		zap.Int("dropped", overflow),
+		zap.Int("retained", len(*batch)))
+	if s.metrics != nil {
+		s.metrics.IncComponentError("audit-batch-writer", "overflow")
+	}
+	return *batch
 }

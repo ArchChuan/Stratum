@@ -47,7 +47,10 @@ type AuthHandlerDeps struct {
 	FrontendURL        string
 	GlobalAdmin        string
 	SecureCookies      bool
-	AvatarStore        AvatarStore
+	// GuestAuthEnabled gates POST /auth/guest. When false the handler fails
+	// closed with 403; when true guests are sandboxed into their own tenant.
+	GuestAuthEnabled bool
+	AvatarStore      AvatarStore
 }
 
 // AuthHandler implements the /auth/* HTTP routes.

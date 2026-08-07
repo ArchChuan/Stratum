@@ -49,6 +49,12 @@ const (
 	// RerankDefaultTopN is the number of results requested from a reranker
 	// when the caller does not specify RerankTopK.
 	RerankDefaultTopN = 5
+	// DefaultRAGTopK is the retrieval result count used when a query does
+	// not specify TopK.
+	DefaultRAGTopK = 5
+	// MaxConcurrentWorkspaceSearch caps the number of workspaces searched
+	// concurrently by the RAG fan-out, bounding embed/DB load per query.
+	MaxConcurrentWorkspaceSearch = 3
 )
 
 var milvusUnsafe = regexp.MustCompile(`[^a-zA-Z0-9_]`)

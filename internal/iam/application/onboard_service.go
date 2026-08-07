@@ -95,9 +95,9 @@ func (s *OnboardService) IsMember(ctx context.Context, userID, tenantID string) 
 }
 
 // CreateGuest provisions a temporary guest identity: a synthetic namespaced
-// github_id, a member seat in the default tenant, and an expiry GuestAccountTTL
-// from now. The guest is functionally identical to a GitHub member; only
-// is_guest/expires_at distinguish it for reaping.
+// github_id, a dedicated per-guest sandbox tenant (owner seat), and an expiry
+// GuestAccountTTL from now. The guest never joins the default tenant; its
+// sandbox tenant and user row are removed by the reaper after expiry.
 func (s *OnboardService) CreateGuest(ctx context.Context) (*GuestAccount, error) {
 	id := uuid.Must(uuid.NewV7()).String()
 	githubID := constants.GuestGitHubIDPrefix + id
@@ -107,7 +107,7 @@ func (s *OnboardService) CreateGuest(ctx context.Context) (*GuestAccount, error)
 	githubLogin := "guest-" + id[len(id)-12:]
 	expiresAt := time.Now().Add(constants.GuestAccountTTL)
 
-	userID, tenantID, err := s.repo.CreateGuestInDefaultTenant(ctx, githubID, githubLogin, "", expiresAt)
+	userID, tenantID, err := s.repo.CreateGuestSandboxTenant(ctx, githubID, githubLogin, "", expiresAt)
 	if err != nil {
 		return nil, err
 	}

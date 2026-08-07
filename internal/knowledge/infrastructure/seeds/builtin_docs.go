@@ -9,7 +9,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/byteBuilderX/stratum/internal/agent/infrastructure/officialdocs"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 )
@@ -28,25 +27,52 @@ const BuiltinWorkspaceName = "stratum_docs"
 //
 // embedModel is the workspace-configured embedding model (e.g. "text-embedding-v3").
 // When empty the ingest layer falls back to the tenant-configured default.
+// catalog is injected by wiring so seeds never import a sibling context.
 func SeedBuiltinDocs(
 	ctx context.Context,
 	tenantID string,
 	embedModel string,
 	ingest *knowledge.KnowledgeIngest,
 	docRepo knowledgeport.DocRepo,
+	catalog knowledgeport.OfficialDocsCatalog,
 	logger *zap.Logger,
 ) int {
-	if ingest == nil || docRepo == nil {
-		logger.Debug("seed.builtin_docs.skipped", zap.String("reason", "ingest or docRepo not configured"))
+	if ingest == nil || docRepo == nil || catalog == nil {
+		logger.Debug("seed.builtin_docs.skipped", zap.String("reason", "ingest, docRepo or catalog not configured"))
 		return 0
 	}
 
-	entries, err := officialdocs.AllCatalogEntries()
+	entries, err := catalog.AllCatalogEntries()
 	if err != nil {
 		logger.Warn("seed.builtin_docs.read_catalog_failed", zap.Error(err))
 		return 0
 	}
 
+	seeded, skipped := seedCatalogEntries(ctx, tenantID, embedModel, ingest, docRepo, entries, logger)
+
+	if seeded > 0 || skipped > 0 {
+		logger.Info("seed.builtin_docs.complete",
+			zap.String("tenant_id", tenantID),
+			zap.Int("seeded", seeded),
+			zap.Int("skipped", skipped),
+			zap.Int("total", len(entries)))
+	}
+	return seeded
+}
+
+// seedCatalogEntries ingests each catalog entry into the built-in RAG
+// workspace. Documents already present (matched by content hash) are skipped;
+// errors from individual ingest operations are logged at WARN level and do not
+// block the remaining catalog. Returns the seeded and skipped counts.
+func seedCatalogEntries(
+	ctx context.Context,
+	tenantID string,
+	embedModel string,
+	ingest *knowledge.KnowledgeIngest,
+	docRepo knowledgeport.DocRepo,
+	entries []knowledgeport.OfficialDocEntry,
+	logger *zap.Logger,
+) (int, int) {
 	seeded := 0
 	skipped := 0
 	for _, entry := range entries {
@@ -86,18 +112,10 @@ func SeedBuiltinDocs(
 		}
 		seeded++
 	}
-
-	if seeded > 0 || skipped > 0 {
-		logger.Info("seed.builtin_docs.complete",
-			zap.String("tenant_id", tenantID),
-			zap.Int("seeded", seeded),
-			zap.Int("skipped", skipped),
-			zap.Int("total", len(entries)))
-	}
-	return seeded
+	return seeded, skipped
 }
 
-func formatDocContent(entry officialdocs.CatalogEntry) string {
+func formatDocContent(entry knowledgeport.OfficialDocEntry) string {
 	return fmt.Sprintf("# %s\n\n## %s\n\n%s", entry.Title, entry.Section, entry.Body)
 }
 

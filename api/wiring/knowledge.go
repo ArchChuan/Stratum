@@ -5,7 +5,9 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/byteBuilderX/stratum/internal/agent/infrastructure/officialdocs"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
+	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/rerank"
@@ -119,26 +121,14 @@ func (c *Container) RecoverStuckKnowledgeIngests(ctx context.Context) {
 	if c.Knowledge == nil || c.Knowledge.Ingest == nil {
 		return
 	}
-	db := c.dbOrNil()
-	if db == nil {
+	if c.IAM == nil || c.IAM.TenantRepo == nil {
 		return
 	}
-	rows, err := db.Query(ctx, "SELECT id FROM public.tenants WHERE deleted_at IS NULL")
+	tenantIDs, err := c.IAM.TenantRepo.ListActiveTenantIDs(ctx)
 	if err != nil {
 		c.Logger.Warn("knowledge.recover_stuck.list_tenants_failed", zap.Error(err))
 		return
 	}
-	var tenantIDs []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			c.Logger.Warn("knowledge.recover_stuck.scan_failed", zap.Error(err))
-			return
-		}
-		tenantIDs = append(tenantIDs, id)
-	}
-	rows.Close()
 	total := 0
 	for _, tid := range tenantIDs {
 		n, err := c.Knowledge.Ingest.RecoverStuckIngests(ctx, tid)
@@ -209,30 +199,40 @@ func (c *Container) SeedBuiltinKnowledgeDocs(ctx context.Context) {
 			zap.String("reason", "knowledge ingest or docRepo not wired"))
 		return
 	}
-	db := c.dbOrNil()
-	if db == nil {
+	if c.IAM == nil || c.IAM.TenantRepo == nil {
+		c.Logger.Debug("knowledge.seed_builtin_docs.skipped",
+			zap.String("reason", "tenant repo not wired"))
 		return
 	}
 
-	rows, err := db.Query(ctx, "SELECT id FROM public.tenants WHERE deleted_at IS NULL")
+	tenantIDs, err := c.IAM.TenantRepo.ListActiveTenantIDs(ctx)
 	if err != nil {
 		c.Logger.Warn("knowledge.seed_builtin_docs.list_tenants_failed", zap.Error(err))
 		return
 	}
-	defer rows.Close()
-
-	var tenantIDs []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			c.Logger.Warn("knowledge.seed_builtin_docs.scan_failed", zap.Error(err))
-			return
-		}
-		tenantIDs = append(tenantIDs, id)
-	}
 
 	for _, tid := range tenantIDs {
 		seeds.SeedBuiltinDocs(ctx, tid, "text-embedding-v3",
-			c.Knowledge.Ingest, c.Knowledge.DocRepo, c.Logger)
+			c.Knowledge.Ingest, c.Knowledge.DocRepo, officialDocsCatalogAdapter{}, c.Logger)
 	}
+}
+
+// officialDocsCatalogAdapter adapts the agent context's embedded official
+// documentation catalog to knowledgeport.OfficialDocsCatalog. Lives in
+// wiring so knowledge infrastructure never imports a sibling context.
+type officialDocsCatalogAdapter struct{}
+
+func (officialDocsCatalogAdapter) AllCatalogEntries() ([]knowledgeport.OfficialDocEntry, error) {
+	entries, err := officialdocs.AllCatalogEntries()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]knowledgeport.OfficialDocEntry, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, knowledgeport.OfficialDocEntry{
+			DocumentID: e.DocumentID, Title: e.Title, ProductVersion: e.ProductVersion,
+			Section: e.Section, URL: e.URL, Ordinal: e.Ordinal, Body: e.Body,
+		})
+	}
+	return out, nil
 }

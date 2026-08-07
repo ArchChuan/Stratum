@@ -233,6 +233,18 @@ func TestCompleteStreamFailureAfterFirstTokenDoesNotFallback(t *testing.T) {
 	require.Equal(t, []string{"primary"}, f.proto.callModels())
 }
 
+func TestCompleteStreamTruncatedAfterFirstTokenPropagates(t *testing.T) {
+	f := newFallbackFixture(t, map[string]*modelScript{
+		"primary": {streamErr: domain.ErrStreamTruncated, streamFailAfterToken: true},
+	})
+	_, err := f.gateway.CompleteStream(ctxWithTenant(), &infrastructure.CompletionRequest{Model: "primary"}, func(string) {})
+	require.Error(t, err)
+	require.True(t, infrastructure.IsPermanent(err), "truncation after first token must be permanent")
+	require.True(t, errors.Is(err, domain.ErrStreamTruncated), "truncation must stay detectable up the chain")
+	// 截断发生在首 token 之后：不得重试或降级（避免重复输出），一次调用即停。
+	require.Equal(t, []string{"primary"}, f.proto.callModels())
+}
+
 func TestCompleteStreamPrimarySuccess(t *testing.T) {
 	f := newFallbackFixture(t, map[string]*modelScript{"primary": {}})
 	resp, err := f.gateway.CompleteStream(ctxWithTenant(), &infrastructure.CompletionRequest{Model: "primary"}, func(string) {})

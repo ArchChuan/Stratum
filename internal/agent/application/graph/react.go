@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -405,12 +406,24 @@ func updateTokenCorrection(correction float64, estimatedTokens, actualPrompt int
 // request construction and retry closure stay within the code-quality line and
 // complexity budgets of the node function.
 func routeLLM(ctx context.Context, s ReActState, messages []port.LLMMessage, tools []port.ToolDefinition, capGW port.CapabilityGateway) (port.CapabilityResponse, error) {
+	// 流式 token 一旦推给前端，本次 attempt 再失败（截断/断连）就不能重试：
+	// RetryFn 重试会再次全量推流 → 前端重复/错乱内容。emitted 标志把这类失败
+	// 标记为 permanent，只允许「首 token 尚未输出」的失败重试。llmgateway 层
+	// 对 outputStarted 已有同样的 fail-fast 语义，此处是图级独立防线。
+	var emitted atomic.Bool
+	stream := s.OnToken
+	if stream != nil {
+		stream = func(tok string) {
+			emitted.Store(true)
+			s.OnToken(tok)
+		}
+	}
 	return RetryFn(ctx, DefaultRetry, func() (port.CapabilityResponse, error) {
-		return capGW.Route(ctx, port.CapabilityRequest{
+		resp, err := capGW.Route(ctx, port.CapabilityRequest{
 			TraceID:     s.TraceID,
 			TenantID:    s.TenantID,
 			Type:        port.CapLLM,
-			TokenStream: s.OnToken,
+			TokenStream: stream,
 			LLM: &port.LLMCapRequest{
 				Model:       s.Model,
 				Messages:    messages,
@@ -419,6 +432,11 @@ func routeLLM(ctx context.Context, s ReActState, messages []port.LLMMessage, too
 				MaxTokens:   s.MaxTokens,
 			},
 		})
+		if err != nil && emitted.Load() {
+			// 已输出 token 的失败永不重试（含截断），原错误透传。
+			return resp, markStreamReplayPermanent(err)
+		}
+		return resp, err
 	})
 }
 

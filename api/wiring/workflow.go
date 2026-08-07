@@ -175,7 +175,7 @@ func (c *Container) buildWorkflow(_ context.Context) error {
 	newID := func() string { return uuid.Must(uuid.NewV7()).String() }
 	agentExecutor := workflowAgentExecutor{agents: c.Agent.Service}
 	registry := workflowexec.NewRegistry(agentExecutor, workflowSkillExecutor{agents: c.Agent.Service, versions: c.Skill.VersionService}, workflowMCPExecutor{policies: c.MCP.Service, manager: c.MCP.Manager})
-	runs := workflowapp.NewRunServiceWithRegistry(store, store, registry, newID)
+	runs := workflowapp.NewRunServiceWithRegistry(store, store, registry, newID, c.Logger)
 	c.Workflow = &Workflow{DefinitionService: workflowapp.NewDefinitionService(store, store, newID), RunService: runs, ControlService: workflowapp.NewControlService(store, newID)}
 	c.Workflow.Worker = workflowapp.NewWorker("workflow-"+newID(), store, workflowRunAdvancer{runs: runs}, 30*time.Second, c.platformMetrics())
 	return nil

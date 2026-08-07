@@ -94,9 +94,11 @@ func (s *ProviderService) Get(ctx context.Context, tenantID, id string) (*domain
 }
 
 // Update applies partial updates to an existing provider.
-// An empty APIKey means "keep existing".
+// An empty APIKey means "keep existing". 元数据经 GetMeta 读取（不解密旧 key）：
+// 存量明文/损坏密文的 provider 带新 key 重新保存必须可用，先解密旧 key
+// 会把该 provider 永久锁死（Get 保持 fail closed 不变）。
 func (s *ProviderService) Update(ctx context.Context, tenantID string, input UpdateProviderInput) (*domain.Provider, error) {
-	existing, err := s.repo.Get(ctx, tenantID, input.ID)
+	existing, err := s.repo.GetMeta(ctx, tenantID, input.ID)
 	if err != nil {
 		return nil, fmt.Errorf("provider service: get for update: %w", err)
 	}

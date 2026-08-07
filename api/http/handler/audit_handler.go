@@ -23,9 +23,25 @@ func NewAuditHandler(query auditport.AuditQueryService, logger *zap.Logger) *Aud
 
 // ListEvents returns a paginated list of audit events for the current tenant.
 func (h *AuditHandler) ListEvents(c *gin.Context) {
-	tid, _ := c.Get("auth.tenant_id")
+	tenantID, ok := tenantIDFromGinKey(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	events, err := h.query.Query(c.Request.Context(), parseAuditFilter(c, tenantID))
+	if err != nil {
+		h.logger.Error("audit: list events failed", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query audit events"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"events": events, "count": len(events)})
+}
+
+// parseAuditFilter 从 query string 解析审计筛选条件；无效时间戳静默忽略
+// （与历史行为一致）。
+func parseAuditFilter(c *gin.Context, tenantID string) auditdomain.AuditFilter {
 	filter := auditdomain.AuditFilter{
-		TenantID: tid.(string),
+		TenantID: tenantID,
 		Limit:    50,
 	}
 	if from := c.Query("from"); from != "" {
@@ -50,20 +66,18 @@ func (h *AuditHandler) ListEvents(c *gin.Context) {
 	if resourceType := c.Query("resource_type"); resourceType != "" {
 		filter.ResourceType = resourceType
 	}
-
-	events, err := h.query.Query(c.Request.Context(), filter)
-	if err != nil {
-		h.logger.Error("audit: list events failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query audit events"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"events": events, "count": len(events)})
+	return filter
 }
 
-// GetEvent returns a single audit event by ID.
+// GetEvent returns a single audit event by ID, scoped to the current tenant.
 func (h *AuditHandler) GetEvent(c *gin.Context) {
 	id := c.Param("id")
-	event, err := h.query.GetByID(c.Request.Context(), id)
+	tenantID, ok := tenantIDFromGinKey(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	event, err := h.query.GetByID(c.Request.Context(), tenantID, id)
 	if err != nil {
 		h.logger.Error("audit: get event failed", zap.String("id", id), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get audit event"})
@@ -74,4 +88,16 @@ func (h *AuditHandler) GetEvent(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, event)
+}
+
+// tenantIDFromGinKey 读取 JWT 中间件写入的 auth.tenant_id gin key。
+// auth.tenant_id 由 JWT middleware 保证存在，但缺 key 或类型异常时仍要
+// fail closed（返回 401）而非对 type assertion panic——防御性修复。
+func tenantIDFromGinKey(c *gin.Context) (string, bool) {
+	val, exists := c.Get("auth.tenant_id")
+	if !exists {
+		return "", false
+	}
+	id, ok := val.(string)
+	return id, ok
 }

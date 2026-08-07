@@ -10,6 +10,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 type queryStore struct {
@@ -76,7 +77,7 @@ func TestDefinitionServiceListsVersionsWithStablePageOffset(t *testing.T) {
 
 func TestRunServiceListsMemberRunsWithOwnershipFilter(t *testing.T) {
 	store := newQueryStore()
-	service := application.NewRunServiceWithRegistry(store, store, &scriptedRegistry{}, (&ids{}).NewID)
+	service := application.NewRunServiceWithRegistry(store, store, &scriptedRegistry{}, (&ids{}).NewID, zap.NewNop())
 
 	page, err := service.ListRuns(context.Background(), "tenant-1", application.ListRunsQuery{
 		ActorID: "user-a", DefinitionID: "wf-1", Status: domain.RunStatusRunning, Page: 1, PageSize: 20,
@@ -91,7 +92,7 @@ func TestRunServiceListsMemberRunsWithOwnershipFilter(t *testing.T) {
 
 func TestRunServiceListsAllTenantRunsForAdmin(t *testing.T) {
 	store := newQueryStore()
-	service := application.NewRunServiceWithRegistry(store, store, &scriptedRegistry{}, (&ids{}).NewID)
+	service := application.NewRunServiceWithRegistry(store, store, &scriptedRegistry{}, (&ids{}).NewID, zap.NewNop())
 
 	_, err := service.ListRuns(context.Background(), "tenant-1", application.ListRunsQuery{
 		ActorID: "admin-a", IsAdmin: true, Page: 1, PageSize: 20,
@@ -102,7 +103,7 @@ func TestRunServiceListsAllTenantRunsForAdmin(t *testing.T) {
 
 func TestRunServiceRejectsMemberListWithoutActor(t *testing.T) {
 	store := newQueryStore()
-	service := application.NewRunServiceWithRegistry(store, store, &scriptedRegistry{}, (&ids{}).NewID)
+	service := application.NewRunServiceWithRegistry(store, store, &scriptedRegistry{}, (&ids{}).NewID, zap.NewNop())
 
 	_, err := service.ListRuns(context.Background(), "tenant-1", application.ListRunsQuery{Page: 1, PageSize: 20})
 	require.ErrorIs(t, err, domain.ErrForbidden)
