@@ -320,6 +320,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 			deps.Metrics, // nil is normalized to NoopMetrics inside the constructor
 		)
 		a.Service.SetResourceChangeProposalService(a.ProposalService)
+		a.Service.SetResourceChangeApplier(adapters.ApplyDirectFromTool)
 	}
 	wireOperationGate(c, a, deps.Metrics)
 	c.Agent = a

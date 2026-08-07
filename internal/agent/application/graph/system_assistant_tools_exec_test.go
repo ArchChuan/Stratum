@@ -3,12 +3,14 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func testAssistantGuard(value any) (port.GuardedToolResult, error) {
@@ -93,4 +95,112 @@ func TestSystemAssistantToolsFailClosedWhenUnavailable(t *testing.T) {
 			require.NotEmpty(t, result.errMsg)
 		})
 	}
+}
+
+func TestSystemAssistantDirectApplyToolExecutesAndBuildsArtifact(t *testing.T) {
+	deadlineSeen := false
+	state := &ReActState{
+		GovernedAssistant: true,
+		ResourceChangeApplyFn: func(callCtx context.Context, _ map[string]any) (domain.ApplyResult, error) {
+			if _, ok := callCtx.Deadline(); ok {
+				deadlineSeen = true
+			}
+			return domain.ApplyResult{ResourceID: "server-1", Fingerprint: "fp"}, nil
+		},
+		InternalToolResultGuardFn: testAssistantGuard,
+	}
+	result := execApplyResourceChangeTool(context.Background(), port.ToolCall{
+		Name: domain.SystemAssistantToolApplyResourceChange,
+		Arguments: map[string]any{
+			"resourceKind": "mcp", "operation": "update", "resourceId": "server-1",
+			"payload": map[string]any{"name": "new"},
+		},
+	}, state, time.Now())
+
+	require.Equal(t, domain.ToolTraceStatusSuccess, result.status)
+	require.NotNil(t, result.artifact)
+	require.NotNil(t, result.artifact.DirectApply)
+	// Artifact-only extraction echoes raw tool arguments; canonical kind
+	// mapping is validated inside ApplyDirect.
+	require.Equal(t, domain.ResourceKind("mcp"), result.artifact.DirectApply.ResourceKind)
+	require.Equal(t, domain.OperationUpdate, result.artifact.DirectApply.Operation)
+	require.Equal(t, "server-1", result.artifact.DirectApply.ResourceID)
+	require.Equal(t, "success", result.artifact.DirectApply.Outcome)
+	require.Empty(t, result.artifact.DirectApply.ErrorCode)
+	require.Contains(t, result.content, "fp")
+	// The apply call carries the bounded tool deadline (10s), not a flat timeout.
+	require.True(t, deadlineSeen)
+}
+
+func TestSystemAssistantDirectApplyToolFailClosed(t *testing.T) {
+	applyFnCalled := false
+	fn := func(context.Context, map[string]any) (domain.ApplyResult, error) {
+		applyFnCalled = true
+		return domain.ApplyResult{}, nil
+	}
+	tests := []struct {
+		name  string
+		state ReActState
+	}{
+		{name: "ungoverned assistant", state: ReActState{ResourceChangeApplyFn: fn}},
+		{name: "unwired apply fn", state: ReActState{GovernedAssistant: true}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			applyFnCalled = false
+			result := execApplyResourceChangeTool(context.Background(), port.ToolCall{
+				Name: domain.SystemAssistantToolApplyResourceChange, Arguments: map[string]any{},
+			}, &tc.state, time.Now())
+			require.Equal(t, domain.ToolTraceStatusError, result.status)
+			require.False(t, applyFnCalled, "apply fn must not be called when the tool is unavailable")
+			// The tool is unavailable before any apply happens, so no typed
+			// artifact is produced — the error surface is the message alone.
+			require.Nil(t, result.artifact)
+			require.Contains(t, result.content, "tool unavailable")
+		})
+	}
+}
+
+func TestSystemAssistantDirectApplyToolErrorBecomesTypedArtifact(t *testing.T) {
+	state := &ReActState{
+		GovernedAssistant: true,
+		ResourceChangeApplyFn: func(context.Context, map[string]any) (domain.ApplyResult, error) {
+			return domain.ApplyResult{}, errors.New("ownership denied")
+		},
+		InternalToolResultGuardFn: testAssistantGuard,
+	}
+	result := execApplyResourceChangeTool(context.Background(), port.ToolCall{
+		Name:      domain.SystemAssistantToolApplyResourceChange,
+		Arguments: map[string]any{"resourceKind": "agent", "operation": "create", "payload": map[string]any{}},
+	}, state, time.Now())
+
+	require.Equal(t, domain.ToolTraceStatusError, result.status)
+	// The raw apply error is sanitized for the model surface (no internal
+	// details leak); the typed artifact keeps a stable error code.
+	require.Equal(t, "evidence unavailable", result.errMsg)
+	require.Contains(t, result.content, "error:")
+	require.NotNil(t, result.artifact.DirectApply)
+	require.Equal(t, "error", result.artifact.DirectApply.Outcome)
+	require.NotEmpty(t, result.artifact.DirectApply.ErrorCode)
+}
+
+func TestSystemAssistantDirectApplyToolRoutesThroughDispatch(t *testing.T) {
+	state := &ReActState{
+		GovernedAssistant: true,
+		ResourceChangeApplyFn: func(context.Context, map[string]any) (domain.ApplyResult, error) {
+			return domain.ApplyResult{ResourceID: "skill-1"}, nil
+		},
+		InternalToolResultGuardFn: testAssistantGuard,
+	}
+	provider := classifyToolProvider(domain.SystemAssistantToolApplyResourceChange, nil)
+	require.Equal(t, domain.ProviderTypeInternal, provider.ProviderType)
+	result := dispatchToolCall(context.Background(), port.ToolCall{
+		Name:      domain.SystemAssistantToolApplyResourceChange,
+		Arguments: map[string]any{"resourceKind": "skill", "operation": "update", "resourceId": "skill-1"},
+	}, state, time.Now(), provider, zap.NewNop())
+	require.Equal(t, domain.ToolTraceStatusSuccess, result.status)
+	require.NotNil(t, result.artifact)
+	// Artifact-only extraction echoes the raw argument; the canonical kind is
+	// validated inside ApplyDirect, so here we assert the echo plus the route.
+	require.Equal(t, domain.ResourceKind("skill"), result.artifact.DirectApply.ResourceKind)
 }

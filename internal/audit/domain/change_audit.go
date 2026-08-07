@@ -31,9 +31,10 @@ const (
 
 // Change sources: which write path produced the change.
 const (
-	ChangeSourceAPI           = "api"
-	ChangeSourceProposalApply = "proposal_apply"
-	ChangeSourceOptimization  = "optimization"
+	ChangeSourceAPI                   = "api"
+	ChangeSourceProposalApply         = "proposal_apply"
+	ChangeSourceOptimization          = "optimization"
+	ChangeSourceSystemAssistantDirect = "system_assistant" // 平台助手对话内直写(内置工具, 无提案)
 )
 
 // ResourceChangeAuditEvent is the pure, context-free record of one committed

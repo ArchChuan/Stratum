@@ -122,8 +122,14 @@ func TestSystemAssistantAdminGetsProposalToolInProcess(t *testing.T) {
 
 func TestSystemAssistantToolDefinitionsForRole(t *testing.T) {
 	require.Len(t, SystemAssistantToolDefinitionsForRole("member"), 2)
-	require.Len(t, SystemAssistantToolDefinitionsForRole("admin"), 3)
-	require.Len(t, SystemAssistantToolDefinitionsForRole("owner"), 3)
+	require.Len(t, SystemAssistantToolDefinitionsForRole("admin"), 4)
+	require.Len(t, SystemAssistantToolDefinitionsForRole("owner"), 4)
+	names := make([]string, 0)
+	for _, tool := range SystemAssistantToolDefinitionsForRole("admin") {
+		names = append(names, tool.Name)
+	}
+	require.Contains(t, names, domain.SystemAssistantToolApplyResourceChange)
+	require.NotContains(t, SystemAssistantToolDefinitionsForRole("member"), port.ToolDefinition{Name: domain.SystemAssistantToolApplyResourceChange})
 }
 
 func TestSystemAssistantWithoutModelFailsBeforeCapabilityResolution(t *testing.T) {

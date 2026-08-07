@@ -63,6 +63,7 @@ type AgentServiceDeps struct {
 	OfficialDocsSearch        func(context.Context, string) ([]domain.Citation, error)
 	DiagnosticProvider        port.DiagnosticEvidenceProvider
 	ProposalService           *ResourceChangeProposalService
+	ResourceChangeApplier     func(context.Context, string, map[string]any) (domain.ApplyResult, error)
 	OperationGate             port.OperationGate
 	TenantRoleResolver        port.TenantRoleResolver
 	Logger                    *zap.Logger
@@ -89,6 +90,15 @@ func (s *AgentService) SetSkillRevisionResolver(resolver port.SkillRevisionResol
 
 func (s *AgentService) SetResourceChangeProposalService(service *ResourceChangeProposalService) {
 	s.deps.ProposalService = service
+}
+
+// SetResourceChangeApplier injects the direct-write apply entry point used by
+// the system assistant's stratum_apply_resource_change tool. The actorID
+// parameter is the conversation initiator; ownership is inherited from their
+// role (no system-actor backdoor). Without it the tool fails closed in
+// execApplyResourceChangeTool.
+func (s *AgentService) SetResourceChangeApplier(fn func(context.Context, string, map[string]any) (domain.ApplyResult, error)) {
+	s.deps.ResourceChangeApplier = fn
 }
 
 // SetOperationGate injects the operation approval gate. Without a gate the
@@ -1680,7 +1690,7 @@ func (s *AgentService) systemAssistantExecutionOptions(
 		proposalService := s.deps.ProposalService
 		tenantID, actorID, conversationID := meta.TenantID, req.UserID, req.ConversationID
 		options = append(options, withProposalCreateFn(func(callCtx context.Context, args map[string]any) (domain.ResourceChangeProposalArtifact, error) {
-			kind, operation, resourceID, payload, parseErr := parseProposalArguments(args)
+			kind, operation, resourceID, payload, parseErr := ParseResourceChangeToolArguments(args)
 			if parseErr != nil {
 				return domain.ResourceChangeProposalArtifact{}, parseErr
 			}
@@ -1693,6 +1703,13 @@ func (s *AgentService) systemAssistantExecutionOptions(
 				Status: proposal.Status, Summary: proposal.Summary, ExpiresAt: proposal.ExpiresAt,
 			}
 			return artifact, createErr
+		}))
+	}
+	if (roleClass == "admin" || roleClass == "owner") && s.deps.ResourceChangeApplier != nil {
+		applier := s.deps.ResourceChangeApplier
+		actorID := req.UserID
+		options = append(options, withResourceChangeApplyFn(func(callCtx context.Context, args map[string]any) (domain.ApplyResult, error) {
+			return applier(callCtx, actorID, args)
 		}))
 	}
 	options = append(options, WithSystemAssistantMode(), withSystemAssistantRoleClass(roleClass),

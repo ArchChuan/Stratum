@@ -10,10 +10,13 @@ import (
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	knowledgedomain "github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
+	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/stretchr/testify/require"
 )
 
@@ -146,9 +149,15 @@ func TestProposalKnowledgeUpdateResolvesApplyResultResourceID(t *testing.T) {
 	require.Equal(t, "new", knowledge.value.Description)
 }
 
-type proposalAgentFake struct{ values map[string]agentapp.AgentDTO }
+type proposalAgentFake struct {
+	values      map[string]agentapp.AgentDTO
+	lastCtx     context.Context
+	lastActorID string
+}
 
-func (f *proposalAgentFake) Create(_ context.Context, in agentapp.CreateAgentInput) (agentapp.AgentDTO, error) {
+func (f *proposalAgentFake) Create(ctx context.Context, in agentapp.CreateAgentInput) (agentapp.AgentDTO, error) {
+	f.lastCtx = ctx
+	f.lastActorID = in.ActorID
 	value := agentapp.AgentDTO{ID: "agent-created", Name: in.Name, Type: in.Type, Description: in.Description, LLMModel: in.LLMModel, MaxIterations: in.MaxIterations, MaxContextTokens: in.MaxContextTokens}
 	f.values[value.ID] = value
 	return value, nil
@@ -216,14 +225,160 @@ func (f *proposalKnowledgeFake) GetWorkspaceByID(_ context.Context, _, id string
 
 var _ proposalSkillService = (*proposalSkillFake)(nil)
 
-type proposalSkillFake struct{}
+type proposalSkillFake struct {
+	fingerprints []string
+}
 
 func (*proposalSkillFake) CreateSkillDraft(context.Context, skillapp.CreateSkillDraftInput) (skillapp.SkillWorkspaceView, error) {
-	return skillapp.SkillWorkspaceView{}, nil
+	return skillapp.SkillWorkspaceView{
+		Skill: skillapp.SkillProduct{ID: "skill-created", Name: "s"},
+		Draft: skilldomain.SkillRevision{Status: skilldomain.VersionStatusDraft, ContentHash: "hash"},
+	}, nil
 }
 func (*proposalSkillFake) GetWorkspace(context.Context, string) (skillapp.SkillWorkspaceView, error) {
 	return skillapp.SkillWorkspaceView{}, nil
 }
-func (*proposalSkillFake) UpdateDraftBundle(context.Context, string, string, skillapp.UpdateDraftBundleInput) (skillapp.SkillWorkspaceView, error) {
-	return skillapp.SkillWorkspaceView{}, nil
+func (f *proposalSkillFake) UpdateDraftBundle(_ context.Context, _, fingerprint string, in skillapp.UpdateDraftBundleInput) (skillapp.SkillWorkspaceView, error) {
+	f.fingerprints = append(f.fingerprints, fingerprint)
+	return skillapp.SkillWorkspaceView{
+		Skill: skillapp.SkillProduct{ID: "skill-1", Name: in.Name},
+		Draft: skilldomain.SkillRevision{Status: skilldomain.VersionStatusDraft, ContentHash: "hash"},
+	}, nil
+}
+
+func TestApplyDirectAgentCreateAndUpdate(t *testing.T) {
+	agents := &proposalAgentFake{values: map[string]agentapp.AgentDTO{}}
+	adapter := NewResourceChangeProposalAdapters(agents, nil, nil, nil)
+	ctx := context.Background()
+
+	created, err := adapter.ApplyDirect(ctx, "tenant-1", "user-1", agentdomain.ResourceAgent,
+		agentdomain.OperationCreate, "", []byte(`{"name":"a","description":"d","model":"m","maxIterations":3,"maxContextTokens":100}`))
+	require.NoError(t, err)
+	require.Equal(t, "agent-created", created.ResourceID)
+	require.NotEmpty(t, created.Fingerprint)
+
+	updated, err := adapter.ApplyDirect(ctx, "tenant-1", "user-1", agentdomain.ResourceAgent,
+		agentdomain.OperationUpdate, "agent-created", []byte(`{"name":"a2","description":"d2","model":"m2","maxIterations":4,"maxContextTokens":200}`))
+	require.NoError(t, err)
+	require.Equal(t, "agent-created", updated.ResourceID)
+	require.Equal(t, "a2", agents.values["agent-created"].Name)
+	require.Equal(t, "m2", agents.values["agent-created"].LLMModel)
+}
+
+func TestApplyDirectAgentRejectsSystemAssistantManaged(t *testing.T) {
+	agents := &proposalAgentFake{values: map[string]agentapp.AgentDTO{
+		agentdomain.SystemAssistantID: {ID: agentdomain.SystemAssistantID, SystemKey: agentdomain.SystemAssistantKey},
+	}}
+	adapter := NewResourceChangeProposalAdapters(agents, nil, nil, nil)
+	_, err := adapter.ApplyDirect(context.Background(), "tenant-1", "user-1", agentdomain.ResourceAgent,
+		agentdomain.OperationUpdate, agentdomain.SystemAssistantID,
+		[]byte(`{"name":"a","description":"d","model":"m","maxIterations":3,"maxContextTokens":100}`))
+	require.ErrorIs(t, err, agentdomain.ErrSystemAssistantManaged)
+}
+
+func TestApplyDirectMCPCreateHasNoCredentialsAndUpdatePreservesStored(t *testing.T) {
+	mcp := &proposalMCPFake{configs: map[string]*mcpdomain.ServerConfig{}}
+	adapter := NewResourceChangeProposalAdapters(nil, nil, mcp, nil)
+	ctx := context.Background()
+
+	created, err := adapter.ApplyDirect(ctx, "tenant-1", "user-1", agentdomain.ResourceMCPConfig,
+		agentdomain.OperationCreate, "", []byte(`{"name":"docs","version":"1","transport":"streamable-http","url":"https://example.test/mcp","timeoutSec":30}`))
+	require.NoError(t, err)
+	createdConfig := mcp.configs[created.ResourceID]
+	require.Equal(t, mcpdomain.AuthTypeNone, createdConfig.Auth.Type)
+	require.Empty(t, createdConfig.Env)
+	require.Empty(t, createdConfig.Headers)
+
+	mcp.configs["server-1"] = &mcpdomain.ServerConfig{
+		ID: "server-1", Name: "old", Transport: "streamable-http", URL: "https://old.test/mcp",
+		Headers: map[string]string{"Authorization": "Bearer keep-me"},
+		Auth:    &mcpdomain.AuthConfig{Type: mcpdomain.AuthTypeBearer, Token: "keep-me"},
+	}
+	updated, err := adapter.ApplyDirect(ctx, "tenant-1", "user-1", agentdomain.ResourceMCPConfig,
+		agentdomain.OperationUpdate, "server-1", []byte(`{"name":"new","version":"2","transport":"streamable-http","url":"https://new.test/mcp","timeoutSec":30}`))
+	require.NoError(t, err)
+	require.Equal(t, "server-1", updated.ResourceID)
+	require.Equal(t, "keep-me", mcp.configs["server-1"].Auth.Token)
+	require.Equal(t, "Bearer keep-me", mcp.configs["server-1"].Headers["Authorization"])
+	require.NotContains(t, string(updated.Readback), "keep-me")
+}
+
+func TestApplyDirectKnowledgeCreateAndUpdate(t *testing.T) {
+	knowledge := &proposalKnowledgeFake{}
+	adapter := NewResourceChangeProposalAdapters(nil, nil, nil, knowledge)
+	ctx := context.Background()
+
+	created, err := adapter.ApplyDirect(ctx, "tenant-1", "user-1", agentdomain.ResourceKnowledgeWorkspace,
+		agentdomain.OperationCreate, "", []byte(`{"name":"docs","description":"old","embeddingModel":"bge-m3"}`))
+	require.NoError(t, err)
+	require.Equal(t, "ws-created", created.ResourceID)
+
+	updated, err := adapter.ApplyDirect(ctx, "tenant-1", "user-1", agentdomain.ResourceKnowledgeWorkspace,
+		agentdomain.OperationUpdate, "ws-created", []byte(`{"name":"docs","description":"new","embeddingModel":"bge-m3"}`))
+	require.NoError(t, err)
+	require.Equal(t, "ws-created", updated.ResourceID)
+	require.Equal(t, "new", knowledge.value.Description)
+}
+
+func TestApplyDirectSkillUpdatePassesEmptyFingerprint(t *testing.T) {
+	skills := &proposalSkillFake{}
+	adapter := NewResourceChangeProposalAdapters(nil, skills, nil, nil)
+	ctx := context.Background()
+
+	created, err := adapter.ApplyDirect(ctx, "tenant-1", "user-1", agentdomain.ResourceSkillDraft,
+		agentdomain.OperationCreate, "", []byte(`{"name":"s","description":"d","instructions":"i"}`))
+	require.NoError(t, err)
+	require.Equal(t, "skill-created", created.ResourceID)
+
+	updated, err := adapter.ApplyDirect(ctx, "tenant-1", "user-1", agentdomain.ResourceSkillDraft,
+		agentdomain.OperationUpdate, "skill-1", []byte(`{"name":"s2","description":"d2","instructions":"i2"}`))
+	require.NoError(t, err)
+	require.Equal(t, "skill-1", updated.ResourceID)
+	// Direct writes carry no baseline: the fingerprint must stay empty so the
+	// update behaves like a plain API update, not a concurrency-guarded apply.
+	require.Equal(t, []string{""}, skills.fingerprints)
+}
+
+func TestApplyDirectRejectsMismatchedResourceIDAndUnknownFields(t *testing.T) {
+	adapter := NewResourceChangeProposalAdapters(nil, nil, nil, nil)
+	ctx := context.Background()
+	payload := []byte(`{"name":"a","description":"d","model":"m","maxIterations":3,"maxContextTokens":100}`)
+
+	_, err := adapter.ApplyDirect(ctx, "tenant-1", "user-1", agentdomain.ResourceAgent,
+		agentdomain.OperationCreate, "agent-1", payload)
+	require.ErrorIs(t, err, agentdomain.ErrProposalInvalid)
+	_, err = adapter.ApplyDirect(ctx, "tenant-1", "user-1", agentdomain.ResourceAgent,
+		agentdomain.OperationUpdate, "", payload)
+	require.ErrorIs(t, err, agentdomain.ErrProposalInvalid)
+	// Unknown fields are rejected by the strict decoder.
+	_, err = adapter.ApplyDirect(ctx, "tenant-1", "user-1", agentdomain.ResourceAgent,
+		agentdomain.OperationCreate, "", []byte(`{"name":"a","description":"d","model":"m","maxIterations":3,"maxContextTokens":100,"editors":["u"]}`))
+	require.ErrorIs(t, err, agentdomain.ErrProposalInvalid)
+}
+
+func TestApplyDirectStampsSystemAssistantAuditSource(t *testing.T) {
+	agents := &proposalAgentFake{values: map[string]agentapp.AgentDTO{}}
+	adapter := NewResourceChangeProposalAdapters(agents, nil, nil, nil)
+	_, err := adapter.ApplyDirect(context.Background(), "tenant-1", "user-1", agentdomain.ResourceAgent,
+		agentdomain.OperationCreate, "", []byte(`{"name":"a","description":"d","model":"m","maxIterations":3,"maxContextTokens":100}`))
+	require.NoError(t, err)
+	require.NotNil(t, agents.lastCtx)
+	source, proposalID := reqctx.ChangeSourceFromContext(agents.lastCtx)
+	require.Equal(t, auditdomain.ChangeSourceSystemAssistantDirect, source)
+	require.Empty(t, proposalID)
+	// Ownership semantics: the direct write acts as the conversation
+	// initiator, so the service layer applies the B ownership matrix — the
+	// direct write is not an isolation bypass.
+	require.Equal(t, "user-1", agents.lastActorID)
+}
+
+func TestApplyDirectFromToolRequiresTenantInContext(t *testing.T) {
+	adapter := NewResourceChangeProposalAdapters(nil, nil, nil, nil)
+	// No tenant stamped on ctx: the tool adapter fails closed.
+	_, err := adapter.ApplyDirectFromTool(context.Background(), "user-1", map[string]any{})
+	require.ErrorIs(t, err, agentdomain.ErrProposalInvalid)
+	// Malformed tool arguments also fail closed before reaching ApplyDirect.
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	_, err = adapter.ApplyDirectFromTool(ctx, "user-1", map[string]any{"resourceKind": "agent", "operation": "delete"})
+	require.ErrorContains(t, err, "invalid system assistant tool arguments")
 }

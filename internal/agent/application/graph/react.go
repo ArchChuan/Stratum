@@ -63,6 +63,7 @@ type ReActState struct {
 	OfficialDocsSearchFn       func(context.Context, string) ([]domain.Citation, error)
 	DiagnosticFn               func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)
 	ProposalCreateFn           func(context.Context, map[string]any) (domain.ResourceChangeProposalArtifact, error)
+	ResourceChangeApplyFn      func(context.Context, map[string]any) (domain.ApplyResult, error)
 	InternalToolResultGuardFn  func(any) (port.GuardedToolResult, error)
 	// MaxLLMSteps caps LLM-node invocations; on the last allowed call tools are
 	// stripped and the model is asked to produce a final answer from collected context.
@@ -607,6 +608,8 @@ func dispatchToolCall(toolCtx context.Context, tc port.ToolCall, s *ReActState, 
 		return execDiagnoseTenantTool(toolCtx, tc, s, toolStart)
 	case domain.SystemAssistantToolProposeResourceChange:
 		return execProposeResourceChangeTool(toolCtx, tc, s, toolStart)
+	case domain.SystemAssistantToolApplyResourceChange:
+		return execApplyResourceChangeTool(toolCtx, tc, s, toolStart)
 	default:
 		return execMCPTool(toolCtx, tc, s, toolStart, provider, logger)
 	}
@@ -694,6 +697,47 @@ func execProposeResourceChangeTool(toolCtx context.Context, tc port.ToolCall, s 
 		status:  domain.ToolTraceStatusSuccess,
 		artifact: &domain.SystemAssistantToolArtifact{
 			Tool: tc.Name, Proposal: &proposal, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "success",
+		},
+	}
+}
+
+func execApplyResourceChangeTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
+	if !s.GovernedAssistant || s.ResourceChangeApplyFn == nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "resource change apply tool unavailable", content: "error: tool unavailable"}
+	}
+	// Artifact-only extraction: strict argument validation (whitelist fields,
+	// payload decode) happens inside ApplyDirect. Here we only read the three
+	// display fields so an invalid call still produces a typed error artifact.
+	kind, _ := tc.Arguments["resourceKind"].(string)
+	operation, _ := tc.Arguments["operation"].(string)
+	resourceID, _ := tc.Arguments["resourceId"].(string)
+	callCtx, cancel := context.WithTimeout(toolCtx, constants.SystemAssistantToolTimeout)
+	result, callErr := s.ResourceChangeApplyFn(callCtx, tc.Arguments)
+	cancel()
+	artifact := &domain.SystemAssistantDirectApplyArtifact{
+		Tool: tc.Name, ResourceKind: domain.ResourceKind(kind), Operation: domain.ProposalOperation(operation),
+		ResourceID: resourceID, Outcome: "success",
+	}
+	if callErr != nil {
+		message := safeAssistantToolError(callErr)
+		artifact.Outcome = "error"
+		artifact.ErrorCode = assistantToolErrorCode(callErr.Error())
+		return toolExecResult{
+			content:  "error: " + message,
+			status:   domain.ToolTraceStatusError,
+			errMsg:   message,
+			artifact: &domain.SystemAssistantToolArtifact{Tool: tc.Name, DirectApply: artifact, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "error", ErrorCode: artifact.ErrorCode},
+		}
+	}
+	content, guardErr := guardInternalAssistantEvidence(s.InternalToolResultGuardFn, map[string]any{"result": result})
+	if guardErr != nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: guardErr.Error(), content: "error: tool result exceeded safe bounds"}
+	}
+	return toolExecResult{
+		content: content,
+		status:  domain.ToolTraceStatusSuccess,
+		artifact: &domain.SystemAssistantToolArtifact{
+			Tool: tc.Name, DirectApply: artifact, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "success",
 		},
 	}
 }
@@ -1018,7 +1062,8 @@ func classifyToolProvider(name string, tools []port.ToolDefinition) toolProvider
 	switch name {
 	case domain.SystemAssistantToolSearchOfficialDocs,
 		domain.SystemAssistantToolDiagnoseTenant,
-		domain.SystemAssistantToolProposeResourceChange:
+		domain.SystemAssistantToolProposeResourceChange,
+		domain.SystemAssistantToolApplyResourceChange:
 		return toolProviderRef{ToolType: domain.ToolTypeInternal, ProviderType: domain.ProviderTypeInternal,
 			ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
 	case "stratum_continue_reasoning":
