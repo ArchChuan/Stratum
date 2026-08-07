@@ -78,13 +78,18 @@ func (c *TenantVectorCleaner) DropTenantCollections(ctx context.Context, tenantI
 // dropWorkspaceCollections queries the tenant's rag_workspaces and drops the
 // matching Milvus collections. The tenant schema is reached through execTenant
 // so the lookup stays inside the tenant boundary instead of interpolating the
-// schema name into SQL. Drop failures are appended to errs; a failed lookup is
-// only logged (best-effort cleanup) so the fixed-name collections still get
-// dropped.
+// schema name into SQL.
+//
+// 两阶段：事务内只做快速 SELECT（short-lived read-only），commit 后再在
+// 事务外逐个删集合——Milvus 删除不可随 DB 事务回滚，放在事务内会造成
+// "事务失败但向量已删"的漂移，且 DB 事务时长受 Milvus 可用性影响。
+// Drop failures are appended to errs; a failed lookup is only logged
+// (best-effort cleanup) so the fixed-name collections still get dropped.
 func (c *TenantVectorCleaner) dropWorkspaceCollections(ctx context.Context, tenantID string, errs *[]string) {
 	if c.pool == nil {
 		return
 	}
+	var cols []string
 	queryErr := execTenant(ctx, c.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id FROM rag_workspaces`)
 		if err != nil {
@@ -96,15 +101,18 @@ func (c *TenantVectorCleaner) dropWorkspaceCollections(ctx context.Context, tena
 			if err := rows.Scan(&id); err != nil {
 				continue
 			}
-			col := constants.CollectionName(tenantID, id)
-			if err := c.vs.DeleteCollection(ctx, col); err != nil {
-				*errs = append(*errs, fmt.Sprintf("%s: %v", col, err))
-			}
+			cols = append(cols, constants.CollectionName(tenantID, id))
 		}
 		return rows.Err()
 	})
 	if queryErr != nil {
 		c.logger.Warn("failed to query rag_workspaces for vector cleanup, workspace collections may leak",
 			zap.String("tenant_id", tenantID), zap.Error(queryErr))
+		return
+	}
+	for _, col := range cols {
+		if err := c.vs.DeleteCollection(ctx, col); err != nil {
+			*errs = append(*errs, fmt.Sprintf("%s: %v", col, err))
+		}
 	}
 }

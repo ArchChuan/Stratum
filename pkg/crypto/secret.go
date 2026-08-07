@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -31,7 +32,9 @@ func EncryptSecret(key [32]byte, plaintext string) (string, error) {
 // DecryptSecret 解密 EncryptSecret 产生的密文，fail closed：
 //   - 空串原样返回（空值无需加密）；
 //   - 无前缀（历史明文或垃圾值）返回 ErrLegacyPlaintext；
-//   - 有前缀但解密失败（密文损坏或 key 不匹配）返回错误。
+//   - 有前缀但 payload 不是合法 base64（业务值恰好以 "enc:v1:" 开头）
+//     同样按无法识别的值返回 ErrLegacyPlaintext；
+//   - 前缀与 base64 合法但解密失败（密文损坏或 key 不匹配）返回错误。
 //
 // 存量兼容策略：加密功能上线前落库的明文没有前缀，读取时必然触发
 // ErrLegacyPlaintext。调用方必须向用户返回"配置无效，请重新保存"，
@@ -43,7 +46,11 @@ func DecryptSecret(key [32]byte, stored string) (string, error) {
 	if !strings.HasPrefix(stored, secretPrefix) {
 		return "", ErrLegacyPlaintext
 	}
-	pt, err := Decrypt(key, strings.TrimPrefix(stored, secretPrefix))
+	payload := strings.TrimPrefix(stored, secretPrefix)
+	if _, err := base64.StdEncoding.DecodeString(payload); err != nil {
+		return "", ErrLegacyPlaintext
+	}
+	pt, err := Decrypt(key, payload)
 	if err != nil {
 		return "", fmt.Errorf("crypto: decrypt secret: %w", err)
 	}

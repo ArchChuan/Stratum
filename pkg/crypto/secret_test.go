@@ -99,8 +99,19 @@ func TestDecryptSecret_legacyPlaintextFailsClosed(t *testing.T) {
 	}
 }
 
-// TestDecryptSecret_corruptedCiphertextFailsClosed 验证带前缀但解密失败的值
-// （损坏或 key 不匹配）必须报错，不得返回任何内容。
+// TestDecryptSecret_badPrefixPayloadIsLegacy 验证带前缀但 payload 不是合法
+// base64 的值（业务值恰好以 "enc:v1:" 开头）按无法识别的值处理，返回
+// ErrLegacyPlaintext 提示重新保存，而不是误报为损坏密文。
+func TestDecryptSecret_badPrefixPayloadIsLegacy(t *testing.T) {
+	key := testKey()
+	_, err := DecryptSecret(key, secretPrefix+"!!!not-base64!!!")
+	if !errors.Is(err, ErrLegacyPlaintext) {
+		t.Fatalf("got %v, want ErrLegacyPlaintext", err)
+	}
+}
+
+// TestDecryptSecret_corruptedCiphertextFailsClosed 验证带前缀且 base64 合法
+// 但解密失败的值（密文损坏或 key 不匹配）必须报错，不得返回任何内容。
 func TestDecryptSecret_corruptedCiphertextFailsClosed(t *testing.T) {
 	key := testKey()
 	var otherKey [32]byte
@@ -109,7 +120,6 @@ func TestDecryptSecret_corruptedCiphertextFailsClosed(t *testing.T) {
 		name   string
 		stored string
 	}{
-		{name: "invalid base64", stored: secretPrefix + "!!!not-base64!!!"},
 		{name: "valid base64 but truncated", stored: secretPrefix + "aGVsbG8="},
 		{name: "wrong key", stored: mustEncrypt(otherKey, "sk-secret")},
 	} {
