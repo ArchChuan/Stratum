@@ -324,7 +324,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	)
 	defer execSpan.End()
 
-	memCtx := a.injectMemoryContext(ctx, tracer, cfg, snap.agentID, snap.memoryScope, input)
+	memCtx, memErr := a.injectMemoryContext(ctx, tracer, cfg, snap.agentID, snap.memoryScope, input)
 
 	a.Logger.Info("agent execution started",
 		zap.String("agent_id", snap.agentID),
@@ -338,7 +338,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		Metadata: map[string]interface{}{},
 	}
 
-	history := a.loadConversationHistory(ctx, tracer, snap.chatStore, cfg)
+	history, histErr := a.loadConversationHistory(ctx, tracer, snap.chatStore, cfg)
 
 	ec := agentExecContext{
 		cfg: cfg, tracer: tracer, agentID: snap.agentID, agentName: snap.agentName,
@@ -350,21 +350,32 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	}
 
 	var execErr error
-	switch snap.agentType {
-	case ReActAgent:
-		execErr = a.executeReAct(ctx, ec, result)
-	case CoTAgent:
-		execErr = a.executeCoT(cfg, input, result)
-	case PlanningAgent:
-		execErr = a.executePlanning(ctx, ec, result)
-
-	case ToolCallingAgent, RAGAgent, SwarmAgent:
-		result.Output = fmt.Sprintf("%s agent type not yet implemented", string(snap.agentType))
-		execErr = fmt.Errorf("agent type %s not implemented", snap.agentType)
-
+	// Fail closed before any LLM/tool work: memory context and conversation
+	// history are part of the execution context, and the execution must not
+	// start when either cannot be loaded (see injectMemoryContext and
+	// loadConversationHistory).
+	switch {
+	case memErr != nil:
+		execErr = fmt.Errorf("agent: memory context preparation: %w", memErr)
+	case histErr != nil:
+		execErr = fmt.Errorf("agent: conversation history preparation: %w", histErr)
 	default:
-		result.Output = "Unknown agent type"
-		execErr = fmt.Errorf("unknown agent type: %s", snap.agentType)
+		switch snap.agentType {
+		case ReActAgent:
+			execErr = a.executeReAct(ctx, ec, result)
+		case CoTAgent:
+			execErr = a.executeCoT(cfg, input, result)
+		case PlanningAgent:
+			execErr = a.executePlanning(ctx, ec, result)
+
+		case ToolCallingAgent, RAGAgent, SwarmAgent:
+			result.Output = fmt.Sprintf("%s agent type not yet implemented", string(snap.agentType))
+			execErr = fmt.Errorf("agent type %s not implemented", snap.agentType)
+
+		default:
+			result.Output = "Unknown agent type"
+			execErr = fmt.Errorf("unknown agent type: %s", snap.agentType)
+		}
 	}
 	result.Artifacts = buildExecutionArtifacts(result.AssistantToolArtifacts, cfg.EvolutionTrace.ResourceManifest["system-assistant-profile"])
 
@@ -434,9 +445,13 @@ func tunableSnapshot(cfg *ExecutionConfig, maxContextTokens int) map[string]any 
 	}
 }
 
-func (a *BaseAgent) injectMemoryContext(ctx context.Context, tracer oteltrace.Tracer, cfg *ExecutionConfig, agentID, memoryScope, input string) string {
+// injectMemoryContext builds the memory context injected into the system
+// prompt. When a MemoryInjector is configured, memory retrieval is part of the
+// execution contract: a failure aborts the execution (fail closed) instead of
+// silently running without memory context and producing a different answer.
+func (a *BaseAgent) injectMemoryContext(ctx context.Context, tracer oteltrace.Tracer, cfg *ExecutionConfig, agentID, memoryScope, input string) (string, error) {
 	if cfg.SystemAssistantMode || a.MemoryInjector == nil || cfg.ConversationID == "" {
-		return ""
+		return "", nil
 	}
 	ic := port.InjectionContext{
 		TenantID: cfg.TenantID, UserID: cfg.UserID, AgentID: agentID,
@@ -448,15 +463,21 @@ func (a *BaseAgent) injectMemoryContext(ctx context.Context, tracer oteltrace.Tr
 	memInjectCancel()
 	memSpan.End()
 	if memInjectErr != nil {
-		a.Logger.Warn("memory injection failed", zap.Error(memInjectErr))
-		return ""
+		a.Logger.Error("agent.memory_inject_failed",
+			zap.String("agent_id", agentID),
+			zap.String("conversation_id", cfg.ConversationID),
+			zap.Error(memInjectErr))
+		return "", fmt.Errorf("inject memory context: %w", memInjectErr)
 	}
-	return mctx
+	return mctx, nil
 }
 
-func (a *BaseAgent) loadConversationHistory(ctx context.Context, tracer oteltrace.Tracer, chatStore ChatStore, cfg *ExecutionConfig) []*ChatMessage {
+// loadConversationHistory loads prior turns from the chat store. History is
+// part of the execution context: a load failure aborts the execution (fail
+// closed) instead of running without conversation continuity.
+func (a *BaseAgent) loadConversationHistory(ctx context.Context, tracer oteltrace.Tracer, chatStore ChatStore, cfg *ExecutionConfig) ([]*ChatMessage, error) {
 	if chatStore == nil || cfg.ConversationID == "" {
-		return nil
+		return nil, nil
 	}
 	histSpanCtx, histSpan := tracer.Start(ctx, "agent.history_load")
 	histCtx, histCancel := context.WithTimeout(histSpanCtx, constants.AgentDBQueryTimeout)
@@ -464,12 +485,13 @@ func (a *BaseAgent) loadConversationHistory(ctx context.Context, tracer oteltrac
 	histCancel()
 	histSpan.End()
 	if histErr != nil {
-		a.Logger.Warn("agent: failed to load conversation history",
+		a.Logger.Error("agent.history_load_failed",
+			zap.String("agent_id", a.ID),
 			zap.String("conversation_id", cfg.ConversationID),
 			zap.Error(histErr))
-		return nil
+		return nil, fmt.Errorf("load conversation history: %w", histErr)
 	}
-	return msgs
+	return msgs, nil
 }
 
 func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, result *AgentResult) error {

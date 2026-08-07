@@ -13,6 +13,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 type dagStore struct {
@@ -252,7 +253,7 @@ func createPublishedRun(t *testing.T, store *dagStore, registry port.NodeExecuto
 	require.NoError(t, err)
 	version, err := definitions.Publish(context.Background(), "tenant-1", definition.ID)
 	require.NoError(t, err)
-	runs := application.NewRunServiceWithRegistry(store, store, registry, ids.NewID)
+	runs := application.NewRunServiceWithRegistry(store, store, registry, ids.NewID, zap.NewNop())
 	run, _, err := runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"task": "执行 DAG", "route": true}, IdempotencyKey: "dag-key"})
 	require.NoError(t, err)
 	return runs, run
@@ -628,7 +629,7 @@ func TestRunStartAndRecoveryUseDistinctAtomicEvents(t *testing.T) {
 	require.NoError(t, err)
 	version, err := definitions.Publish(context.Background(), "tenant-1", definition.ID)
 	require.NoError(t, err)
-	runs := application.NewRunServiceWithRegistry(store, store, &scriptedRegistry{}, ids.NewID)
+	runs := application.NewRunServiceWithRegistry(store, store, &scriptedRegistry{}, ids.NewID, zap.NewNop())
 	run, _, err := runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"task": "启动"}, IdempotencyKey: "start-event"})
 	require.NoError(t, err)
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))

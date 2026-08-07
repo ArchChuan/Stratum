@@ -3,7 +3,11 @@
 
 package graph
 
-import "github.com/byteBuilderX/stratum/internal/agent/domain/port"
+import (
+	"context"
+
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+)
 
 // Test-only aliases for unexported helpers.
 func MessagesWithActiveSkillsForTest(messages []port.LLMMessage, actives []port.SkillActivation) []port.LLMMessage {
@@ -27,4 +31,8 @@ func EffectiveToolsForTest(
 
 func UpsertActivationForTest(actives []port.SkillActivation, activation port.SkillActivation) []port.SkillActivation {
 	return upsertActivation(actives, activation)
+}
+
+func RouteLLMForTest(ctx context.Context, s ReActState, messages []port.LLMMessage, tools []port.ToolDefinition, capGW port.CapabilityGateway) (port.CapabilityResponse, error) {
+	return routeLLM(ctx, s, messages, tools, capGW)
 }

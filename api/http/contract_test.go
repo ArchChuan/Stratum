@@ -247,6 +247,14 @@ func (contractProviderRepo) Get(_ context.Context, _ string, _ string) (*llmdoma
 		UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}, nil
 }
+func (contractProviderRepo) GetMeta(_ context.Context, _ string, _ string) (*llmdomain.Provider, error) {
+	return &llmdomain.Provider{
+		ID: "contract-provider", Name: "stub", Kind: llmdomain.ProviderOpenAICompat,
+		BaseURL: "https://stub.example.com/v1", Enabled: true,
+		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}, nil
+}
 func (contractProviderRepo) List(_ context.Context, _ string) ([]llmdomain.Provider, error) {
 	return nil, nil
 }
@@ -620,7 +628,7 @@ func (contractAuditRepo) InsertBatch(_ context.Context, _ []auditdomain.AuditEve
 func (contractAuditRepo) Query(_ context.Context, _ auditdomain.AuditFilter) ([]auditdomain.AuditEvent, error) {
 	return nil, nil
 }
-func (contractAuditRepo) GetByID(_ context.Context, _ string) (*auditdomain.AuditEvent, error) {
+func (contractAuditRepo) GetByID(_ context.Context, _, _ string) (*auditdomain.AuditEvent, error) {
 	return nil, nil
 }
 func (contractAuditRepo) DeleteOlderThan(_ context.Context, _ time.Time) error { return nil }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -102,7 +103,7 @@ func bootstrapTenantSchemas(
 
 func Run(ctx context.Context, cfg *config.Config, c *wiring.Container, logger *zap.Logger) error {
 	appHarness := harnesspkg.New(logger)
-	registerHermes(appHarness, cfg, logger)
+	registerHermes(appHarness, c, logger)
 	registerMemoryPipeline(appHarness, c, logger)
 	registerMemoryWorkers(appHarness, c, logger)
 	registerChatCleanup(appHarness, c, logger)
@@ -151,17 +152,39 @@ func normalizeHarnessError(err error) error {
 	return fmt.Errorf("run application harness: %w", err)
 }
 
+// trackedWorker tracks a worker goroutine so the component's Stop func can
+// wait for it to exit within the shutdown budget. Workers exit when the run
+// ctx (cancelled before Stop) fires; Stop receives a live bounded ctx.
+type trackedWorker struct {
+	wg sync.WaitGroup
+}
+
+// goRun launches run in a tracked goroutine. Safe to call from Start.
+func (t *trackedWorker) goRun(ctx context.Context, run func(context.Context)) {
+	t.wg.Add(1)
+	go func() {
+		defer t.wg.Done()
+		run(ctx)
+	}()
+}
+
+// wait blocks until the tracked goroutine exits or the shutdown ctx expires.
+func (t *trackedWorker) wait(ctx context.Context) error {
+	return harnesspkg.WaitForGroup(ctx, &t.wg)
+}
+
 func registerAuditCleanup(appHarness *harnesspkg.Harness, c *wiring.Container, logger *zap.Logger) {
 	if c.Audit == nil {
 		return
 	}
 	worker := wiring.NewAuditCleanupWorker(c.Audit.Recorder, c.Audit.QueryService, logger)
+	var tw trackedWorker
 	mustRegister(appHarness, harnesspkg.NewSimpleComponent("audit-cleanup", logger,
 		harnesspkg.WithStartFunc(func(ctx context.Context) error {
-			go worker.Run(ctx)
+			tw.goRun(ctx, worker.Run)
 			return nil
 		}),
-		harnesspkg.WithStopFunc(func(context.Context) error { return nil }),
+		harnesspkg.WithStopFunc(tw.wait),
 	), logger)
 }
 
@@ -169,9 +192,13 @@ func registerWorkflowWorker(appHarness *harnesspkg.Harness, c *wiring.Container,
 	if c.Workflow == nil || c.Workflow.Worker == nil {
 		return
 	}
+	var tw trackedWorker
 	mustRegister(appHarness, harnesspkg.NewSimpleComponent("workflow-worker", logger,
-		harnesspkg.WithStartFunc(func(ctx context.Context) error { go c.Workflow.Worker.Run(ctx, 250*time.Millisecond); return nil }),
-		harnesspkg.WithStopFunc(func(context.Context) error { return nil }),
+		harnesspkg.WithStartFunc(func(ctx context.Context) error {
+			tw.goRun(ctx, func(runCtx context.Context) { c.Workflow.Worker.Run(runCtx, 250*time.Millisecond) })
+			return nil
+		}),
+		harnesspkg.WithStopFunc(tw.wait),
 		harnesspkg.WithHealthCheckFunc(func(context.Context) error { return nil }),
 	), logger)
 }
@@ -180,18 +207,19 @@ func registerCollabWorker(appHarness *harnesspkg.Harness, c *wiring.Container, l
 	if c.Collab == nil || c.Collab.Worker == nil {
 		return
 	}
+	var tw trackedWorker
 	mustRegister(appHarness, harnesspkg.NewSimpleComponent("collab-worker", logger,
 		harnesspkg.WithStartFunc(func(ctx context.Context) error {
-			go c.Collab.Worker.Run(ctx, 250*time.Millisecond)
+			tw.goRun(ctx, func(runCtx context.Context) { c.Collab.Worker.Run(runCtx, 250*time.Millisecond) })
 			return nil
 		}),
-		harnesspkg.WithStopFunc(func(context.Context) error { return nil }),
+		harnesspkg.WithStopFunc(tw.wait),
 		harnesspkg.WithHealthCheckFunc(func(context.Context) error { return nil }),
 	), logger)
 }
 
-func registerHermes(appHarness *harnesspkg.Harness, cfg *config.Config, logger *zap.Logger) {
-	start, stop, healthCheck := wiring.BuildHermesFuncs(cfg, logger)
+func registerHermes(appHarness *harnesspkg.Harness, c *wiring.Container, logger *zap.Logger) {
+	start, stop, healthCheck := wiring.BuildHermesFuncs(c, logger)
 	mustRegister(appHarness, harnesspkg.NewSimpleComponent("hermes", logger,
 		harnesspkg.WithStartFunc(start),
 		harnesspkg.WithStopFunc(stop),
@@ -226,20 +254,21 @@ func registerMemoryWorkers(appHarness *harnesspkg.Harness, c *wiring.Container, 
 	if len(memWorkers) == 0 {
 		return
 	}
+	var tw trackedWorker
 	mustRegister(appHarness, harnesspkg.NewSimpleComponent("memory-workers", logger,
 		harnesspkg.WithStartFunc(func(ctx context.Context) error {
 			for _, w := range memWorkers {
-				go w.Start(ctx)
+				tw.goRun(ctx, w.Start)
 			}
 			logger.Info("Memory workers started", zap.Int("worker_count", len(memWorkers)))
 			return nil
 		}),
-		harnesspkg.WithStopFunc(func(context.Context) error {
+		harnesspkg.WithStopFunc(func(ctx context.Context) error {
 			for _, w := range memWorkers {
 				w.Stop()
 			}
 			logger.Info("Memory workers stopped")
-			return nil
+			return tw.wait(ctx)
 		}),
 		harnesspkg.WithHealthCheckFunc(func(context.Context) error { return nil }),
 	), logger)
@@ -252,6 +281,7 @@ type chatCleaner interface {
 }
 
 func registerChatCleanup(appHarness *harnesspkg.Harness, c *wiring.Container, logger *zap.Logger) {
+	var tw trackedWorker
 	mustRegister(appHarness, harnesspkg.NewSimpleComponent("chat-cleanup", logger,
 		harnesspkg.WithStartFunc(func(ctx context.Context) error {
 			db := c.DB()
@@ -263,19 +293,23 @@ func registerChatCleanup(appHarness *harnesspkg.Harness, c *wiring.Container, lo
 			if c.Platform != nil && c.Platform.Metrics != nil {
 				metrics = c.Platform.Metrics
 			}
-			go runChatCleanup(ctx, db, c.Agent.ChatStore, chatCleanupInterval, metrics, logger)
+			tw.goRun(ctx, func(runCtx context.Context) {
+				runChatCleanup(runCtx, db, c.Agent.ChatStore, chatCleanupInterval, metrics, logger)
+			})
 			return nil
 		}),
-		harnesspkg.WithStopFunc(func(context.Context) error { return nil }),
+		harnesspkg.WithStopFunc(tw.wait),
 	), logger)
 }
 
 // registerGuestReaper installs the background component that reaps expired
 // guest accounts: for each expired guest it deletes every non-default tenant
-// the guest owns, then hard-deletes the user (FK cascades clear membership +
-// refresh tokens). Removing a guest is thus equivalent to evicting the member
-// from the default tenant plus dropping tenants the guest created.
+// the guest owns (including the per-guest sandbox tenant provisioned at
+// guest login), then hard-deletes the user (FK cascades clear membership +
+// refresh tokens). Guests are never members of the default tenant, so reaping
+// drops only the guest's own sandbox tenants.
 func registerGuestReaper(appHarness *harnesspkg.Harness, c *wiring.Container, logger *zap.Logger) {
+	var tw trackedWorker
 	mustRegister(appHarness, harnesspkg.NewSimpleComponent("guest-reaper", logger,
 		harnesspkg.WithStartFunc(func(ctx context.Context) error {
 			if c.Platform == nil || c.Platform.OnboardSvc == nil || c.IAM == nil || c.IAM.AdminService == nil {
@@ -286,10 +320,12 @@ func registerGuestReaper(appHarness *harnesspkg.Harness, c *wiring.Container, lo
 			if c.Platform.Metrics != nil {
 				metrics = c.Platform.Metrics
 			}
-			go runGuestReaper(ctx, c.Platform.OnboardSvc, c.IAM.AdminService, metrics, constants.GuestReaperInterval, logger)
+			tw.goRun(ctx, func(runCtx context.Context) {
+				runGuestReaper(runCtx, c.Platform.OnboardSvc, c.IAM.AdminService, metrics, constants.GuestReaperInterval, logger)
+			})
 			return nil
 		}),
-		harnesspkg.WithStopFunc(func(context.Context) error { return nil }),
+		harnesspkg.WithStopFunc(tw.wait),
 	), logger)
 }
 

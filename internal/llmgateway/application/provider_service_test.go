@@ -17,6 +17,9 @@ import (
 type mockProviderRepo struct {
 	providers map[string]*domain.Provider
 	err       error
+	// getErrs 模拟读取路径解密失败（历史明文/损坏密文）：Get 报错，
+	// GetMeta 不受影响——Update 必须仍能带新 key 重存该 provider。
+	getErrs map[string]error
 }
 
 func (m *mockProviderRepo) Create(_ context.Context, _ string, p *domain.Provider) error {
@@ -34,11 +37,27 @@ func (m *mockProviderRepo) Get(_ context.Context, _, id string) (*domain.Provide
 	if m.err != nil {
 		return nil, m.err
 	}
+	if getErr := m.getErrs[id]; getErr != nil {
+		return nil, getErr
+	}
 	p, ok := m.providers[id]
 	if !ok {
 		return nil, errors.New("provider not found")
 	}
 	return p, nil
+}
+
+func (m *mockProviderRepo) GetMeta(_ context.Context, _, id string) (*domain.Provider, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	p, ok := m.providers[id]
+	if !ok {
+		return nil, errors.New("provider not found")
+	}
+	cp := *p
+	cp.APIKey = ""
+	return &cp, nil
 }
 
 func (m *mockProviderRepo) List(_ context.Context, _ string) ([]domain.Provider, error) {
@@ -294,6 +313,39 @@ func TestProviderService_Update_NotFound(t *testing.T) {
 	_, err := svc.Update(context.Background(), "t1", application.UpdateProviderInput{ID: "nope"})
 	if err == nil {
 		t.Fatal("expected error for unknown provider, got nil")
+	}
+}
+
+// TestProviderService_Update_ResaveKeyWhenGetFailsClosed 回归：存量明文/损坏
+// 密文的 provider 在 Get（解密）失败时，带新 apiKey 的 Update 必须仍能重存。
+// 此前 Update 无条件先 Get 解密旧 key，重存被永久锁死（500）。
+func TestProviderService_Update_ResaveKeyWhenGetFailsClosed(t *testing.T) {
+	pr := &mockProviderRepo{
+		providers: map[string]*domain.Provider{
+			"p1": {ID: "p1", Name: "Legacy", Kind: domain.ProviderOpenAICompat,
+				BaseURL: "https://legacy.url", Enabled: true},
+		},
+		// Get 模拟解密失败；GetMeta 不受影响。
+		getErrs: map[string]error{"p1": errors.New("legacy plaintext")},
+	}
+	svc := newTestProviderService(pr, &mockModelRepo{}, nil)
+
+	input := application.UpdateProviderInput{
+		ID:      "p1",
+		Name:    "Legacy",
+		APIKey:  "new-key",
+		BaseURL: "https://legacy.url",
+	}
+	p, err := svc.Update(context.Background(), "t1", input)
+	if err != nil {
+		t.Fatalf("Update with new api key failed despite legacy plaintext: %v", err)
+	}
+	if p.APIKey != "new-key" {
+		t.Errorf("APIKey = %q, want %q", p.APIKey, "new-key")
+	}
+	// 重存后读取路径恢复正常：Get 不再被旧 key 卡死。
+	if got := pr.providers["p1"].APIKey; got != "new-key" {
+		t.Errorf("stored APIKey = %q, want %q", got, "new-key")
 	}
 }
 

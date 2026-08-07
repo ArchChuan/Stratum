@@ -8,11 +8,29 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/byteBuilderX/stratum/internal/agent/infrastructure/officialdocs"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
+	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/stretchr/testify/require"
 )
+
+// stubCatalog fakes knowledgeport.OfficialDocsCatalog so seeds tests stay
+// inside the knowledge context.
+type stubCatalog struct {
+	entries []knowledgeport.OfficialDocEntry
+	err     error
+}
+
+func (s stubCatalog) AllCatalogEntries() ([]knowledgeport.OfficialDocEntry, error) {
+	return s.entries, s.err
+}
+
+func testCatalog() stubCatalog {
+	return stubCatalog{entries: []knowledgeport.OfficialDocEntry{
+		{DocumentID: "getting-started", Title: "Getting Started", Section: "Install", Body: "install it"},
+		{DocumentID: "faq", Title: "FAQ", Section: "General", Body: "answers"},
+	}}
+}
 
 // --- pure helpers ---
 
@@ -37,7 +55,7 @@ func TestSectionSlug(t *testing.T) {
 }
 
 func TestFormatDocContent(t *testing.T) {
-	entry := officialdocs.CatalogEntry{Title: "T", Section: "S", Body: "B"}
+	entry := knowledgeport.OfficialDocEntry{Title: "T", Section: "S", Body: "B"}
 	require.Equal(t, "# T\n\n## S\n\nB", formatDocContent(entry))
 }
 
@@ -54,13 +72,21 @@ func TestContentHash_deterministicAndDistinct(t *testing.T) {
 // --- SeedBuiltinDocs branch coverage ---
 
 func TestSeedBuiltinDocs_nilIngest(t *testing.T) {
-	n := SeedBuiltinDocs(context.Background(), "t1", "", nil, nil, zap.NewNop())
+	n := SeedBuiltinDocs(context.Background(), "t1", "", nil, nil, nil, zap.NewNop())
 	require.Zero(t, n)
 }
 
 func TestSeedBuiltinDocs_nilDocRepo(t *testing.T) {
 	ingest := knowledge.NewKnowledgeIngest(nil, nil, nil, nil, zap.NewNop())
-	n := SeedBuiltinDocs(context.Background(), "t1", "", ingest, nil, zap.NewNop())
+	n := SeedBuiltinDocs(context.Background(), "t1", "", ingest, nil, testCatalog(), zap.NewNop())
+	require.Zero(t, n)
+}
+
+func TestSeedBuiltinDocs_catalogFails(t *testing.T) {
+	ingest := knowledge.NewKnowledgeIngest(nil, nil, nil, nil, zap.NewNop())
+	docRepo := &stubDocRepo{}
+	n := SeedBuiltinDocs(context.Background(), "t1", "", ingest, docRepo,
+		stubCatalog{err: errors.New("catalog decode failed")}, zap.NewNop())
 	require.Zero(t, n)
 }
 
@@ -95,20 +121,20 @@ func (errParser) ParseBytes([]byte, string) (string, error) { return "", errors.
 func TestSeedBuiltinDocs_existsCheckFails(t *testing.T) {
 	ingest := knowledge.NewKnowledgeIngest(errParser{}, nil, nil, nil, zap.NewNop())
 	docRepo := &stubDocRepo{existsErr: errors.New("db down")}
-	n := SeedBuiltinDocs(context.Background(), "t1", "", ingest, docRepo, zap.NewNop())
+	n := SeedBuiltinDocs(context.Background(), "t1", "", ingest, docRepo, testCatalog(), zap.NewNop())
 	require.Zero(t, n)
 }
 
 func TestSeedBuiltinDocs_allSkipped(t *testing.T) {
 	ingest := knowledge.NewKnowledgeIngest(errParser{}, nil, nil, nil, zap.NewNop())
 	docRepo := &stubDocRepo{exists: true}
-	n := SeedBuiltinDocs(context.Background(), "t1", "", ingest, docRepo, zap.NewNop())
+	n := SeedBuiltinDocs(context.Background(), "t1", "", ingest, docRepo, testCatalog(), zap.NewNop())
 	require.Zero(t, n)
 }
 
 func TestSeedBuiltinDocs_ingestFails(t *testing.T) {
 	ingest := knowledge.NewKnowledgeIngest(errParser{}, nil, nil, nil, zap.NewNop())
 	docRepo := &stubDocRepo{exists: false}
-	n := SeedBuiltinDocs(context.Background(), "t1", "", ingest, docRepo, zap.NewNop())
+	n := SeedBuiltinDocs(context.Background(), "t1", "", ingest, docRepo, testCatalog(), zap.NewNop())
 	require.Zero(t, n)
 }

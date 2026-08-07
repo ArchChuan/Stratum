@@ -2,6 +2,7 @@ package vectorstore
 
 import (
 	"context"
+	"errors"
 
 	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	storagemilvus "github.com/byteBuilderX/stratum/pkg/storage/milvus"
@@ -12,7 +13,10 @@ import (
 type storeIface interface {
 	CreateCollectionWithDim(ctx context.Context, collectionName string, dimension int) error
 	Insert(ctx context.Context, collectionName string, docs []storagemilvus.DocumentChunk, partition string) error
-	Search(ctx context.Context, collectionName string, queryVector []float32, topK int, partitions ...string) ([]storagemilvus.SearchResult, error)
+	// SearchWithFilterStrict is the fail-closed search variant: RAG collections
+	// are created with the current schema, so a missing collection or schema
+	// drift is reported instead of silently returning empty results.
+	SearchWithFilterStrict(ctx context.Context, collectionName string, queryVector []float32, topK int, expression string, partitions ...string) ([]storagemilvus.SearchResult, error)
 	DescribeCollection(ctx context.Context, collectionName string) (storagemilvus.CollectionInfo, error)
 	Flush(ctx context.Context, collectionName string) error
 	DeleteCollection(ctx context.Context, collectionName string) error
@@ -45,7 +49,7 @@ func (a *Adapter) Insert(ctx context.Context, collectionName string, docs []know
 }
 
 func (a *Adapter) Search(ctx context.Context, collectionName string, queryVector []float32, topK int) ([]knowledgeport.VectorSearchResult, error) {
-	results, err := a.store.Search(ctx, collectionName, queryVector, topK)
+	results, err := a.store.SearchWithFilterStrict(ctx, collectionName, queryVector, topK, "")
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +82,13 @@ func (a *Adapter) DeleteCollection(ctx context.Context, collectionName string) e
 }
 
 func (a *Adapter) CountVectors(ctx context.Context, collectionName string) (int64, error) {
-	return a.store.CountVectors(ctx, collectionName, "")
+	n, err := a.store.CountVectors(ctx, collectionName, "")
+	if errors.Is(err, storagemilvus.ErrCollectionNotFound) {
+		// A workspace that never ingested has no collection: zero vectors is
+		// the correct stats answer, not a failure.
+		return 0, nil
+	}
+	return n, err
 }
 
 var _ knowledgeport.VectorStore = (*Adapter)(nil)

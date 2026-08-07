@@ -17,6 +17,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	pgstorage "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -85,7 +86,7 @@ func setupLLMAdminTestEnv(t *testing.T) *llmAdminTestEnv {
 
 	// Build real repos
 	modelRepo := llmgateway.NewPgModelRepo(pool)
-	providerRepo := llmgateway.NewPgProviderRepo(pool)
+	providerRepo := llmgateway.NewPgProviderRepo(pool, [32]byte{}, zap.NewNop(), observability.NoopMetrics{})
 
 	// Build services with mock runtime
 	runtime := &mockProviderRuntime{}
@@ -491,7 +492,7 @@ func TestLLMAdminTenantIsolation(t *testing.T) {
 	})
 
 	// Build repos — TestLLMAdminTenantIsolation tests the repo layer directly
-	providerRepo := llmgateway.NewPgProviderRepo(pool)
+	providerRepo := llmgateway.NewPgProviderRepo(pool, [32]byte{}, zap.NewNop(), observability.NoopMetrics{})
 
 	// Create a provider in tenant A
 	provA := &domain.Provider{

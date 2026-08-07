@@ -137,10 +137,9 @@ func (s *TenantService) UpdateSettings(ctx context.Context, tenantID, callerRole
 		return ErrInvalidSettings
 	}
 
-	_, _, existingJSON, _ := s.repo.GetTenantSettings(ctx, tenantID)
-	merged := map[string]interface{}{}
-	if len(existingJSON) > 0 {
-		_ = json.Unmarshal(existingJSON, &merged)
+	merged, err := s.readSettingsBaseline(ctx, tenantID)
+	if err != nil {
+		return err
 	}
 
 	for k, v := range req.Settings {
@@ -156,6 +155,25 @@ func (s *TenantService) UpdateSettings(ctx context.Context, tenantID, callerRole
 		return err
 	}
 	return nil
+}
+
+// readSettingsBaseline loads the stored tenant settings and parses them into
+// a merge baseline. Fail closed: a read failure or corrupt stored JSON must
+// never be replaced by an empty baseline.
+func (s *TenantService) readSettingsBaseline(ctx context.Context, tenantID string) (map[string]interface{}, error) {
+	_, _, existingJSON, err := s.repo.GetTenantSettings(ctx, tenantID)
+	if err != nil {
+		// fail closed: 读取失败不得以空基线覆盖现有设置
+		return nil, fmt.Errorf("tenant: read settings: %w", err)
+	}
+	merged := map[string]interface{}{}
+	if len(existingJSON) > 0 {
+		if err := json.Unmarshal(existingJSON, &merged); err != nil {
+			// fail closed: 损坏的存量 JSON 不得被空基线替换
+			return nil, fmt.Errorf("tenant: settings unmarshal: %w", err)
+		}
+	}
+	return merged, nil
 }
 
 // ListUserTenants returns all tenants the user belongs to.

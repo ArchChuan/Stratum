@@ -33,7 +33,7 @@ func (s *stubStore) DescribeCollection(context.Context, string) (storagemilvus.C
 	return s.collectionInfo, nil
 }
 
-func (s *stubStore) Search(context.Context, string, []float32, int, ...string) ([]storagemilvus.SearchResult, error) {
+func (s *stubStore) SearchWithFilterStrict(context.Context, string, []float32, int, string, ...string) ([]storagemilvus.SearchResult, error) {
 	return s.searchRes, s.searchErr
 }
 func (s *stubStore) Flush(context.Context, string) error            { return s.flushErr }
@@ -129,4 +129,24 @@ func TestAdapter_CountVectors_storeFails(t *testing.T) {
 	a := &Adapter{store: s}
 	_, err := a.CountVectors(context.Background(), "col")
 	require.ErrorContains(t, err, "count down")
+}
+
+func TestAdapter_CountVectors_collectionNotFoundIsZero(t *testing.T) {
+	// A workspace that never ingested has no collection; stats must read 0,
+	// not fail.
+	s := &stubStore{countErr: storagemilvus.ErrCollectionNotFound}
+	a := &Adapter{store: s}
+	n, err := a.CountVectors(context.Background(), "col")
+	require.NoError(t, err)
+	require.Equal(t, int64(0), n)
+}
+
+func TestAdapter_Search_collectionNotFoundPropagates(t *testing.T) {
+	// RAG retrieval fails closed on a missing collection: the application
+	// layer distinguishes "legitimately empty workspace" from drift.
+	s := &stubStore{searchErr: storagemilvus.ErrCollectionNotFound}
+	a := &Adapter{store: s}
+	res, err := a.Search(context.Background(), "col", []float32{0.5}, 5)
+	require.Nil(t, res)
+	require.ErrorIs(t, err, storagemilvus.ErrCollectionNotFound)
 }

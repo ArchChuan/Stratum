@@ -2,6 +2,7 @@ package middleware_test
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -174,6 +175,68 @@ func TestAuditMiddleware_ExtractsActorFromJWT(t *testing.T) {
 	}
 	if evt.TraceID != "trace-1" {
 		t.Errorf("trace_id=%q, want trace-1", evt.TraceID)
+	}
+}
+
+// TestAuditMiddleware_AuthPathDropsRequestBody verifies that /auth/* bodies
+// (login/register/guest carry credentials by design) are never recorded in
+// the audit snapshot, while the downstream handler still receives the body.
+func TestAuditMiddleware_AuthPathDropsRequestBody(t *testing.T) {
+	rec := &fakeAuditRecorder{}
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.Use(middleware.AuditMiddleware(rec))
+	r.POST("/auth/guest", func(c *gin.Context) {
+		body, _ := io.ReadAll(c.Request.Body)
+		c.String(http.StatusOK, string(body))
+	})
+
+	body := `{"password":"hunter2","token":"abc"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/guest", strings.NewReader(body)) //nolint:noctx
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if got := w.Body.String(); got != body {
+		t.Fatalf("downstream handler body=%q, want original %q", got, body)
+	}
+	evt := rec.last()
+	if evt == nil {
+		t.Fatal("expected audit event")
+	}
+	if len(evt.After) != 0 {
+		t.Errorf("auth path body must not be recorded, got %q", evt.After)
+	}
+}
+
+// TestAuditMiddleware_RedactsCredentialBodies verifies that non-auth bodies
+// are redacted before they reach the audit snapshot.
+func TestAuditMiddleware_RedactsCredentialBodies(t *testing.T) {
+	rec := &fakeAuditRecorder{}
+	r := setupAuditMiddlewareRouter(rec)
+
+	req := httptest.NewRequest(http.MethodPost, "/test", //nolint:noctx
+		strings.NewReader(`{"password":"hunter2","api_key_value":"sk-123","title":"ok"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	evt := rec.last()
+	if evt == nil {
+		t.Fatal("expected audit event")
+	}
+	after := string(evt.After)
+	for _, secret := range []string{"hunter2", "sk-123"} {
+		if strings.Contains(after, secret) {
+			t.Fatalf("credential %q leaked into audit snapshot: %q", secret, after)
+		}
+	}
+	if !strings.Contains(after, `"title":"ok"`) {
+		t.Errorf("non-credential field was lost: %q", after)
+	}
+	if !strings.Contains(after, "[REDACTED]") {
+		t.Errorf("expected redaction marker in %q", after)
 	}
 }
 

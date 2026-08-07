@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	llmapp "github.com/byteBuilderX/stratum/internal/llmgateway/application"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 
 func newModelHandler(registry *llmgateway.ModelRegistry) *ModelHandler {
@@ -25,7 +27,7 @@ func TestListModels_emptyRegistry(t *testing.T) {
 
 	reg := llmgateway.NewModelRegistry(
 		llmgateway.NewPgModelRepo(nil),
-		llmgateway.NewPgProviderRepo(nil),
+		llmgateway.NewPgProviderRepo(nil, [32]byte{}, zap.NewNop(), observability.NoopMetrics{}),
 		nil, nil, 5*time.Minute,
 	)
 	h := newModelHandler(reg)

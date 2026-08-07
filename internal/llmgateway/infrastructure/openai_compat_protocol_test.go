@@ -3,6 +3,7 @@ package infrastructure
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+
+	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 )
 
 // openAICompatServer 用 httptest 模拟 OpenAI-compatible 端点，计数调用。
@@ -94,6 +97,69 @@ func TestOpenAICompatProtocol_CompleteStream(t *testing.T) {
 	require.Equal(t, "t1", resp.ToolCalls[0].ID)
 	require.Equal(t, "f", resp.ToolCalls[0].Function.Name)
 	require.Equal(t, `{"a":1}`, resp.ToolCalls[0].Function.Arguments)
+}
+
+// TestOpenAICompatCompleteStream_termination 覆盖 SSE 流三种收尾：
+// 正常终止（[DONE] 或 finish_reason）成功；内容已输出但连接中断返回
+// ErrStreamTruncated；空响应返回普通错误（不是截断，不是成功）。
+func TestOpenAICompatCompleteStream_termination(t *testing.T) {
+	cases := []struct {
+		name    string
+		write   func(w http.ResponseWriter)
+		want    string // 成功时期望的内容
+		wantErr error  // 失败时 errors.Is 断言目标
+	}{
+		{
+			name: "normal termination via [DONE]",
+			write: func(w http.ResponseWriter) {
+				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+				fmt.Fprint(w, "data: [DONE]\n\n")
+			},
+			want: "hi",
+		},
+		{
+			name: "finish_reason chunk without [DONE] terminates",
+			write: func(w http.ResponseWriter) {
+				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+			},
+			want: "hi",
+		},
+		{
+			name: "mid-stream disconnect is truncated",
+			write: func(w http.ResponseWriter) {
+				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+			},
+			wantErr: domain.ErrStreamTruncated,
+		},
+		{
+			name:    "empty response is an error",
+			write:   func(w http.ResponseWriter) {},
+			wantErr: io.EOF,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				tc.write(w)
+				w.(http.Flusher).Flush()
+			}))
+			defer srv.Close()
+
+			client := NewOpenAICompatClient(ProviderConfig{
+				Name: "test-openai", BaseURL: srv.URL, APIKey: "sk-test",
+			}, zap.NewNop())
+			resp, err := client.CompleteStream(context.Background(),
+				&CompletionRequest{Model: "m1"}, func(string) {})
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, resp.Content)
+		})
+	}
 }
 
 func TestOpenAICompatProtocol_Health(t *testing.T) {

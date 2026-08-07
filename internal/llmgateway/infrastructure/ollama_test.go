@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 )
 
@@ -97,6 +99,63 @@ func TestOllamaCompleteStream(t *testing.T) {
 	require.Equal(t, 3, resp.Usage.CompletionTokens)
 	require.Equal(t, 10, resp.Usage.PromptTokens)
 	require.Equal(t, 13, resp.Usage.TotalTokens)
+}
+
+// TestOllamaCompleteStream_termination 覆盖 NDJSON 流三种收尾：
+// done:true 正常终止成功；内容已输出但连接中断返回 ErrStreamTruncated；
+// 空响应返回普通错误（不是截断，不是成功）。
+func TestOllamaCompleteStream_termination(t *testing.T) {
+	cases := []struct {
+		name    string
+		write   func(w http.ResponseWriter)
+		want    string // 成功时期望的内容
+		wantErr error  // 失败时 errors.Is 断言目标
+	}{
+		{
+			name: "done true terminates",
+			write: func(w http.ResponseWriter) {
+				fmt.Fprint(w, `{"model":"llama3.2","message":{"role":"assistant","content":"hi"},"done":false}`+"\n")
+				fmt.Fprint(w, `{"model":"llama3.2","message":{"role":"assistant","content":"!"},"done":true}`+"\n")
+			},
+			want: "hi!",
+		},
+		{
+			name: "mid-stream disconnect is truncated",
+			write: func(w http.ResponseWriter) {
+				fmt.Fprint(w, `{"model":"llama3.2","message":{"role":"assistant","content":"hi"},"done":false}`+"\n")
+			},
+			wantErr: domain.ErrStreamTruncated,
+		},
+		{
+			name:    "empty response is an error",
+			write:   func(w http.ResponseWriter) {},
+			wantErr: io.EOF,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/x-ndjson")
+				tc.write(w)
+				w.(http.Flusher).Flush()
+			}))
+			defer srv.Close()
+
+			client := infrastructure.NewOllamaClient(
+				infrastructure.ProviderConfig{Name: "test-ollama", BaseURL: srv.URL},
+				zap.NewNop(),
+			)
+			resp, err := client.CompleteStream(context.Background(),
+				&infrastructure.CompletionRequest{Model: "llama3.2"},
+				func(string) {})
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, resp.Content)
+		})
+	}
 }
 
 func TestOllamaHealth(t *testing.T) {

@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -213,8 +216,8 @@ func TestRAGQueryKeywordDefaultsTopK(t *testing.T) {
 		t.Fatalf("expected keyword query to succeed, got %v", err)
 	}
 
-	if chunks.topK != 5 {
-		t.Fatalf("expected non-positive TopK to default to 5, got %d", chunks.topK)
+	if chunks.topK != constants.DefaultRAGTopK {
+		t.Fatalf("expected non-positive TopK to default to %d, got %d", constants.DefaultRAGTopK, chunks.topK)
 	}
 }
 
@@ -350,4 +353,136 @@ func (r *recordingWorkspaceRepo) GetConfigByID(ctx context.Context, tenantID, id
 		return r.workspace.Config, nil
 	}
 	return domain.WorkspaceConfig{}, nil
+}
+
+func TestRAGService_MergeResults_PartialFailureKeepsContentAndWarns(t *testing.T) {
+	core, logs := observer.New(zapcore.WarnLevel)
+	svc := NewRAGService(nil, nil, zap.New(core))
+
+	content, err := svc.mergeResults([]wsResult{
+		{content: "chunk-a"},
+		{err: errors.New("workspace down")},
+		{content: "chunk-b"},
+	})
+	if err != nil {
+		t.Fatalf("partial failure must not fail the query, got %v", err)
+	}
+	if !strings.Contains(content, "chunk-a") || !strings.Contains(content, "chunk-b") {
+		t.Fatalf("expected successful workspace content, got %q", content)
+	}
+
+	warns := logs.FilterMessage("knowledge.rag.partial_failure").All()
+	if len(warns) != 1 {
+		t.Fatalf("expected 1 partial-failure WARN, got %d", len(warns))
+	}
+	failed := warns[0].ContextMap()["failed_workspaces"]
+	if failed != int64(1) {
+		t.Errorf("failed_workspaces=%v, want 1", failed)
+	}
+}
+
+func TestRAGService_MergeResults_AllFailedReturnsFirstError(t *testing.T) {
+	svc := NewRAGService(nil, nil, zap.NewNop())
+	errA := errors.New("workspace A down")
+
+	content, err := svc.mergeResults([]wsResult{{err: errA}, {err: errors.New("workspace B down")}})
+	if !errors.Is(err, errA) {
+		t.Fatalf("expected first error to surface, got %v", err)
+	}
+	if content != "" {
+		t.Fatalf("expected empty content when all workspaces failed, got %q", content)
+	}
+}
+
+func TestRAGService_MergeResults_AllSucceedConcatenatesContent(t *testing.T) {
+	svc := NewRAGService(nil, nil, zap.NewNop())
+
+	content, err := svc.mergeResults([]wsResult{{content: "a"}, {content: "b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content != "ab" {
+		t.Fatalf("expected concatenated content, got %q", content)
+	}
+}
+
+// blockingChunkRepo blocks each KeywordSearch until release is closed while
+// tracking peak concurrency, making the fan-out bound deterministically
+// observable.
+type blockingChunkRepo struct {
+	recordingChunkRepo
+	release chan struct{}
+	current int32
+	max     int32
+}
+
+func (r *blockingChunkRepo) KeywordSearch(_ context.Context, _, _, _ string, _ int) ([]domain.Chunk, error) {
+	inFlight := atomic.AddInt32(&r.current, 1)
+	for {
+		peak := atomic.LoadInt32(&r.max)
+		if inFlight <= peak || atomic.CompareAndSwapInt32(&r.max, peak, inFlight) {
+			break
+		}
+	}
+	<-r.release
+	atomic.AddInt32(&r.current, -1)
+	return []domain.Chunk{{ID: "c1", DocID: "d1", Text: "关于学习的段落", Index: 0}}, nil
+}
+
+func TestNewRAGSearchFn_FanoutBoundedByMaxConcurrentWorkspaceSearch(t *testing.T) {
+	repo := &blockingChunkRepo{release: make(chan struct{})}
+	svc := NewRAGService(nil, nil, zap.NewNop())
+	svc.SetChunkRepo(repo)
+	svc.SetWorkspaceRepo(&recordingWorkspaceRepo{
+		workspace: &domain.Workspace{
+			ID:   "019047ac-0000-7000-9000-000000000099",
+			Name: "个人知识库",
+			Config: domain.WorkspaceConfig{
+				EmbeddingModel: "text-embedding-v3",
+				QueryMode:      "keyword",
+				TopK:           3,
+			},
+		},
+	})
+
+	const wsCount = 6
+	names := make([]string, wsCount)
+	for i := range names {
+		names[i] = "ws-" + itoa(i+1)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = NewRAGSearchFn(svc, "tenant-1")(context.Background(), names, "学习", 3)
+	}()
+
+	limit := int32(constants.MaxConcurrentWorkspaceSearch)
+	// Wait until the bound is saturated: searches may enter KeywordSearch
+	// only one at a time, so reaching `limit` proves bounded launch.
+	deadline := time.After(2 * time.Second)
+	for atomic.LoadInt32(&repo.current) < limit {
+		select {
+		case <-done:
+			t.Fatal("fan-out finished before the concurrency bound was saturated")
+		case <-deadline:
+			t.Fatalf("timeout waiting for %d concurrent searches", limit)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+
+	// If the fan-out were unbounded, extra searches would have entered by now.
+	time.Sleep(100 * time.Millisecond)
+	if got := atomic.LoadInt32(&repo.current); got > limit {
+		t.Fatalf("fan-out exceeded bound: %d searches in flight, limit %d", got, limit)
+	}
+
+	close(repo.release)
+	<-done
+	if peak := atomic.LoadInt32(&repo.max); peak > limit {
+		t.Fatalf("peak concurrency %d exceeds bound %d", peak, limit)
+	}
+}
+
+func itoa(n int) string {
+	return string(rune('0' + n))
 }

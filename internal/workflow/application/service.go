@@ -17,6 +17,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/dag"
+	"go.uber.org/zap"
 )
 
 type CreateDefinitionCommand struct {
@@ -135,13 +136,14 @@ type RunService struct {
 	executors port.NodeExecutorRegistry
 	newID     func() string
 	eventIDMu sync.Mutex
+	logger    *zap.Logger
 }
 
 func NewRunService(versions port.VersionRepository, store interface {
 	port.RunRepository
 	port.AttemptRepository
 }, agents port.AgentExecutor, newID func() string) *RunService {
-	return NewRunServiceWithRegistry(versions, eventCapableStore{RunRepository: store, AttemptRepository: store}, agentRegistry{agents: agents}, newID)
+	return NewRunServiceWithRegistry(versions, eventCapableStore{RunRepository: store, AttemptRepository: store}, agentRegistry{agents: agents}, newID, zap.NewNop())
 }
 
 type eventCapableStore struct {
@@ -170,8 +172,8 @@ func NewRunServiceWithRegistry(versions port.VersionRepository, store interface 
 	port.RunRepository
 	port.AttemptRepository
 	port.EventRepository
-}, executors port.NodeExecutorRegistry, newID func() string) *RunService {
-	return &RunService{versions: versions, store: store, executors: executors, newID: newID}
+}, executors port.NodeExecutorRegistry, newID func() string, logger *zap.Logger) *RunService {
+	return &RunService{versions: versions, store: store, executors: executors, newID: newID, logger: logger}
 }
 
 func (s *RunService) Start(ctx context.Context, tenantID string, cmd StartRunCommand) (*domain.Run, bool, error) {
@@ -350,6 +352,8 @@ func (s *RunService) reconcileExpiredAttempts(ctx context.Context, tenantID stri
 			if err := s.store.UpdateRun(ctx, tenantID, run); err != nil {
 				return true, err
 			}
+			// UpdateRun 乐观锁成功即 generation+1,内存同步保证后续 CAS 基于最新值。
+			run.Generation++
 			return true, nil
 		}
 		attempt.Status, attempt.FenceToken, attempt.RunGeneration = domain.AttemptStatusRetryWait, run.Generation, run.Generation
@@ -678,125 +682,190 @@ func truncateWorkflowText(value string, limit int) string {
 	return string(runes[:limit])
 }
 
+// commitOutcome 按执行结果分派：paused → 创建审批；失败 → 干预/取消/重试/
+// 失败落库；成功 → effect 成功 + 完成 checkpoint。
 func (s *RunService) commitOutcome(ctx context.Context, tenantID string, run *domain.Run, outcome executionOutcome) error {
-	attempt := outcome.attempt
 	if outcome.err == nil && outcome.result.Paused {
-		attempt.Status = domain.AttemptStatusPaused
-		attempt.OutputSummary = outcome.result.Output
-		if err := s.checkpointAttempt(ctx, tenantID, attempt, "workflow.node_paused", "approval required"); err != nil {
-			return err
-		}
-		approvals, ok := s.store.(port.ApprovalRepository)
-		if !ok {
-			return fmt.Errorf("workflow approval repository unavailable")
-		}
-		reason, risk := "human approval required", "high"
-		approval := domain.NewApproval(s.newID(), run.ID, attempt.NodeID, attempt.ID, outcome.approvalGeneration+1, reason, risk, attempt.Input)
-		if err := approvals.CreateApproval(ctx, tenantID, approval, domain.Event{ID: s.newID(), RunID: run.ID, Type: "workflow.approval_requested", NodeID: attempt.NodeID, AttemptNo: attempt.AttemptNo, Status: string(domain.ApprovalStatusPending), Summary: reason, OccurredAt: time.Now().UTC()}); err != nil {
-			return err
-		}
-		run.Status, run.PauseReason, run.Generation = domain.RunStatusPaused, reason, approval.RunGeneration
-		return nil
+		return s.commitPausedOutcome(ctx, tenantID, run, outcome)
 	}
 	if outcome.err != nil {
-		if outcome.effect != nil && outcome.effect.Status == domain.EffectIntentStatusStarted && outcome.effect.EffectClass == domain.EffectClassNonIdempotent {
-			effects := s.store.(port.EffectRepository)
-			if err := outcome.effect.MarkUnknown(outcome.err.Error(), run.Generation); err != nil {
-				return err
-			}
-			if err := effects.UpdateEffectIntent(ctx, tenantID, outcome.effect, domain.EffectIntentStatusStarted); err != nil {
-				return err
-			}
-			attempt.Status, attempt.ErrorMessage = domain.AttemptStatusManualIntervention, outcome.err.Error()
-			if err := s.checkpointAttempt(ctx, tenantID, attempt, "workflow.manual_intervention", run.ManualReason); err != nil {
-				return err
-			}
-			run.Status, run.ManualReason = domain.RunStatusManualIntervention, "external effect result is unknown"
-			run.Generation++
-			if err := s.store.UpdateRun(ctx, tenantID, run); err != nil {
-				return err
-			}
-			return nil
-		}
-		if outcome.effect != nil && outcome.effect.Status == domain.EffectIntentStatusStarted {
-			effects := s.store.(port.EffectRepository)
-			outcome.effect.Status, outcome.effect.Reason = domain.EffectIntentStatusFailed, outcome.err.Error()
-			if err := effects.UpdateEffectIntent(context.WithoutCancel(ctx), tenantID, outcome.effect, domain.EffectIntentStatusStarted); err != nil {
-				return err
-			}
-		}
-		if errors.Is(outcome.err, context.Canceled) {
-			fresh, err := s.store.GetRun(context.WithoutCancel(ctx), tenantID, run.ID)
-			if err != nil {
-				return err
-			}
-			if fresh.Status == domain.RunStatusPauseRequested {
-				attempt.Status, attempt.ErrorMessage, attempt.FenceToken, attempt.RunGeneration = domain.AttemptStatusRetryWait, "paused at node boundary", fresh.Generation, fresh.Generation
-				attempt.RetryAt = nil
-				if err := s.checkpointAttempt(context.WithoutCancel(ctx), tenantID, attempt, "workflow.node_paused", attempt.ErrorMessage); err != nil {
-					return err
-				}
-				controller, ok := s.store.(runController)
-				if !ok {
-					return fmt.Errorf("workflow control repository unavailable")
-				}
-				event := domain.Event{ID: s.newID(), RunID: run.ID, Type: "workflow.paused", Status: string(domain.RunStatusPaused), NodeID: attempt.NodeID, AttemptNo: attempt.AttemptNo, OccurredAt: time.Now().UTC()}
-				if err := controller.ControlRun(context.WithoutCancel(ctx), tenantID, run.ID, fresh.Generation, domain.RunStatusPaused, fresh.PauseReason, event); err != nil {
-					return err
-				}
-				latest, getErr := s.store.GetRun(context.WithoutCancel(ctx), tenantID, run.ID)
-				if getErr == nil {
-					*run = *latest
-				}
-				return nil
-			}
-		}
-		if errors.Is(outcome.err, context.Canceled) {
-			fresh, err := s.store.GetRun(context.WithoutCancel(ctx), tenantID, run.ID)
-			if err != nil {
-				return err
-			}
-			if fresh.Status == domain.RunStatusCancelRequested {
-				attempt.Status, attempt.ErrorMessage, attempt.FenceToken, attempt.RunGeneration = domain.AttemptStatusCanceled, "canceled", fresh.Generation, fresh.Generation
-				if err := s.checkpointAttempt(context.WithoutCancel(ctx), tenantID, attempt, "workflow.node_canceled", "canceled"); err != nil {
-					return err
-				}
-				controller, ok := s.store.(runController)
-				if !ok {
-					return fmt.Errorf("workflow control repository unavailable")
-				}
-				event := domain.Event{ID: s.newID(), RunID: run.ID, Type: "workflow.canceled", Status: string(domain.RunStatusCanceled), NodeID: attempt.NodeID, AttemptNo: attempt.AttemptNo, OccurredAt: time.Now().UTC()}
-				if err := controller.ControlRun(context.WithoutCancel(ctx), tenantID, run.ID, fresh.Generation, domain.RunStatusCanceled, fresh.CancelReason, event); err != nil {
-					return err
-				}
-				latest, getErr := s.store.GetRun(context.WithoutCancel(ctx), tenantID, run.ID)
-				if getErr == nil {
-					*run = *latest
-				}
-				return nil
-			}
-		}
-		attempt.ErrorMessage, attempt.ErrorCode = outcome.err.Error(), outcome.result.ErrorCode
-		maxAttempts := outcome.node.Retry.MaxAttempts
-		if maxAttempts == 0 {
-			maxAttempts = 1
-		}
-		canRetry := outcome.result.Retryable && attempt.AttemptNo < maxAttempts && outcome.node.EffectClass != domain.EffectClassNonIdempotent
-		if canRetry {
-			attempt.Status = domain.AttemptStatusRetryWait
-			retryAt := time.Now().Add(time.Duration(outcome.node.Retry.BackoffMS) * time.Millisecond)
-			attempt.RetryAt = &retryAt
-			if err := s.checkpointAttempt(ctx, tenantID, attempt, "workflow.node_retrying", attempt.ErrorMessage); err != nil {
-				return err
-			}
-			return nil
-		}
-		attempt.Status = domain.AttemptStatusFailed
-		if err := s.checkpointAttempt(ctx, tenantID, attempt, "workflow.node_failed", attempt.ErrorMessage); err != nil {
+		return s.commitFailedOutcome(ctx, tenantID, run, outcome)
+	}
+	return s.commitSucceededOutcome(ctx, tenantID, run, outcome)
+}
+
+// commitPausedOutcome 持久化审批节点暂停：checkpoint 暂停状态并创建审批。
+func (s *RunService) commitPausedOutcome(ctx context.Context, tenantID string, run *domain.Run, outcome executionOutcome) error {
+	attempt := outcome.attempt
+	attempt.Status = domain.AttemptStatusPaused
+	attempt.OutputSummary = outcome.result.Output
+	if err := s.checkpointAttempt(ctx, tenantID, attempt, "workflow.node_paused", "approval required"); err != nil {
+		return err
+	}
+	approvals, ok := s.store.(port.ApprovalRepository)
+	if !ok {
+		return fmt.Errorf("workflow approval repository unavailable")
+	}
+	reason, risk := "human approval required", "high"
+	approval := domain.NewApproval(s.newID(), run.ID, attempt.NodeID, attempt.ID, outcome.approvalGeneration+1, reason, risk, attempt.Input)
+	if err := approvals.CreateApproval(ctx, tenantID, approval, domain.Event{ID: s.newID(), RunID: run.ID, Type: "workflow.approval_requested", NodeID: attempt.NodeID, AttemptNo: attempt.AttemptNo, Status: string(domain.ApprovalStatusPending), Summary: reason, OccurredAt: time.Now().UTC()}); err != nil {
+		return err
+	}
+	run.Status, run.PauseReason, run.Generation = domain.RunStatusPaused, reason, approval.RunGeneration
+	return nil
+}
+
+// effectStarted 报告执行是否已启动 effect（失败路径的 effect 状态决策）。
+func (o executionOutcome) effectStarted() bool {
+	return o.effect != nil && o.effect.Status == domain.EffectIntentStatusStarted
+}
+
+// commitFailedOutcome 持久化失败执行：先处理 effect 状态，再处理取消语义，
+// 最后落到重试或失败。
+func (s *RunService) commitFailedOutcome(ctx context.Context, tenantID string, run *domain.Run, outcome executionOutcome) error {
+	if outcome.effectStarted() && outcome.effect.EffectClass == domain.EffectClassNonIdempotent {
+		return s.commitEffectUnknown(ctx, tenantID, run, outcome)
+	}
+	if outcome.effectStarted() {
+		if err := s.markEffectFailed(ctx, tenantID, outcome); err != nil {
 			return err
 		}
-		return fmt.Errorf("node %s: %w", attempt.NodeID, outcome.err)
 	}
+	if errors.Is(outcome.err, context.Canceled) {
+		handled, err := s.commitCanceledOutcome(ctx, tenantID, run, outcome)
+		if err != nil {
+			return err
+		}
+		if handled {
+			return nil
+		}
+	}
+	return s.commitRetryOrFail(ctx, tenantID, outcome)
+}
+
+// commitEffectUnknown 将结果未知的非幂等 effect 置为 manual intervention，
+// 防止重放副作用。
+func (s *RunService) commitEffectUnknown(ctx context.Context, tenantID string, run *domain.Run, outcome executionOutcome) error {
+	effects := s.store.(port.EffectRepository)
+	if err := outcome.effect.MarkUnknown(outcome.err.Error(), run.Generation); err != nil {
+		return err
+	}
+	if err := effects.UpdateEffectIntent(ctx, tenantID, outcome.effect, domain.EffectIntentStatusStarted); err != nil {
+		return err
+	}
+	attempt := outcome.attempt
+	attempt.Status, attempt.ErrorMessage = domain.AttemptStatusManualIntervention, outcome.err.Error()
+	if err := s.checkpointAttempt(ctx, tenantID, attempt, "workflow.manual_intervention", run.ManualReason); err != nil {
+		return err
+	}
+	run.Status, run.ManualReason = domain.RunStatusManualIntervention, "external effect result is unknown"
+	if err := s.store.UpdateRun(ctx, tenantID, run); err != nil {
+		return err
+	}
+	// UpdateRun 乐观锁成功即 generation+1,内存同步保证同批后续 outcome 的 CAS 基于最新值。
+	run.Generation++
+	return nil
+}
+
+// markEffectFailed 把已启动但结果失败的 effect 标记为 failed。
+func (s *RunService) markEffectFailed(ctx context.Context, tenantID string, outcome executionOutcome) error {
+	effects := s.store.(port.EffectRepository)
+	outcome.effect.Status, outcome.effect.Reason = domain.EffectIntentStatusFailed, outcome.err.Error()
+	return effects.UpdateEffectIntent(context.WithoutCancel(ctx), tenantID, outcome.effect, domain.EffectIntentStatusStarted)
+}
+
+// commitCanceledOutcome 处理节点边界的取消：先查 fresh run 是否
+// pause-requested，未命中再查是否 cancel-requested；都未命中返回
+// handled=false 让调用方继续走重试逻辑。两次 GetRun 与原实现逐一对应。
+func (s *RunService) commitCanceledOutcome(ctx context.Context, tenantID string, run *domain.Run, outcome executionOutcome) (bool, error) {
+	fresh, err := s.store.GetRun(context.WithoutCancel(ctx), tenantID, run.ID)
+	if err != nil {
+		return false, err
+	}
+	if fresh.Status == domain.RunStatusPauseRequested {
+		return true, s.commitPauseBoundary(ctx, tenantID, run, outcome, fresh)
+	}
+	fresh, err = s.store.GetRun(context.WithoutCancel(ctx), tenantID, run.ID)
+	if err != nil {
+		return false, err
+	}
+	if fresh.Status == domain.RunStatusCancelRequested {
+		return true, s.commitCancelBoundary(ctx, tenantID, run, outcome, fresh)
+	}
+	return false, nil
+}
+
+// commitPauseBoundary 把节点边界取消落成暂停：checkpoint retry_wait 并收敛
+// run 状态。
+func (s *RunService) commitPauseBoundary(ctx context.Context, tenantID string, run *domain.Run, outcome executionOutcome, fresh *domain.Run) error {
+	attempt := outcome.attempt
+	attempt.Status, attempt.ErrorMessage, attempt.FenceToken, attempt.RunGeneration = domain.AttemptStatusRetryWait, "paused at node boundary", fresh.Generation, fresh.Generation
+	attempt.RetryAt = nil
+	if err := s.checkpointAttempt(context.WithoutCancel(ctx), tenantID, attempt, "workflow.node_paused", attempt.ErrorMessage); err != nil {
+		return err
+	}
+	event := domain.Event{ID: s.newID(), RunID: run.ID, Type: "workflow.paused", Status: string(domain.RunStatusPaused), NodeID: attempt.NodeID, AttemptNo: attempt.AttemptNo, OccurredAt: time.Now().UTC()}
+	return s.commitBoundaryStatus(ctx, tenantID, run, event, domain.RunStatusPaused, fresh.PauseReason, fresh.Generation)
+}
+
+// commitCancelBoundary 把节点边界取消落成 canceled：checkpoint canceled 并
+// 收敛 run 状态。
+func (s *RunService) commitCancelBoundary(ctx context.Context, tenantID string, run *domain.Run, outcome executionOutcome, fresh *domain.Run) error {
+	attempt := outcome.attempt
+	attempt.Status, attempt.ErrorMessage, attempt.FenceToken, attempt.RunGeneration = domain.AttemptStatusCanceled, "canceled", fresh.Generation, fresh.Generation
+	if err := s.checkpointAttempt(context.WithoutCancel(ctx), tenantID, attempt, "workflow.node_canceled", "canceled"); err != nil {
+		return err
+	}
+	event := domain.Event{ID: s.newID(), RunID: run.ID, Type: "workflow.canceled", Status: string(domain.RunStatusCanceled), NodeID: attempt.NodeID, AttemptNo: attempt.AttemptNo, OccurredAt: time.Now().UTC()}
+	return s.commitBoundaryStatus(ctx, tenantID, run, event, domain.RunStatusCanceled, fresh.CancelReason, fresh.Generation)
+}
+
+// commitBoundaryStatus 通过 controller 把 run 收敛到目标状态，并在成功后把
+// 内存 run 同步为最新值（乐观锁 generation 漂移容错）。
+func (s *RunService) commitBoundaryStatus(ctx context.Context, tenantID string, run *domain.Run, event domain.Event, status domain.RunStatus, reason string, generation int64) error {
+	controller, ok := s.store.(runController)
+	if !ok {
+		return fmt.Errorf("workflow control repository unavailable")
+	}
+	if err := controller.ControlRun(context.WithoutCancel(ctx), tenantID, run.ID, generation, status, reason, event); err != nil {
+		return err
+	}
+	latest, getErr := s.store.GetRun(context.WithoutCancel(ctx), tenantID, run.ID)
+	if getErr == nil {
+		*run = *latest
+	}
+	return nil
+}
+
+// commitRetryOrFail 决策重试或失败：满足重试条件则进入 retry_wait，否则落
+// failed 并返回包装错误。
+func (s *RunService) commitRetryOrFail(ctx context.Context, tenantID string, outcome executionOutcome) error {
+	attempt := outcome.attempt
+	attempt.ErrorMessage, attempt.ErrorCode = outcome.err.Error(), outcome.result.ErrorCode
+	maxAttempts := outcome.node.Retry.MaxAttempts
+	if maxAttempts == 0 {
+		maxAttempts = 1
+	}
+	canRetry := outcome.result.Retryable && attempt.AttemptNo < maxAttempts && outcome.node.EffectClass != domain.EffectClassNonIdempotent
+	if canRetry {
+		attempt.Status = domain.AttemptStatusRetryWait
+		retryAt := time.Now().Add(time.Duration(outcome.node.Retry.BackoffMS) * time.Millisecond)
+		attempt.RetryAt = &retryAt
+		if err := s.checkpointAttempt(ctx, tenantID, attempt, "workflow.node_retrying", attempt.ErrorMessage); err != nil {
+			return err
+		}
+		return nil
+	}
+	attempt.Status = domain.AttemptStatusFailed
+	if err := s.checkpointAttempt(ctx, tenantID, attempt, "workflow.node_failed", attempt.ErrorMessage); err != nil {
+		return err
+	}
+	return fmt.Errorf("node %s: %w", attempt.NodeID, outcome.err)
+}
+
+// commitSucceededOutcome 持久化成功执行：effect 成功 + 完成 checkpoint。
+func (s *RunService) commitSucceededOutcome(ctx context.Context, tenantID string, run *domain.Run, outcome executionOutcome) error {
+	attempt := outcome.attempt
 	if outcome.effect != nil {
 		effects := s.store.(port.EffectRepository)
 		previous := outcome.effect.Status
@@ -926,16 +995,31 @@ func (s *RunService) checkpointRun(ctx context.Context, tenantID string, run *do
 	if err := s.store.UpdateRun(ctx, tenantID, run); err != nil {
 		return err
 	}
+	// UpdateRun 乐观锁成功即 generation+1,内存同步保证 run 对象与库内 generation 一致。
+	run.Generation++
 	_, err := s.store.AppendEvent(ctx, tenantID, event)
 	return err
 }
 
-func (s *RunService) failRun(ctx context.Context, tenantID string, run *domain.Run, err error) error {
-	if run.Status == domain.RunStatusRunning {
-		_ = run.Fail(err.Error())
-		_ = s.checkpointRun(ctx, tenantID, run, "workflow.run_failed", err.Error())
+func (s *RunService) failRun(ctx context.Context, tenantID string, run *domain.Run, cause error) error {
+	if run.Status != domain.RunStatusRunning {
+		return cause
 	}
-	return err
+	if failErr := run.Fail(cause.Error()); failErr != nil {
+		s.logger.Error("workflow.run_failed_transition",
+			zap.String("tenant_id", tenantID), zap.String("run_id", run.ID),
+			zap.String("cause", cause.Error()), zap.Error(failErr))
+		return errors.Join(cause, fmt.Errorf("workflow: mark run %s failed: %w", run.ID, failErr))
+	}
+	// run.Fail 的状态推进在内存侧,失败状态必须持久化;写回失败必须显式暴露,
+	// 禁止吞掉——否则 run 会停留在 running 直至租约过期才被重新回收。
+	if persistErr := s.checkpointRun(ctx, tenantID, run, "workflow.run_failed", cause.Error()); persistErr != nil {
+		s.logger.Error("workflow.run_failed_persist",
+			zap.String("tenant_id", tenantID), zap.String("run_id", run.ID),
+			zap.String("cause", cause.Error()), zap.Error(persistErr))
+		return errors.Join(cause, fmt.Errorf("workflow: persist failed state of run %s: %w", run.ID, persistErr))
+	}
+	return cause
 }
 
 func commandHash(versionID string, input map[string]any) (string, error) {

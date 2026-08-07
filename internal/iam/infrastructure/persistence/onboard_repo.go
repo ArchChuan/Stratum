@@ -318,14 +318,17 @@ func (r *OnboardRepo) IsMember(ctx context.Context, userID, tenantID string) (bo
 	return count > 0, nil
 }
 
-// CreateGuestInDefaultTenant inserts a synthetic guest user and joins the default
-// tenant as a member in one tx. Mirrors AutoJoinDefaultTenant but flags is_guest
-// and stamps expires_at; caller supplies the pre-namespaced github_id.
-func (r *OnboardRepo) CreateGuestInDefaultTenant(ctx context.Context, githubID, githubLogin, avatarURL string, expiresAt time.Time) (string, string, error) {
+// CreateGuestSandboxTenant inserts a synthetic guest user and provisions a
+// dedicated per-guest sandbox tenant (guest as owner, status 'provisioning') in
+// one tx. The guest is deliberately never a member of the default tenant: all
+// data reachable with the guest token is confined to this private tenant, which
+// the reaper deletes together with the user after expiry. Caller supplies the
+// pre-namespaced github_id and must provision + activate the sandbox schema.
+func (r *OnboardRepo) CreateGuestSandboxTenant(ctx context.Context, githubID, githubLogin, avatarURL string, expiresAt time.Time) (string, string, error) {
 	var userID, tenantID string
 	err := retryPostgres(ctx, constants.GuestProvisionMaxAttempts, constants.GuestProvisionRetryBackoff, func() error {
 		var err error
-		userID, tenantID, err = r.createGuestAttempt(ctx, githubID, githubLogin, avatarURL, expiresAt)
+		userID, tenantID, err = r.createGuestSandboxAttempt(ctx, githubID, githubLogin, avatarURL, expiresAt)
 		return err
 	})
 	if err != nil {
@@ -334,7 +337,7 @@ func (r *OnboardRepo) CreateGuestInDefaultTenant(ctx context.Context, githubID, 
 	return userID, tenantID, nil
 }
 
-func (r *OnboardRepo) createGuestAttempt(ctx context.Context, githubID, githubLogin, avatarURL string, expiresAt time.Time) (string, string, error) {
+func (r *OnboardRepo) createGuestSandboxAttempt(ctx context.Context, githubID, githubLogin, avatarURL string, expiresAt time.Time) (string, string, error) {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return "", "", fmt.Errorf("onboard_repo: begin tx: %w", err)
@@ -358,26 +361,28 @@ func (r *OnboardRepo) createGuestAttempt(ctx context.Context, githubID, githubLo
 		return "", "", fmt.Errorf("onboard_repo: insert guest user: %w", err)
 	}
 
-	var tid string
-	if err = tx.QueryRow(ctx,
-		`SELECT id FROM tenants WHERE is_default = true LIMIT 1`,
-	).Scan(&tid); err != nil {
-		return "", "", fmt.Errorf("onboard_repo: find default tenant: %w", err)
+	tenantID := uuid.Must(uuid.NewV7()).String()
+	if _, err = tx.Exec(ctx,
+		`INSERT INTO tenants (id, name, slug, status)
+		 VALUES ($1, $2, $3, 'provisioning')`,
+		tenantID, githubLogin, tenantSlug(tenantID, ""),
+	); err != nil {
+		return "", "", fmt.Errorf("onboard_repo: insert guest sandbox tenant: %w", err)
 	}
 
 	if _, err = tx.Exec(ctx,
 		`INSERT INTO tenant_members (tenant_id, user_id, role)
-		 VALUES ($1, $2, 'member')
+		 VALUES ($1, $2, 'owner')
 		 ON CONFLICT (tenant_id, user_id) DO NOTHING`,
-		tid, uid,
+		tenantID, uid,
 	); err != nil {
-		return "", "", fmt.Errorf("onboard_repo: join default tenant: %w", err)
+		return "", "", fmt.Errorf("onboard_repo: join sandbox tenant: %w", err)
 	}
 
 	if err = tx.Commit(ctx); err != nil {
 		return "", "", fmt.Errorf("onboard_repo: commit: %w", err)
 	}
-	return uid, tid, nil
+	return uid, tenantID, nil
 }
 
 // ListExpiredGuests returns UUIDs of guest users whose expires_at is in the past.

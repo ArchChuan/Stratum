@@ -39,6 +39,10 @@ type ClientManager struct {
 	wg         sync.WaitGroup
 	pool       *pgxpool.Pool
 
+	// emptyTenantWarnOnce 保证空 tenantID 的 heartbeat 告警只输出一次
+	// （生产恒非空，仅测试构造空 tenantKey，见 refreshHeartbeat）。
+	emptyTenantWarnOnce sync.Once
+
 	// serverCtx is the lifecycle context for spawned child processes.
 	// Cancelled only when the server shuts down, not on HTTP request end.
 	serverCtx    context.Context
@@ -51,6 +55,23 @@ type ClientManager struct {
 	clientFactory func(*MCPServerConfig, *zap.Logger) MCPClient
 
 	metrics observability.MetricsProvider
+
+	// secretKey 是 mcp_configs 中 env/headers/auth_config 敏感字段的
+	// at-rest 加密密钥（AES-256-GCM，来源见 wiring 的 WithSecretKey）。
+	// 加解密对零值密钥对称可用，因此零值必须由 WithSecretKey 拒绝——
+	// 否则 wiring 漏传时落到公开常量密钥（伪安全），密文形同明文。
+	secretKey [32]byte
+}
+
+// WithSecretKey 注入 at-rest 加密密钥。由组合根在构造后立即调用；
+// 注入前持久化的敏感字段以明文落库，因此必须在使用 manager 前设置。
+// 零值密钥拒绝注入（fail closed），让 wiring 启动失败而非静默降级。
+func (m *ClientManager) WithSecretKey(key [32]byte) error {
+	if key == [32]byte{} {
+		return errors.New("mcp client manager: secret key must not be zero value")
+	}
+	m.secretKey = key
+	return nil
 }
 
 // NewClientManager 创建新的客户端管理器
@@ -177,11 +198,25 @@ func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig
 	if m.pool == nil {
 		return nil
 	}
+	// 敏感字段（env 值、header 值、auth secret）在落库前逐项加密；
+	// 深拷贝保证内存中的 cfg 保持明文，不会被二次加密。
+	envEnc, err := encryptSecretMap(m.secretKey, cfg.Env)
+	if err != nil {
+		return fmt.Errorf("persist mcp config %s: %w", cfg.ID, err)
+	}
+	hdrsEnc, err := encryptSecretMap(m.secretKey, cfg.Headers)
+	if err != nil {
+		return fmt.Errorf("persist mcp config %s: %w", cfg.ID, err)
+	}
+	authEnc, err := encryptAuthConfig(m.secretKey, cfg.Auth)
+	if err != nil {
+		return fmt.Errorf("persist mcp config %s: %w", cfg.ID, err)
+	}
 	argsB, _ := json.Marshal(cfg.Args)
-	envB, _ := json.Marshal(cfg.Env)
+	envB, _ := json.Marshal(envEnc)
 	capsB, _ := json.Marshal(cfg.Capabilities)
-	hdrsB, _ := json.Marshal(cfg.Headers)
-	authB, _ := json.Marshal(cfg.Auth)
+	hdrsB, _ := json.Marshal(hdrsEnc)
+	authB, _ := json.Marshal(authEnc)
 	retryB, _ := json.Marshal(cfg.Retry)
 	argsJSON, envJSON, capsJSON, hdrsJSON, authJSON, retryJSON :=
 		string(argsB), string(envB), string(capsB), string(hdrsB), string(authB), string(retryB)
@@ -189,8 +224,8 @@ func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig
 	if timeoutSec <= 0 {
 		timeoutSec = 30
 	}
-	err := tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `
+	err = tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
+		_, execErr := tx.Exec(ctx, `
 			INSERT INTO mcp_configs
 				(id, name, transport, command, url, args, env, capabilities, timeout_sec,
 				 enabled, version, headers, auth_config, retry_config, updated_at, created_by)
@@ -202,8 +237,9 @@ func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig
 				updated_at=NOW()`,
 			cfg.ID, cfg.Name, cfg.Transport, cfg.Command, cfg.URL,
 			argsJSON, envJSON, capsJSON, timeoutSec,
-			cfg.Version, hdrsJSON, authJSON, retryJSON, cfg.CreatedBy); err != nil {
-			return err
+			cfg.Version, hdrsJSON, authJSON, retryJSON, cfg.CreatedBy)
+		if execErr != nil {
+			return execErr
 		}
 		return insertChangeAudit(ctx, tx, audit)
 	})
@@ -723,7 +759,18 @@ func (m *ClientManager) restoreTenantServers(ctx context.Context, tenantID strin
 	}
 
 	for _, r := range rows {
-		cfg := configFromDBRow(r)
+		cfg, err := m.configFromDBRow(r)
+		if err != nil {
+			// fail closed：敏感字段解不开（历史明文或密文损坏）的配置不恢复、
+			// 不连接，记 warn 后跳过该 server，不阻塞其他 server 的恢复。
+			// metric 计数暴露"静默消失"的行，避免仅靠日志难发现。
+			m.metrics.IncComponentError("mcp-server-restore", "decrypt")
+			m.logger.Warn("RestoreFromDB: config secrets cannot be decrypted, skipping server",
+				zap.String("tenant_id", tenantID),
+				zap.String("server_id", r.id),
+				zap.Error(err))
+			continue
+		}
 		m.restoreServer(ctx, tenantID, cfg)
 	}
 	return nil
@@ -755,7 +802,10 @@ func (m *ClientManager) loadMCPConfigRows(ctx context.Context, _ string) ([]mcpC
 	return rows, err
 }
 
-func configFromDBRow(r mcpConfigRow) *MCPServerConfig {
+// configFromDBRow 把 DB 行还原为明文配置。env/headers/auth 中的敏感字段以
+// 密文落库，这里逐项解密；任一字段解密失败（历史明文或密文损坏）返回错误，
+// fail closed，禁止把密文当明文使用。
+func (m *ClientManager) configFromDBRow(r mcpConfigRow) (*MCPServerConfig, error) {
 	var args []string
 	var env map[string]string
 	var caps []string
@@ -768,6 +818,18 @@ func configFromDBRow(r mcpConfigRow) *MCPServerConfig {
 	_ = json.Unmarshal(r.headers, &headers)
 	_ = json.Unmarshal(r.authCfg, &auth)
 	_ = json.Unmarshal(r.retryCfg, &retry)
+	env, err := decryptSecretMap(m.secretKey, env)
+	if err != nil {
+		return nil, fmt.Errorf("mcp config %s: env secrets: %w", r.id, err)
+	}
+	headers, err = decryptSecretMap(m.secretKey, headers)
+	if err != nil {
+		return nil, fmt.Errorf("mcp config %s: headers secrets: %w", r.id, err)
+	}
+	auth, err = decryptAuthConfig(m.secretKey, auth)
+	if err != nil {
+		return nil, fmt.Errorf("mcp config %s: auth secrets: %w", r.id, err)
+	}
 	return &MCPServerConfig{
 		ID: r.id, Name: r.name, Transport: r.transport,
 		Command: r.command, URL: r.url, Version: r.version,
@@ -777,7 +839,7 @@ func configFromDBRow(r mcpConfigRow) *MCPServerConfig {
 		SystemKey:      r.systemKey,
 		ManagementMode: r.managementMode,
 		CreatedBy:      r.createdBy,
-	}
+	}, nil
 }
 
 func (m *ClientManager) restoreServer(ctx context.Context, tenantID string, cfg *MCPServerConfig) {
@@ -864,6 +926,12 @@ func (m *ClientManager) StartHeartbeat(interval time.Duration) {
 	}()
 }
 
+// stdioOwned 记录本节点拥有的 stdio server 及其所属租户。
+type stdioOwned struct {
+	tenantID string
+	serverID string
+}
+
 func (m *ClientManager) refreshHeartbeat() {
 	if m.pool == nil {
 		return
@@ -871,25 +939,49 @@ func (m *ClientManager) refreshHeartbeat() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	m.mu.RLock()
-	owned := make(map[string]string)
+	owned := make(map[string]stdioOwned)
 	for key, cfg := range m.configs {
-		if cfg.Transport == "stdio" {
-			owned[key] = cfg.ID
+		if cfg.Transport != "stdio" {
+			continue
 		}
+		// key 格式 tenantID:serverID（见 tenantKey）。
+		parts := strings.SplitN(key, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		owned[key] = stdioOwned{tenantID: parts[0], serverID: cfg.ID}
 	}
 	m.mu.RUnlock()
-	for _, serverID := range owned {
-		// Heartbeat uses public schema; mcp_configs is tenant-scoped but
-		// owner_node/heartbeat columns are in the public-facing table.
-		// We simply refresh via public exec since owner NodeID is
-		// not tenant-specific.
-		_ = m.pool.AcquireFunc(ctx, func(conn *pgxpool.Conn) error {
-			_, err := conn.Exec(ctx,
+	for _, o := range owned {
+		if o.tenantID == "" {
+			// 生产路径（Connect/RestoreFromDB/scanOrphaned）构造的 key 恒非空，
+			// 空 tenantID 仅出现在测试手工构造场景：Warn 一次即可，避免每轮
+			// heartbeat ERROR 日志噪音。
+			m.emptyTenantWarnOnce.Do(func() {
+				m.logger.Warn("heartbeat: skip stdio server with empty tenant_id",
+					zap.String("server_id", o.serverID))
+			})
+			continue
+		}
+		// mcp_configs 是 tenant-schema 表：heartbeat 必须走租户边界封装
+		// （search_path 切换），否则在 public schema 下必然 42P01。
+		// 失败记 ERROR 日志并继续，禁止吞错。
+		tctx := tenantdb.WithTenant(ctx, &tenantdb.TenantContext{
+			TenantID: o.tenantID, Role: tenantdb.RoleTenantAdmin,
+		})
+		err := tenantdb.ExecTenant(tctx, m.pool, func(qctx context.Context, tx pgx.Tx) error {
+			_, execErr := tx.Exec(qctx,
 				`UPDATE mcp_configs SET owner_heartbeat=NOW()
 				 WHERE id=$1 AND owner_node=$2`,
-				serverID, m.nodeID)
-			return err
+				o.serverID, m.nodeID)
+			return execErr
 		})
+		if err != nil {
+			m.logger.Error("heartbeat: refresh owner_heartbeat failed",
+				zap.String("tenant_id", o.tenantID),
+				zap.String("server_id", o.serverID),
+				zap.Error(err))
+		}
 	}
 }
 
@@ -1219,8 +1311,7 @@ func (m *ClientManager) GetServerConfig(ctx context.Context, serverID string) (*
 		return nil, mcpdomain.ErrServerNotFound
 	}
 	var out MCPServerConfig
-	var argsStr, envStr, capsStr, hdrsStr, authStr, retryStr string
-	var timeoutSec int
+	var row serverConfigRow
 	err := tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
 			SELECT id, name, transport, command, url, args, env, capabilities,
@@ -1228,8 +1319,8 @@ func (m *ClientManager) GetServerConfig(ctx context.Context, serverID string) (*
 			       COALESCE(system_key, ''), management_mode, enabled, COALESCE(created_by, '')
 			FROM mcp_configs WHERE id=$1`, serverID).
 			Scan(&out.ID, &out.Name, &out.Transport, &out.Command, &out.URL,
-				&argsStr, &envStr, &capsStr, &timeoutSec,
-				&out.Version, &hdrsStr, &authStr, &retryStr, &out.SystemKey, &out.ManagementMode, &out.Enabled, &out.CreatedBy)
+				&row.args, &row.env, &row.caps, &row.timeoutSec,
+				&out.Version, &row.headers, &row.authCfg, &row.retryCfg, &out.SystemKey, &out.ManagementMode, &out.Enabled, &out.CreatedBy)
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1237,18 +1328,56 @@ func (m *ClientManager) GetServerConfig(ctx context.Context, serverID string) (*
 		}
 		return nil, fmt.Errorf("get mcp server config %s: %w", serverID, err)
 	}
-	out.Timeout = time.Duration(timeoutSec) * time.Second
-	_ = json.Unmarshal([]byte(argsStr), &out.Args)
-	_ = json.Unmarshal([]byte(envStr), &out.Env)
-	_ = json.Unmarshal([]byte(capsStr), &out.Capabilities)
-	_ = json.Unmarshal([]byte(hdrsStr), &out.Headers)
-	if authStr != "" && authStr != "null" {
-		out.Auth = &mcpdomain.AuthConfig{}
-		_ = json.Unmarshal([]byte(authStr), out.Auth)
-	}
-	if retryStr != "" && retryStr != "null" {
-		out.Retry = &mcpdomain.RetryConfig{}
-		_ = json.Unmarshal([]byte(retryStr), out.Retry)
+	if err := m.decodeServerConfigRow(serverID, &out, row); err != nil {
+		return nil, err
 	}
 	return &out, nil
+}
+
+// serverConfigRow carries the raw JSONB string columns of a mcp_configs row,
+// before JSON decode and secrets decryption.
+type serverConfigRow struct {
+	args, env, caps, headers, authCfg, retryCfg string
+	timeoutSec                                  int
+}
+
+// decodeServerConfigRow decodes a raw mcp_configs row into the in-memory
+// plaintext config. Sensitive fields (env/headers/auth secrets) are decrypted
+// at the DB boundary; a decryption failure (legacy plaintext or corrupted
+// ciphertext) fails closed — ciphertext must never be used as plaintext.
+func (m *ClientManager) decodeServerConfigRow(serverID string, out *MCPServerConfig, row serverConfigRow) error {
+	out.Timeout = time.Duration(row.timeoutSec) * time.Second
+	_ = json.Unmarshal([]byte(row.args), &out.Args)
+	_ = json.Unmarshal([]byte(row.env), &out.Env)
+	_ = json.Unmarshal([]byte(row.caps), &out.Capabilities)
+	_ = json.Unmarshal([]byte(row.headers), &out.Headers)
+	var auth *MCPAuthConfig
+	if row.authCfg != "" && row.authCfg != "null" {
+		auth = &MCPAuthConfig{}
+		if err := json.Unmarshal([]byte(row.authCfg), auth); err != nil {
+			return fmt.Errorf("mcp server config %s: decode auth: %w", serverID, err)
+		}
+	}
+	// 敏感字段解密：失败（历史明文或密文损坏）即 fail closed，
+	// 返回"配置无效"错误，禁止把密文当明文使用。
+	env, err := decryptSecretMap(m.secretKey, out.Env)
+	if err != nil {
+		return fmt.Errorf("mcp server config %s: env secrets: %w", serverID, err)
+	}
+	out.Env = env
+	headers, err := decryptSecretMap(m.secretKey, out.Headers)
+	if err != nil {
+		return fmt.Errorf("mcp server config %s: headers secrets: %w", serverID, err)
+	}
+	out.Headers = headers
+	auth, err = decryptAuthConfig(m.secretKey, auth)
+	if err != nil {
+		return fmt.Errorf("mcp server config %s: auth secrets: %w", serverID, err)
+	}
+	out.Auth = auth
+	if row.retryCfg != "" && row.retryCfg != "null" {
+		out.Retry = &mcpdomain.RetryConfig{}
+		_ = json.Unmarshal([]byte(row.retryCfg), out.Retry)
+	}
+	return nil
 }

@@ -33,9 +33,11 @@ func newGuestLoginResponse(guest *application.GuestAccount, accessToken string, 
 		AccessToken: accessToken,
 		TenantID:    guest.TenantID,
 		User: guestLoginUserResponse{
-			Sub:         guest.UserID,
-			TenantID:    guest.TenantID,
-			Role:        "member",
+			Sub:      guest.UserID,
+			TenantID: guest.TenantID,
+			// Guest owns their private sandbox tenant; "member" would not permit
+			// creating the agents/knowledge a trial requires.
+			Role:        "owner",
 			GlobalRole:  "",
 			SystemRole:  string(systemRole),
 			AvatarURL:   guest.AvatarURL,
@@ -45,13 +47,25 @@ func newGuestLoginResponse(guest *application.GuestAccount, accessToken string, 
 }
 
 // GuestLogin provisions a temporary guest account and issues a token pair.
-// The guest joins the default tenant as a member — same data visibility and
-// permission model as a GitHub member; it only differs by an expiry after which
-// the reaper removes the account and any tenants it created.
+//
+// Security model: guests never join the default tenant. Every guest gets a
+// dedicated per-guest sandbox tenant (owner seat) that is provisioned and
+// activated before tokens are issued, so an unauthenticated caller can only
+// ever reach data inside their own empty tenant. The sandbox tenant and the
+// guest user are removed by the guest reaper after GuestAccountTTL.
+//
+// The endpoint is gated by AuthHandlerDeps.GuestAuthEnabled: when disabled the
+// handler fails closed with 403. It defaults to enabled (restricted sandbox
+// mode) because the frontend login page exposes a guest trial entry; operators
+// can fully disable it with GUEST_AUTH_ENABLED=false.
 // POST /auth/guest
 func (h *AuthHandler) GuestLogin(c *gin.Context) {
 	ctx := c.Request.Context()
 
+	if !h.deps.GuestAuthEnabled {
+		_ = c.Error(middleware.NewHTTPError(http.StatusForbidden, errors.New("guest login disabled")))
+		return
+	}
 	if h.deps.OnboardSvc == nil || h.deps.JWTService == nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("service not initialized")))
 		return
@@ -64,12 +78,21 @@ func (h *AuthHandler) GuestLogin(c *gin.Context) {
 		return
 	}
 
-	// Guest is a plain default-tenant member → SystemRoleUser, no global role.
+	// Activate the sandbox tenant: apply tenant DDL and flip status to active.
+	// On failure the tenant stays provisioning (all requireActive routes fail
+	// closed) and the reaper cleans it up with the guest.
+	if err := completeTenantProvision(ctx, h.deps.SchemaProvisioner, guest.TenantID); err != nil {
+		h.deps.Logger.Error("provision guest sandbox tenant", zap.String("tenant_id", guest.TenantID), zap.Error(err))
+		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("guest sandbox provisioning failed")))
+		return
+	}
+
+	// Guest is owner of their own sandbox tenant → SystemRoleUser, no global role.
 	systemRole := domain.DeriveSystemRole([]domain.TenantMembership{
-		{TenantID: guest.TenantID, Role: "member"},
+		{TenantID: guest.TenantID, Role: "owner"},
 	})
 
-	rawRT, accessJWT, err := h.issueTokenPair(ctx, guest.UserID, guest.TenantID, "member", "", systemRole, guest.AvatarURL, guest.GitHubLogin)
+	rawRT, accessJWT, err := h.issueTokenPair(ctx, guest.UserID, guest.TenantID, "owner", "", systemRole, guest.AvatarURL, guest.GitHubLogin)
 	if err != nil {
 		h.deps.Logger.Error("issue token pair for guest", zap.Error(err))
 		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("token issuance failed")))

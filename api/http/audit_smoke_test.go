@@ -40,7 +40,7 @@ func (r *smokeAuditRepo) InsertBatch(_ context.Context, events []auditdomain.Aud
 func (r *smokeAuditRepo) Query(_ context.Context, _ auditdomain.AuditFilter) ([]auditdomain.AuditEvent, error) {
 	return nil, nil
 }
-func (r *smokeAuditRepo) GetByID(_ context.Context, _ string) (*auditdomain.AuditEvent, error) {
+func (r *smokeAuditRepo) GetByID(_ context.Context, _, _ string) (*auditdomain.AuditEvent, error) {
 	return nil, nil
 }
 func (r *smokeAuditRepo) DeleteOlderThan(_ context.Context, _ time.Time) error { return nil }
@@ -138,7 +138,9 @@ func TestAuditSmoke_RouterDoesNotPanic(t *testing.T) {
 		token      string
 		wantStatus int
 	}{
-		{"guest json", "POST", "/auth/guest", `{}`, "", http.StatusInternalServerError},
+		// smokeContainer 的 Config.GuestAuthEnabled 为零值 false（guest 禁用态），
+		// POST /auth/guest 必须 fail closed 返回 403（guest 沙箱开关关闭时禁止签发）。
+		{"guest json", "POST", "/auth/guest", `{}`, "", http.StatusForbidden},
 		{"refresh no cookie", "POST", "/auth/refresh", "", "", http.StatusUnauthorized},
 		{"logout no cookie", "POST", "/auth/logout", "", "", http.StatusOK},
 		{"register json", "POST", "/auth/register", `{}`, "", http.StatusBadRequest},

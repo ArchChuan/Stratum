@@ -611,12 +611,46 @@ func TestPgStore_UpdateRun_success(t *testing.T) {
 
 	beginTenantTx(mock)
 	mock.ExpectExec("UPDATE workflow_runs SET").
-		WithArgs(domain.RunStatus("running"), "out", "", int64(4), "", "", "", "r1").
+		WithArgs(domain.RunStatus("running"), "out", "", "", "", "", "r1", int64(4)).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
 	require.NoError(t, store.UpdateRun(context.Background(), "t1", r))
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgStore_UpdateRun_generationCAS(t *testing.T) {
+	tests := []struct {
+		name string
+		run  *domain.Run
+	}{
+		{
+			name: "stale generation rejected",
+			run:  &domain.Run{ID: "r1", Status: domain.RunStatusRunning, Generation: 3},
+		},
+		{
+			name: "second concurrent update loses CAS",
+			run:  &domain.Run{ID: "r1", Status: domain.RunStatusRunning, Generation: 4},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newStoreMock(t)
+			store := &PgStore{pool: mock}
+
+			beginTenantTx(mock)
+			mock.ExpectExec("UPDATE workflow_runs SET").
+				WithArgs(domain.RunStatus("running"), "", "", "", "", "", "r1", int64(tc.run.Generation)).
+				WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+			mock.ExpectRollback()
+
+			// 乐观锁失败:行未命中(generation 不匹配或被并发更新先行提交),
+			// 必须返回冲突错误并回滚,由调用方决定重试或放弃,禁止静默覆盖。
+			err := store.UpdateRun(context.Background(), "t1", tc.run)
+			require.ErrorIs(t, err, domain.ErrGenerationConflict)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func TestPgStore_RenewRunLease_success(t *testing.T) {

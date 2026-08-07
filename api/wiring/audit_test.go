@@ -38,7 +38,7 @@ func (stubAuditRepo) InsertBatch(_ context.Context, _ []domain.AuditEvent) error
 func (stubAuditRepo) Query(_ context.Context, _ domain.AuditFilter) ([]domain.AuditEvent, error) {
 	return nil, nil
 }
-func (stubAuditRepo) GetByID(_ context.Context, _ string) (*domain.AuditEvent, error) {
+func (stubAuditRepo) GetByID(_ context.Context, _, _ string) (*domain.AuditEvent, error) {
 	return nil, nil
 }
 func (stubAuditRepo) DeleteOlderThan(_ context.Context, _ time.Time) error { return nil }

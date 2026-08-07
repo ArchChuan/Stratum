@@ -10,6 +10,12 @@ import (
 // The wrapping error carries diagnostic details: provider name, URL, status code.
 var ErrUpstreamRequestFailed = errors.New("upstream provider request failed")
 
+// ErrStreamTruncated indicates a streaming response ended before the
+// provider's termination marker ([DONE]/finish_reason, message_stop,
+// done:true) after content had already been emitted — the answer is
+// incomplete and must not be treated as success.
+var ErrStreamTruncated = errors.New("stream truncated before completion marker")
+
 // ProviderKind enumerates supported LLM provider categories.
 type ProviderKind string
 

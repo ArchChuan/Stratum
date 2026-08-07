@@ -10,23 +10,32 @@ import (
 )
 
 type Config struct {
-	Port                    string
-	NatsURL                 string
-	MilvusHost              string
-	MilvusPort              string
-	OtelEndpoint            string
-	PostgresURL             string
-	RedisURL                string
-	PasswordAuthEnabled     bool
-	AdminUsername           string
-	AdminPassword           string
-	AvatarDir               string
-	GitHubClientID          string
-	GitHubClientSecret      string
-	GitHubAuthorizeURL      string
-	GitHubTokenURL          string
-	GitHubUserURL           string
-	JWTPrivateKeyPEM        string
+	Port                string
+	NatsURL             string
+	MilvusHost          string
+	MilvusPort          string
+	OtelEndpoint        string
+	PostgresURL         string
+	RedisURL            string
+	PasswordAuthEnabled bool
+	// GuestAuthEnabled controls the unauthenticated trial endpoint POST /auth/guest.
+	// Guests are provisioned into a dedicated per-guest sandbox tenant (never the
+	// default tenant) and are reaped after GuestAccountTTL; set to false to
+	// disable the trial entry entirely.
+	GuestAuthEnabled   bool
+	AdminUsername      string
+	AdminPassword      string
+	AvatarDir          string
+	GitHubClientID     string
+	GitHubClientSecret string
+	GitHubAuthorizeURL string
+	GitHubTokenURL     string
+	GitHubUserURL      string
+	JWTPrivateKeyPEM   string
+	// DataEncryptionKey 是 at-rest 加密的密钥材料（provider API key / MCP
+	// secret 等），独立于 JWT 签名密钥：轮换 JWT 私钥不影响密文可解，
+	// 未配置时回退 JWT 私钥派生以兼容存量密文（见 pkg/crypto.ResolveDataKey）。
+	DataEncryptionKey       string
 	GlobalAdminGitHubLogin  string
 	FrontendURL             string
 	GitHubCallbackURL       string
@@ -89,7 +98,10 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg := &Config{
-		PasswordAuthEnabled:     getEnv("PASSWORD_AUTH_ENABLED", "") == "true",
+		PasswordAuthEnabled: getEnv("PASSWORD_AUTH_ENABLED", "") == "true",
+		// 默认开启受限沙箱模式：前端登录页有访客试用入口，直接禁用会破坏试用流程；
+		// 沙箱隔离使 guest 只能访问自己的空租户，部署方可用 GUEST_AUTH_ENABLED=false 完全关闭。
+		GuestAuthEnabled:        getEnv("GUEST_AUTH_ENABLED", "true") == "true",
 		AdminUsername:           getEnv("STRATUM_ADMIN_USERNAME", ""),
 		AdminPassword:           getEnv("STRATUM_ADMIN_PASSWORD", ""),
 		AvatarDir:               getEnv("AVATAR_DIR", "/data/avatars"),
@@ -106,6 +118,7 @@ func Load() (*Config, error) {
 		GitHubTokenURL:          tokenURL,
 		GitHubUserURL:           userURL,
 		JWTPrivateKeyPEM:        getEnv("JWT_PRIVATE_KEY_PEM", ""),
+		DataEncryptionKey:       getEnv("DATA_ENCRYPTION_KEY", ""),
 		GlobalAdminGitHubLogin:  getEnv("GLOBAL_ADMIN_GITHUB_LOGIN", "ArchChuan"),
 		FrontendURL:             getEnv("FRONTEND_URL", "http://localhost:3002"),
 		GitHubCallbackURL:       getEnv("GITHUB_CALLBACK_URL", "http://localhost:8080/auth/github/callback"),

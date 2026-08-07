@@ -2,11 +2,13 @@ package wiring
 
 import (
 	"context"
+	"fmt"
 
 	llmapp "github.com/byteBuilderX/stratum/internal/llmgateway/application"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 
@@ -80,7 +82,13 @@ func (c *Container) buildLLMGateway(_ context.Context) error {
 	}
 
 	modelRepo := llmgateway.NewPgModelRepo(db)
-	providerRepo := llmgateway.NewPgProviderRepo(db)
+	// at-rest 密钥独立于 JWT 签名密钥；两者皆空时 fail closed，
+	// 禁止以 sha256("") 公开常量密钥加密 provider API key。
+	aesKey, err := pkgcrypto.ResolveDataKey(c.Config.DataEncryptionKey, c.Config.JWTPrivateKeyPEM)
+	if err != nil {
+		return fmt.Errorf("build llmgateway: %w", err)
+	}
+	providerRepo := llmgateway.NewPgProviderRepo(db, aesKey, c.Logger, metrics)
 	registry := llmgateway.NewModelRegistry(
 		modelRepo, providerRepo,
 		chatProtos, embedProtos,

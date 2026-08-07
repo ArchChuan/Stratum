@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/nats-io/nats.go"
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
@@ -140,7 +139,6 @@ func (c *Container) buildMemoryPipeline(mem *Memory, db *pgxpool.Pool) error {
 	mp := c.Config.MemoryPipeline
 	pipelineCfg := pipeline.Config{
 		Enabled:               mp.Enabled,
-		NatsURL:               mp.NatsURL,
 		PollInterval:          mp.PollInterval,
 		BatchSize:             mp.BatchSize,
 		EmbedWorkers:          mp.EmbedWorkers,
@@ -159,12 +157,12 @@ func (c *Container) buildMemoryPipeline(mem *Memory, db *pgxpool.Pool) error {
 		return nil
 	}
 
-	nc, err := nats.Connect(pipelineCfg.NatsURL)
-	if err != nil {
-		c.Logger.Warn("memory-pipeline: NATS connect failed", zap.Error(err))
+	// 复用平台共享 NATS 连接（pkg/messaging/nats.Connect 创建，
+	// MaxReconnects(-1)）；连接生命周期归 wiring，pipeline 只使用不关闭。
+	if c.Storage.NATS == nil {
+		c.Logger.Warn("memory-pipeline: NATS unavailable, pipeline disabled")
 		return nil
 	}
-	c.shutdown = append(c.shutdown, func(_ context.Context) error { return nc.Drain() })
 
 	dimResolver := pipeline.DimResolver(func(ctx context.Context, tenantID string) int {
 		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
@@ -178,7 +176,7 @@ func (c *Container) buildMemoryPipeline(mem *Memory, db *pgxpool.Pool) error {
 	})
 
 	vectorAdapter := pipeline.NewMilvusVectorAdapter(c.Storage.Milvus).WithDimResolver(dimResolver)
-	p := pipeline.New(pipelineCfg, db, nc, vectorAdapter, c.Logger)
+	p := pipeline.New(pipelineCfg, db, c.Storage.NATS, vectorAdapter, c.Logger)
 	if c.LLMGateway != nil && c.LLMGateway.Metrics != nil {
 		pipeline.RegisterMetrics(c.LLMGateway.Metrics.Registerer())
 	}

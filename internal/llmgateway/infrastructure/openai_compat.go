@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
@@ -383,6 +384,47 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 	var result CompletionResponse
 	tcAcc := make(map[int]*streamToolCallDelta)
 	scanner := bufio.NewScanner(resp.Body)
+	streamDone, chunksWithContent := c.scanStream(scanner, &result, tcAcc, wrappedOnToken)
+	// convert accumulated deltas to ToolCall slice ordered by index
+	result.ToolCalls = convertToolCalls(tcAcc)
+	if err := scanner.Err(); err != nil {
+		if cause := context.Cause(idleCtx); cause != nil && !errors.Is(cause, context.Canceled) {
+			c.breaker.recordFailure()
+			return nil, fmt.Errorf("%s: %w", c.cfg.Name, cause)
+		}
+		c.breaker.recordFailure()
+		return nil, fmt.Errorf("%s: read stream: %w", c.cfg.Name, err)
+	}
+	if !streamDone {
+		c.breaker.recordFailure()
+		if result.Content == "" && len(tcAcc) == 0 {
+			// 首个 chunk 前断开：连接正常建立但未产出任何内容，视为普通错误。
+			c.logger.Warn(c.cfg.Name+": stream ended before any data",
+				zap.String("model", req.Model))
+			return nil, fmt.Errorf("%s: stream ended before any data: %w", c.cfg.Name, io.EOF)
+		}
+		// 内容已开始输出但未收尾：截断，绝不 recordSuccess。
+		c.logger.Warn(c.cfg.Name+": stream truncated",
+			zap.String("model", req.Model),
+			zap.Int("chunks", chunksWithContent))
+		return nil, fmt.Errorf("%s: stream truncated: %w", c.cfg.Name, domain.ErrStreamTruncated)
+	}
+	c.breaker.recordSuccess()
+	return &result, nil
+}
+
+// scanStream reads SSE chunks until EOF or a termination marker ([DONE] or a
+// chunk with finish_reason). Returns whether a termination marker was seen and
+// the number of chunks carrying a non-empty content delta (截断日志用；每个
+// chunk 至多计 1，不是 token 数)。
+func (c *OpenAICompatClient) scanStream(
+	scanner *bufio.Scanner,
+	result *CompletionResponse,
+	tcAcc map[int]*streamToolCallDelta,
+	onToken func(string),
+) (bool, int) {
+	streamDone := false
+	chunksWithContent := 0
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
@@ -390,49 +432,82 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 		}
 		payload := strings.TrimPrefix(line, "data: ")
 		if payload == "[DONE]" {
-			break
+			return true, chunksWithContent
 		}
 		var chunk openAIStreamChunk
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			continue
 		}
-		if chunk.Model != "" {
-			result.Model = chunk.Model
-		}
-		if chunk.Usage != nil {
-			result.Usage.PromptTokens = chunk.Usage.PromptTokens
-			result.Usage.CompletionTokens = chunk.Usage.CompletionTokens
-			result.Usage.TotalTokens = chunk.Usage.TotalTokens
-		}
-		if len(chunk.Choices) > 0 {
-			if t := chunk.Choices[0].Delta.Content; t != "" {
-				result.Content += t
-				wrappedOnToken(t)
-			}
-			for _, d := range chunk.Choices[0].Delta.ToolCalls {
-				acc, ok := tcAcc[d.Index]
-				if !ok {
-					acc = &streamToolCallDelta{Index: d.Index}
-					tcAcc[d.Index] = acc
-				}
-				if d.ID != "" {
-					acc.ID = d.ID
-				}
-				if d.Type != "" {
-					acc.Type = d.Type
-				}
-				if d.Function.Name != "" {
-					acc.Function.Name = d.Function.Name
-				}
-				acc.Function.Arguments += d.Function.Arguments
-			}
+		finishSeen, contentChunks := applyStreamChunk(result, tcAcc, chunk, onToken)
+		chunksWithContent += contentChunks
+		if finishSeen {
+			streamDone = true
 		}
 	}
-	// convert accumulated deltas to ToolCall slice ordered by index
-	result.ToolCalls = make([]ToolCall, len(tcAcc))
+	return streamDone, chunksWithContent
+}
+
+// applyStreamChunk merges one SSE chunk into result and returns whether a
+// finish_reason termination marker was seen, plus the number of chunks with
+// content emitted by this chunk (0 或 1)。兼容仅发 finish_reason、不发
+// [DONE] 的 provider（如部分代理）。
+func applyStreamChunk(
+	result *CompletionResponse,
+	tcAcc map[int]*streamToolCallDelta,
+	chunk openAIStreamChunk,
+	onToken func(string),
+) (bool, int) {
+	finishSeen := false
+	contentChunks := 0
+	if chunk.Model != "" {
+		result.Model = chunk.Model
+	}
+	if chunk.Usage != nil {
+		result.Usage.PromptTokens = chunk.Usage.PromptTokens
+		result.Usage.CompletionTokens = chunk.Usage.CompletionTokens
+		result.Usage.TotalTokens = chunk.Usage.TotalTokens
+	}
+	if len(chunk.Choices) > 0 {
+		if chunk.Choices[0].FinishReason != "" {
+			finishSeen = true
+		}
+		if t := chunk.Choices[0].Delta.Content; t != "" {
+			result.Content += t
+			contentChunks++
+			onToken(t)
+		}
+		accumulateToolDeltas(tcAcc, chunk.Choices[0].Delta.ToolCalls)
+	}
+	return finishSeen, contentChunks
+}
+
+// accumulateToolDeltas merges per-chunk tool-call fragments into tcAcc by index.
+func accumulateToolDeltas(tcAcc map[int]*streamToolCallDelta, deltas []streamToolCallDelta) {
+	for _, d := range deltas {
+		acc, ok := tcAcc[d.Index]
+		if !ok {
+			acc = &streamToolCallDelta{Index: d.Index}
+			tcAcc[d.Index] = acc
+		}
+		if d.ID != "" {
+			acc.ID = d.ID
+		}
+		if d.Type != "" {
+			acc.Type = d.Type
+		}
+		if d.Function.Name != "" {
+			acc.Function.Name = d.Function.Name
+		}
+		acc.Function.Arguments += d.Function.Arguments
+	}
+}
+
+// convertToolCalls converts accumulated deltas to a ToolCall slice ordered by index.
+func convertToolCalls(tcAcc map[int]*streamToolCallDelta) []ToolCall {
+	result := make([]ToolCall, len(tcAcc))
 	for idx, acc := range tcAcc {
-		if idx < len(result.ToolCalls) {
-			result.ToolCalls[idx] = ToolCall{
+		if idx < len(result) {
+			result[idx] = ToolCall{
 				ID:   acc.ID,
 				Type: acc.Type,
 				Function: struct {
@@ -442,16 +517,7 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 			}
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		if cause := context.Cause(idleCtx); cause != nil && !errors.Is(cause, context.Canceled) {
-			c.breaker.recordFailure()
-			return nil, fmt.Errorf("%s: %w", c.cfg.Name, cause)
-		}
-		c.breaker.recordFailure()
-		return nil, fmt.Errorf("%s: read stream: %w", c.cfg.Name, err)
-	}
-	c.breaker.recordSuccess()
-	return &result, nil
+	return result
 }
 
 func (c *OpenAICompatClient) BatchSize() int {

@@ -4,16 +4,19 @@ import (
 	"context"
 	"testing"
 
+	"go.uber.org/zap"
+
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres/postgrestest"
 )
 
 func TestPgModelRepo_CRUD(t *testing.T) {
 	pool := postgrestest.NewPool(t)
 	tenantID := postgrestest.CreateTestTenant(t, pool)
-	providerRepo := infrastructure.NewPgProviderRepo(pool)
+	providerRepo := infrastructure.NewPgProviderRepo(pool, testRepoKey, zap.NewNop(), observability.NoopMetrics{})
 	modelRepo := infrastructure.NewPgModelRepo(pool)
 	ctx := context.Background()
 
@@ -154,7 +157,7 @@ func TestPgModelRepo_CRUD(t *testing.T) {
 func TestPgModelRepo_UpsertDiscovered(t *testing.T) {
 	pool := postgrestest.NewPool(t)
 	tenantID := postgrestest.CreateTestTenant(t, pool)
-	providerRepo := infrastructure.NewPgProviderRepo(pool)
+	providerRepo := infrastructure.NewPgProviderRepo(pool, testRepoKey, zap.NewNop(), observability.NoopMetrics{})
 	modelRepo := infrastructure.NewPgModelRepo(pool)
 	ctx := context.Background()
 
@@ -250,7 +253,7 @@ func TestPgModelRepo_UpsertDiscovered(t *testing.T) {
 func TestPgModelRepo_DeleteProviderManaged(t *testing.T) {
 	pool := postgrestest.NewPool(t)
 	tenantID := postgrestest.CreateTestTenant(t, pool)
-	providerRepo := infrastructure.NewPgProviderRepo(pool)
+	providerRepo := infrastructure.NewPgProviderRepo(pool, testRepoKey, zap.NewNop(), observability.NoopMetrics{})
 	modelRepo := infrastructure.NewPgModelRepo(pool)
 	ctx := context.Background()
 

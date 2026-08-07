@@ -147,6 +147,30 @@ func (r *TenantRepo) UpdateTenantSettings(ctx context.Context, tenantID string, 
 	return nil
 }
 
+// ListActiveTenantIDs returns the ids of all non-deleted tenants in the
+// public tenant registry. Used by startup paths that iterate every tenant
+// (e.g. stuck-ingest recovery, built-in doc seeding).
+func (r *TenantRepo) ListActiveTenantIDs(ctx context.Context) ([]string, error) {
+	rows, err := r.db.Query(ctx, "SELECT id FROM public.tenants WHERE deleted_at IS NULL")
+	if err != nil {
+		return nil, fmt.Errorf("tenant_repo: list active tenant ids: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("tenant_repo: scan active tenant id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tenant_repo: iterate active tenant ids: %w", err)
+	}
+	return ids, nil
+}
+
 // ListUserTenants returns all active tenants the user belongs to.
 func (r *TenantRepo) ListUserTenants(ctx context.Context, userID string) ([]domain.UserTenantInfo, error) {
 	rows, err := r.db.Query(ctx,

@@ -9,7 +9,11 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/workflow/application"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
+	"github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type memoryStore struct {
@@ -226,4 +230,73 @@ func TestRunServiceStartAsyncOnlyPersistsQueuedRun(t *testing.T) {
 	require.NoError(t, getErr)
 	require.Equal(t, domain.RunStatusQueued, got.Status)
 	require.Empty(t, agents.calls)
+}
+
+// persistFailStore 在 run 进入 failed 状态时让持久化失败,用于验证 failRun
+// 不得吞掉失败状态写回错误(项目原则:持久化失败必须向上传播)。
+type persistFailStore struct {
+	*memoryStore
+	events      []domain.Event
+	failPersist error
+}
+
+func (s *persistFailStore) UpdateRun(ctx context.Context, tenantID string, run *domain.Run) error {
+	if run.Status == domain.RunStatusFailed {
+		return s.failPersist
+	}
+	return s.memoryStore.UpdateRun(ctx, tenantID, run)
+}
+
+func (s *persistFailStore) AppendEvent(_ context.Context, _ string, event domain.Event) (domain.Event, error) {
+	s.events = append(s.events, event)
+	return event, nil
+}
+
+func (s *persistFailStore) ListEvents(context.Context, string, string, int64, int) ([]domain.Event, error) {
+	return nil, nil
+}
+
+func TestRunServiceFailRunPropagatesCheckpointFailure(t *testing.T) {
+	store, idgen := newMemoryStore(), &ids{}
+	persistErr := errors.New("checkpoint write failed")
+	persistStore := &persistFailStore{memoryStore: store, failPersist: persistErr}
+	agentErr := errors.New("agent two exploded")
+	agents := &scriptedFailAgent{err: agentErr}
+	defs := application.NewDefinitionService(store, store, idgen.NewID)
+	def, err := defs.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()})
+	require.NoError(t, err)
+	version, err := defs.Publish(context.Background(), "tenant-1", def.ID)
+	require.NoError(t, err)
+	core, observed := observer.New(zapcore.ErrorLevel)
+	runs := application.NewRunServiceWithRegistry(store, persistStore, agents, idgen.NewID, zap.New(core))
+	run, _, err := runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"task": "hello"}, IdempotencyKey: "fail-persist"})
+	require.NoError(t, err)
+
+	// failRun 路径:节点执行失败 → run 标记失败 → 失败状态写回失败。
+	// 持久化错误必须随返回值向上传播,且记录 ERROR 日志(含 run id)。
+	err = runs.Execute(context.Background(), "tenant-1", run.ID)
+	require.ErrorIs(t, err, agentErr, "原始失败原因必须保留")
+	require.ErrorIs(t, err, persistErr, "失败状态写回错误必须向上传播,禁止吞掉")
+
+	entries := observed.FilterMessage("workflow.run_failed_persist").All()
+	require.Len(t, entries, 1, "失败状态写回失败必须记录 ERROR 日志")
+	require.Equal(t, run.ID, entries[0].ContextMap()["run_id"])
+	// 失败状态未落库:库内 run 仍停留在 running,等待租约回收——这与静默吞错
+	// 的区别在于错误已经显式暴露,运维可见。
+	got, _, getErr := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
+	require.NoError(t, getErr)
+	require.Equal(t, domain.RunStatusRunning, got.Status)
+}
+
+// scriptedFailAgent 对特定 node 返回捕获的 sentinel 错误,便于 errors.Is 断言。
+type scriptedFailAgent struct{ err error }
+
+func (s *scriptedFailAgent) Execute(_ context.Context, request port.NodeExecutionRequest) (port.NodeExecutionResult, error) {
+	if request.Node.AgentID == "agent-2" {
+		return port.NodeExecutionResult{}, s.err
+	}
+	return port.NodeExecutionResult{
+		Output:  "output-" + request.Node.AgentID,
+		TraceID: "trace-" + request.Node.AgentID,
+	}, nil
 }

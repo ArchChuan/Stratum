@@ -8,6 +8,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/workflow/application"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestDefinitionServiceUpdate(t *testing.T) {
@@ -108,7 +109,7 @@ func seededRunStore(run *domain.Run) *eventRecordingStore {
 func TestRunServiceEvents(t *testing.T) {
 	store := seededRunStore(&domain.Run{ID: "run-1", Status: domain.RunStatusRunning, CreatedBy: "operator"})
 	store.events = []domain.Event{{ID: "e1"}, {ID: "e2"}}
-	runs := application.NewRunServiceWithRegistry(store, store, nil, (&ids{}).NewID)
+	runs := application.NewRunServiceWithRegistry(store, store, nil, (&ids{}).NewID, zap.NewNop())
 
 	// 正常：admin 读取，after/limit 透传。
 	events, err := runs.Events(context.Background(), "t1", "run-1", adminActor(), 7, 5)

@@ -2,6 +2,7 @@ package application_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -15,7 +16,7 @@ import (
 type fakeAuditRepo struct {
 	insertBatchFn func(ctx context.Context, events []domain.AuditEvent) error
 	queryFn       func(ctx context.Context, filter domain.AuditFilter) ([]domain.AuditEvent, error)
-	getByIDFn     func(ctx context.Context, id string) (*domain.AuditEvent, error)
+	getByIDFn     func(ctx context.Context, tenantID, id string) (*domain.AuditEvent, error)
 	deleteFn      func(ctx context.Context, before time.Time) error
 }
 
@@ -33,9 +34,9 @@ func (f *fakeAuditRepo) Query(ctx context.Context, filter domain.AuditFilter) ([
 	return nil, nil
 }
 
-func (f *fakeAuditRepo) GetByID(ctx context.Context, id string) (*domain.AuditEvent, error) {
+func (f *fakeAuditRepo) GetByID(ctx context.Context, tenantID, id string) (*domain.AuditEvent, error) {
 	if f.getByIDFn != nil {
-		return f.getByIDFn(ctx, id)
+		return f.getByIDFn(ctx, tenantID, id)
 	}
 	return nil, nil
 }
@@ -160,10 +161,13 @@ func TestAuditService_Query_DelegatesToRepo(t *testing.T) {
 	}
 }
 
-func TestAuditService_GetByID_DelegatesToRepo(t *testing.T) {
+func TestAuditService_GetByID_DelegatesToRepoWithTenant(t *testing.T) {
 	want := &domain.AuditEvent{ID: "evt-1"}
 	repo := &fakeAuditRepo{
-		getByIDFn: func(_ context.Context, id string) (*domain.AuditEvent, error) {
+		getByIDFn: func(_ context.Context, tenantID, id string) (*domain.AuditEvent, error) {
+			if tenantID != "t1" {
+				t.Errorf("tenantID=%q, want t1", tenantID)
+			}
 			if id != "evt-1" {
 				return nil, nil
 			}
@@ -173,7 +177,7 @@ func TestAuditService_GetByID_DelegatesToRepo(t *testing.T) {
 	svc := application.NewAuditService(repo, observability.NoopMetrics{}, zap.NewNop())
 	defer svc.Stop(context.Background())
 
-	got, err := svc.GetByID(context.Background(), "evt-1")
+	got, err := svc.GetByID(context.Background(), "t1", "evt-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +185,7 @@ func TestAuditService_GetByID_DelegatesToRepo(t *testing.T) {
 		t.Fatal("unexpected result")
 	}
 
-	got, err = svc.GetByID(context.Background(), "missing")
+	got, err = svc.GetByID(context.Background(), "t1", "missing")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,5 +221,75 @@ func TestAuditService_Stop_DoubleCloseSafe(t *testing.T) {
 	}
 	if err := svc.Stop(context.Background()); err != nil {
 		t.Fatal("second Stop should be no-op", err)
+	}
+}
+
+// TestAuditService_FlushFailure_RetainsEventsUntilRetrySucceeds pins the
+// no-event-loss contract: a failed batch insert must keep the events in the
+// in-memory batch (retried on the next flush) instead of clearing them.
+func TestAuditService_FlushFailure_RetainsEventsUntilRetrySucceeds(t *testing.T) {
+	var (
+		mu        sync.Mutex
+		callCount int
+		saved     []domain.AuditEvent
+		flushed   = make(chan struct{}, 1)
+	)
+	repo := &fakeAuditRepo{
+		insertBatchFn: func(_ context.Context, events []domain.AuditEvent) error {
+			mu.Lock()
+			defer mu.Unlock()
+			callCount++
+			if len(events) < 101 {
+				// Simulate a store outage: partial batches are rejected.
+				// The writer must retain them and retry until the whole set
+				// is deliverable in one flush.
+				return errors.New("db unavailable")
+			}
+			saved = append(saved, events...)
+			select {
+			case flushed <- struct{}{}:
+			default:
+			}
+			return nil
+		},
+	}
+	svc := application.NewAuditService(repo, observability.NoopMetrics{}, zap.NewNop())
+	defer svc.Stop(context.Background())
+
+	for i := 0; i < 101; i++ {
+		svc.Record(context.Background(), domain.AuditEvent{
+			Action: "POST /test", RiskLevel: "medium",
+		})
+	}
+
+	select {
+	case <-flushed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for successful retry flush")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(saved) != 101 {
+		t.Fatalf("expected all 101 events persisted after retry, got %d", len(saved))
+	}
+	if callCount < 2 {
+		t.Fatalf("expected at least one failed attempt before success, got %d calls", callCount)
+	}
+}
+
+// TestAuditService_Stop_PropagatesPersistError pins that a failing store
+// surfaces through Stop instead of silently dropping the pending events.
+func TestAuditService_Stop_PropagatesPersistError(t *testing.T) {
+	repo := &fakeAuditRepo{
+		insertBatchFn: func(_ context.Context, _ []domain.AuditEvent) error {
+			return errors.New("db down")
+		},
+	}
+	svc := application.NewAuditService(repo, observability.NoopMetrics{}, zap.NewNop())
+
+	svc.Record(context.Background(), domain.AuditEvent{Action: "POST /test"})
+	if err := svc.Stop(context.Background()); err == nil {
+		t.Fatal("expected Stop to propagate the persist error, got nil")
 	}
 }
