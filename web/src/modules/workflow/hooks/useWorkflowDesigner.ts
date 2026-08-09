@@ -5,10 +5,9 @@ import { workflowApi } from '../api/workflow.api';
 import { createInitialEditorState, workflowEditorReducer, type WorkflowEditorAction } from '../model/editor';
 import type { WorkflowDefinition, WorkflowInputSchema } from '../model/workflow';
 
-interface RequestError { response?: { data?: { error?: string }; status?: number } }
+import { extractErrorMessage } from '@/shared/lib';
 
 const emptyInputSchema: WorkflowInputSchema = { task_label: '', task_description: '', fields: [] };
-const errorText = (error: unknown) => (error as RequestError).response?.data?.error || '操作失败';
 
 export const useWorkflowDesigner = (workflowId?: string) => {
   const [editor, rawDispatch] = useReducer(workflowEditorReducer, undefined, () => createInitialEditorState());
@@ -36,7 +35,7 @@ export const useWorkflowDesigner = (workflowId?: string) => {
       rawDispatch({ type: 'server.reset', spec: next.spec });
       setDetailsDirty(false);
     }).catch((error: unknown) => {
-      if (!cancelled) message.error({ content: errorText(error), duration: 0 });
+      if (!cancelled) message.error({ content: extractErrorMessage(error, '操作失败'), duration: 0 });
     }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [workflowId]);
@@ -67,9 +66,11 @@ export const useWorkflowDesigner = (workflowId?: string) => {
       message.success({ content: '草稿已保存', duration: 2 });
       return saved;
     } catch (error: unknown) {
-      const requestError = error as RequestError;
+      const isConflict = (error as { response?: { status?: number } })?.response?.status === 409;
       message.error({
-        content: requestError.response?.status === 409 ? '草稿已被其他人修改，本地内容已保留，请刷新后重试' : errorText(error),
+        content: isConflict
+          ? '草稿已被其他人修改，本地内容已保留，请刷新后重试'
+          : extractErrorMessage(error, '操作失败'),
         duration: 0,
       });
       return null;
@@ -87,7 +88,7 @@ export const useWorkflowDesigner = (workflowId?: string) => {
       message.success({ content: '当前修订校验通过', duration: 2 });
       return true;
     } catch (error: unknown) {
-      message.error({ content: errorText(error), duration: 0 });
+      message.error({ content: extractErrorMessage(error), duration: 0 });
       return false;
     } finally {
       setValidating(false);
@@ -102,7 +103,7 @@ export const useWorkflowDesigner = (workflowId?: string) => {
       message.success({ content: '工作流已发布', duration: 2 });
       return version;
     } catch (error: unknown) {
-      message.error({ content: errorText(error), duration: 0 });
+      message.error({ content: extractErrorMessage(error), duration: 0 });
       return null;
     } finally {
       setPublishing(false);

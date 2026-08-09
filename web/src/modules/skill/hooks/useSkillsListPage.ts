@@ -34,10 +34,10 @@ export const useSkillsListPage = () => {
   const handleDelete = useCallback(async (id: string) => {
     try {
       await skillApi.delete(id);
-      message.success('技能已删除');
+      message.success({ content: '技能已删除', duration: 2 });
       setSkills((prev) => prev.filter((s) => s.id !== id));
     } catch (err) {
-      message.error(extractErrorMessage(err) || '删除失败');
+      message.error({ content: extractErrorMessage(err, '删除失败'), duration: 0 });
     }
   }, []);
 

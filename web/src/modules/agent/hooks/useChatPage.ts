@@ -21,6 +21,24 @@ const normalizeArtifacts = (value: unknown) => {
   return parsed.success ? parsed.data : [];
 };
 
+// 组装临时消息（本地乐观渲染，尚未落库）
+const makeMessage = (msg: {
+  id: string;
+  role: string;
+  content: string;
+  steps?: ChatMessage['steps'];
+  artifacts?: ChatMessage['artifacts'];
+  interrupted?: boolean;
+}): ChatMessage => ({
+  id: msg.id,
+  role: msg.role,
+  content: msg.content,
+  created_at: new Date().toISOString(),
+  steps: msg.steps,
+  artifacts: msg.artifacts,
+  interrupted: msg.interrupted,
+});
+
 type UseChatPageOptions = { fixedAgentId?: string };
 
 export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
@@ -34,9 +52,9 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [loadingConvs, setLoadingConvs] = useState(false);
-	const [loadingMsgs, setLoadingMsgs] = useState(false);
-	const [pendingApprovals, setPendingApprovals] = useState<ToolApproval[]>([]);
-	const [approvalActionId, setApprovalActionId] = useState<string | null>(null);
+  const [loadingMsgs, setLoadingMsgs] = useState(false);
+  const [pendingApprovals, setPendingApprovals] = useState<ToolApproval[]>([]);
+  const [approvalActionId, setApprovalActionId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const pinnedToBottomRef = useRef(true); // auto-scroll only when user is at the bottom
@@ -51,25 +69,25 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
     accumulatedContent,
     streamResult,
     streamError,
-		streamDone,
-		streamApproval,
-		streamFailure,
-		startStream,
-		cancelStream,
-		clearStreamFailure,
+    streamDone,
+    streamApproval,
+    streamFailure,
+    startStream,
+    cancelStream,
+    clearStreamFailure,
     getStreamState,
-	} = useChatStream();
+  } = useChatStream();
 
-	useEffect(() => {
-		clearStreamFailure();
-	}, [selectedAgent, selectedConv, clearStreamFailure]);
+  useEffect(() => {
+    clearStreamFailure();
+  }, [selectedAgent, selectedConv, clearStreamFailure]);
 
-	useEffect(() => {
-		let cancelled=false;
-		agentApi.listToolApprovals().then((rows)=>{if(!cancelled)setPendingApprovals(rows)}).catch(()=>undefined);
-		return()=>{cancelled=true};
-	},[]);
-	useEffect(()=>{if(streamApproval)setPendingApprovals((rows)=>rows.some((r)=>r.approvalId===streamApproval.approvalId)?rows:[...rows,streamApproval])},[streamApproval]);
+  useEffect(() => {
+    let cancelled=false;
+    agentApi.listToolApprovals().then((rows)=>{if(!cancelled)setPendingApprovals(rows)}).catch(()=>undefined);
+    return()=>{cancelled=true};
+  },[]);
+  useEffect(()=>{if(streamApproval)setPendingApprovals((rows)=>rows.some((r)=>r.approvalId===streamApproval.approvalId)?rows:[...rows,streamApproval])},[streamApproval]);
 
   const streamStateRef = useRef(getStreamState);
   streamStateRef.current = getStreamState;
@@ -78,13 +96,13 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
     let cancelled = false;
     (async () => {
       try {
-				if (fixedAgentId) {
-					const assistant = await agentApi.get(fixedAgentId);
-					if (cancelled) return;
-					setAgents([assistant]);
-					setSelectedAgent(fixedAgentId);
-					return;
-				}
+        if (fixedAgentId) {
+          const assistant = await agentApi.get(fixedAgentId);
+          if (cancelled) return;
+          setAgents([assistant]);
+          setSelectedAgent(fixedAgentId);
+          return;
+        }
         const list = await agentApi.list();
         if (cancelled) return;
         const ordered = [...list].sort((left, right) => Number(right.isSystem) - Number(left.isSystem));
@@ -97,7 +115,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
           return defaultAgent;
         });
       } catch {
-        if (!cancelled) msg.error('加载 Agent 列表失败');
+        if (!cancelled) msg.error({ content: '加载 Agent 列表失败', duration: 0 });
       }
     })();
     return () => {
@@ -123,7 +141,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
         const found = convs.find((c) => c.id === last);
         setSelectedConv(found ? found.id : convs[0]?.id ?? null);
       } catch {
-        if (!cancelled) msg.error('加载会话列表失败');
+        if (!cancelled) msg.error({ content: '加载会话列表失败', duration: 0 });
       } finally {
         if (!cancelled) setLoadingConvs(false);
       }
@@ -156,14 +174,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
             : [
                 ...loaded,
                 ...(st.userQuery
-                  ? [
-                      {
-                        id: `u-restore-${Date.now()}`,
-                        role: 'user',
-                        content: st.userQuery,
-                        created_at: new Date().toISOString(),
-                      } as ChatMessage,
-                    ]
+                  ? [makeMessage({ id: `u-restore-${Date.now()}`, role: 'user', content: st.userQuery })]
                   : []),
               ];
 
@@ -173,12 +184,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
             setSending(true);
             setMessages([
               ...restored,
-              {
-                id: msgId,
-                role: 'assistant',
-                content: st.content,
-                created_at: new Date().toISOString(),
-              } as ChatMessage,
+              makeMessage({ id: msgId, role: 'assistant', content: st.content }),
             ]);
           } else if (st.done && st.content) {
             const lastLoaded = loaded[loaded.length - 1];
@@ -187,14 +193,13 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
               const finalContent = st.result?.output || st.content;
               setMessages([
                 ...restored,
-                {
+                makeMessage({
                   id: `a-done-${Date.now()}`,
                   role: st.error ? 'error' : 'assistant',
                   content: st.error || finalContent,
-                  created_at: new Date().toISOString(),
                   steps: st.result?.steps,
                   artifacts: normalizeArtifacts(st.result?.artifacts),
-                } as ChatMessage,
+                }),
               ]);
             } else if (!hasUserMsg && st.userQuery) {
               setMessages(restored);
@@ -204,7 +209,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
           }
         }
       } catch {
-        if (!cancelled) msg.error('加载消息历史失败');
+        if (!cancelled) msg.error({ content: '加载消息历史失败', duration: 0 });
       } finally {
         if (!cancelled) setLoadingMsgs(false);
       }
@@ -295,19 +300,13 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
     }
 
     const tmpId = `tmp-${Date.now()}`;
-    setMessages((prev) => [
-      ...prev,
-      { id: tmpId, role: 'user', content: text, created_at: new Date().toISOString() } as ChatMessage,
-    ]);
+    setMessages((prev) => [...prev, makeMessage({ id: tmpId, role: 'user', content: text })]);
     setInput('');
     setSending(true);
 
     const msgId = `a-${Date.now()}`;
     streamMsgIdRef.current = msgId;
-    setMessages((prev) => [
-      ...prev,
-      { id: msgId, role: 'assistant', content: '', created_at: new Date().toISOString() } as ChatMessage,
-    ]);
+    setMessages((prev) => [...prev, makeMessage({ id: msgId, role: 'assistant', content: '' })]);
 
     startStream(selectedAgent, {
       query: text,
@@ -324,7 +323,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
       setConversations((prev) => [conv, ...prev]);
       setSelectedConv(conv.id);
     } catch {
-      msg.error('创建会话失败');
+      msg.error({ content: '创建会话失败', duration: 0 });
     }
   }, [selectedAgent]);
 
@@ -333,11 +332,11 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
       await conversationApi.rename(convId, name);
       setConversations((prev) => prev.map((c) => (c.id === convId ? { ...c, name } : c)));
     } catch {
-      msg.error('重命名失败');
+      msg.error({ content: '重命名失败', duration: 0 });
     }
   }, []);
 
-	const handleDeleteConv = useCallback(
+  const handleDeleteConv = useCallback(
     async (convId: string) => {
       try {
         await conversationApi.delete(convId);
@@ -345,61 +344,56 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
         setConversations(next);
         if (selectedConv === convId) setSelectedConv(next[0]?.id ?? null);
       } catch {
-        msg.error('删除会话失败');
+        msg.error({ content: '删除会话失败', duration: 0 });
       }
     },
     [conversations, selectedConv],
-	);
+  );
 
-	const handleApprove = useCallback(async (approvalID: string) => {
-		setApprovalActionId(approvalID);
-		try {
-			await agentApi.decideToolApproval(approvalID, 'approved');
-			const result = await agentApi.resumeToolApproval(approvalID);
-			setPendingApprovals((rows) => rows.filter((row) => row.approvalId !== approvalID));
-			setMessages((rows) => [
-				...rows,
-				{
-					id: `approval-${Date.now()}`,
-					role: 'assistant',
-					content: result.output || '工具执行完成',
-					created_at: new Date().toISOString(),
-				} as ChatMessage,
-			]);
-			msg.success({ content: '工具执行完成', duration: 2 });
-		} catch (err) {
-			const detail = extractErrorMessage(err, '批准或恢复执行失败');
-			const normalized = detail.toLowerCase();
-			const status = normalized.includes('outcome is unknown')
-				? 'unknown_outcome'
-				: normalized.includes('expired')
-					? 'expired'
-					: normalized.includes('authorization') || normalized.includes('permission')
-						? 'authorization_denied'
-						: 'approved';
-			setPendingApprovals((rows) => rows.map((row) => (
-				row.approvalId === approvalID ? { ...row, status } : row
-			)));
-			msg.error({
-				content: status === 'unknown_outcome' ? '工具执行结果未知，需要人工对账' : detail,
-				duration: 0,
-			});
-		} finally {
-			setApprovalActionId(null);
-		}
-	}, []);
-	const handleReject = useCallback(async (approvalID: string) => {
-		setApprovalActionId(approvalID);
-		try {
-			await agentApi.decideToolApproval(approvalID, 'rejected');
-			setPendingApprovals((rows) => rows.filter((row) => row.approvalId !== approvalID));
-			msg.success({ content: '已拒绝工具执行', duration: 2 });
-		} catch (err) {
-			msg.error({ content: extractErrorMessage(err, '拒绝审批失败'), duration: 0 });
-		} finally {
-			setApprovalActionId(null);
-		}
-	}, []);
+  const handleApprove = useCallback(async (approvalID: string) => {
+    setApprovalActionId(approvalID);
+    try {
+      await agentApi.decideToolApproval(approvalID, 'approved');
+      const result = await agentApi.resumeToolApproval(approvalID);
+      setPendingApprovals((rows) => rows.filter((row) => row.approvalId !== approvalID));
+      setMessages((rows) => [
+        ...rows,
+        makeMessage({ id: `approval-${Date.now()}`, role: 'assistant', content: result.output || '工具执行完成' }),
+      ]);
+      msg.success({ content: '工具执行完成', duration: 2 });
+    } catch (err) {
+      const detail = extractErrorMessage(err, '批准或恢复执行失败');
+      const normalized = detail.toLowerCase();
+      const status = normalized.includes('outcome is unknown')
+        ? 'unknown_outcome'
+        : normalized.includes('expired')
+          ? 'expired'
+          : normalized.includes('authorization') || normalized.includes('permission')
+            ? 'authorization_denied'
+            : 'approved';
+      setPendingApprovals((rows) => rows.map((row) => (
+        row.approvalId === approvalID ? { ...row, status } : row
+      )));
+      msg.error({
+        content: status === 'unknown_outcome' ? '工具执行结果未知，需要人工对账' : detail,
+        duration: 0,
+      });
+    } finally {
+      setApprovalActionId(null);
+    }
+  }, []);
+  const handleReject = useCallback(async (approvalID: string) => {
+    setApprovalActionId(approvalID);
+    try {
+      await agentApi.decideToolApproval(approvalID, 'rejected');
+      setPendingApprovals((rows) => rows.filter((row) => row.approvalId !== approvalID));
+      msg.success({ content: '已拒绝工具执行', duration: 2 });
+    } catch (err) {
+      msg.error({ content: extractErrorMessage(err, '拒绝审批失败'), duration: 0 });
+    } finally {
+      setApprovalActionId(null);
+    }
+  }, []);
 
   return {
     agents,
@@ -420,13 +414,13 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
     handleSend,
     handleCreateConv,
     handleRenameConv,
-		handleDeleteConv,
-		pendingApprovals,
-		approvalActionId,
-		handleApprove,
-		handleReject,
-		streamFailure,
-		clearStreamFailure,
-		cancelStream,
+    handleDeleteConv,
+    pendingApprovals,
+    approvalActionId,
+    handleApprove,
+    handleReject,
+    streamFailure,
+    clearStreamFailure,
+    cancelStream,
   };
 };

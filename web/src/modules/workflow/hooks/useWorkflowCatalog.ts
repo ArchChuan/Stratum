@@ -5,6 +5,7 @@ import { workflowApi } from '../api/workflow.api';
 import type { WorkflowSummary } from '../model/workflow';
 
 import { WORKFLOW_DEFAULT_PAGE_SIZE } from '@/constants';
+import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 export const useWorkflowCatalog = () => {
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
@@ -24,8 +25,8 @@ export const useWorkflowCatalog = () => {
         setTotal(result.total);
       })
       .catch((err) => {
-        if (cancelled) return;
-        message.error({ content: err.response?.data?.error || '加载工作流失败', duration: 0 });
+        if (cancelled || isForbidden(err)) return;
+        message.error({ content: extractErrorMessage(err, '加载工作流失败'), duration: 0 });
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -44,8 +45,10 @@ export const useWorkflowCatalog = () => {
       message.success({ content: '工作流草稿已删除', duration: 2 });
       setWorkflows((current) => current.filter((workflow) => workflow.id !== workflowId));
       setTotal((current) => Math.max(0, current - 1));
-    } catch (err: any) {
-      message.error({ content: err.response?.data?.error || '删除工作流失败', duration: 0 });
+    } catch (err: unknown) {
+      if (!isForbidden(err)) {
+        message.error({ content: extractErrorMessage(err, '删除工作流失败'), duration: 0 });
+      }
     }
   };
 

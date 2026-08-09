@@ -1,12 +1,15 @@
 import { UploadOutlined, UserOutlined } from '@ant-design/icons';
-import { Avatar, Button, Card, message, Space, Typography, Upload } from 'antd';
+import { Avatar, Button, Card, Space, Typography, Upload, message } from 'antd';
 import type { RcFile, UploadChangeParam } from 'antd/es/upload';
 import { useState } from 'react';
 
 import { authApi } from '../api/auth.api';
 import { useAuth } from '../components/AuthContext';
 
+import { AVATAR_MAX_UPLOAD_SIZE_BYTES } from '@/constants';
 import { extractErrorMessage } from '@/shared/lib';
+
+const ACCEPTED_AVATAR_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp'];
 
 const { Title, Text } = Typography;
 
@@ -57,7 +60,18 @@ export const ProfilePage = () => {
                 <Upload
                   accept="image/jpeg,image/png,image/webp"
                   showUploadList={false}
-                  beforeUpload={() => false}
+                  beforeUpload={(file) => {
+                    const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+                    if (!ACCEPTED_AVATAR_EXTENSIONS.includes(ext)) {
+                      message.error({ content: '头像仅支持 JPG / PNG / WebP', duration: 0 });
+                      return Upload.LIST_IGNORE;
+                    }
+                    if (file.size > AVATAR_MAX_UPLOAD_SIZE_BYTES) {
+                      message.error({ content: '头像不能超过 2MB', duration: 0 });
+                      return Upload.LIST_IGNORE;
+                    }
+                    return false;
+                  }}
                   onChange={handleAvatarChange}
                   disabled={uploading}
                 >

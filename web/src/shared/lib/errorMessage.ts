@@ -11,3 +11,7 @@ export const extractErrorMessage = (err: unknown, fallback = '操作失败'): st
     fallback
   );
 };
+
+// 403 判定统一入口（权限变更场景页面刻意静默，集中判定避免各处手写）
+export const isForbidden = (err: unknown): boolean =>
+  (err as AxiosError)?.response?.status === 403;

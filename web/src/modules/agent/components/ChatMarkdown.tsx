@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { memo, type CSSProperties, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -45,6 +45,19 @@ interface CodeProps extends MdProps {
 interface LinkProps extends MdProps {
   href?: string;
 }
+
+// 链接协议白名单：仅 http/https/mailto 可点击，其余协议渲染为纯文本，防止 js: 等注入
+const SAFE_LINK_PROTOCOLS = ['http:', 'https:', 'mailto:'];
+
+const isSafeLink = (href?: string): boolean => {
+  if (!href) return false;
+  try {
+    const url = new URL(href, window.location.origin);
+    return SAFE_LINK_PROTOCOLS.includes(url.protocol);
+  } catch {
+    return false;
+  }
+};
 
 const mdComponents = {
   p: ({ children }: MdProps) => (
@@ -99,11 +112,14 @@ const mdComponents = {
       {children}
     </blockquote>
   ),
-  a: ({ href, children }: LinkProps) => (
-    <a href={href} target="_blank" rel="noreferrer" style={{ color: '#1677ff' }}>
-      {children}
-    </a>
-  ),
+  a: ({ href, children }: LinkProps) =>
+    isSafeLink(href) ? (
+      <a href={href} target="_blank" rel="noreferrer" style={{ color: '#1677ff' }}>
+        {children}
+      </a>
+    ) : (
+      <span style={{ color: '#595959' }}>{children}</span>
+    ),
   strong: ({ children }: MdProps) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
   h1: ({ children }: MdProps) => (
     <h1 style={{ fontSize: 18, fontWeight: 600, margin: '8px 0 4px' }}>{children}</h1>
@@ -137,10 +153,13 @@ const mdComponents = {
   ),
 };
 
-export const ChatMarkdown = ({ content }: { content: string }) => (
-  <div className="chat-markdown" style={{ overflowWrap: 'anywhere', minWidth: 0 }}>
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-      {content}
-    </ReactMarkdown>
-  </div>
-);
+// memo：流式期间历史消息 content 不变时不重跑 ReactMarkdown 解析
+export const ChatMarkdown = memo(function ChatMarkdown({ content }: { content: string }) {
+  return (
+    <div className="chat-markdown" style={{ overflowWrap: 'anywhere', minWidth: 0 }}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+});

@@ -5,8 +5,9 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { knowledgeApi } from '../api/knowledge.api';
 import type { KnowledgeDocument, QueryResult, WorkspaceStats } from '../model/knowledge';
 
+import { KNOWLEDGE_DEFAULT_TOP_K } from '@/constants';
 import { useAuth } from '@/modules/iam';
-import { extractErrorMessage } from '@/shared/lib';
+import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 const DOC_POLL_INTERVAL_MS = 5000;
 
@@ -49,7 +50,7 @@ export const useKnowledgeDetailPage = () => {
       setDocuments(docs);
       return docs;
     } catch (err) {
-      message.error(extractErrorMessage(err) || '获取文档列表失败');
+      message.error({ content: extractErrorMessage(err) || '获取文档列表失败', duration: 0 });
       return [];
     } finally {
       setDocumentsLoading(false);
@@ -76,7 +77,7 @@ export const useKnowledgeDetailPage = () => {
       }
       lastLoadedConfig.current = values;
     } catch (err) {
-      message.error(extractErrorMessage(err) || '获取知识库详情失败');
+      message.error({ content: extractErrorMessage(err) || '获取知识库详情失败', duration: 0 });
     } finally {
       setStatsLoading(false);
     }
@@ -123,10 +124,10 @@ export const useKnowledgeDetailPage = () => {
       if (!newName || newName === name) return;
       try {
         await knowledgeApi.update(name, { name: newName });
-        message.success('名称已更新');
+        message.success({ content: '名称已更新', duration: 2 });
         navigate(`/knowledge/${encodeURIComponent(newName)}`);
       } catch (err) {
-        message.error(extractErrorMessage(err) || '更新失败');
+        message.error({ content: extractErrorMessage(err) || '更新失败', duration: 0 });
       }
     },
     [name, navigate],
@@ -136,10 +137,10 @@ export const useKnowledgeDetailPage = () => {
     async (description: string) => {
       try {
         await knowledgeApi.update(name, { description });
-        message.success('描述已更新');
+        message.success({ content: '描述已更新', duration: 2 });
         fetchStats();
       } catch (err) {
-        message.error(extractErrorMessage(err) || '更新失败');
+        message.error({ content: extractErrorMessage(err) || '更新失败', duration: 0 });
       }
     },
     [name, fetchStats],
@@ -158,12 +159,11 @@ export const useKnowledgeDetailPage = () => {
             top_k: values.top_k,
           },
         });
-        message.success('配置已保存');
+        message.success({ content: '配置已保存', duration: 2 });
         fetchStats();
       } catch (err: unknown) {
-        const status = (err as { response?: { status?: number } })?.response?.status;
-        if (status !== 403) {
-          message.error(extractErrorMessage(err) || '保存失败');
+        if (!isForbidden(err)) {
+          message.error({ content: extractErrorMessage(err) || '保存失败', duration: 0 });
         }
       } finally {
         setConfigLoading(false);
@@ -188,15 +188,14 @@ export const useKnowledgeDetailPage = () => {
         const totalChunks = data?.total_chunks ?? 0;
         const errs = data?.errors ?? [];
         if (errs.length > 0) {
-          message.warning(`上传完成，但存在错误：${errs[0]}`);
+          message.warning({ content: `上传完成，但存在错误：${errs[0]}`, duration: 0 });
         } else {
-          message.success(`上传成功，共 ${totalChunks} 个分块`);
+          message.success({ content: `上传成功，共 ${totalChunks} 个分块`, duration: 2 });
         }
         fetchStats();
       } catch (err: unknown) {
-        const status = (err as { response?: { status?: number } })?.response?.status;
-        if (status !== 403) {
-          message.error(extractErrorMessage(err) || '上传失败');
+        if (!isForbidden(err)) {
+          message.error({ content: extractErrorMessage(err) || '上传失败', duration: 0 });
         }
       } finally {
         setUploadLoading(false);
@@ -206,8 +205,11 @@ export const useKnowledgeDetailPage = () => {
     [name, fetchStats, fetchDocuments],
   );
 
+  // 查询请求序号防竞态：连续查询时旧响应不覆盖新结果（M5）
+  const queryGenRef = useRef(0);
   const handleQuery = useCallback(
     async (values: QueryValues) => {
+      const gen = ++queryGenRef.current;
       setQueryLoading(true);
       setQueryResult(null);
       try {
@@ -215,13 +217,16 @@ export const useKnowledgeDetailPage = () => {
           question: values.question,
           workspace: name,
           mode: values.mode || stats?.config?.query_mode || 'hybrid',
-          topK: values.top_k || stats?.config?.top_k || 5,
+          topK: values.top_k || stats?.config?.top_k || KNOWLEDGE_DEFAULT_TOP_K,
         });
+        if (gen !== queryGenRef.current) return;
         setQueryResult(result);
       } catch (err) {
-        message.error(extractErrorMessage(err) || '查询失败');
+        if (gen === queryGenRef.current) {
+          message.error({ content: extractErrorMessage(err) || '查询失败', duration: 0 });
+        }
       } finally {
-        setQueryLoading(false);
+        if (gen === queryGenRef.current) setQueryLoading(false);
       }
     },
     [name, stats],
@@ -232,10 +237,10 @@ export const useKnowledgeDetailPage = () => {
       setDeletingDocumentID(documentID);
       try {
         await knowledgeApi.deleteDocument(name, documentID);
-        message.success('文档已删除');
+        message.success({ content: '文档已删除', duration: 2 });
         await Promise.all([fetchDocuments(), fetchStats()]);
       } catch (err) {
-        message.error(extractErrorMessage(err) || '删除文档失败');
+        message.error({ content: extractErrorMessage(err) || '删除文档失败', duration: 0 });
       } finally {
         setDeletingDocumentID('');
       }

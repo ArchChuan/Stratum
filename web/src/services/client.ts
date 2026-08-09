@@ -1,4 +1,3 @@
-import { message } from 'antd';
 import axios, {
   type AxiosInstance,
   type AxiosRequestConfig,
@@ -144,9 +143,8 @@ export const setupApiInterceptors = (tokenRef: TokenRef, onLogout?: LogoutHandle
     async (error) => {
       const originalRequest = error.config as RetryableConfig | undefined;
 
-      if (error.response?.status === 403 && error.response?.data?.message) {
-        message.error(error.response.data.message);
-      }
+      // 403 提示统一交给页面 catch 呈现（M2）：页面可能刻意静默 403
+      // （如权限变更场景），拦截器全局弹窗会破坏静默并造成双弹。
 
       if (
         originalRequest &&

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { agentApi } from '../api/agent.api';
-import type { AgentFormValues, GroupedModelOption } from '../model/agent';
+import { buildGroupedModels, type AgentFormValues, type GroupedModelOption } from '../model/agent';
 
 import { knowledgeApi } from '@/modules/knowledge';
 import type { Workspace } from '@/modules/knowledge';
@@ -12,7 +12,7 @@ import { mcpApi } from '@/modules/mcp';
 import type { MCPToolOption } from '@/modules/mcp';
 import { skillApi } from '@/modules/skill';
 import type { Skill } from '@/modules/skill';
-import { extractErrorMessage } from '@/shared/lib';
+import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 export const useCreateAgentPage = () => {
   const [form] = Form.useForm<AgentFormValues>();
@@ -38,18 +38,7 @@ export const useCreateAgentPage = () => {
       if (mcpRes.status === 'fulfilled') setMcpTools(mcpRes.value);
       if (workspacesRes.status === 'fulfilled') setWorkspaces(workspacesRes.value);
       if (modelsRes.status === 'fulfilled' && providersRes.status === 'fulfilled') {
-        const providers = providersRes.value;
-        const models = modelsRes.value;
-        const providerMap = new Map(providers.map((p) => [p.id, p.name]));
-        const grouped = new Map<string, { value: string; label: string }[]>();
-        for (const m of models) {
-          const pName = providerMap.get(m.providerId) || m.providerId;
-          if (!grouped.has(pName)) grouped.set(pName, []);
-          grouped.get(pName)!.push({ value: m.name, label: m.displayName || m.name });
-        }
-        setGroupedModels(
-          Array.from(grouped.entries()).map(([provider, models]) => ({ provider, models })),
-        );
+        setGroupedModels(buildGroupedModels(modelsRes.value, providersRes.value));
       } else {
         const failed = [modelsRes, providersRes].find((r) => r.status === 'rejected');
         if (failed && failed.status === 'rejected') {
@@ -71,11 +60,12 @@ export const useCreateAgentPage = () => {
           mcpToolIds: values.mcpToolIds || [],
           knowledgeWorkspaceIds: values.knowledgeWorkspaceIds || [],
         });
-        message.success(`Agent "${values.name}" 创建成功`);
+        message.success({ content: `Agent "${values.name}" 创建成功`, duration: 2 });
         navigate('/agents');
       } catch (err) {
-        const status = (err as { response?: { status?: number } })?.response?.status;
-        if (status !== 403) message.error(extractErrorMessage(err) || '创建失败');
+        if (!isForbidden(err)) {
+          message.error({ content: extractErrorMessage(err, '创建失败'), duration: 0 });
+        }
       } finally {
         setLoading(false);
       }

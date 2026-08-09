@@ -15,7 +15,7 @@ import {
   Typography,
   message as antdMsg,
 } from 'antd';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import type { Agent, Conversation } from '../model/agent';
 
@@ -53,10 +53,18 @@ export const ChatConversationSidebar = ({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
 
+  // 防重入：按 Enter 触发 onPressEnter 后 Input 失焦还会再触发 onBlur，避免同名 API 调两次
+  const renamingRef = useRef(false);
   const commitRename = async (convId: string) => {
+    if (renamingRef.current) return;
     const name = editingName.trim();
-    if (name) await onRename(convId, name);
-    setEditingId(null);
+    renamingRef.current = true;
+    try {
+      if (name) await onRename(convId, name);
+    } finally {
+      renamingRef.current = false;
+      setEditingId(null);
+    }
   };
 
   return (
@@ -155,7 +163,7 @@ export const ChatConversationSidebar = ({
                           e.stopPropagation();
                           navigator.clipboard
                             .writeText(c.id)
-                            .then(() => antdMsg.success('会话 ID 已复制'));
+                            .then(() => antdMsg.success({ content: '会话 ID 已复制', duration: 2 }));
                         }}
                       >
                         {c.id}

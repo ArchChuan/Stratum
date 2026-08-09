@@ -5,7 +5,9 @@ import { useInRouterContext, useNavigate } from 'react-router-dom';
 
 import type { Agent } from '../model/agent';
 
+import { WORKFLOW_DEFAULT_PAGE_SIZE } from '@/constants';
 import { workflowApi } from '@/modules/workflow/api/workflow.api';
+import { extractErrorMessage } from '@/shared/lib';
 
 const { Text } = Typography;
 
@@ -26,10 +28,10 @@ const WorkflowShortcut = ({ isMobile }: { isMobile: boolean }) => {
     if (!open || workflows.length) return;
     setWorkflowLoading(true);
     try {
-      const result = await workflowApi.listWorkflows({ page: 1, pageSize: 50 });
+      const result = await workflowApi.listWorkflows({ page: 1, pageSize: WORKFLOW_DEFAULT_PAGE_SIZE });
       setWorkflows(result.workflows.map((workflow) => ({ value: workflow.id, label: workflow.name })));
     } catch (error: unknown) {
-      message.error({ content: (error as { response?: { data?: { error?: string } } }).response?.data?.error || '操作失败', duration: 0 });
+      message.error({ content: extractErrorMessage(error, '操作失败'), duration: 0 });
     } finally {
       setWorkflowLoading(false);
     }

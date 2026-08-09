@@ -73,8 +73,8 @@ export const ServerDetailDrawer = ({ server, onClose, isAdmin = false }: Props) 
 	const riskFor = (toolName: string): MCPToolRiskLevel => policies.find((p) => p.serverId === server?.id && p.toolName === toolName)?.riskLevel || 'unclassified';
 	const changeRisk = async (toolName: string, riskLevel: MCPToolRiskLevel) => {
 		if (!server) return;
-		try { await mcpApi.setToolPolicy(server.id, toolName, riskLevel); setPolicies((rows) => [...rows.filter((p) => p.serverId !== server.id || p.toolName !== toolName), { serverId: server.id, toolName, riskLevel }]); message.success('工具风险策略已更新'); }
-		catch (err) { message.error(extractErrorMessage(err) || '更新风险策略失败'); }
+		try { await mcpApi.setToolPolicy(server.id, toolName, riskLevel); setPolicies((rows) => [...rows.filter((p) => p.serverId !== server.id || p.toolName !== toolName), { serverId: server.id, toolName, riskLevel }]); message.success({ content: '工具风险策略已更新', duration: 2 }); }
+		catch (err) { message.error({ content: extractErrorMessage(err, '更新风险策略失败'), duration: 0 }); }
 	};
 
   const toolCols = [

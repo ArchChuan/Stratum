@@ -19,27 +19,15 @@ export function useProviders() {
       const data = await llmApi.listProviders();
       setProviders(data);
     } catch (err) {
-      message.error({ content: extractErrorMessage(err) || '加载厂商列表失败', duration: 0 });
+      message.error({ content: extractErrorMessage(err, '加载厂商列表失败'), duration: 0 });
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const data = await llmApi.listProviders();
-        if (!cancelled) setProviders(data);
-      } catch (err) {
-        if (!cancelled) message.error({ content: extractErrorMessage(err) || '加载厂商列表失败', duration: 0 });
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
+    void fetch();
+  }, [fetch]);
 
   const createProvider = useCallback(async (values: CreateProviderInput) => {
     setCreateLoading(true);
@@ -47,8 +35,8 @@ export function useProviders() {
       await llmApi.createProvider(values);
       message.success({ content: '厂商已创建', duration: 2 });
       await fetch();
-    } catch (err: any) {
-      message.error({ content: err.response?.data?.error || '创建厂商失败', duration: 0 });
+    } catch (err) {
+      message.error({ content: extractErrorMessage(err, '创建厂商失败'), duration: 0 });
     } finally {
       setCreateLoading(false);
     }
@@ -60,8 +48,8 @@ export function useProviders() {
       await llmApi.updateProvider(id, values);
       message.success({ content: '厂商已更新', duration: 2 });
       await fetch();
-    } catch (err: any) {
-      message.error({ content: err.response?.data?.error || '更新厂商失败', duration: 0 });
+    } catch (err) {
+      message.error({ content: extractErrorMessage(err, '更新厂商失败'), duration: 0 });
     } finally {
       setUpdateLoading(false);
     }
@@ -73,8 +61,8 @@ export function useProviders() {
       await llmApi.deleteProvider(id);
       message.success({ content: '厂商已删除', duration: 2 });
       await fetch();
-    } catch (err: any) {
-      message.error({ content: err.response?.data?.error || '删除厂商失败', duration: 0 });
+    } catch (err) {
+      message.error({ content: extractErrorMessage(err, '删除厂商失败'), duration: 0 });
     } finally {
       setDeleteLoading(false);
     }
