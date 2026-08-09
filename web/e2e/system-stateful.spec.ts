@@ -29,6 +29,7 @@ import { executeLLMAdminPack } from './stateful/packs/llm-admin';
 import { executeMCPPack } from './stateful/packs/mcp';
 import { executeMemoryPack } from './stateful/packs/memory';
 import { executeOperationGatePack } from './stateful/packs/operation-gate';
+import { executeScheduledTaskPack } from './stateful/packs/scheduled-task';
 import { executeSkillPack } from './stateful/packs/skill';
 import { executeWorkflowPack } from './stateful/packs/workflow';
 
@@ -225,6 +226,12 @@ const executePack = async (
   if (pack === 'collab') {
     completedActions.push(...await executeCollabPack({
       actor: actors.memberA, adminActor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL, backendURL,
+    }));
+    return;
+  }
+  if (pack === 'scheduled-task') {
+    completedActions.push(...await executeScheduledTaskPack({
+      actor: actors.tenantAdmin, pool, evidence, webURL, backendURL,
     }));
     return;
   }

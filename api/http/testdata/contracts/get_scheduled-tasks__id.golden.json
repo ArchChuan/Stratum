@@ -1,0 +1,11 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "GET",
+    "path": "/scheduled-tasks/contract-id",
+    "want_status": 404,
+    "want_body": {
+      "error": "scheduled task not found"
+    }
+  }
+]

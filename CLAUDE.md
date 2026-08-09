@@ -26,7 +26,7 @@ Local hooks under `.claude/hooks/`, when present, provide mechanical enforcement
 ## Technology and directory map
 
 - 后端使用 Go 1.25.12（以 `go.mod` 为准）。入口 `cmd/server/main.go` 通过 `api/wiring.BuildContainer` 构图；HTTP 路由、handler、DTO 和 middleware 位于 `api/http/`，组合根位于 `api/wiring/`。
-- 业务上下文位于 `internal/<ctx>/{domain,application,infrastructure}`。当前上下文为 `agent`、`evaluation`、`iam`、`knowledge`、`llmgateway`、`mcp`、`memory`、`platform`、`skill`、`workflow`。
+- 业务上下文位于 `internal/<ctx>/{domain,application,infrastructure}`。当前上下文为 `agent`、`evaluation`、`iam`、`knowledge`、`llmgateway`、`mcp`、`memory`、`platform`、`scheduler`、`skill`、`workflow`。
 - 通用基础设施位于 `pkg/`：`constants`、`observability`、`reqctx`、`storage/{milvus,postgres,redis}`、`tenantdb`、`migration`、`httpclient`、`textchunk`、`crypto`。`pkg/vector` 仅兼容旧 import，新代码使用 `pkg/storage/milvus`。
 - 关键后端依赖：Gin v1.9.1、NATS v1.51.0（JetStream）、Milvus SDK v2.4.2、pgx v5.9.2、go-redis v9.7.3、golang-jwt v5.3.1、OTEL v1.40.0、Zap v1.27.1。
 - 前端位于 `web/`，使用 React 18.3、Vite 6.4、Ant Design 5.20、React Router 6.26、Axios 1.18、TypeScript。代码按 `web/src/modules/` 业务域组织，共享 API 客户端是 `web/src/services/client.ts`。
