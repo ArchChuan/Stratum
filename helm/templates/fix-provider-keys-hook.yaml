@@ -1,0 +1,85 @@
+{{/*
+Pre-upgrade one-time fix: re-encrypt legacy plaintext provider API keys.
+独立于 db-migration-hook(后者依赖不存在的 secret key 且会连带跑 public
+迁移链,从未启用):本 hook 只把 providers.api_key 历史明文回填为 enc:v1:
+密文,不碰迁移。天然幂等:无明文行时零操作,每次部署自动执行。
+*/}}
+{{- if .Values.database.providerKeyFixHookEnabled }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "stratum.fullname" . }}-fix-provider-keys
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "-4"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      name: {{ include "stratum.fullname" . }}-fix-provider-keys
+      labels:
+        {{- include "stratum.selectorLabels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: fix-provider-keys
+          image: {{ include "stratum.image" .Values.app.image | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["./fix-provider-keys"]
+          env:
+            - name: POSTGRES_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: POSTGRES_HOST
+            - name: POSTGRES_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: POSTGRES_PORT
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_URL
+              value: {{ printf "postgres://%s:$(POSTGRES_PASSWORD)@%s:%v/%s?sslmode=%s&sslrootcert=%s" .Values.database.user .Values.database.host .Values.database.port .Values.database.name .Values.database.sslMode .Values.database.sslRootCert | quote }}
+            - name: JWT_PRIVATE_KEY_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: JWT_PRIVATE_KEY_PEM
+                  optional: true
+            - name: DATA_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: DATA_ENCRYPTION_KEY
+                  optional: true
+            - name: APP_ENV
+              value: {{ .Values.config.environment | quote }}
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+{{- end }}

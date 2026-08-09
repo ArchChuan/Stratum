@@ -124,6 +124,9 @@ secrets:
 database:
   external: false
   migrationHookEnabled: false
+  # pre-upgrade Job 将 providers.api_key 历史明文回填为 enc:v1: 密文（幂等，
+  # 无明文行时零操作）。独立于 migrationHookEnabled：不跑 public 迁移链。
+  providerKeyFixHookEnabled: true
   host: "stratum-postgresql"
   port: 5432
   name: "stratum"

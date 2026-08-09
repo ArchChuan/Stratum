@@ -79,7 +79,9 @@ jobs:
           cache: true
 
       - name: Build Go binary
-        run: CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server
+        run: |
+          CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server
+          CGO_ENABLED=0 GOOS=linux go build -o fix-provider-keys ./cmd/fix-provider-keys
 
       - name: Configure Docker Hub mirror
         run: |

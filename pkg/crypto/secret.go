@@ -16,6 +16,13 @@ const secretPrefix = "enc:v1:"
 // （历史明文或无法识别的值）。调用方应将其视为"配置无效，需要重新保存"。
 var ErrLegacyPlaintext = errors.New("crypto: stored value is not an encrypted secret (legacy plaintext)")
 
+// IsEncrypted 报告 stored 是否为 EncryptSecret 生成的版本化密文（enc:v1: 前缀）。
+// 读取侧用它在"加密后的新值"与"历史明文"之间做确定性判别：无前缀的值一律
+// 视为明文，禁止把损坏的密文（有前缀但解不开）混入明文放行路径。
+func IsEncrypted(stored string) bool {
+	return strings.HasPrefix(stored, secretPrefix)
+}
+
 // EncryptSecret 用 AES-256-GCM 加密 plaintext，返回带版本前缀的密文
 // （"enc:v1:" + base64）。空串按原样返回，不产生密文。
 func EncryptSecret(key [32]byte, plaintext string) (string, error) {

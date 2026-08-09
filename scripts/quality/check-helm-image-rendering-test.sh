@@ -23,6 +23,26 @@ fi
 helm template stratum "${ROOT}/helm" -f "${ROOT}/helm/values-demo.yaml" >"${TAG_RENDER}"
 grep -Fq 'registry.cn-hangzhou.aliyuncs.com/stratum-demo/stratum-backend:demo' "${TAG_RENDER}"
 
+# fix-provider-keys pre-upgrade hook:image 必须与 deployment 同源渲染,禁止
+# `<no value>` 非法引用(db-migration-hook 曾因传根 context 渲染坏镜像而从未
+# 生效);secret env 必须指向与 deployment 同一 secret。
+FIX_HOOK="${TMP_ROOT}/fix-hook.yaml"
+awk '/^kind: Job$/{found=1} found{print} found && /^---$/{exit}' "${TAG_RENDER}" >"${FIX_HOOK}"
+grep -Fq 'kind: Job' "${FIX_HOOK}"
+grep -Fq 'name: stratum-fix-provider-keys' "${FIX_HOOK}"
+grep -Fq 'helm.sh/hook: pre-upgrade' "${FIX_HOOK}"
+grep -Fq 'image: "registry.cn-hangzhou.aliyuncs.com/stratum-demo/stratum-backend:demo"' "${FIX_HOOK}"
+if grep -Eq 'image:[[:space:]]*"?<no value>|image:[[:space:]]*"?<nil>' "${FIX_HOOK}"; then
+    echo 'fix-provider-keys hook image is not rendered (template bug)' >&2
+    exit 1
+fi
+grep -Fq 'key: POSTGRES_PASSWORD' "${FIX_HOOK}"
+grep -Fq 'key: JWT_PRIVATE_KEY_PEM' "${FIX_HOOK}"
+grep -Fq 'key: DATA_ENCRYPTION_KEY' "${FIX_HOOK}"
+grep -Fq 'name: "stratum-secrets"' "${FIX_HOOK}"
+grep -Fq 'command:' "${FIX_HOOK}"
+grep -Fq './fix-provider-keys' "${FIX_HOOK}"
+
 helm template stratum "${ROOT}/helm" -f "${ROOT}/helm/values-demo.yaml" | \
     awk '/# Source: stratum\/templates\/servicemonitor.yaml/{found=1} found{print}' >"${SERVICE_MONITOR_RENDER}"
 grep -Fq 'kind: ServiceMonitor' "${SERVICE_MONITOR_RENDER}"
@@ -59,6 +79,13 @@ for index in "${!repositories[@]}"; do
     digest="sha256:$(printf '%064x' "$((index + 1))")"
     grep -Fq "${repositories[$index]}@${digest}" "${DIGEST_RENDER}"
 done
+
+# hook Job 必须与 deployment 共用 app digest(同一 stratum.image helper)。
+FIX_HOOK_DIGEST="${TMP_ROOT}/fix-hook-digest.yaml"
+awk '/^kind: Job$/{found=1} found{print} found && /^---$/{exit}' "${DIGEST_RENDER}" >"${FIX_HOOK_DIGEST}"
+app_digest="sha256:$(printf '%064x' 1)"
+grep -Fq "registry.cn-hangzhou.aliyuncs.com/stratum-demo/stratum-backend@${app_digest}" \
+    "${FIX_HOOK_DIGEST}"
 
 helm template stratum "${ROOT}/helm" \
     -f "${ROOT}/helm/values-demo.yaml" \

@@ -209,6 +209,12 @@ spec:
                   name: {{ .Values.secrets.name | quote }}
                   key: JWT_PRIVATE_KEY_PEM
                   optional: true
+            - name: DATA_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: DATA_ENCRYPTION_KEY
+                  optional: true
             - name: GITHUB_CLIENT_ID
               valueFrom:
                 secretKeyRef:

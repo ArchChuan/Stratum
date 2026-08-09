@@ -3,7 +3,8 @@ RUN apk --no-cache add ca-certificates tzdata
 RUN adduser -D -s /bin/sh appuser
 WORKDIR /app
 COPY server .
-RUN chown appuser:appuser server
+COPY fix-provider-keys .
+RUN chown appuser:appuser server fix-provider-keys
 USER appuser
 EXPOSE 8080
 CMD ["./server"]
