@@ -42,6 +42,7 @@ type Container struct {
 	IAM                  *IAM
 	Agent                *Agent
 	Workflow             *Workflow
+	Scheduler            *Scheduler
 	Collab               *Collab
 	Audit                *Audit
 	Prompt               *Prompt
@@ -64,7 +65,8 @@ type buildStep struct {
 // already-built resources before returning.
 //
 // Order: storage → llmgateway → platform → mcp → skill → knowledge →
-// memory → iam → agent. Shutdown reverses construction.
+// memory → iam → agent → workflow → scheduler. Shutdown reverses
+// construction.
 func BuildContainer(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*Container, error) {
 	c := &Container{Config: cfg, Logger: logger}
 
@@ -82,6 +84,7 @@ func BuildContainer(ctx context.Context, cfg *config.Config, logger *zap.Logger)
 		{"iam", c.buildIAM},
 		{"agent", c.buildAgent},
 		{"workflow", c.buildWorkflow},
+		{"scheduler", c.buildScheduler},
 		{"collab", c.buildCollab},
 		{"evaluation", c.buildEvaluation},
 	}

@@ -50,6 +50,7 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	registerOperationProposals(r, c, requireActive)
 	registerWorkflows(r, c, requireActive)
 	registerCollab(r, c, requireActive)
+	registerScheduledTasks(r, c, requireActive)
 	registerKnowledge(r, c, requireActive)
 	registerMCP(r, c, requireActive)
 	registerMemory(r, c, requireActive)
@@ -410,6 +411,27 @@ func registerCollab(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 	routes.GET("/:id", h.Get)
 	routes.POST("/:id/start", h.Start)
 	routes.POST("/:id/cancel", h.Cancel)
+}
+
+// registerScheduledTasks wires /scheduled-tasks/*: reads are member-level,
+// writes (create/update/delete/enable) require admin plus an active tenant.
+// Params use :id so scripts/record-contracts.go resolves them as named paths.
+func registerScheduledTasks(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
+	if c.Scheduler == nil || c.Scheduler.Service == nil {
+		return
+	}
+	h := handler.NewScheduledTaskHandler(c.Scheduler.Service)
+	member := protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))
+	admin := append(protectedTenantMiddleware(c, middleware.RequireTenantRole("admin")), requireActive)
+	group := r.Group("/scheduled-tasks", member...)
+	{
+		group.GET("", h.List)
+		group.GET("/:id", h.Get)
+		group.POST("", append(admin, h.Create)...)
+		group.PUT("/:id", append(admin, h.Update)...)
+		group.DELETE("/:id", append(admin, h.Delete)...)
+		group.PATCH("/:id/enabled", append(admin, h.SetEnabled)...)
+	}
 }
 
 // registerKnowledge wires /knowledge/* under JWT + tenant context with

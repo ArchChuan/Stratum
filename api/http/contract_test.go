@@ -44,10 +44,14 @@ import (
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	platformapp "github.com/byteBuilderX/stratum/internal/platform/application"
 	platformdomain "github.com/byteBuilderX/stratum/internal/platform/domain"
+	schedapp "github.com/byteBuilderX/stratum/internal/scheduler/application"
+	scheddomain "github.com/byteBuilderX/stratum/internal/scheduler/domain"
+	schedport "github.com/byteBuilderX/stratum/internal/scheduler/domain/port"
 	workflowapp "github.com/byteBuilderX/stratum/internal/workflow/application"
 	workflowdomain "github.com/byteBuilderX/stratum/internal/workflow/domain"
 	workflowport "github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	"go.uber.org/zap"
 )
 
 type contractCase struct {
@@ -146,6 +150,7 @@ func TestContracts(t *testing.T) {
 			TenantService:     iamapp.NewTenantService(contractTenantR, logger),
 			InvitationService: iamapp.NewInvitationService(contractInvR),
 		},
+		Scheduler: &wiring.Scheduler{Service: contractSchedulerStub(logger)},
 		Audit: &wiring.Audit{
 			Recorder:     auditapp.NewAuditService(contractAuditRepo, observability.NoopMetrics{}, logger),
 			QueryService: auditapp.NewAuditService(contractAuditRepo, observability.NoopMetrics{}, logger),
@@ -159,7 +164,7 @@ func TestContracts(t *testing.T) {
 		"/evaluations/", "/dashboard/", "/resource-change-proposals/",
 		"/admin/providers", "/admin/models", "/admin/tenants",
 		"/tenant/", "/workflows", "/workflow-runs", "/workflow-approvals",
-		"/operation-proposals",
+		"/operation-proposals", "/scheduled-tasks",
 	}
 
 	files, err := filepath.Glob("testdata/contracts/*.golden.json")
@@ -635,6 +640,53 @@ func (contractAuditRepo) GetByID(_ context.Context, _, _ string) (*auditdomain.A
 	return nil, nil
 }
 func (contractAuditRepo) DeleteOlderThan(_ context.Context, _ time.Time) error { return nil }
+
+// contractSchedulerStub wires a real Service over stub ports so the DDD
+// router records deterministic scheduled-task responses.
+func contractSchedulerStub(logger *zap.Logger) *schedapp.Service {
+	return schedapp.NewService(contractSchedRepo{}, contractSchedRunner{}, contractSchedResolver{},
+		observability.NoopMetrics{}, logger, func() string { return "contract-task" }, time.Now)
+}
+
+type contractSchedRepo struct{}
+
+func (contractSchedRepo) Insert(context.Context, string, *scheddomain.ScheduledTask) error {
+	return nil
+}
+func (contractSchedRepo) GetByID(context.Context, string, string) (*scheddomain.ScheduledTask, error) {
+	return nil, scheddomain.ErrScheduledTaskNotFound
+}
+func (contractSchedRepo) List(context.Context, string, int, int) ([]scheddomain.ScheduledTask, int, error) {
+	return nil, 0, nil
+}
+func (contractSchedRepo) Update(context.Context, string, *scheddomain.ScheduledTask) error {
+	return nil
+}
+func (contractSchedRepo) Delete(context.Context, string, string) error { return nil }
+func (contractSchedRepo) SetEnabled(context.Context, string, string, bool, *time.Time) error {
+	return nil
+}
+func (contractSchedRepo) ListDue(context.Context, string, time.Time, int) ([]scheddomain.ScheduledTask, error) {
+	return nil, nil
+}
+func (contractSchedRepo) RecordFire(context.Context, string, string, time.Time, string, string, time.Time, time.Time) (bool, error) {
+	return true, nil
+}
+
+type contractSchedRunner struct{}
+
+func (contractSchedRunner) StartAsync(context.Context, string, string, map[string]any, string, string) error {
+	return nil
+}
+
+type contractSchedResolver struct{}
+
+func (contractSchedResolver) GetVersion(context.Context, string, string) (*schedport.VersionInfo, error) {
+	return &schedport.VersionInfo{DefinitionID: "contract-workflow"}, nil
+}
+func (contractSchedResolver) ValidateInput(context.Context, string, string, map[string]any) error {
+	return nil
+}
 
 func mustGeneratePEM(t *testing.T) string {
 	t.Helper()

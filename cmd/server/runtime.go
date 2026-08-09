@@ -110,6 +110,7 @@ func Run(ctx context.Context, cfg *config.Config, c *wiring.Container, logger *z
 	registerGuestReaper(appHarness, c, logger)
 	registerWorkflowWorker(appHarness, c, logger)
 	registerCollabWorker(appHarness, c, logger)
+	registerSchedulerWorker(appHarness, c, logger)
 	registerAuditCleanup(appHarness, c, logger)
 	c.ReadinessCheck = withPostgresReadiness(appHarness.HealthCheck, func(ctx context.Context) error {
 		db := c.DB()
@@ -215,6 +216,27 @@ func registerCollabWorker(appHarness *harnesspkg.Harness, c *wiring.Container, l
 		}),
 		harnesspkg.WithStopFunc(tw.wait),
 		harnesspkg.WithHealthCheckFunc(func(context.Context) error { return nil }),
+	), logger)
+}
+
+func registerSchedulerWorker(appHarness *harnesspkg.Harness, c *wiring.Container, logger *zap.Logger) {
+	if c.Scheduler == nil || c.Scheduler.Worker == nil {
+		return
+	}
+	var tw trackedWorker
+	mustRegister(appHarness, harnesspkg.NewSimpleComponent("scheduler-worker", logger,
+		harnesspkg.WithStartFunc(func(ctx context.Context) error {
+			tw.goRun(ctx, c.Scheduler.Worker.Start)
+			return nil
+		}),
+		harnesspkg.WithStopFunc(tw.wait),
+		harnesspkg.WithHealthCheckFunc(func(context.Context) error {
+			last := c.Scheduler.Worker.LastPollAt()
+			if last.IsZero() || time.Since(last) > 3*constants.SchedulerPollInterval {
+				return fmt.Errorf("scheduler worker stale: last poll %v", last)
+			}
+			return nil
+		}),
 	), logger)
 }
 

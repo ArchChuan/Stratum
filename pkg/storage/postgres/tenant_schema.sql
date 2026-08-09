@@ -7,7 +7,6 @@ DROP TABLE IF EXISTS webhooks;
 DROP TABLE IF EXISTS model_quotas;
 DROP TABLE IF EXISTS model_usage;
 DROP TABLE IF EXISTS model_presets;
-DROP TABLE IF EXISTS scheduled_tasks;
 DROP TABLE IF EXISTS prompt_templates;
 DROP TABLE IF EXISTS exec_history;
 DROP TABLE IF EXISTS entity_relations;
@@ -238,6 +237,30 @@ CREATE TABLE IF NOT EXISTS shared_contexts (
     data    JSONB NOT NULL DEFAULT '{}',
     version INT NOT NULL DEFAULT 0
 );
+
+-- Scheduled tasks (T11): tenant admins bind a workflow version + input template
+-- to a cron expression; the scheduler worker fires due tasks by creating queued
+-- runs via the workflow runner. next_fire_at is advanced optimistically with a
+-- WHERE clause on the row's current value so concurrent workers never double-fire.
+-- last_run_status is one of '' (never fired) | 'ok' | 'error'.
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id                  TEXT PRIMARY KEY,
+    name                TEXT NOT NULL,
+    workflow_id         TEXT NOT NULL,
+    version_id          TEXT NOT NULL,
+    input_template      JSONB NOT NULL DEFAULT '{}',
+    cron_expr           TEXT NOT NULL,
+    enabled             BOOLEAN NOT NULL DEFAULT TRUE,
+    next_fire_at        TIMESTAMPTZ NOT NULL,
+    last_run_at         TIMESTAMPTZ,
+    last_run_status     TEXT NOT NULL DEFAULT '',
+    last_error_message  TEXT NOT NULL DEFAULT '',
+    created_by          TEXT NOT NULL DEFAULT '',
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks (enabled, next_fire_at);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_created ON scheduled_tasks (created_at DESC, id DESC);
 
 DO $$
 BEGIN

@@ -2182,6 +2182,106 @@
       "http_evidence": "The browser observes the expected successful response for POST /collaborations/:id/cancel",
       "db_evidence": "The collaboration transitions to canceled and pending steps are marked canceled",
       "coverage": "short"
+    },
+    {
+      "id": "scheduled-task.route.scheduled.tasks",
+      "domain": "scheduled-task",
+      "user_goal": "Open /scheduled-tasks and review scheduled workflow tasks",
+      "route": "/scheduled-tasks",
+      "roles": {
+        "allowed": [
+          "member",
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /scheduled-tasks",
+      "browser_action_id": "scheduled-task.route.scheduled.tasks",
+      "http_evidence": "The route and required read requests complete successfully for /scheduled-tasks",
+      "db_evidence": "Scheduled task rows agree with the rendered list",
+      "coverage": "short"
+    },
+    {
+      "id": "scheduled-task.mutation.create",
+      "domain": "scheduled-task",
+      "user_goal": "Create a cron-triggered scheduled workflow task",
+      "route": "/scheduled-tasks",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "member",
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /scheduled-tasks",
+      "browser_action_id": "scheduled-task.mutation.create",
+      "http_evidence": "The browser observes the expected successful response for POST /scheduled-tasks",
+      "db_evidence": "A scheduled_tasks row with cron and next fire time is persisted in the tenant schema",
+      "coverage": "short"
+    },
+    {
+      "id": "scheduled-task.mutation.update",
+      "domain": "scheduled-task",
+      "user_goal": "Edit a scheduled workflow task",
+      "route": "/scheduled-tasks",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "member",
+          "unauthenticated"
+        ]
+      },
+      "mutation": "PUT /scheduled-tasks/:id",
+      "browser_action_id": "scheduled-task.mutation.update",
+      "http_evidence": "The browser observes the expected successful response for PUT /scheduled-tasks/:id",
+      "db_evidence": "The scheduled_tasks row reflects the edited fields",
+      "coverage": "short"
+    },
+    {
+      "id": "scheduled-task.mutation.enable",
+      "domain": "scheduled-task",
+      "user_goal": "Enable or disable a scheduled workflow task",
+      "route": "/scheduled-tasks",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "member",
+          "unauthenticated"
+        ]
+      },
+      "mutation": "PATCH /scheduled-tasks/:id/enabled",
+      "browser_action_id": "scheduled-task.mutation.enable",
+      "http_evidence": "The browser observes the expected successful response for PATCH /scheduled-tasks/:id/enabled",
+      "db_evidence": "The scheduled_tasks enabled flag and next fire time follow the toggle",
+      "coverage": "short"
+    },
+    {
+      "id": "scheduled-task.mutation.delete",
+      "domain": "scheduled-task",
+      "user_goal": "Delete a scheduled workflow task",
+      "route": "/scheduled-tasks",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "member",
+          "unauthenticated"
+        ]
+      },
+      "mutation": "DELETE /scheduled-tasks/:id",
+      "browser_action_id": "scheduled-task.mutation.delete",
+      "http_evidence": "The browser observes the expected successful response for DELETE /scheduled-tasks/:id",
+      "db_evidence": "The scheduled_tasks row is removed from the tenant schema",
+      "coverage": "short"
     }
   ]
 }
