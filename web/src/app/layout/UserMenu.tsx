@@ -22,9 +22,9 @@ export const UserMenu = () => {
       onOk: async () => {
         try {
           await memoryUserApi.clearMyMemories();
-          message.success('记忆已清空', 2);
+          message.success({ content: '记忆已清空', duration: 2 });
         } catch (error) {
-          message.error(extractErrorMessage(error, '清空失败，请稍后重试'), 0);
+          message.error({ content: extractErrorMessage(error, '清空失败，请稍后重试'), duration: 0 });
         }
       },
     });

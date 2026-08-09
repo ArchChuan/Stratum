@@ -27,7 +27,7 @@ import { buildMenuItems, resolveOpenKeys } from './menu.config';
 import { useAuth, authApi } from '@/modules/iam';
 import api from '@/services/client';
 import { useResponsive } from '@/shared/hooks';
-import { extractErrorMessage } from '@/shared/lib';
+import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 const { Header, Content, Sider } = Layout;
 
@@ -114,9 +114,17 @@ export const AppShell = ({ children }: AppShellProps) => {
   const { isMobile } = useResponsive();
 
   useEffect(() => {
+    let cancelled = false;
     api.get('/health')
-      .then(() => setConnected(true))
-      .catch(() => setConnected(false));
+      .then(() => {
+        if (!cancelled) setConnected(true);
+      })
+      .catch(() => {
+        if (!cancelled) setConnected(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -129,8 +137,10 @@ export const AppShell = ({ children }: AppShellProps) => {
     try {
       await switchTenant(tenantId);
       navigate('/', { replace: true });
-    } catch {
-      message.error('切换租户失败');
+    } catch (err) {
+      if (!isForbidden(err)) {
+        message.error({ content: '切换租户失败', duration: 0 });
+      }
     } finally {
       setSwitchingTenant(false);
     }
@@ -145,7 +155,9 @@ export const AppShell = ({ children }: AppShellProps) => {
       createTenantForm.resetFields();
       navigate('/', { replace: true });
     } catch (err) {
-      message.error(extractErrorMessage(err, '创建租户失败'));
+      if (!isForbidden(err)) {
+        message.error({ content: extractErrorMessage(err, '创建租户失败'), duration: 0 });
+      }
     } finally {
       setCreateTenantLoading(false);
     }

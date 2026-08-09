@@ -87,7 +87,7 @@ describe('UserMenu memory interaction', () => {
     fireEvent.click(screen.getByRole('button', { name: '确认清空' }));
 
     await waitFor(() => expect(memoryUserApi.clearMyMemories).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(message.success).toHaveBeenCalledWith('记忆已清空', 2));
+    await waitFor(() => expect(message.success).toHaveBeenCalledWith({ content: '记忆已清空', duration: 2 }));
   });
 
   it('shows the backend failure without auto-dismiss', async () => {
@@ -97,6 +97,8 @@ describe('UserMenu memory interaction', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '确认清空' }));
 
-    await waitFor(() => expect(message.error).toHaveBeenCalledWith('记忆服务暂不可用', 0));
+    await waitFor(() =>
+      expect(message.error).toHaveBeenCalledWith({ content: '记忆服务暂不可用', duration: 0 }),
+    );
   });
 });

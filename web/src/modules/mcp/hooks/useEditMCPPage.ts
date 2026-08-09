@@ -12,7 +12,7 @@ import {
   MCP_RETRY_MAX_DELAY_MS,
   MCP_RETRY_MAX_RETRIES,
 } from '@/constants';
-import { extractErrorMessage } from '@/shared/lib';
+import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 const parseEnv = (str?: string): Record<string, string> => {
   const result: Record<string, string> = {};
@@ -149,8 +149,10 @@ export const useEditMCPPage = (id: string) => {
       try {
         const cfg = await mcpApi.getConfig(id);
         if (!cancelled) setInitialValues(configToFormValues(cfg));
-      } catch {
-        if (!cancelled) message.error('加载配置失败');
+      } catch (err) {
+        if (!cancelled && !isForbidden(err)) {
+          message.error({ content: extractErrorMessage(err, '加载配置失败'), duration: 0 });
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -162,10 +164,12 @@ export const useEditMCPPage = (id: string) => {
     setSubmitting(true);
     try {
       await mcpApi.update(id, buildMCPUpdateConfig(id, values));
-      message.success('MCP 服务器配置已更新并重新连接');
+      message.success({ content: 'MCP 服务器配置已更新并重新连接', duration: 2 });
       navigate('/mcp');
     } catch (err) {
-      message.error(extractErrorMessage(err) || '更新失败');
+      if (!isForbidden(err)) {
+        message.error({ content: extractErrorMessage(err, '更新失败'), duration: 0 });
+      }
     } finally {
       setSubmitting(false);
     }

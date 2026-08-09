@@ -64,6 +64,24 @@ export interface GroupedModelOption {
   models: { value: string; label: string }[];
 }
 
+// 按厂商聚合模型下拉选项（创建/编辑 Agent 页共用）
+export const buildGroupedModels = (
+  models: Array<{ providerId: string; name: string; displayName?: string }>,
+  providers: Array<{ id: string; name: string }>,
+): GroupedModelOption[] => {
+  const providerMap = new Map(providers.map((p) => [p.id, p.name]));
+  const grouped = new Map<string, { value: string; label: string }[]>();
+  for (const m of models) {
+    const providerName = providerMap.get(m.providerId) || m.providerId;
+    if (!grouped.has(providerName)) grouped.set(providerName, []);
+    grouped.get(providerName)!.push({ value: m.name, label: m.displayName || m.name });
+  }
+  return Array.from(grouped.entries()).map(([provider, modelOptions]) => ({
+    provider,
+    models: modelOptions,
+  }));
+};
+
 export const conversationSchema = z
   .object({
     id: z.string(),

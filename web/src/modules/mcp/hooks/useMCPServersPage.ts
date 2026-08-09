@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { mcpApi } from '../api/mcp.api';
 import type { MCPQuota, MCPServer } from '../model/mcp';
 
-import { extractErrorMessage } from '@/shared/lib';
+import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 export const useMCPServersPage = () => {
   const [servers, setServers] = useState<MCPServer[]>([]);
@@ -31,14 +31,14 @@ export const useMCPServersPage = () => {
 
   const refreshServers = useCallback(async () => {
     const r = await fetchServers();
-    if (!r.ok) message.error('获取 MCP 服务器列表失败');
+    if (!r.ok) message.error({ content: '获取 MCP 服务器列表失败', duration: 0 });
   }, [fetchServers]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const r = await fetchServers();
-      if (!cancelled && !r.ok) message.error('获取 MCP 服务器列表失败');
+      if (!cancelled && !r.ok) message.error({ content: '获取 MCP 服务器列表失败', duration: 0 });
     })();
     return () => {
       cancelled = true;
@@ -49,12 +49,11 @@ export const useMCPServersPage = () => {
     async (id: string) => {
       try {
         await mcpApi.disconnect(id);
-        message.success('已断开连接');
+        message.success({ content: '已断开连接', duration: 2 });
         refreshServers();
       } catch (err: unknown) {
-        const status = (err as { response?: { status?: number } })?.response?.status;
-        if (status !== 403) {
-          message.error(extractErrorMessage(err) || '断开失败');
+        if (!isForbidden(err)) {
+          message.error({ content: extractErrorMessage(err) || '断开失败', duration: 0 });
         }
       }
     },
@@ -65,7 +64,7 @@ export const useMCPServersPage = () => {
     async (id: string) => {
       try {
         await mcpApi.reconnect(id);
-        message.success('已重新连接');
+        message.success({ content: '已重新连接', duration: 2 });
         refreshServers();
       } catch (err: unknown) {
         message.error(extractErrorMessage(err) || '连接失败');
@@ -78,7 +77,7 @@ export const useMCPServersPage = () => {
     async (id: string) => {
       try {
         await mcpApi.delete(id);
-        message.success('已删除');
+        message.success({ content: '已删除', duration: 2 });
         refreshServers();
       } catch (err: unknown) {
         message.error(extractErrorMessage(err) || '删除失败');

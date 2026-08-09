@@ -26,7 +26,8 @@ export default defineConfig(({ command, mode }) => {
     },
 
     build: {
-      sourcemap: isDev || mode === 'staging',
+      // staging 产物只出 hidden sourcemap（文件保留、浏览器不可直接查看源码），production 不带 sourcemap
+      sourcemap: isDev ? true : mode === 'staging' ? 'hidden' : false,
       rollupOptions: {
         output: {
           manualChunks: {

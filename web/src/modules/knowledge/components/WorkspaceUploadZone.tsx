@@ -1,5 +1,9 @@
 import { InboxOutlined } from '@ant-design/icons';
-import { Card, Upload } from 'antd';
+import { Card, Upload, message } from 'antd';
+
+import { KNOWLEDGE_MAX_UPLOAD_SIZE_BYTES } from '@/constants';
+
+const ACCEPTED_EXTENSIONS = ['txt', 'pdf', 'md', 'docx'];
 
 interface WorkspaceUploadZoneProps {
   loading: boolean;
@@ -14,6 +18,15 @@ export const WorkspaceUploadZone = ({ loading, onUpload }: WorkspaceUploadZonePr
   >
     <Upload.Dragger
       beforeUpload={(file) => {
+        const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+        if (!ACCEPTED_EXTENSIONS.includes(ext)) {
+          message.error({ content: '仅支持 .txt .pdf .md .docx 文件', duration: 0 });
+          return Upload.LIST_IGNORE;
+        }
+        if (file.size > KNOWLEDGE_MAX_UPLOAD_SIZE_BYTES) {
+          message.error({ content: '单文件不能超过 10MB', duration: 0 });
+          return Upload.LIST_IGNORE;
+        }
         onUpload({ file });
         return false;
       }}

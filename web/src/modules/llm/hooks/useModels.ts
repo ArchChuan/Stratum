@@ -17,27 +17,15 @@ export function useModels() {
       const data = await llmApi.listModels();
       setModels(data);
     } catch (err) {
-      message.error({ content: extractErrorMessage(err) || '加载模型列表失败', duration: 0 });
+      message.error({ content: extractErrorMessage(err, '加载模型列表失败'), duration: 0 });
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const data = await llmApi.listModels();
-        if (!cancelled) setModels(data);
-      } catch (err) {
-        if (!cancelled) message.error({ content: extractErrorMessage(err) || '加载模型列表失败', duration: 0 });
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
+    void fetch();
+  }, [fetch]);
 
   const toggleModel = useCallback(async (id: string, enabled: boolean) => {
     try {
@@ -45,14 +33,18 @@ export function useModels() {
       setModels((prev) => prev.map((m) => (m.id === id ? { ...m, enabled } : m)));
       message.success({ content: '已更新', duration: 2 });
     } catch (err) {
-      message.error({ content: extractErrorMessage(err) || '更新失败', duration: 0 });
+      message.error({ content: extractErrorMessage(err, '更新失败'), duration: 0 });
     }
   }, []);
 
   const updateModel = useCallback(async (id: string, values: UpdateModelInput) => {
-    await llmApi.updateModel(id, values);
-    message.success({ content: '模型已更新', duration: 2 });
-    await fetch();
+    try {
+      await llmApi.updateModel(id, values);
+      message.success({ content: '模型已更新', duration: 2 });
+      await fetch();
+    } catch (err) {
+      message.error({ content: extractErrorMessage(err, '更新模型失败'), duration: 0 });
+    }
   }, [fetch]);
 
   const deleteModel = useCallback(async (id: string) => {
@@ -61,8 +53,8 @@ export function useModels() {
       await llmApi.deleteModel(id);
       message.success({ content: '模型已删除', duration: 2 });
       await fetch();
-    } catch (err: any) {
-      message.error({ content: err.response?.data?.error || '删除模型失败', duration: 0 });
+    } catch (err) {
+      message.error({ content: extractErrorMessage(err, '删除模型失败'), duration: 0 });
     } finally {
       setDeleteLoading(false);
     }

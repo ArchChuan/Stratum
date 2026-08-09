@@ -44,6 +44,8 @@ export const KNOWLEDGE_MIN_CHUNK_OVERLAP = 0;
 export const KNOWLEDGE_MAX_CHUNK_OVERLAP = 512;
 export const KNOWLEDGE_MIN_TOP_K = 1;
 export const KNOWLEDGE_MAX_TOP_K = 20;
+export const KNOWLEDGE_MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024; // 10MB，与 UI 提示一致（后端上限 100MB）
+export const AVATAR_MAX_UPLOAD_SIZE_BYTES = 2 * 1024 * 1024; // 2MB，与 UI 提示一致
 
 // Memory v2
 export const MEMORY_SCOPE_OPTIONS = [

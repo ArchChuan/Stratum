@@ -23,6 +23,7 @@ import type { Model, ModelCapability, UpdateModelInput } from '../model/llm';
 
 import { LLM_DEFAULT_PAGE_SIZE } from '@/constants';
 import { useTenantRole } from '@/modules/iam';
+import { extractErrorMessage } from '@/shared/lib';
 
 const { Text } = Typography;
 
@@ -60,8 +61,8 @@ export function ModelListPage() {
         await updateModel(id, values);
         message.success({ content: '模型已更新', duration: 2 });
         setEditOpen(false);
-      } catch (err: any) {
-        message.error({ content: err.response?.data?.error || '更新模型失败', duration: 0 });
+      } catch (err: unknown) {
+        message.error({ content: extractErrorMessage(err, '更新模型失败'), duration: 0 });
       } finally {
         setEditLoading(false);
       }

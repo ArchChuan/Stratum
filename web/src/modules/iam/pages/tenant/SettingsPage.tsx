@@ -6,6 +6,8 @@ import { tenantApi } from '../../api/tenant.api';
 import { TenantBasicCard } from '../../components/TenantBasicCard';
 import { useTenantSettings } from '../../hooks/useTenantSettings';
 
+import { extractErrorMessage, isForbidden } from '@/shared/lib';
+
 const { Title, Text } = Typography;
 
 export const SettingsPage = () => {
@@ -33,10 +35,12 @@ export const SettingsPage = () => {
         setDeleteLoading(true);
         try {
           await tenantApi.deleteSelf();
-          message.success('租户已删除');
+          message.success({ content: '租户已删除', duration: 2 });
           navigate('/');
-        } catch (err: any) {
-          message.error(err?.response?.data?.error || '删除失败');
+        } catch (err: unknown) {
+          if (!isForbidden(err)) {
+            message.error({ content: extractErrorMessage(err, '删除失败'), duration: 0 });
+          }
         } finally {
           setDeleteLoading(false);
         }

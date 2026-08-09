@@ -10,7 +10,7 @@ import type { AdminTenant } from '../../model/auth';
 import { CreateTenantModal } from './CreateTenantModal';
 
 import { DEFAULT_PAGE_SIZE } from '@/constants';
-import { extractErrorMessage } from '@/shared/lib';
+import { extractErrorMessage, isForbidden } from '@/shared/lib';
 import { DangerPopconfirm, ResponsiveDataView } from '@/shared/ui';
 
 const { Title, Text } = Typography;
@@ -34,8 +34,10 @@ export const TenantsListPage = () => {
       const result = await tenantApi.listAllTenants(page, pageSize);
       setTenants(result.tenants);
       setPagination({ current: result.page, pageSize: result.page_size, total: result.total });
-    } catch {
-      message.error('获取租户列表失败');
+    } catch (err) {
+      if (!isForbidden(err)) {
+        message.error({ content: '获取租户列表失败', duration: 0 });
+      }
     } finally {
       setLoading(false);
     }
@@ -49,10 +51,12 @@ export const TenantsListPage = () => {
     const enabling = currentStatus !== 'active';
     try {
       await tenantApi.setTenantEnabled(tenantId, enabling);
-      message.success(enabling ? '已启用' : '已禁用');
+      message.success({ content: enabling ? '已启用' : '已禁用', duration: 2 });
       void fetchTenants(pagination.current, pagination.pageSize);
     } catch (err) {
-      message.error(extractErrorMessage(err, '操作失败'));
+      if (!isForbidden(err)) {
+        message.error({ content: extractErrorMessage(err, '操作失败'), duration: 0 });
+      }
     }
   };
 
@@ -60,10 +64,12 @@ export const TenantsListPage = () => {
     setDeleteLoadingId(tenantId);
     try {
       await tenantApi.adminDeleteTenant(tenantId);
-      message.success('租户已删除');
+      message.success({ content: '租户已删除', duration: 2 });
       void fetchTenants(pagination.current, pagination.pageSize);
     } catch (err) {
-      message.error(extractErrorMessage(err, '删除失败'));
+      if (!isForbidden(err)) {
+        message.error({ content: extractErrorMessage(err, '删除失败'), duration: 0 });
+      }
     } finally {
       setDeleteLoadingId(null);
     }

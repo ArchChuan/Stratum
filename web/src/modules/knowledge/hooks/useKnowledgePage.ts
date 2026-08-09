@@ -12,7 +12,7 @@ import {
 } from '@/constants';
 import { useAuth } from '@/modules/iam';
 import { llmApi } from '@/modules/llm';
-import { extractErrorMessage } from '@/shared/lib';
+import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 interface CreateValues {
   name: string;
@@ -49,7 +49,9 @@ export const useKnowledgePage = () => {
           setEmbeddingModels(catalogue.embeddingModels);
         }
       } catch (err) {
-        if (!cancelled) message.error(extractErrorMessage(err) || '获取知识库列表失败');
+        if (!cancelled && !isForbidden(err)) {
+          message.error({ content: extractErrorMessage(err, '获取知识库列表失败'), duration: 0 });
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -77,14 +79,13 @@ export const useKnowledgePage = () => {
           editors: values.editors || [],
         };
         await knowledgeApi.create(payload);
-        message.success('知识库创建成功');
+        message.success({ content: '知识库创建成功', duration: 2 });
         setCreateOpen(false);
         form.resetFields();
         setWorkspaces(await knowledgeApi.list());
       } catch (err: unknown) {
-        const status = (err as { response?: { status?: number } })?.response?.status;
-        if (status !== 403) {
-          message.error(extractErrorMessage(err) || '创建失败');
+        if (!isForbidden(err)) {
+          message.error({ content: extractErrorMessage(err, '创建失败'), duration: 0 });
         }
       } finally {
         setCreateLoading(false);
@@ -96,12 +97,11 @@ export const useKnowledgePage = () => {
   const handleDelete = useCallback(async (name: string) => {
     try {
       await knowledgeApi.delete(name);
-      message.success('知识库已删除');
+      message.success({ content: '知识库已删除', duration: 2 });
       setWorkspaces((prev) => prev.filter((w) => w.name !== name));
     } catch (err: unknown) {
-      const status = (err as { response?: { status?: number } })?.response?.status;
-      if (status !== 403) {
-        message.error(extractErrorMessage(err) || '删除失败');
+      if (!isForbidden(err)) {
+        message.error({ content: extractErrorMessage(err, '删除失败'), duration: 0 });
       }
     }
   }, []);

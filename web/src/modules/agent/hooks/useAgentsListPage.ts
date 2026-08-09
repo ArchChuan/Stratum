@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { agentApi } from '../api/agent.api';
 import type { Agent, AgentExecutionResult } from '../model/agent';
 
-import { extractErrorMessage } from '@/shared/lib';
+import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 export const useAgentsListPage = () => {
   const navigate = useNavigate();
@@ -28,7 +28,7 @@ export const useAgentsListPage = () => {
         const list = await agentApi.list();
         if (!cancelled) setAgents(list);
       } catch {
-        if (!cancelled) message.error('获取 Agent 列表失败');
+        if (!cancelled) message.error({ content: '获取 Agent 列表失败', duration: 0 });
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -40,7 +40,7 @@ export const useAgentsListPage = () => {
 
   const handleTaskSubmit = useCallback(async () => {
     if (!executingAgent || !taskQuery.trim()) {
-      message.warning('请输入任务内容');
+      message.warning({ content: '请输入任务内容', duration: 0 });
       return;
     }
     setExecuting(true);
@@ -71,11 +71,12 @@ export const useAgentsListPage = () => {
   const handleDeleteAgent = useCallback(async (agentId: string) => {
     try {
       await agentApi.delete(agentId);
-      message.success('Agent 已删除');
+      message.success({ content: 'Agent 已删除', duration: 2 });
       setAgents((prev) => prev.filter((a) => a.id !== agentId));
     } catch (err) {
-      const status = (err as { response?: { status?: number } })?.response?.status;
-      if (status !== 403) message.error(extractErrorMessage(err) || '删除失败');
+      if (!isForbidden(err)) {
+        message.error({ content: extractErrorMessage(err) || '删除失败', duration: 0 });
+      }
     }
   }, []);
 

@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -174,22 +175,26 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
     [],
   );
 
-  const value: ChatStreamContextValue = {
-    streaming: !stateRef.current.done && stateRef.current.ctrl !== null,
-    streamConversationId: stateRef.current.conversationId,
-    accumulatedContent: stateRef.current.content,
-    streamResult: stateRef.current.result,
-    streamError: stateRef.current.error,
-	streamDone: stateRef.current.done,
-	streamApproval: stateRef.current.approval,
-	streamFailure: stateRef.current.failure,
-    startStream,
-    cancelStream,
-	clearStreamFailure,
-    getStreamState,
-  };
-
-  void tick;
+  // 流状态全部存于 stateRef，tick 是唯一变更信号；useMemo 保证未变更时
+  // value 引用稳定，避免流式期间全应用消费子树每帧重渲染。
+  const value: ChatStreamContextValue = useMemo(
+    () => ({
+      streaming: !stateRef.current.done && stateRef.current.ctrl !== null,
+      streamConversationId: stateRef.current.conversationId,
+      accumulatedContent: stateRef.current.content,
+      streamResult: stateRef.current.result,
+      streamError: stateRef.current.error,
+      streamDone: stateRef.current.done,
+      streamApproval: stateRef.current.approval,
+      streamFailure: stateRef.current.failure,
+      startStream,
+      cancelStream,
+      clearStreamFailure,
+      getStreamState,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tick 是函数体外的强制重算信号（stateRef 读取不触发重渲染），刻意放在依赖数组
+    [tick, startStream, cancelStream, clearStreamFailure, getStreamState],
+  );
 
   return <ChatStreamContext.Provider value={value}>{children}</ChatStreamContext.Provider>;
 };

@@ -7,8 +7,7 @@ import type { Collaboration, TaskStep } from '../model/collaboration';
 
 import { agentApi } from '@/modules/agent';
 import { useAuth, useTenantRole } from '@/modules/iam';
-
-interface RequestError { response?: { data?: { error?: string } } }
+import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 const STRATEGY_LABELS: Record<string, string> = {
   sequential: '顺序',
@@ -54,7 +53,7 @@ export const CollaborationsPage = () => {
   const [detail, setDetail] = useState<Collaboration | null>(null);
   const [detailSteps, setDetailSteps] = useState<TaskStep[]>([]);
   const [detailOpen, setDetailOpen] = useState(false);
-  const [startLoading, setStartLoading] = useState(false);
+  const [startLoadingId, setStartLoadingId] = useState<string | null>(null);
   const [form] = Form.useForm();
 
   const load = useCallback(async () => {
@@ -62,7 +61,9 @@ export const CollaborationsPage = () => {
     try {
       setCollabs(await collaborationApi.list());
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '加载协作任务失败', duration: 0 });
+      if (!isForbidden(err)) {
+        message.error({ content: extractErrorMessage(err, '加载协作任务失败'), duration: 0 });
+      }
     } finally {
       setLoading(false);
     }
@@ -106,7 +107,9 @@ export const CollaborationsPage = () => {
       setCreateOpen(false);
       await load();
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '创建协作任务失败', duration: 0 });
+      if (!isForbidden(err)) {
+        message.error({ content: extractErrorMessage(err, '创建协作任务失败'), duration: 0 });
+      }
     } finally {
       setCreateLoading(false);
     }
@@ -119,7 +122,9 @@ export const CollaborationsPage = () => {
       setDetailSteps(detailData.steps);
       setDetailOpen(true);
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '加载协作详情失败', duration: 0 });
+      if (!isForbidden(err)) {
+        message.error({ content: extractErrorMessage(err, '加载协作详情失败'), duration: 0 });
+      }
     }
   }, []);
 
@@ -130,15 +135,17 @@ export const CollaborationsPage = () => {
   }, []);
 
   const handleStart = useCallback(async (collab: Collaboration) => {
-    setStartLoading(true);
+    setStartLoadingId(collab.id);
     try {
       await collaborationApi.start(collab.id);
       message.success({ content: '协作任务已启动', duration: 2 });
       await load();
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '启动协作任务失败', duration: 0 });
+      if (!isForbidden(err)) {
+        message.error({ content: extractErrorMessage(err, '启动协作任务失败'), duration: 0 });
+      }
     } finally {
-      setStartLoading(false);
+      setStartLoadingId(null);
     }
   }, [load]);
 
@@ -152,7 +159,9 @@ export const CollaborationsPage = () => {
           message.success({ content: '协作任务已取消', duration: 2 });
           await load();
         } catch (err) {
-          message.error({ content: (err as RequestError).response?.data?.error || '取消协作任务失败', duration: 0 });
+          if (!isForbidden(err)) {
+            message.error({ content: extractErrorMessage(err, '取消协作任务失败'), duration: 0 });
+          }
         }
       },
     });
@@ -191,7 +200,7 @@ export const CollaborationsPage = () => {
         <Space>
           <Button size="small" onClick={() => void openDetail(collab)}>详情</Button>
           {canControl(collab) && collab.status === 'created' && (
-            <Button size="small" type="primary" loading={startLoading} onClick={() => void handleStart(collab)}>
+            <Button size="small" type="primary" loading={startLoadingId === collab.id} onClick={() => void handleStart(collab)}>
               启动
             </Button>
           )}

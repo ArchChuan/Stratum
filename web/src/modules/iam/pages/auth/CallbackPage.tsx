@@ -5,6 +5,8 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { authApi } from '../../api/auth.api';
 import { useAuth } from '../../components/AuthContext';
 
+import { extractErrorMessage } from '@/shared/lib';
+
 export const CallbackPage = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -57,8 +59,8 @@ export const CallbackPage = () => {
           navigate('/', { replace: true });
           return;
         }
-      } catch (err: any) {
-        setError(err?.response?.data?.message || '登录失败，请重试');
+      } catch (err: unknown) {
+        setError(extractErrorMessage(err, '登录失败，请重试'));
       }
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps

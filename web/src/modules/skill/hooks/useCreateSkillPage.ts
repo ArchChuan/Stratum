@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { skillApi } from '../api/skill.api';
 import { buildCreateSkillDraftPayload, type SkillFormValues } from '../model/skill';
 
-import { extractErrorMessage } from '@/shared/lib';
+import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 export const useCreateSkillPage = () => {
   const [form] = Form.useForm<SkillFormValues>();
@@ -16,11 +16,11 @@ export const useCreateSkillPage = () => {
     setLoading(true);
     try {
       const workspace = await skillApi.createDraft(payload);
-      message.success(`技能 "${payload.name}" 草稿已创建`);
+      message.success({ content: `技能 "${payload.name}" 草稿已创建`, duration: 2 });
       navigate(`/skills/${workspace.skill.id}/workspace`);
     } catch (err: unknown) {
-      if ((err as { response?: { status?: number } })?.response?.status !== 403) {
-        message.error(extractErrorMessage(err) || '创建失败');
+      if (!isForbidden(err)) {
+        message.error({ content: extractErrorMessage(err, '创建失败'), duration: 0 });
       }
     } finally {
       setLoading(false);

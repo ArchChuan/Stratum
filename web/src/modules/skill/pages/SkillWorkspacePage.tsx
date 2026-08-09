@@ -141,7 +141,7 @@ export const SkillWorkspacePage = () => {
                   setSaving('editors');
                   try {
                     await skillApi.setEditors(skill.id, editorIDs);
-                    message.success('编辑人已更新');
+                    message.success({ content: '编辑人已更新', duration: 2 });
                   } catch (err) {
                     message.error({ content: extractErrorMessage(err) || '保存失败', duration: 0 });
                   } finally {

@@ -1,6 +1,6 @@
 import { RobotOutlined, ThunderboltOutlined, UserOutlined } from '@ant-design/icons';
 import { Empty, Skeleton, Spin, Tag, Typography } from 'antd';
-import { type MutableRefObject, type RefObject, useEffect } from 'react';
+import { memo, type MutableRefObject, type RefObject, useEffect } from 'react';
 
 import type { ChatMessage } from '../model/agent';
 
@@ -42,6 +42,91 @@ const StreamingBubble = ({ content }: { content: string }) => (
     />
   </span>
 );
+
+// memo：流式期间仅最后一条消息内容变化（useChatPage 的 prev.map 只替换
+// 流式消息），历史消息 props 引用稳定 → 跳过重渲染，避免每帧重跑
+// ReactMarkdown 解析（H2）。
+const MessageItem = memo(function MessageItem({
+  message: m,
+  streaming,
+  isMobile,
+}: {
+  message: ChatMessage;
+  streaming: boolean;
+  isMobile: boolean;
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: m.role === 'user' ? 'flex-end' : 'flex-start',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+        {m.role !== 'user' &&
+          (m.role === 'assistant' ? (
+            <RobotOutlined style={{ color: '#1677ff' }} />
+          ) : (
+            <ThunderboltOutlined style={{ color: '#ff4d4f' }} />
+          ))}
+        <Text type="secondary" style={{ fontSize: 11 }}>
+          {m.role === 'user' ? '你' : m.role === 'assistant' ? 'Agent' : '错误'}
+        </Text>
+        {m.role === 'user' && <UserOutlined style={{ color: '#8c8c8c' }} />}
+      </div>
+      <div
+        className="chat-message-bubble"
+        style={{
+          ...(BUBBLE[m.role] || BUBBLE.assistant),
+          maxWidth: isMobile ? '88%' : '72%',
+          padding: isMobile ? '8px 10px' : '10px 14px',
+          overflowWrap: 'anywhere',
+          minWidth: 0,
+        }}
+      >
+        {m.role === 'user' ? (
+          <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.content}</span>
+        ) : streaming ? (
+          <StreamingBubble content={m.content || ''} />
+        ) : (
+          <>
+            <ChatMarkdown content={m.content || ''} />
+            {m.artifacts?.map((artifact, index) => {
+              const artifactCitations = artifact.citations ?? [];
+              const report = artifact.diagnosticReport ?? (artifactCitations.length > 0 ? {
+                facts: [],
+                inferences: [],
+                evidenceGaps: [],
+                recommendedActions: [],
+                citations: artifactCitations,
+                steps: [],
+              } : undefined);
+              if (artifact.resourceChangeProposal) {
+                return <ResourceChangeProposalCard key={`proposal-${artifact.resourceChangeProposal.id}`} proposal={artifact.resourceChangeProposal} />;
+              }
+              return report ? (
+                <DiagnosticReport
+                  key={`${artifact.type}-${artifact.profileVersion || index}`}
+                  report={report}
+                  profileVersion={artifact.profileVersion}
+                />
+              ) : null;
+            })}
+          </>
+        )}
+        {m.interrupted && (
+          <div style={{ marginTop: 6 }}>
+            <Tag color="orange">已中断</Tag>
+          </div>
+        )}
+        {m.role === 'assistant' && !streaming && (
+          <ChatStepList steps={m.steps} />
+        )}
+      </div>
+    </div>
+  );
+});
 
 export const ChatMessageList = ({
   messages,
@@ -98,76 +183,12 @@ export const ChatMessageList = ({
       {loadingMsgs && <Skeleton active paragraph={{ rows: 6 }} />}
       {!loadingMsgs &&
         messages.map((m) => (
-          <div
+          <MessageItem
             key={m.id}
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: m.role === 'user' ? 'flex-end' : 'flex-start',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-              {m.role !== 'user' &&
-                (m.role === 'assistant' ? (
-                  <RobotOutlined style={{ color: '#1677ff' }} />
-                ) : (
-                  <ThunderboltOutlined style={{ color: '#ff4d4f' }} />
-                ))}
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                {m.role === 'user' ? '你' : m.role === 'assistant' ? 'Agent' : '错误'}
-              </Text>
-              {m.role === 'user' && <UserOutlined style={{ color: '#8c8c8c' }} />}
-            </div>
-            <div
-              className="chat-message-bubble"
-              style={{
-                ...(BUBBLE[m.role] || BUBBLE.assistant),
-                maxWidth: isMobile ? '88%' : '72%',
-                padding: isMobile ? '8px 10px' : '10px 14px',
-                overflowWrap: 'anywhere',
-                minWidth: 0,
-              }}
-            >
-              {m.role === 'user' ? (
-                <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.content}</span>
-              ) : m.id === streamingMsgId ? (
-                <StreamingBubble content={m.content || ''} />
-              ) : (
-                <>
-                  <ChatMarkdown content={m.content || ''} />
-                  {m.artifacts?.map((artifact, index) => {
-                    const artifactCitations = artifact.citations ?? [];
-                    const report = artifact.diagnosticReport ?? (artifactCitations.length > 0 ? {
-                      facts: [],
-                      inferences: [],
-                      evidenceGaps: [],
-                      recommendedActions: [],
-                      citations: artifactCitations,
-                      steps: [],
-                    } : undefined);
-                    if (artifact.resourceChangeProposal) {
-                      return <ResourceChangeProposalCard key={`proposal-${artifact.resourceChangeProposal.id}`} proposal={artifact.resourceChangeProposal} />;
-                    }
-                    return report ? (
-                      <DiagnosticReport
-                        key={`${artifact.type}-${artifact.profileVersion || index}`}
-                        report={report}
-                        profileVersion={artifact.profileVersion}
-                      />
-                    ) : null;
-                  })}
-                </>
-              )}
-              {m.interrupted && (
-                <div style={{ marginTop: 6 }}>
-                  <Tag color="orange">已中断</Tag>
-                </div>
-              )}
-              {m.role === 'assistant' && m.id !== streamingMsgId && (
-                <ChatStepList steps={m.steps} />
-              )}
-            </div>
-          </div>
+            message={m}
+            streaming={m.id === streamingMsgId}
+            isMobile={isMobile}
+          />
         ))}
       {sending && messages[messages.length - 1]?.role !== 'assistant' && (
         <div

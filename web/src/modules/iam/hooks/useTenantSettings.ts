@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { tenantApi } from '../api/tenant.api';
 
 import { useAuth } from '@/modules/iam';
-import { extractErrorMessage } from '@/shared/lib';
+import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 export const useTenantSettings = () => {
   const { user, login, tokenRef } = useAuth();
@@ -18,8 +18,10 @@ export const useTenantSettings = () => {
       const settings = await tenantApi.settings();
       setTenantName(settings.tenant_name || '');
       setIsDefault(settings.is_default ?? false);
-    } catch (err: any) {
-      if (err?.response?.status !== 403) message.error(extractErrorMessage(err, '加载设置失败'));
+    } catch (err: unknown) {
+      if (!isForbidden(err)) {
+        message.error({ content: extractErrorMessage(err, '加载设置失败'), duration: 0 });
+      }
     }
   }, []);
 
@@ -31,7 +33,7 @@ export const useTenantSettings = () => {
     setLoading(true);
     try {
       await tenantApi.updateSettings(values);
-      message.success('设置已保存');
+      message.success({ content: '设置已保存', duration: 2 });
       setTenantName(values.name);
       if (user) {
         const currentTenantID = user.current_tenant?.id ?? user.tenant_id ?? '';
@@ -40,8 +42,10 @@ export const useTenantSettings = () => {
           tokenRef.current ?? '',
         );
       }
-    } catch (err: any) {
-      if (err?.response?.status !== 403) message.error(extractErrorMessage(err, '保存失败'));
+    } catch (err: unknown) {
+      if (!isForbidden(err)) {
+        message.error({ content: extractErrorMessage(err, '保存失败'), duration: 0 });
+      }
     } finally {
       setLoading(false);
     }
