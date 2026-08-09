@@ -104,9 +104,9 @@ func TestProviderRepo_Create_writesCiphertext(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestProviderRepo_Get_legacyPlaintextFailsClosed 验证历史明文 fail closed：
-// 无前缀的存量值不得按明文返回，必须报错提示重新保存。
-func TestProviderRepo_Get_legacyPlaintextFailsClosed(t *testing.T) {
+// TestProviderRepo_Get_legacyPlaintextReadable 验证双读兼容：无前缀的历史明文
+// 按明文返回（恢复可用），写路径仍由 Create/Update 加密。
+func TestProviderRepo_Get_legacyPlaintextReadable(t *testing.T) {
 	mock := newFactMock(t)
 	repo := newMockProviderRepo(mock)
 
@@ -121,31 +121,49 @@ func TestProviderRepo_Get_legacyPlaintextFailsClosed(t *testing.T) {
 	// 解密发生在事务提交之后；SQL 层无错误，事务正常 commit。
 	mock.ExpectCommit()
 
-	_, err := repo.Get(context.Background(), "t1", "p1")
-	require.ErrorContains(t, err, "请重新保存")
-	require.ErrorContains(t, err, "legacy plaintext")
+	got, err := repo.Get(context.Background(), "t1", "p1")
+	require.NoError(t, err)
+	require.Equal(t, "sk-legacy-plaintext", got.APIKey, "历史明文应按原值放行")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestProviderRepo_Get_corruptedCiphertextFailsClosed 验证损坏密文 fail closed。
+// TestProviderRepo_Get_corruptedCiphertextFailsClosed 验证损坏密文 fail closed：
+// 有 enc:v1: 前缀但解不开的值（payload 非 base64 或 key 不匹配）不得按明文放行。
 func TestProviderRepo_Get_corruptedCiphertextFailsClosed(t *testing.T) {
-	mock := newFactMock(t)
-	repo := newMockProviderRepo(mock)
+	// 另一把 key 加密的合法密文：base64 合法但 AES-GCM 解密必然失败。
+	otherKey := [32]byte{9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+		9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9}
+	wrongKeyCt, err := crypto.EncryptSecret(otherKey, "sk-from-another-key")
+	require.NoError(t, err)
 
-	p := providerFixture()
-	mock.ExpectBegin()
-	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	mock.ExpectQuery("FROM providers WHERE id=\\$1").
-		WithArgs("p1").
-		WillReturnRows(pgxmock.NewRows(providerColumns).
-			AddRow(p.ID, p.TenantID, p.Name, string(p.Kind), p.BaseURL, "enc:v1:not-base64!!!",
-				p.DefaultModel, p.Enabled, time.Now(), time.Now()))
-	// 解密发生在事务提交之后；SQL 层无错误，事务正常 commit。
-	mock.ExpectCommit()
+	for _, tc := range []struct {
+		name   string
+		stored string
+	}{
+		{name: "payload not base64", stored: "enc:v1:not-base64!!!"},
+		{name: "valid base64 but wrong key", stored: wrongKeyCt},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newFactMock(t)
+			repo := newMockProviderRepo(mock)
 
-	_, err := repo.Get(context.Background(), "t1", "p1")
-	require.ErrorContains(t, err, "请重新保存")
-	require.NoError(t, mock.ExpectationsWereMet())
+			p := providerFixture()
+			mock.ExpectBegin()
+			mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+			mock.ExpectQuery("FROM providers WHERE id=\\$1").
+				WithArgs("p1").
+				WillReturnRows(pgxmock.NewRows(providerColumns).
+					AddRow(p.ID, p.TenantID, p.Name, string(p.Kind), p.BaseURL, tc.stored,
+						p.DefaultModel, p.Enabled, time.Now(), time.Now()))
+			// 解密发生在事务提交之后；SQL 层无错误，事务正常 commit。
+			mock.ExpectCommit()
+
+			_, err := repo.Get(context.Background(), "t1", "p1")
+			require.ErrorContains(t, err, "请重新保存")
+			require.ErrorContains(t, err, "解密失败")
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func TestProviderRepo_Create_queryFails(t *testing.T) {

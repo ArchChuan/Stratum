@@ -18,9 +18,11 @@ import (
 //
 // API keys are encrypted at rest via crypto.EncryptSecret: the providers
 // table stores "enc:v1:"-prefixed AES-256-GCM ciphertext, never plaintext.
-// 存量兼容策略：加密功能上线前落库的历史明文没有前缀，读取时 crypto.DecryptSecret
-// 返回 ErrLegacyPlaintext，本层将其转换为"配置无效，请重新保存"错误（fail closed），
-// 禁止把存储值当作明文使用。
+// 存量兼容策略（双读）：加密功能上线前落库的历史明文没有前缀（crypto.IsEncrypted
+// 为 false），读取时按明文放行（恢复可见/可用）；有前缀的必须是可解密的密文，
+// 解不开（密文损坏或 key 不匹配）视为"配置无效，请重新保存"错误（fail closed），
+// 禁止把存储值当作明文使用。写路径一律加密（Create/Update），明文存量由
+// cmd/fix-provider-keys 一次性回填。
 type PgProviderRepo struct {
 	pool    tenantPool
 	key     [32]byte
@@ -107,9 +109,10 @@ func (r *PgProviderRepo) List(ctx context.Context, tenantID string) ([]domain.Pr
 	if err != nil {
 		return nil, fmt.Errorf("list providers: %w", err)
 	}
-	// 单条解密失败（历史明文或密文损坏）→ 跳过该条并告警，其余正常返回：
-	// 一条损坏的密文不应让整个管理页（编辑/删除入口）永久不可用。Get/Update
-	// 仍保持 fail closed——只读列表以可用性优先，单条访问以正确性优先。
+	// 单条 key 无效（有前缀但解不开 = 密文损坏/key 不匹配）→ 跳过该条并告警，
+	// 其余正常返回：一条损坏的密文不应让整个管理页（编辑/删除入口）永久不可用。
+	// 历史明文按放行处理（decryptProviderKey 直接返回）。Get 仍保持 fail closed——
+	// 只读列表以可用性优先，单条访问以正确性优先。
 	kept := out[:0]
 	for i := range out {
 		if err := r.decryptProviderKey(&out[i]); err != nil {
@@ -146,13 +149,20 @@ func (r *PgProviderRepo) GetMeta(ctx context.Context, tenantID, id string) (*dom
 	return &p, nil
 }
 
-// decryptProviderKey 将 p.APIKey 从密文解密为明文。解密失败时返回配置无效错误
-// （fail closed）：不降级为把存储值当明文使用。
+// decryptProviderKey 将 p.APIKey 从密文解密为明文。按前缀判定（crypto.IsEncrypted）
+// 而非错误类型分支：DecryptSecret 对"无前缀明文"与"有前缀但 payload 非法 base64"
+// 返回同一个 ErrLegacyPlaintext，若按错误放行会把损坏的密文当成明文凭据使用。
+// 无前缀 = 历史明文 → 放行（读兼容，写路径一律加密）；有前缀 → 必须解密成功，
+// 失败返回配置无效错误（fail closed），禁止降级为把存储值当明文使用。
 func (r *PgProviderRepo) decryptProviderKey(p *domain.Provider) error {
+	if !crypto.IsEncrypted(p.APIKey) {
+		// 历史明文：放行（恢复可见/可用），由 fix-provider-keys 回填为密文。
+		return nil
+	}
 	plain, err := crypto.DecryptSecret(r.key, p.APIKey)
 	if err != nil {
 		return fmt.Errorf(
-			"provider %s: api key 解密失败（历史明文或密文损坏），请重新保存该 provider 的 api key: %w",
+			"provider %s: api key 解密失败（密文损坏或 key 不匹配），请重新保存该 provider 的 api key: %w",
 			p.ID, err)
 	}
 	p.APIKey = plain

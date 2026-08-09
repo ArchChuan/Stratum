@@ -153,9 +153,10 @@ func TestPgProviderRepo_ListEmpty(t *testing.T) {
 	}
 }
 
-// TestPgProviderRepo_LegacyPlaintextFailsClosed 验证加密上线前的存量明文：
-// 读取必须 fail closed（返回"请重新保存"错误），禁止把明文当可用 key 返回。
-func TestPgProviderRepo_LegacyPlaintextFailsClosed(t *testing.T) {
+// TestPgProviderRepo_LegacyPlaintextReadable 验证双读兼容：加密上线前的存量
+// 明文经 Get 返回原值（恢复运行时可用）、出现在 List 中（管理页可见），
+// 写路径仍由 Create/Update 加密。
+func TestPgProviderRepo_LegacyPlaintextReadable(t *testing.T) {
 	pool := postgrestest.NewPool(t)
 	tenantID := postgrestest.CreateTestTenant(t, pool)
 	repo := infrastructure.NewPgProviderRepo(pool, testRepoKey, zap.NewNop(), observability.NoopMetrics{})
@@ -174,10 +175,20 @@ func TestPgProviderRepo_LegacyPlaintextFailsClosed(t *testing.T) {
 		t.Fatalf("seed legacy row: %v", err)
 	}
 
-	if _, err := repo.Get(ctx, tenantID, p.ID); err == nil {
-		t.Fatal("expected fail-closed error for legacy plaintext api key")
-	} else if !strings.Contains(err.Error(), "请重新保存") {
-		t.Fatalf("expected re-save hint in error, got: %v", err)
+	got, err := repo.Get(ctx, tenantID, p.ID)
+	if err != nil {
+		t.Fatalf("get legacy plaintext provider must succeed (dual-read): %v", err)
+	}
+	if got.APIKey != "sk-legacy" {
+		t.Fatalf("get api key: got %q, want legacy plaintext as-is", got.APIKey)
+	}
+
+	list, err := repo.List(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("list with legacy plaintext entry must not fail: %v", err)
+	}
+	if len(list) != 1 || list[0].APIKey != "sk-legacy" {
+		t.Fatalf("legacy plaintext provider must be listed with readable key, got: %+v", list)
 	}
 }
 
@@ -198,8 +209,15 @@ func TestPgProviderRepo_List_SkipsCorruptEntry(t *testing.T) {
 			t.Fatalf("seed row %s: %v", id, err)
 		}
 	}
-	// 1 条损坏密文 + 2 条正常（经 repo 加密）记录。
+	// 2 条损坏密文（payload 非法 base64 / 合法 base64 但 key 不匹配）+ 2 条正常记录。
+	otherKey := [32]byte{8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+		8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8}
+	wrongKeyCt, err := crypto.EncryptSecret(otherKey, "sk-from-another-key")
+	if err != nil {
+		t.Fatalf("encrypt wrong-key fixture: %v", err)
+	}
 	insert("corrupt-1", "enc:v1:not-valid-ciphertext!!!")
+	insert("corrupt-2", wrongKeyCt)
 	for _, id := range []string{"good-1", "good-2"} {
 		enc, err := crypto.EncryptSecret(testRepoKey, "sk-"+id)
 		if err != nil {
@@ -213,10 +231,10 @@ func TestPgProviderRepo_List_SkipsCorruptEntry(t *testing.T) {
 		t.Fatalf("list with corrupt entry must not fail wholesale: %v", err)
 	}
 	if len(list) != 2 {
-		t.Fatalf("list len: got %d, want 2 (corrupt entry skipped)", len(list))
+		t.Fatalf("list len: got %d, want 2 (corrupt entries skipped)", len(list))
 	}
 	for _, p := range list {
-		if p.ID == "corrupt-1" {
+		if p.ID == "corrupt-1" || p.ID == "corrupt-2" {
 			t.Fatalf("corrupt entry must be excluded from result: %+v", p)
 		}
 		if p.APIKey == "" || strings.HasPrefix(p.APIKey, "enc:v1:") {
@@ -225,7 +243,9 @@ func TestPgProviderRepo_List_SkipsCorruptEntry(t *testing.T) {
 	}
 
 	// Get 单条访问仍 fail closed：与 List 的可用性优先策略不同。
-	if _, err := repo.Get(ctx, tenantID, "corrupt-1"); err == nil {
-		t.Fatal("Get on corrupt entry must stay fail closed")
+	for _, id := range []string{"corrupt-1", "corrupt-2"} {
+		if _, err := repo.Get(ctx, tenantID, id); err == nil {
+			t.Fatalf("Get on corrupt entry %s must stay fail closed", id)
+		}
 	}
 }
