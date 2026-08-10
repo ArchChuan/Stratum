@@ -168,3 +168,29 @@ func ToOperationProposalResponse(p agentdomain.OperationProposal) OperationPropo
 		ExpiresAt:          p.ExpiresAt,
 	}
 }
+
+// NewResourceChangeProposalResponse 与手写 dto.NewResourceChangeProposalResponse
+// 逐行一致(迁移保留,含 OperationCreate 时 baselineProjection 置 nil 的业务逻辑)。
+func NewResourceChangeProposalResponse(
+	proposal agentdomain.ResourceChangeProposal,
+	events []agentdomain.ProposalEvent,
+) ResourceChangeProposalResponse {
+	if events == nil {
+		events = []agentdomain.ProposalEvent{}
+	}
+	baselineProjection := proposal.BaselineProjection
+	if proposal.Operation == agentdomain.OperationCreate {
+		baselineProjection = nil
+	}
+	return ResourceChangeProposalResponse{
+		ID: proposal.ID, ConversationID: proposal.ConversationID, ProposerID: proposal.ProposerID,
+		ConfirmerID: proposal.ConfirmerID, ResourceKind: proposal.ResourceKind, ResourceID: proposal.ResourceID,
+		Operation: proposal.Operation, BaselineFingerprint: proposal.BaselineFingerprint,
+		BaselineProjection: baselineProjection,
+		Payload:            proposal.Payload, Summary: proposal.Summary, Status: proposal.Status,
+		ErrorCode: proposal.ErrorCode, ApplyResult: proposal.ApplyResult, Events: events,
+		//nolint:gosec // EditCount 是业务计数器,不可能溢出 int32(proto 契约)
+		EditCount: int32(proposal.EditCount), // domain int → gen int32
+		ExpiresAt: proposal.ExpiresAt, CreatedAt: proposal.CreatedAt, UpdatedAt: proposal.UpdatedAt,
+	}
+}

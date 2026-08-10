@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/byteBuilderX/stratum/api/http/dto"
+	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
@@ -42,7 +42,7 @@ func (h *ResourceChangeProposalHandler) Get(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.NewResourceChangeProposalResponse(proposal, events))
+	c.JSON(http.StatusOK, gen.NewResourceChangeProposalResponse(proposal, events))
 }
 
 func (h *ResourceChangeProposalHandler) Update(c *gin.Context) {
@@ -50,7 +50,7 @@ func (h *ResourceChangeProposalHandler) Update(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var request dto.UpdateResourceChangeProposalRequest
+	var request gen.UpdateResourceChangeProposalRequest
 	if err := decodeClosedJSON(c, &request); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -62,7 +62,7 @@ func (h *ResourceChangeProposalHandler) Update(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.NewResourceChangeProposalResponse(proposal, nil))
+	c.JSON(http.StatusOK, gen.NewResourceChangeProposalResponse(proposal, nil))
 }
 
 func (h *ResourceChangeProposalHandler) Cancel(c *gin.Context) {
@@ -87,7 +87,7 @@ func (h *ResourceChangeProposalHandler) Confirm(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.NewResourceChangeProposalResponse(proposal, nil))
+	c.JSON(http.StatusOK, gen.NewResourceChangeProposalResponse(proposal, nil))
 }
 
 func proposalIdentity(c *gin.Context) (string, string, bool) {

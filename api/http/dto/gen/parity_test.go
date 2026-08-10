@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/api/http/dto"
-	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 )
 
 // parityPairs 登记 (gen struct, 手写 struct) 类型对偶。
@@ -18,54 +17,45 @@ var parityPairs = []struct {
 	name string
 	gen  reflect.Type
 	hw   reflect.Type
-}{
-	{
-		name: "UpdateResourceChangeProposalRequest",
-		gen:  reflect.TypeOf(gen.UpdateResourceChangeProposalRequest{}),
-		hw:   reflect.TypeOf(dto.UpdateResourceChangeProposalRequest{}),
-	},
-	{
-		name: "ResourceChangeProposalResponse",
-		gen:  reflect.TypeOf(gen.ResourceChangeProposalResponse{}),
-		hw:   reflect.TypeOf(dto.ResourceChangeProposalResponse{}),
-	},
-}
+}{}
 
 // removedStructs 登记"已从 dto 包删除"的 struct 名。
 var removedStructs = map[string]bool{
-	"CreateCollabRequest":               true,
-	"CollabResponse":                    true,
-	"TaskStepResponse":                  true,
-	"CreateAgentRequest":                true,
-	"AgentResponse":                     true,
-	"ExecuteAgentRequest":               true,
-	"ExecuteAgentResponse":              true,
-	"AgentStep":                         true,
-	"MCPServerConfigRequest":            true,
-	"MCPAuthConfigResponse":             true,
-	"MCPServerConfigResponse":           true,
-	"CreateWorkflowRequest":             true,
-	"UpdateWorkflowRequest":             true,
-	"StartWorkflowRunRequest":           true,
-	"WorkflowControlRequest":            true,
-	"WorkflowApprovalDecisionRequest":   true,
-	"WorkflowManualResolveRequest":      true,
-	"EvaluationResourceRef":             true,
-	"EvaluationCaseRequest":             true,
-	"CreateEvaluationSuiteRequest":      true,
-	"EnqueueEvaluationRunRequest":       true,
-	"EvaluationJobResponse":             true,
-	"GenerateOptimizationRequest":       true,
-	"CreateEvaluationExperimentRequest": true,
-	"EvaluationCommandRequest":          true,
-	"RecordEvaluationFeedbackRequest":   true,
-	"CreateScheduledTaskRequest":        true,
-	"UpdateScheduledTaskRequest":        true,
-	"SetScheduledTaskEnabledRequest":    true,
-	"ScheduledTaskResponse":             true,
-	"ScheduledTaskPageResponse":         true,
-	"RejectOperationProposalRequest":    true,
-	"OperationProposalResponse":         true,
+	"CreateCollabRequest":                 true,
+	"CollabResponse":                      true,
+	"TaskStepResponse":                    true,
+	"CreateAgentRequest":                  true,
+	"AgentResponse":                       true,
+	"ExecuteAgentRequest":                 true,
+	"ExecuteAgentResponse":                true,
+	"AgentStep":                           true,
+	"MCPServerConfigRequest":              true,
+	"MCPAuthConfigResponse":               true,
+	"MCPServerConfigResponse":             true,
+	"CreateWorkflowRequest":               true,
+	"UpdateWorkflowRequest":               true,
+	"StartWorkflowRunRequest":             true,
+	"WorkflowControlRequest":              true,
+	"WorkflowApprovalDecisionRequest":     true,
+	"WorkflowManualResolveRequest":        true,
+	"EvaluationResourceRef":               true,
+	"EvaluationCaseRequest":               true,
+	"CreateEvaluationSuiteRequest":        true,
+	"EnqueueEvaluationRunRequest":         true,
+	"EvaluationJobResponse":               true,
+	"GenerateOptimizationRequest":         true,
+	"CreateEvaluationExperimentRequest":   true,
+	"EvaluationCommandRequest":            true,
+	"RecordEvaluationFeedbackRequest":     true,
+	"CreateScheduledTaskRequest":          true,
+	"UpdateScheduledTaskRequest":          true,
+	"SetScheduledTaskEnabledRequest":      true,
+	"ScheduledTaskResponse":               true,
+	"ScheduledTaskPageResponse":           true,
+	"RejectOperationProposalRequest":      true,
+	"OperationProposalResponse":           true,
+	"UpdateResourceChangeProposalRequest": true,
+	"ResourceChangeProposalResponse":      true,
 }
 
 func TestParityHandwrittenVsGenerated(t *testing.T) {
