@@ -30,4 +30,10 @@ message SampleMappings {
   map<string, string> headers = 9;
   repeated SampleScalars steps = 10;
   map<string, google.protobuf.Struct> overrides = 11;
+  // @gotype: []github.com/byteBuilderX/stratum/internal/agent/domain.ProposalEvent
+  repeated google.protobuf.Value events = 12;
+  // @gotype: *github.com/byteBuilderX/stratum/internal/agent/domain.ProposalEvent
+  optional google.protobuf.Value maybe_config = 13;
+  // @gotype: map[string][]any
+  map<string, google.protobuf.Value> value_map = 14;
 }

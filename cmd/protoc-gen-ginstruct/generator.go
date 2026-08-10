@@ -174,14 +174,15 @@ func collectField(fd *descriptorpb.FileDescriptorProto, f *descriptorpb.FieldDes
 		// TS side follows the proto type: message types map via tsScalarType;
 		// scalar types (the @gotype case, tsScalarType returns "") reuse
 		// scalarType's TS column — the mapping table stays in one place.
-		fl.TSType = tsScalarType(f)
-		if fl.TSType == "" {
-			_, ts, err := scalarType(f)
-			if err != nil {
-				return nil, fmt.Errorf("%s: %s: %w", fd.GetName(), jsonName, err)
-			}
-			fl.TSType = ts
+		// Label wrappers (map -> Record<>, repeated -> [], proto3 optional ->
+		// | null) apply exactly like mapType's, so @gotype never loses the TS
+		// shape the proto label declares (e.g. repeated Value + @gotype
+		// []domain.X must still emit unknown[]).
+		tsType, err := gotypeTSType(f, fd)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %s: %w", fd.GetName(), jsonName, err)
 		}
+		fl.TSType = tsType
 	}
 	// json tag: key verbatim; ,omitempty only via @omitempty. The comma goes
 	// inside the quotes — encoding/json silently ignores one outside.
@@ -277,6 +278,36 @@ func mapEntryTypes(entry *descriptorpb.DescriptorProto) (keyGo, valGo, valTS str
 		}
 	}
 	return keyGo, valGo, valTS, nil
+}
+
+// gotypeTSType computes the TS type for a @gotype-overridden field: the
+// proto label shape (map -> Record<>, repeated -> [], proto3 optional ->
+// | null) applies on top of the proto type's TS mapping — the same wrapper
+// logic mapType applies to default-mapped fields.
+func gotypeTSType(f *descriptorpb.FieldDescriptorProto, fd *descriptorpb.FileDescriptorProto) (string, error) {
+	if entry := mapEntry(fd, f.GetTypeName()); entry != nil {
+		_, _, valTS, err := mapEntryTypes(entry)
+		if err != nil {
+			return "", err
+		}
+		return "Record<string, " + valTS + ">", nil
+	}
+	base := tsScalarType(f)
+	if base == "" {
+		_, ts, err := scalarType(f)
+		if err != nil {
+			return "", err
+		}
+		base = ts
+	}
+	switch {
+	case f.GetLabel() == descriptorpb.FieldDescriptorProto_LABEL_REPEATED:
+		return base + "[]", nil
+	case f.GetProto3Optional():
+		return base + " | null", nil
+	default:
+		return base, nil
+	}
 }
 
 // mapType implements the §5 mapping table. proto3 map fields arrive as a

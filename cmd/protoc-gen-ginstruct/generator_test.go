@@ -144,6 +144,12 @@ func TestMappingTable(t *testing.T) {
 			"headers":      {"map[string]string", "Record<string, string>", `json:"headers"`, ""},
 			"steps":        {"[]SampleScalars", "SampleScalars[]", `json:"steps"`, ""},
 			"overrides":    {"map[string]map[string]any", "Record<string, Record<string, unknown>>", `json:"overrides"`, ""},
+			// @gotype label wrappers: TS side must keep the proto label shape
+			// (repeated [], optional | null, map Record<>) alongside the
+			// overridden Go type — regression guard for the else branch.
+			"events":       {"[]github.com/byteBuilderX/stratum/internal/agent/domain.ProposalEvent", "unknown[]", `json:"events"`, ""},
+			"maybe_config": {"*github.com/byteBuilderX/stratum/internal/agent/domain.ProposalEvent", "unknown | null", `json:"maybe_config"`, ""},
+			"value_map":    {"map[string][]any", "Record<string, unknown>", `json:"value_map"`, ""},
 		},
 	}
 	for msgName, fields := range cases {

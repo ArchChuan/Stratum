@@ -23,5 +23,8 @@ export interface SampleMappings {
   headers: Record<string, string>;
   steps: SampleScalars[];
   overrides: Record<string, Record<string, unknown>>;
+  events: unknown[];
+  maybe_config?: unknown | null;
+  value_map: Record<string, unknown>;
 }
 

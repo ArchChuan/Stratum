@@ -30,4 +30,7 @@ type SampleMappings struct {
 	Headers     map[string]string         `json:"headers"`
 	Steps       []SampleScalars           `json:"steps"`
 	Overrides   map[string]map[string]any `json:"overrides"`
+	Events      []domain.ProposalEvent    `json:"events"`
+	MaybeConfig *domain.ProposalEvent     `json:"maybe_config"`
+	ValueMap    map[string][]any          `json:"value_map"`
 }
