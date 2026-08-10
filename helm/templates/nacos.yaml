@@ -55,6 +55,12 @@ spec:
               value: "3306"
             - name: MYSQL_SERVICE_DB_NAME
               value: nacos
+            # MySQL 8 默认 caching_sha2_password 认证，非 SSL 连接需显式
+            # allowPublicKeyRetrieval=true 获取服务器公钥，否则连接失败。
+            # 镜像 application.properties 的 db.url.0 用 ${MYSQL_SERVICE_DB_PARAM:...}
+            # 拼接参数（MYSQL_SERVICE_URL 在 2.5.x 已无占位符），此处完整覆盖默认串。
+            - name: MYSQL_SERVICE_DB_PARAM
+              value: characterEncoding=utf8&connectTimeout=1000&socketTimeout=3000&autoReconnect=true&useSSL=false&allowPublicKeyRetrieval=true
             - name: MYSQL_SERVICE_USER
               value: root
             - name: MYSQL_SERVICE_PASSWORD
@@ -80,6 +86,17 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.name | quote }}
                   key: NACOS_AUTH_TOKEN
+            # admin 用户初始化密码（2.4+ 首启用户表空时据此创建 admin；
+            # 缺失则无用户可登录，SDK 用户名密码拉取报 user not found）
+            - name: NACOS_AUTH_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: NACOS_PASSWORD
+                  optional: true
+            # 切换外部 MySQL（spec 要求）；缺省走 embedded Derby
+            - name: SPRING_DATASOURCE_PLATFORM
+              value: mysql
           ports:
             - name: http
               containerPort: 8848

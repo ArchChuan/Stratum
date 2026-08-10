@@ -18,10 +18,11 @@ import (
 )
 
 // Nacos dataId 约定：按业务域拆分，变更粒度小、审计清晰。
+// 命名禁止含 /（Nacos 2.4+ 服务端校验 dataId 非法字符，stratum-auth 会 400）。
 const (
 	nacosGroup        = "DEFAULT_GROUP"
-	nacosAuthDataID   = "stratum/auth"
-	nacosMemoryDataID = "stratum/memory"
+	nacosAuthDataID   = "stratum-auth"
+	nacosMemoryDataID = "stratum-memory"
 )
 
 // nacosClient 抽象 Nacos 配置客户端，便于测试注入。
@@ -165,10 +166,10 @@ func (c *Config) ConnectNacos(logger *zap.Logger) error {
 		}
 	}
 
-	// 热更新 listener：只注册 memory（stratum/memory 的 poll_interval/batch_size
-	// 是热生效字段）。auth（stratum/auth）全部为冷生效字段，回调写普通字段会与
+	// 热更新 listener：只注册 memory（stratum-memory 的 poll_interval/batch_size
+	// 是热生效字段）。auth（stratum-auth）全部为冷生效字段，回调写普通字段会与
 	// 启动期装配读（wiring memory.go/router.go）构成 data race 且无语义价值，
-	// 故不注册——修改 stratum/auth 后重启生效。
+	// 故不注册——修改 stratum-auth 后重启生效。
 	if err := client.Listen(nacosMemoryDataID, func(content string) {
 		if err := c.applyMemoryConfigDynamic(content); err != nil {
 			logger.Warn("config: nacos push rejected, keeping previous value",
@@ -193,7 +194,7 @@ func (c *Config) CloseNacos() error {
 	return nil
 }
 
-// applyAuthConfig 应用 stratum/auth dataId。
+// applyAuthConfig 应用 stratum-auth dataId。
 // 字段缺省不覆盖（*bool 指针区分"未设置"与"显式 false"）。
 func (c *Config) applyAuthConfig(content string) error {
 	var d struct {
@@ -212,7 +213,7 @@ func (c *Config) applyAuthConfig(content string) error {
 	return nil
 }
 
-// applyMemoryConfig 应用 stratum/memory dataId（同步拉取路径）。
+// applyMemoryConfig 应用 stratum-memory dataId（同步拉取路径）。
 // enabled 等装配参数为冷生效（写入字段，下次启动生效）；
 // poll_interval/batch_size 为热生效（原子写入 dynamic 并通知 listener）。
 // 任一字段非法 → 整体回退（不部分应用，解析失败不写任何字段）。

@@ -18,8 +18,8 @@
 
 | dataId | 字段 | 热生效 | 负责人 |
 |---|---|---|---|
-| stratum/auth | password_auth_enabled, guest_auth_enabled | 冷（重启） | 平台 |
-| stratum/memory | enabled（冷）；poll_interval, batch_size（热） | 混合 | 平台 |
+| stratum-auth | password_auth_enabled, guest_auth_enabled | 冷（重启） | 平台 |
+| stratum-memory | enabled（冷）；poll_interval, batch_size（热） | 混合 | 平台 |
 
 ### 档位 B（保持 env，未来进化链路接管）
 
