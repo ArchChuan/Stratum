@@ -27,6 +27,10 @@ jobs:
       - name: Generate proto contracts
         run: make proto-gen
 
+      # 名单式守卫:手写 DTO 残留即 CI 红(纯静态 find/grep,不依赖生成物)
+      - name: Enforce no hand-written DTO residue
+        run: bash scripts/quality/dto-residue-guard.sh
+
       - name: Verify generated agent instructions
         run: make agent-instructions-check
 
@@ -54,13 +58,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate proto contracts
-        run: make proto-gen
-
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+
+      - name: Generate proto contracts
+        run: make proto-gen
 
       - uses: actions/setup-node@v4
         with:
@@ -135,13 +139,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate proto contracts
-        run: make proto-gen
-
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+
+      - name: Generate proto contracts
+        run: make proto-gen
 
       - uses: actions/setup-node@v4
         with:
@@ -174,13 +178,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate proto contracts
-        run: make proto-gen
-
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+
+      - name: Generate proto contracts
+        run: make proto-gen
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v8
@@ -194,13 +198,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate proto contracts
-        run: make proto-gen
-
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+
+      - name: Generate proto contracts
+        run: make proto-gen
 
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.out ./... -timeout=5m
@@ -230,13 +234,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate proto contracts
-        run: make proto-gen
-
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+
+      - name: Generate proto contracts
+        run: make proto-gen
 
       - name: Run contract golden tests
         run: make contract-enforce
@@ -262,13 +266,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate proto contracts
-        run: make proto-gen
-
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+
+      - name: Generate proto contracts
+        run: make proto-gen
 
       - name: Run Workflow HTTP/PostgreSQL/worker E2E
         run: go test -tags=integration ./test/e2e -run TestWorkflowHTTPPostgresWorkerApprovalRestartAndSSEE2E -count=1 -v
@@ -279,13 +283,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate proto contracts
-        run: make proto-gen
-
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+
+      - name: Generate proto contracts
+        run: make proto-gen
 
       - name: Run platform assistant PostgreSQL E2E
         run: bash scripts/test-platform-assistant-e2e.sh
@@ -297,13 +301,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate proto contracts
-        run: make proto-gen
-
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+
+      - name: Generate proto contracts
+        run: make proto-gen
 
       - name: Build binary
         run: go build -o bin/server ./cmd/server
@@ -317,13 +321,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate proto contracts
-        run: make proto-gen
-
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+
+      - name: Generate proto contracts
+        run: make proto-gen
 
       - name: Install gosec
         run: go install github.com/securego/gosec/v2/cmd/gosec@v2.25.0
