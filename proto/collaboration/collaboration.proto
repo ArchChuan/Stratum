@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package stratum.collaboration;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// CreateCollabRequest creates a plan. Strategy validation lives in the
+// service layer so unknown values surface as ErrCollabInvalidInput.
+// (comment matches the hand-written DTO so the contract stays self-documenting)
+message CreateCollabRequest {
+  // @binding: required
+  string task_description = 1;
+  // @gotype: github.com/byteBuilderX/stratum/internal/collab/domain.CollabStrategy
+  // @binding: required
+  string strategy = 2;
+  // @binding: required
+  repeated string participants = 3;
+}
+
+// CollabResponse is the plan surface shown to members.
+message CollabResponse {
+  string id = 1;
+  string taskDescription = 2;
+  string strategy = 3;
+  string status = 4;
+  string createdBy = 5;
+  repeated string participants = 6;
+  google.protobuf.Timestamp createdAt = 7;
+  // @omitempty — hand-written DTO: *time.Time `json:"startedAt,omitempty"`
+  optional google.protobuf.Timestamp startedAt = 8;
+  // @omitempty — hand-written DTO: *time.Time `json:"completedAt,omitempty"`
+  optional google.protobuf.Timestamp completedAt = 9;
+}
+
+// TaskStepResponse is the detail-view step surface: dependency structure,
+// status, and the step's own input/output payloads.
+message TaskStepResponse {
+  string id = 1;
+  string planId = 2;
+  string agentId = 3;
+  repeated string dependencies = 4;
+  string status = 5;
+  google.protobuf.Struct input = 6;
+  // @omitempty — hand-written DTO: `json:"output,omitempty"`
+  google.protobuf.Struct output = 7;
+  // @omitempty — hand-written DTO: `json:"error,omitempty"`
+  string error = 8;
+  google.protobuf.Timestamp createdAt = 9;
+}
