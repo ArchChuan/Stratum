@@ -25,7 +25,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: migrate
-          image: {{ include "stratum.image" . }}
+          image: {{ include "stratum.image" .Values.app.image }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           command: ["./migrate-public"]
           env:
