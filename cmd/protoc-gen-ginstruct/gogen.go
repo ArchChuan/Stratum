@@ -35,26 +35,21 @@ func messageType(typeName string) (string, error) {
 // resolveGoType validates a @gotype value against the whitelist. The base
 // type path must be a stratum/internal package, encoding/json, or time
 // (RawMessage / Duration are proto-inexpressible); builtin expressions with
-// no dots (e.g. map[string][]any) are allowed. Pointer/slice/map prefixes
-// are stripped before the check (*domain.AuthConfig, []domain.ProposalEvent).
+// no dots (e.g. map[string][]any) are allowed. Pointer/slice/map-key
+// prefixes of any depth are stripped before the check, so stacked forms
+// (*domain.AuthConfig, []*domain.ProposalEvent, map[string][]domain.X) all
+// validate on the base path.
 func resolveGoType(gt string) (string, error) {
 	// Dotted identifiers first: types.Eval with a nil package can never
 	// resolve a qualified name (time.Time, github.com/.../domain.X), so
 	// validation for those is the whitelist prefix match below — running
 	// types.Eval first would reject every one of them.
 	if strings.Contains(gt, ".") {
-		// strip pointer/slice prefixes to reach the base type path;
-		// "[]" is 2 bytes — a 1-byte strip would leave a stray "]" and fail
-		// the whitelist match below ([]github.com/.../domain.X)
-		base := gt
-		if n := leadingTypePrefixLen(base); n > 0 {
-			base = base[n:]
-		}
-		if strings.HasPrefix(base, "map[") {
-			if idx := strings.Index(base, "]"); idx >= 0 {
-				base = base[idx+1:] // map[K]V -> V
-			}
-		}
+		// Peel pointer/slice/map-key prefixes (any layer count) to reach
+		// the base type path for the whitelist match. The original
+		// expression is returned unchanged, so the prefixes are preserved
+		// for the caller.
+		_, base := splitGoTypePrefix(gt)
 		for _, allow := range []string{
 			"github.com/byteBuilderX/stratum/internal/",
 			"encoding/json.",
@@ -73,38 +68,33 @@ func resolveGoType(gt string) (string, error) {
 }
 
 // splitGoTypePrefix peels pointer/slice/map-key prefixes off a Go type
-// expression so the remainder is the base type: *github.com/.../domain.X ->
-// "*" + "github.com/.../domain.X", map[string][]any -> "map[string]" +
-// "[]any", []byte -> "[]" + "byte".
+// expression so the remainder is the base type. "*" and "[]" layers are
+// consumed in any order at any depth, then "map[K]" key prefixes, so
+// stacked forms all reduce to the bare base: *github.com/.../domain.X ->
+// "*" + "github.com/.../domain.X", []*domain.X -> "[]*" + "domain.X",
+// map[string][]any -> "map[string][]" + "any", []byte -> "[]" + "byte".
+// An unterminated "map[" is left in the remainder for the caller to fail
+// closed on.
 func splitGoTypePrefix(gt string) (prefix, rest string) {
-	for strings.HasPrefix(gt, "*") {
-		prefix += "*"
-		gt = gt[1:]
-	}
-	for strings.HasPrefix(gt, "[]") {
-		prefix += "[]"
-		gt = gt[2:]
-	}
-	if strings.HasPrefix(gt, "map[") {
-		if idx := strings.Index(gt, "]"); idx >= 0 {
-			prefix += gt[:idx+1]
-			gt = gt[idx+1:]
+	for {
+		switch {
+		case strings.HasPrefix(gt, "*"):
+			prefix += "*"
+			gt = gt[1:]
+		case strings.HasPrefix(gt, "[]"):
+			prefix += "[]"
+			gt = gt[2:]
+		case strings.HasPrefix(gt, "map["):
+			if idx := strings.Index(gt, "]"); idx >= 0 {
+				prefix += gt[:idx+1]
+				gt = gt[idx+1:]
+			} else {
+				return prefix, gt
+			}
+		default:
+			return prefix, gt
 		}
 	}
-	return prefix, gt
-}
-
-// leadingTypePrefixLen returns the byte length of a leading "*" or "[]"
-// type prefix, 0 when neither. resolveGoType uses it to skip the prefix
-// before the whitelist match — "[]" must strip 2 bytes, not 1.
-func leadingTypePrefixLen(s string) int {
-	if strings.HasPrefix(s, "[]") {
-		return 2
-	}
-	if strings.HasPrefix(s, "*") {
-		return 1
-	}
-	return 0
 }
 
 // goTypeSegPath returns the folded package segment and the full import path

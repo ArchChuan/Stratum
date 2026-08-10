@@ -255,6 +255,11 @@ func TestFoldGoType(t *testing.T) {
 		"*github.com/byteBuilderX/stratum/internal/agent/domain.AuthConfig":      "*domain.AuthConfig",
 		"[]github.com/byteBuilderX/stratum/internal/agent/domain.ProposalEvent":  "[]domain.ProposalEvent",
 		"map[string]github.com/byteBuilderX/stratum/internal/agent/domain.Task":  "map[string]domain.Task",
+		// stacked prefixes fold without losing any layer
+		"[]*github.com/byteBuilderX/stratum/internal/agent/domain.ProposalEvent":  "[]*domain.ProposalEvent",
+		"*[]github.com/byteBuilderX/stratum/internal/mcp/domain.AuthConfig":       "*[]domain.AuthConfig",
+		"[][]github.com/byteBuilderX/stratum/internal/agent/domain.ProposalEvent": "[][]domain.ProposalEvent",
+		"map[string][]github.com/byteBuilderX/stratum/internal/agent/domain.Task": "map[string][]domain.Task",
 		"time.Duration":        "time.Duration",
 		"map[string][]any":     "map[string][]any",
 		"map[string]time.Time": "map[string]time.Time",
@@ -303,13 +308,26 @@ func TestGoTypeWhitelist(t *testing.T) {
 		"*github.com/byteBuilderX/stratum/internal/mcp/domain.AuthConfig",
 		"map[string][]any",
 		"[]string",
+		// stacked prefixes: every layer must strip before the whitelist match
+		"[]*github.com/byteBuilderX/stratum/internal/agent/domain.ProposalEvent",
+		"*[]github.com/byteBuilderX/stratum/internal/mcp/domain.AuthConfig",
+		"[][]github.com/byteBuilderX/stratum/internal/agent/domain.ProposalEvent",
+		"map[string][]github.com/byteBuilderX/stratum/internal/agent/domain.ProposalEvent",
+		"*[]*github.com/byteBuilderX/stratum/internal/agent/domain.AuthConfig",
 	}
 	for _, in := range ok {
 		if _, err := resolveGoType(in); err != nil {
 			t.Errorf("resolveGoType(%q) unexpected error: %v", in, err)
 		}
 	}
-	bad := []string{"os.File", "github.com/evil/corp.Secret"}
+	bad := []string{
+		"os.File",
+		"github.com/evil/corp.Secret",
+		// fail-closed: unknown bases stay rejected under any prefix shape
+		"[]github.com/evil/corp.Secret",
+		"*[]os.File",
+		"map[string]github.com/evil/corp.Secret",
+	}
 	for _, in := range bad {
 		if _, err := resolveGoType(in); err == nil {
 			t.Errorf("resolveGoType(%q) expected whitelist error", in)
