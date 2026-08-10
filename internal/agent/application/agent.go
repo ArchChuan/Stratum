@@ -19,6 +19,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	jschema "github.com/byteBuilderX/stratum/pkg/jsonschema"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 )
@@ -1219,10 +1220,6 @@ func mergeTools(builtins []port.ToolDefinition, extras []port.ToolDefinition, lo
 func buildBuiltinTools(workspaceNames, workspaceDescs []string, hasRAG, hasMemory bool) []port.ToolDefinition {
 	var tools []port.ToolDefinition
 	if hasRAG {
-		enumVals := make([]interface{}, len(workspaceNames))
-		for i, n := range workspaceNames {
-			enumVals[i] = n
-		}
 		var b strings.Builder
 		b.WriteString("Search one or more knowledge bases for relevant information. Available workspaces:\n")
 		for i, n := range workspaceNames {
@@ -1243,20 +1240,14 @@ func buildBuiltinTools(workspaceNames, workspaceDescs []string, hasRAG, hasMemor
 			ProviderID:   "stratum_search_knowledge",
 			CapabilityID: "stratum_search_knowledge",
 			NodeType:     domain.ObservationTypeRetriever,
-			InputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"workspaces": map[string]interface{}{
-						"type":        "array",
-						"description": "Knowledge workspaces to search (one or more)",
-						"items":       map[string]interface{}{"type": "string", "enum": enumVals},
-						"minItems":    1,
-					},
-					"query": map[string]interface{}{"type": "string", "description": "Search query"},
-					"top_k": map[string]interface{}{"type": "integer", "description": "Number of results per workspace (1-20, default 5)"},
-				},
-				"required": []string{"workspaces", "query"},
-			},
+			InputSchema: jschema.Must(jschema.Object(
+				jschema.RequiredProp("workspaces", jschema.Array(
+					jschema.Must(jschema.Enum("", workspaceNames...)),
+					1, 0, false, "Knowledge workspaces to search (one or more)",
+				)),
+				jschema.RequiredProp("query", jschema.String("Search query")),
+				jschema.OptionalProp("top_k", jschema.Integer(nil, nil, "Number of results per workspace (1-20, default 5)")),
+			)).Map(),
 		})
 	}
 	if hasMemory {
@@ -1267,14 +1258,10 @@ func buildBuiltinTools(workspaceNames, workspaceDescs []string, hasRAG, hasMemor
 			ProviderID:   "stratum_recall_memory",
 			CapabilityID: "stratum_recall_memory",
 			NodeType:     domain.ObservationTypeMemory,
-			InputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"query": map[string]interface{}{"type": "string", "description": "Search query to find relevant memories"},
-					"limit": map[string]interface{}{"type": "integer", "description": "Max results (1-20, default 5)"},
-				},
-				"required": []string{"query"},
-			},
+			InputSchema: jschema.Must(jschema.Object(
+				jschema.RequiredProp("query", jschema.String("Search query to find relevant memories")),
+				jschema.OptionalProp("limit", jschema.Integer(nil, nil, "Max results (1-20, default 5)")),
+			)).Map(),
 		})
 	}
 	tools = append(tools, port.ToolDefinition{
@@ -1284,11 +1271,7 @@ func buildBuiltinTools(workspaceNames, workspaceDescs []string, hasRAG, hasMemor
 		ProviderID:   "stratum_continue_reasoning",
 		CapabilityID: "stratum_continue_reasoning",
 		NodeType:     domain.ObservationTypeAgent,
-		InputSchema: map[string]interface{}{
-			"type":       "object",
-			"properties": map[string]interface{}{},
-			"required":   []string{},
-		},
+		InputSchema:  jschema.Must(jschema.Object()).Map(),
 	})
 	return tools
 }
