@@ -38,34 +38,36 @@ func messageType(typeName string) (string, error) {
 // no dots (e.g. map[string][]any) are allowed. Pointer/slice/map prefixes
 // are stripped before the check (*domain.AuthConfig, []domain.ProposalEvent).
 func resolveGoType(gt string) (string, error) {
-	expr, err := types.Eval(token.NewFileSet(), nil, 0, gt)
-	if err != nil {
+	// Dotted identifiers first: types.Eval with a nil package can never
+	// resolve a qualified name (time.Time, github.com/.../domain.X), so
+	// validation for those is the whitelist prefix match below — running
+	// types.Eval first would reject every one of them.
+	if strings.Contains(gt, ".") {
+		// strip pointer/slice/map prefixes to reach the base type path
+		base := gt
+		for strings.HasPrefix(base, "*") || strings.HasPrefix(base, "[]") {
+			base = base[1:]
+		}
+		if strings.HasPrefix(base, "map[") {
+			if idx := strings.Index(base, "]"); idx >= 0 {
+				base = base[idx+1:] // map[K]V -> V
+			}
+		}
+		for _, allow := range []string{
+			"github.com/byteBuilderX/stratum/internal/",
+			"encoding/json.",
+			"time.",
+		} {
+			if strings.HasPrefix(base, allow) {
+				return gt, nil
+			}
+		}
+		return "", fmt.Errorf("@gotype %q outside whitelist (only stratum/internal, encoding/json, time, or builtin expressions)", gt)
+	}
+	if _, err := types.Eval(token.NewFileSet(), nil, 0, gt); err != nil {
 		return "", fmt.Errorf("@gotype %q is not a valid Go type expression", gt)
 	}
-	_ = expr
-	if !strings.Contains(gt, ".") {
-		return gt, nil // builtin expression (map/slice of builtins)
-	}
-	// strip pointer/slice/map prefixes to reach the base type path
-	base := gt
-	for strings.HasPrefix(base, "*") || strings.HasPrefix(base, "[]") {
-		base = base[1:]
-	}
-	if strings.HasPrefix(base, "map[") {
-		if idx := strings.Index(base, "]"); idx >= 0 {
-			base = base[idx+1:] // map[K]V -> V
-		}
-	}
-	for _, allow := range []string{
-		"github.com/byteBuilderX/stratum/internal/",
-		"encoding/json.",
-		"time.",
-	} {
-		if strings.HasPrefix(base, allow) {
-			return gt, nil
-		}
-	}
-	return "", fmt.Errorf("@gotype %q outside whitelist (only stratum/internal, encoding/json, time, or builtin expressions)", gt)
+	return gt, nil // builtin expression (map/slice of builtins)
 }
 
 // collectImports returns the set of package paths referenced by field types,
@@ -111,7 +113,14 @@ func goFile(msgs []*message, protoPath string) []byte {
 	for _, m := range msgs {
 		fmt.Fprintf(&b, "type %s struct {\n", m.GoName)
 		for _, f := range m.Fields {
-			fmt.Fprintf(&b, "\t%-24s %s `%s`\n", f.GoName, f.GoType, f.JSONTag)
+			// Binding is a second tag beside the json tag (both optional
+			// content-wise, but json always present), space-separated inside
+			// the same backtick pair.
+			tags := f.JSONTag
+			if f.Binding != "" {
+				tags += ` binding:"` + f.Binding + `"`
+			}
+			fmt.Fprintf(&b, "\t%-24s %s `%s`\n", f.GoName, f.GoType, tags)
 		}
 		b.WriteString("}\n\n")
 	}

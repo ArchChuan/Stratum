@@ -115,8 +115,8 @@ func collectMessages(fd *descriptorpb.FileDescriptorProto) ([]*message, error) {
 		structNames["."+fd.GetPackage()+"."+md.GetName()] = goFieldName(md.GetName())
 	}
 	var msgs []*message
-	for _, md := range fd.GetMessageType() {
-		m, err := collectMessage(fd, md)
+	for i, md := range fd.GetMessageType() {
+		m, err := collectMessage(fd, md, int32(i))
 		if err != nil {
 			return nil, err
 		}
@@ -125,11 +125,11 @@ func collectMessages(fd *descriptorpb.FileDescriptorProto) ([]*message, error) {
 	return msgs, nil
 }
 
-func collectMessage(fd *descriptorpb.FileDescriptorProto, md *descriptorpb.DescriptorProto) (*message, error) {
+func collectMessage(fd *descriptorpb.FileDescriptorProto, md *descriptorpb.DescriptorProto, msgIdx int32) (*message, error) {
 	m := &message{GoName: goFieldName(md.GetName()), TSName: md.GetName()}
 	seenGoNames := map[string]bool{}
-	for _, f := range md.GetField() {
-		fl, err := collectField(fd, f)
+	for i, f := range md.GetField() {
+		fl, err := collectField(fd, f, msgIdx, int32(i))
 		if err != nil {
 			return nil, err
 		}
@@ -143,7 +143,7 @@ func collectMessage(fd *descriptorpb.FileDescriptorProto, md *descriptorpb.Descr
 	return m, nil
 }
 
-func collectField(fd *descriptorpb.FileDescriptorProto, f *descriptorpb.FieldDescriptorProto) (*field, error) {
+func collectField(fd *descriptorpb.FileDescriptorProto, f *descriptorpb.FieldDescriptorProto, msgIdx, fieldIdx int32) (*field, error) {
 	jsonName := f.GetName()
 	fl := &field{
 		GoName:   goFieldName(jsonName),
@@ -152,7 +152,7 @@ func collectField(fd *descriptorpb.FileDescriptorProto, f *descriptorpb.FieldDes
 	}
 	// Comments: last preceding // @xxx line wins; the field's own leading
 	// comment block is scanned in order.
-	if err := parseFieldComments(fd, f, fl); err != nil {
+	if err := parseFieldComments(fd, f, fl, msgIdx, fieldIdx); err != nil {
 		return nil, err
 	}
 	// Default type mapping when no @gotype override.
@@ -165,20 +165,22 @@ func collectField(fd *descriptorpb.FileDescriptorProto, f *descriptorpb.FieldDes
 	} else {
 		fl.TSType = tsScalarType(f) // TS side follows the proto type
 	}
-	// json tag: key verbatim; ,omitempty only via @omitempty.
-	tag := `json:"` + jsonName + `"`
+	// json tag: key verbatim; ,omitempty only via @omitempty. The comma goes
+	// inside the quotes — encoding/json silently ignores one outside.
+	tag := `json:"` + jsonName
 	if fl.OmitZero {
 		tag += `,omitempty`
 	}
+	tag += `"`
 	fl.JSONTag = tag
 	return fl, nil
 }
 
 // parseFieldComments scans a field's leading comment locations for
 // @binding/@gotype/@omitempty directives and applies them to fl.
-func parseFieldComments(fd *descriptorpb.FileDescriptorProto, f *descriptorpb.FieldDescriptorProto, fl *field) error {
+func parseFieldComments(fd *descriptorpb.FileDescriptorProto, f *descriptorpb.FieldDescriptorProto, fl *field, msgIdx, fieldIdx int32) error {
 	for _, loc := range fd.GetSourceCodeInfo().GetLocation() {
-		if !isFieldLocation(loc.GetPath(), f) {
+		if !isFieldLocation(loc.GetPath(), msgIdx, fieldIdx) {
 			continue
 		}
 		for _, line := range strings.Split(loc.GetLeadingComments(), "\n") {
@@ -209,22 +211,32 @@ func applyDirective(fl *field, line, file, fieldName string) error {
 	return nil
 }
 
-func isFieldLocation(path []int32, f *descriptorpb.FieldDescriptorProto) bool {
-	// message.field location path: 4 (message_type) <idx> 2 (field) <idx>
-	return len(path) == 4 && path[0] == 4 && path[2] == 2
+func isFieldLocation(path []int32, msgIdx, fieldIdx int32) bool {
+	// message.field location path: 4 (message_type) <msg idx> 2 (field) <field
+	// idx>; both indices must match exactly, otherwise every field would
+	// adopt every other field's leading comments.
+	return len(path) == 4 && path[0] == 4 && path[1] == msgIdx && path[2] == 2 && path[3] == fieldIdx
 }
 
 // mapEntry locates the proto3 MapEntry message for a field's TypeName, or
-// nil when the field is not a map (TypeName's last segment matches a
-// message whose options.map_entry == true).
+// nil when the field is not a map. MapEntry messages are nested inside the
+// message that declares the map field (e.g. SampleMappings.HeadersEntry
+// lives in SampleMappings.nested_type), never top-level — resolve the
+// parent message by fully-qualified name first, then match the entry by
+// short name + options.map_entry.
 func mapEntry(fd *descriptorpb.FileDescriptorProto, typeName string) *descriptorpb.DescriptorProto {
-	short := typeName
+	parent, short := "", typeName
 	if idx := strings.LastIndex(short, "."); idx >= 0 {
-		short = short[idx+1:]
+		parent, short = short[:idx], short[idx+1:]
 	}
 	for _, md := range fd.GetMessageType() {
-		if md.GetName() == short && md.GetOptions().GetMapEntry() {
-			return md
+		if "."+fd.GetPackage()+"."+md.GetName() != parent {
+			continue
+		}
+		for _, nested := range md.GetNestedType() {
+			if nested.GetName() == short && nested.GetOptions().GetMapEntry() {
+				return nested
+			}
 		}
 	}
 	return nil
