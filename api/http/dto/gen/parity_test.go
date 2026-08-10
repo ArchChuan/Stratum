@@ -1,6 +1,7 @@
 package gen_test
 
 import (
+	"errors"
 	"os/exec"
 	"reflect"
 	"testing"
@@ -93,10 +94,20 @@ func TestRemovedStructsGone(t *testing.T) {
 		names = append(names, name)
 	}
 	pattern := "type (" + joinPattern(names) + ") struct"
-	out, err := exec.Command("grep", "-rn", "-E", pattern, "../").CombinedOutput()
+	// --exclude-dir=gen:守卫只扫手写 dto 包,生成物(gen/ 子目录)与手写同格式,
+	// 纳入会假阳性自堵迁移。
+	out, err := exec.Command("grep", "-rn", "--exclude-dir=gen", "-E", pattern, "../").CombinedOutput()
 	if err == nil {
 		t.Errorf("dto package still contains migrated structs:\n%s", out)
+		return
 	}
+	// fail-closed:exit 1 = 无命中(通过);exit 0 = 命中(违规,上方已报);
+	// 其余退出码(如 2,grep 出错/路径错)也必须暴露,禁止当通过。
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ee.ExitCode() == 1 {
+		return
+	}
+	t.Errorf("grep error: %v\n%s", err, out)
 	_ = dto.UploadDocumentRequest{} // 锚定 dto 包 import 存在;Task 19 手写 dto 包消亡时与 import 一并移除
 }
 
