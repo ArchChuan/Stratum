@@ -1,0 +1,86 @@
+{{- if .Values.nacos.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "stratum.fullname" . }}-nacos-mysql-data
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nacos-mysql
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.nacos.mysql.persistence.size | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "stratum.fullname" . }}-nacos-mysql
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nacos-mysql
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "stratum.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: nacos-mysql
+  template:
+    metadata:
+      labels:
+        {{- include "stratum.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: nacos-mysql
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: nacos-mysql
+          image: {{ include "stratum.image" .Values.nacos.mysql.image | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: mysql
+              containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: NACOS_MYSQL_PASSWORD
+            - name: MYSQL_DATABASE
+              value: nacos
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+          resources:
+            {{- toYaml .Values.nacos.mysql.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "stratum.fullname" . }}-nacos-mysql-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "stratum.fullname" . }}-nacos-mysql
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nacos-mysql
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "stratum.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: nacos-mysql
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+{{- end }}

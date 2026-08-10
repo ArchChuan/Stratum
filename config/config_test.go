@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadGitHubOAuthEndpointDefaults(t *testing.T) {
@@ -172,5 +173,32 @@ func TestLoadOpikAndTracePayloadConfig(t *testing.T) {
 	}
 	if !cfg.TracePayload.Enabled || !cfg.TracePayload.UseTLS || cfg.TracePayload.Bucket != "stratum-evidence-test" {
 		t.Fatalf("unexpected trace payload config: %#v", cfg.TracePayload)
+	}
+}
+
+func TestMemoryPipelineDynamicApplyAndLoad(t *testing.T) {
+	cfg := &Config{}
+	d := MemoryPipelineDynamic{PollInterval: 5 * time.Second, BatchSize: 100}
+	cfg.ApplyMemoryPipelineDynamic(d)
+	got := cfg.LoadMemoryPipelineDynamic()
+	if got != d {
+		t.Fatalf("LoadMemoryPipelineDynamic() = %+v, want %+v", got, d)
+	}
+}
+
+func TestMemoryPipelineDynamicListenerFires(t *testing.T) {
+	cfg := &Config{}
+	var got MemoryPipelineDynamic
+	cfg.OnMemoryPipelineDynamic(func(d MemoryPipelineDynamic) { got = d })
+	cfg.ApplyMemoryPipelineDynamic(MemoryPipelineDynamic{PollInterval: 7 * time.Second})
+	if got.PollInterval != 7*time.Second {
+		t.Fatalf("listener got %+v, want PollInterval=7s", got)
+	}
+}
+
+func TestMemoryPipelineDynamicZeroWhenUnset(t *testing.T) {
+	cfg := &Config{}
+	if got := cfg.LoadMemoryPipelineDynamic(); got != (MemoryPipelineDynamic{}) {
+		t.Fatalf("expected zero value, got %+v", got)
 	}
 }

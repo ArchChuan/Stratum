@@ -3,7 +3,9 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/pashagolub/pgxmock/v2"
@@ -144,4 +146,31 @@ func TestPollTenantPublishSuccessThenConfirmDelivered(t *testing.T) {
 	info, err := stream.Info(ctx)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), info.State.Msgs)
+}
+
+func TestOutboxPollerDynamicConfigOverridesStatic(t *testing.T) {
+	p := &OutboxPoller{interval: time.Second, batch: 10}
+	var dyn atomic.Pointer[DynamicConfig]
+	dyn.Store(&DynamicConfig{PollInterval: 2 * time.Second, BatchSize: 20})
+	p.WithDynamic(&dyn)
+
+	if got := p.currentInterval(); got != 2*time.Second {
+		t.Fatalf("currentInterval() = %v, want 2s", got)
+	}
+	if got := p.currentBatch(); got != 20 {
+		t.Fatalf("currentBatch() = %d, want 20", got)
+	}
+}
+
+func TestOutboxPollerDynamicConfigZeroValueFallsBackToStatic(t *testing.T) {
+	p := &OutboxPoller{interval: time.Second, batch: 10}
+	var dyn atomic.Pointer[DynamicConfig]
+	p.WithDynamic(&dyn) // 指针非 nil，但未 Store 过
+
+	if got := p.currentInterval(); got != time.Second {
+		t.Fatalf("currentInterval() = %v, want static 1s", got)
+	}
+	if got := p.currentBatch(); got != 10 {
+		t.Fatalf("currentBatch() = %d, want static 10", got)
+	}
 }

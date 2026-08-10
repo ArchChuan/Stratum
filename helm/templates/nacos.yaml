@@ -1,0 +1,120 @@
+{{- if .Values.nacos.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "stratum.fullname" . }}-nacos-data
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nacos
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.nacos.persistence.size | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "stratum.fullname" . }}-nacos
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nacos
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "stratum.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: nacos
+  template:
+    metadata:
+      labels:
+        {{- include "stratum.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: nacos
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: nacos
+          image: {{ include "stratum.image" .Values.nacos.image | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            - name: MODE
+              value: standalone
+            - name: MYSQL_SERVICE_HOST
+              value: {{ printf "%s-nacos-mysql" (include "stratum.fullname" .) | quote }}
+            - name: MYSQL_SERVICE_PORT
+              value: "3306"
+            - name: MYSQL_SERVICE_DB_NAME
+              value: nacos
+            - name: MYSQL_SERVICE_USER
+              value: root
+            - name: MYSQL_SERVICE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: NACOS_MYSQL_PASSWORD
+            # 认证开启（v2.5 默认开启，需显式 identity key）
+            - name: NACOS_AUTH_ENABLE
+              value: "true"
+            - name: NACOS_AUTH_IDENTITY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: NACOS_AUTH_IDENTITY_KEY
+            - name: NACOS_AUTH_IDENTITY_VALUE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: NACOS_AUTH_IDENTITY_VALUE
+            - name: NACOS_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: NACOS_AUTH_TOKEN
+          ports:
+            - name: http
+              containerPort: 8848
+            - name: grpc
+              containerPort: 9848
+          volumeMounts:
+            - name: data
+              mountPath: /home/nacos/data
+          resources:
+            {{- toYaml .Values.nacos.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "stratum.fullname" . }}-nacos-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "stratum.fullname" . }}-nacos
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nacos
+spec:
+  # NodePort 供 Nacos 控制台外网访问，8848 HTTP / 9848 gRPC（SDK 必需）
+  type: NodePort
+  selector:
+    {{- include "stratum.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: nacos
+  ports:
+    - name: http
+      port: 8848
+      targetPort: http
+      nodePort: 32088
+    - name: grpc
+      port: 9848
+      targetPort: grpc
+      nodePort: 32098
+{{- end }}

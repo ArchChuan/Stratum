@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"go.uber.org/zap"
 
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
@@ -43,6 +45,9 @@ type Pipeline struct {
 	vectorDB      VectorStore
 	llmResolver   LLMResolver
 	logger        *zap.Logger
+
+	// dynamic 是热更新调度参数源（Nacos 经 wiring 桥接），每轮由 poller re-read。
+	dynamic *atomic.Pointer[DynamicConfig]
 
 	poller    *OutboxPoller
 	embedders []*EmbedderWorker
@@ -84,6 +89,22 @@ func (p *Pipeline) SetLLMResolver(r LLMResolver) {
 	p.llmResolver = r
 }
 
+// WithDynamic 挂载热更新调度参数源（Nacos 经 wiring 桥接）。
+// 必须在 Start 之前调用。
+func (p *Pipeline) WithDynamic(d *atomic.Pointer[DynamicConfig]) *Pipeline {
+	p.dynamic = d
+	return p
+}
+
+// buildPoller 创建 outbox poller 并挂载热更新配置源（若有）。
+// 抽出为独立函数以保持 Start 复杂度在门禁内。
+func (p *Pipeline) buildPoller(js jetstream.JetStream) {
+	p.poller = NewOutboxPoller(p.pool, js, p.logger, p.cfg)
+	if p.dynamic != nil {
+		p.poller.WithDynamic(p.dynamic)
+	}
+}
+
 // Start initializes JetStream infrastructure, creates consumers, and launches
 // all worker goroutines. It returns immediately after setup; workers run in the
 // background until Stop is called or the parent context is cancelled.
@@ -106,7 +127,7 @@ func (p *Pipeline) Start(ctx context.Context) error {
 	js := jsm.JS()
 
 	// Outbox poller
-	p.poller = NewOutboxPoller(p.pool, js, p.logger, p.cfg)
+	p.buildPoller(js)
 
 	// 关键：worker 生命周期 ctx 必须独立于 ctx 参数。
 	// Harness.Run 把 startCtx 设成 30s 超时，Start 返回后会 cancel()，
