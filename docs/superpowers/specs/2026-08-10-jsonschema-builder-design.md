@@ -66,7 +66,7 @@ type Schema struct {
  Description          string             `json:"description,omitempty"`
  Properties           map[string]*Schema `json:"properties,omitempty"`
  Required             []string           `json:"required,omitempty"`
- AdditionalProperties bool               `json:"additionalProperties,omitempty"` // false 输出,true 省略(= 默认)
+ AdditionalProperties *bool              `json:"additionalProperties,omitempty"` // nil 省略(默认 true);Ptr(false) 输出 false
  Enum                 []any              `json:"enum,omitempty"`
  Const                any                `json:"const,omitempty"`
  Items                *Schema            `json:"items,omitempty"`
@@ -75,16 +75,16 @@ type Schema struct {
  UniqueItems          bool               `json:"uniqueItems,omitempty"`
  MinLength            int                `json:"minLength,omitempty"`
  MaxLength            int                `json:"maxLength,omitempty"`
- Minimum              *int               `json:"minimum,omitempty"` // 指针避免 0 歧义;现状全 integer
- Maximum              *int               `json:"maximum,omitempty"`
+ Minimum              *float64           `json:"minimum,omitempty"` // 指针区分省略与 0;支持 float(backoffFactor)
+ Maximum              *float64           `json:"maximum,omitempty"`
  OneOf                []*Schema          `json:"oneOf,omitempty"`
 }
 ```
 
 设计要点:
 
-- `AdditionalProperties bool`:`false` 输出,`true` 省略(JSON Schema 默认即为 true)——与现状 `additionalProperties:false` 用法一致,无需指针
-- `Minimum/Maximum *int`:避免 0 被 omitempty 吞掉;现状全部 integer 用法
+- `AdditionalProperties *bool`:nil 省略(JSON Schema 默认 true);`Ptr(false)` 输出 `false`——Go omitempty 对 bool 是 false 省略、true 输出,`bool` 无法输出 `false`,必须指针
+- `Minimum/Maximum *float64`:避免 0 被 omitempty 吞掉;`proposalRetrySchema` 的 `backoffFactor` min/max 是 float64(`minProposalMCPRetryBackoffFactor = 1.0`),`json.Marshal(float64(1))` 输出 `1` 与现状 integer 字面量字节一致
 - `Enum []any`:元素类型多样(string/integer)
 - `MinItems/MaxItems int` + omitempty:0 省略等价默认,语义无歧义
 
@@ -106,7 +106,7 @@ func OptionalProp(name string, s *Schema) Prop
 func String(desc string) *Schema
 func StringRange(minLen, maxLen int, desc string) *Schema
 func Integer(min, max *int, desc string) *Schema
-func Number(min, max *int, desc string) *Schema
+func Number(min, max *float64, desc string) *Schema
 func Boolean(desc string) *Schema
 func Array(items *Schema, minItems, maxItems int, unique bool, desc string) *Schema
 func Enum[T any](desc string, vals ...T) (*Schema, error) // 校验:非空
