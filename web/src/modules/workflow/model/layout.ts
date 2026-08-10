@@ -12,7 +12,7 @@ import type { WorkflowSpec } from './workflow';
 
 /** position 缺失或被填充 (0,0)（布局前坐标即原点）视为未定位。 */
 export const hasValidPosition = (position: XYPosition | undefined): position is XYPosition =>
-  Boolean(position) && (position.x !== 0 || position.y !== 0);
+  position !== undefined && (position.x !== 0 || position.y !== 0);
 
 /**
  * DAG 分层自动布局（参考 Dify 画布）：按边建邻接后 Kahn 拓扑分层，

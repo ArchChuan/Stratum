@@ -15,7 +15,7 @@ const agent = (id: string, extra: Partial<WorkflowNode> = {}): WorkflowNode => (
   id, name: id, type: 'agent', agent_id: 'a',
   input_mapping: {}, output_mapping: {}, retry: { max_attempts: 0, backoff_ms: 0 }, timeout_ms: 0,
   ...extra,
-});
+} as WorkflowNode);
 
 describe('computeAutoLayout', () => {
   it('layers a diamond DAG by longest path', () => {
@@ -23,8 +23,8 @@ describe('computeAutoLayout', () => {
     const spec: WorkflowSpec = {
       nodes: [agent('a'), agent('b'), agent('c'), agent('d')],
       edges: [
-        { id: 'e1', from: 'a', to: 'b' }, { id: 'e2', from: 'a', to: 'c' },
-        { id: 'e3', from: 'b', to: 'd' }, { id: 'e4', from: 'c', to: 'd' },
+        { id: 'e1', from: 'a', to: 'b', default: false }, { id: 'e2', from: 'a', to: 'c', default: false },
+        { id: 'e3', from: 'b', to: 'd', default: false }, { id: 'e4', from: 'c', to: 'd', default: false },
       ],
       max_concurrency: 0,
     };
@@ -39,8 +39,8 @@ describe('computeAutoLayout', () => {
     const spec: WorkflowSpec = {
       nodes: [agent('cond', { type: 'condition', condition: '1 == 1' }), agent('yes'), agent('no'), agent('def')],
       edges: [
-        { id: 'e1', from: 'cond', to: 'yes', condition_value: true },
-        { id: 'e2', from: 'cond', to: 'no', condition_value: false },
+        { id: 'e1', from: 'cond', to: 'yes', condition_value: true, default: false },
+        { id: 'e2', from: 'cond', to: 'no', condition_value: false, default: false },
         { id: 'e3', from: 'cond', to: 'def', default: true },
       ],
       max_concurrency: 0,
@@ -57,7 +57,7 @@ describe('computeAutoLayout', () => {
   it('centers nodes vertically within their layer', () => {
     const spec: WorkflowSpec = {
       nodes: [agent('a'), agent('b'), agent('c')],
-      edges: [{ id: 'e1', from: 'a', to: 'b' }, { id: 'e2', from: 'a', to: 'c' }],
+      edges: [{ id: 'e1', from: 'a', to: 'b', default: false }, { id: 'e2', from: 'a', to: 'c', default: false }],
       max_concurrency: 0,
     };
     const layout = computeAutoLayout(spec);
@@ -71,8 +71,8 @@ describe('computeAutoLayout', () => {
     const spec: WorkflowSpec = {
       nodes: [agent('a'), agent('b'), agent('c'), agent('d'), agent('e')],
       edges: [
-        { id: 'e1', from: 'a', to: 'c' }, { id: 'e2', from: 'b', to: 'c' },
-        { id: 'e3', from: 'c', to: 'd' }, { id: 'e4', from: 'd', to: 'e' },
+        { id: 'e1', from: 'a', to: 'c', default: false }, { id: 'e2', from: 'b', to: 'c', default: false },
+        { id: 'e3', from: 'c', to: 'd', default: false }, { id: 'e4', from: 'd', to: 'e', default: false },
       ],
       max_concurrency: 0,
     };
@@ -82,7 +82,7 @@ describe('computeAutoLayout', () => {
   it('falls back for cycles and disconnected nodes instead of hanging', () => {
     const spec: WorkflowSpec = {
       nodes: [agent('a'), agent('b'), agent('orphan')],
-      edges: [{ id: 'e1', from: 'a', to: 'b' }, { id: 'e2', from: 'b', to: 'a' }],
+      edges: [{ id: 'e1', from: 'a', to: 'b', default: false }, { id: 'e2', from: 'b', to: 'a', default: false }],
       max_concurrency: 0,
     };
     const layout = computeAutoLayout(spec);
@@ -99,7 +99,7 @@ describe('applyAutoLayout', () => {
     const positioned = { x: 500, y: -120 };
     const spec: WorkflowSpec = {
       nodes: [agent('a', { position: positioned }), agent('b')],
-      edges: [{ id: 'e1', from: 'a', to: 'b' }],
+      edges: [{ id: 'e1', from: 'a', to: 'b', default: false }],
       max_concurrency: 0,
     };
     const next = applyAutoLayout(spec);
@@ -111,7 +111,7 @@ describe('applyAutoLayout', () => {
   it('treats (0,0) as unpositioned and fills it', () => {
     const spec: WorkflowSpec = {
       nodes: [agent('a', { position: { x: 0, y: 0 } }), agent('b', { position: { x: 240, y: 60 } })],
-      edges: [{ id: 'e1', from: 'a', to: 'b' }],
+      edges: [{ id: 'e1', from: 'a', to: 'b', default: false }],
       max_concurrency: 0,
     };
     const next = applyAutoLayout(spec);
@@ -123,7 +123,7 @@ describe('applyAutoLayout', () => {
   it('is idempotent and does not mutate the input spec', () => {
     const spec: WorkflowSpec = {
       nodes: [agent('a'), agent('b')],
-      edges: [{ id: 'e1', from: 'a', to: 'b' }],
+      edges: [{ id: 'e1', from: 'a', to: 'b', default: false }],
       max_concurrency: 0,
     };
     const once = applyAutoLayout(spec);
