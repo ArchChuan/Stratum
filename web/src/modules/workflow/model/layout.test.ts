@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
+import { applyAutoLayout, computeAutoLayout, hasValidPosition } from './layout';
+import type { WorkflowNode, WorkflowSpec } from './workflow';
+
 import {
   WORKFLOW_LAYOUT_LAYER_GAP_X,
   WORKFLOW_LAYOUT_MARGIN,
@@ -7,9 +10,6 @@ import {
   WORKFLOW_NODE_HEIGHT,
   WORKFLOW_NODE_WIDTH,
 } from '@/constants';
-
-import { applyAutoLayout, computeAutoLayout, hasValidPosition } from './layout';
-import type { WorkflowNode, WorkflowSpec } from './workflow';
 
 const agent = (id: string, extra: Partial<WorkflowNode> = {}): WorkflowNode => ({
   id, name: id, type: 'agent', agent_id: 'a',

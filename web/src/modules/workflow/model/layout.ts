@@ -1,5 +1,7 @@
 import type { XYPosition } from '@xyflow/react';
 
+import type { WorkflowSpec } from './workflow';
+
 import {
   WORKFLOW_LAYOUT_LAYER_GAP_X,
   WORKFLOW_LAYOUT_MARGIN,
@@ -7,8 +9,6 @@ import {
   WORKFLOW_NODE_HEIGHT,
   WORKFLOW_NODE_WIDTH,
 } from '@/constants';
-
-import type { WorkflowSpec } from './workflow';
 
 /** position 缺失或被填充 (0,0)（布局前坐标即原点）视为未定位。 */
 export const hasValidPosition = (position: XYPosition | undefined): position is XYPosition =>
