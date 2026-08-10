@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	collabdomain "github.com/byteBuilderX/stratum/internal/collab/domain"
 	"github.com/byteBuilderX/stratum/internal/mcp/domain"
 	scheddomain "github.com/byteBuilderX/stratum/internal/scheduler/domain"
@@ -143,5 +144,27 @@ func ToScheduledTaskResponse(t scheddomain.ScheduledTask) ScheduledTaskResponse 
 		CreatedBy:        t.CreatedBy,
 		CreatedAt:        t.CreatedAt,
 		UpdatedAt:        t.UpdatedAt,
+	}
+}
+
+// ToOperationProposalResponse 与手写 dto.ToOperationProposalResponse 逐行一致(迁移保留)。
+func ToOperationProposalResponse(p agentdomain.OperationProposal) OperationProposalResponse {
+	return OperationProposalResponse{
+		ID:              p.ID,
+		AgentID:         p.AgentID,
+		TargetAgentID:   p.TargetAgentID,
+		OpType:          p.OpType,
+		Delegation:      p.Delegation,
+		MaxDailyCostUSD: p.MaxDailyCostUSD,
+		//nolint:gosec // MaxDailyExecutions 是配置上限(用户设置的每日执行配额),不可能溢出 int32(proto 契约)
+		MaxDailyExecutions: int32(p.MaxDailyExecutions), // domain int → gen int32
+		PayloadSummary:     p.PayloadSummary,
+		Status:             p.Status,
+		ProposerID:         p.ProposerID,
+		ReviewedBy:         p.ReviewedBy,
+		ReviewNote:         p.ReviewNote,
+		CreatedAt:          p.CreatedAt,
+		ResolvedAt:         p.ResolvedAt,
+		ExpiresAt:          p.ExpiresAt,
 	}
 }
