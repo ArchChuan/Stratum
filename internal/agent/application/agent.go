@@ -543,13 +543,18 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	// counts only LLM calls and triggers forced answer at
 	// s.Steps >= MaxLLMSteps-1. Double it and add one so the
 	// forced-answer mechanism engages before the graph loop
-	// exhausts the step budget. Keep 0 as-is so Invoke falls
-	// back to its internal default.
+	// exhausts the step budget. The plan tail reserves one wave for
+	// the slots and one for the finalize join per plan step. Keep 0
+	// as-is so Invoke falls back to its internal default.
 	graphSteps := ec.cfg.MaxSteps
 	if graphSteps > 0 {
-		graphSteps = graphSteps*2 + 1
+		graphSteps = graphSteps*2 + 1 + 2*constants.MaxPlanSteps
 	}
-	runCfg := agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: graphSteps}
+	runCfg := agentgraph.RunConfig[agentgraph.ReActState]{
+		MaxSteps:    graphSteps,
+		MaxParallel: initState.PlanLimits.MaxConcurrentNodes,
+		MergeWave:   agentgraph.MergeReActWave,
+	}
 	if a.CheckpointEnabled && a.CheckpointStore != nil {
 		runCfg.AfterStep = func(afterCtx context.Context, afterState agentgraph.ReActState) error {
 			return agentgraph.PersistReActCheckpoint(afterCtx, a.CheckpointStore, ec.cfg.TenantID, agentgraph.PlanCheckpointIdentity{
@@ -614,11 +619,7 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 		return fmt.Errorf("planning: CapGateway not set")
 	}
 	stuckThreshold := a.effectiveStuckThreshold()
-	var cpWriter agentgraph.PlanCheckpointWriter
-	if a.CheckpointStore != nil {
-		cpWriter = a.CheckpointStore
-	}
-	cg, buildErr := agentgraph.BuildPlanExecuteGraph(ec.capGW, a.Ledger, cpWriter, nil, a.Logger)
+	cg, buildErr := agentgraph.BuildReActGraph(ec.capGW, a.Ledger, a.Logger)
 	if buildErr != nil {
 		return fmt.Errorf("planning: build graph: %w", buildErr)
 	}
@@ -651,11 +652,16 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 	graphCtx, planSpan := ec.tracer.Start(execCtx, "planning.graph.invoke",
 		oteltrace.WithAttributes(attribute.Int("stuck_threshold", stuckThreshold)),
 	)
+	// 与 executeReAct 相同的波次预算：双倍 LLM 步 + 1 + plan 槽位/finalize 预留
 	planSteps := ec.cfg.MaxSteps
 	if planSteps > 0 {
-		planSteps = planSteps*2 + 1
+		planSteps = planSteps*2 + 1 + 2*constants.MaxPlanSteps
 	}
-	finalState, runErr := cg.Invoke(graphCtx, initState, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: planSteps})
+	finalState, runErr := cg.Invoke(graphCtx, initState, agentgraph.RunConfig[agentgraph.ReActState]{
+		MaxSteps:    planSteps,
+		MaxParallel: initState.PlanLimits.MaxConcurrentNodes,
+		MergeWave:   agentgraph.MergeReActWave,
+	})
 	planSpan.End()
 	if runErr != nil {
 		return fmt.Errorf("planning: %w", runErr)

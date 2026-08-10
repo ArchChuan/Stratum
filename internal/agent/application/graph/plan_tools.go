@@ -94,9 +94,24 @@ func ExecutePlanTool(ctx context.Context, state *ReActState, call port.ToolCall)
 	state.ActivePlan = next
 	state.PlanCheckpointIdentity = identity
 	if call.Name == "stratum_continue_plan" && state.PlanNodeExecutor != nil {
-		return ExecuteReadyPlanNodes(ctx, state, state.PlanNodeExecutor)
+		return scheduleContinue(state, call)
 	}
 	return planObservation(call.Name, next), nil
+}
+
+// scheduleContinue registers the ready wave for engine execution. With no
+// ready nodes it returns the plain observation. When a wave is scheduled the
+// tool node skips the direct observation — the finalize node appends it after
+// the wave joins — and PlanContinueCallID carries the call for that skip.
+func scheduleContinue(state *ReActState, call port.ToolCall) (string, error) {
+	content, err := schedulePlanWave(state)
+	if err != nil {
+		return content, err
+	}
+	if len(state.PlanWavePending) > 0 {
+		state.PlanContinueCallID = call.ID
+	}
+	return content, nil
 }
 
 func correction(toolName string, err error, plan *domain.Plan) string {

@@ -1,0 +1,432 @@
+package graph
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sync/atomic"
+	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	oteltrace "go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
+
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/tokenutil"
+)
+
+// BuildReActGraph constructs and compiles the ReAct agent graph.
+func BuildReActGraph(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap.Logger) (*CompiledGraph[ReActState], error) {
+	g := New[ReActState]()
+	g.AddNode(nodeLLM, makeLLMNode(capGW, ledger, logger))
+	g.AddNode(nodeTool, makeToolNode(capGW, logger))
+	g.AddConditionalEdge(nodeLLM, func(s ReActState) []string {
+		if len(s.Messages) == 0 {
+			return []string{END}
+		}
+		last := s.Messages[len(s.Messages)-1]
+		if last.Role == "assistant" && len(last.ToolCalls) > 0 {
+			return []string{nodeTool}
+		}
+		return []string{END}
+	})
+	// tool 的条件边优先于静态边：存在已排程 plan 波次时进入槽位，否则回到
+	// LLM 节点（多后继形式，行为不变）。
+	g.AddConditionalEdge(nodeTool, makeToolNext)
+	// plan 槽位预注册（plan-0..plan-MaxPlanSteps-1），波次经静态边汇合到
+	// finalize 节点，最终回到 LLM。
+	for i := 0; i < constants.MaxPlanSteps; i++ {
+		g.AddNode(fmt.Sprintf("plan-%d", i), makePlanSlotNode(i))
+		g.AddEdges(fmt.Sprintf("plan-%d", i), nodePlanFinalize)
+	}
+	g.AddNode(nodePlanFinalize, makePlanFinalizeNode())
+	g.AddEdges(nodePlanFinalize, nodeLLM)
+	g.SetEntryPoint(nodeLLM)
+	return g.Compile()
+}
+
+func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap.Logger) NodeFunc[ReActState] {
+	return func(ctx context.Context, s ReActState) (ReActState, error) {
+		start := time.Now()
+
+		tools, messages, _ := prepareLLMRequest(ctx, &s)
+		ctx, llmSpan := startLLMTrace(ctx, &s, messages, tools, start)
+		defer llmSpan.End()
+
+		// Always stream: tool-decision turns typically produce empty content so no tokens
+		// reach the client; final-answer turns stream the output to the frontend as required.
+		resp, err := routeLLM(ctx, s, messages, tools, capGW)
+		latencyMs := time.Since(start).Milliseconds()
+		if err != nil {
+			llmSpan.SetAttributes(attribute.String("opik.metadata.stratum.status", domain.ToolTraceStatusError))
+			llmSpan.RecordError(err)
+			llmSpan.SetStatus(codes.Error, "llm call failed")
+			logLLMError(logger, s, latencyMs, err)
+			return s, fmt.Errorf("react llm node: %w", err)
+		}
+		s.Steps++
+		total, cost := recordLLMUsage(ctx, &s, resp, ledger, llmSpan, latencyMs)
+		s.TotalTokens += total
+		s.TotalCostUSD += cost
+		logLLMSuccess(logger, s, latencyMs, len(resp.ToolCalls) > 0)
+		appendLLMResponse(&s, resp, cost, latencyMs, start)
+		return s, nil
+	}
+}
+
+// prepareLLMRequest 计算本步实际分发的 tools/messages：最终步骤剥离工具、
+// 活动技能指令注入、上下文预算裁剪与循环内压缩，并更新 LastEstimatedTokens
+// 作为用量反馈循环的基线。返回 (tools, messages, toolTokens)。
+func prepareLLMRequest(ctx context.Context, s *ReActState) ([]port.ToolDefinition, []port.LLMMessage, int) {
+	tools := effectiveTools(s.AvailableTools, s.SkillCatalog, s.Actives, s.AgentKnowledgeWorkspaceIDs, s.AgentMemoryScope, s.GovernedAssistant)
+	if s.PlanToolsDisabled {
+		tools = withoutPlanTools(tools)
+	}
+	messages := messagesWithActiveSkills(s.Messages, s.Actives)
+	protectedUsers := 1
+	if s.MaxLLMSteps > 0 && s.Steps >= s.MaxLLMSteps-1 {
+		tools = nil
+		protectedUsers = 2
+		messages = append(messages, port.LLMMessage{
+			Role:    "user",
+			Content: "You have reached the maximum reasoning steps. Based on your analysis and tool results so far, provide your final answer now. Do not call any tools.",
+		})
+	}
+	// In-loop compaction: bound the complete request, including any final-step
+	// instruction, without mutating s.Messages (trace/history stay complete).
+	// Tunable overrides resolve here: 0 means auto-derive from the window.
+	recentGroups, safetyRatio, correction := loopPolicy(*s)
+	tools = fitToolsToContextBudget(tools, messages, s.MaxContextTokens, protectedUsers, correction, safetyRatio)
+	toolTokens := 0
+	if encodedTools, err := json.Marshal(tools); err == nil {
+		toolTokens = tokenutil.EstimateText(string(encodedTools))
+	}
+	messages = compactLoopMessagesWithPolicy(ctx, messages, s.MaxContextTokens, toolTokens, recentGroups, protectedUsers, correction, safetyRatio, s.HistoryCompactor)
+	// Baseline for the usage-feedback loop: the estimate of what is actually
+	// dispatched this step (post-compaction messages + tools), so the ratio
+	// stays on a consistent basis across steps.
+	s.LastEstimatedTokens = tokenutil.EstimateMessages(toEstimate(messages)) + toolTokens
+	return tools, messages, toolTokens
+}
+
+// startLLMTrace 构建 LLM 请求的 span 与 TraceEventLLMRequest 事件；返回带 span
+// 上下文的 ctx（routeLLM 依赖其链路传播）。span 的 End 由调用方 defer。
+func startLLMTrace(ctx context.Context, s *ReActState, messages []port.LLMMessage, tools []port.ToolDefinition, start time.Time) (context.Context, oteltrace.Span) {
+	tracer := otel.Tracer("stratum/agent")
+	inputPayload := observability.SafeTracePayload(map[string]any{"messages": messages, "tools": tools}, constants.AgentToolTraceMaxRawJSONBytes)
+	llmAttributes := []attribute.KeyValue{
+		attribute.String("llm.model", s.Model),
+		attribute.String("gen_ai.request.model", s.Model),
+		attribute.Int("react.step", s.Steps+1),
+		attribute.Int("stratum.llm.step", s.Steps+1),
+		attribute.String("stratum.input.sha256", inputPayload.SHA256),
+		attribute.Bool("stratum.input.truncated", inputPayload.Truncated),
+		attribute.String("opik.metadata.stratum.tenant_id", s.TenantID),
+		attribute.String("opik.metadata.stratum.trace_id", s.TraceID),
+		attribute.String("opik.metadata.stratum.provider_type", domain.ProviderTypeLLM),
+		attribute.String("opik.metadata.stratum.provider_id", s.Model),
+		attribute.String("opik.metadata.stratum.status", domain.ToolTraceStatusSuccess),
+	}
+	llmAttributes = append(llmAttributes, tracePayloadAttributes(
+		ctx, s.TracePayloadStore, s.TenantID, s.TraceID, "llm-input",
+		map[string]any{"messages": messages, "tools": tools},
+	)...)
+	ctx, llmSpan := tracer.Start(ctx, "react.llm",
+		oteltrace.WithAttributes(llmAttributes...),
+	)
+	s.TraceEvents = append(s.TraceEvents, domain.AgentTraceEvent{
+		TraceID:         s.TraceID,
+		ConversationID:  s.ConversationID,
+		RunType:         domain.RunTypeAgent,
+		ObservationType: domain.ObservationTypeLLM,
+		EventType:       domain.TraceEventLLMRequest,
+		StepIndex:       s.Steps + 1,
+		SpanName:        "react.llm",
+		Status:          domain.ToolTraceStatusSuccess,
+		ProviderType:    domain.ProviderTypeLLM,
+		ProviderID:      s.Model,
+		NodeID:          nodeLLM,
+		NodeType:        domain.ObservationTypeLLM,
+		Input: map[string]any{
+			"model":    s.Model,
+			"messages": messages,
+			"tools":    tools,
+		},
+		Model:     s.Model,
+		StartedAt: start,
+		EndedAt:   start,
+	})
+	return ctx, llmSpan
+}
+
+// recordLLMUsage 记录本次 LLM 调用的模型解析、token 记账与 span 输出属性，
+// 返回 (total tokens, cost USD)，供调用方累加。
+func recordLLMUsage(ctx context.Context, s *ReActState, resp port.CapabilityResponse, ledger TokenRecorder, llmSpan oteltrace.Span, latencyMs int64) (int, float64) {
+	total, cost := recordModelResolution(ctx, s, resp, ledger)
+	s.TokenCorrection = updateTokenCorrection(s.TokenCorrection, s.LastEstimatedTokens, resp.Usage.Prompt)
+	llmSpan.SetAttributes(
+		attribute.Int("llm.prompt_tokens", resp.Usage.Prompt),
+		attribute.Int("llm.completion_tokens", resp.Usage.Completion),
+		attribute.Int("gen_ai.usage.input_tokens", resp.Usage.Prompt),
+		attribute.Int("gen_ai.usage.output_tokens", resp.Usage.Completion),
+		attribute.Float64("stratum.cost_usd", cost),
+		attribute.Bool("llm.has_tool_calls", len(resp.ToolCalls) > 0),
+		attribute.Int64("opik.metadata.stratum.latency_ms", latencyMs),
+		attribute.Int64("opik.metadata.stratum.total_tokens", int64(resp.Usage.Total)),
+		attribute.Float64("opik.metadata.stratum.cost_usd", cost),
+	)
+	outputPayload := observability.SafeTracePayload(map[string]any{"content": resp.Content, "tool_calls": resp.ToolCalls}, constants.AgentToolTraceMaxRawJSONBytes)
+	outputAttributes := []attribute.KeyValue{
+		attribute.String("stratum.output.sha256", outputPayload.SHA256),
+		attribute.Bool("stratum.output.truncated", outputPayload.Truncated),
+	}
+	outputAttributes = append(outputAttributes, tracePayloadAttributes(
+		ctx, s.TracePayloadStore, s.TenantID, s.TraceID, "llm-output",
+		map[string]any{"content": resp.Content, "tool_calls": resp.ToolCalls},
+	)...)
+	llmSpan.SetAttributes(outputAttributes...)
+	return total, cost
+}
+
+// logLLMError 记录 LLM 调用失败日志；上下文取消按可预期事件记 Info。
+func logLLMError(logger *zap.Logger, s ReActState, latencyMs int64, err error) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		logger.Info("react.llm",
+			zap.String("trace_id", s.TraceID),
+			zap.String("tenant_id", s.TenantID),
+			zap.String("conversation_id", s.ConversationID),
+			zap.String("model", s.Model),
+			zap.Int("step", s.Steps+1),
+			zap.Int64("latency_ms", latencyMs),
+			zap.String("error", "context canceled"),
+		)
+		return
+	}
+	logger.Error("react.llm",
+		zap.String("trace_id", s.TraceID),
+		zap.String("tenant_id", s.TenantID),
+		zap.String("conversation_id", s.ConversationID),
+		zap.String("model", s.Model),
+		zap.Int("step", s.Steps+1),
+		zap.Int64("latency_ms", latencyMs),
+		zap.Error(err),
+	)
+}
+
+// logLLMSuccess 记录 LLM 调用成功的用量与延迟日志。
+func logLLMSuccess(logger *zap.Logger, s ReActState, latencyMs int64, hasToolCalls bool) {
+	logger.Info("react.llm",
+		zap.String("trace_id", s.TraceID),
+		zap.String("tenant_id", s.TenantID),
+		zap.String("conversation_id", s.ConversationID),
+		zap.String("model", s.Model),
+		zap.Int("step", s.Steps),
+		zap.Int("total_tokens", s.TotalTokens),
+		zap.Float64("cost_usd", s.TotalCostUSD),
+		zap.Int64("latency_ms", latencyMs),
+		zap.Bool("has_tool_calls", hasToolCalls),
+	)
+}
+
+// appendLLMResponse 将 LLM 响应追加到消息历史并记录 LLMResponse trace 事件。
+func appendLLMResponse(s *ReActState, resp port.CapabilityResponse, cost float64, latencyMs int64, start time.Time) {
+	if len(resp.ToolCalls) == 0 {
+		s.Output = resp.Content
+		s.Messages = append(s.Messages, port.LLMMessage{
+			Role:    "assistant",
+			Content: resp.Content,
+		})
+		s.TraceEvents = append(s.TraceEvents, domain.AgentTraceEvent{
+			TraceID:          s.TraceID,
+			ConversationID:   s.ConversationID,
+			RunType:          domain.RunTypeAgent,
+			ObservationType:  domain.ObservationTypeLLM,
+			EventType:        domain.TraceEventLLMResponse,
+			StepIndex:        s.Steps,
+			SpanName:         "react.llm",
+			Status:           domain.ToolTraceStatusSuccess,
+			Output:           map[string]any{"content": resp.Content},
+			Summary:          truncateRunes(resp.Content, 500),
+			Model:            s.Model,
+			ProviderType:     domain.ProviderTypeLLM,
+			ProviderID:       s.Model,
+			NodeID:           nodeLLM,
+			NodeType:         domain.ObservationTypeLLM,
+			PromptTokens:     resp.Usage.Prompt,
+			CompletionTokens: resp.Usage.Completion,
+			TotalTokens:      resp.Usage.Total,
+			CostUSD:          cost,
+			LatencyMs:        latencyMs,
+			StartedAt:        start,
+			EndedAt:          start.Add(time.Duration(latencyMs) * time.Millisecond),
+		})
+		return
+	}
+	s.Messages = append(s.Messages, port.LLMMessage{
+		Role:      "assistant",
+		ToolCalls: resp.ToolCalls,
+	})
+	s.TraceEvents = append(s.TraceEvents, domain.AgentTraceEvent{
+		TraceID:          s.TraceID,
+		ConversationID:   s.ConversationID,
+		RunType:          domain.RunTypeAgent,
+		ObservationType:  domain.ObservationTypeLLM,
+		EventType:        domain.TraceEventLLMResponse,
+		StepIndex:        s.Steps,
+		SpanName:         "react.llm",
+		Status:           domain.ToolTraceStatusSuccess,
+		Output:           map[string]any{"tool_calls": resp.ToolCalls},
+		Summary:          fmt.Sprintf("model requested %d tool call(s)", len(resp.ToolCalls)),
+		Model:            s.Model,
+		ProviderType:     domain.ProviderTypeLLM,
+		ProviderID:       s.Model,
+		NodeID:           nodeLLM,
+		NodeType:         domain.ObservationTypeLLM,
+		PromptTokens:     resp.Usage.Prompt,
+		CompletionTokens: resp.Usage.Completion,
+		TotalTokens:      resp.Usage.Total,
+		CostUSD:          cost,
+		LatencyMs:        latencyMs,
+		StartedAt:        start,
+		EndedAt:          start.Add(time.Duration(latencyMs) * time.Millisecond),
+	})
+}
+
+// recordModelResolution 回写模型解析结果（fallback 降级后与配置模型不同）
+// 并按实际解析模型记账（价格不同），返回累计 token 与成本。
+func recordModelResolution(ctx context.Context, s *ReActState, resp port.CapabilityResponse, ledger TokenRecorder) (int, float64) {
+	s.ModelResolved = resp.ModelResolved
+	s.ModelRoutedVia = resp.ModelRoutedVia
+	ledgerModel := s.Model
+	if resp.ModelResolved != "" {
+		ledgerModel = resp.ModelResolved
+	}
+	return ledger.Record(ctx, ledgerModel, resp.Usage)
+}
+
+// loopPolicy resolves the in-loop compaction tunables from the run state:
+// 0 means auto-derive (recent groups from the window size, safety ratio from
+// the constant default), and a zero correction is treated as 1 (no correction).
+func loopPolicy(s ReActState) (recentGroups int, safetyRatio, correction float64) {
+	recentGroups = s.CompactionRecentGroups
+	if recentGroups == 0 {
+		recentGroups = constants.DynamicRecentGroups(s.MaxContextTokens)
+	}
+	safetyRatio = float64(s.CompactionSafetyRatio)
+	if safetyRatio == 0 {
+		safetyRatio = constants.LoopCompactionSafetyRatio
+	}
+	correction = s.TokenCorrection
+	if correction <= 0 {
+		correction = 1
+	}
+	return recentGroups, safetyRatio, correction
+}
+
+// updateTokenCorrection folds the previous step's estimated-vs-actual prompt
+// token ratio into the EMA correction factor, clamped to [TokenCorrectionMin,
+// TokenCorrectionMax]. Without a baseline (first step) or a reported prompt
+// count the correction is left unchanged. Under-estimation (ratio > 1) raises
+// the correction, lowering the next compaction threshold so compaction starts
+// earlier.
+func updateTokenCorrection(correction float64, estimatedTokens, actualPrompt int) float64 {
+	if correction <= 0 {
+		// 零值 state（绕过 buildReActInitState 的调用方）按 1.0 处理，
+		// 与 compactLoopMessagesWithPolicy 的 correction≤0→1 同语义，
+		// 否则 0.9×0 会把 EMA 塌到 clamp 下限，低估反而变成更晚压缩。
+		correction = 1
+	}
+	if estimatedTokens <= 0 || actualPrompt <= 0 {
+		return correction
+	}
+	ratio := float64(actualPrompt) / float64(estimatedTokens)
+	smoothed := constants.TokenCorrectionAlpha*ratio + (1-constants.TokenCorrectionAlpha)*correction
+	return min(max(smoothed, constants.TokenCorrectionMin), constants.TokenCorrectionMax)
+}
+
+// routeLLM streams one LLM call with retry. Extracted from makeLLMNode so the
+// request construction and retry closure stay within the code-quality line and
+// complexity budgets of the node function.
+func routeLLM(ctx context.Context, s ReActState, messages []port.LLMMessage, tools []port.ToolDefinition, capGW port.CapabilityGateway) (port.CapabilityResponse, error) {
+	// 流式 token 一旦推给前端，本次 attempt 再失败（截断/断连）就不能重试：
+	// RetryFn 重试会再次全量推流 → 前端重复/错乱内容。emitted 标志把这类失败
+	// 标记为 permanent，只允许「首 token 尚未输出」的失败重试。llmgateway 层
+	// 对 outputStarted 已有同样的 fail-fast 语义，此处是图级独立防线。
+	var emitted atomic.Bool
+	stream := s.OnToken
+	if stream != nil {
+		stream = func(tok string) {
+			emitted.Store(true)
+			s.OnToken(tok)
+		}
+	}
+	return RetryFn(ctx, DefaultRetry, func() (port.CapabilityResponse, error) {
+		resp, err := capGW.Route(ctx, port.CapabilityRequest{
+			TraceID:     s.TraceID,
+			TenantID:    s.TenantID,
+			Type:        port.CapLLM,
+			TokenStream: stream,
+			LLM: &port.LLMCapRequest{
+				Model:       s.Model,
+				Messages:    messages,
+				Tools:       tools,
+				Temperature: s.Temperature,
+				MaxTokens:   s.MaxTokens,
+			},
+		})
+		if err != nil && emitted.Load() {
+			// 已输出 token 的失败永不重试（含截断），原错误透传。
+			return resp, markStreamReplayPermanent(err)
+		}
+		return resp, err
+	})
+}
+
+func fitToolsToContextBudget(tools []port.ToolDefinition, messages []port.LLMMessage, budget, protectedUsers int, correction, safetyRatio float64) []port.ToolDefinition {
+	if budget <= 0 || len(tools) == 0 {
+		return tools
+	}
+	threshold := compactionThreshold(budget, 0, correction, safetyRatio)
+	groups := groupMessages(messages)
+	protectedMessages := flatten(groups[:anchorCount(groups)])
+	protectedMessages = append(protectedMessages, protectedUserMessages(groups, protectedUsers)...)
+	toolAllowance := max(threshold-tokenutil.EstimateMessages(toEstimate(protectedMessages)), 0)
+	return fitToolList(tools, toolAllowance)
+}
+
+// protectedUserMessages collects the most recent protected user turns (the
+// active task and, when configured, earlier task history) so tools never crowd
+// out the messages that must survive compaction.
+func protectedUserMessages(groups []msgGroup, protectedUsers int) []port.LLMMessage {
+	var out []port.LLMMessage
+	usersKept := 0
+	for i := len(groups) - 1; i >= 0 && usersKept < protectedUsers; i-- {
+		if groups[i].role0 == "user" {
+			out = append(out, groups[i].msgs...)
+			usersKept++
+		}
+	}
+	return out
+}
+
+// fitToolList greedily packs tool schemas while the encoded definition list
+// stays within the token allowance, preserving declaration order.
+func fitToolList(tools []port.ToolDefinition, allowance int) []port.ToolDefinition {
+	fitted := make([]port.ToolDefinition, 0, len(tools))
+	for _, tool := range tools {
+		candidate := make([]port.ToolDefinition, len(fitted), len(fitted)+1)
+		copy(candidate, fitted)
+		candidate = append(candidate, tool)
+		encoded, err := json.Marshal(candidate)
+		if err == nil && tokenutil.EstimateText(string(encoded)) <= allowance {
+			fitted = candidate
+		}
+	}
+	return fitted
+}
