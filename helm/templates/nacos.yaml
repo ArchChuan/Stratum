@@ -56,10 +56,11 @@ spec:
             - name: MYSQL_SERVICE_DB_NAME
               value: nacos
             # MySQL 8 默认 caching_sha2_password 认证，非 SSL 连接需显式
-            # allowPublicKeyRetrieval=true 获取服务器公钥，否则连接失败
-            # （Nacos 自拼 URL 不带该参数，必须显式提供完整 JDBC URL）
-            - name: MYSQL_SERVICE_URL
-              value: jdbc:mysql://{{ printf "%s-nacos-mysql" (include "stratum.fullname" .) }}:3306/nacos?characterEncoding=utf8&serverTimezone=UTC&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
+            # allowPublicKeyRetrieval=true 获取服务器公钥，否则连接失败。
+            # 镜像 application.properties 的 db.url.0 用 ${MYSQL_SERVICE_DB_PARAM:...}
+            # 拼接参数（MYSQL_SERVICE_URL 在 2.5.x 已无占位符），此处完整覆盖默认串。
+            - name: MYSQL_SERVICE_DB_PARAM
+              value: characterEncoding=utf8&connectTimeout=1000&socketTimeout=3000&autoReconnect=true&useSSL=false&allowPublicKeyRetrieval=true
             - name: MYSQL_SERVICE_USER
               value: root
             - name: MYSQL_SERVICE_PASSWORD
