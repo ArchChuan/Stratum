@@ -234,3 +234,33 @@ func TestBufferScannerStartStopsOnStop(t *testing.T) {
 		t.Fatal("Start must return after Stop")
 	}
 }
+
+// blockingScanStore 模拟外部依赖挂起：Scan 阻塞到 ctx 取消（对应 DNS 解析
+// 卡死/Redis 不可达的真实场景），用于验证 scan 有操作超时预算。
+type blockingScanStore struct {
+	*fakeMessageBufferStore
+	blockOnScan bool
+}
+
+func (s *blockingScanStore) Scan(ctx context.Context, _ uint64, _ string, _ int64) ([]string, uint64, error) {
+	if s.blockOnScan {
+		<-ctx.Done()
+		return nil, 0, ctx.Err()
+	}
+	return nil, 0, nil
+}
+
+func TestBufferScannerScanHasOperationBudget(t *testing.T) {
+	store := &blockingScanStore{fakeMessageBufferStore: newFakeMessageBufferStore(), blockOnScan: true}
+	scanner := NewBufferScanner(store, new(MockExtractionQueue), testLogger())
+
+	start := time.Now()
+	scanner.scan(context.Background())
+	elapsed := time.Since(start)
+
+	// scan 必须在预算内返回：挂起的 store 调用不得无限阻塞扫描循环，
+	// 否则 ticker 节拍被拖死（日志 "scan_failed: dial tcp: lookup ... i/o timeout"）。
+	if elapsed >= constants.MemoryBufferScanTimeout+5*time.Second {
+		t.Fatalf("scan exceeded operation budget: %v >= %v", elapsed, constants.MemoryBufferScanTimeout)
+	}
+}
