@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/api/http/dto"
-	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 )
 
 // parityPairs 登记 (gen struct, 手写 struct) 类型对偶。
@@ -18,37 +17,36 @@ var parityPairs = []struct {
 	name string
 	gen  reflect.Type
 	hw   reflect.Type
-}{
-	{name: "EvaluationResourceRef", gen: reflect.TypeOf(gen.EvaluationResourceRef{}), hw: reflect.TypeOf(dto.EvaluationResourceRef{})},
-	{name: "EvaluationCaseRequest", gen: reflect.TypeOf(gen.EvaluationCaseRequest{}), hw: reflect.TypeOf(dto.EvaluationCaseRequest{})},
-	{name: "CreateEvaluationSuiteRequest", gen: reflect.TypeOf(gen.CreateEvaluationSuiteRequest{}), hw: reflect.TypeOf(dto.CreateEvaluationSuiteRequest{})},
-	{name: "EnqueueEvaluationRunRequest", gen: reflect.TypeOf(gen.EnqueueEvaluationRunRequest{}), hw: reflect.TypeOf(dto.EnqueueEvaluationRunRequest{})},
-	{name: "EvaluationJobResponse", gen: reflect.TypeOf(gen.EvaluationJobResponse{}), hw: reflect.TypeOf(dto.EvaluationJobResponse{})},
-	{name: "GenerateOptimizationRequest", gen: reflect.TypeOf(gen.GenerateOptimizationRequest{}), hw: reflect.TypeOf(dto.GenerateOptimizationRequest{})},
-	{name: "CreateEvaluationExperimentRequest", gen: reflect.TypeOf(gen.CreateEvaluationExperimentRequest{}), hw: reflect.TypeOf(dto.CreateEvaluationExperimentRequest{})},
-	{name: "EvaluationCommandRequest", gen: reflect.TypeOf(gen.EvaluationCommandRequest{}), hw: reflect.TypeOf(dto.EvaluationCommandRequest{})},
-	{name: "RecordEvaluationFeedbackRequest", gen: reflect.TypeOf(gen.RecordEvaluationFeedbackRequest{}), hw: reflect.TypeOf(dto.RecordEvaluationFeedbackRequest{})},
-}
+}{}
 
 // removedStructs 登记"已从 dto 包删除"的 struct 名。
 var removedStructs = map[string]bool{
-	"CreateCollabRequest":             true,
-	"CollabResponse":                  true,
-	"TaskStepResponse":                true,
-	"CreateAgentRequest":              true,
-	"AgentResponse":                   true,
-	"ExecuteAgentRequest":             true,
-	"ExecuteAgentResponse":            true,
-	"AgentStep":                       true,
-	"MCPServerConfigRequest":          true,
-	"MCPAuthConfigResponse":           true,
-	"MCPServerConfigResponse":         true,
-	"CreateWorkflowRequest":           true,
-	"UpdateWorkflowRequest":           true,
-	"StartWorkflowRunRequest":         true,
-	"WorkflowControlRequest":          true,
-	"WorkflowApprovalDecisionRequest": true,
-	"WorkflowManualResolveRequest":    true,
+	"CreateCollabRequest":               true,
+	"CollabResponse":                    true,
+	"TaskStepResponse":                  true,
+	"CreateAgentRequest":                true,
+	"AgentResponse":                     true,
+	"ExecuteAgentRequest":               true,
+	"ExecuteAgentResponse":              true,
+	"AgentStep":                         true,
+	"MCPServerConfigRequest":            true,
+	"MCPAuthConfigResponse":             true,
+	"MCPServerConfigResponse":           true,
+	"CreateWorkflowRequest":             true,
+	"UpdateWorkflowRequest":             true,
+	"StartWorkflowRunRequest":           true,
+	"WorkflowControlRequest":            true,
+	"WorkflowApprovalDecisionRequest":   true,
+	"WorkflowManualResolveRequest":      true,
+	"EvaluationResourceRef":             true,
+	"EvaluationCaseRequest":             true,
+	"CreateEvaluationSuiteRequest":      true,
+	"EnqueueEvaluationRunRequest":       true,
+	"EvaluationJobResponse":             true,
+	"GenerateOptimizationRequest":       true,
+	"CreateEvaluationExperimentRequest": true,
+	"EvaluationCommandRequest":          true,
+	"RecordEvaluationFeedbackRequest":   true,
 }
 
 func TestParityHandwrittenVsGenerated(t *testing.T) {
