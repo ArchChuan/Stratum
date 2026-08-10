@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -123,6 +124,13 @@ type RetryPolicy struct {
 	BackoffMS   int `json:"backoff_ms,omitempty"`
 }
 
+// NodePosition 是节点在画布上的坐标（前端 React Flow 坐标系）。
+// 指针 + omitempty：历史 spec 无此字段，响应省略，校验/回写不受影响。
+type NodePosition struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
 type Node struct {
 	ID              string            `json:"id"`
 	Name            string            `json:"name,omitempty"`
@@ -138,6 +146,7 @@ type Node struct {
 	OutputMapping   map[string]string `json:"output_mapping,omitempty"`
 	Retry           RetryPolicy       `json:"retry,omitempty"`
 	TimeoutMS       int               `json:"timeout_ms,omitempty"`
+	Position        *NodePosition     `json:"position,omitempty"`
 }
 
 type Edge struct {
@@ -465,6 +474,9 @@ func reachable(adj map[string][]string, from, to string) bool {
 	return false
 }
 
+// maxNodePositionAbs 是节点坐标的绝对值上限，防止极端值进入渲染端。
+const maxNodePositionAbs = 1e6
+
 func validateNode(node Node) error {
 	if err := validateNodeType(node); err != nil {
 		return err
@@ -472,7 +484,22 @@ func validateNode(node Node) error {
 	if err := validateExecutionPolicy(node); err != nil {
 		return err
 	}
+	if err := validateNodePosition(node.Position); err != nil {
+		return err
+	}
 	return validateOutputMappings(node.OutputMapping)
+}
+
+func validateNodePosition(position *NodePosition) error {
+	if position == nil {
+		return nil
+	}
+	if math.IsNaN(position.X) || math.IsInf(position.X, 0) ||
+		math.IsNaN(position.Y) || math.IsInf(position.Y, 0) ||
+		math.Abs(position.X) > maxNodePositionAbs || math.Abs(position.Y) > maxNodePositionAbs {
+		return fmt.Errorf("%w: node position must be finite and within ±%g", ErrInvalidSpec, maxNodePositionAbs)
+	}
+	return nil
 }
 
 func validateNodeType(node Node) error {
@@ -591,6 +618,10 @@ func cloneSpec(spec Spec) Spec {
 			for key, value := range spec.Nodes[i].OutputMapping {
 				nodes[i].OutputMapping[key] = value
 			}
+		}
+		if nodes[i].Position != nil {
+			pos := *nodes[i].Position
+			nodes[i].Position = &pos
 		}
 	}
 	return Spec{Nodes: nodes, Edges: append([]Edge(nil), spec.Edges...), MaxConcurrency: spec.MaxConcurrency}

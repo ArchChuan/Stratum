@@ -12,6 +12,12 @@ const presentations: Record<WorkflowNodeType, { label: string; icon: React.React
   approval: { label: '人工审批', icon: <SafetyCertificateOutlined /> },
 };
 
+const branchLabels: Array<{ id: string; label: string }> = [
+  { id: 'yes', label: '是' },
+  { id: 'no', label: '否' },
+  { id: 'default', label: '默认' },
+];
+
 export const WorkflowNodeCard = ({ data, selected }: NodeProps<WorkflowFlowNode>) => {
   const presentation = presentations[data.node.type];
   return <article
@@ -21,6 +27,13 @@ export const WorkflowNodeCard = ({ data, selected }: NodeProps<WorkflowFlowNode>
     <Handle type="target" position={Position.Left} />
     <span className={`workflow-node-icon type-${data.node.type}`}>{presentation.icon}</span>
     <span><strong>{data.node.name || presentation.label}</strong><small>{data.statusLabel || presentation.label}</small></span>
-    <Handle type="source" position={Position.Right} />
+    {data.node.type === 'condition'
+      ? <span className="workflow-node-branches">
+          {branchLabels.map((branch) => <span className="workflow-node-branch" key={branch.id}>
+            <span className="workflow-branch-label">{branch.label}</span>
+            <Handle type="source" position={Position.Right} id={branch.id} className="workflow-handle-branch" />
+          </span>)}
+        </span>
+      : <Handle type="source" position={Position.Right} />}
   </article>;
 };

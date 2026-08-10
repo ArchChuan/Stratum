@@ -1,8 +1,10 @@
 package domain_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"testing"
 
@@ -474,4 +476,64 @@ func TestApprovalRejectsUnknownDecision(t *testing.T) {
 	approval := domain.NewApproval("approval", "run", "node", "attempt", 1, "risk", "high", "safe")
 	require.ErrorIs(t, approval.Decide("approve ", "admin", "", 1, "attempt"), domain.ErrInvalidTransition)
 	require.Equal(t, domain.ApprovalStatusPending, approval.Status)
+}
+
+func TestNodePositionRoundTripsThroughJSON(t *testing.T) {
+	// 与 pgx 写 JSONB 相同路径：Marshal → string → Unmarshal。
+	spec := domain.Spec{Nodes: []domain.Node{{
+		ID: "agent-1", Type: domain.NodeTypeAgent, AgentID: "a",
+		Position: &domain.NodePosition{X: 120.5, Y: -40},
+	}}}
+	encoded, err := json.Marshal(spec)
+	require.NoError(t, err)
+	var decoded domain.Spec
+	require.NoError(t, json.Unmarshal([]byte(string(encoded)), &decoded))
+	require.NotNil(t, decoded.Nodes[0].Position)
+	require.Equal(t, 120.5, decoded.Nodes[0].Position.X)
+	require.Equal(t, -40.0, decoded.Nodes[0].Position.Y)
+	require.NoError(t, domain.ValidateSpec(decoded))
+}
+
+func TestNodePositionIsOptionalForLegacySpecs(t *testing.T) {
+	// 历史 spec 无 position 字段：可解析、nil、JSON 不输出、校验通过。
+	legacy := `{"nodes":[{"id":"agent-1","type":"agent","agent_id":"a"}],"edges":[]}`
+	var decoded domain.Spec
+	require.NoError(t, json.Unmarshal([]byte(legacy), &decoded))
+	require.Nil(t, decoded.Nodes[0].Position)
+	require.NoError(t, domain.ValidateSpec(decoded))
+	encoded, err := json.Marshal(decoded)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), "position")
+}
+
+func TestCloneSpecDeepCopiesPosition(t *testing.T) {
+	def, err := domain.NewDefinition("wf-1", "Research", "desc", domain.Spec{Nodes: []domain.Node{{
+		ID: "agent-1", Type: domain.NodeTypeAgent, AgentID: "a", Position: &domain.NodePosition{X: 10, Y: 20},
+	}}}, domain.InputSchema{TaskLabel: "任务"})
+	require.NoError(t, err)
+	version, err := def.Publish("version-1", 1)
+	require.NoError(t, err)
+
+	def.Spec.Nodes[0].Position.X = 999
+	require.Equal(t, 10.0, version.Spec.Nodes[0].Position.X)
+}
+
+func TestValidateNodeRejectsNonFiniteOrHugePosition(t *testing.T) {
+	// NaN/Inf 无法经 JSON 到达（encoding/json 直接报错），直接构造验证领域不变量。
+	tests := []struct {
+		name     string
+		position domain.NodePosition
+	}{
+		{name: "NaN x", position: domain.NodePosition{X: math.NaN(), Y: 0}},
+		{name: "Inf y", position: domain.NodePosition{X: 0, Y: math.Inf(1)}},
+		{name: "beyond limit", position: domain.NodePosition{X: 1e7, Y: 0}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := domain.Spec{Nodes: []domain.Node{{
+				ID: "agent-1", Type: domain.NodeTypeAgent, AgentID: "a", Position: &tc.position,
+			}}}
+			require.ErrorIs(t, domain.ValidateSpec(spec), domain.ErrInvalidSpec)
+		})
+	}
 }

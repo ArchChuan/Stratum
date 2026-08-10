@@ -1,11 +1,30 @@
 import { Form, Input, Select, Typography } from 'antd';
 
+import { parseMappingText } from '../model/editor';
 import type { WorkflowNode } from '../model/workflow';
 
 import { WorkflowAdvancedSettings } from './WorkflowAdvancedSettings';
 
 const { Text } = Typography;
 type Option = { value: string; label: string };
+
+/** 映射字段是 schema 外展平文本：解析成功写回结构化 mapping 并删脏字段，失败保留上次合法值。 */
+const applyMappingField = <K extends 'input_mapping' | 'output_mapping'>(
+  node: WorkflowNode & Record<string, unknown>,
+  values: Record<string, unknown>,
+  key: K,
+  textField: 'input_mapping_text' | 'output_mapping_text',
+): WorkflowNode => {
+  const text = values[textField];
+  if (typeof text !== 'string') return node;
+  // 在传入 node 上删脏字段：node 是 { ...node, ...values } 的合并结果，
+  // 若用原始 values 重建会让前一个字段的脏键复活。
+  const next = { ...node };
+  delete next[textField];
+  const mapping = parseMappingText(text, node[key]);
+  if (mapping) next[key] = mapping;
+  return next as WorkflowNode;
+};
 
 export const WorkflowNodeInspector = ({
   node,
@@ -33,7 +52,12 @@ export const WorkflowNodeInspector = ({
       key={node.id}
       layout="vertical"
       initialValues={initialValues}
-      onValuesChange={(_, values) => onChange({ ...node, ...values } as WorkflowNode)}
+      onValuesChange={(_, values) => {
+        let next = { ...node, ...values } as WorkflowNode & Record<string, unknown>;
+        next = applyMappingField(next, values, 'input_mapping', 'input_mapping_text');
+        next = applyMappingField(next, values, 'output_mapping', 'output_mapping_text');
+        onChange(next);
+      }}
     >
       <Form.Item label="节点名称" name="name"><Input aria-label="节点名称" placeholder="给这个步骤命名" /></Form.Item>
       {(node.type === 'agent' || node.type === 'skill') && <Form.Item label="执行 Agent" name="agent_id"><Select options={agents} /></Form.Item>}

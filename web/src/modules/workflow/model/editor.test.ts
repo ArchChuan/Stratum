@@ -53,14 +53,10 @@ describe('workflow editor reducer', () => {
 
   it('resets from the server without marking the editor dirty', () => {
     const dirty = workflowEditorReducer(createInitialEditorState(), insertAgent);
-    const reset = workflowEditorReducer(dirty, {
-      type: 'server.reset',
-      spec: dirty.spec,
-      positions: { 'node-agent': { x: 20, y: 40 } },
-    });
+    const reset = workflowEditorReducer(dirty, { type: 'server.reset', spec: dirty.spec });
     expect(reset.dirty).toBe(false);
     expect(reset.selected).toBeNull();
-    expect(reset.positions['node-agent']).toEqual({ x: 20, y: 40 });
+    expect(reset.spec.nodes[0].position).toEqual({ x: 80, y: 120 });
   });
 
   it('converts domain graph state to deterministic React Flow elements', () => {
@@ -76,8 +72,52 @@ describe('workflow editor reducer', () => {
       expect.objectContaining({ id: 'node-agent', type: 'workflowNode', position: { x: 80, y: 120 } }),
       expect.objectContaining({ id: 'node-approval', type: 'workflowNode', position: { x: 360, y: 120 } }),
     ]);
+    // 非 condition 源边不派生 sourceHandle（handle 无 id，派生会导致整条边不渲染）
     expect(toFlowEdges(state)).toEqual([
-      expect.objectContaining({ id: 'edge-1', source: 'node-agent', target: 'node-approval', label: '默认' }),
+      expect.objectContaining({ id: 'edge-1', source: 'node-agent', target: 'node-approval', label: '默认', sourceHandle: undefined }),
     ]);
+  });
+
+  it('derives branch handles only from condition source edges', () => {
+    let state = workflowEditorReducer(createInitialEditorState(), insertAgent);
+    state = workflowEditorReducer(state, {
+      type: 'node.insert', nodeId: 'node-condition', nodeType: 'condition', position: { x: 360, y: 120 },
+    });
+    state = workflowEditorReducer(state, {
+      type: 'node.insert', nodeId: 'node-approval', nodeType: 'approval', position: { x: 640, y: 120 },
+    });
+    state = workflowEditorReducer(state, {
+      type: 'edge.connect', edgeId: 'edge-yes', from: 'node-condition', to: 'node-agent', conditionValue: true,
+    });
+    state = workflowEditorReducer(state, {
+      type: 'edge.connect', edgeId: 'edge-no', from: 'node-condition', to: 'node-approval', conditionValue: false,
+    });
+    state = workflowEditorReducer(state, {
+      type: 'edge.connect', edgeId: 'edge-default', from: 'node-condition', to: 'node-agent', isDefault: true,
+    });
+    state = workflowEditorReducer(state, {
+      type: 'edge.connect', edgeId: 'edge-bare', from: 'node-condition', to: 'node-approval',
+    });
+
+    const edges = toFlowEdges(state);
+    expect(edges).toEqual([
+      expect.objectContaining({ id: 'edge-yes', sourceHandle: 'yes', label: '是' }),
+      expect.objectContaining({ id: 'edge-no', sourceHandle: 'no', label: '否' }),
+      expect.objectContaining({ id: 'edge-default', sourceHandle: 'default', label: '默认' }),
+      expect.objectContaining({ id: 'edge-bare', sourceHandle: 'default', label: '未指定分支' }),
+    ]);
+  });
+
+  it('does not mutate the spec when deriving flow edges', () => {
+    let state = workflowEditorReducer(createInitialEditorState(), insertAgent);
+    state = workflowEditorReducer(state, {
+      type: 'node.insert', nodeId: 'node-condition', nodeType: 'condition', position: { x: 360, y: 120 },
+    });
+    state = workflowEditorReducer(state, {
+      type: 'edge.connect', edgeId: 'edge-yes', from: 'node-condition', to: 'node-agent', conditionValue: true,
+    });
+    const before = JSON.stringify(state.spec);
+    toFlowEdges(state);
+    expect(JSON.stringify(state.spec)).toBe(before);
   });
 });
