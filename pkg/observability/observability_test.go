@@ -2,8 +2,10 @@ package observability
 
 import (
 	"context"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -69,6 +71,39 @@ func TestDefaultTraceConfig(t *testing.T) {
 
 func TestNoopMetricsImplementsProvider(t *testing.T) {
 	var _ MetricsProvider = NoopMetrics{}
+}
+
+func TestInitOTelProviderProbesEndpoint(t *testing.T) {
+	t.Run("unreachable endpoint fails fast", func(t *testing.T) {
+		// otlptracegrpc.New 是 lazy dial：collector 不可达时构造仍成功，
+		// BatchSpanProcessor 之后会无限重试导出。必须在此处显式探测并失败。
+		cfg := DefaultTraceConfig()
+		cfg.OTLPEndpoint = "127.0.0.1:1" // 端口 1 必定拒绝连接，模拟 collector 未启动
+		_, err := InitOTelProvider(context.Background(), cfg)
+		if err == nil {
+			t.Fatal("expected error for unreachable OTLP endpoint")
+		}
+	})
+
+	t.Run("reachable endpoint initializes", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+		cfg := DefaultTraceConfig()
+		cfg.OTLPEndpoint = ln.Addr().String()
+		shutdown, err := InitOTelProvider(context.Background(), cfg)
+		if err != nil {
+			t.Fatalf("expected success for reachable endpoint: %v", err)
+		}
+		if shutdown == nil {
+			t.Fatal("expected non-nil shutdown func")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = shutdown(ctx)
+	})
 }
 
 func TestPrometheusMetricsImplementsProvider(t *testing.T) {

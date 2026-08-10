@@ -5,6 +5,7 @@ package observability
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -222,6 +223,20 @@ func (*noopSpan) RecordError(_ error)                  {}
 // OTel SDK provider — used when ExporterType == "otlp"
 // ---------------------------------------------------------------------------
 
+// probeOTLPEndpoint verifies the OTLP endpoint accepts TCP connections.
+// Short explicit budget: DNS hangs (WSL2 lookup can stall ~30s) and refused
+// connections must both fail here, bounded by ctx (caller passes a 5s init
+// ctx) and the dialer timeout.
+func probeOTLPEndpoint(ctx context.Context, endpoint string) error {
+	d := net.Dialer{Timeout: 2 * time.Second}
+	conn, err := d.DialContext(ctx, "tcp", endpoint)
+	if err != nil {
+		return err
+	}
+	_ = conn.Close()
+	return nil
+}
+
 // InitOTelProvider creates an OTel TracerProvider that exports spans to the
 // OTLP gRPC endpoint in cfg.OTLPEndpoint, registers it as the global provider,
 // and returns a shutdown function the caller must invoke on exit.
@@ -229,6 +244,15 @@ func (*noopSpan) RecordError(_ error)                  {}
 func InitOTelProvider(ctx context.Context, cfg *TraceConfig) (func(context.Context) error, error) {
 	endpoint := strings.TrimPrefix(cfg.OTLPEndpoint, "http://")
 	endpoint = strings.TrimPrefix(endpoint, "https://")
+
+	// otlptracegrpc.New is a lazy dial: an unreachable collector still
+	// constructs successfully, so the BatchSpanProcessor starts and then
+	// retries exports forever ("traces export: exporter export timeout"
+	// every ~15s). Probe TCP reachability first and fail fast so callers
+	// can degrade to the log tracer instead of spinning forever.
+	if err := probeOTLPEndpoint(ctx, endpoint); err != nil {
+		return nil, fmt.Errorf("otlp endpoint %s unreachable: %w", endpoint, err)
+	}
 
 	exporter, err := otlptracegrpc.New(ctx,
 		otlptracegrpc.WithEndpoint(endpoint),

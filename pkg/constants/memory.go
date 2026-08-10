@@ -90,10 +90,15 @@ const (
 	// session-buffer lifetimes (LangChain ConversationBufferMemory, Mem0).
 	MemoryBufferKeyTTL = 24 * time.Hour
 
-	MemoryBufferSizeLimit     = 8 * 1024         // flush if accumulated bytes >= 8KB
-	MemoryBufferIdleTimeout   = 60 * time.Second // scanner: flush if no new message for 60s
-	MemoryBufferAgeTimeout    = 5 * time.Minute  // scanner: flush if oldest message > 5min
-	MemoryBufferScanInterval  = 30 * time.Second // how often BufferScanner polls Redis
+	MemoryBufferSizeLimit    = 8 * 1024         // flush if accumulated bytes >= 8KB
+	MemoryBufferIdleTimeout  = 60 * time.Second // scanner: flush if no new message for 60s
+	MemoryBufferAgeTimeout   = 5 * time.Minute  // scanner: flush if oldest message > 5min
+	MemoryBufferScanInterval = 30 * time.Second // how often BufferScanner polls Redis
+	// MemoryBufferScanTimeout is the per-scan operation budget. store.Scan can
+	// hang on DNS/network (e.g. WSL2 lookup timeout reaches 30s); without a
+	// budget the ticker cadence stalls behind the hung call. Must be <
+	// MemoryBufferScanInterval so the scan can never outlive its ticker slot.
+	MemoryBufferScanTimeout   = 20 * time.Second
 	MemoryTenantWatchInterval = 60 * time.Second // how often TenantWatcher polls tenant list
 
 	// MemoryBufferMinContentRunes is the minimum rune count of non-tool messages required to
