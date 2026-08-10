@@ -42,31 +42,6 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      # Nacos 外部 MySQL 模式要求 schema 预初始化（config_info 等表）。
-      # 镜像 entrypoint 的 initdb 脚本只在空数据目录执行，PVC 复用后不生效，
-      # 因此用 initContainer 显式幂等灌入（CREATE TABLE IF NOT EXISTS）。
-      initContainers:
-        - name: init-schema
-          image: {{ include "stratum.image" .Values.nacos.mysql.image | quote }}
-          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              until mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --silent; do
-                echo "waiting for mysql ready..."; sleep 2;
-              done
-              mysql -uroot -p"$MYSQL_ROOT_PASSWORD" nacos < /schema/mysql-schema.sql
-              echo "nacos schema initialized"
-          env:
-            - name: MYSQL_ROOT_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.secrets.name | quote }}
-                  key: NACOS_MYSQL_PASSWORD
-          volumeMounts:
-            - name: schema
-              mountPath: /schema
-              readOnly: true
       containers:
         - name: nacos-mysql
           image: {{ include "stratum.image" .Values.nacos.mysql.image | quote }}
@@ -91,9 +66,6 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "stratum.fullname" . }}-nacos-mysql-data
-        - name: schema
-          configMap:
-            name: {{ include "stratum.fullname" . }}-nacos-mysql-schema
 ---
 apiVersion: v1
 kind: Service
