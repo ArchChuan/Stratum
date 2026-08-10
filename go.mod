@@ -30,7 +30,7 @@ require (
 	google.golang.org/grpc v1.79.2
 )
 
-require github.com/robfig/cron/v3 v3.0.1 // indirect
+require github.com/robfig/cron/v3 v3.0.1
 
 require (
 	github.com/antithesishq/antithesis-sdk-go v0.7.0-default-no-op // indirect
@@ -117,7 +117,7 @@ require (
 	golang.org/x/text v0.39.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260209200024-4cfbd4190f57 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260209200024-4cfbd4190f57 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
+	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 )
 
