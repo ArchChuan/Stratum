@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/api/http/dto"
+	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 )
 
 // parityPairs 登记 (gen struct, 手写 struct) 类型对偶。
@@ -17,7 +18,14 @@ var parityPairs = []struct {
 	name string
 	gen  reflect.Type
 	hw   reflect.Type
-}{}
+}{
+	{"DashboardOverviewResponse", reflect.TypeOf(gen.DashboardOverviewResponse{}), reflect.TypeOf(dto.DashboardOverviewResponse{})},
+	{"CreateMemoryRequest", reflect.TypeOf(gen.CreateMemoryRequest{}), reflect.TypeOf(dto.CreateMemoryRequest{})},
+	{"MemoryFactResponse", reflect.TypeOf(gen.MemoryFactResponse{}), reflect.TypeOf(dto.MemoryFactResponse{})},
+	{"MemorySessionsResponse", reflect.TypeOf(gen.MemorySessionsResponse{}), reflect.TypeOf(dto.MemorySessionsResponse{})},
+	{"MemorySummaryResponse", reflect.TypeOf(gen.MemorySummaryResponse{}), reflect.TypeOf(dto.MemorySummaryResponse{})},
+	{"MemoryStatsResponse", reflect.TypeOf(gen.MemoryStatsResponse{}), reflect.TypeOf(dto.MemoryStatsResponse{})},
+}
 
 // removedStructs 登记"已从 dto 包删除"的 struct 名。
 var removedStructs = map[string]bool{

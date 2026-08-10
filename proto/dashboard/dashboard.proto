@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package stratum.dashboard;
+
+message DashboardOverviewResponse {
+  int32 agents = 1;
+  int32 skills = 2;
+  int32 knowledge_workspaces = 3;
+  int32 mcp_servers = 4;
+  int32 model_providers = 5;
+  int32 tenant_members = 6;
+  int32 workflows = 7;
+  int32 agent_user_messages_7d = 8;
+}
