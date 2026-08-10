@@ -29,6 +29,29 @@ export interface WorkflowNodeData extends Record<string, unknown> {
 
 export type WorkflowFlowNode = Node<WorkflowNodeData, 'workflowNode'>;
 
+/**
+ * 解析 inspector 的映射文本。契约约束（zod z.record(z.string()) 与 Go
+ * map[string]string）：必须是纯对象且每个 value 为 string。`{"a":5}` 一旦
+ * 保存，工作流重载会直接失败，因此这里双重断言。
+ * 返回 null 表示非法输入；空字符串视为未修改，沿用 previous。
+ */
+export const parseMappingText = (
+  text: string,
+  previous: Record<string, string>,
+): Record<string, string> | null => {
+  if (typeof text !== 'string' || text.trim() === '') return previous;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object') return null;
+    for (const value of Object.values(parsed)) {
+      if (typeof value !== 'string') return null;
+    }
+    return parsed as Record<string, string>;
+  } catch {
+    return null;
+  }
+};
+
 const emptySpec = (): WorkflowSpec => ({ nodes: [], edges: [], max_concurrency: 0 });
 
 const createNode = (id: string, type: WorkflowNodeType): WorkflowNode => {
