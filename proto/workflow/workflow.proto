@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package stratum.workflow;
+
+import "google/protobuf/struct.proto";
+
+message CreateWorkflowRequest {
+  // @binding: required
+  string name = 1;
+  string description = 2;
+  // @gotype: github.com/byteBuilderX/stratum/internal/workflow/domain.Spec
+  // @binding: required
+  google.protobuf.Struct spec = 3;
+  // @gotype: github.com/byteBuilderX/stratum/internal/workflow/domain.InputSchema
+  // @binding: required
+  google.protobuf.Struct input_schema = 4;
+}
+
+message UpdateWorkflowRequest {
+  // @binding: required
+  string name = 1;
+  string description = 2;
+  // @gotype: github.com/byteBuilderX/stratum/internal/workflow/domain.Spec
+  // @binding: required
+  google.protobuf.Struct spec = 3;
+  // @gotype: github.com/byteBuilderX/stratum/internal/workflow/domain.InputSchema
+  // @binding: required
+  google.protobuf.Struct input_schema = 4;
+  // @binding: required
+  int64 expected_revision = 5;
+}
+
+message StartWorkflowRunRequest {
+  // @binding: required
+  string version_id = 1;
+  // @binding: required
+  string task = 2;
+  google.protobuf.Struct fields = 3;
+  // @binding: required
+  string idempotency_key = 4;
+}
+
+message WorkflowControlRequest {
+  // @binding: required
+  int64 expected_generation = 1;
+  string reason = 2;
+}
+
+message WorkflowApprovalDecisionRequest {
+  // @binding: required
+  string run_id = 1;
+  // @binding: required
+  string attempt_id = 2;
+  // @binding: required
+  int64 expected_generation = 3;
+  // @gotype: github.com/byteBuilderX/stratum/internal/workflow/domain.ApprovalDecision
+  // @binding: required,oneof=approve reject
+  string decision = 4;
+  string comment = 5;
+}
+
+message WorkflowManualResolveRequest {
+  // @binding: required
+  int64 expected_generation = 1;
+  // @gotype: github.com/byteBuilderX/stratum/internal/workflow/domain.ManualAction
+  // @binding: required
+  string action = 2;
+  string output_summary = 3;
+}

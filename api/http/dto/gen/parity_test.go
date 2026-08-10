@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/api/http/dto"
+	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 )
 
 // parityPairs 登记 (gen struct, 手写 struct) 类型对偶。
@@ -17,7 +18,14 @@ var parityPairs = []struct {
 	name string
 	gen  reflect.Type
 	hw   reflect.Type
-}{}
+}{
+	{name: "CreateWorkflowRequest", gen: reflect.TypeOf(gen.CreateWorkflowRequest{}), hw: reflect.TypeOf(dto.CreateWorkflowRequest{})},
+	{name: "UpdateWorkflowRequest", gen: reflect.TypeOf(gen.UpdateWorkflowRequest{}), hw: reflect.TypeOf(dto.UpdateWorkflowRequest{})},
+	{name: "StartWorkflowRunRequest", gen: reflect.TypeOf(gen.StartWorkflowRunRequest{}), hw: reflect.TypeOf(dto.StartWorkflowRunRequest{})},
+	{name: "WorkflowControlRequest", gen: reflect.TypeOf(gen.WorkflowControlRequest{}), hw: reflect.TypeOf(dto.WorkflowControlRequest{})},
+	{name: "WorkflowApprovalDecisionRequest", gen: reflect.TypeOf(gen.WorkflowApprovalDecisionRequest{}), hw: reflect.TypeOf(dto.WorkflowApprovalDecisionRequest{})},
+	{name: "WorkflowManualResolveRequest", gen: reflect.TypeOf(gen.WorkflowManualResolveRequest{}), hw: reflect.TypeOf(dto.WorkflowManualResolveRequest{})},
+}
 
 // removedStructs 登记"已从 dto 包删除"的 struct 名。
 var removedStructs = map[string]bool{
