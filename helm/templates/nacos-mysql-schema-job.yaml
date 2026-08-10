@@ -169,11 +169,14 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
+              set -e
               MYSQL_HOST={{ printf "%s-nacos-mysql" (include "stratum.fullname" .) }}
               until mysqladmin ping -h "$MYSQL_HOST" -uroot -p"$MYSQL_ROOT_PASSWORD" --silent; do
                 echo "waiting for mysql service ready..."; sleep 3;
               done
-              mysql -uroot -p"$MYSQL_ROOT_PASSWORD" nacos < /schema/mysql-schema.sql
+              # 必须带 -h：无 -h 时 mysql 客户端走 localhost socket（Job pod 内无 mysqld），必失败
+              # set -e 保证 mysql 失败即 Job Failed，暴露 schema 未灌入，而非 echo 兜底伪成功
+              mysql -h "$MYSQL_HOST" -uroot -p"$MYSQL_ROOT_PASSWORD" nacos < /schema/mysql-schema.sql
               echo "nacos schema initialized"
           env:
             - name: MYSQL_ROOT_PASSWORD
