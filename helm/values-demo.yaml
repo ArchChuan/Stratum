@@ -66,6 +66,9 @@ config:
   frontendUrl: "https://demo.example.com"
   githubCallbackUrl: "https://demo.example.com/api/auth/github/callback"
   secureCookies: "true"
+  nacosUrl: "http://stratum-nacos:8848"
+  nacosNamespace: "stratum-prod"
+  nacosUsername: "nacos"
 
 secrets:
   create: false
@@ -176,6 +179,9 @@ minio:
     limits:
       cpu: "500m"
       memory: "512Mi"
+
+nacos:
+  enabled: true
 
 observability:
   enabled: true

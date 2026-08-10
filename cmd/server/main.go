@@ -28,6 +28,16 @@ func main() {
 	}
 	defer logger.Sync() //nolint:errcheck
 
+	// 配置中心（Nacos）：档位 A 业务/功能配置，Nacos 优先、env 兜底。
+	// fail-closed：连接失败 WARN 后按 env/默认值启动，不阻断。
+	// 必须位于 BuildContainer 之前——MemoryPipeline.Enabled 影响装配。
+	// ConnectNacos 非幂等，main 只调一次，defer 中关闭。
+	if err := cfg.ConnectNacos(logger); err != nil {
+		logger.Warn("config: nacos unavailable, using env/fallback config", zap.Error(err))
+	} else {
+		defer func() { _ = cfg.CloseNacos() }()
+	}
+
 	if shutdown := InitTracingFromEnv(logger); shutdown != nil {
 		defer func() {
 			ctx, cancel := context.WithTimeout(context.Background(), constants.HTTPShutdownTimeout)

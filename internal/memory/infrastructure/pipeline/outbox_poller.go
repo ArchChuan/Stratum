@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -31,9 +32,35 @@ type OutboxPoller struct {
 	logger   *zap.Logger
 	interval time.Duration
 	batch    int
+	// dynamic 提供运行期可变的调度参数；nil 时回退 interval/batch 静态值。
+	dynamic  *atomic.Pointer[DynamicConfig]
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	begin    func(context.Context) (pgx.Tx, error)
+}
+
+// WithDynamic 挂载热更新配置源。d 为 nil 时 poller 完全按静态值运行。
+func (p *OutboxPoller) WithDynamic(d *atomic.Pointer[DynamicConfig]) *OutboxPoller {
+	p.dynamic = d
+	return p
+}
+
+func (p *OutboxPoller) currentInterval() time.Duration {
+	if d := p.dynamic; d != nil {
+		if dc := d.Load(); dc != nil && dc.PollInterval > 0 {
+			return dc.PollInterval
+		}
+	}
+	return p.interval
+}
+
+func (p *OutboxPoller) currentBatch() int {
+	if d := p.dynamic; d != nil {
+		if dc := d.Load(); dc != nil && dc.BatchSize > 0 {
+			return dc.BatchSize
+		}
+	}
+	return p.batch
 }
 
 // NewOutboxPoller creates an OutboxPoller with the given configuration.
@@ -59,11 +86,12 @@ func NewOutboxPoller(pool *pgxpool.Pool, js jetstream.JetStream, logger *zap.Log
 
 // Start begins the polling loop. Blocks until ctx is cancelled or Stop is called.
 func (p *OutboxPoller) Start(ctx context.Context) {
-	p.logger.Info("memory.outbox.poller_started",
-		zap.Duration("interval", p.interval),
-		zap.Int("batch", p.batch))
-	ticker := time.NewTicker(p.interval)
+	interval := p.currentInterval()
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	p.logger.Info("memory.outbox.poller_started",
+		zap.Duration("interval", interval),
+		zap.Int("batch", p.currentBatch()))
 	for {
 		select {
 		case <-ctx.Done():
@@ -73,6 +101,11 @@ func (p *OutboxPoller) Start(ctx context.Context) {
 			p.logger.Info("memory.outbox.poller_stopped", zap.String("cause", "stop_called"))
 			return
 		case <-ticker.C:
+			if cur := p.currentInterval(); cur != interval {
+				interval = cur
+				ticker.Reset(interval) // 同一 goroutine 内 Reset 安全
+				p.logger.Info("memory.outbox.poller_interval_changed", zap.Duration("interval", interval))
+			}
 			if err := p.poll(ctx); err != nil {
 				p.logger.Error("memory.outbox.poll", zap.Error(err))
 			}
@@ -192,7 +225,7 @@ func (p *OutboxPoller) takeOutboxBatch(ctx context.Context, schema string) ([]pe
 
 	rows, err := tx.Query(ctx,
 		"SELECT id, payload FROM memory_outbox ORDER BY id LIMIT $1 FOR UPDATE SKIP LOCKED",
-		p.batch)
+		p.currentBatch())
 	if err != nil {
 		return nil, fmt.Errorf("select outbox: %w", err)
 	}
