@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	jschema "github.com/byteBuilderX/stratum/pkg/jsonschema"
 )
 
 const (
@@ -429,7 +430,9 @@ func mcpHandler(w http.ResponseWriter, r *http.Request) {
 	case "tools/list":
 		result = map[string]any{"tools": []any{map[string]any{
 			"name": "stateful_echo", "description": "Return text for stateful acceptance",
-			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"text": map[string]any{"type": "string"}}},
+			"inputSchema": jschema.Must(jschema.Object(
+				jschema.RequiredProp("text", jschema.String("")),
+			)).Map(),
 		}}}
 	case "tools/call":
 		result = map[string]any{"content": []any{map[string]any{"type": "text", "text": "stateful MCP call completed"}}}

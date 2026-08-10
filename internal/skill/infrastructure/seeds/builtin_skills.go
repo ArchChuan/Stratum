@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/byteBuilderX/stratum/internal/skill/domain"
+	jschema "github.com/byteBuilderX/stratum/pkg/jsonschema"
 )
 
 // BuiltinSkill holds the seed definition of a single built-in skill.
@@ -52,12 +53,10 @@ func platformGuide() BuiltinSkill {
 		ActivationContract: domain.ActivationContract{
 			Name:        "platform_guide",
 			Description: "基于官方资料提供平台使用指导",
-			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"question": map[string]any{"type": "string"}},
-				"required":   []any{"question"},
-			},
-			OutputSchema: map[string]any{"type": "object"},
+			InputSchema: jschema.Must(jschema.Object(
+				jschema.RequiredProp("question", jschema.String("")),
+			)).Map(),
+			OutputSchema: jschema.Must(jschema.Object()).Map(),
 			Confirmed:    true,
 		},
 		Instructions: "先用 stratum_search_official_docs 检索官方资料。基于检索结果回答用户问题。" +
@@ -104,11 +103,10 @@ func tenantDiagnostic() BuiltinSkill {
 		ActivationContract: domain.ActivationContract{
 			Name:        "diagnose_tenant",
 			Description: "诊断当前租户各模块运行状态",
-			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"area": map[string]any{"type": "string"}},
-			},
-			OutputSchema: map[string]any{"type": "object"},
+			InputSchema: jschema.Must(jschema.Object(
+				jschema.OptionalProp("area", jschema.String("")),
+			)).Map(),
+			OutputSchema: jschema.Must(jschema.Object()).Map(),
 			Confirmed:    true,
 		},
 		Instructions: "调用 stratum_diagnose_tenant 收集各模块诊断证据。" +
@@ -156,11 +154,10 @@ func resourceChange() BuiltinSkill {
 		ActivationContract: domain.ActivationContract{
 			Name:        "propose_resource_change",
 			Description: "生成受控资源配置提案，等待管理员确认",
-			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"resourceKind": map[string]any{"type": "string"}},
-			},
-			OutputSchema: map[string]any{"type": "object"},
+			InputSchema: jschema.Must(jschema.Object(
+				jschema.OptionalProp("resourceKind", jschema.String("")),
+			)).Map(),
+			OutputSchema: jschema.Must(jschema.Object()).Map(),
 			Confirmed:    true,
 		},
 		Instructions: "调用 stratum_propose_resource_change 生成类型化提案。" +
@@ -208,11 +205,10 @@ func toolExecution() BuiltinSkill {
 		ActivationContract: domain.ActivationContract{
 			Name:        "execute_tool",
 			Description: "执行已授权的平台或租户外部工具",
-			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"tool": map[string]any{"type": "string"}},
-			},
-			OutputSchema: map[string]any{"type": "object"},
+			InputSchema: jschema.Must(jschema.Object(
+				jschema.OptionalProp("tool", jschema.String("")),
+			)).Map(),
+			OutputSchema: jschema.Must(jschema.Object()).Map(),
 			Confirmed:    true,
 		},
 		Instructions: "只能执行当前授权目录内的工具。" +

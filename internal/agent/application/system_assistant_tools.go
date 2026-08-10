@@ -8,6 +8,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	jschema "github.com/byteBuilderX/stratum/pkg/jsonschema"
 )
 
 const (
@@ -25,24 +26,13 @@ func SystemAssistantToolDefinitions() []port.ToolDefinition {
 			Name: ToolSearchOfficialDocs, ProviderType: domain.ProviderTypeInternal,
 			ProviderID: ToolSearchOfficialDocs, CapabilityID: ToolSearchOfficialDocs,
 			Description: "检索当前版本的 Stratum 官方文档。仅在需要回答平台使用方式时调用。",
-			InputSchema: map[string]any{
-				"type": "object", "additionalProperties": false,
-				"properties": map[string]any{"query": map[string]any{"type": "string", "minLength": 1, "maxLength": constants.SystemAssistantQueryMaxRunes}},
-				"required":   []any{"query"},
-			},
+			InputSchema: searchDocsSchema(),
 		},
 		{
 			Name: ToolDiagnoseTenant, ProviderType: domain.ProviderTypeInternal,
 			ProviderID: ToolDiagnoseTenant, CapabilityID: ToolDiagnoseTenant,
 			Description: "按当前登录成员权限只读诊断当前租户的应用状态。",
-			InputSchema: map[string]any{
-				"type": "object", "additionalProperties": false,
-				"properties": map[string]any{"areas": map[string]any{
-					"type": "array", "minItems": 1, "maxItems": constants.SystemAssistantAreasMaxCount, "uniqueItems": true,
-					"items": map[string]any{"type": "string", "enum": []any{"agent", "skill", "mcp", "knowledge", "model"}},
-				}},
-				"required": []any{"areas"},
-			},
+			InputSchema: diagnoseTenantSchema(),
 		},
 	}
 }
@@ -68,105 +58,83 @@ func SystemAssistantToolDefinitionsForRole(roleClass string) []port.ToolDefiniti
 }
 
 func proposalToolSchema() map[string]any {
-	payloads := map[domain.ResourceKind]map[string]any{
-		domain.ResourceAgent: {
-			"type": "object", "additionalProperties": false,
-			"properties": map[string]any{
-				"name":             map[string]any{"type": "string", "minLength": 1},
-				"description":      map[string]any{"type": "string"},
-				"model":            map[string]any{"type": "string"},
-				"maxIterations":    map[string]any{"type": "integer", "minimum": 1, "maximum": 20},
-				"maxContextTokens": map[string]any{"type": "integer", "minimum": 1},
-				"skillIds":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "uniqueItems": true},
-				"mcpToolIds":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "uniqueItems": true},
-				"workspaceIds":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "uniqueItems": true},
-			},
-			"required": []any{"name", "description", "model", "maxIterations", "maxContextTokens"},
-		},
-		domain.ResourceSkillDraft: {
-			"type": "object", "additionalProperties": false,
-			"properties": map[string]any{
-				"name":         map[string]any{"type": "string", "minLength": 1},
-				"description":  map[string]any{"type": "string"},
-				"instructions": map[string]any{"type": "string", "minLength": 1},
-			},
-			"required": []any{"name", "description", "instructions"},
-		},
-		domain.ResourceMCPConfig: {
-			"type": "object", "additionalProperties": false,
-			"properties": map[string]any{
-				"name":         map[string]any{"type": "string", "minLength": 1},
-				"version":      map[string]any{"type": "string"},
-				"transport":    map[string]any{"type": "string", "enum": []any{"stdio", "streamable-http"}},
-				"command":      map[string]any{"type": "string"},
-				"args":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-				"url":          map[string]any{"type": "string"},
-				"capabilities": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "uniqueItems": true},
-				"timeoutSec": map[string]any{
-					"type": "integer", "minimum": minProposalMCPTimeoutSec, "maximum": maxProposalMCPTimeoutSec,
-				},
-				"retry": proposalRetrySchema(),
-			},
-			"required": []any{"name", "version", "transport", "timeoutSec"},
-		},
-		domain.ResourceKnowledgeWorkspace: {
-			"type": "object", "additionalProperties": false,
-			"properties": map[string]any{
-				"name":           map[string]any{"type": "string", "minLength": 1},
-				"description":    map[string]any{"type": "string", "minLength": 1},
-				"embeddingModel": map[string]any{"type": "string"},
-			},
-			"required": []any{"name", "description", "embeddingModel"},
-		},
+	payloads := map[domain.ResourceKind]*jschema.Schema{
+		domain.ResourceAgent: jschema.Must(jschema.ClosedObject(
+			jschema.RequiredProp("name", jschema.StringRange(1, 0, "")),
+			jschema.RequiredProp("description", jschema.String("")),
+			jschema.RequiredProp("model", jschema.String("")),
+			jschema.RequiredProp("maxIterations", jschema.Integer(jschema.Ptr(1), jschema.Ptr(20), "")),
+			jschema.RequiredProp("maxContextTokens", jschema.Integer(jschema.Ptr(1), nil, "")),
+			jschema.OptionalProp("skillIds", jschema.Array(jschema.String(""), 0, 0, true, "")),
+			jschema.OptionalProp("mcpToolIds", jschema.Array(jschema.String(""), 0, 0, true, "")),
+			jschema.OptionalProp("workspaceIds", jschema.Array(jschema.String(""), 0, 0, true, "")),
+		)),
+		domain.ResourceSkillDraft: jschema.Must(jschema.ClosedObject(
+			jschema.RequiredProp("name", jschema.StringRange(1, 0, "")),
+			jschema.RequiredProp("description", jschema.String("")),
+			jschema.RequiredProp("instructions", jschema.StringRange(1, 0, "")),
+		)),
+		domain.ResourceMCPConfig: jschema.Must(jschema.ClosedObject(
+			jschema.RequiredProp("name", jschema.StringRange(1, 0, "")),
+			jschema.RequiredProp("version", jschema.String("")),
+			jschema.RequiredProp("transport", jschema.Must(jschema.Enum("", "stdio", "streamable-http"))),
+			jschema.RequiredProp("timeoutSec", jschema.Integer(jschema.Ptr(minProposalMCPTimeoutSec), jschema.Ptr(maxProposalMCPTimeoutSec), "")),
+			jschema.OptionalProp("command", jschema.String("")),
+			jschema.OptionalProp("args", jschema.Array(jschema.String(""), 0, 0, false, "")),
+			jschema.OptionalProp("url", jschema.String("")),
+			jschema.OptionalProp("capabilities", jschema.Array(jschema.String(""), 0, 0, true, "")),
+			jschema.OptionalProp("retry", proposalRetrySchema()),
+		)),
+		domain.ResourceKnowledgeWorkspace: jschema.Must(jschema.ClosedObject(
+			jschema.RequiredProp("name", jschema.StringRange(1, 0, "")),
+			jschema.RequiredProp("description", jschema.StringRange(1, 0, "")),
+			jschema.RequiredProp("embeddingModel", jschema.String("")),
+		)),
 	}
 	kinds := []domain.ResourceKind{
 		domain.ResourceAgent, domain.ResourceSkillDraft, domain.ResourceMCPConfig, domain.ResourceKnowledgeWorkspace,
 	}
-	branches := make([]any, 0, len(kinds)*2)
+	branches := make([]*jschema.Schema, 0, len(kinds)*2)
 	for _, kind := range kinds {
 		for _, operation := range []domain.ProposalOperation{domain.OperationCreate, domain.OperationUpdate} {
-			properties := map[string]any{
-				"resourceKind": map[string]any{"const": string(kind)},
-				"operation":    map[string]any{"const": string(operation)},
-				"payload":      payloads[kind],
+			props := []jschema.Prop{
+				jschema.RequiredProp("resourceKind", jschema.Const(string(kind))),
+				jschema.RequiredProp("operation", jschema.Const(string(operation))),
+				jschema.RequiredProp("payload", payloads[kind]),
 			}
-			required := []any{"resourceKind", "operation", "payload"}
 			if operation == domain.OperationUpdate {
-				properties["resourceId"] = map[string]any{"type": "string", "minLength": 1}
-				required = append(required, "resourceId")
+				props = append(props, jschema.RequiredProp("resourceId", jschema.StringRange(1, 0, "")))
 			}
-			branches = append(branches, map[string]any{
-				"type": "object", "additionalProperties": false,
-				"properties": properties, "required": required,
-			})
+			branches = append(branches, jschema.Must(jschema.ClosedObject(props...)))
 		}
 	}
-	return map[string]any{"oneOf": branches}
+	return jschema.Must(jschema.OneOf(branches...)).Map()
 }
 
-func proposalRetrySchema() map[string]any {
-	return map[string]any{
-		"type": "object", "additionalProperties": false,
-		"properties": map[string]any{
-			"enabled": map[string]any{"type": "boolean"},
-			"maxRetries": map[string]any{
-				"type": "integer", "minimum": minProposalMCPRetryCount, "maximum": maxProposalMCPRetryCount,
-			},
-			"initialDelayMs": map[string]any{
-				"type": "integer", "minimum": minProposalMCPRetryInitialDelayMs,
-				"maximum": maxProposalMCPRetryInitialDelayMs,
-			},
-			"maxDelayMs": map[string]any{
-				"type": "integer", "minimum": minProposalMCPRetryMaxDelayMs,
-				"maximum": maxProposalMCPRetryMaxDelayMs,
-			},
-			"backoffFactor": map[string]any{
-				"type": "number", "minimum": minProposalMCPRetryBackoffFactor,
-				"maximum": maxProposalMCPRetryBackoffFactor,
-			},
-		},
-		"required": []any{"enabled", "maxRetries", "initialDelayMs", "maxDelayMs", "backoffFactor"},
-	}
+func proposalRetrySchema() *jschema.Schema {
+	return jschema.Must(jschema.ClosedObject(
+		jschema.RequiredProp("enabled", jschema.Boolean("")),
+		jschema.RequiredProp("maxRetries", jschema.Integer(jschema.Ptr(minProposalMCPRetryCount), jschema.Ptr(maxProposalMCPRetryCount), "")),
+		jschema.RequiredProp("initialDelayMs", jschema.Integer(jschema.Ptr(int(minProposalMCPRetryInitialDelayMs)), jschema.Ptr(int(maxProposalMCPRetryInitialDelayMs)), "")),
+		jschema.RequiredProp("maxDelayMs", jschema.Integer(jschema.Ptr(int(minProposalMCPRetryMaxDelayMs)), jschema.Ptr(int(maxProposalMCPRetryMaxDelayMs)), "")),
+		jschema.RequiredProp("backoffFactor", jschema.Number(jschema.Ptr(minProposalMCPRetryBackoffFactor), jschema.Ptr(maxProposalMCPRetryBackoffFactor), "")),
+	))
+}
+
+func searchDocsSchema() map[string]any {
+	return jschema.Must(jschema.ClosedObject(
+		jschema.RequiredProp("query", jschema.StringRange(1, constants.SystemAssistantQueryMaxRunes, "")),
+	)).Map()
+}
+
+func diagnoseTenantSchema() map[string]any {
+	areas := jschema.Array(
+		jschema.Must(jschema.Enum("", "agent", "skill", "mcp", "knowledge", "model")),
+		1, constants.SystemAssistantAreasMaxCount, true, "",
+	)
+	return jschema.Must(jschema.ClosedObject(
+		jschema.RequiredProp("areas", areas),
+	)).Map()
 }
 
 func ParseResourceChangeToolArguments(args map[string]any) (domain.ResourceKind, domain.ProposalOperation, string, []byte, error) {
