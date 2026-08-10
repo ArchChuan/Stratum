@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package stratum.knowledge;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+message WorkspaceConfig {
+  string embedding_model = 1;
+  string chunking_strategy = 2;
+  int32 chunk_size = 3;
+  int32 chunk_overlap = 4;
+  string query_mode = 5;
+  int32 top_k = 6;
+  string reranking = 7; // "" / "builtin-score-v1" / "provider:model"
+  float score_threshold = 8; // float32:映射表 float → float32
+  int32 rerank_top_k = 9; // 0 = use TopK
+}
+
+message QueryRequest {
+  // @binding: required,max=4096
+  string question = 1;
+  // @binding: required
+  string workspace = 2;
+  // @binding: required,oneof=vector keyword hybrid
+  string mode = 3;
+  // @binding: omitempty,min=1,max=20
+  int32 topK = 4;
+}
+
+message CreateWorkspaceRequest {
+  // @binding: required
+  string name = 1;
+  string description = 2;
+  WorkspaceConfig config = 3;
+  repeated string editors = 4; // 每个 id 须持 admin/owner 角色
+}
+
+message UpdateWorkspaceRequest {
+  optional string name = 1;
+  optional string description = 2;
+  optional WorkspaceConfig config = 3;
+}
+
+message IngestDocumentRequest {
+  // @binding: required
+  string workspace = 1;
+  // @binding: required
+  bytes document_data = 2;
+  // @binding: required
+  string filename = 3;
+  // @binding: required
+  string document_id = 4;
+}
+
+message WorkspaceListItem {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  WorkspaceConfig config = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  // Editors is the current granted editor set, for form prefill.
+  repeated string editors = 7;
+}

@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package stratum.mcp;
+
+import "google/protobuf/struct.proto";
+
+// MCPServerConfigRequest is the tenant-editable MCP configuration. Managed
+// identity fields are never converted.
+message MCPServerConfigRequest {
+  string id = 1;
+  string name = 2;
+  string version = 3;
+  string transport = 4;
+  string command = 5;
+  repeated string args = 6;
+  string url = 7;
+  map<string, string> env = 8;
+  // @omitempty
+  map<string, string> headers = 9;
+  repeated string capabilities = 10;
+  // @gotype: time.Duration
+  // JSON 是纳秒整数,proto Duration 的 "3.5s" 不兼容
+  int64 timeout = 11;
+  // @gotype: *github.com/byteBuilderX/stratum/internal/mcp/domain.AuthConfig
+  // @omitempty
+  google.protobuf.Struct auth = 12;
+  // @gotype: *github.com/byteBuilderX/stratum/internal/mcp/domain.RetryConfig
+  // @omitempty
+  google.protobuf.Struct retry = 13;
+  // @gotype: encoding/json.RawMessage
+  google.protobuf.Value system_key = 14;
+  // Editors is the initial granted editor set (create path); each id must
+  // hold role admin or owner at write time.
+  repeated string editors = 15;
+}
+
+message MCPAuthConfigResponse {
+  // @gotype: github.com/byteBuilderX/stratum/internal/mcp/domain.AuthType
+  string type = 1;
+  // @omitempty
+  string api_key_header = 2;
+  // @omitempty
+  string oauth2_client_id = 3;
+  // @omitempty
+  string oauth2_token_url = 4;
+  // @omitempty
+  repeated string oauth2_scopes = 5;
+  bool credential_configured = 6; // 凭证值剔除设计:只暴露布尔指示器
+}
+
+// MCPServerConfigResponse is the browser-safe projection of an MCP server config.
+message MCPServerConfigResponse {
+  string id = 1;
+  string name = 2;
+  string version = 3;
+  string transport = 4;
+  string command = 5;
+  repeated string args = 6;
+  string url = 7;
+  map<string, string> env = 8;
+  // @omitempty
+  map<string, string> headers = 9;
+  repeated string capabilities = 10;
+  // @gotype: time.Duration
+  int64 timeout = 11;
+  // @omitempty
+  optional MCPAuthConfigResponse auth = 12;
+  // @gotype: *github.com/byteBuilderX/stratum/internal/mcp/domain.RetryConfig
+  // @omitempty
+  google.protobuf.Struct retry = 13;
+  string management_mode = 14;
+  repeated string editors = 15;
+}

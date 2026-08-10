@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package stratum.memory;
+
+import "google/protobuf/timestamp.proto";
+
+message CreateMemoryRequest {
+  // @binding: required
+  string content = 1;
+  double importance = 2;
+}
+
+message MemoryFactResponse {
+  string id = 1;
+  string scope = 2;
+  string content = 3;
+  double importance = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message MemorySessionsResponse {
+  repeated string sessions = 1;
+}
+
+message MemorySummaryResponse {
+  string summary = 1;
+}
+
+message MemoryStatsResponse {
+  int64 total_entries = 1;
+  int64 short_term_count = 2;
+  int64 long_term_count = 3;
+  int64 entity_count = 4;
+  int64 sessions_count = 5;
+  int64 active_users = 6;
+  int64 vector_count = 7;
+  google.protobuf.Timestamp last_access_time = 8;
+  int64 storage_size_bytes = 9;
+}

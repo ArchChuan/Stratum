@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/byteBuilderX/stratum/api/http/dto"
+	gen "github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	"github.com/byteBuilderX/stratum/internal/skill/domain"
@@ -87,9 +87,9 @@ func TestSkillHandlerCreateInstructionBundle(t *testing.T) {
 	service := &fakeSkillRevisionService{}
 	handler := NewSkillHandler(service, zap.NewNop())
 	router := newSkillTestRouter(http.MethodPost, "/skills", handler.CreateSkill)
-	body, _ := json.Marshal(dto.CreateSkillRequest{
+	body, _ := json.Marshal(gen.CreateSkillRequest{
 		Name: "投诉分类", Goal: "分类", WhenToUse: "用户投诉时", Instructions: "根据规则分类",
-		Requirements: dto.SkillRequirements{MCPToolIDs: []string{"mcp:orders:get_order"}},
+		Requirements: gen.SkillRequirements{MCPToolIDs: []string{"mcp:orders:get_order"}},
 	})
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/skills", bytes.NewReader(body))
@@ -135,7 +135,7 @@ func TestSkillHandlerUpdatesActivationAndInstructions(t *testing.T) {
 	handler := NewSkillHandler(service, zap.NewNop())
 
 	activationRouter := newSkillTestRouter(http.MethodPatch, "/skills/:id/draft/activation", handler.UpdateDraftActivation)
-	body, _ := json.Marshal(dto.UpdateSkillActivationRequest{
+	body, _ := json.Marshal(gen.UpdateSkillActivationRequest{
 		Name: "classify_complaint", Description: "分类", InputSchema: map[string]any{"type": "object"},
 		OutputSchema: map[string]any{"type": "object"}, Confirmed: true,
 	})
@@ -148,8 +148,8 @@ func TestSkillHandlerUpdatesActivationAndInstructions(t *testing.T) {
 	}
 
 	bundleRouter := newSkillTestRouter(http.MethodPatch, "/skills/:id/draft/instructions", handler.UpdateDraftInstructionBundle)
-	body, _ = json.Marshal(dto.UpdateSkillInstructionBundleRequest{
-		Instructions: "新方法", Requirements: dto.SkillRequirements{MemoryScopes: []string{"user"}},
+	body, _ = json.Marshal(gen.UpdateSkillInstructionBundleRequest{
+		Instructions: "新方法", Requirements: gen.SkillRequirements{MemoryScopes: []string{"user"}},
 	})
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPatch, "/skills/skill-1/draft/instructions", bytes.NewReader(body))

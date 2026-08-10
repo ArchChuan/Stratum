@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package stratum.agent;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+message RejectOperationProposalRequest {
+  // @binding: required
+  string note = 1;
+}
+
+message OperationProposalResponse {
+  string id = 1;
+  string agentId = 2;
+  // @omitempty
+  string targetAgentId = 3;
+  string opType = 4;
+  // @omitempty
+  string delegation = 5;
+  // @omitempty
+  double maxDailyCostUsd = 6;
+  // @omitempty
+  int32 maxDailyExecutions = 7;
+  // @gotype: encoding/json.RawMessage
+  google.protobuf.Value payloadSummary = 8;
+  // @gotype: github.com/byteBuilderX/stratum/internal/agent/domain.OpProposalStatus
+  string status = 9;
+  string proposerId = 10;
+  // @omitempty
+  string reviewedBy = 11;
+  // @omitempty
+  string reviewNote = 12;
+  google.protobuf.Timestamp createdAt = 13;
+  // @omitempty
+  optional google.protobuf.Timestamp resolvedAt = 14;
+  // @omitempty
+  optional google.protobuf.Timestamp expiresAt = 15;
+}

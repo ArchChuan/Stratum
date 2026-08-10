@@ -8,7 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/byteBuilderX/stratum/api/http/dto"
+	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	schedapp "github.com/byteBuilderX/stratum/internal/scheduler/application"
 	scheddomain "github.com/byteBuilderX/stratum/internal/scheduler/domain"
@@ -52,7 +52,7 @@ func (h *ScheduledTaskHandler) Create(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var req dto.CreateScheduledTaskRequest
+	var req gen.CreateScheduledTaskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -68,7 +68,7 @@ func (h *ScheduledTaskHandler) Create(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusCreated, dto.ToScheduledTaskResponse(*task))
+	c.JSON(http.StatusCreated, gen.ToScheduledTaskResponse(*task))
 }
 
 func (h *ScheduledTaskHandler) Update(c *gin.Context) {
@@ -76,7 +76,7 @@ func (h *ScheduledTaskHandler) Update(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var req dto.UpdateScheduledTaskRequest
+	var req gen.UpdateScheduledTaskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -92,7 +92,7 @@ func (h *ScheduledTaskHandler) Update(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.ToScheduledTaskResponse(*task))
+	c.JSON(http.StatusOK, gen.ToScheduledTaskResponse(*task))
 }
 
 func (h *ScheduledTaskHandler) Delete(c *gin.Context) {
@@ -112,7 +112,7 @@ func (h *ScheduledTaskHandler) SetEnabled(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var req dto.SetScheduledTaskEnabledRequest
+	var req gen.SetScheduledTaskEnabledRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -134,7 +134,7 @@ func (h *ScheduledTaskHandler) Get(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.ToScheduledTaskResponse(*task))
+	c.JSON(http.StatusOK, gen.ToScheduledTaskResponse(*task))
 }
 
 func (h *ScheduledTaskHandler) List(c *gin.Context) {
@@ -142,21 +142,22 @@ func (h *ScheduledTaskHandler) List(c *gin.Context) {
 	if !ok {
 		return
 	}
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	tasks, total, err := h.service.List(c.Request.Context(), tenantID, page, pageSize)
+	page, _ := strconv.ParseInt(c.DefaultQuery("page", "1"), 10, 32)
+	pageSize, _ := strconv.ParseInt(c.DefaultQuery("page_size", "20"), 10, 32)
+	tasks, total, err := h.service.List(c.Request.Context(), tenantID, int(page), int(pageSize))
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
-	out := make([]dto.ScheduledTaskResponse, 0, len(tasks))
+	out := make([]gen.ScheduledTaskResponse, 0, len(tasks))
 	for _, t := range tasks {
-		out = append(out, dto.ToScheduledTaskResponse(t))
+		out = append(out, gen.ToScheduledTaskResponse(t))
 	}
-	c.JSON(http.StatusOK, dto.ScheduledTaskPageResponse{
-		Tasks:    out,
-		Total:    total,
-		Page:     page,
-		PageSize: pageSize,
+	c.JSON(http.StatusOK, gen.ScheduledTaskPageResponse{
+		Tasks: out,
+		//nolint:gosec // total 是 COUNT(*) 结果,任务数不可能溢出 int32(proto 契约)
+		Total:    int32(total),
+		Page:     int32(page),
+		PageSize: int32(pageSize),
 	})
 }

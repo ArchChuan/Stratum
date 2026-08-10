@@ -8,7 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
-	"github.com/byteBuilderX/stratum/api/http/dto"
+	gen "github.com/byteBuilderX/stratum/api/http/dto/gen"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	skillpkg "github.com/byteBuilderX/stratum/internal/skill/domain"
@@ -39,31 +39,35 @@ func NewRAGHandler(
 	}
 }
 
-func toDTOConfig(c domain.WorkspaceConfig) dto.WorkspaceConfig {
-	return dto.WorkspaceConfig{
+func toDTOConfig(c domain.WorkspaceConfig) gen.WorkspaceConfig {
+	return gen.WorkspaceConfig{
 		EmbeddingModel:   c.EmbeddingModel,
 		ChunkingStrategy: c.ChunkingStrategy,
-		ChunkSize:        c.ChunkSize,
-		ChunkOverlap:     c.ChunkOverlap,
-		QueryMode:        c.QueryMode,
-		TopK:             c.TopK,
-		Reranking:        c.Reranking,
-		ScoreThreshold:   c.ScoreThreshold,
-		RerankTopK:       c.RerankTopK,
+		//nolint:gosec // chunk_size 等配置值由用户设置,不可能溢出 int32(proto 契约)
+		ChunkSize: int32(c.ChunkSize),
+		//nolint:gosec // 同 ChunkSize
+		ChunkOverlap: int32(c.ChunkOverlap),
+		QueryMode:    c.QueryMode,
+		//nolint:gosec // 同 ChunkSize
+		TopK:           int32(c.TopK),
+		Reranking:      c.Reranking,
+		ScoreThreshold: c.ScoreThreshold,
+		//nolint:gosec // 同 ChunkSize
+		RerankTopK: int32(c.RerankTopK),
 	}
 }
 
-func fromDTOConfig(c dto.WorkspaceConfig) domain.WorkspaceConfig {
+func fromDTOConfig(c gen.WorkspaceConfig) domain.WorkspaceConfig {
 	return domain.WorkspaceConfig{
 		EmbeddingModel:   c.EmbeddingModel,
 		ChunkingStrategy: c.ChunkingStrategy,
-		ChunkSize:        c.ChunkSize,
-		ChunkOverlap:     c.ChunkOverlap,
+		ChunkSize:        int(c.ChunkSize),
+		ChunkOverlap:     int(c.ChunkOverlap),
 		QueryMode:        c.QueryMode,
-		TopK:             c.TopK,
+		TopK:             int(c.TopK),
 		Reranking:        c.Reranking,
 		ScoreThreshold:   c.ScoreThreshold,
-		RerankTopK:       c.RerankTopK,
+		RerankTopK:       int(c.RerankTopK),
 	}
 }
 
@@ -73,7 +77,7 @@ func (h *RAGHandler) UploadDocument(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	var req dto.UploadDocumentRequest
+	var req gen.UploadDocumentRequest
 	if err := c.ShouldBind(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -113,7 +117,7 @@ func (h *RAGHandler) Query(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	var req dto.QueryRequest
+	var req gen.QueryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -137,12 +141,13 @@ func (h *RAGHandler) Query(c *gin.Context) {
 	}
 
 	result, err := h.ragService.Query(c.Request.Context(), knowledge.RAGQueryRequest{
-		Question:       req.Question,
-		Workspace:      req.Workspace,
-		WorkspaceID:    workspaceID,
-		TenantID:       tenantID,
-		Mode:           req.Mode,
-		TopK:           req.TopK,
+		Question:    req.Question,
+		Workspace:   req.Workspace,
+		WorkspaceID: workspaceID,
+		TenantID:    tenantID,
+		Mode:        req.Mode,
+		//nolint:gosec // TopK 已受 binding max=20 约束,不可能溢出 int(proto 契约)
+		TopK:           int(req.TopK),
 		EmbeddingModel: embedModel,
 	})
 	if err != nil {
@@ -173,7 +178,7 @@ func (h *RAGHandler) CreateWorkspace(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	var req dto.CreateWorkspaceRequest
+	var req gen.CreateWorkspaceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -217,9 +222,9 @@ func (h *RAGHandler) ListWorkspaces(c *gin.Context) {
 		return
 	}
 
-	out := make([]dto.WorkspaceListItem, 0, len(list))
+	out := make([]gen.WorkspaceListItem, 0, len(list))
 	for _, ws := range list {
-		item := dto.WorkspaceListItem{
+		item := gen.WorkspaceListItem{
 			ID:          ws.ID,
 			Name:        ws.Name,
 			Description: ws.Description,
@@ -250,7 +255,7 @@ func (h *RAGHandler) UpdateWorkspace(c *gin.Context) {
 		return
 	}
 
-	var req dto.UpdateWorkspaceRequest
+	var req gen.UpdateWorkspaceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return

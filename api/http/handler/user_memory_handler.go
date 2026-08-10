@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/byteBuilderX/stratum/api/http/dto"
+	gen "github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/memory/application"
 	"github.com/gin-gonic/gin"
@@ -72,7 +72,7 @@ func (h *UserMemoryHandler) AddMemory(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errInvalidInput))
 		return
 	}
-	var req dto.CreateMemoryRequest
+	var req gen.CreateMemoryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -109,7 +109,7 @@ func (h *UserMemoryHandler) GetMemory(c *gin.Context) {
 }
 
 func (h *UserMemoryHandler) ListSessions(c *gin.Context) {
-	c.JSON(http.StatusOK, dto.MemorySessionsResponse{Sessions: []string{}})
+	c.JSON(http.StatusOK, gen.MemorySessionsResponse{Sessions: []string{}})
 }
 
 // ListMemories godoc
@@ -141,7 +141,7 @@ func (h *UserMemoryHandler) ListMemories(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	resp := make([]dto.MemoryFactResponse, 0, len(memories))
+	resp := make([]gen.MemoryFactResponse, 0, len(memories))
 	for _, memory := range memories {
 		resp = append(resp, memoryFactResponse(memory))
 	}
@@ -159,7 +159,7 @@ func (h *UserMemoryHandler) GetStats(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.MemoryStatsResponse{
+	c.JSON(http.StatusOK, gen.MemoryStatsResponse{
 		TotalEntries: stats.TotalEntries, ShortTermCount: stats.ShortTermCount,
 		LongTermCount: stats.LongTermCount, EntityCount: stats.EntityCount,
 		SessionsCount: stats.SessionsCount, ActiveUsers: stats.ActiveUsers,
@@ -182,7 +182,7 @@ func (h *UserMemoryHandler) GetSummary(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.MemorySummaryResponse{Summary: summary})
+	c.JSON(http.StatusOK, gen.MemorySummaryResponse{Summary: summary})
 }
 
 func (h *UserMemoryHandler) DeleteMemory(c *gin.Context) {
@@ -205,8 +205,8 @@ func (h *UserMemoryHandler) DeleteMemory(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-func memoryFactResponse(memory *application.UserMemory) dto.MemoryFactResponse {
-	return dto.MemoryFactResponse{
+func memoryFactResponse(memory *application.UserMemory) gen.MemoryFactResponse {
+	return gen.MemoryFactResponse{
 		ID: memory.ID, Scope: memory.Scope, Content: memory.Content,
 		Importance: memory.Importance, CreatedAt: memory.CreatedAt, UpdatedAt: memory.UpdatedAt,
 	}

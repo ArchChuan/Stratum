@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/byteBuilderX/stratum/api/http/dto"
+	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/iam/application"
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
@@ -266,7 +266,7 @@ func TestListMembers_appliesPaginationQuery(t *testing.T) {
 		t.Fatalf("expected limit=10 offset=10, got limit=%d offset=%d", repo.listLimit, repo.listOffset)
 	}
 
-	var resp dto.ListMembersResponse
+	var resp gen.ListMembersResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +297,7 @@ func TestListMembers_filtersByRole(t *testing.T) {
 	if len(repo.roleFilter) != 2 {
 		t.Fatalf("expected roles [admin owner] forwarded, got %v", repo.roleFilter)
 	}
-	var resp dto.ListMembersResponse
+	var resp gen.ListMembersResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}

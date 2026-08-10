@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+package stratum.evaluation;
+
+import "google/protobuf/struct.proto";
+
+message EvaluationResourceRef {
+  // @binding: required,oneof=skill agent mcp knowledge
+  string kind = 1;
+  // @binding: required
+  string resource_id = 2;
+  // @binding: required
+  string revision_id = 3;
+}
+
+message EvaluationCaseRequest {
+  string name = 1;
+  // @binding: required
+  google.protobuf.Value input = 2;
+  // @binding: required
+  google.protobuf.Value expected_output = 3;
+  // @binding: required,oneof=exact contains regex
+  string assertion_mode = 4;
+  optional bool enabled = 5; // 手写 *bool,json 无 omitempty
+}
+
+message CreateEvaluationSuiteRequest {
+  // @binding: required,max=255
+  string name = 1;
+  // @binding: max=2048
+  string description = 2;
+  // @binding: required,oneof=skill agent mcp knowledge
+  string resource_kind = 3;
+  // @binding: required,min=1,dive
+  repeated EvaluationCaseRequest cases = 4;
+}
+
+message EnqueueEvaluationRunRequest {
+  // @binding: required
+  EvaluationResourceRef resource = 1;
+  // @binding: required
+  string suite_revision_id = 2;
+  // @binding: required,max=255
+  string idempotency_key = 3;
+}
+
+message EvaluationJobResponse {
+  string job_id = 1;
+  string status = 2;
+  // @omitempty
+  string error_message = 3;
+  // @omitempty
+  string result_id = 4;
+}
+
+message GenerateOptimizationRequest {
+  // @binding: omitempty,max=255
+  string idempotency_key = 1;
+  // @binding: required
+  EvaluationResourceRef baseline = 2;
+  // @binding: required
+  string suite_revision_id = 3;
+  // @gotype: map[string][]any
+  google.protobuf.Struct search_space = 4;
+  // @binding: max=50,dive,max=2048
+  repeated string failure_summaries = 5;
+}
+
+message CreateEvaluationExperimentRequest {
+  // @binding: required
+  EvaluationResourceRef stable = 1;
+  // @binding: required
+  EvaluationResourceRef canary = 2;
+  // @binding: required
+  string suite_revision_id = 3;
+}
+
+message EvaluationCommandRequest {
+  // @binding: required,max=2048
+  string reason = 1;
+  // @binding: required,max=255
+  string idempotency_key = 2;
+  // @binding: required,min=1
+  int64 expected_state_version = 3;
+}
+
+message RecordEvaluationFeedbackRequest {
+  // @binding: required
+  string trace_id = 1;
+  // @binding: required,oneof=skill agent mcp knowledge
+  string resource_kind = 2;
+  // @binding: required
+  string resource_id = 3;
+  // @binding: min=0,max=1
+  double score = 4;
+  google.protobuf.Struct outcome = 5;
+  // @binding: required,max=255
+  string idempotency_key = 6;
+  bool security_violation = 7;
+}
