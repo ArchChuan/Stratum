@@ -111,6 +111,9 @@ config:
   githubCallbackUrl: "http://localhost:8080/auth/github/callback"
   secureCookies: "false"
   globalAdminGitHubLogin: "ArchChuan"
+  nacosUrl: ""
+  nacosNamespace: ""
+  nacosUsername: "nacos"
 
 secrets:
   create: false
@@ -230,6 +233,35 @@ minio:
     limits:
       cpu: "500m"
       memory: "512Mi"
+
+# Nacos 配置中心（standalone + MySQL 8.4，CD 时镜像由 deploy.yml 发布并锁定 digest）
+nacos:
+  enabled: false
+  image:
+    repository: nacos/nacos-server
+    tag: "v2.5.1"
+    digest: ""
+  persistence:
+    size: 2Gi
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      memory: "1Gi"
+  mysql:
+    image:
+      repository: mysql
+      tag: "8.4"
+      digest: ""
+    persistence:
+      size: 5Gi
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        memory: "1Gi"
 
 # Observability settings
 observability:
