@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/byteBuilderX/stratum/api/http/dto"
+	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
@@ -327,7 +328,7 @@ func (h *EvaluationHandler) Overview(c *gin.Context) {
 }
 
 func centerFilter(c *gin.Context, kind, id string) (port.CenterFilter, error) {
-	var req dto.EvaluationCenterQuery
+	var req gen.EvaluationCenterQuery
 	if err := c.ShouldBindQuery(&req); err != nil {
 		return port.CenterFilter{}, err
 	}
