@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package stratum.agent;
+
+import "google/protobuf/struct.proto";
+
+message CreateAgentRequest {
+  // @binding: required,max=100
+  string name = 1;
+  // @binding: omitempty,max=2000
+  string description = 2;
+  // @binding: omitempty,max=16384
+  string system_prompt = 3;
+  // @binding: required
+  string llm_model = 4;
+  // @binding: required,min=1,max=90
+  int32 max_iterations = 5;
+  repeated string allowed_skills = 6;
+}
+
+message AgentResponse {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string system_prompt = 4;
+  string llm_model = 5;
+  int32 max_iterations = 6;
+  repeated string allowed_skills = 7;
+  string created_at = 8; // 注意:手写是 string(非 time.Time),proto 用 string
+}
+
+message ExecuteAgentRequest {
+  // @binding: required
+  string query = 1;
+  google.protobuf.Struct context = 2;
+  google.protobuf.Struct variables = 3;
+}
+
+message ExecuteAgentResponse {
+  // @omitempty
+  google.protobuf.Value result = 1;
+  // @omitempty
+  repeated AgentStep steps = 2;
+  string status = 3;
+  // @omitempty
+  string error = 4;
+}
+
+message AgentStep {
+  int32 iteration = 1;
+  string action = 2;
+  // @omitempty
+  string tool = 3;
+  // @omitempty
+  google.protobuf.Value input = 4;
+  // @omitempty
+  google.protobuf.Value output = 5;
+}

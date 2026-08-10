@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/api/http/dto"
+	gen "github.com/byteBuilderX/stratum/api/http/dto/gen"
 )
 
 // parityPairs 登记 (gen struct, 手写 struct) 类型对偶。
@@ -17,7 +18,13 @@ var parityPairs = []struct {
 	name string
 	gen  reflect.Type
 	hw   reflect.Type
-}{}
+}{
+	{"CreateAgentRequest", reflect.TypeOf(gen.CreateAgentRequest{}), reflect.TypeOf(dto.CreateAgentRequest{})},
+	{"AgentResponse", reflect.TypeOf(gen.AgentResponse{}), reflect.TypeOf(dto.AgentResponse{})},
+	{"ExecuteAgentRequest", reflect.TypeOf(gen.ExecuteAgentRequest{}), reflect.TypeOf(dto.ExecuteAgentRequest{})},
+	{"ExecuteAgentResponse", reflect.TypeOf(gen.ExecuteAgentResponse{}), reflect.TypeOf(dto.ExecuteAgentResponse{})},
+	{"AgentStep", reflect.TypeOf(gen.AgentStep{}), reflect.TypeOf(dto.AgentStep{})},
+}
 
 // removedStructs 登记"已从 dto 包删除"的 struct 名。
 var removedStructs = map[string]bool{
@@ -61,7 +68,13 @@ func compareStructs(t *testing.T, name string, genT, hwT reflect.Type) {
 }
 
 // compatibleType 允许 §5 映射表定义的等价对:int32↔int(递归进 slice/map 元素)。
+// 命名 struct 类型(gen.AgentStep vs dto.AgentStep)跨包不等价,按字段集
+// 结构等价递归比较(嵌套 message 场景,如 ExecuteAgentResponse.Steps)。
 func compatibleType(a, b reflect.Type) bool {
+	return compatibleTypeDepth(a, b, 0)
+}
+
+func compatibleTypeDepth(a, b reflect.Type, depth int) bool {
 	if a == b {
 		return true
 	}
@@ -72,12 +85,41 @@ func compatibleType(a, b reflect.Type) bool {
 		return true
 	}
 	if a.Kind() == reflect.Slice && b.Kind() == reflect.Slice {
-		return compatibleType(a.Elem(), b.Elem())
+		return compatibleTypeDepth(a.Elem(), b.Elem(), depth+1)
 	}
 	if a.Kind() == reflect.Map && b.Kind() == reflect.Map {
-		return compatibleType(a.Key(), b.Key()) && compatibleType(a.Elem(), b.Elem())
+		return compatibleTypeDepth(a.Key(), b.Key(), depth+1) && compatibleTypeDepth(a.Elem(), b.Elem(), depth+1)
+	}
+	if a.Kind() == reflect.Struct && b.Kind() == reflect.Struct {
+		// 防御递归类型(如链表)导致的栈溢出;迁移契约无自引用,深度封顶 8
+		if depth >= 8 {
+			return false
+		}
+		return compatibleStruct(a, b, depth)
 	}
 	return false
+}
+
+// compatibleStruct 比较两个 struct 类型的字段集:同名且类型兼容
+// (按名查找,不依赖字段声明顺序)。字段 json/binding tag 由对偶各自的
+// 顶层 compareStructs 覆盖(嵌套 struct 的字段同时是另一条对偶的顶层字段)。
+func compatibleStruct(a, b reflect.Type, depth int) bool {
+	if a.NumField() != b.NumField() {
+		return false
+	}
+	bfields := make(map[string]reflect.Type, b.NumField())
+	for i := 0; i < b.NumField(); i++ {
+		f := b.Field(i)
+		bfields[f.Name] = f.Type
+	}
+	for i := 0; i < a.NumField(); i++ {
+		af := a.Field(i)
+		bt, ok := bfields[af.Name]
+		if !ok || !compatibleTypeDepth(af.Type, bt, depth+1) {
+			return false
+		}
+	}
+	return true
 }
 
 // TestRemovedStructsGone 防半迁移态:dto 包不得再出现已删除的 struct 名。
