@@ -293,6 +293,7 @@ func TestGoFieldNameAcronyms(t *testing.T) {
 		"oauth2_client_id":       "OAuth2ClientID",
 		"maxDailyCostUsd":        "MaxDailyCostUSD",
 		"topK":                   "TopK",
+		"github_login":           "GitHubLogin",
 	}
 	for in, want := range cases {
 		if got := goFieldName(in); got != want {

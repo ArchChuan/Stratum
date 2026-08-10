@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+package stratum.admin;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+message CreateTenantRequest {
+  // @binding: required
+  string name = 1;
+  // @binding: required
+  string slug = 2;
+  // @binding: required,oneof=free pro enterprise
+  string plan = 3;
+  // @binding: required,oneof=active suspended
+  string status = 4;
+}
+
+message UpdateTenantRequest {
+  // @binding: omitempty,oneof=free pro enterprise
+  string plan = 1;
+  // @binding: omitempty,oneof=active suspended
+  string status = 2;
+}
+
+message TenantResponse {
+  string id = 1;
+  string name = 2;
+  string slug = 3;
+  string plan = 4;
+  string status = 5;
+  int32 member_count = 6;
+  google.protobuf.Timestamp created_at = 7;
+  // @omitempty
+  optional google.protobuf.Timestamp deleted_at = 8;
+  bool is_default = 9;
+}
+
+message ListTenantsResponse {
+  repeated TenantResponse tenants = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+}
+
+message InviteMemberRequest {
+  // @binding: required,email
+  string email = 1;
+  // @binding: required,oneof=member admin
+  string role = 2;
+}
+
+message InviteMemberResponse {
+  string invitation_code = 1;
+  string email = 2;
+  string role = 3;
+}
+
+message UpdateMemberRoleRequest {
+  // @binding: required,oneof=member admin
+  string role = 1;
+}
+
+message MemberResponse {
+  string user_id = 1;
+  string github_login = 2;
+  string avatar_url = 3;
+  string role = 4;
+  google.protobuf.Timestamp joined_at = 5;
+}
+
+message ListMembersResponse {
+  repeated MemberResponse members = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+}
+
+message UpdateSettingsRequest {
+  string name = 1;
+  google.protobuf.Struct settings = 2;
+}
+
+message SettingsResponse {
+  string tenant_id = 1;
+  string tenant_name = 2;
+  bool is_default = 3;
+  google.protobuf.Struct settings = 4;
+}
+
+message TenantListItem {
+  string tenant_id = 1;
+  string name = 2;
+  bool is_default = 3;
+}
+
+message TenantListResponse {
+  repeated TenantListItem tenants = 1;
+}

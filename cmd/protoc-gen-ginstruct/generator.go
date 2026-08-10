@@ -32,7 +32,7 @@ var acronyms = map[string]string{
 	"api": "API", "url": "URL", "id": "ID", "ids": "IDs", "llm": "LLM",
 	"mcp": "MCP", "oauth": "OAuth", "oauth2": "OAuth2", "http": "HTTP",
 	"db": "DB", "sse": "SSE", "rag": "RAG", "json": "JSON", "ui": "UI",
-	"usd": "USD",
+	"usd": "USD", "github": "GitHub",
 }
 
 // goFieldName converts a json key (snake_case or camelCase) to a PascalCase

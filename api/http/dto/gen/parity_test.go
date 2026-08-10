@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/api/http/dto"
+	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 )
 
 // parityPairs 登记 (gen struct, 手写 struct) 类型对偶。
@@ -17,7 +18,21 @@ var parityPairs = []struct {
 	name string
 	gen  reflect.Type
 	hw   reflect.Type
-}{}
+}{
+	{"CreateTenantRequest", reflect.TypeOf(gen.CreateTenantRequest{}), reflect.TypeOf(dto.CreateTenantRequest{})},
+	{"UpdateTenantRequest", reflect.TypeOf(gen.UpdateTenantRequest{}), reflect.TypeOf(dto.UpdateTenantRequest{})},
+	{"TenantResponse", reflect.TypeOf(gen.TenantResponse{}), reflect.TypeOf(dto.TenantResponse{})},
+	{"ListTenantsResponse", reflect.TypeOf(gen.ListTenantsResponse{}), reflect.TypeOf(dto.ListTenantsResponse{})},
+	{"InviteMemberRequest", reflect.TypeOf(gen.InviteMemberRequest{}), reflect.TypeOf(dto.InviteMemberRequest{})},
+	{"InviteMemberResponse", reflect.TypeOf(gen.InviteMemberResponse{}), reflect.TypeOf(dto.InviteMemberResponse{})},
+	{"UpdateMemberRoleRequest", reflect.TypeOf(gen.UpdateMemberRoleRequest{}), reflect.TypeOf(dto.UpdateMemberRoleRequest{})},
+	{"MemberResponse", reflect.TypeOf(gen.MemberResponse{}), reflect.TypeOf(dto.MemberResponse{})},
+	{"ListMembersResponse", reflect.TypeOf(gen.ListMembersResponse{}), reflect.TypeOf(dto.ListMembersResponse{})},
+	{"UpdateSettingsRequest", reflect.TypeOf(gen.UpdateSettingsRequest{}), reflect.TypeOf(dto.UpdateSettingsRequest{})},
+	{"SettingsResponse", reflect.TypeOf(gen.SettingsResponse{}), reflect.TypeOf(dto.SettingsResponse{})},
+	{"TenantListItem", reflect.TypeOf(gen.TenantListItem{}), reflect.TypeOf(dto.TenantListItem{})},
+	{"TenantListResponse", reflect.TypeOf(gen.TenantListResponse{}), reflect.TypeOf(dto.TenantListResponse{})},
+}
 
 // removedStructs 登记"已从 dto 包删除"的 struct 名。
 var removedStructs = map[string]bool{
