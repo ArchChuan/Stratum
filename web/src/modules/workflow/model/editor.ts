@@ -171,10 +171,29 @@ export const toFlowNodes = (state: WorkflowEditorState): WorkflowFlowNode[] => s
   data: { node, selected: state.selected?.kind === 'node' && state.selected.id === node.id },
 }));
 
-export const toFlowEdges = (state: WorkflowEditorState): Edge[] => state.spec.edges.map((edge) => ({
-  id: edge.id || `${edge.from}-${edge.to}`,
-  source: edge.from,
-  target: edge.to,
-  label: edge.default ? '默认' : edge.condition_value === true ? '是' : edge.condition_value === false ? '否' : undefined,
-  selected: state.selected?.kind === 'edge' && state.selected.id === edge.id,
-}));
+const conditionSourceHandle = (edge: WorkflowEdge): string | undefined => {
+  if (edge.default) return 'default';
+  if (edge.condition_value === true) return 'yes';
+  if (edge.condition_value === false) return 'no';
+  // 裸边（无分支字段）运行时恒不选中是死边：挂 default handle 会与真 default 边
+  // 视觉混淆且诱使用户重连出双 default（保存必报错），独立标记为「未指定分支」。
+  return 'default';
+};
+
+export const toFlowEdges = (state: WorkflowEditorState): Edge[] => state.spec.edges.map((edge) => {
+  // 仅 condition 源边派生 sourceHandle：非 condition 节点 handle 无 id，
+  // 若派生 handle id React Flow 找不到对应 handle 会让整条边不渲染。
+  const sourceNode = state.spec.nodes.find((node) => node.id === edge.from);
+  const isConditionEdge = sourceNode?.type === 'condition';
+  const isBareConditionEdge = isConditionEdge && !edge.default && edge.condition_value === undefined;
+  return {
+    id: edge.id || `${edge.from}-${edge.to}`,
+    source: edge.from,
+    target: edge.to,
+    sourceHandle: isConditionEdge ? conditionSourceHandle(edge) : undefined,
+    label: isBareConditionEdge
+      ? '未指定分支'
+      : edge.default ? '默认' : edge.condition_value === true ? '是' : edge.condition_value === false ? '否' : undefined,
+    selected: state.selected?.kind === 'edge' && state.selected.id === edge.id,
+  };
+});
