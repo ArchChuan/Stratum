@@ -195,6 +195,11 @@ linters:
       - path: 'internal/agent/a2a/'
         linters: [unused]
 
+      # Task 3 Nacos scaffolding (dataID 常量、nacosClient 接口、sdk 实现与测试 fake)
+      # 由 Task 4 ConnectNacos 消费；接入后移除本排除项。
+      - path: 'config/nacos(_test)?\.go'
+        linters: [unused]
+
       - path: 'internal/mcp/client\.go'
         linters: [unused]
 

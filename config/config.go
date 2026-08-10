@@ -48,6 +48,10 @@ type Config struct {
 	RerankBaseURL           string
 	RerankAPIKey            string
 	RerankModel             string
+	NacosURL                string
+	NacosNamespace          string
+	NacosUsername           string
+	NacosPassword           string
 	Opik                    OpikConfig
 	TracePayload            TracePayloadConfig
 	MemoryPipeline          MemoryPipelineConfig
@@ -136,6 +140,10 @@ func Load() (*Config, error) {
 		RerankBaseURL:           getEnv("RERANK_BASE_URL", ""),
 		RerankAPIKey:            getEnv("RERANK_API_KEY", ""),
 		RerankModel:             getEnv("RERANK_MODEL", "rerank-v3.0"),
+		NacosURL:                getEnv("NACOS_URL", ""),
+		NacosNamespace:          getEnv("NACOS_NAMESPACE", ""),
+		NacosUsername:           getEnv("NACOS_USERNAME", ""),
+		NacosPassword:           getEnv("NACOS_PASSWORD", ""),
 		Opik: OpikConfig{
 			URL:       getEnv("OPIK_URL", ""),
 			Project:   getEnv("OPIK_PROJECT", "stratum"),
