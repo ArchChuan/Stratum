@@ -16,6 +16,7 @@ import (
 type fakeAuditRepo struct {
 	insertBatchFn func(ctx context.Context, events []domain.AuditEvent) error
 	queryFn       func(ctx context.Context, filter domain.AuditFilter) ([]domain.AuditEvent, error)
+	countFn       func(ctx context.Context, filter domain.AuditFilter) (int, error)
 	getByIDFn     func(ctx context.Context, tenantID, id string) (*domain.AuditEvent, error)
 	deleteFn      func(ctx context.Context, before time.Time) error
 }
@@ -32,6 +33,13 @@ func (f *fakeAuditRepo) Query(ctx context.Context, filter domain.AuditFilter) ([
 		return f.queryFn(ctx, filter)
 	}
 	return nil, nil
+}
+
+func (f *fakeAuditRepo) Count(ctx context.Context, filter domain.AuditFilter) (int, error) {
+	if f.countFn != nil {
+		return f.countFn(ctx, filter)
+	}
+	return 0, nil
 }
 
 func (f *fakeAuditRepo) GetByID(ctx context.Context, tenantID, id string) (*domain.AuditEvent, error) {
@@ -158,6 +166,41 @@ func TestAuditService_Query_DelegatesToRepo(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].ID != "evt-1" {
 		t.Fatalf("unexpected events: %+v", events)
+	}
+}
+
+func TestAuditService_Count_DelegatesToRepo(t *testing.T) {
+	repo := &fakeAuditRepo{
+		countFn: func(_ context.Context, f domain.AuditFilter) (int, error) {
+			if f.TenantID != "t1" {
+				t.Errorf("filter TenantID=%q, want t1", f.TenantID)
+			}
+			return 42, nil
+		},
+	}
+	svc := application.NewAuditService(repo, observability.NoopMetrics{}, zap.NewNop())
+	defer svc.Stop(context.Background())
+
+	total, err := svc.Count(context.Background(), domain.AuditFilter{TenantID: "t1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 42 {
+		t.Fatalf("total=%d, want 42", total)
+	}
+}
+
+func TestAuditService_Count_PropagatesRepoError(t *testing.T) {
+	repo := &fakeAuditRepo{
+		countFn: func(_ context.Context, _ domain.AuditFilter) (int, error) {
+			return 0, errors.New("db down")
+		},
+	}
+	svc := application.NewAuditService(repo, observability.NoopMetrics{}, zap.NewNop())
+	defer svc.Stop(context.Background())
+
+	if _, err := svc.Count(context.Background(), domain.AuditFilter{}); err == nil {
+		t.Fatal("want error propagated from repo, got nil")
 	}
 }
 

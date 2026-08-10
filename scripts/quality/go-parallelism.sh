@@ -26,8 +26,10 @@ nproc_val=${GO_PARALLELISM_NPROC:-$(nproc)}
 [[ "$load" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo 4; exit 0; }
 [[ "$nproc_val" =~ ^[1-9][0-9]*$ ]] || { echo 4; exit 0; }
 
-# ceil(loadavg1)：awk 处理整数/小数（printf %.0f 的轮入语义不匹配 ceil）
-load_ceil=$(awk -v l="$load" 'BEGIN { c = (l == int(l)) ? l : int(l) + 1; print c }')
+# ceil(loadavg1)：awk 处理整数/小数（printf %.0f 的轮入语义不匹配 ceil）。
+# 注意整数输入（如 "2.00"）时 c 保留字符串形式，必须 int(c) 强制整数，
+# 否则代入 bash 算术表达式会报 invalid arithmetic operator。
+load_ceil=$(awk -v l="$load" 'BEGIN { c = (l == int(l)) ? l : int(l) + 1; print int(c) }')
 
 p=$((nproc_val - 5 - load_ceil))
 [[ "$p" -gt 4 ]] && p=4

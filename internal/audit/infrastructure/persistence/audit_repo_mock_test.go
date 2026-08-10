@@ -207,6 +207,33 @@ func TestPgAuditRepo_Query_clampsLimit(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestPgAuditRepo_Count_tenantScoped(t *testing.T) {
+	mock := newAuditMock(t)
+	repo := &PgAuditRepo{pool: mock}
+
+	mock.ExpectQuery("COUNT").
+		WithArgs("t1", "high").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(42))
+
+	total, err := repo.Count(context.Background(), domain.AuditFilter{TenantID: "t1", RiskLevel: "high"})
+	require.NoError(t, err)
+	require.Equal(t, 42, total)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgAuditRepo_Count_queryFails(t *testing.T) {
+	mock := newAuditMock(t)
+	repo := &PgAuditRepo{pool: mock}
+
+	mock.ExpectQuery("COUNT").
+		WithArgs("t1").
+		WillReturnError(pgx.ErrTxClosed)
+
+	_, err := repo.Count(context.Background(), domain.AuditFilter{TenantID: "t1"})
+	require.ErrorContains(t, err, "audit: count")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestPgAuditRepo_Query_queryFails(t *testing.T) {
 	mock := newAuditMock(t)
 	repo := &PgAuditRepo{pool: mock}

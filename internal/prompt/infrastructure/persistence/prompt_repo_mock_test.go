@@ -363,3 +363,69 @@ func TestPgPromptRepo_GetVersion_tenantScoped(t *testing.T) {
 	require.NotNil(t, tmpl)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestPgPromptRepo_ListByKey_success(t *testing.T) {
+	mock := newPromptMock(t)
+	repo := &PgPromptRepo{pool: mock}
+
+	mock.ExpectQuery("SELECT COUNT\\(DISTINCT key\\) FROM public.prompt_templates").
+		WithArgs((*string)(nil)).
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(2))
+	mock.ExpectQuery("SELECT DISTINCT ON \\(key\\) key, tenant_id, version, content, status, content_hash, created_by, created_at").
+		WithArgs((*string)(nil), 10, 0).
+		WillReturnRows(pgxmock.NewRows(promptColumns).
+			AddRow(promptRow("k1", "v3", "draft", 3)...).
+			AddRow(promptRow("k2", "v2", "published", 2)...))
+
+	tmpls, total, err := repo.ListByKey(context.Background(), nil, 10, 0)
+	require.NoError(t, err)
+	require.Len(t, tmpls, 2)
+	require.Equal(t, 2, total)
+	require.Equal(t, "k1", tmpls[0].Key)
+	require.Equal(t, domain.PromptPublished, tmpls[1].Status)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgPromptRepo_ListByKey_countFails(t *testing.T) {
+	mock := newPromptMock(t)
+	repo := &PgPromptRepo{pool: mock}
+	tenant := "t1"
+
+	mock.ExpectQuery("SELECT COUNT\\(DISTINCT key\\)").
+		WithArgs(&tenant).
+		WillReturnError(pgx.ErrTxClosed)
+
+	_, _, err := repo.ListByKey(context.Background(), &tenant, 10, 0)
+	require.ErrorContains(t, err, "prompt: count keys")
+}
+
+func TestPgPromptRepo_ListByKey_queryFails(t *testing.T) {
+	mock := newPromptMock(t)
+	repo := &PgPromptRepo{pool: mock}
+
+	mock.ExpectQuery("SELECT COUNT\\(DISTINCT key\\)").
+		WithArgs((*string)(nil)).
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery("SELECT DISTINCT ON \\(key\\)").
+		WithArgs((*string)(nil), 10, 0).
+		WillReturnError(pgx.ErrTxClosed)
+
+	_, _, err := repo.ListByKey(context.Background(), nil, 10, 0)
+	require.ErrorContains(t, err, "prompt: list by key")
+}
+
+func TestPgPromptRepo_ListByKey_scanFails(t *testing.T) {
+	mock := newPromptMock(t)
+	repo := &PgPromptRepo{pool: mock}
+
+	mock.ExpectQuery("SELECT COUNT\\(DISTINCT key\\)").
+		WithArgs((*string)(nil)).
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery("SELECT DISTINCT ON \\(key\\)").
+		WithArgs((*string)(nil), 10, 0).
+		WillReturnRows(pgxmock.NewRows(promptColumns).
+			AddRow("k1", (*string)(nil), 3, "hello", 42, "h1", "user:1", time.Now()))
+
+	_, _, err := repo.ListByKey(context.Background(), nil, 10, 0)
+	require.ErrorContains(t, err, "prompt: scan")
+}

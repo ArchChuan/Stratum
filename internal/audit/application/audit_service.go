@@ -33,6 +33,7 @@ type AuditService struct {
 type AuditRepo interface {
 	InsertBatch(ctx context.Context, events []domain.AuditEvent) error
 	Query(ctx context.Context, filter domain.AuditFilter) ([]domain.AuditEvent, error)
+	Count(ctx context.Context, filter domain.AuditFilter) (int, error)
 	GetByID(ctx context.Context, tenantID string, id string) (*domain.AuditEvent, error)
 	DeleteOlderThan(ctx context.Context, before time.Time) error
 }
@@ -93,6 +94,11 @@ func (s *AuditService) Record(ctx context.Context, event domain.AuditEvent) erro
 // Query reads audit events matching the filter.
 func (s *AuditService) Query(ctx context.Context, filter domain.AuditFilter) ([]domain.AuditEvent, error) {
 	return s.repo.Query(ctx, filter)
+}
+
+// Count returns the total number of events matching the filter.
+func (s *AuditService) Count(ctx context.Context, filter domain.AuditFilter) (int, error) {
+	return s.repo.Count(ctx, filter)
 }
 
 // GetByID retrieves a single audit event, scoped to the caller's tenant.

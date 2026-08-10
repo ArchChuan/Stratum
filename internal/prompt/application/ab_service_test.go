@@ -13,6 +13,10 @@ type fakePromptRepo struct {
 	byKey           map[string][]domain.PromptTemplate
 	byVer           map[string]*domain.PromptTemplate
 	pub             map[string]*domain.PromptTemplate
+	listKeys        []domain.PromptTemplate
+	listTotal       int
+	listLimit       int
+	listOffset      int
 	err             error
 	insertErr       error
 	archived        map[int]bool
@@ -50,6 +54,11 @@ func (f *fakePromptRepo) UpdateStatus(_ context.Context, _ string, ver int, _ *s
 		f.publishedStatus = status
 	}
 	return nil
+}
+func (f *fakePromptRepo) ListByKey(_ context.Context, _ *string, limit, offset int) ([]domain.PromptTemplate, int, error) {
+	f.listLimit = limit
+	f.listOffset = offset
+	return f.listKeys, f.listTotal, f.err
 }
 func (f *fakePromptRepo) GetByHash(_ context.Context, hash string) (*domain.PromptTemplate, error) {
 	return f.byHash[hash], f.err
@@ -125,6 +134,23 @@ func TestABService_BindExperiment_skipEmptyVersions(t *testing.T) {
 	svc := NewABService(bindings, &fakePromptRepo{err: context.DeadlineExceeded})
 	require.NoError(t, svc.BindExperiment(context.Background(), "k1", "tenant:t1", "", "", 0))
 	require.NotNil(t, bindings.upserted)
+}
+
+func TestABService_ListBindings(t *testing.T) {
+	bindings := &fakeBindingRepo{bindings: []domain.PromptBinding{
+		{Key: "k1", Scope: "tenant:t1", StableVersionID: "sv1", TrafficPercent: 20},
+	}}
+	svc := NewABService(bindings, &fakePromptRepo{})
+	got, err := svc.ListBindings(context.Background())
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, "k1", got[0].Key)
+}
+
+func TestABService_ListBindings_fails(t *testing.T) {
+	svc := NewABService(&fakeBindingRepo{err: context.DeadlineExceeded}, &fakePromptRepo{})
+	_, err := svc.ListBindings(context.Background())
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestABService_ClearExperiment(t *testing.T) {

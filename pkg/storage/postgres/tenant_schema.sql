@@ -7,7 +7,6 @@ DROP TABLE IF EXISTS webhooks;
 DROP TABLE IF EXISTS model_quotas;
 DROP TABLE IF EXISTS model_usage;
 DROP TABLE IF EXISTS model_presets;
-DROP TABLE IF EXISTS prompt_templates;
 DROP TABLE IF EXISTS exec_history;
 DROP TABLE IF EXISTS entity_relations;
 DROP TABLE IF EXISTS memory_token_budgets;

@@ -38,6 +38,9 @@ func (stubAuditRepo) InsertBatch(_ context.Context, _ []domain.AuditEvent) error
 func (stubAuditRepo) Query(_ context.Context, _ domain.AuditFilter) ([]domain.AuditEvent, error) {
 	return nil, nil
 }
+func (stubAuditRepo) Count(_ context.Context, _ domain.AuditFilter) (int, error) {
+	return 0, nil
+}
 func (stubAuditRepo) GetByID(_ context.Context, _, _ string) (*domain.AuditEvent, error) {
 	return nil, nil
 }

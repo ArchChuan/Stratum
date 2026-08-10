@@ -55,6 +55,16 @@ func (s *ABService) ClearExperiment(ctx context.Context, key, scope string) erro
 	return s.bindings.DeleteBinding(ctx, key, scope)
 }
 
+// ListBindings returns every A/B binding (scope prefix "" = all), for the
+// admin bindings read endpoint.
+func (s *ABService) ListBindings(ctx context.Context) ([]domain.PromptBinding, error) {
+	bindings, err := s.bindings.ListBindings(ctx, "")
+	if err != nil {
+		return nil, fmt.Errorf("prompt: list bindings: %w", err)
+	}
+	return bindings, nil
+}
+
 // resolveAB determines whether a request should be routed to the canary
 // version based on a deterministic fnv hash of the request ID.
 func resolveAB(requestID string, trafficPercent int) bool {

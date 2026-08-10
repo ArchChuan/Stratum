@@ -486,6 +486,7 @@ func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 	g.Use(requireActive)
 	g.DELETE("/clear", userHandler.ClearMemories)
 	g.POST("", userHandler.AddMemory)
+	g.GET("", userHandler.ListMemories)
 	g.GET("/:id", userHandler.GetMemory)
 	g.POST("/sessions", userHandler.ListSessions)
 	g.GET("/stats", userHandler.GetStats)
@@ -517,10 +518,12 @@ func registerPrompt(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 
 	prompts := r.Group("/prompts", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	prompts.POST("", adminMW, requireActive, h.CreatePrompt)
+	prompts.GET("", adminMW, h.ListPrompts)
 	prompts.GET("/:key/versions", h.ListVersions)
 	prompts.POST("/:key/versions/:version/publish", adminMW, requireActive, h.PublishVersion)
 
 	bindings := r.Group("/prompts/bindings", protectedTenantMiddleware(c, middleware.RequireTenantRole("admin"))...)
+	bindings.GET("", requireActive, h.ListBindings)
 	bindings.PUT("", requireActive, h.UpsertBinding)
 	bindings.DELETE("/:key/:scope", requireActive, h.DeleteBinding)
 }
