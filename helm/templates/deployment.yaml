@@ -276,6 +276,7 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.name | quote }}
                   key: NACOS_PASSWORD
+                  optional: true
           livenessProbe:
             httpGet:
               path: /livez
