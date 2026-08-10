@@ -6,7 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/byteBuilderX/stratum/api/http/dto"
+	gen "github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/internal/platform/domain"
 )
 
@@ -33,10 +33,11 @@ func (h *DashboardHandler) Overview(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.DashboardOverviewResponse{
-		Agents: overview.Agents, Skills: overview.Skills,
-		KnowledgeWorkspaces: overview.KnowledgeWorkspaces, MCPServers: overview.MCPServers,
-		ModelProviders: overview.ModelProviders, TenantMembers: overview.TenantMembers,
-		Workflows: overview.Workflows, AgentUserMessages7d: overview.AgentUserMessages7d,
+	//nolint:gosec // 仪表盘计数不可能溢出 int32(proto 契约)
+	c.JSON(http.StatusOK, gen.DashboardOverviewResponse{
+		Agents: int32(overview.Agents), Skills: int32(overview.Skills),
+		KnowledgeWorkspaces: int32(overview.KnowledgeWorkspaces), MCPServers: int32(overview.MCPServers),
+		ModelProviders: int32(overview.ModelProviders), TenantMembers: int32(overview.TenantMembers),
+		Workflows: int32(overview.Workflows), AgentUserMessages7d: int32(overview.AgentUserMessages7d),
 	})
 }

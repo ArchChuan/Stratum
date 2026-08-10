@@ -1,0 +1,9 @@
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+  except:
+    - FIELD_LOWER_SNAKE_CASE   # 存量契约混合 camelCase(json key 逐字节)
+    - PACKAGE_DIRECTORY_MATCH  # proto 目录按 domain,package 含 domain

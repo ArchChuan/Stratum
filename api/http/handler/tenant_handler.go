@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/byteBuilderX/stratum/api/http/dto"
+	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/iam/application"
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
@@ -44,7 +44,7 @@ func (h *TenantHandler) InviteMember(c *gin.Context) {
 	}
 	callerRole, _ := c.Get("auth.role")
 	callerID, _ := c.Get("auth.sub")
-	var req dto.InviteMemberRequest
+	var req gen.InviteMemberRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -56,7 +56,7 @@ func (h *TenantHandler) InviteMember(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusCreated, dto.InviteMemberResponse{
+	c.JSON(http.StatusCreated, gen.InviteMemberResponse{
 		InvitationCode: code, Email: req.Email, Role: req.Role,
 	})
 }
@@ -125,14 +125,17 @@ func (h *TenantHandler) ListMembers(c *gin.Context) {
 		page, pageSize = normalizedPage, normalizedPageSize
 	}
 
-	resp := dto.ListMembersResponse{
-		Members:  make([]dto.MemberResponse, 0, len(members)),
-		Total:    total,
-		Page:     page,
-		PageSize: pageSize,
+	resp := gen.ListMembersResponse{
+		Members: make([]gen.MemberResponse, 0, len(members)),
+		//nolint:gosec // total 是 COUNT(*) 结果,不可能溢出 int32(proto 契约)
+		Total: int32(total),
+		//nolint:gosec // page 是分页参数,不可能溢出 int32(proto 契约)
+		Page: int32(page),
+		//nolint:gosec // pageSize 是分页参数,不可能溢出 int32(proto 契约)
+		PageSize: int32(pageSize),
 	}
 	for _, m := range members {
-		resp.Members = append(resp.Members, dto.MemberResponse{
+		resp.Members = append(resp.Members, gen.MemberResponse{
 			UserID:      m.UserID,
 			GitHubLogin: m.GitHubLogin,
 			AvatarURL:   m.AvatarURL,
@@ -177,7 +180,7 @@ func (h *TenantHandler) UpdateMemberRole(c *gin.Context) {
 		return
 	}
 
-	var req dto.UpdateMemberRoleRequest
+	var req gen.UpdateMemberRoleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -222,7 +225,7 @@ func (h *TenantHandler) GetSettings(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.SettingsResponse{TenantID: tenantID, TenantName: name, IsDefault: isDefault, Settings: settings})
+	c.JSON(http.StatusOK, gen.SettingsResponse{TenantID: tenantID, TenantName: name, IsDefault: isDefault, Settings: settings})
 }
 
 // UpdateSettings PATCH /tenant/settings
@@ -239,7 +242,7 @@ func (h *TenantHandler) UpdateSettings(c *gin.Context) {
 		return
 	}
 
-	var req dto.UpdateSettingsRequest
+	var req gen.UpdateSettingsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -269,11 +272,11 @@ func (h *TenantHandler) ListUserTenants(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	items := make([]dto.TenantListItem, 0, len(tenants))
+	items := make([]gen.TenantListItem, 0, len(tenants))
 	for _, t := range tenants {
-		items = append(items, dto.TenantListItem{TenantID: t.TenantID, Name: t.Name, IsDefault: t.IsDefault})
+		items = append(items, gen.TenantListItem{TenantID: t.TenantID, Name: t.Name, IsDefault: t.IsDefault})
 	}
-	c.JSON(http.StatusOK, dto.TenantListResponse{Tenants: items})
+	c.JSON(http.StatusOK, gen.TenantListResponse{Tenants: items})
 }
 
 // DeleteSelf DELETE /tenant — tenant owner deletes their own tenant and all associated storage.

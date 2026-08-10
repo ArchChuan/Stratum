@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/byteBuilderX/stratum/api/http/dto"
+	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
@@ -51,9 +51,9 @@ func (h *OperationProposalHandler) List(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	out := make([]dto.OperationProposalResponse, 0, len(proposals))
+	out := make([]gen.OperationProposalResponse, 0, len(proposals))
 	for _, p := range proposals {
-		out = append(out, dto.ToOperationProposalResponse(p))
+		out = append(out, gen.ToOperationProposalResponse(p))
 	}
 	c.JSON(http.StatusOK, gin.H{"proposals": out})
 }
@@ -68,7 +68,7 @@ func (h *OperationProposalHandler) Get(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.ToOperationProposalResponse(*proposal))
+	c.JSON(http.StatusOK, gen.ToOperationProposalResponse(*proposal))
 }
 
 func (h *OperationProposalHandler) Review(c *gin.Context) {
@@ -100,7 +100,7 @@ func (h *OperationProposalHandler) Reject(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var req dto.RejectOperationProposalRequest
+	var req gen.RejectOperationProposalRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, domain.ErrProposalInvalid))
 		return

@@ -7,12 +7,7 @@ import {
 } from '../model/collaboration';
 
 import api from '@/services/client';
-
-export interface CreateCollabPayload {
-  task_description: string;
-  strategy: string;
-  participants: string[];
-}
+import { CreateCollabRequest as CreateCollabPayload } from '@/services/gen/collaboration';
 
 export const collaborationApi = {
   list: async (limit = 50, offset = 0): Promise<Collaboration[]> => {

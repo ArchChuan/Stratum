@@ -57,6 +57,29 @@ help:
 	@echo "K8s: make k8s-deploy k8s-delete k8s-logs"
 	@echo "Helm: make helm-diff helm-lint"
 
+# ─── proto contract generation ────────────────────────────────────────────
+# buf 版本锁定 v1.50.0(已记录决策);proto-gen 是全部编译入口的前置依赖,
+# 幂等秒级,生成物 gitignored(api/http/dto/gen/、web/src/services/gen/)。
+# buf.gen.yaml 禁 paths=source_relative:插件响应已写绝对输出路径
+# (goFileName/tsFileName),source_relative 会按 proto 相对路径改写文件名,
+# 生成物将落到错误目录。
+
+BUF_VERSION := v1.50.0
+BUF := $(GOMODCACHE)/buf-$(BUF_VERSION)
+
+.PHONY: proto-gen proto-install-buf
+proto-install-buf:
+	@command -v buf >/dev/null 2>&1 || go install github.com/bufbuild/buf/cmd/buf@$(BUF_VERSION)
+	@command -v buf >/dev/null 2>&1 || { echo "error: install buf: go install github.com/bufbuild/buf/cmd/buf@$(BUF_VERSION)"; exit 1; }
+
+proto-gen: proto-install-buf bin/protoc-gen-ginstruct
+	buf generate
+	@echo "proto: generated api/http/dto/gen + web/src/services/gen"
+
+bin/protoc-gen-ginstruct: $(shell find cmd/protoc-gen-ginstruct -name '*.go')
+	mkdir -p bin
+	go build -o bin/protoc-gen-ginstruct ./cmd/protoc-gen-ginstruct
+
 # ─── Backend 后端 ──────────────────────────────────────────────────────────
 be-install:
 	go mod download
@@ -66,12 +89,12 @@ be-fmt:
 	go fmt ./...
 	gofmt -s -w .
 
-be-lint:
+be-lint: proto-gen
 	@command -v golangci-lint >/dev/null 2>&1 || \
 		(echo "安装 golangci-lint: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest" && exit 1)
 	golangci-lint run --timeout=5m ./...
 
-be-test:
+be-test: proto-gen
 	go test -v -race -coverprofile=coverage.out ./... -timeout=5m $(GO_TEST_FLAGS)
 	@COVERAGE=$$(go tool cover -func=coverage.out | tail -1 | awk '{print $$3}' | tr -d '%'); \
 	echo "Total coverage: $${COVERAGE}%"; \
@@ -80,30 +103,34 @@ be-test:
 		exit 1; \
 	fi
 
-be-build:
+be-build: proto-gen
 	go build -o bin/server ./cmd/server $(GO_TEST_FLAGS)
 
-be-docker-build:
+# docker build 前必须先生成 proto 契约:生成物不入 git(fresh checkout
+# 无 api/http/dto/gen、web/src/services/gen),Dockerfile 内另有 make proto-gen
+# 兜底,双保险从入口堵死。
+be-docker-build: proto-gen
 	docker build -t $(BE_IMAGE):$(IMAGE_TAG) -f Dockerfile .
 
 # ─── Frontend 前端 ─────────────────────────────────────────────────────────
 fe-install:
 	cd $(WEB_DIR) && npm ci
 
-fe-lint:
+fe-lint: proto-gen
 	cd $(WEB_DIR) && npm run lint
 
-fe-typecheck:
+fe-typecheck: proto-gen
 	cd $(WEB_DIR) && npx tsc --noEmit
 
-fe-build:
+fe-build: proto-gen
 	cd $(WEB_DIR) && npm run build
 
-fe-docker-build:
+fe-docker-build: proto-gen
 	docker build -t $(FE_IMAGE):$(IMAGE_TAG) -f $(WEB_DIR)/Dockerfile $(WEB_DIR)/
 
 # ─── Pre-merge 快速门禁（本地一键跑完，PR 前必过）────────────────────────
-check: fe-typecheck fe-lint contract-enforce code-quality
+check: proto-gen fe-typecheck fe-lint contract-enforce code-quality
+	bash scripts/quality/dto-residue-guard.sh
 	@echo "pre-merge checks passed"
 
 # ─── 本地基础设施 Infra ───────────────────────────────────────────────────
@@ -206,7 +233,7 @@ agent-instructions-check:
 	/bin/bash scripts/quality/generate-agent-instructions-test.sh
 	/bin/bash scripts/quality/generate-agent-instructions.sh --check
 
-code-quality:
+code-quality: proto-gen
 	bash scripts/quality/code-quality-ratchet-test.sh
 	bash scripts/quality/code-quality-ratchet.sh --all
 
@@ -299,7 +326,7 @@ ci-backend: migration-guardrails arch-guardrails be-install be-fmt be-lint
 
 ci-frontend: fe-install fe-lint fe-typecheck fe-build
 
-ci-docker:
+ci-docker: proto-gen
 	docker build -t $(REGISTRY)/$(BE_IMAGE):$(IMAGE_TAG) -f Dockerfile .
 	docker build -t $(REGISTRY)/$(FE_IMAGE):$(IMAGE_TAG) -f $(WEB_DIR)/Dockerfile $(WEB_DIR)/
 	docker push $(REGISTRY)/$(BE_IMAGE):$(IMAGE_TAG)
@@ -353,7 +380,7 @@ clean:
 contract-test:
 	go test -run TestContracts ./api/http/ -count=1 $(GO_TEST_FLAGS)
 
-contract-enforce: contract-test
+contract-enforce: proto-gen contract-test
 	bash scripts/quality/camelcase-enforce.sh
 
 record-contracts:

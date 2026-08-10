@@ -1,5 +1,9 @@
 import { z } from 'zod';
 
+import type { MCPAuthConfigResponse, MCPServerConfigResponse } from '@/services/gen/mcp_config';
+
+export type { MCPAuthConfigResponse, MCPServerConfigResponse };
+
 export const mcpToolSchema = z
   .object({
     name: z.string(),
@@ -63,15 +67,6 @@ export interface MCPAuthConfig {
   oauth2_scopes?: string[];
 }
 
-export interface MCPAuthConfigResponse {
-  type: string;
-  api_key_header?: string;
-  oauth2_client_id?: string;
-  oauth2_token_url?: string;
-  oauth2_scopes?: string[];
-  credential_configured: boolean;
-}
-
 export interface MCPServerConfig {
   id: string;
   name: string;
@@ -87,7 +82,3 @@ export interface MCPServerConfig {
   retry?: MCPRetryConfig;
 }
 
-export interface MCPServerConfigResponse extends Omit<MCPServerConfig, 'auth'> {
-  auth?: MCPAuthConfigResponse;
-  editors?: string[];
-}

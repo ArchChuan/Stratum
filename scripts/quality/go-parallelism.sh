@@ -27,7 +27,7 @@ nproc_val=${GO_PARALLELISM_NPROC:-$(nproc)}
 [[ "$nproc_val" =~ ^[1-9][0-9]*$ ]] || { echo 4; exit 0; }
 
 # ceil(loadavg1)：awk 处理整数/小数（printf %.0f 的轮入语义不匹配 ceil）。
-# 注意整数输入（如 "2.00"）时 c 保留字符串形式，必须 int(c) 强制整数，
+# 整数输入（如 "25.00"）时 c 是字符串，必须 int(c) 强制整数，
 # 否则代入 bash 算术表达式会报 invalid arithmetic operator。
 load_ceil=$(awk -v l="$load" 'BEGIN { c = (l == int(l)) ? l : int(l) + 1; print int(c) }')
 

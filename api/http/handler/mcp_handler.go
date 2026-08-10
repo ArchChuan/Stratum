@@ -6,7 +6,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/byteBuilderX/stratum/api/http/dto"
+	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
@@ -153,7 +153,7 @@ func (h *MCPHandler) GetServerConfig(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	response := dto.NewMCPServerConfigResponse(cfg)
+	response := gen.NewMCPServerConfigResponse(cfg)
 	if tenantID, ok := tenantIDFromCtx(c); ok {
 		editors, listErr := h.svc.ListEditors(c.Request.Context(), tenantID, c.Param("id"))
 		if listErr != nil {
@@ -175,7 +175,7 @@ func (h *MCPHandler) UpdateServer(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	var req dto.MCPServerConfigRequest
+	var req gen.MCPServerConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -208,7 +208,7 @@ func (h *MCPHandler) ConnectServer(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	var req dto.MCPServerConfigRequest
+	var req gen.MCPServerConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
