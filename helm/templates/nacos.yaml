@@ -80,6 +80,17 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.name | quote }}
                   key: NACOS_AUTH_TOKEN
+            # admin 用户初始化密码（2.4+ 首启用户表空时据此创建 admin；
+            # 缺失则无用户可登录，SDK 用户名密码拉取报 user not found）
+            - name: NACOS_AUTH_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: NACOS_PASSWORD
+                  optional: true
+            # 切换外部 MySQL（spec 要求）；缺省走 embedded Derby
+            - name: SPRING_DATASOURCE_PLATFORM
+              value: mysql
           ports:
             - name: http
               containerPort: 8848
