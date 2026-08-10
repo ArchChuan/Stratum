@@ -16,16 +16,18 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the application and the public-schema migration binary
-# (the latter is used by the db-migration pre-upgrade hook job)
+# Build the server and the two hook binaries
+# (fix-provider-keys and migrate-public are executed by pre-upgrade hook jobs)
 RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server && \
+    CGO_ENABLED=0 GOOS=linux go build -o fix-provider-keys ./cmd/fix-provider-keys && \
     CGO_ENABLED=0 GOOS=linux go build -o migrate-public ./cmd/migrate-public
 
 # Final stage
+# runtime 段与 Dockerfile.ci 保持逐行同步（check-deployment-safety-test.sh 守卫）
 FROM alpine:latest
 
-# Install ca-certificates for HTTPS requests
-RUN apk --no-cache add ca-certificates
+# Install ca-certificates and tzdata for HTTPS requests and time zones
+RUN apk --no-cache add ca-certificates tzdata
 
 # Create non-root user
 RUN adduser -D -s /bin/sh appuser
@@ -35,6 +37,7 @@ WORKDIR /app
 
 # Copy the binaries from builder stage
 COPY --from=builder /app/server .
+COPY --from=builder /app/fix-provider-keys .
 COPY --from=builder /app/migrate-public .
 
 # Copy SQL migration files so the db-migration hook job can run golang-migrate
@@ -42,7 +45,8 @@ COPY --from=builder /app/migrate-public .
 COPY pkg/migration/sql ./pkg/migration/sql/
 
 # Change ownership to appuser
-RUN chown -R appuser:appuser .
+RUN chown appuser:appuser server fix-provider-keys migrate-public
+RUN chown -R appuser:appuser pkg
 
 # Switch to non-root user
 USER appuser
