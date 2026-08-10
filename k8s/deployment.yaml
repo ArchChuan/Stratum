@@ -190,28 +190,6 @@ spec:
                 fieldRef:
                   fieldPath: spec.nodeName
 
-            # Nacos 配置
-            - name: NACOS_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: stratum-config
-                  key: NACOS_URL
-            - name: NACOS_NAMESPACE
-              valueFrom:
-                configMapKeyRef:
-                  name: stratum-config
-                  key: NACOS_NAMESPACE
-            - name: NACOS_USERNAME
-              valueFrom:
-                configMapKeyRef:
-                  name: stratum-config
-                  key: NACOS_USERNAME
-            - name: NACOS_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: stratum-secrets
-                  key: NACOS_PASSWORD
-
           resources:
             requests:
               memory: "256Mi"
