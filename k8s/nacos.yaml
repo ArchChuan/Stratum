@@ -1,0 +1,76 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nacos
+  namespace: stratum
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: nacos}
+  template:
+    metadata:
+      labels: {app: nacos}
+    spec:
+      containers:
+        - name: nacos
+          image: nacos/nacos-server:v2.5.1
+          env:
+            - name: MODE
+              value: standalone
+            - name: MYSQL_SERVICE_HOST
+              value: nacos-mysql
+            - name: MYSQL_SERVICE_PORT
+              value: "3306"
+            - name: MYSQL_SERVICE_DB_NAME
+              value: nacos
+            - name: MYSQL_SERVICE_USER
+              value: root
+            - name: MYSQL_SERVICE_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: stratum-secrets, key: NACOS_MYSQL_PASSWORD}
+            # 认证开启（v2.5 默认开启需显式 identity key）
+            - name: NACOS_AUTH_ENABLE
+              value: "true"
+            - name: NACOS_AUTH_IDENTITY_KEY
+              valueFrom:
+                secretKeyRef: {name: stratum-secrets, key: NACOS_AUTH_IDENTITY_KEY}
+            - name: NACOS_AUTH_IDENTITY_VALUE
+              valueFrom:
+                secretKeyRef: {name: stratum-secrets, key: NACOS_AUTH_IDENTITY_VALUE}
+            - name: NACOS_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef: {name: stratum-secrets, key: NACOS_AUTH_TOKEN}
+          ports:
+            - {containerPort: 8848}   # 客户端 HTTP
+            - {containerPort: 9848}   # 客户端 gRPC（SDK 必需）
+          volumeMounts:
+            - name: data
+              mountPath: /home/nacos/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: nacos-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nacos-data
+  namespace: stratum
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nacos
+  namespace: stratum
+spec:
+  type: NodePort
+  selector: {app: nacos}
+  ports:
+    - {name: http, port: 8848, targetPort: 8848, nodePort: 32088}
+    - {name: grpc, port: 9848, targetPort: 9848, nodePort: 32098}

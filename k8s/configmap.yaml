@@ -10,6 +10,11 @@ data:
   LOG_LEVEL: "info"
   ENVIRONMENT: "production"
 
+  # Nacos 配置
+  NACOS_URL: "http://nacos:8848"
+  NACOS_NAMESPACE: "stratum-prod"
+  NACOS_USERNAME: "nacos"
+
   # NATS 配置
   NATS_URL: "nats://nats:4222"
   NATS_CLUSTER_ID: "stratum-cluster"
