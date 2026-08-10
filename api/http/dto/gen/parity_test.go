@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/api/http/dto"
-	gen "github.com/byteBuilderX/stratum/api/http/dto/gen"
 )
 
 // parityPairs 登记 (gen struct, 手写 struct) 类型对偶。
@@ -18,19 +17,18 @@ var parityPairs = []struct {
 	name string
 	gen  reflect.Type
 	hw   reflect.Type
-}{
-	{"CreateAgentRequest", reflect.TypeOf(gen.CreateAgentRequest{}), reflect.TypeOf(dto.CreateAgentRequest{})},
-	{"AgentResponse", reflect.TypeOf(gen.AgentResponse{}), reflect.TypeOf(dto.AgentResponse{})},
-	{"ExecuteAgentRequest", reflect.TypeOf(gen.ExecuteAgentRequest{}), reflect.TypeOf(dto.ExecuteAgentRequest{})},
-	{"ExecuteAgentResponse", reflect.TypeOf(gen.ExecuteAgentResponse{}), reflect.TypeOf(dto.ExecuteAgentResponse{})},
-	{"AgentStep", reflect.TypeOf(gen.AgentStep{}), reflect.TypeOf(dto.AgentStep{})},
-}
+}{}
 
 // removedStructs 登记"已从 dto 包删除"的 struct 名。
 var removedStructs = map[string]bool{
-	"CreateCollabRequest": true,
-	"CollabResponse":      true,
-	"TaskStepResponse":    true,
+	"CreateCollabRequest":  true,
+	"CollabResponse":       true,
+	"TaskStepResponse":     true,
+	"CreateAgentRequest":   true,
+	"AgentResponse":        true,
+	"ExecuteAgentRequest":  true,
+	"ExecuteAgentResponse": true,
+	"AgentStep":            true,
 }
 
 func TestParityHandwrittenVsGenerated(t *testing.T) {
