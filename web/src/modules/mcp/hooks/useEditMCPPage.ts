@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { mcpApi } from '../api/mcp.api';
-import type { MCPServerConfig, MCPServerConfigResponse } from '../model/mcp';
+import type { MCPRetryConfig, MCPServerConfig, MCPServerConfigResponse } from '../model/mcp';
 
 import {
   MCP_DEFAULT_TIMEOUT_SEC,
@@ -36,35 +36,40 @@ const parseKV = (str?: string): Record<string, string> => {
 
 const parseArgs = (str?: string): string[] => (str || '').split(/\s+/).filter(Boolean);
 
-export const configToFormValues = (cfg: MCPServerConfigResponse) => ({
-  name: cfg.name,
-  version: cfg.version,
-  transport: cfg.transport,
-  timeout_sec: cfg.timeout ? cfg.timeout / 1e9 : MCP_DEFAULT_TIMEOUT_SEC,
-  command: cfg.command,
-  args: cfg.args?.join(' '),
-  env: cfg.env ? Object.entries(cfg.env).map(([k, v]) => `${k}=${v}`).join('\n') : '',
-  url: cfg.url,
-  headers: cfg.headers
-    ? Object.entries(cfg.headers)
-        .map(([k, v]) => `${k}: ${v}`)
-        .join('\n')
-    : '',
-  auth_type: cfg.auth?.type ?? 'none',
-  api_key_header: cfg.auth?.api_key_header,
-  oauth2_client_id: cfg.auth?.oauth2_client_id,
-  oauth2_token_url: cfg.auth?.oauth2_token_url,
-  oauth2_scopes: cfg.auth?.oauth2_scopes?.join(', '),
-  bearer_token: undefined,
-  api_key_value: undefined,
-  oauth2_client_secret: undefined,
-  credential_configured: cfg.auth?.credential_configured ?? false,
-  retry_enabled: cfg.retry?.enabled ?? false,
-  retry_max_retries: cfg.retry?.max_retries ?? MCP_RETRY_MAX_RETRIES,
-  retry_initial_delay_ms: cfg.retry?.initial_delay_ms ?? MCP_RETRY_INITIAL_DELAY_MS,
-  retry_max_delay_ms: cfg.retry?.max_delay_ms ?? MCP_RETRY_MAX_DELAY_MS,
-  retry_backoff_factor: cfg.retry?.backoff_factor ?? MCP_RETRY_BACKOFF_FACTOR,
-});
+export const configToFormValues = (cfg: MCPServerConfigResponse) => {
+  // gen 契约的 retry 是 @gotype 黑盒(Record<string, unknown>);运行时是
+  // domain.RetryConfig 的 JSON 形状,收窄到 MCPRetryConfig 读取字段。
+  const retry = cfg.retry as MCPRetryConfig | undefined;
+  return {
+    name: cfg.name,
+    version: cfg.version,
+    transport: cfg.transport,
+    timeout_sec: cfg.timeout ? cfg.timeout / 1e9 : MCP_DEFAULT_TIMEOUT_SEC,
+    command: cfg.command,
+    args: cfg.args?.join(' '),
+    env: cfg.env ? Object.entries(cfg.env).map(([k, v]) => `${k}=${v}`).join('\n') : '',
+    url: cfg.url,
+    headers: cfg.headers
+      ? Object.entries(cfg.headers)
+          .map(([k, v]) => `${k}: ${v}`)
+          .join('\n')
+      : '',
+    auth_type: cfg.auth?.type ?? 'none',
+    api_key_header: cfg.auth?.api_key_header,
+    oauth2_client_id: cfg.auth?.oauth2_client_id,
+    oauth2_token_url: cfg.auth?.oauth2_token_url,
+    oauth2_scopes: cfg.auth?.oauth2_scopes?.join(', '),
+    bearer_token: undefined,
+    api_key_value: undefined,
+    oauth2_client_secret: undefined,
+    credential_configured: cfg.auth?.credential_configured ?? false,
+    retry_enabled: retry?.enabled ?? false,
+    retry_max_retries: retry?.max_retries ?? MCP_RETRY_MAX_RETRIES,
+    retry_initial_delay_ms: retry?.initial_delay_ms ?? MCP_RETRY_INITIAL_DELAY_MS,
+    retry_max_delay_ms: retry?.max_delay_ms ?? MCP_RETRY_MAX_DELAY_MS,
+    retry_backoff_factor: retry?.backoff_factor ?? MCP_RETRY_BACKOFF_FACTOR,
+  };
+};
 
 export interface FormValues {
   name: string;

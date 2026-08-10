@@ -9,13 +9,19 @@ const redactedConfig: MCPServerConfigResponse = {
   name: 'private server',
   version: '1',
   transport: 'http',
-  timeout: 30e9,
+  command: '',
+  args: [],
+  env: {},
   url: 'https://mcp.example.com',
+  capabilities: [],
+  timeout: 30e9,
   auth: {
     type: 'api_key',
     api_key_header: 'X-API-Key',
     credential_configured: true,
   },
+  management_mode: '',
+  editors: [],
 };
 
 describe('MCP edit credential handling', () => {
