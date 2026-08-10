@@ -38,7 +38,11 @@ export const dashboardActions: BrowserAction[] = [{
         text: query,
         values: label === '租户成员' ? [tenantID] : [],
       });
-      const card = page.locator('.ant-card').filter({ has: page.getByText(label, { exact: true }) });
+      // 统计卡与执行表卡片并存（执行表含表格），对账只针对统计卡，排除含表格的卡片。
+      const card = page
+        .locator('.ant-card')
+        .filter({ has: page.getByText(label, { exact: true }) })
+        .filter({ hasNot: page.locator('.ant-table') });
       await expect(card).toContainText(result.rows[0].count);
       evidence.database.push(`${label} count reconciled`);
     }
