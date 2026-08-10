@@ -4,7 +4,8 @@ RUN adduser -D -s /bin/sh appuser
 WORKDIR /app
 COPY server .
 COPY fix-provider-keys .
-RUN chown appuser:appuser server fix-provider-keys
+COPY migrate-public .
+RUN chown appuser:appuser server fix-provider-keys migrate-public
 USER appuser
 EXPOSE 8080
 CMD ["./server"]
