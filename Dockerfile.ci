@@ -4,7 +4,12 @@ RUN adduser -D -s /bin/sh appuser
 WORKDIR /app
 COPY server .
 COPY fix-provider-keys .
-RUN chown appuser:appuser server fix-provider-keys
+COPY migrate-public .
+# SQL migration files so the db-migration hook job can run golang-migrate
+# (migrate-public reads them from ./pkg/migration/sql; Dockerfile already does this)
+COPY pkg/migration/sql ./pkg/migration/sql/
+RUN chown appuser:appuser server fix-provider-keys migrate-public
+RUN chown -R appuser:appuser pkg
 USER appuser
 EXPOSE 8080
 CMD ["./server"]

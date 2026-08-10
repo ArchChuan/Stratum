@@ -26,6 +26,8 @@ export interface ResponsiveDataViewProps<T extends object> {
   pagination?: TablePaginationConfig | false;
   mobilePaginationMode?: 'client' | 'server';
   onChange?: TableProps<T>['onChange'];
+  /** 桌面端表格行交互（如点击行打开详情）；移动端由 renderMobileItem 自行处理。 */
+  onRow?: TableProps<T>['onRow'];
   emptyText?: string;
   renderMobileItem: (row: T, index: number) => ReactNode;
 }
@@ -39,6 +41,7 @@ export function ResponsiveDataView<T extends object>({
   pagination,
   mobilePaginationMode = 'client',
   onChange,
+  onRow,
   emptyText = '暂无数据',
   renderMobileItem,
 }: ResponsiveDataViewProps<T>) {
@@ -69,6 +72,7 @@ export function ResponsiveDataView<T extends object>({
         size={size}
         pagination={resolvedPagination}
         onChange={onChange}
+        onRow={onRow}
         locale={{ emptyText }}
       />
     );

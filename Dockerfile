@@ -21,8 +21,10 @@ COPY . .
 # 可 go install buf + 自建插件;alpine 镜像补装了 make)。
 RUN make proto-gen
 
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server
+# Build the application and the public-schema migration binary
+# (the latter is used by the db-migration pre-upgrade hook job)
+RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server && \
+    CGO_ENABLED=0 GOOS=linux go build -o migrate-public ./cmd/migrate-public
 
 # Final stage
 FROM alpine:latest
@@ -36,11 +38,16 @@ RUN adduser -D -s /bin/sh appuser
 # Set working directory
 WORKDIR /app
 
-# Copy the binary from builder stage
+# Copy the binaries from builder stage
 COPY --from=builder /app/server .
+COPY --from=builder /app/migrate-public .
+
+# Copy SQL migration files so the db-migration hook job can run golang-migrate
+# against the public schema (migrate-public reads them from ./pkg/migration/sql)
+COPY pkg/migration/sql ./pkg/migration/sql/
 
 # Change ownership to appuser
-RUN chown appuser:appuser server
+RUN chown -R appuser:appuser .
 
 # Switch to non-root user
 USER appuser

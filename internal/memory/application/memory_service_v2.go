@@ -314,3 +314,29 @@ func (s *MemoryService) ForgetMemory(ctx context.Context, req *ForgetMemoryReque
 	}
 	return nil
 }
+
+// ListUserMemoriesRequest lists the authenticated user's active memories, newest first.
+type ListUserMemoriesRequest struct {
+	TenantID string
+	UserID   string
+	Limit    int
+	Offset   int
+}
+
+// ListUserMemories returns a page of the user's active memories plus the active total
+// (CountByUser 只统计 active，与列表同口径，构成分页 total)。
+func (s *MemoryService) ListUserMemories(ctx context.Context, req *ListUserMemoriesRequest) ([]*UserMemory, int, error) {
+	facts, err := s.factRepo.ListUserFacts(ctx, req.TenantID, req.UserID, req.Limit, req.Offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list user memories: %w", err)
+	}
+	total, err := s.factRepo.CountByUser(ctx, req.TenantID, req.UserID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count user memories: %w", err)
+	}
+	memories := make([]*UserMemory, 0, len(facts))
+	for _, fact := range facts {
+		memories = append(memories, userMemoryFromFact(fact))
+	}
+	return memories, total, nil
+}

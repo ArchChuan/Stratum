@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 
 	gen "github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
@@ -18,6 +19,7 @@ type userMemorySvc interface {
 	CreateUserMemory(ctx context.Context, req *application.CreateUserMemoryRequest) (*application.UserMemory, error)
 	GetUserMemory(ctx context.Context, req *application.GetUserMemoryRequest) (*application.UserMemory, error)
 	ForgetUserMemory(ctx context.Context, req *application.ForgetMemoryRequest) error
+	ListUserMemories(ctx context.Context, req *application.ListUserMemoriesRequest) ([]*application.UserMemory, int, error)
 }
 
 type memoryMgrSvc interface {
@@ -108,6 +110,42 @@ func (h *UserMemoryHandler) GetMemory(c *gin.Context) {
 
 func (h *UserMemoryHandler) ListSessions(c *gin.Context) {
 	c.JSON(http.StatusOK, gen.MemorySessionsResponse{Sessions: []string{}})
+}
+
+// ListMemories godoc
+// GET /memory?page=&page_size=
+// Returns the authenticated user's active memories, newest first (member).
+func (h *UserMemoryHandler) ListMemories(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	userID, ok := userIDFromCtx(c)
+	if !ok {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errInvalidInput))
+		return
+	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	memories, total, err := h.svc.ListUserMemories(c.Request.Context(), &application.ListUserMemoriesRequest{
+		TenantID: tenantID, UserID: userID, Limit: pageSize, Offset: (page - 1) * pageSize,
+	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	resp := make([]gen.MemoryFactResponse, 0, len(memories))
+	for _, memory := range memories {
+		resp = append(resp, memoryFactResponse(memory))
+	}
+	c.JSON(http.StatusOK, gin.H{"memories": resp, "total": total})
 }
 
 func (h *UserMemoryHandler) GetStats(c *gin.Context) {

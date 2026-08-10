@@ -1,0 +1,68 @@
+{
+  "schema_version": 2,
+  "source_digest": "95240ff09d1a2dd7914f136e4a39a56c64049afd8735d46d42f63826778a4529",
+  "manifest_digest": "8ceeb8359a930c035790fc120389d9b4bedfbd5dd1195e9446f3e07745c76921",
+  "policy_manifest_digest": "6665d1ccc906cadbd70bcd863261cf8562f58c87aa05a85588c8f4408cc82f0c",
+  "tested_git_parent": "1f11a702f14e09ebf39789ce90efb804cbeb23da",
+  "browser": {
+    "name": "chromium",
+    "version": "149.0.7827.55"
+  },
+  "mode": "short",
+  "seed": 1,
+  "started_at": "2026-08-10T09:31:25.555Z",
+  "duration_seconds": 11,
+  "host_class": "developer",
+  "packs": [
+    {
+      "id": "memory",
+      "status": "passed"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "memory.delete.memory",
+      "status": "passed"
+    },
+    {
+      "id": "memory.mutation.delete.memory.clear",
+      "status": "passed"
+    },
+    {
+      "id": "memory.route.memory",
+      "status": "passed"
+    }
+  ],
+  "action_count": 3,
+  "sequence_digest": "ac762a89249e378b15376d621e89fb2b731a86e17946de55fca875c8428afa35",
+  "evidence": {
+    "ui": 3,
+    "http": 3,
+    "database": 3,
+    "reconciled": 3
+  },
+  "artifacts": [],
+  "cleanup": {
+    "passed": true,
+    "residual_entity_ids": []
+  },
+  "unverified_capabilities": [],
+  "risk_classification": "short",
+  "status": "passed",
+  "run_topology": {
+    "run_id": "20260810t093119z-a12f8c6e35624848",
+    "host": "127.0.0.1",
+    "ports": {
+      "backend": 40955,
+      "fixture": 40865,
+      "frontend": 40229,
+      "oauth": 41707
+    },
+    "database_name": "stratum_e2e_20260810t093119z_a12f8c6e35624848"
+  },
+  "owned_cleanup": {
+    "database_dropped": true,
+    "lease_removed": true
+  },
+  "expires_at": "2026-08-13T09:31:44.856416349Z"
+}

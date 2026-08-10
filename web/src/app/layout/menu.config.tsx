@@ -14,6 +14,9 @@ import {
   BranchesOutlined,
   HistoryOutlined,
   ScheduleOutlined,
+  FileTextOutlined,
+  AuditOutlined,
+  DatabaseOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Link } from 'react-router-dom';
@@ -81,6 +84,11 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
       label: <Link to="/knowledge">知识库</Link>,
     },
     {
+      key: '/memory',
+      icon: <DatabaseOutlined />,
+      label: <Link to="/memory">我的记忆</Link>,
+    },
+    {
       key: 'mcp-group',
       icon: <ApiOutlined />,
       label: 'MCP 服务器',
@@ -124,6 +132,26 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
     });
   }
 
+  if (canManageTenant) {
+    base.push({
+      key: 'tenant-admin-group',
+      icon: <SettingOutlined />,
+      label: '平台管理',
+      children: [
+        {
+          key: '/prompts',
+          icon: <FileTextOutlined />,
+          label: <Link to="/prompts">提示词管理</Link>,
+        },
+        {
+          key: '/audit',
+          icon: <AuditOutlined />,
+          label: <Link to="/audit">审计日志</Link>,
+        },
+      ],
+    });
+  }
+
   if (user?.global_role === 'global_admin' || user?.system_role === 'system_admin') {
     const adminItems: MenuItem[] = [];
 
@@ -156,6 +184,7 @@ export const resolveOpenKeys = (pathname: string): string[] => {
   if (pathname.startsWith('/evaluations')) return ['evaluation-group'];
   if (pathname.startsWith('/workflows') || pathname.startsWith('/workflow-runs') || pathname.startsWith('/scheduled-tasks')) return ['workflow-group'];
   if (pathname.startsWith('/tenant')) return ['tenant-group'];
+  if (pathname.startsWith('/prompts') || pathname.startsWith('/audit')) return ['tenant-admin-group'];
   if (pathname.startsWith('/admin')) return ['admin-group'];
   return [];
 };

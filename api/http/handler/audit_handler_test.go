@@ -18,6 +18,7 @@ import (
 
 type fakeAuditQueryService struct {
 	queryFn   func(ctx context.Context, filter domain.AuditFilter) ([]domain.AuditEvent, error)
+	countFn   func(ctx context.Context, filter domain.AuditFilter) (int, error)
 	getByIDFn func(ctx context.Context, tenantID, id string) (*domain.AuditEvent, error)
 }
 
@@ -26,6 +27,13 @@ func (f *fakeAuditQueryService) Query(ctx context.Context, filter domain.AuditFi
 		return f.queryFn(ctx, filter)
 	}
 	return nil, nil
+}
+
+func (f *fakeAuditQueryService) Count(ctx context.Context, filter domain.AuditFilter) (int, error) {
+	if f.countFn != nil {
+		return f.countFn(ctx, filter)
+	}
+	return 0, nil
 }
 
 func (f *fakeAuditQueryService) GetByID(ctx context.Context, tenantID, id string) (*domain.AuditEvent, error) {
@@ -57,6 +65,9 @@ func TestAuditHandler_ListEvents_EmptyResult(t *testing.T) {
 		queryFn: func(_ context.Context, _ domain.AuditFilter) ([]domain.AuditEvent, error) {
 			return []domain.AuditEvent{}, nil
 		},
+		countFn: func(_ context.Context, _ domain.AuditFilter) (int, error) {
+			return 0, nil
+		},
 	}
 	r := setupAuditHandlerRouter(q)
 
@@ -74,6 +85,9 @@ func TestAuditHandler_ListEvents_EmptyResult(t *testing.T) {
 	if _, ok := body["events"]; !ok {
 		t.Error("missing events field")
 	}
+	if total, ok := body["total"].(float64); !ok || total != 0 {
+		t.Errorf("total=%#v, want 0", body["total"])
+	}
 }
 
 func TestAuditHandler_ListEvents_WithResults(t *testing.T) {
@@ -82,6 +96,9 @@ func TestAuditHandler_ListEvents_WithResults(t *testing.T) {
 			return []domain.AuditEvent{
 				{ID: "evt-1", Action: "POST /test"},
 			}, nil
+		},
+		countFn: func(_ context.Context, _ domain.AuditFilter) (int, error) {
+			return 2, nil
 		},
 	}
 	r := setupAuditHandlerRouter(q)
@@ -99,12 +116,78 @@ func TestAuditHandler_ListEvents_WithResults(t *testing.T) {
 	if !ok || len(events) != 1 {
 		t.Fatalf("expected 1 event, got %#v", body["events"])
 	}
+	if total, ok := body["total"].(float64); !ok || total != 2 {
+		t.Errorf("total=%#v, want 2 (pagination total)", body["total"])
+	}
+}
+
+func TestAuditHandler_ListEvents_Pagination(t *testing.T) {
+	var gotFilter domain.AuditFilter
+	countCalls := 0
+	queryCalls := 0
+	q := &fakeAuditQueryService{
+		queryFn: func(_ context.Context, f domain.AuditFilter) ([]domain.AuditEvent, error) {
+			queryCalls++
+			gotFilter = f
+			return nil, nil
+		},
+		countFn: func(_ context.Context, f domain.AuditFilter) (int, error) {
+			countCalls++
+			gotFilter = f
+			return 0, nil
+		},
+	}
+	r := setupAuditHandlerRouter(q)
+
+	req := httptest.NewRequest(http.MethodGet, "/audit/events?page=2&page_size=20", nil) //nolint:noctx
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d", w.Code)
+	}
+	if countCalls != 1 || queryCalls != 1 {
+		t.Fatalf("countCalls=%d queryCalls=%d, want 1/1", countCalls, queryCalls)
+	}
+	if gotFilter.Limit != 20 {
+		t.Errorf("limit=%d, want 20 from page_size", gotFilter.Limit)
+	}
+	if gotFilter.Offset != 20 {
+		t.Errorf("offset=%d, want 20 = (page-1)*page_size", gotFilter.Offset)
+	}
+	if gotFilter.TenantID != "t1" {
+		t.Errorf("tenantID=%q, want t1", gotFilter.TenantID)
+	}
+}
+
+func TestAuditHandler_ListEvents_CountError(t *testing.T) {
+	q := &fakeAuditQueryService{
+		countFn: func(_ context.Context, _ domain.AuditFilter) (int, error) {
+			return 0, errors.New("db down")
+		},
+		queryFn: func(_ context.Context, _ domain.AuditFilter) ([]domain.AuditEvent, error) {
+			t.Error("Query must not be called when Count fails")
+			return nil, nil
+		},
+	}
+	r := setupAuditHandlerRouter(q)
+
+	req := httptest.NewRequest(http.MethodGet, "/audit/events", nil) //nolint:noctx
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d, want 500 (fail closed on count error)", w.Code)
+	}
 }
 
 func TestAuditHandler_ListEvents_RepoError(t *testing.T) {
 	q := &fakeAuditQueryService{
 		queryFn: func(_ context.Context, _ domain.AuditFilter) ([]domain.AuditEvent, error) {
 			return nil, errors.New("db down")
+		},
+		countFn: func(_ context.Context, _ domain.AuditFilter) (int, error) {
+			return 0, nil
 		},
 	}
 	r := setupAuditHandlerRouter(q)

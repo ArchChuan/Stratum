@@ -73,6 +73,22 @@ func (s *RegistryService) PublishVersion(ctx context.Context, key string, versio
 	return s.prompts.UpdateStatus(ctx, key, version, tenantID, domain.PromptPublished)
 }
 
+// ListTemplates returns the latest version of every prompt key for a tenant
+// (nil = global) with the total key count, for the admin list endpoint.
+func (s *RegistryService) ListTemplates(ctx context.Context, tenantID *string, page, pageSize int) ([]domain.PromptTemplate, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	tmpls, total, err := s.prompts.ListByKey(ctx, tenantID, pageSize, (page-1)*pageSize)
+	if err != nil {
+		return nil, 0, fmt.Errorf("prompt: list templates: %w", err)
+	}
+	return tmpls, total, nil
+}
+
 // GetVersions returns all versions for a key+tenant pair.
 func (s *RegistryService) GetVersions(ctx context.Context, key string, tenantID *string) ([]domain.PromptTemplate, error) {
 	versions, err := s.prompts.GetByKey(ctx, key, tenantID)

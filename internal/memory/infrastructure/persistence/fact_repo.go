@@ -345,6 +345,30 @@ func (r *FactRepo) ListActive(ctx context.Context, tenantID string, filter domai
 	return facts, err
 }
 
+func (r *FactRepo) ListUserFacts(ctx context.Context, tenantID, userID string, limit, offset int) ([]*domain.MemoryFact, error) {
+	const query = `
+		SELECT id, user_id, agent_id, scope, conversation_id, content, importance,
+			status, superseded_by, access_count, last_accessed_at,
+			created_at, updated_at, frecency_score,
+			category, confidence, source
+		FROM memory_facts
+		WHERE user_id = $1 AND status = 'active' AND scope = 'user'
+		ORDER BY created_at DESC
+		LIMIT $2 OFFSET $3`
+
+	var facts []*domain.MemoryFact
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, query, userID, limit, offset)
+		if err != nil {
+			return fmt.Errorf("list user facts: %w", err)
+		}
+		defer rows.Close()
+		facts, err = scanFacts(rows)
+		return err
+	})
+	return facts, err
+}
+
 func (r *FactRepo) SearchByContent(ctx context.Context, tenantID string, filter domain.ScopeFilter, query string, limit int) ([]*domain.MemoryFact, error) {
 	const sql = `
 		SELECT id, user_id, agent_id, scope, conversation_id, content, importance,

@@ -87,6 +87,7 @@ jobs:
         run: |
           CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server
           CGO_ENABLED=0 GOOS=linux go build -o fix-provider-keys ./cmd/fix-provider-keys
+          CGO_ENABLED=0 GOOS=linux go build -o migrate-public ./cmd/migrate-public
 
       - name: Configure Docker Hub mirror
         run: |
@@ -307,6 +308,10 @@ jobs:
             "${{ env.IMAGE_REPO }}/minio:RELEASE.2025-04-22T22-12-26Z" minio
           publish_dependency milvusdb/milvus:v2.4.15 \
             "${{ env.IMAGE_REPO }}/milvus:v2.4.15" milvus
+          publish_dependency nacos/nacos-server:v2.5.1 \
+            "${{ env.IMAGE_REPO }}/nacos:v2.5.1" nacos
+          publish_dependency mysql:8.4 \
+            "${{ env.IMAGE_REPO }}/mysql:8.4" nacos_mysql
 
           require_digest "${{ env.IMAGE_REPO }}/stratum-backend:${{ needs.build-and-push.outputs.image-tag }}" backend
           require_digest "${{ env.IMAGE_REPO }}/stratum-frontend:${{ needs.build-and-push.outputs.image-tag }}" frontend
@@ -468,6 +473,11 @@ jobs:
           MINIO_ROOT_PASSWORD: ${{ secrets.MINIO_ROOT_PASSWORD || secrets.POSTGRES_PASSWORD }}
           GITHUB_CLIENT_ID: ${{ secrets.OAUTH_GITHUB_CLIENT_ID }}
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_CLIENT_SECRET }}
+          NACOS_PASSWORD: ${{ secrets.NACOS_PASSWORD }}
+          NACOS_MYSQL_PASSWORD: ${{ secrets.NACOS_MYSQL_PASSWORD }}
+          NACOS_AUTH_IDENTITY_KEY: ${{ secrets.NACOS_AUTH_IDENTITY_KEY }}
+          NACOS_AUTH_IDENTITY_VALUE: ${{ secrets.NACOS_AUTH_IDENTITY_VALUE }}
+          NACOS_AUTH_TOKEN: ${{ secrets.NACOS_AUTH_TOKEN }}
           GLOBAL_AGENT_SYSTEM_PROMPT: |
             你运行在一个企业级私有化 AI 平台中，平台采用严格的多租户隔离架构。
 
@@ -493,6 +503,11 @@ jobs:
             - 所有用户数据严格保密，不得引用或推断其他租户的数据。
             - 执行不可逆操作（删除、发送、发布）前，必须获得用户的明确确认。
         run: |
+          test -n "$NACOS_PASSWORD"
+          test -n "$NACOS_MYSQL_PASSWORD"
+          test -n "$NACOS_AUTH_IDENTITY_KEY"
+          test -n "$NACOS_AUTH_IDENTITY_VALUE"
+          test -n "$NACOS_AUTH_TOKEN"
           kubectl create namespace stratum --dry-run=client -o yaml | kubectl apply -f -
           JWT_KEY=$(echo "${{ secrets.JWT_PRIVATE_KEY }}" | base64 -d)
           kubectl create secret generic stratum-secrets \
@@ -502,6 +517,11 @@ jobs:
             --from-literal=GITHUB_CLIENT_ID="$GITHUB_CLIENT_ID" \
             --from-literal=GITHUB_CLIENT_SECRET="$GITHUB_CLIENT_SECRET" \
             --from-literal=GLOBAL_AGENT_SYSTEM_PROMPT="$GLOBAL_AGENT_SYSTEM_PROMPT" \
+            --from-literal=NACOS_PASSWORD="$NACOS_PASSWORD" \
+            --from-literal=NACOS_MYSQL_PASSWORD="$NACOS_MYSQL_PASSWORD" \
+            --from-literal=NACOS_AUTH_IDENTITY_KEY="$NACOS_AUTH_IDENTITY_KEY" \
+            --from-literal=NACOS_AUTH_IDENTITY_VALUE="$NACOS_AUTH_IDENTITY_VALUE" \
+            --from-literal=NACOS_AUTH_TOKEN="$NACOS_AUTH_TOKEN" \
             -n stratum --dry-run=client -o yaml | kubectl apply -f -
           kubectl create secret docker-registry aliyun-registry \
             --docker-server="${{ secrets.DOCKER_REGISTRY_URL }}" \
@@ -585,6 +605,10 @@ jobs:
             --set-string minio.image.digest="${{ steps.images.outputs.minio }}" \
             --set milvus.image.repository="${{ env.IMAGE_REPO }}/milvus" \
             --set-string milvus.image.digest="${{ steps.images.outputs.milvus }}" \
+            --set nacos.image.repository="${{ env.IMAGE_REPO }}/nacos" \
+            --set-string nacos.image.digest="${{ steps.images.outputs.nacos }}" \
+            --set nacos.mysql.image.repository="${{ env.IMAGE_REPO }}/mysql" \
+            --set-string nacos.mysql.image.digest="${{ steps.images.outputs.nacos_mysql }}" \
             --set-string secrets.externalChecksum="${EXTERNAL_SECRET_CHECKSUM}" \
             --set-string config.opikUrl="http://opik-backend.opik.svc.cluster.local:8080" \
             --set-string config.frontendUrl="$PUBLIC_BASE_URL" \

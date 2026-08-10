@@ -25,20 +25,25 @@ describe('DashboardPage', () => {
     }));
   });
 
-  it('renders eight responsive tenant overview cards without execution history', () => {
+  it('renders eight responsive tenant overview cards and the recent executions section', () => {
     useDashboardPageMock.mockReturnValue({
       counts: { agents: 1, skills: 2, knowledge_workspaces: 3, mcp_servers: 4,
         model_providers: 5, tenant_members: 6, workflows: 7, agent_user_messages_7d: 8 },
       loading: false,
+      executions: [],
+      executionsTotal: 0,
+      executionsLoading: false,
+      page: 1,
+      pageSize: 10,
+      handlePageChange: vi.fn(),
     });
 
     render(<DashboardPage />);
 
-    expect(screen.queryByText('近期执行')).not.toBeInTheDocument();
-    expect(screen.queryByText('最近执行记录')).not.toBeInTheDocument();
-    expect(screen.queryByText(/执行历史/)).not.toBeInTheDocument();
     expect(screen.getByText('概览')).toBeInTheDocument();
     expect(screen.getByText('系统运行状态一览')).toBeInTheDocument();
+    expect(screen.getByText('最近执行')).toBeInTheDocument();
+    expect(screen.getByText('最近执行记录')).toBeInTheDocument();
     for (const label of ['模型厂商', '租户成员', '工作流', '近七日 Agent 对话']) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }

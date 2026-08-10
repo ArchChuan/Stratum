@@ -40,6 +40,9 @@ func (r *smokeAuditRepo) InsertBatch(_ context.Context, events []auditdomain.Aud
 func (r *smokeAuditRepo) Query(_ context.Context, _ auditdomain.AuditFilter) ([]auditdomain.AuditEvent, error) {
 	return nil, nil
 }
+func (r *smokeAuditRepo) Count(_ context.Context, _ auditdomain.AuditFilter) (int, error) {
+	return 0, nil
+}
 func (r *smokeAuditRepo) GetByID(_ context.Context, _, _ string) (*auditdomain.AuditEvent, error) {
 	return nil, nil
 }

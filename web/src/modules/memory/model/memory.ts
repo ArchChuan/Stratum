@@ -20,6 +20,24 @@ export const memorySearchResultSchema = z
   .passthrough();
 export type MemorySearchResult = z.infer<typeof memorySearchResultSchema>;
 
+// 用户记忆事实（对齐后端 dto.MemoryFactResponse；注意时间字段为 created_at，
+// 与 memoryEntrySchema 的 timestamp 不同，不复用旧 schema）。
+export const memoryFactSchema = z.object({
+  id: z.string(),
+  scope: z.string(),
+  content: z.string(),
+  importance: z.number(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export type MemoryFact = z.infer<typeof memoryFactSchema>;
+
+export const memoryListPageSchema = z.object({
+  memories: z.array(memoryFactSchema),
+  total: z.number(),
+});
+export type MemoryListPage = z.infer<typeof memoryListPageSchema>;
+
 export const memoryStatsSchema = z
   .object({
     total_entries: z.number().optional().default(0),

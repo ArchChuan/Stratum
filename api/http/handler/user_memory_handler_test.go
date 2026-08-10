@@ -21,6 +21,9 @@ type fakeUserMemorySvc struct {
 	clearErr  error
 	created   *application.UserMemory
 	createReq *application.CreateUserMemoryRequest
+	listReq   *application.ListUserMemoriesRequest
+	listMem   []*application.UserMemory
+	listTotal int
 }
 
 func (f *fakeUserMemorySvc) ClearUserMemories(_ context.Context, _ *application.ClearUserMemoriesRequest) error {
@@ -38,6 +41,11 @@ func (f *fakeUserMemorySvc) GetUserMemory(_ context.Context, _ *application.GetU
 
 func (f *fakeUserMemorySvc) ForgetUserMemory(_ context.Context, _ *application.ForgetMemoryRequest) error {
 	return nil
+}
+
+func (f *fakeUserMemorySvc) ListUserMemories(_ context.Context, req *application.ListUserMemoriesRequest) ([]*application.UserMemory, int, error) {
+	f.listReq = req
+	return f.listMem, f.listTotal, nil
 }
 
 func setupUserMemoryRouter(svc *fakeUserMemorySvc, tenantID, userID string) *gin.Engine {
@@ -141,5 +149,88 @@ func TestClearMemories_serviceError(t *testing.T) {
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestListMemories_paginationUsesAuthenticatedIdentity(t *testing.T) {
+	svc := &fakeUserMemorySvc{
+		listMem: []*application.UserMemory{
+			{ID: "fact-2", Scope: "user", Content: "prefers Go", Importance: 0.8},
+			{ID: "fact-1", Scope: "user", Content: "likes Go", Importance: 0.7},
+		},
+		listTotal: 2,
+	}
+	h := NewUserMemoryHandler(svc, nil)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.GET("/api/memory", func(c *gin.Context) {
+		ctx := reqctx.WithTenantID(c.Request.Context(), "tenant-1")
+		c.Request = c.Request.WithContext(ctx)
+		c.Set(middleware.ContextKeySub, "user-1")
+	}, h.ListMemories)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/memory?page=2&page_size=10", nil) //nolint:noctx
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if svc.listReq.TenantID != "tenant-1" || svc.listReq.UserID != "user-1" {
+		t.Fatalf("handler used wrong identity: %#v", svc.listReq)
+	}
+	if svc.listReq.Limit != 10 || svc.listReq.Offset != 10 {
+		t.Fatalf("limit=%d offset=%d, want 10/10", svc.listReq.Limit, svc.listReq.Offset)
+	}
+	var got struct {
+		Memories []map[string]any `json:"memories"`
+		Total    int              `json:"total"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Total != 2 || len(got.Memories) != 2 {
+		t.Fatalf("total=%d len=%d, want 2/2", got.Total, len(got.Memories))
+	}
+	if got.Memories[0]["id"] != "fact-2" {
+		t.Fatalf("unexpected first memory: %#v", got.Memories[0])
+	}
+}
+
+func TestListMemories_clampsInvalidPagination(t *testing.T) {
+	svc := &fakeUserMemorySvc{}
+	h := NewUserMemoryHandler(svc, nil)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.GET("/api/memory", func(c *gin.Context) {
+		ctx := reqctx.WithTenantID(c.Request.Context(), "tenant-1")
+		c.Request = c.Request.WithContext(ctx)
+		c.Set(middleware.ContextKeySub, "user-1")
+	}, h.ListMemories)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/memory?page=0&page_size=-5", nil) //nolint:noctx
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if svc.listReq.Limit != 20 || svc.listReq.Offset != 0 {
+		t.Fatalf("limit=%d offset=%d, want clamped 20/0", svc.listReq.Limit, svc.listReq.Offset)
+	}
+}
+
+func TestListMemories_missingIdentity(t *testing.T) {
+	h := NewUserMemoryHandler(&fakeUserMemorySvc{}, nil)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.GET("/api/memory", h.ListMemories)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/memory", nil) //nolint:noctx
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
 	}
 }

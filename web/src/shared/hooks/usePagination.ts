@@ -27,6 +27,7 @@ export const usePagination = (initial?: Partial<PaginationState>) => {
   return {
     ...state,
     setTotal,
+    onChange,
     pageSizeOptions: PAGE_SIZE_OPTIONS,
     tableProps: {
       pagination: {

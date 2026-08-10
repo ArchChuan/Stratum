@@ -54,6 +54,10 @@ func (r *stubFactRepo) FindSupersedeCandidates(ctx context.Context, tenantID str
 	return r.findCandidatesFunc(ctx, tenantID, filter.UserID, filter.AgentID, content, minSimilarity, maxCount)
 }
 
+func (r *stubFactRepo) ListUserFacts(ctx context.Context, tenantID, userID string, limit, offset int) ([]*domain.MemoryFact, error) {
+	return nil, nil
+}
+
 func (r *stubFactRepo) CountByUser(ctx context.Context, tenantID, userID string) (int, error) {
 	return 0, nil
 }

@@ -14,7 +14,7 @@ import { useMemo, useRef } from 'react';
 import { toFlowEdges, toFlowNodes, type WorkflowEditorAction, type WorkflowEditorState, type WorkflowFlowNode } from '../model/editor';
 import type { WorkflowNodeType } from '../model/workflow';
 
-import { WorkflowNodePalette } from './WorkflowNodePalette';
+import { WORKFLOW_DRAG_TYPE, WorkflowNodePalette } from './WorkflowNodePalette';
 import { WorkflowNodeCard } from './nodes/WorkflowNodeCard';
 
 import { WORKFLOW_NODE_HEIGHT, WORKFLOW_NODE_WIDTH } from '@/constants';
@@ -40,13 +40,27 @@ export const WorkflowCanvas = ({
   });
   const connect = (connection: Connection) => {
     if (!connection.source || !connection.target) return;
-    dispatch({ type: 'edge.connect', edgeId: createEdgeId(), from: connection.source, to: connection.target });
+    // 条件节点的分支 handle（是/否/默认）映射到边字段，非 condition 边无 sourceHandle
+    const branch = connection.sourceHandle === 'yes'
+      ? { conditionValue: true }
+      : connection.sourceHandle === 'no'
+        ? { conditionValue: false }
+        : connection.sourceHandle === 'default' ? { isDefault: true } : {};
+    dispatch({ type: 'edge.connect', edgeId: createEdgeId(), from: connection.source, to: connection.target, ...branch });
   };
   const deleteSelection = () => {
     if (!state.selected) return;
     dispatch(state.selected.kind === 'node'
       ? { type: 'node.delete', nodeId: state.selected.id }
       : { type: 'edge.delete', edgeId: state.selected.id });
+  };
+  const onDrop = (event: React.DragEvent) => {
+    // 只接受本页面 palette 拖出的自定义类型，忽略外部拖拽内容
+    if (!event.dataTransfer.types.includes(WORKFLOW_DRAG_TYPE)) return;
+    event.preventDefault();
+    const nodeType = event.dataTransfer.getData(WORKFLOW_DRAG_TYPE) as WorkflowNodeType;
+    const position = instanceRef.current?.screenToFlowPosition({ x: event.clientX, y: event.clientY }) ?? { x: 0, y: 0 };
+    dispatch({ type: 'node.insert', nodeId: createNodeId(), nodeType, position });
   };
 
   return <div className="workflow-editor-workspace">
@@ -72,6 +86,13 @@ export const WorkflowCanvas = ({
         onNodeClick={(_, node) => dispatch({ type: 'selection.set', selection: { kind: 'node', id: node.id } })}
         onEdgeClick={(_, edge) => dispatch({ type: 'selection.set', selection: { kind: 'edge', id: edge.id } })}
         onNodeDragStop={(_, node) => dispatch({ type: 'node.move', nodeId: node.id, position: node.position })}
+        onDrop={onDrop}
+        onDragOver={(event) => {
+          if (event.dataTransfer.types.includes(WORKFLOW_DRAG_TYPE)) {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'copy';
+          }
+        }}
         nodeOrigin={[0.5, 0.5]}
         defaultEdgeOptions={{ animated: true }}
         fitView

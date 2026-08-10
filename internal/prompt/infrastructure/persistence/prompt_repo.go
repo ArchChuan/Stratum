@@ -139,6 +139,35 @@ func (r *PgPromptRepo) GetByHash(ctx context.Context, hash string) (*domain.Prom
 	return &tmpl, nil
 }
 
+// ListByKey returns the latest version row per prompt key (DISTINCT ON key
+// keeps the highest version of each family) with the total distinct key count.
+func (r *PgPromptRepo) ListByKey(ctx context.Context, tenantID *string, limit, offset int) ([]domain.PromptTemplate, int, error) {
+	var total int
+	if err := r.pool.QueryRow(ctx,
+		`SELECT COUNT(DISTINCT key) FROM public.prompt_templates
+		 WHERE tenant_id IS NOT DISTINCT FROM $1`, tenantID,
+	).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("prompt: count keys: %w", err)
+	}
+	rows, err := r.pool.Query(ctx,
+		`SELECT DISTINCT ON (key) key, tenant_id, version, content, status, content_hash, created_by, created_at
+		 FROM public.prompt_templates
+		 WHERE tenant_id IS NOT DISTINCT FROM $1
+		 ORDER BY key, version DESC
+		 LIMIT $2 OFFSET $3`,
+		tenantID, limit, offset,
+	)
+	if err != nil {
+		return nil, 0, fmt.Errorf("prompt: list by key: %w", err)
+	}
+	defer rows.Close()
+	tmpls, err := scanPrompts(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	return tmpls, total, nil
+}
+
 // PgBindingRepo persists prompt bindings in public.prompt_bindings.
 type PgBindingRepo struct {
 	pool poolIface

@@ -29,6 +29,10 @@ func (r *alwaysFailAuditRepo) Query(context.Context, domain.AuditFilter) ([]doma
 	return nil, nil
 }
 
+func (r *alwaysFailAuditRepo) Count(context.Context, domain.AuditFilter) (int, error) {
+	return 0, nil
+}
+
 func (r *alwaysFailAuditRepo) GetByID(context.Context, string, string) (*domain.AuditEvent, error) {
 	return nil, nil
 }

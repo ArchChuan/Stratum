@@ -48,6 +48,34 @@ func (h *PromptHandler) CreatePrompt(c *gin.Context) {
 	c.JSON(http.StatusCreated, tmpl)
 }
 
+// ListPrompts godoc
+// GET /v1/prompts?page=&page_size=
+// Returns the latest version of every prompt key (admin).
+func (h *PromptHandler) ListPrompts(c *gin.Context) {
+	tenantID, _ := c.Get("auth.tenant_id")
+	var tid *string
+	if v, ok := tenantID.(string); ok && v != "" {
+		tid = &v
+	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	tmpls, total, err := h.registry.ListTemplates(c.Request.Context(), tid, page, pageSize)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	prompts := make([]gin.H, 0, len(tmpls))
+	for _, t := range tmpls {
+		prompts = append(prompts, gin.H{
+			"key":            t.Key,
+			"latest_version": t.Version,
+			"latest_status":  t.Status,
+			"created_at":     t.CreatedAt,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"prompts": prompts, "total": total})
+}
+
 // ListVersions godoc
 // GET /v1/prompts/:key/versions
 func (h *PromptHandler) ListVersions(c *gin.Context) {
@@ -84,6 +112,18 @@ func (h *PromptHandler) PublishVersion(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "published"})
+}
+
+// ListBindings godoc
+// GET /v1/prompts/bindings
+// Returns all A/B bindings (admin).
+func (h *PromptHandler) ListBindings(c *gin.Context) {
+	bindings, err := h.ab.ListBindings(c.Request.Context())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"bindings": bindings})
 }
 
 // UpsertBinding godoc

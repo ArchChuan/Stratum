@@ -58,6 +58,28 @@ describe('buildMenuItems', () => {
     expect(resolveOpenKeys('/workflows/new')).toEqual(['workflow-group']);
   });
 
+  it('shows the tenant admin group (prompts/audit) only to tenant admins', () => {
+    const adminLabels = collectLabels(buildMenuItems({
+      sub: 'admin-1', tenant_id: 'tenant-1', role: 'admin', avatar_url: '', github_login: 'admin', username: '',
+      current_tenant: { id: 'tenant-1', name: 'Test', role: 'admin' },
+    }));
+    render(<MemoryRouter>{adminLabels.map((label, index) => <div key={index}>{label}</div>)}</MemoryRouter>);
+    expect(screen.getByRole('link', { name: '提示词管理' })).toHaveAttribute('href', '/prompts');
+    expect(screen.getByRole('link', { name: '审计日志' })).toHaveAttribute('href', '/audit');
+    expect(resolveOpenKeys('/prompts')).toEqual(['tenant-admin-group']);
+    expect(resolveOpenKeys('/audit')).toEqual(['tenant-admin-group']);
+  });
+
+  it('hides the tenant admin group from members', () => {
+    const memberLabels = collectLabels(buildMenuItems({
+      sub: 'user-1', tenant_id: 'tenant-1', role: 'member', avatar_url: '', github_login: 'member', username: '',
+      current_tenant: { id: 'tenant-1', name: 'Test', role: 'member' },
+    }));
+    render(<MemoryRouter>{memberLabels.map((label, index) => <div key={index}>{label}</div>)}</MemoryRouter>);
+    expect(screen.queryByRole('link', { name: '提示词管理' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '审计日志' })).not.toBeInTheDocument();
+  });
+
   it('does not expose execution history in navigation', () => {
     const items = buildMenuItems({
       sub: 'user-1',

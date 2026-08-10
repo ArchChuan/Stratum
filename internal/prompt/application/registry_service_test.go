@@ -224,3 +224,34 @@ func TestRegistryService_GetEffectivePrompt_agentBindingBrokenFallsThrough(t *te
 	require.NoError(t, err)
 	require.Equal(t, "global-prompt", text)
 }
+
+func TestRegistryService_ListTemplates_passesPagination(t *testing.T) {
+	repo := &fakePromptRepo{
+		listKeys:  []domain.PromptTemplate{{Key: "k1", Version: 3, Status: domain.PromptPublished}},
+		listTotal: 1,
+	}
+	svc := newRegistry(repo, nil)
+	tmpls, total, err := svc.ListTemplates(context.Background(), tenantPtr("t1"), 2, 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, tmpls, 1)
+	require.Equal(t, 10, repo.listLimit)
+	require.Equal(t, 10, repo.listOffset)
+}
+
+func TestRegistryService_ListTemplates_defaultsNonPositivePagination(t *testing.T) {
+	repo := &fakePromptRepo{}
+	svc := newRegistry(repo, nil)
+	_, _, err := svc.ListTemplates(context.Background(), nil, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, 20, repo.listLimit)
+	require.Equal(t, 0, repo.listOffset)
+}
+
+func TestRegistryService_ListTemplates_repoFails(t *testing.T) {
+	svc := newRegistry(&fakePromptRepo{err: context.DeadlineExceeded}, nil)
+	_, _, err := svc.ListTemplates(context.Background(), nil, 1, 10)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func tenantPtr(id string) *string { return &id }

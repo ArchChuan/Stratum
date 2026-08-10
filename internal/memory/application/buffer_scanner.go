@@ -80,9 +80,14 @@ func (s *BufferScanner) run(ctx context.Context) {
 }
 
 func (s *BufferScanner) scan(ctx context.Context) {
+	// 单次扫描必须有操作预算：store.Scan 的 DNS/网络解析可能挂死（WSL2
+	// lookup timeout 可达 30s），无预算时 ticker 节拍被拖死。预算必须小于
+	// MemoryBufferScanInterval，否则扫描永远追不上节拍。
+	scanCtx, cancel := context.WithTimeout(ctx, constants.MemoryBufferScanTimeout)
+	defer cancel()
 	var cursor uint64
 	for {
-		keys, next, err := s.store.Scan(ctx, cursor, "memory:buffer:meta:*", 100)
+		keys, next, err := s.store.Scan(scanCtx, cursor, "memory:buffer:meta:*", 100)
 		if err != nil {
 			s.logger.Warn("memory.buffer_scanner.scan_failed", zap.Error(err))
 			return

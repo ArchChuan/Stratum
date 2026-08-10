@@ -15,6 +15,10 @@ export const workflowRetrySchema = z.object({
   backoff_ms: z.number().int().nonnegative().optional().default(0),
 });
 
+// 必须 optional、无 default：历史数据无 position 时保持缺失，
+// 由自动布局兜底填充，避免被 (0,0) 污染导致节点堆叠在原点。
+export const workflowNodePositionSchema = z.object({ x: z.number(), y: z.number() });
+
 const workflowNodeBase = z.object({
   id: z.string().min(1),
   name: z.string().optional().default(''),
@@ -22,6 +26,7 @@ const workflowNodeBase = z.object({
   output_mapping: z.record(z.string()).optional().default({}),
   retry: workflowRetrySchema.optional().default({ max_attempts: 0, backoff_ms: 0 }),
   timeout_ms: z.number().int().nonnegative().optional().default(0),
+  position: workflowNodePositionSchema.optional(),
 });
 
 export const workflowNodeSchema = z.discriminatedUnion('type', [

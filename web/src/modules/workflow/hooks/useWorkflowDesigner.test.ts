@@ -50,4 +50,20 @@ describe('useWorkflowDesigner', () => {
     expect(result.current.editor.spec.nodes[0].name).toBe('本地修改');
     expect(result.current.dirty).toBe(true);
   });
+
+  it('fills missing positions on load so legacy specs render laid out', async () => {
+    const { result } = renderHook(() => useWorkflowDesigner('workflow-1'));
+    await waitFor(() => expect(result.current.definition).not.toBeNull());
+    // 单节点 layout：x = MARGIN，y = MARGIN - HEIGHT/2
+    expect(result.current.editor.spec.nodes[0].position).toEqual({ x: 80, y: 36 });
+  });
+
+  it('includes computed positions in the save payload, not only in local state', async () => {
+    vi.mocked(workflowApi.updateWorkflowDraft).mockResolvedValue({ ...definition, revision: 4 });
+    const { result } = renderHook(() => useWorkflowDesigner('workflow-1'));
+    await waitFor(() => expect(result.current.definition).not.toBeNull());
+    await act(async () => { await result.current.save(); });
+    const payload = vi.mocked(workflowApi.updateWorkflowDraft).mock.calls[0][1];
+    expect(payload.spec.nodes[0].position).toEqual({ x: 80, y: 36 });
+  });
 });

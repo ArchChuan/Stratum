@@ -521,6 +521,41 @@ func TestFactRepo_CountByUser_queryFails(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestFactRepo_ListUserFacts_userScopedNewestFirst(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockFactRepo(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("FROM memory_facts").
+		WithArgs("u1", 5, 10).
+		WillReturnRows(pgxmock.NewRows(factColumns).
+			AddRow(factRow(nil, nil, nil)...).
+			AddRow(factRow(nil, nil, nil)...))
+	mock.ExpectCommit()
+
+	facts, err := repo.ListUserFacts(context.Background(), "t1", "u1", 5, 10)
+	require.NoError(t, err)
+	require.Len(t, facts, 2)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFactRepo_ListUserFacts_queryFails(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockFactRepo(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("FROM memory_facts").
+		WithArgs("u1", 20, 0).
+		WillReturnError(pgx.ErrTxClosed)
+	mock.ExpectRollback()
+
+	_, err := repo.ListUserFacts(context.Background(), "t1", "u1", 20, 0)
+	require.ErrorContains(t, err, "list user facts")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestFactRepo_Delete(t *testing.T) {
 	mock := newFactMock(t)
 	repo := newMockFactRepo(mock)

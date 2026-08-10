@@ -173,6 +173,21 @@ func (r *PgAuditRepo) Query(ctx context.Context, f domain.AuditFilter) ([]domain
 	return events, rows.Err()
 }
 
+// Count returns the total number of events matching the filter
+// (pagination total; filters share buildAuditFilter with Query).
+func (r *PgAuditRepo) Count(ctx context.Context, f domain.AuditFilter) (int, error) {
+	where, args := buildAuditFilter(f)
+	var total int
+	err := r.pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT COUNT(*) FROM public.audit_events WHERE %s`, where),
+		args...,
+	).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("audit: count: %w", err)
+	}
+	return total, nil
+}
+
 // GetByID returns a single event or nil, scoped to the caller's tenant.
 // An empty tenantID fails closed: a query without a tenant condition would
 // expose other tenants' audit events (cross-tenant IDOR).
