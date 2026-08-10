@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/api/http/dto"
+	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 )
 
 // parityPairs 登记 (gen struct, 手写 struct) 类型对偶。
@@ -17,7 +18,11 @@ var parityPairs = []struct {
 	name string
 	gen  reflect.Type
 	hw   reflect.Type
-}{}
+}{
+	{name: "MCPServerConfigRequest", gen: reflect.TypeOf(gen.MCPServerConfigRequest{}), hw: reflect.TypeOf(dto.MCPServerConfigRequest{})},
+	{name: "MCPAuthConfigResponse", gen: reflect.TypeOf(gen.MCPAuthConfigResponse{}), hw: reflect.TypeOf(dto.MCPAuthConfigResponse{})},
+	{name: "MCPServerConfigResponse", gen: reflect.TypeOf(gen.MCPServerConfigResponse{}), hw: reflect.TypeOf(dto.MCPServerConfigResponse{})},
+}
 
 // removedStructs 登记"已从 dto 包删除"的 struct 名。
 var removedStructs = map[string]bool{
@@ -83,6 +88,10 @@ func compatibleTypeDepth(a, b reflect.Type, depth int) bool {
 		return true
 	}
 	if a.Kind() == reflect.Slice && b.Kind() == reflect.Slice {
+		return compatibleTypeDepth(a.Elem(), b.Elem(), depth+1)
+	}
+	if a.Kind() == reflect.Ptr && b.Kind() == reflect.Ptr {
+		// proto3 optional message → *T(映射表):*gen.T vs *dto.T 递归到 struct 等价
 		return compatibleTypeDepth(a.Elem(), b.Elem(), depth+1)
 	}
 	if a.Kind() == reflect.Map && b.Kind() == reflect.Map {
