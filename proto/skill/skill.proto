@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package stratum.skill;
+
+import "google/protobuf/struct.proto";
+
+message SkillRequirements {
+  repeated string mcpToolIds = 1;
+  repeated string knowledgeWorkspaceIds = 2;
+  repeated string memoryScopes = 3;
+}
+
+message CreateSkillRequest {
+  // @binding: required
+  string name = 1;
+  // @binding: required
+  string goal = 2;
+  // @binding: required
+  string whenToUse = 3;
+  google.protobuf.Value sampleInput = 4;
+  google.protobuf.Value expectedOutput = 5;
+  // @binding: required
+  string instructions = 6;
+  SkillRequirements requirements = 7;
+  // Editors grants additional admins update rights, persisted with the skill.
+  repeated string editors = 8;
+}
+
+message UpdateSkillCapabilityRequest {
+  string goal = 1;
+  string whenToUse = 2;
+  string inputSpec = 3;
+  string outputSpec = 4;
+}
+
+message UpdateSkillActivationRequest {
+  string name = 1;
+  string description = 2;
+  google.protobuf.Struct inputSchema = 3;
+  google.protobuf.Struct outputSchema = 4;
+  bool confirmed = 5;
+}
+
+message UpdateSkillInstructionBundleRequest {
+  string instructions = 1;
+  SkillRequirements requirements = 2;
+}
+
+message SkillWorkspaceResponse {
+  repeated string editors = 1;
+  SkillProductResponse skill = 2;
+  SkillRevisionResponse draft = 3;
+}
+
+message SkillProductResponse {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string status = 4;
+  // @omitempty
+  string activeRevisionId = 5;
+  // @omitempty
+  string draftRevisionId = 6;
+}
+
+message SkillRevisionResponse {
+  string id = 1;
+  string skillId = 2;
+  // @omitempty
+  int32 revisionNo = 3;
+  string status = 4;
+  google.protobuf.Struct capability = 5;
+  google.protobuf.Struct activationContract = 6;
+  string instructions = 7;
+  google.protobuf.Struct requirements = 8;
+  // @omitempty
+  google.protobuf.Struct publishChecks = 9;
+}
+
+message ErrorResponse {
+  int32 code = 1;
+  string message = 2;
+}

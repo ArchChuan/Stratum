@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/api/http/dto"
+	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 )
 
 // parityPairs 登记 (gen struct, 手写 struct) 类型对偶。
@@ -17,7 +18,17 @@ var parityPairs = []struct {
 	name string
 	gen  reflect.Type
 	hw   reflect.Type
-}{}
+}{
+	{"SkillRequirements", reflect.TypeOf(gen.SkillRequirements{}), reflect.TypeOf(dto.SkillRequirements{})},
+	{"CreateSkillRequest", reflect.TypeOf(gen.CreateSkillRequest{}), reflect.TypeOf(dto.CreateSkillRequest{})},
+	{"UpdateSkillCapabilityRequest", reflect.TypeOf(gen.UpdateSkillCapabilityRequest{}), reflect.TypeOf(dto.UpdateSkillCapabilityRequest{})},
+	{"UpdateSkillActivationRequest", reflect.TypeOf(gen.UpdateSkillActivationRequest{}), reflect.TypeOf(dto.UpdateSkillActivationRequest{})},
+	{"UpdateSkillInstructionBundleRequest", reflect.TypeOf(gen.UpdateSkillInstructionBundleRequest{}), reflect.TypeOf(dto.UpdateSkillInstructionBundleRequest{})},
+	{"SkillWorkspaceResponse", reflect.TypeOf(gen.SkillWorkspaceResponse{}), reflect.TypeOf(dto.SkillWorkspaceResponse{})},
+	{"SkillProductResponse", reflect.TypeOf(gen.SkillProductResponse{}), reflect.TypeOf(dto.SkillProductResponse{})},
+	{"SkillRevisionResponse", reflect.TypeOf(gen.SkillRevisionResponse{}), reflect.TypeOf(dto.SkillRevisionResponse{})},
+	{"ErrorResponse", reflect.TypeOf(gen.ErrorResponse{}), reflect.TypeOf(dto.ErrorResponse{})},
+}
 
 // removedStructs 登记"已从 dto 包删除"的 struct 名。
 var removedStructs = map[string]bool{
