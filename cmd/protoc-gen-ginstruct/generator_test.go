@@ -286,6 +286,7 @@ func TestGoFieldNameAcronyms(t *testing.T) {
 		"mcpToolIds":             "MCPToolIDs",
 		"agent_user_messages_7d": "AgentUserMessages7d",
 		"oauth2_client_id":       "OAuth2ClientID",
+		"maxDailyCostUsd":        "MaxDailyCostUSD",
 		"topK":                   "TopK",
 	}
 	for in, want := range cases {
