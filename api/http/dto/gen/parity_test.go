@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/api/http/dto"
-	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 )
 
 // parityPairs 登记 (gen struct, 手写 struct) 类型对偶。
@@ -18,13 +17,7 @@ var parityPairs = []struct {
 	name string
 	gen  reflect.Type
 	hw   reflect.Type
-}{
-	{name: "CreateScheduledTaskRequest", gen: reflect.TypeOf(gen.CreateScheduledTaskRequest{}), hw: reflect.TypeOf(dto.CreateScheduledTaskRequest{})},
-	{name: "UpdateScheduledTaskRequest", gen: reflect.TypeOf(gen.UpdateScheduledTaskRequest{}), hw: reflect.TypeOf(dto.UpdateScheduledTaskRequest{})},
-	{name: "SetScheduledTaskEnabledRequest", gen: reflect.TypeOf(gen.SetScheduledTaskEnabledRequest{}), hw: reflect.TypeOf(dto.SetScheduledTaskEnabledRequest{})},
-	{name: "ScheduledTaskResponse", gen: reflect.TypeOf(gen.ScheduledTaskResponse{}), hw: reflect.TypeOf(dto.ScheduledTaskResponse{})},
-	{name: "ScheduledTaskPageResponse", gen: reflect.TypeOf(gen.ScheduledTaskPageResponse{}), hw: reflect.TypeOf(dto.ScheduledTaskPageResponse{})},
-}
+}{}
 
 // removedStructs 登记"已从 dto 包删除"的 struct 名。
 var removedStructs = map[string]bool{
@@ -54,6 +47,11 @@ var removedStructs = map[string]bool{
 	"CreateEvaluationExperimentRequest": true,
 	"EvaluationCommandRequest":          true,
 	"RecordEvaluationFeedbackRequest":   true,
+	"CreateScheduledTaskRequest":        true,
+	"UpdateScheduledTaskRequest":        true,
+	"SetScheduledTaskEnabledRequest":    true,
+	"ScheduledTaskResponse":             true,
+	"ScheduledTaskPageResponse":         true,
 }
 
 func TestParityHandwrittenVsGenerated(t *testing.T) {

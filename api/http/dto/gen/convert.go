@@ -6,6 +6,7 @@ import (
 
 	collabdomain "github.com/byteBuilderX/stratum/internal/collab/domain"
 	"github.com/byteBuilderX/stratum/internal/mcp/domain"
+	scheddomain "github.com/byteBuilderX/stratum/internal/scheduler/domain"
 )
 
 // ToCollabResponse 与手写 dto.ToCollabResponse 逐行一致(迁移保留)。
@@ -123,4 +124,24 @@ func (r StartWorkflowRunRequest) RunInput() (map[string]any, error) {
 		input[key] = value
 	}
 	return input, nil
+}
+
+// ToScheduledTaskResponse 与手写 dto.ToScheduledTaskResponse 逐行一致(迁移保留)。
+func ToScheduledTaskResponse(t scheddomain.ScheduledTask) ScheduledTaskResponse {
+	return ScheduledTaskResponse{
+		ID:               t.ID,
+		Name:             t.Name,
+		WorkflowID:       t.WorkflowID,
+		VersionID:        t.VersionID,
+		InputTemplate:    t.InputTemplate,
+		CronExpr:         t.CronExpr,
+		Enabled:          t.Enabled,
+		NextFireAt:       t.NextFireAt,
+		LastRunAt:        t.LastRunAt,
+		LastRunStatus:    t.LastRunStatus,
+		LastErrorMessage: t.LastErrorMessage,
+		CreatedBy:        t.CreatedBy,
+		CreatedAt:        t.CreatedAt,
+		UpdatedAt:        t.UpdatedAt,
+	}
 }
