@@ -167,7 +167,17 @@ func collectField(fd *descriptorpb.FileDescriptorProto, f *descriptorpb.FieldDes
 		}
 		fl.GoType, fl.TSType = goType, tsType
 	} else {
-		fl.TSType = tsScalarType(f) // TS side follows the proto type
+		// TS side follows the proto type: message types map via tsScalarType;
+		// scalar types (the @gotype case, tsScalarType returns "") reuse
+		// scalarType's TS column — the mapping table stays in one place.
+		fl.TSType = tsScalarType(f)
+		if fl.TSType == "" {
+			_, ts, err := scalarType(f)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %s: %w", fd.GetName(), jsonName, err)
+			}
+			fl.TSType = ts
+		}
 	}
 	// json tag: key verbatim; ,omitempty only via @omitempty. The comma goes
 	// inside the quotes — encoding/json silently ignores one outside.

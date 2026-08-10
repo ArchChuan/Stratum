@@ -51,34 +51,60 @@ func buildRequest(t *testing.T, protoPath string) *pluginpb.CodeGeneratorRequest
 }
 
 // TestGenerateSnapshot guards the approved output shape: any generator
-// behavior change that moves the emitted text fails CI. Only the Go side is
-// asserted here — tsFileName/tsFile are still Task 3 stubs (TS output and
-// its golden move to Task 3).
+// behavior change that moves the emitted text fails CI. Files are located by
+// the same name the plugin emits (goFileName/tsFileName), never by content,
+// so a Go/TS swap cannot be mistaken for the other side.
 func TestGenerateSnapshot(t *testing.T) {
 	resp := generate(buildRequest(t, "testdata/sample.proto"))
 	if resp.Error != nil {
 		t.Fatalf("generate: %s", *resp.Error)
 	}
-	var goContent string
+	contents := map[string]string{}
 	for _, f := range resp.File {
-		if f.GetContent() != "" {
-			goContent = f.GetContent()
+		contents[f.GetName()] = f.GetContent()
+	}
+	for name, golden := range map[string]string{
+		goFileName("sample.proto"): "testdata/sample.golden.go",
+		tsFileName("sample.proto"): "testdata/sample.golden.ts",
+	} {
+		got, ok := contents[name]
+		if !ok {
+			t.Errorf("missing generated file %q", name)
+			continue
+		}
+		want, err := os.ReadFile(golden)
+		if err != nil {
+			t.Fatalf("missing golden %s: %v", golden, err)
+		}
+		if got != string(want) {
+			t.Errorf("%s differs from golden:\n%s", name, diff(got, string(want)))
 		}
 	}
-	want, err := os.ReadFile("testdata/sample.golden.go")
-	if err != nil {
-		t.Fatalf("missing golden: %v", err)
+}
+
+// TestFileNames pins the output path derivation: fixed gen/ dirs,
+// basename-derived (one file per proto), .proto -> .go / .ts.
+func TestFileNames(t *testing.T) {
+	cases := map[string]struct{ goName, tsName string }{
+		"sample.proto":               {"api/http/dto/gen/sample.go", "web/src/services/gen/sample.ts"},
+		"collab/collaboration.proto": {"api/http/dto/gen/collaboration.go", "web/src/services/gen/collaboration.ts"},
+		"proto/agent/agent.proto":    {"api/http/dto/gen/agent.go", "web/src/services/gen/agent.ts"},
 	}
-	if goContent != string(want) {
-		t.Errorf("go output differs from golden:\n%s", diff(goContent, string(want)))
+	for in, want := range cases {
+		if got := goFileName(in); got != want.goName {
+			t.Errorf("goFileName(%q) = %q, want %q", in, got, want.goName)
+		}
+		if got := tsFileName(in); got != want.tsName {
+			t.Errorf("tsFileName(%q) = %q, want %q", in, got, want.tsName)
+		}
 	}
 }
 
 // TestMappingTable fixes every row of the §5 mapping table on the
 // intermediate model: scalar/optional/repeated/map/message/WKT mapping plus
-// @binding/@gotype/@omitempty effects. TS columns follow the model (the
-// status row's TSType is still "" because tsScalarType maps message types
-// only; the @gotype TS side is Task 3).
+// @binding/@gotype/@omitempty effects. The @gotype status row's TSType
+// follows the proto type (proto string -> "string"), reusing scalarType's
+// TS column — the mapping table has one home in the generator.
 func TestMappingTable(t *testing.T) {
 	req := buildRequest(t, "testdata/sample.proto")
 	resp := generate(req)
@@ -109,7 +135,7 @@ func TestMappingTable(t *testing.T) {
 		"SampleMappings": {
 			"name":         {"string", "string", `json:"name"`, "required,max=255"},
 			"created_at":   {"time.Time", "string", `json:"created_at"`, ""},
-			"status":       {"github.com/byteBuilderX/stratum/internal/agent/domain.OpProposalStatus", "", `json:"status"`, ""},
+			"status":       {"github.com/byteBuilderX/stratum/internal/agent/domain.OpProposalStatus", "string", `json:"status"`, ""},
 			"config":       {"map[string]any", "Record<string, unknown>", `json:"config"`, ""},
 			"sample_input": {"any", "unknown", `json:"sample_input"`, ""},
 			"maybe":        {"*bool", "boolean | null", `json:"maybe"`, ""},
