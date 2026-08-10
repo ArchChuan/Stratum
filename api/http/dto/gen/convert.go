@@ -2,6 +2,7 @@ package gen
 
 import (
 	"errors"
+	"fmt"
 
 	collabdomain "github.com/byteBuilderX/stratum/internal/collab/domain"
 	"github.com/byteBuilderX/stratum/internal/mcp/domain"
@@ -108,4 +109,18 @@ func authCredentialConfigured(auth *domain.AuthConfig) bool {
 	default:
 		return false
 	}
+}
+
+// RunInput 与手写 dto.(StartWorkflowRunRequest).RunInput 逐行一致(迁移保留,
+// 含 fields.task 保留字校验)。
+func (r StartWorkflowRunRequest) RunInput() (map[string]any, error) {
+	if _, exists := r.Fields["task"]; exists {
+		return nil, fmt.Errorf("fields.task is reserved")
+	}
+	input := make(map[string]any, len(r.Fields)+1)
+	input["task"] = r.Task
+	for key, value := range r.Fields {
+		input[key] = value
+	}
+	return input, nil
 }

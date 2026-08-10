@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/byteBuilderX/stratum/api/http/dto"
+	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	workflowapp "github.com/byteBuilderX/stratum/internal/workflow/application"
 	workflowdomain "github.com/byteBuilderX/stratum/internal/workflow/domain"
@@ -139,7 +139,7 @@ func (h *WorkflowHandler) CreateDefinition(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	var req dto.CreateWorkflowRequest
+	var req gen.CreateWorkflowRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -158,7 +158,7 @@ func (h *WorkflowHandler) UpdateDefinition(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	var req dto.UpdateWorkflowRequest
+	var req gen.UpdateWorkflowRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -222,7 +222,7 @@ func (h *WorkflowHandler) StartRun(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, fmt.Errorf("authenticated actor required")))
 		return
 	}
-	var req dto.StartWorkflowRunRequest
+	var req gen.StartWorkflowRunRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -363,7 +363,7 @@ func (h *WorkflowHandler) controlRun(c *gin.Context, action string) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, fmt.Errorf("authenticated actor required")))
 		return
 	}
-	var req dto.WorkflowControlRequest
+	var req gen.WorkflowControlRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -417,7 +417,7 @@ func (h *WorkflowHandler) DecideApproval(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, fmt.Errorf("authenticated actor required")))
 		return
 	}
-	var req dto.WorkflowApprovalDecisionRequest
+	var req gen.WorkflowApprovalDecisionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -440,7 +440,7 @@ func (h *WorkflowHandler) ResolveManual(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, fmt.Errorf("authenticated actor required")))
 		return
 	}
-	var req dto.WorkflowManualResolveRequest
+	var req gen.WorkflowManualResolveRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return

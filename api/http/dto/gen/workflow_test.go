@@ -1,15 +1,14 @@
-package dto_test
+package gen
 
 import (
 	"encoding/json"
 	"testing"
 
-	"github.com/byteBuilderX/stratum/api/http/dto"
 	"github.com/stretchr/testify/require"
 )
 
 func TestStartWorkflowRunRequestBuildsFlatDomainInput(t *testing.T) {
-	var request dto.StartWorkflowRunRequest
+	var request StartWorkflowRunRequest
 	require.NoError(t, json.Unmarshal([]byte(`{
 		"version_id":"version-1","task":"分析市场","fields":{"region":"east","count":3},"idempotency_key":"key-1"
 	}`), &request))
@@ -21,7 +20,7 @@ func TestStartWorkflowRunRequestBuildsFlatDomainInput(t *testing.T) {
 }
 
 func TestStartWorkflowRunRequestRejectsReservedTaskField(t *testing.T) {
-	request := dto.StartWorkflowRunRequest{Task: "真实任务", Fields: map[string]any{"task": "覆盖"}}
+	request := StartWorkflowRunRequest{Task: "真实任务", Fields: map[string]any{"task": "覆盖"}}
 	_, err := request.RunInput()
 	require.Error(t, err)
 }
