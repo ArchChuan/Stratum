@@ -35,6 +35,9 @@ type Schema struct {
 	Minimum              *float64           `json:"minimum,omitempty"` // 指针区分省略与 0;支持 float(backoffFactor)
 	Maximum              *float64           `json:"maximum,omitempty"`
 	OneOf                []*Schema          `json:"oneOf,omitempty"`
+
+	// untypedArray 标记有意无 items 的数组;unexported,不参与序列化。
+	untypedArray bool
 }
 
 // Ptr 返回指向 v 的指针,用于区分"省略"与"零值"(additionalProperties、minimum 等)。

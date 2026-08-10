@@ -113,6 +113,17 @@ func TestScalars(t *testing.T) {
 	if string(got) != `{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":5,"uniqueItems":true}` {
 		t.Errorf("Array = %s", got)
 	}
+	got, _ = json.Marshal(UntypedArray(""))
+	if string(got) != `{"type":"array"}` {
+		t.Errorf("UntypedArray = %s", got)
+	}
+	// UntypedArray 通过 Object 递归校验(有意无 items 合法)。
+	untyped, err := Object(RequiredProp("nodes", UntypedArray("")))
+	if err != nil {
+		t.Errorf("Object(UntypedArray): %v", err)
+	} else if !untyped.Properties["nodes"].untypedArray {
+		t.Errorf("UntypedArray marker lost")
+	}
 	got, _ = json.Marshal(Boolean(""))
 	if string(got) != `{"type":"boolean"}` {
 		t.Errorf("Boolean = %s", got)

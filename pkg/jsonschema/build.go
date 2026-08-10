@@ -90,6 +90,13 @@ func Array(items *Schema, minItems, maxItems int, unique bool, desc string) *Sch
 	return withDesc(&Schema{Type: TypeArray, Items: items, MinItems: minItems, MaxItems: maxItems, UniqueItems: unique}, desc)
 }
 
+// UntypedArray 构造无 items 约束的 array schema(允许任意元素)。
+// JSON Schema 中 items 缺失合法;显式构造器表达"有意不设 items",
+// 区别于 Array() 的 items 必填契约。
+func UntypedArray(desc string) *Schema {
+	return withDesc(&Schema{Type: TypeArray, untypedArray: true}, desc)
+}
+
 // Enum 构造 enum schema;vals 必须非空。type 由元素类型推断(string→string、int→integer、bool→boolean),
 // 未匹配类型时省略 type(JSON Schema 合法)。
 func Enum[T any](desc string, vals ...T) (*Schema, error) {
@@ -199,9 +206,12 @@ func validateObject(s *Schema) error {
 	return nil
 }
 
-// validateArray 校验 items 非 nil 并递归。
+// validateArray 校验 items 非 nil 并递归;UntypedArray 有意无 items,放行。
 func validateArray(s *Schema) error {
 	if s.Items == nil {
+		if s.untypedArray {
+			return nil
+		}
 		return fmt.Errorf("jsonschema: array items is nil")
 	}
 	return validate(s.Items)

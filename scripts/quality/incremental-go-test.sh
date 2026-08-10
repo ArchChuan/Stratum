@@ -26,6 +26,9 @@ for pkg in $pkgs; do
   ls "$pkg"/*.go >/dev/null 2>&1 || continue
   # 跳过需要基础设施的 e2e
   [[ "$pkg" == "test/e2e" ]] && continue
+  # 跳过 build tag 排除全部文件的目录(如 e2e/evaluation-evolution,纯 ignore tag),
+  # 此类目录无可用构建文件,go test 会 setup failed。
+  go list -f '{{.Name}}' "./$pkg" >/dev/null 2>&1 || continue
 
   if ! go test -short -count=1 -p "$(bash scripts/quality/go-parallelism.sh)" "./$pkg" 2>&1; then
     passed=false
