@@ -6,13 +6,12 @@ export type EditorSelection = { kind: 'node' | 'edge'; id: string } | null;
 
 export interface WorkflowEditorState {
   spec: WorkflowSpec;
-  positions: Record<string, XYPosition>;
   selected: EditorSelection;
   dirty: boolean;
 }
 
 export type WorkflowEditorAction =
-  | { type: 'server.reset'; spec: WorkflowSpec; positions?: Record<string, XYPosition> }
+  | { type: 'server.reset'; spec: WorkflowSpec }
   | { type: 'node.insert'; nodeId: string; nodeType: WorkflowNodeType; position: XYPosition }
   | { type: 'node.move'; nodeId: string; position: XYPosition }
   | { type: 'node.rename'; nodeId: string; name: string }
@@ -54,7 +53,6 @@ const createNode = (id: string, type: WorkflowNodeType): WorkflowNode => {
 
 export const createInitialEditorState = (spec: WorkflowSpec = emptySpec()): WorkflowEditorState => ({
   spec,
-  positions: {},
   selected: null,
   dirty: false,
 });
@@ -65,18 +63,27 @@ export const workflowEditorReducer = (
 ): WorkflowEditorState => {
   switch (action.type) {
     case 'server.reset':
-      return { spec: action.spec, positions: action.positions || {}, selected: null, dirty: false };
+      return { spec: action.spec, selected: null, dirty: false };
     case 'node.insert':
       if (state.spec.nodes.some((node) => node.id === action.nodeId)) return state;
       return {
         ...state,
-        spec: { ...state.spec, nodes: [...state.spec.nodes, createNode(action.nodeId, action.nodeType)] },
-        positions: { ...state.positions, [action.nodeId]: action.position },
+        spec: {
+          ...state.spec,
+          nodes: [...state.spec.nodes, { ...createNode(action.nodeId, action.nodeType), position: action.position }],
+        },
         selected: { kind: 'node', id: action.nodeId },
         dirty: true,
       };
     case 'node.move':
-      return { ...state, positions: { ...state.positions, [action.nodeId]: action.position }, dirty: true };
+      return {
+        ...state,
+        spec: {
+          ...state.spec,
+          nodes: state.spec.nodes.map((node) => node.id === action.nodeId ? { ...node, position: action.position } : node),
+        },
+        dirty: true,
+      };
     case 'node.rename':
       return {
         ...state,
@@ -103,7 +110,6 @@ export const workflowEditorReducer = (
           nodes: state.spec.nodes.filter((node) => node.id !== action.nodeId),
           edges: state.spec.edges.filter((edge) => edge.from !== action.nodeId && edge.to !== action.nodeId),
         },
-        positions: Object.fromEntries(Object.entries(state.positions).filter(([id]) => id !== action.nodeId)),
         selected: state.selected?.id === action.nodeId ? null : state.selected,
         dirty: true,
       };
@@ -138,7 +144,7 @@ export const workflowEditorReducer = (
 export const toFlowNodes = (state: WorkflowEditorState): WorkflowFlowNode[] => state.spec.nodes.map((node) => ({
   id: node.id,
   type: 'workflowNode',
-  position: state.positions[node.id] || { x: 0, y: 0 },
+  position: node.position || { x: 0, y: 0 },
   data: { node, selected: state.selected?.kind === 'node' && state.selected.id === node.id },
 }));
 

@@ -53,14 +53,10 @@ describe('workflow editor reducer', () => {
 
   it('resets from the server without marking the editor dirty', () => {
     const dirty = workflowEditorReducer(createInitialEditorState(), insertAgent);
-    const reset = workflowEditorReducer(dirty, {
-      type: 'server.reset',
-      spec: dirty.spec,
-      positions: { 'node-agent': { x: 20, y: 40 } },
-    });
+    const reset = workflowEditorReducer(dirty, { type: 'server.reset', spec: dirty.spec });
     expect(reset.dirty).toBe(false);
     expect(reset.selected).toBeNull();
-    expect(reset.positions['node-agent']).toEqual({ x: 20, y: 40 });
+    expect(reset.spec.nodes[0].position).toEqual({ x: 80, y: 120 });
   });
 
   it('converts domain graph state to deterministic React Flow elements', () => {

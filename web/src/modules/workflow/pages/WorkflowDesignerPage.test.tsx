@@ -7,7 +7,7 @@ import { WorkflowDesignerPage } from './WorkflowDesignerPage';
 const responsive = vi.hoisted(() => ({ isMobile: true }));
 vi.mock('@/shared/hooks', () => ({ useResponsive: () => responsive }));
 vi.mock('../hooks/useWorkflowDesigner', () => ({ useWorkflowDesigner: () => ({
-  editor: { spec: { nodes: [], edges: [], max_concurrency: 0 }, positions: {}, selected: null, dirty: false },
+  editor: { spec: { nodes: [], edges: [], max_concurrency: 0 }, selected: null, dirty: false },
   dispatch: vi.fn(), definition: null, name: '', description: '', inputSchema: { task_label: '', task_description: '', fields: [] },
   setName: vi.fn(), setDescription: vi.fn(), setInputSchema: vi.fn(), loading: false, saving: false, validating: false,
   publishing: false, dirty: false, validatedRevision: null, save: vi.fn(), validate: vi.fn(), publish: vi.fn(),
