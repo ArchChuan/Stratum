@@ -186,3 +186,92 @@ func TestResolveEffectiveParametersNilProviderIsNoop(t *testing.T) {
 }
 
 var _ port.ParametersProvider = stubParametersProvider{}
+
+func TestApplyParameterOverridesMapWinsAndOnlyPresentKeysOverwrite(t *testing.T) {
+	// Parameters map keys take precedence over the top-level sampling fields;
+	// keys absent from the map keep the top-level value (merge semantics).
+	in := UpdateAgentInput{
+		Temperature:            0.9,
+		MaxTokens:              2048,
+		CompactionRecentGroups: 3,
+		CompactionSafetyRatio:  0.5,
+		Parameters: map[string]any{
+			"temperature": 0.3,
+			"max_tokens":  float64(4096),
+		},
+	}
+	temperature, maxTokens, recentGroups, safetyRatio := applyParameterOverrides(in)
+
+	if temperature != 0.3 {
+		t.Errorf("temperature = %v, want 0.3 (map wins)", temperature)
+	}
+	if maxTokens != 4096 {
+		t.Errorf("max_tokens = %d, want 4096 (map wins)", maxTokens)
+	}
+	if recentGroups != 3 {
+		t.Errorf("compaction_recent_groups = %d, want 3 (absent key keeps top-level)", recentGroups)
+	}
+	if safetyRatio != 0.5 {
+		t.Errorf("compaction_safety_ratio = %v, want 0.5 (absent key keeps top-level)", safetyRatio)
+	}
+}
+
+func TestApplyParameterOverridesEmptyMapIsNoop(t *testing.T) {
+	// 旧客户端 PUT(无 parameters 对象)不得改变采样字段:merge 不清除已存值。
+	in := UpdateAgentInput{
+		Temperature:            0.9,
+		MaxTokens:              2048,
+		CompactionRecentGroups: 3,
+		CompactionSafetyRatio:  0.5,
+	}
+	temperature, maxTokens, recentGroups, safetyRatio := applyParameterOverrides(in)
+
+	if temperature != 0.9 || maxTokens != 2048 || recentGroups != 3 || safetyRatio != 0.5 {
+		t.Errorf("empty map must be a no-op, got %v/%d/%d/%v",
+			temperature, maxTokens, recentGroups, safetyRatio)
+	}
+}
+
+func TestApplyParameterOverridesExplicitZeroIsUnset(t *testing.T) {
+	// 0=unset:map 显式 0 覆盖顶层字段后由 pack 跳过(omitempty),JSONB 拼接
+	// 不清除既有值——与「merge 不清除已存参数」及 pack 注释语义一致。
+	in := UpdateAgentInput{
+		Temperature: 0.9,
+		Parameters:  map[string]any{"temperature": 0},
+	}
+	temperature, _, _, _ := applyParameterOverrides(in)
+
+	if temperature != 0 {
+		t.Errorf("temperature = %v, want 0 (explicit 0 maps to unset; pack skips it)", temperature)
+	}
+}
+
+func TestBuildUpdateConfigMergesDeclaredParameters(t *testing.T) {
+	// handler PUT parameters 对象 → service 合并进 cfg → repo merge 落库的
+	// 中间环节:此前 Parameters map 从未被消费,PUT 后 DB parameters='{}'(真实 bug)。
+	svc := NewAgentService(AgentServiceDeps{
+		ParametersProvider: stubParametersProvider{},
+		Logger:             zap.NewNop(),
+	})
+	cfg, err := svc.buildUpdateConfig(context.Background(), "agent-1", UpdateAgentInput{
+		Name:             "e2e",
+		LLMModel:         "qwen-plus",
+		MaxContextTokens: 100,
+		Parameters: map[string]any{
+			"temperature":              0.3,
+			"max_tokens":               float64(4096),
+			"compaction_safety_ratio":  0.4,
+			"compaction_recent_groups": float64(5),
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildUpdateConfig: %v", err)
+	}
+	if cfg.Temperature != 0.3 || cfg.MaxTokens != 4096 {
+		t.Errorf("sampling fields not merged: temp=%v maxTokens=%d", cfg.Temperature, cfg.MaxTokens)
+	}
+	if cfg.CompactionRecentGroups != 5 || cfg.CompactionSafetyRatio != 0.4 {
+		t.Errorf("compaction fields not merged: groups=%d ratio=%v",
+			cfg.CompactionRecentGroups, cfg.CompactionSafetyRatio)
+	}
+}

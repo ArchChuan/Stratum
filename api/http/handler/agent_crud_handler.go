@@ -143,6 +143,7 @@ func (h *AgentHandler) UpdateAgent(c *gin.Context) {
 		MaxTokens:              req.MaxTokens,
 		CompactionRecentGroups: req.CompactionRecentGroups,
 		CompactionSafetyRatio:  req.CompactionSafetyRatio,
+		Parameters:             req.Parameters,
 		AllowedSkills:          req.AllowedSkills,
 		MCPToolIDs:             req.MCPToolIDs,
 		KnowledgeWorkspaceIDs:  req.KnowledgeWorkspaceIDs,

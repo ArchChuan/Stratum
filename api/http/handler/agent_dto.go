@@ -47,6 +47,11 @@ type UpdateAgentRequest struct {
 	KnowledgeWorkspaceIDs  []string `json:"knowledgeWorkspaceIds"`
 	MemoryScope            string   `json:"memoryScope"`
 	CheckpointEnabled      bool     `json:"checkpointEnabled"`
+	// Parameters carries the registry sampling parameters as a flat object
+	// (temperature/max_tokens/compaction_recent_groups/compaction_safety_ratio).
+	// Merge semantics: only keys present in this map are written; a 0 value is
+	// unset and never overwrites a persisted value.
+	Parameters map[string]any `json:"parameters"`
 }
 
 type AgentResponse struct {
@@ -70,6 +75,9 @@ type AgentResponse struct {
 	IsSystem               bool     `json:"isSystem"`
 	ManagementMode         string   `json:"managementMode"`
 	CheckpointEnabled      bool     `json:"checkpointEnabled"`
+	// Parameters echoes the persisted sampling parameters (0=unset keys
+	// omitted), symmetric with UpdateAgentRequest.parameters.
+	Parameters map[string]any `json:"parameters"`
 	// Editors is the current granted editor set, for form prefill.
 	Editors []string `json:"editors"`
 }
@@ -119,6 +127,7 @@ func dtoToResponse(d agent.AgentDTO) AgentResponse {
 		IsSystem:               d.IsSystem,
 		ManagementMode:         d.ManagementMode,
 		CheckpointEnabled:      d.CheckpointEnabled,
+		Parameters:             d.Parameters,
 		Editors:                d.Editors,
 	}
 }

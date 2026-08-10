@@ -166,6 +166,11 @@ type UpdateAgentInput struct {
 	MaxTokens              int
 	CompactionRecentGroups int
 	CompactionSafetyRatio  float32
+	// Parameters carries the registry sampling parameters as a flat object;
+	// merge semantics — only present keys overwrite, and only non-zero values
+	// persist (0 = unset, never clears an existing value). Keys that appear
+	// here take precedence over the top-level sampling fields above.
+	Parameters map[string]any
 	// ReplaceParameters selects agents.parameters JSONB semantics:
 	// true = overall replace (promote 写回,零值清除旧值);
 	// false = merge (表单路径,零值不落库,旧客户端 PUT 不清除已存参数)。
@@ -201,6 +206,7 @@ type AgentDTO struct {
 	IsSystem               bool
 	ManagementMode         string
 	CheckpointEnabled      bool
+	Parameters             map[string]any
 	Editors                []string
 }
 
@@ -635,8 +641,10 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 // buildUpdateConfig validates the sampling parameters and assembles the
 // domain config from the wire input, deriving max context tokens when unset.
 func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in UpdateAgentInput) (*domain.AgentConfig, error) {
-	if err := s.validateSamplingParams(ctx, in.Temperature, in.MaxTokens,
-		in.CompactionRecentGroups, in.CompactionSafetyRatio); err != nil {
+	// Parameters map keys take precedence over the top-level sampling fields
+	// (only present keys overwrite); validation runs on the merged result.
+	temperature, maxTokens, recentGroups, safetyRatio := applyParameterOverrides(in)
+	if err := s.validateSamplingParams(ctx, temperature, maxTokens, recentGroups, safetyRatio); err != nil {
 		return nil, err
 	}
 	skills := in.AllowedSkills
@@ -656,16 +664,59 @@ func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in Upda
 		LLMModel:               in.LLMModel,
 		MaxIterations:          in.MaxIterations,
 		MaxContextTokens:       maxCtxTokens,
-		Temperature:            in.Temperature,
-		MaxTokens:              in.MaxTokens,
-		CompactionRecentGroups: in.CompactionRecentGroups,
-		CompactionSafetyRatio:  in.CompactionSafetyRatio,
+		Temperature:            temperature,
+		MaxTokens:              maxTokens,
+		CompactionRecentGroups: recentGroups,
+		CompactionSafetyRatio:  safetyRatio,
 		AllowedSkills:          skills,
 		MCPToolIDs:             in.MCPToolIDs,
 		KnowledgeWorkspaceIDs:  in.KnowledgeWorkspaceIDs,
 		MemoryScope:            in.MemoryScope,
 		CheckpointEnabled:      in.CheckpointEnabled,
 	}, nil
+}
+
+// applyParameterOverrides merges the declared parameters map onto the
+// top-level sampling fields. Only keys present in the map overwrite; map
+// values win over the top-level fields. Zero values pass through unchanged
+// (0 = unset, the merge pack skips them, so an explicit 0 never clears).
+func applyParameterOverrides(in UpdateAgentInput) (float32, int, int, float32) {
+	temperature, maxTokens := in.Temperature, in.MaxTokens
+	recentGroups, safetyRatio := in.CompactionRecentGroups, in.CompactionSafetyRatio
+	if len(in.Parameters) == 0 {
+		return temperature, maxTokens, recentGroups, safetyRatio
+	}
+	if v, ok := numericSampleValue(in.Parameters["temperature"]); ok {
+		temperature = float32(v)
+	}
+	if v, ok := numericSampleValue(in.Parameters["max_tokens"]); ok {
+		maxTokens = int(v)
+	}
+	if v, ok := numericSampleValue(in.Parameters["compaction_recent_groups"]); ok {
+		recentGroups = int(v)
+	}
+	if v, ok := numericSampleValue(in.Parameters["compaction_safety_ratio"]); ok {
+		safetyRatio = float32(v)
+	}
+	return temperature, maxTokens, recentGroups, safetyRatio
+}
+
+// numericSampleValue coerces a decoded JSON scalar (float64/int) to float64.
+// A present but non-numeric value is treated as absent rather than an error:
+// the merge path only overwrites keys it can interpret.
+func numericSampleValue(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	default:
+		return 0, false
+	}
 }
 
 // resolveUpdateEditorActor decides whether the actor may act as an editor:
@@ -852,7 +903,28 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		IsSystem:               cfg.IsSystem,
 		CheckpointEnabled:      cfg.CheckpointEnabled,
 		ManagementMode:         cfg.ManagementMode,
+		Parameters:             samplingParameterMap(cfg),
 	}
+}
+
+// samplingParameterMap renders the persisted sampling parameters back to the
+// wire object; zero fields are omitted (0 = unset), symmetric with the merge
+// pack in the persistence layer.
+func samplingParameterMap(cfg *domain.AgentConfig) map[string]any {
+	params := map[string]any{}
+	if cfg.Temperature != 0 {
+		params["temperature"] = cfg.Temperature
+	}
+	if cfg.MaxTokens != 0 {
+		params["max_tokens"] = cfg.MaxTokens
+	}
+	if cfg.CompactionRecentGroups != 0 {
+		params["compaction_recent_groups"] = cfg.CompactionRecentGroups
+	}
+	if cfg.CompactionSafetyRatio != 0 {
+		params["compaction_safety_ratio"] = cfg.CompactionSafetyRatio
+	}
+	return params
 }
 
 // ExecRequest is the wire-agnostic execute payload AgentService accepts
