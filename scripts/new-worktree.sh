@@ -33,3 +33,7 @@ fi
 
 git fetch --no-tags origin main:refs/remotes/origin/main
 git worktree add "$path" -b "$branch" origin/main
+
+# proto 生成物不入 git:新 worktree 是干净 checkout,首构建前先生成契约。
+# 生成失败直接退出——后续任何构建都会失败,早暴露优于晚失败。
+(cd "$path" && make proto-gen)
