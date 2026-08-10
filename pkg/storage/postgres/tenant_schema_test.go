@@ -157,6 +157,31 @@ func TestTenantSchemaBackfillsStructuredMemoryFacts(t *testing.T) {
 	}
 }
 
+// TestTenantSchemaBackfillsAgentSamplingParameters pins 断层 2:agents.parameters
+// JSONB 必须由 CREATE TABLE 之后的 ALTER 回填(历史租户升级路径),NOT NULL 带
+// 安全默认 '{}',使 INSERT 不需要逐列列出该列。
+func TestTenantSchemaBackfillsAgentSamplingParameters(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	createAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS agents")
+	require.NotEqual(t, -1, createAt, "agents table DDL must exist")
+
+	for _, want := range []string{
+		"ALTER TABLE agents ADD COLUMN IF NOT EXISTS parameters JSONB NOT NULL DEFAULT '{}'::jsonb",
+	} {
+		at := strings.Index(sql, want)
+		if at == -1 {
+			t.Fatalf("tenant_schema.sql missing agents.parameters backfill %q", want)
+		}
+		if at < createAt {
+			t.Fatalf("agents.parameters backfill must follow table creation: %q", want)
+		}
+	}
+}
+
 func TestStructuredMemoryFactsMigrationMarkerIsPaired(t *testing.T) {
 	for _, path := range []string{
 		"../../migration/sql/020_memory_facts_quality.up.sql",

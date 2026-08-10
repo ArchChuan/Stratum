@@ -38,6 +38,10 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_scope TEXT NOT NULL DEFAULT '
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS system_key TEXT;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS checkpoint_enabled BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
+-- 采样参数(统一参数注册表 resource 层)。扁平标量 omitempty:
+-- temperature/max_tokens/compaction_recent_groups/compaction_safety_ratio,
+-- 0 与缺键等价(unset → 网关/provider 默认)。
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS parameters JSONB NOT NULL DEFAULT '{}'::jsonb;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_system_key
     ON agents(system_key) WHERE system_key IS NOT NULL;
 
@@ -1132,6 +1136,7 @@ CREATE INDEX IF NOT EXISTS idx_memory_entries_user_id ON memory_entries (user_id
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL DEFAULT 8000;
 ALTER TABLE agents DROP COLUMN IF EXISTS embed_model;
 ALTER TABLE agents DROP COLUMN IF EXISTS persona;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS parameters JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 -- chat_conversations soft-delete backfill
 ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;

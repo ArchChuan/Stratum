@@ -34,6 +34,7 @@ type Container struct {
 	Storage              *Storage
 	LLMGateway           *LLMGateway
 	Platform             *Platform
+	Parameters           *Parameters
 	MCP                  *MCP
 	Skill                *Skill
 	Evaluation           *Evaluation
@@ -76,6 +77,7 @@ func BuildContainer(ctx context.Context, cfg *config.Config, logger *zap.Logger)
 		{"prompt", c.buildPrompt},
 		{"llmgateway", c.buildLLMGateway},
 		{"platform", c.buildPlatform},
+		{"parameters", c.buildParameters},
 		{"revision-object-store", c.buildRevisionObjectStore},
 		{"mcp", c.buildMCP},
 		{"skill", c.buildSkill},
@@ -269,6 +271,7 @@ func (c *Container) newFromExistingInitialSteps() []buildStep {
 		{"audit", c.buildAudit},
 		{"prompt", c.buildPrompt},
 		{"platform", c.buildPlatform},
+		{"parameters", c.buildParameters},
 		{"revision-object-store", c.buildRevisionObjectStore},
 		{"mcp", c.buildMCP},
 		{"knowledge", c.buildKnowledge},

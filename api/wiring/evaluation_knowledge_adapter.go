@@ -14,6 +14,7 @@ import (
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	knowledgedomain "github.com/byteBuilderX/stratum/internal/knowledge/domain"
+	parametersdomain "github.com/byteBuilderX/stratum/internal/parameters/domain"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 )
@@ -89,6 +90,8 @@ type knowledgeEvaluationAdapter struct {
 	// wired. Execution fails closed when a snapshot selects an external
 	// identity but no backend is configured.
 	rerankAvailable func() bool
+	// parameters is the registry source of truth for optimizable keys.
+	parameters *parametersdomain.ParametersRegistry
 }
 
 func (a knowledgeEvaluationAdapter) CreatePublishedBaseline(
@@ -163,6 +166,9 @@ func (a knowledgeEvaluationAdapter) LoadOptimizableSnapshot(
 func (a knowledgeEvaluationAdapter) CreateCandidate(
 	ctx context.Context, tenantID string, baseline evaldomain.ResourceRef, patch evaldomain.CandidatePatch,
 ) (evaldomain.ResourceRef, error) {
+	if err := validatePatchKeys(a.parameters, patch); err != nil {
+		return evaldomain.ResourceRef{}, err
+	}
 	parent, snapshot, err := a.loadRevision(ctx, tenantID, baseline, false)
 	if err != nil {
 		return evaldomain.ResourceRef{}, err
@@ -359,19 +365,17 @@ func canonicalKnowledgeHash(value any) (string, error) {
 	return hex.EncodeToString(hash[:]), nil
 }
 
-func applyKnowledgeCandidatePatch(snapshot *knowledgeRetrievalSnapshot, patch evaldomain.CandidatePatch) ([]string, error) {
+func applyKnowledgeCandidatePatch(
+	snapshot *knowledgeRetrievalSnapshot, patch evaldomain.CandidatePatch,
+) ([]string, error) {
 	if snapshot == nil {
 		return nil, errors.New("evaluation Knowledge adapter: snapshot required")
 	}
 	if len(patch.PromptPatch) != 0 {
 		return nil, errors.New("evaluation Knowledge adapter: prompt patch is not supported")
 	}
-	allowed := map[string]bool{"top_k": true, "score_threshold": true, "reranking": true, "query_rewrite": true}
 	changed := make([]string, 0, len(patch.ParameterPatch))
 	for key, value := range patch.ParameterPatch {
-		if !allowed[key] {
-			return nil, fmt.Errorf("evaluation Knowledge adapter: parameter %q is not optimizable", key)
-		}
 		switch key {
 		case "top_k":
 			parsed, err := knowledgeInteger(value)

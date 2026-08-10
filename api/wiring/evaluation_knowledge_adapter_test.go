@@ -12,6 +12,7 @@ import (
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	knowledgedomain "github.com/byteBuilderX/stratum/internal/knowledge/domain"
+	parametersdomain "github.com/byteBuilderX/stratum/internal/parameters/domain"
 )
 
 func TestKnowledgeEvaluationAdapterCreatesPublishedImmutableBaseline(t *testing.T) {
@@ -22,7 +23,7 @@ func TestKnowledgeEvaluationAdapterCreatesPublishedImmutableBaseline(t *testing.
 			{ID: "doc-b", ContentHash: "hash-b", IngestStatus: "completed"},
 			{ID: "doc-a", ContentHash: "hash-a", IngestStatus: "completed"},
 		}}
-	adapter := knowledgeEvaluationAdapter{revisions: revisions, source: source, actorID: "evaluation-worker"}
+	adapter := knowledgeEvaluationAdapter{revisions: revisions, source: source, actorID: "evaluation-worker", parameters: parametersdomain.NewParametersRegistry()}
 	ref, err := adapter.CreatePublishedBaseline(context.Background(), "tenant-1", "support")
 	if err != nil || ref.Kind != evaldomain.ResourceKindKnowledge || revisions.publishCalls != 1 {
 		t.Fatalf("ref=%+v publish=%d err=%v", ref, revisions.publishCalls, err)
@@ -47,7 +48,7 @@ func TestKnowledgeEvaluationAdapterCandidateIsBoundedIdempotentAndExact(t *testi
 		ScoreThreshold: 0.2, RerankingIdentity: knowledgeRerankingIdentity, Reranking: knowledgeapp.RerankingNone, QueryRewrite: "none"}
 	revisions := publishedKnowledgeRevisions(t, snapshot)
 	adapter := knowledgeEvaluationAdapter{revisions: revisions, evaluator: knowledgeapp.NewRetrievalEvaluator(
-		&fakeKnowledgeRetriever{result: &knowledgeapp.RAGQueryResult{}})}
+		&fakeKnowledgeRetriever{result: &knowledgeapp.RAGQueryResult{}}), parameters: parametersdomain.NewParametersRegistry()}
 	patch := evaldomain.CandidatePatch{Source: "bounded", ParameterPatch: map[string]any{
 		"top_k": float64(8), "score_threshold": 0.4, "reranking": "score_desc", "query_rewrite": "lowercase_trim",
 	}}
@@ -91,7 +92,7 @@ func TestKnowledgeEvaluationAdapterRequiresPublishedTenantRevisionAndSafeOutput(
 	}}}
 	adapter := knowledgeEvaluationAdapter{revisions: publishedKnowledgeRevisions(t, snapshot),
 		evaluator: knowledgeapp.NewRetrievalEvaluator(retriever),
-		source:    &fakeKnowledgeSnapshotSource{documents: documents}}
+		source:    &fakeKnowledgeSnapshotSource{documents: documents}, parameters: parametersdomain.NewParametersRegistry()}
 	result, err := adapter.ExecuteRevision(context.Background(), "tenant-1", "user-1", knowledgeRef("published-1"), evaldomain.EvalCase{
 		Input: map[string]any{"query": "refund", "relevant_document_ids": []any{"doc-1"}},
 	})
@@ -121,7 +122,7 @@ func TestKnowledgeEvaluationAdapterRejectsReassociatedCrossTenantPayload(t *test
 		RerankingIdentity: knowledgeRerankingIdentity, QueryMode: "vector", TopK: 5,
 		Reranking: knowledgeapp.RerankingNone, QueryRewrite: "none"}
 	revisions := publishedKnowledgeRevisions(t, snapshot)
-	adapter := knowledgeEvaluationAdapter{revisions: revisions}
+	adapter := knowledgeEvaluationAdapter{revisions: revisions, parameters: parametersdomain.NewParametersRegistry()}
 
 	_, err := adapter.ResolveRevision(context.Background(), "tenant-2", knowledgeRef("published-1"))
 	if !errors.Is(err, evalport.ErrCenterResourceNotFound) {
@@ -138,7 +139,7 @@ func TestKnowledgeEvaluationAdapterCandidatePreservesTenantOwnership(t *testing.
 		RerankingIdentity: knowledgeRerankingIdentity, QueryMode: "vector", TopK: 5,
 		Reranking: knowledgeapp.RerankingNone, QueryRewrite: "none"}
 	revisions := publishedKnowledgeRevisions(t, snapshot)
-	adapter := knowledgeEvaluationAdapter{revisions: revisions}
+	adapter := knowledgeEvaluationAdapter{revisions: revisions, parameters: parametersdomain.NewParametersRegistry()}
 	_, err := adapter.CreateCandidate(context.Background(), "tenant-1", knowledgeRef("published-1"),
 		evaldomain.CandidatePatch{ParameterPatch: map[string]any{"tenant_id": "tenant-2"}})
 	if err == nil {
@@ -174,6 +175,7 @@ func TestKnowledgeEvaluationAdapterPreflightRerankFailsClosed(t *testing.T) {
 				evaluator:       knowledgeapp.NewRetrievalEvaluator(&fakeKnowledgeRetriever{result: &knowledgeapp.RAGQueryResult{}}),
 				source:          &fakeKnowledgeSnapshotSource{documents: documents},
 				rerankAvailable: tc.rerankAvailable,
+				parameters:      parametersdomain.NewParametersRegistry(),
 			}
 			_, err := adapter.ExecuteRevision(context.Background(), "tenant-1", "user-1", ref, executionCase)
 			if tc.wantErr {
@@ -201,9 +203,10 @@ func TestKnowledgeEvaluationAdapterPreflightRerankSkipsBuiltinAndNone(t *testing
 			RerankingIdentity: knowledgeRerankingIdentity, QueryMode: "vector", TopK: 5,
 			Reranking: identity, QueryRewrite: "none"}
 		adapter := knowledgeEvaluationAdapter{
-			revisions: publishedKnowledgeRevisions(t, snapshot),
-			evaluator: knowledgeapp.NewRetrievalEvaluator(&fakeKnowledgeRetriever{result: &knowledgeapp.RAGQueryResult{}}),
-			source:    &fakeKnowledgeSnapshotSource{documents: documents},
+			revisions:  publishedKnowledgeRevisions(t, snapshot),
+			evaluator:  knowledgeapp.NewRetrievalEvaluator(&fakeKnowledgeRetriever{result: &knowledgeapp.RAGQueryResult{}}),
+			source:     &fakeKnowledgeSnapshotSource{documents: documents},
+			parameters: parametersdomain.NewParametersRegistry(),
 		}
 		if _, err := adapter.ExecuteRevision(context.Background(), "tenant-1", "user-1",
 			knowledgeRef("published-1"), evaldomain.EvalCase{Input: map[string]any{"query": "refund"}}); err != nil {
@@ -218,7 +221,7 @@ func TestKnowledgeEvaluationAdapterSummariesPassRealRevisionValidation(t *testin
 	revisions := evalapp.NewRevisionService(store, repo)
 	source := &fakeKnowledgeSnapshotSource{workspace: &knowledgedomain.Workspace{ID: "workspace-id", Name: "support",
 		Config: knowledgedomain.WorkspaceConfig{EmbeddingModel: "embedding-3", QueryMode: "hybrid", TopK: 5}}}
-	adapter := knowledgeEvaluationAdapter{revisions: revisions, source: source}
+	adapter := knowledgeEvaluationAdapter{revisions: revisions, source: source, parameters: parametersdomain.NewParametersRegistry()}
 	baseline, err := adapter.CreatePublishedBaseline(context.Background(), "tenant-1", "support")
 	if err != nil {
 		t.Fatalf("baseline rejected: %v", err)

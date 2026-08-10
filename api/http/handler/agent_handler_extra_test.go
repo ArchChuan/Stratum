@@ -60,8 +60,21 @@ func (m *mockAgentRepo) GetAll(context.Context) ([]*domain.AgentConfig, error) {
 func (m *mockAgentRepo) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return m.removeErr
 }
-func (m *mockAgentRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string) error {
-	return m.updateErr
+func (m *mockAgentRepo) Update(_ context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool) error {
+	if m.updateErr != nil {
+		return m.updateErr
+	}
+	// 真实写回:service 在 Update 成功后经 repo 回读,若 mock 是 no-op,
+	// 回读结果与内存 DTO 不一致,API 断言会假绿。
+	for i, a := range m.agents {
+		if a.ID == cfg.ID {
+			cfg.IsSystem = a.IsSystem
+			cfg.SystemKey = a.SystemKey
+			m.agents[i] = cfg
+			return nil
+		}
+	}
+	return nil
 }
 func (m *mockAgentRepo) UpdateSystemAssistantModel(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	return nil, m.err

@@ -10,11 +10,36 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
+// PlatformParams reads platform-layer parameter values (unified parameter
+// registry) used by the pipeline. Implemented by wiring; nil keeps the
+// pkg/constants defaults so unit tests and degraded startups behave as before.
+type PlatformParams interface {
+	Int(ctx context.Context, key string) (int, bool)
+}
+
 // LLMExtractor adapts LLMClient to memport.LLMExtractor.
-type LLMExtractor struct{ client LLMClient }
+type LLMExtractor struct {
+	client LLMClient
+	params PlatformParams
+}
 
 func NewLLMExtractor(client LLMClient) *LLMExtractor {
 	return &LLMExtractor{client: client}
+}
+
+// SetPlatformParams wires the platform parameter reader (registry-backed).
+func (e *LLMExtractor) SetPlatformParams(p PlatformParams) { e.params = p }
+
+// maxFacts resolves memory.max_facts_per_extraction (platform layer),
+// falling back to the constant default when unset or unavailable.
+func (e *LLMExtractor) maxFacts(ctx context.Context) int {
+	if e.params == nil {
+		return constants.MemoryMaxFactsPerExtraction
+	}
+	if v, ok := e.params.Int(ctx, "memory.max_facts_per_extraction"); ok {
+		return v
+	}
+	return constants.MemoryMaxFactsPerExtraction
 }
 
 func (e *LLMExtractor) ExtractFacts(ctx context.Context, userID, agentID string, message string) ([]*memport.ExtractedFact, error) {
@@ -36,7 +61,7 @@ fact_type 分类：
 - other：不属于以上分类的陈述性事实
 
 只输出 JSON 数组，不加任何说明或 markdown 标记：
-[{"content":"...","importance":0.0-1.0,"fact_type":"...","confidence":0.0-1.0,"entities":["实体名"]}]`, userID, agentID, constants.MemoryMaxFactsPerExtraction)
+[{"content":"...","importance":0.0-1.0,"fact_type":"...","confidence":0.0-1.0,"entities":["实体名"]}]`, userID, agentID, e.maxFacts(ctx))
 	resp, err := e.client.Complete(ctx, &memport.CompletionRequest{
 		Messages: []memport.CompletionMessage{
 			{Role: "system", Content: system},

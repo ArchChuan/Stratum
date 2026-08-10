@@ -16,6 +16,9 @@ interface ConfigValues {
   chunk_size?: number;
   chunk_overlap?: number;
   top_k?: number;
+  reranking?: string;
+  score_threshold?: number;
+  rerank_top_k?: number;
 }
 
 interface QueryValues {
@@ -67,6 +70,9 @@ export const useKnowledgeDetailPage = () => {
         chunk_overlap: data.config?.chunk_overlap,
         query_mode: data.config?.query_mode,
         top_k: data.config?.top_k,
+        reranking: data.config?.reranking,
+        score_threshold: data.config?.score_threshold,
+        rerank_top_k: data.config?.rerank_top_k,
       };
       for (const field of Object.keys(values) as (keyof ConfigValues)[]) {
         const currentValue = configForm.getFieldValue(field);
@@ -157,6 +163,9 @@ export const useKnowledgeDetailPage = () => {
             chunk_overlap: values.chunk_overlap,
             query_mode: values.query_mode,
             top_k: values.top_k,
+            reranking: values.reranking,
+            score_threshold: values.score_threshold,
+            rerank_top_k: values.rerank_top_k,
           },
         });
         message.success({ content: '配置已保存', duration: 2 });

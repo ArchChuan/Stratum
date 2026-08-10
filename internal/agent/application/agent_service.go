@@ -67,6 +67,7 @@ type AgentServiceDeps struct {
 	ResourceEditorRepo        port.ResourceEditorRepo
 	OperationGate             port.OperationGate
 	TenantRoleResolver        port.TenantRoleResolver
+	ParametersProvider        port.ParametersProvider
 	Logger                    *zap.Logger
 }
 
@@ -165,11 +166,15 @@ type UpdateAgentInput struct {
 	MaxTokens              int
 	CompactionRecentGroups int
 	CompactionSafetyRatio  float32
-	AllowedSkills          []string
-	MCPToolIDs             []string
-	KnowledgeWorkspaceIDs  []string
-	MemoryScope            string
-	CheckpointEnabled      bool
+	// ReplaceParameters selects agents.parameters JSONB semantics:
+	// true = overall replace (promote 写回,零值清除旧值);
+	// false = merge (表单路径,零值不落库,旧客户端 PUT 不清除已存参数)。
+	ReplaceParameters     bool
+	AllowedSkills         []string
+	MCPToolIDs            []string
+	KnowledgeWorkspaceIDs []string
+	MemoryScope           string
+	CheckpointEnabled     bool
 }
 
 // AgentDTO is the wire shape returned by AgentService for transport
@@ -208,8 +213,46 @@ type SystemAssistantSettings struct {
 
 // Create persists a new agent for the tenant. Only owner/admin roles may
 // create; the caller becomes the resource owner (created_by).
+// validateSamplingParams rejects out-of-bounds sampling values
+// (temperature / max_tokens / compaction×2) against the parameter registry
+// before persist. Zero means unset (gateway default) and is skipped; a nil
+// provider (db unavailable) degrades to no-op, matching resolve.
+func (s *AgentService) validateSamplingParams(
+	ctx context.Context, temperature float32, maxTokens, compactionRecentGroups int, compactionSafetyRatio float32,
+) error {
+	if s.deps.ParametersProvider == nil {
+		return nil
+	}
+	declared := map[string]any{}
+	if temperature != 0 {
+		declared["temperature"] = float64(temperature)
+	}
+	if maxTokens != 0 {
+		declared["max_tokens"] = maxTokens
+	}
+	if compactionRecentGroups != 0 {
+		declared["compaction_recent_groups"] = compactionRecentGroups
+	}
+	if compactionSafetyRatio != 0 {
+		declared["compaction_safety_ratio"] = float64(compactionSafetyRatio)
+	}
+	if len(declared) == 0 {
+		return nil
+	}
+	if err := s.deps.ParametersProvider.ValidateResource(ctx, declared); err != nil {
+		// %w 保留 sentinel 供错误中间件映射 400;%v 保留越界详情给调用方。
+		return fmt.Errorf("%w: agent service: validate sampling parameters: %v",
+			domain.ErrInvalidSamplingParameters, err)
+	}
+	return nil
+}
+
 func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDTO, error) {
 	if err := s.checkOwnership(ctx, in.ActorID, in.ActorID, nil); err != nil {
+		return AgentDTO{}, err
+	}
+	if err := s.validateSamplingParams(ctx, in.Temperature, in.MaxTokens,
+		in.CompactionRecentGroups, in.CompactionSafetyRatio); err != nil {
 		return AgentDTO{}, err
 	}
 	id := uuid.Must(uuid.NewV7()).String()
@@ -564,16 +607,47 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	if err != nil {
 		return AgentDTO{}, err
 	}
+	cfg, err := s.buildUpdateConfig(ctx, id, in)
+	if err != nil {
+		return AgentDTO{}, err
+	}
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindAgent, id, auditdomain.ChangeOpUpdate, in.ActorID,
+		AgentSafeProjection(existing.GetConfig()), AgentSafeProjection(cfg))
+	if err != nil {
+		return AgentDTO{}, err
+	}
+	if err := s.deps.Registry.Update(ctx, cfg, audit, editorActor, in.ReplaceParameters); err != nil {
+		return AgentDTO{}, err
+	}
+	s.deps.Logger.Info("agent updated", zap.String("id", id), zap.String("name", in.Name))
+	// 回读而非返回内存 DTO:API 断言必须以 DB 为准(防假绿),
+	// 同时证明采样参数(agents.parameters JSONB)确实落库并反序列化回来。
+	fresh, ok, err := s.deps.Registry.Get(ctx, id)
+	if err != nil {
+		return AgentDTO{}, fmt.Errorf("agent service update: re-read: %w", err)
+	}
+	if !ok {
+		return AgentDTO{}, ErrNotFound
+	}
+	return cfgToDTO(fresh.GetConfig()), nil
+}
+
+// buildUpdateConfig validates the sampling parameters and assembles the
+// domain config from the wire input, deriving max context tokens when unset.
+func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in UpdateAgentInput) (*domain.AgentConfig, error) {
+	if err := s.validateSamplingParams(ctx, in.Temperature, in.MaxTokens,
+		in.CompactionRecentGroups, in.CompactionSafetyRatio); err != nil {
+		return nil, err
+	}
 	skills := in.AllowedSkills
 	if skills == nil {
 		skills = []string{}
 	}
 	maxCtxTokens := in.MaxContextTokens
 	if maxCtxTokens <= 0 {
-		tenantID := reqctx.TenantIDFromContext(ctx)
-		maxCtxTokens = s.deriveMaxContextTokens(ctx, tenantID, in.LLMModel)
+		maxCtxTokens = s.deriveMaxContextTokens(ctx, reqctx.TenantIDFromContext(ctx), in.LLMModel)
 	}
-	cfg := &domain.AgentConfig{
+	return &domain.AgentConfig{
 		ID:                     id,
 		Name:                   in.Name,
 		Type:                   parseAgentTypeWire(in.Type),
@@ -591,17 +665,7 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 		KnowledgeWorkspaceIDs:  in.KnowledgeWorkspaceIDs,
 		MemoryScope:            in.MemoryScope,
 		CheckpointEnabled:      in.CheckpointEnabled,
-	}
-	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindAgent, id, auditdomain.ChangeOpUpdate, in.ActorID,
-		AgentSafeProjection(existing.GetConfig()), AgentSafeProjection(cfg))
-	if err != nil {
-		return AgentDTO{}, err
-	}
-	if err := s.deps.Registry.Update(ctx, cfg, audit, editorActor); err != nil {
-		return AgentDTO{}, err
-	}
-	s.deps.Logger.Info("agent updated", zap.String("id", id), zap.String("name", in.Name))
-	return cfgToDTO(cfg), nil
+	}, nil
 }
 
 // resolveUpdateEditorActor decides whether the actor may act as an editor:
@@ -1660,7 +1724,49 @@ func (s *AgentService) assembleOptions(
 			return combined.String(), nil
 		}))
 	}
-	return ctx, options, nil
+	return ctx, s.resolveEffectiveParameters(ctx, a, options), nil
+}
+
+// resolveEffectiveParameters merges platform defaults into the execution
+// options at the assemble point (no caching). Agent-config values — the
+// resource-declared layer — already flow into execution through the
+// snapshotExecutionConfig backfill; the provider fills in platform defaults
+// only where the resource left the key at 0=unset. Resolution errors degrade
+// to unset (execution keeps gateway defaults): parameters are an
+// optimization input, not an execution gate.
+func (s *AgentService) resolveEffectiveParameters(
+	ctx context.Context,
+	a Agent,
+	options []ExecutionOption,
+) []ExecutionOption {
+	if s.deps.ParametersProvider == nil {
+		return options
+	}
+	cfg := a.GetConfig()
+	declared := map[string]any{
+		"agent.temperature":              cfg.Temperature,
+		"agent.max_tokens":               cfg.MaxTokens,
+		"agent.compaction_recent_groups": cfg.CompactionRecentGroups,
+		"agent.compaction_safety_ratio":  cfg.CompactionSafetyRatio,
+	}
+	effective, err := s.deps.ParametersProvider.ResolveForResource(ctx, declared)
+	if err != nil {
+		s.deps.Logger.Warn("agent execute: resolve effective parameters, keeping defaults", zap.Error(err))
+		return options
+	}
+	if v, ok := effective["agent.temperature"].(float64); ok {
+		options = append(options, WithTemperature(float32(v)))
+	}
+	if v, ok := effective["agent.max_tokens"].(int64); ok {
+		options = append(options, WithMaxTokens(int(v)))
+	}
+	if v, ok := effective["agent.compaction_recent_groups"].(int64); ok {
+		options = append(options, WithCompactionRecentGroups(int(v)))
+	}
+	if v, ok := effective["agent.compaction_safety_ratio"].(float64); ok {
+		options = append(options, WithCompactionSafetyRatio(float32(v)))
+	}
+	return options
 }
 
 // attachChatStore wires the configured ChatStore onto the running agent

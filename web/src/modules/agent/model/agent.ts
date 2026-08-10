@@ -12,6 +12,10 @@ export const agentSchema = z
     llmModel: z.string().optional().default(''),
     maxIterations: z.number().optional(),
     maxContextTokens: z.number().optional(),
+    temperature: z.number().optional(),
+    max_tokens: z.number().optional(),
+    compaction_recent_groups: z.number().optional(),
+    compaction_safety_ratio: z.number().optional(),
     allowedSkills: z.array(z.string()).nullish().transform((v) => v ?? []),
     mcpToolIds: z.array(z.string()).nullish().transform((v) => v ?? []),
     knowledgeWorkspaceIds: z.array(z.string()).nullish().transform((v) => v ?? []),
@@ -32,6 +36,10 @@ export interface Agent {
   llmModel: string;
   maxIterations?: number;
   maxContextTokens?: number;
+  temperature?: number;
+  max_tokens?: number;
+  compaction_recent_groups?: number;
+  compaction_safety_ratio?: number;
   allowedSkills: string[];
   mcpToolIds: string[];
   knowledgeWorkspaceIds: string[];
@@ -51,6 +59,11 @@ export interface AgentFormValues {
   llmModel: string;
   maxIterations: number;
   maxContextTokens: number;
+  // 采样参数(agents.parameters JSONB,merge 语义:0=unset 不落库)
+  temperature?: number;
+  max_tokens?: number;
+  compaction_recent_groups?: number;
+  compaction_safety_ratio?: number;
   allowedSkills?: string[];
   mcpToolIds?: string[];
   knowledgeWorkspaceIds?: string[];
