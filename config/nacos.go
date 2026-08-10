@@ -132,7 +132,9 @@ func (c *sdkNacosClient) Close() error {
 // 连接失败 → 返回 error（调用方 WARN，用 env/默认值启动）；
 // 单个 dataId 拉取/解析失败 → WARN 跳过，不阻断其余 dataId；
 // 非法内容 → 整体回退旧值。
-// 冷生效字段（装配参数）在同步阶段应用；热更新字段经 listener 原子写入。
+// 冷生效字段（装配参数）在同步阶段应用，装配期一次读取；
+// 热更新 listener 只注册有热生效字段的 dataId（memory 调度字段），
+// 回调只走 applyMemoryConfigDynamic，不写任何冷生效普通字段。
 func (c *Config) ConnectNacos(logger *zap.Logger) error {
 	if c.NacosURL == "" {
 		return nil
@@ -146,6 +148,7 @@ func (c *Config) ConnectNacos(logger *zap.Logger) error {
 	}
 	c.nacos = client
 
+	// 同步拉取：全量应用（冷生效普通字段 + 热生效调度字段）。
 	for dataID, apply := range map[string]func(string) error{
 		nacosAuthDataID:   c.applyAuthConfig,
 		nacosMemoryDataID: c.applyMemoryConfig,
@@ -162,20 +165,18 @@ func (c *Config) ConnectNacos(logger *zap.Logger) error {
 		}
 	}
 
-	for dataID, apply := range map[string]func(string) error{
-		nacosAuthDataID:   c.applyAuthConfig,
-		nacosMemoryDataID: c.applyMemoryConfig,
-	} {
-		dataID, apply := dataID, apply // 循环变量捕获（Go <1.22 兼容）
-		if err := client.Listen(dataID, func(content string) {
-			if err := apply(content); err != nil {
-				logger.Warn("config: nacos push rejected, keeping previous value",
-					zap.String("data_id", dataID), zap.Error(err))
-			}
-		}); err != nil {
-			logger.Warn("config: nacos listen failed, hot reload disabled for this dataId",
-				zap.String("data_id", dataID), zap.Error(err))
+	// 热更新 listener：只注册 memory（stratum/memory 的 poll_interval/batch_size
+	// 是热生效字段）。auth（stratum/auth）全部为冷生效字段，回调写普通字段会与
+	// 启动期装配读（wiring memory.go/router.go）构成 data race 且无语义价值，
+	// 故不注册——修改 stratum/auth 后重启生效。
+	if err := client.Listen(nacosMemoryDataID, func(content string) {
+		if err := c.applyMemoryConfigDynamic(content); err != nil {
+			logger.Warn("config: nacos push rejected, keeping previous value",
+				zap.String("data_id", nacosMemoryDataID), zap.Error(err))
 		}
+	}); err != nil {
+		logger.Warn("config: nacos listen failed, hot reload disabled for this dataId",
+			zap.String("data_id", nacosMemoryDataID), zap.Error(err))
 	}
 	return nil
 }
@@ -211,10 +212,10 @@ func (c *Config) applyAuthConfig(content string) error {
 	return nil
 }
 
-// applyMemoryConfig 应用 stratum/memory dataId。
+// applyMemoryConfig 应用 stratum/memory dataId（同步拉取路径）。
 // enabled 等装配参数为冷生效（写入字段，下次启动生效）；
 // poll_interval/batch_size 为热生效（原子写入 dynamic 并通知 listener）。
-// 任一字段非法 → 整体回退（不部分应用）。
+// 任一字段非法 → 整体回退（不部分应用，解析失败不写任何字段）。
 func (c *Config) applyMemoryConfig(content string) error {
 	var d struct {
 		Enabled      *bool  `json:"enabled"`
@@ -224,23 +225,56 @@ func (c *Config) applyMemoryConfig(content string) error {
 	if err := json.Unmarshal([]byte(content), &d); err != nil {
 		return fmt.Errorf("parse memory config: %w", err)
 	}
-	dynamic := MemoryPipelineDynamic{}
-	if d.PollInterval != "" {
-		parsed, err := time.ParseDuration(d.PollInterval)
-		if err != nil {
-			return fmt.Errorf("parse poll_interval: %w", err)
-		}
-		dynamic.PollInterval = parsed
-	}
-	if d.BatchSize != nil {
-		dynamic.BatchSize = *d.BatchSize
+	dynamic, err := memoryDynamicFrom(d.PollInterval, d.BatchSize)
+	if err != nil {
+		return err
 	}
 	if d.Enabled != nil {
 		c.MemoryPipeline.Enabled = *d.Enabled
 	}
-	// 只有显式提供调度字段时才推送动态值，缺省不覆盖（防止只改 enabled 时清零动态值）。
+	c.applyMemoryDynamic(dynamic)
+	return nil
+}
+
+// applyMemoryConfigDynamic 只应用热生效调度字段（poll_interval/batch_size），
+// 供 Nacos listener 回调使用。不写冷生效普通字段（enabled），避免回调
+// goroutine 与启动期装配读构成 data race。任一字段非法 → 整体回退（不部分应用）。
+func (c *Config) applyMemoryConfigDynamic(content string) error {
+	var d struct {
+		PollInterval string `json:"poll_interval"`
+		BatchSize    *int   `json:"batch_size"`
+	}
+	if err := json.Unmarshal([]byte(content), &d); err != nil {
+		return fmt.Errorf("parse memory config: %w", err)
+	}
+	dynamic, err := memoryDynamicFrom(d.PollInterval, d.BatchSize)
+	if err != nil {
+		return err
+	}
+	c.applyMemoryDynamic(dynamic)
+	return nil
+}
+
+// memoryDynamicFrom 解析热生效调度字段；任一字段非法 → error。
+func memoryDynamicFrom(pollInterval string, batchSize *int) (MemoryPipelineDynamic, error) {
+	dynamic := MemoryPipelineDynamic{}
+	if pollInterval != "" {
+		parsed, err := time.ParseDuration(pollInterval)
+		if err != nil {
+			return MemoryPipelineDynamic{}, fmt.Errorf("parse poll_interval: %w", err)
+		}
+		dynamic.PollInterval = parsed
+	}
+	if batchSize != nil {
+		dynamic.BatchSize = *batchSize
+	}
+	return dynamic, nil
+}
+
+// applyMemoryDynamic 只在显式提供了任一调度字段时推送动态值，
+// 缺省不覆盖（防止只改其他字段时清零动态值）。
+func (c *Config) applyMemoryDynamic(dynamic MemoryPipelineDynamic) {
 	if dynamic != (MemoryPipelineDynamic{}) {
 		c.ApplyMemoryPipelineDynamic(dynamic)
 	}
-	return nil
 }
