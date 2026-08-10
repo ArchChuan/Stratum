@@ -33,6 +33,9 @@ var acronyms = map[string]string{
 	"mcp": "MCP", "oauth": "OAuth", "oauth2": "OAuth2", "http": "HTTP",
 	"db": "DB", "sse": "SSE", "rag": "RAG", "json": "JSON", "ui": "UI",
 	"usd": "USD", "github": "GitHub",
+	// 与手写 dto.IngestDocumentRequest 对齐:手写字段名是 FileName(非标准
+	// Filename),parity 按字段名查找,生成器必须产出同名才可对偶。
+	"filename": "FileName",
 }
 
 // goFieldName converts a json key (snake_case or camelCase) to a PascalCase
