@@ -91,7 +91,11 @@ func generate(req *pluginpb.CodeGeneratorRequest) *pluginpb.CodeGeneratorRespons
 			return resp
 		}
 		// Go output
-		goOut := goFile(msgs, fd.GetName())
+		goOut, err := goFile(msgs, fd.GetName())
+		if err != nil {
+			resp.Error = protoPtr(err.Error())
+			return resp
+		}
 		resp.File = append(resp.File, &pluginpb.CodeGeneratorResponse_File{
 			Name:    protoPtr(goFileName(fd.GetName())),
 			Content: protoPtr(string(goOut)),

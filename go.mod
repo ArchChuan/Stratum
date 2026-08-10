@@ -30,7 +30,10 @@ require (
 	google.golang.org/grpc v1.79.2
 )
 
-require github.com/robfig/cron/v3 v3.0.1
+require (
+	github.com/bufbuild/protocompile v0.14.1
+	github.com/robfig/cron/v3 v3.0.1
+)
 
 require (
 	github.com/antithesishq/antithesis-sdk-go v0.7.0-default-no-op // indirect
