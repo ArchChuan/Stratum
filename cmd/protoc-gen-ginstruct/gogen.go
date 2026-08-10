@@ -43,10 +43,12 @@ func resolveGoType(gt string) (string, error) {
 	// validation for those is the whitelist prefix match below — running
 	// types.Eval first would reject every one of them.
 	if strings.Contains(gt, ".") {
-		// strip pointer/slice/map prefixes to reach the base type path
+		// strip pointer/slice prefixes to reach the base type path;
+		// "[]" is 2 bytes — a 1-byte strip would leave a stray "]" and fail
+		// the whitelist match below ([]github.com/.../domain.X)
 		base := gt
-		for strings.HasPrefix(base, "*") || strings.HasPrefix(base, "[]") {
-			base = base[1:]
+		if n := leadingTypePrefixLen(base); n > 0 {
+			base = base[n:]
 		}
 		if strings.HasPrefix(base, "map[") {
 			if idx := strings.Index(base, "]"); idx >= 0 {
@@ -90,6 +92,19 @@ func splitGoTypePrefix(gt string) (prefix, rest string) {
 		}
 	}
 	return prefix, gt
+}
+
+// leadingTypePrefixLen returns the byte length of a leading "*" or "[]"
+// type prefix, 0 when neither. resolveGoType uses it to skip the prefix
+// before the whitelist match — "[]" must strip 2 bytes, not 1.
+func leadingTypePrefixLen(s string) int {
+	if strings.HasPrefix(s, "[]") {
+		return 2
+	}
+	if strings.HasPrefix(s, "*") {
+		return 1
+	}
+	return 0
 }
 
 // goTypeSegPath returns the folded package segment and the full import path

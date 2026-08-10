@@ -299,6 +299,8 @@ func TestGoFieldNameAcronyms(t *testing.T) {
 func TestGoTypeWhitelist(t *testing.T) {
 	ok := []string{
 		"github.com/byteBuilderX/stratum/internal/agent/domain.OpProposalStatus",
+		"[]github.com/byteBuilderX/stratum/internal/agent/domain.ProposalEvent",
+		"*github.com/byteBuilderX/stratum/internal/mcp/domain.AuthConfig",
 		"map[string][]any",
 		"[]string",
 	}
