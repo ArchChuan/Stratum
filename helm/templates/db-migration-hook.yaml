@@ -23,17 +23,25 @@ spec:
         {{- include "stratum.selectorLabels" . | nindent 8 }}
     spec:
       restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: migrate
           image: {{ include "stratum.image" .Values.app.image }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           command: ["./migrate-public"]
           env:
-            - name: POSTGRES_URL
+            # secret 无 POSTGRES_URL key；与 fix-provider-keys-hook 一致，
+            # 由 configmap 字段 + secret 密码拼 URL（$(VAR) 容器内展开）
+            - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.name | quote }}
-                  key: POSTGRES_URL
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_URL
+              value: {{ printf "postgres://%s:$(POSTGRES_PASSWORD)@%s:%v/%s?sslmode=%s&sslrootcert=%s" .Values.database.user .Values.database.host .Values.database.port .Values.database.name .Values.database.sslMode .Values.database.sslRootCert | quote }}
             - name: APP_ENV
               value: {{ .Values.config.environment | quote }}
           resources:
