@@ -1,6 +1,11 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"go.uber.org/zap"
+)
 
 func TestNacosSettingsServerAddresses(t *testing.T) {
 	cases := []struct {
@@ -58,3 +63,98 @@ func (f *fakeNacosClient) Listen(dataID string, onChange func(string)) error {
 }
 
 func (f *fakeNacosClient) Close() error { return nil }
+
+func TestConnectNacosAppliesColdAndHotConfig(t *testing.T) {
+	fake := &fakeNacosClient{
+		contents: map[string]string{
+			nacosAuthDataID:   `{"password_auth_enabled": false, "guest_auth_enabled": true}`,
+			nacosMemoryDataID: `{"enabled": true, "poll_interval": "5s", "batch_size": 100}`,
+		},
+		listeners: map[string]func(string){},
+	}
+	// brief 遗漏 NacosURL 导致 ConnectNacos 直接跳过（fail-closed 设计）；
+	// 补上 URL 才能走冷生效覆盖路径，断言未改动。
+	cfg := &Config{NacosURL: "http://nacos:8848", PasswordAuthEnabled: true, GuestAuthEnabled: false}
+	newNacosClient = func(s NacosSettings) (nacosClient, error) { return fake, nil }
+	defer func() { newNacosClient = newNacosClientImpl }()
+
+	logger := zap.NewNop()
+	if err := cfg.ConnectNacos(logger); err != nil {
+		t.Fatalf("ConnectNacos() error: %v", err)
+	}
+	// 冷生效字段（启动拉取）
+	if cfg.PasswordAuthEnabled {
+		t.Fatal("PasswordAuthEnabled should be false from Nacos")
+	}
+	if !cfg.GuestAuthEnabled {
+		t.Fatal("GuestAuthEnabled should be true from Nacos")
+	}
+	if !cfg.MemoryPipeline.Enabled {
+		t.Fatal("MemoryPipeline.Enabled should be true from Nacos")
+	}
+	// 热更新字段（初始拉取也写入 dynamic）
+	if d := cfg.LoadMemoryPipelineDynamic(); d.PollInterval != 5*time.Second || d.BatchSize != 100 {
+		t.Fatalf("dynamic = %+v, want 5s/100", d)
+	}
+	// 热更新推送
+	cfg.applyMemoryConfig(`{"poll_interval": "10s", "batch_size": 200}`)
+	if d := cfg.LoadMemoryPipelineDynamic(); d.PollInterval != 10*time.Second || d.BatchSize != 200 {
+		t.Fatalf("dynamic after push = %+v, want 10s/200", d)
+	}
+}
+
+func TestConnectNacosSkippedWhenNotConfigured(t *testing.T) {
+	cfg := &Config{} // NacosURL 为空
+	if err := cfg.ConnectNacos(zap.NewNop()); err != nil {
+		t.Fatalf("ConnectNacos() = %v, want nil skip", err)
+	}
+}
+
+func TestApplyMemoryConfigInvalidJSONKeepsOldValue(t *testing.T) {
+	cfg := &Config{}
+	cfg.ApplyMemoryPipelineDynamic(MemoryPipelineDynamic{PollInterval: time.Second})
+	if err := cfg.applyMemoryConfig(`{not json`); err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	if d := cfg.LoadMemoryPipelineDynamic(); d.PollInterval != time.Second {
+		t.Fatalf("dynamic lost after invalid push: %+v", d)
+	}
+}
+
+func TestApplyMemoryConfigInvalidDurationKeepsOldValue(t *testing.T) {
+	cfg := &Config{}
+	cfg.ApplyMemoryPipelineDynamic(MemoryPipelineDynamic{PollInterval: time.Second, BatchSize: 10})
+	if err := cfg.applyMemoryConfig(`{"poll_interval": "5x", "batch_size": 20}`); err == nil {
+		t.Fatal("expected error for invalid duration")
+	}
+	// 原子性：整体回退，batch_size 也不应用
+	if d := cfg.LoadMemoryPipelineDynamic(); d.BatchSize != 10 {
+		t.Fatalf("partial apply detected: %+v", d)
+	}
+}
+
+func TestApplyMemoryConfigMissingDynamicFieldsDontClear(t *testing.T) {
+	cfg := &Config{}
+	cfg.ApplyMemoryPipelineDynamic(MemoryPipelineDynamic{PollInterval: 3 * time.Second, BatchSize: 50})
+	// 只改 enabled，不提供调度字段 → 动态值保留
+	if err := cfg.applyMemoryConfig(`{"enabled": true}`); err != nil {
+		t.Fatalf("applyMemoryConfig() error: %v", err)
+	}
+	if d := cfg.LoadMemoryPipelineDynamic(); d.PollInterval != 3*time.Second || d.BatchSize != 50 {
+		t.Fatalf("dynamic cleared by partial push: %+v", d)
+	}
+}
+
+func TestApplyAuthConfigMissingFieldsDontOverride(t *testing.T) {
+	cfg := &Config{PasswordAuthEnabled: true}
+	// 字段缺省（JSON 无 password_auth_enabled）→ 保持 env 值
+	if err := cfg.applyAuthConfig(`{"guest_auth_enabled": false}`); err != nil {
+		t.Fatalf("applyAuthConfig() error: %v", err)
+	}
+	if !cfg.PasswordAuthEnabled {
+		t.Fatal("missing field should not override existing value")
+	}
+	if cfg.GuestAuthEnabled {
+		t.Fatal("guest_auth_enabled should be false")
+	}
+}

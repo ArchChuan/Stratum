@@ -59,6 +59,8 @@ type Config struct {
 	memoryDynamic          atomic.Pointer[MemoryPipelineDynamic]
 	memoryDynamicListeners []func(MemoryPipelineDynamic)
 	dynamicMu              sync.RWMutex
+	// nacos 客户端实例（ConnectNacos 设置、CloseNacos 清空）
+	nacos nacosClient
 }
 
 // RerankConfigured reports whether an external reranker backend is available.

@@ -1,15 +1,18 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nacos-group/nacos-sdk-go/v2/clients"
 	"github.com/nacos-group/nacos-sdk-go/v2/clients/config_client"
 	"github.com/nacos-group/nacos-sdk-go/v2/common/constant"
 	"github.com/nacos-group/nacos-sdk-go/v2/vo"
+	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
@@ -121,5 +124,123 @@ func (c *sdkNacosClient) Listen(dataID string, onChange func(string)) error {
 
 func (c *sdkNacosClient) Close() error {
 	c.cc.CloseClient()
+	return nil
+}
+
+// ConnectNacos 建立 Nacos 连接并应用档位 A 配置。
+// 语义（fail-closed）：未配置 NacosURL → 返回 nil 不启用；
+// 连接失败 → 返回 error（调用方 WARN，用 env/默认值启动）；
+// 单个 dataId 拉取/解析失败 → WARN 跳过，不阻断其余 dataId；
+// 非法内容 → 整体回退旧值。
+// 冷生效字段（装配参数）在同步阶段应用；热更新字段经 listener 原子写入。
+func (c *Config) ConnectNacos(logger *zap.Logger) error {
+	if c.NacosURL == "" {
+		return nil
+	}
+	client, err := newNacosClient(NacosSettings{
+		URL: c.NacosURL, Namespace: c.NacosNamespace,
+		Username: c.NacosUsername, Password: c.NacosPassword,
+	})
+	if err != nil {
+		return fmt.Errorf("config nacos connect: %w", err)
+	}
+	c.nacos = client
+
+	for dataID, apply := range map[string]func(string) error{
+		nacosAuthDataID:   c.applyAuthConfig,
+		nacosMemoryDataID: c.applyMemoryConfig,
+	} {
+		content, err := client.GetConfig(dataID)
+		if err != nil {
+			logger.Warn("config: nacos get failed, using env/fallback",
+				zap.String("data_id", dataID), zap.Error(err))
+			continue
+		}
+		if err := apply(content); err != nil {
+			logger.Warn("config: nacos apply failed, keeping previous value",
+				zap.String("data_id", dataID), zap.Error(err))
+		}
+	}
+
+	for dataID, apply := range map[string]func(string) error{
+		nacosAuthDataID:   c.applyAuthConfig,
+		nacosMemoryDataID: c.applyMemoryConfig,
+	} {
+		dataID, apply := dataID, apply // 循环变量捕获（Go <1.22 兼容）
+		if err := client.Listen(dataID, func(content string) {
+			if err := apply(content); err != nil {
+				logger.Warn("config: nacos push rejected, keeping previous value",
+					zap.String("data_id", dataID), zap.Error(err))
+			}
+		}); err != nil {
+			logger.Warn("config: nacos listen failed, hot reload disabled for this dataId",
+				zap.String("data_id", dataID), zap.Error(err))
+		}
+	}
+	return nil
+}
+
+// CloseNacos 关闭 Nacos 连接。幂等。
+func (c *Config) CloseNacos() error {
+	if c.nacos == nil {
+		return nil
+	}
+	if err := c.nacos.Close(); err != nil {
+		return fmt.Errorf("config nacos close: %w", err)
+	}
+	c.nacos = nil
+	return nil
+}
+
+// applyAuthConfig 应用 stratum/auth dataId。
+// 字段缺省不覆盖（*bool 指针区分"未设置"与"显式 false"）。
+func (c *Config) applyAuthConfig(content string) error {
+	var d struct {
+		PasswordAuthEnabled *bool `json:"password_auth_enabled"`
+		GuestAuthEnabled    *bool `json:"guest_auth_enabled"`
+	}
+	if err := json.Unmarshal([]byte(content), &d); err != nil {
+		return fmt.Errorf("parse auth config: %w", err)
+	}
+	if d.PasswordAuthEnabled != nil {
+		c.PasswordAuthEnabled = *d.PasswordAuthEnabled
+	}
+	if d.GuestAuthEnabled != nil {
+		c.GuestAuthEnabled = *d.GuestAuthEnabled
+	}
+	return nil
+}
+
+// applyMemoryConfig 应用 stratum/memory dataId。
+// enabled 等装配参数为冷生效（写入字段，下次启动生效）；
+// poll_interval/batch_size 为热生效（原子写入 dynamic 并通知 listener）。
+// 任一字段非法 → 整体回退（不部分应用）。
+func (c *Config) applyMemoryConfig(content string) error {
+	var d struct {
+		Enabled      *bool  `json:"enabled"`
+		PollInterval string `json:"poll_interval"`
+		BatchSize    *int   `json:"batch_size"`
+	}
+	if err := json.Unmarshal([]byte(content), &d); err != nil {
+		return fmt.Errorf("parse memory config: %w", err)
+	}
+	dynamic := MemoryPipelineDynamic{}
+	if d.PollInterval != "" {
+		parsed, err := time.ParseDuration(d.PollInterval)
+		if err != nil {
+			return fmt.Errorf("parse poll_interval: %w", err)
+		}
+		dynamic.PollInterval = parsed
+	}
+	if d.BatchSize != nil {
+		dynamic.BatchSize = *d.BatchSize
+	}
+	if d.Enabled != nil {
+		c.MemoryPipeline.Enabled = *d.Enabled
+	}
+	// 只有显式提供调度字段时才推送动态值，缺省不覆盖（防止只改 enabled 时清零动态值）。
+	if dynamic != (MemoryPipelineDynamic{}) {
+		c.ApplyMemoryPipelineDynamic(dynamic)
+	}
 	return nil
 }
