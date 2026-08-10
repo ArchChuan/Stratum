@@ -6,25 +6,24 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/byteBuilderX/stratum/api/http/dto"
 	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 )
 
 // parityPairs 登记 (gen struct, 手写 struct) 类型对偶。
-// 每批迁移工作流:写 proto → make proto-gen → 在此登记对偶 → parity 全绿 →
-// 删除手写 struct → 整条对偶移除(手写类型不存在后编译失败)、名字转入
-// removedStructs。
+// 终态(手写 dto 包消亡,Task 19):两包类型已逐字段相等,对偶退化为
+// "生成 vs 自身"的自对照——真正的守卫是 Task 2 快照 + 生成器不漂移,
+// 这里保留对偶清单作为结构形式,removedStructs 兜底防手写复活。
 var parityPairs = []struct {
 	name string
 	gen  reflect.Type
 	hw   reflect.Type
 }{
-	{name: "WorkspaceConfig", gen: reflect.TypeOf(gen.WorkspaceConfig{}), hw: reflect.TypeOf(dto.WorkspaceConfig{})},
-	{name: "QueryRequest", gen: reflect.TypeOf(gen.QueryRequest{}), hw: reflect.TypeOf(dto.QueryRequest{})},
-	{name: "CreateWorkspaceRequest", gen: reflect.TypeOf(gen.CreateWorkspaceRequest{}), hw: reflect.TypeOf(dto.CreateWorkspaceRequest{})},
-	{name: "UpdateWorkspaceRequest", gen: reflect.TypeOf(gen.UpdateWorkspaceRequest{}), hw: reflect.TypeOf(dto.UpdateWorkspaceRequest{})},
-	{name: "IngestDocumentRequest", gen: reflect.TypeOf(gen.IngestDocumentRequest{}), hw: reflect.TypeOf(dto.IngestDocumentRequest{})},
-	{name: "WorkspaceListItem", gen: reflect.TypeOf(gen.WorkspaceListItem{}), hw: reflect.TypeOf(dto.WorkspaceListItem{})},
+	{name: "WorkspaceConfig", gen: reflect.TypeOf(gen.WorkspaceConfig{}), hw: reflect.TypeOf(gen.WorkspaceConfig{})},
+	{name: "QueryRequest", gen: reflect.TypeOf(gen.QueryRequest{}), hw: reflect.TypeOf(gen.QueryRequest{})},
+	{name: "CreateWorkspaceRequest", gen: reflect.TypeOf(gen.CreateWorkspaceRequest{}), hw: reflect.TypeOf(gen.CreateWorkspaceRequest{})},
+	{name: "UpdateWorkspaceRequest", gen: reflect.TypeOf(gen.UpdateWorkspaceRequest{}), hw: reflect.TypeOf(gen.UpdateWorkspaceRequest{})},
+	{name: "IngestDocumentRequest", gen: reflect.TypeOf(gen.IngestDocumentRequest{}), hw: reflect.TypeOf(gen.IngestDocumentRequest{})},
+	{name: "WorkspaceListItem", gen: reflect.TypeOf(gen.WorkspaceListItem{}), hw: reflect.TypeOf(gen.WorkspaceListItem{})},
 }
 
 // removedStructs 登记"已从 dto 包删除"的 struct 名。
@@ -92,6 +91,16 @@ var removedStructs = map[string]bool{
 	"SkillProductResponse":                true,
 	"SkillRevisionResponse":               true,
 	"ErrorResponse":                       true,
+	"WorkspaceConfig":                     true,
+	"QueryRequest":                        true,
+	"CreateWorkspaceRequest":              true,
+	"UpdateWorkspaceRequest":              true,
+	"IngestDocumentRequest":               true,
+	"WorkspaceListItem":                   true,
+	// UploadDocumentRequest 是 multipart 契约(不入 proto),保留在
+	// gen/rag_manual.go;无手写对照物,由 golden 守卫行为,名字照常登记
+	// removedStructs 防手写复活。
+	"UploadDocumentRequest": true,
 }
 
 func TestParityHandwrittenVsGenerated(t *testing.T) {
@@ -212,7 +221,6 @@ func TestRemovedStructsGone(t *testing.T) {
 		return
 	}
 	t.Errorf("grep error: %v\n%s", err, out)
-	_ = dto.UploadDocumentRequest{} // 锚定 dto 包 import 存在;Task 19 手写 dto 包消亡时与 import 一并移除
 }
 
 func joinPattern(names []string) string {
