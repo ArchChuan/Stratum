@@ -106,7 +106,10 @@ be-test: proto-gen
 be-build: proto-gen
 	go build -o bin/server ./cmd/server $(GO_TEST_FLAGS)
 
-be-docker-build:
+# docker build 前必须先生成 proto 契约:生成物不入 git(fresh checkout
+# 无 api/http/dto/gen、web/src/services/gen),Dockerfile 内另有 make proto-gen
+# 兜底,双保险从入口堵死。
+be-docker-build: proto-gen
 	docker build -t $(BE_IMAGE):$(IMAGE_TAG) -f Dockerfile .
 
 # ─── Frontend 前端 ─────────────────────────────────────────────────────────
@@ -122,7 +125,7 @@ fe-typecheck: proto-gen
 fe-build: proto-gen
 	cd $(WEB_DIR) && npm run build
 
-fe-docker-build:
+fe-docker-build: proto-gen
 	docker build -t $(FE_IMAGE):$(IMAGE_TAG) -f $(WEB_DIR)/Dockerfile $(WEB_DIR)/
 
 # ─── Pre-merge 快速门禁（本地一键跑完，PR 前必过）────────────────────────
@@ -323,7 +326,7 @@ ci-backend: migration-guardrails arch-guardrails be-install be-fmt be-lint
 
 ci-frontend: fe-install fe-lint fe-typecheck fe-build
 
-ci-docker:
+ci-docker: proto-gen
 	docker build -t $(REGISTRY)/$(BE_IMAGE):$(IMAGE_TAG) -f Dockerfile .
 	docker build -t $(REGISTRY)/$(FE_IMAGE):$(IMAGE_TAG) -f $(WEB_DIR)/Dockerfile $(WEB_DIR)/
 	docker push $(REGISTRY)/$(BE_IMAGE):$(IMAGE_TAG)

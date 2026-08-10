@@ -78,6 +78,11 @@ jobs:
           go-version: '1.25.12'
           cache: true
 
+      # 生成物 api/http/dto/gen、web/src/services/gen 不入 git,fresh checkout
+      # 编译前必须先 make proto-gen,否则 go build ./cmd/server 找不到生成包。
+      - name: Generate proto contracts
+        run: make proto-gen
+
       - name: Build Go binary
         run: |
           CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server
@@ -130,6 +135,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.candidate.outputs.sha }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: true
+
+      # web 源码 import web/src/services/gen/**(不入 git),docker build 前
+      # 必须在 checkout 工作区先生成,否则 web/Dockerfile 的 npm run build 失败。
+      - name: Generate proto contracts
+        run: make proto-gen
 
       - uses: docker/login-action@v3
         with:

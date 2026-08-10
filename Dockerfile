@@ -1,8 +1,8 @@
 # Multi-stage build
 FROM golang:1.25-alpine AS builder
 
-# Install git for go modules
-RUN apk add --no-cache git
+# Install git for go modules + make for make proto-gen
+RUN apk add --no-cache git make
 
 # Set working directory
 WORKDIR /app
@@ -15,6 +15,11 @@ RUN go mod download
 
 # Copy source code
 COPY . .
+
+# 生成物 api/http/dto/gen、web/src/services/gen 不入 git(见 .gitignore),
+# fresh checkout 的 go build 前必须先 make proto-gen(builder 内有 Go 工具链,
+# 可 go install buf + 自建插件;alpine 镜像补装了 make)。
+RUN make proto-gen
 
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server
