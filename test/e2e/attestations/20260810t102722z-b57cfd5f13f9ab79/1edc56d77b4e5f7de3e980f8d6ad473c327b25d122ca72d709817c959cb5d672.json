@@ -1,0 +1,84 @@
+{
+  "schema_version": 2,
+  "source_digest": "1edc56d77b4e5f7de3e980f8d6ad473c327b25d122ca72d709817c959cb5d672",
+  "manifest_digest": "8ceeb8359a930c035790fc120389d9b4bedfbd5dd1195e9446f3e07745c76921",
+  "policy_manifest_digest": "6665d1ccc906cadbd70bcd863261cf8562f58c87aa05a85588c8f4408cc82f0c",
+  "tested_git_parent": "1d334356ae8ab2561e2663d259c101d3b67d176c",
+  "browser": {
+    "name": "chromium",
+    "version": "149.0.7827.55"
+  },
+  "mode": "short",
+  "seed": 1,
+  "started_at": "2026-08-10T10:27:35.843Z",
+  "duration_seconds": 30,
+  "host_class": "developer",
+  "packs": [
+    {
+      "id": "audit",
+      "status": "passed"
+    },
+    {
+      "id": "prompt",
+      "status": "passed"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "audit.route.audit",
+      "status": "passed"
+    },
+    {
+      "id": "prompt.create.template",
+      "status": "passed"
+    },
+    {
+      "id": "prompt.delete.binding",
+      "status": "passed"
+    },
+    {
+      "id": "prompt.publish.version",
+      "status": "passed"
+    },
+    {
+      "id": "prompt.route.prompts",
+      "status": "passed"
+    },
+    {
+      "id": "prompt.upsert.binding",
+      "status": "passed"
+    }
+  ],
+  "action_count": 6,
+  "sequence_digest": "d98764feedb2da38b6dc3ff5db21e8038f1a06cfa8dcc3a86f789cb62f0d3576",
+  "evidence": {
+    "ui": 6,
+    "http": 6,
+    "database": 6,
+    "reconciled": 6
+  },
+  "artifacts": [],
+  "cleanup": {
+    "passed": true,
+    "residual_entity_ids": []
+  },
+  "unverified_capabilities": [],
+  "risk_classification": "short",
+  "status": "passed",
+  "run_topology": {
+    "run_id": "20260810t102722z-b57cfd5f13f9ab79",
+    "host": "127.0.0.1",
+    "ports": {
+      "backend": 37815,
+      "fixture": 46801,
+      "frontend": 35173,
+      "oauth": 39643
+    },
+    "database_name": "stratum_e2e_20260810t102722z_b57cfd5f13f9ab79"
+  },
+  "owned_cleanup": {
+    "database_dropped": true,
+    "lease_removed": true
+  },
+  "expires_at": "2026-08-13T10:28:15.959196339Z"
+}

@@ -18,6 +18,7 @@ import { parseRuntimeOptions, type SystemPack } from './stateful/core/runtime';
 import { executeAcceptanceSchedule } from './stateful/core/scheduler';
 import { dashboardActions } from './stateful/packs/dashboard';
 import { executeAgentPack } from './stateful/packs/agent';
+import { executeAuditPack } from './stateful/packs/audit';
 import { executeAgentContextPack } from './stateful/packs/agent-context';
 import { executeAgentSkillMCPPack } from './stateful/packs/agent-skill-mcp';
 import { executeCollabPack } from './stateful/packs/collab';
@@ -29,6 +30,7 @@ import { executeLLMAdminPack } from './stateful/packs/llm-admin';
 import { executeMCPPack } from './stateful/packs/mcp';
 import { executeMemoryPack } from './stateful/packs/memory';
 import { executeOperationGatePack } from './stateful/packs/operation-gate';
+import { executePromptPack } from './stateful/packs/prompt';
 import { executeScheduledTaskPack } from './stateful/packs/scheduled-task';
 import { executeSkillPack } from './stateful/packs/skill';
 import { executeWorkflowPack } from './stateful/packs/workflow';
@@ -211,6 +213,14 @@ const executePack = async (
   }
   if (pack === 'memory') {
     completedActions.push(...await executeMemoryPack({ actor: actors.memberA, pool, evidence, webURL }));
+    return;
+  }
+  if (pack === 'prompt') {
+    completedActions.push(...await executePromptPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    return;
+  }
+  if (pack === 'audit') {
+    completedActions.push(...await executeAuditPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
     return;
   }
   if (pack === 'llm-admin') {
