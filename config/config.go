@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -49,11 +51,16 @@ type Config struct {
 	Opik                    OpikConfig
 	TracePayload            TracePayloadConfig
 	MemoryPipeline          MemoryPipelineConfig
+	// 热更新运行时状态（Nacos listener 写、wiring 注册回调读）
+	memoryDynamic          atomic.Pointer[MemoryPipelineDynamic]
+	memoryDynamicListeners []func(MemoryPipelineDynamic)
+	dynamicMu              sync.RWMutex
 }
 
 // RerankConfigured reports whether an external reranker backend is available.
 // BaseURL is the single switch: an empty base URL disables the backend.
-func (c Config) RerankConfigured() bool {
+// 指针接收者：Config 含 atomic.Pointer/sync.RWMutex 后不可按值复制（vet copylocks）。
+func (c *Config) RerankConfigured() bool {
 	return c.RerankBaseURL != ""
 }
 
@@ -196,6 +203,41 @@ func githubOAuthEndpoints() (string, string, string, error) {
 		}
 	}
 	return overrides[0], overrides[1], overrides[2], nil
+}
+
+// MemoryPipelineDynamic 是运行期可热更新的 memory pipeline 调度参数
+// （Nacos stratum/memory dataId 的 poll_interval/batch_size），
+// 与冷生效的装配参数（Enabled、worker 数等）分离。
+type MemoryPipelineDynamic struct {
+	PollInterval time.Duration
+	BatchSize    int
+}
+
+// OnMemoryPipelineDynamic 注册热更新回调；回调在 listener goroutine 同步调用，
+// 必须非阻塞、不得持有锁（内部由 wiring 做 atomic Store）。
+func (c *Config) OnMemoryPipelineDynamic(fn func(MemoryPipelineDynamic)) {
+	c.dynamicMu.Lock()
+	c.memoryDynamicListeners = append(c.memoryDynamicListeners, fn)
+	c.dynamicMu.Unlock()
+}
+
+// ApplyMemoryPipelineDynamic 原子写入动态配置并通知所有 listener。
+func (c *Config) ApplyMemoryPipelineDynamic(d MemoryPipelineDynamic) {
+	c.memoryDynamic.Store(&d)
+	c.dynamicMu.RLock()
+	listeners := append([]func(MemoryPipelineDynamic){}, c.memoryDynamicListeners...)
+	c.dynamicMu.RUnlock()
+	for _, fn := range listeners {
+		fn(d)
+	}
+}
+
+// LoadMemoryPipelineDynamic 返回当前动态值；未设置过时为零值。
+func (c *Config) LoadMemoryPipelineDynamic() MemoryPipelineDynamic {
+	if d := c.memoryDynamic.Load(); d != nil {
+		return *d
+	}
+	return MemoryPipelineDynamic{}
 }
 
 func getEnv(key, defaultValue string) string {
