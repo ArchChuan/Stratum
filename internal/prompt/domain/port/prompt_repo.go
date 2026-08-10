@@ -14,6 +14,10 @@ type PromptRepo interface {
 	GetLatestPublished(ctx context.Context, key string, tenantID *string) (*domain.PromptTemplate, error)
 	UpdateStatus(ctx context.Context, key string, version int, tenantID *string, status domain.PromptStatus) error
 	GetByHash(ctx context.Context, hash string) (*domain.PromptTemplate, error)
+	// ListByKey returns the latest version row of every prompt key for a
+	// tenant (nil = global), ordered by version descending, plus the total
+	// distinct key count for pagination.
+	ListByKey(ctx context.Context, tenantID *string, limit, offset int) ([]domain.PromptTemplate, int, error)
 }
 
 // BindingRepo manages prompt version bindings for tenant/agent scopes.

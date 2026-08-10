@@ -636,6 +636,9 @@ func (contractAuditRepo) InsertBatch(_ context.Context, _ []auditdomain.AuditEve
 func (contractAuditRepo) Query(_ context.Context, _ auditdomain.AuditFilter) ([]auditdomain.AuditEvent, error) {
 	return nil, nil
 }
+func (contractAuditRepo) Count(_ context.Context, _ auditdomain.AuditFilter) (int, error) {
+	return 0, nil
+}
 func (contractAuditRepo) GetByID(_ context.Context, _, _ string) (*auditdomain.AuditEvent, error) {
 	return nil, nil
 }

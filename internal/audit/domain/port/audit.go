@@ -16,6 +16,9 @@ type AuditRecorder interface {
 // AuditQueryService reads audit events for human and automated review.
 type AuditQueryService interface {
 	Query(ctx context.Context, filter domain.AuditFilter) ([]domain.AuditEvent, error)
+	// Count returns the total number of events matching the filter
+	// (pagination total).
+	Count(ctx context.Context, filter domain.AuditFilter) (int, error)
 	// GetByID returns a single event, scoped to tenantID. tenantID must not be
 	// empty: cross-tenant reads are refused by the implementation.
 	GetByID(ctx context.Context, tenantID string, id string) (*domain.AuditEvent, error)

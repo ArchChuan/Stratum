@@ -232,6 +232,14 @@ func (m *MockFactRepo) FindSupersedeCandidates(ctx context.Context, tenantID str
 	return args.Get(0).([]*port.SupersedeCandidate), args.Error(1)
 }
 
+func (m *MockFactRepo) ListUserFacts(ctx context.Context, tenantID, userID string, limit, offset int) ([]*domain.MemoryFact, error) {
+	args := m.Called(ctx, tenantID, userID, limit, offset)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.MemoryFact), args.Error(1)
+}
+
 func (m *MockFactRepo) CountByUser(ctx context.Context, tenantID, userID string) (int, error) {
 	args := m.Called(ctx, tenantID, userID)
 	return args.Int(0), args.Error(1)
@@ -549,4 +557,48 @@ func TestForgetMemoryWithoutVectorStoreDeletesFact(t *testing.T) {
 
 	assert.NoError(t, svc.ForgetMemory(ctx, req))
 	factRepo.AssertExpectations(t)
+}
+
+func TestMemoryService_ListUserMemories_NewestFirstWithActiveTotal(t *testing.T) {
+	ctx := context.Background()
+	facts := new(MockFactRepo)
+	svc := NewMemoryService(facts, nil, nil, nil, nil, nil, nil, nil)
+
+	facts.On("ListUserFacts", ctx, "tenant-1", "user-1", 10, 20).Return([]*domain.MemoryFact{
+		{ID: "fact-2", Scope: domain.ScopeUser, Content: "prefers Go", Importance: 0.8},
+		{ID: "fact-1", Scope: domain.ScopeUser, Content: "likes Go", Importance: 0.7},
+	}, nil).Once()
+	facts.On("CountByUser", ctx, "tenant-1", "user-1").Return(42, nil).Once()
+
+	memories, total, err := svc.ListUserMemories(ctx, &ListUserMemoriesRequest{
+		TenantID: "tenant-1", UserID: "user-1", Limit: 10, Offset: 20,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, 42, total)
+	if len(memories) != 2 {
+		t.Fatalf("len=%d, want 2", len(memories))
+	}
+	assert.Equal(t, "fact-2", memories[0].ID)
+	assert.Equal(t, "user", memories[0].Scope)
+	facts.AssertExpectations(t)
+}
+
+func TestMemoryService_ListUserMemories_PropagatesRepoErrors(t *testing.T) {
+	ctx := context.Background()
+	facts := new(MockFactRepo)
+	svc := NewMemoryService(facts, nil, nil, nil, nil, nil, nil, nil)
+
+	facts.On("ListUserFacts", ctx, "tenant-1", "user-1", 20, 0).Return(nil, errors.New("list failed")).Once()
+	_, _, err := svc.ListUserMemories(ctx, &ListUserMemoriesRequest{
+		TenantID: "tenant-1", UserID: "user-1", Limit: 20, Offset: 0,
+	})
+	assert.ErrorContains(t, err, "list user memories")
+
+	facts.On("ListUserFacts", ctx, "tenant-1", "user-1", 20, 0).Return(nil, nil).Once()
+	facts.On("CountByUser", ctx, "tenant-1", "user-1").Return(0, errors.New("count failed")).Once()
+	_, _, err = svc.ListUserMemories(ctx, &ListUserMemoriesRequest{
+		TenantID: "tenant-1", UserID: "user-1", Limit: 20, Offset: 0,
+	})
+	assert.ErrorContains(t, err, "count user memories")
+	facts.AssertExpectations(t)
 }

@@ -11,6 +11,7 @@ import {
 import { Col, Row, Typography } from 'antd';
 import type { ReactNode } from 'react';
 
+import { RecentExecutionsTable } from '../components/RecentExecutionsTable';
 import { StatCard } from '../components/StatCard';
 import { useDashboardPage } from '../hooks/useDashboardPage';
 
@@ -25,7 +26,8 @@ interface StatCardSpec {
 }
 
 export const DashboardPage = () => {
-  const { counts, loading } = useDashboardPage();
+  const { counts, loading, executions, executionsTotal, executionsLoading, page, pageSize, handlePageChange } =
+    useDashboardPage();
 
   const statCards: StatCardSpec[] = [
     { title: 'Agent', value: counts.agents, icon: <RobotOutlined />, color: '#1677ff', bg: '#e6f4ff' },
@@ -56,6 +58,23 @@ export const DashboardPage = () => {
           </Col>
         ))}
       </Row>
+
+      <div style={{ marginBottom: 16 }}>
+        <Title level={5} style={{ margin: 0 }}>
+          最近执行
+        </Title>
+        <Text type="secondary" style={{ fontSize: 13 }}>
+          当前用户的 Agent 执行记录
+        </Text>
+      </div>
+      <RecentExecutionsTable
+        data={executions}
+        loading={loading || executionsLoading}
+        total={executionsTotal}
+        page={page}
+        pageSize={pageSize}
+        onPageChange={handlePageChange}
+      />
     </div>
   );
 };
