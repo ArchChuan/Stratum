@@ -3,6 +3,7 @@ import { useCallback, useEffect, useReducer, useState } from 'react';
 
 import { workflowApi } from '../api/workflow.api';
 import { createInitialEditorState, workflowEditorReducer, type WorkflowEditorAction } from '../model/editor';
+import { applyAutoLayout } from '../model/layout';
 import type { WorkflowDefinition, WorkflowInputSchema } from '../model/workflow';
 
 import { extractErrorMessage } from '@/shared/lib';
@@ -32,7 +33,8 @@ export const useWorkflowDesigner = (workflowId?: string) => {
       setNameState(next.name);
       setDescriptionState(next.description);
       setInputSchemaState(next.input_schema);
-      rawDispatch({ type: 'server.reset', spec: next.spec });
+      // 历史 spec 无 position：布局兜底一次（幂等，不覆盖已有坐标）
+      rawDispatch({ type: 'server.reset', spec: applyAutoLayout(next.spec) });
       setDetailsDirty(false);
     }).catch((error: unknown) => {
       if (!cancelled) message.error({ content: extractErrorMessage(error, '操作失败'), duration: 0 });
@@ -52,7 +54,8 @@ export const useWorkflowDesigner = (workflowId?: string) => {
   const save = async () => {
     setSaving(true);
     try {
-      const payload = { name, description, spec: editor.spec, input_schema: inputSchema };
+      // 布局兜底作用于 payload：新插入的节点坐标缺位时也能落库，而非只作用于本地 reset
+      const payload = { name, description, spec: applyAutoLayout(editor.spec), input_schema: inputSchema };
       const saved = definition
         ? await workflowApi.updateWorkflowDraft(definition.id, { ...payload, expected_revision: definition.revision })
         : await workflowApi.createWorkflow(payload);
@@ -60,7 +63,7 @@ export const useWorkflowDesigner = (workflowId?: string) => {
       setNameState(saved.name);
       setDescriptionState(saved.description);
       setInputSchemaState(saved.input_schema);
-      rawDispatch({ type: 'server.reset', spec: saved.spec });
+      rawDispatch({ type: 'server.reset', spec: applyAutoLayout(saved.spec) });
       setDetailsDirty(false);
       setValidatedRevision(null);
       message.success({ content: '草稿已保存', duration: 2 });

@@ -6,13 +6,12 @@ export type EditorSelection = { kind: 'node' | 'edge'; id: string } | null;
 
 export interface WorkflowEditorState {
   spec: WorkflowSpec;
-  positions: Record<string, XYPosition>;
   selected: EditorSelection;
   dirty: boolean;
 }
 
 export type WorkflowEditorAction =
-  | { type: 'server.reset'; spec: WorkflowSpec; positions?: Record<string, XYPosition> }
+  | { type: 'server.reset'; spec: WorkflowSpec }
   | { type: 'node.insert'; nodeId: string; nodeType: WorkflowNodeType; position: XYPosition }
   | { type: 'node.move'; nodeId: string; position: XYPosition }
   | { type: 'node.rename'; nodeId: string; name: string }
@@ -29,6 +28,29 @@ export interface WorkflowNodeData extends Record<string, unknown> {
 }
 
 export type WorkflowFlowNode = Node<WorkflowNodeData, 'workflowNode'>;
+
+/**
+ * 解析 inspector 的映射文本。契约约束（zod z.record(z.string()) 与 Go
+ * map[string]string）：必须是纯对象且每个 value 为 string。`{"a":5}` 一旦
+ * 保存，工作流重载会直接失败，因此这里双重断言。
+ * 返回 null 表示非法输入；空字符串视为未修改，沿用 previous。
+ */
+export const parseMappingText = (
+  text: string,
+  previous: Record<string, string>,
+): Record<string, string> | null => {
+  if (typeof text !== 'string' || text.trim() === '') return previous;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object') return null;
+    for (const value of Object.values(parsed)) {
+      if (typeof value !== 'string') return null;
+    }
+    return parsed as Record<string, string>;
+  } catch {
+    return null;
+  }
+};
 
 const emptySpec = (): WorkflowSpec => ({ nodes: [], edges: [], max_concurrency: 0 });
 
@@ -54,7 +76,6 @@ const createNode = (id: string, type: WorkflowNodeType): WorkflowNode => {
 
 export const createInitialEditorState = (spec: WorkflowSpec = emptySpec()): WorkflowEditorState => ({
   spec,
-  positions: {},
   selected: null,
   dirty: false,
 });
@@ -65,18 +86,27 @@ export const workflowEditorReducer = (
 ): WorkflowEditorState => {
   switch (action.type) {
     case 'server.reset':
-      return { spec: action.spec, positions: action.positions || {}, selected: null, dirty: false };
+      return { spec: action.spec, selected: null, dirty: false };
     case 'node.insert':
       if (state.spec.nodes.some((node) => node.id === action.nodeId)) return state;
       return {
         ...state,
-        spec: { ...state.spec, nodes: [...state.spec.nodes, createNode(action.nodeId, action.nodeType)] },
-        positions: { ...state.positions, [action.nodeId]: action.position },
+        spec: {
+          ...state.spec,
+          nodes: [...state.spec.nodes, { ...createNode(action.nodeId, action.nodeType), position: action.position }],
+        },
         selected: { kind: 'node', id: action.nodeId },
         dirty: true,
       };
     case 'node.move':
-      return { ...state, positions: { ...state.positions, [action.nodeId]: action.position }, dirty: true };
+      return {
+        ...state,
+        spec: {
+          ...state.spec,
+          nodes: state.spec.nodes.map((node) => node.id === action.nodeId ? { ...node, position: action.position } : node),
+        },
+        dirty: true,
+      };
     case 'node.rename':
       return {
         ...state,
@@ -103,7 +133,6 @@ export const workflowEditorReducer = (
           nodes: state.spec.nodes.filter((node) => node.id !== action.nodeId),
           edges: state.spec.edges.filter((edge) => edge.from !== action.nodeId && edge.to !== action.nodeId),
         },
-        positions: Object.fromEntries(Object.entries(state.positions).filter(([id]) => id !== action.nodeId)),
         selected: state.selected?.id === action.nodeId ? null : state.selected,
         dirty: true,
       };
@@ -138,14 +167,33 @@ export const workflowEditorReducer = (
 export const toFlowNodes = (state: WorkflowEditorState): WorkflowFlowNode[] => state.spec.nodes.map((node) => ({
   id: node.id,
   type: 'workflowNode',
-  position: state.positions[node.id] || { x: 0, y: 0 },
+  position: node.position || { x: 0, y: 0 },
   data: { node, selected: state.selected?.kind === 'node' && state.selected.id === node.id },
 }));
 
-export const toFlowEdges = (state: WorkflowEditorState): Edge[] => state.spec.edges.map((edge) => ({
-  id: edge.id || `${edge.from}-${edge.to}`,
-  source: edge.from,
-  target: edge.to,
-  label: edge.default ? '默认' : edge.condition_value === true ? '是' : edge.condition_value === false ? '否' : undefined,
-  selected: state.selected?.kind === 'edge' && state.selected.id === edge.id,
-}));
+const conditionSourceHandle = (edge: WorkflowEdge): string | undefined => {
+  if (edge.default) return 'default';
+  if (edge.condition_value === true) return 'yes';
+  if (edge.condition_value === false) return 'no';
+  // 裸边（无分支字段）运行时恒不选中是死边：挂 default handle 会与真 default 边
+  // 视觉混淆且诱使用户重连出双 default（保存必报错），独立标记为「未指定分支」。
+  return 'default';
+};
+
+export const toFlowEdges = (state: WorkflowEditorState): Edge[] => state.spec.edges.map((edge) => {
+  // 仅 condition 源边派生 sourceHandle：非 condition 节点 handle 无 id，
+  // 若派生 handle id React Flow 找不到对应 handle 会让整条边不渲染。
+  const sourceNode = state.spec.nodes.find((node) => node.id === edge.from);
+  const isConditionEdge = sourceNode?.type === 'condition';
+  const isBareConditionEdge = isConditionEdge && !edge.default && edge.condition_value === undefined;
+  return {
+    id: edge.id || `${edge.from}-${edge.to}`,
+    source: edge.from,
+    target: edge.to,
+    sourceHandle: isConditionEdge ? conditionSourceHandle(edge) : undefined,
+    label: isBareConditionEdge
+      ? '未指定分支'
+      : edge.default ? '默认' : edge.condition_value === true ? '是' : edge.condition_value === false ? '否' : undefined,
+    selected: state.selected?.kind === 'edge' && state.selected.id === edge.id,
+  };
+});

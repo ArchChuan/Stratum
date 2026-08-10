@@ -1,6 +1,7 @@
 import { Background, Controls, ReactFlow } from '@xyflow/react';
 
 import { createInitialEditorState, toFlowEdges, toFlowNodes } from '../model/editor';
+import { hasValidPosition } from '../model/layout';
 import type { WorkflowRunState } from '../model/run-state';
 
 import { WorkflowNodeCard } from './nodes/WorkflowNodeCard';
@@ -12,10 +13,12 @@ export const WorkflowRunCanvas = ({ state, selectedNodeId, onSelectNode }: { sta
   const editor = createInitialEditorState(state.run.snapshot);
   const nodes = toFlowNodes(editor).map((node, index) => {
     const attempt = [...state.attempts].reverse().find((item) => item.node_id === node.id);
-    return { ...node, position: { x: 100 + index * 280, y: 160 }, draggable: false, connectable: false, selected: selectedNodeId === node.id, data: { ...node.data, selected: selectedNodeId === node.id, statusLabel: labels[attempt?.status || 'pending'] } };
+    // 作者坐标优先（与编辑器/只读画布一致），旧快照无 position 时水平排布兜底
+    const fallback = { x: 100 + index * 280, y: 160 };
+    return { ...node, position: hasValidPosition(node.position) ? node.position : fallback, draggable: false, connectable: false, selected: selectedNodeId === node.id, data: { ...node.data, selected: selectedNodeId === node.id, statusLabel: labels[attempt?.status || 'pending'] } };
   });
   return <section aria-label="工作流运行图" className="workflow-readonly-canvas">
-    <ReactFlow nodes={nodes} edges={toFlowEdges(editor)} nodeTypes={nodeTypes} nodesDraggable={false} nodesConnectable={false} onNodeClick={(_, node) => onSelectNode(node.id)} fitView>
+    <ReactFlow nodes={nodes} edges={toFlowEdges(editor)} nodeTypes={nodeTypes} nodesDraggable={false} nodesConnectable={false} onNodeClick={(_, node) => onSelectNode(node.id)} nodeOrigin={[0.5, 0.5]} fitView>
       <Background gap={24} size={1} /><Controls showInteractive={false} />
     </ReactFlow>
   </section>;
