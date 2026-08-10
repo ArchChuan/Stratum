@@ -23,6 +23,7 @@ export const WorkflowReadonlyCanvas = ({ spec }: { spec: WorkflowSpec }) => {
       nodesDraggable={false}
       nodesConnectable={false}
       elementsSelectable={false}
+      nodeOrigin={[0.5, 0.5]}
       fitView
     >
       <Background gap={24} size={1} />
