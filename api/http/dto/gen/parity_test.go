@@ -157,7 +157,7 @@ func compatibleTypeDepth(a, b reflect.Type, depth int) bool {
 	if a.Kind() == reflect.Slice && b.Kind() == reflect.Slice {
 		return compatibleTypeDepth(a.Elem(), b.Elem(), depth+1)
 	}
-	if a.Kind() == reflect.Ptr && b.Kind() == reflect.Ptr {
+	if a.Kind() == reflect.Pointer && b.Kind() == reflect.Pointer {
 		// proto3 optional message → *T(映射表):*gen.T vs *dto.T 递归到 struct 等价
 		return compatibleTypeDepth(a.Elem(), b.Elem(), depth+1)
 	}

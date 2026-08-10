@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
-import type { ExecuteAgentRequest as GenExecuteAgentRequest } from '@/services/gen/agent';
-
 import { resourceChangeProposalArtifactSchema } from './proposal';
+
+import type { ExecuteAgentRequest as GenExecuteAgentRequest } from '@/services/gen/agent';
 
 export const agentSchema = z
   .object({
