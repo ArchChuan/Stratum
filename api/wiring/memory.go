@@ -3,10 +3,12 @@ package wiring
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
+	"github.com/byteBuilderX/stratum/config"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	memory "github.com/byteBuilderX/stratum/internal/memory/application"
@@ -177,6 +179,7 @@ func (c *Container) buildMemoryPipeline(mem *Memory, db *pgxpool.Pool) error {
 
 	vectorAdapter := pipeline.NewMilvusVectorAdapter(c.Storage.Milvus).WithDimResolver(dimResolver)
 	p := pipeline.New(pipelineCfg, db, c.Storage.NATS, vectorAdapter, c.Logger)
+	c.attachPipelineDynamic(p)
 	if c.LLMGateway != nil && c.LLMGateway.Metrics != nil {
 		pipeline.RegisterMetrics(c.LLMGateway.Metrics.Registerer())
 	}
@@ -197,6 +200,21 @@ func (c *Container) buildMemoryPipeline(mem *Memory, db *pgxpool.Pool) error {
 	}
 	mem.Pipeline = p
 	return nil
+}
+
+// attachPipelineDynamic 桥接热更新管道：config 层动态配置 → atomic 指针 →
+// poller 每轮 re-read。dynamic 逃逸到堆，生命周期与 Container 一致；
+// 若从未 Store 过，poller 回退静态值——与现状一致。
+// 独立成函数以保持 buildMemoryPipeline 复杂度在基线内。
+func (c *Container) attachPipelineDynamic(p *pipeline.Pipeline) {
+	var dynamic atomic.Pointer[pipeline.DynamicConfig]
+	if d := c.Config.LoadMemoryPipelineDynamic(); d.PollInterval > 0 || d.BatchSize > 0 {
+		dynamic.Store(&pipeline.DynamicConfig{PollInterval: d.PollInterval, BatchSize: d.BatchSize})
+	}
+	c.Config.OnMemoryPipelineDynamic(func(d config.MemoryPipelineDynamic) {
+		dynamic.Store(&pipeline.DynamicConfig{PollInterval: d.PollInterval, BatchSize: d.BatchSize})
+	})
+	p.WithDynamic(&dynamic)
 }
 
 func makeLLMExtractResolver(llmRes *tenantCapabilityResolver) func(context.Context, string) memport.LLMExtractor {
