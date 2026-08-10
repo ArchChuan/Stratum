@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	jschema "github.com/byteBuilderX/stratum/pkg/jsonschema"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	vector "github.com/byteBuilderX/stratum/pkg/vector"
 	"github.com/jackc/pgx/v5"
@@ -49,20 +50,10 @@ func RecallToolDefinition() map[string]any {
 	return map[string]any{
 		"name":        "stratum_recall_memory",
 		"description": "Search long-term memory for relevant past interactions, entities, and context. Use when you need to recall information from previous conversations.",
-		"input_schema": map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"query": map[string]any{
-					"type":        "string",
-					"description": "Search query to find relevant memories",
-				},
-				"limit": map[string]any{
-					"type":        "integer",
-					"description": "Max results (1-20, default 5)",
-				},
-			},
-			"required": []string{"query"},
-		},
+		"input_schema": jschema.Must(jschema.Object(
+			jschema.RequiredProp("query", jschema.String("Search query to find relevant memories")),
+			jschema.OptionalProp("limit", jschema.Integer(nil, nil, "Max results (1-20, default 5)")),
+		)).Map(),
 	}
 }
 

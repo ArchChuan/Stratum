@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	jschema "github.com/byteBuilderX/stratum/pkg/jsonschema"
 )
 
 type rpcRequest struct {
@@ -37,8 +38,9 @@ func main() {
 		case "tools/list":
 			result = map[string]any{"tools": []map[string]any{{
 				"name": "e2e_lookup", "description": "Returns bounded E2E evidence",
-				"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
-					"id": map[string]any{"type": "string"}}, "required": []string{"id"}},
+				"inputSchema": jschema.Must(jschema.Object(
+					jschema.RequiredProp("id", jschema.String("")),
+				)).Map(),
 			}}}
 		case "resources/list":
 			result = map[string]any{"resources": []any{}}

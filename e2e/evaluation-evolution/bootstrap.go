@@ -24,6 +24,7 @@ import (
 	"time"
 
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
+	jschema "github.com/byteBuilderX/stratum/pkg/jsonschema"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
@@ -769,7 +770,7 @@ func executeLiveSkillFlow(client *http.Client, apiURL, token, agentID, serverID,
 	}
 	requestJSON(client, http.MethodPatch, apiURL+"/skills/"+workspace.Skill.ID+"/draft/activation", token,
 		map[string]any{"name": "e2e_live_skill", "description": "Isolated live Skill activation",
-			"inputSchema": map[string]any{"type": "object"}, "outputSchema": map[string]any{"type": "object"},
+			"inputSchema": jschema.Must(jschema.Object()).Map(), "outputSchema": jschema.Must(jschema.Object()).Map(),
 			"confirmed": true}, http.StatusOK, nil)
 	var published struct {
 		ID      string `json:"id"`

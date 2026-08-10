@@ -8,29 +8,27 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	jschema "github.com/byteBuilderX/stratum/pkg/jsonschema"
 )
 
 var ErrPlanCheckpointRequired = errors.New("plan checkpoint writer is required")
 
 func PlanToolDefinitions() []port.ToolDefinition {
 	return []port.ToolDefinition{
-		{Name: "stratum_create_plan", Description: "Create an explicit dependency plan for this task.", InputSchema: planSchema(map[string]any{
-			"nodes": map[string]any{"type": "array"},
-		})},
-		{Name: "stratum_revise_plan", Description: "Revise the active plan using explicit add, update, remove, or dependency operations.", InputSchema: planSchema(map[string]any{
-			"operations": map[string]any{"type": "array"},
-		})},
-		{Name: "stratum_continue_plan", Description: "Execute the active plan ready set.", InputSchema: planSchema(nil)},
-		{Name: "stratum_cancel_plan", Description: "Cancel the active plan and all outstanding nodes.", InputSchema: planSchema(nil)},
+		{Name: "stratum_create_plan", Description: "Create an explicit dependency plan for this task.", InputSchema: planSchema(
+			jschema.OptionalProp("nodes", jschema.UntypedArray("")),
+		)},
+		{Name: "stratum_revise_plan", Description: "Revise the active plan using explicit add, update, remove, or dependency operations.", InputSchema: planSchema(
+			jschema.OptionalProp("operations", jschema.UntypedArray("")),
+		)},
+		{Name: "stratum_continue_plan", Description: "Execute the active plan ready set.", InputSchema: planSchema()},
+		{Name: "stratum_cancel_plan", Description: "Cancel the active plan and all outstanding nodes.", InputSchema: planSchema()},
 	}
 }
 
-func planSchema(properties map[string]any) map[string]any {
-	if properties == nil {
-		properties = map[string]any{}
-	}
-	properties["expected_revision"] = map[string]any{"type": "integer", "minimum": 0}
-	return map[string]any{"type": "object", "properties": properties, "required": []string{"expected_revision"}}
+func planSchema(props ...jschema.Prop) map[string]any {
+	props = append(props, jschema.RequiredProp("expected_revision", jschema.Integer(jschema.Ptr(0), nil, "")))
+	return jschema.Must(jschema.Object(props...)).Map()
 }
 
 // ExecutePlanTool applies a reserved plan action. Invalid model input is
