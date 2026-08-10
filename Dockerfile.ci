@@ -5,7 +5,8 @@ WORKDIR /app
 COPY server .
 COPY fix-provider-keys .
 COPY migrate-public .
-RUN chown appuser:appuser server fix-provider-keys migrate-public
+COPY pkg/migration/sql ./pkg/migration/sql/
+RUN chown -R appuser:appuser .
 USER appuser
 EXPOSE 8080
 CMD ["./server"]
