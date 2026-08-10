@@ -89,6 +89,7 @@ push 触发 CI 后的等待期间，必须先检查 PR base 是否落后于最�
 - 所有登录测试和验证流程必须使用无头浏览器（Playwright headless）；禁止为测试或验证启动有头浏览器。纯 API/单元测试不属于登录测试，但涉及登录态恢复时必须通过无头浏览器完成。
 - AI 生成测试前必须先读同域优质测试模板，复用 mock 和断言风格。代码是主、测试是行为契约；冲突时依据产品意图判断改实现或改测试，禁止为过测扭曲实现。
 - API 兼容性由 `api/http/contract_test.go` 和 `api/http/testdata/contracts/*.golden.json` 守护。业务逻辑目标覆盖率 ≥80%，外部依赖须 mock，完整套件使用 `-race`。
+- HTTP JSON 参数契约的唯一事实源是 `proto/` 下的 .proto 文件；前后端类型由 `protoc-gen-ginstruct` 生成（`api/http/dto/gen/`、`web/src/services/gen/`，不入 git）。改参数契约 = 改 proto 后 `make proto-gen`；绕过 make 直敲 `go test` 且未生成时 import 编译失败，属预期约束（与"生成物不入 git"配套）。仓库级残留由 `scripts/quality/dto-residue-guard.sh` 守卫（挂在 `make check`）。
 
 ## Backend conventions
 

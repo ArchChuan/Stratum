@@ -127,6 +127,7 @@ fe-docker-build:
 
 # ─── Pre-merge 快速门禁（本地一键跑完，PR 前必过）────────────────────────
 check: proto-gen fe-typecheck fe-lint contract-enforce code-quality
+	bash scripts/quality/dto-residue-guard.sh
 	@echo "pre-merge checks passed"
 
 # ─── 本地基础设施 Infra ───────────────────────────────────────────────────
