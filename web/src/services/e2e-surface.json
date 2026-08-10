@@ -5,7 +5,7 @@
     "/skills/:id/workspace", "/mcp", "/mcp/create", "/mcp/:id/edit", "/knowledge", "/knowledge/:name",
     "/evaluations", "/workflows", "/workflows/new", "/workflows/:id/edit",
     "/workflows/:id/versions/:versionId", "/workflows/:id/run", "/workflow-runs", "/workflow-runs/:runId",
-    "/operation-proposals", "/collaborations"
+    "/operation-proposals", "/collaborations", "/scheduled-tasks"
   ],
   "mutations": [
     "POST /auth/refresh", "POST /auth/oauth/exchange", "POST /auth/logout", "POST /auth/guest",
@@ -36,6 +36,8 @@
     "POST /workflows/:workflowId/publish", "POST /workflow-runs", "POST /workflow-runs/:runId/cancel",
     "POST /workflow-runs/:runId/pause", "POST /workflow-runs/:runId/resume",
     "POST /workflow-approvals/:approvalId/decision",
-    "POST /workflow-runs/:runId/manual-interventions/:effectId/resolve"
+    "POST /workflow-runs/:runId/manual-interventions/:effectId/resolve",
+    "POST /scheduled-tasks", "PUT /scheduled-tasks/:id", "DELETE /scheduled-tasks/:id",
+    "PATCH /scheduled-tasks/:id/enabled"
   ]
 }

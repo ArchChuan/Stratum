@@ -11,6 +11,7 @@ import { knowledgeRoutes } from '@/modules/knowledge';
 import { llmRoutes } from '@/modules/llm';
 import { mcpRoutes } from '@/modules/mcp';
 import { operationGateRoutes } from '@/modules/operation-gate';
+import { scheduledTaskRoutes } from '@/modules/scheduled-task';
 import { skillRoutes } from '@/modules/skill';
 import { workflowRoutes } from '@/modules/workflow';
 import systemE2ESurface from '@/services/e2e-surface.json';
@@ -41,6 +42,7 @@ export const AppRouter = () => {
         {workflowRoutes}
         {operationGateRoutes}
         {collabRoutes}
+        {scheduledTaskRoutes}
         {iamPrivateRoutes}
         {iamPublicRoutes}
       </Routes>

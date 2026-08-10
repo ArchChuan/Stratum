@@ -13,6 +13,7 @@ import {
   ExperimentOutlined,
   BranchesOutlined,
   HistoryOutlined,
+  ScheduleOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Link } from 'react-router-dom';
@@ -34,6 +35,7 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
       children: [
         { key: '/workflows', icon: <BranchesOutlined />, label: <Link to="/workflows">工作流</Link> },
         { key: '/workflow-runs', icon: <HistoryOutlined />, label: <Link to="/workflow-runs">运行中心</Link> },
+        { key: '/scheduled-tasks', icon: <ScheduleOutlined />, label: <Link to="/scheduled-tasks">定时任务</Link> },
         canManageTenant ? {
           key: '/workflows/new', icon: <PlusCircleOutlined />, label: <Link to="/workflows/new">新建工作流</Link>,
         } : null,
@@ -152,7 +154,7 @@ export const resolveOpenKeys = (pathname: string): string[] => {
   if (pathname.startsWith('/mcp')) return ['mcp-group'];
   if (pathname.startsWith('/models')) return ['model-group'];
   if (pathname.startsWith('/evaluations')) return ['evaluation-group'];
-  if (pathname.startsWith('/workflows') || pathname.startsWith('/workflow-runs')) return ['workflow-group'];
+  if (pathname.startsWith('/workflows') || pathname.startsWith('/workflow-runs') || pathname.startsWith('/scheduled-tasks')) return ['workflow-group'];
   if (pathname.startsWith('/tenant')) return ['tenant-group'];
   if (pathname.startsWith('/admin')) return ['admin-group'];
   return [];

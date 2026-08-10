@@ -136,7 +136,7 @@ stratum/
 | | `knowledge_docs` | workspace_id FK CASCADE, title, content, source, metadata JSONB |
 | Knowledge | `knowledge_chunks` · `knowledge_parent_chunks` | 文档分块、父块与全文检索字段 |
 
-`sessions`、`entities`、`entity_relations`、`memory_token_budgets`、`exec_history`、`llm_api_keys`、模型预设/配额、prompt/workflow/scheduled task/webhook 等旧表会在 tenant schema provisioning 时幂等删除。
+`sessions`、`entities`、`entity_relations`、`memory_token_budgets`、`exec_history`、`llm_api_keys`、模型预设/配额、prompt/webhook 等旧表会在 tenant schema provisioning 时幂等删除；`scheduled_tasks` 由 provisioning 以新 schema 重建，不再删除。
 
 ### 4.3 Migration Timeline
 
@@ -335,7 +335,7 @@ stratum/
 - **e2e 覆盖尚非全域**：已有 Memory lifecycle 和前端响应式用户流，但 Agent/Skill/MCP/Knowledge/IAM 尚未都有独立的真实环境套件。
 - **`internal/agent/application/agent.go` 与 `registry.go` 内部细节未完整读**（BaseAgent.Execute 主体已通过 ReAct graph 间接确认）。
 - **OTEL trace 端到端串联**（HTTP→Agent→Skill→LLM）在 README 路线图标注为「待完成」。
-- **Workflow / scheduled task / webhook** 仍是路线图方向；对应旧 tenant tables 已由 provisioning 删除，当前没有可用运行时。
+- **Webhook** 仍是路线图方向；对应旧 tenant table 已由 provisioning 删除，当前没有可用运行时。**Workflow / scheduled task** 已有可用运行时（见 §4.2 表与 `internal/scheduler/`）。
 - **多 LLM provider 扩展**（Anthropic / Ollama / 本地）路线图待办；当前仅 Qwen + Zhipu。
 - **通用业务审计日志** 尚无独立 `audit_logs` 表；当前可观察重点是 Agent execution/tool/trace 记录与结构化日志。
 - 假设：所有 `infrastructure/` 适配器都正确翻译 `pgconn.PgError → domain.Err*`（基于 error_mapping.go 反推，未逐文件核对）。

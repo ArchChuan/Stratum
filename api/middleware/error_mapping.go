@@ -17,6 +17,7 @@ import (
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	memoryapp "github.com/byteBuilderX/stratum/internal/memory/application"
 	memorydomain "github.com/byteBuilderX/stratum/internal/memory/domain"
+	scheddomain "github.com/byteBuilderX/stratum/internal/scheduler/domain"
 	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
 	workflowdomain "github.com/byteBuilderX/stratum/internal/workflow/domain"
 	"github.com/jackc/pgx/v5"
@@ -145,6 +146,10 @@ var errorStatusTable = map[error]int{
 	collabdomain.ErrCollabInvalidTransition:       http.StatusConflict,
 	collabdomain.ErrCollabInvalidInput:            http.StatusBadRequest,
 	collabdomain.ErrCollabConflict:                http.StatusConflict,
+	scheddomain.ErrScheduledTaskForbidden:         http.StatusForbidden,
+	scheddomain.ErrScheduledTaskNotFound:          http.StatusNotFound,
+	scheddomain.ErrScheduledTaskInvalidInput:      http.StatusBadRequest,
+	scheddomain.ErrScheduledTaskInvalidCron:       http.StatusBadRequest,
 	iamapp.ErrForbiddenOwner:                      http.StatusForbidden,
 	iamapp.ErrForbiddenSelfModify:                 http.StatusForbidden,
 	iamapp.ErrForbiddenOwnerRole:                  http.StatusForbidden,

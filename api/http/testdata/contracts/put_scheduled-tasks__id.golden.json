@@ -1,0 +1,11 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "PUT",
+    "path": "/scheduled-tasks/contract-id",
+    "want_status": 400,
+    "want_body": {
+      "error": "EOF"
+    }
+  }
+]

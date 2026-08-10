@@ -55,6 +55,8 @@ linters:
               desc: "application 不得直接 import infrastructure；改为 domain/port + wiring 注入"
             - pkg: "github.com/byteBuilderX/stratum/internal/platform/infrastructure"
               desc: "application 不得直接 import infrastructure；改为 domain/port + wiring 注入"
+            - pkg: "github.com/byteBuilderX/stratum/internal/scheduler/infrastructure"
+              desc: "application 不得直接 import infrastructure；改为 domain/port + wiring 注入"
         handler-no-infra:
           # agent_handler 全家已通过 consumer-side port + AgentService 完成拆解。
           # 唯一遗留：auth_handler 依赖 iam/infrastructure/oauth.GitHubClient（OAuth 回调专用），
@@ -106,6 +108,8 @@ linters:
               desc: "domain 不得 import gin"
             - pkg: "go.uber.org/zap"
               desc: "domain 不得 import zap"
+            - pkg: "github.com/robfig/cron/v3"
+              desc: "domain 不得 import cron 库；cron 解析与 next 计算只在 application 层"
         pkg-no-internal:
           # pkg/ 禁止 import internal/
           list-mode: lax
