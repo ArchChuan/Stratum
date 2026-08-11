@@ -17,6 +17,8 @@ import (
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	memworkers "github.com/byteBuilderX/stratum/internal/memory/infrastructure/workers"
 	parametersapp "github.com/byteBuilderX/stratum/internal/parameters/application"
+
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 )
 
 // Memory groups memory-system services: the user-facing manager, the
@@ -37,7 +39,14 @@ type memoryGatewayCompleter interface {
 	Complete(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error)
 }
 
-type memoryLLMAdapter struct{ client memoryGatewayCompleter }
+// memoryLLMAdapter 把 memory pipeline 的 LLM 请求适配到 llmgateway。
+// tenantID 由构造方闭包捕获（pipeline worker 的 ctx 不含请求租户），
+// Complete 时注入 reqctx——Gateway 内部从 ctx 取租户做模型解析（gateway.go
+// 的 TenantIDFromContext），不注入则 resolve 报 tenant_id is empty。
+type memoryLLMAdapter struct {
+	client   memoryGatewayCompleter
+	tenantID string
+}
 
 func (a memoryLLMAdapter) Complete(ctx context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
 	if a.client == nil {
@@ -45,6 +54,9 @@ func (a memoryLLMAdapter) Complete(ctx context.Context, req *memport.CompletionR
 	}
 	if req == nil {
 		return nil, fmt.Errorf("memory llm adapter: request is nil")
+	}
+	if a.tenantID != "" {
+		ctx = reqctx.WithTenantID(ctx, a.tenantID)
 	}
 	messages := make([]llmdomain.Message, len(req.Messages))
 	for i, message := range req.Messages {
@@ -228,7 +240,7 @@ func (c *Container) buildMemoryPipeline(mem *Memory, db *pgxpool.Pool) error {
 			if gw == nil {
 				return nil
 			}
-			return memoryLLMAdapter{client: gw}
+			return memoryLLMAdapter{client: gw, tenantID: tenantID}
 		})
 	}
 	mem.Pipeline = p
@@ -256,7 +268,7 @@ func makeLLMExtractResolver(llmRes *tenantCapabilityResolver, params pipeline.Pl
 		if llm == nil {
 			return nil
 		}
-		extractor := pipeline.NewLLMExtractor(memoryLLMAdapter{client: llm})
+		extractor := pipeline.NewLLMExtractor(memoryLLMAdapter{client: llm, tenantID: tenantID})
 		extractor.SetPlatformParams(params)
 		return extractor
 	}
@@ -268,7 +280,7 @@ func makeLLMSupersederResolver(llmRes *tenantCapabilityResolver) func(context.Co
 		if llm == nil {
 			return nil
 		}
-		return memworkers.NewLLMSuperseder(memoryLLMAdapter{client: llm})
+		return memworkers.NewLLMSuperseder(memoryLLMAdapter{client: llm, tenantID: tenantID})
 	}
 }
 
@@ -363,7 +375,7 @@ func buildWorkerLLMResolver(llmRes *tenantCapabilityResolver) memworkers.TenantL
 		if err != nil || llm == nil {
 			return nil, err
 		}
-		return memoryLLMAdapter{client: llm}, nil
+		return memoryLLMAdapter{client: llm, tenantID: tenantID}, nil
 	}
 }
 
