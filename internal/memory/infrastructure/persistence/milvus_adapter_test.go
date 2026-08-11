@@ -279,3 +279,25 @@ func validMemoryFactVectorDoc() *memport.VectorDoc {
 		},
 	}
 }
+
+// TestLegacyCollectionNamesPin 把 persistence 侧 legacy collection 名 pin 到
+// 与 pipeline/vector_adapter_test.go（TestMemoryCollectionNames /
+// TestMemoryFactsCollectionNames）完全相同的字面量：两处 helper 各自维护同名
+// 实现（跨包禁止共享），本测试保证任一包漂移时立即断裂，且删除路径
+// （legacyMemoryCollections）与查询回退路径（pipeline memory*LegacyName）
+// 对同一租户产出字节级一致的 collection 名。
+func TestLegacyCollectionNamesPin(t *testing.T) {
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"facts dashed tenant", memoryFactsCollectionLegacyName("my-tenant-42"), "memory_facts_my_tenant_42"},
+		{"raw dashed tenant", memoryCollectionLegacyName("my-tenant-42"), "memory_my_tenant_42"},
+	}
+	for _, tc := range tests {
+		if tc.got != tc.want {
+			t.Errorf("%s = %q, want %q (与 pipeline 侧 pin 字面量必须一致)", tc.name, tc.got, tc.want)
+		}
+	}
+}

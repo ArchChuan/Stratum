@@ -3,9 +3,14 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/byteBuilderX/stratum/pkg/observability"
+	storagemilvus "github.com/byteBuilderX/stratum/pkg/storage/milvus"
 	vector "github.com/byteBuilderX/stratum/pkg/vector"
+	"github.com/pashagolub/pgxmock/v2"
 	"go.uber.org/zap"
 )
 
@@ -39,7 +44,21 @@ func (f *fakeVectorSearcher) SearchWithFilter(_ context.Context, collectionName 
 }
 
 func newTestRecallHandler(embed EmbedClient, vs vectorSearcher) *RecallHandler {
-	return &RecallHandler{logger: zap.NewNop(), embedSvc: embed, vectorDB: vs}
+	return &RecallHandler{logger: zap.NewNop(), embedSvc: embed, vectorDB: vs, metrics: observability.NoopMetrics{}}
+}
+
+// recallMetricSpy captures IncKnowledgeQuery calls so tests can assert the
+// degraded/error signalling without a real Prometheus registry.
+type recallMetricSpy struct {
+	observability.NoopMetrics
+	knowledgeQuery map[string]int
+}
+
+func (m *recallMetricSpy) IncKnowledgeQuery(queryType, status string) {
+	if m.knowledgeQuery == nil {
+		m.knowledgeQuery = map[string]int{}
+	}
+	m.knowledgeQuery[queryType+"."+status]++
 }
 
 func TestTryVectorSearch_QueriesFourCandidatesInOrderAndSortsByDistance(t *testing.T) {
@@ -58,7 +77,7 @@ func TestTryVectorSearch_QueriesFourCandidatesInOrderAndSortsByDistance(t *testi
 	}}
 	h := newTestRecallHandler(&fakeEmbedClient{vec: []float32{1, 2, 3}, model: model}, vs)
 
-	got := h.tryVectorSearch(context.Background(), tenant, "u1", "", "user", RecallRequest{Query: "q", Limit: 5})
+	got, _ := h.tryVectorSearch(context.Background(), tenant, "u1", "", "user", RecallRequest{Query: "q", Limit: 5})
 
 	// 候选 = 当前模型新名（raw+facts）∪ legacy 名（升级前数据），顺序固定。
 	if len(vs.queried) != 4 || vs.queried[0] != names[0] || vs.queried[1] != names[1] || vs.queried[2] != names[2] || vs.queried[3] != names[3] {
@@ -82,7 +101,7 @@ func TestTryVectorSearch_LegacyOnlyWhenNoModel(t *testing.T) {
 	}}
 	h := newTestRecallHandler(&fakeEmbedClient{vec: []float32{1, 2, 3}, model: ""}, vs)
 
-	got := h.tryVectorSearch(context.Background(), tenant, "u1", "", "user", RecallRequest{Query: "q", Limit: 5})
+	got, _ := h.tryVectorSearch(context.Background(), tenant, "u1", "", "user", RecallRequest{Query: "q", Limit: 5})
 
 	// 无模型 → 只查 legacy 两个 collection（新名带尾下划线无意义，且升级前数据在旧名）。
 	want := []string{memoryCollectionLegacyName(tenant), memoryFactsCollectionLegacyName(tenant)}
@@ -110,7 +129,7 @@ func TestTryVectorSearch_SkipsEmptyContentAndToleratesOneCollectionFailure(t *te
 	}
 	h := newTestRecallHandler(&fakeEmbedClient{vec: []float32{1}}, vs)
 
-	got := h.tryVectorSearch(context.Background(), tenant, "u1", "", "user", RecallRequest{Query: "q", Limit: 5})
+	got, _ := h.tryVectorSearch(context.Background(), tenant, "u1", "", "user", RecallRequest{Query: "q", Limit: 5})
 
 	// A single failing collection must not abort the whole vector search.
 	if len(got) != 1 {
@@ -123,18 +142,119 @@ func TestTryVectorSearch_SkipsEmptyContentAndToleratesOneCollectionFailure(t *te
 
 func TestTryVectorSearch_NilVectorDBReturnsNil(t *testing.T) {
 	h := newTestRecallHandler(&fakeEmbedClient{vec: []float32{1}}, nil)
-	if got := h.tryVectorSearch(context.Background(), "t", "u", "", "user", RecallRequest{Query: "q", Limit: 5}); got != nil {
-		t.Fatalf("expected nil when vectorDB absent, got %v", got)
+	got, err := h.tryVectorSearch(context.Background(), "t", "u", "", "user", RecallRequest{Query: "q", Limit: 5})
+	if got != nil || err != nil {
+		t.Fatalf("expected nil candidates and nil error when vectorDB absent, got (%v, %v)", got, err)
 	}
 }
 
 func TestTryVectorSearch_EmbedFailureReturnsNil(t *testing.T) {
 	vs := &fakeVectorSearcher{}
 	h := newTestRecallHandler(&fakeEmbedClient{err: errors.New("embed down")}, vs)
-	if got := h.tryVectorSearch(context.Background(), "t", "u", "", "user", RecallRequest{Query: "q", Limit: 5}); got != nil {
-		t.Fatalf("expected nil on embed failure, got %v", got)
+	got, err := h.tryVectorSearch(context.Background(), "t", "u", "", "user", RecallRequest{Query: "q", Limit: 5})
+	if got != nil || err != nil {
+		t.Fatalf("expected nil candidates and nil error on embed failure, got (%v, %v)", got, err)
 	}
 	if len(vs.queried) != 0 {
 		t.Fatal("vector store must not be queried when embedding fails")
+	}
+}
+
+func TestTryVectorSearch_OutageClassifiedAndDegradationKept(t *testing.T) {
+	tenant := "acme"
+	model := "embedding-3"
+	names := recallCandidateCollections(tenant, model)
+	// 一个 collection 遭遇非 not-found 的 outage（wrap 验证 errors.Is 解包），
+	// 一个为 legacy not-found，其余正常返回——降级契约：幸存 candidates 仍返回，
+	// outage 以 error + degraded 指标可观测，not-found 不计入。
+	outage := fmt.Errorf("milvus unreachable: %w", errors.New("connection refused"))
+	vs := &fakeVectorSearcher{
+		byCollection: map[string][]vector.SearchResult{
+			names[1]: {{ID: "legacy-hit", Content: "legacy hit", Score: 0.2}},
+			names[2]: {{ID: "fact-hit", Content: "fact hit", Score: 0.1}},
+		},
+		errByColl: map[string]error{
+			names[0]: outage,
+			names[3]: storagemilvus.ErrCollectionNotFound,
+		},
+	}
+	spy := &recallMetricSpy{}
+	h := &RecallHandler{logger: zap.NewNop(), embedSvc: &fakeEmbedClient{vec: []float32{1}, model: model}, vectorDB: vs, metrics: spy}
+
+	got, err := h.tryVectorSearch(context.Background(), tenant, "u1", "", "user", RecallRequest{Query: "q", Limit: 5})
+
+	if len(got) != 2 {
+		t.Fatalf("degradation: expected 2 survivors from non-failing collections, got %d", len(got))
+	}
+	if !errors.Is(err, outage) {
+		t.Fatalf("outage must surface as error, got %v", err)
+	}
+	if spy.knowledgeQuery["recall.degraded"] != 1 {
+		t.Fatalf("expected exactly 1 degraded signal for one outage, got %d", spy.knowledgeQuery["recall.degraded"])
+	}
+	if spy.knowledgeQuery["recall.error"] != 0 {
+		t.Fatalf("not-found must not count as recall error, got %d", spy.knowledgeQuery["recall.error"])
+	}
+}
+
+func TestTryVectorSearch_CollectionNotFoundIsSilentLegacyFallback(t *testing.T) {
+	tenant := "acme"
+	vs := &fakeVectorSearcher{errByColl: map[string]error{
+		memoryCollectionLegacyName(tenant):      storagemilvus.ErrCollectionNotFound,
+		memoryFactsCollectionLegacyName(tenant): storagemilvus.ErrCollectionNotFound,
+	}}
+	spy := &recallMetricSpy{}
+	h := &RecallHandler{logger: zap.NewNop(), embedSvc: &fakeEmbedClient{vec: []float32{1}}, vectorDB: vs, metrics: spy}
+
+	got, err := h.tryVectorSearch(context.Background(), tenant, "u1", "", "user", RecallRequest{Query: "q", Limit: 5})
+
+	if got != nil || err != nil {
+		t.Fatalf("all-not-found must degrade silently (nil candidates, nil error), got (%v, %v)", got, err)
+	}
+	if spy.knowledgeQuery["recall.degraded"] != 0 {
+		t.Fatalf("not-found must not emit degraded signal, got %d", spy.knowledgeQuery["recall.degraded"])
+	}
+}
+
+func TestHandle_VectorOutageStillReturnsTextResults(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	pool.ExpectBegin()
+	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	pool.ExpectQuery("SELECT id, content, role, importance, created_at FROM memory_entries").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "content", "role", "importance", "created_at"}).
+			AddRow("t1", "text hit", "user", 0.9, "2026-08-11 10:00:00"))
+	pool.ExpectRollback()
+
+	// 全部 4 个候选 collection 均为非 not-found 的 Milvus outage——最坏情形：
+	// 用户 recall 退化为纯 text，但必须带 degraded 信号而非无声成功。
+	tenant := "acme"
+	model := "embedding-3"
+	vs := &fakeVectorSearcher{errByColl: map[string]error{}}
+	for _, c := range recallCandidateCollections(tenant, model) {
+		vs.errByColl[c] = errors.New("milvus connection refused")
+	}
+	spy := &recallMetricSpy{}
+	h := &RecallHandler{pool: pool, logger: zap.NewNop(), embedSvc: &fakeEmbedClient{vec: []float32{1}, model: model}, vectorDB: vs, metrics: spy}
+
+	got, err := h.Handle(context.Background(), tenant, "u1", "", "user", map[string]any{"query": "hit", "limit": 5})
+
+	if err != nil {
+		t.Fatalf("degradation contract: Handle must succeed on vector outage, got %v", err)
+	}
+	if !strings.Contains(got, "text hit") {
+		t.Fatalf("expected text results in output, got %q", got)
+	}
+	if spy.knowledgeQuery["recall.degraded"] != 1 {
+		t.Fatalf("expected exactly 1 degraded signal, got %d", spy.knowledgeQuery["recall.degraded"])
+	}
+	if spy.knowledgeQuery["recall.success"] != 1 {
+		t.Fatalf("expected success metric for degraded-but-successful recall, got %d", spy.knowledgeQuery["recall.success"])
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
