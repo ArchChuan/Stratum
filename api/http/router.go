@@ -566,6 +566,7 @@ func registerLLMAdmin(r *gin.Engine, c *wiring.Container, requireActive gin.Hand
 		models.GET("", modelMgmtH.List)
 		models.GET("/:id", modelMgmtH.Get)
 		models.PUT("/:id", adminMW, modelMgmtH.Update)
+		models.PUT("/:id/default-embedding", adminMW, requireActive, modelMgmtH.SetDefaultEmbedding)
 		models.PATCH("/:id/toggle", adminMW, modelMgmtH.Toggle)
 		models.DELETE("/:id", adminMW, modelMgmtH.Delete)
 	}

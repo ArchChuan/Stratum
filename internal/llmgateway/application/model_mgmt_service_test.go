@@ -10,12 +10,19 @@ import (
 )
 
 type modelMgmtRepo struct {
-	model domain.Model
-	err   error
+	model  domain.Model
+	models []domain.Model
+	err    error
 }
 
 func (r *modelMgmtRepo) Create(context.Context, string, *domain.Model) error { return r.err }
-func (r *modelMgmtRepo) Get(context.Context, string, string) (*domain.Model, error) {
+func (r *modelMgmtRepo) Get(_ context.Context, _ string, id string) (*domain.Model, error) {
+	for i := range r.models {
+		if r.models[i].ID == id {
+			m := r.models[i]
+			return &m, r.err
+		}
+	}
 	model := r.model
 	return &model, r.err
 }
@@ -42,6 +49,11 @@ func (i *recordingInvalidator) Invalidate(tenantID string) {
 	i.tenants = append(i.tenants, tenantID)
 }
 
+// invalidatorFunc adapts a plain func to ModelCacheInvalidator for concise test setup.
+type invalidatorFunc func(tenantID string)
+
+func (f invalidatorFunc) Invalidate(tenantID string) { f(tenantID) }
+
 func TestModelMgmtServiceInvalidatesRegistryAfterSuccessfulMutation(t *testing.T) {
 	invalidator := &recordingInvalidator{}
 	svc := NewModelMgmtService(&modelMgmtRepo{}, invalidator)
@@ -64,4 +76,40 @@ func TestModelMgmtServiceDoesNotInvalidateAfterFailedMutation(t *testing.T) {
 	if len(invalidator.tenants) != 0 {
 		t.Fatalf("invalidations = %v, want none", invalidator.tenants)
 	}
+}
+
+func TestModelMgmtServiceSetDefaultEmbedding(t *testing.T) {
+	t.Run("rejects non-embedding model when enabling", func(t *testing.T) {
+		repo := &modelMgmtRepo{models: []domain.Model{
+			{ID: "m1", Name: "chat-x", Capabilities: []domain.ModelCapability{domain.CapChat}, Enabled: true},
+		}}
+		svc := NewModelMgmtService(repo, invalidatorFunc(func(tenantID string) {
+			t.Fatal("must not invalidate on rejected set")
+		}))
+		if err := svc.SetDefaultEmbedding(context.Background(), "t1", "m1", true); err == nil {
+			t.Fatal("expected error for non-embedding model")
+		}
+	})
+	t.Run("rejects disabled model when enabling", func(t *testing.T) {
+		repo := &modelMgmtRepo{models: []domain.Model{
+			{ID: "m1", Name: "embed-x", Capabilities: []domain.ModelCapability{domain.CapEmbedding}, Enabled: false},
+		}}
+		svc := NewModelMgmtService(repo)
+		if err := svc.SetDefaultEmbedding(context.Background(), "t1", "m1", true); err == nil {
+			t.Fatal("expected error for disabled model")
+		}
+	})
+	t.Run("invalidates registry after successful set", func(t *testing.T) {
+		repo := &modelMgmtRepo{models: []domain.Model{
+			{ID: "m1", Name: "embed-x", Capabilities: []domain.ModelCapability{domain.CapEmbedding}, Enabled: true},
+		}}
+		invalidated := false
+		svc := NewModelMgmtService(repo, invalidatorFunc(func(tenantID string) { invalidated = true }))
+		if err := svc.SetDefaultEmbedding(context.Background(), "t1", "m1", true); err != nil {
+			t.Fatal(err)
+		}
+		if !invalidated {
+			t.Fatal("expected registry invalidation")
+		}
+	})
 }

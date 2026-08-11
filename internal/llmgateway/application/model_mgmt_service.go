@@ -80,6 +80,35 @@ func (s *ModelMgmtService) Toggle(ctx context.Context, tenantID, id string, enab
 	return nil
 }
 
+// SetDefaultEmbedding 设置或取消模型的默认嵌入标记。启用时校验目标
+// capability 含 embedding 且 enabled（fail-closed）；repo 单事务
+// clear-then-set 保证并发安全。成功后失效 registry 缓存。
+func (s *ModelMgmtService) SetDefaultEmbedding(ctx context.Context, tenantID, id string, enabled bool) error {
+	if enabled {
+		m, err := s.repo.Get(ctx, tenantID, id)
+		if err != nil {
+			return err
+		}
+		if !m.Enabled || !hasCapability(m.Capabilities, domain.CapEmbedding) {
+			return fmt.Errorf("model %s is not an enabled embedding model", id)
+		}
+	}
+	if err := s.repo.SetDefaultEmbedding(ctx, tenantID, id, enabled); err != nil {
+		return err
+	}
+	s.invalidate(tenantID)
+	return nil
+}
+
+func hasCapability(caps []domain.ModelCapability, want domain.ModelCapability) bool {
+	for _, c := range caps {
+		if c == want {
+			return true
+		}
+	}
+	return false
+}
+
 // Delete removes a non-provider-managed model by ID.
 func (s *ModelMgmtService) Delete(ctx context.Context, tenantID, id string) error {
 	if err := s.repo.Delete(ctx, tenantID, id); err != nil {
