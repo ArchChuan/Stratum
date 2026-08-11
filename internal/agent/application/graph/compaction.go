@@ -99,18 +99,19 @@ func compactLoopMessagesWithReserve(
 	recentGroups int,
 	compactor port.HistoryCompactor,
 ) []port.LLMMessage {
-	return compactLoopMessagesWithPolicy(ctx, msgs, budget, reservedTokens, recentGroups,
+	return compactLoopMessagesWithPolicy(ctx, msgs, Budget{HistoryCap: budget}, reservedTokens, recentGroups,
 		1, 1.0, constants.LoopCompactionSafetyRatio, compactor)
 }
 
 // compactLoopMessagesWithPolicy is the full compaction core. The threshold is
-// budget·safety/correction: a correction > 1 (the token estimate under-counted
-// the previous request) lowers the threshold and compacts earlier; < 1 later.
-// correction ≤ 0 is treated as 1 (no correction).
+// budget.HistoryCap·safety/correction: a correction > 1 (the token estimate
+// under-counted the previous request) lowers the threshold and compacts
+// earlier; < 1 later. correction ≤ 0 is treated as 1 (no correction).
+// Budget 零值（未初始化）时 HistoryCap 为 0，压缩禁用，消息原样返回。
 func compactLoopMessagesWithPolicy(
 	ctx context.Context,
 	msgs []port.LLMMessage,
-	budget int,
+	budget Budget,
 	reservedTokens int,
 	recentGroups int,
 	protectedUsers int,
@@ -118,10 +119,12 @@ func compactLoopMessagesWithPolicy(
 	safetyRatio float64,
 	compactor port.HistoryCompactor,
 ) []port.LLMMessage {
-	if budget <= 0 {
+	if budget.HistoryCap <= 0 {
 		return msgs
 	}
-	threshold := compactionThreshold(budget, reservedTokens, correction, safetyRatio)
+	// 阈值基于预算账本的 history 配额：工具 token 走 ToolsCap 独立配额，
+	// 不再压垮可压缩区（Spec 第 2 节根因修复）。
+	threshold := compactionThreshold(budget.HistoryCap, reservedTokens, correction, safetyRatio)
 	if tokenutil.EstimateMessages(toEstimate(msgs)) <= threshold {
 		return msgs // lazy: still fits, do nothing
 	}

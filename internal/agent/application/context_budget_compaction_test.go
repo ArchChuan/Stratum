@@ -57,6 +57,7 @@ func TestBuildContextMessagesWithCompaction(t *testing.T) {
 		historyLen     int
 		maxTokens      int
 		window         int
+		outputReserve  int // 显式预留，避免小窗口被自动链常量 4096 吞掉
 		compactor      *fakeCompactor
 		wantSummary    bool // system 中应含摘要标记
 		wantCompaction bool // compactor 应被调用
@@ -66,6 +67,7 @@ func TestBuildContextMessagesWithCompaction(t *testing.T) {
 			historyLen:     30,
 			maxTokens:      500,
 			window:         5,
+			outputReserve:  50,
 			compactor:      nil,
 			wantSummary:    false,
 			wantCompaction: false,
@@ -75,6 +77,7 @@ func TestBuildContextMessagesWithCompaction(t *testing.T) {
 			historyLen:     30,
 			maxTokens:      500,
 			window:         5,
+			outputReserve:  50,
 			compactor:      &fakeCompactor{summary: marker},
 			wantSummary:    true,
 			wantCompaction: true,
@@ -84,6 +87,7 @@ func TestBuildContextMessagesWithCompaction(t *testing.T) {
 			historyLen:     30,
 			maxTokens:      500,
 			window:         5,
+			outputReserve:  50,
 			compactor:      &fakeCompactor{err: errors.New("llm down")},
 			wantSummary:    false,
 			wantCompaction: true,
@@ -93,6 +97,7 @@ func TestBuildContextMessagesWithCompaction(t *testing.T) {
 			historyLen:     30,
 			maxTokens:      500,
 			window:         5,
+			outputReserve:  50,
 			compactor:      &fakeCompactor{summary: ""},
 			wantSummary:    false,
 			wantCompaction: true,
@@ -117,7 +122,7 @@ func TestBuildContextMessagesWithCompaction(t *testing.T) {
 			msgs := application.BuildContextMessagesWithCompaction(
 				context.Background(),
 				"你是助手", "", makeHistory(tc.historyLen), "当前问题",
-				tc.maxTokens, tc.window, c,
+				tc.maxTokens, tc.window, tc.outputReserve, c,
 			)
 
 			// 末条永远是当前输入。
@@ -142,12 +147,13 @@ func TestBuildContextMessagesWithCompaction(t *testing.T) {
 	}
 }
 
-// TestCompaction_BackwardCompatible 保证：nil compactor 时新旧实现逐条一致。
+// TestCompaction_BackwardCompatible 保证：nil compactor 时与压缩失败降级
+// 路径逐条一致。窗口取 40000，避免小窗口被自动链输出预留（4096）吞成 0 usable。
 func TestCompaction_BackwardCompatible(t *testing.T) {
 	hist := makeHistory(30)
-	legacy := application.BuildContextMessages("sys", "mem", hist, "q", 500, 5)
+	legacy := application.BuildContextMessages("sys", "mem", hist, "q", 40000, 5)
 	viaCompaction := application.BuildContextMessagesWithCompaction(
-		context.Background(), "sys", "mem", hist, "q", 500, 5, nil,
+		context.Background(), "sys", "mem", hist, "q", 40000, 5, 0, nil,
 	)
 	if len(legacy) != len(viaCompaction) {
 		t.Fatalf("长度不一致: legacy=%d compaction=%d", len(legacy), len(viaCompaction))
@@ -169,14 +175,15 @@ func summaryBody(sys string) string {
 }
 
 // TestCompaction_SummaryReserveScalesWithBudget 验证摘要预留额度从固定
-// min(budget/4, 400) 改为 5% 联动（40000 tokens 预算 → 1989 tokens 预留）：
-// 超大摘要被精确截断到预留额度，且明显大于旧逻辑的 400-token 上限。
+// min(budget/4, 400) 改为 HistoryCap 的 5% 联动（300000 窗口 → HistoryCap
+// 33542 → 1677 tokens 预留）：超大摘要被精确截断到预留额度，
+// 且明显大于旧逻辑的 400-token 上限。outputReserve 传 0 走自动链常量 4096。
 func TestCompaction_SummaryReserveScalesWithBudget(t *testing.T) {
-	const maxTokens = 40000
+	const maxTokens = 300000
 	fc := &fakeCompactor{summary: marker + strings.Repeat("摘", 20000)}
 	msgs := application.BuildContextMessagesWithCompaction(
 		context.Background(), "你是助手", "", makeHistory(30), "当前问题",
-		maxTokens, 5, fc,
+		maxTokens, 5, 0, fc,
 	)
 	if fc.callCount == 0 {
 		t.Fatal("expected compactor to be invoked on overflow history")
@@ -185,24 +192,26 @@ func TestCompaction_SummaryReserveScalesWithBudget(t *testing.T) {
 	if !hasSys || !strings.Contains(sys, marker) {
 		t.Fatalf("summary not injected: %q", sys)
 	}
-	// budget = 40000 − input(4) − sysReserve(200) = 39796; reserve = 5% = 1989
-	// tokens. The whole summary (marker included) is truncated to the reserve,
-	// so the marker-stripped body must be 1989*3 − len(marker) bytes.
-	const wantBytes = 1989 * 3
+	// usable = 60000 − 4096 = 55904; HistoryCap = 0.6 × 55904 = 33542;
+	// reserve = 5% = 1677 tokens. The whole summary (marker included) is
+	// truncated to the reserve, so the marker-stripped body must be
+	// 1677*3 − len(marker) bytes.
+	const wantBytes = 1677 * 3
 	if got := len(summaryBody(sys)) + len(marker); got != wantBytes {
-		t.Fatalf("summary reserve = %d bytes, want %d (5%% of remaining budget)", got, wantBytes)
+		t.Fatalf("summary reserve = %d bytes, want %d (5%% of HistoryCap)", got, wantBytes)
 	}
 }
 
 // TestCompaction_SummaryReserveCappedAtBudget 验证小窗口下预留额度被 cap 于
-// 剩余预算而非固定 200-token floor：maxTokens=400 时剩余 196，旧逻辑只预留
-// 49 tokens（budget/4），新逻辑预留全部 196。
+// history 配额而非固定 200-token floor：maxTokens=400 + 预留 50 时
+// HistoryCap 只剩 18，预留被 cap 到全部 18。
 func TestCompaction_SummaryReserveCappedAtBudget(t *testing.T) {
 	const maxTokens = 400
+	const outputReserve = 50
 	fc := &fakeCompactor{summary: marker + strings.Repeat("摘", 20000)}
 	msgs := application.BuildContextMessagesWithCompaction(
 		context.Background(), "你是助手", "", makeHistory(30), "当前问题",
-		maxTokens, 5, fc,
+		maxTokens, 5, outputReserve, fc,
 	)
 	if fc.callCount == 0 {
 		t.Fatal("expected compactor to be invoked on overflow history")
@@ -211,11 +220,11 @@ func TestCompaction_SummaryReserveCappedAtBudget(t *testing.T) {
 	if !hasSys || !strings.Contains(sys, marker) {
 		t.Fatalf("summary not injected: %q", sys)
 	}
-	// budget = 400 − 4 − 200 = 196; reserve = min(5% floor 200, 196) = 196
-	// tokens, capped at the remaining budget.
-	const wantBytes = 196 * 3
+	// usable = 400 − 320 − 50 = 30; HistoryCap = 30 − 6 − 6 = 18;
+	// reserve = min(5% floor 200, 18) = 18 tokens, capped at the history quota.
+	const wantBytes = 18 * 3
 	if got := len(summaryBody(sys)) + len(marker); got != wantBytes {
-		t.Fatalf("summary reserve = %d bytes, want %d (capped at remaining budget)", got, wantBytes)
+		t.Fatalf("summary reserve = %d bytes, want %d (capped at history quota)", got, wantBytes)
 	}
 }
 
@@ -225,10 +234,10 @@ func TestCompaction_FailureRestoresPlainTruncationBudget(t *testing.T) {
 		hist[i] = &application.ChatMessage{Role: "user", Content: strings.Repeat("x", 360)}
 	}
 	want := application.BuildContextMessagesWithCompaction(
-		context.Background(), "sys", "mem", hist, "q", 500, 50, nil,
+		context.Background(), "sys", "mem", hist, "q", 500, 50, 50, nil,
 	)
 	got := application.BuildContextMessagesWithCompaction(
-		context.Background(), "sys", "mem", hist, "q", 500, 50,
+		context.Background(), "sys", "mem", hist, "q", 500, 50, 50,
 		&fakeCompactor{err: errors.New("unavailable")},
 	)
 

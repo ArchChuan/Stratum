@@ -102,12 +102,15 @@ func prepareLLMRequest(ctx context.Context, s *ReActState) ([]port.ToolDefinitio
 	// instruction, without mutating s.Messages (trace/history stay complete).
 	// Tunable overrides resolve here: 0 means auto-derive from the window.
 	recentGroups, safetyRatio, correction := loopPolicy(*s)
-	tools = fitToolsToContextBudget(tools, messages, s.MaxContextTokens, protectedUsers, correction, safetyRatio)
+	// 预算账本：工具定义走 ToolsCap 独立配额，history 压缩走 HistoryCap；
+	// 二者互不挤占（Spec 第 2 节根因修复）。Budget 零值 = 未初始化，
+	// 工具裁剪与压缩自动禁用（与旧 0 预算语义一致）。
+	tools = fitToolsToContextBudget(tools, messages, s.Budget.ToolsCap, protectedUsers, correction, safetyRatio)
 	toolTokens := 0
 	if encodedTools, err := json.Marshal(tools); err == nil {
 		toolTokens = tokenutil.EstimateText(string(encodedTools))
 	}
-	messages = compactLoopMessagesWithPolicy(ctx, messages, s.MaxContextTokens, toolTokens, recentGroups, protectedUsers, correction, safetyRatio, s.HistoryCompactor)
+	messages = compactLoopMessagesWithPolicy(ctx, messages, s.Budget, toolTokens, recentGroups, protectedUsers, correction, safetyRatio, s.HistoryCompactor)
 	// Baseline for the usage-feedback loop: the estimate of what is actually
 	// dispatched this step (post-compaction messages + tools), so the ratio
 	// stays on a consistent basis across steps.

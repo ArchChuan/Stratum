@@ -630,6 +630,9 @@ func TestExecute_CompactsOverflowingInitialHistory(t *testing.T) {
 		},
 	})
 
+	// 账本语义：默认 fallback 窗口 8000 − safety 6400 − 自动输出预留 4096
+	// → usable 0，初始组装只剩当前输入。显式窗口 30000 下 HistoryCap 1142
+	// 才让溢出压缩有意义（Spec 第 2 节）。
 	_, err := a.Execute(
 		context.Background(),
 		"continue",
@@ -637,6 +640,7 @@ func TestExecute_CompactsOverflowingInitialHistory(t *testing.T) {
 		agent.WithConversationID("conv-abc"),
 		agent.WithUserID("user-1"),
 		agent.WithHistoryWindow(4),
+		agent.WithMaxContextTokens(30000),
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1, compactor.callCount)

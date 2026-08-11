@@ -1520,6 +1520,8 @@ func (s *AgentService) assembleOptions(
 		WithMaxSteps(a.GetConfig().MaxIterations),
 		WithMaxContextTokens(window),
 		WithWindowSource(string(windowSrc)),
+		// outputReserve 与窗口同一来源链：显式 max_tokens > vendor maxOut > 常量。
+		WithOutputReserve(s.resolveOutputReserve(a.GetConfig().LLMModel, a.GetConfig().MaxTokens)),
 	}
 	if req.MaxSteps > 0 {
 		options = append(options, WithMaxSteps(req.MaxSteps))
@@ -2312,4 +2314,20 @@ func (s *AgentService) resolveExecutionWindow(
 			zap.Int("model_window", modelWin), zap.Int("window", window))
 	}
 	return window, agentSrc
+}
+
+// resolveOutputReserve 解析主模型输出预留（Spec 第 2 节 outputReserve 来源链）：
+// 显式 cfg.MaxTokens（>0）> vendor 表 maxOut > DefaultOutputReserveTokens。
+// 局限：execution 级 effective-parameter 覆写对 max_tokens 的调整在此不可见
+// （service 层解析时以 agent 配置为准），保守方向一致，不放大可用窗口。
+func (s *AgentService) resolveOutputReserve(model string, explicitMaxTokens int) int {
+	if explicitMaxTokens > 0 {
+		return explicitMaxTokens
+	}
+	if s.deps.VendorWindowLookup != nil {
+		if _, maxOut := s.deps.VendorWindowLookup(model); maxOut > 0 {
+			return maxOut
+		}
+	}
+	return constants.DefaultOutputReserveTokens
 }

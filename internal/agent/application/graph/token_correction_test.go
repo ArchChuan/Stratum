@@ -84,17 +84,17 @@ func TestCompactLoopMessagesWithPolicy_Correction(t *testing.T) {
 		return tokenutil.EstimateMessages(toEstimate(msgs))
 	}
 
-	out05 := compactLoopMessagesWithPolicy(ctx, in, budget, 0, 3, 0, 0.5, 0, nil)
+	out05 := compactLoopMessagesWithPolicy(ctx, in, Budget{HistoryCap: budget}, 0, 3, 0, 0.5, 0, nil)
 	if len(out05) != len(in) {
 		t.Fatalf("correction 0.5 raises threshold above estimate: expected lazy no-op, compacted %d → %d messages", len(in), len(out05))
 	}
 
-	out10 := compactLoopMessagesWithPolicy(ctx, in, budget, 0, 3, 0, 1.0, 0, nil)
+	out10 := compactLoopMessagesWithPolicy(ctx, in, Budget{HistoryCap: budget}, 0, 3, 0, 1.0, 0, nil)
 	if got := estimate(out10); got > int(float64(budget)*constants.LoopCompactionSafetyRatio) {
 		t.Fatalf("correction 1.0: estimate = %d, want <= safety threshold %d", got, int(float64(budget)*constants.LoopCompactionSafetyRatio))
 	}
 
-	out20 := compactLoopMessagesWithPolicy(ctx, in, budget, 0, 3, 0, 2.0, 0, nil)
+	out20 := compactLoopMessagesWithPolicy(ctx, in, Budget{HistoryCap: budget}, 0, 3, 0, 2.0, 0, nil)
 	if got := estimate(out20); got > int(float64(budget)*constants.LoopCompactionSafetyRatio/2.0) {
 		t.Fatalf("correction 2.0: estimate = %d, want <= halved threshold %d", got, int(float64(budget)*constants.LoopCompactionSafetyRatio/2.0))
 	}
@@ -104,7 +104,7 @@ func TestCompactLoopMessagesWithPolicy_Correction(t *testing.T) {
 	assertNoOrphans(t, out20)
 
 	// correction ≤ 0 must behave exactly like 1.0 (no correction).
-	outZero := compactLoopMessagesWithPolicy(ctx, in, budget, 0, 3, 0, 0, 0, nil)
+	outZero := compactLoopMessagesWithPolicy(ctx, in, Budget{HistoryCap: budget}, 0, 3, 0, 0, 0, nil)
 	for i := range out10 {
 		if outZero[i].Role != out10[i].Role || outZero[i].Content != out10[i].Content {
 			t.Fatalf("correction 0 must be treated as 1.0: msg %d = %+v, want %+v", i, outZero[i], out10[i])
@@ -114,7 +114,7 @@ func TestCompactLoopMessagesWithPolicy_Correction(t *testing.T) {
 
 func TestCompactLoopMessagesWithPolicy_ZeroBudgetSkipsCorrection(t *testing.T) {
 	in := correctionMsgs()
-	out := compactLoopMessagesWithPolicy(context.Background(), in, 0, 0, 3, 0, 2.0, 0, nil)
+	out := compactLoopMessagesWithPolicy(context.Background(), in, Budget{HistoryCap: 0}, 0, 3, 0, 2.0, 0, nil)
 	if len(out) != len(in) {
 		t.Fatalf("budget 0 disables compaction regardless of correction: %d → %d", len(in), len(out))
 	}
@@ -131,19 +131,19 @@ func TestCompactLoopMessagesWithPolicy_SafetyOverride(t *testing.T) {
 	}
 	const budget = 800
 
-	outDefault := compactLoopMessagesWithPolicy(ctx, in, budget, 0, 3, 0, 1.0, 0, nil)
+	outDefault := compactLoopMessagesWithPolicy(ctx, in, Budget{HistoryCap: budget}, 0, 3, 0, 1.0, 0, nil)
 	if got := tokenutil.EstimateMessages(toEstimate(outDefault)); got > int(float64(budget)*constants.LoopCompactionSafetyRatio) {
 		t.Fatalf("default safety: estimate = %d, want <= %d", got, int(float64(budget)*constants.LoopCompactionSafetyRatio))
 	}
 
-	outFull := compactLoopMessagesWithPolicy(ctx, in, budget, 0, 3, 0, 1.0, 1.0, nil)
+	outFull := compactLoopMessagesWithPolicy(ctx, in, Budget{HistoryCap: budget}, 0, 3, 0, 1.0, 1.0, nil)
 	if len(outFull) != len(in) {
 		t.Fatalf("safety 1.0 raises threshold above estimate: expected lazy no-op, compacted %d → %d", len(in), len(outFull))
 	}
 
 	// safety ≤ 0 falls back to the constant default, byte-identical to 0.8.
-	outExplicit := compactLoopMessagesWithPolicy(ctx, in, budget, 0, 3, 0, 1.0, constants.LoopCompactionSafetyRatio, nil)
-	outFallback := compactLoopMessagesWithPolicy(ctx, in, budget, 0, 3, 0, 1.0, 0, nil)
+	outExplicit := compactLoopMessagesWithPolicy(ctx, in, Budget{HistoryCap: budget}, 0, 3, 0, 1.0, constants.LoopCompactionSafetyRatio, nil)
+	outFallback := compactLoopMessagesWithPolicy(ctx, in, Budget{HistoryCap: budget}, 0, 3, 0, 1.0, 0, nil)
 	for i := range outExplicit {
 		if outFallback[i].Role != outExplicit[i].Role || outFallback[i].Content != outExplicit[i].Content {
 			t.Fatalf("safety 0 must fall back to default: msg %d = %+v, want %+v", i, outFallback[i], outExplicit[i])
@@ -192,12 +192,13 @@ func TestReActLoop_UsageFeedbackClosesCorrectionLoop(t *testing.T) {
 	cg, err := BuildReActGraph(stub, NoopTokenRecorder{}, zap.NewNop())
 	require.NoError(t, err)
 
-	// 2000-token window keeps the tool schemas (~500 tokens) but forces the
+	// 2000-token window keeps the tool schemas (ToolsCap 80) but forces the
 	// second dispatch — a huge tool result — past the correction-adjusted
-	// threshold (≈1600/correction).
+	// HistoryCap threshold (≈192/correction).
 	state := ReActState{
 		Model:            "qwen",
 		MaxContextTokens: 2000,
+		Budget:           ComputeBudget(2000, 0, 0),
 		Messages:         []port.LLMMessage{{Role: "user", Content: "hi"}},
 		AvailableTools: []port.ToolDefinition{
 			{Name: "calc", ProviderType: "mcp", ServerID: "test", Metadata: map[string]any{"risk_level": "read"}},
@@ -221,12 +222,13 @@ func TestReActLoop_UsageFeedbackClosesCorrectionLoop(t *testing.T) {
 		t.Fatalf("under-estimated prompt must raise correction above 1: %v", out.TokenCorrection)
 	}
 
-	// 第二步：请求必须按新 correction 压缩（阈值 = 2000·0.8/correction）。
+	// 第二步：请求必须按新 correction 压缩（阈值 = HistoryCap·0.8/correction）。
 	second := stub.llmReqs[1]
 	secondEst := requestEstimate(second)
-	if secondEst > int(float64(2000)*constants.LoopCompactionSafetyRatio/out.TokenCorrection) {
+	historyCap := ComputeBudget(2000, 0, 0).HistoryCap
+	if secondEst > int(float64(historyCap)*constants.LoopCompactionSafetyRatio/out.TokenCorrection) {
 		t.Fatalf("second dispatch estimate = %d, want <= correction-adjusted threshold %d",
-			secondEst, int(float64(2000)*constants.LoopCompactionSafetyRatio/out.TokenCorrection))
+			secondEst, int(float64(historyCap)*constants.LoopCompactionSafetyRatio/out.TokenCorrection))
 	}
 	if out.LastEstimatedTokens != secondEst {
 		t.Fatalf("LastEstimatedTokens = %d, want the dispatched request estimate %d", out.LastEstimatedTokens, secondEst)

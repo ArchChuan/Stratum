@@ -89,6 +89,8 @@ func TestBuildReActGraph_FinalInstructionFitsContextBudget(t *testing.T) {
 		Messages:         messages,
 		MaxLLMSteps:      1,
 		MaxContextTokens: budget,
+		// 账本快照：压缩阈值基于 HistoryCap（= usable − fixedHead − tools）。
+		Budget: graph.ComputeBudget(budget, 0, 0),
 	}, graph.RunConfig[graph.ReActState]{MaxSteps: 2})
 	require.NoError(t, err)
 	require.Len(t, stub.llmReqs, 1)
@@ -102,7 +104,7 @@ func TestBuildReActGraph_FinalInstructionFitsContextBudget(t *testing.T) {
 	for i, message := range reqMessages {
 		estimate[i] = tokenutil.Message{Role: message.Role, Content: message.Content}
 	}
-	wantMax := int(float64(budget) * constants.LoopCompactionSafetyRatio)
+	wantMax := int(float64(graph.ComputeBudget(budget, 0, 0).HistoryCap) * constants.LoopCompactionSafetyRatio)
 	require.LessOrEqual(t, tokenutil.EstimateMessages(estimate), wantMax)
 }
 
@@ -119,6 +121,7 @@ func TestBuildReActGraph_FinalInstructionDoesNotReplaceCurrentTask(t *testing.T)
 
 	_, err = cg.Invoke(context.Background(), graph.ReActState{
 		Model: "qwen", Messages: messages, MaxLLMSteps: 1, MaxContextTokens: 800,
+		Budget: graph.ComputeBudget(800, 0, 0),
 	}, graph.RunConfig[graph.ReActState]{MaxSteps: 2})
 	require.NoError(t, err)
 	reqMessages := stub.llmReqs[0].Messages
@@ -145,9 +148,11 @@ func TestBuildReActGraph_ReservesContextBudgetForToolSchemas(t *testing.T) {
 		}},
 	}}
 
-	const budget = 1000
+	const budget = 10000
 	_, err = cg.Invoke(context.Background(), graph.ReActState{
 		Model: "qwen", Messages: messages, AvailableTools: tools, MaxContextTokens: budget,
+		// 账本快照：ToolsCap 足够容纳 ~300 token 工具定义，history 压缩走 HistoryCap。
+		Budget: graph.ComputeBudget(budget, 0, 0),
 	}, graph.RunConfig[graph.ReActState]{MaxSteps: 2})
 	require.NoError(t, err)
 	require.Len(t, stub.llmReqs, 1)
@@ -160,7 +165,11 @@ func TestBuildReActGraph_ReservesContextBudgetForToolSchemas(t *testing.T) {
 	toolJSON, err := json.Marshal(req.Tools)
 	require.NoError(t, err)
 	total := tokenutil.EstimateMessages(estimate) + tokenutil.EstimateText(string(toolJSON))
-	require.LessOrEqual(t, total, int(float64(budget)*constants.LoopCompactionSafetyRatio))
+	// 派发总量 = 压缩后的 history（≤ HistoryCap·safety）+ 工具（≤ ToolsCap 份额）。
+	ledger := graph.ComputeBudget(budget, 0, 0)
+	require.LessOrEqual(t, total, int(float64(ledger.HistoryCap)*constants.LoopCompactionSafetyRatio)+ledger.ToolsCap)
+	// 工具定义必须保留（ToolsCap 独立配额，不挤占 history）。
+	require.NotEmpty(t, req.Tools)
 }
 
 func TestBuildReActGraph_DropsToolsThatConsumeMessageAllowance(t *testing.T) {
@@ -171,6 +180,7 @@ func TestBuildReActGraph_DropsToolsThatConsumeMessageAllowance(t *testing.T) {
 	const budget = 800
 	_, err = cg.Invoke(context.Background(), graph.ReActState{
 		Model: "qwen", MaxContextTokens: budget,
+		Budget:   graph.ComputeBudget(budget, 0, 0),
 		Messages: []port.LLMMessage{{Role: "system", Content: "system"}, {Role: "user", Content: "CURRENT TASK"}},
 		AvailableTools: []port.ToolDefinition{{
 			Name: "oversized", Description: strings.Repeat("schema", 1000),
@@ -189,6 +199,7 @@ func TestBuildReActGraph_ReservedPlanToolsConsumeContextBeforeOptionalTools(t *t
 
 	_, err = cg.Invoke(context.Background(), graph.ReActState{
 		Model: "qwen", MaxContextTokens: 1000,
+		Budget:   graph.ComputeBudget(1000, 0, 0),
 		Messages: []port.LLMMessage{{Role: "user", Content: "short task"}},
 		AvailableTools: []port.ToolDefinition{{
 			Name: "large_but_usable", Description: strings.Repeat("schema", 310),

@@ -64,6 +64,9 @@ type ReActState struct {
 	// accumulated Messages exceed it, older tool-call/tool-result groups are compacted
 	// (summarized or dropped) before dispatch. Zero disables in-loop compaction.
 	MaxContextTokens int
+	// Budget 是本次执行的预算账本快照（Spec 第 2 节）：初始组装与 ReAct 循环
+	// 共享同一来源，一次执行一个。零值 = 未初始化 → 循环内压缩与工具裁剪禁用。
+	Budget Budget
 	// CompactionRecentGroups overrides the recent-groups count during in-loop
 	// compaction. 0 = auto-derive from MaxContextTokens.
 	CompactionRecentGroups int

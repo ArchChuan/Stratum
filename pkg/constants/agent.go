@@ -52,6 +52,14 @@ const (
 	// is clamped to when the model window is known.
 	MinContextWindowTokens = 2_000
 
+	// DefaultFixedHeadRatio 是 system+memory 的预算配额比例（Spec 第 2 节）。
+	DefaultFixedHeadRatio = 0.2
+	// DefaultToolsBudgetRatio 是工具定义的预算配额比例（Spec 第 2 节）。
+	DefaultToolsBudgetRatio = 0.2
+	// DefaultOutputReserveTokens 是主模型输出预留的保守默认（无显式 max_tokens
+	// 且 vendor 表未知时的兜底）。
+	DefaultOutputReserveTokens = 4_096
+
 	// ---- adaptive compaction thresholds (Context Phase 3) ----
 
 	// CompactionRecentGroupsSmall is the number of recent message groups kept

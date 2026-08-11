@@ -53,6 +53,9 @@ type ExecutionConfig struct {
 	// MaxContextTokens 是本次执行解析后的上下文窗口预算（0 = 未注入，
 	// 回退到 agent 配置显式值）。执行时由 AgentService 两阶段解析后注入。
 	MaxContextTokens int
+	// OutputReserve 是主模型输出预留（账本 usable 的扣减项）。
+	// 0 = 未注入，由调用链自动解析（显式 max_tokens > vendor maxOut > 常量）。
+	OutputReserve int
 	// WindowSource 记录本次执行窗口解析来源（window_source trace 用）。
 	WindowSource string
 	// CompactionRecentGroups overrides in-loop compaction recent groups.
@@ -552,7 +555,7 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 		maxTokens = constants.DefaultAgentContextTokens
 	}
 	initMessages := BuildContextMessagesWithCompaction(
-		ctx, ec.systemPrompt, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow, ec.historyCompactor,
+		ctx, ec.systemPrompt, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow, ec.cfg.OutputReserve, ec.historyCompactor,
 	)
 
 	// Resume from checkpoint if one exists.
@@ -672,7 +675,7 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 		maxTokens = constants.DefaultAgentContextTokens
 	}
 	initMessages := BuildContextMessagesWithCompaction(
-		ctx, ec.systemPrompt, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow, ec.historyCompactor,
+		ctx, ec.systemPrompt, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow, ec.cfg.OutputReserve, ec.historyCompactor,
 	)
 	initState := a.buildReActInitState(ec, initMessages, maxTokens)
 	initState.StuckThreshold = stuckThreshold
@@ -770,9 +773,12 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		InternalToolResultGuardFn:  ec.cfg.InternalToolResultGuardFn,
 		MaxLLMSteps:                ec.cfg.MaxSteps,
 		MaxContextTokens:           maxTokens,
-		CheckpointEnabled:          a.CheckpointEnabled,
-		HistoryCompactor:           ec.historyCompactor,
-		PlanCheckpointWriter:       a.CheckpointStore,
+		// Budget 账本快照：一次执行一个，初始组装与 ReAct 循环共享同一来源。
+		Budget: agentgraph.ComputeBudget(maxTokens, ec.cfg.OutputReserve,
+			float64(ec.cfg.CompactionSafetyRatio)),
+		CheckpointEnabled:    a.CheckpointEnabled,
+		HistoryCompactor:     ec.historyCompactor,
+		PlanCheckpointWriter: a.CheckpointStore,
 		PlanCheckpointIdentity: agentgraph.PlanCheckpointIdentity{
 			ExecutionID: ec.cfg.ExecutionID, TraceID: ec.cfg.TraceID,
 			ConversationID: ec.cfg.ConversationID, AgentID: ec.agentID, UserID: ec.cfg.UserID,
@@ -1024,6 +1030,13 @@ func WithMaxTokens(maxTokens int) ExecutionOption {
 func WithMaxContextTokens(maxContextTokens int) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.MaxContextTokens = maxContextTokens
+	}
+}
+
+// WithOutputReserve 注入主模型输出预留（Spec 第 2 节账本 outputReserve）。
+func WithOutputReserve(reserve int) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.OutputReserve = reserve
 	}
 }
 
