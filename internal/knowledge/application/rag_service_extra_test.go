@@ -58,33 +58,33 @@ func TestRetrieveRelevantChunks(t *testing.T) {
 	})
 	rs := NewRAGService(&mockEmbedder{dim: 4}, store, zap.NewNop())
 
-	chunks, err := rs.RetrieveRelevantChunks(context.Background(), "t1", "q", "ws1", "text-embedding-v3", 3)
+	chunks, err := rs.RetrieveRelevantChunks(context.Background(), "t1", "q", "ws1", "text-embedding-v3", 3, "viewer-1")
 	if err != nil || len(chunks) != 2 || chunks[0] != "chunk-a" {
 		t.Fatalf("chunks = %+v, %v", chunks, err)
 	}
 	// 极端情况：空 tenant → 明确错误。
-	if _, err := rs.RetrieveRelevantChunks(context.Background(), "", "q", "ws1", "text-embedding-v3", 3); err == nil {
+	if _, err := rs.RetrieveRelevantChunks(context.Background(), "", "q", "ws1", "text-embedding-v3", 3, "viewer-1"); err == nil {
 		t.Fatal("empty tenant must error")
 	}
 	// 极端情况：EmbedVector 失败 → ErrRAGDependency。
 	rsBad := NewRAGService(&mockEmbedder{err: errors.New("embed down")}, store, zap.NewNop())
-	if _, err := rsBad.RetrieveRelevantChunks(context.Background(), "t1", "q", "ws1", "text-embedding-v3", 3); !errors.Is(err, ErrRAGDependency) {
+	if _, err := rsBad.RetrieveRelevantChunks(context.Background(), "t1", "q", "ws1", "text-embedding-v3", 3, "viewer-1"); !errors.Is(err, ErrRAGDependency) {
 		t.Fatalf("embed err = %v", err)
 	}
 	// 极端情况：Search 失败 → ErrRAGDependency。
 	store.SetSearchError(errors.New("milvus down"))
-	if _, err := rs.RetrieveRelevantChunks(context.Background(), "t1", "q", "ws1", "text-embedding-v3", 3); !errors.Is(err, ErrRAGDependency) {
+	if _, err := rs.RetrieveRelevantChunks(context.Background(), "t1", "q", "ws1", "text-embedding-v3", 3, "viewer-1"); !errors.Is(err, ErrRAGDependency) {
 		t.Fatalf("search err = %v", err)
 	}
 	// 极端情况：collection 不存在 → 降级为空结果而非错误。
 	store.SetSearchError(errors.New("collection not found: x"))
-	chunks, err = rs.RetrieveRelevantChunks(context.Background(), "t1", "q", "ws1", "text-embedding-v3", 3)
+	chunks, err = rs.RetrieveRelevantChunks(context.Background(), "t1", "q", "ws1", "text-embedding-v3", 3, "viewer-1")
 	if err != nil || len(chunks) != 0 {
 		t.Fatalf("missing collection = %+v, %v", chunks, err)
 	}
 	// 极端情况：embedder 未配置 → 明确错误。
 	rsNil := NewRAGService(nil, store, zap.NewNop())
-	if _, err := rsNil.RetrieveRelevantChunks(context.Background(), "t1", "q", "ws1", "text-embedding-v3", 3); err == nil {
+	if _, err := rsNil.RetrieveRelevantChunks(context.Background(), "t1", "q", "ws1", "text-embedding-v3", 3, "viewer-1"); err == nil {
 		t.Fatal("nil embedder must error")
 	}
 }
@@ -92,7 +92,7 @@ func TestRetrieveRelevantChunks(t *testing.T) {
 func TestRAGQueryDefaultsAndCollectionName(t *testing.T) {
 	// 极端情况：TopK <= 0 默认 5；WorkspaceID 空时 collection 用 Workspace。
 	rs := NewRAGService(&mockEmbedder{dim: 4}, NewMockVectorStore(), zap.NewNop())
-	res, err := rs.Query(context.Background(), RAGQueryRequest{Question: "q", Mode: "vector"})
+	res, err := rs.Query(context.Background(), RAGQueryRequest{Question: "q", Mode: "vector", ViewerID: "test-user"})
 	if err != nil || res.Mode != "vector" || len(res.Sources) != 0 {
 		t.Fatalf("query = %+v, %v", res, err)
 	}

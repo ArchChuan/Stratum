@@ -51,6 +51,45 @@ message IngestDocumentRequest {
   string filename = 3;
   // @binding: required
   string document_id = 4;
+  // Document-level access whitelist; both empty => unrestricted.
+  repeated string allowed_user_ids = 5;
+  repeated string allowed_role_ids = 6;
+}
+
+// DocumentAccessRequest replaces the document-level access whitelist of a
+// single document (PUT /knowledge/workspaces/:name/documents/:documentID/access).
+message DocumentAccessRequest {
+  // @binding: required
+  string workspace = 1;
+  // @binding: required
+  string document_id = 2;
+  repeated string allowed_user_ids = 3;
+  repeated string allowed_role_ids = 4;
+}
+
+// DocumentAccessResponse echoes the applied whitelist.
+message DocumentAccessResponse {
+  repeated string allowed_user_ids = 1;
+  repeated string allowed_role_ids = 2;
+}
+
+// ChunkSegment is one ordered content unit of a previewed document.
+message ChunkSegment {
+  string chunk_id = 1;
+  int64 index = 2;
+  string content = 3;
+  string parent_content = 4; // non-empty when the chunk references a Parent-Child parent
+}
+
+// PreviewDocumentResponse is the chunk-reassembled content of a document
+// (GET /knowledge/workspaces/:name/documents/:documentID/preview). Raw
+// document text is not stored, so previews rebuild it from ordered chunks.
+message PreviewDocumentResponse {
+  string workspace = 1;
+  string document_id = 2;
+  string document_title = 3; // source file name of the doc
+  int32 chunk_count = 4;
+  repeated ChunkSegment segments = 5;
 }
 
 message WorkspaceListItem {

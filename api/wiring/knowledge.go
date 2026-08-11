@@ -72,6 +72,10 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 		rag.SetEmbedResolver(knowledgeResolver)
 		rag.SetWorkspaceRepo(persistence.NewWorkspaceRepo(db))
 		rag.SetChunkRepo(chunkRepo)
+		// Doc-level whitelist filtering needs the document repo; the tenant
+		// role resolver is injected with the other services by
+		// injectTenantRoleResolvers (same DB-backed adapter).
+		rag.SetDocRepo(docRepo)
 	}
 	if c.Platform != nil && c.Platform.Metrics != nil {
 		ingest.SetMetrics(c.Platform.Metrics)

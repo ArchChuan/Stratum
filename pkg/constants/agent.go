@@ -20,6 +20,9 @@ const (
 	SystemAssistantDiagnosticGapsMaxCount        = 20
 	SystemAssistantDiagnosticAreaResultsMaxCount = 5
 	SystemAssistantEvidenceFieldMaxRunes         = 500
+	// MaxAgentResultSources caps the citation sources attached to an agent
+	// result for chat display (deduplicated by chunk ID, newest wins).
+	MaxAgentResultSources = 10
 
 	// Lazy planning: K consecutive LLM rounds with no Output triggers Reflect→Plan.
 	DefaultStuckThreshold = 3

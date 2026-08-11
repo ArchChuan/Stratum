@@ -703,7 +703,7 @@ func (contractAgentRepo) GetAll(context.Context) ([]*agentdomain.AgentConfig, er
 func (contractAgentRepo) Remove(context.Context, string, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (contractAgentRepo) Update(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string) error {
+func (contractAgentRepo) Update(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string, bool) error {
 	return nil
 }
 func (contractAgentRepo) UpdateSystemAssistantModel(

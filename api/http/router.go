@@ -158,11 +158,13 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 	requireAdmin := middleware.RequireTenantRole("admin")
 	evaluations := r.Group("/evaluations", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	{
-		evaluations.GET("/overview", h.Overview)
+		// 读端点收 admin（D6）：评估中心数据（runs/candidates/overview/jobs）暴露
+		// 检索质量与实验结果，仅管理员可读；其余只读资源仍对 member 开放。
+		evaluations.GET("/overview", requireAdmin, h.Overview)
 		evaluations.GET("/resources", h.ListResources)
 		evaluations.GET("/suites", h.ListSuites)
-		evaluations.GET("/runs", h.ListRuns)
-		evaluations.GET("/candidates", h.ListCandidates)
+		evaluations.GET("/runs", requireAdmin, h.ListRuns)
+		evaluations.GET("/candidates", requireAdmin, h.ListCandidates)
 		evaluations.GET("/experiments", h.ListExperiments)
 		evaluations.GET("/resources/:kind/:id/timeline", h.Timeline)
 		evaluations.POST("/resources/:kind/:id/baseline", requireAdmin, requireActive, h.CreateBaseline)
@@ -489,6 +491,7 @@ func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 		knowledgeGroup.GET("/workspaces", ragHandler.ListWorkspaces)
 		knowledgeGroup.GET("/workspaces/:name/stats", ragHandler.GetWorkspaceStats)
 		knowledgeGroup.GET("/workspaces/:name/documents", ragHandler.ListDocuments)
+		knowledgeGroup.GET("/workspaces/:name/documents/:documentID/preview", requireActive, ragHandler.PreviewDocument)
 		knowledgeGroup.POST("/query", requireActive, ragHandler.Query)
 
 		adminMW := []gin.HandlerFunc{middleware.RequireTenantRole("admin")}
@@ -497,6 +500,8 @@ func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 		knowledgeGroup.DELETE("/workspaces/:name", append(adminMW, requireActive, ragHandler.DeleteWorkspace)...)
 		knowledgeGroup.PUT("/workspaces/:name/editors", append(adminMW, requireActive, ragHandler.SetWorkspaceEditors)...)
 		knowledgeGroup.DELETE("/workspaces/:name/documents/:documentID", append(adminMW, requireActive, ragHandler.DeleteDocument)...)
+		knowledgeGroup.PUT("/workspaces/:name/documents/:documentID/access",
+			append(adminMW, requireActive, ragHandler.SetDocumentAccess)...)
 		knowledgeGroup.POST("/ingest", append(adminMW, requireActive, middleware.BodyLimit(constants.MaxUploadBytes), ragHandler.UploadDocument)...)
 	}
 }

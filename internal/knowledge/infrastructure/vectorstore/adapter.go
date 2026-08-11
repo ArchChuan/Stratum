@@ -63,6 +63,21 @@ func (a *Adapter) Search(ctx context.Context, collectionName string, queryVector
 	return converted, nil
 }
 
+func (a *Adapter) SearchWithFilter(ctx context.Context, collectionName string, queryVector []float32, topK int, expression string) ([]knowledgeport.VectorSearchResult, error) {
+	results, err := a.store.SearchWithFilterStrict(ctx, collectionName, queryVector, topK, expression)
+	if err != nil {
+		return nil, err
+	}
+	converted := make([]knowledgeport.VectorSearchResult, len(results))
+	for i, result := range results {
+		converted[i] = knowledgeport.VectorSearchResult{
+			ID: result.ID, Content: result.Content, SourceDocument: result.SourceDocument,
+			ChunkIndex: result.ChunkIndex, Score: result.Score,
+		}
+	}
+	return converted, nil
+}
+
 func (a *Adapter) DescribeCollection(ctx context.Context, collectionName string) (knowledgeport.CollectionInfo, error) {
 	info, err := a.store.DescribeCollection(ctx, collectionName)
 	if err != nil {

@@ -13,7 +13,10 @@ vi.mock('../api/knowledge.api', () => ({
     listDocuments: vi.fn(),
   },
 }));
-vi.mock('@/modules/iam', () => ({ useAuth: () => ({ user: { role: 'admin' } }) }));
+vi.mock('@/modules/iam', () => ({
+  useAuth: () => ({ user: { role: 'admin' } }),
+  tenantApi: { members: vi.fn().mockResolvedValue({ members: [], total: 0, page: 1, page_size: 1000 }) },
+}));
 vi.mock('react-router-dom', () => ({
   useNavigate: () => vi.fn(),
   useParams: () => ({ name: 'workspace-1' }),
@@ -26,6 +29,7 @@ const deferred = <T,>() => {
 };
 const stats = {
   description: '知识库',
+  is_platform_managed: false,
   config: { embedding_model: 'text-embedding-v1', chunking_strategy: 'fixed', top_k: 5 },
 };
 const wrapper = ({ children }: PropsWithChildren) => <StrictMode>{children}</StrictMode>;

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"mime/multipart"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -53,10 +54,11 @@ type UpdateWorkspaceInput struct {
 
 // WorkspaceStatsResult bundles the workspace metadata and milvus stats.
 type WorkspaceStatsResult struct {
-	Name        string
-	Description string
-	Config      domain.WorkspaceConfig
-	Stats       map[string]any
+	Name              string
+	Description       string
+	Config            domain.WorkspaceConfig
+	Stats             map[string]any
+	IsPlatformManaged bool
 }
 
 // IngestUploadResult mirrors the JSON shape returned by POST /knowledge/ingest.
@@ -279,9 +281,19 @@ func applyWorkspaceUpdate(current *domain.Workspace, in UpdateWorkspaceInput, re
 	return newCfg, &after, nil
 }
 
-// GetWorkspaceStats fetches workspace metadata and milvus stats; stats errors degrade to {error: ...}.
-func (s *WorkspaceService) GetWorkspaceStats(ctx context.Context, tenantID, name string) (*WorkspaceStatsResult, error) {
+// GetWorkspaceStats fetches workspace metadata and milvus stats; stats errors
+// degrade to {error: ...}. doc_count counts the documents visible to viewerID
+// (whitelist-filtered for members, full count otherwise); vector_count is the
+// real Milvus total only for tenant admins/owners and the workspace creator —
+// members see 0 so hidden documents cannot be inferred from vector volume.
+func (s *WorkspaceService) GetWorkspaceStats(
+	ctx context.Context, tenantID, name, viewerID string,
+) (*WorkspaceStatsResult, error) {
 	ws, err := s.repo.GetByName(ctx, tenantID, name)
+	if err != nil {
+		return nil, err
+	}
+	visible, unrestricted, err := s.VisibleDocIDs(ctx, tenantID, ws.ID, viewerID)
 	if err != nil {
 		return nil, err
 	}
@@ -291,18 +303,32 @@ func (s *WorkspaceService) GetWorkspaceStats(ctx context.Context, tenantID, name
 		stats = map[string]any{"error": statsErr.Error()}
 	}
 	if s.docRepo != nil {
-		docCount, docErr := s.docRepo.CountByWorkspace(ctx, tenantID, ws.ID)
-		if docErr != nil {
-			s.logger.Warn("failed to get doc count", zap.String("workspace", name), zap.Error(docErr))
+		if unrestricted {
+			docCount, docErr := s.docRepo.CountByWorkspace(ctx, tenantID, ws.ID)
+			if docErr != nil {
+				s.logger.Warn("failed to get doc count", zap.String("workspace", name), zap.Error(docErr))
+			} else {
+				stats["doc_count"] = docCount
+			}
 		} else {
-			stats["doc_count"] = docCount
+			stats["doc_count"] = len(visible)
+		}
+	}
+	echoACL, err := s.canEchoACL(ctx, tenantID, viewerID, ws)
+	if err != nil {
+		return nil, err
+	}
+	if !echoACL {
+		if _, hasVectorCount := stats["vector_count"]; hasVectorCount {
+			stats["vector_count"] = 0
 		}
 	}
 	return &WorkspaceStatsResult{
-		Name:        name,
-		Description: ws.Description,
-		Config:      ws.Config,
-		Stats:       stats,
+		Name:              name,
+		Description:       ws.Description,
+		Config:            ws.Config,
+		Stats:             stats,
+		IsPlatformManaged: isPlatformManaged(ws),
 	}, nil
 }
 
@@ -342,6 +368,61 @@ func (s *WorkspaceService) GetWorkspaceByID(ctx context.Context, tenantID, id st
 	return s.repo.GetByID(ctx, tenantID, id)
 }
 
+// VisibleDocIDs returns the doc IDs of a workspace visible to viewerID and
+// whether filtering is skipped entirely (unrestricted=true). This is the
+// single decision point for document-level visibility — callers never
+// re-implement the matrix.
+//
+// Unrestricted cases:
+//   - platform-managed workspaces: the system built-in KB is visible to every
+//     tenant member by product rule; the whitelist mechanism does not apply
+//     to it at all.
+//   - tenant owner/admin: management exemption — admins can audit every
+//     document and must never lock themselves out of managing access.
+//   - workspace owner (CreatedBy): same management rationale.
+//
+// Fail closed: empty viewerID, missing role resolver or doc repo, role
+// resolution failure and repo failure all return an error with no doc IDs.
+func (s *WorkspaceService) VisibleDocIDs(ctx context.Context, tenantID, workspaceID, viewerID string) ([]string, bool, error) {
+	ws, err := s.repo.GetByID(ctx, tenantID, workspaceID)
+	if err != nil {
+		return nil, false, err
+	}
+	if isPlatformManaged(ws) {
+		return nil, true, nil
+	}
+	role, unrestricted, err := s.viewerScope(ctx, tenantID, workspaceID, viewerID, ws)
+	if err != nil {
+		return nil, false, err
+	}
+	if unrestricted {
+		return nil, true, nil
+	}
+	ids, err := s.docRepo.VisibleDocIDs(ctx, tenantID, workspaceID, viewerID, role)
+	if err != nil {
+		return nil, false, err
+	}
+	return ids, false, nil
+}
+
+// viewerScope resolves the viewer's tenant role and the D1 management
+// exemption (tenant admin/owner, workspace creator). Fail closed: empty
+// identity or unconfigured resolver/doc repo returns an error, never an
+// unrestricted set.
+func (s *WorkspaceService) viewerScope(ctx context.Context, tenantID, workspaceID, viewerID string, ws *domain.Workspace) (role string, unrestricted bool, err error) {
+	if viewerID == "" || s.roles == nil || s.docRepo == nil {
+		return "", false, domain.ErrForbidden
+	}
+	role, err = s.roles.ResolveTenantRole(ctx, tenantID, viewerID)
+	if err != nil {
+		return "", false, domain.ErrForbidden
+	}
+	if role == "owner" || role == "admin" || ws.CreatedBy == viewerID {
+		return role, true, nil
+	}
+	return role, false, nil
+}
+
 // ListSnapshotDocuments returns document metadata used to fingerprint an
 // immutable evaluation snapshot. Document bodies remain in retrieval stores.
 func (s *WorkspaceService) ListSnapshotDocuments(
@@ -353,14 +434,24 @@ func (s *WorkspaceService) ListSnapshotDocuments(
 	return s.docRepo.List(ctx, tenantID, workspaceID)
 }
 
-// IngestUpload reads the uploaded file and dispatches ingestion using the workspace's configured embedding model.
-func (s *WorkspaceService) IngestUpload(ctx context.Context, tenantID, workspace string, fileHeader *multipart.FileHeader) (*IngestUploadResult, error) {
+// IngestUpload reads the uploaded file and dispatches ingestion using the
+// workspace's configured embedding model. The optional access whitelist
+// (allowedUserIDs/allowedRoleIDs) is persisted on the document row with
+// CreatedBy=actorID. Platform-managed workspaces reject the whole upload
+// (内置知识库不支持文档级权限), so whitelist params never reach storage for them.
+func (s *WorkspaceService) IngestUpload(
+	ctx context.Context, tenantID, workspace string, fileHeader *multipart.FileHeader,
+	actorID string, allowedUserIDs, allowedRoleIDs []string,
+) (*IngestUploadResult, error) {
 	ws, err := s.repo.GetByName(ctx, tenantID, workspace)
 	if err != nil {
 		return nil, err
 	}
 	if isPlatformManaged(ws) {
 		return nil, domain.ErrPlatformManagedWorkspace
+	}
+	if err := s.checkOwnership(ctx, tenantID, actorID, ws.CreatedBy, nil); err != nil {
+		return nil, err
 	}
 
 	file, err := fileHeader.Open()
@@ -396,6 +487,9 @@ func (s *WorkspaceService) IngestUpload(ctx context.Context, tenantID, workspace
 		FileName:         fileHeader.Filename,
 		DocumentID:       documentID,
 		ContentHash:      hash,
+		AllowedUserIDs:   allowedUserIDs,
+		AllowedRoleIDs:   allowedRoleIDs,
+		CreatedBy:        actorID,
 	})
 	if err != nil {
 		return nil, err
@@ -411,7 +505,9 @@ func (s *WorkspaceService) IngestUpload(ctx context.Context, tenantID, workspace
 
 // DocumentView is the projection returned by ListDocuments — omits raw
 // contents and exposes ingest lifecycle fields so the front-end can render
-// status badges + poll for terminal state.
+// status badges + poll for terminal state. AllowedUserIDs/AllowedRoleIDs/
+// CreatedBy are only echoed to tenant admins/owners and the workspace creator
+// (access-matrix leak guard); members always receive empty values.
 type DocumentView struct {
 	ID               string
 	Source           string
@@ -423,11 +519,39 @@ type DocumentView struct {
 	CreatedAt        time.Time
 	IngestStartedAt  *time.Time
 	IngestFinishedAt *time.Time
+	AllowedUserIDs   []string
+	AllowedRoleIDs   []string
+	CreatedBy        string
 }
 
-// ListDocuments returns the documents in a workspace with their ingest status.
-// Used by GET /knowledge/workspaces/:name/documents and polled by the UI.
-func (s *WorkspaceService) ListDocuments(ctx context.Context, tenantID, workspace string) ([]DocumentView, error) {
+// canEchoACL reports whether viewerID may see the document access whitelist
+// and real vector counts of a workspace: tenant owner/admin or the workspace
+// creator. Platform-managed workspaces never echo (the whitelist does not
+// apply there at all). Missing resolver and resolution failure fail closed.
+func (s *WorkspaceService) canEchoACL(
+	ctx context.Context, tenantID, viewerID string, ws *domain.Workspace,
+) (bool, error) {
+	if isPlatformManaged(ws) {
+		return false, nil
+	}
+	if s.roles == nil {
+		return false, domain.ErrForbidden
+	}
+	role, err := s.roles.ResolveTenantRole(ctx, tenantID, viewerID)
+	if err != nil {
+		return false, domain.ErrForbidden
+	}
+	return role == "owner" || role == "admin" || ws.CreatedBy == viewerID, nil
+}
+
+// ListDocuments returns the documents of a workspace visible to viewerID with
+// their ingest status. Whitelisted documents are filtered out for plain
+// members (VisibleDocIDs matrix); admins, tenant owners and the workspace
+// creator see everything. Used by GET /knowledge/workspaces/:name/documents
+// and polled by the UI.
+func (s *WorkspaceService) ListDocuments(
+	ctx context.Context, tenantID, workspace, viewerID string,
+) ([]DocumentView, error) {
 	if s.docRepo == nil {
 		return []DocumentView{}, nil
 	}
@@ -435,13 +559,45 @@ func (s *WorkspaceService) ListDocuments(ctx context.Context, tenantID, workspac
 	if err != nil {
 		return nil, err
 	}
+	visible, unrestricted, err := s.VisibleDocIDs(ctx, tenantID, ws.ID, viewerID)
+	if err != nil {
+		return nil, err
+	}
 	docs, err := s.docRepo.List(ctx, tenantID, ws.ID)
 	if err != nil {
 		return nil, err
 	}
+	if !unrestricted {
+		docs = filterVisibleDocs(docs, visible)
+	}
+	echoACL, err := s.canEchoACL(ctx, tenantID, viewerID, ws)
+	if err != nil {
+		return nil, err
+	}
+	return buildDocumentViews(docs, echoACL), nil
+}
+
+// filterVisibleDocs keeps only documents whose ID appears in the visible set.
+func filterVisibleDocs(docs []*domain.Document, visible []string) []*domain.Document {
+	allowed := make(map[string]struct{}, len(visible))
+	for _, id := range visible {
+		allowed[id] = struct{}{}
+	}
+	filtered := make([]*domain.Document, 0, len(docs))
+	for _, d := range docs {
+		if _, ok := allowed[d.ID]; ok {
+			filtered = append(filtered, d)
+		}
+	}
+	return filtered
+}
+
+// buildDocumentViews projects documents to the API view, echoing the access
+// whitelist only for management-scope viewers (D8).
+func buildDocumentViews(docs []*domain.Document, echoACL bool) []DocumentView {
 	views := make([]DocumentView, len(docs))
 	for i, d := range docs {
-		views[i] = DocumentView{
+		v := DocumentView{
 			ID:               d.ID,
 			Source:           d.Source,
 			ContentHash:      d.ContentHash,
@@ -453,8 +609,14 @@ func (s *WorkspaceService) ListDocuments(ctx context.Context, tenantID, workspac
 			IngestStartedAt:  d.IngestStartedAt,
 			IngestFinishedAt: d.IngestFinishedAt,
 		}
+		if echoACL {
+			v.AllowedUserIDs = d.AllowedUserIDs
+			v.AllowedRoleIDs = d.AllowedRoleIDs
+			v.CreatedBy = d.CreatedBy
+		}
+		views[i] = v
 	}
-	return views, nil
+	return views
 }
 
 // findDocument returns the document with the given ID within a workspace, or
@@ -474,7 +636,8 @@ func (s *WorkspaceService) findDocument(ctx context.Context, tenantID, workspace
 
 // DeleteDocument removes a terminal document from vector and relational storage.
 // Processing documents are rejected because their background ingest job may still write data.
-func (s *WorkspaceService) DeleteDocument(ctx context.Context, tenantID, workspace, documentID string) error {
+// Only tenant owner/admin or the workspace creator may delete (checkOwnership).
+func (s *WorkspaceService) DeleteDocument(ctx context.Context, tenantID, workspace, documentID, actorID string) error {
 	if s.docRepo == nil || s.vectorStore == nil {
 		return errors.New("knowledge document storage is not configured")
 	}
@@ -484,6 +647,9 @@ func (s *WorkspaceService) DeleteDocument(ctx context.Context, tenantID, workspa
 	}
 	if isPlatformManaged(ws) {
 		return domain.ErrPlatformManagedWorkspace
+	}
+	if err := s.checkOwnership(ctx, tenantID, actorID, ws.CreatedBy, nil); err != nil {
+		return err
 	}
 	target, err := s.findDocument(ctx, tenantID, ws.ID, documentID)
 	if err != nil {
@@ -500,4 +666,43 @@ func (s *WorkspaceService) DeleteDocument(ctx context.Context, tenantID, workspa
 		return fmt.Errorf("delete document records: %w", err)
 	}
 	return nil
+}
+
+// SetDocAccess replaces the document-level access whitelist of a document.
+// Only tenant owner, or admin acting on their own document (checkOwnership
+// matrix), may manage it — every other role fails closed; platform-managed
+// workspaces reject the call — 内置知识库不支持文档级权限 (ErrPlatformManagedWorkspace,
+// HTTP 409, consistent with the other platform-managed rejections). roleIDs
+// are normalized: trimmed, lowercased, empty entries dropped — whitelist
+// matching is single-role semantics (viewer visible if any listed tenant role
+// matches).
+func (s *WorkspaceService) SetDocAccess(
+	ctx context.Context, tenantID, workspace, documentID, actorID string,
+	userIDs, roleIDs []string,
+) error {
+	if s.docRepo == nil {
+		return errors.New("knowledge document repository unavailable")
+	}
+	ws, err := s.repo.GetByName(ctx, tenantID, workspace)
+	if err != nil {
+		return err
+	}
+	if isPlatformManaged(ws) {
+		return domain.ErrPlatformManagedWorkspace
+	}
+	if err := s.checkOwnership(ctx, tenantID, actorID, ws.CreatedBy, nil); err != nil {
+		return err
+	}
+	// Ownership validation: the document must belong to the workspace (double
+	// constraint); ErrDocumentNotFound surfaces verbatim (HTTP 404).
+	if _, err := s.docRepo.GetByID(ctx, tenantID, ws.ID, documentID); err != nil {
+		return err
+	}
+	normalized := make([]string, 0, len(roleIDs))
+	for _, r := range roleIDs {
+		if r = strings.ToLower(strings.TrimSpace(r)); r != "" {
+			normalized = append(normalized, r)
+		}
+	}
+	return s.docRepo.SetDocAccess(ctx, tenantID, documentID, userIDs, normalized)
 }

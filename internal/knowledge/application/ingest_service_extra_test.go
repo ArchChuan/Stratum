@@ -39,7 +39,7 @@ func (m *mockChunkRepo) GetChunksByIDs(context.Context, string, string, []string
 	return nil, nil
 }
 
-func (m *mockChunkRepo) KeywordSearch(context.Context, string, string, string, int) ([]domain.Chunk, error) {
+func (m *mockChunkRepo) KeywordSearch(context.Context, string, string, string, []string, int) ([]domain.Chunk, error) {
 	if m.keywordErr != nil {
 		return nil, m.keywordErr
 	}
@@ -48,6 +48,10 @@ func (m *mockChunkRepo) KeywordSearch(context.Context, string, string, string, i
 
 func (m *mockChunkRepo) CountByWorkspace(context.Context, string, string) (int64, error) {
 	return m.countByWorkspace, nil
+}
+
+func (m *mockChunkRepo) ListByDoc(context.Context, string, string, string) ([]domain.Chunk, error) {
+	return nil, nil
 }
 
 func (m *mockChunkRepo) DeleteByWorkspace(_ context.Context, tenantID, workspaceID string) error {

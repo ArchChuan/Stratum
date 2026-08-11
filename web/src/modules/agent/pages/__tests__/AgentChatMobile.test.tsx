@@ -32,6 +32,9 @@ vi.mock('@/shared/hooks/useResponsive', () => ({
 
 vi.mock('@/modules/iam', () => ({
   useTenantRole: () => ({ isAdmin: mocks.isAdmin }),
+  // SourceCardList 经 knowledge barrel 间接引入 llmRoutes → PrivateRoute，
+  // mock 边界需提供该导出（与 evaluation/routes.test.tsx 同款）
+  PrivateRoute: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 vi.mock('../../hooks/useChatPage', () => ({

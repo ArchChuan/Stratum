@@ -77,12 +77,12 @@ type ExecutionConfig struct {
 	TenantID              string
 	TraceID               string
 	ExecutionID           string
-	RAGSearchFn           func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
+	RAGSearchFn           func(ctx context.Context, workspaces []string, query string, topK int, viewerID string) (string, error)
 	// RAGSearchFnWithEvidence is the evidence-capable knowledge search hook
 	// (port.RAGSearchEvidenceProvider). When set, the knowledge tool prefers
 	// it over RAGSearchFn so tool observations carry retrieval provenance;
 	// the content contract is identical.
-	RAGSearchFnWithEvidence func(ctx context.Context, workspaces []string, query string, topK int) (port.RAGSearchEvidence, error)
+	RAGSearchFnWithEvidence func(ctx context.Context, workspaces []string, query string, topK int, viewerID string) (port.RAGSearchEvidence, error)
 	// CaptureParameters gates recording of the effective parameter values
 	// (stratum.params.* attributes) on the execution span. The parameter
 	// fingerprint stratum.params.sha256 is always recorded; only the raw
@@ -856,6 +856,7 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		ExecutionID:                ec.cfg.ExecutionID,
 		AgentKnowledgeWorkspaceIDs: ec.workspaceNames,
 		AgentMemoryScope:           ec.memoryScope,
+		ViewerID:                   ec.cfg.UserID,
 		RAGSearchFn:                ec.cfg.RAGSearchFn,
 		RAGSearchFnWithEvidence:    ec.cfg.RAGSearchFnWithEvidence,
 		PromptVersions:             promptVersionMap(ec.cfg.SystemPromptVersion),
@@ -941,6 +942,7 @@ func (a *BaseAgent) collectGraphResult(result *AgentResult, finalState agentgrap
 	result.ToolObservations = enrichToolObservations(finalState.ToolObservations, ec.cfg.TraceID, ec.cfg.ExecutionID, ec.cfg.ConversationID, ec.agentID, ec.cfg.UserID)
 	result.TraceEvents = enrichTraceEvents(finalState.TraceEvents, ec.cfg.TraceID, ec.cfg.ExecutionID, ec.cfg.ConversationID, ec.agentID, ec.cfg.UserID)
 	result.AssistantToolArtifacts = append([]domain.SystemAssistantToolArtifact(nil), finalState.AssistantToolArtifacts...)
+	result.Sources = append([]port.RAGSearchSource(nil), finalState.CitationSources...)
 	// 业务终止（如成本预算超限）不是错误：终止原因透传，已产出部分保留。
 	if finalState.TerminatedBy == agentgraph.CostBudgetTerminated {
 		result.TerminatedBy = finalState.TerminatedBy
@@ -1241,8 +1243,9 @@ func WithExecutionID(id string) ExecutionOption {
 	}
 }
 
-// WithRAGSearchFn injects a knowledge-base search function for the search_knowledge tool.
-func WithRAGSearchFn(fn func(ctx context.Context, workspaces []string, query string, topK int) (string, error)) ExecutionOption {
+// WithRAGSearchFn injects a knowledge-base search function for the
+// search_knowledge tool. viewerID is the end user scoping retrieval.
+func WithRAGSearchFn(fn func(ctx context.Context, workspaces []string, query string, topK int, viewerID string) (string, error)) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.RAGSearchFn = fn
 	}
@@ -1250,7 +1253,7 @@ func WithRAGSearchFn(fn func(ctx context.Context, workspaces []string, query str
 
 // WithRAGSearchFnWithEvidence injects the evidence-capable knowledge search
 // function; the tool node prefers it over WithRAGSearchFn when set.
-func WithRAGSearchFnWithEvidence(fn func(ctx context.Context, workspaces []string, query string, topK int) (port.RAGSearchEvidence, error)) ExecutionOption {
+func WithRAGSearchFnWithEvidence(fn func(ctx context.Context, workspaces []string, query string, topK int, viewerID string) (port.RAGSearchEvidence, error)) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.RAGSearchFnWithEvidence = fn
 	}

@@ -88,11 +88,20 @@ func (h *RAGHandler) UploadDocument(c *gin.Context) {
 		return
 	}
 
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+
 	h.logger.Info("uploading document",
 		zap.String("workspace", req.Workspace),
 		zap.String("filename", req.File.Filename))
 
-	result, err := h.wsService.IngestUpload(c.Request.Context(), tenantID, req.Workspace, req.File)
+	result, err := h.wsService.IngestUpload(
+		c.Request.Context(), tenantID, req.Workspace, req.File, actorID,
+		req.AllowedUserIDs, req.AllowedRoleIDs,
+	)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -132,6 +141,12 @@ func (h *RAGHandler) Query(c *gin.Context) {
 		req.TopK = skillpkg.DefaultTopK
 	}
 
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+
 	var embedModel, workspaceID string
 	if h.wsService != nil {
 		if ws, err := h.wsService.GetWorkspace(c.Request.Context(), tenantID, req.Workspace); err == nil {
@@ -149,6 +164,7 @@ func (h *RAGHandler) Query(c *gin.Context) {
 		//nolint:gosec // TopK 已受 binding max=20 约束,不可能溢出 int(proto 契约)
 		TopK:           int(req.TopK),
 		EmbeddingModel: embedModel,
+		ViewerID:       actorID,
 	})
 	if err != nil {
 		_ = c.Error(err)
@@ -293,17 +309,24 @@ func (h *RAGHandler) GetWorkspaceStats(c *gin.Context) {
 		return
 	}
 
-	res, err := h.wsService.GetWorkspaceStats(c.Request.Context(), tenantID, name)
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+
+	res, err := h.wsService.GetWorkspaceStats(c.Request.Context(), tenantID, name, actorID)
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"name":        res.Name,
-		"description": res.Description,
-		"config":      toDTOConfig(res.Config),
-		"stats":       res.Stats,
+		"name":                res.Name,
+		"description":         res.Description,
+		"config":              toDTOConfig(res.Config),
+		"stats":               res.Stats,
+		"is_platform_managed": res.IsPlatformManaged,
 	})
 }
 
@@ -369,6 +392,8 @@ func (h *RAGHandler) DeleteWorkspace(c *gin.Context) {
 // ListDocuments returns the documents in a workspace with their ingest
 // lifecycle fields. Front-end polls this endpoint every ~5s while a doc
 // is in 'processing' to render a status badge and show terminal state.
+// The access whitelist fields are echoed only for admins/owners (see
+// WorkspaceService.ListDocuments); members always receive empty values.
 func (h *RAGHandler) ListDocuments(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
@@ -380,7 +405,12 @@ func (h *RAGHandler) ListDocuments(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("workspace name required")))
 		return
 	}
-	docs, err := h.wsService.ListDocuments(c.Request.Context(), tenantID, name)
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	docs, err := h.wsService.ListDocuments(c.Request.Context(), tenantID, name, actorID)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -398,9 +428,21 @@ func (h *RAGHandler) ListDocuments(c *gin.Context) {
 			"created_at":         d.CreatedAt,
 			"ingest_started_at":  d.IngestStartedAt,
 			"ingest_finished_at": d.IngestFinishedAt,
+			"allowed_user_ids":   strSliceOrEmpty(d.AllowedUserIDs),
+			"allowed_role_ids":   strSliceOrEmpty(d.AllowedRoleIDs),
+			"created_by":         d.CreatedBy,
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"workspace": name, "documents": items})
+}
+
+// strSliceOrEmpty renders nil slices as [] so JSON clients never see null for
+// whitelist fields echoed to members.
+func strSliceOrEmpty(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 func (h *RAGHandler) DeleteDocument(c *gin.Context) {
@@ -414,7 +456,12 @@ func (h *RAGHandler) DeleteDocument(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("workspace and document required")))
 		return
 	}
-	if err := h.wsService.DeleteDocument(c.Request.Context(), tenantID, workspace, documentID); err != nil {
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	if err := h.wsService.DeleteDocument(c.Request.Context(), tenantID, workspace, documentID, actorID); err != nil {
 		_ = c.Error(err)
 		return
 	}
@@ -423,4 +470,93 @@ func (h *RAGHandler) DeleteDocument(c *gin.Context) {
 		zap.String("document_id", documentID),
 		zap.String("tenant_id", tenantID))
 	c.JSON(http.StatusOK, gin.H{"success": true, "document_id": documentID})
+}
+
+// SetDocumentAccess replaces the document-level access whitelist of a
+// document (PUT /knowledge/workspaces/:name/documents/:documentID/access).
+// Only tenant owner, or admin acting on their own document (checkOwnership
+// matrix), may grant access; the response echoes the applied whitelist.
+func (h *RAGHandler) SetDocumentAccess(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	workspace, documentID := c.Param("name"), c.Param("documentID")
+	if workspace == "" || documentID == "" {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("workspace and document required")))
+		return
+	}
+	var req gen.DocumentAccessRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	if err := h.wsService.SetDocAccess(
+		c.Request.Context(), tenantID, workspace, documentID, actorID,
+		req.AllowedUserIDs, req.AllowedRoleIDs,
+	); err != nil {
+		_ = c.Error(err)
+		return
+	}
+	h.logger.Info("knowledge document access updated",
+		zap.String("workspace", workspace),
+		zap.String("document_id", documentID),
+		zap.String("tenant_id", tenantID))
+	c.JSON(http.StatusOK, gen.DocumentAccessResponse{
+		AllowedUserIDs: strSliceOrEmpty(req.AllowedUserIDs),
+		AllowedRoleIDs: strSliceOrEmpty(req.AllowedRoleIDs),
+	})
+}
+
+// PreviewDocument returns the chunk-reassembled content of a document for
+// citation preview (GET /knowledge/workspaces/:name/documents/:documentID/preview).
+// Any tenant member may preview a document they can see; invisible and
+// nonexistent documents both render 404 (fail closed, no existence leak).
+func (h *RAGHandler) PreviewDocument(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	workspace, documentID := c.Param("name"), c.Param("documentID")
+	if workspace == "" || documentID == "" {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("workspace and document required")))
+		return
+	}
+	viewerID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	preview, err := h.ragService.PreviewDocument(c.Request.Context(), tenantID, workspace, documentID, viewerID)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	segments := make([]gen.ChunkSegment, 0, len(preview.Segments))
+	for _, seg := range preview.Segments {
+		segments = append(segments, gen.ChunkSegment{
+			ChunkID:       seg.ChunkID,
+			Index:         seg.Index,
+			Content:       seg.Content,
+			ParentContent: seg.ParentContent,
+		})
+	}
+	h.logger.Info("knowledge document previewed",
+		zap.String("workspace", workspace),
+		zap.String("document_id", documentID),
+		zap.String("tenant_id", tenantID))
+	c.JSON(http.StatusOK, gen.PreviewDocumentResponse{
+		Workspace:     workspace,
+		DocumentID:    preview.DocumentID,
+		DocumentTitle: preview.DocumentTitle,
+		ChunkCount:    int32(preview.ChunkCount), //nolint:gosec // 分块数来自重组结果,不可能溢出 int32(proto 契约)
+		Segments:      segments,
+	})
 }

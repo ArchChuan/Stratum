@@ -71,6 +71,12 @@ func TestRAGHandlerQuery(t *testing.T) {
 	logger := zap.NewNop()
 	handler := newTestRAGHandler(logger)
 	router := setupRAGRouter(handler)
+	// Query 现在要求 actor 身份（fail closed）；setupRAGRouter 只注入 tenant，
+	// 这里补 sub 使请求通过 handler 层门禁并落到 service 错误路径。
+	router.Use(func(c *gin.Context) {
+		c.Set(middleware.ContextKeySub, "user-1")
+		c.Next()
+	})
 	router.POST("/query", handler.Query)
 
 	req := map[string]interface{}{

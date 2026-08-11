@@ -170,6 +170,21 @@ export const executionArtifactSchema = z.object({
 });
 export type ExecutionArtifact = z.infer<typeof executionArtifactSchema>;
 
+// ChatCitationSource is a retrieval provenance entry carried by the SSE done
+// payload (JSON field names are PascalCase: the backend serializes
+// domain.RAGSearchSource without tags). Each entry points at one chunk of a
+// source document the assistant grounded its answer on.
+export interface ChatCitationSource {
+  WorkspaceID?: string;
+  WorkspaceName?: string;
+  ChunkID?: string;
+  DocumentID?: string;
+  DocumentTitle?: string;
+  Snippet?: string;
+  Score?: number;
+  HasScore?: boolean;
+}
+
 export const chatMessageSchema = z
   .object({
     id: z.string().optional(),
@@ -189,6 +204,7 @@ export interface ChatMessage {
   steps?: ChatStep[];
   artifacts?: ExecutionArtifact[];
   interrupted?: boolean;
+  sources?: ChatCitationSource[];
   [key: string]: unknown;
 }
 
@@ -202,6 +218,7 @@ export interface AgentExecutionResult {
   output?: string;
   steps?: ChatStep[];
   artifacts?: ExecutionArtifact[];
+  sources?: ChatCitationSource[];
   error?: string;
   [key: string]: unknown;
 }

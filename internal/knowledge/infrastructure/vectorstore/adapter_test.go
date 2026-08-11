@@ -22,6 +22,9 @@ type stubStore struct {
 	countErr  error
 
 	collectionInfo storagemilvus.CollectionInfo
+	// lastExpression records the filter expression of the most recent
+	// SearchWithFilterStrict call for whitelist-propagation assertions.
+	lastExpression string
 }
 
 func (s *stubStore) CreateCollectionWithDim(context.Context, string, int) error { return s.createErr }
@@ -33,7 +36,8 @@ func (s *stubStore) DescribeCollection(context.Context, string) (storagemilvus.C
 	return s.collectionInfo, nil
 }
 
-func (s *stubStore) SearchWithFilterStrict(context.Context, string, []float32, int, string, ...string) ([]storagemilvus.SearchResult, error) {
+func (s *stubStore) SearchWithFilterStrict(_ context.Context, _ string, _ []float32, _ int, expression string, _ ...string) ([]storagemilvus.SearchResult, error) {
+	s.lastExpression = expression
 	return s.searchRes, s.searchErr
 }
 func (s *stubStore) Flush(context.Context, string) error            { return s.flushErr }
@@ -102,6 +106,33 @@ func TestAdapter_Search_emptyResults(t *testing.T) {
 	res, err := a.Search(context.Background(), "col", []float32{0.5}, 5)
 	require.NoError(t, err)
 	require.Empty(t, res)
+}
+
+func TestAdapter_SearchWithFilter_passesExpression(t *testing.T) {
+	s := &stubStore{searchRes: []storagemilvus.SearchResult{
+		{ID: "r1", Content: "hit", SourceDocument: "doc", ChunkIndex: 3, Score: 0.91},
+	}}
+	a := &Adapter{store: s}
+	res, err := a.SearchWithFilter(context.Background(), "col", []float32{0.5}, 5, `source_document in ["doc"]`)
+	require.NoError(t, err)
+	require.Len(t, res, 1)
+	require.Equal(t, "doc", res[0].SourceDocument)
+	require.Equal(t, `source_document in ["doc"]`, s.lastExpression)
+}
+
+func TestAdapter_SearchWithFilter_emptyExpression(t *testing.T) {
+	a := &Adapter{store: &stubStore{}}
+	res, err := a.SearchWithFilter(context.Background(), "col", []float32{0.5}, 5, "")
+	require.NoError(t, err)
+	require.Empty(t, res)
+}
+
+func TestAdapter_SearchWithFilter_storeFails(t *testing.T) {
+	s := &stubStore{searchErr: errors.New("search down")}
+	a := &Adapter{store: s}
+	res, err := a.SearchWithFilter(context.Background(), "col", []float32{0.5}, 5, "expr")
+	require.Nil(t, res)
+	require.ErrorContains(t, err, "search down")
 }
 
 func TestAdapter_Flush(t *testing.T) {

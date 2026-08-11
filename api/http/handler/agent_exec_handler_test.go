@@ -151,3 +151,40 @@ func TestExecuteAgentStreamReturnsJSONContractBeforeStreamStarts(t *testing.T) {
 		t.Fatalf("body = %q, want %q", response.Body.String(), wantBody)
 	}
 }
+
+func TestAgentExecutionDonePayloadSourcesSerializeAsArray(t *testing.T) {
+	// Without sources the payload must carry "sources":[] — never null — so
+	// the frontend can treat done.sources as a list during rolling upgrades.
+	result := &domain.AgentResult{AgentID: "a1", Output: "ok"}
+	done := agentExecutionDonePayload(result)
+	if !strings.Contains(string(done), `"sources":[]`) {
+		t.Fatalf("done payload must serialize empty sources as []: %s", done)
+	}
+	if strings.Contains(string(done), `"sources":null`) {
+		t.Fatalf("done payload must never serialize null sources: %s", done)
+	}
+
+	// With sources, fields serialize camelCase and Snippet rides along.
+	result.Sources = []domain.RAGSearchSource{{
+		WorkspaceID: "ws-1", WorkspaceName: "legal", ChunkID: "chunk-1",
+		DocumentID: "doc-1", DocumentTitle: "policy.pdf", Snippet: "must be short",
+	}}
+	done = agentExecutionDonePayload(result)
+	var decoded map[string]any
+	if err := json.Unmarshal(done, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	sources, ok := decoded["sources"].([]any)
+	if !ok || len(sources) != 1 {
+		t.Fatalf("sources = %#v, want 1 item", decoded["sources"])
+	}
+	first, ok := sources[0].(map[string]any)
+	if !ok {
+		t.Fatalf("source = %#v, want object", sources[0])
+	}
+	for _, key := range []string{"workspaceId", "workspaceName", "chunkId", "documentId", "documentTitle", "snippet"} {
+		if _, ok := first[key]; !ok {
+			t.Fatalf("source missing %q: %#v", key, first)
+		}
+	}
+}

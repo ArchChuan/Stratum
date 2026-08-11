@@ -47,6 +47,20 @@ func (r *recordingVectorStore) Search(ctx context.Context, collection string, ve
 	return r.MockVectorStore.Search(ctx, collection, vector, topK)
 }
 
+// SearchWithFilter records the same call sequence as Search — the RAG legs
+// search through SearchWithFilter after the viewer-whitelist fusion — so the
+// G7 fallback state machine assertions hold for both search paths.
+func (r *recordingVectorStore) SearchWithFilter(ctx context.Context, collection string, vector []float32, topK int, expression string) ([]knowledgeport.VectorSearchResult, error) {
+	r.searchCalls = append(r.searchCalls, collection)
+	if err, ok := r.searchFail[collection]; ok {
+		return nil, err
+	}
+	if out, ok := r.searchOut[collection]; ok {
+		return out, nil
+	}
+	return r.MockVectorStore.SearchWithFilter(ctx, collection, vector, topK, expression)
+}
+
 // G7 状态机测试：kb_<workspace>_<model> 命名 + legacy 回退先于 drift 分类。
 // newName 是带模型后缀的新集合名，legacyName 是升级前无后缀的存量名；
 // 当前模型 text-embedding-v3 → 1024 维。
@@ -63,6 +77,10 @@ func fallbackQueryReq() RAGQueryRequest {
 	return RAGQueryRequest{
 		Question: "q", TenantID: fallbackTenant, WorkspaceID: fallbackWSID,
 		EmbeddingModel: fallbackModel, Mode: "vector",
+		// D2 gate requires a viewer identity; wsRepo is unset in these tests,
+		// so visibility resolves unrestricted and the G7 fallback state machine
+		// is exercised without doc-level filtering.
+		ViewerID: "fallback-viewer",
 	}
 }
 

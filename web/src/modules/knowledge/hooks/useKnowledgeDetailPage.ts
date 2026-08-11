@@ -3,13 +3,20 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { knowledgeApi } from '../api/knowledge.api';
-import type { KnowledgeDocument, QueryResult, WorkspaceStats } from '../model/knowledge';
+import type {
+  DocAccessValues,
+  KnowledgeDocument,
+  QueryResult,
+  WorkspaceStats,
+} from '../model/knowledge';
 
 import { KNOWLEDGE_DEFAULT_TOP_K } from '@/constants';
-import { useAuth } from '@/modules/iam';
+import { tenantApi, useAuth, type Member } from '@/modules/iam';
 import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 const DOC_POLL_INTERVAL_MS = 5000;
+// 租户角色候选：成员列表去重 + 兜底常见角色（白名单按 tenant_role 文本匹配）
+const FALLBACK_ROLES = ['admin', 'owner', 'member'];
 
 interface ConfigValues {
   query_mode?: string;
@@ -45,6 +52,42 @@ export const useKnowledgeDetailPage = () => {
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [documentsLoading, setDocumentsLoading] = useState(false);
   const [deletingDocumentID, setDeletingDocumentID] = useState('');
+  // 系统内置知识库（platform-managed）完全豁免白名单机制：前端不暴露权限 UI
+  const [platformManaged, setPlatformManaged] = useState(false);
+  // 权限候选：全量租户成员 + 成员角色去重
+  const [userCandidates, setUserCandidates] = useState<Member[]>([]);
+  const [userCandidatesLoading, setUserCandidatesLoading] = useState(false);
+  const [roleCandidates, setRoleCandidates] = useState<string[]>(FALLBACK_ROLES);
+  // 文档访问权限弹窗（P0.8）
+  const [editOpen, setEditOpen] = useState(false);
+  const [editDoc, setEditDoc] = useState<KnowledgeDocument | null>(null);
+  const [accessLoading, setAccessLoading] = useState(false);
+  const [accessForm] = Form.useForm<DocAccessValues>();
+  // 文档原文预览（P1.4）
+  const [previewDoc, setPreviewDoc] = useState<KnowledgeDocument | null>(null);
+
+  // 加载权限候选（成员 + 角色），失败不阻塞页面
+  useEffect(() => {
+    let cancelled = false;
+    setUserCandidatesLoading(true);
+    tenantApi
+      .members(1, 1000)
+      .then((page) => {
+        if (cancelled) return;
+        setUserCandidates(page.members);
+        const roles = Array.from(new Set(page.members.map((m) => m.role).filter(Boolean)));
+        setRoleCandidates(roles.length > 0 ? roles : FALLBACK_ROLES);
+      })
+      .catch(() => {
+        if (!cancelled) setUserCandidates([]);
+      })
+      .finally(() => {
+        if (!cancelled) setUserCandidatesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const fetchDocuments = useCallback(async (): Promise<KnowledgeDocument[]> => {
     setDocumentsLoading(true);
@@ -65,6 +108,7 @@ export const useKnowledgeDetailPage = () => {
     try {
       const data = await knowledgeApi.stats(name);
       setStats(data);
+      setPlatformManaged(Boolean(data.is_platform_managed));
       const values: ConfigValues = {
         chunk_size: data.config?.chunk_size,
         chunk_overlap: data.config?.chunk_overlap,
@@ -182,13 +226,22 @@ export const useKnowledgeDetailPage = () => {
   );
 
   const handleUpload = useCallback(
-    async ({ file }: { file: File | Blob }) => {
+    async ({ file, allowedUserIDs, allowedRoleIDs }: {
+      file: File | Blob;
+      allowedUserIDs?: string[];
+      allowedRoleIDs?: string[];
+    }) => {
       const formData = new FormData();
       formData.append('workspace', name);
       formData.append('file', file);
       setUploadLoading(true);
       try {
-        const res = await knowledgeApi.ingest(formData);
+        // P0.8: 上传携带文档级白名单（platform-managed workspace 由后端忽略）
+        const res = await knowledgeApi.ingest({
+          formData,
+          allowedUserIDs,
+          allowedRoleIDs,
+        });
         // 202 means ingest is now running in background; refresh docs so
         // the new row appears in 'processing' state and the polling effect
         // above takes over from here.
@@ -257,6 +310,41 @@ export const useKnowledgeDetailPage = () => {
     [name, fetchDocuments, fetchStats],
   );
 
+  // 打开权限弹窗并预填当前白名单（member 收到的回显恒为空，弹窗仅 admin 可见）
+  const handleOpenAccess = useCallback((document: KnowledgeDocument) => {
+    setEditDoc(document);
+    setEditOpen(true);
+    accessForm.setFieldsValue({
+      allowedUserIDs: document.allowed_user_ids ?? [],
+      allowedRoleIDs: document.allowed_role_ids ?? [],
+    });
+  }, [accessForm]);
+
+  const handleSetDocAccess = useCallback(
+    async (values: DocAccessValues) => {
+      if (!editDoc) return;
+      const allowedUserIDs = values.allowedUserIDs ?? [];
+      const allowedRoleIDs = values.allowedRoleIDs ?? [];
+      setAccessLoading(true);
+      try {
+        await knowledgeApi.setDocAccess(name, editDoc.id, { allowedUserIDs, allowedRoleIDs });
+        message.success({ content: '访问权限已更新', duration: 2 });
+        setEditOpen(false);
+        await Promise.all([fetchDocuments(), fetchStats()]);
+      } catch (err) {
+        message.error({ content: extractErrorMessage(err) || '设置权限失败', duration: 0 });
+      } finally {
+        setAccessLoading(false);
+      }
+    },
+    [name, editDoc, fetchDocuments, fetchStats],
+  );
+
+  const handlePreviewDocument = useCallback((document: KnowledgeDocument) => {
+    // DocPreviewDrawer 自拉取预览内容，这里只记录目标
+    setPreviewDoc(document);
+  }, []);
+
   return {
     name,
     navigate,
@@ -279,5 +367,19 @@ export const useKnowledgeDetailPage = () => {
     deletingDocumentID,
     handleDeleteDocument,
     fetchDocuments,
+    platformManaged,
+    userCandidates,
+    userCandidatesLoading,
+    roleCandidates,
+    editOpen,
+    setEditOpen,
+    editDoc,
+    accessLoading,
+    accessForm,
+    handleOpenAccess,
+    handleSetDocAccess,
+    previewDoc,
+    setPreviewDoc,
+    handlePreviewDocument,
   };
 };

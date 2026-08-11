@@ -14,7 +14,7 @@ type mockRAGSearchProvider struct {
 	err error
 }
 
-func (m *mockRAGSearchProvider) SearchKnowledge(_ context.Context, _ string, _ []string, _ string, _ int) (string, error) {
+func (m *mockRAGSearchProvider) SearchKnowledge(_ context.Context, _ string, _ []string, _ string, _ int, _ string) (string, error) {
 	return m.out, m.err
 }
 
@@ -23,7 +23,7 @@ func TestRAGSearchProvider_InterfaceContract(t *testing.T) {
 
 	t.Run("returns context block on success", func(t *testing.T) {
 		m := &mockRAGSearchProvider{out: "chunk-1\nchunk-2"}
-		out, err := m.SearchKnowledge(context.Background(), "tenant-1", []string{"ws-a"}, "what is x", 5)
+		out, err := m.SearchKnowledge(context.Background(), "tenant-1", []string{"ws-a"}, "what is x", 5, "viewer-1")
 		assert.NoError(t, err)
 		assert.Equal(t, "chunk-1\nchunk-2", out)
 	})
@@ -31,7 +31,7 @@ func TestRAGSearchProvider_InterfaceContract(t *testing.T) {
 	t.Run("propagates error", func(t *testing.T) {
 		want := errors.New("vector backend down")
 		m := &mockRAGSearchProvider{err: want}
-		out, err := m.SearchKnowledge(context.Background(), "tenant-1", nil, "q", 0)
+		out, err := m.SearchKnowledge(context.Background(), "tenant-1", nil, "q", 0, "viewer-1")
 		assert.Equal(t, "", out)
 		assert.ErrorIs(t, err, want)
 	})

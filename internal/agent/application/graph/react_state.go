@@ -44,10 +44,17 @@ type ReActState struct {
 	TotalTokens                int
 	TotalCostUSD               float64
 	OnToken                    func(string) // if non-nil, stream tokens from the final LLM response
-	RAGSearchFn                func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
+	// ViewerID is the end user executing this session; it scopes every
+	// knowledge retrieval to the user's document whitelist.
+	ViewerID    string
+	RAGSearchFn func(ctx context.Context, workspaces []string, query string, topK int, viewerID string) (string, error)
 	// RAGSearchFnWithEvidence is the evidence-capable variant; the tool node
 	// prefers it over RAGSearchFn when set.
-	RAGSearchFnWithEvidence func(ctx context.Context, workspaces []string, query string, topK int) (port.RAGSearchEvidence, error)
+	RAGSearchFnWithEvidence func(ctx context.Context, workspaces []string, query string, topK int, viewerID string) (port.RAGSearchEvidence, error)
+	// CitationSources accumulate retrieval evidence across searches for the
+	// chat UI: deduplicated by chunk ID, capped at MaxAgentResultSources,
+	// newest search winning. Populated only by evidence-capable searches.
+	CitationSources []port.RAGSearchSource
 	// PromptVersions records the prompt key → content fingerprint map
 	// applied to this execution; startLLMTrace writes stratum.prompt.*
 	// attributes from it. nil means no version was resolved.

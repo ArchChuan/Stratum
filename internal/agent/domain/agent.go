@@ -361,9 +361,31 @@ type AgentResult struct {
 	// 降级后与配置模型不同）；ModelRoutedVia 是实际尝试过的模型链。
 	ModelResolved  string
 	ModelRoutedVia []string
+	// Sources are the citation sources surfaced in the chat UI, aggregated
+	// from retrieval evidence during execution (deduplicated by chunk ID,
+	// capped at constants.MaxAgentResultSources). Empty when no knowledge
+	// search ran or nothing matched.
+	Sources []RAGSearchSource
 	// TerminatedBy 记录业务终止原因（如 cost_budget）；空 = 正常完成。
 	// 业务终止仍返回已产出部分结果，不进入错误路径。
 	TerminatedBy string
+}
+
+// RAGSearchSource is per-chunk retrieval provenance for the chat UI. Score
+// is only meaningful when HasScore is true (vector retrieval); keyword-mode
+// results carry no score. DocumentTitle and Snippet are display metadata for
+// citations; the knowledge side has already applied the viewer's document
+// whitelist before emitting any source. JSON tags serialize the chat-source
+// payload (SSE done event) in camelCase.
+type RAGSearchSource struct {
+	WorkspaceID   string  `json:"workspaceId"`
+	WorkspaceName string  `json:"workspaceName"`
+	ChunkID       string  `json:"chunkId"`
+	DocumentID    string  `json:"documentId"`
+	DocumentTitle string  `json:"documentTitle"`
+	Snippet       string  `json:"snippet"`
+	Score         float64 `json:"score,omitempty"`
+	HasScore      bool    `json:"hasScore,omitempty"`
 }
 
 // AgentState tracks mutable execution progress during a single run.
