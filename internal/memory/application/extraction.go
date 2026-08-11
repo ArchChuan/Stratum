@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
@@ -199,7 +198,7 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 			return fmt.Errorf("embed text: %w", err)
 		}
 
-		collectionName := fmt.Sprintf("memory_facts_%s", strings.ReplaceAll(req.TenantID, "-", "_"))
+		collectionName := factsCollectionName(req.TenantID, embedder.Model())
 		// Phase 0: vector metadata 包含 category/confidence/source，不含敏感原文以外的新增字段
 		doc := &port.VectorDoc{
 			ID:        fact.ID,

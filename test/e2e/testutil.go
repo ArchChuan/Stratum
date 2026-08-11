@@ -229,6 +229,8 @@ func (m *mockEmbedClient) EmbedBatch(ctx context.Context, texts []string) ([][]f
 	return result, nil
 }
 
+func (m *mockEmbedClient) Model() string { return "text-embedding-v3" }
+
 // mockVectorStore stores vectors in memory for testing.
 type mockVectorStore struct {
 	docs map[string]*port.VectorDoc // collectionName_docID -> doc

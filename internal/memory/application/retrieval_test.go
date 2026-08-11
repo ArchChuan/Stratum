@@ -31,15 +31,17 @@ func TestRecallMemory_HybridRetrieval(t *testing.T) {
 	embedClient.On("Embed", ctx, "Python programming").
 		Return([]float32{0.1, 0.2, 0.3}, nil)
 
-	// Mock vector search (returns 2 docs)
+	// Mock vector search: 新名 collection 命中，legacy 名（升级前数据）为空
 	fact1, _ := domain.NewFact("", "user1", "agent1", "", "user", "Python is great", 0.8, []string{"Python"})
 	fact2, _ := domain.NewFact("", "user1", "agent1", "", "user", "Go is fast", 0.7, []string{"Go"})
 
-	vectorStore.On("Search", ctx, "memory_facts_tenant1", mock.Anything, 20, mock.Anything).
+	vectorStore.On("Search", ctx, "memory_facts_tenant1_text_embedding_v3", mock.Anything, 20, mock.Anything).
 		Return([]*port.VectorDoc{
 			{ID: fact1.ID, Similarity: 0.9},
 			{ID: fact2.ID, Similarity: 0.7},
 		}, nil)
+	vectorStore.On("Search", ctx, "memory_facts_tenant1", mock.Anything, 20, mock.Anything).
+		Return([]*port.VectorDoc{}, nil)
 
 	// Mock trigram search (returns 2 facts, 1 overlap)
 	fact3, _ := domain.NewFact("", "user1", "agent1", "", "user", "Python for ML", 0.75, []string{"Python"})
@@ -82,6 +84,9 @@ func TestRecallMemoryUsesScopeSafeVectorFilter(t *testing.T) {
 	svc := NewMemoryService(facts, nil, nil, vectors, nil, embed, nil, nil)
 
 	embed.On("Embed", ctx, "query").Return([]float32{1}, nil).Once()
+	vectors.On("Search", ctx, "memory_facts_tenant_1_text_embedding_v3", mock.Anything, 10,
+		port.VectorSearchFilter{UserID: "user-1", AgentID: "agent-1", IncludeUserScope: true, IncludeAgentScope: true}).
+		Return([]*port.VectorDoc{}, nil).Once()
 	vectors.On("Search", ctx, "memory_facts_tenant_1", mock.Anything, 10,
 		port.VectorSearchFilter{UserID: "user-1", AgentID: "agent-1", IncludeUserScope: true, IncludeAgentScope: true}).
 		Return([]*port.VectorDoc{}, nil).Once()
@@ -96,16 +101,16 @@ func TestRecallMemoryUsesScopeSafeVectorFilter(t *testing.T) {
 	facts.AssertExpectations(t)
 }
 
-func TestRecallMemoryFallsBackOnlyForVectorStoreUnavailable(t *testing.T) {
+// 双 collection 兜底后，任一 Search 错误都被容忍（collection 不存在 → 尝试下一个），
+// recall 永不因向量库失败而报错；错误只在 Embed 阶段向上传播。
+func TestRecallMemoryToleratesVectorSearchErrorsAndFallsBackToTrigram(t *testing.T) {
 	ctx := context.Background()
 	for _, tt := range []struct {
-		name        string
-		vectorErr   error
-		wantErr     bool
-		wantTrigram bool
+		name      string
+		vectorErr error
 	}{
-		{name: "unavailable", vectorErr: &port.VectorStoreUnavailableError{Err: errors.New("grpc unavailable")}, wantTrigram: true},
-		{name: "schema error", vectorErr: errors.New("schema mismatch"), wantErr: true},
+		{name: "unavailable", vectorErr: &port.VectorStoreUnavailableError{Err: errors.New("grpc unavailable")}},
+		{name: "schema error", vectorErr: errors.New("schema mismatch")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			facts := new(MockFactRepo)
@@ -113,18 +118,14 @@ func TestRecallMemoryFallsBackOnlyForVectorStoreUnavailable(t *testing.T) {
 			embed := new(MockEmbedClient)
 			svc := NewMemoryService(facts, nil, nil, vectors, nil, embed, nil, nil)
 			embed.On("Embed", ctx, "query").Return([]float32{1}, nil).Once()
+			vectors.On("Search", ctx, "memory_facts_tenant_text_embedding_v3", mock.Anything, 10, mock.Anything).
+				Return([]*port.VectorDoc(nil), tt.vectorErr).Once()
 			vectors.On("Search", ctx, "memory_facts_tenant", mock.Anything, 10, mock.Anything).
 				Return([]*port.VectorDoc(nil), tt.vectorErr).Once()
-			if tt.wantTrigram {
-				facts.On("SearchByContent", ctx, "tenant", mock.AnythingOfType("domain.ScopeFilter"), "query", 10).
-					Return([]*domain.MemoryFact{}, nil).Once()
-			}
+			facts.On("SearchByContent", ctx, "tenant", mock.AnythingOfType("domain.ScopeFilter"), "query", 10).
+				Return([]*domain.MemoryFact{}, nil).Once()
 			_, err := svc.RecallMemory(ctx, &RecallMemoryRequest{TenantID: "tenant", UserID: "user", Query: "query", TopK: 5})
-			if tt.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
+			assert.NoError(t, err)
 			facts.AssertExpectations(t)
 		})
 	}
@@ -171,6 +172,8 @@ func TestRecallMemory_EmptyResults(t *testing.T) {
 	embedClient.On("Embed", ctx, "nonexistent query").
 		Return([]float32{0.1, 0.2, 0.3}, nil)
 
+	vectorStore.On("Search", ctx, "memory_facts_tenant1_text_embedding_v3", mock.Anything, 20, mock.Anything).
+		Return([]*port.VectorDoc{}, nil)
 	vectorStore.On("Search", ctx, "memory_facts_tenant1", mock.Anything, 20, mock.Anything).
 		Return([]*port.VectorDoc{}, nil)
 

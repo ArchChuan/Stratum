@@ -425,6 +425,10 @@ func (m *MockEmbedClient) EmbedBatch(ctx context.Context, texts []string) ([][]f
 	return args.Get(0).([][]float32), args.Error(1)
 }
 
+// Model reports the fixed test model so collection names take the
+// model-suffixed form ("memory_facts_<tenant>_text_embedding_v3").
+func (m *MockEmbedClient) Model() string { return "text-embedding-v3" }
+
 func TestNewMemoryService(t *testing.T) {
 	factRepo := new(MockFactRepo)
 	entityRepo := new(MockEntityRepo)

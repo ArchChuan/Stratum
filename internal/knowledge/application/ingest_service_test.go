@@ -284,6 +284,8 @@ func (e *recordingEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]f
 
 func (e *recordingEmbedder) GetVectorDimension() int { return e.dim }
 
+func (e *recordingEmbedder) Model() string { return "text-embedding-v3" }
+
 func (e *recordingEmbedder) vectorCalls() int {
 	e.mu.Lock()
 	defer e.mu.Unlock()

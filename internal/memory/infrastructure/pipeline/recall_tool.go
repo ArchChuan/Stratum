@@ -168,20 +168,11 @@ func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID, a
 		expr = fmt.Sprintf(`user_id == "%s" && scope == "user"`, userID)
 	}
 
-	// Query both the raw-turn collection (Pipeline A: enrich→embed) and the
-	// extracted-facts collection (Pipeline B: extract→embed). They share the
-	// same Milvus schema and scope fields; fusing them here is the only place
-	// distilled fact vectors become reachable by semantic recall.
-	var merged []vector.SearchResult
-	for _, collection := range []string{memoryCollectionName(tenantID), memoryFactsCollectionName(tenantID)} {
-		results, err := h.vectorDB.SearchWithFilter(ctx, collection, vec, req.Limit*2, expr)
-		if err != nil {
-			h.logger.Debug("memory.recall: vector search failed for collection, skipping",
-				zap.String("collection", collection), zap.Error(err))
-			continue
-		}
-		merged = append(merged, results...)
-	}
+	// 候选集合 = 当前模型的新名 collection（raw + facts）∪ legacy 名（升级前
+	// 数据）。SearchWithFilter 对不存在的 collection 报错被跳过——天然实现
+	// legacy 回退与 dim mismatch 跳过（不 fail-closed）。
+	// embedSvc 已由上方 guard 保证非 nil；Model() 可能为空串 → legacy-only。
+	merged := h.searchAllCollections(ctx, recallCandidateCollections(tenantID, embedSvc.Model()), vec, req.Limit*2, expr)
 
 	// Sort by ascending L2 distance (smaller = more similar) so downstream RRF
 	// ranks the closest match across both collections first.
@@ -199,6 +190,36 @@ func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID, a
 		}
 	}
 	return entries
+}
+
+// recallCandidateCollections 返回查询候选：模型非空 → [新 raw, legacy raw,
+// 新 facts, legacy facts]（升级后数据在新名，升级前在 legacy 名）；模型未知
+// → 仅 legacy 对（空模型后缀的新名无意义且升级前数据都在旧名）。
+func recallCandidateCollections(tenantID, embedModel string) []string {
+	if embedModel == "" {
+		return []string{memoryCollectionLegacyName(tenantID), memoryFactsCollectionLegacyName(tenantID)}
+	}
+	return []string{
+		memoryCollectionName(tenantID, embedModel), memoryCollectionLegacyName(tenantID),
+		memoryFactsCollectionName(tenantID, embedModel), memoryFactsCollectionLegacyName(tenantID),
+	}
+}
+
+// searchAllCollections 对每个候选 collection 查询并合并结果；单个 collection
+// 查询失败（不存在/dim mismatch）记 Debug 后跳过，不 fail-closed——legacy 回退
+// 由"先新名后旧名"的顺序天然实现。
+func (h *RecallHandler) searchAllCollections(ctx context.Context, collections []string, vec []float32, limit int, expr string) []vector.SearchResult {
+	var merged []vector.SearchResult
+	for _, collection := range collections {
+		results, err := h.vectorDB.SearchWithFilter(ctx, collection, vec, limit, expr)
+		if err != nil {
+			h.logger.Debug("memory.recall: vector search failed for collection, skipping",
+				zap.String("collection", collection), zap.Error(err))
+			continue
+		}
+		merged = append(merged, results...)
+	}
+	return merged
 }
 
 func (h *RecallHandler) textSearchCandidates(ctx context.Context, tenantID, userID, agentID, scope string, req RecallRequest) ([]recallCandidate, error) {

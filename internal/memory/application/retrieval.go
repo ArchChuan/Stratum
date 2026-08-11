@@ -35,20 +35,18 @@ func (s *MemoryService) RecallMemory(ctx context.Context, req *RecallMemoryReque
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
 
-	// Step 2: Vector search (retrieve 2*topK candidates)
-	collectionName := fmt.Sprintf("memory_facts_%s", strings.ReplaceAll(req.TenantID, "-", "_"))
+	// Step 2: Vector search (retrieve 2*topK candidates) — 新名 collection 优先，
+	// 不存在（升级后未重建）时回退 legacy 名；无可用模型时直接 legacy 名。
+	model := s.currentEmbedModel(ctx, req.TenantID)
+	collections := []string{factsCollectionName(req.TenantID, model)}
+	if model != "" {
+		collections = append(collections, fmt.Sprintf("memory_facts_%s", strings.ReplaceAll(req.TenantID, "-", "_")))
+	}
 	filter := port.VectorSearchFilter{
 		UserID: req.UserID, AgentID: req.AgentID, IncludeUserScope: true, IncludeAgentScope: req.AgentID != "",
 	}
 
-	vectorDocs, err := s.vectorStore.Search(ctx, collectionName, queryVector, req.TopK*2, filter)
-	if err != nil {
-		var unavailable *port.VectorStoreUnavailableError
-		if !errors.As(err, &unavailable) {
-			return nil, fmt.Errorf("vector search: %w", err)
-		}
-		vectorDocs = nil
-	}
+	vectorDocs := s.vectorSearchCandidates(ctx, collections, queryVector, req.TopK*2, filter)
 
 	// Step 3: Trigram search (retrieve 2*topK candidates)
 	scopeFilter := domain.BuildScopeFilter(req.TenantID, req.UserID, req.AgentID, "user")
@@ -137,4 +135,26 @@ func (s *MemoryService) RecallMemory(ctx context.Context, req *RecallMemoryReque
 	}
 
 	return &RecallMemoryResponse{Facts: dtos}, nil
+}
+
+// vectorSearchCandidates 双名兜底：按 [新名, legacy] 顺序查询并合并结果。
+// 单个 collection 查询失败（不存在/维度不匹配）被容忍——collection 不存在时
+// 继续尝试下一个（legacy 回退）；错误只在 Embed 阶段向上传播。
+func (s *MemoryService) vectorSearchCandidates(ctx context.Context, collections []string, queryVector []float32, topK int, filter port.VectorSearchFilter) []*port.VectorDoc {
+	var vectorDocs []*port.VectorDoc
+	for _, collectionName := range collections {
+		if collectionName == "" {
+			continue
+		}
+		docs, err := s.vectorStore.Search(ctx, collectionName, queryVector, topK, filter)
+		if err != nil {
+			var unavailable *port.VectorStoreUnavailableError
+			if errors.As(err, &unavailable) {
+				vectorDocs = nil
+			}
+			continue // collection 不存在 → 尝试下一个（legacy 回退）
+		}
+		vectorDocs = append(vectorDocs, docs...)
+	}
+	return vectorDocs
 }

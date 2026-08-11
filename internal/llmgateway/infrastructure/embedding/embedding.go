@@ -95,3 +95,6 @@ func (e *EmbeddingService) EmbedBatch(ctx context.Context, texts []string) ([][]
 func (e *EmbeddingService) GetVectorDimension() int {
 	return constants.DimensionForModel(e.model)
 }
+
+// Model returns the embedding model name this service was built with.
+func (e *EmbeddingService) Model() string { return e.model }

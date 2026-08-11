@@ -15,7 +15,7 @@ import (
 
 // VectorStore abstracts vector database operations for the embedder.
 type VectorStore interface {
-	Upsert(ctx context.Context, tenantID string, userID string, id string, vector []float32, metadata map[string]any) error
+	Upsert(ctx context.Context, tenantID string, userID string, id string, model string, vector []float32, metadata map[string]any) error
 }
 
 // EmbedderWorker consumes from MEMORY_RAW stream, generates embeddings,
@@ -199,7 +199,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		}
 		return
 	}
-	if err := w.vectorDB.Upsert(ctx, ev.TenantID, ev.UserID, ev.MessageID, vector, metadata); err != nil {
+	if err := w.vectorDB.Upsert(ctx, ev.TenantID, ev.UserID, ev.MessageID, embedSvc.Model(), vector, metadata); err != nil {
 		w.logger.Error("memory.embed.milvus",
 			zap.String("trace_id", traceID),
 			zap.String("message_id", ev.MessageID),
