@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 
+	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 )
@@ -51,8 +52,10 @@ func ApplySkillAssignmentsForTest(catalog map[string]port.SkillActivation, assig
 	applySkillAssignments(catalog, assignments)
 }
 
-func DeriveMaxContextTokensForTest(s *AgentService, ctx context.Context, tenantID, model string) int {
-	return s.deriveMaxContextTokens(ctx, tenantID, model)
+func ResolveExecutionWindowForTest(
+	s *AgentService, ctx context.Context, tenantID, model string, explicit int,
+) (int, agentgraph.WindowSource) {
+	return s.resolveExecutionWindow(ctx, tenantID, model, explicit)
 }
 
 func CatalogFromActivationsForTest(activations []port.SkillActivation) map[string]port.SkillActivation {

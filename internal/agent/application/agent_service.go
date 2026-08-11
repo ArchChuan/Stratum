@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
@@ -45,30 +46,33 @@ type AgentServiceDeps struct {
 	TenantModelValidator      port.TenantChatModelValidator
 	TenantModelCatalog        port.TenantChatModelCatalog
 	ModelContextProvider      port.ModelContextProvider
-	HistoryCompactorFactory   func(port.CapabilityGateway, string, *zap.Logger, int) port.HistoryCompactor
-	MCPTools                  port.MCPToolProvider
-	MCPToolExecutor           port.MCPToolExecutor
-	MCPToolPolicy             port.MCPToolPolicyResolver
-	ToolAuthorizer            *ToolAuthorizer
-	ApprovalService           *ToolApprovalService
-	ChatStore                 ChatStore
-	EvidenceProvider          port.TraceEvidenceProvider
-	TracePayloadStore         port.TracePayloadStore
-	CheckpointStore           CheckpointStore
-	MemoryCleaner             port.AgentMemoryCleaner
-	MemoryBuffer              port.BufferMemoryFn
-	MemoryInjector            port.MemoryInjector
-	RecallMemory              port.RecallMemoryFn
-	Metrics                   observability.MetricsProvider
-	OfficialDocsSearch        func(context.Context, string) ([]domain.Citation, error)
-	DiagnosticProvider        port.DiagnosticEvidenceProvider
-	ProposalService           *ResourceChangeProposalService
-	ResourceChangeApplier     func(context.Context, string, map[string]any) (domain.ApplyResult, error)
-	ResourceEditorRepo        port.ResourceEditorRepo
-	OperationGate             port.OperationGate
-	TenantRoleResolver        port.TenantRoleResolver
-	ParametersProvider        port.ParametersProvider
-	Logger                    *zap.Logger
+	// VendorWindowLookup 解析内置厂商静态能力表（窗口 + 最大输出）。
+	// 由 wiring 注入 llmgateway.LookupModelSpec；nil 时回退链跳过 vendor 层。
+	VendorWindowLookup      func(string) (int, int)
+	HistoryCompactorFactory func(port.CapabilityGateway, string, *zap.Logger, int) port.HistoryCompactor
+	MCPTools                port.MCPToolProvider
+	MCPToolExecutor         port.MCPToolExecutor
+	MCPToolPolicy           port.MCPToolPolicyResolver
+	ToolAuthorizer          *ToolAuthorizer
+	ApprovalService         *ToolApprovalService
+	ChatStore               ChatStore
+	EvidenceProvider        port.TraceEvidenceProvider
+	TracePayloadStore       port.TracePayloadStore
+	CheckpointStore         CheckpointStore
+	MemoryCleaner           port.AgentMemoryCleaner
+	MemoryBuffer            port.BufferMemoryFn
+	MemoryInjector          port.MemoryInjector
+	RecallMemory            port.RecallMemoryFn
+	Metrics                 observability.MetricsProvider
+	OfficialDocsSearch      func(context.Context, string) ([]domain.Citation, error)
+	DiagnosticProvider      port.DiagnosticEvidenceProvider
+	ProposalService         *ResourceChangeProposalService
+	ResourceChangeApplier   func(context.Context, string, map[string]any) (domain.ApplyResult, error)
+	ResourceEditorRepo      port.ResourceEditorRepo
+	OperationGate           port.OperationGate
+	TenantRoleResolver      port.TenantRoleResolver
+	ParametersProvider      port.ParametersProvider
+	Logger                  *zap.Logger
 }
 
 // AgentService aggregates agent CRUD + Execute/ExecuteStream and shields
@@ -262,10 +266,6 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		return AgentDTO{}, err
 	}
 	id := uuid.Must(uuid.NewV7()).String()
-	maxCtxTokens := in.MaxContextTokens
-	if maxCtxTokens <= 0 {
-		maxCtxTokens = s.deriveMaxContextTokens(ctx, in.TenantID, in.LLMModel)
-	}
 	cfg := &domain.AgentConfig{
 		ID:                     id,
 		Name:                   in.Name,
@@ -274,7 +274,7 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		SystemPrompt:           in.SystemPrompt,
 		LLMModel:               in.LLMModel,
 		MaxIterations:          in.MaxIterations,
-		MaxContextTokens:       maxCtxTokens,
+		MaxContextTokens:       in.MaxContextTokens, // 0 = 未配置，执行时两阶段解析
 		Temperature:            in.Temperature,
 		MaxTokens:              in.MaxTokens,
 		CompactionRecentGroups: in.CompactionRecentGroups,
@@ -651,10 +651,6 @@ func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in Upda
 	if skills == nil {
 		skills = []string{}
 	}
-	maxCtxTokens := in.MaxContextTokens
-	if maxCtxTokens <= 0 {
-		maxCtxTokens = s.deriveMaxContextTokens(ctx, reqctx.TenantIDFromContext(ctx), in.LLMModel)
-	}
 	return &domain.AgentConfig{
 		ID:                     id,
 		Name:                   in.Name,
@@ -663,7 +659,7 @@ func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in Upda
 		SystemPrompt:           in.SystemPrompt,
 		LLMModel:               in.LLMModel,
 		MaxIterations:          in.MaxIterations,
-		MaxContextTokens:       maxCtxTokens,
+		MaxContextTokens:       in.MaxContextTokens, // 0 = 未配置，执行时两阶段解析
 		Temperature:            temperature,
 		MaxTokens:              maxTokens,
 		CompactionRecentGroups: recentGroups,
@@ -1515,7 +1511,16 @@ func catalogFromActivations(activations []port.SkillActivation) map[string]port.
 func (s *AgentService) assembleOptions(
 	ctx context.Context, a Agent, req ExecRequest, meta ExecMeta, executionID string,
 ) (context.Context, []ExecutionOption, error) {
-	options := []ExecutionOption{WithMaxSteps(a.GetConfig().MaxIterations)}
+	// 执行时两阶段解析窗口：MaxContextTokens 只存显式值（0 = 未配置），
+	// 解析结果随选项进入 agentExecContext 并回填 WindowSource 供 trace。
+	window, windowSrc := s.resolveExecutionWindow(
+		ctx, meta.TenantID, a.GetConfig().LLMModel, a.GetConfig().MaxContextTokens,
+	)
+	options := []ExecutionOption{
+		WithMaxSteps(a.GetConfig().MaxIterations),
+		WithMaxContextTokens(window),
+		WithWindowSource(string(windowSrc)),
+	}
 	if req.MaxSteps > 0 {
 		options = append(options, WithMaxSteps(req.MaxSteps))
 	}
@@ -1545,7 +1550,8 @@ func (s *AgentService) assembleOptions(
 				setter.SetCapGateway(capGW)
 			}
 			if s.deps.HistoryCompactorFactory != nil {
-				compactionMaxTokens := constants.DynamicCompactionMaxTokens(a.GetConfig().MaxContextTokens)
+				// 压缩输出预算基于执行时解析窗口，与 agentExecContext 同一来源。
+				compactionMaxTokens := constants.DynamicCompactionMaxTokens(window)
 				if compactor := s.deps.HistoryCompactorFactory(capGW, a.GetConfig().LLMModel, s.deps.Logger, compactionMaxTokens); compactor != nil {
 					type historyCompactorSetter interface {
 						SetHistoryCompactor(port.HistoryCompactor)
@@ -2285,21 +2291,25 @@ func executionIDOrNew(id string) string {
 	return id
 }
 
-// deriveMaxContextTokens returns a sensible MaxContextTokens for the given model.
-// User-explicit value always wins; when zero the method derives from the model's
-// known ContextWindow capped by DefaultAgentContextTokensCeiling; fallback is
-// DefaultAgentContextTokens.
-func (s *AgentService) deriveMaxContextTokens(ctx context.Context, tenantID, model string) int {
-	if model == "" || s.deps.ModelContextProvider == nil {
-		return constants.DefaultAgentContextTokens
+// resolveExecutionWindow 执行时解析 agent 窗口（Spec 第 1 节两阶段），
+// 替代 Create/Update 的一次性固化：管理员后补配置下次执行立即生效。
+// 返回 (解析窗口, 来源)；模型窗口来源为 vendor_table/fallback 时 WARN。
+func (s *AgentService) resolveExecutionWindow(
+	ctx context.Context,
+	tenantID, model string,
+	explicit int,
+) (int, agentgraph.WindowSource) {
+	modelWin, src := agentgraph.ResolveModelWindow(
+		ctx, tenantID, model, s.deps.ModelContextProvider, s.deps.VendorWindowLookup,
+	)
+	if modelWin > constants.MaxContextWindowTokens {
+		modelWin = constants.MaxContextWindowTokens
 	}
-	cw, err := s.deps.ModelContextProvider.GetChatModelContextWindow(ctx, tenantID, model)
-	if err != nil || cw <= 0 {
-		return constants.DefaultAgentContextTokens
+	window, agentSrc := agentgraph.ResolveAgentWindow(modelWin, explicit)
+	if src == agentgraph.WindowVendorTable || src == agentgraph.WindowFallback {
+		s.deps.Logger.Warn("agent: model window resolved from fallback source",
+			zap.String("model", model), zap.String("source", string(src)),
+			zap.Int("model_window", modelWin), zap.Int("window", window))
 	}
-	derived := int(float64(cw) * constants.DefaultContextWindowRatio)
-	if derived > constants.DefaultAgentContextTokensCeiling {
-		return constants.DefaultAgentContextTokensCeiling
-	}
-	return derived
+	return window, agentSrc
 }

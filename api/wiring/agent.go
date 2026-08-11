@@ -272,6 +272,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		TenantModelValidator:    tenantModelValidator(a.TenantResolver),
 		TenantModelCatalog:      tenantModelCatalog(a.TenantResolver),
 		ModelContextProvider:    modelContextProvider(a.TenantResolver),
+		VendorWindowLookup:      llmgateway.LookupModelSpec,
 		HistoryCompactorFactory: func(gw agentport.CapabilityGateway, model string, logger *zap.Logger, compactionMaxTokens int) agentport.HistoryCompactor {
 			return capgateway.NewLLMHistoryCompactor(gw, model, logger, compactionMaxTokens)
 		},

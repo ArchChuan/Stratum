@@ -50,6 +50,11 @@ type ExecutionConfig struct {
 	Timeout     time.Duration
 	Temperature float32
 	MaxTokens   int
+	// MaxContextTokens 是本次执行解析后的上下文窗口预算（0 = 未注入，
+	// 回退到 agent 配置显式值）。执行时由 AgentService 两阶段解析后注入。
+	MaxContextTokens int
+	// WindowSource 记录本次执行窗口解析来源（window_source trace 用）。
+	WindowSource string
 	// CompactionRecentGroups overrides in-loop compaction recent groups.
 	// 0 = auto-derive from MaxContextTokens.
 	CompactionRecentGroups int
@@ -298,6 +303,11 @@ func (a *BaseAgent) snapshotExecutionConfig(cfg *ExecutionConfig) agentExecSnaps
 	if cfg.CompactionSafetyRatio == 0 {
 		cfg.CompactionSafetyRatio = a.CompactionSafetyRatio
 	}
+	// 执行时解析的窗口（WithMaxContextTokens 注入）优先；
+	// 未注入时回退 agent 配置显式值（revision/直接执行等路径）。
+	if cfg.MaxContextTokens == 0 {
+		cfg.MaxContextTokens = a.MaxContextTokens
+	}
 	return agentExecSnapshot{
 		agentID:          a.ID,
 		agentName:        a.Name,
@@ -310,7 +320,7 @@ func (a *BaseAgent) snapshotExecutionConfig(cfg *ExecutionConfig) agentExecSnaps
 		metrics:          a.metrics,
 		workspaceNames:   a.KnowledgeWorkspaceNames,
 		workspaceDescs:   a.KnowledgeWorkspaceDescriptions,
-		maxContextTokens: a.MaxContextTokens,
+		maxContextTokens: cfg.MaxContextTokens,
 		memoryScope:      a.MemoryScope,
 	}
 }
@@ -1009,6 +1019,21 @@ func WithMaxTokens(maxTokens int) ExecutionOption {
 	}
 }
 
+// WithMaxContextTokens sets the resolved execution window budget.
+// 0 = unset, falls back to the agent config's explicit MaxContextTokens.
+func WithMaxContextTokens(maxContextTokens int) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.MaxContextTokens = maxContextTokens
+	}
+}
+
+// WithWindowSource records the window resolution source for trace attributes.
+func WithWindowSource(source string) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.WindowSource = source
+	}
+}
+
 // WithCompactionRecentGroups overrides in-loop compaction recent groups.
 // 0 = auto-derive from MaxContextTokens.
 func WithCompactionRecentGroups(recentGroups int) ExecutionOption {
@@ -1236,6 +1261,14 @@ func agentExecutionAttributes(agentID, agentName string, agentType AgentType, cf
 		attribute.String("opik.metadata.stratum.experiment_assignments", string(assignments)),
 		attribute.String("opik.metadata.stratum.resource_manifest", string(manifest)),
 		attribute.String("stratum.params.sha256", contentVersion(string(paramsJSON))),
+	}
+	// 窗口来源与解析值必须始终可观测（Spec 第 1 节），不随
+	// CaptureParameters 门控；WindowSource 为空（preparation span）时不记录。
+	if cfg.WindowSource != "" {
+		attrs = append(attrs,
+			attribute.String("stratum.window_source", cfg.WindowSource),
+			attribute.Int("stratum.window_tokens", maxContextTokens),
+		)
 	}
 	// Effective parameter values are privacy-gated by trace.capture_parameters;
 	// the fingerprint above is always recorded so runs remain comparable.

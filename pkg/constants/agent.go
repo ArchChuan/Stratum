@@ -41,13 +41,16 @@ const (
 	// leaving margin for the EstimateText heuristic error (<20%).
 	LoopCompactionSafetyRatio = 0.8
 
-	// DefaultAgentContextTokensCeiling caps auto-derived MaxContextTokens to avoid
-	// 128K+ models exhausting memory with full-window context budgets.
-	DefaultAgentContextTokensCeiling = 32768
-
 	// DefaultContextWindowRatio is the fraction of a model's context window
 	// used as the agent's MaxContextTokens when the user does not set one explicitly.
 	DefaultContextWindowRatio = 0.85
+
+	// MaxContextWindowTokens is the hard ceiling of a resolved window (Spec 第 1 节),
+	// replacing the model-independent DefaultAgentContextTokensCeiling(32768).
+	MaxContextWindowTokens = 1_048_576
+	// MinContextWindowTokens is the lower bound an explicit MaxContextTokens
+	// is clamped to when the model window is known.
+	MinContextWindowTokens = 2_000
 
 	// ---- adaptive compaction thresholds (Context Phase 3) ----
 
