@@ -94,8 +94,12 @@ data:
       `gmt_modified` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
       `tenant_id` varchar(128) DEFAULT '' COMMENT 'tenant field',
       `encrypted_data_key` text NOT NULL COMMENT 'encrypted_data_key',
+      `publish_type` varchar(50) DEFAULT 'formal' COMMENT 'publish type gray or formal',
+      `gray_name` varchar(128) DEFAULT NULL,
+      `ext_info` longtext DEFAULT NULL COMMENT 'ext info',
       PRIMARY KEY (`nid`),
       KEY `idx_gmt_create` (`gmt_create`),
+      KEY `idx_gmt_modified` (`gmt_modified`),
       KEY `idx_did` (`data_id`),
       KEY `idx_gid` (`group_id`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin COMMENT='多租户改造';
@@ -176,6 +180,21 @@ spec:
               done
               # 必须带 -h：无 -h 时 mysql 客户端走 localhost socket（Job pod 内无 mysqld），必失败
               # set -e 保证 mysql 失败即 Job Failed，暴露 schema 未灌入，而非 echo 兜底伪成功
+              # 存量表补列：MySQL 8 无 ADD COLUMN IF NOT EXISTS（MariaDB 语法），用 information_schema 判断后显式 ALTER。
+              # 2.5.1 的 his_config_info 新增 publish_type/gray_name/ext_info（灰度发布），旧表缺列会导致
+              # 配置发布 500 bad SQL grammar（INSERT 含 15 列）。CREATE TABLE IF NOT EXISTS 不碰存量表，必须走 ALTER。
+              add_col_if_missing() {
+                local table_name=$1 col_name=$2 col_ddl=$3
+                local cnt
+                cnt=$(mysql -h "$MYSQL_HOST" -uroot -p"$MYSQL_ROOT_PASSWORD" -N -e \
+                  "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='nacos' AND TABLE_NAME='$table_name' AND COLUMN_NAME='$col_name'")
+                if [ "$cnt" = "0" ]; then
+                  mysql -h "$MYSQL_HOST" -uroot -p"$MYSQL_ROOT_PASSWORD" nacos -e "ALTER TABLE $table_name $col_ddl"
+                fi
+              }
+              add_col_if_missing his_config_info publish_type "ADD COLUMN publish_type varchar(50) DEFAULT 'formal' COMMENT 'publish type gray or formal'"
+              add_col_if_missing his_config_info gray_name "ADD COLUMN gray_name varchar(128) DEFAULT NULL"
+              add_col_if_missing his_config_info ext_info "ADD COLUMN ext_info longtext DEFAULT NULL COMMENT 'ext info'"
               mysql -h "$MYSQL_HOST" -uroot -p"$MYSQL_ROOT_PASSWORD" nacos < /schema/mysql-schema.sql
               echo "nacos schema initialized"
           env:
