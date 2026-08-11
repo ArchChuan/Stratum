@@ -224,7 +224,7 @@ const executePack = async (
     return;
   }
   if (pack === 'llm-admin') {
-    completedActions.push(...await executeLLMAdminPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL, backendURL }));
+    completedActions.push(...await executeLLMAdminPack({ actor: actors.tenantAdmin, systemAdmin: actors.systemAdmin, pool, evidence, webURL, fixtureURL, backendURL }));
     return;
   }
   if (pack === 'operation-gate') {
