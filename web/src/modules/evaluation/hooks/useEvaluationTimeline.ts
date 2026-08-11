@@ -8,7 +8,7 @@ interface TimelineResource { resource_kind: ResourceKind; resource_id: string }
 export const useEvaluationTimeline = () => {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const generationRef = useRef(0);
   const resourceKeyRef = useRef('');

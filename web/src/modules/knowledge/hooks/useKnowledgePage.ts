@@ -28,7 +28,7 @@ interface CreateValues {
 
 export const useKnowledgePage = () => {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
   const [searchText, setSearchText] = useState('');

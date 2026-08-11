@@ -18,7 +18,7 @@ const { Title, Text } = Typography;
 export const TenantsListPage = () => {
   useAuth();
   const [tenants, setTenants] = useState<AdminTenant[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [deleteLoadingId, setDeleteLoadingId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);

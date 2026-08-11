@@ -8,7 +8,7 @@ import { extractErrorMessage } from '@/shared/lib';
 
 export function useModels() {
   const [models, setModels] = useState<Model[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   const fetch = useCallback(async () => {

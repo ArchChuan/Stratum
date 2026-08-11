@@ -32,7 +32,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 export const OperationProposalsPage = () => {
   const [proposals, setProposals] = useState<OperationProposal[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<OperationProposal | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [note, setNote] = useState('');
