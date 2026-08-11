@@ -875,8 +875,9 @@ func TestExecute_CompactionCooldownSuppressesPerStepSummary(t *testing.T) {
 		agent.WithConversationID("conv-abc"),
 		agent.WithUserID("user-1"),
 		agent.WithHistoryWindow(4),
-		// recentGroups=1 使中间段非空：默认 5 组时全部落入最近尾部，
-		// 循环内压缩只会截断、永远不会调用同步摘要（场景无效）。
+		// recentGroups=1 使中间段非空、压缩走同步摘要路径。压缩在默认消息形状下
+		// 确实触发（本测试 callCount==3 即证据）；早前草稿场景不触发的真实原因是
+		// 估算未过阈值，而非默认形状下压缩永不触发。
 		agent.WithCompactionRecentGroups(1),
 		agent.WithMaxContextTokens(30000),
 		agent.WithMaxSteps(10),
