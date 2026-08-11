@@ -61,32 +61,50 @@ func setupAuditHandlerRouter(q auditport.AuditQueryService) *gin.Engine {
 }
 
 func TestAuditHandler_ListEvents_EmptyResult(t *testing.T) {
-	q := &fakeAuditQueryService{
-		queryFn: func(_ context.Context, _ domain.AuditFilter) ([]domain.AuditEvent, error) {
-			return []domain.AuditEvent{}, nil
-		},
-		countFn: func(_ context.Context, _ domain.AuditFilter) (int, error) {
-			return 0, nil
-		},
+	// nil 是 PgAuditRepo.Query 无匹配行时的真实返回（GitHub #313：nil slice
+	// 序列化为 null，前端 zod schema 拒绝 null 导致"加载审计记录失败"）。
+	// 空 slice 与 nil 都必须归一化为 JSON 数组 []，不能输出 null。
+	cases := []struct {
+		name string
+		res  []domain.AuditEvent
+	}{
+		{name: "query returns nil", res: nil},
+		{name: "query returns empty slice", res: []domain.AuditEvent{}},
 	}
-	r := setupAuditHandlerRouter(q)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			q := &fakeAuditQueryService{
+				queryFn: func(_ context.Context, _ domain.AuditFilter) ([]domain.AuditEvent, error) {
+					return tc.res, nil
+				},
+				countFn: func(_ context.Context, _ domain.AuditFilter) (int, error) {
+					return 0, nil
+				},
+			}
+			r := setupAuditHandlerRouter(q)
 
-	req := httptest.NewRequest(http.MethodGet, "/audit/events", nil) //nolint:noctx
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+			req := httptest.NewRequest(http.MethodGet, "/audit/events", nil) //nolint:noctx
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
-	}
-	var body map[string]interface{}
-	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := body["events"]; !ok {
-		t.Error("missing events field")
-	}
-	if total, ok := body["total"].(float64); !ok || total != 0 {
-		t.Errorf("total=%#v, want 0", body["total"])
+			if w.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+			var body map[string]interface{}
+			if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			events, ok := body["events"].([]interface{})
+			if !ok {
+				t.Fatalf("events must be a JSON array, got %#v", body["events"])
+			}
+			if len(events) != 0 {
+				t.Errorf("expected 0 events, got %d", len(events))
+			}
+			if total, ok := body["total"].(float64); !ok || total != 0 {
+				t.Errorf("total=%#v, want 0", body["total"])
+			}
+		})
 	}
 }
 
