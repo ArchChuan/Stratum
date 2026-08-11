@@ -39,6 +39,66 @@ type EvalCase struct {
 	// parameters and the registered global rubric respectively. Persisted in
 	// the evaluator_config JSONB column (never written before Phase 3).
 	JudgeSpec *JudgeSpec `json:"judge_spec,omitempty"`
+	// Provenance fields link generated cases back to the production trace
+	// and feedback signal they were sampled from (Phase 3c). Populated only
+	// for LLM-generated cases; empty for hand-authored ones. Persisted in
+	// the evaluator_config JSONB column alongside JudgeSpec.
+	SourceTraceID  string `json:"source_trace_id,omitempty"`
+	FeedbackRef    string `json:"feedback_ref,omitempty"`
+	GenerateReason string `json:"generate_reason,omitempty"`
+}
+
+// EvalCaseConfig is the persisted payload of eval_cases.evaluator_config.
+// It wraps the judge spec and generation provenance in one JSONB column;
+// reading tolerates the pre-3c bare JudgeSpec layout for backward
+// compatibility.
+type EvalCaseConfig struct {
+	JudgeSpec  *JudgeSpec      `json:"judge_spec,omitempty"`
+	Generation *GenerationMeta `json:"generation,omitempty"`
+}
+
+// GenerationMeta is the provenance block of an LLM-generated eval case.
+type GenerationMeta struct {
+	SourceTraceID  string `json:"source_trace_id,omitempty"`
+	FeedbackRef    string `json:"feedback_ref,omitempty"`
+	GenerateReason string `json:"generate_reason,omitempty"`
+}
+
+// ToConfig packs the case's judge spec and provenance for persistence.
+func (c EvalCase) ToConfig() *EvalCaseConfig {
+	cfg := &EvalCaseConfig{JudgeSpec: c.JudgeSpec}
+	if c.SourceTraceID != "" || c.FeedbackRef != "" || c.GenerateReason != "" {
+		cfg.Generation = &GenerationMeta{
+			SourceTraceID: c.SourceTraceID, FeedbackRef: c.FeedbackRef, GenerateReason: c.GenerateReason,
+		}
+	}
+	if cfg.JudgeSpec == nil && cfg.Generation == nil {
+		return nil
+	}
+	return cfg
+}
+
+// ApplyConfig fills JudgeSpec and provenance from the persisted config,
+// accepting both the wrapped layout and the bare JudgeSpec written before
+// Phase 3c.
+func (c *EvalCase) ApplyConfig(raw []byte) {
+	if len(raw) == 0 {
+		return
+	}
+	var cfg EvalCaseConfig
+	if err := json.Unmarshal(raw, &cfg); err == nil && (cfg.JudgeSpec != nil || cfg.Generation != nil) {
+		c.JudgeSpec = cfg.JudgeSpec
+		if cfg.Generation != nil {
+			c.SourceTraceID = cfg.Generation.SourceTraceID
+			c.FeedbackRef = cfg.Generation.FeedbackRef
+			c.GenerateReason = cfg.Generation.GenerateReason
+		}
+		return
+	}
+	var spec JudgeSpec
+	if err := json.Unmarshal(raw, &spec); err == nil {
+		c.JudgeSpec = &spec
+	}
 }
 
 // JudgeSpec is the per-case LLM judge configuration.
@@ -216,6 +276,56 @@ type EvaluationFeedback struct {
 	Outcome        map[string]any `json:"outcome,omitempty"`
 	IdempotencyKey string         `json:"idempotency_key"`
 	CreatedAt      time.Time      `json:"created_at"`
+}
+
+// SamplePolicy controls how production (query, response) pairs are picked
+// for case generation: negative_first prioritises low-score / negative
+// feedback, balanced alternates between negative and non-negative samples.
+type SamplePolicy string
+
+const (
+	SamplePolicyNegativeFirst SamplePolicy = "negative_first"
+	SamplePolicyBalanced      SamplePolicy = "balanced"
+)
+
+// CaseSample is one sampled production interaction paired with its feedback
+// signal, ready to be turned into an eval case by the LLM generator.
+type CaseSample struct {
+	TraceID     string
+	FeedbackRef string
+	Score       *float64
+	Outcome     map[string]any
+	Query       string
+	Response    string
+}
+
+// GeneratedCase is the LLM generator's verdict for one sample. Valid cases
+// carry a full eval-case shape; invalid ones carry only Reason (generation
+// failure or quality-filter rejection) and never enter the draft.
+type GeneratedCase struct {
+	Name           string
+	Input          any
+	ExpectedOutput any
+	AssertionMode  AssertionMode
+	GenerateReason string
+	Valid          bool
+	Reason         string
+}
+
+// Validate checks a generated case against the assertion contract.
+func (g GeneratedCase) Validate() (string, bool) {
+	if !g.Valid {
+		return g.Reason, false
+	}
+	if g.Input == nil || g.ExpectedOutput == nil {
+		return "empty input or expected output", false
+	}
+	switch g.AssertionMode {
+	case AssertionExact, AssertionContains, AssertionRegex, AssertionJudge:
+	default:
+		return "unsupported assertion_mode " + string(g.AssertionMode), false
+	}
+	return "", true
 }
 
 type OnlineObservation struct {

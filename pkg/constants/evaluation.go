@@ -31,4 +31,16 @@ const (
 	// JSON object, so a fixed cap keeps judge cost bounded regardless of
 	// provider. The judge itself is gated by evaluation.judge.enabled.
 	JudgeMaxTokens = 1024
+
+	// CaseGenMaxTokens caps a single case-generator response: one eval case
+	// JSON object (name/input/expected_output/assertion_mode/reason).
+	CaseGenMaxTokens = 2048
+
+	// DefaultCaseSampleLimit bounds how many production samples one
+	// generation pass samples when the caller does not request more.
+	DefaultCaseSampleLimit = 20
+
+	// MaxCaseSampleLimit caps the caller-provided sample count so one
+	// request cannot fan out unbounded LLM calls.
+	MaxCaseSampleLimit = 50
 )

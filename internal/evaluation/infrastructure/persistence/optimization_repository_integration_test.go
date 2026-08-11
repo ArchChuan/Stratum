@@ -29,7 +29,6 @@ func TestPgOptimizationRepositoryIdempotencyRollbackAndTenantIsolation(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
 	const tenantID = "optimization_atomic_test"
 	const otherTenantID = "optimization_atomic_other"
 	for _, id := range []string{tenantID, otherTenantID} {
@@ -40,10 +39,15 @@ func TestPgOptimizationRepositoryIdempotencyRollbackAndTenantIsolation(t *testin
 			t.Fatal(err)
 		}
 	}
+	// pool.Close 必须在 DROP 之后执行:defer 先于 t.Cleanup,分开注册会让 DROP
+	// 拿到已关闭的 pool 而静默失败,残留 tenant schema 导致下次运行 duplicate key。
 	t.Cleanup(func() {
 		for _, id := range []string{tenantID, otherTenantID} {
-			_, _ = pool.Exec(context.Background(), fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, id))
+			if _, err := pool.Exec(context.Background(), fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, id)); err != nil {
+				t.Logf("cleanup tenant %s: %v", id, err)
+			}
 		}
+		pool.Close()
 	})
 	seedOptimizationDependencies(t, ctx, pool, tenantID)
 
@@ -112,7 +116,7 @@ func TestPgOptimizationRepositoryIdempotencyRollbackAndTenantIsolation(t *testin
 		GenerationMetadata: map[string]any{}, Instructions: "candidate",
 	}
 	err = repo.WithinTransaction(ctx, tenantID, func(txCtx context.Context) error {
-		if err := skillRepo.InsertCandidate(txCtx, orphan); err != nil {
+		if err := skillRepo.InsertCandidate(txCtx, orphan, nil); err != nil {
 			return err
 		}
 		_, err := repo.SaveJobWithCandidates(txCtx, tenantID,

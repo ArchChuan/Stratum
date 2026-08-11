@@ -716,6 +716,14 @@ ALTER TABLE chat_messages
 ALTER TABLE chat_messages DROP CONSTRAINT IF EXISTS chat_messages_visibility_check;
 ALTER TABLE chat_messages ADD CONSTRAINT chat_messages_visibility_check
     CHECK (visibility IN ('user', 'internal'));
+-- trace_id links chat messages back to the agent execution trace so the
+-- evaluation case generator can pair (query, response) with feedback
+-- signals (Phase 3c). Empty for manual messages; only newly written rows
+-- are backfillable (historical rows stay untraceable by design).
+ALTER TABLE chat_messages
+    ADD COLUMN IF NOT EXISTS trace_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_chat_msg_trace
+    ON chat_messages (trace_id) WHERE trace_id <> '';
 CREATE INDEX IF NOT EXISTS idx_chat_msg_conv
     ON chat_messages (conversation_id, created_at ASC);
 

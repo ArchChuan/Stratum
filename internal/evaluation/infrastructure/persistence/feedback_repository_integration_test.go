@@ -116,7 +116,12 @@ func feedbackRepositoryTestPool(t *testing.T, suffix string) (*pgxpool.Pool, con
 	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenantID)) })
+	t.Cleanup(func() {
+		if _, err := pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenantID)); err != nil {
+			t.Logf("cleanup tenant %s: %v", tenantID, err)
+		}
+		pool.Close()
+	})
 	return pool, ctx, tenantID
 }
 
@@ -130,13 +135,17 @@ func TestPgFeedbackRepositoryStageFeedbackReadsOnlyControlPlaneRows(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
 
 	tenantID := fmt.Sprintf("eval_feedback_repo_%d", time.Now().UnixNano())
 	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenantID)) })
+	t.Cleanup(func() {
+		if _, err := pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenantID)); err != nil {
+			t.Logf("cleanup tenant %s: %v", tenantID, err)
+		}
+		pool.Close()
+	})
 
 	schema := `"tenant_` + tenantID + `"`
 	if _, err := pool.Exec(ctx, `INSERT INTO `+schema+`.eval_suites (id, name) VALUES ('suite','suite');
@@ -187,13 +196,17 @@ func TestPgFeedbackRepositoryPersistsTraceExperimentAttribution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
 
 	tenantID := fmt.Sprintf("eval_feedback_attribution_%d", time.Now().UnixNano())
 	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenantID)) })
+	t.Cleanup(func() {
+		if _, err := pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenantID)); err != nil {
+			t.Logf("cleanup tenant %s: %v", tenantID, err)
+		}
+		pool.Close()
+	})
 
 	stored, err := NewPgFeedbackRepository(pool).Record(ctx, tenantID, domain.FeedbackRequest{
 		TraceID: "trace-1", ResourceKind: domain.ResourceKindAgent, ResourceID: "agent-1",
@@ -218,13 +231,17 @@ func TestPgFeedbackRepositoryObservationsExcludePreviousStageFeedback(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
 
 	tenantID := fmt.Sprintf("eval_feedback_stage_%d", time.Now().UnixNano())
 	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenantID)) })
+	t.Cleanup(func() {
+		if _, err := pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenantID)); err != nil {
+			t.Logf("cleanup tenant %s: %v", tenantID, err)
+		}
+		pool.Close()
+	})
 	schema := `"tenant_` + tenantID + `"`
 	if _, err := pool.Exec(ctx, `INSERT INTO `+schema+`.eval_suites (id, name) VALUES ('suite','suite');
 		INSERT INTO `+schema+`.eval_suite_revisions
@@ -260,13 +277,17 @@ func TestFeedbackHoldDecisionDoesNotResetStageObservationWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
 
 	tenantID := fmt.Sprintf("eval_feedback_hold_%d", time.Now().UnixNano())
 	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenantID)) })
+	t.Cleanup(func() {
+		if _, err := pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenantID)); err != nil {
+			t.Logf("cleanup tenant %s: %v", tenantID, err)
+		}
+		pool.Close()
+	})
 	schema := `"tenant_` + tenantID + `"`
 	if _, err := pool.Exec(ctx, `INSERT INTO `+schema+`.eval_suites (id, name) VALUES ('suite','suite');
 		INSERT INTO `+schema+`.eval_suite_revisions
@@ -334,13 +355,17 @@ func TestFeedbackAlternatingVariantsAccumulateAndAdvanceStage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
 
 	tenantID := fmt.Sprintf("eval_feedback_advance_%d", time.Now().UnixNano())
 	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenantID)) })
+	t.Cleanup(func() {
+		if _, err := pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenantID)); err != nil {
+			t.Logf("cleanup tenant %s: %v", tenantID, err)
+		}
+		pool.Close()
+	})
 	schema := `"tenant_` + tenantID + `"`
 	if _, err := pool.Exec(ctx, `INSERT INTO `+schema+`.eval_suites (id, name) VALUES ('suite','suite');
 		INSERT INTO `+schema+`.eval_suite_revisions

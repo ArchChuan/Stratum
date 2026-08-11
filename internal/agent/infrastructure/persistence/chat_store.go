@@ -199,10 +199,10 @@ func (s *PgChatStore) AddMessage(ctx context.Context, tenantID string, msg *doma
 			return err
 		}
 		if err := tx.QueryRow(ctx,
-			`INSERT INTO chat_messages (conversation_id, role, content, steps_json, is_error, artifacts_json, visibility)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7)
+			`INSERT INTO chat_messages (conversation_id, role, content, steps_json, is_error, artifacts_json, visibility, trace_id)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 			 RETURNING id, created_at`,
-			msg.ConversationID, msg.Role, msg.Content, string(msg.StepsJSON), msg.IsError, string(artifactsJSON), msg.Visibility,
+			msg.ConversationID, msg.Role, msg.Content, string(msg.StepsJSON), msg.IsError, string(artifactsJSON), msg.Visibility, msg.TraceID,
 		).Scan(&msg.ID, &msg.CreatedAt); err != nil {
 			return err
 		}
