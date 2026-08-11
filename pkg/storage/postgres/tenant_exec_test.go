@@ -233,3 +233,57 @@ func TestExecTenantFailsClosedWithoutTenantContext(t *testing.T) {
 		t.Fatalf("ExecTenant error = %v, want tenant_id is empty", err)
 	}
 }
+
+func TestExecTenantWithReusesNestedTransactionWithoutNewBegin(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	// Same rule as ExecTenant: a nested ExecTenantWith call must reuse the
+	// enclosing tenant transaction instead of beginning a new one. The mock
+	// pool stands in for the outer transaction on the context.
+	nested := context.WithValue(context.Background(), tenantTxKey{}, tenantTxContext{tenantID: "abc-1", tx: pool})
+
+	var gotTx pgx.Tx
+	err = ExecTenantWith(nested, pool, "abc-1", func(ctx context.Context, tx pgx.Tx) error {
+		gotTx = tx
+		current, ok := ctx.Value(tenantTxKey{}).(tenantTxContext)
+		if !ok || current.tx != tx {
+			t.Fatal("nested transaction key not preserved in callback context")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ExecTenantWith nested: %v", err)
+	}
+	if gotTx != pool {
+		t.Fatal("nested ExecTenantWith did not reuse the existing transaction")
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Fatalf("nested ExecTenantWith touched the pool: %v", err)
+	}
+}
+
+func TestExecTenantWithRejectsNestedTransactionForDifferentTenant(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	nested := context.WithValue(context.Background(), tenantTxKey{}, tenantTxContext{tenantID: "other-tenant", tx: pool})
+
+	called := false
+	err = ExecTenantWith(nested, pool, "abc-1", func(context.Context, pgx.Tx) error {
+		called = true
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "tenant transaction context mismatch") {
+		t.Fatalf("ExecTenantWith error = %v, want tenant transaction context mismatch", err)
+	}
+	if called {
+		t.Fatal("callback ran despite tenant transaction context mismatch")
+	}
+}

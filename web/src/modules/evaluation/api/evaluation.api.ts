@@ -5,6 +5,7 @@ import {
   evaluationJobSchema,
   evaluationRunSchema,
   experimentResponseSchema,
+  generateResultSchema,
   optimizationResponseSchema,
   suiteRevisionSchema,
   type EvaluationCase,
@@ -14,6 +15,7 @@ import {
   type ResourceRef,
   candidatePageSchema,
   centerOverviewSchema,
+  evaluationCaseSchema,
   evaluationCommandSchema,
   experimentPageSchema,
   resourcePageSchema,
@@ -22,7 +24,9 @@ import {
   timelinePageSchema,
   type EvaluationCenterFilters,
   type EvaluationCommand,
+  type GenerateResult,
   type ResourceKind,
+  type SuiteRevision,
   resourceRefSchema,
   candidateCommandResponseSchema,
   experimentCommandResponseSchema,
@@ -72,6 +76,27 @@ export const evaluationApi = {
   publishSuite: async (suiteId: string) => {
     const response = await api.post(`/evaluations/suites/${suiteId}/publish`);
     return suiteRevisionSchema.parse(response.data);
+  },
+  generateSuiteCases: async (suiteId: string, data: { samplePolicy: 'negative_first' | 'balanced'; maxCases?: number }): Promise<GenerateResult> => {
+    const { samplePolicy, maxCases } = data;
+    const response = await api.post(`/evaluations/suites/${suiteId}/generate`, {
+      sample_policy: samplePolicy,
+      max_cases: maxCases,
+    });
+    return generateResultSchema.parse(response.data);
+  },
+  getSuiteDraft: async (suiteId: string): Promise<SuiteRevision> => {
+    const response = await api.get(`/evaluations/suites/${suiteId}/draft`);
+    return suiteRevisionSchema.parse(response.data);
+  },
+  updateDraftCase: async (suiteId: string, caseId: string, data: {
+    name: string; input: unknown; expectedOutput: unknown; assertionMode: 'exact' | 'contains' | 'regex' | 'judge'; enabled: boolean;
+  }): Promise<EvaluationCase> => {
+    const { expectedOutput, assertionMode, ...body } = data;
+    const response = await api.put(`/evaluations/suites/${suiteId}/draft/cases/${caseId}`, {
+      ...body, expected_output: expectedOutput, assertion_mode: assertionMode,
+    });
+    return evaluationCaseSchema.parse(response.data);
   },
   enqueueRun: async (resource: ResourceRef, suiteRevisionId: string, idempotencyKey: string): Promise<EvaluationJob> => {
     const response = await api.post('/evaluations/runs', {

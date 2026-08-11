@@ -981,6 +981,7 @@ func (a *BaseAgent) persistChatMessages(ctx context.Context, tracer oteltrace.Tr
 		ConversationID: cfg.ConversationID, Role: "user", Content: input,
 		UserID: cfg.UserID, AgentID: agentID, MemoryScope: memoryScope,
 		SkipOutbox: false, Visibility: domain.ChatMessageVisibilityUser,
+		TraceID: cfg.TraceID,
 	}
 	_, saveUserSpan := tracer.Start(ctx, "agent.chat_store.save_user")
 	saveCtx1, saveCancel1 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
@@ -994,6 +995,7 @@ func (a *BaseAgent) persistChatMessages(ctx context.Context, tracer oteltrace.Tr
 		ConversationID: cfg.ConversationID, Role: "assistant", Content: result.Output,
 		UserID: cfg.UserID, AgentID: agentID, MemoryScope: memoryScope,
 		SkipOutbox: false, Visibility: domain.ChatMessageVisibilityUser, Artifacts: result.Artifacts,
+		TraceID: cfg.TraceID,
 	}
 	_, saveAgentSpan := tracer.Start(ctx, "agent.chat_store.save_assistant")
 	saveCtx2, saveCancel2 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
@@ -1011,6 +1013,7 @@ func (a *BaseAgent) persistChatMessages(ctx context.Context, tracer oteltrace.Tr
 		ConversationID: cfg.ConversationID, Role: "assistant", Content: summary,
 		UserID: cfg.UserID, AgentID: agentID, MemoryScope: memoryScope,
 		SkipOutbox: true, Visibility: domain.ChatMessageVisibilityInternal,
+		TraceID: cfg.TraceID,
 	}
 	_, saveSummarySpan := tracer.Start(ctx, "agent.chat_store.save_tool_summary")
 	saveCtx3, saveCancel3 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)

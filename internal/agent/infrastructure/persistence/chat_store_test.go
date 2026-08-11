@@ -166,6 +166,7 @@ func TestChatStore_AddMessage(t *testing.T) {
 		Content:        "hello",
 		StepsJSON:      steps,
 		IsError:        false,
+		TraceID:        "trace-1",
 	}
 
 	expectTenantTx(mock)
@@ -173,7 +174,7 @@ func TestChatStore_AddMessage(t *testing.T) {
 		WithArgs("conv-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectQuery("INSERT INTO chat_messages").
-		WithArgs("conv-1", "user", "hello", string(steps), false, "[]", "user").
+		WithArgs("conv-1", "user", "hello", string(steps), false, "[]", "user", "trace-1").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "created_at"}).AddRow("msg-uuid", now))
 	mock.ExpectCommit()
 
@@ -198,6 +199,7 @@ func TestChatStore_AddMessage_nilStepsDefaultsToEmpty(t *testing.T) {
 		Role:           "user",
 		Content:        "hi",
 		StepsJSON:      nil,
+		TraceID:        "trace-2",
 	}
 
 	expectTenantTx(mock)
@@ -205,7 +207,7 @@ func TestChatStore_AddMessage_nilStepsDefaultsToEmpty(t *testing.T) {
 		WithArgs("conv-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectQuery("INSERT INTO chat_messages").
-		WithArgs("conv-1", "user", "hi", "[]", false, "[]", "user").
+		WithArgs("conv-1", "user", "hi", "[]", false, "[]", "user", "trace-2").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "created_at"}).AddRow("msg-2", now))
 	mock.ExpectCommit()
 
@@ -259,7 +261,7 @@ func TestChatStore_ArtifactRoundTrip(t *testing.T) {
 	msg := &domain.ChatMessage{ConversationID: "conv-1", Role: "assistant", Content: "ok", Artifacts: artifacts}
 	expectTenantTx(mock)
 	mock.ExpectExec("UPDATE chat_conversations").WithArgs("conv-1").WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	mock.ExpectQuery("INSERT INTO chat_messages").WithArgs("conv-1", "assistant", "ok", "[]", false, string(raw), "user").
+	mock.ExpectQuery("INSERT INTO chat_messages").WithArgs("conv-1", "assistant", "ok", "[]", false, string(raw), "user", "").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "created_at"}).AddRow("m1", now))
 	mock.ExpectCommit()
 	if err := store.AddMessage(context.Background(), "t1", msg); err != nil {

@@ -155,9 +155,17 @@ func (p *Pool) ExecTenant(ctx context.Context, tenantID string, fn func(ctx cont
 
 // ExecTenantWith applies the shared tenant validation and transaction policy to
 // any pgx-compatible transaction beginner, including test doubles.
+// Nested calls reuse the enclosing tenant transaction (same rule as ExecTenant)
+// so composite operations like optimization's WithinTransaction stay atomic.
 func ExecTenantWith(ctx context.Context, pool tenantTxBeginner, tenantID string, fn func(ctx context.Context, tx pgx.Tx) error) error {
 	if tenantID == "" {
 		return fmt.Errorf("postgres: tenant_id is empty")
+	}
+	if current, ok := ctx.Value(tenantTxKey{}).(tenantTxContext); ok {
+		if current.tenantID != tenantID {
+			return fmt.Errorf("postgres: tenant transaction context mismatch")
+		}
+		return fn(ctx, current.tx)
 	}
 	return execTenantOnPool(ctx, pool, tenantID, fn)
 }

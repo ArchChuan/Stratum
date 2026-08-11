@@ -28,7 +28,6 @@ func TestPgRevisionRepositoryCreateDuplicateGetAndTenantIsolation(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
 
 	const tenantID = "revision_repo_test"
 	const otherTenantID = "revision_repo_other_test"
@@ -37,10 +36,15 @@ func TestPgRevisionRepositoryCreateDuplicateGetAndTenantIsolation(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
+	// pool.Close 必须在 DROP 之后执行:defer 先于 t.Cleanup,分开注册会让 DROP
+	// 拿到已关闭的 pool 而静默失败,残留 tenant schema 导致下次运行 duplicate key。
 	t.Cleanup(func() {
 		for _, id := range []string{tenantID, otherTenantID} {
-			_, _ = pool.Exec(context.Background(), fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, id))
+			if _, err := pool.Exec(context.Background(), fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, id)); err != nil {
+				t.Logf("cleanup tenant %s: %v", id, err)
+			}
 		}
+		pool.Close()
 	})
 
 	repo := NewPgRevisionRepository(pool)

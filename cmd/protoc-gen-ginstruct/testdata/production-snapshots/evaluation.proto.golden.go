@@ -66,3 +66,16 @@ type RecordEvaluationFeedbackRequest struct {
 	IdempotencyKey    string         `json:"idempotency_key" binding:"required,max=255"`
 	SecurityViolation bool           `json:"security_violation"`
 }
+
+type GenerateSuiteCasesRequest struct {
+	SamplePolicy string `json:"sample_policy" binding:"required,oneof=negative_first balanced"`
+	MaxCases     int32  `json:"max_cases" binding:"max=50"`
+}
+
+type UpdateDraftCaseRequest struct {
+	Name           string `json:"name" binding:"required,max=255"`
+	Input          any    `json:"input" binding:"required"`
+	ExpectedOutput any    `json:"expected_output" binding:"required"`
+	AssertionMode  string `json:"assertion_mode" binding:"required,oneof=exact contains regex"`
+	Enabled        *bool  `json:"enabled"`
+}
