@@ -1889,6 +1889,7 @@ func (s *AgentService) resolveEffectiveParameters(
 		"agent.compaction_recent_groups": cfg.CompactionRecentGroups,
 		"agent.compaction_safety_ratio":  cfg.CompactionSafetyRatio,
 		"agent.compaction_cooldown_sec":  cfg.CompactionCooldownSec,
+		"agent.max_tokens_per_execution": cfg.MaxTokensPerExecution,
 	}
 	effective, err := s.deps.ParametersProvider.ResolveForResource(ctx, declared)
 	if err != nil {
@@ -1909,6 +1910,9 @@ func (s *AgentService) resolveEffectiveParameters(
 	}
 	if v, ok := effective["agent.compaction_cooldown_sec"].(int64); ok {
 		options = append(options, WithCompactionCooldownSec(int(v)))
+	}
+	if v, ok := effective["agent.max_tokens_per_execution"].(int64); ok {
+		options = append(options, WithMaxTokensPerExecution(int(v)))
 	}
 	// Platform-scope execution toggles are resolved individually; they are
 	// not resource keys so ResolveForResource never returns them.

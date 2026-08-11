@@ -67,6 +67,9 @@ type ExecutionConfig struct {
 	// CompactionCooldownSec overrides the in-loop compaction cooldown window
 	// (seconds). 0 = default constant (constants.DefaultCompactionCooldown).
 	CompactionCooldownSec int
+	// MaxTokensPerExecution 是本次执行的累计 LLM token 预算（Spec 第 3 节，
+	// 与 Ledger 已记账 TotalTokens 对齐）。0 = 不设限。
+	MaxTokensPerExecution int
 	EnableTools           bool
 	AvailableTools        []string
 	Stream                bool
@@ -312,6 +315,9 @@ func (a *BaseAgent) snapshotExecutionConfig(cfg *ExecutionConfig) agentExecSnaps
 	}
 	if cfg.CompactionCooldownSec == 0 {
 		cfg.CompactionCooldownSec = a.CompactionCooldownSec
+	}
+	if cfg.MaxTokensPerExecution == 0 {
+		cfg.MaxTokensPerExecution = a.MaxTokensPerExecution
 	}
 	// 执行时解析的窗口（WithMaxContextTokens 注入）优先；
 	// 未注入时回退 agent 配置显式值（revision/直接执行等路径）。
@@ -622,6 +628,7 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 		oteltrace.WithAttributes(attribute.Int("max_steps", ec.cfg.MaxSteps)),
 	)
 	finalState, runErr := cg.Invoke(graphCtx, initState, runCfg)
+	recordTerminatedBy(reactSpan, finalState)
 	reactSpan.End()
 	if runErr == nil && a.CheckpointStore != nil {
 		markCtx, markCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
@@ -720,6 +727,7 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 		MaxParallel: initState.PlanLimits.MaxConcurrentNodes,
 		MergeWave:   agentgraph.MergeReActWave,
 	})
+	recordTerminatedBy(planSpan, finalState)
 	planSpan.End()
 	if runErr != nil {
 		return fmt.Errorf("planning: %w", runErr)
@@ -804,6 +812,9 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		InternalToolResultGuardFn:  ec.cfg.InternalToolResultGuardFn,
 		MaxLLMSteps:                ec.cfg.MaxSteps,
 		MaxContextTokens:           maxTokens,
+		// 成本预算：registry 参数 agent.max_tokens_per_execution 经
+		// WithMaxTokensPerExecution 覆盖，0 = 不设限（Spec 第 3 节）。
+		MaxTokensPerExecution: ec.cfg.MaxTokensPerExecution,
 		// Budget 账本快照：一次执行一个，初始组装与 ReAct 循环共享同一来源。
 		// 循环侧任务 = 最新用户消息，经 WithTask 从 HistoryCap 扣减（I3）。
 		Budget: agentgraph.ComputeBudget(maxTokens, ec.cfg.OutputReserve,
@@ -851,6 +862,14 @@ func (a *BaseAgent) buildPlanNodeExecutor(ec agentExecContext, capGW port.Capabi
 	}
 }
 
+// recordTerminatedBy 在循环 span 上记录业务终止原因（Spec 第 3 节）。
+// 终止标记在循环内产生，只有 Invoke 返回后才能写入；空值不写属性。
+func recordTerminatedBy(span oteltrace.Span, finalState agentgraph.ReActState) {
+	if finalState.TerminatedBy != "" {
+		span.SetAttributes(attribute.String("terminated_by", finalState.TerminatedBy))
+	}
+}
+
 func (a *BaseAgent) collectGraphResult(result *AgentResult, finalState agentgraph.ReActState, ec agentExecContext) {
 	result.Output = finalState.Output
 	result.Steps = finalState.Steps
@@ -861,6 +880,10 @@ func (a *BaseAgent) collectGraphResult(result *AgentResult, finalState agentgrap
 	result.ToolObservations = enrichToolObservations(finalState.ToolObservations, ec.cfg.TraceID, ec.cfg.ExecutionID, ec.cfg.ConversationID, ec.agentID, ec.cfg.UserID)
 	result.TraceEvents = enrichTraceEvents(finalState.TraceEvents, ec.cfg.TraceID, ec.cfg.ExecutionID, ec.cfg.ConversationID, ec.agentID, ec.cfg.UserID)
 	result.AssistantToolArtifacts = append([]domain.SystemAssistantToolArtifact(nil), finalState.AssistantToolArtifacts...)
+	// 业务终止（如成本预算超限）不是错误：终止原因透传，已产出部分保留。
+	if finalState.TerminatedBy == agentgraph.CostBudgetTerminated {
+		result.TerminatedBy = finalState.TerminatedBy
+	}
 }
 
 func (a *BaseAgent) appendFinalAnswerEvent(result *AgentResult, finalState agentgraph.ReActState, ec agentExecContext) {
@@ -1101,6 +1124,14 @@ func WithCompactionSafetyRatio(ratio float32) ExecutionOption {
 func WithCompactionCooldownSec(sec int) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.CompactionCooldownSec = sec
+	}
+}
+
+// WithMaxTokensPerExecution sets the execution-wide LLM token budget.
+// 0 = unlimited (gateway/provider default).
+func WithMaxTokensPerExecution(tokens int) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.MaxTokensPerExecution = tokens
 	}
 }
 

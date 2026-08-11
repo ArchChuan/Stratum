@@ -27,6 +27,9 @@ func BuildReActGraph(capGW port.CapabilityGateway, ledger TokenRecorder, logger 
 	g.AddNode(nodeLLM, makeLLMNode(capGW, ledger, logger))
 	g.AddNode(nodeTool, makeToolNode(capGW, logger))
 	g.AddConditionalEdge(nodeLLM, func(s ReActState) []string {
+		if s.TerminatedBy != "" {
+			return []string{END}
+		}
 		if len(s.Messages) == 0 {
 			return []string{END}
 		}
@@ -53,6 +56,12 @@ func BuildReActGraph(capGW port.CapabilityGateway, ledger TokenRecorder, logger 
 
 func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap.Logger) NodeFunc[ReActState] {
 	return func(ctx context.Context, s ReActState) (ReActState, error) {
+		// 已业务终止（如成本预算超限）：不再发起 LLM 调用，直接交给条件边
+		// END 收尾。否则 plan-finalize 等遗留路由会把终止态重新带回 LLM
+		// 节点，预算硬上限会被多一轮调用击穿（Spec 第 3 节）。
+		if s.TerminatedBy != "" {
+			return s, nil
+		}
 		start := time.Now()
 
 		tools, messages, _ := prepareLLMRequest(ctx, &s)
@@ -76,6 +85,11 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 		s.TotalCostUSD += cost
 		logLLMSuccess(logger, s, latencyMs, len(resp.ToolCalls) > 0)
 		appendLLMResponse(&s, resp, cost, latencyMs, start)
+		// 成本预算检查点：每次 LLM 调用后按 Ledger 累计（Spec 第 3 节）。
+		// 超限标记业务终止（非错误），已产出部分由 collectGraphResult 保留。
+		if budgetExceeded(s.TotalTokens, s.MaxTokensPerExecution) {
+			s.TerminatedBy = CostBudgetTerminated
+		}
 		return s, nil
 	}
 }

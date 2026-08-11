@@ -65,6 +65,11 @@ type ReActState struct {
 	// accumulated Messages exceed it, older tool-call/tool-result groups are compacted
 	// (summarized or dropped) before dispatch. Zero disables in-loop compaction.
 	MaxContextTokens int
+	// MaxTokensPerExecution 是本次执行的累计 LLM token 预算（0 = 不设限）。
+	// 图级每次 LLM 调用后累计检查，超限终止循环（Spec 第 3 节）。
+	MaxTokensPerExecution int
+	// TerminatedBy 标记业务终止原因（如 CostBudgetTerminated）；空 = 正常结束。
+	TerminatedBy string
 	// Budget 是本次执行的预算账本快照（Spec 第 2 节）：初始组装与 ReAct 循环
 	// 共享同一来源，一次执行一个。TaskHint 由 application 层 WithTask 登记
 	// （最新用户输入），已从 HistoryCap 扣减。零值 = 未初始化 → 循环内压缩

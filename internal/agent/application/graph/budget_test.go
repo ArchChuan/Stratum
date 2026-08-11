@@ -1,9 +1,13 @@
 package graph
 
 import (
+	"context"
 	"testing"
 
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 // TestComputeBudget 验证账本核心计算（Spec 第 2 节）：
@@ -169,4 +173,142 @@ func TestComputeBudget_HistoryIsolation(t *testing.T) {
 	if again := ComputeBudget(window, 0, 0.8); again.HistoryCap != base.HistoryCap {
 		t.Fatalf("HistoryCap 不稳定: %d vs %d", again.HistoryCap, base.HistoryCap)
 	}
+}
+
+// usageStubGateway 每次 LLM 调用按序返回预设响应（含 usage），记录调用次数，
+// 供成本预算检查点测试注入累计 token（Spec 第 3 节）。
+type usageStubGateway struct {
+	responses []port.CapabilityResponse
+	idx       int
+	llmCalls  int
+}
+
+func (s *usageStubGateway) Route(_ context.Context, req port.CapabilityRequest) (port.CapabilityResponse, error) {
+	if req.LLM != nil {
+		s.llmCalls++
+	}
+	if s.idx < len(s.responses) {
+		r := s.responses[s.idx]
+		s.idx++
+		return r, nil
+	}
+	return port.CapabilityResponse{}, nil
+}
+
+func guardedToolResult(content string) port.GuardedToolResult {
+	return port.GuardedToolResult{ModelContent: content, Summary: content, Untrusted: true}
+}
+
+// TestBudgetExceeded 验证超限判定：0 = 不设限永不超限；累计值 > 上限才超限
+// （等于上限不超）；负数上限按不设限处理。
+func TestBudgetExceeded(t *testing.T) {
+	cases := []struct {
+		name  string
+		total int
+		cap   int
+		want  bool
+	}{
+		{name: "zero cap is unlimited", total: 100000, cap: 0, want: false},
+		{name: "negative cap treated as unset", total: 100000, cap: -1, want: false},
+		{name: "under budget", total: 3999, cap: 4000, want: false},
+		{name: "at budget boundary is not exceeded", total: 4000, cap: 4000, want: false},
+		{name: "over budget", total: 4001, cap: 4000, want: true},
+		{name: "no tokens under budget", total: 0, cap: 4000, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := budgetExceeded(tc.total, tc.cap); got != tc.want {
+				t.Errorf("budgetExceeded(%d, %d) = %v, want %v", tc.total, tc.cap, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCostBudget_ExceededTerminates 验证单次 LLM 调用累计即超限时（Spec 第 3 节）：
+// 业务终止（TerminatedBy == CostBudgetTerminated）而非错误路径，返回已产出部分，
+// 且不再发起后续 LLM 调用。
+func TestCostBudget_ExceededTerminates(t *testing.T) {
+	stub := &usageStubGateway{responses: []port.CapabilityResponse{
+		{Content: "partial", Usage: port.TokenUsage{Total: 3000}},
+	}}
+	cg, err := BuildReActGraph(stub, NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+
+	out, err := cg.Invoke(context.Background(), ReActState{
+		Model:                 "qwen-turbo",
+		Messages:              []port.LLMMessage{{Role: "user", Content: "task"}},
+		MaxTokensPerExecution: 2000,
+	}, RunConfig[ReActState]{MaxSteps: 5})
+	require.NoError(t, err) // 业务终止非错误路径
+	require.Equal(t, CostBudgetTerminated, out.TerminatedBy)
+	require.Equal(t, "partial", out.Output) // 已产出部分结果返回
+	require.Equal(t, 3000, out.TotalTokens)
+	require.Equal(t, 1, stub.llmCalls) // 超限后循环终止，不再调用 LLM
+}
+
+// TestCostBudget_AccumulatedAcrossSteps 验证跨步累计：每次 LLM 调用后累加
+// TotalTokens，累计超限才终止；第二次调用已产出的内容保留为部分结果。
+func TestCostBudget_AccumulatedAcrossSteps(t *testing.T) {
+	stub := &usageStubGateway{responses: []port.CapabilityResponse{
+		{ToolCalls: []port.ToolCall{{ID: "c1", Name: "calc", Arguments: map[string]any{}}}, Usage: port.TokenUsage{Total: 2500}},
+		{Content: "final", Usage: port.TokenUsage{Total: 2500}},
+	}}
+	cg, err := BuildReActGraph(stub, NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+
+	out, err := cg.Invoke(context.Background(), ReActState{
+		Model:          "qwen-turbo",
+		Messages:       []port.LLMMessage{{Role: "user", Content: "go"}},
+		AvailableTools: []port.ToolDefinition{{Name: "calc", ProviderType: "mcp", ServerID: "test", Metadata: map[string]any{"risk_level": "read"}}},
+		ToolExecutionFn: func(context.Context, port.ToolExecutionRequest) (any, error) {
+			return guardedToolResult("ok"), nil
+		},
+		MaxTokensPerExecution: 4000,
+	}, RunConfig[ReActState]{MaxSteps: 10})
+	require.NoError(t, err)
+	require.Equal(t, CostBudgetTerminated, out.TerminatedBy)
+	require.Equal(t, "final", out.Output) // 第二次已产出内容作为部分结果保留
+	require.Equal(t, 5000, out.TotalTokens)
+	require.Equal(t, 2, stub.llmCalls) // 第二次累计超限后终止
+}
+
+// TestCostBudget_ZeroMeansUnlimited 验证 0 = 不设限：高消耗执行照常跑完
+// 最终回答，不触发终止。
+func TestCostBudget_ZeroMeansUnlimited(t *testing.T) {
+	stub := &usageStubGateway{responses: []port.CapabilityResponse{
+		{ToolCalls: []port.ToolCall{{ID: "c1", Name: "calc", Arguments: map[string]any{}}}, Usage: port.TokenUsage{Total: 5000}},
+		{Content: "done", Usage: port.TokenUsage{Total: 5000}},
+	}}
+	cg, err := BuildReActGraph(stub, NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+
+	out, err := cg.Invoke(context.Background(), ReActState{
+		Model:          "qwen-turbo",
+		Messages:       []port.LLMMessage{{Role: "user", Content: "go"}},
+		AvailableTools: []port.ToolDefinition{{Name: "calc", ProviderType: "mcp", ServerID: "test", Metadata: map[string]any{"risk_level": "read"}}},
+		ToolExecutionFn: func(context.Context, port.ToolExecutionRequest) (any, error) {
+			return guardedToolResult("ok"), nil
+		},
+	}, RunConfig[ReActState]{MaxSteps: 10})
+	require.NoError(t, err)
+	require.Empty(t, out.TerminatedBy)
+	require.Equal(t, 10000, out.TotalTokens)
+	require.Equal(t, "done", out.Output)
+}
+
+// TestCostBudget_TerminatedStateRoutesToEnd 验证条件边（Spec 第 3 节）：
+// TerminatedBy 非空时 LLM 节点直接放行、路由 END，不再发起 LLM 调用。
+func TestCostBudget_TerminatedStateRoutesToEnd(t *testing.T) {
+	stub := &usageStubGateway{}
+	cg, err := BuildReActGraph(stub, NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+
+	out, err := cg.Invoke(context.Background(), ReActState{
+		Model:        "qwen-turbo",
+		Messages:     []port.LLMMessage{{Role: "user", Content: "hi"}},
+		TerminatedBy: CostBudgetTerminated,
+	}, RunConfig[ReActState]{MaxSteps: 5})
+	require.NoError(t, err)
+	require.Equal(t, CostBudgetTerminated, out.TerminatedBy)
+	require.Zero(t, stub.llmCalls) // 终止态直接 END，零 LLM 调用
 }

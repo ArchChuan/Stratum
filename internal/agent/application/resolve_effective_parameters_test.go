@@ -67,6 +67,7 @@ func TestResolveEffectiveParametersMergesPlatformDefaultsWhenResourceUnset(t *te
 			"agent.max_tokens":               int64(2048),
 			"agent.compaction_recent_groups": int64(3),
 			"agent.compaction_safety_ratio":  0.6,
+			"agent.max_tokens_per_execution": int64(50000),
 		}},
 		Logger: zap.NewNop(),
 	})
@@ -86,6 +87,9 @@ func TestResolveEffectiveParametersMergesPlatformDefaultsWhenResourceUnset(t *te
 	if cfg.CompactionSafetyRatio != 0.6 {
 		t.Errorf("CompactionSafetyRatio = %v, want 0.6", cfg.CompactionSafetyRatio)
 	}
+	if cfg.MaxTokensPerExecution != 50000 {
+		t.Errorf("MaxTokensPerExecution = %d, want 50000 (platform default, resource unset)", cfg.MaxTokensPerExecution)
+	}
 }
 
 func TestResolveEffectiveParametersResourceValueWinsOverPlatformDefault(t *testing.T) {
@@ -93,12 +97,13 @@ func TestResolveEffectiveParametersResourceValueWinsOverPlatformDefault(t *testi
 	// resolveEffectiveParameters 把 declared 层的值透传到 option)。
 	svc := NewAgentService(AgentServiceDeps{
 		ParametersProvider: stubParametersProvider{effective: map[string]any{
-			"agent.temperature": 1.2,
-			"agent.max_tokens":  int64(4096),
+			"agent.temperature":              1.2,
+			"agent.max_tokens":               int64(4096),
+			"agent.max_tokens_per_execution": int64(60000),
 		}},
 		Logger: zap.NewNop(),
 	})
-	agent := &testParamAgent{cfg: &domain.AgentConfig{Temperature: 1.2, MaxTokens: 4096}}
+	agent := &testParamAgent{cfg: &domain.AgentConfig{Temperature: 1.2, MaxTokens: 4096, MaxTokensPerExecution: 60000}}
 
 	cfg := applyOptions(svc.resolveEffectiveParameters(context.Background(), agent, nil))
 
@@ -107,6 +112,9 @@ func TestResolveEffectiveParametersResourceValueWinsOverPlatformDefault(t *testi
 	}
 	if cfg.MaxTokens != 4096 {
 		t.Errorf("MaxTokens = %d, want 4096", cfg.MaxTokens)
+	}
+	if cfg.MaxTokensPerExecution != 60000 {
+		t.Errorf("MaxTokensPerExecution = %d, want 60000 (resource-declared)", cfg.MaxTokensPerExecution)
 	}
 }
 

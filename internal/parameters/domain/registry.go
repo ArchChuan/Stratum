@@ -191,6 +191,13 @@ func (r *ParametersRegistry) registerAgentParams() {
 			Optimizable: false,
 		},
 		{
+			Key: "agent.max_tokens_per_execution", Scope: ScopeResource, Category: "agent",
+			DisplayName: "单次执行 Token 预算", Description: "本次执行累计 LLM token 上限,0 表示不设限",
+			ValueType: TypeInt, Default: int64(0),
+			VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(2000000), Step: f(10000), Unit: "tokens"},
+			Optimizable: false,
+		},
+		{
 			Key: "agent.bindings", Scope: ScopeResource, Category: "agent",
 			DisplayName: "绑定", Description: "agent 绑定关系(复杂结构,由 evaluation adapter 校验,仅登记兼容)",
 			ValueType: TypeString, Default: nil,
