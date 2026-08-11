@@ -11,7 +11,17 @@ interface AppProvidersProps {
 }
 
 export const AppProviders = ({ children }: AppProvidersProps) => (
-  <ConfigProvider locale={zhCN}>
+  <ConfigProvider
+    locale={zhCN}
+    theme={{
+      token: {
+        // 主题 token 骨架：控件圆角 8、卡片圆角 12（AntD borderRadiusLG）、主色统一为 AntD default blue
+        colorPrimary: '#1677ff',
+        borderRadius: 8,
+        borderRadiusLG: 12,
+      },
+    }}
+  >
     <BrowserRouter>
       <AuthProvider>
         <ChatStreamProvider>{children}</ChatStreamProvider>
