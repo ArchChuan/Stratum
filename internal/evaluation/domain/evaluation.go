@@ -69,6 +69,22 @@ type EvalCaseResult struct {
 	CostUSD       float64                `json:"cost_usd"`
 	DurationMs    int                    `json:"duration_ms"`
 	TraceEvidence *ObservedTraceEvidence `json:"trace_evidence,omitempty"`
+	// RAGEvidence carries structured retrieval metrics for knowledge
+	// evaluations; nil for other resource kinds. It replaces brittle parsing
+	// of the serialized Actual payload.
+	RAGEvidence *RAGEvidenceInfo `json:"rag_evidence,omitempty"`
+}
+
+// RAGEvidenceInfo is the per-case retrieval signal for knowledge runs. The
+// K-suffixed metrics use the rank window of knowledge/application.RetrievalK
+// (constants.DefaultRAGTopK); retrieved IDs are ordered as returned.
+type RAGEvidenceInfo struct {
+	RetrievedDocumentIDs []string `json:"retrieved_document_ids,omitempty"`
+	RelevantDocumentIDs  []string `json:"relevant_document_ids,omitempty"`
+	RecallAtK            float64  `json:"recall_at_k,omitempty"`
+	PrecisionAtK         float64  `json:"precision_at_k,omitempty"`
+	MRR                  float64  `json:"mrr,omitempty"`
+	NDCGAtK              float64  `json:"ndcg_at_k,omitempty"`
 }
 
 // ObservedTraceEvidence carries trace-level observability signals resolved

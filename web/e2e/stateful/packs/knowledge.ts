@@ -44,7 +44,7 @@ export const executeKnowledgePack = async ({ actor, pool, evidence, webURL, fixt
     await expect(page).toHaveURL(`${webURL}/knowledge/${workspace}`);
     await expect(page.getByRole('heading', { name: workspace })).toBeVisible();
 
-    const topKInput = page.getByLabel('Top-K');
+    const topKInput = page.getByLabel('Top-K', { exact: true });
     await expect(topKInput).toHaveValue('5');
     await topKInput.fill('6');
     await expect(topKInput).toHaveValue('6');

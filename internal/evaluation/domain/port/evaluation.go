@@ -32,6 +32,9 @@ type ExecutionResult struct {
 	Tokens     int
 	CostUSD    float64
 	DurationMs int
+	// RAGEvidence carries per-case retrieval metrics for knowledge
+	// evaluations; nil for other resource kinds.
+	RAGEvidence *domain.RAGEvidenceInfo
 }
 
 type ResourceAdapter interface {

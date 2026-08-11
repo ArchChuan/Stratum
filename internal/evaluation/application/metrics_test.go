@@ -1,6 +1,7 @@
 package application
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -86,5 +87,36 @@ func TestAggregateRunMetrics(t *testing.T) {
 		require.Equal(t, float64(100), metrics["avg_tokens_per_case"])
 		require.InDelta(t, (10.0+20.0+100.0)/3.0, metrics["avg_latency_ms"], 1e-9)
 		require.Equal(t, float64(100), metrics["p95_latency_ms"])
+	})
+
+	t.Run("rag evidence aggregated over evidence cases only", func(t *testing.T) {
+		evidence := func(retrieved, relevant []string, precision, mrr, ndcg float64) *domain.RAGEvidenceInfo {
+			return &domain.RAGEvidenceInfo{
+				RetrievedDocumentIDs: retrieved,
+				RelevantDocumentIDs:  relevant,
+				RecallAtK:            1,
+				PrecisionAtK:         precision,
+				MRR:                  mrr,
+				NDCGAtK:              ndcg,
+			}
+		}
+		withEvidence := pass(true, 10, 0, 0)
+		withEvidence.RAGEvidence = evidence([]string{"a", "b", "x"}, []string{"a"}, 1.0/3.0, 1, 1)
+		withEvidence2 := pass(true, 10, 0, 0)
+		withEvidence2.RAGEvidence = evidence([]string{"x", "a"}, []string{"a"}, 0.5, 0.5, 1.0/math.Log2(3))
+		withoutEvidence := pass(false, 5, 0, 0)
+
+		metrics := aggregateRunMetrics(mkRun([]domain.EvalCaseResult{withEvidence, withEvidence2, withoutEvidence}))
+		require.InDelta(t, 1.0, metrics["avg_recall_at_5"], 1e-9)
+		require.InDelta(t, (1.0/3.0+1.0/2.0)/2.0, metrics["avg_precision_at_5"], 1e-9)
+		require.InDelta(t, 0.75, metrics["avg_mrr"], 1e-9)
+		require.InDelta(t, (1+1.0/math.Log2(3))/2.0, metrics["avg_ndcg_at_5"], 1e-9)
+		require.Equal(t, float64(2), metrics["rag_case_count"])
+	})
+
+	t.Run("no rag evidence omits rag metrics", func(t *testing.T) {
+		metrics := aggregateRunMetrics(mkRun([]domain.EvalCaseResult{pass(true, 10, 0, 10)}))
+		require.NotContains(t, metrics, "avg_recall_at_5")
+		require.NotContains(t, metrics, "rag_case_count")
 	})
 }

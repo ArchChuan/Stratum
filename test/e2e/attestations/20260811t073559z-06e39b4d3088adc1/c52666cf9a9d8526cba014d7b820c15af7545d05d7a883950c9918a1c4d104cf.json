@@ -1,0 +1,88 @@
+{
+  "schema_version": 2,
+  "source_digest": "c52666cf9a9d8526cba014d7b820c15af7545d05d7a883950c9918a1c4d104cf",
+  "manifest_digest": "a799b5d03962e89b1c4bdb6422a37f2eadea7410e464cdcc0d94a87f825c03a1",
+  "policy_manifest_digest": "6665d1ccc906cadbd70bcd863261cf8562f58c87aa05a85588c8f4408cc82f0c",
+  "tested_git_parent": "38dea427876dc9adf64c4b564bdd24003bfb61c6",
+  "browser": {
+    "name": "chromium",
+    "version": "149.0.7827.55"
+  },
+  "mode": "short",
+  "seed": 1,
+  "started_at": "2026-08-11T07:36:05.213Z",
+  "duration_seconds": 14,
+  "host_class": "developer",
+  "packs": [
+    {
+      "id": "llm-admin",
+      "status": "passed"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "llm-admin.mutation.delete.admin.providers.id",
+      "status": "passed"
+    },
+    {
+      "id": "llm-admin.mutation.patch.admin.models.id.toggle",
+      "status": "passed"
+    },
+    {
+      "id": "llm-admin.mutation.post.admin.providers",
+      "status": "passed"
+    },
+    {
+      "id": "llm-admin.mutation.post.admin.providers.id.discover",
+      "status": "passed"
+    },
+    {
+      "id": "llm-admin.mutation.put.admin.models.id",
+      "status": "passed"
+    },
+    {
+      "id": "llm-admin.mutation.put.admin.providers.id",
+      "status": "passed"
+    },
+    {
+      "id": "llm-admin.route.admin.settings",
+      "status": "passed"
+    },
+    {
+      "id": "llm-admin.route.models",
+      "status": "passed"
+    }
+  ],
+  "action_count": 8,
+  "sequence_digest": "942328abffe2397bc0ad1ec9be782c4789831ecbc06799364fba9a49b18ddbc9",
+  "evidence": {
+    "ui": 7,
+    "http": 7,
+    "database": 7,
+    "reconciled": 8
+  },
+  "artifacts": [],
+  "cleanup": {
+    "passed": true,
+    "residual_entity_ids": []
+  },
+  "unverified_capabilities": [],
+  "risk_classification": "short",
+  "status": "passed",
+  "run_topology": {
+    "run_id": "20260811t073559z-06e39b4d3088adc1",
+    "host": "127.0.0.1",
+    "ports": {
+      "backend": 38587,
+      "fixture": 39477,
+      "frontend": 35517,
+      "oauth": 41859
+    },
+    "database_name": "stratum_e2e_20260811t073559z_06e39b4d3088adc1"
+  },
+  "owned_cleanup": {
+    "database_dropped": true,
+    "lease_removed": true
+  },
+  "expires_at": "2026-08-14T07:36:27.523949066Z"
+}

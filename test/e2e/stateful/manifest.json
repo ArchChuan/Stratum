@@ -2444,7 +2444,7 @@
       "route": "/admin/settings",
       "roles": {
         "allowed": [
-          "tenant_admin"
+          "global_admin"
         ],
         "denied": [
           "unauthenticated"
