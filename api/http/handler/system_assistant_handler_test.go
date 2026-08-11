@@ -36,7 +36,7 @@ func (r *settingsAgentRepo) GetAll(context.Context) ([]*domain.AgentConfig, erro
 func (r *settingsAgentRepo) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (r *settingsAgentRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string) error {
+func (r *settingsAgentRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool) error {
 	return nil
 }
 func (r *settingsAgentRepo) UpdateSystemAssistant(_ context.Context, cfg *domain.AgentConfig) error {

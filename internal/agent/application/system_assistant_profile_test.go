@@ -173,7 +173,7 @@ func (r systemAssistantProfileRepo) GetSystemAssistant(ctx context.Context) (*do
 func (r systemAssistantProfileRepo) GetAll(context.Context) ([]*domain.AgentConfig, error) {
 	return r.cfgs, r.err
 }
-func (r systemAssistantProfileRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string) error {
+func (r systemAssistantProfileRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool) error {
 	return nil
 }
 func (r systemAssistantProfileRepo) UpdateSystemAssistantModel(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {

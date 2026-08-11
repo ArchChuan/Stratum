@@ -35,7 +35,11 @@ type AgentRepo interface {
 	// holds role admin/owner AND appears in resource_editors — closing the
 	// check-then-write TOCTOU window for editors acting on someone else's
 	// resource. Empty means no editor re-validation (owner/creator path).
-	Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string) error
+	// replaceParams selects the agents.parameters JSONB write semantics:
+	// true = overall replace (promote; zero fields become explicit nulls that
+	// clear previously persisted values), false = merge (zero fields are
+	// omitted so an old client PUT cannot erase stored sampling parameters).
+	Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string, replaceParams bool) error
 	UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error)
 	UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, checkpointEnabled bool, maxIterations, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error)
 }

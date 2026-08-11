@@ -267,7 +267,7 @@ func TestSystemAssistantTenantIsolationAndRoleScope(t *testing.T) {
 	_, _, err = repo.GetSystemAssistant(assistantTenantContext("bad tenant!", users[tenants[0]][0], tenantdb.RoleTenantAdmin))
 	require.Error(t, err)
 	require.ErrorIs(t, repo.Remove(ctxA, domain.SystemAssistantID, nil), domain.ErrSystemAssistantManaged)
-	require.ErrorIs(t, repo.Update(ctxA, &domain.AgentConfig{ID: domain.SystemAssistantID}, nil, ""), domain.ErrSystemAssistantManaged)
+	require.ErrorIs(t, repo.Update(ctxA, &domain.AgentConfig{ID: domain.SystemAssistantID}, nil, "", false), domain.ErrSystemAssistantManaged)
 }
 
 func TestSystemAssistantOfficialDocsArtifactsAndAreaGap(t *testing.T) {

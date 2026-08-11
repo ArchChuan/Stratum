@@ -161,6 +161,11 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
         icon: <GlobalOutlined />,
         label: <Link to="/admin/tenants">全局租户</Link>,
       });
+      adminItems.push({
+        key: '/admin/settings',
+        icon: <SettingOutlined />,
+        label: <Link to="/admin/settings">平台参数</Link>,
+      });
     }
 
     if (adminItems.length > 0) {

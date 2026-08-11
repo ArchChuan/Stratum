@@ -16,6 +16,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/persistence"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	memworkers "github.com/byteBuilderX/stratum/internal/memory/infrastructure/workers"
+	parametersapp "github.com/byteBuilderX/stratum/internal/parameters/application"
 )
 
 // Memory groups memory-system services: the user-facing manager, the
@@ -61,6 +62,31 @@ func (a memoryLLMAdapter) Complete(ctx context.Context, req *memport.CompletionR
 	return &memport.CompletionResponse{Content: response.Content, CompletionTokens: response.Usage.CompletionTokens}, nil
 }
 
+// platformParameterReader adapts the parameters application service to the
+// pipeline's PlatformParams port (thin ACL; wiring is the only allowed
+// adapter seam). nil service (db unavailable) reports absent so consumers
+// keep their definition defaults.
+type platformParameterReader struct {
+	svc *parametersapp.Service
+}
+
+func (r platformParameterReader) Int(ctx context.Context, key string) (int, bool) {
+	if r.svc == nil {
+		return 0, false
+	}
+	values, err := r.svc.PlatformValues(ctx)
+	if err != nil {
+		return 0, false
+	}
+	switch v := values[key].(type) {
+	case float64:
+		return int(v), true
+	case int64:
+		return int(v), true
+	}
+	return 0, false
+}
+
 func (c *Container) buildMemory(ctx context.Context) error {
 	memRepo := persistence.NewMemoryRepo(c.dbOrNil())
 	mem := &Memory{
@@ -96,7 +122,11 @@ func (c *Container) buildMemoryService(mem *Memory, db *pgxpool.Pool, memRepo me
 		llmRes := newTenantCapabilityResolver(
 			c.LLMGateway.Registry, c.LLMGateway.Gateway, c.Logger,
 		).(*tenantCapabilityResolver)
-		mem.Service.SetLLMExtractResolver(makeLLMExtractResolver(llmRes))
+		var extractParams pipeline.PlatformParams
+		if c.Parameters != nil {
+			extractParams = platformParameterReader{svc: c.Parameters.Service}
+		}
+		mem.Service.SetLLMExtractResolver(makeLLMExtractResolver(llmRes, extractParams))
 		mem.Service.SetLLMSupersederResolver(makeLLMSupersederResolver(llmRes))
 	}
 	if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
@@ -112,6 +142,9 @@ func (c *Container) buildMemoryInjector(mem *Memory, db *pgxpool.Pool) {
 	inj := pipeline.NewMemoryInjector(db, c.Logger, nil, vectorStore)
 	if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 		inj.SetEmbedResolver(c.Knowledge.EmbedResolver)
+	}
+	if c.Parameters != nil {
+		inj.SetPlatformParams(platformParameterReader{svc: c.Parameters.Service})
 	}
 	mem.Injector = injectorAdapter{inj: inj}
 }
@@ -217,13 +250,15 @@ func (c *Container) attachPipelineDynamic(p *pipeline.Pipeline) {
 	p.WithDynamic(&dynamic)
 }
 
-func makeLLMExtractResolver(llmRes *tenantCapabilityResolver) func(context.Context, string) memport.LLMExtractor {
+func makeLLMExtractResolver(llmRes *tenantCapabilityResolver, params pipeline.PlatformParams) func(context.Context, string) memport.LLMExtractor {
 	return func(ctx context.Context, tenantID string) memport.LLMExtractor {
 		llm := llmRes.ResolveLLM(ctx, tenantID)
 		if llm == nil {
 			return nil
 		}
-		return pipeline.NewLLMExtractor(memoryLLMAdapter{client: llm})
+		extractor := pipeline.NewLLMExtractor(memoryLLMAdapter{client: llm})
+		extractor.SetPlatformParams(params)
+		return extractor
 	}
 }
 

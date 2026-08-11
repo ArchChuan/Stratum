@@ -185,8 +185,10 @@ func (r *Registry) Remove(ctx context.Context, id string, audit *auditdomain.Res
 // Update replaces mutable fields on an existing agent, auditing the change in
 // the same transaction. editorActor, when non-empty, re-validates editor
 // eligibility inside the write transaction (see port.AgentRepo.Update).
-func (r *Registry) Update(ctx context.Context, cfg *AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string) error {
-	if err := r.repo.Update(ctx, cfg, audit, editorActor); err != nil {
+// replaceParams selects sampling-parameter JSONB semantics: true = overall
+// replace (promote), false = merge (old-client-safe).
+func (r *Registry) Update(ctx context.Context, cfg *AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string, replaceParams bool) error {
+	if err := r.repo.Update(ctx, cfg, audit, editorActor, replaceParams); err != nil {
 		return err
 	}
 	if r.logger != nil {

@@ -281,22 +281,10 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	if c.Platform != nil {
 		deps.Metrics = c.Platform.Metrics
 	}
+	deps.ParametersProvider = agentParametersProvider(c)
 	if c.Memory != nil && c.Memory.Service != nil {
 		deps.MemoryCleaner = c.Memory.Service
-		svc := c.Memory.Service
-		deps.MemoryBuffer = func(ctx context.Context, tenantID, userID, agentID, conversationID, scope, role, content string) error {
-			return svc.BufferMessage(ctx, &memapp.BufferMessageRequest{
-				TenantID:       tenantID,
-				UserID:         userID,
-				AgentID:        agentID,
-				ConversationID: conversationID,
-				Scope:          scope,
-				Role:           role,
-				Content:        content,
-				MessageID:      uuid.Must(uuid.NewV7()).String(),
-				CreatedAt:      time.Now(),
-			})
-		}
+		deps.MemoryBuffer = memoryBufferClosure(c.Memory.Service)
 	}
 	a.DiagnosticProvider = newSystemAssistantDiagnosticAdapter(
 		tenantRoleAdapter{service: tenantMemberService(c)}, systemAssistantDiagnosticCollectors(c, a),
@@ -378,6 +366,24 @@ func tenantModelCatalog(resolver agentport.TenantCapabilityResolver) agentport.T
 func modelContextProvider(resolver agentport.TenantCapabilityResolver) agentport.ModelContextProvider {
 	provider, _ := resolver.(agentport.ModelContextProvider)
 	return provider
+}
+
+// memoryBufferClosure adapts the memory BufferMessage service onto the
+// agentport.MemoryBufferFn shape, stamping a fresh message id per turn.
+func memoryBufferClosure(svc *memapp.MemoryService) func(ctx context.Context, tenantID, userID, agentID, conversationID, scope, role, content string) error {
+	return func(ctx context.Context, tenantID, userID, agentID, conversationID, scope, role, content string) error {
+		return svc.BufferMessage(ctx, &memapp.BufferMessageRequest{
+			TenantID:       tenantID,
+			UserID:         userID,
+			AgentID:        agentID,
+			ConversationID: conversationID,
+			Scope:          scope,
+			Role:           role,
+			Content:        content,
+			MessageID:      uuid.Must(uuid.NewV7()).String(),
+			CreatedAt:      time.Now(),
+		})
+	}
 }
 
 // wirePromptResolver constructs the PromptResolver and injects the

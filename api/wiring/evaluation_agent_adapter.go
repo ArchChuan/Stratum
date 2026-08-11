@@ -14,6 +14,7 @@ import (
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	parametersdomain "github.com/byteBuilderX/stratum/internal/parameters/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
@@ -43,7 +44,11 @@ type agentEvaluationAdapter struct {
 	agents         agentRevisionExecutor
 	agentUpdater   agentReadWriter
 	modelValidator agentport.TenantChatModelValidator
-	actorID        string
+	// parameters is the registry source of truth: candidate patches are
+	// rejected unless their keys are registered (legacy hard-coded whitelists
+	// removed; key registrability lives in the registry alone).
+	parameters *parametersdomain.ParametersRegistry
+	actorID    string
 }
 
 // validateCandidateModel fails closed: a candidate model that cannot be
@@ -152,11 +157,14 @@ func (a agentEvaluationAdapter) ApplyPublishedRevision(
 		MaxTokens:              snapshot.ModelParameters.MaxTokens,
 		CompactionRecentGroups: snapshot.ModelParameters.CompactionRecentGroups,
 		CompactionSafetyRatio:  snapshot.ModelParameters.CompactionSafetyRatio,
-		AllowedSkills:          existing.AllowedSkills,
-		MCPToolIDs:             existing.MCPToolIDs,
-		KnowledgeWorkspaceIDs:  existing.KnowledgeWorkspaceIDs,
-		MemoryScope:            existing.MemoryScope,
-		CheckpointEnabled:      existing.CheckpointEnabled,
+		// promote 写回 = 整体替换:零值采样参数必须以 JSONB null 清除旧值,
+		// 与表单路径的 merge 语义(零值不落库)区分。
+		ReplaceParameters:     true,
+		AllowedSkills:         existing.AllowedSkills,
+		MCPToolIDs:            existing.MCPToolIDs,
+		KnowledgeWorkspaceIDs: existing.KnowledgeWorkspaceIDs,
+		MemoryScope:           existing.MemoryScope,
+		CheckpointEnabled:     existing.CheckpointEnabled,
 	})
 	if err != nil {
 		return fmt.Errorf("evaluation Agent adapter: apply to agent: %w", err)
@@ -185,6 +193,9 @@ func (a agentEvaluationAdapter) LoadOptimizableSnapshot(
 func (a agentEvaluationAdapter) CreateCandidate(
 	ctx context.Context, tenantID string, baseline evaldomain.ResourceRef, patch evaldomain.CandidatePatch,
 ) (evaldomain.ResourceRef, error) {
+	if err := validatePatchKeys(a.parameters, patch); err != nil {
+		return evaldomain.ResourceRef{}, err
+	}
 	parent, snapshot, err := a.loadPublished(ctx, tenantID, baseline)
 	if err != nil {
 		return evaldomain.ResourceRef{}, err

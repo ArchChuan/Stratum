@@ -229,6 +229,44 @@ export const AgentFormSections = ({
                 >
                   <InputNumber min={1000} max={128000} step={1000} style={{ width: '100%' }} />
                 </Form.Item>
+                {!isSystem && (
+                  <>
+                    <Form.Item
+                      label="温度（temperature）"
+                      name="temperature"
+                      extra="采样随机性：0 = 未设置（使用平台默认），通常 0.7"
+                    >
+                      <Slider min={0} max={2} step={0.1} marks={{ 0: '0', 2: '2' }} ariaLabelForHandle="temperature" />
+                    </Form.Item>
+                    <Form.Item
+                      label="最大生成 Token（max_tokens）"
+                      name="max_tokens"
+                      extra="单次生成的 token 上限：0 = 未设置（使用平台默认）"
+                    >
+                      <InputNumber min={0} max={131072} step={256} style={{ width: '100%' }} />
+                    </Form.Item>
+                    <Form.Item
+                      label="压缩最近轮数（compaction_recent_groups）"
+                      name="compaction_recent_groups"
+                      extra="按轮次组压缩历史：0 = 不启用历史压缩"
+                    >
+                      <Select allowClear placeholder="0（不启用）">
+                        <Option value={0}>0（不启用）</Option>
+                        <Option value={2}>2 组</Option>
+                        <Option value={3}>3 组</Option>
+                        <Option value={5}>5 组</Option>
+                      </Select>
+                    </Form.Item>
+                    <Form.Item
+                      label="压缩安全比例（compaction_safety_ratio）"
+                      name="compaction_safety_ratio"
+                      extra="压缩阈值：0 = 未设置（使用平台默认）"
+                      style={{ marginBottom: 0 }}
+                    >
+                      <Slider min={0} max={0.95} step={0.05} marks={{ 0: '0', 0.95: '0.95' }} ariaLabelForHandle="compaction_safety_ratio" />
+                    </Form.Item>
+                  </>
+                )}
                 <Form.Item
                   label="执行断点续传"
                   name="checkpointEnabled"

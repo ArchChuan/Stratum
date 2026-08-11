@@ -18,6 +18,7 @@ import (
 	evalpersist "github.com/byteBuilderX/stratum/internal/evaluation/infrastructure/persistence"
 	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
+	parametersapp "github.com/byteBuilderX/stratum/internal/parameters/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
@@ -454,6 +455,39 @@ func evaluationSkillContext(
 
 type gatewayPromptRewriter struct {
 	resolver agentport.TenantCapabilityResolver
+	// params feeds evaluation.optimizer.* platform parameters into the
+	// rewrite request (model / temperature / max_tokens), replacing the
+	// legacy hard-coded qwen-plus/0.2/2048. nil degrades to those defaults
+	// (db unavailable); a read failure also keeps the definition defaults.
+	params *parametersapp.Service
+}
+
+// optimizerLLM picks the effective optimizer LLM spec from platform
+// parameters, falling back to the definition defaults.
+func (r gatewayPromptRewriter) optimizerLLM(
+	ctx context.Context,
+) (model string, temperature float32, maxTokens int) {
+	model, temperature, maxTokens = "qwen-plus", 0.2, 2048
+	if r.params == nil {
+		return model, temperature, maxTokens
+	}
+	values, err := r.params.PlatformValues(ctx)
+	if err != nil {
+		return model, temperature, maxTokens
+	}
+	if v, ok := values["evaluation.optimizer.model"].(string); ok && v != "" {
+		model = v
+	}
+	if v, ok := values["evaluation.optimizer.temperature"].(float64); ok {
+		temperature = float32(v)
+	}
+	switch v := values["evaluation.optimizer.max_tokens"].(type) {
+	case float64:
+		maxTokens = int(v)
+	case int64:
+		maxTokens = int(v)
+	}
+	return model, temperature, maxTokens
 }
 
 func (r gatewayPromptRewriter) Rewrite(
@@ -463,6 +497,7 @@ func (r gatewayPromptRewriter) Rewrite(
 	if !ok || gateway == nil {
 		return nil, fmt.Errorf("prompt optimizer: tenant has no LLM provider configured")
 	}
+	model, temperature, maxTokens := r.optimizerLLM(ctx)
 	snapshotJSON, err := json.Marshal(request.BaselineSnapshot)
 	if err != nil {
 		return nil, err
@@ -476,7 +511,7 @@ func (r gatewayPromptRewriter) Rewrite(
 		Type:     agentport.CapLLM,
 		Timeout:  60 * time.Second,
 		LLM: &agentport.LLMCapRequest{
-			Model: "qwen-plus", Temperature: 0.2, MaxTokens: 2048,
+			Model: model, Temperature: temperature, MaxTokens: maxTokens,
 			Messages: []agentport.LLMMessage{
 				{Role: "system", Content: "你是提示词优化器。只生成候选内容，不决定发布。仅输出 JSON 数组。"},
 				{Role: "user", Content: fmt.Sprintf(
@@ -696,7 +731,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	if c.Agent != nil && sharedRevisionService != nil {
 		agentAdapter := agentEvaluationAdapter{
 			revisions: sharedRevisionService, agents: c.Agent.Service, modelValidator: tenantModelValidator(c.Agent.TenantResolver),
-			agentUpdater: c.Agent.Service, actorID: "evaluation-worker",
+			agentUpdater: c.Agent.Service, actorID: "evaluation-worker", parameters: c.Parameters.Registry,
 		}
 		resourceAdapters[evaldomain.ResourceKindAgent] = agentAdapter
 		candidateCreators[evaldomain.ResourceKindAgent] = agentAdapter
@@ -706,7 +741,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	if c.MCP != nil && c.MCP.Manager != nil && sharedRevisionService != nil {
 		mcpAdapter := mcpEvaluationAdapter{
 			runtime: c.MCP.Manager, revisions: sharedRevisionService,
-			runtimeStore: c.RevisionObjectStore, actorID: "evaluation-worker",
+			runtimeStore: c.RevisionObjectStore, actorID: "evaluation-worker", parameters: c.Parameters.Registry,
 		}
 		resourceAdapters[evaldomain.ResourceKindMCP] = mcpAdapter
 		candidateCreators[evaldomain.ResourceKindMCP] = mcpAdapter
@@ -717,7 +752,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		sharedRevisionService != nil {
 		knowledgeAdapter := knowledgeEvaluationAdapter{
 			revisions: sharedRevisionService, source: c.Knowledge.WorkspaceService, rerankAvailable: c.Config.RerankConfigured,
-			evaluator: knowledgeapp.NewRetrievalEvaluator(c.Knowledge.RAGService), actorID: "evaluation-worker",
+			evaluator: knowledgeapp.NewRetrievalEvaluator(c.Knowledge.RAGService), actorID: "evaluation-worker", parameters: c.Parameters.Registry,
 		}
 		resourceAdapters[evaldomain.ResourceKindKnowledge] = knowledgeAdapter
 		candidateCreators[evaldomain.ResourceKindKnowledge] = knowledgeAdapter
@@ -732,7 +767,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	jobService := evalapp.NewJobService(jobRepo, service)
 	var rewriter evalapp.PromptRewriter
 	if c.Agent != nil && c.Agent.TenantResolver != nil {
-		rewriter = gatewayPromptRewriter{resolver: c.Agent.TenantResolver}
+		rewriter = gatewayPromptRewriter{resolver: c.Agent.TenantResolver, params: c.Parameters.Service}
 	}
 	optimizationService := evalapp.NewOptimizationService(
 		evaluationCandidateRouter{creators: candidateCreators}, rewriter, optimizationRepo,

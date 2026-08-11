@@ -32,7 +32,7 @@ func (f *gateAgentRepoFake) GetAll(context.Context) ([]*domain.AgentConfig, erro
 func (f *gateAgentRepoFake) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (f *gateAgentRepoFake) Update(_ context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string) error {
+func (f *gateAgentRepoFake) Update(_ context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool) error {
 	f.agents[cfg.ID] = cfg
 	return nil
 }
