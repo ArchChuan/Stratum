@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"testing"
 )
 
@@ -30,8 +31,8 @@ func TestIsTransient(t *testing.T) {
 		{name: "4xx is permanent", err: &statusError{code: 400, msg: "bad request"}, want: false},
 		{name: "401 is permanent", err: &statusError{code: 401, msg: "unauthorized"}, want: false},
 		{name: "404 is permanent", err: &statusError{code: 404, msg: "not found"}, want: false},
-		{name: "deadline exceeded is transient", err: context.DeadlineExceeded, want: true},
-		{name: "wrapped deadline is transient", err: fmt.Errorf("call: %w", context.DeadlineExceeded), want: true},
+		{name: "deadline exceeded is permanent", err: context.DeadlineExceeded, want: false},
+		{name: "wrapped deadline is permanent", err: fmt.Errorf("call: %w", context.DeadlineExceeded), want: false},
 		{name: "canceled never triggers fallback", err: context.Canceled, want: false},
 		{name: "wrapped canceled never triggers fallback", err: fmt.Errorf("call: %w", context.Canceled), want: false},
 		{name: "connection refused is transient", err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}, want: true},
@@ -39,6 +40,35 @@ func TestIsTransient(t *testing.T) {
 		{name: "timeout net.Error is transient", err: &timeoutNetErr{timeout: true}, want: true},
 		{name: "connection refused text is transient", err: errors.New("dial tcp 1.2.3.4:443: connect: connection refused"), want: true},
 		{name: "plain error is permanent", err: errors.New("provider error"), want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isTransient(tc.err); got != tc.want {
+				t.Fatalf("isTransient(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsTransient_DeadlineExceededIsPermanent 验证 DeadlineExceeded 必须判定为
+// 永久错误：等待无意义，继续重试只会叠加时延，fallback 链应 fail-fast。
+func TestIsTransient_DeadlineExceededIsPermanent(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool // transient?
+	}{
+		{name: "canceled is permanent", err: context.Canceled, want: false},
+		{name: "deadline exceeded is permanent", err: context.DeadlineExceeded, want: false},
+		{name: "wrapped deadline is permanent", err: fmt.Errorf("upstream: %w", context.DeadlineExceeded), want: false},
+		// http.Client timeout 包装链：url.Error → net.OpError → DeadlineExceeded
+		// 必须判定永久，否则 60s client timeout 仍被当瞬态重试。
+		{name: "http client timeout chain is permanent",
+			err:  &url.Error{Op: "Post", URL: "https://x", Err: &net.OpError{Op: "dial", Err: context.DeadlineExceeded}},
+			want: false},
+		{name: "net timeout is transient", err: &net.OpError{Op: "dial", Err: &net.DNSError{Err: "timeout"}}, want: true},
+		{name: "status 429 is transient", err: &statusError{code: 429, msg: "rate limited"}, want: true},
+		{name: "status 503 is transient", err: &statusError{code: 503, msg: "service unavailable"}, want: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
