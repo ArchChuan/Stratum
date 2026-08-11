@@ -97,6 +97,46 @@ func TestDropTenantCollections_validTenantNoWorkspaces(t *testing.T) {
 	}, dropper.deleted)
 }
 
+// TestDropTenantCollections_modelSuffixedMemoryCollectionsDropped 覆盖本分支
+// 新增的 memory_<tid>_<model> / memory_facts_<tid>_<model> 命名：固定名删除后，
+// 按前缀枚举所有 model-suffixed 集合并逐个删除（与 workspace 枚举模式一致）。
+func TestDropTenantCollections_modelSuffixedMemoryCollectionsDropped(t *testing.T) {
+	mock := newRepoMock(t)
+	dropper := &fakeDropper{lists: map[string][]string{
+		"memory_550e8400_e29b_41d4_a716_446655440000_": {
+			"memory_550e8400_e29b_41d4_a716_446655440000_text_embedding_v3",
+			"memory_550e8400_e29b_41d4_a716_446655440000_embedding_3",
+		},
+		"memory_facts_550e8400_e29b_41d4_a716_446655440000_": {
+			"memory_facts_550e8400_e29b_41d4_a716_446655440000_text_embedding_v2",
+		},
+	}}
+	cleaner := newVectorCleaner(mock, dropper)
+	tenantID := "550e8400-e29b-41d4-a716-446655440000"
+
+	repoBeginTenant(mock)
+	mock.ExpectQuery("SELECT id FROM rag_workspaces").
+		WillReturnRows(pgxmock.NewRows([]string{"id"}))
+	mock.ExpectCommit()
+
+	err := cleaner.DropTenantCollections(context.Background(), tenantID)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+	// 基础名（无后缀）必须仍在固定名列表删除；枚举结果全部删除，无重复。
+	require.Equal(t, []string{
+		"memory_550e8400_e29b_41d4_a716_446655440000",
+		"memory_facts_550e8400_e29b_41d4_a716_446655440000",
+		"tenant_550e8400_e29b_41d4_a716_446655440000_kb",
+		"memory_550e8400_e29b_41d4_a716_446655440000_text_embedding_v3",
+		"memory_550e8400_e29b_41d4_a716_446655440000_embedding_3",
+		"memory_facts_550e8400_e29b_41d4_a716_446655440000_text_embedding_v2",
+	}, dropper.deleted)
+	require.Equal(t, []string{
+		"memory_550e8400_e29b_41d4_a716_446655440000_",
+		"memory_facts_550e8400_e29b_41d4_a716_446655440000_",
+	}, dropper.listCalls)
+}
+
 func TestDropTenantCollections_workspaceCollectionsDropped(t *testing.T) {
 	mock := newRepoMock(t)
 	dropper := &fakeDropper{lists: map[string][]string{
@@ -128,7 +168,12 @@ func TestDropTenantCollections_workspaceCollectionsDropped(t *testing.T) {
 		constants.CollectionLegacyName(tenantID, "ws-2"),
 		"kb_ws_2_text_embedding_v2",
 	}, dropper.deleted)
-	require.Equal(t, []string{"kb_ws_1_", "kb_ws_2_"}, dropper.listCalls)
+	require.Equal(t, []string{
+		"memory_550e8400_e29b_41d4_a716_446655440000_",
+		"memory_facts_550e8400_e29b_41d4_a716_446655440000_",
+		"kb_ws_1_",
+		"kb_ws_2_",
+	}, dropper.listCalls)
 }
 
 func TestDropTenantCollections_workspaceDropFailureIsCollected(t *testing.T) {

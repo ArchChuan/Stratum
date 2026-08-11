@@ -69,12 +69,35 @@ func (c *TenantVectorCleaner) DropTenantCollections(ctx context.Context, tenantI
 		}
 	}
 
+	c.dropModelSuffixedMemoryCollections(ctx, tid, &errs)
+
 	c.dropWorkspaceCollections(ctx, tenantID, &errs)
 
 	if len(errs) > 0 {
 		return fmt.Errorf("drop tenant collections: %s", strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+// dropModelSuffixedMemoryCollections 枚举并删除 memory_<tid>_* / memory_facts_<tid>_*
+// 前缀下的全部 model-suffixed 集合（本分支按嵌入模型隔离数据的命名，前缀含尾
+// 下划线：memory_<tid> 基础名与 memory_facts_<tid> 均不以该前缀开头，由上方
+// 固定名删除覆盖，不会被重复删除）。任何历史或未来模型后缀都被覆盖，无需随
+// 新模型改代码。ListCollections 失败计入 errs（不能静默漏删），与 workspace
+// 路径同一错误处理模式。
+func (c *TenantVectorCleaner) dropModelSuffixedMemoryCollections(ctx context.Context, tid string, errs *[]string) {
+	for _, prefix := range []string{"memory_" + tid + "_", "memory_facts_" + tid + "_"} {
+		cols, err := c.vs.ListCollections(ctx, prefix)
+		if err != nil {
+			*errs = append(*errs, fmt.Sprintf("list collections %s: %v", prefix, err))
+			continue
+		}
+		for _, col := range cols {
+			if err := c.vs.DeleteCollection(ctx, col); err != nil && !errors.Is(err, milvus.ErrCollectionNotFound) {
+				*errs = append(*errs, fmt.Sprintf("%s: %v", col, err))
+			}
+		}
+	}
 }
 
 // dropWorkspaceCollections queries the tenant's rag_workspaces and drops the
