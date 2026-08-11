@@ -2,6 +2,7 @@ package infrastructure
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -395,6 +396,9 @@ func TestPgModelRepoSetDefaultEmbedding(t *testing.T) {
 			}
 			if !tc.expectErr && err != nil {
 				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.expectErr && !errors.Is(err, domain.ErrModelNotFound) {
+				t.Fatalf("err = %v, want ErrModelNotFound", err)
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatal(err)

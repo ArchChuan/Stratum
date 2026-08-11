@@ -21,6 +21,11 @@ const (
 // embedding model. It is a client-input mistake and must map to 4xx, never 5xx.
 var ErrModelNotEmbeddingEnabled = errors.New("model is not an enabled embedding model")
 
+// ErrModelNotFound indicates the target model does not exist for the tenant
+// (or belongs to another tenant). It is a client-input mistake and must map
+// to 4xx (404), never 5xx.
+var ErrModelNotFound = errors.New("model not found")
+
 // Model represents an LLM model that can be used for completions or embeddings.
 type Model struct {
 	ID               string            `json:"id"`

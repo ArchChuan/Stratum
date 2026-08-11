@@ -15,6 +15,7 @@ func TestMapErrorToStatus_LLMGatewaySentinels(t *testing.T) {
 		status int
 	}{
 		{name: "model not embedding enabled", err: llmgatewaydomain.ErrModelNotEmbeddingEnabled, status: http.StatusBadRequest},
+		{name: "model not found", err: llmgatewaydomain.ErrModelNotFound, status: http.StatusNotFound},
 	}
 
 	for _, tt := range tests {

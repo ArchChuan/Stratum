@@ -266,7 +266,7 @@ func (r *PgModelRepo) SetDefaultEmbedding(ctx context.Context, tenantID, id stri
 				return fmt.Errorf("clear default embedding: %w", err)
 			}
 			if tag.RowsAffected() == 0 {
-				return fmt.Errorf("model not found: %s", id)
+				return fmt.Errorf("model not found: %s: %w", id, domain.ErrModelNotFound)
 			}
 			return nil
 		}
@@ -282,7 +282,7 @@ func (r *PgModelRepo) SetDefaultEmbedding(ctx context.Context, tenantID, id stri
 			return fmt.Errorf("set default embedding: %w", err)
 		}
 		if tag.RowsAffected() == 0 {
-			return fmt.Errorf("model not found or not an enabled embedding model: %s", id)
+			return fmt.Errorf("model not found or not an enabled embedding model: %s: %w", id, domain.ErrModelNotFound)
 		}
 		return nil
 	})
