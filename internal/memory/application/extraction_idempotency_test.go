@@ -47,11 +47,11 @@ func TestExtractFactsSourceReplayReusesPersistedIDAndRetriesVector(t *testing.T)
 	factRepo.On("CreateExtracted", mock.Anything, "tenant-1", mock.Anything).Return(persisted, false, nil).Once()
 	embed.On("Embed", mock.Anything, "User uses Go").Return([]float32{0.1, 0.2}, nil).Twice()
 	var vectorIDs []string
-	vectors.On("Upsert", mock.Anything, "memory_facts_tenant_1", mock.Anything).Run(func(args mock.Arguments) {
+	vectors.On("Upsert", mock.Anything, "memory_facts_tenant_1_text_embedding_v3", mock.Anything).Run(func(args mock.Arguments) {
 		docs := args.Get(2).([]*port.VectorDoc)
 		vectorIDs = append(vectorIDs, docs[0].ID)
 	}).Return(errors.New("milvus unavailable")).Once()
-	vectors.On("Upsert", mock.Anything, "memory_facts_tenant_1", mock.Anything).Run(func(args mock.Arguments) {
+	vectors.On("Upsert", mock.Anything, "memory_facts_tenant_1_text_embedding_v3", mock.Anything).Run(func(args mock.Arguments) {
 		docs := args.Get(2).([]*port.VectorDoc)
 		vectorIDs = append(vectorIDs, docs[0].ID)
 	}).Return(nil).Once()

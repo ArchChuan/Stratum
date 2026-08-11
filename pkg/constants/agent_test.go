@@ -74,15 +74,18 @@ func TestCollectionName(t *testing.T) {
 	cases := []struct {
 		name        string
 		workspaceID string
+		model       string
 		want        string
 	}{
-		{"uuid workspace", "019a1b2c-3d4e-5f60-7182-93a4b5c6d7e8", CollectionPrefix + "_019a1b2c_3d4e_5f60_7182_93a4b5c6d7e8"},
-		{"alnum only", "workspace1", CollectionPrefix + "_workspace1"},
-		{"unsafe chars replaced", "my workspace/中文!", CollectionPrefix + "_my_workspace____"},
+		{"uuid workspace", "019a1b2c-3d4e-5f60-7182-93a4b5c6d7e8", "text-embedding-v3", CollectionPrefix + "_019a1b2c_3d4e_5f60_7182_93a4b5c6d7e8_text_embedding_v3"},
+		{"alnum only", "workspace1", "text-embedding-v2", CollectionPrefix + "_workspace1_text_embedding_v2"},
+		{"unsafe chars replaced", "my workspace/中文!", "text-embedding-v1", CollectionPrefix + "_my_workspace_____text_embedding_v1"},
+		{"model chars sanitized", "workspace1", "my model/1", CollectionPrefix + "_workspace1_my_model_1"},
+		{"empty model keeps legacy form", "workspace1", "", CollectionPrefix + "_workspace1_"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := CollectionName("tenant-ignored", tc.workspaceID); got != tc.want {
+			if got := CollectionName("tenant-ignored", tc.workspaceID, tc.model); got != tc.want {
 				t.Errorf("CollectionName = %q, want %q", got, tc.want)
 			}
 		})

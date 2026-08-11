@@ -11,4 +11,7 @@ type EmbedClient interface {
 
 	// EmbedBatch converts multiple texts to embeddings.
 	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
+
+	// Model returns the embedding model name in use (collection 命名依赖).
+	Model() string
 }

@@ -86,6 +86,10 @@ export const llmApi = {
     await api.patch<MessageResponse>(`/admin/models/${id}/toggle`, { enabled });
   },
 
+  setDefaultEmbedding: async (id: string, enabled: boolean): Promise<void> => {
+    await api.put<MessageResponse>(`/admin/models/${id}/default-embedding`, { enabled });
+  },
+
   deleteModel: async (id: string): Promise<void> => {
     await api.delete<MessageResponse>(`/admin/models/${id}`);
   },

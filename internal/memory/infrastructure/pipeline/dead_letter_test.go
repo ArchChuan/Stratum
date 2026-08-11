@@ -71,7 +71,7 @@ func (m *fakeJetStreamMsg) TermWithReason(string) error {
 	return nil
 }
 
-func TestDeadLetterPublishesMetadataWithoutContentThenTerminates(t *testing.T) {
+func TestDeadLetterStoresPayloadForReplayThenTerminates(t *testing.T) {
 	msg := &fakeJetStreamMsg{
 		data:    []byte(`{"content":"secret user text"}`),
 		subject: "memory.raw.tenant-a",
@@ -94,13 +94,14 @@ func TestDeadLetterPublishesMetadataWithoutContentThenTerminates(t *testing.T) {
 	assert.Equal(t, "memory.dlq.tenant-a", pub.subject)
 	assert.Equal(t, 1, msg.termCount)
 	assert.Zero(t, msg.nakCount)
-	assert.NotContains(t, string(pub.payload), "secret user text")
 
 	var event DeadLetterEvent
 	require.NoError(t, json.Unmarshal(pub.payload, &event))
 	assert.Equal(t, uint64(42), event.StreamSequence)
 	assert.Equal(t, uint64(2), event.Deliveries)
 	assert.Equal(t, "invalid_event", event.ErrorCode)
+	// 原始 body 必须保留在 DLQ 事件中，供定向重放重建消息（Task 7）。
+	assert.Equal(t, `{"content":"secret user text"}`, string(event.Payload))
 }
 
 func TestDeadLetterPublishFailureNaksOriginal(t *testing.T) {

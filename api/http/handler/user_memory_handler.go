@@ -31,13 +31,34 @@ type memoryMgrSvc interface {
 	GetSummary(ctx context.Context, sessionCtx *application.SessionContext) (string, error)
 }
 
-type UserMemoryHandler struct {
-	svc userMemorySvc
-	mgr memoryMgrSvc
+// DefaultEmbedModelResolver resolves the tenant's default embedding model name;
+// implemented by llmgateway.ModelRegistry and injected via wiring. nil-safe:
+// 解析失败或无可用模型时 GetStats 返回 embed_model_configured=false。
+type DefaultEmbedModelResolver interface {
+	ResolveDefaultEmbeddingModel(ctx context.Context, tenantID string) (string, error)
 }
 
-func NewUserMemoryHandler(svc userMemorySvc, mgr memoryMgrSvc) *UserMemoryHandler {
-	return &UserMemoryHandler{svc: svc, mgr: mgr}
+type UserMemoryHandler struct {
+	svc      userMemorySvc
+	mgr      memoryMgrSvc
+	embedSvc DefaultEmbedModelResolver
+}
+
+func NewUserMemoryHandler(svc userMemorySvc, mgr memoryMgrSvc, embedSvc DefaultEmbedModelResolver) *UserMemoryHandler {
+	return &UserMemoryHandler{svc: svc, mgr: mgr, embedSvc: embedSvc}
+}
+
+// embedModelConfigured reports whether the tenant has a usable default
+// embedding model; resolver nil or error → false（fail-closed，永不 panic）。
+func (h *UserMemoryHandler) embedModelConfigured(ctx context.Context, tenantID string) bool {
+	if h.embedSvc == nil {
+		return false
+	}
+	model, err := h.embedSvc.ResolveDefaultEmbeddingModel(ctx, tenantID)
+	if err != nil {
+		return false
+	}
+	return model != ""
 }
 
 func (h *UserMemoryHandler) ClearMemories(c *gin.Context) {
@@ -164,7 +185,8 @@ func (h *UserMemoryHandler) GetStats(c *gin.Context) {
 		LongTermCount: stats.LongTermCount, EntityCount: stats.EntityCount,
 		SessionsCount: stats.SessionsCount, ActiveUsers: stats.ActiveUsers,
 		VectorCount: stats.VectorCount, LastAccessTime: stats.LastAccessTime,
-		StorageSizeBytes: stats.StorageSizeBytes,
+		StorageSizeBytes:     stats.StorageSizeBytes,
+		EmbedModelConfigured: h.embedModelConfigured(c.Request.Context(), tenantID),
 	})
 }
 

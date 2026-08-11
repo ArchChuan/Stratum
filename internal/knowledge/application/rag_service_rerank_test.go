@@ -251,7 +251,7 @@ func TestRAGQueryDimensionMismatchFailsClosed(t *testing.T) {
 
 	_, err := service.Query(context.Background(), RAGQueryRequest{
 		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
-		TopK: 3, EmbeddingModel: "embedding-3", // vectorDim("embedding-3") = 2048 != 3
+		TopK: 3, EmbeddingModel: "embedding-3", // DimensionForModel("embedding-3") = 2048 != 3
 	})
 	if !errors.Is(err, ErrRAGDependency) {
 		t.Fatalf("dimension mismatch must fail closed, got %v", err)

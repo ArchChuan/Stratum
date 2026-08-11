@@ -34,18 +34,6 @@ type collectionProvisioner interface {
 	DeleteByDocumentIDs(ctx context.Context, collectionName string, docIDs []string) error
 }
 
-// vectorDim returns the vector dimension for the given embedding model.
-func vectorDim(model string) int {
-	switch model {
-	case "text-embedding-v2", "text-embedding-v3", "text-embedding-v4":
-		return 1024
-	case "embedding-3":
-		return 2048
-	default:
-		return 1536
-	}
-}
-
 // CreateWorkspaceInput carries the application-level shape of POST /knowledge/workspaces.
 type CreateWorkspaceInput struct {
 	Name        string
@@ -140,8 +128,8 @@ func (s *WorkspaceService) CreateWorkspace(ctx context.Context, tenantID string,
 		return nil, err
 	}
 	if s.vectorStore != nil {
-		col := constants.CollectionName(tenantID, ws.ID)
-		if err := s.vectorStore.CreateCollectionWithDim(ctx, col, vectorDim(ws.Config.EmbeddingModel)); err != nil {
+		col := constants.CollectionName(tenantID, ws.ID, ws.Config.EmbeddingModel)
+		if err := s.vectorStore.CreateCollectionWithDim(ctx, col, constants.DimensionForModel(ws.Config.EmbeddingModel)); err != nil {
 			s.logger.Error("knowledge.workspace.create_collection_failed: rolling back db record",
 				zap.String("tenant_id", tenantID),
 				zap.String("workspace", in.Name),
@@ -297,7 +285,7 @@ func (s *WorkspaceService) GetWorkspaceStats(ctx context.Context, tenantID, name
 	if err != nil {
 		return nil, err
 	}
-	stats, statsErr := s.ingestSvc.GetWorkspaceStats(ctx, tenantID, ws.ID)
+	stats, statsErr := s.ingestSvc.GetWorkspaceStats(ctx, tenantID, ws.ID, ws.Config.EmbeddingModel)
 	if statsErr != nil {
 		s.logger.Warn("failed to get milvus stats", zap.String("workspace", name), zap.Error(statsErr))
 		stats = map[string]any{"error": statsErr.Error()}
@@ -504,7 +492,7 @@ func (s *WorkspaceService) DeleteDocument(ctx context.Context, tenantID, workspa
 	if target.IngestStatus == constants.IngestStatusProcessing {
 		return domain.ErrDocumentProcessing
 	}
-	collection := constants.CollectionName(tenantID, ws.ID)
+	collection := constants.CollectionName(tenantID, ws.ID, ws.Config.EmbeddingModel)
 	if err := s.vectorStore.DeleteByDocumentIDs(ctx, collection, []string{documentID}); err != nil {
 		return fmt.Errorf("delete document vectors: %w", err)
 	}

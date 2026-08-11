@@ -3,9 +3,11 @@ package milvus
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/milvus-io/milvus-sdk-go/v2/client"
+	"github.com/milvus-io/milvus-sdk-go/v2/entity"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -17,8 +19,9 @@ import (
 // touched (which itself signals an unexpected call).
 type fakeMilvusClient struct {
 	*client.GrpcClient
-	loadErr  error
-	queryErr error
+	loadErr   error
+	queryErr  error
+	searchErr error
 }
 
 func (f *fakeMilvusClient) LoadCollection(context.Context, string, bool, ...client.LoadCollectionOption) error {
@@ -27,6 +30,10 @@ func (f *fakeMilvusClient) LoadCollection(context.Context, string, bool, ...clie
 
 func (f *fakeMilvusClient) Query(_ context.Context, _ string, _ []string, _ string, _ []string, _ ...client.SearchQueryOptionFunc) (client.ResultSet, error) {
 	return nil, f.queryErr
+}
+
+func (f *fakeMilvusClient) Search(_ context.Context, _ string, _ []string, _ string, _ []string, _ []entity.Vector, _ string, _ entity.MetricType, _ int, _ entity.SearchParam, _ ...client.SearchQueryOptionFunc) ([]client.SearchResult, error) {
+	return nil, f.searchErr
 }
 
 func newStoreWithClient(fake *fakeMilvusClient) *VectorStore {
@@ -60,6 +67,47 @@ func TestIsCollectionNotFound(t *testing.T) {
 				t.Fatalf("isCollectionNotFound(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIsDimensionMismatch(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", want: false},
+		{name: "sentinel", err: ErrDimensionMismatch, want: true},
+		// Milvus 以 InvalidArgument + 以下消息形态暴露 dim mismatch。
+		{name: "dimension mismatch message", err: status.Error(codes.InvalidArgument, "dimension mismatch: query vector dimension (1024) does not match collection dimension (1536)"), want: true},
+		{name: "does not match message", err: status.Error(codes.InvalidArgument, "query vector dimension (2) doesn't match collection dimension (1024)"), want: true},
+		{name: "wrapped sentinel", err: fmt.Errorf("failed to search vectors: %w", ErrDimensionMismatch), want: true},
+		// 真 outage 不得被误分类。
+		{name: "unavailable", err: status.Error(codes.Unavailable, "connection refused"), want: false},
+		{name: "unrelated failure", err: errors.New("collection not found: missing"), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isDimensionMismatch(tt.err); got != tt.want {
+				t.Fatalf("isDimensionMismatch(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSearchWithFilter_DimensionMismatchIsClassifiedNotOutage(t *testing.T) {
+	// 查询向量维度与 collection 维度不一致（模型切换后的存量集合）是确定性
+	// 数据形态错误，不是向量库 outage：必须翻译为 ErrDimensionMismatch，
+	// 让调用方降级跳过，而不是按通用搜索失败告警。
+	for _, searchErr := range []error{
+		status.Error(codes.InvalidArgument, "dimension mismatch: query vector dimension (1024) does not match collection dimension (1536)"),
+		status.Error(codes.InvalidArgument, "query vector dimension (2) doesn't match collection dimension (1024)"),
+	} {
+		vs := newStoreWithClient(&fakeMilvusClient{searchErr: searchErr})
+		results, err := vs.SearchWithFilter(context.Background(), "coll", []float32{0.5}, 5, "")
+		if results != nil || !errors.Is(err, ErrDimensionMismatch) {
+			t.Fatalf("search with dim mismatch = (%v, %v), want (nil, ErrDimensionMismatch)", results, err)
+		}
 	}
 }
 
