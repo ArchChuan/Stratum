@@ -58,12 +58,22 @@ type ReplayResult struct {
 // 且未超重放上限的，重发回 memory.raw.<tenant>。单条失败只计入 Failed（不中断）；
 // 只有 stream 读取失败才返回 error。
 //
-// 幂等：raw publish 复用 replay:<StreamSequence> MsgID，JetStream dedup 窗口内
-// 重复调用被去重，不会产生新消息。重放标记以同 dedupID 重发布回 DLQ subject：
-// 窗口内被去重（原消息不落地新副本），窗口外落地为带 Replayed/ReplayCount
-// header 的新副本，由 ReplayCount 上限兜底终止自喂循环。
+// 幂等：raw publish 复用 replay:<TenantID>:<OriginalStream>:<StreamSequence>
+// MsgID，JetStream dedup 窗口内重复调用被去重，不会产生新消息；去重命中时
+// 该事件计 Skipped 而非 Replayed，避免谎报。重放标记以
+// dlq-mark:<TenantID>:<OriginalStream>:<StreamSequence>:<目标count> 为 MsgID
+// 重发布回 DLQ subject——含目标 count 使标记在 dedup 窗口内也能落地为新副本
+// （带 Replayed/ReplayCount header），ReplayCount 每次重放真实推进，直至
+// ReplayCount 上限兜底终止自喂循环。
 func (s *ReplayService) ReplayByErrorCode(ctx context.Context, errorCode string) (ReplayResult, error) {
 	result := ReplayResult{}
+	// 快照语义：只处理调用开始时已在 DLQ 的消息。重放标记在调用期间落地为新
+	// 副本，若也被本次消费会形成单次调用内的自喂级联（count 一次冲到上限、
+	// Total/Skipped 记账失真）；留给下次调用处理，ReplayCount 按调用逐步推进。
+	snapshotSeq, err := s.dlqSnapshotSeq(ctx)
+	if err != nil {
+		return result, err
+	}
 	consumer, err := s.js.CreateOrUpdateConsumer(ctx, constants.MemoryDLQStream, jetstream.ConsumerConfig{
 		DeliverPolicy: jetstream.DeliverAllPolicy,
 		AckPolicy:     jetstream.AckNonePolicy,
@@ -72,20 +82,50 @@ func (s *ReplayService) ReplayByErrorCode(ctx context.Context, errorCode string)
 	if err != nil {
 		return result, fmt.Errorf("create dlq replay consumer: %w", err)
 	}
+	return s.replaySnapshot(ctx, consumer, snapshotSeq, errorCode, result)
+}
+
+// dlqSnapshotSeq 取 DLQ stream 的当前最后序列号，作为本次重放的快照边界。
+func (s *ReplayService) dlqSnapshotSeq(ctx context.Context) (uint64, error) {
+	stream, err := s.js.Stream(ctx, constants.MemoryDLQStream)
+	if err != nil {
+		return 0, fmt.Errorf("get dlq stream: %w", err)
+	}
+	info, err := stream.Info(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("get dlq stream info: %w", err)
+	}
+	return info.State.LastSeq, nil
+}
+
+// replaySnapshot 拉取并重放快照内的 DLQ 消息；调用期间新落地的重放标记
+// （seq > snapshotSeq）不处理，留给下次调用。
+func (s *ReplayService) replaySnapshot(ctx context.Context, consumer jetstream.Consumer, snapshotSeq uint64, errorCode string, result ReplayResult) (ReplayResult, error) {
 	for {
 		batch, err := consumer.Fetch(dlqReplayFetchBatch, jetstream.FetchMaxWait(dlqReplayFetchWait))
 		if err != nil {
 			return result, fmt.Errorf("fetch dlq: %w", err)
 		}
 		received := 0
+		beyondSnapshot := false
 		for msg := range batch.Messages() {
 			received++
+			if beyondSnapshotSeq(msg, snapshotSeq) {
+				beyondSnapshot = true
+				continue
+			}
 			s.replayOne(ctx, msg, errorCode, &result)
 		}
-		if received == 0 {
+		if received == 0 || beyondSnapshot {
 			return result, nil
 		}
 	}
+}
+
+// beyondSnapshotSeq 判断消息是否落在本次调用快照之外（调用期间新落地）。
+func beyondSnapshotSeq(msg jetstream.Msg, snapshotSeq uint64) bool {
+	meta, err := msg.Metadata()
+	return err == nil && meta.Sequence.Stream > snapshotSeq
 }
 
 func (s *ReplayService) replayOne(ctx context.Context, msg jetstream.Msg, errorCode string, result *ReplayResult) {
@@ -108,8 +148,9 @@ func (s *ReplayService) replayOne(ctx context.Context, msg jetstream.Msg, errorC
 	publishCtx, cancel := context.WithTimeout(ctx, constants.MemoryOutboxPublishTimeout)
 	defer cancel()
 	rawSubject := fmt.Sprintf("%s.%s", constants.MemoryRawSubject, ev.TenantID)
-	replayMsgID := fmt.Sprintf("replay:%d", ev.StreamSequence)
-	if _, err := s.js.Publish(publishCtx, rawSubject, ev.Payload, jetstream.WithMsgID(replayMsgID)); err != nil {
+	// MsgID 含租户与原始流：不同租户/不同流相同 seq 的事件在窗口内互不去重。
+	ack, err := s.js.Publish(publishCtx, rawSubject, ev.Payload, jetstream.WithMsgID(rawReplayMsgID(ev)))
+	if err != nil {
 		result.Failed++
 		s.logger.Error("memory.dlq.replay.publish_raw_failed",
 			zap.String("tenant_id", ev.TenantID), zap.Error(err))
@@ -125,10 +166,18 @@ func (s *ReplayService) replayOne(ctx context.Context, msg jetstream.Msg, errorC
 			replayHeaderReplayCount: {strconv.Itoa(replayCount + 1)},
 		},
 	}
-	if _, err := s.js.PublishMsg(publishCtx, mark, jetstream.WithMsgID(deadLetterDedupID(ev))); err != nil {
+	// mark MsgID 含目标 count：窗口内也能落地为新副本，ReplayCount 真实推进；
+	// 与原消息 deadLetterDedupID（dlq:...）不同前缀，首轮标记不会被去重吞掉。
+	if _, err := s.js.PublishMsg(publishCtx, mark, jetstream.WithMsgID(markReplayMsgID(ev, replayCount+1))); err != nil {
 		result.Failed++
 		s.logger.Error("memory.dlq.replay.mark_failed",
 			zap.String("tenant_id", ev.TenantID), zap.Error(err))
+		return
+	}
+	// raw 侧被 dedup：该事件在窗口内已 re-feed，本次不产生新消息——计 Skipped
+	// 而非 Replayed，避免 API 谎报；mark 已发布，ReplayCount 照常推进。
+	if ack != nil && ack.Duplicate {
+		result.Skipped++
 		return
 	}
 	result.Replayed++
@@ -136,6 +185,20 @@ func (s *ReplayService) replayOne(ctx context.Context, msg jetstream.Msg, errorC
 		zap.String("tenant_id", ev.TenantID),
 		zap.String("error_code", errorCode),
 		zap.Uint64("stream_sequence", ev.StreamSequence))
+}
+
+// rawReplayMsgID 生成 raw 重放发布的 dedup MsgID。含租户与原始流，
+// 保证不同租户/不同流的相同 seq 在窗口内互不去重（防碰撞）；
+// 同一事件重复重放则复用同 ID，窗口内被服务器静默去重。
+func rawReplayMsgID(ev DeadLetterEvent) string {
+	return fmt.Sprintf("replay:%s:%s:%d", ev.TenantID, ev.OriginalStream, ev.StreamSequence)
+}
+
+// markReplayMsgID 生成重放标记的 dedup MsgID。targetCount 是本次标记试图写入
+// 的 ReplayCount 值：含 count 后窗口内每次重放的标记都能落地（与原消息的
+// dlq: 前缀及上次标记的 count 均不同），ReplayCount 逐步推进至上限。
+func markReplayMsgID(ev DeadLetterEvent, targetCount int) string {
+	return fmt.Sprintf("dlq-mark:%s:%s:%d:%d", ev.TenantID, ev.OriginalStream, ev.StreamSequence, targetCount)
 }
 
 // replayCountOf 读取消息 header 中的重放次数，缺失或非法按 0 计。
