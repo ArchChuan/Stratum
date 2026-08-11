@@ -64,7 +64,9 @@ type ReplayResult struct {
 // dlq-mark:<TenantID>:<OriginalStream>:<StreamSequence>:<目标count> 为 MsgID
 // 重发布回 DLQ subject——含目标 count 使标记在 dedup 窗口内也能落地为新副本
 // （带 Replayed/ReplayCount header），ReplayCount 每次重放真实推进，直至
-// ReplayCount 上限兜底终止自喂循环。
+// ReplayCount 上限兜底终止副本链（收敛在 count=MaxDLQReplay）。
+// 原消息本身不退役（AckNone 设计使然）：持久失败事件在运维持续调用时每个
+// dedup 窗口至多被 re-feed 一次，re-feed 速率由 raw dedup 窗口硬限，天然防风暴。
 func (s *ReplayService) ReplayByErrorCode(ctx context.Context, errorCode string) (ReplayResult, error) {
 	result := ReplayResult{}
 	// 快照语义：只处理调用开始时已在 DLQ 的消息。重放标记在调用期间落地为新
