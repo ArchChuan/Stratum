@@ -33,6 +33,22 @@ func IsPermanent(err error) bool {
 	return errors.As(err, &pe)
 }
 
+// ErrContextLengthExceeded 表示请求超出模型上下文窗口：不可恢复（重试依旧
+// 报错），agent 层可感知并触发降级/下修闭环。
+var ErrContextLengthExceeded = &contextLengthExceededError{msg: "context length exceeded"}
+
+type contextLengthExceededError struct{ msg string }
+
+func (e *contextLengthExceededError) Error() string               { return e.msg }
+func (e *contextLengthExceededError) Unwrap() error               { return nil }
+func (e *contextLengthExceededError) Permanent() bool             { return true } // permanentMarker
+func (e *contextLengthExceededError) ContextLengthExceeded() bool { return true }
+
+// IsContextLengthExceeded 报告 err（含包装链）是否为上下文超限。
+func IsContextLengthExceeded(err error) bool {
+	return errors.Is(err, ErrContextLengthExceeded)
+}
+
 // isTransient 分类 LLM provider 调用错误：瞬态错误可触发 fallback 降级；
 // 永久错误（含 context.Canceled、DeadlineExceeded）立即停止链，保持 fail-fast 语义。
 //

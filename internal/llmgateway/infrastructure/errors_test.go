@@ -79,6 +79,47 @@ func TestIsTransient_DeadlineExceededIsPermanent(t *testing.T) {
 	}
 }
 
+func TestIsContextLengthExceeded(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "bare sentinel", err: ErrContextLengthExceeded, want: true},
+		{name: "wrapped", err: fmt.Errorf("complete: %w", ErrContextLengthExceeded), want: true},
+		{name: "other 400", err: fmt.Errorf("complete: status 400: schema mismatch"), want: false},
+		{name: "nil", err: nil, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsContextLengthExceeded(tc.err); got != tc.want {
+				t.Fatalf("IsContextLengthExceeded(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestContextLengthExceededProbe 验证 agent 层 duck-typing 探测协议：
+// 经 %w 包装链 errors.As 可分别命中 ContextLengthExceeded()（Task 9 降级
+// 探测）与 Permanent()（permanentMarker）标记。
+func TestContextLengthExceededProbe(t *testing.T) {
+	err := fmt.Errorf("complete: %w", ErrContextLengthExceeded)
+	var cle interface{ ContextLengthExceeded() bool }
+	if !errors.As(err, &cle) {
+		t.Fatal("wrapped error must expose ContextLengthExceeded() marker")
+	}
+	if !cle.ContextLengthExceeded() {
+		t.Fatal("ContextLengthExceeded() must report true")
+	}
+	var perm interface{ Permanent() bool }
+	if !errors.As(err, &perm) {
+		t.Fatal("wrapped error must expose Permanent() marker")
+	}
+	if !perm.Permanent() {
+		t.Fatal("Permanent() must report true")
+	}
+}
+
 // timeoutNetErr 模拟实现 net.Error 的超时错误。
 type timeoutNetErr struct{ timeout bool }
 
