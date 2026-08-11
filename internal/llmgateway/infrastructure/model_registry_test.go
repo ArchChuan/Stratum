@@ -69,6 +69,10 @@ func (m *mockModelRepo) Toggle(ctx context.Context, tenantID, id string, enabled
 	return m.err
 }
 
+func (m *mockModelRepo) SetDefaultEmbedding(context.Context, string, string, bool) error {
+	return m.err
+}
+
 type mockProviderRepo struct {
 	providers map[string]*domain.Provider
 	err       error

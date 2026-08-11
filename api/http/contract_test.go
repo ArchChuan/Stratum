@@ -283,6 +283,9 @@ func (contractModelRepo) UpsertDiscovered(_ context.Context, _ string, _ string,
 }
 func (contractModelRepo) Delete(_ context.Context, _ string, _ string) error         { return nil }
 func (contractModelRepo) Toggle(_ context.Context, _ string, _ string, _ bool) error { return nil }
+func (contractModelRepo) SetDefaultEmbedding(_ context.Context, _ string, _ string, _ bool) error {
+	return nil
+}
 
 type contractProviderRuntime struct{}
 

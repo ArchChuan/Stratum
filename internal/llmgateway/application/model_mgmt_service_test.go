@@ -30,6 +30,9 @@ func (r *modelMgmtRepo) UpsertDiscovered(
 }
 func (r *modelMgmtRepo) Delete(context.Context, string, string) error       { return r.err }
 func (r *modelMgmtRepo) Toggle(context.Context, string, string, bool) error { return r.err }
+func (r *modelMgmtRepo) SetDefaultEmbedding(context.Context, string, string, bool) error {
+	return r.err
+}
 
 type recordingInvalidator struct {
 	tenants []string

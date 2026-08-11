@@ -838,3 +838,20 @@ func TestTenantSchemaBackfillsChatMessageArtifactsAfterTableCreate(t *testing.T)
 		t.Fatal("artifacts_json backfill must follow chat_messages creation for historical tenants")
 	}
 }
+
+func TestTenantSchemaHasDefaultEmbeddingColumnAndIndex(t *testing.T) {
+	schema, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(schema)
+	for _, want := range []string{
+		"ADD COLUMN IF NOT EXISTS default_embedding BOOLEAN NOT NULL DEFAULT false",
+		"idx_models_default_embedding",
+		"WHERE default_embedding AND 'embedding' = ANY(capabilities)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("tenant_schema.sql missing %q", want)
+		}
+	}
+}

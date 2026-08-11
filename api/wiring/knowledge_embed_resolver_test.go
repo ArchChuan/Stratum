@@ -42,6 +42,9 @@ func (r *knowledgeModelRepo) UpsertDiscovered(
 }
 func (r *knowledgeModelRepo) Delete(context.Context, string, string) error       { return nil }
 func (r *knowledgeModelRepo) Toggle(context.Context, string, string, bool) error { return nil }
+func (r *knowledgeModelRepo) SetDefaultEmbedding(context.Context, string, string, bool) error {
+	return nil
+}
 
 func modelHasCapabilityForKnowledge(model domain.Model, capability domain.ModelCapability) bool {
 	for _, candidate := range model.Capabilities {
