@@ -244,7 +244,7 @@ func TestWorkspaceCreateSuccessAndCollection(t *testing.T) {
 	if len(store.created) != 1 {
 		t.Fatalf("collections = %+v", store.created)
 	}
-	if store.created[0].name != constants.CollectionName("t1", ws.ID) || store.created[0].dim != 1024 {
+	if store.created[0].name != constants.CollectionName("t1", ws.ID, ws.Config.EmbeddingModel) || store.created[0].dim != 1024 {
 		t.Fatalf("collection = %+v", store.created[0])
 	}
 	// embedding-3 → 2048 dim。
@@ -649,7 +649,7 @@ func TestWorkspaceDeleteDocument(t *testing.T) {
 	if err := svc.DeleteDocument(context.Background(), "t1", "ws1", "d1"); err != nil {
 		t.Fatalf("delete = %v", err)
 	}
-	if len(store.deletedByDoc[constants.CollectionName("t1", "wsid-ws1")]) != 1 {
+	if len(store.deletedByDoc[constants.CollectionName("t1", "wsid-ws1", "text-embedding-v3")]) != 1 {
 		t.Fatalf("vector deletes = %+v", store.deletedByDoc)
 	}
 }

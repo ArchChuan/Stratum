@@ -65,8 +65,14 @@ func SanitizeMilvusName(s string) string { return milvusUnsafe.ReplaceAllString(
 
 // CollectionName generates the Milvus collection name for a knowledge workspace.
 // workspaceID must be the stable workspace ID, not the mutable name.
-// CollectionName returns the Milvus collection name for a workspace.
-// workspaceID (UUID v7) is globally unique, so tenantID is ignored.
-func CollectionName(_, workspaceID string) string {
+// workspaceID (UUID v7) is globally unique, so tenantID is ignored; embedModel
+// is encoded as a sanitized suffix so switching models isolates vector data.
+func CollectionName(_, workspaceID, embedModel string) string {
+	return fmt.Sprintf("%s_%s_%s", CollectionPrefix, SanitizeMilvusName(workspaceID), SanitizeMilvusName(embedModel))
+}
+
+// CollectionLegacyName 是无模型后缀的存量 collection 名（升级前数据）。
+// 删除/清理路径与 legacy 回退读取统一经此拼写，避免两处命名漂移。
+func CollectionLegacyName(_, workspaceID string) string {
 	return fmt.Sprintf("%s_%s", CollectionPrefix, SanitizeMilvusName(workspaceID))
 }

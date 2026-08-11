@@ -722,6 +722,32 @@ func (vs *VectorStore) DeleteByFilter(ctx context.Context, collectionName, expr 
 	return nil
 }
 
+// ListCollections returns the names of all collections whose name starts with
+// prefix. An empty prefix lists every collection. The SDK (v2.4.2) offers no
+// server-side prefix filter, so filtering happens here; results are sorted for
+// deterministic callers. Delete paths use this with a trailing-underscore
+// prefix to enumerate model-suffixed collections (memory_<t>_ / kb_<ws>_)
+// without knowing which models a tenant ever used.
+func (vs *VectorStore) ListCollections(ctx context.Context, prefix string) ([]string, error) {
+	c, err := vs.getClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	collections, err := c.ListCollections(ctx)
+	if err != nil {
+		return nil, classifyAvailabilityError("list collections",
+			fmt.Errorf("failed to list collections: %w", err))
+	}
+	out := make([]string, 0, len(collections))
+	for _, coll := range collections {
+		if coll != nil && strings.HasPrefix(coll.Name, prefix) {
+			out = append(out, coll.Name)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 func (vs *VectorStore) DeleteCollection(ctx context.Context, collectionName string) error {
 	c, err := vs.getClient(ctx)
 	if err != nil {

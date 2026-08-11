@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -24,6 +25,7 @@ var tenantIDRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 // can inject a stub without a live Milvus.
 type collectionDropper interface {
 	DeleteCollection(ctx context.Context, collectionName string) error
+	ListCollections(ctx context.Context, prefix string) ([]string, error)
 }
 
 var _ collectionDropper = (*milvus.VectorStore)(nil)
@@ -89,7 +91,7 @@ func (c *TenantVectorCleaner) dropWorkspaceCollections(ctx context.Context, tena
 	if c.pool == nil {
 		return
 	}
-	var cols []string
+	var wsIDs []string
 	queryErr := execTenant(ctx, c.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id FROM rag_workspaces`)
 		if err != nil {
@@ -101,7 +103,7 @@ func (c *TenantVectorCleaner) dropWorkspaceCollections(ctx context.Context, tena
 			if err := rows.Scan(&id); err != nil {
 				continue
 			}
-			cols = append(cols, constants.CollectionName(tenantID, id))
+			wsIDs = append(wsIDs, id)
 		}
 		return rows.Err()
 	})
@@ -110,8 +112,29 @@ func (c *TenantVectorCleaner) dropWorkspaceCollections(ctx context.Context, tena
 			zap.String("tenant_id", tenantID), zap.Error(queryErr))
 		return
 	}
+	for _, wsID := range wsIDs {
+		c.dropWorkspaceCollectionsForWorkspace(ctx, tenantID, wsID, errs)
+	}
+}
+
+// dropWorkspaceCollectionsForWorkspace deletes the legacy collection plus
+// every model-suffixed collection of one workspace. Model-suffixed names are
+// enumerated by prefix (kb_<san(wsID)>_，含尾下划线), so collections written
+// under any historical or future embedding model are covered without new code.
+func (c *TenantVectorCleaner) dropWorkspaceCollectionsForWorkspace(ctx context.Context, tenantID, workspaceID string, errs *[]string) {
+	legacy := constants.CollectionLegacyName(tenantID, workspaceID)
+	if err := c.vs.DeleteCollection(ctx, legacy); err != nil && !errors.Is(err, milvus.ErrCollectionNotFound) {
+		*errs = append(*errs, fmt.Sprintf("%s: %v", legacy, err))
+	}
+	prefix := legacy + "_"
+	cols, err := c.vs.ListCollections(ctx, prefix)
+	if err != nil {
+		// 列不出来时不能静默漏删：失败必须暴露（残留由后续 cleaner 运行重试）。
+		*errs = append(*errs, fmt.Sprintf("list collections %s: %v", prefix, err))
+		return
+	}
 	for _, col := range cols {
-		if err := c.vs.DeleteCollection(ctx, col); err != nil {
+		if err := c.vs.DeleteCollection(ctx, col); err != nil && !errors.Is(err, milvus.ErrCollectionNotFound) {
 			*errs = append(*errs, fmt.Sprintf("%s: %v", col, err))
 		}
 	}

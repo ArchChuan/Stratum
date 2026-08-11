@@ -30,9 +30,16 @@ const hybridLegRecallFactor = 2
 // and "drift" via ChunkRepo.CountByWorkspace.
 var errCollectionNotFound = errors.New("knowledge collection not found")
 
+// errLegacyDimMismatch reports a vector-dimension mismatch on the collection
+// being searched. The caller decides the semantics: on the legacy
+// (pre-upgrade) collection a mismatch skips retrieval (Warn + empty result,
+// spec: legacy dim drift is not fail-closed); on the model-suffixed name it
+// still fails closed as ErrRAGDependency.
+var errLegacyDimMismatch = errors.New("knowledge legacy collection dimension mismatch")
+
 func isCollectionNotFound(err error) bool {
 	return errors.Is(err, errCollectionNotFound) ||
-		strings.Contains(err.Error(), "collection not found")
+		(err != nil && strings.Contains(err.Error(), "collection not found"))
 }
 
 // rerankIdentity splits "provider:model" style rerank identities.
@@ -266,7 +273,7 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 		}
 	}
 
-	collectionName := constants.CollectionName(req.TenantID, req.WorkspaceID)
+	collectionName := constants.CollectionName(req.TenantID, req.WorkspaceID, req.EmbeddingModel)
 
 	switch req.Mode {
 	case "vector":
@@ -274,10 +281,12 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 		if widensRecall(req.Reranking) {
 			candidateTopK = req.TopK * constants.RerankWidenFactor
 		}
-		vectorResults, err := rs.queryVector(ctx, req.Question, collectionName, candidateTopK, rs.resolveEmbedder(ctx, req), req.EmbeddingModel)
+		legacyName := constants.CollectionLegacyName(req.TenantID, req.WorkspaceID)
+		searchName, legacy := rs.resolveSearchCollection(ctx, collectionName, legacyName, req.WorkspaceID)
+		vectorResults, err := rs.queryVector(ctx, req.Question, searchName, candidateTopK, rs.resolveEmbedder(ctx, req), req.EmbeddingModel, legacy)
 		if err != nil {
 			if errors.Is(err, errCollectionNotFound) {
-				if missingErr := rs.handleMissingCollection(ctx, req); missingErr != nil {
+				if missingErr := rs.handleMissingCollection(ctx, req, searchName); missingErr != nil {
 					return nil, missingErr
 				}
 				return result, nil
@@ -392,7 +401,7 @@ func (rs *RAGService) hybridPool(ctx context.Context, req RAGQueryRequest, colle
 	vCh := make(chan vRes, 1)
 	kCh := make(chan kRes, 1)
 	go func() {
-		r, e := rs.queryVector(ctx, req.Question, collectionName, legTopK, embedder, req.EmbeddingModel)
+		r, e := rs.queryVector(ctx, req.Question, collectionName, legTopK, embedder, req.EmbeddingModel, false)
 		vCh <- vRes{r, e}
 	}()
 	go func() {
@@ -407,7 +416,7 @@ func (rs *RAGService) hybridPool(ctx context.Context, req RAGQueryRequest, colle
 	kr := <-kCh
 	if vr.e != nil {
 		if errors.Is(vr.e, errCollectionNotFound) {
-			if missingErr := rs.handleMissingCollection(ctx, req); missingErr != nil {
+			if missingErr := rs.handleMissingCollection(ctx, req, collectionName); missingErr != nil {
 				return nil, nil, missingErr
 			}
 			// Empty workspace: fall through to the keyword leg alone.
@@ -511,10 +520,30 @@ func (rs *RAGService) attachParentContent(ctx context.Context, req RAGQueryReque
 	}
 }
 
+// resolveSearchCollection decides the collection to search: the model-suffixed
+// name normally, or the legacy (no-suffix) name when the new collection is
+// missing. Legacy fallback runs before drift classification: a workspace that
+// was upgraded but not re-ingested legitimately lacks the new collection, so
+// the old data is searched first; only when both names are missing does
+// handleMissingCollection classify the state.
+func (rs *RAGService) resolveSearchCollection(ctx context.Context, collectionName, legacyName, workspaceID string) (searchName string, legacy bool) {
+	searchName = collectionName
+	if _, err := rs.vectorStore.DescribeCollection(ctx, collectionName); isCollectionNotFound(err) {
+		searchName = legacyName
+		legacy = true
+		rs.logger.Info("knowledge.retrieval.legacy_collection_fallback",
+			zap.String("collection", legacyName), zap.String("workspace_id", workspaceID))
+	}
+	return searchName, legacy
+}
+
 // queryVector embeds the question and searches the workspace collection.
 // embedModel ("" when unknown) drives the collection dimension check; a
 // missing collection yields errCollectionNotFound for the caller to classify.
-func (rs *RAGService) queryVector(ctx context.Context, question string, collection string, topK int, embedder knowledgeport.Embedder, embedModel string) ([]knowledgeport.VectorSearchResult, error) {
+// legacy marks the fallback search on the pre-upgrade (no model suffix)
+// collection: a dimension mismatch on it skips retrieval with an empty result
+// instead of failing closed, per the spec's legacy-drift contract.
+func (rs *RAGService) queryVector(ctx context.Context, question string, collection string, topK int, embedder knowledgeport.Embedder, embedModel string, legacy bool) ([]knowledgeport.VectorSearchResult, error) {
 	rs.logger.Debug("querying vector store")
 
 	if embedder == nil {
@@ -528,6 +557,11 @@ func (rs *RAGService) queryVector(ctx context.Context, question string, collecti
 
 	if embedModel != "" {
 		if err := rs.validateCollectionDim(ctx, collection, embedModel); err != nil {
+			if legacy && errors.Is(err, errLegacyDimMismatch) {
+				// legacy 集合维数与当前模型不符：Warn 已在 validateCollectionDim
+				// 记录，跳过该集合返回空（spec：legacy dim 不一致不 fail-closed）。
+				return []knowledgeport.VectorSearchResult{}, nil
+			}
 			return nil, err
 		}
 	}
@@ -559,10 +593,10 @@ func (rs *RAGService) validateCollectionDim(ctx context.Context, collection, emb
 		return ErrRAGDependency
 	}
 	if info.Dim != 0 && info.Dim != constants.DimensionForModel(embedModel) {
-		rs.logger.Error("knowledge.retrieval.schema_mismatch",
+		rs.logger.Warn("knowledge.retrieval.legacy_dim_mismatch",
 			zap.String("collection", collection), zap.Int("existing_dim", info.Dim),
 			zap.Int("required_dim", constants.DimensionForModel(embedModel)))
-		return ErrRAGDependency
+		return errLegacyDimMismatch // 调用方对 legacy 名跳过、新名转 ErrRAGDependency
 	}
 	if !info.HasUserID {
 		rs.logger.Warn("collection lacks user_id column, skipping user scope check",
@@ -573,8 +607,10 @@ func (rs *RAGService) validateCollectionDim(ctx context.Context, collection, emb
 
 // handleMissingCollection classifies a missing vector collection: 0 chunks in
 // PG means a legitimately empty workspace (empty result), any chunks means
-// drift between PG and Milvus and fails closed.
-func (rs *RAGService) handleMissingCollection(ctx context.Context, req RAGQueryRequest) error {
+// drift between PG and Milvus and fails closed. collectionName is the name the
+// caller actually searched (the legacy name after a fallback), so logs and
+// metrics attribute the failure to the real collection.
+func (rs *RAGService) handleMissingCollection(ctx context.Context, req RAGQueryRequest, collectionName string) error {
 	if rs.chunkRepo == nil {
 		return ErrRAGDependency
 	}
@@ -586,11 +622,11 @@ func (rs *RAGService) handleMissingCollection(ctx context.Context, req RAGQueryR
 	}
 	if count > 0 {
 		rs.logger.Error("knowledge.retrieval.drift",
-			zap.Int64("chunk_count", count), zap.String("collection", constants.CollectionName(req.TenantID, req.WorkspaceID)))
+			zap.Int64("chunk_count", count), zap.String("collection", collectionName))
 		return ErrRAGDependency
 	}
 	rs.logger.Warn("vector collection not found; workspace has no chunks",
-		zap.String("collection", constants.CollectionName(req.TenantID, req.WorkspaceID)))
+		zap.String("collection", collectionName))
 	return nil
 }
 
@@ -687,13 +723,13 @@ func l2ToSim(d float32) float32 {
 	return 1.0 / (1.0 + d)
 }
 
-func (rs *RAGService) RetrieveRelevantChunks(ctx context.Context, tenantID, question, workspace string, topK int) ([]string, error) {
+func (rs *RAGService) RetrieveRelevantChunks(ctx context.Context, tenantID, question, workspace, embedModel string, topK int) ([]string, error) {
 	if tenantID == "" {
 		return nil, fmt.Errorf("knowledge: tenant_id is empty")
 	}
-	collectionName := constants.CollectionName(tenantID, workspace)
+	collectionName := constants.CollectionName(tenantID, workspace, embedModel)
 
-	vectorResults, err := rs.queryVector(ctx, question, collectionName, topK, rs.embeddingSvc, "")
+	vectorResults, err := rs.queryVector(ctx, question, collectionName, topK, rs.embeddingSvc, embedModel, false)
 	if err != nil {
 		if isCollectionNotFound(err) {
 			return []string{}, nil

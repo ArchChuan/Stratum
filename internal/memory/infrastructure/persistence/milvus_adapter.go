@@ -29,6 +29,7 @@ type milvusStore interface {
 	DeleteByPrimaryIDs(context.Context, string, []string) error
 	DeleteByFilter(context.Context, string, string) error
 	SearchWithFilter(context.Context, string, []float32, int, string, ...string) ([]storagemilvus.SearchResult, error)
+	ListCollections(context.Context, string) ([]string, error)
 }
 
 // MilvusPortAdapter adapts *storagemilvus.VectorStore to memport.VectorStore.
@@ -200,8 +201,31 @@ func (a *MilvusPortAdapter) DeleteAllByUser(ctx context.Context, tenantID, userI
 
 func (a *MilvusPortAdapter) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error {
 	expr := fmt.Sprintf("agent_id == %q and scope == %q", agentID, string(domain.ScopeAgent))
+	return a.deleteFromAllCollections(ctx, tenantID, expr)
+}
+
+func (a *MilvusPortAdapter) deleteBothMemoryCollections(ctx context.Context, tenantID, field, value string) error {
+	expr := fmt.Sprintf("%s == %q", field, value)
+	return a.deleteFromAllCollections(ctx, tenantID, expr)
+}
+
+// deleteFromAllCollections applies the filter to the tenant's legacy
+// (no-model-suffix) collections and to every model-suffixed collection listed
+// by prefix, so delete-all paths cover every historical default embedding
+// model, not just the current one.
+func (a *MilvusPortAdapter) deleteFromAllCollections(ctx context.Context, tenantID, expr string) error {
 	var errs []error
 	for _, collection := range legacyMemoryCollections(tenantID) {
+		if err := a.vs.DeleteByFilter(ctx, collection, expr); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", collection, err))
+		}
+	}
+	modelSuffixed, listErr := a.modelSuffixedMemoryCollections(ctx, tenantID)
+	if listErr != nil {
+		// 列不出来就不能静默当没这回事：失败必须暴露，否则模型后缀集合漏删。
+		errs = append(errs, listErr)
+	}
+	for _, collection := range modelSuffixed {
 		if err := a.vs.DeleteByFilter(ctx, collection, expr); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", collection, err))
 		}
@@ -209,15 +233,23 @@ func (a *MilvusPortAdapter) DeleteAllByAgent(ctx context.Context, tenantID, agen
 	return errors.Join(errs...)
 }
 
-func (a *MilvusPortAdapter) deleteBothMemoryCollections(ctx context.Context, tenantID, field, value string) error {
-	expr := fmt.Sprintf("%s == %q", field, value)
+// modelSuffixedMemoryCollections lists the tenant's model-suffixed memory
+// collections (memory_<t>_<model> / memory_facts_<t>_<model>). The trailing
+// underscore keeps tenant t1 from matching t10. A listing failure is returned
+// so the delete path surfaces it instead of leaking collections.
+func (a *MilvusPortAdapter) modelSuffixedMemoryCollections(ctx context.Context, tenantID string) ([]string, error) {
+	tid := strings.ReplaceAll(tenantID, "-", "_")
+	var cols []string
 	var errs []error
-	for _, collection := range legacyMemoryCollections(tenantID) {
-		if err := a.vs.DeleteByFilter(ctx, collection, expr); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", collection, err))
+	for _, prefix := range []string{"memory_" + tid + "_", "memory_facts_" + tid + "_"} {
+		listed, err := a.vs.ListCollections(ctx, prefix)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("list collections %q: %w", prefix, err))
+			continue
 		}
+		cols = append(cols, listed...)
 	}
-	return errors.Join(errs...)
+	return cols, errors.Join(errs...)
 }
 
 // memoryFactsCollectionLegacyName / memoryCollectionLegacyName 是无模型后缀的
@@ -232,14 +264,8 @@ func memoryCollectionLegacyName(tenantID string) string {
 }
 
 // legacyMemoryCollections 返回租户的存量（无模型后缀）collection 名列表，
-// DeleteAllByUser / DeleteAllByAgent 两个删除路径统一经此枚举。
-//
-// 已知限制：模型后缀 collection（memory_<t>_<model> / memory_facts_<t>_<model>，
-// 由 pipeline 侧 memoryCollectionName / memoryFactsCollectionName 写入）不在枚举
-// 范围——其数量取决于租户历史默认嵌入模型，且 pkg/storage/milvus 当前不暴露
-// ListCollections（底层 SDK 支持），无法按前缀枚举。首选方案：pkg/storage/milvus
-// 增加 ListCollections 包装后，按 "memory_<t>_" / "memory_facts_<t>_" 前缀（含尾
-// 下划线，避免 t1 误匹配 t10）枚举并逐 collection 执行 DeleteByFilter。
+// 删除路径统一经此枚举。模型后缀 collection 不在此列——它们由
+// modelSuffixedMemoryCollections 按前缀枚举，两者共同构成 delete-all 全集。
 func legacyMemoryCollections(tenantID string) []string {
 	return []string{memoryFactsCollectionLegacyName(tenantID), memoryCollectionLegacyName(tenantID)}
 }

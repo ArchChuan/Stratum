@@ -13,8 +13,9 @@ import (
 
 // mockChunkRepo 实现 port.ChunkRepo；DeleteByWorkspace 可脚本化错误。
 type mockChunkRepo struct {
-	deleteErr error
-	deleted   []struct{ tenantID, workspaceID string }
+	deleteErr        error
+	countByWorkspace int64
+	deleted          []struct{ tenantID, workspaceID string }
 }
 
 var _ knowledgeport.ChunkRepo = (*mockChunkRepo)(nil)
@@ -40,7 +41,7 @@ func (m *mockChunkRepo) KeywordSearch(context.Context, string, string, string, i
 }
 
 func (m *mockChunkRepo) CountByWorkspace(context.Context, string, string) (int64, error) {
-	return 0, nil
+	return m.countByWorkspace, nil
 }
 
 func (m *mockChunkRepo) DeleteByWorkspace(_ context.Context, tenantID, workspaceID string) error {
@@ -159,17 +160,17 @@ func TestGetWorkspaceStats(t *testing.T) {
 	ki := buildIngest(t, &mockParser{out: paragraphInput(2)}, &mockEmbedder{dim: 4}, newMockDocRepo())
 	ki.vectorStore = NewMockVectorStore()
 
-	stats, err := ki.GetWorkspaceStats(context.Background(), "t1", "wsid-1")
+	stats, err := ki.GetWorkspaceStats(context.Background(), "t1", "wsid-1", "text-embedding-v3")
 	if err != nil {
 		t.Fatalf("stats = %v", err)
 	}
-	if stats["workspace"] != "wsid-1" || stats["vector_count"] != int64(0) || stats["collection"] != constants.CollectionName("t1", "wsid-1") {
+	if stats["workspace"] != "wsid-1" || stats["vector_count"] != int64(0) || stats["collection"] != constants.CollectionName("t1", "wsid-1", "text-embedding-v3") {
 		t.Fatalf("stats = %+v", stats)
 	}
 
 	// 极端情况：CountVectors 失败 → 错误传播。
 	ki.vectorStore = &vectorStoreFailing{}
-	if _, err := ki.GetWorkspaceStats(context.Background(), "t1", "wsid-1"); err == nil {
+	if _, err := ki.GetWorkspaceStats(context.Background(), "t1", "wsid-1", "text-embedding-v3"); err == nil {
 		t.Fatal("count failure must error")
 	}
 }
