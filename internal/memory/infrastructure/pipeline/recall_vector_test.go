@@ -197,6 +197,38 @@ func TestTryVectorSearch_OutageClassifiedAndDegradationKept(t *testing.T) {
 	}
 }
 
+func TestTryVectorSearch_DimensionMismatchIsSilentLegacyFallback(t *testing.T) {
+	tenant := "acme"
+	model := "embedding-3"
+	names := recallCandidateCollections(tenant, model)
+	// 模型切换后的存量集合维度与当前 embedding 不一致是必然的 dim mismatch：
+	// 必须与 collection-not-found 同级——Debug 跳过、不 ERROR、不 degraded、
+	// 不作为 outage 上抛。幸存 collection 的结果照常返回。
+	vs := &fakeVectorSearcher{
+		byCollection: map[string][]vector.SearchResult{
+			names[1]: {{ID: "legacy-hit", Content: "legacy hit", Score: 0.2}},
+		},
+		errByColl: map[string]error{
+			names[0]: storagemilvus.ErrDimensionMismatch,
+			names[3]: fmt.Errorf("failed to search vectors: %w: %v", storagemilvus.ErrDimensionMismatch, "dimension mismatch: query vector dimension (1536) does not match collection dimension (1024)"),
+		},
+	}
+	spy := &recallMetricSpy{}
+	h := &RecallHandler{logger: zap.NewNop(), embedSvc: &fakeEmbedClient{vec: []float32{1}, model: model}, vectorDB: vs, metrics: spy}
+
+	got, err := h.tryVectorSearch(context.Background(), tenant, "u1", "", "user", RecallRequest{Query: "q", Limit: 5})
+
+	if err != nil {
+		t.Fatalf("dim mismatch must not surface as outage, got %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "legacy-hit" {
+		t.Fatalf("expected survivor 'legacy-hit' from non-mismatch collection, got %v", got)
+	}
+	if spy.knowledgeQuery["recall.degraded"] != 0 {
+		t.Fatalf("dim mismatch must not emit degraded signal, got %d", spy.knowledgeQuery["recall.degraded"])
+	}
+}
+
 func TestTryVectorSearch_CollectionNotFoundIsSilentLegacyFallback(t *testing.T) {
 	tenant := "acme"
 	vs := &fakeVectorSearcher{errByColl: map[string]error{

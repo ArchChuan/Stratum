@@ -186,8 +186,9 @@ func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID, a
 	}
 
 	// 候选集合 = 当前模型的新名 collection（raw + facts）∪ legacy 名（升级前
-	// 数据）。SearchWithFilter 对不存在的 collection 报错被跳过——天然实现
-	// legacy 回退与 dim mismatch 跳过（不 fail-closed）。
+	// 数据）。SearchWithFilter 对不存在的 collection 报错被跳过，dim mismatch
+	// （模型切换后旧集合维度不符）同样跳过——天然实现 legacy 回退（不
+	// fail-closed），详见 searchAllCollections 的错误分类。
 	// embedSvc 已由上方 guard 保证非 nil；Model() 可能为空串 → legacy-only。
 	merged, searchErr := h.searchAllCollections(ctx, recallCandidateCollections(tenantID, embedSvc.Model()), vec, req.Limit*2, expr)
 
@@ -224,10 +225,11 @@ func recallCandidateCollections(tenantID, embedModel string) []string {
 
 // searchAllCollections 对每个候选 collection 查询并合并结果；单个 collection
 // 查询失败不 fail-closed——legacy 回退由"先新名后旧名"的顺序天然实现。失败按
-// 性质分类：collection-not-found 是升级前存量数据的预期状态，Debug 后静默跳过；
-// 其余错误（Milvus 连接/超时/dim mismatch）是向量库 outage——降级保留，但必须
-// ERROR 可见并计入 degraded 指标，禁止无声降级。返回的 error 为首个 outage
-// （nil 表示无 outage），供调用方追溯。
+// 性质分类：collection-not-found 与 dim mismatch（模型切换后旧集合维度不符）
+// 都是升级前存量数据的预期状态，Debug 后静默跳过；其余错误（Milvus 连接/
+// 超时等）才是向量库 outage——降级保留，但必须 ERROR 可见并计入 degraded
+// 指标，禁止无声降级。返回的 error 为首个 outage（nil 表示无 outage），供调用
+// 方追溯。
 func (h *RecallHandler) searchAllCollections(ctx context.Context, collections []string, vec []float32, limit int, expr string) ([]vector.SearchResult, error) {
 	var merged []vector.SearchResult
 	var outageErr error
@@ -239,6 +241,14 @@ func (h *RecallHandler) searchAllCollections(ctx context.Context, collections []
 		}
 		if errors.Is(err, storagemilvus.ErrCollectionNotFound) {
 			h.logger.Debug("memory.recall: collection not found, legacy fallback",
+				zap.String("collection", collection))
+			continue
+		}
+		if errors.Is(err, storagemilvus.ErrDimensionMismatch) {
+			// 模型切换后旧集合维度与当前 embedding 不一致：确定性数据形态错误，
+			// 与 collection-not-found 同级——Debug 跳过，不 ERROR、不计 degraded、
+			// 不构成 outage。
+			h.logger.Debug("memory.recall: collection dimension mismatch, legacy fallback",
 				zap.String("collection", collection))
 			continue
 		}

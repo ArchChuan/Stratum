@@ -542,6 +542,12 @@ func (vs *VectorStore) searchWithParam(
 			zap.String("collection", collectionName))
 		return nil, nil
 	}
+	if isDimensionMismatch(err) {
+		// 查询维度与 collection 维度不一致是确定性数据形态错误，不是 outage：
+		// 翻译为 ErrDimensionMismatch（errors.Is 可判），调用方降级跳过；
+		// 保留原始消息便于排查。
+		return nil, fmt.Errorf("failed to search vectors: %w: %v", ErrDimensionMismatch, err)
+	}
 	vs.logger.Error("failed to search vectors", zap.Error(err))
 	return nil, classifyAvailabilityError("search", fmt.Errorf("failed to search vectors: %w", err))
 }
