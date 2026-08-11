@@ -558,10 +558,10 @@ func (rs *RAGService) validateCollectionDim(ctx context.Context, collection, emb
 			zap.String("operation", "describe_collection"), zap.Error(err))
 		return ErrRAGDependency
 	}
-	if info.Dim != 0 && info.Dim != vectorDim(embedModel) {
+	if info.Dim != 0 && info.Dim != constants.DimensionForModel(embedModel) {
 		rs.logger.Error("knowledge.retrieval.schema_mismatch",
 			zap.String("collection", collection), zap.Int("existing_dim", info.Dim),
-			zap.Int("required_dim", vectorDim(embedModel)))
+			zap.Int("required_dim", constants.DimensionForModel(embedModel)))
 		return ErrRAGDependency
 	}
 	if !info.HasUserID {

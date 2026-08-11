@@ -34,18 +34,6 @@ type collectionProvisioner interface {
 	DeleteByDocumentIDs(ctx context.Context, collectionName string, docIDs []string) error
 }
 
-// vectorDim returns the vector dimension for the given embedding model.
-func vectorDim(model string) int {
-	switch model {
-	case "text-embedding-v2", "text-embedding-v3", "text-embedding-v4":
-		return 1024
-	case "embedding-3":
-		return 2048
-	default:
-		return 1536
-	}
-}
-
 // CreateWorkspaceInput carries the application-level shape of POST /knowledge/workspaces.
 type CreateWorkspaceInput struct {
 	Name        string
@@ -141,7 +129,7 @@ func (s *WorkspaceService) CreateWorkspace(ctx context.Context, tenantID string,
 	}
 	if s.vectorStore != nil {
 		col := constants.CollectionName(tenantID, ws.ID)
-		if err := s.vectorStore.CreateCollectionWithDim(ctx, col, vectorDim(ws.Config.EmbeddingModel)); err != nil {
+		if err := s.vectorStore.CreateCollectionWithDim(ctx, col, constants.DimensionForModel(ws.Config.EmbeddingModel)); err != nil {
 			s.logger.Error("knowledge.workspace.create_collection_failed: rolling back db record",
 				zap.String("tenant_id", tenantID),
 				zap.String("workspace", in.Name),

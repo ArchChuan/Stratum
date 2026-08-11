@@ -344,7 +344,7 @@ func (ki *KnowledgeIngest) doEmbedAndPersist(ctx context.Context, req IngestDocu
 	}
 
 	collectionName := constants.CollectionName(req.TenantID, req.WorkspaceID)
-	if err := ki.vectorStore.CreateCollectionWithDim(ctx, collectionName, vectorDim(req.EmbeddingModel)); err != nil {
+	if err := ki.vectorStore.CreateCollectionWithDim(ctx, collectionName, constants.DimensionForModel(req.EmbeddingModel)); err != nil {
 		return fmt.Errorf("failed to ensure vector collection: %w", err)
 	}
 	if err := ki.vectorStore.Insert(ctx, collectionName, docChunks); err != nil {

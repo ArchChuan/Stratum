@@ -203,22 +203,26 @@ func seedWorkspace(repo *fakeWorkspaceRepo, name string, managed bool) *domain.W
 	return ws
 }
 
-func TestVectorDimTable(t *testing.T) {
+func TestDimensionForModelPin(t *testing.T) {
 	cases := []struct {
 		model string
 		want  int
 	}{
+		{"text-embedding-v1", 1536},
 		{"text-embedding-v2", 1024},
 		{"text-embedding-v3", 1024},
 		{"text-embedding-v4", 1024},
 		{"embedding-3", 2048},
-		{"", 1536},
-		{"unknown-model", 1536},
+		{"text-embedding-3-small", 1536}, // default
+		{"", 1536},                       // default
+		{"unknown-model", 1536},          // default
 	}
 	for _, tc := range cases {
-		if got := vectorDim(tc.model); got != tc.want {
-			t.Fatalf("vectorDim(%q) = %d, want %d", tc.model, got, tc.want)
-		}
+		t.Run(tc.model, func(t *testing.T) {
+			if got := constants.DimensionForModel(tc.model); got != tc.want {
+				t.Fatalf("DimensionForModel(%q) = %d, want %d", tc.model, got, tc.want)
+			}
+		})
 	}
 }
 

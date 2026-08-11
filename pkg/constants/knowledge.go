@@ -59,11 +59,14 @@ const (
 
 var milvusUnsafe = regexp.MustCompile(`[^a-zA-Z0-9_]`)
 
+// SanitizeMilvusName 把任意字符串清洗为 Milvus 安全的 collection 名片段
+// （仅字母数字下划线）。memory 与 knowledge 命名统一走此函数。
+func SanitizeMilvusName(s string) string { return milvusUnsafe.ReplaceAllString(s, "_") }
+
 // CollectionName generates the Milvus collection name for a knowledge workspace.
 // workspaceID must be the stable workspace ID, not the mutable name.
 // CollectionName returns the Milvus collection name for a workspace.
 // workspaceID (UUID v7) is globally unique, so tenantID is ignored.
 func CollectionName(_, workspaceID string) string {
-	san := func(s string) string { return milvusUnsafe.ReplaceAllString(s, "_") }
-	return fmt.Sprintf("%s_%s", CollectionPrefix, san(workspaceID))
+	return fmt.Sprintf("%s_%s", CollectionPrefix, SanitizeMilvusName(workspaceID))
 }
