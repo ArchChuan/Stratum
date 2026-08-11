@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -27,19 +28,23 @@ type Service struct {
 	repo        port.RunRepository
 	suites      port.SuiteRepository
 	traceReader port.TraceEvidenceReader
+	// judge evaluates assertion_mode=judge cases; nil keeps rule assertions
+	// working and makes judge cases fail closed.
+	judge port.LLMJudge
 }
 
 func NewService(
 	adapter port.ResourceAdapter,
 	repo port.RunRepository,
 	traceReader port.TraceEvidenceReader,
+	judge port.LLMJudge,
 	suites ...port.SuiteRepository,
 ) *Service {
 	var suiteRepo port.SuiteRepository
 	if len(suites) > 0 {
 		suiteRepo = suites[0]
 	}
-	return &Service{adapter: adapter, repo: repo, suites: suiteRepo, traceReader: traceReader}
+	return &Service{adapter: adapter, repo: repo, suites: suiteRepo, traceReader: traceReader, judge: judge}
 }
 
 func (s *Service) RunStored(
@@ -135,7 +140,56 @@ func (s *Service) runCase(
 		}
 	}
 
+	// Judge assertions dispatch to the LLM judge port; rule assertions stay
+	// in the domain's pure EvaluateAssertion.
+	if testCase.AssertionMode == domain.AssertionJudge {
+		return s.judgeCase(ctx, testCase, result)
+	}
+
 	assertion, err := domain.EvaluateAssertion(testCase.AssertionMode, execution.Output, testCase.ExpectedOutput)
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	result.Passed = assertion.Passed
+	result.Message = assertion.Message
+	return result
+}
+
+// judgeCase runs the LLM judge assertion for a judge case. Fail-closed: a
+// nil or disabled judge makes the case fail with an explicit error instead
+// of a silent pass.
+func (s *Service) judgeCase(ctx context.Context, testCase domain.EvalCase, result domain.EvalCaseResult) domain.EvalCaseResult {
+	if s.judge == nil || !s.judge.Enabled(ctx) {
+		result.Error = "LLM judge disabled"
+		return result
+	}
+	inputJSON, err := json.Marshal(testCase.Input)
+	if err != nil {
+		result.Error = fmt.Errorf("judge: marshal input: %w", err).Error()
+		return result
+	}
+	expectedJSON, err := json.Marshal(testCase.ExpectedOutput)
+	if err != nil {
+		result.Error = fmt.Errorf("judge: marshal expected output: %w", err).Error()
+		return result
+	}
+	actualJSON, err := json.Marshal(result.Actual)
+	if err != nil {
+		result.Error = fmt.Errorf("judge: marshal actual output: %w", err).Error()
+		return result
+	}
+	var spec domain.JudgeSpec
+	if testCase.JudgeSpec != nil {
+		spec = *testCase.JudgeSpec
+	}
+	assertion, err := s.judge.Judge(ctx, port.JudgeRequest{
+		Model:          spec.Model,
+		Rubric:         spec.Rubric,
+		Input:          string(inputJSON),
+		ExpectedOutput: string(expectedJSON),
+		Actual:         string(actualJSON),
+	})
 	if err != nil {
 		result.Error = err.Error()
 		return result

@@ -17,6 +17,9 @@ const (
 	AssertionExact    AssertionMode = "exact"
 	AssertionContains AssertionMode = "contains"
 	AssertionRegex    AssertionMode = "regex"
+	// AssertionJudge delegates the verdict to an LLM judge. Dispatch happens
+	// in the application layer (runCase); EvaluateAssertion stays rule-only.
+	AssertionJudge AssertionMode = "judge"
 )
 
 type AssertionResult struct {
@@ -31,6 +34,17 @@ type EvalCase struct {
 	ExpectedOutput any           `json:"expected_output"`
 	AssertionMode  AssertionMode `json:"assertion_mode"`
 	Enabled        bool          `json:"enabled"`
+	// JudgeSpec configures LLM judge assertion for assertion_mode=judge.
+	// Both fields are optional: empty Model/Rubric fall back to platform
+	// parameters and the registered global rubric respectively. Persisted in
+	// the evaluator_config JSONB column (never written before Phase 3).
+	JudgeSpec *JudgeSpec `json:"judge_spec,omitempty"`
+}
+
+// JudgeSpec is the per-case LLM judge configuration.
+type JudgeSpec struct {
+	Model  string `json:"model,omitempty"`
+	Rubric string `json:"rubric,omitempty"`
 }
 
 type EvalSuiteRevision struct {

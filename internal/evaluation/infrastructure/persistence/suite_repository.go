@@ -147,12 +147,21 @@ func insertEvalCase(ctx context.Context, tx pgx.Tx, revisionID string, testCase 
 	if err != nil {
 		return fmt.Errorf("evaluation suite repository: marshal expected output: %w", err)
 	}
+	// evaluator_config is NULL for rule-assertion cases and carries the JSON
+	// judge spec for assertion_mode=judge (zero writes before Phase 3).
+	var evaluatorConfig []byte
+	if testCase.JudgeSpec != nil {
+		evaluatorConfig, err = json.Marshal(testCase.JudgeSpec)
+		if err != nil {
+			return fmt.Errorf("evaluation suite repository: marshal judge spec: %w", err)
+		}
+	}
 	_, err = tx.Exec(ctx,
 		`INSERT INTO eval_cases
-		 (id, suite_revision_id, name, input, expected_output, assertion_mode, enabled)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+		 (id, suite_revision_id, name, input, expected_output, assertion_mode, enabled, evaluator_config)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
 		testCase.ID, revisionID, testCase.Name, string(inputJSON), string(expectedJSON),
-		string(testCase.AssertionMode), testCase.Enabled,
+		string(testCase.AssertionMode), testCase.Enabled, evaluatorConfig,
 	)
 	if err != nil {
 		return fmt.Errorf("evaluation suite repository: insert case: %w", err)
@@ -180,7 +189,7 @@ func loadSuiteRevision(
 	revision.Status = domain.SuiteRevisionStatus(status)
 	revision.ResourceKind = domain.ResourceKind(kind)
 	rows, err := tx.Query(ctx,
-		`SELECT id, name, input, expected_output, assertion_mode, enabled
+		`SELECT id, name, input, expected_output, assertion_mode, enabled, evaluator_config
 		 FROM eval_cases WHERE suite_revision_id=$1 ORDER BY created_at, id`, revision.ID)
 	if err != nil {
 		return domain.EvalSuiteRevision{}, false, err
@@ -188,14 +197,22 @@ func loadSuiteRevision(
 	defer rows.Close()
 	for rows.Next() {
 		var testCase domain.EvalCase
-		var inputJSON, expectedJSON []byte
+		var inputJSON, expectedJSON, evaluatorConfig []byte
 		var mode string
-		if err := rows.Scan(&testCase.ID, &testCase.Name, &inputJSON, &expectedJSON, &mode, &testCase.Enabled); err != nil {
+		if err := rows.Scan(&testCase.ID, &testCase.Name, &inputJSON, &expectedJSON, &mode, &testCase.Enabled, &evaluatorConfig); err != nil {
 			return domain.EvalSuiteRevision{}, false, err
 		}
 		testCase.AssertionMode = domain.AssertionMode(mode)
 		_ = json.Unmarshal(inputJSON, &testCase.Input)
 		_ = json.Unmarshal(expectedJSON, &testCase.ExpectedOutput)
+		// evaluator_config carries the judge spec for judge cases; NULL for
+		// rule-assertion cases stays a nil JudgeSpec.
+		if len(evaluatorConfig) > 0 {
+			var spec domain.JudgeSpec
+			if err := json.Unmarshal(evaluatorConfig, &spec); err == nil {
+				testCase.JudgeSpec = &spec
+			}
+		}
 		revision.Cases = append(revision.Cases, testCase)
 	}
 	return revision, true, rows.Err()

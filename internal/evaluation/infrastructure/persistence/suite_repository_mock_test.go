@@ -38,7 +38,7 @@ func TestPgSuiteRepository_CreateSuite_success(t *testing.T) {
 		WithArgs("rev-1", "suite-1", "parent-1", 2, "draft", "prompt").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO eval_cases").
-		WithArgs("case-1", "rev-1", "c1", `{"q":"hi"}`, `"ok"`, "exact", true).
+		WithArgs("case-1", "rev-1", "c1", `{"q":"hi"}`, `"ok"`, "exact", true, []byte(nil)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
@@ -91,11 +91,11 @@ func TestPgSuiteRepository_GetDraftRevision_found(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "suite_id", "parent_id", "version_no", "status", "resource_kind",
 		}).AddRow("rev-1", "suite-1", "", 3, "draft", "prompt"))
-	mock.ExpectQuery("SELECT id, name, input, expected_output, assertion_mode, enabled").
+	mock.ExpectQuery("SELECT id, name, input, expected_output, assertion_mode, enabled, evaluator_config").
 		WithArgs("rev-1").
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "name", "input", "expected_output", "assertion_mode", "enabled",
-		}).AddRow("case-1", "c1", []byte(`{"q":1}`), []byte(`"ok"`), "contains", true))
+			"id", "name", "input", "expected_output", "assertion_mode", "enabled", "evaluator_config",
+		}).AddRow("case-1", "c1", []byte(`{"q":1}`), []byte(`"ok"`), "contains", true, []byte(nil)))
 	mock.ExpectCommit()
 
 	revision, found, err := repo.GetDraftRevision(context.Background(), "t1", "suite-1")
@@ -134,11 +134,11 @@ func TestPgSuiteRepository_GetRevision_invalidCaseJSON(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "suite_id", "parent_id", "version_no", "status", "resource_kind",
 		}).AddRow("rev-1", "suite-1", "", 3, "published", "prompt"))
-	mock.ExpectQuery("SELECT id, name, input, expected_output, assertion_mode, enabled").
+	mock.ExpectQuery("SELECT id, name, input, expected_output, assertion_mode, enabled, evaluator_config").
 		WithArgs("rev-1").
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "name", "input", "expected_output", "assertion_mode", "enabled",
-		}).AddRow("case-1", "c1", []byte(`{bad`), []byte(`"ok"`), "contains", true))
+			"id", "name", "input", "expected_output", "assertion_mode", "enabled", "evaluator_config",
+		}).AddRow("case-1", "c1", []byte(`{bad`), []byte(`"ok"`), "contains", true, []byte(nil)))
 	mock.ExpectCommit()
 
 	// loadSuiteRevision ignores per-case decode errors; revision is still returned.
@@ -182,10 +182,10 @@ func TestPgSuiteRepository_PublishRevision_success(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "suite_id", "parent_id", "version_no", "status", "resource_kind",
 		}).AddRow("rev-1", "suite-1", "", 5, "published", "prompt"))
-	mock.ExpectQuery("SELECT id, name, input, expected_output, assertion_mode, enabled").
+	mock.ExpectQuery("SELECT id, name, input, expected_output, assertion_mode, enabled, evaluator_config").
 		WithArgs("rev-1").
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "name", "input", "expected_output", "assertion_mode", "enabled",
+			"id", "name", "input", "expected_output", "assertion_mode", "enabled", "evaluator_config",
 		}))
 	mock.ExpectCommit()
 
