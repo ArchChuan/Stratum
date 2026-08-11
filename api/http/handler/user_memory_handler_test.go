@@ -48,6 +48,35 @@ func (f *fakeUserMemorySvc) ListUserMemories(_ context.Context, req *application
 	return f.listMem, f.listTotal, nil
 }
 
+type fakeMemoryMgr struct {
+	stats *application.MemoryStats
+	err   error
+}
+
+func (f *fakeMemoryMgr) Add(_ context.Context, _ *application.MemoryEntry) error { return nil }
+func (f *fakeMemoryMgr) Get(_ context.Context, _ string) (*application.MemoryEntry, error) {
+	return nil, nil
+}
+func (f *fakeMemoryMgr) Delete(_ context.Context, _ string) error { return nil }
+func (f *fakeMemoryMgr) Clear(_ context.Context, _ *application.SessionContext) error {
+	return nil
+}
+func (f *fakeMemoryMgr) GetStats(_ context.Context, _ *application.SessionContext) (*application.MemoryStats, error) {
+	return f.stats, f.err
+}
+func (f *fakeMemoryMgr) GetSummary(_ context.Context, _ *application.SessionContext) (string, error) {
+	return "", nil
+}
+
+type fakeEmbedResolver struct {
+	model string
+	err   error
+}
+
+func (f *fakeEmbedResolver) ResolveDefaultEmbeddingModel(_ context.Context, _ string) (string, error) {
+	return f.model, f.err
+}
+
 func setupUserMemoryRouter(svc *fakeUserMemorySvc, tenantID, userID string) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
@@ -64,7 +93,7 @@ func setupUserMemoryRouter(svc *fakeUserMemorySvc, tenantID, userID string) *gin
 		c.Next()
 	}
 
-	h := NewUserMemoryHandler(svc, nil)
+	h := NewUserMemoryHandler(svc, nil, nil)
 	r.DELETE("/api/memory/clear", injectClaims, h.ClearMemories)
 	return r
 }
@@ -72,7 +101,7 @@ func setupUserMemoryRouter(svc *fakeUserMemorySvc, tenantID, userID string) *gin
 func TestAddMemory_UsesAuthenticatedIdentityAndCanonicalDTO(t *testing.T) {
 	svc := &fakeUserMemorySvc{created: &application.UserMemory{ID: "fact-1", Scope: "user", Content: "likes Go", Importance: 0.7}}
 	r := setupUserMemoryRouter(svc, "tenant-1", "user-1")
-	h := NewUserMemoryHandler(svc, nil)
+	h := NewUserMemoryHandler(svc, nil, nil)
 	r.POST("/api/memory", func(c *gin.Context) {
 		ctx := reqctx.WithTenantID(c.Request.Context(), "tenant-1")
 		c.Request = c.Request.WithContext(ctx)
@@ -160,7 +189,7 @@ func TestListMemories_paginationUsesAuthenticatedIdentity(t *testing.T) {
 		},
 		listTotal: 2,
 	}
-	h := NewUserMemoryHandler(svc, nil)
+	h := NewUserMemoryHandler(svc, nil, nil)
 	r := gin.New()
 	r.Use(middleware.ErrorHandler(zap.NewNop()))
 	r.GET("/api/memory", func(c *gin.Context) {
@@ -199,7 +228,7 @@ func TestListMemories_paginationUsesAuthenticatedIdentity(t *testing.T) {
 
 func TestListMemories_clampsInvalidPagination(t *testing.T) {
 	svc := &fakeUserMemorySvc{}
-	h := NewUserMemoryHandler(svc, nil)
+	h := NewUserMemoryHandler(svc, nil, nil)
 	r := gin.New()
 	r.Use(middleware.ErrorHandler(zap.NewNop()))
 	r.GET("/api/memory", func(c *gin.Context) {
@@ -220,8 +249,64 @@ func TestListMemories_clampsInvalidPagination(t *testing.T) {
 	}
 }
 
+func TestGetStats_embedModelConfigured(t *testing.T) {
+	cases := []struct {
+		name     string
+		resolver DefaultEmbedModelResolver
+		want     bool
+	}{
+		{name: "resolver nil → false", resolver: nil, want: false},
+		{name: "resolver error → false", resolver: &fakeEmbedResolver{err: errors.New("registry down")}, want: false},
+		{name: "no embedding model → false", resolver: &fakeEmbedResolver{model: ""}, want: false},
+		{name: "embedding model resolved → true", resolver: &fakeEmbedResolver{model: "text-embedding-3-small"}, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewUserMemoryHandler(&fakeUserMemorySvc{}, &fakeMemoryMgr{
+				stats: &application.MemoryStats{TotalEntries: 3},
+			}, tc.resolver)
+			r := gin.New()
+			r.Use(middleware.ErrorHandler(zap.NewNop()))
+			r.GET("/api/memory/stats", func(c *gin.Context) {
+				ctx := reqctx.WithTenantID(c.Request.Context(), "tenant-1")
+				c.Request = c.Request.WithContext(ctx)
+			}, h.GetStats)
+
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest(http.MethodGet, "/api/memory/stats", nil) //nolint:noctx
+			r.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+			}
+			var got map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got["embed_model_configured"] != tc.want {
+				t.Fatalf("embed_model_configured=%v, want %v (body %s)", got["embed_model_configured"], tc.want, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestGetStats_missingTenant(t *testing.T) {
+	h := NewUserMemoryHandler(&fakeUserMemorySvc{}, &fakeMemoryMgr{}, nil)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.GET("/api/memory/stats", h.GetStats)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/memory/stats", nil) //nolint:noctx
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
 func TestListMemories_missingIdentity(t *testing.T) {
-	h := NewUserMemoryHandler(&fakeUserMemorySvc{}, nil)
+	h := NewUserMemoryHandler(&fakeUserMemorySvc{}, nil, nil)
 	r := gin.New()
 	r.Use(middleware.ErrorHandler(zap.NewNop()))
 	r.GET("/api/memory", h.ListMemories)

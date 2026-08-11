@@ -203,22 +203,26 @@ func seedWorkspace(repo *fakeWorkspaceRepo, name string, managed bool) *domain.W
 	return ws
 }
 
-func TestVectorDimTable(t *testing.T) {
+func TestDimensionForModelPin(t *testing.T) {
 	cases := []struct {
 		model string
 		want  int
 	}{
+		{"text-embedding-v1", 1536},
 		{"text-embedding-v2", 1024},
 		{"text-embedding-v3", 1024},
 		{"text-embedding-v4", 1024},
 		{"embedding-3", 2048},
-		{"", 1536},
-		{"unknown-model", 1536},
+		{"text-embedding-3-small", 1536}, // default
+		{"", 1536},                       // default
+		{"unknown-model", 1536},          // default
 	}
 	for _, tc := range cases {
-		if got := vectorDim(tc.model); got != tc.want {
-			t.Fatalf("vectorDim(%q) = %d, want %d", tc.model, got, tc.want)
-		}
+		t.Run(tc.model, func(t *testing.T) {
+			if got := constants.DimensionForModel(tc.model); got != tc.want {
+				t.Fatalf("DimensionForModel(%q) = %d, want %d", tc.model, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -240,7 +244,7 @@ func TestWorkspaceCreateSuccessAndCollection(t *testing.T) {
 	if len(store.created) != 1 {
 		t.Fatalf("collections = %+v", store.created)
 	}
-	if store.created[0].name != constants.CollectionName("t1", ws.ID) || store.created[0].dim != 1024 {
+	if store.created[0].name != constants.CollectionName("t1", ws.ID, ws.Config.EmbeddingModel) || store.created[0].dim != 1024 {
 		t.Fatalf("collection = %+v", store.created[0])
 	}
 	// embedding-3 → 2048 dim。
@@ -649,7 +653,7 @@ func TestWorkspaceDeleteDocument(t *testing.T) {
 	if err := svc.DeleteDocument(context.Background(), "t1", "ws1", "d1", "user-1"); err != nil {
 		t.Fatalf("delete = %v", err)
 	}
-	if len(store.deletedByDoc[constants.CollectionName("t1", "wsid-ws1")]) != 1 {
+	if len(store.deletedByDoc[constants.CollectionName("t1", "wsid-ws1", "text-embedding-v3")]) != 1 {
 		t.Fatalf("vector deletes = %+v", store.deletedByDoc)
 	}
 }

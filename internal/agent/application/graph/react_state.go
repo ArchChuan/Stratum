@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
@@ -71,6 +72,16 @@ type ReActState struct {
 	// accumulated Messages exceed it, older tool-call/tool-result groups are compacted
 	// (summarized or dropped) before dispatch. Zero disables in-loop compaction.
 	MaxContextTokens int
+	// MaxTokensPerExecution 是本次执行的累计 LLM token 预算（0 = 不设限）。
+	// 图级每次 LLM 调用后累计检查，超限终止循环（Spec 第 3 节）。
+	MaxTokensPerExecution int
+	// TerminatedBy 标记业务终止原因（如 CostBudgetTerminated）；空 = 正常结束。
+	TerminatedBy string
+	// Budget 是本次执行的预算账本快照（Spec 第 2 节）：初始组装与 ReAct 循环
+	// 共享同一来源，一次执行一个。TaskHint 由 application 层 WithTask 登记
+	// （最新用户输入），已从 HistoryCap 扣减。零值 = 未初始化 → 循环内压缩
+	// 与工具裁剪禁用。
+	Budget Budget
 	// CompactionRecentGroups overrides the recent-groups count during in-loop
 	// compaction. 0 = auto-derive from MaxContextTokens.
 	CompactionRecentGroups int
@@ -80,6 +91,11 @@ type ReActState struct {
 	// threshold, learned from the previous step's estimated-vs-actual prompt
 	// token ratio. Must be > 0; buildReActInitState initializes it to 1.0.
 	TokenCorrection float64
+	// CompactionCooldownSec 是压缩冷却窗口（秒）：一次执行内压缩触发后，
+	// 冷却期内超限只截断不重复触发同步 LLM 摘要。0 = 用常量默认。
+	CompactionCooldownSec int
+	// LastCompactionAt 是最近一次 LLM 压缩完成时间；零值表示未压缩过。
+	LastCompactionAt time.Time
 	// LastEstimatedTokens is the estimated token count of the previous
 	// dispatched request (post-compaction messages + tools). It is the ratio
 	// baseline for TokenCorrection; 0 until the first request is dispatched.

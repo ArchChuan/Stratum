@@ -12,6 +12,10 @@ import (
 type PlanNodeExecutionResult struct {
 	Summary             string
 	UncertainSideEffect bool
+	// TokensUsed 是子循环相对父基线（child := parent 拷贝时的 TotalTokens）
+	// 的增量，由槽位节点折回父图预算账本。取 delta 而非累计值，避免基线
+	// 重复计数（与 MergeReActWave 的 base-relative 语义一致）。
+	TokensUsed int
 }
 
 type PlanNodeExecutor func(context.Context, ReActState, domain.PlanNode, map[string]string) (PlanNodeExecutionResult, error)

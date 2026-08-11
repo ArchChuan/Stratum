@@ -54,7 +54,7 @@ func TestExtractFacts_Success(t *testing.T) {
 		Return([]float32{0.1, 0.2, 0.3}, nil)
 
 	// Mock vector store
-	vectorStore.On("Upsert", ctx, "memory_facts_tenant1", mock.AnythingOfType("[]*port.VectorDoc")).
+	vectorStore.On("Upsert", ctx, "memory_facts_tenant1_text_embedding_v3", mock.AnythingOfType("[]*port.VectorDoc")).
 		Return(nil)
 
 	req := &ExtractFactsRequest{
@@ -119,7 +119,7 @@ func TestExtractFacts_EntityUpdate(t *testing.T) {
 		Return([]float32{0.4, 0.5, 0.6}, nil)
 
 	// Mock vector store
-	vectorStore.On("Upsert", ctx, "memory_facts_tenant1", mock.AnythingOfType("[]*port.VectorDoc")).
+	vectorStore.On("Upsert", ctx, "memory_facts_tenant1_text_embedding_v3", mock.AnythingOfType("[]*port.VectorDoc")).
 		Return(nil)
 
 	req := &ExtractFactsRequest{

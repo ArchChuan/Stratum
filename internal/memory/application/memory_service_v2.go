@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
@@ -84,6 +83,19 @@ func (s *MemoryService) SetLLMSuperseder(j port.LLMSuperseder) { s.judge = j }
 // Preferred over SetLLMSuperseder in multi-tenant wiring: the LLM gateway is resolved
 // per tenant, so a singleton judge would apply one tenant's model to another's facts.
 func (s *MemoryService) SetLLMSupersederResolver(r LLMSupersederResolver) { s.judgeResolver = r }
+
+// currentEmbedModel 返回当前默认嵌入模型名；无可用模型时返回 ""（legacy 名兜底）。
+func (s *MemoryService) currentEmbedModel(ctx context.Context, tenantID string) string {
+	if s.embedClient != nil {
+		return s.embedClient.Model()
+	}
+	if s.embedClientResolver != nil {
+		if ec := s.embedClientResolver(ctx, tenantID); ec != nil {
+			return ec.Model()
+		}
+	}
+	return ""
+}
 
 // BufferMessage accumulates messages in Redis; flushes at K=5 or T=2min.
 func (s *MemoryService) BufferMessage(ctx context.Context, req *BufferMessageRequest) error {
@@ -304,7 +316,7 @@ type ForgetMemoryRequest struct {
 // ForgetMemory deletes a single fact by ID.
 func (s *MemoryService) ForgetMemory(ctx context.Context, req *ForgetMemoryRequest) error {
 	if s.vectorStore != nil {
-		collectionName := fmt.Sprintf("memory_facts_%s", strings.ReplaceAll(req.TenantID, "-", "_"))
+		collectionName := factsCollectionName(req.TenantID, s.currentEmbedModel(ctx, req.TenantID))
 		if err := s.vectorStore.Delete(ctx, collectionName, []string{req.FactID}); err != nil {
 			return fmt.Errorf("forget memory vector replica: %w", err)
 		}

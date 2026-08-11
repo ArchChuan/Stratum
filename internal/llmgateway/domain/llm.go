@@ -62,6 +62,12 @@ type CompletionRequest struct {
 	Tools       []Tool    `json:"tools,omitempty"`
 	ToolChoice  string    `json:"tool_choice,omitempty"`
 	Stream      bool      `json:"stream,omitempty"`
+	// NoPrimaryRetry 禁止 gateway 对主模型瞬态失败的立即重试（0 值 = 默认
+	// 允许一次立即重试）。压缩路径用：时间片内主模型一次尝试失败直接降级候选。
+	// json:"-"：路由选项，禁止随请求体泄漏给 provider。
+	NoPrimaryRetry bool `json:"-"`
+	// MaxCandidates 限制 fallback 候选数量；0 = gateway 默认上限。
+	MaxCandidates int `json:"-"`
 }
 
 type TokenUsage struct {

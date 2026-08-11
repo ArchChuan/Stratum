@@ -58,6 +58,11 @@ type AgentConfig struct {
 	CompactionRecentGroups int
 	// CompactionSafetyRatio overrides the compaction safety ratio. 0 = default.
 	CompactionSafetyRatio float32
+	// CompactionCooldownSec overrides the in-loop compaction cooldown.
+	// 0 = default constant.
+	CompactionCooldownSec int
+	// MaxTokensPerExecution is the execution-wide LLM token budget. 0 = unlimited.
+	MaxTokensPerExecution int
 	MemoryScope           string
 	SystemKey             string
 	IsSystem              bool
@@ -361,6 +366,9 @@ type AgentResult struct {
 	// capped at constants.MaxAgentResultSources). Empty when no knowledge
 	// search ran or nothing matched.
 	Sources []RAGSearchSource
+	// TerminatedBy 记录业务终止原因（如 cost_budget）；空 = 正常完成。
+	// 业务终止仍返回已产出部分结果，不进入错误路径。
+	TerminatedBy string
 }
 
 // RAGSearchSource is per-chunk retrieval provenance for the chat UI. Score

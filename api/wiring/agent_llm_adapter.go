@@ -61,6 +61,8 @@ func buildAgentLLMRequest(req *agentport.LLMCapRequest) *llmdomain.CompletionReq
 	return &llmdomain.CompletionRequest{
 		Model: req.Model, Messages: messages, Tools: tools, ToolChoice: choice,
 		Temperature: req.Temperature, MaxTokens: req.MaxTokens,
+		NoPrimaryRetry: req.NoPrimaryRetry,
+		MaxCandidates:  req.MaxCandidates,
 	}
 }
 

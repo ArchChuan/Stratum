@@ -28,6 +28,8 @@ func (deterministicEmbedder) EmbedBatch(context.Context, []string) ([][]float32,
 	return nil, nil
 }
 
+func (deterministicEmbedder) Model() string { return "text-embedding-v3" }
+
 type failOnceVectorStore struct {
 	mu  sync.Mutex
 	ids []string

@@ -56,11 +56,11 @@ func (r *PgModelRepo) Get(ctx context.Context, tenantID, id string) (*domain.Mod
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
 			`SELECT id, tenant_id, provider_id, name, display_name, capabilities,
-			 context_window, max_tokens, input_price, output_price, recommended, enabled, provider_managed,
-			 created_at, updated_at FROM models WHERE id=$1`, id,
+			 context_window, max_tokens, input_price, output_price, recommended, default_embedding,
+			 enabled, provider_managed, created_at, updated_at FROM models WHERE id=$1`, id,
 		).Scan(&m.ID, &m.TenantID, &m.ProviderID, &m.Name, &m.DisplayName, &caps,
 			&m.ContextWindow, &m.MaxTokens, &m.InputPrice, &m.OutputPrice,
-			&m.Recommended, &m.Enabled, &m.ProviderManaged, &m.CreatedAt, &m.UpdatedAt)
+			&m.Recommended, &m.DefaultEmbedding, &m.Enabled, &m.ProviderManaged, &m.CreatedAt, &m.UpdatedAt)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("get model: %w", err)
@@ -74,8 +74,8 @@ func (r *PgModelRepo) List(ctx context.Context, tenantID string, filter port.Mod
 	var out []domain.Model
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		query := `SELECT id, tenant_id, provider_id, name, display_name, capabilities,
-		          context_window, max_tokens, input_price, output_price, recommended, enabled,
-		          provider_managed, created_at, updated_at FROM models WHERE tenant_id=$1`
+		          context_window, max_tokens, input_price, output_price, recommended, default_embedding,
+		          enabled, provider_managed, created_at, updated_at FROM models WHERE tenant_id=$1`
 		args := []any{tenantID}
 		argIdx := 2
 		if filter.ProviderID != "" {
@@ -103,7 +103,7 @@ func (r *PgModelRepo) List(ctx context.Context, tenantID string, filter port.Mod
 			var caps []string
 			if err := rows.Scan(&m.ID, &m.TenantID, &m.ProviderID, &m.Name, &m.DisplayName, &caps,
 				&m.ContextWindow, &m.MaxTokens, &m.InputPrice, &m.OutputPrice,
-				&m.Recommended, &m.Enabled, &m.ProviderManaged, &m.CreatedAt, &m.UpdatedAt); err != nil {
+				&m.Recommended, &m.DefaultEmbedding, &m.Enabled, &m.ProviderManaged, &m.CreatedAt, &m.UpdatedAt); err != nil {
 				return err
 			}
 			m.Capabilities = stringsToModelCaps(caps)
@@ -126,7 +126,8 @@ func (r *PgModelRepo) Update(ctx context.Context, tenantID string, m *domain.Mod
 		caps := modelCapsToStrings(m.Capabilities)
 		tag, err := tx.Exec(ctx,
 			`UPDATE models SET display_name=$1, capabilities=$2, context_window=$3, max_tokens=$4,
-			 input_price=$5, output_price=$6, recommended=$7, enabled=$8, updated_at=now()
+			 input_price=$5, output_price=$6, recommended=$7, enabled=$8, updated_at=now(),
+			 default_embedding = default_embedding AND $8 AND 'embedding' = ANY($2)
 			 WHERE id=$9 AND tenant_id=$10`,
 			m.DisplayName, caps, m.ContextWindow, m.MaxTokens,
 			m.InputPrice, m.OutputPrice, m.Recommended, m.Enabled, m.ID, tenantID,
@@ -147,9 +148,15 @@ func (r *PgModelRepo) UpsertDiscovered(ctx context.Context, tenantID, providerID
 	var result []domain.Model
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		// Mark all provider-managed models for this provider as disabled,
-		// then re-enable those still present.
+		// then re-enable those still present. The default-embedding marker
+		// is intentionally NOT cleared here: re-enabling has no restore
+		// channel, so clearing would drop user marks on models still in the
+		// list. We only clean stale marks on models whose capabilities no
+		// longer include embedding; disabled marks are harmless because
+		// resolution filters on enabled.
 		if _, err := tx.Exec(ctx,
-			`UPDATE models SET enabled=false, updated_at=now()
+			`UPDATE models SET enabled=false, updated_at=now(),
+			 default_embedding = default_embedding AND 'embedding' = ANY(capabilities)
 			 WHERE tenant_id=$1 AND provider_id=$2 AND provider_managed=true`,
 			tenantID, providerID); err != nil {
 			return fmt.Errorf("upsert models: disable phase: %w", err)
@@ -190,8 +197,8 @@ func (r *PgModelRepo) UpsertDiscovered(ctx context.Context, tenantID, providerID
 		// Read back
 		rows, err := tx.Query(ctx,
 			`SELECT id, tenant_id, provider_id, name, display_name, capabilities,
-			 context_window, max_tokens, input_price, output_price, recommended, enabled,
-			 provider_managed, created_at, updated_at
+			 context_window, max_tokens, input_price, output_price, recommended, default_embedding,
+			 enabled, provider_managed, created_at, updated_at
 			 FROM models WHERE tenant_id=$1 AND provider_id=$2 ORDER BY name`,
 			tenantID, providerID)
 		if err != nil {
@@ -203,8 +210,8 @@ func (r *PgModelRepo) UpsertDiscovered(ctx context.Context, tenantID, providerID
 			var caps []string
 			if err := rows.Scan(&model.ID, &model.TenantID, &model.ProviderID, &model.Name,
 				&model.DisplayName, &caps, &model.ContextWindow, &model.MaxTokens,
-				&model.InputPrice, &model.OutputPrice, &model.Recommended, &model.Enabled,
-				&model.ProviderManaged, &model.CreatedAt, &model.UpdatedAt); err != nil {
+				&model.InputPrice, &model.OutputPrice, &model.Recommended, &model.DefaultEmbedding,
+				&model.Enabled, &model.ProviderManaged, &model.CreatedAt, &model.UpdatedAt); err != nil {
 				return err
 			}
 			model.Capabilities = stringsToModelCaps(caps)
@@ -237,13 +244,50 @@ func (r *PgModelRepo) Delete(ctx context.Context, tenantID, id string) error {
 func (r *PgModelRepo) Toggle(ctx context.Context, tenantID, id string, enabled bool) error {
 	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx,
-			`UPDATE models SET enabled=$1, updated_at=now() WHERE id=$2 AND tenant_id=$3`,
+			`UPDATE models SET enabled=$1, updated_at=now(),
+			 default_embedding = default_embedding AND $1 AND 'embedding' = ANY(capabilities)
+			 WHERE id=$2 AND tenant_id=$3`,
 			enabled, id, tenantID)
 		if err != nil {
 			return fmt.Errorf("toggle model: %w", err)
 		}
 		if tag.RowsAffected() == 0 {
 			return fmt.Errorf("model not found: %s", id)
+		}
+		return nil
+	})
+}
+
+// SetDefaultEmbedding sets or clears the default-embedding marker for a model.
+// enabled=true clears all other markers for the tenant first, then sets the
+// target in the same transaction (atomic clear-then-set). The target must be
+// enabled and carry the embedding capability; otherwise the call fails closed.
+func (r *PgModelRepo) SetDefaultEmbedding(ctx context.Context, tenantID, id string, enabled bool) error {
+	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		if !enabled {
+			tag, err := tx.Exec(ctx,
+				`UPDATE models SET default_embedding=false WHERE id=$1 AND tenant_id=$2`, id, tenantID)
+			if err != nil {
+				return fmt.Errorf("clear default embedding: %w", err)
+			}
+			if tag.RowsAffected() == 0 {
+				return fmt.Errorf("model not found: %s: %w", id, domain.ErrModelNotFound)
+			}
+			return nil
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE models SET default_embedding=false WHERE tenant_id=$1 AND id<>$2`,
+			tenantID, id); err != nil {
+			return fmt.Errorf("clear other default embeddings: %w", err)
+		}
+		tag, err := tx.Exec(ctx,
+			`UPDATE models SET default_embedding=true WHERE id=$1 AND tenant_id=$2 AND enabled AND 'embedding' = ANY(capabilities)`,
+			id, tenantID)
+		if err != nil {
+			return fmt.Errorf("set default embedding: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("model not found or not an enabled embedding model: %s: %w", id, domain.ErrModelNotFound)
 		}
 		return nil
 	})

@@ -12,6 +12,7 @@ import {
   Select,
   Switch,
   Table,
+  Tag,
   Typography,
 } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
@@ -36,12 +37,14 @@ const CAP_FILTER_OPTIONS: { label: string; value: ModelCapability }[] = [
 ];
 
 export function ModelListPage() {
-  const { models, loading, refresh, toggleModel, updateModel, deleteModel } = useModels();
+  const { models, loading, refresh, toggleModel, updateModel, deleteModel, setDefaultEmbedding } =
+    useModels();
   const { isAdmin } = useTenantRole();
   const [capFilter, setCapFilter] = useState<ModelCapability | undefined>();
   const [editModel, setEditModel] = useState<Model | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [editLoading, setEditLoading] = useState(false);
+  const [defaultLoading, setDefaultLoading] = useState<string | null>(null);
 
   const filtered = useMemo(
     () =>
@@ -68,6 +71,18 @@ export function ModelListPage() {
       }
     },
     [updateModel],
+  );
+
+  const handleSetDefault = useCallback(
+    async (record: Model) => {
+      setDefaultLoading(record.id);
+      try {
+        await setDefaultEmbedding(record.id, !record.defaultEmbedding);
+      } finally {
+        setDefaultLoading(null);
+      }
+    },
+    [setDefaultEmbedding],
   );
 
   const handleDelete = useCallback(
@@ -103,6 +118,11 @@ export function ModelListPage() {
             <Text type="success" style={{ marginLeft: 6, fontSize: 12 }}>
               推荐
             </Text>
+          )}
+          {record.defaultEmbedding && (
+            <Tag color="purple" style={{ marginLeft: 6, fontSize: 12 }}>
+              默认嵌入
+            </Tag>
           )}
         </span>
       ),
@@ -152,12 +172,24 @@ export function ModelListPage() {
     {
       title: '操作',
       key: 'actions',
-      width: 120,
+      width: 200,
       render: (_: unknown, record: Model) => (
         <span style={{ display: 'flex', gap: 8 }}>
           <Button size="small" onClick={() => handleEdit(record)} disabled={!isAdmin}>
             编辑
           </Button>
+          {isAdmin &&
+            record.capabilities.includes('embedding') &&
+            record.enabled && (
+              <Button
+                size="small"
+                type={record.defaultEmbedding ? 'default' : 'primary'}
+                loading={defaultLoading === record.id}
+                onClick={() => void handleSetDefault(record)}
+              >
+                {record.defaultEmbedding ? '取消默认' : '设为默认'}
+              </Button>
+            )}
           {isAdmin && (
             <Button
               size="small"

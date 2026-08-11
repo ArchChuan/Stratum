@@ -48,6 +48,8 @@ func (m *mockEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]float3
 
 func (m *mockEmbedder) GetVectorDimension() int { return m.dim }
 
+func (m *mockEmbedder) Model() string { return "text-embedding-v3" }
+
 // mockDocRepo satisfies knowledgeport.DocRepo for tests. All methods record
 // invocations under a mutex so assertions can inspect them from the main
 // goroutine even when the ingest job runs in the background.

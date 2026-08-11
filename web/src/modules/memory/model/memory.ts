@@ -49,6 +49,8 @@ export const memoryStatsSchema = z
     vector_count: z.number().optional().default(0),
     last_access_time: z.string().optional().default(''),
     storage_size_bytes: z.number().optional().default(0),
+    // 租户是否已配置可用嵌入模型；false 时记忆页展示健康提示。
+    embed_model_configured: z.boolean().optional().default(false),
   })
   .passthrough();
 export type MemoryStats = z.infer<typeof memoryStatsSchema>;

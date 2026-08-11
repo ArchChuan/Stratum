@@ -70,11 +70,23 @@ const (
 
 var milvusUnsafe = regexp.MustCompile(`[^a-zA-Z0-9_]`)
 
+// SanitizeMilvusName 把任意字符串清洗为 Milvus 安全的 collection 名片段
+// （仅字母数字下划线）。memory 与 knowledge 命名统一走此函数。
+func SanitizeMilvusName(s string) string { return milvusUnsafe.ReplaceAllString(s, "_") }
+
 // CollectionName generates the Milvus collection name for a knowledge workspace.
 // workspaceID must be the stable workspace ID, not the mutable name.
-// CollectionName returns the Milvus collection name for a workspace.
-// workspaceID (UUID v7) is globally unique, so tenantID is ignored.
-func CollectionName(_, workspaceID string) string {
-	san := func(s string) string { return milvusUnsafe.ReplaceAllString(s, "_") }
-	return fmt.Sprintf("%s_%s", CollectionPrefix, san(workspaceID))
+// workspaceID (UUID v7) is globally unique, so tenantID is ignored; embedModel
+// is encoded as a sanitized suffix so switching models isolates vector data.
+// 空 model 时产出 kb_<workspaceID>_ 尾下划线形态（既非 legacy 名也非模型名）：
+// 该形态被 cleaner 的 kb_<ws>_ 前缀匹配覆盖，RAG 查询回退仍可达 legacy 数据，
+// 故无害；此行为已由 pkg/constants/agent_test.go pin。
+func CollectionName(_, workspaceID, embedModel string) string {
+	return fmt.Sprintf("%s_%s_%s", CollectionPrefix, SanitizeMilvusName(workspaceID), SanitizeMilvusName(embedModel))
+}
+
+// CollectionLegacyName 是无模型后缀的存量 collection 名（升级前数据）。
+// 删除/清理路径与 legacy 回退读取统一经此拼写，避免两处命名漂移。
+func CollectionLegacyName(_, workspaceID string) string {
+	return fmt.Sprintf("%s_%s", CollectionPrefix, SanitizeMilvusName(workspaceID))
 }

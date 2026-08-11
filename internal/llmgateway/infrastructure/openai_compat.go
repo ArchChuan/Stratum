@@ -134,6 +134,32 @@ func parseRetryAfter(header string) time.Duration {
 	return 0
 }
 
+// isContextLengthBody 探测 OpenAI-compat 400 响应体的 error.code /
+// error.message 是否标记上下文超限。字节级前置过滤避免无谓 json.Unmarshal；
+// message 可能写作 "context length"（空格）而非 "context_length"（下划线），
+// 两种形式都必须放行到 JSON 解析。
+func isContextLengthBody(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	if !bytes.Contains(body, []byte("context_length")) && !bytes.Contains(body, []byte("context length")) {
+		return false
+	}
+	var payload struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return false
+	}
+	code := strings.ToLower(payload.Error.Code)
+	return code == "context_length_exceeded" ||
+		strings.Contains(strings.ToLower(payload.Error.Message), "context_length_exceeded") ||
+		strings.Contains(strings.ToLower(payload.Error.Message), "maximum context length")
+}
+
 // openaiModelsResponse is the JSON body from GET /models (OpenAI-compatible).
 type openaiModelsResponse struct {
 	Data []openaiModelItem `json:"data"`
@@ -228,29 +254,11 @@ func (c *OpenAICompatClient) Complete(ctx context.Context, req *CompletionReques
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			// 429: respect Retry-After before next attempt
-			if resp.StatusCode == http.StatusTooManyRequests {
-				if delay := parseRetryAfter(resp.Header.Get("Retry-After")); delay > 0 {
-					select {
-					case <-time.After(delay):
-					case <-ctx.Done():
-						return nil, fmt.Errorf("%s: context cancelled waiting Retry-After: %w", c.cfg.Name, ctx.Err())
-					}
-				}
+			shouldRetry, statusErr := c.handleCompleteStatus(ctx, resp, raw, req.Model, attempt)
+			if !shouldRetry {
+				return nil, statusErr
 			}
-			lastErr = fmt.Errorf("%s: complete status %d", c.cfg.Name, resp.StatusCode)
-			if !isRetryableHTTPStatus(resp.StatusCode) {
-				c.logger.Error(c.cfg.Name+": http error (no retry)",
-					zap.String("model", req.Model),
-					zap.Int("status", resp.StatusCode),
-				)
-				return nil, lastErr
-			}
-			c.logger.Warn(c.cfg.Name+": http error, retrying",
-				zap.String("model", req.Model),
-				zap.Int("status", resp.StatusCode),
-				zap.Int("attempt", attempt+1),
-			)
+			lastErr = statusErr
 			continue
 		}
 
@@ -277,6 +285,48 @@ func (c *OpenAICompatClient) Complete(ctx context.Context, req *CompletionReques
 		zap.Error(lastErr),
 	)
 	return nil, lastErr
+}
+
+// handleCompleteStatus 处理 Complete 的非 200 响应：识别 400
+// context_length_exceeded 为永久语义错误（重试不可恢复，供 agent 层感知
+// 降级）；429 按 Retry-After 等待；其余按 isRetryableHTTPStatus 分类。
+// 返回 (shouldRetry, err)：shouldRetry=true 时 err 为本次尝试的错误。
+func (c *OpenAICompatClient) handleCompleteStatus(
+	ctx context.Context,
+	resp *http.Response,
+	raw []byte,
+	model string,
+	attempt int,
+) (bool, error) {
+	// 429: respect Retry-After before next attempt
+	if resp.StatusCode == http.StatusTooManyRequests {
+		if delay := parseRetryAfter(resp.Header.Get("Retry-After")); delay > 0 {
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return false, fmt.Errorf("%s: context cancelled waiting Retry-After: %w", c.cfg.Name, ctx.Err())
+			}
+		}
+	}
+	// 400 context_length_exceeded 语义化：重试不可恢复，标记永久错误
+	// 供 agent 层感知降级。
+	if resp.StatusCode == http.StatusBadRequest && isContextLengthBody(raw) {
+		return false, fmt.Errorf("%s: %w", c.cfg.Name, ErrContextLengthExceeded)
+	}
+	lastErr := fmt.Errorf("%s: complete status %d", c.cfg.Name, resp.StatusCode)
+	if !isRetryableHTTPStatus(resp.StatusCode) {
+		c.logger.Error(c.cfg.Name+": http error (no retry)",
+			zap.String("model", model),
+			zap.Int("status", resp.StatusCode),
+		)
+		return false, lastErr
+	}
+	c.logger.Warn(c.cfg.Name+": http error, retrying",
+		zap.String("model", model),
+		zap.Int("status", resp.StatusCode),
+		zap.Int("attempt", attempt+1),
+	)
+	return true, lastErr
 }
 
 func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *CompletionRequest, onToken func(string)) (*CompletionResponse, error) {

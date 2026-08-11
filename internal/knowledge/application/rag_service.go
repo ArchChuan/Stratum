@@ -32,9 +32,16 @@ const hybridLegRecallFactor = 2
 // and "drift" via ChunkRepo.CountByWorkspace.
 var errCollectionNotFound = errors.New("knowledge collection not found")
 
+// errLegacyDimMismatch reports a vector-dimension mismatch on the collection
+// being searched. The caller decides the semantics: on the legacy
+// (pre-upgrade) collection a mismatch skips retrieval (Warn + empty result,
+// spec: legacy dim drift is not fail-closed); on the model-suffixed name it
+// still fails closed as ErrRAGDependency.
+var errLegacyDimMismatch = errors.New("knowledge legacy collection dimension mismatch")
+
 func isCollectionNotFound(err error) bool {
 	return errors.Is(err, errCollectionNotFound) ||
-		strings.Contains(err.Error(), "collection not found")
+		(err != nil && strings.Contains(err.Error(), "collection not found"))
 }
 
 // rerankIdentity splits "provider:model" style rerank identities.
@@ -310,7 +317,7 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 		}
 	}
 
-	collectionName := constants.CollectionName(req.TenantID, req.WorkspaceID)
+	collectionName := constants.CollectionName(req.TenantID, req.WorkspaceID, req.EmbeddingModel)
 
 	// D2 fail-closed gate + D1 visibility set, resolved in one step.
 	visibleDocIDs, unrestricted, err := rs.accessScope(ctx, req)
@@ -330,18 +337,24 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 
 	switch req.Mode {
 	case "vector":
-		vr, sources, legErr := rs.vectorLeg(ctx, req, collectionName, filterExpr, visibleDocIDs)
-		if legErr != nil {
-			if errors.Is(legErr, errCollectionNotFound) {
-				if missingErr := rs.handleMissingCollection(ctx, req); missingErr != nil {
+		legacyName := constants.CollectionLegacyName(req.TenantID, req.WorkspaceID)
+		searchName, legacy := rs.resolveSearchCollection(ctx, collectionName, legacyName, req.WorkspaceID)
+		vectorResults, vErr := rs.vectorLegSearch(ctx, req, searchName, legacy, filterExpr, visibleDocIDs)
+		if vErr != nil {
+			if errors.Is(vErr, errCollectionNotFound) {
+				if missingErr := rs.handleMissingCollection(ctx, req, searchName); missingErr != nil {
 					return nil, missingErr
 				}
 				result.Latency = time.Since(startTime)
 				return result, nil
 			}
-			return nil, legErr
+			return nil, vErr
 		}
-		result.VectorResults = vr
+		result.VectorResults = vectorResults
+		sources, rerankErr := rs.rerankSources(ctx, req, vectorToPool(vectorResults))
+		if rerankErr != nil {
+			return nil, rerankErr
+		}
 		result.Sources = sources
 
 	case "keyword":
@@ -386,39 +399,35 @@ func (rs *RAGService) accessScope(ctx context.Context, req RAGQueryRequest) ([]s
 	return rs.visibleDocIDs(ctx, req)
 }
 
-// vectorLeg runs the vector-only retrieval leg with the D7 over-long filter
-// guard: an oversized whitelist degrades this leg to empty results with a
-// WARN (never a query failure), while the keyword leg keeps filtering.
-func (rs *RAGService) vectorLeg(ctx context.Context, req RAGQueryRequest, collectionName, filterExpr string, docIDs []string) ([]knowledgeport.VectorSearchResult, []Source, error) {
+// vectorLegSearch runs the vector-only retrieval leg with the D7 over-long
+// filter guard: an oversized whitelist degrades this leg to empty results with
+// a WARN (never a query failure), while the keyword leg keeps filtering.
+// errCollectionNotFound propagates for the caller to classify via
+// handleMissingCollection; other failures map to ErrRAGDependency.
+func (rs *RAGService) vectorLegSearch(ctx context.Context, req RAGQueryRequest, searchName string, legacy bool, filterExpr string, visibleDocIDs []string) ([]knowledgeport.VectorSearchResult, error) {
+	if visibleDocIDs != nil && filterExprTooLong(filterExpr) {
+		sc, _ := observability.SpanFromContext(ctx)
+		rs.logger.Warn("knowledge.rag.filter_degraded",
+			zap.String("trace_id", sc.TraceID),
+			zap.Int("visible_docs", len(visibleDocIDs)),
+			zap.Int("filter_len", len(filterExpr)))
+		return nil, nil
+	}
 	candidateTopK := req.TopK
 	if widensRecall(req.Reranking) {
 		candidateTopK = req.TopK * constants.RerankWidenFactor
 	}
-	var vectorResults []knowledgeport.VectorSearchResult
-	if docIDs != nil && filterExprTooLong(filterExpr) {
-		sc, _ := observability.SpanFromContext(ctx)
-		rs.logger.Warn("knowledge.rag.filter_degraded",
-			zap.String("trace_id", sc.TraceID),
-			zap.Int("visible_docs", len(docIDs)),
-			zap.Int("filter_len", len(filterExpr)))
-	} else {
-		var err error
-		vectorResults, err = rs.queryVector(ctx, req.Question, collectionName, candidateTopK, rs.resolveEmbedder(ctx, req), req.EmbeddingModel, filterExpr)
-		if err != nil {
-			if !errors.Is(err, errCollectionNotFound) {
-				sc, _ := observability.SpanFromContext(ctx)
-				rs.logger.Error("knowledge.retrieval.dependency_failed", zap.String("trace_id", sc.TraceID),
-					zap.String("operation", "vector_search"), zap.String("error_category", "dependency_unavailable"))
-				return nil, nil, ErrRAGDependency
-			}
-			return nil, nil, err
+	results, err := rs.queryVector(ctx, req.Question, searchName, candidateTopK, rs.resolveEmbedder(ctx, req), req.EmbeddingModel, legacy, filterExpr)
+	if err != nil {
+		if errors.Is(err, errCollectionNotFound) {
+			return nil, err
 		}
+		sc, _ := observability.SpanFromContext(ctx)
+		rs.logger.Error("knowledge.retrieval.dependency_failed", zap.String("trace_id", sc.TraceID),
+			zap.String("operation", "vector_search"), zap.String("error_category", "dependency_unavailable"))
+		return nil, ErrRAGDependency
 	}
-	sources, rerankErr := rs.rerankSources(ctx, req, vectorToPool(vectorResults))
-	if rerankErr != nil {
-		return nil, nil, rerankErr
-	}
-	return vectorResults, sources, nil
+	return results, nil
 }
 
 // keywordLeg runs the keyword-only retrieval leg. The visible doc-ID set is
@@ -656,11 +665,15 @@ func vectorToPool(results []knowledgeport.VectorSearchResult) []Source {
 }
 
 // hybridPool runs both retrieval legs concurrently and fuses them with
-// reciprocal rank fusion. A missing collection with no documents falls
-// through to the keyword leg alone; other vector failures fail closed.
-// filterExpr/docIDs carry the viewer whitelist to both legs (docIDs nil when
-// unrestricted); an over-long expression degrades the vector leg to empty
-// results while the keyword leg keeps filtering (D7).
+// reciprocal rank fusion. The vector leg mirrors the vector branch's legacy
+// fallback: a missing new name falls back to the legacy collection (upgraded
+// workspaces that were not re-ingested are an expected state), and a legacy
+// dimension mismatch skips that leg with an empty result instead of failing
+// closed — the keyword leg still contributes. A missing collection with no
+// documents falls through to the keyword leg alone; other vector failures
+// fail closed. filterExpr/docIDs carry the viewer whitelist to both legs
+// (docIDs nil when unrestricted); an over-long expression degrades the vector
+// leg to empty results while the keyword leg keeps filtering (D7).
 func (rs *RAGService) hybridPool(ctx context.Context, req RAGQueryRequest, collectionName string, embedder knowledgeport.Embedder, legTopK int, filterExpr string, docIDs []string) ([]knowledgeport.VectorSearchResult, []Source, error) {
 	type vRes struct {
 		r []knowledgeport.VectorSearchResult
@@ -670,6 +683,8 @@ func (rs *RAGService) hybridPool(ctx context.Context, req RAGQueryRequest, colle
 		r []domain.Chunk
 		e error
 	}
+	legacyName := constants.CollectionLegacyName(req.TenantID, req.WorkspaceID)
+	searchName, legacy := rs.resolveSearchCollection(ctx, collectionName, legacyName, req.WorkspaceID)
 	vCh := make(chan vRes, 1)
 	kCh := make(chan kRes, 1)
 	go func() {
@@ -680,7 +695,7 @@ func (rs *RAGService) hybridPool(ctx context.Context, req RAGQueryRequest, colle
 			vCh <- vRes{}
 			return
 		}
-		r, e := rs.queryVector(ctx, req.Question, collectionName, legTopK, embedder, req.EmbeddingModel, filterExpr)
+		r, e := rs.queryVector(ctx, req.Question, searchName, legTopK, embedder, req.EmbeddingModel, legacy, filterExpr)
 		vCh <- vRes{r, e}
 	}()
 	go func() {
@@ -695,7 +710,7 @@ func (rs *RAGService) hybridPool(ctx context.Context, req RAGQueryRequest, colle
 	kr := <-kCh
 	if vr.e != nil {
 		if errors.Is(vr.e, errCollectionNotFound) {
-			if missingErr := rs.handleMissingCollection(ctx, req); missingErr != nil {
+			if missingErr := rs.handleMissingCollection(ctx, req, searchName); missingErr != nil {
 				return nil, nil, missingErr
 			}
 			// Empty workspace: fall through to the keyword leg alone.
@@ -799,12 +814,32 @@ func (rs *RAGService) attachParentContent(ctx context.Context, req RAGQueryReque
 	}
 }
 
+// resolveSearchCollection decides the collection to search: the model-suffixed
+// name normally, or the legacy (no-suffix) name when the new collection is
+// missing. Legacy fallback runs before drift classification: a workspace that
+// was upgraded but not re-ingested legitimately lacks the new collection, so
+// the old data is searched first; only when both names are missing does
+// handleMissingCollection classify the state.
+func (rs *RAGService) resolveSearchCollection(ctx context.Context, collectionName, legacyName, workspaceID string) (searchName string, legacy bool) {
+	searchName = collectionName
+	if _, err := rs.vectorStore.DescribeCollection(ctx, collectionName); isCollectionNotFound(err) {
+		searchName = legacyName
+		legacy = true
+		rs.logger.Info("knowledge.retrieval.legacy_collection_fallback",
+			zap.String("collection", legacyName), zap.String("workspace_id", workspaceID))
+	}
+	return searchName, legacy
+}
+
 // queryVector embeds the question and searches the workspace collection.
-// expression ("" when unrestricted) restricts results to the viewer's visible
-// document set. embedModel ("" when unknown) drives the collection dimension
-// check; a missing collection yields errCollectionNotFound for the caller to
-// classify.
-func (rs *RAGService) queryVector(ctx context.Context, question string, collection string, topK int, embedder knowledgeport.Embedder, embedModel, expression string) ([]knowledgeport.VectorSearchResult, error) {
+// embedModel ("" when unknown) drives the collection dimension check; a
+// missing collection yields errCollectionNotFound for the caller to classify.
+// legacy marks the fallback search on the pre-upgrade (no model suffix)
+// collection: a dimension mismatch on it skips retrieval with an empty result
+// instead of failing closed, per the spec's legacy-drift contract. expression
+// ("" when unrestricted) restricts results to the viewer's visible document
+// set.
+func (rs *RAGService) queryVector(ctx context.Context, question string, collection string, topK int, embedder knowledgeport.Embedder, embedModel string, legacy bool, expression string) ([]knowledgeport.VectorSearchResult, error) {
 	rs.logger.Debug("querying vector store")
 
 	if embedder == nil {
@@ -818,6 +853,11 @@ func (rs *RAGService) queryVector(ctx context.Context, question string, collecti
 
 	if embedModel != "" {
 		if err := rs.validateCollectionDim(ctx, collection, embedModel); err != nil {
+			if legacy && errors.Is(err, errLegacyDimMismatch) {
+				// legacy 集合维数与当前模型不符：Warn 已在 validateCollectionDim
+				// 记录，跳过该集合返回空（spec：legacy dim 不一致不 fail-closed）。
+				return []knowledgeport.VectorSearchResult{}, nil
+			}
 			return nil, err
 		}
 	}
@@ -848,11 +888,11 @@ func (rs *RAGService) validateCollectionDim(ctx context.Context, collection, emb
 			zap.String("operation", "describe_collection"), zap.Error(err))
 		return ErrRAGDependency
 	}
-	if info.Dim != 0 && info.Dim != vectorDim(embedModel) {
-		rs.logger.Error("knowledge.retrieval.schema_mismatch",
+	if info.Dim != 0 && info.Dim != constants.DimensionForModel(embedModel) {
+		rs.logger.Warn("knowledge.retrieval.legacy_dim_mismatch",
 			zap.String("collection", collection), zap.Int("existing_dim", info.Dim),
-			zap.Int("required_dim", vectorDim(embedModel)))
-		return ErrRAGDependency
+			zap.Int("required_dim", constants.DimensionForModel(embedModel)))
+		return errLegacyDimMismatch // 调用方对 legacy 名跳过、新名转 ErrRAGDependency
 	}
 	if !info.HasUserID {
 		rs.logger.Warn("collection lacks user_id column, skipping user scope check",
@@ -863,8 +903,10 @@ func (rs *RAGService) validateCollectionDim(ctx context.Context, collection, emb
 
 // handleMissingCollection classifies a missing vector collection: 0 chunks in
 // PG means a legitimately empty workspace (empty result), any chunks means
-// drift between PG and Milvus and fails closed.
-func (rs *RAGService) handleMissingCollection(ctx context.Context, req RAGQueryRequest) error {
+// drift between PG and Milvus and fails closed. collectionName is the name the
+// caller actually searched (the legacy name after a fallback), so logs and
+// metrics attribute the failure to the real collection.
+func (rs *RAGService) handleMissingCollection(ctx context.Context, req RAGQueryRequest, collectionName string) error {
 	if rs.chunkRepo == nil {
 		return ErrRAGDependency
 	}
@@ -876,11 +918,11 @@ func (rs *RAGService) handleMissingCollection(ctx context.Context, req RAGQueryR
 	}
 	if count > 0 {
 		rs.logger.Error("knowledge.retrieval.drift",
-			zap.Int64("chunk_count", count), zap.String("collection", constants.CollectionName(req.TenantID, req.WorkspaceID)))
+			zap.Int64("chunk_count", count), zap.String("collection", collectionName))
 		return ErrRAGDependency
 	}
 	rs.logger.Warn("vector collection not found; workspace has no chunks",
-		zap.String("collection", constants.CollectionName(req.TenantID, req.WorkspaceID)))
+		zap.String("collection", collectionName))
 	return nil
 }
 
@@ -977,7 +1019,7 @@ func l2ToSim(d float32) float32 {
 	return 1.0 / (1.0 + d)
 }
 
-func (rs *RAGService) RetrieveRelevantChunks(ctx context.Context, tenantID, question, workspace string, topK int, viewerID string) ([]string, error) {
+func (rs *RAGService) RetrieveRelevantChunks(ctx context.Context, tenantID, question, workspace, embedModel string, topK int, viewerID string) ([]string, error) {
 	// D12 gate: this path (tool/test caller) resolves no visible set itself,
 	// so the identity check is the whole access control — an empty viewer
 	// identity fails closed instead of returning unfiltered chunks.
@@ -987,9 +1029,9 @@ func (rs *RAGService) RetrieveRelevantChunks(ctx context.Context, tenantID, ques
 	if tenantID == "" {
 		return nil, fmt.Errorf("knowledge: tenant_id is empty")
 	}
-	collectionName := constants.CollectionName(tenantID, workspace)
+	collectionName := constants.CollectionName(tenantID, workspace, embedModel)
 
-	vectorResults, err := rs.queryVector(ctx, question, collectionName, topK, rs.embeddingSvc, "", "")
+	vectorResults, err := rs.queryVector(ctx, question, collectionName, topK, rs.embeddingSvc, embedModel, false, "")
 	if err != nil {
 		if isCollectionNotFound(err) {
 			return []string{}, nil

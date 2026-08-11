@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -99,31 +100,43 @@ func compactLoopMessagesWithReserve(
 	recentGroups int,
 	compactor port.HistoryCompactor,
 ) []port.LLMMessage {
-	return compactLoopMessagesWithPolicy(ctx, msgs, budget, reservedTokens, recentGroups,
-		1, 1.0, constants.LoopCompactionSafetyRatio, compactor)
+	return compactLoopMessagesWithPolicy(ctx, msgs, Budget{HistoryCap: budget}, reservedTokens, recentGroups,
+		1, 1.0, constants.LoopCompactionSafetyRatio, compactor, nil)
 }
 
 // compactLoopMessagesWithPolicy is the full compaction core. The threshold is
-// budget·safety/correction: a correction > 1 (the token estimate under-counted
-// the previous request) lowers the threshold and compacts earlier; < 1 later.
-// correction ≤ 0 is treated as 1 (no correction).
+// budget.HistoryCap·safety/correction: a correction > 1 (the token estimate
+// under-counted the previous request) lowers the threshold and compacts
+// earlier; < 1 later. correction ≤ 0 is treated as 1 (no correction).
+// Budget 零值（未初始化）时 HistoryCap 为 0，压缩禁用，消息原样返回。
+// state 非 nil 时启用压缩冷却（Spec 第 4 节）：冷却期内超限走截断兜底，
+// 不触发同步 LLM 摘要；实际压缩发生后回写 state.LastCompactionAt。
+// nil state = 旧版行为（无冷却、无时间戳回写）。
 func compactLoopMessagesWithPolicy(
 	ctx context.Context,
 	msgs []port.LLMMessage,
-	budget int,
+	budget Budget,
 	reservedTokens int,
 	recentGroups int,
 	protectedUsers int,
 	correction float64,
 	safetyRatio float64,
 	compactor port.HistoryCompactor,
+	state *ReActState,
 ) []port.LLMMessage {
-	if budget <= 0 {
+	if budget.HistoryCap <= 0 {
 		return msgs
 	}
-	threshold := compactionThreshold(budget, reservedTokens, correction, safetyRatio)
+	// 阈值基于预算账本的 history 配额：工具 token 走 ToolsCap 独立配额，
+	// 不再压垮可压缩区（Spec 第 2 节根因修复）。
+	threshold := compactionThreshold(budget.HistoryCap, reservedTokens, correction, safetyRatio)
 	if tokenutil.EstimateMessages(toEstimate(msgs)) <= threshold {
 		return msgs // lazy: still fits, do nothing
+	}
+	// 压缩冷却：冷却期内跳过同步 LLM 摘要，走截断兜底——压缩是尽力而为
+	// 机制，同步 LLM 摘要不应每步触发（spec 症状 #2）。
+	if inCompactionCooldown(state) {
+		compactor = nil
 	}
 
 	groups := groupMessages(msgs)
@@ -131,10 +144,20 @@ func compactLoopMessagesWithPolicy(
 	if recentGroups < 0 {
 		recentGroups = 0
 	}
-	rebuilt := rebuildProtectedSegments(ctx, groups, headEnd, recentGroups, protectedUsers, compactor)
+	rebuilt := rebuildProtectedSegments(ctx, groups, headEnd, recentGroups, protectedUsers, compactor, state)
 	rebuilt = evictUntilFit(rebuilt, threshold)
 	rebuilt = truncateProtectedUntilFit(rebuilt, threshold)
 	return flatten(rebuilt)
+}
+
+// inCompactionCooldown 判断距上次 LLM 压缩是否仍在冷却窗口内（Spec 第 4 节）：
+// 一次执行内压缩触发后，冷却期内超限只截断、不重复触发同步 LLM 摘要。
+// nil state、cooldownSec <= 0 或从未压缩过 → 不受冷却限制（与旧版一致）。
+func inCompactionCooldown(state *ReActState) bool {
+	return state != nil &&
+		state.CompactionCooldownSec > 0 &&
+		!state.LastCompactionAt.IsZero() &&
+		time.Since(state.LastCompactionAt) < time.Duration(state.CompactionCooldownSec)*time.Second
 }
 
 // compactionThreshold normalizes the policy parameters and derives the budget
@@ -154,7 +177,13 @@ func compactionThreshold(budget, reservedTokens int, correction, safetyRatio flo
 // segments, and the protected user turns. The latest user message is the active
 // task; preceding user messages belong to chat history and are protected in
 // order of recency when protectedUsers > 0.
-func rebuildProtectedSegments(ctx context.Context, groups []msgGroup, headEnd, recentGroups, protectedUsers int, compactor port.HistoryCompactor) []msgGroup {
+func rebuildProtectedSegments(
+	ctx context.Context,
+	groups []msgGroup,
+	headEnd, recentGroups, protectedUsers int,
+	compactor port.HistoryCompactor,
+	state *ReActState,
+) []msgGroup {
 	protectedUserIdx := make(map[int]struct{}, max(protectedUsers, 0))
 	for i := len(groups) - 1; i >= headEnd && len(protectedUserIdx) < protectedUsers; i-- {
 		if groups[i].role0 == "user" {
@@ -174,7 +203,7 @@ func rebuildProtectedSegments(ctx context.Context, groups []msgGroup, headEnd, r
 		if seenProtectedUser {
 			keepRecent = recentGroups
 		}
-		rebuilt = appendCompactedSegment(ctx, rebuilt, groups[segmentStart:i], keepRecent, compactor)
+		rebuilt = appendCompactedSegment(ctx, rebuilt, groups[segmentStart:i], keepRecent, compactor, state)
 		protectedUser := groups[i]
 		protectedUser.anchorHdr = true
 		protectedUser.priority = 2
@@ -185,7 +214,7 @@ func rebuildProtectedSegments(ctx context.Context, groups []msgGroup, headEnd, r
 		segmentStart = i + 1
 		seenProtectedUser = true
 	}
-	return appendCompactedSegment(ctx, rebuilt, groups[segmentStart:], recentGroups, compactor)
+	return appendCompactedSegment(ctx, rebuilt, groups[segmentStart:], recentGroups, compactor, state)
 }
 
 func latestProtectedUserIndex(indices map[int]struct{}) int {
@@ -196,9 +225,15 @@ func latestProtectedUserIndex(indices map[int]struct{}) int {
 	return latest
 }
 
-func appendCompactedSegment(ctx context.Context, dst, segment []msgGroup, keepRecent int, compactor port.HistoryCompactor) []msgGroup {
+func appendCompactedSegment(
+	ctx context.Context,
+	dst, segment []msgGroup,
+	keepRecent int,
+	compactor port.HistoryCompactor,
+	state *ReActState,
+) []msgGroup {
 	tailStart := max(len(segment)-keepRecent, 0)
-	if bc := summarizeMiddle(ctx, segment[:tailStart], compactor); bc != nil {
+	if bc := summarizeMiddle(ctx, segment[:tailStart], compactor, state); bc != nil {
 		bc.anchorHdr = true
 		dst = append(dst, *bc)
 	}
@@ -243,7 +278,12 @@ func toEstimate(msgs []port.LLMMessage) []tokenutil.Message {
 // With a compactor it embeds a natural-language summary; without one (or on
 // error) it emits a count-only marker so the model knows history was elided.
 // Returns nil when there is nothing to summarize.
-func summarizeMiddle(ctx context.Context, middle []msgGroup, compactor port.HistoryCompactor) *msgGroup {
+func summarizeMiddle(
+	ctx context.Context,
+	middle []msgGroup,
+	compactor port.HistoryCompactor,
+	state *ReActState,
+) *msgGroup {
 	if len(middle) == 0 {
 		return nil
 	}
@@ -252,6 +292,11 @@ func summarizeMiddle(ctx context.Context, middle []msgGroup, compactor port.Hist
 	if compactor != nil {
 		if summary, err := compactor.CompactHistory(ctx, flat); err == nil && summary != "" {
 			marker = "[早期对话摘要] " + summary
+			// 压缩实际发生（同步摘要产出）：回写冷却时间戳（Spec 第 4 节），
+			// 一次执行内后续超限步骤不再重复触发。
+			if state != nil {
+				state.LastCompactionAt = time.Now()
+			}
 		}
 	}
 	return &msgGroup{

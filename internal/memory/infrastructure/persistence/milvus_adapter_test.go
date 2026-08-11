@@ -20,6 +20,9 @@ type fakeMilvusStore struct {
 	searchResults     []storagemilvus.SearchResult
 	searchErr         error
 	searchCalls       int
+	lists             map[string][]string
+	listCalls         []string
+	listErr           error
 }
 
 func (f *fakeMilvusStore) SearchWithFilter(_ context.Context, _ string, _ []float32, _ int, expression string, _ ...string) ([]storagemilvus.SearchResult, error) {
@@ -46,6 +49,14 @@ func (f *fakeMilvusStore) DeleteByFilter(_ context.Context, collection, expr str
 	err := f.filterErrors[0]
 	f.filterErrors = f.filterErrors[1:]
 	return err
+}
+
+func (f *fakeMilvusStore) ListCollections(_ context.Context, prefix string) ([]string, error) {
+	f.listCalls = append(f.listCalls, prefix)
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.lists[prefix], nil
 }
 
 func TestMilvusPortAdapterDeleteUsesPrimaryIDs(t *testing.T) {
@@ -91,6 +102,45 @@ func TestMilvusPortAdapterDeleteAllByAgentCleansBothCollections(t *testing.T) {
 	}
 	if strings.Join(store.filterCalls, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("filter calls = %v, want %v", store.filterCalls, want)
+	}
+}
+
+func TestMilvusPortAdapterDeleteAllByAgentCleansModelSuffixedCollections(t *testing.T) {
+	// 模型后缀集合按前缀枚举（尾下划线，避免 t1 误匹配 t10）：legacy 名先删，
+	// 再删 memory_<t>_ / memory_facts_<t>_ 下列出的全部模型后缀集合。
+	store := &fakeMilvusStore{lists: map[string][]string{
+		"memory_tenant_1_":       {"memory_tenant_1_text_embedding_v2", "memory_tenant_1_text_embedding_v3"},
+		"memory_facts_tenant_1_": {"memory_facts_tenant_1_text_embedding_v3"},
+	}}
+	adapter := NewMilvusPortAdapter(store)
+	if err := adapter.DeleteAllByAgent(context.Background(), "tenant-1", "agent-1"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		`memory_facts_tenant_1:agent_id == "agent-1" and scope == "agent"`,
+		`memory_tenant_1:agent_id == "agent-1" and scope == "agent"`,
+		`memory_tenant_1_text_embedding_v2:agent_id == "agent-1" and scope == "agent"`,
+		`memory_tenant_1_text_embedding_v3:agent_id == "agent-1" and scope == "agent"`,
+		`memory_facts_tenant_1_text_embedding_v3:agent_id == "agent-1" and scope == "agent"`,
+	}
+	if strings.Join(store.filterCalls, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("filter calls = %v, want %v", store.filterCalls, want)
+	}
+	if strings.Join(store.listCalls, ",") != "memory_tenant_1_,memory_facts_tenant_1_" {
+		t.Fatalf("list calls = %v", store.listCalls)
+	}
+}
+
+func TestMilvusPortAdapterDeleteAllListFailureSurfaced(t *testing.T) {
+	// 列不出模型后缀集合不能静默当没这回事：legacy 仍删，list 失败必须暴露。
+	store := &fakeMilvusStore{listErr: errors.New("list boom")}
+	adapter := NewMilvusPortAdapter(store)
+	err := adapter.DeleteAllByAgent(context.Background(), "tenant-1", "agent-1")
+	if err == nil || !strings.Contains(err.Error(), "list boom") {
+		t.Fatalf("error = %v, want list failure surfaced", err)
+	}
+	if len(store.filterCalls) != 2 {
+		t.Fatalf("filter calls = %v, want legacy deletes only", store.filterCalls)
 	}
 }
 
@@ -277,5 +327,27 @@ func validMemoryFactVectorDoc() *memport.VectorDoc {
 			"confidence":      0.8,
 			"source":          "llm_extraction",
 		},
+	}
+}
+
+// TestLegacyCollectionNamesPin 把 persistence 侧 legacy collection 名 pin 到
+// 与 pipeline/vector_adapter_test.go（TestMemoryCollectionNames /
+// TestMemoryFactsCollectionNames）完全相同的字面量：两处 helper 各自维护同名
+// 实现（跨包禁止共享），本测试保证任一包漂移时立即断裂，且删除路径
+// （legacyMemoryCollections）与查询回退路径（pipeline memory*LegacyName）
+// 对同一租户产出字节级一致的 collection 名。
+func TestLegacyCollectionNamesPin(t *testing.T) {
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"facts dashed tenant", memoryFactsCollectionLegacyName("my-tenant-42"), "memory_facts_my_tenant_42"},
+		{"raw dashed tenant", memoryCollectionLegacyName("my-tenant-42"), "memory_my_tenant_42"},
+	}
+	for _, tc := range tests {
+		if tc.got != tc.want {
+			t.Errorf("%s = %q, want %q (与 pipeline 侧 pin 字面量必须一致)", tc.name, tc.got, tc.want)
+		}
 	}
 }

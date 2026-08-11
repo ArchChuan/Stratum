@@ -93,14 +93,8 @@ func (e *EmbeddingService) EmbedBatch(ctx context.Context, texts []string) ([][]
 }
 
 func (e *EmbeddingService) GetVectorDimension() int {
-	switch e.model {
-	case "text-embedding-v1", "text-embedding-v2":
-		return 1536 // DashScope v1/v2
-	case "text-embedding-v3", "text-embedding-v4":
-		return 1024 // DashScope v3/v4 default
-	case "embedding-3":
-		return 2048 // Zhipu
-	default:
-		return 1536 // OpenAI text-embedding-3-small / ada-002
-	}
+	return constants.DimensionForModel(e.model)
 }
+
+// Model returns the embedding model name this service was built with.
+func (e *EmbeddingService) Model() string { return e.model }

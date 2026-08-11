@@ -22,6 +22,8 @@ import (
 type EmbedClient interface {
 	EmbedVector(ctx context.Context, text string) ([]float32, error)
 	GetVectorDimension() int
+	// Model returns the embedding model name in use (collection 命名依赖).
+	Model() string
 }
 
 // LLMClient performs a single non-streaming completion against an LLM provider.

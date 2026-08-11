@@ -24,3 +24,7 @@ func (a *EmbedClientAdapter) EmbedBatch(ctx context.Context, texts []string) ([]
 	}
 	return results, nil
 }
+
+// Model forwards the underlying embedder's model name so the collection
+// naming decision stays with the concrete embedding service.
+func (a *EmbedClientAdapter) Model() string { return a.ec.Model() }

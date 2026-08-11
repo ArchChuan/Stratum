@@ -12,9 +12,13 @@ import (
 )
 
 // mockChunkRepo 实现 port.ChunkRepo；DeleteByWorkspace 可脚本化错误。
+// keywordOut/keywordErr 让 hybrid 测试可注入 keyword leg 结果。
 type mockChunkRepo struct {
-	deleteErr error
-	deleted   []struct{ tenantID, workspaceID string }
+	deleteErr        error
+	countByWorkspace int64
+	deleted          []struct{ tenantID, workspaceID string }
+	keywordOut       []domain.Chunk
+	keywordErr       error
 }
 
 var _ knowledgeport.ChunkRepo = (*mockChunkRepo)(nil)
@@ -36,11 +40,14 @@ func (m *mockChunkRepo) GetChunksByIDs(context.Context, string, string, []string
 }
 
 func (m *mockChunkRepo) KeywordSearch(context.Context, string, string, string, []string, int) ([]domain.Chunk, error) {
-	return nil, nil
+	if m.keywordErr != nil {
+		return nil, m.keywordErr
+	}
+	return m.keywordOut, nil
 }
 
 func (m *mockChunkRepo) CountByWorkspace(context.Context, string, string) (int64, error) {
-	return 0, nil
+	return m.countByWorkspace, nil
 }
 
 func (m *mockChunkRepo) ListByDoc(context.Context, string, string, string) ([]domain.Chunk, error) {
@@ -123,8 +130,22 @@ func TestIngestBatchAllFail(t *testing.T) {
 	}
 }
 
+// deleteRecordingStore 记录 DeleteCollection 调用名，断言双删
+// （legacy 名 + 当前注入 embedder 的模型新名）与 embeddingSvc 为 nil 时
+// 只删 legacy 名。
+type deleteRecordingStore struct {
+	*MockVectorStore
+	deleted []string
+	err     error
+}
+
+func (d *deleteRecordingStore) DeleteCollection(_ context.Context, name string) error {
+	d.deleted = append(d.deleted, name)
+	return d.err
+}
+
 func TestDeleteWorkspaceData(t *testing.T) {
-	store := NewMockVectorStore()
+	store := &deleteRecordingStore{MockVectorStore: NewMockVectorStore()}
 	chunks := &mockChunkRepo{}
 	ki := buildIngest(t, &mockParser{out: paragraphInput(2)}, &mockEmbedder{dim: 4}, newMockDocRepo())
 	ki.vectorStore = store
@@ -135,6 +156,29 @@ func TestDeleteWorkspaceData(t *testing.T) {
 	}
 	if len(chunks.deleted) != 1 || chunks.deleted[0].workspaceID != "wsid-1" {
 		t.Fatalf("chunk deletes = %+v", chunks.deleted)
+	}
+	// 双删：legacy 名 + 当前注入 embedder（mockEmbedder.Model=text-embedding-v3）的模型新名。
+	want := []string{
+		constants.CollectionLegacyName("t1", "wsid-1"),
+		constants.CollectionName("t1", "wsid-1", "text-embedding-v3"),
+	}
+	if got := store.deleted; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("collection deletes = %v, want %v", got, want)
+	}
+}
+
+func TestDeleteWorkspaceDataNilEmbedderDeletesLegacyOnly(t *testing.T) {
+	// embeddingSvc 为 nil → 只删 legacy 名，不拼模型新名。
+	store := &deleteRecordingStore{MockVectorStore: NewMockVectorStore()}
+	ki := buildIngest(t, &mockParser{out: paragraphInput(2)}, &mockEmbedder{dim: 4}, newMockDocRepo())
+	ki.embeddingSvc = nil
+	ki.vectorStore = store
+
+	if err := ki.DeleteWorkspaceData(context.Background(), "t1", "wsid-1"); err != nil {
+		t.Fatalf("delete = %v", err)
+	}
+	if got := store.deleted; len(got) != 1 || got[0] != constants.CollectionLegacyName("t1", "wsid-1") {
+		t.Fatalf("collection deletes = %v, want only [%s]", got, constants.CollectionLegacyName("t1", "wsid-1"))
 	}
 }
 
@@ -163,17 +207,17 @@ func TestGetWorkspaceStats(t *testing.T) {
 	ki := buildIngest(t, &mockParser{out: paragraphInput(2)}, &mockEmbedder{dim: 4}, newMockDocRepo())
 	ki.vectorStore = NewMockVectorStore()
 
-	stats, err := ki.GetWorkspaceStats(context.Background(), "t1", "wsid-1")
+	stats, err := ki.GetWorkspaceStats(context.Background(), "t1", "wsid-1", "text-embedding-v3")
 	if err != nil {
 		t.Fatalf("stats = %v", err)
 	}
-	if stats["workspace"] != "wsid-1" || stats["vector_count"] != int64(0) || stats["collection"] != constants.CollectionName("t1", "wsid-1") {
+	if stats["workspace"] != "wsid-1" || stats["vector_count"] != int64(0) || stats["collection"] != constants.CollectionName("t1", "wsid-1", "text-embedding-v3") {
 		t.Fatalf("stats = %+v", stats)
 	}
 
 	// 极端情况：CountVectors 失败 → 错误传播。
 	ki.vectorStore = &vectorStoreFailing{}
-	if _, err := ki.GetWorkspaceStats(context.Background(), "t1", "wsid-1"); err == nil {
+	if _, err := ki.GetWorkspaceStats(context.Background(), "t1", "wsid-1", "text-embedding-v3"); err == nil {
 		t.Fatal("count failure must error")
 	}
 }
