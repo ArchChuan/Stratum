@@ -43,6 +43,10 @@ func (h *AuditHandler) ListEvents(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query audit events"})
 		return
 	}
+	// nil slice 序列化为 null，前端 zod schema 要求数组——空结果归一化为 []。
+	if events == nil {
+		events = []auditdomain.AuditEvent{}
+	}
 	c.JSON(http.StatusOK, gin.H{"events": events, "count": len(events), "total": total})
 }
 
