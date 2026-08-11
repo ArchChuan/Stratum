@@ -12,6 +12,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/evaluation/application"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -353,4 +354,181 @@ func (f *fakeOptimizationService) Generate(
 		ID: "candidate-record-1", OptimizationJobID: job.ID,
 		Revision: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "candidate-1"},
 	}}, nil
+}
+
+type fakeSuiteService struct {
+	created     domain.EvalSuite
+	revision    domain.EvalSuiteRevision
+	getDraftErr error
+	updated     domain.EvalCase
+	updateErr   error
+	tenantID    string
+	suiteID     string
+	caseID      string
+}
+
+func (f *fakeSuiteService) Create(_ context.Context, _ string, input application.CreateSuiteInput) (domain.EvalSuite, domain.EvalSuiteRevision, error) {
+	return f.created, f.revision, nil
+}
+
+func (f *fakeSuiteService) Publish(_ context.Context, _, _ string) (domain.EvalSuiteRevision, error) {
+	return f.revision, nil
+}
+
+func (f *fakeSuiteService) GetDraft(_ context.Context, tenantID, suiteID string) (domain.EvalSuiteRevision, error) {
+	f.tenantID, f.suiteID = tenantID, suiteID
+	return f.revision, f.getDraftErr
+}
+
+func (f *fakeSuiteService) UpdateDraftCase(_ context.Context, tenantID, suiteID, caseID string, testCase domain.EvalCase) (domain.EvalCase, error) {
+	f.tenantID, f.suiteID, f.caseID = tenantID, suiteID, caseID
+	return f.updated, f.updateErr
+}
+
+type fakeCaseGen struct {
+	result application.GenerateResult
+	err    error
+	input  application.GenerateInput
+}
+
+func (f *fakeCaseGen) Generate(_ context.Context, input application.GenerateInput) (application.GenerateResult, error) {
+	f.input = input
+	return f.result, f.err
+}
+
+func TestEvaluationHandlerGenerateSuiteCasesSamplesAndReturnsResult(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	gen := &fakeCaseGen{result: application.GenerateResult{SamplesFound: 5, Generated: 3}}
+	h := NewEvaluationHandler(nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop()).
+		WithTestCaseGenerator(gen)
+	r := gin.New()
+	r.POST("/evaluations/suites/:id/generate", withTenant("tenant-1"), h.GenerateSuiteCases)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/evaluations/suites/suite-1/generate",
+		strings.NewReader(`{"sample_policy":"negative_first","max_cases":7}`)))
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"samples_found":5`) ||
+		!strings.Contains(rec.Body.String(), `"generated":3`) {
+		t.Fatalf("unexpected response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if gen.input.SuiteID != "suite-1" || gen.input.TenantID != "tenant-1" ||
+		gen.input.Policy != domain.SamplePolicyNegativeFirst || gen.input.MaxCases != 7 {
+		t.Fatalf("generate input not propagated: %+v", gen.input)
+	}
+}
+
+func TestEvaluationHandlerGenerateSuiteCasesDefaultsLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	gen := &fakeCaseGen{}
+	h := NewEvaluationHandler(nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop()).
+		WithTestCaseGenerator(gen)
+	r := gin.New()
+	r.POST("/evaluations/suites/:id/generate", withTenant("tenant-1"), h.GenerateSuiteCases)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/evaluations/suites/suite-1/generate", strings.NewReader(`{"sample_policy":"balanced"}`)))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	if gen.input.MaxCases != constants.DefaultCaseSampleLimit {
+		t.Fatalf("default limit not applied: %d", gen.input.MaxCases)
+	}
+}
+
+func TestEvaluationHandlerGenerateSuiteCasesUnavailableWithoutGateway(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewEvaluationHandler(nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.POST("/evaluations/suites/:id/generate", withTenant("tenant-1"), h.GenerateSuiteCases)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/evaluations/suites/suite-1/generate", strings.NewReader(`{"sample_policy":"negative_first"}`)))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 without gateway, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestEvaluationHandlerGetSuiteDraft(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{
+		revision: domain.EvalSuiteRevision{
+			ID: "draft-1", SuiteID: "suite-1", Status: domain.SuiteRevisionDraft,
+			ResourceKind: domain.ResourceKindSkill,
+			Cases:        []domain.EvalCase{{ID: "case-1", Name: "物流", Input: "快递没更新", ExpectedOutput: "物流查询"}},
+		},
+	}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.GET("/evaluations/suites/:id/draft", withTenant("tenant-1"), h.GetSuiteDraft)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/evaluations/suites/suite-1/draft", nil))
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"case-1"`) {
+		t.Fatalf("unexpected response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if suites.tenantID != "tenant-1" || suites.suiteID != "suite-1" {
+		t.Fatalf("draft path not propagated: %+v", suites)
+	}
+}
+
+func TestEvaluationHandlerUpdateDraftCaseDefaultsEnabledTrue(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{updated: domain.EvalCase{ID: "case-1", Name: "物流改", Enabled: true}}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.PUT("/evaluations/suites/:id/draft/cases/:caseId", withTenant("tenant-1"), h.UpdateDraftCase)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
+		"/evaluations/suites/suite-1/draft/cases/case-1",
+		strings.NewReader(`{"name":"物流改","input":"物流进度查询","expected_output":"物流查询","assertion_mode":"exact"}`)))
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"enabled":true`) {
+		t.Fatalf("unexpected response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if suites.caseID != "case-1" || suites.tenantID != "tenant-1" {
+		t.Fatalf("update path not propagated: %+v", suites)
+	}
+}
+
+func TestEvaluationHandlerUpdateDraftCaseRejectsWhenEnabledFalse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{updated: domain.EvalCase{ID: "case-1", Enabled: false}}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.PUT("/evaluations/suites/:id/draft/cases/:caseId", withTenant("tenant-1"), h.UpdateDraftCase)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
+		"/evaluations/suites/suite-1/draft/cases/case-1",
+		strings.NewReader(`{"name":"物流改","input":"物流进度查询","expected_output":"物流查询","assertion_mode":"contains","enabled":false}`)))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestEvaluationHandlerUpdateDraftCaseRejectsBadRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewEvaluationHandler(&fakeSuiteService{}, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.PUT("/evaluations/suites/:id/draft/cases/:caseId", withTenant("tenant-1"), h.UpdateDraftCase)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
+		"/evaluations/suites/suite-1/draft/cases/case-1",
+		strings.NewReader(`{"name":"","input":"","expected_output":""}`)))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid update, got %d body=%s", rec.Code, rec.Body.String())
+	}
 }

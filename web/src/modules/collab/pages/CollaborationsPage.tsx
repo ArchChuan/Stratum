@@ -47,7 +47,7 @@ export const CollaborationsPage = () => {
   const { isAdmin } = useTenantRole();
   const [collabs, setCollabs] = useState<Collaboration[]>([]);
   const [agents, setAgents] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
   const [detail, setDetail] = useState<Collaboration | null>(null);

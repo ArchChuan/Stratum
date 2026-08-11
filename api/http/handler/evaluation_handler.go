@@ -11,6 +11,7 @@ import (
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -18,6 +19,12 @@ import (
 type evaluationSuiteService interface {
 	Create(ctx context.Context, tenantID string, input evalapp.CreateSuiteInput) (domain.EvalSuite, domain.EvalSuiteRevision, error)
 	Publish(ctx context.Context, tenantID, suiteID string) (domain.EvalSuiteRevision, error)
+	GetDraft(ctx context.Context, tenantID, suiteID string) (domain.EvalSuiteRevision, error)
+	UpdateDraftCase(ctx context.Context, tenantID, suiteID, caseID string, testCase domain.EvalCase) (domain.EvalCase, error)
+}
+
+type evaluationCaseGenerator interface {
+	Generate(ctx context.Context, input evalapp.GenerateInput) (evalapp.GenerateResult, error)
 }
 
 type evaluationJobService interface {
@@ -92,6 +99,7 @@ type EvaluationHandler struct {
 	candidates   evaluationCandidateCommandService
 	baselines    evaluationBaselineService
 	agentApplier evaluationAgentRevisionApplier
+	casegen      evaluationCaseGenerator
 	logger       *zap.Logger
 }
 
@@ -119,6 +127,11 @@ func (h *EvaluationHandler) WithBaselineService(service evaluationBaselineServic
 
 func (h *EvaluationHandler) WithAgentRevisionApplier(applier evaluationAgentRevisionApplier) *EvaluationHandler {
 	h.agentApplier = applier
+	return h
+}
+
+func (h *EvaluationHandler) WithTestCaseGenerator(generator evaluationCaseGenerator) *EvaluationHandler {
+	h.casegen = generator
 	return h
 }
 
@@ -189,6 +202,87 @@ func (h *EvaluationHandler) PublishSuite(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, revision)
+}
+
+// GenerateSuiteCases samples production interactions for the suite's
+// resource kind and writes generated cases into its draft revision for
+// human review. The generator never publishes automatically.
+func (h *EvaluationHandler) GenerateSuiteCases(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	if h.casegen == nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusServiceUnavailable, errors.New("case generator unavailable")))
+		return
+	}
+	var req gen.GenerateSuiteCasesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	limit := constants.DefaultCaseSampleLimit
+	if req.MaxCases > 0 {
+		limit = int(req.MaxCases)
+	}
+	result, err := h.casegen.Generate(c.Request.Context(), evalapp.GenerateInput{
+		TenantID: tenantID,
+		SuiteID:  c.Param("id"),
+		Policy:   domain.SamplePolicy(req.SamplePolicy),
+		MaxCases: limit,
+	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func (h *EvaluationHandler) GetSuiteDraft(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	revision, err := h.suites.GetDraft(c.Request.Context(), tenantID, c.Param("id"))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, revision)
+}
+
+// UpdateDraftCase approves (enabled=true), edits (full replacement) or
+// rejects (enabled=false) one case in the suite's draft revision.
+func (h *EvaluationHandler) UpdateDraftCase(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	var req gen.UpdateDraftCaseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+	updated, err := h.suites.UpdateDraftCase(c.Request.Context(), tenantID, c.Param("id"), c.Param("caseId"), domain.EvalCase{
+		ID:             c.Param("caseId"),
+		Name:           req.Name,
+		Input:          req.Input,
+		ExpectedOutput: req.ExpectedOutput,
+		AssertionMode:  domain.AssertionMode(req.AssertionMode),
+		Enabled:        enabled,
+	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, updated)
 }
 
 func (h *EvaluationHandler) EnqueueRun(c *gin.Context) {

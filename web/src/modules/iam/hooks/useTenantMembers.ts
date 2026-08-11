@@ -17,7 +17,7 @@ interface PaginationState {
 export const useTenantMembers = () => {
   const { user } = useAuth();
   const [members, setMembers] = useState<Member[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteLoading, setInviteLoading] = useState(false);
   const [invitationCode, setInvitationCode] = useState('');

@@ -44,6 +44,7 @@ type Evaluation struct {
 	KnowledgeProvider    evalport.ResourceRevisionProvider
 	BaselineService      *evalapp.BaselineService
 	AgentRevisionApplier evalport.AgentRevisionApplier
+	TestCaseGenerator    *evalapp.TestCaseGenerator
 }
 
 type evaluationResourceRouter struct {
@@ -651,6 +652,143 @@ func (j judgeAdapter) Judge(ctx context.Context, req evalport.JudgeRequest) (eva
 	return parseJudgeResponse(response.Content)
 }
 
+// buildEvaluationCaseGen wires the LLM-backed eval-case generator. Returns
+// nil when the gateway is unavailable; TestCaseGenerator rejects the whole
+// request then instead of silently producing no cases.
+// buildEvaluationRuntime resolves the baseline service and agent revision
+// applier used by the runtime evaluation entry points.
+func buildEvaluationRuntime(
+	manager skillCandidateManager,
+	agentProvider, mcpProvider, knowledgeProvider evalport.ResourceRevisionProvider,
+	runtimeAgentAdapter *agentEvaluationAdapter,
+) (*evalapp.BaselineService, evalport.AgentRevisionApplier) {
+	baseline := newEvaluationBaselineService(manager, agentProvider, mcpProvider, knowledgeProvider)
+	var applier evalport.AgentRevisionApplier
+	if runtimeAgentAdapter != nil {
+		applier = *runtimeAgentAdapter
+	}
+	return baseline, applier
+}
+
+// buildTestCaseGenerator wires sample source, LLM generator and suite repo
+// into the eval-case generation service.
+func buildTestCaseGenerator(c *Container, suites evalport.SuiteRepository, db *pgxpool.Pool) *evalapp.TestCaseGenerator {
+	return evalapp.NewTestCaseGenerator(
+		evalpersist.NewPgCaseSampleSource(db),
+		buildEvaluationCaseGen(c),
+		suites,
+	)
+}
+
+func buildEvaluationCaseGen(c *Container) evalport.CaseGenerator {
+	if c.LLMGateway == nil || c.LLMGateway.Gateway == nil {
+		return nil
+	}
+	var params *parametersapp.Service
+	if c.Parameters != nil {
+		params = c.Parameters.Service
+	}
+	return casegenAdapter{completer: c.LLMGateway.Gateway, params: params}
+}
+
+// casegenAdapter implements evalport.CaseGenerator over llmgateway's
+// LLMCompleter, the same channel as the LLM judge. The model falls back to
+// the platform optimizer model; a generation failure returns a
+// Valid=false GeneratedCase so the caller can report the per-sample reason
+// without aborting the whole pass.
+type casegenAdapter struct {
+	completer llmgatewaydomain.LLMCompleter
+	params    *parametersapp.Service
+}
+
+const caseGenSystemPrompt = `你是一名评测用例生成器。给定一条真实生产交互样本（用户查询、实际回答、用户反馈信号），生成一条评测用例。
+规则：
+1. input：保留或轻度改写原用户查询，不得改变语义；
+2. expected_output：基于实际回答推导期望输出；回答明显错误时可给出修正后的期望；
+3. assertion_mode：从 exact（精确匹配）、contains（包含）、regex（正则）、judge（LLM 判断）中选择最能验证该意图的模式；
+4. reason：一句话说明该用例的来源与生成依据。
+只输出 JSON：{"name": "...", "input": ..., "expected_output": ..., "assertion_mode": "...", "reason": "..."}，不要输出其他内容。`
+
+func (a casegenAdapter) Generate(ctx context.Context, req evalport.CaseGenRequest) (evaldomain.GeneratedCase, error) {
+	if a.completer == nil {
+		return evaldomain.GeneratedCase{Valid: false, Reason: "case generator: no LLM completer configured"}, nil
+	}
+	response, err := a.completer.Complete(ctx, &llmgatewaydomain.CompletionRequest{
+		Model:       a.genModel(ctx),
+		Temperature: 0.2,
+		MaxTokens:   constants.CaseGenMaxTokens,
+		Messages: []llmgatewaydomain.Message{
+			{Role: "system", Content: caseGenSystemPrompt},
+			{Role: "user", Content: caseGenUserContent(req)},
+		},
+	})
+	if err != nil {
+		return evaldomain.GeneratedCase{}, fmt.Errorf("case generator: %w", err)
+	}
+	return parseCaseGenResponse(response.Content)
+}
+
+func (a casegenAdapter) genModel(ctx context.Context) string {
+	if a.params != nil {
+		if values, err := a.params.PlatformValues(ctx); err == nil {
+			if model, ok := values["evaluation.optimizer.model"].(string); ok && model != "" {
+				return model
+			}
+		}
+	}
+	return "qwen-plus"
+}
+
+// caseGenUserContent renders one sample for the generator, including the
+// feedback signal when present.
+func caseGenUserContent(req evalport.CaseGenRequest) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "资源类型：%s\n", req.ResourceKind)
+	fmt.Fprintf(&b, "用户查询：%s\n", req.Sample.Query)
+	fmt.Fprintf(&b, "实际回答：%s\n", req.Sample.Response)
+	if req.Sample.Score != nil {
+		fmt.Fprintf(&b, "反馈分数：%.2f\n", *req.Sample.Score)
+	} else {
+		b.WriteString("反馈分数：无\n")
+	}
+	if len(req.Sample.Outcome) > 0 {
+		outcomeJSON, _ := json.Marshal(req.Sample.Outcome)
+		fmt.Fprintf(&b, "反馈标签：%s\n", outcomeJSON)
+	}
+	return b.String()
+}
+
+// parseCaseGenResponse extracts one eval-case JSON from the generator
+// output, tolerating a markdown code fence. Unparseable output becomes a
+// Valid=false GeneratedCase: the sample is rejected with a reason, never
+// silently dropped.
+func parseCaseGenResponse(content string) (evaldomain.GeneratedCase, error) {
+	trimmed := strings.TrimSpace(content)
+	if strings.HasPrefix(trimmed, "```") {
+		trimmed = strings.TrimPrefix(trimmed, "```json")
+		trimmed = strings.TrimPrefix(trimmed, "```")
+		trimmed = strings.TrimSuffix(strings.TrimSpace(trimmed), "```")
+	}
+	var generated struct {
+		Name           string                   `json:"name"`
+		Input          any                      `json:"input"`
+		ExpectedOutput any                      `json:"expected_output"`
+		AssertionMode  evaldomain.AssertionMode `json:"assertion_mode"`
+		Reason         string                   `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(trimmed)), &generated); err != nil {
+		return evaldomain.GeneratedCase{}, fmt.Errorf("case generator: parse generated case: %w", err)
+	}
+	return evaldomain.GeneratedCase{
+		Name:           generated.Name,
+		Input:          generated.Input,
+		ExpectedOutput: generated.ExpectedOutput,
+		AssertionMode:  generated.AssertionMode,
+		GenerateReason: generated.Reason,
+		Valid:          true,
+	}, nil
+}
+
 // parseJudgeResponse extracts {"passed": bool, "reason": string} from the
 // judge output, tolerating a markdown code fence around the JSON.
 func parseJudgeResponse(content string) (evaldomain.AssertionResult, error) {
@@ -928,11 +1066,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	)
 	worker.Start(ctx)
 	c.shutdown = append(c.shutdown, func(context.Context) error { worker.Stop(); return nil })
-	baselineService := newEvaluationBaselineService(manager, agentProvider, mcpProvider, knowledgeProvider)
-	var agentRevisionApplier evalport.AgentRevisionApplier
-	if runtimeAgentAdapter != nil {
-		agentRevisionApplier = *runtimeAgentAdapter
-	}
+	baselineService, agentRevisionApplier := buildEvaluationRuntime(manager, agentProvider, mcpProvider, knowledgeProvider, runtimeAgentAdapter)
 	c.Evaluation = &Evaluation{
 		Service:              service,
 		SuiteService:         suiteService,
@@ -948,6 +1082,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		KnowledgeProvider:    knowledgeProvider,
 		BaselineService:      baselineService,
 		AgentRevisionApplier: agentRevisionApplier,
+		TestCaseGenerator:    buildTestCaseGenerator(c, suiteRepo, db),
 	}
 	c.applyAgentRevisionResolvers(experimentService, runtimeAgentAdapter, runtimeMCPAdapter, runtimeKnowledgeAdapter)
 	c.applySkillEvaluationReader(experimentRepo)

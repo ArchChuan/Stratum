@@ -75,6 +75,41 @@ type SuiteRepository interface {
 	GetRevision(ctx context.Context, tenantID, revisionID string) (domain.EvalSuiteRevision, bool, error)
 	NextVersionNo(ctx context.Context, tenantID, suiteID string) (int, error)
 	PublishRevision(ctx context.Context, tenantID, suiteID, revisionID string, versionNo int) (domain.EvalSuiteRevision, error)
+	// CreateDraftRevision opens a fresh draft revision for a suite whose
+	// draft was cleared by publishing, and points eval_suites at it. The
+	// resource kind and parent revision are inherited from the suite's
+	// active revision; suites that were never published have no active
+	// revision and fail.
+	CreateDraftRevision(ctx context.Context, tenantID, suiteID string) (domain.EvalSuiteRevision, error)
+	// AddDraftCases inserts generated cases into a draft revision. All cases
+	// must carry provenance; the insert is atomic.
+	AddDraftCases(ctx context.Context, tenantID, revisionID string, cases []domain.EvalCase) error
+	// UpdateDraftCase replaces the editable fields of one draft case
+	// (approve = re-submit with Enabled=true, edit = full field replacement).
+	UpdateDraftCase(ctx context.Context, tenantID, revisionID string, testCase domain.EvalCase) error
+	// DeleteDraftCase removes a rejected draft case.
+	DeleteDraftCase(ctx context.Context, tenantID, revisionID, caseID string) error
+}
+
+// CaseSampleSource pairs evaluation_feedback signals with the production
+// (query, response) conversation rows they came from. The join is trace_id
+// based; rows written before trace_id existed are unreachable by design.
+type CaseSampleSource interface {
+	ListSamples(ctx context.Context, tenantID string, kind domain.ResourceKind, policy domain.SamplePolicy, limit int) ([]domain.CaseSample, error)
+}
+
+// CaseGenerator turns one production sample into an eval case with an LLM.
+// Implementations use llmgateway's LLMCompleter (same channel as the LLM
+// judge). A failed generation returns Valid=false with a diagnostic Reason.
+type CaseGenerator interface {
+	Generate(ctx context.Context, req CaseGenRequest) (domain.GeneratedCase, error)
+}
+
+// CaseGenRequest carries one sample and the suite's resource kind for
+// context-aware generation.
+type CaseGenRequest struct {
+	ResourceKind domain.ResourceKind
+	Sample       domain.CaseSample
 }
 
 type JobRepository interface {

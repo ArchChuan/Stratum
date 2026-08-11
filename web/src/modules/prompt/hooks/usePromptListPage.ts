@@ -10,7 +10,7 @@ interface RequestError { response?: { data?: { error?: string } } }
 
 export const usePromptListPage = () => {
   const [prompts, setPrompts] = useState<PromptSummary[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
   const { current: page, pageSize, total, setTotal, onChange, pageSizeOptions } = usePagination();

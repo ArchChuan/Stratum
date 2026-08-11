@@ -8,7 +8,7 @@ import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 export const useTenantSettings = () => {
   const { user, login, tokenRef } = useAuth();
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [tenantName, setTenantName] = useState('');
   const [isDefault, setIsDefault] = useState<boolean | null>(null);
 
@@ -22,6 +22,10 @@ export const useTenantSettings = () => {
       if (!isForbidden(err)) {
         message.error({ content: extractErrorMessage(err, '加载设置失败'), duration: 0 });
       }
+    } finally {
+      // loading 初值 true (首帧 Skeleton);数据到达或失败后必须解锁,
+      // 否则保存按钮 loading 恒 true 被禁用,租户设置永远无法提交。
+      setLoading(false);
     }
   }, []);
 

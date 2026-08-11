@@ -153,7 +153,8 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 		c.Evaluation.OptimizationService, c.Evaluation.ExperimentService,
 		c.Evaluation.FeedbackService, c.Evaluation.QueryService, c.Evaluation.CandidateService,
 		c.Logger,
-	).WithBaselineService(c.Evaluation.BaselineService).WithAgentRevisionApplier(c.Evaluation.AgentRevisionApplier)
+	).WithBaselineService(c.Evaluation.BaselineService).WithAgentRevisionApplier(c.Evaluation.AgentRevisionApplier).
+		WithTestCaseGenerator(c.Evaluation.TestCaseGenerator)
 	requireAdmin := middleware.RequireTenantRole("admin")
 	evaluations := r.Group("/evaluations", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	{
@@ -167,6 +168,9 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 		evaluations.POST("/resources/:kind/:id/baseline", requireAdmin, requireActive, h.CreateBaseline)
 		evaluations.POST("/suites", requireAdmin, requireActive, h.CreateSuite)
 		evaluations.POST("/suites/:id/publish", requireAdmin, requireActive, h.PublishSuite)
+		evaluations.POST("/suites/:id/generate", requireAdmin, requireActive, h.GenerateSuiteCases)
+		evaluations.GET("/suites/:id/draft", requireAdmin, requireActive, h.GetSuiteDraft)
+		evaluations.PUT("/suites/:id/draft/cases/:caseId", requireAdmin, requireActive, h.UpdateDraftCase)
 		evaluations.POST("/runs", requireAdmin, requireActive, h.EnqueueRun)
 		evaluations.GET("/runs/:id", requireAdmin, h.GetRun)
 		evaluations.GET("/jobs/:id", requireAdmin, h.GetJob)

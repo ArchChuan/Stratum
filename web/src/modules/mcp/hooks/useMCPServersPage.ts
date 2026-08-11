@@ -8,7 +8,7 @@ import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 export const useMCPServersPage = () => {
   const [servers, setServers] = useState<MCPServer[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [quota, setQuota] = useState<MCPQuota | null>(null);
   const [detailServer, setDetailServer] = useState<MCPServer | null>(null);
 

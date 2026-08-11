@@ -51,7 +51,11 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
-  const [loadingConvs, setLoadingConvs] = useState(false);
+  // 有恢复目标（fixedAgentId 或 sessionStorage 上次 agent）时，首帧即处于「会话恢复中」，
+  // 避免挂载首帧渲染「请先选择会话」空态后再跳真实页面。
+  const [loadingConvs, setLoadingConvs] = useState(
+    () => Boolean(fixedAgentId ?? sessionStorage.getItem(SS_AGENT)),
+  );
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [pendingApprovals, setPendingApprovals] = useState<ToolApproval[]>([]);
   const [approvalActionId, setApprovalActionId] = useState<string | null>(null);
@@ -127,6 +131,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
     if (!selectedAgent) {
       setConversations([]);
       setSelectedConv(null);
+      setLoadingConvs(false);
       return;
     }
     sessionStorage.setItem(SS_AGENT, selectedAgent);

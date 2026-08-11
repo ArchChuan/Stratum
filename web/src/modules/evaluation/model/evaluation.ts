@@ -24,8 +24,23 @@ export const evaluationCaseSchema = z.object({
   assertion_mode: z.enum(['exact', 'contains', 'regex', 'judge']),
   judge_spec: judgeSpecSchema,
   enabled: z.boolean().optional().default(true),
+  // Provenance from auto-generation (Phase 3c): which production trace and
+  // feedback signal the case was generated from, and why.
+  source_trace_id: z.string().optional(),
+  feedback_ref: z.string().optional(),
+  generate_reason: z.string().optional(),
 });
 export type EvaluationCase = z.infer<typeof evaluationCaseSchema>;
+
+// generateResultSchema is the outcome of one POST /suites/:id/generate
+// pass: how many samples were found, how many became draft cases, and
+// which samples were rejected and why.
+export const generateResultSchema = z.object({
+  samples_found: z.number(),
+  generated: z.number(),
+  rejected: z.array(z.object({ trace_id: z.string(), reason: z.string() }).strict()),
+}).strict();
+export type GenerateResult = z.infer<typeof generateResultSchema>;
 
 export const suiteRevisionSchema = z.object({
   id: z.string(),
