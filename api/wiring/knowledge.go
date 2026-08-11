@@ -145,23 +145,23 @@ func (c *Container) RecoverStuckKnowledgeIngests(ctx context.Context) {
 	}
 }
 
-// buildEmbedResolver resolves the tenant's first available managed embedding model.
+// buildEmbedResolver resolves the tenant's default embedding model via the
+// registry (marked default → first available → empty).
 func buildEmbedResolver(
 	registry *llmgateway.ModelRegistry,
 	logger *zap.Logger,
 ) pipeline.EmbedServiceResolver {
 	return func(ctx context.Context, tenantID string) pipeline.EmbedClient {
-		models, err := registry.ListEmbeddingModelsByTenant(ctx, tenantID)
-		if err != nil || len(models) == 0 {
+		model, err := registry.ResolveDefaultEmbeddingModel(ctx, tenantID)
+		if err != nil || model == "" {
 			return nil
 		}
-		embedModel := models[0]
-		cfg, _, err := registry.ResolveEmbedding(ctx, tenantID, embedModel)
+		cfg, _, err := registry.ResolveEmbedding(ctx, tenantID, model)
 		if err != nil {
 			return nil
 		}
 		client := llmgateway.NewOpenAICompatClient(cfg, logger)
-		return embedding.NewEmbeddingServiceWithModel(client, embedModel, logger)
+		return embedding.NewEmbeddingServiceWithModel(client, model, logger)
 	}
 }
 
@@ -173,11 +173,11 @@ func buildKnowledgeEmbedResolver(
 	return func(ctx context.Context, tenantID, model string) knowledge.EmbedClient {
 		m := model
 		if m == "" {
-			models, err := registry.ListEmbeddingModelsByTenant(ctx, tenantID)
-			if err != nil || len(models) == 0 {
+			var err error
+			m, err = registry.ResolveDefaultEmbeddingModel(ctx, tenantID)
+			if err != nil || m == "" {
 				return nil
 			}
-			m = models[0]
 		}
 
 		cfg, _, err := registry.ResolveEmbedding(ctx, tenantID, m)
@@ -205,6 +205,11 @@ func (c *Container) SeedBuiltinKnowledgeDocs(ctx context.Context) {
 			zap.String("reason", "tenant repo not wired"))
 		return
 	}
+	if c.LLMGateway == nil || c.LLMGateway.Registry == nil {
+		c.Logger.Debug("knowledge.seed_builtin_docs.skipped",
+			zap.String("reason", "llm gateway registry not wired"))
+		return
+	}
 
 	tenantIDs, err := c.IAM.TenantRepo.ListActiveTenantIDs(ctx)
 	if err != nil {
@@ -213,9 +218,21 @@ func (c *Container) SeedBuiltinKnowledgeDocs(ctx context.Context) {
 	}
 
 	for _, tid := range tenantIDs {
-		seeds.SeedBuiltinDocs(ctx, tid, "text-embedding-v3",
-			c.Knowledge.Ingest, c.Knowledge.DocRepo, officialDocsCatalogAdapter{}, c.Logger)
+		c.seedBuiltinDocsForTenant(ctx, tid)
 	}
+}
+
+// seedBuiltinDocsForTenant 为单个 tenant 种子内置文档；无可用嵌入模型时
+// WARN 并跳过，不阻断启动。
+func (c *Container) seedBuiltinDocsForTenant(ctx context.Context, tid string) {
+	model, err := c.LLMGateway.Registry.ResolveDefaultEmbeddingModel(ctx, tid)
+	if err != nil || model == "" {
+		c.Logger.Warn("knowledge.seed_builtin_docs.skip: no embedding model",
+			zap.String("tenant_id", tid))
+		return
+	}
+	seeds.SeedBuiltinDocs(ctx, tid, model,
+		c.Knowledge.Ingest, c.Knowledge.DocRepo, officialDocsCatalogAdapter{}, c.Logger)
 }
 
 // officialDocsCatalogAdapter adapts the agent context's embedded official
