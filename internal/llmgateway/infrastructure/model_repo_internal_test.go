@@ -217,7 +217,7 @@ func TestModelRepo_Update_success(t *testing.T) {
 	m := modelFixture()
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	mock.ExpectExec(`UPDATE models SET display_name=\$1, capabilities=\$2, context_window=\$3, max_tokens=\$4,\s+input_price=\$5, output_price=\$6, recommended=\$7, enabled=\$8, updated_at=now\(\),\s+default_embedding = default_embedding AND enabled AND 'embedding' = ANY\(capabilities\)\s+WHERE id=\$9 AND tenant_id=\$10`).
+	mock.ExpectExec(`UPDATE models SET display_name=\$1, capabilities=\$2, context_window=\$3, max_tokens=\$4,\s+input_price=\$5, output_price=\$6, recommended=\$7, enabled=\$8, updated_at=now\(\),\s+default_embedding = default_embedding AND \$8 AND 'embedding' = ANY\(\$2\)\s+WHERE id=\$9 AND tenant_id=\$10`).
 		WithArgs(m.DisplayName, []string{"chat", "vision"}, m.ContextWindow, m.MaxTokens,
 			m.InputPrice, m.OutputPrice, m.Recommended, m.Enabled, m.ID, "t1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
@@ -233,7 +233,7 @@ func TestModelRepo_Update_notFound(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	mock.ExpectExec(`UPDATE models SET display_name=\$1, capabilities=\$2, context_window=\$3, max_tokens=\$4,\s+input_price=\$5, output_price=\$6, recommended=\$7, enabled=\$8, updated_at=now\(\),\s+default_embedding = default_embedding AND enabled AND 'embedding' = ANY\(capabilities\)\s+WHERE id=\$9 AND tenant_id=\$10`).
+	mock.ExpectExec(`UPDATE models SET display_name=\$1, capabilities=\$2, context_window=\$3, max_tokens=\$4,\s+input_price=\$5, output_price=\$6, recommended=\$7, enabled=\$8, updated_at=now\(\),\s+default_embedding = default_embedding AND \$8 AND 'embedding' = ANY\(\$2\)\s+WHERE id=\$9 AND tenant_id=\$10`).
 		WithArgs(anyArgs(10)...).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectRollback()
 
@@ -248,7 +248,7 @@ func TestModelRepo_Update_execFails(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	mock.ExpectExec(`UPDATE models SET display_name=\$1, capabilities=\$2, context_window=\$3, max_tokens=\$4,\s+input_price=\$5, output_price=\$6, recommended=\$7, enabled=\$8, updated_at=now\(\),\s+default_embedding = default_embedding AND enabled AND 'embedding' = ANY\(capabilities\)\s+WHERE id=\$9 AND tenant_id=\$10`).
+	mock.ExpectExec(`UPDATE models SET display_name=\$1, capabilities=\$2, context_window=\$3, max_tokens=\$4,\s+input_price=\$5, output_price=\$6, recommended=\$7, enabled=\$8, updated_at=now\(\),\s+default_embedding = default_embedding AND \$8 AND 'embedding' = ANY\(\$2\)\s+WHERE id=\$9 AND tenant_id=\$10`).
 		WithArgs(anyArgs(10)...).WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
@@ -292,7 +292,7 @@ func TestModelRepo_Toggle_success(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	mock.ExpectExec(`UPDATE models SET enabled=\$1, updated_at=now\(\),\s+default_embedding = default_embedding AND enabled AND 'embedding' = ANY\(capabilities\)\s+WHERE id=\$2 AND tenant_id=\$3`).
+	mock.ExpectExec(`UPDATE models SET enabled=\$1, updated_at=now\(\),\s+default_embedding = default_embedding AND \$1 AND 'embedding' = ANY\(capabilities\)\s+WHERE id=\$2 AND tenant_id=\$3`).
 		WithArgs(false, "m1", "t1").WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
@@ -306,7 +306,7 @@ func TestModelRepo_Toggle_notFound(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	mock.ExpectExec(`UPDATE models SET enabled=\$1, updated_at=now\(\),\s+default_embedding = default_embedding AND enabled AND 'embedding' = ANY\(capabilities\)\s+WHERE id=\$2 AND tenant_id=\$3`).
+	mock.ExpectExec(`UPDATE models SET enabled=\$1, updated_at=now\(\),\s+default_embedding = default_embedding AND \$1 AND 'embedding' = ANY\(capabilities\)\s+WHERE id=\$2 AND tenant_id=\$3`).
 		WithArgs(anyArgs(3)...).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectRollback()
 
@@ -421,7 +421,7 @@ func TestModelRepo_UpsertDiscovered_newAndExisting(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	// disable phase
-	mock.ExpectExec(`UPDATE models SET enabled=false, updated_at=now\(\),\s+default_embedding = default_embedding AND enabled AND 'embedding' = ANY\(capabilities\)\s+WHERE tenant_id=\$1 AND provider_id=\$2 AND provider_managed=true`).
+	mock.ExpectExec(`UPDATE models SET enabled=false, updated_at=now\(\),\s+default_embedding = default_embedding AND 'embedding' = ANY\(capabilities\)\s+WHERE tenant_id=\$1 AND provider_id=\$2 AND provider_managed=true`).
 		WithArgs("t1", "p1").WillReturnResult(pgxmock.NewResult("UPDATE", 2))
 	// new model -> no existing row -> insert
 	mock.ExpectQuery("SELECT id FROM models WHERE tenant_id=\\$1 AND provider_id=\\$2 AND name=\\$3").
@@ -458,7 +458,7 @@ func TestModelRepo_UpsertDiscovered_disableFails(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	mock.ExpectExec(`UPDATE models SET enabled=false, updated_at=now\(\),\s+default_embedding = default_embedding AND enabled AND 'embedding' = ANY\(capabilities\)\s+WHERE tenant_id=\$1 AND provider_id=\$2 AND provider_managed=true`).
+	mock.ExpectExec(`UPDATE models SET enabled=false, updated_at=now\(\),\s+default_embedding = default_embedding AND 'embedding' = ANY\(capabilities\)\s+WHERE tenant_id=\$1 AND provider_id=\$2 AND provider_managed=true`).
 		WithArgs("t1", "p1").WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
@@ -473,7 +473,7 @@ func TestModelRepo_UpsertDiscovered_insertFails(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	mock.ExpectExec(`UPDATE models SET enabled=false, updated_at=now\(\),\s+default_embedding = default_embedding AND enabled AND 'embedding' = ANY\(capabilities\)\s+WHERE tenant_id=\$1 AND provider_id=\$2 AND provider_managed=true`).
+	mock.ExpectExec(`UPDATE models SET enabled=false, updated_at=now\(\),\s+default_embedding = default_embedding AND 'embedding' = ANY\(capabilities\)\s+WHERE tenant_id=\$1 AND provider_id=\$2 AND provider_managed=true`).
 		WithArgs("t1", "p1").WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectQuery("SELECT id FROM models WHERE tenant_id=\\$1 AND provider_id=\\$2 AND name=\\$3").
 		WithArgs("t1", "p1", "new-model").WillReturnError(pgx.ErrNoRows)
@@ -496,7 +496,7 @@ func TestModelRepo_UpsertDiscovered_updateFails(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	mock.ExpectExec(`UPDATE models SET enabled=false, updated_at=now\(\),\s+default_embedding = default_embedding AND enabled AND 'embedding' = ANY\(capabilities\)\s+WHERE tenant_id=\$1 AND provider_id=\$2 AND provider_managed=true`).
+	mock.ExpectExec(`UPDATE models SET enabled=false, updated_at=now\(\),\s+default_embedding = default_embedding AND 'embedding' = ANY\(capabilities\)\s+WHERE tenant_id=\$1 AND provider_id=\$2 AND provider_managed=true`).
 		WithArgs("t1", "p1").WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectQuery("SELECT id FROM models WHERE tenant_id=\\$1 AND provider_id=\\$2 AND name=\\$3").
 		WithArgs("t1", "p1", "existing").

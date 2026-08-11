@@ -127,7 +127,7 @@ func (r *PgModelRepo) Update(ctx context.Context, tenantID string, m *domain.Mod
 		tag, err := tx.Exec(ctx,
 			`UPDATE models SET display_name=$1, capabilities=$2, context_window=$3, max_tokens=$4,
 			 input_price=$5, output_price=$6, recommended=$7, enabled=$8, updated_at=now(),
-			 default_embedding = default_embedding AND enabled AND 'embedding' = ANY(capabilities)
+			 default_embedding = default_embedding AND $8 AND 'embedding' = ANY($2)
 			 WHERE id=$9 AND tenant_id=$10`,
 			m.DisplayName, caps, m.ContextWindow, m.MaxTokens,
 			m.InputPrice, m.OutputPrice, m.Recommended, m.Enabled, m.ID, tenantID,
@@ -148,10 +148,15 @@ func (r *PgModelRepo) UpsertDiscovered(ctx context.Context, tenantID, providerID
 	var result []domain.Model
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		// Mark all provider-managed models for this provider as disabled,
-		// then re-enable those still present.
+		// then re-enable those still present. The default-embedding marker
+		// is intentionally NOT cleared here: re-enabling has no restore
+		// channel, so clearing would drop user marks on models still in the
+		// list. We only clean stale marks on models whose capabilities no
+		// longer include embedding; disabled marks are harmless because
+		// resolution filters on enabled.
 		if _, err := tx.Exec(ctx,
 			`UPDATE models SET enabled=false, updated_at=now(),
-			 default_embedding = default_embedding AND enabled AND 'embedding' = ANY(capabilities)
+			 default_embedding = default_embedding AND 'embedding' = ANY(capabilities)
 			 WHERE tenant_id=$1 AND provider_id=$2 AND provider_managed=true`,
 			tenantID, providerID); err != nil {
 			return fmt.Errorf("upsert models: disable phase: %w", err)
@@ -240,7 +245,7 @@ func (r *PgModelRepo) Toggle(ctx context.Context, tenantID, id string, enabled b
 	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx,
 			`UPDATE models SET enabled=$1, updated_at=now(),
-			 default_embedding = default_embedding AND enabled AND 'embedding' = ANY(capabilities)
+			 default_embedding = default_embedding AND $1 AND 'embedding' = ANY(capabilities)
 			 WHERE id=$2 AND tenant_id=$3`,
 			enabled, id, tenantID)
 		if err != nil {
