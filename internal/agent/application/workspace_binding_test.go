@@ -22,9 +22,9 @@ type recordingBindingValidator struct {
 	call int
 }
 
-func (v *recordingBindingValidator) ValidateWorkspaceBindings(_ context.Context, _ string, names []string) error {
+func (v *recordingBindingValidator) ValidateWorkspaceBindings(_ context.Context, _ string, ids []string) error {
 	v.call++
-	v.got = append(v.got, names)
+	v.got = append(v.got, ids)
 	return v.err
 }
 

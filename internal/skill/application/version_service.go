@@ -109,7 +109,7 @@ func (s *VersionService) SetWorkspaceBindingValidator(v port.WorkspaceBindingVal
 }
 
 // validateWorkspaceBindings fails closed (D10): an un-wired validator or an
-// unknown workspace name rejects the binding. Empty lists pass trivially —
+// unknown workspace ID rejects the binding. Empty lists pass trivially —
 // no bindings to verify.
 func (s *VersionService) validateWorkspaceBindings(ctx context.Context, workspaceIDs []string) error {
 	if len(workspaceIDs) == 0 {

@@ -180,11 +180,11 @@ type workspaceBindingAdapter struct {
 	ws *knowledge.WorkspaceService
 }
 
-func (a workspaceBindingAdapter) ValidateWorkspaceBindings(ctx context.Context, tenantID string, names []string) error {
+func (a workspaceBindingAdapter) ValidateWorkspaceBindings(ctx context.Context, tenantID string, ids []string) error {
 	if a.ws == nil {
 		return fmt.Errorf("knowledge: workspace binding validation unavailable (workspace service not wired)")
 	}
-	return a.ws.ValidateWorkspaceBindings(ctx, tenantID, names)
+	return a.ws.ValidateWorkspaceBindings(ctx, tenantID, ids)
 }
 
 func tenantMemberService(c *Container) tenantMemberRoleService {
