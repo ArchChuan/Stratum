@@ -119,6 +119,7 @@ export const AgentChatPage = ({
         <ChatMessageList
           messages={messages}
           loadingMsgs={loadingMsgs}
+          loadingConvs={loadingConvs}
           sending={sending}
           selectedConv={selectedConv}
           selectedAgent={selectedAgent}
@@ -152,6 +153,7 @@ export const AgentChatPage = ({
           setInput={setInput}
           sending={sending}
           selectedConv={selectedConv}
+          loading={loadingConvs}
           onSend={handleSend}
           isMobile={isMobile}
         />
