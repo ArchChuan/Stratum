@@ -111,6 +111,28 @@ func (a ragSearchAdapter) SearchKnowledge(
 	return knowledge.NewRAGSearchFn(a.rag, tenantID)(ctx, workspaceIDs, query, topK)
 }
 
+// SearchKnowledgeWithEvidence implements agentport.RAGSearchEvidenceProvider:
+// same fan-out as SearchKnowledge but retaining chunk-level provenance so
+// agent tool observations can record retrieval evidence.
+func (a ragSearchAdapter) SearchKnowledgeWithEvidence(
+	ctx context.Context, tenantID string, workspaceIDs []string, query string, topK int,
+) (agentport.RAGSearchEvidence, error) {
+	ev, err := knowledge.NewRAGSearchEvidenceFn(a.rag, tenantID)(ctx, workspaceIDs, query, topK)
+	if err != nil {
+		return agentport.RAGSearchEvidence{}, err
+	}
+	out := agentport.RAGSearchEvidence{Content: ev.Content, Sources: make([]agentport.RAGSearchSource, 0, len(ev.Sources))}
+	for _, src := range ev.Sources {
+		out.Sources = append(out.Sources, agentport.RAGSearchSource{
+			WorkspaceID: src.WorkspaceID, WorkspaceName: src.WorkspaceName, ChunkID: src.ChunkID,
+			Score: src.Score, HasScore: src.HasScore,
+		})
+	}
+	return out, nil
+}
+
+var _ agentport.RAGSearchEvidenceProvider = ragSearchAdapter{}
+
 func (a ragSearchAdapter) SearchKnowledgeRevision(
 	ctx context.Context, tenantID string, revision agentport.KnowledgeRetrievalRevision, query string,
 ) (string, error) {

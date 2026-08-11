@@ -955,3 +955,76 @@ func TestUpsertActivationReplacesInPlaceOrAppends(t *testing.T) {
 	got = graph.UpsertActivationForTest(got, a2)
 	require.Equal(t, []port.SkillActivation{a2, b}, got)
 }
+
+func TestBuildReActGraph_SearchKnowledgePrefersEvidenceFn(t *testing.T) {
+	stub := &capGWSequence{responses: []port.CapabilityResponse{
+		{ToolCalls: []port.ToolCall{{ID: "k1", Name: "stratum_search_knowledge",
+			Arguments: map[string]any{"workspaces": []any{"kb"}, "query": "q"}}}},
+		{Content: "done"},
+	}}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+
+	var plainCalled, evidenceCalled bool
+	out, err := cg.Invoke(context.Background(), graph.ReActState{
+		Model: "qwen", Messages: []port.LLMMessage{{Role: "user", Content: "search"}},
+		AvailableTools:             []port.ToolDefinition{{Name: "stratum_search_knowledge", ProviderType: "builtin"}},
+		AgentKnowledgeWorkspaceIDs: []string{"kb"},
+		RAGSearchFn: func(context.Context, []string, string, int) (string, error) {
+			plainCalled = true
+			return "plain", nil
+		},
+		RAGSearchFnWithEvidence: func(context.Context, []string, string, int) (port.RAGSearchEvidence, error) {
+			evidenceCalled = true
+			return port.RAGSearchEvidence{Content: "ev", Sources: []port.RAGSearchSource{
+				{WorkspaceID: "w1", WorkspaceName: "KB One", ChunkID: "c1", Score: 0.85, HasScore: true},
+				{WorkspaceID: "w2", WorkspaceName: "KB Two", ChunkID: "c2"},
+			}}, nil
+		},
+	}, graph.RunConfig[graph.ReActState]{MaxSteps: 8})
+
+	require.NoError(t, err)
+	require.True(t, evidenceCalled)
+	require.False(t, plainCalled)
+	require.Equal(t, "done", out.Output)
+
+	require.Len(t, out.ToolObservations, 1)
+	meta, ok := out.ToolObservations[0].Metadata["evidence"].(map[string]any)
+	require.True(t, ok, "evidence metadata expected on tool observation")
+	require.Equal(t, 2, meta["source_count"])
+	sources, ok := meta["sources"].([]any)
+	require.True(t, ok)
+	require.Len(t, sources, 2)
+	first := sources[0].(map[string]any)
+	require.Equal(t, "w1", first["workspace_id"])
+	require.Equal(t, "KB One", first["workspace_name"])
+	require.Equal(t, "c1", first["chunk_id"])
+	require.InDelta(t, 0.85, first["score"], 1e-6)
+	second := sources[1].(map[string]any)
+	require.NotContains(t, second, "score")
+}
+
+func TestBuildReActGraph_SearchKnowledgeFallsBackToPlainFn(t *testing.T) {
+	stub := &capGWSequence{responses: []port.CapabilityResponse{
+		{ToolCalls: []port.ToolCall{{ID: "k1", Name: "stratum_search_knowledge",
+			Arguments: map[string]any{"workspaces": []any{"kb"}, "query": "q"}}}},
+		{Content: "done"},
+	}}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+
+	out, err := cg.Invoke(context.Background(), graph.ReActState{
+		Model: "qwen", Messages: []port.LLMMessage{{Role: "user", Content: "search"}},
+		AvailableTools:             []port.ToolDefinition{{Name: "stratum_search_knowledge", ProviderType: "builtin"}},
+		AgentKnowledgeWorkspaceIDs: []string{"kb"},
+		RAGSearchFn: func(context.Context, []string, string, int) (string, error) {
+			return "plain result", nil
+		},
+	}, graph.RunConfig[graph.ReActState]{MaxSteps: 8})
+
+	require.NoError(t, err)
+	require.Equal(t, "done", out.Output)
+	require.Len(t, out.ToolObservations, 1)
+	_, hasEvidence := out.ToolObservations[0].Metadata["evidence"]
+	require.False(t, hasEvidence, "plain search must not fabricate evidence metadata")
+}

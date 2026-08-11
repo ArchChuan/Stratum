@@ -84,14 +84,18 @@ type ObservedTraceEvidence struct {
 }
 
 type EvalRun struct {
-	ID              string           `json:"id"`
-	Resource        ResourceRef      `json:"resource"`
-	SuiteRevisionID string           `json:"suite_revision_id"`
-	Passed          bool             `json:"passed"`
-	TotalCases      int              `json:"total_cases"`
-	PassedCases     int              `json:"passed_cases"`
-	Results         []EvalCaseResult `json:"results"`
-	CreatedAt       time.Time        `json:"created_at"`
+	ID              string      `json:"id"`
+	Resource        ResourceRef `json:"resource"`
+	SuiteRevisionID string      `json:"suite_revision_id"`
+	Passed          bool        `json:"passed"`
+	TotalCases      int         `json:"total_cases"`
+	PassedCases     int         `json:"passed_cases"`
+	// Metrics aggregates run-level signals (pass rate, latency percentiles,
+	// token/cost totals) computed after the case loop; persisted to
+	// eval_runs.metrics JSONB.
+	Metrics   map[string]any   `json:"metrics,omitempty"`
+	Results   []EvalCaseResult `json:"results"`
+	CreatedAt time.Time        `json:"created_at"`
 }
 
 type JobStatus string

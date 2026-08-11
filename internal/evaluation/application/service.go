@@ -100,6 +100,7 @@ func (s *Service) Run(ctx context.Context, input RunInput) (domain.EvalRun, erro
 		}
 		run.Results = append(run.Results, result)
 	}
+	run.Metrics = aggregateRunMetrics(run)
 	if err := s.repo.SaveRun(ctx, input.TenantID, run); err != nil {
 		return domain.EvalRun{}, err
 	}
