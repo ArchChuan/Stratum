@@ -67,6 +67,9 @@ func SanitizeMilvusName(s string) string { return milvusUnsafe.ReplaceAllString(
 // workspaceID must be the stable workspace ID, not the mutable name.
 // workspaceID (UUID v7) is globally unique, so tenantID is ignored; embedModel
 // is encoded as a sanitized suffix so switching models isolates vector data.
+// 空 model 时产出 kb_<workspaceID>_ 尾下划线形态（既非 legacy 名也非模型名）：
+// 该形态被 cleaner 的 kb_<ws>_ 前缀匹配覆盖，RAG 查询回退仍可达 legacy 数据，
+// 故无害；此行为已由 pkg/constants/agent_test.go pin。
 func CollectionName(_, workspaceID, embedModel string) string {
 	return fmt.Sprintf("%s_%s_%s", CollectionPrefix, SanitizeMilvusName(workspaceID), SanitizeMilvusName(embedModel))
 }

@@ -7,6 +7,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 )
 
@@ -180,6 +181,74 @@ func TestG7LegacyFallback_NewNameDimMismatchFailsClosed(t *testing.T) {
 	}
 	if len(rec.searchCalls) != 0 {
 		t.Fatalf("search calls = %v, want none", rec.searchCalls)
+	}
+}
+
+func hybridFallbackQueryReq() RAGQueryRequest {
+	req := fallbackQueryReq()
+	req.Mode = "hybrid"
+	return req
+}
+
+func TestG7Hybrid_UpgradedWorkspaceFallsBackToLegacy(t *testing.T) {
+	// 升级态 workspace（仅 legacy collection 存在）走 hybrid：新名缺失回退
+	// legacy 名，vector leg 读旧数据，keyword leg 照常融合返回。
+	rec := &recordingVectorStore{
+		MockVectorStore: NewMockVectorStore(),
+		describeErr:     map[string]error{fallbackNewName: errors.New("collection not found: " + fallbackNewName)},
+		describeInfo:    map[string]knowledgeport.CollectionInfo{fallbackLegacy: {Dim: 1024, HasUserID: true}},
+		searchOut:       map[string][]knowledgeport.VectorSearchResult{fallbackLegacy: {{ID: "v1", Content: "legacy-data"}}},
+	}
+	rs := newFallbackRAGService(rec)
+	rs.SetChunkRepo(&mockChunkRepo{keywordOut: []domain.Chunk{{ID: "c1", DocID: "d1", Text: "kw-data"}}})
+
+	res, err := rs.Query(context.Background(), hybridFallbackQueryReq())
+	if err != nil {
+		t.Fatalf("query = %v", err)
+	}
+	// 真实调用序列断言：[新名 Describe, legacy Describe, legacy Search]，
+	// 与 vector 分支回退路径同构。
+	if got := rec.describeCalls; len(got) != 2 || got[0] != fallbackNewName || got[1] != fallbackLegacy {
+		t.Fatalf("describe calls = %v, want [%s %s]", got, fallbackNewName, fallbackLegacy)
+	}
+	if got := rec.searchCalls; len(got) != 1 || got[0] != fallbackLegacy {
+		t.Fatalf("search calls = %v, want [%s]", got, fallbackLegacy)
+	}
+	// 两腿结果都进 fusion，互不吞没。
+	var hasLegacy, hasKeyword bool
+	for _, s := range res.Sources {
+		hasLegacy = hasLegacy || s.Content == "legacy-data"
+		hasKeyword = hasKeyword || s.Content == "kw-data"
+	}
+	if !hasLegacy || !hasKeyword {
+		t.Fatalf("sources = %+v, want both legacy-data and kw-data", res.Sources)
+	}
+}
+
+func TestG7Hybrid_LegacyDimMismatchSkipsVectorKeepsKeyword(t *testing.T) {
+	// hybrid 中 legacy 集合维数与当前模型不符：vector leg 空结果（Warn 已
+	// 记录），不 fail hybrid —— keyword leg 结果照常返回。
+	rec := &recordingVectorStore{
+		MockVectorStore: NewMockVectorStore(),
+		describeErr:     map[string]error{fallbackNewName: errors.New("collection not found: " + fallbackNewName)},
+		describeInfo:    map[string]knowledgeport.CollectionInfo{fallbackLegacy: {Dim: 1536, HasUserID: true}},
+	}
+	rs := newFallbackRAGService(rec)
+	rs.SetChunkRepo(&mockChunkRepo{keywordOut: []domain.Chunk{{ID: "c1", DocID: "d1", Text: "kw-data"}}})
+
+	res, err := rs.Query(context.Background(), hybridFallbackQueryReq())
+	if err != nil {
+		t.Fatalf("query = %v, want keyword leg only, not fail", err)
+	}
+	if len(res.VectorResults) != 0 {
+		t.Fatalf("vector results = %+v, want empty", res.VectorResults)
+	}
+	// dim 不一致在搜索前拦截：vector leg 一次 Search 都不该发生。
+	if len(rec.searchCalls) != 0 {
+		t.Fatalf("search calls = %v, want none", rec.searchCalls)
+	}
+	if len(res.Sources) == 0 || res.Sources[0].Content != "kw-data" {
+		t.Fatalf("sources = %+v, want keyword leg result", res.Sources)
 	}
 }
 

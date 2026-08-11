@@ -387,8 +387,13 @@ func vectorToPool(results []knowledgeport.VectorSearchResult) []Source {
 }
 
 // hybridPool runs both retrieval legs concurrently and fuses them with
-// reciprocal rank fusion. A missing collection with no documents falls
-// through to the keyword leg alone; other vector failures fail closed.
+// reciprocal rank fusion. The vector leg mirrors the vector branch's legacy
+// fallback: a missing new name falls back to the legacy collection (upgraded
+// workspaces that were not re-ingested are an expected state), and a legacy
+// dimension mismatch skips that leg with an empty result instead of failing
+// closed — the keyword leg still contributes. A missing collection with no
+// documents falls through to the keyword leg alone; other vector failures
+// fail closed.
 func (rs *RAGService) hybridPool(ctx context.Context, req RAGQueryRequest, collectionName string, embedder knowledgeport.Embedder, legTopK int) ([]knowledgeport.VectorSearchResult, []Source, error) {
 	type vRes struct {
 		r []knowledgeport.VectorSearchResult
@@ -398,10 +403,12 @@ func (rs *RAGService) hybridPool(ctx context.Context, req RAGQueryRequest, colle
 		r []domain.Chunk
 		e error
 	}
+	legacyName := constants.CollectionLegacyName(req.TenantID, req.WorkspaceID)
+	searchName, legacy := rs.resolveSearchCollection(ctx, collectionName, legacyName, req.WorkspaceID)
 	vCh := make(chan vRes, 1)
 	kCh := make(chan kRes, 1)
 	go func() {
-		r, e := rs.queryVector(ctx, req.Question, collectionName, legTopK, embedder, req.EmbeddingModel, false)
+		r, e := rs.queryVector(ctx, req.Question, searchName, legTopK, embedder, req.EmbeddingModel, legacy)
 		vCh <- vRes{r, e}
 	}()
 	go func() {
@@ -416,7 +423,7 @@ func (rs *RAGService) hybridPool(ctx context.Context, req RAGQueryRequest, colle
 	kr := <-kCh
 	if vr.e != nil {
 		if errors.Is(vr.e, errCollectionNotFound) {
-			if missingErr := rs.handleMissingCollection(ctx, req, collectionName); missingErr != nil {
+			if missingErr := rs.handleMissingCollection(ctx, req, searchName); missingErr != nil {
 				return nil, nil, missingErr
 			}
 			// Empty workspace: fall through to the keyword leg alone.
