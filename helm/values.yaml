@@ -111,9 +111,9 @@ config:
   githubCallbackUrl: "http://localhost:8080/auth/github/callback"
   secureCookies: "false"
   globalAdminGitHubLogin: "ArchChuan"
-  # memory pipeline 的 enrich LLM 模型名，必须是 tenant 模型 registry 中的 chat 模型；
-  # 默认值不再使用过时的 qwen-turbo（registry 时代前的老默认，tenant 内不存在）。
-  memoryEnrichModel: "glm-4.7-flash"
+  # memory pipeline 的 enrich LLM 模型名，必须是 tenant 模型 registry 中 enabled 的 chat 模型
+  # （resolve 按 enabled 过滤）。glm-4.5-air：轻量低成本，适合批量 enrich；禁用 :free 变体规避限流。
+  memoryEnrichModel: "glm-4.5-air"
   nacosUrl: ""
   nacosNamespace: ""
   nacosUsername: "nacos"
