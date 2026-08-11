@@ -81,6 +81,11 @@ func (ki *KnowledgeIngest) SetMetrics(m observability.MetricsProvider) {
 // Shutdown waits for all in-flight background ingest jobs to finish.
 // Called from Harness Shutdown to preserve ordering guarantees.
 func (ki *KnowledgeIngest) Shutdown(ctx context.Context) error {
+	// 已取消的 ctx 无等待意义：立即返回错误，避免空 wg 时与
+	// close(done) 竞争 select 随机分支而错误返回 nil。
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	done := make(chan struct{})
 	go func() {
 		ki.wg.Wait()

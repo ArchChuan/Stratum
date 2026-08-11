@@ -10,12 +10,19 @@ export const resourceRefSchema = z.object({
 });
 export type ResourceRef = z.infer<typeof resourceRefSchema>;
 
+export const judgeSpecSchema = z.object({
+  model: z.string().optional(),
+  rubric: z.string().optional(),
+}).optional();
+export type JudgeSpec = z.infer<typeof judgeSpecSchema>;
+
 export const evaluationCaseSchema = z.object({
   id: z.string().optional(),
   name: z.string().optional().default(''),
   input: z.unknown(),
   expected_output: z.unknown(),
-  assertion_mode: z.enum(['exact', 'contains', 'regex']),
+  assertion_mode: z.enum(['exact', 'contains', 'regex', 'judge']),
+  judge_spec: judgeSpecSchema,
   enabled: z.boolean().optional().default(true),
 });
 export type EvaluationCase = z.infer<typeof evaluationCaseSchema>;
