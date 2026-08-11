@@ -14,6 +14,7 @@ const { Text } = Typography;
 interface Props {
   messages: ChatMessage[];
   loadingMsgs: boolean;
+  loadingConvs: boolean;
   sending: boolean;
   selectedConv: string | null;
   selectedAgent: string | null;
@@ -131,6 +132,7 @@ const MessageItem = memo(function MessageItem({
 export const ChatMessageList = ({
   messages,
   loadingMsgs,
+  loadingConvs,
   sending,
   selectedConv,
   selectedAgent,
@@ -174,13 +176,13 @@ export const ChatMessageList = ({
           gap: 12,
         }}
       >
-      {!selectedConv && !loadingMsgs && (
+      {(loadingMsgs || (!selectedConv && loadingConvs)) && <Skeleton active paragraph={{ rows: 6 }} />}
+      {!selectedConv && !loadingConvs && !loadingMsgs && (
         <Empty
           description={selectedAgent ? '新建或选择一个会话' : '请先选择 Agent'}
           style={{ marginTop: 80 }}
         />
       )}
-      {loadingMsgs && <Skeleton active paragraph={{ rows: 6 }} />}
       {!loadingMsgs &&
         messages.map((m) => (
           <MessageItem

@@ -8,6 +8,7 @@ interface Props {
   setInput: (v: string) => void;
   sending: boolean;
   selectedConv: string | null;
+  loading?: boolean;
   onSend: () => void;
   isMobile?: boolean;
 }
@@ -17,6 +18,7 @@ export const ChatComposer = ({
   setInput,
   sending,
   selectedConv,
+  loading = false,
   onSend,
   isMobile = false,
 }: Props) => (
@@ -40,9 +42,9 @@ export const ChatComposer = ({
             onSend();
           }
         }}
-        placeholder={selectedConv ? '输入消息，Enter 发送，Shift+Enter 换行' : '请先选择会话'}
+        placeholder={loading ? '正在加载会话…' : selectedConv ? '输入消息，Enter 发送，Shift+Enter 换行' : '请先选择会话'}
         autoSize={{ minRows: 1, maxRows: 5 }}
-        disabled={!selectedConv || sending}
+        disabled={!selectedConv || sending || loading}
         style={{ flex: 1, resize: 'none', fontSize: 14 }}
       />
       <Button
