@@ -35,7 +35,7 @@ const StreamingBubble = ({ content }: { content: string }) => (
         display: 'inline-block',
         width: 2,
         height: '1em',
-        background: '#1677ff',
+        background: '#2563eb',
         marginLeft: 2,
         verticalAlign: 'text-bottom',
       }}
@@ -66,7 +66,7 @@ const MessageItem = memo(function MessageItem({
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
         {m.role !== 'user' &&
           (m.role === 'assistant' ? (
-            <RobotOutlined style={{ color: '#1677ff' }} />
+            <RobotOutlined style={{ color: '#2563eb' }} />
           ) : (
             <ThunderboltOutlined style={{ color: '#ff4d4f' }} />
           ))}
@@ -199,7 +199,7 @@ export const ChatMessageList = ({
             alignSelf: 'flex-start',
           }}
         >
-          <RobotOutlined style={{ color: '#1677ff' }} />
+          <RobotOutlined style={{ color: '#2563eb' }} />
           <Spin size="small" />
           <Text type="secondary" style={{ fontSize: 12 }}>
             Agent 正在处理…

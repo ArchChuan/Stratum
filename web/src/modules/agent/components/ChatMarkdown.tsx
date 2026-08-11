@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm';
 export const BUBBLE: Record<string, CSSProperties> = {
   user: {
     maxWidth: '72%',
-    background: '#1677ff',
+    background: '#2563eb',
     color: '#fff',
     padding: '10px 14px',
     borderRadius: 12,
@@ -114,7 +114,7 @@ const mdComponents = {
   ),
   a: ({ href, children }: LinkProps) =>
     isSafeLink(href) ? (
-      <a href={href} target="_blank" rel="noreferrer" style={{ color: '#1677ff' }}>
+      <a href={href} target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>
         {children}
       </a>
     ) : (

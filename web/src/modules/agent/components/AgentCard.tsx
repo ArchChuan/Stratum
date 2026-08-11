@@ -13,7 +13,7 @@ import type { Agent } from '../model/agent';
 const { Text, Paragraph } = Typography;
 
 const MODEL_COLORS: Record<string, string> = {
-  'gpt-4': '#1677ff',
+  'gpt-4': '#2563eb',
   'gpt-3.5-turbo': '#52c41a',
   'glm-4': '#722ed1',
   'glm-4-flash': '#13c2c2',
@@ -66,14 +66,14 @@ export const AgentCard = ({
           width: 40,
           height: 40,
           borderRadius: 10,
-          background: 'linear-gradient(135deg, #e6f4ff 0%, #f9f0ff 100%)',
+          background: 'linear-gradient(135deg, #dbeafe 0%, #f9f0ff 100%)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           flexShrink: 0,
         }}
       >
-        <RobotOutlined style={{ fontSize: 18, color: '#1677ff' }} />
+        <RobotOutlined style={{ fontSize: 18, color: '#2563eb' }} />
       </div>
       <Tag
         style={{
@@ -125,7 +125,7 @@ export const AgentCard = ({
             size="small"
             icon={<PlayCircleOutlined />}
             onClick={() => onExecute(agent)}
-            style={{ color: '#1677ff' }}
+            style={{ color: '#2563eb' }}
           />
         </Tooltip>
         {!canManage && onSelfModify && (
