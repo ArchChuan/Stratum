@@ -22,7 +22,6 @@ import {
   runPageSchema,
   suitePageSchema,
   timelinePageSchema,
-  type EvaluationCase,
   type EvaluationCenterFilters,
   type EvaluationCommand,
   type GenerateResult,
