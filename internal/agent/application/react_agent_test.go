@@ -631,7 +631,8 @@ func TestExecute_CompactsOverflowingInitialHistory(t *testing.T) {
 	})
 
 	// 账本语义：默认 fallback 窗口 8000 − safety 6400 − 自动输出预留 4096
-	// → usable 0，初始组装只剩当前输入。显式窗口 30000 下 HistoryCap 1142
+	// → usable 0，初始组装退化为最小 head（system + 输入），无历史可压缩；
+	// 显式窗口 30000 下 HistoryCap = 1904−380−380−任务(2) = 1142，
 	// 才让溢出压缩有意义（Spec 第 2 节）。
 	_, err := a.Execute(
 		context.Background(),

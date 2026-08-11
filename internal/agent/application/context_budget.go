@@ -33,29 +33,47 @@ func truncateToTokenBudget(s string, budget int) string {
 
 // resolveLedgerBudget 解析 outputReserve 自动链并计算执行级预算账本。
 // 显式 max_tokens > vendor maxOut 的解析在 AgentService，此处仅兜底常量。
-func resolveLedgerBudget(maxTokens, outputReserve int) agentgraph.Budget {
+// safetyRatio 与 ReAct 循环侧同一来源（execution 级 registry 参数
+// agent.compaction_safety_ratio）：一次执行一个 usable（I1）。
+func resolveLedgerBudget(maxTokens, outputReserve int, safetyRatio float64) agentgraph.Budget {
 	if outputReserve <= 0 {
 		outputReserve = constants.DefaultOutputReserveTokens
 	}
-	return agentgraph.ComputeBudget(maxTokens, outputReserve, 0)
+	return agentgraph.ComputeBudget(maxTokens, outputReserve, safetyRatio)
 }
 
-// fitSystemAndMemory 在 FixedHeadCap 配额内截断 system prompt（保底
+// fitSystemAndMemory 在 headCap 配额内截断 system prompt（保底
 // MinSystemPromptTokens）与 memory context（剩余头部份额的 30%）。
-func fitSystemAndMemory(b agentgraph.Budget, systemPromptBase, memoryCtx string) (string, string) {
+func fitSystemAndMemory(headCap int, systemPromptBase, memoryCtx string) (string, string) {
 	sysTokens := tokenutil.EstimateText(systemPromptBase)
 	sysReserve := max(sysTokens, constants.MinSystemPromptTokens)
-	sysReserve = min(sysReserve, b.FixedHeadCap)
+	sysReserve = min(sysReserve, headCap)
 	if sysTokens > sysReserve {
 		systemPromptBase = truncateToTokenBudget(systemPromptBase, sysReserve)
 	}
 	if memoryCtx != "" {
-		memBudget := int(float64(b.FixedHeadCap-sysReserve) * constants.MemoryBudgetRatio)
+		memBudget := int(float64(headCap-sysReserve) * constants.MemoryBudgetRatio)
 		if tokenutil.EstimateText(memoryCtx) > memBudget {
 			memoryCtx = truncateToTokenBudget(memoryCtx, memBudget)
 		}
 	}
 	return systemPromptBase, memoryCtx
+}
+
+// minimalHeadMessages 在预算耗尽（usable − task ≤ 0）时组装最小 head：
+// system prompt + 当前输入，memory 能装下才带——绝不丢弃 system prompt。
+// 超窗发送交由规格收敛机制（400 context_length_exceeded → TokenCorrection
+// 下调阈值）处理，self-correction 才有机会启动（C1 回归防护）。
+func minimalHeadMessages(headCap int, systemPromptBase, memoryCtx, currentInput string) []port.LLMMessage {
+	systemPromptBase, memoryCtx = fitSystemAndMemory(headCap, systemPromptBase, memoryCtx)
+	systemFull := systemPromptBase
+	if memoryCtx != "" {
+		systemFull += "\n\n" + memoryCtx
+	}
+	return []port.LLMMessage{
+		{Role: "system", Content: systemFull},
+		{Role: "user", Content: currentInput},
+	}
 }
 
 // BuildContextMessages assembles the message slice for an LLM call with token-aware trimming.
@@ -69,11 +87,12 @@ func BuildContextMessages(
 	historyWindow int,
 ) []port.LLMMessage {
 	// 无压缩器时委托给完整实现，行为等同于历史版本（最老先丢）。
-	// outputReserve 传 0 走自动链（显式 > vendor > 常量），此处无法感知执行参数。
+	// outputReserve 传 0 走自动链（显式 > vendor > 常量），safetyRatio 传 0
+	// 走 constants 默认——此处无法感知执行参数。
 	return BuildContextMessagesWithCompaction(
 		context.Background(),
 		systemPromptBase, memoryCtx, history, currentInput,
-		maxTokens, historyWindow, 0, nil,
+		maxTokens, historyWindow, 0, 0, nil,
 	)
 }
 
@@ -88,7 +107,8 @@ func BuildContextMessages(
 //   - compactor != nil：溢出消息先压缩成摘要，占用预留额度后注入 system。
 //
 // outputReserve ≤ 0 时走自动链兜底常量（显式 max_tokens > vendor maxOut 的
-// 解析在 AgentService，此处仅接收结果）。
+// 解析在 AgentService，此处仅接收结果）；safetyRatio ≤ 0 走 constants 默认，
+// 必须与 ReAct 循环侧同一来源（I1），保证一次执行一个 usable。
 // 降级保证：compactor 返回 error 或空摘要时，静默退回纯截断，绝不阻断主流程。
 func BuildContextMessagesWithCompaction(
 	ctx context.Context,
@@ -99,6 +119,7 @@ func BuildContextMessagesWithCompaction(
 	maxTokens int,
 	historyWindow int,
 	outputReserve int,
+	safetyRatio float64,
 	compactor port.HistoryCompactor,
 ) []port.LLMMessage {
 	if historyWindow <= 0 {
@@ -112,17 +133,25 @@ func BuildContextMessagesWithCompaction(
 	}
 
 	// 预算账本：maxTokens 即执行窗口（调用侧已解析），outputReserve 未显式
-	// 传入时兜底常量。safetyRatio 走默认（0 = 用 constants 默认）。
-	b := resolveLedgerBudget(maxTokens, outputReserve)
+	// 传入时兜底常量。任务 token 从 history 配额扣减（Spec 第 2 节
+	// history = usable − fixedHead − tools − task）。
+	b := resolveLedgerBudget(maxTokens, outputReserve, safetyRatio)
+	taskTokens := tokenutil.EstimateText(currentInput)
+	b = b.WithTask(taskTokens)
 
 	// 1. task（currentInput）最高优先级且永不压缩：usable 扣减 task 后
 	// 仍为正，才有 head + history 的可组装空间。
-	if b.Usable-tokenutil.EstimateText(currentInput) <= 0 {
-		return []port.LLMMessage{{Role: "user", Content: currentInput}}
+	if b.Usable-taskTokens <= 0 {
+		// 降级：预算耗尽仍保留最小 head（system prompt + 当前输入，
+		// memory 能装下才带），不丢弃 system prompt；超窗发送交由规格
+		// 收敛机制（400 context_length_exceeded → TokenCorrection 下调
+		// 阈值）处理。fallback 来源的 WARN 在 resolveExecutionWindow。
+		return minimalHeadMessages(max(b.FixedHeadCap, constants.MinSystemPromptTokens),
+			systemPromptBase, memoryCtx, currentInput)
 	}
 
 	// 2/3. System prompt 与 memory context — FixedHeadCap 配额内截断
-	systemPromptBase, memoryCtx = fitSystemAndMemory(b, systemPromptBase, memoryCtx)
+	systemPromptBase, memoryCtx = fitSystemAndMemory(b.FixedHeadCap, systemPromptBase, memoryCtx)
 
 	// 4. Convert in-window history and trim oldest to fit; collect dropped for compaction.
 	histMsgs := make([]port.LLMMessage, 0, len(history))

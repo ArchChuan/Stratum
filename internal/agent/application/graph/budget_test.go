@@ -74,7 +74,8 @@ func TestComputeBudget(t *testing.T) {
 			if b.ToolsCap != tc.wantTools {
 				t.Errorf("ToolsCap = %d, want %d", b.ToolsCap, tc.wantTools)
 			}
-			// 不变量：history = usable − fixedHead − tools（taskHint 单列，不在此扣减）
+			// 不变量：history = usable − fixedHead − tools（taskHint 由
+			// WithTask 单列扣减，ComputeBudget 不含任务输入）
 			wantHistory := b.Usable - b.FixedHeadCap - b.ToolsCap
 			if b.HistoryCap != wantHistory {
 				t.Errorf("HistoryCap = %d, want %d (= usable − fixedHead − tools)", b.HistoryCap, wantHistory)
@@ -114,6 +115,36 @@ func TestComputeBudget_InvalidRatioFallsBackToDefault(t *testing.T) {
 		if b.Usable != wantUsable {
 			t.Errorf("ratio %v: Usable = %d, want default-ratio %d", ratio, b.Usable, wantUsable)
 		}
+	}
+}
+
+// TestBudget_WithTaskDeductsHistoryQuota 验证任务扣减（I3）：WithTask 登记
+// 当前任务的 token 估算，并按其从 history 配额扣减（Spec 第 2 节
+// history = usable − fixedHead − tools − task），其余配额与窗口映射不变。
+func TestBudget_WithTaskDeductsHistoryQuota(t *testing.T) {
+	b := ComputeBudget(100000, 0, 0.8)
+	// usable = 20000；fixedHead/tools 各 4000；HistoryCap = 12000。
+	if b.HistoryCap != 12000 {
+		t.Fatalf("HistoryCap = %d, want 12000", b.HistoryCap)
+	}
+	withTask := b.WithTask(500)
+	if withTask.TaskHint != 500 || withTask.HistoryCap != 11500 {
+		t.Fatalf("WithTask(500) = %+v, want TaskHint 500 / HistoryCap 11500", withTask)
+	}
+	if withTask.Usable != b.Usable || withTask.FixedHeadCap != b.FixedHeadCap || withTask.ToolsCap != b.ToolsCap {
+		t.Fatalf("WithTask 不应改变窗口映射配额: %+v", withTask)
+	}
+	// 任务超出可压缩区时钳到 0，不产生负数配额。
+	if zero := b.WithTask(50000); zero.HistoryCap != 0 {
+		t.Fatalf("超量任务 HistoryCap = %d, want 0", zero.HistoryCap)
+	}
+	// 负值按 0 处理。
+	if neg := b.WithTask(-10); neg.TaskHint != 0 || neg.HistoryCap != 12000 {
+		t.Fatalf("负任务按 0 处理: %+v", neg)
+	}
+	// 值语义：WithTask 返回副本，原账本不被修改。
+	if b.TaskHint != 0 || b.HistoryCap != 12000 {
+		t.Fatalf("WithTask 必须返回副本: %+v", b)
 	}
 }
 

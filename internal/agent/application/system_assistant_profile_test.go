@@ -293,8 +293,9 @@ func TestSystemAssistantProfileManagedRuntimeDoesNotAppendGlobalSuffix(t *testin
 	}
 	managedGateway := &systemAssistantPromptGateway{}
 	base.SetCapGateway(managedGateway)
-	// 显式窗口：默认 fallback 8000 在账本下 usable 为 0，系统提示会被整体
-	// 舍弃，测试意图（managed 提示不含租户后缀）需要 usable > 0 才有意义。
+	// 显式窗口：默认 fallback 8000 在账本下 usable 为 0，初始组装退化为
+	// 最小 head（system 截到 200t + 输入）；显式 30000 窗口下完整提示
+	// 直达 LLM，后缀断言更有意义。
 	if _, err := base.Execute(context.Background(), "help",
 		WithMaxContextTokens(30000)); err != nil {
 		t.Fatalf("managed Execute() error = %v", err)

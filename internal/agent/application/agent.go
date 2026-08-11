@@ -24,6 +24,7 @@ import (
 	jschema "github.com/byteBuilderX/stratum/pkg/jsonschema"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
+	"github.com/byteBuilderX/stratum/pkg/tokenutil"
 )
 
 // Domain type aliases — canonical definitions live in
@@ -554,8 +555,10 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	if maxTokens <= 0 {
 		maxTokens = constants.DefaultAgentContextTokens
 	}
+	// 组装侧与循环侧同一预算账本（I1）：safetyRatio 传同一 resolution 结果。
 	initMessages := BuildContextMessagesWithCompaction(
-		ctx, ec.systemPrompt, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow, ec.cfg.OutputReserve, ec.historyCompactor,
+		ctx, ec.systemPrompt, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow,
+		ec.cfg.OutputReserve, float64(ec.cfg.CompactionSafetyRatio), ec.historyCompactor,
 	)
 
 	// Resume from checkpoint if one exists.
@@ -674,8 +677,10 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 	if maxTokens <= 0 {
 		maxTokens = constants.DefaultAgentContextTokens
 	}
+	// 组装侧与循环侧同一预算账本（I1）：safetyRatio 传同一 resolution 结果。
 	initMessages := BuildContextMessagesWithCompaction(
-		ctx, ec.systemPrompt, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow, ec.cfg.OutputReserve, ec.historyCompactor,
+		ctx, ec.systemPrompt, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow,
+		ec.cfg.OutputReserve, float64(ec.cfg.CompactionSafetyRatio), ec.historyCompactor,
 	)
 	initState := a.buildReActInitState(ec, initMessages, maxTokens)
 	initState.StuckThreshold = stuckThreshold
@@ -722,6 +727,18 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 		result.ToolCalls = append(result.ToolCalls, ToolCall{ToolName: tc.Name, Input: tc.Arguments})
 	}
 	return nil
+}
+
+// taskTokensOf 返回消息列表中最新用户消息（当前任务）的 token 估算；
+// 无用户消息时返回 0。任务永不压缩，其 token 成本必须从预算账本的
+// history 配额扣减（Spec 第 2 节 history = usable − fixedHead − tools − task）。
+func taskTokensOf(msgs []port.LLMMessage) int {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			return tokenutil.EstimateText(msgs[i].Content)
+		}
+	}
+	return 0
 }
 
 // promptVersionMap builds the prompt key → version fingerprint map carried
@@ -774,8 +791,9 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		MaxLLMSteps:                ec.cfg.MaxSteps,
 		MaxContextTokens:           maxTokens,
 		// Budget 账本快照：一次执行一个，初始组装与 ReAct 循环共享同一来源。
+		// 循环侧任务 = 最新用户消息，经 WithTask 从 HistoryCap 扣减（I3）。
 		Budget: agentgraph.ComputeBudget(maxTokens, ec.cfg.OutputReserve,
-			float64(ec.cfg.CompactionSafetyRatio)),
+			float64(ec.cfg.CompactionSafetyRatio)).WithTask(taskTokensOf(initMessages)),
 		CheckpointEnabled:    a.CheckpointEnabled,
 		HistoryCompactor:     ec.historyCompactor,
 		PlanCheckpointWriter: a.CheckpointStore,
@@ -807,6 +825,8 @@ func (a *BaseAgent) buildPlanNodeExecutor(ec agentExecContext, capGW port.Capabi
 		child.Messages = []port.LLMMessage{systemMessage, {Role: "user", Content: goal}}
 		child.ActivePlan = nil
 		child.PlanToolsDisabled = true
+		// 子循环的任务是节点目标：预算快照按新任务重新扣减 history 配额（I3）。
+		child.Budget = child.Budget.WithTask(tokenutil.EstimateText(goal))
 		child.MaxLLMSteps = constants.DefaultStepMaxLLMSteps
 		subSteps := constants.DefaultStepMaxLLMSteps*2 + 1
 		final, invokeErr := nodeGraph.Invoke(nodeCtx, child, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: subSteps})
