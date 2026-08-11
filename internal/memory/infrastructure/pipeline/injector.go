@@ -23,6 +23,7 @@ type EmbedServiceResolver func(ctx context.Context, tenantID string) EmbedClient
 // MemoryInjector fetches memory context (summaries, entities, long-term vectors)
 // and formats it for injection into the agent's system prompt.
 type MemoryInjector struct {
+	params     PlatformParams
 	pool       *pgxpool.Pool
 	txBeginner interface {
 		Begin(context.Context) (pgx.Tx, error)
@@ -44,6 +45,21 @@ func NewMemoryInjector(pool *pgxpool.Pool, logger *zap.Logger, embedSvc EmbedCli
 // SetEmbedResolver sets a per-tenant embedding resolver used when the global embedSvc is nil.
 func (inj *MemoryInjector) SetEmbedResolver(r EmbedServiceResolver) {
 	inj.embedResolver = r
+}
+
+// SetPlatformParams wires the platform parameter reader (registry-backed);
+// nil keeps the pkg/constants defaults.
+func (inj *MemoryInjector) SetPlatformParams(p PlatformParams) { inj.params = p }
+
+// platformInt resolves one platform parameter, falling back to def.
+func (inj *MemoryInjector) platformInt(ctx context.Context, key string, def int) int {
+	if inj.params == nil {
+		return def
+	}
+	if v, ok := inj.params.Int(ctx, key); ok {
+		return v
+	}
+	return def
 }
 
 // Pool returns the underlying connection pool (used by RecallHandler).
@@ -138,7 +154,8 @@ func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext
 
 	var history []historyRow
 	historyCtx, cancelHistory := context.WithTimeout(ctx, constants.HistoryReadTimeout)
-	historyRows, historyErr := tx.Query(historyCtx, historyInjectionQuery(), ic.UserID, ic.AgentID, ic.Query, constants.HistoryInjectionTopN,
+	historyTopN := inj.platformInt(ctx, "memory.history_injection_top_n", constants.HistoryInjectionTopN)
+	historyRows, historyErr := tx.Query(historyCtx, historyInjectionQuery(), ic.UserID, ic.AgentID, ic.Query, historyTopN,
 		scopeFilter.IncludeUserScope, scopeFilter.IncludeAgentScope)
 	if historyErr == nil {
 		for historyRows.Next() {

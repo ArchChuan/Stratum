@@ -55,7 +55,7 @@ func (f *ownershipAgentRepoFake) Remove(_ context.Context, id string, audit *aud
 	delete(f.agents, id)
 	return nil
 }
-func (f *ownershipAgentRepoFake) Update(_ context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string) error {
+func (f *ownershipAgentRepoFake) Update(_ context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string, _ bool) error {
 	f.recordAudit(audit)
 	if f.updateErr != nil {
 		return f.updateErr
