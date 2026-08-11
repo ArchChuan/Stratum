@@ -101,16 +101,20 @@ func TestRecallMemoryUsesScopeSafeVectorFilter(t *testing.T) {
 	facts.AssertExpectations(t)
 }
 
-// 双 collection 兜底后，任一 Search 错误都被容忍（collection 不存在 → 尝试下一个），
-// recall 永不因向量库失败而报错；错误只在 Embed 阶段向上传播。
-func TestRecallMemoryToleratesVectorSearchErrorsAndFallsBackToTrigram(t *testing.T) {
+// 双 collection 兜底仅容忍 collection-not-found（→ 尝试 legacy 名），其余错误
+// （schema 不匹配、Milvus 不可用）必须传播使 recall 失败——fail-closed 不变量：
+// 向量库故障不得静默退化为 trigram 检索。
+func TestRecallMemoryFallsBackOnlyForCollectionNotFound(t *testing.T) {
 	ctx := context.Background()
 	for _, tt := range []struct {
-		name      string
-		vectorErr error
+		name        string
+		vectorErr   error
+		wantErr     bool
+		wantTrigram bool
 	}{
-		{name: "unavailable", vectorErr: &port.VectorStoreUnavailableError{Err: errors.New("grpc unavailable")}},
-		{name: "schema error", vectorErr: errors.New("schema mismatch")},
+		{name: "collection not found", vectorErr: errors.New("milvus collection not found"), wantTrigram: true},
+		{name: "schema error", vectorErr: errors.New("schema mismatch"), wantErr: true},
+		{name: "unavailable", vectorErr: &port.VectorStoreUnavailableError{Err: errors.New("grpc unavailable")}, wantErr: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			facts := new(MockFactRepo)
@@ -120,13 +124,20 @@ func TestRecallMemoryToleratesVectorSearchErrorsAndFallsBackToTrigram(t *testing
 			embed.On("Embed", ctx, "query").Return([]float32{1}, nil).Once()
 			vectors.On("Search", ctx, "memory_facts_tenant_text_embedding_v3", mock.Anything, 10, mock.Anything).
 				Return([]*port.VectorDoc(nil), tt.vectorErr).Once()
-			vectors.On("Search", ctx, "memory_facts_tenant", mock.Anything, 10, mock.Anything).
-				Return([]*port.VectorDoc(nil), tt.vectorErr).Once()
-			facts.On("SearchByContent", ctx, "tenant", mock.AnythingOfType("domain.ScopeFilter"), "query", 10).
-				Return([]*domain.MemoryFact{}, nil).Once()
+			if tt.wantTrigram {
+				vectors.On("Search", ctx, "memory_facts_tenant", mock.Anything, 10, mock.Anything).
+					Return([]*port.VectorDoc{}, nil).Once()
+				facts.On("SearchByContent", ctx, "tenant", mock.AnythingOfType("domain.ScopeFilter"), "query", 10).
+					Return([]*domain.MemoryFact{}, nil).Once()
+			}
 			_, err := svc.RecallMemory(ctx, &RecallMemoryRequest{TenantID: "tenant", UserID: "user", Query: "query", TopK: 5})
-			assert.NoError(t, err)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
 			facts.AssertExpectations(t)
+			vectors.AssertExpectations(t)
 		})
 	}
 }

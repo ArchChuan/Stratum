@@ -46,7 +46,10 @@ func (s *MemoryService) RecallMemory(ctx context.Context, req *RecallMemoryReque
 		UserID: req.UserID, AgentID: req.AgentID, IncludeUserScope: true, IncludeAgentScope: req.AgentID != "",
 	}
 
-	vectorDocs := s.vectorSearchCandidates(ctx, collections, queryVector, req.TopK*2, filter)
+	vectorDocs, err := s.vectorSearchCandidates(ctx, collections, queryVector, req.TopK*2, filter)
+	if err != nil {
+		return nil, fmt.Errorf("vector search: %w", err)
+	}
 
 	// Step 3: Trigram search (retrieve 2*topK candidates)
 	scopeFilter := domain.BuildScopeFilter(req.TenantID, req.UserID, req.AgentID, "user")
@@ -137,10 +140,24 @@ func (s *MemoryService) RecallMemory(ctx context.Context, req *RecallMemoryReque
 	return &RecallMemoryResponse{Facts: dtos}, nil
 }
 
+// errCollectionNotFound distinguishes a missing Milvus collection from other
+// search failures so vectorSearchCandidates can decide between legacy fallback
+// and fail-closed error propagation.
+var errCollectionNotFound = errors.New("memory collection not found")
+
+// isCollectionNotFound mirrors knowledge/application 的判定形状：本地哨兵或错误
+// 文本包含 pkg/storage/milvus.ErrCollectionNotFound（"milvus collection not
+// found"）的消息片段（errors.Is 哨兵在 infrastructure 层直接判定）。
+func isCollectionNotFound(err error) bool {
+	return errors.Is(err, errCollectionNotFound) ||
+		strings.Contains(err.Error(), "collection not found")
+}
+
 // vectorSearchCandidates 双名兜底：按 [新名, legacy] 顺序查询并合并结果。
-// 单个 collection 查询失败（不存在/维度不匹配）被容忍——collection 不存在时
-// 继续尝试下一个（legacy 回退）；错误只在 Embed 阶段向上传播。
-func (s *MemoryService) vectorSearchCandidates(ctx context.Context, collections []string, queryVector []float32, topK int, filter port.VectorSearchFilter) []*port.VectorDoc {
+// 仅 collection-not-found 容忍（继续尝试下一个，legacy 回退）；其余错误
+// （schema 不匹配、Milvus 不可用）向上传播，保持 fail-closed——向量库故障
+// 必须显式失败，不得静默退化为 trigram 检索。
+func (s *MemoryService) vectorSearchCandidates(ctx context.Context, collections []string, queryVector []float32, topK int, filter port.VectorSearchFilter) ([]*port.VectorDoc, error) {
 	var vectorDocs []*port.VectorDoc
 	for _, collectionName := range collections {
 		if collectionName == "" {
@@ -148,13 +165,12 @@ func (s *MemoryService) vectorSearchCandidates(ctx context.Context, collections 
 		}
 		docs, err := s.vectorStore.Search(ctx, collectionName, queryVector, topK, filter)
 		if err != nil {
-			var unavailable *port.VectorStoreUnavailableError
-			if errors.As(err, &unavailable) {
-				vectorDocs = nil
+			if isCollectionNotFound(err) {
+				continue // collection 不存在 → 尝试下一个（legacy 回退）
 			}
-			continue // collection 不存在 → 尝试下一个（legacy 回退）
+			return nil, err
 		}
 		vectorDocs = append(vectorDocs, docs...)
 	}
-	return vectorDocs
+	return vectorDocs, nil
 }

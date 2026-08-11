@@ -199,10 +199,9 @@ func (a *MilvusPortAdapter) DeleteAllByUser(ctx context.Context, tenantID, userI
 }
 
 func (a *MilvusPortAdapter) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error {
-	normalized := strings.ReplaceAll(tenantID, "-", "_")
 	expr := fmt.Sprintf("agent_id == %q and scope == %q", agentID, string(domain.ScopeAgent))
 	var errs []error
-	for _, collection := range []string{"memory_facts_" + normalized, "memory_" + normalized} {
+	for _, collection := range legacyMemoryCollections(tenantID) {
 		if err := a.vs.DeleteByFilter(ctx, collection, expr); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", collection, err))
 		}
@@ -211,13 +210,36 @@ func (a *MilvusPortAdapter) DeleteAllByAgent(ctx context.Context, tenantID, agen
 }
 
 func (a *MilvusPortAdapter) deleteBothMemoryCollections(ctx context.Context, tenantID, field, value string) error {
-	normalized := strings.ReplaceAll(tenantID, "-", "_")
 	expr := fmt.Sprintf("%s == %q", field, value)
 	var errs []error
-	for _, collection := range []string{"memory_facts_" + normalized, "memory_" + normalized} {
+	for _, collection := range legacyMemoryCollections(tenantID) {
 		if err := a.vs.DeleteByFilter(ctx, collection, expr); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", collection, err))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// memoryFactsCollectionLegacyName / memoryCollectionLegacyName 是无模型后缀的
+// 存量 collection 名（升级前数据）。删除路径统一经此拼写，与 pipeline 查询回退
+// （memoryFactsCollectionLegacyName）保持一致，避免两处命名漂移。
+func memoryFactsCollectionLegacyName(tenantID string) string {
+	return "memory_facts_" + strings.ReplaceAll(tenantID, "-", "_")
+}
+
+func memoryCollectionLegacyName(tenantID string) string {
+	return "memory_" + strings.ReplaceAll(tenantID, "-", "_")
+}
+
+// legacyMemoryCollections 返回租户的存量（无模型后缀）collection 名列表，
+// DeleteAllByUser / DeleteAllByAgent 两个删除路径统一经此枚举。
+//
+// 已知限制：模型后缀 collection（memory_<t>_<model> / memory_facts_<t>_<model>，
+// 由 pipeline 侧 memoryCollectionName / memoryFactsCollectionName 写入）不在枚举
+// 范围——其数量取决于租户历史默认嵌入模型，且 pkg/storage/milvus 当前不暴露
+// ListCollections（底层 SDK 支持），无法按前缀枚举。首选方案：pkg/storage/milvus
+// 增加 ListCollections 包装后，按 "memory_<t>_" / "memory_facts_<t>_" 前缀（含尾
+// 下划线，避免 t1 误匹配 t10）枚举并逐 collection 执行 DeleteByFilter。
+func legacyMemoryCollections(tenantID string) []string {
+	return []string{memoryFactsCollectionLegacyName(tenantID), memoryCollectionLegacyName(tenantID)}
 }
