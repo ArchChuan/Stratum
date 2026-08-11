@@ -8,7 +8,7 @@ import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 export const useTenantSettings = () => {
   const { user, login, tokenRef } = useAuth();
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [tenantName, setTenantName] = useState('');
   const [isDefault, setIsDefault] = useState<boolean | null>(null);
 

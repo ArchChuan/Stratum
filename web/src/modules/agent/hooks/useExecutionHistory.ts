@@ -15,7 +15,7 @@ interface PaginationState {
 
 export const useExecutionHistory = () => {
   const [executions, setExecutions] = useState<ExecutionRow[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [pagination, setPagination] = useState<PaginationState>({
     current: 1,
     pageSize: DEFAULT_PAGE_SIZE,
