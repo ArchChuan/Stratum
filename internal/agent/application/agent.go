@@ -64,6 +64,9 @@ type ExecutionConfig struct {
 	CompactionRecentGroups int
 	// CompactionSafetyRatio overrides the compaction safety ratio. 0 = default.
 	CompactionSafetyRatio float32
+	// CompactionCooldownSec overrides the in-loop compaction cooldown window
+	// (seconds). 0 = default constant (constants.DefaultCompactionCooldown).
+	CompactionCooldownSec int
 	EnableTools           bool
 	AvailableTools        []string
 	Stream                bool
@@ -306,6 +309,9 @@ func (a *BaseAgent) snapshotExecutionConfig(cfg *ExecutionConfig) agentExecSnaps
 	}
 	if cfg.CompactionSafetyRatio == 0 {
 		cfg.CompactionSafetyRatio = a.CompactionSafetyRatio
+	}
+	if cfg.CompactionCooldownSec == 0 {
+		cfg.CompactionCooldownSec = a.CompactionCooldownSec
 	}
 	// 执行时解析的窗口（WithMaxContextTokens 注入）优先；
 	// 未注入时回退 agent 配置显式值（revision/直接执行等路径）。
@@ -757,6 +763,13 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 	if ec.cfg.SystemAssistantMode {
 		availableTools = nil
 	}
+	// 压缩冷却默认启用（Spec 第 4 节）：0 = constants.DefaultCompactionCooldown，
+	// 与 CompactionSafetyRatio 的 0=default 语义一致。registry 参数
+	// agent.compaction_cooldown_sec 经 WithCompactionCooldownSec 覆盖。
+	cooldownSec := ec.cfg.CompactionCooldownSec
+	if cooldownSec <= 0 {
+		cooldownSec = int(constants.DefaultCompactionCooldown.Seconds())
+	}
 	return agentgraph.ReActState{
 		TenantID:               ec.cfg.TenantID,
 		TraceID:                ec.cfg.TraceID,
@@ -766,6 +779,7 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		MaxTokens:              ec.cfg.MaxTokens,
 		CompactionRecentGroups: ec.cfg.CompactionRecentGroups,
 		CompactionSafetyRatio:  ec.cfg.CompactionSafetyRatio,
+		CompactionCooldownSec:  cooldownSec,
 		// TokenCorrection must start at 1.0: the zero value would divide the
 		// compaction threshold by zero on the first step.
 		TokenCorrection:            1.0,
@@ -1079,6 +1093,14 @@ func WithCompactionRecentGroups(recentGroups int) ExecutionOption {
 func WithCompactionSafetyRatio(ratio float32) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.CompactionSafetyRatio = ratio
+	}
+}
+
+// WithCompactionCooldownSec sets the in-loop compaction cooldown in seconds.
+// 0 = default constant.
+func WithCompactionCooldownSec(sec int) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.CompactionCooldownSec = sec
 	}
 }
 

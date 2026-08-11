@@ -184,6 +184,13 @@ func (r *ParametersRegistry) registerAgentParams() {
 			EvaluationKeys: []string{"compaction_safety_ratio"},
 		},
 		{
+			Key: "agent.compaction_cooldown_sec", Scope: ScopeResource, Category: "agent",
+			DisplayName: "压缩冷却(秒)", Description: "压缩触发后的冷却窗口,0 表示默认常量",
+			ValueType: TypeInt, Default: int64(0),
+			VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(120), Step: f(5), Unit: "s"},
+			Optimizable: false,
+		},
+		{
 			Key: "agent.bindings", Scope: ScopeResource, Category: "agent",
 			DisplayName: "绑定", Description: "agent 绑定关系(复杂结构,由 evaluation adapter 校验,仅登记兼容)",
 			ValueType: TypeString, Default: nil,

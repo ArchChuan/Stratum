@@ -37,6 +37,10 @@ const (
 	// (a group = one assistant turn plus its paired tool results) kept verbatim
 	// during in-loop compaction. Older groups are summarized or dropped.
 	LoopCompactionRecentGroups = 3
+	// DefaultCompactionCooldown 是一次执行内压缩触发后的冷却窗口（Spec 第 4 节，
+	// 建议默认 10s，实现时按压测验证）。registry 参数 agent.compaction_cooldown_sec
+	// 覆盖它（0 = 本常量）。
+	DefaultCompactionCooldown = 10 * time.Second
 	// LoopCompactionSafetyRatio triggers compaction before the hard token ceiling,
 	// leaving margin for the EstimateText heuristic error (<20%).
 	LoopCompactionSafetyRatio = 0.8

@@ -110,7 +110,7 @@ func prepareLLMRequest(ctx context.Context, s *ReActState) ([]port.ToolDefinitio
 	if encodedTools, err := json.Marshal(tools); err == nil {
 		toolTokens = tokenutil.EstimateText(string(encodedTools))
 	}
-	messages = compactLoopMessagesWithPolicy(ctx, messages, s.Budget, toolTokens, recentGroups, protectedUsers, correction, safetyRatio, s.HistoryCompactor)
+	messages = compactLoopMessagesWithPolicy(ctx, messages, s.Budget, toolTokens, recentGroups, protectedUsers, correction, safetyRatio, s.HistoryCompactor, s)
 	// Baseline for the usage-feedback loop: the estimate of what is actually
 	// dispatched this step (post-compaction messages + tools), so the ratio
 	// stays on a consistent basis across steps.

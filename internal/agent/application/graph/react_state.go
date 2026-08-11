@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
@@ -78,6 +79,11 @@ type ReActState struct {
 	// threshold, learned from the previous step's estimated-vs-actual prompt
 	// token ratio. Must be > 0; buildReActInitState initializes it to 1.0.
 	TokenCorrection float64
+	// CompactionCooldownSec 是压缩冷却窗口（秒）：一次执行内压缩触发后，
+	// 冷却期内超限只截断不重复触发同步 LLM 摘要。0 = 用常量默认。
+	CompactionCooldownSec int
+	// LastCompactionAt 是最近一次 LLM 压缩完成时间；零值表示未压缩过。
+	LastCompactionAt time.Time
 	// LastEstimatedTokens is the estimated token count of the previous
 	// dispatched request (post-compaction messages + tools). It is the ratio
 	// baseline for TokenCorrection; 0 until the first request is dispatched.

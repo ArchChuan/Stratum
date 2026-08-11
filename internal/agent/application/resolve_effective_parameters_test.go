@@ -326,3 +326,21 @@ func TestBuildUpdateConfigMergesDeclaredParameters(t *testing.T) {
 			cfg.CompactionRecentGroups, cfg.CompactionSafetyRatio)
 	}
 }
+
+func TestResolveEffectiveParametersCooldownKey(t *testing.T) {
+	// agent.compaction_cooldown_sec 是资源层声明的可调参数：资源未设（0）时
+	// 平台默认值流入执行配置。
+	svc := NewAgentService(AgentServiceDeps{
+		ParametersProvider: stubParametersProvider{effective: map[string]any{
+			"agent.compaction_cooldown_sec": int64(15),
+		}},
+		Logger: zap.NewNop(),
+	})
+	agent := &testParamAgent{cfg: &domain.AgentConfig{}}
+
+	cfg := applyOptions(svc.resolveEffectiveParameters(context.Background(), agent, nil))
+
+	if cfg.CompactionCooldownSec != 15 {
+		t.Errorf("CompactionCooldownSec = %d, want 15 (platform default, resource unset)", cfg.CompactionCooldownSec)
+	}
+}

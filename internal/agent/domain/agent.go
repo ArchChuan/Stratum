@@ -58,6 +58,9 @@ type AgentConfig struct {
 	CompactionRecentGroups int
 	// CompactionSafetyRatio overrides the compaction safety ratio. 0 = default.
 	CompactionSafetyRatio float32
+	// CompactionCooldownSec overrides the in-loop compaction cooldown.
+	// 0 = default constant.
+	CompactionCooldownSec int
 	MemoryScope           string
 	SystemKey             string
 	IsSystem              bool

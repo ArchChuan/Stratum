@@ -697,3 +697,55 @@ func TestBaseAgent_AddToMemory_StillAddsToSlice(t *testing.T) {
 	require.Equal(t, "user", mem[0].Role)
 	require.Equal(t, "hello", mem[0].Content)
 }
+
+func TestWithCompactionCooldownSec_SetsField(t *testing.T) {
+	cfg := &agent.ExecutionConfig{}
+	agent.WithCompactionCooldownSec(15)(cfg)
+	if cfg.CompactionCooldownSec != 15 {
+		t.Errorf("CompactionCooldownSec = %d, want 15", cfg.CompactionCooldownSec)
+	}
+}
+
+// TestExecute_CompactionCooldownSuppressesPerStepSummary 覆盖 Spec 第 4 节默认
+// 冷却（0 = constants.DefaultCompactionCooldown）：一次执行内首次循环压缩触发
+// 同步摘要并回写时间戳，冷却窗口内后续超限步骤退化为截断兜底，不再每步触发
+// 同步 LLM 摘要（spec 症状 #2）。
+func TestExecute_CompactionCooldownSuppressesPerStepSummary(t *testing.T) {
+	a := newReActAgent()
+	gw := &mockCapGW{responses: []port.CapabilityResponse{
+		{ToolCalls: []port.ToolCall{{ID: "c1", Name: "calc", Arguments: map[string]any{"expr": "6*7"}}}},
+		{ToolCalls: []port.ToolCall{{ID: "c2", Name: "calc", Arguments: map[string]any{"expr": "7*8"}}}},
+		{Content: "done"},
+	}}
+	compactor := &fakeCompactor{summary: "compacted earlier discussion"}
+	a.SetCapGateway(gw)
+	a.SetHistoryCompactor(compactor)
+	a.WithChatStore(&mockChatStore{
+		listMsgs: func(context.Context, string, string, string) ([]*agent.ChatMessage, error) {
+			return makeHistory(12), nil
+		},
+	})
+
+	_, err := a.Execute(
+		context.Background(),
+		"continue",
+		agent.WithTenantID("t1"),
+		agent.WithConversationID("conv-abc"),
+		agent.WithUserID("user-1"),
+		agent.WithHistoryWindow(4),
+		// recentGroups=1 使中间段非空：默认 5 组时全部落入最近尾部，
+		// 循环内压缩只会截断、永远不会调用同步摘要（场景无效）。
+		agent.WithCompactionRecentGroups(1),
+		agent.WithMaxContextTokens(30000),
+		agent.WithMaxSteps(10),
+		agent.WithExtraTools([]port.ToolDefinition{{Name: "calc", ProviderType: "mcp", ServerID: "math", Metadata: map[string]any{"risk_level": "read"}}}),
+		agent.WithToolExecutionFn(func(context.Context, port.ToolExecutionRequest) (any, error) {
+			return port.GuardedToolResult{ModelContent: strings.Repeat("x", 3000)}, nil
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, gw.requests, 3)
+	// 初始组装 1 次 + 循环内首次超限压缩 1 次；第二次超限处于默认 10s
+	// 冷却窗口内被抑制，只走截断兜底 → 共 3 次（无冷却时 = 4）。
+	require.Equal(t, 3, compactor.callCount)
+}
