@@ -165,6 +165,7 @@ var errorStatusTable = map[error]int{
 	iamdomain.ErrDefaultTenantDelete:              http.StatusBadRequest,
 	iamdomain.ErrUsernameTaken:                    http.StatusConflict,
 	knowledgedomain.ErrInvalidEmbeddingModel:      http.StatusBadRequest,
+	llmgatewaydomain.ErrModelNotEmbeddingEnabled:  http.StatusBadRequest,
 	knowledgedomain.ErrInvalidQueryMode:           http.StatusBadRequest,
 	knowledgedomain.ErrInvalidRerankIdentity:      http.StatusBadRequest,
 	knowledgedomain.ErrInvalidScoreThreshold:      http.StatusBadRequest,

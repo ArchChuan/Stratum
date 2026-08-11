@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 // ModelCapability enumerates capabilities that a model may support.
 type ModelCapability string
@@ -12,6 +15,11 @@ const (
 	CapToolUse   ModelCapability = "tool_use"
 	CapReasoning ModelCapability = "reasoning"
 )
+
+// ErrModelNotEmbeddingEnabled indicates the target model is disabled or lacks
+// the embedding capability, so it cannot be promoted to the tenant default
+// embedding model. It is a client-input mistake and must map to 4xx, never 5xx.
+var ErrModelNotEmbeddingEnabled = errors.New("model is not an enabled embedding model")
 
 // Model represents an LLM model that can be used for completions or embeddings.
 type Model struct {

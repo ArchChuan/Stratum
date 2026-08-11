@@ -90,7 +90,7 @@ func (s *ModelMgmtService) SetDefaultEmbedding(ctx context.Context, tenantID, id
 			return err
 		}
 		if !m.Enabled || !hasCapability(m.Capabilities, domain.CapEmbedding) {
-			return fmt.Errorf("model %s is not an enabled embedding model", id)
+			return fmt.Errorf("model %s is not an enabled embedding model: %w", id, domain.ErrModelNotEmbeddingEnabled)
 		}
 	}
 	if err := s.repo.SetDefaultEmbedding(ctx, tenantID, id, enabled); err != nil {
