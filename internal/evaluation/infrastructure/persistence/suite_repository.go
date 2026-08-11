@@ -276,7 +276,7 @@ func insertEvalCase(ctx context.Context, tx pgx.Tx, revisionID string, testCase 
 		 (id, suite_revision_id, name, input, expected_output, assertion_mode, enabled, evaluator_config)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
 		testCase.ID, revisionID, testCase.Name, string(inputJSON), string(expectedJSON),
-		string(testCase.AssertionMode), testCase.Enabled, evaluatorConfig,
+		string(testCase.AssertionMode), testCase.Enabled, string(evaluatorConfig),
 	)
 	if err != nil {
 		return fmt.Errorf("evaluation suite repository: insert case: %w", err)
