@@ -54,21 +54,50 @@ describe('memoryUserApi', () => {
     await expect(memoryUserApi.listMyMemories({ page: 1, pageSize: 20 })).rejects.toThrow();
   });
 
-  it('fetches memory stats', async () => {
+  it('fetches user-level memory stats', async () => {
     vi.mocked(api.get).mockResolvedValue({
-      data: { total_entries: 5, long_term_count: 2, short_term_count: 3, entity_count: 1 },
+      data: { memory_count: 5, entity_count: 3 },
     } as never);
 
     const stats = await memoryUserApi.getStats();
 
     expect(api.get).toHaveBeenCalledWith('/memory/stats');
-    expect(stats.total_entries).toBe(5);
-    expect(stats.long_term_count).toBe(2);
+    expect(stats.memory_count).toBe(5);
+    expect(stats.entity_count).toBe(3);
   });
 
-  it('deletes a single memory by id', async () => {
-    await memoryUserApi.deleteMemory('fact/1');
+  it('defaults missing stats fields to zero', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: {} } as never);
 
-    expect(api.delete).toHaveBeenCalledWith('/memory/fact%2F1');
+    const stats = await memoryUserApi.getStats();
+
+    expect(stats.memory_count).toBe(0);
+    expect(stats.entity_count).toBe(0);
+  });
+
+  it('lists my entity topic tags with pagination params', async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      data: {
+        entities: [
+          {
+            id: 'ent-1',
+            name: 'Go',
+            entity_type: 'tech',
+            fact_count: 4,
+            last_seen_at: '2026-08-01T10:00:00Z',
+          },
+        ],
+        total: 1,
+      },
+    } as never);
+
+    const pageData = await memoryUserApi.listMyEntities({ page: 2, pageSize: 10 });
+
+    expect(api.get).toHaveBeenCalledWith('/memory/entities', {
+      params: { page: 2, page_size: 10 },
+    });
+    expect(pageData.total).toBe(1);
+    expect(pageData.entities[0].name).toBe('Go');
+    expect(pageData.entities[0].fact_count).toBe(4);
   });
 });

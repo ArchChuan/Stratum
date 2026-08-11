@@ -66,7 +66,6 @@ func TestEntityRepo_Update(t *testing.T) {
 	entity, _ := domain.NewEntity("user123", "", "user", "React", "technology")
 	require.NoError(t, repo.Create(ctx, testTenantID, entity))
 
-	entity.Profile = "A JavaScript library for building user interfaces"
 	entity.IncrementFactCount()
 	err := repo.Update(ctx, testTenantID, entity)
 	require.NoError(t, err)
@@ -74,36 +73,47 @@ func TestEntityRepo_Update(t *testing.T) {
 	retrieved, err := repo.GetByID(ctx, testTenantID, entity.ID)
 	require.NoError(t, err)
 	require.Equal(t, 1, retrieved.FactCount)
-	require.Contains(t, retrieved.Profile, "JavaScript")
 }
 
-func TestEntityRepo_ListProfiles(t *testing.T) {
+func TestEntityRepo_ListUserEntities_ordersByLastSeenAndPaginates(t *testing.T) {
 	_, repo := setupEntityRepoTest(t)
 	ctx := context.Background()
 
-	e1, _ := domain.NewEntity("user123", "agent1", "user", "Python", "technology")
-	e1.Profile = "A programming language"
-	e2, _ := domain.NewEntity("user123", "agent1", "agent", "FastAPI", "technology")
-	e2.Profile = "A web framework"
+	e1, _ := domain.NewEntity("user123", "", "user", "Python", "technology")
+	e2, _ := domain.NewEntity("user123", "", "user", "FastAPI", "technology")
+	e3, _ := domain.NewEntity("user123", "agent1", "agent", "AgentScopeOnly", "technology")
 	require.NoError(t, repo.Create(ctx, testTenantID, e1))
 	require.NoError(t, repo.Create(ctx, testTenantID, e2))
+	require.NoError(t, repo.Create(ctx, testTenantID, e3))
 
-	filter := domain.BuildScopeFilter("", "user123", "agent1", "user")
-	entities, err := repo.ListProfiles(ctx, filter, 10)
+	// 只返回 user scope；agent scope 实体不得混入用户级列表。
+	page1, err := repo.ListUserEntities(ctx, testTenantID, "user123", 1, 0)
 	require.NoError(t, err)
-	require.Len(t, entities, 2)
+	require.Len(t, page1, 1)
+	require.NotEqual(t, "AgentScopeOnly", page1[0].Name)
+
+	page2, err := repo.ListUserEntities(ctx, testTenantID, "user123", 1, 1)
+	require.NoError(t, err)
+	require.Len(t, page2, 1)
+	require.NotEqual(t, page2[0].Name, page1[0].Name)
+
+	empty, err := repo.ListUserEntities(ctx, testTenantID, "user123", 10, 5)
+	require.NoError(t, err)
+	require.Empty(t, empty)
 }
 
-func TestEntityRepo_CountByUser(t *testing.T) {
+func TestEntityRepo_CountUserEntities_countsOnlyUserScope(t *testing.T) {
 	_, repo := setupEntityRepoTest(t)
 	ctx := context.Background()
 
 	e1, _ := domain.NewEntity("user123", "", "user", "Entity1", "person")
 	e2, _ := domain.NewEntity("user123", "", "user", "Entity2", "project")
+	e3, _ := domain.NewEntity("user123", "agent1", "agent", "Entity3", "tech")
 	require.NoError(t, repo.Create(ctx, testTenantID, e1))
 	require.NoError(t, repo.Create(ctx, testTenantID, e2))
+	require.NoError(t, repo.Create(ctx, testTenantID, e3))
 
-	count, err := repo.CountByUser(ctx, testTenantID, "user123")
+	count, err := repo.CountUserEntities(ctx, testTenantID, "user123")
 	require.NoError(t, err)
 	require.Equal(t, 2, count)
 }

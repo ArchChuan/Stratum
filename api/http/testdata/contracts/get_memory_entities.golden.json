@@ -2,7 +2,7 @@
   {
     "name": "default-unauth",
     "method": "GET",
-    "path": "/memory/:id",
+    "path": "/memory/entities",
     "body": {
       "error": "missing bearer token"
     },

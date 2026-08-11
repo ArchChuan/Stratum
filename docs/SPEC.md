@@ -185,7 +185,7 @@ stratum/
 | Workflow | `/workflows` · definition/version publish · `/workflow-runs` · events/stream · pause/resume/cancel/manual resolve · `/workflow-approvals` | member 可读定义并启动运行；admin 管理定义、运行控制与审批；写操作需 active |
 | Knowledge | `/knowledge/workspaces` · workspace stats/documents · `/knowledge/ingest` · `/knowledge/query` | member 读/查，admin 管理/摄取 |
 | MCP | `/mcp/servers` · server tools/resources/config/reconnect · `/mcp/tool-policies` · `/mcp/status` | member 读取，admin 管理 server/policy；写操作需 active；工具仅由 Agent 内部执行 |
-| Memory | `/memory` · `/memory/:id` · `/memory/clear` · `/memory/sessions` · `/memory/session/:session_id` · `/memory/stats` · `/memory/summary/:session_id` | JWT + tenant context + active tenant |
+| Memory | `/memory` · `/memory/entities` · `/memory/clear` · `/memory/sessions` · `/memory/session/:session_id` · `/memory/stats` · `/memory/summary/:session_id` | JWT + tenant context + active tenant |
 
 完整方法与角色矩阵见 `docs/agent/api.md` 和 `api/http/router.go`。
 

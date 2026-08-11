@@ -9,7 +9,7 @@ flowchart LR
   repos["entity_repo.go · fact_repo.go · memory_repo.go<br/>EntityRepo · FactRepo · MemoryRepo"]
   tiered["active_snapshot_repo.go · history_repo.go<br/>ActiveSnapshotRepo · HistoryRepo"]
   queue["extraction_queue.go · message_buffer_store.go<br/>ExtractionTask/Queue · MessageBufferStore"]
-  llm["llm.go · llm_extractor.go<br/>Enricher · LLMExtractor · LLMSuperseder<br/>EntityProfiler · ExtractedFact"]
+  llm["llm.go · llm_extractor.go<br/>Enricher · LLMExtractor · LLMSuperseder<br/>ExtractedFact"]
   embedding["embed_client.go · embedder.go<br/>EmbedClient · Embedder"]
   vector["vector.go · vector_store.go<br/>Document · Hit · VectorIndex<br/>VectorDoc · VectorStore"]
   events["publisher.go<br/>EventPublisher"]

@@ -115,7 +115,6 @@
     "POST /prompts",
     "POST /prompts/:key/versions/:version/publish",
     "PUT /prompts/bindings",
-    "DELETE /prompts/bindings/:key/:scope",
-    "DELETE /memory/:id"
+    "DELETE /prompts/bindings/:key/:scope"
   ]
 }

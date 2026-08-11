@@ -1,15 +1,14 @@
 import {
-  BookOutlined,
   ClearOutlined,
   DatabaseOutlined,
   TagsOutlined,
 } from '@ant-design/icons';
-import { Button, Card, Pagination, Space, Table, Tag, Typography } from 'antd';
+import { Button, Card, Pagination, Space, Table, Tag, Tabs, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useCallback } from 'react';
 
 import { useMyMemoriesPage } from '../hooks/useMyMemoriesPage';
-import type { MemoryFact } from '../model/memory';
+import type { MemoryEntity, MemoryFact } from '../model/memory';
 
 import { StatCard } from '@/modules/dashboard';
 import { DangerPopconfirm, EmptyHint } from '@/shared/ui';
@@ -28,18 +27,23 @@ export const MyMemoriesPage = () => {
     loading,
     stats,
     statsLoading,
-    deleteLoading,
     clearLoading,
     total,
     page,
     pageSize,
     pageSizeOptions,
+    entities,
+    entitiesLoading,
+    entityTotal,
+    entityPage,
+    entityPageSize,
+    entityPageSizeOptions,
     handlePageChange,
-    handleDelete,
+    handleEntityPageChange,
     handleClearAll,
   } = useMyMemoriesPage();
 
-  const columns: ColumnsType<MemoryFact> = [
+  const factColumns: ColumnsType<MemoryFact> = [
     {
       title: '内容',
       dataIndex: 'content',
@@ -61,18 +65,31 @@ export const MyMemoriesPage = () => {
       width: 160,
       render: (v: string) => new Date(v).toLocaleString(),
     },
+  ];
+
+  const entityColumns: ColumnsType<MemoryEntity> = [
     {
-      title: '操作',
-      key: 'actions',
-      width: 80,
-      render: (_, record) => (
-        <DangerPopconfirm
-          title="删除这条记忆？"
-          description="删除后不可恢复，该记忆将从记忆中移除。"
-          onConfirm={() => handleDelete(record.id)}
-          loading={deleteLoading === record.id}
-        />
-      ),
+      title: '名称',
+      dataIndex: 'name',
+      ellipsis: true,
+      render: (v: string) => <Typography.Text strong>{v}</Typography.Text>,
+    },
+    {
+      title: '类型',
+      dataIndex: 'entity_type',
+      width: 120,
+      render: (v: string) => <Tag color="blue">{v}</Tag>,
+    },
+    {
+      title: '提及次数',
+      dataIndex: 'fact_count',
+      width: 100,
+    },
+    {
+      title: '最近出现',
+      dataIndex: 'last_seen_at',
+      width: 160,
+      render: (v: string) => new Date(v).toLocaleString(),
     },
   ];
 
@@ -88,7 +105,7 @@ export const MyMemoriesPage = () => {
         extra={
           <DangerPopconfirm
             title="清空全部记忆？"
-            description="将删除当前用户的所有记忆，删除后不可恢复。"
+            description="将删除当前用户的所有记忆与实体，删除后不可恢复。"
             onConfirm={handleClear}
             loading={clearLoading}
           >
@@ -103,26 +120,10 @@ export const MyMemoriesPage = () => {
             <StatCard
               loading={statsLoading}
               title="记忆条目"
-              value={stats?.total_entries ?? 0}
+              value={stats?.memory_count ?? 0}
               icon={<DatabaseOutlined />}
               color="#2563eb"
               bg="#dbeafe"
-            />
-            <StatCard
-              loading={statsLoading}
-              title="长期记忆"
-              value={stats?.long_term_count ?? 0}
-              icon={<BookOutlined />}
-              color="#722ed1"
-              bg="#f9f0ff"
-            />
-            <StatCard
-              loading={statsLoading}
-              title="短期记忆"
-              value={stats?.short_term_count ?? 0}
-              icon={<BookOutlined />}
-              color="#13c2c2"
-              bg="#e6fffb"
             />
             <StatCard
               loading={statsLoading}
@@ -134,33 +135,78 @@ export const MyMemoriesPage = () => {
             />
           </Space>
 
-          <Table<MemoryFact>
-            rowKey="id"
-            columns={columns}
-            dataSource={memories}
-            loading={loading}
-            pagination={false}
-            locale={{
-              emptyText: (
-                <EmptyHint
-                  title="记忆还是空的"
-                  description="与 AI 助手的对话内容会被提取为长期记忆，展示在这里。"
-                />
-              ),
-            }}
+          <Tabs
+            items={[
+              {
+                key: 'facts',
+                label: '记忆条目',
+                children: (
+                  <>
+                    <Table<MemoryFact>
+                      rowKey="id"
+                      columns={factColumns}
+                      dataSource={memories}
+                      loading={loading}
+                      pagination={false}
+                      locale={{
+                        emptyText: (
+                          <EmptyHint
+                            title="记忆还是空的"
+                            description="与 AI 助手的对话内容会被提取为记忆，展示在这里。"
+                          />
+                        ),
+                      }}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+                      <Pagination
+                        current={page}
+                        pageSize={pageSize}
+                        total={total}
+                        showSizeChanger
+                        pageSizeOptions={pageSizeOptions}
+                        showTotal={(t) => `共 ${t} 条记录`}
+                        onChange={handlePageChange}
+                      />
+                    </div>
+                  </>
+                ),
+              },
+              {
+                key: 'entities',
+                label: '记忆实体',
+                children: (
+                  <>
+                    <Table<MemoryEntity>
+                      rowKey="id"
+                      columns={entityColumns}
+                      dataSource={entities}
+                      loading={entitiesLoading}
+                      pagination={false}
+                      locale={{
+                        emptyText: (
+                          <EmptyHint
+                            title="还没有记忆实体"
+                            description="对话中反复出现的话题会被识别为实体，展示在这里。"
+                          />
+                        ),
+                      }}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+                      <Pagination
+                        current={entityPage}
+                        pageSize={entityPageSize}
+                        total={entityTotal}
+                        showSizeChanger
+                        pageSizeOptions={entityPageSizeOptions}
+                        showTotal={(t) => `共 ${t} 条记录`}
+                        onChange={handleEntityPageChange}
+                      />
+                    </div>
+                  </>
+                ),
+              },
+            ]}
           />
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
-            <Pagination
-              current={page}
-              pageSize={pageSize}
-              total={total}
-              showSizeChanger
-              pageSizeOptions={pageSizeOptions}
-              showTotal={(t) => `共 ${t} 条记录`}
-              onChange={handlePageChange}
-            />
-          </div>
         </div>
       </Card>
     </div>

@@ -1,0 +1,8 @@
+[
+  {
+    "name": "removed-memory-delete-compatibility",
+    "method": "DELETE",
+    "path": "/memory/some-id",
+    "want_status": 404
+  }
+]

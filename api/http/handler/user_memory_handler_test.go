@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/memory/application"
-	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -19,33 +17,36 @@ import (
 
 type fakeUserMemorySvc struct {
 	clearErr  error
-	created   *application.UserMemory
-	createReq *application.CreateUserMemoryRequest
 	listReq   *application.ListUserMemoriesRequest
 	listMem   []*application.UserMemory
 	listTotal int
+
+	statsMemoryCount int
+	statsEntityCount int
+	statsErr         error
+
+	entitiesReq   *application.ListUserEntitiesRequest
+	entities      []*application.UserMemoryEntity
+	entitiesTotal int
+	entitiesErr   error
 }
 
 func (f *fakeUserMemorySvc) ClearUserMemories(_ context.Context, _ *application.ClearUserMemoriesRequest) error {
 	return f.clearErr
 }
 
-func (f *fakeUserMemorySvc) CreateUserMemory(_ context.Context, req *application.CreateUserMemoryRequest) (*application.UserMemory, error) {
-	f.createReq = req
-	return f.created, nil
-}
-
-func (f *fakeUserMemorySvc) GetUserMemory(_ context.Context, _ *application.GetUserMemoryRequest) (*application.UserMemory, error) {
-	return nil, domain.ErrFactNotFound
-}
-
-func (f *fakeUserMemorySvc) ForgetUserMemory(_ context.Context, _ *application.ForgetMemoryRequest) error {
-	return nil
-}
-
 func (f *fakeUserMemorySvc) ListUserMemories(_ context.Context, req *application.ListUserMemoriesRequest) ([]*application.UserMemory, int, error) {
 	f.listReq = req
 	return f.listMem, f.listTotal, nil
+}
+
+func (f *fakeUserMemorySvc) UserStats(_ context.Context, _, _ string) (int, int, error) {
+	return f.statsMemoryCount, f.statsEntityCount, f.statsErr
+}
+
+func (f *fakeUserMemorySvc) ListUserEntities(_ context.Context, req *application.ListUserEntitiesRequest) ([]*application.UserMemoryEntity, int, error) {
+	f.entitiesReq = req
+	return f.entities, f.entitiesTotal, f.entitiesErr
 }
 
 func setupUserMemoryRouter(svc *fakeUserMemorySvc, tenantID, userID string) *gin.Engine {
@@ -67,40 +68,6 @@ func setupUserMemoryRouter(svc *fakeUserMemorySvc, tenantID, userID string) *gin
 	h := NewUserMemoryHandler(svc, nil)
 	r.DELETE("/api/memory/clear", injectClaims, h.ClearMemories)
 	return r
-}
-
-func TestAddMemory_UsesAuthenticatedIdentityAndCanonicalDTO(t *testing.T) {
-	svc := &fakeUserMemorySvc{created: &application.UserMemory{ID: "fact-1", Scope: "user", Content: "likes Go", Importance: 0.7}}
-	r := setupUserMemoryRouter(svc, "tenant-1", "user-1")
-	h := NewUserMemoryHandler(svc, nil)
-	r.POST("/api/memory", func(c *gin.Context) {
-		ctx := reqctx.WithTenantID(c.Request.Context(), "tenant-1")
-		c.Request = c.Request.WithContext(ctx)
-		c.Set(middleware.ContextKeySub, "user-1")
-	}, h.AddMemory)
-
-	body, _ := json.Marshal(map[string]any{
-		"content": "likes Go", "importance": 0.7,
-		"tenant_id": "attacker", "user_id": "attacker", "agent_id": "foreign-agent",
-	})
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPost, "/api/memory", bytes.NewReader(body)) //nolint:noctx
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
-	}
-	if svc.createReq.TenantID != "tenant-1" || svc.createReq.UserID != "user-1" {
-		t.Fatalf("handler trusted body identity: %#v", svc.createReq)
-	}
-	var got map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
-	if got["id"] != "fact-1" || got["scope"] != "user" || got["content"] != "likes Go" {
-		t.Fatalf("unexpected response: %#v", got)
-	}
 }
 
 func TestClearMemories_success(t *testing.T) {
@@ -232,5 +199,169 @@ func TestListMemories_missingIdentity(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func setupMemoryStatsRouter(svc *fakeUserMemorySvc, tenantID, userID string, handler func(*gin.Context)) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.GET("/api/memory/stats", func(c *gin.Context) {
+		if tenantID != "" {
+			ctx := reqctx.WithTenantID(c.Request.Context(), tenantID)
+			c.Request = c.Request.WithContext(ctx)
+		}
+		if userID != "" {
+			c.Set(middleware.ContextKeySub, userID)
+		}
+		handler(c)
+	})
+	return r
+}
+
+func TestGetStats_returnsUserLevelCounts(t *testing.T) {
+	svc := &fakeUserMemorySvc{statsMemoryCount: 3, statsEntityCount: 5}
+	h := NewUserMemoryHandler(svc, nil)
+	r := setupMemoryStatsRouter(svc, "tenant-1", "user-1", h.GetStats)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/memory/stats", nil) //nolint:noctx
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var got struct {
+		MemoryCount int64 `json:"memory_count"`
+		EntityCount int64 `json:"entity_count"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.MemoryCount != 3 || got.EntityCount != 5 {
+		t.Fatalf("memory_count=%d entity_count=%d, want 3/5", got.MemoryCount, got.EntityCount)
+	}
+}
+
+func TestGetStats_missingIdentity(t *testing.T) {
+	h := NewUserMemoryHandler(&fakeUserMemorySvc{}, nil)
+	r := setupMemoryStatsRouter(&fakeUserMemorySvc{}, "", "", h.GetStats)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/memory/stats", nil) //nolint:noctx
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestGetStats_missingTenant(t *testing.T) {
+	h := NewUserMemoryHandler(&fakeUserMemorySvc{}, nil)
+	r := setupMemoryStatsRouter(&fakeUserMemorySvc{}, "", "user-1", h.GetStats)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/memory/stats", nil) //nolint:noctx
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestGetStats_serviceError(t *testing.T) {
+	svc := &fakeUserMemorySvc{statsErr: errors.New("db error")}
+	h := NewUserMemoryHandler(svc, nil)
+	r := setupMemoryStatsRouter(svc, "tenant-1", "user-1", h.GetStats)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/memory/stats", nil) //nolint:noctx
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func setupMemoryEntitiesRouter(svc *fakeUserMemorySvc, tenantID, userID string, handler func(*gin.Context)) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.GET("/api/memory/entities", func(c *gin.Context) {
+		if tenantID != "" {
+			ctx := reqctx.WithTenantID(c.Request.Context(), tenantID)
+			c.Request = c.Request.WithContext(ctx)
+		}
+		if userID != "" {
+			c.Set(middleware.ContextKeySub, userID)
+		}
+		handler(c)
+	})
+	return r
+}
+
+func TestGetEntities_paginationUsesAuthenticatedIdentity(t *testing.T) {
+	svc := &fakeUserMemorySvc{
+		entities: []*application.UserMemoryEntity{
+			{ID: "ent-2", Name: "Python", EntityType: "tech", FactCount: 4},
+			{ID: "ent-1", Name: "Alice", EntityType: "person", FactCount: 2},
+		},
+		entitiesTotal: 2,
+	}
+	h := NewUserMemoryHandler(svc, nil)
+	r := setupMemoryEntitiesRouter(svc, "tenant-1", "user-1", h.GetEntities)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/memory/entities?page=2&page_size=10", nil) //nolint:noctx
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if svc.entitiesReq.TenantID != "tenant-1" || svc.entitiesReq.UserID != "user-1" {
+		t.Fatalf("handler used wrong identity: %#v", svc.entitiesReq)
+	}
+	if svc.entitiesReq.Limit != 10 || svc.entitiesReq.Offset != 10 {
+		t.Fatalf("limit=%d offset=%d, want 10/10", svc.entitiesReq.Limit, svc.entitiesReq.Offset)
+	}
+	var got struct {
+		Entities []map[string]any `json:"entities"`
+		Total    int              `json:"total"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Total != 2 || len(got.Entities) != 2 {
+		t.Fatalf("total=%d len=%d, want 2/2", got.Total, len(got.Entities))
+	}
+	if got.Entities[0]["name"] != "Python" || got.Entities[0]["fact_count"] != float64(4) {
+		t.Fatalf("unexpected first entity: %#v", got.Entities[0])
+	}
+}
+
+func TestGetEntities_missingIdentity(t *testing.T) {
+	h := NewUserMemoryHandler(&fakeUserMemorySvc{}, nil)
+	r := setupMemoryEntitiesRouter(&fakeUserMemorySvc{}, "", "", h.GetEntities)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/memory/entities", nil) //nolint:noctx
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestGetEntities_serviceError(t *testing.T) {
+	svc := &fakeUserMemorySvc{entitiesErr: errors.New("db error")}
+	h := NewUserMemoryHandler(svc, nil)
+	r := setupMemoryEntitiesRouter(svc, "tenant-1", "user-1", h.GetEntities)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/memory/entities", nil) //nolint:noctx
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
 	}
 }

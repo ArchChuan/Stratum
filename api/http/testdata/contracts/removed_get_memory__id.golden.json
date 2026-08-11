@@ -1,0 +1,8 @@
+[
+  {
+    "name": "removed-memory-get-compatibility",
+    "method": "GET",
+    "path": "/memory/some-id",
+    "want_status": 404
+  }
+]

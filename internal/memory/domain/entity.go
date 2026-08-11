@@ -2,28 +2,25 @@ package domain
 
 import (
 	"time"
-
-	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 const EntityStatusActive = "active"
 
-// MemoryEntity represents a recognized entity with a rolling profile summary.
+// MemoryEntity represents a recognized entity as a lightweight topic tag.
+// The LLM-generated profile (画像) was removed: it had zero consumers at
+// runtime while ProfileWorker kept paying LLM rebuild costs.
 type MemoryEntity struct {
-	ID                    string
-	UserID                string
-	AgentID               string
-	Scope                 Scope
-	Name                  string
-	EntityType            string // person/project/preference/tech/location
-	Profile               string // LLM-generated rolling summary
-	FactCount             int
-	FactCountSinceRebuild int
-	LastSeenAt            time.Time
-	LastProfileRebuildAt  time.Time
-	Status                string // active/deleted
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	ID         string
+	UserID     string
+	AgentID    string
+	Scope      Scope
+	Name       string
+	EntityType string // person/project/preference/tech/location
+	FactCount  int
+	LastSeenAt time.Time
+	Status     string // active/deleted
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // NewEntity creates a new active entity with validation.
@@ -40,47 +37,25 @@ func NewEntity(userID, agentID, scope, name, entityType string) (*MemoryEntity, 
 
 	now := now()
 	return &MemoryEntity{
-		ID:                    newID(),
-		UserID:                userID,
-		AgentID:               agentID,
-		Scope:                 Scope(scope),
-		Name:                  name,
-		EntityType:            entityType,
-		Profile:               "",
-		FactCount:             0,
-		FactCountSinceRebuild: 0,
-		LastSeenAt:            now,
-		LastProfileRebuildAt:  time.Time{}, // zero means never rebuilt
-		Status:                EntityStatusActive,
-		CreatedAt:             now,
-		UpdatedAt:             now,
+		ID:         newID(),
+		UserID:     userID,
+		AgentID:    agentID,
+		Scope:      Scope(scope),
+		Name:       name,
+		EntityType: entityType,
+		FactCount:  0,
+		LastSeenAt: now,
+		Status:     EntityStatusActive,
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}, nil
 }
 
-// IncrementFactCount increments the total and since-rebuild counters.
+// IncrementFactCount increments the total counter.
 func (e *MemoryEntity) IncrementFactCount() {
 	e.FactCount++
-	e.FactCountSinceRebuild++
 	e.LastSeenAt = now()
 	e.UpdatedAt = now()
-}
-
-// ShouldRebuildProfile checks if profile rebuild should be triggered.
-// Triggers if: >7 days since last rebuild OR fact delta >=5
-func (e *MemoryEntity) ShouldRebuildProfile() bool {
-	if e.LastProfileRebuildAt.IsZero() {
-		// Never rebuilt — trigger if we have any facts
-		return e.FactCount > 0
-	}
-
-	daysSinceRebuild := time.Since(e.LastProfileRebuildAt).Hours() / 24
-	if daysSinceRebuild >= float64(constants.MemoryEntityRebuildInterval.Hours()/24) {
-		return true
-	}
-	if e.FactCountSinceRebuild >= constants.MemoryEntityRebuildFactDelta {
-		return true
-	}
-	return false
 }
 
 // MarkDeleted soft-deletes the entity.

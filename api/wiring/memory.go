@@ -327,7 +327,6 @@ func BuildMemoryWorkers(c *Container) []interface {
 	}
 
 	factRepo := persistence.NewFactRepo(db)
-	entityRepo := persistence.NewEntityRepo(db)
 	historyRepo := persistence.NewHistoryRepo(db)
 	queue := persistence.NewExtractionQueue(db)
 
@@ -347,7 +346,7 @@ func BuildMemoryWorkers(c *Container) []interface {
 			memworkers.NewExtractionWorker(tid, queue, c.Memory.Service, c.Logger),
 			memworkers.NewGCWorker(tid, factRepo, c.Logger).WithQueue(queue),
 		}
-		return appendTenantLLMWorkers(ws, tid, entityRepo, factRepo, historyRepo,
+		return appendTenantLLMWorkers(ws, tid, factRepo, historyRepo,
 			buildWorkerLLMResolver(llmRes), c.Logger)
 	}, c.Logger)
 
@@ -382,7 +381,6 @@ func buildWorkerLLMResolver(llmRes *tenantCapabilityResolver) memworkers.TenantL
 func appendTenantLLMWorkers(
 	workerSet memworkers.WorkerSet,
 	tenantID string,
-	entityRepo memport.EntityRepo,
 	factRepo memport.FactRepo,
 	historyRepo memport.HistoryRepo,
 	resolver memworkers.TenantLLMResolver,
@@ -395,13 +393,6 @@ func appendTenantLLMWorkers(
 			tenantID,
 			factRepo,
 			memworkers.NewResolvingLLMSuperseder(tenantID, resolver),
-			logger,
-		))
-		workerSet = append(workerSet, memworkers.NewProfileWorker(
-			tenantID,
-			entityRepo,
-			factRepo,
-			memworkers.NewResolvingLLMEntityProfiler(tenantID, resolver),
 			logger,
 		))
 		historyProcessor := memworkers.NewResolvingLLMHistorySummarizer(tenantID, resolver)

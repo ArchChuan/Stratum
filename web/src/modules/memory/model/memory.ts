@@ -38,17 +38,28 @@ export const memoryListPageSchema = z.object({
 });
 export type MemoryListPage = z.infer<typeof memoryListPageSchema>;
 
+// 用户级记忆统计（对齐 dto.MemoryStatsResponse：memory_count 为当前用户 active
+// facts 数，entity_count 为当前用户 active 实体数；与列表/实体列表同口径）。
 export const memoryStatsSchema = z
   .object({
-    total_entries: z.number().optional().default(0),
-    short_term_count: z.number().optional().default(0),
-    long_term_count: z.number().optional().default(0),
+    memory_count: z.number().optional().default(0),
     entity_count: z.number().optional().default(0),
-    sessions_count: z.number().optional().default(0),
-    active_users: z.number().optional().default(0),
-    vector_count: z.number().optional().default(0),
-    last_access_time: z.string().optional().default(''),
-    storage_size_bytes: z.number().optional().default(0),
   })
   .passthrough();
 export type MemoryStats = z.infer<typeof memoryStatsSchema>;
+
+// 用户记忆实体（轻量话题标签，对齐 dto.MemoryEntityResponse）。
+export const memoryEntitySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  entity_type: z.string(),
+  fact_count: z.number(),
+  last_seen_at: z.string(),
+});
+export type MemoryEntity = z.infer<typeof memoryEntitySchema>;
+
+export const memoryEntityListPageSchema = z.object({
+  entities: z.array(memoryEntitySchema),
+  total: z.number(),
+});
+export type MemoryEntityListPage = z.infer<typeof memoryEntityListPageSchema>;

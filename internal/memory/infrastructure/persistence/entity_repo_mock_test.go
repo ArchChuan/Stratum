@@ -15,31 +15,31 @@ func newMockEntityRepo(mock pgxmock.PgxPoolIface) *EntityRepo {
 	return &EntityRepo{pool: mock}
 }
 
-var entityColumns = []string{"id", "user_id", "agent_id", "scope", "name", "entity_type", "profile",
-	"fact_count", "last_seen_at", "rebuild_after", "status", "created_at", "updated_at"}
+var entityColumns = []string{"id", "user_id", "agent_id", "scope", "name", "entity_type",
+	"fact_count", "last_seen_at", "status", "created_at", "updated_at"}
 
-// Scan targets are **string/**time.Time, so pgxmock row values must be *string/*time.Time (or nil for NULL).
-func entityRow(agent *string, rebuild *time.Time) []any {
+// Scan targets are **string/*time.Time, so pgxmock row values must be *string/*time.Time (or nil for NULL).
+func entityRow(agent *string) []any {
 	t := ts()
-	return []any{"e1", "u1", agent, "user", "alice", "person", "profile text",
-		5, t, rebuild, "active", t, t}
+	return []any{"e1", "u1", agent, "user", "alice", "person",
+		5, t, "active", t, t}
 }
 
 func TestEntityRepo_Create_success(t *testing.T) {
 	mock := newFactMock(t)
 	repo := newMockEntityRepo(mock)
 
-	ag, rb := "ag1", ts().Add(7*24*time.Hour)
+	ag := "ag1"
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectExec("INSERT INTO memory_entities").
-		WithArgs("e1", "u1", &ag, "agent", "alice", "person", "p", 3, ts(), &rb, "active", ts(), ts()).
+		WithArgs("e1", "u1", &ag, "agent", "alice", "person", 3, ts(), "active", ts(), ts()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
 	e := &domain.MemoryEntity{ID: "e1", UserID: "u1", AgentID: "ag1", Scope: domain.ScopeAgent,
-		Name: "alice", EntityType: "person", Profile: "p", FactCount: 3,
-		LastSeenAt: ts(), LastProfileRebuildAt: ts(), Status: "active", CreatedAt: ts(), UpdatedAt: ts()}
+		Name: "alice", EntityType: "person", FactCount: 3,
+		LastSeenAt: ts(), Status: "active", CreatedAt: ts(), UpdatedAt: ts()}
 	require.NoError(t, repo.Create(context.Background(), "t1", e))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -48,11 +48,11 @@ func TestEntityRepo_Create_zeroDerivedFields(t *testing.T) {
 	mock := newFactMock(t)
 	repo := newMockEntityRepo(mock)
 
-	// No agent, zero LastProfileRebuildAt -> both args nil.
+	// No agent -> agentID arg nil. profile/rebuild_after 列已移出 INSERT，依赖 DDL 默认值。
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectExec("INSERT INTO memory_entities").
-		WithArgs("e1", "u1", (*string)(nil), "user", "bob", "", "", 0, time.Time{}, (*time.Time)(nil), "active", time.Time{}, time.Time{}).
+		WithArgs("e1", "u1", (*string)(nil), "user", "bob", "", 0, time.Time{}, "active", time.Time{}, time.Time{}).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
@@ -68,7 +68,7 @@ func TestEntityRepo_Create_duplicate(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectExec("INSERT INTO memory_entities").
-		WithArgs(anyArgs(13)...).
+		WithArgs(anyArgs(11)...).
 		WillReturnError(pgErr23505())
 	mock.ExpectRollback()
 
@@ -81,12 +81,12 @@ func TestEntityRepo_GetByID_success(t *testing.T) {
 	mock := newFactMock(t)
 	repo := newMockEntityRepo(mock)
 
-	ag, rb := "ag1", ts()
+	ag := "ag1"
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectQuery("FROM memory_entities").
 		WithArgs("e1").
-		WillReturnRows(pgxmock.NewRows(entityColumns).AddRow(entityRow(&ag, &rb)...))
+		WillReturnRows(pgxmock.NewRows(entityColumns).AddRow(entityRow(&ag)...))
 	mock.ExpectCommit()
 
 	e, err := repo.GetByID(context.Background(), "t1", "e1")
@@ -105,7 +105,7 @@ func TestEntityRepo_GetByID_nilOptional(t *testing.T) {
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectQuery("FROM memory_entities").
 		WithArgs("e1").
-		WillReturnRows(pgxmock.NewRows(entityColumns).AddRow(entityRow(nil, nil)...))
+		WillReturnRows(pgxmock.NewRows(entityColumns).AddRow(entityRow(nil)...))
 	mock.ExpectCommit()
 
 	e, err := repo.GetByID(context.Background(), "t1", "e1")
@@ -151,16 +151,15 @@ func TestEntityRepo_Update_success(t *testing.T) {
 	mock := newFactMock(t)
 	repo := newMockEntityRepo(mock)
 
-	rb := ts().Add(7 * 24 * time.Hour)
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectExec("UPDATE memory_entities SET").
-		WithArgs("e1", "alice", "person", "p", 6, ts(), &rb, "active", ts()).
+		WithArgs("e1", "alice", "person", 6, ts(), "active", ts()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
-	e := &domain.MemoryEntity{ID: "e1", Name: "alice", EntityType: "person", Profile: "p", FactCount: 6,
-		LastSeenAt: ts(), LastProfileRebuildAt: ts(), Status: "active", UpdatedAt: ts()}
+	e := &domain.MemoryEntity{ID: "e1", Name: "alice", EntityType: "person", FactCount: 6,
+		LastSeenAt: ts(), Status: "active", UpdatedAt: ts()}
 	require.NoError(t, repo.Update(context.Background(), "t1", e))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -172,7 +171,7 @@ func TestEntityRepo_Update_notFound(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectExec("UPDATE memory_entities SET").
-		WithArgs("nope", "alice", "", "", 0, time.Time{}, (*time.Time)(nil), "active", time.Time{}).
+		WithArgs("nope", "alice", "", 0, time.Time{}, "active", time.Time{}).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectRollback()
 
@@ -188,7 +187,7 @@ func TestEntityRepo_Update_execFails(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectExec("UPDATE memory_entities SET").
-		WithArgs(anyArgs(9)...).
+		WithArgs(anyArgs(7)...).
 		WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
@@ -205,7 +204,7 @@ func TestEntityRepo_FindByNameAndType_userScope(t *testing.T) {
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectQuery("similarity\\(name").
 		WithArgs("u1", "alic", "person", 0.6).
-		WillReturnRows(pgxmock.NewRows(append(entityColumns, "sim")).AddRow(append(entityRow(nil, nil), 0.9)...))
+		WillReturnRows(pgxmock.NewRows(append(entityColumns, "sim")).AddRow(append(entityRow(nil), 0.9)...))
 	mock.ExpectCommit()
 
 	filter := domain.ScopeFilter{UserID: "u1", IncludeUserScope: true}
@@ -224,7 +223,7 @@ func TestEntityRepo_FindByNameAndType_agentScope(t *testing.T) {
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectQuery("similarity\\(name").
 		WithArgs("u1", "alic", "person", 0.6, "ag1").
-		WillReturnRows(pgxmock.NewRows(append(entityColumns, "sim")).AddRow(append(entityRow(&ag, nil), 0.9)...))
+		WillReturnRows(pgxmock.NewRows(append(entityColumns, "sim")).AddRow(append(entityRow(&ag), 0.9)...))
 	mock.ExpectCommit()
 
 	filter := domain.ScopeFilter{UserID: "u1", AgentID: "ag1", IncludeAgentScope: true}
@@ -252,64 +251,61 @@ func TestEntityRepo_FindByNameAndType_notFound(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestEntityRepo_ListProfiles_success(t *testing.T) {
+func TestEntityRepo_ListUserEntities_filtersActiveUserScope(t *testing.T) {
 	mock := newFactMock(t)
 	repo := newMockEntityRepo(mock)
 
-	ag := "ag1"
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	mock.ExpectQuery("profile != ''").
-		WithArgs("u1", true, "ag1", true, 10).
-		WillReturnRows(pgxmock.NewRows(entityColumns).
-			AddRow(entityRow(&ag, nil)...).
-			AddRow(entityRow(nil, nil)...))
+	mock.ExpectQuery("FROM memory_entities").
+		WithArgs("u1", 10, 0).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "entity_type", "fact_count", "last_seen_at"}).
+			AddRow("e1", "alice", "person", 5, ts()).
+			AddRow("e2", "python", "tech", 2, ts()))
 	mock.ExpectCommit()
 
-	filter := domain.ScopeFilter{TenantID: "t1", UserID: "u1", AgentID: "ag1", IncludeUserScope: true, IncludeAgentScope: true}
-	entities, err := repo.ListProfiles(context.Background(), filter, 10)
+	entities, err := repo.ListUserEntities(context.Background(), "t1", "u1", 10, 0)
 	require.NoError(t, err)
 	require.Len(t, entities, 2)
-	require.Equal(t, "ag1", entities[0].AgentID)
-	require.Empty(t, entities[1].AgentID)
+	require.Equal(t, "alice", entities[0].Name)
+	require.Equal(t, 5, entities[0].FactCount)
+	require.Equal(t, "python", entities[1].Name)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestEntityRepo_ListProfiles_queryFails(t *testing.T) {
+func TestEntityRepo_ListUserEntities_queryFails(t *testing.T) {
 	mock := newFactMock(t)
 	repo := newMockEntityRepo(mock)
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	mock.ExpectQuery("profile != ''").
-		WithArgs(anyArgs(5)...).WillReturnError(pgx.ErrTxClosed)
+	mock.ExpectQuery("FROM memory_entities").
+		WithArgs(anyArgs(3)...).WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
-	filter := domain.ScopeFilter{TenantID: "t1", UserID: "u1"}
-	_, err := repo.ListProfiles(context.Background(), filter, 10)
-	require.ErrorContains(t, err, "list entity profiles")
+	_, err := repo.ListUserEntities(context.Background(), "t1", "u1", 10, 0)
+	require.ErrorContains(t, err, "list user entities")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestEntityRepo_ListProfiles_scanFails(t *testing.T) {
+func TestEntityRepo_ListUserEntities_scanFails(t *testing.T) {
 	mock := newFactMock(t)
 	repo := newMockEntityRepo(mock)
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	mock.ExpectQuery("profile != ''").
-		WithArgs(anyArgs(5)...).
-		WillReturnRows(pgxmock.NewRows(entityColumns).AddRow("e1", 42, nil, "user", "alice", "person", "p",
-			5, ts(), nil, "active", ts(), ts()))
+	mock.ExpectQuery("FROM memory_entities").
+		WithArgs(anyArgs(3)...).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "entity_type", "fact_count", "last_seen_at"}).
+			AddRow("e1", 42, "person", 5, ts()))
 	mock.ExpectRollback()
 
-	filter := domain.ScopeFilter{TenantID: "t1", UserID: "u1"}
-	_, err := repo.ListProfiles(context.Background(), filter, 10)
-	require.ErrorContains(t, err, "scan entity")
+	_, err := repo.ListUserEntities(context.Background(), "t1", "u1", 10, 0)
+	require.ErrorContains(t, err, "scan user entity")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestEntityRepo_CountByUser(t *testing.T) {
+func TestEntityRepo_CountUserEntities(t *testing.T) {
 	mock := newFactMock(t)
 	repo := newMockEntityRepo(mock)
 
@@ -320,13 +316,13 @@ func TestEntityRepo_CountByUser(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(7))
 	mock.ExpectCommit()
 
-	n, err := repo.CountByUser(context.Background(), "t1", "u1")
+	n, err := repo.CountUserEntities(context.Background(), "t1", "u1")
 	require.NoError(t, err)
 	require.Equal(t, 7, n)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestEntityRepo_CountByUser_queryFails(t *testing.T) {
+func TestEntityRepo_CountUserEntities_queryFails(t *testing.T) {
 	mock := newFactMock(t)
 	repo := newMockEntityRepo(mock)
 
@@ -336,8 +332,8 @@ func TestEntityRepo_CountByUser_queryFails(t *testing.T) {
 		WithArgs(anyArgs(1)...).WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
-	_, err := repo.CountByUser(context.Background(), "t1", "u1")
-	require.ErrorContains(t, err, "count entities by user")
+	_, err := repo.CountUserEntities(context.Background(), "t1", "u1")
+	require.ErrorContains(t, err, "count user entities")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

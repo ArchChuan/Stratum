@@ -502,13 +502,11 @@ func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 	g := r.Group("/memory", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	g.Use(requireActive)
 	g.DELETE("/clear", userHandler.ClearMemories)
-	g.POST("", userHandler.AddMemory)
 	g.GET("", userHandler.ListMemories)
-	g.GET("/:id", userHandler.GetMemory)
 	g.POST("/sessions", userHandler.ListSessions)
 	g.GET("/stats", userHandler.GetStats)
+	g.GET("/entities", userHandler.GetEntities)
 	g.GET("/summary/:session_id", userHandler.GetSummary)
-	g.DELETE("/:id", userHandler.DeleteMemory)
 	g.DELETE("/session/:session_id", userHandler.ClearSession)
 }
 

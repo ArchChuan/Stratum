@@ -1,0 +1,8 @@
+[
+  {
+    "name": "removed-memory-create-compatibility",
+    "method": "POST",
+    "path": "/memory",
+    "want_status": 404
+  }
+]

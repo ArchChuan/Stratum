@@ -4,12 +4,6 @@ package stratum.memory;
 
 import "google/protobuf/timestamp.proto";
 
-message CreateMemoryRequest {
-  // @binding: required
-  string content = 1;
-  double importance = 2;
-}
-
 message MemoryFactResponse {
   string id = 1;
   string scope = 2;
@@ -27,14 +21,23 @@ message MemorySummaryResponse {
   string summary = 1;
 }
 
+// MemoryStatsResponse 统计当前用户的记忆（scope='user' AND status='active'，
+// 与 ListUserFacts/ListUserEntities 同口径）。
 message MemoryStatsResponse {
-  int64 total_entries = 1;
-  int64 short_term_count = 2;
-  int64 long_term_count = 3;
-  int64 entity_count = 4;
-  int64 sessions_count = 5;
-  int64 active_users = 6;
-  int64 vector_count = 7;
-  google.protobuf.Timestamp last_access_time = 8;
-  int64 storage_size_bytes = 9;
+  int64 memory_count = 1;
+  int64 entity_count = 2;
+}
+
+// MemoryEntityResponse 是用户侧只读的轻量话题标签。
+message MemoryEntityResponse {
+  string id = 1;
+  string name = 2;
+  string entity_type = 3;
+  int64 fact_count = 4;
+  google.protobuf.Timestamp last_seen_at = 5;
+}
+
+message ListMemoryEntitiesResponse {
+  repeated MemoryEntityResponse entities = 1;
+  int64 total = 2;
 }

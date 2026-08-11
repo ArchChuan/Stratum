@@ -80,15 +80,10 @@ func TestMemoryLifecycle(t *testing.T) {
 	}
 	require.True(t, foundDarkMode, "should recall dark mode preference")
 
-	// Step 4: Forget specific fact
+	// Step 4: Forget specific fact — 用户侧单条删除已移除（服务层不再暴露），
+	// E2E 直接经 repo 层验证删除与召回联动。
 	factID := recallResp.Facts[0].ID
-	forgetReq := &application.ForgetMemoryRequest{
-		TenantID: env.TenantID,
-		UserID:   env.UserID,
-		FactID:   factID,
-	}
-
-	err = env.MemoryService.ForgetMemory(ctx, forgetReq)
+	err = env.FactRepo.Delete(ctx, env.TenantID, factID)
 	require.NoError(t, err, "forget memory")
 
 	// Step 5: Verify fact no longer recalled

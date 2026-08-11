@@ -3,7 +3,6 @@ package persistence
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	pgstore "github.com/byteBuilderX/stratum/pkg/storage/postgres"
@@ -22,32 +21,29 @@ func NewEntityRepo(pool *pgxpool.Pool) *EntityRepo {
 }
 
 // Create inserts a new entity into the tenant schema.
+// profile/rebuild_after 列保留在 DB（历史数据），Go 侧不再写入，
+// 依赖 DDL 的 DEFAULT ” 与 nullable 兜底。
 func (r *EntityRepo) Create(ctx context.Context, tenantID string, entity *domain.MemoryEntity) error {
 	const query = `
 		INSERT INTO memory_entities (
-			id, user_id, agent_id, scope, name, entity_type, profile,
-			fact_count, last_seen_at, rebuild_after, status,
+			id, user_id, agent_id, scope, name, entity_type,
+			fact_count, last_seen_at, status,
 			created_at, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9, $10, $11,
-			$12, $13
+			$1, $2, $3, $4, $5, $6,
+			$7, $8, $9,
+			$10, $11
 		)`
 
 	var agentID *string
 	if entity.AgentID != "" {
 		agentID = &entity.AgentID
 	}
-	var rebuildAfter *time.Time
-	if !entity.LastProfileRebuildAt.IsZero() {
-		t := entity.LastProfileRebuildAt.Add(7 * 24 * time.Hour)
-		rebuildAfter = &t
-	}
 
 	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, query,
-			entity.ID, entity.UserID, agentID, string(entity.Scope), entity.Name, entity.EntityType, entity.Profile,
-			entity.FactCount, entity.LastSeenAt, rebuildAfter, entity.Status,
+			entity.ID, entity.UserID, agentID, string(entity.Scope), entity.Name, entity.EntityType,
+			entity.FactCount, entity.LastSeenAt, entity.Status,
 			entity.CreatedAt, entity.UpdatedAt,
 		)
 		return translatePgError(err, "create entity")
@@ -57,8 +53,8 @@ func (r *EntityRepo) Create(ctx context.Context, tenantID string, entity *domain
 // GetByID retrieves an entity by ID from the tenant schema.
 func (r *EntityRepo) GetByID(ctx context.Context, tenantID, id string) (*domain.MemoryEntity, error) {
 	const query = `
-		SELECT id, user_id, agent_id, scope, name, entity_type, profile,
-			fact_count, last_seen_at, rebuild_after, status,
+		SELECT id, user_id, agent_id, scope, name, entity_type,
+			fact_count, last_seen_at, status,
 			created_at, updated_at
 		FROM memory_entities
 		WHERE id = $1`
@@ -67,11 +63,10 @@ func (r *EntityRepo) GetByID(ctx context.Context, tenantID, id string) (*domain.
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var e domain.MemoryEntity
 		var agentID *string
-		var rebuildAfter *time.Time
 		var scope string
 		if err := tx.QueryRow(ctx, query, id).Scan(
-			&e.ID, &e.UserID, &agentID, &scope, &e.Name, &e.EntityType, &e.Profile,
-			&e.FactCount, &e.LastSeenAt, &rebuildAfter, &e.Status,
+			&e.ID, &e.UserID, &agentID, &scope, &e.Name, &e.EntityType,
+			&e.FactCount, &e.LastSeenAt, &e.Status,
 			&e.CreatedAt, &e.UpdatedAt,
 		); err != nil {
 			if err == pgx.ErrNoRows {
@@ -93,20 +88,14 @@ func (r *EntityRepo) GetByID(ctx context.Context, tenantID, id string) (*domain.
 func (r *EntityRepo) Update(ctx context.Context, tenantID string, entity *domain.MemoryEntity) error {
 	const query = `
 		UPDATE memory_entities SET
-			name = $2, entity_type = $3, profile = $4, fact_count = $5,
-			last_seen_at = $6, rebuild_after = $7, status = $8, updated_at = $9
+			name = $2, entity_type = $3, fact_count = $4,
+			last_seen_at = $5, status = $6, updated_at = $7
 		WHERE id = $1`
-
-	var rebuildAfter *time.Time
-	if !entity.LastProfileRebuildAt.IsZero() {
-		t := entity.LastProfileRebuildAt.Add(7 * 24 * time.Hour)
-		rebuildAfter = &t
-	}
 
 	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, query,
-			entity.ID, entity.Name, entity.EntityType, entity.Profile, entity.FactCount,
-			entity.LastSeenAt, rebuildAfter, entity.Status, entity.UpdatedAt,
+			entity.ID, entity.Name, entity.EntityType, entity.FactCount,
+			entity.LastSeenAt, entity.Status, entity.UpdatedAt,
 		)
 		if err != nil {
 			return translatePgError(err, "update entity")
@@ -128,8 +117,8 @@ func entityScopeClause(filter domain.ScopeFilter) string {
 
 func (r *EntityRepo) FindByNameAndType(ctx context.Context, tenantID string, filter domain.ScopeFilter, name, entityType string, threshold float64) (*domain.MemoryEntity, error) {
 	query := `
-		SELECT id, user_id, agent_id, scope, name, entity_type, profile,
-			fact_count, last_seen_at, rebuild_after, status,
+		SELECT id, user_id, agent_id, scope, name, entity_type,
+			fact_count, last_seen_at, status,
 			created_at, updated_at,
 			similarity(name, $2) as sim
 		FROM memory_entities
@@ -145,7 +134,6 @@ func (r *EntityRepo) FindByNameAndType(ctx context.Context, tenantID string, fil
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var e domain.MemoryEntity
 		var agentID *string
-		var rebuildAfter *time.Time
 		var scope string
 		var sim float64
 		args := []any{filter.UserID, name, entityType, threshold}
@@ -153,8 +141,8 @@ func (r *EntityRepo) FindByNameAndType(ctx context.Context, tenantID string, fil
 			args = append(args, filter.AgentID)
 		}
 		if err := tx.QueryRow(ctx, query, args...).Scan(
-			&e.ID, &e.UserID, &agentID, &scope, &e.Name, &e.EntityType, &e.Profile,
-			&e.FactCount, &e.LastSeenAt, &rebuildAfter, &e.Status,
+			&e.ID, &e.UserID, &agentID, &scope, &e.Name, &e.EntityType,
+			&e.FactCount, &e.LastSeenAt, &e.Status,
 			&e.CreatedAt, &e.UpdatedAt, &sim,
 		); err != nil {
 			if err == pgx.ErrNoRows {
@@ -172,47 +160,46 @@ func (r *EntityRepo) FindByNameAndType(ctx context.Context, tenantID string, fil
 	return out, err
 }
 
-// ListProfiles returns entities with profiles for context injection.
-func (r *EntityRepo) ListProfiles(ctx context.Context, filter domain.ScopeFilter, limit int) ([]*domain.MemoryEntity, error) {
+// ListUserEntities lists the user's active user-scope entities as lightweight
+// topic tags, newest-seen first. 与 ListUserFacts 同口径（scope='user' AND active）。
+func (r *EntityRepo) ListUserEntities(ctx context.Context, tenantID, userID string, limit, offset int) ([]*domain.MemoryEntity, error) {
 	const query = `
-		SELECT id, user_id, agent_id, scope, name, entity_type, profile,
-			fact_count, last_seen_at, rebuild_after, status,
-			created_at, updated_at
+		SELECT id, name, entity_type, fact_count, last_seen_at
 		FROM memory_entities
-		WHERE user_id = $1
-			AND status = 'active'
-			AND profile != ''
-			AND (
-				(scope = 'user' AND $2 = true)
-				OR (scope = 'agent' AND agent_id = $3 AND $4 = true)
-			)
-		ORDER BY fact_count DESC
-		LIMIT $5`
+		WHERE user_id = $1 AND scope = 'user' AND status = 'active'
+		ORDER BY last_seen_at DESC
+		LIMIT $2 OFFSET $3`
 
 	var out []*domain.MemoryEntity
-	err := r.execTenant(ctx, filter.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, query,
-			filter.UserID, filter.IncludeUserScope, filter.AgentID, filter.IncludeAgentScope, limit)
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, query, userID, limit, offset)
 		if err != nil {
-			return fmt.Errorf("list entity profiles: %w", err)
+			return fmt.Errorf("list user entities: %w", err)
 		}
 		defer rows.Close()
-		out, err = r.scanEntities(rows)
-		return err
+		for rows.Next() {
+			var e domain.MemoryEntity
+			if err := rows.Scan(&e.ID, &e.Name, &e.EntityType, &e.FactCount, &e.LastSeenAt); err != nil {
+				return fmt.Errorf("scan user entity: %w", err)
+			}
+			out = append(out, &e)
+		}
+		return rows.Err()
 	})
 	return out, err
 }
 
-// CountByUser returns total entity count for a user.
-func (r *EntityRepo) CountByUser(ctx context.Context, tenantID, userID string) (int, error) {
+// CountUserEntities returns the user's active user-scope entity count,
+// 与 ListUserEntities 同口径。
+func (r *EntityRepo) CountUserEntities(ctx context.Context, tenantID, userID string) (int, error) {
 	var count int
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			"SELECT COUNT(*) FROM memory_entities WHERE user_id = $1 AND status = 'active'",
+			"SELECT COUNT(*) FROM memory_entities WHERE user_id = $1 AND scope = 'user' AND status = 'active'",
 			userID).Scan(&count)
 	})
 	if err != nil {
-		return 0, fmt.Errorf("count entities by user: %w", err)
+		return 0, fmt.Errorf("count user entities: %w", err)
 	}
 	return count, nil
 }
@@ -241,34 +228,4 @@ func (r *EntityRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID str
 		}
 		return nil
 	})
-}
-
-// scanEntities is a helper to scan multiple entity rows.
-func (r *EntityRepo) scanEntities(rows pgx.Rows) ([]*domain.MemoryEntity, error) {
-	var entities []*domain.MemoryEntity
-
-	for rows.Next() {
-		var e domain.MemoryEntity
-		var agentID *string
-		var rebuildAfter *time.Time
-		var scope string
-
-		err := rows.Scan(
-			&e.ID, &e.UserID, &agentID, &scope, &e.Name, &e.EntityType, &e.Profile,
-			&e.FactCount, &e.LastSeenAt, &rebuildAfter, &e.Status,
-			&e.CreatedAt, &e.UpdatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("scan entity: %w", err)
-		}
-
-		e.Scope = domain.Scope(scope)
-		if agentID != nil {
-			e.AgentID = *agentID
-		}
-
-		entities = append(entities, &e)
-	}
-
-	return entities, rows.Err()
 }
