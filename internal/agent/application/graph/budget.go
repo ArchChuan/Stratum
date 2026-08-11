@@ -24,7 +24,7 @@ func ComputeBudget(window, outputReserve int, safetyRatio float64) Budget {
 	}
 	ratio := safetyRatio
 	if ratio <= 0 || ratio >= 1 {
-		ratio = constants.LoopCompactionSafetyRatio
+		ratio = constants.ContextSafetyReserveRatio
 	}
 	usable := window - int(float64(window)*ratio) - outputReserve
 	if usable < 0 {

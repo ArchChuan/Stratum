@@ -44,6 +44,13 @@ const (
 	// LoopCompactionSafetyRatio triggers compaction before the hard token ceiling,
 	// leaving margin for the EstimateText heuristic error (<20%).
 	LoopCompactionSafetyRatio = 0.8
+	// ContextSafetyReserveRatio 是执行级预算账本的安全余量默认比例（Spec 第 2 节
+	// usable = window − safetyReserve − outputReserve）。独立于
+	// LoopCompactionSafetyRatio（"80% 满即压缩"的触发语义）：扣减 80% 会让
+	// 默认配置下 usable 归零（0.8×window + outputReserve > window），system 模板
+	// 塞满 headCap、memory 注入与压缩全部失效。默认 20% 余量在窗口利用率与
+	// 自修正兜底间取中。
+	ContextSafetyReserveRatio = 0.2
 
 	// CompactionBudgetTotal 是压缩路径一次执行的总体时间预算（Spec 第 4 节）：
 	// 按 剩余/剩余尝试数 分摊为逐次独立的时间片，链内所有尝试合计不放大

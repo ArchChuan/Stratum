@@ -879,7 +879,10 @@ func TestExecute_CompactionCooldownSuppressesPerStepSummary(t *testing.T) {
 		// 确实触发（本测试 callCount==3 即证据）；早前草稿场景不触发的真实原因是
 		// 估算未过阈值，而非默认形状下压缩永不触发。
 		agent.WithCompactionRecentGroups(1),
-		agent.WithMaxContextTokens(30000),
+		// 默认 safety 0.2 下 HistoryCap 随 usable 放大（30000 窗口 HistoryCap
+		// ≈11940t，循环内不再持续超限，冷却分支走不到）。10000 窗口
+		// HistoryCap ≈2340t：每步工具结果（≈1000t）都超限，冷却抑制可观测。
+		agent.WithMaxContextTokens(10000),
 		agent.WithMaxSteps(10),
 		agent.WithExtraTools([]port.ToolDefinition{{Name: "calc", ProviderType: "mcp", ServerID: "math", Metadata: map[string]any{"risk_level": "read"}}}),
 		agent.WithToolExecutionFn(func(context.Context, port.ToolExecutionRequest) (any, error) {
@@ -888,7 +891,7 @@ func TestExecute_CompactionCooldownSuppressesPerStepSummary(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, gw.requests, 3)
-	// 初始组装 1 次 + 循环内首次超限压缩 1 次；第二次超限处于默认 10s
-	// 冷却窗口内被抑制，只走截断兜底 → 共 3 次（无冷却时 = 4）。
-	require.Equal(t, 3, compactor.callCount)
+	// 首次超限触发 1 次同步摘要后，后续步骤处于默认 10s 冷却窗口内被抑制，
+	// 只走截断兜底 → callCount == 1（无冷却时会按每步超限次数触发多次）。
+	require.Equal(t, 1, compactor.callCount)
 }

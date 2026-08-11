@@ -120,7 +120,12 @@ func prepareLLMRequest(ctx context.Context, s *ReActState) ([]port.ToolDefinitio
 	// 预算账本：工具定义走 ToolsCap 独立配额，history 压缩走 HistoryCap；
 	// 二者互不挤占（Spec 第 2 节根因修复）。Budget 零值 = 未初始化，
 	// 工具裁剪与压缩自动禁用（与旧 0 预算语义一致）。
-	tools = fitToolsToContextBudget(tools, messages, s.Budget.ToolsCap, protectedUsers, correction, safetyRatio)
+	// Governed assistant（系统助手）不参与裁剪：其工具集是平台角色能力契约
+	// （角色权限建模的固定组成，schema 大、数量少），裁剪会造成角色能力
+	// 静默缺失（TestSystemAssistantDeterministicAgentLoopPersistsTypedArtifacts）。
+	if !s.GovernedAssistant {
+		tools = fitToolsToContextBudget(tools, messages, s.Budget.ToolsCap, protectedUsers, correction, safetyRatio)
+	}
 	toolTokens := 0
 	if encodedTools, err := json.Marshal(tools); err == nil {
 		toolTokens = tokenutil.EstimateText(string(encodedTools))
@@ -516,15 +521,33 @@ func protectedUserMessages(groups []msgGroup, protectedUsers int) []port.LLMMess
 	return out
 }
 
-// fitToolList greedily packs tool schemas while the encoded definition list
-// stays within the token allowance, preserving declaration order.
+// fitToolList packs tool schemas within the token allowance. 预算充足时保持
+// 声明顺序全量返回；不足时按优先级贪心：激活技能与授权能力工具（skill、
+// MCP、知识、记忆）优先打包，plan 工作流工具最后裁——技能激活是用户显式
+// 功能开关（TestAgentService_ExecuteSkillScenarioActivatesMultipleSkills），
+// plan 是内置辅助工作流，预算受限时先牺牲后者。
 func fitToolList(tools []port.ToolDefinition, allowance int) []port.ToolDefinition {
-	fitted := make([]port.ToolDefinition, 0, len(tools))
-	for _, tool := range tools {
+	encoded, err := json.Marshal(tools)
+	if err == nil && tokenutil.EstimateText(string(encoded)) <= allowance {
+		return tools
+	}
+	ordered := append([]port.ToolDefinition(nil), tools...)
+	slices.SortStableFunc(ordered, func(a, b port.ToolDefinition) int {
+		switch {
+		case isReservedPlanTool(a.Name) == isReservedPlanTool(b.Name):
+			return 0
+		case isReservedPlanTool(a.Name):
+			return 1
+		default:
+			return -1
+		}
+	})
+	fitted := make([]port.ToolDefinition, 0, len(ordered))
+	for _, tool := range ordered {
 		candidate := make([]port.ToolDefinition, len(fitted), len(fitted)+1)
 		copy(candidate, fitted)
 		candidate = append(candidate, tool)
-		encoded, err := json.Marshal(candidate)
+		encoded, err = json.Marshal(candidate)
 		if err == nil && tokenutil.EstimateText(string(encoded)) <= allowance {
 			fitted = candidate
 		}

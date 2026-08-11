@@ -175,10 +175,10 @@ func summaryBody(sys string) string {
 }
 
 // TestCompaction_SummaryReserveScalesWithBudget 验证摘要预留额度从固定
-// min(budget/4, 400) 改为 HistoryCap 的 5% 联动（300000 窗口 → HistoryCap
-// 33544 − 任务 4 = 33540 → 1677 tokens 预留）：超大摘要被精确截断到预留
-// 额度，且明显大于旧逻辑的 400-token 上限。outputReserve 传 0 走自动链
-// 常量 4096。
+// min(budget/4, 400) 改为 HistoryCap 的 5% 联动（300000 窗口，默认 safety
+// 0.2 → usable 235904 → HistoryCap 141540 − 任务 4 = 141536 → 7077 tokens
+// 预留）：超大摘要被精确截断到预留额度，且明显大于旧逻辑的 400-token 上限。
+// outputReserve 传 0 走自动链常量 4096。
 func TestCompaction_SummaryReserveScalesWithBudget(t *testing.T) {
 	const maxTokens = 300000
 	fc := &fakeCompactor{summary: marker + strings.Repeat("摘", 20000)}
@@ -193,12 +193,12 @@ func TestCompaction_SummaryReserveScalesWithBudget(t *testing.T) {
 	if !hasSys || !strings.Contains(sys, marker) {
 		t.Fatalf("summary not injected: %q", sys)
 	}
-	// usable = 300000 − 240000 − 4096 = 55904; fixedHead/tools 各 11180;
-	// HistoryCap = 55904 − 11180 − 11180 − task(4) = 33540;
-	// reserve = 5% = 1677 tokens. The whole summary (marker included) is
+	// usable = 300000 − 60000 − 4096 = 235904; fixedHead/tools 各 47180;
+	// HistoryCap = 235904 − 47180 − 47180 − task(4) = 141540;
+	// reserve = 5% = 7077 tokens. The whole summary (marker included) is
 	// truncated to the reserve, so the marker-stripped body must be
-	// 1677*3 − len(marker) bytes.
-	const wantBytes = 1677 * 3
+	// 7077*3 − len(marker) bytes.
+	const wantBytes = 7077 * 3
 	if got := len(summaryBody(sys)) + len(marker); got != wantBytes {
 		t.Fatalf("summary reserve = %d bytes, want %d (5%% of HistoryCap)", got, wantBytes)
 	}
@@ -206,7 +206,7 @@ func TestCompaction_SummaryReserveScalesWithBudget(t *testing.T) {
 
 // TestCompaction_SummaryReserveCappedAtBudget 验证小窗口下预留额度被 cap 于
 // history 配额而非固定 200-token floor：maxTokens=400 + 预留 50 时
-// HistoryCap 只剩 18，扣任务 4 后为 14，预留被 cap 到全部 14。
+// HistoryCap 只剩 162，扣任务 4 后为 158，预留被 cap 到全部 158。
 func TestCompaction_SummaryReserveCappedAtBudget(t *testing.T) {
 	const maxTokens = 400
 	const outputReserve = 50
@@ -222,9 +222,9 @@ func TestCompaction_SummaryReserveCappedAtBudget(t *testing.T) {
 	if !hasSys || !strings.Contains(sys, marker) {
 		t.Fatalf("summary not injected: %q", sys)
 	}
-	// usable = 400 − 320 − 50 = 30; HistoryCap = 30 − 6 − 6 − task(4) = 14;
-	// reserve = min(5% floor 200, 14) = 14 tokens, capped at the history quota.
-	const wantBytes = 14 * 3
+	// usable = 400 − 80 − 50 = 270; HistoryCap = 270 − 54 − 54 − task(4) = 158;
+	// reserve = min(5% floor 200, 158) = 158 tokens, capped at the history quota.
+	const wantBytes = 158 * 3
 	if got := len(summaryBody(sys)) + len(marker); got != wantBytes {
 		t.Fatalf("summary reserve = %d bytes, want %d (capped at history quota)", got, wantBytes)
 	}
@@ -254,58 +254,73 @@ func TestCompaction_FailureRestoresPlainTruncationBudget(t *testing.T) {
 }
 
 // TestBuildContextMessages_DegradedUsableKeepsMinimalHead 回归防护（C1）：
-// fallback 窗口（8000，未知模型）与显式小窗口（2000）下 usable 耗尽时，
+// usable 耗尽时（显式小窗口 2000、显式 aggressive ratio 0.8、大任务超窗），
 // 初始组装仍发送最小 head（system prompt + 当前输入，memory 能装下才带），
 // 绝不丢弃 system prompt；超窗发送交由规格收敛机制（400
-// context_length_exceeded → TokenCorrection 下调阈值）处理。断言"只发输入"
-// 就是在断言回归本身。
+// context_length_exceeded → TokenCorrection 下调阈值）处理。
+// 默认 safety ratio 0.2 下 fallback 8000 窗口 usable 仍为正（2304），
+// 走正常组装路径且 memory 注入；断言"只发输入"就是在断言回归本身。
 func TestBuildContextMessages_DegradedUsableKeepsMinimalHead(t *testing.T) {
 	cases := []struct {
-		name      string
-		maxTokens int
-		input     string
-		wantMem   bool
+		name        string
+		maxTokens   int
+		ratio       float64
+		input       string
+		wantMinimal bool // 期望最小 head（恰 2 条）
+		wantMem     bool
 	}{
-		{name: "fallback 8000 窗口（未知模型）", maxTokens: 8000, input: "当前问题", wantMem: false},
-		{name: "显式 2000 窗口", maxTokens: 2000, input: "当前问题", wantMem: false},
-		// 大任务超窗（usable 3904 < task 5000）但头部配额充足：memory 能装下则保留。
-		{name: "大任务超窗且 memory 能装下", maxTokens: 40000,
-			input: strings.Repeat("x", 15000), wantMem: true},
+		// 默认 ratio 0.2：usable = 8000 − 1600 − 4096 = 2304 > 0，headCap 460
+		// 内 system + memory 都能装下（修复前默认 0.8 时 usable 钳 0 属退化）。
+		{name: "fallback 8000 默认 ratio 正常组装", maxTokens: 8000, input: "当前问题", wantMinimal: false, wantMem: true},
+		// 显式 aggressive ratio 0.8（registry 配置被尊重，不隐式纠正）：
+		// usable 钳 0 → 最小 head，memory 装不下丢弃。
+		{name: "8000 + 显式 0.8 退化保 head", maxTokens: 8000, ratio: 0.8, input: "当前问题", wantMinimal: true, wantMem: false},
+		{name: "显式 2000 窗口", maxTokens: 2000, input: "当前问题", wantMinimal: true, wantMem: false},
+		// 大任务超窗（显式 0.8：usable 3904 < task 5000）但头部配额充足：
+		// memory 能装下则保留。
+		{name: "大任务超窗且 memory 能装下", maxTokens: 40000, ratio: 0.8,
+			input: strings.Repeat("x", 15000), wantMinimal: true, wantMem: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			msgs := application.BuildContextMessagesWithCompaction(
 				context.Background(),
 				"你是助手", "记忆内容", makeHistory(5), tc.input,
-				tc.maxTokens, 5, 0, 0, nil,
+				tc.maxTokens, 5, 0, tc.ratio, nil,
 			)
-			if len(msgs) != 2 {
-				t.Fatalf("最小 head 应恰为 system + user 两条，实际 %d 条: %+v", len(msgs), msgs)
+			if tc.wantMinimal {
+				if len(msgs) != 2 {
+					t.Fatalf("最小 head 应恰为 system + user 两条，实际 %d 条: %+v", len(msgs), msgs)
+				}
+				if msgs[0].Role != "system" || !strings.Contains(msgs[0].Content, "你是助手") {
+					t.Fatalf("system prompt 被丢弃：msgs[0] = %+v", msgs[0])
+				}
+				if msgs[1].Role != "user" || msgs[1].Content != tc.input {
+					t.Fatalf("末条应为当前输入 user，实际 %+v", msgs[1])
+				}
+			} else if len(msgs) <= 2 {
+				t.Fatalf("正常组装应含历史，实际 %d 条: %+v", len(msgs), msgs)
 			}
-			if msgs[0].Role != "system" || !strings.Contains(msgs[0].Content, "你是助手") {
-				t.Fatalf("system prompt 被丢弃：msgs[0] = %+v", msgs[0])
-			}
-			if msgs[1].Role != "user" || msgs[1].Content != tc.input {
-				t.Fatalf("末条应为当前输入 user，实际 %+v", msgs[1])
-			}
-			if got := strings.Contains(msgs[0].Content, "记忆内容"); got != tc.wantMem {
-				t.Errorf("memory 保留 = %v，期望 %v（system=%q）", got, tc.wantMem, msgs[0].Content)
+			sys := msgs[0].Content
+			if got := strings.Contains(sys, "记忆内容"); got != tc.wantMem {
+				t.Errorf("memory 保留 = %v，期望 %v（system=%q）", got, tc.wantMem, sys)
 			}
 		})
 	}
 }
 
 // TestBuildContextMessages_SafetyRatioDrivesAssemblyBudget（I1）：组装侧必须
-// 使用与 ReAct 循环侧同一 compaction_safety_ratio 来源——非默认 ratio（0.5）
-// 放大了 history 配额，同一历史在 0.5 下全部保留、默认 0.8 下被截断；
-// 一次执行一个 usable。
+// 使用与 ReAct 循环侧同一 compaction_safety_ratio 来源——宽松 ratio（0.5）
+// 放大了 history 配额，同一历史在 0.5 下全部保留、激进 ratio（0.8）下被
+// 截断；一次执行一个 usable。默认 ratio（0.2，ratio 传 0）余量更大，
+// 同历史也全保留，此处用显式 0.8 构造"截断 vs 保留"对比。
 func TestBuildContextMessages_SafetyRatioDrivesAssemblyBudget(t *testing.T) {
 	hist := makeHistory(200) // ≈33000 tokens，介于 0.8 与 0.5 ratio 的 HistoryCap 之间
 	loose := application.BuildContextMessagesWithCompaction(
 		context.Background(), "sys", "", hist, "q", 200000, 200, 0, 0.5, nil,
 	)
 	strict := application.BuildContextMessagesWithCompaction(
-		context.Background(), "sys", "", hist, "q", 200000, 200, 0, 0, nil,
+		context.Background(), "sys", "", hist, "q", 200000, 200, 0, 0.8, nil,
 	)
 	if len(loose) <= len(strict) {
 		t.Fatalf("ratio 0.5 应保留更多历史：loose=%d strict=%d", len(loose), len(strict))

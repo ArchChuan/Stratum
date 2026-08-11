@@ -24,20 +24,21 @@ func TestComputeBudget(t *testing.T) {
 		wantTools     int
 	}{
 		{
-			name: "qwen-max window",
-			// int(131072×0.8) = 104857 → usable = 131072 − 104857 − 8192 = 18023
-			window: 131072, reserve: 8192, ratio: 0.8,
+			name: "qwen-max window default safety ratio",
+			// 真实 qwen-max（32768）：默认 safety 0.2 → usable = 32768 − 6553 − 8192
+			// = 18023。修复前默认 0.8 时 usable 为负钳到 0，memory 注入失效。
+			window: 32768, reserve: 8192, ratio: 0,
 			wantUsable:    18023,
 			wantFixedHead: 3604,
 			wantTools:     3604,
 		},
 		{
 			name: "large window",
-			// usable = 200000 − 160000 − 8192 = 31808；fixedHead = 20% = 6361
-			window: 200000, reserve: 8192, ratio: 0.8,
-			wantUsable:    31808,
-			wantFixedHead: 6361,
-			wantTools:     6361,
+			// 默认 safety 0.2 → usable = 200000 − 40000 − 8192 = 151808；fixedHead = 20%
+			window: 200000, reserve: 8192, ratio: 0,
+			wantUsable:    151808,
+			wantFixedHead: 30361,
+			wantTools:     30361,
 		},
 		{
 			name: "custom safety ratio",
@@ -50,15 +51,24 @@ func TestComputeBudget(t *testing.T) {
 		{
 			name: "zero reserve",
 			// reserve 0 时 usable = window − safety，不额外扣减
-			window: 10000, reserve: 0, ratio: 0.8,
-			wantUsable:    2000,
-			wantFixedHead: 400,
-			wantTools:     400,
+			window: 10000, reserve: 0, ratio: 0.2,
+			wantUsable:    8000,
+			wantFixedHead: 1600,
+			wantTools:     1600,
 		},
 		{
-			name: "tiny window degrades to zero usable",
-			// 8000 fallback 窗口 + 默认 reserve 4096：safety 6400 + reserve 4096
-			// 超过窗口 → usable 钳到 0，所有配额为 0（压缩/工具裁剪随之禁用）。
+			name: "tiny window keeps usable under default ratio",
+			// 8000 fallback 窗口 + 默认 reserve 4096：safety 1600 + reserve 4096
+			// = 2304 仍为正，head 配额保留 memory 注入空间。
+			window: 8000, reserve: 4096, ratio: 0,
+			wantUsable:    2304,
+			wantFixedHead: 460,
+			wantTools:     460,
+		},
+		{
+			name: "explicit aggressive ratio degrades to zero usable",
+			// registry 显式配置 0.8（用户选择）：safety 6400 + reserve 4096 超过
+			// 8000 窗口 → usable 钳到 0，配额为 0。显式配置被尊重，不隐式纠正。
 			window: 8000, reserve: 4096, ratio: 0.8,
 			wantUsable: 0, wantFixedHead: 0, wantTools: 0,
 		},
@@ -109,11 +119,12 @@ func TestComputeBudget_ClampsAboveCeiling(t *testing.T) {
 }
 
 // TestComputeBudget_InvalidRatioFallsBackToDefault 验证 safetyRatio 越界
-// （≤0 或 ≥1）时回退 constants 默认，与 compactionThreshold 的归一化同语义。
+// （≤0 或 ≥1）时回退 constants 默认（ContextSafetyReserveRatio），
+// 与 compactionThreshold 的归一化同语义。
 func TestComputeBudget_InvalidRatioFallsBackToDefault(t *testing.T) {
 	const window = 100000
-	// 默认 0.8 → usable = 100000 − 80000 = 20000
-	const wantUsable = 20000
+	// 默认 0.2 → usable = 100000 − 20000 = 80000
+	const wantUsable = 80000
 	for _, ratio := range []float64{0, -1, 1, 1.5} {
 		b := ComputeBudget(window, 0, ratio)
 		if b.Usable != wantUsable {
