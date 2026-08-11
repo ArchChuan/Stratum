@@ -340,7 +340,7 @@ func TestBuildReActGraph_ActiveSkillIntersectsKnowledgeWorkspaces(t *testing.T) 
 		AvailableTools:             []port.ToolDefinition{{Name: "stratum_search_knowledge", ProviderType: "builtin"}},
 		AgentKnowledgeWorkspaceIDs: []string{"kb-allowed", "kb-agent-only"},
 		SkillCatalog:               map[string]port.SkillActivation{"skill-a": {SkillID: "skill-a", Name: "skill-a", KnowledgeWorkspaceIDs: []string{"kb-allowed", "kb-skill-only"}}},
-		RAGSearchFn: func(_ context.Context, workspaces []string, _ string, _ int) (string, error) {
+		RAGSearchFn: func(_ context.Context, workspaces []string, _ string, _ int, _ string) (string, error) {
 			searched = workspaces
 			return "result", nil
 		},
@@ -364,7 +364,7 @@ func TestBuildReActGraph_KnowledgeRevisionFailureStopsBeforeSecondLLMCall(t *tes
 		Model: "qwen", Messages: []port.LLMMessage{{Role: "user", Content: "search"}},
 		AvailableTools:             []port.ToolDefinition{{Name: "stratum_search_knowledge", ProviderType: "builtin"}},
 		AgentKnowledgeWorkspaceIDs: []string{"Knowledge One"},
-		RAGSearchFn: func(context.Context, []string, string, int) (string, error) {
+		RAGSearchFn: func(context.Context, []string, string, int, string) (string, error) {
 			return "", fmt.Errorf("%w: vector backend unavailable", domain.ErrKnowledgeRevisionUnavailable)
 		},
 	}, graph.RunConfig[graph.ReActState]{MaxSteps: 5})
@@ -763,7 +763,7 @@ func TestBuildReActGraph_ActivesUnionKnowledgeWorkspaces(t *testing.T) {
 			"skill-a": {SkillID: "skill-a", Name: "skill-a", KnowledgeWorkspaceIDs: []string{"kb-allowed", "kb-skill-only"}},
 			"skill-b": {SkillID: "skill-b", Name: "skill-b", KnowledgeWorkspaceIDs: []string{"kb-agent-only"}},
 		},
-		RAGSearchFn: func(_ context.Context, workspaces []string, _ string, _ int) (string, error) {
+		RAGSearchFn: func(_ context.Context, workspaces []string, _ string, _ int, _ string) (string, error) {
 			searched = workspaces
 			return "result", nil
 		},
@@ -970,11 +970,11 @@ func TestBuildReActGraph_SearchKnowledgePrefersEvidenceFn(t *testing.T) {
 		Model: "qwen", Messages: []port.LLMMessage{{Role: "user", Content: "search"}},
 		AvailableTools:             []port.ToolDefinition{{Name: "stratum_search_knowledge", ProviderType: "builtin"}},
 		AgentKnowledgeWorkspaceIDs: []string{"kb"},
-		RAGSearchFn: func(context.Context, []string, string, int) (string, error) {
+		RAGSearchFn: func(context.Context, []string, string, int, string) (string, error) {
 			plainCalled = true
 			return "plain", nil
 		},
-		RAGSearchFnWithEvidence: func(context.Context, []string, string, int) (port.RAGSearchEvidence, error) {
+		RAGSearchFnWithEvidence: func(context.Context, []string, string, int, string) (port.RAGSearchEvidence, error) {
 			evidenceCalled = true
 			return port.RAGSearchEvidence{Content: "ev", Sources: []port.RAGSearchSource{
 				{WorkspaceID: "w1", WorkspaceName: "KB One", ChunkID: "c1", Score: 0.85, HasScore: true},
@@ -1017,7 +1017,7 @@ func TestBuildReActGraph_SearchKnowledgeFallsBackToPlainFn(t *testing.T) {
 		Model: "qwen", Messages: []port.LLMMessage{{Role: "user", Content: "search"}},
 		AvailableTools:             []port.ToolDefinition{{Name: "stratum_search_knowledge", ProviderType: "builtin"}},
 		AgentKnowledgeWorkspaceIDs: []string{"kb"},
-		RAGSearchFn: func(context.Context, []string, string, int) (string, error) {
+		RAGSearchFn: func(context.Context, []string, string, int, string) (string, error) {
 			return "plain result", nil
 		},
 	}, graph.RunConfig[graph.ReActState]{MaxSteps: 8})

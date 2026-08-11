@@ -68,6 +68,19 @@ func (r *deleteDocRepo) MarkIngestFailed(context.Context, string, string, string
 func (r *deleteDocRepo) RecoverStuckIngests(context.Context, string, time.Duration) (int, error) {
 	return 0, nil
 }
+func (r *deleteDocRepo) VisibleDocIDs(_ context.Context, _, _, _, _ string) ([]string, error) {
+	ids := make([]string, 0, len(r.docs))
+	for _, d := range r.docs {
+		ids = append(ids, d.ID)
+	}
+	return ids, nil
+}
+func (r *deleteDocRepo) GetByID(context.Context, string, string, string) (*domain.Document, error) {
+	return nil, domain.ErrDocumentNotFound
+}
+func (r *deleteDocRepo) SetDocAccess(context.Context, string, string, []string, []string) error {
+	return nil
+}
 
 type deleteVectorStore struct {
 	deletedCollection string
@@ -106,7 +119,7 @@ func TestDeleteDocumentRejectsProcessingDocument(t *testing.T) {
 	service.SetDocRepo(docs)
 	service.SetVectorStore(vectors)
 
-	err := service.DeleteDocument(context.Background(), "tenant-1", "docs", "doc-1")
+	err := service.DeleteDocument(context.Background(), "tenant-1", "docs", "doc-1", "user-1")
 
 	if !errors.Is(err, domain.ErrDocumentProcessing) {
 		t.Fatalf("expected ErrDocumentProcessing, got %v", err)
@@ -127,7 +140,7 @@ func TestDeleteDocumentCleansVectorsBeforeDocumentRecord(t *testing.T) {
 			service.SetDocRepo(docs)
 			service.SetVectorStore(vectors)
 
-			if err := service.DeleteDocument(context.Background(), "tenant-1", "docs", "doc-1"); err != nil {
+			if err := service.DeleteDocument(context.Background(), "tenant-1", "docs", "doc-1", "user-1"); err != nil {
 				t.Fatalf("DeleteDocument() error = %v", err)
 			}
 			if len(vectors.deletedDocIDs) != 1 || vectors.deletedDocIDs[0] != "doc-1" {

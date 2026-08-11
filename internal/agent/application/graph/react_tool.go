@@ -330,14 +330,19 @@ func execSearchKnowledgeTool(toolCtx context.Context, tc port.ToolCall, s *ReAct
 	var content string
 	var evidence map[string]any
 	var ragErr error
+	// evidenceRes carries the raw evidence for citation aggregation on the
+	// success path; zero-valued (empty sources) on the plain-search branch,
+	// where appendCitationSources is a no-op.
+	var evidenceRes port.RAGSearchEvidence
 	if s.RAGSearchFnWithEvidence != nil {
-		// Evidence-capable search: provenance travels with the content.
-		var res port.RAGSearchEvidence
-		res, ragErr = s.RAGSearchFnWithEvidence(ragCtx, workspaces, query, topK)
-		content = res.Content
-		evidence = ragEvidenceToMetadata(res)
+		// Evidence-capable search: provenance travels with the content. The
+		// viewer identity is threaded through state so the tool node stays
+		// signature-compatible with plain and evidence variants alike.
+		evidenceRes, ragErr = s.RAGSearchFnWithEvidence(ragCtx, workspaces, query, topK, s.ViewerID)
+		content = evidenceRes.Content
+		evidence = ragEvidenceToMetadata(evidenceRes)
 	} else {
-		content, ragErr = s.RAGSearchFn(ragCtx, workspaces, query, topK)
+		content, ragErr = s.RAGSearchFn(ragCtx, workspaces, query, topK, s.ViewerID)
 	}
 	ragCancel()
 	if ragErr != nil {
@@ -353,7 +358,37 @@ func execSearchKnowledgeTool(toolCtx context.Context, tc port.ToolCall, s *ReAct
 	logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
 		zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
 		zap.Int64("latency_ms", time.Since(toolStart).Milliseconds()))
+	s.appendCitationSources(evidenceRes)
 	return toolExecResult{content: content, status: domain.ToolTraceStatusSuccess, evidence: evidence}
+}
+
+// appendCitationSources merges retrieval evidence into the execution's
+// citation list for the chat UI: deduplicated by chunk ID (newest search
+// wins), capped at MaxAgentResultSources. Only evidence-capable searches
+// reach here, so the list is already viewer-filtered by the knowledge side.
+func (s *ReActState) appendCitationSources(evidence port.RAGSearchEvidence) {
+	if len(evidence.Sources) == 0 {
+		return
+	}
+	seen := make(map[string]bool, len(s.CitationSources)+len(evidence.Sources))
+	for _, existing := range s.CitationSources {
+		seen[existing.ChunkID] = true
+	}
+	var fresh []port.RAGSearchSource
+	for _, src := range evidence.Sources {
+		if src.ChunkID == "" || seen[src.ChunkID] {
+			continue
+		}
+		seen[src.ChunkID] = true
+		fresh = append(fresh, src)
+	}
+	if len(fresh) == 0 {
+		return
+	}
+	s.CitationSources = append(s.CitationSources, fresh...)
+	if len(s.CitationSources) > constants.MaxAgentResultSources {
+		s.CitationSources = s.CitationSources[len(s.CitationSources)-constants.MaxAgentResultSources:]
+	}
 }
 
 func execRecallMemoryTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time, logger *zap.Logger) toolExecResult {

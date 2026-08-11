@@ -17,7 +17,7 @@ func TestKnowledgeRepositoriesRejectInvalidTenantBeforeUsingPool(t *testing.T) {
 			return err
 		}},
 		{name: "chunk", call: func() error {
-			_, err := NewChunkRepo(nil).KeywordSearch(context.Background(), `bad"tenant`, "ws-1", "query", 1)
+			_, err := NewChunkRepo(nil).KeywordSearch(context.Background(), `bad"tenant`, "ws-1", "query", nil, 1)
 			return err
 		}},
 	}

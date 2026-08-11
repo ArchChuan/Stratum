@@ -8,6 +8,7 @@ import { BUBBLE, ChatMarkdown } from './ChatMarkdown';
 import { ChatStepList } from './ChatStepList';
 import { DiagnosticReport } from './DiagnosticReport';
 import { ResourceChangeProposalCard } from './ResourceChangeProposalCard';
+import { SourceCardList } from './SourceCardList';
 
 const { Text } = Typography;
 
@@ -114,6 +115,8 @@ const MessageItem = memo(function MessageItem({
                 />
               ) : null;
             })}
+            {/* P1.4: 回答引用的来源文档卡片（点击预览原文） */}
+            <SourceCardList sources={m.sources} />
           </>
         )}
         {m.interrupted && (

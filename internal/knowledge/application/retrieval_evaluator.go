@@ -107,7 +107,10 @@ func NewRetrievalEvaluator(retriever EvaluationRetriever) *RetrievalEvaluator {
 func (e *RetrievalEvaluator) EvaluateRetrieval(
 	ctx context.Context, snapshot RetrievalSnapshot, testCase RetrievalCase,
 ) (RetrievalEvaluation, error) {
-	sources, err := e.retrieveSources(ctx, snapshot, testCase.Query)
+	// The evaluation worker runs as a tenant-admin privileged path (no end-user
+	// viewer identity): SkipAccessCheck is the explicit bypass equivalent to
+	// the admin-owner exemption in the D1 matrix, never an implicit full scan.
+	sources, err := e.retrieveSources(ctx, snapshot, testCase.Query, "")
 	if err != nil {
 		return RetrievalEvaluation{}, err
 	}
@@ -126,9 +129,14 @@ func (e *RetrievalEvaluator) EvaluateRetrieval(
 }
 
 func (e *RetrievalEvaluator) RetrieveContext(
-	ctx context.Context, snapshot RetrievalSnapshot, query string,
+	ctx context.Context, snapshot RetrievalSnapshot, query, viewerID string,
 ) (string, error) {
-	sources, err := e.retrieveSources(ctx, snapshot, query)
+	// D3 gate: this path resolves no visible set itself (the snapshot carries
+	// only workspace identity), so an empty viewer identity fails closed.
+	if viewerID == "" {
+		return "", errors.New("knowledge retrieval: viewer identity required")
+	}
+	sources, err := e.retrieveSources(ctx, snapshot, query, viewerID)
 	if err != nil {
 		return "", err
 	}
@@ -141,7 +149,7 @@ func (e *RetrievalEvaluator) RetrieveContext(
 }
 
 func (e *RetrievalEvaluator) retrieveSources(
-	ctx context.Context, snapshot RetrievalSnapshot, rawQuery string,
+	ctx context.Context, snapshot RetrievalSnapshot, rawQuery, viewerID string,
 ) ([]Source, error) {
 	if e == nil || e.retriever == nil {
 		return nil, errors.New("knowledge retrieval evaluator unavailable")
@@ -160,6 +168,11 @@ func (e *RetrievalEvaluator) retrieveSources(
 		Reranking:      snapshot.Reranking,
 		ScoreThreshold: float32(snapshot.ScoreThreshold),
 		RerankTopK:     snapshot.TopK,
+		// The internal worker path (EvaluateRetrieval) has no end-user viewer
+		// identity and explicitly bypasses the D2 gate — the D1 admin-owner
+		// equivalent. System-actor contexts bypass too (privileged wiring).
+		ViewerID:        viewerID,
+		SkipAccessCheck: viewerID == "" || reqctx.SystemActorFromContext(ctx) != "",
 	})
 	if err != nil {
 		return nil, ErrRetrievalDependency

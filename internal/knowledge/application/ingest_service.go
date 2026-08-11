@@ -120,6 +120,12 @@ type IngestDocumentRequest struct {
 	FileName         string
 	DocumentID       string
 	ContentHash      string
+	// AllowedUserIDs/AllowedRoleIDs form the document-level access whitelist;
+	// both empty => unrestricted (inherits workspace visibility). CreatedBy is
+	// the uploading actor, implicitly allowed to see the document.
+	AllowedUserIDs []string
+	AllowedRoleIDs []string
+	CreatedBy      string
 }
 
 type IngestResult struct {
@@ -206,12 +212,15 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 	// fails we release the queue slot and abort — client sees the error.
 	if ki.docRepo != nil {
 		doc := &domain.Document{
-			ID:           req.DocumentID,
-			KBID:         req.WorkspaceID,
-			Source:       req.FileName,
-			ContentHash:  req.ContentHash,
-			IngestStatus: constants.IngestStatusProcessing,
-			TotalChunks:  len(chunkResult.Leaves),
+			ID:             req.DocumentID,
+			KBID:           req.WorkspaceID,
+			Source:         req.FileName,
+			ContentHash:    req.ContentHash,
+			IngestStatus:   constants.IngestStatusProcessing,
+			TotalChunks:    len(chunkResult.Leaves),
+			AllowedUserIDs: req.AllowedUserIDs,
+			AllowedRoleIDs: req.AllowedRoleIDs,
+			CreatedBy:      req.CreatedBy,
 		}
 		if err := ki.docRepo.Save(ctx, req.TenantID, req.WorkspaceID, doc); err != nil {
 			<-ki.queueSem

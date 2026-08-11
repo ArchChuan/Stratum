@@ -12,6 +12,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/platformknowledge"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -51,6 +52,7 @@ func TestRAGQueryKeywordUsesWorkspaceID(t *testing.T) {
 		Question:    "如何申请",
 		Mode:        "keyword",
 		TopK:        3,
+		ViewerID:    "test-user",
 	})
 	if err != nil {
 		t.Fatalf("expected keyword query to succeed, got %v", err)
@@ -119,6 +121,7 @@ func TestRAGQuerySanitizesDependencyErrorsAndLogs(t *testing.T) {
 			}
 			_, err := service.Query(context.Background(), RAGQueryRequest{
 				TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: mode, TopK: 5,
+				ViewerID: "test-user",
 			})
 			if !errors.Is(err, ErrRAGDependency) || errors.Is(err, sensitive) {
 				t.Fatalf("dependency classification/cause exposure mismatch: %v", err)
@@ -155,6 +158,7 @@ func TestRAGQueryDoesNotLogQuestionContent(t *testing.T) {
 	_, err := service.Query(context.Background(), RAGQueryRequest{
 		TenantID: "tenant-1", WorkspaceID: "workspace-1",
 		Question: "rag-sensitive-sentinel", Mode: "keyword", TopK: 3,
+		ViewerID: "test-user",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -189,6 +193,10 @@ func TestRAGQueryKeywordResolvesWorkspaceIDByName(t *testing.T) {
 		Question:  "如何申请",
 		Mode:      "keyword",
 		TopK:      3,
+		// This test exercises name→ID resolution, not access semantics: the
+		// service has no role/doc dependency wired, so the D2 gate is
+		// explicitly bypassed the way a system-actor wiring path would.
+		SkipAccessCheck: true,
 	})
 	if err != nil {
 		t.Fatalf("expected keyword query to succeed, got %v", err)
@@ -211,6 +219,7 @@ func TestRAGQueryKeywordDefaultsTopK(t *testing.T) {
 		Question:    "如何申请",
 		Mode:        "keyword",
 		TopK:        0,
+		ViewerID:    "test-user",
 	})
 	if err != nil {
 		t.Fatalf("expected keyword query to succeed, got %v", err)
@@ -231,6 +240,7 @@ func TestRAGQueryKeywordRequiresWorkspaceIDWhenNameCannotBeResolved(t *testing.T
 		Question: "如何申请",
 		Mode:     "keyword",
 		TopK:     3,
+		ViewerID: "test-user",
 	})
 	if err == nil {
 		t.Fatal("expected keyword query without workspace ID to fail, got nil")
@@ -258,8 +268,12 @@ func TestNewRAGSearchFnResolvesWorkspaceNameToID(t *testing.T) {
 			},
 		},
 	})
+	// The D1 matrix requires a role/doc provider even for owner viewers, so
+	// both fakes are wired; role "owner" makes the search unrestricted.
+	service.SetTenantRoleResolver(stubRoleResolver{role: "owner"})
+	service.SetDocRepo(stubDocRepo{})
 
-	fn := NewRAGSearchFn(service, "tenant-1")
+	fn := NewRAGSearchFn(service, "tenant-1", "viewer-1")
 	content, err := fn(context.Background(), []string{"个人知识库"}, "学习", 3)
 	if err != nil {
 		t.Fatalf("expected search to succeed, got %v", err)
@@ -278,10 +292,17 @@ func TestNewRAGSearchFnResolvesWorkspaceNameToID(t *testing.T) {
 type recordingChunkRepo struct {
 	workspaceID string
 	topK        int
+	docIDs      []string
 	chunks      []domain.Chunk
 	insertErr   error
 	parentErr   error
 	searchErr   error
+	// listByDoc drives ListByDoc (preview); the last call's docID is recorded
+	// in lastDocID so tests can assert the double constraint.
+	listByDoc  []domain.Chunk
+	listByErr  error
+	lastDocID  string
+	lastParent *port.ParentChunk
 }
 
 func (r *recordingChunkRepo) InsertBatch(ctx context.Context, tenantID, workspaceID string, chunks []domain.Chunk) error {
@@ -289,8 +310,9 @@ func (r *recordingChunkRepo) InsertBatch(ctx context.Context, tenantID, workspac
 	return r.insertErr
 }
 
-func (r *recordingChunkRepo) KeywordSearch(ctx context.Context, tenantID, workspaceID, query string, topK int) ([]domain.Chunk, error) {
+func (r *recordingChunkRepo) KeywordSearch(ctx context.Context, tenantID, workspaceID, query string, docIDs []string, topK int) ([]domain.Chunk, error) {
 	r.workspaceID = workspaceID
+	r.docIDs = docIDs
 	r.topK = topK
 	return r.chunks, r.searchErr
 }
@@ -305,7 +327,13 @@ func (r *recordingChunkRepo) InsertParentBatch(_ context.Context, _, _ string, _
 }
 
 func (r *recordingChunkRepo) GetParentByID(_ context.Context, _, _, _ string) (*port.ParentChunk, error) {
-	return nil, nil
+	return r.lastParent, r.parentErr
+}
+
+func (r *recordingChunkRepo) ListByDoc(ctx context.Context, tenantID, workspaceID, docID string) ([]domain.Chunk, error) {
+	r.workspaceID = workspaceID
+	r.lastDocID = docID
+	return r.listByDoc, r.listByErr
 }
 
 func (r *recordingChunkRepo) GetChunksByIDs(_ context.Context, _, _ string, _ []string) ([]domain.Chunk, error) {
@@ -416,7 +444,7 @@ type blockingChunkRepo struct {
 	max     int32
 }
 
-func (r *blockingChunkRepo) KeywordSearch(_ context.Context, _, _, _ string, _ int) ([]domain.Chunk, error) {
+func (r *blockingChunkRepo) KeywordSearch(_ context.Context, _, _, _ string, _ []string, _ int) ([]domain.Chunk, error) {
 	inFlight := atomic.AddInt32(&r.current, 1)
 	for {
 		peak := atomic.LoadInt32(&r.max)
@@ -444,6 +472,8 @@ func TestNewRAGSearchFn_FanoutBoundedByMaxConcurrentWorkspaceSearch(t *testing.T
 			},
 		},
 	})
+	svc.SetTenantRoleResolver(stubRoleResolver{role: "owner"})
+	svc.SetDocRepo(stubDocRepo{})
 
 	const wsCount = 6
 	names := make([]string, wsCount)
@@ -453,7 +483,7 @@ func TestNewRAGSearchFn_FanoutBoundedByMaxConcurrentWorkspaceSearch(t *testing.T
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = NewRAGSearchFn(svc, "tenant-1")(context.Background(), names, "学习", 3)
+		_, _ = NewRAGSearchFn(svc, "tenant-1", "viewer-1")(context.Background(), names, "学习", 3)
 	}()
 
 	limit := int32(constants.MaxConcurrentWorkspaceSearch)
@@ -485,4 +515,467 @@ func TestNewRAGSearchFn_FanoutBoundedByMaxConcurrentWorkspaceSearch(t *testing.T
 
 func itoa(n int) string {
 	return string(rune('0' + n))
+}
+
+// stubRoleResolver returns a fixed tenant role; RAGService tests use it to
+// exercise the D1 matrix without an IAM dependency.
+type stubRoleResolver struct{ role string }
+
+func (s stubRoleResolver) ResolveTenantRole(context.Context, string, string) (string, error) {
+	return s.role, nil
+}
+
+// stubDocRepo is an inert DocRepo fake whose VisibleDocIDs returns a fixed
+// whitelist and List returns the configured docs; the remaining methods are
+// stubs so RAGService tests can wire doc-level visibility without a database.
+type stubDocRepo struct {
+	visible []string
+	docs    []*domain.Document
+	listErr error
+	// doc is returned by GetByID; nil means "not found".
+	doc *domain.Document
+}
+
+func (s stubDocRepo) Save(context.Context, string, string, *domain.Document) error { return nil }
+func (s stubDocRepo) List(context.Context, string, string) ([]*domain.Document, error) {
+	return s.docs, s.listErr
+}
+func (s stubDocRepo) Delete(context.Context, string, string, string) error { return nil }
+func (s stubDocRepo) ExistsByHash(context.Context, string, string, string) (bool, error) {
+	return false, nil
+}
+func (s stubDocRepo) CountByWorkspace(context.Context, string, string) (int, error) {
+	return 0, nil
+}
+func (s stubDocRepo) MarkIngestStarted(context.Context, string, string, int) error   { return nil }
+func (s stubDocRepo) MarkIngestCompleted(context.Context, string, string, int) error { return nil }
+func (s stubDocRepo) MarkIngestFailed(context.Context, string, string, string) error { return nil }
+func (s stubDocRepo) RecoverStuckIngests(context.Context, string, time.Duration) (int, error) {
+	return 0, nil
+}
+func (s stubDocRepo) VisibleDocIDs(context.Context, string, string, string, string) ([]string, error) {
+	return s.visible, nil
+}
+func (s stubDocRepo) GetByID(context.Context, string, string, string) (*domain.Document, error) {
+	return s.doc, nil
+}
+func (s stubDocRepo) SetDocAccess(context.Context, string, string, []string, []string) error {
+	return nil
+}
+
+// countingEmbedder wraps mockEmbedder and counts EmbedVector calls so the
+// empty-whitelist test can assert the embed path is never entered.
+type countingEmbedder struct {
+	mockEmbedder
+	calls atomic.Int32
+}
+
+func (c *countingEmbedder) EmbedVector(ctx context.Context, text string) ([]float32, error) {
+	c.calls.Add(1)
+	return c.mockEmbedder.EmbedVector(ctx, text)
+}
+
+// memberWorkspace returns a workspace created by someone else, so a viewer is
+// a plain member whose visibility comes from docRepo.VisibleDocIDs.
+func memberWorkspace() *domain.Workspace {
+	return &domain.Workspace{ID: "workspace-1", Name: "support", CreatedBy: "other-user"}
+}
+
+func TestRAGQueryFailsClosedWithoutViewerIdentity(t *testing.T) {
+	service := NewRAGService(&mockEmbedder{dim: 3}, NewMockVectorStore(), zap.NewNop())
+	_, err := service.Query(context.Background(), RAGQueryRequest{
+		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector", TopK: 5,
+	})
+	if !errors.Is(err, ErrRAGDependency) {
+		t.Fatalf("D2 gate must fail closed without viewer identity, got %v", err)
+	}
+}
+
+func TestRAGQuerySkipAccessCheckBypassesD2Gate(t *testing.T) {
+	service := NewRAGService(&mockEmbedder{dim: 3}, NewMockVectorStore(), zap.NewNop())
+	_, err := service.Query(context.Background(), RAGQueryRequest{
+		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector", TopK: 5,
+		SkipAccessCheck: true,
+	})
+	if err != nil {
+		t.Fatalf("explicit SkipAccessCheck must pass the D2 gate, got %v", err)
+	}
+}
+
+func TestRAGQueryVectorFiltersByVisibleDocIDs(t *testing.T) {
+	vectors := NewMockVectorStore()
+	vectors.SetSearchResults([]port.VectorSearchResult{{
+		ID: "c1", SourceDocument: "doc-visible", Content: "hit", Score: 0.9,
+	}})
+	service := NewRAGService(&mockEmbedder{dim: 3}, vectors, zap.NewNop())
+	service.SetWorkspaceRepo(&recordingWorkspaceRepo{workspace: memberWorkspace()})
+	service.SetTenantRoleResolver(stubRoleResolver{role: "member"})
+	service.SetDocRepo(stubDocRepo{visible: []string{"doc-visible"}})
+
+	result, err := service.Query(context.Background(), RAGQueryRequest{
+		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector", TopK: 5,
+		ViewerID: "viewer-1",
+	})
+	if err != nil {
+		t.Fatalf("expected vector query to succeed, got %v", err)
+	}
+	if len(result.Sources) != 1 {
+		t.Fatalf("expected 1 source, got %d", len(result.Sources))
+	}
+	if !strings.Contains(vectors.lastExpression, `"doc-visible"`) {
+		t.Fatalf("vector leg expression %q missing the visible doc", vectors.lastExpression)
+	}
+}
+
+func TestRAGQueryKeywordFiltersByVisibleDocIDs(t *testing.T) {
+	chunks := &recordingChunkRepo{chunks: []domain.Chunk{{ID: "c1", DocID: "doc-visible", Text: "hit"}}}
+	service := NewRAGService(nil, nil, zap.NewNop())
+	service.SetChunkRepo(chunks)
+	service.SetWorkspaceRepo(&recordingWorkspaceRepo{workspace: memberWorkspace()})
+	service.SetTenantRoleResolver(stubRoleResolver{role: "member"})
+	service.SetDocRepo(stubDocRepo{visible: []string{"doc-visible"}})
+
+	_, err := service.Query(context.Background(), RAGQueryRequest{
+		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "keyword", TopK: 5,
+		ViewerID: "viewer-1",
+	})
+	if err != nil {
+		t.Fatalf("expected keyword query to succeed, got %v", err)
+	}
+	if len(chunks.docIDs) != 1 || chunks.docIDs[0] != "doc-visible" {
+		t.Fatalf("keyword leg received docIDs %v, want [doc-visible]", chunks.docIDs)
+	}
+}
+
+func TestRAGQueryHybridFiltersBothLegs(t *testing.T) {
+	vectors := NewMockVectorStore()
+	vectors.SetSearchResults([]port.VectorSearchResult{{
+		ID: "c1", SourceDocument: "doc-visible", Content: "vector hit", Score: 0.9,
+	}})
+	chunks := &recordingChunkRepo{chunks: []domain.Chunk{{ID: "c2", DocID: "doc-visible", Text: "keyword hit"}}}
+	service := NewRAGService(&mockEmbedder{dim: 3}, vectors, zap.NewNop())
+	service.SetChunkRepo(chunks)
+	service.SetWorkspaceRepo(&recordingWorkspaceRepo{workspace: memberWorkspace()})
+	service.SetTenantRoleResolver(stubRoleResolver{role: "member"})
+	service.SetDocRepo(stubDocRepo{visible: []string{"doc-visible"}})
+
+	result, err := service.Query(context.Background(), RAGQueryRequest{
+		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "hybrid", TopK: 5,
+		ViewerID: "viewer-1",
+	})
+	if err != nil {
+		t.Fatalf("expected hybrid query to succeed, got %v", err)
+	}
+	if len(result.Sources) == 0 {
+		t.Fatal("expected hybrid query to return sources")
+	}
+	if !strings.Contains(vectors.lastExpression, `"doc-visible"`) {
+		t.Fatalf("hybrid vector leg expression %q missing the visible doc", vectors.lastExpression)
+	}
+	if len(chunks.docIDs) != 1 || chunks.docIDs[0] != "doc-visible" {
+		t.Fatalf("hybrid keyword leg received docIDs %v, want [doc-visible]", chunks.docIDs)
+	}
+}
+
+func TestRAGQueryEmptyVisibleSetReturnsEmptyWithoutEmbedding(t *testing.T) {
+	embedder := &countingEmbedder{}
+	vectors := NewMockVectorStore()
+	service := NewRAGService(embedder, vectors, zap.NewNop())
+	service.SetWorkspaceRepo(&recordingWorkspaceRepo{workspace: memberWorkspace()})
+	service.SetTenantRoleResolver(stubRoleResolver{role: "member"})
+	service.SetDocRepo(stubDocRepo{visible: nil})
+
+	result, err := service.Query(context.Background(), RAGQueryRequest{
+		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector", TopK: 5,
+		ViewerID: "viewer-1",
+	})
+	if err != nil {
+		t.Fatalf("expected empty result, not error, got %v", err)
+	}
+	if len(result.Sources) != 0 {
+		t.Fatalf("expected no sources for an empty visible set, got %d", len(result.Sources))
+	}
+	if embedder.calls.Load() != 0 {
+		t.Fatalf("embedder must not be called when the visible set is empty, got %d calls", embedder.calls.Load())
+	}
+	if vectors.lastExpression != "" {
+		t.Fatalf("vector store must not be searched, got expression %q", vectors.lastExpression)
+	}
+}
+
+func TestRAGQueryOwnerRoleIsUnrestricted(t *testing.T) {
+	vectors := NewMockVectorStore()
+	vectors.SetSearchResults([]port.VectorSearchResult{{
+		ID: "c1", SourceDocument: "doc", Content: "hit", Score: 0.9,
+	}})
+	service := NewRAGService(&mockEmbedder{dim: 3}, vectors, zap.NewNop())
+	service.SetChunkRepo(&recordingChunkRepo{})
+	service.SetWorkspaceRepo(&recordingWorkspaceRepo{workspace: memberWorkspace()})
+	service.SetTenantRoleResolver(stubRoleResolver{role: "owner"})
+	service.SetDocRepo(stubDocRepo{visible: []string{"doc-private"}})
+
+	result, err := service.Query(context.Background(), RAGQueryRequest{
+		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector", TopK: 5,
+		ViewerID: "viewer-1",
+	})
+	if err != nil {
+		t.Fatalf("expected owner query to succeed, got %v", err)
+	}
+	if len(result.Sources) != 1 {
+		t.Fatalf("expected 1 source, got %d", len(result.Sources))
+	}
+	if vectors.lastExpression != "" {
+		t.Fatalf("owner query must not filter, got expression %q", vectors.lastExpression)
+	}
+}
+
+func TestBuildDocFilterExprQuotesAndEscapes(t *testing.T) {
+	if expr := buildDocFilterExpr(nil); expr != "" {
+		t.Fatalf("empty whitelist must yield no filter, got %q", expr)
+	}
+	if expr := buildDocFilterExpr([]string{}); expr != "" {
+		t.Fatalf("empty whitelist must yield no filter, got %q", expr)
+	}
+	expr := buildDocFilterExpr([]string{`doc"quoted`, `back\slash`})
+	if !strings.HasPrefix(expr, "source_document in [") {
+		t.Fatalf("unexpected expression prefix: %q", expr)
+	}
+	if !strings.Contains(expr, `"doc\"quoted"`) || !strings.Contains(expr, `"back\\slash"`) {
+		t.Fatalf(`ids must be %q-quoted with " and \ escaped: %q`, expr, expr)
+	}
+}
+
+func TestFilterExprTooLong(t *testing.T) {
+	if filterExprTooLong("") {
+		t.Fatal("empty expression must not be too long")
+	}
+	atLimit := strings.Repeat("x", constants.MaxMilvusFilterLen)
+	if filterExprTooLong(atLimit) {
+		t.Fatal("expression at the limit must be accepted")
+	}
+	if !filterExprTooLong(strings.Repeat("x", constants.MaxMilvusFilterLen+1)) {
+		t.Fatal("expression beyond the limit must be rejected")
+	}
+}
+
+func TestRAGSearchEvidenceCarriesCitationMetadata(t *testing.T) {
+	vectors := NewMockVectorStore()
+	vectors.SetSearchResults([]port.VectorSearchResult{{
+		ID: "c1", SourceDocument: "doc-visible", Content: "hit", Score: 0.9,
+	}})
+	service := NewRAGService(&mockEmbedder{dim: 3}, vectors, zap.NewNop())
+	service.SetChunkRepo(&recordingChunkRepo{})
+	service.SetWorkspaceRepo(&recordingWorkspaceRepo{workspace: memberWorkspace()})
+	service.SetTenantRoleResolver(stubRoleResolver{role: "member"})
+	service.SetDocRepo(stubDocRepo{
+		visible: []string{"doc-visible"},
+		docs:    []*domain.Document{{ID: "doc-visible", Source: "annual-report.pdf"}},
+	})
+
+	fn := NewRAGSearchEvidenceFn(service, "tenant-1", "viewer-1")
+	ev, err := fn(context.Background(), []string{"support"}, "query", 5)
+	if err != nil {
+		t.Fatalf("expected evidence search to succeed, got %v", err)
+	}
+	if len(ev.Sources) != 1 {
+		t.Fatalf("expected 1 source, got %d", len(ev.Sources))
+	}
+	src := ev.Sources[0]
+	if src.DocumentID != "doc-visible" {
+		t.Fatalf("DocumentID = %q, want doc-visible", src.DocumentID)
+	}
+	if src.DocumentTitle != "annual-report.pdf" {
+		t.Fatalf("DocumentTitle = %q, want annual-report.pdf", src.DocumentTitle)
+	}
+	if src.Snippet != "hit" {
+		t.Fatalf("Snippet = %q, want hit", src.Snippet)
+	}
+}
+
+func TestRAGSearchEvidenceSnippetTruncatedToConstant(t *testing.T) {
+	long := strings.Repeat("很", constants.MaxSourceSnippetRunes+50)
+	vectors := NewMockVectorStore()
+	vectors.SetSearchResults([]port.VectorSearchResult{{
+		ID: "c1", SourceDocument: "doc-visible", Content: long, Score: 0.9,
+	}})
+	service := NewRAGService(&mockEmbedder{dim: 3}, vectors, zap.NewNop())
+	service.SetChunkRepo(&recordingChunkRepo{})
+	service.SetWorkspaceRepo(&recordingWorkspaceRepo{workspace: memberWorkspace()})
+	service.SetTenantRoleResolver(stubRoleResolver{role: "member"})
+	service.SetDocRepo(stubDocRepo{visible: []string{"doc-visible"}})
+
+	fn := NewRAGSearchEvidenceFn(service, "tenant-1", "viewer-1")
+	ev, err := fn(context.Background(), []string{"support"}, "query", 5)
+	if err != nil {
+		t.Fatalf("expected evidence search to succeed, got %v", err)
+	}
+	if len(ev.Sources) != 1 {
+		t.Fatalf("expected 1 source, got %d", len(ev.Sources))
+	}
+	if got := len([]rune(ev.Sources[0].Snippet)); got != constants.MaxSourceSnippetRunes {
+		t.Fatalf("Snippet length = %d runes, want %d", got, constants.MaxSourceSnippetRunes)
+	}
+}
+
+func TestRAGSearchEvidenceTitlesDegradeOnRepoFailure(t *testing.T) {
+	vectors := NewMockVectorStore()
+	vectors.SetSearchResults([]port.VectorSearchResult{{
+		ID: "c1", SourceDocument: "doc-visible", Content: "hit", Score: 0.9,
+	}})
+	service := NewRAGService(&mockEmbedder{dim: 3}, vectors, zap.NewNop())
+	service.SetChunkRepo(&recordingChunkRepo{})
+	service.SetWorkspaceRepo(&recordingWorkspaceRepo{workspace: memberWorkspace()})
+	service.SetTenantRoleResolver(stubRoleResolver{role: "member"})
+	service.SetDocRepo(stubDocRepo{visible: []string{"doc-visible"}, listErr: errors.New("db down")})
+
+	// A title lookup failure must not fail retrieval: citation titles are
+	// display metadata; the visible-set filter already ran inside Query.
+	fn := NewRAGSearchEvidenceFn(service, "tenant-1", "viewer-1")
+	ev, err := fn(context.Background(), []string{"support"}, "query", 5)
+	if err != nil {
+		t.Fatalf("evidence search must survive title repo failure, got %v", err)
+	}
+	if len(ev.Sources) != 1 || ev.Sources[0].DocumentID != "doc-visible" {
+		t.Fatalf("sources lost despite title failure: %+v", ev.Sources)
+	}
+	if ev.Sources[0].DocumentTitle != "" {
+		t.Fatalf("DocumentTitle = %q, want empty on repo failure", ev.Sources[0].DocumentTitle)
+	}
+}
+
+func TestTruncateRunes(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		n    int
+		want string
+	}{
+		{name: "empty", in: "", n: 10, want: ""},
+		{name: "nonpositive limit", in: "abc", n: 0, want: ""},
+		{name: "shorter than limit", in: "abc", n: 10, want: "abc"},
+		{name: "exact length", in: "abc", n: 3, want: "abc"},
+		{name: "cut at rune boundary", in: "很长的内容", n: 3, want: "很长的"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := truncateRunes(tc.in, tc.n); got != tc.want {
+				t.Fatalf("truncateRunes(%q, %d) = %q, want %q", tc.in, tc.n, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPreviewDocumentInvisibleAndNonexistentUniformlyNotFound(t *testing.T) {
+	service := NewRAGService(nil, nil, zap.NewNop())
+	service.SetWorkspaceRepo(&recordingWorkspaceRepo{workspace: memberWorkspace()})
+	service.SetTenantRoleResolver(stubRoleResolver{role: "member"})
+	service.SetChunkRepo(&recordingChunkRepo{})
+
+	// Invisible: whitelist does not contain the requested doc.
+	service.SetDocRepo(stubDocRepo{visible: []string{"doc-a"}, doc: &domain.Document{ID: "doc-b"}})
+	_, err := service.PreviewDocument(context.Background(), "tenant-1", "support", "doc-b", "viewer-1")
+	if !errors.Is(err, domain.ErrDocumentNotFound) {
+		t.Fatalf("invisible doc must surface as ErrDocumentNotFound (no existence leak), got %v", err)
+	}
+
+	// Nonexistent: whitelist contains it but the doc row is missing.
+	service.SetDocRepo(stubDocRepo{visible: []string{"doc-b"}, doc: nil})
+	_, err = service.PreviewDocument(context.Background(), "tenant-1", "support", "doc-b", "viewer-1")
+	if !errors.Is(err, domain.ErrDocumentNotFound) {
+		t.Fatalf("missing doc must surface as ErrDocumentNotFound, got %v", err)
+	}
+}
+
+func TestPreviewDocumentFailsClosedWithoutIdentityOrRepos(t *testing.T) {
+	service := NewRAGService(nil, nil, zap.NewNop())
+	service.SetWorkspaceRepo(&recordingWorkspaceRepo{workspace: memberWorkspace()})
+	service.SetTenantRoleResolver(stubRoleResolver{role: "member"})
+	service.SetDocRepo(stubDocRepo{visible: []string{"doc-a"}, doc: &domain.Document{ID: "doc-a"}})
+
+	// chunkRepo missing → dependency fail closed.
+	if _, err := service.PreviewDocument(context.Background(), "tenant-1", "support", "doc-a", "viewer-1"); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("missing chunkRepo must fail closed, got %v", err)
+	}
+
+	service.SetChunkRepo(&recordingChunkRepo{})
+	// Empty viewer identity → fail closed (preview is a user read path).
+	if _, err := service.PreviewDocument(context.Background(), "tenant-1", "support", "doc-a", ""); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("empty viewerID must fail closed, got %v", err)
+	}
+}
+
+func TestPreviewDocumentUnknownWorkspaceNotFound(t *testing.T) {
+	service := NewRAGService(nil, nil, zap.NewNop())
+	service.SetWorkspaceRepo(&recordingWorkspaceRepo{workspace: nil})
+	service.SetTenantRoleResolver(stubRoleResolver{role: "member"})
+	service.SetDocRepo(stubDocRepo{visible: []string{"doc-a"}})
+	service.SetChunkRepo(&recordingChunkRepo{})
+
+	if _, err := service.PreviewDocument(context.Background(), "tenant-1", "ghost", "doc-a", "viewer-1"); !errors.Is(err, domain.ErrDocumentNotFound) {
+		t.Fatalf("unknown workspace must surface as ErrDocumentNotFound, got %v", err)
+	}
+}
+
+func TestPreviewDocumentReassemblesChunksWithParents(t *testing.T) {
+	chunks := &recordingChunkRepo{
+		listByDoc: []domain.Chunk{
+			{ID: "c1", DocID: "doc-a", Index: 0, Text: "leaf-0"},
+			{ID: "c2", DocID: "doc-a", Index: 1, Text: "leaf-1", ParentID: "p1"},
+			{ID: "c3", DocID: "doc-a", Index: 2, Text: "leaf-2"},
+		},
+		lastParent: &port.ParentChunk{ID: "p1", Content: "parent-context"},
+	}
+	service := NewRAGService(nil, nil, zap.NewNop())
+	service.SetWorkspaceRepo(&recordingWorkspaceRepo{workspace: memberWorkspace()})
+	service.SetTenantRoleResolver(stubRoleResolver{role: "member"})
+	service.SetDocRepo(stubDocRepo{
+		visible: []string{"doc-a"},
+		doc:     &domain.Document{ID: "doc-a", Source: "annual-report.pdf"},
+	})
+	service.SetChunkRepo(chunks)
+
+	preview, err := service.PreviewDocument(context.Background(), "tenant-1", "support", "doc-a", "viewer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.DocumentID != "doc-a" || preview.DocumentTitle != "annual-report.pdf" {
+		t.Fatalf("preview identity wrong: %+v", preview)
+	}
+	if preview.ChunkCount != 3 || len(preview.Segments) != 3 {
+		t.Fatalf("expected 3 segments, got count=%d len=%d", preview.ChunkCount, len(preview.Segments))
+	}
+	if chunks.lastDocID != "doc-a" || chunks.workspaceID != "workspace-1" {
+		t.Fatalf("ListByDoc must carry workspace+doc double constraint, got ws=%q doc=%q", chunks.workspaceID, chunks.lastDocID)
+	}
+	seg1 := preview.Segments[1]
+	if seg1.ParentContent != "parent-context" {
+		t.Fatalf("expected parent content attached to leaf-1, got %q", seg1.ParentContent)
+	}
+	for i, seg := range preview.Segments {
+		if seg.Index != int64(i) || seg.Content != "leaf-"+string(rune('0'+i)) {
+			t.Fatalf("segment %d out of order: %+v", i, seg)
+		}
+	}
+}
+
+func TestPreviewDocumentPlatformManagedSkipsWhitelist(t *testing.T) {
+	chunks := &recordingChunkRepo{listByDoc: []domain.Chunk{{ID: "c1", DocID: "doc-a", Index: 0, Text: "hit"}}}
+	service := NewRAGService(nil, nil, zap.NewNop())
+	// Built-in knowledge: SystemKey set, member viewer, whitelist would NOT
+	// include doc-a — exemption must still serve the preview.
+	service.SetWorkspaceRepo(&recordingWorkspaceRepo{workspace: &domain.Workspace{
+		ID: "workspace-1", Name: "support", CreatedBy: "other-user",
+		SystemKey: platformknowledge.SystemWorkspaceKey,
+	}})
+	service.SetTenantRoleResolver(stubRoleResolver{role: "member"})
+	service.SetDocRepo(stubDocRepo{visible: []string{}, doc: &domain.Document{ID: "doc-a", Source: "builtin.md"}})
+	service.SetChunkRepo(chunks)
+
+	preview, err := service.PreviewDocument(context.Background(), "tenant-1", "support", "doc-a", "viewer-1")
+	if err != nil {
+		t.Fatalf("platform-managed workspace must exempt whitelist, got %v", err)
+	}
+	if preview.DocumentTitle != "builtin.md" || len(preview.Segments) != 1 {
+		t.Fatalf("unexpected preview: %+v", preview)
+	}
 }

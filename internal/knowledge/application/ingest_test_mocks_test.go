@@ -102,6 +102,18 @@ func (m *mockDocRepo) List(_ context.Context, _, _ string) ([]*domain.Document, 
 
 func (m *mockDocRepo) Delete(_ context.Context, _, _, _ string) error { return nil }
 
+// VisibleDocIDs / GetByID / SetDocAccess are not exercised by ingest tests;
+// return safe defaults so the mock keeps satisfying the expanded port.
+func (m *mockDocRepo) VisibleDocIDs(context.Context, string, string, string, string) ([]string, error) {
+	return nil, nil
+}
+func (m *mockDocRepo) GetByID(context.Context, string, string, string) (*domain.Document, error) {
+	return nil, domain.ErrDocumentNotFound
+}
+func (m *mockDocRepo) SetDocAccess(context.Context, string, string, []string, []string) error {
+	return nil
+}
+
 func (m *mockDocRepo) ExistsByHash(_ context.Context, _, _, hash string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -33,6 +33,13 @@ const (
 
 	// RerankHTTPTimeout bounds a single external reranker call (10s).
 	RerankHTTPTimeout = 10 * time.Second
+
+	// MaxMilvusFilterLen is the maximum byte length of a Milvus filter
+	// expression (docs: filters with large `in` lists may fail). When a
+	// doc-level whitelist exceeds this bound the vector leg degrades to
+	// empty results while the keyword leg keeps filtering — never a
+	// filterless full-collection search.
+	MaxMilvusFilterLen = 60000
 )
 
 const (
@@ -55,6 +62,10 @@ const (
 	// MaxConcurrentWorkspaceSearch caps the number of workspaces searched
 	// concurrently by the RAG fan-out, bounding embed/DB load per query.
 	MaxConcurrentWorkspaceSearch = 3
+	// MaxSourceSnippetRunes bounds the preview snippet attached to retrieval
+	// sources for citation display. Full chunk content stays in the LLM
+	// context; the snippet is display metadata only.
+	MaxSourceSnippetRunes = 200
 )
 
 var milvusUnsafe = regexp.MustCompile(`[^a-zA-Z0-9_]`)

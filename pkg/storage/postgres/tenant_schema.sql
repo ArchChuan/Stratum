@@ -1401,6 +1401,19 @@ ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS ingest_started_at TIMESTAMPT
 ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS ingest_finished_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_knowledge_docs_ws_status ON knowledge_docs (workspace_id, ingest_status);
 
+-- Document-level access whitelist (P0 doc ACL).
+-- Semantics: both arrays empty => unrestricted (inherits workspace visibility,
+-- existing rows migrate with zero changes); either non-empty => whitelist in
+-- effect: viewer visible iff viewer_id IN allowed_user_ids OR tenant_role IN
+-- allowed_role_ids OR viewer_id = created_by (creator never locks self out).
+-- created_by is nullable: legacy rows are not backfilled and lose the
+-- creator exemption only.
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS allowed_user_ids TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS allowed_role_ids TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS created_by TEXT;
+CREATE INDEX IF NOT EXISTS idx_knowledge_docs_allowed_users ON knowledge_docs USING GIN (allowed_user_ids);
+CREATE INDEX IF NOT EXISTS idx_knowledge_docs_allowed_roles ON knowledge_docs USING GIN (allowed_role_ids);
+
 -- Parent chunks: large context units for Parent-Child chunking strategies.
 -- Leaves reference these via knowledge_chunks.parent_id.
 CREATE TABLE IF NOT EXISTS knowledge_parent_chunks (

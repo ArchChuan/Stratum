@@ -20,7 +20,14 @@ type ChunkRepo interface {
 	InsertParentBatch(ctx context.Context, tenantID, workspaceID string, parents []ParentChunk) error
 	GetParentByID(ctx context.Context, tenantID, workspaceID, parentID string) (*ParentChunk, error)
 	GetChunksByIDs(ctx context.Context, tenantID, workspaceID string, ids []string) ([]domain.Chunk, error)
-	KeywordSearch(ctx context.Context, tenantID, workspaceID, query string, topK int) ([]domain.Chunk, error)
+	// KeywordSearch returns up to topK chunks matching query in a workspace.
+	// The caller guarantees docIDs is the viewer's visible set: when non-empty
+	// it acts as a whitelist (AND doc_id = ANY(...)); empty means no filter.
+	KeywordSearch(ctx context.Context, tenantID, workspaceID, query string, docIDs []string, topK int) ([]domain.Chunk, error)
+	// ListByDoc returns every chunk of a document ordered by chunk index.
+	// workspace_id + doc_id double constraint prevents cross-workspace access
+	// (doc_id has no FK).
+	ListByDoc(ctx context.Context, tenantID, workspaceID, docID string) ([]domain.Chunk, error)
 	CountByWorkspace(ctx context.Context, tenantID, workspaceID string) (int64, error)
 	DeleteByWorkspace(ctx context.Context, tenantID, workspaceID string) error
 }

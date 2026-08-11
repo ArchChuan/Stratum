@@ -439,7 +439,7 @@ func knowledgeDiagnosticCollector(service *knowledgeapp.WorkspaceService, member
 					continue
 				}
 			}
-			documents, listErr := service.ListDocuments(ctx, req.TenantID, workspace.Name)
+			documents, listErr := service.ListDocuments(ctx, req.TenantID, workspace.Name, req.UserID)
 			if listErr != nil {
 				return nil, nil, listErr
 			}

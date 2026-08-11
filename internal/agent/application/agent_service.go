@@ -67,6 +67,7 @@ type AgentServiceDeps struct {
 	ResourceEditorRepo        port.ResourceEditorRepo
 	OperationGate             port.OperationGate
 	TenantRoleResolver        port.TenantRoleResolver
+	WorkspaceBindingValidator port.WorkspaceBindingValidator
 	ParametersProvider        port.ParametersProvider
 	Logger                    *zap.Logger
 }
@@ -288,6 +289,9 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		CreatedBy:              in.ActorID,
 	}
 
+	if err := s.validateWorkspaceBindings(ctx, in.TenantID, in.KnowledgeWorkspaceIDs); err != nil {
+		return AgentDTO{}, err
+	}
 	a := NewBaseAgent(cfg, s.deps.Logger)
 	if s.deps.Metrics != nil {
 		a = a.WithMetrics(s.deps.Metrics)
@@ -655,7 +659,7 @@ func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in Upda
 	if maxCtxTokens <= 0 {
 		maxCtxTokens = s.deriveMaxContextTokens(ctx, reqctx.TenantIDFromContext(ctx), in.LLMModel)
 	}
-	return &domain.AgentConfig{
+	cfg := &domain.AgentConfig{
 		ID:                     id,
 		Name:                   in.Name,
 		Type:                   parseAgentTypeWire(in.Type),
@@ -673,7 +677,25 @@ func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in Upda
 		KnowledgeWorkspaceIDs:  in.KnowledgeWorkspaceIDs,
 		MemoryScope:            in.MemoryScope,
 		CheckpointEnabled:      in.CheckpointEnabled,
-	}, nil
+	}
+	if err := s.validateWorkspaceBindings(ctx, reqctx.TenantIDFromContext(ctx), in.KnowledgeWorkspaceIDs); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// validateWorkspaceBindings fails closed (D10): an un-wired validator or an
+// unknown workspace name rejects the binding. Empty workspace lists pass
+// trivially — no bindings to verify. GatedSelfModify inherits this check via
+// s.Update → buildUpdateConfig.
+func (s *AgentService) validateWorkspaceBindings(ctx context.Context, tenantID string, workspaceIDs []string) error {
+	if len(workspaceIDs) == 0 {
+		return nil
+	}
+	if s.deps.WorkspaceBindingValidator == nil {
+		return fmt.Errorf("agent: workspace binding validation unavailable (validator not wired)")
+	}
+	return s.deps.WorkspaceBindingValidator.ValidateWorkspaceBindings(ctx, tenantID, workspaceIDs)
 }
 
 // applyParameterOverrides merges the declared parameters map onto the
@@ -1781,7 +1803,7 @@ func appendRAGSearchOptions(
 	search port.RAGSearchProvider,
 	knowledgeAssignments map[string]port.KnowledgeRevisionAssignment,
 ) []ExecutionOption {
-	options = append(options, WithRAGSearchFn(func(rctx context.Context, workspaces []string, query string, topK int) (string, error) {
+	options = append(options, WithRAGSearchFn(func(rctx context.Context, workspaces []string, query string, topK int, viewerID string) (string, error) {
 		var combined strings.Builder
 		mutable := make([]string, 0, len(workspaces))
 		for _, workspace := range workspaces {
@@ -1794,14 +1816,14 @@ func appendRAGSearchOptions(
 			if !ok {
 				return "", errors.New("Knowledge revision search provider not configured")
 			}
-			content, err := revisionSearch.SearchKnowledgeRevision(rctx, tenantID, assignment.Revision, query)
+			content, err := revisionSearch.SearchKnowledgeRevision(rctx, tenantID, assignment.Revision, query, viewerID)
 			if err != nil {
 				return "", fmt.Errorf("%w: %w", domain.ErrKnowledgeRevisionUnavailable, err)
 			}
 			combined.WriteString(content)
 		}
 		if len(mutable) > 0 {
-			content, err := search.SearchKnowledge(rctx, tenantID, mutable, query, topK)
+			content, err := search.SearchKnowledge(rctx, tenantID, mutable, query, topK, viewerID)
 			if err != nil {
 				return "", err
 			}
@@ -1827,7 +1849,7 @@ func appendEvidenceRAGOption(
 	if !ok {
 		return options
 	}
-	return append(options, WithRAGSearchFnWithEvidence(func(rctx context.Context, workspaces []string, query string, topK int) (port.RAGSearchEvidence, error) {
+	return append(options, WithRAGSearchFnWithEvidence(func(rctx context.Context, workspaces []string, query string, topK int, viewerID string) (port.RAGSearchEvidence, error) {
 		var combined strings.Builder
 		var sources []port.RAGSearchSource
 		mutable := make([]string, 0, len(workspaces))
@@ -1841,14 +1863,14 @@ func appendEvidenceRAGOption(
 			if !ok {
 				return port.RAGSearchEvidence{}, errors.New("Knowledge revision search provider not configured")
 			}
-			content, err := revisionSearch.SearchKnowledgeRevision(rctx, tenantID, assignment.Revision, query)
+			content, err := revisionSearch.SearchKnowledgeRevision(rctx, tenantID, assignment.Revision, query, viewerID)
 			if err != nil {
 				return port.RAGSearchEvidence{}, fmt.Errorf("%w: %w", domain.ErrKnowledgeRevisionUnavailable, err)
 			}
 			combined.WriteString(content)
 		}
 		if len(mutable) > 0 {
-			ev, err := evidenceProvider.SearchKnowledgeWithEvidence(rctx, tenantID, mutable, query, topK)
+			ev, err := evidenceProvider.SearchKnowledgeWithEvidence(rctx, tenantID, mutable, query, topK, viewerID)
 			if err != nil {
 				return port.RAGSearchEvidence{}, err
 			}

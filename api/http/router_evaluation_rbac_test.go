@@ -49,11 +49,18 @@ func TestEvaluationEvolutionRoutesRBAC(t *testing.T) {
 	registerEvaluations(r, c, requireActive)
 
 	member := signEvaluationToken(t, tokens, "tenant-1", "member")
-	for _, path := range []string{"/evaluations/overview", "/evaluations/resources", "/evaluations/suites",
-		"/evaluations/runs", "/evaluations/candidates", "/evaluations/experiments",
+	for _, path := range []string{"/evaluations/resources", "/evaluations/suites",
+		"/evaluations/experiments",
 		"/evaluations/resources/skill/skill-1/timeline"} {
 		rec := performEvaluationRequest(r, http.MethodGet, path, member, "", nil)
 		if rec.Code != http.StatusOK {
+			t.Errorf("member GET %s: status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
+	// D6: runs/candidates/overview 读端点收 admin — members are denied.
+	for _, path := range []string{"/evaluations/overview", "/evaluations/runs", "/evaluations/candidates"} {
+		rec := performEvaluationRequest(r, http.MethodGet, path, member, "", nil)
+		if rec.Code != http.StatusForbidden {
 			t.Errorf("member GET %s: status=%d body=%s", path, rec.Code, rec.Body.String())
 		}
 	}
@@ -65,6 +72,13 @@ func TestEvaluationEvolutionRoutesRBAC(t *testing.T) {
 		}
 	}
 	admin := signEvaluationToken(t, tokens, "tenant-1", "admin")
+	// Admin retains read access to the moved endpoints.
+	for _, path := range []string{"/evaluations/overview", "/evaluations/runs", "/evaluations/candidates"} {
+		rec := performEvaluationRequest(r, http.MethodGet, path, admin, "", nil)
+		if rec.Code != http.StatusOK {
+			t.Errorf("admin GET %s: status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
 	for _, route := range r.Routes() {
 		if route.Method == http.MethodPost && route.Path == "/evaluations/experiments/:id/evaluate" {
 			t.Fatal("client-reported experiment metrics route must not be registered")

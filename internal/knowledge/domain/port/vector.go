@@ -31,6 +31,10 @@ type VectorStore interface {
 	CreateCollectionWithDim(ctx context.Context, collectionName string, dimension int) error
 	Insert(ctx context.Context, collectionName string, docs []VectorDocument) error
 	Search(ctx context.Context, collectionName string, queryVector []float32, topK int) ([]VectorSearchResult, error)
+	// SearchWithFilter runs Search restricted by a Milvus filter expression
+	// (e.g. `source_document in ["a","b"]`). An empty expression means no
+	// filter. Fail-closed: schema drift or a missing collection is an error.
+	SearchWithFilter(ctx context.Context, collectionName string, queryVector []float32, topK int, expression string) ([]VectorSearchResult, error)
 	DescribeCollection(ctx context.Context, collectionName string) (CollectionInfo, error)
 	Flush(ctx context.Context, collectionName string) error
 	DeleteCollection(ctx context.Context, collectionName string) error

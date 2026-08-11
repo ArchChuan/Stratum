@@ -109,20 +109,65 @@ func (r *ChunkRepo) GetChunksByIDs(ctx context.Context, tenantID, workspaceID st
 	return out, nil
 }
 
-func (r *ChunkRepo) KeywordSearch(ctx context.Context, tenantID, workspaceID, query string, topK int) ([]domain.Chunk, error) {
+// ListByDoc returns every chunk of a document ordered by chunk index.
+// workspace_id + doc_id double constraint prevents cross-workspace access
+// (doc_id has no FK, so a bare doc_id query would leak across workspaces).
+func (r *ChunkRepo) ListByDoc(ctx context.Context, tenantID, workspaceID, docID string) ([]domain.Chunk, error) {
 	var out []domain.Chunk
 	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := tx.Query(ctx,
-			// Must use the same text-search config as the GENERATED tsv column
-			// (public.chinese_zh) or the GIN index on tsv is bypassed and the query
-			// vs document tokenizations disagree. chinese_zh is zhparser when the
-			// extension is installed, otherwise a copy of 'simple' (see public_schema.sql).
-			`SELECT id, doc_id, chunk_index, content
+		rows, err := tx.Query(ctx, `SELECT id, doc_id, chunk_index, content, parent_id
+			FROM knowledge_chunks WHERE workspace_id = $1 AND doc_id = $2
+			ORDER BY chunk_index`, workspaceID, docID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var c domain.Chunk
+			var parentID *string
+			if err := rows.Scan(&c.ID, &c.DocID, &c.Index, &c.Text, &parentID); err != nil {
+				return fmt.Errorf("chunk_repo: scan: %w", err)
+			}
+			if parentID != nil {
+				c.ParentID = *parentID
+			}
+			out = append(out, c)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("chunk_repo: list by doc: %w", err)
+	}
+	return out, nil
+}
+
+func (r *ChunkRepo) KeywordSearch(ctx context.Context, tenantID, workspaceID, query string, docIDs []string, topK int) ([]domain.Chunk, error) {
+	var out []domain.Chunk
+	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// Must use the same text-search config as the GENERATED tsv column
+		// (public.chinese_zh) or the GIN index on tsv is bypassed and the query
+		// vs document tokenizations disagree. chinese_zh is zhparser when the
+		// extension is installed, otherwise a copy of 'simple' (see public_schema.sql).
+		// Non-empty docIDs is a viewer whitelist (caller-guaranteed visible set);
+		// empty keeps the original 3-arg SQL.
+		queryText := `SELECT id, doc_id, chunk_index, content
 			FROM knowledge_chunks
 			WHERE workspace_id = $1
 			  AND tsv @@ plainto_tsquery('public.chinese_zh', $2)
 			ORDER BY ts_rank(tsv, plainto_tsquery('public.chinese_zh', $2)) DESC
-			LIMIT $3`, workspaceID, query, topK)
+			LIMIT $3`
+		args := []any{workspaceID, query, topK}
+		if len(docIDs) > 0 {
+			queryText = `SELECT id, doc_id, chunk_index, content
+			FROM knowledge_chunks
+			WHERE workspace_id = $1
+			  AND tsv @@ plainto_tsquery('public.chinese_zh', $2)
+			  AND doc_id = ANY($3)
+			ORDER BY ts_rank(tsv, plainto_tsquery('public.chinese_zh', $2)) DESC
+			LIMIT $4`
+			args = []any{workspaceID, query, docIDs, topK}
+		}
+		rows, err := tx.Query(ctx, queryText, args...)
 		if err != nil {
 			return err
 		}

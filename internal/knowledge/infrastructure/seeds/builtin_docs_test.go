@@ -111,6 +111,15 @@ func (s *stubDocRepo) MarkIngestFailed(context.Context, string, string, string) 
 func (s *stubDocRepo) RecoverStuckIngests(context.Context, string, time.Duration) (int, error) {
 	return 0, nil
 }
+func (s *stubDocRepo) VisibleDocIDs(context.Context, string, string, string, string) ([]string, error) {
+	return nil, nil
+}
+func (s *stubDocRepo) GetByID(context.Context, string, string, string) (*domain.Document, error) {
+	return nil, domain.ErrDocumentNotFound
+}
+func (s *stubDocRepo) SetDocAccess(context.Context, string, string, []string, []string) error {
+	return nil
+}
 
 // errParser fails on every document so IngestDocument returns before spawning
 // the background job; seeds must log-and-continue, never block startup.

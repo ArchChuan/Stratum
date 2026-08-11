@@ -36,6 +36,9 @@ export const workspaceStatsSchema = z
       })
       .passthrough()
       .optional(),
+    // is_platform_managed: 系统内置知识库完全豁免白名单机制（所有租户成员可见），
+    // 前端据此隐藏权限设置区与受限 Tag。
+    is_platform_managed: z.boolean().optional().default(false),
   })
   .passthrough();
 export type WorkspaceStats = z.infer<typeof workspaceStatsSchema>;
@@ -52,6 +55,9 @@ export const documentSchema = z
     created_at: z.string().nullable().optional(),
     ingest_started_at: z.string().nullable().optional(),
     ingest_finished_at: z.string().nullable().optional(),
+    // 文档级访问白名单（仅 admin/owner 回显，member 恒为空数组）
+    allowed_user_ids: z.array(z.string()).optional().default([]),
+    allowed_role_ids: z.array(z.string()).optional().default([]),
   })
   .passthrough();
 export type KnowledgeDocument = z.infer<typeof documentSchema>;
@@ -61,9 +67,46 @@ export const querySourceSchema = z
     document_id: z.string().optional().default(''),
     score: z.number().optional().default(0),
     content: z.string().optional().default(''),
+    // P1.1 之后 query 响应带文档名与所在 workspace，用于来源卡片跳转预览
+    document_title: z.string().optional().default(''),
+    workspace: z.string().optional().default(''),
   })
   .passthrough();
 export type QuerySource = z.infer<typeof querySourceSchema>;
+
+export const chunkSegmentSchema = z
+  .object({
+    chunk_id: z.string().optional().default(''),
+    index: z.number().optional().default(0),
+    content: z.string().optional().default(''),
+    parent_content: z.string().optional().default(''),
+  })
+  .passthrough();
+export type ChunkSegment = z.infer<typeof chunkSegmentSchema>;
+
+// 原文未存储（knowledge_docs.content 已 DROP），预览由分块重组而来。
+export const documentPreviewSchema = z
+  .object({
+    workspace: z.string().optional().default(''),
+    document_id: z.string().optional().default(''),
+    document_title: z.string().optional().default(''),
+    chunk_count: z.number().optional().default(0),
+    segments: z.array(chunkSegmentSchema).optional().default([]),
+  })
+  .passthrough();
+export type DocumentPreview = z.infer<typeof documentPreviewSchema>;
+
+// 文档级访问白名单设置入参（PUT /knowledge/workspaces/:name/documents/:documentID/access）
+export interface DocumentAccessInput {
+  allowedUserIDs: string[];
+  allowedRoleIDs: string[];
+}
+
+// 权限弹窗表单值（hooks 与组件共用的类型定义，避免 hooks 依赖 components）
+export interface DocAccessValues {
+  allowedUserIDs?: string[];
+  allowedRoleIDs?: string[];
+}
 
 export const queryResultSchema = z
   .object({

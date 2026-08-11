@@ -181,14 +181,22 @@ func executionArtifactsResponse(artifacts []domain.ExecutionArtifact) []domain.E
 
 func agentExecutionDonePayload(result *agent.AgentResult) []byte {
 	dto := agentExecutionResultDTO(result)
+	// Sources must serialize as an empty array, never null: the frontend
+	// reads done.sources as a list and treats [] and null differently during
+	// rolling upgrades.
+	sources := result.Sources
+	if sources == nil {
+		sources = []agentport.RAGSearchSource{}
+	}
 	payload, _ := json.Marshal(struct {
-		Done       bool                       `json:"done"`
-		Output     string                     `json:"output"`
-		Steps      int                        `json:"steps"`
-		TokensUsed int                        `json:"tokensUsed"`
-		Duration   string                     `json:"duration"`
-		Artifacts  []domain.ExecutionArtifact `json:"artifacts"`
-	}{true, dto.Output, dto.Steps, dto.TokensUsed, dto.Duration, dto.Artifacts})
+		Done       bool                        `json:"done"`
+		Output     string                      `json:"output"`
+		Steps      int                         `json:"steps"`
+		TokensUsed int                         `json:"tokensUsed"`
+		Duration   string                      `json:"duration"`
+		Artifacts  []domain.ExecutionArtifact  `json:"artifacts"`
+		Sources    []agentport.RAGSearchSource `json:"sources"`
+	}{true, dto.Output, dto.Steps, dto.TokensUsed, dto.Duration, dto.Artifacts, sources})
 	return payload
 }
 
