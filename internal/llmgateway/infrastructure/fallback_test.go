@@ -299,6 +299,61 @@ func TestResolveFallbackCandidatesOrderingAndCap(t *testing.T) {
 	}
 }
 
+// TestInvokeWithFallback_NoPrimaryRetrySkipsImmediateRetry 验证压缩路径语义：
+// NoPrimaryRetry=true 时主模型瞬态失败不立即重试，直接降级候选。
+func TestInvokeWithFallback_NoPrimaryRetrySkipsImmediateRetry(t *testing.T) {
+	unavailable := &statusErr{code: 503, msg: "unavailable"}
+	f := newFallbackFixture(t, map[string]*modelScript{
+		"primary": {completeErr: unavailable},
+	})
+	resp, err := f.gateway.Complete(ctxWithTenant(), &infrastructure.CompletionRequest{
+		Model: "primary", NoPrimaryRetry: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "cand-a", resp.ModelResolved)
+	require.Equal(t, []string{"primary", "cand-a"}, resp.ModelRoutedVia)
+	// 主模型只调用 1 次即降级；默认（false）行为仍是「主模型 + 立即重试 + 候选」。
+	require.Equal(t, []string{"primary", "cand-a"}, f.proto.callModels())
+}
+
+// TestInvokeWithFallback_MaxCandidatesTruncates 验证候选链按 MaxCandidates 截断：
+// 注册 3 个候选，MaxCandidates=2 时只尝试前 2 个。
+func TestInvokeWithFallback_MaxCandidatesTruncates(t *testing.T) {
+	models := []domain.Model{
+		{ID: "m-primary", ProviderID: "p1", Name: "primary", Enabled: true, Recommended: true,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
+		{ID: "m-c1", ProviderID: "p1", Name: "cand-a", Enabled: true, Recommended: false,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
+		{ID: "m-c2", ProviderID: "p1", Name: "cand-b", Enabled: true, Recommended: false,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
+		{ID: "m-c3", ProviderID: "p1", Name: "cand-c", Enabled: true, Recommended: false,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
+	}
+	modelRepo := &mockModelRepo{models: models}
+	providerRepo := &mockProviderRepo{providers: map[string]*domain.Provider{
+		"p1": {ID: "p1", Name: "Test Provider", Kind: domain.ProviderOpenAICompat,
+			BaseURL: "https://api.test", APIKey: "sk-test", DefaultModel: "primary", Enabled: true},
+	}}
+	proto := newScriptedProto(map[string]*modelScript{
+		"primary": {completeErr: &statusErr{code: 500, msg: "boom"}},
+		"cand-a":  {completeErr: &statusErr{code: 500, msg: "boom"}},
+		"cand-b":  {completeErr: &statusErr{code: 500, msg: "boom"}},
+		"cand-c":  {completeErr: &statusErr{code: 500, msg: "boom"}},
+	})
+	chatProtos := map[domain.ProviderKind]infrastructure.ChatProtocol{domain.ProviderOpenAICompat: proto}
+	reg := infrastructure.NewModelRegistry(modelRepo, providerRepo, chatProtos,
+		map[domain.ProviderKind]infrastructure.EmbedProtocol{}, 5*time.Minute)
+	gateway := infrastructure.NewGateway(reg, chatProtos, map[domain.ProviderKind]infrastructure.EmbedProtocol{})
+
+	_, err := gateway.Complete(ctxWithTenant(), &infrastructure.CompletionRequest{
+		Model: "primary", MaxCandidates: 2,
+	})
+	require.Error(t, err)
+	require.True(t, infrastructure.IsPermanent(err), "exhausted chain must be marked permanent")
+	// MaxCandidates=2：候选截断为前 2 个（同 provider → name asc），cand-c 不参与。
+	require.Equal(t, []string{"primary", "primary", "cand-a", "cand-b"}, proto.callModels())
+}
+
 func TestResolveFallbackCandidatesPrimaryMissingFails(t *testing.T) {
 	modelRepo := &mockModelRepo{models: []domain.Model{}}
 	providerRepo := &mockProviderRepo{providers: map[string]*domain.Provider{}}

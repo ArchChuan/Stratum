@@ -187,10 +187,11 @@ func (g *Gateway) resolveChain(ctx context.Context, tenantID, model string) ([]c
 	return links, nil
 }
 
-// invokeWithFallback 沿链编排调用：主模型（i==0）瞬态失败立即重试 1 次，
-// 仍失败或候选失败时瞬态错误降级到下一候选；永久错误、context.Canceled
-// 或流式已出首 token 立即停止。耗尽返回包装全部尝试的 permanent 错误，
-// 绝不静默成功。每次降级调用 IncRouteFallback(from, to)。
+// invokeWithFallback 沿链编排调用：主模型（i==0）瞬态失败立即重试 1 次
+// （req.NoPrimaryRetry=true 时跳过），仍失败或候选失败时瞬态错误降级到
+// 下一候选；永久错误、context.Canceled 或流式已出首 token 立即停止。候选
+// 链按 req.MaxCandidates 截断（0 = 默认上限）。耗尽返回包装全部尝试的
+// permanent 错误，绝不静默成功。每次降级调用 IncRouteFallback(from, to)。
 func (g *Gateway) invokeWithFallback(
 	ctx context.Context,
 	req *CompletionRequest,
@@ -198,6 +199,11 @@ func (g *Gateway) invokeWithFallback(
 	stream bool,
 	onToken func(string),
 ) (*CompletionResponse, routedInfo, error) {
+	// 候选链按 req.MaxCandidates 截断：links[0] 是主模型，其余为候选。
+	// resolveChain 已按 constants.MaxModelFallbackCandidates 封顶，此处只缩不放。
+	if req.MaxCandidates > 0 && len(links) > 1+req.MaxCandidates {
+		links = links[:1+req.MaxCandidates]
+	}
 	tried := make([]string, 0, len(links))
 	attempts := make([]error, 0, len(links)+1)
 	for i, link := range links {
@@ -219,7 +225,7 @@ func (g *Gateway) invokeWithFallback(
 }
 
 // invokeCandidate 完成单个链环节点的所有尝试：主模型（isPrimary）瞬态失败
-// 立即重试 1 次，候选不重试。返回：
+// 立即重试 1 次（req.NoPrimaryRetry=true 时跳过），候选不重试。返回：
 //   - resp != nil：成功；
 //   - stop=true：链必须终止（永久错误 / 流式已出首 token），err 直接传播；
 //   - 其余：瞬态失败，链继续降级到下一候选。
@@ -235,7 +241,7 @@ func (g *Gateway) invokeCandidate(
 	if err == nil {
 		return resp, nil, false
 	}
-	if isPrimary && !outputStarted && isTransient(err) {
+	if isPrimary && !req.NoPrimaryRetry && !outputStarted && isTransient(err) {
 		// 主模型 1 次立即重试，仍失败才进入降级。
 		resp, outputStarted, err = g.invoke(ctx, req, link, stream, onToken)
 		if err == nil {

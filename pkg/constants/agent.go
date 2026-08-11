@@ -45,6 +45,16 @@ const (
 	// leaving margin for the EstimateText heuristic error (<20%).
 	LoopCompactionSafetyRatio = 0.8
 
+	// CompactionBudgetTotal 是压缩路径一次执行的总体时间预算（Spec 第 4 节）：
+	// 按 剩余/剩余尝试数 分摊为逐次独立的时间片，链内所有尝试合计不放大
+	// 用户可感知时延。
+	CompactionBudgetTotal = 5 * time.Second
+	// CompactionMaxCandidates 是压缩路径 fallback 候选模型数量上限（不含主模型）。
+	CompactionMaxCandidates = 2
+	// CompactionMinSlice 是单次尝试时间片下限：剩余预算耗尽（≤0）时的兜底
+	// slice，保证每次尝试仍有最小执行窗口。
+	CompactionMinSlice = 1 * time.Millisecond
+
 	// DefaultContextWindowRatio is the fraction of a model's context window
 	// used as the agent's MaxContextTokens when the user does not set one explicitly.
 	DefaultContextWindowRatio = 0.85
