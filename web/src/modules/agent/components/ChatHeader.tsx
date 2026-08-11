@@ -84,7 +84,7 @@ export const ChatHeader = ({
         onClick={onOpenConversations}
       />
     )}
-    <RobotOutlined style={{ fontSize: 18, color: '#1677ff' }} />
+    <RobotOutlined style={{ fontSize: 18, color: '#2563eb' }} />
     <Space size={6} wrap style={{ minWidth: 0 }}>
       <Text strong style={{ fontSize: 15 }}>{agent?.name || '请选择 Agent'}</Text>
       {agent?.isSystem && (

@@ -13,6 +13,7 @@ import (
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
+	parametersdomain "github.com/byteBuilderX/stratum/internal/parameters/domain"
 	pkgobjectstore "github.com/byteBuilderX/stratum/pkg/storage/objectstore"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 )
@@ -26,7 +27,7 @@ func TestMCPEvaluationAdapterCreatesPublishedSafeBaseline(t *testing.T) {
 	}, tools: []*mcpdomain.Tool{{Name: "lookup", InputSchema: map[string]any{"type": "object"}}}}
 	runtimeStore := &fakeMCPRuntimeStore{}
 	adapter := mcpEvaluationAdapter{runtime: runtime, revisions: revisions, runtimeStore: runtimeStore,
-		actorID: "evaluation-worker"}
+		actorID: "evaluation-worker", parameters: parametersdomain.NewParametersRegistry()}
 
 	ref, err := adapter.CreatePublishedBaseline(context.Background(), "tenant-1", "server-1")
 	if err != nil || ref.Kind != evaldomain.ResourceKindMCP || revisions.publishCalls != 1 {
@@ -57,7 +58,7 @@ func TestMCPEvaluationAdapterBaselineReplayIsStableAndCleansDuplicateRuntime(t *
 	runtime := &fakeMCPRuntime{config: &mcpdomain.ServerConfig{
 		ID: "server-1", Name: "orders", Transport: "http", URL: "https://one.example", Timeout: time.Second,
 	}, tools: []*mcpdomain.Tool{{Name: "lookup", InputSchema: map[string]any{"type": "object"}}}}
-	adapter := mcpEvaluationAdapter{runtime: runtime, revisions: revisions, runtimeStore: store}
+	adapter := mcpEvaluationAdapter{runtime: runtime, revisions: revisions, runtimeStore: store, parameters: parametersdomain.NewParametersRegistry()}
 	first, err := adapter.CreatePublishedBaseline(context.Background(), "tenant-1", "server-1")
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +89,7 @@ func TestMCPEvaluationAdapterBaselineFailureCleansRuntimeObject(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &fakeMCPRuntimeStore{putErr: tc.storePutErr}
-			adapter := mcpEvaluationAdapter{runtime: runtime, revisions: tc.revisions, runtimeStore: store}
+			adapter := mcpEvaluationAdapter{runtime: runtime, revisions: tc.revisions, runtimeStore: store, parameters: parametersdomain.NewParametersRegistry()}
 			if _, err := adapter.CreatePublishedBaseline(context.Background(), "tenant-1", "server-1"); err == nil {
 				t.Fatal("expected baseline failure")
 			}
@@ -106,7 +107,7 @@ func TestMCPEvaluationAdapterPublishRetryPreservesWinnerRuntime(t *testing.T) {
 	}, tools: tools, callResult: map[string]any{"ok": true}}
 	revisions := &fakeMCPRevisionService{publishErr: errors.New("temporary publish failure")}
 	store := &fakeMCPRuntimeStore{}
-	adapter := mcpEvaluationAdapter{runtime: runtime, revisions: revisions, runtimeStore: store}
+	adapter := mcpEvaluationAdapter{runtime: runtime, revisions: revisions, runtimeStore: store, parameters: parametersdomain.NewParametersRegistry()}
 
 	if _, err := adapter.CreatePublishedBaseline(context.Background(), "tenant-1", "server-1"); err == nil {
 		t.Fatal("expected first publish failure")
@@ -136,7 +137,7 @@ func TestMCPEvaluationAdapterCandidateIsExactBoundedAndIdempotent(t *testing.T) 
 		RuntimeRef:   pkgobjectstore.Reference{URI: "object://runtime/one", SHA256: "hash"},
 		EnabledTools: []string{"lookup", "health"}, TimeoutMS: 4000, MaxRetries: 1, ToolSchemaHash: "schema-hash"}
 	revisions := publishedMCPRevisions(t, snapshot)
-	adapter := mcpEvaluationAdapter{revisions: revisions, actorID: "evaluation-worker"}
+	adapter := mcpEvaluationAdapter{revisions: revisions, actorID: "evaluation-worker", parameters: parametersdomain.NewParametersRegistry()}
 	patch := evaldomain.CandidatePatch{Source: "bounded", ParameterPatch: map[string]any{
 		"enabled_tools": []any{"lookup"}, "timeout_ms": float64(5000), "max_retries": float64(2),
 	}}
@@ -170,7 +171,7 @@ func TestMCPEvaluationAdapterDetectsSchemaDriftBeforeInvocation(t *testing.T) {
 	adapter := mcpEvaluationAdapter{revisions: revisions, runtime: runtime, runtimeStore: &fakeMCPRuntimeStore{
 		values: map[string]any{"object://runtime/one": mcpRuntimeConfigEnvelope{TenantID: "tenant-1",
 			Config: &mcpdomain.ServerConfig{ID: "server-1", Timeout: time.Second}}},
-	}}
+	}, parameters: parametersdomain.NewParametersRegistry()}
 	_, err := adapter.ExecuteRevision(context.Background(), "tenant-1", "user-1", mcpRef("published-1"), evaldomain.EvalCase{
 		Input: map[string]any{"tool": "lookup", "arguments": map[string]any{"id": "1"}},
 	})
@@ -196,7 +197,7 @@ func TestMCPEvaluationAdapterInvokesExistingToolWithTenantContext(t *testing.T) 
 			ID: "server-1", Name: "orders", URL: "https://original.example/mcp", Timeout: time.Second,
 		},
 	}}}
-	adapter := mcpEvaluationAdapter{revisions: publishedMCPRevisions(t, snapshot), runtime: runtime, runtimeStore: store}
+	adapter := mcpEvaluationAdapter{revisions: publishedMCPRevisions(t, snapshot), runtime: runtime, runtimeStore: store, parameters: parametersdomain.NewParametersRegistry()}
 	result, err := adapter.ExecuteRevision(context.Background(), "tenant-1", "user-1", mcpRef("published-1"), evaldomain.EvalCase{
 		Input: map[string]any{"tool": "lookup", "arguments": map[string]any{"id": "1"}},
 	})
@@ -222,7 +223,7 @@ func TestMCPEvaluationAdapterRejectsCrossTenantRuntimeReference(t *testing.T) {
 			Config: &mcpdomain.ServerConfig{ID: "server-1", Timeout: time.Second}},
 	}}
 	adapter := mcpEvaluationAdapter{revisions: publishedMCPRevisions(t, snapshot), runtime: &fakeMCPRuntime{},
-		runtimeStore: store}
+		runtimeStore: store, parameters: parametersdomain.NewParametersRegistry()}
 	_, err := adapter.ExecuteRevision(context.Background(), "tenant-2", "user-2", mcpRef("published-1"), evaldomain.EvalCase{
 		Input: map[string]any{"tool": "lookup", "arguments": map[string]any{}},
 	})
@@ -266,7 +267,7 @@ func TestMCPEvaluationAdapterSummariesPassRealRevisionValidation(t *testing.T) {
 	runtime := &fakeMCPRuntime{config: &mcpdomain.ServerConfig{
 		ID: "server-1", Name: "orders", Timeout: time.Second,
 	}, tools: []*mcpdomain.Tool{{Name: "lookup", InputSchema: map[string]any{"type": "object"}}}}
-	adapter := mcpEvaluationAdapter{runtime: runtime, revisions: revisions, runtimeStore: &fakeMCPRuntimeStore{}}
+	adapter := mcpEvaluationAdapter{runtime: runtime, revisions: revisions, runtimeStore: &fakeMCPRuntimeStore{}, parameters: parametersdomain.NewParametersRegistry()}
 	baseline, err := adapter.CreatePublishedBaseline(context.Background(), "tenant-1", "server-1")
 	if err != nil {
 		t.Fatalf("baseline rejected by real RevisionService: %v", err)

@@ -12,6 +12,7 @@ import (
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	parametersdomain "github.com/byteBuilderX/stratum/internal/parameters/domain"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 )
 
@@ -20,7 +21,7 @@ func TestAgentEvaluationAdapterRequiresPublishedTenantRevision(t *testing.T) {
 		ID: "rev-1", ResourceKind: evaldomain.ResourceKindAgent, ResourceID: "agent-1",
 		Status: evaldomain.RevisionStatusDraft,
 	}, payload: []byte(`{"agent_id":"agent-1","type":"react","system_prompt":"baseline","model":"qwen-plus","max_iterations":5}`), found: true}
-	adapter := agentEvaluationAdapter{revisions: revisions}
+	adapter := agentEvaluationAdapter{revisions: revisions, parameters: parametersdomain.NewParametersRegistry()}
 	_, err := adapter.LoadOptimizableSnapshot(context.Background(), "tenant-1", agentRef("rev-1"))
 	if err == nil {
 		t.Fatal("expected draft baseline rejection")
@@ -35,7 +36,7 @@ func TestAgentEvaluationAdapterCandidateIsIdempotentAndBounded(t *testing.T) {
 		ID: "published-1", ResourceKind: evaldomain.ResourceKindAgent, ResourceID: "agent-1",
 		Status: evaldomain.RevisionStatusPublished,
 	}, payload: []byte(`{"agent_id":"agent-1","type":"react","system_prompt":"baseline","model":"qwen-plus","max_iterations":5,"bindings":[{"kind":"skill","id":"skill-1","enabled":true}]}`), found: true}
-	adapter := agentEvaluationAdapter{revisions: revisions, actorID: "evaluation-worker"}
+	adapter := agentEvaluationAdapter{revisions: revisions, actorID: "evaluation-worker", parameters: parametersdomain.NewParametersRegistry()}
 	patch := evaldomain.CandidatePatch{Source: "llm_rewrite", PromptPatch: map[string]any{"instructions": "candidate"}, ParameterPatch: map[string]any{
 		"bindings": map[string]any{"skill:skill-1": false},
 	}}
@@ -63,7 +64,7 @@ func TestAgentEvaluationAdapterPropagatesRevisionPersistenceFailure(t *testing.T
 		ID: "published-1", ResourceKind: evaldomain.ResourceKindAgent, ResourceID: "agent-1",
 		Status: evaldomain.RevisionStatusPublished,
 	}, payload: []byte(`{"agent_id":"agent-1","type":"react","system_prompt":"baseline","model":"qwen-plus","max_iterations":5}`), found: true, createErr: wantErr}
-	adapter := agentEvaluationAdapter{revisions: revisions, actorID: "evaluation-worker"}
+	adapter := agentEvaluationAdapter{revisions: revisions, actorID: "evaluation-worker", parameters: parametersdomain.NewParametersRegistry()}
 	_, err := adapter.CreateCandidate(context.Background(), "tenant-1", agentRef("published-1"), evaldomain.CandidatePatch{
 		Source: "llm_rewrite", PromptPatch: map[string]any{"instructions": "candidate"},
 	})
@@ -78,7 +79,7 @@ func TestAgentEvaluationAdapterTreatsProviderFailureAsExecutionFailure(t *testin
 		ID: "published-1", ResourceKind: evaldomain.ResourceKindAgent, ResourceID: "agent-1",
 		Status: evaldomain.RevisionStatusPublished,
 	}, payload: []byte(`{"agent_id":"agent-1","type":"react","system_prompt":"baseline","model":"qwen-plus","max_iterations":5}`), found: true}
-	adapter := agentEvaluationAdapter{revisions: revisions, agents: fakeAgentRevisionExecutor{err: wantErr}}
+	adapter := agentEvaluationAdapter{revisions: revisions, agents: fakeAgentRevisionExecutor{err: wantErr}, parameters: parametersdomain.NewParametersRegistry()}
 	result, err := adapter.ExecuteRevision(
 		context.Background(), "tenant-1", "user-1", agentRef("published-1"), evaldomain.EvalCase{Input: "hello"},
 	)
@@ -88,7 +89,7 @@ func TestAgentEvaluationAdapterTreatsProviderFailureAsExecutionFailure(t *testin
 }
 
 func TestAgentEvaluationAdapterCrossTenantRevisionIsNotFound(t *testing.T) {
-	adapter := agentEvaluationAdapter{revisions: &fakeAgentRevisionService{found: false}}
+	adapter := agentEvaluationAdapter{revisions: &fakeAgentRevisionService{found: false}, parameters: parametersdomain.NewParametersRegistry()}
 	_, err := adapter.ResolveRevision(context.Background(), "other-tenant", agentRef("published-1"))
 	if !errors.Is(err, evalport.ErrCenterResourceNotFound) {
 		t.Fatalf("expected tenant-safe not found, got %v", err)
@@ -100,7 +101,7 @@ func TestAgentEvaluationAdapterRejectsDraftExecution(t *testing.T) {
 		ID: "draft-1", ResourceKind: evaldomain.ResourceKindAgent, ResourceID: "agent-1",
 		Status: evaldomain.RevisionStatusDraft,
 	}, payload: []byte(`{"agent_id":"agent-1","type":"react","system_prompt":"baseline","model":"qwen-plus","max_iterations":5}`), found: true}
-	adapter := agentEvaluationAdapter{revisions: revisions, agents: fakeAgentRevisionExecutor{}}
+	adapter := agentEvaluationAdapter{revisions: revisions, agents: fakeAgentRevisionExecutor{}, parameters: parametersdomain.NewParametersRegistry()}
 	_, err := adapter.ExecuteRevision(
 		context.Background(), "tenant-1", "user-1", agentRef("draft-1"), evaldomain.EvalCase{Input: "hello"},
 	)
@@ -129,7 +130,7 @@ func TestAgentEvaluationAdapterCreatesPublishedBaselineFromLiveAgent(t *testing.
 		AgentID: "agent-1", Type: agentdomain.ReActAgent, SystemPrompt: "baseline", Model: "qwen-plus",
 		MaxIterations: 5,
 	}}
-	adapter := agentEvaluationAdapter{revisions: revisions, agents: agents, actorID: "evaluation-worker"}
+	adapter := agentEvaluationAdapter{revisions: revisions, agents: agents, actorID: "evaluation-worker", parameters: parametersdomain.NewParametersRegistry()}
 	ref, err := adapter.CreatePublishedBaseline(context.Background(), "tenant-1", "agent-1")
 	if err != nil || ref.RevisionID != "candidate-1" || revisions.publishCalls != 1 {
 		t.Fatalf("unexpected baseline: ref=%+v publishCalls=%d err=%v", ref, revisions.publishCalls, err)
@@ -143,7 +144,7 @@ func TestAgentEvaluationAdapterDoesNotPublishFailedBaselinePersistence(t *testin
 		AgentID: "agent-1", Type: agentdomain.ReActAgent, SystemPrompt: "baseline", Model: "qwen-plus",
 		MaxIterations: 5,
 	}}
-	adapter := agentEvaluationAdapter{revisions: revisions, agents: agents}
+	adapter := agentEvaluationAdapter{revisions: revisions, agents: agents, parameters: parametersdomain.NewParametersRegistry()}
 	_, err := adapter.CreatePublishedBaseline(context.Background(), "tenant-1", "agent-1")
 	if !errors.Is(err, wantErr) || revisions.publishCalls != 0 {
 		t.Fatalf("failed persistence must abort publish: calls=%d err=%v", revisions.publishCalls, err)
@@ -244,7 +245,7 @@ func TestAgentEvaluationAdapterSummariesPassRealRevisionValidation(t *testing.T)
 		AgentID: "agent-1", Type: agentdomain.ReActAgent, SystemPrompt: "baseline", Model: "qwen-plus",
 		MaxIterations: 5,
 	}}
-	adapter := agentEvaluationAdapter{revisions: revisions, agents: agents}
+	adapter := agentEvaluationAdapter{revisions: revisions, agents: agents, parameters: parametersdomain.NewParametersRegistry()}
 	baseline, err := adapter.CreatePublishedBaseline(context.Background(), "tenant-1", "agent-1")
 	if err != nil {
 		t.Fatalf("baseline rejected by real RevisionService: %v", err)
@@ -265,7 +266,7 @@ func TestAgentEvaluationAdapterApplyPublishedRevisionFailsClosedOnModelValidatio
 
 	t.Run("missing validator blocks apply", func(t *testing.T) {
 		updater := &recordingAgentUpdater{}
-		adapter := agentEvaluationAdapter{revisions: revisions, agentUpdater: updater}
+		adapter := agentEvaluationAdapter{revisions: revisions, agentUpdater: updater, parameters: parametersdomain.NewParametersRegistry()}
 		if err := adapter.ApplyPublishedRevision(context.Background(), "tenant-1", "agent-1", "published-1"); err == nil {
 			t.Fatal("expected missing validator to fail closed")
 		}
@@ -280,6 +281,7 @@ func TestAgentEvaluationAdapterApplyPublishedRevisionFailsClosedOnModelValidatio
 		adapter := agentEvaluationAdapter{
 			revisions: revisions, agentUpdater: updater,
 			modelValidator: fakeModelValidator{err: wantErr},
+			parameters:     parametersdomain.NewParametersRegistry(),
 		}
 		err := adapter.ApplyPublishedRevision(context.Background(), "tenant-1", "agent-1", "published-1")
 		if !errors.Is(err, wantErr) {
@@ -295,6 +297,7 @@ func TestAgentEvaluationAdapterApplyPublishedRevisionFailsClosedOnModelValidatio
 		adapter := agentEvaluationAdapter{
 			revisions: revisions, agentUpdater: updater,
 			modelValidator: fakeModelValidator{},
+			parameters:     parametersdomain.NewParametersRegistry(),
 		}
 		if err := adapter.ApplyPublishedRevision(context.Background(), "tenant-1", "agent-1", "published-1"); err != nil {
 			t.Fatal(err)
@@ -316,6 +319,7 @@ func TestAgentEvaluationAdapterCreateCandidateValidatesPatchedModel(t *testing.T
 	adapter := agentEvaluationAdapter{
 		revisions: revisions, actorID: "evaluation-worker",
 		modelValidator: fakeModelValidator{err: errors.New("model not in tenant catalog")},
+		parameters:     parametersdomain.NewParametersRegistry(),
 	}
 	_, err := adapter.CreateCandidate(context.Background(), "tenant-1", agentRef("published-1"), evaldomain.CandidatePatch{
 		Source: "llm_rewrite", ParameterPatch: map[string]any{"model": "other-model"},
@@ -352,7 +356,7 @@ func TestAgentEvaluationAdapterExecutionReceivesTenantContext(t *testing.T) {
 		Status: evaldomain.RevisionStatusPublished,
 	}, payload: []byte(`{"agent_id":"agent-1","type":"react","system_prompt":"baseline","model":"qwen-plus","max_iterations":5}`), found: true}
 	executor := &tenantCaptureAgentExecutor{}
-	adapter := agentEvaluationAdapter{revisions: revisions, agents: executor}
+	adapter := agentEvaluationAdapter{revisions: revisions, agents: executor, parameters: parametersdomain.NewParametersRegistry()}
 	_, _ = adapter.ExecuteRevision(
 		context.Background(), "tenant-1", "user-1", agentRef("published-1"), evaldomain.EvalCase{Input: "hello"},
 	)

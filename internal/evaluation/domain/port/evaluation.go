@@ -32,6 +32,28 @@ type ExecutionResult struct {
 	Tokens     int
 	CostUSD    float64
 	DurationMs int
+	// RAGEvidence carries per-case retrieval metrics for knowledge
+	// evaluations; nil for other resource kinds.
+	RAGEvidence *domain.RAGEvidenceInfo
+}
+
+// LLMJudge evaluates free-form outputs with an LLM for assertion_mode=judge
+// cases. Enabled reports the runtime switch (evaluation.judge.enabled
+// platform parameter) so the application can fail closed when the judge is
+// off. Wiring adapters implement it over llmgateway's LLMCompleter.
+type LLMJudge interface {
+	Enabled(ctx context.Context) bool
+	Judge(ctx context.Context, req JudgeRequest) (domain.AssertionResult, error)
+}
+
+// JudgeRequest carries the material a judge needs. Empty Model/Rubric mean
+// "use platform defaults / the registered global rubric".
+type JudgeRequest struct {
+	Model          string
+	Rubric         string
+	Input          string
+	ExpectedOutput string
+	Actual         string
 }
 
 type ResourceAdapter interface {

@@ -9,6 +9,7 @@ package persistence
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -58,6 +59,100 @@ func editorEligible(ctx context.Context, tx pgx.Tx, tenantID, userID string) (bo
 		return false, fmt.Errorf("editor role check: %w", err)
 	}
 	return ok, nil
+}
+
+// agents.parameters JSONB carries only the 4 sampling parameters as flat
+// scalar keys (temperature/max_tokens/compaction_recent_groups/
+// compaction_safety_ratio). An explicit 0 is indistinguishable from an
+// absent key under omitempty, so 0 == unset == gateway/provider default.
+// Keys match the registry evaluation keys so promote can write them back
+// without mapping.
+func packSamplingParameters(cfg *domain.AgentConfig) (string, error) {
+	params := map[string]any{}
+	if cfg.Temperature != 0 {
+		params["temperature"] = cfg.Temperature
+	}
+	if cfg.MaxTokens != 0 {
+		params["max_tokens"] = cfg.MaxTokens
+	}
+	if cfg.CompactionRecentGroups != 0 {
+		params["compaction_recent_groups"] = cfg.CompactionRecentGroups
+	}
+	if cfg.CompactionSafetyRatio != 0 {
+		params["compaction_safety_ratio"] = cfg.CompactionSafetyRatio
+	}
+	b, err := json.Marshal(params)
+	if err != nil {
+		return "", fmt.Errorf("pack sampling parameters: %w", err)
+	}
+	return string(b), nil
+}
+
+// packAllSamplingParameters builds the full JSONB map including explicit
+// nulls for zero sampling fields. A JSONB null == explicit clear: under
+// overall-replace semantics (promote) a zero field must erase a previously
+// persisted value, which packSkipZero alone cannot express. unpack treats
+// null and absent identically (0 = unset).
+func packAllSamplingParameters(cfg *domain.AgentConfig) (string, error) {
+	params := map[string]any{
+		"temperature":              cfg.Temperature,
+		"max_tokens":               cfg.MaxTokens,
+		"compaction_recent_groups": cfg.CompactionRecentGroups,
+		"compaction_safety_ratio":  cfg.CompactionSafetyRatio,
+	}
+	// 0 → nil → JSON null;non-zero 保持原值。
+	for k, v := range params {
+		switch val := v.(type) {
+		case float32:
+			if val == 0 {
+				params[k] = nil
+			}
+		case int:
+			if val == 0 {
+				params[k] = nil
+			}
+		}
+	}
+	b, err := json.Marshal(params)
+	if err != nil {
+		return "", fmt.Errorf("pack sampling parameters: %w", err)
+	}
+	return string(b), nil
+}
+
+// unpackSamplingParameters fills the 4 sampling fields from JSONB; absent
+// keys leave the zero value (unset) untouched.
+func unpackSamplingParameters(raw string, cfg *domain.AgentConfig) error {
+	if raw == "" {
+		return nil
+	}
+	var params map[string]any
+	if err := json.Unmarshal([]byte(raw), &params); err != nil {
+		return fmt.Errorf("unpack sampling parameters: %w", err)
+	}
+	if v, ok := numericValue(params["temperature"]); ok {
+		cfg.Temperature = float32(v)
+	}
+	if v, ok := numericValue(params["max_tokens"]); ok {
+		cfg.MaxTokens = int(v)
+	}
+	if v, ok := numericValue(params["compaction_recent_groups"]); ok {
+		cfg.CompactionRecentGroups = int(v)
+	}
+	if v, ok := numericValue(params["compaction_safety_ratio"]); ok {
+		cfg.CompactionSafetyRatio = float32(v)
+	}
+	return nil
+}
+
+func numericValue(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int64:
+		return float64(n), true
+	}
+	return 0, false
 }
 
 // insertEditors validates and persists the editor set inside the write
@@ -273,11 +368,15 @@ func loadKnowledgeWorkspaces(ctx context.Context, tx pgx.Tx, agentID string) ([]
 // same transaction.
 func (r *PgAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editors []string) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx,
-			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope, system_key, checkpoint_enabled, created_by)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10,$11)`,
+		params, err := packSamplingParameters(cfg)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx,
+			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope, system_key, checkpoint_enabled, created_by, parameters)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10,$11,$12)`,
 			cfg.ID, cfg.Name, string(cfg.Type), cfg.Description,
-			cfg.SystemPrompt, cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, cfg.CheckpointEnabled, cfg.CreatedBy,
+			cfg.SystemPrompt, cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, cfg.CheckpointEnabled, cfg.CreatedBy, params,
 		)
 		if err != nil {
 			var pgErr *pgconn.PgError
@@ -337,14 +436,18 @@ func revalidateEditorIfActor(ctx context.Context, tx pgx.Tx, kind, resourceID, a
 func (r *PgAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig, bool, error) {
 	var cfg domain.AgentConfig
 	var agentType string
+	var rawParams string
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
 			`SELECT id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope,
-			        COALESCE(system_key, ''), COALESCE(checkpoint_enabled, false), COALESCE(created_by, '')
+			        COALESCE(system_key, ''), COALESCE(checkpoint_enabled, false), COALESCE(created_by, ''), parameters
 			 FROM agents WHERE id = $1`, id).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
 				&cfg.SystemPrompt, &cfg.LLMModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope,
-				&cfg.SystemKey, &cfg.CheckpointEnabled, &cfg.CreatedBy); err != nil {
+				&cfg.SystemKey, &cfg.CheckpointEnabled, &cfg.CreatedBy, &rawParams); err != nil {
+			return err
+		}
+		if err := unpackSamplingParameters(rawParams, &cfg); err != nil {
 			return err
 		}
 		skillIDs, err := loadSkillIDs(ctx, tx, id)
@@ -381,15 +484,21 @@ func (r *PgAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig, 
 }
 
 func (r *PgAgentRepo) GetSystemAssistant(ctx context.Context) (*domain.AgentConfig, bool, error) {
+	// 平台助手不进参数闭环(采样参数不优化、不走 promote 写回),但快照读取
+	// 与普通 agent 同形状,一并补读 parameters 列保持 schema 一致。
 	var cfg domain.AgentConfig
 	var agentType string
+	var rawParams string
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
 			`SELECT id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens,
-			        memory_scope, system_key, COALESCE(checkpoint_enabled, false), COALESCE(created_by, '')
+			        memory_scope, system_key, COALESCE(checkpoint_enabled, false), COALESCE(created_by, ''), parameters
 			 FROM agents WHERE system_key = 'stratum.platform_assistant'`).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
-				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CheckpointEnabled, &cfg.CreatedBy); err != nil {
+				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CheckpointEnabled, &cfg.CreatedBy, &rawParams); err != nil {
+			return err
+		}
+		if err := unpackSamplingParameters(rawParams, &cfg); err != nil {
 			return err
 		}
 		if err := loadAgentRelations(ctx, tx, &cfg); err != nil {
@@ -453,7 +562,7 @@ func (r *PgAgentRepo) GetAll(ctx context.Context) ([]*domain.AgentConfig, error)
 func scanAgents(ctx context.Context, tx pgx.Tx) ([]*domain.AgentConfig, []string, error) {
 	rows, err := tx.Query(ctx,
 		`SELECT id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope,
-		        COALESCE(system_key, ''), COALESCE(checkpoint_enabled, false), COALESCE(created_by, '')
+		        COALESCE(system_key, ''), COALESCE(checkpoint_enabled, false), COALESCE(created_by, ''), parameters
 		 FROM agents ORDER BY created_at`)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list agents: %w", err)
@@ -464,9 +573,13 @@ func scanAgents(ctx context.Context, tx pgx.Tx) ([]*domain.AgentConfig, []string
 	for rows.Next() {
 		var cfg domain.AgentConfig
 		var agentType string
+		var rawParams string
 		if err := rows.Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
 			&cfg.SystemPrompt, &cfg.LLMModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope,
-			&cfg.SystemKey, &cfg.CheckpointEnabled, &cfg.CreatedBy); err != nil {
+			&cfg.SystemKey, &cfg.CheckpointEnabled, &cfg.CreatedBy, &rawParams); err != nil {
+			return nil, nil, fmt.Errorf("scan agent row: %w", err)
+		}
+		if err := unpackSamplingParameters(rawParams, &cfg); err != nil {
 			return nil, nil, fmt.Errorf("scan agent row: %w", err)
 		}
 		cfg.Type = domain.AgentType(agentType)
@@ -576,8 +689,10 @@ func (r *PgAgentRepo) Remove(ctx context.Context, id string, audit *auditdomain.
 
 // Update replaces an agent's mutable fields in the tenant schema, auditing
 // the change in the same transaction. created_by is deliberately not in the
-// SET list — ownership never changes after creation.
-func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string) error {
+// SET list — ownership never changes after creation. replaceParams selects
+// the parameters JSONB semantics: true = overall replace (promote, zero
+// fields become explicit nulls), false = merge (zero fields omitted).
+func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string, replaceParams bool) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := rejectManagedAssistant(ctx, tx, cfg.ID); err != nil {
 			return err
@@ -585,14 +700,18 @@ func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, audit
 		if err := revalidateEditorIfActor(ctx, tx, resourceEditorKind, cfg.ID, editorActor); err != nil {
 			return fmt.Errorf("update agent %s: %w", cfg.ID, err)
 		}
+		parametersSet, params, err := samplingParameterSet(cfg, replaceParams)
+		if err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx,
 			`UPDATE agents
 			 SET name=$1, description=$2, system_prompt=$3,
 			     llm_model=$4, max_iterations=$5, max_context_tokens=$6,
-			     memory_scope=$7, checkpoint_enabled=$8, updated_at=NOW()
-			 WHERE id=$9`,
+			     memory_scope=$7, checkpoint_enabled=$8, `+parametersSet+`, updated_at=NOW()
+			 WHERE id=$10`,
 			cfg.Name, cfg.Description, cfg.SystemPrompt,
-			cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, cfg.CheckpointEnabled, cfg.ID,
+			cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, cfg.CheckpointEnabled, params, cfg.ID,
 		)
 		if err != nil {
 			return fmt.Errorf("update agent %s: %w", cfg.ID, err)
@@ -614,6 +733,27 @@ func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, audit
 		}
 		return nil
 	})
+}
+
+// samplingParameterSet renders the parameters UPDATE fragment and packed JSON
+// for the merge (form/API) or replace (promote) semantics. merge 路径用 JSONB
+// 拼接:仅覆盖本次出现的 key,旧客户端 PUT 不清除已存参数;replace 路径整体
+// 覆盖,零值以 JSON null 显式清除。0=unset 语义见 pack 函数注释。
+func samplingParameterSet(cfg *domain.AgentConfig, replaceParams bool) (string, string, error) {
+	var params string
+	var err error
+	if replaceParams {
+		params, err = packAllSamplingParameters(cfg)
+	} else {
+		params, err = packSamplingParameters(cfg)
+	}
+	if err != nil {
+		return "", "", err
+	}
+	if replaceParams {
+		return "parameters=$9", params, nil
+	}
+	return "parameters=parameters || $9::jsonb", params, nil
 }
 
 // UpdateSystemAssistantModel updates the platform assistant's model fields in

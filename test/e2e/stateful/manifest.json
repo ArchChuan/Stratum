@@ -2436,6 +2436,25 @@
       "http_evidence": "The browser observes the expected successful response for DELETE /memory/:id",
       "db_evidence": "Persisted state is reconciled after DELETE /memory/:id",
       "coverage": "short"
+    },
+    {
+      "id": "llm-admin.route.admin.settings",
+      "domain": "llm-admin",
+      "user_goal": "Open /admin/settings to view and edit platform-level optimizable parameters",
+      "route": "/admin/settings",
+      "roles": {
+        "allowed": [
+          "global_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /admin/settings",
+      "browser_action_id": "llm-admin.route.admin.settings",
+      "http_evidence": "GET /admin/parameters/schema returns registry definitions; GET /admin/parameters returns platform defaults",
+      "db_evidence": "platform_settings rows reflect values written from the page",
+      "coverage": "short"
     }
   ]
 }

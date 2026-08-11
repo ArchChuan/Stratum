@@ -70,7 +70,7 @@ const NavigationContent = ({
           width: 28,
           height: 28,
           borderRadius: 8,
-          background: 'linear-gradient(135deg, #1677ff 0%, #722ed1 100%)',
+          background: 'linear-gradient(135deg, #2563eb 0%, #722ed1 100%)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -277,7 +277,7 @@ export const AppShell = ({ children }: AppShellProps) => {
                 >
                   <span
                     style={{
-                      color: '#1677ff',
+                      color: '#2563eb',
                       fontWeight: 500,
                       cursor: 'pointer',
                       fontSize: 13,

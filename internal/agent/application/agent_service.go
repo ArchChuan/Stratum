@@ -67,6 +67,7 @@ type AgentServiceDeps struct {
 	ResourceEditorRepo        port.ResourceEditorRepo
 	OperationGate             port.OperationGate
 	TenantRoleResolver        port.TenantRoleResolver
+	ParametersProvider        port.ParametersProvider
 	Logger                    *zap.Logger
 }
 
@@ -165,11 +166,20 @@ type UpdateAgentInput struct {
 	MaxTokens              int
 	CompactionRecentGroups int
 	CompactionSafetyRatio  float32
-	AllowedSkills          []string
-	MCPToolIDs             []string
-	KnowledgeWorkspaceIDs  []string
-	MemoryScope            string
-	CheckpointEnabled      bool
+	// Parameters carries the registry sampling parameters as a flat object;
+	// merge semantics — only present keys overwrite, and only non-zero values
+	// persist (0 = unset, never clears an existing value). Keys that appear
+	// here take precedence over the top-level sampling fields above.
+	Parameters map[string]any
+	// ReplaceParameters selects agents.parameters JSONB semantics:
+	// true = overall replace (promote 写回,零值清除旧值);
+	// false = merge (表单路径,零值不落库,旧客户端 PUT 不清除已存参数)。
+	ReplaceParameters     bool
+	AllowedSkills         []string
+	MCPToolIDs            []string
+	KnowledgeWorkspaceIDs []string
+	MemoryScope           string
+	CheckpointEnabled     bool
 }
 
 // AgentDTO is the wire shape returned by AgentService for transport
@@ -196,6 +206,7 @@ type AgentDTO struct {
 	IsSystem               bool
 	ManagementMode         string
 	CheckpointEnabled      bool
+	Parameters             map[string]any
 	Editors                []string
 }
 
@@ -208,8 +219,46 @@ type SystemAssistantSettings struct {
 
 // Create persists a new agent for the tenant. Only owner/admin roles may
 // create; the caller becomes the resource owner (created_by).
+// validateSamplingParams rejects out-of-bounds sampling values
+// (temperature / max_tokens / compaction×2) against the parameter registry
+// before persist. Zero means unset (gateway default) and is skipped; a nil
+// provider (db unavailable) degrades to no-op, matching resolve.
+func (s *AgentService) validateSamplingParams(
+	ctx context.Context, temperature float32, maxTokens, compactionRecentGroups int, compactionSafetyRatio float32,
+) error {
+	if s.deps.ParametersProvider == nil {
+		return nil
+	}
+	declared := map[string]any{}
+	if temperature != 0 {
+		declared["temperature"] = float64(temperature)
+	}
+	if maxTokens != 0 {
+		declared["max_tokens"] = maxTokens
+	}
+	if compactionRecentGroups != 0 {
+		declared["compaction_recent_groups"] = compactionRecentGroups
+	}
+	if compactionSafetyRatio != 0 {
+		declared["compaction_safety_ratio"] = float64(compactionSafetyRatio)
+	}
+	if len(declared) == 0 {
+		return nil
+	}
+	if err := s.deps.ParametersProvider.ValidateResource(ctx, declared); err != nil {
+		// %w 保留 sentinel 供错误中间件映射 400;%v 保留越界详情给调用方。
+		return fmt.Errorf("%w: agent service: validate sampling parameters: %v",
+			domain.ErrInvalidSamplingParameters, err)
+	}
+	return nil
+}
+
 func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDTO, error) {
 	if err := s.checkOwnership(ctx, in.ActorID, in.ActorID, nil); err != nil {
+		return AgentDTO{}, err
+	}
+	if err := s.validateSamplingParams(ctx, in.Temperature, in.MaxTokens,
+		in.CompactionRecentGroups, in.CompactionSafetyRatio); err != nil {
 		return AgentDTO{}, err
 	}
 	id := uuid.Must(uuid.NewV7()).String()
@@ -564,16 +613,49 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	if err != nil {
 		return AgentDTO{}, err
 	}
+	cfg, err := s.buildUpdateConfig(ctx, id, in)
+	if err != nil {
+		return AgentDTO{}, err
+	}
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindAgent, id, auditdomain.ChangeOpUpdate, in.ActorID,
+		AgentSafeProjection(existing.GetConfig()), AgentSafeProjection(cfg))
+	if err != nil {
+		return AgentDTO{}, err
+	}
+	if err := s.deps.Registry.Update(ctx, cfg, audit, editorActor, in.ReplaceParameters); err != nil {
+		return AgentDTO{}, err
+	}
+	s.deps.Logger.Info("agent updated", zap.String("id", id), zap.String("name", in.Name))
+	// 回读而非返回内存 DTO:API 断言必须以 DB 为准(防假绿),
+	// 同时证明采样参数(agents.parameters JSONB)确实落库并反序列化回来。
+	fresh, ok, err := s.deps.Registry.Get(ctx, id)
+	if err != nil {
+		return AgentDTO{}, fmt.Errorf("agent service update: re-read: %w", err)
+	}
+	if !ok {
+		return AgentDTO{}, ErrNotFound
+	}
+	return cfgToDTO(fresh.GetConfig()), nil
+}
+
+// buildUpdateConfig validates the sampling parameters and assembles the
+// domain config from the wire input, deriving max context tokens when unset.
+func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in UpdateAgentInput) (*domain.AgentConfig, error) {
+	// Parameters map keys take precedence over the top-level sampling fields
+	// (only present keys overwrite); validation runs on the merged result.
+	temperature, maxTokens, recentGroups, safetyRatio := applyParameterOverrides(in)
+	if err := s.validateSamplingParams(ctx, temperature, maxTokens, recentGroups, safetyRatio); err != nil {
+		return nil, err
+	}
 	skills := in.AllowedSkills
 	if skills == nil {
 		skills = []string{}
 	}
 	maxCtxTokens := in.MaxContextTokens
 	if maxCtxTokens <= 0 {
-		tenantID := reqctx.TenantIDFromContext(ctx)
-		maxCtxTokens = s.deriveMaxContextTokens(ctx, tenantID, in.LLMModel)
+		maxCtxTokens = s.deriveMaxContextTokens(ctx, reqctx.TenantIDFromContext(ctx), in.LLMModel)
 	}
-	cfg := &domain.AgentConfig{
+	return &domain.AgentConfig{
 		ID:                     id,
 		Name:                   in.Name,
 		Type:                   parseAgentTypeWire(in.Type),
@@ -582,26 +664,59 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 		LLMModel:               in.LLMModel,
 		MaxIterations:          in.MaxIterations,
 		MaxContextTokens:       maxCtxTokens,
-		Temperature:            in.Temperature,
-		MaxTokens:              in.MaxTokens,
-		CompactionRecentGroups: in.CompactionRecentGroups,
-		CompactionSafetyRatio:  in.CompactionSafetyRatio,
+		Temperature:            temperature,
+		MaxTokens:              maxTokens,
+		CompactionRecentGroups: recentGroups,
+		CompactionSafetyRatio:  safetyRatio,
 		AllowedSkills:          skills,
 		MCPToolIDs:             in.MCPToolIDs,
 		KnowledgeWorkspaceIDs:  in.KnowledgeWorkspaceIDs,
 		MemoryScope:            in.MemoryScope,
 		CheckpointEnabled:      in.CheckpointEnabled,
+	}, nil
+}
+
+// applyParameterOverrides merges the declared parameters map onto the
+// top-level sampling fields. Only keys present in the map overwrite; map
+// values win over the top-level fields. Zero values pass through unchanged
+// (0 = unset, the merge pack skips them, so an explicit 0 never clears).
+func applyParameterOverrides(in UpdateAgentInput) (float32, int, int, float32) {
+	temperature, maxTokens := in.Temperature, in.MaxTokens
+	recentGroups, safetyRatio := in.CompactionRecentGroups, in.CompactionSafetyRatio
+	if len(in.Parameters) == 0 {
+		return temperature, maxTokens, recentGroups, safetyRatio
 	}
-	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindAgent, id, auditdomain.ChangeOpUpdate, in.ActorID,
-		AgentSafeProjection(existing.GetConfig()), AgentSafeProjection(cfg))
-	if err != nil {
-		return AgentDTO{}, err
+	if v, ok := numericSampleValue(in.Parameters["temperature"]); ok {
+		temperature = float32(v)
 	}
-	if err := s.deps.Registry.Update(ctx, cfg, audit, editorActor); err != nil {
-		return AgentDTO{}, err
+	if v, ok := numericSampleValue(in.Parameters["max_tokens"]); ok {
+		maxTokens = int(v)
 	}
-	s.deps.Logger.Info("agent updated", zap.String("id", id), zap.String("name", in.Name))
-	return cfgToDTO(cfg), nil
+	if v, ok := numericSampleValue(in.Parameters["compaction_recent_groups"]); ok {
+		recentGroups = int(v)
+	}
+	if v, ok := numericSampleValue(in.Parameters["compaction_safety_ratio"]); ok {
+		safetyRatio = float32(v)
+	}
+	return temperature, maxTokens, recentGroups, safetyRatio
+}
+
+// numericSampleValue coerces a decoded JSON scalar (float64/int) to float64.
+// A present but non-numeric value is treated as absent rather than an error:
+// the merge path only overwrites keys it can interpret.
+func numericSampleValue(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	default:
+		return 0, false
+	}
 }
 
 // resolveUpdateEditorActor decides whether the actor may act as an editor:
@@ -788,7 +903,28 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		IsSystem:               cfg.IsSystem,
 		CheckpointEnabled:      cfg.CheckpointEnabled,
 		ManagementMode:         cfg.ManagementMode,
+		Parameters:             samplingParameterMap(cfg),
 	}
+}
+
+// samplingParameterMap renders the persisted sampling parameters back to the
+// wire object; zero fields are omitted (0 = unset), symmetric with the merge
+// pack in the persistence layer.
+func samplingParameterMap(cfg *domain.AgentConfig) map[string]any {
+	params := map[string]any{}
+	if cfg.Temperature != 0 {
+		params["temperature"] = cfg.Temperature
+	}
+	if cfg.MaxTokens != 0 {
+		params["max_tokens"] = cfg.MaxTokens
+	}
+	if cfg.CompactionRecentGroups != 0 {
+		params["compaction_recent_groups"] = cfg.CompactionRecentGroups
+	}
+	if cfg.CompactionSafetyRatio != 0 {
+		params["compaction_safety_ratio"] = cfg.CompactionSafetyRatio
+	}
+	return params
 }
 
 // ExecRequest is the wire-agnostic execute payload AgentService accepts
@@ -923,7 +1059,7 @@ func recordExecutionPreparation(
 	}
 	config := a.GetConfig()
 	oteltrace.SpanFromContext(ctx).SetAttributes(
-		agentExecutionAttributes(config.ID, config.Name, domain.ReActAgent, cfg)...,
+		agentExecutionAttributes(config.ID, config.Name, domain.ReActAgent, cfg, config.MaxContextTokens)...,
 	)
 }
 
@@ -1630,37 +1766,161 @@ func (s *AgentService) assembleOptions(
 		}))
 	}
 	if s.deps.RAGSearch != nil && len(a.GetConfig().KnowledgeWorkspaceIDs) > 0 {
-		tenantID, search := meta.TenantID, s.deps.RAGSearch
-		options = append(options, WithRAGSearchFn(func(rctx context.Context, workspaces []string, query string, topK int) (string, error) {
-			var combined strings.Builder
-			mutable := make([]string, 0, len(workspaces))
-			for _, workspace := range workspaces {
-				assignment, found := knowledgeAssignments[workspace]
-				if !found {
-					mutable = append(mutable, workspace)
-					continue
-				}
-				revisionSearch, ok := search.(port.KnowledgeRevisionSearchProvider)
-				if !ok {
-					return "", errors.New("Knowledge revision search provider not configured")
-				}
-				content, err := revisionSearch.SearchKnowledgeRevision(rctx, tenantID, assignment.Revision, query)
-				if err != nil {
-					return "", fmt.Errorf("%w: %w", domain.ErrKnowledgeRevisionUnavailable, err)
-				}
-				combined.WriteString(content)
-			}
-			if len(mutable) > 0 {
-				content, err := search.SearchKnowledge(rctx, tenantID, mutable, query, topK)
-				if err != nil {
-					return "", err
-				}
-				combined.WriteString(content)
-			}
-			return combined.String(), nil
-		}))
+		options = appendRAGSearchOptions(options, meta.TenantID, s.deps.RAGSearch, knowledgeAssignments)
 	}
-	return ctx, options, nil
+	return ctx, s.resolveEffectiveParameters(ctx, a, options), nil
+}
+
+// appendRAGSearchOptions wires the plain and (when supported) evidence-capable
+// knowledge search variants. Both share the revision/mutable split: revision
+// snapshots contribute content only, mutable workspaces fan out through the
+// live search provider.
+func appendRAGSearchOptions(
+	options []ExecutionOption,
+	tenantID string,
+	search port.RAGSearchProvider,
+	knowledgeAssignments map[string]port.KnowledgeRevisionAssignment,
+) []ExecutionOption {
+	options = append(options, WithRAGSearchFn(func(rctx context.Context, workspaces []string, query string, topK int) (string, error) {
+		var combined strings.Builder
+		mutable := make([]string, 0, len(workspaces))
+		for _, workspace := range workspaces {
+			assignment, found := knowledgeAssignments[workspace]
+			if !found {
+				mutable = append(mutable, workspace)
+				continue
+			}
+			revisionSearch, ok := search.(port.KnowledgeRevisionSearchProvider)
+			if !ok {
+				return "", errors.New("Knowledge revision search provider not configured")
+			}
+			content, err := revisionSearch.SearchKnowledgeRevision(rctx, tenantID, assignment.Revision, query)
+			if err != nil {
+				return "", fmt.Errorf("%w: %w", domain.ErrKnowledgeRevisionUnavailable, err)
+			}
+			combined.WriteString(content)
+		}
+		if len(mutable) > 0 {
+			content, err := search.SearchKnowledge(rctx, tenantID, mutable, query, topK)
+			if err != nil {
+				return "", err
+			}
+			combined.WriteString(content)
+		}
+		return combined.String(), nil
+	}))
+	return appendEvidenceRAGOption(options, search, tenantID, knowledgeAssignments)
+}
+
+// appendEvidenceRAGOption wires the evidence-capable search variant when the
+// provider supports chunk-level provenance. Same revision/mutable split as
+// the plain variant; revision snapshots have no provenance path, so they
+// contribute content only. The options slice is returned unchanged when the
+// provider lacks evidence support (existing behavior preserved).
+func appendEvidenceRAGOption(
+	options []ExecutionOption,
+	search port.RAGSearchProvider,
+	tenantID string,
+	knowledgeAssignments map[string]port.KnowledgeRevisionAssignment,
+) []ExecutionOption {
+	evidenceProvider, ok := search.(port.RAGSearchEvidenceProvider)
+	if !ok {
+		return options
+	}
+	return append(options, WithRAGSearchFnWithEvidence(func(rctx context.Context, workspaces []string, query string, topK int) (port.RAGSearchEvidence, error) {
+		var combined strings.Builder
+		var sources []port.RAGSearchSource
+		mutable := make([]string, 0, len(workspaces))
+		for _, workspace := range workspaces {
+			assignment, found := knowledgeAssignments[workspace]
+			if !found {
+				mutable = append(mutable, workspace)
+				continue
+			}
+			revisionSearch, ok := search.(port.KnowledgeRevisionSearchProvider)
+			if !ok {
+				return port.RAGSearchEvidence{}, errors.New("Knowledge revision search provider not configured")
+			}
+			content, err := revisionSearch.SearchKnowledgeRevision(rctx, tenantID, assignment.Revision, query)
+			if err != nil {
+				return port.RAGSearchEvidence{}, fmt.Errorf("%w: %w", domain.ErrKnowledgeRevisionUnavailable, err)
+			}
+			combined.WriteString(content)
+		}
+		if len(mutable) > 0 {
+			ev, err := evidenceProvider.SearchKnowledgeWithEvidence(rctx, tenantID, mutable, query, topK)
+			if err != nil {
+				return port.RAGSearchEvidence{}, err
+			}
+			combined.WriteString(ev.Content)
+			sources = append(sources, ev.Sources...)
+		}
+		return port.RAGSearchEvidence{Content: combined.String(), Sources: sources}, nil
+	}))
+}
+
+// resolveEffectiveParameters merges platform defaults into the execution
+// options at the assemble point (no caching). Agent-config values — the
+// resource-declared layer — already flow into execution through the
+// snapshotExecutionConfig backfill; the provider fills in platform defaults
+// only where the resource left the key at 0=unset. Resolution errors degrade
+// to unset (execution keeps gateway defaults): parameters are an
+// optimization input, not an execution gate.
+func (s *AgentService) resolveEffectiveParameters(
+	ctx context.Context,
+	a Agent,
+	options []ExecutionOption,
+) []ExecutionOption {
+	if s.deps.ParametersProvider == nil {
+		return options
+	}
+	cfg := a.GetConfig()
+	declared := map[string]any{
+		"agent.temperature":              cfg.Temperature,
+		"agent.max_tokens":               cfg.MaxTokens,
+		"agent.compaction_recent_groups": cfg.CompactionRecentGroups,
+		"agent.compaction_safety_ratio":  cfg.CompactionSafetyRatio,
+	}
+	effective, err := s.deps.ParametersProvider.ResolveForResource(ctx, declared)
+	if err != nil {
+		s.deps.Logger.Warn("agent execute: resolve effective parameters, keeping defaults", zap.Error(err))
+		return options
+	}
+	if v, ok := effective["agent.temperature"].(float64); ok {
+		options = append(options, WithTemperature(float32(v)))
+	}
+	if v, ok := effective["agent.max_tokens"].(int64); ok {
+		options = append(options, WithMaxTokens(int(v)))
+	}
+	if v, ok := effective["agent.compaction_recent_groups"].(int64); ok {
+		options = append(options, WithCompactionRecentGroups(int(v)))
+	}
+	if v, ok := effective["agent.compaction_safety_ratio"].(float64); ok {
+		options = append(options, WithCompactionSafetyRatio(float32(v)))
+	}
+	// Platform-scope execution toggles are resolved individually; they are
+	// not resource keys so ResolveForResource never returns them.
+	if opt := captureParametersOption(ctx, s.deps.ParametersProvider); opt != nil {
+		options = append(options, opt)
+	}
+	return options
+}
+
+// captureParametersOption reads the platform-scope execution toggle
+// trace.capture_parameters and returns the option recording raw parameter
+// values when enabled. Unset, non-bool or resolution errors degrade to
+// fingerprint-only traces (parameters are an optimization input, not an
+// execution gate).
+func captureParametersOption(ctx context.Context, provider port.ParametersProvider) ExecutionOption {
+	v, ok, err := provider.Resolve(ctx, "trace.capture_parameters", nil)
+	if err != nil || !ok {
+		return nil
+	}
+	enabled, isBool := v.(bool)
+	if !isBool || !enabled {
+		return nil
+	}
+	return WithCaptureParameters(true)
 }
 
 // attachChatStore wires the configured ChatStore onto the running agent

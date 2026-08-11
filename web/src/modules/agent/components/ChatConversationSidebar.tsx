@@ -123,7 +123,7 @@ export const ChatConversationSidebar = ({
                 borderRadius: 6,
                 cursor: 'pointer',
                 marginBottom: 2,
-                background: c.id === selectedConv ? '#e6f4ff' : 'transparent',
+                background: c.id === selectedConv ? '#dbeafe' : 'transparent',
               }}
             >
               {editingId === c.id ? (
@@ -143,7 +143,7 @@ export const ChatConversationSidebar = ({
                     style={{
                       display: 'block',
                       fontSize: 13,
-                      color: c.id === selectedConv ? '#1677ff' : undefined,
+                      color: c.id === selectedConv ? '#2563eb' : undefined,
                     }}
                   >
                     {c.name}

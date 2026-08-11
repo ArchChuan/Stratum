@@ -10,12 +10,19 @@ export const resourceRefSchema = z.object({
 });
 export type ResourceRef = z.infer<typeof resourceRefSchema>;
 
+export const judgeSpecSchema = z.object({
+  model: z.string().optional(),
+  rubric: z.string().optional(),
+}).optional();
+export type JudgeSpec = z.infer<typeof judgeSpecSchema>;
+
 export const evaluationCaseSchema = z.object({
   id: z.string().optional(),
   name: z.string().optional().default(''),
   input: z.unknown(),
   expected_output: z.unknown(),
-  assertion_mode: z.enum(['exact', 'contains', 'regex']),
+  assertion_mode: z.enum(['exact', 'contains', 'regex', 'judge']),
+  judge_spec: judgeSpecSchema,
   enabled: z.boolean().optional().default(true),
 });
 export type EvaluationCase = z.infer<typeof evaluationCaseSchema>;
@@ -43,6 +50,16 @@ export const evaluationJobSchema = z.object({
 });
 export type EvaluationJob = z.infer<typeof evaluationJobSchema>;
 
+export const ragEvidenceSchema = z.object({
+  retrieved_document_ids: z.array(z.string()).optional(),
+  relevant_document_ids: z.array(z.string()).optional(),
+  recall_at_k: z.number().optional(),
+  precision_at_k: z.number().optional(),
+  mrr: z.number().optional(),
+  ndcg_at_k: z.number().optional(),
+});
+export type RAGEvidence = z.infer<typeof ragEvidenceSchema>;
+
 export const evaluationRunSchema = z.object({
   id: z.string(),
   resource: resourceRefSchema,
@@ -50,6 +67,7 @@ export const evaluationRunSchema = z.object({
   passed: z.boolean(),
   total_cases: z.number(),
   passed_cases: z.number(),
+  metrics: z.record(z.string(), z.unknown()).optional(),
   results: z.array(
     z.object({
       case_id: z.string(),
@@ -61,6 +79,7 @@ export const evaluationRunSchema = z.object({
       tokens: z.number().optional().default(0),
       cost_usd: z.number().optional().default(0),
       duration_ms: z.number().optional().default(0),
+      rag_evidence: ragEvidenceSchema.optional(),
     }),
   ),
 });

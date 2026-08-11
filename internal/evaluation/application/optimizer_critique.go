@@ -277,11 +277,14 @@ func (CompatibilityCritic) Review(
 	return domain.CritiqueResult{Approved: true}, nil
 }
 
+// allowedParams mirrors the registry evaluation keys; registry_consistency_test
+// keeps both sides in lockstep (registry is the source of truth).
 var allowedParams = map[string]bool{
 	"model": true, "temperature": true, "maxTokens": true, "max_tokens": true,
 	"max_context_tokens": true, "max_iterations": true, "bindings": true,
 	"enabled_tools": true, "timeout_ms": true, "max_retries": true,
 	"top_k": true, "score_threshold": true, "reranking": true, "query_rewrite": true,
+	"compaction_recent_groups": true, "compaction_safety_ratio": true,
 }
 
 var allowedPrompts = map[string]bool{

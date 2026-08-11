@@ -13,6 +13,7 @@ import { llmRoutes } from '@/modules/llm';
 import { mcpRoutes } from '@/modules/mcp';
 import { memoryRoutes } from '@/modules/memory';
 import { operationGateRoutes } from '@/modules/operation-gate';
+import { parametersRoutes } from '@/modules/parameters';
 import { promptRoutes } from '@/modules/prompt';
 import { scheduledTaskRoutes } from '@/modules/scheduled-task';
 import { skillRoutes } from '@/modules/skill';
@@ -44,6 +45,7 @@ export const AppRouter = () => {
         {llmRoutes}
         {workflowRoutes}
         {operationGateRoutes}
+        {parametersRoutes}
         {promptRoutes}
         {auditRoutes}
         {memoryRoutes}

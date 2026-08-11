@@ -333,7 +333,7 @@ func createCommandExperiment(
 		StableRevisionID: experiment.StableRevisionID, CanaryRevisionID: experiment.CanaryRevisionID,
 		CanaryPercent: 5, ExperimentID: experiment.ID, PolicyVersion: 1,
 	}
-	seedCommandExperimentRevisions(t, ctx, repo.pool, tenantID, experiment)
+	seedCommandExperimentRevisions(t, ctx, repo.pool.(*pgxpool.Pool), tenantID, experiment)
 	if err := repo.Create(ctx, tenantID, experiment, deployment); err != nil {
 		t.Fatal(err)
 	}

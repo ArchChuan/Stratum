@@ -10,7 +10,10 @@ import {
 import { configureManagedModels, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
 import type { EvidenceRecord } from '../core/evidence';
 
-interface LLMAdminPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string; fixtureURL: string; backendURL: string }
+interface LLMAdminPackContext {
+  actor: BrowserActor; systemAdmin: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord;
+  webURL: string; fixtureURL: string; backendURL: string;
+}
 
 const waitForMutation = (page: Page, path: string | RegExp, method: string) => page.waitForResponse((response) => {
   const urlPath = new URL(response.url()).pathname;
@@ -29,7 +32,7 @@ const recordEvidence = (evidence: EvidenceRecord, label: string) => {
 const clickModalOK = (page: Page) => page.locator('.ant-modal-content')
   .getByRole('button', { name: /确\s*定/ }).click();
 
-export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL, fixtureURL, backendURL }: LLMAdminPackContext): Promise<string[]> => {
+export const executeLLMAdminPack = async ({ actor, systemAdmin, pool, evidence, webURL, fixtureURL, backendURL }: LLMAdminPackContext): Promise<string[]> => {
   const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
   const completed: string[] = [];
   const page = await actor.context.newPage();
@@ -224,6 +227,23 @@ export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL, fixtu
       .toEqual([{ count: '0' }]);
     completed.push('llm-admin.mutation.delete.admin.providers.id');
     recordEvidence(evidence, 'LLM provider deletion');
+
+    // ── Open /admin/settings (platform-level optimizable parameters) ─────────
+    // The route requires global admin (PrivateRoute requiredRole="global_admin");
+    // the tenant admin actor is not elevated to global admin.
+    const adminPage = await systemAdmin.context.newPage();
+    try {
+      const schemaResponse = waitForMutation(adminPage, '/admin/parameters/schema', 'GET');
+      const paramsResponse = waitForMutation(adminPage, '/admin/parameters', 'GET');
+      await adminPage.goto(`${webURL}/admin/settings`);
+      expect((await schemaResponse).status()).toBe(200);
+      expect((await paramsResponse).status()).toBe(200);
+      await expect(adminPage.getByRole('heading', { name: '平台参数' })).toBeVisible();
+      completed.push('llm-admin.route.admin.settings');
+      recordEvidence(evidence, 'LLM admin platform settings');
+    } finally {
+      await adminPage.close();
+    }
   } finally {
     await page.close();
   }

@@ -247,6 +247,7 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		adminGroup.GET("/tenants/:id", adminHandler.GetTenant)
 		adminGroup.PATCH("/tenants/:id", adminHandler.UpdateTenant)
 		adminGroup.DELETE("/tenants/:id", adminHandler.DeleteTenant)
+		registerParameterAdminRoutes(adminGroup, c)
 	}
 
 	tenantGroup := r.Group("/tenant", jwtMW, middleware.InjectTenantContext(), middleware.RequireTenantRole("member"))
@@ -262,6 +263,18 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 	}
 
 	r.GET("/tenant/list", jwtMW, tenantHandler.ListUserTenants)
+}
+
+// registerParameterAdminRoutes wires the unified parameter registry admin
+// endpoints (schema + platform values) when the registry is wired.
+func registerParameterAdminRoutes(adminGroup *gin.RouterGroup, c *wiring.Container) {
+	if c.Parameters == nil || c.Parameters.Service == nil {
+		return
+	}
+	paramHandler := handler.NewParameterHandler(c.Parameters.Service, c.Logger)
+	adminGroup.GET("/parameters/schema", paramHandler.Schema)
+	adminGroup.GET("/parameters", paramHandler.List)
+	adminGroup.PUT("/parameters", paramHandler.Update)
 }
 
 func registerModelCatalogue(r *gin.Engine, c *wiring.Container) {

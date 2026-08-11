@@ -16,6 +16,9 @@ import (
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/persistence"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	memworkers "github.com/byteBuilderX/stratum/internal/memory/infrastructure/workers"
+	parametersapp "github.com/byteBuilderX/stratum/internal/parameters/application"
+
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 )
 
 // Memory groups memory-system services: the user-facing manager, the
@@ -36,7 +39,14 @@ type memoryGatewayCompleter interface {
 	Complete(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error)
 }
 
-type memoryLLMAdapter struct{ client memoryGatewayCompleter }
+// memoryLLMAdapter 把 memory pipeline 的 LLM 请求适配到 llmgateway。
+// tenantID 由构造方闭包捕获（pipeline worker 的 ctx 不含请求租户），
+// Complete 时注入 reqctx——Gateway 内部从 ctx 取租户做模型解析（gateway.go
+// 的 TenantIDFromContext），不注入则 resolve 报 tenant_id is empty。
+type memoryLLMAdapter struct {
+	client   memoryGatewayCompleter
+	tenantID string
+}
 
 func (a memoryLLMAdapter) Complete(ctx context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
 	if a.client == nil {
@@ -44,6 +54,9 @@ func (a memoryLLMAdapter) Complete(ctx context.Context, req *memport.CompletionR
 	}
 	if req == nil {
 		return nil, fmt.Errorf("memory llm adapter: request is nil")
+	}
+	if a.tenantID != "" {
+		ctx = reqctx.WithTenantID(ctx, a.tenantID)
 	}
 	messages := make([]llmdomain.Message, len(req.Messages))
 	for i, message := range req.Messages {
@@ -59,6 +72,31 @@ func (a memoryLLMAdapter) Complete(ctx context.Context, req *memport.CompletionR
 		return nil, fmt.Errorf("memory llm adapter: provider returned nil response")
 	}
 	return &memport.CompletionResponse{Content: response.Content, CompletionTokens: response.Usage.CompletionTokens}, nil
+}
+
+// platformParameterReader adapts the parameters application service to the
+// pipeline's PlatformParams port (thin ACL; wiring is the only allowed
+// adapter seam). nil service (db unavailable) reports absent so consumers
+// keep their definition defaults.
+type platformParameterReader struct {
+	svc *parametersapp.Service
+}
+
+func (r platformParameterReader) Int(ctx context.Context, key string) (int, bool) {
+	if r.svc == nil {
+		return 0, false
+	}
+	values, err := r.svc.PlatformValues(ctx)
+	if err != nil {
+		return 0, false
+	}
+	switch v := values[key].(type) {
+	case float64:
+		return int(v), true
+	case int64:
+		return int(v), true
+	}
+	return 0, false
 }
 
 func (c *Container) buildMemory(ctx context.Context) error {
@@ -96,7 +134,11 @@ func (c *Container) buildMemoryService(mem *Memory, db *pgxpool.Pool, memRepo me
 		llmRes := newTenantCapabilityResolver(
 			c.LLMGateway.Registry, c.LLMGateway.Gateway, c.Logger,
 		).(*tenantCapabilityResolver)
-		mem.Service.SetLLMExtractResolver(makeLLMExtractResolver(llmRes))
+		var extractParams pipeline.PlatformParams
+		if c.Parameters != nil {
+			extractParams = platformParameterReader{svc: c.Parameters.Service}
+		}
+		mem.Service.SetLLMExtractResolver(makeLLMExtractResolver(llmRes, extractParams))
 		mem.Service.SetLLMSupersederResolver(makeLLMSupersederResolver(llmRes))
 	}
 	if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
@@ -112,6 +154,9 @@ func (c *Container) buildMemoryInjector(mem *Memory, db *pgxpool.Pool) {
 	inj := pipeline.NewMemoryInjector(db, c.Logger, nil, vectorStore)
 	if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 		inj.SetEmbedResolver(c.Knowledge.EmbedResolver)
+	}
+	if c.Parameters != nil {
+		inj.SetPlatformParams(platformParameterReader{svc: c.Parameters.Service})
 	}
 	mem.Injector = injectorAdapter{inj: inj}
 }
@@ -195,7 +240,7 @@ func (c *Container) buildMemoryPipeline(mem *Memory, db *pgxpool.Pool) error {
 			if gw == nil {
 				return nil
 			}
-			return memoryLLMAdapter{client: gw}
+			return memoryLLMAdapter{client: gw, tenantID: tenantID}
 		})
 	}
 	mem.Pipeline = p
@@ -217,13 +262,15 @@ func (c *Container) attachPipelineDynamic(p *pipeline.Pipeline) {
 	p.WithDynamic(&dynamic)
 }
 
-func makeLLMExtractResolver(llmRes *tenantCapabilityResolver) func(context.Context, string) memport.LLMExtractor {
+func makeLLMExtractResolver(llmRes *tenantCapabilityResolver, params pipeline.PlatformParams) func(context.Context, string) memport.LLMExtractor {
 	return func(ctx context.Context, tenantID string) memport.LLMExtractor {
 		llm := llmRes.ResolveLLM(ctx, tenantID)
 		if llm == nil {
 			return nil
 		}
-		return pipeline.NewLLMExtractor(memoryLLMAdapter{client: llm})
+		extractor := pipeline.NewLLMExtractor(memoryLLMAdapter{client: llm, tenantID: tenantID})
+		extractor.SetPlatformParams(params)
+		return extractor
 	}
 }
 
@@ -233,7 +280,7 @@ func makeLLMSupersederResolver(llmRes *tenantCapabilityResolver) func(context.Co
 		if llm == nil {
 			return nil
 		}
-		return memworkers.NewLLMSuperseder(memoryLLMAdapter{client: llm})
+		return memworkers.NewLLMSuperseder(memoryLLMAdapter{client: llm, tenantID: tenantID})
 	}
 }
 
@@ -328,7 +375,7 @@ func buildWorkerLLMResolver(llmRes *tenantCapabilityResolver) memworkers.TenantL
 		if err != nil || llm == nil {
 			return nil, err
 		}
-		return memoryLLMAdapter{client: llm}, nil
+		return memoryLLMAdapter{client: llm, tenantID: tenantID}, nil
 	}
 }
 

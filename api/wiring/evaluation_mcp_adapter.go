@@ -15,6 +15,7 @@ import (
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
+	parametersdomain "github.com/byteBuilderX/stratum/internal/parameters/domain"
 	pkgobjectstore "github.com/byteBuilderX/stratum/pkg/storage/objectstore"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 )
@@ -53,7 +54,9 @@ type mcpEvaluationAdapter struct {
 	runtime      mcpRevisionRuntime
 	revisions    mcpRevisionService
 	runtimeStore pkgobjectstore.Store
-	actorID      string
+	// parameters is the registry source of truth for optimizable keys.
+	parameters *parametersdomain.ParametersRegistry
+	actorID    string
 }
 
 func (a mcpEvaluationAdapter) CreatePublishedBaseline(
@@ -130,6 +133,9 @@ func (a mcpEvaluationAdapter) LoadOptimizableSnapshot(
 func (a mcpEvaluationAdapter) CreateCandidate(
 	ctx context.Context, tenantID string, baseline evaldomain.ResourceRef, patch evaldomain.CandidatePatch,
 ) (evaldomain.ResourceRef, error) {
+	if err := validatePatchKeys(a.parameters, patch); err != nil {
+		return evaldomain.ResourceRef{}, err
+	}
 	parent, snapshot, err := a.loadRevision(ctx, tenantID, baseline, false)
 	if err != nil {
 		return evaldomain.ResourceRef{}, err
@@ -376,7 +382,9 @@ func stableTenantFingerprint(tenantID, contentFingerprint string) string {
 	return hex.EncodeToString(hash[:])
 }
 
-func applyMCPCandidatePatch(snapshot *mcpRevisionSnapshot, patch evaldomain.CandidatePatch) ([]string, error) {
+func applyMCPCandidatePatch(
+	snapshot *mcpRevisionSnapshot, patch evaldomain.CandidatePatch,
+) ([]string, error) {
 	if len(patch.PromptPatch) != 0 {
 		return nil, errors.New("evaluation MCP adapter: prompt is not optimizable")
 	}

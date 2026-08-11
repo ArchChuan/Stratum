@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
@@ -15,7 +16,7 @@ func TestServiceRunEvaluatesEnabledCasesAndPersistsResults(t *testing.T) {
 		"case-2": map[string]any{"label": "refund"},
 	}}
 	repo := &fakeRunRepo{}
-	svc := NewService(adapter, repo, nil)
+	svc := NewService(adapter, repo, nil, nil)
 
 	run, err := svc.Run(context.Background(), RunInput{
 		TenantID: "tenant-1",
@@ -49,7 +50,7 @@ func TestServiceRunEvaluatesEnabledCasesAndPersistsResults(t *testing.T) {
 func TestServiceRunPersistsExecutionErrorsAsFailedCases(t *testing.T) {
 	adapter := &fakeAdapter{errCase: "case-1"}
 	repo := &fakeRunRepo{}
-	svc := NewService(adapter, repo, nil)
+	svc := NewService(adapter, repo, nil, nil)
 
 	run, err := svc.Run(context.Background(), RunInput{
 		TenantID: "tenant-1",
@@ -77,7 +78,7 @@ func TestServiceRunStoredLoadsPublishedSuiteRevision(t *testing.T) {
 		ResourceKind: domain.ResourceKindSkill,
 		Cases:        []domain.EvalCase{{ID: "case-1", Input: "快递没更新", ExpectedOutput: "物流", AssertionMode: domain.AssertionContains, Enabled: true}},
 	}}
-	svc := NewService(adapter, runRepo, nil, suiteRepo)
+	svc := NewService(adapter, runRepo, nil, nil, suiteRepo)
 
 	run, err := svc.RunStored(context.Background(), "tenant-1", "user-1", domain.ResourceRef{
 		Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2",
@@ -92,7 +93,7 @@ func TestServiceRunStoredLoadsPublishedSuiteRevision(t *testing.T) {
 
 func TestServiceGetRunReturnsPersistedRun(t *testing.T) {
 	repo := &fakeRunRepo{saved: domain.EvalRun{ID: "run-1", Passed: true}}
-	svc := NewService(&fakeAdapter{}, repo, nil)
+	svc := NewService(&fakeAdapter{}, repo, nil, nil)
 
 	run, err := svc.GetRun(context.Background(), "tenant-1", "run-1")
 	if err != nil {
@@ -161,7 +162,7 @@ func TestServiceRunCaseResolvesTraceEvidence(t *testing.T) {
 			},
 		},
 	}
-	svc := NewService(adapter, repo, traceReader)
+	svc := NewService(adapter, repo, traceReader, nil)
 
 	run, err := svc.Run(context.Background(), RunInput{
 		TenantID: "tenant-1",
@@ -186,7 +187,7 @@ func TestServiceRunCaseGracefullyHandlesTraceReaderError(t *testing.T) {
 	adapter := &fakeAdapter{outputs: map[string]any{"case-1": "ok"}}
 	repo := &fakeRunRepo{}
 	traceReader := &fakeFailingTraceEvidenceReader{}
-	svc := NewService(adapter, repo, traceReader)
+	svc := NewService(adapter, repo, traceReader, nil)
 
 	run, err := svc.Run(context.Background(), RunInput{
 		TenantID: "tenant-1",
@@ -210,7 +211,7 @@ func TestServiceRunCaseGracefullyHandlesTraceReaderError(t *testing.T) {
 func TestServiceRunCaseSkipsTraceEvidenceWhenReaderNil(t *testing.T) {
 	adapter := &fakeAdapter{outputs: map[string]any{"case-1": "ok"}}
 	repo := &fakeRunRepo{}
-	svc := NewService(adapter, repo, nil) // no trace reader configured
+	svc := NewService(adapter, repo, nil, nil) // no trace reader configured
 
 	run, err := svc.Run(context.Background(), RunInput{
 		TenantID: "tenant-1",
@@ -235,4 +236,150 @@ func (f *fakeFailingTraceEvidenceReader) Resolve(_ context.Context, _, _ string)
 
 func (f *fakeFailingTraceEvidenceReader) ResolveBatch(_ context.Context, _ string, _ []string) (map[string]port.ObservedTrace, error) {
 	return nil, errors.New("opik unavailable")
+}
+
+type fakeLLMJudge struct {
+	enabled bool
+	result  domain.AssertionResult
+	err     error
+	got     port.JudgeRequest
+	calls   int
+}
+
+func (f *fakeLLMJudge) Enabled(_ context.Context) bool { return f.enabled }
+func (f *fakeLLMJudge) Judge(_ context.Context, req port.JudgeRequest) (domain.AssertionResult, error) {
+	f.calls++
+	f.got = req
+	return f.result, f.err
+}
+
+func TestServiceJudgeAssertionDispatchesToJudge(t *testing.T) {
+	adapter := &fakeAdapter{outputs: map[string]any{"judge-1": "退款已到账"}}
+	repo := &fakeRunRepo{}
+	judge := &fakeLLMJudge{enabled: true, result: domain.AssertionResult{Passed: true, Message: "符合要求"}}
+	svc := NewService(adapter, repo, nil, judge)
+
+	run, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
+		Suite: domain.EvalSuiteRevision{
+			ID: "suite-version-1",
+			Cases: []domain.EvalCase{
+				{ID: "judge-1", Input: "退款到账了吗", AssertionMode: domain.AssertionJudge, Enabled: true,
+					JudgeSpec: &domain.JudgeSpec{Model: "qwen-max", Rubric: "custom rubric"}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !run.Passed || !run.Results[0].Passed {
+		t.Fatalf("expected judge case to pass, got %+v", run.Results[0])
+	}
+	if judge.calls != 1 {
+		t.Fatalf("expected 1 judge call, got %d", judge.calls)
+	}
+	if judge.got.Model != "qwen-max" || judge.got.Rubric != "custom rubric" {
+		t.Fatalf("judge request missing spec: %+v", judge.got)
+	}
+	if judge.got.Input != `"退款到账了吗"` || judge.got.Actual != `"退款已到账"` {
+		t.Fatalf("judge request material mismatch: input=%s actual=%s", judge.got.Input, judge.got.Actual)
+	}
+	if judge.got.ExpectedOutput != "null" {
+		t.Fatalf("expected null expected output for judge-only case, got %s", judge.got.ExpectedOutput)
+	}
+}
+
+func TestServiceJudgeAssertionFailClosedWhenDisabled(t *testing.T) {
+	adapter := &fakeAdapter{outputs: map[string]any{"judge-1": "any"}}
+	repo := &fakeRunRepo{}
+	svc := NewService(adapter, repo, nil, nil) // no judge configured
+
+	run, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
+		Suite: domain.EvalSuiteRevision{
+			ID: "suite-version-1",
+			Cases: []domain.EvalCase{
+				{ID: "judge-1", Input: "x", AssertionMode: domain.AssertionJudge, Enabled: true},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if run.Passed || run.Results[0].Error != "LLM judge disabled" {
+		t.Fatalf("expected fail-closed error, got %+v", run.Results[0])
+	}
+}
+
+func TestServiceJudgeAssertionDisabledJudgeFailsClosed(t *testing.T) {
+	adapter := &fakeAdapter{outputs: map[string]any{"judge-1": "any"}}
+	repo := &fakeRunRepo{}
+	svc := NewService(adapter, repo, nil, &fakeLLMJudge{enabled: false})
+
+	run, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
+		Suite: domain.EvalSuiteRevision{
+			ID: "suite-version-1",
+			Cases: []domain.EvalCase{
+				{ID: "judge-1", Input: "x", AssertionMode: domain.AssertionJudge, Enabled: true},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if run.Passed || run.Results[0].Error != "LLM judge disabled" {
+		t.Fatalf("expected fail-closed error, got %+v", run.Results[0])
+	}
+}
+
+func TestServiceJudgeAssertionPropagatesJudgeError(t *testing.T) {
+	adapter := &fakeAdapter{outputs: map[string]any{"judge-1": "any"}}
+	repo := &fakeRunRepo{}
+	judge := &fakeLLMJudge{enabled: true, err: errors.New("completer timeout")}
+	svc := NewService(adapter, repo, nil, judge)
+
+	run, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
+		Suite: domain.EvalSuiteRevision{
+			ID: "suite-version-1",
+			Cases: []domain.EvalCase{
+				{ID: "judge-1", Input: "x", AssertionMode: domain.AssertionJudge, Enabled: true},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if run.Passed || !strings.Contains(run.Results[0].Error, "completer timeout") {
+		t.Fatalf("expected judge error to propagate, got %+v", run.Results[0])
+	}
+}
+
+func TestServiceRuleAssertionDoesNotTouchJudge(t *testing.T) {
+	adapter := &fakeAdapter{outputs: map[string]any{"case-1": "发货了"}}
+	repo := &fakeRunRepo{}
+	judge := &fakeLLMJudge{enabled: true}
+	svc := NewService(adapter, repo, nil, judge)
+
+	_, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
+		Suite: domain.EvalSuiteRevision{
+			ID: "suite-version-1",
+			Cases: []domain.EvalCase{
+				{ID: "case-1", Input: "物流", ExpectedOutput: "发货", AssertionMode: domain.AssertionContains, Enabled: true},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if judge.calls != 0 {
+		t.Fatalf("rule assertion must not call the judge, got %d calls", judge.calls)
+	}
 }

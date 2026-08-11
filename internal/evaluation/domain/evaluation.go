@@ -17,6 +17,9 @@ const (
 	AssertionExact    AssertionMode = "exact"
 	AssertionContains AssertionMode = "contains"
 	AssertionRegex    AssertionMode = "regex"
+	// AssertionJudge delegates the verdict to an LLM judge. Dispatch happens
+	// in the application layer (runCase); EvaluateAssertion stays rule-only.
+	AssertionJudge AssertionMode = "judge"
 )
 
 type AssertionResult struct {
@@ -31,6 +34,17 @@ type EvalCase struct {
 	ExpectedOutput any           `json:"expected_output"`
 	AssertionMode  AssertionMode `json:"assertion_mode"`
 	Enabled        bool          `json:"enabled"`
+	// JudgeSpec configures LLM judge assertion for assertion_mode=judge.
+	// Both fields are optional: empty Model/Rubric fall back to platform
+	// parameters and the registered global rubric respectively. Persisted in
+	// the evaluator_config JSONB column (never written before Phase 3).
+	JudgeSpec *JudgeSpec `json:"judge_spec,omitempty"`
+}
+
+// JudgeSpec is the per-case LLM judge configuration.
+type JudgeSpec struct {
+	Model  string `json:"model,omitempty"`
+	Rubric string `json:"rubric,omitempty"`
 }
 
 type EvalSuiteRevision struct {
@@ -69,6 +83,22 @@ type EvalCaseResult struct {
 	CostUSD       float64                `json:"cost_usd"`
 	DurationMs    int                    `json:"duration_ms"`
 	TraceEvidence *ObservedTraceEvidence `json:"trace_evidence,omitempty"`
+	// RAGEvidence carries structured retrieval metrics for knowledge
+	// evaluations; nil for other resource kinds. It replaces brittle parsing
+	// of the serialized Actual payload.
+	RAGEvidence *RAGEvidenceInfo `json:"rag_evidence,omitempty"`
+}
+
+// RAGEvidenceInfo is the per-case retrieval signal for knowledge runs. The
+// K-suffixed metrics use the rank window of knowledge/application.RetrievalK
+// (constants.DefaultRAGTopK); retrieved IDs are ordered as returned.
+type RAGEvidenceInfo struct {
+	RetrievedDocumentIDs []string `json:"retrieved_document_ids,omitempty"`
+	RelevantDocumentIDs  []string `json:"relevant_document_ids,omitempty"`
+	RecallAtK            float64  `json:"recall_at_k,omitempty"`
+	PrecisionAtK         float64  `json:"precision_at_k,omitempty"`
+	MRR                  float64  `json:"mrr,omitempty"`
+	NDCGAtK              float64  `json:"ndcg_at_k,omitempty"`
 }
 
 // ObservedTraceEvidence carries trace-level observability signals resolved
@@ -84,14 +114,18 @@ type ObservedTraceEvidence struct {
 }
 
 type EvalRun struct {
-	ID              string           `json:"id"`
-	Resource        ResourceRef      `json:"resource"`
-	SuiteRevisionID string           `json:"suite_revision_id"`
-	Passed          bool             `json:"passed"`
-	TotalCases      int              `json:"total_cases"`
-	PassedCases     int              `json:"passed_cases"`
-	Results         []EvalCaseResult `json:"results"`
-	CreatedAt       time.Time        `json:"created_at"`
+	ID              string      `json:"id"`
+	Resource        ResourceRef `json:"resource"`
+	SuiteRevisionID string      `json:"suite_revision_id"`
+	Passed          bool        `json:"passed"`
+	TotalCases      int         `json:"total_cases"`
+	PassedCases     int         `json:"passed_cases"`
+	// Metrics aggregates run-level signals (pass rate, latency percentiles,
+	// token/cost totals) computed after the case loop; persisted to
+	// eval_runs.metrics JSONB.
+	Metrics   map[string]any   `json:"metrics,omitempty"`
+	Results   []EvalCaseResult `json:"results"`
+	CreatedAt time.Time        `json:"created_at"`
 }
 
 type JobStatus string

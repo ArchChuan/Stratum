@@ -26,6 +26,9 @@ type toolExecResult struct {
 	errMsg       string
 	fatalToolErr error
 	artifact     *domain.SystemAssistantToolArtifact
+	// evidence is retrieval provenance (e.g. RAG sources) merged into the
+	// tool observation metadata so traces record where tool content came from.
+	evidence map[string]any
 }
 
 func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReActState] {
@@ -312,7 +315,7 @@ func execPlanTool(toolCtx context.Context, tc port.ToolCall, s *ReActState) tool
 }
 
 func execSearchKnowledgeTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time, logger *zap.Logger) toolExecResult {
-	if s.RAGSearchFn == nil {
+	if s.RAGSearchFn == nil && s.RAGSearchFnWithEvidence == nil {
 		return toolExecResult{content: "error: stratum_search_knowledge tool not configured", status: domain.ToolTraceStatusSuccess}
 	}
 	workspaces := extractStringSliceArg(tc.Arguments, "workspaces")
@@ -324,7 +327,18 @@ func execSearchKnowledgeTool(toolCtx context.Context, tc port.ToolCall, s *ReAct
 	}
 	topK := clampTopK(tc.Arguments)
 	ragCtx, ragCancel := context.WithTimeout(toolCtx, constants.AgentRAGSearchTimeout)
-	content, ragErr := s.RAGSearchFn(ragCtx, workspaces, query, topK)
+	var content string
+	var evidence map[string]any
+	var ragErr error
+	if s.RAGSearchFnWithEvidence != nil {
+		// Evidence-capable search: provenance travels with the content.
+		var res port.RAGSearchEvidence
+		res, ragErr = s.RAGSearchFnWithEvidence(ragCtx, workspaces, query, topK)
+		content = res.Content
+		evidence = ragEvidenceToMetadata(res)
+	} else {
+		content, ragErr = s.RAGSearchFn(ragCtx, workspaces, query, topK)
+	}
 	ragCancel()
 	if ragErr != nil {
 		r := toolExecResult{status: domain.ToolTraceStatusError, errMsg: ragErr.Error(), content: fmt.Sprintf("error: %v", ragErr)}
@@ -339,7 +353,7 @@ func execSearchKnowledgeTool(toolCtx context.Context, tc port.ToolCall, s *ReAct
 	logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
 		zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
 		zap.Int64("latency_ms", time.Since(toolStart).Milliseconds()))
-	return toolExecResult{content: content, status: domain.ToolTraceStatusSuccess}
+	return toolExecResult{content: content, status: domain.ToolTraceStatusSuccess, evidence: evidence}
 }
 
 func execRecallMemoryTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time, logger *zap.Logger) toolExecResult {
@@ -482,8 +496,37 @@ func recordToolSpanResult(toolSpan oteltrace.Span, errMsg, content string, toolL
 	)
 }
 
+// ragEvidenceToMetadata converts retrieval provenance into the metadata
+// shape stored on tool observations. Per-chunk content is excluded (the raw
+// result already carries it); only attribution fields are kept.
+func ragEvidenceToMetadata(evidence port.RAGSearchEvidence) map[string]any {
+	sources := make([]any, 0, len(evidence.Sources))
+	for _, src := range evidence.Sources {
+		item := map[string]any{
+			"workspace_id":   src.WorkspaceID,
+			"workspace_name": src.WorkspaceName,
+			"chunk_id":       src.ChunkID,
+		}
+		if src.HasScore {
+			item["score"] = src.Score
+		}
+		sources = append(sources, item)
+	}
+	return map[string]any{"source_count": len(sources), "sources": sources}
+}
+
 func appendToolObservation(s *ReActState, tc port.ToolCall, provider toolProviderRef, result toolExecResult, toolStart time.Time, toolLatencyMs int64) {
 	summary := summarizeToolObservation(tc.Name, result.content, result.status, result.errMsg)
+	metadata := provider.Metadata
+	if len(result.evidence) > 0 {
+		// Merge, never overwrite: provider metadata wins on key collision.
+		merged := make(map[string]any, len(metadata)+1)
+		for k, v := range metadata {
+			merged[k] = v
+		}
+		merged["evidence"] = result.evidence
+		metadata = merged
+	}
 	s.ToolObservations = append(s.ToolObservations, domain.ToolObservation{
 		TraceID:        s.TraceID,
 		ConversationID: s.ConversationID,
@@ -502,7 +545,7 @@ func appendToolObservation(s *ReActState, tc port.ToolCall, provider toolProvide
 		Status:         result.status,
 		ErrorMessage:   result.errMsg,
 		LatencyMs:      toolLatencyMs,
-		Metadata:       provider.Metadata,
+		Metadata:       metadata,
 		StartedAt:      toolStart,
 		EndedAt:        toolStart.Add(time.Duration(toolLatencyMs) * time.Millisecond),
 	})

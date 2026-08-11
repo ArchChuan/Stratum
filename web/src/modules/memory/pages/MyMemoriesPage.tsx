@@ -105,8 +105,8 @@ export const MyMemoriesPage = () => {
               title="记忆条目"
               value={stats?.total_entries ?? 0}
               icon={<DatabaseOutlined />}
-              color="#1677ff"
-              bg="#e6f4ff"
+              color="#2563eb"
+              bg="#dbeafe"
             />
             <StatCard
               loading={statsLoading}

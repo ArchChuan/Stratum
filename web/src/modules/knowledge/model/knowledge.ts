@@ -8,6 +8,9 @@ export const workspaceConfigSchema = z
     chunk_overlap: z.number().optional(),
     query_mode: z.string().optional(),
     top_k: z.number().optional(),
+    reranking: z.string().optional(),
+    score_threshold: z.number().optional(),
+    rerank_top_k: z.number().optional(),
   })
   .passthrough();
 export type WorkspaceConfig = z.infer<typeof workspaceConfigSchema>;

@@ -17,9 +17,13 @@ import (
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	evalpersist "github.com/byteBuilderX/stratum/internal/evaluation/infrastructure/persistence"
 	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
+	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
+	parametersapp "github.com/byteBuilderX/stratum/internal/parameters/application"
+	promptapp "github.com/byteBuilderX/stratum/internal/prompt/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -454,6 +458,39 @@ func evaluationSkillContext(
 
 type gatewayPromptRewriter struct {
 	resolver agentport.TenantCapabilityResolver
+	// params feeds evaluation.optimizer.* platform parameters into the
+	// rewrite request (model / temperature / max_tokens), replacing the
+	// legacy hard-coded qwen-plus/0.2/2048. nil degrades to those defaults
+	// (db unavailable); a read failure also keeps the definition defaults.
+	params *parametersapp.Service
+}
+
+// optimizerLLM picks the effective optimizer LLM spec from platform
+// parameters, falling back to the definition defaults.
+func (r gatewayPromptRewriter) optimizerLLM(
+	ctx context.Context,
+) (model string, temperature float32, maxTokens int) {
+	model, temperature, maxTokens = "qwen-plus", 0.2, 2048
+	if r.params == nil {
+		return model, temperature, maxTokens
+	}
+	values, err := r.params.PlatformValues(ctx)
+	if err != nil {
+		return model, temperature, maxTokens
+	}
+	if v, ok := values["evaluation.optimizer.model"].(string); ok && v != "" {
+		model = v
+	}
+	if v, ok := values["evaluation.optimizer.temperature"].(float64); ok {
+		temperature = float32(v)
+	}
+	switch v := values["evaluation.optimizer.max_tokens"].(type) {
+	case float64:
+		maxTokens = int(v)
+	case int64:
+		maxTokens = int(v)
+	}
+	return model, temperature, maxTokens
 }
 
 func (r gatewayPromptRewriter) Rewrite(
@@ -463,6 +500,7 @@ func (r gatewayPromptRewriter) Rewrite(
 	if !ok || gateway == nil {
 		return nil, fmt.Errorf("prompt optimizer: tenant has no LLM provider configured")
 	}
+	model, temperature, maxTokens := r.optimizerLLM(ctx)
 	snapshotJSON, err := json.Marshal(request.BaselineSnapshot)
 	if err != nil {
 		return nil, err
@@ -476,7 +514,7 @@ func (r gatewayPromptRewriter) Rewrite(
 		Type:     agentport.CapLLM,
 		Timeout:  60 * time.Second,
 		LLM: &agentport.LLMCapRequest{
-			Model: "qwen-plus", Temperature: 0.2, MaxTokens: 2048,
+			Model: model, Temperature: temperature, MaxTokens: maxTokens,
 			Messages: []agentport.LLMMessage{
 				{Role: "system", Content: "你是提示词优化器。只生成候选内容，不决定发布。仅输出 JSON 数组。"},
 				{Role: "user", Content: fmt.Sprintf(
@@ -490,6 +528,146 @@ func (r gatewayPromptRewriter) Rewrite(
 		return nil, err
 	}
 	return parsePromptRewritePatches(response.Content)
+}
+
+// judgeRubricKey is the prompt-registry key for the LLM judge rubric. A
+// published global template wins over the built-in default; tenants may
+// override it through the prompt registry's tenant scoping.
+const judgeRubricKey = "evaluation.judge.rubric"
+
+// judgeDefaultRubric is the built-in rubric used when no global template is
+// published. It asks for a binary verdict with a short justification.
+const judgeDefaultRubric = `你是一名严谨的评测法官。根据以下标准判断实际输出是否通过：
+1. 实际输出是否直接、完整地回答了输入要求；
+2. 与期望输出的一致性（期望输出为 null 或空时忽略该项）；
+3. 是否存在明显的事实错误或逻辑矛盾。
+只输出 JSON：{"passed": true 或 false, "reason": "一句话理由"}。`
+
+// buildEvaluationJudge wires the optional LLM judge. It degrades to a
+// disabled judge when the gateway is unavailable (db not configured),
+// keeping rule assertions working.
+func buildEvaluationJudge(c *Container) evalport.LLMJudge {
+	if c.LLMGateway == nil || c.LLMGateway.Gateway == nil {
+		return nil
+	}
+	var prompts *promptapp.RegistryService
+	if c.Prompt != nil {
+		prompts = c.Prompt.Registry
+	}
+	return judgeAdapter{
+		completer: c.LLMGateway.Gateway,
+		params:    c.Parameters.Service,
+		prompts:   prompts,
+	}
+}
+
+// judgeAdapter implements evalport.LLMJudge over llmgateway's LLMCompleter.
+// The runtime switch and model/temperature come from platform parameters;
+// the rubric comes from the prompt registry (global template) unless the
+// case declares one explicitly. nil dependencies degrade conservatively:
+// disabled judge and built-in defaults, never a silent pass.
+type judgeAdapter struct {
+	completer llmgatewaydomain.LLMCompleter
+	params    *parametersapp.Service
+	prompts   *promptapp.RegistryService
+}
+
+// Enabled reports the evaluation.judge.enabled platform parameter. Fail
+// closed when the parameters service is unavailable.
+func (j judgeAdapter) Enabled(ctx context.Context) bool {
+	if j.params == nil {
+		return false
+	}
+	values, err := j.params.PlatformValues(ctx)
+	if err != nil {
+		return false
+	}
+	enabled, _ := values["evaluation.judge.enabled"].(bool)
+	return enabled
+}
+
+func (j judgeAdapter) judgeModel(ctx context.Context, requested string) string {
+	if requested != "" {
+		return requested
+	}
+	if j.params == nil {
+		return "qwen-plus"
+	}
+	values, err := j.params.PlatformValues(ctx)
+	if err != nil {
+		return "qwen-plus"
+	}
+	if model, ok := values["evaluation.judge.model"].(string); ok && model != "" {
+		return model
+	}
+	return "qwen-plus"
+}
+
+func (j judgeAdapter) judgeTemperature(ctx context.Context) float32 {
+	if j.params == nil {
+		return 0
+	}
+	values, err := j.params.PlatformValues(ctx)
+	if err != nil {
+		return 0
+	}
+	if temperature, ok := values["evaluation.judge.temperature"].(float64); ok {
+		return float32(temperature)
+	}
+	return 0
+}
+
+func (j judgeAdapter) judgeRubric(ctx context.Context, requested string) string {
+	if requested != "" {
+		return requested
+	}
+	if j.prompts != nil {
+		if rubric, err := j.prompts.GetEffectivePrompt(ctx, judgeRubricKey, "", "", ""); err == nil && rubric != "" {
+			return rubric
+		}
+	}
+	return judgeDefaultRubric
+}
+
+func (j judgeAdapter) Judge(ctx context.Context, req evalport.JudgeRequest) (evaldomain.AssertionResult, error) {
+	if j.completer == nil {
+		return evaldomain.AssertionResult{}, errors.New("LLM judge: no LLM completer configured")
+	}
+	response, err := j.completer.Complete(ctx, &llmgatewaydomain.CompletionRequest{
+		Model:       j.judgeModel(ctx, req.Model),
+		Temperature: j.judgeTemperature(ctx),
+		MaxTokens:   constants.JudgeMaxTokens,
+		Messages: []llmgatewaydomain.Message{
+			{Role: "system", Content: "你是评测法官。只输出 JSON，不输出其他内容。"},
+			{Role: "user", Content: fmt.Sprintf(
+				"Rubric:\n%s\n\nInput:\n%s\n\nExpected output:\n%s\n\nActual output:\n%s",
+				j.judgeRubric(ctx, req.Rubric), req.Input, req.ExpectedOutput, req.Actual,
+			)},
+		},
+	})
+	if err != nil {
+		return evaldomain.AssertionResult{}, fmt.Errorf("LLM judge: %w", err)
+	}
+	return parseJudgeResponse(response.Content)
+}
+
+// parseJudgeResponse extracts {"passed": bool, "reason": string} from the
+// judge output, tolerating a markdown code fence around the JSON.
+func parseJudgeResponse(content string) (evaldomain.AssertionResult, error) {
+	trimmed := strings.TrimSpace(content)
+	if strings.HasPrefix(trimmed, "```") {
+		trimmed = strings.TrimPrefix(trimmed, "```json")
+		trimmed = strings.TrimPrefix(trimmed, "```")
+		trimmed = strings.TrimSuffix(strings.TrimSpace(trimmed), "```")
+	}
+	var verdict struct {
+		Passed bool   `json:"passed"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(trimmed)), &verdict); err != nil {
+		return evaldomain.AssertionResult{}, fmt.Errorf("LLM judge: parse verdict: %w", err)
+	}
+	return evaldomain.AssertionResult{Passed: verdict.Passed, Message: verdict.Reason}, nil
 }
 
 func parsePromptRewritePatches(content string) ([]evaldomain.CandidatePatch, error) {
@@ -696,7 +874,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	if c.Agent != nil && sharedRevisionService != nil {
 		agentAdapter := agentEvaluationAdapter{
 			revisions: sharedRevisionService, agents: c.Agent.Service, modelValidator: tenantModelValidator(c.Agent.TenantResolver),
-			agentUpdater: c.Agent.Service, actorID: "evaluation-worker",
+			agentUpdater: c.Agent.Service, actorID: "evaluation-worker", parameters: c.Parameters.Registry,
 		}
 		resourceAdapters[evaldomain.ResourceKindAgent] = agentAdapter
 		candidateCreators[evaldomain.ResourceKindAgent] = agentAdapter
@@ -706,7 +884,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	if c.MCP != nil && c.MCP.Manager != nil && sharedRevisionService != nil {
 		mcpAdapter := mcpEvaluationAdapter{
 			runtime: c.MCP.Manager, revisions: sharedRevisionService,
-			runtimeStore: c.RevisionObjectStore, actorID: "evaluation-worker",
+			runtimeStore: c.RevisionObjectStore, actorID: "evaluation-worker", parameters: c.Parameters.Registry,
 		}
 		resourceAdapters[evaldomain.ResourceKindMCP] = mcpAdapter
 		candidateCreators[evaldomain.ResourceKindMCP] = mcpAdapter
@@ -717,7 +895,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		sharedRevisionService != nil {
 		knowledgeAdapter := knowledgeEvaluationAdapter{
 			revisions: sharedRevisionService, source: c.Knowledge.WorkspaceService, rerankAvailable: c.Config.RerankConfigured,
-			evaluator: knowledgeapp.NewRetrievalEvaluator(c.Knowledge.RAGService), actorID: "evaluation-worker",
+			evaluator: knowledgeapp.NewRetrievalEvaluator(c.Knowledge.RAGService), actorID: "evaluation-worker", parameters: c.Parameters.Registry,
 		}
 		resourceAdapters[evaldomain.ResourceKindKnowledge] = knowledgeAdapter
 		candidateCreators[evaldomain.ResourceKindKnowledge] = knowledgeAdapter
@@ -728,11 +906,11 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	if c.Agent != nil {
 		traceReader = evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider}
 	}
-	service := evalapp.NewService(evaluationResourceRouter{adapters: resourceAdapters}, runRepo, traceReader, suiteRepo)
+	service := evalapp.NewService(evaluationResourceRouter{adapters: resourceAdapters}, runRepo, traceReader, buildEvaluationJudge(c), suiteRepo)
 	jobService := evalapp.NewJobService(jobRepo, service)
 	var rewriter evalapp.PromptRewriter
 	if c.Agent != nil && c.Agent.TenantResolver != nil {
-		rewriter = gatewayPromptRewriter{resolver: c.Agent.TenantResolver}
+		rewriter = gatewayPromptRewriter{resolver: c.Agent.TenantResolver, params: c.Parameters.Service}
 	}
 	optimizationService := evalapp.NewOptimizationService(
 		evaluationCandidateRouter{creators: candidateCreators}, rewriter, optimizationRepo,
