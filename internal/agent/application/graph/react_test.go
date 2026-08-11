@@ -388,6 +388,130 @@ func TestBuildReActGraph_KnowledgeRevisionFailureStopsBeforeSecondLLMCall(t *tes
 	require.Equal(t, domain.TraceEventToolFailed, state.TraceEvents[3].EventType)
 }
 
+// contextLengthMarkerErr 是 llmgateway ErrContextLengthExceeded 的测试副本：
+// Permanent + ContextLengthExceeded 双标记与真实错误一致，供 graph 包
+// duck-typing 探测验证。
+type contextLengthMarkerErr struct{ msg string }
+
+func (e *contextLengthMarkerErr) Error() string               { return e.msg }
+func (e *contextLengthMarkerErr) Permanent() bool             { return true }
+func (e *contextLengthMarkerErr) ContextLengthExceeded() bool { return true }
+
+// permanentOnlyErr 是参数校验类 400 的测试副本：permanent 但不带
+// context_length 标记——重试无意义，也不触发降级。
+type permanentOnlyErr struct{ msg string }
+
+func (e *permanentOnlyErr) Error() string   { return e.msg }
+func (e *permanentOnlyErr) Permanent() bool { return true }
+
+func TestIsContextLengthExceeded(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "bare marker", err: &contextLengthMarkerErr{msg: "context length exceeded"}, want: true},
+		{name: "wrapped once", err: fmt.Errorf("react llm node: %w", &contextLengthMarkerErr{msg: "context length exceeded"}), want: true},
+		{name: "wrapped twice", err: fmt.Errorf("react: %w", fmt.Errorf("react llm node: %w", &contextLengthMarkerErr{})), want: true},
+		{name: "plain error", err: errors.New("boom"), want: false},
+		{name: "permanent but not context length", err: &permanentOnlyErr{msg: "invalid parameter schema"}, want: false},
+		{name: "nil", err: nil, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, graph.IsContextLengthExceeded(tc.err))
+		})
+	}
+}
+
+// TestBuildMinimalRetryMessages 覆盖 Spec D4 降级最小请求构造：
+// 成对剔除工具交换（assistant tool_calls 与其 tool 结果）、预算上限、
+// 最近优先保留、首条 system / 末条当前任务。
+func TestBuildMinimalRetryMessages(t *testing.T) {
+	task := "CURRENT TASK"
+	cases := []struct {
+		name     string
+		system   string
+		task     string
+		messages []port.LLMMessage
+		window   int
+		want     []port.LLMMessage
+	}{
+		{
+			name:   "keeps plain history and appends task",
+			system: "sys",
+			task:   task,
+			messages: []port.LLMMessage{
+				{Role: "system", Content: "sys"},
+				{Role: "user", Content: "prior task"},
+				{Role: "assistant", Content: "prior answer"},
+			},
+			window: 1000,
+			want: []port.LLMMessage{
+				{Role: "system", Content: "sys"},
+				{Role: "user", Content: "prior task"},
+				{Role: "assistant", Content: "prior answer"},
+				{Role: "user", Content: task},
+			},
+		},
+		{
+			name:   "strips tool result and its assistant tool_calls pair",
+			system: "sys",
+			task:   task,
+			messages: []port.LLMMessage{
+				{Role: "system", Content: "sys"},
+				{Role: "user", Content: "prior task"},
+				{Role: "assistant", ToolCalls: []port.ToolCall{{ID: "c1", Name: "calc"}}},
+				{Role: "tool", ToolCallID: "c1", Content: "42"},
+				{Role: "assistant", Content: "interim"},
+			},
+			window: 1000,
+			want: []port.LLMMessage{
+				{Role: "system", Content: "sys"},
+				{Role: "user", Content: "prior task"},
+				{Role: "assistant", Content: "interim"},
+				{Role: "user", Content: task},
+			},
+		},
+		{
+			name:   "budget exhaustion keeps most recent messages",
+			system: "sys",
+			task:   task,
+			messages: []port.LLMMessage{
+				{Role: "system", Content: "sys"},
+				{Role: "user", Content: strings.Repeat("x", 50)},
+				{Role: "assistant", Content: strings.Repeat("y", 50)},
+				{Role: "user", Content: "recent"},
+			},
+			// 预算只容得下最近一条 user 消息，system 也被挤出。
+			window: len("sys") + len("recent") + len(task) + 64 + 6,
+			want: []port.LLMMessage{
+				{Role: "user", Content: "recent"},
+				{Role: "user", Content: task},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := graph.BuildMinimalRetryMessages(tc.system, tc.task, tc.messages, tc.window)
+			require.Equal(t, tc.want, got)
+			// 不变式：剔除全部工具消息与 assistant tool_calls；末条为当前任务。
+			contentSum := 0
+			for _, m := range got {
+				require.NotEqual(t, "tool", m.Role)
+				require.Empty(t, m.ToolCalls)
+				contentSum += len(m.Content)
+			}
+			require.Equal(t, "user", got[len(got)-1].Role)
+			require.Equal(t, tc.task, got[len(got)-1].Content)
+			// 预算充足时总量必须 ≤ window（最小请求必然小于原请求）。
+			if tc.window > 100 {
+				require.LessOrEqual(t, contentSum, tc.window)
+			}
+		})
+	}
+}
+
 func toolNames(tools []port.ToolDefinition) []string {
 	names := make([]string, len(tools))
 	for i := range tools {

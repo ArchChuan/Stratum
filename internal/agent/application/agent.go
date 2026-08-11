@@ -630,6 +630,9 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	finalState, runErr := cg.Invoke(graphCtx, initState, runCfg)
 	recordTerminatedBy(reactSpan, finalState)
 	reactSpan.End()
+	// 最终请求 context_length_exceeded 降级（Spec D4）：循环已结束、工具成本
+	// 已花，最小请求必然小于原请求，只重试一次；成功返回答案，仍失败终止。
+	finalState, runErr = degradeFinalRequest(graphCtx, ec, finalState, runErr, maxTokens)
 	if runErr == nil && a.CheckpointStore != nil {
 		markCtx, markCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
 		_ = a.CheckpointStore.MarkCompleted(markCtx, ec.cfg.TenantID, ec.cfg.ExecutionID)
@@ -647,6 +650,56 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 		result.ToolCalls = append(result.ToolCalls, ToolCall{ToolName: tc.Name, Input: tc.Arguments})
 	}
 	return nil
+}
+
+// degradeFinalRequest 处理最终请求 context_length_exceeded 降级（Spec D4）：
+// 最小请求（system + 纯截断历史 + task，剔除全部工具结果）重试一次；成功
+// 返回带答案的终态，仍失败原样返回原错误（重试失败不替换错误类型）。非
+// context_length 错误或非最终请求位置时也原样返回——参数校验类 400 不在此
+// 路径（重试无意义，是 bug），等待工具结果位置失败不降级（否则模型会看到
+// "调用了工具但没有结果"的残缺对话）。
+func degradeFinalRequest(ctx context.Context, ec agentExecContext, finalState agentgraph.ReActState, runErr error, maxTokens int) (agentgraph.ReActState, error) {
+	if runErr == nil || !agentgraph.IsContextLengthExceeded(runErr) || !isFinalRequest(finalState) {
+		return finalState, runErr
+	}
+	retryMessages := agentgraph.BuildMinimalRetryMessages(ec.systemPrompt, ec.input, finalState.Messages, maxTokens)
+	// 复用 routeLLM 语义：非流式单次 Route，RetryFn 对瞬态失败一层退避。
+	finalResp, retryErr := retryMinimalFinalRequest(ctx, ec, retryMessages)
+	if retryErr != nil {
+		return finalState, runErr
+	}
+	finalState.Output = finalResp
+	return finalState, nil
+}
+
+// isFinalRequest 报告图终止时是否处于"最终回答请求"位置：最后一条消息
+// 不是等待工具调用的 assistant 消息。等待工具结果位置失败不降级——否则
+// 模型会看到"调用了工具但没有结果"的残缺对话。
+func isFinalRequest(s agentgraph.ReActState) bool {
+	if len(s.Messages) == 0 {
+		return true
+	}
+	last := s.Messages[len(s.Messages)-1]
+	return last.Role != "assistant" || len(last.ToolCalls) == 0
+}
+
+// retryMinimalFinalRequest 以最小请求重试一次最终回答（Spec D4）：非流式
+// 单次 Route，RetryFn 对瞬态失败一层退避；context_length 错误本身是永久
+// 错误，RetryFn 单次尝试后终止。
+func retryMinimalFinalRequest(ctx context.Context, ec agentExecContext, messages []port.LLMMessage) (string, error) {
+	resp, err := agentgraph.RetryFn(ctx, agentgraph.DefaultRetry, func() (port.CapabilityResponse, error) {
+		return ec.capGW.Route(ctx, port.CapabilityRequest{
+			TraceID: ec.cfg.TraceID, TenantID: ec.cfg.TenantID, Type: port.CapLLM,
+			LLM: &port.LLMCapRequest{
+				Model: ec.llmModel, Messages: messages,
+				Temperature: ec.cfg.Temperature, MaxTokens: ec.cfg.MaxTokens,
+			},
+		})
+	})
+	if err != nil {
+		return "", err
+	}
+	return resp.Content, nil
 }
 
 func (a *BaseAgent) executeCoT(cfg *ExecutionConfig, input string, result *AgentResult) error {

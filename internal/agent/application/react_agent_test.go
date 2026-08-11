@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
+	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
@@ -69,6 +70,147 @@ func (m *mockCapGW) Route(_ context.Context, req port.CapabilityRequest) (port.C
 		return r, nil
 	}
 	return port.CapabilityResponse{Content: "done"}, nil
+}
+
+// contextLengthErr 是 llmgateway ErrContextLengthExceeded 的测试副本：
+// duck-type 标记与真实错误一致（Permanent + ContextLengthExceeded），
+// 经 Execute 全链路验证最终请求降级。
+type contextLengthErr struct{ msg string }
+
+func (e *contextLengthErr) Error() string               { return e.msg }
+func (e *contextLengthErr) Permanent() bool             { return true }
+func (e *contextLengthErr) ContextLengthExceeded() bool { return true }
+
+// paramValidationErr 是参数校验类 400 的测试副本：permanent 但不带
+// context_length 标记——直接终止，重试无意义也不触发降级。
+type paramValidationErr struct{ msg string }
+
+func (e *paramValidationErr) Error() string   { return e.msg }
+func (e *paramValidationErr) Permanent() bool { return true }
+
+// degradeCapGW 按脚本驱动 Route：每条目要么返回响应要么返回错误，
+// 用于验证最终请求 context_length_exceeded 的降级重试次数与请求内容。
+type degradeCapGW struct {
+	mu       sync.Mutex
+	script   []capGWResult
+	requests []port.CapabilityRequest
+}
+
+type capGWResult struct {
+	resp port.CapabilityResponse
+	err  error
+}
+
+func (g *degradeCapGW) Route(_ context.Context, req port.CapabilityRequest) (port.CapabilityResponse, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.requests = append(g.requests, req)
+	if len(g.script) == 0 {
+		return port.CapabilityResponse{Content: "done"}, nil
+	}
+	r := g.script[0]
+	g.script = g.script[1:]
+	return r.resp, r.err
+}
+
+// TestExecute_FinalRequestContextLengthExceeded_DegradesToMinimalRetry 覆盖
+// Spec D4：循环结束（最终请求）第一次 400 context_length_exceeded → 降级
+// 最小请求重试一次；重试成功返回答案。降级请求剔除全部工具结果与
+// assistant tool_calls，不带工具定义，末条为当前任务。
+func TestExecute_FinalRequestContextLengthExceeded_DegradesToMinimalRetry(t *testing.T) {
+	a := newReActAgent()
+	gw := &degradeCapGW{script: []capGWResult{
+		{resp: port.CapabilityResponse{ToolCalls: []port.ToolCall{{ID: "c1", Name: "calc", Arguments: map[string]any{"expr": "6*7"}}}}},
+		{err: &contextLengthErr{msg: "context length exceeded"}},
+		{resp: port.CapabilityResponse{Content: "final answer"}},
+	}}
+	a.SetCapGateway(gw)
+
+	result, err := a.Execute(context.Background(), "calc 6*7",
+		agent.WithTenantID("t1"),
+		agent.WithMaxSteps(10),
+		agent.WithExtraTools([]port.ToolDefinition{{Name: "calc", ProviderType: "mcp", ServerID: "math", Metadata: map[string]any{"risk_level": "read"}}}),
+		agent.WithToolExecutionFn(func(context.Context, port.ToolExecutionRequest) (any, error) {
+			return port.GuardedToolResult{ModelContent: "42"}, nil
+		}),
+	)
+	require.NoError(t, err)
+	require.Equal(t, "final answer", result.Output)
+	require.Len(t, gw.requests, 3, "图内 2 次 + 降级重试 1 次")
+
+	retryReq := gw.requests[2]
+	require.Nil(t, retryReq.LLM.Tools, "降级请求不带工具定义")
+	require.NotEmpty(t, retryReq.LLM.Messages)
+	for _, m := range retryReq.LLM.Messages {
+		require.NotEqual(t, "tool", m.Role, "降级请求剔除全部工具结果")
+		require.Empty(t, m.ToolCalls, "降级请求剔除 assistant tool_calls")
+	}
+	last := retryReq.LLM.Messages[len(retryReq.LLM.Messages)-1]
+	require.Equal(t, "user", last.Role)
+	require.Equal(t, "calc 6*7", last.Content)
+}
+
+// TestExecute_FinalRequestContextLengthExceeded_RetryFailsTerminates 覆盖
+// Spec D4：降级重试仍失败 → 终止，不换模型不退避循环。
+func TestExecute_FinalRequestContextLengthExceeded_RetryFailsTerminates(t *testing.T) {
+	a := newReActAgent()
+	gw := &degradeCapGW{script: []capGWResult{
+		{resp: port.CapabilityResponse{ToolCalls: []port.ToolCall{{ID: "c1", Name: "calc", Arguments: map[string]any{}}}}},
+		{err: &contextLengthErr{msg: "context length exceeded"}},
+		{err: &contextLengthErr{msg: "context length exceeded"}},
+	}}
+	a.SetCapGateway(gw)
+
+	_, err := a.Execute(context.Background(), "calc",
+		agent.WithTenantID("t1"),
+		agent.WithMaxSteps(10),
+		agent.WithExtraTools([]port.ToolDefinition{{Name: "calc", ProviderType: "mcp", ServerID: "math", Metadata: map[string]any{"risk_level": "read"}}}),
+		agent.WithToolExecutionFn(func(context.Context, port.ToolExecutionRequest) (any, error) {
+			return port.GuardedToolResult{ModelContent: "42"}, nil
+		}),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "context length exceeded")
+	require.Len(t, gw.requests, 3, "降级只重试一次，仍失败即终止")
+}
+
+// TestExecute_NonContextLengthErrorNoDegrade 覆盖 Spec D4：参数校验类 400
+// （非 context_length）直接终止，不降级重试（重试无意义，是 bug）。
+func TestExecute_NonContextLengthErrorNoDegrade(t *testing.T) {
+	a := newReActAgent()
+	gw := &degradeCapGW{script: []capGWResult{
+		{err: &paramValidationErr{msg: "invalid parameter schema"}},
+	}}
+	a.SetCapGateway(gw)
+
+	_, err := a.Execute(context.Background(), "calc",
+		agent.WithTenantID("t1"),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid parameter schema")
+	require.Len(t, gw.requests, 1, "参数校验类 400 直接终止，无降级重试")
+}
+
+// TestIsFinalRequest 覆盖 isFinalRequest 语义：图终止时最后一条消息是
+// 等待工具结果的 assistant 消息（非最终回答位置）→ 不降级；其余位置
+// （tool 结果、user 任务、空）→ 最终请求位置。
+func TestIsFinalRequest(t *testing.T) {
+	cases := []struct {
+		name     string
+		messages []port.LLMMessage
+		want     bool
+	}{
+		{name: "empty", messages: nil, want: true},
+		{name: "waiting for tool result", messages: []port.LLMMessage{{Role: "assistant", ToolCalls: []port.ToolCall{{ID: "c1", Name: "calc"}}}}, want: false},
+		{name: "tool result last", messages: []port.LLMMessage{{Role: "tool", ToolCallID: "c1", Content: "42"}}, want: true},
+		{name: "user task last", messages: []port.LLMMessage{{Role: "user", Content: "task"}}, want: true},
+		{name: "plain assistant last", messages: []port.LLMMessage{{Role: "assistant", Content: "answer"}}, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, agent.IsFinalRequestForTest(agentgraph.ReActState{Messages: tc.messages}))
+		})
+	}
 }
 
 func newReActAgent() *agent.BaseAgent {

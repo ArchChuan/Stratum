@@ -120,6 +120,11 @@ const (
 	// effective budget (compacts earlier); 2.0 doubles it (compacts later).
 	TokenCorrectionMin = 0.5
 	TokenCorrectionMax = 2.0
+
+	// MinimalRetryReserveBytes 是最终请求 context_length_exceeded 降级最小
+	// 请求（Spec D4）的字节预算余量：len() 字节数是 token 的保守上界
+	// （CJK 每字符 3 字节），从窗口扣除该余量保证最小请求必然小于原请求。
+	MinimalRetryReserveBytes = 64
 )
 
 // DynamicRecentGroups returns the number of recent message groups to preserve

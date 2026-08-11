@@ -65,3 +65,5 @@ func CatalogFromActivationsForTest(activations []port.SkillActivation) map[strin
 func RestorePlanCheckpointStateForTest(raw json.RawMessage, catalog map[string]port.SkillActivation) (*domain.Plan, []port.SkillActivation) {
 	return restorePlanCheckpointState(raw, catalog)
 }
+
+func IsFinalRequestForTest(s agentgraph.ReActState) bool { return isFinalRequest(s) }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -419,6 +420,57 @@ func routeLLM(ctx context.Context, s ReActState, messages []port.LLMMessage, too
 		}
 		return resp, err
 	})
+}
+
+// contextLengthMarker 是 llmgateway ErrContextLengthExceeded 的跨包探测协议
+// （与 capability 包本地副本同模式）：graph 不 import llmgateway，经方法
+// 探测鸭子类型识别 context_length 错误。
+type contextLengthMarker interface{ ContextLengthExceeded() bool }
+
+// IsContextLengthExceeded 报告错误链（含 %w 包装）是否携带上下文超限标记，
+// 供 executeReAct 判定最终请求是否触发最小请求降级（Spec D4）。
+func IsContextLengthExceeded(err error) bool {
+	var m contextLengthMarker
+	return errors.As(err, &m)
+}
+
+// minimalRetryBudgetFloor 是降级最小请求的字节预算下界：窗口被
+// system+task 占满时仍保留至少一条最近历史消息，避免无上下文的裸请求。
+const minimalRetryBudgetFloor = 1
+
+// BuildMinimalRetryMessages 构造最终请求 400 context_length_exceeded 后的
+// 降级最小请求（Spec D4）：system + 纯截断历史（成对剔除工具交换）+ task。
+// 非流式、单次调用；再次失败即终止，不换模型不退避。只删 tool 消息会让
+// 模型看到"调用了工具但没有结果"，破坏消息配对，也留下无内容的 assistant
+// 消息——故成对剔除 assistant tool_calls 与其 tool 结果。len() 字节数是
+// token 的保守上界（CJK 每字符 3 字节），字符数下界保证最小请求必然小于
+// 原请求。
+func BuildMinimalRetryMessages(systemPrompt, task string, messages []port.LLMMessage, window int) []port.LLMMessage {
+	out := make([]port.LLMMessage, 0, len(messages)+2)
+	out = append(out, port.LLMMessage{Role: "system", Content: systemPrompt})
+	budget := window - len(systemPrompt) - len(task) - constants.MinimalRetryReserveBytes
+	if budget <= 0 {
+		budget = minimalRetryBudgetFloor
+	}
+	// 保留最近消息，成对剔除工具交换（assistant tool_calls 与其 tool 结果）。
+	for i := len(messages) - 1; i >= 0 && budget > 0; i-- {
+		msg := messages[i]
+		if msg.Role == "tool" {
+			continue
+		}
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			continue
+		}
+		budget -= len(msg.Content)
+		if budget < 0 {
+			break
+		}
+		out = append(out, msg)
+	}
+	// 反转恢复时间顺序，去掉前置的 system 占位（历史自带 system 消息）。
+	out = out[1:]
+	slices.Reverse(out)
+	return append(out, port.LLMMessage{Role: "user", Content: task})
 }
 
 func fitToolsToContextBudget(tools []port.ToolDefinition, messages []port.LLMMessage, budget, protectedUsers int, correction, safetyRatio float64) []port.ToolDefinition {
