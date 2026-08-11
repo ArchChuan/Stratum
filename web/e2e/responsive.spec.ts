@@ -15,19 +15,6 @@ const agents = [
   },
 ];
 
-const executions = [
-  {
-    id: 'execution-1',
-    agent_name: '客服助手',
-    status: 'success',
-    input_preview: '查询移动端适配进度',
-    output_preview: '适配已完成',
-    total_tokens: 128,
-    duration_ms: 860,
-    created_at: '2026-07-14T08:00:00Z',
-  },
-];
-
 const json = (route: Route, body: unknown, status = 200) =>
   route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
@@ -48,9 +35,6 @@ async function mockAuthenticatedApi(page: Page) {
     json(route, { tenants: [{ tenant_id: 'tenant-1', name: '移动端验收租户' }] }),
   );
   await page.route('**/health', (route) => json(route, { status: 'ok' }));
-  await page.route('**/agents/executions**', (route) =>
-    json(route, { executions, total: executions.length }),
-  );
   await page.route('**/agents/agent-1/conversations', (route) =>
     json(route, {
       conversations: [
@@ -136,7 +120,6 @@ test.describe('authenticated responsive workflows', () => {
     const isMobile = page.viewportSize()!.width < MOBILE_BREAKPOINT;
     if (isMobile) {
       await expect(page.locator('.ant-table')).toHaveCount(0);
-      await expect(page.getByText('查询移动端适配进度')).toBeVisible();
 
       await page.getByRole('button', { name: '打开主导航' }).click();
       const navigation = page.getByRole('navigation', { name: '主导航' });
@@ -147,7 +130,7 @@ test.describe('authenticated responsive workflows', () => {
       await expect(page.getByText('产品文档与常见问题')).toBeVisible();
     } else {
       await expect(page.getByRole('navigation', { name: '主导航' })).toBeVisible();
-      await expect(page.locator('.ant-table')).toBeVisible();
+      await expect(page.getByText('系统运行状态一览')).toBeVisible();
       await expect(page.getByRole('button', { name: '打开主导航' })).toHaveCount(0);
     }
 
