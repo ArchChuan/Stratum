@@ -36,7 +36,7 @@ export const CreateAgentPage = () => {
         onFinish={onFinish}
         initialValues={{
           maxIterations: AGENT_DEFAULT_MAX_ITERATIONS,
-          maxContextTokens: 8000,
+          maxContextTokens: 0, // 0 = 自动按模型窗口解析
           allowedSkills: [],
           memoryScope: 'user',
         }}
