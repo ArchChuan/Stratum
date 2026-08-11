@@ -75,7 +75,6 @@ export const SettingsPage = () => {
             marginTop: 24,
             padding: 16,
             border: '1px solid #ff4d4f',
-            borderRadius: 8,
           }}
         >
           <Title level={5} style={{ color: '#ff4d4f', margin: '0 0 8px' }}>

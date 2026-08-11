@@ -12,7 +12,7 @@ interface StatCardProps {
 
 export const StatCard = ({ loading, title, value, icon, color, bg }: StatCardProps) => (
   <Card
-    style={{ borderRadius: 12, border: 'none', background: bg, overflow: 'hidden' }}
+    style={{ border: 'none', background: bg, overflow: 'hidden' }}
     styles={{ body: { padding: '20px 24px' } }}
   >
     {loading ? (
@@ -29,7 +29,6 @@ export const StatCard = ({ loading, title, value, icon, color, bg }: StatCardPro
           style={{
             width: 48,
             height: 48,
-            borderRadius: 12,
             background: `${color}22`,
             display: 'flex',
             alignItems: 'center',

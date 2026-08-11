@@ -1,5 +1,5 @@
 import { ArrowRightOutlined, BookOutlined, DeleteOutlined } from '@ant-design/icons';
-import { Button, Card, Space, Tag, Tooltip, Typography } from 'antd';
+import { Button, Card, Space, Tag, theme, Tooltip, Typography } from 'antd';
 
 import type { Workspace } from '../model/knowledge';
 
@@ -25,10 +25,11 @@ interface WorkspaceCardProps {
   isAdmin: boolean;
 }
 
-export const WorkspaceCard = ({ ws, onDelete, onOpen, isAdmin }: WorkspaceCardProps) => (
+export const WorkspaceCard = ({ ws, onDelete, onOpen, isAdmin }: WorkspaceCardProps) => {
+  const { token } = theme.useToken();
+  return (
   <Card
     style={{
-      borderRadius: 12,
       border: '1px solid #f0f0f0',
       height: '100%',
       display: 'flex',
@@ -51,19 +52,18 @@ export const WorkspaceCard = ({ ws, onDelete, onOpen, isAdmin }: WorkspaceCardPr
         style={{
           width: 40,
           height: 40,
-          borderRadius: 10,
-          background: '#f0f5ff',
+          background: token.colorPrimaryBg,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           flexShrink: 0,
         }}
       >
-        <BookOutlined style={{ fontSize: 18, color: '#2f54eb' }} />
+        <BookOutlined style={{ fontSize: 18, color: token.colorPrimary }} />
       </div>
       <Tag
         color={MODE_COLORS[ws.config?.query_mode || ''] || 'default'}
-        style={{ border: 'none', borderRadius: 6, fontSize: 11, fontWeight: 500 }}
+        style={{ border: 'none', fontSize: 11, fontWeight: 500 }}
       >
         {MODE_LABELS[ws.config?.query_mode || ''] || ws.config?.query_mode || '-'}
       </Tag>
@@ -127,4 +127,5 @@ export const WorkspaceCard = ({ ws, onDelete, onOpen, isAdmin }: WorkspaceCardPr
       </div>
     </div>
   </Card>
-);
+  );
+};

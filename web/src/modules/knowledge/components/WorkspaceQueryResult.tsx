@@ -15,7 +15,8 @@ export const WorkspaceQueryResult = ({ result }: WorkspaceQueryResultProps) => (
       style={{
         background: '#f6ffed',
         border: '1px solid #b7eb8f',
-        borderRadius: 10,
+        // 结果卡片语义，与 token.borderRadiusLG 对齐
+        borderRadius: 12,
         padding: 16,
         marginBottom: 12,
       }}
@@ -41,7 +42,6 @@ export const WorkspaceQueryResult = ({ result }: WorkspaceQueryResultProps) => (
               style={{
                 background: '#fafafa',
                 border: '1px solid #f0f0f0',
-                borderRadius: 8,
                 padding: '10px 14px',
               }}
             >
