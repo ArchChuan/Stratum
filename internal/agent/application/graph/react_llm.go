@@ -467,10 +467,26 @@ func BuildMinimalRetryMessages(systemPrompt, task string, messages []port.LLMMes
 		}
 		out = append(out, msg)
 	}
-	// 反转恢复时间顺序，去掉前置的 system 占位（历史自带 system 消息）。
+	// 反转恢复时间顺序；历史自带 system 消息未被预算保留时补回前置
+	// 占位——预算在扫描前已为 system 预留字节，无条件剔除即浪费保留额，
+	// 最小请求必须满足 D4 语义（system + task + 压缩后历史）。
 	out = out[1:]
 	slices.Reverse(out)
+	if !hasSystemRole(out) {
+		out = append([]port.LLMMessage{{Role: "system", Content: systemPrompt}}, out...)
+	}
 	return append(out, port.LLMMessage{Role: "user", Content: task})
+}
+
+// hasSystemRole 报告消息序列是否已含 system 角色消息（降级请求的
+// D4 语义守卫：system 缺失时由调用方补回占位）。
+func hasSystemRole(messages []port.LLMMessage) bool {
+	for _, m := range messages {
+		if m.Role == "system" {
+			return true
+		}
+	}
+	return false
 }
 
 func fitToolsToContextBudget(tools []port.ToolDefinition, messages []port.LLMMessage, budget, protectedUsers int, correction, safetyRatio float64) []port.ToolDefinition {

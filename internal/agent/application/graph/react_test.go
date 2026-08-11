@@ -474,7 +474,7 @@ func TestBuildMinimalRetryMessages(t *testing.T) {
 			},
 		},
 		{
-			name:   "budget exhaustion keeps most recent messages",
+			name:   "budget exhaustion keeps most recent messages and restores system",
 			system: "sys",
 			task:   task,
 			messages: []port.LLMMessage{
@@ -483,9 +483,11 @@ func TestBuildMinimalRetryMessages(t *testing.T) {
 				{Role: "assistant", Content: strings.Repeat("y", 50)},
 				{Role: "user", Content: "recent"},
 			},
-			// 预算只容得下最近一条 user 消息，system 也被挤出。
+			// 预算只容得下最近一条 user 消息：历史 system 被挤出，但占位
+			// 必须补回——预算在扫描前已为 system 预留字节。
 			window: len("sys") + len("recent") + len(task) + 64 + 6,
 			want: []port.LLMMessage{
+				{Role: "system", Content: "sys"},
 				{Role: "user", Content: "recent"},
 				{Role: "user", Content: task},
 			},
@@ -504,6 +506,10 @@ func TestBuildMinimalRetryMessages(t *testing.T) {
 			}
 			require.Equal(t, "user", got[len(got)-1].Role)
 			require.Equal(t, tc.task, got[len(got)-1].Content)
+			// D4 语义不变式：最小请求首条恒为 system（预算已为 system
+			// 预留字节，历史 system 被预算挤出时由占位补回）。
+			require.Equal(t, "system", got[0].Role)
+			require.Equal(t, tc.system, got[0].Content)
 			// 预算充足时总量必须 ≤ window（最小请求必然小于原请求）。
 			if tc.window > 100 {
 				require.LessOrEqual(t, contentSum, tc.window)

@@ -658,7 +658,8 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 // context_length 错误或非最终请求位置时也原样返回——参数校验类 400 不在此
 // 路径（重试无意义，是 bug），等待工具结果位置失败不降级（否则模型会看到
 // "调用了工具但没有结果"的残缺对话）。
-func degradeFinalRequest(ctx context.Context, ec agentExecContext, finalState agentgraph.ReActState, runErr error, maxTokens int) (agentgraph.ReActState, error) {
+func degradeFinalRequest(ctx context.Context, ec agentExecContext, finalState agentgraph.ReActState,
+	runErr error, maxTokens int) (agentgraph.ReActState, error) {
 	if runErr == nil || !agentgraph.IsContextLengthExceeded(runErr) || !isFinalRequest(finalState) {
 		return finalState, runErr
 	}
