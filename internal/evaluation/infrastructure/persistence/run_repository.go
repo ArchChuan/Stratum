@@ -28,14 +28,21 @@ func NewPgRunRepository(pool *pgxpool.Pool) *PgRunRepository {
 
 func (r *PgRunRepository) SaveRun(ctx context.Context, tenantID string, run domain.EvalRun) error {
 	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
+	metricsJSON, err := json.Marshal(run.Metrics)
+	if err != nil {
+		return fmt.Errorf("evaluation run repository: marshal metrics: %w", err)
+	}
+	if string(metricsJSON) == "null" {
+		metricsJSON = []byte("{}")
+	}
 	return execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO eval_runs
 			 (id, resource_kind, resource_id, revision_id, suite_revision_id, status, passed,
 			  total_cases, passed_cases, metrics, created_at, started_at, completed_at)
-			 VALUES ($1,$2,$3,$4,$5,'succeeded',$6,$7,$8,'{}',$9,$9,NOW())`,
+			 VALUES ($1,$2,$3,$4,$5,'succeeded',$6,$7,$8,$9,$10,$10,NOW())`,
 			run.ID, string(run.Resource.Kind), run.Resource.ResourceID, run.Resource.RevisionID,
-			run.SuiteRevisionID, run.Passed, run.TotalCases, run.PassedCases, run.CreatedAt,
+			run.SuiteRevisionID, run.Passed, run.TotalCases, run.PassedCases, string(metricsJSON), run.CreatedAt,
 		); err != nil {
 			return fmt.Errorf("evaluation run repository: insert run: %w", err)
 		}
@@ -68,12 +75,16 @@ func (r *PgRunRepository) GetRun(
 	found := false
 	err := execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var kind string
+		var metricsJSON []byte
 		err := tx.QueryRow(ctx,
 			`SELECT id, resource_kind, resource_id, revision_id, suite_revision_id,
-			        passed, total_cases, passed_cases, created_at
+			        passed, total_cases, passed_cases, metrics, created_at
 			 FROM eval_runs WHERE id=$1`, runID,
 		).Scan(&run.ID, &kind, &run.Resource.ResourceID, &run.Resource.RevisionID,
-			&run.SuiteRevisionID, &run.Passed, &run.TotalCases, &run.PassedCases, &run.CreatedAt)
+			&run.SuiteRevisionID, &run.Passed, &run.TotalCases, &run.PassedCases, &metricsJSON, &run.CreatedAt)
+		if err == nil && len(metricsJSON) > 0 {
+			_ = json.Unmarshal(metricsJSON, &run.Metrics)
+		}
 		if err == pgx.ErrNoRows {
 			return nil
 		}

@@ -1059,7 +1059,7 @@ func recordExecutionPreparation(
 	}
 	config := a.GetConfig()
 	oteltrace.SpanFromContext(ctx).SetAttributes(
-		agentExecutionAttributes(config.ID, config.Name, domain.ReActAgent, cfg)...,
+		agentExecutionAttributes(config.ID, config.Name, domain.ReActAgent, cfg, config.MaxContextTokens)...,
 	)
 }
 
@@ -1766,37 +1766,97 @@ func (s *AgentService) assembleOptions(
 		}))
 	}
 	if s.deps.RAGSearch != nil && len(a.GetConfig().KnowledgeWorkspaceIDs) > 0 {
-		tenantID, search := meta.TenantID, s.deps.RAGSearch
-		options = append(options, WithRAGSearchFn(func(rctx context.Context, workspaces []string, query string, topK int) (string, error) {
-			var combined strings.Builder
-			mutable := make([]string, 0, len(workspaces))
-			for _, workspace := range workspaces {
-				assignment, found := knowledgeAssignments[workspace]
-				if !found {
-					mutable = append(mutable, workspace)
-					continue
-				}
-				revisionSearch, ok := search.(port.KnowledgeRevisionSearchProvider)
-				if !ok {
-					return "", errors.New("Knowledge revision search provider not configured")
-				}
-				content, err := revisionSearch.SearchKnowledgeRevision(rctx, tenantID, assignment.Revision, query)
-				if err != nil {
-					return "", fmt.Errorf("%w: %w", domain.ErrKnowledgeRevisionUnavailable, err)
-				}
-				combined.WriteString(content)
-			}
-			if len(mutable) > 0 {
-				content, err := search.SearchKnowledge(rctx, tenantID, mutable, query, topK)
-				if err != nil {
-					return "", err
-				}
-				combined.WriteString(content)
-			}
-			return combined.String(), nil
-		}))
+		options = appendRAGSearchOptions(options, meta.TenantID, s.deps.RAGSearch, knowledgeAssignments)
 	}
 	return ctx, s.resolveEffectiveParameters(ctx, a, options), nil
+}
+
+// appendRAGSearchOptions wires the plain and (when supported) evidence-capable
+// knowledge search variants. Both share the revision/mutable split: revision
+// snapshots contribute content only, mutable workspaces fan out through the
+// live search provider.
+func appendRAGSearchOptions(
+	options []ExecutionOption,
+	tenantID string,
+	search port.RAGSearchProvider,
+	knowledgeAssignments map[string]port.KnowledgeRevisionAssignment,
+) []ExecutionOption {
+	options = append(options, WithRAGSearchFn(func(rctx context.Context, workspaces []string, query string, topK int) (string, error) {
+		var combined strings.Builder
+		mutable := make([]string, 0, len(workspaces))
+		for _, workspace := range workspaces {
+			assignment, found := knowledgeAssignments[workspace]
+			if !found {
+				mutable = append(mutable, workspace)
+				continue
+			}
+			revisionSearch, ok := search.(port.KnowledgeRevisionSearchProvider)
+			if !ok {
+				return "", errors.New("Knowledge revision search provider not configured")
+			}
+			content, err := revisionSearch.SearchKnowledgeRevision(rctx, tenantID, assignment.Revision, query)
+			if err != nil {
+				return "", fmt.Errorf("%w: %w", domain.ErrKnowledgeRevisionUnavailable, err)
+			}
+			combined.WriteString(content)
+		}
+		if len(mutable) > 0 {
+			content, err := search.SearchKnowledge(rctx, tenantID, mutable, query, topK)
+			if err != nil {
+				return "", err
+			}
+			combined.WriteString(content)
+		}
+		return combined.String(), nil
+	}))
+	return appendEvidenceRAGOption(options, search, tenantID, knowledgeAssignments)
+}
+
+// appendEvidenceRAGOption wires the evidence-capable search variant when the
+// provider supports chunk-level provenance. Same revision/mutable split as
+// the plain variant; revision snapshots have no provenance path, so they
+// contribute content only. The options slice is returned unchanged when the
+// provider lacks evidence support (existing behavior preserved).
+func appendEvidenceRAGOption(
+	options []ExecutionOption,
+	search port.RAGSearchProvider,
+	tenantID string,
+	knowledgeAssignments map[string]port.KnowledgeRevisionAssignment,
+) []ExecutionOption {
+	evidenceProvider, ok := search.(port.RAGSearchEvidenceProvider)
+	if !ok {
+		return options
+	}
+	return append(options, WithRAGSearchFnWithEvidence(func(rctx context.Context, workspaces []string, query string, topK int) (port.RAGSearchEvidence, error) {
+		var combined strings.Builder
+		var sources []port.RAGSearchSource
+		mutable := make([]string, 0, len(workspaces))
+		for _, workspace := range workspaces {
+			assignment, found := knowledgeAssignments[workspace]
+			if !found {
+				mutable = append(mutable, workspace)
+				continue
+			}
+			revisionSearch, ok := search.(port.KnowledgeRevisionSearchProvider)
+			if !ok {
+				return port.RAGSearchEvidence{}, errors.New("Knowledge revision search provider not configured")
+			}
+			content, err := revisionSearch.SearchKnowledgeRevision(rctx, tenantID, assignment.Revision, query)
+			if err != nil {
+				return port.RAGSearchEvidence{}, fmt.Errorf("%w: %w", domain.ErrKnowledgeRevisionUnavailable, err)
+			}
+			combined.WriteString(content)
+		}
+		if len(mutable) > 0 {
+			ev, err := evidenceProvider.SearchKnowledgeWithEvidence(rctx, tenantID, mutable, query, topK)
+			if err != nil {
+				return port.RAGSearchEvidence{}, err
+			}
+			combined.WriteString(ev.Content)
+			sources = append(sources, ev.Sources...)
+		}
+		return port.RAGSearchEvidence{Content: combined.String(), Sources: sources}, nil
+	}))
 }
 
 // resolveEffectiveParameters merges platform defaults into the execution
@@ -1838,7 +1898,29 @@ func (s *AgentService) resolveEffectiveParameters(
 	if v, ok := effective["agent.compaction_safety_ratio"].(float64); ok {
 		options = append(options, WithCompactionSafetyRatio(float32(v)))
 	}
+	// Platform-scope execution toggles are resolved individually; they are
+	// not resource keys so ResolveForResource never returns them.
+	if opt := captureParametersOption(ctx, s.deps.ParametersProvider); opt != nil {
+		options = append(options, opt)
+	}
 	return options
+}
+
+// captureParametersOption reads the platform-scope execution toggle
+// trace.capture_parameters and returns the option recording raw parameter
+// values when enabled. Unset, non-bool or resolution errors degrade to
+// fingerprint-only traces (parameters are an optimization input, not an
+// execution gate).
+func captureParametersOption(ctx context.Context, provider port.ParametersProvider) ExecutionOption {
+	v, ok, err := provider.Resolve(ctx, "trace.capture_parameters", nil)
+	if err != nil || !ok {
+		return nil
+	}
+	enabled, isBool := v.(bool)
+	if !isBool || !enabled {
+		return nil
+	}
+	return WithCaptureParameters(true)
 }
 
 // attachChatStore wires the configured ChatStore onto the running agent

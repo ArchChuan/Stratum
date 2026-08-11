@@ -44,12 +44,19 @@ type ReActState struct {
 	TotalCostUSD               float64
 	OnToken                    func(string) // if non-nil, stream tokens from the final LLM response
 	RAGSearchFn                func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
-	RecallMemoryFn             func(ctx context.Context, input map[string]any) (string, error)
-	OfficialDocsSearchFn       func(context.Context, string) ([]domain.Citation, error)
-	DiagnosticFn               func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)
-	ProposalCreateFn           func(context.Context, map[string]any) (domain.ResourceChangeProposalArtifact, error)
-	ResourceChangeApplyFn      func(context.Context, map[string]any) (domain.ApplyResult, error)
-	InternalToolResultGuardFn  func(any) (port.GuardedToolResult, error)
+	// RAGSearchFnWithEvidence is the evidence-capable variant; the tool node
+	// prefers it over RAGSearchFn when set.
+	RAGSearchFnWithEvidence func(ctx context.Context, workspaces []string, query string, topK int) (port.RAGSearchEvidence, error)
+	// PromptVersions records the prompt key → content fingerprint map
+	// applied to this execution; startLLMTrace writes stratum.prompt.*
+	// attributes from it. nil means no version was resolved.
+	PromptVersions            map[string]string
+	RecallMemoryFn            func(ctx context.Context, input map[string]any) (string, error)
+	OfficialDocsSearchFn      func(context.Context, string) ([]domain.Citation, error)
+	DiagnosticFn              func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)
+	ProposalCreateFn          func(context.Context, map[string]any) (domain.ResourceChangeProposalArtifact, error)
+	ResourceChangeApplyFn     func(context.Context, map[string]any) (domain.ApplyResult, error)
+	InternalToolResultGuardFn func(any) (port.GuardedToolResult, error)
 	// MaxLLMSteps caps LLM-node invocations; on the last allowed call tools are
 	// stripped and the model is asked to produce a final answer from collected context.
 	MaxLLMSteps int

@@ -23,6 +23,7 @@ func TestPgRunRepository_SaveRun_success(t *testing.T) {
 		Passed:          true,
 		TotalCases:      2,
 		PassedCases:     2,
+		Metrics:         map[string]any{"pass_rate": 1.0, "total_tokens": 10},
 		CreatedAt:       now,
 		Results: []domain.EvalCaseResult{
 			{CaseID: "case-1", Passed: true, Actual: map[string]any{"token": "leak"}, Message: "ok"},
@@ -32,7 +33,8 @@ func TestPgRunRepository_SaveRun_success(t *testing.T) {
 
 	expectTenantTx(mock)
 	mock.ExpectExec("INSERT INTO eval_runs").
-		WithArgs("run-1", "prompt", "r-1", "rev-1", "suite-rev-1", true, 2, 2, now).
+		WithArgs("run-1", "prompt", "r-1", "rev-1", "suite-rev-1", true, 2, 2,
+			`{"pass_rate":1,"total_tokens":10}`, now).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO eval_case_results").
 		WithArgs(pgxmock.AnyArg(), "run-1", "case-1", true, `{"token":"[REDACTED]"}`, "ok", "", "", 0, 0.0, 0).
@@ -53,7 +55,7 @@ func TestPgRunRepository_SaveRun_insertRunFails(t *testing.T) {
 
 	expectTenantTx(mock)
 	mock.ExpectExec("INSERT INTO eval_runs").
-		WithArgs("run-1", "prompt", "r-1", "rev-1", "s-1", false, 0, 0, pgxmock.AnyArg()).
+		WithArgs("run-1", "prompt", "r-1", "rev-1", "s-1", false, 0, 0, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnError(errors.New("duplicate key"))
 	mock.ExpectRollback()
 
@@ -77,7 +79,7 @@ func TestPgRunRepository_SaveRun_marshalResultFails(t *testing.T) {
 
 	expectTenantTx(mock)
 	mock.ExpectExec("INSERT INTO eval_runs").
-		WithArgs("run-1", "prompt", "r-1", "rev-1", "s-1", false, 0, 0, pgxmock.AnyArg()).
+		WithArgs("run-1", "prompt", "r-1", "rev-1", "s-1", false, 0, 0, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectRollback()
 
@@ -99,7 +101,7 @@ func TestPgRunRepository_SaveRun_insertResultFails(t *testing.T) {
 
 	expectTenantTx(mock)
 	mock.ExpectExec("INSERT INTO eval_runs").
-		WithArgs("run-1", "prompt", "r-1", "rev-1", "s-1", false, 0, 0, pgxmock.AnyArg()).
+		WithArgs("run-1", "prompt", "r-1", "rev-1", "s-1", false, 0, 0, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO eval_case_results").
 		WithArgs(pgxmock.AnyArg(), "run-1", "case-1", false, `"x"`, "", "", "", 0, 0.0, 0).
@@ -121,8 +123,8 @@ func TestPgRunRepository_GetRun_found(t *testing.T) {
 		WithArgs("run-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "resource_kind", "resource_id", "revision_id", "suite_revision_id",
-			"passed", "total_cases", "passed_cases", "created_at",
-		}).AddRow("run-1", "prompt", "r-1", "rev-1", "s-1", true, 1, 1, now))
+			"passed", "total_cases", "passed_cases", "metrics", "created_at",
+		}).AddRow("run-1", "prompt", "r-1", "rev-1", "s-1", true, 1, 1, []byte(`{"pass_rate":1.0}`), now))
 	mock.ExpectQuery("SELECT case_id, passed, actual_output").
 		WithArgs("run-1").
 		WillReturnRows(pgxmock.NewRows([]string{

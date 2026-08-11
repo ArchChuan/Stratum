@@ -16,12 +16,23 @@ import (
 type stubParametersProvider struct {
 	effective map[string]any
 	err       error
+	// singleKey is returned by Resolve for the requested key; missing from
+	// the map → (nil, false, nil). Platform toggles scripted here.
+	singleKey map[string]any
 }
 
 func (p stubParametersProvider) ResolveForResource(
 	_ context.Context, _ map[string]any,
 ) (map[string]any, error) {
 	return p.effective, p.err
+}
+
+func (p stubParametersProvider) Resolve(_ context.Context, key string, _ map[string]any) (any, bool, error) {
+	if p.err != nil {
+		return nil, false, p.err
+	}
+	v, ok := p.singleKey[key]
+	return v, ok, nil
 }
 
 func (stubParametersProvider) ValidateResource(_ context.Context, _ map[string]any) error {
@@ -186,6 +197,46 @@ func TestResolveEffectiveParametersNilProviderIsNoop(t *testing.T) {
 }
 
 var _ port.ParametersProvider = stubParametersProvider{}
+
+// TestResolveEffectiveParametersPlatformToggleCaptureParameters verifies the
+// platform-scope trace.capture_parameters toggle reaches the execution
+// config through the WithCaptureParameters option (Phase 2: value-gated
+// parameter attributes on the execution span).
+func TestResolveEffectiveParametersPlatformToggleCaptureParameters(t *testing.T) {
+	svc := NewAgentService(AgentServiceDeps{
+		ParametersProvider: stubParametersProvider{singleKey: map[string]any{"trace.capture_parameters": true}},
+		Logger:             zap.NewNop(),
+	})
+	agent := &testParamAgent{cfg: &domain.AgentConfig{}}
+	options := svc.resolveEffectiveParameters(context.Background(), agent, nil)
+	if got := applyOptions(options).CaptureParameters; !got {
+		t.Fatalf("expected CaptureParameters=true when platform toggle resolves true, got %v", got)
+	}
+}
+
+func TestResolveEffectiveParametersPlatformToggleUnsetStaysFalse(t *testing.T) {
+	svc := NewAgentService(AgentServiceDeps{
+		ParametersProvider: stubParametersProvider{singleKey: map[string]any{}},
+		Logger:             zap.NewNop(),
+	})
+	agent := &testParamAgent{cfg: &domain.AgentConfig{}}
+	options := svc.resolveEffectiveParameters(context.Background(), agent, nil)
+	if got := applyOptions(options).CaptureParameters; got {
+		t.Fatalf("expected CaptureParameters=false when toggle is unset, got %v", got)
+	}
+}
+
+func TestResolveEffectiveParametersPlatformToggleErrorDegradesToUnset(t *testing.T) {
+	svc := NewAgentService(AgentServiceDeps{
+		ParametersProvider: stubParametersProvider{err: errors.New("registry down")},
+		Logger:             zap.NewNop(),
+	})
+	agent := &testParamAgent{cfg: &domain.AgentConfig{}}
+	options := svc.resolveEffectiveParameters(context.Background(), agent, nil)
+	if got := applyOptions(options).CaptureParameters; got {
+		t.Fatalf("expected CaptureParameters=false on resolution error, got %v", got)
+	}
+}
 
 func TestApplyParameterOverridesMapWinsAndOnlyPresentKeysOverwrite(t *testing.T) {
 	// Parameters map keys take precedence over the top-level sampling fields;
