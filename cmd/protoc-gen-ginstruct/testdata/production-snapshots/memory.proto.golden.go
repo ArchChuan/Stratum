@@ -30,13 +30,14 @@ type MemorySummaryResponse struct {
 }
 
 type MemoryStatsResponse struct {
-	TotalEntries     int64     `json:"total_entries"`
-	ShortTermCount   int64     `json:"short_term_count"`
-	LongTermCount    int64     `json:"long_term_count"`
-	EntityCount      int64     `json:"entity_count"`
-	SessionsCount    int64     `json:"sessions_count"`
-	ActiveUsers      int64     `json:"active_users"`
-	VectorCount      int64     `json:"vector_count"`
-	LastAccessTime   time.Time `json:"last_access_time"`
-	StorageSizeBytes int64     `json:"storage_size_bytes"`
+	TotalEntries         int64     `json:"total_entries"`
+	ShortTermCount       int64     `json:"short_term_count"`
+	LongTermCount        int64     `json:"long_term_count"`
+	EntityCount          int64     `json:"entity_count"`
+	SessionsCount        int64     `json:"sessions_count"`
+	ActiveUsers          int64     `json:"active_users"`
+	VectorCount          int64     `json:"vector_count"`
+	LastAccessTime       time.Time `json:"last_access_time"`
+	StorageSizeBytes     int64     `json:"storage_size_bytes"`
+	EmbedModelConfigured bool      `json:"embed_model_configured"`
 }

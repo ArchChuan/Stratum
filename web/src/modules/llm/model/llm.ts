@@ -28,6 +28,7 @@ export interface Model {
   inputPrice: number;
   outputPrice: number;
   recommended: boolean;
+  defaultEmbedding: boolean;
   enabled: boolean;
   providerManaged: boolean;
   createdAt: string;

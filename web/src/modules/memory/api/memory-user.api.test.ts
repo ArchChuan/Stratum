@@ -56,7 +56,13 @@ describe('memoryUserApi', () => {
 
   it('fetches memory stats', async () => {
     vi.mocked(api.get).mockResolvedValue({
-      data: { total_entries: 5, long_term_count: 2, short_term_count: 3, entity_count: 1 },
+      data: {
+        total_entries: 5,
+        long_term_count: 2,
+        short_term_count: 3,
+        entity_count: 1,
+        embed_model_configured: true,
+      },
     } as never);
 
     const stats = await memoryUserApi.getStats();
@@ -64,6 +70,7 @@ describe('memoryUserApi', () => {
     expect(api.get).toHaveBeenCalledWith('/memory/stats');
     expect(stats.total_entries).toBe(5);
     expect(stats.long_term_count).toBe(2);
+    expect(stats.embed_model_configured).toBe(true);
   });
 
   it('deletes a single memory by id', async () => {

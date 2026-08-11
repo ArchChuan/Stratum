@@ -519,7 +519,12 @@ func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		return
 	}
 
-	userHandler := handler.NewUserMemoryHandler(c.Memory.Service, c.Memory.Manager)
+	// LLMGateway 可能未构建（DB 不可用），handler 内部对 nil resolver fail-closed。
+	var embedSvc handler.DefaultEmbedModelResolver
+	if c.LLMGateway != nil {
+		embedSvc = c.LLMGateway.Registry
+	}
+	userHandler := handler.NewUserMemoryHandler(c.Memory.Service, c.Memory.Manager, embedSvc)
 	g := r.Group("/memory", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	g.Use(requireActive)
 	g.DELETE("/clear", userHandler.ClearMemories)

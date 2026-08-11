@@ -37,4 +37,6 @@ message MemoryStatsResponse {
   int64 vector_count = 7;
   google.protobuf.Timestamp last_access_time = 8;
   int64 storage_size_bytes = 9;
+  // 租户是否已配置可用嵌入模型（无可用模型时 false，前端展示健康提示）。
+  bool embed_model_configured = 10;
 }
