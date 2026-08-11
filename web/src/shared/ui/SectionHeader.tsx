@@ -1,4 +1,4 @@
-import { Typography } from 'antd';
+import { theme, Typography } from 'antd';
 import { cloneElement } from 'react';
 import type { ReactElement } from 'react';
 
@@ -10,24 +10,26 @@ export interface SectionHeaderProps {
   subtitle?: string;
 }
 
-export const SectionHeader = ({ icon, title, subtitle }: SectionHeaderProps) => (
-  <div
-    className="responsive-section-header"
-    style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, minWidth: 0 }}
-  >
+export const SectionHeader = ({ icon, title, subtitle }: SectionHeaderProps) => {
+  const { token } = theme.useToken();
+  return (
     <div
-      style={{
-        width: 32,
-        height: 32,
-        borderRadius: 8,
-        background: '#f0f5ff',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
+      className="responsive-section-header"
+      style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, minWidth: 0 }}
     >
-      {cloneElement(icon, { style: { color: '#2f54eb', fontSize: 16 } })}
-    </div>
+      <div
+        style={{
+          width: 32,
+          height: 32,
+          // 圆角由主题 token.borderRadius 接管；浅底配主色 icon 保持色相一致性
+          background: token.colorPrimaryBg,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {cloneElement(icon, { style: { color: token.colorPrimary, fontSize: 16 } })}
+      </div>
     <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
       <Text strong style={{ fontSize: 14, display: 'block' }}>
         {title}
@@ -39,4 +41,5 @@ export const SectionHeader = ({ icon, title, subtitle }: SectionHeaderProps) => 
       )}
     </div>
   </div>
-);
+  );
+};

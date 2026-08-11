@@ -1,5 +1,5 @@
 import { DeleteOutlined, EditOutlined, ToolOutlined } from '@ant-design/icons';
-import { Button, Card, Space, Tooltip, Typography } from 'antd';
+import { Button, Card, Space, theme, Tooltip, Typography } from 'antd';
 
 import type { Skill } from '../model/skill';
 
@@ -16,10 +16,10 @@ interface SkillCardProps {
 }
 
 export const SkillCard = ({ skill, onEdit, onDelete, canManage = false }: SkillCardProps) => {
+  const { token } = theme.useToken();
   return (
     <Card
       style={{
-        borderRadius: 12,
         border: '1px solid #f0f0f0',
         height: '100%',
         display: 'flex',
@@ -40,14 +40,13 @@ export const SkillCard = ({ skill, onEdit, onDelete, canManage = false }: SkillC
           style={{
             width: 40,
             height: 40,
-            borderRadius: 10,
-            background: '#f0f5ff',
+            background: token.colorPrimaryBg,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             flexShrink: 0,
             fontSize: 18,
-            color: '#2f54eb',
+            color: token.colorPrimary,
           }}
         >
           <ToolOutlined />
