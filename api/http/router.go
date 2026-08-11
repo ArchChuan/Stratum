@@ -15,6 +15,7 @@ import (
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/api/wiring"
 	"github.com/byteBuilderX/stratum/internal/iam/application"
+	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
@@ -248,6 +249,7 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		adminGroup.PATCH("/tenants/:id", adminHandler.UpdateTenant)
 		adminGroup.DELETE("/tenants/:id", adminHandler.DeleteTenant)
 		registerParameterAdminRoutes(adminGroup, c)
+		registerMemoryDLQAdminRoutes(adminGroup, c)
 	}
 
 	tenantGroup := r.Group("/tenant", jwtMW, middleware.InjectTenantContext(), middleware.RequireTenantRole("member"))
@@ -275,6 +277,29 @@ func registerParameterAdminRoutes(adminGroup *gin.RouterGroup, c *wiring.Contain
 	adminGroup.GET("/parameters/schema", paramHandler.Schema)
 	adminGroup.GET("/parameters", paramHandler.List)
 	adminGroup.PUT("/parameters", paramHandler.Update)
+}
+
+// dlqReplayAdapter 把 pipeline.ReplayService 适配到 handler 的消费方接口
+// （router 层是 wiring 之外的唯一允许适配点，避免 wiring import handler）。
+type dlqReplayAdapter struct {
+	svc *pipeline.ReplayService
+}
+
+func (a dlqReplayAdapter) ReplayByErrorCode(ctx context.Context, errorCode string) (handler.MemoryDLQReplayResult, error) {
+	result, err := a.svc.ReplayByErrorCode(ctx, errorCode)
+	return handler.MemoryDLQReplayResult{
+		Total: result.Total, Replayed: result.Replayed, Skipped: result.Skipped, Failed: result.Failed,
+	}, err
+}
+
+// registerMemoryDLQAdminRoutes wires POST /admin/memory/dlq/replay on the
+// global admin group when the memory pipeline (and its NATS connection) is up.
+func registerMemoryDLQAdminRoutes(adminGroup *gin.RouterGroup, c *wiring.Container) {
+	if c.Memory == nil || c.Memory.DLQReplay == nil {
+		return
+	}
+	h := handler.NewMemoryDlqReplayHandler(dlqReplayAdapter{svc: c.Memory.DLQReplay})
+	adminGroup.POST("/memory/dlq/replay", h.Replay)
 }
 
 func registerModelCatalogue(r *gin.Engine, c *wiring.Container) {

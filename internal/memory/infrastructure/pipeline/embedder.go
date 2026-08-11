@@ -105,6 +105,22 @@ func (w *EmbedderWorker) Stop() {
 	w.stopOnce.Do(func() { close(w.stopCh) })
 }
 
+// deadLetterWithoutEmbedder 处理租户无可用嵌入模型的 nil-embed 分支：
+// 记录 memory_embed_unavailable_total 指标后死信。独立成方法保持
+// processMessage 行数在代码质量棘轮基线内（存量超限函数不得恶化）。
+func (w *EmbedderWorker) deadLetterWithoutEmbedder(ctx context.Context, msg jetstream.Msg, stopHeartbeat func(), ev *MemoryRawEvent) {
+	w.logger.Warn("memory.embed.skip: no embedding service",
+		zap.String("trace_id", ev.TraceID),
+		zap.String("message_id", ev.MessageID),
+		zap.String("tenant_id", ev.TenantID))
+	embedUnavailableTotal.WithLabelValues(ev.TenantID).Inc()
+	if dlqErr := deadLetterWithHeartbeat(ctx, w.js, msg, stopHeartbeat, deadLetterDetails{
+		Stage: "embed", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "embed_service_unavailable",
+	}); dlqErr != nil {
+		w.logger.Error("memory.embed.dlq", zap.Error(dlqErr))
+	}
+}
+
 // safeProcessMessage isolates per-message panics so a single bad payload can't
 // take down the whole worker goroutine.
 func (w *EmbedderWorker) safeProcessMessage(ctx context.Context, msg jetstream.Msg) {
@@ -150,15 +166,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		embedSvc = w.embedResolver(ctx, ev.TenantID)
 	}
 	if embedSvc == nil {
-		w.logger.Warn("memory.embed.skip: no embedding service",
-			zap.String("trace_id", traceID),
-			zap.String("message_id", ev.MessageID),
-			zap.String("tenant_id", ev.TenantID))
-		if dlqErr := deadLetterWithHeartbeat(ctx, w.js, msg, stopHeartbeat, deadLetterDetails{
-			Stage: "embed", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "embed_service_unavailable",
-		}); dlqErr != nil {
-			w.logger.Error("memory.embed.dlq", zap.Error(dlqErr))
-		}
+		w.deadLetterWithoutEmbedder(ctx, msg, stopHeartbeat, ev)
 		return
 	}
 

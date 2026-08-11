@@ -27,13 +27,16 @@ import (
 // pipeline (JetStream-backed) that embeds and persists memories.
 //
 // Pipeline is nil when MEMORY_PIPELINE_ENABLED is false or NATS is not
-// reachable; downstream consumers must nil-check before use.
+// reachable; downstream consumers must nil-check before use. DLQReplay
+// follows the same availability (depends on the shared NATS connection),
+// and needs no shutdown code (no goroutines).
 type Memory struct {
-	Manager  *memory.MemoryManager
-	Service  *memory.MemoryService
-	Injector port.MemoryInjector
-	Pipeline *pipeline.Pipeline
-	RecallFn port.RecallMemoryFn
+	Manager   *memory.MemoryManager
+	Service   *memory.MemoryService
+	Injector  port.MemoryInjector
+	Pipeline  *pipeline.Pipeline
+	DLQReplay *pipeline.ReplayService
+	RecallFn  port.RecallMemoryFn
 }
 
 type memoryGatewayCompleter interface {
@@ -211,6 +214,12 @@ func (c *Container) buildMemoryPipeline(mem *Memory, db *pgxpool.Pool) error {
 		c.Logger.Warn("memory-pipeline: NATS unavailable, pipeline disabled")
 		return nil
 	}
+
+	replaySvc, err := pipeline.NewReplayService(c.Storage.NATS, c.Logger)
+	if err != nil {
+		return fmt.Errorf("memory dlq replay service: %w", err)
+	}
+	mem.DLQReplay = replaySvc
 
 	dimResolver := pipeline.DimResolver(func(ctx context.Context, tenantID string) int {
 		return c.resolveEmbeddingDim(ctx, tenantID)

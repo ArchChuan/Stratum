@@ -269,6 +269,20 @@ groups:
           dashboard_url: /d/stratum-service-overview
           runbook_url: /docs/operations/alerts/business.md#memory-dlq-critical
 
+      - alert: StratumMemoryEmbedUnavailable
+        expr: increase(memory_embed_unavailable_total[15m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: stratum
+          environment: remote-test
+          component: memory
+        annotations:
+          summary: 租户无可用嵌入模型，记忆写入持续进入 DLQ
+          description: Tenant {{ $labels.tenant_id }} has no configured embedding model; memory writes are being dead-lettered (increase {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/alerts/business.md#memory-dlq
+
   - name: stratum-memory-workers
     rules:
       - alert: StratumMemoryWorkerPanics
