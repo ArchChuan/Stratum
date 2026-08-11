@@ -216,6 +216,88 @@ func TestBaseAgentOTelHierarchyFollowsReActGraphContext(t *testing.T) {
 	require.NotEmpty(t, toolAttrs["stratum.result.sha256"])
 }
 
+// TestBaseAgentExecutionSpanCarriesParamSnapshotAndPromptVersion verifies the
+// Phase 2 trace enhancement: the execution span always carries the parameter
+// fingerprint (stratum.params.sha256), value attributes appear only under
+// trace.capture_parameters, and LLM spans carry the effective temperature /
+// max_tokens plus the system prompt version fingerprint.
+func TestBaseAgentExecutionSpanCarriesParamSnapshotAndPromptVersion(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previous)
+		_ = provider.Shutdown(context.Background())
+	})
+
+	a := newReActAgent()
+	a.SetCapGateway(&mockCapGW{responses: []port.CapabilityResponse{
+		{Content: "answer", Usage: port.TokenUsage{Prompt: 10, Completion: 4, Total: 14}},
+	}})
+	_, err := a.Execute(context.Background(), "hello",
+		agent.WithTenantID("tenant-1"),
+		agent.WithTemperature(0.7),
+		agent.WithMaxTokens(512),
+		agent.WithCaptureParameters(true),
+	)
+	require.NoError(t, err)
+
+	spans := recorder.Ended()
+	byName := make(map[string][]sdktrace.ReadOnlySpan)
+	for _, span := range spans {
+		byName[span.Name()] = append(byName[span.Name()], span)
+	}
+
+	execAttrs := spanAttributes(byName["agent.execute"][0])
+	require.NotEmpty(t, execAttrs["stratum.params.sha256"])
+	require.InDelta(t, 0.7, execAttrs["stratum.params.temperature"], 1e-6)
+	require.Equal(t, int64(512), execAttrs["stratum.params.max_tokens"])
+
+	llmAttrs := spanAttributes(byName["react.llm"][0])
+	require.InDelta(t, 0.7, llmAttrs["gen_ai.request.temperature"], 1e-6)
+	require.Equal(t, int64(512), llmAttrs["gen_ai.request.max_tokens"])
+	require.Equal(t, "system_prompt", llmAttrs["stratum.prompt.key"])
+	require.NotEmpty(t, llmAttrs["stratum.prompt.version"])
+}
+
+// TestBaseAgentExecutionSpanOmitsParamValuesWhenCaptureDisabled verifies the
+// privacy gate: without trace.capture_parameters the raw values are absent
+// while the fingerprint remains.
+func TestBaseAgentExecutionSpanOmitsParamValuesWhenCaptureDisabled(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previous)
+		_ = provider.Shutdown(context.Background())
+	})
+
+	a := newReActAgent()
+	a.SetCapGateway(&mockCapGW{responses: []port.CapabilityResponse{
+		{Content: "answer", Usage: port.TokenUsage{Prompt: 10, Completion: 4, Total: 14}},
+	}})
+	_, err := a.Execute(context.Background(), "hello",
+		agent.WithTenantID("tenant-1"),
+	)
+	require.NoError(t, err)
+
+	byName := make(map[string][]sdktrace.ReadOnlySpan)
+	for _, span := range recorder.Ended() {
+		byName[span.Name()] = append(byName[span.Name()], span)
+	}
+	execAttrs := spanAttributes(byName["agent.execute"][0])
+	require.NotEmpty(t, execAttrs["stratum.params.sha256"])
+	_, hasTemperature := execAttrs["stratum.params.temperature"]
+	require.False(t, hasTemperature, "parameter values must be gated by trace.capture_parameters")
+
+	// 0=unset semantics: temperature attribute absent from LLM spans too.
+	llmAttrs := spanAttributes(byName["react.llm"][0])
+	_, hasGenTemperature := llmAttrs["gen_ai.request.temperature"]
+	require.False(t, hasGenTemperature, "unset temperature must not be recorded as 0, got %#v", llmAttrs)
+}
+
 func TestBaseAgentRootSpanCarriesEvaluationEvidence(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))

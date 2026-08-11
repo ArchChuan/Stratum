@@ -36,6 +36,15 @@ func (p resourceParameterProvider) ResolveForResource(
 	return p.svc.Resolver().ResolveForResource(ctx, declared)
 }
 
+// Resolve resolves a single registry key (platform-scope toggles included)
+// through the same two-level fallback the resource path uses.
+func (p resourceParameterProvider) Resolve(ctx context.Context, key string, declared map[string]any) (any, bool, error) {
+	if p.svc == nil {
+		return nil, false, fmt.Errorf("parameters service not configured")
+	}
+	return p.svc.Resolver().Resolve(ctx, key, declared)
+}
+
 // ValidateResource validates declared sampling values through the registry;
 // a nil service (db unavailable) skips validation so the write path still
 // works — the same degrade convention as resolution.

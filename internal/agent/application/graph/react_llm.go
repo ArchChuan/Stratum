@@ -133,6 +133,22 @@ func startLLMTrace(ctx context.Context, s *ReActState, messages []port.LLMMessag
 		attribute.String("opik.metadata.stratum.provider_id", s.Model),
 		attribute.String("opik.metadata.stratum.status", domain.ToolTraceStatusSuccess),
 	}
+	// Effective request parameters: only non-zero (set) values are recorded so
+	// "unset" is not misrepresented as 0.
+	if s.Temperature != 0 {
+		llmAttributes = append(llmAttributes, attribute.Float64("gen_ai.request.temperature", float64(s.Temperature)))
+	}
+	if s.MaxTokens > 0 {
+		llmAttributes = append(llmAttributes, attribute.Int("gen_ai.request.max_tokens", s.MaxTokens))
+	}
+	// Prompt version fingerprint ties the LLM request to the system prompt
+	// revision that produced it.
+	if version, ok := s.PromptVersions["system_prompt"]; ok && version != "" {
+		llmAttributes = append(llmAttributes,
+			attribute.String("stratum.prompt.key", "system_prompt"),
+			attribute.String("stratum.prompt.version", version),
+		)
+	}
 	llmAttributes = append(llmAttributes, tracePayloadAttributes(
 		ctx, s.TracePayloadStore, s.TenantID, s.TraceID, "llm-input",
 		map[string]any{"messages": messages, "tools": tools},

@@ -727,3 +727,115 @@ func (rs *RAGService) BuildPrompt(question string, chunks []string) string {
 
 	return prompt.String()
 }
+
+// RAGSearchSource is chunk-level retrieval provenance: which workspace the
+// chunk came from and (for vector retrieval) its similarity score. Keyword
+// mode produces no score (HasScore=false).
+type RAGSearchSource struct {
+	WorkspaceID   string
+	WorkspaceName string
+	ChunkID       string
+	Score         float64
+	HasScore      bool
+}
+
+// RAGSearchEvidence is the structured result of a knowledge search: the
+// concatenated context block plus per-chunk provenance. Wiring adapters map
+// it to the agent-side evidence type; the application layer keeps its own
+// type so knowledge never imports agent ports.
+type RAGSearchEvidence struct {
+	Content string
+	Sources []RAGSearchSource
+}
+
+type wsEvidenceResult struct {
+	content string
+	sources []RAGSearchSource
+	err     error
+}
+
+// NewRAGSearchEvidenceFn mirrors NewRAGSearchFn (same fan-out, concurrency
+// bound and at-least-one semantics) but retains per-chunk provenance so
+// callers can record retrieval evidence without re-querying.
+func NewRAGSearchEvidenceFn(rs *RAGService, tenantID string) func(
+	ctx context.Context, workspaces []string, query string, topK int,
+) (RAGSearchEvidence, error) {
+	return func(ctx context.Context, workspaces []string, query string, topK int) (RAGSearchEvidence, error) {
+		results := make([]wsEvidenceResult, len(workspaces))
+		sem := make(chan struct{}, constants.MaxConcurrentWorkspaceSearch)
+		var wg sync.WaitGroup
+		for i, ws := range workspaces {
+			sem <- struct{}{}
+			wg.Add(1)
+			go func(i int, ws string) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				results[i] = searchWorkspaceWithEvidence(ctx, rs, tenantID, ws, query, topK)
+			}(i, ws)
+		}
+		wg.Wait()
+		return rs.mergeEvidenceResults(results)
+	}
+}
+
+func searchWorkspaceWithEvidence(ctx context.Context, rs *RAGService, tenantID, ws, query string, topK int) wsEvidenceResult {
+	mode, effectiveTopK, embedModel, workspaceID, err := resolveWorkspaceConfig(ctx, rs, tenantID, ws, topK)
+	if err != nil {
+		return wsEvidenceResult{err: err}
+	}
+	out, err := rs.Query(ctx, RAGQueryRequest{
+		WorkspaceID:    workspaceID,
+		Workspace:      ws,
+		Question:       query,
+		TenantID:       tenantID,
+		Mode:           mode,
+		TopK:           effectiveTopK,
+		EmbeddingModel: embedModel,
+	})
+	if err != nil {
+		return wsEvidenceResult{err: err}
+	}
+	sources := make([]RAGSearchSource, 0, len(out.Sources))
+	for _, src := range out.Sources {
+		sources = append(sources, RAGSearchSource{
+			WorkspaceID:   workspaceID,
+			WorkspaceName: ws,
+			ChunkID:       src.ChunkID,
+			Score:         float64(src.Score),
+			HasScore:      src.Score != 0,
+		})
+	}
+	return wsEvidenceResult{content: formatSources(out.Sources), sources: sources}
+}
+
+// mergeEvidenceResults keeps the same at-least-one semantics as mergeResults:
+// failed workspaces are skipped, successful ones contribute, and the first
+// error surfaces only when nothing was produced at all; partial failure
+// warns but keeps the successful content and their evidence.
+func (rs *RAGService) mergeEvidenceResults(results []wsEvidenceResult) (RAGSearchEvidence, error) {
+	var combined strings.Builder
+	var sources []RAGSearchSource
+	var firstErr error
+	failures := 0
+	for _, r := range results {
+		if r.err != nil {
+			failures++
+			if firstErr == nil {
+				firstErr = r.err
+			}
+			continue
+		}
+		combined.WriteString(r.content)
+		sources = append(sources, r.sources...)
+	}
+	if failures > 0 {
+		rs.logger.Warn("knowledge.rag.partial_failure",
+			zap.Int("failed_workspaces", failures),
+			zap.Int("total_workspaces", len(results)),
+			zap.Error(firstErr))
+	}
+	if combined.Len() == 0 && firstErr != nil {
+		return RAGSearchEvidence{}, firstErr
+	}
+	return RAGSearchEvidence{Content: combined.String(), Sources: sources}, nil
+}

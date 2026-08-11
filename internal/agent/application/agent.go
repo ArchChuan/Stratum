@@ -3,6 +3,8 @@ package application
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -52,15 +54,29 @@ type ExecutionConfig struct {
 	// 0 = auto-derive from MaxContextTokens.
 	CompactionRecentGroups int
 	// CompactionSafetyRatio overrides the compaction safety ratio. 0 = default.
-	CompactionSafetyRatio     float32
-	EnableTools               bool
-	AvailableTools            []string
-	Stream                    bool
-	TokenCallback             func(string)
-	TenantID                  string
-	TraceID                   string
-	ExecutionID               string
-	RAGSearchFn               func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
+	CompactionSafetyRatio float32
+	EnableTools           bool
+	AvailableTools        []string
+	Stream                bool
+	TokenCallback         func(string)
+	TenantID              string
+	TraceID               string
+	ExecutionID           string
+	RAGSearchFn           func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
+	// RAGSearchFnWithEvidence is the evidence-capable knowledge search hook
+	// (port.RAGSearchEvidenceProvider). When set, the knowledge tool prefers
+	// it over RAGSearchFn so tool observations carry retrieval provenance;
+	// the content contract is identical.
+	RAGSearchFnWithEvidence func(ctx context.Context, workspaces []string, query string, topK int) (port.RAGSearchEvidence, error)
+	// CaptureParameters gates recording of the effective parameter values
+	// (stratum.params.* attributes) on the execution span. The parameter
+	// fingerprint stratum.params.sha256 is always recorded; only the raw
+	// values are privacy-gated by the platform trace.capture_parameters
+	// toggle.
+	CaptureParameters bool
+	// SystemPromptVersion is the content fingerprint of the system prompt
+	// actually applied to this execution; 0 = unset leaves it empty.
+	SystemPromptVersion       string
 	ExtraTools                []port.ToolDefinition
 	SkillCatalog              map[string]port.SkillActivation
 	ToolExecutionFn           port.ToolExecutionFn
@@ -308,6 +324,15 @@ func globalSystemSuffix(suffix string) string {
 	return "\n\n" + suffix
 }
 
+// contentVersion returns a stable short fingerprint (first 16 hex chars of
+// the SHA-256 digest) of a text blob. Used as the prompt version key so
+// trace consumers can group executions by prompt without storing full
+// prompt text.
+func contentVersion(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
 func (a *BaseAgent) Execute(ctx context.Context, input string, options ...ExecutionOption) (*AgentResult, error) {
 	startTime := time.Now()
 
@@ -317,8 +342,16 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	// Snapshot mutable fields under lock, then release before the long LLM call.
 	snap := a.snapshotExecutionConfig(cfg)
 
+	// Prompt version fingerprint: derived from the actual system prompt text
+	// applied to this execution (DB-loaded AgentConfig.SystemPrompt +
+	// global suffix). The production path does not go through the prompt
+	// registry, so the version is a content hash, not a registry revision.
+	if cfg.SystemPromptVersion == "" && snap.systemPrompt != "" {
+		cfg.SystemPromptVersion = contentVersion(snap.systemPrompt)
+	}
+
 	tracer := otel.Tracer("stratum/agent")
-	executionAttrs := agentExecutionAttributes(snap.agentID, snap.agentName, snap.agentType, *cfg)
+	executionAttrs := agentExecutionAttributes(snap.agentID, snap.agentName, snap.agentType, *cfg, snap.maxContextTokens)
 	requestSpan := oteltrace.SpanFromContext(ctx)
 	requestSpan.SetAttributes(executionAttrs...)
 	ctx, execSpan := tracer.Start(ctx, "agent.execute",
@@ -678,6 +711,16 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 	return nil
 }
 
+// promptVersionMap builds the prompt key → version fingerprint map carried
+// into the ReAct loop. Only the system prompt is fingerprinted today;
+// registry-driven prompts (if re-introduced) add their own keys here.
+func promptVersionMap(systemPromptVersion string) map[string]string {
+	if systemPromptVersion == "" {
+		return nil
+	}
+	return map[string]string{"system_prompt": systemPromptVersion}
+}
+
 func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port.LLMMessage, maxTokens int) agentgraph.ReActState {
 	availableTools := buildBuiltinTools(ec.workspaceNames, ec.workspaceDescs,
 		len(ec.workspaceNames) > 0 && ec.cfg.RAGSearchFn != nil, a.MemoryInjector != nil)
@@ -708,6 +751,8 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		AgentKnowledgeWorkspaceIDs: ec.workspaceNames,
 		AgentMemoryScope:           ec.memoryScope,
 		RAGSearchFn:                ec.cfg.RAGSearchFn,
+		RAGSearchFnWithEvidence:    ec.cfg.RAGSearchFnWithEvidence,
+		PromptVersions:             promptVersionMap(ec.cfg.SystemPromptVersion),
 		OfficialDocsSearchFn:       ec.cfg.OfficialDocsSearchFn,
 		DiagnosticFn:               ec.cfg.DiagnosticFn,
 		ProposalCreateFn:           ec.cfg.ProposalCreateFn,
@@ -1028,6 +1073,30 @@ func WithRAGSearchFn(fn func(ctx context.Context, workspaces []string, query str
 	}
 }
 
+// WithRAGSearchFnWithEvidence injects the evidence-capable knowledge search
+// function; the tool node prefers it over WithRAGSearchFn when set.
+func WithRAGSearchFnWithEvidence(fn func(ctx context.Context, workspaces []string, query string, topK int) (port.RAGSearchEvidence, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.RAGSearchFnWithEvidence = fn
+	}
+}
+
+// WithCaptureParameters toggles recording of effective parameter values on
+// the execution span (stratum.params.* attributes).
+func WithCaptureParameters(enabled bool) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.CaptureParameters = enabled
+	}
+}
+
+// WithSystemPromptVersion records the content fingerprint of the system
+// prompt applied to this execution.
+func WithSystemPromptVersion(version string) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.SystemPromptVersion = version
+	}
+}
+
 // WithExtraTools appends extra tool definitions (from MCP servers and allowed skills) to AvailableTools.
 func WithExtraTools(tools []port.ToolDefinition) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
@@ -1126,7 +1195,7 @@ func withInternalToolResultGuard(fn func(any) (port.GuardedToolResult, error)) E
 	return func(cfg *ExecutionConfig) { cfg.InternalToolResultGuardFn = fn }
 }
 
-func agentExecutionAttributes(agentID, agentName string, agentType AgentType, cfg ExecutionConfig) []attribute.KeyValue {
+func agentExecutionAttributes(agentID, agentName string, agentType AgentType, cfg ExecutionConfig, maxContextTokens int) []attribute.KeyValue {
 	resourceManifest := cfg.EvolutionTrace.ResourceManifest
 	if resourceManifest == nil {
 		resourceManifest = map[string]string{}
@@ -1137,7 +1206,8 @@ func agentExecutionAttributes(agentID, agentName string, agentType AgentType, cf
 	}
 	manifest, _ := json.Marshal(resourceManifest)
 	assignments, _ := json.Marshal(experimentAssignments)
-	return []attribute.KeyValue{
+	paramsJSON, _ := json.Marshal(tunableSnapshot(&cfg, maxContextTokens))
+	attrs := []attribute.KeyValue{
 		attribute.String("agent.id", agentID),
 		attribute.String("agent.type", string(agentType)),
 		attribute.String("conversation.id", cfg.ConversationID),
@@ -1165,7 +1235,20 @@ func agentExecutionAttributes(agentID, agentName string, agentType AgentType, cf
 		attribute.String("opik.metadata.stratum.experiment_variant", cfg.EvolutionTrace.Variant),
 		attribute.String("opik.metadata.stratum.experiment_assignments", string(assignments)),
 		attribute.String("opik.metadata.stratum.resource_manifest", string(manifest)),
+		attribute.String("stratum.params.sha256", contentVersion(string(paramsJSON))),
 	}
+	// Effective parameter values are privacy-gated by trace.capture_parameters;
+	// the fingerprint above is always recorded so runs remain comparable.
+	if cfg.CaptureParameters {
+		attrs = append(attrs,
+			attribute.Float64("stratum.params.temperature", float64(cfg.Temperature)),
+			attribute.Int("stratum.params.max_tokens", cfg.MaxTokens),
+			attribute.Int("stratum.params.max_context_tokens", maxContextTokens),
+			attribute.Int("stratum.params.compaction_recent_groups", cfg.CompactionRecentGroups),
+			attribute.Float64("stratum.params.compaction_safety_ratio", float64(cfg.CompactionSafetyRatio)),
+		)
+	}
+	return attrs
 }
 
 // ApplyOptions applies options to the execution config

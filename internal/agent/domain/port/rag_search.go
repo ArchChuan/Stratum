@@ -22,3 +22,32 @@ type KnowledgeRevisionSearchProvider interface {
 		query string,
 	) (string, error)
 }
+
+// RAGSearchSource is per-chunk retrieval provenance attached to a knowledge
+// search result. Score is only meaningful when HasScore is true (vector
+// retrieval); keyword-mode results carry no score.
+type RAGSearchSource struct {
+	WorkspaceID   string
+	WorkspaceName string
+	ChunkID       string
+	Score         float64
+	HasScore      bool
+}
+
+// RAGSearchEvidence is the structured result of a knowledge search: the
+// concatenated context block plus the chunk-level provenance that produced
+// it. Tool observations merge the provenance into their metadata so traces
+// record retrieval evidence alongside the injected context.
+type RAGSearchEvidence struct {
+	Content string
+	Sources []RAGSearchSource
+}
+
+// RAGSearchEvidenceProvider is an optional capability of wiring adapters
+// backed by a RAG engine that returns chunk-level provenance. Agent
+// execution prefers it over RAGSearchProvider when both are available; the
+// base SearchKnowledge contract is untouched for adapters that cannot
+// provide evidence.
+type RAGSearchEvidenceProvider interface {
+	SearchKnowledgeWithEvidence(ctx context.Context, tenantID string, workspaceIDs []string, query string, topK int) (RAGSearchEvidence, error)
+}

@@ -10,6 +10,11 @@ import "context"
 // defaults participate in execution.
 type ParametersProvider interface {
 	ResolveForResource(ctx context.Context, declared map[string]any) (map[string]any, error)
+	// Resolve returns the effective value for a single registry key
+	// (declared → platform default → definition default). present=false
+	// means the value resolved to unset. Used for platform-scope execution
+	// toggles (e.g. trace.capture_parameters) that are not resource keys.
+	Resolve(ctx context.Context, key string, declared map[string]any) (any, bool, error)
 	// ValidateResource validates resource-scope declared sampling values
 	// (bare JSONB keys) against registry bounds/options. Unknown keys and
 	// out-of-bounds values return an error; callers skip 0=unset values
