@@ -244,7 +244,23 @@ func (a knowledgeEvaluationAdapter) ExecuteRevision(
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
-	return evalport.ExecutionResult{Output: result}, nil
+	return evalport.ExecutionResult{Output: result, RAGEvidence: ragEvidenceFromRetrieval(result, retrievalCase)}, nil
+}
+
+// ragEvidenceFromRetrieval converts a retrieval evaluation into structured
+// per-case evidence so consumers never parse the serialized Actual payload.
+func ragEvidenceFromRetrieval(
+	result knowledgeapp.RetrievalEvaluation,
+	testCase knowledgeapp.RetrievalCase,
+) *evaldomain.RAGEvidenceInfo {
+	return &evaldomain.RAGEvidenceInfo{
+		RetrievedDocumentIDs: result.RetrievedDocumentIDs,
+		RelevantDocumentIDs:  testCase.RelevantDocumentIDs,
+		RecallAtK:            knowledgeapp.RecallAtK(result.RetrievedDocumentIDs, testCase.RelevantDocumentIDs, knowledgeapp.RetrievalK),
+		PrecisionAtK:         knowledgeapp.PrecisionAtK(result.RetrievedDocumentIDs, testCase.RelevantDocumentIDs, knowledgeapp.RetrievalK),
+		MRR:                  knowledgeapp.MRR(result.RetrievedDocumentIDs, testCase.RelevantDocumentIDs),
+		NDCGAtK:              knowledgeapp.NDCGAtK(result.RetrievedDocumentIDs, testCase.RelevantDocumentIDs, knowledgeapp.RetrievalK),
+	}
 }
 
 // loadVerifiedSnapshot loads the revision and verifies its document set is

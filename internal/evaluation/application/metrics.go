@@ -40,7 +40,39 @@ func aggregateRunMetrics(run domain.EvalRun) map[string]any {
 		metrics["avg_latency_ms"] = avgInt64(latencies)
 		metrics["p95_latency_ms"] = percentileInt64(latencies, 0.95)
 	}
+	for key, value := range aggregateRAGEvidence(run.Results) {
+		metrics[key] = value
+	}
 	return metrics
+}
+
+// aggregateRAGEvidence averages the per-case retrieval metrics of a run over
+// the cases that carry evidence; runs without knowledge evidence return nil.
+// The at_5 rank window mirrors knowledge/application.RetrievalK.
+func aggregateRAGEvidence(results []domain.EvalCaseResult) map[string]float64 {
+	var recall, precision, mrr, ndcg float64
+	n := 0
+	for _, result := range results {
+		if result.RAGEvidence == nil {
+			continue
+		}
+		recall += result.RAGEvidence.RecallAtK
+		precision += result.RAGEvidence.PrecisionAtK
+		mrr += result.RAGEvidence.MRR
+		ndcg += result.RAGEvidence.NDCGAtK
+		n++
+	}
+	if n == 0 {
+		return nil
+	}
+	count := float64(n)
+	return map[string]float64{
+		"avg_recall_at_5":    recall / count,
+		"avg_precision_at_5": precision / count,
+		"avg_mrr":            mrr / count,
+		"avg_ndcg_at_5":      ndcg / count,
+		"rag_case_count":     float64(n),
+	}
 }
 
 func avgInt64(values []int64) float64 {

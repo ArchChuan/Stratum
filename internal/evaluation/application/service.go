@@ -121,6 +121,7 @@ func (s *Service) runCase(
 	result.Tokens = execution.Tokens
 	result.CostUSD = execution.CostUSD
 	result.DurationMs = execution.DurationMs
+	result.RAGEvidence = execution.RAGEvidence
 
 	// Resolve trace evidence from Opik (best-effort: Opik unavailability must
 	// not block Agent execution or evaluation).
