@@ -16,7 +16,7 @@ export const AppProviders = ({ children }: AppProvidersProps) => (
     theme={{
       token: {
         // 主题 token 骨架：控件圆角 8、卡片圆角 12（AntD borderRadiusLG）、主色统一为 AntD default blue
-        colorPrimary: '#1677ff',
+        colorPrimary: '#2563eb',
         borderRadius: 8,
         borderRadiusLG: 12,
         // 字体：数字/英文 Inter 优先，中文按平台回退最优系统字体（Avenir 仅 macOS，缺失时会落到 Arial 渲染粗笨）
@@ -38,7 +38,7 @@ export const AppProviders = ({ children }: AppProvidersProps) => (
         Button: {
           // 默认按钮轻投影、主按钮主色投影，三态更有"按得下去"的层次
           boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
-          boxShadowSecondary: '0 2px 6px rgba(22, 119, 255, 0.28)',
+          boxShadowSecondary: '0 2px 6px rgba(37, 99, 235, 0.28)',
           fontWeight: 500,
         },
         Card: {

@@ -28,7 +28,7 @@ export const DashboardPage = () => {
   const { counts, loading } = useDashboardPage();
 
   const statCards: StatCardSpec[] = [
-    { title: 'Agent', value: counts.agents, icon: <RobotOutlined />, color: '#1677ff', bg: '#e6f4ff' },
+    { title: 'Agent', value: counts.agents, icon: <RobotOutlined />, color: '#2563eb', bg: '#dbeafe' },
     { title: '技能', value: counts.skills, icon: <AppstoreOutlined />, color: '#52c41a', bg: '#f6ffed' },
     { title: '知识库', value: counts.knowledge_workspaces, icon: <DatabaseOutlined />, color: '#13c2c2', bg: '#e6fffb' },
     { title: 'MCP 服务器', value: counts.mcp_servers, icon: <ApiOutlined />, color: '#722ed1', bg: '#f9f0ff' },
