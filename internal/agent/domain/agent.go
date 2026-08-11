@@ -58,6 +58,11 @@ type AgentConfig struct {
 	CompactionRecentGroups int
 	// CompactionSafetyRatio overrides the compaction safety ratio. 0 = default.
 	CompactionSafetyRatio float32
+	// CompactionCooldownSec overrides the in-loop compaction cooldown.
+	// 0 = default constant.
+	CompactionCooldownSec int
+	// MaxTokensPerExecution is the execution-wide LLM token budget. 0 = unlimited.
+	MaxTokensPerExecution int
 	MemoryScope           string
 	SystemKey             string
 	IsSystem              bool
@@ -356,6 +361,9 @@ type AgentResult struct {
 	// 降级后与配置模型不同）；ModelRoutedVia 是实际尝试过的模型链。
 	ModelResolved  string
 	ModelRoutedVia []string
+	// TerminatedBy 记录业务终止原因（如 cost_budget）；空 = 正常完成。
+	// 业务终止仍返回已产出部分结果，不进入错误路径。
+	TerminatedBy string
 }
 
 // AgentState tracks mutable execution progress during a single run.

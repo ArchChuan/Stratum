@@ -224,10 +224,10 @@ export const AgentFormSections = ({
                 <Form.Item
                   label="最大上下文 Token"
                   name="maxContextTokens"
-                  rules={[{ required: true, message: '请输入最大上下文 Token' }, { type: 'number', min: 1000, message: '最小值为 1000' }]}
-                  extra="推荐值：轻量对话 4000，标准 8000，长文档处理 32000-128000"
+                  rules={[{ required: true, message: '请输入最大上下文 Token' }, { type: 'number', min: 0, message: '最小值为 0（0 = 自动按模型窗口解析）' }]}
+                  extra="0 = 自动按模型窗口解析；推荐值：轻量对话 4000，标准 8000，长文档处理 32000-128000"
                 >
-                  <InputNumber min={1000} max={128000} step={1000} style={{ width: '100%' }} />
+                  <InputNumber min={0} max={128000} step={1000} style={{ width: '100%' }} />
                 </Form.Item>
                 {!isSystem && (
                   <>

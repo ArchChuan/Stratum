@@ -37,17 +37,49 @@ const (
 	// (a group = one assistant turn plus its paired tool results) kept verbatim
 	// during in-loop compaction. Older groups are summarized or dropped.
 	LoopCompactionRecentGroups = 3
+	// DefaultCompactionCooldown 是一次执行内压缩触发后的冷却窗口（Spec 第 4 节，
+	// 建议默认 10s，实现时按压测验证）。registry 参数 agent.compaction_cooldown_sec
+	// 覆盖它（0 = 本常量）。
+	DefaultCompactionCooldown = 10 * time.Second
 	// LoopCompactionSafetyRatio triggers compaction before the hard token ceiling,
 	// leaving margin for the EstimateText heuristic error (<20%).
 	LoopCompactionSafetyRatio = 0.8
+	// ContextSafetyReserveRatio 是执行级预算账本的安全余量默认比例（Spec 第 2 节
+	// usable = window − safetyReserve − outputReserve）。独立于
+	// LoopCompactionSafetyRatio（"80% 满即压缩"的触发语义）：扣减 80% 会让
+	// 默认配置下 usable 归零（0.8×window + outputReserve > window），system 模板
+	// 塞满 headCap、memory 注入与压缩全部失效。默认 20% 余量在窗口利用率与
+	// 自修正兜底间取中。
+	ContextSafetyReserveRatio = 0.2
 
-	// DefaultAgentContextTokensCeiling caps auto-derived MaxContextTokens to avoid
-	// 128K+ models exhausting memory with full-window context budgets.
-	DefaultAgentContextTokensCeiling = 32768
+	// CompactionBudgetTotal 是压缩路径一次执行的总体时间预算（Spec 第 4 节）：
+	// 按 剩余/剩余尝试数 分摊为逐次独立的时间片，链内所有尝试合计不放大
+	// 用户可感知时延。
+	CompactionBudgetTotal = 5 * time.Second
+	// CompactionMaxCandidates 是压缩路径 fallback 候选模型数量上限（不含主模型）。
+	CompactionMaxCandidates = 2
+	// CompactionMinSlice 是单次尝试时间片下限：剩余预算耗尽（≤0）时的兜底
+	// slice，保证每次尝试仍有最小执行窗口。
+	CompactionMinSlice = 1 * time.Millisecond
 
 	// DefaultContextWindowRatio is the fraction of a model's context window
 	// used as the agent's MaxContextTokens when the user does not set one explicitly.
 	DefaultContextWindowRatio = 0.85
+
+	// MaxContextWindowTokens is the hard ceiling of a resolved window (Spec 第 1 节),
+	// replacing the model-independent DefaultAgentContextTokensCeiling(32768).
+	MaxContextWindowTokens = 1_048_576
+	// MinContextWindowTokens is the lower bound an explicit MaxContextTokens
+	// is clamped to when the model window is known.
+	MinContextWindowTokens = 2_000
+
+	// DefaultFixedHeadRatio 是 system+memory 的预算配额比例（Spec 第 2 节）。
+	DefaultFixedHeadRatio = 0.2
+	// DefaultToolsBudgetRatio 是工具定义的预算配额比例（Spec 第 2 节）。
+	DefaultToolsBudgetRatio = 0.2
+	// DefaultOutputReserveTokens 是主模型输出预留的保守默认（无显式 max_tokens
+	// 且 vendor 表未知时的兜底）。
+	DefaultOutputReserveTokens = 4_096
 
 	// ---- adaptive compaction thresholds (Context Phase 3) ----
 
@@ -95,6 +127,11 @@ const (
 	// effective budget (compacts earlier); 2.0 doubles it (compacts later).
 	TokenCorrectionMin = 0.5
 	TokenCorrectionMax = 2.0
+
+	// MinimalRetryReserveBytes 是最终请求 context_length_exceeded 降级最小
+	// 请求（Spec D4）的字节预算余量：len() 字节数是 token 的保守上界
+	// （CJK 每字符 3 字节），从窗口扣除该余量保证最小请求必然小于原请求。
+	MinimalRetryReserveBytes = 64
 )
 
 // DynamicRecentGroups returns the number of recent message groups to preserve

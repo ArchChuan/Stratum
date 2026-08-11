@@ -116,6 +116,45 @@ var modelCatalog = map[string]modelSpec{
 	"text-embedding-v4":      {8_191, 0},
 }
 
+// familyPrefixes 是模型族 → 静态窗口的回退键（只覆盖主流族）。
+// 带版本/尺寸后缀的模型（如 deepseek-v4-flash、qwen3-max-202508）
+// 通过前缀匹配命中族窗口；族窗口取该族主流模型的 context_window。
+var familyPrefixes = []struct {
+	prefix string
+	window int
+	maxOut int
+}{
+	{prefix: "deepseek", window: 65536, maxOut: 8192},
+	{prefix: "qwen", window: 131072, maxOut: 8192},
+	{prefix: "glm", window: 128000, maxOut: 4096},
+	{prefix: "gpt-", window: 128000, maxOut: 16384},
+	{prefix: "gpt4", window: 128000, maxOut: 16384},
+	{prefix: "claude", window: 200000, maxOut: 16384},
+	{prefix: "moonshot", window: 128000, maxOut: 4096},
+	{prefix: "mistral", window: 128000, maxOut: 4096},
+	{prefix: "yi-", window: 32768, maxOut: 4096},
+}
+
+// LookupModelSpec 返回模型的静态能力（上下文窗口 + 最大输出 token）。
+// 匹配顺序：全名 exact（大小写不敏感）→ 前缀族 → 0/0 表示未知。
+// 供 agent 执行时窗口解析与输出预留共用（wiring 注入，graph 包不直接引用）。
+func LookupModelSpec(name string) (contextWindow, maxOutputTokens int) {
+	if name == "" {
+		return 0, 0
+	}
+	if cw, mo := lookupModelSpec(name); cw > 0 {
+		return cw, mo
+	}
+	lower := toLower(name)
+	for _, f := range familyPrefixes {
+		// 手动前缀比较，与 toLower 一样避免 import strings。
+		if len(f.prefix) <= len(lower) && lower[:len(f.prefix)] == f.prefix {
+			return f.window, f.maxOut
+		}
+	}
+	return 0, 0
+}
+
 // lookupModelSpec returns the static spec for name, or 0/0 if unknown.
 // Matching is case-insensitive on the full model ID.
 func lookupModelSpec(name string) (ctxWin, maxOut int) {

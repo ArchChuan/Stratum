@@ -293,7 +293,11 @@ func TestSystemAssistantProfileManagedRuntimeDoesNotAppendGlobalSuffix(t *testin
 	}
 	managedGateway := &systemAssistantPromptGateway{}
 	base.SetCapGateway(managedGateway)
-	if _, err := base.Execute(context.Background(), "help"); err != nil {
+	// 显式窗口：默认 fallback 8000 在账本下 usable 为 0，初始组装退化为
+	// 最小 head（system 截到 200t + 输入）；显式 30000 窗口下完整提示
+	// 直达 LLM，后缀断言更有意义。
+	if _, err := base.Execute(context.Background(), "help",
+		WithMaxContextTokens(30000)); err != nil {
 		t.Fatalf("managed Execute() error = %v", err)
 	}
 	if got := managedGateway.request.LLM.Messages[0].Content; strings.Contains(got, "tenant-global-suffix") {
@@ -314,7 +318,8 @@ func TestSystemAssistantProfileManagedRuntimeDoesNotAppendGlobalSuffix(t *testin
 	ordinary := agent.(*BaseAgent)
 	ordinaryGateway := &systemAssistantPromptGateway{}
 	ordinary.SetCapGateway(ordinaryGateway)
-	if _, err := ordinary.Execute(context.Background(), "help"); err != nil {
+	if _, err := ordinary.Execute(context.Background(), "help",
+		WithMaxContextTokens(30000)); err != nil {
 		t.Fatalf("ordinary Execute() error = %v", err)
 	}
 	if got := ordinaryGateway.request.LLM.Messages[0].Content; !strings.Contains(got, "tenant-global-suffix") {

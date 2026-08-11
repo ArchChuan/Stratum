@@ -54,6 +54,11 @@ type LLMCapRequest struct {
 	Tools       []ToolDefinition
 	Temperature float32
 	MaxTokens   int
+	// NoPrimaryRetry 禁止 gateway 对主模型瞬态失败的立即重试（压缩路径用：
+	// 时间片内一次主尝试，失败直接降级候选）。0 值（false）= 默认允许一次立即重试。
+	NoPrimaryRetry bool
+	// MaxCandidates 限制 fallback 候选数量；0 = gateway 默认（3）。
+	MaxCandidates int
 }
 
 type CapabilityResponse struct {
