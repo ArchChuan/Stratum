@@ -22,7 +22,7 @@ describe('executeAgentStream', () => {
 
   it('preserves the public code from a terminal SSE error', () => {
     const onError = vi.fn();
-    executeAgentStream('system', { query: 'hello' }, {
+    executeAgentStream('system', { query: 'hello', context: {}, variables: {} }, {
       onToken: vi.fn(),
       onDone: vi.fn(),
       onError,

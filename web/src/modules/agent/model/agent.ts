@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 import { resourceChangeProposalArtifactSchema } from './proposal';
 
+import type { ExecuteAgentRequest as GenExecuteAgentRequest } from '@/services/gen/agent';
+
 export const agentSchema = z
   .object({
     id: z.string(),
@@ -190,10 +192,9 @@ export interface ChatMessage {
   [key: string]: unknown;
 }
 
-export interface ExecuteAgentPayload {
-  query: string;
-  context?: Record<string, unknown>;
-  variables?: Record<string, unknown>;
+// query/context/variables 来自 proto 契约(gen);conversation_id 是 wire-only 字段
+// (后端 handler.ExecuteAgentRequest 绑定并用于会话连续性,dto 契约无此字段,parity 冻结)。
+export interface ExecuteAgentPayload extends GenExecuteAgentRequest {
   conversation_id?: string;
 }
 

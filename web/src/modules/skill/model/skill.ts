@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import type { CreateSkillRequest as CreateSkillDraftPayload } from '@/services/gen/skill';
+
 const jsonObjectSchema = z.record(z.unknown());
 
 export const skillSchema = z.object({
@@ -51,16 +53,7 @@ export interface SkillFormValues {
   editors?: string[];
 }
 
-export interface CreateSkillDraftPayload {
-  name: string;
-  goal: string;
-  whenToUse: string;
-  sampleInput: string;
-  expectedOutput: string;
-  instructions: string;
-  requirements: SkillRequirements;
-  editors?: string[];
-}
+export type { CreateSkillDraftPayload };
 
 const lines = (value?: string) => (value || '').split('\n').map((item) => item.trim()).filter(Boolean);
 

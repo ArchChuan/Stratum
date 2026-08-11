@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/byteBuilderX/stratum/api/http/dto"
+	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
 	iamdomain "github.com/byteBuilderX/stratum/internal/iam/domain"
@@ -39,12 +39,13 @@ func (h *AdminHandler) ListTenants(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	tenants := make([]dto.TenantResponse, 0, len(result.Tenants))
+	tenants := make([]gen.TenantResponse, 0, len(result.Tenants))
 	for _, t := range result.Tenants {
 		tenants = append(tenants, tenantToDTO(t))
 	}
-	c.JSON(http.StatusOK, dto.ListTenantsResponse{
-		Tenants: tenants, Total: result.Total, Page: result.Page, PageSize: result.PageSize,
+	//nolint:gosec // total/page/pageSize 来自分页查询,不可能溢出 int32(proto 契约)
+	c.JSON(http.StatusOK, gen.ListTenantsResponse{
+		Tenants: tenants, Total: int32(result.Total), Page: int32(result.Page), PageSize: int32(result.PageSize),
 	})
 }
 
@@ -60,7 +61,7 @@ func (h *AdminHandler) GetTenant(c *gin.Context) {
 
 // CreateTenant POST /admin/tenants
 func (h *AdminHandler) CreateTenant(c *gin.Context) {
-	var req dto.CreateTenantRequest
+	var req gen.CreateTenantRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -76,7 +77,7 @@ func (h *AdminHandler) CreateTenant(c *gin.Context) {
 // UpdateTenant PATCH /admin/tenants/:id
 func (h *AdminHandler) UpdateTenant(c *gin.Context) {
 	id := c.Param("id")
-	var req dto.UpdateTenantRequest
+	var req gen.UpdateTenantRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -100,16 +101,17 @@ func (h *AdminHandler) DeleteTenant(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "tenant deleted"})
 }
 
-func tenantToDTO(t iamdomain.Tenant) dto.TenantResponse {
-	return dto.TenantResponse{
-		ID:          t.ID,
-		Name:        t.Name,
-		Slug:        t.Slug,
-		Plan:        t.Plan,
-		Status:      t.Status,
-		CreatedAt:   t.CreatedAt,
-		DeletedAt:   t.DeletedAt,
-		MemberCount: t.MemberCount,
+func tenantToDTO(t iamdomain.Tenant) gen.TenantResponse {
+	return gen.TenantResponse{
+		ID:        t.ID,
+		Name:      t.Name,
+		Slug:      t.Slug,
+		Plan:      t.Plan,
+		Status:    t.Status,
+		CreatedAt: t.CreatedAt,
+		DeletedAt: t.DeletedAt,
+		//nolint:gosec // 成员数不可能溢出 int32(proto 契约)
+		MemberCount: int32(t.MemberCount),
 		IsDefault:   t.IsDefault,
 	}
 }

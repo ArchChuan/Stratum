@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/byteBuilderX/stratum/api/http/dto"
+	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
@@ -151,7 +151,7 @@ func (h *EvaluationHandler) CreateSuite(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	var req dto.CreateEvaluationSuiteRequest
+	var req gen.CreateEvaluationSuiteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -202,7 +202,7 @@ func (h *EvaluationHandler) EnqueueRun(c *gin.Context) {
 		respondMissingUser(c)
 		return
 	}
-	var req dto.EnqueueEvaluationRunRequest
+	var req gen.EnqueueEvaluationRunRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -219,7 +219,7 @@ func (h *EvaluationHandler) EnqueueRun(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusAccepted, dto.EvaluationJobResponse{JobID: job.ID, Status: string(job.Status)})
+	c.JSON(http.StatusAccepted, gen.EvaluationJobResponse{JobID: job.ID, Status: string(job.Status)})
 }
 
 func (h *EvaluationHandler) GetJob(c *gin.Context) {
@@ -233,7 +233,7 @@ func (h *EvaluationHandler) GetJob(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.EvaluationJobResponse{
+	c.JSON(http.StatusOK, gen.EvaluationJobResponse{
 		JobID: job.ID, Status: string(job.Status), ErrorMessage: job.ErrorMessage, ResultID: job.ResultID,
 	})
 }
@@ -258,7 +258,7 @@ func (h *EvaluationHandler) GenerateOptimization(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	var req dto.GenerateOptimizationRequest
+	var req gen.GenerateOptimizationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -294,12 +294,12 @@ func (h *EvaluationHandler) CreateExperiment(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	var req dto.CreateEvaluationExperimentRequest
+	var req gen.CreateEvaluationExperimentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	toRef := func(ref dto.EvaluationResourceRef) domain.ResourceRef {
+	toRef := func(ref gen.EvaluationResourceRef) domain.ResourceRef {
 		return domain.ResourceRef{Kind: domain.ResourceKind(ref.Kind), ResourceID: ref.ResourceID, RevisionID: ref.RevisionID}
 	}
 	experiment, deployment, err := h.experiments.Create(c.Request.Context(), tenantID, evalapp.CreateExperimentInput{
@@ -327,7 +327,7 @@ func (h *EvaluationHandler) Overview(c *gin.Context) {
 }
 
 func centerFilter(c *gin.Context, kind, id string) (port.CenterFilter, error) {
-	var req dto.EvaluationCenterQuery
+	var req gen.EvaluationCenterQuery
 	if err := c.ShouldBindQuery(&req); err != nil {
 		return port.CenterFilter{}, err
 	}
@@ -392,7 +392,7 @@ func (h *EvaluationHandler) Timeline(c *gin.Context) {
 }
 
 func commandInput(c *gin.Context) (evalapp.ExperimentCommandInput, bool) {
-	var req dto.EvaluationCommandRequest
+	var req gen.EvaluationCommandRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return evalapp.ExperimentCommandInput{}, false
@@ -492,7 +492,7 @@ func (h *EvaluationHandler) RecordFeedback(c *gin.Context) {
 		respondMissingUser(c)
 		return
 	}
-	var req dto.RecordEvaluationFeedbackRequest
+	var req gen.RecordEvaluationFeedbackRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return

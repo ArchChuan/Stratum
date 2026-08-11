@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/byteBuilderX/stratum/api/http/dto"
+	gen "github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	collabapp "github.com/byteBuilderX/stratum/internal/collab/application"
 	collabdomain "github.com/byteBuilderX/stratum/internal/collab/domain"
@@ -52,7 +52,7 @@ func (h *CollaborationHandler) Create(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var req dto.CreateCollabRequest
+	var req gen.CreateCollabRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, collabdomain.ErrCollabInvalidInput))
 		return
@@ -62,7 +62,7 @@ func (h *CollaborationHandler) Create(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusCreated, dto.ToCollabResponse(*collab))
+	c.JSON(http.StatusCreated, gen.ToCollabResponse(*collab))
 }
 
 func (h *CollaborationHandler) List(c *gin.Context) {
@@ -80,9 +80,9 @@ func (h *CollaborationHandler) List(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	out := make([]dto.CollabResponse, 0, len(collabs))
+	out := make([]gen.CollabResponse, 0, len(collabs))
 	for _, collab := range collabs {
-		out = append(out, dto.ToCollabResponse(collab))
+		out = append(out, gen.ToCollabResponse(collab))
 	}
 	c.JSON(http.StatusOK, gin.H{"collaborations": out})
 }
@@ -102,12 +102,12 @@ func (h *CollaborationHandler) Get(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	stepOut := make([]dto.TaskStepResponse, 0, len(steps))
+	stepOut := make([]gen.TaskStepResponse, 0, len(steps))
 	for _, s := range steps {
-		stepOut = append(stepOut, dto.ToTaskStepResponse(s))
+		stepOut = append(stepOut, gen.ToTaskStepResponse(s))
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"collaboration": dto.ToCollabResponse(*collab),
+		"collaboration": gen.ToCollabResponse(*collab),
 		"steps":         stepOut,
 	})
 }
@@ -122,7 +122,7 @@ func (h *CollaborationHandler) Start(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.ToCollabResponse(*collab))
+	c.JSON(http.StatusOK, gen.ToCollabResponse(*collab))
 }
 
 func (h *CollaborationHandler) Cancel(c *gin.Context) {

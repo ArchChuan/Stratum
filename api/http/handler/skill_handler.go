@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/byteBuilderX/stratum/api/http/dto"
+	gen "github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
@@ -35,7 +35,7 @@ func NewSkillHandler(service skillRevisionService, logger *zap.Logger) *SkillHan
 }
 
 func (h *SkillHandler) CreateSkill(c *gin.Context) {
-	var req dto.CreateSkillRequest
+	var req gen.CreateSkillRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		h.logger.Warn("invalid instruction Skill request", zap.Error(err))
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
@@ -65,7 +65,7 @@ func (h *SkillHandler) GetAllSkills(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	out := make([]dto.SkillProductResponse, 0, len(items))
+	out := make([]gen.SkillProductResponse, 0, len(items))
 	for _, item := range items {
 		out = append(out, productToResponse(item))
 	}
@@ -84,7 +84,7 @@ func (h *SkillHandler) GetSkillWorkspace(c *gin.Context) {
 }
 
 func (h *SkillHandler) UpdateDraftCapability(c *gin.Context) {
-	var req dto.UpdateSkillCapabilityRequest
+	var req gen.UpdateSkillCapabilityRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -106,7 +106,7 @@ func (h *SkillHandler) UpdateDraftCapability(c *gin.Context) {
 }
 
 func (h *SkillHandler) UpdateDraftActivation(c *gin.Context) {
-	var req dto.UpdateSkillActivationRequest
+	var req gen.UpdateSkillActivationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -128,7 +128,7 @@ func (h *SkillHandler) UpdateDraftActivation(c *gin.Context) {
 }
 
 func (h *SkillHandler) UpdateDraftInstructionBundle(c *gin.Context) {
-	var req dto.UpdateSkillInstructionBundleRequest
+	var req gen.UpdateSkillInstructionBundleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -197,27 +197,28 @@ func (h *SkillHandler) SetSkillEditors(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "editors updated"})
 }
 
-func requirementsFromDTO(value dto.SkillRequirements) skilldomain.Requirements {
+func requirementsFromDTO(value gen.SkillRequirements) skilldomain.Requirements {
 	return skilldomain.Requirements{
 		MCPToolIDs: value.MCPToolIDs, KnowledgeWorkspaceIDs: value.KnowledgeWorkspaceIDs,
 		MemoryScopes: value.MemoryScopes,
 	}
 }
 
-func productToResponse(value skillapp.SkillProduct) dto.SkillProductResponse {
-	return dto.SkillProductResponse{
+func productToResponse(value skillapp.SkillProduct) gen.SkillProductResponse {
+	return gen.SkillProductResponse{
 		ID: value.ID, Name: value.Name, Description: value.Description, Status: value.Status,
 		ActiveRevisionID: value.ActiveRevisionID, DraftRevisionID: value.DraftRevisionID,
 	}
 }
 
-func workspaceToResponse(value skillapp.SkillWorkspaceView) dto.SkillWorkspaceResponse {
-	return dto.SkillWorkspaceResponse{Skill: productToResponse(value.Skill), Draft: revisionToResponse(value.Draft), Editors: value.Editors}
+func workspaceToResponse(value skillapp.SkillWorkspaceView) gen.SkillWorkspaceResponse {
+	return gen.SkillWorkspaceResponse{Skill: productToResponse(value.Skill), Draft: revisionToResponse(value.Draft), Editors: value.Editors}
 }
 
-func revisionToResponse(value skillapp.SkillRevision) dto.SkillRevisionResponse {
-	return dto.SkillRevisionResponse{
-		ID: value.ID, SkillID: value.SkillID, RevisionNo: value.RevisionNo, Status: string(value.Status),
+func revisionToResponse(value skillapp.SkillRevision) gen.SkillRevisionResponse {
+	//nolint:gosec // 版本号不可能溢出 int32(proto 契约)
+	return gen.SkillRevisionResponse{
+		ID: value.ID, SkillID: value.SkillID, RevisionNo: int32(value.RevisionNo), Status: string(value.Status),
 		Capability: structToMap(value.Capability), ActivationContract: structToMap(value.ActivationContract),
 		Instructions: value.Instructions, Requirements: structToMap(value.Requirements), PublishChecks: value.PublishChecks,
 	}

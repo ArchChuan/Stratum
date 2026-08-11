@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package stratum.agent;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+message UpdateResourceChangeProposalRequest {
+  // @gotype: encoding/json.RawMessage
+  // @binding: required
+  google.protobuf.Value payload = 1;
+}
+
+message ResourceChangeProposalResponse {
+  string id = 1;
+  // @omitempty
+  string conversationId = 2;
+  string proposerId = 3;
+  // @omitempty
+  string confirmerId = 4;
+  // @gotype: github.com/byteBuilderX/stratum/internal/agent/domain.ResourceKind
+  string resourceKind = 5;
+  // @omitempty
+  string resourceId = 6;
+  // @gotype: github.com/byteBuilderX/stratum/internal/agent/domain.ProposalOperation
+  string operation = 7;
+  // @omitempty
+  string baselineFingerprint = 8;
+  // @gotype: encoding/json.RawMessage
+  // @omitempty
+  google.protobuf.Value baselineProjection = 9;
+  // @gotype: encoding/json.RawMessage
+  google.protobuf.Value payload = 10;
+  string summary = 11;
+  // @gotype: github.com/byteBuilderX/stratum/internal/agent/domain.ProposalStatus
+  string status = 12;
+  // @omitempty
+  string errorCode = 13;
+  // @gotype: github.com/byteBuilderX/stratum/internal/agent/domain.ApplyResult
+  // @omitempty
+  google.protobuf.Value applyResult = 14;
+  // @gotype: []github.com/byteBuilderX/stratum/internal/agent/domain.ProposalEvent
+  repeated google.protobuf.Value events = 15;
+  int32 editCount = 16;
+  google.protobuf.Timestamp expiresAt = 17;
+  google.protobuf.Timestamp createdAt = 18;
+  google.protobuf.Timestamp updatedAt = 19;
+}

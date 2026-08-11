@@ -110,6 +110,11 @@ ENV/
 # Generated files
 *.pb.go
 
+# proto 生成物(不入 git,由 make proto-gen 生成)
+api/http/dto/gen/
+web/src/services/gen/
+bin/
+
 # Local AI assistants, code indexes, and developer automation
 /.agents/
 /.claude/

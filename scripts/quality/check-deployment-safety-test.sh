@@ -430,4 +430,15 @@ if git -C "${ROOT}" grep -in gitee -- .github docs/deployment >/dev/null 2>&1; t
     exit 1
 fi
 
+# Backend runtime image contents must stay in sync between the root Dockerfile
+# (local builds via Makefile/docker-compose) and Dockerfile.ci (CD pipeline).
+# 历史教训：88bdd632 只改根 Dockerfile、#295 只补 Dockerfile.ci 的二进制，
+# db-migration hook 连续部署事故（缺二进制 / 缺 SQL 目录）；任一文件漏同步即失败。
+for dockerfile in "${ROOT}/Dockerfile" "${ROOT}/Dockerfile.ci"; do
+    require_file "${dockerfile}" 'fix-provider-keys' 'fix-provider-keys hook binary missing'
+    require_file "${dockerfile}" 'COPY pkg/migration/sql' 'migration SQL files not copied into image'
+    require_file "${dockerfile}" 'tzdata' 'tzdata not installed in image'
+    require_file "${dockerfile}" 'chown appuser:appuser server' 'hook binaries not owned by appuser'
+done
+
 echo 'deployment safety contract tests passed'

@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package stratum.scheduler;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+message CreateScheduledTaskRequest {
+  // @binding: required
+  string name = 1;
+  // @binding: required
+  string workflowId = 2;
+  // @binding: required
+  string versionId = 3;
+  google.protobuf.Struct inputTemplate = 4;
+  // @binding: required
+  string cronExpr = 5;
+}
+
+message UpdateScheduledTaskRequest {
+  // @binding: required
+  string name = 1;
+  // @binding: required
+  string workflowId = 2;
+  // @binding: required
+  string versionId = 3;
+  google.protobuf.Struct inputTemplate = 4;
+  // @binding: required
+  string cronExpr = 5;
+}
+
+message SetScheduledTaskEnabledRequest {
+  bool enabled = 1;
+}
+
+message ScheduledTaskResponse {
+  string id = 1;
+  string name = 2;
+  string workflowId = 3;
+  string versionId = 4;
+  google.protobuf.Struct inputTemplate = 5;
+  string cronExpr = 6;
+  bool enabled = 7;
+  google.protobuf.Timestamp nextFireAt = 8;
+  // @omitempty
+  optional google.protobuf.Timestamp lastRunAt = 9;
+  string lastRunStatus = 10;
+  // @omitempty
+  string lastErrorMessage = 11;
+  string createdBy = 12;
+  google.protobuf.Timestamp createdAt = 13;
+  google.protobuf.Timestamp updatedAt = 14;
+}
+
+message ScheduledTaskPageResponse {
+  repeated ScheduledTaskResponse tasks = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 pageSize = 4;
+}
