@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/config"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 )
 
@@ -80,5 +81,35 @@ func TestMemoryLLMAdapterRejectsNilProviderResponse(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("expected nil provider response to fail closed")
+	}
+}
+
+type tenantCapturingClientForWiringTest struct{ gotTenant string }
+
+func (c *tenantCapturingClientForWiringTest) Complete(ctx context.Context, _ *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
+	c.gotTenant = reqctx.TenantIDFromContext(ctx)
+	return &llmdomain.CompletionResponse{Usage: llmdomain.TokenUsage{CompletionTokens: 1}}, nil
+}
+
+func TestMemoryLLMAdapterInjectsTenantIntoContext(t *testing.T) {
+	client := &tenantCapturingClientForWiringTest{}
+	adapter := memoryLLMAdapter{client: client, tenantID: "tenant-123"}
+	if _, err := adapter.Complete(context.Background(), &memport.CompletionRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if client.gotTenant != "tenant-123" {
+		t.Fatalf("gateway saw tenant %q, want %q", client.gotTenant, "tenant-123")
+	}
+}
+
+func TestMemoryLLMAdapterEmptyTenantKeepsContextTenant(t *testing.T) {
+	client := &tenantCapturingClientForWiringTest{}
+	adapter := memoryLLMAdapter{client: client}
+	ctx := reqctx.WithTenantID(context.Background(), "ctx-tenant")
+	if _, err := adapter.Complete(ctx, &memport.CompletionRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if client.gotTenant != "ctx-tenant" {
+		t.Fatalf("gateway saw tenant %q, want existing ctx tenant %q", client.gotTenant, "ctx-tenant")
 	}
 }
