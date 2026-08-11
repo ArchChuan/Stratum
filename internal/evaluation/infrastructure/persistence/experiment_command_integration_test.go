@@ -26,8 +26,7 @@ func TestPgExperimentRepositoryHumanGates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
-
+	// pool.Close 与 DROP 同 cleanup,避免 defer 先关池导致 DROP 静默失败残留 schema。
 	tenantID := fmt.Sprintf("eval_commands_%d", time.Now().UnixNano())
 	otherTenantID := tenantID + "_other"
 	for _, id := range []string{tenantID, otherTenantID} {
@@ -35,7 +34,12 @@ func TestPgExperimentRepositoryHumanGates(t *testing.T) {
 			t.Fatal(err)
 		}
 		id := id
-		t.Cleanup(func() { _, _ = pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, id)) })
+		t.Cleanup(func() {
+			if _, err := pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, id)); err != nil {
+				t.Logf("cleanup tenant %s: %v", id, err)
+			}
+			pool.Close()
+		})
 	}
 	repo := NewPgExperimentRepository(pool)
 	seedExperimentSuite(t, ctx, pool, tenantID)

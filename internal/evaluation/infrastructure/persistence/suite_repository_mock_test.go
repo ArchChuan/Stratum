@@ -38,7 +38,7 @@ func TestPgSuiteRepository_CreateSuite_success(t *testing.T) {
 		WithArgs("rev-1", "suite-1", "parent-1", 2, "draft", "prompt").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO eval_cases").
-		WithArgs("case-1", "rev-1", "c1", `{"q":"hi"}`, `"ok"`, "exact", true, []byte(nil)).
+		WithArgs("case-1", "rev-1", "c1", `{"q":"hi"}`, `"ok"`, "exact", true, []byte("{}")).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 

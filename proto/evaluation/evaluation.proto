@@ -98,3 +98,29 @@ message RecordEvaluationFeedbackRequest {
   string idempotency_key = 6;
   bool security_violation = 7;
 }
+
+// GenerateSuiteCasesRequest drives one case-generation pass: production
+// samples are sampled and turned into eval cases in the suite's draft
+// revision. Cases never publish automatically.
+message GenerateSuiteCasesRequest {
+  // @binding: required,oneof=negative_first balanced
+  string sample_policy = 1;
+  // @binding: max=50
+  // max_cases is optional: 0 means the handler default of
+  // constants.DefaultCaseSampleLimit, so the binding must not reject 0.
+  int32 max_cases = 2;
+}
+
+// UpdateDraftCaseRequest approves (enabled=true), edits (full field
+// replacement) or rejects (enabled=false) one draft case.
+message UpdateDraftCaseRequest {
+  // @binding: required,max=255
+  string name = 1;
+  // @binding: required
+  google.protobuf.Value input = 2;
+  // @binding: required
+  google.protobuf.Value expected_output = 3;
+  // @binding: required,oneof=exact contains regex
+  string assertion_mode = 4;
+  optional bool enabled = 5;
+}

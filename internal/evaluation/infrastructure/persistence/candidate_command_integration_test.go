@@ -27,7 +27,7 @@ func TestPgCandidateCommandRepositoryReplayAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
+	// pool.Close 与 DROP 同 cleanup,避免 defer 先关池导致 DROP 静默失败残留 schema。
 	tenantID := fmt.Sprintf("candidate_commands_%d", time.Now().UnixNano())
 	otherTenantID := tenantID + "_other"
 	for _, id := range []string{tenantID, otherTenantID} {
@@ -36,7 +36,12 @@ func TestPgCandidateCommandRepositoryReplayAndIsolation(t *testing.T) {
 		}
 		seedCandidateCommand(t, ctx, pool, id)
 		id := id
-		t.Cleanup(func() { _, _ = pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, id)) })
+		t.Cleanup(func() {
+			if _, err := pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, id)); err != nil {
+				t.Logf("cleanup tenant %s: %v", id, err)
+			}
+			pool.Close()
+		})
 	}
 	repo := NewPgCandidateCommandRepository(pool)
 	command := domain.CandidateCommand{ActorID: "admin-1", ActorType: domain.ActorTypeAdmin, Reason: "unsafe",
@@ -111,7 +116,12 @@ func TestPgCandidateCommandRepositoryReplayAndIsolation(t *testing.T) {
 func seedCandidateCommand(t *testing.T, ctx context.Context, pool *pgxpool.Pool, tenantID string) {
 	t.Helper()
 	schema := `"tenant_` + tenantID + `"`
-	if _, err := pool.Exec(ctx, `INSERT INTO `+schema+`.optimization_jobs
+	// optimization_jobs.suite_revision_id has a NOT NULL FK to eval_suite_revisions;
+	// seed the referenced revision before the job (same shape as seedOptimizationDependencies).
+	if _, err := pool.Exec(ctx, `INSERT INTO `+schema+`.eval_suites(id,name) VALUES('suite-1','suite');
+		INSERT INTO `+schema+`.eval_suite_revisions(id,suite_id,version_no,status,resource_kind)
+		VALUES('suite-revision-1','suite-1',1,'published','skill');
+		INSERT INTO `+schema+`.optimization_jobs
 		(id,resource_kind,resource_id,baseline_revision_id,suite_revision_id,status)
 		VALUES('job-1','skill','skill-1','revision-1','suite-revision-1','succeeded')`); err != nil {
 		t.Fatal(err)

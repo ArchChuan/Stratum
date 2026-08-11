@@ -23,12 +23,16 @@ func TestPgSuiteRepositoryCreatePublishAndLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
 	tenantID := "eval_repo_test"
 	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenantID)) })
+	t.Cleanup(func() {
+		if _, err := pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenantID)); err != nil {
+			t.Logf("cleanup tenant %s: %v", tenantID, err)
+		}
+		pool.Close()
+	})
 
 	repo := NewPgSuiteRepository(pool)
 	suite := domain.EvalSuite{ID: "suite-1", Name: "基线", DraftRevisionID: "suite-rev-1"}

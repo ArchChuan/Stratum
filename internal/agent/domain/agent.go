@@ -126,6 +126,10 @@ type ChatMessage struct {
 	SkipOutbox     bool
 	Visibility     string
 	Artifacts      []ExecutionArtifact
+	// TraceID links the message to its agent execution trace. Persisted so
+	// the evaluation case generator can pair (query, response) with
+	// evaluation_feedback rows; empty for manual messages.
+	TraceID string
 }
 
 const (

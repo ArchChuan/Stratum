@@ -75,6 +75,48 @@ func (s *SuiteService) Publish(ctx context.Context, tenantID, suiteID string) (d
 	return s.repo.PublishRevision(ctx, tenantID, suiteID, revision.ID, next)
 }
 
+// GetDraft returns the suite's current draft revision (the review queue for
+// generated cases) or ErrSuiteNotFound when none exists.
+func (s *SuiteService) GetDraft(ctx context.Context, tenantID, suiteID string) (domain.EvalSuiteRevision, error) {
+	revision, ok, err := s.repo.GetDraftRevision(ctx, tenantID, suiteID)
+	if err != nil {
+		return domain.EvalSuiteRevision{}, err
+	}
+	if !ok {
+		return domain.EvalSuiteRevision{}, ErrSuiteNotFound
+	}
+	return revision, nil
+}
+
+// UpdateDraftCase applies an approve (Enabled=true), reject (Enabled=false)
+// or edit (full field replacement) to one draft case, then returns the
+// updated case read back from the persisted draft.
+func (s *SuiteService) UpdateDraftCase(ctx context.Context, tenantID, suiteID, caseID string, testCase domain.EvalCase) (domain.EvalCase, error) {
+	revision, ok, err := s.repo.GetDraftRevision(ctx, tenantID, suiteID)
+	if err != nil {
+		return domain.EvalCase{}, err
+	}
+	if !ok {
+		return domain.EvalCase{}, ErrSuiteNotFound
+	}
+	if err := s.repo.UpdateDraftCase(ctx, tenantID, revision.ID, testCase); err != nil {
+		return domain.EvalCase{}, err
+	}
+	updated, ok, err := s.repo.GetDraftRevision(ctx, tenantID, suiteID)
+	if err != nil {
+		return domain.EvalCase{}, err
+	}
+	if !ok {
+		return domain.EvalCase{}, ErrSuiteNotFound
+	}
+	for i := range updated.Cases {
+		if updated.Cases[i].ID == caseID {
+			return updated.Cases[i], nil
+		}
+	}
+	return domain.EvalCase{}, ErrSuiteNotFound
+}
+
 func (s *SuiteService) GetRevision(ctx context.Context, tenantID, revisionID string) (domain.EvalSuiteRevision, error) {
 	revision, ok, err := s.repo.GetRevision(ctx, tenantID, revisionID)
 	if err != nil {
