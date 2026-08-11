@@ -10,6 +10,7 @@ import (
 	natsserver "github.com/nats-io/nats-server/v2/test"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zaptest"
@@ -149,12 +150,72 @@ func TestInvalidRawEventMovesToDeadLetterStream(t *testing.T) {
 	assert.Equal(t, "invalid_event", got.ErrorCode)
 	assert.Equal(t, constants.MemoryRawStream, got.OriginalStream)
 	assert.NotZero(t, got.StreamSequence)
-	assert.NotContains(t, string(mustJSON(t, got)), "broken")
+	// Task 7: DLQ 事件携带原始 body 供定向重放。
+	assert.Equal(t, `{"broken":`, string(got.Payload))
 }
 
-func mustJSON(t *testing.T, value any) []byte {
-	t.Helper()
-	data, err := json.Marshal(value)
+// TestEmbedderNoEmbedServiceDeadLettersWithMetric 验证租户无嵌入模型（embedResolver
+// 返回 nil）时消息进入 DLQ（error_code=embed_service_unavailable）且
+// memory_embed_unavailable_total 计数器按租户递增。
+func TestEmbedderNoEmbedServiceDeadLettersWithMetric(t *testing.T) {
+	_, nc := startJetStreamServer(t)
+	logger := zaptest.NewLogger(t)
+	jsm, err := NewJetStreamManager(nc, logger)
 	require.NoError(t, err)
-	return data
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, jsm.EnsureStreams(ctx))
+	js := jsm.JS()
+
+	tenant := "tenant-nil-embed"
+	ev := &MemoryRawEvent{
+		MessageID:      "msg-no-embed",
+		ConversationID: "conv-1",
+		TenantID:       tenant,
+		UserID:         "user-1",
+		AgentID:        "agent-1",
+		Role:           "user",
+		Content:        "Hello without embed model",
+		CreatedAt:      time.Now().Truncate(time.Millisecond),
+	}
+	data, err := ev.Marshal()
+	require.NoError(t, err)
+	_, err = js.Publish(ctx, constants.MemoryRawSubject+"."+tenant, data)
+	require.NoError(t, err)
+
+	rawConsumer, err := jsm.CreateConsumer(
+		ctx, constants.MemoryRawStream, "test-no-embed",
+		constants.MemoryRawSubject+".>", time.Second, 3,
+	)
+	require.NoError(t, err)
+	batch, err := rawConsumer.Fetch(1, jetstream.FetchMaxWait(time.Second))
+	require.NoError(t, err)
+	for msg := range batch.Messages() {
+		worker := &EmbedderWorker{
+			js:            js,
+			logger:        logger,
+			ackWait:       time.Second,
+			maxDeliver:    3,
+			embedResolver: func(context.Context, string) EmbedClient { return nil },
+		}
+		worker.processMessage(ctx, msg)
+	}
+
+	dlqConsumer, err := jsm.CreateConsumer(
+		ctx, constants.MemoryDLQStream, "test-no-embed-reader",
+		constants.MemoryDLQSubject+"."+tenant, time.Second, 1,
+	)
+	require.NoError(t, err)
+	dlqBatch, err := dlqConsumer.Fetch(1, jetstream.FetchMaxWait(time.Second))
+	require.NoError(t, err)
+	var got DeadLetterEvent
+	for msg := range dlqBatch.Messages() {
+		require.NoError(t, json.Unmarshal(msg.Data(), &got))
+		require.NoError(t, msg.Ack())
+	}
+	assert.Equal(t, "embed_service_unavailable", got.ErrorCode)
+	assert.Equal(t, tenant, got.TenantID)
+
+	assert.Equal(t, float64(1), testutil.ToFloat64(embedUnavailableTotal.WithLabelValues(tenant)))
 }

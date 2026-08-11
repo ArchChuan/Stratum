@@ -18,6 +18,7 @@ import (
 	memworkers "github.com/byteBuilderX/stratum/internal/memory/infrastructure/workers"
 	parametersapp "github.com/byteBuilderX/stratum/internal/parameters/application"
 
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 )
 
@@ -26,13 +27,16 @@ import (
 // pipeline (JetStream-backed) that embeds and persists memories.
 //
 // Pipeline is nil when MEMORY_PIPELINE_ENABLED is false or NATS is not
-// reachable; downstream consumers must nil-check before use.
+// reachable; downstream consumers must nil-check before use. DLQReplay
+// follows the same availability (depends on the shared NATS connection),
+// and needs no shutdown code (no goroutines).
 type Memory struct {
-	Manager  *memory.MemoryManager
-	Service  *memory.MemoryService
-	Injector port.MemoryInjector
-	Pipeline *pipeline.Pipeline
-	RecallFn port.RecallMemoryFn
+	Manager   *memory.MemoryManager
+	Service   *memory.MemoryService
+	Injector  port.MemoryInjector
+	Pipeline  *pipeline.Pipeline
+	DLQReplay *pipeline.ReplayService
+	RecallFn  port.RecallMemoryFn
 }
 
 type memoryGatewayCompleter interface {
@@ -211,15 +215,14 @@ func (c *Container) buildMemoryPipeline(mem *Memory, db *pgxpool.Pool) error {
 		return nil
 	}
 
+	replaySvc, err := pipeline.NewReplayService(c.Storage.NATS, c.Logger)
+	if err != nil {
+		return fmt.Errorf("memory dlq replay service: %w", err)
+	}
+	mem.DLQReplay = replaySvc
+
 	dimResolver := pipeline.DimResolver(func(ctx context.Context, tenantID string) int {
-		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
-			if ec := c.Knowledge.EmbedResolver(ctx, tenantID); ec != nil {
-				if d := ec.GetVectorDimension(); d > 0 {
-					return d
-				}
-			}
-		}
-		return 1536
+		return c.resolveEmbeddingDim(ctx, tenantID)
 	})
 
 	vectorAdapter := pipeline.NewMilvusVectorAdapter(c.Storage.Milvus).WithDimResolver(dimResolver)
@@ -245,6 +248,18 @@ func (c *Container) buildMemoryPipeline(mem *Memory, db *pgxpool.Pool) error {
 	}
 	mem.Pipeline = p
 	return nil
+}
+
+// resolveEmbeddingDim 按租户默认 embedding 模型查维度表；模型未配置或解析失败
+// 时回退 1536（既有默认），保证 create-collection 维度始终可计算。
+// 独立成方法以保持 buildMemoryPipeline 复杂度在基线内。
+func (c *Container) resolveEmbeddingDim(ctx context.Context, tenantID string) int {
+	if c.LLMGateway != nil && c.LLMGateway.Registry != nil {
+		if model, err := c.LLMGateway.Registry.ResolveDefaultEmbeddingModel(ctx, tenantID); err == nil && model != "" {
+			return constants.DimensionForModel(model)
+		}
+	}
+	return 1536
 }
 
 // attachPipelineDynamic 桥接热更新管道：config 层动态配置 → atomic 指针 →

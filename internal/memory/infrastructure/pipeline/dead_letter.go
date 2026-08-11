@@ -28,6 +28,9 @@ type DeadLetterEvent struct {
 	StreamSequence uint64    `json:"stream_sequence,omitempty"`
 	Deliveries     uint64    `json:"deliveries,omitempty"`
 	FailedAt       time.Time `json:"failed_at"`
+	// Payload 是原始消息 body（TermWithReason 销毁原消息前读出），
+	// 供定向重放重建消息。
+	Payload []byte `json:"payload,omitempty"`
 }
 
 type deadLetterDetails struct {
@@ -78,6 +81,7 @@ func deadLetterWithHeartbeat(
 	event.Consumer = meta.Consumer
 	event.StreamSequence = meta.Sequence.Stream
 	event.Deliveries = meta.NumDelivered
+	event.Payload = append([]byte(nil), msg.Data()...)
 
 	payload, err := json.Marshal(event)
 	if err != nil {

@@ -1487,6 +1487,14 @@ CREATE INDEX IF NOT EXISTS idx_models_tenant ON models(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_models_provider ON models(provider_id);
 CREATE INDEX IF NOT EXISTS idx_models_enabled ON models(tenant_id, enabled);
 
+-- 默认嵌入模型标记（本设计唯一配置点）：partial unique index 保证同 tenant
+-- 最多一个默认。index WHERE 无 enabled 谓词——DB 层不防悬空，靠 repo 自清理联动。
+ALTER TABLE models ADD COLUMN IF NOT EXISTS default_embedding BOOLEAN NOT NULL DEFAULT false;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_models_default_embedding
+    ON models (tenant_id)
+    WHERE default_embedding AND 'embedding' = ANY(capabilities);
+
 -- =============================================================================
 -- Built-in platform assistant resources (skills + knowledge workspace)
 -- =============================================================================

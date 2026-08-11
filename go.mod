@@ -33,6 +33,8 @@ require (
 
 require github.com/robfig/cron/v3 v3.0.1
 
+require github.com/kylelemons/godebug v1.1.0 // indirect
+
 require (
 	github.com/alibabacloud-go/alibabacloud-gateway-pop v0.0.6 // indirect
 	github.com/alibabacloud-go/alibabacloud-gateway-spi v0.0.5 // indirect

@@ -5,20 +5,29 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/vector"
 )
 
-// memoryCollectionName builds a Milvus-safe collection name for a tenant.
-// Milvus only allows letters, digits, and underscores.
-func memoryCollectionName(tenantID string) string {
-	return "memory_" + strings.ReplaceAll(tenantID, "-", "_")
+// memoryCollectionName builds the Milvus collection name for a tenant's
+// raw-turn vectors, encoding the embedding model suffix so switching models
+// isolates data into a fresh collection.
+func memoryCollectionName(tenantID, model string) string {
+	return "memory_" + strings.ReplaceAll(tenantID, "-", "_") + "_" + constants.SanitizeMilvusName(model)
 }
 
 // memoryFactsCollectionName builds the collection name for LLM-extracted facts.
-// Must mirror extraction.go's write-side naming ("memory_facts_<tenant>"); the
-// two collections are maintained together (see MilvusPortAdapter delete paths),
-// and recall must query both to surface distilled facts alongside raw turns.
-func memoryFactsCollectionName(tenantID string) string {
+func memoryFactsCollectionName(tenantID, model string) string {
+	return "memory_facts_" + strings.ReplaceAll(tenantID, "-", "_") + "_" + constants.SanitizeMilvusName(model)
+}
+
+// memoryCollectionLegacyName / memoryFactsCollectionLegacyName 是无模型后缀的
+// 存量 collection 名（升级前数据），仅查询回退使用；写入永远走新名。
+func memoryCollectionLegacyName(tenantID string) string {
+	return "memory_" + strings.ReplaceAll(tenantID, "-", "_")
+}
+
+func memoryFactsCollectionLegacyName(tenantID string) string {
 	return "memory_facts_" + strings.ReplaceAll(tenantID, "-", "_")
 }
 
@@ -51,28 +60,29 @@ func (a *MilvusVectorAdapter) resolveDim(ctx context.Context, tenantID string) i
 }
 
 // ensureCollection creates the memory collection for a tenant if not already done.
-// Uses sync.Map as a per-tenant once gate; CreateCollectionWithDim itself is idempotent.
-func (a *MilvusVectorAdapter) ensureCollection(ctx context.Context, tenantID string) error {
-	if _, ok := a.ensured.Load(tenantID); ok {
+// Uses sync.Map as a per-(tenant, model) once gate; CreateCollectionWithDim itself is idempotent.
+func (a *MilvusVectorAdapter) ensureCollection(ctx context.Context, tenantID, model string) error {
+	key := tenantID + "/" + model
+	if _, ok := a.ensured.Load(key); ok {
 		return nil
 	}
-	collectionName := memoryCollectionName(tenantID)
+	collectionName := memoryCollectionName(tenantID, model)
 	dim := a.resolveDim(ctx, tenantID)
 	if err := a.vs.CreateCollectionWithDim(ctx, collectionName, dim); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			return err
 		}
 	}
-	a.ensured.Store(tenantID, struct{}{})
+	a.ensured.Store(key, struct{}{})
 	return nil
 }
 
 // Upsert implements VectorStore by delegating to the underlying Milvus Insert.
-func (a *MilvusVectorAdapter) Upsert(ctx context.Context, tenantID string, userID string, id string, vec []float32, metadata map[string]any) error {
-	if err := a.ensureCollection(ctx, tenantID); err != nil {
+func (a *MilvusVectorAdapter) Upsert(ctx context.Context, tenantID string, userID string, id string, model string, vec []float32, metadata map[string]any) error {
+	if err := a.ensureCollection(ctx, tenantID, model); err != nil {
 		return err
 	}
-	collectionName := memoryCollectionName(tenantID)
+	collectionName := memoryCollectionName(tenantID, model)
 	doc := vector.DocumentChunk{
 		ID:             id,
 		UserID:         userID,

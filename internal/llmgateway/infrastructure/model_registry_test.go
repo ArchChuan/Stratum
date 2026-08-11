@@ -69,6 +69,10 @@ func (m *mockModelRepo) Toggle(ctx context.Context, tenantID, id string, enabled
 	return m.err
 }
 
+func (m *mockModelRepo) SetDefaultEmbedding(context.Context, string, string, bool) error {
+	return m.err
+}
+
 type mockProviderRepo struct {
 	providers map[string]*domain.Provider
 	err       error
@@ -174,6 +178,25 @@ func newTestRegistry(modelRepo *mockModelRepo, providerRepo *mockProviderRepo) *
 		embedProtos,
 		5*time.Minute,
 	)
+}
+
+// modelWith 构造一个 enabled 的 embedding 模型；def 控制 DefaultEmbedding 标记。
+func modelWith(name, providerID string, def bool) domain.Model {
+	return domain.Model{ID: name, Name: name, ProviderID: providerID,
+		Capabilities:     []domain.ModelCapability{domain.CapEmbedding},
+		Enabled:          true,
+		DefaultEmbedding: def,
+	}
+}
+
+// enabledProvider/disabledProvider 构造 OpenAI-compatible provider（newTestRegistry
+// 的 embedProtos 只注册了该 kind）。
+func enabledProvider() *domain.Provider {
+	return &domain.Provider{Kind: domain.ProviderOpenAICompat, Enabled: true}
+}
+
+func disabledProvider() *domain.Provider {
+	return &domain.Provider{Kind: domain.ProviderOpenAICompat, Enabled: false}
 }
 
 // ---------------------------------------------------------------------------
@@ -677,5 +700,52 @@ func TestModelRegistry_ListChatModels_Error(t *testing.T) {
 	_, err := reg.ListChatModelsByTenant(context.Background(), "t1")
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestResolveDefaultEmbeddingModel(t *testing.T) {
+	// fake 数据：enabled 模型列表 + 各模型 DefaultEmbedding/provider enabled 状态
+	tests := []struct {
+		name      string
+		models    []domain.Model              // List(Enabled, CapEmbedding) 返回
+		providers map[string]*domain.Provider // providerID → provider
+		want      string
+	}{
+		{"marked model wins over alphabetical first",
+			[]domain.Model{modelWith("a-embed", "p1", false), modelWith("b-embed", "p1", true)},
+			map[string]*domain.Provider{"p1": enabledProvider()},
+			"b-embed"},
+		{"no marker falls back to first",
+			[]domain.Model{modelWith("a-embed", "p1", false), modelWith("b-embed", "p1", false)},
+			map[string]*domain.Provider{"p1": enabledProvider()},
+			"a-embed"},
+		{"empty list returns empty",
+			nil, map[string]*domain.Provider{}, ""},
+		{"marked but provider disabled falls back to first",
+			[]domain.Model{modelWith("a-embed", "p1", false), modelWith("b-embed", "p2", true)},
+			map[string]*domain.Provider{"p1": enabledProvider(), "p2": disabledProvider()},
+			"a-embed"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := newTestRegistry(&mockModelRepo{models: tc.models}, &mockProviderRepo{providers: tc.providers})
+			got, err := reg.ResolveDefaultEmbeddingModel(context.Background(), "tenant-a")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveDefaultEmbeddingModel_ProviderLookupFailsClosed(t *testing.T) {
+	// 模型 provider 缺失时解析必须 fail closed，不得默认放行
+	models := []domain.Model{modelWith("orphan", "missing", false)}
+	reg := newTestRegistry(&mockModelRepo{models: models}, &mockProviderRepo{providers: map[string]*domain.Provider{}})
+
+	if _, err := reg.ResolveDefaultEmbeddingModel(context.Background(), "tenant-a"); err == nil {
+		t.Fatal("missing provider must fail the resolution closed")
 	}
 }

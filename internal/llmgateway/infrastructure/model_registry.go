@@ -230,6 +230,41 @@ func (r *ModelRegistry) ListEmbeddingModelsByTenant(ctx context.Context, tenantI
 	return r.listModelsByCapability(ctx, tenantID, domain.CapEmbedding)
 }
 
+// ResolveDefaultEmbeddingModel 解析 tenant 的默认嵌入模型名：
+// 1. enabled 且 provider 可用且标记 default_embedding 的模型优先；
+// 2. 无标记 → enabled 列表第一个（保留现状 sort.Strings 字典序语义）；
+// 3. 列表为空 → 返回 ""，调用方 fail-closed（不默认放行）。
+func (r *ModelRegistry) ResolveDefaultEmbeddingModel(ctx context.Context, tenantID string) (string, error) {
+	enabled := true
+	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled, Capability: domain.CapEmbedding})
+	if err != nil {
+		return "", fmt.Errorf("model registry: list embedding models: %w", err)
+	}
+	names := make([]string, 0, len(models))
+	var marked string
+	for _, m := range models {
+		provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
+		if err != nil {
+			return "", fmt.Errorf("model registry: get provider: %w", err)
+		}
+		if !provider.Enabled || !r.supports(provider.Kind, domain.CapEmbedding) {
+			continue
+		}
+		if m.DefaultEmbedding {
+			marked = m.Name
+		}
+		names = append(names, m.Name)
+	}
+	if marked != "" {
+		return marked, nil
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		return "", nil
+	}
+	return names[0], nil
+}
+
 func (r *ModelRegistry) listModelsByCapability(
 	ctx context.Context,
 	tenantID string,
