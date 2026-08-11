@@ -14,7 +14,7 @@ const STATUS_LABEL: Record<string, string> = {
 export const ResourceChangeProposalCard = ({ proposal }: { proposal: ResourceChangeProposalArtifact }) => (
   <section
     aria-label="资源变更提案"
-    style={{ marginTop: 10, borderInlineStart: '3px solid #1677ff', padding: '10px 12px', background: '#f7f9fc', minWidth: 0 }}
+    style={{ marginTop: 10, borderInlineStart: '3px solid #2563eb', padding: '10px 12px', background: '#f7f9fc', minWidth: 0 }}
   >
     <Space direction="vertical" size={6} style={{ width: '100%', minWidth: 0 }}>
       <Space wrap size={6}>

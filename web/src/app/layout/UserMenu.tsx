@@ -67,7 +67,7 @@ export const UserMenu = () => {
             src={user.avatar_url}
             icon={<UserOutlined />}
             size={28}
-            style={{ background: '#1677ff' }}
+            style={{ background: '#2563eb' }}
           />
           <span style={{ fontSize: 13, color: '#262626' }}>{user.github_login}</span>
         </Space>

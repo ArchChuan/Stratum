@@ -52,7 +52,7 @@ export const ProfilePage = () => {
               src={user.avatar_url}
               icon={<UserOutlined />}
               size={80}
-              style={{ background: '#1677ff', marginBottom: 12 }}
+              style={{ background: '#2563eb', marginBottom: 12 }}
             />
             <br />
             {isPasswordUser && (
