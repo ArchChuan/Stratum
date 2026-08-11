@@ -858,7 +858,14 @@ func (a *BaseAgent) buildPlanNodeExecutor(ec agentExecContext, capGW port.Capabi
 		if invokeErr != nil {
 			return agentgraph.PlanNodeExecutionResult{}, invokeErr
 		}
-		return agentgraph.PlanNodeExecutionResult{Summary: final.Output}, nil
+		// 子循环 token 用量折回父图预算账本：child 是 parent 的结构体拷贝，
+		// 继承父图 TotalTokens 基线，故 delta = final − child 即子循环自身用量，
+		// 基线只计一次。子循环内已按同一 MaxTokensPerExecution 自终止，折回后
+		// 父图下一次 LLM 检查点终止整次执行（Finding 1 修复）。
+		return agentgraph.PlanNodeExecutionResult{
+			Summary:    final.Output,
+			TokensUsed: final.TotalTokens - child.TotalTokens,
+		}, nil
 	}
 }
 
