@@ -149,17 +149,11 @@ func (p *matrixEvaluatorProvider) EnsureBenchmarkSuite(ctx context.Context, tena
 		if !errors.Is(err, evalapp.ErrSuiteNotFound) {
 			return "", fmt.Errorf("matrix provider: load active revision of %s: %w", summary.ID, err)
 		}
-		// 同名套件存在但从未发布：重新 seed 并发布（幂等语义）。
-		suite, _, err := p.suites.Create(ctx, tenantID, evalapp.CreateSuiteInput{
-			Name: summary.Name, Description: summary.Description,
-			ResourceKind: evaldomain.ResourceKindMechanism, Cases: benchmarkMatrixCases(),
-		})
+		// 同名套件存在但从未发布：发布其既有 draft revision（eval_suites.name
+		// 唯一约束使同名重建必冲突，幂等语义 = 恢复可评测基准集，而非重建）。
+		published, err := p.suites.Publish(ctx, tenantID, summary.ID)
 		if err != nil {
-			return "", fmt.Errorf("matrix provider: recreate benchmark suite: %w", err)
-		}
-		published, err := p.suites.Publish(ctx, tenantID, suite.ID)
-		if err != nil {
-			return "", fmt.Errorf("matrix provider: publish benchmark suite: %w", err)
+			return "", fmt.Errorf("matrix provider: publish existing benchmark suite: %w", err)
 		}
 		return published.ID, nil
 	}
@@ -236,14 +230,15 @@ func (p *matrixEvaluatorProvider) LatestMatrixRuns(
 			continue
 		}
 		runs = append(runs, mechanismport.MatrixRun{
-			FamilyKey:  familyKey,
-			RunID:      run.ID,
-			Passed:     run.Passed,
-			PassRate:   metricFloat(run.Metrics, "pass_rate"),
-			TotalCost:  metricFloat(run.Metrics, "total_cost_usd"),
-			AvgLatency: metricFloat(run.Metrics, "avg_latency_ms"),
-			TotalCases: run.TotalCases,
-			Status:     summary.Status,
+			FamilyKey:     familyKey,
+			RunID:         run.ID,
+			Passed:        run.Passed,
+			PassRate:      metricFloat(run.Metrics, "pass_rate"),
+			TotalCost:     metricFloat(run.Metrics, "total_cost_usd"),
+			AvgLatency:    metricFloat(run.Metrics, "avg_latency_ms"),
+			TotalCases:    run.TotalCases,
+			ExecutedCases: executedCaseCount(run.Results),
+			Status:        summary.Status,
 		})
 	}
 	return runs, nil
@@ -260,4 +255,17 @@ func metricFloat(metrics map[string]any, key string) float64 {
 		return 0
 	}
 	return value
+}
+
+// executedCaseCount 统计 run 中真实执行产出结果的 case 数：case 无执行
+// 错误即计入（adapter/网关失败、fingerprint 漂移或 judge 禁用会写 Error，
+// 不计）。全失败 run 返回 0，矩阵前沿据此排除无评测证据的 run。
+func executedCaseCount(results []evaldomain.EvalCaseResult) int {
+	executed := 0
+	for _, result := range results {
+		if result.Error == "" {
+			executed++
+		}
+	}
+	return executed
 }

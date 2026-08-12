@@ -105,12 +105,13 @@ func (s *stubMatrixRuns) SaveRun(context.Context, string, evaldomain.EvalRun) er
 
 func TestMatrixProviderEnsureBenchmarkSuite(t *testing.T) {
 	cases := []struct {
-		name      string
-		suites    evaldomain.SuitePage
-		active    evaldomain.EvalSuiteRevision
-		activeOK  bool // 是否存在已发布 revision
-		want      string
-		wantSeeds int
+		name        string
+		suites      evaldomain.SuitePage
+		active      evaldomain.EvalSuiteRevision
+		activeOK    bool // 是否存在已发布 revision
+		want        string
+		wantSeeds   int
+		wantPublish string // 期望对既有套件执行 Publish 的 suiteID
 	}{
 		{
 			name: "seeds benchmark suite when absent",
@@ -129,11 +130,11 @@ func TestMatrixProviderEnsureBenchmarkSuite(t *testing.T) {
 			want:     "rev-existing", wantSeeds: 0,
 		},
 		{
-			name: "reseeds unpublished benchmark suite",
+			name: "publishes existing unpublished benchmark suite",
 			suites: evaldomain.SuitePage{Items: []evaldomain.SuiteSummary{
 				{ID: "s-bench", Name: constants.MatrixBenchmarkSuiteName},
 			}},
-			want: "rev-suite-new", wantSeeds: 1,
+			want: "rev-s-bench", wantSeeds: 0, wantPublish: "s-bench",
 		},
 	}
 	for _, tc := range cases {
@@ -158,6 +159,21 @@ func TestMatrixProviderEnsureBenchmarkSuite(t *testing.T) {
 			}
 			if len(suites.created) != tc.wantSeeds {
 				t.Fatalf("expected %d seeds, got %d", tc.wantSeeds, len(suites.created))
+			}
+			// 发布路径：seed 分支发布新建套件（suite-new），unpublished 分支发布既有套件。
+			var wantPublished []string
+			if tc.wantSeeds > 0 {
+				wantPublished = []string{"suite-new"}
+			} else if tc.wantPublish != "" {
+				wantPublished = []string{tc.wantPublish}
+			}
+			if len(suites.published) != len(wantPublished) {
+				t.Fatalf("expected publish calls %v, got %v", wantPublished, suites.published)
+			}
+			for i := range wantPublished {
+				if suites.published[i] != wantPublished[i] {
+					t.Fatalf("expected publish calls %v, got %v", wantPublished, suites.published)
+				}
 			}
 			if len(suites.created) > 0 {
 				seeded := suites.created[0]
@@ -281,6 +297,56 @@ func TestMatrixProviderLatestMatrixRunsMissingMetricsDefaultZero(t *testing.T) {
 	}
 	if len(runs) != 1 || runs[0].PassRate != 0 || runs[0].TotalCost != 0 || runs[0].AvgLatency != 0 {
 		t.Fatalf("missing metrics must default to zero, got %+v", runs)
+	}
+}
+
+func TestMatrixProviderLatestMatrixRunsCountsExecutedCases(t *testing.T) {
+	provider := &matrixEvaluatorProvider{
+		suites: &stubMatrixSuites{}, jobs: &stubMatrixJobs{},
+		query: &stubMatrixQuery{runs: map[string]evaldomain.RunPage{"qwen": {Items: []evaldomain.RunSummary{
+			{ID: "run-1", Status: "completed"},
+		}}}},
+		run: &stubMatrixRuns{ok: true, run: evaldomain.EvalRun{
+			ID: "run-1", TotalCases: 3,
+			Results: []evaldomain.EvalCaseResult{
+				{CaseID: "c1"},
+				{CaseID: "c2", Error: "adapter down"},
+				{CaseID: "c3"},
+			},
+		}},
+		profiles: &stubProfileReader{profile: matrixProfile("fp-1", "qwen-max")},
+	}
+	runs, err := provider.LatestMatrixRuns(context.Background(), "t1", []string{"qwen"})
+	if err != nil {
+		t.Fatalf("LatestMatrixRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].ExecutedCases != 2 {
+		t.Fatalf("expected 2 executed cases, got %+v", runs)
+	}
+}
+
+func TestMatrixProviderLatestMatrixRunsFullyFailedRunZeroExecuted(t *testing.T) {
+	provider := &matrixEvaluatorProvider{
+		suites: &stubMatrixSuites{}, jobs: &stubMatrixJobs{},
+		query: &stubMatrixQuery{runs: map[string]evaldomain.RunPage{"qwen": {Items: []evaldomain.RunSummary{
+			{ID: "run-1", Status: "completed"},
+		}}}},
+		run: &stubMatrixRuns{ok: true, run: evaldomain.EvalRun{
+			ID: "run-1", TotalCases: 3,
+			Results: []evaldomain.EvalCaseResult{
+				{CaseID: "c1", Error: "adapter down"},
+				{CaseID: "c2", Error: "adapter down"},
+				{CaseID: "c3", Error: "adapter down"},
+			},
+		}},
+		profiles: &stubProfileReader{profile: matrixProfile("fp-1", "qwen-max")},
+	}
+	runs, err := provider.LatestMatrixRuns(context.Background(), "t1", []string{"qwen"})
+	if err != nil {
+		t.Fatalf("LatestMatrixRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].ExecutedCases != 0 {
+		t.Fatalf("expected 0 executed cases, got %+v", runs)
 	}
 }
 

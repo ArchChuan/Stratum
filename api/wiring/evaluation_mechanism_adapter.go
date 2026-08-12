@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +15,7 @@ import (
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	mechanismdomain "github.com/byteBuilderX/stratum/internal/mechanism/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 )
 
 // mechanismEvaluationAdapter 以模型档案（model_profiles 族档位）为被测对象
@@ -92,15 +94,18 @@ func (a *mechanismEvaluationAdapter) SafeSummary(
 }
 
 func (a *mechanismEvaluationAdapter) ExecuteRevision(
-	ctx context.Context, _ string, _ string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase,
+	ctx context.Context, tenantID, _ string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase,
 ) (evalport.ExecutionResult, error) {
-	var input matrixCaseInput
-	payload, err := json.Marshal(testCase.Input)
-	if err != nil {
-		return evalport.ExecutionResult{}, fmt.Errorf("mechanism evaluation adapter: encode case input: %w", err)
+	if strings.TrimSpace(tenantID) == "" {
+		return evalport.ExecutionResult{}, errors.New("mechanism evaluation adapter: tenant ID required")
 	}
-	if err := json.Unmarshal(payload, &input); err != nil || input.Template == "" || input.Input == "" {
-		return evalport.ExecutionResult{}, errors.New("mechanism evaluation adapter: case input must be {\"template\",\"input\"}")
+	// LLM 网关按租户解析模型提供方；矩阵评测依附默认租户（管理面），
+	// 必须把 run 的租户注入上下文，否则冷缓存首跑在网关空租户硬失败
+	// （postgres: tenant_id is empty）。
+	ctx = reqctx.WithTenantID(ctx, tenantID)
+	input, err := parseMatrixCaseInput(testCase.Input)
+	if err != nil {
+		return evalport.ExecutionResult{}, err
 	}
 	profile, err := a.profileByRef(ctx, ref)
 	if err != nil {
@@ -137,6 +142,24 @@ func (a *mechanismEvaluationAdapter) ExecuteRevision(
 		CostUSD:    0,
 		DurationMs: int(time.Since(start).Milliseconds()),
 	}, nil
+}
+
+// parseMatrixCaseInput 校验并解析基准集 case 的 input（必须含 template 与
+// input 两键；缺失或结构错误 fail closed，禁止静默回退）。独立 helper 控制
+// ExecuteRevision 圈复杂度（质量棘轮）。
+func parseMatrixCaseInput(raw any) (matrixCaseInput, error) {
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		return matrixCaseInput{}, fmt.Errorf("mechanism evaluation adapter: encode case input: %w", err)
+	}
+	var input matrixCaseInput
+	if err := json.Unmarshal(payload, &input); err != nil {
+		return matrixCaseInput{}, fmt.Errorf("mechanism evaluation adapter: decode case input: %w", err)
+	}
+	if input.Template == "" || input.Input == "" {
+		return matrixCaseInput{}, errors.New("mechanism evaluation adapter: case input must be {\"template\",\"input\"}")
+	}
+	return input, nil
 }
 
 // mechanismTemplateByKey 按基准集 case 的 template 键取档案模板；未知键

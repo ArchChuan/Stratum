@@ -14,15 +14,19 @@ type BenchmarkSuite struct {
 }
 
 // MatrixRun 是单个档案×基准集的一次评测 run 摘要（矩阵单元格）。
+// ExecutedCases 是该 run 中真实执行产出结果的 case 数（case 无执行错误）。
+// 执行失败（adapter/网关错误、judge 禁用）的 case 计 0，全失败 run 因此
+// 可被前沿排除——TotalCases 在 case 执行前自增，不能用作该判别。
 type MatrixRun struct {
-	FamilyKey  string
-	RunID      string
-	Passed     bool
-	PassRate   float64
-	TotalCost  float64
-	AvgLatency float64
-	TotalCases int
-	Status     string
+	FamilyKey     string
+	RunID         string
+	Passed        bool
+	PassRate      float64
+	TotalCost     float64
+	AvgLatency    float64
+	TotalCases    int
+	ExecutedCases int
+	Status        string
 }
 
 // MatrixEvaluator 是矩阵评测引擎对 evaluation 侧的能力依赖：

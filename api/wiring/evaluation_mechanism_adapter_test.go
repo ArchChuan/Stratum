@@ -9,6 +9,7 @@ import (
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	mechanismdomain "github.com/byteBuilderX/stratum/internal/mechanism/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 )
 
 // stubProfileReader 是 mechanismProfileReader 的内存替身。
@@ -29,15 +30,18 @@ func (s *stubProfileReader) GetByFamilyKey(_ context.Context, familyKey string) 
 }
 
 // stubCompleter 是 llmgatewaydomain.LLMCompleter 的内存替身（仅 Complete
-// 被机制 adapter 使用，CompleteStream 恒报错）。
+// 被机制 adapter 使用，CompleteStream 恒报错）。tenant 捕获 ctx 租户，
+// 供租户注入断言使用。
 type stubCompleter struct {
 	response *llmgatewaydomain.CompletionResponse
 	err      error
 	request  *llmgatewaydomain.CompletionRequest
+	tenant   string
 }
 
-func (s *stubCompleter) Complete(_ context.Context, req *llmgatewaydomain.CompletionRequest) (*llmgatewaydomain.CompletionResponse, error) {
+func (s *stubCompleter) Complete(ctx context.Context, req *llmgatewaydomain.CompletionRequest) (*llmgatewaydomain.CompletionResponse, error) {
 	s.request = req
+	s.tenant = reqctx.TenantIDFromContext(ctx)
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -89,6 +93,37 @@ func TestMechanismEvaluationAdapterExecutesWithProfileModelAndTemplate(t *testin
 	}
 	if result.Output != "{\"地点\":\"杭州\"}" || result.Tokens != 42 || result.TraceID == "" || result.DurationMs < 0 {
 		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestMechanismEvaluationAdapterInjectsTenantForGateway(t *testing.T) {
+	completer := &stubCompleter{response: &llmgatewaydomain.CompletionResponse{Content: "ok"}}
+	adapter := &mechanismEvaluationAdapter{
+		profiles:  &stubProfileReader{profile: matrixProfile("fp-1", "qwen-max")},
+		completer: completer,
+	}
+	_, err := adapter.ExecuteRevision(context.Background(), "tenant_default", "runner", evaldomain.ResourceRef{
+		Kind: evaldomain.ResourceKindMechanism, ResourceID: "qwen", RevisionID: "fp-1",
+	}, evaldomain.EvalCase{Input: map[string]string{"template": "memory_extraction", "input": "x"}})
+	if err != nil {
+		t.Fatalf("ExecuteRevision: %v", err)
+	}
+	// 网关 Complete 从 ctx 读租户解析模型提供方；未注入会在冷缓存空租户硬失败。
+	if completer.tenant != "tenant_default" {
+		t.Fatalf("expected tenant injected into completer ctx, got %q", completer.tenant)
+	}
+}
+
+func TestMechanismEvaluationAdapterRejectsEmptyTenant(t *testing.T) {
+	adapter := &mechanismEvaluationAdapter{
+		profiles:  &stubProfileReader{profile: matrixProfile("fp-1", "qwen-max")},
+		completer: &stubCompleter{response: &llmgatewaydomain.CompletionResponse{Content: "ok"}},
+	}
+	_, err := adapter.ExecuteRevision(context.Background(), "", "runner", evaldomain.ResourceRef{
+		Kind: evaldomain.ResourceKindMechanism, ResourceID: "qwen", RevisionID: "fp-1",
+	}, evaldomain.EvalCase{Input: map[string]string{"template": "memory_extraction", "input": "x"}})
+	if err == nil {
+		t.Fatal("expected fail-closed error for empty tenant, got nil")
 	}
 }
 

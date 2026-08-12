@@ -36,20 +36,21 @@ type RunMatrixResult struct {
 
 // MatrixCell 是矩阵中一个档案的最近评测单元格。
 type MatrixCell struct {
-	FamilyKey    string
-	DisplayName  string
-	Status       string
-	Fingerprint  string
-	Version      int
-	EnrichModel  string // 档案声明的富化模型（执行侧使用的模型档位）
-	SummaryModel string
-	RunID        string
-	Passed       bool
-	PassRate     float64
-	TotalCost    float64 // 整轮 run 成本（USD）
-	AvgLatency   float64 // 单 case 平均延迟（ms）
-	TotalCases   int
-	Frontier     bool // 帕累托前沿成员（fidelity/cost/perf 三维非支配）
+	FamilyKey     string
+	DisplayName   string
+	Status        string
+	Fingerprint   string
+	Version       int
+	EnrichModel   string // 档案声明的富化模型（执行侧使用的模型档位）
+	SummaryModel  string
+	RunID         string
+	Passed        bool
+	PassRate      float64
+	TotalCost     float64 // 整轮 run 成本（USD）
+	AvgLatency    float64 // 单 case 平均延迟（ms）
+	TotalCases    int
+	ExecutedCases int  // 真实执行产出结果的 case 数（无执行错误的 case）
+	Frontier      bool // 帕累托前沿成员（fidelity/cost/perf 三维非支配）
 }
 
 // MatrixReport 是矩阵工作台的完整快照。
@@ -141,6 +142,7 @@ func buildMatrixCells(profiles []domain.Profile, runByFamily map[string]port.Mat
 			cell.TotalCost = r.TotalCost
 			cell.AvgLatency = r.AvgLatency
 			cell.TotalCases = r.TotalCases
+			cell.ExecutedCases = r.ExecutedCases
 		}
 		cells = append(cells, cell)
 	}
@@ -164,18 +166,20 @@ func (s *MatrixService) AdoptProfile(ctx context.Context, familyKey, updatedBy s
 
 // annotateFrontier 计算帕累托前沿并回写 Frontier 标志：维度为 pass_rate
 // （越高越好）、total_cost（越低越好）、avg_latency（越低越好），仅对
-// 「有评测数据」的档案计算。前沿 = 不被任何其他有数据档案支配的档案；
-// 无数据档案不参与且不在前沿。返回前沿族键。
+// 「有真实评测数据」的档案计算。数据判定 = run 存在 且 至少一个 case 真实
+// 执行（ExecutedCases>0）：执行失败的 run（adapter/网关错误、judge 禁用）
+// 零指标且无评测证据，不参与前沿——TotalCases 在 case 执行前自增，不能
+// 用作判别。前沿 = 不被任何其他有数据档案支配的档案；返回前沿族键。
 func annotateFrontier(cells []MatrixCell) []string {
 	withData := make([]MatrixCell, 0, len(cells))
 	for _, c := range cells {
-		if c.RunID != "" {
+		if hasFrontierData(c) {
 			withData = append(withData, c)
 		}
 	}
 	frontier := make([]string, 0, len(cells))
 	for i := range cells {
-		if cells[i].RunID == "" {
+		if !hasFrontierData(cells[i]) {
 			continue
 		}
 		if isDominated(cells[i], withData) {
@@ -185,6 +189,11 @@ func annotateFrontier(cells []MatrixCell) []string {
 		frontier = append(frontier, cells[i].FamilyKey)
 	}
 	return frontier
+}
+
+// hasFrontierData 判定单元格携带可进入前沿的真实评测证据。
+func hasFrontierData(c MatrixCell) bool {
+	return c.RunID != "" && c.ExecutedCases > 0
 }
 
 // isDominated 报告 a 是否被 candidates 中任一档案支配。

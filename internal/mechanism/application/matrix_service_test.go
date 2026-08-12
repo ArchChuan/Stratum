@@ -61,14 +61,27 @@ func newMatrixService(eval *fakeEvaluator, profiles []domain.Profile) *MatrixSer
 
 func matrixRun(family string, passRate, cost, latency float64) port.MatrixRun {
 	return port.MatrixRun{
-		FamilyKey:  family,
-		RunID:      "run-" + family,
-		Passed:     passRate >= 1,
-		PassRate:   passRate,
-		TotalCost:  cost,
-		AvgLatency: latency,
-		TotalCases: 10,
-		Status:     "succeeded",
+		FamilyKey:     family,
+		RunID:         "run-" + family,
+		Passed:        passRate >= 1,
+		PassRate:      passRate,
+		TotalCost:     cost,
+		AvgLatency:    latency,
+		TotalCases:    10,
+		ExecutedCases: 10,
+		Status:        "succeeded",
+	}
+}
+
+// failedMatrixCell 是执行失败 run 的替身 cell：run 已落库但无 case 真实执行
+// （TotalCases 在 case 执行前自增，因此非零；ExecutedCases=0 判别前沿）。
+func failedMatrixCell(family string) MatrixCell {
+	return MatrixCell{
+		FamilyKey:     family,
+		RunID:         "run-" + family,
+		Passed:        false,
+		TotalCases:    10,
+		ExecutedCases: 0,
 	}
 }
 
@@ -198,33 +211,49 @@ func TestMarkFrontierPicksParetoNonDominated(t *testing.T) {
 		{
 			name: "single data point is frontier",
 			cells: []MatrixCell{
-				{FamilyKey: "a", RunID: "r1", PassRate: 0.8, TotalCost: 1, AvgLatency: 100},
+				{FamilyKey: "a", RunID: "r1", PassRate: 0.8, TotalCost: 1, AvgLatency: 100, ExecutedCases: 3},
 			},
 			want: []string{"a"},
 		},
 		{
 			name: "dominated cell dropped",
 			cells: []MatrixCell{
-				{FamilyKey: "good", RunID: "r1", PassRate: 0.9, TotalCost: 1, AvgLatency: 100},
-				{FamilyKey: "bad", RunID: "r2", PassRate: 0.5, TotalCost: 2, AvgLatency: 300},
+				{FamilyKey: "good", RunID: "r1", PassRate: 0.9, TotalCost: 1, AvgLatency: 100, ExecutedCases: 3},
+				{FamilyKey: "bad", RunID: "r2", PassRate: 0.5, TotalCost: 2, AvgLatency: 300, ExecutedCases: 3},
 			},
 			want: []string{"good"},
 		},
 		{
 			name: "trade-off keeps both",
 			cells: []MatrixCell{
-				{FamilyKey: "fast", RunID: "r1", PassRate: 0.6, TotalCost: 1, AvgLatency: 100},
-				{FamilyKey: "accurate", RunID: "r2", PassRate: 0.95, TotalCost: 2, AvgLatency: 500},
+				{FamilyKey: "fast", RunID: "r1", PassRate: 0.6, TotalCost: 1, AvgLatency: 100, ExecutedCases: 3},
+				{FamilyKey: "accurate", RunID: "r2", PassRate: 0.95, TotalCost: 2, AvgLatency: 500, ExecutedCases: 3},
 			},
 			want: []string{"fast", "accurate"},
 		},
 		{
 			name: "cells without runs are excluded",
 			cells: []MatrixCell{
-				{FamilyKey: "measured", RunID: "r1", PassRate: 0.8, TotalCost: 1, AvgLatency: 100},
+				{FamilyKey: "measured", RunID: "r1", PassRate: 0.8, TotalCost: 1, AvgLatency: 100, ExecutedCases: 3},
 				{FamilyKey: "never-run"},
 			},
 			want: []string{"measured"},
+		},
+		{
+			name: "execution-failed run excluded despite persisted run",
+			cells: []MatrixCell{
+				{FamilyKey: "good", RunID: "r1", PassRate: 0.9, TotalCost: 1, AvgLatency: 100, ExecutedCases: 3},
+				failedMatrixCell("errored"),
+			},
+			want: []string{"good"},
+		},
+		{
+			name: "low-quality real run stays on frontier",
+			cells: []MatrixCell{
+				{FamilyKey: "qwen", RunID: "r1", PassRate: 0.3, TotalCost: 1, AvgLatency: 100, ExecutedCases: 3},
+				failedMatrixCell("errored"),
+			},
+			want: []string{"qwen"},
 		},
 	}
 	for _, tc := range cases {
