@@ -51,6 +51,11 @@ type AgentConfig struct {
 	MaxContextTokens               int
 	// Temperature 0 means unset: the gateway/provider default applies.
 	Temperature float32
+	// ReasoningEffort is the sampling effort tier: "" (unset) | low | medium |
+	// high. Empty means unset: the gateway/provider default applies. Unlike
+	// Temperature, "" is a *sentinel* not a zero — merge paths skip it so an
+	// old client PUT never erases a persisted effort.
+	ReasoningEffort string
 	// MaxTokens 0 means unset: no explicit output cap.
 	MaxTokens int
 	// CompactionRecentGroups overrides in-loop compaction recent groups.

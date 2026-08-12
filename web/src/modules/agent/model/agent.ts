@@ -18,6 +18,7 @@ export const agentSchema = z
     max_tokens: z.number().optional(),
     compaction_recent_groups: z.number().optional(),
     compaction_safety_ratio: z.number().optional(),
+    reasoning_effort: z.string().optional(),
     allowedSkills: z.array(z.string()).nullish().transform((v) => v ?? []),
     mcpToolIds: z.array(z.string()).nullish().transform((v) => v ?? []),
     knowledgeWorkspaceIds: z.array(z.string()).nullish().transform((v) => v ?? []),
@@ -42,6 +43,7 @@ export interface Agent {
   max_tokens?: number;
   compaction_recent_groups?: number;
   compaction_safety_ratio?: number;
+  reasoning_effort?: string;
   allowedSkills: string[];
   mcpToolIds: string[];
   knowledgeWorkspaceIds: string[];
@@ -66,6 +68,7 @@ export interface AgentFormValues {
   max_tokens?: number;
   compaction_recent_groups?: number;
   compaction_safety_ratio?: number;
+  reasoning_effort?: string;
   allowedSkills?: string[];
   mcpToolIds?: string[];
   knowledgeWorkspaceIds?: string[];
@@ -76,25 +79,43 @@ export interface AgentFormValues {
 
 export interface GroupedModelOption {
   provider: string;
-  models: { value: string; label: string }[];
+  models: { value: string; label: string; reasoning: boolean }[];
 }
 
-// 按厂商聚合模型下拉选项（创建/编辑 Agent 页共用）
+// 按厂商聚合模型下拉选项（创建/编辑 Agent 页共用）。
+// capabilities 可选：缺失时按默认推理名单推断（见 isReasoningModel），
+// 避免调用方为拿能力标志额外加一次请求。
 export const buildGroupedModels = (
-  models: Array<{ providerId: string; name: string; displayName?: string }>,
+  models: Array<{ providerId: string; name: string; displayName?: string; capabilities?: string[] }>,
   providers: Array<{ id: string; name: string }>,
 ): GroupedModelOption[] => {
   const providerMap = new Map(providers.map((p) => [p.id, p.name]));
-  const grouped = new Map<string, { value: string; label: string }[]>();
+  const grouped = new Map<string, { value: string; label: string; reasoning: boolean }[]>();
   for (const m of models) {
     const providerName = providerMap.get(m.providerId) || m.providerId;
     if (!grouped.has(providerName)) grouped.set(providerName, []);
-    grouped.get(providerName)!.push({ value: m.name, label: m.displayName || m.name });
+    grouped.get(providerName)!.push({
+      value: m.name,
+      label: m.displayName || m.name,
+      reasoning: isReasoningModel(m),
+    });
   }
   return Array.from(grouped.entries()).map(([provider, modelOptions]) => ({
     provider,
     models: modelOptions,
   }));
+};
+
+// 推理模型判定：优先用 catalog/DB 返回的 capabilities，缺失时按命名规则兜底
+// （o1/o3/o4/deepseek-reasoner/qwq 等）。与后端 pkg/constants 的
+// reasoning 能力标注保持一致；未知模型前端默认视为非推理（fail-closed）。
+const isReasoningModel = (
+  m: { name: string; capabilities?: string[] },
+): boolean => {
+  if (m.capabilities?.length) {
+    return m.capabilities.includes('reasoning');
+  }
+  return /^(o1|o3|o4|deepseek-reasoner|qwq)/i.test(m.name);
 };
 
 export const conversationSchema = z

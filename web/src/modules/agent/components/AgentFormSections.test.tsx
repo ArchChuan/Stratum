@@ -24,7 +24,7 @@ describe('AgentFormSections', () => {
           skills={[]}
           mcpTools={[]}
           workspaces={[]}
-          groupedModels={[{ provider: '托管厂商', models: [{ value: 'managed-chat', label: 'managed-chat' }] }]}
+          groupedModels={[{ provider: '托管厂商', models: [{ value: 'managed-chat', label: 'managed-chat', reasoning: false }] }]}
         />
       </Form>,
     );
@@ -41,7 +41,7 @@ describe('AgentFormSections', () => {
           skills={[]}
           mcpTools={[]}
           workspaces={[]}
-          groupedModels={[{ provider: 'Qwen', models: [{ value: 'qwen-max', label: 'qwen-max' }] }]}
+          groupedModels={[{ provider: 'Qwen', models: [{ value: 'qwen-max', label: 'qwen-max', reasoning: false }] }]}
         />
       </Form>,
     );
@@ -56,7 +56,7 @@ describe('AgentFormSections', () => {
           skills={[]}
           mcpTools={[]}
           workspaces={[]}
-          groupedModels={[{ provider: '托管厂商', models: [{ value: 'managed-chat', label: 'managed-chat' }] }]}
+          groupedModels={[{ provider: '托管厂商', models: [{ value: 'managed-chat', label: 'managed-chat', reasoning: false }] }]}
           currentModel="retired-chat"
         />
       </Form>,
@@ -112,6 +112,71 @@ describe('AgentFormSections', () => {
 
     expect(screen.getByRole('slider', { name: 'temperature' })).toBeInTheDocument();
     expect(screen.getByText('压缩最近轮数（compaction_recent_groups）')).toBeInTheDocument();
+  });
+
+  it('shows reasoning effort selector only for reasoning-capable models', () => {
+    // 推理模型 → 显示
+    render(
+      <Form initialValues={{ llmModel: 'o3-mini' }}>
+        <AgentFormSections
+          skills={[]}
+          mcpTools={[]}
+          workspaces={[]}
+          groupedModels={[
+            {
+              provider: '托管厂商',
+              models: [
+                { value: 'o3-mini', label: 'o3-mini', reasoning: true },
+                { value: 'qwen-turbo', label: 'qwen-turbo', reasoning: false },
+              ],
+            },
+          ]}
+        />
+      </Form>,
+    );
+    expect(screen.getByText('思考强度（reasoning_effort）')).toBeInTheDocument();
+  });
+
+  it('hides reasoning effort selector for non-reasoning models and for the system assistant', () => {
+    // 非推理模型 → 隐藏
+    const { rerender } = render(
+      <Form initialValues={{ llmModel: 'qwen-turbo' }}>
+        <AgentFormSections
+          skills={[]}
+          mcpTools={[]}
+          workspaces={[]}
+          groupedModels={[
+            {
+              provider: '托管厂商',
+              models: [
+                { value: 'o3-mini', label: 'o3-mini', reasoning: true },
+                { value: 'qwen-turbo', label: 'qwen-turbo', reasoning: false },
+              ],
+            },
+          ]}
+        />
+      </Form>,
+    );
+    expect(screen.queryByText('思考强度（reasoning_effort）')).not.toBeInTheDocument();
+
+    // 推理模型但系统助手 → 隐藏（system 走统一模型管理，不带采样参数）
+    rerender(
+      <Form initialValues={{ llmModel: 'o3-mini' }}>
+        <AgentFormSections
+          skills={[]}
+          mcpTools={[]}
+          workspaces={[]}
+          groupedModels={[
+            {
+              provider: '托管厂商',
+              models: [{ value: 'o3-mini', label: 'o3-mini', reasoning: true }],
+            },
+          ]}
+          isSystem
+        />
+      </Form>,
+    );
+    expect(screen.queryByText('思考强度（reasoning_effort）')).not.toBeInTheDocument();
   });
 
   it('applies constant bounds to the token inputs', () => {

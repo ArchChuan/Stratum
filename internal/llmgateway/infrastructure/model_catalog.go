@@ -168,6 +168,32 @@ func lookupModelSpec(name string) (ctxWin, maxOut int) {
 	return 0, 0
 }
 
+// reasoningModels 是已知推理模型的 exact-match 清单（OpenAI o 系、
+// deepseek-reasoner、qwq 等）。与 modelCatalog 分离：位置字面量 struct 无法
+// 混用 keyed 字段，且推理是网关门控能力，与窗口元数据关注点不同。必须
+// exact-match：family 前缀回退不能标（deepseek-chat 非推理 /
+// deepseek-reasoner 是推理）。
+var reasoningModels = map[string]bool{
+	"o4-mini": true, "o3": true, "o3-mini": true,
+	"o1": true, "o1-mini": true, "o1-preview": true,
+	"qwq-plus": true, "qwq-32b": true,
+	"deepseek-r1": true, "deepseek-r1-0528": true, "deepseek-reasoner": true,
+}
+
+// ModelSupportsReasoning 判断模型名是否为已知推理模型（exact-match，大小写
+// 不敏感）。family 前缀回退不打标（deepseek-chat 非推理 / deepseek-reasoner
+// 是推理，前缀回退会误判）。未知模型返回 false，fail-closed：网关据此清空
+// reasoning_effort。
+func ModelSupportsReasoning(name string) bool {
+	if name == "" {
+		return false
+	}
+	if reasoningModels[name] {
+		return true
+	}
+	return reasoningModels[toLower(name)]
+}
+
 // toLower is a simple ASCII-only lowercasing helper to avoid importing strings.
 func toLower(s string) string {
 	b := make([]byte, len(s))

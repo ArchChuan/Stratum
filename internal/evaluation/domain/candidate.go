@@ -8,15 +8,17 @@ import (
 
 const MaxGeneratedCandidates = 64
 
-// allowedParameterFields mirrors the registry evaluation keys (20 legacy +
-// 2 newly opened compaction keys). Keep in sync: registry_consistency_test
-// fails when either side drifts, and the registry is the source of truth.
+// allowedParameterFields mirrors the registry evaluation keys (14 legacy +
+// 2 newly opened compaction keys + reasoning_effort). Keep in sync:
+// registry_consistency_test fails when either side drifts, and the registry
+// is the source of truth.
 var allowedParameterFields = map[string]struct{}{
 	"model": {}, "temperature": {}, "maxTokens": {}, "max_tokens": {},
 	"max_context_tokens": {}, "max_iterations": {}, "bindings": {},
 	"enabled_tools": {}, "timeout_ms": {}, "max_retries": {},
 	"top_k": {}, "score_threshold": {}, "reranking": {}, "query_rewrite": {},
 	"compaction_recent_groups": {}, "compaction_safety_ratio": {},
+	"reasoning_effort": {},
 }
 
 var allowedPromptFields = map[string]struct{}{

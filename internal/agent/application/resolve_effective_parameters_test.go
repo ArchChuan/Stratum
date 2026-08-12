@@ -154,7 +154,7 @@ func TestValidateSamplingParamsRejectsOutOfBoundsWithSentinel(t *testing.T) {
 		ParametersProvider: failingValidateProvider{},
 		Logger:             zap.NewNop(),
 	})
-	err := svc.validateSamplingParams(context.Background(), 3.5, 0, 0, 0)
+	err := svc.validateSamplingParams(context.Background(), 3.5, 0, 0, 0, "")
 	if err == nil {
 		t.Fatal("expected error for out-of-bounds temperature")
 	}
@@ -181,14 +181,14 @@ func TestValidateSamplingParamsSkipsUnsetValues(t *testing.T) {
 		ParametersProvider: failingValidateProvider{},
 		Logger:             zap.NewNop(),
 	})
-	if err := svc.validateSamplingParams(context.Background(), 0, 0, 0, 0); err != nil {
+	if err := svc.validateSamplingParams(context.Background(), 0, 0, 0, 0, ""); err != nil {
 		t.Errorf("all-unset must pass validation, got %v", err)
 	}
 }
 
 func TestValidateSamplingParamsNilProviderIsNoop(t *testing.T) {
 	svc := NewAgentService(AgentServiceDeps{Logger: zap.NewNop()})
-	if err := svc.validateSamplingParams(context.Background(), 0.9, 2048, 3, 0.5); err != nil {
+	if err := svc.validateSamplingParams(context.Background(), 0.9, 2048, 3, 0.5, "high"); err != nil {
 		t.Errorf("nil provider must degrade to no-op, got %v", err)
 	}
 }
@@ -254,12 +254,14 @@ func TestApplyParameterOverridesMapWinsAndOnlyPresentKeysOverwrite(t *testing.T)
 		MaxTokens:              2048,
 		CompactionRecentGroups: 3,
 		CompactionSafetyRatio:  0.5,
+		ReasoningEffort:        "medium",
 		Parameters: map[string]any{
-			"temperature": 0.3,
-			"max_tokens":  float64(4096),
+			"temperature":      0.3,
+			"max_tokens":       float64(4096),
+			"reasoning_effort": "high",
 		},
 	}
-	temperature, maxTokens, recentGroups, safetyRatio := applyParameterOverrides(in)
+	temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort := applyParameterOverrides(in)
 
 	if temperature != 0.3 {
 		t.Errorf("temperature = %v, want 0.3 (map wins)", temperature)
@@ -273,6 +275,9 @@ func TestApplyParameterOverridesMapWinsAndOnlyPresentKeysOverwrite(t *testing.T)
 	if safetyRatio != 0.5 {
 		t.Errorf("compaction_safety_ratio = %v, want 0.5 (absent key keeps top-level)", safetyRatio)
 	}
+	if reasoningEffort != "high" {
+		t.Errorf("reasoning_effort = %q, want \"high\" (map wins)", reasoningEffort)
+	}
 }
 
 func TestApplyParameterOverridesEmptyMapIsNoop(t *testing.T) {
@@ -282,12 +287,16 @@ func TestApplyParameterOverridesEmptyMapIsNoop(t *testing.T) {
 		MaxTokens:              2048,
 		CompactionRecentGroups: 3,
 		CompactionSafetyRatio:  0.5,
+		ReasoningEffort:        "low",
 	}
-	temperature, maxTokens, recentGroups, safetyRatio := applyParameterOverrides(in)
+	temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort := applyParameterOverrides(in)
 
 	if temperature != 0.9 || maxTokens != 2048 || recentGroups != 3 || safetyRatio != 0.5 {
 		t.Errorf("empty map must be a no-op, got %v/%d/%d/%v",
 			temperature, maxTokens, recentGroups, safetyRatio)
+	}
+	if reasoningEffort != "low" {
+		t.Errorf("reasoning_effort = %q, want \"low\" (absent key keeps top-level)", reasoningEffort)
 	}
 }
 
@@ -298,7 +307,7 @@ func TestApplyParameterOverridesExplicitZeroIsUnset(t *testing.T) {
 		Temperature: 0.9,
 		Parameters:  map[string]any{"temperature": 0},
 	}
-	temperature, _, _, _ := applyParameterOverrides(in)
+	temperature, _, _, _, _ := applyParameterOverrides(in)
 
 	if temperature != 0 {
 		t.Errorf("temperature = %v, want 0 (explicit 0 maps to unset; pack skips it)", temperature)

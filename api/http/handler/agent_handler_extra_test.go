@@ -14,6 +14,8 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	parametersapp "github.com/byteBuilderX/stratum/internal/parameters/application"
+	parametersdomain "github.com/byteBuilderX/stratum/internal/parameters/domain"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -294,6 +296,56 @@ func TestAgentHandlerUpdateAgent(t *testing.T) {
 	repo.updateErr = errors.New("write failed")
 	w = doAgentReq(t, authedRoutes(h), http.MethodPut, "/agents/a1", valid)
 	require.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// registryParamsProvider adapts the real parameters registry validator to the
+// agent ParametersProvider port so handler tests exercise the actual enum
+// rejection (the frontend hidden field is UX, not a security boundary). Resolve
+// stubs are unused by the create/update write paths.
+type registryParamsProvider struct {
+	svc *parametersapp.Service
+}
+
+func (p registryParamsProvider) ResolveForResource(context.Context, map[string]any) (map[string]any, error) {
+	return nil, nil
+}
+func (p registryParamsProvider) Resolve(context.Context, string, map[string]any) (any, bool, error) {
+	return nil, false, nil
+}
+func (p registryParamsProvider) ValidateResource(_ context.Context, declared map[string]any) error {
+	return p.svc.ValidateResourceValues(declared)
+}
+
+// TestAgentHandlerReasoningEffortEcho 守护 reasoning_effort 在 Create/Update 请求
+// 与响应间往返回显，并拒绝枚举外非法值（fail-closed，防绕过前端传非法档位）。
+func TestAgentHandlerReasoningEffortEcho(t *testing.T) {
+	paramsProvider := registryParamsProvider{svc: parametersapp.NewService(parametersdomain.NewParametersRegistry(), nil)}
+	newHandler := func(repo *mockAgentRepo) *AgentHandler {
+		return newTestAgentHandler(t, repo, nil, func(deps *agent.AgentServiceDeps) {
+			deps.ParametersProvider = paramsProvider
+		})
+	}
+
+	// Create 成功回显高档位。
+	h := newHandler(&mockAgentRepo{})
+	body := `{"name":"N","llmModel":"qwen-max","maxIterations":5,"reasoning_effort":"high"}`
+	w := doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents", body)
+	require.Equal(t, http.StatusCreated, w.Code)
+	require.Contains(t, w.Body.String(), `"reasoning_effort":"high"`)
+
+	// Update 成功回显中档位。
+	repo := &mockAgentRepo{agents: []*domain.AgentConfig{{ID: "a1", Name: "Alpha", LLMModel: "qwen-max"}}}
+	h = newHandler(repo)
+	body = `{"name":"Renamed","llmModel":"qwen-max","maxIterations":3,"reasoning_effort":"medium"}`
+	w = doAgentReq(t, authedRoutes(h), http.MethodPut, "/agents/a1", body)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), `"reasoning_effort":"medium"`)
+
+	// 极端情况：枚举外值被拒 → 400（绕过前端直调 API 也拦得住）。
+	h = newHandler(&mockAgentRepo{})
+	body = `{"name":"N","llmModel":"qwen-max","maxIterations":5,"reasoning_effort":"deep"}`
+	w = doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents", body)
+	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 func TestAgentHandlerDeleteAgent(t *testing.T) {

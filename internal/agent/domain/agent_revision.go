@@ -26,6 +26,9 @@ type ModelParameters struct {
 	MaxContextTokens int     `json:"max_context_tokens,omitempty"`
 	Temperature      float32 `json:"temperature,omitempty"`
 	MaxTokens        int     `json:"max_tokens,omitempty"`
+	// ReasoningEffort 是推理强度档位:""(unset)|low|medium|high。空串跳过,
+	// 非空必须落在枚举内(validateModelParameters 防 optimizer 绕过 enum)。
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// CompactionRecentGroups overrides the per-execution recent-groups
 	// count during in-loop compaction. 0 = auto-derive from MaxContextTokens.
 	CompactionRecentGroups int `json:"compaction_recent_groups,omitempty"`
@@ -206,6 +209,11 @@ func validateModelParameters(params ModelParameters) error {
 	if params.MaxTokens < constants.TunableMaxTokensMin || params.MaxTokens > constants.TunableMaxTokensMax {
 		return fmt.Errorf("agent revision: max tokens must be between %d and %d",
 			constants.TunableMaxTokensMin, constants.TunableMaxTokensMax)
+	}
+	// reasoning_effort 是 optimizer 绕过 validateSamplingParams 后的唯一防线:
+	// 非法值写进 revision 会沿 promote 透传到网关打严格端点 400(永久错误)。
+	if !constants.IsValidReasoningEffort(params.ReasoningEffort) {
+		return errors.New("agent revision: reasoning_effort must be one of low/medium/high")
 	}
 	return validateCompactionParameters(params)
 }

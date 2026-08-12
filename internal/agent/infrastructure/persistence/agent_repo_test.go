@@ -380,8 +380,8 @@ func TestPackAllSamplingParameters(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &params); err != nil {
 		t.Fatal(err)
 	}
-	if len(params) != 4 {
-		t.Fatalf("packAll must carry all 4 keys, got %v", params)
+	if len(params) != 5 {
+		t.Fatalf("packAll must carry all 5 keys, got %v", params)
 	}
 	if params["temperature"] != 0.7 || params["compaction_recent_groups"] != float64(2) {
 		t.Errorf("non-zero fields must keep value: %v", params)
@@ -391,6 +391,26 @@ func TestPackAllSamplingParameters(t *testing.T) {
 	}
 	if v, ok := params["compaction_safety_ratio"]; !ok || v != nil {
 		t.Errorf("zero compaction_safety_ratio must serialize as explicit null, got %v", params["compaction_safety_ratio"])
+	}
+	if v, ok := params["reasoning_effort"]; !ok || v != nil {
+		t.Errorf("empty reasoning_effort must serialize as explicit null, got %v", params["reasoning_effort"])
+	}
+}
+
+// TestPackAllSamplingParameters_ReasoningEffortTier pins the string branch:
+// a declared tier keeps its value under overall-replace semantics.
+func TestPackAllSamplingParameters_ReasoningEffortTier(t *testing.T) {
+	cfg := &domain.AgentConfig{ReasoningEffort: "high"}
+	raw, err := packAllSamplingParameters(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal([]byte(raw), &params); err != nil {
+		t.Fatal(err)
+	}
+	if params["reasoning_effort"] != "high" {
+		t.Errorf("reasoning_effort = %v, want high", params["reasoning_effort"])
 	}
 }
 

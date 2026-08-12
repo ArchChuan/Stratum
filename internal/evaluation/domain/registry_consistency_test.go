@@ -47,15 +47,16 @@ func TestCandidateWhitelistStaysInLockstepWithRegistry(t *testing.T) {
 
 // TestCandidateWhitelistCountAnchors20Plus2 pins the exact search-space
 // boundary: 14 parameter + 6 prompt legacy keys, plus the 2 newly opened
-// compaction keys — never fewer (收缩会把 MCP 闭环维度清零)。
+// compaction keys and reasoning_effort — never fewer (收缩会把 MCP 闭环
+// 维度清零)。
 func TestCandidateWhitelistCountAnchors20Plus2(t *testing.T) {
-	if got := len(allowedParameterFields); got != 16 {
-		t.Fatalf("allowedParameterFields = %d keys, want 16 (14 legacy + 2 compaction)", got)
+	if got := len(allowedParameterFields); got != 17 {
+		t.Fatalf("allowedParameterFields = %d keys, want 17 (14 legacy + 2 compaction + reasoning_effort)", got)
 	}
 	if got := len(allowedPromptFields); got != 6 {
 		t.Fatalf("allowedPromptFields = %d keys, want 6", got)
 	}
-	for _, key := range []string{"compaction_recent_groups", "compaction_safety_ratio"} {
+	for _, key := range []string{"compaction_recent_groups", "compaction_safety_ratio", "reasoning_effort"} {
 		if _, ok := allowedParameterFields[key]; !ok {
 			t.Errorf("newly opened key %q missing from candidate whitelist", key)
 		}

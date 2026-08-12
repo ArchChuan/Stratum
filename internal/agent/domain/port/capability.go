@@ -53,7 +53,10 @@ type LLMCapRequest struct {
 	Messages    []LLMMessage
 	Tools       []ToolDefinition
 	Temperature float32
-	MaxTokens   int
+	// ReasoningEffort 是请求的采样强度档位:""|low|medium|high。空串 =
+	// unset;非空值由网关按候选模型推理能力门控(unknown/非推理模型清空)。
+	ReasoningEffort string
+	MaxTokens       int
 	// NoPrimaryRetry 禁止 gateway 对主模型瞬态失败的立即重试（压缩路径用：
 	// 时间片内一次主尝试，失败直接降级候选）。0 值（false）= 默认允许一次立即重试。
 	NoPrimaryRetry bool
