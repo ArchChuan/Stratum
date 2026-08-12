@@ -592,7 +592,7 @@ func (c *AnthropicClient) buildRequest(req *CompletionRequest, stream bool) anth
 
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 {
-		maxTokens = 4096
+		maxTokens = constants.DefaultOutputReserveTokens
 	}
 
 	anthropicReq := anthropicMessagesRequest{

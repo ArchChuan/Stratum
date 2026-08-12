@@ -214,7 +214,13 @@ func (c *OpenAICompatClient) Complete(ctx context.Context, req *CompletionReques
 		return nil, fmt.Errorf("%s: circuit breaker open", c.cfg.Name)
 	}
 
-	body, err := json.Marshal(req)
+	// 网关防御层：上层调用方（memory 等）可能传 MaxTokens<=0，供应商要求
+	// minimum:1。复制后兜底，禁止就地修改调用方可见的 req 对象。
+	marshalReq := *req
+	if marshalReq.MaxTokens <= 0 {
+		marshalReq.MaxTokens = constants.DefaultOutputReserveTokens
+	}
+	body, err := json.Marshal(&marshalReq)
 	if err != nil {
 		return nil, fmt.Errorf("%s: marshal request: %w", c.cfg.Name, err)
 	}
@@ -336,6 +342,10 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 
 	streamReq := *req
 	streamReq.Stream = true
+	// 网关防御层：MaxTokens<=0 时 marshal 前兜底（供应商要求 minimum:1）。
+	if streamReq.MaxTokens <= 0 {
+		streamReq.MaxTokens = constants.DefaultOutputReserveTokens
+	}
 	body, err := json.Marshal(streamReq)
 	if err != nil {
 		return nil, fmt.Errorf("%s: marshal stream request: %w", c.cfg.Name, err)
