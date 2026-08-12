@@ -285,6 +285,7 @@ var allowedParams = map[string]bool{
 	"enabled_tools": true, "timeout_ms": true, "max_retries": true,
 	"top_k": true, "score_threshold": true, "reranking": true, "query_rewrite": true,
 	"compaction_recent_groups": true, "compaction_safety_ratio": true,
+	"reasoning_effort": true,
 }
 
 var allowedPrompts = map[string]bool{

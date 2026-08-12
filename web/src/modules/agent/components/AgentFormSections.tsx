@@ -1,5 +1,6 @@
 import { RobotOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { Collapse, Form, Input, InputNumber, Select, Slider, Switch, Tag, Typography } from 'antd';
+import { useMemo } from 'react';
 
 import type { GroupedModelOption } from '../model/agent';
 
@@ -14,6 +15,7 @@ import {
   AGENT_MAX_TOKENS_MIN,
   AGENT_MAX_TOKENS_STEP,
   AGENT_MIN_MAX_ITERATIONS,
+  REASONING_EFFORT_OPTIONS,
 } from '@/constants';
 import type { Member } from '@/modules/iam';
 import type { Workspace } from '@/modules/knowledge';
@@ -49,6 +51,15 @@ export const AgentFormSections = ({
   editorCandidates = [],
   editorCandidatesLoading = false,
 }: AgentFormSectionsProps) => {
+  const form = Form.useFormInstance();
+  const selectedModel = Form.useWatch('llmModel', form);
+  // 当前选中模型是否支持推理；未选中或模型不在托管目录（不可用/退役）时视为
+  // 非推理，隐藏思考强度控件（fail-closed，与网关 unknown→清空+WARN 一致）。
+  const supportsReasoning = useMemo(() => {
+    if (!selectedModel) return false;
+    return groupedModels.some((g) => g.models.some((m) => m.value === selectedModel && m.reasoning));
+  }, [selectedModel, groupedModels]);
+
   return (
     <>
     <Form.Item name="type" hidden>
@@ -254,6 +265,21 @@ export const AgentFormSections = ({
                     >
                       <Slider min={0} max={2} step={0.1} marks={{ 0: '0', 2: '2' }} ariaLabelForHandle="temperature" />
                     </Form.Item>
+                    {supportsReasoning && (
+                      <Form.Item
+                        label="思考强度（reasoning_effort）"
+                        name="reasoning_effort"
+                        extra="推理深度与 token 成本权衡：不设置 = 平台默认。仅对支持推理的模型生效，非推理模型由网关忽略"
+                      >
+                        <Select allowClear placeholder="平台默认">
+                          {REASONING_EFFORT_OPTIONS.map((o) => (
+                            <Option key={o.value} value={o.value}>
+                              {o.label}
+                            </Option>
+                          ))}
+                        </Select>
+                      </Form.Item>
+                    )}
                     <Form.Item
                       label="压缩最近轮数（compaction_recent_groups）"
                       name="compaction_recent_groups"

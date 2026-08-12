@@ -45,19 +45,14 @@ button:focus-visible,
   height: 100%;
 }
 
+/* 路由切换残影(Windows Chrome 合成层纹理残留):页面内容层隔离。
+   生产提交极快,旧页合成层纹理回收滞后,DComp 合成器将幽灵纹理投放到新页。
+   isolation: isolate 建立层叠隔离上下文,阻止旧页幽灵图层穿透到新页内容。 */
 .app-shell-content {
+  isolation: isolate;
+  position: relative;
   min-width: 0;
   padding: 24px;
-}
-
-/* 表格首帧减负:视口外行跳过 paint,仅渲染视口内行。
-   根因(实测 + Windows 反馈):切换表格密集页时,首帧需光栅化全部行
-   (微软雅黑 DirectWrite 字形 + 表格线),超帧预算 → 合成器保留旧帧产生
-   表格线/文字残影。content-visibility 让 layout 仍全量(列宽正确),
-   首帧只 paint 视口内行;行高固定,contain-intrinsic-size 兜底占位。 */
-.ant-table-tbody {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 32px;
 }
 
 .responsive-page-header,

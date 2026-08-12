@@ -73,3 +73,12 @@ export const CHUNKING_STRATEGY_OPTIONS = [
   { value: 'recursive', label: '递归分块 — 按字符边界递归切分' },
   { value: 'semantic', label: '语义分块 — 按语义相似度切分（需嵌入模型）' },
 ];
+
+// 思考强度档位 Options；与后端 agents.parameters JSONB 的 reasoning_effort 键
+// 及 pkg/constants 枚举 low/medium/high 一致。高档位 token 消耗放大，无
+// max_tokens_per_execution 联动属成本 DoS 风险（后端仅文档化，不联动）。
+export const REASONING_EFFORT_OPTIONS = [
+  { value: 'low', label: '低 — 更快的响应，更少 token 消耗' },
+  { value: 'medium', label: '中 — 平衡质量与成本' },
+  { value: 'high', label: '高 — 更深推理，token 消耗放大' },
+];

@@ -61,12 +61,12 @@ func editorEligible(ctx context.Context, tx pgx.Tx, tenantID, userID string) (bo
 	return ok, nil
 }
 
-// agents.parameters JSONB carries only the 4 sampling parameters as flat
-// scalar keys (temperature/max_tokens/compaction_recent_groups/
-// compaction_safety_ratio). An explicit 0 is indistinguishable from an
-// absent key under omitempty, so 0 == unset == gateway/provider default.
-// Keys match the registry evaluation keys so promote can write them back
-// without mapping.
+// agents.parameters JSONB carries the sampling parameters as flat scalar
+// keys (temperature/max_tokens/compaction_recent_groups/
+// compaction_safety_ratio/reasoning_effort). An explicit 0 / "" is
+// indistinguishable from an absent key under omitempty, so 0/"" == unset ==
+// gateway/provider default. Keys match the registry evaluation keys so
+// promote can write them back without mapping.
 func packSamplingParameters(cfg *domain.AgentConfig) (string, error) {
 	params := map[string]any{}
 	if cfg.Temperature != 0 {
@@ -80,6 +80,9 @@ func packSamplingParameters(cfg *domain.AgentConfig) (string, error) {
 	}
 	if cfg.CompactionSafetyRatio != 0 {
 		params["compaction_safety_ratio"] = cfg.CompactionSafetyRatio
+	}
+	if cfg.ReasoningEffort != "" {
+		params["reasoning_effort"] = cfg.ReasoningEffort
 	}
 	b, err := json.Marshal(params)
 	if err != nil {
@@ -113,18 +116,12 @@ func packAllSamplingParameters(cfg *domain.AgentConfig) (string, error) {
 		"max_tokens":               cfg.MaxTokens,
 		"compaction_recent_groups": cfg.CompactionRecentGroups,
 		"compaction_safety_ratio":  cfg.CompactionSafetyRatio,
+		"reasoning_effort":         cfg.ReasoningEffort,
 	}
-	// 0 → nil → JSON null;non-zero 保持原值。
+	// 0 / "" → nil → JSON null;非零/非空保持原值。
 	for k, v := range params {
-		switch val := v.(type) {
-		case float32:
-			if val == 0 {
-				params[k] = nil
-			}
-		case int:
-			if val == 0 {
-				params[k] = nil
-			}
+		if isZeroSamplingValue(v) {
+			params[k] = nil
 		}
 	}
 	b, err := json.Marshal(params)
@@ -132,6 +129,22 @@ func packAllSamplingParameters(cfg *domain.AgentConfig) (string, error) {
 		return "", fmt.Errorf("pack sampling parameters: %w", err)
 	}
 	return string(b), nil
+}
+
+// isZeroSamplingValue reports whether a sampling value is the unset sentinel
+// for its type (0 for numbers, "" for strings). packAllSamplingParameters maps
+// such values to JSON null (explicit clear under overall-replace semantics).
+func isZeroSamplingValue(v any) bool {
+	switch val := v.(type) {
+	case float32:
+		return val == 0
+	case int:
+		return val == 0
+	case string:
+		return val == ""
+	default:
+		return false
+	}
 }
 
 // unpackSamplingParameters fills the 4 sampling fields from JSONB; absent
@@ -155,6 +168,10 @@ func unpackSamplingParameters(raw string, cfg *domain.AgentConfig) error {
 	}
 	if v, ok := numericValue(params["compaction_safety_ratio"]); ok {
 		cfg.CompactionSafetyRatio = float32(v)
+	}
+	if v, ok := params["reasoning_effort"].(string); ok {
+		// JSON null (explicit clear) and absent both land as "" = unset.
+		cfg.ReasoningEffort = v
 	}
 	return nil
 }

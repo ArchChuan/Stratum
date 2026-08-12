@@ -23,6 +23,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -130,6 +131,25 @@ export const AppShell = ({ children }: AppShellProps) => {
   const location = useLocation();
   const { user, tenants, switchTenant } = useAuth();
   const { isMobile } = useResponsive();
+  const contentRef = useRef<HTMLDivElement>(null);
+  const prevPathRef = useRef(location.pathname);
+
+  // 路由切换兜底:强制 LayerTree 更新,触发 Windows DComp 合成器旧层纹理回收。
+  // 双 rAF 是关键:单 rAF 时 set 与 clear 在同一渲染帧内发生,transform 从未被
+  // 合成器提交;双 rAF 让 translateZ(0) 存活完整一帧(层创建)再移除(层销毁),
+  // 合成器完成一次层树重建,回收幽灵纹理。配合 index.css 的 isolation: isolate。
+  useEffect(() => {
+    if (prevPathRef.current === location.pathname) return;
+    prevPathRef.current = location.pathname;
+    const el = contentRef.current;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      el.style.transform = 'translateZ(0)';
+      requestAnimationFrame(() => {
+        el.style.transform = '';
+      });
+    });
+  }, [location.pathname]);
 
   useEffect(() => {
     let cancelled = false;
@@ -331,6 +351,7 @@ export const AppShell = ({ children }: AppShellProps) => {
         </Header>
 
         <Content
+          ref={contentRef}
           className="app-shell-content"
           style={{
             margin: 0,

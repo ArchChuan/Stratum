@@ -33,6 +33,14 @@ type anthropicMessagesRequest struct {
 	MaxTokens int                `json:"max_tokens"`
 	Stream    bool               `json:"stream,omitempty"`
 	Tools     []anthropicToolDef `json:"tools,omitempty"`
+	// Thinking 启用 Anthropic extended thinking。budget_tokens 必须 ≤
+	// max_tokens - 4096（保留输出空间），否则严格端点 400——buildRequest 钳制并抬升。
+	Thinking *anthropicThinking `json:"thinking,omitempty"`
+}
+
+type anthropicThinking struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
 }
 
 type anthropicMessage struct {
@@ -567,33 +575,18 @@ func (c *AnthropicClient) setHeaders(req *http.Request) {
 
 // buildRequest converts a domain CompletionRequest into an Anthropic messages request.
 func (c *AnthropicClient) buildRequest(req *CompletionRequest, stream bool) anthropicMessagesRequest {
-	// Separate system message from conversation messages.
-	var system string
-	messages := make([]anthropicMessage, 0, len(req.Messages))
-	for _, m := range req.Messages {
-		if m.Role == "system" {
-			if system != "" {
-				system += "\n"
-			}
-			system += m.Content
-			continue
-		}
-		msg := anthropicMessage{Role: m.Role}
-		msg.Content = c.buildContentBlocks(m)
-		messages = append(messages, msg)
-	}
-
-	// Map "tool" role to "user" with tool_result content blocks (Anthropic convention).
-	for i := range messages {
-		if messages[i].Role == "tool" && len(messages[i].Content) > 0 {
-			messages[i].Role = "user"
-		}
-	}
+	system, messages := c.splitSystemMessage(req.Messages)
+	normalizeToolRoles(messages)
 
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 {
 		maxTokens = constants.DefaultOutputReserveTokens
 	}
+
+	// ReasoningEffort 映射 extended_thinking。budget 必须 ≤ max_tokens-4096，
+	// 否则严格端点 400；不足时抬升 max_tokens = budget+4096（保留输出空间）。
+	// 空串/未知档位返回 nil 不启用（fail-closed，网关已按模型能力门控清空）。
+	thinking, maxTokens := thinkingForBudget(effortBudget(req.ReasoningEffort), maxTokens)
 
 	anthropicReq := anthropicMessagesRequest{
 		Model:     req.Model,
@@ -601,6 +594,7 @@ func (c *AnthropicClient) buildRequest(req *CompletionRequest, stream bool) anth
 		Messages:  messages,
 		MaxTokens: maxTokens,
 		Stream:    stream,
+		Thinking:  thinking,
 	}
 
 	if len(req.Tools) > 0 {
@@ -615,6 +609,68 @@ func (c *AnthropicClient) buildRequest(req *CompletionRequest, stream bool) anth
 	}
 
 	return anthropicReq
+}
+
+// splitSystemMessage separates the system message from conversation messages.
+// Anthropic takes system as a top-level field; multiple system messages are
+// joined with a newline.
+func (c *AnthropicClient) splitSystemMessage(msgs []Message) (string, []anthropicMessage) {
+	var system string
+	messages := make([]anthropicMessage, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Role == "system" {
+			if system != "" {
+				system += "\n"
+			}
+			system += m.Content
+			continue
+		}
+		msg := anthropicMessage{Role: m.Role}
+		msg.Content = c.buildContentBlocks(m)
+		messages = append(messages, msg)
+	}
+	return system, messages
+}
+
+// normalizeToolRoles maps the "tool" role to "user" with tool_result content
+// blocks (Anthropic convention).
+func normalizeToolRoles(messages []anthropicMessage) {
+	for i := range messages {
+		if messages[i].Role == "tool" && len(messages[i].Content) > 0 {
+			messages[i].Role = "user"
+		}
+	}
+}
+
+// thinkingForBudget computes the extended_thinking config and the max_tokens
+// value that leaves room for output. Anthropic's strict endpoint rejects
+// budget > max_tokens-4096 with 400; the budget is clamped and max_tokens
+// raised to budget+reserve when needed. A zero budget returns nil (thinking
+// disabled, fail-closed).
+func thinkingForBudget(budget, maxTokens int) (*anthropicThinking, int) {
+	if budget <= 0 {
+		return nil, maxTokens
+	}
+	reserve := constants.ReasoningEffortMaxTokensReserve
+	if budget > maxTokens-reserve {
+		maxTokens = budget + reserve
+	}
+	return &anthropicThinking{Type: "enabled", BudgetTokens: budget}, maxTokens
+}
+
+// effortBudget 把 reasoning_effort 档位映射为 Anthropic extended_thinking
+// budget_tokens。空串/未知档位返回 0（不启用 thinking，fail-closed）。
+func effortBudget(effort string) int {
+	switch effort {
+	case "low":
+		return constants.ReasoningEffortBudgetLow
+	case "medium":
+		return constants.ReasoningEffortBudgetMedium
+	case "high":
+		return constants.ReasoningEffortBudgetHigh
+	default:
+		return 0
+	}
 }
 
 // buildContentBlocks converts a domain Message into Anthropic content blocks.
