@@ -19,7 +19,7 @@ import (
 func TestPersistConnect_encryptsSecretsAtRest(t *testing.T) {
 	pool := postgrestest.NewPool(t)
 	tenantID := postgrestest.CreateTestTenant(t, pool)
-	m := NewClientManager(zap.NewNop(), nil, pool, "")
+	m := NewClientManager(zap.NewNop(), nil, pool)
 	require.NoError(t, m.WithSecretKey(mcpTestKey))
 	ctx := tenantdb.WithTenant(t.Context(), &tenantdb.TenantContext{
 		TenantID: tenantID, Role: tenantdb.RoleTenantAdmin,
@@ -68,7 +68,7 @@ func TestPersistConnect_encryptsSecretsAtRest(t *testing.T) {
 func TestGetServerConfig_legacyPlaintextFailsClosed(t *testing.T) {
 	pool := postgrestest.NewPool(t)
 	tenantID := postgrestest.CreateTestTenant(t, pool)
-	m := NewClientManager(zap.NewNop(), nil, pool, "")
+	m := NewClientManager(zap.NewNop(), nil, pool)
 	require.NoError(t, m.WithSecretKey(mcpTestKey))
 	ctx := tenantdb.WithTenant(t.Context(), &tenantdb.TenantContext{
 		TenantID: tenantID, Role: tenantdb.RoleTenantAdmin,
@@ -89,7 +89,7 @@ func TestGetServerConfig_legacyPlaintextFailsClosed(t *testing.T) {
 
 // TestConfigFromDBRow_roundTrip 验证 configFromDBRow 对密文行解密还原明文配置。
 func TestConfigFromDBRow_roundTrip(t *testing.T) {
-	m := NewClientManager(zap.NewNop(), nil, nil, "")
+	m := NewClientManager(zap.NewNop(), nil, nil)
 	require.NoError(t, m.WithSecretKey(mcpTestKey))
 
 	envEnc, err := encryptSecretMap(mcpTestKey, map[string]string{"K": "v-plain"})

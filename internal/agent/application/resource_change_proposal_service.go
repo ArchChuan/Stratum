@@ -384,9 +384,9 @@ func validMCPConfigChange(value *domain.MCPConfigChange) bool {
 	}
 	switch value.Transport {
 	case "stdio":
-		if strings.TrimSpace(value.Command) == "" || strings.TrimSpace(value.URL) != "" {
-			return false
-		}
+		// stdio 已全链禁用（mcp doConnect 唯一权威拒绝）：proposal 一律拒绝，
+		// 避免申请一批准即被服务端 400 拒绝（承诺能力与实现不一致）。
+		return false
 	case "streamable-http":
 		if !validProposalMCPURL(value.URL) || strings.TrimSpace(value.Command) != "" || len(value.Args) > 0 {
 			return false

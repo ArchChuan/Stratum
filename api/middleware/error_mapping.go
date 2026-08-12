@@ -188,6 +188,9 @@ var errorStatusTable = map[error]int{
 	memorydomain.ErrEmptyContent:                  http.StatusBadRequest,
 	workflowdomain.ErrInvalidSpec:                 http.StatusBadRequest,
 	workflowdomain.ErrInvalidInputSchema:          http.StatusBadRequest,
+	mcpdomain.ErrUnsupportedTransport:             http.StatusBadRequest,
+	mcpdomain.ErrInvalidServerURL:                 http.StatusBadRequest,
+	mcpdomain.ErrUnsupportedAuth:                  http.StatusBadRequest,
 }
 
 // MapErrorToStatus walks the wrap chain and returns the HTTP status that

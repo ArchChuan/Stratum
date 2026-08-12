@@ -217,12 +217,24 @@ func TestMCPServiceSetToolPolicyValidation(t *testing.T) {
 }
 
 func TestMCPServiceReconnectServer(t *testing.T) {
-	// 成功 + 注册失败仅告警（不阻断）。
-	mgr := &queryManagerFake{lifecycleManagerFake: &lifecycleManagerFake{}}
+	// 成功 + 注册失败仅告警（不阻断）。ReconnectServer 现在带 ownership
+	// 校验：creator/owner 放行，非 owner 一律 ErrForbidden。
+	mgr := &queryManagerFake{lifecycleManagerFake: &lifecycleManagerFake{stored: &domain.ServerConfig{
+		ID: "s1", CreatedBy: "user-1",
+	}}}
 	svc := NewMCPService(&lifecycleRegistryFake{}, mgr, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-	if err := svc.ReconnectServer(context.Background(), "s1"); err != nil {
+	if err := svc.ReconnectServer(context.Background(), "s1", "user-1"); err != nil {
 		t.Fatalf("reconnect = %v", err)
+	}
+	// 非 owner 拒绝。
+	mgr2 := &queryManagerFake{lifecycleManagerFake: &lifecycleManagerFake{stored: &domain.ServerConfig{
+		ID: "s1", CreatedBy: "other-user",
+	}}}
+	svc2 := NewMCPService(&lifecycleRegistryFake{}, mgr2, zap.NewNop())
+	svc2.SetTenantRoleResolver(stubTenantRole{role: "viewer"})
+	if err := svc2.ReconnectServer(context.Background(), "s1", "user-1"); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("reconnect by non-owner = %v, want ErrForbidden", err)
 	}
 }
 

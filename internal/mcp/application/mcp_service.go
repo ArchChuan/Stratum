@@ -144,33 +144,19 @@ func (s *MCPService) ServerStatus(ctx context.Context) ServerStatusBreakdown {
 // the granted editor set on the create path (written in the same transaction,
 // each editor must hold role admin/owner); update paths ignore it.
 func (s *MCPService) ConnectServer(ctx context.Context, cfg *domain.ServerConfig, editors []string, actorID string) error {
+	// UX 纵深：服务端 stdio 全链禁用，权威拒绝点在内层 client.doConnect
+	// （覆盖 5 条连接路径）。这里提前拒绝让写接口直接返回 400，避免租户
+	// 写入一个必然连不上的配置；存量 stdio 行改写成 HTTP 不受影响。
+	if cfg.Transport == "stdio" {
+		return domain.ErrUnsupportedTransport
+	}
 	stored, getErr := s.manager.GetServerConfig(ctx, cfg.ID)
 	if getErr != nil && !errors.Is(getErr, domain.ErrServerNotFound) {
 		return getErr
 	}
-	op := auditdomain.ChangeOpCreate
-	var before any
-	editorActor := ""
-	switch {
-	case getErr == nil && isPlatformManaged(stored):
-		return domain.ErrPlatformManagedServer
-	case getErr == nil:
-		// Update semantics on an existing row: creator/owner, or a granted
-		// editor (update only — editors never grant delete rights).
-		ea, resolveErr := s.resolveUpdateActor(ctx, actorID, stored)
-		if resolveErr != nil {
-			return resolveErr
-		}
-		editorActor = ea
-		cfg.CreatedBy = stored.CreatedBy
-		op = auditdomain.ChangeOpUpdate
-		before = MCPSafeProjection(stored)
-	default:
-		// New server: creator becomes owner; only owner/admin may create.
-		if err := s.checkOwnership(ctx, actorID, actorID, nil); err != nil {
-			return err
-		}
-		cfg.CreatedBy = actorID
+	op, editorActor, before, err := s.resolveConnectOp(ctx, cfg, stored, getErr, actorID)
+	if err != nil {
+		return err
 	}
 	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindMCP, cfg.ID, op, actorID, before, MCPSafeProjection(cfg))
 	if err != nil {
@@ -187,6 +173,35 @@ func (s *MCPService) ConnectServer(ctx context.Context, cfg *domain.ServerConfig
 		s.logger.Warn("failed to register MCP tools", zap.String("server_id", cfg.ID), zap.Error(err))
 	}
 	return nil
+}
+
+// resolveConnectOp decides the upsert semantics of ConnectServer:
+// platform-managed rows are refused, existing rows take update semantics
+// (owner, or a granted editor — editors never grant delete rights) keeping
+// the original creator, and new rows make the creator the owner after an
+// ownership check. It returns the audit op, the update-path editor, and the
+// before-projection for the audit trail (untyped nil for create, so the
+// audit layer records no before-state).
+func (s *MCPService) resolveConnectOp(ctx context.Context, cfg, stored *domain.ServerConfig, getErr error, actorID string) (string, string, any, error) {
+	op := auditdomain.ChangeOpCreate
+	switch {
+	case getErr == nil && isPlatformManaged(stored):
+		return op, "", nil, domain.ErrPlatformManagedServer
+	case getErr == nil:
+		ea, err := s.resolveUpdateActor(ctx, actorID, stored)
+		if err != nil {
+			return op, "", nil, err
+		}
+		cfg.CreatedBy = stored.CreatedBy
+		return auditdomain.ChangeOpUpdate, ea, MCPSafeProjection(stored), nil
+	default:
+		// New server: creator becomes owner; only owner/admin may create.
+		if err := s.checkOwnership(ctx, actorID, actorID, nil); err != nil {
+			return op, "", nil, err
+		}
+		cfg.CreatedBy = actorID
+		return op, "", nil, nil
+	}
 }
 
 // DeleteServer permanently removes an MCP server config and cascades to agent relations.
@@ -214,9 +229,14 @@ func (s *MCPService) DeleteServer(ctx context.Context, serverID, actorID string)
 }
 
 // DisconnectServer drops the connection to serverID (no audit: connection
-// state is not a configuration change).
-func (s *MCPService) DisconnectServer(ctx context.Context, serverID string) error {
-	if _, err := s.loadManagedServer(ctx, serverID); err != nil {
+// state is not a configuration change). Only the creator/owner may drop the
+// connection.
+func (s *MCPService) DisconnectServer(ctx context.Context, serverID, actorID string) error {
+	stored, err := s.loadManagedServer(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	if err := s.checkOwnership(ctx, actorID, stored.CreatedBy, nil); err != nil {
 		return err
 	}
 	if err := s.manager.Disconnect(ctx, serverID); err != nil {
@@ -226,8 +246,16 @@ func (s *MCPService) DisconnectServer(ctx context.Context, serverID string) erro
 	return nil
 }
 
-// ReconnectServer restores a previously disconnected MCP server.
-func (s *MCPService) ReconnectServer(ctx context.Context, serverID string) error {
+// ReconnectServer restores a previously disconnected MCP server. Only the
+// creator/owner may reconnect.
+func (s *MCPService) ReconnectServer(ctx context.Context, serverID, actorID string) error {
+	stored, err := s.loadManagedServer(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	if err := s.checkOwnership(ctx, actorID, stored.CreatedBy, nil); err != nil {
+		return err
+	}
 	if err := s.manager.Reconnect(ctx, serverID); err != nil {
 		return err
 	}
@@ -240,6 +268,11 @@ func (s *MCPService) ReconnectServer(ctx context.Context, serverID string) error
 
 // UpdateServer disconnects and reconnects an existing MCP server with new config.
 func (s *MCPService) UpdateServer(ctx context.Context, cfg *domain.ServerConfig, actorID string) error {
+	// 与 ConnectServer 一致：incoming stdio 一律拒绝（存量 stdio 行改写为
+	// HTTP 是受支持的修复路径，incoming 非 stdio 不受影响）。
+	if cfg.Transport == "stdio" {
+		return domain.ErrUnsupportedTransport
+	}
 	stored, err := s.manager.GetServerConfig(ctx, cfg.ID)
 	if err != nil {
 		return err
@@ -340,10 +373,9 @@ func mergeProtectedConfig(stored, incoming *domain.ServerConfig) *domain.ServerC
 	if stored == nil {
 		return merged
 	}
-	if stored.Transport == incoming.Transport && incoming.Transport == "stdio" {
-		mergeSensitiveValues(merged.Env, stored.Env)
-	}
-	if stored.Transport == incoming.Transport && incoming.Transport != "stdio" {
+	// stdio 已禁用（service 层 + doConnect 双重拒绝），stdio 的 env 敏感值
+	// 合并分支随之失效；HTTP transport 下只剩 headers 合并。
+	if stored.Transport == incoming.Transport {
 		mergeSensitiveValues(merged.Headers, stored.Headers)
 	}
 	if stored.Auth == nil || merged.Auth == nil || stored.Auth.Type != merged.Auth.Type {

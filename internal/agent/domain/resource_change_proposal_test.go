@@ -81,7 +81,9 @@ func TestDecodeProposalPayloadStrictly(t *testing.T) {
 		{"knowledge", ResourceKnowledgeWorkspace, OperationCreate, `{"name":"docs","description":"official docs","embeddingModel":"text-embedding-v3"}`, false},
 		{"unknown field", ResourceAgent, OperationCreate, `{"name":"agent","description":"desc","model":"qwen-plus","maxIterations":5,"maxContextTokens":4096,"systemPrompt":"override"}`, false},
 		{"unknown field", ResourceAgent, OperationCreate, `{"name":"agent","description":"desc","model":"qwen-plus","maxIterations":5,"maxContextTokens":4096,"temperature":0.7}`, true},
-		{"secret env", ResourceMCPConfig, OperationCreate, `{"name":"docs","version":"1","transport":"stdio","command":"server","timeoutSec":30,"env":{"TOKEN":"secret"}}`, true},
+		// stdio 已全链禁用，env 字段不会出现在任何合法 payload 中；该用例
+		// 与 stdio 解耦，继续断言未知字段 env 被严格 decode 拒绝。
+		{"unknown env field", ResourceMCPConfig, OperationCreate, `{"name":"docs","version":"1","transport":"streamable-http","url":"https://example.test/mcp","timeoutSec":30,"env":{"TOKEN":"secret"}}`, true},
 		{"secret headers", ResourceMCPConfig, OperationUpdate, `{"name":"docs","version":"1","transport":"streamable-http","url":"https://example.test/mcp","timeoutSec":30,"headers":{"Authorization":"Bearer secret"}}`, true},
 		{"trailing object", ResourceKnowledgeWorkspace, OperationCreate, `{"name":"docs","description":"official docs","embeddingModel":"embed"}{}`, true},
 	}
