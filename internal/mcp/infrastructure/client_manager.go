@@ -38,6 +38,14 @@ type ClientManager struct {
 	wg         sync.WaitGroup
 	pool       *pgxpool.Pool
 
+	// reconnectMu guards the single-flight reconnect state shared by
+	// performHealthCheck and CallTool: a burst of failures (N concurrent
+	// requests against a dead session) collapses into one rebuild per
+	// server, and MCPMinReconnectInterval rate-gates repeated rebuilds.
+	reconnectMu   sync.Mutex
+	reconnecting  map[string]struct{}
+	lastReconnect map[string]time.Time
+
 	// serverCtx is the lifecycle context for spawned child processes.
 	// Cancelled only when the server shuts down, not on HTTP request end.
 	serverCtx    context.Context
@@ -79,15 +87,17 @@ func NewClientManager(
 	}
 
 	manager := &ClientManager{
-		clients:    make(map[string]MCPClient),
-		configs:    make(map[string]*MCPServerConfig),
-		connecting: make(map[string]struct{}),
-		cache:      NewCapabilityCache(1000, 1*time.Hour),
-		logger:     logger.Named("mcp.client_manager"),
-		poolConfig: poolConfig,
-		stopCh:     make(chan struct{}),
-		pool:       pool,
-		metrics:    observability.NoopMetrics{},
+		clients:       make(map[string]MCPClient),
+		configs:       make(map[string]*MCPServerConfig),
+		connecting:    make(map[string]struct{}),
+		reconnecting:  make(map[string]struct{}),
+		lastReconnect: make(map[string]time.Time),
+		cache:         NewCapabilityCache(1000, 1*time.Hour),
+		logger:        logger.Named("mcp.client_manager"),
+		poolConfig:    poolConfig,
+		stopCh:        make(chan struct{}),
+		pool:          pool,
+		metrics:       observability.NoopMetrics{},
 	}
 	//nolint:gosec // serverCancel is called in Stop()
 	manager.serverCtx, manager.serverCancel = context.WithCancel(context.Background())
@@ -103,6 +113,18 @@ func (m *ClientManager) SetMetrics(metrics observability.MetricsProvider) {
 		metrics = observability.NoopMetrics{}
 	}
 	m.metrics = metrics
+}
+
+// WithAllowPrivateClientFactoryForTest replaces the client factory with one
+// that dials loopback/private targets (URLPolicyAllowPrivate). Only cross-package
+// e2e tests exercise the client against httptest servers; production wiring
+// never calls this.
+func (m *ClientManager) WithAllowPrivateClientFactoryForTest() {
+	m.clientFactory = func(cfg *MCPServerConfig, logger *zap.Logger) MCPClient {
+		c := NewBaseClient(cfg, logger)
+		c.urlPolicy = URLPolicyAllowPrivate
+		return c
+	}
 }
 
 // ErrNameConflict is the canonical sentinel for an MCP server name collision.
@@ -326,14 +348,19 @@ func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig
 	return nil
 }
 
-func (m *ClientManager) persistDisconnect(ctx context.Context, serverID string) {
+func (m *ClientManager) persistDisconnect(ctx context.Context, serverID string) error {
 	if m.pool == nil {
-		return
+		return nil
 	}
-	_ = tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
+	err := tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE mcp_configs SET enabled=false WHERE id=$1`, serverID)
 		return err
 	})
+	if err != nil {
+		m.logger.Error("failed to persist disconnect", zap.String("server_id", serverID), zap.Error(err))
+		return fmt.Errorf("persist disconnect %s: %w", serverID, err)
+	}
+	return nil
 }
 
 // Connect 连接到 MCP 服务器
@@ -456,7 +483,9 @@ func (m *ClientManager) Disconnect(ctx context.Context, serverID string) error {
 		return err
 	}
 
-	m.persistDisconnect(ctx, serverID)
+	if err := m.persistDisconnect(ctx, serverID); err != nil {
+		return err
+	}
 
 	m.logger.Info("disconnected from MCP server", zap.String("server_id", serverID))
 	return nil
@@ -543,13 +572,38 @@ func (m *ClientManager) GetAllClients(ctx context.Context) map[string]MCPClient 
 	return result
 }
 
-// CallTool 调用工具
+// CallTool 调用工具。调用失败且 client 已不健康（会话丢失或传输死亡）时
+// 触发单飞重连，让下一次调用落到新会话上；重连异步进行，不拖慢本次失败。
 func (m *ClientManager) CallTool(ctx context.Context, serverID, toolName string, input any) (any, error) {
 	client, err := m.getOrRestoreClient(ctx, serverID)
 	if err != nil {
 		return nil, err
 	}
-	return client.CallTool(ctx, toolName, input)
+	result, err := client.CallTool(ctx, toolName, input)
+	if err != nil && !client.IsHealthy() {
+		key := tenantKey(tenantIDFromCtx(ctx), serverID)
+		m.scheduleReconnect(key, client)
+	}
+	return result, err
+}
+
+// scheduleReconnect triggers the single-flight reconnect for a failed
+// client. Fire-and-forget: the caller's request has already failed, the
+// rebuild serves subsequent calls. Bound by a 10s budget so the goroutine
+// cannot outlive the server process by more than the connect timeout.
+func (m *ClientManager) scheduleReconnect(key string, client MCPClient) {
+	m.reconnectMu.Lock()
+	_, inflight := m.reconnecting[key]
+	gated := time.Since(m.lastReconnect[key]) < constants.MCPMinReconnectInterval
+	m.reconnectMu.Unlock()
+	if inflight || gated {
+		return
+	}
+	ctx, cancel := context.WithTimeout(m.serverCtx, 10*time.Second)
+	go func() {
+		defer cancel()
+		_, _ = m.reconnectClient(ctx, key, client)
+	}()
 }
 
 // CallToolWithConfig uses an isolated client built from an immutable revision
@@ -730,66 +784,112 @@ func (m *ClientManager) evictIdle(idleTimeout time.Duration) {
 	}
 }
 
-// performHealthCheck 执行健康检查
+// reconnectClient rebuilds one unhealthy client through the single-flight
+// reconnect path shared by performHealthCheck and CallTool. It returns the
+// replacement client (nil when skipped or failed) and whether a rebuild
+// happened. The gate is per-server: concurrent rebuild attempts collapse
+// into the first one (single-flight), and a server is not rebuilt again
+// within MCPMinReconnectInterval. Skipped rebuilds leave the candidate in
+// place.
+func (m *ClientManager) reconnectClient(ctx context.Context, key string, candidate MCPClient) (MCPClient, bool) {
+	if !m.beginReconnect(key) {
+		return nil, false
+	}
+	defer m.endReconnect(key)
+
+	// Build from the config snapshot held by the manager: it may have been
+	// updated after the candidate was constructed.
+	m.mu.RLock()
+	cfg := m.configs[key]
+	m.mu.RUnlock()
+	if cfg == nil {
+		return nil, false
+	}
+	m.logger.Warn("client unhealthy, attempting reconnect", zap.String("key", key))
+	fresh := m.clientFactory(cfg, m.logger)
+	if fresh == nil {
+		return nil, false
+	}
+	if err := fresh.Connect(ctx); err != nil {
+		m.logger.Error("reconnect failed", zap.String("key", key), zap.Error(err))
+		m.metrics.IncMCPClientReconnect(cfg.ID)
+		return nil, false
+	}
+	if !m.swapReconnectClient(ctx, key, candidate, fresh) {
+		return nil, false
+	}
+	m.logger.Info("reconnected MCP server", zap.String("key", key))
+	return fresh, true
+}
+
+// beginReconnect acquires the per-server single-flight slot under the
+// MCPMinReconnectInterval rate gate. False means another rebuild is inflight
+// or the interval has not elapsed.
+func (m *ClientManager) beginReconnect(key string) bool {
+	m.reconnectMu.Lock()
+	defer m.reconnectMu.Unlock()
+	if _, inflight := m.reconnecting[key]; inflight {
+		return false
+	}
+	if time.Since(m.lastReconnect[key]) < constants.MCPMinReconnectInterval {
+		return false
+	}
+	m.reconnecting[key] = struct{}{}
+	return true
+}
+
+func (m *ClientManager) endReconnect(key string) {
+	m.reconnectMu.Lock()
+	delete(m.reconnecting, key)
+	m.lastReconnect[key] = time.Now()
+	m.reconnectMu.Unlock()
+}
+
+// swapReconnectClient installs fresh when no newer client won the race (e.g.
+// a lazy reconnect landed first); the loser fresh is discarded. A displaced
+// candidate is disconnected so the old transport closes deterministically.
+func (m *ClientManager) swapReconnectClient(ctx context.Context, key string, candidate, fresh MCPClient) bool {
+	m.mu.Lock()
+	current := m.clients[key]
+	if current == nil || current == candidate {
+		m.clients[key] = fresh
+	}
+	m.mu.Unlock()
+	if current != nil && current != candidate {
+		_ = fresh.Disconnect(ctx)
+		return false
+	}
+	if candidate != nil {
+		if err := candidate.Disconnect(ctx); err != nil {
+			m.logger.Warn("displaced client disconnect failed", zap.String("key", key), zap.Error(err))
+		}
+	}
+	return true
+}
+
+// performHealthCheck 执行健康检查。不健康 client 的重连经单飞路径
+// （reconnectClient），并发失败风暴收敛为每 server 一次重建。
 func (m *ClientManager) performHealthCheck() {
-	type reconnectCandidate struct {
-		config *MCPServerConfig
+	m.mu.RLock()
+	var unhealthy []struct {
+		key    string
 		client MCPClient
 	}
-	m.mu.RLock()
-	unhealthy := make(map[string]reconnectCandidate)
 	for k, v := range m.clients {
 		if !v.IsHealthy() {
-			unhealthy[k] = reconnectCandidate{config: m.configs[k], client: v}
+			unhealthy = append(unhealthy, struct {
+				key    string
+				client MCPClient
+			}{k, v})
 		}
 	}
 	m.mu.RUnlock()
 
-	if len(unhealthy) == 0 {
-		return
+	for _, entry := range unhealthy {
+		ctx, cancel := context.WithTimeout(m.serverCtx, 10*time.Second)
+		_, _ = m.reconnectClient(ctx, entry.key, entry.client)
+		cancel()
 	}
-
-	sem := make(chan struct{}, m.poolConfig.MaxConnections)
-	var wg sync.WaitGroup
-	for key, candidate := range unhealthy {
-		if candidate.config == nil {
-			continue
-		}
-		key, candidate := key, candidate
-		sem <- struct{}{}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer func() { <-sem }()
-			defer func() {
-				if r := recover(); r != nil {
-					m.logger.Error("reconnect panic", zap.String("key", key), zap.Any("panic", r))
-				}
-			}()
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			m.logger.Warn("client unhealthy, attempting reconnect", zap.String("key", key))
-			fresh := m.clientFactory(candidate.config, m.logger)
-			if err := fresh.Connect(ctx); err != nil {
-				m.logger.Error("reconnect failed", zap.String("key", key), zap.Error(err))
-				return
-			}
-			m.mu.Lock()
-			current := m.clients[key]
-			if current == candidate.client {
-				m.clients[key] = fresh
-			}
-			m.mu.Unlock()
-			if current != candidate.client {
-				_ = fresh.Disconnect(ctx)
-				return
-			}
-			if err := candidate.client.Disconnect(ctx); err != nil {
-				m.logger.Warn("displaced client disconnect failed", zap.String("key", key), zap.Error(err))
-			}
-		}()
-	}
-	wg.Wait()
 }
 
 // RestoreFromDB 遍历所有租户，从各自 schema 读取 enabled=true 的 MCP 配置并重建连接。
