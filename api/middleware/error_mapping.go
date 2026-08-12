@@ -69,6 +69,8 @@ var errorStatusTable = map[error]int{
 	llmgatewaydomain.ErrModelNotFound:             http.StatusNotFound,
 	agentapp.ErrNotFound:                          http.StatusNotFound,
 	agentdomain.ErrApprovalNotFound:               http.StatusNotFound,
+	agentdomain.ErrApprovalConversationGone:       http.StatusGone,
+	agentdomain.ErrApprovalPolicyChanged:          http.StatusConflict,
 	agentdomain.ErrProposalNotFound:               http.StatusNotFound,
 	agentdomain.ErrNotFound:                       http.StatusNotFound,
 	mechanismapp.ErrProfileNotFound:               http.StatusNotFound,

@@ -30,6 +30,13 @@ type chatPoolIface interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
+// ApprovalCascade 是 DeleteConversation 需要的审批级联 port：同一租户事务内终结
+// 该会话关联的审批，保证物理删除会话后审批历史仍可对账。由 api/wiring 注入
+// *PgToolApprovalStore；nil 表示未装配（级联跳过）。
+type ApprovalCascade interface {
+	CascadeByConversation(ctx context.Context, tenantID, conversationID string) error
+}
+
 // PgChatStore implements port.ChatRepo using pgxpool with per-tenant search_path.
 //
 // Tenant-scoped transactions go through pkg/storage/postgres.ExecTenantWith so
@@ -37,8 +44,9 @@ type chatPoolIface interface {
 // nested-transaction support are the single canonical implementation — no
 // per-repository copy of the boundary.
 type PgChatStore struct {
-	pool   chatPoolIface
-	logger *zap.Logger
+	pool      chatPoolIface
+	logger    *zap.Logger
+	approvals ApprovalCascade
 }
 
 // NewPgChatStore creates a PgChatStore. If logger is nil, a no-op logger is used.
@@ -47,6 +55,12 @@ func NewPgChatStore(pool *pgxpool.Pool, logger *zap.Logger) *PgChatStore {
 		logger = zap.NewNop()
 	}
 	return &PgChatStore{pool: pool, logger: logger}
+}
+
+// SetApprovalCascade 注入会话删除级联目标（D9）。DeleteConversation 在同一租户
+// 事务内终结该会话的审批：pending→cancelled、approved→voided。
+func (s *PgChatStore) SetApprovalCascade(approvals ApprovalCascade) {
+	s.approvals = approvals
 }
 
 // execTenantID is a thin package-level alias kept for checkpoint and
@@ -67,6 +81,11 @@ func (s *PgChatStore) GetConversation(ctx context.Context, tenantID, convID stri
 		).Scan(&conv.ID, &conv.AgentID, &conv.UserID, &conv.Name,
 			&conv.CreatedAt, &conv.UpdatedAt, &conv.ExpiresAt)
 	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		// 修复 review MAJOR：缺行翻译为 domain.ErrNotFound——恢复层需区分"会话确实
+		// 不存在"（可 Void）与"瞬态读取失败"（fail closed 但不销毁审批）。
+		return nil, domain.ErrNotFound
+	}
 	if err != nil {
 		return nil, fmt.Errorf("chat_store: get conversation: %w", err)
 	}
@@ -145,7 +164,19 @@ func (s *PgChatStore) RenameConversation(ctx context.Context, tenantID, convID, 
 }
 
 func (s *PgChatStore) DeleteConversation(ctx context.Context, tenantID, convID, userID string) error {
+	// 修复 review MINOR：空 convID 独立于级联 wiring 拒绝——否则未装配
+	// SetApprovalCascade 的路径会以 conversation_id='' 批量命中该租户全部消息。
+	if convID == "" {
+		return domain.ErrNotFound
+	}
 	err := pgstore.ExecTenantWith(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// D9 级联在删数据前执行：CascadeByConversation 复用同一租户事务（嵌套事务支持，
+		// 已由 tenant_exec_test 验证），任何一步失败整体回滚，审批不会删一半留半。
+		if s.approvals != nil {
+			if err := s.approvals.CascadeByConversation(ctx, tenantID, convID); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.Exec(ctx,
 			`DELETE FROM chat_messages WHERE conversation_id = $1`,
 			convID,

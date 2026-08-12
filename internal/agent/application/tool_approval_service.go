@@ -346,6 +346,17 @@ func (s *ToolApprovalService) MarkExecuted(ctx context.Context, tenantID, id str
 	return s.repo.MarkExecuted(ctx, tenantID, id)
 }
 
+// Void 终结已批准审批（D9：会话删除级联保留可对账历史）。CAS 0 行折叠为
+// ErrApprovalAlreadyExecuted，由调用方按终态忽略。
+func (s *ToolApprovalService) Void(ctx context.Context, tenantID, id, reason string) error {
+	return s.repo.Void(ctx, tenantID, id, reason)
+}
+
+// Invalidate 失效 approved/executing 审批（D9：策略变更等语义失效）。
+func (s *ToolApprovalService) Invalidate(ctx context.Context, tenantID, id, reason string) error {
+	return s.repo.Invalidate(ctx, tenantID, id, reason)
+}
+
 func (s *ToolApprovalService) ExecuteApproved(ctx context.Context, tenantID, id, serverID, toolName string, args map[string]any, executor port.MCPToolExecutor) (port.MCPToolResult, error) {
 	payload, err := s.ApprovedPayload(ctx, tenantID, id)
 	if err != nil {

@@ -289,9 +289,12 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		a.RevisionObjectStore = c.RevisionObjectStore
 	}
 	if db != nil {
-		a.ChatStore = persistence.NewPgChatStore(db, c.Logger)
 		a.CheckpointStore = persistence.NewPgCheckpointStore(db)
 		a.ApprovalStore = persistence.NewPgToolApprovalStore(db)
+		chatStore := persistence.NewPgChatStore(db, c.Logger)
+		// D9 会话删除级联：DeleteConversation 在同一租户事务内终结关联审批。
+		chatStore.SetApprovalCascade(a.ApprovalStore)
+		a.ChatStore = chatStore
 		a.ApprovalService = agent.NewToolApprovalService(a.ApprovalStore, a.CheckpointStore, c.Platform.AESKey)
 		a.CheckpointCleanup = agent.NewCheckpointCleanupWorker(
 			agentCheckpointTenantLister{pool: db}.list,

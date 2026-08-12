@@ -24,6 +24,8 @@ type approvalRepoFake struct {
 	released, outcomeUnknown, decided, claimed          int
 	lastListUserID, lastAssignee                        string
 	pendingN                                            int // 返回给 ListPending 的审批数（配额测试用）
+	voidReasons, invalidateReasons                      []string
+	voidErr, invalidateErr                              error // 恢复层终结动作硬失败注入（Join 路径测试）
 }
 
 func (f *approvalRepoFake) Create(_ context.Context, _ string, row domain.ToolApproval) (string, error) {
@@ -73,8 +75,14 @@ func (f *approvalRepoFake) ListPending(_ context.Context, _, userID string) ([]d
 func (f *approvalRepoFake) ListHistory(_ context.Context, _ string, _, _ int) ([]domain.ToolApproval, int, error) {
 	return nil, 0, nil
 }
-func (f *approvalRepoFake) Invalidate(_ context.Context, _, _, _ string) error { return nil }
-func (f *approvalRepoFake) Void(_ context.Context, _, _, _ string) error       { return nil }
+func (f *approvalRepoFake) Invalidate(_ context.Context, _, _, reason string) error {
+	f.invalidateReasons = append(f.invalidateReasons, reason)
+	return f.invalidateErr
+}
+func (f *approvalRepoFake) Void(_ context.Context, _, _, reason string) error {
+	f.voidReasons = append(f.voidReasons, reason)
+	return f.voidErr
+}
 func (f *approvalRepoFake) UpdateAssignee(_ context.Context, _, _, assignee string) error {
 	f.lastAssignee = assignee
 	return nil

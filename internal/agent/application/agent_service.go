@@ -1486,16 +1486,11 @@ func (s *AgentService) ResumeToolApproval(ctx context.Context, tenantID, approva
 	if s.deps.ApprovalService == nil || s.deps.MCPToolExecutor == nil {
 		return nil, 0, errors.New("tool approval runtime not configured")
 	}
-	payload, err := s.deps.ApprovalService.ApprovedPayload(ctx, tenantID, approvalID)
+	// 三段前置步骤（ApprovedPayload → 恢复层校验 → Registry.Get）提成 resumeContext，
+	// 控制 ResumeToolApproval 复杂度并固化"D9 校验先于 Registry.Get"的顺序不变量。
+	payload, a, err := s.resumeContext(ctx, tenantID, approvalID)
 	if err != nil {
 		return nil, 0, err
-	}
-	a, ok, err := s.deps.Registry.Get(ctx, payload.AgentID)
-	if err != nil {
-		return nil, 0, fmt.Errorf("resume tool approval: get agent: %w", err)
-	}
-	if !ok {
-		return nil, 0, ErrNotFound
 	}
 	req := ExecRequest{Query: payload.Query, ConversationID: payload.ConversationID, UserID: payload.UserID}
 	meta := ExecMeta{TenantID: tenantID, TraceID: payload.TraceID,
@@ -1548,6 +1543,116 @@ func (s *AgentService) ResumeToolApproval(ctx context.Context, tenantID, approva
 	duration := int(time.Since(start).Milliseconds())
 	runErr = completeApprovalResume(ctx, s.deps.CheckpointStore, tenantID, payload.ExecutionID, runErr)
 	return result, duration, runErr
+}
+
+// resumeContext 组合 ResumeToolApproval 的三段前置步骤：ApprovedPayload →
+// 恢复层校验（D9，先于 Registry.Get）→ Registry.Get。not-found 折叠为
+// ErrNotFound（与调用方原语义一致）。
+func (s *AgentService) resumeContext(ctx context.Context, tenantID, approvalID string) (ToolApprovalPayload, Agent, error) {
+	payload, err := s.resumeApprovalPayload(ctx, tenantID, approvalID)
+	if err != nil {
+		return ToolApprovalPayload{}, nil, err
+	}
+	if err := s.validateApprovalResume(ctx, tenantID, approvalID, payload); err != nil {
+		return ToolApprovalPayload{}, nil, err
+	}
+	a, ok, err := s.deps.Registry.Get(ctx, payload.AgentID)
+	if err != nil {
+		return ToolApprovalPayload{}, nil, fmt.Errorf("resume tool approval: get agent: %w", err)
+	}
+	if !ok {
+		return ToolApprovalPayload{}, nil, ErrNotFound
+	}
+	return payload, a, nil
+}
+
+// resumeApprovalPayload 解出可恢复审批载荷并统一失败处理（见 handleApprovedPayloadError）。
+func (s *AgentService) resumeApprovalPayload(ctx context.Context, tenantID, approvalID string) (ToolApprovalPayload, error) {
+	payload, err := s.deps.ApprovalService.ApprovedPayload(ctx, tenantID, approvalID)
+	if err != nil {
+		return ToolApprovalPayload{}, s.handleApprovedPayloadError(ctx, tenantID, approvalID, err)
+	}
+	return payload, nil
+}
+
+// validateApprovalResume 是断点恢复的恢复层校验（D9）：复用自己的旧授权前，重新
+// 核验外部状态。任一校验失败都 fail closed——确认的状态变更终结审批（保留可对账
+// 历史），瞬态读取失败拒绝恢复但不销毁审批（避免 DB 抖动永久作废有效授权并写入
+// 假审计 reason）。拆成会话/策略两个单职责子校验以控制复杂度。
+func (s *AgentService) validateApprovalResume(ctx context.Context, tenantID, approvalID string, payload ToolApprovalPayload) error {
+	if err := s.validateApprovalConversation(ctx, tenantID, approvalID, payload); err != nil {
+		return err
+	}
+	return s.validateApprovalPolicy(ctx, tenantID, approvalID, payload)
+}
+
+// handleApprovedPayloadError 统一 ApprovedPayload 失败处理：过期是不可逆终态，
+// Invalidate(expired) 只是规范化 reason 标记——CAS 失败（已决定/已执行）忽略，
+// 真实持久化失败 Join 暴露（不吞错）；其他错误原样传播。
+func (s *AgentService) handleApprovedPayloadError(ctx context.Context, tenantID, approvalID string, err error) error {
+	if !errors.Is(err, ErrApprovalExpired) {
+		return err
+	}
+	if err := approvalTransitionErr(err, s.deps.ApprovalService.Invalidate(ctx, tenantID, approvalID, "expired")); err != nil {
+		return err
+	}
+	return err
+}
+
+// validateApprovalConversation 会话存在性校验：会话确认不存在（ErrNotFound）才
+// Void(conversation_deleted)；其他读取错误 fail closed 返回原始错误，不 Void。
+func (s *AgentService) validateApprovalConversation(ctx context.Context, tenantID, approvalID string, payload ToolApprovalPayload) error {
+	if payload.ConversationID == "" || s.deps.ChatStore == nil {
+		return nil
+	}
+	if _, err := s.deps.ChatStore.GetConversation(ctx, tenantID, payload.ConversationID); err != nil {
+		if !errors.Is(err, domain.ErrNotFound) {
+			return fmt.Errorf("resume tool approval: check conversation: %w", err)
+		}
+		if err := approvalTransitionErr(err, s.deps.ApprovalService.Void(ctx, tenantID, approvalID, "conversation_deleted")); err != nil {
+			return err
+		}
+		return domain.ErrApprovalConversationGone
+	}
+	return nil
+}
+
+// validateApprovalPolicy 策略重查：无法解析（resolver 错误或空风险，镜像
+// resolveMCPToolRisk 的 unresolved 语义）→ fail closed 返回错误不 Invalidate；
+// 已解析但等级不一致 → Invalidate(policy_changed)。
+func (s *AgentService) validateApprovalPolicy(ctx context.Context, tenantID, approvalID string, payload ToolApprovalPayload) error {
+	// 策略重查是 MCP-tool 语义：空值视为 mcp_tool（存量兼容），显式非 MCP 审批
+	// （evaluation_action/mcp_policy/mcp_server）无 MCP tool risk——用无关的
+	// server/tool 名重查可能解析出偶然不同的等级，误 Invalidate 有效审批并写误导
+	// 审计 reason。门控镜像 createApprovalCheckpoint。
+	if s.deps.MCPToolPolicy == nil || (payload.SubjectKind != "" && payload.SubjectKind != domain.SubjectKindMCPTool) {
+		return nil
+	}
+	risk, riskErr := s.deps.MCPToolPolicy.ResolveMCPToolRisk(ctx, tenantID, payload.ServerID, payload.ToolName)
+	if riskErr != nil || risk == "" {
+		if riskErr == nil {
+			riskErr = errors.New("tool risk unresolved")
+		}
+		return fmt.Errorf("resume tool approval: resolve policy: %w", riskErr)
+	}
+	if risk != payload.RiskLevel {
+		if err := approvalTransitionErr(fmt.Errorf("tool risk %q changed from %q", risk, payload.RiskLevel),
+			s.deps.ApprovalService.Invalidate(ctx, tenantID, approvalID, "policy_changed")); err != nil {
+			return err
+		}
+		return domain.ErrApprovalPolicyChanged
+	}
+	return nil
+}
+
+// approvalTransitionErr 统一恢复层终结动作的 CAS 语义：终态 CAS 失败
+// （已执行/已决定，ErrApprovalAlreadyExecuted）按不可逆终态忽略返回 nil；
+// 其他错误 Join 保留——恢复层任何终结动作失败都必须暴露，禁止吞错。
+func approvalTransitionErr(cause, transitionErr error) error {
+	if transitionErr == nil || errors.Is(transitionErr, domain.ErrApprovalAlreadyExecuted) {
+		return nil
+	}
+	return errors.Join(cause, transitionErr)
 }
 
 func completeApprovalResume(
