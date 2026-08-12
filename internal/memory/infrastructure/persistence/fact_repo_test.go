@@ -86,14 +86,24 @@ func TestFactRepo_SearchByContent(t *testing.T) {
 	require.Equal(t, f1.ID, results[0].ID)
 }
 
+// TestFactRepo_CountByUser counts only active user-scope facts — the same
+// scope as ListUserFacts — so stats and list totals can never diverge.
+// agent-scope, superseded and archived rows must be excluded.
 func TestFactRepo_CountByUser(t *testing.T) {
 	_, repo := setupFactRepoTest(t)
 	ctx := context.Background()
 
-	f1, _ := domain.NewFact(testFactTenant, "user123", "", "", "user", "Fact 1", 0.8, []string{})
-	f2, _ := domain.NewFact(testFactTenant, "user123", "", "", "user", "Fact 2", 0.7, []string{})
-	require.NoError(t, repo.Create(ctx, testFactTenant, f1))
-	require.NoError(t, repo.Create(ctx, testFactTenant, f2))
+	userActive, _ := domain.NewFact(testFactTenant, "user123", "", "", "user", "Fact 1", 0.8, []string{})
+	userActive2, _ := domain.NewFact(testFactTenant, "user123", "", "", "user", "Fact 2", 0.7, []string{})
+	agentScoped, _ := domain.NewFact(testFactTenant, "user123", "agent1", "", "agent", "Fact 3", 0.6, []string{})
+	userSuperseded, _ := domain.NewFact(testFactTenant, "user123", "", "", "user", "Fact 4", 0.5, []string{})
+	require.NoError(t, userSuperseded.MarkSuperseded("fact-new"))
+	userArchived, _ := domain.NewFact(testFactTenant, "user123", "", "", "user", "Fact 5", 0.4, []string{})
+	require.NoError(t, userArchived.MarkArchived())
+	otherUser, _ := domain.NewFact(testFactTenant, "other", "", "", "user", "Fact 6", 0.3, []string{})
+	for _, f := range []*domain.MemoryFact{userActive, userActive2, agentScoped, userSuperseded, userArchived, otherUser} {
+		require.NoError(t, repo.Create(ctx, testFactTenant, f))
+	}
 
 	count, err := repo.CountByUser(ctx, testFactTenant, "user123")
 	require.NoError(t, err)

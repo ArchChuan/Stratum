@@ -160,13 +160,14 @@ registerMemory(r, c, requireActive)
 | 方法 | 路径 | Handler | 额外权限 |
 |------|------|---------|---------|
 | DELETE | `/memory/clear` | ClearMemories | — |
-| POST | `/memory` | AddMemory | — |
-| GET | `/memory/:id` | GetMemory | — |
-| POST | `/memory/sessions` | ListSessions | — |
+| GET | `/memory` | ListMemories | — |
 | GET | `/memory/stats` | GetStats | — |
+| GET | `/memory/entities` | GetEntities | — |
+| POST | `/memory/sessions` | ListSessions | — |
 | GET | `/memory/summary/:session_id` | GetSummary | — |
-| DELETE | `/memory/:id` | DeleteMemory | — |
 | DELETE | `/memory/session/:session_id` | ClearSession | — |
+
+记忆管理页为当前用户级视角：`/memory/stats` 返回 `{memory_count, entity_count}`（facts 与 entities 均按 `scope='user' AND status='active'` 统计），`/memory/entities` 返回该用户的实体话题标签分页列表。单条记忆的创建/读取/删除已移除（facts 用户侧只读），清空与会话清理保留。
 
 ### MCP（JWT + tenant context，由 `MCPHandler.RegisterRoutes` 动态注册）
 

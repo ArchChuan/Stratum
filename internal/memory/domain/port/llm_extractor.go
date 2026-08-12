@@ -32,8 +32,3 @@ type SupersedeJudgment struct {
 type LLMSuperseder interface {
 	JudgeSupersede(ctx context.Context, oldFact, newFact string) (*SupersedeJudgment, error)
 }
-
-// EntityProfiler generates rolling summaries for entities.
-type EntityProfiler interface {
-	GenerateProfile(ctx context.Context, entityName, entityType string, facts []string) (string, error)
-}

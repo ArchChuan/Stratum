@@ -152,12 +152,6 @@ const (
 	MemoryExtractLLMMaxTokens   = 4096 // JSON array of facts; 1024 truncates large conversations
 )
 
-// Memory Entity - entity profile rebuild triggers
-const (
-	MemoryEntityRebuildFactDelta = 5                  // rebuild after N new facts
-	MemoryEntityRebuildInterval  = 7 * 24 * time.Hour // or after 7 days
-)
-
 // Memory Supersede - supersede detection thresholds
 const (
 	MemorySupersedeCandidateMin     = 0.6  // min similarity to consider supersede
@@ -190,8 +184,7 @@ const (
 	MemorySupersedeBatchSize   = 20                  // facts per supersede judgment batch
 	MemoryEmbedInterval        = 10 * time.Second    // embed worker poll interval
 	MemoryEmbedBatchSize       = 50                  // facts per embed batch
-	MemoryProfileInterval      = 5 * time.Minute     // profile rebuild poll interval
-	MemoryProfileBatchSize     = 10                  // entities per profile rebuild batch
+	MemoryProfileInterval      = 5 * time.Minute     // supersede worker poll interval
 	MemoryGCInterval           = 24 * time.Hour      // garbage collection interval
 	MemoryGCBatchSize          = 100                 // facts per GC batch
 	MemoryGCQueueRetentionDays = 7                   // days to keep completed queue tasks

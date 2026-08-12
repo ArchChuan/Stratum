@@ -7,11 +7,6 @@ import (
 	"time"
 )
 
-type CreateMemoryRequest struct {
-	Content    string  `json:"content" binding:"required"`
-	Importance float64 `json:"importance"`
-}
-
 type MemoryFactResponse struct {
 	ID         string    `json:"id"`
 	Scope      string    `json:"scope"`
@@ -30,14 +25,20 @@ type MemorySummaryResponse struct {
 }
 
 type MemoryStatsResponse struct {
-	TotalEntries         int64     `json:"total_entries"`
-	ShortTermCount       int64     `json:"short_term_count"`
-	LongTermCount        int64     `json:"long_term_count"`
-	EntityCount          int64     `json:"entity_count"`
-	SessionsCount        int64     `json:"sessions_count"`
-	ActiveUsers          int64     `json:"active_users"`
-	VectorCount          int64     `json:"vector_count"`
-	LastAccessTime       time.Time `json:"last_access_time"`
-	StorageSizeBytes     int64     `json:"storage_size_bytes"`
-	EmbedModelConfigured bool      `json:"embed_model_configured"`
+	MemoryCount          int64 `json:"memory_count"`
+	EntityCount          int64 `json:"entity_count"`
+	EmbedModelConfigured bool  `json:"embed_model_configured"`
+}
+
+type MemoryEntityResponse struct {
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	EntityType string    `json:"entity_type"`
+	FactCount  int64     `json:"fact_count"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+}
+
+type ListMemoryEntitiesResponse struct {
+	Entities []MemoryEntityResponse `json:"entities"`
+	Total    int64                  `json:"total"`
 }

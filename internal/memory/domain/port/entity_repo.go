@@ -20,11 +20,11 @@ type EntityRepo interface {
 	// FindByNameAndType finds an entity by fuzzy name match within a scope.
 	FindByNameAndType(ctx context.Context, tenantID string, filter domain.ScopeFilter, name, entityType string, threshold float64) (*domain.MemoryEntity, error)
 
-	// ListProfiles returns entities with profiles for context injection.
-	ListProfiles(ctx context.Context, filter domain.ScopeFilter, limit int) ([]*domain.MemoryEntity, error)
+	// ListUserEntities lists the user's active user-scope entities, newest-seen first.
+	ListUserEntities(ctx context.Context, tenantID, userID string, limit, offset int) ([]*domain.MemoryEntity, error)
 
-	// CountByUser returns total entity count for a user.
-	CountByUser(ctx context.Context, tenantID, userID string) (int, error)
+	// CountUserEntities returns the user's active user-scope entity count.
+	CountUserEntities(ctx context.Context, tenantID, userID string) (int, error)
 
 	// DeleteAllByUser hard-deletes all entities owned by userID within the tenant schema.
 	DeleteAllByUser(ctx context.Context, tenantID, userID string) error

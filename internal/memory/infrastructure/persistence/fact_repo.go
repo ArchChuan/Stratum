@@ -466,7 +466,7 @@ func (r *FactRepo) CountByUser(ctx context.Context, tenantID, userID string) (in
 	var count int
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			"SELECT COUNT(*) FROM memory_facts WHERE user_id = $1 AND status = 'active'",
+			"SELECT COUNT(*) FROM memory_facts WHERE user_id = $1 AND status = 'active' AND scope = 'user'",
 			userID).Scan(&count)
 	})
 	if err != nil {

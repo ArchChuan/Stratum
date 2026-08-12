@@ -12,21 +12,19 @@ flowchart TB
     workerSet["按租户构建 WorkerSet"]
     factJobs["extraction_worker.go · gc_worker.go<br/>ExtractionWorker · GCWorker<br/>抽取事实与清理过期事实"]
     supersedeJobs["supersede_worker.go · llm_superseder.go<br/>SupersedeWorker · LLMSuperseder<br/>候选事实 supersede 判定"]
-    profileJob["profile_worker.go<br/>ProfileWorker<br/>实体画像重建"]
     historyJob["history_worker.go · history_summarizer.go<br/>HistoryWorker<br/>聚合、压缩、晋级与 source-ID 归档"]
     support["helpers.go · metrics.go<br/>SleepCtx · runWithRestart<br/>worker Prometheus 指标"]
     watcher --> workerSet
     workerSet --> factJobs
     workerSet --> supersedeJobs
-    workerSet --> profileJob
+    workerSet --> historyJob
     factJobs ~~~ supersedeJobs
-    supersedeJobs ~~~ profileJob
+    supersedeJobs ~~~ historyJob
     factJobs --> support
-    profileJob --> support
   end
   projectDeps["直接项目依赖<br/>internal/memory/application<br/>internal/memory/domain · internal/memory/domain/port<br/>internal/memory/infrastructure/pipeline<br/>internal/llmgateway/domain<br/>pkg/constants · pkg/timeutil"]
   externalDeps["关键外部依赖<br/>pgxpool · Prometheus · zap"]
-  tests["测试汇总<br/>extraction · GC · helpers · profile · supersede · history"]
+  tests["测试汇总<br/>extraction · GC · helpers · supersede · history"]
   internalPkg --> projectDeps
   internalPkg --> externalDeps
   projectDeps ~~~ externalDeps

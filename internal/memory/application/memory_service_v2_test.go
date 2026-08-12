@@ -13,67 +13,6 @@ import (
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 )
 
-func TestMemoryService_CreateAndReadUserMemory(t *testing.T) {
-	ctx := context.Background()
-	facts := new(MockFactRepo)
-	svc := NewMemoryService(facts, nil, nil, nil, nil, nil, nil, nil)
-
-	facts.On("Create", ctx, "tenant-1", mock.MatchedBy(func(f *domain.MemoryFact) bool {
-		return f.TenantID == "tenant-1" && f.UserID == "user-1" && f.Scope == domain.ScopeUser &&
-			f.Content == "prefers concise answers" && f.Importance == 0.8 &&
-			f.Category == "other" && f.Confidence == 1.0 && f.Source == domain.FactSourceExplicitUser
-	})).Return(nil).Once()
-
-	created, err := svc.CreateUserMemory(ctx, &CreateUserMemoryRequest{
-		TenantID: "tenant-1", UserID: "user-1", Content: "prefers concise answers", Importance: 0.8,
-	})
-	assert.NoError(t, err)
-	assert.Equal(t, "prefers concise answers", created.Content)
-	assert.Equal(t, "user", created.Scope)
-
-	fact := &domain.MemoryFact{ID: created.ID, TenantID: "tenant-1", UserID: "user-1", Scope: domain.ScopeUser, Content: created.Content}
-	facts.On("GetByID", ctx, "tenant-1", created.ID).Return(fact, nil).Once()
-	read, err := svc.GetUserMemory(ctx, &GetUserMemoryRequest{TenantID: "tenant-1", UserID: "user-1", FactID: created.ID})
-	assert.NoError(t, err)
-	assert.Equal(t, created.ID, read.ID)
-	facts.AssertExpectations(t)
-}
-
-func TestMemoryService_UserMemoryOwnership(t *testing.T) {
-	ctx := context.Background()
-	facts := new(MockFactRepo)
-	svc := NewMemoryService(facts, nil, nil, nil, nil, nil, nil, nil)
-	fact := &domain.MemoryFact{ID: "fact-1", TenantID: "tenant-1", UserID: "other-user", Scope: domain.ScopeUser}
-
-	facts.On("GetByID", ctx, "tenant-1", "fact-1").Return(fact, nil).Twice()
-	_, err := svc.GetUserMemory(ctx, &GetUserMemoryRequest{TenantID: "tenant-1", UserID: "user-1", FactID: "fact-1"})
-	assert.ErrorIs(t, err, domain.ErrScopeMismatch)
-	err = svc.ForgetUserMemory(ctx, &ForgetMemoryRequest{TenantID: "tenant-1", UserID: "user-1", FactID: "fact-1"})
-	assert.ErrorIs(t, err, domain.ErrScopeMismatch)
-	facts.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything, mock.Anything)
-}
-
-func TestMemoryService_UserEndpointRejectsAgentScopedFact(t *testing.T) {
-	ctx := context.Background()
-	facts := new(MockFactRepo)
-	svc := NewMemoryService(facts, nil, nil, nil, nil, nil, nil, nil)
-	fact := &domain.MemoryFact{ID: "fact-1", TenantID: "tenant-1", UserID: "user-1", AgentID: "agent-1", Scope: domain.ScopeAgent}
-
-	facts.On("GetByID", ctx, "tenant-1", "fact-1").Return(fact, nil).Once()
-	_, err := svc.GetUserMemory(ctx, &GetUserMemoryRequest{TenantID: "tenant-1", UserID: "user-1", FactID: "fact-1"})
-	assert.ErrorIs(t, err, domain.ErrScopeMismatch)
-}
-
-func TestMemoryService_GetUserMemoryPreservesNotFound(t *testing.T) {
-	ctx := context.Background()
-	facts := new(MockFactRepo)
-	svc := NewMemoryService(facts, nil, nil, nil, nil, nil, nil, nil)
-	facts.On("GetByID", ctx, "tenant-1", "missing").Return(nil, domain.ErrFactNotFound).Once()
-
-	_, err := svc.GetUserMemory(ctx, &GetUserMemoryRequest{TenantID: "tenant-1", UserID: "user-1", FactID: "missing"})
-	assert.True(t, errors.Is(err, domain.ErrFactNotFound))
-}
-
 func TestMemoryServiceClearUserMemoriesReturnsVectorCleanupError(t *testing.T) {
 	ctx := context.Background()
 	facts, vectors := new(MockFactRepo), new(MockVectorStore)
@@ -301,15 +240,15 @@ func (m *MockEntityRepo) FindByNameAndType(ctx context.Context, tenantID string,
 	return args.Get(0).(*domain.MemoryEntity), args.Error(1)
 }
 
-func (m *MockEntityRepo) ListProfiles(ctx context.Context, filter domain.ScopeFilter, limit int) ([]*domain.MemoryEntity, error) {
-	args := m.Called(ctx, filter, limit)
+func (m *MockEntityRepo) ListUserEntities(ctx context.Context, tenantID, userID string, limit, offset int) ([]*domain.MemoryEntity, error) {
+	args := m.Called(ctx, tenantID, userID, limit, offset)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).([]*domain.MemoryEntity), args.Error(1)
 }
 
-func (m *MockEntityRepo) CountByUser(ctx context.Context, tenantID, userID string) (int, error) {
+func (m *MockEntityRepo) CountUserEntities(ctx context.Context, tenantID, userID string) (int, error) {
 	args := m.Called(ctx, tenantID, userID)
 	return args.Int(0), args.Error(1)
 }
@@ -493,76 +432,6 @@ func TestFactDTO_Fields(t *testing.T) {
 	assert.Equal(t, now, dto.CreatedAt)
 }
 
-func TestForgetMemoryDeletesFactVectorReplica(t *testing.T) {
-	ctx := context.Background()
-	factRepo := new(MockFactRepo)
-	entityRepo := new(MockEntityRepo)
-	queue := new(MockExtractionQueue)
-	vectorStore := new(MockVectorStore)
-	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, nil, nil, nil, nil)
-	req := &ForgetMemoryRequest{
-		TenantID: "42c9b62d-4f66-4bc4-a1b8-eed81cdae7b1",
-		UserID:   "user-1",
-		FactID:   "fact-1",
-	}
-
-	factRepo.On("Delete", ctx, req.TenantID, req.FactID).Return(nil).Once()
-	vectorStore.On("Delete", ctx, "memory_facts_42c9b62d_4f66_4bc4_a1b8_eed81cdae7b1", []string{req.FactID}).Return(nil).Once()
-
-	err := svc.ForgetMemory(ctx, req)
-
-	assert.NoError(t, err)
-	factRepo.AssertExpectations(t)
-	vectorStore.AssertExpectations(t)
-}
-
-func TestForgetUserMemoryVectorFailurePreservesFactForOwnershipRetry(t *testing.T) {
-	ctx := context.Background()
-	factRepo := new(MockFactRepo)
-	vectorStore := new(MockVectorStore)
-	svc := NewMemoryService(factRepo, nil, nil, vectorStore, nil, nil, nil, nil)
-	req := &ForgetMemoryRequest{TenantID: "tenant-1", UserID: "user-1", FactID: "fact-1"}
-	wantErr := errors.New("milvus unavailable")
-	factRepo.On("GetByID", ctx, req.TenantID, req.FactID).Return(&domain.MemoryFact{
-		ID: req.FactID, UserID: req.UserID, Scope: domain.ScopeUser,
-	}, nil).Once()
-	vectorStore.On("Delete", ctx, "memory_facts_tenant_1", []string{req.FactID}).Return(wantErr).Once()
-
-	err := svc.ForgetUserMemory(ctx, req)
-
-	assert.ErrorIs(t, err, wantErr)
-	assert.ErrorContains(t, err, "forget memory vector replica")
-	factRepo.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything, mock.Anything)
-}
-
-func TestForgetMemoryFactFailureAfterVectorSuccessRemainsRetryable(t *testing.T) {
-	ctx := context.Background()
-	factRepo := new(MockFactRepo)
-	vectorStore := new(MockVectorStore)
-	svc := NewMemoryService(factRepo, nil, nil, vectorStore, nil, nil, nil, nil)
-	req := &ForgetMemoryRequest{TenantID: "tenant-1", FactID: "fact-1"}
-	wantErr := errors.New("postgres unavailable")
-	vectorStore.On("Delete", ctx, "memory_facts_tenant_1", []string{req.FactID}).Return(nil).Twice()
-	factRepo.On("Delete", ctx, req.TenantID, req.FactID).Return(wantErr).Once()
-	factRepo.On("Delete", ctx, req.TenantID, req.FactID).Return(nil).Once()
-
-	assert.ErrorIs(t, svc.ForgetMemory(ctx, req), wantErr)
-	assert.NoError(t, svc.ForgetMemory(ctx, req))
-	factRepo.AssertExpectations(t)
-	vectorStore.AssertExpectations(t)
-}
-
-func TestForgetMemoryWithoutVectorStoreDeletesFact(t *testing.T) {
-	ctx := context.Background()
-	factRepo := new(MockFactRepo)
-	svc := NewMemoryService(factRepo, nil, nil, nil, nil, nil, nil, nil)
-	req := &ForgetMemoryRequest{TenantID: "tenant-1", FactID: "fact-1"}
-	factRepo.On("Delete", ctx, req.TenantID, req.FactID).Return(nil).Once()
-
-	assert.NoError(t, svc.ForgetMemory(ctx, req))
-	factRepo.AssertExpectations(t)
-}
-
 func TestMemoryService_ListUserMemories_NewestFirstWithActiveTotal(t *testing.T) {
 	ctx := context.Background()
 	facts := new(MockFactRepo)
@@ -605,4 +474,85 @@ func TestMemoryService_ListUserMemories_PropagatesRepoErrors(t *testing.T) {
 	})
 	assert.ErrorContains(t, err, "count user memories")
 	facts.AssertExpectations(t)
+}
+
+func TestMemoryService_UserStats_returnsUserLevelCounts(t *testing.T) {
+	ctx := context.Background()
+	facts := new(MockFactRepo)
+	entities := new(MockEntityRepo)
+	svc := NewMemoryService(facts, entities, nil, nil, nil, nil, nil, nil)
+
+	facts.On("CountByUser", ctx, "tenant-1", "user-1").Return(7, nil).Once()
+	entities.On("CountUserEntities", ctx, "tenant-1", "user-1").Return(3, nil).Once()
+
+	memoryCount, entityCount, err := svc.UserStats(ctx, "tenant-1", "user-1")
+	assert.NoError(t, err)
+	assert.Equal(t, 7, memoryCount)
+	assert.Equal(t, 3, entityCount)
+	facts.AssertExpectations(t)
+	entities.AssertExpectations(t)
+}
+
+func TestMemoryService_UserStats_propagatesRepoErrors(t *testing.T) {
+	ctx := context.Background()
+	facts := new(MockFactRepo)
+	entities := new(MockEntityRepo)
+	svc := NewMemoryService(facts, entities, nil, nil, nil, nil, nil, nil)
+
+	facts.On("CountByUser", ctx, "tenant-1", "user-1").Return(0, errors.New("facts failed")).Once()
+	_, _, err := svc.UserStats(ctx, "tenant-1", "user-1")
+	assert.ErrorContains(t, err, "count user memories")
+
+	facts.On("CountByUser", ctx, "tenant-1", "user-1").Return(5, nil).Once()
+	entities.On("CountUserEntities", ctx, "tenant-1", "user-1").Return(0, errors.New("entities failed")).Once()
+	_, _, err = svc.UserStats(ctx, "tenant-1", "user-1")
+	assert.ErrorContains(t, err, "count user entities")
+	facts.AssertExpectations(t)
+	entities.AssertExpectations(t)
+}
+
+func TestMemoryService_ListUserEntities_mapsToTopicTags(t *testing.T) {
+	ctx := context.Background()
+	entities := new(MockEntityRepo)
+	svc := NewMemoryService(nil, entities, nil, nil, nil, nil, nil, nil)
+	now := time.Now()
+
+	entities.On("ListUserEntities", ctx, "tenant-1", "user-1", 10, 20).Return([]*domain.MemoryEntity{
+		{ID: "ent-2", Name: "Go", EntityType: "tech", FactCount: 4, LastSeenAt: now.Add(time.Hour)},
+		{ID: "ent-1", Name: "Alice", EntityType: "person", FactCount: 2, LastSeenAt: now},
+	}, nil).Once()
+	entities.On("CountUserEntities", ctx, "tenant-1", "user-1").Return(42, nil).Once()
+
+	got, total, err := svc.ListUserEntities(ctx, &ListUserEntitiesRequest{
+		TenantID: "tenant-1", UserID: "user-1", Limit: 10, Offset: 20,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, 42, total)
+	if len(got) != 2 {
+		t.Fatalf("len=%d, want 2", len(got))
+	}
+	assert.Equal(t, "Go", got[0].Name)
+	assert.Equal(t, "person", got[1].EntityType)
+	assert.Equal(t, 2, got[1].FactCount)
+	entities.AssertExpectations(t)
+}
+
+func TestMemoryService_ListUserEntities_propagatesRepoErrors(t *testing.T) {
+	ctx := context.Background()
+	entities := new(MockEntityRepo)
+	svc := NewMemoryService(nil, entities, nil, nil, nil, nil, nil, nil)
+
+	entities.On("ListUserEntities", ctx, "tenant-1", "user-1", 20, 0).Return(nil, errors.New("list failed")).Once()
+	_, _, err := svc.ListUserEntities(ctx, &ListUserEntitiesRequest{
+		TenantID: "tenant-1", UserID: "user-1", Limit: 20, Offset: 0,
+	})
+	assert.ErrorContains(t, err, "list user entities")
+
+	entities.On("ListUserEntities", ctx, "tenant-1", "user-1", 20, 0).Return(nil, nil).Once()
+	entities.On("CountUserEntities", ctx, "tenant-1", "user-1").Return(0, errors.New("count failed")).Once()
+	_, _, err = svc.ListUserEntities(ctx, &ListUserEntitiesRequest{
+		TenantID: "tenant-1", UserID: "user-1", Limit: 20, Offset: 0,
+	})
+	assert.ErrorContains(t, err, "count user entities")
+	entities.AssertExpectations(t)
 }

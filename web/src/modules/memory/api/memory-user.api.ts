@@ -1,4 +1,13 @@
-import { memoryListPageSchema, memoryStatsSchema, type MemoryFact, type MemoryListPage, type MemoryStats } from '../model/memory';
+import {
+  memoryEntityListPageSchema,
+  memoryListPageSchema,
+  memoryStatsSchema,
+  type MemoryEntity,
+  type MemoryEntityListPage,
+  type MemoryFact,
+  type MemoryListPage,
+  type MemoryStats,
+} from '../model/memory';
 
 import api from '@/services/client';
 
@@ -20,8 +29,11 @@ export const memoryUserApi = {
     return memoryStatsSchema.parse(response.data);
   },
 
-  deleteMemory: async (id: string): Promise<void> => {
-    await api.delete(`/memory/${encodeURIComponent(id)}`);
+  listMyEntities: async (filter: MyMemoriesFilter): Promise<MemoryEntityListPage> => {
+    const response = await api.get('/memory/entities', {
+      params: { page: filter.page, page_size: filter.pageSize },
+    });
+    return memoryEntityListPageSchema.parse(response.data);
   },
 
   clearMyMemories: async (): Promise<void> => {
@@ -29,4 +41,4 @@ export const memoryUserApi = {
   },
 };
 
-export type { MemoryFact };
+export type { MemoryEntity, MemoryFact };

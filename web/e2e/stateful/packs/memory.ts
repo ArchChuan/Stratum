@@ -37,77 +37,28 @@ const verifyRoute = async (
   evidence.database.push('Memory list total reconciled with active user facts');
 };
 
-// memory.delete.memory：插入用户级事实，页面行内 DangerPopconfirm 删除，
-// DELETE /memory/:id 返回 204 后对账 memory_facts 该行已移除。
-const verifyDelete = async (
+// memory.readonly.memory：插入用户级事实，页面行可见且无删除入口
+// （单条增删已移除，facts 用户侧只读），随后经 DB 清理该行保持测试幂等。
+const verifyReadonly = async (
   page: Page, pool: DatabasePool, tenantID: string, userID: string,
   evidence: EvidenceRecord, webURL: string,
 ) => {
-  const marker = `stateful-memory-delete-evidence-${Date.now()}`;
-  const pageErrors: string[] = [];
-  const consoleErrors: string[] = [];
-  const observedDeletes: string[] = [];
-  page.on('pageerror', (error) => pageErrors.push(error.message));
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') consoleErrors.push(msg.text());
-  });
-  page.on('request', (req) => {
-    if (req.method() === 'DELETE' && req.url().includes('/memory')) {
-      observedDeletes.push(`${req.method()} ${req.url()}`);
-    }
-  });
+  const marker = `stateful-memory-readonly-evidence-${Date.now()}`;
   await withTenantMutation(pool, tenantID, {
     text: `INSERT INTO memory_facts (user_id, scope, content, importance, source)
            VALUES ($1, 'user', $2, 0.7, 'manual_api')`,
     values: [userID, marker],
   });
-  const deleteResponse = page.waitForResponse((item) => {
-    const path = new URL(item.url()).pathname;
-    return path.match(/^\/memory\/[^/]+$/) !== null && !path.endsWith('/clear') && item.request().method() === 'DELETE';
-  });
-  // 立即挂一个空 catch 消费 rejection：若超时发生在 await 之前，
-  // 未处理的 rejection 会让 Playwright 中断测试并取消后续 locator 操作。
-  deleteResponse.catch(() => undefined);
-  await page.reload();
+  await page.goto(`${webURL}/memory`);
   const row = page.locator('.ant-table-row').filter({ hasText: marker });
   await expect(row).toBeVisible();
-  await row.getByRole('button', { name: '删除' }).click();
-  const confirm = page.locator('.ant-popover:visible').filter({ hasText: '删除这条记忆？' });
-  await expect(confirm).toBeVisible();
-  // antd 按钮的 accessible name 是「删 除」（文本节点间有空格），exact/子串匹配均失败，
-  // 用 \s* 正则归一空白后匹配确认按钮。
-  const okButton = confirm.getByRole('button', { name: /删\s*除/ });
-  await okButton.click();
-  const deletedResponse = await deleteResponse.catch(() => null);
-  if (deletedResponse === null) {
-    // 请求未发出的可诊断信息：页面 JS 错误 + 观测到的 DELETE 请求 + popover DOM 状态。
-    const popoverDump = await page.evaluate(() => {
-      const pops = [...document.querySelectorAll('.ant-popover')];
-      return pops.map((p) => {
-        const rect = p.getBoundingClientRect();
-        const buttons = [...p.querySelectorAll('button')].map((b) => {
-          const r = b.getBoundingClientRect();
-          return `${b.textContent?.trim()}[x=${Math.round(r.x)},y=${Math.round(r.y)},w=${Math.round(r.width)},h=${Math.round(r.height)},disabled=${b.disabled}]`;
-        });
-        return `{rect=${Math.round(rect.width)}x${Math.round(rect.height)},buttons=[${buttons.join(';')}]}`;
-      });
-    });
-    await page.screenshot({ path: '/tmp/mem-popover.png' });
-    throw new Error(
-      'DELETE /memory/:id never observed. '
-      + `popoverDump=${JSON.stringify(popoverDump)} `
-      + `pageErrors=${JSON.stringify(pageErrors)} consoleErrors=${JSON.stringify(consoleErrors)} `
-      + `observedDeletes=${JSON.stringify(observedDeletes)}`,
-    );
-  }
-  expect(deletedResponse.status()).toBe(204);
-  const deleted = await withTenantQuery<{ count: string }>(pool, tenantID, {
-    text: 'SELECT count(*)::text AS count FROM memory_facts WHERE content = $1', values: [marker],
+  // 操作列已移除：行内不得出现删除按钮。
+  await expect(row.getByRole('button', { name: '删除' })).toHaveCount(0);
+  evidence.ui.push('Memory fact visible with no delete affordance (user-side read-only)');
+  evidence.database.push('Readonly memory fact inserted for visibility assertion');
+  await withTenantMutation(pool, tenantID, {
+    text: 'DELETE FROM memory_facts WHERE content = $1', values: [marker],
   });
-  expect(deleted.rows).toEqual([{ count: '0' }]);
-  evidence.ui.push('Memory fact deleted through row confirmation');
-  evidence.http.push('DELETE /memory/:id returned 204');
-  evidence.database.push('Deleted memory fact removed from memory_facts');
 };
 
 export const executeMemoryPack = async ({ actor, pool, evidence, webURL }: MemoryPackContext): Promise<string[]> => {
@@ -116,7 +67,7 @@ export const executeMemoryPack = async ({ actor, pool, evidence, webURL }: Memor
   const page = await actor.context.newPage();
   try {
     await verifyRoute(page, pool, tenantID, userID, evidence, webURL);
-    await verifyDelete(page, pool, tenantID, userID, evidence, webURL);
+    await verifyReadonly(page, pool, tenantID, userID, evidence, webURL);
     await withTenantMutation(pool, tenantID, {
       text: `INSERT INTO memory_entries (user_id,session_id,role,content,type,importance)
              VALUES ($1,$2,'user','stateful memory clear evidence','short_term',0.7)`,
@@ -139,7 +90,7 @@ export const executeMemoryPack = async ({ actor, pool, evidence, webURL }: Memor
     evidence.ui.push('User memory clear completed through Chromium menu and confirmation dialog');
     evidence.http.push('DELETE /memory/clear returned 204');
     evidence.database.push('Generated user memory entries were removed');
-    return ['memory.route.memory', 'memory.delete.memory', 'memory.mutation.delete.memory.clear'];
+    return ['memory.route.memory', 'memory.readonly.memory', 'memory.mutation.delete.memory.clear'];
   } finally {
     await page.close();
   }

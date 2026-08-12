@@ -2418,9 +2418,9 @@
       "coverage": "short"
     },
     {
-      "id": "memory.delete.memory",
+      "id": "memory.readonly.memory",
       "domain": "memory",
-      "user_goal": "Delete a single memory fact",
+      "user_goal": "Review a specific memory fact on the memory page",
       "route": "/memory",
       "roles": {
         "allowed": [
@@ -2431,10 +2431,10 @@
           "unauthenticated"
         ]
       },
-      "mutation": "DELETE /memory/:id",
-      "browser_action_id": "memory.delete.memory",
-      "http_evidence": "The browser observes the expected successful response for DELETE /memory/:id",
-      "db_evidence": "Persisted state is reconciled after DELETE /memory/:id",
+      "mutation": "INSERT memory_facts (user-scope)",
+      "browser_action_id": "memory.readonly.memory",
+      "http_evidence": "The inserted memory fact renders on /memory without a delete affordance (user-side read-only)",
+      "db_evidence": "Inserted memory fact is visible and cleaned up after assertion",
       "coverage": "short"
     },
     {
