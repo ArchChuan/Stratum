@@ -53,6 +53,12 @@ type ClientManager struct {
 
 	clientFactory func(*MCPServerConfig, *zap.Logger) MCPClient
 
+	// urlPolicy gates the SSRF dial policy of every client the manager
+	// constructs. Zero value (URLPolicyStrict) blocks loopback/private
+	// targets; deployments that must reach local fixtures flip it via
+	// WithURLPolicy.
+	urlPolicy URLPolicyOption
+
 	metrics observability.MetricsProvider
 
 	// secretKey 是 mcp_configs 中 env/headers/auth_config 敏感字段的
@@ -102,7 +108,9 @@ func NewClientManager(
 	//nolint:gosec // serverCancel is called in Stop()
 	manager.serverCtx, manager.serverCancel = context.WithCancel(context.Background())
 	manager.clientFactory = func(cfg *MCPServerConfig, logger *zap.Logger) MCPClient {
-		return NewBaseClient(cfg, logger)
+		c := NewBaseClient(cfg, logger)
+		c.urlPolicy = manager.urlPolicy
+		return c
 	}
 	return manager
 }
@@ -115,16 +123,20 @@ func (m *ClientManager) SetMetrics(metrics observability.MetricsProvider) {
 	m.metrics = metrics
 }
 
-// WithAllowPrivateClientFactoryForTest replaces the client factory with one
-// that dials loopback/private targets (URLPolicyAllowPrivate). Only cross-package
-// e2e tests exercise the client against httptest servers; production wiring
-// never calls this.
+// WithURLPolicy sets the SSRF dial policy every client this manager
+// constructs applies. Production wiring leaves the default (URLPolicyStrict)
+// in place; only deployments that must reach loopback/private fixtures (e2e,
+// local verification) set URLPolicyAllowPrivate via config.
+func (m *ClientManager) WithURLPolicy(policy URLPolicyOption) {
+	m.urlPolicy = policy
+}
+
+// WithAllowPrivateClientFactoryForTest dials loopback/private targets
+// (URLPolicyAllowPrivate). Cross-package e2e tests exercise the client
+// against httptest/fixture servers; production wiring must use
+// WithURLPolicy(URLPolicyStrict) instead.
 func (m *ClientManager) WithAllowPrivateClientFactoryForTest() {
-	m.clientFactory = func(cfg *MCPServerConfig, logger *zap.Logger) MCPClient {
-		c := NewBaseClient(cfg, logger)
-		c.urlPolicy = URLPolicyAllowPrivate
-		return c
-	}
+	m.WithURLPolicy(URLPolicyAllowPrivate)
 }
 
 // ErrNameConflict is the canonical sentinel for an MCP server name collision.

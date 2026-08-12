@@ -201,6 +201,10 @@ func (c *Container) buildMCP(ctx context.Context) error {
 	if err := manager.WithSecretKey(aesKey); err != nil {
 		return fmt.Errorf("build mcp: %w", err)
 	}
+	// e2e/本地验证的 fixture 监听 loopback；生产默认 Strict 拒绝私网目标。
+	if c.Config.MCPAllowPrivateTargets {
+		manager.WithURLPolicy(mcp.URLPolicyAllowPrivate)
+	}
 	manager.SetMetrics(c.platformMetrics())
 	registry := mcp.NewMCPToolRegistry(manager, c.Logger)
 	svc := mcpapp.NewMCPService(
