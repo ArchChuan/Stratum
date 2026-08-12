@@ -234,11 +234,9 @@ func TestAgentServiceTraceOwnerAuthorization(t *testing.T) {
 
 func TestAgentServiceApprovalMethodsFailClosed(t *testing.T) {
 	svc := agent.NewAgentService(agent.AgentServiceDeps{Logger: zap.NewNop()})
-	// 极端情况：ApprovalService 缺失 → ListPending 空、Decide/Resume 报错。
-	approvals, err := svc.ListPendingApprovals(context.Background(), "t1", "u1", "member")
-	require.NoError(t, err)
-	require.Empty(t, approvals)
-	require.NotNil(t, approvals)
+	// 极端情况：ApprovalService 缺失 → ListPending/Decide/Resume 全部报错（fail closed）。
+	_, err := svc.ListPendingApprovals(context.Background(), "t1", "u1")
+	require.Error(t, err)
 	err = svc.DecideToolApproval(context.Background(), "t1", "a1", "approve", "u1", "ok")
 	require.Error(t, err)
 	_, _, err = svc.ResumeToolApproval(context.Background(), "t1", "a1")

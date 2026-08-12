@@ -397,6 +397,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 func (c *Container) injectTenantRoleResolvers(a *Agent) {
 	roles := tenantRoleAdapter{service: tenantMemberService(c)}
 	a.Service.SetTenantRoleResolver(roles)
+	a.ApprovalService.SetTenantRoleResolver(roles)
 	c.Skill.VersionService.SetTenantRoleResolver(roles)
 	c.Skill.VersionService.SetWorkspaceBindingValidator(workspaceBindingAdapter{ws: c.Knowledge.WorkspaceService})
 	c.MCP.Service.SetTenantRoleResolver(roles)

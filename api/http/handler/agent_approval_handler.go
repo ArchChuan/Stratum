@@ -13,13 +13,10 @@ func (h *AgentHandler) ListToolApprovals(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
+	// 角色由 service 内 resolver 现查（单事实源），handler 不读 JWT role claim——避免
+	// 72h TTL 内成员变动后越权访问审批列表。
 	actor, _ := userIDFromCtx(c)
-	roleClass, _ := c.Get(middleware.ContextKeyRole)
-	role := ""
-	if roleClass != nil {
-		role, _ = roleClass.(string)
-	}
-	rows, err := h.svc.ListPendingApprovals(c.Request.Context(), tenantID, actor, role)
+	rows, err := h.svc.ListPendingApprovals(c.Request.Context(), tenantID, actor)
 	if err != nil {
 		_ = c.Error(err)
 		return
