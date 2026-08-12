@@ -104,6 +104,10 @@ func (s *Service) UpsertProfile(ctx context.Context, p domain.Profile, updatedBy
 	if p.ID == "" {
 		p.ID = uuid.Must(uuid.NewV7()).String()
 	}
+	// 首版从 1 开始；族键冲突时 SQL 层 version+1 覆盖本值，互不干扰。
+	if p.Version == 0 {
+		p.Version = 1
+	}
 	p.Fingerprint = ComputeFingerprint(p)
 	p.CreatedBy = updatedBy
 	if err := s.repo.Upsert(ctx, p); err != nil {
