@@ -33,6 +33,9 @@ type MenuItem = NonNullable<MenuProps['items']>[number];
 export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
   const tenantRole = user?.role ?? user?.current_tenant?.role ?? 'member';
   const canManageTenant = tenantRole === 'admin' || tenantRole === 'owner';
+  // 平台管理面依附默认租户：仅默认租户 admin/root（system/global admin）可见。
+  const isPlatformAdmin =
+    user?.global_role === 'global_admin' || user?.system_role === 'system_admin';
   const base: MenuItem[] = [
     { key: '/', icon: <DashboardOutlined />, label: '概览' },
     { key: '/chat', icon: <CommentOutlined />, label: 'Agent 对话' },
@@ -153,7 +156,14 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
           icon: <AuditOutlined />,
           label: '审计日志',
         },
-      ],
+        isPlatformAdmin
+          ? {
+              key: '/mechanism/profiles',
+              icon: <DatabaseOutlined />,
+              label: '模型档案',
+            }
+          : null,
+      ].filter(Boolean) as MenuItem[],
     });
   }
 
@@ -194,7 +204,12 @@ export const resolveOpenKeys = (pathname: string): string[] => {
   if (pathname.startsWith('/evaluations')) return ['evaluation-group'];
   if (pathname.startsWith('/workflows') || pathname.startsWith('/workflow-runs') || pathname.startsWith('/scheduled-tasks')) return ['workflow-group'];
   if (pathname.startsWith('/tenant')) return ['tenant-group'];
-  if (pathname.startsWith('/prompts') || pathname.startsWith('/audit')) return ['tenant-admin-group'];
+  if (
+    pathname.startsWith('/prompts') ||
+    pathname.startsWith('/audit') ||
+    pathname.startsWith('/mechanism')
+  )
+    return ['tenant-admin-group'];
   if (pathname.startsWith('/admin')) return ['admin-group'];
   return [];
 };

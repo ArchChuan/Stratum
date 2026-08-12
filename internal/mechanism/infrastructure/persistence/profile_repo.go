@@ -85,6 +85,7 @@ func (r *ProfileRepo) Upsert(ctx context.Context, p domain.Profile) error {
 		   display_name=EXCLUDED.display_name, model_matcher=EXCLUDED.model_matcher,
 		   baseline=EXCLUDED.baseline, fingerprint=EXCLUDED.fingerprint,
 		   version=model_profiles.version+1, status=EXCLUDED.status,
+		   // created_by 在冲突覆盖时更新为最后操作者（版本化语义，非原始创建者）。
 		   created_by=EXCLUDED.created_by, updated_at=NOW()`,
 		p.ID, p.FamilyKey, p.DisplayName, string(matcherJSON), string(baselineJSON),
 		p.Fingerprint, p.Version, p.Status, p.CreatedBy,
