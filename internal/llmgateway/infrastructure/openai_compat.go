@@ -160,6 +160,16 @@ func isContextLengthBody(body []byte) bool {
 		strings.Contains(strings.ToLower(payload.Error.Message), "maximum context length")
 }
 
+// maxTokensFallback 网关防御层：MaxTokens<=0 时兜底 DefaultOutputReserveTokens
+// （供应商要求 minimum:1）。按值传参会复制 req，返回副本，
+// 禁止就地修改调用方可见的 req 对象。
+func maxTokensFallback(req CompletionRequest) CompletionRequest {
+	if req.MaxTokens <= 0 {
+		req.MaxTokens = constants.DefaultOutputReserveTokens
+	}
+	return req
+}
+
 // openaiModelsResponse is the JSON body from GET /models (OpenAI-compatible).
 type openaiModelsResponse struct {
 	Data []openaiModelItem `json:"data"`
@@ -215,11 +225,8 @@ func (c *OpenAICompatClient) Complete(ctx context.Context, req *CompletionReques
 	}
 
 	// 网关防御层：上层调用方（memory 等）可能传 MaxTokens<=0，供应商要求
-	// minimum:1。复制后兜底，禁止就地修改调用方可见的 req 对象。
-	marshalReq := *req
-	if marshalReq.MaxTokens <= 0 {
-		marshalReq.MaxTokens = constants.DefaultOutputReserveTokens
-	}
+	// minimum:1。maxTokensFallback 复制后兜底，禁止就地修改调用方可见的 req。
+	marshalReq := maxTokensFallback(*req)
 	body, err := json.Marshal(&marshalReq)
 	if err != nil {
 		return nil, fmt.Errorf("%s: marshal request: %w", c.cfg.Name, err)
@@ -342,11 +349,7 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 
 	streamReq := *req
 	streamReq.Stream = true
-	// 网关防御层：MaxTokens<=0 时 marshal 前兜底（供应商要求 minimum:1）。
-	if streamReq.MaxTokens <= 0 {
-		streamReq.MaxTokens = constants.DefaultOutputReserveTokens
-	}
-	body, err := json.Marshal(streamReq)
+	body, err := json.Marshal(maxTokensFallback(streamReq))
 	if err != nil {
 		return nil, fmt.Errorf("%s: marshal stream request: %w", c.cfg.Name, err)
 	}
