@@ -46,6 +46,7 @@ type AgentServiceDeps struct {
 	TenantModelValidator      port.TenantChatModelValidator
 	TenantModelCatalog        port.TenantChatModelCatalog
 	ModelContextProvider      port.ModelContextProvider
+	ModelDetailsProvider      port.TenantModelDetailsProvider
 	// VendorWindowLookup 解析内置厂商静态能力表（窗口 + 最大输出）。
 	// 由 wiring 注入 llmgateway.LookupModelSpec；nil 时回退链跳过 vendor 层。
 	VendorWindowLookup        func(string) (int, int)
@@ -2175,6 +2176,7 @@ func (s *AgentService) systemAssistantExecutionOptions(
 			return applier(callCtx, actorID, args)
 		}))
 	}
+	options = s.appendSystemModelToolOptions(options, meta, req, roleClass)
 	options = append(options, WithSystemAssistantMode(), withSystemAssistantRoleClass(roleClass),
 		withInternalToolResultGuard(func(value any) (port.GuardedToolResult, error) {
 			structured, ok := value.(map[string]any)
@@ -2183,6 +2185,44 @@ func (s *AgentService) systemAssistantExecutionOptions(
 			}
 			return guard.Validate(port.MCPToolResult{StructuredContent: structured}, nil)
 		}))
+	return options
+}
+
+// appendSystemModelToolOptions 装配模型工具闭包：list_models 全角色可见；
+// update_system_model 写路径在闭包内按 roleClass fail closed，member 明确
+// 拒绝且不触达 Registry。提取为独立方法以控制主函数圈复杂度。
+func (s *AgentService) appendSystemModelToolOptions(
+	options []ExecutionOption, meta ExecMeta, req ExecRequest, roleClass string,
+) []ExecutionOption {
+	if s.deps.ModelDetailsProvider != nil {
+		details := s.deps.ModelDetailsProvider
+		options = append(options, WithListModelsFn(func(callCtx context.Context) (map[string]any, error) {
+			models, listErr := details.ListTenantModelDetails(callCtx, meta.TenantID)
+			if listErr != nil {
+				return nil, fmt.Errorf("list tenant models: %w", listErr)
+			}
+			return map[string]any{"models": models}, nil
+		}))
+	}
+	if s.deps.Registry != nil {
+		actorID := req.UserID
+		updateModel := func(callCtx context.Context, model string) (map[string]any, error) {
+			if roleClass != "admin" && roleClass != "owner" {
+				// 写路径 fail closed：member 明确拒绝，不触达 Registry。
+				return nil, errors.New("更新平台助手模型需要管理员权限")
+			}
+			settings, updateErr := s.UpdateSystemAssistantModel(callCtx, model, actorID)
+			if updateErr != nil {
+				return nil, updateErr
+			}
+			return map[string]any{
+				"model":           settings.Model,
+				"ready":           settings.Ready,
+				"availableModels": settings.AvailableModels,
+			}, nil
+		}
+		options = append(options, WithUpdateSystemModelFn(updateModel))
+	}
 	return options
 }
 

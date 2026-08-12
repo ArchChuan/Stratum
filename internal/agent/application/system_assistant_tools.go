@@ -16,6 +16,8 @@ const (
 	ToolDiagnoseTenant        = domain.SystemAssistantToolDiagnoseTenant
 	ToolProposeResourceChange = domain.SystemAssistantToolProposeResourceChange
 	ToolApplyResourceChange   = domain.SystemAssistantToolApplyResourceChange
+	ToolListModels            = domain.SystemAssistantToolListModels
+	ToolUpdateSystemModel     = domain.SystemAssistantToolUpdateSystemModel
 )
 
 var ErrInvalidSystemAssistantToolArguments = errors.New("invalid system assistant tool arguments")
@@ -33,6 +35,20 @@ func SystemAssistantToolDefinitions() []port.ToolDefinition {
 			ProviderID: ToolDiagnoseTenant, CapabilityID: ToolDiagnoseTenant,
 			Description: "按当前登录成员权限只读诊断当前租户的应用状态。",
 			InputSchema: diagnoseTenantSchema(),
+		},
+		{
+			Name: ToolListModels, ProviderType: domain.ProviderTypeInternal,
+			ProviderID: ToolListModels, CapabilityID: ToolListModels,
+			Description: "列出当前租户全量可配置模型（含停用/embedding，标注 enabled 与能力）。",
+			InputSchema: jschema.Must(jschema.ClosedObject()).Map(),
+		},
+		{
+			Name: ToolUpdateSystemModel, ProviderType: domain.ProviderTypeInternal,
+			ProviderID: ToolUpdateSystemModel, CapabilityID: ToolUpdateSystemModel,
+			Description: "更新平台助手（系统助手）使用的模型。需要管理员权限，member 调用会被拒绝。",
+			InputSchema: jschema.Must(jschema.ClosedObject(
+				jschema.RequiredProp("model", jschema.StringRange(1, 0, "")),
+			)).Map(),
 		},
 	}
 }

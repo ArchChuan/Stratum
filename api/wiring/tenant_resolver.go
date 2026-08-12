@@ -140,6 +140,35 @@ func (r *tenantCapabilityResolver) GetChatModelContextWindow(ctx context.Context
 	return r.registry.GetChatModelContextWindow(ctx, tenantID, model)
 }
 
+// ListTenantModelDetails projects the full tenant model catalog (including
+// disabled and provider-managed models) into the platform-assistant DTO.
+// Registry unavailability fails closed so the assistant never presents an
+// empty catalog as healthy.
+func (r *tenantCapabilityResolver) ListTenantModelDetails(ctx context.Context, tenantID string) ([]agentdomain.TenantModelDetail, error) {
+	if r.registry == nil {
+		return nil, fmt.Errorf("tenant llm model catalogue: registry unavailable")
+	}
+	models, err := r.registry.ListModelsByTenantDetails(ctx, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("tenant llm model catalogue: %w", err)
+	}
+	details := make([]agentdomain.TenantModelDetail, 0, len(models))
+	for _, m := range models {
+		capabilities := make([]string, 0, len(m.Capabilities))
+		for _, capability := range m.Capabilities {
+			capabilities = append(capabilities, string(capability))
+		}
+		details = append(details, agentdomain.TenantModelDetail{
+			Model:           m.Name,
+			Provider:        m.ProviderID,
+			Capabilities:    capabilities,
+			Enabled:         m.Enabled,
+			ProviderManaged: m.ProviderManaged,
+		})
+	}
+	return details, nil
+}
+
 // InjectCompleter injects the per-tenant LLM completer into ctx for streaming.
 func (r *tenantCapabilityResolver) InjectCompleter(ctx context.Context, tenantID string) context.Context {
 	gw, ok := r.resolveGateway(ctx, tenantID)

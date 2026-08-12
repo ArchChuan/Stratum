@@ -12,6 +12,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
+	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -174,8 +175,8 @@ func systemAssistantDiagnosticCollectors(c *Container, a *Agent) map[domain.Diag
 		collectors[domain.DiagnosticAreaKnowledge] = knowledgeDiagnosticCollector(c.Knowledge.WorkspaceService, memberBindings)
 	}
 	if a != nil && a.TenantResolver != nil {
-		if diagnostics, ok := a.TenantResolver.(agentport.TenantModelDiagnosticProvider); ok {
-			collectors[domain.DiagnosticAreaModel] = modelDiagnosticCollector(diagnostics)
+		if details, ok := a.TenantResolver.(agentport.TenantModelDetailsProvider); ok {
+			collectors[domain.DiagnosticAreaModel] = modelDiagnosticCollector(details)
 		}
 	}
 	return collectors
@@ -473,17 +474,36 @@ func knowledgeIngestSummary(documents []knowledgeapp.DocumentView) string {
 		",completed=" + strconv.Itoa(completed) + ",failed=" + strconv.Itoa(failed)
 }
 
-func modelDiagnosticCollector(provider agentport.TenantModelDiagnosticProvider) diagnosticAreaCollector {
+func modelDiagnosticCollector(provider agentport.TenantModelDetailsProvider) diagnosticAreaCollector {
 	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, []domain.EvidenceGap, error) {
-		status, err := provider.DiagnosticModelStatus(ctx, req.TenantID)
+		models, err := provider.ListTenantModelDetails(ctx, req.TenantID)
 		if err != nil {
-			return nil, nil, err
+			// 单 area 失败降级为安全 gap：不阻断其余 area，也不泄漏原始错误。
+			return nil, []domain.EvidenceGap{{Area: domain.DiagnosticAreaModel,
+				Source: "managed_model_configuration", Code: domain.DiagnosticGapUnavailable}}, nil
 		}
-		statement := "model_configured=false"
-		if status.Configured {
-			statement = "model_configured=true"
+		enabled, disabled, chat, embedding := 0, 0, 0, 0
+		for _, m := range models {
+			if m.Enabled {
+				enabled++
+			} else {
+				disabled++
+			}
+			for _, capability := range m.Capabilities {
+				switch capability {
+				case string(llmgatewaydomain.CapChat):
+					chat++
+				case string(llmgatewaydomain.CapEmbedding):
+					embedding++
+				}
+			}
 		}
-		return []domain.DiagnosticFact{{Area: domain.DiagnosticAreaModel, Statement: statement,
-			Source: "managed_model_configuration", ObservedAt: time.Now().UTC()}}, nil, nil
+		statement := "catalog_total=" + strconv.Itoa(len(models)) +
+			" enabled=" + strconv.Itoa(enabled) +
+			" disabled=" + strconv.Itoa(disabled) +
+			" chat=" + strconv.Itoa(chat) +
+			" embedding=" + strconv.Itoa(embedding)
+		return []domain.DiagnosticFact{{Area: domain.DiagnosticAreaModel, ObjectID: "catalog",
+			Statement: statement, Source: "managed_model_configuration", ObservedAt: time.Now().UTC()}}, nil, nil
 	}
 }

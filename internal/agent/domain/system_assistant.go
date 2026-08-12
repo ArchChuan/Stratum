@@ -12,6 +12,18 @@ const (
 	CurrentSystemAssistantProfileVersion = "2026-08-08.v3"
 )
 
+// TenantModelDetail is the platform-assistant view of one tenant catalog
+// model. It is the cross-context DTO projected by the llmgateway registry;
+// the agent domain never reads provider internals (API keys, provider
+// secrets) through this projection.
+type TenantModelDetail struct {
+	Model           string   `json:"model"`
+	Provider        string   `json:"provider,omitempty"`
+	Capabilities    []string `json:"capabilities"`
+	Enabled         bool     `json:"enabled"`
+	ProviderManaged bool     `json:"providerManaged"`
+}
+
 // SystemAssistantProfile is an immutable, code-reviewed runtime definition.
 // Old versions remain addressable so historical traces and rollback targets
 // continue to resolve after a new version becomes active.

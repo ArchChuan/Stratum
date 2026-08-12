@@ -111,6 +111,8 @@ type ExecutionConfig struct {
 	DiagnosticFn              func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)
 	ProposalCreateFn          func(context.Context, map[string]any) (domain.ResourceChangeProposalArtifact, error)
 	ResourceChangeApplyFn     func(context.Context, map[string]any) (domain.ApplyResult, error)
+	ListModelsFn              func(context.Context) (map[string]any, error)
+	UpdateSystemModelFn       func(context.Context, string) (map[string]any, error)
 	InternalToolResultGuardFn func(any) (port.GuardedToolResult, error)
 }
 
@@ -886,6 +888,8 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		DiagnosticFn:               ec.cfg.DiagnosticFn,
 		ProposalCreateFn:           ec.cfg.ProposalCreateFn,
 		ResourceChangeApplyFn:      ec.cfg.ResourceChangeApplyFn,
+		ListModelsFn:               ec.cfg.ListModelsFn,
+		UpdateSystemModelFn:        ec.cfg.UpdateSystemModelFn,
 		InternalToolResultGuardFn:  ec.cfg.InternalToolResultGuardFn,
 		MaxLLMSteps:                ec.cfg.MaxSteps,
 		MaxContextTokens:           maxTokens,
@@ -1398,6 +1402,19 @@ func withProposalCreateFn(fn func(context.Context, map[string]any) (domain.Resou
 // (stratum_apply_resource_change) used by the system assistant tool.
 func withResourceChangeApplyFn(fn func(context.Context, map[string]any) (domain.ApplyResult, error)) ExecutionOption {
 	return func(cfg *ExecutionConfig) { cfg.ResourceChangeApplyFn = fn }
+}
+
+// WithListModelsFn attaches the in-process tenant model catalog capability
+// (stratum_list_models) used by the system assistant tool.
+func WithListModelsFn(fn func(context.Context) (map[string]any, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.ListModelsFn = fn }
+}
+
+// WithUpdateSystemModelFn attaches the in-process system assistant model
+// update capability (stratum_update_system_model) used by the system
+// assistant tool. The role gate lives inside the attached closure.
+func WithUpdateSystemModelFn(fn func(context.Context, string) (map[string]any, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.UpdateSystemModelFn = fn }
 }
 
 func withInternalToolResultGuard(fn func(any) (port.GuardedToolResult, error)) ExecutionOption {

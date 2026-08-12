@@ -7,6 +7,9 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -79,7 +82,7 @@ func TestSystemAssistantResolvesPlatformToolsInProcess(t *testing.T) {
 	require.NoError(t, err)
 	cfg := &ExecutionConfig{}
 	cfg.ApplyOptions(options)
-	require.Len(t, cfg.ExtraTools, 2)
+	require.Len(t, cfg.ExtraTools, 4)
 	for _, tool := range cfg.ExtraTools {
 		require.Equal(t, domain.ProviderTypeInternal, tool.ProviderType)
 		require.Equal(t, tool.Name, tool.CapabilityID)
@@ -116,20 +119,136 @@ func TestSystemAssistantAdminGetsProposalToolInProcess(t *testing.T) {
 	require.Equal(t, "admin", cfg.SystemAssistantRoleClass)
 	// Proposal tool is only injected when the proposal service is wired; the
 	// role-gated definition set itself is covered by the pure-function test.
-	require.Len(t, cfg.ExtraTools, 2)
+	require.Len(t, cfg.ExtraTools, 4)
 	require.Nil(t, cfg.ProposalCreateFn)
 }
 
 func TestSystemAssistantToolDefinitionsForRole(t *testing.T) {
-	require.Len(t, SystemAssistantToolDefinitionsForRole("member"), 2)
-	require.Len(t, SystemAssistantToolDefinitionsForRole("admin"), 4)
-	require.Len(t, SystemAssistantToolDefinitionsForRole("owner"), 4)
+	// 基础工具（含模型工具，D1 可见性不裁剪）对所有角色可见；propose/apply
+	// 仍按角色裁剪（Task 4 移除）。
+	require.Len(t, SystemAssistantToolDefinitionsForRole("member"), 4)
+	require.Len(t, SystemAssistantToolDefinitionsForRole("admin"), 6)
+	require.Len(t, SystemAssistantToolDefinitionsForRole("owner"), 6)
 	names := make([]string, 0)
 	for _, tool := range SystemAssistantToolDefinitionsForRole("admin") {
 		names = append(names, tool.Name)
 	}
 	require.Contains(t, names, domain.SystemAssistantToolApplyResourceChange)
 	require.NotContains(t, SystemAssistantToolDefinitionsForRole("member"), port.ToolDefinition{Name: domain.SystemAssistantToolApplyResourceChange})
+}
+
+func TestSystemAssistantToolDefinitionsIncludeModelTools(t *testing.T) {
+	names := map[string]bool{}
+	for _, d := range SystemAssistantToolDefinitions() {
+		names[d.Name] = true
+	}
+	if !names[domain.SystemAssistantToolListModels] {
+		t.Fatalf("expected %s in definitions, got %v", domain.SystemAssistantToolListModels, names)
+	}
+	if !names[domain.SystemAssistantToolUpdateSystemModel] {
+		t.Fatalf("expected %s in definitions, got %v", domain.SystemAssistantToolUpdateSystemModel, names)
+	}
+	require.Equal(t, domain.ProviderTypeInternal, defByName(SystemAssistantToolDefinitions(), domain.SystemAssistantToolListModels).ProviderType)
+	require.Equal(t, domain.ProviderTypeInternal, defByName(SystemAssistantToolDefinitions(), domain.SystemAssistantToolUpdateSystemModel).ProviderType)
+}
+
+func defByName(defs []port.ToolDefinition, name string) port.ToolDefinition {
+	for _, d := range defs {
+		if d.Name == name {
+			return d
+		}
+	}
+	return port.ToolDefinition{}
+}
+
+type assistantModelDetailsStub struct {
+	details []domain.TenantModelDetail
+	err     error
+}
+
+func (s *assistantModelDetailsStub) ListTenantModelDetails(
+	_ context.Context, _ string,
+) ([]domain.TenantModelDetail, error) {
+	return s.details, s.err
+}
+
+func TestSystemAssistantModelToolsAssemblyAndRoleGate(t *testing.T) {
+	details := &assistantModelDetailsStub{details: []domain.TenantModelDetail{
+		{Model: "qwen-plus", Provider: "provider-1", Capabilities: []string{"chat"}, Enabled: true},
+		{Model: "embed-model", Capabilities: []string{"embedding"}, Enabled: false, ProviderManaged: true},
+	}}
+	repo := new(mockAgentRepo)
+	validator := &stubTenantModelValidator{}
+	svc := NewAgentService(AgentServiceDeps{
+		Registry:             NewRegistry(repo, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		DiagnosticProvider:   &assistantDiagnosticStub{role: "member"},
+		OfficialDocsSearch:   func(_ context.Context, query string) ([]domain.Citation, error) { return nil, nil },
+		TenantModelValidator: validator,
+		TenantModelCatalog:   validator,
+		ModelDetailsProvider: details,
+		Logger:               zap.NewNop(),
+	})
+	system := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		LLMModel: "tenant-model", MaxIterations: 3,
+	}}
+	_, options, err := svc.assembleOptions(t.Context(), system, ExecRequest{UserID: "user-1"},
+		ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1")
+	require.NoError(t, err)
+	cfg := &ExecutionConfig{}
+	cfg.ApplyOptions(options)
+
+	// list_models 全角色可见：member 直接返回完整清单。
+	require.NotNil(t, cfg.ListModelsFn)
+	listResult, listErr := cfg.ListModelsFn(context.Background())
+	require.NoError(t, listErr)
+	require.Equal(t, details.details, listResult["models"])
+
+	// update_system_model 写路径 member 明确拒绝（fail closed），不触达 Registry。
+	require.NotNil(t, cfg.UpdateSystemModelFn)
+	_, updateErr := cfg.UpdateSystemModelFn(context.Background(), "qwen-plus")
+	require.ErrorContains(t, updateErr, "管理员权限")
+	repo.AssertNotCalled(t, "UpdateSystemAssistantModel", mock.Anything, mock.Anything)
+}
+
+func TestSystemAssistantAdminUpdateSystemModelExecutes(t *testing.T) {
+	repo := new(mockAgentRepo)
+	validator := &stubTenantModelValidator{}
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	svc := NewAgentService(AgentServiceDeps{
+		Registry:             NewRegistry(repo, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		DiagnosticProvider:   &assistantDiagnosticStub{role: "admin"},
+		OfficialDocsSearch:   func(_ context.Context, query string) ([]domain.Citation, error) { return nil, nil },
+		TenantModelValidator: validator,
+		TenantModelCatalog:   validator,
+		Logger:               zap.NewNop(),
+	})
+	repo.On("GetSystemAssistant", ctx).Return(&domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "existing-model",
+	}, true, nil)
+	repo.On("UpdateSystemAssistantModel", ctx, "qwen-plus", "", false, 0, 0,
+		mock.MatchedBy(func(a *auditdomain.ResourceChangeAuditEvent) bool {
+			return a != nil && a.ActorID == "user-1" && a.Operation == auditdomain.ChangeOpUpdate &&
+				a.ResourceKind == auditdomain.ResourceKindAgent
+		})).Return(&domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "qwen-plus",
+	}, nil).Once()
+	system := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		LLMModel: "tenant-model", MaxIterations: 3,
+	}}
+	_, options, err := svc.assembleOptions(t.Context(), system, ExecRequest{UserID: "user-1"},
+		ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1")
+	require.NoError(t, err)
+	cfg := &ExecutionConfig{}
+	cfg.ApplyOptions(options)
+
+	result, updateErr := cfg.UpdateSystemModelFn(ctx, "qwen-plus")
+	require.NoError(t, updateErr)
+	require.Equal(t, "qwen-plus", result["model"])
+	require.Equal(t, true, result["ready"])
+	require.Equal(t, []string{"qwen-plus", "qwen-plus-latest", "qwen-max"}, result["availableModels"])
+	repo.AssertExpectations(t)
 }
 
 func TestSystemAssistantWithoutModelFailsBeforeCapabilityResolution(t *testing.T) {
@@ -182,4 +301,65 @@ func TestBuildExecutionArtifactsPreservesAssistantFailureAsEvidenceGap(t *testin
 	require.Len(t, artifacts, 1)
 	require.NotNil(t, artifacts[0].DiagnosticReport)
 	require.Equal(t, "not_found", artifacts[0].DiagnosticReport.EvidenceGaps[0].Code)
+}
+
+// mockAgentRepo 是内部测试包的 port.AgentRepo stub（外部测试包 agent_service_test.go
+// 中已有同名类型，但内部测试包无法引用外部测试包符号，故此处独立定义）。
+type mockAgentRepo struct{ mock.Mock }
+
+func (m *mockAgentRepo) Register(_ context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ []string) error {
+	return m.Called(cfg).Error(0)
+}
+
+func (m *mockAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig, bool, error) {
+	args := m.Called(ctx, id)
+	return args.Get(0).(*domain.AgentConfig), args.Bool(1), args.Error(2)
+}
+
+func (m *mockAgentRepo) GetSystemAssistant(ctx context.Context) (*domain.AgentConfig, bool, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(*domain.AgentConfig), args.Bool(1), args.Error(2)
+}
+
+func (m *mockAgentRepo) GetAll(_ context.Context) ([]*domain.AgentConfig, error) {
+	args := m.Called()
+	return args.Get(0).([]*domain.AgentConfig), args.Error(1)
+}
+
+func (m *mockAgentRepo) Remove(_ context.Context, id string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return m.Called(id).Error(0)
+}
+
+func (m *mockAgentRepo) Update(_ context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool) error {
+	return m.Called(cfg).Error(0)
+}
+
+func (m *mockAgentRepo) UpdateSystemAssistantModel(
+	ctx context.Context, model, memoryScope string, checkpointEnabled bool, maxIterations, maxContextTokens int,
+	audit *auditdomain.ResourceChangeAuditEvent,
+) (*domain.AgentConfig, error) {
+	args := m.Called(ctx, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens, audit)
+	cfg, _ := args.Get(0).(*domain.AgentConfig)
+	return cfg, args.Error(1)
+}
+
+func (m *mockAgentRepo) UpdateSystemAssistantAll(
+	ctx context.Context, model, memoryScope string, checkpointEnabled bool, maxIterations, maxContextTokens, maxTokens int,
+	_ *auditdomain.ResourceChangeAuditEvent,
+) (*domain.AgentConfig, error) {
+	args := m.Called(ctx, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens, maxTokens)
+	cfg, _ := args.Get(0).(*domain.AgentConfig)
+	return cfg, args.Error(1)
+}
+
+// stubTenantModelValidator 同时实现 port.TenantChatModelValidator 与
+// port.TenantChatModelCatalog，目录与外部测试包版本一致。
+type stubTenantModelValidator struct{}
+
+func (s *stubTenantModelValidator) ValidateTenantChatModel(context.Context, string, string) error {
+	return nil
+}
+
+func (s *stubTenantModelValidator) ListTenantChatModels(context.Context, string) ([]string, error) {
+	return []string{"qwen-plus", "qwen-plus-latest", "qwen-max"}, nil
 }

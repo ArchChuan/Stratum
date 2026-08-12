@@ -151,17 +151,33 @@ func dispatchToolCall(toolCtx context.Context, tc port.ToolCall, s *ReActState, 
 		return execSearchKnowledgeTool(toolCtx, tc, s, toolStart, logger)
 	case "stratum_recall_memory":
 		return execRecallMemoryTool(toolCtx, tc, s, toolStart, logger)
-	case domain.SystemAssistantToolSearchOfficialDocs:
-		return execOfficialDocsSearchTool(toolCtx, tc, s, toolStart)
-	case domain.SystemAssistantToolDiagnoseTenant:
-		return execDiagnoseTenantTool(toolCtx, tc, s, toolStart)
-	case domain.SystemAssistantToolProposeResourceChange:
-		return execProposeResourceChangeTool(toolCtx, tc, s, toolStart)
-	case domain.SystemAssistantToolApplyResourceChange:
-		return execApplyResourceChangeTool(toolCtx, tc, s, toolStart)
 	default:
+		if result, matched := dispatchSystemAssistantTool(toolCtx, tc, s, toolStart); matched {
+			return result
+		}
 		return execMCPTool(toolCtx, tc, s, toolStart, provider, logger)
 	}
+}
+
+// dispatchSystemAssistantTool 分发系统助手内置工具（官方文档检索、
+// 租户诊断、资源变更提案/应用、模型清单/模型更新），避免主分发的
+// switch case 数推高圈复杂度。
+func dispatchSystemAssistantTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) (toolExecResult, bool) {
+	switch tc.Name {
+	case domain.SystemAssistantToolSearchOfficialDocs:
+		return execOfficialDocsSearchTool(toolCtx, tc, s, toolStart), true
+	case domain.SystemAssistantToolDiagnoseTenant:
+		return execDiagnoseTenantTool(toolCtx, tc, s, toolStart), true
+	case domain.SystemAssistantToolProposeResourceChange:
+		return execProposeResourceChangeTool(toolCtx, tc, s, toolStart), true
+	case domain.SystemAssistantToolApplyResourceChange:
+		return execApplyResourceChangeTool(toolCtx, tc, s, toolStart), true
+	case domain.SystemAssistantToolListModels:
+		return execListModelsTool(toolCtx, tc, s, toolStart), true
+	case domain.SystemAssistantToolUpdateSystemModel:
+		return execUpdateSystemModelTool(toolCtx, tc, s, toolStart), true
+	}
+	return toolExecResult{}, false
 }
 
 func execOfficialDocsSearchTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
@@ -218,6 +234,62 @@ func execDiagnoseTenantTool(toolCtx context.Context, tc port.ToolCall, s *ReActS
 		status:  domain.ToolTraceStatusSuccess,
 		artifact: &domain.SystemAssistantToolArtifact{
 			Tool: tc.Name, Evidence: &evidence, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "success",
+		},
+	}
+}
+
+// execListModelsTool 只读：返回当前租户全量可配置模型清单（含停用/
+// embedding，标注 enabled 与能力）。对任意角色可用，结果经守卫限界。
+func execListModelsTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
+	if !s.GovernedAssistant || s.ListModelsFn == nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "list models tool unavailable", content: "error: tool unavailable"}
+	}
+	callCtx, cancel := context.WithTimeout(toolCtx, constants.SystemAssistantToolTimeout)
+	content, callErr := s.ListModelsFn(callCtx)
+	cancel()
+	if callErr != nil {
+		message := safeAssistantToolError(callErr)
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: message, content: "error: " + message}
+	}
+	guarded, guardErr := guardInternalAssistantEvidence(s.InternalToolResultGuardFn, content)
+	if guardErr != nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: guardErr.Error(), content: "error: tool result exceeded safe bounds"}
+	}
+	return toolExecResult{
+		content: guarded,
+		status:  domain.ToolTraceStatusSuccess,
+		artifact: &domain.SystemAssistantToolArtifact{
+			Tool: tc.Name, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "success",
+		},
+	}
+}
+
+// execUpdateSystemModelTool 写路径：model 参数必填；角色门禁（member
+// 拒绝）位于装配闭包内，graph 层只负责参数校验与守卫。
+func execUpdateSystemModelTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
+	if !s.GovernedAssistant || s.UpdateSystemModelFn == nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "update system model tool unavailable", content: "error: tool unavailable"}
+	}
+	model, _ := tc.Arguments["model"].(string)
+	if model == "" {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "invalid tool arguments", content: "error: invalid tool arguments: model required"}
+	}
+	callCtx, cancel := context.WithTimeout(toolCtx, constants.SystemAssistantToolTimeout)
+	content, callErr := s.UpdateSystemModelFn(callCtx, model)
+	cancel()
+	if callErr != nil {
+		message := safeAssistantToolError(callErr)
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: message, content: "error: " + message}
+	}
+	guarded, guardErr := guardInternalAssistantEvidence(s.InternalToolResultGuardFn, content)
+	if guardErr != nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: guardErr.Error(), content: "error: tool result exceeded safe bounds"}
+	}
+	return toolExecResult{
+		content: guarded,
+		status:  domain.ToolTraceStatusSuccess,
+		artifact: &domain.SystemAssistantToolArtifact{
+			Tool: tc.Name, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "success",
 		},
 	}
 }
@@ -480,7 +552,9 @@ func isSystemAssistantTool(toolName string) bool {
 	switch toolName {
 	case domain.SystemAssistantToolSearchOfficialDocs,
 		domain.SystemAssistantToolDiagnoseTenant,
-		domain.SystemAssistantToolProposeResourceChange:
+		domain.SystemAssistantToolProposeResourceChange,
+		domain.SystemAssistantToolListModels,
+		domain.SystemAssistantToolUpdateSystemModel:
 		return true
 	default:
 		return false
@@ -632,7 +706,9 @@ func classifyToolProvider(name string, tools []port.ToolDefinition) toolProvider
 	case domain.SystemAssistantToolSearchOfficialDocs,
 		domain.SystemAssistantToolDiagnoseTenant,
 		domain.SystemAssistantToolProposeResourceChange,
-		domain.SystemAssistantToolApplyResourceChange:
+		domain.SystemAssistantToolApplyResourceChange,
+		domain.SystemAssistantToolListModels,
+		domain.SystemAssistantToolUpdateSystemModel:
 		return toolProviderRef{ToolType: domain.ToolTypeInternal, ProviderType: domain.ProviderTypeInternal,
 			ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
 	case "stratum_continue_reasoning":
