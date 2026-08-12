@@ -2,27 +2,19 @@
 package infrastructure
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
+	"net/url"
 	"sync"
-	"sync/atomic"
 	"time"
 
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
+	mcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
-
-const mcpProtocolVersion = constants.MCPProtocolVersion
 
 // ErrTransportTimeout is returned when an HTTP request is abandoned by ctx
 // deadline/cancel. It is the safe projection of a url.Error whose original
@@ -33,6 +25,35 @@ var ErrTransportTimeout = errors.New("mcp http transport timed out")
 // ErrClientClosed is returned when an in-flight request races with Disconnect
 // (or is issued against a client whose transport is no longer available).
 var ErrClientClosed = errors.New("mcp client closed")
+
+// unhealthyError reports whether err means the session or transport is dead,
+// so the manager's single-flight reconnect should rebuild a fresh session.
+//
+// ErrTransportFailed is deliberately NOT here: it is the projection of the
+// SDK's rejection family (transient 429/502/503/504 plus per-call JSON-RPC
+// errors), which the SDK explicitly keeps the connection alive for. Marking
+// unhealthy on one application-level tool error would tear down a session the
+// SDK deliberately preserved and rebuild it every MCPMinReconnectInterval
+// forever — and a successful call never restores the healthy flag, so the
+// rebuild loop would be permanent. Real connection death surfaces as
+// ErrSessionMissing / ErrClientClosed / ErrTransportTimeout instead, and the
+// manager's 30s health check catches any residual dead session.
+//
+// context.Canceled is excluded: it is the caller's own context, not a
+// server-side failure. An oversized SSE frame also does not reach here: the
+// SDK reports it as the generic "request terminated without response" (which
+// carries no distinguishable symbol), and it fails only that single call
+// closed while the session stays usable for new streams (verified in
+// TestInteropOversizedLineFailsSafely) — so no reconnect is warranted.
+func unhealthyError(err error) bool {
+	switch {
+	case errors.Is(err, mcpdomain.ErrSessionMissing),
+		errors.Is(err, ErrClientClosed),
+		errors.Is(err, ErrTransportTimeout):
+		return true
+	}
+	return false
+}
 
 // MCPClient 定义 MCP 客户端接口
 type MCPClient interface {
@@ -56,19 +77,24 @@ type BaseClient struct {
 	lastHealthy time.Time
 	mu          sync.RWMutex
 	logger      *zap.Logger
-	reqID       atomic.Int32
-	// 传输相关字段。租户 stdio 已禁用（doConnect 是唯一权威拒绝点），
-	// 不再存在子进程/管道字段；stdio 专属的 stdinLock/readMu 一并移除。
-	reqMu      sync.Mutex // serialises request periods (at most one in-flight request per client)
-	httpClient *http.Client
-	sessionID  string
+	// origin is the validated, normalized endpoint snapshot captured at
+	// doConnect. The round tripper compares every request URL against it
+	// before injecting credentials; config is a pointer and may be mutated
+	// externally, so the origin is never re-derived at request time.
+	origin *url.URL
+	// sdk and session hold the SDK client and its initialized session. Both
+	// are nil while disconnected. The SDK session is concurrency-safe (ids
+	// are allocated per request), so no request mutex is needed.
+	sdk     *mcp.Client
+	session *mcp.ClientSession
+	// urlPolicy gates the SSRF dial policy. Production construction leaves it
+	// at the zero value (URLPolicyStrict); only same-package tests flip it to
+	// URLPolicyAllowPrivate to exercise httptest loopback servers. No
+	// production call site may set it.
+	urlPolicy URLPolicyOption
 	// lastActivity records the wall time of the most recent CallTool / ListTools / ListResources.
 	lastActivity time.Time
-	// negotiatedVersion is set only after a valid initialize response.
-	negotiatedVersion string
 }
-
-func (c *BaseClient) nextID() int { return int(c.reqID.Add(1)) }
 
 func NewBaseClient(config *MCPServerConfig, logger *zap.Logger) *BaseClient {
 	now := time.Now()
@@ -117,27 +143,76 @@ func (c *BaseClient) doConnect(ctx context.Context) error {
 		return mcpdomain.ErrUnsupportedTransport
 	}
 
-	var err error
 	switch c.config.Transport {
 	case "http", "streamable-http":
-		err = c.connectHTTP(ctx)
 	default:
 		return fmt.Errorf("unsupported transport: %s", c.config.Transport)
 	}
 
-	if err != nil {
+	if err := c.connectStreamableHTTP(ctx); err != nil {
+		// ensureConnected holds c.mu here; markUnhealthy would re-acquire it
+		// and self-deadlock (non-reentrant RWMutex). It is also a no-op on a
+		// fresh client: healthy flips to true only on successful connect.
 		c.serverInfo.Status = "error"
 		c.serverInfo.Error = "connect_failed"
-		c.logger.Error("failed to connect", zap.String("error_category", "connect_failed"))
+		c.logger.Error("failed to connect",
+			zap.String("error_category", "connect_failed"),
+			zap.String("server_id", c.config.ID))
 		return err
 	}
 
 	c.connected = true
 	c.healthy = true
 	c.serverInfo.Status = "connected"
+	c.serverInfo.Error = ""
+	c.serverInfo.Protocol = c.session.InitializeResult().ProtocolVersion
 	c.serverInfo.LastUpdated = time.Now()
-	c.logger.Info("connected to MCP server")
+	c.logger.Info("connected to MCP server",
+		zap.String("protocol", c.serverInfo.Protocol))
 	return nil
+}
+
+// connectStreamableHTTP runs the SDK handshake over the hardened transport.
+// Errors are translated to safe sentinels before leaving this function.
+func (c *BaseClient) connectStreamableHTTP(ctx context.Context) error {
+	if c.config.URL == "" {
+		return mcpdomain.ErrInvalidServerURL
+	}
+	if c.config.Auth != nil && c.config.Auth.Type == mcpdomain.AuthTypeOAuth2 {
+		// OAuth2 拒绝落点 = doConnect：client-credentials 直配模型与 SDK
+		// OAuth flow 不对齐（SDK 需要 discovery/authorization-server 协商），
+		// 本次不做。OAuthHandler 保持 nil，这里拒绝即全链无 OAuth 路径。
+		return mcpdomain.ErrUnsupportedAuth
+	}
+	if c.config.Auth != nil && c.config.Auth.Type == mcpdomain.AuthTypeAPIKey && c.config.Auth.APIKeyHeader == "" {
+		// fail closed：禁止默认猜 X-API-Key 之类的通用头。
+		return mcpdomain.ErrUnsupportedAuth
+	}
+
+	origin, err := ValidateMCPURL(c.config.URL)
+	if err != nil {
+		return err
+	}
+
+	// SDK 要求非 nil Implementation（nil 直接 panic）；clientInfo 不含凭据。
+	sdkClient := mcp.NewClient(&mcp.Implementation{Name: "stratum", Version: "1.0"}, nil)
+	session, err := sdkClient.Connect(ctx, newSDKTransport(origin, c.config, c.urlPolicy),
+		&mcp.ClientSessionOptions{ProtocolVersion: constants.MCPProtocolVersion})
+	if err != nil {
+		return translateSDKError(err)
+	}
+	c.origin = origin
+	c.sdk = sdkClient
+	c.session = session
+	return nil
+}
+
+// markUnhealthy flips the health flag; the manager's single-flight reconnect
+// reacts to unhealthy clients.
+func (c *BaseClient) markUnhealthy() {
+	c.mu.Lock()
+	c.healthy = false
+	c.mu.Unlock()
 }
 
 func (c *BaseClient) ensureConnected(ctx context.Context) error {
@@ -163,12 +238,18 @@ func (c *BaseClient) Disconnect(ctx context.Context) error {
 	c.healthy = false
 	c.serverInfo.Status = "disconnected"
 	var result error
-	if c.httpClient != nil {
-		c.httpClient.CloseIdleConnections()
-		c.httpClient = nil
+	if c.session != nil {
+		// Session close tears down the standalone SSE stream and any
+		// in-flight request channels.
+		if err := c.session.Close(); err != nil && result == nil {
+			// Close 错误同样是 SDK 原文（可能带 server-controlled 文本），
+			// 上抛前投影；Stop/RemoveTenant 会 zap.Error 记录这个错误。
+			result = translateSDKError(err)
+		}
+		c.session = nil
+		c.sdk = nil
+		c.origin = nil
 	}
-	c.sessionID = ""
-	c.negotiatedVersion = ""
 	c.logger.Info("disconnected from MCP server")
 	return result
 }
@@ -192,27 +273,29 @@ func (c *BaseClient) CallTool(ctx context.Context, toolName string, input interf
 	if err := c.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
-
-	// 构建请求
-	req := MCPRequest{
-		JSONRPC: "2.0",
-		ID:      c.nextID(),
-		Method:  "tools/call",
-		Params: map[string]interface{}{
-			"name":      toolName,
-			"arguments": input,
-		},
+	c.mu.RLock()
+	session := c.session
+	c.mu.RUnlock()
+	if session == nil {
+		return nil, ErrClientClosed
 	}
 
-	// 发送请求并获取响应
-	resp, err := c.sendRequest(ctx, &req)
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: toolName, Arguments: input})
 	if err != nil {
-		c.logger.Error("failed to call tool", zap.String("tool", toolName), zap.Error(err))
+		err = translateSDKError(err)
+		if unhealthyError(err) {
+			// Session or transport gone: flag unhealthy so the manager's
+			// single-flight reconnect rebuilds a fresh session. Canceled
+			// errors pass through without marking (caller's own context).
+			c.markUnhealthy()
+		}
+		c.logger.Error("failed to call tool",
+			zap.String("tool", toolName),
+			zap.String("error_category", "call_failed"))
 		return nil, err
 	}
 	c.markActivity()
-
-	return resp.Result, nil
+	return result, nil
 }
 
 // ListTools 列出所有工具
@@ -220,26 +303,28 @@ func (c *BaseClient) ListTools(ctx context.Context) ([]*MCPTool, error) {
 	if err := c.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
-
-	req := MCPRequest{
-		JSONRPC: "2.0",
-		ID:      c.nextID(),
-		Method:  "tools/list",
+	c.mu.RLock()
+	session := c.session
+	c.mu.RUnlock()
+	if session == nil {
+		return nil, ErrClientClosed
 	}
 
-	resp, err := c.sendRequest(ctx, &req)
+	result, err := session.ListTools(ctx, &mcp.ListToolsParams{})
 	if err != nil {
+		err = translateSDKError(err)
+		if unhealthyError(err) {
+			c.markUnhealthy()
+		}
 		return nil, err
 	}
-
-	var toolsWrapper struct {
-		Tools []*MCPTool `json:"tools"`
-	}
-	data, _ := json.Marshal(resp.Result)
-	_ = json.Unmarshal(data, &toolsWrapper)
-	tools := toolsWrapper.Tools
-	if tools == nil {
-		tools = []*MCPTool{}
+	tools := make([]*MCPTool, 0, len(result.Tools))
+	for _, t := range result.Tools {
+		tools = append(tools, &MCPTool{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: mcpToolInputSchema(t.InputSchema),
+		})
 	}
 
 	c.mu.Lock()
@@ -250,31 +335,43 @@ func (c *BaseClient) ListTools(ctx context.Context) ([]*MCPTool, error) {
 	return tools, nil
 }
 
+// mcpToolInputSchema converts the SDK's any-typed input schema to the domain
+// map shape (an empty schema when the server sent something exotic).
+func mcpToolInputSchema(schema any) map[string]any {
+	if m, ok := schema.(map[string]any); ok {
+		return m
+	}
+	return map[string]any{}
+}
+
 // ListResources 列出所有资源
 func (c *BaseClient) ListResources(ctx context.Context) ([]*MCPResource, error) {
 	if err := c.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
-
-	req := MCPRequest{
-		JSONRPC: "2.0",
-		ID:      c.nextID(),
-		Method:  "resources/list",
+	c.mu.RLock()
+	session := c.session
+	c.mu.RUnlock()
+	if session == nil {
+		return nil, ErrClientClosed
 	}
 
-	resp, err := c.sendRequest(ctx, &req)
+	result, err := session.ListResources(ctx, &mcp.ListResourcesParams{})
 	if err != nil {
+		err = translateSDKError(err)
+		if unhealthyError(err) {
+			c.markUnhealthy()
+		}
 		return nil, err
 	}
-
-	var resWrapper struct {
-		Resources []*MCPResource `json:"resources"`
-	}
-	data, _ := json.Marshal(resp.Result)
-	_ = json.Unmarshal(data, &resWrapper)
-	resources := resWrapper.Resources
-	if resources == nil {
-		resources = []*MCPResource{}
+	resources := make([]*MCPResource, 0, len(result.Resources))
+	for _, r := range result.Resources {
+		resources = append(resources, &MCPResource{
+			URI:         r.URI,
+			Name:        r.Name,
+			Description: r.Description,
+			MimeType:    r.MIMEType,
+		})
 	}
 
 	c.mu.Lock()
@@ -292,306 +389,41 @@ func (c *BaseClient) GetServerInfo() *MCPServerInfo {
 	return c.serverInfo
 }
 
-// 私有方法
-
-func (c *BaseClient) connectHTTP(ctx context.Context) error {
-	if c.config.URL == "" {
-		return fmt.Errorf("URL not specified for HTTP transport")
-	}
-
-	c.httpClient = &http.Client{Timeout: c.config.Timeout}
-	initReq := c.newHTTPInitializeRequest()
-	resp, err := c.sendHTTPInitialize(ctx, &initReq)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close() //nolint:errcheck
-	initializeResult, err := validateHTTPInitializeResponse(resp, initReq.ID)
-	if err != nil {
-		return err
-	}
-	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
-		c.sessionID = sid
-	}
-	c.negotiatedVersion = initializeResult.ProtocolVersion
-	initialized := MCPRequest{JSONRPC: "2.0", Method: "notifications/initialized", Params: map[string]any{}}
-	// 本函数由 ensureConnected 的写锁调用（doConnect），状态字段已受保护；
-	// 不能走 RLock 快照路径（Go RWMutex 不可重入，锁内再 RLock 自死锁），
-	// 因此直接传字段快照给请求内核。
-	if err := c.sendNotificationWith(c.httpClient, c.sessionID, c.negotiatedVersion, ctx, &initialized); err != nil {
-		c.sessionID = ""
-		c.negotiatedVersion = ""
-		return err
-	}
-	c.logger.Info("HTTP connection established", zap.String("transport", c.config.Transport),
-		zap.String("server_id", c.config.ID))
-	return nil
-}
-
-type httpInitializeResult struct {
-	ProtocolVersion string          `json:"protocolVersion"`
-	Capabilities    json.RawMessage `json:"capabilities"`
-	ServerInfo      struct {
-		Name    string `json:"name"`
-		Version string `json:"version"`
-	} `json:"serverInfo"`
-}
-
-func (c *BaseClient) newHTTPInitializeRequest() MCPRequest {
-	return MCPRequest{
-		JSONRPC: "2.0",
-		ID:      c.nextID(),
-		Method:  "initialize",
-		Params: map[string]interface{}{
-			"protocolVersion": constants.MCPProtocolVersion,
-			"capabilities":    map[string]interface{}{},
-			"clientInfo":      map[string]interface{}{"name": "stratum", "version": "1.0"},
-		},
-	}
-}
-
-func (c *BaseClient) sendHTTPInitialize(ctx context.Context, initReq *MCPRequest) (*http.Response, error) {
-	data, err := json.Marshal(initReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal initialize request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", c.config.URL, bytes.NewReader(data))
-	if err != nil {
-		return nil, errors.New("MCP HTTP initialize request invalid")
-	}
-	if err := c.applyHTTPHeaders(ctx, req, false, ""); err != nil {
-		return nil, err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, errors.New("MCP HTTP initialize transport failed")
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		_ = resp.Body.Close()
-		return nil, fmt.Errorf("MCP HTTP initialize failed with status %d", resp.StatusCode)
-	}
-	return resp, nil
-}
-
-func validateHTTPInitializeResponse(resp *http.Response, requestID int) (httpInitializeResult, error) {
-	initializeResponse, err := decodeHTTPMCPResponse(resp)
-	if err != nil {
-		return httpInitializeResult{}, fmt.Errorf("decode MCP initialize response: %w", err)
-	}
-	if err := validateHTTPInitializeEnvelope(initializeResponse, requestID); err != nil {
-		return httpInitializeResult{}, err
-	}
-	var initializeResult httpInitializeResult
-	resultData, err := json.Marshal(initializeResponse.Result)
-	if err != nil {
-		return httpInitializeResult{}, errors.New("MCP initialize result invalid")
-	}
-	if err := json.Unmarshal(resultData, &initializeResult); err != nil {
-		return httpInitializeResult{}, errors.New("MCP initialize result invalid")
-	}
-	if err := validateHTTPInitializeResult(initializeResult); err != nil {
-		return httpInitializeResult{}, err
-	}
-	return initializeResult, nil
-}
-
-func validateHTTPInitializeEnvelope(response *MCPResponse, requestID int) error {
-	if response.JSONRPC != "2.0" || response.ID != requestID {
-		return errors.New("MCP initialize response envelope invalid")
-	}
-	if len(response.Error) > 0 && string(response.Error) != "null" {
-		return errors.New("MCP initialize protocol error")
-	}
-	return nil
-}
-
-func validateHTTPInitializeResult(result httpInitializeResult) error {
-	if result.ProtocolVersion != mcpProtocolVersion {
-		return errors.New("MCP initialize selected unsupported protocol version")
-	}
-	if len(result.Capabilities) == 0 || string(result.Capabilities) == "null" ||
-		result.ServerInfo.Name == "" || result.ServerInfo.Version == "" {
-		return errors.New("MCP initialize result incomplete")
-	}
-	return nil
-}
-
-func (c *BaseClient) sendRequest(ctx context.Context, req *MCPRequest) (*MCPResponse, error) {
-	// At most one request may be in flight per client: responses are
-	// correlated by request id on a shared transport, so concurrent requests
-	// would steal each other's responses. The lock spans the whole request
-	// period (write, read, timeout) but never connection lifecycle methods.
-	c.reqMu.Lock()
-	defer c.reqMu.Unlock()
-	var resp *MCPResponse
-	var err error
-	switch c.config.Transport {
-	case "http", "streamable-http":
-		resp, err = c.sendHTTPRequest(ctx, req)
-	default:
-		// stdio 已被 doConnect 拒绝；sendRequest 只会在已连接 client 上被
-		// 调用，走到这里说明连接路径与发送路径的 transport 判断不一致。
-		return nil, fmt.Errorf("unsupported transport: %s", c.config.Transport)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if len(resp.Error) > 0 && string(resp.Error) != "null" {
-		return nil, fmt.Errorf("MCP protocol error")
-	}
-	return resp, nil
-}
-
-func (c *BaseClient) sendHTTPRequest(ctx context.Context, req *MCPRequest) (*MCPResponse, error) {
-	// Capture shared state under the lock: Disconnect nils httpClient and
-	// clears sessionID/negotiatedVersion, so lock-free use would race and
-	// could panic on a nil client.
-	c.mu.RLock()
-	httpClient := c.httpClient
-	sessionID := c.sessionID
-	negotiatedVersion := c.negotiatedVersion
-	c.mu.RUnlock()
-	if httpClient == nil {
-		return nil, ErrClientClosed
-	}
-
-	data, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.config.URL, bytes.NewReader(data))
-	if err != nil {
-		return nil, errors.New("MCP HTTP request invalid")
-	}
-
-	if err := c.applyHTTPHeaders(ctx, httpReq, true, negotiatedVersion); err != nil {
-		return nil, err
-	}
-	if sessionID != "" {
-		httpReq.Header.Set("Mcp-Session-Id", sessionID)
-	}
-
-	resp, err := httpClient.Do(httpReq)
-	if err != nil {
-		// URL/query 不得进入错误文本（凭据防泄漏：url.Error 原文含完整
-		// URL）。超时/取消语义经 sentinel 保留，供调用方区分"慢 server"
-		// 与"连接失败"，且 errors.Is 可识别。
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return nil, ErrTransportTimeout
-		}
-		return nil, errors.New("MCP HTTP transport failed")
-	}
-	defer resp.Body.Close() //nolint:errcheck
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("MCP HTTP request failed with status %d", resp.StatusCode)
-	}
-
-	return decodeHTTPMCPResponse(resp)
-}
-
-// sendNotificationWith 是 notification 发送的请求内核。前三个参数必须是
-// 锁内快照：connectHTTP 初始化路径由 ensureConnected 的写锁保护，
-// 直接传字段值（见 connectHTTP）。
-func (c *BaseClient) sendNotificationWith(httpClient *http.Client, sessionID, negotiatedVersion string, ctx context.Context, notification *MCPRequest) error {
-	data, err := json.Marshal(notification)
-	if err != nil {
-		return fmt.Errorf("marshal MCP notification: %w", err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.config.URL, bytes.NewReader(data))
-	if err != nil {
-		return errors.New("MCP HTTP notification request invalid")
-	}
-	if err := c.applyHTTPHeaders(ctx, req, true, negotiatedVersion); err != nil {
-		return err
-	}
-	if sessionID != "" {
-		req.Header.Set("Mcp-Session-Id", sessionID)
-	}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return errors.New("MCP HTTP initialized notification transport failed")
-	}
-	defer resp.Body.Close() //nolint:errcheck
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("MCP HTTP initialized notification failed with status %d", resp.StatusCode)
-	}
-	return nil
-}
-
-func decodeHTTPMCPResponse(resp *http.Response) (*MCPResponse, error) {
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read MCP response: %w", err)
-	}
-	jsonBody := body
-	if ct := resp.Header.Get("Content-Type"); strings.Contains(ct, "text/event-stream") {
-		for _, line := range bytes.Split(body, []byte("\n")) {
-			if bytes.HasPrefix(line, []byte("data:")) {
-				jsonBody = bytes.TrimSpace(line[5:])
-				break
-			}
-		}
-	}
-	var response MCPResponse
-	if err := json.Unmarshal(jsonBody, &response); err != nil {
-		return nil, fmt.Errorf("unmarshal MCP response: %w", err)
-	}
-	return &response, nil
-}
-
-func (c *BaseClient) applyHTTPHeaders(
-	ctx context.Context,
-	req *http.Request,
-	includeProtocolVersion bool,
-	negotiatedVersion string,
-) error {
-	for name, value := range c.config.Headers {
-		req.Header.Set(name, value)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	if includeProtocolVersion {
-		req.Header.Set("MCP-Protocol-Version", negotiatedVersion)
-	}
-	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
-	return nil
-}
-
-// HealthCheck 执行健康检查
+// HealthCheck 执行健康检查。协议 ping 是最轻的探活方式（无状态副作用，
+// 所有符合 2025-06-18 的 server 必须实现）。
 func (c *BaseClient) HealthCheck(ctx context.Context) error {
 	c.mu.RLock()
 	connected := c.connected
 	c.mu.RUnlock()
 
 	if !connected {
-		c.mu.Lock()
-		c.healthy = false
-		c.mu.Unlock()
+		c.markUnhealthy()
 		return fmt.Errorf("not connected")
 	}
 
-	// 网络调用在锁外执行，不阻塞并发读
-	req := MCPRequest{
-		JSONRPC: "2.0",
-		ID:      c.nextID(),
-		Method:  "tools/list",
+	c.mu.RLock()
+	session := c.session
+	c.mu.RUnlock()
+	if session == nil {
+		return ErrClientClosed
 	}
 
-	_, err := c.sendRequest(ctx, &req)
+	err := session.Ping(ctx, &mcp.PingParams{})
 
 	c.mu.Lock()
-	if err != nil {
+	// Canceled 是调用方自己的 context，不是服务器故障：health probe 用短
+	// 超时时不得把健康的客户端标记为不健康。其余失败（含 ErrTransportFailed
+	// 投影的连接死亡）都标 unhealthy，触发 manager 的单飞重连。
+	if err != nil && !errors.Is(err, context.Canceled) {
 		c.healthy = false
-		c.logger.Warn("health check failed", zap.Error(err))
-	} else {
+		c.logger.Warn("health check failed",
+			zap.String("error_category", "health_check_failed"))
+	} else if err == nil {
 		c.healthy = true
 		c.lastHealthy = time.Now()
 	}
 	c.mu.Unlock()
 
-	return err
+	// 返回前翻译：SDK 错误原文可能回显 Authorization，不得上抛。
+	return translateSDKError(err)
 }

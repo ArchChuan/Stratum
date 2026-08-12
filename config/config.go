@@ -37,7 +37,11 @@ type Config struct {
 	// DataEncryptionKey 是 at-rest 加密的密钥材料（provider API key / MCP
 	// secret 等），独立于 JWT 签名密钥：轮换 JWT 私钥不影响密文可解，
 	// 未配置时回退 JWT 私钥派生以兼容存量密文（见 pkg/crypto.ResolveDataKey）。
-	DataEncryptionKey       string
+	DataEncryptionKey string
+	// MCPAllowPrivateTargets 允许 MCP 客户端连接 loopback/私网目标。仅
+	// e2e/本地验证环境设置（fixture 监听 127.0.0.1）；生产必须保持 false，
+	// 否则 SSRF 护栏（URLPolicyStrict）被整体削弱。
+	MCPAllowPrivateTargets  bool
 	GlobalAdminGitHubLogin  string
 	FrontendURL             string
 	GitHubCallbackURL       string
@@ -132,6 +136,7 @@ func Load() (*Config, error) {
 		GitHubUserURL:           userURL,
 		JWTPrivateKeyPEM:        getEnv("JWT_PRIVATE_KEY_PEM", ""),
 		DataEncryptionKey:       getEnv("DATA_ENCRYPTION_KEY", ""),
+		MCPAllowPrivateTargets:  os.Getenv("MCP_ALLOW_PRIVATE_TARGETS") == "true",
 		GlobalAdminGitHubLogin:  getEnv("GLOBAL_ADMIN_GITHUB_LOGIN", "ArchChuan"),
 		FrontendURL:             getEnv("FRONTEND_URL", "http://localhost:3002"),
 		GitHubCallbackURL:       getEnv("GITHUB_CALLBACK_URL", "http://localhost:8080/auth/github/callback"),

@@ -3,6 +3,7 @@ package infrastructure
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -352,4 +353,81 @@ func TestToolRegistryAsPortAdapter(t *testing.T) {
 	require.NoError(t, adapter.UnregisterServer("missing"))
 	// RegisterServer：注册不存在的 server → 发现失败错误传播。
 	require.Error(t, adapter.RegisterServer(tenantCtx(t, "t1"), "ghost"))
+}
+
+// TestSwapReconnectClientSkipsAfterDisconnect 验证 Fix #39:reconnect 与
+// Disconnect/Delete 竞态时,configs 已被成对删除的 server 不得被重连复活。
+// 此前 swapReconnectClient 只复查 clients,reconnect 在 teardown 之后完成
+// 会把已禁用 server 重新装回 map。
+func TestSwapReconnectClientSkipsAfterDisconnect(t *testing.T) {
+	m := newManagerWithFactory(t, nil)
+	key := tenantKey("t1", "s1")
+
+	old := &fakeMCPClient{}
+	m.clients[key] = old
+	m.configs[key] = &MCPServerConfig{ID: "s1"}
+
+	// Disconnect 语义:锁内成对删除 clients+configs。
+	m.mu.Lock()
+	delete(m.clients, key)
+	delete(m.configs, key)
+	m.mu.Unlock()
+
+	fresh := &fakeMCPClient{}
+	require.False(t, m.swapReconnectClient(context.Background(), key, old, fresh),
+		"reconnect must not resurrect a server torn down by Disconnect")
+	require.Equal(t, 1, fresh.disconnectCalls,
+		"loser fresh must be disconnected so its transport closes deterministically")
+	m.mu.RLock()
+	_, present := m.clients[key]
+	m.mu.RUnlock()
+	require.False(t, present, "no client may be installed for a removed server")
+}
+
+// TestSwapReconnectClientConcurrentWithDisconnect 并发压力:reconnect 与
+// teardown 反复交错时,终态不得残留已删除 server 的 client(修复前竞态
+// 会让 swap 在 delete 之后把 fresh 装回 map)。
+func TestSwapReconnectClientConcurrentWithDisconnect(t *testing.T) {
+	m := newManagerWithFactory(t, nil)
+	key := tenantKey("t1", "s1")
+	m.configs[key] = &MCPServerConfig{ID: "s1"}
+	m.clients[key] = &fakeMCPClient{}
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			m.mu.Lock()
+			delete(m.clients, key)
+			delete(m.configs, key)
+			m.mu.Unlock()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			// 总是带着 configs 仍在的假设竞争:swap 内部复查决定取舍。
+			m.swapReconnectClient(context.Background(), key, nil, &fakeMCPClient{})
+		}
+	}()
+	time.Sleep(50 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+
+	m.mu.RLock()
+	_, present := m.clients[key]
+	m.mu.RUnlock()
+	require.False(t, present, "no client may survive after teardown of its server")
 }

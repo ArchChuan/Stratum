@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"slices"
 	"time"
 
@@ -200,6 +201,15 @@ func (c *Container) buildMCP(ctx context.Context) error {
 	}
 	if err := manager.WithSecretKey(aesKey); err != nil {
 		return fmt.Errorf("build mcp: %w", err)
+	}
+	// e2e/本地验证的 fixture 监听 loopback；生产默认 Strict 拒绝私网目标。
+	if c.Config.MCPAllowPrivateTargets {
+		if os.Getenv("STRATUM_E2E_MODE") != "true" {
+			// 非 e2e 环境下放行私网目标会整体削弱 SSRF 护栏，必须显式告警。
+			c.Logger.Error("MCP_ALLOW_PRIVATE_TARGETS=true 且非 STRATUM_E2E_MODE: " +
+				"SSRF 护栏被削弱，禁止在生产环境设置")
+		}
+		manager.WithURLPolicy(mcp.URLPolicyAllowPrivate)
 	}
 	manager.SetMetrics(c.platformMetrics())
 	registry := mcp.NewMCPToolRegistry(manager, c.Logger)
