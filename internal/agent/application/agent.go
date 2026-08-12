@@ -693,7 +693,7 @@ func retryMinimalFinalRequest(ctx context.Context, ec agentExecContext, messages
 			TraceID: ec.cfg.TraceID, TenantID: ec.cfg.TenantID, Type: port.CapLLM,
 			LLM: &port.LLMCapRequest{
 				Model: ec.llmModel, Messages: messages,
-				Temperature: ec.cfg.Temperature, MaxTokens: ec.cfg.MaxTokens,
+				Temperature: ec.cfg.Temperature, MaxTokens: resolveMaxOutputTokens(ec.cfg.MaxTokens, ec.cfg.OutputReserve),
 			},
 		})
 	})
@@ -819,6 +819,18 @@ func promptVersionMap(systemPromptVersion string) map[string]string {
 	return map[string]string{"system_prompt": systemPromptVersion}
 }
 
+// resolveMaxOutputTokens 解析单次 LLM 请求的输出上限：显式 MaxTokens >
+// 已解析 OutputReserve（显式 > vendor maxOut > 常量）> 兜底常量。
+func resolveMaxOutputTokens(explicit, reserve int) int {
+	if explicit > 0 {
+		return explicit
+	}
+	if reserve > 0 {
+		return reserve
+	}
+	return constants.DefaultOutputReserveTokens
+}
+
 func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port.LLMMessage, maxTokens int) agentgraph.ReActState {
 	availableTools := buildBuiltinTools(ec.workspaceNames, ec.workspaceDescs,
 		len(ec.workspaceNames) > 0 && ec.cfg.RAGSearchFn != nil, a.MemoryInjector != nil)
@@ -838,7 +850,7 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		ConversationID:         ec.cfg.ConversationID,
 		Model:                  ec.llmModel,
 		Temperature:            ec.cfg.Temperature,
-		MaxTokens:              ec.cfg.MaxTokens,
+		MaxTokens:              resolveMaxOutputTokens(ec.cfg.MaxTokens, ec.cfg.OutputReserve),
 		CompactionRecentGroups: ec.cfg.CompactionRecentGroups,
 		CompactionSafetyRatio:  ec.cfg.CompactionSafetyRatio,
 		CompactionCooldownSec:  cooldownSec,
