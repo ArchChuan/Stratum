@@ -765,20 +765,13 @@ func (s *AgentService) updateSystemAssistant(ctx context.Context, cfg *domain.Ag
 	if tenantID == "" {
 		return AgentDTO{}, fmt.Errorf("update system assistant: tenant id required")
 	}
-	model := in.LLMModel
-	if model == "" {
-		model = cfg.LLMModel
+	model, err := s.resolveSystemAssistantModel(ctx, tenantID, cfg.LLMModel, in.LLMModel)
+	if err != nil {
+		return AgentDTO{}, err
 	}
-	if model != cfg.LLMModel {
-		if s.deps.TenantModelValidator != nil {
-			if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, tenantID, model); err != nil {
-				if errors.Is(err, domain.ErrAssistantModelUnavailable) ||
-					errors.Is(err, domain.ErrInvalidSystemAssistantModel) {
-					return AgentDTO{}, domain.ErrInvalidSystemAssistantModel
-				}
-				return AgentDTO{}, fmt.Errorf("update system assistant model: %w", err)
-			}
-		}
+	maxTokens, err := s.mergeSystemAssistantMaxTokens(ctx, in.MaxTokens, cfg.MaxTokens)
+	if err != nil {
+		return AgentDTO{}, err
 	}
 	memoryScope := in.MemoryScope
 	maxIterations := in.MaxIterations
@@ -794,12 +787,58 @@ func (s *AgentService) updateSystemAssistant(ctx context.Context, cfg *domain.Ag
 	if err != nil {
 		return AgentDTO{}, err
 	}
-	updated, err := s.deps.Registry.UpdateSystemAssistantAll(ctx, model, memoryScope, in.CheckpointEnabled, maxIterations, maxContextTokens, audit)
+	updated, err := s.deps.Registry.UpdateSystemAssistantAll(ctx, model, memoryScope, in.CheckpointEnabled, maxIterations, maxContextTokens, maxTokens, audit)
 	if err != nil {
 		return AgentDTO{}, fmt.Errorf("update system assistant: %w", err)
 	}
 	s.deps.Logger.Info("system assistant updated", zap.String("id", cfg.ID))
 	return cfgToDTO(updated.GetConfig()), nil
+}
+
+// resolveSystemAssistantModel merges the requested model with the persisted
+// value (unset keeps current) and validates only genuine changes, keeping the
+// settings-channel sentinel mapping.
+func (s *AgentService) resolveSystemAssistantModel(ctx context.Context, tenantID, persisted, requested string) (string, error) {
+	model := requested
+	if model == "" {
+		model = persisted
+	}
+	if model == persisted {
+		return model, nil
+	}
+	if s.deps.TenantModelValidator == nil {
+		return model, nil
+	}
+	if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, tenantID, model); err != nil {
+		if errors.Is(err, domain.ErrAssistantModelUnavailable) ||
+			errors.Is(err, domain.ErrInvalidSystemAssistantModel) {
+			return "", domain.ErrInvalidSystemAssistantModel
+		}
+		return "", fmt.Errorf("update system assistant model: %w", err)
+	}
+	return model, nil
+}
+
+// mergeSystemAssistantMaxTokens merges the requested max_tokens with the
+// persisted value (0 = keep current) and validates both input and merged
+// result. The pre-merge check rejects out-of-bounds PUT values; the post-merge
+// check stops a legacy out-of-bounds persisted value from being silently
+// rewritten by PUT 0. Both fail closed with ErrInvalidSamplingParameters and
+// never persist.
+func (s *AgentService) mergeSystemAssistantMaxTokens(ctx context.Context, requested, persisted int) (int, error) {
+	if err := s.validateSamplingParams(ctx, 0, requested, 0, 0); err != nil {
+		return 0, err
+	}
+	maxTokens := requested
+	if maxTokens <= 0 {
+		maxTokens = persisted
+	}
+	if maxTokens != 0 {
+		if err := s.validateSamplingParams(ctx, 0, maxTokens, 0, 0); err != nil {
+			return 0, err
+		}
+	}
+	return maxTokens, nil
 }
 
 // Delete removes an agent and cascades deletion to conversations and memories.

@@ -77,7 +77,7 @@ func proposalToolSchema() map[string]any {
 		domain.ResourceMCPConfig: jschema.Must(jschema.ClosedObject(
 			jschema.RequiredProp("name", jschema.StringRange(1, 0, "")),
 			jschema.RequiredProp("version", jschema.String("")),
-			jschema.RequiredProp("transport", jschema.Must(jschema.Enum("", "stdio", "streamable-http"))),
+			jschema.RequiredProp("transport", jschema.Must(jschema.Enum("", "streamable-http"))),
 			jschema.RequiredProp("timeoutSec", jschema.Integer(jschema.Ptr(minProposalMCPTimeoutSec), jschema.Ptr(maxProposalMCPTimeoutSec), "")),
 			jschema.OptionalProp("command", jschema.String("")),
 			jschema.OptionalProp("args", jschema.Array(jschema.String(""), 0, 0, false, "")),

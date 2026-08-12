@@ -12,7 +12,7 @@ import (
 
 func TestGetServerConfigDatabaseFailureIsNotNotFound(t *testing.T) {
 	pool := postgrestest.NewPool(t)
-	manager := NewClientManager(zap.NewNop(), nil, pool, "")
+	manager := NewClientManager(zap.NewNop(), nil, pool)
 	pool.Close()
 	ctx := tenantdb.WithTenant(t.Context(), &tenantdb.TenantContext{
 		TenantID: "database_failure",

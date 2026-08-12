@@ -77,7 +77,7 @@ func TestPlatformManagedServerMutationsAreRejectedBeforeLifecycleChange(t *testi
 			return s.DeleteServer(t.Context(), "stratum-platform-mcp", "user-1")
 		}},
 		{name: "disconnect", act: func(s *MCPService) error {
-			return s.DisconnectServer(t.Context(), "stratum-platform-mcp")
+			return s.DisconnectServer(t.Context(), "stratum-platform-mcp", "user-1")
 		}},
 		// Reconnect is intentionally allowed for platform-managed servers;
 		// it restores connectivity after idle eviction without modifying config.

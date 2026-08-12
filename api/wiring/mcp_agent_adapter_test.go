@@ -16,7 +16,7 @@ import (
 
 func TestMCPAgentToolAdapterKeepsStableExposedIDAndRawToolName(t *testing.T) {
 	logger := zap.NewNop()
-	manager := mcp.NewClientManager(logger, nil, nil, "")
+	manager := mcp.NewClientManager(logger, nil, nil)
 	registry := mcp.NewMCPToolRegistry(manager, logger)
 	catalog := mcp.NewMCPToolCatalog("orders", manager, logger)
 	catalog.AddToolForTest(&mcp.MCPToolHandle{

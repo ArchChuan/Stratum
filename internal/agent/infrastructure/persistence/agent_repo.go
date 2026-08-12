@@ -88,6 +88,20 @@ func packSamplingParameters(cfg *domain.AgentConfig) (string, error) {
 	return string(b), nil
 }
 
+// packMaxTokensFragment renders the parameters merge fragment for the system
+// assistant update. 0 = unset (skip), mirroring packSamplingParameters' skip-zero
+// semantics so an old client PUT cannot erase stored sampling parameters.
+func packMaxTokensFragment(maxTokens int) (string, error) {
+	if maxTokens <= 0 {
+		return "{}", nil
+	}
+	b, err := json.Marshal(map[string]any{"max_tokens": maxTokens})
+	if err != nil {
+		return "", fmt.Errorf("pack max tokens fragment: %w", err)
+	}
+	return string(b), nil
+}
+
 // packAllSamplingParameters builds the full JSONB map including explicit
 // nulls for zero sampling fields. A JSONB null == explicit clear: under
 // overall-replace semantics (promote) a zero field must erase a previously
@@ -798,20 +812,30 @@ func (r *PgAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model stri
 // (unchanged) bindings in ONE transaction so the change audit lands with the
 // business write atomically. Formerly UpdateSystemAssistantModel +
 // UpdateSystemAssistantBindings in two separate transactions.
-func (r *PgAgentRepo) UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, checkpointEnabled bool, maxIterations, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+func (r *PgAgentRepo) UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, checkpointEnabled bool, maxIterations, maxContextTokens, maxTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	var cfg domain.AgentConfig
 	var agentType string
+	var rawParams string
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		fragment, err := packMaxTokensFragment(maxTokens)
+		if err != nil {
+			return err
+		}
 		if err := tx.QueryRow(ctx, `UPDATE agents SET llm_model=$1, memory_scope=$2, checkpoint_enabled=$3,
-			max_iterations=$4, max_context_tokens=$5, updated_at=NOW()
+			max_iterations=$4, max_context_tokens=$5,
+			parameters = COALESCE(parameters, '{}'::jsonb) || $6::jsonb,
+			updated_at=NOW()
 			WHERE system_key='stratum.platform_assistant'
 			RETURNING id, name, type, description, system_prompt, llm_model,
-			          max_iterations, max_context_tokens, memory_scope, system_key, checkpoint_enabled, created_by`, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens).
+			          max_iterations, max_context_tokens, memory_scope, system_key, checkpoint_enabled, created_by, parameters`, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens, fragment).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
-				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CheckpointEnabled, &cfg.CreatedBy); err != nil {
+				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CheckpointEnabled, &cfg.CreatedBy, &rawParams); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("update system assistant: %w", domain.ErrNotFound)
 			}
+			return fmt.Errorf("update system assistant: %w", err)
+		}
+		if err := unpackSamplingParameters(rawParams, &cfg); err != nil {
 			return fmt.Errorf("update system assistant: %w", err)
 		}
 		if err := loadAgentRelations(ctx, tx, &cfg); err != nil {

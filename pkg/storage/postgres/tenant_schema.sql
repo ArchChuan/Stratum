@@ -1190,8 +1190,10 @@ ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS version TEXT NOT NULL DEFAULT '
 ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS headers JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS auth_config JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS retry_config JSONB NOT NULL DEFAULT '{}';
-ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS owner_node TEXT;
-ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS owner_heartbeat TIMESTAMPTZ;
+-- stdio failover 已删除（租户 stdio 全链禁用）：幂等清理历史列，随租户
+-- provision 应用；零迁移立场，存量租户在下次 provision 时自动生效。
+ALTER TABLE mcp_configs DROP COLUMN IF EXISTS owner_node;
+ALTER TABLE mcp_configs DROP COLUMN IF EXISTS owner_heartbeat;
 
 -- chat_messages: rename role 'agent' → 'assistant' (LLM protocol alignment).
 -- Idempotent: drop old check, backfill rows, re-add with new constraint.

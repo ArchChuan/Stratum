@@ -11,6 +11,7 @@ import (
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
@@ -189,6 +190,36 @@ func TestExecute_NonContextLengthErrorNoDegrade(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid parameter schema")
 	require.Len(t, gw.requests, 1, "参数校验类 400 直接终止，无降级重试")
+}
+
+// TestExecute_MaxTokensResolvedWithFallback 验证执行层兜底（生产故障：
+// max_tokens=0 被 omitempty 丢弃 → 智谱 400）：无 WithMaxTokens 时单次
+// LLM 请求携带 DefaultOutputReserveTokens；WithMaxTokens(512) 时携带 512。
+func TestExecute_MaxTokensResolvedWithFallback(t *testing.T) {
+	cases := []struct {
+		name   string
+		option agent.ExecutionOption
+		want   int
+	}{
+		{"falls back to default reserve when unset", nil, constants.DefaultOutputReserveTokens},
+		{"uses explicit max tokens", agent.WithMaxTokens(512), 512},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newReActAgent()
+			gw := &mockCapGW{responses: []port.CapabilityResponse{{Content: "42"}}}
+			a.SetCapGateway(gw)
+
+			opts := []agent.ExecutionOption{agent.WithTenantID("t1")}
+			if tc.option != nil {
+				opts = append(opts, tc.option)
+			}
+			_, err := a.Execute(context.Background(), "hi", opts...)
+			require.NoError(t, err)
+			require.Len(t, gw.requests, 1, "直接回答只发一次 LLM 请求")
+			require.Equal(t, tc.want, gw.requests[0].LLM.MaxTokens)
+		})
+	}
 }
 
 // TestIsFinalRequest 覆盖 isFinalRequest 语义：图终止时最后一条消息是

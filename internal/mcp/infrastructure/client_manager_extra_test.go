@@ -57,7 +57,7 @@ func tenantCtx(t *testing.T, tenantID string) context.Context {
 
 func newManagerWithFactory(t *testing.T, factory func(*MCPServerConfig, *zap.Logger) MCPClient) *ClientManager {
 	t.Helper()
-	m := NewClientManager(zap.NewNop(), nil, nil, "node-1")
+	m := NewClientManager(zap.NewNop(), nil, nil)
 	m.clientFactory = factory
 	return m
 }

@@ -107,6 +107,34 @@ func TestComposeSystemAssistantProfileReplacesProtectedFieldsAndPreservesTenantR
 	}
 }
 
+func TestComposeSystemAssistantProfileManagedBranchPreservesSamplingFields(t *testing.T) {
+	// B1 修复回归:托管分支此前丢弃采样字段(只透传 MaxIterations/
+	// MaxContextTokens),落库值在运行时组装时被清零,GET 恒读 0。
+	profile := BuiltinSystemAssistantProfile()
+	want := &domain.AgentConfig{
+		ID: "assistant-1", SystemKey: domain.SystemAssistantKey,
+		LLMModel:               "qwen-plus",
+		Temperature:            0.7,
+		MaxTokens:              2048,
+		CompactionRecentGroups: 4,
+		CompactionSafetyRatio:  0.8,
+		CheckpointEnabled:      true,
+	}
+
+	got, err := ComposeSystemAssistantProfile(want, profile)
+	if err != nil {
+		t.Fatalf("ComposeSystemAssistantProfile() error = %v", err)
+	}
+	if got.Temperature != want.Temperature || got.MaxTokens != want.MaxTokens ||
+		got.CompactionRecentGroups != want.CompactionRecentGroups ||
+		got.CompactionSafetyRatio != want.CompactionSafetyRatio {
+		t.Fatalf("managed branch dropped sampling fields: got %#v, want %#v", got, want)
+	}
+	if got.CheckpointEnabled != want.CheckpointEnabled {
+		t.Fatalf("tenant checkpoint not preserved: got %v, want %v", got.CheckpointEnabled, want.CheckpointEnabled)
+	}
+}
+
 func TestComposeSystemAssistantProfileFailsClosedForInvalidProfile(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -179,7 +207,7 @@ func (r systemAssistantProfileRepo) Update(_ context.Context, _ *domain.AgentCon
 func (r systemAssistantProfileRepo) UpdateSystemAssistantModel(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	return nil, nil
 }
-func (r systemAssistantProfileRepo) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+func (r systemAssistantProfileRepo) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	return nil, nil
 }
 func (r systemAssistantProfileRepo) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {

@@ -1,5 +1,5 @@
 import { ArrowLeftOutlined } from '@ant-design/icons';
-import { Button, Form, Skeleton, Typography } from 'antd';
+import { Alert, Button, Form, Skeleton, Typography } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { MCPAuthSection } from '../components/MCPAuthSection';
@@ -45,8 +45,16 @@ export const EditMCPPage = () => {
         onFinish={handleFinish}
         initialValues={initialValues ?? undefined}
       >
+        {transport === 'stdio' && (
+          <Alert
+            type="warning"
+            showIcon
+            message="传输方式已停用，请改用 streamable-http"
+            style={{ marginBottom: 16 }}
+          />
+        )}
         <MCPBasicSection />
-        <MCPTransportSection transport={transport} />
+        <MCPTransportSection />
         {isHTTP && (
           <MCPAuthSection
             authType={authType}

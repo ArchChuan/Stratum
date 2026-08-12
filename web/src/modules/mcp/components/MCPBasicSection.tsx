@@ -11,7 +11,6 @@ const { Option } = Select;
 const { Text } = Typography;
 
 const TRANSPORT_DESCS: Record<string, string> = {
-  stdio: '通过标准输入/输出通信，适合本地命令行工具',
   'streamable-http': '流式 HTTP，MCP 2025-03-26 规范推荐方式',
 };
 

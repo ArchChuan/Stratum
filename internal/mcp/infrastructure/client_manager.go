@@ -12,7 +12,6 @@ import (
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
-	"github.com/byteBuilderX/stratum/internal/mcp/infrastructure/mcpnode"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
@@ -39,18 +38,10 @@ type ClientManager struct {
 	wg         sync.WaitGroup
 	pool       *pgxpool.Pool
 
-	// emptyTenantWarnOnce 保证空 tenantID 的 heartbeat 告警只输出一次
-	// （生产恒非空，仅测试构造空 tenantKey，见 refreshHeartbeat）。
-	emptyTenantWarnOnce sync.Once
-
 	// serverCtx is the lifecycle context for spawned child processes.
 	// Cancelled only when the server shuts down, not on HTTP request end.
 	serverCtx    context.Context
 	serverCancel context.CancelFunc
-
-	// nodeID identifies this instance in a multi-pod deployment. Only
-	// stdio servers owned by this node are restored/spawned locally.
-	nodeID string
 
 	clientFactory func(*MCPServerConfig, *zap.Logger) MCPClient
 
@@ -76,7 +67,7 @@ func (m *ClientManager) WithSecretKey(key [32]byte) error {
 
 // NewClientManager 创建新的客户端管理器
 func NewClientManager(
-	logger *zap.Logger, poolConfig *ConnectionPoolConfig, pool *pgxpool.Pool, nodeID string,
+	logger *zap.Logger, poolConfig *ConnectionPoolConfig, pool *pgxpool.Pool,
 ) *ClientManager {
 	if poolConfig == nil {
 		poolConfig = &ConnectionPoolConfig{
@@ -85,9 +76,6 @@ func NewClientManager(
 			MaxRetries:     3,
 			RetryBackoff:   1 * time.Second,
 		}
-	}
-	if nodeID == "" {
-		nodeID = mcpnode.NodeID()
 	}
 
 	manager := &ClientManager{
@@ -99,7 +87,6 @@ func NewClientManager(
 		poolConfig: poolConfig,
 		stopCh:     make(chan struct{}),
 		pool:       pool,
-		nodeID:     nodeID,
 		metrics:    observability.NoopMetrics{},
 	}
 	//nolint:gosec // serverCancel is called in Stop()
@@ -929,19 +916,15 @@ func (m *ClientManager) configFromDBRow(r mcpConfigRow) (*MCPServerConfig, error
 }
 
 func (m *ClientManager) restoreServer(ctx context.Context, tenantID string, cfg *MCPServerConfig) {
-	// stdio servers are node-local — only the owning node spawns.
+	// stdio 已全链禁用（doConnect 唯一权威拒绝点）：存量 stdio 行不尝试
+	// 连接也不 spawn 任何进程，仅记录一次并跳过。改写成 streamable-http
+	// 的存量行在下次更新后走正常恢复路径。
 	if cfg.Transport == "stdio" {
-		claimed, claimErr := m.claimOwnership(ctx, tenantID, cfg.ID)
-		if claimErr != nil {
-			m.logger.Warn("RestoreFromDB: claim ownership failed",
-				zap.String("tenant_id", tenantID),
-				zap.String("server_id", cfg.ID),
-				zap.Error(claimErr))
-			return
-		}
-		if !claimed {
-			return // owned by another node
-		}
+		m.metrics.IncComponentError("mcp-server-restore", "stdio_disabled")
+		m.logger.Warn("RestoreFromDB: skip disabled stdio MCP server",
+			zap.String("tenant_id", tenantID),
+			zap.String("server_id", cfg.ID))
+		return
 	}
 
 	connectCtx := tenantdb.WithTenant(ctx, &tenantdb.TenantContext{
@@ -956,218 +939,6 @@ func (m *ClientManager) restoreServer(ctx context.Context, tenantID string, cfg 
 		m.logger.Info("RestoreFromDB: reconnected MCP server",
 			zap.String("tenant_id", tenantID),
 			zap.String("server_id", cfg.ID))
-	}
-}
-
-// claimOwnership atomically adopts a stdio server for this node. Only
-// succeeds when owner_node is empty or the previous heartbeat is stale.
-func (m *ClientManager) claimOwnership(ctx context.Context, tenantID, serverID string) (bool, error) {
-	if m.pool == nil {
-		return true, nil // single node with no DB fallback
-	}
-	var claimed bool
-	err := tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
-		var ownerNode string
-		var heartbeat time.Time
-		if err := tx.QueryRow(ctx, `
-			SELECT COALESCE(owner_node,''), COALESCE(owner_heartbeat, '1970-01-01'::timestamptz)
-			FROM mcp_configs WHERE id=$1 FOR UPDATE`,
-			serverID,
-		).Scan(&ownerNode, &heartbeat); err != nil {
-			return err
-		}
-		if ownerNode == "" || time.Since(heartbeat) > mcpnode.FailoverTimeout {
-			_, err := tx.Exec(ctx, `
-				UPDATE mcp_configs SET owner_node=$1, owner_heartbeat=NOW()
-				WHERE id=$2`, m.nodeID, serverID)
-			if err != nil {
-				return err
-			}
-			claimed = true
-		}
-		return nil
-	})
-	return claimed, err
-}
-
-// StartHeartbeat starts a background goroutine that refreshes the
-// owner_heartbeat for every stdio server this node owns.
-func (m *ClientManager) StartHeartbeat(interval time.Duration) {
-	if interval <= 0 {
-		interval = mcpnode.HeartbeatInterval
-	}
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-m.stopCh:
-				return
-			case <-ticker.C:
-				m.refreshHeartbeat()
-			}
-		}
-	}()
-}
-
-// stdioOwned 记录本节点拥有的 stdio server 及其所属租户。
-type stdioOwned struct {
-	tenantID string
-	serverID string
-}
-
-func (m *ClientManager) refreshHeartbeat() {
-	if m.pool == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	m.mu.RLock()
-	owned := make(map[string]stdioOwned)
-	for key, cfg := range m.configs {
-		if cfg.Transport != "stdio" {
-			continue
-		}
-		// key 格式 tenantID:serverID（见 tenantKey）。
-		parts := strings.SplitN(key, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		owned[key] = stdioOwned{tenantID: parts[0], serverID: cfg.ID}
-	}
-	m.mu.RUnlock()
-	for _, o := range owned {
-		if o.tenantID == "" {
-			// 生产路径（Connect/RestoreFromDB/scanOrphaned）构造的 key 恒非空，
-			// 空 tenantID 仅出现在测试手工构造场景：Warn 一次即可，避免每轮
-			// heartbeat ERROR 日志噪音。
-			m.emptyTenantWarnOnce.Do(func() {
-				m.logger.Warn("heartbeat: skip stdio server with empty tenant_id",
-					zap.String("server_id", o.serverID))
-			})
-			continue
-		}
-		// mcp_configs 是 tenant-schema 表：heartbeat 必须走租户边界封装
-		// （search_path 切换），否则在 public schema 下必然 42P01。
-		// 失败记 ERROR 日志并继续，禁止吞错。
-		tctx := tenantdb.WithTenant(ctx, &tenantdb.TenantContext{
-			TenantID: o.tenantID, Role: tenantdb.RoleTenantAdmin,
-		})
-		err := tenantdb.ExecTenant(tctx, m.pool, func(qctx context.Context, tx pgx.Tx) error {
-			_, execErr := tx.Exec(qctx,
-				`UPDATE mcp_configs SET owner_heartbeat=NOW()
-				 WHERE id=$1 AND owner_node=$2`,
-				o.serverID, m.nodeID)
-			return execErr
-		})
-		if err != nil {
-			m.logger.Error("heartbeat: refresh owner_heartbeat failed",
-				zap.String("tenant_id", o.tenantID),
-				zap.String("server_id", o.serverID),
-				zap.Error(err))
-		}
-	}
-}
-
-// StartFailoverScanner periodically scans for stdio servers whose owner
-// heartbeat has expired and attempts to take them over.
-func (m *ClientManager) StartFailoverScanner(interval time.Duration) {
-	if interval <= 0 {
-		interval = mcpnode.FailoverTimeout
-	}
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-m.stopCh:
-				return
-			case <-ticker.C:
-				m.scanOrphaned()
-			}
-		}
-	}()
-}
-
-func (m *ClientManager) scanOrphaned() {
-	if m.pool == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	// We need to query across all tenant schemas. For simplicity,
-	// iterate tenants and check each one.
-	schemas, err := tenantdb.ListTenantSchemas(ctx, m.pool)
-	if err != nil {
-		m.logger.Warn("failover scan: list tenants failed", zap.Error(err))
-		return
-	}
-	for _, schema := range schemas {
-		tenantID := strings.TrimPrefix(schema, "tenant_")
-		_ = tenantdb.ExecTenant(ctx, m.pool, func(qctx context.Context, tx pgx.Tx) error {
-			rows, qErr := tx.Query(qctx, `
-				SELECT id FROM mcp_configs
-				WHERE transport='stdio'
-				  AND owner_heartbeat < NOW() - $1::interval`,
-				fmt.Sprintf("%.0f seconds", mcpnode.FailoverTimeout.Seconds()))
-			if qErr != nil {
-				return qErr
-			}
-			defer rows.Close()
-			var orphans []string
-			for rows.Next() {
-				var id string
-				if scanErr := rows.Scan(&id); scanErr != nil {
-					return scanErr
-				}
-				orphans = append(orphans, id)
-			}
-			_ = rows.Err()
-			for _, serverID := range orphans {
-				claimed, claimErr := m.claimOwnership(ctx, tenantID, serverID)
-				if claimErr != nil {
-					m.logger.Warn("failover claim error",
-						zap.String("tenant_id", tenantID),
-						zap.String("server_id", serverID),
-						zap.Error(claimErr))
-					continue
-				}
-				if !claimed {
-					continue
-				}
-				m.logger.Warn("failover: taking over orphaned stdio server",
-					zap.String("tenant_id", tenantID),
-					zap.String("server_id", serverID))
-				// Restore single server via Connect.
-				cfg, cfgErr := m.GetServerConfig(ctx, serverID)
-				if cfgErr != nil {
-					m.logger.Warn("failover: get config failed",
-						zap.String("server_id", serverID),
-						zap.Error(cfgErr))
-					continue
-				}
-				// Remove stale local state if any.
-				m.mu.Lock()
-				key := tenantKey(tenantID, serverID)
-				if old, ok := m.clients[key]; ok {
-					delete(m.clients, key)
-					delete(m.configs, key)
-					m.cache.Delete(key)
-					_ = disconnectMCPClient(old)
-				}
-				m.mu.Unlock()
-				if connErr := m.Connect(ctx, cfg, nil, "", nil); connErr != nil {
-					m.logger.Warn("failover: connect failed",
-						zap.String("server_id", serverID),
-						zap.Error(connErr))
-				}
-			}
-			return nil
-		})
 	}
 }
 
