@@ -18,6 +18,9 @@ var ProvisionAllTenantSchemas = postgres.ProvisionAllTenantSchemas
 // EnsureDefaultTenant re-exports postgres.EnsureDefaultTenant.
 var EnsureDefaultTenant = postgres.EnsureDefaultTenant
 
+// ResolveDefaultTenantID re-exports postgres.ResolveDefaultTenantID.
+var ResolveDefaultTenantID = postgres.ResolveDefaultTenantID
+
 // ListTenantSchemas re-exports postgres.ListTenantSchemas.
 var ListTenantSchemas = postgres.ListTenantSchemas
 

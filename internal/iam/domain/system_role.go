@@ -18,10 +18,13 @@ type TenantMembership struct {
 }
 
 // DeriveSystemRole computes SystemRole from user's tenant memberships.
-// Logic: if user has default tenant membership, map role; else user.
+// Logic: if user has the default tenant membership, map role; else user.
+// The default tenant is identified by its resolved id (bootstrap 后解析的真实
+// UUID，见 constants.ResolvedDefaultTenantID)——tenants.id 是 UUID，字面
+// "tenant_default" 永远不会出现在真实 membership 里。
 func DeriveSystemRole(memberships []TenantMembership) SystemRole {
 	for _, m := range memberships {
-		if m.TenantID == constants.DefaultTenantID {
+		if m.TenantID == constants.ResolvedDefaultTenantID() {
 			switch m.Role {
 			case "root":
 				return SystemRoleGlobalAdmin
