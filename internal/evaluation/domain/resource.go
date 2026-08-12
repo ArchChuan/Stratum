@@ -17,6 +17,9 @@ const (
 	ResourceKindAgent     ResourceKind = "agent"
 	ResourceKindMCP       ResourceKind = "mcp"
 	ResourceKindKnowledge ResourceKind = "knowledge"
+	// ResourceKindMechanism 被测对象是机制面模型档案（model_profiles 族档位）：
+	// 基准集 × 档案矩阵评测（机制基线设计 §5），adapter 用档案声明的模型/模板执行 case。
+	ResourceKindMechanism ResourceKind = "mechanism"
 )
 
 func (k ResourceKind) Validate() error {
@@ -24,7 +27,7 @@ func (k ResourceKind) Validate() error {
 		return errors.New("resource kind required")
 	}
 	switch k {
-	case ResourceKindSkill, ResourceKindAgent, ResourceKindMCP, ResourceKindKnowledge:
+	case ResourceKindSkill, ResourceKindAgent, ResourceKindMCP, ResourceKindKnowledge, ResourceKindMechanism:
 		return nil
 	default:
 		return fmt.Errorf("unsupported resource kind: %s", k)

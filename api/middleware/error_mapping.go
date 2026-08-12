@@ -72,6 +72,8 @@ var errorStatusTable = map[error]int{
 	agentdomain.ErrProposalNotFound:               http.StatusNotFound,
 	agentdomain.ErrNotFound:                       http.StatusNotFound,
 	mechanismapp.ErrProfileNotFound:               http.StatusNotFound,
+	mechanismapp.ErrMatrixNoProfiles:              http.StatusConflict,
+	mechanismapp.ErrAdoptInvalidTransition:        http.StatusConflict,
 	memoryapp.ErrNotFound:                         http.StatusNotFound,
 	memorydomain.ErrEntryNotFound:                 http.StatusNotFound,
 	memorydomain.ErrSessionNotFound:               http.StatusNotFound,

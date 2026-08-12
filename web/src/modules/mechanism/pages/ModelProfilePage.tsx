@@ -1,9 +1,10 @@
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Button, Card, Space, Table, Tag, Typography, message } from 'antd';
+import { Button, Card, Space, Table, Tabs, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useCallback, useEffect, useState } from 'react';
 
 import { mechanismApi } from '../api/mechanism.api';
+import { MatrixWorkbench } from '../components/MatrixWorkbench';
 import { ProfileEditDrawer } from '../components/ProfileEditDrawer';
 import type { Profile } from '../model/mechanism';
 
@@ -13,6 +14,7 @@ const STATUS_COLORS: Record<string, string> = { active: 'green', draft: 'orange'
 const STATUS_LABELS: Record<string, string> = { active: '生效', draft: '建档' };
 
 export const ModelProfilePage = () => {
+  const [tab, setTab] = useState('profiles');
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [editOpen, setEditOpen] = useState(false);
@@ -84,42 +86,60 @@ export const ModelProfilePage = () => {
 
   return (
     <div style={{ maxWidth: 1080, margin: '0 auto', padding: '24px 16px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <div>
-          <Typography.Title level={4} style={{ marginBottom: 4 }}>
-            模型档案
-          </Typography.Title>
-          <Typography.Text type="secondary">
-            机制基线按模型族建档（prompt 模板 / 管线模型 / 生效状态），平台管理面依附默认租户迭代；消费路径自动取用生效档案。
-          </Typography.Text>
-        </div>
-        <Space>
-          <Button icon={<ReloadOutlined />} onClick={() => void reload()} loading={loading}>
-            刷新
-          </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            新建档案
-          </Button>
-        </Space>
-      </div>
+      <Typography.Title level={4} style={{ marginBottom: 4 }}>
+        模型档案
+      </Typography.Title>
+      <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
+        机制基线按模型族建档（prompt 模板 / 管线模型 / 生效状态），平台管理面依附默认租户迭代；评测矩阵闭环驱动模型升级采纳。
+      </Typography.Text>
 
-      <Card size="small" style={{ borderRadius: 12, border: '1px solid #f0f0f0' }}>
-        <Table<Profile>
-          rowKey="family_key"
-          columns={columns}
-          dataSource={profiles}
-          loading={loading}
-          pagination={false}
-          locale={{ emptyText: '暂无模型档案，点击右上角新建' }}
-          onRow={(row) => ({ onDoubleClick: () => openEdit(row) })}
-        />
-      </Card>
+      <Tabs
+        activeKey={tab}
+        onChange={setTab}
+        items={[
+          {
+            key: 'profiles',
+            label: '模型档案',
+            children: (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+                  <Space>
+                    <Button icon={<ReloadOutlined />} onClick={() => void reload()} loading={loading}>
+                      刷新
+                    </Button>
+                    <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+                      新建档案
+                    </Button>
+                  </Space>
+                </div>
 
-      <ProfileEditDrawer
-        profile={editing}
-        open={editOpen}
-        onClose={() => setEditOpen(false)}
-        onSaved={() => void reload()}
+                <Card size="small" style={{ borderRadius: 12, border: '1px solid #f0f0f0' }}>
+                  <Table<Profile>
+                    rowKey="family_key"
+                    columns={columns}
+                    dataSource={profiles}
+                    loading={loading}
+                    pagination={false}
+                    locale={{ emptyText: '暂无模型档案，点击右上角新建' }}
+                    onRow={(row) => ({ onDoubleClick: () => openEdit(row) })}
+                  />
+                </Card>
+
+                <ProfileEditDrawer
+                  profile={editing}
+                  open={editOpen}
+                  onClose={() => setEditOpen(false)}
+                  onSaved={() => void reload()}
+                />
+              </>
+            ),
+          },
+          {
+            key: 'matrix',
+            label: '评测矩阵',
+            children: <MatrixWorkbench />,
+          },
+        ]}
       />
     </div>
   );

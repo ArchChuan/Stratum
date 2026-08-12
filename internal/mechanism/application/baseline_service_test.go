@@ -37,6 +37,8 @@ func (f *fakeRepo) Upsert(_ context.Context, p domain.Profile) error {
 	}
 	for i, existing := range f.profiles {
 		if existing.FamilyKey == p.FamilyKey {
+			// 模拟 SQL 层 ON CONFLICT：version=model_profiles.version+1
+			p.Version = existing.Version + 1
 			f.profiles[i] = p
 			return nil
 		}

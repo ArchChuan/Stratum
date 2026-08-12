@@ -42,3 +42,45 @@ export interface UpsertProfileInput {
   status?: ProfileStatus;
   baseline?: Partial<ProfileBaseline>;
 }
+
+// —— 评测矩阵工作台（阶段3）——
+
+export const benchmarkSuiteSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().optional().default(''),
+  active_revision: z.string().optional().default(''),
+  case_count: z.number().optional().default(0),
+});
+export type BenchmarkSuite = z.infer<typeof benchmarkSuiteSchema>;
+
+export const matrixCellSchema = z.object({
+  family_key: z.string(),
+  display_name: z.string().optional().default(''),
+  status: z.string().optional().default(''),
+  fingerprint: z.string().optional().default(''),
+  version: z.number().optional().default(0),
+  enrich_model: z.string().optional().default(''),
+  summary_model: z.string().optional().default(''),
+  run_id: z.string().optional().default(''),
+  passed: z.boolean().optional().default(false),
+  pass_rate: z.number().optional().default(0),
+  total_cost: z.number().optional().default(0),
+  avg_latency: z.number().optional().default(0),
+  total_cases: z.number().optional().default(0),
+  frontier: z.boolean().optional().default(false),
+});
+export type MatrixCell = z.infer<typeof matrixCellSchema>;
+
+export const matrixReportSchema = z.object({
+  suites: z.array(benchmarkSuiteSchema).default([]),
+  cells: z.array(matrixCellSchema).default([]),
+  frontier_keys: z.array(z.string()).default([]),
+});
+export type MatrixReport = z.infer<typeof matrixReportSchema>;
+
+export const runMatrixResultSchema = z.object({
+  suite_revision_id: z.string().optional().default(''),
+  triggered_count: z.number().optional().default(0),
+});
+export type RunMatrixResult = z.infer<typeof runMatrixResultSchema>;

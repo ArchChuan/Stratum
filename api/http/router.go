@@ -567,7 +567,7 @@ func registerMechanism(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 	if c.Mechanism == nil || c.Mechanism.Service == nil {
 		return
 	}
-	h := handler.NewMechanismHandler(c.Mechanism.Service, c.Logger)
+	h := handler.NewMechanismHandler(c.Mechanism.Service, c.Mechanism.Matrix, c.Logger)
 	// 管理面整体 admin + 默认租户：普通租户（含其 admin）一律 403。
 	profiles := r.Group("/mechanism/profiles",
 		protectedTenantMiddleware(c, middleware.RequireTenantRole("admin"), middleware.RequireDefaultTenant())...)
@@ -576,6 +576,18 @@ func registerMechanism(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 		profiles.GET("", h.List)
 		profiles.GET("/:familyKey", h.Get)
 		profiles.PUT("", h.Upsert)
+	}
+	// 评测矩阵工作台（阶段3）：与档案管理同权限门槛。evaluation 缺库时
+	// Matrix 为 nil → 不挂载（端点 404，而非空报告/静默降级）。
+	if c.Mechanism.Matrix != nil {
+		matrix := r.Group("/mechanism/matrix",
+			protectedTenantMiddleware(c, middleware.RequireTenantRole("admin"), middleware.RequireDefaultTenant())...)
+		matrix.Use(requireActive)
+		{
+			matrix.GET("", h.MatrixReport)
+			matrix.POST("/runs", h.RunMatrix)
+			matrix.POST("/adopt", h.AdoptProfile)
+		}
 	}
 }
 
