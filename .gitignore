@@ -128,6 +128,7 @@ bin/
 /scripts/update-docs-daily.sh
 /test-results/
 /web/test-results/
+/web/playwright-report/
 
 # Pre-commit framework
 .pre-commit-framework/
