@@ -282,6 +282,45 @@ func TestChatStore_ArtifactRoundTrip(t *testing.T) {
 	}
 }
 
+// TestExecutionArtifactsAllTypesRoundTrip pins the full artifact type set the
+// execution layer can produce — proposal and direct-apply evidence included —
+// so encodeExecutionArtifacts (the AddMessage gate) never rejects a reply the
+// agent just generated (regression: assistant replies were dropped on save).
+func TestExecutionArtifactsAllTypesRoundTrip(t *testing.T) {
+	now := time.Now()
+	artifacts := []domain.ExecutionArtifact{
+		{Type: "citations", ProfileVersion: "2026-08-08.v3", Citations: []domain.Citation{{DocumentID: "doc-1", Section: "s", URL: "u", Title: "t", ProductVersion: "v", Excerpt: "e"}}},
+		{Type: "diagnostic_report", ProfileVersion: "2026-08-08.v3", DiagnosticReport: &domain.DiagnosticReport{
+			Facts: []domain.DiagnosticFact{}, Inferences: []string{}, EvidenceGaps: []domain.EvidenceGap{},
+			RecommendedActions: []string{}, Citations: []domain.Citation{}, Steps: []domain.DiagnosticStep{},
+		}},
+		{Type: "resource_change_proposal", ProfileVersion: "2026-08-08.v3", ResourceChangeProposal: &domain.ResourceChangeProposalArtifact{
+			ID: "proposal-1", ResourceKind: domain.ResourceAgent, Operation: domain.OperationUpdate,
+			Status: domain.StatusReadyForReview, Summary: "update agent model", ExpiresAt: now,
+		}},
+		{Type: "resource_change_direct_apply", ProfileVersion: "2026-08-08.v3", DirectApply: &domain.SystemAssistantDirectApplyArtifact{
+			Tool: domain.SystemAssistantToolApplyResourceChange, ResourceKind: domain.ResourceAgent,
+			Operation: domain.OperationUpdate, ResourceID: "agent-1", Outcome: "success",
+		}},
+	}
+	raw, err := encodeExecutionArtifacts(artifacts)
+	if err != nil {
+		t.Fatalf("encode all artifact types: %v", err)
+	}
+	got, err := decodeExecutionArtifacts(raw)
+	if err != nil {
+		t.Fatalf("decode all artifact types: %v", err)
+	}
+	if len(got) != len(artifacts) {
+		t.Fatalf("want %d artifacts, got %d", len(artifacts), len(got))
+	}
+	for i, a := range got {
+		if a.Type != artifacts[i].Type {
+			t.Fatalf("artifact %d type mismatch: %s != %s", i, a.Type, artifacts[i].Type)
+		}
+	}
+}
+
 func TestChatStore_HistoricalMessageHydratesEmptyArtifacts(t *testing.T) {
 	store, mock := newChatStoreWithMock(t)
 	defer mock.Close()
@@ -317,13 +356,17 @@ func TestChatStore_MalformedArtifactsReturnError(t *testing.T) {
 
 func TestDecodeExecutionArtifactsRejectsInvalidPersistedShapes(t *testing.T) {
 	tests := map[string]string{
-		"null":                 `null`,
-		"unknown top field":    `[{"type":"citations","profileVersion":"v1","citations":[],"extra":1}]`,
-		"unknown nested field": `[{"type":"diagnostic_report","profileVersion":"v1","diagnosticReport":{"facts":[],"inferences":[],"evidenceGaps":[],"recommendedActions":[],"citations":[],"steps":[],"extra":1}}]`,
-		"empty artifact":       `[{}]`,
-		"wrong discriminator":  `[{"type":"other","profileVersion":"v1"}]`,
-		"exclusive fields":     `[{"type":"citations","profileVersion":"v1","citations":[],"diagnosticReport":{"facts":[],"inferences":[],"evidenceGaps":[],"recommendedActions":[],"citations":[],"steps":[]}}]`,
-		"trailing json":        `[] {}`,
+		"null":                   `null`,
+		"unknown top field":      `[{"type":"citations","profileVersion":"v1","citations":[],"extra":1}]`,
+		"unknown nested field":   `[{"type":"diagnostic_report","profileVersion":"v1","diagnosticReport":{"facts":[],"inferences":[],"evidenceGaps":[],"recommendedActions":[],"citations":[],"steps":[],"extra":1}}]`,
+		"empty artifact":         `[{}]`,
+		"wrong discriminator":    `[{"type":"other","profileVersion":"v1"}]`,
+		"exclusive fields":       `[{"type":"citations","profileVersion":"v1","citations":[],"diagnosticReport":{"facts":[],"inferences":[],"evidenceGaps":[],"recommendedActions":[],"citations":[],"steps":[]}}]`,
+		"proposal exclusive":     `[{"type":"resource_change_proposal","profileVersion":"v1","resourceChangeProposal":{"id":"p1","resourceKind":"agent","operation":"update","status":"draft","summary":"s","expiresAt":"2026-08-12T00:00:00Z"},"citations":[]}]`,
+		"direct apply exclusive": `[{"type":"resource_change_direct_apply","profileVersion":"v1","directApply":{"tool":"stratum_apply_resource_change","resourceKind":"agent","operation":"update","resourceId":"a1","outcome":"success"},"diagnosticReport":{"facts":[],"inferences":[],"evidenceGaps":[],"recommendedActions":[],"citations":[],"steps":[]}}]`,
+		"invalid proposal enum":  `[{"type":"resource_change_proposal","profileVersion":"v1","resourceChangeProposal":{"id":"p1","resourceKind":"bogus","operation":"update","status":"draft","summary":"s"}}]`,
+		"invalid apply outcome":  `[{"type":"resource_change_direct_apply","profileVersion":"v1","directApply":{"tool":"stratum_apply_resource_change","resourceKind":"agent","operation":"update","resourceId":"a1","outcome":"maybe"}}]`,
+		"trailing json":          `[] {}`,
 	}
 	for name, raw := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -347,6 +390,17 @@ func TestChatStoreRejectsInvalidArtifactsBeforeTransaction(t *testing.T) {
 		"unsafe object":    {{Type: "diagnostic_report", ProfileVersion: "v1", DiagnosticReport: &domain.DiagnosticReport{Facts: []domain.DiagnosticFact{{Area: domain.DiagnosticAreaAgent, ObjectID: "password=secret", Statement: "ok", Source: "source"}}}}},
 		"invalid area":     {{Type: "diagnostic_report", ProfileVersion: "v1", DiagnosticReport: &domain.DiagnosticReport{Facts: []domain.DiagnosticFact{{Area: "global", Statement: "ok", Source: "source"}}}}},
 		"prose code":       {{Type: "diagnostic_report", ProfileVersion: "v1", DiagnosticReport: &domain.DiagnosticReport{Steps: []domain.DiagnosticStep{{Tool: "tool", Outcome: "maybe later", ErrorCode: "provider said no because prose"}}}}},
+		"invalid proposal kind": {
+			{Type: "resource_change_proposal", ProfileVersion: "v1", ResourceChangeProposal: &domain.ResourceChangeProposalArtifact{
+				ID: "p1", ResourceKind: "bogus", Operation: domain.OperationCreate, Status: domain.StatusDraft, Summary: "s",
+			}},
+		},
+		"invalid apply outcome": {
+			{Type: "resource_change_direct_apply", ProfileVersion: "v1", DirectApply: &domain.SystemAssistantDirectApplyArtifact{
+				Tool: domain.SystemAssistantToolApplyResourceChange, ResourceKind: domain.ResourceAgent,
+				Operation: domain.OperationUpdate, ResourceID: "a1", Outcome: "maybe",
+			}},
+		},
 	}
 	for name, artifacts := range tests {
 		t.Run(name, func(t *testing.T) {
