@@ -156,6 +156,15 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 		c.Logger,
 	).WithBaselineService(c.Evaluation.BaselineService).WithAgentRevisionApplier(c.Evaluation.AgentRevisionApplier).
 		WithTestCaseGenerator(c.Evaluation.TestCaseGenerator)
+	if c.Agent != nil && c.Agent.ApprovalService != nil {
+		// D4：member 写操作创建审批（缺装配时 handler 内部 fail closed 503）。
+		h = h.WithApprovalService(c.Agent.ApprovalService)
+		// 角色分流现查（单事实源）：不信任 JWT role claim 的陈旧窗口。
+		// 仅当完整 resource stack 装配时注入；否则 handler 回退 claim（测试路径）。
+		if roles := c.Agent.RoleResolver; roles != nil {
+			h = h.WithRoleResolver(roles)
+		}
+	}
 	requireAdmin := middleware.RequireTenantRole("admin")
 	evaluations := r.Group("/evaluations", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	{
@@ -168,21 +177,23 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 		evaluations.GET("/candidates", requireAdmin, h.ListCandidates)
 		evaluations.GET("/experiments", h.ListExperiments)
 		evaluations.GET("/resources/:kind/:id/timeline", h.Timeline)
-		evaluations.POST("/resources/:kind/:id/baseline", requireAdmin, requireActive, h.CreateBaseline)
-		evaluations.POST("/suites", requireAdmin, requireActive, h.CreateSuite)
-		evaluations.POST("/suites/:id/publish", requireAdmin, requireActive, h.PublishSuite)
-		evaluations.POST("/suites/:id/generate", requireAdmin, requireActive, h.GenerateSuiteCases)
+		// D4：11 个评测写端点放宽为 requireActive，handler 内按角色分流——
+		// member 创建 evaluation_action 审批返回 202，admin/owner 直接执行。
+		evaluations.POST("/resources/:kind/:id/baseline", requireActive, h.CreateBaseline)
+		evaluations.POST("/suites", requireActive, h.CreateSuite)
+		evaluations.POST("/suites/:id/publish", requireActive, h.PublishSuite)
+		evaluations.POST("/suites/:id/generate", requireActive, h.GenerateSuiteCases)
 		evaluations.GET("/suites/:id/draft", requireAdmin, requireActive, h.GetSuiteDraft)
 		evaluations.PUT("/suites/:id/draft/cases/:caseId", requireAdmin, requireActive, h.UpdateDraftCase)
-		evaluations.POST("/runs", requireAdmin, requireActive, h.EnqueueRun)
+		evaluations.POST("/runs", requireActive, h.EnqueueRun)
 		evaluations.GET("/runs/:id", requireAdmin, h.GetRun)
 		evaluations.GET("/jobs/:id", requireAdmin, h.GetJob)
-		evaluations.POST("/optimizations", requireAdmin, requireActive, h.GenerateOptimization)
-		evaluations.POST("/experiments", requireAdmin, requireActive, h.CreateExperiment)
-		evaluations.POST("/candidates/:id/reject", requireAdmin, requireActive, h.RejectCandidate)
-		evaluations.POST("/experiments/:id/pause", requireAdmin, requireActive, h.PauseExperiment)
-		evaluations.POST("/experiments/:id/promote", requireAdmin, requireActive, h.PromoteExperiment)
-		evaluations.POST("/experiments/:id/rollback", requireAdmin, requireActive, h.RollbackExperiment)
+		evaluations.POST("/optimizations", requireActive, h.GenerateOptimization)
+		evaluations.POST("/experiments", requireActive, h.CreateExperiment)
+		evaluations.POST("/candidates/:id/reject", requireActive, h.RejectCandidate)
+		evaluations.POST("/experiments/:id/pause", requireActive, h.PauseExperiment)
+		evaluations.POST("/experiments/:id/promote", requireActive, h.PromoteExperiment)
+		evaluations.POST("/experiments/:id/rollback", requireActive, h.RollbackExperiment)
 		evaluations.POST("/feedback", requireActive, h.RecordFeedback)
 	}
 }
@@ -391,7 +402,7 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 	if c.Agent == nil || c.Agent.Service == nil {
 		return
 	}
-	agentHandler := handler.NewAgentHandler(c.Agent.Service, c.Logger)
+	agentHandler := handler.NewAgentHandler(c.Agent.Service, c.Logger).WithActionExecutor(c.Agent.ActionExecutor)
 	chatHandler := handler.NewChatHandler(c.Agent.ChatStore, c.Logger)
 
 	requireAdmin := middleware.RequireTenantRole("admin")
@@ -406,6 +417,11 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		agents.GET("/tool-approvals", agentHandler.ListToolApprovals)
 		agents.POST("/tool-approvals/:approvalID/decision", requireAdmin, requireActive, agentHandler.DecideToolApproval)
 		agents.POST("/tool-approvals/:approvalID/resume", requireAdmin, requireActive, agentHandler.ResumeToolApproval)
+		// D4：审批工作台——历史/详情/执行/指定审批人。
+		agents.GET("/tool-approvals/history", requireAdmin, requireActive, agentHandler.ListApprovalHistory)
+		agents.GET("/tool-approvals/:approvalID", requireAdmin, requireActive, agentHandler.GetApprovalDetail)
+		agents.POST("/tool-approvals/:approvalID/execute", requireAdmin, requireActive, agentHandler.ExecuteApproval)
+		agents.PUT("/tool-approvals/:approvalID/assignee", requireAdmin, requireActive, agentHandler.SetApprovalAssignee)
 		agents.GET("/system/settings", agentHandler.GetSettings)
 		agents.PUT("/system/settings", requireAdmin, requireActive, agentHandler.UpdateModel)
 		agents.GET("/:id", agentHandler.GetAgent)

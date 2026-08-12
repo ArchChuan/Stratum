@@ -18,6 +18,8 @@ var (
 	ErrApprovalTargetGone       = errors.New("tool approval target is gone")
 	ErrApprovalConversationGone = errors.New("tool approval conversation is gone")
 	ErrApprovalInvalidated      = errors.New("tool approval invalidated")
+	// ErrTooManyPendingApprovals 单用户未过期 pending 审批数超上限（存储 DoS 防护）。
+	ErrTooManyPendingApprovals = errors.New("too many pending tool approvals")
 )
 
 type ToolApprovalStatus string

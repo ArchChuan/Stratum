@@ -91,6 +91,7 @@ var errorStatusTable = map[error]int{
 	agentdomain.ErrApprovalSelfDecision:           http.StatusConflict,
 	agentdomain.ErrApprovalAssigneeInvalid:        http.StatusBadRequest,
 	agentdomain.ErrApprovalInvalidated:            http.StatusConflict,
+	agentdomain.ErrTooManyPendingApprovals:        http.StatusTooManyRequests,
 	knowledgedomain.ErrWorkspaceConflict:          http.StatusConflict,
 	agentdomain.ErrProposalStale:                  http.StatusConflict,
 	agentdomain.ErrProposalExpired:                http.StatusConflict,

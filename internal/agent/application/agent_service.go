@@ -1449,6 +1449,39 @@ func (s *AgentService) DecideToolApproval(ctx context.Context, tenantID, id, dec
 	return s.deps.ApprovalService.Decide(ctx, tenantID, id, decision, actor, reason)
 }
 
+// ListApprovalHistory 分页查询租户审批历史（actor 用于内部角色现查，空值放行返回全部）。
+func (s *AgentService) ListApprovalHistory(ctx context.Context, tenantID string, page, pageSize int, actor string) ([]domain.ToolApproval, int, error) {
+	if s.deps.ApprovalService == nil {
+		return nil, 0, errors.New("tool approval service not configured")
+	}
+	return s.deps.ApprovalService.ListHistory(ctx, tenantID, page, pageSize, actor)
+}
+
+// ApprovalDetail 返回单个审批的脱敏详情（actor 用于内部角色现查）。
+func (s *AgentService) ApprovalDetail(ctx context.Context, tenantID, id, actor string) (ApprovalDetail, error) {
+	if s.deps.ApprovalService == nil {
+		return ApprovalDetail{}, errors.New("tool approval service not configured")
+	}
+	return s.deps.ApprovalService.ApprovalDetail(ctx, tenantID, id, actor)
+}
+
+// ExecuteApprovedAction 单次消费已批准审批并把动作交给执行器（D4/D5）。
+// actor 现查角色：仅 admin/owner 可执行（fail closed）。
+func (s *AgentService) ExecuteApprovedAction(ctx context.Context, tenantID, id, actor string, executor port.ApprovalActionExecutor) (map[string]any, error) {
+	if s.deps.ApprovalService == nil {
+		return nil, errors.New("tool approval service not configured")
+	}
+	return s.deps.ApprovalService.ExecuteApprovedAction(ctx, tenantID, id, actor, executor)
+}
+
+// SetApprovalAssignee 指定审批人（actor 需具备 admin/owner 角色，内部现查）。
+func (s *AgentService) SetApprovalAssignee(ctx context.Context, tenantID, id, assignee, actor string) error {
+	if s.deps.ApprovalService == nil {
+		return errors.New("tool approval service not configured")
+	}
+	return s.deps.ApprovalService.SetAssignee(ctx, tenantID, id, assignee, actor)
+}
+
 func (s *AgentService) ResumeToolApproval(ctx context.Context, tenantID, approvalID string) (*AgentResult, int, error) {
 	if s.deps.ApprovalService == nil || s.deps.MCPToolExecutor == nil {
 		return nil, 0, errors.New("tool approval runtime not configured")

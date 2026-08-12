@@ -11,6 +11,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/google/uuid"
 )
@@ -153,6 +154,9 @@ func (s *ToolApprovalService) Request(ctx context.Context, payload ToolApprovalP
 	if err := domain.ValidateSubjectKind(payload.SubjectKind); err != nil {
 		return "", err
 	}
+	if err := s.enforcePendingQuota(ctx, payload); err != nil {
+		return "", err
+	}
 	// D8：指定审批人必须是 admin/owner（软绑定，落地为工作台 PUT assignee）。
 	if err := s.validateAssignee(ctx, payload.TenantID, payload.AssignedApprover); err != nil {
 		return "", err
@@ -195,6 +199,18 @@ func (s *ToolApprovalService) Request(ctx context.Context, payload ToolApprovalP
 		return "", err
 	}
 	return id, nil
+}
+
+// enforcePendingQuota 防单用户无限创建未过期 pending 审批（存储 DoS 防护，D4 放宽后引入）。
+func (s *ToolApprovalService) enforcePendingQuota(ctx context.Context, payload ToolApprovalPayload) error {
+	pending, err := s.repo.ListPending(ctx, payload.TenantID, payload.UserID)
+	if err != nil {
+		return fmt.Errorf("count pending tool approvals: %w", err)
+	}
+	if len(pending) >= constants.MaxPendingApprovalsPerActor {
+		return domain.ErrTooManyPendingApprovals
+	}
+	return nil
 }
 
 // createApprovalCheckpoint 断点恢复仅 MCP 工具审批需要（D3：评测/策略/服务器配置审批无 agent 恢复语义）。
@@ -463,9 +479,18 @@ func (s *ToolApprovalService) SetAssignee(ctx context.Context, tenantID, id, ass
 }
 
 // ExecuteApprovedAction 通用执行：CAS 单次消费 + subject 分发执行器（D3/D4/D5）。
-// 预执行失败（ApprovalActionNotExecutedError）释放回 approved 可重试；产生副作用后
-// 的失败标记 unknown_outcome；claim 后 Get 失败同样标记 unknown（避免卡死 executing）。
-func (s *ToolApprovalService) ExecuteApprovedAction(ctx context.Context, tenantID, id string, executor port.ApprovalActionExecutor) (map[string]any, error) {
+// 执行者角色由 resolver 现查（单事实源，fail closed）：仅 admin/owner 可执行，
+// 不信任 JWT role claim 的陈旧窗口（review security）。预执行失败
+// （ApprovalActionNotExecutedError）释放回 approved 可重试；产生副作用后的失败标记
+// unknown_outcome；claim 后 Get 失败同样标记 unknown（避免卡死 executing）。
+func (s *ToolApprovalService) ExecuteApprovedAction(ctx context.Context, tenantID, id, actor string, executor port.ApprovalActionExecutor) (map[string]any, error) {
+	role, err := s.resolveRole(ctx, tenantID, actor)
+	if err != nil {
+		return nil, err
+	}
+	if role != "admin" && role != "owner" {
+		return nil, domain.ErrApprovalRoleDenied
+	}
 	if executor == nil {
 		return nil, errors.New("approval action executor not configured")
 	}

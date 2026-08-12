@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
+	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
+	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/application"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
@@ -231,6 +233,7 @@ func withTenantAndUser(tenantID, userID string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), tenantID))
 		c.Set(middleware.ContextKeySub, userID)
+		c.Set(middleware.ContextKeyRole, "admin")
 		c.Next()
 	}
 }
@@ -305,6 +308,7 @@ func (*fakeExperimentCommands) Rollback(context.Context, string, string, applica
 func withTenant(tenantID string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), tenantID))
+		c.Set(middleware.ContextKeyRole, "admin")
 		c.Next()
 	}
 }
@@ -530,5 +534,95 @@ func TestEvaluationHandlerUpdateDraftCaseRejectsBadRequest(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for invalid update, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// withRole 注入 JWT role claim（middleware.RequireTenantRole 依赖 auth.role）。
+func withRole(role string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Set(middleware.ContextKeyRole, role)
+		c.Next()
+	}
+}
+
+// fakeApprovalRequests 记录审批请求，模拟 ToolApprovalService.Request。
+type fakeApprovalRequests struct {
+	called      int
+	subjectKind string
+	toolName    string
+	args        map[string]any
+}
+
+func (f *fakeApprovalRequests) Request(_ context.Context, payload agentapp.ToolApprovalPayload) (string, error) {
+	f.called++
+	f.subjectKind = payload.SubjectKind
+	f.toolName = payload.ToolName
+	f.args = payload.Arguments
+	return "approval-1", nil
+}
+
+// D4：member 发起评测写操作 → 创建审批并返回 202 pending_approval，不直接执行。
+func TestEvaluationCreateSuiteMemberGetsPendingApproval(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{}
+	approvals := &fakeApprovalRequests{}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop()).
+		WithApprovalService(approvals)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.POST("/evaluations/suites", withTenantAndUser("tenant-1", "member-1"), withRole("member"), h.CreateSuite)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/evaluations/suites",
+		strings.NewReader(`{"name":"S","description":"D","resource_kind":"skill","cases":[{"name":"c1","input":"i","expected_output":"o","assertion_mode":"exact"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 pending_approval, got status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"status":"pending_approval"`) ||
+		!strings.Contains(rec.Body.String(), `"approval_id":"approval-1"`) {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+	if approvals.called != 1 {
+		t.Fatalf("approval Request called %d times, want 1", approvals.called)
+	}
+	if approvals.subjectKind != agentdomain.SubjectKindEvaluationAction {
+		t.Fatalf("subject kind=%q, want evaluation_action", approvals.subjectKind)
+	}
+	if approvals.toolName != "evaluation.create_suite" {
+		t.Fatalf("tool name=%q, want evaluation.create_suite", approvals.toolName)
+	}
+	if approvals.args["operation"] != "create_suite" {
+		t.Fatalf("operation arg=%v, want create_suite", approvals.args["operation"])
+	}
+}
+
+// D4：admin 直接执行，不创建审批。
+func TestEvaluationCreateSuiteAdminExecutesDirectly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{created: domain.EvalSuite{ID: "suite-1"}}
+	approvals := &fakeApprovalRequests{}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop()).
+		WithApprovalService(approvals)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.POST("/evaluations/suites", withTenantAndUser("tenant-1", "admin-1"), withRole("admin"), h.CreateSuite)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/evaluations/suites",
+		strings.NewReader(`{"name":"S","description":"D","resource_kind":"skill","cases":[{"name":"c1","input":"i","expected_output":"o","assertion_mode":"exact"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if approvals.called != 0 {
+		t.Fatalf("approval Request called %d times, want 0 for admin", approvals.called)
+	}
+	if suites.created.ID != "suite-1" {
+		t.Fatalf("suite Create not executed directly: %+v", suites.created)
 	}
 }

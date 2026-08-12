@@ -9,6 +9,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/stretchr/testify/require"
 )
@@ -20,8 +21,9 @@ type approvalRepoFake struct {
 	getErr                                              error
 	getCalls                                            int
 	getFailFirst                                        bool // 首次 Get 即失败（单次 Get 路径，如 SetAssignee 前置检查）
-	released, outcomeUnknown, decided                   int
+	released, outcomeUnknown, decided, claimed          int
 	lastListUserID, lastAssignee                        string
+	pendingN                                            int // 返回给 ListPending 的审批数（配额测试用）
 }
 
 func (f *approvalRepoFake) Create(_ context.Context, _ string, row domain.ToolApproval) (string, error) {
@@ -44,8 +46,11 @@ func (f *approvalRepoFake) Decide(_ context.Context, _, _, _, _, _ string, _ tim
 	f.decided++
 	return f.decideErr
 }
-func (f *approvalRepoFake) MarkExecuted(_ context.Context, _, _ string) error   { return f.markErr }
-func (f *approvalRepoFake) ClaimExecution(_ context.Context, _, _ string) error { return f.claimErr }
+func (f *approvalRepoFake) MarkExecuted(_ context.Context, _, _ string) error { return f.markErr }
+func (f *approvalRepoFake) ClaimExecution(_ context.Context, _, _ string) error {
+	f.claimed++
+	return f.claimErr
+}
 func (f *approvalRepoFake) ReleaseExecution(_ context.Context, _, _ string) error {
 	f.released++
 	return f.releaseErr
@@ -56,6 +61,13 @@ func (f *approvalRepoFake) MarkOutcomeUnknown(_ context.Context, _, _ string) er
 }
 func (f *approvalRepoFake) ListPending(_ context.Context, _, userID string) ([]domain.ToolApproval, error) {
 	f.lastListUserID = userID
+	if f.pendingN > 0 {
+		out := make([]domain.ToolApproval, f.pendingN)
+		for i := range out {
+			out[i] = f.row
+		}
+		return out, nil
+	}
 	return []domain.ToolApproval{f.row}, nil
 }
 func (f *approvalRepoFake) ListHistory(_ context.Context, _ string, _, _ int) ([]domain.ToolApproval, int, error) {
@@ -69,6 +81,30 @@ func (f *approvalRepoFake) UpdateAssignee(_ context.Context, _, _, assignee stri
 }
 func (f *approvalRepoFake) CascadeByConversation(_ context.Context, _, _ string) error {
 	return nil
+}
+
+func TestToolApprovalServiceRequestDeniesWhenPendingQuotaExhausted(t *testing.T) {
+	repo := &approvalRepoFake{pendingN: constants.MaxPendingApprovalsPerActor}
+	svc := NewToolApprovalService(repo, &checkpointFake{}, crypto.DeriveAESKey("test-key"))
+	_, err := svc.Request(context.Background(), ToolApprovalPayload{
+		TenantID: "tenant-1", ExecutionID: "exec-1", AgentID: "agent-1", UserID: "user-member",
+		ToolCallID: "call-1", ServerID: "orders", ToolName: "delete", RiskLevel: port.ToolRiskDestructive,
+		Query: "delete order", Arguments: map[string]any{},
+	})
+	require.ErrorIs(t, err, domain.ErrTooManyPendingApprovals, "member 超过 pending 配额必须 fail closed，不得再创建审批行")
+	require.Equal(t, "user-member", repo.lastListUserID, "配额按发起者 userID 计数")
+}
+
+func TestToolApprovalServiceRequestWithinQuotaCreates(t *testing.T) {
+	repo := &approvalRepoFake{pendingN: constants.MaxPendingApprovalsPerActor - 1}
+	svc := NewToolApprovalService(repo, &checkpointFake{}, crypto.DeriveAESKey("test-key"))
+	id, err := svc.Request(context.Background(), ToolApprovalPayload{
+		TenantID: "tenant-1", ExecutionID: "exec-1", AgentID: "agent-1", UserID: "user-member",
+		ToolCallID: "call-1", ServerID: "orders", ToolName: "delete", RiskLevel: port.ToolRiskDestructive,
+		Query: "delete order", Arguments: map[string]any{},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "approval-1", id)
 }
 
 func TestToolApprovalServiceEncryptsPayloadAndCreatesSafeCheckpoint(t *testing.T) {
@@ -645,7 +681,8 @@ func TestExecuteApprovedActionSuccess(t *testing.T) {
 	})
 	executor := &fakeApprovalExecutor{output: map[string]any{"ok": true}}
 	svc := NewToolApprovalService(repo, nil, crypto.DeriveAESKey("test"))
-	out, err := svc.ExecuteApprovedAction(context.Background(), "tenant-1", repo.row.ID, executor)
+	svc.SetTenantRoleResolver(&fakeRoleResolver{role: "admin"})
+	out, err := svc.ExecuteApprovedAction(context.Background(), "tenant-1", repo.row.ID, "user-admin", executor)
 	require.NoError(t, err)
 	require.Equal(t, true, out["ok"])
 	require.Equal(t, "tenant-1", executor.got.TenantID)
@@ -655,6 +692,21 @@ func TestExecuteApprovedActionSuccess(t *testing.T) {
 	require.Equal(t, map[string]any{"evaluation_id": "ev-1"}, executor.got.Arguments)
 }
 
+// 执行者角色现查（review security MEDIUM）：member 无法执行已批准审批，fail closed。
+func TestExecuteApprovedActionDeniesNonAdminActor(t *testing.T) {
+	repo := approvedRow(t, ToolApprovalPayload{
+		TenantID: "tenant-1", UserID: "user-1", SubjectKind: domain.SubjectKindEvaluationAction,
+		Arguments: map[string]any{"operation": "pause_experiment"},
+	})
+	svc := NewToolApprovalService(repo, nil, crypto.DeriveAESKey("test"))
+	svc.SetTenantRoleResolver(&fakeRoleResolver{role: "member"})
+	_, err := svc.ExecuteApprovedAction(context.Background(), "tenant-1", repo.row.ID, "user-member", &fakeApprovalExecutor{})
+	require.ErrorIs(t, err, domain.ErrApprovalRoleDenied)
+	require.Zero(t, repo.claimed) // 未 claim = 未消费，审批保持 approved
+	require.Zero(t, repo.released)
+	require.Zero(t, repo.outcomeUnknown)
+}
+
 func TestExecuteApprovedActionMarksUnknownOnSideEffectFailure(t *testing.T) {
 	repo := approvedRow(t, ToolApprovalPayload{
 		TenantID: "tenant-1", UserID: "user-1", SubjectKind: domain.SubjectKindMCPPolicy,
@@ -662,7 +714,8 @@ func TestExecuteApprovedActionMarksUnknownOnSideEffectFailure(t *testing.T) {
 	})
 	executor := &fakeApprovalExecutor{err: errors.New("provider rejected after partial apply")}
 	svc := NewToolApprovalService(repo, nil, crypto.DeriveAESKey("test"))
-	_, err := svc.ExecuteApprovedAction(context.Background(), "tenant-1", repo.row.ID, executor)
+	svc.SetTenantRoleResolver(&fakeRoleResolver{role: "admin"})
+	_, err := svc.ExecuteApprovedAction(context.Background(), "tenant-1", repo.row.ID, "user-admin", executor)
 	require.Error(t, err)
 	require.Equal(t, 1, repo.outcomeUnknown)
 	require.Zero(t, repo.released)
@@ -675,7 +728,8 @@ func TestExecuteApprovedActionReleasesPreExecutionFailure(t *testing.T) {
 	})
 	executor := &fakeApprovalExecutor{err: &port.ApprovalActionNotExecutedError{Err: errors.New("target unreachable")}}
 	svc := NewToolApprovalService(repo, nil, crypto.DeriveAESKey("test"))
-	_, err := svc.ExecuteApprovedAction(context.Background(), "tenant-1", repo.row.ID, executor)
+	svc.SetTenantRoleResolver(&fakeRoleResolver{role: "admin"})
+	_, err := svc.ExecuteApprovedAction(context.Background(), "tenant-1", repo.row.ID, "user-admin", executor)
 	require.Error(t, err)
 	require.Equal(t, 1, repo.released)
 	require.Zero(t, repo.outcomeUnknown)
@@ -686,7 +740,8 @@ func TestExecuteApprovedActionNilExecutorFailsClosed(t *testing.T) {
 		TenantID: "tenant-1", UserID: "user-1", SubjectKind: domain.SubjectKindMCPTool,
 	})
 	svc := NewToolApprovalService(repo, nil, crypto.DeriveAESKey("test"))
-	_, err := svc.ExecuteApprovedAction(context.Background(), "tenant-1", repo.row.ID, nil)
+	svc.SetTenantRoleResolver(&fakeRoleResolver{role: "admin"})
+	_, err := svc.ExecuteApprovedAction(context.Background(), "tenant-1", repo.row.ID, "user-admin", nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "executor not configured")
 }
@@ -697,7 +752,8 @@ func TestExecuteApprovedActionRejectsInvalidated(t *testing.T) {
 	})
 	repo.row.Status = string(domain.ToolApprovalInvalidated)
 	svc := NewToolApprovalService(repo, nil, crypto.DeriveAESKey("test"))
-	_, err := svc.ExecuteApprovedAction(context.Background(), "tenant-1", repo.row.ID, &fakeApprovalExecutor{})
+	svc.SetTenantRoleResolver(&fakeRoleResolver{role: "admin"})
+	_, err := svc.ExecuteApprovedAction(context.Background(), "tenant-1", repo.row.ID, "user-admin", &fakeApprovalExecutor{})
 	require.ErrorIs(t, err, domain.ErrApprovalInvalidated)
 }
 
@@ -710,7 +766,8 @@ func TestExecuteApprovedActionMarksUnknownOnPostClaimGetFailure(t *testing.T) {
 	getErr := errors.New("row vanished after claim")
 	repo.getErr = getErr
 	svc := NewToolApprovalService(repo, nil, crypto.DeriveAESKey("test"))
-	_, err := svc.ExecuteApprovedAction(context.Background(), "tenant-1", repo.row.ID, &fakeApprovalExecutor{})
+	svc.SetTenantRoleResolver(&fakeRoleResolver{role: "admin"})
+	_, err := svc.ExecuteApprovedAction(context.Background(), "tenant-1", repo.row.ID, "user-admin", &fakeApprovalExecutor{})
 	require.ErrorIs(t, err, getErr)
 	require.Equal(t, 1, repo.outcomeUnknown)
 	require.Zero(t, repo.released)
@@ -728,8 +785,9 @@ func TestExecuteApprovedActionMarksUnknownOnMarkExecutedFailure(t *testing.T) {
 	markErr := errors.New("mark executed db hiccup")
 	repo.markErr = markErr
 	svc := NewToolApprovalService(repo, nil, crypto.DeriveAESKey("test"))
+	svc.SetTenantRoleResolver(&fakeRoleResolver{role: "admin"})
 	executor := &fakeApprovalExecutor{output: map[string]any{"ok": true}}
-	_, err := svc.ExecuteApprovedAction(context.Background(), "tenant-1", repo.row.ID, executor)
+	_, err := svc.ExecuteApprovedAction(context.Background(), "tenant-1", repo.row.ID, "user-admin", executor)
 	require.ErrorIs(t, err, markErr)
 	require.Equal(t, 1, repo.outcomeUnknown)
 	require.Zero(t, repo.released)
