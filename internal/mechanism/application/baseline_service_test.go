@@ -10,8 +10,9 @@ import (
 
 // fakeRepo 是 ProfileRepo 的内存替身（测试只 mock 外部依赖，不 mock 领域逻辑）。
 type fakeRepo struct {
-	profiles []domain.Profile
-	err      error
+	profiles  []domain.Profile
+	err       error
+	upsertErr error
 }
 
 func (f *fakeRepo) GetByFamilyKey(_ context.Context, familyKey string) (domain.Profile, bool, error) {
@@ -31,6 +32,9 @@ func (f *fakeRepo) List(_ context.Context) ([]domain.Profile, error) {
 }
 
 func (f *fakeRepo) Upsert(_ context.Context, p domain.Profile) error {
+	if f.upsertErr != nil {
+		return f.upsertErr
+	}
 	for i, existing := range f.profiles {
 		if existing.FamilyKey == p.FamilyKey {
 			f.profiles[i] = p
@@ -134,6 +138,33 @@ func TestUpsertProfileAssignsFingerprintAndValidates(t *testing.T) {
 			t.Fatalf("expected ErrInvalidProfile, got %v", err)
 		}
 	})
+}
+
+func TestUpsertProfile_propagatesRepoError(t *testing.T) {
+	svc := NewService(&fakeRepo{upsertErr: errors.New("db down")})
+	err := svc.UpsertProfile(context.Background(), profile("qwen", "qwen", ""), "ops")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestUpsertProfile_defaultsActorToApi(t *testing.T) {
+	repo := &fakeRepo{}
+	svc := NewService(repo)
+	p := profile("qwen", "qwen", "")
+	if err := svc.UpsertProfile(context.Background(), p, ""); err != nil {
+		t.Fatalf("UpsertProfile: %v", err)
+	}
+	if repo.profiles[0].CreatedBy != "api" {
+		t.Fatalf("expected actor fallback 'api', got %q", repo.profiles[0].CreatedBy)
+	}
+}
+
+func TestListProfiles_propagatesRepoError(t *testing.T) {
+	svc := NewService(&fakeRepo{err: errors.New("db down")})
+	if _, err := svc.ListProfiles(context.Background()); err == nil {
+		t.Fatal("expected error, got nil")
+	}
 }
 
 func TestUpsertInvalidatesCache(t *testing.T) {

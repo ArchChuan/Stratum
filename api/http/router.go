@@ -56,6 +56,7 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	registerMCP(r, c, requireActive)
 	registerMemory(r, c, requireActive)
 	registerAudit(r, c, requireActive)
+	registerMechanism(r, c, requireActive)
 	registerPrompt(r, c, requireActive)
 	registerLLMAdmin(r, c, requireActive)
 	if c.Config.AvatarDir != "" {
@@ -557,6 +558,25 @@ func registerAudit(r *gin.Engine, c *wiring.Container, requireActive gin.Handler
 	auditGroup.Use(requireActive)
 	auditGroup.GET("/events", h.ListEvents)
 	auditGroup.GET("/events/:id", h.GetEvent)
+}
+
+// registerMechanism wires /mechanism/profiles — 机制基线（model_profiles）
+// 管理面。整体依附默认租户（RequireDefaultTenant）：只有 tenant_default 的
+// admin/owner/root 可管理，普通租户经消费路径透明取用同一份档案、零感知。
+func registerMechanism(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
+	if c.Mechanism == nil || c.Mechanism.Service == nil {
+		return
+	}
+	h := handler.NewMechanismHandler(c.Mechanism.Service, c.Logger)
+	// 管理面整体 admin + 默认租户：普通租户（含其 admin）一律 403。
+	profiles := r.Group("/mechanism/profiles",
+		protectedTenantMiddleware(c, middleware.RequireTenantRole("admin"), middleware.RequireDefaultTenant())...)
+	profiles.Use(requireActive)
+	{
+		profiles.GET("", h.List)
+		profiles.GET("/:familyKey", h.Get)
+		profiles.PUT("", h.Upsert)
+	}
 }
 
 func registerPrompt(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {

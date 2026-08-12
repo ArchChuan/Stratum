@@ -45,6 +45,8 @@ export const EVALUATION_JOB_MAX_WAIT_MS = 120000;
 
 export const MEMORY_SEARCH_LIMIT = 20;
 
+export const PROMPT_TEXTAREA_MAX_LENGTH = 16000; // 机制模板 TextArea 上限，与后端全局 10MB body 双保险
+
 export const LLM_DEFAULT_PAGE_SIZE = 20;
 
 export const KNOWLEDGE_DEFAULT_CHUNK_SIZE = 512;
