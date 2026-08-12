@@ -85,13 +85,15 @@ const SeedMemorySupersedePrompt = `判断新事实是否应该取代旧事实。
 {"supersedes": true/false, "reason": "简短说明"}`
 
 // DefaultBaseline 返回种子档位基线（现状硬编码值）。无 DB 档案时全系统
-// 回退此值，行为与改造前一致。
+// 回退此值，行为与改造前一致。六键必须与消费路径逐一对应，禁止漏键。
 func DefaultBaseline() Baseline {
 	return Baseline{
 		Prompts: BaselinePrompts{
 			MemoryExtraction: SeedMemoryExtractionPrompt,
-			MemorySummary:    SeedMemorySummarizePrompt,
+			MemorySummary:    SeedMemorySummaryPrompt,
 			MemoryEnrichment: SeedMemoryEnrichmentPrompt,
+			MemorySummarize:  SeedMemorySummarizePrompt,
+			MemorySupersede:  SeedMemorySupersedePrompt,
 			Compaction:       SeedCompactionPrompt,
 		},
 		Models: BaselineModels{},

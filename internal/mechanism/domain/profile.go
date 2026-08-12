@@ -20,13 +20,15 @@ type ModelMatcher struct {
 	FamilyPrefixes []string `json:"family_prefixes"`
 }
 
-// BaselinePrompts 是机制面 prompt 四键：对应原 memory 管线/agent 压缩链路的
-// 硬编码模板，DB 缺省时回退 embedded 种子（现状值）。
+// BaselinePrompts 是机制面 prompt 键集：对应原 memory 管线/agent 压缩链路的
+// 全部硬编码模板（6 个消费点），DB 缺省时回退 embedded 种子（现状值）。
 type BaselinePrompts struct {
-	MemoryExtraction string `json:"memory_extraction,omitempty"`
-	MemorySummary    string `json:"memory_summary,omitempty"`
-	MemoryEnrichment string `json:"memory_enrichment,omitempty"`
-	Compaction       string `json:"compaction,omitempty"`
+	MemoryExtraction string `json:"memory_extraction,omitempty"` // llm_extractor 抽取模板（%s/%s/%d）
+	MemorySummary    string `json:"memory_summary,omitempty"`    // enricher 中文总结模板（%s）
+	MemoryEnrichment string `json:"memory_enrichment,omitempty"` // enricher 富化模板（%s/%s）
+	MemorySummarize  string `json:"memory_summarize,omitempty"`  // history_summarizer 周期总结（无占位）
+	MemorySupersede  string `json:"memory_supersede,omitempty"`  // llm_superseder 判断模板（%s/%s）
+	Compaction       string `json:"compaction,omitempty"`        // history_compactor 压缩指令（无占位）
 }
 
 // BaselineModels 是机制面管线模型引用（原 env EnrichModel/SummaryModel）。

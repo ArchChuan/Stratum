@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
@@ -156,4 +157,30 @@ func TestResolvingLLMSupersederPropagatesContextCancellationBeforeClientCall(t *
 	_, err := judge.JudgeSupersede(ctx, "old", "new")
 	require.ErrorIs(t, err, context.Canceled)
 	require.Zero(t, clientCalls)
+}
+
+// TestLLMSupersederUsesInjectedJudgePromptOverFallback 验证机制基线判断模板
+// 注入优先、空值回退内置常量（现状行为），注入模板的 %s 占位照常渲染。
+func TestLLMSupersederUsesInjectedJudgePromptOverFallback(t *testing.T) {
+	var got string
+	client := completionClientFunc(func(_ context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+		got = req.Messages[0].Content
+		return &memport.CompletionResponse{Content: `{"supersedes":false,"reason":"ok"}`}, nil
+	})
+	judge := workers.NewLLMSuperseder(client)
+
+	if _, err := judge.JudgeSupersede(context.Background(), "old", "new"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "旧事实：old") {
+		t.Fatalf("fallback template missing old fact slot: %q", got)
+	}
+
+	judge.WithJudgePrompt("判断模板 %s vs %s")
+	if _, err := judge.JudgeSupersede(context.Background(), "old", "new"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "判断模板 old vs new") {
+		t.Fatalf("injected template not used: %q", got)
+	}
 }

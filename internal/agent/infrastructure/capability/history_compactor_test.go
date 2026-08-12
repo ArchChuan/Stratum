@@ -3,6 +3,7 @@ package capgateway
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,5 +160,29 @@ func TestCompactionSlice(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, tc.want, compactionSlice(tc.remaining, tc.attemptsLeft))
 		})
+	}
+}
+
+// TestCompactHistory_UsesInjectedCompactionPromptOverFallback 验证机制基线
+// 压缩指令注入优先、空值回退内置常量（现状行为）。
+func TestCompactHistory_UsesInjectedCompactionPromptOverFallback(t *testing.T) {
+	gw := &scriptedCompactorGateway{}
+	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0)
+	msgs := []port.LLMMessage{{Role: "user", Content: "history"}}
+
+	if _, err := compactor.CompactHistory(context.Background(), msgs); err != nil {
+		t.Fatal(err)
+	}
+	fallback := gw.calls[0].req.LLM.Messages[0].Content
+	if !strings.Contains(fallback, "对话历史压缩器") {
+		t.Fatalf("fallback compaction prompt missing: %q", fallback)
+	}
+
+	compactor.WithCompactionPrompt("注入压缩指令：")
+	if _, err := compactor.CompactHistory(context.Background(), msgs); err != nil {
+		t.Fatal(err)
+	}
+	if got := gw.calls[1].req.LLM.Messages[0].Content; got != "注入压缩指令：" {
+		t.Fatalf("injected compaction prompt not used: %q", got)
 	}
 }

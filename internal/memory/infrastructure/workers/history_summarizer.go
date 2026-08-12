@@ -8,12 +8,17 @@ import (
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 )
 
+// summarizePrefix 是周期总结指令前缀兜底（现状硬编码值）。机制基线建档后
+// 由 wiring 注入覆盖，空值维持现状行为。
+const summarizePrefix = "Summarize this bounded period of user history. Preserve decisions, goals, preferences, and durable context; omit secrets and raw payloads.\n\n"
+
 type historyLLM = TenantLLMClient
 
 type LLMHistorySummarizer struct {
-	llm      historyLLM
-	tenantID string
-	resolver TenantLLMResolver
+	llm           historyLLM
+	tenantID      string
+	resolver      TenantLLMResolver
+	summarizeTmpl string
 }
 
 var _ HistorySummarizer = (*LLMHistorySummarizer)(nil)
@@ -26,6 +31,21 @@ func NewLLMHistorySummarizer(llm historyLLM) *LLMHistorySummarizer {
 // NewResolvingLLMHistorySummarizer resolves the tenant client for every operation.
 func NewResolvingLLMHistorySummarizer(tenantID string, resolver TenantLLMResolver) *LLMHistorySummarizer {
 	return &LLMHistorySummarizer{tenantID: tenantID, resolver: resolver}
+}
+
+// WithSummarizePrompt overrides the summarization instruction with the
+// mechanism baseline prompt. Empty keeps summarizePrefix.
+func (s *LLMHistorySummarizer) WithSummarizePrompt(p string) *LLMHistorySummarizer {
+	s.summarizeTmpl = p
+	return s
+}
+
+// summarizePrefixOr 返回生效指令前缀：基线注入值优先，空则兜底内置常量。
+func (s *LLMHistorySummarizer) summarizePrefixOr() string {
+	if s.summarizeTmpl != "" {
+		return s.summarizeTmpl
+	}
+	return summarizePrefix
 }
 
 func (s *LLMHistorySummarizer) SummarizeHistory(ctx context.Context, items []string) (string, error) {
@@ -43,7 +63,7 @@ func (s *LLMHistorySummarizer) SummarizeHistory(ctx context.Context, items []str
 	if client == nil {
 		return "", fmt.Errorf("history llm unavailable")
 	}
-	prompt := "Summarize this bounded period of user history. Preserve decisions, goals, preferences, and durable context; omit secrets and raw payloads.\n\n" + strings.Join(items, "\n")
+	prompt := s.summarizePrefixOr() + strings.Join(items, "\n")
 	resp, err := client.Complete(ctx, &memport.CompletionRequest{Messages: []memport.CompletionMessage{{Role: "user", Content: prompt}}, Temperature: .2})
 	if err != nil {
 		return "", err
