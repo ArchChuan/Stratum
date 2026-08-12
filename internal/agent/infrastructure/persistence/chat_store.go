@@ -342,27 +342,59 @@ func decodeExecutionArtifacts(raw []byte) ([]domain.ExecutionArtifact, error) {
 		if artifact.ProfileVersion == "" || len([]rune(artifact.ProfileVersion)) > constants.SystemAssistantEvidenceFieldMaxRunes || safetext.RedactCredentials(artifact.ProfileVersion) != artifact.ProfileVersion {
 			return nil, fmt.Errorf("artifact %d has invalid profile version", i)
 		}
-		switch artifact.Type {
-		case "citations":
-			if artifact.DiagnosticReport != nil || artifact.Citations == nil {
-				return nil, fmt.Errorf("artifact %d has invalid citation fields", i)
-			}
-			if err := validateArtifactCitations(artifact.Citations); err != nil {
-				return nil, fmt.Errorf("artifact %d: %w", i, err)
-			}
-		case "diagnostic_report":
-			if artifact.DiagnosticReport == nil || artifact.Citations != nil {
-				return nil, fmt.Errorf("artifact %d has invalid diagnostic report", i)
-			}
-			normalizeDiagnosticReport(artifact.DiagnosticReport)
-			if err := validateDiagnosticReport(artifact.DiagnosticReport); err != nil {
-				return nil, fmt.Errorf("artifact %d: %w", i, err)
-			}
-		default:
-			return nil, fmt.Errorf("artifact %d has invalid type", i)
+		if err := validateArtifactFields(artifact); err != nil {
+			return nil, fmt.Errorf("artifact %d: %w", i, err)
 		}
 	}
 	return artifacts, nil
+}
+
+// validateArtifactFields is the persisted-shape gate shared by the write path
+// (AddMessage) and the read path (ListMessages). Every type the execution
+// layer can produce must be admitted here; a type missing from this switch
+// makes AddMessage reject the whole message and drops the reply on save.
+func validateArtifactFields(artifact *domain.ExecutionArtifact) error {
+	switch artifact.Type {
+	case "citations":
+		return validateCitationsArtifact(artifact)
+	case "diagnostic_report":
+		return validateDiagnosticArtifact(artifact)
+	case "resource_change_proposal":
+		return validateProposalArtifact(artifact)
+	case "resource_change_direct_apply":
+		return validateDirectApplyFields(artifact)
+	default:
+		return errors.New("invalid artifact type")
+	}
+}
+
+func validateCitationsArtifact(artifact *domain.ExecutionArtifact) error {
+	if artifact.DiagnosticReport != nil || artifact.Citations == nil {
+		return errors.New("invalid citation fields")
+	}
+	return validateArtifactCitations(artifact.Citations)
+}
+
+func validateDiagnosticArtifact(artifact *domain.ExecutionArtifact) error {
+	if artifact.DiagnosticReport == nil || artifact.Citations != nil {
+		return errors.New("invalid diagnostic report fields")
+	}
+	normalizeDiagnosticReport(artifact.DiagnosticReport)
+	return validateDiagnosticReport(artifact.DiagnosticReport)
+}
+
+func validateProposalArtifact(artifact *domain.ExecutionArtifact) error {
+	if artifact.ResourceChangeProposal == nil || artifact.Citations != nil || artifact.DiagnosticReport != nil || artifact.DirectApply != nil {
+		return errors.New("invalid proposal fields")
+	}
+	return validateResourceChangeProposalArtifact(artifact.ResourceChangeProposal)
+}
+
+func validateDirectApplyFields(artifact *domain.ExecutionArtifact) error {
+	if artifact.DirectApply == nil || artifact.Citations != nil || artifact.DiagnosticReport != nil || artifact.ResourceChangeProposal != nil {
+		return errors.New("invalid direct apply fields")
+	}
+	return validateDirectApplyArtifact(artifact.DirectApply)
 }
 
 var artifactCodePattern = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
@@ -416,6 +448,41 @@ func validArtifactOutcome(outcome string) bool {
 	default:
 		return false
 	}
+}
+
+// validateResourceChangeProposalArtifact enforces the same field discipline as
+// the other artifact types: enum validity, safe strings, typed error codes.
+func validateResourceChangeProposalArtifact(p *domain.ResourceChangeProposalArtifact) error {
+	if p.ID == "" || !safeArtifactString(p.ID) || !safeArtifactString(p.Summary) {
+		return errors.New("invalid proposal text")
+	}
+	if !p.ResourceKind.Valid() || !p.Operation.Valid() {
+		return errors.New("invalid proposal kind or operation")
+	}
+	switch p.Status {
+	case domain.StatusDraft, domain.StatusReadyForReview, domain.StatusConfirmed, domain.StatusApplying,
+		domain.StatusApplied, domain.StatusInvalid, domain.StatusStale, domain.StatusExpired,
+		domain.StatusFailed, domain.StatusUnknownOutcome, domain.StatusCancelled:
+	default:
+		return errors.New("invalid proposal status")
+	}
+	return nil
+}
+
+func validateDirectApplyArtifact(a *domain.SystemAssistantDirectApplyArtifact) error {
+	if a.Tool == "" || !safeArtifactString(a.Tool) || !safeArtifactString(a.ResourceID) {
+		return errors.New("invalid direct apply text")
+	}
+	if !a.ResourceKind.Valid() || !a.Operation.Valid() {
+		return errors.New("invalid direct apply kind or operation")
+	}
+	if !validArtifactOutcome(a.Outcome) {
+		return errors.New("invalid direct apply outcome")
+	}
+	if a.ErrorCode != "" && !artifactCodePattern.MatchString(a.ErrorCode) {
+		return errors.New("invalid direct apply error code")
+	}
+	return nil
 }
 
 func validateArtifactCitations(citations []domain.Citation) error {
