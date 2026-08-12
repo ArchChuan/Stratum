@@ -176,8 +176,8 @@ func (h *UserMemoryHandler) GetStats(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gen.MemoryStatsResponse{
-		MemoryCount:         int64(memoryCount),
-		EntityCount:         int64(entityCount),
+		MemoryCount:          int64(memoryCount),
+		EntityCount:          int64(entityCount),
 		EmbedModelConfigured: h.embedModelConfigured(c.Request.Context(), tenantID),
 	})
 }
