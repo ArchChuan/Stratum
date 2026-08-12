@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -11,20 +12,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/byteBuilderX/stratum/pkg/constants"
-	jschema "github.com/byteBuilderX/stratum/pkg/jsonschema"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const (
 	readHeaderTimeout   = 5 * time.Second
 	optimizationContent = `[{"prompt_patch":{"instructions":"先分析 stateful 输入，再按明确步骤输出。"},"rationale":"提高可验证性"},{"prompt_patch":{"instructions":"对 stateful 输入给出简洁且可核对的结果。"},"rationale":"减少歧义"}]`
 )
-
-type rpcRequest struct {
-	ID     any             `json:"id"`
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params"`
-}
 
 type opikEvidence struct {
 	TraceID    string `json:"trace_id"`
@@ -404,53 +398,34 @@ func findSkillTool(tools []toolDef, called map[string]bool) (string, string) {
 	return "", ""
 }
 
-func mcpHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet && r.URL.Path == "/health" {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	defer r.Body.Close()
-	var request rpcRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, request.ID, -32700)
-		return
-	}
-	var result any
-	switch request.Method {
-	case "initialize":
-		result = map[string]any{
-			"protocolVersion": constants.MCPProtocolVersion,
-			"capabilities":    map[string]any{"tools": map[string]any{}, "resources": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "stratum-stateful-mcp", "version": "1.0.0"},
-		}
-	case "tools/list":
-		result = map[string]any{"tools": []any{map[string]any{
-			"name": "stateful_echo", "description": "Return text for stateful acceptance",
-			"inputSchema": jschema.Must(jschema.Object(
-				jschema.RequiredProp("text", jschema.String("")),
-			)).Map(),
-		}}}
-	case "tools/call":
-		result = map[string]any{"content": []any{map[string]any{"type": "text", "text": "stateful MCP call completed"}}}
-	case "resources/list":
-		result = map[string]any{"resources": []any{map[string]any{
-			"uri": "stratum://stateful/evidence", "name": "Stateful evidence", "mimeType": "text/plain",
-		}}}
-	default:
-		writeError(w, request.ID, -32601)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
-}
-
-func writeError(w http.ResponseWriter, id any, code int) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": code, "message": "stateful MCP protocol error"},
+// sdkMCPHandler is the MCP endpoint served at /mcp, built on the official
+// SDK (mcp.NewServer + NewStreamableHTTPHandler). The SDK client in
+// internal/mcp/infrastructure performs a full initialize → standalone SSE →
+// tools/list → tools/call handshake; the fixture must speak that protocol,
+// so hand-rolled JSON-RPC would never connect.
+var sdkMCPHandler = func() http.Handler {
+	srv := mcp.NewServer(&mcp.Implementation{Name: "stratum-stateful-mcp", Version: "1.0.0"}, nil)
+	srv.AddTool(&mcp.Tool{
+		Name:        "stateful_echo",
+		Description: "Return text for stateful acceptance",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"required":   []string{"text"},
+			"properties": map[string]any{"text": map[string]any{"type": "string"}},
+		},
+	}, func(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "stateful MCP call completed"}}}, nil
 	})
+	srv.AddResource(&mcp.Resource{
+		URI: "stratum://stateful/evidence", Name: "Stateful evidence", MIMEType: "text/plain",
+	}, func(_ context.Context, _ *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{
+			URI: "stratum://stateful/evidence", Text: "stateful MCP resource evidence",
+		}}}, nil
+	})
+	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
+}()
+
+func mcpHandler(w http.ResponseWriter, r *http.Request) {
+	sdkMCPHandler.ServeHTTP(w, r)
 }

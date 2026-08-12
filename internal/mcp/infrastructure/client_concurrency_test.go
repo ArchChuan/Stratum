@@ -3,267 +3,193 @@ package infrastructure
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"sort"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/byteBuilderX/stratum/pkg/constants"
+	mcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
-// mcpEchoHandler is a minimal streamable-http MCP server for concurrency
-// tests: initialize handshake + per-method JSON-RPC echo. notify (optional)
-// receives every decoded request method; when block is non-nil the handler
-// waits on it before replying to tools/call.
-func mcpEchoHandler(notify func(method string, id any), block <-chan struct{}) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
-		var req struct {
-			ID     any    `json:"id"`
-			Method string `json:"method"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-		if notify != nil {
-			notify(req.Method, req.ID)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		switch req.Method {
-		case "initialize":
-			writeEchoResult(w, req.ID, map[string]any{
-				"protocolVersion": constants.MCPProtocolVersion,
-				"capabilities":    map[string]any{"tools": map[string]any{"listChanged": true}},
-				"serverInfo":      map[string]any{"name": "echo", "version": "1.0"},
-			})
-		case "notifications/initialized":
-			w.WriteHeader(http.StatusAccepted)
-		case "tools/call":
-			if block != nil {
-				// 随客户端断开退出：httptest Close 等待活跃连接，永久阻塞会
-				// 在 Cleanup 阶段拖垮测试进程（断言失败也先释放 server）。
-				select {
-				case <-block:
-				case <-r.Context().Done():
-					return
-				}
-			}
-			writeEchoResult(w, req.ID, map[string]any{"content": []any{map[string]any{"type": "text", "text": "ok"}}})
-		default:
-			http.Error(w, "method not found", http.StatusNotFound)
-		}
-	})
-}
+// 串行化语义为什么不存在：旧实现用 reqMu 保证同一 client 同时只有一个
+// in-flight 请求（自研 sendRequest 按顺序配对响应）。官方 SDK 的 session 是
+// 并发安全的——每个请求分配独立 ID，响应按 ID 路由回各自调用方，因此无需
+// 也不存在锁。以下测试验证的正是该并发安全契约。
 
-func writeEchoResult(w http.ResponseWriter, id any, result any) {
-	_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
-}
-
-// newHTTPTestClient wires a BaseClient to an in-process echo server and
-// completes the initialize handshake.
-func newHTTPTestClient(t *testing.T, handler http.Handler) (*BaseClient, *httptest.Server) {
+// newSDKEchoServer builds an in-process official-SDK MCP server exposing one
+// tool ("echo") that echoes the "text" argument back as a text result.
+// handler overrides the default echo behavior (e.g. to block or to count
+// arrivals). The SDK server handles the initialize handshake, the standalone
+// SSE stream and concurrent POSTs natively, so no self-built JSON-RPC handler
+// is needed (a raw echo handler cannot interoperate: its 400 on the
+// standalone SSE GET breaks the SDK session, see connectStandaloneSSE).
+func newSDKEchoServer(t *testing.T, handler mcp.ToolHandler) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
+	srv := mcp.NewServer(&mcp.Implementation{Name: "echo", Version: "1.0"}, nil)
+	echo := func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if handler != nil {
+			return handler(ctx, req)
+		}
+		var args struct {
+			Text string `json:"text"`
+		}
+		_ = json.Unmarshal(req.Params.Arguments, &args)
+		if args.Text == "" {
+			args.Text = "ok"
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: args.Text}}}, nil
+	}
+	srv.AddTool(&mcp.Tool{
+		Name: "echo", Description: "echoes the text argument",
+		InputSchema: map[string]any{"type": "object"},
+	}, echo)
+	ts := httptest.NewServer(mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return srv }, &mcp.StreamableHTTPOptions{}))
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// newHTTPTestClient wires a BaseClient to an in-process SDK server and
+// completes the initialize handshake. URLPolicyAllowPrivate is required:
+// httptest loopback addresses are blocked under the production
+// URLPolicyStrict (zero value), so tests must opt in.
+func newHTTPTestClient(t *testing.T, handler mcp.ToolHandler) (*BaseClient, *httptest.Server) {
+	t.Helper()
+	srv := newSDKEchoServer(t, handler)
 	client := NewBaseClient(&MCPServerConfig{
 		ID: "srv", Name: "test", Transport: "streamable-http", URL: srv.URL,
 	}, zap.NewNop())
+	client.urlPolicy = URLPolicyAllowPrivate
 	require.NoError(t, client.Connect(context.Background()))
+	// Cleanup 逆序执行：必须先断开客户端再关 server，否则 SDK 的 standalone
+	// SSE 长连接还挂在 httptest 上，ts.Close 会永久等待活跃请求。
+	t.Cleanup(func() { _ = client.Disconnect(context.Background()) })
 	return client, srv
 }
 
-// TestSendRequestConcurrentRequestsAreSerialized hammers one client with
-// concurrent requests. Per-client serialisation (reqMu) guarantees at most
-// one in-flight request, so every response is consumed by its own request:
-// all requests must succeed and the multiset of response IDs must equal the
-// multiset of request IDs (no response lost, stolen, or duplicated).
-// -race guards the lower-level request/response path.
-func TestSendRequestConcurrentRequestsAreSerialized(t *testing.T) {
-	client, _ := newHTTPTestClient(t, mcpEchoHandler(nil, nil))
+// callToolText extracts the first text content of a CallTool result.
+func callToolText(t *testing.T, result any) string {
+	t.Helper()
+	res, ok := result.(*mcp.CallToolResult)
+	require.True(t, ok, "unexpected result type %T", result)
+	if len(res.Content) == 0 {
+		return ""
+	}
+	tc, ok := res.Content[0].(*mcp.TextContent)
+	require.True(t, ok, "unexpected content type %T", res.Content[0])
+	return tc.Text
+}
+
+// TestCallToolConcurrentCallsAllSucceed hammers one client with N=16
+// concurrent CallTool calls. The SDK session is concurrency-safe: ids are
+// allocated per request and responses are routed by id, so no request mutex
+// exists (the old reqMu serialization is gone). Every call must succeed and
+// each must receive its own echoed payload — a response misrouted to another
+// caller would fail the payload check. -race guards the low-level
+// request/response path.
+func TestCallToolConcurrentCallsAllSucceed(t *testing.T) {
+	client, _ := newHTTPTestClient(t, nil)
 
 	const n = 16
-	gotIDs := make(chan int, n)
 	var wg sync.WaitGroup
+	errs := make(chan error, n)
 	for i := 1; i <= n; i++ {
 		i := i
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			resp, err := client.sendRequest(ctx, &MCPRequest{JSONRPC: "2.0", ID: i, Method: "tools/call", Params: map[string]any{"name": "echo"}})
+			result, err := client.CallTool(ctx, "echo", map[string]any{"text": fmt.Sprintf("payload-%d", i)})
 			if err != nil {
-				t.Errorf("request %d failed: %v", i, err)
+				errs <- fmt.Errorf("call %d: %w", i, err)
 				return
 			}
-			gotIDs <- resp.ID
+			if text := callToolText(t, result); text != fmt.Sprintf("payload-%d", i) {
+				errs <- fmt.Errorf("call %d: got payload %q", i, text)
+			}
 		}()
 	}
 	wg.Wait()
-	close(gotIDs)
-	got := make([]int, 0, n)
-	for id := range gotIDs {
-		got = append(got, id)
-	}
-	sort.Ints(got)
-	for i := 1; i <= n; i++ {
-		if got[i-1] != i {
-			t.Fatalf("response IDs not preserved under concurrency: got %v", got)
-		}
+	close(errs)
+	for err := range errs {
+		t.Error(err)
 	}
 }
 
-// TestCallToolSerializesSameClient verifies that two concurrent CallTool calls
-// on the same client are serialised: the second request must not reach the
-// server until the first has completed.
-func TestCallToolSerializesSameClient(t *testing.T) {
-	received := make(chan int, 4)
+// TestCallToolTimeoutThenFollowUpSucceeds verifies that a call abandoned by
+// ctx deadline maps to ErrTransportTimeout and does not kill the SDK session:
+// the follow-up call on the same client must still succeed. Under the old
+// reqMu semantics this test asserted that a timeout releases the
+// serialization lock; there is no lock anymore — the SDK session survives a
+// cancelled POST, and the server-side handler is released explicitly.
+func TestCallToolTimeoutThenFollowUpSucceeds(t *testing.T) {
 	release := make(chan struct{})
-	client, _ := newHTTPTestClient(t, mcpEchoHandler(func(method string, id any) {
-		if method == "tools/call" {
-			if f, ok := id.(float64); ok {
-				received <- int(f)
-			}
-		}
-	}, release))
-
-	errCh := make(chan error, 2)
-	go func() { _, err := client.CallTool(context.Background(), "echo", map[string]any{}); errCh <- err }()
-	go func() { _, err := client.CallTool(context.Background(), "echo", map[string]any{}); errCh <- err }()
-
-	first := <-received
-	// The first request is still blocked at the server, so its serialisation
-	// lock is held: the second request must not have reached the server yet.
-	select {
-	case r := <-received:
-		t.Fatalf("second request %d reached the server while the first was in flight", r)
-	case <-time.After(100 * time.Millisecond):
-	}
-	_ = first
-	release <- struct{}{} // complete the first request
-	second := <-received
-	release <- struct{}{} // complete the second request
-	for i := 0; i < 2; i++ {
-		if err := <-errCh; err != nil {
-			t.Fatalf("CallTool failed: %v", err)
-		}
-	}
-	if first == second {
-		t.Fatalf("expected two distinct requests, got %d twice", first)
-	}
-}
-
-// TestCallToolParallelAcrossClients verifies that the serialisation lock is
-// per-client, not global: requests on different clients reach their servers
-// concurrently.
-func TestCallToolParallelAcrossClients(t *testing.T) {
-	arriveA := make(chan struct{}, 1)
-	arriveB := make(chan struct{}, 1)
-	release := make(chan struct{})
-	notifyArrival := func(ch chan struct{}) func(string, any) {
-		return func(method string, _ any) {
-			if method == "tools/call" {
-				ch <- struct{}{}
-			}
-		}
-	}
-	clientA, _ := newHTTPTestClient(t, mcpEchoHandler(notifyArrival(arriveA), release))
-	clientB, _ := newHTTPTestClient(t, mcpEchoHandler(notifyArrival(arriveB), release))
-
-	errCh := make(chan error, 2)
-	go func() { _, err := clientA.CallTool(context.Background(), "echo", map[string]any{}); errCh <- err }()
-	go func() { _, err := clientB.CallTool(context.Background(), "echo", map[string]any{}); errCh <- err }()
-
-	select {
-	case <-arriveA:
-	case <-time.After(time.Second):
-		t.Fatal("client A request never reached its server")
-	}
-	select {
-	case <-arriveB:
-	case <-time.After(time.Second):
-		t.Fatal("client B request never reached its server; per-client lock leaked across clients")
-	}
-	release <- struct{}{}
-	release <- struct{}{}
-	for i := 0; i < 2; i++ {
-		if err := <-errCh; err != nil {
-			t.Fatalf("CallTool failed: %v", err)
-		}
-	}
-}
-
-// TestSendRequestTimeoutReleasesSerializationLock verifies that a timed-out
-// request releases the per-client lock, so the next request on the same
-// client can execute.
-func TestSendRequestTimeoutReleasesSerializationLock(t *testing.T) {
-	serverReady := make(chan struct{})
-	respond := make(chan struct{})
 	var first atomic.Bool
-	client, _ := newHTTPTestClient(t, mcpEchoHandler(func(method string, _ any) {
-		// 第一个 tools/call 挂住（模拟慢 server）；其余立即响应。
-		// 阻塞须随客户端断开退出（r.Context().Done()），否则 srv.Close 在
-		// Cleanup 阶段永久等待活跃连接，失败断言也会拖垮整个测试进程。
-		if method == "tools/call" && !first.Swap(true) {
-			close(serverReady)
-			// 兜底超时：即使断言提前失败，server 侧也能退出，
-			// httptest Close 不会永久等待活跃连接。
+	client, _ := newHTTPTestClient(t, func(ctx context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if !first.Swap(true) {
+			// 模拟慢 server：第一个调用挂住直到被释放；兜底超时避免
+			// Cleanup 阶段 httptest 等待活跃请求。ctx 兜底是防御性的：
+			// 2025-06-18 协议下 server handler 的 ctx 不与请求取消联动。
 			select {
-			case <-respond:
+			case <-release:
 			case <-time.After(5 * time.Second):
+			case <-ctx.Done():
 			}
 		}
-	}, nil))
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	_, err := client.CallTool(ctx, "echo", map[string]any{})
 	cancel()
-	// url.Error 原文含完整 URL（凭据防泄漏），超时经 ErrTransportTimeout
-	// sentinel 保留语义，不落原始错误文本。
 	require.ErrorIs(t, err, ErrTransportTimeout)
 
-	<-serverReady
-	close(respond)
+	close(release)
 
-	ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel2()
 	_, err = client.CallTool(ctx2, "echo", map[string]any{})
 	require.NoError(t, err)
 }
 
-// TestDisconnectDuringInFlightCallToolRacesSafely races Disconnect against
-// an in-flight CallTool. HTTP requests hold a client snapshot taken under
-// the lock, so Disconnect cannot interrupt an in-flight request; it must
-// instead not panic on shared transport state, and the in-flight request
-// must exit boundedly once the server releases it. The client ends
-// disconnected; a later CallTool transparently reconnects (stdio's
-// closed-pipe semantics no longer exist).
+// TestDisconnectDuringInFlightCallToolRacesSafely races Disconnect against an
+// in-flight CallTool. Session Close tears down the standalone SSE stream and
+// pending request channels, so the in-flight call may succeed (response
+// already delivered) or fail (connection torn down); it must always return
+// boundedly, must not panic, and must not leak goroutines. CallTool holds
+// only a snapshot of the session pointer, so Disconnect never blocks on it —
+// the old reqMu deadlock/races around shared transport state no longer exist.
 func TestDisconnectDuringInFlightCallToolRacesSafely(t *testing.T) {
 	block := make(chan struct{})
 	received := make(chan struct{}, 1)
-	client, _ := newHTTPTestClient(t, mcpEchoHandler(func(method string, _ any) {
-		if method == "tools/call" {
-			select {
-			case received <- struct{}{}:
-			default:
-			}
-			// 兜底超时：断言失败提前退出时 server 也能释放连接。
-			select {
-			case <-block:
-			case <-time.After(5 * time.Second):
-			}
+	client, _ := newHTTPTestClient(t, func(ctx context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		select {
+		case received <- struct{}{}:
+		default:
 		}
-	}, nil))
+		select {
+		case <-block:
+		case <-time.After(5 * time.Second):
+		case <-ctx.Done():
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil
+	})
+
+	baseline := runtime.NumGoroutine()
 
 	result := make(chan error, 1)
 	go func() {
-		_, err := client.CallTool(context.Background(), "slow_tool", map[string]any{})
+		_, err := client.CallTool(context.Background(), "echo", map[string]any{})
 		result <- err
 	}()
 
@@ -273,17 +199,19 @@ func TestDisconnectDuringInFlightCallToolRacesSafely(t *testing.T) {
 		t.Fatal("request never reached the server")
 	}
 
+	// 真正的竞态：server 在 100ms 后释放 in-flight 请求，同时立刻 Disconnect。
+	// 两种结局都可能：请求先完成（结果送达）或连接先关闭（结果丢弃）。
+	timer := time.AfterFunc(100*time.Millisecond, func() { close(block) })
+	defer timer.Stop()
+
 	if err := client.Disconnect(context.Background()); err != nil {
 		t.Fatalf("disconnect failed: %v", err)
 	}
 
-	// Release the server so the in-flight request exits boundedly; it may
-	// complete or fail, but must not panic or leak the goroutine.
-	close(block)
 	select {
 	case err := <-result:
 		if err != nil {
-			t.Logf("in-flight CallTool after Disconnect: %v (allowed: HTTP cannot interrupt in-flight requests)", err)
+			t.Logf("in-flight CallTool after Disconnect: %v (allowed: session Close cannot be interrupted)", err)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("in-flight CallTool did not return after server release")
@@ -291,12 +219,40 @@ func TestDisconnectDuringInFlightCallToolRacesSafely(t *testing.T) {
 	if client.IsConnected() {
 		t.Fatal("client still connected after Disconnect")
 	}
+
+	// No goroutine leak: the client's SDK goroutines (SSE reader, response
+	// dispatchers) exit asynchronously after Close, so poll briefly instead
+	// of asserting an immediate count. A small tolerance absorbs server-side
+	// long-lived goroutines.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if runtime.NumGoroutine() <= baseline+3 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("goroutine leak: %d goroutines, baseline %d", runtime.NumGoroutine(), baseline)
 }
 
-// TestSendHTTPRequestClosedTransportReturnsErrClientClosed is the HTTP
-// counterpart: a call racing Disconnect must not dereference a nil client.
-func TestSendHTTPRequestClosedTransportReturnsErrClientClosed(t *testing.T) {
-	client := NewBaseClient(&MCPServerConfig{ID: "srv", Transport: "http", URL: "http://localhost:1"}, zap.NewNop())
-	_, err := client.sendHTTPRequest(context.Background(), &MCPRequest{JSONRPC: "2.0", ID: 1, Method: "tools/list"})
-	require.ErrorIs(t, err, ErrClientClosed)
+// TestCallToolUnreachableServerReturnsTranslatedError covers a client that
+// was never connected: CallTool first attempts to connect
+// (ensureConnected → doConnect), so the failure surfaces as the translated
+// transport error rather than ErrClientClosed. The old sendHTTPRequest path
+// returned ErrClientClosed for a closed transport; the new semantics have no
+// pre-connected state a call could short-circuit on.
+func TestCallToolUnreachableServerReturnsTranslatedError(t *testing.T) {
+	// Port 1 refuses connections; the test URL policy lets the dial attempt
+	// happen (production strict policy is bypassed by urlPolicy).
+	client := NewBaseClient(&MCPServerConfig{
+		ID: "srv", Name: "test", Transport: "streamable-http", URL: "http://localhost:1",
+	}, zap.NewNop())
+	client.urlPolicy = URLPolicyAllowPrivate
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := client.CallTool(ctx, "echo", map[string]any{})
+	require.Error(t, err)
+	require.False(t, errors.Is(err, ErrClientClosed),
+		"CallTool on a fresh client must attempt to connect, not report closed: %v", err)
+	require.ErrorIs(t, err, mcpdomain.ErrTransportFailed)
 }

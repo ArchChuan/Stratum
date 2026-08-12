@@ -36,3 +36,14 @@ var ErrInvalidServerURL = errors.New("invalid MCP server URL")
 // client does not support (OAuth2 is out of scope: the configured
 // client-credentials model does not align with the SDK OAuth flow).
 var ErrUnsupportedAuth = errors.New("unsupported MCP auth type")
+
+// ErrSessionMissing reports an MCP session the server no longer holds
+// (404 on POST, session expiry). The client must drop the connection and
+// let the manager's single-flight reconnect establish a fresh session.
+var ErrSessionMissing = errors.New("MCP session missing")
+
+// ErrTransportFailed is the generic projection of any SDK transport error
+// whose original text must not propagate: the SDK decodes non-2xx response
+// bodies into its error value, so server-controlled text (potentially an
+// echoed Authorization header) must never reach logs or API responses.
+var ErrTransportFailed = errors.New("MCP transport failed")

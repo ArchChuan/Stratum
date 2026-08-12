@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestHealthRequiresCurrentRunnerIdentity(t *testing.T) {
@@ -41,36 +44,59 @@ func TestServerConfigRequiresExplicitLoopbackAddress(t *testing.T) {
 	}
 }
 
+// TestMCPHandlerServesDeterministicProtocol drives the fixture with the real
+// official SDK client (the same library internal/mcp/infrastructure uses):
+// initialize → tools/list → tools/call → resources/read must all succeed.
+// A hand-rolled POST-only client would pass an incompatible server, so the
+// SDK client is the contract here.
 func TestMCPHandlerServesDeterministicProtocol(t *testing.T) {
 	t.Parallel()
-	for _, method := range []string{"initialize", "tools/list", "tools/call", "resources/list"} {
-		method := method
-		t.Run(method, func(t *testing.T) {
-			t.Parallel()
-			body, err := json.Marshal(map[string]any{
-				"jsonrpc": "2.0", "id": 1, "method": method,
-				"params": map[string]any{"name": "stateful_echo", "arguments": map[string]any{"text": "probe"}},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
-			rec := httptest.NewRecorder()
-			mcpHandler(rec, req)
-			if rec.Code != http.StatusOK {
-				t.Fatalf("status=%d", rec.Code)
-			}
-			var response struct {
-				JSONRPC string          `json:"jsonrpc"`
-				Result  json.RawMessage `json:"result"`
-			}
-			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-				t.Fatal(err)
-			}
-			if response.JSONRPC != "2.0" || len(response.Result) == 0 {
-				t.Fatalf("response=%s", rec.Body.String())
-			}
-		})
+	ts := httptest.NewServer(http.HandlerFunc(mcpHandler))
+	t.Cleanup(func() { ts.CloseClientConnections(); ts.Close() })
+
+	sdkClient := mcp.NewClient(&mcp.Implementation{Name: "fixture-test", Version: "1.0"}, nil)
+	transport := &mcp.StreamableClientTransport{Endpoint: ts.URL}
+	session, err := sdkClient.Connect(context.Background(), transport, &mcp.ClientSessionOptions{
+		ProtocolVersion: "2025-06-18",
+	})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+
+	initResult := session.InitializeResult()
+	if initResult.ServerInfo.Name != "stratum-stateful-mcp" || initResult.ServerInfo.Version != "1.0.0" {
+		t.Fatalf("serverInfo=%+v", initResult.ServerInfo)
+	}
+
+	tools, err := session.ListTools(context.Background(), &mcp.ListToolsParams{})
+	if err != nil {
+		t.Fatalf("tools/list: %v", err)
+	}
+	if len(tools.Tools) != 1 || tools.Tools[0].Name != "stateful_echo" {
+		t.Fatalf("tools=%+v", tools.Tools)
+	}
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "stateful_echo", Arguments: json.RawMessage(`{"text":"probe"}`),
+	})
+	if err != nil {
+		t.Fatalf("tools/call: %v", err)
+	}
+	if len(result.Content) != 1 {
+		t.Fatalf("call content=%+v", result.Content)
+	}
+	text, ok := result.Content[0].(*mcp.TextContent)
+	if !ok || text.Text != "stateful MCP call completed" {
+		t.Fatalf("call text=%+v", result.Content[0])
+	}
+
+	resources, err := session.ListResources(context.Background(), &mcp.ListResourcesParams{})
+	if err != nil {
+		t.Fatalf("resources/list: %v", err)
+	}
+	if len(resources.Resources) != 1 || resources.Resources[0].URI != "stratum://stateful/evidence" {
+		t.Fatalf("resources=%+v", resources.Resources)
 	}
 }
 
