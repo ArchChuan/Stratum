@@ -18,6 +18,7 @@ type CreateAgentRequest struct {
 	MaxIterations          int      `json:"maxIterations" binding:"required"`
 	MaxContextTokens       int      `json:"maxContextTokens"`
 	Temperature            float32  `json:"temperature"`
+	ReasoningEffort        string   `json:"reasoning_effort"`
 	MaxTokens              int      `json:"max_tokens"`
 	CompactionRecentGroups int      `json:"compaction_recent_groups"`
 	CompactionSafetyRatio  float32  `json:"compaction_safety_ratio"`
@@ -39,6 +40,7 @@ type UpdateAgentRequest struct {
 	MaxIterations          int      `json:"maxIterations"`
 	MaxContextTokens       int      `json:"maxContextTokens"`
 	Temperature            float32  `json:"temperature"`
+	ReasoningEffort        string   `json:"reasoning_effort"`
 	MaxTokens              int      `json:"max_tokens"`
 	CompactionRecentGroups int      `json:"compaction_recent_groups"`
 	CompactionSafetyRatio  float32  `json:"compaction_safety_ratio"`
@@ -48,9 +50,9 @@ type UpdateAgentRequest struct {
 	MemoryScope            string   `json:"memoryScope"`
 	CheckpointEnabled      bool     `json:"checkpointEnabled"`
 	// Parameters carries the registry sampling parameters as a flat object
-	// (temperature/max_tokens/compaction_recent_groups/compaction_safety_ratio).
-	// Merge semantics: only keys present in this map are written; a 0 value is
-	// unset and never overwrites a persisted value.
+	// (temperature/max_tokens/compaction_recent_groups/compaction_safety_ratio/
+	// reasoning_effort). Merge semantics: only keys present in this map are
+	// written; a 0 value is unset and never overwrites a persisted value.
 	Parameters map[string]any `json:"parameters"`
 }
 
@@ -64,6 +66,7 @@ type AgentResponse struct {
 	MaxIterations          int      `json:"maxIterations"`
 	MaxContextTokens       int      `json:"maxContextTokens"`
 	Temperature            float32  `json:"temperature"`
+	ReasoningEffort        string   `json:"reasoning_effort"`
 	MaxTokens              int      `json:"max_tokens"`
 	CompactionRecentGroups int      `json:"compaction_recent_groups"`
 	CompactionSafetyRatio  float32  `json:"compaction_safety_ratio"`
@@ -116,6 +119,7 @@ func dtoToResponse(d agent.AgentDTO) AgentResponse {
 		MaxIterations:          d.MaxIterations,
 		MaxContextTokens:       d.MaxContextTokens,
 		Temperature:            d.Temperature,
+		ReasoningEffort:        d.ReasoningEffort,
 		MaxTokens:              d.MaxTokens,
 		CompactionRecentGroups: d.CompactionRecentGroups,
 		CompactionSafetyRatio:  d.CompactionSafetyRatio,

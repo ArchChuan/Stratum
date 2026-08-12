@@ -121,6 +121,10 @@ type chainLink struct {
 	Model    string
 	Config   ProviderConfig
 	Protocol ChatProtocol
+	// Reasoning 标记该模型是否为已知推理模型（DB∨catalog 并集解析）。
+	// false 表示非推理或未知模型：invoke 对该 link 清空 reasoning_effort，
+	// 防止严格端点 400（永久错误，中止整条 fallback 链）。
+	Reasoning bool
 }
 
 // routedInfo 记录一次请求实际尝试过的模型链与最终成功模型。
@@ -176,13 +180,23 @@ func (g *Gateway) resolveChain(ctx context.Context, tenantID, model string) ([]c
 	if err != nil {
 		return nil, err
 	}
-	links := []chainLink{{Model: model, Config: cfg, Protocol: proto}}
+	links := []chainLink{{
+		Model:     model,
+		Config:    cfg,
+		Protocol:  proto,
+		Reasoning: g.registry.ResolveReasoning(ctx, tenantID, model),
+	}}
 	cands, err := g.registry.ResolveFallbackCandidates(ctx, tenantID, model)
 	if err != nil {
 		return nil, err
 	}
 	for _, c := range cands {
-		links = append(links, chainLink(c))
+		links = append(links, chainLink{
+			Model:     c.Model,
+			Config:    c.Config,
+			Protocol:  c.Protocol,
+			Reasoning: g.registry.ResolveReasoning(ctx, tenantID, c.Model),
+		})
 	}
 	return links, nil
 }
@@ -278,9 +292,18 @@ func (g *Gateway) invoke(
 	onToken func(string),
 ) (*CompletionResponse, bool, error) {
 	attemptReq := req
-	if link.Model != req.Model {
+	if link.Model != req.Model || (req.ReasoningEffort != "" && !link.Reasoning) {
 		cloned := *req
 		cloned.Model = link.Model
+		if req.ReasoningEffort != "" && !link.Reasoning {
+			// 能力门控 fail-closed：非推理/未知模型清空 effort（known-reasoning
+			// 透传 / known-non 与 unknown 均清空）。严格端点 400 是永久错误，
+			// 会中止整条 fallback 链。只改本次尝试副本，绝不改共享 req。
+			cloned.ReasoningEffort = ""
+			g.logger.Warn("llmgateway: reasoning_effort ignored for non-reasoning model",
+				zap.String("model", link.Model),
+				zap.String("reasoning_effort", req.ReasoningEffort))
+		}
 		attemptReq = &cloned
 	}
 	if stream {

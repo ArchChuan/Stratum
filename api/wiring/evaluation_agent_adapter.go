@@ -154,6 +154,7 @@ func (a agentEvaluationAdapter) ApplyPublishedRevision(
 		MaxIterations:          snapshot.MaxIterations,
 		MaxContextTokens:       snapshot.ModelParameters.MaxContextTokens,
 		Temperature:            snapshot.ModelParameters.Temperature,
+		ReasoningEffort:        snapshot.ModelParameters.ReasoningEffort,
 		MaxTokens:              snapshot.ModelParameters.MaxTokens,
 		CompactionRecentGroups: snapshot.ModelParameters.CompactionRecentGroups,
 		CompactionSafetyRatio:  snapshot.ModelParameters.CompactionSafetyRatio,
@@ -382,7 +383,7 @@ func parseAgentCandidatePatch(
 	for key, value := range patch.ParameterPatch {
 		switch key {
 		case "model", "max_context_tokens", "temperature", "max_tokens",
-			"compaction_recent_groups", "compaction_safety_ratio":
+			"compaction_recent_groups", "compaction_safety_ratio", "reasoning_effort":
 			model, changed, err := parseModelParameterPatch(key, value, &params)
 			if err != nil {
 				return result, err
@@ -414,18 +415,50 @@ func parseAgentCandidatePatch(
 }
 
 // parseModelParameterPatch applies one model-config parameter patch key
-// (model, max_context_tokens, temperature, max_tokens) into params. It returns
-// the patched model name (empty when unchanged) and whether any parameter
-// value was modified. Kept separate so the candidate patch parser stays within
-// the code-quality complexity budget.
+// (model, max_context_tokens, temperature, max_tokens, reasoning_effort) into
+// params. It returns the patched model name (empty when unchanged) and whether
+// any parameter value was modified. Kept separate so the candidate patch
+// parser stays within the code-quality complexity budget.
 func parseModelParameterPatch(key string, value any, params *agentdomain.ModelParameters) (string, bool, error) {
 	switch key {
+	case "reasoning_effort":
+		return applyReasoningEffortPatch(value, params)
 	case "model":
-		model, _ := value.(string)
-		if strings.TrimSpace(model) == "" {
-			return "", false, errors.New("evaluation Agent adapter: model must be non-empty")
-		}
-		return model, false, nil
+		return applyModelNamePatch(value)
+	default:
+		return applyModelNumericPatch(key, value, params)
+	}
+}
+
+// applyReasoningEffortPatch validates a reasoning_effort patch value. Invalid
+// tiers fail closed: written revisions propagate through promote to strict
+// endpoints where an invalid value 400s (a permanent error aborting the
+// fallback chain), so the tier must be rejected here.
+func applyReasoningEffortPatch(value any, params *agentdomain.ModelParameters) (string, bool, error) {
+	effort, ok := value.(string)
+	if !ok {
+		return "", false, errors.New("evaluation Agent adapter: reasoning_effort must be a string")
+	}
+	if !constants.IsValidReasoningEffort(effort) {
+		return "", false, errors.New("evaluation Agent adapter: reasoning_effort must be one of low/medium/high")
+	}
+	params.ReasoningEffort = effort
+	return "", true, nil
+}
+
+// applyModelNamePatch validates a model patch value and returns the new name.
+func applyModelNamePatch(value any) (string, bool, error) {
+	model, _ := value.(string)
+	if strings.TrimSpace(model) == "" {
+		return "", false, errors.New("evaluation Agent adapter: model must be non-empty")
+	}
+	return model, false, nil
+}
+
+// applyModelNumericPatch runs the shared parse → range-validate → assign
+// sequence for the numeric model-config patch keys.
+func applyModelNumericPatch(key string, value any, params *agentdomain.ModelParameters) (string, bool, error) {
+	switch key {
 	case "max_context_tokens":
 		changed, err := applyNumericPatch(key, value, parseInteger, func(v any) error {
 			params.MaxContextTokens = v.(int)

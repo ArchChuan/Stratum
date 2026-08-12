@@ -20,7 +20,10 @@ type ReActState struct {
 	ConversationID string
 	Model          string
 	Temperature    float32 // 0 = provider default
-	MaxTokens      int     // 0 = unset
+	// ReasoningEffort 是本次执行透传到 LLM 调用的采样强度档位:""|low|medium|
+	// high。空串 = unset,由网关按模型能力门控决定是否忽略。
+	ReasoningEffort string
+	MaxTokens       int // 0 = unset
 	// ModelResolved 是本次执行最后一次 LLM 调用实际成功的模型名（fallback
 	// 降级后与 Model 不同）；ModelRoutedVia 是实际尝试过的模型链。
 	ModelResolved              string

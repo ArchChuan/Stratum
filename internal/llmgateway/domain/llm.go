@@ -57,11 +57,16 @@ type CompletionRequest struct {
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages"`
 	Temperature float32   `json:"temperature,omitempty"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
-	TopP        float32   `json:"top_p,omitempty"`
-	Tools       []Tool    `json:"tools,omitempty"`
-	ToolChoice  string    `json:"tool_choice,omitempty"`
-	Stream      bool      `json:"stream,omitempty"`
+	// ReasoningEffort 是采样强度档位:""|low|medium|high。OpenAI 兼容协议
+	// 直传 body;Anthropic 由 provider 映射 extended_thinking。网关按候选
+	// 模型推理能力门控,未知/非推理模型清空,禁止盲透传(严格端点 400 是
+	// 永久错误,会中止 fallback 链)。
+	ReasoningEffort string  `json:"reasoning_effort,omitempty"`
+	MaxTokens       int     `json:"max_tokens,omitempty"`
+	TopP            float32 `json:"top_p,omitempty"`
+	Tools           []Tool  `json:"tools,omitempty"`
+	ToolChoice      string  `json:"tool_choice,omitempty"`
+	Stream          bool    `json:"stream,omitempty"`
 	// NoPrimaryRetry 禁止 gateway 对主模型瞬态失败的立即重试（0 值 = 默认
 	// 允许一次立即重试）。压缩路径用：时间片内主模型一次尝试失败直接降级候选。
 	// json:"-"：路由选项，禁止随请求体泄漏给 provider。

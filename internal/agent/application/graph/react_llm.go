@@ -412,11 +412,12 @@ func routeLLM(ctx context.Context, s ReActState, messages []port.LLMMessage, too
 			Type:        port.CapLLM,
 			TokenStream: stream,
 			LLM: &port.LLMCapRequest{
-				Model:       s.Model,
-				Messages:    messages,
-				Tools:       tools,
-				Temperature: s.Temperature,
-				MaxTokens:   s.MaxTokens,
+				Model:           s.Model,
+				Messages:        messages,
+				Tools:           tools,
+				Temperature:     s.Temperature,
+				ReasoningEffort: s.ReasoningEffort,
+				MaxTokens:       s.MaxTokens,
 			},
 		})
 		if err != nil && emitted.Load() {

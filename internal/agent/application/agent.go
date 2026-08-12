@@ -50,7 +50,11 @@ type ExecutionConfig struct {
 	MaxSteps    int
 	Timeout     time.Duration
 	Temperature float32
-	MaxTokens   int
+	// ReasoningEffort 是本次执行的采样强度档位:""(unset)|low|medium|high。
+	// 空串 = unset(与 Temperature 0 同构):网关/provider 默认生效。由
+	// registry 参数 agent.reasoning_effort 经 WithReasoningEffort 注入。
+	ReasoningEffort string
+	MaxTokens       int
 	// MaxContextTokens 是本次执行解析后的上下文窗口预算（0 = 未注入，
 	// 回退到 agent 配置显式值）。执行时由 AgentService 两阶段解析后注入。
 	MaxContextTokens int
@@ -303,6 +307,10 @@ func (a *BaseAgent) snapshotExecutionConfig(cfg *ExecutionConfig) agentExecSnaps
 	// a wall-clock deadline is optional and client-controlled.
 	if cfg.Temperature == 0 {
 		cfg.Temperature = a.Temperature
+	}
+	// ReasoningEffort 用 "" 作 unset 哨兵:空串回填 agent 配置,非空 option 优先。
+	if cfg.ReasoningEffort == "" {
+		cfg.ReasoningEffort = a.ReasoningEffort
 	}
 	if cfg.MaxTokens == 0 {
 		cfg.MaxTokens = a.MaxTokens
@@ -693,7 +701,8 @@ func retryMinimalFinalRequest(ctx context.Context, ec agentExecContext, messages
 			TraceID: ec.cfg.TraceID, TenantID: ec.cfg.TenantID, Type: port.CapLLM,
 			LLM: &port.LLMCapRequest{
 				Model: ec.llmModel, Messages: messages,
-				Temperature: ec.cfg.Temperature, MaxTokens: resolveMaxOutputTokens(ec.cfg.MaxTokens, ec.cfg.OutputReserve),
+				Temperature: ec.cfg.Temperature, ReasoningEffort: ec.cfg.ReasoningEffort,
+				MaxTokens: resolveMaxOutputTokens(ec.cfg.MaxTokens, ec.cfg.OutputReserve),
 			},
 		})
 	})
@@ -850,6 +859,7 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		ConversationID:         ec.cfg.ConversationID,
 		Model:                  ec.llmModel,
 		Temperature:            ec.cfg.Temperature,
+		ReasoningEffort:        ec.cfg.ReasoningEffort,
 		MaxTokens:              resolveMaxOutputTokens(ec.cfg.MaxTokens, ec.cfg.OutputReserve),
 		CompactionRecentGroups: ec.cfg.CompactionRecentGroups,
 		CompactionSafetyRatio:  ec.cfg.CompactionSafetyRatio,
@@ -1150,6 +1160,15 @@ func WithTimeout(timeout time.Duration) ExecutionOption {
 func WithTemperature(temperature float32) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.Temperature = temperature
+	}
+}
+
+// WithReasoningEffort sets the LLM reasoning effort tier. "" = unset
+// (gateway/provider default applies); non-empty values are gated by model
+// capability at the gateway.
+func WithReasoningEffort(effort string) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.ReasoningEffort = effort
 	}
 }
 

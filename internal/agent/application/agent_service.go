@@ -147,6 +147,7 @@ type CreateAgentInput struct {
 	MaxIterations          int
 	MaxContextTokens       int
 	Temperature            float32
+	ReasoningEffort        string
 	MaxTokens              int
 	CompactionRecentGroups int
 	CompactionSafetyRatio  float32
@@ -168,6 +169,7 @@ type UpdateAgentInput struct {
 	MaxIterations          int
 	MaxContextTokens       int
 	Temperature            float32
+	ReasoningEffort        string
 	MaxTokens              int
 	CompactionRecentGroups int
 	CompactionSafetyRatio  float32
@@ -199,6 +201,7 @@ type AgentDTO struct {
 	MaxIterations          int
 	MaxContextTokens       int
 	Temperature            float32
+	ReasoningEffort        string
 	MaxTokens              int
 	CompactionRecentGroups int
 	CompactionSafetyRatio  float32
@@ -229,7 +232,7 @@ type SystemAssistantSettings struct {
 // before persist. Zero means unset (gateway default) and is skipped; a nil
 // provider (db unavailable) degrades to no-op, matching resolve.
 func (s *AgentService) validateSamplingParams(
-	ctx context.Context, temperature float32, maxTokens, compactionRecentGroups int, compactionSafetyRatio float32,
+	ctx context.Context, temperature float32, maxTokens, compactionRecentGroups int, compactionSafetyRatio float32, reasoningEffort string,
 ) error {
 	if s.deps.ParametersProvider == nil {
 		return nil
@@ -247,6 +250,11 @@ func (s *AgentService) validateSamplingParams(
 	if compactionSafetyRatio != 0 {
 		declared["compaction_safety_ratio"] = float64(compactionSafetyRatio)
 	}
+	// ReasoningEffort "" = unset 跳过;非空必须在 low/medium/high 枚举内,否则
+	// 非法值会沿执行链路透传到网关对严格端点打 400,中止整条 fallback 链。
+	if reasoningEffort != "" {
+		declared["reasoning_effort"] = reasoningEffort
+	}
 	if len(declared) == 0 {
 		return nil
 	}
@@ -263,7 +271,7 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		return AgentDTO{}, err
 	}
 	if err := s.validateSamplingParams(ctx, in.Temperature, in.MaxTokens,
-		in.CompactionRecentGroups, in.CompactionSafetyRatio); err != nil {
+		in.CompactionRecentGroups, in.CompactionSafetyRatio, in.ReasoningEffort); err != nil {
 		return AgentDTO{}, err
 	}
 	id := uuid.Must(uuid.NewV7()).String()
@@ -277,6 +285,7 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		MaxIterations:          in.MaxIterations,
 		MaxContextTokens:       in.MaxContextTokens, // 0 = 未配置，执行时两阶段解析
 		Temperature:            in.Temperature,
+		ReasoningEffort:        in.ReasoningEffort,
 		MaxTokens:              in.MaxTokens,
 		CompactionRecentGroups: in.CompactionRecentGroups,
 		CompactionSafetyRatio:  in.CompactionSafetyRatio,
@@ -647,8 +656,8 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in UpdateAgentInput) (*domain.AgentConfig, error) {
 	// Parameters map keys take precedence over the top-level sampling fields
 	// (only present keys overwrite); validation runs on the merged result.
-	temperature, maxTokens, recentGroups, safetyRatio := applyParameterOverrides(in)
-	if err := s.validateSamplingParams(ctx, temperature, maxTokens, recentGroups, safetyRatio); err != nil {
+	temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort := applyParameterOverrides(in)
+	if err := s.validateSamplingParams(ctx, temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort); err != nil {
 		return nil, err
 	}
 	skills := in.AllowedSkills
@@ -665,6 +674,7 @@ func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in Upda
 		MaxIterations:          in.MaxIterations,
 		MaxContextTokens:       in.MaxContextTokens, // 0 = 未配置，执行时两阶段解析
 		Temperature:            temperature,
+		ReasoningEffort:        reasoningEffort,
 		MaxTokens:              maxTokens,
 		CompactionRecentGroups: recentGroups,
 		CompactionSafetyRatio:  safetyRatio,
@@ -698,11 +708,12 @@ func (s *AgentService) validateWorkspaceBindings(ctx context.Context, tenantID s
 // top-level sampling fields. Only keys present in the map overwrite; map
 // values win over the top-level fields. Zero values pass through unchanged
 // (0 = unset, the merge pack skips them, so an explicit 0 never clears).
-func applyParameterOverrides(in UpdateAgentInput) (float32, int, int, float32) {
+func applyParameterOverrides(in UpdateAgentInput) (float32, int, int, float32, string) {
 	temperature, maxTokens := in.Temperature, in.MaxTokens
 	recentGroups, safetyRatio := in.CompactionRecentGroups, in.CompactionSafetyRatio
+	reasoningEffort := in.ReasoningEffort
 	if len(in.Parameters) == 0 {
-		return temperature, maxTokens, recentGroups, safetyRatio
+		return temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort
 	}
 	if v, ok := numericSampleValue(in.Parameters["temperature"]); ok {
 		temperature = float32(v)
@@ -716,7 +727,10 @@ func applyParameterOverrides(in UpdateAgentInput) (float32, int, int, float32) {
 	if v, ok := numericSampleValue(in.Parameters["compaction_safety_ratio"]); ok {
 		safetyRatio = float32(v)
 	}
-	return temperature, maxTokens, recentGroups, safetyRatio
+	if v, ok := in.Parameters["reasoning_effort"].(string); ok {
+		reasoningEffort = v
+	}
+	return temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort
 }
 
 // numericSampleValue coerces a decoded JSON scalar (float64/int) to float64.
@@ -764,6 +778,11 @@ func (s *AgentService) updateSystemAssistant(ctx context.Context, cfg *domain.Ag
 	tenantID := reqctx.TenantIDFromContext(ctx)
 	if tenantID == "" {
 		return AgentDTO{}, fmt.Errorf("update system assistant: tenant id required")
+	}
+	// 平台助手不参与思考强度配置:前端以 !isSystem 守卫隐藏,这里 fail closed
+	// 拒绝任何直调 API 携带的非空 effort,防止经网关对严格端点打 400。
+	if in.ReasoningEffort != "" {
+		return AgentDTO{}, domain.ErrInvalidSamplingParameters
 	}
 	model, err := s.resolveSystemAssistantModel(ctx, tenantID, cfg.LLMModel, in.LLMModel)
 	if err != nil {
@@ -826,7 +845,7 @@ func (s *AgentService) resolveSystemAssistantModel(ctx context.Context, tenantID
 // rewritten by PUT 0. Both fail closed with ErrInvalidSamplingParameters and
 // never persist.
 func (s *AgentService) mergeSystemAssistantMaxTokens(ctx context.Context, requested, persisted int) (int, error) {
-	if err := s.validateSamplingParams(ctx, 0, requested, 0, 0); err != nil {
+	if err := s.validateSamplingParams(ctx, 0, requested, 0, 0, ""); err != nil {
 		return 0, err
 	}
 	maxTokens := requested
@@ -834,7 +853,7 @@ func (s *AgentService) mergeSystemAssistantMaxTokens(ctx context.Context, reques
 		maxTokens = persisted
 	}
 	if maxTokens != 0 {
-		if err := s.validateSamplingParams(ctx, 0, maxTokens, 0, 0); err != nil {
+		if err := s.validateSamplingParams(ctx, 0, maxTokens, 0, 0, ""); err != nil {
 			return 0, err
 		}
 	}
@@ -948,6 +967,7 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		MaxIterations:          cfg.MaxIterations,
 		MaxContextTokens:       cfg.MaxContextTokens,
 		Temperature:            cfg.Temperature,
+		ReasoningEffort:        cfg.ReasoningEffort,
 		MaxTokens:              cfg.MaxTokens,
 		CompactionRecentGroups: cfg.CompactionRecentGroups,
 		CompactionSafetyRatio:  cfg.CompactionSafetyRatio,
@@ -980,6 +1000,9 @@ func samplingParameterMap(cfg *domain.AgentConfig) map[string]any {
 	}
 	if cfg.CompactionSafetyRatio != 0 {
 		params["compaction_safety_ratio"] = cfg.CompactionSafetyRatio
+	}
+	if cfg.ReasoningEffort != "" {
+		params["reasoning_effort"] = cfg.ReasoningEffort
 	}
 	return params
 }
@@ -1952,35 +1975,60 @@ func (s *AgentService) resolveEffectiveParameters(
 		"agent.compaction_cooldown_sec":  cfg.CompactionCooldownSec,
 		"agent.max_tokens_per_execution": cfg.MaxTokensPerExecution,
 	}
+	// ReasoningEffort 用 "" 作 unset 哨兵,但 resolver.isUnset 只认零值:空串放
+	// 进 declared 会遮蔽平台默认。只有非空才声明,与全局 isUnset 语义解耦。
+	if cfg.ReasoningEffort != "" {
+		declared["agent.reasoning_effort"] = cfg.ReasoningEffort
+	}
 	effective, err := s.deps.ParametersProvider.ResolveForResource(ctx, declared)
 	if err != nil {
 		s.deps.Logger.Warn("agent execute: resolve effective parameters, keeping defaults", zap.Error(err))
 		return options
 	}
-	if v, ok := effective["agent.temperature"].(float64); ok {
-		options = append(options, WithTemperature(float32(v)))
-	}
-	if v, ok := effective["agent.max_tokens"].(int64); ok {
-		options = append(options, WithMaxTokens(int(v)))
-	}
-	if v, ok := effective["agent.compaction_recent_groups"].(int64); ok {
-		options = append(options, WithCompactionRecentGroups(int(v)))
-	}
-	if v, ok := effective["agent.compaction_safety_ratio"].(float64); ok {
-		options = append(options, WithCompactionSafetyRatio(float32(v)))
-	}
-	if v, ok := effective["agent.compaction_cooldown_sec"].(int64); ok {
-		options = append(options, WithCompactionCooldownSec(int(v)))
-	}
-	if v, ok := effective["agent.max_tokens_per_execution"].(int64); ok {
-		options = append(options, WithMaxTokensPerExecution(int(v)))
-	}
+	opts := []ExecutionOption{}
+	opts = appendFloatOption(opts, effective, "agent.temperature", WithTemperature)
+	opts = appendIntOption(opts, effective, "agent.max_tokens", WithMaxTokens)
+	opts = appendStringOption(opts, effective, "agent.reasoning_effort", WithReasoningEffort)
+	opts = appendIntOption(opts, effective, "agent.compaction_recent_groups", WithCompactionRecentGroups)
+	opts = appendFloatOption(opts, effective, "agent.compaction_safety_ratio", WithCompactionSafetyRatio)
+	opts = appendIntOption(opts, effective, "agent.compaction_cooldown_sec", WithCompactionCooldownSec)
+	opts = appendIntOption(opts, effective, "agent.max_tokens_per_execution", WithMaxTokensPerExecution)
+	options = append(options, opts...)
 	// Platform-scope execution toggles are resolved individually; they are
 	// not resource keys so ResolveForResource never returns them.
 	if opt := captureParametersOption(ctx, s.deps.ParametersProvider); opt != nil {
 		options = append(options, opt)
 	}
 	return options
+}
+
+// appendIntOption appends the ExecutionOption produced by set when the resolved
+// value for key is an int64. One type-assert + build per resolved resource key,
+// keeping resolveEffectiveParameters within the complexity budget.
+func appendIntOption(opts []ExecutionOption, effective map[string]any, key string, set func(int) ExecutionOption) []ExecutionOption {
+	if v, ok := effective[key].(int64); ok {
+		opts = append(opts, set(int(v)))
+	}
+	return opts
+}
+
+// appendFloatOption appends the ExecutionOption produced by set when the
+// resolved value for key is a float64.
+func appendFloatOption(opts []ExecutionOption, effective map[string]any, key string, set func(float32) ExecutionOption) []ExecutionOption {
+	if v, ok := effective[key].(float64); ok {
+		opts = append(opts, set(float32(v)))
+	}
+	return opts
+}
+
+// appendStringOption appends the ExecutionOption produced by set when the
+// resolved value for key is a non-empty string. Empty strings stay unset so a
+// ""-keyed resource value never masks the platform default.
+func appendStringOption(opts []ExecutionOption, effective map[string]any, key string, set func(string) ExecutionOption) []ExecutionOption {
+	if v, ok := effective[key].(string); ok && v != "" {
+		opts = append(opts, set(v))
+	}
+	return opts
 }
 
 // captureParametersOption reads the platform-scope execution toggle

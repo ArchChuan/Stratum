@@ -171,13 +171,34 @@ func (s *ProviderService) invalidate(tenantID string) {
 
 // inferCapabilities deduces model capabilities from the model name using
 // provider-agnostic naming conventions. All major LLM providers follow the
-// pattern of including "embed" in embedding model names.
+// pattern of including "embed" in embedding model names. 推理模型按命名规则 +
+// exact-match 清单打标，必须保留 CapChat（否则被 capability='chat' 过滤出
+// Agent 下拉，feature 对目标模型不可用）。
 func inferCapabilities(name string) []domain.ModelCapability {
 	lower := strings.ToLower(name)
 	if strings.Contains(lower, "embed") {
 		return []domain.ModelCapability{domain.CapEmbedding}
 	}
+	if isReasoningModelName(lower) {
+		return []domain.ModelCapability{domain.CapChat, domain.CapReasoning}
+	}
 	return []domain.ModelCapability{domain.CapChat}
+}
+
+// isReasoningModelName 判断模型名是否为已知推理模型。命名规则：o1/o3/o4、
+// qwq 前缀，deepseek-reasoner exact-match。发现打标会写入 DB models.capabilities，
+// 是网关能力来源之一（DB∨catalog 并集）——与 infrastructure/model_catalog.go
+// 的 reasoningModels 清单保持同步：新增推理模型须两处都登记。
+func isReasoningModelName(lower string) bool {
+	if lower == "deepseek-reasoner" {
+		return true
+	}
+	for _, prefix := range []string{"o1", "o3", "o4", "qwq"} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // HealthCheck verifies that the provider is reachable by calling the

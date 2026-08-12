@@ -118,18 +118,55 @@ func (d *ParameterDefinition) Validate(value any) error {
 	case TypeFloat:
 		return d.validateNumber(value, false)
 	case TypeBool:
-		if _, ok := value.(bool); !ok {
-			return fmt.Errorf("%s: expected bool, got %T", d.Key, value)
-		}
-		return nil
+		return d.validateBool(value)
 	case TypeString:
-		if _, ok := value.(string); !ok {
-			return fmt.Errorf("%s: expected string, got %T", d.Key, value)
-		}
-		return nil
+		return d.validateString(value)
 	default:
 		return fmt.Errorf("%s: unknown value type %q", d.Key, d.ValueType)
 	}
+}
+
+// validateBool checks a boolean value's type. Split out of Validate to keep the
+// switch dispatch shallow (cyclomatic ratchet).
+func (d *ParameterDefinition) validateBool(value any) error {
+	if _, ok := value.(bool); !ok {
+		return fmt.Errorf("%s: expected bool, got %T", d.Key, value)
+	}
+	return nil
+}
+
+// validateString checks a string value's type and, when the definition constrains
+// select options, membership in them. ValidateFn (registry-level semantic check)
+// runs last when present.
+func (d *ParameterDefinition) validateString(value any) error {
+	s, ok := value.(string)
+	if !ok {
+		return fmt.Errorf("%s: expected string, got %T", d.Key, value)
+	}
+	if len(d.VisualHint.Options) > 0 && !d.matchesStringOption(s) {
+		return fmt.Errorf("%s: value %q not in allowed options %v", d.Key, value, d.VisualHint.Options)
+	}
+	if d.ValidateFn != nil {
+		return d.ValidateFn(value)
+	}
+	return nil
+}
+
+// matchesStringOption reports whether the string value is among the declared
+// select options. Options constrain string-select parameters (e.g.
+// reasoning_effort tiers); a nil/empty option list accepts any string.
+// 空串恒放行:Select 参数的空串 = unset 哨兵(与 omitempty、isUnset 一致),
+// Default:"" + Options 组合必须合法,否则 resolver 校验默认值就失败。
+func (d *ParameterDefinition) matchesStringOption(s string) bool {
+	if s == "" {
+		return true
+	}
+	for _, opt := range d.VisualHint.Options {
+		if o, ok := opt.(string); ok && o == s {
+			return true
+		}
+	}
+	return false
 }
 
 // validateNumber checks numeric type/bounds/options shared by int and float
