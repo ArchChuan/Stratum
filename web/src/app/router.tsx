@@ -11,6 +11,7 @@ import { iamPublicRoutes, iamPrivateRoutes, useAuth } from '@/modules/iam';
 import { knowledgeRoutes } from '@/modules/knowledge';
 import { llmRoutes } from '@/modules/llm';
 import { mcpRoutes } from '@/modules/mcp';
+import { mechanismRoutes } from '@/modules/mechanism';
 import { memoryRoutes } from '@/modules/memory';
 import { operationGateRoutes } from '@/modules/operation-gate';
 import { parametersRoutes } from '@/modules/parameters';
@@ -49,6 +50,7 @@ export const AppRouter = () => {
         {promptRoutes}
         {auditRoutes}
         {memoryRoutes}
+        {mechanismRoutes}
         {collabRoutes}
         {scheduledTaskRoutes}
         {iamPrivateRoutes}

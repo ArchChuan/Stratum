@@ -15,6 +15,13 @@ const (
 	ProfileStatusDraft  = "draft"
 )
 
+// 家族前缀规模上限：与 proto binding（max=32,dive,max=100）双保险，
+// 限制全局基线的 JSONB 体积与消费路径前缀扫描成本。
+const (
+	maxFamilyPrefixes  = 32
+	maxFamilyPrefixLen = 100
+)
+
 // ModelMatcher 把模型名映射到档案：模型名以任一 family_prefix 开头即命中。
 type ModelMatcher struct {
 	FamilyPrefixes []string `json:"family_prefixes"`
@@ -70,6 +77,7 @@ type Profile struct {
 var ErrInvalidProfile = errors.New("mechanism: invalid profile")
 
 // Validate 校验档案不变量：族键非空、matcher 至少一个前缀、状态合法。
+// 前缀数量/长度上限与 proto binding（max=32 / dive,max=100）保持双保险。
 func (p *Profile) Validate() error {
 	if p.FamilyKey == "" {
 		return fmt.Errorf("%w: family_key required", ErrInvalidProfile)
@@ -77,9 +85,15 @@ func (p *Profile) Validate() error {
 	if len(p.Matcher.FamilyPrefixes) == 0 {
 		return fmt.Errorf("%w: model_matcher.family_prefixes must not be empty", ErrInvalidProfile)
 	}
+	if len(p.Matcher.FamilyPrefixes) > maxFamilyPrefixes {
+		return fmt.Errorf("%w: too many family_prefixes (%d > %d)", ErrInvalidProfile, len(p.Matcher.FamilyPrefixes), maxFamilyPrefixes)
+	}
 	for _, prefix := range p.Matcher.FamilyPrefixes {
 		if prefix == "" {
 			return fmt.Errorf("%w: model_matcher.family_prefixes contains empty prefix", ErrInvalidProfile)
+		}
+		if len(prefix) > maxFamilyPrefixLen {
+			return fmt.Errorf("%w: family_prefix exceeds %d chars", ErrInvalidProfile, maxFamilyPrefixLen)
 		}
 	}
 	if p.Status != "" && p.Status != ProfileStatusActive && p.Status != ProfileStatusDraft {

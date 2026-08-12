@@ -33,7 +33,8 @@
     "/scheduled-tasks",
     "/prompts",
     "/audit",
-    "/memory"
+    "/memory",
+    "/mechanism/profiles"
   ],
   "mutations": [
     "POST /auth/refresh",
@@ -115,6 +116,7 @@
     "POST /prompts",
     "POST /prompts/:key/versions/:version/publish",
     "PUT /prompts/bindings",
-    "DELETE /prompts/bindings/:key/:scope"
+    "DELETE /prompts/bindings/:key/:scope",
+    "PUT /mechanism/profiles"
   ]
 }
