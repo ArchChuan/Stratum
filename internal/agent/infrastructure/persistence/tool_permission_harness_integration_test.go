@@ -45,6 +45,7 @@ func TestToolPermissionHarnessIsolatesApprovalAcrossTenantSchemas(t *testing.T) 
 	}
 	store := persistence.NewPgToolApprovalStore(pool)
 	service := agentapp.NewToolApprovalService(store, nil, pkgcrypto.DeriveAESKey("permission-harness-key"))
+	service.SetTenantRoleResolver(integrationRoleStub{role: "admin"})
 	const sentinel = "approval-sensitive-sentinel"
 	payload := agentapp.ToolApprovalPayload{
 		TenantID: tenantA, ExecutionID: "exec-1", TraceID: "trace-1", AgentID: "agent-1", UserID: "user-1",

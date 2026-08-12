@@ -66,6 +66,7 @@ func TestToolApprovalEncryptedDecisionAndExactlyOnceExecution(t *testing.T) {
 	approvals := persistence.NewPgToolApprovalStore(pool)
 	checkpoints := persistence.NewPgCheckpointStore(pool)
 	svc := agentapp.NewToolApprovalService(approvals, checkpoints, pkgcrypto.DeriveAESKey("integration-key"))
+	svc.SetTenantRoleResolver(integrationRoleStub{role: "admin"})
 	payload := agentapp.ToolApprovalPayload{TenantID: tenantID, ExecutionID: "exec-1", TraceID: "trace-1", AgentID: "agent-1", UserID: "user-1", ConversationID: uuid.NewString(), ToolCallID: "call-1", ServerID: "orders", ToolName: "delete", RiskLevel: port.ToolRiskDestructive, Query: "delete", Arguments: map[string]any{"secret": "plain-secret"}}
 	id, err := svc.Request(ctx, payload)
 	if err != nil {
