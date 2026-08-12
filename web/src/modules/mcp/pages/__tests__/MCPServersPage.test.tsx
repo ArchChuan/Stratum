@@ -61,6 +61,8 @@ describe('MCPServersPage responsive list', () => {
     expect(screen.getByText('搜索服务')).toBeInTheDocument();
     expect(screen.getByText('http')).toBeInTheDocument();
     expect(screen.getByText('https://mcp.example.test')).toBeInTheDocument();
+    expect(screen.getByText('文件服务')).toBeInTheDocument();
+    expect(screen.getByText('已停用')).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole('button', { name: '查看详情' })[0]);
     fireEvent.click(screen.getAllByRole('button', { name: '编辑服务器' })[0]);
     fireEvent.click(screen.getByRole('button', { name: '连接服务器' }));

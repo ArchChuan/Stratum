@@ -2,7 +2,6 @@
 package infrastructure
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -10,30 +9,26 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 
+	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
 
 const mcpProtocolVersion = constants.MCPProtocolVersion
 
-const (
-	// maxStdioReadBytes caps a single stdio response line to prevent memory exhaustion.
-	maxStdioReadBytes = 8 << 20
-	// processTerminateGrace is how long Disconnect waits for a stdio child to
-	// exit after SIGTERM before escalating to SIGKILL.
-	processTerminateGrace = 5 * time.Second
-)
+// ErrTransportTimeout is returned when an HTTP request is abandoned by ctx
+// deadline/cancel. It is the safe projection of a url.Error whose original
+// text contains the full request URL (credentials must never leak into logs);
+// errors.Is(err, context.DeadlineExceeded) callers use this sentinel instead.
+var ErrTransportTimeout = errors.New("mcp http transport timed out")
 
 // ErrClientClosed is returned when an in-flight request races with Disconnect
 // (or is issued against a client whose transport is no longer available).
@@ -62,12 +57,8 @@ type BaseClient struct {
 	mu          sync.RWMutex
 	logger      *zap.Logger
 	reqID       atomic.Int32
-	// 传输相关字段
-	cmd        *exec.Cmd
-	stdin      io.WriteCloser
-	stdout     io.ReadCloser
-	stdinLock  sync.Mutex // serialises writes to stdin
-	readMu     sync.Mutex // serialises reads on stdout (single-reader)
+	// 传输相关字段。租户 stdio 已禁用（doConnect 是唯一权威拒绝点），
+	// 不再存在子进程/管道字段；stdio 专属的 stdinLock/readMu 一并移除。
 	reqMu      sync.Mutex // serialises request periods (at most one in-flight request per client)
 	httpClient *http.Client
 	sessionID  string
@@ -117,10 +108,17 @@ func (c *BaseClient) Connect(ctx context.Context) error {
 func (c *BaseClient) doConnect(ctx context.Context) error {
 	c.logger.Info("connecting to MCP server", zap.String("transport", c.config.Transport))
 
+	// stdio 拒绝的唯一权威落点：租户 stdio 意味着按租户可编辑配置 spawn
+	// 任意进程（宿主机任意命令执行）。所有连接路径（service 写入、
+	// ReconnectServer 路由、懒恢复、evaluation 基线、performHealthCheck
+	// 重连、restoreServer 存量行）最终都收敛于 doConnect，这里拒绝即全链
+	// 禁用；后续新增连接路径一律不得绕过。
+	if c.config.Transport == "stdio" {
+		return mcpdomain.ErrUnsupportedTransport
+	}
+
 	var err error
 	switch c.config.Transport {
-	case "stdio":
-		err = c.connectStdio(ctx)
 	case "http", "streamable-http":
 		err = c.connectHTTP(ctx)
 	default:
@@ -165,38 +163,6 @@ func (c *BaseClient) Disconnect(ctx context.Context) error {
 	c.healthy = false
 	c.serverInfo.Status = "disconnected"
 	var result error
-	if c.stdin != nil {
-		if err := c.stdin.Close(); err != nil {
-			result = errors.Join(result, fmt.Errorf("close MCP stdin: %w", err))
-		}
-		c.stdin = nil
-	}
-	if c.stdout != nil {
-		if err := c.stdout.Close(); err != nil {
-			result = errors.Join(result, fmt.Errorf("close MCP stdout: %w", err))
-		}
-		c.stdout = nil
-	}
-	if c.cmd != nil && c.cmd.Process != nil {
-		command := c.cmd
-		done := make(chan struct{})
-		go func() {
-			_ = command.Wait()
-			close(done)
-		}()
-		// Kill process group: SIGTERM first, then SIGKILL after grace period.
-		pgid := -command.Process.Pid
-		if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			result = errors.Join(result, fmt.Errorf("SIGTERM MCP process group: %w", err))
-		}
-		select {
-		case <-done:
-		case <-time.After(processTerminateGrace):
-			_ = syscall.Kill(pgid, syscall.SIGKILL)
-			<-done
-		}
-		c.cmd = nil
-	}
 	if c.httpClient != nil {
 		c.httpClient.CloseIdleConnections()
 		c.httpClient = nil
@@ -328,45 +294,6 @@ func (c *BaseClient) GetServerInfo() *MCPServerInfo {
 
 // 私有方法
 
-func (c *BaseClient) connectStdio(ctx context.Context) error {
-	if c.config.Command == "" {
-		return fmt.Errorf("command not specified for stdio transport")
-	}
-
-	cmd := exec.CommandContext(ctx, c.config.Command, c.config.Args...) //nolint:gosec
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Env = os.Environ()
-	for k, v := range c.config.Env {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
-	}
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("failed to create stdin pipe: %w", err)
-	}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		_ = stdin.Close()
-		return fmt.Errorf("failed to create stdout pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		_ = stdin.Close()
-		_ = stdout.Close()
-		return fmt.Errorf("failed to start command: %w", err)
-	}
-
-	c.cmd = cmd
-	c.stdin = stdin
-	c.stdout = stdout
-	c.serverInfo.Pid = cmd.Process.Pid
-	c.serverInfo.StartedAt = time.Now()
-
-	c.logger.Info("stdio connection established", zap.String("command", c.config.Command))
-	return nil
-}
-
 func (c *BaseClient) connectHTTP(ctx context.Context) error {
 	if c.config.URL == "" {
 		return fmt.Errorf("URL not specified for HTTP transport")
@@ -492,20 +419,20 @@ func validateHTTPInitializeResult(result httpInitializeResult) error {
 }
 
 func (c *BaseClient) sendRequest(ctx context.Context, req *MCPRequest) (*MCPResponse, error) {
-	// At most one request may be in flight per client: stdio responses are
-	// consumed as the next line on a shared pipe, so concurrent requests would
-	// steal each other's responses. The lock spans the whole request period
-	// (write, read, timeout) but never connection lifecycle methods.
+	// At most one request may be in flight per client: responses are
+	// correlated by request id on a shared transport, so concurrent requests
+	// would steal each other's responses. The lock spans the whole request
+	// period (write, read, timeout) but never connection lifecycle methods.
 	c.reqMu.Lock()
 	defer c.reqMu.Unlock()
 	var resp *MCPResponse
 	var err error
 	switch c.config.Transport {
-	case "stdio":
-		resp, err = c.sendStdioRequest(ctx, req)
 	case "http", "streamable-http":
 		resp, err = c.sendHTTPRequest(ctx, req)
 	default:
+		// stdio 已被 doConnect 拒绝；sendRequest 只会在已连接 client 上被
+		// 调用，走到这里说明连接路径与发送路径的 transport 判断不一致。
 		return nil, fmt.Errorf("unsupported transport: %s", c.config.Transport)
 	}
 	if err != nil {
@@ -515,92 +442,6 @@ func (c *BaseClient) sendRequest(ctx context.Context, req *MCPRequest) (*MCPResp
 		return nil, fmt.Errorf("MCP protocol error")
 	}
 	return resp, nil
-}
-
-func (c *BaseClient) sendStdioRequest(ctx context.Context, req *MCPRequest) (*MCPResponse, error) {
-	// Capture the transport under the lock: Disconnect closes and nils the
-	// fields at any time, so checking the fields and using them without the
-	// lock would race and could panic on a nil interface.
-	c.mu.RLock()
-	stdin := c.stdin
-	stdout := c.stdout
-	c.mu.RUnlock()
-	if stdin == nil || stdout == nil {
-		return nil, ErrClientClosed
-	}
-
-	data, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	// Serialise writes across concurrent goroutines. A write on a pipe closed
-	// by Disconnect surfaces as os.ErrClosed, never a panic.
-	c.stdinLock.Lock()
-	_, writeErr := stdin.Write(append(data, '\n'))
-	c.stdinLock.Unlock()
-	if writeErr != nil {
-		if errors.Is(writeErr, os.ErrClosed) {
-			return nil, fmt.Errorf("%w: stdin closed during request", ErrClientClosed)
-		}
-		return nil, fmt.Errorf("failed to write to stdin: %w", writeErr)
-	}
-
-	// Single-reader: at most one in-flight read on stdout at a time. The lock
-	// is held until the reader goroutine has exited, so a later request can
-	// never start reading while a previous reader is still blocked.
-	c.readMu.Lock()
-	defer c.readMu.Unlock()
-
-	// Read response in a goroutine so ctx cancellation is honoured. The caller
-	// always waits for the goroutine (wg) before returning, so a timeout can
-	// never leak it.
-	type readResult struct {
-		resp *MCPResponse
-		err  error
-	}
-	ch := make(chan readResult, 1)
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		limitReader := io.LimitReader(stdout, maxStdioReadBytes)
-		reader := bufio.NewReader(limitReader)
-		line, err := reader.ReadBytes('\n')
-		if err != nil {
-			if errors.Is(err, os.ErrClosed) {
-				ch <- readResult{err: fmt.Errorf("%w: stdout closed during request", ErrClientClosed)}
-				return
-			}
-			ch <- readResult{err: fmt.Errorf("failed to read from stdout: %w", err)}
-			return
-		}
-		var resp MCPResponse
-		if err := json.Unmarshal(bytes.TrimSpace(line), &resp); err != nil {
-			ch <- readResult{err: fmt.Errorf("failed to unmarshal response: %w", err)}
-			return
-		}
-		ch <- readResult{resp: &resp}
-	}()
-
-	select {
-	case <-ctx.Done():
-		// Wake the blocked read so the reader goroutine exits boundedly, then
-		// wait for it before releasing the single-reader lock. The stdout pipe
-		// is an *os.File in production (exec and os.Pipe), which supports read
-		// deadlines; the deadline is cleared so the next read is not cut short.
-		if f, ok := stdout.(*os.File); ok {
-			_ = f.SetReadDeadline(time.Now())
-		}
-		wg.Wait()
-		if f, ok := stdout.(*os.File); ok {
-			_ = f.SetReadDeadline(time.Time{})
-		}
-		return nil, ctx.Err()
-	case r := <-ch:
-		wg.Wait()
-		return r.resp, r.err
-	}
 }
 
 func (c *BaseClient) sendHTTPRequest(ctx context.Context, req *MCPRequest) (*MCPResponse, error) {
@@ -635,6 +476,12 @@ func (c *BaseClient) sendHTTPRequest(ctx context.Context, req *MCPRequest) (*MCP
 
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
+		// URL/query 不得进入错误文本（凭据防泄漏：url.Error 原文含完整
+		// URL）。超时/取消语义经 sentinel 保留，供调用方区分"慢 server"
+		// 与"连接失败"，且 errors.Is 可识别。
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return nil, ErrTransportTimeout
+		}
 		return nil, errors.New("MCP HTTP transport failed")
 	}
 	defer resp.Body.Close() //nolint:errcheck

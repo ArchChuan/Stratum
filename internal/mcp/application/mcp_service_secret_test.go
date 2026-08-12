@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
@@ -87,9 +88,11 @@ func TestUpdateServerPreservesOmittedSecrets(t *testing.T) {
 	}
 }
 
-func TestUpdateServerPreservesOmittedEnvironmentSecretForStdio(t *testing.T) {
+func TestUpdateServerRejectsStdioTransport(t *testing.T) {
 	t.Parallel()
 
+	// stdio 已全链禁用：UpdateServer 对 incoming stdio 一律返回
+	// ErrUnsupportedTransport，stdio 的 env 敏感值合并分支随之失效。
 	manager := &secretTestManager{stored: &domain.ServerConfig{
 		ID: "server-1", Transport: "stdio", Env: map[string]string{"MODE": "old", "OPENAI_API_KEY": "env-secret"},
 	}}
@@ -99,14 +102,8 @@ func TestUpdateServerPreservesOmittedEnvironmentSecretForStdio(t *testing.T) {
 		ID: "server-1", Transport: "stdio", Env: map[string]string{"MODE": "new"},
 	}
 
-	if err := svc.UpdateServer(context.Background(), incoming, "user-1"); err != nil {
-		t.Fatalf("UpdateServer: %v", err)
-	}
-	if got := manager.updated.Env["OPENAI_API_KEY"]; got != "env-secret" {
-		t.Errorf("env secret=%q, want preserved value", got)
-	}
-	if manager.stored.Env["MODE"] != "old" {
-		t.Fatal("stored config was mutated during merge")
+	if err := svc.UpdateServer(context.Background(), incoming, "user-1"); !errors.Is(err, domain.ErrUnsupportedTransport) {
+		t.Fatalf("UpdateServer(stdio) = %v, want ErrUnsupportedTransport", err)
 	}
 }
 

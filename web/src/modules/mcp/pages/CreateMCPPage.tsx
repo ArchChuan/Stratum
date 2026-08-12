@@ -26,10 +26,8 @@ export const CreateMCPPage = () => {
   const { candidates, loading } = useEditorCandidates();
   const navigate = useNavigate();
 
-  const transport = Form.useWatch('transport', form);
   const authType = Form.useWatch('auth_type', form);
   const retryEnabled = Form.useWatch('retry_enabled', form);
-  const isHTTP = transport && transport !== 'stdio';
 
   return (
     <div className="responsive-form-page">
@@ -52,7 +50,7 @@ export const CreateMCPPage = () => {
         layout="vertical"
         onFinish={handleFinish}
         initialValues={{
-          transport: 'stdio',
+          transport: 'streamable-http',
           auth_type: 'none',
           timeout_sec: MCP_DEFAULT_TIMEOUT_SEC,
           retry_enabled: false,
@@ -63,8 +61,8 @@ export const CreateMCPPage = () => {
         }}
       >
         <MCPBasicSection />
-        <MCPTransportSection transport={transport} />
-        {isHTTP && <MCPAuthSection authType={authType} />}
+        <MCPTransportSection />
+        <MCPAuthSection authType={authType} />
         <MCPRetrySection retryEnabled={retryEnabled} />
         <MCPEditorSection candidates={candidates} loading={loading} />
 

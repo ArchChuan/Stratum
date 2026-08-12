@@ -158,7 +158,7 @@ func TestMCPServiceConnectServerNewAuditsCreate(t *testing.T) {
 	svc := NewMCPService(&lifecycleRegistryFake{}, manager, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
-	err := svc.ConnectServer(t.Context(), &domain.ServerConfig{ID: "orders", Name: "orders", Transport: "stdio"}, nil, "user-1")
+	err := svc.ConnectServer(t.Context(), &domain.ServerConfig{ID: "orders", Name: "orders", Transport: "streamable-http"}, nil, "user-1")
 	require.NoError(t, err)
 
 	require.Len(t, manager.audits, 1)

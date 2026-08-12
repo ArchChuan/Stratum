@@ -58,12 +58,14 @@ func TestResourceChangeProposalValidatesMCPConfigurationBeforeReview(t *testing.
 		wantErr error
 	}{
 		{
-			name:    "stdio requires command",
+			// stdio 已全链禁用：无论 payload 形状一律拒绝，不再有
+			// "需 command / 拒 URL" 的局部校验语义。
+			name:    "stdio rejected without command",
 			payload: `{"name":"local","version":"1","transport":"stdio","timeoutSec":30}`,
 			wantErr: domain.ErrProposalInvalid,
 		},
 		{
-			name:    "stdio rejects URL",
+			name:    "stdio rejected even with command and URL",
 			payload: `{"name":"local","version":"1","transport":"stdio","command":"mcp-server","url":"https://example.test/mcp","timeoutSec":30}`,
 			wantErr: domain.ErrProposalInvalid,
 		},
@@ -98,8 +100,10 @@ func TestResourceChangeProposalValidatesMCPConfigurationBeforeReview(t *testing.
 			wantErr: domain.ErrProposalInvalid,
 		},
 		{
-			name:    "valid stdio",
+			// valid-looking stdio（command+args 齐全）同样一律拒绝。
+			name:    "stdio rejected despite valid shape",
 			payload: `{"name":"local","version":"1","transport":"stdio","command":"mcp-server","args":["serve"],"timeoutSec":30}`,
+			wantErr: domain.ErrProposalInvalid,
 		},
 		{
 			name:    "valid streamable HTTP with retry",

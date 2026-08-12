@@ -34,7 +34,7 @@ func TestLazyReconnectAfterEviction(t *testing.T) {
 	ts.SetBehavior("echo", testserver.Behavior{Result: map[string]any{"echo": true}})
 	defer ts.Close()
 
-	manager := NewClientManager(logger, nil, nil, "")
+	manager := NewClientManager(logger, nil, nil)
 	ctx := context.Background()
 
 	cfg := &domain.ServerConfig{
@@ -76,7 +76,7 @@ func TestLazyReconnectSkipsDisabledServer(t *testing.T) {
 	ts.SetBehavior("echo", testserver.Behavior{Result: map[string]any{"echo": true}})
 	defer ts.Close()
 
-	manager := NewClientManager(logger, nil, nil, "")
+	manager := NewClientManager(logger, nil, nil)
 	ctx := context.Background()
 
 	cfg := &domain.ServerConfig{
@@ -110,7 +110,7 @@ func TestLazyReconnectConcurrentBurst(t *testing.T) {
 	ts.SetBehavior("echo", testserver.Behavior{Result: map[string]any{"echo": true}})
 	defer ts.Close()
 
-	manager := NewClientManager(logger, nil, nil, "")
+	manager := NewClientManager(logger, nil, nil)
 	ctx := context.Background()
 
 	cfg := &domain.ServerConfig{
@@ -154,7 +154,7 @@ func TestLazyReconnectConcurrentBurst(t *testing.T) {
 // returns "client not found".
 func TestLazyReconnectServerNotFound(t *testing.T) {
 	logger := zap.NewNop()
-	manager := NewClientManager(logger, nil, nil, "")
+	manager := NewClientManager(logger, nil, nil)
 
 	_, err := manager.CallTool(context.Background(), "nonexistent-id", "some_tool", map[string]any{})
 	require.Error(t, err)

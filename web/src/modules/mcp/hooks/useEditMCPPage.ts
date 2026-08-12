@@ -14,16 +14,6 @@ import {
 } from '@/constants';
 import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
-const parseEnv = (str?: string): Record<string, string> => {
-  const result: Record<string, string> = {};
-  if (!str) return result;
-  for (const line of str.split('\n')) {
-    const eq = line.indexOf('=');
-    if (eq > 0) result[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
-  }
-  return result;
-};
-
 const parseKV = (str?: string): Record<string, string> => {
   const result: Record<string, string> = {};
   if (!str) return result;
@@ -34,8 +24,6 @@ const parseKV = (str?: string): Record<string, string> => {
   return result;
 };
 
-const parseArgs = (str?: string): string[] => (str || '').split(/\s+/).filter(Boolean);
-
 export const configToFormValues = (cfg: MCPServerConfigResponse) => {
   // gen 契约的 retry 是 @gotype 黑盒(Record<string, unknown>);运行时是
   // domain.RetryConfig 的 JSON 形状,收窄到 MCPRetryConfig 读取字段。
@@ -45,9 +33,6 @@ export const configToFormValues = (cfg: MCPServerConfigResponse) => {
     version: cfg.version,
     transport: cfg.transport,
     timeout_sec: cfg.timeout ? cfg.timeout / 1e9 : MCP_DEFAULT_TIMEOUT_SEC,
-    command: cfg.command,
-    args: cfg.args?.join(' '),
-    env: cfg.env ? Object.entries(cfg.env).map(([k, v]) => `${k}=${v}`).join('\n') : '',
     url: cfg.url,
     headers: cfg.headers
       ? Object.entries(cfg.headers)
@@ -76,9 +61,6 @@ export interface FormValues {
   version?: string;
   transport: string;
   timeout_sec?: number;
-  command?: string;
-  args?: string;
-  env?: string;
   url?: string;
   headers?: string;
   auth_type?: string;
@@ -105,27 +87,21 @@ export const buildMCPUpdateConfig = (id: string, values: FormValues): MCPServerC
     timeout: (values.timeout_sec || MCP_DEFAULT_TIMEOUT_SEC) * 1e9,
   };
 
-  if (values.transport === 'stdio') {
-    cfg.command = values.command || '';
-    cfg.args = parseArgs(values.args);
-    cfg.env = parseEnv(values.env);
-  } else {
-    cfg.url = values.url || '';
-    cfg.headers = parseKV(values.headers);
-    const authType = values.auth_type || 'none';
-    if (authType !== 'none') {
-      cfg.auth = { type: authType };
-      if (authType === 'bearer' && values.bearer_token) {
-        cfg.auth.token = values.bearer_token;
-      } else if (authType === 'api_key') {
-        cfg.auth.api_key_header = values.api_key_header || 'X-API-Key';
-        if (values.api_key_value) cfg.auth.api_key_value = values.api_key_value;
-      } else if (authType === 'oauth2') {
-        cfg.auth.oauth2_client_id = values.oauth2_client_id || '';
-        if (values.oauth2_client_secret) cfg.auth.oauth2_client_secret = values.oauth2_client_secret;
-        cfg.auth.oauth2_token_url = values.oauth2_token_url || '';
-        cfg.auth.oauth2_scopes = (values.oauth2_scopes || '').split(/[,\s]+/).filter(Boolean);
-      }
+  cfg.url = values.url || '';
+  cfg.headers = parseKV(values.headers);
+  const authType = values.auth_type || 'none';
+  if (authType !== 'none') {
+    cfg.auth = { type: authType };
+    if (authType === 'bearer' && values.bearer_token) {
+      cfg.auth.token = values.bearer_token;
+    } else if (authType === 'api_key') {
+      cfg.auth.api_key_header = values.api_key_header || 'X-API-Key';
+      if (values.api_key_value) cfg.auth.api_key_value = values.api_key_value;
+    } else if (authType === 'oauth2') {
+      cfg.auth.oauth2_client_id = values.oauth2_client_id || '';
+      if (values.oauth2_client_secret) cfg.auth.oauth2_client_secret = values.oauth2_client_secret;
+      cfg.auth.oauth2_token_url = values.oauth2_token_url || '';
+      cfg.auth.oauth2_scopes = (values.oauth2_scopes || '').split(/[,\s]+/).filter(Boolean);
     }
   }
 

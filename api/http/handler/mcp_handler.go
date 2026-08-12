@@ -241,7 +241,12 @@ func (h *MCPHandler) DisconnectServer(c *gin.Context) {
 		return
 	}
 	serverID := c.Param("id")
-	if err := h.svc.DisconnectServer(c.Request.Context(), serverID); err != nil {
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	if err := h.svc.DisconnectServer(c.Request.Context(), serverID, actorID); err != nil {
 		h.logger.Error("failed to disconnect MCP server",
 			zap.String("trace_id", middleware.GetTraceID(c)),
 			zap.String("server_id", serverID),
@@ -303,7 +308,12 @@ func (h *MCPHandler) ReconnectServer(c *gin.Context) {
 		return
 	}
 	serverID := c.Param("id")
-	if err := h.svc.ReconnectServer(context.WithoutCancel(c.Request.Context()), serverID); err != nil {
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	if err := h.svc.ReconnectServer(context.WithoutCancel(c.Request.Context()), serverID, actorID); err != nil {
 		h.logger.Error("failed to reconnect MCP server",
 			zap.String("trace_id", middleware.GetTraceID(c)),
 			zap.String("server_id", serverID),

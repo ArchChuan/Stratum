@@ -1,4 +1,4 @@
-import { Alert, Badge, Drawer, Descriptions, Flex, Select, Tabs, Tag, Typography, message } from 'antd';
+import { Alert, Badge, Drawer, Descriptions, Flex, Select, Space, Tabs, Tag, Typography, message } from 'antd';
 import { useEffect, useState } from 'react';
 
 import { mcpApi } from '../api/mcp.api';
@@ -160,7 +160,10 @@ export const ServerDetailDrawer = ({ server, onClose, isAdmin = false }: Props) 
               <Text code>{server.id}</Text>
             </Descriptions.Item>
             <Descriptions.Item label="Transport">
-              <Tag color={TRANSPORT_COLORS[server.transport]}>{server.transport}</Tag>
+              <Space size={4}>
+                <Tag color={TRANSPORT_COLORS[server.transport]}>{server.transport}</Tag>
+                {server.transport === 'stdio' && <Tag>已停用</Tag>}
+              </Space>
             </Descriptions.Item>
             <Descriptions.Item label="状态">
               <Badge

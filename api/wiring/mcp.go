@@ -13,7 +13,6 @@ import (
 	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
 	mcpport "github.com/byteBuilderX/stratum/internal/mcp/domain/port"
 	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
-	"github.com/byteBuilderX/stratum/internal/mcp/infrastructure/mcpnode"
 	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 )
@@ -190,7 +189,7 @@ func (r agentMCPPolicyResolver) ResolveMCPToolRisk(ctx context.Context, _, serve
 
 func (c *Container) buildMCP(ctx context.Context) error {
 	var db = c.dbOrNil()
-	manager := mcp.NewClientManager(c.Logger, nil, db, mcpnode.NodeID())
+	manager := mcp.NewClientManager(c.Logger, nil, db)
 	// 注入 mcp_configs 敏感字段（env/headers/auth_config）的 at-rest 加密密钥，
 	// 必须在 RestoreFromDB 之前设置，否则启动恢复读到的是密文而无法解密。
 	// 密钥材料独立于 JWT 签名密钥；两者皆空时 fail closed，禁止以
@@ -221,8 +220,6 @@ func (c *Container) buildMCP(ctx context.Context) error {
 
 	manager.StartHealthCheck(30 * time.Second)
 	manager.StartIdleEviction(0, 0)
-	manager.StartHeartbeat(0)
-	manager.StartFailoverScanner(0)
 	c.shutdown = append(c.shutdown, manager.Stop)
 
 	c.MCP = &MCP{

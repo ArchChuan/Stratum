@@ -62,7 +62,12 @@ export const MCPServersPage = () => {
       title: 'Transport',
       dataIndex: 'transport',
       width: 110,
-      render: (v: string) => <Tag color={TRANSPORT_COLORS[v]}>{v}</Tag>,
+      render: (v: string) => (
+        <Space size={4}>
+          <Tag color={TRANSPORT_COLORS[v]}>{v}</Tag>
+          {v === 'stdio' && <Tag>已停用</Tag>}
+        </Space>
+      ),
     },
     {
       title: '状态',
@@ -212,6 +217,7 @@ export const MCPServersPage = () => {
                 </Flex>
                 <Space size={8} style={{ marginTop: 8, maxWidth: '100%' }}>
                   <Tag color={TRANSPORT_COLORS[server.transport]}>{server.transport}</Tag>
+                  {server.transport === 'stdio' && <Tag>已停用</Tag>}
                   <Text type="secondary" ellipsis>{endpoint}</Text>
                 </Space>
                 <Flex justify="space-between" align="center" gap={8} style={{ marginTop: 10 }}>
