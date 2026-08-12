@@ -5,7 +5,16 @@ import type { GroupedModelOption } from '../model/agent';
 
 import { AgentMemoryConfig } from './AgentMemoryConfig';
 
-import { AGENT_MAX_MAX_ITERATIONS, AGENT_MIN_MAX_ITERATIONS } from '@/constants';
+import {
+  AGENT_MAX_CONTEXT_TOKENS_MAX,
+  AGENT_MAX_CONTEXT_TOKENS_MIN,
+  AGENT_MAX_CONTEXT_TOKENS_STEP,
+  AGENT_MAX_MAX_ITERATIONS,
+  AGENT_MAX_TOKENS_MAX,
+  AGENT_MAX_TOKENS_MIN,
+  AGENT_MAX_TOKENS_STEP,
+  AGENT_MIN_MAX_ITERATIONS,
+} from '@/constants';
 import type { Member } from '@/modules/iam';
 import type { Workspace } from '@/modules/knowledge';
 import type { MCPToolOption } from '@/modules/mcp';
@@ -224,10 +233,17 @@ export const AgentFormSections = ({
                 <Form.Item
                   label="最大上下文 Token"
                   name="maxContextTokens"
-                  rules={[{ required: true, message: '请输入最大上下文 Token' }, { type: 'number', min: 0, message: '最小值为 0（0 = 自动按模型窗口解析）' }]}
+                  rules={[{ required: true, message: '请输入最大上下文 Token' }, { type: 'number', min: AGENT_MAX_CONTEXT_TOKENS_MIN, message: '最小值为 0（0 = 自动按模型窗口解析）' }]}
                   extra="0 = 自动按模型窗口解析；推荐值：轻量对话 4000，标准 8000，长文档处理 32000-128000"
                 >
-                  <InputNumber min={0} max={128000} step={1000} style={{ width: '100%' }} />
+                  <InputNumber min={AGENT_MAX_CONTEXT_TOKENS_MIN} max={AGENT_MAX_CONTEXT_TOKENS_MAX} step={AGENT_MAX_CONTEXT_TOKENS_STEP} style={{ width: '100%' }} />
+                </Form.Item>
+                <Form.Item
+                  label="最大生成 Token（max_tokens）"
+                  name="max_tokens"
+                  extra="0 = 不修改（保留现有值）；未设置过则使用平台默认"
+                >
+                  <InputNumber min={AGENT_MAX_TOKENS_MIN} max={AGENT_MAX_TOKENS_MAX} step={AGENT_MAX_TOKENS_STEP} style={{ width: '100%' }} />
                 </Form.Item>
                 {!isSystem && (
                   <>
@@ -237,13 +253,6 @@ export const AgentFormSections = ({
                       extra="采样随机性：0 = 未设置（使用平台默认），通常 0.7"
                     >
                       <Slider min={0} max={2} step={0.1} marks={{ 0: '0', 2: '2' }} ariaLabelForHandle="temperature" />
-                    </Form.Item>
-                    <Form.Item
-                      label="最大生成 Token（max_tokens）"
-                      name="max_tokens"
-                      extra="单次生成的 token 上限：0 = 未设置（使用平台默认）"
-                    >
-                      <InputNumber min={0} max={131072} step={256} style={{ width: '100%' }} />
                     </Form.Item>
                     <Form.Item
                       label="压缩最近轮数（compaction_recent_groups）"

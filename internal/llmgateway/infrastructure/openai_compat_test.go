@@ -2,11 +2,13 @@ package infrastructure
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -68,6 +70,91 @@ func TestComplete_400ContextLengthExceeded(t *testing.T) {
 				require.False(t, IsContextLengthExceeded(err), "err = %v", err)
 				require.Contains(t, err.Error(), "status 400")
 			}
+		})
+	}
+}
+
+var maxTokensFallbackCases = []struct {
+	name      string
+	maxTokens int
+	want      int // 期望出现在请求体 max_tokens 中的值
+}{
+	{
+		name:      "zero falls back to DefaultOutputReserveTokens",
+		maxTokens: 0,
+		want:      constants.DefaultOutputReserveTokens,
+	},
+	{
+		name:      "positive value preserved",
+		maxTokens: 2048,
+		want:      2048,
+	},
+}
+
+// maxTokensEchoServer 返回一个 httptest server：解码请求体把 max_tokens
+// 写入 seen channel，然后返回一次成功的 chat/completions 响应（stream
+// 模式返回 SSE 直至 [DONE]）。断言在测试 goroutine 中进行，不在 handler 内。
+func maxTokensEchoServer(t *testing.T, stream bool) (*httptest.Server, <-chan int) {
+	t.Helper()
+	seen := make(chan int, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			MaxTokens int `json:"max_tokens"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		seen <- body.MaxTokens
+		if stream {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+			fmt.Fprint(w, "data: [DONE]\n\n")
+			return
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"ok"}}],"model":"m1"}`)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, seen
+}
+
+// TestComplete_MaxTokensFallback 验证 Complete 对调用方传 MaxTokens<=0 的
+// 请求在 marshal 前兜底为 constants.DefaultOutputReserveTokens（供应商
+// 要求 minimum:1），且不就地修改调用方的 req 对象。
+func TestComplete_MaxTokensFallback(t *testing.T) {
+	for _, tc := range maxTokensFallbackCases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, seen := maxTokensEchoServer(t, false)
+			client := NewOpenAICompatClient(ProviderConfig{
+				Name: "test-openai", BaseURL: srv.URL, APIKey: "sk-test",
+			}, zap.NewNop())
+			callerReq := &CompletionRequest{
+				Model: "m1", Messages: []Message{{Role: "user", Content: "hi"}},
+				MaxTokens: tc.maxTokens,
+			}
+			_, err := client.Complete(context.Background(), callerReq)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, <-seen)
+			require.Equal(t, tc.maxTokens, callerReq.MaxTokens, "caller req must not be mutated")
+		})
+	}
+}
+
+// TestCompleteStream_MaxTokensFallback 与 Complete 相同的网关层防御断言，
+// 覆盖流式路径。
+func TestCompleteStream_MaxTokensFallback(t *testing.T) {
+	for _, tc := range maxTokensFallbackCases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, seen := maxTokensEchoServer(t, true)
+			client := NewOpenAICompatClient(ProviderConfig{
+				Name: "test-openai", BaseURL: srv.URL, APIKey: "sk-test",
+			}, zap.NewNop())
+			callerReq := &CompletionRequest{
+				Model: "m1", Messages: []Message{{Role: "user", Content: "hi"}},
+				MaxTokens: tc.maxTokens,
+			}
+			resp, err := client.CompleteStream(context.Background(), callerReq, func(string) {})
+			require.NoError(t, err)
+			require.Equal(t, "hi", resp.Content)
+			require.Equal(t, tc.want, <-seen)
+			require.Equal(t, tc.maxTokens, callerReq.MaxTokens, "caller req must not be mutated")
 		})
 	}
 }

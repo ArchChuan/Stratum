@@ -185,8 +185,8 @@ func (m *mockAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model st
 	cfg, _ := args.Get(0).(*domain.AgentConfig)
 	return cfg, args.Error(1)
 }
-func (m *mockAgentRepo) UpdateSystemAssistantAll(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
-	args := m.Called(ctx, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens)
+func (m *mockAgentRepo) UpdateSystemAssistantAll(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int, maxTokens int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+	args := m.Called(ctx, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens, maxTokens)
 	cfg, _ := args.Get(0).(*domain.AgentConfig)
 	return cfg, args.Error(1)
 }
@@ -294,15 +294,54 @@ var (
 
 func newTestService(t *testing.T) (*application.AgentService, *mockAgentRepo) {
 	t.Helper()
+	return newTestServiceWithProvider(t, nil)
+}
+
+func newTestServiceWithProvider(t *testing.T, provider port.ParametersProvider) (*application.AgentService, *mockAgentRepo) {
+	t.Helper()
 	repo := new(mockAgentRepo)
 	reg := application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop())
 	svc := application.NewAgentService(application.AgentServiceDeps{
-		Registry: reg,
-		Logger:   zap.NewNop(),
+		Registry:           reg,
+		ParametersProvider: provider,
+		Logger:             zap.NewNop(),
 	})
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	return svc, repo
 }
+
+// validatingParametersProvider accepts every declared sampling value (registry
+// healthy); rejectingParametersProvider rejects any non-empty declared set
+// (out-of-bounds), so 0=unset PUTs still pass pre-merge validation.
+type validatingParametersProvider struct{}
+
+func (validatingParametersProvider) ResolveForResource(context.Context, map[string]any) (map[string]any, error) {
+	return nil, nil
+}
+func (validatingParametersProvider) Resolve(context.Context, string, map[string]any) (any, bool, error) {
+	return nil, false, nil
+}
+func (validatingParametersProvider) ValidateResource(_ context.Context, _ map[string]any) error {
+	return nil
+}
+
+type rejectingParametersProvider struct{}
+
+func (rejectingParametersProvider) ResolveForResource(context.Context, map[string]any) (map[string]any, error) {
+	return nil, nil
+}
+func (rejectingParametersProvider) Resolve(context.Context, string, map[string]any) (any, bool, error) {
+	return nil, false, nil
+}
+func (rejectingParametersProvider) ValidateResource(_ context.Context, declared map[string]any) error {
+	if len(declared) == 0 {
+		return nil
+	}
+	return errors.New("agent.max_tokens: must be <= 8192, got out-of-bounds")
+}
+
+var _ port.ParametersProvider = validatingParametersProvider{}
+var _ port.ParametersProvider = rejectingParametersProvider{}
 
 // ---------- tests ----------
 
@@ -737,7 +776,7 @@ func TestAgentService_UpdateSystemAssistant_IgnoresName(t *testing.T) {
 	}
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
 	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
-	repo.On("UpdateSystemAssistantAll", ctx, "", "", false, 0, 0).Return(cfg, nil)
+	repo.On("UpdateSystemAssistantAll", ctx, "", "", false, 0, 0, 0).Return(cfg, nil)
 
 	dto, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{
 		Name: "ignored",
@@ -755,7 +794,7 @@ func TestAgentServicePlatformAssistantModelOnlyUpdatePreservesSystemBindings(t *
 		MCPToolIDs: []string{"mcp:orders:get"},
 	}
 	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
-	repo.On("UpdateSystemAssistantAll", ctx, "new-model", "", false, 0, 0).Return(&domain.AgentConfig{
+	repo.On("UpdateSystemAssistantAll", ctx, "new-model", "", false, 0, 0, 0).Return(&domain.AgentConfig{
 		ID: cfg.ID, SystemKey: cfg.SystemKey, LLMModel: "new-model", MCPToolIDs: cfg.MCPToolIDs,
 	}, nil)
 
@@ -774,13 +813,79 @@ func TestAgentServicePlatformAssistantRejectsBindingRemovalByPreservingManagedTo
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, MCPToolIDs: managedTools,
 	}
 	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
-	repo.On("UpdateSystemAssistantAll", ctx, "", "", false, 0, 0).Return(cfg, nil)
+	repo.On("UpdateSystemAssistantAll", ctx, "", "", false, 0, 0, 0).Return(cfg, nil)
 
 	got, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{MCPToolIDs: []string{}})
 
 	assert.NoError(t, err)
 	assert.Equal(t, managedTools, got.MCPToolIDs)
 	repo.AssertExpectations(t)
+}
+
+// updateSystemAssistant max_tokens 通道测试:merge 前校验 → merge(0=保留现值)
+// → merge 后复验,越界与历史非法值均 400 且不落库。
+func TestAgentServiceUpdateSystemAssistantPersistsMaxTokens(t *testing.T) {
+	svc, repo := newTestService(t)
+	cfg := &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+	}
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
+	repo.On("UpdateSystemAssistantAll", ctx, "", "", false, 0, 0, 2048).Return(&domain.AgentConfig{
+		ID: cfg.ID, SystemKey: cfg.SystemKey, MaxTokens: 2048,
+	}, nil)
+
+	dto, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{MaxTokens: 2048})
+
+	assert.NoError(t, err)
+	assert.Equal(t, 2048, dto.MaxTokens)
+	repo.AssertExpectations(t)
+}
+
+func TestAgentServiceUpdateSystemAssistantZeroKeepsCurrentMaxTokens(t *testing.T) {
+	svc, repo := newTestService(t)
+	cfg := &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, MaxTokens: 2048,
+	}
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
+	// 0 = 保留现值:merge 后传 cfg.MaxTokens(2048) 落库。
+	repo.On("UpdateSystemAssistantAll", ctx, "", "", false, 0, 0, 2048).Return(cfg, nil)
+
+	dto, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{})
+
+	assert.NoError(t, err)
+	assert.Equal(t, 2048, dto.MaxTokens)
+	repo.AssertExpectations(t)
+}
+
+func TestAgentServiceUpdateSystemAssistantRejectsOutOfBoundsMaxTokens(t *testing.T) {
+	svc, repo := newTestServiceWithProvider(t, rejectingParametersProvider{})
+	cfg := &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+	}
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
+
+	_, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{MaxTokens: 999999})
+
+	assert.ErrorIs(t, err, domain.ErrInvalidSamplingParameters)
+	repo.AssertNotCalled(t, "UpdateSystemAssistantAll", mock.Anything, mock.Anything)
+}
+
+func TestAgentServiceUpdateSystemAssistantRevalidatesLegacyOutOfBoundsOnZero(t *testing.T) {
+	// merge 后复验:存量 cfg.MaxTokens 越界时 PUT 0 不得静默回写历史非法值。
+	svc, repo := newTestServiceWithProvider(t, rejectingParametersProvider{})
+	cfg := &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, MaxTokens: 999999,
+	}
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
+
+	_, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{})
+
+	assert.ErrorIs(t, err, domain.ErrInvalidSamplingParameters)
+	repo.AssertNotCalled(t, "UpdateSystemAssistantAll", mock.Anything, mock.Anything)
 }
 
 func TestAgentService_Delete(t *testing.T) {

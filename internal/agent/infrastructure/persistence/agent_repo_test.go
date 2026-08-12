@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v2"
@@ -672,6 +673,129 @@ func TestAgentRepo_UpdateSystemAssistantModelRelationFailureRollsBack(t *testing
 	cfg, err := repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus", "user", false, 10, 8000, nil)
 	if err == nil || cfg != nil || !strings.Contains(err.Error(), "relations unavailable") {
 		t.Fatalf("expected rollback relation error, cfg=%+v err=%v", cfg, err)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// systemAssistantUpdateRow builds the 13-column UPDATE ... RETURNING row shared
+// by the UpdateSystemAssistantAll tests (parameters appended last).
+func systemAssistantUpdateRow() *pgxmock.Rows {
+	return pgxmock.NewRows([]string{
+		"id", "name", "type", "description", "system_prompt", "llm_model",
+		"max_iterations", "max_context_tokens", "memory_scope", "system_key", "checkpoint_enabled", "created_by", "parameters",
+	}).AddRow(domain.SystemAssistantID, "平台助手", string(domain.ReActAgent), "", "", "qwen-plus", 10, 8000,
+		"user", domain.SystemAssistantKey, false, "", `{"temperature":0.5,"max_tokens":2048}`)
+}
+
+func TestAgentRepo_UpdateSystemAssistantAll_ParametersMergeAndReadback(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	pool.ExpectQuery("UPDATE agents SET llm_model=\\$1.*updated_at=NOW\\(\\).*RETURNING id").
+		WithArgs("qwen-plus", "user", false, 10, 8000, `{"max_tokens":2048}`).
+		WillReturnRows(systemAssistantUpdateRow())
+	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
+		WithArgs(domain.SystemAssistantID).WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
+	pool.ExpectQuery("SELECT server_id, tool_name FROM agent_mcp_tool_links").
+		WithArgs(domain.SystemAssistantID).WillReturnRows(pgxmock.NewRows([]string{"server_id", "tool_name"}))
+	pool.ExpectQuery("SELECT aw.workspace_id").
+		WithArgs(domain.SystemAssistantID).WillReturnRows(pgxmock.NewRows([]string{"workspace_id", "name", "description"}))
+	pool.ExpectCommit()
+
+	repo := &PgAgentRepo{pool: pool}
+	cfg, err := repo.UpdateSystemAssistantAll(tenantCtx("t1"), "qwen-plus", "user", false, 10, 8000, 2048, nil)
+	if err != nil {
+		t.Fatalf("UpdateSystemAssistantAll: %v", err)
+	}
+	if cfg.MaxTokens != 2048 {
+		t.Errorf("MaxTokens = %d, want 2048 (RETURNING parameters unpack)", cfg.MaxTokens)
+	}
+	if cfg.Temperature != 0.5 {
+		t.Errorf("Temperature = %v, want 0.5 (pre-existing parameter preserved)", cfg.Temperature)
+	}
+	if !cfg.IsSystem || cfg.ManagementMode != "platform" {
+		t.Fatalf("unexpected managed identity: %+v", cfg)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestAgentRepo_UpdateSystemAssistantAll_ZeroMaxTokensSendsEmptyFragment(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	// 0=unset:JSONB 拼接空对象,存量 parameters 不被清除。
+	pool.ExpectQuery("UPDATE agents SET llm_model=\\$1.*RETURNING id").
+		WithArgs("qwen-plus", "user", false, 10, 8000, `{}`).
+		WillReturnRows(systemAssistantUpdateRow())
+	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
+		WithArgs(domain.SystemAssistantID).WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
+	pool.ExpectQuery("SELECT server_id, tool_name FROM agent_mcp_tool_links").
+		WithArgs(domain.SystemAssistantID).WillReturnRows(pgxmock.NewRows([]string{"server_id", "tool_name"}))
+	pool.ExpectQuery("SELECT aw.workspace_id").
+		WithArgs(domain.SystemAssistantID).WillReturnRows(pgxmock.NewRows([]string{"workspace_id", "name", "description"}))
+	pool.ExpectCommit()
+
+	repo := &PgAgentRepo{pool: pool}
+	cfg, err := repo.UpdateSystemAssistantAll(tenantCtx("t1"), "qwen-plus", "user", false, 10, 8000, 0, nil)
+	if err != nil {
+		t.Fatalf("UpdateSystemAssistantAll: %v", err)
+	}
+	if cfg.MaxTokens != 2048 {
+		t.Errorf("MaxTokens = %d, want 2048 (stored value read back unchanged)", cfg.MaxTokens)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestAgentRepo_UpdateSystemAssistantAll_AuditFailureRollsBackParameters(t *testing.T) {
+	// CLAUDE.md:数据库写入必须验证事务回滚和失败传播。审计 INSERT 失败 →
+	// parameters 更新不得提交,错误必须向上传播且不返回 config。
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	pool.ExpectQuery("UPDATE agents SET llm_model=\\$1.*RETURNING id").
+		WithArgs("qwen-plus", "user", false, 10, 8000, `{"max_tokens":2048}`).
+		WillReturnRows(systemAssistantUpdateRow())
+	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
+		WithArgs(domain.SystemAssistantID).WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
+	pool.ExpectQuery("SELECT server_id, tool_name FROM agent_mcp_tool_links").
+		WithArgs(domain.SystemAssistantID).WillReturnRows(pgxmock.NewRows([]string{"server_id", "tool_name"}))
+	pool.ExpectQuery("SELECT aw.workspace_id").
+		WithArgs(domain.SystemAssistantID).WillReturnRows(pgxmock.NewRows([]string{"workspace_id", "name", "description"}))
+	pool.ExpectExec("INSERT INTO resource_change_audits").
+		WithArgs(pgxmock.AnyArg(), "t1", "agent", domain.SystemAssistantID, "update", "user-1",
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnError(errors.New("audit write failed"))
+	pool.ExpectRollback()
+
+	repo := &PgAgentRepo{pool: pool}
+	ev := &auditdomain.ResourceChangeAuditEvent{
+		ResourceKind: auditdomain.ResourceKindAgent, ResourceID: domain.SystemAssistantID,
+		Operation: auditdomain.ChangeOpUpdate, ActorID: "user-1",
+	}
+	cfg, err := repo.UpdateSystemAssistantAll(tenantCtx("t1"), "qwen-plus", "user", false, 10, 8000, 2048, ev)
+	if err == nil || cfg != nil || !strings.Contains(err.Error(), "audit write failed") {
+		t.Fatalf("expected audit rollback error, cfg=%+v err=%v", cfg, err)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
