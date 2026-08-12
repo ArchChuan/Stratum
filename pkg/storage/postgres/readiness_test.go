@@ -64,3 +64,63 @@ func TestCheckDefaultTenantReadiness(t *testing.T) {
 }
 
 func boolPtr(value bool) *bool { return &value }
+
+const defaultTenantResolveQueryPattern = `SELECT id FROM public\.tenants WHERE is_default = true AND deleted_at IS NULL LIMIT 1`
+
+func TestResolveDefaultTenantID(t *testing.T) {
+	t.Run("resolved", func(t *testing.T) {
+		pool, err := pgxmock.NewPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		pool.ExpectQuery(regexp.MustCompile(defaultTenantResolveQueryPattern).String()).
+			WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("11111111-2222-3333-4444-555555555555"))
+
+		got, err := ResolveDefaultTenantID(context.Background(), pool)
+		if err != nil {
+			t.Fatalf("ResolveDefaultTenantID: %v", err)
+		}
+		if got != "11111111-2222-3333-4444-555555555555" {
+			t.Fatalf("id = %q, want default tenant id", got)
+		}
+		if err := pool.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("missing default tenant fails closed", func(t *testing.T) {
+		pool, err := pgxmock.NewPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		pool.ExpectQuery(regexp.MustCompile(defaultTenantResolveQueryPattern).String()).
+			WillReturnError(pgx.ErrNoRows)
+
+		if _, err := ResolveDefaultTenantID(context.Background(), pool); err == nil {
+			t.Fatal("expected error when default tenant missing (fail closed)")
+		}
+		if err := pool.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("query failure propagates", func(t *testing.T) {
+		pool, err := pgxmock.NewPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		pool.ExpectQuery(regexp.MustCompile(defaultTenantResolveQueryPattern).String()).
+			WillReturnError(errors.New("database unavailable"))
+
+		if _, err := ResolveDefaultTenantID(context.Background(), pool); err == nil ||
+			!strings.Contains(err.Error(), "database unavailable") {
+			t.Fatalf("expected database failure to propagate, got %v", err)
+		}
+		if err := pool.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}

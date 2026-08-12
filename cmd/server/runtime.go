@@ -78,6 +78,16 @@ func BootstrapTenants(ctx context.Context, c *wiring.Container, logger *zap.Logg
 	if err := bootstrapTenantSchemas(ctx, c.DB(), logger, defaultTenantBootstrapDeps); err != nil {
 		return err
 	}
+	// 管理面门禁（RequireDefaultTenant）与系统角色推导（DeriveSystemRole）
+	// 比较的是默认租户的真实 id，而非字面 "tenant_default"。bootstrap 在
+	// 路由装配（BuildContainer）之后运行，因此只能在这里解析并写入。
+	// 解析失败 → 启动失败（fail closed），禁止带未知默认租户服务请求。
+	defaultTenantID, err := tenantdb.ResolveDefaultTenantID(ctx, c.DB())
+	if err != nil {
+		return fmt.Errorf("resolve default tenant id: %w", err)
+	}
+	constants.SetResolvedDefaultTenantID(defaultTenantID)
+	logger.Info("default tenant resolved", zap.String("tenant_id", defaultTenantID))
 	return iampersistence.EnsureAdminUser(ctx, c.DB(), c.Config.AdminUsername, c.Config.AdminPassword, logger)
 }
 

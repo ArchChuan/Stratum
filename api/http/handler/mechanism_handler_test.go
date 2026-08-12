@@ -78,7 +78,7 @@ func mechanismProfile() mechanismdomain.Profile {
 
 func newMechanismTestRouter(repo *mechanismFakeRepo) *gin.Engine {
 	gin.SetMode(gin.TestMode)
-	h := NewMechanismHandler(application.NewService(repo), zap.NewNop())
+	h := NewMechanismHandler(application.NewService(repo), nil, zap.NewNop())
 	r := gin.New()
 	r.Use(middleware.ErrorHandler(zap.NewNop()))
 	g := r.Group("/mechanism/profiles")
@@ -202,7 +202,7 @@ func TestMechanismHandler_Upsert_bindsActor(t *testing.T) {
 
 func newMechanismTestRouterWithActor(repo *mechanismFakeRepo, actor string) *gin.Engine {
 	gin.SetMode(gin.TestMode)
-	h := NewMechanismHandler(application.NewService(repo), zap.NewNop())
+	h := NewMechanismHandler(application.NewService(repo), nil, zap.NewNop())
 	r := gin.New()
 	r.Use(middleware.ErrorHandler(zap.NewNop()))
 	g := r.Group("/mechanism/profiles", func(c *gin.Context) { c.Set(middleware.ContextKeySub, actor) })

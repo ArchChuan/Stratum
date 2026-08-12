@@ -13,6 +13,7 @@ import (
 	iamtoken "github.com/byteBuilderX/stratum/internal/iam/infrastructure/token"
 	mechanismapp "github.com/byteBuilderX/stratum/internal/mechanism/application"
 	mechanismdomain "github.com/byteBuilderX/stratum/internal/mechanism/domain"
+	mechanismport "github.com/byteBuilderX/stratum/internal/mechanism/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -121,5 +122,112 @@ func TestMechanismProfilesRBAC(t *testing.T) {
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("inactive %s: status=%d body=%s", method, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+// matrixEvaluatorFake 是 mechanismport.MatrixEvaluator 的内存替身（RBAC 测试
+// 只验证权限链，业务链路由 MatrixService 单测覆盖）。
+type matrixEvaluatorFake struct{}
+
+func (f *matrixEvaluatorFake) ListBenchmarkSuites(context.Context, string) ([]mechanismport.BenchmarkSuite, error) {
+	return nil, nil
+}
+
+func (f *matrixEvaluatorFake) EnsureBenchmarkSuite(context.Context, string) (string, error) {
+	return "rev-1", nil
+}
+
+func (f *matrixEvaluatorFake) StartMatrixRun(context.Context, string, string, string, string) error {
+	return nil
+}
+
+func (f *matrixEvaluatorFake) LatestMatrixRuns(context.Context, string, []string) ([]mechanismport.MatrixRun, error) {
+	return nil, nil
+}
+
+// TestMechanismMatrixRBAC 验证 /mechanism/matrix 的权限链与档案管理同门槛：
+// JWT → 租户上下文 → RequireTenantRole(admin) → RequireDefaultTenant → requireActive。
+// 矩阵组仅在 Matrix 装配后挂载（evaluation 缺库 → 端点 404，而非空报告降级）。
+func TestMechanismMatrixRBAC(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens := iamtoken.NewJWTService(key)
+	repo := &mechanismRepoFake{profiles: []mechanismdomain.Profile{
+		{FamilyKey: "qwen", Matcher: mechanismdomain.ModelMatcher{FamilyPrefixes: []string{"qwen"}},
+			Status: mechanismdomain.ProfileStatusDraft, Version: 1},
+	}}
+	matrix := mechanismapp.NewMatrixService(mechanismapp.NewService(repo), &matrixEvaluatorFake{})
+	c := &wiring.Container{Logger: zap.NewNop(),
+		Platform:  &wiring.Platform{JWTService: tokens, Metrics: observability.NewPrometheusMetrics(zap.NewNop())},
+		Mechanism: &wiring.Mechanism{Service: mechanismapp.NewService(repo), Matrix: matrix},
+	}
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	requireActive := func(c *gin.Context) {
+		if c.GetHeader("X-Tenant-Status") == "inactive" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "tenant is not active"})
+			return
+		}
+		c.Next()
+	}
+	registerMechanism(r, c, requireActive)
+
+	// 默认租户 admin：报告可读、评测可触发、draft 档案可采纳。
+	platformAdmin := signEvaluationToken(t, tokens, "tenant_default", "admin")
+	rec := performEvaluationRequest(r, http.MethodGet, "/mechanism/matrix", platformAdmin, "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("default tenant admin GET: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = performEvaluationRequest(r, http.MethodPost, "/mechanism/matrix/runs", platformAdmin, "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("default tenant admin POST runs: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = performEvaluationRequest(r, http.MethodPost, "/mechanism/matrix/adopt", platformAdmin, "",
+		strings.NewReader(`{"family_key":"qwen"}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("default tenant admin POST adopt: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// 默认租户 member 被角色门槛拦截。
+	member := signEvaluationToken(t, tokens, "tenant_default", "member")
+	rec = performEvaluationRequest(r, http.MethodGet, "/mechanism/matrix", member, "", nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("default tenant member GET: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// 非默认租户 admin 被 RequireDefaultTenant 拦截。
+	otherAdmin := signEvaluationToken(t, tokens, "tenant-1", "admin")
+	rec = performEvaluationRequest(r, http.MethodGet, "/mechanism/matrix", otherAdmin, "", nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("non-default tenant admin GET: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// 无 token fail closed。
+	rec = performEvaluationRequest(r, http.MethodGet, "/mechanism/matrix", "", "", nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated GET: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// 停用租户被 requireActive 拦截。
+	inactive := signEvaluationToken(t, tokens, "tenant_default", "admin")
+	rec = performEvaluationRequest(r, http.MethodGet, "/mechanism/matrix", inactive, "inactive", nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("inactive GET: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// 矩阵未装配（evaluation 缺库）→ 组不挂载，端点 404 fail closed。
+	c2 := &wiring.Container{Logger: zap.NewNop(),
+		Platform:  &wiring.Platform{JWTService: tokens, Metrics: observability.NewPrometheusMetrics(zap.NewNop())},
+		Mechanism: &wiring.Mechanism{Service: mechanismapp.NewService(repo)},
+	}
+	r2 := gin.New()
+	r2.Use(middleware.ErrorHandler(zap.NewNop()))
+	registerMechanism(r2, c2, requireActive)
+	rec = performEvaluationRequest(r2, http.MethodGet, "/mechanism/matrix", platformAdmin, "", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("matrix unassembled GET: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

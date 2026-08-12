@@ -72,6 +72,9 @@ type RunRepository interface {
 type SuiteRepository interface {
 	CreateSuite(ctx context.Context, tenantID string, suite domain.EvalSuite, revision domain.EvalSuiteRevision) error
 	GetDraftRevision(ctx context.Context, tenantID, suiteID string) (domain.EvalSuiteRevision, bool, error)
+	// GetActiveRevision 返回套件当前已发布（active）revision；从未发布的
+	// 套件或套件不存在时 found=false。矩阵评测 seed 复用已发布基准集用。
+	GetActiveRevision(ctx context.Context, tenantID, suiteID string) (domain.EvalSuiteRevision, bool, error)
 	GetRevision(ctx context.Context, tenantID, revisionID string) (domain.EvalSuiteRevision, bool, error)
 	NextVersionNo(ctx context.Context, tenantID, suiteID string) (int, error)
 	PublishRevision(ctx context.Context, tenantID, suiteID, revisionID string, versionNo int) (domain.EvalSuiteRevision, error)

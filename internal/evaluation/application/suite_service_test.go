@@ -62,6 +62,12 @@ func (f *fakeSuiteRepo) GetRevision(_ context.Context, _ string, revisionID stri
 	return f.revision, f.revision.ID == revisionID, nil
 }
 
+func (f *fakeSuiteRepo) GetActiveRevision(_ context.Context, _ string, suiteID string) (domain.EvalSuiteRevision, bool, error) {
+	return f.revision,
+		f.suite.ID == suiteID && f.suite.ActiveRevisionID == f.revision.ID && f.revision.Status == domain.SuiteRevisionPublished,
+		nil
+}
+
 // The four draft-management methods exist so the fake satisfies
 // port.SuiteRepository; UpdateDraftCase mutates the fake's revision to
 // exercise UpdateDraftCase on the service.
@@ -148,4 +154,36 @@ func TestSuiteServiceGetDraftNotFound(t *testing.T) {
 	if _, err := svc.GetDraft(context.Background(), "tenant-1", "missing"); !errors.Is(err, ErrSuiteNotFound) {
 		t.Fatalf("expected ErrSuiteNotFound, got %v", err)
 	}
+}
+
+func TestSuiteServiceGetActiveRevision(t *testing.T) {
+	repo := &fakeSuiteRepo{}
+	svc := NewSuiteService(repo)
+
+	t.Run("published suite returns active revision", func(t *testing.T) {
+		suite, revision, err := svc.Create(context.Background(), "tenant-1", CreateSuiteInput{
+			Name: "机制基准集", ResourceKind: domain.ResourceKindMechanism,
+			Cases: []domain.EvalCase{{Name: "抽取", Input: "x", AssertionMode: domain.AssertionJudge, Enabled: true}},
+		})
+		if err != nil {
+			t.Fatalf("Create returned error: %v", err)
+		}
+		if _, err := svc.Publish(context.Background(), "tenant-1", suite.ID); err != nil {
+			t.Fatalf("Publish returned error: %v", err)
+		}
+		active, err := svc.GetActiveRevision(context.Background(), "tenant-1", suite.ID)
+		if err != nil {
+			t.Fatalf("GetActiveRevision returned error: %v", err)
+		}
+		if active.ID != revision.ID || active.Status != domain.SuiteRevisionPublished {
+			t.Fatalf("expected published active revision %s, got %+v", revision.ID, active)
+		}
+	})
+
+	t.Run("unpublished suite returns ErrSuiteNotFound", func(t *testing.T) {
+		svc := NewSuiteService(&fakeSuiteRepo{})
+		if _, err := svc.GetActiveRevision(context.Background(), "tenant-1", "missing"); !errors.Is(err, ErrSuiteNotFound) {
+			t.Fatalf("expected ErrSuiteNotFound, got %v", err)
+		}
+	})
 }
