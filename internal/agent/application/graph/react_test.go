@@ -89,6 +89,8 @@ func TestBuildReActGraph_FinalInstructionFitsContextBudget(t *testing.T) {
 		Messages:         messages,
 		MaxLLMSteps:      1,
 		MaxContextTokens: budget,
+		// 账本快照：压缩阈值基于 HistoryCap（= usable − fixedHead − tools）。
+		Budget: graph.ComputeBudget(budget, 0, 0),
 	}, graph.RunConfig[graph.ReActState]{MaxSteps: 2})
 	require.NoError(t, err)
 	require.Len(t, stub.llmReqs, 1)
@@ -102,7 +104,7 @@ func TestBuildReActGraph_FinalInstructionFitsContextBudget(t *testing.T) {
 	for i, message := range reqMessages {
 		estimate[i] = tokenutil.Message{Role: message.Role, Content: message.Content}
 	}
-	wantMax := int(float64(budget) * constants.LoopCompactionSafetyRatio)
+	wantMax := int(float64(graph.ComputeBudget(budget, 0, 0).HistoryCap) * constants.LoopCompactionSafetyRatio)
 	require.LessOrEqual(t, tokenutil.EstimateMessages(estimate), wantMax)
 }
 
@@ -119,6 +121,7 @@ func TestBuildReActGraph_FinalInstructionDoesNotReplaceCurrentTask(t *testing.T)
 
 	_, err = cg.Invoke(context.Background(), graph.ReActState{
 		Model: "qwen", Messages: messages, MaxLLMSteps: 1, MaxContextTokens: 800,
+		Budget: graph.ComputeBudget(800, 0, 0),
 	}, graph.RunConfig[graph.ReActState]{MaxSteps: 2})
 	require.NoError(t, err)
 	reqMessages := stub.llmReqs[0].Messages
@@ -145,9 +148,11 @@ func TestBuildReActGraph_ReservesContextBudgetForToolSchemas(t *testing.T) {
 		}},
 	}}
 
-	const budget = 1000
+	const budget = 10000
 	_, err = cg.Invoke(context.Background(), graph.ReActState{
 		Model: "qwen", Messages: messages, AvailableTools: tools, MaxContextTokens: budget,
+		// 账本快照：ToolsCap 足够容纳 ~300 token 工具定义，history 压缩走 HistoryCap。
+		Budget: graph.ComputeBudget(budget, 0, 0),
 	}, graph.RunConfig[graph.ReActState]{MaxSteps: 2})
 	require.NoError(t, err)
 	require.Len(t, stub.llmReqs, 1)
@@ -160,7 +165,11 @@ func TestBuildReActGraph_ReservesContextBudgetForToolSchemas(t *testing.T) {
 	toolJSON, err := json.Marshal(req.Tools)
 	require.NoError(t, err)
 	total := tokenutil.EstimateMessages(estimate) + tokenutil.EstimateText(string(toolJSON))
-	require.LessOrEqual(t, total, int(float64(budget)*constants.LoopCompactionSafetyRatio))
+	// 派发总量 = 压缩后的 history（≤ HistoryCap·safety）+ 工具（≤ ToolsCap 份额）。
+	ledger := graph.ComputeBudget(budget, 0, 0)
+	require.LessOrEqual(t, total, int(float64(ledger.HistoryCap)*constants.LoopCompactionSafetyRatio)+ledger.ToolsCap)
+	// 工具定义必须保留（ToolsCap 独立配额，不挤占 history）。
+	require.NotEmpty(t, req.Tools)
 }
 
 func TestBuildReActGraph_DropsToolsThatConsumeMessageAllowance(t *testing.T) {
@@ -171,6 +180,7 @@ func TestBuildReActGraph_DropsToolsThatConsumeMessageAllowance(t *testing.T) {
 	const budget = 800
 	_, err = cg.Invoke(context.Background(), graph.ReActState{
 		Model: "qwen", MaxContextTokens: budget,
+		Budget:   graph.ComputeBudget(budget, 0, 0),
 		Messages: []port.LLMMessage{{Role: "system", Content: "system"}, {Role: "user", Content: "CURRENT TASK"}},
 		AvailableTools: []port.ToolDefinition{{
 			Name: "oversized", Description: strings.Repeat("schema", 1000),
@@ -189,6 +199,7 @@ func TestBuildReActGraph_ReservedPlanToolsConsumeContextBeforeOptionalTools(t *t
 
 	_, err = cg.Invoke(context.Background(), graph.ReActState{
 		Model: "qwen", MaxContextTokens: 1000,
+		Budget:   graph.ComputeBudget(1000, 0, 0),
 		Messages: []port.LLMMessage{{Role: "user", Content: "short task"}},
 		AvailableTools: []port.ToolDefinition{{
 			Name: "large_but_usable", Description: strings.Repeat("schema", 310),
@@ -340,7 +351,7 @@ func TestBuildReActGraph_ActiveSkillIntersectsKnowledgeWorkspaces(t *testing.T) 
 		AvailableTools:             []port.ToolDefinition{{Name: "stratum_search_knowledge", ProviderType: "builtin"}},
 		AgentKnowledgeWorkspaceIDs: []string{"kb-allowed", "kb-agent-only"},
 		SkillCatalog:               map[string]port.SkillActivation{"skill-a": {SkillID: "skill-a", Name: "skill-a", KnowledgeWorkspaceIDs: []string{"kb-allowed", "kb-skill-only"}}},
-		RAGSearchFn: func(_ context.Context, workspaces []string, _ string, _ int) (string, error) {
+		RAGSearchFn: func(_ context.Context, workspaces []string, _ string, _ int, _ string) (string, error) {
 			searched = workspaces
 			return "result", nil
 		},
@@ -364,7 +375,7 @@ func TestBuildReActGraph_KnowledgeRevisionFailureStopsBeforeSecondLLMCall(t *tes
 		Model: "qwen", Messages: []port.LLMMessage{{Role: "user", Content: "search"}},
 		AvailableTools:             []port.ToolDefinition{{Name: "stratum_search_knowledge", ProviderType: "builtin"}},
 		AgentKnowledgeWorkspaceIDs: []string{"Knowledge One"},
-		RAGSearchFn: func(context.Context, []string, string, int) (string, error) {
+		RAGSearchFn: func(context.Context, []string, string, int, string) (string, error) {
 			return "", fmt.Errorf("%w: vector backend unavailable", domain.ErrKnowledgeRevisionUnavailable)
 		},
 	}, graph.RunConfig[graph.ReActState]{MaxSteps: 5})
@@ -375,6 +386,136 @@ func TestBuildReActGraph_KnowledgeRevisionFailureStopsBeforeSecondLLMCall(t *tes
 	require.Equal(t, domain.ToolTraceStatusError, state.ToolObservations[0].Status)
 	require.Len(t, state.TraceEvents, 4)
 	require.Equal(t, domain.TraceEventToolFailed, state.TraceEvents[3].EventType)
+}
+
+// contextLengthMarkerErr 是 llmgateway ErrContextLengthExceeded 的测试副本：
+// Permanent + ContextLengthExceeded 双标记与真实错误一致，供 graph 包
+// duck-typing 探测验证。
+type contextLengthMarkerErr struct{ msg string }
+
+func (e *contextLengthMarkerErr) Error() string               { return e.msg }
+func (e *contextLengthMarkerErr) Permanent() bool             { return true }
+func (e *contextLengthMarkerErr) ContextLengthExceeded() bool { return true }
+
+// permanentOnlyErr 是参数校验类 400 的测试副本：permanent 但不带
+// context_length 标记——重试无意义，也不触发降级。
+type permanentOnlyErr struct{ msg string }
+
+func (e *permanentOnlyErr) Error() string   { return e.msg }
+func (e *permanentOnlyErr) Permanent() bool { return true }
+
+func TestIsContextLengthExceeded(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "bare marker", err: &contextLengthMarkerErr{msg: "context length exceeded"}, want: true},
+		{name: "wrapped once", err: fmt.Errorf("react llm node: %w", &contextLengthMarkerErr{msg: "context length exceeded"}), want: true},
+		{name: "wrapped twice", err: fmt.Errorf("react: %w", fmt.Errorf("react llm node: %w", &contextLengthMarkerErr{})), want: true},
+		{name: "plain error", err: errors.New("boom"), want: false},
+		{name: "permanent but not context length", err: &permanentOnlyErr{msg: "invalid parameter schema"}, want: false},
+		{name: "nil", err: nil, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, graph.IsContextLengthExceeded(tc.err))
+		})
+	}
+}
+
+// TestBuildMinimalRetryMessages 覆盖 Spec D4 降级最小请求构造：
+// 成对剔除工具交换（assistant tool_calls 与其 tool 结果）、预算上限、
+// 最近优先保留、首条 system / 末条当前任务。
+func TestBuildMinimalRetryMessages(t *testing.T) {
+	task := "CURRENT TASK"
+	cases := []struct {
+		name     string
+		system   string
+		task     string
+		messages []port.LLMMessage
+		window   int
+		want     []port.LLMMessage
+	}{
+		{
+			name:   "keeps plain history and appends task",
+			system: "sys",
+			task:   task,
+			messages: []port.LLMMessage{
+				{Role: "system", Content: "sys"},
+				{Role: "user", Content: "prior task"},
+				{Role: "assistant", Content: "prior answer"},
+			},
+			window: 1000,
+			want: []port.LLMMessage{
+				{Role: "system", Content: "sys"},
+				{Role: "user", Content: "prior task"},
+				{Role: "assistant", Content: "prior answer"},
+				{Role: "user", Content: task},
+			},
+		},
+		{
+			name:   "strips tool result and its assistant tool_calls pair",
+			system: "sys",
+			task:   task,
+			messages: []port.LLMMessage{
+				{Role: "system", Content: "sys"},
+				{Role: "user", Content: "prior task"},
+				{Role: "assistant", ToolCalls: []port.ToolCall{{ID: "c1", Name: "calc"}}},
+				{Role: "tool", ToolCallID: "c1", Content: "42"},
+				{Role: "assistant", Content: "interim"},
+			},
+			window: 1000,
+			want: []port.LLMMessage{
+				{Role: "system", Content: "sys"},
+				{Role: "user", Content: "prior task"},
+				{Role: "assistant", Content: "interim"},
+				{Role: "user", Content: task},
+			},
+		},
+		{
+			name:   "budget exhaustion keeps most recent messages and restores system",
+			system: "sys",
+			task:   task,
+			messages: []port.LLMMessage{
+				{Role: "system", Content: "sys"},
+				{Role: "user", Content: strings.Repeat("x", 50)},
+				{Role: "assistant", Content: strings.Repeat("y", 50)},
+				{Role: "user", Content: "recent"},
+			},
+			// 预算只容得下最近一条 user 消息：历史 system 被挤出，但占位
+			// 必须补回——预算在扫描前已为 system 预留字节。
+			window: len("sys") + len("recent") + len(task) + 64 + 6,
+			want: []port.LLMMessage{
+				{Role: "system", Content: "sys"},
+				{Role: "user", Content: "recent"},
+				{Role: "user", Content: task},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := graph.BuildMinimalRetryMessages(tc.system, tc.task, tc.messages, tc.window)
+			require.Equal(t, tc.want, got)
+			// 不变式：剔除全部工具消息与 assistant tool_calls；末条为当前任务。
+			contentSum := 0
+			for _, m := range got {
+				require.NotEqual(t, "tool", m.Role)
+				require.Empty(t, m.ToolCalls)
+				contentSum += len(m.Content)
+			}
+			require.Equal(t, "user", got[len(got)-1].Role)
+			require.Equal(t, tc.task, got[len(got)-1].Content)
+			// D4 语义不变式：最小请求首条恒为 system（预算已为 system
+			// 预留字节，历史 system 被预算挤出时由占位补回）。
+			require.Equal(t, "system", got[0].Role)
+			require.Equal(t, tc.system, got[0].Content)
+			// 预算充足时总量必须 ≤ window（最小请求必然小于原请求）。
+			if tc.window > 100 {
+				require.LessOrEqual(t, contentSum, tc.window)
+			}
+		})
+	}
 }
 
 func toolNames(tools []port.ToolDefinition) []string {
@@ -763,7 +904,7 @@ func TestBuildReActGraph_ActivesUnionKnowledgeWorkspaces(t *testing.T) {
 			"skill-a": {SkillID: "skill-a", Name: "skill-a", KnowledgeWorkspaceIDs: []string{"kb-allowed", "kb-skill-only"}},
 			"skill-b": {SkillID: "skill-b", Name: "skill-b", KnowledgeWorkspaceIDs: []string{"kb-agent-only"}},
 		},
-		RAGSearchFn: func(_ context.Context, workspaces []string, _ string, _ int) (string, error) {
+		RAGSearchFn: func(_ context.Context, workspaces []string, _ string, _ int, _ string) (string, error) {
 			searched = workspaces
 			return "result", nil
 		},
@@ -970,11 +1111,11 @@ func TestBuildReActGraph_SearchKnowledgePrefersEvidenceFn(t *testing.T) {
 		Model: "qwen", Messages: []port.LLMMessage{{Role: "user", Content: "search"}},
 		AvailableTools:             []port.ToolDefinition{{Name: "stratum_search_knowledge", ProviderType: "builtin"}},
 		AgentKnowledgeWorkspaceIDs: []string{"kb"},
-		RAGSearchFn: func(context.Context, []string, string, int) (string, error) {
+		RAGSearchFn: func(context.Context, []string, string, int, string) (string, error) {
 			plainCalled = true
 			return "plain", nil
 		},
-		RAGSearchFnWithEvidence: func(context.Context, []string, string, int) (port.RAGSearchEvidence, error) {
+		RAGSearchFnWithEvidence: func(context.Context, []string, string, int, string) (port.RAGSearchEvidence, error) {
 			evidenceCalled = true
 			return port.RAGSearchEvidence{Content: "ev", Sources: []port.RAGSearchSource{
 				{WorkspaceID: "w1", WorkspaceName: "KB One", ChunkID: "c1", Score: 0.85, HasScore: true},
@@ -1017,7 +1158,7 @@ func TestBuildReActGraph_SearchKnowledgeFallsBackToPlainFn(t *testing.T) {
 		Model: "qwen", Messages: []port.LLMMessage{{Role: "user", Content: "search"}},
 		AvailableTools:             []port.ToolDefinition{{Name: "stratum_search_knowledge", ProviderType: "builtin"}},
 		AgentKnowledgeWorkspaceIDs: []string{"kb"},
-		RAGSearchFn: func(context.Context, []string, string, int) (string, error) {
+		RAGSearchFn: func(context.Context, []string, string, int, string) (string, error) {
 			return "plain result", nil
 		},
 	}, graph.RunConfig[graph.ReActState]{MaxSteps: 8})

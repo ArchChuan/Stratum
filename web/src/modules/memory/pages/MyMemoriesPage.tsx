@@ -3,9 +3,10 @@ import {
   DatabaseOutlined,
   TagsOutlined,
 } from '@ant-design/icons';
-import { Button, Card, Pagination, Space, Table, Tag, Tabs, Typography } from 'antd';
+import { Alert, Button, Card, Pagination, Space, Table, Tag, Tabs, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useCallback } from 'react';
+import { Link } from 'react-router-dom';
 
 import { useMyMemoriesPage } from '../hooks/useMyMemoriesPage';
 import type { MemoryEntity, MemoryFact } from '../model/memory';
@@ -116,6 +117,20 @@ export const MyMemoriesPage = () => {
         }
       >
         <div style={{ padding: 16 }}>
+          {stats && stats.embed_model_configured === false && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="未配置嵌入模型"
+              description={
+                <span>
+                  记忆可能无法写入，请到{' '}
+                  <Link to="/models">模型管理页</Link> 配置嵌入模型。
+                </span>
+              }
+            />
+          )}
           <Space size={16} wrap style={{ marginBottom: 16, width: '100%' }}>
             <StatCard
               loading={statsLoading}

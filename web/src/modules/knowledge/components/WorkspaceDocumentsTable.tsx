@@ -1,4 +1,4 @@
-import { DeleteOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EyeOutlined, SettingOutlined } from '@ant-design/icons';
 import { Badge, Button, Card, Flex, Popconfirm, Progress, Tag, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 
@@ -13,8 +13,12 @@ interface WorkspaceDocumentsTableProps {
   documents: KnowledgeDocument[];
   loading: boolean;
   isAdmin?: boolean;
+  // platform-managed 知识库豁免白名单：不渲染受限 Tag 与权限动作
+  platformManaged?: boolean;
   deletingDocumentID?: string;
   onDelete?: (documentID: string) => void;
+  onPreview?: (document: KnowledgeDocument) => void;
+  onSetAccess?: (document: KnowledgeDocument) => void;
 }
 
 const STATUS_META: Record<string, { color: string; label: string }> = {
@@ -58,13 +62,24 @@ const renderProgress = (doc: KnowledgeDocument) => {
   );
 };
 
+// 白名单任一维度非空 = 受限；两者全空 = 继承 workspace 可见性
+const isRestricted = (doc: KnowledgeDocument) =>
+  (doc.allowed_user_ids?.length ?? 0) > 0 || (doc.allowed_role_ids?.length ?? 0) > 0;
+
+const renderName = (doc: KnowledgeDocument) => (
+  <Flex align="center" gap={6} style={{ minWidth: 0 }}>
+    <Text ellipsis>{doc.source || '-'}</Text>
+    {isRestricted(doc) && <Tag color="orange" style={{ margin: 0 }}>受限</Tag>}
+  </Flex>
+);
+
 const baseColumns: ColumnsType<KnowledgeDocument> = [
   {
     title: '文件名',
     dataIndex: 'source',
     key: 'source',
     ellipsis: true,
-    render: (source: string) => <Text>{source || '-'}</Text>,
+    render: (_, doc) => renderName(doc),
   },
   {
     title: '状态',
@@ -123,22 +138,44 @@ export const WorkspaceDocumentsTable = ({
   documents,
   loading,
   isAdmin = false,
+  platformManaged = false,
   deletingDocumentID = '',
   onDelete = () => undefined,
+  onPreview,
+  onSetAccess,
 }: WorkspaceDocumentsTableProps) => {
-  const columns = isAdmin
-    ? [
-        ...baseColumns,
-        {
-          title: '操作',
-          key: 'actions',
-          width: 72,
-          align: 'center' as const,
-          render: (_: unknown, document: KnowledgeDocument) =>
-            deleteAction(document, deletingDocumentID, onDelete),
-        },
-      ]
-    : baseColumns;
+  const actions: ColumnsType<KnowledgeDocument>[number] = {
+    title: '操作',
+    key: 'actions',
+    width: platformManaged ? 72 : 144,
+    align: 'center' as const,
+    render: (_: unknown, document: KnowledgeDocument) => (
+      <Flex align="center" justify="center" gap={0}>
+        {onPreview && (
+          <Tooltip title="预览原文">
+            <Button
+              type="text"
+              icon={<EyeOutlined />}
+              aria-label="预览文档"
+              onClick={() => onPreview(document)}
+            />
+          </Tooltip>
+        )}
+        {isAdmin && !platformManaged && onSetAccess && (
+          <Tooltip title="设置访问权限">
+            <Button
+              type="text"
+              icon={<SettingOutlined />}
+              aria-label="设置文档访问权限"
+              onClick={() => onSetAccess(document)}
+            />
+          </Tooltip>
+        )}
+        {isAdmin && deleteAction(document, deletingDocumentID, onDelete)}
+      </Flex>
+    ),
+  };
+  const columns = isAdmin || onPreview ? [...baseColumns, actions] : baseColumns;
 
   return (
   <Card
@@ -157,7 +194,7 @@ export const WorkspaceDocumentsTable = ({
       renderMobileItem={(document) => (
         <div style={{ padding: 12, borderBottom: '1px solid #f0f0f0' }}>
           <Flex justify="space-between" align="center" gap={8}>
-            <Text strong ellipsis>{document.source || '-'}</Text>
+            {renderName(document)}
             {renderStatus(document)}
           </Flex>
           <Flex justify="space-between" align="center" gap={8} style={{ marginTop: 10 }}>
@@ -168,6 +205,24 @@ export const WorkspaceDocumentsTable = ({
                   ? new Date(document.created_at).toLocaleString('zh-CN')
                   : '-'}
               </Text>
+              {onPreview && (
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<EyeOutlined />}
+                  aria-label="预览文档"
+                  onClick={() => onPreview(document)}
+                />
+              )}
+              {isAdmin && !platformManaged && onSetAccess && (
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<SettingOutlined />}
+                  aria-label="设置文档访问权限"
+                  onClick={() => onSetAccess(document)}
+                />
+              )}
               {isAdmin && deleteAction(document, deletingDocumentID, onDelete)}
             </Flex>
           </Flex>

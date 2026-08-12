@@ -61,6 +61,10 @@ func makePlanSlotNode(i int) NodeFunc[ReActState] {
 			outcome.Status = domain.PlanNodeStatusSucceeded
 			outcome.Summary = result.Summary
 		}
+		// 子循环 token 用量折回父图预算账本（Finding 1 修复）：即使 outcome
+		// 失败也折回——失败路径的子循环同样消耗了预算；execErr 时 result 为
+		// 零值（TokensUsed = 0），折回为空操作。
+		s.TotalTokens += result.TokensUsed
 		s.PlanWaveOutcomes = append(s.PlanWaveOutcomes, outcome)
 		return s, nil
 	}

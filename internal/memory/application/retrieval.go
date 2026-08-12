@@ -35,19 +35,20 @@ func (s *MemoryService) RecallMemory(ctx context.Context, req *RecallMemoryReque
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
 
-	// Step 2: Vector search (retrieve 2*topK candidates)
-	collectionName := fmt.Sprintf("memory_facts_%s", strings.ReplaceAll(req.TenantID, "-", "_"))
+	// Step 2: Vector search (retrieve 2*topK candidates) — 新名 collection 优先，
+	// 不存在（升级后未重建）时回退 legacy 名；无可用模型时直接 legacy 名。
+	model := s.currentEmbedModel(ctx, req.TenantID)
+	collections := []string{factsCollectionName(req.TenantID, model)}
+	if model != "" {
+		collections = append(collections, fmt.Sprintf("memory_facts_%s", strings.ReplaceAll(req.TenantID, "-", "_")))
+	}
 	filter := port.VectorSearchFilter{
 		UserID: req.UserID, AgentID: req.AgentID, IncludeUserScope: true, IncludeAgentScope: req.AgentID != "",
 	}
 
-	vectorDocs, err := s.vectorStore.Search(ctx, collectionName, queryVector, req.TopK*2, filter)
+	vectorDocs, err := s.vectorSearchCandidates(ctx, collections, queryVector, req.TopK*2, filter)
 	if err != nil {
-		var unavailable *port.VectorStoreUnavailableError
-		if !errors.As(err, &unavailable) {
-			return nil, fmt.Errorf("vector search: %w", err)
-		}
-		vectorDocs = nil
+		return nil, fmt.Errorf("vector search: %w", err)
 	}
 
 	// Step 3: Trigram search (retrieve 2*topK candidates)
@@ -137,4 +138,39 @@ func (s *MemoryService) RecallMemory(ctx context.Context, req *RecallMemoryReque
 	}
 
 	return &RecallMemoryResponse{Facts: dtos}, nil
+}
+
+// errCollectionNotFound distinguishes a missing Milvus collection from other
+// search failures so vectorSearchCandidates can decide between legacy fallback
+// and fail-closed error propagation.
+var errCollectionNotFound = errors.New("memory collection not found")
+
+// isCollectionNotFound mirrors knowledge/application 的判定形状：本地哨兵或错误
+// 文本包含 pkg/storage/milvus.ErrCollectionNotFound（"milvus collection not
+// found"）的消息片段（errors.Is 哨兵在 infrastructure 层直接判定）。
+func isCollectionNotFound(err error) bool {
+	return errors.Is(err, errCollectionNotFound) ||
+		strings.Contains(err.Error(), "collection not found")
+}
+
+// vectorSearchCandidates 双名兜底：按 [新名, legacy] 顺序查询并合并结果。
+// 仅 collection-not-found 容忍（继续尝试下一个，legacy 回退）；其余错误
+// （schema 不匹配、Milvus 不可用）向上传播，保持 fail-closed——向量库故障
+// 必须显式失败，不得静默退化为 trigram 检索。
+func (s *MemoryService) vectorSearchCandidates(ctx context.Context, collections []string, queryVector []float32, topK int, filter port.VectorSearchFilter) ([]*port.VectorDoc, error) {
+	var vectorDocs []*port.VectorDoc
+	for _, collectionName := range collections {
+		if collectionName == "" {
+			continue
+		}
+		docs, err := s.vectorStore.Search(ctx, collectionName, queryVector, topK, filter)
+		if err != nil {
+			if isCollectionNotFound(err) {
+				continue // collection 不存在 → 尝试下一个（legacy 回退）
+			}
+			return nil, err
+		}
+		vectorDocs = append(vectorDocs, docs...)
+	}
+	return vectorDocs, nil
 }

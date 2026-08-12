@@ -37,6 +37,10 @@ var (
 		Name: "memory_dlq_total",
 		Help: "Total messages sent to DLQ",
 	}, []string{"tenant_id", "stage"})
+	embedUnavailableTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "memory_embed_unavailable_total",
+		Help: "Total messages dead-lettered because no embedding model is configured for the tenant.",
+	}, []string{"tenant_id"})
 	entitiesExtracted = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "memory_entities_extracted_total",
 		Help: "Total entities extracted",
@@ -54,6 +58,6 @@ func RegisterMetrics(reg prometheus.Registerer) {
 		embedDuration, embedTotal,
 		enrichDuration, enrichTotal,
 		summaryTriggered, dlqTotal, entitiesExtracted,
-		pipelinePanics,
+		pipelinePanics, embedUnavailableTotal,
 	)
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
+	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -254,38 +255,58 @@ func (f fakeModelContextProvider) GetChatModelContextWindow(context.Context, str
 	return f.cw, f.err
 }
 
-func TestDeriveMaxContextTokens(t *testing.T) {
-	svc := agent.NewAgentService(agent.AgentServiceDeps{Logger: zap.NewNop()})
+// windowRatioAt 运行时按 DefaultContextWindowRatio 缩放窗口
+// （want 值计算：常量浮点→int 转换在编译期被拒绝）。
+func windowRatioAt(win int) int {
+	return int(float64(win) * constants.DefaultContextWindowRatio)
+}
 
-	// 极端情况：空 model / nil provider → 默认值。
-	require.Equal(t, constants.DefaultAgentContextTokens, agent.DeriveMaxContextTokensForTest(svc, context.Background(), "t1", ""))
-	require.Equal(t, constants.DefaultAgentContextTokens, agent.DeriveMaxContextTokensForTest(svc, context.Background(), "t1", "qwen"))
-
-	// 正常推导路径：cw×ratio < ceiling → 按比例缩放。
-	svc = agent.NewAgentService(agent.AgentServiceDeps{
-		ModelContextProvider: fakeModelContextProvider{cw: 10_000},
-		Logger:               zap.NewNop(),
-	})
-	require.Equal(t, 8500, agent.DeriveMaxContextTokensForTest(svc, context.Background(), "t1", "qwen"))
-
-	// 极端情况：provider 失败 / cw<=0 → 默认值。
-	svc = agent.NewAgentService(agent.AgentServiceDeps{
-		ModelContextProvider: fakeModelContextProvider{err: errors.New("catalog down")},
-		Logger:               zap.NewNop(),
-	})
-	require.Equal(t, constants.DefaultAgentContextTokens, agent.DeriveMaxContextTokensForTest(svc, context.Background(), "t1", "qwen"))
-	svc = agent.NewAgentService(agent.AgentServiceDeps{
-		ModelContextProvider: fakeModelContextProvider{cw: 0},
-		Logger:               zap.NewNop(),
-	})
-	require.Equal(t, constants.DefaultAgentContextTokens, agent.DeriveMaxContextTokensForTest(svc, context.Background(), "t1", "qwen"))
-
-	// 极端情况：推导值超 ceiling → 收敛到 ceiling。
-	svc = agent.NewAgentService(agent.AgentServiceDeps{
-		ModelContextProvider: fakeModelContextProvider{cw: 1_000_000},
-		Logger:               zap.NewNop(),
-	})
-	require.Equal(t, constants.DefaultAgentContextTokensCeiling, agent.DeriveMaxContextTokensForTest(svc, context.Background(), "t1", "qwen"))
+func TestResolveExecutionWindow(t *testing.T) {
+	// 执行时两阶段解析：registry > vendor 表 > 8000；显式值按
+	// [MinContextWindowTokens, w×0.85] clamp；UNKNOWN 不压显式值（D7）。
+	cases := []struct {
+		name     string
+		provider port.ModelContextProvider
+		vendor   func(string) (int, int)
+		explicit int
+		want     int
+		wantSrc  agentgraph.WindowSource
+	}{
+		// registry 命中 + 显式在 clamp 区间内 → 显式生效。
+		{name: "registry explicit within clamp",
+			provider: fakeModelContextProvider{cw: 200_000}, explicit: 30_000,
+			want: 30_000, wantSrc: agentgraph.WindowExplicit},
+		// registry 未知 + vendor 命中 + 未配置 → vendor 窗口 × 0.85。
+		{name: "vendor derived",
+			provider: fakeModelContextProvider{cw: 0},
+			vendor:   func(string) (int, int) { return 131_072, 8192 }, explicit: 0,
+			want: windowRatioAt(131_072), wantSrc: agentgraph.WindowRegistry},
+		// 全空 → 保守默认。
+		{name: "fallback default",
+			provider: fakeModelContextProvider{cw: 0}, explicit: 0,
+			want: constants.DefaultAgentContextTokens, wantSrc: agentgraph.WindowFallback},
+		// 显式超过 w×0.85 → clamp 到 w×0.85。
+		{name: "explicit above ratio cap clamps",
+			provider: fakeModelContextProvider{cw: 200_000}, explicit: 200_000,
+			want: windowRatioAt(200_000), wantSrc: agentgraph.WindowExplicit},
+		// registry 窗口超 1M 硬 ceiling → 收敛到 1M 再派生。
+		{name: "model window capped at 1M",
+			provider: fakeModelContextProvider{cw: 2_000_000}, explicit: 0,
+			want:    windowRatioAt(constants.MaxContextWindowTokens),
+			wantSrc: agentgraph.WindowRegistry},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := agent.NewAgentService(agent.AgentServiceDeps{
+				ModelContextProvider: tc.provider,
+				VendorWindowLookup:   tc.vendor,
+				Logger:               zap.NewNop(),
+			})
+			got, src := agent.ResolveExecutionWindowForTest(svc, context.Background(), "t1", "qwen", tc.explicit)
+			require.Equal(t, tc.want, got)
+			require.Equal(t, tc.wantSrc, src)
+		})
+	}
 }
 
 func TestBaseAgentSettersResetAndMemoryBound(t *testing.T) {

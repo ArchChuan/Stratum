@@ -106,18 +106,18 @@ func (r agentToolUserScopeResolver) ResolveToolUserScope(
 }
 
 func (a ragSearchAdapter) SearchKnowledge(
-	ctx context.Context, tenantID string, workspaceIDs []string, query string, topK int,
+	ctx context.Context, tenantID string, workspaceIDs []string, query string, topK int, viewerID string,
 ) (string, error) {
-	return knowledge.NewRAGSearchFn(a.rag, tenantID)(ctx, workspaceIDs, query, topK)
+	return knowledge.NewRAGSearchFn(a.rag, tenantID, viewerID)(ctx, workspaceIDs, query, topK)
 }
 
 // SearchKnowledgeWithEvidence implements agentport.RAGSearchEvidenceProvider:
 // same fan-out as SearchKnowledge but retaining chunk-level provenance so
 // agent tool observations can record retrieval evidence.
 func (a ragSearchAdapter) SearchKnowledgeWithEvidence(
-	ctx context.Context, tenantID string, workspaceIDs []string, query string, topK int,
+	ctx context.Context, tenantID string, workspaceIDs []string, query string, topK int, viewerID string,
 ) (agentport.RAGSearchEvidence, error) {
-	ev, err := knowledge.NewRAGSearchEvidenceFn(a.rag, tenantID)(ctx, workspaceIDs, query, topK)
+	ev, err := knowledge.NewRAGSearchEvidenceFn(a.rag, tenantID, viewerID)(ctx, workspaceIDs, query, topK)
 	if err != nil {
 		return agentport.RAGSearchEvidence{}, err
 	}
@@ -125,6 +125,7 @@ func (a ragSearchAdapter) SearchKnowledgeWithEvidence(
 	for _, src := range ev.Sources {
 		out.Sources = append(out.Sources, agentport.RAGSearchSource{
 			WorkspaceID: src.WorkspaceID, WorkspaceName: src.WorkspaceName, ChunkID: src.ChunkID,
+			DocumentID: src.DocumentID, DocumentTitle: src.DocumentTitle, Snippet: src.Snippet,
 			Score: src.Score, HasScore: src.HasScore,
 		})
 	}
@@ -134,18 +135,21 @@ func (a ragSearchAdapter) SearchKnowledgeWithEvidence(
 var _ agentport.RAGSearchEvidenceProvider = ragSearchAdapter{}
 
 func (a ragSearchAdapter) SearchKnowledgeRevision(
-	ctx context.Context, tenantID string, revision agentport.KnowledgeRetrievalRevision, query string,
+	ctx context.Context, tenantID string, revision agentport.KnowledgeRetrievalRevision, query string, viewerID string,
 ) (string, error) {
 	if a.rag == nil {
 		return "", fmt.Errorf("Knowledge revision search: RAG service unavailable")
 	}
 	ctx = reqctx.WithTenantID(ctx, tenantID)
+	// D3: the revision path resolves its visible set inside RAGService.Query
+	// (the snapshot carries the workspace ID); viewerID is the end-user
+	// identity and the evaluator fails closed when it is missing.
 	return knowledge.NewRetrievalEvaluator(a.rag).RetrieveContext(ctx, knowledge.RetrievalSnapshot{
 		WorkspaceID: revision.WorkspaceID, WorkspaceName: revision.WorkspaceName,
 		EmbeddingModel: revision.EmbeddingModel, QueryMode: revision.QueryMode, TopK: revision.TopK,
 		ScoreThreshold: revision.ScoreThreshold, Reranking: revision.Reranking,
 		QueryRewrite: revision.QueryRewrite,
-	}, query)
+	}, query, viewerID)
 }
 
 // skillVersionService returns the wired skill VersionService, or nil when the
@@ -156,6 +160,31 @@ func skillVersionService(c *Container) *skillapp.VersionService {
 		return nil
 	}
 	return c.Skill.VersionService
+}
+
+// knowledgeWorkspaceService returns the wired knowledge WorkspaceService, or
+// nil when the knowledge context was built without a database. Consumers
+// treat a nil service as fail-closed (bindings rejected).
+func knowledgeWorkspaceService(c *Container) *knowledge.WorkspaceService {
+	if c.Knowledge == nil {
+		return nil
+	}
+	return c.Knowledge.WorkspaceService
+}
+
+// workspaceBindingAdapter adapts *knowledge.WorkspaceService onto the
+// consuming contexts' WorkspaceBindingValidator ports (agent and skill each
+// define their own same-shaped interface; this single adapter satisfies
+// both). Lives in wiring so neither context imports the other.
+type workspaceBindingAdapter struct {
+	ws *knowledge.WorkspaceService
+}
+
+func (a workspaceBindingAdapter) ValidateWorkspaceBindings(ctx context.Context, tenantID string, ids []string) error {
+	if a.ws == nil {
+		return fmt.Errorf("knowledge: workspace binding validation unavailable (workspace service not wired)")
+	}
+	return a.ws.ValidateWorkspaceBindings(ctx, tenantID, ids)
 }
 
 func tenantMemberService(c *Container) tenantMemberRoleService {
@@ -272,6 +301,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		TenantModelValidator:    tenantModelValidator(a.TenantResolver),
 		TenantModelCatalog:      tenantModelCatalog(a.TenantResolver),
 		ModelContextProvider:    modelContextProvider(a.TenantResolver),
+		VendorWindowLookup:      llmgateway.LookupModelSpec,
 		HistoryCompactorFactory: func(gw agentport.CapabilityGateway, model string, logger *zap.Logger, compactionMaxTokens int) agentport.HistoryCompactor {
 			return capgateway.NewLLMHistoryCompactor(gw, model, logger, compactionMaxTokens)
 		},
@@ -283,7 +313,8 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		ToolAuthorizer: agent.NewToolAuthorizer(agentToolUserScopeResolver{
 			members: tenantMemberService(c),
 		}),
-		Logger: c.Logger,
+		WorkspaceBindingValidator: workspaceBindingAdapter{ws: knowledgeWorkspaceService(c)},
+		Logger:                    c.Logger,
 	}
 	if db != nil {
 		deps.ResourceEditorRepo = persistence.NewPgResourceEditorRepo(db)
@@ -346,8 +377,12 @@ func (c *Container) injectTenantRoleResolvers(a *Agent) {
 	roles := tenantRoleAdapter{service: tenantMemberService(c)}
 	a.Service.SetTenantRoleResolver(roles)
 	c.Skill.VersionService.SetTenantRoleResolver(roles)
+	c.Skill.VersionService.SetWorkspaceBindingValidator(workspaceBindingAdapter{ws: c.Knowledge.WorkspaceService})
 	c.MCP.Service.SetTenantRoleResolver(roles)
 	c.Knowledge.WorkspaceService.SetTenantRoleResolver(roles)
+	if c.Knowledge.RAGService != nil {
+		c.Knowledge.RAGService.SetTenantRoleResolver(roles)
+	}
 }
 
 // wireOperationGate wires the T8 operation approval chain: the gate service

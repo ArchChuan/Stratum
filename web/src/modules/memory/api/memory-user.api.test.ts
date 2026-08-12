@@ -56,7 +56,7 @@ describe('memoryUserApi', () => {
 
   it('fetches user-level memory stats', async () => {
     vi.mocked(api.get).mockResolvedValue({
-      data: { memory_count: 5, entity_count: 3 },
+      data: { memory_count: 5, entity_count: 3, embed_model_configured: true },
     } as never);
 
     const stats = await memoryUserApi.getStats();
@@ -64,6 +64,7 @@ describe('memoryUserApi', () => {
     expect(api.get).toHaveBeenCalledWith('/memory/stats');
     expect(stats.memory_count).toBe(5);
     expect(stats.entity_count).toBe(3);
+    expect(stats.embed_model_configured).toBe(true);
   });
 
   it('defaults missing stats fields to zero', async () => {

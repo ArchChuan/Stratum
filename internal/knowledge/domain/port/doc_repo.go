@@ -24,4 +24,15 @@ type DocRepo interface {
 	// RecoverStuckIngests marks docs stuck in 'processing' for longer than
 	// threshold as 'failed'. Returns number of rows affected. Called on startup.
 	RecoverStuckIngests(ctx context.Context, tenantID string, threshold time.Duration) (int, error)
+
+	// VisibleDocIDs returns the doc IDs of a workspace visible to viewerID.
+	// role is the viewer's tenant role (resolved by the caller) — whitelist
+	// matching is user OR role OR creator. Rows with both whitelist arrays
+	// empty are always visible (workspace visibility inheritance).
+	VisibleDocIDs(ctx context.Context, tenantID, workspaceID, viewerID, role string) ([]string, error)
+	// GetByID returns a document scoped to a workspace (doc_id has no FK,
+	// workspace_id + id double constraint prevents cross-workspace access).
+	GetByID(ctx context.Context, tenantID, workspaceID, docID string) (*domain.Document, error)
+	// SetDocAccess replaces the document-level whitelist.
+	SetDocAccess(ctx context.Context, tenantID, docID string, userIDs, roleIDs []string) error
 }

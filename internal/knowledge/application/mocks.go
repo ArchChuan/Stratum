@@ -12,6 +12,9 @@ type MockVectorStore struct {
 	searchErr      error
 	collectionInfo knowledgeport.CollectionInfo
 	collectionErr  error
+	// lastExpression records the filter expression of the most recent
+	// SearchWithFilter call for whitelist-filter assertions.
+	lastExpression string
 }
 
 func NewMockVectorStore() *MockVectorStore {
@@ -37,6 +40,16 @@ func (m *MockVectorStore) Insert(ctx context.Context, collection string, chunks 
 }
 
 func (m *MockVectorStore) Search(ctx context.Context, collection string, vector []float32, topK int) ([]knowledgeport.VectorSearchResult, error) {
+	if m.searchErr != nil {
+		return nil, m.searchErr
+	}
+	return m.searchResults, nil
+}
+
+// SearchWithFilter mirrors Search but records the filter expression so tests
+// can assert the doc whitelist reached the vector leg.
+func (m *MockVectorStore) SearchWithFilter(ctx context.Context, collection string, vector []float32, topK int, expression string) ([]knowledgeport.VectorSearchResult, error) {
+	m.lastExpression = expression
 	if m.searchErr != nil {
 		return nil, m.searchErr
 	}

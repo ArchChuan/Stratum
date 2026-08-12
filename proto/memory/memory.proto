@@ -26,6 +26,8 @@ message MemorySummaryResponse {
 message MemoryStatsResponse {
   int64 memory_count = 1;
   int64 entity_count = 2;
+  // 租户是否已配置可用嵌入模型（无可用模型时 false，前端展示健康提示）。
+  bool embed_model_configured = 3;
 }
 
 // MemoryEntityResponse 是用户侧只读的轻量话题标签。

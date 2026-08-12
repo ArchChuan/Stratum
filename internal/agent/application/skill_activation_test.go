@@ -174,7 +174,12 @@ func TestAgentService_ExecuteSkillScenarioActivatesMultipleSkills(t *testing.T) 
 	require.Contains(t, string(encoded), "USE INSTRUCTION A")
 	require.Contains(t, string(encoded), "USE INSTRUCTION B")
 	// buildBuiltinTools 无条件追加 stratum_continue_reasoning；无 RAG/无 memory 时 available 仅此一项。
-	require.Equal(t, []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "skill-a", "skill-b", "stratum_continue_reasoning"}, scenarioToolNames(req.LLM.Tools))
+	// qwen-turbo fallback 8000 窗口下 ToolsCap 有限：预算裁剪只裁 plan 工作流工具，
+	// 激活技能与授权能力工具必须全量保留（技能激活 = 用户显式功能开关）。
+	names := scenarioToolNames(req.LLM.Tools)
+	for _, mustKeep := range []string{"skill-a", "skill-b", "stratum_continue_reasoning"} {
+		require.Contains(t, names, mustKeep, "激活技能/能力工具被预算裁剪: %v", names)
+	}
 }
 
 type resumableCheckpointStore struct {

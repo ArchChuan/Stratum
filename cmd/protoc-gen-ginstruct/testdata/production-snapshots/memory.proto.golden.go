@@ -25,8 +25,9 @@ type MemorySummaryResponse struct {
 }
 
 type MemoryStatsResponse struct {
-	MemoryCount int64 `json:"memory_count"`
-	EntityCount int64 `json:"entity_count"`
+	MemoryCount          int64 `json:"memory_count"`
+	EntityCount          int64 `json:"entity_count"`
+	EmbedModelConfigured bool  `json:"embed_model_configured"`
 }
 
 type MemoryEntityResponse struct {

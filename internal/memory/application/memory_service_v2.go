@@ -84,6 +84,19 @@ func (s *MemoryService) SetLLMSuperseder(j port.LLMSuperseder) { s.judge = j }
 // per tenant, so a singleton judge would apply one tenant's model to another's facts.
 func (s *MemoryService) SetLLMSupersederResolver(r LLMSupersederResolver) { s.judgeResolver = r }
 
+// currentEmbedModel 返回当前默认嵌入模型名；无可用模型时返回 ""（legacy 名兜底）。
+func (s *MemoryService) currentEmbedModel(ctx context.Context, tenantID string) string {
+	if s.embedClient != nil {
+		return s.embedClient.Model()
+	}
+	if s.embedClientResolver != nil {
+		if ec := s.embedClientResolver(ctx, tenantID); ec != nil {
+			return ec.Model()
+		}
+	}
+	return ""
+}
+
 // BufferMessage accumulates messages in Redis; flushes at K=5 or T=2min.
 func (s *MemoryService) BufferMessage(ctx context.Context, req *BufferMessageRequest) error {
 	return s.buffer.BufferMessage(ctx, req)

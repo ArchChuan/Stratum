@@ -14,6 +14,63 @@ import (
 	"go.uber.org/zap"
 )
 
+// TestPlanWaveFoldsBackSlotTokensIntoParentTotal 验证 plan 槽位子循环的 token
+// 用量折回父图预算账本（Finding 1 修复）：子循环 delta 经
+// PlanNodeExecutionResult.TokensUsed 叠加进父状态 TotalTokens；并行波次的多个
+// 槽位各折回自身 delta，父图基线只计一次（与 MergeReActWave 的 base-relative
+// 语义一致，无重复计数）。
+func TestPlanWaveFoldsBackSlotTokensIntoParentTotal(t *testing.T) {
+	cg, stub := planWaveTestGraph(t)
+	// 父图首轮 LLM 调用消耗 500：折回必须叠加在基线上，基线不得重复计入。
+	stub.responses[0].Usage = port.TokenUsage{Total: 500}
+	state := runtimeStateWithPlan([]domain.PlanNode{
+		{ID: "a", Goal: "a", Status: domain.PlanNodeStatusPending},
+		{ID: "b", Goal: "b", Status: domain.PlanNodeStatusPending},
+	})
+	state.Model = "qwen-turbo"
+	state.Messages = []port.LLMMessage{{Role: "user", Content: "run the plan"}}
+	state.PlanNodeExecutor = func(_ context.Context, _ graph.ReActState, node domain.PlanNode, _ map[string]string) (graph.PlanNodeExecutionResult, error) {
+		return graph.PlanNodeExecutionResult{Summary: node.ID + " done", TokensUsed: 1500}, nil
+	}
+
+	out, err := cg.Invoke(context.Background(), state, graph.RunConfig[graph.ReActState]{
+		MaxSteps: 20, MaxParallel: 2, MergeWave: graph.MergeReActWave,
+	})
+	require.NoError(t, err)
+	// 基线 500 只计一次 + 两个槽位各折回 1500 = 3500。
+	require.Equal(t, 3500, out.TotalTokens)
+	require.Equal(t, domain.PlanNodeStatusSucceeded, out.ActivePlan.Nodes[0].Status)
+}
+
+// TestPlanWaveBudgetTerminatesAfterSlotFoldBack 验证父图成本预算检查点在槽位
+// 折回后生效：子循环用量 + 基线超预算时，finalize 后父图下一次 LLM 检查点
+// 业务终止整次执行。修复前子循环用量在返回时丢失，父图预算形同虚设（每个
+// 槽位独立放宽 ≈ 一个 cap）。
+func TestPlanWaveBudgetTerminatesAfterSlotFoldBack(t *testing.T) {
+	cg, stub := planWaveTestGraph(t)
+	state := runtimeStateWithPlan([]domain.PlanNode{
+		{ID: "a", Goal: "a", Status: domain.PlanNodeStatusPending},
+	})
+	state.Model = "qwen-turbo"
+	state.Messages = []port.LLMMessage{{Role: "user", Content: "run"}}
+	state.PlanNodeExecutor = func(_ context.Context, _ graph.ReActState, node domain.PlanNode, _ map[string]string) (graph.PlanNodeExecutionResult, error) {
+		return graph.PlanNodeExecutionResult{Summary: node.ID + " done", TokensUsed: 1500}, nil
+	}
+	// 预算低于折回后的累计：finalize 后父图 LLM 检查点必须终止，不再发起后续调用。
+	state.MaxTokensPerExecution = 1200
+
+	out, err := cg.Invoke(context.Background(), state, graph.RunConfig[graph.ReActState]{
+		MaxSteps: 20, MaxParallel: 2, MergeWave: graph.MergeReActWave,
+	})
+	require.NoError(t, err)
+	require.Equal(t, graph.CostBudgetTerminated, out.TerminatedBy)
+	require.Equal(t, 1500, out.TotalTokens)
+	require.Equal(t, domain.PlanNodeStatusSucceeded, out.ActivePlan.Nodes[0].Status)
+	// 折回终止发生在波次汇合后的那次 LLM 调用上：共 2 次（排程 + 终止检查），
+	// 终止后不再多调。
+	require.Len(t, stub.llmReqs, 2)
+}
+
 // planWaveTestGraph builds the real ReAct graph whose first LLM response
 // schedules a stratum_continue_plan wave and whose second response ends the run.
 func planWaveTestGraph(t *testing.T) (*graph.CompiledGraph[graph.ReActState], *capGWSequence) {

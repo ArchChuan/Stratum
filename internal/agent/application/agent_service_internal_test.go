@@ -108,20 +108,24 @@ type knowledgeRevisionSearchFake struct {
 	revisionCalls int
 	revision      port.KnowledgeRetrievalRevision
 	revisionErr   error
+	// viewerID records the identity passed to SearchKnowledgeRevision so the
+	// D3 gate regression test can assert the viewer identity survives wiring.
+	viewerID string
 }
 
 func (f *knowledgeRevisionSearchFake) SearchKnowledge(
-	context.Context, string, []string, string, int,
+	context.Context, string, []string, string, int, string,
 ) (string, error) {
 	f.mutableCalls++
 	return "", errors.New("mutable knowledge search must not be used")
 }
 
 func (f *knowledgeRevisionSearchFake) SearchKnowledgeRevision(
-	_ context.Context, _ string, revision port.KnowledgeRetrievalRevision, _ string,
+	_ context.Context, _ string, revision port.KnowledgeRetrievalRevision, _ string, viewerID string,
 ) (string, error) {
 	f.revisionCalls++
 	f.revision = revision
+	f.viewerID = viewerID
 	if f.revisionErr != nil {
 		return "", f.revisionErr
 	}
@@ -222,11 +226,14 @@ func TestAssembleOptionsPinsKnowledgeExperimentRevisionForTraceAndSearch(t *test
 		cfg.EvolutionTrace.ExperimentAssignments["knowledge:Knowledge One"].Variant != "canary" {
 		t.Fatalf("knowledge assignment not traced: %+v", cfg.EvolutionTrace)
 	}
-	content, err := cfg.RAGSearchFn(context.Background(), []string{"Knowledge One"}, "QUERY", 9)
+	content, err := cfg.RAGSearchFn(context.Background(), []string{"Knowledge One"}, "QUERY", 9, "viewer-1")
 	if err != nil || content != "canary knowledge" || search.mutableCalls != 0 || search.revisionCalls != 1 ||
 		search.revision.RevisionID != revision.RevisionID {
 		t.Fatalf("content=%q mutable=%d revision=%d snapshot=%+v err=%v",
 			content, search.mutableCalls, search.revisionCalls, search.revision, err)
+	}
+	if search.viewerID != "viewer-1" {
+		t.Fatalf("viewer identity lost in revision wiring: got %q, want viewer-1", search.viewerID)
 	}
 }
 
@@ -254,7 +261,7 @@ func TestAssembleOptionsClassifiesKnowledgeRevisionSearchFailure(t *testing.T) {
 	cfg := &ExecutionConfig{}
 	cfg.ApplyOptions(options)
 
-	_, err = cfg.RAGSearchFn(context.Background(), []string{"Knowledge One"}, "query", 5)
+	_, err = cfg.RAGSearchFn(context.Background(), []string{"Knowledge One"}, "query", 5, "viewer-1")
 	if !errors.Is(err, domain.ErrKnowledgeRevisionUnavailable) || !errors.Is(err, searchErr) {
 		t.Fatalf("RAGSearchFn() error = %v, want classified revision error wrapping %v", err, searchErr)
 	}

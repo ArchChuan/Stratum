@@ -121,10 +121,29 @@ func TestChunkRepo_KeywordSearch_success(t *testing.T) {
 			AddRow("c2", "d1", int64(1), "检索结果二"))
 	mock.ExpectCommit()
 
-	out, err := repo.KeywordSearch(context.Background(), "t1", "ws", "检索", 5)
+	out, err := repo.KeywordSearch(context.Background(), "t1", "ws", "检索", nil, 5)
 	require.NoError(t, err)
 	require.Len(t, out, 2)
 	require.Equal(t, "检索结果一", out[0].Text)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestChunkRepo_KeywordSearch_docWhitelist(t *testing.T) {
+	mock := newRepoMock(t)
+	repo := NewChunkRepo(mock)
+
+	repoBeginTenant(mock)
+	// Non-empty docIDs adds the whitelist predicate: doc_id = ANY($3), LIMIT moves to $4.
+	mock.ExpectQuery("doc_id = ANY\\(\\$3\\).*LIMIT \\$4").
+		WithArgs("ws", "检索", []string{"d1", "d2"}, 5).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "doc_id", "chunk_index", "content"}).
+			AddRow("c1", "d1", int64(0), "可见结果"))
+	mock.ExpectCommit()
+
+	out, err := repo.KeywordSearch(context.Background(), "t1", "ws", "检索", []string{"d1", "d2"}, 5)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Equal(t, "可见结果", out[0].Text)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -138,7 +157,7 @@ func TestChunkRepo_KeywordSearch_queryFails(t *testing.T) {
 		WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
-	_, err := repo.KeywordSearch(context.Background(), "t1", "ws", "x", 5)
+	_, err := repo.KeywordSearch(context.Background(), "t1", "ws", "x", nil, 5)
 	require.ErrorContains(t, err, "chunk_repo: keyword search")
 	require.NoError(t, mock.ExpectationsWereMet())
 }

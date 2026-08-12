@@ -73,7 +73,8 @@ func TestRAGQueryExternalRerankWidensRecallAndNarrows(t *testing.T) {
 
 	got, err := service.Query(context.Background(), RAGQueryRequest{
 		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
-		TopK: 2, EmbeddingModel: "embedding-3", Reranking: "cohere:rerank-v3.0",
+		ViewerID: "test-user",
+		TopK:     2, EmbeddingModel: "embedding-3", Reranking: "cohere:rerank-v3.0",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +105,8 @@ func TestRAGQueryExternalRerankAppliesThresholdAfterRescore(t *testing.T) {
 
 	got, err := service.Query(context.Background(), RAGQueryRequest{
 		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
-		TopK: 2, EmbeddingModel: "embedding-3", Reranking: "cohere:rerank-v3.0",
+		ViewerID: "test-user",
+		TopK:     2, EmbeddingModel: "embedding-3", Reranking: "cohere:rerank-v3.0",
 		ScoreThreshold: 0.5,
 	})
 	if err != nil {
@@ -127,7 +129,8 @@ func TestRAGQueryBuiltinRerankStableScoreDesc(t *testing.T) {
 
 	got, err := service.Query(context.Background(), RAGQueryRequest{
 		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
-		TopK: 3, EmbeddingModel: "embedding-3", Reranking: "builtin-score-v1",
+		ViewerID: "test-user",
+		TopK:     3, EmbeddingModel: "embedding-3", Reranking: "builtin-score-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +157,8 @@ func TestRAGQueryExternalRerankSkipsTinyPoolWithMetric(t *testing.T) {
 
 	got, err := service.Query(context.Background(), RAGQueryRequest{
 		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
-		TopK: 1, EmbeddingModel: "embedding-3", Reranking: "cohere:rerank-v3.0",
+		ViewerID: "test-user",
+		TopK:     1, EmbeddingModel: "embedding-3", Reranking: "cohere:rerank-v3.0",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -181,7 +185,8 @@ func TestRAGQueryExternalRerankFailsClosedWithoutBackend(t *testing.T) {
 
 	_, err := service.Query(context.Background(), RAGQueryRequest{
 		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
-		TopK: 2, EmbeddingModel: "embedding-3", Reranking: "cohere:rerank-v3.0",
+		ViewerID: "test-user",
+		TopK:     2, EmbeddingModel: "embedding-3", Reranking: "cohere:rerank-v3.0",
 	})
 	if err == nil || !strings.Contains(err.Error(), "no external reranker configured") {
 		t.Fatalf("external identity without backend must fail closed, got %v", err)
@@ -197,7 +202,8 @@ func TestRAGQueryKeywordExemptFromScoreThreshold(t *testing.T) {
 
 	got, err := service.Query(context.Background(), RAGQueryRequest{
 		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "keyword",
-		TopK: 5, ScoreThreshold: 0.9,
+		ViewerID: "test-user",
+		TopK:     5, ScoreThreshold: 0.9,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -226,7 +232,8 @@ func TestRAGQueryMissingCollectionClassifiesDrift(t *testing.T) {
 
 			got, err := service.Query(context.Background(), RAGQueryRequest{
 				TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
-				TopK: 3, EmbeddingModel: "embedding-3",
+				ViewerID: "test-user",
+				TopK:     3, EmbeddingModel: "embedding-3",
 			})
 			if tc.wantErr {
 				if !errors.Is(err, ErrRAGDependency) {
@@ -251,7 +258,8 @@ func TestRAGQueryDimensionMismatchFailsClosed(t *testing.T) {
 
 	_, err := service.Query(context.Background(), RAGQueryRequest{
 		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
-		TopK: 3, EmbeddingModel: "embedding-3", // vectorDim("embedding-3") = 2048 != 3
+		ViewerID: "test-user",
+		TopK:     3, EmbeddingModel: "embedding-3", // DimensionForModel("embedding-3") = 2048 != 3
 	})
 	if !errors.Is(err, ErrRAGDependency) {
 		t.Fatalf("dimension mismatch must fail closed, got %v", err)
@@ -269,7 +277,8 @@ func TestRAGQueryMissingUserIDColumnTolerated(t *testing.T) {
 
 	got, err := service.Query(context.Background(), RAGQueryRequest{
 		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
-		TopK: 3, EmbeddingModel: "embedding-3",
+		ViewerID: "test-user",
+		TopK:     3, EmbeddingModel: "embedding-3",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -306,7 +315,8 @@ func TestRAGQueryHybridExternalRerankWidensBothLegs(t *testing.T) {
 
 	got, err := service.Query(context.Background(), RAGQueryRequest{
 		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "hybrid",
-		TopK: 2, EmbeddingModel: "embedding-3", Reranking: "cohere:rerank-v3.0",
+		ViewerID: "test-user",
+		TopK:     2, EmbeddingModel: "embedding-3", Reranking: "cohere:rerank-v3.0",
 	})
 	if err != nil {
 		t.Fatal(err)

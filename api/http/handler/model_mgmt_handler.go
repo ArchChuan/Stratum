@@ -100,6 +100,27 @@ func (h *ModelMgmtHandler) Toggle(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已更新"})
 }
 
+// SetDefaultEmbedding PUT /admin/models/:id/default-embedding — 设置/取消默认嵌入模型。
+func (h *ModelMgmtHandler) SetDefaultEmbedding(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	if err := h.svc.SetDefaultEmbedding(c.Request.Context(), tenantID, c.Param("id"), req.Enabled); err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "已更新"})
+}
+
 // Delete DELETE /admin/models/:id — removes a model.
 func (h *ModelMgmtHandler) Delete(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)

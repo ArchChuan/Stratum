@@ -40,10 +40,39 @@ type UpdateWorkspaceRequest struct {
 }
 
 type IngestDocumentRequest struct {
-	Workspace    string `json:"workspace" binding:"required"`
-	DocumentData []byte `json:"document_data" binding:"required"`
-	FileName     string `json:"filename" binding:"required"`
-	DocumentID   string `json:"document_id" binding:"required"`
+	Workspace      string   `json:"workspace" binding:"required"`
+	DocumentData   []byte   `json:"document_data" binding:"required"`
+	FileName       string   `json:"filename" binding:"required"`
+	DocumentID     string   `json:"document_id" binding:"required"`
+	AllowedUserIDs []string `json:"allowed_user_ids"`
+	AllowedRoleIDs []string `json:"allowed_role_ids"`
+}
+
+type DocumentAccessRequest struct {
+	Workspace      string   `json:"workspace" binding:"required"`
+	DocumentID     string   `json:"document_id" binding:"required"`
+	AllowedUserIDs []string `json:"allowed_user_ids"`
+	AllowedRoleIDs []string `json:"allowed_role_ids"`
+}
+
+type DocumentAccessResponse struct {
+	AllowedUserIDs []string `json:"allowed_user_ids"`
+	AllowedRoleIDs []string `json:"allowed_role_ids"`
+}
+
+type ChunkSegment struct {
+	ChunkID       string `json:"chunk_id"`
+	Index         int64  `json:"index"`
+	Content       string `json:"content"`
+	ParentContent string `json:"parent_content"`
+}
+
+type PreviewDocumentResponse struct {
+	Workspace     string         `json:"workspace"`
+	DocumentID    string         `json:"document_id"`
+	DocumentTitle string         `json:"document_title"`
+	ChunkCount    int32          `json:"chunk_count"`
+	Segments      []ChunkSegment `json:"segments"`
 }
 
 type WorkspaceListItem struct {

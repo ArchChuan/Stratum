@@ -34,6 +34,31 @@ func isCollectionNotFound(err error) bool {
 		strings.Contains(msg, "does not exist")
 }
 
+// ErrDimensionMismatch is returned when the query vector dimension does not
+// match the collection schema dimension (e.g. embedding-model switch leaves
+// legacy collections at an old dimension). This is a deterministic data-shape
+// error, not a vector-store outage: retrieval callers must degrade silently
+// (skip the mismatched collection) instead of firing outage alerts.
+var ErrDimensionMismatch = errors.New("milvus vector dimension mismatch")
+
+// isDimensionMismatch reports whether err means the query vector dimension
+// does not match the collection dimension. Milvus exposes it as an
+// InvalidArgument error whose message carries "dimension" plus a mismatch
+// marker; classified by message feature to stay robust against wrap layers.
+func isDimensionMismatch(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrDimensionMismatch) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "dimension") &&
+		(strings.Contains(msg, "mismatch") ||
+			strings.Contains(msg, "does not match") ||
+			strings.Contains(msg, "doesn't match"))
+}
+
 // UnavailableError identifies a transient Milvus availability failure.
 type UnavailableError struct {
 	Op  string

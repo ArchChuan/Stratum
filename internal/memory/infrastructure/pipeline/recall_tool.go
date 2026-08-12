@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	jschema "github.com/byteBuilderX/stratum/pkg/jsonschema"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	storagemilvus "github.com/byteBuilderX/stratum/pkg/storage/milvus"
 	vector "github.com/byteBuilderX/stratum/pkg/vector"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -65,10 +67,18 @@ type vectorSearcher interface {
 	SearchWithFilter(ctx context.Context, collectionName string, queryVector []float32, topK int, expression string, partitions ...string) ([]vector.SearchResult, error)
 }
 
+// recallDB is the minimal slice of *pgxpool.Pool that text recall needs.
+// Narrowing to this interface (rather than the concrete pool) lets Handle's
+// text fallback be unit-tested with pgxmock, mirroring the vectorSearcher
+// narrowing above and the tenantPool pattern in persistence.
+type recallDB interface {
+	Begin(context.Context) (pgx.Tx, error)
+}
+
 // RecallHandler executes recall_memory queries against the memory_entries table.
 // It retrieves semantic and text candidates, then fuses them with RRF.
 type RecallHandler struct {
-	pool          *pgxpool.Pool
+	pool          recallDB
 	logger        *zap.Logger
 	embedSvc      EmbedClient
 	embedResolver EmbedServiceResolver
@@ -113,7 +123,7 @@ func (h *RecallHandler) Handle(ctx context.Context, tenantID, userID, agentID, s
 		req.Limit = 5
 	}
 
-	vectorCandidates := h.tryVectorSearch(ctx, tenantID, userID, agentID, scope, req)
+	vectorCandidates, vecErr := h.tryVectorSearch(ctx, tenantID, userID, agentID, scope, req)
 	textCandidates, err := h.textSearchCandidates(ctx, tenantID, userID, agentID, scope, req)
 	h.metrics.RecordMemoryRetrievalDuration("recall_hybrid", time.Since(start).Seconds())
 	if err != nil && len(vectorCandidates) == 0 {
@@ -138,28 +148,35 @@ func (h *RecallHandler) Handle(ctx context.Context, tenantID, userID, agentID, s
 		zap.String("query", req.Query),
 		zap.Int("vector_results", len(vectorCandidates)),
 		zap.Int("text_results", len(textCandidates)),
-		zap.Int("results", len(results)))
+		zap.Int("results", len(results)),
+		// vecErr 非 nil 表示向量库 outage，已在 searchAllCollections 内 ERROR log
+		// + degraded 指标；此处仅随 Debug 链路追溯，zap.Error(nil) 自动省略。
+		zap.Error(vecErr))
 	h.metrics.IncKnowledgeQuery("recall", "success")
 	return string(out), nil
 }
 
-func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID, agentID, scope string, req RecallRequest) []recallCandidate {
+// tryVectorSearch 返回向量候选与是否发生向量库 outage。非 nil 的 error 表示
+// 至少一个候选 collection 遭遇非 not-found 的查询失败（见 searchAllCollections
+// 的分类）——调用方（Handle）保持 text 降级契约不变，outage 信号由
+// searchAllCollections 内以 ERROR log + degraded 指标发出。
+func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID, agentID, scope string, req RecallRequest) ([]recallCandidate, error) {
 	embedSvc := h.embedSvc
 	if embedSvc == nil && h.embedResolver != nil {
 		embedSvc = h.embedResolver(ctx, tenantID)
 	}
 	if embedSvc == nil || h.vectorDB == nil {
-		return nil
+		return nil, nil
 	}
 
 	vec, err := embedSvc.EmbedVector(ctx, req.Query)
 	if err != nil {
 		h.logger.Debug("memory.recall: embed failed, falling back to text search", zap.Error(err))
-		return nil
+		return nil, nil
 	}
 
 	if strings.ContainsAny(userID, `"'\`) {
-		return nil
+		return nil, nil
 	}
 	var expr string
 	if scope == "agent" && agentID != "" && !strings.ContainsAny(agentID, `"'\`) {
@@ -168,20 +185,12 @@ func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID, a
 		expr = fmt.Sprintf(`user_id == "%s" && scope == "user"`, userID)
 	}
 
-	// Query both the raw-turn collection (Pipeline A: enrich→embed) and the
-	// extracted-facts collection (Pipeline B: extract→embed). They share the
-	// same Milvus schema and scope fields; fusing them here is the only place
-	// distilled fact vectors become reachable by semantic recall.
-	var merged []vector.SearchResult
-	for _, collection := range []string{memoryCollectionName(tenantID), memoryFactsCollectionName(tenantID)} {
-		results, err := h.vectorDB.SearchWithFilter(ctx, collection, vec, req.Limit*2, expr)
-		if err != nil {
-			h.logger.Debug("memory.recall: vector search failed for collection, skipping",
-				zap.String("collection", collection), zap.Error(err))
-			continue
-		}
-		merged = append(merged, results...)
-	}
+	// 候选集合 = 当前模型的新名 collection（raw + facts）∪ legacy 名（升级前
+	// 数据）。SearchWithFilter 对不存在的 collection 报错被跳过，dim mismatch
+	// （模型切换后旧集合维度不符）同样跳过——天然实现 legacy 回退（不
+	// fail-closed），详见 searchAllCollections 的错误分类。
+	// embedSvc 已由上方 guard 保证非 nil；Model() 可能为空串 → legacy-only。
+	merged, searchErr := h.searchAllCollections(ctx, recallCandidateCollections(tenantID, embedSvc.Model()), vec, req.Limit*2, expr)
 
 	// Sort by ascending L2 distance (smaller = more similar) so downstream RRF
 	// ranks the closest match across both collections first.
@@ -198,7 +207,59 @@ func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID, a
 			})
 		}
 	}
-	return entries
+	return entries, searchErr
+}
+
+// recallCandidateCollections 返回查询候选：模型非空 → [新 raw, legacy raw,
+// 新 facts, legacy facts]（升级后数据在新名，升级前在 legacy 名）；模型未知
+// → 仅 legacy 对（空模型后缀的新名无意义且升级前数据都在旧名）。
+func recallCandidateCollections(tenantID, embedModel string) []string {
+	if embedModel == "" {
+		return []string{memoryCollectionLegacyName(tenantID), memoryFactsCollectionLegacyName(tenantID)}
+	}
+	return []string{
+		memoryCollectionName(tenantID, embedModel), memoryCollectionLegacyName(tenantID),
+		memoryFactsCollectionName(tenantID, embedModel), memoryFactsCollectionLegacyName(tenantID),
+	}
+}
+
+// searchAllCollections 对每个候选 collection 查询并合并结果；单个 collection
+// 查询失败不 fail-closed——legacy 回退由"先新名后旧名"的顺序天然实现。失败按
+// 性质分类：collection-not-found 与 dim mismatch（模型切换后旧集合维度不符）
+// 都是升级前存量数据的预期状态，Debug 后静默跳过；其余错误（Milvus 连接/
+// 超时等）才是向量库 outage——降级保留，但必须 ERROR 可见并计入 degraded
+// 指标，禁止无声降级。返回的 error 为首个 outage（nil 表示无 outage），供调用
+// 方追溯。
+func (h *RecallHandler) searchAllCollections(ctx context.Context, collections []string, vec []float32, limit int, expr string) ([]vector.SearchResult, error) {
+	var merged []vector.SearchResult
+	var outageErr error
+	for _, collection := range collections {
+		results, err := h.vectorDB.SearchWithFilter(ctx, collection, vec, limit, expr)
+		if err == nil {
+			merged = append(merged, results...)
+			continue
+		}
+		if errors.Is(err, storagemilvus.ErrCollectionNotFound) {
+			h.logger.Debug("memory.recall: collection not found, legacy fallback",
+				zap.String("collection", collection))
+			continue
+		}
+		if errors.Is(err, storagemilvus.ErrDimensionMismatch) {
+			// 模型切换后旧集合维度与当前 embedding 不一致：确定性数据形态错误，
+			// 与 collection-not-found 同级——Debug 跳过，不 ERROR、不计 degraded、
+			// 不构成 outage。
+			h.logger.Debug("memory.recall: collection dimension mismatch, legacy fallback",
+				zap.String("collection", collection))
+			continue
+		}
+		if outageErr == nil {
+			outageErr = err
+			h.metrics.IncKnowledgeQuery("recall", "degraded")
+		}
+		h.logger.Error("memory.recall.vector_search_failed",
+			zap.String("collection", collection), zap.Error(err))
+	}
+	return merged, outageErr
 }
 
 func (h *RecallHandler) textSearchCandidates(ctx context.Context, tenantID, userID, agentID, scope string, req RecallRequest) ([]recallCandidate, error) {

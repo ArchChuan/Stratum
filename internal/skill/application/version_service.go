@@ -81,10 +81,11 @@ type CandidateInput struct {
 }
 
 type VersionService struct {
-	repo       port.VersionRepo
-	logger     *zap.Logger
-	roles      port.TenantRoleResolver
-	editorRepo port.SkillResourceEditorRepo
+	repo             port.VersionRepo
+	logger           *zap.Logger
+	roles            port.TenantRoleResolver
+	editorRepo       port.SkillResourceEditorRepo
+	bindingValidator port.WorkspaceBindingValidator
 }
 
 func NewVersionService(repo port.VersionRepo, logger *zap.Logger) *VersionService {
@@ -99,6 +100,26 @@ func (s *VersionService) SetTenantRoleResolver(r port.TenantRoleResolver) { s.ro
 // admin-editor row of the ownership matrix. A nil repo denies every
 // editor-granted update (fail closed).
 func (s *VersionService) SetEditorRepo(r port.SkillResourceEditorRepo) { s.editorRepo = r }
+
+// SetWorkspaceBindingValidator injects the knowledge workspace existence
+// check backing draft knowledge bindings. A nil validator rejects every
+// binding (fail closed).
+func (s *VersionService) SetWorkspaceBindingValidator(v port.WorkspaceBindingValidator) {
+	s.bindingValidator = v
+}
+
+// validateWorkspaceBindings fails closed (D10): an un-wired validator or an
+// unknown workspace ID rejects the binding. Empty lists pass trivially —
+// no bindings to verify.
+func (s *VersionService) validateWorkspaceBindings(ctx context.Context, workspaceIDs []string) error {
+	if len(workspaceIDs) == 0 {
+		return nil
+	}
+	if s.bindingValidator == nil {
+		return fmt.Errorf("skill: workspace binding validation unavailable (validator not wired)")
+	}
+	return s.bindingValidator.ValidateWorkspaceBindings(ctx, reqctx.TenantIDFromContext(ctx), workspaceIDs)
+}
 
 func (s *VersionService) CreateSkillDraft(ctx context.Context, in CreateSkillDraftInput) (SkillWorkspaceView, error) {
 	// create encodes "the creator owns the resource": only owner/admin may create.
@@ -132,6 +153,9 @@ func (s *VersionService) CreateSkillDraft(ctx context.Context, in CreateSkillDra
 		Instructions: instructions,
 		Requirements: in.Requirements,
 	}
+	if err := s.validateWorkspaceBindings(ctx, in.Requirements.KnowledgeWorkspaceIDs); err != nil {
+		return SkillWorkspaceView{}, err
+	}
 	contentHash, err := draft.ComputeContentHash()
 	if err != nil {
 		return SkillWorkspaceView{}, err
@@ -160,31 +184,15 @@ func (s *VersionService) CreateSkillDraft(ctx context.Context, in CreateSkillDra
 }
 
 func (s *VersionService) PublishDraft(ctx context.Context, skillID, actorID string) (domain.SkillRevision, error) {
-	if isBuiltinSkill(skillID) {
-		return domain.SkillRevision{}, domain.ErrPlatformManagedSkill
-	}
-	skill, ok, err := s.repo.GetSkill(ctx, skillID)
+	skill, draft, err := s.loadPublishDraft(ctx, skillID)
 	if err != nil {
 		return domain.SkillRevision{}, err
-	}
-	if !ok {
-		return domain.SkillRevision{}, domain.ErrSkillNotFound
 	}
 	// Publish is an update-style mutation: creator/owner pass the base
 	// matrix, a foreign admin may publish when granted as editor (re-checked
 	// inside the write transaction via editorActor).
 	editorActor, err := s.resolveUpdateActor(ctx, skillID, actorID, skill.CreatedBy)
 	if err != nil {
-		return domain.SkillRevision{}, err
-	}
-	draft, ok, err := s.repo.GetDraftRevision(ctx, skillID)
-	if err != nil {
-		return domain.SkillRevision{}, err
-	}
-	if !ok {
-		return domain.SkillRevision{}, domain.ErrSkillDraftNotFound
-	}
-	if err := draft.ValidatePublishable(0); err != nil {
 		return domain.SkillRevision{}, err
 	}
 	next, err := s.repo.NextRevisionNo(ctx, skillID)
@@ -201,6 +209,38 @@ func (s *VersionService) PublishDraft(ctx context.Context, skillID, actorID stri
 		return domain.SkillRevision{}, err
 	}
 	return s.repo.PublishDraft(ctx, skillID, draft.ID, next, checks, audit, editorActor)
+}
+
+// loadPublishDraft loads the skill and its draft revision, enforcing the
+// builtin-skill guard, existence and publishability. Unknown workspace
+// bindings fail here so a broken activation contract never ships.
+func (s *VersionService) loadPublishDraft(ctx context.Context, skillID string) (port.SkillProductRow, domain.SkillRevision, error) {
+	if isBuiltinSkill(skillID) {
+		return port.SkillProductRow{}, domain.SkillRevision{}, domain.ErrPlatformManagedSkill
+	}
+	skill, ok, err := s.repo.GetSkill(ctx, skillID)
+	if err != nil {
+		return port.SkillProductRow{}, domain.SkillRevision{}, err
+	}
+	if !ok {
+		return port.SkillProductRow{}, domain.SkillRevision{}, domain.ErrSkillNotFound
+	}
+	draft, ok, err := s.repo.GetDraftRevision(ctx, skillID)
+	if err != nil {
+		return port.SkillProductRow{}, domain.SkillRevision{}, err
+	}
+	if !ok {
+		return port.SkillProductRow{}, domain.SkillRevision{}, domain.ErrSkillDraftNotFound
+	}
+	if err := draft.ValidatePublishable(0); err != nil {
+		return port.SkillProductRow{}, domain.SkillRevision{}, err
+	}
+	// Publishing freezes the draft's bindings: unknown workspaces must fail
+	// here rather than ship a broken activation contract.
+	if err := s.validateWorkspaceBindings(ctx, draft.Requirements.KnowledgeWorkspaceIDs); err != nil {
+		return port.SkillProductRow{}, domain.SkillRevision{}, err
+	}
+	return skill, draft, nil
 }
 
 func (s *VersionService) GetWorkspace(ctx context.Context, skillID string) (SkillWorkspaceView, error) {
@@ -526,6 +566,9 @@ func (s *VersionService) UpdateInstructionBundle(
 		return domain.SkillRevision{}, err
 	}
 	before := skillSafeProjection(skill, draft)
+	if err := s.validateWorkspaceBindings(ctx, in.Requirements.KnowledgeWorkspaceIDs); err != nil {
+		return domain.SkillRevision{}, err
+	}
 	draft.Instructions = in.Instructions
 	draft.Requirements = in.Requirements
 	contentHash, err := draft.ComputeContentHash()
@@ -608,6 +651,9 @@ func (s *VersionService) UpdateDraftBundle(
 		return SkillWorkspaceView{}, domain.ErrSkillDraftStale
 	}
 	before := skillSafeProjection(skill, draft)
+	if err := s.validateWorkspaceBindings(ctx, in.Requirements.KnowledgeWorkspaceIDs); err != nil {
+		return SkillWorkspaceView{}, err
+	}
 	if err := applyDraftBundle(&skill, draft, in); err != nil {
 		return SkillWorkspaceView{}, err
 	}

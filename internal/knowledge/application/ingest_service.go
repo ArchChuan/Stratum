@@ -120,6 +120,12 @@ type IngestDocumentRequest struct {
 	FileName         string
 	DocumentID       string
 	ContentHash      string
+	// AllowedUserIDs/AllowedRoleIDs form the document-level access whitelist;
+	// both empty => unrestricted (inherits workspace visibility). CreatedBy is
+	// the uploading actor, implicitly allowed to see the document.
+	AllowedUserIDs []string
+	AllowedRoleIDs []string
+	CreatedBy      string
 }
 
 type IngestResult struct {
@@ -206,12 +212,15 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 	// fails we release the queue slot and abort — client sees the error.
 	if ki.docRepo != nil {
 		doc := &domain.Document{
-			ID:           req.DocumentID,
-			KBID:         req.WorkspaceID,
-			Source:       req.FileName,
-			ContentHash:  req.ContentHash,
-			IngestStatus: constants.IngestStatusProcessing,
-			TotalChunks:  len(chunkResult.Leaves),
+			ID:             req.DocumentID,
+			KBID:           req.WorkspaceID,
+			Source:         req.FileName,
+			ContentHash:    req.ContentHash,
+			IngestStatus:   constants.IngestStatusProcessing,
+			TotalChunks:    len(chunkResult.Leaves),
+			AllowedUserIDs: req.AllowedUserIDs,
+			AllowedRoleIDs: req.AllowedRoleIDs,
+			CreatedBy:      req.CreatedBy,
 		}
 		if err := ki.docRepo.Save(ctx, req.TenantID, req.WorkspaceID, doc); err != nil {
 			<-ki.queueSem
@@ -343,8 +352,8 @@ func (ki *KnowledgeIngest) doEmbedAndPersist(ctx context.Context, req IngestDocu
 		}
 	}
 
-	collectionName := constants.CollectionName(req.TenantID, req.WorkspaceID)
-	if err := ki.vectorStore.CreateCollectionWithDim(ctx, collectionName, vectorDim(req.EmbeddingModel)); err != nil {
+	collectionName := constants.CollectionName(req.TenantID, req.WorkspaceID, req.EmbeddingModel)
+	if err := ki.vectorStore.CreateCollectionWithDim(ctx, collectionName, constants.DimensionForModel(req.EmbeddingModel)); err != nil {
 		return fmt.Errorf("failed to ensure vector collection: %w", err)
 	}
 	if err := ki.vectorStore.Insert(ctx, collectionName, docChunks); err != nil {
@@ -426,11 +435,24 @@ func (ki *KnowledgeIngest) markFailed(ctx context.Context, req IngestDocumentReq
 	}
 }
 
-// DeleteWorkspaceData purges the vector collection and PG chunks for a workspace.
+// DeleteWorkspaceData 删除 workspace 的向量数据。删除路径无模型上下文
+// （spec §11：删除策略不在本设计内）：删 legacy 名 + 当前注入 embedder
+// 的模型新名（embeddingSvc 为 nil 时只删 legacy 名）。换过多次模型的
+// 旧 collection 不在删除范围，属可接受残差，由 tenant_vector_cleaner
+// 全量清理兜底。
 func (ki *KnowledgeIngest) DeleteWorkspaceData(ctx context.Context, tenantID, workspaceID string) error {
-	col := constants.CollectionName(tenantID, workspaceID)
-	if err := ki.vectorStore.DeleteCollection(ctx, col); err != nil {
-		return fmt.Errorf("failed to delete workspace collection: %w", err)
+	model := ""
+	if ki.embeddingSvc != nil {
+		model = ki.embeddingSvc.Model()
+	}
+	cols := []string{constants.CollectionLegacyName(tenantID, workspaceID)}
+	if model != "" {
+		cols = append(cols, constants.CollectionName(tenantID, workspaceID, model))
+	}
+	for _, col := range cols {
+		if err := ki.vectorStore.DeleteCollection(ctx, col); err != nil && !isCollectionNotFound(err) {
+			return fmt.Errorf("failed to delete workspace collection %s: %w", col, err)
+		}
 	}
 	if ki.chunkRepo != nil {
 		if err := ki.chunkRepo.DeleteByWorkspace(ctx, tenantID, workspaceID); err != nil {
@@ -440,7 +462,7 @@ func (ki *KnowledgeIngest) DeleteWorkspaceData(ctx context.Context, tenantID, wo
 	ki.logger.Info("knowledge.workspace.collection_deleted",
 		zap.String("tenant_id", tenantID),
 		zap.String("workspace_id", workspaceID),
-		zap.String("collection", col))
+		zap.Strings("collections", cols))
 	return nil
 }
 
@@ -479,8 +501,10 @@ func (ki *KnowledgeIngest) IngestBatch(ctx context.Context, requests []IngestDoc
 }
 
 // GetWorkspaceStats returns vector counts for a workspace collection.
-func (ki *KnowledgeIngest) GetWorkspaceStats(ctx context.Context, tenantID, workspaceID string) (map[string]interface{}, error) {
-	col := constants.CollectionName(tenantID, workspaceID)
+// embedModel identifies the workspace's current embedding model so the
+// model-suffixed collection name can be constructed.
+func (ki *KnowledgeIngest) GetWorkspaceStats(ctx context.Context, tenantID, workspaceID, embedModel string) (map[string]interface{}, error) {
+	col := constants.CollectionName(tenantID, workspaceID, embedModel)
 	vectorCount, err := ki.vectorStore.CountVectors(ctx, col)
 	if err != nil {
 		return nil, err

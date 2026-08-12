@@ -91,8 +91,8 @@ func (s *AgentService) GatedSelfModify(
 	// system actor with the proposal's proposer/reviewer carrying provenance.
 	ctx = reqctx.WithSystemActor(ctx, operationGateActor)
 	// SelfModifyRequest 是 member 受控内容变更子集：Temperature/MaxTokens/
-	// Compaction* 等派生配置不在自改面内，显式构造留零值（Update 对
-	// MaxContextTokens<=0 有 derive 兜底，此处成员已显式传值不受影响）
+	// Compaction* 等派生配置不在自改面内，显式构造留零值（MaxContextTokens
+	// 0 = 未配置，执行时两阶段解析；此处成员已显式传值不受影响）
 	dto, err := s.Update(ctx, agentID, UpdateAgentInput{
 		Name:                  req.Name,
 		Type:                  req.Type,

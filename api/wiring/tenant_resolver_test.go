@@ -48,6 +48,9 @@ func (r *resolverModelRepo) UpsertDiscovered(
 }
 func (r *resolverModelRepo) Delete(context.Context, string, string) error       { return r.err }
 func (r *resolverModelRepo) Toggle(context.Context, string, string, bool) error { return r.err }
+func (r *resolverModelRepo) SetDefaultEmbedding(context.Context, string, string, bool) error {
+	return r.err
+}
 
 func modelHasCapability(model llmdomain.Model, capability llmdomain.ModelCapability) bool {
 	for _, candidate := range model.Capabilities {

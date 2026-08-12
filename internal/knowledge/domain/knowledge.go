@@ -16,6 +16,16 @@ type Document struct {
 	CreatedAt                     time.Time
 	IngestStartedAt               *time.Time
 	IngestFinishedAt              *time.Time
+
+	// AllowedUserIDs/AllowedRoleIDs form the document-level access whitelist.
+	// Both empty => unrestricted (inherits workspace visibility); either
+	// non-empty => viewer visible iff in user whitelist, in role whitelist,
+	// or the document creator (CreatedBy).
+	AllowedUserIDs []string
+	AllowedRoleIDs []string
+	// CreatedBy is the uploading user; creator is implicitly allowed to see
+	// the document (never locks themselves out). Empty for legacy rows.
+	CreatedBy string
 }
 
 type Chunk struct {

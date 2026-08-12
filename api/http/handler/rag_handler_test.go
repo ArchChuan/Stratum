@@ -150,6 +150,37 @@ func TestQuery_MissingTenant(t *testing.T) {
 	}
 }
 
+// injectRAGTenantNoUser sets tenant context but no actor identity: the
+// query path must fail closed (401) instead of leaking an anonymous viewer.
+func injectRAGTenantNoUser(tenantID string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tc := &tenantdb.TenantContext{TenantID: tenantID, UserID: "", Role: tenantdb.RoleTenantAdmin}
+		ctx := tenantdb.WithTenant(c.Request.Context(), tc)
+		ctx = reqctx.WithTenantID(ctx, tenantID)
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}
+}
+
+func TestQuery_MissingUser(t *testing.T) {
+	r := newRouterWithErrorHandler()
+	r.Use(injectRAGTenantNoUser("tenant-1"))
+	h := newMinimalRAGHandler()
+	r.POST("/knowledge/query", h.Query)
+
+	body, _ := json.Marshal(map[string]any{
+		"question": "hello", "workspace": "ws", "mode": "hybrid",
+	})
+	w := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/knowledge/query", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d", w.Code)
+	}
+}
+
 func TestDeleteWorkspace_MissingTenant(t *testing.T) {
 	r := newRouterWithErrorHandler()
 	h := newMinimalRAGHandler()

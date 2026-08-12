@@ -203,22 +203,26 @@ func seedWorkspace(repo *fakeWorkspaceRepo, name string, managed bool) *domain.W
 	return ws
 }
 
-func TestVectorDimTable(t *testing.T) {
+func TestDimensionForModelPin(t *testing.T) {
 	cases := []struct {
 		model string
 		want  int
 	}{
+		{"text-embedding-v1", 1536},
 		{"text-embedding-v2", 1024},
 		{"text-embedding-v3", 1024},
 		{"text-embedding-v4", 1024},
 		{"embedding-3", 2048},
-		{"", 1536},
-		{"unknown-model", 1536},
+		{"text-embedding-3-small", 1536}, // default
+		{"", 1536},                       // default
+		{"unknown-model", 1536},          // default
 	}
 	for _, tc := range cases {
-		if got := vectorDim(tc.model); got != tc.want {
-			t.Fatalf("vectorDim(%q) = %d, want %d", tc.model, got, tc.want)
-		}
+		t.Run(tc.model, func(t *testing.T) {
+			if got := constants.DimensionForModel(tc.model); got != tc.want {
+				t.Fatalf("DimensionForModel(%q) = %d, want %d", tc.model, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -240,7 +244,7 @@ func TestWorkspaceCreateSuccessAndCollection(t *testing.T) {
 	if len(store.created) != 1 {
 		t.Fatalf("collections = %+v", store.created)
 	}
-	if store.created[0].name != constants.CollectionName("t1", ws.ID) || store.created[0].dim != 1024 {
+	if store.created[0].name != constants.CollectionName("t1", ws.ID, ws.Config.EmbeddingModel) || store.created[0].dim != 1024 {
 		t.Fatalf("collection = %+v", store.created[0])
 	}
 	// embedding-3 → 2048 dim。
@@ -383,7 +387,7 @@ func TestWorkspaceGetStats(t *testing.T) {
 	ki.SetDocRepo(docRepo)
 	svc.SetDocRepo(docRepo)
 
-	res, err := svc.GetWorkspaceStats(context.Background(), "t1", "ws1")
+	res, err := svc.GetWorkspaceStats(context.Background(), "t1", "ws1", "user-1")
 	if err != nil {
 		t.Fatalf("stats = %v", err)
 	}
@@ -395,7 +399,7 @@ func TestWorkspaceGetStats(t *testing.T) {
 	repo.workspaces["ws1"].ID = "wsid-1"
 	failing := &vectorStoreFailing{}
 	ki.vectorStore = failing
-	res, err = svc.GetWorkspaceStats(context.Background(), "t1", "ws1")
+	res, err = svc.GetWorkspaceStats(context.Background(), "t1", "ws1", "user-1")
 	if err != nil {
 		t.Fatalf("degraded stats = %v", err)
 	}
@@ -404,7 +408,7 @@ func TestWorkspaceGetStats(t *testing.T) {
 	}
 	// 极端情况：doc 统计失败 → 不写 doc_count 键，仍成功。
 	svc.SetDocRepo(&docCountErrRepo{mockDocRepo: newMockDocRepo()})
-	res, err = svc.GetWorkspaceStats(context.Background(), "t1", "ws1")
+	res, err = svc.GetWorkspaceStats(context.Background(), "t1", "ws1", "user-1")
 	if err != nil {
 		t.Fatalf("doc-err stats = %v", err)
 	}
@@ -421,6 +425,10 @@ func (v *vectorStoreFailing) CreateCollectionWithDim(context.Context, string, in
 func (v *vectorStoreFailing) Insert(context.Context, string, []port.VectorDocument) error { return nil }
 
 func (v *vectorStoreFailing) Search(context.Context, string, []float32, int) ([]port.VectorSearchResult, error) {
+	return nil, nil
+}
+
+func (v *vectorStoreFailing) SearchWithFilter(context.Context, string, []float32, int, string) ([]port.VectorSearchResult, error) {
 	return nil, nil
 }
 
@@ -536,7 +544,7 @@ func TestWorkspaceListDocuments(t *testing.T) {
 	seedWorkspace(repo, "ws1", false)
 
 	// 极端情况：无 docRepo → 空 slice 非 nil。
-	views, err := svc.ListDocuments(context.Background(), "t1", "ws1")
+	views, err := svc.ListDocuments(context.Background(), "t1", "ws1", "user-1")
 	if err != nil || len(views) != 0 || views == nil {
 		t.Fatalf("no repo views = %+v, %v", views, err)
 	}
@@ -544,7 +552,7 @@ func TestWorkspaceListDocuments(t *testing.T) {
 	docRepo := newMockDocRepo()
 	ki.SetDocRepo(docRepo)
 	svc.SetDocRepo(docRepo)
-	if _, err := svc.ListDocuments(context.Background(), "t1", "ghost"); !errors.Is(err, domain.ErrWorkspaceNotFound) {
+	if _, err := svc.ListDocuments(context.Background(), "t1", "ghost", "user-1"); !errors.Is(err, domain.ErrWorkspaceNotFound) {
 		t.Fatalf("ghost err = %v", err)
 	}
 
@@ -555,7 +563,7 @@ func TestWorkspaceListDocuments(t *testing.T) {
 		CreatedAt: timeNow(), IngestStartedAt: timePtr(),
 	}
 	docRepo.saved = append(docRepo.saved, started)
-	views, err = svc.ListDocuments(context.Background(), "t1", "ws1")
+	views, err = svc.ListDocuments(context.Background(), "t1", "ws1", "user-1")
 	if err != nil || len(views) != 1 {
 		t.Fatalf("views = %+v, %v", views, err)
 	}
@@ -574,7 +582,7 @@ func TestWorkspaceIngestUpload(t *testing.T) {
 	svc.SetDocRepo(docRepo)
 
 	fh := newUploadFileHeader(t, "test.txt", paragraphInput(3))
-	result, err := svc.IngestUpload(context.Background(), "t1", "ws1", fh)
+	result, err := svc.IngestUpload(context.Background(), "t1", "ws1", fh, "user-1", nil, nil)
 	if err != nil {
 		t.Fatalf("ingest = %v", err)
 	}
@@ -597,19 +605,19 @@ func TestWorkspaceIngestUploadRejections(t *testing.T) {
 
 	// 极端情况：workspace 不存在。
 	fh := newUploadFileHeader(t, "x.txt", "hello")
-	if _, err := svc.IngestUpload(context.Background(), "t1", "ghost", fh); !errors.Is(err, domain.ErrWorkspaceNotFound) {
+	if _, err := svc.IngestUpload(context.Background(), "t1", "ghost", fh, "user-1", nil, nil); !errors.Is(err, domain.ErrWorkspaceNotFound) {
 		t.Fatalf("ghost err = %v", err)
 	}
 	// 极端情况：platform-managed 拒绝。
 	seedWorkspace(repo, "managed", true)
-	if _, err := svc.IngestUpload(context.Background(), "t1", "managed", fh); !errors.Is(err, domain.ErrPlatformManagedWorkspace) {
+	if _, err := svc.IngestUpload(context.Background(), "t1", "managed", fh, "user-1", nil, nil); !errors.Is(err, domain.ErrPlatformManagedWorkspace) {
 		t.Fatalf("platform err = %v", err)
 	}
 	// 极端情况：重复内容 hash → ErrDuplicateDocument。
 	docRepo := newMockDocRepo()
 	docRepo.existsHash[fmt.Sprintf("%x", sha256.Sum256([]byte("hello")))] = true
 	svc.SetDocRepo(docRepo)
-	if _, err := svc.IngestUpload(context.Background(), "t1", "ws1", fh); !errors.Is(err, domain.ErrDuplicateDocument) {
+	if _, err := svc.IngestUpload(context.Background(), "t1", "ws1", fh, "user-1", nil, nil); !errors.Is(err, domain.ErrDuplicateDocument) {
 		t.Fatalf("duplicate err = %v", err)
 	}
 }
@@ -626,7 +634,7 @@ func TestWorkspaceDeleteDocument(t *testing.T) {
 
 	// 极端情况：storage 未配置。
 	svc2, _ := buildWorkspaceService(repo)
-	if err := svc2.DeleteDocument(context.Background(), "t1", "ws1", "d1"); err == nil {
+	if err := svc2.DeleteDocument(context.Background(), "t1", "ws1", "d1", "user-1"); err == nil {
 		t.Fatal("unconfigured storage must error")
 	}
 
@@ -634,7 +642,7 @@ func TestWorkspaceDeleteDocument(t *testing.T) {
 	docRepo.saved = append(docRepo.saved, &domain.Document{
 		ID: "d-processing", IngestStatus: constants.IngestStatusProcessing,
 	})
-	if err := svc.DeleteDocument(context.Background(), "t1", "ws1", "d-processing"); !errors.Is(err, domain.ErrDocumentProcessing) {
+	if err := svc.DeleteDocument(context.Background(), "t1", "ws1", "d-processing", "user-1"); !errors.Is(err, domain.ErrDocumentProcessing) {
 		t.Fatalf("processing err = %v", err)
 	}
 
@@ -642,10 +650,10 @@ func TestWorkspaceDeleteDocument(t *testing.T) {
 	docRepo.saved = append(docRepo.saved, &domain.Document{
 		ID: "d1", IngestStatus: constants.IngestStatusCompleted,
 	})
-	if err := svc.DeleteDocument(context.Background(), "t1", "ws1", "d1"); err != nil {
+	if err := svc.DeleteDocument(context.Background(), "t1", "ws1", "d1", "user-1"); err != nil {
 		t.Fatalf("delete = %v", err)
 	}
-	if len(store.deletedByDoc[constants.CollectionName("t1", "wsid-ws1")]) != 1 {
+	if len(store.deletedByDoc[constants.CollectionName("t1", "wsid-ws1", "text-embedding-v3")]) != 1 {
 		t.Fatalf("vector deletes = %+v", store.deletedByDoc)
 	}
 }
@@ -660,16 +668,16 @@ func TestWorkspaceDeleteDocumentNotFound(t *testing.T) {
 	svc.SetVectorStore(newCollectionStub())
 
 	// 极端情况：文档不存在。
-	if err := svc.DeleteDocument(context.Background(), "t1", "ws1", "ghost"); !errors.Is(err, domain.ErrDocumentNotFound) {
+	if err := svc.DeleteDocument(context.Background(), "t1", "ws1", "ghost", "user-1"); !errors.Is(err, domain.ErrDocumentNotFound) {
 		t.Fatalf("not found err = %v", err)
 	}
 	// 极端情况：workspace 不存在。
-	if err := svc.DeleteDocument(context.Background(), "t1", "ghost", "d1"); !errors.Is(err, domain.ErrWorkspaceNotFound) {
+	if err := svc.DeleteDocument(context.Background(), "t1", "ghost", "d1", "user-1"); !errors.Is(err, domain.ErrWorkspaceNotFound) {
 		t.Fatalf("ghost ws err = %v", err)
 	}
 	// 极端情况：platform-managed 拒绝。
 	seedWorkspace(repo, "managed", true)
-	if err := svc.DeleteDocument(context.Background(), "t1", "managed", "d1"); !errors.Is(err, domain.ErrPlatformManagedWorkspace) {
+	if err := svc.DeleteDocument(context.Background(), "t1", "managed", "d1", "user-1"); !errors.Is(err, domain.ErrPlatformManagedWorkspace) {
 		t.Fatalf("platform err = %v", err)
 	}
 }

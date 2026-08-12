@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -27,6 +28,9 @@ func BuildReActGraph(capGW port.CapabilityGateway, ledger TokenRecorder, logger 
 	g.AddNode(nodeLLM, makeLLMNode(capGW, ledger, logger))
 	g.AddNode(nodeTool, makeToolNode(capGW, logger))
 	g.AddConditionalEdge(nodeLLM, func(s ReActState) []string {
+		if s.TerminatedBy != "" {
+			return []string{END}
+		}
 		if len(s.Messages) == 0 {
 			return []string{END}
 		}
@@ -53,6 +57,12 @@ func BuildReActGraph(capGW port.CapabilityGateway, ledger TokenRecorder, logger 
 
 func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap.Logger) NodeFunc[ReActState] {
 	return func(ctx context.Context, s ReActState) (ReActState, error) {
+		// 已业务终止（如成本预算超限）：不再发起 LLM 调用，直接交给条件边
+		// END 收尾。否则 plan-finalize 等遗留路由会把终止态重新带回 LLM
+		// 节点，预算硬上限会被多一轮调用击穿（Spec 第 3 节）。
+		if s.TerminatedBy != "" {
+			return s, nil
+		}
 		start := time.Now()
 
 		tools, messages, _ := prepareLLMRequest(ctx, &s)
@@ -76,6 +86,11 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 		s.TotalCostUSD += cost
 		logLLMSuccess(logger, s, latencyMs, len(resp.ToolCalls) > 0)
 		appendLLMResponse(&s, resp, cost, latencyMs, start)
+		// 成本预算检查点：每次 LLM 调用后按 Ledger 累计（Spec 第 3 节）。
+		// 超限标记业务终止（非错误），已产出部分由 collectGraphResult 保留。
+		if budgetExceeded(s.TotalTokens, s.MaxTokensPerExecution) {
+			s.TerminatedBy = CostBudgetTerminated
+		}
 		return s, nil
 	}
 }
@@ -102,12 +117,20 @@ func prepareLLMRequest(ctx context.Context, s *ReActState) ([]port.ToolDefinitio
 	// instruction, without mutating s.Messages (trace/history stay complete).
 	// Tunable overrides resolve here: 0 means auto-derive from the window.
 	recentGroups, safetyRatio, correction := loopPolicy(*s)
-	tools = fitToolsToContextBudget(tools, messages, s.MaxContextTokens, protectedUsers, correction, safetyRatio)
+	// 预算账本：工具定义走 ToolsCap 独立配额，history 压缩走 HistoryCap；
+	// 二者互不挤占（Spec 第 2 节根因修复）。Budget 零值 = 未初始化，
+	// 工具裁剪与压缩自动禁用（与旧 0 预算语义一致）。
+	// Governed assistant（系统助手）不参与裁剪：其工具集是平台角色能力契约
+	// （角色权限建模的固定组成，schema 大、数量少），裁剪会造成角色能力
+	// 静默缺失（TestSystemAssistantDeterministicAgentLoopPersistsTypedArtifacts）。
+	if !s.GovernedAssistant {
+		tools = fitToolsToContextBudget(tools, messages, s.Budget.ToolsCap, protectedUsers, correction, safetyRatio)
+	}
 	toolTokens := 0
 	if encodedTools, err := json.Marshal(tools); err == nil {
 		toolTokens = tokenutil.EstimateText(string(encodedTools))
 	}
-	messages = compactLoopMessagesWithPolicy(ctx, messages, s.MaxContextTokens, toolTokens, recentGroups, protectedUsers, correction, safetyRatio, s.HistoryCompactor)
+	messages = compactLoopMessagesWithPolicy(ctx, messages, s.Budget, toolTokens, recentGroups, protectedUsers, correction, safetyRatio, s.HistoryCompactor, s)
 	// Baseline for the usage-feedback loop: the estimate of what is actually
 	// dispatched this step (post-compaction messages + tools), so the ratio
 	// stays on a consistent basis across steps.
@@ -404,6 +427,73 @@ func routeLLM(ctx context.Context, s ReActState, messages []port.LLMMessage, too
 	})
 }
 
+// contextLengthMarker 是 llmgateway ErrContextLengthExceeded 的跨包探测协议
+// （与 capability 包本地副本同模式）：graph 不 import llmgateway，经方法
+// 探测鸭子类型识别 context_length 错误。
+type contextLengthMarker interface{ ContextLengthExceeded() bool }
+
+// IsContextLengthExceeded 报告错误链（含 %w 包装）是否携带上下文超限标记，
+// 供 executeReAct 判定最终请求是否触发最小请求降级（Spec D4）。
+func IsContextLengthExceeded(err error) bool {
+	var m contextLengthMarker
+	return errors.As(err, &m)
+}
+
+// minimalRetryBudgetFloor 是降级最小请求的字节预算下界：窗口被
+// system+task 占满时仍保留至少一条最近历史消息，避免无上下文的裸请求。
+const minimalRetryBudgetFloor = 1
+
+// BuildMinimalRetryMessages 构造最终请求 400 context_length_exceeded 后的
+// 降级最小请求（Spec D4）：system + 纯截断历史（成对剔除工具交换）+ task。
+// 非流式、单次调用；再次失败即终止，不换模型不退避。只删 tool 消息会让
+// 模型看到"调用了工具但没有结果"，破坏消息配对，也留下无内容的 assistant
+// 消息——故成对剔除 assistant tool_calls 与其 tool 结果。len() 字节数是
+// token 的保守上界（CJK 每字符 3 字节），字符数下界保证最小请求必然小于
+// 原请求。
+func BuildMinimalRetryMessages(systemPrompt, task string, messages []port.LLMMessage, window int) []port.LLMMessage {
+	out := make([]port.LLMMessage, 0, len(messages)+2)
+	out = append(out, port.LLMMessage{Role: "system", Content: systemPrompt})
+	budget := window - len(systemPrompt) - len(task) - constants.MinimalRetryReserveBytes
+	if budget <= 0 {
+		budget = minimalRetryBudgetFloor
+	}
+	// 保留最近消息，成对剔除工具交换（assistant tool_calls 与其 tool 结果）。
+	for i := len(messages) - 1; i >= 0 && budget > 0; i-- {
+		msg := messages[i]
+		if msg.Role == "tool" {
+			continue
+		}
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			continue
+		}
+		budget -= len(msg.Content)
+		if budget < 0 {
+			break
+		}
+		out = append(out, msg)
+	}
+	// 反转恢复时间顺序；历史自带 system 消息未被预算保留时补回前置
+	// 占位——预算在扫描前已为 system 预留字节，无条件剔除即浪费保留额，
+	// 最小请求必须满足 D4 语义（system + task + 压缩后历史）。
+	out = out[1:]
+	slices.Reverse(out)
+	if !hasSystemRole(out) {
+		out = append([]port.LLMMessage{{Role: "system", Content: systemPrompt}}, out...)
+	}
+	return append(out, port.LLMMessage{Role: "user", Content: task})
+}
+
+// hasSystemRole 报告消息序列是否已含 system 角色消息（降级请求的
+// D4 语义守卫：system 缺失时由调用方补回占位）。
+func hasSystemRole(messages []port.LLMMessage) bool {
+	for _, m := range messages {
+		if m.Role == "system" {
+			return true
+		}
+	}
+	return false
+}
+
 func fitToolsToContextBudget(tools []port.ToolDefinition, messages []port.LLMMessage, budget, protectedUsers int, correction, safetyRatio float64) []port.ToolDefinition {
 	if budget <= 0 || len(tools) == 0 {
 		return tools
@@ -431,15 +521,33 @@ func protectedUserMessages(groups []msgGroup, protectedUsers int) []port.LLMMess
 	return out
 }
 
-// fitToolList greedily packs tool schemas while the encoded definition list
-// stays within the token allowance, preserving declaration order.
+// fitToolList packs tool schemas within the token allowance. 预算充足时保持
+// 声明顺序全量返回；不足时按优先级贪心：激活技能与授权能力工具（skill、
+// MCP、知识、记忆）优先打包，plan 工作流工具最后裁——技能激活是用户显式
+// 功能开关（TestAgentService_ExecuteSkillScenarioActivatesMultipleSkills），
+// plan 是内置辅助工作流，预算受限时先牺牲后者。
 func fitToolList(tools []port.ToolDefinition, allowance int) []port.ToolDefinition {
-	fitted := make([]port.ToolDefinition, 0, len(tools))
-	for _, tool := range tools {
+	encoded, err := json.Marshal(tools)
+	if err == nil && tokenutil.EstimateText(string(encoded)) <= allowance {
+		return tools
+	}
+	ordered := append([]port.ToolDefinition(nil), tools...)
+	slices.SortStableFunc(ordered, func(a, b port.ToolDefinition) int {
+		switch {
+		case isReservedPlanTool(a.Name) == isReservedPlanTool(b.Name):
+			return 0
+		case isReservedPlanTool(a.Name):
+			return 1
+		default:
+			return -1
+		}
+	})
+	fitted := make([]port.ToolDefinition, 0, len(ordered))
+	for _, tool := range ordered {
 		candidate := make([]port.ToolDefinition, len(fitted), len(fitted)+1)
 		copy(candidate, fitted)
 		candidate = append(candidate, tool)
-		encoded, err := json.Marshal(candidate)
+		encoded, err = json.Marshal(candidate)
 		if err == nil && tokenutil.EstimateText(string(encoded)) <= allowance {
 			fitted = candidate
 		}

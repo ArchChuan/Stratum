@@ -58,7 +58,7 @@ func TestRetrieveContextDelegatesSnapshotToRetriever(t *testing.T) {
 	}
 
 	content, err := NewRetrievalEvaluator(retriever).RetrieveContext(
-		reqctx.WithTenantID(context.Background(), "tenant-1"), snapshot, "  QUERY  ",
+		reqctx.WithTenantID(context.Background(), "tenant-1"), snapshot, "  QUERY  ", "viewer-1",
 	)
 
 	if err != nil || content != "first\n---\nsecond\n---\n" || retriever.request.Question != "query" ||

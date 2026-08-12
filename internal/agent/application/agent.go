@@ -24,6 +24,7 @@ import (
 	jschema "github.com/byteBuilderX/stratum/pkg/jsonschema"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
+	"github.com/byteBuilderX/stratum/pkg/tokenutil"
 )
 
 // Domain type aliases — canonical definitions live in
@@ -50,11 +51,25 @@ type ExecutionConfig struct {
 	Timeout     time.Duration
 	Temperature float32
 	MaxTokens   int
+	// MaxContextTokens 是本次执行解析后的上下文窗口预算（0 = 未注入，
+	// 回退到 agent 配置显式值）。执行时由 AgentService 两阶段解析后注入。
+	MaxContextTokens int
+	// OutputReserve 是主模型输出预留（账本 usable 的扣减项）。
+	// 0 = 未注入，由调用链自动解析（显式 max_tokens > vendor maxOut > 常量）。
+	OutputReserve int
+	// WindowSource 记录本次执行窗口解析来源（window_source trace 用）。
+	WindowSource string
 	// CompactionRecentGroups overrides in-loop compaction recent groups.
 	// 0 = auto-derive from MaxContextTokens.
 	CompactionRecentGroups int
 	// CompactionSafetyRatio overrides the compaction safety ratio. 0 = default.
 	CompactionSafetyRatio float32
+	// CompactionCooldownSec overrides the in-loop compaction cooldown window
+	// (seconds). 0 = default constant (constants.DefaultCompactionCooldown).
+	CompactionCooldownSec int
+	// MaxTokensPerExecution 是本次执行的累计 LLM token 预算（Spec 第 3 节，
+	// 与 Ledger 已记账 TotalTokens 对齐）。0 = 不设限。
+	MaxTokensPerExecution int
 	EnableTools           bool
 	AvailableTools        []string
 	Stream                bool
@@ -62,12 +77,12 @@ type ExecutionConfig struct {
 	TenantID              string
 	TraceID               string
 	ExecutionID           string
-	RAGSearchFn           func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
+	RAGSearchFn           func(ctx context.Context, workspaces []string, query string, topK int, viewerID string) (string, error)
 	// RAGSearchFnWithEvidence is the evidence-capable knowledge search hook
 	// (port.RAGSearchEvidenceProvider). When set, the knowledge tool prefers
 	// it over RAGSearchFn so tool observations carry retrieval provenance;
 	// the content contract is identical.
-	RAGSearchFnWithEvidence func(ctx context.Context, workspaces []string, query string, topK int) (port.RAGSearchEvidence, error)
+	RAGSearchFnWithEvidence func(ctx context.Context, workspaces []string, query string, topK int, viewerID string) (port.RAGSearchEvidence, error)
 	// CaptureParameters gates recording of the effective parameter values
 	// (stratum.params.* attributes) on the execution span. The parameter
 	// fingerprint stratum.params.sha256 is always recorded; only the raw
@@ -298,6 +313,17 @@ func (a *BaseAgent) snapshotExecutionConfig(cfg *ExecutionConfig) agentExecSnaps
 	if cfg.CompactionSafetyRatio == 0 {
 		cfg.CompactionSafetyRatio = a.CompactionSafetyRatio
 	}
+	if cfg.CompactionCooldownSec == 0 {
+		cfg.CompactionCooldownSec = a.CompactionCooldownSec
+	}
+	if cfg.MaxTokensPerExecution == 0 {
+		cfg.MaxTokensPerExecution = a.MaxTokensPerExecution
+	}
+	// 执行时解析的窗口（WithMaxContextTokens 注入）优先；
+	// 未注入时回退 agent 配置显式值（revision/直接执行等路径）。
+	if cfg.MaxContextTokens == 0 {
+		cfg.MaxContextTokens = a.MaxContextTokens
+	}
 	return agentExecSnapshot{
 		agentID:          a.ID,
 		agentName:        a.Name,
@@ -310,7 +336,7 @@ func (a *BaseAgent) snapshotExecutionConfig(cfg *ExecutionConfig) agentExecSnaps
 		metrics:          a.metrics,
 		workspaceNames:   a.KnowledgeWorkspaceNames,
 		workspaceDescs:   a.KnowledgeWorkspaceDescriptions,
-		maxContextTokens: a.MaxContextTokens,
+		maxContextTokens: cfg.MaxContextTokens,
 		memoryScope:      a.MemoryScope,
 	}
 }
@@ -541,8 +567,10 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	if maxTokens <= 0 {
 		maxTokens = constants.DefaultAgentContextTokens
 	}
+	// 组装侧与循环侧同一预算账本（I1）：safetyRatio 传同一 resolution 结果。
 	initMessages := BuildContextMessagesWithCompaction(
-		ctx, ec.systemPrompt, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow, ec.historyCompactor,
+		ctx, ec.systemPrompt, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow,
+		ec.cfg.OutputReserve, float64(ec.cfg.CompactionSafetyRatio), ec.historyCompactor,
 	)
 
 	// Resume from checkpoint if one exists.
@@ -600,7 +628,11 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 		oteltrace.WithAttributes(attribute.Int("max_steps", ec.cfg.MaxSteps)),
 	)
 	finalState, runErr := cg.Invoke(graphCtx, initState, runCfg)
+	recordTerminatedBy(reactSpan, finalState)
 	reactSpan.End()
+	// 最终请求 context_length_exceeded 降级（Spec D4）：循环已结束、工具成本
+	// 已花，最小请求必然小于原请求，只重试一次；成功返回答案，仍失败终止。
+	finalState, runErr = degradeFinalRequest(graphCtx, ec, finalState, runErr, maxTokens)
 	if runErr == nil && a.CheckpointStore != nil {
 		markCtx, markCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
 		_ = a.CheckpointStore.MarkCompleted(markCtx, ec.cfg.TenantID, ec.cfg.ExecutionID)
@@ -618,6 +650,57 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 		result.ToolCalls = append(result.ToolCalls, ToolCall{ToolName: tc.Name, Input: tc.Arguments})
 	}
 	return nil
+}
+
+// degradeFinalRequest 处理最终请求 context_length_exceeded 降级（Spec D4）：
+// 最小请求（system + 纯截断历史 + task，剔除全部工具结果）重试一次；成功
+// 返回带答案的终态，仍失败原样返回原错误（重试失败不替换错误类型）。非
+// context_length 错误或非最终请求位置时也原样返回——参数校验类 400 不在此
+// 路径（重试无意义，是 bug），等待工具结果位置失败不降级（否则模型会看到
+// "调用了工具但没有结果"的残缺对话）。
+func degradeFinalRequest(ctx context.Context, ec agentExecContext, finalState agentgraph.ReActState,
+	runErr error, maxTokens int) (agentgraph.ReActState, error) {
+	if runErr == nil || !agentgraph.IsContextLengthExceeded(runErr) || !isFinalRequest(finalState) {
+		return finalState, runErr
+	}
+	retryMessages := agentgraph.BuildMinimalRetryMessages(ec.systemPrompt, ec.input, finalState.Messages, maxTokens)
+	// 复用 routeLLM 语义：非流式单次 Route，RetryFn 对瞬态失败一层退避。
+	finalResp, retryErr := retryMinimalFinalRequest(ctx, ec, retryMessages)
+	if retryErr != nil {
+		return finalState, runErr
+	}
+	finalState.Output = finalResp
+	return finalState, nil
+}
+
+// isFinalRequest 报告图终止时是否处于"最终回答请求"位置：最后一条消息
+// 不是等待工具调用的 assistant 消息。等待工具结果位置失败不降级——否则
+// 模型会看到"调用了工具但没有结果"的残缺对话。
+func isFinalRequest(s agentgraph.ReActState) bool {
+	if len(s.Messages) == 0 {
+		return true
+	}
+	last := s.Messages[len(s.Messages)-1]
+	return last.Role != "assistant" || len(last.ToolCalls) == 0
+}
+
+// retryMinimalFinalRequest 以最小请求重试一次最终回答（Spec D4）：非流式
+// 单次 Route，RetryFn 对瞬态失败一层退避；context_length 错误本身是永久
+// 错误，RetryFn 单次尝试后终止。
+func retryMinimalFinalRequest(ctx context.Context, ec agentExecContext, messages []port.LLMMessage) (string, error) {
+	resp, err := agentgraph.RetryFn(ctx, agentgraph.DefaultRetry, func() (port.CapabilityResponse, error) {
+		return ec.capGW.Route(ctx, port.CapabilityRequest{
+			TraceID: ec.cfg.TraceID, TenantID: ec.cfg.TenantID, Type: port.CapLLM,
+			LLM: &port.LLMCapRequest{
+				Model: ec.llmModel, Messages: messages,
+				Temperature: ec.cfg.Temperature, MaxTokens: ec.cfg.MaxTokens,
+			},
+		})
+	})
+	if err != nil {
+		return "", err
+	}
+	return resp.Content, nil
 }
 
 func (a *BaseAgent) executeCoT(cfg *ExecutionConfig, input string, result *AgentResult) error {
@@ -661,8 +744,10 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 	if maxTokens <= 0 {
 		maxTokens = constants.DefaultAgentContextTokens
 	}
+	// 组装侧与循环侧同一预算账本（I1）：safetyRatio 传同一 resolution 结果。
 	initMessages := BuildContextMessagesWithCompaction(
-		ctx, ec.systemPrompt, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow, ec.historyCompactor,
+		ctx, ec.systemPrompt, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow,
+		ec.cfg.OutputReserve, float64(ec.cfg.CompactionSafetyRatio), ec.historyCompactor,
 	)
 	initState := a.buildReActInitState(ec, initMessages, maxTokens)
 	initState.StuckThreshold = stuckThreshold
@@ -696,6 +781,7 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 		MaxParallel: initState.PlanLimits.MaxConcurrentNodes,
 		MergeWave:   agentgraph.MergeReActWave,
 	})
+	recordTerminatedBy(planSpan, finalState)
 	planSpan.End()
 	if runErr != nil {
 		return fmt.Errorf("planning: %w", runErr)
@@ -709,6 +795,18 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 		result.ToolCalls = append(result.ToolCalls, ToolCall{ToolName: tc.Name, Input: tc.Arguments})
 	}
 	return nil
+}
+
+// taskTokensOf 返回消息列表中最新用户消息（当前任务）的 token 估算；
+// 无用户消息时返回 0。任务永不压缩，其 token 成本必须从预算账本的
+// history 配额扣减（Spec 第 2 节 history = usable − fixedHead − tools − task）。
+func taskTokensOf(msgs []port.LLMMessage) int {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			return tokenutil.EstimateText(msgs[i].Content)
+		}
+	}
+	return 0
 }
 
 // promptVersionMap builds the prompt key → version fingerprint map carried
@@ -727,6 +825,13 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 	if ec.cfg.SystemAssistantMode {
 		availableTools = nil
 	}
+	// 压缩冷却默认启用（Spec 第 4 节）：0 = constants.DefaultCompactionCooldown，
+	// 与 CompactionSafetyRatio 的 0=default 语义一致。registry 参数
+	// agent.compaction_cooldown_sec 经 WithCompactionCooldownSec 覆盖。
+	cooldownSec := ec.cfg.CompactionCooldownSec
+	if cooldownSec <= 0 {
+		cooldownSec = int(constants.DefaultCompactionCooldown.Seconds())
+	}
 	return agentgraph.ReActState{
 		TenantID:               ec.cfg.TenantID,
 		TraceID:                ec.cfg.TraceID,
@@ -736,6 +841,7 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		MaxTokens:              ec.cfg.MaxTokens,
 		CompactionRecentGroups: ec.cfg.CompactionRecentGroups,
 		CompactionSafetyRatio:  ec.cfg.CompactionSafetyRatio,
+		CompactionCooldownSec:  cooldownSec,
 		// TokenCorrection must start at 1.0: the zero value would divide the
 		// compaction threshold by zero on the first step.
 		TokenCorrection:            1.0,
@@ -750,6 +856,7 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		ExecutionID:                ec.cfg.ExecutionID,
 		AgentKnowledgeWorkspaceIDs: ec.workspaceNames,
 		AgentMemoryScope:           ec.memoryScope,
+		ViewerID:                   ec.cfg.UserID,
 		RAGSearchFn:                ec.cfg.RAGSearchFn,
 		RAGSearchFnWithEvidence:    ec.cfg.RAGSearchFnWithEvidence,
 		PromptVersions:             promptVersionMap(ec.cfg.SystemPromptVersion),
@@ -760,9 +867,16 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		InternalToolResultGuardFn:  ec.cfg.InternalToolResultGuardFn,
 		MaxLLMSteps:                ec.cfg.MaxSteps,
 		MaxContextTokens:           maxTokens,
-		CheckpointEnabled:          a.CheckpointEnabled,
-		HistoryCompactor:           ec.historyCompactor,
-		PlanCheckpointWriter:       a.CheckpointStore,
+		// 成本预算：registry 参数 agent.max_tokens_per_execution 经
+		// WithMaxTokensPerExecution 覆盖，0 = 不设限（Spec 第 3 节）。
+		MaxTokensPerExecution: ec.cfg.MaxTokensPerExecution,
+		// Budget 账本快照：一次执行一个，初始组装与 ReAct 循环共享同一来源。
+		// 循环侧任务 = 最新用户消息，经 WithTask 从 HistoryCap 扣减（I3）。
+		Budget: agentgraph.ComputeBudget(maxTokens, ec.cfg.OutputReserve,
+			float64(ec.cfg.CompactionSafetyRatio)).WithTask(taskTokensOf(initMessages)),
+		CheckpointEnabled:    a.CheckpointEnabled,
+		HistoryCompactor:     ec.historyCompactor,
+		PlanCheckpointWriter: a.CheckpointStore,
 		PlanCheckpointIdentity: agentgraph.PlanCheckpointIdentity{
 			ExecutionID: ec.cfg.ExecutionID, TraceID: ec.cfg.TraceID,
 			ConversationID: ec.cfg.ConversationID, AgentID: ec.agentID, UserID: ec.cfg.UserID,
@@ -791,13 +905,30 @@ func (a *BaseAgent) buildPlanNodeExecutor(ec agentExecContext, capGW port.Capabi
 		child.Messages = []port.LLMMessage{systemMessage, {Role: "user", Content: goal}}
 		child.ActivePlan = nil
 		child.PlanToolsDisabled = true
+		// 子循环的任务是节点目标：预算快照按新任务重新扣减 history 配额（I3）。
+		child.Budget = child.Budget.WithTask(tokenutil.EstimateText(goal))
 		child.MaxLLMSteps = constants.DefaultStepMaxLLMSteps
 		subSteps := constants.DefaultStepMaxLLMSteps*2 + 1
 		final, invokeErr := nodeGraph.Invoke(nodeCtx, child, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: subSteps})
 		if invokeErr != nil {
 			return agentgraph.PlanNodeExecutionResult{}, invokeErr
 		}
-		return agentgraph.PlanNodeExecutionResult{Summary: final.Output}, nil
+		// 子循环 token 用量折回父图预算账本：child 是 parent 的结构体拷贝，
+		// 继承父图 TotalTokens 基线，故 delta = final − child 即子循环自身用量，
+		// 基线只计一次。子循环内已按同一 MaxTokensPerExecution 自终止，折回后
+		// 父图下一次 LLM 检查点终止整次执行（Finding 1 修复）。
+		return agentgraph.PlanNodeExecutionResult{
+			Summary:    final.Output,
+			TokensUsed: final.TotalTokens - child.TotalTokens,
+		}, nil
+	}
+}
+
+// recordTerminatedBy 在循环 span 上记录业务终止原因（Spec 第 3 节）。
+// 终止标记在循环内产生，只有 Invoke 返回后才能写入；空值不写属性。
+func recordTerminatedBy(span oteltrace.Span, finalState agentgraph.ReActState) {
+	if finalState.TerminatedBy != "" {
+		span.SetAttributes(attribute.String("terminated_by", finalState.TerminatedBy))
 	}
 }
 
@@ -811,6 +942,11 @@ func (a *BaseAgent) collectGraphResult(result *AgentResult, finalState agentgrap
 	result.ToolObservations = enrichToolObservations(finalState.ToolObservations, ec.cfg.TraceID, ec.cfg.ExecutionID, ec.cfg.ConversationID, ec.agentID, ec.cfg.UserID)
 	result.TraceEvents = enrichTraceEvents(finalState.TraceEvents, ec.cfg.TraceID, ec.cfg.ExecutionID, ec.cfg.ConversationID, ec.agentID, ec.cfg.UserID)
 	result.AssistantToolArtifacts = append([]domain.SystemAssistantToolArtifact(nil), finalState.AssistantToolArtifacts...)
+	result.Sources = append([]port.RAGSearchSource(nil), finalState.CitationSources...)
+	// 业务终止（如成本预算超限）不是错误：终止原因透传，已产出部分保留。
+	if finalState.TerminatedBy == agentgraph.CostBudgetTerminated {
+		result.TerminatedBy = finalState.TerminatedBy
+	}
 }
 
 func (a *BaseAgent) appendFinalAnswerEvent(result *AgentResult, finalState agentgraph.ReActState, ec agentExecContext) {
@@ -1012,6 +1148,28 @@ func WithMaxTokens(maxTokens int) ExecutionOption {
 	}
 }
 
+// WithMaxContextTokens sets the resolved execution window budget.
+// 0 = unset, falls back to the agent config's explicit MaxContextTokens.
+func WithMaxContextTokens(maxContextTokens int) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.MaxContextTokens = maxContextTokens
+	}
+}
+
+// WithOutputReserve 注入主模型输出预留（Spec 第 2 节账本 outputReserve）。
+func WithOutputReserve(reserve int) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.OutputReserve = reserve
+	}
+}
+
+// WithWindowSource records the window resolution source for trace attributes.
+func WithWindowSource(source string) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.WindowSource = source
+	}
+}
+
 // WithCompactionRecentGroups overrides in-loop compaction recent groups.
 // 0 = auto-derive from MaxContextTokens.
 func WithCompactionRecentGroups(recentGroups int) ExecutionOption {
@@ -1024,6 +1182,22 @@ func WithCompactionRecentGroups(recentGroups int) ExecutionOption {
 func WithCompactionSafetyRatio(ratio float32) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.CompactionSafetyRatio = ratio
+	}
+}
+
+// WithCompactionCooldownSec sets the in-loop compaction cooldown in seconds.
+// 0 = default constant.
+func WithCompactionCooldownSec(sec int) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.CompactionCooldownSec = sec
+	}
+}
+
+// WithMaxTokensPerExecution sets the execution-wide LLM token budget.
+// 0 = unlimited (gateway/provider default).
+func WithMaxTokensPerExecution(tokens int) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.MaxTokensPerExecution = tokens
 	}
 }
 
@@ -1069,8 +1243,9 @@ func WithExecutionID(id string) ExecutionOption {
 	}
 }
 
-// WithRAGSearchFn injects a knowledge-base search function for the search_knowledge tool.
-func WithRAGSearchFn(fn func(ctx context.Context, workspaces []string, query string, topK int) (string, error)) ExecutionOption {
+// WithRAGSearchFn injects a knowledge-base search function for the
+// search_knowledge tool. viewerID is the end user scoping retrieval.
+func WithRAGSearchFn(fn func(ctx context.Context, workspaces []string, query string, topK int, viewerID string) (string, error)) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.RAGSearchFn = fn
 	}
@@ -1078,7 +1253,7 @@ func WithRAGSearchFn(fn func(ctx context.Context, workspaces []string, query str
 
 // WithRAGSearchFnWithEvidence injects the evidence-capable knowledge search
 // function; the tool node prefers it over WithRAGSearchFn when set.
-func WithRAGSearchFnWithEvidence(fn func(ctx context.Context, workspaces []string, query string, topK int) (port.RAGSearchEvidence, error)) ExecutionOption {
+func WithRAGSearchFnWithEvidence(fn func(ctx context.Context, workspaces []string, query string, topK int, viewerID string) (port.RAGSearchEvidence, error)) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.RAGSearchFnWithEvidence = fn
 	}
@@ -1239,6 +1414,14 @@ func agentExecutionAttributes(agentID, agentName string, agentType AgentType, cf
 		attribute.String("opik.metadata.stratum.experiment_assignments", string(assignments)),
 		attribute.String("opik.metadata.stratum.resource_manifest", string(manifest)),
 		attribute.String("stratum.params.sha256", contentVersion(string(paramsJSON))),
+	}
+	// 窗口来源与解析值必须始终可观测（Spec 第 1 节），不随
+	// CaptureParameters 门控；WindowSource 为空（preparation span）时不记录。
+	if cfg.WindowSource != "" {
+		attrs = append(attrs,
+			attribute.String("stratum.window_source", cfg.WindowSource),
+			attribute.Int("stratum.window_tokens", maxContextTokens),
+		)
 	}
 	// Effective parameter values are privacy-gated by trace.capture_parameters;
 	// the fingerprint above is always recorded so runs remain comparable.

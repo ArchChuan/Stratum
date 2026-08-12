@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"go.uber.org/zap"
 )
 
@@ -30,9 +32,16 @@ const hybridLegRecallFactor = 2
 // and "drift" via ChunkRepo.CountByWorkspace.
 var errCollectionNotFound = errors.New("knowledge collection not found")
 
+// errLegacyDimMismatch reports a vector-dimension mismatch on the collection
+// being searched. The caller decides the semantics: on the legacy
+// (pre-upgrade) collection a mismatch skips retrieval (Warn + empty result,
+// spec: legacy dim drift is not fail-closed); on the model-suffixed name it
+// still fails closed as ErrRAGDependency.
+var errLegacyDimMismatch = errors.New("knowledge legacy collection dimension mismatch")
+
 func isCollectionNotFound(err error) bool {
 	return errors.Is(err, errCollectionNotFound) ||
-		strings.Contains(err.Error(), "collection not found")
+		(err != nil && strings.Contains(err.Error(), "collection not found"))
 }
 
 // rerankIdentity splits "provider:model" style rerank identities.
@@ -50,7 +59,8 @@ func rerankIdentity(identity string) (provider, model string) {
 // by MaxConcurrentWorkspaceSearch (a per-query cap protecting the embed
 // backend and DB pool), and concatenates results; the first error is returned
 // only when no content was produced (at-least-one semantics).
-func NewRAGSearchFn(rs *RAGService, tenantID string) func(
+// viewerID is the end user whose document whitelist scopes every search.
+func NewRAGSearchFn(rs *RAGService, tenantID, viewerID string) func(
 	ctx context.Context, workspaces []string, query string, topK int,
 ) (string, error) {
 	return func(ctx context.Context, workspaces []string, query string, topK int) (string, error) {
@@ -65,7 +75,7 @@ func NewRAGSearchFn(rs *RAGService, tenantID string) func(
 			go func(i int, ws string) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				results[i] = searchWorkspace(ctx, rs, tenantID, ws, query, topK)
+				results[i] = searchWorkspace(ctx, rs, tenantID, viewerID, ws, query, topK)
 			}(i, ws)
 		}
 		wg.Wait()
@@ -73,7 +83,7 @@ func NewRAGSearchFn(rs *RAGService, tenantID string) func(
 	}
 }
 
-func searchWorkspace(ctx context.Context, rs *RAGService, tenantID, ws, query string, topK int) wsResult {
+func searchWorkspace(ctx context.Context, rs *RAGService, tenantID, viewerID, ws, query string, topK int) wsResult {
 	mode, effectiveTopK, embedModel, workspaceID, err := resolveWorkspaceConfig(ctx, rs, tenantID, ws, topK)
 	if err != nil {
 		return wsResult{err: err}
@@ -86,6 +96,10 @@ func searchWorkspace(ctx context.Context, rs *RAGService, tenantID, ws, query st
 		Mode:           mode,
 		TopK:           effectiveTopK,
 		EmbeddingModel: embedModel,
+		ViewerID:       viewerID,
+		// System-actor contexts (privileged wiring paths such as eval workers)
+		// carry the same trust as an admin owner and bypass the D2 gate.
+		SkipAccessCheck: reqctx.SystemActorFromContext(ctx) != "",
 	})
 	if err != nil {
 		return wsResult{err: err}
@@ -173,8 +187,13 @@ type RAGService struct {
 	chunkRepo     knowledgeport.ChunkRepo
 	vectorStore   knowledgeport.VectorStore
 	reranker      knowledgeport.Reranker
-	metrics       observability.MetricsProvider
-	logger        *zap.Logger
+	// docRepo + roleResolver back the document-level visibility whitelist
+	// (D1 matrix); both are required for restricted workspaces and fail
+	// closed when unavailable.
+	docRepo      knowledgeport.DocRepo
+	roleResolver knowledgeport.TenantRoleResolver
+	metrics      observability.MetricsProvider
+	logger       *zap.Logger
 }
 
 func NewRAGService(
@@ -194,6 +213,10 @@ func (rs *RAGService) SetWorkspaceRepo(repo knowledgeport.WorkspaceRepo) { rs.ws
 func (rs *RAGService) SetChunkRepo(repo knowledgeport.ChunkRepo)         { rs.chunkRepo = repo }
 func (rs *RAGService) SetReranker(r knowledgeport.Reranker)              { rs.reranker = r }
 func (rs *RAGService) SetMetrics(m observability.MetricsProvider)        { rs.metrics = m }
+func (rs *RAGService) SetDocRepo(repo knowledgeport.DocRepo)             { rs.docRepo = repo }
+func (rs *RAGService) SetTenantRoleResolver(r knowledgeport.TenantRoleResolver) {
+	rs.roleResolver = r
+}
 
 func (rs *RAGService) resolveEmbedder(ctx context.Context, req RAGQueryRequest) knowledgeport.Embedder {
 	if rs.embedResolver != nil && req.TenantID != "" {
@@ -217,6 +240,15 @@ type RAGQueryRequest struct {
 	Reranking      string
 	ScoreThreshold float32 // keep only results with Score >= threshold; 0 disables (keyword mode exempt)
 	RerankTopK     int     // final count after external reranking; 0 uses TopK
+	// ViewerID is the end user whose document whitelist scopes the search.
+	// Empty with SkipAccessCheck=false fails closed (D2 gate): a missing
+	// identity must never silently become a filterless full-library search.
+	ViewerID string
+	// SkipAccessCheck is only settable by privileged wiring paths running in
+	// a SystemActor context (eval workers, platform tooling) — the equivalent
+	// of the admin-owner exemption in the D1 matrix. Business callers must
+	// never set it.
+	SkipAccessCheck bool
 }
 
 type RAGQueryResult struct {
@@ -234,6 +266,25 @@ type Source struct {
 	ParentContent string // non-empty when parent chunk was fetched (Parent-Child strategy)
 	ChunkIndex    int64
 	Score         float32
+}
+
+// DocumentPreview is the chunk-reassembled content of a document for the
+// citation preview UI. Raw document text is not stored (knowledge_docs.content
+// was dropped), so previews rebuild the document from its chunks ordered by
+// chunk index; Parent-Child chunking attaches the parent context per leaf.
+type DocumentPreview struct {
+	DocumentID    string
+	DocumentTitle string // Source file name of the doc (no title column exists)
+	ChunkCount    int
+	Segments      []ChunkSegment
+}
+
+// ChunkSegment is one ordered content unit of a previewed document.
+type ChunkSegment struct {
+	ChunkID       string
+	Index         int64
+	Content       string
+	ParentContent string // non-empty when the chunk references a Parent-Child parent
 }
 
 func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQueryResult, error) {
@@ -266,28 +317,40 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 		}
 	}
 
-	collectionName := constants.CollectionName(req.TenantID, req.WorkspaceID)
+	collectionName := constants.CollectionName(req.TenantID, req.WorkspaceID, req.EmbeddingModel)
+
+	// D2 fail-closed gate + D1 visibility set, resolved in one step.
+	visibleDocIDs, unrestricted, err := rs.accessScope(ctx, req)
+	if err != nil {
+		rs.logger.Error("knowledge.rag.visibility_unavailable",
+			zap.String("trace_id", sc.TraceID), zap.Error(err))
+		return nil, err
+	}
+	if !unrestricted && len(visibleDocIDs) == 0 {
+		// Nothing visible: an empty result without touching embed/Milvus/keyword.
+		result.Latency = time.Since(startTime)
+		return result, nil
+	}
+	// D7 guard is evaluated per leg: an over-long whitelist degrades the
+	// vector leg (empty results, WARN) while the keyword leg keeps filtering.
+	filterExpr := buildDocFilterExpr(visibleDocIDs)
 
 	switch req.Mode {
 	case "vector":
-		candidateTopK := req.TopK
-		if widensRecall(req.Reranking) {
-			candidateTopK = req.TopK * constants.RerankWidenFactor
-		}
-		vectorResults, err := rs.queryVector(ctx, req.Question, collectionName, candidateTopK, rs.resolveEmbedder(ctx, req), req.EmbeddingModel)
-		if err != nil {
-			if errors.Is(err, errCollectionNotFound) {
-				if missingErr := rs.handleMissingCollection(ctx, req); missingErr != nil {
+		legacyName := constants.CollectionLegacyName(req.TenantID, req.WorkspaceID)
+		searchName, legacy := rs.resolveSearchCollection(ctx, collectionName, legacyName, req.WorkspaceID)
+		vectorResults, vErr := rs.vectorLegSearch(ctx, req, searchName, legacy, filterExpr, visibleDocIDs)
+		if vErr != nil {
+			if errors.Is(vErr, errCollectionNotFound) {
+				if missingErr := rs.handleMissingCollection(ctx, req, searchName); missingErr != nil {
 					return nil, missingErr
 				}
+				result.Latency = time.Since(startTime)
 				return result, nil
 			}
-			rs.logger.Error("knowledge.retrieval.dependency_failed", zap.String("trace_id", sc.TraceID),
-				zap.String("operation", "vector_search"), zap.String("error_category", "dependency_unavailable"))
-			return nil, ErrRAGDependency
+			return nil, vErr
 		}
 		result.VectorResults = vectorResults
-
 		sources, rerankErr := rs.rerankSources(ctx, req, vectorToPool(vectorResults))
 		if rerankErr != nil {
 			return nil, rerankErr
@@ -295,48 +358,18 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 		result.Sources = sources
 
 	case "keyword":
-		if rs.chunkRepo == nil {
-			return nil, fmt.Errorf("keyword search not available: chunk store not configured")
+		sources, legErr := rs.keywordLeg(ctx, req, visibleDocIDs)
+		if legErr != nil {
+			return nil, legErr
 		}
-		if req.WorkspaceID == "" {
-			return nil, fmt.Errorf("keyword search requires workspace ID")
-		}
-		chunks, err := rs.chunkRepo.KeywordSearch(ctx, req.TenantID, req.WorkspaceID, req.Question, req.TopK)
-		if err != nil {
-			rs.logger.Error("knowledge.retrieval.dependency_failed", zap.String("trace_id", sc.TraceID),
-				zap.String("operation", "keyword_search"), zap.String("error_category", "dependency_unavailable"))
-			return nil, ErrRAGDependency
-		}
-		for _, c := range chunks {
-			result.Sources = append(result.Sources, Source{
-				DocumentID: c.DocID,
-				ChunkID:    c.ID,
-				Content:    c.Text,
-				ChunkIndex: c.Index,
-			})
-		}
+		result.Sources = sources
 
 	case "hybrid":
-		embedder := rs.resolveEmbedder(ctx, req)
-		if embedder == nil {
-			return nil, fmt.Errorf("embedding service not configured: enable an embedding model in model management")
+		vr, sources, legErr := rs.hybridLeg(ctx, req, collectionName, filterExpr, visibleDocIDs)
+		if legErr != nil {
+			return nil, legErr
 		}
-		if rs.chunkRepo == nil {
-			return nil, fmt.Errorf("hybrid search not available: chunk store not configured")
-		}
-		legTopK := req.TopK * hybridLegRecallFactor
-		if widensRecall(req.Reranking) {
-			legTopK = req.TopK * constants.RerankWidenFactor
-		}
-		vectorResults, pool, err := rs.hybridPool(ctx, req, collectionName, embedder, legTopK)
-		if err != nil {
-			return nil, err
-		}
-		result.VectorResults = vectorResults
-		sources, rerankErr := rs.rerankSources(ctx, req, pool)
-		if rerankErr != nil {
-			return nil, rerankErr
-		}
+		result.VectorResults = vr
 		result.Sources = sources
 	}
 
@@ -350,6 +383,260 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 		zap.Duration("latency", result.Latency))
 
 	return result, nil
+}
+
+// accessScope enforces the D2 identity gate and resolves the D1 visibility
+// set in one step. A query without an explicit viewer identity must not
+// silently degrade into a filterless full-library search; only system-actor
+// wiring paths set SkipAccessCheck.
+func (rs *RAGService) accessScope(ctx context.Context, req RAGQueryRequest) ([]string, bool, error) {
+	if req.ViewerID == "" && !req.SkipAccessCheck {
+		sc, _ := observability.SpanFromContext(ctx)
+		rs.logger.Warn("knowledge.rag.access_check_skipped",
+			zap.String("trace_id", sc.TraceID), zap.String("tenant_id", req.TenantID))
+		return nil, false, ErrRAGDependency
+	}
+	return rs.visibleDocIDs(ctx, req)
+}
+
+// vectorLegSearch runs the vector-only retrieval leg with the D7 over-long
+// filter guard: an oversized whitelist degrades this leg to empty results with
+// a WARN (never a query failure), while the keyword leg keeps filtering.
+// errCollectionNotFound propagates for the caller to classify via
+// handleMissingCollection; other failures map to ErrRAGDependency.
+func (rs *RAGService) vectorLegSearch(ctx context.Context, req RAGQueryRequest, searchName string, legacy bool, filterExpr string, visibleDocIDs []string) ([]knowledgeport.VectorSearchResult, error) {
+	if visibleDocIDs != nil && filterExprTooLong(filterExpr) {
+		sc, _ := observability.SpanFromContext(ctx)
+		rs.logger.Warn("knowledge.rag.filter_degraded",
+			zap.String("trace_id", sc.TraceID),
+			zap.Int("visible_docs", len(visibleDocIDs)),
+			zap.Int("filter_len", len(filterExpr)))
+		return nil, nil
+	}
+	candidateTopK := req.TopK
+	if widensRecall(req.Reranking) {
+		candidateTopK = req.TopK * constants.RerankWidenFactor
+	}
+	results, err := rs.queryVector(ctx, req.Question, searchName, candidateTopK, rs.resolveEmbedder(ctx, req), req.EmbeddingModel, legacy, filterExpr)
+	if err != nil {
+		if errors.Is(err, errCollectionNotFound) {
+			return nil, err
+		}
+		sc, _ := observability.SpanFromContext(ctx)
+		rs.logger.Error("knowledge.retrieval.dependency_failed", zap.String("trace_id", sc.TraceID),
+			zap.String("operation", "vector_search"), zap.String("error_category", "dependency_unavailable"))
+		return nil, ErrRAGDependency
+	}
+	return results, nil
+}
+
+// keywordLeg runs the keyword-only retrieval leg. The visible doc-ID set is
+// passed through to KeywordSearch so both hybrid legs filter identically.
+func (rs *RAGService) keywordLeg(ctx context.Context, req RAGQueryRequest, docIDs []string) ([]Source, error) {
+	if rs.chunkRepo == nil {
+		return nil, fmt.Errorf("keyword search not available: chunk store not configured")
+	}
+	if req.WorkspaceID == "" {
+		return nil, fmt.Errorf("keyword search requires workspace ID")
+	}
+	chunks, err := rs.chunkRepo.KeywordSearch(ctx, req.TenantID, req.WorkspaceID, req.Question, docIDs, req.TopK)
+	if err != nil {
+		sc, _ := observability.SpanFromContext(ctx)
+		rs.logger.Error("knowledge.retrieval.dependency_failed", zap.String("trace_id", sc.TraceID),
+			zap.String("operation", "keyword_search"), zap.String("error_category", "dependency_unavailable"))
+		return nil, ErrRAGDependency
+	}
+	sources := make([]Source, 0, len(chunks))
+	for _, c := range chunks {
+		sources = append(sources, Source{
+			DocumentID: c.DocID,
+			ChunkID:    c.ID,
+			Content:    c.Text,
+			ChunkIndex: c.Index,
+		})
+	}
+	return sources, nil
+}
+
+// hybridLeg runs the hybrid retrieval leg: both the vector and keyword legs
+// receive the same visible doc-ID filter, so no unfiltered leg exists.
+func (rs *RAGService) hybridLeg(ctx context.Context, req RAGQueryRequest, collectionName, filterExpr string, docIDs []string) ([]knowledgeport.VectorSearchResult, []Source, error) {
+	embedder := rs.resolveEmbedder(ctx, req)
+	if embedder == nil {
+		return nil, nil, fmt.Errorf("embedding service not configured: enable an embedding model in model management")
+	}
+	if rs.chunkRepo == nil {
+		return nil, nil, fmt.Errorf("hybrid search not available: chunk store not configured")
+	}
+	legTopK := req.TopK * hybridLegRecallFactor
+	if widensRecall(req.Reranking) {
+		legTopK = req.TopK * constants.RerankWidenFactor
+	}
+	vectorResults, pool, err := rs.hybridPool(ctx, req, collectionName, embedder, legTopK, filterExpr, docIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	sources, rerankErr := rs.rerankSources(ctx, req, pool)
+	if rerankErr != nil {
+		return nil, nil, rerankErr
+	}
+	return vectorResults, sources, nil
+}
+
+// visibleDocIDs resolves the viewer's document whitelist per the D1
+// visibility matrix. unrestricted=true means the whole workspace is visible
+// (nil ids → no filter expression). Fail closed: identity or dependency
+// unavailability never degrades into a filterless search.
+func (rs *RAGService) visibleDocIDs(ctx context.Context, req RAGQueryRequest) ([]string, bool, error) {
+	if req.SkipAccessCheck {
+		return nil, true, nil
+	}
+	if rs.wsRepo == nil {
+		// No workspace metadata: the caller already scoped the query to a
+		// collection, so doc-level visibility cannot be evaluated — keep the
+		// pre-existing workspace-scoped behavior (no extra filtering).
+		return nil, true, nil
+	}
+	ws, err := rs.wsRepo.GetByID(ctx, req.TenantID, req.WorkspaceID)
+	if err != nil {
+		return nil, false, fmt.Errorf("knowledge: resolve workspace visibility: %w", err)
+	}
+	if ws == nil || isPlatformManaged(ws) {
+		// Unknown workspace keeps collection-level scoping; platform-managed
+		// workspaces (built-in knowledge) are fully visible per the D1 matrix.
+		return nil, true, nil
+	}
+	role, unrestricted, err := rs.viewerScope(ctx, req, ws)
+	if err != nil {
+		return nil, false, err
+	}
+	if unrestricted {
+		return nil, true, nil
+	}
+	ids, err := rs.docRepo.VisibleDocIDs(ctx, req.TenantID, req.WorkspaceID, req.ViewerID, role)
+	if err != nil {
+		return nil, false, err
+	}
+	return ids, false, nil
+}
+
+// viewerScope resolves the viewer's tenant role and the D1 management
+// exemption (tenant admin/owner, workspace creator). Fail closed: empty
+// identity or unconfigured resolver/repo returns an error, never an
+// unrestricted set.
+func (rs *RAGService) viewerScope(ctx context.Context, req RAGQueryRequest, ws *domain.Workspace) (role string, unrestricted bool, err error) {
+	if req.ViewerID == "" || rs.roleResolver == nil || rs.docRepo == nil {
+		return "", false, fmt.Errorf("knowledge: doc-level visibility unavailable: %w", domain.ErrForbidden)
+	}
+	role, err = rs.roleResolver.ResolveTenantRole(ctx, req.TenantID, req.ViewerID)
+	if err != nil {
+		return "", false, fmt.Errorf("knowledge: resolve viewer role: %w", domain.ErrForbidden)
+	}
+	if role == "owner" || role == "admin" || ws.CreatedBy == req.ViewerID {
+		return role, true, nil
+	}
+	return role, false, nil
+}
+
+// PreviewDocument returns the chunk-reassembled content of a document for the
+// citation preview UI (GET .../documents/:documentID/preview). The viewer must
+// be able to see the document per the D1 visibility matrix; invisible and
+// nonexistent documents both surface as ErrDocumentNotFound (404) so access
+// attempts cannot probe existence. Platform-managed workspaces (built-in
+// knowledge) are exempt from the whitelist but still require the document to
+// exist. Fail closed: missing identity or unconfigured repositories reject.
+func (rs *RAGService) PreviewDocument(ctx context.Context, tenantID, workspaceName, docID, viewerID string) (*DocumentPreview, error) {
+	ws, err := rs.previewWorkspace(ctx, tenantID, workspaceName, viewerID)
+	if err != nil {
+		return nil, err
+	}
+	visible, unrestricted, err := rs.visibleDocIDs(ctx, RAGQueryRequest{
+		TenantID:    tenantID,
+		WorkspaceID: ws.ID,
+		ViewerID:    viewerID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !unrestricted && !slices.Contains(visible, docID) {
+		return nil, domain.ErrDocumentNotFound
+	}
+	doc, err := rs.docRepo.GetByID(ctx, tenantID, ws.ID, docID)
+	if err != nil {
+		return nil, err
+	}
+	if doc == nil {
+		return nil, domain.ErrDocumentNotFound
+	}
+	chunks, err := rs.chunkRepo.ListByDoc(ctx, tenantID, ws.ID, docID)
+	if err != nil {
+		return nil, fmt.Errorf("knowledge: list preview chunks: %w", err)
+	}
+	preview := &DocumentPreview{
+		DocumentID:    docID,
+		DocumentTitle: doc.Source,
+		ChunkCount:    len(chunks),
+	}
+	// chunks arrive ordered by chunk index (ListByDoc ORDER BY chunk_index).
+	for _, ch := range chunks {
+		seg := ChunkSegment{ChunkID: ch.ID, Index: ch.Index, Content: ch.Text}
+		attachParent(ctx, rs, tenantID, ws.ID, ch, &seg)
+		preview.Segments = append(preview.Segments, seg)
+	}
+	return preview, nil
+}
+
+// previewWorkspace resolves and validates the preview target workspace.
+// Fail closed on unconfigured dependencies or missing viewer identity.
+func (rs *RAGService) previewWorkspace(ctx context.Context, tenantID, workspaceName, viewerID string) (*domain.Workspace, error) {
+	if rs.wsRepo == nil || rs.docRepo == nil || rs.chunkRepo == nil {
+		return nil, fmt.Errorf("knowledge: preview dependencies unavailable: %w", domain.ErrForbidden)
+	}
+	if viewerID == "" {
+		return nil, fmt.Errorf("knowledge: preview viewer identity missing: %w", domain.ErrForbidden)
+	}
+	ws, err := rs.wsRepo.GetByName(ctx, tenantID, workspaceName)
+	if err != nil {
+		return nil, fmt.Errorf("knowledge: resolve preview workspace: %w", err)
+	}
+	if ws == nil {
+		return nil, domain.ErrDocumentNotFound
+	}
+	return ws, nil
+}
+
+// attachParent best-effort appends a leaf segment's parent content. A parent
+// fetch failure degrades to leaf-only content: the leaf is the authoritative
+// citation text, the parent is enrichment.
+func attachParent(ctx context.Context, rs *RAGService, tenantID, workspaceID string, ch domain.Chunk, seg *ChunkSegment) {
+	if ch.ParentID == "" {
+		return
+	}
+	if parent, perr := rs.chunkRepo.GetParentByID(ctx, tenantID, workspaceID, ch.ParentID); perr == nil && parent != nil {
+		seg.ParentContent = parent.Content
+	}
+}
+
+// buildDocFilterExpr renders a doc-ID whitelist as a Milvus filter expression
+// (`source_document in [...]`). Empty docIDs → "" (no filter). IDs are quoted
+// with %q exactly like pkg/storage/milvus DeleteByDocumentIDs: " and \ are
+// escaped, so arbitrary IDs cannot break out of the expression.
+func buildDocFilterExpr(docIDs []string) string {
+	if len(docIDs) == 0 {
+		return ""
+	}
+	quoted := make([]string, len(docIDs))
+	for i, id := range docIDs {
+		quoted[i] = fmt.Sprintf("%q", id)
+	}
+	return fmt.Sprintf("source_document in [%s]", strings.Join(quoted, ","))
+}
+
+// filterExprTooLong reports whether a whitelist expression exceeds the Milvus
+// expression length bound (D7). Over-long filters fail or, worse, get
+// truncated into an incorrect filter — so the caller degrades instead.
+func filterExprTooLong(expr string) bool {
+	return len(expr) > constants.MaxMilvusFilterLen
 }
 
 // widensRecall reports whether the selected rerank identity is an external
@@ -378,9 +665,16 @@ func vectorToPool(results []knowledgeport.VectorSearchResult) []Source {
 }
 
 // hybridPool runs both retrieval legs concurrently and fuses them with
-// reciprocal rank fusion. A missing collection with no documents falls
-// through to the keyword leg alone; other vector failures fail closed.
-func (rs *RAGService) hybridPool(ctx context.Context, req RAGQueryRequest, collectionName string, embedder knowledgeport.Embedder, legTopK int) ([]knowledgeport.VectorSearchResult, []Source, error) {
+// reciprocal rank fusion. The vector leg mirrors the vector branch's legacy
+// fallback: a missing new name falls back to the legacy collection (upgraded
+// workspaces that were not re-ingested are an expected state), and a legacy
+// dimension mismatch skips that leg with an empty result instead of failing
+// closed — the keyword leg still contributes. A missing collection with no
+// documents falls through to the keyword leg alone; other vector failures
+// fail closed. filterExpr/docIDs carry the viewer whitelist to both legs
+// (docIDs nil when unrestricted); an over-long expression degrades the vector
+// leg to empty results while the keyword leg keeps filtering (D7).
+func (rs *RAGService) hybridPool(ctx context.Context, req RAGQueryRequest, collectionName string, embedder knowledgeport.Embedder, legTopK int, filterExpr string, docIDs []string) ([]knowledgeport.VectorSearchResult, []Source, error) {
 	type vRes struct {
 		r []knowledgeport.VectorSearchResult
 		e error
@@ -389,10 +683,19 @@ func (rs *RAGService) hybridPool(ctx context.Context, req RAGQueryRequest, colle
 		r []domain.Chunk
 		e error
 	}
+	legacyName := constants.CollectionLegacyName(req.TenantID, req.WorkspaceID)
+	searchName, legacy := rs.resolveSearchCollection(ctx, collectionName, legacyName, req.WorkspaceID)
 	vCh := make(chan vRes, 1)
 	kCh := make(chan kRes, 1)
 	go func() {
-		r, e := rs.queryVector(ctx, req.Question, collectionName, legTopK, embedder, req.EmbeddingModel)
+		if docIDs != nil && filterExprTooLong(filterExpr) {
+			rs.logger.Warn("knowledge.rag.filter_degraded",
+				zap.Int("visible_docs", len(docIDs)),
+				zap.Int("filter_len", len(filterExpr)))
+			vCh <- vRes{}
+			return
+		}
+		r, e := rs.queryVector(ctx, req.Question, searchName, legTopK, embedder, req.EmbeddingModel, legacy, filterExpr)
 		vCh <- vRes{r, e}
 	}()
 	go func() {
@@ -400,14 +703,14 @@ func (rs *RAGService) hybridPool(ctx context.Context, req RAGQueryRequest, colle
 			kCh <- kRes{e: fmt.Errorf("keyword search requires workspace ID")}
 			return
 		}
-		r, e := rs.chunkRepo.KeywordSearch(ctx, req.TenantID, req.WorkspaceID, req.Question, legTopK)
+		r, e := rs.chunkRepo.KeywordSearch(ctx, req.TenantID, req.WorkspaceID, req.Question, docIDs, legTopK)
 		kCh <- kRes{r, e}
 	}()
 	vr := <-vCh
 	kr := <-kCh
 	if vr.e != nil {
 		if errors.Is(vr.e, errCollectionNotFound) {
-			if missingErr := rs.handleMissingCollection(ctx, req); missingErr != nil {
+			if missingErr := rs.handleMissingCollection(ctx, req, searchName); missingErr != nil {
 				return nil, nil, missingErr
 			}
 			// Empty workspace: fall through to the keyword leg alone.
@@ -511,10 +814,32 @@ func (rs *RAGService) attachParentContent(ctx context.Context, req RAGQueryReque
 	}
 }
 
+// resolveSearchCollection decides the collection to search: the model-suffixed
+// name normally, or the legacy (no-suffix) name when the new collection is
+// missing. Legacy fallback runs before drift classification: a workspace that
+// was upgraded but not re-ingested legitimately lacks the new collection, so
+// the old data is searched first; only when both names are missing does
+// handleMissingCollection classify the state.
+func (rs *RAGService) resolveSearchCollection(ctx context.Context, collectionName, legacyName, workspaceID string) (searchName string, legacy bool) {
+	searchName = collectionName
+	if _, err := rs.vectorStore.DescribeCollection(ctx, collectionName); isCollectionNotFound(err) {
+		searchName = legacyName
+		legacy = true
+		rs.logger.Info("knowledge.retrieval.legacy_collection_fallback",
+			zap.String("collection", legacyName), zap.String("workspace_id", workspaceID))
+	}
+	return searchName, legacy
+}
+
 // queryVector embeds the question and searches the workspace collection.
 // embedModel ("" when unknown) drives the collection dimension check; a
 // missing collection yields errCollectionNotFound for the caller to classify.
-func (rs *RAGService) queryVector(ctx context.Context, question string, collection string, topK int, embedder knowledgeport.Embedder, embedModel string) ([]knowledgeport.VectorSearchResult, error) {
+// legacy marks the fallback search on the pre-upgrade (no model suffix)
+// collection: a dimension mismatch on it skips retrieval with an empty result
+// instead of failing closed, per the spec's legacy-drift contract. expression
+// ("" when unrestricted) restricts results to the viewer's visible document
+// set.
+func (rs *RAGService) queryVector(ctx context.Context, question string, collection string, topK int, embedder knowledgeport.Embedder, embedModel string, legacy bool, expression string) ([]knowledgeport.VectorSearchResult, error) {
 	rs.logger.Debug("querying vector store")
 
 	if embedder == nil {
@@ -528,11 +853,16 @@ func (rs *RAGService) queryVector(ctx context.Context, question string, collecti
 
 	if embedModel != "" {
 		if err := rs.validateCollectionDim(ctx, collection, embedModel); err != nil {
+			if legacy && errors.Is(err, errLegacyDimMismatch) {
+				// legacy 集合维数与当前模型不符：Warn 已在 validateCollectionDim
+				// 记录，跳过该集合返回空（spec：legacy dim 不一致不 fail-closed）。
+				return []knowledgeport.VectorSearchResult{}, nil
+			}
 			return nil, err
 		}
 	}
 
-	results, err := rs.vectorStore.Search(ctx, collection, queryVector, topK)
+	results, err := rs.vectorStore.SearchWithFilter(ctx, collection, queryVector, topK, expression)
 	if err != nil {
 		if isCollectionNotFound(err) {
 			return nil, errCollectionNotFound
@@ -558,11 +888,11 @@ func (rs *RAGService) validateCollectionDim(ctx context.Context, collection, emb
 			zap.String("operation", "describe_collection"), zap.Error(err))
 		return ErrRAGDependency
 	}
-	if info.Dim != 0 && info.Dim != vectorDim(embedModel) {
-		rs.logger.Error("knowledge.retrieval.schema_mismatch",
+	if info.Dim != 0 && info.Dim != constants.DimensionForModel(embedModel) {
+		rs.logger.Warn("knowledge.retrieval.legacy_dim_mismatch",
 			zap.String("collection", collection), zap.Int("existing_dim", info.Dim),
-			zap.Int("required_dim", vectorDim(embedModel)))
-		return ErrRAGDependency
+			zap.Int("required_dim", constants.DimensionForModel(embedModel)))
+		return errLegacyDimMismatch // 调用方对 legacy 名跳过、新名转 ErrRAGDependency
 	}
 	if !info.HasUserID {
 		rs.logger.Warn("collection lacks user_id column, skipping user scope check",
@@ -573,8 +903,10 @@ func (rs *RAGService) validateCollectionDim(ctx context.Context, collection, emb
 
 // handleMissingCollection classifies a missing vector collection: 0 chunks in
 // PG means a legitimately empty workspace (empty result), any chunks means
-// drift between PG and Milvus and fails closed.
-func (rs *RAGService) handleMissingCollection(ctx context.Context, req RAGQueryRequest) error {
+// drift between PG and Milvus and fails closed. collectionName is the name the
+// caller actually searched (the legacy name after a fallback), so logs and
+// metrics attribute the failure to the real collection.
+func (rs *RAGService) handleMissingCollection(ctx context.Context, req RAGQueryRequest, collectionName string) error {
 	if rs.chunkRepo == nil {
 		return ErrRAGDependency
 	}
@@ -586,11 +918,11 @@ func (rs *RAGService) handleMissingCollection(ctx context.Context, req RAGQueryR
 	}
 	if count > 0 {
 		rs.logger.Error("knowledge.retrieval.drift",
-			zap.Int64("chunk_count", count), zap.String("collection", constants.CollectionName(req.TenantID, req.WorkspaceID)))
+			zap.Int64("chunk_count", count), zap.String("collection", collectionName))
 		return ErrRAGDependency
 	}
 	rs.logger.Warn("vector collection not found; workspace has no chunks",
-		zap.String("collection", constants.CollectionName(req.TenantID, req.WorkspaceID)))
+		zap.String("collection", collectionName))
 	return nil
 }
 
@@ -687,13 +1019,19 @@ func l2ToSim(d float32) float32 {
 	return 1.0 / (1.0 + d)
 }
 
-func (rs *RAGService) RetrieveRelevantChunks(ctx context.Context, tenantID, question, workspace string, topK int) ([]string, error) {
+func (rs *RAGService) RetrieveRelevantChunks(ctx context.Context, tenantID, question, workspace, embedModel string, topK int, viewerID string) ([]string, error) {
+	// D12 gate: this path (tool/test caller) resolves no visible set itself,
+	// so the identity check is the whole access control — an empty viewer
+	// identity fails closed instead of returning unfiltered chunks.
+	if viewerID == "" {
+		return nil, fmt.Errorf("knowledge: retrieval viewer identity required")
+	}
 	if tenantID == "" {
 		return nil, fmt.Errorf("knowledge: tenant_id is empty")
 	}
-	collectionName := constants.CollectionName(tenantID, workspace)
+	collectionName := constants.CollectionName(tenantID, workspace, embedModel)
 
-	vectorResults, err := rs.queryVector(ctx, question, collectionName, topK, rs.embeddingSvc, "")
+	vectorResults, err := rs.queryVector(ctx, question, collectionName, topK, rs.embeddingSvc, embedModel, false, "")
 	if err != nil {
 		if isCollectionNotFound(err) {
 			return []string{}, nil
@@ -729,12 +1067,17 @@ func (rs *RAGService) BuildPrompt(question string, chunks []string) string {
 }
 
 // RAGSearchSource is chunk-level retrieval provenance: which workspace the
-// chunk came from and (for vector retrieval) its similarity score. Keyword
-// mode produces no score (HasScore=false).
+// chunk came from, its owning document (for citation display), and (for
+// vector retrieval) its similarity score. Keyword mode produces no score
+// (HasScore=false). DocumentTitle/Snippet are display metadata only — the
+// visible-set filter already ran inside Query before any source is emitted.
 type RAGSearchSource struct {
 	WorkspaceID   string
 	WorkspaceName string
 	ChunkID       string
+	DocumentID    string
+	DocumentTitle string // source file name of the owning document
+	Snippet       string // rune-truncated chunk content preview
 	Score         float64
 	HasScore      bool
 }
@@ -757,7 +1100,8 @@ type wsEvidenceResult struct {
 // NewRAGSearchEvidenceFn mirrors NewRAGSearchFn (same fan-out, concurrency
 // bound and at-least-one semantics) but retains per-chunk provenance so
 // callers can record retrieval evidence without re-querying.
-func NewRAGSearchEvidenceFn(rs *RAGService, tenantID string) func(
+// viewerID is the end user whose document whitelist scopes every search.
+func NewRAGSearchEvidenceFn(rs *RAGService, tenantID, viewerID string) func(
 	ctx context.Context, workspaces []string, query string, topK int,
 ) (RAGSearchEvidence, error) {
 	return func(ctx context.Context, workspaces []string, query string, topK int) (RAGSearchEvidence, error) {
@@ -770,7 +1114,7 @@ func NewRAGSearchEvidenceFn(rs *RAGService, tenantID string) func(
 			go func(i int, ws string) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				results[i] = searchWorkspaceWithEvidence(ctx, rs, tenantID, ws, query, topK)
+				results[i] = searchWorkspaceWithEvidence(ctx, rs, tenantID, viewerID, ws, query, topK)
 			}(i, ws)
 		}
 		wg.Wait()
@@ -778,7 +1122,7 @@ func NewRAGSearchEvidenceFn(rs *RAGService, tenantID string) func(
 	}
 }
 
-func searchWorkspaceWithEvidence(ctx context.Context, rs *RAGService, tenantID, ws, query string, topK int) wsEvidenceResult {
+func searchWorkspaceWithEvidence(ctx context.Context, rs *RAGService, tenantID, viewerID, ws, query string, topK int) wsEvidenceResult {
 	mode, effectiveTopK, embedModel, workspaceID, err := resolveWorkspaceConfig(ctx, rs, tenantID, ws, topK)
 	if err != nil {
 		return wsEvidenceResult{err: err}
@@ -791,21 +1135,65 @@ func searchWorkspaceWithEvidence(ctx context.Context, rs *RAGService, tenantID, 
 		Mode:           mode,
 		TopK:           effectiveTopK,
 		EmbeddingModel: embedModel,
+		ViewerID:       viewerID,
+		// System-actor contexts (privileged wiring paths) carry admin-owner
+		// trust and bypass the D2 gate.
+		SkipAccessCheck: reqctx.SystemActorFromContext(ctx) != "",
 	})
 	if err != nil {
 		return wsEvidenceResult{err: err}
 	}
+	titles := rs.documentTitles(ctx, tenantID, workspaceID)
 	sources := make([]RAGSearchSource, 0, len(out.Sources))
 	for _, src := range out.Sources {
 		sources = append(sources, RAGSearchSource{
 			WorkspaceID:   workspaceID,
 			WorkspaceName: ws,
 			ChunkID:       src.ChunkID,
+			DocumentID:    src.DocumentID,
+			DocumentTitle: titles[src.DocumentID],
+			Snippet:       truncateRunes(src.Content, constants.MaxSourceSnippetRunes),
 			Score:         float64(src.Score),
 			HasScore:      src.Score != 0,
 		})
 	}
 	return wsEvidenceResult{content: formatSources(out.Sources), sources: sources}
+}
+
+// documentTitles maps doc ID to its source file name for citation display.
+// Best-effort: a repo failure yields an empty map (WARN) so retrieval still
+// succeeds — titles are display metadata, and the visible-set filter already
+// ran inside Query before any source was emitted.
+func (rs *RAGService) documentTitles(ctx context.Context, tenantID, workspaceID string) map[string]string {
+	titles := make(map[string]string)
+	if rs.docRepo == nil {
+		return titles
+	}
+	docs, err := rs.docRepo.List(ctx, tenantID, workspaceID)
+	if err != nil {
+		rs.logger.Warn("citation titles unavailable",
+			zap.String("tenant_id", tenantID), zap.String("workspace_id", workspaceID), zap.Error(err))
+		return titles
+	}
+	for _, doc := range docs {
+		if doc != nil {
+			titles[doc.ID] = doc.Source
+		}
+	}
+	return titles
+}
+
+// truncateRunes cuts s to at most n runes, preserving rune boundaries so a
+// multi-byte character is never split in the middle.
+func truncateRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n])
 }
 
 // mergeEvidenceResults keeps the same at-least-one semantics as mergeResults:

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -277,5 +278,75 @@ func TestCompactLoopMessages_TruncatesSystemBeforeCurrentRequest(t *testing.T) {
 	}
 	if !foundCurrent {
 		t.Fatalf("current request was truncated before system prompt: %+v", out)
+	}
+}
+
+// TestCompactLoop_CooldownSuppressesRepeat 覆盖 Spec 第 4 节压缩冷却：首次超限
+// 触发同步摘要并回写 LastCompactionAt；冷却窗口内再次超限只走截断兜底，
+// 不得重复调用 LLM compactor（一次执行压缩最多一次）。
+func TestCompactLoop_CooldownSuppressesRepeat(t *testing.T) {
+	in := bigHistory(15)
+	fc := &fakeCompactor{summary: "SUMMARY"}
+	state := ReActState{
+		CompactionCooldownSec: int(constants.DefaultCompactionCooldown.Seconds()),
+	}
+	budget := Budget{HistoryCap: 800}
+	ctx := context.Background()
+
+	out1 := compactLoopMessagesWithPolicy(ctx, in, budget, 0, 3, 1, 1.0, constants.LoopCompactionSafetyRatio, fc, &state)
+	if fc.callCount != 1 {
+		t.Fatalf("first over-budget step must compact; compactor called %d times, want 1", fc.callCount)
+	}
+	if state.LastCompactionAt.IsZero() {
+		t.Fatal("actual compaction must stamp LastCompactionAt")
+	}
+	assertNoOrphans(t, out1)
+
+	// 冷却窗口内再次超限：不得再次调用 LLM compactor，走截断兜底。
+	out2 := compactLoopMessagesWithPolicy(ctx, bigHistory(15), budget, 0, 3, 1, 1.0, constants.LoopCompactionSafetyRatio, fc, &state)
+	if fc.callCount != 1 {
+		t.Fatalf("cooldown must suppress repeat compaction; compactor called %d times, want 1", fc.callCount)
+	}
+	assertNoOrphans(t, out2)
+	if len(out2) >= len(bigHistory(15)) {
+		t.Fatalf("cooldown path must still bound messages (truncation fallback), got %d", len(out2))
+	}
+}
+
+// TestCompactLoop_CooldownExpiredAllowsAgain 覆盖冷却窗口过期后的重新触发：
+// 距上次压缩超过窗口后，超限步骤允许再次调用 LLM compactor。
+func TestCompactLoop_CooldownExpiredAllowsAgain(t *testing.T) {
+	fc := &fakeCompactor{summary: "SUMMARY"}
+	state := ReActState{
+		CompactionCooldownSec: int(constants.DefaultCompactionCooldown.Seconds()),
+	}
+	budget := Budget{HistoryCap: 800}
+	ctx := context.Background()
+
+	compactLoopMessagesWithPolicy(ctx, bigHistory(15), budget, 0, 3, 1, 1.0, constants.LoopCompactionSafetyRatio, fc, &state)
+	if fc.callCount != 1 {
+		t.Fatalf("first compaction must trigger; compactor called %d times, want 1", fc.callCount)
+	}
+
+	// 冷却窗口已过期：再次超限允许重新触发同步摘要。
+	state.LastCompactionAt = time.Now().Add(-constants.DefaultCompactionCooldown - time.Second)
+	compactLoopMessagesWithPolicy(ctx, bigHistory(15), budget, 0, 3, 1, 1.0, constants.LoopCompactionSafetyRatio, fc, &state)
+	if fc.callCount != 2 {
+		t.Fatalf("expired cooldown must allow compaction; compactor called %d times, want 2", fc.callCount)
+	}
+}
+
+// TestCompactLoop_CooldownZeroDisabled 固定 0 = 冷却禁用的契约：与旧行为一致，
+// 每次超限都调用 compactor（截断/摘要路径不受冷却约束）。
+func TestCompactLoop_CooldownZeroDisabled(t *testing.T) {
+	fc := &fakeCompactor{summary: "SUMMARY"}
+	state := ReActState{}
+	budget := Budget{HistoryCap: 800}
+	ctx := context.Background()
+
+	compactLoopMessagesWithPolicy(ctx, bigHistory(15), budget, 0, 3, 1, 1.0, constants.LoopCompactionSafetyRatio, fc, &state)
+	compactLoopMessagesWithPolicy(ctx, bigHistory(15), budget, 0, 3, 1, 1.0, constants.LoopCompactionSafetyRatio, fc, &state)
+	if fc.callCount != 2 {
+		t.Fatalf("zero cooldown must keep legacy behavior; compactor called %d times, want 2", fc.callCount)
 	}
 }
