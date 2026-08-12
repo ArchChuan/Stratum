@@ -235,6 +235,30 @@ func TestAgentEvaluationAdapterParsesModelParameters(t *testing.T) {
 			t.Fatalf("auto values not written back: %#v", parsed.ModelParameters)
 		}
 	})
+	t.Run("accepts valid reasoning_effort and writes it back", func(t *testing.T) {
+		parsed, err := parseAgentCandidatePatch(baseline, evaldomain.CandidatePatch{
+			ParameterPatch: map[string]any{"reasoning_effort": "high"},
+		})
+		if err != nil {
+			t.Fatalf("expected valid reasoning_effort to be accepted: %v", err)
+		}
+		if parsed.ModelParameters == nil || parsed.ModelParameters.ReasoningEffort != "high" {
+			t.Fatalf("reasoning_effort not written back: %#v", parsed.ModelParameters)
+		}
+	})
+	t.Run("rejects invalid reasoning_effort and non-string values", func(t *testing.T) {
+		for _, patch := range []map[string]any{
+			{"reasoning_effort": "deep"}, // outside low/medium/high
+			{"reasoning_effort": 1},      // non-string must fail closed
+		} {
+			_, err := parseAgentCandidatePatch(baseline, evaldomain.CandidatePatch{
+				ParameterPatch: patch,
+			})
+			if err == nil {
+				t.Fatalf("expected patch %v to be rejected", patch)
+			}
+		}
+	})
 }
 
 func TestAgentEvaluationAdapterSummariesPassRealRevisionValidation(t *testing.T) {

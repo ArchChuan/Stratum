@@ -137,6 +137,14 @@ func (r *ParametersRegistry) registerAgentParams() {
 			EvaluationKeys: []string{"temperature"},
 		},
 		{
+			Key: "agent.reasoning_effort", Scope: ScopeResource, Category: "agent",
+			DisplayName: "思考强度", Description: "推理深度档位:low/medium/high,空表示不设置(平台默认)",
+			ValueType: TypeString, Default: "",
+			VisualHint:     VisualHint{Control: ControlSelect, Options: []any{"low", "medium", "high"}},
+			Optimizable:    true,
+			EvaluationKeys: []string{"reasoning_effort"},
+		},
+		{
 			Key: "agent.max_tokens", Scope: ScopeResource, Category: "agent",
 			DisplayName: "最大输出 Token 数", Description: "单次 LLM 输出上限,0 表示不限制",
 			ValueType: TypeInt, Default: int64(0),

@@ -13,9 +13,10 @@ import (
 )
 
 type resolvedEntry struct {
-	config   ProviderConfig
-	provider domain.Provider
-	expires  time.Time
+	config       ProviderConfig
+	provider     domain.Provider
+	capabilities []domain.ModelCapability
+	expires      time.Time
 }
 
 // ModelRegistry wraps a ModelRepository and ProviderRepository with an
@@ -122,7 +123,7 @@ func (r *ModelRegistry) resolveModelFromDB(
 				HealthModel: provider.DefaultModel,
 				Models:      []string{m.Name},
 			}
-			r.cacheSet(tenantID, cacheKey, cfg, *provider)
+			r.cacheSet(tenantID, cacheKey, cfg, *provider, m.Capabilities)
 			return cfg, *provider, nil
 		}
 	}
@@ -166,7 +167,7 @@ func (r *ModelRegistry) ResolveFallbackCandidates(ctx context.Context, tenantID,
 		}
 		// 复用 TTL 缓存语义：WarmTenant/Resolve 已缓存的 entry 保持有效，
 		// 这里与缓存数据同源（同 modelRepo/providerRepo），直接写回。
-		r.cacheSet(tenantID, "chat:"+c.model.Name, cfg, c.provider)
+		r.cacheSet(tenantID, "chat:"+c.model.Name, cfg, c.provider, c.model.Capabilities)
 		proto, ok := r.chatProtos[c.provider.Kind]
 		if !ok {
 			continue
@@ -336,9 +337,9 @@ func (r *ModelRegistry) WarmTenant(ctx context.Context, tenantID string) error {
 			}
 			switch cap {
 			case domain.CapChat:
-				r.cacheSet(tenantID, "chat:"+m.Name, cfg, *provider)
+				r.cacheSet(tenantID, "chat:"+m.Name, cfg, *provider, m.Capabilities)
 			case domain.CapEmbedding:
-				r.cacheSet(tenantID, "embed:"+m.Name, cfg, *provider)
+				r.cacheSet(tenantID, "embed:"+m.Name, cfg, *provider, m.Capabilities)
 			}
 		}
 	}
@@ -398,15 +399,42 @@ func (r *ModelRegistry) cacheGet(tenantID, key string) *resolvedEntry {
 }
 
 // cacheSet stores an entry in the cache.
-func (r *ModelRegistry) cacheSet(tenantID, key string, cfg ProviderConfig, provider domain.Provider) {
+func (r *ModelRegistry) cacheSet(tenantID, key string, cfg ProviderConfig, provider domain.Provider, capabilities []domain.ModelCapability) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.cache[tenantID] == nil {
 		r.cache[tenantID] = make(map[string]*resolvedEntry)
 	}
 	r.cache[tenantID][key] = &resolvedEntry{
-		config:   cfg,
-		provider: provider,
-		expires:  time.Now().Add(r.cacheTTL),
+		config:       cfg,
+		provider:     provider,
+		capabilities: capabilities,
+		expires:      time.Now().Add(r.cacheTTL),
 	}
+}
+
+// ResolveReasoning 判断模型是否为推理模型。能力来源并集：DB models.capabilities
+// 含 CapReasoning → true；否则 catalog 已知推理模型（ModelSupportsReasoning）
+// → true；否则 false。unknown 返回 false，fail-closed：网关据此清空
+// reasoning_effort，禁止对非推理/未知模型盲透传（严格端点 400 是永久错误，
+// 会中止整条 fallback 链）。
+func (r *ModelRegistry) ResolveReasoning(ctx context.Context, tenantID, modelName string) bool {
+	enabled := true
+	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled})
+	if err != nil {
+		return false
+	}
+	for _, m := range models {
+		if m.Name != modelName {
+			continue
+		}
+		for _, cap := range m.Capabilities {
+			if cap == domain.CapReasoning {
+				return true
+			}
+		}
+		// DB 无 CapReasoning 标记：回退 catalog 已知推理模型（并集兜底）。
+		return ModelSupportsReasoning(modelName)
+	}
+	return false
 }
