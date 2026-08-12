@@ -3,6 +3,7 @@ import { Routes, useLocation } from 'react-router-dom';
 import { AppShell } from './layout/AppShell';
 
 import { agentRoutes } from '@/modules/agent';
+import { approvalsRoutes } from '@/modules/approvals';
 import { auditRoutes } from '@/modules/audit';
 import { collabRoutes } from '@/modules/collab';
 import { dashboardRoutes } from '@/modules/dashboard';
@@ -48,6 +49,7 @@ export const AppRouter = () => {
         {operationGateRoutes}
         {parametersRoutes}
         {promptRoutes}
+        {approvalsRoutes}
         {auditRoutes}
         {memoryRoutes}
         {mechanismRoutes}

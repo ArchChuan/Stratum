@@ -271,8 +271,9 @@ export interface ToolApproval {
 	toolName: string;
 	serverId: string;
 	riskLevel: string;
-	status: 'pending' | 'approved' | 'rejected' | 'expired' | 'unknown_outcome' | 'authorization_denied' | string;
+	status: 'pending' | 'approved' | 'rejected' | 'expired' | 'unknown_outcome' | 'authorization_denied' | 'cancelled' | 'voided' | 'invalidated' | string;
 	expiresAt?: string;
+	invalidationReason?: string;
 }
 
 export interface ToolApprovalResumeResult {

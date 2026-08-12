@@ -191,6 +191,62 @@ describe('AgentChatPage mobile layout', () => {
 		expect(screen.queryByRole('button', { name: '批准并继续' })).not.toBeInTheDocument();
 	});
 
+	it.each(['cancelled', 'voided', 'invalidated'])(
+		'renders %s as invalidated without approve controls',
+		(status) => {
+			mocks.pendingApprovals = [{
+				approvalId: `approval-${status}`, agentId: 'agent-1', toolName: 'delete',
+				serverId: 'orders', riskLevel: 'destructive', status,
+			}];
+			render(<AgentChatPage />);
+			expect(screen.getByText('工具审批已失效')).toBeInTheDocument();
+			expect(screen.queryByRole('button', { name: '批准并继续' })).not.toBeInTheDocument();
+		},
+	);
+
+	it('shows the mapped reason for conversation-delete invalidation', () => {
+		mocks.pendingApprovals = [{
+			approvalId: 'approval-voided', agentId: 'agent-1', toolName: 'delete',
+			serverId: 'orders', riskLevel: 'destructive', status: 'voided',
+			invalidationReason: 'conversation_deleted',
+		}];
+		render(<AgentChatPage />);
+		expect(screen.getByText('工具审批已失效：会话已删除')).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: '批准并继续' })).not.toBeInTheDocument();
+	});
+
+	it('renders authorization_denied as a terminal blocked state', () => {
+		mocks.pendingApprovals = [{
+			approvalId: 'approval-blocked', agentId: 'agent-1', toolName: 'delete',
+			serverId: 'orders', riskLevel: 'destructive', status: 'authorization_denied',
+		}];
+		render(<AgentChatPage />);
+		expect(screen.getByText('权限已变更，工具执行已阻止')).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: '批准并继续' })).not.toBeInTheDocument();
+	});
+
+	it('renders an expired status as terminal without approve controls', () => {
+		mocks.pendingApprovals = [{
+			approvalId: 'approval-expired', agentId: 'agent-1', toolName: 'delete',
+			serverId: 'orders', riskLevel: 'destructive', status: 'expired',
+		}];
+		render(<AgentChatPage />);
+		expect(screen.getByText('工具审批已过期')).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: '批准并继续' })).not.toBeInTheDocument();
+	});
+
+	it('prefers status-based invalidation over clock expiry', () => {
+		// cancelled 的审批即使 expiresAt 已过，也应显示"已失效"而非"已过期"。
+		mocks.pendingApprovals = [{
+			approvalId: 'approval-invalidated', agentId: 'agent-1', toolName: 'delete',
+			serverId: 'orders', riskLevel: 'destructive', status: 'cancelled',
+			expiresAt: '2020-01-01T00:00:00Z', invalidationReason: 'conversation_deleted',
+		}];
+		render(<AgentChatPage />);
+		expect(screen.getByText('工具审批已失效：会话已删除')).toBeInTheDocument();
+		expect(screen.queryByText('工具审批已过期')).not.toBeInTheDocument();
+	});
+
   it('does not expose platform assistant model settings in chat', () => {
     mocks.agents = [{
       id: 'system', name: '平台使用小助手', description: '系统助手', llmModel: 'glm-5.2', isSystem: true,
