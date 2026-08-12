@@ -1,6 +1,5 @@
 import { render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 
 import { buildMenuItems, resolveOpenKeys } from '../menu.config';
@@ -15,6 +14,10 @@ const collectLabels = (items: ReturnType<typeof buildMenuItems>): ReactNode[] =>
     return [...current, ...children];
   });
 
+/**
+ * label 是纯字符串(导航由 key + AppShell 的 onClick 承担,不再是 <Link>)。
+ * 测试断言菜单项文本与权限过滤;href 语义由 E2E 覆盖。
+ */
 describe('buildMenuItems', () => {
   it('hides tenant management routes from members', () => {
     const labels = collectLabels(buildMenuItems({
@@ -26,21 +29,17 @@ describe('buildMenuItems', () => {
           username: '',
           current_tenant: { id: 'tenant-1', name: 'Test', role: 'member' },
         }));
-    render(
-      <MemoryRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
-        {labels.map((label, index) => <div key={index}>{label}</div>)}
-      </MemoryRouter>,
-    );
+    render(<div>{labels.map((label, index) => <div key={index}>{label}</div>)}</div>);
 
-    expect(screen.getByRole('link', { name: 'Agent 管理' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '技能列表' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '服务器列表' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '工作流' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: '新建工作流' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: '创建 Agent' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: '创建技能' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: '添加服务器' })).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '评测与进化' })).toHaveAttribute('href', '/evaluations');
+    expect(screen.getByText('Agent 管理')).toBeInTheDocument();
+    expect(screen.getByText('技能列表')).toBeInTheDocument();
+    expect(screen.getByText('服务器列表')).toBeInTheDocument();
+    expect(screen.getByText('工作流')).toBeInTheDocument();
+    expect(screen.queryByText('新建工作流')).not.toBeInTheDocument();
+    expect(screen.queryByText('创建 Agent')).not.toBeInTheDocument();
+    expect(screen.queryByText('创建技能')).not.toBeInTheDocument();
+    expect(screen.queryByText('添加服务器')).not.toBeInTheDocument();
+    expect(screen.getByText('评测与进化')).toBeInTheDocument();
   });
 
   it('opens the evaluation navigation group', () => {
@@ -52,9 +51,9 @@ describe('buildMenuItems', () => {
       sub: 'admin-1', tenant_id: 'tenant-1', role: 'admin', avatar_url: '', github_login: 'admin', username: '',
       current_tenant: { id: 'tenant-1', name: 'Test', role: 'admin' },
     }));
-    render(<MemoryRouter>{labels.map((label, index) => <div key={index}>{label}</div>)}</MemoryRouter>);
-    expect(screen.getByRole('link', { name: '工作流' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '新建工作流' })).toBeInTheDocument();
+    render(<div>{labels.map((label, index) => <div key={index}>{label}</div>)}</div>);
+    expect(screen.getByText('工作流')).toBeInTheDocument();
+    expect(screen.getByText('新建工作流')).toBeInTheDocument();
     expect(resolveOpenKeys('/workflows/new')).toEqual(['workflow-group']);
   });
 
@@ -63,9 +62,9 @@ describe('buildMenuItems', () => {
       sub: 'admin-1', tenant_id: 'tenant-1', role: 'admin', avatar_url: '', github_login: 'admin', username: '',
       current_tenant: { id: 'tenant-1', name: 'Test', role: 'admin' },
     }));
-    render(<MemoryRouter>{adminLabels.map((label, index) => <div key={index}>{label}</div>)}</MemoryRouter>);
-    expect(screen.getByRole('link', { name: '提示词管理' })).toHaveAttribute('href', '/prompts');
-    expect(screen.getByRole('link', { name: '审计日志' })).toHaveAttribute('href', '/audit');
+    render(<div>{adminLabels.map((label, index) => <div key={index}>{label}</div>)}</div>);
+    expect(screen.getByText('提示词管理')).toBeInTheDocument();
+    expect(screen.getByText('审计日志')).toBeInTheDocument();
     expect(resolveOpenKeys('/prompts')).toEqual(['tenant-admin-group']);
     expect(resolveOpenKeys('/audit')).toEqual(['tenant-admin-group']);
   });
@@ -75,9 +74,9 @@ describe('buildMenuItems', () => {
       sub: 'user-1', tenant_id: 'tenant-1', role: 'member', avatar_url: '', github_login: 'member', username: '',
       current_tenant: { id: 'tenant-1', name: 'Test', role: 'member' },
     }));
-    render(<MemoryRouter>{memberLabels.map((label, index) => <div key={index}>{label}</div>)}</MemoryRouter>);
-    expect(screen.queryByRole('link', { name: '提示词管理' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: '审计日志' })).not.toBeInTheDocument();
+    render(<div>{memberLabels.map((label, index) => <div key={index}>{label}</div>)}</div>);
+    expect(screen.queryByText('提示词管理')).not.toBeInTheDocument();
+    expect(screen.queryByText('审计日志')).not.toBeInTheDocument();
   });
 
   it('does not expose execution history in navigation', () => {
@@ -92,13 +91,9 @@ describe('buildMenuItems', () => {
     });
 
     const labels = collectLabels(items);
-    render(
-      <MemoryRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
-        {labels.map((label, index) => <div key={index}>{label}</div>)}
-      </MemoryRouter>,
-    );
+    render(<div>{labels.map((label, index) => <div key={index}>{label}</div>)}</div>);
 
-    expect(screen.queryByRole('link', { name: '执行历史' })).not.toBeInTheDocument();
+    expect(screen.queryByText('执行历史')).not.toBeInTheDocument();
     expect(items.some((item) => item && 'key' in item && item.key === '/history')).toBe(false);
     expect(resolveOpenKeys('/history')).toEqual([]);
     expect(resolveOpenKeys('/agents')).toEqual(['agent-group']);

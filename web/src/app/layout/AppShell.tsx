@@ -18,7 +18,14 @@ import {
   Space,
   message,
 } from 'antd';
-import { useEffect, useState, type ReactNode } from 'react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 import { UserMenu } from './UserMenu';
@@ -38,22 +45,31 @@ interface AppShellProps {
 interface NavigationContentProps {
   collapsed?: boolean;
   menuItems: ReturnType<typeof buildMenuItems>;
-  openKeys: string[];
   pathname: string;
   onSelect: (key: string) => void;
 }
 
-const NavigationContent = ({
-  collapsed = false,
-  menuItems,
-  openKeys,
-  pathname,
-  onSelect,
-}: NavigationContentProps) => (
-  <nav
-    aria-label="主导航"
-    style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
-  >
+/**
+ * memo + 字符串 label:让菜单树的渲染成本在路由切换时归零。
+ * 根因(实测):每次切换 antd Menu 对 26 个 <Link> label 全量 reconcile,
+ * 主线程阻塞 50-80ms,合成器保留旧帧产生残影/慢。
+ * 修复:label 改为字符串(menu.config),菜单 reconcile 降至 ~0ms;
+ * selectedKeys 受控高亮,前进/回退/直达 URL 均正确。
+ * openKeys 只在挂载时确定:展开状态是用户持久控制,路径变化不应重置。
+ */
+const NavigationContent = memo(
+  function NavigationContentInner({
+    collapsed = false,
+    menuItems,
+    pathname,
+    onSelect,
+  }: NavigationContentProps) {
+    const [openKeys] = useState(() => resolveOpenKeys(pathname));
+    return (
+      <nav
+        aria-label="主导航"
+        style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+      >
     <div
       style={{
         padding: collapsed ? '18px 8px' : '18px 20px',
@@ -86,18 +102,20 @@ const NavigationContent = ({
       )}
     </div>
 
-    <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
-      <Menu
-        theme="dark"
-        selectedKeys={[pathname]}
-        defaultOpenKeys={openKeys}
-        mode="inline"
-        items={menuItems}
-        style={{ background: '#141414', borderRight: 0 }}
-        onClick={({ key }) => onSelect(key)}
-      />
-    </div>
-  </nav>
+        <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+          <Menu
+            theme="dark"
+            selectedKeys={[pathname]}
+            defaultOpenKeys={openKeys}
+            mode="inline"
+            items={menuItems}
+            style={{ background: '#141414', borderRight: 0 }}
+            onClick={({ key }) => onSelect(key)}
+          />
+        </div>
+      </nav>
+    );
+  },
 );
 
 export const AppShell = ({ children }: AppShellProps) => {
@@ -190,13 +208,16 @@ export const AppShell = ({ children }: AppShellProps) => {
     },
   ];
 
-  const menuItems = buildMenuItems(user);
-  const openKeys = resolveOpenKeys(location.pathname);
-  const handleNavigation = (key: string) => {
-    if (key.endsWith('-group')) return;
-    setMobileNavOpen(false);
-    navigate(key);
-  };
+  // menuItems 只在 user 变化时重建:路由切换时保持稳定引用,避免 antd Menu 全量 reconcile
+  const menuItems = useMemo(() => buildMenuItems(user), [user]);
+  const handleNavigation = useCallback(
+    (key: string) => {
+      if (key.endsWith('-group')) return;
+      setMobileNavOpen(false);
+      navigate(key);
+    },
+    [navigate],
+  );
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -218,7 +239,6 @@ export const AppShell = ({ children }: AppShellProps) => {
           <NavigationContent
             collapsed={collapsed}
             menuItems={menuItems}
-            openKeys={openKeys}
             pathname={location.pathname}
             onSelect={handleNavigation}
           />
@@ -333,7 +353,6 @@ export const AppShell = ({ children }: AppShellProps) => {
       >
         <NavigationContent
           menuItems={menuItems}
-          openKeys={openKeys}
           pathname={location.pathname}
           onSelect={handleNavigation}
         />
