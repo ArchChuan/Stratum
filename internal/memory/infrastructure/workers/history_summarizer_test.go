@@ -3,6 +3,7 @@ package workers_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
@@ -55,4 +56,30 @@ func TestResolvingHistoryProcessorRecoversWithoutReusingOldClient(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, "recovered", summary)
 	require.Equal(t, 1, calls)
+}
+
+// TestHistoryProcessorUsesInjectedSummarizePromptOverFallback 验证机制基线
+// 周期总结指令注入优先、空值回退内置前缀（现状行为）。
+func TestHistoryProcessorUsesInjectedSummarizePromptOverFallback(t *testing.T) {
+	var got string
+	client := completionClientFunc(func(_ context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+		got = req.Messages[0].Content
+		return &memport.CompletionResponse{Content: "s"}, nil
+	})
+	processor := workers.NewLLMHistorySummarizer(client)
+
+	if _, err := processor.SummarizeHistory(context.Background(), []string{"item"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(got, "Summarize this bounded period") {
+		t.Fatalf("fallback prefix missing: %q", got)
+	}
+
+	processor.WithSummarizePrompt("压缩指令：")
+	if _, err := processor.SummarizeHistory(context.Background(), []string{"item"}); err != nil {
+		t.Fatal(err)
+	}
+	if got != "压缩指令：item" {
+		t.Fatalf("injected prompt not used: %q", got)
+	}
 }

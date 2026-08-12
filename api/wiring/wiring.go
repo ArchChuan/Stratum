@@ -47,6 +47,7 @@ type Container struct {
 	Collab               *Collab
 	Audit                *Audit
 	Prompt               *Prompt
+	Mechanism            *Mechanism
 	ReadinessCheck       func(context.Context) map[string]error
 	RevisionObjectStore  pkgobjectstore.Store
 	revisionObjectClient *minio.Client
@@ -75,6 +76,7 @@ func BuildContainer(ctx context.Context, cfg *config.Config, logger *zap.Logger)
 		{"storage", c.buildStorage},
 		{"audit", c.buildAudit},
 		{"prompt", c.buildPrompt},
+		{"mechanism", c.buildMechanism},
 		{"llmgateway", c.buildLLMGateway},
 		{"platform", c.buildPlatform},
 		{"parameters", c.buildParameters},
