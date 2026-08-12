@@ -8,7 +8,7 @@
 	docker-start \
 	k8s-deploy k8s-delete k8s-logs \
 	helm-install helm-upgrade helm-uninstall helm-diff helm-lint \
-	migration-guardrails e2e-attestation-check test-verify-plan test-verify-fast test-verify-before-pr test-verify-local test-verify-ci \
+	migration-guardrails migration-db-guardrails e2e-attestation-check test-verify-plan test-verify-fast test-verify-before-pr test-verify-local test-verify-ci \
 	test-verify-attestation test-verify-report full-regression ci-backend ci-frontend ci-docker \
 	cd-deploy-dev cd-deploy-staging cd-deploy-prod cd-validate ci-cd-full \
 	agent-instructions agent-instructions-check \
@@ -212,6 +212,13 @@ helm-uninstall:
 migration-guardrails:
 	bash scripts/quality/check-migration-boundaries-test.sh
 	bash scripts/quality/check-migration-boundaries.sh
+
+# ─── Migration DB 护栏：真实 PG 全量回滚验证（需 make infra-up 或本地 PG）──
+# 必须 target-specific export：顶层 ?= 不导出到 recipe env，go test 拿不到
+# 变量会静默全 skip 空转；全局 export 会泄漏进 be-test/test-verify-local。
+migration-db-guardrails: export STRATUM_TEST_POSTGRES_URL ?= postgres://stratum:stratum@localhost:5432/stratum?sslmode=disable
+migration-db-guardrails:
+	go test ./pkg/migration ./pkg/storage/postgres -count=1 -v $(GO_TEST_FLAGS)
 
 # ─── 架构护栏：验证守卫脚本逻辑 + 全量硬扫描 api/wiring 裸 SQL ─────────────
 # 历史 2 处违规（evaluation.go / agent.go）已下沉到 infrastructure repo，
