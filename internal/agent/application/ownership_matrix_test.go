@@ -68,7 +68,7 @@ func (f *ownershipAgentRepoFake) UpdateSystemAssistantModel(_ context.Context, _
 	f.recordAudit(audit)
 	return nil, nil
 }
-func (f *ownershipAgentRepoFake) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ bool, _ int, _ int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+func (f *ownershipAgentRepoFake) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	f.recordAudit(audit)
 	return nil, nil
 }
