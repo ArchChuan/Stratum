@@ -106,7 +106,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_model_profiles_family ON public.model_prof
 
 - 代码轨：embedded 种子 + 基准集 + 迁移（CI/CD 门禁）
 - 数据轨：model_profiles 运行态真相（评测闭环产出）
-- 部署处 seed 交汇：启动 provision 幂等写入（无 profile 的族自动建档，值为 embedded 种子）
+- seed 交汇为**懒加载语义**：消费路径未命中档案 → 种子兜底（不自动写库，
+  避免启动批量产生空壳档位）；档案由管理面显式建档（支持「基于种子初始化」）。
+  Service 内置进程内缓存（model → baseline），Upsert 后失效。
+- 多副本部署时缓存一致性由部署层保证（当前单节点 k3s）
 
 ## 7. 成功标准
 

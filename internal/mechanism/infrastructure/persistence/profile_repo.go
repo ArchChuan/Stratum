@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/byteBuilderX/stratum/internal/mechanism/domain"
 )
@@ -15,12 +16,7 @@ import (
 type pgxPool interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-	Exec(ctx context.Context, sql string, args ...any) (pgconnCommandTag, error)
-}
-
-// pgconnCommandTag 仅用于 RowsAffected 语义的窄接口。
-type pgconnCommandTag interface {
-	RowsAffected() int64
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
 // ProfileRepo 持久化 model_profiles（public schema，global 共享）。

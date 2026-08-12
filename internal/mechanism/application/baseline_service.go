@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/google/uuid"
 
@@ -15,13 +16,18 @@ import (
 )
 
 // Service 是机制基线（model_profiles）的应用门面：解析、管理、指纹。
+// 单节点部署下使用进程内缓存（model → baseline），Upsert 后失效；
+// 多副本部署时由部署层保证配置同步（当前单节点 k3s，见部署架构）。
 type Service struct {
 	repo port.ProfileRepo
+
+	mu    sync.RWMutex
+	cache map[string]domain.Baseline
 }
 
 // NewService 构造 Service。repo 不可为空（DB 缺失时由 wiring 决定不构造）。
 func NewService(repo port.ProfileRepo) *Service {
-	return &Service{repo: repo}
+	return &Service{repo: repo, cache: make(map[string]domain.Baseline)}
 }
 
 // ErrProfileNotFound 标记按族键查询缺失。
@@ -34,6 +40,25 @@ func (s *Service) GetEffective(ctx context.Context, model string) (domain.Baseli
 	if model == "" {
 		return domain.DefaultBaseline(), nil
 	}
+	s.mu.RLock()
+	if b, ok := s.cache[model]; ok {
+		s.mu.RUnlock()
+		return b, nil
+	}
+	s.mu.RUnlock()
+
+	b, err := s.resolve(ctx, model)
+	if err != nil {
+		return domain.Baseline{}, err
+	}
+	s.mu.Lock()
+	s.cache[model] = b
+	s.mu.Unlock()
+	return b, nil
+}
+
+// resolve 是未命中缓存时的真实解析：全量档案 + Go 侧族前缀匹配。
+func (s *Service) resolve(ctx context.Context, model string) (domain.Baseline, error) {
 	profiles, err := s.repo.List(ctx)
 	if err != nil {
 		return domain.Baseline{}, fmt.Errorf("mechanism service: list profiles: %w", err)
@@ -81,7 +106,14 @@ func (s *Service) UpsertProfile(ctx context.Context, p domain.Profile, updatedBy
 	}
 	p.Fingerprint = ComputeFingerprint(p)
 	p.CreatedBy = updatedBy
-	return s.repo.Upsert(ctx, p)
+	if err := s.repo.Upsert(ctx, p); err != nil {
+		return err
+	}
+	// 写入成功后失效缓存；清空比逐键删除简单且行数级成本可忽略。
+	s.mu.Lock()
+	s.cache = make(map[string]domain.Baseline)
+	s.mu.Unlock()
+	return nil
 }
 
 // GetByFamilyKey 按族键读取档案。

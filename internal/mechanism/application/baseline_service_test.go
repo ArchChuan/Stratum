@@ -31,6 +31,12 @@ func (f *fakeRepo) List(_ context.Context) ([]domain.Profile, error) {
 }
 
 func (f *fakeRepo) Upsert(_ context.Context, p domain.Profile) error {
+	for i, existing := range f.profiles {
+		if existing.FamilyKey == p.FamilyKey {
+			f.profiles[i] = p
+			return nil
+		}
+	}
 	f.profiles = append(f.profiles, p)
 	return nil
 }
@@ -128,6 +134,35 @@ func TestUpsertProfileAssignsFingerprintAndValidates(t *testing.T) {
 			t.Fatalf("expected ErrInvalidProfile, got %v", err)
 		}
 	})
+}
+
+func TestUpsertInvalidatesCache(t *testing.T) {
+	repo := &fakeRepo{profiles: []domain.Profile{
+		profile("qwen", "qwen", domain.ProfileStatusActive),
+	}}
+	svc := NewService(repo)
+
+	got, err := svc.GetEffective(context.Background(), "qwen-turbo")
+	if err != nil {
+		t.Fatalf("GetEffective: %v", err)
+	}
+	if got.Prompts.Compaction != "baseline-qwen" {
+		t.Fatalf("expected cached baseline, got %q", got.Prompts.Compaction)
+	}
+
+	// 更新档案后，缓存必须失效（下一次解析取新值）。
+	updated := profile("qwen", "qwen", domain.ProfileStatusActive)
+	updated.Baseline.Prompts.Compaction = "baseline-qwen-v2"
+	if err := svc.UpsertProfile(context.Background(), updated, "ops"); err != nil {
+		t.Fatalf("UpsertProfile: %v", err)
+	}
+	got, err = svc.GetEffective(context.Background(), "qwen-turbo")
+	if err != nil {
+		t.Fatalf("GetEffective: %v", err)
+	}
+	if got.Prompts.Compaction != "baseline-qwen-v2" {
+		t.Fatalf("expected invalidated cache to see new value, got %q", got.Prompts.Compaction)
+	}
 }
 
 func TestComputeFingerprintStableAndSensitive(t *testing.T) {
