@@ -85,6 +85,10 @@ func TestValidateIP(t *testing.T) {
 		{name: "nat64 loopback", addr: "64:ff9b::7f00:1", block: true},
 		{name: "nat64 private", addr: "64:ff9b::a00:1", block: true},
 		{name: "nat64 metadata", addr: "64:ff9b::a9fe:a9fe", block: true},
+		// NAT64 local-use prefix（RFC 6052 §3.2）同样内嵌 IPv4，覆盖私网/云元数据
+		{name: "nat64-local-use loopback", addr: "64:ff9b:1::7f00:1", block: true},
+		{name: "nat64-local-use private", addr: "64:ff9b:1::a00:1", block: true},
+		{name: "nat64-local-use metadata", addr: "64:ff9b:1::a9fe:a9fe", block: true},
 		// 公网放行
 		{name: "public ipv4", addr: "8.8.8.8", block: false},
 		{name: "public ipv6", addr: "2606:4700:4700::1111", block: false},

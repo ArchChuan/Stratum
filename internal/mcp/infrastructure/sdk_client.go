@@ -16,15 +16,34 @@ import (
 // error category is projected. Deployment may additionally set
 // MCPGODEBUG=noprotocolerrorbody=1 as belt-and-braces (not a code change).
 //
-// context.Canceled is passed through unchanged (not projected to
-// ErrTransportTimeout): it is the caller's own context, carries no
-// server-controlled text, and must not be treated as a transport fault (see
-// unhealthyError). The SDK's rejection family (429/502/503/504 etc.) wraps
-// its internal jsonrpc2.ErrRejected, which is not importable from outside the
-// module and not re-exported, so it cannot be distinguished here; it falls
-// into ErrTransportFailed. Callers may conservatively mark the client
-// unhealthy on that sentinel — the manager's MCPMinReconnectInterval gate
-// throttles rebuilds and a fresh session is harmless.
+// context.Canceled is passed through as the bare sentinel (not projected to
+// ErrTransportTimeout): it is the caller's own context and must not be treated
+// as a transport fault (see unhealthyError).
+//
+// The SDK distinguishes two failure families, and they are intentionally NOT
+// projected the same way:
+//
+//   - Transient HTTP statuses (429/502/503/504) and per-call JSON-RPC errors
+//     are wrapped in its internal jsonrpc2.ErrRejected, which explicitly does
+//     not break the connection (streamable.go: "Transient errors should not
+//     break the connection"). jsonrpc2 is an internal package, so ErrRejected
+//     cannot be imported here; everything in this family falls into
+//     ErrTransportFailed and must NOT mark the client unhealthy — killing a
+//     session the SDK deliberately kept alive on one application-level error
+//     would rebuild it every MCPMinReconnectInterval forever.
+//   - Real connection death (c.fail on a non-rejected error, session expiry)
+//     surfaces as ErrConnectionClosed / ErrSessionMissing, which are handled
+//     above.
+//
+// An oversized SSE frame (lineLimitedReader) is not distinguishable here: the
+// SDK swallows the stream-read sentinel and reports the generic "request
+// terminated without response" on the affected call (streamable.go handles
+// scanEvents termination that way). That generic text carries no error-chain
+// symbol, so it falls into ErrTransportFailed like everything else — which is
+// the correct outcome anyway: an oversized frame fails that single call
+// closed while the session stays usable for new streams, so it must not mark
+// the client unhealthy. A truly dead session still surfaces through
+// ErrSessionMissing / ErrConnectionClosed and the manager's 30s health check.
 func translateSDKError(err error) error {
 	switch {
 	case err == nil:
@@ -36,7 +55,7 @@ func translateSDKError(err error) error {
 	case errors.Is(err, context.DeadlineExceeded):
 		return ErrTransportTimeout
 	case errors.Is(err, context.Canceled):
-		return err
+		return context.Canceled
 	default:
 		return mcpdomain.ErrTransportFailed
 	}

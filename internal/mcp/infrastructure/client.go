@@ -28,18 +28,28 @@ var ErrClientClosed = errors.New("mcp client closed")
 
 // unhealthyError reports whether err means the session or transport is dead,
 // so the manager's single-flight reconnect should rebuild a fresh session.
-// context.Canceled is excluded on purpose: it is the caller's own context,
-// not a server-side failure, and must not trigger a reconnect. The SDK's
-// rejection family (429/502/503/504) is not distinguishable from the outside
-// (its ErrRejected lives in an internal package) and conservatively counts as
-// unhealthy; MCPMinReconnectInterval throttles the resulting rebuild, and a
-// fresh session on an overloaded server is harmless.
+//
+// ErrTransportFailed is deliberately NOT here: it is the projection of the
+// SDK's rejection family (transient 429/502/503/504 plus per-call JSON-RPC
+// errors), which the SDK explicitly keeps the connection alive for. Marking
+// unhealthy on one application-level tool error would tear down a session the
+// SDK deliberately preserved and rebuild it every MCPMinReconnectInterval
+// forever — and a successful call never restores the healthy flag, so the
+// rebuild loop would be permanent. Real connection death surfaces as
+// ErrSessionMissing / ErrClientClosed / ErrTransportTimeout instead, and the
+// manager's 30s health check catches any residual dead session.
+//
+// context.Canceled is excluded: it is the caller's own context, not a
+// server-side failure. An oversized SSE frame also does not reach here: the
+// SDK reports it as the generic "request terminated without response" (which
+// carries no distinguishable symbol), and it fails only that single call
+// closed while the session stays usable for new streams (verified in
+// TestInteropOversizedLineFailsSafely) — so no reconnect is warranted.
 func unhealthyError(err error) bool {
 	switch {
 	case errors.Is(err, mcpdomain.ErrSessionMissing),
 		errors.Is(err, ErrClientClosed),
-		errors.Is(err, ErrTransportTimeout),
-		errors.Is(err, mcpdomain.ErrTransportFailed):
+		errors.Is(err, ErrTransportTimeout):
 		return true
 	}
 	return false
@@ -232,7 +242,9 @@ func (c *BaseClient) Disconnect(ctx context.Context) error {
 		// Session close tears down the standalone SSE stream and any
 		// in-flight request channels.
 		if err := c.session.Close(); err != nil && result == nil {
-			result = err
+			// Close 错误同样是 SDK 原文（可能带 server-controlled 文本），
+			// 上抛前投影；Stop/RemoveTenant 会 zap.Error 记录这个错误。
+			result = translateSDKError(err)
 		}
 		c.session = nil
 		c.sdk = nil
@@ -399,11 +411,14 @@ func (c *BaseClient) HealthCheck(ctx context.Context) error {
 	err := session.Ping(ctx, &mcp.PingParams{})
 
 	c.mu.Lock()
-	if err != nil {
+	// Canceled 是调用方自己的 context，不是服务器故障：health probe 用短
+	// 超时时不得把健康的客户端标记为不健康。其余失败（含 ErrTransportFailed
+	// 投影的连接死亡）都标 unhealthy，触发 manager 的单飞重连。
+	if err != nil && !errors.Is(err, context.Canceled) {
 		c.healthy = false
 		c.logger.Warn("health check failed",
 			zap.String("error_category", "health_check_failed"))
-	} else {
+	} else if err == nil {
 		c.healthy = true
 		c.lastHealthy = time.Now()
 	}

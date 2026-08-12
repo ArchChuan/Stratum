@@ -54,14 +54,15 @@ var blockedIPv4Prefixes = []netip.Prefix{
 }
 
 var blockedIPv6Prefixes = []netip.Prefix{
-	netip.MustParsePrefix("::1/128"),       // loopback
-	netip.MustParsePrefix("64:ff9b::/96"),  // NAT64 well-known prefix（内嵌 IPv4，可编码 127.0.0.1/私网/云元数据）
-	netip.MustParsePrefix("fc00::/7"),      // unique-local
-	netip.MustParsePrefix("fe80::/10"),     // link-local
-	netip.MustParsePrefix("2001:db8::/32"), // documentation
-	netip.MustParsePrefix("2001::/32"),     // Teredo
-	netip.MustParsePrefix("2002::/16"),     // 6to4
-	netip.MustParsePrefix("ff00::/8"),      // multicast
+	netip.MustParsePrefix("::1/128"),        // loopback
+	netip.MustParsePrefix("64:ff9b::/96"),   // NAT64 well-known prefix（内嵌 IPv4，可编码 127.0.0.1/私网/云元数据）
+	netip.MustParsePrefix("64:ff9b:1::/48"), // NAT64 local-use prefix（RFC 6052 §3.2，同样内嵌 IPv4）
+	netip.MustParsePrefix("fc00::/7"),       // unique-local
+	netip.MustParsePrefix("fe80::/10"),      // link-local
+	netip.MustParsePrefix("2001:db8::/32"),  // documentation
+	netip.MustParsePrefix("2001::/32"),      // Teredo
+	netip.MustParsePrefix("2002::/16"),      // 6to4
+	netip.MustParsePrefix("ff00::/8"),       // multicast
 }
 
 // ValidateIP reports whether addr may be dialed under the given policy.

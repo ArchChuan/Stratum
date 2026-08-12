@@ -1,13 +1,22 @@
 package infrastructure
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"errors"
+	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +27,7 @@ import (
 	mcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -333,6 +343,50 @@ func TestInteropSessionExpiredMapsToErrSessionMissing(t *testing.T) {
 	require.False(t, c.IsHealthy(), "expired session must flip health for reconnect")
 }
 
+// TestInteropApplicationErrorKeepsSession 锁定高危回归:一个 JSON-RPC 应用
+// 级错误(工具实现返回 error → SDK 编码 -32603 → ErrRejected 包裹,连接
+// 存活)不得把客户端标记为 unhealthy。此前 unhealthyError 把
+// ErrTransportFailed(default 投影)计入致命,一次业务错误就让会话每
+// MCPMinReconnectInterval 重建一次(且成功调用不恢复 healthy,重建永续)。
+func TestInteropApplicationErrorKeepsSession(t *testing.T) {
+	mcpSrv := mcp.NewServer(&mcp.Implementation{Name: "app-error", Version: "1.0"}, nil)
+	mcpSrv.AddTool(&mcp.Tool{
+		Name:        "boom",
+		Description: "returns a protocol-level JSON-RPC error",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return nil, errors.New("internal boom")
+	})
+	mcpSrv.AddTool(&mcp.Tool{
+		Name:        "ok",
+		Description: "returns a tiny result",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil
+	})
+	ts := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpSrv }, nil))
+	t.Cleanup(ts.Close)
+
+	c := newInteropClient(t, ts.URL)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	require.NoError(t, c.Connect(ctx))
+	t.Cleanup(func() { _ = c.Disconnect(context.Background()) })
+	require.True(t, c.IsHealthy())
+
+	_, err := c.CallTool(ctx, "boom", map[string]any{})
+	require.Error(t, err, "application error must surface as a failure")
+	require.ErrorIs(t, err, mcpdomain.ErrTransportFailed, "JSON-RPC error is projected to the default transport bucket")
+	// 核心:应用错误不翻转健康标志——SDK 明确保连接(ErrRejected),
+	// 触发重连会无谓杀掉一个存活的会话并每 30s 重建。
+	require.True(t, c.IsHealthy(), "an application-level JSON-RPC error must not mark the client unhealthy")
+
+	// 会话存活:后续正常调用在同一 session 上成功。
+	_, err = c.CallTool(ctx, "ok", map[string]any{})
+	require.NoError(t, err, "session must remain usable after an application error")
+	require.True(t, c.IsHealthy())
+}
+
 // TestInteropConcurrentCallToolAndDisconnect 验证并发 CallTool 与
 // Disconnect 无 panic、无死锁,错误路径有界。
 func TestInteropConcurrentCallToolAndDisconnect(t *testing.T) {
@@ -445,13 +499,14 @@ func TestInteropOversizedLineFailsSafely(t *testing.T) {
 	require.Error(t, err, "oversized frame must surface as a failure, not a success")
 	require.NotErrorIs(t, err, context.DeadlineExceeded, "failure must come from the line bound, not the caller timeout")
 
-	// 帧超限损坏的是该次响应流(scanEvents 终止),会话层仍可开新流:
-	// 后续小结果调用必须成功。客户端被标记不健康(ErrTransportFailed 保守
-	// markUnhealthy)是预期行为——manager 的 30s 单飞重连会重建会话,
-	// 而不是把损坏流当健康连接继续用。
+	// 帧超限失败的是该次响应流(scanEvents 终止),会话层仍可开新流:
+	// 后续小结果调用必须成功。且客户端不能因此被标记不健康——SDK 把该
+	// 帧超限报告为 generic "request terminated without response"(无符号可
+	// 识别),实测会话仍可用,标 unhealthy 反而会触发无谓重建;真连接死亡
+	// 由 ErrSessionMissing/ErrConnectionClosed 与 30s 健康检查兜底。
 	result, err := c.CallTool(ctx, "small", map[string]any{})
 	require.NoError(t, err)
-	require.False(t, c.IsHealthy(), "a rejected frame marks the client unhealthy for reconnect")
+	require.True(t, c.IsHealthy(), "a rejected frame must not poison the session health")
 	_ = result
 }
 
@@ -530,4 +585,145 @@ func TestSecureHTTPClientStandardTLSDialer(t *testing.T) {
 	require.Nil(t, base.DialTLSContext,
 		"DialTLSContext must be nil: returning a plain TCP conn skips the TLS handshake")
 	require.NotNil(t, base.DialContext, "SSRF-guarded DialContext must be present")
+	require.Nil(t, base.TLSClientConfig,
+		"no TLSClientConfig override: InsecureSkipVerify stays false and hostname verification uses the system pool")
+}
+
+// TestInteropCredentialNeverEchoesIntoErrorOrLog 锁定安全边界:恶意/被黑的
+// server 在 401 响应体里回显 Authorization 头时,凭据不得进入 error 原文
+// 或日志。SDK 默认把非 2xx 响应体解码进 error 值(MCPGODEBUG=
+// noprotocolerrorbody 默认关),这是服务端可控文本入日志的唯一通道;
+// translateSDKError 必须只投影错误类别,调用路径日志字段也不得含原始错误。
+func TestInteropCredentialNeverEchoesIntoErrorOrLog(t *testing.T) {
+	// 假凭据,仅用于断言回显拦截;不带 sk- 前缀避免 gitleaks generic-api-key 误报。
+	const token = "test-bearer-token-9f8e7d6c"
+	mcpSrv := mcp.NewServer(&mcp.Implementation{Name: "echo-server", Version: "1.0"}, nil)
+	mcpSrv.AddTool(&mcp.Tool{
+		Name:        "echo",
+		Description: "echoes the value argument",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "echo"}}}, nil
+	})
+	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpSrv }, nil)
+
+	// 捕获 error 级别日志;断言 token 不落任何日志字段。
+	var logBuf bytes.Buffer
+	logger := zap.New(zapcore.NewCore(
+		zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig()),
+		zapcore.AddSync(&logBuf),
+		zapcore.ErrorLevel,
+	))
+
+	// 劫持已初始化后的 tools/call:回显 Authorization 值,模拟被黑 server。
+	// SDK 的 POST 请求路径始终是 endpoint(不带 /call),方法名在 JSON-RPC
+	// body 的 method 字段里;initialize 必须走真实 handler,否则连接建立不起来。
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			b, _ := io.ReadAll(r.Body)
+			r.Body = io.NopCloser(bytes.NewReader(b)) // 透传前恢复,否则 initialize 读到空 body
+			if bytes.Contains(b, []byte(`"tools/call"`)) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Bearer ` + token + ` rejected"}}`))
+				return
+			}
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close)
+
+	c := NewBaseClient(&MCPServerConfig{
+		ID: "echo-server", Name: "echo", Version: "1.0",
+		Transport: "streamable-http",
+		URL:       ts.URL,
+		Auth:      &mcpdomain.AuthConfig{Type: mcpdomain.AuthTypeBearer, Token: token},
+	}, logger)
+	c.urlPolicy = URLPolicyAllowPrivate
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	require.NoError(t, c.Connect(ctx))
+	t.Cleanup(func() { _ = c.Disconnect(context.Background()) })
+
+	_, err := c.CallTool(ctx, "echo", map[string]any{"value": "hi"})
+	require.Error(t, err, "401 with embedded credential must surface as a failure")
+	require.ErrorIs(t, err, mcpdomain.ErrTransportFailed,
+		"JSON-RPC error body is projected to the default transport bucket")
+	require.NotContains(t, err.Error(), token,
+		"error text must not echo the credential back at the caller")
+	require.NotContains(t, logBuf.String(), token,
+		"logs must not echo the credential (server-controlled error text must stay out)")
+}
+
+// certSANOnlyIP builds a self-signed server cert whose SAN carries only the
+// given IP — deliberately no DNS name, so "localhost" fails hostname
+// verification while the CA itself stays trusted.
+func certSANOnlyIP(t *testing.T, ip string) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: ip},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP(ip)},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+// TestInteropTLSHostnameMismatchFailsHandshake 锁定负面断言:证书 SAN 不含
+// 连接 host 时握手必须失败。拨号地址(127.0.0.1)与 TLS ServerName(localhost)
+// 由 Go transport 独立处理——即使 SSRF 校验放行了拨号 IP,证书校验仍按 URL
+// host 走,不能被拨号地址绕过。
+func TestInteropTLSHostnameMismatchFailsHandshake(t *testing.T) {
+	cert := certSANOnlyIP(t, "127.0.0.1")
+	pool := x509.NewCertPool()
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	require.NoError(t, err)
+	pool.AddCert(leaf)
+
+	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
+		return mcp.NewServer(&mcp.Implementation{Name: "tls-host", Version: "1.0"}, nil)
+	}, nil)
+	ts := httptest.NewUnstartedServer(handler)
+	ts.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
+	ts.StartTLS()
+	t.Cleanup(ts.Close)
+
+	// URL 指向 localhost(证书 SAN 只有 127.0.0.1),dialMCP 把 localhost 解析
+	// 到 127.0.0.1 放行拨号;失败必须发生在 TLS hostname 校验。
+	port := ts.Listener.Addr().(*net.TCPAddr).Port
+	endpoint := (&url.URL{Scheme: "https", Host: net.JoinHostPort("localhost", strconv.Itoa(port))}).String()
+	origin, err := ValidateMCPURL(endpoint)
+	require.NoError(t, err)
+
+	dialer := &net.Dialer{Timeout: constants.MCPDefaultDialTimeout, KeepAlive: 30 * time.Second}
+	base := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialMCP(ctx, network, addr, dialer, URLPolicyAllowPrivate)
+		},
+		TLSClientConfig:       &tls.Config{RootCAs: pool},
+		TLSHandshakeTimeout:   constants.MCPTLSHandshakeTimeout,
+		ResponseHeaderTimeout: constants.MCPResponseHeaderTimeout,
+		MaxIdleConns:          2,
+		IdleConnTimeout:       60 * time.Second,
+	}
+	hc := &http.Client{Transport: &secureRoundTripper{origin: origin, cfg: &MCPServerConfig{}, next: base}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	sdkClient := mcp.NewClient(&mcp.Implementation{Name: "stratum", Version: "1.0"}, nil)
+	_, err = sdkClient.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint:   origin.String(),
+		HTTPClient: hc,
+		MaxRetries: constants.MCPMaxRetries,
+	}, &mcp.ClientSessionOptions{ProtocolVersion: constants.MCPProtocolVersion})
+	require.Error(t, err,
+		"certificate SAN (127.0.0.1) must not verify for host localhost; the dial address must not substitute for the URL host")
 }
