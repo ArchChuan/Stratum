@@ -47,6 +47,7 @@ type EnricherWorker struct {
 	js             dlqPublisher
 	pool           *pgxpool.Pool
 	llmResolver    LLMResolver
+	baseline       port.MechanismBaselineResolver
 	logger         *zap.Logger
 	model          string
 	summaryModel   string
@@ -58,6 +59,15 @@ type EnricherWorker struct {
 	ackWait        time.Duration
 	maxDeliver     int
 	snapshotRepo   port.ActiveSnapshotRepo
+}
+
+// effectiveConfig 是单条消息处理生效的机制配置：基线解析一次，覆盖
+// 构造时固化的 env/默认值；键为空表示该消费点未建档，维持现状。
+type effectiveConfig struct {
+	enrichmentTmpl string
+	summaryTmpl    string
+	model          string
+	summaryModel   string
 }
 
 // NewEnricherWorker creates an enricher configured from the pipeline Config.
@@ -103,6 +113,51 @@ func NewEnricherWorker(
 func (w *EnricherWorker) WithLLMResolver(r LLMResolver) *EnricherWorker {
 	w.llmResolver = r
 	return w
+}
+
+// WithMechanismBaseline sets the per-tenant mechanism baseline resolver
+// (wired from model_profiles). It overrides prompts and models per message;
+// a nil resolver keeps the constructor-time env/default values (pre-change
+// behavior).
+func (w *EnricherWorker) WithMechanismBaseline(r port.MechanismBaselineResolver) *EnricherWorker {
+	w.baseline = r
+	return w
+}
+
+// resolveEffective resolves the mechanism baseline for one message.
+// Baseline is a config source, not an authorization gate: on resolver error
+// the worker keeps its constructor-time values and logs a warning (degraded
+// startup matches the pre-change behavior; the Service already fail-closes
+// its own repo errors before reaching here).
+func (w *EnricherWorker) resolveEffective(ctx context.Context, tenantID string) effectiveConfig {
+	eff := effectiveConfig{
+		enrichmentTmpl: w.enrichmentTmpl,
+		summaryTmpl:    w.summaryTmpl,
+		model:          w.model,
+		summaryModel:   w.summaryModel,
+	}
+	if w.baseline == nil {
+		return eff
+	}
+	bl, err := w.baseline(ctx, tenantID)
+	if err != nil {
+		w.logger.Warn("memory.enrich.baseline_failed",
+			zap.String("tenant_id", tenantID), zap.Error(err))
+		return eff
+	}
+	if bl.MemoryEnrichment != "" {
+		eff.enrichmentTmpl = bl.MemoryEnrichment
+	}
+	if bl.MemorySummary != "" {
+		eff.summaryTmpl = bl.MemorySummary
+	}
+	if bl.EnrichModel != "" {
+		eff.model = bl.EnrichModel
+	}
+	if bl.SummaryModel != "" {
+		eff.summaryModel = bl.SummaryModel
+	}
+	return eff
 }
 
 // llmFor returns the LLMClient for tenantID. Prefers the resolver-supplied
@@ -209,7 +264,8 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		}
 		return
 	}
-	enrichment, err := w.callEnrichLLM(ctx, llm, ev.Role, ev.Content)
+	eff := w.resolveEffective(ctx, ev.TenantID)
+	enrichment, err := w.callEnrichLLM(ctx, llm, ev.Role, ev.Content, eff)
 	if err != nil {
 		w.logger.Error("memory.enrich.llm",
 			zap.String("trace_id", traceID),
@@ -262,7 +318,7 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 	// 原实现把 LLM 调用塞在 persistEnrichment 的事务里，单次摘要 30s+，
 	// 一个慢富化能把整个 pgxpool 连接池耗尽，连带主流程 DB 调用全部超时。
 	// 这里独立 ctx + 独立 tx + 独立 panic recover，失败只 warn 不影响主流程。
-	w.runSummaryAsyncSafe(ctx, ev)
+	w.runSummaryAsyncSafe(ctx, ev, eff)
 }
 
 func (w *EnricherWorker) refreshActiveSnapshot(ctx context.Context, ev *MemoryEnrichedEvent, enrichment *EnrichmentResult) error {
@@ -288,7 +344,7 @@ func (w *EnricherWorker) refreshActiveSnapshot(ctx context.Context, ev *MemoryEn
 	return nil
 }
 
-func (w *EnricherWorker) runSummaryAsyncSafe(ctx context.Context, ev *MemoryEnrichedEvent) {
+func (w *EnricherWorker) runSummaryAsyncSafe(ctx context.Context, ev *MemoryEnrichedEvent, eff effectiveConfig) {
 	defer func() {
 		if r := recover(); r != nil {
 			w.logger.Error("memory.enrich.summary_panic",
@@ -298,7 +354,7 @@ func (w *EnricherWorker) runSummaryAsyncSafe(ctx context.Context, ev *MemoryEnri
 				zap.Stack("stack"))
 		}
 	}()
-	if err := w.maybeTriggerSummary(ctx, ev); err != nil {
+	if err := w.maybeTriggerSummary(ctx, ev, eff); err != nil {
 		w.logger.Warn("memory.enrich.summary_check",
 			zap.String("trace_id", ev.TraceID),
 			zap.String("conversation_id", ev.ConversationID),
@@ -306,10 +362,10 @@ func (w *EnricherWorker) runSummaryAsyncSafe(ctx context.Context, ev *MemoryEnri
 	}
 }
 
-func (w *EnricherWorker) callEnrichLLM(ctx context.Context, llm LLMClient, role, content string) (*EnrichmentResult, error) {
-	prompt := formatEnrichmentPrompt(w.enrichmentTmpl, role, content)
+func (w *EnricherWorker) callEnrichLLM(ctx context.Context, llm LLMClient, role, content string, eff effectiveConfig) (*EnrichmentResult, error) {
+	prompt := formatEnrichmentPrompt(eff.enrichmentTmpl, role, content)
 	req := &port.CompletionRequest{
-		Model: w.model,
+		Model: eff.model,
 		Messages: []port.CompletionMessage{
 			{Role: "user", Content: prompt},
 		},
@@ -386,7 +442,7 @@ func (w *EnricherWorker) persistEnrichment(ctx context.Context, ev *MemoryEnrich
 //
 // 老实现把 LLM Complete 塞在 persistEnrichment 的事务里，单条记录持锁 30s+，
 // 高 QPS 下 pgxpool 连接耗尽，主流程全部 DB 调用排队超时甚至拖崩 worker。
-func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnrichedEvent) error {
+func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnrichedEvent, eff effectiveConfig) error {
 	if ev.ConversationID == "" {
 		return nil
 	}
@@ -408,9 +464,9 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnri
 	if prevSummary != "" {
 		input = "[Previous Summary]: " + prevSummary + "\n\n[New Messages]:\n" + input
 	}
-	prompt := formatSummaryPrompt(w.summaryTmpl, input)
+	prompt := formatSummaryPrompt(eff.summaryTmpl, input)
 	req := &port.CompletionRequest{
-		Model: w.summaryModel,
+		Model: eff.summaryModel,
 		Messages: []port.CompletionMessage{
 			{Role: "user", Content: prompt},
 		},

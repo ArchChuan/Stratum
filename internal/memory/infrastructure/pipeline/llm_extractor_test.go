@@ -31,3 +31,25 @@ func TestLLMExtractorDecodesFactTypeAndExplicitZeroConfidence(t *testing.T) {
 		t.Fatal("extractor prompt must request confidence in pipeline JSON")
 	}
 }
+
+// TestLLMExtractorUsesInjectedSystemPromptOverFallback 验证机制基线抽取模板
+// 注入优先、空值回退内置常量（现状行为）；注入模板的占位照常渲染。
+func TestLLMExtractorUsesInjectedSystemPromptOverFallback(t *testing.T) {
+	llm := &extractorLLMStub{content: `[]`}
+	extractor := NewLLMExtractor(llm)
+
+	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-1", "msg"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(llm.prompt, "长期记忆提取助手") {
+		t.Fatalf("fallback prompt missing: %q", llm.prompt)
+	}
+
+	extractor.SetSystemPrompt("模板：用户 %s 助手 %s 上限 %d")
+	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-1", "msg"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(llm.prompt, "模板：用户 user-1 助手 agent-1") {
+		t.Fatalf("injected prompt not used: %q", llm.prompt)
+	}
+}

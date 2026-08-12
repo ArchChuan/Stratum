@@ -18,6 +18,7 @@ import (
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	memapp "github.com/byteBuilderX/stratum/internal/memory/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	pkgobjectstore "github.com/byteBuilderX/stratum/pkg/storage/objectstore"
@@ -234,6 +235,22 @@ func (r publishedSkillActivationResolver) ResolveSkills(
 	return catalog, nil
 }
 
+// compactionBaselinePrompt 取机制基线压缩指令（DB 档案 → 种子兜底），
+// 空串表示未建档或解析失败（保持内置指令，现状行为）。
+// factory 签名无 ctx，Background + 短超时兜底 DB 悬挂。
+func compactionBaselinePrompt(c *Container, model string) string {
+	if c.Mechanism == nil || c.Mechanism.BaselineResolver == nil {
+		return ""
+	}
+	bctx, cancel := context.WithTimeout(context.Background(), constants.AgentDBQueryTimeout)
+	defer cancel()
+	b, err := c.Mechanism.BaselineResolver(bctx, model)
+	if err != nil {
+		return ""
+	}
+	return b.Prompts.Compaction
+}
+
 func (c *Container) buildAgent(ctx context.Context) error {
 	db := c.dbOrNil()
 
@@ -303,7 +320,11 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		ModelContextProvider:    modelContextProvider(a.TenantResolver),
 		VendorWindowLookup:      llmgateway.LookupModelSpec,
 		HistoryCompactorFactory: func(gw agentport.CapabilityGateway, model string, logger *zap.Logger, compactionMaxTokens int) agentport.HistoryCompactor {
-			return capgateway.NewLLMHistoryCompactor(gw, model, logger, compactionMaxTokens)
+			compactor := capgateway.NewLLMHistoryCompactor(gw, model, logger, compactionMaxTokens)
+			if p := compactionBaselinePrompt(c, model); p != "" {
+				compactor.WithCompactionPrompt(p)
+			}
+			return compactor
 		},
 		ChatStore:         a.ChatStore,
 		EvidenceProvider:  a.EvidenceProvider,

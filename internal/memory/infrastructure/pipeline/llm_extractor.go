@@ -17,33 +17,9 @@ type PlatformParams interface {
 	Int(ctx context.Context, key string) (int, bool)
 }
 
-// LLMExtractor adapts LLMClient to memport.LLMExtractor.
-type LLMExtractor struct {
-	client LLMClient
-	params PlatformParams
-}
-
-func NewLLMExtractor(client LLMClient) *LLMExtractor {
-	return &LLMExtractor{client: client}
-}
-
-// SetPlatformParams wires the platform parameter reader (registry-backed).
-func (e *LLMExtractor) SetPlatformParams(p PlatformParams) { e.params = p }
-
-// maxFacts resolves memory.max_facts_per_extraction (platform layer),
-// falling back to the constant default when unset or unavailable.
-func (e *LLMExtractor) maxFacts(ctx context.Context) int {
-	if e.params == nil {
-		return constants.MemoryMaxFactsPerExtraction
-	}
-	if v, ok := e.params.Int(ctx, "memory.max_facts_per_extraction"); ok {
-		return v
-	}
-	return constants.MemoryMaxFactsPerExtraction
-}
-
-func (e *LLMExtractor) ExtractFacts(ctx context.Context, userID, agentID string, message string) ([]*memport.ExtractedFact, error) {
-	system := fmt.Sprintf(`你是一个长期记忆提取助手，负责从对话中提取关于用户（%s）的有价值事实，供 AI 助手（%s）在未来对话中使用。
+// extractionSystemPrompt 是抽取模板兜底（现状硬编码值）。机制基线
+// （model_profiles）建档后由 wiring 注入覆盖，空值维持现状行为。
+const extractionSystemPrompt = `你是一个长期记忆提取助手，负责从对话中提取关于用户（%s）的有价值事实，供 AI 助手（%s）在未来对话中使用。
 
 提取规则（严格执行）：
 - 只提取用户明确陈述、确认或展现的事实
@@ -61,7 +37,48 @@ fact_type 分类：
 - other：不属于以上分类的陈述性事实
 
 只输出 JSON 数组，不加任何说明或 markdown 标记：
-[{"content":"...","importance":0.0-1.0,"fact_type":"...","confidence":0.0-1.0,"entities":["实体名"]}]`, userID, agentID, e.maxFacts(ctx))
+[{"content":"...","importance":0.0-1.0,"fact_type":"...","confidence":0.0-1.0,"entities":["实体名"]}]`
+
+// LLMExtractor adapts LLMClient to memport.LLMExtractor.
+type LLMExtractor struct {
+	client       LLMClient
+	params       PlatformParams
+	systemPrompt string
+}
+
+func NewLLMExtractor(client LLMClient) *LLMExtractor {
+	return &LLMExtractor{client: client}
+}
+
+// SetPlatformParams wires the platform parameter reader (registry-backed).
+func (e *LLMExtractor) SetPlatformParams(p PlatformParams) { e.params = p }
+
+// SetSystemPrompt overrides the extraction template with the mechanism
+// baseline prompt. Empty keeps the built-in extractionSystemPrompt fallback.
+func (e *LLMExtractor) SetSystemPrompt(p string) { e.systemPrompt = p }
+
+// systemPromptOr 返回生效抽取模板：基线注入值优先，空则兜底内置常量。
+func (e *LLMExtractor) systemPromptOr() string {
+	if e.systemPrompt != "" {
+		return e.systemPrompt
+	}
+	return extractionSystemPrompt
+}
+
+// maxFacts resolves memory.max_facts_per_extraction (platform layer),
+// falling back to the constant default when unset or unavailable.
+func (e *LLMExtractor) maxFacts(ctx context.Context) int {
+	if e.params == nil {
+		return constants.MemoryMaxFactsPerExtraction
+	}
+	if v, ok := e.params.Int(ctx, "memory.max_facts_per_extraction"); ok {
+		return v
+	}
+	return constants.MemoryMaxFactsPerExtraction
+}
+
+func (e *LLMExtractor) ExtractFacts(ctx context.Context, userID, agentID string, message string) ([]*memport.ExtractedFact, error) {
+	system := fmt.Sprintf(e.systemPromptOr(), userID, agentID, e.maxFacts(ctx))
 	resp, err := e.client.Complete(ctx, &memport.CompletionRequest{
 		Messages: []memport.CompletionMessage{
 			{Role: "system", Content: system},
