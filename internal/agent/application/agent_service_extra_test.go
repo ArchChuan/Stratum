@@ -235,7 +235,7 @@ func TestAgentServiceTraceOwnerAuthorization(t *testing.T) {
 func TestAgentServiceApprovalMethodsFailClosed(t *testing.T) {
 	svc := agent.NewAgentService(agent.AgentServiceDeps{Logger: zap.NewNop()})
 	// 极端情况：ApprovalService 缺失 → ListPending 空、Decide/Resume 报错。
-	approvals, err := svc.ListPendingApprovals(context.Background(), "t1")
+	approvals, err := svc.ListPendingApprovals(context.Background(), "t1", "u1", "member")
 	require.NoError(t, err)
 	require.Empty(t, approvals)
 	require.NotNil(t, approvals)

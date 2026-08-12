@@ -17,6 +17,7 @@ type approvalRepoFake struct {
 	createErr, decideErr, claimErr, markErr, releaseErr error
 	unknownErr                                          error
 	released, outcomeUnknown                            int
+	lastListUserID                                      string
 }
 
 func (f *approvalRepoFake) Create(_ context.Context, _ string, row domain.ToolApproval) (string, error) {
@@ -42,8 +43,20 @@ func (f *approvalRepoFake) MarkOutcomeUnknown(_ context.Context, _, _ string) er
 	f.outcomeUnknown++
 	return f.unknownErr
 }
-func (f *approvalRepoFake) ListPending(_ context.Context, _ string) ([]domain.ToolApproval, error) {
+func (f *approvalRepoFake) ListPending(_ context.Context, _, userID string) ([]domain.ToolApproval, error) {
+	f.lastListUserID = userID
 	return []domain.ToolApproval{f.row}, nil
+}
+func (f *approvalRepoFake) ListHistory(_ context.Context, _ string, _, _ int) ([]domain.ToolApproval, int, error) {
+	return nil, 0, nil
+}
+func (f *approvalRepoFake) Invalidate(_ context.Context, _, _, _ string) error { return nil }
+func (f *approvalRepoFake) Void(_ context.Context, _, _, _ string) error       { return nil }
+func (f *approvalRepoFake) UpdateAssignee(_ context.Context, _, _, _ string) error {
+	return nil
+}
+func (f *approvalRepoFake) CascadeByConversation(_ context.Context, _, _ string) error {
+	return nil
 }
 
 func TestToolApprovalServiceEncryptsPayloadAndCreatesSafeCheckpoint(t *testing.T) {
@@ -116,6 +129,32 @@ func TestToolApprovalServiceRejectsTamperedBinding(t *testing.T) {
 			_, err := svc.ApprovedPayload(context.Background(), "tenant-1", "approval-1")
 			require.ErrorIs(t, err, ErrApprovalBindingMismatch)
 		})
+	}
+}
+
+func TestToolApprovalServiceListPendingScopesByRole(t *testing.T) {
+	// 回归防护（review blocking：member 横向越权）——fake 捕获透传给 repo 的 userID。
+	repo := &approvalRepoFake{}
+	svc := NewToolApprovalService(repo, nil, crypto.DeriveAESKey("test-key"))
+	ctx := context.Background()
+	if _, err := svc.ListPending(ctx, "tenant-1", "user-member", "member"); err != nil {
+		t.Fatal(err)
+	}
+	if repo.lastListUserID != "user-member" {
+		t.Fatalf("member scope: expected user-member, got %q", repo.lastListUserID)
+	}
+	if _, err := svc.ListPending(ctx, "tenant-1", "user-admin", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if repo.lastListUserID != "" {
+		t.Fatalf("admin scope: expected empty (all), got %q", repo.lastListUserID)
+	}
+	if _, err := svc.ListPending(ctx, "tenant-1", "user-x", ""); err != nil {
+		t.Fatal(err)
+	}
+	// fail closed：未知角色按 member 最小权限
+	if repo.lastListUserID != "user-x" {
+		t.Fatalf("unknown role: expected user-x (least privilege), got %q", repo.lastListUserID)
 	}
 }
 

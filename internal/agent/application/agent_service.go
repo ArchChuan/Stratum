@@ -1434,11 +1434,11 @@ func (s *AgentService) ListExecutions(
 	return out, total, nil
 }
 
-func (s *AgentService) ListPendingApprovals(ctx context.Context, tenantID string) ([]domain.ToolApproval, error) {
+func (s *AgentService) ListPendingApprovals(ctx context.Context, tenantID, actorID, roleClass string) ([]domain.ToolApproval, error) {
 	if s.deps.ApprovalService == nil {
 		return []domain.ToolApproval{}, nil
 	}
-	return s.deps.ApprovalService.ListPending(ctx, tenantID)
+	return s.deps.ApprovalService.ListPending(ctx, tenantID, actorID, roleClass)
 }
 
 func (s *AgentService) DecideToolApproval(ctx context.Context, tenantID, id, decision, actor, reason string) error {

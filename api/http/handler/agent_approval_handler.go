@@ -13,7 +13,13 @@ func (h *AgentHandler) ListToolApprovals(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	rows, err := h.svc.ListPendingApprovals(c.Request.Context(), tenantID)
+	actor, _ := userIDFromCtx(c)
+	roleClass, _ := c.Get(middleware.ContextKeyRole)
+	role := ""
+	if roleClass != nil {
+		role, _ = roleClass.(string)
+	}
+	rows, err := h.svc.ListPendingApprovals(c.Request.Context(), tenantID, actor, role)
 	if err != nil {
 		_ = c.Error(err)
 		return

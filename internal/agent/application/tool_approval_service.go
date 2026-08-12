@@ -97,6 +97,9 @@ func (s *ToolApprovalService) Request(ctx context.Context, payload ToolApprovalP
 	if err != nil {
 		return "", err
 	}
+	// 修复 review B1/M1：Create 必须显式落库 subject_kind 与 conversation_id（INSERT 显式列时
+	// DDL DEFAULT 不生效）；当前创建路径固定 mcp_tool，Task 2 引入 payload.SubjectKind 后
+	// 在此处先行 ValidateSubjectKind 再写入。
 	expires := s.now().Add(30 * time.Minute)
 	id, err := s.repo.Create(ctx, payload.TenantID, domain.ToolApproval{
 		DecisionID:  payload.DecisionID,
@@ -106,6 +109,8 @@ func (s *ToolApprovalService) Request(ctx context.Context, payload ToolApprovalP
 		MCPRevisionsDigest:       payload.MCPRevisionsDigest,
 		KnowledgeRevisionsDigest: payload.KnowledgeRevisionsDigest,
 		PolicyVersion:            payload.PolicyVersion,
+		SubjectKind:              domain.SubjectKindMCPTool,
+		ConversationID:           payload.ConversationID,
 		EncryptedPayload:         encrypted, Status: "pending", ExpiresAt: expires,
 	})
 	if err != nil {
@@ -246,6 +251,16 @@ func (s *ToolApprovalService) ExecuteApproved(ctx context.Context, tenantID, id,
 	}
 	return output, nil
 }
-func (s *ToolApprovalService) ListPending(ctx context.Context, tenantID string) ([]domain.ToolApproval, error) {
-	return s.repo.ListPending(ctx, tenantID)
+
+// ListPending 按调用者身份过滤（修复 review blocking：member 横向越权）。
+// member 仅返回本人发起的审批；admin/owner（或未知角色，fail closed 取最小权限）仅 admin/owner 可看全量。
+func (s *ToolApprovalService) ListPending(ctx context.Context, tenantID, actorID, roleClass string) ([]domain.ToolApproval, error) {
+	if roleClass == "" {
+		roleClass = "member"
+	}
+	userID := actorID
+	if roleClass == "admin" || roleClass == "owner" {
+		userID = ""
+	}
+	return s.repo.ListPending(ctx, tenantID, userID)
 }
