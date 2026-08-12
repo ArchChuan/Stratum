@@ -857,17 +857,25 @@ func (m *ClientManager) endReconnect(key string) {
 	m.reconnectMu.Unlock()
 }
 
-// swapReconnectClient installs fresh when no newer client won the race (e.g.
-// a lazy reconnect landed first); the loser fresh is discarded. A displaced
-// candidate is disconnected so the old transport closes deterministically.
+// swapReconnectClient installs fresh when the server is still configured and
+// no newer client won the race (e.g. a lazy reconnect landed first); the loser
+// fresh is discarded. Disconnect/Delete remove m.clients and m.configs as a
+// pair under the same lock, so re-checking m.configs here is the guard against
+// a reconnect racing a teardown and resurrecting a disabled server. A
+// displaced candidate is disconnected so the old transport closes
+// deterministically.
 func (m *ClientManager) swapReconnectClient(ctx context.Context, key string, candidate, fresh MCPClient) bool {
 	m.mu.Lock()
+	_, stillConfigured := m.configs[key]
 	current := m.clients[key]
-	if current == nil || current == candidate {
+	installed := stillConfigured && (current == nil || current == candidate)
+	if installed {
 		m.clients[key] = fresh
 	}
 	m.mu.Unlock()
-	if current != nil && current != candidate {
+	if !installed {
+		// server 已被 Disconnect/Delete 移除，或已有更新的 client 胜出：
+		// 丢弃 fresh（其 session 已建立，必须断开以免泄漏 transport）。
 		_ = fresh.Disconnect(ctx)
 		return false
 	}

@@ -55,6 +55,7 @@ var blockedIPv4Prefixes = []netip.Prefix{
 
 var blockedIPv6Prefixes = []netip.Prefix{
 	netip.MustParsePrefix("::1/128"),       // loopback
+	netip.MustParsePrefix("64:ff9b::/96"),  // NAT64 well-known prefix（内嵌 IPv4，可编码 127.0.0.1/私网/云元数据）
 	netip.MustParsePrefix("fc00::/7"),      // unique-local
 	netip.MustParsePrefix("fe80::/10"),     // link-local
 	netip.MustParsePrefix("2001:db8::/32"), // documentation
@@ -133,10 +134,15 @@ func defaultPort(scheme string) string {
 // redirect; custom credential headers such as X-API-Key would be forwarded
 // verbatim to the target, so a redirect to another origin is never followed.
 // A 301/302/303 on a POST would silently convert to GET and drop the body,
-// so that transition is rejected even when same-origin.
+// so that transition is rejected even when same-origin. A redirect chain is
+// also bounded by MCPMaxRedirects: without it, a same-origin 307 loop would
+// recurse without limit.
 func mcpCheckRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) == 0 {
 		return nil
+	}
+	if len(via) >= constants.MCPMaxRedirects {
+		return mcpdomain.ErrInvalidServerURL
 	}
 	prev := via[len(via)-1]
 	if !sameOrigin(prev.URL, req.URL) || req.URL.User != nil {
@@ -224,9 +230,11 @@ func newSecureHTTPClient(origin *url.URL, cfg *MCPServerConfig, policy URLPolicy
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return dialMCP(ctx, network, addr, dialer, policy)
 		},
-		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return dialMCP(ctx, network, addr, dialer, policy)
-		},
+		// 注意：不得设置 DialTLSContext。Go 的 transport 只对返回值
+		// *tls.Conn 执行 HandshakeContext；自定义 DialTLSContext 返回裸
+		// TCP conn 时会静默跳过 TLS handshake，把明文发到 443。SSRF 校验
+		// 只关心拨号地址，走 DialContext 即可——TLS ServerName 由 transport
+		// 独立取 URL host，证书校验不受影响。
 		TLSHandshakeTimeout:   constants.MCPTLSHandshakeTimeout,
 		ResponseHeaderTimeout: constants.MCPResponseHeaderTimeout,
 		MaxIdleConns:          2,

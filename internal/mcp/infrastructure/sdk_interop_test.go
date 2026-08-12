@@ -2,7 +2,10 @@ package infrastructure
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -442,10 +445,89 @@ func TestInteropOversizedLineFailsSafely(t *testing.T) {
 	require.Error(t, err, "oversized frame must surface as a failure, not a success")
 	require.NotErrorIs(t, err, context.DeadlineExceeded, "failure must come from the line bound, not the caller timeout")
 
-	// 流错误不杀连接:后续小结果调用必须成功,证明帧上限没有把连接打成
-	// 不可用状态。
+	// 帧超限损坏的是该次响应流(scanEvents 终止),会话层仍可开新流:
+	// 后续小结果调用必须成功。客户端被标记不健康(ErrTransportFailed 保守
+	// markUnhealthy)是预期行为——manager 的 30s 单飞重连会重建会话,
+	// 而不是把损坏流当健康连接继续用。
 	result, err := c.CallTool(ctx, "small", map[string]any{})
 	require.NoError(t, err)
-	require.True(t, c.IsHealthy(), "a rejected frame must not poison the connection")
+	require.False(t, c.IsHealthy(), "a rejected frame marks the client unhealthy for reconnect")
 	_ = result
+}
+
+// TestInteropTLSHandshake 覆盖真实 TLS 链路:httptest.NewTLSServer 提供
+// 自签名证书,transport 信任它并保留 dialMCP 的 SSRF 校验——与
+// newSecureHTTPClient 的唯一差异是 TLSClientConfig。回归点:此前
+// DialTLSContext 返回裸 TCP conn,Go transport 对非 *tls.Conn 返回值跳过
+// HandshakeContext,https 端点会在 443 上发明文;删除后此处必须完整握手。
+func TestInteropTLSHandshake(t *testing.T) {
+	mcpSrv := mcp.NewServer(&mcp.Implementation{Name: "stratum-tls", Version: "1.0"}, nil)
+	mcpSrv.AddTool(&mcp.Tool{
+		Name:        "ping",
+		Description: "returns pong",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "pong"}}}, nil
+	})
+	ts := httptest.NewTLSServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpSrv }, nil))
+	t.Cleanup(ts.Close)
+
+	origin, err := ValidateMCPURL(ts.URL)
+	require.NoError(t, err)
+	cfg := &MCPServerConfig{ID: "tls-server", Name: "tls", Version: "1.0",
+		Transport: "streamable-http", URL: ts.URL}
+
+	// 信任测试证书:RootCAs 加入 server 证书,其余与 newSecureHTTPClient
+	// 逐项对齐(无 DialTLSContext、分项超时、dialMCP SSRF 校验)。
+	pool := x509.NewCertPool()
+	pool.AddCert(ts.Certificate())
+	dialer := &net.Dialer{Timeout: constants.MCPDefaultDialTimeout, KeepAlive: 30 * time.Second}
+	base := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialMCP(ctx, network, addr, dialer, URLPolicyAllowPrivate)
+		},
+		TLSClientConfig:       &tls.Config{RootCAs: pool},
+		TLSHandshakeTimeout:   constants.MCPTLSHandshakeTimeout,
+		ResponseHeaderTimeout: constants.MCPResponseHeaderTimeout,
+		MaxIdleConns:          2,
+		IdleConnTimeout:       60 * time.Second,
+	}
+	hc := &http.Client{
+		Transport:     &secureRoundTripper{origin: origin, cfg: cfg, next: base},
+		CheckRedirect: mcpCheckRedirect,
+	}
+
+	// 直接走 SDK Connect(transport 手写以注入测试证书),验证标准 TLS
+	// 握手发生在拨号之后。
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	sdkClient := mcp.NewClient(&mcp.Implementation{Name: "stratum", Version: "1.0"}, nil)
+	session, err := sdkClient.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint:   origin.String(),
+		HTTPClient: hc,
+		MaxRetries: constants.MCPMaxRetries,
+	}, &mcp.ClientSessionOptions{ProtocolVersion: constants.MCPProtocolVersion})
+	require.NoError(t, err, "TLS handshake must succeed over the hardened transport")
+	t.Cleanup(func() { _ = session.Close() })
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "ping"})
+	require.NoError(t, err)
+	require.Equal(t, "pong", res.Content[0].(*mcp.TextContent).Text)
+}
+
+// TestSecureHTTPClientStandardTLSDialer 锁定 DialTLSContext 回归:该字段
+// 一旦被设置,Go transport 对返回的裸 TCP conn 跳过 TLS handshake(只对
+// *tls.Conn 执行 HandshakeContext),https 端点明文失败。此断言保证
+// newSecureHTTPClient 永远不设置它。
+func TestSecureHTTPClientStandardTLSDialer(t *testing.T) {
+	origin, err := ValidateMCPURL("https://example.com/mcp")
+	require.NoError(t, err)
+	hc := newSecureHTTPClient(origin, &MCPServerConfig{}, URLPolicyStrict)
+	rt, ok := hc.Transport.(*secureRoundTripper)
+	require.True(t, ok)
+	base, ok := rt.next.(*http.Transport)
+	require.True(t, ok)
+	require.Nil(t, base.DialTLSContext,
+		"DialTLSContext must be nil: returning a plain TCP conn skips the TLS handshake")
+	require.NotNil(t, base.DialContext, "SSRF-guarded DialContext must be present")
 }

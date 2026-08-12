@@ -81,6 +81,10 @@ func TestValidateIP(t *testing.T) {
 		{name: "teredo", addr: "2001::1", block: true},
 		{name: "6to4", addr: "2002::1", block: true},
 		{name: "ipv6 multicast", addr: "ff00::1", block: true},
+		// NAT64 well-known prefix 内嵌 IPv4：可编码 127.0.0.1/私网/云元数据
+		{name: "nat64 loopback", addr: "64:ff9b::7f00:1", block: true},
+		{name: "nat64 private", addr: "64:ff9b::a00:1", block: true},
+		{name: "nat64 metadata", addr: "64:ff9b::a9fe:a9fe", block: true},
 		// 公网放行
 		{name: "public ipv4", addr: "8.8.8.8", block: false},
 		{name: "public ipv6", addr: "2606:4700:4700::1111", block: false},
@@ -173,6 +177,9 @@ func TestMCPCheckRedirect(t *testing.T) {
 		{name: "get redirect allowed",
 			via: []*http.Request{req(http.MethodGet, "https://example.com/mcp")},
 			req: req(http.MethodGet, "https://example.com/mcp/redirect")},
+		{name: "redirect chain bounded",
+			via: []*http.Request{req(http.MethodGet, "https://example.com/mcp"), req(http.MethodGet, "https://example.com/1"), req(http.MethodGet, "https://example.com/2"), req(http.MethodGet, "https://example.com/3")},
+			req: req(http.MethodGet, "https://example.com/4"), want: mcpdomain.ErrInvalidServerURL},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

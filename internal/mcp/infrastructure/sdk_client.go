@@ -15,6 +15,16 @@ import (
 // header back at us; it must never reach logs or API responses. Only the
 // error category is projected. Deployment may additionally set
 // MCPGODEBUG=noprotocolerrorbody=1 as belt-and-braces (not a code change).
+//
+// context.Canceled is passed through unchanged (not projected to
+// ErrTransportTimeout): it is the caller's own context, carries no
+// server-controlled text, and must not be treated as a transport fault (see
+// unhealthyError). The SDK's rejection family (429/502/503/504 etc.) wraps
+// its internal jsonrpc2.ErrRejected, which is not importable from outside the
+// module and not re-exported, so it cannot be distinguished here; it falls
+// into ErrTransportFailed. Callers may conservatively mark the client
+// unhealthy on that sentinel — the manager's MCPMinReconnectInterval gate
+// throttles rebuilds and a fresh session is harmless.
 func translateSDKError(err error) error {
 	switch {
 	case err == nil:
@@ -23,13 +33,11 @@ func translateSDKError(err error) error {
 		return mcpdomain.ErrSessionMissing
 	case errors.Is(err, mcp.ErrConnectionClosed):
 		return ErrClientClosed
-	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+	case errors.Is(err, context.DeadlineExceeded):
 		return ErrTransportTimeout
+	case errors.Is(err, context.Canceled):
+		return err
 	default:
-		// Includes 429/502/503/504 rejection semantics and any other
-		// transport failure; the SDK keeps the session alive for the
-		// rejection family, this projection just hides the server-controlled
-		// text.
 		return mcpdomain.ErrTransportFailed
 	}
 }

@@ -26,6 +26,25 @@ var ErrTransportTimeout = errors.New("mcp http transport timed out")
 // (or is issued against a client whose transport is no longer available).
 var ErrClientClosed = errors.New("mcp client closed")
 
+// unhealthyError reports whether err means the session or transport is dead,
+// so the manager's single-flight reconnect should rebuild a fresh session.
+// context.Canceled is excluded on purpose: it is the caller's own context,
+// not a server-side failure, and must not trigger a reconnect. The SDK's
+// rejection family (429/502/503/504) is not distinguishable from the outside
+// (its ErrRejected lives in an internal package) and conservatively counts as
+// unhealthy; MCPMinReconnectInterval throttles the resulting rebuild, and a
+// fresh session on an overloaded server is harmless.
+func unhealthyError(err error) bool {
+	switch {
+	case errors.Is(err, mcpdomain.ErrSessionMissing),
+		errors.Is(err, ErrClientClosed),
+		errors.Is(err, ErrTransportTimeout),
+		errors.Is(err, mcpdomain.ErrTransportFailed):
+		return true
+	}
+	return false
+}
+
 // MCPClient 定义 MCP 客户端接口
 type MCPClient interface {
 	Connect(ctx context.Context) error
@@ -252,9 +271,10 @@ func (c *BaseClient) CallTool(ctx context.Context, toolName string, input interf
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: toolName, Arguments: input})
 	if err != nil {
 		err = translateSDKError(err)
-		if errors.Is(err, mcpdomain.ErrSessionMissing) || errors.Is(err, ErrTransportTimeout) {
-			// Session gone or transport dead: flag unhealthy so the
-			// manager's single-flight reconnect rebuilds a fresh session.
+		if unhealthyError(err) {
+			// Session or transport gone: flag unhealthy so the manager's
+			// single-flight reconnect rebuilds a fresh session. Canceled
+			// errors pass through without marking (caller's own context).
 			c.markUnhealthy()
 		}
 		c.logger.Error("failed to call tool",
@@ -280,7 +300,11 @@ func (c *BaseClient) ListTools(ctx context.Context) ([]*MCPTool, error) {
 
 	result, err := session.ListTools(ctx, &mcp.ListToolsParams{})
 	if err != nil {
-		return nil, translateSDKError(err)
+		err = translateSDKError(err)
+		if unhealthyError(err) {
+			c.markUnhealthy()
+		}
+		return nil, err
 	}
 	tools := make([]*MCPTool, 0, len(result.Tools))
 	for _, t := range result.Tools {
@@ -322,7 +346,11 @@ func (c *BaseClient) ListResources(ctx context.Context) ([]*MCPResource, error) 
 
 	result, err := session.ListResources(ctx, &mcp.ListResourcesParams{})
 	if err != nil {
-		return nil, translateSDKError(err)
+		err = translateSDKError(err)
+		if unhealthyError(err) {
+			c.markUnhealthy()
+		}
+		return nil, err
 	}
 	resources := make([]*MCPResource, 0, len(result.Resources))
 	for _, r := range result.Resources {
@@ -381,5 +409,6 @@ func (c *BaseClient) HealthCheck(ctx context.Context) error {
 	}
 	c.mu.Unlock()
 
-	return err
+	// 返回前翻译：SDK 错误原文可能回显 Authorization，不得上抛。
+	return translateSDKError(err)
 }
