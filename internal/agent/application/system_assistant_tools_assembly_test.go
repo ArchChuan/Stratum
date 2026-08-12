@@ -82,7 +82,7 @@ func TestSystemAssistantResolvesPlatformToolsInProcess(t *testing.T) {
 	require.NoError(t, err)
 	cfg := &ExecutionConfig{}
 	cfg.ApplyOptions(options)
-	require.Len(t, cfg.ExtraTools, 4)
+	require.Len(t, cfg.ExtraTools, 6)
 	for _, tool := range cfg.ExtraTools {
 		require.Equal(t, domain.ProviderTypeInternal, tool.ProviderType)
 		require.Equal(t, tool.Name, tool.CapabilityID)
@@ -97,7 +97,7 @@ func TestSystemAssistantResolvesPlatformToolsInProcess(t *testing.T) {
 	require.Equal(t, 1, diagnostics.authorizeCalls)
 }
 
-func TestSystemAssistantAdminGetsProposalToolInProcess(t *testing.T) {
+func TestSystemAssistantProposalToolVisibleInProcessWithoutService(t *testing.T) {
 	diagnostics := &assistantDiagnosticStub{role: "admin"}
 	svc := NewAgentService(AgentServiceDeps{
 		Registry:           NewRegistry(nil, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
@@ -117,24 +117,10 @@ func TestSystemAssistantAdminGetsProposalToolInProcess(t *testing.T) {
 	cfg := &ExecutionConfig{}
 	cfg.ApplyOptions(options)
 	require.Equal(t, "admin", cfg.SystemAssistantRoleClass)
-	// Proposal tool is only injected when the proposal service is wired; the
-	// role-gated definition set itself is covered by the pure-function test.
-	require.Len(t, cfg.ExtraTools, 4)
+	// D6：工具可见性全角色一致（6 个），无需按角色注入；ProposalCreateFn
+	// 仅在装配 ProposalService 时注入（见 TestAdminProposeAutoConfirmsAndApplies）。
+	require.Len(t, cfg.ExtraTools, 6)
 	require.Nil(t, cfg.ProposalCreateFn)
-}
-
-func TestSystemAssistantToolDefinitionsForRole(t *testing.T) {
-	// 基础工具（含模型工具，D1 可见性不裁剪）对所有角色可见；propose/apply
-	// 仍按角色裁剪（Task 4 移除）。
-	require.Len(t, SystemAssistantToolDefinitionsForRole("member"), 4)
-	require.Len(t, SystemAssistantToolDefinitionsForRole("admin"), 6)
-	require.Len(t, SystemAssistantToolDefinitionsForRole("owner"), 6)
-	names := make([]string, 0)
-	for _, tool := range SystemAssistantToolDefinitionsForRole("admin") {
-		names = append(names, tool.Name)
-	}
-	require.Contains(t, names, domain.SystemAssistantToolApplyResourceChange)
-	require.NotContains(t, SystemAssistantToolDefinitionsForRole("member"), port.ToolDefinition{Name: domain.SystemAssistantToolApplyResourceChange})
 }
 
 func TestSystemAssistantToolDefinitionsIncludeModelTools(t *testing.T) {
@@ -362,4 +348,111 @@ func (s *stubTenantModelValidator) ValidateTenantChatModel(context.Context, stri
 
 func (s *stubTenantModelValidator) ListTenantChatModels(context.Context, string) ([]string, error) {
 	return []string{"qwen-plus", "qwen-plus-latest", "qwen-max"}, nil
+}
+
+func TestProposeToolVisibleToAllRoles(t *testing.T) {
+	defs := SystemAssistantToolDefinitions()
+	names := map[string]bool{}
+	for _, d := range defs {
+		names[d.Name] = true
+	}
+	require.True(t, names[domain.SystemAssistantToolProposeResourceChange], "propose must be visible to all roles")
+	require.True(t, names[domain.SystemAssistantToolApplyResourceChange], "apply must be visible to all roles")
+}
+
+func TestAdminProposeAutoConfirmsAndApplies(t *testing.T) {
+	repo := newProposalRepoFake()
+	applier := &proposalApplierFake{result: domain.ApplyResult{ResourceID: "created"}}
+	proposalService := newProposalServiceForTest(repo, &proposalAuthorizerFake{}, &baselineFake{},
+		map[domain.ResourceKind]port.ResourceChangeApplier{domain.ResourceAgent: applier})
+	svc := NewAgentService(AgentServiceDeps{
+		Registry:             NewRegistry(new(mockAgentRepo), BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		DiagnosticProvider:   &assistantDiagnosticStub{role: "admin"},
+		ProposalService:      proposalService,
+		TenantModelValidator: &stubTenantModelValidator{},
+		Logger:               zap.NewNop(),
+	})
+	system := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		LLMModel: "tenant-model", MaxIterations: 3,
+	}}
+	_, options, err := svc.assembleOptions(t.Context(), system, ExecRequest{UserID: "admin-1"},
+		ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1")
+	require.NoError(t, err)
+	cfg := &ExecutionConfig{}
+	cfg.ApplyOptions(options)
+	require.NotNil(t, cfg.ProposalCreateFn)
+
+	artifact, err := cfg.ProposalCreateFn(context.Background(), map[string]any{
+		"resourceKind": "agent", "operation": "create",
+		"payload": map[string]any{"name": "a", "description": "d", "model": "qwen-plus", "maxIterations": 5, "maxContextTokens": 4096},
+	})
+	require.NoError(t, err)
+	require.Equal(t, domain.StatusApplied, artifact.Status)
+	require.Equal(t, 1, applier.calls)
+}
+
+func TestMemberProposeStaysInReviewFlow(t *testing.T) {
+	repo := newProposalRepoFake()
+	applier := &proposalApplierFake{result: domain.ApplyResult{ResourceID: "created"}}
+	proposalService := newProposalServiceForTest(repo, &proposalAuthorizerFake{}, &baselineFake{},
+		map[domain.ResourceKind]port.ResourceChangeApplier{domain.ResourceAgent: applier})
+	svc := NewAgentService(AgentServiceDeps{
+		Registry:             NewRegistry(new(mockAgentRepo), BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		DiagnosticProvider:   &assistantDiagnosticStub{role: "member"},
+		ProposalService:      proposalService,
+		TenantModelValidator: &stubTenantModelValidator{},
+		Logger:               zap.NewNop(),
+	})
+	system := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		LLMModel: "tenant-model", MaxIterations: 3,
+	}}
+	_, options, err := svc.assembleOptions(t.Context(), system, ExecRequest{UserID: "member-1"},
+		ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1")
+	require.NoError(t, err)
+	cfg := &ExecutionConfig{}
+	cfg.ApplyOptions(options)
+
+	artifact, err := cfg.ProposalCreateFn(context.Background(), map[string]any{
+		"resourceKind": "agent", "operation": "create",
+		"payload": map[string]any{"name": "a", "description": "d", "model": "qwen-plus", "maxIterations": 5, "maxContextTokens": 4096},
+	})
+	require.NoError(t, err)
+	require.Equal(t, domain.StatusReadyForReview, artifact.Status)
+	require.Equal(t, 0, applier.calls)
+}
+
+func TestAdminProposeAutoApplyFailureKeepsCreatedProposal(t *testing.T) {
+	repo := newProposalRepoFake()
+	applier := &proposalApplierFake{result: domain.ApplyResult{ResourceID: "created"}}
+	// failAt=2：CreateProposal 的 authorize 放行，ConfirmAndApply 的预检拒绝，
+	// 已创建提案必须保留（artifact.ID 非空、状态 ready_for_review）。
+	proposalService := newProposalServiceForTest(repo, &proposalAuthorizerFake{failAt: 2}, &baselineFake{},
+		map[domain.ResourceKind]port.ResourceChangeApplier{domain.ResourceAgent: applier})
+	svc := NewAgentService(AgentServiceDeps{
+		Registry:             NewRegistry(new(mockAgentRepo), BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		DiagnosticProvider:   &assistantDiagnosticStub{role: "admin"},
+		ProposalService:      proposalService,
+		TenantModelValidator: &stubTenantModelValidator{},
+		Logger:               zap.NewNop(),
+	})
+	system := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		LLMModel: "tenant-model", MaxIterations: 3,
+	}}
+	_, options, err := svc.assembleOptions(t.Context(), system, ExecRequest{UserID: "admin-1"},
+		ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1")
+	require.NoError(t, err)
+	cfg := &ExecutionConfig{}
+	cfg.ApplyOptions(options)
+
+	artifact, err := cfg.ProposalCreateFn(context.Background(), map[string]any{
+		"resourceKind": "agent", "operation": "create",
+		"payload": map[string]any{"name": "a", "description": "d", "model": "qwen-plus", "maxIterations": 5, "maxContextTokens": 4096},
+	})
+	require.ErrorIs(t, err, domain.ErrProposalForbidden)
+	require.NotEmpty(t, artifact.ID)
+	require.Equal(t, domain.StatusReadyForReview, artifact.Status)
+	require.Zero(t, applier.calls)
 }

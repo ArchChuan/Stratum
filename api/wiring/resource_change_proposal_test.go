@@ -382,3 +382,43 @@ func TestApplyDirectFromToolRequiresTenantInContext(t *testing.T) {
 	_, err = adapter.ApplyDirectFromTool(ctx, "user-1", map[string]any{"resourceKind": "agent", "operation": "delete"})
 	require.ErrorContains(t, err, "invalid system assistant tool arguments")
 }
+
+// proposalRoleStub 固定角色的 TenantRoleResolver stub。
+type proposalRoleStub struct {
+	role string
+	err  error
+}
+
+func (s proposalRoleStub) ResolveTenantRole(context.Context, string, string) (string, error) {
+	return s.role, s.err
+}
+
+// TestProposalAuthorizerMemberCreateAllowedDecideForbidden 用真实 wiring
+// authorizer 验证 D6 分流：member 可创建提案（ready_for_review 流），但
+// 编辑/确认/应用（decide）被拒绝；admin/owner 全部放行。防 regression：
+// 测试 fake 的宽松行为不得掩盖 wiring 授权。
+func TestProposalAuthorizerMemberCreateAllowedDecideForbidden(t *testing.T) {
+	auth := proposalAuthorizer{roles: proposalRoleStub{role: "member"}}
+	require.NoError(t, auth.AuthorizeProposal(context.Background(), "tenant-1", "member-1",
+		agentdomain.ResourceAgent, agentdomain.OperationCreate, agentdomain.ProposalActionCreate))
+	require.ErrorIs(t, auth.AuthorizeProposal(context.Background(), "tenant-1", "member-1",
+		agentdomain.ResourceAgent, agentdomain.OperationCreate, agentdomain.ProposalActionDecide), agentdomain.ErrProposalForbidden)
+}
+
+func TestProposalAuthorizerAdminAndOwnerDecideAllowed(t *testing.T) {
+	for _, role := range []string{"admin", "owner"} {
+		auth := proposalAuthorizer{roles: proposalRoleStub{role: role}}
+		require.NoError(t, auth.AuthorizeProposal(context.Background(), "tenant-1", "admin-1",
+			agentdomain.ResourceAgent, agentdomain.OperationUpdate, agentdomain.ProposalActionCreate))
+		require.NoError(t, auth.AuthorizeProposal(context.Background(), "tenant-1", "admin-1",
+			agentdomain.ResourceAgent, agentdomain.OperationUpdate, agentdomain.ProposalActionDecide))
+	}
+}
+
+func TestProposalAuthorizerFailClosedOnResolverError(t *testing.T) {
+	auth := proposalAuthorizer{roles: proposalRoleStub{err: errors.New("resolver down")}}
+	require.ErrorIs(t, auth.AuthorizeProposal(context.Background(), "tenant-1", "user-1",
+		agentdomain.ResourceAgent, agentdomain.OperationCreate, agentdomain.ProposalActionCreate), agentdomain.ErrProposalForbidden)
+	require.ErrorIs(t, auth.AuthorizeProposal(context.Background(), "tenant-1", "user-1",
+		agentdomain.ResourceAgent, agentdomain.OperationCreate, agentdomain.ProposalActionDecide), agentdomain.ErrProposalForbidden)
+}

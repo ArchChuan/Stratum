@@ -50,27 +50,19 @@ func SystemAssistantToolDefinitions() []port.ToolDefinition {
 				jschema.RequiredProp("model", jschema.StringRange(1, 0, "")),
 			)).Map(),
 		},
+		{
+			Name: ToolProposeResourceChange, ProviderType: domain.ProviderTypeInternal,
+			ProviderID: ToolProposeResourceChange, CapabilityID: ToolProposeResourceChange,
+			Description: "创建受治理的资源变更提案：admin/owner 调用后自动确认并应用，member 生成待审提案等待审批。",
+			InputSchema: proposalToolSchema(),
+		},
+		{
+			Name: ToolApplyResourceChange, ProviderType: domain.ProviderTypeInternal,
+			ProviderID: ToolApplyResourceChange, CapabilityID: ToolApplyResourceChange,
+			Description: "直接修改租户资源(更新或创建)，无需审批，修改会立即生效并记录审计。调用前必须从对话确认用户意图；仅用于用户明确要求立即生效的场景，否则应使用提案工具。禁止删除资源、修改凭据或发布操作。",
+			InputSchema: proposalToolSchema(),
+		},
 	}
-}
-
-func SystemAssistantToolDefinitionsForRole(roleClass string) []port.ToolDefinition {
-	tools := SystemAssistantToolDefinitions()
-	if roleClass != "admin" && roleClass != "owner" {
-		return tools
-	}
-	proposal := port.ToolDefinition{
-		Name: ToolProposeResourceChange, ProviderType: domain.ProviderTypeInternal,
-		ProviderID: ToolProposeResourceChange, CapabilityID: ToolProposeResourceChange,
-		Description: "创建受治理的资源变更提案。只生成待审提案，不直接修改资源。",
-		InputSchema: proposalToolSchema(),
-	}
-	directApply := port.ToolDefinition{
-		Name: ToolApplyResourceChange, ProviderType: domain.ProviderTypeInternal,
-		ProviderID: ToolApplyResourceChange, CapabilityID: ToolApplyResourceChange,
-		Description: "直接修改租户资源(更新或创建)，无需审批，修改会立即生效并记录审计。调用前必须从对话确认用户意图；仅用于用户明确要求立即生效的场景，否则应使用提案工具。禁止删除资源、修改凭据或发布操作。",
-		InputSchema: proposalToolSchema(),
-	}
-	return append(tools, proposal, directApply)
 }
 
 func proposalToolSchema() map[string]any {

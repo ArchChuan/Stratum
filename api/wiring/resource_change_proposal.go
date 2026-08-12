@@ -64,6 +64,7 @@ func (a proposalAuthorizer) AuthorizeProposal(
 	tenantID, actorID string,
 	_ agentdomain.ResourceKind,
 	_ agentdomain.ProposalOperation,
+	action agentdomain.ProposalAction,
 ) error {
 	if a.roles == nil {
 		return agentdomain.ErrProposalForbidden
@@ -72,10 +73,17 @@ func (a proposalAuthorizer) AuthorizeProposal(
 	if err != nil {
 		return agentdomain.ErrProposalForbidden
 	}
-	if role != "admin" && role != "owner" {
-		return agentdomain.ErrProposalForbidden
+	switch role {
+	case "admin", "owner":
+		return nil
+	case "member":
+		// D6：member 可创建提案（落地 ready_for_review 交由审批流），
+		// 编辑/取消/确认/应用仍仅 admin/owner。
+		if action == agentdomain.ProposalActionCreate {
+			return nil
+		}
 	}
-	return nil
+	return agentdomain.ErrProposalForbidden
 }
 
 func NewResourceChangeProposalAdapters(

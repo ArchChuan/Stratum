@@ -21,7 +21,9 @@ type ProposalRepo interface {
 }
 
 type ProposalAuthorizer interface {
-	AuthorizeProposal(context.Context, string, string, domain.ResourceKind, domain.ProposalOperation) error
+	// AuthorizeProposal 校验指定 action 的权限：create 允许 member 发起提案
+	// （修改仍由 decide gate 把关），decide（编辑/取消/确认/应用）仅 admin/owner。
+	AuthorizeProposal(context.Context, string, string, domain.ResourceKind, domain.ProposalOperation, domain.ProposalAction) error
 }
 
 type BaselineResolver interface {

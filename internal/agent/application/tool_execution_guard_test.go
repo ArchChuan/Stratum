@@ -318,7 +318,7 @@ func TestSystemAssistantToolInputSchemasCompileForSharedExecutionGuard(t *testin
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var schema map[string]any
-			for _, tool := range SystemAssistantToolDefinitionsForRole("admin") {
+			for _, tool := range SystemAssistantToolDefinitions() {
 				if tool.Name == tc.name {
 					schema = tool.InputSchema
 				}

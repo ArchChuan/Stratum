@@ -22,11 +22,17 @@ func (a proposalE2EAuthorizer) AuthorizeProposal(
 	_, actorID string,
 	_ domain.ResourceKind,
 	_ domain.ProposalOperation,
+	action domain.ProposalAction,
 ) error {
-	if role := a.roles[actorID]; role != "admin" && role != "owner" {
-		return domain.ErrProposalForbidden
+	switch a.roles[actorID] {
+	case "admin", "owner":
+		return nil
+	case "member":
+		if action == domain.ProposalActionCreate {
+			return nil
+		}
 	}
-	return nil
+	return domain.ErrProposalForbidden
 }
 
 type proposalE2EApplier struct {
@@ -86,10 +92,14 @@ func TestSystemAssistantProposalPostgresAuthorizationSecretsAndConcurrency(t *te
 	otherTenantCtx := assistantTenantContext(tenants[1], adminID, tenantdb.RoleTenantAdmin)
 	payload := json.RawMessage(`{"name":"受治理 Agent","description":"端到端验收","model":"test-model","maxIterations":4,"maxContextTokens":4096}`)
 
-	_, err := service.CreateProposal(memberCtx, agentapp.CreateProposalInput{
+	// D6：member 可创建提案（进入待审流），但不能确认/应用（decide 仍 fail closed）。
+	memberProposal, err := service.CreateProposal(memberCtx, agentapp.CreateProposalInput{
 		TenantID: tenants[0], ActorID: memberID, Kind: domain.ResourceAgent,
 		Operation: domain.OperationCreate, Payload: payload,
 	})
+	require.NoError(t, err)
+	require.Equal(t, domain.StatusReadyForReview, memberProposal.Status)
+	_, err = service.ConfirmAndApply(memberCtx, tenants[0], memberProposal.ID, memberID)
 	require.ErrorIs(t, err, domain.ErrProposalForbidden)
 
 	invalid, err := service.CreateProposal(adminCtx, agentapp.CreateProposalInput{

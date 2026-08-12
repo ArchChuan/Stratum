@@ -2098,9 +2098,6 @@ func (s *AgentService) resolveSystemAssistantTooling(
 		roleClass = boundedAssistantRoleClass(authorization.RoleClass)
 	}
 	extraTools := SystemAssistantToolDefinitions()
-	if (roleClass == "admin" || roleClass == "owner") && s.deps.ProposalService != nil {
-		extraTools = SystemAssistantToolDefinitionsForRole(roleClass)
-	}
 	skillCatalog, catalogErr := s.buildSkillCatalog(ctx, meta.TenantID, subjectID, a.GetConfig().AllowedSkills)
 	if catalogErr != nil {
 		return nil, nil, "", fmt.Errorf("resolve experiment resources: %w", catalogErr)
@@ -2150,9 +2147,11 @@ func (s *AgentService) systemAssistantExecutionOptions(
 		}))
 	}
 	guard := NewToolResultGuard()
-	if (roleClass == "admin" || roleClass == "owner") && s.deps.ProposalService != nil {
+	if s.deps.ProposalService != nil {
 		proposalService := s.deps.ProposalService
 		tenantID, actorID, conversationID := meta.TenantID, req.UserID, req.ConversationID
+		// D6：admin/owner 提案创建后立即自动确认并应用，一气呵成；member 保持待审提案流。
+		autoApply := roleClass == "admin" || roleClass == "owner"
 		options = append(options, withProposalCreateFn(func(callCtx context.Context, args map[string]any) (domain.ResourceChangeProposalArtifact, error) {
 			kind, operation, resourceID, payload, parseErr := ParseResourceChangeToolArguments(args)
 			if parseErr != nil {
@@ -2162,17 +2161,45 @@ func (s *AgentService) systemAssistantExecutionOptions(
 				TenantID: tenantID, ConversationID: conversationID, ActorID: actorID,
 				Kind: kind, Operation: operation, ResourceID: resourceID, Payload: payload,
 			})
+			if createErr != nil {
+				return domain.ResourceChangeProposalArtifact{}, createErr
+			}
+			if autoApply {
+				applied, applyErr := proposalService.ConfirmAndApply(callCtx, tenantID, proposal.ID, actorID)
+				if applyErr != nil {
+					// 保留已创建的 proposal artifact：graph 错误分支据此记录
+					// proposal ID，避免模型重复创建提案。ConfirmAndApply 失败前
+					// 可能已推进状态机（stale/failed/unknown_outcome），回读当前
+					// DB 状态避免用创建时的 ready_for_review 快照误导模型；回读
+					// 失败（如上下文超时）则退回创建快照。
+					current, getErr := proposalService.Get(callCtx, tenantID, actorID, proposal.ID)
+					if getErr == nil {
+						proposal = current
+					}
+					created := domain.ResourceChangeProposalArtifact{
+						ID: proposal.ID, ResourceKind: proposal.ResourceKind, Operation: proposal.Operation,
+						Status: proposal.Status, Summary: proposal.Summary, ExpiresAt: proposal.ExpiresAt,
+					}
+					return created, fmt.Errorf("auto apply proposal %s: %w", proposal.ID, applyErr)
+				}
+				proposal = applied
+			}
 			artifact := domain.ResourceChangeProposalArtifact{
 				ID: proposal.ID, ResourceKind: proposal.ResourceKind, Operation: proposal.Operation,
 				Status: proposal.Status, Summary: proposal.Summary, ExpiresAt: proposal.ExpiresAt,
 			}
-			return artifact, createErr
+			return artifact, nil
 		}))
 	}
-	if (roleClass == "admin" || roleClass == "owner") && s.deps.ResourceChangeApplier != nil {
+	if s.deps.ResourceChangeApplier != nil {
 		applier := s.deps.ResourceChangeApplier
 		actorID := req.UserID
+		// apply 工具全角色可见（D6）；member 闭包内 fail closed 明确拒绝，
+		// 不触达 applier，与 update_system_model 的写路径模式一致。
 		options = append(options, withResourceChangeApplyFn(func(callCtx context.Context, args map[string]any) (domain.ApplyResult, error) {
+			if roleClass != "admin" && roleClass != "owner" {
+				return domain.ApplyResult{}, errors.New("直接修改资源需要管理员权限，member 请改用提案工具")
+			}
 			return applier(callCtx, actorID, args)
 		}))
 	}

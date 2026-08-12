@@ -298,7 +298,9 @@ func execProposeResourceChangeTool(toolCtx context.Context, tc port.ToolCall, s 
 	if !s.GovernedAssistant || s.ProposalCreateFn == nil {
 		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "proposal tool unavailable", content: "error: tool unavailable"}
 	}
-	proposal, callErr := s.ProposalCreateFn(toolCtx, tc.Arguments)
+	callCtx, cancel := context.WithTimeout(toolCtx, constants.SystemAssistantToolTimeout)
+	defer cancel()
+	proposal, callErr := s.ProposalCreateFn(callCtx, tc.Arguments)
 	if callErr != nil {
 		message := safeAssistantToolError(callErr)
 		if proposal.ID != "" {

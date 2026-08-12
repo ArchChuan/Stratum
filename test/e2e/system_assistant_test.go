@@ -329,8 +329,8 @@ func TestSystemAssistantOfficialDocsArtifactsAndAreaGap(t *testing.T) {
 	require.NotContains(t, string(gotJSON), tenantB)
 	require.NotContains(t, string(gotJSON), userB)
 
-	tools := agentapp.SystemAssistantToolDefinitionsForRole("admin")
-	require.Len(t, tools, 4)
+	tools := agentapp.SystemAssistantToolDefinitions()
+	require.Len(t, tools, 6)
 	for _, tool := range tools {
 		require.Equal(t, domain.ProviderTypeInternal, tool.ProviderType)
 		require.NotEmpty(t, tool.InputSchema)
@@ -382,7 +382,8 @@ func TestSystemAssistantDeterministicAgentLoopPersistsTypedArtifacts(t *testing.
 		require.Equal(t, domain.CurrentSystemAssistantProfileVersion, artifact.ProfileVersion)
 	}
 	require.Len(t, gateway.requests, 2)
-	require.Len(t, gateway.requests[0].LLM.Tools, 2)
+	// D6：工具全量暴露（不再按角色裁剪），确定性模型只选用 search/diagnose。
+	require.Len(t, gateway.requests[0].LLM.Tools, len(agentapp.SystemAssistantToolDefinitions()))
 	for i, name := range []string{domain.SystemAssistantToolSearchOfficialDocs, domain.SystemAssistantToolDiagnoseTenant} {
 		require.Equal(t, name, gateway.requests[0].LLM.Tools[i].Name)
 	}

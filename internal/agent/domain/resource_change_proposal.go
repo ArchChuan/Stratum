@@ -40,6 +40,15 @@ const (
 	OperationUpdate ProposalOperation = "update"
 )
 
+// ProposalAction 区分提案生命周期中的授权动作：create 允许 member 发起提案
+// （最终修改由决策 gate 把关），decide（编辑/取消/确认/应用）仅 admin/owner。
+type ProposalAction string
+
+const (
+	ProposalActionCreate ProposalAction = "create"
+	ProposalActionDecide ProposalAction = "decide"
+)
+
 type ResourceChangeProposal struct {
 	ID                  string            `json:"id"`
 	TenantID            string            `json:"-"`

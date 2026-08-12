@@ -297,6 +297,21 @@ func TestResourceChangeProposalConcurrentConfirmDoesNotFinalizeActiveClaim(t *te
 	require.Equal(t, domain.StatusApplying, repo.proposals[proposal.ID].Status)
 }
 
+func TestResourceChangeProposalConfirmAndApplyRejectsCrossTenant(t *testing.T) {
+	repo := newProposalRepoFake()
+	service := newProposalServiceForTest(repo, &proposalAuthorizerFake{}, &baselineFake{}, nil)
+	proposal, err := service.CreateProposal(context.Background(), CreateProposalInput{
+		TenantID: "tenant-1", ActorID: "admin", Kind: domain.ResourceAgent, Operation: domain.OperationCreate,
+		Payload: json.RawMessage(`{"name":"agent","description":"desc","model":"qwen-plus","maxIterations":5,"maxContextTokens":4096}`),
+	})
+	require.NoError(t, err)
+	// 跨租户确认/应用必须被 getOwnedProposal 归属校验拒绝，
+	// 即使 authorizer 放行（防御存储层迁移到共享 schema）。
+	_, err = service.ConfirmAndApply(context.Background(), "tenant-2", proposal.ID, "admin")
+	require.ErrorIs(t, err, domain.ErrProposalForbidden)
+	require.Equal(t, domain.StatusReadyForReview, repo.proposals[proposal.ID].Status)
+}
+
 func TestResourceChangeProposalUpdateDraftRevalidatesPayload(t *testing.T) {
 	repo := newProposalRepoFake()
 	service := newProposalServiceForTest(repo, &proposalAuthorizerFake{}, &baselineFake{}, nil)
@@ -452,7 +467,7 @@ type proposalAuthorizerFake struct {
 	err           error
 }
 
-func (f *proposalAuthorizerFake) AuthorizeProposal(context.Context, string, string, domain.ResourceKind, domain.ProposalOperation) error {
+func (f *proposalAuthorizerFake) AuthorizeProposal(context.Context, string, string, domain.ResourceKind, domain.ProposalOperation, domain.ProposalAction) error {
 	f.calls++
 	if f.err != nil || f.calls == f.failAt {
 		if f.err != nil {

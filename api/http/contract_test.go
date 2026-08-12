@@ -559,6 +559,7 @@ type contractProposalAuthorizer struct{}
 
 func (contractProposalAuthorizer) AuthorizeProposal(
 	context.Context, string, string, agentdomain.ResourceKind, agentdomain.ProposalOperation,
+	agentdomain.ProposalAction,
 ) error {
 	return nil
 }
