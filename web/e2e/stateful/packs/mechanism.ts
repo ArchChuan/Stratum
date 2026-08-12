@@ -89,10 +89,14 @@ export const executeMechanismPack = async ({
     const drawer = page.locator('.ant-drawer:visible');
     await expect(drawer).toBeVisible();
     await page.getByLabel('档案名称').fill(`E2E 机制档案 ${Date.now()}`);
-    const prefixes = page.getByLabel('家族前缀');
-    await prefixes.click();
-    await prefixes.locator('input').fill(familyKey);
-    await prefixes.locator('input').press('Enter');
+    // 家族前缀 Select 是 mode="tags" open={false}：搜索 input 不参与可访问性树
+    // 且下拉永不开，getByLabel 定位不到控件内部。改用现有 pack 的 form-item
+    // filter 模式，模拟真实用户：点击 selector 聚焦搜索框，键盘输入后 Enter 添加。
+    const prefixes = page.locator('.ant-form-item').filter({ hasText: '家族前缀' }).locator('.ant-select');
+    await prefixes.locator('.ant-select-selector').click();
+    await page.keyboard.type(familyKey);
+    await page.keyboard.press('Enter');
+    await expect(prefixes.locator('.ant-select-selection-item')).toContainText(familyKey);
     await page.getByLabel('记忆提取模板').fill('抽取 {input} 中的关键事实并以 JSON 输出。');
     await page.getByLabel('记忆富化模型').fill('qwen-max');
     await page.getByLabel('记忆总结模型').fill('qwen-max');
