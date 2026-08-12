@@ -65,4 +65,70 @@ describe('AgentFormSections', () => {
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'LLM 模型' }));
     expect(screen.getByText('retired-chat（当前不可用）')).toBeInTheDocument();
   });
+
+  it('shows an editable max_tokens field for the system assistant', () => {
+    render(
+      <Form initialValues={{ max_tokens: 2048 }}>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} isSystem />
+      </Form>,
+    );
+
+    const input = screen.getByLabelText(/最大生成 Token/);
+    expect(input).toHaveValue('2048');
+    expect(screen.getByText('0 = 不修改（保留现有值）；未设置过则使用平台默认')).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: '4096' } });
+    expect(input).toHaveValue('4096');
+    expect(screen.queryByText(/请输入最大生成 Token/)).not.toBeInTheDocument();
+  });
+
+  it('keeps max_tokens visible for ordinary agents', () => {
+    render(
+      <Form initialValues={{ max_tokens: 2048 }}>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
+      </Form>,
+    );
+
+    const input = screen.getByLabelText(/最大生成 Token/);
+    expect(input).toHaveValue('2048');
+  });
+
+  it('hides temperature and compaction fields for the system assistant only', () => {
+    const { rerender } = render(
+      <Form>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} isSystem />
+      </Form>,
+    );
+
+    expect(screen.queryByRole('slider', { name: 'temperature' })).not.toBeInTheDocument();
+    expect(screen.queryByText('压缩最近轮数（compaction_recent_groups）')).not.toBeInTheDocument();
+    expect(screen.queryByText('压缩安全比例（compaction_safety_ratio）')).not.toBeInTheDocument();
+
+    rerender(
+      <Form>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
+      </Form>,
+    );
+
+    expect(screen.getByRole('slider', { name: 'temperature' })).toBeInTheDocument();
+    expect(screen.getByText('压缩最近轮数（compaction_recent_groups）')).toBeInTheDocument();
+  });
+
+  it('applies constant bounds to the token inputs', () => {
+    render(
+      <Form>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} isSystem />
+      </Form>,
+    );
+
+    const maxTokens = screen.getByLabelText(/最大生成 Token/);
+    expect(maxTokens).toHaveAttribute('aria-valuemin', '0');
+    expect(maxTokens).toHaveAttribute('aria-valuemax', '131072');
+    expect(maxTokens).toHaveAttribute('step', '256');
+
+    const contextTokens = screen.getByLabelText(/最大上下文 Token/);
+    expect(contextTokens).toHaveAttribute('aria-valuemin', '0');
+    expect(contextTokens).toHaveAttribute('aria-valuemax', '128000');
+    expect(contextTokens).toHaveAttribute('step', '1000');
+  });
 });
