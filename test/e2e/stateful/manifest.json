@@ -2495,6 +2495,46 @@
       "http_evidence": "PUT /mechanism/profiles returns the updated profile with incremented version",
       "db_evidence": "model_profiles row family_key/fingerprint/version agree with the response",
       "coverage": "short"
+    },
+    {
+      "id": "mechanism.mutation.run.matrix",
+      "domain": "mechanism",
+      "user_goal": "Trigger matrix evaluation of all model profiles against the benchmark suite from /mechanism/profiles",
+      "route": "/mechanism/matrix",
+      "roles": {
+        "allowed": [
+          "system_admin",
+          "global_admin"
+        ],
+        "denied": [
+          "member"
+        ]
+      },
+      "mutation": "POST /mechanism/matrix/runs",
+      "browser_action_id": "mechanism.mutation.run.matrix",
+      "http_evidence": "POST /mechanism/matrix/runs returns suite_revision_id and triggered_count",
+      "db_evidence": "evaluation runs are enqueued per profile with matrix: idempotency key",
+      "coverage": "short"
+    },
+    {
+      "id": "mechanism.mutation.adopt.matrix",
+      "domain": "mechanism",
+      "user_goal": "Adopt a draft profile (draft to active) from the matrix workbench",
+      "route": "/mechanism/matrix",
+      "roles": {
+        "allowed": [
+          "system_admin",
+          "global_admin"
+        ],
+        "denied": [
+          "member"
+        ]
+      },
+      "mutation": "POST /mechanism/matrix/adopt",
+      "browser_action_id": "mechanism.mutation.adopt.matrix",
+      "http_evidence": "POST /mechanism/matrix/adopt returns the profile with status active",
+      "db_evidence": "model_profiles row status flips draft to active with fingerprint unchanged",
+      "coverage": "short"
     }
   ]
 }

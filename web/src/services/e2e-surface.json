@@ -117,6 +117,8 @@
     "POST /prompts/:key/versions/:version/publish",
     "PUT /prompts/bindings",
     "DELETE /prompts/bindings/:key/:scope",
-    "PUT /mechanism/profiles"
+    "PUT /mechanism/profiles",
+    "POST /mechanism/matrix/runs",
+    "POST /mechanism/matrix/adopt"
   ]
 }

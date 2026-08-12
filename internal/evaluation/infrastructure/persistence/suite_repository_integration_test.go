@@ -66,4 +66,27 @@ func TestPgSuiteRepositoryCreatePublishAndLoad(t *testing.T) {
 	if judgeCase.JudgeSpec.Model != "qwen-max" || judgeCase.JudgeSpec.Rubric != "自定义 rubric" {
 		t.Fatalf("judge spec mismatch on round-trip: %+v", judgeCase.JudgeSpec)
 	}
+
+	// 矩阵评测 seed 复用路径：active revision 必须是发布态且携带完整 cases。
+	active, found, err := repo.GetActiveRevision(ctx, tenantID, suite.ID)
+	if err != nil || !found {
+		t.Fatalf("GetActiveRevision: found=%v err=%v", found, err)
+	}
+	if active.ID != revision.ID || active.Status != domain.SuiteRevisionPublished || len(active.Cases) != 2 {
+		t.Fatalf("unexpected active revision: %+v", active)
+	}
+
+	// 从未发布的套件 found=false。
+	neverPublished := domain.EvalSuite{ID: "suite-2", Name: "未发布基线", DraftRevisionID: "suite-rev-2"}
+	draftRev := domain.EvalSuiteRevision{
+		ID: "suite-rev-2", SuiteID: "suite-2", Status: domain.SuiteRevisionDraft,
+		ResourceKind: domain.ResourceKindMechanism,
+		Cases:        []domain.EvalCase{{ID: "case-3", Name: "未发布", Input: "x", AssertionMode: domain.AssertionContains, Enabled: true}},
+	}
+	if err := repo.CreateSuite(ctx, tenantID, neverPublished, draftRev); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := repo.GetActiveRevision(ctx, tenantID, "suite-2"); err != nil || found {
+		t.Fatalf("expected no active revision for unpublished suite: found=%v err=%v", found, err)
+	}
 }

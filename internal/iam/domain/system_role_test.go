@@ -55,6 +55,22 @@ func TestDeriveSystemRole(t *testing.T) {
 	}
 }
 
+// TestDeriveSystemRole_ResolvedDefaultTenantID 回归真实运行时缺陷：默认租户 id
+// 是 bootstrap 解析出的 UUID，真实 membership 里永远不会出现字面 "tenant_default"。
+// 覆盖已解析 id 时的 admin/root 推导，以及非默认租户 root 仍是普通用户。
+func TestDeriveSystemRole_ResolvedDefaultTenantID(t *testing.T) {
+	const resolved = "11111111-2222-3333-4444-555555555555"
+	constants.SetResolvedDefaultTenantID(resolved)
+	defer constants.SetResolvedDefaultTenantID(constants.DefaultTenantID)
+
+	require.Equal(t, domain.SystemRoleSystemAdmin,
+		domain.DeriveSystemRole([]domain.TenantMembership{{TenantID: resolved, Role: "admin"}}))
+	require.Equal(t, domain.SystemRoleGlobalAdmin,
+		domain.DeriveSystemRole([]domain.TenantMembership{{TenantID: resolved, Role: "root"}}))
+	require.Equal(t, domain.SystemRoleUser,
+		domain.DeriveSystemRole([]domain.TenantMembership{{TenantID: "tenant_acme", Role: "root"}}))
+}
+
 func TestSystemRoleAtLeast(t *testing.T) {
 	tests := []struct {
 		name   string

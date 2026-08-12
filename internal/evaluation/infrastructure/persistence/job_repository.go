@@ -34,9 +34,20 @@ func (r *PgJobRepository) Enqueue(
 		var payloadJSON []byte
 		var status string
 		if err := tx.QueryRow(ctx,
+			// 幂等冲突按状态分派：succeeded/running 是静默 no-op（已完成或
+			// 正在执行的 run 不重复触发）；failed/cancelled 重新激活为 queued
+			// 并清空执行残留（error/lease/result），使重触发可被 worker 重拾。
+			// 修复前 ON CONFLICT 仅写回幂等键，而 Claim 只选 queued/running，
+			// 终态 job 永不重拾——矩阵重评测对失败 run 是静默 no-op。
 			`INSERT INTO evaluation_jobs (id, job_type, payload, status, idempotency_key, created_at)
 			 VALUES ($1,$2,$3,$4,$5,$6)
-			 ON CONFLICT (idempotency_key) DO UPDATE SET idempotency_key=EXCLUDED.idempotency_key
+			 ON CONFLICT (idempotency_key) DO UPDATE SET
+			   status = CASE WHEN evaluation_jobs.status IN ('failed','cancelled') THEN 'queued' ELSE evaluation_jobs.status END,
+			   error_message = CASE WHEN evaluation_jobs.status IN ('failed','cancelled') THEN '' ELSE evaluation_jobs.error_message END,
+			   lease_owner = CASE WHEN evaluation_jobs.status IN ('failed','cancelled') THEN '' ELSE evaluation_jobs.lease_owner END,
+			   lease_until = CASE WHEN evaluation_jobs.status IN ('failed','cancelled') THEN NULL ELSE evaluation_jobs.lease_until END,
+			   result_id = CASE WHEN evaluation_jobs.status IN ('failed','cancelled') THEN '' ELSE evaluation_jobs.result_id END,
+			   updated_at = CASE WHEN evaluation_jobs.status IN ('failed','cancelled') THEN NOW() ELSE evaluation_jobs.updated_at END
 			 RETURNING id, job_type, payload, status, attempts, idempotency_key, error_message, result_id, created_at`,
 			job.ID, job.Type, string(payload), string(job.Status), job.IdempotencyKey, job.CreatedAt,
 		).Scan(&saved.ID, &saved.Type, &payloadJSON, &status, &saved.Attempts,

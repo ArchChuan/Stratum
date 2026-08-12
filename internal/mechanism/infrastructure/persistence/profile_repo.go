@@ -78,6 +78,8 @@ func (r *ProfileRepo) Upsert(ctx context.Context, p domain.Profile) error {
 	if err != nil {
 		return fmt.Errorf("profile_repo: marshal baseline: %w", err)
 	}
+	// created_by 在冲突覆盖时更新为最后操作者（版本化语义，非原始创建者）。
+	// 注释必须放在 SQL 字符串外：`//` 不是 PostgreSQL 注释，拼进语句会语法错误。
 	_, err = r.db.Exec(ctx,
 		`INSERT INTO model_profiles (id, family_key, display_name, model_matcher, baseline, fingerprint, version, status, created_by)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -85,7 +87,6 @@ func (r *ProfileRepo) Upsert(ctx context.Context, p domain.Profile) error {
 		   display_name=EXCLUDED.display_name, model_matcher=EXCLUDED.model_matcher,
 		   baseline=EXCLUDED.baseline, fingerprint=EXCLUDED.fingerprint,
 		   version=model_profiles.version+1, status=EXCLUDED.status,
-		   // created_by 在冲突覆盖时更新为最后操作者（版本化语义，非原始创建者）。
 		   created_by=EXCLUDED.created_by, updated_at=NOW()`,
 		p.ID, p.FamilyKey, p.DisplayName, string(matcherJSON), string(baselineJSON),
 		p.Fingerprint, p.Version, p.Status, p.CreatedBy,

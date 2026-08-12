@@ -117,6 +117,19 @@ func (s *SuiteService) UpdateDraftCase(ctx context.Context, tenantID, suiteID, c
 	return domain.EvalCase{}, ErrSuiteNotFound
 }
 
+// GetActiveRevision 返回套件当前已发布 revision；套件不存在或从未发布
+// 时返回 ErrSuiteNotFound。矩阵评测 seed 用：已有发布基准集直接复用。
+func (s *SuiteService) GetActiveRevision(ctx context.Context, tenantID, suiteID string) (domain.EvalSuiteRevision, error) {
+	revision, ok, err := s.repo.GetActiveRevision(ctx, tenantID, suiteID)
+	if err != nil {
+		return domain.EvalSuiteRevision{}, err
+	}
+	if !ok {
+		return domain.EvalSuiteRevision{}, ErrSuiteNotFound
+	}
+	return revision, nil
+}
+
 func (s *SuiteService) GetRevision(ctx context.Context, tenantID, revisionID string) (domain.EvalSuiteRevision, error) {
 	revision, ok, err := s.repo.GetRevision(ctx, tenantID, revisionID)
 	if err != nil {

@@ -82,6 +82,37 @@ func (r *PgSuiteRepository) GetRevision(
 	return revision, found, err
 }
 
+// GetActiveRevision 返回套件当前已发布（active）revision，用于矩阵评测
+// seed 幂等复用：已发布的基准集直接复用，不重复创建。套件不存在或
+// 从未发布（active_revision_id 为 NULL）时 found=false。
+func (r *PgSuiteRepository) GetActiveRevision(
+	ctx context.Context,
+	tenantID, suiteID string,
+) (domain.EvalSuiteRevision, bool, error) {
+	var revision domain.EvalSuiteRevision
+	found := false
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var activeRevisionID string
+		if err := tx.QueryRow(ctx,
+			`SELECT COALESCE(active_revision_id, '') FROM eval_suites WHERE id=$1`, suiteID,
+		).Scan(&activeRevisionID); err != nil {
+			if err == pgx.ErrNoRows {
+				return nil // 套件不存在：保持 found=false
+			}
+			return fmt.Errorf("evaluation suite repository: load active revision id: %w", err)
+		}
+		if activeRevisionID == "" {
+			return nil // 从未发布
+		}
+		var err error
+		revision, found, err = loadSuiteRevision(ctx, tx,
+			`SELECT id, suite_id, COALESCE(parent_id, ''), COALESCE(version_no, 0), status, resource_kind
+			 FROM eval_suite_revisions WHERE id=$1`, activeRevisionID)
+		return err
+	})
+	return revision, found, err
+}
+
 func (r *PgSuiteRepository) NextVersionNo(ctx context.Context, tenantID, suiteID string) (int, error) {
 	next := 0
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {

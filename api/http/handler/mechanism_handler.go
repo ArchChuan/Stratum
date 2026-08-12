@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"net/http"
 
 	"github.com/byteBuilderX/stratum/api/http/dto/gen"
@@ -11,17 +13,30 @@ import (
 	"go.uber.org/zap"
 )
 
+// errMatrixUnavailable 标记矩阵服务未装配（evaluation 缺库时 wiring 置 nil，
+// 矩阵端点 fail closed，不静默返回空报告）。
+var errMatrixUnavailable = errors.New("mechanism matrix: unavailable")
+
+// matrixService 是 handler 对矩阵服务（*application.MatrixService）的依赖收窄。
+type matrixService interface {
+	GetMatrix(ctx context.Context, tenantID string) (application.MatrixReport, error)
+	RunMatrix(ctx context.Context, tenantID, requestedBy string) (application.RunMatrixResult, error)
+	AdoptProfile(ctx context.Context, familyKey, updatedBy string) error
+}
+
 // MechanismHandler exposes the mechanism baseline (model_profiles) management
 // surface under /mechanism/profiles. 管理面依附默认租户（middleware 层校验），
 // 消费路径（memory 管线）经 Service 透明取用同一份档案。
 type MechanismHandler struct {
 	svc    *application.Service
+	matrix matrixService
 	logger *zap.Logger
 }
 
-// NewMechanismHandler 构造机制档案管理 handler。
-func NewMechanismHandler(svc *application.Service, logger *zap.Logger) *MechanismHandler {
-	return &MechanismHandler{svc: svc, logger: logger}
+// NewMechanismHandler 构造机制档案管理 handler。matrix 为评测矩阵工作台
+// 服务（阶段3），evaluation 缺库时可传 nil（矩阵端点 503 fail closed）。
+func NewMechanismHandler(svc *application.Service, matrix matrixService, logger *zap.Logger) *MechanismHandler {
+	return &MechanismHandler{svc: svc, matrix: matrix, logger: logger}
 }
 
 // List GET /mechanism/profiles — 全部模型族档案。
@@ -96,6 +111,102 @@ func toProfileResponse(p mechanismdomain.Profile) gen.ProfileResponse {
 			SummaryModel:     p.Baseline.Models.SummaryModel,
 		},
 	}
+}
+
+// MatrixReport GET /mechanism/matrix — 评测矩阵工作台快照：基准集、档案
+// 单元格（多维指标）与帕累托前沿标注。
+func (h *MechanismHandler) MatrixReport(c *gin.Context) {
+	if h.matrix == nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusServiceUnavailable, errMatrixUnavailable))
+		return
+	}
+	report, err := h.matrix.GetMatrix(c.Request.Context(), c.GetString(middleware.ContextKeyTenantID))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, toMatrixReportResponse(report))
+}
+
+// RunMatrix POST /mechanism/matrix/runs — 触发全部档案 × 基准集矩阵评测
+// （异步 job 执行，立即返回排队摘要）。
+func (h *MechanismHandler) RunMatrix(c *gin.Context) {
+	if h.matrix == nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusServiceUnavailable, errMatrixUnavailable))
+		return
+	}
+	result, err := h.matrix.RunMatrix(c.Request.Context(),
+		c.GetString(middleware.ContextKeyTenantID), c.GetString(middleware.ContextKeySub))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gen.RunMatrixResponse{
+		SuiteRevisionID: result.SuiteRevisionID,
+		//nolint:gosec // 触发档案数为小整数,不可能溢出 int32(proto 契约)
+		TriggeredCount: int32(result.TriggeredCount),
+	})
+}
+
+// AdoptProfile POST /mechanism/matrix/adopt — 采纳档案（draft → active 两态
+// 发布，评测采纳后置 active）。返回采纳后的档案。
+func (h *MechanismHandler) AdoptProfile(c *gin.Context) {
+	if h.matrix == nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusServiceUnavailable, errMatrixUnavailable))
+		return
+	}
+	var req gen.AdoptProfileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	if err := h.matrix.AdoptProfile(c.Request.Context(), req.FamilyKey, c.GetString(middleware.ContextKeySub)); err != nil {
+		// 400（ErrAdoptInvalidTransition）由统一错误管线的 errorStatusTable 映射。
+		_ = c.Error(err)
+		return
+	}
+	p, err := h.svc.GetByFamilyKey(c.Request.Context(), req.FamilyKey)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, toProfileResponse(p))
+}
+
+// toMatrixReportResponse 映射 MatrixReport → DTO。
+func toMatrixReportResponse(report application.MatrixReport) gen.MatrixReportResponse {
+	resp := gen.MatrixReportResponse{
+		Suites: make([]gen.BenchmarkSuiteResponse, 0, len(report.Suites)),
+		Cells:  make([]gen.MatrixCellResponse, 0, len(report.Cells)),
+	}
+	for _, s := range report.Suites {
+		resp.Suites = append(resp.Suites, gen.BenchmarkSuiteResponse{
+			ID: s.ID, Name: s.Name, Description: s.Description,
+			ActiveRevision: s.ActiveRevision,
+			//nolint:gosec // case 数为小整数,不可能溢出 int32(proto 契约)
+			CaseCount: int32(s.CaseCount),
+		})
+	}
+	for _, cell := range report.Cells {
+		resp.Cells = append(resp.Cells, gen.MatrixCellResponse{
+			FamilyKey:    cell.FamilyKey,
+			DisplayName:  cell.DisplayName,
+			Status:       cell.Status,
+			Fingerprint:  cell.Fingerprint,
+			Version:      int32(cell.Version), //nolint:gosec // 版本自增小整数
+			EnrichModel:  cell.EnrichModel,
+			SummaryModel: cell.SummaryModel,
+			RunID:        cell.RunID,
+			Passed:       cell.Passed,
+			PassRate:     cell.PassRate,
+			TotalCost:    cell.TotalCost,
+			AvgLatency:   cell.AvgLatency,
+			TotalCases:   int32(cell.TotalCases), //nolint:gosec // case 数为小整数
+			Frontier:     cell.Frontier,
+		})
+	}
+	resp.FrontierKeys = report.FrontierKeys
+	return resp
 }
 
 // domainFromUpsert 映射 Upsert DTO → domain.Profile（recall 当前保持 nil）。
