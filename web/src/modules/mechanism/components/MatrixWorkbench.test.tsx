@@ -3,6 +3,7 @@ import { message } from 'antd';
 import { vi } from 'vitest';
 
 import type { MatrixReport } from '../model/mechanism';
+
 import { MatrixWorkbench } from './MatrixWorkbench';
 
 const { mechanismApiMock } = vi.hoisted(() => ({
