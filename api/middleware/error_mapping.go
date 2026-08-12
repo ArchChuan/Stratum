@@ -200,6 +200,8 @@ var errorStatusTable = map[error]int{
 	mcpdomain.ErrUnsupportedTransport:             http.StatusBadRequest,
 	mcpdomain.ErrInvalidServerURL:                 http.StatusBadRequest,
 	mcpdomain.ErrUnsupportedAuth:                  http.StatusBadRequest,
+	mcpdomain.ErrSessionMissing:                   http.StatusNotFound,
+	mcpdomain.ErrTransportFailed:                  http.StatusBadGateway,
 }
 
 // MapErrorToStatus walks the wrap chain and returns the HTTP status that

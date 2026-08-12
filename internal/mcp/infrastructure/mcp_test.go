@@ -5,26 +5,44 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
+	mcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestHTTPClientErrorDoesNotExposeResponseBody(t *testing.T) {
+	// SDK 握手需要 standalone SSE 端点:GET 保持打开的空流,POST
+	// initialize/initialized 正常应答,其余请求 502 + 敏感 body。
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush() // 不发 flush,响应头永远不到客户端,Do 死等
+			<-r.Context().Done()
+			return
+		}
 		var request MCPRequest
 		_ = json.NewDecoder(r.Body).Decode(&request)
 		switch request.Method {
 		case "initialize":
+			// SDK 客户端把 POST 响应按 SSE 帧解析,纯 JSON 会被当作空事件
+			// 丢弃,handleSend 永远等不到响应。必须写 data: 前缀。
+			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Mcp-Session-Id", "session-1")
-			writeTestInitializeResult(w, request.ID)
+			b, _ := json.Marshal(MCPResponse{JSONRPC: "2.0", ID: request.ID, Result: map[string]any{
+				"protocolVersion": "2025-06-18",
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]any{"name": "test-server", "version": "1.0.0"},
+			}})
+			_, _ = w.Write([]byte("data: " + string(b) + "\n\n"))
 			return
 		case "notifications/initialized":
 			w.WriteHeader(http.StatusAccepted)
@@ -33,47 +51,49 @@ func TestHTTPClientErrorDoesNotExposeResponseBody(t *testing.T) {
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write([]byte("mcp-sensitive-sentinel"))
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 	client := NewBaseClient(&MCPServerConfig{
-		ID: "server-1", Name: "test", Transport: "http", URL: server.URL, Timeout: time.Second,
+		ID: "server-1", Name: "test", Transport: "http", URL: server.URL,
 	}, zap.NewNop())
-	if err := client.Connect(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	client.urlPolicy = URLPolicyAllowPrivate // httptest loopback
+	require.NoError(t, client.Connect(context.Background()))
+	// 注册顺序:server.Close 先注册、Disconnect 后注册 → LIFO 里 Disconnect
+	// 先执行关掉 GET 流,server.Close 才不会等死活跃连接。
+	t.Cleanup(func() { _ = client.Disconnect(context.Background()) })
+
 	_, err := client.ListTools(context.Background())
-	if err == nil {
-		t.Fatal("expected downstream HTTP error")
-	}
-	if strings.Contains(err.Error(), "mcp-sensitive-sentinel") {
-		t.Fatalf("downstream response body leaked through error: %v", err)
-	}
+	require.Error(t, err, "expected downstream HTTP error")
+	// 翻译层把 502 投影为通用 transport 错误,服务器可控文本不得进入
+	// 错误链(否则会经 zap.Error 落日志)。
+	require.ErrorIs(t, err, mcpdomain.ErrTransportFailed)
+	require.NotContains(t, err.Error(), "mcp-sensitive-sentinel")
 }
 
 func TestHTTPClientRejectsJSONRPCProtocolErrorWithoutLeakingMessage(t *testing.T) {
+	// 用真实 SDK 服务器:工具 handler 返回错误 → 服务器编码为 JSON-RPC
+	// error 帧。客户端翻译层必须把 sentinel 剥掉,只投影通用 sentinel。
 	const sentinel = "mcp-private-protocol-error"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		body, _ := io.ReadAll(r.Body)
-		if strings.Contains(string(body), `"method":"initialize"`) {
-			writeTestInitializeResult(w, 1)
-			return
-		}
-		if strings.Contains(string(body), `"method":"notifications/initialized"`) {
-			w.WriteHeader(http.StatusAccepted)
-			return
-		}
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"` + sentinel + `"}}`))
-	}))
-	defer server.Close()
+	mcpSrv := mcp.NewServer(&mcp.Implementation{Name: "errsrv", Version: "1.0"}, nil)
+	mcpSrv.AddTool(&mcp.Tool{
+		Name:        "failing_tool",
+		Description: "always errors",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return nil, errors.New(sentinel)
+	})
+	server := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpSrv }, nil))
+	t.Cleanup(server.Close)
 	client := NewBaseClient(&MCPServerConfig{
-		ID: "server-1", Name: "test", Transport: "http", URL: server.URL, Timeout: time.Second,
+		ID: "server-1", Name: "test", Transport: "http", URL: server.URL,
 	}, zap.NewNop())
+	client.urlPolicy = URLPolicyAllowPrivate // httptest loopback
 	require.NoError(t, client.Connect(context.Background()))
+	t.Cleanup(func() { _ = client.Disconnect(context.Background()) })
 
 	_, err := client.CallTool(context.Background(), "failing_tool", map[string]any{})
 
-	require.ErrorContains(t, err, "MCP protocol error")
-	require.NotContains(t, err.Error(), sentinel)
+	require.ErrorIs(t, err, mcpdomain.ErrTransportFailed)
+	require.NotContains(t, err.Error(), sentinel, "server-controlled error text must not leak")
 }
 
 type blockingMCPClient struct {
@@ -423,10 +443,16 @@ func TestBaseClientHTTPInitializeRejectsNon2xxWithoutLeakingQuery(t *testing.T) 
 	client := NewBaseClient(&MCPServerConfig{
 		ID: "server-1", Name: "test", Transport: "http", URL: server.URL + "?" + secretQuery, Timeout: time.Second,
 	}, zap.NewNop())
+	client.urlPolicy = URLPolicyAllowPrivate
 	err := client.Connect(context.Background())
 	if err == nil || strings.Contains(err.Error(), secretQuery) || strings.Contains(client.GetServerInfo().Error, secretQuery) ||
 		client.GetServerInfo().Error != "connect_failed" {
 		t.Fatalf("err=%v server_info=%+v", err, client.GetServerInfo())
+	}
+	// The SDK decodes non-2xx bodies into its error value, so only the
+	// category is projected; 401 is non-transient and not retried.
+	if !errors.Is(err, mcpdomain.ErrTransportFailed) {
+		t.Fatalf("expected ErrTransportFailed projection, got: %v", err)
 	}
 }
 
@@ -438,9 +464,13 @@ func TestBaseClientHTTPInitializeTimeoutAndLogsExcludeQuery(t *testing.T) {
 	defer server.Close()
 	client := NewBaseClient(&MCPServerConfig{
 		ID: "server-1", Transport: "http", URL: server.URL + "?credential=synthetic-sensitive-value",
-		Timeout: 10 * time.Millisecond,
 	}, zap.New(core))
-	if err := client.Connect(context.Background()); err == nil {
+	client.urlPolicy = URLPolicyAllowPrivate
+	// config.Timeout is not consumed by the SDK-backed client; per-call
+	// budgets travel on the context (SDK retries keep a cancelled ctx failing fast).
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := client.Connect(ctx); err == nil {
 		t.Fatal("expected initialize timeout")
 	}
 	for _, entry := range observed.All() {
@@ -467,6 +497,7 @@ func TestBaseClientCallToolTransportFailureDoesNotLeakURLOrSession(t *testing.T)
 	client := NewBaseClient(&MCPServerConfig{
 		ID: "server-1", Transport: "http", URL: server.URL + "?" + secretQuery, Timeout: time.Second,
 	}, zap.New(core))
+	client.urlPolicy = URLPolicyAllowPrivate
 	if err := client.Connect(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -530,12 +561,13 @@ func TestClientManagerHTTPInitializeFailureClosesPartialClient(t *testing.T) {
 	var client *BaseClient
 	manager.clientFactory = func(config *MCPServerConfig, logger *zap.Logger) MCPClient {
 		client = NewBaseClient(config, logger)
+		client.urlPolicy = URLPolicyAllowPrivate
 		return client
 	}
 	err := manager.Connect(context.Background(), &MCPServerConfig{
 		ID: "server-1", Transport: "http", URL: server.URL, Timeout: time.Second,
 	}, nil, "", nil)
-	if err == nil || client == nil || client.httpClient != nil || manager.GetClient(context.Background(), "server-1") != nil {
+	if err == nil || client == nil || client.session != nil || manager.GetClient(context.Background(), "server-1") != nil {
 		t.Fatalf("partial HTTP client not cleaned up: client=%+v err=%v", client, err)
 	}
 }

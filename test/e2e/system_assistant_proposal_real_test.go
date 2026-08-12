@@ -182,11 +182,14 @@ func TestSystemAssistantProposalRealServices(t *testing.T) {
 	skillSvc.SetTenantRoleResolver(roles)
 	workspaceSvc := knowledgeapp.NewWorkspaceService(knowledgepersist.NewWorkspaceRepo(pool), nil, zap.NewNop())
 	workspaceSvc.SetTenantRoleResolver(roles)
-	mcpServer := testserver.New(t)
-	mcpServer.SetTools([]testserver.Tool{{
+	// SDK 兼容 fixture：真实 SDK server 才能完成 initialize→SSE→tools 握手；
+	// 旧 fake_server 是自研 JSON-RPC 方言，SDK 客户端连不上。
+	mcpServer := testserver.NewSDKServer(t, []testserver.Tool{{
 		Name: "read_verified_docs", InputSchema: map[string]any{"type": "object"},
 	}})
 	manager := mcpinfra.NewClientManager(zap.NewNop(), nil, pool)
+	// httptest 监听 loopback；生产构造默认 Strict 拒绝私网地址。
+	manager.WithAllowPrivateClientFactoryForTest()
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
 	registry := mcpinfra.NewMCPToolRegistry(manager, zap.NewNop())
 	mcpSvc := mcpapp.NewMCPService(
