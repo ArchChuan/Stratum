@@ -73,7 +73,8 @@ describe('AppShell responsive navigation', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '打开主导航' }));
     const drawer = await screen.findByRole('dialog', { name: '主导航' });
-    fireEvent.click(screen.getByRole('link', { name: /Agent 对话/ }));
+    // label 为字符串后菜单项由 antd 渲染为 menuitem,不再是 <Link>
+    fireEvent.click(screen.getByRole('menuitem', { name: /Agent 对话/ }));
 
     expect(screen.getByRole('status', { name: '当前路径' })).toHaveTextContent('/chat');
     await waitFor(() => expect(drawer).not.toBeVisible());

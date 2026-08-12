@@ -19,28 +19,33 @@ import {
   DatabaseOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Link } from 'react-router-dom';
 
 import type { User } from '@/modules/iam';
 
 type MenuItem = NonNullable<MenuProps['items']>[number];
 
+/**
+ * label 一律用字符串,不用 <Link> ReactNode。
+ * 根因(实测):antd Menu 每次路由切换对 26 个 <Link> 全量 reconcile,
+ * 主线程阻塞 50-80ms,合成器保留旧帧产生残影/慢。
+ * 字符串 label 后 reconcile 降至 ~0ms;导航由 key + AppShell 的 onClick 承担。
+ */
 export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
   const tenantRole = user?.role ?? user?.current_tenant?.role ?? 'member';
   const canManageTenant = tenantRole === 'admin' || tenantRole === 'owner';
   const base: MenuItem[] = [
-    { key: '/', icon: <DashboardOutlined />, label: <Link to="/">概览</Link> },
-    { key: '/chat', icon: <CommentOutlined />, label: <Link to="/chat">Agent 对话</Link> },
+    { key: '/', icon: <DashboardOutlined />, label: '概览' },
+    { key: '/chat', icon: <CommentOutlined />, label: 'Agent 对话' },
     {
       key: 'workflow-group',
       icon: <BranchesOutlined />,
       label: '流程',
       children: [
-        { key: '/workflows', icon: <BranchesOutlined />, label: <Link to="/workflows">工作流</Link> },
-        { key: '/workflow-runs', icon: <HistoryOutlined />, label: <Link to="/workflow-runs">运行中心</Link> },
-        { key: '/scheduled-tasks', icon: <ScheduleOutlined />, label: <Link to="/scheduled-tasks">定时任务</Link> },
+        { key: '/workflows', icon: <BranchesOutlined />, label: '工作流' },
+        { key: '/workflow-runs', icon: <HistoryOutlined />, label: '运行中心' },
+        { key: '/scheduled-tasks', icon: <ScheduleOutlined />, label: '定时任务' },
         canManageTenant ? {
-          key: '/workflows/new', icon: <PlusCircleOutlined />, label: <Link to="/workflows/new">新建工作流</Link>,
+          key: '/workflows/new', icon: <PlusCircleOutlined />, label: '新建工作流',
         } : null,
       ],
     },
@@ -49,11 +54,11 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
       icon: <RobotOutlined />,
       label: 'Agent',
       children: [
-        { key: '/agents', icon: <RobotOutlined />, label: <Link to="/agents">Agent 管理</Link> },
+        { key: '/agents', icon: <RobotOutlined />, label: 'Agent 管理' },
         canManageTenant ? {
           key: '/agents/create',
           icon: <PlusCircleOutlined />,
-          label: <Link to="/agents/create">创建 Agent</Link>,
+          label: '创建 Agent',
         } : null,
       ],
     },
@@ -62,11 +67,11 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
       icon: <ThunderboltOutlined />,
       label: '技能',
       children: [
-        { key: '/skills', icon: <AppstoreOutlined />, label: <Link to="/skills">技能列表</Link> },
+        { key: '/skills', icon: <AppstoreOutlined />, label: '技能列表' },
         canManageTenant ? {
           key: '/skills/create',
           icon: <PlusCircleOutlined />,
-          label: <Link to="/skills/create">创建技能</Link>,
+          label: '创建技能',
         } : null,
       ],
     },
@@ -75,29 +80,29 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
       icon: <ExperimentOutlined />,
       label: '评测',
       children: [
-        { key: '/evaluations', icon: <ExperimentOutlined />, label: <Link to="/evaluations">评测与进化</Link> },
+        { key: '/evaluations', icon: <ExperimentOutlined />, label: '评测与进化' },
       ],
     },
     {
       key: '/knowledge',
       icon: <BookOutlined />,
-      label: <Link to="/knowledge">知识库</Link>,
+      label: '知识库',
     },
     {
       key: '/memory',
       icon: <DatabaseOutlined />,
-      label: <Link to="/memory">我的记忆</Link>,
+      label: '我的记忆',
     },
     {
       key: 'mcp-group',
       icon: <ApiOutlined />,
       label: 'MCP 服务器',
       children: [
-        { key: '/mcp', icon: <ApiOutlined />, label: <Link to="/mcp">服务器列表</Link> },
+        { key: '/mcp', icon: <ApiOutlined />, label: '服务器列表' },
         canManageTenant ? {
           key: '/mcp/create',
           icon: <PlusCircleOutlined />,
-          label: <Link to="/mcp/create">添加服务器</Link>,
+          label: '添加服务器',
         } : null,
       ],
     },
@@ -108,7 +113,7 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
     icon: <ApiOutlined />,
     label: '模型管理',
     children: [
-      { key: '/models', icon: <SettingOutlined />, label: <Link to="/models">模型管理</Link> },
+      { key: '/models', icon: <SettingOutlined />, label: '模型管理' },
     ],
   });
 
@@ -121,12 +126,12 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
         {
           key: '/tenant/members',
           icon: <TeamOutlined />,
-          label: <Link to="/tenant/members">成员管理</Link>,
+          label: '成员管理',
         },
         {
           key: '/tenant/settings',
           icon: <SettingOutlined />,
-          label: <Link to="/tenant/settings">租户设置</Link>,
+          label: '租户设置',
         },
       ],
     });
@@ -141,12 +146,12 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
         {
           key: '/prompts',
           icon: <FileTextOutlined />,
-          label: <Link to="/prompts">提示词管理</Link>,
+          label: '提示词管理',
         },
         {
           key: '/audit',
           icon: <AuditOutlined />,
-          label: <Link to="/audit">审计日志</Link>,
+          label: '审计日志',
         },
       ],
     });
@@ -159,12 +164,12 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
       adminItems.push({
         key: '/admin/tenants',
         icon: <GlobalOutlined />,
-        label: <Link to="/admin/tenants">全局租户</Link>,
+        label: '全局租户',
       });
       adminItems.push({
         key: '/admin/settings',
         icon: <SettingOutlined />,
-        label: <Link to="/admin/settings">平台参数</Link>,
+        label: '平台参数',
       });
     }
 

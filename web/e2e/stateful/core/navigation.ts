@@ -8,16 +8,17 @@ interface NavigationGroup {
 }
 
 export interface AgentNavigationPage {
-  getByRole(role: 'link', options: { name: string }): NavigationTarget;
+  getByRole(role: 'link' | 'menuitem', options: { name: string }): NavigationTarget;
   locator(selector: string): { filter(options: { hasText: string }): NavigationGroup };
   waitForURL(url: string): Promise<void>;
 }
 
 export const openAgentCreation = async (page: AgentNavigationPage): Promise<void> => {
-  const createLink = page.getByRole('link', { name: '创建 Agent' });
-  if (!await createLink.isVisible()) {
+  // 菜单项是字符串 label,由 antd 渲染为 menuitem 而非 <Link>
+  const createItem = page.getByRole('menuitem', { name: '创建 Agent' });
+  if (!await createItem.isVisible()) {
     await page.locator('.ant-menu-submenu-title').filter({ hasText: 'Agent' }).click();
   }
-  await createLink.click();
+  await createItem.click();
   await page.waitForURL('**/agents/create');
 };
