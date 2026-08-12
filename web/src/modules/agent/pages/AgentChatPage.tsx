@@ -171,19 +171,46 @@ type ApprovalGateProps = {
   onReject: (approvalId: string) => void;
 };
 
-const ApprovalGate = ({ approval, isAdmin, isMobile, loading, onApprove, onReject }: ApprovalGateProps) => {
+const APPROVAL_INVALIDATION_LABELS: Record<string, string> = {
+  conversation_deleted: '会话已删除',
+  policy_changed: '策略已变更',
+  expired: '已过期',
+};
+
+interface ApprovalGateState {
+  terminal: boolean;
+  message: string;
+}
+
+// 审批状态机终态判定（D7/D8/D12）。status-based 终态优先于时钟过期：已取消/级联
+// 失效的审批即使 expiresAt 已过，也应显示"已失效"而非"已过期"。pending 之外的
+// 状态一律 terminal，管理员按钮隐藏。
+const resolveApprovalGate = (approval: ApprovalGateProps['approval']): ApprovalGateState => {
+  if (approval.status === 'unknown_outcome') {
+    return { terminal: true, message: '工具执行结果未知，需要人工对账' };
+  }
+  if (approval.status === 'authorization_denied') {
+    return { terminal: true, message: '权限已变更，工具执行已阻止' };
+  }
+  const invalidated = approval.status === 'cancelled' ||
+    approval.status === 'voided' ||
+    approval.status === 'invalidated';
+  if (invalidated) {
+    const reason = approval.invalidationReason
+      ? `：${APPROVAL_INVALIDATION_LABELS[approval.invalidationReason] || approval.invalidationReason}`
+      : '';
+    return { terminal: true, message: `工具审批已失效${reason}` };
+  }
   const expired = approval.status === 'expired' ||
     (!!approval.expiresAt && new Date(approval.expiresAt).getTime() <= Date.now());
-  const unknown = approval.status === 'unknown_outcome';
-  const blocked = approval.status === 'authorization_denied';
-  const terminal = expired || unknown || blocked;
-  const message = unknown
-    ? '工具执行结果未知，需要人工对账'
-    : expired
-      ? '工具审批已过期'
-      : blocked
-        ? '权限已变更，工具执行已阻止'
-        : `工具 ${approval.toolName} 等待审批`;
+  if (expired) {
+    return { terminal: true, message: '工具审批已过期' };
+  }
+  return { terminal: false, message: `工具 ${approval.toolName} 等待审批` };
+};
+
+const ApprovalGate = ({ approval, isAdmin, isMobile, loading, onApprove, onReject }: ApprovalGateProps) => {
+  const { terminal, message } = resolveApprovalGate(approval);
 
   return (
     <Alert

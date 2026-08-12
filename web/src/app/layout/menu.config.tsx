@@ -17,6 +17,7 @@ import {
   FileTextOutlined,
   AuditOutlined,
   DatabaseOutlined,
+  SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 
@@ -156,6 +157,11 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
           icon: <AuditOutlined />,
           label: '审计日志',
         },
+        {
+          key: '/approvals',
+          icon: <SafetyCertificateOutlined />,
+          label: '工具审批',
+        },
         isPlatformAdmin
           ? {
               key: '/mechanism/profiles',
@@ -207,6 +213,7 @@ export const resolveOpenKeys = (pathname: string): string[] => {
   if (
     pathname.startsWith('/prompts') ||
     pathname.startsWith('/audit') ||
+    pathname.startsWith('/approvals') ||
     pathname.startsWith('/mechanism')
   )
     return ['tenant-admin-group'];

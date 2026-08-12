@@ -52,16 +52,22 @@ func (l agentCheckpointTenantLister) list(ctx context.Context) ([]string, error)
 // so agents resolved from DB inherit those capabilities at construction
 // time. Service is the orchestration façade handlers consume.
 type Agent struct {
-	Registry             *agent.Registry
-	Service              *agent.AgentService
-	ChatStore            agent.ChatStore
-	EvidenceProvider     agentport.TraceEvidenceProvider
-	TracePayloadStore    agentport.TracePayloadStore
-	RevisionObjectStore  pkgobjectstore.Store
-	CheckpointStore      agent.CheckpointStore
-	CheckpointCleanup    *agent.CheckpointCleanupWorker
-	ApprovalStore        agentport.ToolApprovalRepo
-	ApprovalService      *agent.ToolApprovalService
+	Registry            *agent.Registry
+	Service             *agent.AgentService
+	ChatStore           agent.ChatStore
+	EvidenceProvider    agentport.TraceEvidenceProvider
+	TracePayloadStore   agentport.TracePayloadStore
+	RevisionObjectStore pkgobjectstore.Store
+	CheckpointStore     agent.CheckpointStore
+	CheckpointCleanup   *agent.CheckpointCleanupWorker
+	ApprovalStore       agentport.ToolApprovalRepo
+	ApprovalService     *agent.ToolApprovalService
+	// ActionExecutor 执行审批通过后的动作（D4/D5），由 buildEvaluation 在评测
+	// 组件就绪后装配；nil 时执行端点 fail closed。
+	ActionExecutor agentport.ApprovalActionExecutor
+	// RoleResolver 现查 actor 的租户角色（单事实源）。injectTenantRoleResolvers
+	// 在完整 resource stack 装配时设置；nil 时消费方回退 JWT role claim（仅测试路径）。
+	RoleResolver         agentport.TenantRoleResolver
 	TenantResolver       agentport.TenantCapabilityResolver
 	SkillLookup          agentport.SkillLookup
 	DiagnosticProvider   agentport.DiagnosticEvidenceProvider
@@ -283,9 +289,12 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		a.RevisionObjectStore = c.RevisionObjectStore
 	}
 	if db != nil {
-		a.ChatStore = persistence.NewPgChatStore(db, c.Logger)
 		a.CheckpointStore = persistence.NewPgCheckpointStore(db)
 		a.ApprovalStore = persistence.NewPgToolApprovalStore(db)
+		chatStore := persistence.NewPgChatStore(db, c.Logger)
+		// D9 会话删除级联：DeleteConversation 在同一租户事务内终结关联审批。
+		chatStore.SetApprovalCascade(a.ApprovalStore)
+		a.ChatStore = chatStore
 		a.ApprovalService = agent.NewToolApprovalService(a.ApprovalStore, a.CheckpointStore, c.Platform.AESKey)
 		a.CheckpointCleanup = agent.NewCheckpointCleanupWorker(
 			agentCheckpointTenantLister{pool: db}.list,
@@ -318,6 +327,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		TenantModelValidator:    tenantModelValidator(a.TenantResolver),
 		TenantModelCatalog:      tenantModelCatalog(a.TenantResolver),
 		ModelContextProvider:    modelContextProvider(a.TenantResolver),
+		ModelDetailsProvider:    tenantModelDetailsProvider(a.TenantResolver),
 		VendorWindowLookup:      llmgateway.LookupModelSpec,
 		HistoryCompactorFactory: func(gw agentport.CapabilityGateway, model string, logger *zap.Logger, compactionMaxTokens int) agentport.HistoryCompactor {
 			compactor := capgateway.NewLLMHistoryCompactor(gw, model, logger, compactionMaxTokens)
@@ -396,7 +406,9 @@ func (c *Container) buildAgent(ctx context.Context) error {
 // wired; otherwise each service fails closed (nil resolver).
 func (c *Container) injectTenantRoleResolvers(a *Agent) {
 	roles := tenantRoleAdapter{service: tenantMemberService(c)}
+	a.RoleResolver = roles
 	a.Service.SetTenantRoleResolver(roles)
+	a.ApprovalService.SetTenantRoleResolver(roles)
 	c.Skill.VersionService.SetTenantRoleResolver(roles)
 	c.Skill.VersionService.SetWorkspaceBindingValidator(workspaceBindingAdapter{ws: c.Knowledge.WorkspaceService})
 	c.MCP.Service.SetTenantRoleResolver(roles)
@@ -443,6 +455,11 @@ func tenantModelCatalog(resolver agentport.TenantCapabilityResolver) agentport.T
 
 func modelContextProvider(resolver agentport.TenantCapabilityResolver) agentport.ModelContextProvider {
 	provider, _ := resolver.(agentport.ModelContextProvider)
+	return provider
+}
+
+func tenantModelDetailsProvider(resolver agentport.TenantCapabilityResolver) agentport.TenantModelDetailsProvider {
+	provider, _ := resolver.(agentport.TenantModelDetailsProvider)
 	return provider
 }
 

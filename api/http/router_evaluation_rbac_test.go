@@ -64,12 +64,19 @@ func TestEvaluationEvolutionRoutesRBAC(t *testing.T) {
 			t.Errorf("member GET %s: status=%d body=%s", path, rec.Code, rec.Body.String())
 		}
 	}
+	// D4: member 写操作进入审批流，绝不直接执行。参数有效时创建审批
+	// （approvals 未装配 → 503 fail closed）；断言响应不是 200/201 且
+	// repo 未记录执行（无直接执行副作用）。
+	commandBody := `{"reason":"reviewed","idempotency_key":"request-1","expected_state_version":1}`
 	for _, path := range []string{"/evaluations/candidates/candidate-1/reject", "/evaluations/experiments/experiment-1/pause",
 		"/evaluations/experiments/experiment-1/promote", "/evaluations/experiments/experiment-1/rollback"} {
-		rec := performEvaluationRequest(r, http.MethodPost, path, member, "", strings.NewReader(`{}`))
-		if rec.Code != http.StatusForbidden {
-			t.Errorf("member POST %s: status=%d body=%s", path, rec.Code, rec.Body.String())
+		rec := performEvaluationRequest(r, http.MethodPost, path, member, "", strings.NewReader(commandBody))
+		if rec.Code == http.StatusOK || rec.Code == http.StatusCreated {
+			t.Errorf("member POST %s must not execute directly: status=%d body=%s", path, rec.Code, rec.Body.String())
 		}
+	}
+	if candidateRepo.actorID != "" || len(experimentRepo.actors) != 0 {
+		t.Fatalf("member write must not execute: candidate=%q experiments=%v", candidateRepo.actorID, experimentRepo.actors)
 	}
 	admin := signEvaluationToken(t, tokens, "tenant-1", "admin")
 	// Admin retains read access to the moved endpoints.
@@ -88,7 +95,6 @@ func TestEvaluationEvolutionRoutesRBAC(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("inactive admin status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	commandBody := `{"reason":"reviewed","idempotency_key":"request-1","expected_state_version":1}`
 	for _, path := range []string{"/evaluations/candidates/candidate-1/reject",
 		"/evaluations/experiments/experiment-1/pause", "/evaluations/experiments/experiment-1/promote",
 		"/evaluations/experiments/experiment-1/rollback"} {

@@ -64,7 +64,7 @@ func (s *ResourceChangeProposalService) CreateProposal(
 	ctx context.Context,
 	in CreateProposalInput,
 ) (domain.ResourceChangeProposal, error) {
-	if err := s.authorize(ctx, in.TenantID, in.ActorID, in.Kind, in.Operation); err != nil {
+	if err := s.authorize(ctx, in.TenantID, in.ActorID, in.Kind, in.Operation, domain.ProposalActionCreate); err != nil {
 		return domain.ResourceChangeProposal{}, err
 	}
 	now := s.now()
@@ -119,17 +119,10 @@ func (s *ResourceChangeProposalService) CreateProposal(
 }
 
 func (s *ResourceChangeProposalService) Get(ctx context.Context, tenantID, actorID, id string) (domain.ResourceChangeProposal, error) {
-	if err := s.authorize(ctx, tenantID, actorID, "", ""); err != nil {
+	if err := s.authorize(ctx, tenantID, actorID, "", "", domain.ProposalActionDecide); err != nil {
 		return domain.ResourceChangeProposal{}, err
 	}
-	proposal, err := s.repo.Get(ctx, id)
-	if err != nil {
-		return domain.ResourceChangeProposal{}, err
-	}
-	if proposal.TenantID != "" && proposal.TenantID != tenantID {
-		return domain.ResourceChangeProposal{}, domain.ErrProposalForbidden
-	}
-	return proposal, nil
+	return s.getOwnedProposal(ctx, tenantID, id)
 }
 
 func (s *ResourceChangeProposalService) UpdateDraft(
@@ -140,7 +133,7 @@ func (s *ResourceChangeProposalService) UpdateDraft(
 	if err != nil {
 		return domain.ResourceChangeProposal{}, err
 	}
-	if err := s.authorize(ctx, in.TenantID, in.ActorID, proposal.ResourceKind, proposal.Operation); err != nil {
+	if err := s.authorize(ctx, in.TenantID, in.ActorID, proposal.ResourceKind, proposal.Operation, domain.ProposalActionDecide); err != nil {
 		return domain.ResourceChangeProposal{}, err
 	}
 	if proposal.Status != domain.StatusDraft && proposal.Status != domain.StatusReadyForReview {
@@ -180,7 +173,7 @@ func (s *ResourceChangeProposalService) Cancel(ctx context.Context, tenantID, ac
 	if err != nil {
 		return err
 	}
-	if err := s.authorize(ctx, tenantID, actorID, proposal.ResourceKind, proposal.Operation); err != nil {
+	if err := s.authorize(ctx, tenantID, actorID, proposal.ResourceKind, proposal.Operation, domain.ProposalActionDecide); err != nil {
 		return err
 	}
 	return s.repo.Cancel(ctx, id, actorID, s.now())
@@ -196,14 +189,29 @@ func (s *ResourceChangeProposalService) ListEvents(
 	return s.repo.ListEvents(ctx, id)
 }
 
+// getOwnedProposal 读取提案并校验 tenant 归属，Get/ConfirmAndApply 共用；
+// 防御存储层迁移到共享 schema 后的跨租户确认/应用。
+func (s *ResourceChangeProposalService) getOwnedProposal(
+	ctx context.Context, tenantID, id string,
+) (domain.ResourceChangeProposal, error) {
+	proposal, err := s.repo.Get(ctx, id)
+	if err != nil {
+		return domain.ResourceChangeProposal{}, err
+	}
+	if proposal.TenantID != "" && proposal.TenantID != tenantID {
+		return domain.ResourceChangeProposal{}, domain.ErrProposalForbidden
+	}
+	return proposal, nil
+}
+
 func (s *ResourceChangeProposalService) ConfirmAndApply(
 	ctx context.Context,
 	tenantID, proposalID, actorID string,
 ) (domain.ResourceChangeProposal, error) {
-	if err := s.authorize(ctx, tenantID, actorID, "", ""); err != nil {
+	if err := s.authorize(ctx, tenantID, actorID, "", "", domain.ProposalActionDecide); err != nil {
 		return domain.ResourceChangeProposal{}, err
 	}
-	proposal, err := s.repo.Get(ctx, proposalID)
+	proposal, err := s.getOwnedProposal(ctx, tenantID, proposalID)
 	if err != nil {
 		return domain.ResourceChangeProposal{}, err
 	}
@@ -241,7 +249,7 @@ func (s *ResourceChangeProposalService) ConfirmAndApply(
 	s.metrics.RecordResourceProposalDraftEdits(
 		string(claimed.ResourceKind), string(claimed.Operation), claimed.EditCount,
 	)
-	if err := s.authorize(ctx, tenantID, actorID, claimed.ResourceKind, claimed.Operation); err != nil {
+	if err := s.authorize(ctx, tenantID, actorID, claimed.ResourceKind, claimed.Operation, domain.ProposalActionDecide); err != nil {
 		finishErr := s.finish(ctx, claimed, domain.StatusFailed, domain.ApplyResult{}, "proposal_forbidden", actorID)
 		if finishErr != nil {
 			return domain.ResourceChangeProposal{}, errors.Join(domain.ErrProposalForbidden, finishErr)
@@ -343,11 +351,12 @@ func (s *ResourceChangeProposalService) authorize(
 	tenantID, actorID string,
 	kind domain.ResourceKind,
 	operation domain.ProposalOperation,
+	action domain.ProposalAction,
 ) error {
 	if s.authorizer == nil || tenantID == "" || actorID == "" {
 		return domain.ErrProposalForbidden
 	}
-	if err := s.authorizer.AuthorizeProposal(ctx, tenantID, actorID, kind, operation); err != nil {
+	if err := s.authorizer.AuthorizeProposal(ctx, tenantID, actorID, kind, operation, action); err != nil {
 		return domain.ErrProposalForbidden
 	}
 	return nil

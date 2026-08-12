@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/gin-gonic/gin"
@@ -100,6 +101,34 @@ func TestErrorHandlerReturnsAssistantModelUnavailableContract(t *testing.T) {
 	wantBody := "{\"code\":\"SYSTEM_ASSISTANT_MODEL_UNAVAILABLE\",\"error\":\"租户尚未配置平台助手模型\"}"
 	if response.Body.String() != wantBody {
 		t.Fatalf("body = %q, want %q", response.Body.String(), wantBody)
+	}
+}
+
+// D7/D8：审批工作台与聊天页依赖可解释的中文终态/操作消息。approval sentinel
+// 经 DescribePublicError 必须映射为固定中文（不泄 payload/内部 detail），status 由
+// MapErrorToStatus 单独守卫（410/409 等）。
+func TestPublicErrorDescribesApprovalSentinels(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"expired", agentapp.ErrApprovalExpired, "审批已过期"},
+		{"policy_changed", agentdomain.ErrApprovalPolicyChanged, "权限策略已变更，请重新发起"},
+		{"conversation_gone", agentdomain.ErrApprovalConversationGone, "会话已删除，审批已失效"},
+		{"self_decision", agentdomain.ErrApprovalSelfDecision, "不能审批自己发起的请求"},
+		{"role_denied", agentdomain.ErrApprovalRoleDenied, "需要管理员权限"},
+		{"already_decided", agentdomain.ErrApprovalAlreadyDecided, "该审批已处理"},
+		{"already_executed", agentdomain.ErrApprovalAlreadyExecuted, "该工具已执行"},
+		{"invalidated", agentdomain.ErrApprovalInvalidated, "审批已失效"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DescribePublicError(fmt.Errorf("approval: %w", tc.err), http.StatusConflict)
+			if got.Message != tc.want {
+				t.Fatalf("DescribePublicError(%v).Message = %q, want %q", tc.err, got.Message, tc.want)
+			}
+		})
 	}
 }
 

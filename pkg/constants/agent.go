@@ -123,6 +123,9 @@ const (
 	// package) because the tenant schema repository must parameterise the
 	// Approve UPDATE's expires_at interval without importing application.
 	OperationApprovalTTL = 24 * time.Hour
+	// MaxPendingApprovalsPerActor caps how many unexpired pending approvals a
+	// single user may hold (D4 放宽后 member 可触发审批，须防存储 DoS）。
+	MaxPendingApprovalsPerActor = 50
 	// TokenCorrectionAlpha is the EMA smoothing factor for the compaction
 	// token-correction loop: correction = α·ratio + (1−α)·correction.
 	TokenCorrectionAlpha = 0.1

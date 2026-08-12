@@ -2,9 +2,11 @@ package persistence
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -107,5 +109,133 @@ func TestPgChatStoreArtifactsRealPostgresRoundTripAndHistoricalUpgrade(t *testin
 	}
 	if defaultExpr == "" {
 		t.Fatal("artifacts_json default missing after repeated provision")
+	}
+}
+
+// D9：DeleteConversation 在同一租户事务内级联终结关联审批——pending→cancelled、
+// approved→voided，reason 均为 conversation_deleted，且物理删除会话后审批历史仍可对账。
+// 直接用 SQL 造行：approvals.Create 硬编码 status='pending'，approved 行必须绕过它。
+func TestDeleteConversationCascadesApprovals(t *testing.T) {
+	url := os.Getenv("STRATUM_TEST_POSTGRES_URL")
+	if url == "" {
+		t.Skip("STRATUM_TEST_POSTGRES_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := postgres.ProvisionPublicSchema(ctx, pool, zap.NewNop()); err != nil {
+		t.Fatal(err)
+	}
+	tenantID := fmt.Sprintf("tmp_chat_cascade_%d", time.Now().UnixNano())
+	schema := "tenant_" + tenantID
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "`+schema+`" CASCADE`) })
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		t.Fatal(err)
+	}
+
+	chat := NewPgChatStore(pool, zap.NewNop())
+	chat.SetApprovalCascade(NewPgToolApprovalStore(pool))
+	conv, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, "user-1", "cascade")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		execID, toolCallID, status string
+	}{
+		{"exec-pending", "tc-pending", "pending"},
+		{"exec-approved", "tc-approved", "approved"},
+	} {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO "`+schema+`".agent_tool_approvals
+			 (execution_id, tool_call_id, server_id, tool_name, risk_level, encrypted_payload, conversation_id, status)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+			tc.execID, tc.toolCallID, "srv", "delete", "destructive", "enc", conv.ID, tc.status); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := chat.DeleteConversation(ctx, tenantID, conv.ID, "user-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT status, invalidation_reason FROM "`+schema+`".agent_tool_approvals WHERE conversation_id=$1`,
+		conv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var status, reason string
+		if err := rows.Scan(&status, &reason); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, status+"/"+reason)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(got)
+	want := []string{"cancelled/conversation_deleted", "voided/conversation_deleted"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("cascade outcomes=%v, want %v", got, want)
+	}
+}
+
+// D9 回滚：非 owner 删除（0 行 → ErrNotFound）使 DeleteConversation 整体失败，
+// 同一租户事务内的级联必须回滚——审批不被终结，历史不可被未授权删除污染。
+func TestDeleteConversationCascadeRollsBackOnFailure(t *testing.T) {
+	url := os.Getenv("STRATUM_TEST_POSTGRES_URL")
+	if url == "" {
+		t.Skip("STRATUM_TEST_POSTGRES_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := postgres.ProvisionPublicSchema(ctx, pool, zap.NewNop()); err != nil {
+		t.Fatal(err)
+	}
+	tenantID := fmt.Sprintf("tmp_chat_cascade_rollback_%d", time.Now().UnixNano())
+	schema := "tenant_" + tenantID
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "`+schema+`" CASCADE`) })
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		t.Fatal(err)
+	}
+
+	chat := NewPgChatStore(pool, zap.NewNop())
+	chat.SetApprovalCascade(NewPgToolApprovalStore(pool))
+	conv, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, "user-1", "rollback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO "`+schema+`".agent_tool_approvals
+		 (execution_id, tool_call_id, server_id, tool_name, risk_level, encrypted_payload, conversation_id, status)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		"exec-approved", "tc-approved", "srv", "delete", "destructive", "enc", conv.ID, "approved"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := chat.DeleteConversation(ctx, tenantID, conv.ID, "wrong-user"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("non-owner delete err=%v, want ErrNotFound", err)
+	}
+
+	var status, reason string
+	if err := pool.QueryRow(ctx,
+		`SELECT status, invalidation_reason FROM "`+schema+`".agent_tool_approvals WHERE conversation_id=$1`, conv.ID).
+		Scan(&status, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if status != "approved" || reason != "" {
+		t.Fatalf("approval after failed delete=%s/%q, want approved/（未被级联）", status, reason)
 	}
 }

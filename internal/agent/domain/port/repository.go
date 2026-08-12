@@ -70,7 +70,19 @@ type ToolApprovalRepo interface {
 	ReleaseExecution(ctx context.Context, tenantID, approvalID string) error
 	MarkOutcomeUnknown(ctx context.Context, tenantID, approvalID string) error
 	MarkExecuted(ctx context.Context, tenantID, approvalID string) error
-	ListPending(ctx context.Context, tenantID string) ([]domain.ToolApproval, error)
+	// ListPending 返回未过期 pending 审批；userID 非空时仅返回该用户发起的（member 语义）。
+	ListPending(ctx context.Context, tenantID, userID string) ([]domain.ToolApproval, error)
+	// ListHistory 返回非 pending 状态（decided/executed/expired/invalidated/voided/cancelled）分页列表，
+	// 第二返回值为总数（admin/owner 工作台用）。
+	ListHistory(ctx context.Context, tenantID string, page, pageSize int) ([]domain.ToolApproval, int, error)
+	// Invalidate CAS：仅 approved/executing → invalidated，写入 invalidation_reason（审批语义失效）。
+	Invalidate(ctx context.Context, tenantID, id, reason string) error
+	// Void CAS：仅 approved → voided，写入 invalidation_reason（执行上下文销毁）。
+	Void(ctx context.Context, tenantID, id, reason string) error
+	// UpdateAssignee CAS：仅 pending 可改指定审批人（软绑定）。
+	UpdateAssignee(ctx context.Context, tenantID, id, assignee string) error
+	// CascadeByConversation 事务内将关联审批 pending→cancelled、approved→voided（原因 conversation_deleted）。
+	CascadeByConversation(ctx context.Context, tenantID, conversationID string) error
 }
 
 // ChatRepo persists chat conversations and messages in the tenant schema.

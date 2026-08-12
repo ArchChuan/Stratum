@@ -266,6 +266,32 @@ func (r *ModelRegistry) ResolveDefaultEmbeddingModel(ctx context.Context, tenant
 	return names[0], nil
 }
 
+// ListModelsByTenantDetails returns the full tenant model catalog (including
+// disabled and provider-managed models) sorted by name. Models backed by a
+// disabled provider are dropped; a provider lookup failure is propagated
+// (fail closed — an unresolved provider must not surface as a healthy model).
+// The returned rows are projected by the composition root into the
+// platform-assistant DTO; provider credentials never leave this boundary.
+func (r *ModelRegistry) ListModelsByTenantDetails(ctx context.Context, tenantID string) ([]domain.Model, error) {
+	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{})
+	if err != nil {
+		return nil, fmt.Errorf("model registry: list models: %w", err)
+	}
+	details := make([]domain.Model, 0, len(models))
+	for _, m := range models {
+		provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
+		if err != nil {
+			return nil, fmt.Errorf("model registry: get provider: %w", err)
+		}
+		if !provider.Enabled {
+			continue
+		}
+		details = append(details, m)
+	}
+	sort.Slice(details, func(i, j int) bool { return details[i].Name < details[j].Name })
+	return details, nil
+}
+
 func (r *ModelRegistry) listModelsByCapability(
 	ctx context.Context,
 	tenantID string,

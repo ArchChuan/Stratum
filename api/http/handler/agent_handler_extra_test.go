@@ -457,11 +457,10 @@ func TestAgentHandlerListExecutionToolTracesAndEvents(t *testing.T) {
 }
 
 func TestAgentHandlerListToolApprovals(t *testing.T) {
-	// ApprovalService 未配置 → fail closed：200 + 空列表。
+	// ApprovalService 未配置 → fail closed：500（配置错误显式暴露，禁止静默空列表）。
 	h := newTestAgentHandler(t, &mockAgentRepo{}, nil, nil)
 	w := doAgentReq(t, authedRoutes(h), http.MethodGet, "/agents/a1/approvals", "")
-	require.Equal(t, http.StatusOK, w.Code)
-	require.Contains(t, w.Body.String(), `"approvals":[]`)
+	require.Equal(t, http.StatusInternalServerError, w.Code)
 
 	// 极端情况：缺 tenant → 401。
 	w = doAgentReq(t, agentRoutes(h), http.MethodGet, "/agents/a1/approvals", "")

@@ -204,3 +204,76 @@ func TestSystemAssistantDirectApplyToolRoutesThroughDispatch(t *testing.T) {
 	// validated inside ApplyDirect, so here we assert the echo plus the route.
 	require.Equal(t, domain.ResourceKind("skill"), result.artifact.DirectApply.ResourceKind)
 }
+
+func TestSystemAssistantListModelsToolExecutesAndBuildsArtifact(t *testing.T) {
+	state := &ReActState{
+		GovernedAssistant: true,
+		ListModelsFn: func(_ context.Context) (map[string]any, error) {
+			return map[string]any{"models": []domain.TenantModelDetail{
+				{Model: "qwen-plus", Capabilities: []string{"chat"}, Enabled: true},
+			}}, nil
+		},
+		InternalToolResultGuardFn: testAssistantGuard,
+	}
+	result := execListModelsTool(context.Background(), port.ToolCall{
+		Name: domain.SystemAssistantToolListModels,
+	}, state, time.Now())
+	require.Equal(t, domain.ToolTraceStatusSuccess, result.status)
+	require.NotNil(t, result.artifact)
+	require.Equal(t, domain.SystemAssistantToolListModels, result.artifact.Tool)
+	require.Equal(t, "success", result.artifact.Outcome)
+	require.Contains(t, result.content, "qwen-plus")
+}
+
+func TestSystemAssistantUpdateSystemModelToolValidatesModelArgument(t *testing.T) {
+	var seen string
+	state := &ReActState{
+		GovernedAssistant: true,
+		UpdateSystemModelFn: func(_ context.Context, model string) (map[string]any, error) {
+			seen = model
+			return map[string]any{"model": model, "ready": true}, nil
+		},
+		InternalToolResultGuardFn: testAssistantGuard,
+	}
+	missing := execUpdateSystemModelTool(context.Background(), port.ToolCall{
+		Name: domain.SystemAssistantToolUpdateSystemModel, Arguments: map[string]any{},
+	}, state, time.Now())
+	require.Equal(t, domain.ToolTraceStatusError, missing.status)
+	require.Contains(t, missing.content, "model required")
+	require.Empty(t, seen, "update fn must not be called without a model argument")
+
+	ok := execUpdateSystemModelTool(context.Background(), port.ToolCall{
+		Name: domain.SystemAssistantToolUpdateSystemModel, Arguments: map[string]any{"model": "qwen-plus"},
+	}, state, time.Now())
+	require.Equal(t, domain.ToolTraceStatusSuccess, ok.status)
+	require.Equal(t, "qwen-plus", seen)
+	require.NotNil(t, ok.artifact)
+	require.Equal(t, domain.SystemAssistantToolUpdateSystemModel, ok.artifact.Tool)
+}
+
+func TestSystemAssistantModelToolsRouteThroughDispatch(t *testing.T) {
+	state := &ReActState{
+		GovernedAssistant: true,
+		ListModelsFn: func(_ context.Context) (map[string]any, error) {
+			return map[string]any{"models": []domain.TenantModelDetail{}}, nil
+		},
+		UpdateSystemModelFn: func(_ context.Context, model string) (map[string]any, error) {
+			return map[string]any{"model": model, "ready": true}, nil
+		},
+		InternalToolResultGuardFn: testAssistantGuard,
+	}
+	listProvider := classifyToolProvider(domain.SystemAssistantToolListModels, nil)
+	require.Equal(t, domain.ProviderTypeInternal, listProvider.ProviderType)
+	listResult := dispatchToolCall(context.Background(), port.ToolCall{
+		Name: domain.SystemAssistantToolListModels,
+	}, state, time.Now(), listProvider, zap.NewNop())
+	require.Equal(t, domain.ToolTraceStatusSuccess, listResult.status)
+
+	updateProvider := classifyToolProvider(domain.SystemAssistantToolUpdateSystemModel, nil)
+	require.Equal(t, domain.ProviderTypeInternal, updateProvider.ProviderType)
+	updateResult := dispatchToolCall(context.Background(), port.ToolCall{
+		Name: domain.SystemAssistantToolUpdateSystemModel, Arguments: map[string]any{"model": "qwen-plus"},
+	}, state, time.Now(), updateProvider, zap.NewNop())
+	require.Equal(t, domain.ToolTraceStatusSuccess, updateResult.status)
+	require.Contains(t, updateResult.content, "qwen-plus")
+}

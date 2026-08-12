@@ -9,9 +9,12 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 type diagnosticRoleStub struct {
@@ -275,6 +278,41 @@ func TestSystemAssistantDiagnosticBoundsConcurrencyAndWaits(t *testing.T) {
 	require.LessOrEqual(t, maximum.Load(), int32(diagnosticCollectorConcurrency))
 	require.Equal(t, int32(len(areas)), finished.Load())
 	close(release)
+}
+
+func TestModelDiagnosticCollectorReportsCatalogStatistics(t *testing.T) {
+	resolver := &tenantCapabilityResolver{registry: newResolverRegistry([]llmdomain.Model{
+		{ID: "m-1", ProviderID: "p-1", Name: "chat-a", Enabled: true, Capabilities: []llmdomain.ModelCapability{llmdomain.CapChat}},
+		{ID: "m-2", ProviderID: "p-1", Name: "chat-b", Enabled: true, Capabilities: []llmdomain.ModelCapability{llmdomain.CapChat}},
+		{ID: "m-3", ProviderID: "p-1", Name: "retired", Enabled: false, Capabilities: []llmdomain.ModelCapability{llmdomain.CapChat}},
+		{ID: "m-4", ProviderID: "p-1", Name: "embed", Enabled: true, Capabilities: []llmdomain.ModelCapability{llmdomain.CapEmbedding}},
+	}, map[string]*llmdomain.Provider{
+		"p-1": {ID: "p-1", Kind: llmdomain.ProviderOpenAICompat, Enabled: true},
+	}), logger: zap.NewNop()}
+	facts, gaps, err := modelDiagnosticCollector(resolver)(context.Background(), domain.DiagnosticRequest{
+		TenantID: "tenant-1", UserID: "admin-1", Scope: domain.DiagnosticScopeTenant,
+	})
+	require.NoError(t, err)
+	require.Empty(t, gaps)
+	require.Equal(t, "catalog", facts[0].ObjectID)
+	require.ElementsMatch(t, []string{
+		"catalog_total=4 enabled=3 disabled=1 chat=3 embedding=1",
+	}, diagnosticStatements(facts))
+}
+
+func TestModelDiagnosticCollectorPropagatesUnavailabilityAsSafeGap(t *testing.T) {
+	resolver := &tenantCapabilityResolver{registry: llmgateway.NewModelRegistry(
+		&resolverModelRepo{err: errors.New("raw catalog response with bearer secret")},
+		&resolverProviderRepo{}, nil, nil, time.Minute,
+	), logger: zap.NewNop()}
+	facts, gaps, err := modelDiagnosticCollector(resolver)(context.Background(), domain.DiagnosticRequest{
+		TenantID: "tenant-1", UserID: "admin-1", Scope: domain.DiagnosticScopeTenant,
+	})
+	require.NoError(t, err)
+	require.Empty(t, facts)
+	require.Equal(t, []domain.EvidenceGap{{Area: domain.DiagnosticAreaModel,
+		Source: "managed_model_configuration", Code: domain.DiagnosticGapUnavailable}}, gaps)
+	require.NotContains(t, gaps[0].Code, "raw catalog")
 }
 
 func TestSystemAssistantDiagnosticDispatchesDuplicateAreaOnce(t *testing.T) {

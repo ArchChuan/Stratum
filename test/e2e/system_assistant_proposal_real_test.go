@@ -62,6 +62,7 @@ func (a realMemberProposalAuthorizer) AuthorizeProposal(
 	tenantID, actorID string,
 	_ domain.ResourceKind,
 	_ domain.ProposalOperation,
+	action domain.ProposalAction,
 ) error {
 	if a.members == nil {
 		return domain.ErrProposalForbidden
@@ -70,10 +71,15 @@ func (a realMemberProposalAuthorizer) AuthorizeProposal(
 	if err != nil {
 		return domain.ErrProposalForbidden
 	}
-	if role != "admin" && role != "owner" {
-		return domain.ErrProposalForbidden
+	switch role {
+	case "admin", "owner":
+		return nil
+	case "member":
+		if action == domain.ProposalActionCreate {
+			return nil
+		}
 	}
-	return nil
+	return domain.ErrProposalForbidden
 }
 
 type roleAwareAssistantDiagnostics struct{ role string }
@@ -450,8 +456,9 @@ func TestSystemAssistantProposalRealServices(t *testing.T) {
 
 // TestSystemAssistantProposalInProcessToolUsesRealMemberPermissions proves the
 // in-process proposal tool resolves the actor's ACTUAL tenant role from the
-// database at call time: an admin creates a real proposal through the agent
-// tool path, while a member is denied by the same real authorization chain.
+// database at call time: an admin creates a proposal through the agent tool
+// path and it is auto-confirmed and applied (D6), while a member's creation
+// flows through the same real authorization chain into a pending review.
 func TestSystemAssistantProposalInProcessToolUsesRealMemberPermissions(t *testing.T) {
 	pool, tenants := setupSystemAssistantPostgres(t)
 	tenantID := tenants[0]
@@ -513,21 +520,23 @@ func TestSystemAssistantProposalInProcessToolUsesRealMemberPermissions(t *testin
 	require.NoError(t, err)
 	require.Equal(t, tenantID, stored.TenantID)
 	require.Equal(t, adminID, stored.ProposerID)
-	require.Equal(t, domain.StatusReadyForReview, stored.Status)
+	// D6：admin 走 propose 工具 → 自动确认并应用。
+	require.Equal(t, domain.StatusApplied, stored.Status)
 
-	// 同租户 member 走同一条真实授权链 → 拒绝创建。
+	// 同租户 member 走同一条真实授权链 → 创建放行（D6），提案进入待审流。
 	memberCtx := assistantTenantContext(tenantID, memberID, tenantdb.RoleTenantUser)
-	_, err = proposalService.CreateProposal(memberCtx, agentapp.CreateProposalInput{
+	memberCreated, err := proposalService.CreateProposal(memberCtx, agentapp.CreateProposalInput{
 		TenantID: tenantID, ActorID: memberID, Kind: domain.ResourceAgent,
 		Operation: domain.OperationCreate,
 		Payload: json.RawMessage(
-			`{"name":"member-denied","description":"x","model":"m","maxIterations":2,"maxContextTokens":1024}`,
+			`{"name":"member-pending","description":"x","model":"m","maxIterations":2,"maxContextTokens":1024}`,
 		),
 	})
-	require.ErrorIs(t, err, domain.ErrProposalForbidden)
+	require.NoError(t, err)
+	require.Equal(t, domain.StatusReadyForReview, memberCreated.Status)
 
-	// member 通过真实执行路径尝试调用提案工具：工具未暴露（ProposalCreateFn
-	// 未注入），调用以“tool unavailable”失败，且不会产生任何 DB 提案。
+	// member 通过真实执行路径调用提案工具：ProposalCreateFn 全角色注入（D6），
+	// member 创建待审提案，不会自动确认/应用。
 	memberService := agentapp.NewAgentService(agentapp.AgentServiceDeps{
 		Registry:             agentapp.NewRegistry(agentRepo, agentapp.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
 		TenantResolver:       deterministicTenantResolver{gateway: &proposalToolGateway{}},
@@ -545,14 +554,15 @@ func TestSystemAssistantProposalInProcessToolUsesRealMemberPermissions(t *testin
 		Query: "创建提案", ConversationID: memberConversation.ID, UserID: memberID, MaxSteps: 5,
 	}, agentapp.ExecMeta{TenantID: tenantID, TraceID: uuid.NewString()})
 	require.NoError(t, err)
-	for _, artifact := range memberResult.AssistantToolArtifacts {
-		require.Nil(t, artifact.Proposal, "member must not produce a proposal artifact")
-	}
+	require.Len(t, memberResult.AssistantToolArtifacts, 1, "member must produce a pending proposal artifact")
+	require.NotNil(t, memberResult.AssistantToolArtifacts[0].Proposal)
+	require.Equal(t, domain.StatusReadyForReview, memberResult.AssistantToolArtifacts[0].Proposal.Status)
 
 	var memberProposals int
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT count(*) FROM "tenant_`+tenantID+`".resource_change_proposals WHERE proposer_id=$1`,
 		memberID,
 	).Scan(&memberProposals))
-	require.Zero(t, memberProposals)
+	// 直接创建 1 条 + 工具路径 1 条。
+	require.Equal(t, 2, memberProposals)
 }

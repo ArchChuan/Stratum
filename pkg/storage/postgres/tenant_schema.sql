@@ -809,6 +809,25 @@ ALTER TABLE agent_tool_approvals ADD CONSTRAINT agent_tool_approvals_status_chec
     CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'executing', 'executed', 'unknown_outcome'));
 CREATE INDEX IF NOT EXISTS idx_agent_tool_approvals_pending
 ON agent_tool_approvals (status, expires_at, created_at);
+-- D3/D8/D9: subject 泛化、指定审批人、失效终态、会话级联（历史租户升级走 IF NOT EXISTS）
+ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS subject_kind TEXT NOT NULL DEFAULT 'mcp_tool';
+ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS assigned_approver TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS invalidation_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS conversation_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_tool_approvals DROP CONSTRAINT IF EXISTS agent_tool_approvals_status_check;
+ALTER TABLE agent_tool_approvals ADD CONSTRAINT agent_tool_approvals_status_check
+    CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'executing', 'executed',
+                      'unknown_outcome', 'cancelled', 'voided', 'invalidated'));
+-- review minor：subject_kind 存储层 CHECK（与 status 同样式 DROP/ADD 幂等）
+ALTER TABLE agent_tool_approvals DROP CONSTRAINT IF EXISTS agent_tool_approvals_subject_kind_check;
+ALTER TABLE agent_tool_approvals ADD CONSTRAINT agent_tool_approvals_subject_kind_check
+    CHECK (subject_kind IN ('mcp_tool', 'evaluation_action', 'mcp_policy', 'mcp_server', ''));
+CREATE INDEX IF NOT EXISTS idx_agent_tool_approvals_subject
+    ON agent_tool_approvals (subject_kind, status);
+CREATE INDEX IF NOT EXISTS idx_agent_tool_approvals_assignee
+    ON agent_tool_approvals (assigned_approver, status);
+CREATE INDEX IF NOT EXISTS idx_agent_tool_approvals_conversation
+    ON agent_tool_approvals (conversation_id, status);
 
 -- =============================================================================
 -- Static Workflow Engine Stage 1A

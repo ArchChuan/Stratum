@@ -48,6 +48,7 @@ export const agentApi = {
 		return (res.data?.approvals ?? []).map((row: Record<string, unknown>) => ({
 			approvalId: String(row.id || ''), agentId: String(row.agent_id || ''), toolName: String(row.tool_name || ''),
 			serverId: String(row.server_id || ''), riskLevel: String(row.risk_level || ''), status: String(row.status || ''), expiresAt: String(row.expires_at || ''),
+			invalidationReason: row.invalidation_reason ? String(row.invalidation_reason) : undefined,
 		}));
 	},
 	decideToolApproval: (id: string, decision: 'approved' | 'rejected', reason = '') => api.post(`/agents/tool-approvals/${id}/decision`, { decision, reason }),

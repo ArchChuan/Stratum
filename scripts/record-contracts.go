@@ -431,6 +431,9 @@ func (contractModRepo) UpsertDiscovered(_ context.Context, _ string, _ string, _
 }
 func (contractModRepo) Delete(_ context.Context, _ string, _ string) error         { return nil }
 func (contractModRepo) Toggle(_ context.Context, _ string, _ string, _ bool) error { return nil }
+func (contractModRepo) SetDefaultEmbedding(_ context.Context, _ string, _ string, _ bool) error {
+	return nil
+}
 
 type contractProvRuntime struct{}
 
@@ -682,6 +685,7 @@ type contractPropAuthorizer struct{}
 
 func (contractPropAuthorizer) AuthorizeProposal(
 	context.Context, string, string, agentdomain.ResourceKind, agentdomain.ProposalOperation,
+	agentdomain.ProposalAction,
 ) error {
 	return nil
 }

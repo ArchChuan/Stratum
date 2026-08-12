@@ -1,6 +1,10 @@
 package port
 
-import "context"
+import (
+	"context"
+
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
+)
 
 // TenantCapabilityResolver resolves per-tenant LLM configuration into a
 // CapabilityGateway ready for agent execution. Implemented by the
@@ -32,4 +36,12 @@ type TenantChatModelCatalog interface {
 // for the current tenant's configured models.
 type ModelContextProvider interface {
 	GetChatModelContextWindow(ctx context.Context, tenantID, model string) (int, error)
+}
+
+// TenantModelDetailsProvider lists the full tenant model catalog (including
+// disabled models) as a platform-assistant-safe projection. Implementations
+// must not leak provider credentials; the returned details only carry model
+// identity, capabilities and enablement flags.
+type TenantModelDetailsProvider interface {
+	ListTenantModelDetails(ctx context.Context, tenantID string) ([]domain.TenantModelDetail, error)
 }

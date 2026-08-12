@@ -46,6 +46,7 @@ type AgentServiceDeps struct {
 	TenantModelValidator      port.TenantChatModelValidator
 	TenantModelCatalog        port.TenantChatModelCatalog
 	ModelContextProvider      port.ModelContextProvider
+	ModelDetailsProvider      port.TenantModelDetailsProvider
 	// VendorWindowLookup 解析内置厂商静态能力表（窗口 + 最大输出）。
 	// 由 wiring 注入 llmgateway.LookupModelSpec；nil 时回退链跳过 vendor 层。
 	VendorWindowLookup        func(string) (int, int)
@@ -1434,11 +1435,11 @@ func (s *AgentService) ListExecutions(
 	return out, total, nil
 }
 
-func (s *AgentService) ListPendingApprovals(ctx context.Context, tenantID string) ([]domain.ToolApproval, error) {
+func (s *AgentService) ListPendingApprovals(ctx context.Context, tenantID, actorID string) ([]domain.ToolApproval, error) {
 	if s.deps.ApprovalService == nil {
-		return []domain.ToolApproval{}, nil
+		return nil, errors.New("tool approval service not configured")
 	}
-	return s.deps.ApprovalService.ListPending(ctx, tenantID)
+	return s.deps.ApprovalService.ListPending(ctx, tenantID, actorID)
 }
 
 func (s *AgentService) DecideToolApproval(ctx context.Context, tenantID, id, decision, actor, reason string) error {
@@ -1448,20 +1449,48 @@ func (s *AgentService) DecideToolApproval(ctx context.Context, tenantID, id, dec
 	return s.deps.ApprovalService.Decide(ctx, tenantID, id, decision, actor, reason)
 }
 
+// ListApprovalHistory 分页查询租户审批历史（actor 用于内部角色现查，空值放行返回全部）。
+func (s *AgentService) ListApprovalHistory(ctx context.Context, tenantID string, page, pageSize int, actor string) ([]domain.ToolApproval, int, error) {
+	if s.deps.ApprovalService == nil {
+		return nil, 0, errors.New("tool approval service not configured")
+	}
+	return s.deps.ApprovalService.ListHistory(ctx, tenantID, page, pageSize, actor)
+}
+
+// ApprovalDetail 返回单个审批的脱敏详情（actor 用于内部角色现查）。
+func (s *AgentService) ApprovalDetail(ctx context.Context, tenantID, id, actor string) (ApprovalDetail, error) {
+	if s.deps.ApprovalService == nil {
+		return ApprovalDetail{}, errors.New("tool approval service not configured")
+	}
+	return s.deps.ApprovalService.ApprovalDetail(ctx, tenantID, id, actor)
+}
+
+// ExecuteApprovedAction 单次消费已批准审批并把动作交给执行器（D4/D5）。
+// actor 现查角色：仅 admin/owner 可执行（fail closed）。
+func (s *AgentService) ExecuteApprovedAction(ctx context.Context, tenantID, id, actor string, executor port.ApprovalActionExecutor) (map[string]any, error) {
+	if s.deps.ApprovalService == nil {
+		return nil, errors.New("tool approval service not configured")
+	}
+	return s.deps.ApprovalService.ExecuteApprovedAction(ctx, tenantID, id, actor, executor)
+}
+
+// SetApprovalAssignee 指定审批人（actor 需具备 admin/owner 角色，内部现查）。
+func (s *AgentService) SetApprovalAssignee(ctx context.Context, tenantID, id, assignee, actor string) error {
+	if s.deps.ApprovalService == nil {
+		return errors.New("tool approval service not configured")
+	}
+	return s.deps.ApprovalService.SetAssignee(ctx, tenantID, id, assignee, actor)
+}
+
 func (s *AgentService) ResumeToolApproval(ctx context.Context, tenantID, approvalID string) (*AgentResult, int, error) {
 	if s.deps.ApprovalService == nil || s.deps.MCPToolExecutor == nil {
 		return nil, 0, errors.New("tool approval runtime not configured")
 	}
-	payload, err := s.deps.ApprovalService.ApprovedPayload(ctx, tenantID, approvalID)
+	// 三段前置步骤（ApprovedPayload → 恢复层校验 → Registry.Get）提成 resumeContext，
+	// 控制 ResumeToolApproval 复杂度并固化"D9 校验先于 Registry.Get"的顺序不变量。
+	payload, a, err := s.resumeContext(ctx, tenantID, approvalID)
 	if err != nil {
 		return nil, 0, err
-	}
-	a, ok, err := s.deps.Registry.Get(ctx, payload.AgentID)
-	if err != nil {
-		return nil, 0, fmt.Errorf("resume tool approval: get agent: %w", err)
-	}
-	if !ok {
-		return nil, 0, ErrNotFound
 	}
 	req := ExecRequest{Query: payload.Query, ConversationID: payload.ConversationID, UserID: payload.UserID}
 	meta := ExecMeta{TenantID: tenantID, TraceID: payload.TraceID,
@@ -1514,6 +1543,116 @@ func (s *AgentService) ResumeToolApproval(ctx context.Context, tenantID, approva
 	duration := int(time.Since(start).Milliseconds())
 	runErr = completeApprovalResume(ctx, s.deps.CheckpointStore, tenantID, payload.ExecutionID, runErr)
 	return result, duration, runErr
+}
+
+// resumeContext 组合 ResumeToolApproval 的三段前置步骤：ApprovedPayload →
+// 恢复层校验（D9，先于 Registry.Get）→ Registry.Get。not-found 折叠为
+// ErrNotFound（与调用方原语义一致）。
+func (s *AgentService) resumeContext(ctx context.Context, tenantID, approvalID string) (ToolApprovalPayload, Agent, error) {
+	payload, err := s.resumeApprovalPayload(ctx, tenantID, approvalID)
+	if err != nil {
+		return ToolApprovalPayload{}, nil, err
+	}
+	if err := s.validateApprovalResume(ctx, tenantID, approvalID, payload); err != nil {
+		return ToolApprovalPayload{}, nil, err
+	}
+	a, ok, err := s.deps.Registry.Get(ctx, payload.AgentID)
+	if err != nil {
+		return ToolApprovalPayload{}, nil, fmt.Errorf("resume tool approval: get agent: %w", err)
+	}
+	if !ok {
+		return ToolApprovalPayload{}, nil, ErrNotFound
+	}
+	return payload, a, nil
+}
+
+// resumeApprovalPayload 解出可恢复审批载荷并统一失败处理（见 handleApprovedPayloadError）。
+func (s *AgentService) resumeApprovalPayload(ctx context.Context, tenantID, approvalID string) (ToolApprovalPayload, error) {
+	payload, err := s.deps.ApprovalService.ApprovedPayload(ctx, tenantID, approvalID)
+	if err != nil {
+		return ToolApprovalPayload{}, s.handleApprovedPayloadError(ctx, tenantID, approvalID, err)
+	}
+	return payload, nil
+}
+
+// validateApprovalResume 是断点恢复的恢复层校验（D9）：复用自己的旧授权前，重新
+// 核验外部状态。任一校验失败都 fail closed——确认的状态变更终结审批（保留可对账
+// 历史），瞬态读取失败拒绝恢复但不销毁审批（避免 DB 抖动永久作废有效授权并写入
+// 假审计 reason）。拆成会话/策略两个单职责子校验以控制复杂度。
+func (s *AgentService) validateApprovalResume(ctx context.Context, tenantID, approvalID string, payload ToolApprovalPayload) error {
+	if err := s.validateApprovalConversation(ctx, tenantID, approvalID, payload); err != nil {
+		return err
+	}
+	return s.validateApprovalPolicy(ctx, tenantID, approvalID, payload)
+}
+
+// handleApprovedPayloadError 统一 ApprovedPayload 失败处理：过期是不可逆终态，
+// Invalidate(expired) 只是规范化 reason 标记——CAS 失败（已决定/已执行）忽略，
+// 真实持久化失败 Join 暴露（不吞错）；其他错误原样传播。
+func (s *AgentService) handleApprovedPayloadError(ctx context.Context, tenantID, approvalID string, err error) error {
+	if !errors.Is(err, ErrApprovalExpired) {
+		return err
+	}
+	if err := approvalTransitionErr(err, s.deps.ApprovalService.Invalidate(ctx, tenantID, approvalID, "expired")); err != nil {
+		return err
+	}
+	return err
+}
+
+// validateApprovalConversation 会话存在性校验：会话确认不存在（ErrNotFound）才
+// Void(conversation_deleted)；其他读取错误 fail closed 返回原始错误，不 Void。
+func (s *AgentService) validateApprovalConversation(ctx context.Context, tenantID, approvalID string, payload ToolApprovalPayload) error {
+	if payload.ConversationID == "" || s.deps.ChatStore == nil {
+		return nil
+	}
+	if _, err := s.deps.ChatStore.GetConversation(ctx, tenantID, payload.ConversationID); err != nil {
+		if !errors.Is(err, domain.ErrNotFound) {
+			return fmt.Errorf("resume tool approval: check conversation: %w", err)
+		}
+		if err := approvalTransitionErr(err, s.deps.ApprovalService.Void(ctx, tenantID, approvalID, "conversation_deleted")); err != nil {
+			return err
+		}
+		return domain.ErrApprovalConversationGone
+	}
+	return nil
+}
+
+// validateApprovalPolicy 策略重查：无法解析（resolver 错误或空风险，镜像
+// resolveMCPToolRisk 的 unresolved 语义）→ fail closed 返回错误不 Invalidate；
+// 已解析但等级不一致 → Invalidate(policy_changed)。
+func (s *AgentService) validateApprovalPolicy(ctx context.Context, tenantID, approvalID string, payload ToolApprovalPayload) error {
+	// 策略重查是 MCP-tool 语义：空值视为 mcp_tool（存量兼容），显式非 MCP 审批
+	// （evaluation_action/mcp_policy/mcp_server）无 MCP tool risk——用无关的
+	// server/tool 名重查可能解析出偶然不同的等级，误 Invalidate 有效审批并写误导
+	// 审计 reason。门控镜像 createApprovalCheckpoint。
+	if s.deps.MCPToolPolicy == nil || (payload.SubjectKind != "" && payload.SubjectKind != domain.SubjectKindMCPTool) {
+		return nil
+	}
+	risk, riskErr := s.deps.MCPToolPolicy.ResolveMCPToolRisk(ctx, tenantID, payload.ServerID, payload.ToolName)
+	if riskErr != nil || risk == "" {
+		if riskErr == nil {
+			riskErr = errors.New("tool risk unresolved")
+		}
+		return fmt.Errorf("resume tool approval: resolve policy: %w", riskErr)
+	}
+	if risk != payload.RiskLevel {
+		if err := approvalTransitionErr(fmt.Errorf("tool risk %q changed from %q", risk, payload.RiskLevel),
+			s.deps.ApprovalService.Invalidate(ctx, tenantID, approvalID, "policy_changed")); err != nil {
+			return err
+		}
+		return domain.ErrApprovalPolicyChanged
+	}
+	return nil
+}
+
+// approvalTransitionErr 统一恢复层终结动作的 CAS 语义：终态 CAS 失败
+// （已执行/已决定，ErrApprovalAlreadyExecuted）按不可逆终态忽略返回 nil；
+// 其他错误 Join 保留——恢复层任何终结动作失败都必须暴露，禁止吞错。
+func approvalTransitionErr(cause, transitionErr error) error {
+	if transitionErr == nil || errors.Is(transitionErr, domain.ErrApprovalAlreadyExecuted) {
+		return nil
+	}
+	return errors.Join(cause, transitionErr)
 }
 
 func completeApprovalResume(
@@ -2097,9 +2236,6 @@ func (s *AgentService) resolveSystemAssistantTooling(
 		roleClass = boundedAssistantRoleClass(authorization.RoleClass)
 	}
 	extraTools := SystemAssistantToolDefinitions()
-	if (roleClass == "admin" || roleClass == "owner") && s.deps.ProposalService != nil {
-		extraTools = SystemAssistantToolDefinitionsForRole(roleClass)
-	}
 	skillCatalog, catalogErr := s.buildSkillCatalog(ctx, meta.TenantID, subjectID, a.GetConfig().AllowedSkills)
 	if catalogErr != nil {
 		return nil, nil, "", fmt.Errorf("resolve experiment resources: %w", catalogErr)
@@ -2149,9 +2285,11 @@ func (s *AgentService) systemAssistantExecutionOptions(
 		}))
 	}
 	guard := NewToolResultGuard()
-	if (roleClass == "admin" || roleClass == "owner") && s.deps.ProposalService != nil {
+	if s.deps.ProposalService != nil {
 		proposalService := s.deps.ProposalService
 		tenantID, actorID, conversationID := meta.TenantID, req.UserID, req.ConversationID
+		// D6：admin/owner 提案创建后立即自动确认并应用，一气呵成；member 保持待审提案流。
+		autoApply := roleClass == "admin" || roleClass == "owner"
 		options = append(options, withProposalCreateFn(func(callCtx context.Context, args map[string]any) (domain.ResourceChangeProposalArtifact, error) {
 			kind, operation, resourceID, payload, parseErr := ParseResourceChangeToolArguments(args)
 			if parseErr != nil {
@@ -2161,20 +2299,49 @@ func (s *AgentService) systemAssistantExecutionOptions(
 				TenantID: tenantID, ConversationID: conversationID, ActorID: actorID,
 				Kind: kind, Operation: operation, ResourceID: resourceID, Payload: payload,
 			})
+			if createErr != nil {
+				return domain.ResourceChangeProposalArtifact{}, createErr
+			}
+			if autoApply {
+				applied, applyErr := proposalService.ConfirmAndApply(callCtx, tenantID, proposal.ID, actorID)
+				if applyErr != nil {
+					// 保留已创建的 proposal artifact：graph 错误分支据此记录
+					// proposal ID，避免模型重复创建提案。ConfirmAndApply 失败前
+					// 可能已推进状态机（stale/failed/unknown_outcome），回读当前
+					// DB 状态避免用创建时的 ready_for_review 快照误导模型；回读
+					// 失败（如上下文超时）则退回创建快照。
+					current, getErr := proposalService.Get(callCtx, tenantID, actorID, proposal.ID)
+					if getErr == nil {
+						proposal = current
+					}
+					created := domain.ResourceChangeProposalArtifact{
+						ID: proposal.ID, ResourceKind: proposal.ResourceKind, Operation: proposal.Operation,
+						Status: proposal.Status, Summary: proposal.Summary, ExpiresAt: proposal.ExpiresAt,
+					}
+					return created, fmt.Errorf("auto apply proposal %s: %w", proposal.ID, applyErr)
+				}
+				proposal = applied
+			}
 			artifact := domain.ResourceChangeProposalArtifact{
 				ID: proposal.ID, ResourceKind: proposal.ResourceKind, Operation: proposal.Operation,
 				Status: proposal.Status, Summary: proposal.Summary, ExpiresAt: proposal.ExpiresAt,
 			}
-			return artifact, createErr
+			return artifact, nil
 		}))
 	}
-	if (roleClass == "admin" || roleClass == "owner") && s.deps.ResourceChangeApplier != nil {
+	if s.deps.ResourceChangeApplier != nil {
 		applier := s.deps.ResourceChangeApplier
 		actorID := req.UserID
+		// apply 工具全角色可见（D6）；member 闭包内 fail closed 明确拒绝，
+		// 不触达 applier，与 update_system_model 的写路径模式一致。
 		options = append(options, withResourceChangeApplyFn(func(callCtx context.Context, args map[string]any) (domain.ApplyResult, error) {
+			if roleClass != "admin" && roleClass != "owner" {
+				return domain.ApplyResult{}, errors.New("直接修改资源需要管理员权限，member 请改用提案工具")
+			}
 			return applier(callCtx, actorID, args)
 		}))
 	}
+	options = s.appendSystemModelToolOptions(options, meta, req, roleClass)
 	options = append(options, WithSystemAssistantMode(), withSystemAssistantRoleClass(roleClass),
 		withInternalToolResultGuard(func(value any) (port.GuardedToolResult, error) {
 			structured, ok := value.(map[string]any)
@@ -2183,6 +2350,44 @@ func (s *AgentService) systemAssistantExecutionOptions(
 			}
 			return guard.Validate(port.MCPToolResult{StructuredContent: structured}, nil)
 		}))
+	return options
+}
+
+// appendSystemModelToolOptions 装配模型工具闭包：list_models 全角色可见；
+// update_system_model 写路径在闭包内按 roleClass fail closed，member 明确
+// 拒绝且不触达 Registry。提取为独立方法以控制主函数圈复杂度。
+func (s *AgentService) appendSystemModelToolOptions(
+	options []ExecutionOption, meta ExecMeta, req ExecRequest, roleClass string,
+) []ExecutionOption {
+	if s.deps.ModelDetailsProvider != nil {
+		details := s.deps.ModelDetailsProvider
+		options = append(options, WithListModelsFn(func(callCtx context.Context) (map[string]any, error) {
+			models, listErr := details.ListTenantModelDetails(callCtx, meta.TenantID)
+			if listErr != nil {
+				return nil, fmt.Errorf("list tenant models: %w", listErr)
+			}
+			return map[string]any{"models": models}, nil
+		}))
+	}
+	if s.deps.Registry != nil {
+		actorID := req.UserID
+		updateModel := func(callCtx context.Context, model string) (map[string]any, error) {
+			if roleClass != "admin" && roleClass != "owner" {
+				// 写路径 fail closed：member 明确拒绝，不触达 Registry。
+				return nil, errors.New("更新平台助手模型需要管理员权限")
+			}
+			settings, updateErr := s.UpdateSystemAssistantModel(callCtx, model, actorID)
+			if updateErr != nil {
+				return nil, updateErr
+			}
+			return map[string]any{
+				"model":           settings.Model,
+				"ready":           settings.Ready,
+				"availableModels": settings.AvailableModels,
+			}, nil
+		}
+		options = append(options, WithUpdateSystemModelFn(updateModel))
+	}
 	return options
 }
 

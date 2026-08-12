@@ -164,3 +164,55 @@ func mustListTenantChatModels(t *testing.T, resolver *tenantCapabilityResolver) 
 	require.NoError(t, err)
 	return models
 }
+
+func TestTenantCapabilityResolverListTenantModelDetails(t *testing.T) {
+	models := []llmdomain.Model{
+		{
+			ID: "model-2", ProviderID: "provider-1", Name: "chat-latest", Enabled: true,
+			Capabilities: []llmdomain.ModelCapability{llmdomain.CapChat},
+		},
+		{
+			ID: "model-1", ProviderID: "provider-1", Name: "chat-base", Enabled: false,
+			Capabilities: []llmdomain.ModelCapability{llmdomain.CapChat},
+		},
+		{
+			ID: "model-3", ProviderID: "provider-off", Name: "hidden", Enabled: true,
+			Capabilities: []llmdomain.ModelCapability{llmdomain.CapChat},
+		},
+		{
+			ID: "model-4", ProviderID: "provider-1", Name: "embed", Enabled: true, ProviderManaged: true,
+			Capabilities: []llmdomain.ModelCapability{llmdomain.CapEmbedding},
+		},
+	}
+	providers := map[string]*llmdomain.Provider{
+		"provider-1":   {ID: "provider-1", Kind: llmdomain.ProviderOpenAICompat, Enabled: true},
+		"provider-off": {ID: "provider-off", Kind: llmdomain.ProviderOpenAICompat, Enabled: false},
+	}
+	resolver := &tenantCapabilityResolver{registry: newResolverRegistry(models, providers), logger: zap.NewNop()}
+
+	details, err := resolver.ListTenantModelDetails(context.Background(), "tenant-1")
+	require.NoError(t, err)
+	// 全量含 disabled model，但 disabled provider 的模型被过滤。
+	require.Len(t, details, 3)
+	require.Equal(t, "chat-base", details[0].Model) // 按 Name 排序
+	require.Equal(t, "provider-1", details[0].Provider)
+	require.Equal(t, []string{string(llmdomain.CapChat)}, details[0].Capabilities)
+	require.False(t, details[0].Enabled)
+	require.False(t, details[0].ProviderManaged)
+	require.Equal(t, "chat-latest", details[1].Model)
+	require.True(t, details[1].Enabled)
+	require.Equal(t, "embed", details[2].Model)
+	require.True(t, details[2].ProviderManaged)
+	require.Equal(t, []string{string(llmdomain.CapEmbedding)}, details[2].Capabilities)
+}
+
+func TestTenantCapabilityResolverListTenantModelDetailsPropagatesProviderFailure(t *testing.T) {
+	models := []llmdomain.Model{{
+		ID: "model-1", ProviderID: "missing", Name: "chat", Enabled: true,
+		Capabilities: []llmdomain.ModelCapability{llmdomain.CapChat},
+	}}
+	resolver := &tenantCapabilityResolver{registry: newResolverRegistry(models, nil), logger: zap.NewNop()}
+
+	_, err := resolver.ListTenantModelDetails(context.Background(), "tenant-1")
+	require.ErrorContains(t, err, "provider not found")
+}
