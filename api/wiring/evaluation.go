@@ -1092,9 +1092,10 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 
 // buildApprovalActionExecutor 评测组件就绪后装配审批动作执行器
 // （agent 先于 evaluation 构建，放末尾；ActionExecutor 缺失时执行端点 fail closed）。
+// mcp 组件先于 evaluation 构建（wiring 顺序 mcp→…→agent→…→evaluation），可直接传入。
 func (c *Container) buildApprovalActionExecutor() {
 	if c.Agent != nil {
-		c.Agent.ActionExecutor = newApprovalActionExecutor(c.Evaluation, c.Logger)
+		c.Agent.ActionExecutor = newApprovalActionExecutor(c.Evaluation, c.MCP, c.Logger)
 	}
 }
 

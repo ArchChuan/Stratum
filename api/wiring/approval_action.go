@@ -1,19 +1,24 @@
 package wiring
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 
+	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
+	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"go.uber.org/zap"
 )
 
 // approvalActionExecutor 把审批通过后的动作分发到对应 context 的 service
-// （wiring 薄 ACL，D3/D4）。执行路径与 admin/owner 直接执行完全一致。
+// （wiring 薄 ACL，D3/D4/D5）。执行路径与 admin/owner 直接执行完全一致。
 type approvalActionExecutor struct {
 	suiteSvc        *evalapp.SuiteService
 	jobSvc          *evalapp.JobService
@@ -23,11 +28,17 @@ type approvalActionExecutor struct {
 	casegen         *evalapp.TestCaseGenerator
 	candidateSvc    *evalapp.CandidateCommandService
 	agentApplier    evalport.AgentRevisionApplier
+	mcpSvc          *mcpapp.MCPService
 	logger          *zap.Logger
 }
 
-// newApprovalActionExecutor 从已装配的 Evaluation 组件收集评测 service。
-func newApprovalActionExecutor(evalComp *Evaluation, logger *zap.Logger) *approvalActionExecutor {
+// newApprovalActionExecutor 从已装配的 Evaluation / MCP 组件收集 service。
+// mcpComp 可为 nil（MCP 组件未装配时 executeMCPConfig fail closed）。
+func newApprovalActionExecutor(evalComp *Evaluation, mcpComp *MCP, logger *zap.Logger) *approvalActionExecutor {
+	var mcpSvc *mcpapp.MCPService
+	if mcpComp != nil {
+		mcpSvc = mcpComp.Service
+	}
 	return &approvalActionExecutor{
 		suiteSvc:        evalComp.SuiteService,
 		jobSvc:          evalComp.JobService,
@@ -37,6 +48,7 @@ func newApprovalActionExecutor(evalComp *Evaluation, logger *zap.Logger) *approv
 		casegen:         evalComp.TestCaseGenerator,
 		candidateSvc:    evalComp.CandidateService,
 		agentApplier:    evalComp.AgentRevisionApplier,
+		mcpSvc:          mcpSvc,
 		logger:          logger,
 	}
 }
@@ -241,11 +253,108 @@ func executeGenerateOptimization(ctx context.Context, e *approvalActionExecutor,
 	return map[string]any{"optimization_id": job.ID, "candidate_count": len(candidates)}, nil
 }
 
-// executeMCPConfig 在 Task 6 实现 mcp_policy/mcp_server 分发（本 Task 仅占位）。
+// mcpConfigActionFunc 执行一个 MCP 配置 operation（D5 审批动作）。
+type mcpConfigActionFunc func(ctx context.Context, e *approvalActionExecutor, req port.ApprovalActionRequest) (map[string]any, error)
+
+// mcpConfigOperations 把 operation 分派到独立方法——避免单一巨型 switch 突破
+// 圈复杂度/认知复杂度门禁（各方法 CC≤2）。
+var mcpConfigOperations = map[string]mcpConfigActionFunc{
+	"set_tool_policy": executeMCPSetToolPolicy,
+	"connect_server":  executeMCPConnectServer,
+	"update_server":   executeMCPUpdateServer,
+	"set_editors":     executeMCPSetEditors,
+	"delete_server":   executeMCPDeleteServer,
+}
+
+// executeMCPConfig 按 operation 分发 MCP 原方法（D5）。actor 一律用 req.DecidedBy——
+// 审批人以自身权限执行：member 发起 connect 审批通过后 ownership 校验能过（DecidedBy 是
+// admin/owner）；未知 operation fail closed（notExecuted → 审批释放回 approved 可重试）。
+// 错误语义与 evaluation 的有意分歧：MCP 写方法非事务性，重试可能重复应用配置
+// （double-connect/覆盖），故业务错误原样返回 → 终态 unknown_outcome（不可重试），
+// 而非 notExecuted 释放回 approved；仅预执行失败（mcpSvc 未装配、未知 operation、
+// config 解码失败）用 notExecuted 保持可重试。
 func (e *approvalActionExecutor) executeMCPConfig(
 	ctx context.Context, req port.ApprovalActionRequest,
 ) (map[string]any, error) {
-	return nil, notExecuted(fmt.Errorf("mcp config approval executor not implemented in task 5"))
+	if e.mcpSvc == nil {
+		return nil, notExecuted(fmt.Errorf("mcp approval executor not configured"))
+	}
+	operation := asString(req.Arguments, "operation")
+	fn, ok := mcpConfigOperations[operation]
+	if !ok {
+		return nil, notExecuted(fmt.Errorf("unsupported mcp operation: %s", operation))
+	}
+	return fn(ctx, e, req)
+}
+
+func executeMCPSetToolPolicy(ctx context.Context, e *approvalActionExecutor, req port.ApprovalActionRequest) (map[string]any, error) {
+	if err := e.mcpSvc.SetToolPolicy(ctx, mcpdomain.ToolPolicy{
+		ServerID: asString(req.Arguments, "serverId"), ToolName: asString(req.Arguments, "toolName"),
+		RiskLevel: mcpdomain.ToolRiskLevel(asString(req.Arguments, "riskLevel")), UpdatedBy: req.DecidedBy,
+	}); err != nil {
+		return nil, err
+	}
+	return map[string]any{"status": "updated"}, nil
+}
+
+func executeMCPConnectServer(ctx context.Context, e *approvalActionExecutor, req port.ApprovalActionRequest) (map[string]any, error) {
+	cfg, err := decodeServerConfig(req.Arguments)
+	if err != nil {
+		return nil, notExecuted(err)
+	}
+	// 与直接路径一致：连接是活网络操作，可越过审批人的请求生命周期。沿用可取消的
+	// request ctx 会在审批人断开时取消连接——业务失败 → unknown_outcome 烧审批。
+	if err := e.mcpSvc.ConnectServer(context.WithoutCancel(ctx), cfg, asStringSlice(req.Arguments, "editors"), req.DecidedBy); err != nil {
+		return nil, err
+	}
+	return map[string]any{"server_id": cfg.ID}, nil
+}
+
+func executeMCPUpdateServer(ctx context.Context, e *approvalActionExecutor, req port.ApprovalActionRequest) (map[string]any, error) {
+	cfg, err := decodeServerConfig(req.Arguments)
+	if err != nil {
+		return nil, notExecuted(err)
+	}
+	cfg.ID = asString(req.Arguments, "serverId")
+	if err := e.mcpSvc.UpdateServer(ctx, cfg, req.DecidedBy); err != nil {
+		return nil, err
+	}
+	return map[string]any{"server_id": cfg.ID}, nil
+}
+
+func executeMCPSetEditors(ctx context.Context, e *approvalActionExecutor, req port.ApprovalActionRequest) (map[string]any, error) {
+	if err := e.mcpSvc.SetEditors(ctx, asString(req.Arguments, "serverId"), req.DecidedBy, asStringSlice(req.Arguments, "editorIds")); err != nil {
+		return nil, err
+	}
+	return map[string]any{"status": "updated"}, nil
+}
+
+func executeMCPDeleteServer(ctx context.Context, e *approvalActionExecutor, req port.ApprovalActionRequest) (map[string]any, error) {
+	if err := e.mcpSvc.DeleteServer(ctx, asString(req.Arguments, "serverId"), req.DecidedBy); err != nil {
+		return nil, err
+	}
+	return map[string]any{"status": "deleted"}, nil
+}
+
+// decodeServerConfig 从审批 args 反序列化 MCP 服务器配置（存储后形态 map[string]any，
+// 经 gen 请求结构还原为 domain.ServerConfig；system_key 由 ServerConfig 校验拒绝）。
+func decodeServerConfig(args map[string]any) (*mcpdomain.ServerConfig, error) {
+	raw, err := json.Marshal(args["config"])
+	if err != nil {
+		return nil, fmt.Errorf("encode mcp config arg: %w", err)
+	}
+	var req gen.MCPServerConfigRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return nil, fmt.Errorf("decode mcp config arg: %w", err)
+	}
+	// handler bind 的 DTO 里 SystemKey 无 omitempty：成员未提供 system_key 时，经 AES
+	// round-trip 后空值落成字面 "null"，ServerConfig() 会误判为系统托管 key 而拒绝——
+	// connect/update 审批永远 notExecuted 释放回 approved 死循环（评审 BLOCKING）。
+	// 非空 system_key 已在 handler bind 层双路径（member/admin）拒绝，此处归一化安全。
+	if len(req.SystemKey) == 0 || string(bytes.TrimSpace(req.SystemKey)) == "null" {
+		req.SystemKey = nil
+	}
+	return req.ServerConfig()
 }
 
 // asExperimentCommand 组装实验命令，执行者记为审批人（DecidedBy）。
@@ -277,18 +386,25 @@ func asInt(args map[string]any, key string) int {
 
 // asStringSlice 缺失/空 key 返回 nil，保持与直接路径一致：OptimizationFingerprint
 // JSON 序列化 nil 为 null、空 slice 为 []，两者 SHA 不同，跨路径会生成不同幂等键。
+// 兼容两种形态：JSON 持久化后 []any 与内存直传 []string。
 func asStringSlice(args map[string]any, key string) []string {
-	raw, ok := args[key].([]any)
-	if !ok || raw == nil {
+	switch raw := args[key].(type) {
+	case []any:
+		if raw == nil {
+			return nil
+		}
+		out := make([]string, 0, len(raw))
+		for _, item := range raw {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []string:
+		return raw
+	default:
 		return nil
 	}
-	out := make([]string, 0, len(raw))
-	for _, item := range raw {
-		if s, ok := item.(string); ok {
-			out = append(out, s)
-		}
-	}
-	return out
 }
 
 // asResourceRef 从 {"kind","id","revision_id"} 映射到 eval domain 的 ResourceRef。

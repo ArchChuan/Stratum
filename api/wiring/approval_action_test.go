@@ -8,7 +8,11 @@ import (
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
+	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
+	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
+	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 // notExecutedError 断言 err 是 ApprovalActionNotExecutedError（预执行失败 → 审批释放回
@@ -151,4 +155,121 @@ func TestApprovalActionExperimentCommandHelper(t *testing.T) {
 	require.Equal(t, "reviewed", cmd.Reason)
 	require.Equal(t, "idem-1", cmd.IdempotencyKey)
 	require.Equal(t, int64(3), cmd.ExpectedStateVersion)
+}
+
+// toolPolicyRecorder 记录 SetToolPolicy Upsert，模拟 ToolPolicyRepo。
+type toolPolicyRecorder struct {
+	upserts []mcpdomain.ToolPolicy
+}
+
+func (r *toolPolicyRecorder) Get(context.Context, string, string) (mcpdomain.ToolPolicy, bool, error) {
+	return mcpdomain.ToolPolicy{}, false, nil
+}
+func (r *toolPolicyRecorder) List(context.Context) ([]mcpdomain.ToolPolicy, error) { return nil, nil }
+func (r *toolPolicyRecorder) Upsert(_ context.Context, p mcpdomain.ToolPolicy) error {
+	r.upserts = append(r.upserts, p)
+	return nil
+}
+
+// newMCPExecutorSvc 构造带 fake ToolPolicyRepo 的 MCPService，供 MCP 审批执行器分发测试。
+func newMCPExecutorSvc(t *testing.T) (*mcpapp.MCPService, *toolPolicyRecorder) {
+	t.Helper()
+	logger := zap.NewNop()
+	manager := mcp.NewClientManager(logger, nil, nil)
+	registry := mcp.NewMCPToolRegistry(manager, logger)
+	svc := mcpapp.NewMCPService(mcp.ToolRegistryAsPort(registry), mcp.ServerManagerAsPort(manager), logger)
+	repo := &toolPolicyRecorder{}
+	svc.SetToolPolicyRepo(repo)
+	return svc, repo
+}
+
+// D5：MCP 策略/服务器配置审批执行分发。set_tool_policy 用 DecidedBy 作为 actor
+// （审批人以自身 admin/owner 权限执行，member 发起的 connect 审批通过后 ownership 校验可过）。
+func TestApprovalActionExecutorMCPDispatch(t *testing.T) {
+	svc, repo := newMCPExecutorSvc(t)
+	e := &approvalActionExecutor{mcpSvc: svc}
+
+	t.Run("set_tool_policy uses DecidedBy as actor", func(t *testing.T) {
+		_, err := e.ExecuteApprovalAction(context.Background(), port.ApprovalActionRequest{
+			TenantID: "t1", SubjectKind: agentdomain.SubjectKindMCPPolicy, DecidedBy: "admin-1",
+			Arguments: map[string]any{"operation": "set_tool_policy", "serverId": "srv", "toolName": "tool", "riskLevel": "write_reversible"},
+		})
+		require.NoError(t, err)
+		require.Len(t, repo.upserts, 1)
+		require.Equal(t, "admin-1", repo.upserts[0].UpdatedBy)
+		require.Equal(t, mcpdomain.ToolRiskWriteReversible, repo.upserts[0].RiskLevel)
+	})
+
+	t.Run("unsupported mcp operation fails closed", func(t *testing.T) {
+		_, err := e.ExecuteApprovalAction(context.Background(), port.ApprovalActionRequest{
+			TenantID: "t1", SubjectKind: agentdomain.SubjectKindMCPServer, DecidedBy: "admin-1",
+			Arguments: map[string]any{"operation": "rm -rf"},
+		})
+		notExecutedError(t, err)
+	})
+
+	t.Run("delete_server dispatches to DeleteServer", func(t *testing.T) {
+		_, err := e.ExecuteApprovalAction(context.Background(), port.ApprovalActionRequest{
+			TenantID: "t1", SubjectKind: agentdomain.SubjectKindMCPServer, DecidedBy: "admin-1",
+			Arguments: map[string]any{"operation": "delete_server", "serverId": "missing"},
+		})
+		// 真实 manager 对不存在 server fail closed；断言错误路径已传播而非静默成功。
+		require.Error(t, err)
+	})
+}
+
+// D5 评审 BLOCKING 回归：handler bind 的 DTO 中 SystemKey 无 omitempty，成员未提供
+// system_key 时经 AES round-trip 空值落成字面 null；decodeServerConfig 必须归一化为
+// nil，否则 ServerConfig() 误判为系统托管 key → connect/update 审批永远 notExecuted
+// 释放回 approved 死循环。真实非空 system_key 仍须拒绝（归一化不得放宽）。
+func TestDecodeServerConfigNormalizesNullSystemKey(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    map[string]any
+		wantErr bool
+	}{
+		{name: "round-tripped literal null", args: map[string]any{"config": map[string]any{
+			"name": "svr", "transport": "streamable-http", "url": "http://localhost:9000",
+			"system_key": nil,
+		}}},
+		{name: "no system_key key", args: map[string]any{"config": map[string]any{
+			"name": "svr", "transport": "streamable-http", "url": "http://localhost:9000",
+		}}},
+		{name: "real system_key still rejected", wantErr: true, args: map[string]any{"config": map[string]any{
+			"name": "svr", "transport": "streamable-http", "system_key": "stratum.platform_mcp",
+		}}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := decodeServerConfig(tc.args)
+			if tc.wantErr {
+				require.Error(t, err, "managed system_key must be rejected by ServerConfig")
+				return
+			}
+			require.NoError(t, err, "config with no real system_key must decode")
+			require.Equal(t, "svr", cfg.Name)
+			require.Equal(t, "http://localhost:9000", cfg.URL)
+		})
+	}
+}
+
+// asStringSlice 兼容 JSON 持久化形态 []any 与内存直传形态 []string（评审建议）。
+func TestAsStringSliceBothForms(t *testing.T) {
+	cases := []struct {
+		name string
+		args map[string]any
+		want []string
+	}{
+		{name: "json round-tripped []any", args: map[string]any{"editors": []any{"e1", "e2"}}, want: []string{"e1", "e2"}},
+		{name: "in-memory []string", args: map[string]any{"editors": []string{"e1"}}, want: []string{"e1"}},
+		{name: "missing key returns nil", args: map[string]any{}, want: nil},
+		{name: "nil slice returns nil", args: map[string]any{"editors": nil}, want: nil},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, asStringSlice(tc.args, "editors"))
+		})
+	}
 }

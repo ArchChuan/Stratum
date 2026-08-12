@@ -81,6 +81,33 @@ func TestRedactSensitivePayloadHandlesNestedArrays(t *testing.T) {
 	}
 }
 
+// MCP auth 配置做外科式脱敏（评审 HIGH）：保留决策元数据（type/api_key_header/
+// oauth2_client_id/oauth2_token_url），仅掩蔽真实凭据值（token/api_key_value/
+// oauth2_client_secret）；非 map 形态（标量）仍整体掩蔽。
+func TestRedactSensitivePayloadMasksOnlyMCPAuthSecrets(t *testing.T) {
+	got := RedactSensitivePayload(map[string]any{
+		"auth": map[string]any{
+			"type": "api_key", "api_key_header": "X-API-Key", "api_key_value": "sk-9",
+			"oauth2_client_id": "cid", "oauth2_client_secret": "cs", "oauth2_token_url": "https://t/url",
+		},
+		"authString": "Basic dXNlcjpwYXNz",
+	})
+	auth, ok := got["auth"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected auth metadata preserved as map, got %v", got["auth"])
+	}
+	if auth["type"] != "api_key" || auth["api_key_header"] != "X-API-Key" ||
+		auth["oauth2_client_id"] != "cid" || auth["oauth2_token_url"] != "https://t/url" {
+		t.Fatalf("expected auth decision metadata preserved, got %v", auth)
+	}
+	if auth["api_key_value"] != "***" || auth["oauth2_client_secret"] != "***" {
+		t.Fatalf("expected auth credential values masked, got %v", auth)
+	}
+	if got["authString"] != "***" {
+		t.Fatalf("expected non-map auth value masked entirely, got %v", got["authString"])
+	}
+}
+
 // 扩展 suffix：passwd/auth/session/bearer/cookie 命中。
 func TestRedactSensitivePayloadExtendedSuffixes(t *testing.T) {
 	got := RedactSensitivePayload(map[string]any{
@@ -91,6 +118,56 @@ func TestRedactSensitivePayloadExtendedSuffixes(t *testing.T) {
 		if v != "***" {
 			t.Fatalf("expected %s masked, got %v", k, v)
 		}
+	}
+}
+
+// 回归（评审 HIGH）：auth 对象白名单外仍须过后缀过滤——{"auth":{"password":...}}
+// 此前 default 分支原样透传泄露；现在 password/apiKey 掩蔽、type 等元数据保留。
+func TestRedactSensitivePayloadAuthNonWhitelistedSensitiveKeysMasked(t *testing.T) {
+	got := RedactSensitivePayload(map[string]any{
+		"auth": map[string]any{
+			"type": "api_key", "api_key_header": "X-API-Key", "api_key_value": "sk-9",
+			"password": "hunter2", "apiKey": "sk-leak", "sessionToken": "s1",
+		},
+	})
+	auth, ok := got["auth"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected auth metadata preserved as map, got %v", got["auth"])
+	}
+	if auth["type"] != "api_key" || auth["api_key_header"] != "X-API-Key" || auth["api_key_value"] != "***" {
+		t.Fatalf("expected known MCP auth fields handled, got %v", auth)
+	}
+	for _, k := range []string{"password", "apiKey", "sessionToken"} {
+		if auth[k] != "***" {
+			t.Fatalf("expected %s masked, got %v", k, auth[k])
+		}
+	}
+}
+
+// 回归（评审 MEDIUM）：auth 内非敏感键下的嵌套凭据必须递归脱敏——{"auth":
+// {"headers":{"x-api-key":"sk"}}} 若原样透传会把嵌套 secret 直接给审批人。
+func TestRedactSensitivePayloadAuthNestedCredentialsMasked(t *testing.T) {
+	got := RedactSensitivePayload(map[string]any{
+		"auth": map[string]any{
+			"type": "api_key", "api_key_header": "X-API-Key",
+			"headers": map[string]any{"x-api-key": "sk-nested"},
+			"config":  map[string]any{"token": "sk-tok"},
+		},
+	})
+	auth, ok := got["auth"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected auth metadata preserved as map, got %v", got["auth"])
+	}
+	headers := auth["headers"].(map[string]any)
+	if headers["x-api-key"] != "***" {
+		t.Fatalf("expected nested x-api-key masked, got %v", headers)
+	}
+	config := auth["config"].(map[string]any)
+	if config["token"] != "***" {
+		t.Fatalf("expected nested config token masked, got %v", config)
+	}
+	if auth["type"] != "api_key" || auth["api_key_header"] != "X-API-Key" {
+		t.Fatalf("expected auth metadata preserved, got %v", auth)
 	}
 }
 

@@ -532,6 +532,14 @@ func registerMCP(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFu
 		return
 	}
 	mcpHandler := handler.NewMCPHandler(c.MCP.Service, c.Logger)
+	if c.Agent != nil && c.Agent.ApprovalService != nil {
+		// D5：member 配置写操作创建审批（缺装配时 handler 内部 fail closed 503）。
+		mcpHandler = mcpHandler.WithApprovalService(c.Agent.ApprovalService)
+		// 角色分流现查（单事实源）：不信任 JWT role claim 的陈旧窗口。
+		if roles := c.Agent.RoleResolver; roles != nil {
+			mcpHandler = mcpHandler.WithRoleResolver(roles)
+		}
+	}
 
 	base := protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))
 	writeMW := []gin.HandlerFunc{requireActive}
