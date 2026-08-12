@@ -1,6 +1,7 @@
 :root {
-  font-family: Inter, 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei', 'Noto Sans CJK SC',
-    -apple-system, 'Segoe UI', Roboto, sans-serif;
+  /* 与 providers.tsx 字体栈同步：拉丁/数字优先系统 UI 字体，中文按平台回退 */
+  font-family: Inter, -apple-system, 'Segoe UI', 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei',
+    'Noto Sans CJK SC', Roboto, sans-serif;
   font-size: 16px;
   line-height: 1.5;
   font-weight: 400;

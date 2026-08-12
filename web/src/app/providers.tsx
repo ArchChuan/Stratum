@@ -19,9 +19,12 @@ export const AppProviders = ({ children }: AppProvidersProps) => (
         colorPrimary: '#2563eb',
         borderRadius: 8,
         borderRadiusLG: 12,
-        // 字体：数字/英文 Inter 优先，中文按平台回退最优系统字体（Avenir 仅 macOS，缺失时会落到 Arial 渲染粗笨）
+        // 字体：拉丁/数字优先系统 UI 字体（Windows Segoe UI、macOS SF Pro），中文按平台回退。
+        // 修复 #321：Inter/PingFang/HarmonyOS 在 Windows 全缺失 → 全站(含拉丁/数字)落到微软雅黑，
+        // DirectWrite 下微软雅黑拉丁字形渲染发虚且光栅化慢，页面切换首帧延迟产生残影。
+        // CSS 逐字符 fallback：拉丁走 Segoe UI/SF Pro，中文自动走微软雅黑/PingFang。
         fontFamily:
-          'Inter, PingFang SC, HarmonyOS Sans SC, Microsoft YaHei, Noto Sans CJK SC, -apple-system, Segoe UI, Roboto, sans-serif',
+          'Inter, -apple-system, Segoe UI, PingFang SC, HarmonyOS Sans SC, Microsoft YaHei, Noto Sans CJK SC, Roboto, sans-serif',
         // 控件高度 32→36，缓解 14px 字号局促感（SM 24→28、LG 40→44 配套缩放）
         controlHeight: 36,
         controlHeightSM: 28,
