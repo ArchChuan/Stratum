@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"go.uber.org/zap"
+
 	llmapp "github.com/byteBuilderX/stratum/internal/llmgateway/application"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
@@ -37,7 +39,7 @@ type LLMGateway struct {
 	ModelMgmtService *llmapp.ModelMgmtService
 }
 
-func (c *Container) buildLLMGateway(_ context.Context) error {
+func (c *Container) buildLLMGateway(ctx context.Context) error {
 	db := c.DB()
 	if db == nil {
 		// c.LLMGateway remains nil when db is unavailable.
@@ -94,6 +96,11 @@ func (c *Container) buildLLMGateway(_ context.Context) error {
 		chatProtos, embedProtos,
 		constants.GatewayCacheTTL,
 	)
+	// 启动期预热全局目录一次；失败仅 WARN 不阻断——解析链内置 ②③④ 兜底
+	// 与 ⑤ fail-closed，运行时按需从 DB 惰性解析。
+	if err := registry.Warm(ctx); err != nil {
+		c.Logger.Warn("llmgateway.registry.warm.failed", zap.Error(err))
+	}
 	gw := llmgateway.NewGateway(registry, chatProtos, embedProtos).
 		WithLogger(c.Logger).WithMetrics(metrics)
 

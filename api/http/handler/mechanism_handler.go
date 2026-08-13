@@ -109,6 +109,8 @@ func toProfileResponse(p mechanismdomain.Profile) gen.ProfileResponse {
 			Compaction:       p.Baseline.Prompts.Compaction,
 			EnrichModel:      p.Baseline.Models.EnrichModel,
 			SummaryModel:     p.Baseline.Models.SummaryModel,
+			ExtractionModel:  p.Baseline.Models.ExtractionModel,
+			JudgeModel:       p.Baseline.Models.JudgeModel,
 		},
 	}
 }
@@ -226,8 +228,10 @@ func domainFromUpsert(req gen.UpsertProfileRequest) mechanismdomain.Profile {
 				Compaction:       req.Baseline.Compaction,
 			},
 			Models: mechanismdomain.BaselineModels{
-				EnrichModel:  req.Baseline.EnrichModel,
-				SummaryModel: req.Baseline.SummaryModel,
+				EnrichModel:     req.Baseline.EnrichModel,
+				SummaryModel:    req.Baseline.SummaryModel,
+				ExtractionModel: req.Baseline.ExtractionModel,
+				JudgeModel:      req.Baseline.JudgeModel,
 			},
 		},
 	}

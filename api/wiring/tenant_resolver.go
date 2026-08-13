@@ -26,7 +26,7 @@ func (r *tenantCapabilityResolver) DiagnosticModelStatus(
 	if r.registry == nil {
 		return status, fmt.Errorf("tenant model diagnostics: registry unavailable")
 	}
-	models, err := r.registry.ListChatModelsByTenant(ctx, tenantID)
+	models, err := r.registry.ListChatModelsByTenant(ctx)
 	if err != nil {
 		return status, fmt.Errorf("tenant model diagnostics: list models: %w", err)
 	}
@@ -46,30 +46,33 @@ func newTenantCapabilityResolver(
 	}
 }
 
-func (r *tenantCapabilityResolver) resolveGateway(ctx context.Context, tenantID string) (*llmgateway.Gateway, bool) {
-	gw, ok, _ := r.resolveGatewayResult(ctx, tenantID, false)
+func (r *tenantCapabilityResolver) resolveGateway(ctx context.Context) (*llmgateway.Gateway, bool) {
+	gw, ok, _ := r.resolveGatewayResult(ctx, false)
 	return gw, ok
 }
 
-func (r *tenantCapabilityResolver) resolveGatewayResult(ctx context.Context, tenantID string, strict bool) (*llmgateway.Gateway, bool, error) {
+func (r *tenantCapabilityResolver) resolveGatewayResult(ctx context.Context, strict bool) (*llmgateway.Gateway, bool, error) {
 	if r.registry == nil {
 		if strict {
 			return nil, false, fmt.Errorf("tenant llm: registry unavailable")
 		}
 		return r.gateway, r.gateway != nil, nil
 	}
-	if err := r.registry.WarmTenant(ctx, tenantID); err != nil {
-		if strict {
-			return nil, false, fmt.Errorf("tenant llm: warm: %w", err)
+	// 全局目录已由启动期 Warm 预热一次；解析链内置 ②③④ 兜底与 ⑤ fail-closed，
+	// 无需在此按租户预热。
+	if strict {
+		// 触发一次目录读取以传播 registry 基础设施故障（DB/provider 缺失），
+		// 不把 worker 解析降级成静默 unavailable。
+		if _, err := r.registry.ListChatModelsByTenant(ctx); err != nil {
+			return nil, false, fmt.Errorf("tenant llm: %w", err)
 		}
-		return r.gateway, r.gateway != nil, nil
 	}
 	return r.gateway, true, nil
 }
 
 // Resolve returns a per-tenant CapabilityGateway.
 func (r *tenantCapabilityResolver) Resolve(ctx context.Context, tenantID string) (agentport.CapabilityGateway, bool) {
-	gw, ok := r.resolveGateway(ctx, tenantID)
+	gw, ok := r.resolveGateway(ctx)
 	if !ok {
 		return nil, false
 	}
@@ -82,7 +85,7 @@ func (r *tenantCapabilityResolver) Resolve(ctx context.Context, tenantID string)
 // nil when the tenant has no provider configured. Used by the memory pipeline
 // to drive enrich/summary jobs against tenant-private gateways.
 func (r *tenantCapabilityResolver) ResolveLLM(ctx context.Context, tenantID string) *llmgateway.Gateway {
-	gw, ok := r.resolveGateway(ctx, tenantID)
+	gw, ok := r.resolveGateway(ctx)
 	if !ok {
 		return nil
 	}
@@ -92,7 +95,7 @@ func (r *tenantCapabilityResolver) ResolveLLM(ctx context.Context, tenantID stri
 // ResolveWorkerLLM resolves the current tenant gateway without hiding
 // infrastructure or credential failures behind the global fallback.
 func (r *tenantCapabilityResolver) ResolveWorkerLLM(ctx context.Context, tenantID string) (*llmgateway.Gateway, error) {
-	gw, ok, err := r.resolveGatewayResult(ctx, tenantID, true)
+	gw, ok, err := r.resolveGatewayResult(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +109,7 @@ func (r *tenantCapabilityResolver) ValidateTenantChatModel(ctx context.Context, 
 	if r.registry == nil {
 		return fmt.Errorf("tenant llm model validation: %w", agentdomain.ErrAssistantModelUnavailable)
 	}
-	names, err := r.registry.ListChatModelsByTenant(ctx, tenantID)
+	names, err := r.registry.ListChatModelsByTenant(ctx)
 	if err != nil {
 		return fmt.Errorf("tenant llm model validation: %w", err)
 	}
@@ -122,7 +125,7 @@ func (r *tenantCapabilityResolver) ListTenantChatModels(ctx context.Context, ten
 	if r.registry == nil {
 		return []string{}, nil
 	}
-	names, err := r.registry.ListChatModelsByTenant(ctx, tenantID)
+	names, err := r.registry.ListChatModelsByTenant(ctx)
 	if err != nil {
 		if errors.Is(err, agentdomain.ErrAssistantModelUnavailable) ||
 			errors.Is(err, agentdomain.ErrInvalidSystemAssistantModel) {
@@ -133,11 +136,11 @@ func (r *tenantCapabilityResolver) ListTenantChatModels(ctx context.Context, ten
 	return names, nil
 }
 
-func (r *tenantCapabilityResolver) GetChatModelContextWindow(ctx context.Context, tenantID, model string) (int, error) {
+func (r *tenantCapabilityResolver) GetChatModelContextWindow(ctx context.Context, model string) (int, error) {
 	if r.registry == nil {
 		return 0, nil
 	}
-	return r.registry.GetChatModelContextWindow(ctx, tenantID, model)
+	return r.registry.GetChatModelContextWindow(ctx, model)
 }
 
 // ListTenantModelDetails projects the full tenant model catalog (including
@@ -148,7 +151,7 @@ func (r *tenantCapabilityResolver) ListTenantModelDetails(ctx context.Context, t
 	if r.registry == nil {
 		return nil, fmt.Errorf("tenant llm model catalogue: registry unavailable")
 	}
-	models, err := r.registry.ListModelsByTenantDetails(ctx, tenantID)
+	models, err := r.registry.ListModelsByTenantDetails(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("tenant llm model catalogue: %w", err)
 	}
@@ -171,7 +174,7 @@ func (r *tenantCapabilityResolver) ListTenantModelDetails(ctx context.Context, t
 
 // InjectCompleter injects the per-tenant LLM completer into ctx for streaming.
 func (r *tenantCapabilityResolver) InjectCompleter(ctx context.Context, tenantID string) context.Context {
-	gw, ok := r.resolveGateway(ctx, tenantID)
+	gw, ok := r.resolveGateway(ctx)
 	if !ok {
 		return ctx
 	}

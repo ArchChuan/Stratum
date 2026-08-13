@@ -84,8 +84,18 @@ const SeedMemorySupersedePrompt = `判断新事实是否应该取代旧事实。
 只输出 JSON，不加任何说明：
 {"supersedes": true/false, "reason": "简短说明"}`
 
+// SeedAgentFactCheckPrompt 对应原 wiring/factCheckJudge 的 user 判定模板
+// （system 角色设定「你是严谨的事实核查法官…」作为消费方不变量保留）。
+// 含 %s/%s 占位（claimsJSON/evidence），消费方 fmt.Sprintf 使用。
+const SeedAgentFactCheckPrompt = "对下列每条 claim，依据给定 RAG 证据判断其是否被支持。" +
+	"\n\nClaims:\n%s\n\nEvidence:\n%s\n\n输出 JSON：" +
+	"{\"claims\":[{\"text\":\"<claim>\",\"verdict\":\"SUPPORTED|CONTRADICTED|UNSUPPORTED\",\"risk\":<0-5>}]}。" +
+	"risk 越高越可疑；证据不足判 UNSUPPORTED。"
+
 // DefaultBaseline 返回种子档位基线（现状硬编码值）。无 DB 档案时全系统
-// 回退此值，行为与改造前一致。六键必须与消费路径逐一对应，禁止漏键。
+// 回退此值，行为与改造前一致。七键必须与消费路径逐一对应，禁止漏键。
+// 模型 seed 对齐 config 现状默认（MEMORY_ENRICH_MODEL/MEMORY_SUMMARY_MODEL/
+// AGENT_FACTCHECK_JUDGE_MODEL；extraction 为 llm_extractor 默认）。
 func DefaultBaseline() Baseline {
 	return Baseline{
 		Prompts: BaselinePrompts{
@@ -95,8 +105,14 @@ func DefaultBaseline() Baseline {
 			MemorySummarize:  SeedMemorySummarizePrompt,
 			MemorySupersede:  SeedMemorySupersedePrompt,
 			Compaction:       SeedCompactionPrompt,
+			AgentFactCheck:   SeedAgentFactCheckPrompt,
 		},
-		Models: BaselineModels{},
+		Models: BaselineModels{
+			EnrichModel:     "qwen-turbo",
+			SummaryModel:    "qwen-plus",
+			ExtractionModel: "qwen-plus",
+			JudgeModel:      "qwen-turbo",
+		},
 		Recall: BaselineRecall{},
 	}
 }

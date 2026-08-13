@@ -35,17 +35,20 @@ const clickModalOK = (page: Page) => page.locator('.ant-modal-content')
 export const executeLLMAdminPack = async ({ actor, systemAdmin, pool, evidence, webURL, fixtureURL, backendURL }: LLMAdminPackContext): Promise<string[]> => {
   const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
   const completed: string[] = [];
-  const page = await actor.context.newPage();
+  // /models 已收进平台管理（#361），前端路由仅 global admin 可访问；厂商/模型 CRUD
+  // 全部走 systemAdmin 上下文。DB 证据仍用 tenantID（providers/models 为 public 全局表）。
+  const page = await systemAdmin.context.newPage();
   const providerName = `E2E-Provider-${Date.now()}`;
   let providerID = '';
   try {
     // Clean up stale E2E providers and models from previous failed runs
+    //（providers/models 已是 public 全局目录，用 schema-qualified 前缀直连）
     await withTenantQuery(pool, tenantID, {
-      text: "DELETE FROM models WHERE provider_id IN (SELECT id FROM providers WHERE name LIKE 'E2E-%')",
+      text: "DELETE FROM public.models WHERE provider_id IN (SELECT id FROM public.providers WHERE name LIKE 'E2E-%')",
       values: [],
     });
     await withTenantQuery(pool, tenantID, {
-      text: "DELETE FROM providers WHERE name LIKE 'E2E-%'",
+      text: "DELETE FROM public.providers WHERE name LIKE 'E2E-%'",
       values: [],
     });
     // Ensure baseline models are present (stateful-qwen provider + qwen models)
@@ -195,9 +198,10 @@ export const executeLLMAdminPack = async ({ actor, systemAdmin, pool, evidence, 
       await toggleSwitch.click();
       expect((await toggleResponse).status()).toBe(200);
 
+      // providers/models 已提升 public 全局目录（035），models 无 tenant_id 列。
       expect(await rows<{ enabled: boolean }>(pool, tenantID,
-        'SELECT enabled FROM models WHERE name=$1 AND provider_id=$2 AND tenant_id=$3',
-        [firstModelName, providerID, tenantID]))
+        'SELECT enabled FROM models WHERE name=$1 AND provider_id=$2',
+        [firstModelName, providerID]))
         .toEqual([{ enabled: !wasEnabled }]);
 
       // Toggle back

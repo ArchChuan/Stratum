@@ -2,6 +2,7 @@ package infrastructure
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -19,8 +20,14 @@ type resolvedEntry struct {
 	expires      time.Time
 }
 
+// errModelNotResolved 是全局解析链的内部 sentinel：某一级未命中，交由下一级
+// 兜底；链尾仍未命中时转换为带模型名的明确错误（fail-closed，禁止默认放行）。
+// 它不是业务可识别错误，不对外暴露。
+var errModelNotResolved = errors.New("model registry: model not resolved")
+
 // ModelRegistry wraps a ModelRepository and ProviderRepository with an
-// in-memory LRU cache and resolves model names to provider config + protocol.
+// in-memory cache and resolves model names to provider config + protocol.
+// models/providers 已提升为 public 平台全局目录，注册表不再区分租户维度。
 type ModelRegistry struct {
 	modelRepo    port.ModelRepository
 	providerRepo port.ProviderRepository
@@ -29,7 +36,7 @@ type ModelRegistry struct {
 	cacheTTL     time.Duration
 
 	mu    sync.RWMutex
-	cache map[string]map[string]*resolvedEntry // tenantID -> "chat:"|"embed:"+modelName -> entry
+	cache map[string]*resolvedEntry // "chat:"|"embed:"+modelName -> entry（单层全局缓存）
 }
 
 // NewModelRegistry returns a new ModelRegistry.
@@ -46,22 +53,19 @@ func NewModelRegistry(
 		chatProtos:   chatProtos,
 		embedProtos:  embedProtos,
 		cacheTTL:     cacheTTL,
-		cache:        make(map[string]map[string]*resolvedEntry),
+		cache:        make(map[string]*resolvedEntry),
 	}
 }
 
-// Resolve looks up modelName for the given tenant and returns the provider
-// configuration and chat protocol. Results are cached per tenant per model.
-func (r *ModelRegistry) Resolve(ctx context.Context, tenantID, modelName string) (ProviderConfig, ChatProtocol, error) {
+// Resolve resolves modelName to a provider configuration and chat protocol.
+// 空 modelName 表示「未显式指定」，跳过 ① 精确匹配，直接走全局默认解析链
+// （② provider.default_model → ③ models.recommended → ⑤ fail-closed）。
+func (r *ModelRegistry) Resolve(ctx context.Context, modelName string) (ProviderConfig, ChatProtocol, error) {
 	cacheKey := "chat:" + modelName
-	if e := r.cacheGet(tenantID, cacheKey); e != nil {
-		proto, ok := r.chatProtos[e.provider.Kind]
-		if !ok {
-			return ProviderConfig{}, nil, fmt.Errorf("model registry: no chat protocol for provider kind %q", e.provider.Kind)
-		}
-		return e.config, proto, nil
+	if e := r.cacheGet(cacheKey); e != nil {
+		return r.chatFromEntry(e)
 	}
-	cfg, provider, err := r.resolveModelFromDB(ctx, tenantID, modelName, cacheKey, domain.CapChat)
+	cfg, provider, err := r.resolveModel(ctx, modelName, cacheKey, domain.CapChat, false)
 	if err != nil {
 		return ProviderConfig{}, nil, err
 	}
@@ -72,18 +76,15 @@ func (r *ModelRegistry) Resolve(ctx context.Context, tenantID, modelName string)
 	return cfg, proto, nil
 }
 
-// ResolveEmbedding looks up modelName for the given tenant and returns the
-// provider configuration and embedding protocol. Results are cached.
-func (r *ModelRegistry) ResolveEmbedding(ctx context.Context, tenantID, modelName string) (ProviderConfig, EmbedProtocol, error) {
+// ResolveEmbedding resolves modelName to a provider configuration and embedding
+// protocol. 空 modelName 跳过 ①，直接走全局默认解析链（② → ③ → ④
+// default_embedding 标记 → ⑤ fail-closed）。
+func (r *ModelRegistry) ResolveEmbedding(ctx context.Context, modelName string) (ProviderConfig, EmbedProtocol, error) {
 	cacheKey := "embed:" + modelName
-	if e := r.cacheGet(tenantID, cacheKey); e != nil {
-		proto, ok := r.embedProtos[e.provider.Kind]
-		if !ok {
-			return ProviderConfig{}, nil, fmt.Errorf("model registry: no embed protocol for provider kind %q", e.provider.Kind)
-		}
-		return e.config, proto, nil
+	if e := r.cacheGet(cacheKey); e != nil {
+		return r.embedFromEntry(e)
 	}
-	cfg, provider, err := r.resolveModelFromDB(ctx, tenantID, modelName, cacheKey, domain.CapEmbedding)
+	cfg, provider, err := r.resolveModel(ctx, modelName, cacheKey, domain.CapEmbedding, true)
 	if err != nil {
 		return ProviderConfig{}, nil, err
 	}
@@ -94,40 +95,241 @@ func (r *ModelRegistry) ResolveEmbedding(ctx context.Context, tenantID, modelNam
 	return cfg, proto, nil
 }
 
-// resolveModelFromDB performs the shared cache-miss resolution: lists enabled
-// models, finds the matching model, looks up its provider, caches the result,
-// and returns the provider config and provider info.
-func (r *ModelRegistry) resolveModelFromDB(
+// chatFromEntry 从缓存 entry 取出 chat 协议并校验协议存在。
+func (r *ModelRegistry) chatFromEntry(e *resolvedEntry) (ProviderConfig, ChatProtocol, error) {
+	proto, ok := r.chatProtos[e.provider.Kind]
+	if !ok {
+		return ProviderConfig{}, nil, fmt.Errorf("model registry: no chat protocol for provider kind %q", e.provider.Kind)
+	}
+	return e.config, proto, nil
+}
+
+// embedFromEntry 从缓存 entry 取出 embedding 协议并校验协议存在。
+func (r *ModelRegistry) embedFromEntry(e *resolvedEntry) (ProviderConfig, EmbedProtocol, error) {
+	proto, ok := r.embedProtos[e.provider.Kind]
+	if !ok {
+		return ProviderConfig{}, nil, fmt.Errorf("model registry: no embed protocol for provider kind %q", e.provider.Kind)
+	}
+	return e.config, proto, nil
+}
+
+// resolveModel 执行全局 5 级解析链，返回命中的 provider 配置与 provider 信息。
+// embeddingDefault 为 true 时在链尾追加 ④ default_embedding 兜底（仅 embedding）。
+// 真实错误（DB 故障、provider 缺失）立即传播，禁止降级掩盖；只有「未命中」
+// 才继续下一级兜底。
+func (r *ModelRegistry) resolveModel(
 	ctx context.Context,
-	tenantID, modelName, cacheKey string,
+	modelName, cacheKey string,
+	capability domain.ModelCapability,
+	embeddingDefault bool,
+) (ProviderConfig, domain.Provider, error) {
+	if modelName != "" {
+		cfg, p, err := r.resolveExact(ctx, modelName, cacheKey, capability)
+		if err == nil {
+			return cfg, p, nil
+		}
+		if !errors.Is(err, errModelNotResolved) {
+			return ProviderConfig{}, domain.Provider{}, err
+		}
+	}
+	for _, step := range []modelResolveStep{r.resolveProviderDefault, r.resolveRecommended} {
+		cfg, p, err := step(ctx, cacheKey, capability)
+		if err == nil {
+			return cfg, p, nil
+		}
+		if !errors.Is(err, errModelNotResolved) {
+			return ProviderConfig{}, domain.Provider{}, err
+		}
+	}
+	if embeddingDefault {
+		cfg, p, err := r.resolveEmbeddingMarked(ctx, cacheKey)
+		if err == nil {
+			return cfg, p, nil
+		}
+		if !errors.Is(err, errModelNotResolved) {
+			return ProviderConfig{}, domain.Provider{}, err
+		}
+	}
+	return ProviderConfig{}, domain.Provider{}, fmt.Errorf(
+		"model registry: model %q not resolved: no default model in global catalog", modelName)
+}
+
+// modelResolveStep 是全局解析链的一级兜底：返回 nil 表示命中；返回
+// errModelNotResolved 表示该级未命中；其他错误为真实故障，必须传播。
+type modelResolveStep func(ctx context.Context, cacheKey string, capability domain.ModelCapability) (ProviderConfig, domain.Provider, error)
+
+// resolveExact 是 ① 级：models 精确匹配（enabled + provider enabled +
+// 能力匹配）。未命中返回 errModelNotResolved。
+func (r *ModelRegistry) resolveExact(
+	ctx context.Context,
+	modelName, cacheKey string,
 	capability domain.ModelCapability,
 ) (ProviderConfig, domain.Provider, error) {
 	enabled := true
-	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled, Capability: capability})
+	models, err := r.modelRepo.List(ctx, port.ModelFilter{Enabled: &enabled, Capability: capability})
 	if err != nil {
 		return ProviderConfig{}, domain.Provider{}, fmt.Errorf("model registry: list models: %w", err)
 	}
 	for _, m := range models {
-		if m.Name == modelName {
-			provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
-			if err != nil {
-				return ProviderConfig{}, domain.Provider{}, fmt.Errorf("model registry: get provider: %w", err)
-			}
-			if !provider.Enabled || !r.supports(provider.Kind, capability) {
-				continue
-			}
-			cfg := ProviderConfig{
-				Name:        provider.Name,
-				BaseURL:     provider.BaseURL,
-				APIKey:      provider.APIKey,
-				HealthModel: provider.DefaultModel,
-				Models:      []string{m.Name},
-			}
-			r.cacheSet(tenantID, cacheKey, cfg, *provider, m.Capabilities)
-			return cfg, *provider, nil
+		if m.Name != modelName {
+			continue
+		}
+		provider, err := r.providerRepo.Get(ctx, m.ProviderID)
+		if err != nil {
+			return ProviderConfig{}, domain.Provider{}, fmt.Errorf("model registry: get provider: %w", err)
+		}
+		if !provider.Enabled || !r.supports(provider.Kind, capability) {
+			continue
+		}
+		cfg := ProviderConfig{
+			Name:        provider.Name,
+			BaseURL:     provider.BaseURL,
+			APIKey:      provider.APIKey,
+			HealthModel: provider.DefaultModel,
+			Models:      []string{m.Name},
+		}
+		r.cacheSet(cacheKey, cfg, *provider, m.Capabilities)
+		return cfg, *provider, nil
+	}
+	return ProviderConfig{}, domain.Provider{}, errModelNotResolved
+}
+
+// resolveProviderDefault 是 ② 级：取 enabled 且 kind 支持能力的 provider 的
+// default_model（HealthModel 复用）。多个 provider 时按 name 排序取第一个，
+// 保证确定性。未命中返回 errModelNotResolved。
+func (r *ModelRegistry) resolveProviderDefault(
+	ctx context.Context,
+	cacheKey string,
+	capability domain.ModelCapability,
+) (ProviderConfig, domain.Provider, error) {
+	providers, err := r.providerRepo.List(ctx)
+	if err != nil {
+		return ProviderConfig{}, domain.Provider{}, fmt.Errorf("model registry: list providers: %w", err)
+	}
+	sort.Slice(providers, func(i, j int) bool { return providers[i].Name < providers[j].Name })
+	for i := range providers {
+		p := providers[i]
+		if !p.Enabled || p.DefaultModel == "" || !r.supports(p.Kind, capability) {
+			continue
+		}
+		cfg := ProviderConfig{
+			Name:        p.Name,
+			BaseURL:     p.BaseURL,
+			APIKey:      p.APIKey,
+			HealthModel: p.DefaultModel,
+			Models:      []string{p.DefaultModel},
+		}
+		r.cacheSet(cacheKey, cfg, p, []domain.ModelCapability{capability})
+		return cfg, p, nil
+	}
+	return ProviderConfig{}, domain.Provider{}, errModelNotResolved
+}
+
+// resolveRecommended 是 ③ 级：取 enabled 且 Recommended 标记的全局默认
+// chat/embed 模型（provider 可用 + 能力匹配），name 排序第一个。未命中返回
+// errModelNotResolved。
+func (r *ModelRegistry) resolveRecommended(
+	ctx context.Context,
+	cacheKey string,
+	capability domain.ModelCapability,
+) (ProviderConfig, domain.Provider, error) {
+	enabled := true
+	models, err := r.modelRepo.List(ctx, port.ModelFilter{Enabled: &enabled, Capability: capability})
+	if err != nil {
+		return ProviderConfig{}, domain.Provider{}, fmt.Errorf("model registry: list recommended models: %w", err)
+	}
+	var best domain.Model
+	var bestProvider *domain.Provider
+	found := false
+	for _, m := range models {
+		if !m.Recommended {
+			continue
+		}
+		provider, err := r.providerRepo.Get(ctx, m.ProviderID)
+		if err != nil {
+			return ProviderConfig{}, domain.Provider{}, fmt.Errorf("model registry: get provider: %w", err)
+		}
+		if !provider.Enabled || !r.supports(provider.Kind, capability) {
+			continue
+		}
+		if !found || m.Name < best.Name {
+			best, bestProvider = m, provider
+			found = true
 		}
 	}
-	return ProviderConfig{}, domain.Provider{}, fmt.Errorf("model registry: model %q not found for tenant %s", modelName, tenantID)
+	if !found {
+		return ProviderConfig{}, domain.Provider{}, errModelNotResolved
+	}
+	cfg := ProviderConfig{
+		Name:        bestProvider.Name,
+		BaseURL:     bestProvider.BaseURL,
+		APIKey:      bestProvider.APIKey,
+		HealthModel: bestProvider.DefaultModel,
+		Models:      []string{best.Name},
+	}
+	r.cacheSet(cacheKey, cfg, *bestProvider, best.Capabilities)
+	return cfg, *bestProvider, nil
+}
+
+// resolveEmbeddingMarked 是 ④ 级（embedding 专用）：default_embedding 标记的
+// 模型优先，无标记则取 enabled 列表第一个（保留 sort.Strings 字典序语义），
+// 均要求 provider 可用。全空返回 errModelNotResolved。
+func (r *ModelRegistry) resolveEmbeddingMarked(ctx context.Context, cacheKey string) (ProviderConfig, domain.Provider, error) {
+	c, err := r.pickEmbeddingCandidate(ctx)
+	if err != nil {
+		return ProviderConfig{}, domain.Provider{}, err
+	}
+	if c == nil {
+		return ProviderConfig{}, domain.Provider{}, errModelNotResolved
+	}
+	cfg := ProviderConfig{
+		Name:        c.p.Name,
+		BaseURL:     c.p.BaseURL,
+		APIKey:      c.p.APIKey,
+		HealthModel: c.p.DefaultModel,
+		Models:      []string{c.m.Name},
+	}
+	r.cacheSet(cacheKey, cfg, *c.p, c.m.Capabilities)
+	return cfg, *c.p, nil
+}
+
+// embeddingCandidate 是 ④ 级选中的候选：marked 优先，否则 name 最小。
+type embeddingCandidate struct {
+	m domain.Model
+	p *domain.Provider
+}
+
+// pickEmbeddingCandidate 在 enabled 且 provider 可用的 embedding 模型中，
+// 优先 default_embedding 标记，无标记取 name 最小者（字典序语义）。全空
+// 返回 (nil, nil)，由调用方按 errModelNotResolved 处理。
+func (r *ModelRegistry) pickEmbeddingCandidate(ctx context.Context) (*embeddingCandidate, error) {
+	enabled := true
+	models, err := r.modelRepo.List(ctx, port.ModelFilter{Enabled: &enabled, Capability: domain.CapEmbedding})
+	if err != nil {
+		return nil, fmt.Errorf("model registry: list embedding models: %w", err)
+	}
+	sort.Slice(models, func(i, j int) bool { return models[i].Name < models[j].Name })
+	var marked, first *embeddingCandidate
+	for _, m := range models {
+		provider, err := r.providerRepo.Get(ctx, m.ProviderID)
+		if err != nil {
+			return nil, fmt.Errorf("model registry: get provider: %w", err)
+		}
+		if !provider.Enabled || !r.supports(provider.Kind, domain.CapEmbedding) {
+			continue
+		}
+		cand := &embeddingCandidate{m: m, p: provider}
+		if first == nil {
+			first = cand
+		}
+		if m.DefaultEmbedding && marked == nil {
+			marked = cand
+		}
+	}
+	if marked != nil {
+		return marked, nil
+	}
+	return first, nil
 }
 
 // FallbackCandidate 是已解析的 fallback 候选：模型名 + 可直接调用的
@@ -143,12 +345,12 @@ type FallbackCandidate struct {
 // 排序：与主模型同 provider 优先 → Recommended desc → name asc；
 // 跳过 disabled provider 与不支持 chat 协议的模型。primary 必须可解析，
 // 否则调用方无法发起主调用，直接返回解析错误。
-func (r *ModelRegistry) ResolveFallbackCandidates(ctx context.Context, tenantID, primary string) ([]FallbackCandidate, error) {
-	primaryCfg, _, err := r.Resolve(ctx, tenantID, primary)
+func (r *ModelRegistry) ResolveFallbackCandidates(ctx context.Context, primary string) ([]FallbackCandidate, error) {
+	primaryCfg, _, err := r.Resolve(ctx, primary)
 	if err != nil {
 		return nil, err
 	}
-	cands, err := r.listFallbackCandidates(ctx, tenantID, primary, primaryCfg.Name)
+	cands, err := r.listFallbackCandidates(ctx, primary, primaryCfg.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -165,9 +367,9 @@ func (r *ModelRegistry) ResolveFallbackCandidates(ctx context.Context, tenantID,
 			HealthModel: c.provider.DefaultModel,
 			Models:      []string{c.model.Name},
 		}
-		// 复用 TTL 缓存语义：WarmTenant/Resolve 已缓存的 entry 保持有效，
+		// 复用 TTL 缓存语义：Warm/Resolve 已缓存的 entry 保持有效，
 		// 这里与缓存数据同源（同 modelRepo/providerRepo），直接写回。
-		r.cacheSet(tenantID, "chat:"+c.model.Name, cfg, c.provider, c.model.Capabilities)
+		r.cacheSet("chat:"+c.model.Name, cfg, c.provider, c.model.Capabilities)
 		proto, ok := r.chatProtos[c.provider.Kind]
 		if !ok {
 			continue
@@ -186,9 +388,9 @@ type fallbackCand struct {
 
 // listFallbackCandidates 列举主模型之外的 enabled chat 模型，跳过 disabled
 // provider 与不支持 chat 协议的模型。
-func (r *ModelRegistry) listFallbackCandidates(ctx context.Context, tenantID, primary, primaryProviderName string) ([]fallbackCand, error) {
+func (r *ModelRegistry) listFallbackCandidates(ctx context.Context, primary, primaryProviderName string) ([]fallbackCand, error) {
 	enabled := true
-	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled, Capability: domain.CapChat})
+	models, err := r.modelRepo.List(ctx, port.ModelFilter{Enabled: &enabled, Capability: domain.CapChat})
 	if err != nil {
 		return nil, fmt.Errorf("model registry: list models: %w", err)
 	}
@@ -197,7 +399,7 @@ func (r *ModelRegistry) listFallbackCandidates(ctx context.Context, tenantID, pr
 		if m.Name == primary {
 			continue
 		}
-		provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
+		provider, err := r.providerRepo.Get(ctx, m.ProviderID)
 		if err != nil {
 			return nil, fmt.Errorf("model registry: get provider: %w", err)
 		}
@@ -221,65 +423,50 @@ func candidateLess(a, b fallbackCand) bool {
 	return a.model.Name < b.model.Name
 }
 
-// ListChatModelsByTenant returns sorted enabled chat model names for a tenant.
-func (r *ModelRegistry) ListChatModelsByTenant(ctx context.Context, tenantID string) ([]string, error) {
-	return r.listModelsByCapability(ctx, tenantID, domain.CapChat)
+// ListChatModelsByTenant 返回全局 enabled chat 模型名（排序）。方法名保留
+// 历史命名，但目录已是全局，tenantID 参数已去除。
+func (r *ModelRegistry) ListChatModelsByTenant(ctx context.Context) ([]string, error) {
+	return r.listModelsByCapability(ctx, domain.CapChat)
 }
 
-// ListEmbeddingModelsByTenant returns sorted enabled embedding model names for a tenant.
-func (r *ModelRegistry) ListEmbeddingModelsByTenant(ctx context.Context, tenantID string) ([]string, error) {
-	return r.listModelsByCapability(ctx, tenantID, domain.CapEmbedding)
+// ListEmbeddingModelsByTenant 返回全局 enabled embedding 模型名（排序）。
+func (r *ModelRegistry) ListEmbeddingModelsByTenant(ctx context.Context) ([]string, error) {
+	return r.listModelsByCapability(ctx, domain.CapEmbedding)
 }
 
-// ResolveDefaultEmbeddingModel 解析 tenant 的默认嵌入模型名：
+// ListRerankModelsByTenant 返回全局 enabled rerank 模型名（排序）。目录化只
+// 约束模型选择：实际调用仍走 knowledge/infrastructure/rerank 独立 HTTP 服务。
+func (r *ModelRegistry) ListRerankModelsByTenant(ctx context.Context) ([]string, error) {
+	return r.listModelsByCapability(ctx, domain.CapRerank)
+}
+
+// ResolveDefaultEmbeddingModel 解析全局默认嵌入模型名：
 // 1. enabled 且 provider 可用且标记 default_embedding 的模型优先；
-// 2. 无标记 → enabled 列表第一个（保留现状 sort.Strings 字典序语义）；
+// 2. 无标记 → enabled 列表第一个（保留 sort.Strings 字典序语义）；
 // 3. 列表为空 → 返回 ""，调用方 fail-closed（不默认放行）。
-func (r *ModelRegistry) ResolveDefaultEmbeddingModel(ctx context.Context, tenantID string) (string, error) {
-	enabled := true
-	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled, Capability: domain.CapEmbedding})
+func (r *ModelRegistry) ResolveDefaultEmbeddingModel(ctx context.Context) (string, error) {
+	cfg, _, err := r.resolveEmbeddingMarked(ctx, "embed:")
 	if err != nil {
-		return "", fmt.Errorf("model registry: list embedding models: %w", err)
-	}
-	names := make([]string, 0, len(models))
-	var marked string
-	for _, m := range models {
-		provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
-		if err != nil {
-			return "", fmt.Errorf("model registry: get provider: %w", err)
+		if errors.Is(err, errModelNotResolved) {
+			return "", nil
 		}
-		if !provider.Enabled || !r.supports(provider.Kind, domain.CapEmbedding) {
-			continue
-		}
-		if m.DefaultEmbedding {
-			marked = m.Name
-		}
-		names = append(names, m.Name)
+		return "", err
 	}
-	if marked != "" {
-		return marked, nil
-	}
-	sort.Strings(names)
-	if len(names) == 0 {
-		return "", nil
-	}
-	return names[0], nil
+	return cfg.Models[0], nil
 }
 
-// ListModelsByTenantDetails returns the full tenant model catalog (including
-// disabled and provider-managed models) sorted by name. Models backed by a
-// disabled provider are dropped; a provider lookup failure is propagated
-// (fail closed — an unresolved provider must not surface as a healthy model).
-// The returned rows are projected by the composition root into the
-// platform-assistant DTO; provider credentials never leave this boundary.
-func (r *ModelRegistry) ListModelsByTenantDetails(ctx context.Context, tenantID string) ([]domain.Model, error) {
-	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{})
+// ListModelsByTenantDetails 返回全局模型目录（包括 disabled 和
+// provider-managed 模型）按 name 排序。模型 provider 缺失时 fail closed
+// （未解析的 provider 不得作为健康模型浮出）。返回行由组合根投影为
+// platform-assistant DTO；provider 凭据不出此边界。
+func (r *ModelRegistry) ListModelsByTenantDetails(ctx context.Context) ([]domain.Model, error) {
+	models, err := r.modelRepo.List(ctx, port.ModelFilter{})
 	if err != nil {
 		return nil, fmt.Errorf("model registry: list models: %w", err)
 	}
 	details := make([]domain.Model, 0, len(models))
 	for _, m := range models {
-		provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
+		provider, err := r.providerRepo.Get(ctx, m.ProviderID)
 		if err != nil {
 			return nil, fmt.Errorf("model registry: get provider: %w", err)
 		}
@@ -294,11 +481,10 @@ func (r *ModelRegistry) ListModelsByTenantDetails(ctx context.Context, tenantID 
 
 func (r *ModelRegistry) listModelsByCapability(
 	ctx context.Context,
-	tenantID string,
 	capability domain.ModelCapability,
 ) ([]string, error) {
 	enabled := true
-	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{
+	models, err := r.modelRepo.List(ctx, port.ModelFilter{
 		Enabled:    &enabled,
 		Capability: capability,
 	})
@@ -307,7 +493,7 @@ func (r *ModelRegistry) listModelsByCapability(
 	}
 	names := make([]string, 0, len(models))
 	for _, m := range models {
-		provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
+		provider, err := r.providerRepo.Get(ctx, m.ProviderID)
 		if err != nil {
 			return nil, fmt.Errorf("model registry: get provider: %w", err)
 		}
@@ -328,56 +514,68 @@ func (r *ModelRegistry) supports(kind domain.ProviderKind, capability domain.Mod
 	case domain.CapEmbedding:
 		_, ok := r.embedProtos[kind]
 		return ok
+	case domain.CapRerank:
+		// cohere rerank 走独立 HTTP 服务（非 ModelRegistry 网关），此处仅约束
+		// 模型选择来源：rerank 能力模型只属于 cohere provider。
+		return kind == domain.ProviderCohere
 	default:
 		return false
 	}
 }
 
-// WarmTenant pre-warms the cache by listing enabled models for a tenant and
-// populating cache entries for each model so that subsequent Resolve and
-// ResolveEmbedding calls hit the cache.
-func (r *ModelRegistry) WarmTenant(ctx context.Context, tenantID string) error {
+// Warm pre-warms the cache by listing enabled models across the global
+// catalog and populating cache entries so that subsequent Resolve and
+// ResolveEmbedding calls hit the cache. 启动时预热一次（全局目录，无租户维度）。
+func (r *ModelRegistry) Warm(ctx context.Context) error {
 	enabled := true
-	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled})
+	models, err := r.modelRepo.List(ctx, port.ModelFilter{Enabled: &enabled})
 	if err != nil {
-		return fmt.Errorf("model registry: warm tenant: %w", err)
+		return fmt.Errorf("model registry: warm: %w", err)
 	}
 	for _, m := range models {
-		provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
-		if err != nil {
-			return fmt.Errorf("model registry: warm tenant: get provider: %w", err)
-		}
-		if !provider.Enabled {
-			continue
-		}
-		cfg := ProviderConfig{
-			Name:        provider.Name,
-			BaseURL:     provider.BaseURL,
-			APIKey:      provider.APIKey,
-			HealthModel: provider.DefaultModel,
-			Models:      []string{m.Name},
-		}
-		for _, cap := range m.Capabilities {
-			if !r.supports(provider.Kind, cap) {
-				continue
-			}
-			switch cap {
-			case domain.CapChat:
-				r.cacheSet(tenantID, "chat:"+m.Name, cfg, *provider, m.Capabilities)
-			case domain.CapEmbedding:
-				r.cacheSet(tenantID, "embed:"+m.Name, cfg, *provider, m.Capabilities)
-			}
+		if err := r.warmModel(ctx, m); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// GetChatModelContextWindow returns the ContextWindow for a named chat model
-// belonging to tenantID. Returns 0 when the model is not found or has no
-// known context window.
-func (r *ModelRegistry) GetChatModelContextWindow(ctx context.Context, tenantID, modelName string) (int, error) {
+// warmModel 为单个 enabled 模型写入 chat/embed 缓存条目；provider 不可用
+// 或能力不支持时跳过。
+func (r *ModelRegistry) warmModel(ctx context.Context, m domain.Model) error {
+	provider, err := r.providerRepo.Get(ctx, m.ProviderID)
+	if err != nil {
+		return fmt.Errorf("model registry: warm: get provider: %w", err)
+	}
+	if !provider.Enabled {
+		return nil
+	}
+	cfg := ProviderConfig{
+		Name:        provider.Name,
+		BaseURL:     provider.BaseURL,
+		APIKey:      provider.APIKey,
+		HealthModel: provider.DefaultModel,
+		Models:      []string{m.Name},
+	}
+	for _, cap := range m.Capabilities {
+		if !r.supports(provider.Kind, cap) {
+			continue
+		}
+		switch cap {
+		case domain.CapChat:
+			r.cacheSet("chat:"+m.Name, cfg, *provider, m.Capabilities)
+		case domain.CapEmbedding:
+			r.cacheSet("embed:"+m.Name, cfg, *provider, m.Capabilities)
+		}
+	}
+	return nil
+}
+
+// GetChatModelContextWindow returns the ContextWindow for a named chat model.
+// Returns 0 when the model is not found or has no known context window.
+func (r *ModelRegistry) GetChatModelContextWindow(ctx context.Context, modelName string) (int, error) {
 	enabled := true
-	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled, Capability: domain.CapChat})
+	models, err := r.modelRepo.List(ctx, port.ModelFilter{Enabled: &enabled, Capability: domain.CapChat})
 	if err != nil {
 		return 0, fmt.Errorf("model registry: get context window: %w", err)
 	}
@@ -389,35 +587,31 @@ func (r *ModelRegistry) GetChatModelContextWindow(ctx context.Context, tenantID,
 	return 0, nil
 }
 
-// ListChatModels returns an empty slice. Tenant-scoped model lists are
-// available via ListChatModels(ctx, tenantID). This method satisfies
-// port.ModelCatalog for non-tenant contexts.
+// ListChatModels returns an empty slice. 全局模型列表经
+// ListChatModelsByTenant(ctx) 获取。该方法满足 port.ModelCatalog 的
+// 无参变体（历史兼容）。
 func (r *ModelRegistry) ListChatModels() []string {
 	return []string{}
 }
 
-// ListEmbeddingModels returns an empty slice. Tenant-scoped model lists
-// are available via ListEmbeddingModels(ctx, tenantID).
+// ListEmbeddingModels returns an empty slice. 全局模型列表经
+// ListEmbeddingModelsByTenant(ctx) 获取。
 func (r *ModelRegistry) ListEmbeddingModels() []string {
 	return []string{}
 }
 
-// Invalidate removes all cached entries for a tenant.
-func (r *ModelRegistry) Invalidate(tenantID string) {
+// Invalidate clears the entire global cache.
+func (r *ModelRegistry) Invalidate() {
 	r.mu.Lock()
-	delete(r.cache, tenantID)
+	r.cache = make(map[string]*resolvedEntry)
 	r.mu.Unlock()
 }
 
 // cacheGet returns a non-expired cached entry, or nil.
-func (r *ModelRegistry) cacheGet(tenantID, key string) *resolvedEntry {
+func (r *ModelRegistry) cacheGet(key string) *resolvedEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	tenantCache, ok := r.cache[tenantID]
-	if !ok {
-		return nil
-	}
-	e, ok := tenantCache[key]
+	e, ok := r.cache[key]
 	if !ok || time.Now().After(e.expires) {
 		return nil
 	}
@@ -425,13 +619,10 @@ func (r *ModelRegistry) cacheGet(tenantID, key string) *resolvedEntry {
 }
 
 // cacheSet stores an entry in the cache.
-func (r *ModelRegistry) cacheSet(tenantID, key string, cfg ProviderConfig, provider domain.Provider, capabilities []domain.ModelCapability) {
+func (r *ModelRegistry) cacheSet(key string, cfg ProviderConfig, provider domain.Provider, capabilities []domain.ModelCapability) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.cache[tenantID] == nil {
-		r.cache[tenantID] = make(map[string]*resolvedEntry)
-	}
-	r.cache[tenantID][key] = &resolvedEntry{
+	r.cache[key] = &resolvedEntry{
 		config:       cfg,
 		provider:     provider,
 		capabilities: capabilities,
@@ -444,9 +635,9 @@ func (r *ModelRegistry) cacheSet(tenantID, key string, cfg ProviderConfig, provi
 // → true；否则 false。unknown 返回 false，fail-closed：网关据此清空
 // reasoning_effort，禁止对非推理/未知模型盲透传（严格端点 400 是永久错误，
 // 会中止整条 fallback 链）。
-func (r *ModelRegistry) ResolveReasoning(ctx context.Context, tenantID, modelName string) bool {
+func (r *ModelRegistry) ResolveReasoning(ctx context.Context, modelName string) bool {
 	enabled := true
-	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled})
+	models, err := r.modelRepo.List(ctx, port.ModelFilter{Enabled: &enabled})
 	if err != nil {
 		return false
 	}
@@ -469,6 +660,6 @@ func (r *ModelRegistry) ResolveReasoning(ctx context.Context, tenantID, modelNam
 // JSON mode 是族级 provider 能力（qwen/glm/deepseek/gpt），不由 DB
 // capabilities 枚举：统一走 catalog 前缀匹配。unknown 返回 false，
 // fail-closed：网关据此清空 response_format（严格端点 400 会中止 fallback 链）。
-func (r *ModelRegistry) ResolveStructuredOutput(ctx context.Context, tenantID, modelName string) bool {
+func (r *ModelRegistry) ResolveStructuredOutput(ctx context.Context, modelName string) bool {
 	return ModelSupportsStructuredOutput(modelName)
 }

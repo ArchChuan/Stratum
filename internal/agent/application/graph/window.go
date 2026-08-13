@@ -22,12 +22,12 @@ const (
 // vendor 通过注入函数访问（wiring 适配 llmgateway），graph 包不跨层依赖。
 func ResolveModelWindow(
 	ctx context.Context,
-	tenantID, model string,
+	model string,
 	provider port.ModelContextProvider,
 	vendor func(string) (int, int),
 ) (window int, source WindowSource) {
 	if provider != nil {
-		if cw, err := provider.GetChatModelContextWindow(ctx, tenantID, model); err == nil && cw > 0 {
+		if cw, err := provider.GetChatModelContextWindow(ctx, model); err == nil && cw > 0 {
 			return cw, WindowRegistry
 		}
 	}

@@ -68,6 +68,55 @@ func llmAdminPostgresURL(t *testing.T) string {
 	return "postgres://stratum:stratum@localhost:5432/stratum_test?sslmode=disable"
 }
 
+// provisionPublicCatalog 幂等创建 public.providers/models 平台全局目录表。
+// 测试直连业务库时不会自动应用 035 migration（test job 无 PG、本地库也不跑迁移），
+// 此处按 035 up DDL 对齐建表，保证 provider/model repo 直连 public schema 有表可用。
+// 若 035 表结构变更，需同步此处。
+func provisionPublicCatalog(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	ctx := context.Background()
+	for _, stmt := range []string{
+		`CREATE TABLE IF NOT EXISTS public.providers (
+			id            TEXT PRIMARY KEY,
+			name          TEXT NOT NULL UNIQUE,
+			kind          TEXT NOT NULL,
+			base_url      TEXT NOT NULL DEFAULT '',
+			api_key       TEXT NOT NULL DEFAULT '',
+			default_model TEXT NOT NULL DEFAULT '',
+			enabled       BOOLEAN NOT NULL DEFAULT true,
+			created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`,
+		`CREATE TABLE IF NOT EXISTS public.models (
+			id                TEXT PRIMARY KEY,
+			provider_id       TEXT NOT NULL REFERENCES public.providers(id) ON DELETE CASCADE,
+			name              TEXT NOT NULL,
+			display_name      TEXT NOT NULL DEFAULT '',
+			capabilities      TEXT[] NOT NULL DEFAULT '{}',
+			context_window    INT NOT NULL DEFAULT 0,
+			max_tokens        INT NOT NULL DEFAULT 0,
+			input_price       DOUBLE PRECISION NOT NULL DEFAULT 0,
+			output_price      DOUBLE PRECISION NOT NULL DEFAULT 0,
+			recommended       BOOLEAN NOT NULL DEFAULT false,
+			enabled           BOOLEAN NOT NULL DEFAULT true,
+			provider_managed  BOOLEAN NOT NULL DEFAULT false,
+			default_embedding BOOLEAN NOT NULL DEFAULT false,
+			created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+			UNIQUE(provider_id, name)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_models_provider ON public.models(provider_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_models_enabled ON public.models(enabled)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_models_default_embedding
+			ON public.models ((true))
+			WHERE default_embedding AND 'embedding' = ANY(capabilities)`,
+	} {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			t.Fatalf("provision public catalog: %v", err)
+		}
+	}
+}
+
 func setupLLMAdminTestEnv(t *testing.T) *llmAdminTestEnv {
 	t.Helper()
 	ctx := context.Background()
@@ -79,6 +128,12 @@ func setupLLMAdminTestEnv(t *testing.T) *llmAdminTestEnv {
 
 	// Provision public + tenant schema
 	require.NoError(t, pgstorage.ProvisionPublicSchema(ctx, pool, zap.NewNop()))
+	provisionPublicCatalog(t, pool)
+	// 测试库专用：清空全局目录表，保证 create 不撞 providers.name UNIQUE、
+	// List 断言不被历史残留污染（语义等价旧 tenant 方案的每测试 DROP SCHEMA）。
+	if _, err := pool.Exec(ctx, `TRUNCATE TABLE public.providers CASCADE`); err != nil {
+		require.NoError(t, err, "truncate public catalog")
+	}
 	tenantID := uuid.NewString()
 	require.NoError(t, pgstorage.ProvisionTenantSchema(ctx, pool, tenantID))
 
@@ -385,7 +440,6 @@ func TestJSONSerializationCamelCaseKeys(t *testing.T) {
 	t.Run("Provider JSON keys", func(t *testing.T) {
 		provider := domain.Provider{
 			ID:           "prov-1",
-			TenantID:     "tenant-1",
 			Name:         "TestName",
 			Kind:         domain.ProviderOpenAICompat,
 			BaseURL:      "https://api.example.com",
@@ -422,7 +476,6 @@ func TestJSONSerializationCamelCaseKeys(t *testing.T) {
 	t.Run("Model JSON keys", func(t *testing.T) {
 		model := domain.Model{
 			ID:              "model-1",
-			TenantID:        "tenant-1",
 			ProviderID:      "prov-1",
 			Name:            "gpt-4",
 			DisplayName:     "GPT-4",
@@ -440,7 +493,6 @@ func TestJSONSerializationCamelCaseKeys(t *testing.T) {
 		raw := string(b)
 
 		require.Contains(t, raw, `"id":"model-1"`)
-		require.Contains(t, raw, `"tenantId":"tenant-1"`)
 		require.Contains(t, raw, `"providerId":"prov-1"`)
 		require.Contains(t, raw, `"name":"gpt-4"`)
 		require.Contains(t, raw, `"displayName":"GPT-4"`)
@@ -466,10 +518,13 @@ func TestJSONSerializationCamelCaseKeys(t *testing.T) {
 }
 
 // =============================================================================
-// Tenant isolation: queries must be scoped to the correct tenant
+// Global catalog: providers/models 提升为 public 平台全局目录
 // =============================================================================
 
-func TestLLMAdminTenantIsolation(t *testing.T) {
+// TestLLMAdminGlobalCatalog 验证重构后的全局目录语义：providers 不再按租户
+// schema 隔离（035 迁移），List 返回全部、任意 ID 可跨调用方 Get、
+// 模型按 provider 全局解析。
+func TestLLMAdminGlobalCatalog(t *testing.T) {
 	ctx := context.Background()
 
 	dsn := llmAdminPostgresURL(t)
@@ -477,84 +532,56 @@ func TestLLMAdminTenantIsolation(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, pool.Ping(ctx))
 	require.NoError(t, pgstorage.ProvisionPublicSchema(ctx, pool, zap.NewNop()))
+	provisionPublicCatalog(t, pool)
+	// 测试库专用：清空全局目录表，保证 List 断言精确（不依赖前序测试清理）。
+	if _, err := pool.Exec(ctx, `TRUNCATE TABLE public.providers CASCADE`); err != nil {
+		require.NoError(t, err, "truncate public catalog")
+	}
 
-	tenantA := uuid.NewString()
-	tenantB := uuid.NewString()
-	require.NoError(t, pgstorage.ProvisionTenantSchema(ctx, pool, tenantA))
-	require.NoError(t, pgstorage.ProvisionTenantSchema(ctx, pool, tenantB))
+	// Build repos — TestLLMAdminGlobalCatalog tests the repo layer directly
+	providerRepo := llmgateway.NewPgProviderRepo(pool, [32]byte{}, zap.NewNop(), observability.NoopMetrics{})
+	modelRepo := llmgateway.NewPgModelRepo(pool)
 
+	provA := &domain.Provider{
+		ID: uuid.NewString(), Name: "Global-Provider-A",
+		Kind: domain.ProviderOpenAICompat, BaseURL: "https://api.a.example.com",
+		APIKey: "sk-tenant-a", Enabled: true,
+	}
+	provB := &domain.Provider{
+		ID: uuid.NewString(), Name: "Global-Provider-B",
+		Kind: domain.ProviderOpenAICompat, BaseURL: "https://api.b.example.com",
+		APIKey: "sk-tenant-b", Enabled: true,
+	}
+	require.NoError(t, providerRepo.Create(ctx, provA))
+	require.NoError(t, providerRepo.Create(ctx, provB))
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(),
-			fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenantA))
+			`DELETE FROM public.models WHERE provider_id IN ($1,$2)`, provA.ID, provB.ID)
 		_, _ = pool.Exec(context.Background(),
-			fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenantB))
+			`DELETE FROM public.providers WHERE id IN ($1,$2)`, provA.ID, provB.ID)
 		pool.Close()
 	})
 
-	// Build repos — TestLLMAdminTenantIsolation tests the repo layer directly
-	providerRepo := llmgateway.NewPgProviderRepo(pool, [32]byte{}, zap.NewNop(), observability.NoopMetrics{})
-
-	// Create a provider in tenant A
-	provA := &domain.Provider{
-		ID:       uuid.NewString(),
-		TenantID: tenantA,
-		Name:     "TenantA-Provider",
-		Kind:     domain.ProviderOpenAICompat,
-		BaseURL:  "https://api.tenant-a.example.com",
-		APIKey:   "sk-tenant-a",
-		Enabled:  true,
-	}
-	require.NoError(t, providerRepo.Create(ctx, tenantA, provA))
-
-	// Create a provider in tenant B
-	provB := &domain.Provider{
-		ID:       uuid.NewString(),
-		TenantID: tenantB,
-		Name:     "TenantB-Provider",
-		Kind:     domain.ProviderOpenAICompat,
-		BaseURL:  "https://api.tenant-b.example.com",
-		APIKey:   "sk-tenant-b",
-		Enabled:  true,
-	}
-	require.NoError(t, providerRepo.Create(ctx, tenantB, provB))
-
-	// Tenant A sees only its own provider
-	providersA, err := providerRepo.List(ctx, tenantA)
+	// 全局目录：List 返回全部 provider，无租户过滤
+	all, err := providerRepo.List(ctx)
 	require.NoError(t, err)
-	for _, p := range providersA {
-		require.NotEqual(t, provB.ID, p.ID, "tenant A must not see tenant B's provider")
-	}
-	foundA := false
-	for _, p := range providersA {
-		if p.ID == provA.ID {
-			foundA = true
-			break
-		}
-	}
-	require.True(t, foundA, "tenant A must see its own provider")
+	require.Len(t, all, 2)
 
-	// Tenant B sees only its own provider
-	providersB, err := providerRepo.List(ctx, tenantB)
+	// 全局目录：任意 provider ID 可直接 Get，不依赖调用方 tenant
+	got, err := providerRepo.Get(ctx, provB.ID)
 	require.NoError(t, err)
-	for _, p := range providersB {
-		require.NotEqual(t, provA.ID, p.ID, "tenant B must not see tenant A's provider")
-	}
+	require.Equal(t, "Global-Provider-B", got.Name)
 
-	// Tenant A cannot get tenant B's provider
-	_, err = providerRepo.Get(ctx, tenantA, provB.ID)
-	require.Error(t, err, "cross-tenant get must fail")
-
-	// Clean up — tenant A deletes its own provider
-	require.NoError(t, providerRepo.Delete(ctx, tenantA, provA.ID))
-	providersA, err = providerRepo.List(ctx, tenantA)
-	require.NoError(t, err)
-	for _, p := range providersA {
-		require.NotEqual(t, provA.ID, p.ID, "deleted provider must disappear from tenant A")
+	// 全局目录：模型按 provider 全局解析
+	m := &domain.Model{
+		ID: uuid.NewString(), ProviderID: provA.ID, Name: "global-model",
+		Capabilities: []domain.ModelCapability{domain.CapChat}, Enabled: true,
 	}
-	// Provider B must remain in tenant B
-	p, err := providerRepo.Get(ctx, tenantB, provB.ID)
+	require.NoError(t, modelRepo.Create(ctx, m))
+	listed, err := modelRepo.List(ctx, port.ModelFilter{ProviderID: provA.ID})
 	require.NoError(t, err)
-	require.Equal(t, "TenantB-Provider", p.Name)
+	require.Len(t, listed, 1)
+	require.Equal(t, "global-model", listed[0].Name)
 }
 
 // =============================================================================

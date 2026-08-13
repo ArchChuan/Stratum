@@ -30,7 +30,7 @@ type memoryMgrSvc interface {
 // implemented by llmgateway.ModelRegistry and injected via wiring. nil-safe:
 // 解析失败或无可用模型时 GetStats 返回 embed_model_configured=false。
 type DefaultEmbedModelResolver interface {
-	ResolveDefaultEmbeddingModel(ctx context.Context, tenantID string) (string, error)
+	ResolveDefaultEmbeddingModel(ctx context.Context) (string, error)
 }
 
 type UserMemoryHandler struct {
@@ -49,7 +49,7 @@ func (h *UserMemoryHandler) embedModelConfigured(ctx context.Context, tenantID s
 	if h.embedSvc == nil {
 		return false
 	}
-	model, err := h.embedSvc.ResolveDefaultEmbeddingModel(ctx, tenantID)
+	model, err := h.embedSvc.ResolveDefaultEmbeddingModel(ctx)
 	if err != nil {
 		return false
 	}

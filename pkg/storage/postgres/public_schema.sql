@@ -124,9 +124,11 @@ CREATE INDEX        IF NOT EXISTS idx_oauth_exchange_expires ON public.oauth_exc
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_is_default     ON public.tenants(is_default) WHERE is_default = true;
 CREATE INDEX        IF NOT EXISTS idx_users_guest_expires     ON public.users(expires_at)   WHERE is_guest = true;
 
--- Drop deprecated tables
+-- Drop deprecated tables.
+-- NOTE: public.models is intentionally NOT dropped here: 035_platform_model_catalog
+-- re-created it as the platform-wide model catalogue (migration-owned). Dropping it
+-- on every startup silently destroys the catalogue and breaks the model registry.
 DROP TABLE IF EXISTS public.agent_executions;
-DROP TABLE IF EXISTS public.models;
 DROP TABLE IF EXISTS public.model_providers;
 DROP TABLE IF EXISTS public.audit_logs;
 DROP TABLE IF EXISTS public.tenant_api_keys;

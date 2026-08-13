@@ -25,7 +25,7 @@ func TestModelRegistry_GetChatModelContextWindow(t *testing.T) {
 	}}
 	reg := registryFixture(repo)
 
-	got, err := reg.GetChatModelContextWindow(context.Background(), "t1", "qwen-turbo")
+	got, err := reg.GetChatModelContextWindow(context.Background(), "qwen-turbo")
 	require.NoError(t, err)
 	require.Equal(t, 8192, got)
 }
@@ -35,7 +35,7 @@ func TestModelRegistry_GetChatModelContextWindow_notFound(t *testing.T) {
 		{Name: "text-embed", ContextWindow: 2048, Capabilities: []domain.ModelCapability{domain.CapEmbedding}},
 	}})
 
-	got, err := reg.GetChatModelContextWindow(context.Background(), "t1", "unknown")
+	got, err := reg.GetChatModelContextWindow(context.Background(), "unknown")
 	require.NoError(t, err)
 	require.Equal(t, 0, got)
 }
@@ -43,7 +43,7 @@ func TestModelRegistry_GetChatModelContextWindow_notFound(t *testing.T) {
 func TestModelRegistry_GetChatModelContextWindow_repoError(t *testing.T) {
 	reg := registryFixture(&mockModelRepo{err: errors.New("db down")})
 
-	_, err := reg.GetChatModelContextWindow(context.Background(), "t1", "qwen-turbo")
+	_, err := reg.GetChatModelContextWindow(context.Background(), "qwen-turbo")
 	require.ErrorContains(t, err, "get context window")
 }
 

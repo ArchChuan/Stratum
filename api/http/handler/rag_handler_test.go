@@ -13,9 +13,21 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
+	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 )
+
+// ragModelExistsStub 实现 knowledgeport.ModelExists；目录为空时任何模型都不存在
+// （使非法 embedding 模型在 application 层被拒）。
+type ragModelExistsStub struct{ embedding map[string]bool }
+
+func (m ragModelExistsStub) Exists(_ context.Context, model string, capability knowledgeport.ModelCapability) (bool, error) {
+	if capability == knowledgeport.CapRerank {
+		return false, nil
+	}
+	return m.embedding[model], nil
+}
 
 // injectRAGTenant sets a tenant context for RAG handler tests.
 func injectRAGTenant(tenantID string) gin.HandlerFunc {
@@ -37,11 +49,14 @@ func newMinimalRAGHandler() *RAGHandler {
 }
 
 // newValidationRAGHandler constructs a handler whose WorkspaceService is wired
-// with a nil repo. Validation errors come from the domain factory before the
-// repo is ever called, so the nil repo is never dereferenced.
+// with a nil repo and an empty catalogue. Structural validation errors
+// (query mode / rerank / threshold) come from the domain factory before the
+// repo is ever called; embedding model existence is rejected by the
+// application catalogue check (empty stub directory).
 func newValidationRAGHandler() *RAGHandler {
 	ws := knowledge.NewWorkspaceService(nil, nil, zap.NewNop())
 	ws.SetTenantRoleResolver(fixedTenantRole{role: "owner"})
+	ws.SetModelExists(ragModelExistsStub{embedding: map[string]bool{}})
 	return NewRAGHandler(nil, ws, zap.NewNop())
 }
 

@@ -54,8 +54,8 @@ func TestModelMgmtUpdate(t *testing.T) {
 		len(m.Capabilities) != 1 {
 		t.Fatalf("updated = %+v", m)
 	}
-	if len(inv.tenants) != 1 || inv.tenants[0] != "t1" {
-		t.Fatalf("invalidations = %+v", inv.tenants)
+	if inv.calls != 1 {
+		t.Fatalf("invalidations = %d, want 1", inv.calls)
 	}
 }
 
@@ -68,8 +68,8 @@ func TestModelMgmtUpdateErrors(t *testing.T) {
 	if _, err := svc.Update(context.Background(), "t1", UpdateModelInput{ID: "m1"}); err == nil {
 		t.Fatal("get failure must error")
 	}
-	if len(inv.tenants) != 0 {
-		t.Fatalf("must not invalidate on get failure, got %+v", inv.tenants)
+	if inv.calls != 0 {
+		t.Fatalf("must not invalidate on get failure, got %d", inv.calls)
 	}
 
 	// 极端情况：Update 失败 → 包装错误，不 invalidate。
@@ -77,8 +77,8 @@ func TestModelMgmtUpdateErrors(t *testing.T) {
 	if _, err := svc2.Update(context.Background(), "t1", UpdateModelInput{ID: "m1"}); err == nil {
 		t.Fatal("update failure must error")
 	}
-	if len(inv.tenants) != 0 {
-		t.Fatalf("must not invalidate on update failure, got %+v", inv.tenants)
+	if inv.calls != 0 {
+		t.Fatalf("must not invalidate on update failure, got %d", inv.calls)
 	}
 }
 
@@ -96,8 +96,8 @@ func TestModelMgmtDelete(t *testing.T) {
 	if err := svc.Delete(context.Background(), "t1", "m1"); err != nil {
 		t.Fatalf("delete = %v", err)
 	}
-	if len(inv.tenants) != 1 || inv.tenants[0] != "t1" {
-		t.Fatalf("invalidations = %+v", inv.tenants)
+	if inv.calls != 1 {
+		t.Fatalf("invalidations = %d, want 1", inv.calls)
 	}
 	// 极端情况：repo 失败 → 包装错误。
 	repo.err = errors.New("db down")
@@ -111,11 +111,11 @@ type failUpdateRepo struct {
 	modelMgmtRepo
 }
 
-func (r *failUpdateRepo) Get(context.Context, string, string) (*domain.Model, error) {
+func (r *failUpdateRepo) Get(context.Context, string) (*domain.Model, error) {
 	return &r.model, nil
 }
 
-func (r *failUpdateRepo) Update(context.Context, string, *domain.Model) error {
+func (r *failUpdateRepo) Update(context.Context, *domain.Model) error {
 	return errors.New("update boom")
 }
 
@@ -129,10 +129,10 @@ type fakeCatalog struct {
 
 func (f *fakeCatalog) ListChatModels() []string      { return f.chat }
 func (f *fakeCatalog) ListEmbeddingModels() []string { return f.embedding }
-func (f *fakeCatalog) ListChatModelsByTenant(context.Context, string) ([]string, error) {
+func (f *fakeCatalog) ListChatModelsByTenant(context.Context) ([]string, error) {
 	return f.chat, f.chatErr
 }
-func (f *fakeCatalog) ListEmbeddingModelsByTenant(context.Context, string) ([]string, error) {
+func (f *fakeCatalog) ListEmbeddingModelsByTenant(context.Context) ([]string, error) {
 	return f.embedding, f.embedErr
 }
 

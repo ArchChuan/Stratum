@@ -19,15 +19,22 @@ import (
 // 单节点部署下使用进程内缓存（model → baseline），Upsert 后失效；
 // 多副本部署时由部署层保证配置同步（当前单节点 k3s，见部署架构）。
 type Service struct {
-	repo port.ProfileRepo
+	repo        port.ProfileRepo
+	modelExists port.ModelExists
 
 	mu    sync.RWMutex
 	cache map[string]domain.Baseline
 }
 
 // NewService 构造 Service。repo 不可为空（DB 缺失时由 wiring 决定不构造）。
-func NewService(repo port.ProfileRepo) *Service {
-	return &Service{repo: repo, cache: make(map[string]domain.Baseline)}
+// modelExists 可选：传入时 UpsertProfile 校验模型存在于全局目录；省略则
+// 跳过校验（测试/降级场景）。
+func NewService(repo port.ProfileRepo, modelExists ...port.ModelExists) *Service {
+	s := &Service{repo: repo, cache: make(map[string]domain.Baseline)}
+	if len(modelExists) > 0 {
+		s.modelExists = modelExists[0]
+	}
+	return s
 }
 
 // ErrProfileNotFound 标记按族键查询缺失。
@@ -101,6 +108,10 @@ func (s *Service) UpsertProfile(ctx context.Context, p domain.Profile, updatedBy
 	if err := p.Validate(); err != nil {
 		return err
 	}
+	// 模型存在性校验：空字段跳过（不引用模型），非空必须存在于全局目录。
+	if err := s.validateModelsInCatalog(ctx, p); err != nil {
+		return err
+	}
 	if p.ID == "" {
 		p.ID = uuid.Must(uuid.NewV7()).String()
 	}
@@ -117,6 +128,33 @@ func (s *Service) UpsertProfile(ctx context.Context, p domain.Profile, updatedBy
 	s.mu.Lock()
 	s.cache = make(map[string]domain.Baseline)
 	s.mu.Unlock()
+	return nil
+}
+
+// validateModelsInCatalog 校验档案引用的非空模型存在于全局目录。空字段
+// 跳过（不引用模型）；目录/DB 故障传播错误（fail-closed），引用不存在
+// 模型拒绝写入。modelExists 未注入时跳过（测试/降级）。
+func (s *Service) validateModelsInCatalog(ctx context.Context, p domain.Profile) error {
+	if s.modelExists == nil {
+		return nil
+	}
+	for _, m := range []string{
+		p.Baseline.Models.EnrichModel,
+		p.Baseline.Models.SummaryModel,
+		p.Baseline.Models.ExtractionModel,
+		p.Baseline.Models.JudgeModel,
+	} {
+		if m == "" {
+			continue
+		}
+		ok, err := s.modelExists.Exists(ctx, m, port.CapChat)
+		if err != nil {
+			return fmt.Errorf("mechanism service: check model %q in catalog: %w", m, err)
+		}
+		if !ok {
+			return fmt.Errorf("%w: model %q not in global catalog", domain.ErrInvalidProfile, m)
+		}
+	}
 	return nil
 }
 

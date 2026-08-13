@@ -6,7 +6,21 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/mechanism/domain"
+	"github.com/byteBuilderX/stratum/internal/mechanism/domain/port"
 )
+
+// fakeModelExists 是 ModelExists 的内存替身：命中集 + 可注入错误。
+type fakeModelExists struct {
+	models map[string]bool
+	err    error
+}
+
+func (f *fakeModelExists) Exists(_ context.Context, model string, _ port.ModelCapability) (bool, error) {
+	if f.err != nil {
+		return false, f.err
+	}
+	return f.models[model], nil
+}
 
 // fakeRepo 是 ProfileRepo 的内存替身（测试只 mock 外部依赖，不 mock 领域逻辑）。
 type fakeRepo struct {
@@ -147,6 +161,53 @@ func TestUpsertProfile_propagatesRepoError(t *testing.T) {
 	err := svc.UpsertProfile(context.Background(), profile("qwen", "qwen", ""), "ops")
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+// profileWithModels 构造带模型引用的档案（供存在性校验用例）。
+func profileWithModels(family, prefix string, models domain.BaselineModels) domain.Profile {
+	p := profile(family, prefix, domain.ProfileStatusDraft)
+	p.Baseline.Models = models
+	return p
+}
+
+func TestUpsertProfile_requiresModelsInGlobalCatalog(t *testing.T) {
+	// qwen-turbo 在目录、qwen-max 不在。
+	exists := &fakeModelExists{models: map[string]bool{"qwen-turbo": true}}
+	svc := NewService(&fakeRepo{}, exists)
+
+	t.Run("non-empty model not in catalog rejected", func(t *testing.T) {
+		p := profileWithModels("qwen", "qwen", domain.BaselineModels{JudgeModel: "qwen-max"})
+		err := svc.UpsertProfile(context.Background(), p, "ops")
+		if !errors.Is(err, domain.ErrInvalidProfile) {
+			t.Fatalf("expected ErrInvalidProfile for unknown model, got %v", err)
+		}
+	})
+
+	t.Run("empty models skip existence check", func(t *testing.T) {
+		if err := svc.UpsertProfile(context.Background(), profile("qwen", "qwen", ""), "ops"); err != nil {
+			t.Fatalf("UpsertProfile: %v", err)
+		}
+	})
+
+	t.Run("all models in catalog accepted", func(t *testing.T) {
+		p := profileWithModels("qwen", "qwen", domain.BaselineModels{
+			EnrichModel:     "qwen-turbo",
+			SummaryModel:    "qwen-turbo",
+			ExtractionModel: "qwen-turbo",
+			JudgeModel:      "qwen-turbo",
+		})
+		if err := svc.UpsertProfile(context.Background(), p, "ops"); err != nil {
+			t.Fatalf("UpsertProfile: %v", err)
+		}
+	})
+}
+
+func TestUpsertProfile_propagatesCatalogError(t *testing.T) {
+	svc := NewService(&fakeRepo{}, &fakeModelExists{err: errors.New("catalog down")})
+	p := profileWithModels("qwen", "qwen", domain.BaselineModels{JudgeModel: "qwen-turbo"})
+	if err := svc.UpsertProfile(context.Background(), p, "ops"); err == nil {
+		t.Fatal("expected catalog error to propagate (fail closed)")
 	}
 }
 

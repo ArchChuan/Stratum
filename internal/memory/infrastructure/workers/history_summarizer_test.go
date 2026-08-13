@@ -83,3 +83,29 @@ func TestHistoryProcessorUsesInjectedSummarizePromptOverFallback(t *testing.T) {
 		t.Fatalf("injected prompt not used: %q", got)
 	}
 }
+
+// TestHistoryProcessorUsesBaselineSummaryModel 验证总结请求显式携带机制基线
+// 的 SummaryModel（MEMORY_SUMMARY_MODEL 兜底经 wiring 注入后由基线覆盖）。
+func TestHistoryProcessorUsesBaselineSummaryModel(t *testing.T) {
+	var gotModel string
+	client := completionClientFunc(func(_ context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+		gotModel = req.Model
+		return &memport.CompletionResponse{Content: "s"}, nil
+	})
+	processor := workers.NewLLMHistorySummarizer(client)
+
+	if _, err := processor.SummarizeHistory(context.Background(), []string{"item"}); err != nil {
+		t.Fatal(err)
+	}
+	if gotModel != "" {
+		t.Fatalf("expected empty model by default, got %q", gotModel)
+	}
+
+	processor.WithSummaryModel("qwen-plus")
+	if _, err := processor.SummarizeHistory(context.Background(), []string{"item"}); err != nil {
+		t.Fatal(err)
+	}
+	if gotModel != "qwen-plus" {
+		t.Fatalf("expected request Model %q, got %q", "qwen-plus", gotModel)
+	}
+}

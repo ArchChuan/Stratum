@@ -27,7 +27,7 @@ export const dashboardActions: BrowserAction[] = [{
       ['技能', 'SELECT count(*)::text AS count FROM skills'],
       ['知识库', 'SELECT count(*)::text AS count FROM rag_workspaces'],
       ['MCP 服务器', 'SELECT count(*)::text AS count FROM mcp_configs'],
-      ['模型厂商', 'SELECT count(*)::text AS count FROM providers'],
+      ['模型厂商', 'SELECT count(*)::text AS count FROM public.providers'],
       ['租户成员', 'SELECT count(*)::text AS count FROM public.tenant_members WHERE tenant_id = $1'],
       ['工作流', 'SELECT count(*)::text AS count FROM workflow_definitions'],
       ['近七日 Agent 对话', `SELECT count(*)::text AS count FROM chat_messages

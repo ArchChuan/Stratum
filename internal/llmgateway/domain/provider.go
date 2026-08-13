@@ -23,13 +23,16 @@ const (
 	ProviderOpenAICompat ProviderKind = "openai_compat"
 	ProviderAnthropic    ProviderKind = "anthropic"
 	ProviderOllama       ProviderKind = "ollama"
+	// ProviderCohere 表示 rerank 能力 provider。rerank 调用走独立 HTTP 服务
+	// （knowledge/infrastructure/rerank），不进 ModelRegistry 的 chat/embedding
+	// 网关；kind 仅用于目录中 rerank 能力模型的 provider 关联与筛选。
+	ProviderCohere ProviderKind = "cohere"
 )
 
 // Provider represents a configured LLM provider instance.
 // apiKey is write-only: it is accepted on create/update but never returned.
 type Provider struct {
 	ID           string       `json:"id"`
-	TenantID     string       `json:"-"`
 	Name         string       `json:"name"`
 	Kind         ProviderKind `json:"kind"`
 	BaseURL      string       `json:"baseUrl"`

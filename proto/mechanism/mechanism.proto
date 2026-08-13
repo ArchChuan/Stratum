@@ -45,6 +45,10 @@ message ProfileBaselineResponse {
   string enrich_model = 7;
   // @omitempty
   string summary_model = 8;
+  // @omitempty
+  string extraction_model = 9;
+  // @omitempty
+  string judge_model = 10;
 }
 
 message ListProfilesResponse {
@@ -72,6 +76,8 @@ message ProfileBaselineRequest {
   string compaction = 6;
   string enrich_model = 7;
   string summary_model = 8;
+  string extraction_model = 9;
+  string judge_model = 10;
 }
 
 // —— 评测矩阵工作台（阶段3，机制基线设计 §5）——

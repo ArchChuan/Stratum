@@ -249,7 +249,7 @@ type fakeModelContextProvider struct {
 	err error
 }
 
-func (f fakeModelContextProvider) GetChatModelContextWindow(context.Context, string, string) (int, error) {
+func (f fakeModelContextProvider) GetChatModelContextWindow(context.Context, string) (int, error) {
 	return f.cw, f.err
 }
 

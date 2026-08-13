@@ -4,6 +4,7 @@ import { expect, type BrowserContext } from '@playwright/test';
 
 import {
   elevateGeneratedActor,
+  promoteGeneratedActorToGlobalAdmin,
   requireUUID,
   setGeneratedActorVerifiedEmail,
   type DatabasePool,
@@ -114,7 +115,15 @@ export const createGuestActor = async (
   await page.close();
   const tenantID = requireUUID(body.tenant_id, 'tenant_id');
   const userID = requireUUID(body.user.sub, 'user_id');
-  if (actor.label === 'systemAdmin') await elevateGeneratedActor(pool, tenantID, userID, 'root');
+  if (actor.label === 'systemAdmin') {
+    // 平台管理权限由 users.global_role='global_admin' 表达（前端 /models 路由
+    // requiredRole="global_admin"，后端 /admin/* 多走 RequireGlobalAdmin）；own
+    // sandbox 租户角色设 owner 而非 root，因为 RequireTenantRole 的 rank 表只认
+    // member/admin/owner（root rank=0 直接 403），而后端 /admin/providers 和
+    // /admin/models 仍走 RequireTenantRole("member") 供 agent 读取目录。
+    await elevateGeneratedActor(pool, tenantID, userID, 'owner');
+    await promoteGeneratedActorToGlobalAdmin(pool, userID);
+  }
   if (actor.label === 'tenantAdmin') await elevateGeneratedActor(pool, tenantID, userID, 'owner');
   const email = `${actor.label.toLowerCase()}-${userID}@example.test`;
   await setGeneratedActorVerifiedEmail(pool, userID, email);
