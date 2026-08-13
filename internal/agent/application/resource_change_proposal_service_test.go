@@ -130,6 +130,45 @@ func TestResourceChangeProposalValidatesMCPConfigurationBeforeReview(t *testing.
 	}
 }
 
+// validateProposalPayload 对 AgentChange 的 maxIterations 应用 1-90 范围校验
+// （与工具 schema、domain、application 同源常量）：90 合法进入 ReadyForReview，
+// 91 越界落 invalid。
+func TestResourceChangeProposalAgentMaxIterationsRange(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		wantErr error
+	}{
+		{
+			name:    "upper boundary accepted",
+			payload: `{"name":"agent","description":"desc","model":"qwen-plus","maxIterations":90,"maxContextTokens":4096}`,
+		},
+		{
+			name:    "exceeds upper bound rejected",
+			payload: `{"name":"agent","description":"desc","model":"qwen-plus","maxIterations":91,"maxContextTokens":4096}`,
+			wantErr: domain.ErrProposalInvalid,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newProposalRepoFake()
+			service := newProposalServiceForTest(repo, &proposalAuthorizerFake{}, &baselineFake{}, nil)
+			proposal, err := service.CreateProposal(context.Background(), CreateProposalInput{
+				TenantID: "tenant-1", ActorID: "admin", Kind: domain.ResourceAgent,
+				Operation: domain.OperationCreate, Payload: json.RawMessage(tc.payload),
+			})
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				require.Equal(t, domain.StatusInvalid, proposal.Status)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, domain.StatusReadyForReview, proposal.Status)
+		})
+	}
+}
+
 func TestResourceChangeProposalConfirmReauthorizesAndChecksBaseline(t *testing.T) {
 	repo := newProposalRepoFake()
 	authorizer := &proposalAuthorizerFake{}

@@ -515,8 +515,16 @@ func execSearchKnowledgeTool(toolCtx context.Context, tc port.ToolCall, s *ReAct
 	logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
 		zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
 		zap.Int64("latency_ms", time.Since(toolStart).Milliseconds()))
+	// RAG 内容源自租户知识库，属不可信数据：经 guard 打 <untrusted_tool_result>
+	// 结构标记后再进模型，防止知识内容作为指令被采纳。
+	guardedContent, guardErr := guardUntrustedToolText(s.InternalToolResultGuardFn, content)
+	if guardErr != nil {
+		// fail-closed：guard 未装配或失败时不发送裸内容；evidence 元数据
+		// 仍保留，供 citation 聚合与 UI 展示。
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: guardErr.Error(), content: "error: tool result validation failed", evidence: evidence}
+	}
 	s.appendCitationSources(evidenceRes)
-	return toolExecResult{content: content, status: domain.ToolTraceStatusSuccess, evidence: evidence}
+	return toolExecResult{content: guardedContent, status: domain.ToolTraceStatusSuccess, evidence: evidence}
 }
 
 // appendCitationSources merges retrieval evidence into the execution's
@@ -574,7 +582,13 @@ func execRecallMemoryTool(toolCtx context.Context, tc port.ToolCall, s *ReActSta
 		logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
 			zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
 			zap.Int64("latency_ms", time.Since(toolStart).Milliseconds()))
-		return toolExecResult{content: content, status: domain.ToolTraceStatusSuccess}
+		// 召回内容源自用户记忆，属不可信数据：guard 打 <untrusted_tool_result>
+		// 标记后再进模型，防止记忆内容作为指令被采纳。
+		guardedContent, guardErr := guardUntrustedToolText(s.InternalToolResultGuardFn, content)
+		if guardErr != nil {
+			return toolExecResult{status: domain.ToolTraceStatusError, errMsg: guardErr.Error(), content: "error: tool result validation failed"}
+		}
+		return toolExecResult{content: guardedContent, status: domain.ToolTraceStatusSuccess}
 	}
 }
 

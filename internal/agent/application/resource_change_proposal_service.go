@@ -11,6 +11,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/google/uuid"
 )
@@ -365,7 +366,7 @@ func (s *ResourceChangeProposalService) authorize(
 func validateProposalPayload(payload any) error {
 	switch value := payload.(type) {
 	case *domain.AgentChange:
-		if strings.TrimSpace(value.Name) == "" || value.MaxIterations < 1 || value.MaxIterations > 20 || value.MaxContextTokens < 1 {
+		if strings.TrimSpace(value.Name) == "" || value.MaxIterations < constants.MinAgentMaxIterations || value.MaxIterations > constants.MaxAgentMaxIterations || value.MaxContextTokens < 1 {
 			return domain.ErrProposalInvalid
 		}
 	case *domain.SkillDraftChange:

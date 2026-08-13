@@ -275,12 +275,27 @@ func (s *AgentService) validateSamplingParams(
 	return nil
 }
 
+// validateAgentMaxIterations rejects an out-of-range explicit max iterations
+// value. 0 = unset (each path keeps its own zero semantics: update/system
+// assistant treat it as keep-current, repo persists it as-is elsewhere);
+// non-zero must lie in [MinAgentMaxIterations, MaxAgentMaxIterations].
+func validateAgentMaxIterations(n int) error {
+	if n != 0 && (n < constants.MinAgentMaxIterations || n > constants.MaxAgentMaxIterations) {
+		return fmt.Errorf("%w: max iterations must be between %d and %d",
+			domain.ErrInvalidMaxIterations, constants.MinAgentMaxIterations, constants.MaxAgentMaxIterations)
+	}
+	return nil
+}
+
 func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDTO, error) {
 	if err := s.checkOwnership(ctx, in.ActorID, in.ActorID, nil); err != nil {
 		return AgentDTO{}, err
 	}
 	if err := s.validateSamplingParams(ctx, in.Temperature, in.MaxTokens,
 		in.CompactionRecentGroups, in.CompactionSafetyRatio, in.ReasoningEffort); err != nil {
+		return AgentDTO{}, err
+	}
+	if err := validateAgentMaxIterations(in.MaxIterations); err != nil {
 		return AgentDTO{}, err
 	}
 	id := uuid.Must(uuid.NewV7()).String()
@@ -669,6 +684,9 @@ func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in Upda
 	if err := s.validateSamplingParams(ctx, temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort); err != nil {
 		return nil, err
 	}
+	if err := validateAgentMaxIterations(in.MaxIterations); err != nil {
+		return nil, err
+	}
 	skills := in.AllowedSkills
 	if skills == nil {
 		skills = []string{}
@@ -799,6 +817,12 @@ func (s *AgentService) updateSystemAssistant(ctx context.Context, cfg *domain.Ag
 	}
 	maxTokens, err := s.mergeSystemAssistantMaxTokens(ctx, in.MaxTokens, cfg.MaxTokens)
 	if err != nil {
+		return AgentDTO{}, err
+	}
+	// 只校验显式传入的非零 in.MaxIterations（B2）：0 = 保留原值，不校验
+	// cfg.MaxIterations——防止 PUT-0 对 DB 遗留超界值的系统助手误拒，破坏
+	// ComposeSystemAssistantProfile 保留租户预算的契约。
+	if err := validateAgentMaxIterations(in.MaxIterations); err != nil {
 		return AgentDTO{}, err
 	}
 	memoryScope := in.MemoryScope
@@ -2008,6 +2032,10 @@ func (s *AgentService) assembleOptions(
 		options = appendRAGSearchOptions(options, meta.TenantID, s.deps.RAGSearch, knowledgeAssignments)
 	}
 	options = applyFactCheckOption(options, s.deps.FactCheck)
+	// 普通 agent 同样装配内部工具结果 guard：RAG/recall 工具结果的
+	// <untrusted_tool_result> 标记依赖 InternalToolResultGuardFn，漏装配会让
+	// 这些工具在 guard 上 fail-closed 报错。无条件装配，对无 RAG agent 无害。
+	options = append(options, withInternalToolResultGuard(makeInternalToolResultGuard(NewToolResultGuard())))
 	return ctx, s.resolveEffectiveParameters(ctx, a, options), nil
 }
 
@@ -2361,13 +2389,7 @@ func (s *AgentService) systemAssistantExecutionOptions(
 	}
 	options = s.appendSystemModelToolOptions(options, meta, req, roleClass)
 	options = append(options, WithSystemAssistantMode(), withSystemAssistantRoleClass(roleClass),
-		withInternalToolResultGuard(func(value any) (port.GuardedToolResult, error) {
-			structured, ok := value.(map[string]any)
-			if !ok {
-				return port.GuardedToolResult{}, ErrMCPToolResultSchema
-			}
-			return guard.Validate(port.MCPToolResult{StructuredContent: structured}, nil)
-		}))
+		withInternalToolResultGuard(makeInternalToolResultGuard(guard)))
 	return options
 }
 

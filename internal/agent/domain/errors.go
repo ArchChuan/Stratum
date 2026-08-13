@@ -19,6 +19,7 @@ var (
 	ErrAssistantModelUnavailable          = errors.New("system assistant model unavailable")
 	ErrInvalidSystemAssistantModel        = errors.New("invalid system assistant model")
 	ErrInvalidSamplingParameters          = errors.New("invalid sampling parameters")
+	ErrInvalidMaxIterations               = errors.New("invalid max iterations")
 	ErrSystemAssistantRevisionUnsupported = errors.New("system assistant revisions are unsupported")
 	ErrProposalInvalid                    = errors.New("proposal invalid")
 	ErrProposalNotFound                   = errors.New("proposal not found")

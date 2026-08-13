@@ -142,3 +142,20 @@ func TestParseResourceChangeToolArgumentsAcceptsSystemPrompt(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &decoded))
 	require.Equal(t, "你是销售助手，只讲中文。", decoded["systemPrompt"])
 }
+
+// TestParseResourceChangeToolArgumentsMaxIterationsBoundary 锁定 schema 与
+// 常量对齐：90 是新上界（合法），91 仍越界且带可读 detail。既有 99 用例
+// （99>90 仍成立）保持不动。
+func TestParseResourceChangeToolArgumentsMaxIterationsBoundary(t *testing.T) {
+	boundary := map[string]any{"resourceKind": "agent", "operation": "create",
+		"payload": map[string]any{"name": "a", "description": "d", "model": "m", "maxIterations": 90, "maxContextTokens": 100}}
+	_, _, _, _, err := ParseResourceChangeToolArguments(boundary)
+	require.NoError(t, err)
+
+	over := map[string]any{"resourceKind": "agent", "operation": "create",
+		"payload": map[string]any{"name": "a", "description": "d", "model": "m", "maxIterations": 91, "maxContextTokens": 100}}
+	_, _, _, _, err = ParseResourceChangeToolArguments(over)
+	var iva *domain.InvalidToolArgumentsError
+	require.ErrorAs(t, err, &iva)
+	require.Contains(t, iva.Detail, "不能大于")
+}

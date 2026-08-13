@@ -175,6 +175,7 @@ var errorStatusTable = map[error]int{
 	agentdomain.ErrProposalInvalid:                http.StatusBadRequest,
 	agentdomain.ErrInvalidSystemAssistantModel:    http.StatusBadRequest,
 	agentdomain.ErrInvalidSamplingParameters:      http.StatusBadRequest,
+	agentdomain.ErrInvalidMaxIterations:           http.StatusBadRequest,
 	iamdomain.ErrDefaultTenantDelete:              http.StatusBadRequest,
 	iamdomain.ErrUsernameTaken:                    http.StatusConflict,
 	knowledgedomain.ErrInvalidEmbeddingModel:      http.StatusBadRequest,
