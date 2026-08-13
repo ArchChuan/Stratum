@@ -116,18 +116,6 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
     },
   ];
 
-  // 模型管理为公共平台目录，仅 global admin 可见（对齐 #361 平台管理权限面）。
-  if (user?.global_role === 'global_admin') {
-    base.push({
-      key: 'model-group',
-      icon: <ApiOutlined />,
-      label: '模型管理',
-      children: [
-        { key: '/models', icon: <SettingOutlined />, label: '模型管理' },
-      ],
-    });
-  }
-
   if (user?.current_tenant) {
     base.push({
       key: 'tenant-group',
@@ -157,6 +145,11 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
       icon: <SettingOutlined />,
       label: '平台管理',
       children: [
+        {
+          key: '/models',
+          icon: <ApiOutlined />,
+          label: '模型管理',
+        },
         {
           key: '/prompts',
           icon: <FileTextOutlined />,
@@ -193,11 +186,11 @@ export const resolveOpenKeys = (pathname: string): string[] => {
   if (pathname.startsWith('/agents')) return ['agent-group'];
   if (pathname.startsWith('/skills')) return ['skill-group'];
   if (pathname.startsWith('/mcp')) return ['mcp-group'];
-  if (pathname.startsWith('/models')) return ['model-group'];
   if (pathname.startsWith('/evaluations')) return ['evaluation-group'];
   if (pathname.startsWith('/workflows') || pathname.startsWith('/workflow-runs') || pathname.startsWith('/scheduled-tasks')) return ['workflow-group'];
   if (pathname.startsWith('/tenant')) return ['tenant-group'];
   if (
+    pathname.startsWith('/models') ||
     pathname.startsWith('/prompts') ||
     pathname.startsWith('/audit') ||
     pathname.startsWith('/mechanism') ||
