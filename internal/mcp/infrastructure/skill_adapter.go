@@ -202,6 +202,12 @@ func (r *MCPToolRegistry) RegisterServer(ctx context.Context, tenantID, serverID
 func (r *MCPToolRegistry) UnregisterServer(tenantID, serverID string) error {
 	if tenantID == "" {
 		// fail closed: never touch the shared "":serverID bucket.
+		// Deliberately asymmetric with RegisterServer: a no-op instead of an
+		// error, because MCPService.DeleteServer unregisters only after the DB
+		// row is already gone — an error here would surface a partial failure
+		// after a successful delete. The "" bucket is unreachable (RegisterServer
+		// is the only production writer and rejects empty tenant), so a dropped
+		// tenant in a caller degrades to a harmless no-op.
 		return nil
 	}
 	r.mu.Lock()
