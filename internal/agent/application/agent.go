@@ -507,13 +507,19 @@ func recordFingerprintAndKPI(
 // tunableSnapshot records the effective tunable values applied to this
 // execution so the fingerprint attributes attribute runs to their tunables.
 func tunableSnapshot(cfg *ExecutionConfig, maxContextTokens int) map[string]any {
-	return map[string]any{
+	snapshot := map[string]any{
 		"temperature":              cfg.Temperature,
 		"max_tokens":               cfg.MaxTokens,
 		"max_context_tokens":       maxContextTokens,
 		"compaction_recent_groups": cfg.CompactionRecentGroups,
 		"compaction_safety_ratio":  cfg.CompactionSafetyRatio,
 	}
+	// ReasoningEffort 空串 = unset，不进 fingerprint：避免未设置档位时
+	// fingerprint 漂移，保持与 resolver 的 string-unset 语义一致。
+	if cfg.ReasoningEffort != "" {
+		snapshot["reasoning_effort"] = cfg.ReasoningEffort
+	}
+	return snapshot
 }
 
 // injectMemoryContext builds the memory context injected into the system
@@ -1481,6 +1487,10 @@ func agentExecutionAttributes(agentID, agentName string, agentType AgentType, cf
 			attribute.Int("stratum.params.compaction_recent_groups", cfg.CompactionRecentGroups),
 			attribute.Float64("stratum.params.compaction_safety_ratio", float64(cfg.CompactionSafetyRatio)),
 		)
+		// reasoning_effort 只记录档位值（low/medium/high），不记录任何请求体。
+		if cfg.ReasoningEffort != "" {
+			attrs = append(attrs, attribute.String("stratum.params.reasoning_effort", cfg.ReasoningEffort))
+		}
 	}
 	return attrs
 }
