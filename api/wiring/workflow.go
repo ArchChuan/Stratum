@@ -121,7 +121,7 @@ func (e workflowSkillExecutor) ExecuteSkill(ctx context.Context, tenantID, agent
 	if !found || view.RevisionID != revisionID {
 		return "", "", fmt.Errorf("pinned skill revision not found")
 	}
-	activation := agentport.SkillActivation{SkillID: view.SkillID, RevisionID: view.RevisionID, Name: view.Name, Description: view.Description, Instructions: view.Instructions, InputSchema: view.InputSchema, OutputSchema: view.OutputSchema, MCPToolIDs: view.MCPToolIDs, KnowledgeWorkspaceIDs: view.KnowledgeWorkspaceIDs, MemoryScopes: view.MemoryScopes}
+	activation := agentport.SkillActivation{SkillID: view.SkillID, RevisionID: view.RevisionID, Name: view.Name, Description: view.Description, Instructions: view.Instructions, InputSchema: view.InputSchema, OutputSchema: view.OutputSchema}
 	traceID := uuid.Must(uuid.NewV7()).String()
 	result, _, err := e.agents.ExecuteSkillScenario(ctx, agentID, agentapp.ExecRequest{Query: input, UserID: "workflow"}, agentapp.ExecMeta{TenantID: tenantID, TraceID: traceID}, []agentport.SkillActivation{activation})
 	if err != nil {

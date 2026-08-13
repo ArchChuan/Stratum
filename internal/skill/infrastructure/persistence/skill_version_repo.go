@@ -310,13 +310,9 @@ func (r *PgSkillRevisionRepo) UpdateDraftActivation(
 }
 
 func (r *PgSkillRevisionRepo) UpdateDraftInstructions(
-	ctx context.Context, skillID, instructions string, requirements domain.Requirements, contentHash string, audit *auditdomain.ResourceChangeAuditEvent, editorActor string,
+	ctx context.Context, skillID, instructions string, contentHash string, audit *auditdomain.ResourceChangeAuditEvent, editorActor string,
 ) (domain.SkillRevision, error) {
-	payload, err := json.Marshal(requirements)
-	if err != nil {
-		return domain.SkillRevision{}, fmt.Errorf("skill_revision_repo: marshal requirements: %w", err)
-	}
-	return r.updateDraft(ctx, skillID, "instructions=$2, requirements=$3", []any{instructions, string(payload)}, contentHash, audit, editorActor)
+	return r.updateDraft(ctx, skillID, "instructions=$2", []any{instructions}, contentHash, audit, editorActor)
 }
 
 func (r *PgSkillRevisionRepo) UpdateDraftBundle(
@@ -335,10 +331,6 @@ func (r *PgSkillRevisionRepo) UpdateDraftBundle(
 	if err != nil {
 		return domain.SkillRevision{}, fmt.Errorf("skill_revision_repo: marshal activation: %w", err)
 	}
-	requirementsJSON, err := json.Marshal(draft.Requirements)
-	if err != nil {
-		return domain.SkillRevision{}, fmt.Errorf("skill_revision_repo: marshal requirements: %w", err)
-	}
 	var updated domain.SkillRevision
 	err = r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := revalidateEditorIfActor(ctx, tx, resourceEditorKind, skillID, editorActor); err != nil {
@@ -350,7 +342,7 @@ func (r *PgSkillRevisionRepo) UpdateDraftBundle(
 		// as stale.
 		query := `UPDATE skill_revisions
 			SET capability=$3::jsonb, activation_contract=$4::jsonb, instructions=$5,
-			    requirements=$6::jsonb, content_hash=$7, updated_at=NOW()
+			    content_hash=$6, updated_at=NOW()
 			WHERE skill_id=$1 AND status='draft'`
 		args := []any{skillID}
 		if expectedContentHash != "" {
@@ -359,7 +351,7 @@ func (r *PgSkillRevisionRepo) UpdateDraftBundle(
 		}
 		query += ` RETURNING ` + revisionColumns
 		args = append(args, string(capabilityJSON), string(activationJSON),
-			draft.Instructions, string(requirementsJSON), draft.ContentHash)
+			draft.Instructions, draft.ContentHash)
 		value, updateErr := scanSkillRevision(tx.QueryRow(ctx, query, args...))
 		if updateErr != nil {
 			if updateErr != pgx.ErrNoRows {
@@ -480,10 +472,6 @@ func insertSkillRevision(ctx context.Context, tx pgx.Tx, revision domain.SkillRe
 	if err != nil {
 		return err
 	}
-	requirementsJSON, err := json.Marshal(revision.Requirements)
-	if err != nil {
-		return err
-	}
 	checksJSON, err := json.Marshal(revision.PublishChecks)
 	if err != nil {
 		return err
@@ -495,11 +483,11 @@ func insertSkillRevision(ctx context.Context, tx pgx.Tx, revision domain.SkillRe
 	_, err = tx.Exec(ctx,
 		`INSERT INTO skill_revisions
 		 (id, skill_id, parent_revision_id, revision_no, status, source, content_hash,
-		  generation_metadata, capability, activation_contract, instructions, requirements, publish_checks, created_by)
-		 VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, 0), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+		  generation_metadata, capability, activation_contract, instructions, publish_checks, created_by)
+		 VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, 0), $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 		revision.ID, revision.SkillID, revision.ParentRevisionID, revision.RevisionNo, string(revision.Status), source,
 		revision.ContentHash, string(generationJSON), string(capabilityJSON), string(activationJSON),
-		revision.Instructions, string(requirementsJSON), string(checksJSON), revision.CreatedBy,
+		revision.Instructions, string(checksJSON), revision.CreatedBy,
 	)
 	return err
 }
@@ -521,7 +509,6 @@ func scanSkillRevision(row revisionScanner) (domain.SkillRevision, error) {
 	_ = json.Unmarshal(generationJSON, &revision.GenerationMetadata)
 	_ = json.Unmarshal(capabilityJSON, &revision.Capability)
 	_ = json.Unmarshal(activationJSON, &revision.ActivationContract)
-	_ = json.Unmarshal(requirementsJSON, &revision.Requirements)
 	_ = json.Unmarshal(checksJSON, &revision.PublishChecks)
 	return revision, nil
 }

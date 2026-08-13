@@ -1,5 +1,5 @@
 import { ArrowLeftOutlined, SendOutlined } from '@ant-design/icons';
-import { Alert, Button, Checkbox, Form, Input, Select, Skeleton, Space, Switch, Tabs, Typography, message } from 'antd';
+import { Alert, Button, Form, Input, Select, Skeleton, Space, Switch, Tabs, Typography, message } from 'antd';
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -16,7 +16,7 @@ const { TextArea } = Input;
 
 type CapabilityValues = { goal: string; whenToUse: string; inputSpec?: string; outputSpec?: string };
 type ActivationValues = { name: string; description: string; inputSchemaJson: string; outputSchemaJson: string; confirmed: boolean };
-type InstructionValues = { instructions: string; mcpToolIDs?: string; knowledgeWorkspaceIDs?: string; memoryScopes?: string[] };
+type InstructionValues = { instructions: string };
 
 export const SkillWorkspacePage = () => {
   const { id = '' } = useParams<{ id: string }>();
@@ -106,12 +106,9 @@ export const SkillWorkspacePage = () => {
         {canEdit && <ActionRow><Button type="primary" htmlType="submit" loading={saving === 'activation'}>保存激活契约</Button></ActionRow>}
       </Form> },
       { key: 'instructions', label: '指令与权限', children: <Form disabled={!canEdit} form={instructionForm} layout="vertical" onFinish={(v) => perform('instructions', () => skillApi.updateInstructions(skill.id, {
-        instructions: v.instructions, requirements: { mcpToolIds: lines(v.mcpToolIDs), knowledgeWorkspaceIds: lines(v.knowledgeWorkspaceIDs), memoryScopes: v.memoryScopes || [] },
+        instructions: v.instructions,
       }), '指令与权限已保存')}>
         <Form.Item label="执行指令" name="instructions" rules={[{ required: true }]}><TextArea rows={10} /></Form.Item>
-        <Form.Item label="MCP 工具 ID" name="mcpToolIDs" extra="声明性元数据，不再做运行时过滤；运行时工具面继承 agent 绑定"><TextArea rows={4} /></Form.Item>
-        <Form.Item label="知识工作区 ID" name="knowledgeWorkspaceIDs" extra="声明性元数据，运行时边界继承 agent 绑定"><TextArea rows={3} /></Form.Item>
-        <Form.Item label="记忆范围" name="memoryScopes" extra="声明性元数据，运行时边界继承 agent 绑定"><Checkbox.Group options={[{ label: '当前会话', value: 'conversation' }, { label: '用户', value: 'user' }, { label: 'Agent', value: 'agent' }]} /></Form.Item>
         {canEdit && <ActionRow><Button type="primary" htmlType="submit" loading={saving === 'instructions'}>保存指令与权限</Button></ActionRow>}
       </Form> },
       { key: 'editors', label: '可编辑人', children: (
@@ -167,7 +164,6 @@ export const SkillWorkspacePage = () => {
 };
 
 const ActionRow = ({ children }: { children: ReactNode }) => <div className="responsive-form-actions" style={{ display: 'flex', justifyContent: 'flex-end' }}>{children}</div>;
-const lines = (value?: string) => (value || '').split('\n').map((item) => item.trim()).filter(Boolean);
 const stringify = (value: unknown) => JSON.stringify(value || {}, null, 2);
 const parseObject = (raw: string, label: string): Record<string, unknown> => {
   try { const value = JSON.parse(raw); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); return value; }
@@ -176,7 +172,7 @@ const parseObject = (raw: string, label: string): Record<string, unknown> => {
 const fillForms = (draft: SkillRevision, capability: ReturnType<typeof Form.useForm<CapabilityValues>>[0], activation: ReturnType<typeof Form.useForm<ActivationValues>>[0], instructions: ReturnType<typeof Form.useForm<InstructionValues>>[0]) => {
   capability.setFieldsValue({ goal: String(draft.capability.goal || ''), whenToUse: String(draft.capability.whenToUse || ''), inputSpec: String(draft.capability.inputSpec || ''), outputSpec: String(draft.capability.outputSpec || '') });
   activation.setFieldsValue({ name: String(draft.activationContract.name || ''), description: String(draft.activationContract.description || ''), confirmed: Boolean(draft.activationContract.confirmed), inputSchemaJson: stringify(draft.activationContract.inputSchema || { type: 'object' }), outputSchemaJson: stringify(draft.activationContract.outputSchema || { type: 'object' }) });
-  instructions.setFieldsValue({ instructions: draft.instructions, mcpToolIDs: draft.requirements.mcpToolIds.join('\n'), knowledgeWorkspaceIDs: draft.requirements.knowledgeWorkspaceIds.join('\n'), memoryScopes: draft.requirements.memoryScopes });
+  instructions.setFieldsValue({ instructions: draft.instructions });
 };
 
 export default SkillWorkspacePage;

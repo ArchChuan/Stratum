@@ -59,7 +59,6 @@ func skillSafeProjection(skill port.SkillProductRow, draft *domain.SkillRevision
 	if draft != nil {
 		out["instructions"] = draft.Instructions
 		out["contentHash"] = draft.ContentHash
-		out["requirements"] = draft.Requirements
 	}
 	return out
 }

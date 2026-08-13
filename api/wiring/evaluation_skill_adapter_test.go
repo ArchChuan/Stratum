@@ -113,7 +113,6 @@ func TestEvaluationSkillCandidatePatchIsBoundedAndSummaryIsSafe(t *testing.T) {
 		ok    bool
 	}{
 		{name: "instructions", patch: map[string]any{"instructions": "clearer instructions"}, ok: true},
-		{name: "requirements", patch: map[string]any{"requirements": map[string]any{}}, ok: false},
 		{name: "permissions", patch: map[string]any{"permissions": []string{"admin"}}, ok: false},
 		{name: "secret", patch: map[string]any{"secret": "synthetic"}, ok: false},
 		{name: "destination", patch: map[string]any{"destination": "https://example.invalid"}, ok: false},
@@ -135,7 +134,7 @@ func TestEvaluationSkillCandidatePatchIsBoundedAndSummaryIsSafe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"secret", "token", "api_key", "requirements", "destination", "instructions"} {
+	for _, key := range []string{"secret", "token", "api_key", "destination", "instructions"} {
 		if _, ok := summary[key]; ok {
 			t.Fatalf("safe summary contains %q: %#v", key, summary)
 		}
@@ -189,7 +188,7 @@ func (r *evaluationSkillVersionRepo) UpdateDraftCapability(context.Context, stri
 func (r *evaluationSkillVersionRepo) UpdateDraftActivation(context.Context, string, skilldomain.ActivationContract, string, *auditdomain.ResourceChangeAuditEvent, string) (skilldomain.SkillRevision, error) {
 	return skilldomain.SkillRevision{}, nil
 }
-func (r *evaluationSkillVersionRepo) UpdateDraftInstructions(context.Context, string, string, skilldomain.Requirements, string, *auditdomain.ResourceChangeAuditEvent, string) (skilldomain.SkillRevision, error) {
+func (r *evaluationSkillVersionRepo) UpdateDraftInstructions(context.Context, string, string, string, *auditdomain.ResourceChangeAuditEvent, string) (skilldomain.SkillRevision, error) {
 	return skilldomain.SkillRevision{}, nil
 }
 func (r *evaluationSkillVersionRepo) UpdateDraftBundle(context.Context, string, string, skillport.SkillProductRow, skilldomain.SkillRevision, *auditdomain.ResourceChangeAuditEvent, string) (skilldomain.SkillRevision, error) {

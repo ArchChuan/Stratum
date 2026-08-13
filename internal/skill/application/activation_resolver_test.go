@@ -24,7 +24,6 @@ func TestResolveActivation_ActiveRevisionFallbackAndNameFallback(t *testing.T) {
 			ID: "rev1", SkillID: "sk1", Status: domain.VersionStatusPublished,
 			Instructions:       "先判断投诉类别",
 			ActivationContract: domain.ActivationContract{}, // 空 → 回退到 skill 名称/描述
-			Requirements:       domain.Requirements{MCPToolIDs: []string{"mcp:orders:get"}},
 		},
 	)
 	svc := NewVersionService(repo, zap.NewNop())
@@ -44,9 +43,6 @@ func TestResolveActivation_ActiveRevisionFallbackAndNameFallback(t *testing.T) {
 	// contract 为空 → name/description 回退到 skill product。
 	if view.Name != "投诉分类" || view.Description != "产品描述" {
 		t.Fatalf("name/description fallback failed: %#v", view)
-	}
-	if len(view.MCPToolIDs) != 1 || view.MCPToolIDs[0] != "mcp:orders:get" {
-		t.Fatalf("requirements not projected: %#v", view)
 	}
 }
 

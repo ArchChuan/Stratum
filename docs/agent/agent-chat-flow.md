@@ -142,12 +142,12 @@ stateDiagram-v2
 ## Effective Permissions
 
 ```text
-MCP tools  = tenant/user permission ∩ Agent.mcpToolIds ∩ active Skill.mcpToolIds
-Knowledge  = Agent.workspaceIds ∩ active Skill.workspaceIds
-Memory     = Agent.memoryScope ∩ active Skill.memoryScopes
+MCP tools  = tenant/user permission ∩ Agent.mcpToolIds
+Knowledge  = Agent.workspaceIds
+Memory     = Agent.memoryScope
 ```
 
-没有 active Skill 时，Agent 可使用自身明确 allowlist。激活 Skill 后 requirements 只能收窄权限，不能扩大权限。
+Skill 激活只注入 instruction bundle，不改变工具、知识或记忆边界（Spec D5）；Agent 始终使用自身明确 allowlist。
 
 ## Evaluation
 
