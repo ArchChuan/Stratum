@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/byteBuilderX/stratum/internal/agent/application/factcheck"
 	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
@@ -81,7 +82,10 @@ type AgentServiceDeps struct {
 	// 由 wiring 注入 TTL 缓存适配器;nil 时对非空 MCP 绑定 fail closed。
 	SystemResourceGuard port.SystemResourceGuard
 	ParametersProvider  port.ParametersProvider
-	Logger              *zap.Logger
+	// FactCheck 是幻觉校验配置（nil/Enabled=false = 关闭，fail-closed）。
+	// EvidenceFn 留空，执行时由 RAGSearchFnWithEvidence 填充。
+	FactCheck *factcheck.Settings
+	Logger    *zap.Logger
 }
 
 // AgentService aggregates agent CRUD + Execute/ExecuteStream and shields
@@ -2224,11 +2228,21 @@ func (s *AgentService) assembleOptions(
 	if s.deps.RAGSearch != nil && len(a.GetConfig().KnowledgeWorkspaceIDs) > 0 {
 		options = appendRAGSearchOptions(options, meta.TenantID, s.deps.RAGSearch, knowledgeAssignments, removedWSNames)
 	}
+	options = applyFactCheckOption(options, s.deps.FactCheck)
 	// 普通 agent 同样装配内部工具结果 guard：RAG/recall 工具结果的
 	// <untrusted_tool_result> 标记依赖 InternalToolResultGuardFn，漏装配会让
 	// 这些工具在 guard 上 fail-closed 报错。无条件装配，对无 RAG agent 无害。
 	options = append(options, withInternalToolResultGuard(makeInternalToolResultGuard(NewToolResultGuard())))
 	return ctx, s.resolveEffectiveParameters(ctx, a, options), nil
+}
+
+// applyFactCheckOption 透传幻觉校验 option（fail-closed：nil/disabled 不注入）。
+// judge 与 TopK 等由 wiring 装配；EvidenceFn 在 collectGraphResult 填充。
+func applyFactCheckOption(options []ExecutionOption, settings *factcheck.Settings) []ExecutionOption {
+	if settings == nil || !settings.Enabled {
+		return options
+	}
+	return append(options, WithFactCheck(settings))
 }
 
 // appendRAGSearchOptions wires the plain and (when supported) evidence-capable

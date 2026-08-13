@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -59,6 +60,7 @@ type Config struct {
 	Opik                    OpikConfig
 	TracePayload            TracePayloadConfig
 	MemoryPipeline          MemoryPipelineConfig
+	AgentFactCheck          AgentFactCheckConfig
 	// 热更新运行时状态（Nacos listener 写、wiring 注册回调读）
 	memoryDynamic          atomic.Pointer[MemoryPipelineDynamic]
 	memoryDynamicListeners []func(MemoryPipelineDynamic)
@@ -106,6 +108,15 @@ type MemoryPipelineConfig struct {
 	SummaryTokenThreshold int
 	EnrichmentPrompt      string
 	SummaryPrompt         string
+}
+
+// AgentFactCheckConfig 控制 agent 输出的幻觉校验（advisory，只展示）。
+// 默认关闭（fail-closed）：关闭时 collectGraphResult 不校验、不进报告。
+type AgentFactCheckConfig struct {
+	Enabled    bool
+	JudgeModel string
+	TopK       int
+	MaxClaims  int
 }
 
 func Load() (*Config, error) {
@@ -179,6 +190,12 @@ func Load() (*Config, error) {
 			EnrichModel:           getEnv("MEMORY_ENRICH_MODEL", "qwen-turbo"),
 			SummaryModel:          getEnv("MEMORY_SUMMARY_MODEL", "qwen-plus"),
 			SummaryTokenThreshold: constants.EnricherSummaryTokenThreshold,
+		},
+		AgentFactCheck: AgentFactCheckConfig{
+			Enabled:    getEnv("AGENT_FACTCHECK_ENABLED", "") == "true",
+			JudgeModel: getEnv("AGENT_FACTCHECK_JUDGE_MODEL", constants.AgentFactCheckJudgeModel),
+			TopK:       getEnvInt("AGENT_FACTCHECK_TOPK", constants.AgentFactCheckTopK),
+			MaxClaims:  getEnvInt("AGENT_FACTCHECK_MAX_CLAIMS", constants.AgentFactCheckMaxClaims),
 		},
 	}
 	return cfg, nil
@@ -258,6 +275,16 @@ func (c *Config) LoadMemoryPipelineDynamic() MemoryPipelineDynamic {
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
+	}
+	return defaultValue
+}
+
+// getEnvInt 读取 int 型环境变量；空或非法值回退默认。
+func getEnvInt(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if n, err := strconv.Atoi(value); err == nil {
+			return n
+		}
 	}
 	return defaultValue
 }

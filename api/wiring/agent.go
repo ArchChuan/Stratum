@@ -2,11 +2,13 @@ package wiring
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
+	"github.com/byteBuilderX/stratum/internal/agent/application/factcheck"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
@@ -15,6 +17,7 @@ import (
 	agentopik "github.com/byteBuilderX/stratum/internal/agent/infrastructure/opik"
 	persistence "github.com/byteBuilderX/stratum/internal/agent/infrastructure/persistence"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
+	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	memapp "github.com/byteBuilderX/stratum/internal/memory/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
@@ -336,14 +339,12 @@ func (c *Container) buildAgent(ctx context.Context) error {
 			}
 			return compactor
 		},
-		ChatStore:         a.ChatStore,
-		EvidenceProvider:  a.EvidenceProvider,
-		TracePayloadStore: a.TracePayloadStore,
-		CheckpointStore:   a.CheckpointStore,
-		ApprovalService:   a.ApprovalService,
-		ToolAuthorizer: agent.NewToolAuthorizer(agentToolUserScopeResolver{
-			members: tenantMemberService(c),
-		}),
+		ChatStore:                 a.ChatStore,
+		EvidenceProvider:          a.EvidenceProvider,
+		TracePayloadStore:         a.TracePayloadStore,
+		CheckpointStore:           a.CheckpointStore,
+		ApprovalService:           a.ApprovalService,
+		ToolAuthorizer:            agent.NewToolAuthorizer(agentToolUserScopeResolver{members: tenantMemberService(c)}),
 		WorkspaceBindingValidator: workspaceBindingAdapter{ws: knowledgeWorkspaceService(c)},
 		SystemResourceGuard:       newSystemResourceGuard(mcpServiceOf(c), knowledgeWorkspaceService(c)),
 		Logger:                    c.Logger,
@@ -364,6 +365,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	if c.Knowledge != nil && c.Knowledge.RAGService != nil {
 		deps.RAGSearch = ragSearchAdapter{rag: c.Knowledge.RAGService}
 	}
+	deps.FactCheck = agentFactCheckSettings(c)
 	if c.Platform != nil {
 		deps.Metrics = c.Platform.Metrics
 	}
@@ -491,4 +493,55 @@ func wirePromptResolver(c *Container, a *Agent) {
 	if c.Prompt != nil && c.Prompt.Registry != nil {
 		a.PromptResolver.SetRegistry(c.Prompt.Registry)
 	}
+}
+
+// agentFactCheckSettings 按开关 + gateway 可用性装配幻觉校验依赖（fail-closed：
+// 任一缺失返回 nil，collectGraphResult 不校验）。judge 模型来自
+// agent.factcheck.judge.model，不静默回落 evaluation.judge.model。EvidenceFn
+// 留空，collectGraphResult 执行时用 RAGSearchFnWithEvidence 填充（per-execution
+// 已带 tenant 权限）。
+func agentFactCheckSettings(c *Container) *factcheck.Settings {
+	if !c.Config.AgentFactCheck.Enabled || c.LLMGateway == nil || c.LLMGateway.Gateway == nil {
+		return nil
+	}
+	return &factcheck.Settings{
+		Enabled:   true,
+		Judge:     factCheckJudge{completer: c.LLMGateway.Gateway, model: c.Config.AgentFactCheck.JudgeModel},
+		TopK:      c.Config.AgentFactCheck.TopK,
+		MaxClaims: c.Config.AgentFactCheck.MaxClaims,
+		Logger:    c.Logger,
+	}
+}
+
+// factCheckJudge 实现 factcheck.Judge（LLM-as-Judge 幻觉判定），走 llmgateway
+// completer + json_object 结构化输出（P1 A 层）。只消费 claim 聚合证据，不
+// 记录原始模型输出（日志白名单：judge 失败只记模型名，不记正文）。
+type factCheckJudge struct {
+	completer llmgatewaydomain.LLMCompleter
+	model     string
+}
+
+func (j factCheckJudge) JudgeClaims(ctx context.Context, claims []string, evidence string) ([]domain.ClaimVerdict, error) {
+	claimsJSON, err := json.Marshal(claims)
+	if err != nil {
+		return nil, fmt.Errorf("factcheck judge: marshal claims: %w", err)
+	}
+	resp, err := j.completer.Complete(ctx, &llmgatewaydomain.CompletionRequest{
+		Model:     j.model,
+		MaxTokens: constants.AgentFactCheckJudgeMaxTokens,
+		ResponseFormat: &llmgatewaydomain.ResponseFormat{
+			Type: "json_object",
+		},
+		Messages: []llmgatewaydomain.Message{
+			{Role: "system", Content: "你是严谨的事实核查法官。只输出 JSON，不输出其他内容。"},
+			{Role: "user", Content: fmt.Sprintf(
+				"对下列每条 claim，依据给定 RAG 证据判断其是否被支持。\n\nClaims:\n%s\n\nEvidence:\n%s\n\n输出 JSON：{\"claims\":[{\"text\":\"<claim>\",\"verdict\":\"SUPPORTED|CONTRADICTED|UNSUPPORTED\",\"risk\":<0-5>}]}。risk 越高越可疑；证据不足判 UNSUPPORTED。",
+				string(claimsJSON), evidence,
+			)},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("factcheck judge: %w", err)
+	}
+	return factcheck.ParseClaimVerdicts(resp.Content)
 }

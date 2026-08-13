@@ -44,7 +44,7 @@ func ExecutePlanTool(ctx context.Context, state *ReActState, call port.ToolCall)
 		return "", fmt.Errorf("plan tool: encode arguments: %w", err)
 	}
 	if err := json.Unmarshal(payload, &command); err != nil {
-		return correction(call.Name, fmt.Errorf("invalid arguments: %w", err), state.ActivePlan), nil
+		return state.recordCorrection(call.Name, fmt.Errorf("invalid arguments: %w", err), state.ActivePlan), nil
 	}
 	switch call.Name {
 	case "stratum_create_plan":
@@ -64,7 +64,7 @@ func ExecutePlanTool(ctx context.Context, state *ReActState, call port.ToolCall)
 	}
 	next, err := domain.ApplyPlanCommand(state.ActivePlan, command, idSource, state.PlanLimits)
 	if err != nil {
-		return correction(call.Name, err, state.ActivePlan), nil
+		return state.recordCorrection(call.Name, err, state.ActivePlan), nil
 	}
 	identity := state.PlanCheckpointIdentity
 	if identity.CheckpointID == "" {

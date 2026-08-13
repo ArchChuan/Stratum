@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"go.uber.org/zap"
+
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
@@ -44,6 +46,7 @@ type LLMExtractor struct {
 	client       LLMClient
 	params       PlatformParams
 	systemPrompt string
+	logger       *zap.Logger
 }
 
 func NewLLMExtractor(client LLMClient) *LLMExtractor {
@@ -56,6 +59,12 @@ func (e *LLMExtractor) SetPlatformParams(p PlatformParams) { e.params = p }
 // SetSystemPrompt overrides the extraction template with the mechanism
 // baseline prompt. Empty keeps the built-in extractionSystemPrompt fallback.
 func (e *LLMExtractor) SetSystemPrompt(p string) { e.systemPrompt = p }
+
+// WithLogger 注入降级日志记录器（结构化失败白名单摘要）。nil 安全。
+func (e *LLMExtractor) WithLogger(l *zap.Logger) *LLMExtractor {
+	e.logger = l
+	return e
+}
 
 // systemPromptOr 返回生效抽取模板：基线注入值优先，空则兜底内置常量。
 func (e *LLMExtractor) systemPromptOr() string {
@@ -79,17 +88,59 @@ func (e *LLMExtractor) maxFacts(ctx context.Context) int {
 
 func (e *LLMExtractor) ExtractFacts(ctx context.Context, userID, agentID string, message string) ([]*memport.ExtractedFact, error) {
 	system := fmt.Sprintf(e.systemPromptOr(), userID, agentID, e.maxFacts(ctx))
-	resp, err := e.client.Complete(ctx, &memport.CompletionRequest{
+	req := &memport.CompletionRequest{
 		Messages: []memport.CompletionMessage{
 			{Role: "system", Content: system},
 			{Role: "user", Content: message},
 		},
 		MaxTokens: constants.MemoryExtractLLMMaxTokens,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("llm extract: %w", err)
 	}
-	raw := resp.Content
+	return extractFactsStructured(ctx, e.client, req, e.logger)
+}
+
+// extractFactsStructured 走 CompleteStructured 的带错重试管线，并实现部分成功
+// 语义：逐条 Validate，≥1 条通过立即返回通过子集（不为小问题浪费重试）；
+// 0 条通过才触发带错重试，耗尽返回 typed error（保留 MarkFailed/DLQ）。
+func extractFactsStructured(
+	ctx context.Context,
+	client memport.Completer,
+	req *memport.CompletionRequest,
+	logger *zap.Logger,
+) ([]*memport.ExtractedFact, error) {
+	var valid []*memport.ExtractedFact
+	_, err := CompleteStructured(ctx, client, req, parseExtractedFacts,
+		func(facts []*memport.ExtractedFact) error {
+			if len(facts) == 0 {
+				// 模型明确表示无事实（[]）：合法结果，非校验失败，
+				// 调用方据此跳过抽取，不触发带错重试。
+				valid = nil
+				return nil
+			}
+			valid = facts[:0]
+			allInvalid := true
+			for _, f := range facts {
+				if f.Validate() == nil {
+					valid = append(valid, f)
+					allInvalid = false
+				}
+			}
+			if allInvalid {
+				return &memport.ValidationError{
+					Location: "facts", Field: "facts",
+					Reason: "no fact passed validation",
+				}
+			}
+			return nil
+		}, logger, "extract_facts")
+	if err != nil {
+		return nil, err
+	}
+	return valid, nil
+}
+
+// parseExtractedFacts 从 LLM 原始输出中剥离非 JSON 前缀并解析事实数组。
+// Token 截断时按最后完整对象恢复（recoverTruncatedArray）。
+func parseExtractedFacts(raw string) ([]*memport.ExtractedFact, error) {
 	start := strings.Index(raw, "[")
 	if start == -1 {
 		return nil, fmt.Errorf("parse extracted facts: no JSON array in response")
@@ -99,8 +150,9 @@ func (e *LLMExtractor) ExtractFacts(ctx context.Context, userID, agentID string,
 	if err := json.NewDecoder(strings.NewReader(body)).Decode(&facts); err != nil {
 		// Token limit may have truncated the JSON mid-object; recover by closing at the last complete item.
 		if recovered := recoverTruncatedArray(body); recovered != "" {
-			if err2 := json.Unmarshal([]byte(recovered), &facts); err2 == nil {
-				return facts, nil
+			var recoveredFacts []*memport.ExtractedFact
+			if err2 := json.Unmarshal([]byte(recovered), &recoveredFacts); err2 == nil {
+				return recoveredFacts, nil
 			}
 		}
 		return nil, fmt.Errorf("parse extracted facts: %w", err)

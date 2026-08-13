@@ -38,60 +38,86 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 		if len(s.Messages) == 0 {
 			return s, nil
 		}
-		tracer := otel.Tracer("stratum/agent")
 		last := s.Messages[len(s.Messages)-1]
 		for _, tc := range last.ToolCalls {
-			toolStart := time.Now()
-			provider := classifyToolProviderRef(tc, s)
-			argumentsPayload := observability.SafeTracePayload(tc.Arguments, constants.AgentToolTraceMaxRawJSONBytes)
-			toolAttributes := buildToolAttributes(tc, s, provider, argumentsPayload)
-			if !s.GovernedAssistant {
-				toolAttributes = append(toolAttributes, tracePayloadAttributes(
-					ctx, s.TracePayloadStore, s.TenantID, s.TraceID, "tool-arguments", tc.Arguments,
-				)...)
-			}
-			toolCtx, toolSpan := tracer.Start(ctx, "react.tool",
-				oteltrace.WithAttributes(toolAttributes...),
-			)
-			s.TraceEvents = append(s.TraceEvents, buildToolStartedEvent(s, tc, provider, toolStart))
-			result := dispatchToolCall(toolCtx, tc, &s, toolStart, provider, logger)
-			if tc.ID == s.PlanContinueCallID {
-				// 排程化的 continue：执行已在此完成（含 rev checkpoint），
-				// 波次观察由 finalize 节点在汇合后补全，这里跳过 observation
-				// 与直接消息追加；trace 与 AllToolCalls 审计保留。
-				toolSpan.End()
-				s.AllToolCalls = append(s.AllToolCalls, tc)
-				if result.fatalToolErr != nil {
-					return s, result.fatalToolErr
-				}
-				continue
-			}
-			if result.artifact != nil {
-				s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, *result.artifact)
-			}
-			recordToolErrorArtifact(&s, provider.CapabilityID, toolStart, result)
-			toolLatencyMs := time.Since(toolStart).Milliseconds()
-			recordToolSpanResult(toolSpan, result.errMsg, result.content, toolLatencyMs)
-			if !s.GovernedAssistant {
-				toolSpan.SetAttributes(tracePayloadAttributes(
-					toolCtx, s.TracePayloadStore, s.TenantID, s.TraceID, "tool-result", result.content,
-				)...)
-			}
-			appendToolObservation(&s, tc, provider, result, toolStart, toolLatencyMs)
-			appendToolTraceEvent(&s, tc, provider, result, toolStart, toolLatencyMs)
-			s.Messages = append(s.Messages, port.LLMMessage{
-				Role:       "tool",
-				Content:    result.content,
-				ToolCallID: tc.ID,
-			})
-			toolSpan.End()
-			s.AllToolCalls = append(s.AllToolCalls, tc)
-			if result.fatalToolErr != nil {
-				return s, result.fatalToolErr
+			var err error
+			s, err = executeToolCall(ctx, s, tc, capGW, logger)
+			if err != nil {
+				return s, err
 			}
 		}
 		return s, nil
 	}
+}
+
+// executeToolCall 处理一次工具调用的完整生命周期：止损检查、dispatch、
+// 统一失败计数（P2）、plan-continue 特判与观察/消息/trace 落盘。plan-continue
+// 的「跳过观察」语义在此内聚：返回 nil 即循环继续下个调用，等价原 continue。
+func executeToolCall(ctx context.Context, s ReActState, tc port.ToolCall, capGW port.CapabilityGateway, logger *zap.Logger) (ReActState, error) {
+	toolStart := time.Now()
+	// classifyToolProviderRef（PR #360 skill-paradigm）把统一 stratum_skill 工具
+	// 的观测归因到具体 skill；此处必须与其一致，保证止损/trace 归因正确。
+	provider := classifyToolProviderRef(tc, s)
+	// 止损：同一工具连续（同错指纹）失败达阈值后不再执行，直接返回观察让模型
+	// 换路。跳过真实调用，但消息配对完整（assistant tool_calls 后有对应 tool
+	// 消息），trace 与 AllToolCalls 保留。
+	if s.StopLossTools[tc.Name] {
+		content := fmt.Sprintf(constants.AgentToolStopLossObservation, tc.Name)
+		slResult := toolExecResult{content: content, status: domain.ToolTraceStatusSuccess}
+		appendToolObservation(&s, tc, provider, slResult, toolStart, 0)
+		appendToolTraceEvent(&s, tc, provider, slResult, toolStart, 0)
+		s.Messages = append(s.Messages, port.LLMMessage{Role: "tool", Content: content, ToolCallID: tc.ID})
+		s.AllToolCalls = append(s.AllToolCalls, tc)
+		return s, nil
+	}
+	tracer := otel.Tracer("stratum/agent")
+	argumentsPayload := observability.SafeTracePayload(tc.Arguments, constants.AgentToolTraceMaxRawJSONBytes)
+	toolAttributes := buildToolAttributes(tc, s, provider, argumentsPayload)
+	if !s.GovernedAssistant {
+		toolAttributes = append(toolAttributes, tracePayloadAttributes(
+			ctx, s.TracePayloadStore, s.TenantID, s.TraceID, "tool-arguments", tc.Arguments,
+		)...)
+	}
+	toolCtx, toolSpan := tracer.Start(ctx, "react.tool",
+		oteltrace.WithAttributes(toolAttributes...),
+	)
+	s.TraceEvents = append(s.TraceEvents, buildToolStartedEvent(s, tc, provider, toolStart))
+	result := dispatchToolCall(toolCtx, tc, &s, toolStart, provider, logger)
+	// 统一计数点：非 fatal 的 status==Error 都累计失败（fatal = 需人工审批、
+	// 知识版本失效等信号，不计入止损）。plan 校验失败走 recordCorrection
+	// （status=Success），此处不重复计数。
+	if result.fatalToolErr == nil && result.status == domain.ToolTraceStatusError {
+		s.recordToolFailure(tc.Name, result.errMsg)
+	}
+	if tc.ID == s.PlanContinueCallID {
+		// 排程化的 continue：执行已在此完成（含 rev checkpoint），波次观察由
+		// finalize 节点在汇合后补全，这里跳过 observation 与直接消息追加；
+		// trace 与 AllToolCalls 审计保留。
+		toolSpan.End()
+		s.AllToolCalls = append(s.AllToolCalls, tc)
+		return s, result.fatalToolErr
+	}
+	if result.artifact != nil {
+		s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, *result.artifact)
+	}
+	recordToolErrorArtifact(&s, provider.CapabilityID, toolStart, result)
+	toolLatencyMs := time.Since(toolStart).Milliseconds()
+	recordToolSpanResult(toolSpan, result.errMsg, result.content, toolLatencyMs)
+	if !s.GovernedAssistant {
+		toolSpan.SetAttributes(tracePayloadAttributes(
+			toolCtx, s.TracePayloadStore, s.TenantID, s.TraceID, "tool-result", result.content,
+		)...)
+	}
+	appendToolObservation(&s, tc, provider, result, toolStart, toolLatencyMs)
+	appendToolTraceEvent(&s, tc, provider, result, toolStart, toolLatencyMs)
+	s.Messages = append(s.Messages, port.LLMMessage{
+		Role:       "tool",
+		Content:    result.content,
+		ToolCallID: tc.ID,
+	})
+	toolSpan.End()
+	s.AllToolCalls = append(s.AllToolCalls, tc)
+	return s, result.fatalToolErr
 }
 
 func buildToolAttributes(tc port.ToolCall, s ReActState, provider toolProviderRef, argumentsPayload observability.TracePayload) []attribute.KeyValue {

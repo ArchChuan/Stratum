@@ -68,6 +68,7 @@ func (a memoryLLMAdapter) Complete(ctx context.Context, req *memport.CompletionR
 	}
 	response, err := a.client.Complete(ctx, &llmdomain.CompletionRequest{
 		Model: req.Model, Messages: messages, Temperature: float32(req.Temperature), MaxTokens: req.MaxTokens,
+		ResponseFormat: toLLMResponseFormat(req.ResponseFormat),
 	})
 	if err != nil {
 		return nil, err
@@ -76,6 +77,15 @@ func (a memoryLLMAdapter) Complete(ctx context.Context, req *memport.CompletionR
 		return nil, fmt.Errorf("memory llm adapter: provider returned nil response")
 	}
 	return &memport.CompletionResponse{Content: response.Content, CompletionTokens: response.Usage.CompletionTokens}, nil
+}
+
+// toLLMResponseFormat 把 memport 的本地 ResponseFormat 适配到 llmgateway domain
+// （DDD：memport 不能 import llmgateway domain，此转换只在组合根做一次）。
+func toLLMResponseFormat(rf *memport.ResponseFormat) *llmdomain.ResponseFormat {
+	if rf == nil {
+		return nil
+	}
+	return &llmdomain.ResponseFormat{Type: rf.Type}
 }
 
 // platformParameterReader adapts the parameters application service to the
@@ -143,8 +153,8 @@ func (c *Container) buildMemoryService(mem *Memory, db *pgxpool.Pool, memRepo me
 			extractParams = platformParameterReader{svc: c.Parameters.Service}
 		}
 		baseline := c.mechanismBaselineForTenant(c.Config.MemoryPipeline.EnrichModel)
-		mem.Service.SetLLMExtractResolver(makeLLMExtractResolver(llmRes, extractParams, baseline))
-		mem.Service.SetLLMSupersederResolver(makeLLMSupersederResolver(llmRes, baseline))
+		mem.Service.SetLLMExtractResolver(makeLLMExtractResolver(llmRes, extractParams, baseline, c.Logger))
+		mem.Service.SetLLMSupersederResolver(makeLLMSupersederResolver(llmRes, baseline, c.Logger))
 	}
 	if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 		mem.Service.SetEmbedClientResolver(makeEmbedClientResolver(c.Knowledge.EmbedResolver))
@@ -281,13 +291,13 @@ func (c *Container) attachPipelineDynamic(p *pipeline.Pipeline) {
 	p.WithDynamic(&dynamic)
 }
 
-func makeLLMExtractResolver(llmRes *tenantCapabilityResolver, params pipeline.PlatformParams, baseline memport.MechanismBaselineResolver) func(context.Context, string) memport.LLMExtractor {
+func makeLLMExtractResolver(llmRes *tenantCapabilityResolver, params pipeline.PlatformParams, baseline memport.MechanismBaselineResolver, logger *zap.Logger) func(context.Context, string) memport.LLMExtractor {
 	return func(ctx context.Context, tenantID string) memport.LLMExtractor {
 		llm := llmRes.ResolveLLM(ctx, tenantID)
 		if llm == nil {
 			return nil
 		}
-		extractor := pipeline.NewLLMExtractor(memoryLLMAdapter{client: llm, tenantID: tenantID})
+		extractor := pipeline.NewLLMExtractor(memoryLLMAdapter{client: llm, tenantID: tenantID}).WithLogger(logger)
 		extractor.SetPlatformParams(params)
 		if baseline != nil {
 			if b, err := baseline(ctx, tenantID); err == nil && b.MemoryExtraction != "" {
@@ -298,13 +308,13 @@ func makeLLMExtractResolver(llmRes *tenantCapabilityResolver, params pipeline.Pl
 	}
 }
 
-func makeLLMSupersederResolver(llmRes *tenantCapabilityResolver, baseline memport.MechanismBaselineResolver) func(context.Context, string) memport.LLMSuperseder {
+func makeLLMSupersederResolver(llmRes *tenantCapabilityResolver, baseline memport.MechanismBaselineResolver, logger *zap.Logger) func(context.Context, string) memport.LLMSuperseder {
 	return func(ctx context.Context, tenantID string) memport.LLMSuperseder {
 		llm := llmRes.ResolveLLM(ctx, tenantID)
 		if llm == nil {
 			return nil
 		}
-		superseder := memworkers.NewLLMSuperseder(memoryLLMAdapter{client: llm, tenantID: tenantID})
+		superseder := memworkers.NewLLMSuperseder(memoryLLMAdapter{client: llm, tenantID: tenantID}).WithLogger(logger)
 		if baseline != nil {
 			if b, err := baseline(ctx, tenantID); err == nil && b.MemorySupersede != "" {
 				superseder.WithJudgePrompt(b.MemorySupersede)
@@ -429,7 +439,7 @@ func appendTenantLLMWorkers(
 				b = bl
 			}
 		}
-		superseder := memworkers.NewResolvingLLMSuperseder(tenantID, resolver)
+		superseder := memworkers.NewResolvingLLMSuperseder(tenantID, resolver).WithLogger(logger)
 		if b.MemorySupersede != "" {
 			superseder.WithJudgePrompt(b.MemorySupersede)
 		}

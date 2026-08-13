@@ -37,6 +37,38 @@ const (
 	// DefaultStepMaxLLMSteps is the LLM budget for each sub-step ReAct execution.
 	DefaultStepMaxLLMSteps = 3
 
+	// AgentToolStopLossThreshold 是同一工具连续（同错指纹）失败触发止损的
+	// 阈值：达阈值后该工具不再执行，模型收到观察后换路。
+	AgentToolStopLossThreshold = 3
+	// AgentDegradeReasonStopLossPrefix 是止损降级原因枚举的前缀。固定枚举
+	// （"tool_stop_loss:<tool>"），禁止拼接 err.Error()——错误正文含
+	// plan_id/revision 等内部标识，透出前端违反「错误不落下游错误正文」。
+	AgentDegradeReasonStopLossPrefix = "tool_stop_loss:"
+	// AgentToolStopLossObservation 是止损后返回给模型的观察文案（%s = 工具名）。
+	AgentToolStopLossObservation = "Tool %s has been stopped after repeated validation failures. Use an alternative approach."
+	// AgentFinalAnswerInstruction 是 ReAct 达步数上限强制收尾的用户指令。
+	AgentFinalAnswerInstruction = "You have reached the maximum reasoning steps. Based on your analysis and tool results so far, provide your final answer now. Do not call any tools."
+	// AgentDegradedFinalAnswerInstruction 是降级执行的强制收尾指令：只基于已
+	// 确认事实回答，禁止声称完成了未验证的操作。
+	AgentDegradedFinalAnswerInstruction = "You have reached the maximum reasoning steps. Based on confirmed facts only, provide your final answer now. Do not claim operations that were not verified successfully. Do not call any tools."
+
+	// AgentFactCheckMaxClaims 是幻觉校验最多拆分的 claim 数（控成本，超出截断）。
+	// 一次 judge 调用批量判定全部 claim，claim 过多会拉长单次生成 → 超时降级；
+	// 4 条 + 30s 预算在 LLM-as-Judge 常见输出量下留足余量。
+	AgentFactCheckMaxClaims = 4
+	// AgentFactCheckTopK 是幻觉校验每个 claim 的 RAG 检索 topK。
+	AgentFactCheckTopK = 4
+	// AgentFactCheckTimeout 是单次幻觉校验的整体时间预算；judge/检索失败或超时
+	// 降级为「不校验」（nil），不阻塞 agent 执行。
+	AgentFactCheckTimeout = 30 * time.Second
+	// AgentFactCheckJudgeModel 是幻觉校验 LLM-as-Judge 的默认模型（独立接线，
+	// 不得静默回落 evaluation.judge.model）。
+	AgentFactCheckJudgeModel = "qwen-turbo"
+	// AgentFactCheckJudgeMaxTokens 是 judge 单次输出预算。1024 会被批量
+	// claim 判定截断（finish_reason=length → JSON 半截 → 解析失败降级）；
+	// 2048 覆盖 4 claims 的完整 verdict JSON 输出。
+	AgentFactCheckJudgeMaxTokens = 2048
+
 	DefaultPlanMaxNodes           = 10
 	DefaultPlanMaxRevisions       = 20
 	DefaultPlanMaxAttemptsPerNode = 3

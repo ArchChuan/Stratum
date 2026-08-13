@@ -189,14 +189,17 @@ func agentExecutionDonePayload(result *agent.AgentResult) []byte {
 		sources = []agentport.RAGSearchSource{}
 	}
 	payload, _ := json.Marshal(struct {
-		Done       bool                        `json:"done"`
-		Output     string                      `json:"output"`
-		Steps      int                         `json:"steps"`
-		TokensUsed int                         `json:"tokensUsed"`
-		Duration   string                      `json:"duration"`
-		Artifacts  []domain.ExecutionArtifact  `json:"artifacts"`
-		Sources    []agentport.RAGSearchSource `json:"sources"`
-	}{true, dto.Output, dto.Steps, dto.TokensUsed, dto.Duration, dto.Artifacts, sources})
+		Done          bool                        `json:"done"`
+		Output        string                      `json:"output"`
+		Steps         int                         `json:"steps"`
+		TokensUsed    int                         `json:"tokensUsed"`
+		Duration      string                      `json:"duration"`
+		Artifacts     []domain.ExecutionArtifact  `json:"artifacts"`
+		Sources       []agentport.RAGSearchSource `json:"sources"`
+		Degraded      bool                        `json:"degraded"`
+		DegradeReason string                      `json:"degradeReason,omitempty"`
+		FactCheck     *domain.FactCheckReport     `json:"factCheck,omitempty"`
+	}{true, dto.Output, dto.Steps, dto.TokensUsed, dto.Duration, dto.Artifacts, sources, result.Degraded, result.DegradeReason, result.FactCheck})
 	return payload
 }
 

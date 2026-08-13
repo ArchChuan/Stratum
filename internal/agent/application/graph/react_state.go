@@ -2,10 +2,12 @@ package graph
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 const (
@@ -135,6 +137,75 @@ type ReActState struct {
 	PlanWavePending    []int
 	PlanWaveOutcomes   []PlanWaveOutcome
 	PlanContinueCallID string
+
+	// CorrectionStreaks 记录每个工具连续失败次数（仅同错指纹累计），按工具名
+	// 键控。map 在子状态（plan 槽位子执行）间按引用共享——止损跨子节点全局
+	// 累计（3 节点各失败 1 次 = 全局 3 次）。
+	CorrectionStreaks map[string]int
+	// LastCorrectionFingerprint 是每个工具上次失败错误消息的规范化指纹；
+	// 仅当前指纹与上次相同才递增计数，否则重置为 1（真"同错重犯"才累计）。
+	LastCorrectionFingerprint map[string]string
+	// StopLossTools 标记已超过止损阈值的工具。非空即推导整体降级——bool
+	// Degraded 在子状态间值拷贝不传播，而 map 共享引用可传播到父图。
+	StopLossTools map[string]bool
+	// Degraded 标记本次执行因工具连续失败进入降级：强制收尾指令切换为降级
+	// 文案，最终回答不得声称完成了未验证的操作。
+	Degraded bool
+	// DegradeReason 是降级原因的固定枚举（如 "tool_stop_loss:<tool>"）。
+	// 禁止赋 err.Error()——错误正文含 plan_id/revision 等内部标识。
+	DegradeReason string
+}
+
+// countToolFailure 在工具失败处统一计数一次：先规范化错误消息取同错指纹，
+// 与上次相同才累计否则重置为 1；达 AgentToolStopLossThreshold 后标记
+// StopLossTools + Degraded + 固定枚举 DegradeReason。nil 安全：裸 ReActState{}
+// 构造（如 plan_tools_test 直接调用）不会 panic。
+func (s *ReActState) countToolFailure(toolName, errMsg string) {
+	if s.CorrectionStreaks == nil {
+		s.CorrectionStreaks = map[string]int{}
+	}
+	if s.LastCorrectionFingerprint == nil {
+		s.LastCorrectionFingerprint = map[string]string{}
+	}
+	if s.StopLossTools == nil {
+		s.StopLossTools = map[string]bool{}
+	}
+	fp := correctionFingerprint(errMsg)
+	if s.LastCorrectionFingerprint[toolName] == fp {
+		s.CorrectionStreaks[toolName]++
+	} else {
+		s.CorrectionStreaks[toolName] = 1
+	}
+	s.LastCorrectionFingerprint[toolName] = fp
+	if s.CorrectionStreaks[toolName] >= constants.AgentToolStopLossThreshold {
+		s.StopLossTools[toolName] = true
+		s.Degraded = true
+		if s.DegradeReason == "" {
+			s.DegradeReason = constants.AgentDegradeReasonStopLossPrefix + toolName
+		}
+	}
+}
+
+// recordToolFailure 是通用工具失败（result.status == Error）的统一计数入口，
+// 供 makeToolNode 在结果层面调用；fatal 错误（需人工审批、知识版本失效）由
+// 调用方跳过，不计入止损。
+func (s *ReActState) recordToolFailure(toolName, errMsg string) {
+	s.countToolFailure(toolName, errMsg)
+}
+
+// recordCorrection 在 plan 工具校验失败（correction 路径）处计数并返回
+// correction 文案。plan 校验失败在工具节点表现为 status=Success（correction
+// 作为观察返回，err 为 nil），通用 status==Error 计数点覆盖不到，必须在此
+// 计数，统一止损门才有数据。内容与 correction() 同源。
+func (s *ReActState) recordCorrection(toolName string, err error, plan *domain.Plan) string {
+	s.countToolFailure(toolName, err.Error())
+	return correction(toolName, err, plan)
+}
+
+// correctionFingerprint 规范化错误消息作为同错指纹：小写、去首尾空白、折叠
+// 连续空白，使格式差异不打断累计。仅用于同错比较，不落日志，无需截断防 PII。
+func correctionFingerprint(errMsg string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(errMsg))), " ")
 }
 
 // TokenRecorder 是 TokenLedger 的最小接口，供 graph 包使用，避免 import application 包循环。

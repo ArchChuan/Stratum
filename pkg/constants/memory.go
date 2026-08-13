@@ -150,6 +150,10 @@ const (
 	MemoryMinFactLength         = 10   // min chars for a valid fact
 	MemoryMaxFactLength         = 500  // max chars for a valid fact
 	MemoryExtractLLMMaxTokens   = 4096 // JSON array of facts; 1024 truncates large conversations
+	// MemoryMaxStructuredRetries 结构化 JSON 输出解析/校验失败后的带错重试次数
+	// （共 MemoryMaxStructuredRetries+1 次尝试）。每次重试把具体错误位置/值/原因
+	// 作为 system-role correction 丢回模型。provider 硬错误不消耗重试（fail-fast）。
+	MemoryMaxStructuredRetries = 2
 )
 
 // Memory Supersede - supersede detection thresholds

@@ -106,9 +106,16 @@ func (c *Chunker) findChunkBoundary(text string, start, end int) int {
 	return start + accumulatedLength
 }
 
+// SplitSentences 把文本切成句子（幻觉校验等按 claim 粒度拆分的公共入口）。
+// 委托零值 Chunker 的 splitSentences，无需 logger。
+func SplitSentences(text string) []string {
+	return (&Chunker{}).splitSentences(text)
+}
+
 func (c *Chunker) splitSentences(text string) []string {
 	var sentences []string
 	var currentSentence strings.Builder
+	var prev rune
 
 	for _, r := range text {
 		switch r {
@@ -120,8 +127,10 @@ func (c *Chunker) splitSentences(text string) []string {
 			}
 		case '.', '!', '?':
 			currentSentence.WriteRune(r)
-			// Check if this is likely end of a Latin sentence
-			if c.isLatinChar(r) {
+			// Latin 句末判定：检查标点前的字符是否 Latin 字母/数字。原实现检查
+			// 标点自身（isLatinChar('.')==false 恒不成立），英文永不切分，导致
+			// 英文输出退化成整块大 claim；跟踪前一 rune 后标点前是字母/数字才切。
+			if c.isLatinChar(prev) {
 				sentences = append(sentences, currentSentence.String())
 				currentSentence.Reset()
 			}
@@ -133,6 +142,7 @@ func (c *Chunker) splitSentences(text string) []string {
 		default:
 			currentSentence.WriteRune(r)
 		}
+		prev = r
 	}
 
 	if currentSentence.Len() > 0 {

@@ -111,3 +111,42 @@ func TestMemoryLLMAdapterEmptyTenantKeepsContextTenant(t *testing.T) {
 		t.Fatalf("gateway saw tenant %q, want existing ctx tenant %q", client.gotTenant, "ctx-tenant")
 	}
 }
+
+// requestCapturingGatewayCompleter 捕获传给 llmgateway 的完整请求（逐字段重建
+// 由 memoryLLMAdapter 完成，这里验证 response_format 透传）。
+type requestCapturingGatewayCompleter struct{ captured *llmdomain.CompletionRequest }
+
+func (c *requestCapturingGatewayCompleter) Complete(_ context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
+	cloned := *req
+	c.captured = &cloned
+	return &llmdomain.CompletionResponse{Usage: llmdomain.TokenUsage{CompletionTokens: 1}}, nil
+}
+
+func TestMemoryLLMAdapterForwardsResponseFormat(t *testing.T) {
+	t.Run("json_object passthrough", func(t *testing.T) {
+		client := &requestCapturingGatewayCompleter{}
+		adapter := memoryLLMAdapter{client: client}
+		if _, err := adapter.Complete(context.Background(), &memport.CompletionRequest{
+			ResponseFormat: &memport.ResponseFormat{Type: "json_object"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if client.captured == nil || client.captured.ResponseFormat == nil {
+			t.Fatalf("gateway request must carry response_format, got %#v", client.captured)
+		}
+		if client.captured.ResponseFormat.Type != "json_object" {
+			t.Fatalf("response_format type = %q, want json_object", client.captured.ResponseFormat.Type)
+		}
+	})
+
+	t.Run("nil stays nil", func(t *testing.T) {
+		client := &requestCapturingGatewayCompleter{}
+		adapter := memoryLLMAdapter{client: client}
+		if _, err := adapter.Complete(context.Background(), &memport.CompletionRequest{}); err != nil {
+			t.Fatal(err)
+		}
+		if client.captured == nil || client.captured.ResponseFormat != nil {
+			t.Fatalf("nil response_format must stay nil, got %#v", client.captured)
+		}
+	})
+}
