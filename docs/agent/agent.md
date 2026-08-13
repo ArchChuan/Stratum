@@ -113,6 +113,10 @@ type AgentConfig struct {
 
 生产 wiring 在每次执行解析租户 `CapabilityGateway` 后，用 Agent 配置的 LLM model 创建 `LLMHistoryCompactor`，再注入 `BaseAgent` 和 ReAct/Planning 状态。这样摘要调用沿用当前租户的 provider 与凭据，不会跨租户共享网关。压缩失败、工厂未配置或未注入时必须降级为硬截断/计数标记，不能阻断 Agent Loop；trace 与持久化会话历史保持完整，压缩只影响当次 LLM 请求副本。
 
+### Reasoning Effort 成本语义
+
+`AgentConfig.ReasoningEffort`（`low`/`medium`/`high`，空串=unset）控制思考强度，网关按模型能力门控映射：OpenAI 兼容直传 `reasoning_effort`，Anthropic 映射 `extended_thinking`（budget low=2000/medium=8000/high=20000，max_tokens 自动抬升保留输出空间）。**成本警告**：high 档位 token 消耗显著放大（Anthropic budget 20000；OpenAI 高阶推理模型 token 成本陡增），且当前无 `max_tokens_per_execution` 联动——多轮 ReAct 执行下单 Agent 可成倍烧 token，属成本 DoS 风险。本期仅文档化，不联动限流；上限控制依赖租户级 `max_tokens_per_execution` 配置与人工预算治理。能力门控为 fail-closed：未知模型或非推理模型清空档位，不默认放行。
+
 ## MCP Risk And Approval
 
 租户管理员为每个 `(server_id, tool_name)` 设置风险：`read`、`write_reversible`、`destructive`、`unclassified`。未配置或读取失败必须视为 `unclassified`。MCP discovery payload 不能设置受信风险。

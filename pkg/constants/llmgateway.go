@@ -13,6 +13,10 @@ const (
 	// ReasoningEffortLow/Medium/High 是思考强度的合法枚举值。空串表示 unset
 	// （与 Temperature 0=unset 同构）。非法值沿链路透传到严格端点会 400
 	// （永久错误中止整条 fallback 链），所有入口必须按此枚举校验。
+	// 成本语义：high 档位 token 消耗显著放大（Anthropic budget 20000、OpenAI
+	// 系高阶推理 token 成本陡增），且无 max_tokens_per_execution 联动——多
+	// 轮 ReAct 执行下单 Agent 可成倍烧 token，属成本 DoS 风险。本期仅文档化，
+	// 不联动限流；上限控制依赖租户级 max_tokens_per_execution 配置。
 	ReasoningEffortLow    = "low"
 	ReasoningEffortMedium = "medium"
 	ReasoningEffortHigh   = "high"
