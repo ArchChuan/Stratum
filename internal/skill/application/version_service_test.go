@@ -11,6 +11,20 @@ import (
 	"go.uber.org/zap"
 )
 
+// stubMCPPlatformGuard scripts MCPPlatformGuard lookups (managed maps serverID
+// to platform-managed; an absent key reads false, nil map is safe).
+type stubMCPPlatformGuard struct {
+	managed map[string]bool
+	err     error
+}
+
+func (g stubMCPPlatformGuard) IsPlatformManagedMCPServer(_ context.Context, _, serverID string) (bool, error) {
+	if g.err != nil {
+		return false, g.err
+	}
+	return g.managed[serverID], nil
+}
+
 func TestVersionServicePublishDistinguishesMissingDraft(t *testing.T) {
 	repo := newFakeVersionRepo()
 	repo.skills["published-skill"] = port.SkillProductRow{ID: "published-skill", Status: "published"}
@@ -28,6 +42,7 @@ func TestVersionServiceCreatesInstructionBundleDraft(t *testing.T) {
 	repo := newFakeVersionRepo()
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	svc.SetMCPPlatformGuard(stubMCPPlatformGuard{})
 	requirements := domain.Requirements{MCPToolIDs: []string{"mcp:orders:get_order"}}
 	view, err := svc.CreateSkillDraft(context.Background(), CreateSkillDraftInput{
 		Name: "投诉分类", Goal: "判断客户投诉类型", WhenToUse: "用户表达投诉时",

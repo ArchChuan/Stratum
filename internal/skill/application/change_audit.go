@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/skill/domain"
@@ -77,5 +78,5 @@ func skillSafeProjectionWithEditors(skill port.SkillProductRow, draft *domain.Sk
 // isBuiltinSkill identifies platform-seeded skills. Their lifecycle is managed
 // by the platform; tenant writes are rejected.
 func isBuiltinSkill(skillID string) bool {
-	return len(skillID) >= 7 && skillID[:7] == "builtin:"
+	return strings.HasPrefix(skillID, "builtin:")
 }

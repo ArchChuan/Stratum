@@ -32,7 +32,7 @@ type proposalAgentService interface {
 
 type proposalSkillService interface {
 	CreateSkillDraft(context.Context, skillapp.CreateSkillDraftInput) (skillapp.SkillWorkspaceView, error)
-	GetWorkspace(context.Context, string) (skillapp.SkillWorkspaceView, error)
+	GetWorkspace(context.Context, string, string) (skillapp.SkillWorkspaceView, error)
 	UpdateDraftBundle(context.Context, string, string, skillapp.UpdateDraftBundleInput) (skillapp.SkillWorkspaceView, error)
 }
 
@@ -112,7 +112,7 @@ func (a *ResourceChangeProposalAdapters) ResolveBaseline(
 		}
 		projection = agentChangeProjection(value)
 	case agentdomain.ResourceSkillDraft:
-		value, err := a.skills.GetWorkspace(ctx, proposal.ResourceID)
+		value, err := a.skills.GetWorkspace(ctx, proposal.ResourceID, proposal.ProposerID)
 		if err != nil {
 			return agentport.ResourceBaseline{}, err
 		}

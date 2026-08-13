@@ -10,6 +10,33 @@ import (
 	"go.uber.org/zap"
 )
 
+// stubSystemResourceGuard scripts SystemResourceGuard lookups: platform sets
+// default to empty (isolation semantics off for legacy tests that only
+// exercise assembly paths), error fields force the fail-closed paths.
+type stubSystemResourceGuard struct {
+	platformMCP []string
+	platformWS  []string
+	mcpErr      error
+	wsErr       error
+}
+
+func (g stubSystemResourceGuard) IsPlatformManagedMCPServer(_ context.Context, _, serverID string) (bool, error) {
+	for _, id := range g.platformMCP {
+		if id == serverID {
+			return true, nil
+		}
+	}
+	return false, g.mcpErr
+}
+
+func (g stubSystemResourceGuard) PlatformManagedMCPServerIDs(_ context.Context, _ string) ([]string, error) {
+	return g.platformMCP, g.mcpErr
+}
+
+func (g stubSystemResourceGuard) PlatformManagedWorkspaceIDs(_ context.Context, _ string) ([]string, error) {
+	return g.platformWS, g.wsErr
+}
+
 func TestParseAgentTypeWireIsCompatibilityOnly(t *testing.T) {
 	for _, value := range []string{"react", "planning", "cot", "tool_calling", "rag", "swarm", "legacy"} {
 		if got := parseAgentTypeWire(value); got != domain.ReActAgent {
@@ -111,12 +138,17 @@ type knowledgeRevisionSearchFake struct {
 	// viewerID records the identity passed to SearchKnowledgeRevision so the
 	// D3 gate regression test can assert the viewer identity survives wiring.
 	viewerID string
+	// mutableWorkspaces records the workspaces handed to SearchKnowledge so
+	// the runtime-sanitize re-intersection test can assert the platform
+	// workspace never reaches the live search provider.
+	mutableWorkspaces []string
 }
 
 func (f *knowledgeRevisionSearchFake) SearchKnowledge(
-	context.Context, string, []string, string, int, string,
+	_ context.Context, _ string, workspaces []string, _ string, _ int, _ string,
 ) (string, error) {
 	f.mutableCalls++
+	f.mutableWorkspaces = append([]string(nil), workspaces...)
 	return "", errors.New("mutable knowledge search must not be used")
 }
 
@@ -209,6 +241,7 @@ func TestAssembleOptionsPinsKnowledgeExperimentRevisionForTraceAndSearch(t *test
 	svc := NewAgentService(AgentServiceDeps{
 		KnowledgeRevisionResolver: resolver,
 		RAGSearch:                 search,
+		SystemResourceGuard:       stubSystemResourceGuard{},
 	})
 	agent := &optionCaptureAgent{config: &domain.AgentConfig{
 		ID: "agent-1", MaxIterations: 3, KnowledgeWorkspaceIDs: []string{"workspace-1"},
@@ -247,7 +280,8 @@ func TestAssembleOptionsClassifiesKnowledgeRevisionSearchFailure(t *testing.T) {
 		KnowledgeRevisionResolver: &knowledgeRevisionResolverFake{assignment: port.KnowledgeRevisionAssignment{
 			Revision: revision, ExperimentID: "experiment-1", Variant: "canary",
 		}},
-		RAGSearch: search,
+		RAGSearch:           search,
+		SystemResourceGuard: stubSystemResourceGuard{},
 	})
 	agent := &optionCaptureAgent{config: &domain.AgentConfig{
 		ID: "agent-1", MaxIterations: 3, KnowledgeWorkspaceIDs: []string{"workspace-1"},
@@ -277,7 +311,7 @@ func TestAssembleOptionsLoadsPinnedKnowledgeRevisionWithoutReassignment(t *testi
 		Reranking: "none", QueryRewrite: "none",
 	}
 	resolver := &knowledgeRevisionResolverFake{assignment: port.KnowledgeRevisionAssignment{Revision: revision}}
-	svc := NewAgentService(AgentServiceDeps{KnowledgeRevisionResolver: resolver, RAGSearch: &knowledgeRevisionSearchFake{}})
+	svc := NewAgentService(AgentServiceDeps{KnowledgeRevisionResolver: resolver, RAGSearch: &knowledgeRevisionSearchFake{}, SystemResourceGuard: stubSystemResourceGuard{}})
 	agent := &optionCaptureAgent{config: &domain.AgentConfig{
 		ID: "agent-1", MaxIterations: 3, KnowledgeWorkspaceIDs: []string{"workspace-1"},
 		KnowledgeWorkspaceNames: []string{"Knowledge One"},
@@ -416,6 +450,7 @@ func TestAssembleOptionsPinsMCPExperimentRevisionForTraceAndExecution(t *testing
 		MCPToolExecutor: executor, ToolAuthorizer: NewToolAuthorizer(stubToolUserScopeResolver{
 			scope: port.ToolUserScope{UserActive: true, AllowsTool: true},
 		}),
+		SystemResourceGuard: stubSystemResourceGuard{},
 	})
 	a := &optionCaptureAgent{config: &domain.AgentConfig{
 		ID: "agent-1", MaxIterations: 3, MCPToolIDs: []string{"mcp:server-1:lookup"},
@@ -496,6 +531,7 @@ func TestAssembleOptionsFailsClosedWhenExperimentAssignmentFails(t *testing.T) {
 	wantErr := errors.New("experiment store unavailable")
 	svc := NewAgentService(AgentServiceDeps{
 		SkillRevisionResolver: failingExperimentRevisionResolver{err: wantErr},
+		SystemResourceGuard:   stubSystemResourceGuard{},
 	})
 	a := &optionCaptureAgent{config: &domain.AgentConfig{
 		ID: "agent-1", MaxIterations: 3, AllowedSkills: []string{"skill-1"},
@@ -513,6 +549,7 @@ func TestAssembleOptionsFailsClosedWhenExperimentRevisionLoadFails(t *testing.T)
 	wantErr := errors.New("revision store unavailable")
 	svc := NewAgentService(AgentServiceDeps{
 		SkillActivationResolver: failingSkillActivationResolver{err: wantErr},
+		SystemResourceGuard:     stubSystemResourceGuard{},
 	})
 	a := &optionCaptureAgent{config: &domain.AgentConfig{
 		ID: "agent-1", MaxIterations: 3, AllowedSkills: []string{"skill-1"},
@@ -530,6 +567,7 @@ func TestAssembleOptionsAttributesEveryExperimentDeterministically(t *testing.T)
 	svc := NewAgentService(AgentServiceDeps{
 		SkillRevisionResolver:   multiExperimentRevisionResolver{},
 		SkillActivationResolver: multiExperimentActivationResolver{},
+		SystemResourceGuard:     stubSystemResourceGuard{},
 	})
 	a := &optionCaptureAgent{config: &domain.AgentConfig{
 		ID:            "agent-1",

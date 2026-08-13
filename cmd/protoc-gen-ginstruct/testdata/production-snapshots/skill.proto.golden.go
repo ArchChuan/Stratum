@@ -53,6 +53,7 @@ type SkillProductResponse struct {
 	Status           string `json:"status"`
 	ActiveRevisionID string `json:"activeRevisionId,omitempty"`
 	DraftRevisionID  string `json:"draftRevisionId,omitempty"`
+	IsSystem         bool   `json:"isSystem"`
 }
 
 type SkillRevisionResponse struct {

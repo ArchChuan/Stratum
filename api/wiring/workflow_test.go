@@ -10,17 +10,19 @@ import (
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
+	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
 	workflowport "github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/stretchr/testify/require"
 )
 
 type workflowAgentServiceFake struct {
-	agentID string
-	req     agentapp.ExecRequest
-	meta    agentapp.ExecMeta
-	tokens  []string
-	result  *agentapp.AgentResult
+	agentID       string
+	req           agentapp.ExecRequest
+	meta          agentapp.ExecMeta
+	tokens        []string
+	result        *agentapp.AgentResult
+	scenarioCalls int
 }
 
 func (f *workflowAgentServiceFake) Execute(_ context.Context, agentID string, req agentapp.ExecRequest, meta agentapp.ExecMeta) (*agentapp.AgentResult, int, error) {
@@ -30,6 +32,7 @@ func (f *workflowAgentServiceFake) Execute(_ context.Context, agentID string, re
 
 func (f *workflowAgentServiceFake) ExecuteSkillScenario(_ context.Context, agentID string, req agentapp.ExecRequest, meta agentapp.ExecMeta, activations []agentport.SkillActivation) (*agentapp.AgentResult, int, error) {
 	f.agentID, f.req, f.meta = agentID, req, meta
+	f.scenarioCalls++
 	revision := ""
 	if len(activations) > 0 {
 		revision = activations[0].RevisionID
@@ -111,6 +114,16 @@ func TestWorkflowSkillExecutorUsesPinnedRevision(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "revision-9", output)
 	require.Equal(t, "query", agents.req.Query)
+}
+
+// TestWorkflowSkillExecutorRejectsBuiltinSkill:内置 skill 仅系统助手可执行,
+// ExecuteSkill 入口 fail-closed 拒 builtin skillID,ExecuteSkillScenario 不被调用。
+func TestWorkflowSkillExecutorRejectsBuiltinSkill(t *testing.T) {
+	agents := &workflowAgentServiceFake{}
+	executor := workflowSkillExecutor{agents: agents, versions: workflowSkillVersionsFake{}}
+	_, _, err := executor.ExecuteSkill(context.Background(), "tenant-1", "agent-1", "builtin:platform-guide", "revision-9", "query")
+	require.ErrorIs(t, err, skilldomain.ErrPlatformManagedSkill)
+	require.Zero(t, agents.scenarioCalls, "builtin skill must not reach ExecuteSkillScenario")
 }
 
 type workflowMCPPolicyFake struct{ risk mcpdomain.ToolRiskLevel }

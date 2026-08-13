@@ -39,15 +39,42 @@ type DefinitionService struct {
 	definitions port.DefinitionRepository
 	versions    port.VersionRepository
 	newID       func() string
+	skillRefs   port.SkillRefClassifier
 }
 
 func NewDefinitionService(definitions port.DefinitionRepository, versions port.VersionRepository, newID func() string) *DefinitionService {
 	return &DefinitionService{definitions: definitions, versions: versions, newID: newID}
 }
 
+// SetSkillRefClassifier 注入 skill 引用判定器;传 nil 恢复默认 fail-closed
+// (skill 节点在无法判定时被拒绝),禁止漏接线导致内置 skill 定义静默保存。
+func (s *DefinitionService) SetSkillRefClassifier(c port.SkillRefClassifier) {
+	s.skillRefs = c
+}
+
+// validateSkillRefs 拒绝引用系统内置 skill 的 workflow 节点。classifier 未
+// 注入时对 skill 节点 fail closed(未知即拒绝),非 skill 节点不受影响。
+func (s *DefinitionService) validateSkillRefs(spec domain.Spec) error {
+	for _, n := range spec.Nodes {
+		if n.Type != domain.NodeTypeSkill {
+			continue
+		}
+		if s.skillRefs == nil {
+			return fmt.Errorf("workflow: skill node %q: skill reference classifier not wired: %w", n.ID, domain.ErrPlatformManagedSkill)
+		}
+		if s.skillRefs.IsBuiltinSkill(n.SkillID) {
+			return fmt.Errorf("workflow: skill node %q references platform-managed skill %q: %w", n.ID, n.SkillID, domain.ErrPlatformManagedSkill)
+		}
+	}
+	return nil
+}
+
 func (s *DefinitionService) Create(ctx context.Context, tenantID string, cmd CreateDefinitionCommand) (*domain.Definition, error) {
 	definition, err := domain.NewDefinition(s.newID(), cmd.Name, cmd.Description, cmd.Spec, normalizeInputSchema(cmd.InputSchema))
 	if err != nil {
+		return nil, err
+	}
+	if err := s.validateSkillRefs(cmd.Spec); err != nil {
 		return nil, err
 	}
 	if err := s.definitions.CreateDefinition(ctx, tenantID, definition); err != nil {
@@ -62,6 +89,9 @@ func (s *DefinitionService) Update(ctx context.Context, tenantID, id string, cmd
 		return nil, err
 	}
 	if err := definition.UpdateDraft(cmd.Name, cmd.Description, cmd.Spec, cmd.ExpectedRevision, normalizeInputSchema(cmd.InputSchema)); err != nil {
+		return nil, err
+	}
+	if err := s.validateSkillRefs(cmd.Spec); err != nil {
 		return nil, err
 	}
 	if err := s.definitions.UpdateDefinition(ctx, tenantID, definition, cmd.ExpectedRevision); err != nil {
