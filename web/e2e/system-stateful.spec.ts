@@ -183,7 +183,8 @@ const executePack = async (
     return;
   }
   if (pack === 'agent-skill-mcp') {
-    completedActions.push(...await executeAgentSkillMCPPack({ actor: actors.tenantAdmin, approver: actors.memberA, pool, evidence, webURL, fixtureURL, backendURL }));
+    // 自审批保护要求审批人 ≠ 发起人：发起（tenantAdmin）+ 批准（systemAdmin 入租户为 owner）双 actor。
+    completedActions.push(...await executeAgentSkillMCPPack({ actor: actors.tenantAdmin, approver: actors.systemAdmin, pool, evidence, webURL, fixtureURL, backendURL }));
     return;
   }
   if (pack === 'workflow') {
@@ -217,11 +218,13 @@ const executePack = async (
     return;
   }
   if (pack === 'prompt') {
-    completedActions.push(...await executePromptPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    // /prompts 收紧为仅 global admin 可访问,执行 actor 必须带 global_role='global_admin'。
+    completedActions.push(...await executePromptPack({ actor: actors.systemAdmin, pool, evidence, webURL }));
     return;
   }
   if (pack === 'audit') {
-    completedActions.push(...await executeAuditPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    // /audit 收紧为仅 global admin 可访问,执行 actor 必须带 global_role='global_admin'。
+    completedActions.push(...await executeAuditPack({ actor: actors.systemAdmin, pool, evidence, webURL }));
     return;
   }
   if (pack === 'llm-admin') {

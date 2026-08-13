@@ -1,7 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 import type { QueryResultRow } from 'pg';
 
-import type { BrowserActor } from '../core/actors';
+import { restoreActorSession, type BrowserActor } from '../core/actors';
 import { addGeneratedActorMembership, configureManagedModels, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
 import type { EvidenceRecord } from '../core/evidence';
 import { openAgentCreation } from '../core/navigation';
@@ -42,21 +42,8 @@ export const executeAgentSkillMCPPack = async ({
 }: CrossPackContext): Promise<string[]> => {
   const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
   await configureManagedModels(pool, tenantID, fixtureURL, actor.accessToken ?? '', backendURL);
-  // D10 自审批规则（tool_approval_service.go Decide）禁止执行者批准自己触发的
-  // agent 工具审批。fixture 各 guest 独占租户，无同租户第二管理员——把 approver
-  // （memberA）以 owner 角色 upsert 进执行者租户，并以其身份发出 decision，验证
-  // 真实的分离职责审批流程。upsert（而非 DO NOTHING）：soak 模式下 operation-gate/
-  // collab 等 pack 可能先以 member 角色写入同一行，DO NOTHING 会保留 member 导致
-  // requireAdmin 403。
-  const approverUserID = requireUUID(approver.userID ?? '', 'approver_user_id');
-  await addGeneratedActorMembership(pool, tenantID, approverUserID, 'owner');
-  const switched = await approver.context.request.post(`${backendURL}/auth/switch-tenant`, {
-    data: { tenant_id: tenantID },
-    headers: { Authorization: `Bearer ${approver.accessToken ?? ''}` },
-  });
-  expect(switched.status()).toBe(200);
-  const approverToken = (await switched.json() as { access_token: string }).access_token;
   const page = await actor.context.newPage();
+  let approverPage: Page | null = null;
   const suffix = Date.now();
   const serverName = `E2E-Cross-MCP-${suffix}`;
   const skillName = `E2E-Cross-Skill-${suffix}`;
@@ -144,23 +131,32 @@ export const executeAgentSkillMCPPack = async ({
     await page.getByRole('button', { name: '发送消息' }).click();
     await expect(page.getByText('工具 stateful_echo 等待审批', { exact: true })).toBeVisible({ timeout: 120_000 });
 
-    const decisionResponse = page.waitForResponse((response) => (
+    // 自审批保护（Decide 校验 actor != payload.UserID）：审批必须由发起者之外的
+    // admin/owner 决定。approver（systemAdmin）以 owner 身份加入本租户后经真实
+    // switch-tenant 切换会话批准。传展开对象避免污染 actors.systemAdmin 的 tenantID。
+    const approverID = requireUUID(approver.userID ?? '', 'user_id');
+    await addGeneratedActorMembership(pool, tenantID, approverID, 'owner');
+    await restoreActorSession({ ...approver, tenantID }, backendURL);
+    approverPage = await approver.context.newPage();
+    // 新页面尚未导航到同源 origin，直接读写 sessionStorage 会被拒绝；先访问首页建立同源会话。
+    await approverPage.goto(`${webURL}/`);
+    await approverPage.evaluate((id) => sessionStorage.setItem('chat:lastAgentId', id), agentID);
+    await approverPage.goto(`${webURL}/chat`);
+    await expect(approverPage.getByText('工具 stateful_echo 等待审批', { exact: true })).toBeVisible({ timeout: 120_000 });
+
+    const decisionResponse = approverPage.waitForResponse((response) => (
       /\/agents\/tool-approvals\/[^/]+\/decision$/.test(new URL(response.url()).pathname)
       && response.request().method() === 'POST'
     ));
-    const resumeResponse = page.waitForResponse((response) => (
+    const resumeResponse = approverPage.waitForResponse((response) => (
       /\/agents\/tool-approvals\/[^/]+\/resume$/.test(new URL(response.url()).pathname)
       && response.request().method() === 'POST'
     ));
-    // decision 以 approver（同租户第二 owner）身份发出，规避 D10 自审批；resume 无身份限制，仍走执行者会话。
-    await page.route('**/agents/tool-approvals/*/decision', async (route) => {
-      const response = await route.fetch({ headers: { Authorization: `Bearer ${approverToken}` } });
-      await route.fulfill({ response });
-    });
-    await page.getByRole('button', { name: '批准并继续' }).click();
+    await approverPage.getByRole('button', { name: '批准并继续' }).click();
     expect((await decisionResponse).status()).toBe(200);
     expect((await resumeResponse).status()).toBe(200);
-    await expect(page.getByText('stateful sync completed', { exact: true }).last()).toBeVisible({ timeout: 120_000 });
+    // resume 同步返回执行结果，handleApprove 把输出追加到 approverPage 会话。
+    await expect(approverPage.getByText('stateful sync completed', { exact: true }).last()).toBeVisible({ timeout: 120_000 });
     const approvals = await rows<{ status: string }>(pool, tenantID,
       'SELECT status FROM agent_tool_approvals WHERE agent_id=$1 ORDER BY created_at DESC LIMIT 1', [agentID]);
     expect(approvals).toEqual([{ status: 'executed' }]);
@@ -190,14 +186,7 @@ export const executeAgentSkillMCPPack = async ({
       'SELECT count(*)::text AS count FROM mcp_configs WHERE id=$1', [serverID])).toEqual([{ count: '0' }]);
   } finally {
     await page.close();
-    // 恢复 approver 在目标租户的 canonical 'member' 角色，而不是删除 membership。
-    // operation-gate/collab 会 upsert memberA 为 tenantAdmin 租户的 'member' 并
-    // 把 actor.tenantID 指向该租户（collab.ts:106 / operation-gate.ts:92）；soak
-    // 随机顺序下 agent-skill-mcp 可能先执行，若 finally 直接 DELETE 该 membership，
-    // 后续 restoreActorSession(memberA) switch 到 tenantAdmin 租户会 403
-    // "not a member"。降回 member 既撤销本 pack 的临时 owner 提升，又保持
-    // 跨 pack 的 member 成员关系不变（残留由 deleteGeneratedActors 级联清理）。
-    await addGeneratedActorMembership(pool, tenantID, approverUserID, 'member');
+    if (approverPage) await approverPage.close();
   }
   return [
     'agent.mutation.post.agents.tool.approvals.id.decision',

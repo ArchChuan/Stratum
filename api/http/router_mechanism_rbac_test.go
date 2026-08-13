@@ -7,9 +7,12 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/api/wiring"
+	iamdomain "github.com/byteBuilderX/stratum/internal/iam/domain"
+	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
 	iamtoken "github.com/byteBuilderX/stratum/internal/iam/infrastructure/token"
 	mechanismapp "github.com/byteBuilderX/stratum/internal/mechanism/application"
 	mechanismdomain "github.com/byteBuilderX/stratum/internal/mechanism/domain"
@@ -50,8 +53,20 @@ func (f *mechanismRepoFake) Upsert(_ context.Context, p mechanismdomain.Profile)
 	return nil
 }
 
+// signGlobalAdminToken 签发带 global_role='global_admin' 的 JWT,
+// 用于覆盖「仅平台管理员可管理机制档案/矩阵」的权限链。
+func signGlobalAdminToken(t *testing.T, svc iamport.TokenService, tenantID, role string) string {
+	t.Helper()
+	token, err := svc.Sign(iamport.TokenClaims{Sub: "user-1", TenantID: tenantID, Role: role,
+		SystemRole: iamdomain.SystemRoleUser, GlobalRole: "global_admin", JTI: tenantID + role + "-ga"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
 // TestMechanismProfilesRBAC 验证 /mechanism/profiles 的权限链：
-// JWT → 租户上下文 → RequireTenantRole(admin) → RequireDefaultTenant → requireActive。
+// JWT → 租户上下文 → RequireGlobalAdmin → requireActive。
 // 与 registerMechanism 的真实挂载（protectedTenantMiddleware + profiles.Use(requireActive)）一致。
 func TestMechanismProfilesRBAC(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -79,16 +94,24 @@ func TestMechanismProfilesRBAC(t *testing.T) {
 	}
 	registerMechanism(r, c, requireActive)
 
-	// 默认租户 admin 可读可写（管理面依附默认租户迭代机制参数）。
-	platformAdmin := signEvaluationToken(t, tokens, "tenant_default", "admin")
+	// global admin（users.global_role='global_admin'）可读可写。
+	platformAdmin := signGlobalAdminToken(t, tokens, "tenant_default", "admin")
 	rec := performEvaluationRequest(r, http.MethodGet, "/mechanism/profiles", platformAdmin, "", nil)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("default tenant admin GET: status=%d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("global admin GET: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	rec = performEvaluationRequest(r, http.MethodPut, "/mechanism/profiles", platformAdmin, "",
 		strings.NewReader(`{"family_key":"glm","family_prefixes":["glm"]}`))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("default tenant admin PUT: status=%d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("global admin PUT: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// 默认租户 admin（无 global_role）被 RequireGlobalAdmin 拦截：平台管理面不再
+	// 向租户 admin 开放。
+	tenantAdmin := signEvaluationToken(t, tokens, "tenant_default", "admin")
+	rec = performEvaluationRequest(r, http.MethodGet, "/mechanism/profiles", tenantAdmin, "", nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("default tenant admin GET: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
 	// 默认租户 member 被角色门槛拦截。
@@ -98,7 +121,7 @@ func TestMechanismProfilesRBAC(t *testing.T) {
 		t.Fatalf("default tenant member GET: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	// 非默认租户 admin 被 RequireDefaultTenant 拦截（普通租户不参与机制管理）。
+	// 非默认租户 admin 同样被 RequireGlobalAdmin 拦截（普通租户不参与机制管理）。
 	otherAdmin := signEvaluationToken(t, tokens, "tenant-1", "admin")
 	for _, method := range []string{http.MethodGet, http.MethodPut} {
 		rec = performEvaluationRequest(r, method, "/mechanism/profiles", otherAdmin, "",
@@ -114,8 +137,9 @@ func TestMechanismProfilesRBAC(t *testing.T) {
 		t.Fatalf("unauthenticated GET: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	// 停用租户（default）读写均被 requireActive 拦截。
-	inactive := signEvaluationToken(t, tokens, "tenant_default", "admin")
+	// 停用租户（default）读写均被 requireActive 拦截。inactive 用例必须用 global
+	// admin token——否则会先在角色检查 403，测不到 requireActive 本身。
+	inactive := signGlobalAdminToken(t, tokens, "tenant_default", "admin")
 	for _, method := range []string{http.MethodGet, http.MethodPut} {
 		rec = performEvaluationRequest(r, method, "/mechanism/profiles", inactive, "inactive",
 			strings.NewReader(`{"family_key":"glm","family_prefixes":["glm"]}`))
@@ -146,7 +170,7 @@ func (f *matrixEvaluatorFake) LatestMatrixRuns(context.Context, string, []string
 }
 
 // TestMechanismMatrixRBAC 验证 /mechanism/matrix 的权限链与档案管理同门槛：
-// JWT → 租户上下文 → RequireTenantRole(admin) → RequireDefaultTenant → requireActive。
+// JWT → 租户上下文 → RequireGlobalAdmin → requireActive。
 // 矩阵组仅在 Matrix 装配后挂载（evaluation 缺库 → 端点 404，而非空报告降级）。
 func TestMechanismMatrixRBAC(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -175,20 +199,27 @@ func TestMechanismMatrixRBAC(t *testing.T) {
 	}
 	registerMechanism(r, c, requireActive)
 
-	// 默认租户 admin：报告可读、评测可触发、draft 档案可采纳。
-	platformAdmin := signEvaluationToken(t, tokens, "tenant_default", "admin")
+	// global admin：报告可读、评测可触发、draft 档案可采纳。
+	platformAdmin := signGlobalAdminToken(t, tokens, "tenant_default", "admin")
 	rec := performEvaluationRequest(r, http.MethodGet, "/mechanism/matrix", platformAdmin, "", nil)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("default tenant admin GET: status=%d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("global admin GET: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	rec = performEvaluationRequest(r, http.MethodPost, "/mechanism/matrix/runs", platformAdmin, "", nil)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("default tenant admin POST runs: status=%d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("global admin POST runs: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	rec = performEvaluationRequest(r, http.MethodPost, "/mechanism/matrix/adopt", platformAdmin, "",
 		strings.NewReader(`{"family_key":"qwen"}`))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("default tenant admin POST adopt: status=%d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("global admin POST adopt: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// 默认租户 admin（无 global_role）被 RequireGlobalAdmin 拦截。
+	tenantAdmin := signEvaluationToken(t, tokens, "tenant_default", "admin")
+	rec = performEvaluationRequest(r, http.MethodGet, "/mechanism/matrix", tenantAdmin, "", nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("default tenant admin GET: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
 	// 默认租户 member 被角色门槛拦截。
@@ -198,7 +229,7 @@ func TestMechanismMatrixRBAC(t *testing.T) {
 		t.Fatalf("default tenant member GET: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	// 非默认租户 admin 被 RequireDefaultTenant 拦截。
+	// 非默认租户 admin 同样被 RequireGlobalAdmin 拦截。
 	otherAdmin := signEvaluationToken(t, tokens, "tenant-1", "admin")
 	rec = performEvaluationRequest(r, http.MethodGet, "/mechanism/matrix", otherAdmin, "", nil)
 	if rec.Code != http.StatusForbidden {
@@ -211,8 +242,9 @@ func TestMechanismMatrixRBAC(t *testing.T) {
 		t.Fatalf("unauthenticated GET: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	// 停用租户被 requireActive 拦截。
-	inactive := signEvaluationToken(t, tokens, "tenant_default", "admin")
+	// 停用租户被 requireActive 拦截。inactive 用例必须用 global admin token——
+	// 否则会先在角色检查 403，测不到 requireActive 本身。
+	inactive := signGlobalAdminToken(t, tokens, "tenant_default", "admin")
 	rec = performEvaluationRequest(r, http.MethodGet, "/mechanism/matrix", inactive, "inactive", nil)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("inactive GET: status=%d body=%s", rec.Code, rec.Body.String())
