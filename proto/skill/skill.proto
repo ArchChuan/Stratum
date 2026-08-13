@@ -61,6 +61,8 @@ message SkillProductResponse {
   string activeRevisionId = 5;
   // @omitempty
   string draftRevisionId = 6;
+  // isSystem 标记系统内置 skill(builtin: 前缀),供前端按普通 agent / 系统助手条件过滤。
+  bool isSystem = 7;
 }
 
 message SkillRevisionResponse {

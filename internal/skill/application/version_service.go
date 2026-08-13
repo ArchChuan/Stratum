@@ -86,6 +86,7 @@ type VersionService struct {
 	roles            port.TenantRoleResolver
 	editorRepo       port.SkillResourceEditorRepo
 	bindingValidator port.WorkspaceBindingValidator
+	mcpGuard         port.MCPPlatformGuard
 }
 
 func NewVersionService(repo port.VersionRepo, logger *zap.Logger) *VersionService {
@@ -108,6 +109,11 @@ func (s *VersionService) SetWorkspaceBindingValidator(v port.WorkspaceBindingVal
 	s.bindingValidator = v
 }
 
+// SetMCPPlatformGuard injects the platform-managed MCP server check backing
+// draft requirements MCP bindings. A nil guard rejects every non-empty MCP
+// binding (fail closed).
+func (s *VersionService) SetMCPPlatformGuard(g port.MCPPlatformGuard) { s.mcpGuard = g }
+
 // validateWorkspaceBindings fails closed (D10): an un-wired validator or an
 // unknown workspace ID rejects the binding. Empty lists pass trivially —
 // no bindings to verify.
@@ -119,6 +125,32 @@ func (s *VersionService) validateWorkspaceBindings(ctx context.Context, workspac
 		return fmt.Errorf("skill: workspace binding validation unavailable (validator not wired)")
 	}
 	return s.bindingValidator.ValidateWorkspaceBindings(ctx, reqctx.TenantIDFromContext(ctx), workspaceIDs)
+}
+
+// validateRequirementsMCPBindings 拒绝 requirements 引用平台托管 MCP server
+// (写路径 fail closed,与 agent 挂载校验同构)。MCP tool id 形如
+// mcp:<server>:<tool>;畸形/空段 id 维持现状不 reject 且显式跳过 guard 查询。
+func (s *VersionService) validateRequirementsMCPBindings(ctx context.Context, r domain.Requirements) error {
+	if len(r.MCPToolIDs) == 0 {
+		return nil
+	}
+	if s.mcpGuard == nil {
+		return fmt.Errorf("skill: MCP binding validation unavailable (guard not wired)")
+	}
+	for _, toolID := range r.MCPToolIDs {
+		parts := strings.Split(toolID, ":")
+		if len(parts) != 3 || parts[0] != "mcp" || parts[1] == "" || parts[2] == "" {
+			continue
+		}
+		managed, err := s.mcpGuard.IsPlatformManagedMCPServer(ctx, reqctx.TenantIDFromContext(ctx), parts[1])
+		if err != nil {
+			return fmt.Errorf("skill: MCP binding validation for server %q: %w", parts[1], err)
+		}
+		if managed {
+			return fmt.Errorf("skill: MCP server %q is platform-managed and cannot be bound: %w", parts[1], domain.ErrPlatformManagedMCPServerBinding)
+		}
+	}
+	return nil
 }
 
 func (s *VersionService) CreateSkillDraft(ctx context.Context, in CreateSkillDraftInput) (SkillWorkspaceView, error) {
@@ -154,6 +186,9 @@ func (s *VersionService) CreateSkillDraft(ctx context.Context, in CreateSkillDra
 		Requirements: in.Requirements,
 	}
 	if err := s.validateWorkspaceBindings(ctx, in.Requirements.KnowledgeWorkspaceIDs); err != nil {
+		return SkillWorkspaceView{}, err
+	}
+	if err := s.validateRequirementsMCPBindings(ctx, in.Requirements); err != nil {
 		return SkillWorkspaceView{}, err
 	}
 	contentHash, err := draft.ComputeContentHash()
@@ -240,10 +275,13 @@ func (s *VersionService) loadPublishDraft(ctx context.Context, skillID string) (
 	if err := s.validateWorkspaceBindings(ctx, draft.Requirements.KnowledgeWorkspaceIDs); err != nil {
 		return port.SkillProductRow{}, domain.SkillRevision{}, err
 	}
+	if err := s.validateRequirementsMCPBindings(ctx, draft.Requirements); err != nil {
+		return port.SkillProductRow{}, domain.SkillRevision{}, err
+	}
 	return skill, draft, nil
 }
 
-func (s *VersionService) GetWorkspace(ctx context.Context, skillID string) (SkillWorkspaceView, error) {
+func (s *VersionService) GetWorkspace(ctx context.Context, skillID, actorID string) (SkillWorkspaceView, error) {
 	skill, ok, err := s.repo.GetSkill(ctx, skillID)
 	if err != nil {
 		return SkillWorkspaceView{}, err
@@ -258,12 +296,31 @@ func (s *VersionService) GetWorkspace(ctx context.Context, skillID string) (Skil
 			return SkillWorkspaceView{}, fmt.Errorf("skill service get workspace: list editors: %w", err)
 		}
 	}
+	// 内置 skill 的 Instructions 是系统助手执行逻辑核心;仅 owner/admin(或系统
+	// actor,评测 worker)可见完整内容,其余角色剥离 Instructions 但保留列表与
+	// 契约。非内置 skill 不受影响(自定义 skill 无跨租户保密需求)。
+	stripInstructions := isBuiltinSkill(skillID) && s.checkOwnership(ctx, actorID, skill.CreatedBy, editors) != nil
+	view, err := s.loadWorkspaceRevision(ctx, skillID, stripInstructions)
+	if err != nil {
+		return SkillWorkspaceView{}, err
+	}
+	view.Skill = skill
+	view.Editors = editors
+	return view, nil
+}
+
+// loadWorkspaceRevision loads the active-or-draft revision for a skill,
+// stripping instructions when strip is true (builtin skills, non-owner actor).
+func (s *VersionService) loadWorkspaceRevision(ctx context.Context, skillID string, strip bool) (SkillWorkspaceView, error) {
 	draft, ok, err := s.repo.GetDraftRevision(ctx, skillID)
 	if err != nil {
 		return SkillWorkspaceView{}, err
 	}
 	if ok {
-		return SkillWorkspaceView{Skill: skill, Draft: draft, Editors: editors}, nil
+		if strip {
+			draft.Instructions = ""
+		}
+		return SkillWorkspaceView{Draft: draft}, nil
 	}
 	active, ok, err := s.repo.GetActiveRevision(ctx, skillID)
 	if err != nil {
@@ -272,7 +329,10 @@ func (s *VersionService) GetWorkspace(ctx context.Context, skillID string) (Skil
 	if !ok {
 		return SkillWorkspaceView{}, domain.ErrSkillNotFound
 	}
-	return SkillWorkspaceView{Skill: skill, Draft: active, Editors: editors}, nil
+	if strip {
+		active.Instructions = ""
+	}
+	return SkillWorkspaceView{Draft: active}, nil
 }
 
 func (s *VersionService) ListSkills(ctx context.Context) ([]SkillProduct, error) {
@@ -572,6 +632,9 @@ func (s *VersionService) UpdateInstructionBundle(
 	if err := s.validateWorkspaceBindings(ctx, in.Requirements.KnowledgeWorkspaceIDs); err != nil {
 		return domain.SkillRevision{}, err
 	}
+	if err := s.validateRequirementsMCPBindings(ctx, in.Requirements); err != nil {
+		return domain.SkillRevision{}, err
+	}
 	draft.Instructions = in.Instructions
 	draft.Requirements = in.Requirements
 	contentHash, err := draft.ComputeContentHash()
@@ -655,6 +718,9 @@ func (s *VersionService) UpdateDraftBundle(
 	}
 	before := skillSafeProjection(skill, draft)
 	if err := s.validateWorkspaceBindings(ctx, in.Requirements.KnowledgeWorkspaceIDs); err != nil {
+		return SkillWorkspaceView{}, err
+	}
+	if err := s.validateRequirementsMCPBindings(ctx, in.Requirements); err != nil {
 		return SkillWorkspaceView{}, err
 	}
 	if err := applyDraftBundle(&skill, draft, in); err != nil {

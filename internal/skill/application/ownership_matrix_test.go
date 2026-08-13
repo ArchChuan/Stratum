@@ -364,12 +364,12 @@ func TestVersionServiceGetWorkspaceInjectsEditors(t *testing.T) {
 	svc.SetEditorRepo(editors)
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
 
-	view, err := svc.GetWorkspace(ctx, "skill-1")
+	view, err := svc.GetWorkspace(ctx, "skill-1", "user-1")
 	require.NoError(t, err)
 	require.Equal(t, []string{"editor-a"}, view.Editors)
 
 	svcNoRepo := NewVersionService(repo, zap.NewNop())
-	view, err = svcNoRepo.GetWorkspace(ctx, "skill-1")
+	view, err = svcNoRepo.GetWorkspace(ctx, "skill-1", "user-1")
 	require.NoError(t, err)
 	require.Empty(t, view.Editors)
 }
@@ -391,4 +391,42 @@ func TestSkillUpdateDraftBundleEmptyFingerprintBypassesStaleness(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, repo.audits, 1)
 	require.Equal(t, auditdomain.ChangeOpUpdate, repo.audits[0].Operation)
+}
+
+// TestGetWorkspaceStripsBuiltinSkillInstructionsForNonOwner(M2):内置 skill 的
+// Instructions 是系统助手执行逻辑核心,member 读取时剥离、其余字段(能力契约/
+// 激活契约/名称描述)保留;owner 看到完整内容。
+func TestGetWorkspaceStripsBuiltinSkillInstructionsForNonOwner(t *testing.T) {
+	repo := newFakeVersionRepo()
+	seedOwnedSkill(t, repo, "builtin:platform-guide", "seed-system")
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+
+	svcMember := NewVersionService(repo, zap.NewNop())
+	svcMember.SetTenantRoleResolver(stubTenantRole{role: "member"})
+	view, err := svcMember.GetWorkspace(ctx, "builtin:platform-guide", "member-1")
+	require.NoError(t, err)
+	require.Empty(t, view.Draft.Instructions, "member must not read builtin instructions")
+	require.Equal(t, "goal", view.Draft.Capability.Goal)
+	require.Equal(t, "act", view.Draft.ActivationContract.Name)
+	require.Equal(t, "desc", view.Skill.Description)
+
+	svcOwner := NewVersionService(repo, zap.NewNop())
+	svcOwner.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	view, err = svcOwner.GetWorkspace(ctx, "builtin:platform-guide", "owner-1")
+	require.NoError(t, err)
+	require.Equal(t, "original instructions", view.Draft.Instructions)
+}
+
+// TestGetWorkspaceKeepsCustomSkillInstructionsForMember:自定义 skill 无跨租户
+// 保密需求,member 读取不受剥离影响。
+func TestGetWorkspaceKeepsCustomSkillInstructionsForMember(t *testing.T) {
+	repo := newFakeVersionRepo()
+	seedOwnedSkill(t, repo, "skill-1", "user-1")
+	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "member"})
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+
+	view, err := svc.GetWorkspace(ctx, "skill-1", "member-1")
+	require.NoError(t, err)
+	require.Equal(t, "original instructions", view.Draft.Instructions)
 }
