@@ -121,6 +121,32 @@ export const elevateGeneratedActor = async (
   }
 };
 
+// promoteGeneratedActorToGlobalAdmin sets users.global_role = 'global_admin' without
+// touching the tenant membership. Used for the systemAdmin fixture: platform-wide
+// permissions live in global_role (frontend /models route requires
+// requiredRole="global_admin"), while the actor's own sandbox tenant stays at a
+// real tenant role (owner) so member-role APIs like /admin/providers pass
+// middleware.RequireTenantRole — whose rank table only knows member/admin/owner
+// and treats 'root' as rank 0 (403).
+export const promoteGeneratedActorToGlobalAdmin = async (
+  pool: DatabasePool,
+  userID: string,
+): Promise<void> => {
+  requireUUID(userID, 'user_id');
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `UPDATE public.users SET global_role = 'global_admin' WHERE id = $1 RETURNING id`,
+      [userID],
+    );
+    if (result.rowCount !== 1) {
+      throw new Error('generated actor global admin promotion did not update exactly one user');
+    }
+  } finally {
+    client.release();
+  }
+};
+
 export const setGeneratedActorVerifiedEmail = async (
   pool: DatabasePool,
   userID: string,
