@@ -22,6 +22,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -133,22 +134,30 @@ export const AppShell = ({ children }: AppShellProps) => {
   const { isMobile } = useResponsive();
   const contentRef = useRef<HTMLDivElement>(null);
   const prevPathRef = useRef(location.pathname);
+  const [routeSwitching, setRouteSwitching] = useState(false);
 
-  // 路由切换兜底:强制 LayerTree 更新,触发 Windows DComp 合成器旧层纹理回收。
-  // 双 rAF 是关键:单 rAF 时 set 与 clear 在同一渲染帧内发生,transform 从未被
-  // 合成器提交;双 rAF 让 translateZ(0) 存活完整一帧(层创建)再移除(层销毁),
-  // 合成器完成一次层树重建,回收幽灵纹理。配合 index.css 的 isolation: isolate。
-  useEffect(() => {
+  // 路由切换:同步盖不透明遮罩,杜绝 Windows DComp 合成器残留旧页纹理(残影)。
+  // useLayoutEffect 在 commit 后、paint 前同步执行;setRouteSwitching 触发同步
+  // 二次渲染,切屏后的首帧即含遮罩,合成器永远不会投递只含旧页的帧。
+  // 双 rAF 后再移除:遮罩至少被合成一帧,此刻新页纹理已就绪,移除不会再生残影。
+  // 保留 translateZ(0) 层树重建作为纵深防御,一并触发旧层纹理回收。
+  useLayoutEffect(() => {
     if (prevPathRef.current === location.pathname) return;
     prevPathRef.current = location.pathname;
+    setRouteSwitching(true);
     const el = contentRef.current;
-    if (!el) return;
-    requestAnimationFrame(() => {
-      el.style.transform = 'translateZ(0)';
-      requestAnimationFrame(() => {
-        el.style.transform = '';
+    let secondRaf = 0;
+    const firstRaf = requestAnimationFrame(() => {
+      if (el) el.style.transform = 'translateZ(0)';
+      secondRaf = requestAnimationFrame(() => {
+        if (el) el.style.transform = '';
+        setRouteSwitching(false);
       });
     });
+    return () => {
+      cancelAnimationFrame(firstRaf);
+      if (secondRaf) cancelAnimationFrame(secondRaf);
+    };
   }, [location.pathname]);
 
   useEffect(() => {
@@ -360,6 +369,7 @@ export const AppShell = ({ children }: AppShellProps) => {
           }}
         >
           {children}
+          {routeSwitching && <div className="route-blank" aria-hidden="true" />}
         </Content>
       </Layout>
 
