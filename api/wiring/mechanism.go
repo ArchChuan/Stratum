@@ -5,8 +5,10 @@ import (
 
 	"go.uber.org/zap"
 
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/mechanism/application"
 	mechanismdomain "github.com/byteBuilderX/stratum/internal/mechanism/domain"
+	mechanismport "github.com/byteBuilderX/stratum/internal/mechanism/domain/port"
 	"github.com/byteBuilderX/stratum/internal/mechanism/infrastructure/persistence"
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 
@@ -27,6 +29,31 @@ type Mechanism struct {
 	Matrix *application.MatrixService
 }
 
+// modelExistsAdapter 把全局 ModelRegistry 目录查询适配为 mechanism 的
+// ModelExists port（wiring 唯一适配点：mechanism 不 import llmgateway）。
+// 目录/DB 故障传播错误（fail-closed），不默认放行。
+type modelExistsAdapter struct{ registry *llmgateway.ModelRegistry }
+
+func (a *modelExistsAdapter) Exists(ctx context.Context, model string, capability mechanismport.ModelCapability) (bool, error) {
+	var names []string
+	var err error
+	switch capability {
+	case mechanismport.CapEmbedding:
+		names, err = a.registry.ListEmbeddingModelsByTenant(ctx)
+	default: // CapChat
+		names, err = a.registry.ListChatModelsByTenant(ctx)
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, n := range names {
+		if n == model {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // buildMechanism 装配机制基线。DB 不可用时保持 nil（调用方 nil-check），
 // 与其余组件缺库降级语义一致。
 func (c *Container) buildMechanism(_ context.Context) error {
@@ -34,7 +61,11 @@ func (c *Container) buildMechanism(_ context.Context) error {
 	if db == nil {
 		return nil
 	}
-	svc := application.NewService(persistence.NewProfileRepo(db))
+	var modelExists mechanismport.ModelExists
+	if c.Platform != nil && c.Platform.ModelRegistry != nil {
+		modelExists = &modelExistsAdapter{registry: c.Platform.ModelRegistry}
+	}
+	svc := application.NewService(persistence.NewProfileRepo(db), modelExists)
 	c.Mechanism = &Mechanism{
 		Service: svc,
 		BaselineResolver: func(ctx context.Context, model string) (mechanismdomain.Baseline, error) {
