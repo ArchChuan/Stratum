@@ -137,6 +137,9 @@ jobs:
       - name: Lint, typecheck, build
         run: make fe-lint fe-typecheck fe-build
 
+      - name: Unit tests
+        run: make fe-test
+
   safety-guards:
     name: Safety Guards
     runs-on: ubuntu-latest
