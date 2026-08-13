@@ -18,7 +18,6 @@ export type ModelCapability = 'chat' | 'embedding' | 'vision' | 'tool_use' | 're
 
 export interface Model {
   id: string;
-  tenantId: string;
   providerId: string;
   name: string;
   displayName: string;

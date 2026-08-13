@@ -24,7 +24,6 @@ import type { ProviderFormValues } from '../components/ProviderForm';
 import { useProviders } from '../hooks/useProviders';
 import type { CreateProviderInput, Model, Provider, ProviderKind } from '../model/llm';
 
-import { useTenantRole } from '@/modules/iam';
 import { extractErrorMessage } from '@/shared/lib';
 
 const { Text } = Typography;
@@ -43,7 +42,6 @@ const KIND_COLORS: Record<ProviderKind, string> = {
 
 export function ProviderListPage() {
   const { providers, loading, createLoading, updateLoading, refresh, createProvider, updateProvider, deleteProvider } = useProviders();
-  const { isAdmin } = useTenantRole();
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
@@ -195,25 +193,21 @@ export function ProviderListPage() {
           <Button size="small" onClick={() => handleHealthCheck(record)}>
             健康检查
           </Button>
-          {isAdmin && (
-            <Tooltip title="编辑">
-              <Button
-                size="small"
-                icon={<EditOutlined />}
-                onClick={() => handleEdit(record)}
-              />
-            </Tooltip>
-          )}
-          {isAdmin && (
-            <Tooltip title="删除">
-              <Button
-                size="small"
-                danger
-                icon={<DeleteOutlined />}
-                onClick={() => handleDelete(record)}
-              />
-            </Tooltip>
-          )}
+          <Tooltip title="编辑">
+            <Button
+              size="small"
+              icon={<EditOutlined />}
+              onClick={() => handleEdit(record)}
+            />
+          </Tooltip>
+          <Tooltip title="删除">
+            <Button
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              onClick={() => handleDelete(record)}
+            />
+          </Tooltip>
         </span>
       ),
     },
@@ -227,29 +221,25 @@ export function ProviderListPage() {
           <Button icon={<ReloadOutlined />} onClick={refresh} loading={loading}>
             刷新
           </Button>
-          {isAdmin && (
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-              添加厂商
-            </Button>
-          )}
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+            添加厂商
+          </Button>
         </span>
       }
     >
       {providers.length === 0 && !loading ? (
         <Empty
           image={<ApiOutlined style={{ fontSize: 48, color: '#d9d9d9' }} />}
-          description={isAdmin ? '还没有厂商，点击右上角添加' : '还没有厂商'}
+          description="还没有厂商，点击右上角添加"
           style={{ padding: '60px 0' }}
         >
-          {isAdmin && (
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={() => setCreateOpen(true)}
-            >
-              添加第一个厂商
-            </Button>
-          )}
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => setCreateOpen(true)}
+          >
+            添加第一个厂商
+          </Button>
         </Empty>
       ) : (
         <Table

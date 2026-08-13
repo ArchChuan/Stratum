@@ -12,6 +12,8 @@ export const profileBaselineSchema = z.object({
   compaction: z.string().optional().default(''),
   enrich_model: z.string().optional().default(''),
   summary_model: z.string().optional().default(''),
+  extraction_model: z.string().optional().default(''),
+  judge_model: z.string().optional().default(''),
 });
 export type ProfileBaseline = z.infer<typeof profileBaselineSchema>;
 

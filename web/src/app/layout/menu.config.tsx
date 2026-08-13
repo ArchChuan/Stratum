@@ -116,14 +116,17 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
     },
   ];
 
-  base.push({
-    key: 'model-group',
-    icon: <ApiOutlined />,
-    label: '模型管理',
-    children: [
-      { key: '/models', icon: <SettingOutlined />, label: '模型管理' },
-    ],
-  });
+  // 模型管理为公共平台目录，仅 global admin 可见（对齐 #361 平台管理权限面）。
+  if (user?.global_role === 'global_admin') {
+    base.push({
+      key: 'model-group',
+      icon: <ApiOutlined />,
+      label: '模型管理',
+      children: [
+        { key: '/models', icon: <SettingOutlined />, label: '模型管理' },
+      ],
+    });
+  }
 
   if (user?.current_tenant) {
     base.push({
