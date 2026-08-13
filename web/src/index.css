@@ -55,6 +55,16 @@ button:focus-visible,
   padding: 24px;
 }
 
+/* 路由切换遮罩:不透明覆盖整个内容区,从切屏首帧起盖住 Windows DComp 合成器
+   残留的旧页幽灵纹理(残影),等新页纹理就绪后由 AppShell 移除。
+   背景与 Content 同色,视觉上是短暂白屏,符合"渲染慢点、白屏可接受"的诉求。 */
+.route-blank {
+  position: absolute;
+  inset: 0;
+  background: #f5f7fa;
+  z-index: 10;
+}
+
 .responsive-page-header,
 .responsive-toolbar {
   display: flex;
