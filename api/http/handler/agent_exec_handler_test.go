@@ -188,3 +188,72 @@ func TestAgentExecutionDonePayloadSourcesSerializeAsArray(t *testing.T) {
 		}
 	}
 }
+
+// P3 done 载荷透出幻觉校验报告与降级标记（advisory）：fact_check 只在
+// 校验实际发生时出现（omitempty），不校验时绝不出 null；degraded/degradeReason
+// 与 fact_check 可同时出现。
+func TestAgentExecutionDonePayloadFactCheckAndDegraded(t *testing.T) {
+	t.Run("fact_check serialized when present", func(t *testing.T) {
+		result := &domain.AgentResult{AgentID: "a1", Output: "ok",
+			FactCheck: &domain.FactCheckReport{
+				Checked:    true,
+				IsValid:    false,
+				RiskPoints: 2,
+				Claims: []domain.ClaimVerdict{
+					{Text: "c1", Verdict: "SUPPORTED", Risk: 0},
+					{Text: "c2", Verdict: "CONTRADICTED", Risk: 4},
+				},
+			},
+		}
+		done := agentExecutionDonePayload(result)
+		var decoded map[string]any
+		if err := json.Unmarshal(done, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		fc, ok := decoded["factCheck"].(map[string]any)
+		if !ok {
+			t.Fatalf("done payload missing factCheck object: %s", done)
+		}
+		if fc["checked"] != true || fc["isValid"] != false || fc["riskPoints"] != float64(2) {
+			t.Fatalf("factCheck summary drifted: %#v", fc)
+		}
+		claims, ok := fc["claims"].([]any)
+		if !ok || len(claims) != 2 {
+			t.Fatalf("factCheck claims = %#v, want 2 items", fc["claims"])
+		}
+		first := claims[0].(map[string]any)
+		if first["text"] != "c1" || first["verdict"] != "SUPPORTED" || first["risk"] != float64(0) {
+			t.Fatalf("claim[0] drifted: %#v", first)
+		}
+	})
+
+	t.Run("fact_check absent when not checked", func(t *testing.T) {
+		result := &domain.AgentResult{AgentID: "a1", Output: "ok"}
+		done := agentExecutionDonePayload(result)
+		if strings.Contains(string(done), "factCheck") {
+			t.Fatalf("done payload must omit factCheck when nil: %s", done)
+		}
+	})
+
+	t.Run("degraded and fact_check coexist", func(t *testing.T) {
+		result := &domain.AgentResult{AgentID: "a1", Output: "ok",
+			Degraded:      true,
+			DegradeReason: "tool_stop_loss:stratum_create_plan",
+			FactCheck: &domain.FactCheckReport{
+				Checked: true, IsValid: true,
+				Claims: []domain.ClaimVerdict{{Text: "c1", Verdict: "SUPPORTED", Risk: 0}},
+			},
+		}
+		done := agentExecutionDonePayload(result)
+		var decoded map[string]any
+		if err := json.Unmarshal(done, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded["degraded"] != true || decoded["degradeReason"] != "tool_stop_loss:stratum_create_plan" {
+			t.Fatalf("degraded fields drifted: %s", done)
+		}
+		if _, ok := decoded["factCheck"]; !ok {
+			t.Fatalf("done payload missing factCheck when set: %s", done)
+		}
+	})
+}

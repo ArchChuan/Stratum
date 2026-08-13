@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -374,18 +375,51 @@ func (w *EnricherWorker) callEnrichLLM(ctx context.Context, llm LLMClient, role,
 
 	llmCtx, cancel := context.WithTimeout(ctx, constants.MemoryEnrichLLMTimeout)
 	defer cancel()
-	resp, err := llm.Complete(llmCtx, req)
+	result, err := CompleteStructured(llmCtx, llm, req, parseEnrichmentResult,
+		func(r EnrichmentResult) error { return r.Validate() }, w.logger, "enrich")
 	if err != nil {
-		return nil, fmt.Errorf("llm complete: %w", err)
-	}
-
-	var result EnrichmentResult
-	if err := json.Unmarshal([]byte(resp.Content), &result); err != nil {
-		return nil, fmt.Errorf("parse enrichment response: %w", err)
+		return nil, err
 	}
 	// token_estimate 由代码计算，不依赖 LLM 自填（不可靠）
 	result.TokenEstimate = tokenutil.EstimateText(content)
 	return &result, nil
+}
+
+// parseEnrichmentResult 解析富化 JSON 输出。解析失败由 CompleteStructured
+// 带错重试处理（错误位置经 correction 丢回模型自修复）。
+func parseEnrichmentResult(raw string) (EnrichmentResult, error) {
+	var result EnrichmentResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return result, fmt.Errorf("parse enrichment response: %w", err)
+	}
+	return result, nil
+}
+
+// unitInterval 判断 v 是否在 [0,1] 闭区间（pipeline 包共享 helper；
+// port 包的 inUnitInterval 未导出，避免跨包引依赖）。
+func unitInterval(v float64) bool {
+	return v >= 0 && v <= 1
+}
+
+// Validate 校验富化结果语义：importance ∈ [0,1]；每条实体 name 非空、
+// confidence ∈ [0,1]。返回 *port.ValidationError 或 nil。
+func (r EnrichmentResult) Validate() error {
+	if !unitInterval(r.Importance) {
+		return &port.ValidationError{Location: "enrichment", Field: "importance",
+			Value: strconv.FormatFloat(r.Importance, 'g', -1, 64), Reason: "importance must be in [0,1]"}
+	}
+	for i, e := range r.Entities {
+		if strings.TrimSpace(e.Name) == "" {
+			return &port.ValidationError{Location: "enrichment", Field: "entities",
+				Value: strconv.Itoa(i), Reason: "entity name must not be empty"}
+		}
+		if !unitInterval(e.Confidence) {
+			return &port.ValidationError{Location: "enrichment", Field: "entities",
+				Value:  fmt.Sprintf("index %d confidence=%s", i, strconv.FormatFloat(e.Confidence, 'g', -1, 64)),
+				Reason: "entity confidence must be in [0,1]"}
+		}
+	}
+	return nil
 }
 
 func (w *EnricherWorker) persistEnrichment(ctx context.Context, ev *MemoryEnrichedEvent, enrichment *EnrichmentResult) error {

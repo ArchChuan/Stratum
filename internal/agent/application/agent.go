@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
+	"github.com/byteBuilderX/stratum/internal/agent/application/factcheck"
 	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
@@ -116,6 +118,10 @@ type ExecutionConfig struct {
 	ListAgentsFn              func(context.Context) (map[string]any, error)
 	ListMCPServersFn          func(context.Context) (map[string]any, error)
 	InternalToolResultGuardFn func(any) (port.GuardedToolResult, error)
+	// FactCheck 是幻觉校验配置（nil/Enabled=false = 关闭，fail-closed）。judge
+	// 与 TopK/MaxClaims 由 wiring 装配；EvidenceFn 留空，collectGraphResult 执行
+	// 时用 RAGSearchFnWithEvidence 填充（per-execution 已带 tenant 权限上下文）。
+	FactCheck *factcheck.Settings
 }
 
 // EvolutionTraceMetadata attributes an execution to evaluation and rollout evidence.
@@ -659,7 +665,7 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	if runErr != nil {
 		return fmt.Errorf("react: %w", runErr)
 	}
-	a.collectGraphResult(result, finalState, ec)
+	a.collectGraphResult(execCtx, result, finalState, ec)
 	a.appendFinalAnswerEvent(result, finalState, ec)
 	a.mu.Lock()
 	a.State.StepsTaken = finalState.Steps
@@ -805,7 +811,7 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 	if runErr != nil {
 		return fmt.Errorf("planning: %w", runErr)
 	}
-	a.collectGraphResult(result, finalState, ec)
+	a.collectGraphResult(execCtx, result, finalState, ec)
 	a.appendFinalAnswerEvent(result, finalState, ec)
 	a.mu.Lock()
 	a.State.StepsTaken = finalState.Steps
@@ -968,7 +974,7 @@ func recordTerminatedBy(span oteltrace.Span, finalState agentgraph.ReActState) {
 	}
 }
 
-func (a *BaseAgent) collectGraphResult(result *AgentResult, finalState agentgraph.ReActState, ec agentExecContext) {
+func (a *BaseAgent) collectGraphResult(ctx context.Context, result *AgentResult, finalState agentgraph.ReActState, ec agentExecContext) {
 	result.Output = finalState.Output
 	result.Steps = finalState.Steps
 	result.TokensUsed = finalState.TotalTokens
@@ -979,10 +985,45 @@ func (a *BaseAgent) collectGraphResult(result *AgentResult, finalState agentgrap
 	result.TraceEvents = enrichTraceEvents(finalState.TraceEvents, ec.cfg.TraceID, ec.cfg.ExecutionID, ec.cfg.ConversationID, ec.agentID, ec.cfg.UserID)
 	result.AssistantToolArtifacts = append([]domain.SystemAssistantToolArtifact(nil), finalState.AssistantToolArtifacts...)
 	result.Sources = append([]port.RAGSearchSource(nil), finalState.CitationSources...)
+	// 幻觉校验（advisory）：开关开 + 有证据 fn 才执行；checker 内部失败/超时
+	// 返回 nil，不阻塞执行。ViewerID（UserID）空时 checker fail-closed 跳过。
+	if ec.cfg.FactCheck != nil && ec.cfg.FactCheck.Enabled && ec.cfg.RAGSearchFnWithEvidence != nil {
+		settings := *ec.cfg.FactCheck
+		settings.EvidenceFn = ec.cfg.RAGSearchFnWithEvidence
+		result.FactCheck = factcheck.New(settings).Check(ctx, domain.FactCheckInput{
+			// 校验目标是本轮最终输出（与 SSE done 透出的 output 同源）。
+			Output: finalState.Output,
+			// 检索侧（RAGService.resolveWorkspaceConfig）按 workspace name 解析，
+			// 普通工具调用传的也是 name（buildBuiltinTools 用 KnowledgeWorkspaceNames
+			// 构造工具参数枚举）。此前误传 ID 导致 GetByName 查不到 → ErrRAGDependency。
+			Workspaces: a.KnowledgeWorkspaceNames,
+			ViewerID:   ec.cfg.UserID,
+		})
+	}
+	// 子节点降级向父图传播：StopLossTools 是跨子状态共享的 map（结构体拷贝
+	// 共享引用），bool Degraded 值拷贝不传播，故从非空 map 推导整体降级。
+	if len(finalState.StopLossTools) > 0 {
+		result.Degraded = true
+		result.DegradeReason = firstStopLossReason(finalState.StopLossTools)
+	}
 	// 业务终止（如成本预算超限）不是错误：终止原因透传，已产出部分保留。
 	if finalState.TerminatedBy == agentgraph.CostBudgetTerminated {
 		result.TerminatedBy = finalState.TerminatedBy
 	}
+}
+
+// firstStopLossReason 从止损工具集合构造固定枚举 DegradeReason。map 迭代序
+// 不稳定，排序取最小工具名保证确定性；空集合返回空串（调用方已判非空）。
+func firstStopLossReason(stopLoss map[string]bool) string {
+	tools := make([]string, 0, len(stopLoss))
+	for name := range stopLoss {
+		tools = append(tools, name)
+	}
+	slices.Sort(tools)
+	if len(tools) == 0 {
+		return ""
+	}
+	return constants.AgentDegradeReasonStopLossPrefix + tools[0]
 }
 
 func (a *BaseAgent) appendFinalAnswerEvent(result *AgentResult, finalState agentgraph.ReActState, ec agentExecContext) {
@@ -1301,6 +1342,16 @@ func WithRAGSearchFn(fn func(ctx context.Context, workspaces []string, query str
 func WithRAGSearchFnWithEvidence(fn func(ctx context.Context, workspaces []string, query string, topK int, viewerID string) (port.RAGSearchEvidence, error)) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.RAGSearchFnWithEvidence = fn
+	}
+}
+
+// WithFactCheck enables hallucination checking for this execution. settings
+// 的 EvidenceFn 留空：collectGraphResult 执行时用 RAGSearchFnWithEvidence
+// 填充（per-execution 已带 tenant 权限上下文）。disabled/fail-closed 时
+// collectGraphResult 直接跳过。
+func WithFactCheck(settings *factcheck.Settings) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.FactCheck = settings
 	}
 }
 

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"go.uber.org/zap"
+
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 )
@@ -30,6 +32,7 @@ type LLMSuperseder struct {
 	tenantID    string
 	resolver    TenantLLMResolver
 	judgePrompt string
+	logger      *zap.Logger
 }
 
 func NewLLMSuperseder(client pipeline.LLMClient) *LLMSuperseder {
@@ -45,6 +48,12 @@ func NewResolvingLLMSuperseder(tenantID string, resolver TenantLLMResolver) *LLM
 // mechanism baseline prompt. Empty keeps supersedePromptTemplate.
 func (s *LLMSuperseder) WithJudgePrompt(p string) *LLMSuperseder {
 	s.judgePrompt = p
+	return s
+}
+
+// WithLogger 注入降级日志记录器（结构化失败白名单摘要）。nil 安全。
+func (s *LLMSuperseder) WithLogger(l *zap.Logger) *LLMSuperseder {
+	s.logger = l
 	return s
 }
 
@@ -69,16 +78,24 @@ func (s *LLMSuperseder) JudgeSupersede(ctx context.Context, oldFact, newFact str
 		return nil, fmt.Errorf("llm supersede: client unavailable")
 	}
 	prompt := fmt.Sprintf(s.judgePromptOr(), oldFact, newFact)
-	resp, err := client.Complete(ctx, &memport.CompletionRequest{
+	judgment, err := pipeline.CompleteStructured(ctx, client, &memport.CompletionRequest{
 		Messages:  []memport.CompletionMessage{{Role: "user", Content: prompt}},
 		MaxTokens: 256,
-	})
+	}, parseSupersedeJudgment,
+		func(j memport.SupersedeJudgment) error { return j.Validate() },
+		s.logger, "supersede")
 	if err != nil {
-		return nil, fmt.Errorf("llm supersede: %w", err)
+		return nil, err
 	}
+	return &judgment, nil
+}
+
+// parseSupersedeJudgment 解析判定 JSON。解析失败由 CompleteStructured
+// 带错重试处理（错误位置经 correction 丢回模型）。
+func parseSupersedeJudgment(raw string) (memport.SupersedeJudgment, error) {
 	var j memport.SupersedeJudgment
-	if err := json.Unmarshal([]byte(resp.Content), &j); err != nil {
-		return nil, fmt.Errorf("parse judgment: %w", err)
+	if err := json.Unmarshal([]byte(raw), &j); err != nil {
+		return j, fmt.Errorf("parse judgment: %w", err)
 	}
-	return &j, nil
+	return j, nil
 }

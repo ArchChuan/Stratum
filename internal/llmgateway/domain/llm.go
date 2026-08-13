@@ -53,6 +53,15 @@ type Message struct {
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
+// ResponseFormat 请求 provider 强制结构化输出。当前仅支持
+// {"type":"json_object"}（OpenAI-compatible JSON mode）。由网关按模型能力
+// 门控：仅对支持 JSON mode 的模型注入，其余候选清空（严格端点 400 是永久
+// 错误，会中止整条 fallback 链）。Anthropic/Ollama 使用独立 typed struct
+// 构造请求体，永不携带该字段，天然安全。
+type ResponseFormat struct {
+	Type string `json:"type"`
+}
+
 type CompletionRequest struct {
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages"`
@@ -67,6 +76,9 @@ type CompletionRequest struct {
 	Tools           []Tool  `json:"tools,omitempty"`
 	ToolChoice      string  `json:"tool_choice,omitempty"`
 	Stream          bool    `json:"stream,omitempty"`
+	// ResponseFormat 请求 provider 强制结构化输出；nil = 不请求。网关按模型
+	// 能力门控，不支持 json_object 的候选清空该字段（fail-closed）。
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
 	// NoPrimaryRetry 禁止 gateway 对主模型瞬态失败的立即重试（0 值 = 默认
 	// 允许一次立即重试）。压缩路径用：时间片内主模型一次尝试失败直接降级候选。
 	// json:"-"：路由选项，禁止随请求体泄漏给 provider。

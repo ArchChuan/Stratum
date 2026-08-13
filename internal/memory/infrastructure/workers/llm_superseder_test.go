@@ -184,3 +184,34 @@ func TestLLMSupersederUsesInjectedJudgePromptOverFallback(t *testing.T) {
 		t.Fatalf("injected template not used: %q", got)
 	}
 }
+
+// TestLLMSupersederRetriesWithCorrectionOnInvalidJSON 验证判定解析失败时走
+// 带错重试：第 2 次请求附加 system-role correction（错误位置丢回模型）。
+func TestLLMSupersederRetriesWithCorrectionOnInvalidJSON(t *testing.T) {
+	var requests [][]memport.CompletionMessage
+	client := completionClientFunc(func(_ context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+		requests = append(requests, append([]memport.CompletionMessage(nil), req.Messages...))
+		if len(requests) == 1 {
+			return &memport.CompletionResponse{Content: "not json at all"}, nil
+		}
+		return &memport.CompletionResponse{Content: `{"supersedes":true,"reason":"ok"}`}, nil
+	})
+	judge := workers.NewLLMSuperseder(client)
+
+	got, err := judge.JudgeSupersede(context.Background(), "old", "new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Supersedes {
+		t.Fatalf("judgment = %+v, want supersedes true after correction retry", got)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("calls = %d, want 2 (initial + correction retry)", len(requests))
+	}
+	if len(requests[1]) != 2 || requests[1][1].Role != "system" {
+		t.Fatalf("retry must append system-role correction, got %#v", requests[1])
+	}
+	if !strings.Contains(requests[1][1].Content, "{correction: ") {
+		t.Fatalf("correction must carry error context, got %q", requests[1][1].Content)
+	}
+}
