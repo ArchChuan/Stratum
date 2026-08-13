@@ -183,7 +183,7 @@ const executePack = async (
     return;
   }
   if (pack === 'agent-skill-mcp') {
-    completedActions.push(...await executeAgentSkillMCPPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL, backendURL }));
+    completedActions.push(...await executeAgentSkillMCPPack({ actor: actors.tenantAdmin, approver: actors.memberA, pool, evidence, webURL, fixtureURL, backendURL }));
     return;
   }
   if (pack === 'workflow') {

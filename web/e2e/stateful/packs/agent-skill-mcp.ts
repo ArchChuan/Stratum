@@ -2,11 +2,11 @@ import { expect, type Page } from '@playwright/test';
 import type { QueryResultRow } from 'pg';
 
 import type { BrowserActor } from '../core/actors';
-import { configureManagedModels, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
+import { addGeneratedActorMembership, configureManagedModels, requireUUID, withTenantMutation, withTenantQuery, type DatabasePool } from '../core/database';
 import type { EvidenceRecord } from '../core/evidence';
 import { openAgentCreation } from '../core/navigation';
 
-interface CrossPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string; fixtureURL: string; backendURL: string }
+interface CrossPackContext { actor: BrowserActor; approver: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string; fixtureURL: string; backendURL: string }
 const waitForMutation = (page: Page, path: string, method: string) => page.waitForResponse((response) => (
   new URL(response.url()).pathname === path && response.request().method() === method
 ));
@@ -38,10 +38,24 @@ const findServerRow = async (page: Page, serverName: string) => {
 };
 
 export const executeAgentSkillMCPPack = async ({
-  actor, pool, evidence, webURL, fixtureURL, backendURL,
+  actor, approver, pool, evidence, webURL, fixtureURL, backendURL,
 }: CrossPackContext): Promise<string[]> => {
   const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
   await configureManagedModels(pool, tenantID, fixtureURL, actor.accessToken ?? '', backendURL);
+  // D10 自审批规则（tool_approval_service.go Decide）禁止执行者批准自己触发的
+  // agent 工具审批。fixture 各 guest 独占租户，无同租户第二管理员——把 approver
+  // （memberA）以 owner 角色 upsert 进执行者租户，并以其身份发出 decision，验证
+  // 真实的分离职责审批流程。upsert（而非 DO NOTHING）：soak 模式下 operation-gate/
+  // collab 等 pack 可能先以 member 角色写入同一行，DO NOTHING 会保留 member 导致
+  // requireAdmin 403。
+  const approverUserID = requireUUID(approver.userID ?? '', 'approver_user_id');
+  await addGeneratedActorMembership(pool, tenantID, approverUserID, 'owner');
+  const switched = await approver.context.request.post(`${backendURL}/auth/switch-tenant`, {
+    data: { tenant_id: tenantID },
+    headers: { Authorization: `Bearer ${approver.accessToken ?? ''}` },
+  });
+  expect(switched.status()).toBe(200);
+  const approverToken = (await switched.json() as { access_token: string }).access_token;
   const page = await actor.context.newPage();
   const suffix = Date.now();
   const serverName = `E2E-Cross-MCP-${suffix}`;
@@ -138,6 +152,11 @@ export const executeAgentSkillMCPPack = async ({
       /\/agents\/tool-approvals\/[^/]+\/resume$/.test(new URL(response.url()).pathname)
       && response.request().method() === 'POST'
     ));
+    // decision 以 approver（同租户第二 owner）身份发出，规避 D10 自审批；resume 无身份限制，仍走执行者会话。
+    await page.route('**/agents/tool-approvals/*/decision', async (route) => {
+      const response = await route.fetch({ headers: { Authorization: `Bearer ${approverToken}` } });
+      await route.fulfill({ response });
+    });
     await page.getByRole('button', { name: '批准并继续' }).click();
     expect((await decisionResponse).status()).toBe(200);
     expect((await resumeResponse).status()).toBe(200);
@@ -171,6 +190,10 @@ export const executeAgentSkillMCPPack = async ({
       'SELECT count(*)::text AS count FROM mcp_configs WHERE id=$1', [serverID])).toEqual([{ count: '0' }]);
   } finally {
     await page.close();
+    await withTenantMutation(pool, tenantID, {
+      text: 'DELETE FROM public.tenant_members WHERE tenant_id=$1 AND user_id=$2',
+      values: [tenantID, approverUserID],
+    });
   }
   return [
     'agent.mutation.post.agents.tool.approvals.id.decision',
