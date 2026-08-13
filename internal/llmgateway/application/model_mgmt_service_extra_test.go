@@ -111,11 +111,11 @@ type failUpdateRepo struct {
 	modelMgmtRepo
 }
 
-func (r *failUpdateRepo) Get(context.Context, string, string) (*domain.Model, error) {
+func (r *failUpdateRepo) Get(context.Context, string) (*domain.Model, error) {
 	return &r.model, nil
 }
 
-func (r *failUpdateRepo) Update(context.Context, string, *domain.Model) error {
+func (r *failUpdateRepo) Update(context.Context, *domain.Model) error {
 	return errors.New("update boom")
 }
 

@@ -20,7 +20,7 @@ type mockModelRepo struct {
 	err    error
 }
 
-func (m *mockModelRepo) List(ctx context.Context, tenantID string, filter port.ModelFilter) ([]domain.Model, error) {
+func (m *mockModelRepo) List(ctx context.Context, filter port.ModelFilter) ([]domain.Model, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -40,11 +40,11 @@ func (m *mockModelRepo) List(ctx context.Context, tenantID string, filter port.M
 	return out, nil
 }
 
-func (m *mockModelRepo) Create(ctx context.Context, tenantID string, model *domain.Model) error {
+func (m *mockModelRepo) Create(ctx context.Context, model *domain.Model) error {
 	return m.err
 }
 
-func (m *mockModelRepo) Get(ctx context.Context, tenantID, id string) (*domain.Model, error) {
+func (m *mockModelRepo) Get(ctx context.Context, id string) (*domain.Model, error) {
 	for _, model := range m.models {
 		if model.ID == id {
 			return &model, nil
@@ -53,23 +53,23 @@ func (m *mockModelRepo) Get(ctx context.Context, tenantID, id string) (*domain.M
 	return nil, m.err
 }
 
-func (m *mockModelRepo) Update(ctx context.Context, tenantID string, model *domain.Model) error {
+func (m *mockModelRepo) Update(ctx context.Context, model *domain.Model) error {
 	return m.err
 }
 
-func (m *mockModelRepo) UpsertDiscovered(ctx context.Context, tenantID, providerID string, models []domain.Model) ([]domain.Model, error) {
+func (m *mockModelRepo) UpsertDiscovered(ctx context.Context, providerID string, models []domain.Model) ([]domain.Model, error) {
 	return models, m.err
 }
 
-func (m *mockModelRepo) Delete(ctx context.Context, tenantID, id string) error {
+func (m *mockModelRepo) Delete(ctx context.Context, id string) error {
 	return m.err
 }
 
-func (m *mockModelRepo) Toggle(ctx context.Context, tenantID, id string, enabled bool) error {
+func (m *mockModelRepo) Toggle(ctx context.Context, id string, enabled bool) error {
 	return m.err
 }
 
-func (m *mockModelRepo) SetDefaultEmbedding(context.Context, string, string, bool) error {
+func (m *mockModelRepo) SetDefaultEmbedding(context.Context, string, bool) error {
 	return m.err
 }
 
@@ -78,7 +78,7 @@ type mockProviderRepo struct {
 	err       error
 }
 
-func (m *mockProviderRepo) Get(ctx context.Context, tenantID, id string) (*domain.Provider, error) {
+func (m *mockProviderRepo) Get(ctx context.Context, id string) (*domain.Provider, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -89,7 +89,7 @@ func (m *mockProviderRepo) Get(ctx context.Context, tenantID, id string) (*domai
 	return p, nil
 }
 
-func (m *mockProviderRepo) GetMeta(ctx context.Context, tenantID, id string) (*domain.Provider, error) {
+func (m *mockProviderRepo) GetMeta(ctx context.Context, id string) (*domain.Provider, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -102,11 +102,11 @@ func (m *mockProviderRepo) GetMeta(ctx context.Context, tenantID, id string) (*d
 	return &cp, nil
 }
 
-func (m *mockProviderRepo) Create(ctx context.Context, tenantID string, p *domain.Provider) error {
+func (m *mockProviderRepo) Create(ctx context.Context, p *domain.Provider) error {
 	return m.err
 }
 
-func (m *mockProviderRepo) List(ctx context.Context, tenantID string) ([]domain.Provider, error) {
+func (m *mockProviderRepo) List(ctx context.Context) ([]domain.Provider, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -117,11 +117,11 @@ func (m *mockProviderRepo) List(ctx context.Context, tenantID string) ([]domain.
 	return out, nil
 }
 
-func (m *mockProviderRepo) Update(ctx context.Context, tenantID string, p *domain.Provider) error {
+func (m *mockProviderRepo) Update(ctx context.Context, p *domain.Provider) error {
 	return m.err
 }
 
-func (m *mockProviderRepo) Delete(ctx context.Context, tenantID, id string) error {
+func (m *mockProviderRepo) Delete(ctx context.Context, id string) error {
 	return m.err
 }
 

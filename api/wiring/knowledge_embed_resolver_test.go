@@ -17,7 +17,7 @@ type knowledgeModelRepo struct {
 	models []domain.Model
 }
 
-func (r *knowledgeModelRepo) List(_ context.Context, _ string, filter port.ModelFilter) ([]domain.Model, error) {
+func (r *knowledgeModelRepo) List(_ context.Context, filter port.ModelFilter) ([]domain.Model, error) {
 	models := make([]domain.Model, 0, len(r.models))
 	for _, model := range r.models {
 		if filter.Enabled != nil && model.Enabled != *filter.Enabled {
@@ -30,19 +30,19 @@ func (r *knowledgeModelRepo) List(_ context.Context, _ string, filter port.Model
 	}
 	return models, nil
 }
-func (r *knowledgeModelRepo) Create(context.Context, string, *domain.Model) error { return nil }
-func (r *knowledgeModelRepo) Get(context.Context, string, string) (*domain.Model, error) {
+func (r *knowledgeModelRepo) Create(context.Context, *domain.Model) error { return nil }
+func (r *knowledgeModelRepo) Get(context.Context, string) (*domain.Model, error) {
 	return nil, nil
 }
-func (r *knowledgeModelRepo) Update(context.Context, string, *domain.Model) error { return nil }
+func (r *knowledgeModelRepo) Update(context.Context, *domain.Model) error { return nil }
 func (r *knowledgeModelRepo) UpsertDiscovered(
-	context.Context, string, string, []domain.Model,
+	context.Context, string, []domain.Model,
 ) ([]domain.Model, error) {
 	return nil, nil
 }
-func (r *knowledgeModelRepo) Delete(context.Context, string, string) error       { return nil }
-func (r *knowledgeModelRepo) Toggle(context.Context, string, string, bool) error { return nil }
-func (r *knowledgeModelRepo) SetDefaultEmbedding(context.Context, string, string, bool) error {
+func (r *knowledgeModelRepo) Delete(context.Context, string) error       { return nil }
+func (r *knowledgeModelRepo) Toggle(context.Context, string, bool) error { return nil }
+func (r *knowledgeModelRepo) SetDefaultEmbedding(context.Context, string, bool) error {
 	return nil
 }
 
@@ -59,21 +59,21 @@ type knowledgeProviderRepo struct {
 	provider domain.Provider
 }
 
-func (r *knowledgeProviderRepo) Create(context.Context, string, *domain.Provider) error { return nil }
-func (r *knowledgeProviderRepo) Get(context.Context, string, string) (*domain.Provider, error) {
+func (r *knowledgeProviderRepo) Create(context.Context, *domain.Provider) error { return nil }
+func (r *knowledgeProviderRepo) Get(context.Context, string) (*domain.Provider, error) {
 	provider := r.provider
 	return &provider, nil
 }
-func (r *knowledgeProviderRepo) GetMeta(ctx context.Context, tenantID, id string) (*domain.Provider, error) {
+func (r *knowledgeProviderRepo) GetMeta(ctx context.Context, id string) (*domain.Provider, error) {
 	provider := r.provider
 	provider.APIKey = ""
 	return &provider, nil
 }
-func (r *knowledgeProviderRepo) Update(context.Context, string, *domain.Provider) error { return nil }
-func (r *knowledgeProviderRepo) List(context.Context, string) ([]domain.Provider, error) {
+func (r *knowledgeProviderRepo) Update(context.Context, *domain.Provider) error { return nil }
+func (r *knowledgeProviderRepo) List(context.Context) ([]domain.Provider, error) {
 	return []domain.Provider{r.provider}, nil
 }
-func (r *knowledgeProviderRepo) Delete(context.Context, string, string) error { return nil }
+func (r *knowledgeProviderRepo) Delete(context.Context, string) error { return nil }
 
 func newKnowledgeRegistry(models []domain.Model) *llmgateway.ModelRegistry {
 	return llmgateway.NewModelRegistry(

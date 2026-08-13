@@ -29,7 +29,6 @@ var ErrModelNotFound = errors.New("model not found")
 // Model represents an LLM model that can be used for completions or embeddings.
 type Model struct {
 	ID               string            `json:"id"`
-	TenantID         string            `json:"tenantId"`
 	ProviderID       string            `json:"providerId"`
 	Name             string            `json:"name"`
 	DisplayName      string            `json:"displayName"`

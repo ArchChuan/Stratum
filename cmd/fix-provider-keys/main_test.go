@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pashagolub/pgxmock/v2"
@@ -46,13 +48,13 @@ func TestRun_flagParseError(t *testing.T) {
 	require.ErrorContains(t, err, "parse flags")
 }
 
-// TestFixProviderKeys_tenantsTableMissing 验证 public.tenants 缺失
-// （relation does not exist）时视为 0 租户正常退出，不阻塞全新环境部署。
-func TestFixProviderKeys_tenantsTableMissing(t *testing.T) {
+// TestFixProviderKeys_providersTableMissing 验证 public.providers 缺失
+// （relation does not exist）时视为全新环境正常退出，不阻塞全新环境部署。
+func TestFixProviderKeys_providersTableMissing(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	mock.ExpectQuery("SELECT id FROM public.tenants").
+	mock.ExpectQuery("SELECT id, api_key FROM public.providers").
 		WillReturnError(&pgconn.PgError{Code: pgCodeUndefinedTable})
 
 	err = fixProviderKeys(context.Background(), mock, testFixKey, zap.NewNop(), false)
@@ -60,13 +62,13 @@ func TestFixProviderKeys_tenantsTableMissing(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestFixProviderKeys_tenantListFails 验证 public.tenants 查询的其他错误必须
-// 向上传播（fail closed），禁止静默漏修。
-func TestFixProviderKeys_tenantListFails(t *testing.T) {
+// TestFixProviderKeys_listFails 验证 providers 查询的其他错误必须向上传播
+// （fail closed），禁止静默漏修。
+func TestFixProviderKeys_listFails(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	mock.ExpectQuery("SELECT id FROM public.tenants").
+	mock.ExpectQuery("SELECT id, api_key FROM public.providers").
 		WillReturnError(context.DeadlineExceeded)
 
 	err = fixProviderKeys(context.Background(), mock, testFixKey, zap.NewNop(), false)
@@ -75,37 +77,19 @@ func TestFixProviderKeys_tenantListFails(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestFixProviderKeys_tenantSchemaMissing 验证未 provision 的租户 schema
-// （relation does not exist）跳过该租户，不中断其他租户。
-func TestFixProviderKeys_tenantSchemaMissing(t *testing.T) {
-	mock, err := pgxmock.NewPool()
-	require.NoError(t, err)
-
-	mock.ExpectQuery("SELECT id FROM public.tenants").
-		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("t-unprovisioned"))
-	mock.ExpectQuery(`FROM "tenant_t-unprovisioned".providers`).
-		WillReturnError(&pgconn.PgError{Code: pgCodeUndefinedTable})
-
-	err = fixProviderKeys(context.Background(), mock, testFixKey, zap.NewNop(), false)
-	require.NoError(t, err)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
 // TestFixProviderKeys_updateFails 验证 UPDATE 失败必须中止并传播错误。
 func TestFixProviderKeys_updateFails(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 
-	mock.ExpectQuery("SELECT id FROM public.tenants").
-		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("t1"))
-	mock.ExpectQuery(`FROM "tenant_t1".providers`).
+	mock.ExpectQuery("SELECT id, api_key FROM public.providers").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "api_key"}).AddRow("p1", "sk-plain"))
-	mock.ExpectExec(`UPDATE "tenant_t1".providers SET api_key`).
+	mock.ExpectExec(`UPDATE public.providers SET api_key`).
 		WithArgs(pgxmock.AnyArg(), "p1").WillReturnError(context.DeadlineExceeded)
 
 	err = fixProviderKeys(context.Background(), mock, testFixKey, zap.NewNop(), false)
 	require.Error(t, err)
-	require.ErrorContains(t, err, "update provider p1 (tenant t1)")
+	require.ErrorContains(t, err, "update provider p1")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -114,24 +98,27 @@ func TestFixProviderKeys_updateFails(t *testing.T) {
 func TestFixProviderKeys_realRoundTrip(t *testing.T) {
 	pool := postgrestest.NewPool(t)
 	ctx := context.Background()
-	tenantID := postgrestest.CreateTestTenant(t, pool)
 
 	insert := func(id, apiKey string) {
 		t.Helper()
 		_, err := pool.Exec(ctx,
-			`INSERT INTO "tenant_`+tenantID+`".providers
-			 (id, tenant_id, name, kind, base_url, api_key, default_model, enabled)
-			 VALUES ($1,$2,$3,$4,$5,$6,'',true)`,
-			id, tenantID, id, "openai", "https://"+id+".example.com", apiKey)
+			`INSERT INTO public.providers
+			 (id, name, kind, base_url, api_key, default_model, enabled)
+			 VALUES ($1,$2,$3,$4,$5,'',true)`,
+			id, id, "openai", "https://"+id+".example.com", apiKey)
 		require.NoError(t, err)
+		t.Cleanup(func() {
+			_, _ = pool.Exec(context.Background(), `DELETE FROM public.providers WHERE id=$1`, id)
+		})
 	}
 
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	encExisting, err := crypto.EncryptSecret(testFixKey, "sk-already-encrypted")
 	require.NoError(t, err)
-	insert("plain-1", "sk-plain-1")
-	insert("plain-2", "sk-plain-2")
-	insert("enc-1", encExisting)
-	insert("empty-1", "")
+	insert("plain-1-"+suffix, "sk-plain-1")
+	insert("plain-2-"+suffix, "sk-plain-2")
+	insert("enc-1-"+suffix, encExisting)
+	insert("empty-1-"+suffix, "")
 
 	require.NoError(t, fixProviderKeys(ctx, pool, testFixKey, zap.NewNop(), false))
 
@@ -140,14 +127,14 @@ func TestFixProviderKeys_realRoundTrip(t *testing.T) {
 		want   string // 期望解密后的明文；空表示保持原样
 		prefix string
 	}{
-		{id: "plain-1", want: "sk-plain-1", prefix: "enc:v1:"},
-		{id: "plain-2", want: "sk-plain-2", prefix: "enc:v1:"},
-		{id: "enc-1", want: "sk-already-encrypted", prefix: "enc:v1:"},
-		{id: "empty-1", want: "", prefix: ""},
+		{id: "plain-1-" + suffix, want: "sk-plain-1", prefix: "enc:v1:"},
+		{id: "plain-2-" + suffix, want: "sk-plain-2", prefix: "enc:v1:"},
+		{id: "enc-1-" + suffix, want: "sk-already-encrypted", prefix: "enc:v1:"},
+		{id: "empty-1-" + suffix, want: "", prefix: ""},
 	} {
 		var stored string
 		require.NoError(t, pool.QueryRow(ctx,
-			`SELECT api_key FROM "tenant_`+tenantID+`".providers WHERE id=$1`, tc.id).Scan(&stored))
+			`SELECT api_key FROM public.providers WHERE id=$1`, tc.id).Scan(&stored))
 		if tc.prefix != "" {
 			require.True(t, strings.HasPrefix(stored, tc.prefix), "row %s must be ciphertext", tc.id)
 			plain, err := crypto.DecryptSecret(testFixKey, stored)
@@ -163,19 +150,22 @@ func TestFixProviderKeys_realRoundTrip(t *testing.T) {
 func TestFixProviderKeys_dryRun(t *testing.T) {
 	pool := postgrestest.NewPool(t)
 	ctx := context.Background()
-	tenantID := postgrestest.CreateTestTenant(t, pool)
 
+	id := fmt.Sprintf("plain-1-%d", time.Now().UnixNano())
 	_, err := pool.Exec(ctx,
-		`INSERT INTO "tenant_`+tenantID+`".providers
-		 (id, tenant_id, name, kind, base_url, api_key, default_model, enabled)
-		 VALUES ($1,$2,$3,$4,$5,$6,'',true)`,
-		"plain-1", tenantID, "plain-1", "openai", "https://plain-1.example.com", "sk-plain-1")
+		`INSERT INTO public.providers
+		 (id, name, kind, base_url, api_key, default_model, enabled)
+		 VALUES ($1,$2,$3,$4,$5,'',true)`,
+		id, "plain-1", "openai", "https://plain-1.example.com", "sk-plain-1")
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM public.providers WHERE id=$1`, id)
+	})
 
 	require.NoError(t, fixProviderKeys(ctx, pool, testFixKey, zap.NewNop(), true))
 
 	var stored string
 	require.NoError(t, pool.QueryRow(ctx,
-		`SELECT api_key FROM "tenant_`+tenantID+`".providers WHERE id=$1`, "plain-1").Scan(&stored))
+		`SELECT api_key FROM public.providers WHERE id=$1`, id).Scan(&stored))
 	require.Equal(t, "sk-plain-1", stored, "dry-run must not rewrite")
 }

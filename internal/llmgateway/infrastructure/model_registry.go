@@ -103,13 +103,13 @@ func (r *ModelRegistry) resolveModelFromDB(
 	capability domain.ModelCapability,
 ) (ProviderConfig, domain.Provider, error) {
 	enabled := true
-	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled, Capability: capability})
+	models, err := r.modelRepo.List(ctx, port.ModelFilter{Enabled: &enabled, Capability: capability})
 	if err != nil {
 		return ProviderConfig{}, domain.Provider{}, fmt.Errorf("model registry: list models: %w", err)
 	}
 	for _, m := range models {
 		if m.Name == modelName {
-			provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
+			provider, err := r.providerRepo.Get(ctx, m.ProviderID)
 			if err != nil {
 				return ProviderConfig{}, domain.Provider{}, fmt.Errorf("model registry: get provider: %w", err)
 			}
@@ -188,7 +188,7 @@ type fallbackCand struct {
 // provider 与不支持 chat 协议的模型。
 func (r *ModelRegistry) listFallbackCandidates(ctx context.Context, tenantID, primary, primaryProviderName string) ([]fallbackCand, error) {
 	enabled := true
-	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled, Capability: domain.CapChat})
+	models, err := r.modelRepo.List(ctx, port.ModelFilter{Enabled: &enabled, Capability: domain.CapChat})
 	if err != nil {
 		return nil, fmt.Errorf("model registry: list models: %w", err)
 	}
@@ -197,7 +197,7 @@ func (r *ModelRegistry) listFallbackCandidates(ctx context.Context, tenantID, pr
 		if m.Name == primary {
 			continue
 		}
-		provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
+		provider, err := r.providerRepo.Get(ctx, m.ProviderID)
 		if err != nil {
 			return nil, fmt.Errorf("model registry: get provider: %w", err)
 		}
@@ -237,14 +237,14 @@ func (r *ModelRegistry) ListEmbeddingModelsByTenant(ctx context.Context, tenantI
 // 3. 列表为空 → 返回 ""，调用方 fail-closed（不默认放行）。
 func (r *ModelRegistry) ResolveDefaultEmbeddingModel(ctx context.Context, tenantID string) (string, error) {
 	enabled := true
-	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled, Capability: domain.CapEmbedding})
+	models, err := r.modelRepo.List(ctx, port.ModelFilter{Enabled: &enabled, Capability: domain.CapEmbedding})
 	if err != nil {
 		return "", fmt.Errorf("model registry: list embedding models: %w", err)
 	}
 	names := make([]string, 0, len(models))
 	var marked string
 	for _, m := range models {
-		provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
+		provider, err := r.providerRepo.Get(ctx, m.ProviderID)
 		if err != nil {
 			return "", fmt.Errorf("model registry: get provider: %w", err)
 		}
@@ -273,13 +273,13 @@ func (r *ModelRegistry) ResolveDefaultEmbeddingModel(ctx context.Context, tenant
 // The returned rows are projected by the composition root into the
 // platform-assistant DTO; provider credentials never leave this boundary.
 func (r *ModelRegistry) ListModelsByTenantDetails(ctx context.Context, tenantID string) ([]domain.Model, error) {
-	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{})
+	models, err := r.modelRepo.List(ctx, port.ModelFilter{})
 	if err != nil {
 		return nil, fmt.Errorf("model registry: list models: %w", err)
 	}
 	details := make([]domain.Model, 0, len(models))
 	for _, m := range models {
-		provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
+		provider, err := r.providerRepo.Get(ctx, m.ProviderID)
 		if err != nil {
 			return nil, fmt.Errorf("model registry: get provider: %w", err)
 		}
@@ -298,7 +298,7 @@ func (r *ModelRegistry) listModelsByCapability(
 	capability domain.ModelCapability,
 ) ([]string, error) {
 	enabled := true
-	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{
+	models, err := r.modelRepo.List(ctx, port.ModelFilter{
 		Enabled:    &enabled,
 		Capability: capability,
 	})
@@ -307,7 +307,7 @@ func (r *ModelRegistry) listModelsByCapability(
 	}
 	names := make([]string, 0, len(models))
 	for _, m := range models {
-		provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
+		provider, err := r.providerRepo.Get(ctx, m.ProviderID)
 		if err != nil {
 			return nil, fmt.Errorf("model registry: get provider: %w", err)
 		}
@@ -338,12 +338,12 @@ func (r *ModelRegistry) supports(kind domain.ProviderKind, capability domain.Mod
 // ResolveEmbedding calls hit the cache.
 func (r *ModelRegistry) WarmTenant(ctx context.Context, tenantID string) error {
 	enabled := true
-	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled})
+	models, err := r.modelRepo.List(ctx, port.ModelFilter{Enabled: &enabled})
 	if err != nil {
 		return fmt.Errorf("model registry: warm tenant: %w", err)
 	}
 	for _, m := range models {
-		provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
+		provider, err := r.providerRepo.Get(ctx, m.ProviderID)
 		if err != nil {
 			return fmt.Errorf("model registry: warm tenant: get provider: %w", err)
 		}
@@ -377,7 +377,7 @@ func (r *ModelRegistry) WarmTenant(ctx context.Context, tenantID string) error {
 // known context window.
 func (r *ModelRegistry) GetChatModelContextWindow(ctx context.Context, tenantID, modelName string) (int, error) {
 	enabled := true
-	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled, Capability: domain.CapChat})
+	models, err := r.modelRepo.List(ctx, port.ModelFilter{Enabled: &enabled, Capability: domain.CapChat})
 	if err != nil {
 		return 0, fmt.Errorf("model registry: get context window: %w", err)
 	}
@@ -446,7 +446,7 @@ func (r *ModelRegistry) cacheSet(tenantID, key string, cfg ProviderConfig, provi
 // 会中止整条 fallback 链）。
 func (r *ModelRegistry) ResolveReasoning(ctx context.Context, tenantID, modelName string) bool {
 	enabled := true
-	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled})
+	models, err := r.modelRepo.List(ctx, port.ModelFilter{Enabled: &enabled})
 	if err != nil {
 		return false
 	}

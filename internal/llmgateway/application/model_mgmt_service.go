@@ -43,17 +43,17 @@ func NewModelMgmtService(repo port.ModelRepository, invalidators ...ModelCacheIn
 
 // List returns models matching the given filter.
 func (s *ModelMgmtService) List(ctx context.Context, tenantID string, filter port.ModelFilter) ([]domain.Model, error) {
-	return s.repo.List(ctx, tenantID, filter)
+	return s.repo.List(ctx, filter)
 }
 
 // Get returns a single model by ID.
 func (s *ModelMgmtService) Get(ctx context.Context, tenantID, id string) (*domain.Model, error) {
-	return s.repo.Get(ctx, tenantID, id)
+	return s.repo.Get(ctx, id)
 }
 
 // Update applies partial edits to a model's display and pricing fields.
 func (s *ModelMgmtService) Update(ctx context.Context, tenantID string, input UpdateModelInput) (*domain.Model, error) {
-	m, err := s.repo.Get(ctx, tenantID, input.ID)
+	m, err := s.repo.Get(ctx, input.ID)
 	if err != nil {
 		return nil, fmt.Errorf("model mgmt: get: %w", err)
 	}
@@ -64,7 +64,7 @@ func (s *ModelMgmtService) Update(ctx context.Context, tenantID string, input Up
 	m.InputPrice = input.InputPrice
 	m.OutputPrice = input.OutputPrice
 	m.Recommended = input.Recommended
-	if err := s.repo.Update(ctx, tenantID, m); err != nil {
+	if err := s.repo.Update(ctx, m); err != nil {
 		return nil, fmt.Errorf("model mgmt: update: %w", err)
 	}
 	s.invalidate(tenantID)
@@ -73,7 +73,7 @@ func (s *ModelMgmtService) Update(ctx context.Context, tenantID string, input Up
 
 // Toggle enables or disables a model.
 func (s *ModelMgmtService) Toggle(ctx context.Context, tenantID, id string, enabled bool) error {
-	if err := s.repo.Toggle(ctx, tenantID, id, enabled); err != nil {
+	if err := s.repo.Toggle(ctx, id, enabled); err != nil {
 		return err
 	}
 	s.invalidate(tenantID)
@@ -85,7 +85,7 @@ func (s *ModelMgmtService) Toggle(ctx context.Context, tenantID, id string, enab
 // clear-then-set 保证并发安全。成功后失效 registry 缓存。
 func (s *ModelMgmtService) SetDefaultEmbedding(ctx context.Context, tenantID, id string, enabled bool) error {
 	if enabled {
-		m, err := s.repo.Get(ctx, tenantID, id)
+		m, err := s.repo.Get(ctx, id)
 		if err != nil {
 			return err
 		}
@@ -93,7 +93,7 @@ func (s *ModelMgmtService) SetDefaultEmbedding(ctx context.Context, tenantID, id
 			return fmt.Errorf("model %s is not an enabled embedding model: %w", id, domain.ErrModelNotEmbeddingEnabled)
 		}
 	}
-	if err := s.repo.SetDefaultEmbedding(ctx, tenantID, id, enabled); err != nil {
+	if err := s.repo.SetDefaultEmbedding(ctx, id, enabled); err != nil {
 		return err
 	}
 	s.invalidate(tenantID)
@@ -111,7 +111,7 @@ func hasCapability(caps []domain.ModelCapability, want domain.ModelCapability) b
 
 // Delete removes a non-provider-managed model by ID.
 func (s *ModelMgmtService) Delete(ctx context.Context, tenantID, id string) error {
-	if err := s.repo.Delete(ctx, tenantID, id); err != nil {
+	if err := s.repo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("model mgmt: delete: %w", err)
 	}
 	s.invalidate(tenantID)

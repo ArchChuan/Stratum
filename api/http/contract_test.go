@@ -241,10 +241,10 @@ var errStubNotFound = errors.New("stub: not found")
 
 type contractProviderRepo struct{}
 
-func (contractProviderRepo) Create(_ context.Context, _ string, _ *llmdomain.Provider) error {
+func (contractProviderRepo) Create(_ context.Context, _ *llmdomain.Provider) error {
 	return nil
 }
-func (contractProviderRepo) Get(_ context.Context, _ string, _ string) (*llmdomain.Provider, error) {
+func (contractProviderRepo) Get(_ context.Context, _ string) (*llmdomain.Provider, error) {
 	return &llmdomain.Provider{
 		ID: "contract-provider", Name: "stub", Kind: llmdomain.ProviderOpenAICompat,
 		BaseURL: "https://stub.example.com/v1", Enabled: true,
@@ -252,7 +252,7 @@ func (contractProviderRepo) Get(_ context.Context, _ string, _ string) (*llmdoma
 		UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}, nil
 }
-func (contractProviderRepo) GetMeta(_ context.Context, _ string, _ string) (*llmdomain.Provider, error) {
+func (contractProviderRepo) GetMeta(_ context.Context, _ string) (*llmdomain.Provider, error) {
 	return &llmdomain.Provider{
 		ID: "contract-provider", Name: "stub", Kind: llmdomain.ProviderOpenAICompat,
 		BaseURL: "https://stub.example.com/v1", Enabled: true,
@@ -260,30 +260,30 @@ func (contractProviderRepo) GetMeta(_ context.Context, _ string, _ string) (*llm
 		UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}, nil
 }
-func (contractProviderRepo) List(_ context.Context, _ string) ([]llmdomain.Provider, error) {
+func (contractProviderRepo) List(_ context.Context) ([]llmdomain.Provider, error) {
 	return nil, nil
 }
-func (contractProviderRepo) Update(_ context.Context, _ string, _ *llmdomain.Provider) error {
+func (contractProviderRepo) Update(_ context.Context, _ *llmdomain.Provider) error {
 	return nil
 }
-func (contractProviderRepo) Delete(_ context.Context, _ string, _ string) error { return nil }
+func (contractProviderRepo) Delete(_ context.Context, _ string) error { return nil }
 
 type contractModelRepo struct{}
 
-func (contractModelRepo) Create(_ context.Context, _ string, _ *llmdomain.Model) error { return nil }
-func (contractModelRepo) Get(_ context.Context, _ string, _ string) (*llmdomain.Model, error) {
+func (contractModelRepo) Create(_ context.Context, _ *llmdomain.Model) error { return nil }
+func (contractModelRepo) Get(_ context.Context, _ string) (*llmdomain.Model, error) {
 	return nil, errStubNotFound
 }
-func (contractModelRepo) List(_ context.Context, _ string, _ llmport.ModelFilter) ([]llmdomain.Model, error) {
+func (contractModelRepo) List(_ context.Context, _ llmport.ModelFilter) ([]llmdomain.Model, error) {
 	return nil, nil
 }
-func (contractModelRepo) Update(_ context.Context, _ string, _ *llmdomain.Model) error { return nil }
-func (contractModelRepo) UpsertDiscovered(_ context.Context, _ string, _ string, _ []llmdomain.Model) ([]llmdomain.Model, error) {
+func (contractModelRepo) Update(_ context.Context, _ *llmdomain.Model) error { return nil }
+func (contractModelRepo) UpsertDiscovered(_ context.Context, _ string, _ []llmdomain.Model) ([]llmdomain.Model, error) {
 	return nil, nil
 }
-func (contractModelRepo) Delete(_ context.Context, _ string, _ string) error         { return nil }
-func (contractModelRepo) Toggle(_ context.Context, _ string, _ string, _ bool) error { return nil }
-func (contractModelRepo) SetDefaultEmbedding(_ context.Context, _ string, _ string, _ bool) error {
+func (contractModelRepo) Delete(_ context.Context, _ string) error         { return nil }
+func (contractModelRepo) Toggle(_ context.Context, _ string, _ bool) error { return nil }
+func (contractModelRepo) SetDefaultEmbedding(_ context.Context, _ string, _ bool) error {
 	return nil
 }
 

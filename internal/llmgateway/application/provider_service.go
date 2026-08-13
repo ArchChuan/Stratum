@@ -66,15 +66,14 @@ func NewProviderService(
 // Create persists a new provider and kicks off best-effort model discovery.
 func (s *ProviderService) Create(ctx context.Context, tenantID string, input CreateProviderInput) (*domain.Provider, error) {
 	p := &domain.Provider{
-		ID:       genULID(),
-		TenantID: tenantID,
-		Name:     input.Name,
-		Kind:     input.Kind,
-		BaseURL:  input.BaseURL,
-		APIKey:   input.APIKey,
-		Enabled:  true,
+		ID:      genULID(),
+		Name:    input.Name,
+		Kind:    input.Kind,
+		BaseURL: input.BaseURL,
+		APIKey:  input.APIKey,
+		Enabled: true,
 	}
-	if err := s.repo.Create(ctx, tenantID, p); err != nil {
+	if err := s.repo.Create(ctx, p); err != nil {
 		return nil, fmt.Errorf("provider service: create: %w", err)
 	}
 	s.invalidate(tenantID)
@@ -85,12 +84,12 @@ func (s *ProviderService) Create(ctx context.Context, tenantID string, input Cre
 
 // List returns all providers for a tenant.
 func (s *ProviderService) List(ctx context.Context, tenantID string) ([]domain.Provider, error) {
-	return s.repo.List(ctx, tenantID)
+	return s.repo.List(ctx)
 }
 
 // Get returns a single provider by ID.
 func (s *ProviderService) Get(ctx context.Context, tenantID, id string) (*domain.Provider, error) {
-	return s.repo.Get(ctx, tenantID, id)
+	return s.repo.Get(ctx, id)
 }
 
 // Update applies partial updates to an existing provider.
@@ -98,7 +97,7 @@ func (s *ProviderService) Get(ctx context.Context, tenantID, id string) (*domain
 // 存量明文/损坏密文的 provider 带新 key 重新保存必须可用，先解密旧 key
 // 会把该 provider 永久锁死（Get 保持 fail closed 不变）。
 func (s *ProviderService) Update(ctx context.Context, tenantID string, input UpdateProviderInput) (*domain.Provider, error) {
-	existing, err := s.repo.GetMeta(ctx, tenantID, input.ID)
+	existing, err := s.repo.GetMeta(ctx, input.ID)
 	if err != nil {
 		return nil, fmt.Errorf("provider service: get for update: %w", err)
 	}
@@ -109,7 +108,7 @@ func (s *ProviderService) Update(ctx context.Context, tenantID string, input Upd
 	if input.APIKey != "" {
 		existing.APIKey = input.APIKey
 	}
-	if err := s.repo.Update(ctx, tenantID, existing); err != nil {
+	if err := s.repo.Update(ctx, existing); err != nil {
 		return nil, fmt.Errorf("provider service: update: %w", err)
 	}
 	s.invalidate(tenantID)
@@ -118,7 +117,7 @@ func (s *ProviderService) Update(ctx context.Context, tenantID string, input Upd
 
 // Delete removes a provider by ID. Associated models are cascade-deleted by FK.
 func (s *ProviderService) Delete(ctx context.Context, tenantID, id string) error {
-	if err := s.repo.Delete(ctx, tenantID, id); err != nil {
+	if err := s.repo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("provider service: delete: %w", err)
 	}
 	s.invalidate(tenantID)
@@ -130,7 +129,7 @@ func (s *ProviderService) Delete(ctx context.Context, tenantID, id string) error
 // model name — models containing "embed" are classified as embedding, others
 // default to chat.
 func (s *ProviderService) DiscoverModels(ctx context.Context, tenantID, providerID string) ([]domain.Model, error) {
-	provider, err := s.repo.Get(ctx, tenantID, providerID)
+	provider, err := s.repo.Get(ctx, providerID)
 	if err != nil {
 		return nil, fmt.Errorf("discover models: %w", err)
 	}
@@ -144,7 +143,6 @@ func (s *ProviderService) DiscoverModels(ctx context.Context, tenantID, provider
 	models := make([]domain.Model, 0, len(discovered))
 	for _, dm := range discovered {
 		models = append(models, domain.Model{
-			TenantID:        tenantID,
 			ProviderID:      providerID,
 			Name:            dm.Name,
 			DisplayName:     dm.Name,
@@ -155,7 +153,7 @@ func (s *ProviderService) DiscoverModels(ctx context.Context, tenantID, provider
 			Enabled:         true,
 		})
 	}
-	upserted, err := s.modelRepo.UpsertDiscovered(ctx, tenantID, providerID, models)
+	upserted, err := s.modelRepo.UpsertDiscovered(ctx, providerID, models)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +202,7 @@ func isReasoningModelName(lower string) bool {
 // HealthCheck verifies that the provider is reachable by calling the
 // configured health model endpoint.
 func (s *ProviderService) HealthCheck(ctx context.Context, tenantID, providerID string) error {
-	provider, err := s.repo.Get(ctx, tenantID, providerID)
+	provider, err := s.repo.Get(ctx, providerID)
 	if err != nil {
 		return err
 	}

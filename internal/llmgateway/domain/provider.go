@@ -29,7 +29,6 @@ const (
 // apiKey is write-only: it is accepted on create/update but never returned.
 type Provider struct {
 	ID           string       `json:"id"`
-	TenantID     string       `json:"-"`
 	Name         string       `json:"name"`
 	Kind         ProviderKind `json:"kind"`
 	BaseURL      string       `json:"baseUrl"`
