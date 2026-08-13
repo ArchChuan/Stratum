@@ -198,7 +198,6 @@ dist/
 
 # AI tooling artifacts
 .claude/
-.agent/
 .agents/
 .codex/
 .serena/
