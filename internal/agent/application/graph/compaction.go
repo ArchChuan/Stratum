@@ -291,7 +291,9 @@ func summarizeMiddle(
 	marker := fmt.Sprintf("[已省略 %d 轮较早对话以控制上下文长度]", len(middle))
 	if compactor != nil {
 		if summary, err := compactor.CompactHistory(ctx, flat); err == nil && summary != "" {
-			marker = "[早期对话摘要] " + summary
+			// 摘要源自被逐出的历史消息，可能携带注入内容；包 untrusted
+			// 标记防止压缩把不可信历史"洗白"成 system 级指令。
+			marker = "[早期对话摘要] " + WrapUntrustedSection("history", summary)
 			// 压缩实际发生（同步摘要产出）：回写冷却时间戳（Spec 第 4 节），
 			// 一次执行内后续超限步骤不再重复触发。
 			if state != nil {
