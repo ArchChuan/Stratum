@@ -229,16 +229,13 @@ func (r publishedSkillActivationResolver) ResolveSkills(
 			continue
 		}
 		catalog[view.SkillID] = agentport.SkillActivation{
-			SkillID:               view.SkillID,
-			RevisionID:            view.RevisionID,
-			Name:                  view.Name,
-			Description:           view.Description,
-			Instructions:          view.Instructions,
-			InputSchema:           view.InputSchema,
-			OutputSchema:          view.OutputSchema,
-			MCPToolIDs:            view.MCPToolIDs,
-			KnowledgeWorkspaceIDs: view.KnowledgeWorkspaceIDs,
-			MemoryScopes:          view.MemoryScopes,
+			SkillID:      view.SkillID,
+			RevisionID:   view.RevisionID,
+			Name:         view.Name,
+			Description:  view.Description,
+			Instructions: view.Instructions,
+			InputSchema:  view.InputSchema,
+			OutputSchema: view.OutputSchema,
 		}
 	}
 	return catalog, nil
@@ -339,15 +336,14 @@ func (c *Container) buildAgent(ctx context.Context) error {
 			}
 			return compactor
 		},
-		ChatStore:         a.ChatStore,
-		EvidenceProvider:  a.EvidenceProvider,
-		TracePayloadStore: a.TracePayloadStore,
-		CheckpointStore:   a.CheckpointStore,
-		ApprovalService:   a.ApprovalService,
-		ToolAuthorizer: agent.NewToolAuthorizer(agentToolUserScopeResolver{
-			members: tenantMemberService(c),
-		}),
+		ChatStore:                 a.ChatStore,
+		EvidenceProvider:          a.EvidenceProvider,
+		TracePayloadStore:         a.TracePayloadStore,
+		CheckpointStore:           a.CheckpointStore,
+		ApprovalService:           a.ApprovalService,
+		ToolAuthorizer:            agent.NewToolAuthorizer(agentToolUserScopeResolver{members: tenantMemberService(c)}),
 		WorkspaceBindingValidator: workspaceBindingAdapter{ws: knowledgeWorkspaceService(c)},
+		SystemResourceGuard:       newSystemResourceGuard(mcpServiceOf(c), knowledgeWorkspaceService(c)),
 		Logger:                    c.Logger,
 	}
 	if db != nil {
@@ -415,7 +411,6 @@ func (c *Container) injectTenantRoleResolvers(a *Agent) {
 	a.Service.SetTenantRoleResolver(roles)
 	a.ApprovalService.SetTenantRoleResolver(roles)
 	c.Skill.VersionService.SetTenantRoleResolver(roles)
-	c.Skill.VersionService.SetWorkspaceBindingValidator(workspaceBindingAdapter{ws: c.Knowledge.WorkspaceService})
 	c.MCP.Service.SetTenantRoleResolver(roles)
 	c.Knowledge.WorkspaceService.SetTenantRoleResolver(roles)
 	if c.Knowledge.RAGService != nil {

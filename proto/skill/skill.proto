@@ -4,12 +4,6 @@ package stratum.skill;
 
 import "google/protobuf/struct.proto";
 
-message SkillRequirements {
-  repeated string mcpToolIds = 1;
-  repeated string knowledgeWorkspaceIds = 2;
-  repeated string memoryScopes = 3;
-}
-
 message CreateSkillRequest {
   // @binding: required
   string name = 1;
@@ -21,7 +15,6 @@ message CreateSkillRequest {
   google.protobuf.Value expectedOutput = 5;
   // @binding: required
   string instructions = 6;
-  SkillRequirements requirements = 7;
   // Editors grants additional admins update rights, persisted with the skill.
   repeated string editors = 8;
 }
@@ -43,7 +36,6 @@ message UpdateSkillActivationRequest {
 
 message UpdateSkillInstructionBundleRequest {
   string instructions = 1;
-  SkillRequirements requirements = 2;
 }
 
 message SkillWorkspaceResponse {
@@ -61,6 +53,8 @@ message SkillProductResponse {
   string activeRevisionId = 5;
   // @omitempty
   string draftRevisionId = 6;
+  // isSystem 标记系统内置 skill(builtin: 前缀),供前端按普通 agent / 系统助手条件过滤。
+  bool isSystem = 7;
 }
 
 message SkillRevisionResponse {
@@ -72,7 +66,6 @@ message SkillRevisionResponse {
   google.protobuf.Struct capability = 5;
   google.protobuf.Struct activationContract = 6;
   string instructions = 7;
-  google.protobuf.Struct requirements = 8;
   // @omitempty
   google.protobuf.Struct publishChecks = 9;
 }

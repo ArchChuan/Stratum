@@ -3,21 +3,14 @@
 
 package gen
 
-type SkillRequirements struct {
-	MCPToolIDs            []string `json:"mcpToolIds"`
-	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
-	MemoryScopes          []string `json:"memoryScopes"`
-}
-
 type CreateSkillRequest struct {
-	Name           string            `json:"name" binding:"required"`
-	Goal           string            `json:"goal" binding:"required"`
-	WhenToUse      string            `json:"whenToUse" binding:"required"`
-	SampleInput    any               `json:"sampleInput"`
-	ExpectedOutput any               `json:"expectedOutput"`
-	Instructions   string            `json:"instructions" binding:"required"`
-	Requirements   SkillRequirements `json:"requirements"`
-	Editors        []string          `json:"editors"`
+	Name           string   `json:"name" binding:"required"`
+	Goal           string   `json:"goal" binding:"required"`
+	WhenToUse      string   `json:"whenToUse" binding:"required"`
+	SampleInput    any      `json:"sampleInput"`
+	ExpectedOutput any      `json:"expectedOutput"`
+	Instructions   string   `json:"instructions" binding:"required"`
+	Editors        []string `json:"editors"`
 }
 
 type UpdateSkillCapabilityRequest struct {
@@ -36,8 +29,7 @@ type UpdateSkillActivationRequest struct {
 }
 
 type UpdateSkillInstructionBundleRequest struct {
-	Instructions string            `json:"instructions"`
-	Requirements SkillRequirements `json:"requirements"`
+	Instructions string `json:"instructions"`
 }
 
 type SkillWorkspaceResponse struct {
@@ -53,6 +45,7 @@ type SkillProductResponse struct {
 	Status           string `json:"status"`
 	ActiveRevisionID string `json:"activeRevisionId,omitempty"`
 	DraftRevisionID  string `json:"draftRevisionId,omitempty"`
+	IsSystem         bool   `json:"isSystem"`
 }
 
 type SkillRevisionResponse struct {
@@ -63,7 +56,6 @@ type SkillRevisionResponse struct {
 	Capability         map[string]any `json:"capability"`
 	ActivationContract map[string]any `json:"activationContract"`
 	Instructions       string         `json:"instructions"`
-	Requirements       map[string]any `json:"requirements"`
 	PublishChecks      map[string]any `json:"publishChecks,omitempty"`
 }
 

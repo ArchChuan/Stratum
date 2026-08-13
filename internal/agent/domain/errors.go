@@ -33,4 +33,10 @@ var (
 	ErrOperationProposalResolved          = errors.New("operation proposal already resolved")
 	ErrOperationProposalPending           = errors.New("operation proposal already pending")
 	ErrOperationProposalExpired           = errors.New("operation proposal approval expired")
+	// ErrPlatformManagedSkillBinding 标记"内置 skill 挂载到普通 agent"边界
+	// (builtin: 前缀)。区别于 skill domain 的 ErrPlatformManagedSkill —— 后者
+	// 守卫 skill 资源自身的写路径,这里守卫 agent 挂载关系,agent 不 import 兄弟 domain。
+	ErrPlatformManagedSkillBinding = errors.New("platform-managed skill cannot be bound to a regular agent")
+	// ErrPlatformManagedMCPServerBinding 标记"平台托管 MCP server 挂载到普通 agent"边界。
+	ErrPlatformManagedMCPServerBinding = errors.New("platform-managed MCP server cannot be bound to a regular agent")
 )

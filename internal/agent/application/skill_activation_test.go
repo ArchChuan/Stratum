@@ -160,8 +160,8 @@ func TestAgentService_ExecuteSkillScenarioActivatesMultipleSkills(t *testing.T) 
 		agent.ExecRequest{Query: "run scenario"},
 		agent.ExecMeta{TenantID: "tenant-1"},
 		[]port.SkillActivation{
-			{SkillID: "skill-a", Name: "skill-a", RevisionID: "rev-a", Instructions: "USE INSTRUCTION A", MCPToolIDs: []string{"mcp:orders:get"}},
-			{SkillID: "skill-b", Name: "skill-b", RevisionID: "rev-b", Instructions: "USE INSTRUCTION B", MCPToolIDs: []string{"mcp:orders:delete"}},
+			{SkillID: "skill-a", Name: "skill-a", RevisionID: "rev-a", Instructions: "USE INSTRUCTION A"},
+			{SkillID: "skill-b", Name: "skill-b", RevisionID: "rev-b", Instructions: "USE INSTRUCTION B"},
 		},
 	)
 	require.NoError(t, err)

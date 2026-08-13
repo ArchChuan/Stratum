@@ -255,7 +255,7 @@ func TestSystemAssistantWithoutModelFailsBeforeCapabilityResolution(t *testing.T
 }
 
 func TestOrdinaryAgentResolvesMCPToolsFromProvider(t *testing.T) {
-	svc := NewAgentService(AgentServiceDeps{MCPTools: genericMCPTools{}})
+	svc := NewAgentService(AgentServiceDeps{MCPTools: genericMCPTools{}, SystemResourceGuard: stubSystemResourceGuard{}})
 	agent := &optionCaptureAgent{config: &domain.AgentConfig{
 		ID: "ordinary", MaxIterations: 3, MCPToolIDs: []string{"mcp:orders:get"},
 	}}

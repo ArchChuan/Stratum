@@ -1,6 +1,6 @@
 .PHONY: \
 	be-install be-fmt be-lint be-test be-build be-docker-build \
-	fe-install fe-lint fe-typecheck fe-build fe-docker-build \
+	fe-install fe-test fe-lint fe-typecheck fe-build fe-docker-build \
 		check \
 	infra-up infra-down infra-wait infra-status \
 	zhparser-build-local \
@@ -124,6 +124,9 @@ fe-typecheck: proto-gen
 
 fe-build: proto-gen
 	cd $(WEB_DIR) && npm run build
+
+fe-test: proto-gen
+	cd $(WEB_DIR) && npm test
 
 fe-docker-build: proto-gen
 	docker build -t $(FE_IMAGE):$(IMAGE_TAG) -f $(WEB_DIR)/Dockerfile $(WEB_DIR)/

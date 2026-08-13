@@ -261,7 +261,7 @@ func (*proposalSkillFake) CreateSkillDraft(context.Context, skillapp.CreateSkill
 		Draft: skilldomain.SkillRevision{Status: skilldomain.VersionStatusDraft, ContentHash: "hash"},
 	}, nil
 }
-func (*proposalSkillFake) GetWorkspace(context.Context, string) (skillapp.SkillWorkspaceView, error) {
+func (*proposalSkillFake) GetWorkspace(context.Context, string, string) (skillapp.SkillWorkspaceView, error) {
 	return skillapp.SkillWorkspaceView{}, nil
 }
 func (f *proposalSkillFake) UpdateDraftBundle(_ context.Context, _, fingerprint string, in skillapp.UpdateDraftBundleInput) (skillapp.SkillWorkspaceView, error) {

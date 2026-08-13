@@ -63,7 +63,7 @@ skill 触发范式要对齐 Claude Code / Codex 的外部范式,同时适配云�
   - `execSearchKnowledgeTool`(`react_tool.go:456`) + `allowedKnowledgeWorkspaces`(`react_tool.go:892`):去掉 skill 声明交集段(897-902, 912-916),只按 agent 绑定的 `s.AgentKnowledgeWorkspaceIDs` 过滤。
   - `anyActiveAllowsMemoryScope`(`react_helpers.go:199-206`)删除。
   - **安全边界不破**:memory scope 与 knowledge workspace 仍受 agent 绑定约束,只是不再受 skill 声明叠加约束;skill 激活既不扩大也不缩小 agent 的能力边界。
-- `requirements.MCPToolIDs/MemoryScopes/KnowledgeWorkspaceIDs` 降级为声明性元数据(文档/校验/作者意图),不做运行时过滤;skill 编辑页不再强制填写资源 ID。
+- `requirements.MCPToolIDs/MemoryScopes/KnowledgeWorkspaceIDs` 降级为声明性元数据(文档/校验/作者意图),不做运行时过滤;skill 编辑页不再强制填写资源 ID。**【后续全链路移除**:三字段已从 proto/DTO/表单/写入路径整体删除(指令即自然语言描述资源),DB 列 `skill_revisions.requirements` 保留空列 `'{}'` 不做破坏性迁移;Agent 的工具/知识/记忆边界完全由 agent 绑定决定。**
 - 收益:消除"激活 skill 即隐藏 agent 其他工具/改变 memory-knowledge 边界"的持续副作用,工具面行为可预期。
 
 ### D6. 重复命中拦截
@@ -81,7 +81,7 @@ skill 触发范式要对齐 Claude Code / Codex 的外部范式,同时适配云�
 - `internal/agent/application/graph/react_llm.go`:`prepareLLMRequest`/`fitToolsToContextBudget`(506)适配两阶段截断。
 - `internal/skill/domain/version.go`:ActivationContract `Validate` 放宽;字段加 `omitempty`。
 - `internal/skill/application/version_service.go`:确认 nil schema 默认填充语义(声明性,不动或注释说明)。
-- 前端:`web/src/modules/skill/pages/SkillWorkspacePage.tsx` 契约 tab 去 inputSchema/outputSchema 强制项;requirements 资源 ID 改可选/说明降级。
+- 前端:`web/src/modules/skill/pages/SkillWorkspacePage.tsx` 契约 tab 去 inputSchema/outputSchema 强制项;requirements 资源 ID 改可选/说明降级。**【全链路移除**:requirements 表单项已从创建页/工作台删除。**
 - 测试:`tool_authorization_test.go`、`tool_authorizer_test.go`、`react_test.go`、`tool_permission_e2e_test.go` 全量改造(均在验证被删行为);新增 stratum_skill 分发/截断/重复命中/空 catalog/保留名/memory-knowledge 继承测试。
 - 契约测试:`api/http/contract_test.go` + `testdata/contracts/*skill*.golden.json`。
 - 文档:`docs/agent/agent.md` 删除 `stratum_activate_skill` 旧设计;交叉引用同步 `docs/superpowers/specs/2026-08-04-platform-assistant-carrier-architecture-design.md:37`、`docs/agent/agent-chat-flow.md:85`。

@@ -762,8 +762,6 @@ func executeLiveSkillFlow(client *http.Client, apiURL, token, agentID, serverID,
 		"whenToUse":   "When executing the isolated Skill evaluation scenario",
 		"sampleInput": "Run the live Skill scenario.", "expectedOutput": "bounded-agent-result",
 		"instructions": "Return bounded-agent-result after following the active scenario.",
-		"requirements": map[string]any{"mcpToolIds": []string{}, "knowledgeWorkspaceIds": []string{},
-			"memoryScopes": []string{}},
 	}, http.StatusCreated, &workspace)
 	if workspace.Skill.ID == "" {
 		panic("live Skill creation response invalid")

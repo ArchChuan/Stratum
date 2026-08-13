@@ -42,12 +42,6 @@ type ActivationContract struct {
 	Confirmed    bool           `json:"confirmed"`
 }
 
-type Requirements struct {
-	MCPToolIDs            []string `json:"mcpToolIds,omitempty"`
-	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds,omitempty"`
-	MemoryScopes          []string `json:"memoryScopes,omitempty"`
-}
-
 type SkillRevision struct {
 	ID                 string
 	SkillID            string
@@ -60,7 +54,6 @@ type SkillRevision struct {
 	Capability         Capability
 	ActivationContract ActivationContract
 	Instructions       string
-	Requirements       Requirements
 	PublishChecks      map[string]any
 	// CreatedBy traces who authored this revision (draft author, not ownership).
 	CreatedBy string
@@ -71,12 +64,10 @@ func (v SkillRevision) ComputeContentHash() (string, error) {
 		Capability         Capability         `json:"capability"`
 		ActivationContract ActivationContract `json:"activation_contract"`
 		Instructions       string             `json:"instructions"`
-		Requirements       Requirements       `json:"requirements"`
 	}{
 		Capability:         v.Capability,
 		ActivationContract: v.ActivationContract,
 		Instructions:       v.Instructions,
-		Requirements:       v.Requirements,
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
@@ -87,7 +78,6 @@ func (v SkillRevision) ComputeContentHash() (string, error) {
 }
 
 var activationNamePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]{0,63}$`)
-var mcpToolIDPattern = regexp.MustCompile(`^mcp:[^:[:space:]]+:[^:[:space:]]+$`)
 
 func (c ActivationContract) Validate() error {
 	if !activationNamePattern.MatchString(c.Name) {
@@ -100,32 +90,6 @@ func (c ActivationContract) Validate() error {
 	// 只需 name+description,契约负担向外部看齐。
 	if !c.Confirmed {
 		return fmt.Errorf("activation contract not confirmed: %w", ErrSkillNotPublishable)
-	}
-	return nil
-}
-
-func (r Requirements) Validate() error {
-	seen := make(map[string]struct{}, len(r.MCPToolIDs))
-	for _, toolID := range r.MCPToolIDs {
-		if !mcpToolIDPattern.MatchString(toolID) {
-			return fmt.Errorf("invalid MCP tool ID %q: %w", toolID, ErrSkillNotPublishable)
-		}
-		if _, ok := seen[toolID]; ok {
-			return fmt.Errorf("duplicate MCP tool ID %q: %w", toolID, ErrSkillNotPublishable)
-		}
-		seen[toolID] = struct{}{}
-	}
-	for _, workspaceID := range r.KnowledgeWorkspaceIDs {
-		if strings.TrimSpace(workspaceID) == "" {
-			return fmt.Errorf("empty knowledge workspace ID: %w", ErrSkillNotPublishable)
-		}
-	}
-	for _, scope := range r.MemoryScopes {
-		switch scope {
-		case "conversation", "user", "agent":
-		default:
-			return fmt.Errorf("invalid memory scope %q: %w", scope, ErrSkillNotPublishable)
-		}
 	}
 	return nil
 }
@@ -145,9 +109,6 @@ func (v SkillRevision) ValidatePublishable(enabledTestCount int) error {
 	}
 	if strings.TrimSpace(v.Instructions) == "" {
 		return fmt.Errorf("instructions required: %w", ErrSkillNotPublishable)
-	}
-	if err := v.Requirements.Validate(); err != nil {
-		return err
 	}
 	return nil
 }
