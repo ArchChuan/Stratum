@@ -3,9 +3,15 @@ package constants
 import "time"
 
 const (
-	DefaultAgentContextTokens                    = 8000
-	DefaultSystemAssistantModel                  = "glm-5.2"
-	MinSystemPromptTokens                        = 200
+	DefaultAgentContextTokens   = 8000
+	DefaultSystemAssistantModel = "glm-5.2"
+	MinSystemPromptTokens       = 200
+	// MinAgentMaxIterations / MaxAgentMaxIterations bound the per-agent max
+	// iteration count. Single source of truth shared by the frontend slider,
+	// AgentRevision.Validate, the HTTP create/update validation, the parameter
+	// registry, and the system assistant's propose/apply payload schema.
+	MinAgentMaxIterations                        = 1
+	MaxAgentMaxIterations                        = 90
 	DefaultInitHistoryWindow                     = 20  // BuildInitMessages fallback window
 	DefaultContextHistoryWindow                  = 50  // BuildContextMessages fallback window
 	MemoryBudgetRatio                            = 0.3 // fraction of remaining budget reserved for memory context

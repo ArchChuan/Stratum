@@ -11,6 +11,20 @@ import (
 // D9 恢复层终结错误映射：会话已删除 → 410 Gone（对齐过期语义），策略变更 → 409
 // Conflict（对齐 invalidated/decided 等终态冲突族）。两者都与既有 approval sentinel
 // 一同受 MapErrorToStatus 守卫。
+func TestMapAgentValidationErrors(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want int
+	}{
+		{agentdomain.ErrInvalidMaxIterations, http.StatusBadRequest},
+		{agentdomain.ErrInvalidSamplingParameters, http.StatusBadRequest},
+	} {
+		if got := MapErrorToStatus(tc.err); got != tc.want {
+			t.Errorf("MapErrorToStatus(%v)=%d want %d", tc.err, got, tc.want)
+		}
+	}
+}
+
 func TestMapAgentApprovalErrors(t *testing.T) {
 	tests := []struct {
 		err  error

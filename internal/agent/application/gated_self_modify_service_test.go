@@ -235,6 +235,32 @@ func TestGatedSelfModifyFingerprintBindsPayload(t *testing.T) {
 	require.NotEqual(t, approved.ID, result.Decision.ProposalID)
 }
 
+// TestGatedSelfModifyRejectsOutOfBoundsMaxIterations 锁定 maxIterations 校验在
+// 批准重放落地路径（Update → buildUpdateConfig）执行：越界 91 在 gate 已放行后
+// 拒绝，决策 Allowed 保持 true（gate 层语义不变），且不产生部分写。
+func TestGatedSelfModifyRejectsOutOfBoundsMaxIterations(t *testing.T) {
+	repo := newOperationProposalRepoFake()
+	seed := &domain.AgentConfig{ID: "agent-1", Name: "old"}
+	svc, agentRepo, _, _, _ := newGatedServiceForTest(t, repo, newOperationUsageRepoFake(), seed)
+	ctx := context.Background()
+
+	req := selfModifyRequest("renamed")
+	req.MaxIterations = 91
+	fingerprint, err := svc.deps.OperationGate.ComputeFingerprint("agent-1", port.OpSelfModify, req)
+	require.NoError(t, err)
+	approved := seededProposal(t, repo)
+	approved.Fingerprint = fingerprint
+	repo.proposals[approved.ID] = approved
+	require.NoError(t, repo.UpdateStatus(ctx, "tenant-1", approved.ID, domain.OpApproved, "admin-1", "ok"))
+
+	result, err := svc.GatedSelfModify(ctx, "tenant-1", "member-1", "agent-1", req)
+
+	require.ErrorIs(t, err, domain.ErrInvalidMaxIterations)
+	require.True(t, result.Decision.Allowed)
+	// 无部分写：拒绝发生在任何 repo 写之前。
+	require.Equal(t, "old", agentRepo.agents["agent-1"].Name)
+}
+
 // stubTenantRole resolves every actor as a fixed role so ownership tests
 // control authorization via the fake, not tenant membership.
 type stubTenantRole struct{ role string }

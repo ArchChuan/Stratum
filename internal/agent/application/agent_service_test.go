@@ -888,6 +888,127 @@ func TestAgentServiceUpdateSystemAssistantRevalidatesLegacyOutOfBoundsOnZero(t *
 	repo.AssertNotCalled(t, "UpdateSystemAssistantAll", mock.Anything, mock.Anything)
 }
 
+// maxIterations 范围校验（对齐 1-90，常量单一事实源）：create 路径在
+// validateSamplingParams 之后拦截越界与负数；0 = unset 通过（handler
+// binding:"required" 已在 HTTP 层拒绝 create 显式 0）。
+func TestAgentServiceCreateMaxIterationsValidation(t *testing.T) {
+	tests := []struct {
+		name          string
+		maxIterations int
+		wantErr       bool
+	}{
+		{name: "unset zero", maxIterations: 0, wantErr: false},
+		{name: "lower boundary", maxIterations: 1, wantErr: false},
+		{name: "upper boundary 90", maxIterations: 90, wantErr: false},
+		{name: "exceeds 90", maxIterations: 91, wantErr: true},
+		{name: "negative", maxIterations: -1, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, repo := newTestService(t)
+			repo.On("Register", mock.Anything, mock.Anything).Return(nil)
+			_, err := svc.Create(context.Background(), application.CreateAgentInput{
+				TenantID: "tenant-1", ActorID: "user-1", Name: "new",
+				Type: string(domain.ReActAgent), LLMModel: "qwen-plus", MaxIterations: tc.maxIterations,
+			})
+			if tc.wantErr {
+				require.ErrorIs(t, err, domain.ErrInvalidMaxIterations)
+				repo.AssertNotCalled(t, "Register", mock.Anything, mock.Anything)
+				return
+			}
+			require.NoError(t, err)
+			repo.AssertExpectations(t)
+		})
+	}
+}
+
+// 普通 update（非系统助手）maxIterations 校验：91/-1 在 buildUpdateConfig
+// 拒绝且不落库，90/0 通过并走 Registry.Update。
+func TestAgentServiceUpdateMaxIterationsValidation(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name          string
+		maxIterations int
+		wantErr       bool
+	}{
+		{name: "unset zero keeps current", maxIterations: 0, wantErr: false},
+		{name: "upper boundary 90", maxIterations: 90, wantErr: false},
+		{name: "exceeds 90", maxIterations: 91, wantErr: true},
+		{name: "negative", maxIterations: -1, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, repo := newTestService(t)
+			cfg := &domain.AgentConfig{ID: "agent-1", Name: "old", Type: domain.ReActAgent, CreatedBy: "user-1"}
+			repo.On("Get", mock.Anything, "agent-1").Return(cfg, true, nil).Once()
+			if !tc.wantErr {
+				updated := &domain.AgentConfig{ID: "agent-1", Name: "old", Type: domain.ReActAgent,
+					CreatedBy: "user-1", MaxIterations: tc.maxIterations}
+				repo.On("Update", mock.Anything, mock.Anything).Return(nil).Once()
+				repo.On("Get", mock.Anything, "agent-1").Return(updated, true, nil).Once()
+			}
+			_, err := svc.Update(ctx, "agent-1", application.UpdateAgentInput{
+				ActorID: "user-1", MaxIterations: tc.maxIterations,
+			})
+			if tc.wantErr {
+				require.ErrorIs(t, err, domain.ErrInvalidMaxIterations)
+				repo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
+				return
+			}
+			require.NoError(t, err)
+			repo.AssertExpectations(t)
+		})
+	}
+}
+
+// updateSystemAssistant maxIterations 通道测试：只校验显式非零 in.MaxIterations
+// （B2），0 = 保留原值，90 合法落库，91 越界 400 且不落库。
+func TestAgentServiceUpdateSystemAssistantPersistsMaxIterations(t *testing.T) {
+	svc, repo := newTestService(t)
+	cfg := &domain.AgentConfig{ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey}
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
+	repo.On("UpdateSystemAssistantAll", ctx, "", "", false, 90, 0, 0).Return(&domain.AgentConfig{
+		ID: cfg.ID, SystemKey: cfg.SystemKey, MaxIterations: 90,
+	}, nil)
+
+	dto, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{MaxIterations: 90})
+
+	assert.NoError(t, err)
+	assert.Equal(t, 90, dto.MaxIterations)
+	repo.AssertExpectations(t)
+}
+
+func TestAgentServiceUpdateSystemAssistantZeroKeepsCurrentMaxIterations(t *testing.T) {
+	svc, repo := newTestService(t)
+	cfg := &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, MaxIterations: 50,
+	}
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
+	// 0 = 保留现值：merge 后传 cfg.MaxIterations(50) 落库，且不校验
+	// cfg.MaxIterations（B2 约束：PUT-0 不误拒 DB 遗留超界值）。
+	repo.On("UpdateSystemAssistantAll", ctx, "", "", false, 50, 0, 0).Return(cfg, nil)
+
+	dto, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{})
+
+	assert.NoError(t, err)
+	assert.Equal(t, 50, dto.MaxIterations)
+	repo.AssertExpectations(t)
+}
+
+func TestAgentServiceUpdateSystemAssistantRejectsOutOfBoundsMaxIterations(t *testing.T) {
+	svc, repo := newTestService(t)
+	cfg := &domain.AgentConfig{ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey}
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
+
+	_, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{MaxIterations: 91})
+
+	assert.ErrorIs(t, err, domain.ErrInvalidMaxIterations)
+	repo.AssertNotCalled(t, "UpdateSystemAssistantAll", mock.Anything, mock.Anything)
+}
+
 func TestAgentService_Delete(t *testing.T) {
 	svc, repo := newTestService(t)
 	repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{ID: "agent-1"}, true, nil)
