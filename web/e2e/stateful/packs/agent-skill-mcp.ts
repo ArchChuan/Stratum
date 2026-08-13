@@ -1,12 +1,12 @@
 import { expect, type Page } from '@playwright/test';
 import type { QueryResultRow } from 'pg';
 
-import type { BrowserActor } from '../core/actors';
-import { configureManagedModels, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
+import { restoreActorSession, type BrowserActor } from '../core/actors';
+import { addGeneratedActorMembership, configureManagedModels, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
 import type { EvidenceRecord } from '../core/evidence';
 import { openAgentCreation } from '../core/navigation';
 
-interface CrossPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string; fixtureURL: string; backendURL: string }
+interface CrossPackContext { actor: BrowserActor; approver: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string; fixtureURL: string; backendURL: string }
 const waitForMutation = (page: Page, path: string, method: string) => page.waitForResponse((response) => (
   new URL(response.url()).pathname === path && response.request().method() === method
 ));
@@ -38,11 +38,12 @@ const findServerRow = async (page: Page, serverName: string) => {
 };
 
 export const executeAgentSkillMCPPack = async ({
-  actor, pool, evidence, webURL, fixtureURL, backendURL,
+  actor, approver, pool, evidence, webURL, fixtureURL, backendURL,
 }: CrossPackContext): Promise<string[]> => {
   const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
   await configureManagedModels(pool, tenantID, fixtureURL, actor.accessToken ?? '', backendURL);
   const page = await actor.context.newPage();
+  let approverPage: Page | null = null;
   const suffix = Date.now();
   const serverName = `E2E-Cross-MCP-${suffix}`;
   const skillName = `E2E-Cross-Skill-${suffix}`;
@@ -130,18 +131,32 @@ export const executeAgentSkillMCPPack = async ({
     await page.getByRole('button', { name: '发送消息' }).click();
     await expect(page.getByText('工具 stateful_echo 等待审批', { exact: true })).toBeVisible({ timeout: 120_000 });
 
-    const decisionResponse = page.waitForResponse((response) => (
+    // 自审批保护（Decide 校验 actor != payload.UserID）：审批必须由发起者之外的
+    // admin/owner 决定。approver（systemAdmin）以 owner 身份加入本租户后经真实
+    // switch-tenant 切换会话批准。传展开对象避免污染 actors.systemAdmin 的 tenantID。
+    const approverID = requireUUID(approver.userID ?? '', 'user_id');
+    await addGeneratedActorMembership(pool, tenantID, approverID, 'owner');
+    await restoreActorSession({ ...approver, tenantID }, backendURL);
+    approverPage = await approver.context.newPage();
+    // 新页面尚未导航到同源 origin，直接读写 sessionStorage 会被拒绝；先访问首页建立同源会话。
+    await approverPage.goto(`${webURL}/`);
+    await approverPage.evaluate((id) => sessionStorage.setItem('chat:lastAgentId', id), agentID);
+    await approverPage.goto(`${webURL}/chat`);
+    await expect(approverPage.getByText('工具 stateful_echo 等待审批', { exact: true })).toBeVisible({ timeout: 120_000 });
+
+    const decisionResponse = approverPage.waitForResponse((response) => (
       /\/agents\/tool-approvals\/[^/]+\/decision$/.test(new URL(response.url()).pathname)
       && response.request().method() === 'POST'
     ));
-    const resumeResponse = page.waitForResponse((response) => (
+    const resumeResponse = approverPage.waitForResponse((response) => (
       /\/agents\/tool-approvals\/[^/]+\/resume$/.test(new URL(response.url()).pathname)
       && response.request().method() === 'POST'
     ));
-    await page.getByRole('button', { name: '批准并继续' }).click();
+    await approverPage.getByRole('button', { name: '批准并继续' }).click();
     expect((await decisionResponse).status()).toBe(200);
     expect((await resumeResponse).status()).toBe(200);
-    await expect(page.getByText('stateful sync completed', { exact: true }).last()).toBeVisible({ timeout: 120_000 });
+    // resume 同步返回执行结果，handleApprove 把输出追加到 approverPage 会话。
+    await expect(approverPage.getByText('stateful sync completed', { exact: true }).last()).toBeVisible({ timeout: 120_000 });
     const approvals = await rows<{ status: string }>(pool, tenantID,
       'SELECT status FROM agent_tool_approvals WHERE agent_id=$1 ORDER BY created_at DESC LIMIT 1', [agentID]);
     expect(approvals).toEqual([{ status: 'executed' }]);
@@ -171,6 +186,7 @@ export const executeAgentSkillMCPPack = async ({
       'SELECT count(*)::text AS count FROM mcp_configs WHERE id=$1', [serverID])).toEqual([{ count: '0' }]);
   } finally {
     await page.close();
+    if (approverPage) await approverPage.close();
   }
   return [
     'agent.mutation.post.agents.tool.approvals.id.decision',

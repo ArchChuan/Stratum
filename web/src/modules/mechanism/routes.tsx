@@ -9,7 +9,7 @@ export const mechanismRoutes = [
     key="mechanism-profiles"
     path="/mechanism/profiles"
     element={
-      <PrivateRoute requiredRole="system_admin">
+      <PrivateRoute requiredRole="global_admin">
         <ModelProfilePage />
       </PrivateRoute>
     }

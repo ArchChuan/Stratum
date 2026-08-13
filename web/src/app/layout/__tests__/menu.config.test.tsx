@@ -57,26 +57,70 @@ describe('buildMenuItems', () => {
     expect(resolveOpenKeys('/workflows/new')).toEqual(['workflow-group']);
   });
 
-  it('shows the tenant admin group (prompts/audit) only to tenant admins', () => {
+  it('hides the platform admin group from tenant admins (no global_role)', () => {
     const adminLabels = collectLabels(buildMenuItems({
       sub: 'admin-1', tenant_id: 'tenant-1', role: 'admin', avatar_url: '', github_login: 'admin', username: '',
       current_tenant: { id: 'tenant-1', name: 'Test', role: 'admin' },
     }));
     render(<div>{adminLabels.map((label, index) => <div key={index}>{label}</div>)}</div>);
-    expect(screen.getByText('提示词管理')).toBeInTheDocument();
-    expect(screen.getByText('审计日志')).toBeInTheDocument();
-    expect(resolveOpenKeys('/prompts')).toEqual(['tenant-admin-group']);
-    expect(resolveOpenKeys('/audit')).toEqual(['tenant-admin-group']);
+    // 平台管理面仅 global admin 可见:租户 admin 看不到合并后的组及其子项
+    expect(screen.queryByText('平台管理')).not.toBeInTheDocument();
+    expect(screen.queryByText('提示词管理')).not.toBeInTheDocument();
+    expect(screen.queryByText('审计日志')).not.toBeInTheDocument();
+    expect(screen.queryByText('模型档案')).not.toBeInTheDocument();
+    // 工具审批是独立菜单行,租户 admin 保留可见
+    expect(screen.getByText('工具审批')).toBeInTheDocument();
   });
 
-  it('hides the tenant admin group from members', () => {
+  it('hides the platform admin group from members', () => {
     const memberLabels = collectLabels(buildMenuItems({
       sub: 'user-1', tenant_id: 'tenant-1', role: 'member', avatar_url: '', github_login: 'member', username: '',
       current_tenant: { id: 'tenant-1', name: 'Test', role: 'member' },
     }));
     render(<div>{memberLabels.map((label, index) => <div key={index}>{label}</div>)}</div>);
+    expect(screen.queryByText('平台管理')).not.toBeInTheDocument();
     expect(screen.queryByText('提示词管理')).not.toBeInTheDocument();
     expect(screen.queryByText('审计日志')).not.toBeInTheDocument();
+    expect(screen.queryByText('模型档案')).not.toBeInTheDocument();
+    expect(screen.queryByText('全局租户')).not.toBeInTheDocument();
+    expect(screen.queryByText('平台参数')).not.toBeInTheDocument();
+    // 工具审批同样对成员隐藏
+    expect(screen.queryByText('工具审批')).not.toBeInTheDocument();
+  });
+
+  it('shows the merged platform admin group only to global admin', () => {
+    const labels = collectLabels(buildMenuItems({
+      sub: 'ga-1', tenant_id: 'tenant-1', role: 'member', global_role: 'global_admin',
+      avatar_url: '', github_login: 'ga', username: '',
+      current_tenant: { id: 'tenant-1', name: 'Test', role: 'member' },
+    }));
+    render(<div>{labels.map((label, index) => <div key={index}>{label}</div>)}</div>);
+    expect(screen.getByText('平台管理')).toBeInTheDocument();
+    expect(screen.getByText('提示词管理')).toBeInTheDocument();
+    expect(screen.getByText('审计日志')).toBeInTheDocument();
+    expect(screen.getByText('模型档案')).toBeInTheDocument();
+    expect(screen.getByText('全局租户')).toBeInTheDocument();
+    expect(screen.getByText('平台参数')).toBeInTheDocument();
+  });
+
+  it('shows 工具审批 to tenant admins even when not global admin', () => {
+    const labels = collectLabels(buildMenuItems({
+      sub: 'owner-1', tenant_id: 'tenant-1', role: 'owner', avatar_url: '', github_login: 'owner', username: '',
+      current_tenant: { id: 'tenant-1', name: 'Test', role: 'owner' },
+    }));
+    render(<div>{labels.map((label, index) => <div key={index}>{label}</div>)}</div>);
+    expect(screen.getByText('工具审批')).toBeInTheDocument();
+    expect(screen.queryByText('平台管理')).not.toBeInTheDocument();
+  });
+
+  it('resolves platform admin paths to the merged open-key group', () => {
+    expect(resolveOpenKeys('/prompts')).toEqual(['platform-admin-group']);
+    expect(resolveOpenKeys('/audit')).toEqual(['platform-admin-group']);
+    expect(resolveOpenKeys('/mechanism/profiles')).toEqual(['platform-admin-group']);
+    expect(resolveOpenKeys('/admin/tenants')).toEqual(['platform-admin-group']);
+    expect(resolveOpenKeys('/admin/settings')).toEqual(['platform-admin-group']);
+    // 工具审批是独立菜单项,不再归入任何分组
+    expect(resolveOpenKeys('/approvals')).toEqual([]);
   });
 
   it('does not expose execution history in navigation', () => {

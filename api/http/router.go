@@ -578,23 +578,23 @@ func registerAudit(r *gin.Engine, c *wiring.Container, requireActive gin.Handler
 		return
 	}
 	h := handler.NewAuditHandler(c.Audit.QueryService, c.Logger)
-	auditGroup := r.Group("/audit", protectedTenantMiddleware(c, middleware.RequireTenantRole("admin"))...)
+	// 审计日志管理面:仅 global admin 可查询,与前端菜单/路由守卫统一。
+	auditGroup := r.Group("/audit", protectedTenantMiddleware(c, middleware.RequireGlobalAdmin())...)
 	auditGroup.Use(requireActive)
 	auditGroup.GET("/events", h.ListEvents)
 	auditGroup.GET("/events/:id", h.GetEvent)
 }
 
 // registerMechanism wires /mechanism/profiles — 机制基线（model_profiles）
-// 管理面。整体依附默认租户（RequireDefaultTenant）：只有 tenant_default 的
-// admin/owner/root 可管理，普通租户经消费路径透明取用同一份档案、零感知。
+// 平台管理面。仅 global admin（users.global_role='global_admin'）可管理;
+// 普通租户（含其 admin）一律 403,经消费路径透明取用同一份档案、零感知。
 func registerMechanism(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
 	if c.Mechanism == nil || c.Mechanism.Service == nil {
 		return
 	}
 	h := handler.NewMechanismHandler(c.Mechanism.Service, c.Mechanism.Matrix, c.Logger)
-	// 管理面整体 admin + 默认租户：普通租户（含其 admin）一律 403。
 	profiles := r.Group("/mechanism/profiles",
-		protectedTenantMiddleware(c, middleware.RequireTenantRole("admin"), middleware.RequireDefaultTenant())...)
+		protectedTenantMiddleware(c, middleware.RequireGlobalAdmin())...)
 	profiles.Use(requireActive)
 	{
 		profiles.GET("", h.List)
@@ -605,7 +605,7 @@ func registerMechanism(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 	// Matrix 为 nil → 不挂载（端点 404，而非空报告/静默降级）。
 	if c.Mechanism.Matrix != nil {
 		matrix := r.Group("/mechanism/matrix",
-			protectedTenantMiddleware(c, middleware.RequireTenantRole("admin"), middleware.RequireDefaultTenant())...)
+			protectedTenantMiddleware(c, middleware.RequireGlobalAdmin())...)
 		matrix.Use(requireActive)
 		{
 			matrix.GET("", h.MatrixReport)
@@ -620,15 +620,16 @@ func registerPrompt(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		return
 	}
 	h := handler.NewPromptHandler(c.Prompt.Registry, c.Prompt.AB, c.Logger)
-	adminMW := middleware.RequireTenantRole("admin")
 
-	prompts := r.Group("/prompts", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
-	prompts.POST("", adminMW, requireActive, h.CreatePrompt)
-	prompts.GET("", adminMW, h.ListPrompts)
+	// 提示词管理面:仅 global admin 可管理,与前端菜单/路由守卫统一;
+	// 组内不再需要逐路由 adminMW,base 的 RequireGlobalAdmin 已覆盖全部。
+	prompts := r.Group("/prompts", protectedTenantMiddleware(c, middleware.RequireGlobalAdmin())...)
+	prompts.POST("", requireActive, h.CreatePrompt)
+	prompts.GET("", h.ListPrompts)
 	prompts.GET("/:key/versions", h.ListVersions)
-	prompts.POST("/:key/versions/:version/publish", adminMW, requireActive, h.PublishVersion)
+	prompts.POST("/:key/versions/:version/publish", requireActive, h.PublishVersion)
 
-	bindings := r.Group("/prompts/bindings", protectedTenantMiddleware(c, middleware.RequireTenantRole("admin"))...)
+	bindings := r.Group("/prompts/bindings", protectedTenantMiddleware(c, middleware.RequireGlobalAdmin())...)
 	bindings.GET("", requireActive, h.ListBindings)
 	bindings.PUT("", requireActive, h.UpsertBinding)
 	bindings.DELETE("/:key/:scope", requireActive, h.DeleteBinding)

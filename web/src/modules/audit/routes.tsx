@@ -9,7 +9,7 @@ export const auditRoutes = [
     key="audit"
     path="/audit"
     element={
-      <PrivateRoute requiredTenantRole="admin">
+      <PrivateRoute requiredRole="global_admin">
         <AuditEventsPage />
       </PrivateRoute>
     }
