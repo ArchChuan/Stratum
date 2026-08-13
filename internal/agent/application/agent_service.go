@@ -2027,6 +2027,10 @@ func (s *AgentService) assembleOptions(
 	if s.deps.RAGSearch != nil && len(a.GetConfig().KnowledgeWorkspaceIDs) > 0 {
 		options = appendRAGSearchOptions(options, meta.TenantID, s.deps.RAGSearch, knowledgeAssignments)
 	}
+	// 普通 agent 同样装配内部工具结果 guard：RAG/recall 工具结果的
+	// <untrusted_tool_result> 标记依赖 InternalToolResultGuardFn，漏装配会让
+	// 这些工具在 guard 上 fail-closed 报错。无条件装配，对无 RAG agent 无害。
+	options = append(options, withInternalToolResultGuard(makeInternalToolResultGuard(NewToolResultGuard())))
 	return ctx, s.resolveEffectiveParameters(ctx, a, options), nil
 }
 
@@ -2371,13 +2375,7 @@ func (s *AgentService) systemAssistantExecutionOptions(
 	}
 	options = s.appendSystemModelToolOptions(options, meta, req, roleClass)
 	options = append(options, WithSystemAssistantMode(), withSystemAssistantRoleClass(roleClass),
-		withInternalToolResultGuard(func(value any) (port.GuardedToolResult, error) {
-			structured, ok := value.(map[string]any)
-			if !ok {
-				return port.GuardedToolResult{}, ErrMCPToolResultSchema
-			}
-			return guard.Validate(port.MCPToolResult{StructuredContent: structured}, nil)
-		}))
+		withInternalToolResultGuard(makeInternalToolResultGuard(guard)))
 	return options
 }
 
