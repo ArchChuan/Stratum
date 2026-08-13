@@ -25,6 +25,9 @@ var (
 	ErrEditorNotEligible = errors.New("editor must hold admin or owner role")
 	// ErrPlatformManagedSkill rejects tenant lifecycle changes to built-in skills.
 	ErrPlatformManagedSkill = errors.New("builtin skill is platform managed")
+	// ErrPlatformManagedMCPServerBinding rejects a skill requirement that binds
+	// a platform-managed MCP server (only the system assistant may reference it).
+	ErrPlatformManagedMCPServerBinding = errors.New("platform-managed MCP server cannot be bound in skill requirements")
 )
 
 // AnalysisError carries analyzer reasons for a static-analysis rejection.

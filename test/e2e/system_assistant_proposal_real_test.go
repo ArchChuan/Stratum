@@ -247,20 +247,20 @@ func TestSystemAssistantProposalRealServices(t *testing.T) {
 			payload:       json.RawMessage(`{"name":"E2E Skill","description":"verified docs","instructions":"Use verified sources."}`),
 			updatePayload: json.RawMessage(`{"name":"E2E Skill","description":"updated verified docs","instructions":"Use only verified sources."}`),
 			assertCreated: func(id string) {
-				got, err := skillSvc.GetWorkspace(ctx, id)
+				got, err := skillSvc.GetWorkspace(ctx, id, actorID)
 				require.NoError(t, err)
 				require.Equal(t, "E2E Skill", got.Skill.Name)
 				require.Equal(t, "draft", string(got.Draft.Status))
 			},
 			assertUpdated: func(id string) {
-				got, err := skillSvc.GetWorkspace(ctx, id)
+				got, err := skillSvc.GetWorkspace(ctx, id, actorID)
 				require.NoError(t, err)
 				require.Equal(t, "updated verified docs", got.Skill.Description)
 				require.Equal(t, "Use only verified sources.", got.Draft.Instructions)
 				require.Equal(t, "draft", string(got.Draft.Status))
 			},
 			assertIsolated: func(id string) {
-				_, err := skillSvc.GetWorkspace(otherTenantCtx, id)
+				_, err := skillSvc.GetWorkspace(otherTenantCtx, id, actorID)
 				require.Error(t, err)
 			},
 		},

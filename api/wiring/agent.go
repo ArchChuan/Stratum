@@ -336,15 +336,14 @@ func (c *Container) buildAgent(ctx context.Context) error {
 			}
 			return compactor
 		},
-		ChatStore:         a.ChatStore,
-		EvidenceProvider:  a.EvidenceProvider,
-		TracePayloadStore: a.TracePayloadStore,
-		CheckpointStore:   a.CheckpointStore,
-		ApprovalService:   a.ApprovalService,
-		ToolAuthorizer: agent.NewToolAuthorizer(agentToolUserScopeResolver{
-			members: tenantMemberService(c),
-		}),
+		ChatStore:                 a.ChatStore,
+		EvidenceProvider:          a.EvidenceProvider,
+		TracePayloadStore:         a.TracePayloadStore,
+		CheckpointStore:           a.CheckpointStore,
+		ApprovalService:           a.ApprovalService,
+		ToolAuthorizer:            agent.NewToolAuthorizer(agentToolUserScopeResolver{members: tenantMemberService(c)}),
 		WorkspaceBindingValidator: workspaceBindingAdapter{ws: knowledgeWorkspaceService(c)},
+		SystemResourceGuard:       newSystemResourceGuard(mcpServiceOf(c), knowledgeWorkspaceService(c)),
 		Logger:                    c.Logger,
 	}
 	if db != nil {

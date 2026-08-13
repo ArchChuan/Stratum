@@ -34,6 +34,9 @@ interface Props {
   onDelete: (convId: string) => void;
   fluid?: boolean;
 	showAgentSelector?: boolean;
+  /** agents 列表加载失败：显示错误态 + 重试，而非静默空下拉（避免切换不了/会话看似消失）。 */
+  agentsError?: boolean;
+  onRetryAgents?: () => void;
 }
 
 export const ChatConversationSidebar = ({
@@ -49,6 +52,8 @@ export const ChatConversationSidebar = ({
   onDelete,
   fluid = false,
 	showAgentSelector = true,
+  agentsError = false,
+  onRetryAgents,
 }: Props) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
@@ -83,14 +88,35 @@ export const ChatConversationSidebar = ({
         <Title level={5} style={{ margin: showAgentSelector ? '0 0 10px' : 0, fontSize: 14 }}>
           {showAgentSelector ? 'Agent 对话' : '历史会话'}
         </Title>
-				{showAgentSelector && <Select
-          style={{ width: '100%' }}
-          placeholder="选择 Agent"
-          value={selectedAgent}
-          onChange={onSelectAgent}
-          options={agents.map((agent) => ({ value: agent.id, label: agent.name }))}
-          size="small"
-				/>}
+				{showAgentSelector && (agentsError ? (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '6px 8px',
+              marginBottom: 10,
+              background: '#fff1f0',
+              borderRadius: 6,
+            }}
+          >
+            <Text type="danger" style={{ fontSize: 12, flex: 1 }}>
+              Agent 列表加载失败
+            </Text>
+            <Button size="small" aria-label="重试加载 Agent" onClick={onRetryAgents}>
+              重试
+            </Button>
+          </div>
+        ) : (
+          <Select
+            style={{ width: '100%' }}
+            placeholder="选择 Agent"
+            value={selectedAgent}
+            onChange={onSelectAgent}
+            options={agents.map((agent) => ({ value: agent.id, label: agent.name }))}
+            size="small"
+          />
+        ))}
       </div>
       <div style={{ padding: '0 12px 8px' }}>
         <Button

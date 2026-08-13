@@ -34,9 +34,13 @@ export const useCreateAgentPage = () => {
         llmApi.listProviders(),
       ]);
       if (cancelled) return;
-      if (skillsRes.status === 'fulfilled') setSkills(skillsRes.value);
+      // 系统内置资源（isSystem skill / platform_managed workspace）仅系统助手可
+      // 挂载，创建页是普通 agent，选择列过滤掉。
+      if (skillsRes.status === 'fulfilled') setSkills(skillsRes.value.filter((s) => !s.isSystem));
       if (mcpRes.status === 'fulfilled') setMcpTools(mcpRes.value);
-      if (workspacesRes.status === 'fulfilled') setWorkspaces(workspacesRes.value);
+      if (workspacesRes.status === 'fulfilled') {
+        setWorkspaces(workspacesRes.value.filter((w) => w.management_mode !== 'platform_managed'));
+      }
       if (modelsRes.status === 'fulfilled' && providersRes.status === 'fulfilled') {
         setGroupedModels(buildGroupedModels(modelsRes.value, providersRes.value));
       } else {

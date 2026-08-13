@@ -45,6 +45,11 @@ type UseChatPageOptions = { fixedAgentId?: string };
 
 export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
   const [agents, setAgents] = useState<Agent[]>([]);
+  // agents 列表加载失败标记：失败时侧栏显示错误态+重试，而非静默当作「没有 Agent」
+  //（避免 agents=[] 导致下拉空、切换不了、会话列表看似消失）。
+  const [agentsError, setAgentsError] = useState(false);
+  // 重试计数：+1 即重新执行 agents 加载 effect。
+  const [agentsReload, setAgentsReload] = useState(0);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(
     () => fixedAgentId ?? sessionStorage.getItem(SS_AGENT),
   );
@@ -112,12 +117,15 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
           if (cancelled) return;
           setAgents([assistant]);
           setSelectedAgent(fixedAgentId);
+          setAgentsError(false);
           return;
         }
         const list = await agentApi.list();
         if (cancelled) return;
         const ordered = [...list].sort((left, right) => Number(right.isSystem) - Number(left.isSystem));
         setAgents(ordered);
+        // 失败不清 selectedAgent：保留上次 agent 时，会话列表照常按 selectedAgent 加载，
+        // 不因 agents 列表失败而整个侧栏空白。
         setSelectedAgent((prev) => {
           if (prev && ordered.some((a) => a.id === prev)) return prev;
           const defaultAgent = ordered.find((agent) => agent.isSystem)?.id ?? null;
@@ -125,14 +133,18 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
           else sessionStorage.removeItem(SS_AGENT);
           return defaultAgent;
         });
+        setAgentsError(false);
       } catch {
-        if (!cancelled) msg.error({ content: '加载 Agent 列表失败', duration: 0 });
+        if (!cancelled) {
+          setAgentsError(true);
+          msg.error({ content: '加载 Agent 列表失败', duration: 0 });
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [fixedAgentId]);
+  }, [fixedAgentId, agentsReload]);
 
   useEffect(() => {
     if (!selectedAgent) {
@@ -437,8 +449,12 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
     }
   }, []);
 
+  const reloadAgents = useCallback(() => setAgentsReload((n) => n + 1), []);
+
   return {
     agents,
+    agentsError,
+    reloadAgents,
     selectedAgent,
     setSelectedAgent,
     conversations,

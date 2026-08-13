@@ -26,6 +26,8 @@ export const AgentChatPage = ({
   const { isAdmin } = useTenantRole();
   const {
     agents,
+    agentsError,
+    reloadAgents,
     selectedAgent,
     setSelectedAgent,
     conversations,
@@ -77,6 +79,8 @@ export const AgentChatPage = ({
       onDelete={handleDeleteConv}
       fluid={isMobile}
 			showAgentSelector={showAgentSelector}
+			agentsError={agentsError}
+			onRetryAgents={reloadAgents}
     />
   );
 

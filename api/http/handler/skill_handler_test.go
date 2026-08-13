@@ -34,7 +34,7 @@ func (f *fakeSkillRevisionService) CreateSkillDraft(_ context.Context, input ski
 		},
 	}, nil
 }
-func (f *fakeSkillRevisionService) GetWorkspace(ctx context.Context, _ string) (skillapp.SkillWorkspaceView, error) {
+func (f *fakeSkillRevisionService) GetWorkspace(ctx context.Context, _, _ string) (skillapp.SkillWorkspaceView, error) {
 	return f.CreateSkillDraft(ctx, skillapp.CreateSkillDraftInput{Name: "complaint", Goal: "分类", WhenToUse: "投诉时", Instructions: "分类投诉"})
 }
 func (f *fakeSkillRevisionService) ListSkills(context.Context) ([]skillapp.SkillProduct, error) {

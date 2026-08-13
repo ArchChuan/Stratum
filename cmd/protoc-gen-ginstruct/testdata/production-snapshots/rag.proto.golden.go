@@ -76,11 +76,12 @@ type PreviewDocumentResponse struct {
 }
 
 type WorkspaceListItem struct {
-	ID          string          `json:"id"`
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Config      WorkspaceConfig `json:"config"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
-	Editors     []string        `json:"editors"`
+	ID             string          `json:"id"`
+	Name           string          `json:"name"`
+	Description    string          `json:"description"`
+	Config         WorkspaceConfig `json:"config"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+	Editors        []string        `json:"editors"`
+	ManagementMode string          `json:"management_mode"`
 }

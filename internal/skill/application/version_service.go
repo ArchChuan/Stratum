@@ -210,7 +210,7 @@ func (s *VersionService) loadPublishDraft(ctx context.Context, skillID string) (
 	return skill, draft, nil
 }
 
-func (s *VersionService) GetWorkspace(ctx context.Context, skillID string) (SkillWorkspaceView, error) {
+func (s *VersionService) GetWorkspace(ctx context.Context, skillID, actorID string) (SkillWorkspaceView, error) {
 	skill, ok, err := s.repo.GetSkill(ctx, skillID)
 	if err != nil {
 		return SkillWorkspaceView{}, err
@@ -225,12 +225,31 @@ func (s *VersionService) GetWorkspace(ctx context.Context, skillID string) (Skil
 			return SkillWorkspaceView{}, fmt.Errorf("skill service get workspace: list editors: %w", err)
 		}
 	}
+	// 内置 skill 的 Instructions 是系统助手执行逻辑核心;仅 owner/admin(或系统
+	// actor,评测 worker)可见完整内容,其余角色剥离 Instructions 但保留列表与
+	// 契约。非内置 skill 不受影响(自定义 skill 无跨租户保密需求)。
+	stripInstructions := isBuiltinSkill(skillID) && s.checkOwnership(ctx, actorID, skill.CreatedBy, editors) != nil
+	view, err := s.loadWorkspaceRevision(ctx, skillID, stripInstructions)
+	if err != nil {
+		return SkillWorkspaceView{}, err
+	}
+	view.Skill = skill
+	view.Editors = editors
+	return view, nil
+}
+
+// loadWorkspaceRevision loads the active-or-draft revision for a skill,
+// stripping instructions when strip is true (builtin skills, non-owner actor).
+func (s *VersionService) loadWorkspaceRevision(ctx context.Context, skillID string, strip bool) (SkillWorkspaceView, error) {
 	draft, ok, err := s.repo.GetDraftRevision(ctx, skillID)
 	if err != nil {
 		return SkillWorkspaceView{}, err
 	}
 	if ok {
-		return SkillWorkspaceView{Skill: skill, Draft: draft, Editors: editors}, nil
+		if strip {
+			draft.Instructions = ""
+		}
+		return SkillWorkspaceView{Draft: draft}, nil
 	}
 	active, ok, err := s.repo.GetActiveRevision(ctx, skillID)
 	if err != nil {
@@ -239,7 +258,10 @@ func (s *VersionService) GetWorkspace(ctx context.Context, skillID string) (Skil
 	if !ok {
 		return SkillWorkspaceView{}, domain.ErrSkillNotFound
 	}
-	return SkillWorkspaceView{Skill: skill, Draft: active, Editors: editors}, nil
+	if strip {
+		active.Instructions = ""
+	}
+	return SkillWorkspaceView{Draft: active}, nil
 }
 
 func (s *VersionService) ListSkills(ctx context.Context) ([]SkillProduct, error) {

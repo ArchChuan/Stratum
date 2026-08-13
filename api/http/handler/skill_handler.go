@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	gen "github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
@@ -19,7 +20,7 @@ type SkillHandler struct {
 
 type skillRevisionService interface {
 	CreateSkillDraft(context.Context, skillapp.CreateSkillDraftInput) (skillapp.SkillWorkspaceView, error)
-	GetWorkspace(context.Context, string) (skillapp.SkillWorkspaceView, error)
+	GetWorkspace(context.Context, string, string) (skillapp.SkillWorkspaceView, error)
 	ListSkills(context.Context) ([]skillapp.SkillProduct, error)
 	DeleteSkill(context.Context, string, string) error
 	UpdateCapability(context.Context, string, skillapp.UpdateCapabilityInput) (skillapp.SkillRevision, error)
@@ -74,7 +75,10 @@ func (h *SkillHandler) GetAllSkills(c *gin.Context) {
 func (h *SkillHandler) GetSkill(c *gin.Context) { h.GetSkillWorkspace(c) }
 
 func (h *SkillHandler) GetSkillWorkspace(c *gin.Context) {
-	view, err := h.service.GetWorkspace(c.Request.Context(), c.Param("id"))
+	// GetWorkspace 按 actor 判定内置 skill 的 Instructions 可见性;未登录时用
+	// 空 actor(内置 skill 剥离,非内置不受影响)。
+	actorID, _ := userIDFromCtx(c)
+	view, err := h.service.GetWorkspace(c.Request.Context(), c.Param("id"), actorID)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -200,6 +204,9 @@ func productToResponse(value skillapp.SkillProduct) gen.SkillProductResponse {
 	return gen.SkillProductResponse{
 		ID: value.ID, Name: value.Name, Description: value.Description, Status: value.Status,
 		ActiveRevisionID: value.ActiveRevisionID, DraftRevisionID: value.DraftRevisionID,
+		// builtin: 前缀即系统内置 skill;前端据此对普通 agent 的选择列过滤,
+		// 系统助手(updateSystemAssistant 不经此列表)仍保持全量展示。
+		IsSystem: strings.HasPrefix(value.ID, "builtin:"),
 	}
 }
 
