@@ -49,6 +49,7 @@ export const AgentChatPage = ({
     handleApprove,
 		handleReject,
 		streamFailure,
+		contentSwitching,
   } = useChatPage({ fixedAgentId });
 
   const agentObj = agents.find((a) => a.id === selectedAgent);
@@ -127,6 +128,7 @@ export const AgentChatPage = ({
           scrollContainerRef={scrollContainerRef}
           pinnedToBottomRef={pinnedToBottomRef}
           isMobile={isMobile}
+          contentSwitching={contentSwitching}
         />
         {pendingApproval && (
           <ApprovalGate

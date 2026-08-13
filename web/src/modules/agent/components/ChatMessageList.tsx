@@ -23,6 +23,7 @@ interface Props {
   scrollContainerRef: RefObject<HTMLDivElement>;
   pinnedToBottomRef: MutableRefObject<boolean>;
   isMobile?: boolean;
+  contentSwitching?: boolean;
 }
 
 // StreamingBubble renders plain text + blinking cursor during streaming to avoid
@@ -143,6 +144,7 @@ export const ChatMessageList = ({
   scrollContainerRef,
   pinnedToBottomRef,
   isMobile = false,
+  contentSwitching = false,
 }: Props) => {
   // The last message is the in-flight assistant bubble while streaming.
   const streamingMsgId = sending && messages.length > 0 ? messages[messages.length - 1].id : null;
@@ -167,51 +169,62 @@ export const ChatMessageList = ({
         @media (prefers-reduced-motion: reduce) { .chat-stream-cursor { animation: none; } }
       `}</style>
       <div
-        className="chat-message-list"
-        ref={scrollContainerRef}
         style={{
+          position: 'relative',
           flex: 1,
-          overflowY: 'auto',
-          padding: isMobile ? 12 : '20px 24px',
           minWidth: 0,
           display: 'flex',
           flexDirection: 'column',
-          gap: 12,
         }}
       >
-      {(loadingMsgs || (!selectedConv && loadingConvs)) && <Skeleton active paragraph={{ rows: 6 }} />}
-      {!selectedConv && !loadingConvs && !loadingMsgs && (
-        <Empty
-          description={selectedAgent ? '新建或选择一个会话' : '请先选择 Agent'}
-          style={{ marginTop: 80 }}
-        />
-      )}
-      {!loadingMsgs &&
-        messages.map((m) => (
-          <MessageItem
-            key={m.id}
-            message={m}
-            streaming={m.id === streamingMsgId}
-            isMobile={isMobile}
-          />
-        ))}
-      {sending && messages[messages.length - 1]?.role !== 'assistant' && (
         <div
+          className="chat-message-list"
+          ref={scrollContainerRef}
           style={{
+            flex: 1,
+            overflowY: 'auto',
+            padding: isMobile ? 12 : '20px 24px',
+            minWidth: 0,
             display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            alignSelf: 'flex-start',
+            flexDirection: 'column',
+            gap: 12,
           }}
         >
-          <RobotOutlined style={{ color: '#2563eb' }} />
-          <Spin size="small" />
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            Agent 正在处理…
-          </Text>
+        {(loadingMsgs || (!selectedConv && loadingConvs)) && <Skeleton active paragraph={{ rows: 6 }} />}
+        {!selectedConv && !loadingConvs && !loadingMsgs && (
+          <Empty
+            description={selectedAgent ? '新建或选择一个会话' : '请先选择 Agent'}
+            style={{ marginTop: 80 }}
+          />
+        )}
+        {!loadingMsgs &&
+          messages.map((m) => (
+            <MessageItem
+              key={m.id}
+              message={m}
+              streaming={m.id === streamingMsgId}
+              isMobile={isMobile}
+            />
+          ))}
+        {sending && messages[messages.length - 1]?.role !== 'assistant' && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              alignSelf: 'flex-start',
+            }}
+          >
+            <RobotOutlined style={{ color: '#2563eb' }} />
+            <Spin size="small" />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              Agent 正在处理…
+            </Text>
+          </div>
+        )}
+          <div ref={bottomRef} />
         </div>
-      )}
-        <div ref={bottomRef} />
+        {contentSwitching && <div className="chat-content-blank" aria-hidden="true" />}
       </div>
     </>
   );

@@ -65,6 +65,17 @@ button:focus-visible,
   z-index: 10;
 }
 
+/* 对话页会话切换遮罩:切会话/进对话页时 pathname 不变,AppShell 的 route-blank
+   不触发。此遮罩由 useChatPage 按 selectedConv 变化在 paint 前同步置起,盖住
+   整个消息区(含滚动区),杜绝 Windows DComp 合成器在旧会话→新会话替换窗口
+   投放旧消息幽灵纹理(残影);消息加载完成双 rAF 后移除。背景同消息区底色。 */
+.chat-content-blank {
+  position: absolute;
+  inset: 0;
+  background: #f5f5f5;
+  z-index: 10;
+}
+
 .responsive-page-header,
 .responsive-toolbar {
   display: flex;
