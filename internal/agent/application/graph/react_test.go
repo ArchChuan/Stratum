@@ -357,6 +357,7 @@ func TestBuildReActGraph_ActiveSkillInheritsAgentKnowledgeWorkspaces(t *testing.
 			searched = workspaces
 			return "result", nil
 		},
+		InternalToolResultGuardFn: untrustedTestGuard,
 	}, graph.RunConfig[graph.ReActState]{MaxSteps: 8})
 	require.NoError(t, err)
 	// 知识边界继承 agent 绑定（Spec D5）：skill 声明不再叠加/收窄，kb-skill-only 被剔除。
@@ -912,6 +913,7 @@ func TestBuildReActGraph_ActivesInheritAgentKnowledgeWorkspaces(t *testing.T) {
 			searched = workspaces
 			return "result", nil
 		},
+		InternalToolResultGuardFn: untrustedTestGuard,
 	}, graph.RunConfig[graph.ReActState]{MaxSteps: 8})
 	require.NoError(t, err)
 	// 多 skill 并列激活后知识边界仍恒为 agent 绑定（Spec D5），skill 声明不再叠加/收窄。
@@ -1084,6 +1086,7 @@ func TestBuildReActGraph_SearchKnowledgePrefersEvidenceFn(t *testing.T) {
 				{WorkspaceID: "w2", WorkspaceName: "KB Two", ChunkID: "c2"},
 			}}, nil
 		},
+		InternalToolResultGuardFn: untrustedTestGuard,
 	}, graph.RunConfig[graph.ReActState]{MaxSteps: 8})
 
 	require.NoError(t, err)
@@ -1123,6 +1126,7 @@ func TestBuildReActGraph_SearchKnowledgeFallsBackToPlainFn(t *testing.T) {
 		RAGSearchFn: func(context.Context, []string, string, int, string) (string, error) {
 			return "plain result", nil
 		},
+		InternalToolResultGuardFn: untrustedTestGuard,
 	}, graph.RunConfig[graph.ReActState]{MaxSteps: 8})
 
 	require.NoError(t, err)
@@ -1130,4 +1134,15 @@ func TestBuildReActGraph_SearchKnowledgeFallsBackToPlainFn(t *testing.T) {
 	require.Len(t, out.ToolObservations, 1)
 	_, hasEvidence := out.ToolObservations[0].Metadata["evidence"]
 	require.False(t, hasEvidence, "plain search must not fabricate evidence metadata")
+}
+
+// untrustedTestGuard 是 RAG/recall 工具成功路径测试共用的最小 guard fn：
+// 直接包 <untrusted_tool_result>，模拟 application 层装配 guard 的效果。
+// 缺失时 guardUntrustedToolText 会 fail-closed，工具改走 error 分支，
+// 无法覆盖真实成功路径。
+func untrustedTestGuard(value any) (port.GuardedToolResult, error) {
+	return port.GuardedToolResult{
+		ModelContent: fmt.Sprintf("<untrusted_tool_result>\n%v\n</untrusted_tool_result>", value),
+		Untrusted:    true,
+	}, nil
 }

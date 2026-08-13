@@ -68,7 +68,7 @@ func minimalHeadMessages(headCap int, systemPromptBase, memoryCtx, currentInput 
 	systemPromptBase, memoryCtx = fitSystemAndMemory(headCap, systemPromptBase, memoryCtx)
 	systemFull := systemPromptBase
 	if memoryCtx != "" {
-		systemFull += "\n\n" + memoryCtx
+		systemFull += "\n\n" + agentgraph.WrapUntrustedSection("memory", memoryCtx)
 	}
 	return []port.LLMMessage{
 		{Role: "system", Content: systemFull},
@@ -196,10 +196,10 @@ func BuildContextMessagesWithCompaction(
 	// 5. Compose final system prompt: base + [summary] + memory.
 	systemFull := systemPromptBase
 	if summary != "" {
-		systemFull += "\n\n[早期对话摘要]\n" + summary
+		systemFull += "\n\n[早期对话摘要]\n" + agentgraph.WrapUntrustedSection("history", summary)
 	}
 	if memoryCtx != "" {
-		systemFull += "\n\n" + memoryCtx
+		systemFull += "\n\n" + agentgraph.WrapUntrustedSection("memory", memoryCtx)
 	}
 
 	msgs := make([]port.LLMMessage, 0, len(histMsgs)+2)
