@@ -9,6 +9,17 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// Tool is a declarative tool description for SDKServer fixtures. The shape is
+// kept from the legacy fake_server so tests keep a stable fixture DSL, but the
+// server behind it is now the official SDK.
+type Tool struct {
+	Name         string         `json:"name"`
+	Description  string         `json:"description,omitempty"`
+	InputSchema  map[string]any `json:"inputSchema"`
+	OutputSchema map[string]any `json:"outputSchema,omitempty"`
+	Annotations  map[string]any `json:"annotations,omitempty"`
+}
+
 // SDKServer is an MCP server backed by the official SDK (mcp.NewServer +
 // NewStreamableHTTPHandler). Tests that exercise the real SDK client handshake
 // (initialize → standalone SSE → tools/list → tools/call) must point at this
