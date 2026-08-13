@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -82,7 +83,7 @@ func TestSystemAssistantResolvesPlatformToolsInProcess(t *testing.T) {
 	require.NoError(t, err)
 	cfg := &ExecutionConfig{}
 	cfg.ApplyOptions(options)
-	require.Len(t, cfg.ExtraTools, 6)
+	require.Len(t, cfg.ExtraTools, 8)
 	for _, tool := range cfg.ExtraTools {
 		require.Equal(t, domain.ProviderTypeInternal, tool.ProviderType)
 		require.Equal(t, tool.Name, tool.CapabilityID)
@@ -94,6 +95,10 @@ func TestSystemAssistantResolvesPlatformToolsInProcess(t *testing.T) {
 	require.NotNil(t, cfg.DiagnosticFn)
 	require.Nil(t, cfg.ProposalCreateFn)
 	require.NotNil(t, cfg.InternalToolResultGuardFn)
+	// Registry 注入时装配 list_agents；MCPServerLister 未注入时 list_mcp_servers
+	// fail-closed（Fn nil）。
+	require.NotNil(t, cfg.ListAgentsFn)
+	require.Nil(t, cfg.ListMCPServersFn)
 	require.Equal(t, 1, diagnostics.authorizeCalls)
 }
 
@@ -117,9 +122,9 @@ func TestSystemAssistantProposalToolVisibleInProcessWithoutService(t *testing.T)
 	cfg := &ExecutionConfig{}
 	cfg.ApplyOptions(options)
 	require.Equal(t, "admin", cfg.SystemAssistantRoleClass)
-	// D6：工具可见性全角色一致（6 个），无需按角色注入；ProposalCreateFn
+	// D6：工具可见性全角色一致（8 个），无需按角色注入；ProposalCreateFn
 	// 仅在装配 ProposalService 时注入（见 TestAdminProposeAutoConfirmsAndApplies）。
-	require.Len(t, cfg.ExtraTools, 6)
+	require.Len(t, cfg.ExtraTools, 8)
 	require.Nil(t, cfg.ProposalCreateFn)
 }
 
@@ -455,4 +460,75 @@ func TestAdminProposeAutoApplyFailureKeepsCreatedProposal(t *testing.T) {
 	require.NotEmpty(t, artifact.ID)
 	require.Equal(t, domain.StatusReadyForReview, artifact.Status)
 	require.Zero(t, applier.calls)
+}
+
+func TestMemberApplyRejectedBeforeApplier(t *testing.T) {
+	called := false
+	svc := NewAgentService(AgentServiceDeps{
+		Registry:           NewRegistry(new(mockAgentRepo), BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		DiagnosticProvider: &assistantDiagnosticStub{role: "member"},
+		ResourceChangeApplier: func(_ context.Context, _ string, _ map[string]any) (domain.ApplyResult, error) {
+			called = true
+			return domain.ApplyResult{}, nil
+		},
+		TenantModelValidator: &stubTenantModelValidator{},
+		Logger:               zap.NewNop(),
+	})
+	system := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		LLMModel: "tenant-model", MaxIterations: 3,
+	}}
+	_, options, err := svc.assembleOptions(t.Context(), system, ExecRequest{UserID: "member-1"},
+		ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1")
+	require.NoError(t, err)
+	cfg := &ExecutionConfig{}
+	cfg.ApplyOptions(options)
+	require.NotNil(t, cfg.ResourceChangeApplyFn)
+
+	// 写路径 fail closed：member 直接拒绝，不触达 applier，与 update_system_model
+	// 的 member 拒绝模式一致；错误同时满足 errors.Is 哨兵与可读文案。
+	result, applyErr := cfg.ResourceChangeApplyFn(context.Background(), map[string]any{})
+	require.ErrorIs(t, applyErr, domain.ErrProposalForbidden)
+	require.ErrorContains(t, applyErr, "管理员权限")
+	require.False(t, called, "member apply must not reach the applier")
+	require.Empty(t, result)
+}
+
+func TestSystemAssistantListAgentsProjectionOmitsSensitiveFields(t *testing.T) {
+	repo := new(mockAgentRepo)
+	repo.On("GetAll").Return([]*domain.AgentConfig{{
+		ID: "agent-1", Name: "sales", Type: domain.ReActAgent, Description: "d",
+		LLMModel: "m", MaxIterations: 3, MaxContextTokens: 100,
+		SystemPrompt: "secret-prompt", SystemKey: "secret-key",
+	}}, nil)
+	svc := NewAgentService(AgentServiceDeps{
+		Registry:             NewRegistry(repo, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		DiagnosticProvider:   &assistantDiagnosticStub{role: "member"},
+		OfficialDocsSearch:   func(_ context.Context, query string) ([]domain.Citation, error) { return nil, nil },
+		TenantModelValidator: &stubTenantModelValidator{},
+		Logger:               zap.NewNop(),
+	})
+	system := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		LLMModel: "tenant-model", MaxIterations: 3,
+	}}
+	_, options, err := svc.assembleOptions(t.Context(), system, ExecRequest{UserID: "user-1"},
+		ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1")
+	require.NoError(t, err)
+	cfg := &ExecutionConfig{}
+	cfg.ApplyOptions(options)
+	require.NotNil(t, cfg.ListAgentsFn)
+
+	raw, listErr := cfg.ListAgentsFn(context.Background())
+	require.NoError(t, listErr)
+	blob, marshalErr := json.Marshal(raw)
+	require.NoError(t, marshalErr)
+	s := string(blob)
+	// 安全投影：保留 id/name 等元数据，绝不携带 systemPrompt/systemKey。
+	require.Contains(t, s, "agent-1")
+	require.Contains(t, s, "sales")
+	require.NotContains(t, s, "secret-prompt")
+	require.NotContains(t, s, "secret-key")
+	require.NotContains(t, s, "systemPrompt")
+	require.NotContains(t, s, "systemKey")
 }

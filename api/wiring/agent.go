@@ -358,6 +358,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		deps.MCPTools = c.MCP.AgentToolProvider
 		deps.MCPToolExecutor = agentMCPExecutor{clients: c.MCP.Manager}
 		deps.MCPToolPolicy = agentMCPPolicyResolver{service: c.MCP.Service}
+		deps.MCPServerLister = agentMCPServerLister{service: c.MCP.Service}
 	}
 	if c.Knowledge != nil && c.Knowledge.RAGService != nil {
 		deps.RAGSearch = ragSearchAdapter{rag: c.Knowledge.RAGService}

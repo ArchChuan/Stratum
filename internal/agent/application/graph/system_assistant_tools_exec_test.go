@@ -184,6 +184,32 @@ func TestSystemAssistantDirectApplyToolErrorBecomesTypedArtifact(t *testing.T) {
 	require.NotEmpty(t, result.artifact.DirectApply.ErrorCode)
 }
 
+// TestSystemAssistantInvalidArgumentsMapsToRecoverableError guards the
+// argument-parsing error surface: a malformed payload must surface as
+// "invalid tool arguments" (a signal the model can self-correct) rather than
+// falling into the generic "evidence unavailable" bucket that implies the
+// platform is unhealthy.
+func TestSystemAssistantInvalidArgumentsMapsToRecoverableError(t *testing.T) {
+	state := &ReActState{
+		GovernedAssistant: true,
+		// 参数解析在装配闭包内（ApplyDirectFromTool → 严格解析器）执行；
+		// graph 层收到的是 callErr，这里直接模拟该错误以验证错误映射：
+		// 非法参数必须映射为模型可自纠的 "invalid tool arguments"，
+		// 而非默认的 "evidence unavailable"（暗示平台不健康）。
+		ResourceChangeApplyFn: func(context.Context, map[string]any) (domain.ApplyResult, error) {
+			return domain.ApplyResult{}, domain.ErrInvalidSystemAssistantToolArguments
+		},
+	}
+	result := execApplyResourceChangeTool(context.Background(), port.ToolCall{
+		Name:      domain.SystemAssistantToolApplyResourceChange,
+		Arguments: map[string]any{"resourceKind": "agent", "operation": "create"},
+	}, state, time.Now())
+	require.Equal(t, "invalid tool arguments", result.errMsg)
+	require.NotNil(t, result.artifact)
+	require.Equal(t, "error", result.artifact.DirectApply.Outcome)
+	require.Equal(t, "invalid_arguments", result.artifact.DirectApply.ErrorCode)
+}
+
 func TestSystemAssistantDirectApplyToolRoutesThroughDispatch(t *testing.T) {
 	state := &ReActState{
 		GovernedAssistant: true,
@@ -249,6 +275,108 @@ func TestSystemAssistantUpdateSystemModelToolValidatesModelArgument(t *testing.T
 	require.Equal(t, "qwen-plus", seen)
 	require.NotNil(t, ok.artifact)
 	require.Equal(t, domain.SystemAssistantToolUpdateSystemModel, ok.artifact.Tool)
+}
+
+func TestSafeAssistantToolErrorSentinelMapping(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"proposal forbidden", domain.ErrProposalForbidden, "proposal forbidden"},
+		{"proposal invalid", domain.ErrProposalInvalid, "invalid proposal payload"},
+		{"proposal expired", domain.ErrProposalExpired, "proposal expired"},
+		{"system managed", domain.ErrSystemAssistantManaged, "resource is system-managed"},
+		{"invalid args carries detail", &domain.InvalidToolArgumentsError{Detail: "缺少必填字段 name"}, "invalid tool arguments: 缺少必填字段 name"},
+		{"bare invalid args", domain.ErrInvalidSystemAssistantToolArguments, "invalid tool arguments"},
+		{"apply definite failure unwraps sentinel", &port.ResourceApplyError{Outcome: port.ResourceApplyDefiniteFailure, Err: domain.ErrProposalForbidden}, "proposal forbidden"},
+		{"apply unknown outcome fail closed", &port.ResourceApplyError{Outcome: port.ResourceApplyUnknownOutcome}, "evidence unavailable"},
+		{"unmatched error", errors.New("boom"), "evidence unavailable"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, safeAssistantToolError(tc.err))
+		})
+	}
+}
+
+func TestAssistantToolErrorCodeMapping(t *testing.T) {
+	tests := []struct {
+		message string
+		want    string
+	}{
+		{"proposal forbidden", "forbidden"},
+		{"invalid proposal payload", "invalid_payload"},
+		{"proposal expired", "expired"},
+		{"resource is system-managed", "system_managed"},
+		{"invalid tool arguments: 缺少必填字段 name", "invalid_arguments"},
+		{"tool timeout", "timeout"},
+		{"evidence unavailable", "unavailable"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.message, func(t *testing.T) {
+			require.Equal(t, tc.want, assistantToolErrorCode(tc.message))
+		})
+	}
+}
+
+func TestSystemAssistantListAgentsToolExecutesAndBuildsArtifact(t *testing.T) {
+	state := &ReActState{
+		GovernedAssistant: true,
+		ListAgentsFn: func(_ context.Context) (map[string]any, error) {
+			return map[string]any{"agents": []map[string]any{{"id": "a1", "name": "sales"}}}, nil
+		},
+		InternalToolResultGuardFn: testAssistantGuard,
+	}
+	result := execListAgentsTool(context.Background(), port.ToolCall{
+		Name: domain.SystemAssistantToolListAgents,
+	}, state, time.Now())
+	require.Equal(t, domain.ToolTraceStatusSuccess, result.status)
+	require.NotNil(t, result.artifact)
+	require.Equal(t, domain.SystemAssistantToolListAgents, result.artifact.Tool)
+	require.Equal(t, "success", result.artifact.Outcome)
+	require.Contains(t, result.content, "sales")
+}
+
+func TestSystemAssistantListMCPServersToolExecutesAndBuildsArtifact(t *testing.T) {
+	state := &ReActState{
+		GovernedAssistant: true,
+		ListMCPServersFn: func(_ context.Context) (map[string]any, error) {
+			return map[string]any{"servers": []map[string]any{{"name": "docs", "status": "connected"}}}, nil
+		},
+		InternalToolResultGuardFn: testAssistantGuard,
+	}
+	result := execListMCPServersTool(context.Background(), port.ToolCall{
+		Name: domain.SystemAssistantToolListMCPServers,
+	}, state, time.Now())
+	require.Equal(t, domain.ToolTraceStatusSuccess, result.status)
+	require.NotNil(t, result.artifact)
+	require.Equal(t, domain.SystemAssistantToolListMCPServers, result.artifact.Tool)
+	require.Contains(t, result.content, "docs")
+}
+
+func TestSystemAssistantListToolsFailClosedWhenUnavailable(t *testing.T) {
+	states := []struct {
+		name string
+		call func(*ReActState) toolExecResult
+	}{
+		{name: "ungoverned list agents", call: func(s *ReActState) toolExecResult {
+			return execListAgentsTool(context.Background(), port.ToolCall{}, s, time.Now())
+		}},
+		{name: "nil list agents fn", call: func(s *ReActState) toolExecResult {
+			return execListAgentsTool(context.Background(), port.ToolCall{}, s, time.Now())
+		}},
+		{name: "nil list mcp fn", call: func(s *ReActState) toolExecResult {
+			return execListMCPServersTool(context.Background(), port.ToolCall{}, s, time.Now())
+		}},
+	}
+	for _, tc := range states {
+		t.Run(tc.name, func(t *testing.T) {
+			result := tc.call(&ReActState{GovernedAssistant: true})
+			require.Equal(t, domain.ToolTraceStatusError, result.status)
+			require.Contains(t, result.content, "tool unavailable")
+		})
+	}
 }
 
 func TestSystemAssistantModelToolsRouteThroughDispatch(t *testing.T) {
