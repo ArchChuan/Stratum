@@ -75,7 +75,8 @@ export const executeSkillPack = async ({ actor, pool, evidence, webURL }: SkillP
 
     await page.getByRole('tab', { name: '指令与权限' }).click();
     await page.getByLabel('执行指令').fill('严格分类输入并返回 category 字段。');
-    await page.getByText('当前会话', { exact: true }).click();
+    // 旧「记忆范围」Checkbox（含「当前会话」选项）随 skill requirements 功能在 main
+    // d65933db 移除；此处不再勾选，仅保存执行指令。
     const instructionsResponse = waitForMutation(page, `/skills/${skillID}/draft/instructions`, 'PATCH');
     await page.getByRole('button', { name: '保存指令与权限' }).click();
     expect((await instructionsResponse).status()).toBe(200);
