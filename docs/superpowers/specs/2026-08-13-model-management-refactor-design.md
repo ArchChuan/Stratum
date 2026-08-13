@@ -83,8 +83,10 @@ CREATE TABLE IF NOT EXISTS models (
 );
 CREATE INDEX IF NOT EXISTS idx_models_provider ON models(provider_id);
 CREATE INDEX IF NOT EXISTS idx_models_enabled ON models(enabled);
+-- 常量表达式索引 (true)：满足 WHERE 的所有行取同一常量，唯一约束强制全表最多一个默认标记。
 CREATE UNIQUE INDEX IF NOT EXISTS idx_models_default_embedding
-    ON models WHERE default_embedding AND 'embedding' = ANY(capabilities);  -- 全局唯一，去 tenant 谓词
+    ON models ((true))
+    WHERE default_embedding AND 'embedding' = ANY(capabilities);  -- 全局唯一，去 tenant 谓词
 ```
 
 ### 4.2 tenant_schema.sql 移除 providers/models

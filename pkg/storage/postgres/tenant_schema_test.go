@@ -839,19 +839,44 @@ func TestTenantSchemaBackfillsChatMessageArtifactsAfterTableCreate(t *testing.T)
 	}
 }
 
-func TestTenantSchemaHasDefaultEmbeddingColumnAndIndex(t *testing.T) {
+func TestTenantSchemaDropsLegacyProviderModelTables(t *testing.T) {
+	// providers/models 已提升为 public 平台目录（迁移 035 + cmd/model-migrate 存量搬迁）。
+	// tenant_schema 只保留幂等清理语句，禁止再建这两张 tenant-only 表。
 	schema, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(schema)
 	for _, want := range []string{
-		"ADD COLUMN IF NOT EXISTS default_embedding BOOLEAN NOT NULL DEFAULT false",
-		"idx_models_default_embedding",
+		"DROP TABLE IF EXISTS models;",
+		"DROP TABLE IF EXISTS providers;",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("tenant_schema.sql missing %q cleanup statement", want)
+		}
+	}
+	if strings.Contains(text, "CREATE TABLE IF NOT EXISTS models") {
+		t.Fatal("tenant_schema.sql must not create tenant-only models table")
+	}
+	if strings.Contains(text, "CREATE TABLE IF NOT EXISTS providers") {
+		t.Fatal("tenant_schema.sql must not create tenant-only providers table")
+	}
+}
+
+func TestPlatformModelCatalogCarriesDefaultEmbeddingUniqueMark(t *testing.T) {
+	// default_embedding 全局唯一标记由 public 035 迁移承担（原 tenant 表 idx 已移除）。
+	// 常量表达式索引 (true)：满足 WHERE 的行取同一常量，唯一约束强制全表最多一个默认标记。
+	up, err := os.ReadFile("../../migration/sql/035_platform_model_catalog.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(up)
+	for _, want := range []string{
+		"ON models ((true))",
 		"WHERE default_embedding AND 'embedding' = ANY(capabilities)",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("tenant_schema.sql missing %q", want)
+			t.Fatalf("035 up.sql missing %q", want)
 		}
 	}
 }

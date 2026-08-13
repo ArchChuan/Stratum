@@ -1479,55 +1479,13 @@ BEGIN
 END $$;
 
 -- =============================================================================
--- Provider & Model Registry (tenant-scoped LLM provider and model catalogue)
+-- Provider & Model Registry
 -- =============================================================================
-
--- Provider registry (tenant-scoped LLM providers)
-CREATE TABLE IF NOT EXISTS providers (
-    id              TEXT PRIMARY KEY,
-    tenant_id       TEXT NOT NULL,
-    name            TEXT NOT NULL,
-    kind            TEXT NOT NULL,
-    base_url        TEXT NOT NULL DEFAULT '',
-    api_key         TEXT NOT NULL DEFAULT '',
-    default_model   TEXT NOT NULL DEFAULT '',
-    enabled         BOOLEAN NOT NULL DEFAULT true,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE(tenant_id, name)
-);
-
--- Model catalogue (tenant-scoped model registry)
-CREATE TABLE IF NOT EXISTS models (
-    id                TEXT PRIMARY KEY,
-    tenant_id         TEXT NOT NULL,
-    provider_id       TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-    name              TEXT NOT NULL,
-    display_name      TEXT NOT NULL DEFAULT '',
-    capabilities      TEXT[] NOT NULL DEFAULT '{}',
-    context_window    INT NOT NULL DEFAULT 0,
-    max_tokens        INT NOT NULL DEFAULT 0,
-    input_price       DOUBLE PRECISION NOT NULL DEFAULT 0,
-    output_price      DOUBLE PRECISION NOT NULL DEFAULT 0,
-    recommended       BOOLEAN NOT NULL DEFAULT false,
-    enabled           BOOLEAN NOT NULL DEFAULT true,
-    provider_managed  BOOLEAN NOT NULL DEFAULT false,
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE(tenant_id, provider_id, name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_models_tenant ON models(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_models_provider ON models(provider_id);
-CREATE INDEX IF NOT EXISTS idx_models_enabled ON models(tenant_id, enabled);
-
--- 默认嵌入模型标记（本设计唯一配置点）：partial unique index 保证同 tenant
--- 最多一个默认。index WHERE 无 enabled 谓词——DB 层不防悬空，靠 repo 自清理联动。
-ALTER TABLE models ADD COLUMN IF NOT EXISTS default_embedding BOOLEAN NOT NULL DEFAULT false;
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_models_default_embedding
-    ON models (tenant_id)
-    WHERE default_embedding AND 'embedding' = ANY(capabilities);
+-- providers/models 已从 tenant schema 提升为 public schema 平台全局资源
+-- （迁移 035 + 一次性 cmd/model-migrate 存量搬迁）。存量租户的表在此幂等清理，
+-- 新租户不再建这两张表；代码已全量切到 public 表（见 035_platform_model_catalog）。
+DROP TABLE IF EXISTS models;
+DROP TABLE IF EXISTS providers;
 
 -- =============================================================================
 -- Built-in platform assistant resources (skills + knowledge workspace)
