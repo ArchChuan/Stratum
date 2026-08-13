@@ -1,5 +1,5 @@
 import { message as msg } from 'antd';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { agentApi, conversationApi } from '../api/agent.api';
 import {
@@ -61,6 +61,11 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [pendingApprovals, setPendingApprovals] = useState<ToolApproval[]>([]);
   const [approvalActionId, setApprovalActionId] = useState<string | null>(null);
+  // 会话切换遮罩：切会话/进对话页时 pathname 不变，AppShell 的 route-blank
+  // 不触发；此处按 selectedConv 变化在 paint 前同步盖不透明遮罩，杜绝
+  // Windows DComp 合成器把旧会话纹理投到新会话首帧（残影）。
+  const [contentSwitching, setContentSwitching] = useState(false);
+  const contentBlankRafRef = useRef<number>(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const pinnedToBottomRef = useRef(true); // auto-scroll only when user is at the bottom
@@ -158,9 +163,23 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
     };
   }, [selectedAgent]);
 
+  // 会话切换遮罩开启：useLayoutEffect 在 commit 后、paint 前同步 setState，
+  // 切会话后的首帧即含不透明遮罩，合成器不会投递只含旧会话纹理的帧。
+  // 遮罩由消息加载完成后的双 rAF 移除（见下方 messages effect 的 finally）。
+  useLayoutEffect(() => {
+    if (!selectedConv) return;
+    setContentSwitching(true);
+    // 该 effect 重新执行（selectedConv 再变）时先 cancel 未决 rAF，
+    // 避免旧遮罩在错误时机被移除。
+    return () => {
+      if (contentBlankRafRef.current) cancelAnimationFrame(contentBlankRafRef.current);
+    };
+  }, [selectedConv]);
+
   useEffect(() => {
     if (!selectedConv) {
       setMessages([]);
+      setContentSwitching(false);
       return;
     }
     if (agentIdRef.current) sessionStorage.setItem(ssConv(agentIdRef.current), selectedConv);
@@ -222,6 +241,18 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
       } finally {
         if (!cancelled) setLoadingMsgs(false);
       }
+      if (cancelled) {
+        // 会话已切走：让新的 selectedConv effect 接管遮罩，本 effect 不再 reveal。
+        return;
+      }
+      // 双 rAF 后再移除遮罩：消息已 set、新纹理至少被合成一帧。
+      // 此时移除不会再生残影，与 AppShell route-blank 同构。
+      contentBlankRafRef.current = requestAnimationFrame(() => {
+        contentBlankRafRef.current = requestAnimationFrame(() => {
+          contentBlankRafRef.current = 0;
+          setContentSwitching(false);
+        });
+      });
     })();
     return () => {
       cancelled = true;
@@ -433,5 +464,6 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
     streamFailure,
     clearStreamFailure,
     cancelStream,
+    contentSwitching,
   };
 };
