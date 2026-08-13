@@ -281,7 +281,7 @@ groups:
           summary: 租户无可用嵌入模型，记忆写入持续进入 DLQ
           description: Tenant {{ $labels.tenant_id }} has no configured embedding model; memory writes are being dead-lettered (increase {{ $value }}).
           dashboard_url: /d/stratum-service-overview
-          runbook_url: /docs/operations/alerts/business.md#memory-dlq
+          runbook_url: /docs/operations/alerts/business.md#memory-embed-unavailable
 
   - name: stratum-memory-workers
     rules:
