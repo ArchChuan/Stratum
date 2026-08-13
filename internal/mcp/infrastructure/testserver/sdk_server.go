@@ -56,9 +56,30 @@ func NewSDKServer(t testing.TB, tools []Tool) *SDKServer {
 func (s *SDKServer) URL() string { return s.server.URL }
 func (s *SDKServer) Close()      { s.server.Close() }
 
+// annotations maps the fixture DSL hints onto the SDK's typed ToolAnnotations.
+// The legacy fake_server exposed these as opaque JSON; the SDK marshals each
+// hint from its typed fields, so an unparsed map (as before) silently dropped
+// every value and a fixture requesting destructiveHint:true advertised the
+// opposite.
 func annotations(m map[string]any) *mcp.ToolAnnotations {
 	if len(m) == 0 {
 		return nil
 	}
-	return &mcp.ToolAnnotations{}
+	a := &mcp.ToolAnnotations{}
+	if v, ok := m["readOnlyHint"].(bool); ok {
+		a.ReadOnlyHint = v
+	}
+	if v, ok := m["destructiveHint"].(bool); ok {
+		a.DestructiveHint = &v
+	}
+	if v, ok := m["idempotentHint"].(bool); ok {
+		a.IdempotentHint = v
+	}
+	if v, ok := m["openWorldHint"].(bool); ok {
+		a.OpenWorldHint = &v
+	}
+	if v, ok := m["title"].(string); ok {
+		a.Title = v
+	}
+	return a
 }

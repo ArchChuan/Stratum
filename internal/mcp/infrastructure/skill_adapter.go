@@ -3,6 +3,7 @@ package infrastructure
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -39,23 +40,6 @@ func (w *MCPToolHandle) GetDescription() string {
 // GetType 获取类型
 func (w *MCPToolHandle) GetType() string {
 	return w.Type
-}
-
-// Execute 执行工具
-func (w *MCPToolHandle) Execute(ctx context.Context, input any) (any, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	result, err := w.Manager.CallTool(ctx, w.ServerID, w.Tool.Name, input)
-	if err != nil {
-		w.logger.Error("failed to execute MCP tool",
-			zap.String("tool", w.Tool.Name),
-			zap.String("server_id", w.ServerID),
-			zap.Error(err))
-		return nil, err
-	}
-
-	return result, nil
 }
 
 // MCPToolCatalog 适配器，管理 MCP Tools
@@ -158,8 +142,14 @@ func registryKey(tenantID, serverID string) string {
 	return tenantID + ":" + serverID
 }
 
-// GetCatalogForServer returns the adapter for a specific server, or nil if not registered.
+// GetCatalogForServer returns the adapter for a specific server, or nil if not
+// registered. An empty tenantID fails closed: without a tenant the registry key
+// would collapse into a shared "":serverID bucket and cross-tenant lookups
+// could resolve another tenant's catalog.
 func (r *MCPToolRegistry) GetCatalogForServer(tenantID, serverID string) *MCPToolCatalog {
+	if tenantID == "" {
+		return nil
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.adapters[registryKey(tenantID, serverID)]
@@ -184,6 +174,11 @@ func NewMCPToolRegistry(manager *ClientManager, logger *zap.Logger) *MCPToolRegi
 
 // RegisterServer 注册 MCP 服务器
 func (r *MCPToolRegistry) RegisterServer(ctx context.Context, tenantID, serverID string) error {
+	if tenantID == "" {
+		// fail closed: without a tenant the entry would land in the shared
+		// "":serverID bucket and be indistinguishable across tenants.
+		return errors.New("mcp registry: tenantID is required")
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -209,6 +204,10 @@ func (r *MCPToolRegistry) RegisterServer(ctx context.Context, tenantID, serverID
 
 // UnregisterServer 注销 MCP 服务器
 func (r *MCPToolRegistry) UnregisterServer(tenantID, serverID string) error {
+	if tenantID == "" {
+		// fail closed: never touch the shared "":serverID bucket.
+		return nil
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -222,70 +221,4 @@ func (r *MCPToolRegistry) UnregisterServer(tenantID, serverID string) error {
 		zap.String("tenant_id", tenantID), zap.String("server_id", serverID))
 
 	return nil
-}
-
-// GetRegisteredTool 获取 Tool
-func (r *MCPToolRegistry) GetRegisteredTool(toolID string) *MCPToolHandle {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	for _, adapter := range r.adapters {
-		if s := adapter.GetRegisteredTool(toolID); s != nil {
-			return s
-		}
-	}
-	return nil
-}
-
-// GetAllTools 获取所有 Tools
-func (r *MCPToolRegistry) GetAllTools() []*MCPToolHandle {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	var tools []*MCPToolHandle
-	for _, adapter := range r.adapters {
-		tools = append(tools, adapter.GetAllTools()...)
-	}
-	return tools
-}
-
-// ExecuteToolByID 执行 Tool
-func (r *MCPToolRegistry) ExecuteToolByID(toolID string, input any) (any, error) {
-	s := r.GetRegisteredTool(toolID)
-	if s == nil {
-		return nil, fmt.Errorf("skill not found: %s", toolID)
-	}
-	return s.Execute(context.Background(), input)
-}
-
-// RefreshTools 刷新 Tools
-func (r *MCPToolRegistry) RefreshTools(ctx context.Context) error {
-	r.mu.RLock()
-	adapters := make(map[string]*MCPToolCatalog)
-	for k, v := range r.adapters {
-		adapters[k] = v
-	}
-	r.mu.RUnlock()
-
-	for _, adapter := range adapters {
-		_, err := adapter.DiscoverTools(ctx)
-		if err != nil {
-			r.logger.Warn("failed to refresh tools",
-				zap.String("tenant_id", adapter.tenantID),
-				zap.String("server_id", adapter.serverID),
-				zap.Error(err))
-		}
-	}
-
-	return nil
-}
-
-// GetServerInfo 获取服务器信息
-func (r *MCPToolRegistry) GetServerInfo(ctx context.Context, serverID string) any {
-	return r.manager.GetServerInfo(ctx, serverID)
-}
-
-// GetAllServerInfo 获取所有服务器信息
-func (r *MCPToolRegistry) GetAllServerInfo(ctx context.Context) []*MCPServerInfo {
-	return r.manager.GetAllServerInfo(ctx)
 }

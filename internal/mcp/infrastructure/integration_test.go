@@ -341,9 +341,9 @@ func TestMCPIntegration(t *testing.T) {
 	// 创建技能注册表
 	registry := NewMCPToolRegistry(manager, logger)
 
-	// 验证初始状态
-	if len(registry.GetAllTools()) != 0 {
-		t.Errorf("expected 0 skills initially, got %d", len(registry.GetAllTools()))
+	// 验证初始状态：未注册 server 无 catalog。
+	if got := registry.GetCatalogForServer("t1", "test-server"); got != nil {
+		t.Errorf("expected nil catalog initially, got %v", got)
 	}
 
 	// 创建测试配置
