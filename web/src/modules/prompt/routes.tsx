@@ -9,7 +9,7 @@ export const promptRoutes = [
     key="prompts"
     path="/prompts"
     element={
-      <PrivateRoute requiredTenantRole="admin">
+      <PrivateRoute requiredRole="global_admin">
         <PromptListPage />
       </PrivateRoute>
     }

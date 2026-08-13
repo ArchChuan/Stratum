@@ -217,11 +217,13 @@ const executePack = async (
     return;
   }
   if (pack === 'prompt') {
-    completedActions.push(...await executePromptPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    // /prompts 收紧为仅 global admin 可访问,执行 actor 必须带 global_role='global_admin'。
+    completedActions.push(...await executePromptPack({ actor: actors.systemAdmin, pool, evidence, webURL }));
     return;
   }
   if (pack === 'audit') {
-    completedActions.push(...await executeAuditPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    // /audit 收紧为仅 global admin 可访问,执行 actor 必须带 global_role='global_admin'。
+    completedActions.push(...await executeAuditPack({ actor: actors.systemAdmin, pool, evidence, webURL }));
     return;
   }
   if (pack === 'llm-admin') {

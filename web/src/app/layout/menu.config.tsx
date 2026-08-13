@@ -34,9 +34,6 @@ type MenuItem = NonNullable<MenuProps['items']>[number];
 export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
   const tenantRole = user?.role ?? user?.current_tenant?.role ?? 'member';
   const canManageTenant = tenantRole === 'admin' || tenantRole === 'owner';
-  // 平台管理面依附默认租户：仅默认租户 admin/root（system/global admin）可见。
-  const isPlatformAdmin =
-    user?.global_role === 'global_admin' || user?.system_role === 'system_admin';
   const base: MenuItem[] = [
     { key: '/', icon: <DashboardOutlined />, label: '概览' },
     { key: '/chat', icon: <CommentOutlined />, label: 'Agent 对话' },
@@ -97,6 +94,13 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
       icon: <DatabaseOutlined />,
       label: '我的记忆',
     },
+    canManageTenant
+      ? {
+          key: '/approvals',
+          icon: <SafetyCertificateOutlined />,
+          label: '工具审批',
+        }
+      : null,
     {
       key: 'mcp-group',
       icon: <ApiOutlined />,
@@ -141,9 +145,12 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
     });
   }
 
-  if (canManageTenant) {
+  // 平台管理面合并自原「平台管理（租户 admin）」+「系统管理（global/system admin）」,
+  // 现统一仅对 global admin（users.global_role='global_admin'）开放;其他角色菜单不可见、
+  // URL 直达也被路由守卫与后端 RequireGlobalAdmin 双拦截。
+  if (user?.global_role === 'global_admin') {
     base.push({
-      key: 'tenant-admin-group',
+      key: 'platform-admin-group',
       icon: <SettingOutlined />,
       label: '平台管理',
       children: [
@@ -158,45 +165,22 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
           label: '审计日志',
         },
         {
-          key: '/approvals',
-          icon: <SafetyCertificateOutlined />,
-          label: '工具审批',
+          key: '/mechanism/profiles',
+          icon: <DatabaseOutlined />,
+          label: '模型档案',
         },
-        isPlatformAdmin
-          ? {
-              key: '/mechanism/profiles',
-              icon: <DatabaseOutlined />,
-              label: '模型档案',
-            }
-          : null,
-      ].filter(Boolean) as MenuItem[],
+        {
+          key: '/admin/tenants',
+          icon: <GlobalOutlined />,
+          label: '全局租户',
+        },
+        {
+          key: '/admin/settings',
+          icon: <SettingOutlined />,
+          label: '平台参数',
+        },
+      ],
     });
-  }
-
-  if (user?.global_role === 'global_admin' || user?.system_role === 'system_admin') {
-    const adminItems: MenuItem[] = [];
-
-    if (user?.global_role === 'global_admin') {
-      adminItems.push({
-        key: '/admin/tenants',
-        icon: <GlobalOutlined />,
-        label: '全局租户',
-      });
-      adminItems.push({
-        key: '/admin/settings',
-        icon: <SettingOutlined />,
-        label: '平台参数',
-      });
-    }
-
-    if (adminItems.length > 0) {
-      base.push({
-        key: 'admin-group',
-        icon: <SettingOutlined />,
-        label: '系统管理',
-        children: adminItems,
-      });
-    }
   }
 
   return base;
@@ -213,10 +197,9 @@ export const resolveOpenKeys = (pathname: string): string[] => {
   if (
     pathname.startsWith('/prompts') ||
     pathname.startsWith('/audit') ||
-    pathname.startsWith('/approvals') ||
-    pathname.startsWith('/mechanism')
+    pathname.startsWith('/mechanism') ||
+    pathname.startsWith('/admin')
   )
-    return ['tenant-admin-group'];
-  if (pathname.startsWith('/admin')) return ['admin-group'];
+    return ['platform-admin-group'];
   return [];
 };
