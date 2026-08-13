@@ -7,15 +7,14 @@ import (
 
 func TestAuthorizeTool(t *testing.T) {
 	base := ToolAuthorizationRequest{
-		TenantID:          "tenant-1",
-		UserID:            "user-1",
-		ToolID:            "mcp:orders:get_order",
-		UserActive:        true,
-		UserAllowsTool:    true,
-		AgentAllowsTool:   true,
-		PolicyResolved:    true,
-		RiskLevel:         ToolRiskRead,
-		ActiveSkillAllows: true,
+		TenantID:        "tenant-1",
+		UserID:          "user-1",
+		ToolID:          "mcp:orders:get_order",
+		UserActive:      true,
+		UserAllowsTool:  true,
+		AgentAllowsTool: true,
+		PolicyResolved:  true,
+		RiskLevel:       ToolRiskRead,
 	}
 
 	tests := []struct {
@@ -28,7 +27,6 @@ func TestAuthorizeTool(t *testing.T) {
 		{name: "inactive user", mutate: func(r *ToolAuthorizationRequest) { r.UserActive = false }, effect: ToolAuthorizationDeny, reason: ToolReasonUserInactive},
 		{name: "user denied", mutate: func(r *ToolAuthorizationRequest) { r.UserAllowsTool = false }, effect: ToolAuthorizationDeny, reason: ToolReasonUserPermissionDenied},
 		{name: "agent denied", mutate: func(r *ToolAuthorizationRequest) { r.AgentAllowsTool = false }, effect: ToolAuthorizationDeny, reason: ToolReasonToolNotAllowlisted},
-		{name: "active skill denied", mutate: func(r *ToolAuthorizationRequest) { r.ActiveSkill = true; r.ActiveSkillAllows = false }, effect: ToolAuthorizationDeny, reason: ToolReasonSkillScopeExceeded},
 		{name: "policy lookup failed", mutate: func(r *ToolAuthorizationRequest) { r.PolicyResolved = false }, effect: ToolAuthorizationRequireApproval, reason: ToolReasonPolicyLookupFailed},
 		{name: "unclassified", mutate: func(r *ToolAuthorizationRequest) { r.RiskLevel = ToolRiskUnclassified }, effect: ToolAuthorizationRequireApproval, reason: ToolReasonToolUnclassified},
 		{name: "read", mutate: func(r *ToolAuthorizationRequest) { r.RiskLevel = ToolRiskRead }, effect: ToolAuthorizationAllow, reason: ToolReasonRiskAllowed},
@@ -52,15 +50,14 @@ func TestAuthorizeTool(t *testing.T) {
 
 func TestAuthorizeSystemAssistantTool(t *testing.T) {
 	base := ToolAuthorizationRequest{
-		TenantID:          "tenant-1",
-		UserID:            "user-1",
-		ToolID:            "mcp:orders:get_order",
-		UserActive:        true,
-		UserAllowsTool:    true,
-		AgentAllowsTool:   true,
-		PolicyResolved:    true,
-		RiskLevel:         ToolRiskRead,
-		ActiveSkillAllows: true,
+		TenantID:        "tenant-1",
+		UserID:          "user-1",
+		ToolID:          "mcp:orders:get_order",
+		UserActive:      true,
+		UserAllowsTool:  true,
+		AgentAllowsTool: true,
+		PolicyResolved:  true,
+		RiskLevel:       ToolRiskRead,
 	}
 
 	tests := []struct {
@@ -73,7 +70,6 @@ func TestAuthorizeSystemAssistantTool(t *testing.T) {
 		{name: "inactive user", mutate: func(r *ToolAuthorizationRequest) { r.UserActive = false }, effect: ToolAuthorizationDeny, reason: ToolReasonUserInactive},
 		{name: "user denied", mutate: func(r *ToolAuthorizationRequest) { r.UserAllowsTool = false }, effect: ToolAuthorizationDeny, reason: ToolReasonUserPermissionDenied},
 		{name: "agent denied", mutate: func(r *ToolAuthorizationRequest) { r.AgentAllowsTool = false }, effect: ToolAuthorizationDeny, reason: ToolReasonToolNotAllowlisted},
-		{name: "active skill denied", mutate: func(r *ToolAuthorizationRequest) { r.ActiveSkill = true; r.ActiveSkillAllows = false }, effect: ToolAuthorizationDeny, reason: ToolReasonSkillScopeExceeded},
 		{name: "policy lookup failed", mutate: func(r *ToolAuthorizationRequest) { r.PolicyResolved = false }, effect: ToolAuthorizationDeny, reason: ToolReasonPolicyLookupFailed},
 		{name: "unclassified", mutate: func(r *ToolAuthorizationRequest) { r.RiskLevel = ToolRiskUnclassified }, effect: ToolAuthorizationDeny, reason: ToolReasonToolUnclassified},
 		{name: "read", mutate: func(r *ToolAuthorizationRequest) { r.RiskLevel = ToolRiskRead }, effect: ToolAuthorizationAllow, reason: ToolReasonRiskAllowed},
@@ -101,29 +97,25 @@ func TestToolAuthorizationMonotonicity(t *testing.T) {
 
 	for i := 0; i < 1_000; i++ {
 		base := ToolAuthorizationRequest{
-			TenantID:          "tenant-1",
-			UserID:            "user-1",
-			ToolID:            "mcp:test:tool",
-			UserActive:        true,
-			UserAllowsTool:    true,
-			AgentAllowsTool:   true,
-			PolicyResolved:    true,
-			RiskLevel:         risks[rng.Intn(len(risks))],
-			ActiveSkillAllows: true,
+			TenantID:        "tenant-1",
+			UserID:          "user-1",
+			ToolID:          "mcp:test:tool",
+			UserActive:      true,
+			UserAllowsTool:  true,
+			AgentAllowsTool: true,
+			PolicyResolved:  true,
+			RiskLevel:       risks[rng.Intn(len(risks))],
 		}
 		baseline := AuthorizeTool(base)
 
 		restricted := base
-		switch rng.Intn(4) {
+		switch rng.Intn(3) {
 		case 0:
 			restricted.UserActive = false
 		case 1:
 			restricted.UserAllowsTool = false
 		case 2:
 			restricted.AgentAllowsTool = false
-		case 3:
-			restricted.ActiveSkill = true
-			restricted.ActiveSkillAllows = false
 		}
 
 		if authorizationRank(AuthorizeTool(restricted).Effect) > authorizationRank(baseline.Effect) {

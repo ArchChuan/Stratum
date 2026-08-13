@@ -82,9 +82,9 @@ sequenceDiagram
     Engine->>DB: load Agent and published Skill revisions
     Engine->>LLM: messages and effective tools
     alt activate Skill
-        LLM-->>Engine: stratum_activate_skill with skill_id
-        Engine->>Engine: replace active Skill and narrow permissions
-        Engine->>LLM: active instructions and effective tools
+        LLM-->>Engine: stratum_skill with skill name
+        Engine->>Engine: activate instruction bundle(s), keep agent tool surface unchanged
+        Engine->>LLM: active instructions and effective tools (position guide in tool result)
     else knowledge or memory
         LLM-->>Engine: built-in tool call
         Engine->>KM: authorized intersection only

@@ -539,6 +539,9 @@ func (s *VersionService) UpdateActivation(ctx context.Context, skillID string, i
 		Name: in.Name, Description: in.Description, InputSchema: in.InputSchema,
 		OutputSchema: in.OutputSchema, Confirmed: in.Confirmed,
 	}
+	// InputSchema/OutputSchema 是声明性元数据(契约负担已放宽,Validate 只强制
+	// Name+Description)。nil 默认成空 object 仅保持存量数据形状兼容,不影响运行时
+	// 工具契约——skill 激活不再依赖 schema 校验。
 	if contract.InputSchema == nil {
 		contract.InputSchema = map[string]any{"type": "object"}
 	}

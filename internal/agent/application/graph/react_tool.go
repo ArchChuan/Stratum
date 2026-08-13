@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -41,7 +42,7 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 		last := s.Messages[len(s.Messages)-1]
 		for _, tc := range last.ToolCalls {
 			toolStart := time.Now()
-			provider := classifyToolProvider(tc.Name, s.AvailableTools)
+			provider := classifyToolProviderRef(tc, s)
 			argumentsPayload := observability.SafeTracePayload(tc.Arguments, constants.AgentToolTraceMaxRawJSONBytes)
 			toolAttributes := buildToolAttributes(tc, s, provider, argumentsPayload)
 			if !s.GovernedAssistant {
@@ -424,19 +425,65 @@ func execApplyResourceChangeTool(toolCtx context.Context, tc port.ToolCall, s *R
 	}
 }
 
-// dispatchSkillTool matches a tool call against the skill catalog.
-// The tool name is the ActivationContract name, not a hardcoded prefix.
+// dispatchSkillTool matches the unified stratum_skill tool call against the
+// skill catalog by the `skill` argument (the ActivationContract name, falling
+// back to the skill ID). Re-activating an already-active skill is intercepted
+// (Spec D6) instead of re-running the activation flow. The result is a
+// position guide (Spec D2), not the instruction body: the full instructions
+// are injected next round as the system message titled by this same name.
 func dispatchSkillTool(tc port.ToolCall, s *ReActState) (toolExecResult, bool) {
-	for _, activation := range s.SkillCatalog {
-		if activation.Name == tc.Name || (activation.Name == "" && activation.SkillID == tc.Name) {
-			s.Actives = upsertActivation(s.Actives, activation)
+	if tc.Name != stratumSkillToolName {
+		return toolExecResult{}, false
+	}
+	name, _ := tc.Arguments["skill"].(string)
+	activation, ok := resolveSkillByName(s.SkillCatalog, name)
+	if !ok {
+		return toolExecResult{
+			content: fmt.Sprintf("error: unknown skill %q; available: %s", name, availableSkillNames(s.SkillCatalog)),
+			status:  domain.ToolTraceStatusError,
+		}, true
+	}
+	title := fmt.Sprintf("Active Skill %s (revision %s)", activationName(activation), activation.RevisionID)
+	for _, active := range s.Actives {
+		if active.SkillID == activation.SkillID {
+			// D6 重复命中拦截：幂等，复用位置指引引导，避免重复消耗轮次。
 			return toolExecResult{
-				content: fmt.Sprintf("activated skill %s revision %s", activation.SkillID, activation.RevisionID),
-				status:  domain.ToolTraceStatusSuccess,
+				content: fmt.Sprintf("Skill %s (revision %s) 已激活，完整指令已在 system 消息『%s』，直接按指令执行，无需重复激活。",
+					activationName(activation), activation.RevisionID, title),
+				status: domain.ToolTraceStatusSuccess,
 			}, true
 		}
 	}
-	return toolExecResult{}, false
+	s.Actives = upsertActivation(s.Actives, activation)
+	return toolExecResult{
+		content: fmt.Sprintf("Skill %s (revision %s) 已激活。完整指令已注入 system 消息『%s』，后续轮次按此执行。",
+			activationName(activation), activation.RevisionID, title),
+		status: domain.ToolTraceStatusSuccess,
+	}, true
+}
+
+// resolveSkillByName 在 catalog 中按解析名（activationName）定位 skill。
+func resolveSkillByName(catalog map[string]port.SkillActivation, name string) (port.SkillActivation, bool) {
+	for _, a := range catalog {
+		if activationName(a) == name {
+			return a, true
+		}
+	}
+	return port.SkillActivation{}, false
+}
+
+// availableSkillNames 返回 catalog 内全部解析名，供未知 skill 报错提示。
+func availableSkillNames(catalog map[string]port.SkillActivation) string {
+	ids := make([]string, 0, len(catalog))
+	for id := range catalog {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	names := make([]string, 0, len(ids))
+	for _, id := range ids {
+		names = append(names, activationName(catalog[id]))
+	}
+	return strings.Join(names, ", ")
 }
 
 func execPlanTool(toolCtx context.Context, tc port.ToolCall, s *ReActState) toolExecResult {
@@ -453,7 +500,9 @@ func execSearchKnowledgeTool(toolCtx context.Context, tc port.ToolCall, s *ReAct
 	}
 	workspaces := extractStringSliceArg(tc.Arguments, "workspaces")
 	query, _ := tc.Arguments["query"].(string)
-	workspaces = allowedKnowledgeWorkspaces(workspaces, s.AgentKnowledgeWorkspaceIDs, s.Actives)
+	// 知识作用域继承 agent 绑定（Spec D5）：不再与 skill 声明的
+	// KnowledgeWorkspaceIDs 交集，skill 激活既不扩大也不缩小边界。
+	workspaces = allowedKnowledgeWorkspaces(workspaces, s.AgentKnowledgeWorkspaceIDs)
 	if len(workspaces) == 0 {
 		msg := "error: no authorized knowledge workspace"
 		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: msg, content: msg}
@@ -533,39 +582,33 @@ func (s *ReActState) appendCitationSources(evidence port.RAGSearchEvidence) {
 }
 
 func execRecallMemoryTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time, logger *zap.Logger) toolExecResult {
-	switch {
-	case len(s.Actives) > 0 && !anyActiveAllowsMemoryScope(s.Actives, s.AgentMemoryScope):
-		msg := "error: active skill does not permit this memory scope"
-		logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
-			zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
-			zap.Int64("latency_ms", time.Since(toolStart).Milliseconds()))
-		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: msg, content: msg}
-	case s.RecallMemoryFn == nil:
+	// 记忆作用域继承 agent 绑定（Spec D5）：不再要求 active skill 的 MemoryScopes
+	// 包含 agent scope；skill 激活既不扩大也不缩小 agent 的能力边界。
+	if s.RecallMemoryFn == nil {
 		logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
 			zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
 			zap.Int64("latency_ms", time.Since(toolStart).Milliseconds()))
 		return toolExecResult{content: "error: stratum_recall_memory tool not configured", status: domain.ToolTraceStatusSuccess}
-	default:
-		recallCtx, recallCancel := context.WithTimeout(toolCtx, constants.AgentMemoryRecallTimeout)
-		content, recallErr := s.RecallMemoryFn(recallCtx, tc.Arguments)
-		recallCancel()
-		if recallErr != nil {
-			logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
-				zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
-				zap.Int64("latency_ms", time.Since(toolStart).Milliseconds()))
-			return toolExecResult{status: domain.ToolTraceStatusError, errMsg: recallErr.Error(), content: fmt.Sprintf("error: %v", recallErr)}
-		}
+	}
+	recallCtx, recallCancel := context.WithTimeout(toolCtx, constants.AgentMemoryRecallTimeout)
+	content, recallErr := s.RecallMemoryFn(recallCtx, tc.Arguments)
+	recallCancel()
+	if recallErr != nil {
 		logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
 			zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
 			zap.Int64("latency_ms", time.Since(toolStart).Milliseconds()))
-		// 召回内容源自用户记忆，属不可信数据：guard 打 <untrusted_tool_result>
-		// 标记后再进模型，防止记忆内容作为指令被采纳。
-		guardedContent, guardErr := guardUntrustedToolText(s.InternalToolResultGuardFn, content)
-		if guardErr != nil {
-			return toolExecResult{status: domain.ToolTraceStatusError, errMsg: guardErr.Error(), content: "error: tool result validation failed"}
-		}
-		return toolExecResult{content: guardedContent, status: domain.ToolTraceStatusSuccess}
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: recallErr.Error(), content: fmt.Sprintf("error: %v", recallErr)}
 	}
+	logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
+		zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
+		zap.Int64("latency_ms", time.Since(toolStart).Milliseconds()))
+	// 召回内容源自用户记忆，属不可信数据：guard 打 <untrusted_tool_result>
+	// 标记后再进模型，防止记忆内容作为指令被采纳。
+	guardedContent, guardErr := guardUntrustedToolText(s.InternalToolResultGuardFn, content)
+	if guardErr != nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: guardErr.Error(), content: "error: tool result validation failed"}
+	}
+	return toolExecResult{content: guardedContent, status: domain.ToolTraceStatusSuccess}
 }
 
 func execMCPTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time, provider toolProviderRef, logger *zap.Logger) toolExecResult {
@@ -580,7 +623,7 @@ func execMCPTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolS
 	}
 	callCtx, cancel := context.WithTimeout(toolCtx, constants.AgentMCPToolCallTimeout)
 	toolOutput, callErr := s.ToolExecutionFn(callCtx, port.ToolExecutionRequest{
-		ToolCallID: tc.ID, Tool: tool, Arguments: tc.Arguments, Actives: s.Actives,
+		ToolCallID: tc.ID, Tool: tool, Arguments: tc.Arguments,
 	})
 	cancel()
 	var approvalRequired *port.ToolApprovalRequiredError
@@ -819,6 +862,41 @@ type toolProviderRef struct {
 	Metadata     map[string]any
 }
 
+// classifyToolProviderRef 解析工具观测归因：内置统一 skill 工具按参数 skill 覆盖到
+// 具体激活（classifySkillProvider），其余工具按名称分类。skill 解析失败回退通用
+// stratum_skill 引用。
+func classifyToolProviderRef(tc port.ToolCall, s ReActState) toolProviderRef {
+	provider := classifyToolProvider(tc.Name, s.AvailableTools)
+	if tc.Name != stratumSkillToolName {
+		return provider
+	}
+	// 恢复逐 skill 观测归因：统一工具按参数 skill 解析到具体激活。
+	if ref, ok := classifySkillProvider(tc, s.SkillCatalog); ok {
+		return ref
+	}
+	return provider
+}
+
+// classifySkillProvider 解析统一 stratum_skill 调用到具体 skill，恢复逐 skill
+// 观测归因（capability id = skill id、node = 解析名、revision = 激活版本）。
+// 解析失败返回 false，调用方回退通用引用。
+func classifySkillProvider(tc port.ToolCall, catalog map[string]port.SkillActivation) (toolProviderRef, bool) {
+	name, _ := tc.Arguments["skill"].(string)
+	activation, ok := resolveSkillByName(catalog, name)
+	if !ok {
+		return toolProviderRef{}, false
+	}
+	return toolProviderRef{
+		ToolType:     domain.ProviderTypeSkill,
+		ProviderType: domain.ProviderTypeSkill,
+		ProviderID:   activation.SkillID,
+		CapabilityID: activation.SkillID,
+		NodeID:       activationName(activation),
+		NodeType:     domain.ObservationTypeSkill,
+		Metadata:     map[string]any{"version_id": activation.RevisionID},
+	}, true
+}
+
 func classifyToolProvider(name string, tools []port.ToolDefinition) toolProviderRef {
 	switch name {
 	case domain.SystemAssistantToolSearchOfficialDocs,
@@ -903,16 +981,12 @@ func findTool(name string, tools []port.ToolDefinition) (port.ToolDefinition, bo
 	return port.ToolDefinition{}, false
 }
 
-func allowedKnowledgeWorkspaces(requested, agentAllowed []string, actives []port.SkillActivation) []string {
+// allowedKnowledgeWorkspaces 按 agent 绑定的工作区集合过滤请求的工作区
+// （Spec D5）：不再与 active skill 声明的 KnowledgeWorkspaceIDs 交集。
+func allowedKnowledgeWorkspaces(requested, agentAllowed []string) []string {
 	agentSet := make(map[string]struct{}, len(agentAllowed))
 	for _, id := range agentAllowed {
 		agentSet[id] = struct{}{}
-	}
-	skillSet := map[string]struct{}{}
-	for _, active := range actives {
-		for _, id := range active.KnowledgeWorkspaceIDs {
-			skillSet[id] = struct{}{}
-		}
 	}
 	if len(requested) == 0 {
 		requested = agentAllowed
@@ -922,11 +996,6 @@ func allowedKnowledgeWorkspaces(requested, agentAllowed []string, actives []port
 	for _, id := range requested {
 		if _, ok := agentSet[id]; !ok {
 			continue
-		}
-		if len(actives) > 0 {
-			if _, ok := skillSet[id]; !ok {
-				continue
-			}
 		}
 		if _, ok := seen[id]; ok {
 			continue

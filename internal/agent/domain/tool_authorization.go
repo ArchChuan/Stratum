@@ -28,7 +28,6 @@ const (
 	ToolReasonUserInactive         ToolAuthorizationReason = "user_inactive"
 	ToolReasonUserPermissionDenied ToolAuthorizationReason = "user_permission_denied"
 	ToolReasonToolNotAllowlisted   ToolAuthorizationReason = "tool_not_allowlisted"
-	ToolReasonSkillScopeExceeded   ToolAuthorizationReason = "skill_scope_exceeded"
 	ToolReasonPolicyLookupFailed   ToolAuthorizationReason = "policy_lookup_failed"
 	ToolReasonToolUnclassified     ToolAuthorizationReason = "tool_unclassified"
 	ToolReasonApprovalRequired     ToolAuthorizationReason = "approval_required"
@@ -37,16 +36,14 @@ const (
 )
 
 type ToolAuthorizationRequest struct {
-	TenantID          string
-	UserID            string
-	ToolID            string
-	UserActive        bool
-	UserAllowsTool    bool
-	AgentAllowsTool   bool
-	ActiveSkill       bool
-	ActiveSkillAllows bool
-	PolicyResolved    bool
-	RiskLevel         ToolRiskLevel
+	TenantID        string
+	UserID          string
+	ToolID          string
+	UserActive      bool
+	UserAllowsTool  bool
+	AgentAllowsTool bool
+	PolicyResolved  bool
+	RiskLevel       ToolRiskLevel
 }
 
 type ToolAuthorizationDecision struct {
@@ -66,8 +63,6 @@ func AuthorizeTool(req ToolAuthorizationRequest) ToolAuthorizationDecision {
 		decision.Reason = ToolReasonUserPermissionDenied
 	case !req.AgentAllowsTool:
 		decision.Reason = ToolReasonToolNotAllowlisted
-	case req.ActiveSkill && !req.ActiveSkillAllows:
-		decision.Reason = ToolReasonSkillScopeExceeded
 	case !req.PolicyResolved:
 		decision.Effect = ToolAuthorizationRequireApproval
 		decision.Reason = ToolReasonPolicyLookupFailed
@@ -103,8 +98,6 @@ func AuthorizeSystemAssistantTool(req ToolAuthorizationRequest) ToolAuthorizatio
 		decision.Reason = ToolReasonUserPermissionDenied
 	case !req.AgentAllowsTool:
 		decision.Reason = ToolReasonToolNotAllowlisted
-	case req.ActiveSkill && !req.ActiveSkillAllows:
-		decision.Reason = ToolReasonSkillScopeExceeded
 	case !req.PolicyResolved:
 		decision.Reason = ToolReasonPolicyLookupFailed
 		decision.RiskLevel = ToolRiskUnclassified

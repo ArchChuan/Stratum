@@ -40,7 +40,7 @@ func skillRevisionRow() []any {
 	return []any{
 		"r-1", "s-1", "p-1", 2, "draft", "evolution", "h-1",
 		[]byte(`{"gen":1}`), []byte(`{"goal":"g","whenToUse":""}`),
-		[]byte(`{"name":"ac","description":"","inputSchema":null,"outputSchema":null,"confirmed":false}`),
+		[]byte(`{"name":"ac","description":"","confirmed":false}`),
 		"do it", []byte(`{"mcpToolIds":["t1"]}`), []byte(`{"ok":true}`),
 	}
 }
@@ -365,7 +365,7 @@ func TestPgSkillRevisionRepo_UpdateDraftActivation_success(t *testing.T) {
 	beginTenantTx(t, mock)
 
 	mock.ExpectQuery("UPDATE skill_revisions SET activation_contract=\\$2, content_hash=\\$3").
-		WithArgs("s-1", `{"name":"ac","description":"","inputSchema":null,"outputSchema":null,"confirmed":false}`, "h-3").
+		WithArgs("s-1", `{"name":"ac","description":"","confirmed":false}`, "h-3").
 		WillReturnRows(pgxmock.NewRows(revisionCols).AddRow(skillRevisionRow()...))
 	mock.ExpectCommit()
 
@@ -398,7 +398,7 @@ func TestPgSkillRevisionRepo_UpdateDraftBundle_success(t *testing.T) {
 	beginTenantTx(t, mock)
 
 	mock.ExpectQuery("UPDATE skill_revisions SET capability=\\$3::jsonb").
-		WithArgs("s-1", "h-1", `{"goal":"g","whenToUse":""}`, `{"name":"ac","description":"","inputSchema":null,"outputSchema":null,"confirmed":false}`,
+		WithArgs("s-1", "h-1", `{"goal":"g","whenToUse":""}`, `{"name":"ac","description":"","confirmed":false}`,
 			"do it", `{"mcpToolIds":["t1"]}`, "h-1").
 		WillReturnRows(pgxmock.NewRows(revisionCols).AddRow(skillRevisionRow()...))
 	mock.ExpectExec("UPDATE skills SET name=\\$2, description=\\$3").
@@ -552,7 +552,7 @@ func TestPgSkillRevisionRepo_UpdateDraftBundle_noBaseline(t *testing.T) {
 	beginTenantTx(t, mock)
 
 	mock.ExpectQuery("UPDATE skill_revisions SET capability=\\$3::jsonb").
-		WithArgs("s-1", `{"goal":"g","whenToUse":""}`, `{"name":"ac","description":"","inputSchema":null,"outputSchema":null,"confirmed":false}`,
+		WithArgs("s-1", `{"goal":"g","whenToUse":""}`, `{"name":"ac","description":"","confirmed":false}`,
 			"do it", `{"mcpToolIds":["t1"]}`, "h-1").
 		WillReturnRows(pgxmock.NewRows(revisionCols).AddRow(skillRevisionRow()...))
 	mock.ExpectExec("UPDATE skills SET name=\\$2, description=\\$3").
