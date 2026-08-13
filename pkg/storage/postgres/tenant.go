@@ -265,6 +265,17 @@ func ProvisionTenantSchema(ctx context.Context, pool *pgxpool.Pool, tenantID str
 		return fmt.Errorf("postgres: set search_path: %w", err)
 	}
 
+	if err := applyTenantSchemaDDL(ctx, tx, schemaName); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+// applyTenantSchemaDDL 执行租户模板 DDL 并清理已提升为 public 平台目录的存量表。
+// 清理必须显式 schema-qualified DROP——search_path 含 public 时，无前缀 DROP 会顺延
+// 误删 public 平台目录；模板无法占位符化，故在此以租户 schema 限定。
+func applyTenantSchemaDDL(ctx context.Context, tx pgx.Tx, schemaName string) error {
 	for i, stmt := range splitStatements(tenantSchemaDDL) {
 		stmt = stripSQLLineComments(strings.TrimSpace(stmt))
 		if stmt == "" {
@@ -274,8 +285,12 @@ func ProvisionTenantSchema(ctx context.Context, pool *pgxpool.Pool, tenantID str
 			return fmt.Errorf("postgres: exec statement %d: %w", i, err)
 		}
 	}
-
-	return tx.Commit(ctx)
+	for _, table := range []string{"models", "providers"} {
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS "%s".%s`, schemaName, table)); err != nil {
+			return fmt.Errorf("postgres: drop legacy %s (schema %s): %w", table, schemaName, err)
+		}
+	}
+	return nil
 }
 
 // stripSQLLineComments removes all `--` comment lines from a SQL statement block.

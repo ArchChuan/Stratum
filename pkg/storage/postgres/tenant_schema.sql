@@ -1482,10 +1482,10 @@ END $$;
 -- Provider & Model Registry
 -- =============================================================================
 -- providers/models 已从 tenant schema 提升为 public schema 平台全局资源
--- （迁移 035 + 一次性 cmd/model-migrate 存量搬迁）。存量租户的表在此幂等清理，
--- 新租户不再建这两张表；代码已全量切到 public 表（见 035_platform_model_catalog）。
-DROP TABLE IF EXISTS models;
-DROP TABLE IF EXISTS providers;
+-- （迁移 035 + 一次性 cmd/model-migrate 存量搬迁）。新租户不再建这两张表，
+-- 代码已全量切到 public 表（见 035_platform_model_catalog）。
+-- 存量租户旧表的清理由 ProvisionTenantSchema 显式 schema-qualified DROP 执行：
+-- 本模板 search_path 含 public，无前缀 DROP 会顺延误删 public 平台目录，禁止在此书写。
 
 -- =============================================================================
 -- Built-in platform assistant resources (skills + knowledge workspace)
