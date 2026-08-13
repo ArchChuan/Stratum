@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test';
 import type { QueryResultRow } from 'pg';
 
 import type { BrowserActor } from '../core/actors';
-import { addGeneratedActorMembership, configureManagedModels, requireUUID, withTenantMutation, withTenantQuery, type DatabasePool } from '../core/database';
+import { addGeneratedActorMembership, configureManagedModels, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
 import type { EvidenceRecord } from '../core/evidence';
 import { openAgentCreation } from '../core/navigation';
 
@@ -190,10 +190,14 @@ export const executeAgentSkillMCPPack = async ({
       'SELECT count(*)::text AS count FROM mcp_configs WHERE id=$1', [serverID])).toEqual([{ count: '0' }]);
   } finally {
     await page.close();
-    await withTenantMutation(pool, tenantID, {
-      text: 'DELETE FROM public.tenant_members WHERE tenant_id=$1 AND user_id=$2',
-      values: [tenantID, approverUserID],
-    });
+    // 恢复 approver 在目标租户的 canonical 'member' 角色，而不是删除 membership。
+    // operation-gate/collab 会 upsert memberA 为 tenantAdmin 租户的 'member' 并
+    // 把 actor.tenantID 指向该租户（collab.ts:106 / operation-gate.ts:92）；soak
+    // 随机顺序下 agent-skill-mcp 可能先执行，若 finally 直接 DELETE 该 membership，
+    // 后续 restoreActorSession(memberA) switch 到 tenantAdmin 租户会 403
+    // "not a member"。降回 member 既撤销本 pack 的临时 owner 提升，又保持
+    // 跨 pack 的 member 成员关系不变（残留由 deleteGeneratedActors 级联清理）。
+    await addGeneratedActorMembership(pool, tenantID, approverUserID, 'member');
   }
   return [
     'agent.mutation.post.agents.tool.approvals.id.decision',
