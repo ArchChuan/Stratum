@@ -194,6 +194,28 @@ func ModelSupportsReasoning(name string) bool {
 	return reasoningModels[toLower(name)]
 }
 
+// structuredOutputPrefixes 是已知支持 JSON mode（response_format json_object）
+// 的模型族前缀。与 reasoningModels 的 exact-match 不同：JSON mode 是 provider
+// 通用能力，族级前缀回退安全（qwen/glm/deepseek/gpt 均提供 OpenAI 兼容端点）。
+var structuredOutputPrefixes = []string{"qwen", "glm", "deepseek", "gpt"}
+
+// ModelSupportsStructuredOutput 判断模型是否支持 response_format=json_object。
+// 前缀匹配，大小写不敏感；未知模型返回 false，fail-closed：网关据此清空
+// response_format，禁止对不支持模型的盲透传（严格端点 400 会中止 fallback 链）。
+func ModelSupportsStructuredOutput(name string) bool {
+	if name == "" {
+		return false
+	}
+	lower := toLower(name)
+	for _, p := range structuredOutputPrefixes {
+		// 手动前缀比较，与 familyPrefixes 循环一致，避免 import strings。
+		if len(p) <= len(lower) && lower[:len(p)] == p {
+			return true
+		}
+	}
+	return false
+}
+
 // toLower is a simple ASCII-only lowercasing helper to avoid importing strings.
 func toLower(s string) string {
 	b := make([]byte, len(s))

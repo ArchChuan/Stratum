@@ -108,9 +108,15 @@ func prepareLLMRequest(ctx context.Context, s *ReActState) ([]port.ToolDefinitio
 	if s.MaxLLMSteps > 0 && s.Steps >= s.MaxLLMSteps-1 {
 		tools = nil
 		protectedUsers = 2
+		instruction := constants.AgentFinalAnswerInstruction
+		// 降级执行（含子节点经共享 map 传播的止损）：只基于已确认事实回答，
+		// 禁止声称完成了未验证的操作。
+		if s.Degraded || len(s.StopLossTools) > 0 {
+			instruction = constants.AgentDegradedFinalAnswerInstruction
+		}
 		messages = append(messages, port.LLMMessage{
 			Role:    "user",
-			Content: "You have reached the maximum reasoning steps. Based on your analysis and tool results so far, provide your final answer now. Do not call any tools.",
+			Content: instruction,
 		})
 	}
 	// In-loop compaction: bound the complete request, including any final-step

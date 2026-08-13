@@ -374,6 +374,44 @@ type AgentResult struct {
 	// TerminatedBy 记录业务终止原因（如 cost_budget）；空 = 正常完成。
 	// 业务终止仍返回已产出部分结果，不进入错误路径。
 	TerminatedBy string
+	// Degraded 标记本次执行因工具连续校验失败进入降级：最终回答已按降级
+	// 指令生成，不得声称完成了未验证的操作。子节点止损经共享 map 传播到
+	// 父图，collectGraphResult 从非空 StopLossTools 推导。
+	Degraded bool
+	// DegradeReason 是降级原因的固定枚举（如 "tool_stop_loss:<tool>"）；
+	// 永不含内部标识或原始错误正文，可安全透出到前端。
+	DegradeReason string
+	// FactCheck 是幻觉校验的展示型报告（advisory）。开关关或校验失败/超时/无
+	// 证据时为 nil，handler 透出 fact_check 时 omitempty 不出现。只展示，不进
+	// 工具决策、不写库为 ground truth。
+	FactCheck *FactCheckReport
+}
+
+// FactCheckInput 是幻觉校验的输入：agent 最终输出 + 可检索的 knowledge
+// workspaces + 请求者。ViewerID 空 = 不校验（RAGService 的 SkipAccessCheck
+// 对 SystemActor 整体旁路 D2 门控，必须显式 fail-closed 守卫）。
+type FactCheckInput struct {
+	Output     string
+	Workspaces []string
+	ViewerID   string
+}
+
+// FactCheckReport 是幻觉校验结果（advisory，只展示）。Checked 表示本次确实
+// 执行了校验；IsValid 由 verdict 推导（存在 CONTRADICTED/UNSUPPORTED 即无效）；
+// RiskPoints 是风险 claim 计数。
+type FactCheckReport struct {
+	Checked    bool           `json:"checked"`
+	Claims     []ClaimVerdict `json:"claims"`
+	IsValid    bool           `json:"isValid"`
+	RiskPoints int            `json:"riskPoints"`
+}
+
+// ClaimVerdict 是单个 claim 的 LLM-as-Judge 判定。Verdict 为固定枚举
+// SUPPORTED|CONTRADICTED|UNSUPPORTED；Risk ∈ [0,5]，越高越可疑。
+type ClaimVerdict struct {
+	Text    string `json:"text"`
+	Verdict string `json:"verdict"`
+	Risk    int    `json:"risk"`
 }
 
 // RAGSearchSource is per-chunk retrieval provenance for the chat UI. Score

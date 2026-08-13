@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/byteBuilderX/stratum/internal/agent/application/factcheck"
 	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
@@ -78,7 +79,10 @@ type AgentServiceDeps struct {
 	TenantRoleResolver        port.TenantRoleResolver
 	WorkspaceBindingValidator port.WorkspaceBindingValidator
 	ParametersProvider        port.ParametersProvider
-	Logger                    *zap.Logger
+	// FactCheck 是幻觉校验配置（nil/Enabled=false = 关闭，fail-closed）。
+	// EvidenceFn 留空，执行时由 RAGSearchFnWithEvidence 填充。
+	FactCheck *factcheck.Settings
+	Logger    *zap.Logger
 }
 
 // AgentService aggregates agent CRUD + Execute/ExecuteStream and shields
@@ -2003,7 +2007,17 @@ func (s *AgentService) assembleOptions(
 	if s.deps.RAGSearch != nil && len(a.GetConfig().KnowledgeWorkspaceIDs) > 0 {
 		options = appendRAGSearchOptions(options, meta.TenantID, s.deps.RAGSearch, knowledgeAssignments)
 	}
+	options = applyFactCheckOption(options, s.deps.FactCheck)
 	return ctx, s.resolveEffectiveParameters(ctx, a, options), nil
+}
+
+// applyFactCheckOption 透传幻觉校验 option（fail-closed：nil/disabled 不注入）。
+// judge 与 TopK 等由 wiring 装配；EvidenceFn 在 collectGraphResult 填充。
+func applyFactCheckOption(options []ExecutionOption, settings *factcheck.Settings) []ExecutionOption {
+	if settings == nil || !settings.Enabled {
+		return options
+	}
+	return append(options, WithFactCheck(settings))
 }
 
 // appendRAGSearchOptions wires the plain and (when supported) evidence-capable

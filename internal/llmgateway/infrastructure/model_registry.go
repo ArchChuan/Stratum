@@ -464,3 +464,11 @@ func (r *ModelRegistry) ResolveReasoning(ctx context.Context, tenantID, modelNam
 	}
 	return false
 }
+
+// ResolveStructuredOutput 判断模型是否支持 response_format=json_object。
+// JSON mode 是族级 provider 能力（qwen/glm/deepseek/gpt），不由 DB
+// capabilities 枚举：统一走 catalog 前缀匹配。unknown 返回 false，
+// fail-closed：网关据此清空 response_format（严格端点 400 会中止 fallback 链）。
+func (r *ModelRegistry) ResolveStructuredOutput(ctx context.Context, tenantID, modelName string) bool {
+	return ModelSupportsStructuredOutput(modelName)
+}

@@ -178,3 +178,34 @@ func TestSmartChunkFallsBackToSemanticBreaksForSingleSmallParagraph(t *testing.T
 		t.Fatalf("expected sequential chunk indexes, got %d and %d", chunks[0].Index, chunks[1].Index)
 	}
 }
+
+func TestSplitSentences(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{"english two sentences", "Hello world. Next sentence.", []string{"Hello world.", " Next sentence."}},
+		{"english exclamation", "Done! Next.", []string{"Done!", " Next."}},
+		{"english question", "Ready? Go.", []string{"Ready?", " Go."}},
+		{"chinese full stop", "你好世界。下一句。", []string{"你好世界。", "下一句。"}},
+		{"chinese marks", "第一句！第二句？第三句。", []string{"第一句！", "第二句？", "第三句。"}},
+		{"mixed scripts", "First. 第二句。Third!", []string{"First.", " 第二句。", "Third!"}},
+		{"abbreviation dot not split boundary at start", ".hidden", []string{".hidden"}},
+		{"no terminator stays one", "no punctuation here", []string{"no punctuation here"}},
+		{"newline splits", "line one\nline two", []string{"line one", "line two"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := SplitSentences(tc.in)
+			if len(got) != len(tc.want) {
+				t.Fatalf("SplitSentences(%q) len=%d want %d: %#v", tc.in, len(got), len(tc.want), got)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("SplitSentences(%q)[%d]=%q want %q", tc.in, i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}

@@ -125,6 +125,11 @@ type chainLink struct {
 	// false 表示非推理或未知模型：invoke 对该 link 清空 reasoning_effort，
 	// 防止严格端点 400（永久错误，中止整条 fallback 链）。
 	Reasoning bool
+	// StructuredOutput 标记该模型是否支持 response_format=json_object
+	// （族级 provider 能力：qwen/glm/deepseek/gpt）。false 表示不支持或
+	// 未知模型：invoke 对该 link 清空 response_format，防止严格端点 400
+	// （永久错误，中止整条 fallback 链）。
+	StructuredOutput bool
 }
 
 // routedInfo 记录一次请求实际尝试过的模型链与最终成功模型。
@@ -181,10 +186,11 @@ func (g *Gateway) resolveChain(ctx context.Context, tenantID, model string) ([]c
 		return nil, err
 	}
 	links := []chainLink{{
-		Model:     model,
-		Config:    cfg,
-		Protocol:  proto,
-		Reasoning: g.registry.ResolveReasoning(ctx, tenantID, model),
+		Model:            model,
+		Config:           cfg,
+		Protocol:         proto,
+		Reasoning:        g.registry.ResolveReasoning(ctx, tenantID, model),
+		StructuredOutput: g.registry.ResolveStructuredOutput(ctx, tenantID, model),
 	}}
 	cands, err := g.registry.ResolveFallbackCandidates(ctx, tenantID, model)
 	if err != nil {
@@ -192,10 +198,11 @@ func (g *Gateway) resolveChain(ctx context.Context, tenantID, model string) ([]c
 	}
 	for _, c := range cands {
 		links = append(links, chainLink{
-			Model:     c.Model,
-			Config:    c.Config,
-			Protocol:  c.Protocol,
-			Reasoning: g.registry.ResolveReasoning(ctx, tenantID, c.Model),
+			Model:            c.Model,
+			Config:           c.Config,
+			Protocol:         c.Protocol,
+			Reasoning:        g.registry.ResolveReasoning(ctx, tenantID, c.Model),
+			StructuredOutput: g.registry.ResolveStructuredOutput(ctx, tenantID, c.Model),
 		})
 	}
 	return links, nil
@@ -291,26 +298,47 @@ func (g *Gateway) invoke(
 	stream bool,
 	onToken func(string),
 ) (*CompletionResponse, bool, error) {
-	attemptReq := req
-	if link.Model != req.Model || (req.ReasoningEffort != "" && !link.Reasoning) {
-		cloned := *req
-		cloned.Model = link.Model
-		if req.ReasoningEffort != "" && !link.Reasoning {
-			// 能力门控 fail-closed：非推理/未知模型清空 effort（known-reasoning
-			// 透传 / known-non 与 unknown 均清空）。严格端点 400 是永久错误，
-			// 会中止整条 fallback 链。只改本次尝试副本，绝不改共享 req。
-			cloned.ReasoningEffort = ""
-			g.logger.Warn("llmgateway: reasoning_effort ignored for non-reasoning model",
-				zap.String("model", link.Model),
-				zap.String("reasoning_effort", req.ReasoningEffort))
-		}
-		attemptReq = &cloned
-	}
+	attemptReq := g.applyCapabilityGate(req, link)
 	if stream {
 		return g.invokeStream(ctx, attemptReq, link, onToken)
 	}
 	resp, err := g.invokeComplete(ctx, attemptReq, link)
 	return resp, false, err
+}
+
+// applyCapabilityGate 对本次尝试副本应用模型能力门控：
+//   - 模型名不同时替换为 link.Model（fallback 候选必须携带候选模型名，
+//     否则候选 provider 会收到主模型名而报错）；
+//   - reasoning_effort 对非推理/未知模型清空（fail-closed）；
+//   - response_format 对不支持 json_object 的模型清空（fail-closed）。
+//
+// 无变化时返回原 req；否则返回 clone 后的副本，绝不修改共享 req。严格端点对
+// 不支持的参数返回 400（永久错误），会中止整条 fallback 链，因此门控必须在
+// 链上每个 link 应用一次。
+func (g *Gateway) applyCapabilityGate(req *CompletionRequest, link chainLink) *CompletionRequest {
+	if link.Model == req.Model &&
+		(req.ReasoningEffort == "" || link.Reasoning) &&
+		(req.ResponseFormat == nil || link.StructuredOutput) {
+		return req
+	}
+	cloned := *req
+	cloned.Model = link.Model
+	if req.ReasoningEffort != "" && !link.Reasoning {
+		// 能力门控 fail-closed：非推理/未知模型清空 effort（known-reasoning
+		// 透传 / known-non 与 unknown 均清空）。只改本次尝试副本。
+		cloned.ReasoningEffort = ""
+		g.logger.Warn("llmgateway: reasoning_effort ignored for non-reasoning model",
+			zap.String("model", link.Model),
+			zap.String("reasoning_effort", req.ReasoningEffort))
+	}
+	if req.ResponseFormat != nil && !link.StructuredOutput {
+		// response_format.Type 是白名单枚举（json_object），不含 PII，可记日志。
+		cloned.ResponseFormat = nil
+		g.logger.Warn("llmgateway: response_format ignored for model without json_object support",
+			zap.String("model", link.Model),
+			zap.String("response_format", req.ResponseFormat.Type))
+	}
+	return &cloned
 }
 
 // invokeComplete 是主模型或候选的单次非流式调用：协议调用 + 指标 + 日志。
