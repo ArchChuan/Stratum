@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import {
   skillRevisionSchema, skillSchema, skillWorkspaceSchema,
-  type CreateSkillDraftPayload, type Skill, type SkillRequirements, type SkillRevision, type SkillWorkspace,
+  type CreateSkillDraftPayload, type Skill, type SkillRevision, type SkillWorkspace,
 } from '../model/skill';
 
 import api from '@/services/client';
@@ -18,7 +18,7 @@ export const skillApi = {
     skillRevisionSchema.parse((await api.patch(`/skills/${id}/draft/capability`, data)).data),
   updateActivation: async (id: string, data: { name: string; description: string; inputSchema: Record<string, unknown>; outputSchema: Record<string, unknown>; confirmed: boolean }): Promise<SkillRevision> =>
     skillRevisionSchema.parse((await api.patch(`/skills/${id}/draft/activation`, data)).data),
-  updateInstructions: async (id: string, data: { instructions: string; requirements: SkillRequirements }): Promise<SkillRevision> =>
+  updateInstructions: async (id: string, data: { instructions: string }): Promise<SkillRevision> =>
     skillRevisionSchema.parse((await api.patch(`/skills/${id}/draft/instructions`, data)).data),
   setEditors: (id: string, editorIds: string[]) =>
     api.put(`/skills/${id}/editors`, { editorIds }),

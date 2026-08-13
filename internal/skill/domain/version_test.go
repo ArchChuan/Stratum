@@ -30,7 +30,7 @@ func TestActivationContractValidateRejectsUnsafeName(t *testing.T) {
 	}
 }
 
-func TestSkillRevisionPublishableRequiresInstructionsAndRequirements(t *testing.T) {
+func TestSkillRevisionPublishableRequiresInstructions(t *testing.T) {
 	revision := SkillRevision{
 		Status: VersionStatusDraft,
 		Capability: Capability{
@@ -46,11 +46,6 @@ func TestSkillRevisionPublishableRequiresInstructionsAndRequirements(t *testing.
 			Confirmed:    true,
 		},
 		Instructions: "根据投诉内容分类；需要订单数据时调用允许的 MCP 工具。",
-		Requirements: Requirements{
-			MCPToolIDs:            []string{"mcp:orders:get_order"},
-			KnowledgeWorkspaceIDs: []string{"support-policy"},
-			MemoryScopes:          []string{"user"},
-		},
 	}
 
 	if err := revision.ValidatePublishable(1); err != nil {
@@ -58,7 +53,7 @@ func TestSkillRevisionPublishableRequiresInstructionsAndRequirements(t *testing.
 	}
 }
 
-func TestSkillRevisionContentHashTracksInstructionsAndRequirements(t *testing.T) {
+func TestSkillRevisionContentHashTracksInstructions(t *testing.T) {
 	revision := SkillRevision{
 		Capability: Capability{Goal: "分类", WhenToUse: "收到投诉时"},
 		ActivationContract: ActivationContract{
@@ -66,7 +61,6 @@ func TestSkillRevisionContentHashTracksInstructionsAndRequirements(t *testing.T)
 			OutputSchema: map[string]any{"type": "object"}, Confirmed: true,
 		},
 		Instructions: "分类用户输入",
-		Requirements: Requirements{MCPToolIDs: []string{"mcp:orders:get_order"}},
 	}
 	first, err := revision.ComputeContentHash()
 	if err != nil {
@@ -83,12 +77,5 @@ func TestSkillRevisionContentHashTracksInstructionsAndRequirements(t *testing.T)
 	}
 	if changed == first {
 		t.Fatal("hash must change when instructions change")
-	}
-}
-
-func TestRequirementsValidateRejectsNonMCPToolID(t *testing.T) {
-	requirements := Requirements{MCPToolIDs: []string{"orders.get_order"}}
-	if err := requirements.Validate(); err == nil {
-		t.Fatal("expected invalid MCP tool ID error")
 	}
 }

@@ -21,7 +21,6 @@ const draftWorkspace = {
           inputSchema: { type: 'object' }, outputSchema: { type: 'object' },
         },
         instructions: '按照步骤完成测试',
-        requirements: { mcpToolIds: ['mcp:test:read'], knowledgeWorkspaceIds: [], memoryScopes: ['conversation'] },
       },
 };
 

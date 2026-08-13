@@ -1,5 +1,5 @@
 import { ArrowLeftOutlined } from '@ant-design/icons';
-import { Button, Checkbox, Form, Input, Select, Typography } from 'antd';
+import { Button, Form, Input, Select, Typography } from 'antd';
 
 import { useCreateSkillPage } from '../hooks/useCreateSkillPage';
 
@@ -86,15 +86,6 @@ export const CreateSkillPage = () => {
 
         <Form.Item label="执行指令" name="instructions" rules={[{ required: true, message: '请输入执行指令' }]}>
           <TextArea rows={6} placeholder="描述 Agent 激活此 Skill 后必须遵循的步骤、约束和输出要求" />
-        </Form.Item>
-        <Form.Item label="所需 MCP 工具" name="mcpToolIDs" extra="一行一个稳定 ID，格式 mcp:<server>:<tool>">
-          <TextArea rows={3} placeholder="mcp:orders:get_order" />
-        </Form.Item>
-        <Form.Item label="知识工作区" name="knowledgeWorkspaceIDs" extra="一行一个 workspace ID">
-          <TextArea rows={2} />
-        </Form.Item>
-        <Form.Item label="允许的记忆范围" name="memoryScopes">
-          <Checkbox.Group options={[{ label: '当前会话', value: 'conversation' }, { label: '用户', value: 'user' }, { label: 'Agent', value: 'agent' }]} />
         </Form.Item>
         <Form.Item
           label="可编辑人"

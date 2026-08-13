@@ -28,12 +28,11 @@ func TestVersionServiceCreatesInstructionBundleDraft(t *testing.T) {
 	repo := newFakeVersionRepo()
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-	requirements := domain.Requirements{MCPToolIDs: []string{"mcp:orders:get_order"}}
 	view, err := svc.CreateSkillDraft(context.Background(), CreateSkillDraftInput{
 		Name: "投诉分类", Goal: "判断客户投诉类型", WhenToUse: "用户表达投诉时",
 		SampleInput: "快递没更新", ExpectedOutput: "物流问题",
-		Instructions: "先判断投诉类别，需要订单信息时查询订单。", Requirements: requirements,
-		ActorID: "user-1",
+		Instructions: "先判断投诉类别，需要订单信息时查询订单。",
+		ActorID:      "user-1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -41,8 +40,8 @@ func TestVersionServiceCreatesInstructionBundleDraft(t *testing.T) {
 	if view.Draft.ActivationContract.Name == "" || view.Draft.Instructions == "" {
 		t.Fatalf("expected activation and instructions, got %#v", view.Draft)
 	}
-	if len(view.Draft.Requirements.MCPToolIDs) != 1 || view.Draft.ContentHash == "" {
-		t.Fatalf("expected requirements and hash, got %#v", view.Draft)
+	if view.Draft.ContentHash == "" {
+		t.Fatalf("expected content hash, got %#v", view.Draft)
 	}
 	if view.Skill.DraftRevisionID != view.Draft.ID {
 		t.Fatalf("draft revision link mismatch: %#v", view.Skill)
@@ -80,8 +79,8 @@ func TestVersionServiceUpdateInstructionBundleRefreshesHash(t *testing.T) {
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	view := mustCreateDraft(t, svc)
 	updated, err := svc.UpdateInstructionBundle(context.Background(), view.Skill.ID, UpdateInstructionBundleInput{
-		Instructions: "使用新的分类方法", Requirements: domain.Requirements{MemoryScopes: []string{"user"}},
-		ActorID: "user-1",
+		Instructions: "使用新的分类方法",
+		ActorID:      "user-1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -189,7 +188,7 @@ func TestVersionServicePublishedRevisionSafeSummaryHasNoSensitiveFields(t *testi
 	if summary["name"] != view.Skill.Name || summary["description"] != view.Skill.Description {
 		t.Fatalf("safe resource identity missing: %#v", summary)
 	}
-	for _, key := range []string{"secret", "token", "api_key", "requirements", "destination", "instructions"} {
+	for _, key := range []string{"secret", "token", "api_key", "destination", "instructions"} {
 		if _, ok := summary[key]; ok {
 			t.Fatalf("safe summary contains %q: %#v", key, summary)
 		}
@@ -294,10 +293,10 @@ func (r *fakeVersionRepo) UpdateDraftActivation(_ context.Context, skillID strin
 	r.recordAudit(audit)
 	return r.updateDraft(skillID, func(v *domain.SkillRevision) { v.ActivationContract, v.ContentHash = value, hash })
 }
-func (r *fakeVersionRepo) UpdateDraftInstructions(_ context.Context, skillID, instructions string, requirements domain.Requirements, hash string, audit *auditdomain.ResourceChangeAuditEvent, _ string) (domain.SkillRevision, error) {
+func (r *fakeVersionRepo) UpdateDraftInstructions(_ context.Context, skillID, instructions string, hash string, audit *auditdomain.ResourceChangeAuditEvent, _ string) (domain.SkillRevision, error) {
 	r.recordAudit(audit)
 	return r.updateDraft(skillID, func(v *domain.SkillRevision) {
-		v.Instructions, v.Requirements, v.ContentHash = instructions, requirements, hash
+		v.Instructions, v.ContentHash = instructions, hash
 	})
 }
 

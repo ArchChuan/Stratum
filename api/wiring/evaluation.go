@@ -854,11 +854,24 @@ func (a agentScenarioEvaluationAdapter) SafeSummary(
 	return a.resources.SafeSummary(ctx, tenantID, ref)
 }
 
+// validateSkillRef rejects non-skill refs and builtin skills. 内置 skill 仅系统
+// 助手可执行;评测链路用 WithActiveSkills 覆盖 agent 侧运行时净化(系统助手保留
+// 绑定),入口 fail-closed 复用已有 sentinel → 409。
+func (a agentScenarioEvaluationAdapter) validateSkillRef(ref evaldomain.ResourceRef) error {
+	if ref.Kind != evaldomain.ResourceKindSkill {
+		return fmt.Errorf("agent scenario evaluation: unsupported resource kind %q", ref.Kind)
+	}
+	if strings.HasPrefix(ref.ResourceID, "builtin:") {
+		return skilldomain.ErrPlatformManagedSkill
+	}
+	return nil
+}
+
 func (a agentScenarioEvaluationAdapter) ExecuteRevision(
 	ctx context.Context, tenantID, requestedBy string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase,
 ) (evalport.ExecutionResult, error) {
-	if ref.Kind != evaldomain.ResourceKindSkill {
-		return evalport.ExecutionResult{}, fmt.Errorf("agent scenario evaluation: unsupported resource kind %q", ref.Kind)
+	if err := a.validateSkillRef(ref); err != nil {
+		return evalport.ExecutionResult{}, err
 	}
 	// Inject tenant context so the agent-context binding port (whose execTenant
 	// reads it) routes to the right schema; the raw agent_skill_links read now

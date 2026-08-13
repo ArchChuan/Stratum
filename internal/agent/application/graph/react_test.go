@@ -315,8 +315,8 @@ func TestBuildReActGraph_StacksInstructionsAndKeepsAgentToolSurface(t *testing.T
 		},
 		AgentMemoryScope: "user",
 		SkillCatalog: map[string]port.SkillActivation{
-			"skill-a": {SkillID: "skill-a", Name: "skill-a", RevisionID: "revision-a", Instructions: "USE INSTRUCTION A", MCPToolIDs: []string{"mcp:orders:get"}, MemoryScopes: []string{"user"}},
-			"skill-b": {SkillID: "skill-b", Name: "skill-b", RevisionID: "revision-b", Instructions: "USE INSTRUCTION B", MCPToolIDs: []string{"mcp:orders:delete"}, MemoryScopes: []string{"conversation"}},
+			"skill-a": {SkillID: "skill-a", Name: "skill-a", RevisionID: "revision-a", Instructions: "USE INSTRUCTION A"},
+			"skill-b": {SkillID: "skill-b", Name: "skill-b", RevisionID: "revision-b", Instructions: "USE INSTRUCTION B"},
 		},
 	}
 	out, err := cg.Invoke(context.Background(), state, graph.RunConfig[graph.ReActState]{MaxSteps: 10})
@@ -352,7 +352,7 @@ func TestBuildReActGraph_ActiveSkillInheritsAgentKnowledgeWorkspaces(t *testing.
 		Model: "qwen", Messages: []port.LLMMessage{{Role: "user", Content: "search"}},
 		AvailableTools:             []port.ToolDefinition{{Name: "stratum_search_knowledge", ProviderType: "builtin"}},
 		AgentKnowledgeWorkspaceIDs: []string{"kb-allowed", "kb-agent-only"},
-		SkillCatalog:               map[string]port.SkillActivation{"skill-a": {SkillID: "skill-a", Name: "skill-a", KnowledgeWorkspaceIDs: []string{"kb-allowed", "kb-skill-only"}}},
+		SkillCatalog:               map[string]port.SkillActivation{"skill-a": {SkillID: "skill-a", Name: "skill-a"}},
 		RAGSearchFn: func(_ context.Context, workspaces []string, _ string, _ int, _ string) (string, error) {
 			searched = workspaces
 			return "result", nil
@@ -360,7 +360,7 @@ func TestBuildReActGraph_ActiveSkillInheritsAgentKnowledgeWorkspaces(t *testing.
 		InternalToolResultGuardFn: untrustedTestGuard,
 	}, graph.RunConfig[graph.ReActState]{MaxSteps: 8})
 	require.NoError(t, err)
-	// 知识边界继承 agent 绑定（Spec D5）：skill 声明不再叠加/收窄，kb-skill-only 被剔除。
+	// 知识边界恒为 agent 绑定（Spec D5）：skill 激活不携带 knowledge 声明，不叠加/收窄。
 	require.Equal(t, []string{"kb-allowed", "kb-agent-only"}, searched)
 }
 
@@ -869,8 +869,8 @@ func TestBuildReActGraph_ReactivatingActiveSkillIsIdempotent(t *testing.T) {
 		},
 		AgentMemoryScope: "user",
 		SkillCatalog: map[string]port.SkillActivation{
-			"skill-a": {SkillID: "skill-a", Name: "skill-a", RevisionID: "revision-a", Instructions: "USE INSTRUCTION A", MCPToolIDs: []string{"mcp:orders:get"}, MemoryScopes: []string{"user"}},
-			"skill-b": {SkillID: "skill-b", Name: "skill-b", RevisionID: "revision-b", Instructions: "USE INSTRUCTION B", MCPToolIDs: []string{"mcp:orders:delete"}, MemoryScopes: []string{"conversation"}},
+			"skill-a": {SkillID: "skill-a", Name: "skill-a", RevisionID: "revision-a", Instructions: "USE INSTRUCTION A"},
+			"skill-b": {SkillID: "skill-b", Name: "skill-b", RevisionID: "revision-b", Instructions: "USE INSTRUCTION B"},
 		},
 	}
 	out, err := cg.Invoke(context.Background(), state, graph.RunConfig[graph.ReActState]{MaxSteps: 10})
@@ -906,8 +906,8 @@ func TestBuildReActGraph_ActivesInheritAgentKnowledgeWorkspaces(t *testing.T) {
 		AvailableTools:             []port.ToolDefinition{{Name: "stratum_search_knowledge", ProviderType: "builtin"}},
 		AgentKnowledgeWorkspaceIDs: []string{"kb-allowed", "kb-agent-only"},
 		SkillCatalog: map[string]port.SkillActivation{
-			"skill-a": {SkillID: "skill-a", Name: "skill-a", KnowledgeWorkspaceIDs: []string{"kb-allowed", "kb-skill-only"}},
-			"skill-b": {SkillID: "skill-b", Name: "skill-b", KnowledgeWorkspaceIDs: []string{"kb-agent-only"}},
+			"skill-a": {SkillID: "skill-a", Name: "skill-a"},
+			"skill-b": {SkillID: "skill-b", Name: "skill-b"},
 		},
 		RAGSearchFn: func(_ context.Context, workspaces []string, _ string, _ int, _ string) (string, error) {
 			searched = workspaces
@@ -916,7 +916,7 @@ func TestBuildReActGraph_ActivesInheritAgentKnowledgeWorkspaces(t *testing.T) {
 		InternalToolResultGuardFn: untrustedTestGuard,
 	}, graph.RunConfig[graph.ReActState]{MaxSteps: 8})
 	require.NoError(t, err)
-	// 多 skill 并列激活后知识边界仍恒为 agent 绑定（Spec D5），skill 声明不再叠加/收窄。
+	// 多 skill 并列激活后知识边界仍恒为 agent 绑定（Spec D5），skill 不携带 knowledge 声明。
 	require.Equal(t, []string{"kb-allowed", "kb-agent-only"}, searched)
 }
 

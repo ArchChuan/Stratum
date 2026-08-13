@@ -102,18 +102,15 @@ type SkillRevisionRef struct {
 // SkillActivation is an immutable instruction-bundle snapshot resolved for a
 // single Agent run. It contains no executable implementation.
 type SkillActivation struct {
-	SkillID               string
-	RevisionID            string
-	Name                  string
-	Description           string
-	Instructions          string
-	InputSchema           map[string]any
-	OutputSchema          map[string]any
-	MCPToolIDs            []string
-	KnowledgeWorkspaceIDs []string
-	MemoryScopes          []string
-	ExperimentID          string
-	Variant               string
+	SkillID      string
+	RevisionID   string
+	Name         string
+	Description  string
+	Instructions string
+	InputSchema  map[string]any
+	OutputSchema map[string]any
+	ExperimentID string
+	Variant      string
 }
 
 type SkillRevisionAssignment struct {

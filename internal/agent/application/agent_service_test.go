@@ -25,6 +25,23 @@ import (
 
 // ---------- mocks ----------
 
+// testSystemResourceGuard is the external-test-package SystemResourceGuard
+// stub: empty platform sets keep isolation semantics off for assembly-only
+// tests, error fields force fail-closed paths.
+type testSystemResourceGuard struct{}
+
+func (testSystemResourceGuard) IsPlatformManagedMCPServer(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (testSystemResourceGuard) PlatformManagedMCPServerIDs(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
+func (testSystemResourceGuard) PlatformManagedWorkspaceIDs(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
 type mockAgentRepo struct{ mock.Mock }
 
 type preparationAgentRevisionResolver struct{}
@@ -119,6 +136,7 @@ func TestAgentServicePreparationFailureRemainsObservable(t *testing.T) {
 				MCPRevisionResolver: failingPreparationMCPRevisionResolver{
 					err: dependencyErr,
 				},
+				SystemResourceGuard: testSystemResourceGuard{},
 			})
 
 			ctx, requestSpan := otel.Tracer("test/http").Start(context.Background(), "/agents/:id/execute")
