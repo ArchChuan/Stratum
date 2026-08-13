@@ -39,6 +39,32 @@ func TestProposalAgentRejectsManagedAssistantAndReturnsSafeReadback(t *testing.T
 	require.NotEmpty(t, result.Fingerprint)
 }
 
+func TestProposalAgentApplySystemPromptTransparency(t *testing.T) {
+	agents := &proposalAgentFake{values: map[string]agentapp.AgentDTO{
+		"agent-existing": {ID: "agent-existing", Name: "old", SystemPrompt: "keep-prompt", LLMModel: "m"},
+	}}
+	adapter := NewResourceChangeProposalAdapters(agents, nil, nil, nil)
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	base := &agentdomain.AgentChange{Name: "n", Description: "d", Model: "m", MaxIterations: 3, MaxContextTokens: 100}
+
+	// create 透传 systemPrompt（修复 silent-drop）。
+	created, err := adapter.applyAgentChange(ctx, "tenant-1", "", agentdomain.OperationCreate,
+		&agentdomain.AgentChange{Name: "n", Description: "d", SystemPrompt: "create-prompt", Model: "m", MaxIterations: 3, MaxContextTokens: 100}, "actor-1")
+	require.NoError(t, err)
+	require.Equal(t, "create-prompt", agents.values[created.ResourceID].SystemPrompt)
+
+	// update 非空覆盖既有 prompt。
+	updated, err := adapter.applyAgentChange(ctx, "tenant-1", "agent-existing", agentdomain.OperationUpdate,
+		&agentdomain.AgentChange{Name: "n2", Description: "d2", SystemPrompt: "new-prompt", Model: "m", MaxIterations: 3, MaxContextTokens: 100}, "actor-1")
+	require.NoError(t, err)
+	require.Equal(t, "new-prompt", agents.values[updated.ResourceID].SystemPrompt)
+
+	// update 空保留既有 prompt（buildUpdateConfig 对空串会清除，不能因省略而误清）。
+	kept, err := adapter.applyAgentChange(ctx, "tenant-1", "agent-existing", agentdomain.OperationUpdate, base, "actor-1")
+	require.NoError(t, err)
+	require.Equal(t, "new-prompt", agents.values[kept.ResourceID].SystemPrompt)
+}
+
 func TestProposalMCPBaselineContainsTypedFieldsWithoutCredentials(t *testing.T) {
 	mcp := &proposalMCPFake{configs: map[string]*mcpdomain.ServerConfig{"server-1": {
 		ID: "server-1", Name: "docs", Version: "1", Transport: "streamable-http",
@@ -158,7 +184,7 @@ type proposalAgentFake struct {
 func (f *proposalAgentFake) Create(ctx context.Context, in agentapp.CreateAgentInput) (agentapp.AgentDTO, error) {
 	f.lastCtx = ctx
 	f.lastActorID = in.ActorID
-	value := agentapp.AgentDTO{ID: "agent-created", Name: in.Name, Type: in.Type, Description: in.Description, LLMModel: in.LLMModel, MaxIterations: in.MaxIterations, MaxContextTokens: in.MaxContextTokens}
+	value := agentapp.AgentDTO{ID: "agent-created", Name: in.Name, Type: in.Type, Description: in.Description, SystemPrompt: in.SystemPrompt, LLMModel: in.LLMModel, MaxIterations: in.MaxIterations, MaxContextTokens: in.MaxContextTokens}
 	f.values[value.ID] = value
 	return value, nil
 }
@@ -167,7 +193,7 @@ func (f *proposalAgentFake) Get(_ context.Context, id string) (agentapp.AgentDTO
 }
 func (f *proposalAgentFake) Update(_ context.Context, id string, in agentapp.UpdateAgentInput) (agentapp.AgentDTO, error) {
 	value := f.values[id]
-	value.Name, value.Description, value.LLMModel = in.Name, in.Description, in.LLMModel
+	value.Name, value.Description, value.SystemPrompt, value.LLMModel = in.Name, in.Description, in.SystemPrompt, in.LLMModel
 	f.values[id] = value
 	return value, nil
 }
@@ -381,6 +407,26 @@ func TestApplyDirectFromToolRequiresTenantInContext(t *testing.T) {
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
 	_, err = adapter.ApplyDirectFromTool(ctx, "user-1", map[string]any{"resourceKind": "agent", "operation": "delete"})
 	require.ErrorContains(t, err, "invalid system assistant tool arguments")
+}
+
+// TestApplyDirectFromToolAcceptsStringifiedPayload covers the production tool
+// boundary variance where a model serializes the nested payload as a JSON
+// string (observed with glm-5). The adapter must decode it and reach the
+// agent service instead of failing argument parsing.
+func TestApplyDirectFromToolAcceptsStringifiedPayload(t *testing.T) {
+	agents := &proposalAgentFake{values: map[string]agentapp.AgentDTO{}}
+	adapter := NewResourceChangeProposalAdapters(agents, nil, nil, nil)
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	rawPayload := `{"name":"a","description":"d","model":"m","maxIterations":3,"maxContextTokens":100}`
+	args := map[string]any{
+		"resourceKind": "agent",
+		"operation":    "create",
+		"payload":      rawPayload,
+	}
+	result, err := adapter.ApplyDirectFromTool(ctx, "user-1", args)
+	require.NoError(t, err)
+	require.NotEmpty(t, result.ResourceID)
+	require.Equal(t, "user-1", agents.lastActorID)
 }
 
 // proposalRoleStub 固定角色的 TenantRoleResolver stub。

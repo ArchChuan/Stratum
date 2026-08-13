@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -176,6 +177,10 @@ func dispatchSystemAssistantTool(toolCtx context.Context, tc port.ToolCall, s *R
 		return execListModelsTool(toolCtx, tc, s, toolStart), true
 	case domain.SystemAssistantToolUpdateSystemModel:
 		return execUpdateSystemModelTool(toolCtx, tc, s, toolStart), true
+	case domain.SystemAssistantToolListAgents:
+		return execListAgentsTool(toolCtx, tc, s, toolStart), true
+	case domain.SystemAssistantToolListMCPServers:
+		return execListMCPServersTool(toolCtx, tc, s, toolStart), true
 	}
 	return toolExecResult{}, false
 }
@@ -264,6 +269,60 @@ func execListModelsTool(toolCtx context.Context, tc port.ToolCall, s *ReActState
 	}
 }
 
+// execListAgentsTool 只读：返回当前租户 agent 目录的安全投影
+// （id/name/type/description/model 等，不含 systemPrompt/systemKey）。
+// 对任意角色可用，结果经守卫限界。
+func execListAgentsTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
+	if !s.GovernedAssistant || s.ListAgentsFn == nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "list agents tool unavailable", content: "error: tool unavailable"}
+	}
+	callCtx, cancel := context.WithTimeout(toolCtx, constants.SystemAssistantToolTimeout)
+	content, callErr := s.ListAgentsFn(callCtx)
+	cancel()
+	if callErr != nil {
+		message := safeAssistantToolError(callErr)
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: message, content: "error: " + message}
+	}
+	guarded, guardErr := guardInternalAssistantEvidence(s.InternalToolResultGuardFn, content)
+	if guardErr != nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: guardErr.Error(), content: "error: tool result exceeded safe bounds"}
+	}
+	return toolExecResult{
+		content: guarded,
+		status:  domain.ToolTraceStatusSuccess,
+		artifact: &domain.SystemAssistantToolArtifact{
+			Tool: tc.Name, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "success",
+		},
+	}
+}
+
+// execListMCPServersTool 只读：返回当前租户已连接 MCP server 的摘要投影
+// （名称/状态/传输/工具名列表，不携带工具 InputSchema/OutputSchema 等内部
+// 契约）。对任意角色可用，结果经守卫限界。
+func execListMCPServersTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
+	if !s.GovernedAssistant || s.ListMCPServersFn == nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "list mcp servers tool unavailable", content: "error: tool unavailable"}
+	}
+	callCtx, cancel := context.WithTimeout(toolCtx, constants.SystemAssistantToolTimeout)
+	content, callErr := s.ListMCPServersFn(callCtx)
+	cancel()
+	if callErr != nil {
+		message := safeAssistantToolError(callErr)
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: message, content: "error: " + message}
+	}
+	guarded, guardErr := guardInternalAssistantEvidence(s.InternalToolResultGuardFn, content)
+	if guardErr != nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: guardErr.Error(), content: "error: tool result exceeded safe bounds"}
+	}
+	return toolExecResult{
+		content: guarded,
+		status:  domain.ToolTraceStatusSuccess,
+		artifact: &domain.SystemAssistantToolArtifact{
+			Tool: tc.Name, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "success",
+		},
+	}
+}
+
 // execUpdateSystemModelTool 写路径：model 参数必填；角色门禁（member
 // 拒绝）位于装配闭包内，graph 层只负责参数校验与守卫。
 func execUpdateSystemModelTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
@@ -306,7 +365,7 @@ func execProposeResourceChangeTool(toolCtx context.Context, tc port.ToolCall, s 
 		if proposal.ID != "" {
 			s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, domain.SystemAssistantToolArtifact{
 				Tool: tc.Name, Proposal: &proposal, LatencyMs: time.Since(toolStart).Milliseconds(),
-				Outcome: "error", ErrorCode: assistantToolErrorCode(callErr.Error()),
+				Outcome: "error", ErrorCode: assistantToolErrorCode(message),
 			})
 		}
 		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: message, content: "error: " + message}
@@ -344,7 +403,7 @@ func execApplyResourceChangeTool(toolCtx context.Context, tc port.ToolCall, s *R
 	if callErr != nil {
 		message := safeAssistantToolError(callErr)
 		artifact.Outcome = "error"
-		artifact.ErrorCode = assistantToolErrorCode(callErr.Error())
+		artifact.ErrorCode = assistantToolErrorCode(message)
 		return toolExecResult{
 			content:  "error: " + message,
 			status:   domain.ToolTraceStatusError,
@@ -556,7 +615,9 @@ func isSystemAssistantTool(toolName string) bool {
 		domain.SystemAssistantToolDiagnoseTenant,
 		domain.SystemAssistantToolProposeResourceChange,
 		domain.SystemAssistantToolListModels,
-		domain.SystemAssistantToolUpdateSystemModel:
+		domain.SystemAssistantToolUpdateSystemModel,
+		domain.SystemAssistantToolListAgents,
+		domain.SystemAssistantToolListMCPServers:
 		return true
 	default:
 		return false
@@ -579,17 +640,58 @@ func guardInternalAssistantEvidence(fn func(any) (port.GuardedToolResult, error)
 }
 
 func safeAssistantToolError(err error) string {
-	switch {
-	case errors.Is(err, context.DeadlineExceeded):
+	// Deadline/cancel 是执行层信号，固定文案，不进入哨兵白名单。
+	if errors.Is(err, context.DeadlineExceeded) {
 		return "tool timeout"
-	case errors.Is(err, context.Canceled):
+	}
+	if errors.Is(err, context.Canceled) {
 		return "tool cancelled"
+	}
+	var applyErr *port.ResourceApplyError
+	if errors.As(err, &applyErr) {
+		// apply 失败按 outcome 分流：definite_failure 提取内层错误再走
+		// 白名单（如提案过期/越权等可读场景）；unknown_outcome 保持
+		// fail-closed 的 "evidence unavailable"，不猜测平台健康状态。
+		if applyErr.Outcome != port.ResourceApplyDefiniteFailure {
+			return "evidence unavailable"
+		}
+		return safeAssistantToolError(applyErr.Err)
+	}
+	var invalidArgs *domain.InvalidToolArgumentsError
+	if errors.As(err, &invalidArgs) {
+		// 字段级校验错误带 detail，须置于哨兵匹配之前：
+		// InvalidToolArgumentsError 的 Unwrap 链会让哨兵先命中、
+		// 吞掉 detail，模型就收不到可自纠的具体字段错误。
+		return "invalid tool arguments: " + invalidArgs.Detail
+	}
+	if msg, ok := matchAssistantToolSentinel(err); ok {
+		return msg
+	}
+	return "evidence unavailable"
+}
+
+// matchAssistantToolSentinel 把已知领域哨兵错误映射为模型可读的固定文案；
+// 匹配失败返回 ok=false，由调用方落入默认 fail-closed 分支。
+func matchAssistantToolSentinel(err error) (string, bool) {
+	switch {
 	case errors.Is(err, domain.ErrOfficialEvidenceNotFound):
-		return "official evidence not found"
+		return "official evidence not found", true
 	case errors.Is(err, domain.ErrDiagnosticForbidden):
-		return "diagnostic forbidden"
+		return "diagnostic forbidden", true
+	case errors.Is(err, domain.ErrProposalForbidden):
+		return "proposal forbidden", true
+	case errors.Is(err, domain.ErrProposalInvalid):
+		return "invalid proposal payload", true
+	case errors.Is(err, domain.ErrProposalExpired):
+		return "proposal expired", true
+	case errors.Is(err, domain.ErrSystemAssistantManaged):
+		return "resource is system-managed", true
+	case errors.Is(err, domain.ErrInvalidSystemAssistantToolArguments):
+		// 参数解析失败（如 payload 非法）是模型可自纠的错误，明确返回
+		// 而非落入默认分支，否则 LLM 会把非法参数误判为环境不可用。
+		return "invalid tool arguments", true
 	default:
-		return "evidence unavailable"
+		return "", false
 	}
 }
 
@@ -710,7 +812,9 @@ func classifyToolProvider(name string, tools []port.ToolDefinition) toolProvider
 		domain.SystemAssistantToolProposeResourceChange,
 		domain.SystemAssistantToolApplyResourceChange,
 		domain.SystemAssistantToolListModels,
-		domain.SystemAssistantToolUpdateSystemModel:
+		domain.SystemAssistantToolUpdateSystemModel,
+		domain.SystemAssistantToolListAgents,
+		domain.SystemAssistantToolListMCPServers:
 		return toolProviderRef{ToolType: domain.ToolTypeInternal, ProviderType: domain.ProviderTypeInternal,
 			ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
 	case "stratum_continue_reasoning":
@@ -827,11 +931,28 @@ func assistantToolErrorCode(message string) string {
 		return "cancelled"
 	case "official evidence not found":
 		return "not_found"
-	case "diagnostic forbidden":
+	case "diagnostic forbidden", "proposal forbidden":
 		return "forbidden"
-	case "invalid official docs arguments", "invalid diagnostic arguments":
+	case "invalid proposal payload":
+		return "invalid_payload"
+	case "proposal expired":
+		return "expired"
+	case "resource is system-managed":
+		return "system_managed"
+	case "invalid official docs arguments", "invalid diagnostic arguments",
+		"invalid tool arguments", "invalid system assistant tool arguments":
 		return "invalid_arguments"
 	default:
-		return "unavailable"
+		return assistantToolErrorCodeDefault(message)
 	}
+}
+
+// assistantToolErrorCodeDefault 处理默认分支：字段级校验 detail 以
+// "invalid tool arguments: " 前缀开头仍归 invalid_arguments（模型可自纠），
+// 其余 fallback 到 unavailable。
+func assistantToolErrorCodeDefault(message string) string {
+	if strings.HasPrefix(message, "invalid tool arguments: ") {
+		return "invalid_arguments"
+	}
+	return "unavailable"
 }

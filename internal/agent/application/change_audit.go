@@ -70,3 +70,15 @@ func AgentSafeProjectionWithEditors(cfg *domain.AgentConfig, editors []string) m
 	p["editors"] = editors
 	return p
 }
+
+// AgentDTOSafeProjection 是 AgentSafeProjection 的 DTO 版本：List 返回 AgentDTO
+// 而非 AgentConfig，stratum_list_agents 装配闭包复用同一字段集做安全投影，
+// 不携带 systemPrompt/systemKey 等敏感字段。与 AgentSafeProjection 保持同构，
+// 避免两条投影规则漂移。
+func AgentDTOSafeProjection(dto AgentDTO) map[string]any {
+	return map[string]any{
+		"id": dto.ID, "name": dto.Name, "type": string(dto.Type), "description": dto.Description,
+		"model": dto.LLMModel, "maxIterations": dto.MaxIterations, "maxContextTokens": dto.MaxContextTokens,
+		"skillIds": dto.AllowedSkills, "mcpToolIds": dto.MCPToolIDs, "workspaceIds": dto.KnowledgeWorkspaceIDs,
+	}
+}

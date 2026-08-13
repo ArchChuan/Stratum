@@ -23,7 +23,20 @@ const (
 	SystemAssistantToolApplyResourceChange   = "stratum_apply_resource_change"
 	SystemAssistantToolListModels            = "stratum_list_models"
 	SystemAssistantToolUpdateSystemModel     = "stratum_update_system_model"
+	SystemAssistantToolListAgents            = "stratum_list_agents"
+	SystemAssistantToolListMCPServers        = "stratum_list_mcp_servers"
 )
+
+// InvalidToolArgumentsError 携带字段级校验 detail，是模型可读的
+// "invalid tool arguments: <detail>" 错误面的载体；Unwrap 归一到
+// ErrInvalidSystemAssistantToolArguments 供现有错误分类复用。
+type InvalidToolArgumentsError struct {
+	Detail string
+}
+
+func (e *InvalidToolArgumentsError) Error() string { return e.Detail }
+
+func (e *InvalidToolArgumentsError) Unwrap() error { return ErrInvalidSystemAssistantToolArguments }
 
 // ParseOfficialDocsToolArguments validates and extracts the query argument of
 // the system assistant official-docs search tool.

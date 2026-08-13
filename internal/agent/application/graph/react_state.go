@@ -69,6 +69,8 @@ type ReActState struct {
 	ResourceChangeApplyFn     func(context.Context, map[string]any) (domain.ApplyResult, error)
 	ListModelsFn              func(context.Context) (map[string]any, error)
 	UpdateSystemModelFn       func(context.Context, string) (map[string]any, error)
+	ListAgentsFn              func(context.Context) (map[string]any, error)
+	ListMCPServersFn          func(context.Context) (map[string]any, error)
 	InternalToolResultGuardFn func(any) (port.GuardedToolResult, error)
 	// MaxLLMSteps caps LLM-node invocations; on the last allowed call tools are
 	// stripped and the model is asked to produce a final answer from collected context.

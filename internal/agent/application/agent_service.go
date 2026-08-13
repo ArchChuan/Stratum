@@ -49,11 +49,15 @@ type AgentServiceDeps struct {
 	ModelDetailsProvider      port.TenantModelDetailsProvider
 	// VendorWindowLookup 解析内置厂商静态能力表（窗口 + 最大输出）。
 	// 由 wiring 注入 llmgateway.LookupModelSpec；nil 时回退链跳过 vendor 层。
-	VendorWindowLookup        func(string) (int, int)
-	HistoryCompactorFactory   func(port.CapabilityGateway, string, *zap.Logger, int) port.HistoryCompactor
-	MCPTools                  port.MCPToolProvider
-	MCPToolExecutor           port.MCPToolExecutor
-	MCPToolPolicy             port.MCPToolPolicyResolver
+	VendorWindowLookup      func(string) (int, int)
+	HistoryCompactorFactory func(port.CapabilityGateway, string, *zap.Logger, int) port.HistoryCompactor
+	MCPTools                port.MCPToolProvider
+	MCPToolExecutor         port.MCPToolExecutor
+	MCPToolPolicy           port.MCPToolPolicyResolver
+	// MCPServerLister 供系统助手 stratum_list_mcp_servers 只读枚举当前租户
+	// 已连接的 MCP server。由 wiring 以薄 ACL 适配 mcp context 的 MCPService；
+	// nil 时该工具 fail-closed（graph 层 ListMCPServersFn 未装配）。
+	MCPServerLister           port.MCPServerLister
 	ToolAuthorizer            *ToolAuthorizer
 	ApprovalService           *ToolApprovalService
 	ChatStore                 ChatStore
@@ -2336,7 +2340,7 @@ func (s *AgentService) systemAssistantExecutionOptions(
 		// 不触达 applier，与 update_system_model 的写路径模式一致。
 		options = append(options, withResourceChangeApplyFn(func(callCtx context.Context, args map[string]any) (domain.ApplyResult, error) {
 			if roleClass != "admin" && roleClass != "owner" {
-				return domain.ApplyResult{}, errors.New("直接修改资源需要管理员权限，member 请改用提案工具")
+				return domain.ApplyResult{}, fmt.Errorf("%w: 需要管理员权限，member 请改用提案工具", domain.ErrProposalForbidden)
 			}
 			return applier(callCtx, actorID, args)
 		}))
@@ -2387,6 +2391,30 @@ func (s *AgentService) appendSystemModelToolOptions(
 			}, nil
 		}
 		options = append(options, WithUpdateSystemModelFn(updateModel))
+	}
+	if s.deps.Registry != nil {
+		options = append(options, WithListAgentsFn(func(callCtx context.Context) (map[string]any, error) {
+			agents, listErr := s.List(callCtx)
+			if listErr != nil {
+				return nil, fmt.Errorf("list agents: %w", listErr)
+			}
+			items := make([]map[string]any, 0, len(agents))
+			for _, dto := range agents {
+				// 复用安全投影：不携带 systemPrompt/systemKey 等敏感字段。
+				items = append(items, AgentDTOSafeProjection(dto))
+			}
+			return map[string]any{"agents": items}, nil
+		}))
+	}
+	if s.deps.MCPServerLister != nil {
+		lister := s.deps.MCPServerLister
+		options = append(options, WithListMCPServersFn(func(callCtx context.Context) (map[string]any, error) {
+			servers, listErr := lister.ListMCPServers(callCtx)
+			if listErr != nil {
+				return nil, fmt.Errorf("list mcp servers: %w", listErr)
+			}
+			return map[string]any{"servers": servers}, nil
+		}))
 	}
 	return options
 }
