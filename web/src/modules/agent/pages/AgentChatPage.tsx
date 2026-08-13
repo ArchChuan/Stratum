@@ -27,6 +27,7 @@ export const AgentChatPage = ({
   const {
     agents,
     agentsError,
+    agentsLoading,
     reloadAgents,
     selectedAgent,
     setSelectedAgent,
@@ -81,6 +82,7 @@ export const AgentChatPage = ({
 			showAgentSelector={showAgentSelector}
 			agentsError={agentsError}
 			onRetryAgents={reloadAgents}
+			agentsLoading={agentsLoading}
     />
   );
 
