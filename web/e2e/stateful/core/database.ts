@@ -207,39 +207,37 @@ export const configureManagedModels = async (
   try {
     await client.query('BEGIN');
     began = true;
-    await client.query("SELECT set_config('search_path', $1, true)", [`tenant_${tenantID},public`]);
+    // providers/models 已提升为 public 平台全局目录（035 迁移），夹具不再走 tenant schema。
     await client.query(
-      `DELETE FROM providers
-       WHERE tenant_id = $1 AND name LIKE 'E2E-Provider-%'`,
-      [tenantID],
+      `DELETE FROM public.providers
+       WHERE name LIKE 'E2E-Provider-%' OR name = 'stateful-qwen'`,
     );
     const providerResult = await client.query(
-      `INSERT INTO providers (id, tenant_id, name, kind, base_url, api_key, default_model, enabled)
-       VALUES ($1, $2, 'stateful-qwen', 'openai_compat', $3, $4, 'qwen-max', true)
-       ON CONFLICT (tenant_id, name) DO UPDATE SET
+      `INSERT INTO public.providers (id, name, kind, base_url, api_key, default_model, enabled)
+       VALUES ('stateful-qwen', 'stateful-qwen', 'openai_compat', $1, $2, 'qwen-max', true)
+       ON CONFLICT (name) DO UPDATE SET
          kind = EXCLUDED.kind,
          base_url = EXCLUDED.base_url,
          api_key = EXCLUDED.api_key,
          default_model = EXCLUDED.default_model,
          enabled = true,
          updated_at = now()`,
-      ['stateful-qwen', tenantID, `${fixtureURL}/v1`, 'stateful-local-provider-key'],
+      [`${fixtureURL}/v1`, 'stateful-local-provider-key'],
     );
     if (providerResult.rowCount !== 1) throw new Error('synthetic LLM provider setup did not affect exactly one row');
     const modelResult = await client.query(
-      `INSERT INTO models (id, tenant_id, provider_id, name, display_name, capabilities, enabled)
-       SELECT 'stateful-' || model.name, $1, $2, model.name, model.name, model.capabilities, true
+      `INSERT INTO public.models (id, provider_id, name, display_name, capabilities, enabled)
+       SELECT 'stateful-' || model.name, 'stateful-qwen', model.name, model.name, model.capabilities, true
        FROM (VALUES
          ('qwen-turbo', ARRAY['chat', 'tool_use']::TEXT[]),
          ('qwen-plus', ARRAY['chat', 'tool_use']::TEXT[]),
          ('qwen-max', ARRAY['chat', 'tool_use']::TEXT[]),
          ('text-embedding-v3', ARRAY['embedding']::TEXT[])
        ) AS model(name, capabilities)
-       ON CONFLICT (tenant_id, provider_id, name) DO UPDATE SET
+       ON CONFLICT (provider_id, name) DO UPDATE SET
          capabilities = EXCLUDED.capabilities,
          enabled = true,
          updated_at = now()`,
-      [tenantID, 'stateful-qwen'],
     );
     if (modelResult.rowCount !== 4) throw new Error('synthetic LLM model setup did not affect all expected rows');
     await client.query('COMMIT');

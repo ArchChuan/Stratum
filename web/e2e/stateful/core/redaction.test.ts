@@ -255,10 +255,9 @@ describe('stateful E2E security boundaries', () => {
     )).rejects.toThrow('generated actor membership setup did not affect exactly one row');
   });
 
-  it('configures the tenant model registry without legacy tenant settings', async () => {
+  it('configures the public platform model catalogue without tenant-scoped tables', async () => {
     const tenantID = '123e4567-e89b-42d3-a456-426614174000';
     const query = vi.fn()
-      .mockResolvedValueOnce({})
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({ rowCount: 0 })
       .mockResolvedValueOnce({ rowCount: 1 })
@@ -272,17 +271,12 @@ describe('stateful E2E security boundaries', () => {
     await configureManagedModels(pool, tenantID, 'http://127.0.0.1:39091', 'owner-token', 'http://127.0.0.1:8080');
 
     expect(query).toHaveBeenNthCalledWith(1, 'BEGIN');
-    expect(query).toHaveBeenNthCalledWith(2, "SELECT set_config('search_path', $1, true)", [
-      `tenant_${tenantID},public`,
+    expect(query).toHaveBeenNthCalledWith(2, expect.stringContaining('DELETE FROM public.providers'));
+    expect(query).toHaveBeenNthCalledWith(3, expect.stringContaining('INSERT INTO public.providers'), [
+      'http://127.0.0.1:39091/v1', 'stateful-local-provider-key',
     ]);
-    expect(query).toHaveBeenNthCalledWith(3, expect.stringContaining("name LIKE 'E2E-Provider-%'"), [tenantID]);
-    expect(query).toHaveBeenNthCalledWith(4, expect.stringContaining('INSERT INTO providers'), [
-      'stateful-qwen', tenantID, 'http://127.0.0.1:39091/v1', 'stateful-local-provider-key',
-    ]);
-    expect(query).toHaveBeenNthCalledWith(5, expect.stringContaining('INSERT INTO models'), [
-      tenantID, 'stateful-qwen',
-    ]);
-    expect(query).toHaveBeenNthCalledWith(6, 'COMMIT');
+    expect(query).toHaveBeenNthCalledWith(4, expect.stringContaining('INSERT INTO public.models'));
+    expect(query).toHaveBeenNthCalledWith(5, 'COMMIT');
     expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8080/admin/providers/stateful-qwen', expect.objectContaining({
       method: 'PUT',
       headers: expect.objectContaining({ Authorization: 'Bearer owner-token' }),

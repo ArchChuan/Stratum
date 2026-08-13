@@ -40,12 +40,13 @@ export const executeLLMAdminPack = async ({ actor, systemAdmin, pool, evidence, 
   let providerID = '';
   try {
     // Clean up stale E2E providers and models from previous failed runs
+    //（providers/models 已是 public 全局目录，用 schema-qualified 前缀直连）
     await withTenantQuery(pool, tenantID, {
-      text: "DELETE FROM models WHERE provider_id IN (SELECT id FROM providers WHERE name LIKE 'E2E-%')",
+      text: "DELETE FROM public.models WHERE provider_id IN (SELECT id FROM public.providers WHERE name LIKE 'E2E-%')",
       values: [],
     });
     await withTenantQuery(pool, tenantID, {
-      text: "DELETE FROM providers WHERE name LIKE 'E2E-%'",
+      text: "DELETE FROM public.providers WHERE name LIKE 'E2E-%'",
       values: [],
     });
     // Ensure baseline models are present (stateful-qwen provider + qwen models)

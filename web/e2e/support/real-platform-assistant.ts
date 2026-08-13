@@ -103,15 +103,15 @@ export const createPlatformAssistantSession = async (
       /^http:\/\/(?:127\.0\.0\.1|localhost):[0-9]+\/v1$/,
     );
     queryTenant(tenantId, `
-      INSERT INTO providers (id, tenant_id, name, kind, base_url, api_key, default_model, enabled)
-      VALUES ('platform-assistant-e2e-qwen', '${tenantId}', 'platform-assistant-e2e-qwen',
+      INSERT INTO public.providers (id, name, kind, base_url, api_key, default_model, enabled)
+      VALUES ('platform-assistant-e2e-qwen', 'platform-assistant-e2e-qwen',
               'openai_compat', '${llmBaseURL}', 'platform-assistant-browser-e2e-key', 'qwen-plus', true)
-      ON CONFLICT (tenant_id, name) DO UPDATE SET
+      ON CONFLICT (name) DO UPDATE SET
         base_url=EXCLUDED.base_url, api_key=EXCLUDED.api_key, default_model=EXCLUDED.default_model, enabled=true;
-      INSERT INTO models (id, tenant_id, provider_id, name, display_name, capabilities, enabled)
-      VALUES ('platform-assistant-e2e-qwen-plus', '${tenantId}', 'platform-assistant-e2e-qwen',
+      INSERT INTO public.models (id, provider_id, name, display_name, capabilities, enabled)
+      VALUES ('platform-assistant-e2e-qwen-plus', 'platform-assistant-e2e-qwen',
               'qwen-plus', 'qwen-plus', ARRAY['chat','tool_use']::TEXT[], true)
-      ON CONFLICT (tenant_id, provider_id, name) DO UPDATE SET
+      ON CONFLICT (provider_id, name) DO UPDATE SET
         capabilities=EXCLUDED.capabilities, enabled=true;
     `);
     const modelResponse = await context.request.put(`${apiURL}/agents/system/settings`, {
