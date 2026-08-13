@@ -45,8 +45,10 @@ type ServerManager interface {
 	Quota(ctx context.Context) domain.Quota
 }
 
-// ToolRegistry registers live MCP tools discovered from a server.
+// ToolRegistry registers live MCP tools discovered from a server. tenantID is
+// required: mcp_configs.id is unique only within a tenant schema, and registry
+// entries are keyed by tenantID:serverID to prevent cross-tenant collisions.
 type ToolRegistry interface {
-	RegisterServer(ctx context.Context, serverID string) error
-	UnregisterServer(serverID string) error
+	RegisterServer(ctx context.Context, tenantID, serverID string) error
+	UnregisterServer(tenantID, serverID string) error
 }

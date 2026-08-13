@@ -2434,7 +2434,7 @@ func (s *AgentService) buildMCPTools(
 		if s.deps.MCPTools == nil {
 			continue
 		}
-		for _, tool := range s.deps.MCPTools.ToolsForServer(ctx, serverID) {
+		for _, tool := range s.deps.MCPTools.ToolsForServer(ctx, tenantID, serverID) {
 			if _, ok := allowedTools[tool.Name]; !ok {
 				continue
 			}

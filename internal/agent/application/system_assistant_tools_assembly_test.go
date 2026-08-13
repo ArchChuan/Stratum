@@ -51,7 +51,7 @@ func (v *strictModelValidatorStub) ValidateTenantChatModel(_ context.Context, te
 
 type genericMCPTools struct{}
 
-func (genericMCPTools) ToolsForServer(_ context.Context, serverID string) []port.ToolDefinition {
+func (genericMCPTools) ToolsForServer(_ context.Context, _ string, serverID string) []port.ToolDefinition {
 	if serverID != "orders" {
 		return nil
 	}

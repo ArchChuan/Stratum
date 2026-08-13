@@ -3,22 +3,22 @@ package infrastructure
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
 	"go.uber.org/zap"
 )
 
-// MCPToolHandle 将 MCP 工具包装为 Tool
+// MCPToolHandle 将 MCP 工具包装为 Tool。agent 生产路径只消费
+// GetID/GetName/GetDescription/GetType 与 Tool 元数据；工具执行经
+// agentMCPExecutor 走 ClientManager（tenant 作用域），不经 handle。
 type MCPToolHandle struct {
 	ID          string
 	Name        string
 	Description string
 	Type        string
 	Tool        *MCPTool
-	ServerID    string
-	Manager     *ClientManager
-	logger      *zap.Logger
 }
 
 // GetID 获取 ID
@@ -41,25 +41,9 @@ func (w *MCPToolHandle) GetType() string {
 	return w.Type
 }
 
-// Execute 执行工具
-func (w *MCPToolHandle) Execute(ctx context.Context, input any) (any, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	result, err := w.Manager.CallTool(ctx, w.ServerID, w.Tool.Name, input)
-	if err != nil {
-		w.logger.Error("failed to execute MCP tool",
-			zap.String("tool", w.Tool.Name),
-			zap.String("server_id", w.ServerID),
-			zap.Error(err))
-		return nil, err
-	}
-
-	return result, nil
-}
-
 // MCPToolCatalog 适配器，管理 MCP Tools
 type MCPToolCatalog struct {
+	tenantID string
 	serverID string
 	manager  *ClientManager
 	tools    map[string]*MCPToolHandle
@@ -68,12 +52,13 @@ type MCPToolCatalog struct {
 }
 
 // NewMCPToolCatalog 创建新的适配器
-func NewMCPToolCatalog(serverID string, manager *ClientManager, logger *zap.Logger) *MCPToolCatalog {
+func NewMCPToolCatalog(tenantID, serverID string, manager *ClientManager, logger *zap.Logger) *MCPToolCatalog {
 	return &MCPToolCatalog{
+		tenantID: tenantID,
 		serverID: serverID,
 		manager:  manager,
 		tools:    make(map[string]*MCPToolHandle),
-		logger:   logger.Named("mcp.tool_catalog").With(zap.String("server_id", serverID)),
+		logger:   logger.Named("mcp.tool_catalog").With(zap.String("tenant_id", tenantID), zap.String("server_id", serverID)),
 	}
 }
 
@@ -97,9 +82,6 @@ func (a *MCPToolCatalog) DiscoverTools(ctx context.Context) ([]*MCPToolHandle, e
 			Description: tool.Description,
 			Type:        "mcp",
 			Tool:        tool,
-			ServerID:    a.serverID,
-			Manager:     a.manager,
-			logger:      a.logger,
 		}
 
 		a.tools[toolID] = wrapper
@@ -149,19 +131,32 @@ type MCPToolRegistry struct {
 	logger   *zap.Logger
 }
 
-// GetCatalogForServer returns the adapter for a specific server, or nil if not registered.
-func (r *MCPToolRegistry) GetCatalogForServer(serverID string) *MCPToolCatalog {
+// registryKey scopes registry entries to one tenant. mcp_configs.id is only
+// unique within a tenant schema, so two tenants may name their server the same;
+// keying by tenantID:serverID prevents cross-tenant overwrite/leak.
+func registryKey(tenantID, serverID string) string {
+	return tenantID + ":" + serverID
+}
+
+// GetCatalogForServer returns the adapter for a specific server, or nil if not
+// registered. An empty tenantID fails closed: without a tenant the registry key
+// would collapse into a shared "":serverID bucket and cross-tenant lookups
+// could resolve another tenant's catalog.
+func (r *MCPToolRegistry) GetCatalogForServer(tenantID, serverID string) *MCPToolCatalog {
+	if tenantID == "" {
+		return nil
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.adapters[serverID]
+	return r.adapters[registryKey(tenantID, serverID)]
 }
 
 // RegisterCatalogForTest injects a pre-built adapter directly, bypassing DiscoverTools.
 // Intended for unit tests only.
-func (r *MCPToolRegistry) RegisterCatalogForTest(serverID string, adapter *MCPToolCatalog) {
+func (r *MCPToolRegistry) RegisterCatalogForTest(tenantID, serverID string, adapter *MCPToolCatalog) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.adapters[serverID] = adapter
+	r.adapters[registryKey(tenantID, serverID)] = adapter
 }
 
 // NewMCPToolRegistry 创建新的注册表
@@ -174,15 +169,21 @@ func NewMCPToolRegistry(manager *ClientManager, logger *zap.Logger) *MCPToolRegi
 }
 
 // RegisterServer 注册 MCP 服务器
-func (r *MCPToolRegistry) RegisterServer(ctx context.Context, serverID string) error {
+func (r *MCPToolRegistry) RegisterServer(ctx context.Context, tenantID, serverID string) error {
+	if tenantID == "" {
+		// fail closed: without a tenant the entry would land in the shared
+		// "":serverID bucket and be indistinguishable across tenants.
+		return errors.New("mcp registry: tenantID is required")
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.adapters[serverID]; exists {
+	key := registryKey(tenantID, serverID)
+	if _, exists := r.adapters[key]; exists {
 		return fmt.Errorf("server already registered: %s", serverID)
 	}
 
-	adapter := NewMCPToolCatalog(serverID, r.manager, r.logger)
+	adapter := NewMCPToolCatalog(tenantID, serverID, r.manager, r.logger)
 
 	// 发现 Tools
 	_, err := adapter.DiscoverTools(ctx)
@@ -190,88 +191,36 @@ func (r *MCPToolRegistry) RegisterServer(ctx context.Context, serverID string) e
 		return err
 	}
 
-	r.adapters[serverID] = adapter
-	r.logger.Info("registered MCP server", zap.String("server_id", serverID))
+	r.adapters[key] = adapter
+	r.logger.Info("registered MCP server",
+		zap.String("tenant_id", tenantID), zap.String("server_id", serverID))
 
 	return nil
 }
 
 // UnregisterServer 注销 MCP 服务器
-func (r *MCPToolRegistry) UnregisterServer(serverID string) error {
+func (r *MCPToolRegistry) UnregisterServer(tenantID, serverID string) error {
+	if tenantID == "" {
+		// fail closed: never touch the shared "":serverID bucket.
+		// Deliberately asymmetric with RegisterServer: a no-op instead of an
+		// error, because MCPService.DeleteServer unregisters only after the DB
+		// row is already gone — an error here would surface a partial failure
+		// after a successful delete. The "" bucket is unreachable (RegisterServer
+		// is the only production writer and rejects empty tenant), so a dropped
+		// tenant in a caller degrades to a harmless no-op.
+		return nil
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.adapters[serverID]; !exists {
+	key := registryKey(tenantID, serverID)
+	if _, exists := r.adapters[key]; !exists {
 		return nil
 	}
 
-	delete(r.adapters, serverID)
-	r.logger.Info("unregistered MCP server", zap.String("server_id", serverID))
+	delete(r.adapters, key)
+	r.logger.Info("unregistered MCP server",
+		zap.String("tenant_id", tenantID), zap.String("server_id", serverID))
 
 	return nil
-}
-
-// GetRegisteredTool 获取 Tool
-func (r *MCPToolRegistry) GetRegisteredTool(toolID string) *MCPToolHandle {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	for _, adapter := range r.adapters {
-		if s := adapter.GetRegisteredTool(toolID); s != nil {
-			return s
-		}
-	}
-	return nil
-}
-
-// GetAllTools 获取所有 Tools
-func (r *MCPToolRegistry) GetAllTools() []*MCPToolHandle {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	var tools []*MCPToolHandle
-	for _, adapter := range r.adapters {
-		tools = append(tools, adapter.GetAllTools()...)
-	}
-	return tools
-}
-
-// ExecuteToolByID 执行 Tool
-func (r *MCPToolRegistry) ExecuteToolByID(toolID string, input any) (any, error) {
-	s := r.GetRegisteredTool(toolID)
-	if s == nil {
-		return nil, fmt.Errorf("skill not found: %s", toolID)
-	}
-	return s.Execute(context.Background(), input)
-}
-
-// RefreshTools 刷新 Tools
-func (r *MCPToolRegistry) RefreshTools(ctx context.Context) error {
-	r.mu.RLock()
-	adapters := make(map[string]*MCPToolCatalog)
-	for k, v := range r.adapters {
-		adapters[k] = v
-	}
-	r.mu.RUnlock()
-
-	for serverID, adapter := range adapters {
-		_, err := adapter.DiscoverTools(ctx)
-		if err != nil {
-			r.logger.Warn("failed to refresh tools",
-				zap.String("server_id", serverID),
-				zap.Error(err))
-		}
-	}
-
-	return nil
-}
-
-// GetServerInfo 获取服务器信息
-func (r *MCPToolRegistry) GetServerInfo(ctx context.Context, serverID string) any {
-	return r.manager.GetServerInfo(ctx, serverID)
-}
-
-// GetAllServerInfo 获取所有服务器信息
-func (r *MCPToolRegistry) GetAllServerInfo(ctx context.Context) []*MCPServerInfo {
-	return r.manager.GetAllServerInfo(ctx)
 }

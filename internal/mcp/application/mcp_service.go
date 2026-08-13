@@ -169,7 +169,7 @@ func (s *MCPService) ConnectServer(ctx context.Context, cfg *domain.ServerConfig
 		zap.String("server_id", cfg.ID),
 		zap.String("server_name", cfg.Name),
 	)
-	if err := s.toolRegistry.RegisterServer(ctx, cfg.ID); err != nil {
+	if err := s.toolRegistry.RegisterServer(ctx, reqctx.TenantIDFromContext(ctx), cfg.ID); err != nil {
 		s.logger.Warn("failed to register MCP tools", zap.String("server_id", cfg.ID), zap.Error(err))
 	}
 	return nil
@@ -221,7 +221,7 @@ func (s *MCPService) DeleteServer(ctx context.Context, serverID, actorID string)
 	if err := s.manager.Delete(ctx, serverID, audit); err != nil {
 		return err
 	}
-	if err := s.toolRegistry.UnregisterServer(serverID); err != nil {
+	if err := s.toolRegistry.UnregisterServer(reqctx.TenantIDFromContext(ctx), serverID); err != nil {
 		return err
 	}
 	s.logger.Info("mcp.server_deleted", zap.String("server_id", serverID))
@@ -260,7 +260,7 @@ func (s *MCPService) ReconnectServer(ctx context.Context, serverID, actorID stri
 		return err
 	}
 	s.logger.Info("mcp.server_reconnected", zap.String("server_id", serverID))
-	if err := s.toolRegistry.RegisterServer(ctx, serverID); err != nil {
+	if err := s.toolRegistry.RegisterServer(ctx, reqctx.TenantIDFromContext(ctx), serverID); err != nil {
 		s.logger.Warn("failed to register MCP tools after reconnect", zap.String("server_id", serverID), zap.Error(err))
 	}
 	return nil
@@ -295,7 +295,7 @@ func (s *MCPService) UpdateServer(ctx context.Context, cfg *domain.ServerConfig,
 		return err
 	}
 	s.logger.Info("mcp.server_updated", zap.String("server_id", cfg.ID))
-	if err := s.toolRegistry.RegisterServer(ctx, cfg.ID); err != nil {
+	if err := s.toolRegistry.RegisterServer(ctx, reqctx.TenantIDFromContext(ctx), cfg.ID); err != nil {
 		s.logger.Warn("failed to re-register MCP tools", zap.String("server_id", cfg.ID), zap.Error(err))
 	}
 	return nil

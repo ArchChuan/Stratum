@@ -50,8 +50,8 @@ func (m *secretTestManager) Quota(context.Context) domain.Quota         { return
 
 type secretTestRegistry struct{}
 
-func (secretTestRegistry) RegisterServer(context.Context, string) error { return nil }
-func (secretTestRegistry) UnregisterServer(string) error                { return nil }
+func (secretTestRegistry) RegisterServer(context.Context, string, string) error { return nil }
+func (secretTestRegistry) UnregisterServer(string, string) error                { return nil }
 
 var _ port.ServerManager = (*secretTestManager)(nil)
 var _ port.ToolRegistry = secretTestRegistry{}

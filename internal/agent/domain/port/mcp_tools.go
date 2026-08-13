@@ -7,9 +7,10 @@ import (
 
 // MCPToolProvider is the consumer-side port for retrieving MCP tool definitions.
 // The handler uses this to build extra tools for the ReAct loop without importing
-// MCP infrastructure directly.
+// MCP infrastructure directly. tenantID scopes the lookup: MCP servers are unique
+// only within a tenant, and the registry keys entries by tenantID:serverID.
 type MCPToolProvider interface {
-	ToolsForServer(ctx context.Context, serverID string) []ToolDefinition
+	ToolsForServer(ctx context.Context, tenantID, serverID string) []ToolDefinition
 }
 
 type MCPToolExecutor interface {

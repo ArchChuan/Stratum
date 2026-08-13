@@ -341,9 +341,9 @@ func TestMCPIntegration(t *testing.T) {
 	// 创建技能注册表
 	registry := NewMCPToolRegistry(manager, logger)
 
-	// 验证初始状态
-	if len(registry.GetAllTools()) != 0 {
-		t.Errorf("expected 0 skills initially, got %d", len(registry.GetAllTools()))
+	// 验证初始状态：未注册 server 无 catalog。
+	if got := registry.GetCatalogForServer("t1", "test-server"); got != nil {
+		t.Errorf("expected nil catalog initially, got %v", got)
 	}
 
 	// 创建测试配置
@@ -412,7 +412,7 @@ func TestMCPIntegration(t *testing.T) {
 	}
 
 	// 测试技能适配器
-	adapter := NewMCPToolCatalog("test-server", manager, logger)
+	adapter := NewMCPToolCatalog("t1", "test-server", manager, logger)
 
 	// 验证适配器初始状态
 	if len(adapter.GetAllTools()) != 0 {
@@ -473,8 +473,6 @@ func TestMCPToolExecutionFlow(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	defer func() { _ = logger.Sync() }()
 
-	manager := NewClientManager(logger, nil, nil)
-
 	// 创建测试工具
 	tool := &MCPTool{
 		Name:        "test_tool",
@@ -494,9 +492,6 @@ func TestMCPToolExecutionFlow(t *testing.T) {
 		Description: "Test Tool",
 		Type:        "mcp",
 		Tool:        tool,
-		ServerID:    "test",
-		Manager:     manager,
-		logger:      logger,
 	}
 
 	// 验证技能属性

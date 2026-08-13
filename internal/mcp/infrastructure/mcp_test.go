@@ -309,9 +309,6 @@ func TestClientManagerHealthReconnectClosesDisplacedClient(t *testing.T) {
 
 // TestMCPToolHandle 测试 MCP Skill 包装器
 func TestMCPToolHandle(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
-	manager := NewClientManager(logger, nil, nil)
-
 	tool := &MCPTool{
 		Name:        "test_tool",
 		Description: "Test Tool",
@@ -323,9 +320,6 @@ func TestMCPToolHandle(t *testing.T) {
 		Description: "Test Tool",
 		Type:        "mcp",
 		Tool:        tool,
-		ServerID:    "test",
-		Manager:     manager,
-		logger:      logger,
 	}
 
 	if wrapper.GetID() != "mcp:test:test_tool" {
@@ -347,26 +341,13 @@ func TestMCPToolRegistry(t *testing.T) {
 	manager := NewClientManager(logger, nil, nil)
 	registry := NewMCPToolRegistry(manager, logger)
 
-	if len(registry.GetAllTools()) != 0 {
-		t.Errorf("expected 0 skills, got %d", len(registry.GetAllTools()))
+	// 未注册 server → nil catalog。
+	if got := registry.GetCatalogForServer("t1", "s1"); got != nil {
+		t.Fatalf("expected nil catalog for unregistered server, got %v", got)
 	}
-
-	// 测试获取不存在的 Skill
-	skill := registry.GetRegisteredTool("nonexistent")
-	if skill != nil {
-		t.Fatal("skill should be nil")
-	}
-}
-
-// TestMCPToolRegistryExecute 测试执行不存在的 Skill
-func TestMCPToolRegistryExecute(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
-	manager := NewClientManager(logger, nil, nil)
-	registry := NewMCPToolRegistry(manager, logger)
-
-	_, err := registry.ExecuteToolByID("nonexistent", nil)
-	if err == nil {
-		t.Fatal("expected error for nonexistent skill")
+	// 空 tenant fail-closed：不允许落到共享 "":serverID 桶。
+	if got := registry.GetCatalogForServer("", "s1"); got != nil {
+		t.Fatalf("empty tenant should fail closed, got %v", got)
 	}
 }
 
@@ -650,7 +631,7 @@ func TestCacheClear(t *testing.T) {
 func TestMCPToolCatalogGetAllTools(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	manager := NewClientManager(logger, nil, nil)
-	adapter := NewMCPToolCatalog("test", manager, logger)
+	adapter := NewMCPToolCatalog("t1", "test", manager, logger)
 
 	skills := adapter.GetAllTools()
 	if len(skills) != 0 {
@@ -732,25 +713,6 @@ func TestStoreResourcesRespectsMaxSize(t *testing.T) {
 
 	if cache.Size() > 2 {
 		t.Errorf("cache size %d exceeds maxSize 2", cache.Size())
-	}
-}
-
-// TestMCPToolHandleUsesStoredContext 验证 Execute 使用构造时注入的 context
-func TestMCPToolHandleUsesStoredContext(t *testing.T) {
-	logger := zap.NewNop()
-	wrapper := &MCPToolHandle{
-		ID:       "mcp:test:tool",
-		Name:     "tool",
-		Type:     "mcp",
-		ServerID: "test-server",
-		Tool:     &MCPTool{Name: "tool"},
-		Manager:  NewClientManager(logger, nil, nil),
-		logger:   logger,
-	}
-
-	_, err := wrapper.Execute(context.Background(), map[string]any{"key": "value"})
-	if err == nil {
-		t.Error("expected error due to nil client, got nil")
 	}
 }
 

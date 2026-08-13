@@ -272,7 +272,7 @@ func TestMCPToolCatalogAddGetAndDiscover(t *testing.T) {
 	logger := zap.NewNop()
 	client := &fakeMCPClient{tools: []*MCPTool{{Name: "search", Description: "Search"}}}
 	m := managerWithClients(t, "t1", map[string]MCPClient{"t1:s1": client})
-	catalog := NewMCPToolCatalog("s1", m, logger)
+	catalog := NewMCPToolCatalog("t1", "s1", m, logger)
 
 	// AddToolForTest：直接注入。
 	w := &MCPToolHandle{ID: "mcp:s1:direct", Name: "direct", Type: "mcp"}
@@ -296,51 +296,27 @@ func TestMCPToolRegistryRegisterUnregister(t *testing.T) {
 	r := NewMCPToolRegistry(m, logger)
 
 	// 预注入 adapter 后重复注册 → 明确报错。
-	adapter := NewMCPToolCatalog("s1", m, logger)
-	r.RegisterCatalogForTest("s1", adapter)
-	require.Same(t, adapter, r.GetCatalogForServer("s1"))
-	require.Nil(t, r.GetCatalogForServer("missing"))
-	err := r.RegisterServer(tenantCtx(t, "t1"), "s1")
+	adapter := NewMCPToolCatalog("t1", "s1", m, logger)
+	r.RegisterCatalogForTest("t1", "s1", adapter)
+	require.Same(t, adapter, r.GetCatalogForServer("t1", "s1"))
+	require.Nil(t, r.GetCatalogForServer("t1", "missing"))
+	err := r.RegisterServer(tenantCtx(t, "t1"), "t1", "s1")
 	require.ErrorContains(t, err, "already registered")
 
 	// 未注册 server 的 RegisterServer → DiscoverTools 失败（无 client）→ 错误传播。
-	err = r.RegisterServer(tenantCtx(t, "t1"), "ghost")
+	err = r.RegisterServer(tenantCtx(t, "t1"), "t1", "ghost")
 	require.Error(t, err)
 
 	// UnregisterServer：已注册 → 删除；未注册 → nil。
-	require.NoError(t, r.UnregisterServer("s1"))
-	require.Nil(t, r.GetCatalogForServer("s1"))
-	require.NoError(t, r.UnregisterServer("s1"))
+	require.NoError(t, r.UnregisterServer("t1", "s1"))
+	require.Nil(t, r.GetCatalogForServer("t1", "s1"))
+	require.NoError(t, r.UnregisterServer("t1", "s1"))
 
-	// GetRegisteredTool / GetAllTools 跨 adapter 汇总。
-	r.RegisterCatalogForTest("s2", NewMCPToolCatalog("s2", m, logger))
-	r.GetCatalogForServer("s2").AddToolForTest(&MCPToolHandle{ID: "mcp:s2:x"})
-	require.NotNil(t, r.GetRegisteredTool("mcp:s2:x"))
-	require.Nil(t, r.GetRegisteredTool("mcp:s2:missing"))
-	require.Len(t, r.GetAllTools(), 1)
-
-	// ExecuteToolByID：未注册 → 报错；已注册（Manager nil 走 panic 前先报错？）→ 未注册错误。
-	_, err = r.ExecuteToolByID("mcp:s2:missing", nil)
-	require.ErrorContains(t, err, "skill not found")
-}
-
-func TestMCPToolRegistryRefreshAndServerInfo(t *testing.T) {
-	logger := zap.NewNop()
-	client := &fakeMCPClient{tools: []*MCPTool{{Name: "search"}}, info: &MCPServerInfo{ID: "s1", Name: "A"}}
-	m := managerWithClients(t, "t1", map[string]MCPClient{"t1:s1": client})
-	r := NewMCPToolRegistry(m, logger)
-
-	// RefreshTools：adapter 刷新失败（无 client 的 ghost server）→ warn 不返回错误。
-	r.RegisterCatalogForTest("ghost", NewMCPToolCatalog("ghost", m, logger))
-	require.NoError(t, r.RefreshTools(tenantCtx(t, "t1")))
-
-	// GetServerInfo / GetAllServerInfo 转发到 manager。
-	require.Nil(t, r.GetServerInfo(tenantCtx(t, "t1"), "missing"))
-	got, ok := r.GetServerInfo(tenantCtx(t, "t1"), "s1").(*MCPServerInfo)
-	require.True(t, ok)
-	require.Equal(t, "A", got.Name)
-	infos := r.GetAllServerInfo(tenantCtx(t, "t1"))
-	require.Len(t, infos, 1)
+	// 空 tenant fail-closed：注册/查询/注销均不得落到共享 "":serverID 桶。
+	require.Nil(t, r.GetCatalogForServer("", "s1"))
+	require.NoError(t, r.UnregisterServer("", "s1"))
+	err = r.RegisterServer(tenantCtx(t, "t1"), "", "s1")
+	require.Error(t, err)
 }
 
 func TestToolRegistryAsPortAdapter(t *testing.T) {
@@ -350,9 +326,9 @@ func TestToolRegistryAsPortAdapter(t *testing.T) {
 	adapter := ToolRegistryAsPort(r)
 
 	// UnregisterServer：未注册 → nil error。
-	require.NoError(t, adapter.UnregisterServer("missing"))
+	require.NoError(t, adapter.UnregisterServer("t1", "missing"))
 	// RegisterServer：注册不存在的 server → 发现失败错误传播。
-	require.Error(t, adapter.RegisterServer(tenantCtx(t, "t1"), "ghost"))
+	require.Error(t, adapter.RegisterServer(tenantCtx(t, "t1"), "t1", "ghost"))
 }
 
 // TestSwapReconnectClientSkipsAfterDisconnect 验证 Fix #39:reconnect 与
