@@ -30,7 +30,7 @@ func (f *fakeSkillRevisionService) CreateSkillDraft(_ context.Context, input ski
 			ID: "revision-1", SkillID: "skill-1", Status: domain.VersionStatusDraft,
 			Capability:         domain.Capability{Goal: input.Goal, WhenToUse: input.WhenToUse},
 			ActivationContract: domain.ActivationContract{Name: "complaint", Description: input.Goal},
-			Instructions:       input.Instructions, Requirements: input.Requirements,
+			Instructions:       input.Instructions,
 		},
 	}, nil
 }
@@ -53,7 +53,7 @@ func (f *fakeSkillRevisionService) UpdateActivation(_ context.Context, _ string,
 }
 func (f *fakeSkillRevisionService) UpdateInstructionBundle(_ context.Context, _ string, input skillapp.UpdateInstructionBundleInput) (skillapp.SkillRevision, error) {
 	f.bundle = input
-	return skillapp.SkillRevision{ID: "revision-1", Instructions: input.Instructions, Requirements: input.Requirements}, nil
+	return skillapp.SkillRevision{ID: "revision-1", Instructions: input.Instructions}, nil
 }
 func (f *fakeSkillRevisionService) PublishDraft(context.Context, string, string) (skillapp.SkillRevision, error) {
 	return skillapp.SkillRevision{ID: "revision-1", RevisionNo: 1, Status: domain.VersionStatusPublished}, nil
@@ -89,7 +89,6 @@ func TestSkillHandlerCreateInstructionBundle(t *testing.T) {
 	router := newSkillTestRouter(http.MethodPost, "/skills", handler.CreateSkill)
 	body, _ := json.Marshal(gen.CreateSkillRequest{
 		Name: "投诉分类", Goal: "分类", WhenToUse: "用户投诉时", Instructions: "根据规则分类",
-		Requirements: gen.SkillRequirements{MCPToolIDs: []string{"mcp:orders:get_order"}},
 	})
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/skills", bytes.NewReader(body))
@@ -98,7 +97,7 @@ func TestSkillHandlerCreateInstructionBundle(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d body=%s", w.Code, w.Body.String())
 	}
-	if service.created.Instructions != "根据规则分类" || len(service.created.Requirements.MCPToolIDs) != 1 {
+	if service.created.Instructions != "根据规则分类" {
 		t.Fatalf("instruction bundle not forwarded: %#v", service.created)
 	}
 }
@@ -149,7 +148,7 @@ func TestSkillHandlerUpdatesActivationAndInstructions(t *testing.T) {
 
 	bundleRouter := newSkillTestRouter(http.MethodPatch, "/skills/:id/draft/instructions", handler.UpdateDraftInstructionBundle)
 	body, _ = json.Marshal(gen.UpdateSkillInstructionBundleRequest{
-		Instructions: "新方法", Requirements: gen.SkillRequirements{MemoryScopes: []string{"user"}},
+		Instructions: "新方法",
 	})
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPatch, "/skills/skill-1/draft/instructions", bytes.NewReader(body))

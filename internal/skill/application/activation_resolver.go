@@ -12,16 +12,13 @@ import (
 // skill context stays free of reverse dependencies; the composition root maps
 // this view onto whatever shape a consumer's port requires.
 type SkillActivationView struct {
-	SkillID               string
-	RevisionID            string
-	Name                  string
-	Description           string
-	Instructions          string
-	InputSchema           map[string]any
-	OutputSchema          map[string]any
-	MCPToolIDs            []string
-	KnowledgeWorkspaceIDs []string
-	MemoryScopes          []string
+	SkillID      string
+	RevisionID   string
+	Name         string
+	Description  string
+	Instructions string
+	InputSchema  map[string]any
+	OutputSchema map[string]any
 }
 
 // ResolveActivation returns the activatable projection of a skill revision.
@@ -70,15 +67,12 @@ func (s *VersionService) ResolveActivation(
 		description = skill.Description
 	}
 	return SkillActivationView{
-		SkillID:               skill.ID,
-		RevisionID:            revision.ID,
-		Name:                  name,
-		Description:           description,
-		Instructions:          revision.Instructions,
-		InputSchema:           revision.ActivationContract.InputSchema,
-		OutputSchema:          revision.ActivationContract.OutputSchema,
-		MCPToolIDs:            revision.Requirements.MCPToolIDs,
-		KnowledgeWorkspaceIDs: revision.Requirements.KnowledgeWorkspaceIDs,
-		MemoryScopes:          revision.Requirements.MemoryScopes,
+		SkillID:      skill.ID,
+		RevisionID:   revision.ID,
+		Name:         name,
+		Description:  description,
+		Instructions: revision.Instructions,
+		InputSchema:  revision.ActivationContract.InputSchema,
+		OutputSchema: revision.ActivationContract.OutputSchema,
 	}, true, nil
 }

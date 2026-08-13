@@ -229,16 +229,13 @@ func (r publishedSkillActivationResolver) ResolveSkills(
 			continue
 		}
 		catalog[view.SkillID] = agentport.SkillActivation{
-			SkillID:               view.SkillID,
-			RevisionID:            view.RevisionID,
-			Name:                  view.Name,
-			Description:           view.Description,
-			Instructions:          view.Instructions,
-			InputSchema:           view.InputSchema,
-			OutputSchema:          view.OutputSchema,
-			MCPToolIDs:            view.MCPToolIDs,
-			KnowledgeWorkspaceIDs: view.KnowledgeWorkspaceIDs,
-			MemoryScopes:          view.MemoryScopes,
+			SkillID:      view.SkillID,
+			RevisionID:   view.RevisionID,
+			Name:         view.Name,
+			Description:  view.Description,
+			Instructions: view.Instructions,
+			InputSchema:  view.InputSchema,
+			OutputSchema: view.OutputSchema,
 		}
 	}
 	return catalog, nil
@@ -415,7 +412,6 @@ func (c *Container) injectTenantRoleResolvers(a *Agent) {
 	a.Service.SetTenantRoleResolver(roles)
 	a.ApprovalService.SetTenantRoleResolver(roles)
 	c.Skill.VersionService.SetTenantRoleResolver(roles)
-	c.Skill.VersionService.SetWorkspaceBindingValidator(workspaceBindingAdapter{ws: c.Knowledge.WorkspaceService})
 	c.MCP.Service.SetTenantRoleResolver(roles)
 	c.Knowledge.WorkspaceService.SetTenantRoleResolver(roles)
 	if c.Knowledge.RAGService != nil {

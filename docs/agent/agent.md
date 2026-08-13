@@ -57,12 +57,12 @@ Agent Loop 是运行期唯一动态决策者。其他上下文职责固定：
 | 上下文 | 职责 | 禁止事项 |
 |---|---|---|
 | Agent | 推理、选择 Skill、调用工具、状态机、checkpoint | 不在 handler 中实现路由或重试 |
-| Skill | 版本化 instruction bundle：capability、activation contract、instructions、requirements | 不执行代码、HTTP、LLM 或 MCP |
+| Skill | 版本化 instruction bundle：capability、activation contract、instructions | 不执行代码、HTTP、LLM 或 MCP |
 | MCP | 外部工具发现和副作用执行 | 不自报可信 risk level，不伪装成 Skill |
 | Knowledge | `stratum_search_knowledge` 内部检索能力 | 不执行外部副作用 |
 | Memory | 自动会话历史、注入、按需 recall | 不作为通用工具网关 |
 
-依赖方向：`Agent -> Skill snapshot / MCP port / Knowledge port / Memory port`。Skill 不依赖或调用 MCP；Skill requirements 只声明运行期所需的稳定 MCP tool IDs。
+依赖方向：`Agent -> Skill snapshot / MCP port / Knowledge port / Memory port`。Skill 不依赖或调用 MCP；工具、知识与记忆边界只由 Agent 绑定决定（Spec D5）。
 
 ## AgentConfig
 
@@ -77,7 +77,7 @@ type AgentConfig struct {
 }
 ```
 
-权限取交集：租户权限 ∩ 用户权限 ∩ Agent allowlist ∩ active Skill requirements。Agent 绑定具体 MCP tool，不绑定整个 server，避免 server 新增工具后自动扩权。
+权限取交集：租户权限 ∩ 用户权限 ∩ Agent allowlist。Agent 绑定具体 MCP tool，不绑定整个 server，避免 server 新增工具后自动扩权；激活 Skill 只注入指令，不再参与权限收窄（Spec D5）。
 
 ## Skill Activation
 

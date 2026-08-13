@@ -8,7 +8,6 @@ import (
 	gen "github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
-	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -49,8 +48,8 @@ func (h *SkillHandler) CreateSkill(c *gin.Context) {
 	view, err := h.service.CreateSkillDraft(c.Request.Context(), skillapp.CreateSkillDraftInput{
 		Name: req.Name, Goal: req.Goal, WhenToUse: req.WhenToUse,
 		SampleInput: req.SampleInput, ExpectedOutput: req.ExpectedOutput,
-		Instructions: req.Instructions, Requirements: requirementsFromDTO(req.Requirements),
-		ActorID: actorID, Editors: req.Editors,
+		Instructions: req.Instructions,
+		ActorID:      actorID, Editors: req.Editors,
 	})
 	if err != nil {
 		_ = c.Error(err)
@@ -139,7 +138,7 @@ func (h *SkillHandler) UpdateDraftInstructionBundle(c *gin.Context) {
 		return
 	}
 	revision, err := h.service.UpdateInstructionBundle(c.Request.Context(), c.Param("id"), skillapp.UpdateInstructionBundleInput{
-		Instructions: req.Instructions, Requirements: requirementsFromDTO(req.Requirements), ActorID: actorID,
+		Instructions: req.Instructions, ActorID: actorID,
 	})
 	if err != nil {
 		_ = c.Error(err)
@@ -197,13 +196,6 @@ func (h *SkillHandler) SetSkillEditors(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "editors updated"})
 }
 
-func requirementsFromDTO(value gen.SkillRequirements) skilldomain.Requirements {
-	return skilldomain.Requirements{
-		MCPToolIDs: value.MCPToolIDs, KnowledgeWorkspaceIDs: value.KnowledgeWorkspaceIDs,
-		MemoryScopes: value.MemoryScopes,
-	}
-}
-
 func productToResponse(value skillapp.SkillProduct) gen.SkillProductResponse {
 	return gen.SkillProductResponse{
 		ID: value.ID, Name: value.Name, Description: value.Description, Status: value.Status,
@@ -220,7 +212,7 @@ func revisionToResponse(value skillapp.SkillRevision) gen.SkillRevisionResponse 
 	return gen.SkillRevisionResponse{
 		ID: value.ID, SkillID: value.SkillID, RevisionNo: int32(value.RevisionNo), Status: string(value.Status),
 		Capability: structToMap(value.Capability), ActivationContract: structToMap(value.ActivationContract),
-		Instructions: value.Instructions, Requirements: structToMap(value.Requirements), PublishChecks: value.PublishChecks,
+		Instructions: value.Instructions, PublishChecks: value.PublishChecks,
 	}
 }
 
