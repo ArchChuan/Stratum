@@ -50,17 +50,17 @@ func (r *modelMgmtRepo) SetDefaultEmbedding(_ context.Context, id string, enable
 }
 
 type recordingInvalidator struct {
-	tenants []string
+	calls int
 }
 
-func (i *recordingInvalidator) Invalidate(tenantID string) {
-	i.tenants = append(i.tenants, tenantID)
+func (i *recordingInvalidator) Invalidate() {
+	i.calls++
 }
 
 // invalidatorFunc adapts a plain func to ModelCacheInvalidator for concise test setup.
-type invalidatorFunc func(tenantID string)
+type invalidatorFunc func()
 
-func (f invalidatorFunc) Invalidate(tenantID string) { f(tenantID) }
+func (f invalidatorFunc) Invalidate() { f() }
 
 func TestModelMgmtServiceInvalidatesRegistryAfterSuccessfulMutation(t *testing.T) {
 	invalidator := &recordingInvalidator{}
@@ -69,8 +69,8 @@ func TestModelMgmtServiceInvalidatesRegistryAfterSuccessfulMutation(t *testing.T
 	if err := svc.Toggle(context.Background(), "tenant-1", "model-1", false); err != nil {
 		t.Fatalf("Toggle: %v", err)
 	}
-	if len(invalidator.tenants) != 1 || invalidator.tenants[0] != "tenant-1" {
-		t.Fatalf("invalidations = %v", invalidator.tenants)
+	if invalidator.calls != 1 {
+		t.Fatalf("invalidations = %d, want 1", invalidator.calls)
 	}
 }
 
@@ -81,8 +81,8 @@ func TestModelMgmtServiceDoesNotInvalidateAfterFailedMutation(t *testing.T) {
 	if err := svc.Toggle(context.Background(), "tenant-1", "model-1", false); err == nil {
 		t.Fatal("Toggle must return the repository error")
 	}
-	if len(invalidator.tenants) != 0 {
-		t.Fatalf("invalidations = %v, want none", invalidator.tenants)
+	if invalidator.calls != 0 {
+		t.Fatalf("invalidations = %d, want none", invalidator.calls)
 	}
 }
 
@@ -91,7 +91,7 @@ func TestModelMgmtServiceSetDefaultEmbedding(t *testing.T) {
 		repo := &modelMgmtRepo{models: []domain.Model{
 			{ID: "m1", Name: "chat-x", Capabilities: []domain.ModelCapability{domain.CapChat}, Enabled: true},
 		}}
-		svc := NewModelMgmtService(repo, invalidatorFunc(func(tenantID string) {
+		svc := NewModelMgmtService(repo, invalidatorFunc(func() {
 			t.Fatal("must not invalidate on rejected set")
 		}))
 		if err := svc.SetDefaultEmbedding(context.Background(), "t1", "m1", true); err == nil {
@@ -112,7 +112,7 @@ func TestModelMgmtServiceSetDefaultEmbedding(t *testing.T) {
 			{ID: "m1", Name: "embed-x", Capabilities: []domain.ModelCapability{domain.CapEmbedding}, Enabled: true},
 		}}
 		invalidated := false
-		svc := NewModelMgmtService(repo, invalidatorFunc(func(tenantID string) { invalidated = true }))
+		svc := NewModelMgmtService(repo, invalidatorFunc(func() { invalidated = true }))
 		if err := svc.SetDefaultEmbedding(context.Background(), "t1", "m1", true); err != nil {
 			t.Fatal(err)
 		}
@@ -125,7 +125,7 @@ func TestModelMgmtServiceSetDefaultEmbedding(t *testing.T) {
 			{ID: "m1", Name: "embed-x", Capabilities: []domain.ModelCapability{domain.CapEmbedding}, Enabled: true},
 		}}
 		invalidated := false
-		svc := NewModelMgmtService(repo, invalidatorFunc(func(tenantID string) { invalidated = true }))
+		svc := NewModelMgmtService(repo, invalidatorFunc(func() { invalidated = true }))
 		if err := svc.SetDefaultEmbedding(context.Background(), "t1", "m1", false); err != nil {
 			t.Fatal(err)
 		}

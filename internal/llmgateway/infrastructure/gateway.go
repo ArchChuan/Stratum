@@ -141,8 +141,7 @@ type routedInfo struct {
 // Complete resolves the model via the registry and delegates to the resolved
 // ChatProtocol. 瞬态失败沿 fallback 链降级；主模型失败立即重试 1 次。
 func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*CompletionResponse, error) {
-	tenantID := reqctx.TenantIDFromContext(ctx)
-	links, err := g.resolveChain(ctx, tenantID, req.Model)
+	links, err := g.resolveChain(ctx, req.Model)
 	if err != nil {
 		g.metrics.IncLLMRequest(req.Model, "unknown", llmStatusError)
 		return nil, fmt.Errorf("llmgateway: resolve model %q: %w", req.Model, err)
@@ -162,8 +161,7 @@ func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*Comple
 // 降级；首 token 已流出后的中途失败不得降级（避免向客户端重复输出），
 // 包装为 permanent 错误传播。
 func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, onToken func(string)) (*CompletionResponse, error) {
-	tenantID := reqctx.TenantIDFromContext(ctx)
-	links, err := g.resolveChain(ctx, tenantID, req.Model)
+	links, err := g.resolveChain(ctx, req.Model)
 	if err != nil {
 		g.metrics.IncLLMRequest(req.Model, "unknown", llmStatusError)
 		return nil, fmt.Errorf("llmgateway: resolve model %q: %w", req.Model, err)
@@ -180,8 +178,8 @@ func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, on
 
 // resolveChain 组装 fallback 链：主模型 + 有序列举的候选（上限
 // constants.MaxModelFallbackCandidates）。主模型必须可解析，否则直接报错。
-func (g *Gateway) resolveChain(ctx context.Context, tenantID, model string) ([]chainLink, error) {
-	cfg, proto, err := g.registry.Resolve(ctx, tenantID, model)
+func (g *Gateway) resolveChain(ctx context.Context, model string) ([]chainLink, error) {
+	cfg, proto, err := g.registry.Resolve(ctx, model)
 	if err != nil {
 		return nil, err
 	}
@@ -189,10 +187,10 @@ func (g *Gateway) resolveChain(ctx context.Context, tenantID, model string) ([]c
 		Model:            model,
 		Config:           cfg,
 		Protocol:         proto,
-		Reasoning:        g.registry.ResolveReasoning(ctx, tenantID, model),
-		StructuredOutput: g.registry.ResolveStructuredOutput(ctx, tenantID, model),
+		Reasoning:        g.registry.ResolveReasoning(ctx, model),
+		StructuredOutput: g.registry.ResolveStructuredOutput(ctx, model),
 	}}
-	cands, err := g.registry.ResolveFallbackCandidates(ctx, tenantID, model)
+	cands, err := g.registry.ResolveFallbackCandidates(ctx, model)
 	if err != nil {
 		return nil, err
 	}
@@ -201,8 +199,8 @@ func (g *Gateway) resolveChain(ctx context.Context, tenantID, model string) ([]c
 			Model:            c.Model,
 			Config:           c.Config,
 			Protocol:         c.Protocol,
-			Reasoning:        g.registry.ResolveReasoning(ctx, tenantID, c.Model),
-			StructuredOutput: g.registry.ResolveStructuredOutput(ctx, tenantID, c.Model),
+			Reasoning:        g.registry.ResolveReasoning(ctx, c.Model),
+			StructuredOutput: g.registry.ResolveStructuredOutput(ctx, c.Model),
 		})
 	}
 	return links, nil
@@ -483,8 +481,7 @@ func (g *Gateway) logComplete(
 // CreateEmbeddings resolves the embedding model via the registry and delegates
 // to the resolved EmbedProtocol.
 func (g *Gateway) CreateEmbeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error) {
-	tenantID := reqctx.TenantIDFromContext(ctx)
-	cfg, proto, err := g.registry.ResolveEmbedding(ctx, tenantID, req.Model)
+	cfg, proto, err := g.registry.ResolveEmbedding(ctx, req.Model)
 	if err != nil {
 		return nil, fmt.Errorf("llmgateway: resolve embedding model %q: %w", req.Model, err)
 	}
@@ -497,28 +494,28 @@ func (g *Gateway) Health(context.Context) error {
 	return nil
 }
 
-// ListEmbeddingModels returns an empty slice. Tenant-scoped model lists are
-// available via ListEmbeddingModelsByTenant.
+// ListEmbeddingModels returns an empty slice. 全局模型列表经
+// ListEmbeddingModelsByTenant(ctx) 获取。
 func (g *Gateway) ListEmbeddingModels() []string {
 	return []string{}
 }
 
-// ListChatModels returns an empty slice. Tenant-scoped model lists are
-// available via ListChatModelsByTenant.
+// ListChatModels returns an empty slice. 全局模型列表经
+// ListChatModelsByTenant(ctx) 获取。
 func (g *Gateway) ListChatModels() []string {
 	return []string{}
 }
 
-// ListChatModelsByTenant returns sorted enabled chat model names for the
-// given tenant, delegating to the registry.
-func (g *Gateway) ListChatModelsByTenant(ctx context.Context, tenantID string) ([]string, error) {
-	return g.registry.ListChatModelsByTenant(ctx, tenantID)
+// ListChatModelsByTenant returns sorted enabled chat model names from the
+// global catalog, delegating to the registry.
+func (g *Gateway) ListChatModelsByTenant(ctx context.Context) ([]string, error) {
+	return g.registry.ListChatModelsByTenant(ctx)
 }
 
 // ListEmbeddingModelsByTenant returns sorted enabled embedding model names
-// for the given tenant, delegating to the registry.
-func (g *Gateway) ListEmbeddingModelsByTenant(ctx context.Context, tenantID string) ([]string, error) {
-	return g.registry.ListEmbeddingModelsByTenant(ctx, tenantID)
+// from the global catalog, delegating to the registry.
+func (g *Gateway) ListEmbeddingModelsByTenant(ctx context.Context) ([]string, error) {
+	return g.registry.ListEmbeddingModelsByTenant(ctx)
 }
 
 // WithGateway returns a new context carrying gw as the LLM gateway override.

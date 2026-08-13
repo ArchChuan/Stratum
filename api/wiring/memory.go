@@ -269,7 +269,7 @@ func (c *Container) buildMemoryPipeline(mem *Memory, db *pgxpool.Pool) error {
 // 独立成方法以保持 buildMemoryPipeline 复杂度在基线内。
 func (c *Container) resolveEmbeddingDim(ctx context.Context, tenantID string) int {
 	if c.LLMGateway != nil && c.LLMGateway.Registry != nil {
-		if model, err := c.LLMGateway.Registry.ResolveDefaultEmbeddingModel(ctx, tenantID); err == nil && model != "" {
+		if model, err := c.LLMGateway.Registry.ResolveDefaultEmbeddingModel(ctx); err == nil && model != "" {
 			return constants.DimensionForModel(model)
 		}
 	}

@@ -225,7 +225,7 @@ func TestModelRegistry_Resolve_HappyPath(t *testing.T) {
 	pr := &mockProviderRepo{providers: providers}
 	reg := newTestRegistry(mr, pr)
 
-	cfg, proto, err := reg.Resolve(context.Background(), "tenant-1", "gpt-4")
+	cfg, proto, err := reg.Resolve(context.Background(), "gpt-4")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestModelRegistry_Resolve_CacheHit(t *testing.T) {
 	reg := newTestRegistry(mr, pr)
 
 	// First call populates cache
-	cfg1, _, err := reg.Resolve(context.Background(), "t1", "model-two")
+	cfg1, _, err := reg.Resolve(context.Background(), "model-two")
 	if err != nil {
 		t.Fatalf("first resolve: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestModelRegistry_Resolve_CacheHit(t *testing.T) {
 	delete(pr.providers, providerID)
 
 	// Second call must still succeed from cache
-	cfg2, proto2, err := reg.Resolve(context.Background(), "t1", "model-two")
+	cfg2, proto2, err := reg.Resolve(context.Background(), "model-two")
 	if err != nil {
 		t.Fatalf("second resolve (cache): %v", err)
 	}
@@ -288,7 +288,7 @@ func TestModelRegistry_Resolve_ModelNotFound(t *testing.T) {
 	pr := &mockProviderRepo{providers: map[string]*domain.Provider{}}
 	reg := newTestRegistry(mr, pr)
 
-	_, _, err := reg.Resolve(context.Background(), "t1", "nonexistent")
+	_, _, err := reg.Resolve(context.Background(), "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for unknown model, got nil")
 	}
@@ -318,7 +318,7 @@ func TestModelRegistry_Resolve_NoChatProtocol(t *testing.T) {
 		5*time.Minute,
 	)
 
-	_, _, err := reg.Resolve(context.Background(), "t1", "llama3")
+	_, _, err := reg.Resolve(context.Background(), "llama3")
 	if err == nil {
 		t.Fatal("expected error for missing chat protocol, got nil")
 	}
@@ -341,7 +341,7 @@ func TestModelRegistry_ResolveEmbedding_HappyPath(t *testing.T) {
 	pr := &mockProviderRepo{providers: providers}
 	reg := newTestRegistry(mr, pr)
 
-	cfg, proto, err := reg.ResolveEmbedding(context.Background(), "t1", "text-embedding-3")
+	cfg, proto, err := reg.ResolveEmbedding(context.Background(), "text-embedding-3")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -374,7 +374,7 @@ func TestModelRegistry_ResolveEmbedding_NoEmbedProtocol(t *testing.T) {
 	pr := &mockProviderRepo{providers: providers}
 	reg := newTestRegistry(mr, pr)
 
-	_, _, err := reg.ResolveEmbedding(context.Background(), "t1", "claude-3")
+	_, _, err := reg.ResolveEmbedding(context.Background(), "claude-3")
 	if err == nil {
 		t.Fatal("expected error for missing embed protocol, got nil")
 	}
@@ -385,7 +385,7 @@ func TestModelRegistry_ResolveEmbedding_ModelNotFound(t *testing.T) {
 	pr := &mockProviderRepo{providers: map[string]*domain.Provider{}}
 	reg := newTestRegistry(mr, pr)
 
-	_, _, err := reg.ResolveEmbedding(context.Background(), "t1", "nope")
+	_, _, err := reg.ResolveEmbedding(context.Background(), "nope")
 	if err == nil {
 		t.Fatal("expected error for unknown embedding model, got nil")
 	}
@@ -404,7 +404,7 @@ func TestModelRegistry_ListChatModels(t *testing.T) {
 	}}
 	reg := newTestRegistry(mr, pr)
 
-	names, err := reg.ListChatModelsByTenant(context.Background(), "t1")
+	names, err := reg.ListChatModelsByTenant(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -421,7 +421,7 @@ func TestModelRegistry_ListChatModels_Empty(t *testing.T) {
 	pr := &mockProviderRepo{providers: map[string]*domain.Provider{}}
 	reg := newTestRegistry(mr, pr)
 
-	names, err := reg.ListChatModelsByTenant(context.Background(), "t1")
+	names, err := reg.ListChatModelsByTenant(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -441,7 +441,7 @@ func TestModelRegistry_ListEmbeddingModels(t *testing.T) {
 	}}
 	reg := newTestRegistry(mr, pr)
 
-	names, err := reg.ListEmbeddingModelsByTenant(context.Background(), "t1")
+	names, err := reg.ListEmbeddingModelsByTenant(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -466,14 +466,14 @@ func TestModelRegistry_ListModelsExcludesDisabledAndUnsupportedProviders(t *test
 	}
 	reg := newTestRegistry(&mockModelRepo{models: models}, &mockProviderRepo{providers: providers})
 
-	chat, err := reg.ListChatModelsByTenant(context.Background(), "t1")
+	chat, err := reg.ListChatModelsByTenant(context.Background())
 	if err != nil {
 		t.Fatalf("ListChatModelsByTenant: %v", err)
 	}
 	if len(chat) != 1 || chat[0] != "chat-ok" {
 		t.Fatalf("chat models = %v, want [chat-ok]", chat)
 	}
-	embedding, err := reg.ListEmbeddingModelsByTenant(context.Background(), "t1")
+	embedding, err := reg.ListEmbeddingModelsByTenant(context.Background())
 	if err != nil {
 		t.Fatalf("ListEmbeddingModelsByTenant: %v", err)
 	}
@@ -489,7 +489,7 @@ func TestModelRegistry_ListModelsFailsClosedWhenProviderLookupFails(t *testing.T
 	}}
 	reg := newTestRegistry(&mockModelRepo{models: models}, &mockProviderRepo{providers: map[string]*domain.Provider{}})
 
-	if _, err := reg.ListChatModelsByTenant(context.Background(), "t1"); err == nil {
+	if _, err := reg.ListChatModelsByTenant(context.Background()); err == nil {
 		t.Fatal("missing provider must fail the catalogue closed")
 	}
 }
@@ -507,15 +507,15 @@ func TestModelRegistry_ResolveRequiresEnabledProviderAndMatchingCapability(t *te
 	}
 	reg := newTestRegistry(&mockModelRepo{models: models}, &mockProviderRepo{providers: providers})
 
-	if _, _, err := reg.Resolve(context.Background(), "t1", "embed-only"); err == nil {
+	if _, _, err := reg.Resolve(context.Background(), "embed-only"); err == nil {
 		t.Fatal("embedding-only model must not resolve for chat")
 	}
-	if _, _, err := reg.Resolve(context.Background(), "t1", "chat-disabled"); err == nil {
+	if _, _, err := reg.Resolve(context.Background(), "chat-disabled"); err == nil {
 		t.Fatal("model from disabled provider must not resolve")
 	}
 }
 
-func TestModelRegistry_WarmTenant(t *testing.T) {
+func TestModelRegistry_Warm(t *testing.T) {
 	providerID := "prov-warm"
 	providers := map[string]*domain.Provider{
 		providerID: {
@@ -530,7 +530,7 @@ func TestModelRegistry_WarmTenant(t *testing.T) {
 	pr := &mockProviderRepo{providers: providers}
 	reg := newTestRegistry(mr, pr)
 
-	err := reg.WarmTenant(context.Background(), "t1")
+	err := reg.Warm(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -539,7 +539,7 @@ func TestModelRegistry_WarmTenant(t *testing.T) {
 	mr.models = nil
 	delete(pr.providers, providerID)
 
-	cfg, _, err := reg.Resolve(context.Background(), "t1", "gpt-4")
+	cfg, _, err := reg.Resolve(context.Background(), "gpt-4")
 	if err != nil {
 		t.Fatal("expected cache hit after warm, got:", err)
 	}
@@ -566,26 +566,26 @@ func TestModelRegistry_Invalidate(t *testing.T) {
 	reg := newTestRegistry(mr, pr)
 
 	// Populate cache
-	_, _, err := reg.Resolve(context.Background(), "t-inv", "test-model")
+	_, _, err := reg.Resolve(context.Background(), "test-model")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 
 	// Invalidate the tenant
-	reg.Invalidate("t-inv")
+	reg.Invalidate()
 
 	// Now blow away the repos; a cache hit would still succeed,
 	// but the entry was evicted so it must hit the DB again.
 	mr.models = nil
 	delete(pr.providers, providerID)
 
-	_, _, err = reg.Resolve(context.Background(), "t-inv", "test-model")
+	_, _, err = reg.Resolve(context.Background(), "test-model")
 	if err == nil {
 		t.Fatal("expected error after invalidation + repo wipe, got nil")
 	}
 }
 
-func TestModelRegistry_Invalidate_OtherTenant(t *testing.T) {
+func TestModelRegistry_Invalidate_ClearsGlobalCache(t *testing.T) {
 	providerID := "prov-other"
 	providers := map[string]*domain.Provider{
 		providerID: {
@@ -604,26 +604,21 @@ func TestModelRegistry_Invalidate_OtherTenant(t *testing.T) {
 	pr := &mockProviderRepo{providers: providers}
 	reg := newTestRegistry(mr, pr)
 
-	// Populate cache for two tenants
-	reg.Resolve(context.Background(), "tenant-a", "model-a")
-	reg.Resolve(context.Background(), "tenant-b", "model-b")
+	// 预热两条缓存条目（单层全局缓存，key 为 chat:<modelName>）。
+	reg.Resolve(context.Background(), "model-a")
+	reg.Resolve(context.Background(), "model-b")
 
-	// Invalidate only tenant-a
-	reg.Invalidate("tenant-a")
+	// 全局 Invalidate 一次性清空全部缓存（不再区分租户维度）。
+	reg.Invalidate()
 
-	// tenant-b must still be served from cache
 	mr.models = nil
 	delete(pr.providers, providerID)
 
-	_, _, err := reg.Resolve(context.Background(), "tenant-b", "model-b")
-	if err != nil {
-		t.Fatalf("tenant-b should still be cached: %v", err)
-	}
-
-	// tenant-a must now fail (cache cleared + repos empty)
-	_, _, err = reg.Resolve(context.Background(), "tenant-a", "model-a")
-	if err == nil {
-		t.Fatal("tenant-a should fail after invalidation + repo wipe")
+	// 缓存已整体失效且 repos 已清空 → 两条都必须 fail。
+	for _, name := range []string{"model-a", "model-b"} {
+		if _, _, err := reg.Resolve(context.Background(), name); err == nil {
+			t.Fatalf("%s should fail after global invalidation + repo wipe", name)
+		}
 	}
 }
 
@@ -650,7 +645,7 @@ func TestModelRegistry_Resolve_CacheExpiry(t *testing.T) {
 	reg := infrastructure.NewModelRegistry(mr, pr, expProto, nil, 0)
 
 	// First call populates cache
-	_, _, err := reg.Resolve(context.Background(), "t-exp", "exp-model")
+	_, _, err := reg.Resolve(context.Background(), "exp-model")
 	if err != nil {
 		t.Fatalf("first resolve: %v", err)
 	}
@@ -659,7 +654,7 @@ func TestModelRegistry_Resolve_CacheExpiry(t *testing.T) {
 	mr.models = nil
 	delete(pr.providers, providerID)
 
-	_, _, err = reg.Resolve(context.Background(), "t-exp", "exp-model")
+	_, _, err = reg.Resolve(context.Background(), "exp-model")
 	if err == nil {
 		t.Fatal("expected error after cache expiry + repo wipe, got nil")
 	}
@@ -670,7 +665,7 @@ func TestModelRegistry_Resolve_ModelRepoError(t *testing.T) {
 	pr := &mockProviderRepo{}
 	reg := newTestRegistry(mr, pr)
 
-	_, _, err := reg.Resolve(context.Background(), "t1", "any")
+	_, _, err := reg.Resolve(context.Background(), "any")
 	if err == nil {
 		t.Fatal("expected error from model repo, got nil")
 	}
@@ -686,7 +681,7 @@ func TestModelRegistry_Resolve_ProviderRepoError(t *testing.T) {
 	pr := &mockProviderRepo{err: errors.New("provider db down")}
 	reg := newTestRegistry(mr, pr)
 
-	_, _, err := reg.Resolve(context.Background(), "t1", "err-model")
+	_, _, err := reg.Resolve(context.Background(), "err-model")
 	if err == nil {
 		t.Fatal("expected error from provider repo, got nil")
 	}
@@ -697,7 +692,7 @@ func TestModelRegistry_ListChatModels_Error(t *testing.T) {
 	pr := &mockProviderRepo{}
 	reg := newTestRegistry(mr, pr)
 
-	_, err := reg.ListChatModelsByTenant(context.Background(), "t1")
+	_, err := reg.ListChatModelsByTenant(context.Background())
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -729,7 +724,7 @@ func TestResolveDefaultEmbeddingModel(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			reg := newTestRegistry(&mockModelRepo{models: tc.models}, &mockProviderRepo{providers: tc.providers})
-			got, err := reg.ResolveDefaultEmbeddingModel(context.Background(), "tenant-a")
+			got, err := reg.ResolveDefaultEmbeddingModel(context.Background())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -745,7 +740,7 @@ func TestResolveDefaultEmbeddingModel_ProviderLookupFailsClosed(t *testing.T) {
 	models := []domain.Model{modelWith("orphan", "missing", false)}
 	reg := newTestRegistry(&mockModelRepo{models: models}, &mockProviderRepo{providers: map[string]*domain.Provider{}})
 
-	if _, err := reg.ResolveDefaultEmbeddingModel(context.Background(), "tenant-a"); err == nil {
+	if _, err := reg.ResolveDefaultEmbeddingModel(context.Background()); err == nil {
 		t.Fatal("missing provider must fail the resolution closed")
 	}
 }

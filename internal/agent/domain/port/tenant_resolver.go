@@ -33,9 +33,9 @@ type TenantChatModelCatalog interface {
 }
 
 // ModelContextProvider resolves per-model metadata such as ContextWindow
-// for the current tenant's configured models.
+// from the global model catalog.
 type ModelContextProvider interface {
-	GetChatModelContextWindow(ctx context.Context, tenantID, model string) (int, error)
+	GetChatModelContextWindow(ctx context.Context, model string) (int, error)
 }
 
 // TenantModelDetailsProvider lists the full tenant model catalog (including

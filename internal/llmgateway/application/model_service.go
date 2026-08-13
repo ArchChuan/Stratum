@@ -25,11 +25,11 @@ func NewModelService(catalog port.ModelCatalog) *ModelService {
 // tenant. It delegates to the underlying ModelRegistry which queries
 // the tenant's enabled models. Returned slices are never nil.
 func (s *ModelService) CatalogueWithTenant(ctx context.Context, tenantID string) (chat, embedding []string) {
-	chat, err := s.catalog.ListChatModelsByTenant(ctx, tenantID)
+	chat, err := s.catalog.ListChatModelsByTenant(ctx)
 	if err != nil || chat == nil {
 		chat = []string{}
 	}
-	embedding, err = s.catalog.ListEmbeddingModelsByTenant(ctx, tenantID)
+	embedding, err = s.catalog.ListEmbeddingModelsByTenant(ctx)
 	if err != nil || embedding == nil {
 		embedding = []string{}
 	}

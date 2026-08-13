@@ -403,6 +403,17 @@ func gatewayFixture(chat infrastructure.ChatProtocol, embed infrastructure.Embed
 	return infrastructure.NewGateway(reg, chatProtos, embedProtos).WithMetrics(spy), spy, modelRepo
 }
 
+// gatewayFixtureEmpty 构造空模型/空 provider 目录，用于解析链 ⑤ fail-closed
+// 路径（显式 model 未命中且 ②③④ 均无兜底）。
+func gatewayFixtureEmpty() (*infrastructure.Gateway, *llmMetricsSpy, *mockModelRepo) {
+	chatProtos := map[domain.ProviderKind]infrastructure.ChatProtocol{domain.ProviderOpenAICompat: &successChatProto{}}
+	embedProtos := map[domain.ProviderKind]infrastructure.EmbedProtocol{domain.ProviderOpenAICompat: &successEmbedProto{}}
+	modelRepo := &mockModelRepo{}
+	reg := infrastructure.NewModelRegistry(modelRepo, &mockProviderRepo{}, chatProtos, embedProtos, 5*time.Minute)
+	spy := &llmMetricsSpy{}
+	return infrastructure.NewGateway(reg, chatProtos, embedProtos).WithMetrics(spy), spy, modelRepo
+}
+
 func TestGatewayComplete_success(t *testing.T) {
 	gateway, _, _ := gatewayFixture(successChatProto{}, successEmbedProto{})
 	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
@@ -414,7 +425,8 @@ func TestGatewayComplete_success(t *testing.T) {
 }
 
 func TestGatewayComplete_resolveFails(t *testing.T) {
-	gateway, _, _ := gatewayFixture(successChatProto{}, successEmbedProto{})
+	// 空目录：5 级解析链 ②③ 无兜底，⑤ fail-closed。
+	gateway, _, _ := gatewayFixtureEmpty()
 	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
 
 	_, err := gateway.Complete(ctx, &infrastructure.CompletionRequest{Model: "nope"})
@@ -464,7 +476,8 @@ func TestGatewayCompleteStream_recordsTTFTOnce(t *testing.T) {
 }
 
 func TestGatewayCompleteStream_resolveFails(t *testing.T) {
-	gateway, spy, _ := gatewayFixture(successChatProto{}, successEmbedProto{})
+	// 空目录：5 级解析链 ②③ 无兜底，⑤ fail-closed。
+	gateway, spy, _ := gatewayFixtureEmpty()
 	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
 
 	_, err := gateway.CompleteStream(ctx, &infrastructure.CompletionRequest{Model: "nope"}, func(string) {})
@@ -482,7 +495,8 @@ func TestGatewayCreateEmbeddings_success(t *testing.T) {
 }
 
 func TestGatewayCreateEmbeddings_resolveFails(t *testing.T) {
-	gateway, _, _ := gatewayFixture(successChatProto{}, successEmbedProto{})
+	// 空目录：embedding 链 ④ 无可用模型，⑤ fail-closed。
+	gateway, _, _ := gatewayFixtureEmpty()
 	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
 
 	_, err := gateway.CreateEmbeddings(ctx, &infrastructure.EmbeddingRequest{Model: "nope"})
@@ -512,7 +526,7 @@ func TestGatewayListChatModelsByTenant(t *testing.T) {
 	gateway, _, _ := gatewayFixture(successChatProto{}, successEmbedProto{})
 	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
 
-	names, err := gateway.ListChatModelsByTenant(ctx, "test-tenant")
+	names, err := gateway.ListChatModelsByTenant(ctx)
 	require.NoError(t, err)
 	require.Equal(t, []string{"qwen-turbo"}, names)
 }
@@ -521,7 +535,7 @@ func TestGatewayListEmbeddingModelsByTenant(t *testing.T) {
 	gateway, _, _ := gatewayFixture(successChatProto{}, successEmbedProto{})
 	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
 
-	names, err := gateway.ListEmbeddingModelsByTenant(ctx, "test-tenant")
+	names, err := gateway.ListEmbeddingModelsByTenant(ctx)
 	require.NoError(t, err)
 	require.Equal(t, []string{"text-embed"}, names)
 }
@@ -531,9 +545,9 @@ func TestGatewayListModelsByTenant_repoFails(t *testing.T) {
 	modelRepo.err = errors.New("db down")
 	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
 
-	_, err := gateway.ListChatModelsByTenant(ctx, "test-tenant")
+	_, err := gateway.ListChatModelsByTenant(ctx)
 	require.ErrorContains(t, err, "list models")
-	_, err = gateway.ListEmbeddingModelsByTenant(ctx, "test-tenant")
+	_, err = gateway.ListEmbeddingModelsByTenant(ctx)
 	require.ErrorContains(t, err, "list models")
 }
 

@@ -203,11 +203,11 @@ func TestProviderService_Create_HappyPath(t *testing.T) {
 }
 
 type providerInvalidator struct {
-	tenants []string
+	calls int
 }
 
-func (i *providerInvalidator) Invalidate(tenantID string) {
-	i.tenants = append(i.tenants, tenantID)
+func (i *providerInvalidator) Invalidate() {
+	i.calls++
 }
 
 func TestProviderServiceInvalidatesRegistryAfterUpdate(t *testing.T) {
@@ -222,8 +222,8 @@ func TestProviderServiceInvalidatesRegistryAfterUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if len(invalidator.tenants) != 1 || invalidator.tenants[0] != "tenant-1" {
-		t.Fatalf("invalidations = %v", invalidator.tenants)
+	if invalidator.calls != 1 {
+		t.Fatalf("invalidations = %d, want 1", invalidator.calls)
 	}
 }
 

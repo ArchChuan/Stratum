@@ -76,7 +76,7 @@ func (s *ProviderService) Create(ctx context.Context, tenantID string, input Cre
 	if err := s.repo.Create(ctx, p); err != nil {
 		return nil, fmt.Errorf("provider service: create: %w", err)
 	}
-	s.invalidate(tenantID)
+	s.invalidate()
 	// Best-effort model discovery — log but never fail the create operation.
 	_, _ = s.DiscoverModels(ctx, tenantID, p.ID)
 	return p, nil
@@ -111,7 +111,7 @@ func (s *ProviderService) Update(ctx context.Context, tenantID string, input Upd
 	if err := s.repo.Update(ctx, existing); err != nil {
 		return nil, fmt.Errorf("provider service: update: %w", err)
 	}
-	s.invalidate(tenantID)
+	s.invalidate()
 	return existing, nil
 }
 
@@ -120,7 +120,7 @@ func (s *ProviderService) Delete(ctx context.Context, tenantID, id string) error
 	if err := s.repo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("provider service: delete: %w", err)
 	}
-	s.invalidate(tenantID)
+	s.invalidate()
 	return nil
 }
 
@@ -157,13 +157,13 @@ func (s *ProviderService) DiscoverModels(ctx context.Context, tenantID, provider
 	if err != nil {
 		return nil, err
 	}
-	s.invalidate(tenantID)
+	s.invalidate()
 	return upserted, nil
 }
 
-func (s *ProviderService) invalidate(tenantID string) {
+func (s *ProviderService) invalidate() {
 	if s.invalidator != nil {
-		s.invalidator.Invalidate(tenantID)
+		s.invalidator.Invalidate()
 	}
 }
 

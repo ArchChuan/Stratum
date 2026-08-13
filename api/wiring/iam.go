@@ -10,8 +10,22 @@ import (
 	"github.com/byteBuilderX/stratum/internal/iam/infrastructure/hermes"
 	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
 	knowledgepersistence "github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/persistence"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 )
+
+// tenantModelCacheInvalidator adapts the global ModelRegistry to IAM's
+// tenant-keyed cache invalidator. providers/models 已提升为 public 全局目录，
+// 租户删除不改动全局解析状态；仍全量刷新以防陈旧 provider 配置残留。
+type tenantModelCacheInvalidator struct {
+	registry *llmgateway.ModelRegistry
+}
+
+func (t tenantModelCacheInvalidator) Invalidate(_ string) {
+	if t.registry != nil {
+		t.registry.Invalidate()
+	}
+}
 
 // BuildHermesFuncs returns start/stop/healthCheck closures for the NATS
 // hermes component. It reuses the platform-wide NATS connection from
@@ -76,7 +90,7 @@ func (c *Container) buildIAM(_ context.Context) error {
 		opts := []application.AdminServiceOption{
 			application.WithSchemaCleaner(iampersistence.NewTenantSchemaCleaner(db)),
 			application.WithAdminLogger(c.Logger),
-			application.WithCacheInvalidator(c.Platform.ModelRegistry),
+			application.WithCacheInvalidator(tenantModelCacheInvalidator{c.Platform.ModelRegistry}),
 		}
 		if c.Storage != nil && c.Storage.Milvus != nil {
 			opts = append(opts, application.WithVectorCleaner(

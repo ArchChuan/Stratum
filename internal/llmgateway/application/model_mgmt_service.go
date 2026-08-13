@@ -27,9 +27,11 @@ type ModelMgmtService struct {
 	invalidator ModelCacheInvalidator
 }
 
-// ModelCacheInvalidator evicts tenant-scoped runtime model resolutions after management changes.
+// ModelCacheInvalidator evicts the global runtime model resolution cache
+// after management changes. providers/models 已提升为 public 全局目录，
+// 缓存不再区分租户维度，变更后全量失效。
 type ModelCacheInvalidator interface {
-	Invalidate(tenantID string)
+	Invalidate()
 }
 
 // NewModelMgmtService returns a ModelMgmtService wired with the given repo.
@@ -67,7 +69,7 @@ func (s *ModelMgmtService) Update(ctx context.Context, tenantID string, input Up
 	if err := s.repo.Update(ctx, m); err != nil {
 		return nil, fmt.Errorf("model mgmt: update: %w", err)
 	}
-	s.invalidate(tenantID)
+	s.invalidate()
 	return m, nil
 }
 
@@ -76,7 +78,7 @@ func (s *ModelMgmtService) Toggle(ctx context.Context, tenantID, id string, enab
 	if err := s.repo.Toggle(ctx, id, enabled); err != nil {
 		return err
 	}
-	s.invalidate(tenantID)
+	s.invalidate()
 	return nil
 }
 
@@ -96,7 +98,7 @@ func (s *ModelMgmtService) SetDefaultEmbedding(ctx context.Context, tenantID, id
 	if err := s.repo.SetDefaultEmbedding(ctx, id, enabled); err != nil {
 		return err
 	}
-	s.invalidate(tenantID)
+	s.invalidate()
 	return nil
 }
 
@@ -114,12 +116,12 @@ func (s *ModelMgmtService) Delete(ctx context.Context, tenantID, id string) erro
 	if err := s.repo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("model mgmt: delete: %w", err)
 	}
-	s.invalidate(tenantID)
+	s.invalidate()
 	return nil
 }
 
-func (s *ModelMgmtService) invalidate(tenantID string) {
+func (s *ModelMgmtService) invalidate() {
 	if s.invalidator != nil {
-		s.invalidator.Invalidate(tenantID)
+		s.invalidator.Invalidate()
 	}
 }
