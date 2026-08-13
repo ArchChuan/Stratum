@@ -79,6 +79,7 @@ describe('buildMenuItems', () => {
     }));
     render(<div>{memberLabels.map((label, index) => <div key={index}>{label}</div>)}</div>);
     expect(screen.queryByText('平台管理')).not.toBeInTheDocument();
+    expect(screen.queryByText('模型管理')).not.toBeInTheDocument();
     expect(screen.queryByText('提示词管理')).not.toBeInTheDocument();
     expect(screen.queryByText('审计日志')).not.toBeInTheDocument();
     expect(screen.queryByText('模型档案')).not.toBeInTheDocument();
@@ -96,6 +97,7 @@ describe('buildMenuItems', () => {
     }));
     render(<div>{labels.map((label, index) => <div key={index}>{label}</div>)}</div>);
     expect(screen.getByText('平台管理')).toBeInTheDocument();
+    expect(screen.getByText('模型管理')).toBeInTheDocument();
     expect(screen.getByText('提示词管理')).toBeInTheDocument();
     expect(screen.getByText('审计日志')).toBeInTheDocument();
     expect(screen.getByText('模型档案')).toBeInTheDocument();
@@ -114,6 +116,7 @@ describe('buildMenuItems', () => {
   });
 
   it('resolves platform admin paths to the merged open-key group', () => {
+    expect(resolveOpenKeys('/models')).toEqual(['platform-admin-group']);
     expect(resolveOpenKeys('/prompts')).toEqual(['platform-admin-group']);
     expect(resolveOpenKeys('/audit')).toEqual(['platform-admin-group']);
     expect(resolveOpenKeys('/mechanism/profiles')).toEqual(['platform-admin-group']);
