@@ -143,6 +143,14 @@ Pod 与日志，再查组件注册是否被配置关闭；恢复后时间戳刷�
 影响：DLQ 大量堆积；紧急度：critical。立即升级 Memory owner；确认消费链路与存储可用性，
 受控处理积压（保留审计），恢复后 DLQ 计数回落。
 
+<a id="memory-embed-unavailable"></a>
+
+## StratumMemoryEmbedUnavailable
+
+影响：租户无可用嵌入模型，记忆写入持续进入 DLQ；紧急度：warning。查询
+`increase(memory_embed_unavailable_total[15m])`。按 tenant_id 检查嵌入模型配置与 provider 连通性，
+修复后确认计数停止增长。
+
 <a id="memory-worker-panics"></a>
 
 ## StratumMemoryWorkerPanics
