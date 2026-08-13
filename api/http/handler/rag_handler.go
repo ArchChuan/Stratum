@@ -241,12 +241,13 @@ func (h *RAGHandler) ListWorkspaces(c *gin.Context) {
 	out := make([]gen.WorkspaceListItem, 0, len(list))
 	for _, ws := range list {
 		item := gen.WorkspaceListItem{
-			ID:          ws.ID,
-			Name:        ws.Name,
-			Description: ws.Description,
-			Config:      toDTOConfig(ws.Config),
-			CreatedAt:   ws.CreatedAt,
-			UpdatedAt:   ws.UpdatedAt,
+			ID:             ws.ID,
+			Name:           ws.Name,
+			Description:    ws.Description,
+			Config:         toDTOConfig(ws.Config),
+			CreatedAt:      ws.CreatedAt,
+			UpdatedAt:      ws.UpdatedAt,
+			ManagementMode: ws.ManagementMode,
 		}
 		editors, listErr := h.wsService.ListEditors(c.Request.Context(), tenantID, ws.ID)
 		if listErr != nil {

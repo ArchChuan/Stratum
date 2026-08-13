@@ -50,7 +50,7 @@ func TestVersionServiceGetWorkspacePrefersDraft(t *testing.T) {
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
-	view, err := svc.GetWorkspace(context.Background(), "s1")
+	view, err := svc.GetWorkspace(context.Background(), "s1", "owner-1")
 	require.NoError(t, err)
 	assert.Equal(t, "s1", view.Skill.ID)
 	assert.Equal(t, domain.VersionStatusDraft, view.Draft.Status)
@@ -63,7 +63,7 @@ func TestVersionServiceGetWorkspaceFallsBackToActive(t *testing.T) {
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
-	view, err := svc.GetWorkspace(context.Background(), "s1")
+	view, err := svc.GetWorkspace(context.Background(), "s1", "owner-1")
 	require.NoError(t, err)
 	assert.Equal(t, domain.VersionStatusPublished, view.Draft.Status)
 }
@@ -72,7 +72,7 @@ func TestVersionServiceGetWorkspaceMissingSkill(t *testing.T) {
 	repo := newFakeVersionRepo()
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-	_, err := svc.GetWorkspace(context.Background(), "ghost")
+	_, err := svc.GetWorkspace(context.Background(), "ghost", "owner-1")
 	assert.ErrorIs(t, err, domain.ErrSkillNotFound)
 }
 
@@ -82,7 +82,7 @@ func TestVersionServiceGetWorkspaceNoActiveEither(t *testing.T) {
 	repo.skills["s1"] = port.SkillProductRow{ID: "s1"}
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-	_, err := svc.GetWorkspace(context.Background(), "s1")
+	_, err := svc.GetWorkspace(context.Background(), "s1", "owner-1")
 	assert.ErrorIs(t, err, domain.ErrSkillNotFound)
 }
 

@@ -35,6 +35,9 @@ func (m *secretTestManager) GetAllServerInfo(context.Context) []*domain.ServerIn
 func (m *secretTestManager) GetServerConfig(context.Context, string) (*domain.ServerConfig, error) {
 	return m.stored, nil
 }
+func (m *secretTestManager) ListPlatformManagedServerIDs(context.Context) ([]string, error) {
+	return nil, nil
+}
 func (m *secretTestManager) UpdateServer(_ context.Context, cfg *domain.ServerConfig, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	m.updated = cfg
 	return nil

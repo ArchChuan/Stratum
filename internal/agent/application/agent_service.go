@@ -77,8 +77,11 @@ type AgentServiceDeps struct {
 	OperationGate             port.OperationGate
 	TenantRoleResolver        port.TenantRoleResolver
 	WorkspaceBindingValidator port.WorkspaceBindingValidator
-	ParametersProvider        port.ParametersProvider
-	Logger                    *zap.Logger
+	// SystemResourceGuard 判定 MCP server 是否平台托管(写路径 A2 + 运行时净化 C)。
+	// 由 wiring 注入 TTL 缓存适配器;nil 时对非空 MCP 绑定 fail closed。
+	SystemResourceGuard port.SystemResourceGuard
+	ParametersProvider  port.ParametersProvider
+	Logger              *zap.Logger
 }
 
 // AgentService aggregates agent CRUD + Execute/ExecuteStream and shields
@@ -319,6 +322,9 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 	}
 
 	if err := s.validateWorkspaceBindings(ctx, in.TenantID, in.KnowledgeWorkspaceIDs); err != nil {
+		return AgentDTO{}, err
+	}
+	if err := s.validateSystemBindings(ctx, in.TenantID, in.AllowedSkills, in.MCPToolIDs); err != nil {
 		return AgentDTO{}, err
 	}
 	a := NewBaseAgent(cfg, s.deps.Logger)
@@ -710,6 +716,9 @@ func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in Upda
 	if err := s.validateWorkspaceBindings(ctx, reqctx.TenantIDFromContext(ctx), in.KnowledgeWorkspaceIDs); err != nil {
 		return nil, err
 	}
+	if err := s.validateSystemBindings(ctx, reqctx.TenantIDFromContext(ctx), in.AllowedSkills, in.MCPToolIDs); err != nil {
+		return nil, err
+	}
 	return cfg, nil
 }
 
@@ -725,6 +734,192 @@ func (s *AgentService) validateWorkspaceBindings(ctx context.Context, tenantID s
 		return fmt.Errorf("agent: workspace binding validation unavailable (validator not wired)")
 	}
 	return s.deps.WorkspaceBindingValidator.ValidateWorkspaceBindings(ctx, tenantID, workspaceIDs)
+}
+
+// validateSystemBindings 拒绝把系统内置资源挂载到普通 agent(写路径 fail closed)。
+// skill 按 builtin: 前缀直接判;MCP tool id 形如 mcp:<server>:<tool>,命中平台托管
+// server 即拒绝。畸形/空段 id(如 mcp::tool)维持现状不 reject 且显式跳过 guard
+// 查询,避免空段无法命中平台 server 却触发意外 DB 失败路径。workspace 已由
+// validateWorkspaceBindings 内部校验 platform_managed 覆盖,不在此重复。系统助手
+// (SystemKey != "")更新走 updateSystemAssistant,不经 Create/buildUpdateConfig,
+// 本校验天然不拦系统助手挂载。
+func (s *AgentService) validateSystemBindings(ctx context.Context, tenantID string, skills, mcpToolIDs []string) error {
+	if err := rejectBuiltinSkillBindings(skills); err != nil {
+		return err
+	}
+	return rejectPlatformMCPServerBindings(ctx, tenantID, mcpToolIDs, s.deps.SystemResourceGuard)
+}
+
+// rejectBuiltinSkillBindings rejects any builtin: skill id in the requested
+// mount set (platform-seeded skills are system-assistant only).
+func rejectBuiltinSkillBindings(skills []string) error {
+	for _, id := range skills {
+		if strings.HasPrefix(id, "builtin:") {
+			return fmt.Errorf("agent: skill %q is platform-managed and cannot be bound: %w", id, domain.ErrPlatformManagedSkillBinding)
+		}
+	}
+	return nil
+}
+
+// rejectPlatformMCPServerBindings rejects MCP tools whose mcp:<server>:<tool>
+// server is platform-managed. Malformed/empty-segment ids (e.g. mcp::tool) are
+// kept as-is (they cannot target a platform server) and skip the guard query.
+// A nil guard fails closed when non-empty bindings are present.
+func rejectPlatformMCPServerBindings(ctx context.Context, tenantID string, mcpToolIDs []string, guard port.SystemResourceGuard) error {
+	if guard == nil {
+		if len(mcpToolIDs) == 0 {
+			return nil
+		}
+		return fmt.Errorf("agent: MCP binding validation unavailable (system resource guard not wired)")
+	}
+	for _, toolID := range mcpToolIDs {
+		parts := strings.Split(toolID, ":")
+		if len(parts) != 3 || parts[0] != "mcp" || parts[1] == "" || parts[2] == "" {
+			continue
+		}
+		managed, err := guard.IsPlatformManagedMCPServer(ctx, tenantID, parts[1])
+		if err != nil {
+			return fmt.Errorf("agent: MCP binding validation for server %q: %w", parts[1], err)
+		}
+		if managed {
+			return fmt.Errorf("agent: MCP server %q is platform-managed and cannot be bound: %w", parts[1], domain.ErrPlatformManagedMCPServerBinding)
+		}
+	}
+	return nil
+}
+
+// sanitizeRuntimeBindings 对非系统 agent 在装配前清除平台内置资源绑定
+// (in-place mutate AgentConfig)。BaseAgent 内嵌 *AgentConfig,本方法在
+// application 包内可直接持 a.mu 锁 mutate —— 与 snapshotExecutionConfig
+// (:349 读 KnowledgeWorkspaceNames/Descriptions)共用同一把锁串行,并发
+// Execute 无数据竞争;mutate 必达 snapshot 及 assembleOptions 内全部读点
+// (buildExtraToolsChecked / knowledgeAssignments / ToolExecutionFn 闭包 /
+// RAG gate),隔离无需额外接线。
+//
+// 返回被剔除的 platform workspace name 集,供 RAG 闭包再交集(E4 兜底,防
+// mutate 漏掉的任何路径仍被实时检索)。零绑定 agent 短路,不发批量查询;
+// guard 为 nil 或批量查询失败且无缓存时 fail closed(禁止默认放行)。
+func (s *AgentService) sanitizeRuntimeBindings(
+	ctx context.Context, tenantID string, a Agent,
+) ([]string, error) {
+	cfg := a.GetConfig()
+	if len(cfg.AllowedSkills) == 0 && len(cfg.MCPToolIDs) == 0 && len(cfg.KnowledgeWorkspaceIDs) == 0 {
+		return nil, nil
+	}
+	if s.deps.SystemResourceGuard == nil {
+		return nil, fmt.Errorf("agent: runtime binding sanitization unavailable (system resource guard not wired)")
+	}
+	platformMCP, err := s.deps.SystemResourceGuard.PlatformManagedMCPServerIDs(ctx, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("agent: resolve platform mcp servers: %w", err)
+	}
+	platformWS, err := s.deps.SystemResourceGuard.PlatformManagedWorkspaceIDs(ctx, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("agent: resolve platform workspaces: %w", err)
+	}
+	platformMCPSet := toSet(platformMCP)
+	platformWSSet := toSet(platformWS)
+
+	var removedWSNames []string
+	apply := func(c *AgentConfig) {
+		changedSkills := false
+		c.AllowedSkills, changedSkills = filterBuiltinSkills(c.AllowedSkills)
+		changedTools := false
+		c.MCPToolIDs, changedTools = filterPlatformMCPTools(c.MCPToolIDs, platformMCPSet)
+		// KnowledgeWorkspaceIDs/Names/Descriptions 三组同序(agent_repo 同查询
+		// 填充),按索引同步剔除,否则只滤 IDs 会漏 search_knowledge enum。
+		changedWS := false
+		if len(c.KnowledgeWorkspaceIDs) > 0 {
+			changedWS = filterPlatformWorkspaces(c, platformWSSet, &removedWSNames)
+		}
+		if changedSkills || changedTools || changedWS {
+			s.deps.Logger.Warn("agent: runtime sanitized platform-managed bindings",
+				zap.String("agent_id", cfg.ID),
+				zap.String("tenant_id", tenantID))
+		}
+	}
+
+	if ba, ok := a.(*BaseAgent); ok {
+		ba.mu.Lock()
+		defer ba.mu.Unlock()
+		apply(ba.AgentConfig)
+	} else {
+		apply(cfg)
+	}
+	return removedWSNames, nil
+}
+
+// toSet converts an id list into a set for O(1) membership checks.
+func toSet(ids []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	return set
+}
+
+// filterBuiltinSkills drops builtin skills (ID prefix builtin:) in place,
+// reporting whether any row was removed.
+func filterBuiltinSkills(skills []string) ([]string, bool) {
+	kept := skills[:0]
+	changed := false
+	for _, id := range skills {
+		if strings.HasPrefix(id, "builtin:") {
+			changed = true
+			continue
+		}
+		kept = append(kept, id)
+	}
+	return kept, changed
+}
+
+// filterPlatformMCPTools drops MCP tools whose mcp:<server>:<tool> server is in
+// the platform set. Malformed/empty-segment ids (e.g. mcp::tool) are kept as-is
+// (they cannot target a platform server), matching the write-path guard.
+func filterPlatformMCPTools(tools []string, platformMCPSet map[string]struct{}) ([]string, bool) {
+	kept := tools[:0]
+	changed := false
+	for _, toolID := range tools {
+		parts := strings.Split(toolID, ":")
+		if len(parts) == 3 && parts[0] == "mcp" && parts[1] != "" && parts[2] != "" {
+			if _, hit := platformMCPSet[parts[1]]; hit {
+				changed = true
+				continue
+			}
+		}
+		kept = append(kept, toolID)
+	}
+	return kept, changed
+}
+
+// filterPlatformWorkspaces drops platform-managed workspaces from the three
+// parallel slices (IDs/Names/Descriptions share index order, filled by the same
+// repo query), collecting removed names for the RAG closure re-intersection.
+func filterPlatformWorkspaces(c *AgentConfig, platformWSSet map[string]struct{}, removedWSNames *[]string) bool {
+	keptIDs := c.KnowledgeWorkspaceIDs[:0]
+	keptNames := c.KnowledgeWorkspaceNames[:0]
+	keptDescs := c.KnowledgeWorkspaceDescriptions[:0]
+	changed := false
+	for index, id := range c.KnowledgeWorkspaceIDs {
+		if _, hit := platformWSSet[id]; hit {
+			changed = true
+			if index < len(c.KnowledgeWorkspaceNames) {
+				*removedWSNames = append(*removedWSNames, c.KnowledgeWorkspaceNames[index])
+			}
+			continue
+		}
+		keptIDs = append(keptIDs, id)
+		if index < len(c.KnowledgeWorkspaceNames) {
+			keptNames = append(keptNames, c.KnowledgeWorkspaceNames[index])
+		}
+		if index < len(c.KnowledgeWorkspaceDescriptions) {
+			keptDescs = append(keptDescs, c.KnowledgeWorkspaceDescriptions[index])
+		}
+	}
+	c.KnowledgeWorkspaceIDs = keptIDs
+	c.KnowledgeWorkspaceNames = keptNames
+	c.KnowledgeWorkspaceDescriptions = keptDescs
+	return changed
 }
 
 // applyParameterOverrides merges the declared parameters map onto the
@@ -1793,6 +1988,18 @@ func (s *AgentService) assembleOptions(
 			return ctx, nil, fmt.Errorf("assemble system assistant model: %w", err)
 		}
 	}
+	// 平台内置资源仅系统助手可挂载:普通 agent 在装配前清除 builtin 技能、
+	// platform MCP server 工具与 platform workspace 绑定(in-place mutate
+	// AgentConfig,与 snapshotExecutionConfig 同锁串行,覆盖下方全部读点)。
+	// 返回被剔除的 workspace name 集,供 RAG 闭包再交集。系统助手保留全部。
+	var removedWSNames []string
+	if !isSystemAssistant {
+		var sanitizeErr error
+		removedWSNames, sanitizeErr = s.sanitizeRuntimeBindings(ctx, meta.TenantID, a)
+		if sanitizeErr != nil {
+			return ctx, nil, sanitizeErr
+		}
+	}
 	if s.deps.TenantResolver != nil {
 		if capGW, ok := s.deps.TenantResolver.Resolve(ctx, meta.TenantID); ok {
 			ctx = s.deps.TenantResolver.InjectCompleter(ctx, meta.TenantID)
@@ -1840,24 +2047,14 @@ func (s *AgentService) assembleOptions(
 	var skillCatalog map[string]port.SkillActivation
 	mcpAssignments := make(map[string]port.MCPRevisionAssignment)
 	knowledgeAssignments := make(map[string]port.KnowledgeRevisionAssignment)
-	roleClass := "unknown"
+	var roleClass string
 	var authorization domain.DiagnosticAuthorization
-	if isSystemAssistant {
-		var toolingErr error
-		extraTools, skillCatalog, roleClass, toolingErr = s.resolveSystemAssistantTooling(
-			ctx, meta, req, a, subjectID, &authorization,
-		)
-		if toolingErr != nil {
-			return ctx, nil, toolingErr
-		}
-	} else {
-		var resolveErr error
-		extraTools, skillCatalog, resolveErr = s.buildExtraToolsChecked(
-			ctx, meta.TenantID, subjectID, a.GetConfig().MCPToolIDs, a.GetConfig().AllowedSkills,
-		)
-		if resolveErr != nil {
-			return ctx, nil, fmt.Errorf("resolve experiment resources: %w", resolveErr)
-		}
+	var toolingErr error
+	extraTools, skillCatalog, roleClass, toolingErr = s.resolveTooling(
+		ctx, meta, req, a, subjectID, isSystemAssistant, &authorization,
+	)
+	if toolingErr != nil {
+		return ctx, nil, toolingErr
 	}
 	evolutionTrace := meta.EvolutionTrace
 	if evolutionTrace.ResourceManifest == nil {
@@ -2025,7 +2222,7 @@ func (s *AgentService) assembleOptions(
 		}))
 	}
 	if s.deps.RAGSearch != nil && len(a.GetConfig().KnowledgeWorkspaceIDs) > 0 {
-		options = appendRAGSearchOptions(options, meta.TenantID, s.deps.RAGSearch, knowledgeAssignments)
+		options = appendRAGSearchOptions(options, meta.TenantID, s.deps.RAGSearch, knowledgeAssignments, removedWSNames)
 	}
 	// 普通 agent 同样装配内部工具结果 guard：RAG/recall 工具结果的
 	// <untrusted_tool_result> 标记依赖 InternalToolResultGuardFn，漏装配会让
@@ -2037,17 +2234,28 @@ func (s *AgentService) assembleOptions(
 // appendRAGSearchOptions wires the plain and (when supported) evidence-capable
 // knowledge search variants. Both share the revision/mutable split: revision
 // snapshots contribute content only, mutable workspaces fan out through the
-// live search provider.
+// live search provider. platformWorkspaces (runtime-sanitized platform-managed
+// workspace names) are intersected out of mutable as a last-resort guard so a
+// platform workspace can never reach the live search provider even if some
+// path bypassed the assembly-time sanitize.
 func appendRAGSearchOptions(
 	options []ExecutionOption,
 	tenantID string,
 	search port.RAGSearchProvider,
 	knowledgeAssignments map[string]port.KnowledgeRevisionAssignment,
+	platformWorkspaces []string,
 ) []ExecutionOption {
+	platformSet := make(map[string]struct{}, len(platformWorkspaces))
+	for _, workspace := range platformWorkspaces {
+		platformSet[workspace] = struct{}{}
+	}
 	options = append(options, WithRAGSearchFn(func(rctx context.Context, workspaces []string, query string, topK int, viewerID string) (string, error) {
 		var combined strings.Builder
 		mutable := make([]string, 0, len(workspaces))
 		for _, workspace := range workspaces {
+			if _, hit := platformSet[workspace]; hit {
+				continue
+			}
 			assignment, found := knowledgeAssignments[workspace]
 			if !found {
 				mutable = append(mutable, workspace)
@@ -2072,7 +2280,7 @@ func appendRAGSearchOptions(
 		}
 		return combined.String(), nil
 	}))
-	return appendEvidenceRAGOption(options, search, tenantID, knowledgeAssignments)
+	return appendEvidenceRAGOption(options, search, tenantID, knowledgeAssignments, platformWorkspaces)
 }
 
 // appendEvidenceRAGOption wires the evidence-capable search variant when the
@@ -2080,21 +2288,31 @@ func appendRAGSearchOptions(
 // the plain variant; revision snapshots have no provenance path, so they
 // contribute content only. The options slice is returned unchanged when the
 // provider lacks evidence support (existing behavior preserved).
+// platformWorkspaces are intersected out of mutable (same guard as the plain
+// variant, see appendRAGSearchOptions).
 func appendEvidenceRAGOption(
 	options []ExecutionOption,
 	search port.RAGSearchProvider,
 	tenantID string,
 	knowledgeAssignments map[string]port.KnowledgeRevisionAssignment,
+	platformWorkspaces []string,
 ) []ExecutionOption {
 	evidenceProvider, ok := search.(port.RAGSearchEvidenceProvider)
 	if !ok {
 		return options
+	}
+	platformSet := make(map[string]struct{}, len(platformWorkspaces))
+	for _, workspace := range platformWorkspaces {
+		platformSet[workspace] = struct{}{}
 	}
 	return append(options, WithRAGSearchFnWithEvidence(func(rctx context.Context, workspaces []string, query string, topK int, viewerID string) (port.RAGSearchEvidence, error) {
 		var combined strings.Builder
 		var sources []port.RAGSearchSource
 		mutable := make([]string, 0, len(workspaces))
 		for _, workspace := range workspaces {
+			if _, hit := platformSet[workspace]; hit {
+				continue
+			}
 			assignment, found := knowledgeAssignments[workspace]
 			if !found {
 				mutable = append(mutable, workspace)
@@ -2120,6 +2338,26 @@ func appendEvidenceRAGOption(
 		}
 		return port.RAGSearchEvidence{Content: combined.String(), Sources: sources}, nil
 	}))
+}
+
+// resolveTooling resolves the skill/tool catalog for an agent: the system
+// assistant profile for system agents (populating authorization), or the
+// per-tenant buildExtraToolsChecked for ordinary agents. This mirrors the
+// isSystemAssistant branch of assembleOptions so the branch count stays flat.
+func (s *AgentService) resolveTooling(
+	ctx context.Context, meta ExecMeta, req ExecRequest, a Agent, subjectID string, isSystemAssistant bool,
+	authorization *domain.DiagnosticAuthorization,
+) (extraTools []port.ToolDefinition, skillCatalog map[string]port.SkillActivation, roleClass string, err error) {
+	if isSystemAssistant {
+		return s.resolveSystemAssistantTooling(ctx, meta, req, a, subjectID, authorization)
+	}
+	extraTools, skillCatalog, err = s.buildExtraToolsChecked(
+		ctx, meta.TenantID, subjectID, a.GetConfig().MCPToolIDs, a.GetConfig().AllowedSkills,
+	)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("resolve experiment resources: %w", err)
+	}
+	return extraTools, skillCatalog, "unknown", nil
 }
 
 // resolveEffectiveParameters merges platform defaults into the execution

@@ -128,7 +128,7 @@ describe('responsive page contracts', () => {
         />
         <SkillCard
           canManage
-          skill={{ id: 'skill-1', name: 'Skill', description: '', status: 'published' }}
+          skill={{ id: 'skill-1', name: 'Skill', description: '', status: 'published', isSystem: false }}
           onEdit={vi.fn()}
           onDelete={vi.fn()}
         />
