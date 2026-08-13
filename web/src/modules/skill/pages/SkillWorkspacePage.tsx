@@ -100,8 +100,8 @@ export const SkillWorkspacePage = () => {
       }), '激活契约已保存')}>
         <Form.Item label="激活名称" name="name" rules={[{ required: true }]}><Input /></Form.Item>
         <Form.Item label="用途说明" name="description" rules={[{ required: true }]}><TextArea rows={3} /></Form.Item>
-        <Form.Item label="输入 Schema" name="inputSchemaJson" rules={[{ required: true }]}><TextArea rows={6} /></Form.Item>
-        <Form.Item label="输出 Schema" name="outputSchemaJson" rules={[{ required: true }]}><TextArea rows={6} /></Form.Item>
+        <Form.Item label="输入 Schema" name="inputSchemaJson" extra="可选，对齐外部 skill 范式（仅 name+description 必填）"><TextArea rows={6} /></Form.Item>
+        <Form.Item label="输出 Schema" name="outputSchemaJson" extra="可选，不填自动按空对象处理"><TextArea rows={6} /></Form.Item>
         <Form.Item label="确认契约" name="confirmed" valuePropName="checked"><Switch /></Form.Item>
         {canEdit && <ActionRow><Button type="primary" htmlType="submit" loading={saving === 'activation'}>保存激活契约</Button></ActionRow>}
       </Form> },
@@ -109,9 +109,9 @@ export const SkillWorkspacePage = () => {
         instructions: v.instructions, requirements: { mcpToolIds: lines(v.mcpToolIDs), knowledgeWorkspaceIds: lines(v.knowledgeWorkspaceIDs), memoryScopes: v.memoryScopes || [] },
       }), '指令与权限已保存')}>
         <Form.Item label="执行指令" name="instructions" rules={[{ required: true }]}><TextArea rows={10} /></Form.Item>
-        <Form.Item label="MCP 工具 ID" name="mcpToolIDs" extra="一行一个，格式 mcp:<server>:<tool>"><TextArea rows={4} /></Form.Item>
-        <Form.Item label="知识工作区 ID" name="knowledgeWorkspaceIDs"><TextArea rows={3} /></Form.Item>
-        <Form.Item label="记忆范围" name="memoryScopes"><Checkbox.Group options={[{ label: '当前会话', value: 'conversation' }, { label: '用户', value: 'user' }, { label: 'Agent', value: 'agent' }]} /></Form.Item>
+        <Form.Item label="MCP 工具 ID" name="mcpToolIDs" extra="声明性元数据，不再做运行时过滤；运行时工具面继承 agent 绑定"><TextArea rows={4} /></Form.Item>
+        <Form.Item label="知识工作区 ID" name="knowledgeWorkspaceIDs" extra="声明性元数据，运行时边界继承 agent 绑定"><TextArea rows={3} /></Form.Item>
+        <Form.Item label="记忆范围" name="memoryScopes" extra="声明性元数据，运行时边界继承 agent 绑定"><Checkbox.Group options={[{ label: '当前会话', value: 'conversation' }, { label: '用户', value: 'user' }, { label: 'Agent', value: 'agent' }]} /></Form.Item>
         {canEdit && <ActionRow><Button type="primary" htmlType="submit" loading={saving === 'instructions'}>保存指令与权限</Button></ActionRow>}
       </Form> },
       { key: 'editors', label: '可编辑人', children: (

@@ -2529,7 +2529,32 @@ func (s *AgentService) buildSkillCatalog(
 		catalog = resolved
 	}
 	applySkillAssignments(catalog, assignments)
+	if err := validateSkillCatalogNames(catalog); err != nil {
+		return nil, err
+	}
 	return catalog, nil
+}
+
+// validateSkillCatalogNames 校验绑定集合内 skill 解析名（contract Name 回退
+// SkillID）唯一且不命中平台内置工具保留名（Spec D1）。stratum_skill 统一工具
+// 按参数名分发，解析名歧义或与内置工具名冲突时 fail-closed，禁止静默截胡或
+// 双义定位。
+func validateSkillCatalogNames(catalog map[string]port.SkillActivation) error {
+	seen := make(map[string]string, len(catalog))
+	for skillID, a := range catalog {
+		name := a.Name
+		if name == "" {
+			name = skillID
+		}
+		if agentgraph.IsReservedToolName(name) {
+			return fmt.Errorf("skill %q: activation name %q collides with reserved platform tool name", skillID, name)
+		}
+		if other, exists := seen[name]; exists {
+			return fmt.Errorf("skill activation name %q collides between %q and %q", name, other, skillID)
+		}
+		seen[name] = skillID
+	}
+	return nil
 }
 
 func (s *AgentService) resolveSkillRevisionRefs(

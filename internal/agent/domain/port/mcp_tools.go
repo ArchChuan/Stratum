@@ -77,7 +77,6 @@ type ToolExecutionRequest struct {
 	Tool          ToolDefinition
 	Arguments     map[string]any
 	AgentToolIDs  []string
-	Actives       []SkillActivation
 	ApprovalID    string
 	PolicyVersion string
 	MCPRevisionID string

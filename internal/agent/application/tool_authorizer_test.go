@@ -28,7 +28,7 @@ func TestToolAuthorizerAllowsActiveMemberWithinAgentScope(t *testing.T) {
 
 	decision := authorizer.Authorize(context.Background(), ToolAuthorizationInput{
 		TenantID: "tenant-1", UserID: "user-1", AgentID: "agent-1", ToolID: "mcp:orders:get",
-		AgentAllowsTool: true, ActiveSkillAllows: true, PolicyResolved: true, RiskLevel: domain.ToolRiskRead,
+		AgentAllowsTool: true, PolicyResolved: true, RiskLevel: domain.ToolRiskRead,
 	})
 
 	require.Equal(t, domain.ToolAuthorizationAllow, decision.Effect)
@@ -46,7 +46,7 @@ func TestToolAuthorizerFailsClosedForUserScope(t *testing.T) {
 			name: "missing tenant context",
 			input: ToolAuthorizationInput{
 				UserID: "user-1", AgentID: "agent-1", ToolID: "mcp:orders:get",
-				AgentAllowsTool: true, ActiveSkillAllows: true, PolicyResolved: true, RiskLevel: domain.ToolRiskRead,
+				AgentAllowsTool: true, PolicyResolved: true, RiskLevel: domain.ToolRiskRead,
 			},
 			resolver: stubToolUserScopeResolver{scope: port.ToolUserScope{UserActive: true, AllowsTool: true}},
 			reason:   domain.ToolReasonTenantContextMissing,
@@ -55,7 +55,7 @@ func TestToolAuthorizerFailsClosedForUserScope(t *testing.T) {
 			name: "inactive user",
 			input: ToolAuthorizationInput{
 				TenantID: "tenant-1", UserID: "user-1", AgentID: "agent-1", ToolID: "mcp:orders:get",
-				AgentAllowsTool: true, ActiveSkillAllows: true, PolicyResolved: true, RiskLevel: domain.ToolRiskRead,
+				AgentAllowsTool: true, PolicyResolved: true, RiskLevel: domain.ToolRiskRead,
 			},
 			resolver: stubToolUserScopeResolver{scope: port.ToolUserScope{AllowsTool: true}},
 			reason:   domain.ToolReasonUserInactive,
@@ -64,7 +64,7 @@ func TestToolAuthorizerFailsClosedForUserScope(t *testing.T) {
 			name: "user policy denies",
 			input: ToolAuthorizationInput{
 				TenantID: "tenant-1", UserID: "user-1", AgentID: "agent-1", ToolID: "mcp:orders:get",
-				AgentAllowsTool: true, ActiveSkillAllows: true, PolicyResolved: true, RiskLevel: domain.ToolRiskRead,
+				AgentAllowsTool: true, PolicyResolved: true, RiskLevel: domain.ToolRiskRead,
 			},
 			resolver: stubToolUserScopeResolver{scope: port.ToolUserScope{UserActive: true}},
 			reason:   domain.ToolReasonUserPermissionDenied,
@@ -73,7 +73,7 @@ func TestToolAuthorizerFailsClosedForUserScope(t *testing.T) {
 			name: "resolver error",
 			input: ToolAuthorizationInput{
 				TenantID: "tenant-1", UserID: "user-1", AgentID: "agent-1", ToolID: "mcp:orders:get",
-				AgentAllowsTool: true, ActiveSkillAllows: true, PolicyResolved: true, RiskLevel: domain.ToolRiskRead,
+				AgentAllowsTool: true, PolicyResolved: true, RiskLevel: domain.ToolRiskRead,
 			},
 			resolver: stubToolUserScopeResolver{err: errors.New("iam unavailable")},
 			reason:   domain.ToolReasonPolicyLookupFailed,
@@ -97,7 +97,7 @@ func TestToolAuthorizerUserScopeCannotExpandAgentAllowlist(t *testing.T) {
 
 	decision := authorizer.Authorize(context.Background(), ToolAuthorizationInput{
 		TenantID: "tenant-1", UserID: "user-1", AgentID: "agent-1", ToolID: "mcp:orders:delete",
-		AgentAllowsTool: false, ActiveSkillAllows: true, PolicyResolved: true, RiskLevel: domain.ToolRiskRead,
+		AgentAllowsTool: false, PolicyResolved: true, RiskLevel: domain.ToolRiskRead,
 	})
 
 	require.Equal(t, domain.ToolAuthorizationDeny, decision.Effect)
@@ -125,7 +125,7 @@ func TestToolAuthorizerSystemAssistantStrictRiskModel(t *testing.T) {
 
 			decision := authorizer.Authorize(context.Background(), ToolAuthorizationInput{
 				TenantID: "tenant-1", UserID: "user-1", AgentID: domain.SystemAssistantID, ToolID: "mcp:orders:get",
-				AgentAllowsTool: true, ActiveSkillAllows: true, PolicyResolved: true, RiskLevel: tt.risk,
+				AgentAllowsTool: true, PolicyResolved: true, RiskLevel: tt.risk,
 			})
 
 			require.Equal(t, tt.effect, decision.Effect)
@@ -141,7 +141,7 @@ func TestToolAuthorizerSystemAssistantFailsClosedOnPolicyLookupFailure(t *testin
 
 	decision := authorizer.Authorize(context.Background(), ToolAuthorizationInput{
 		TenantID: "tenant-1", UserID: "user-1", AgentID: domain.SystemAssistantID, ToolID: "mcp:orders:get",
-		AgentAllowsTool: true, ActiveSkillAllows: true, PolicyResolved: true, RiskLevel: domain.ToolRiskRead,
+		AgentAllowsTool: true, PolicyResolved: true, RiskLevel: domain.ToolRiskRead,
 	})
 
 	require.Equal(t, domain.ToolAuthorizationDeny, decision.Effect)
@@ -155,7 +155,7 @@ func TestToolAuthorizerOrdinaryAgentModelUnchanged(t *testing.T) {
 
 	decision := authorizer.Authorize(context.Background(), ToolAuthorizationInput{
 		TenantID: "tenant-1", UserID: "user-1", AgentID: "agent-1", ToolID: "mcp:orders:create",
-		AgentAllowsTool: true, ActiveSkillAllows: true, PolicyResolved: true, RiskLevel: domain.ToolRiskWriteReversible,
+		AgentAllowsTool: true, PolicyResolved: true, RiskLevel: domain.ToolRiskWriteReversible,
 	})
 
 	require.Equal(t, domain.ToolAuthorizationAllow, decision.Effect)

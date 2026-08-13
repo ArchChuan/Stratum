@@ -99,7 +99,7 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 // 活动技能指令注入、上下文预算裁剪与循环内压缩，并更新 LastEstimatedTokens
 // 作为用量反馈循环的基线。返回 (tools, messages, toolTokens)。
 func prepareLLMRequest(ctx context.Context, s *ReActState) ([]port.ToolDefinition, []port.LLMMessage, int) {
-	tools := effectiveTools(s.AvailableTools, s.SkillCatalog, s.Actives, s.AgentKnowledgeWorkspaceIDs, s.AgentMemoryScope, s.GovernedAssistant)
+	tools := effectiveTools(s.AvailableTools, s.GovernedAssistant)
 	if s.PlanToolsDisabled {
 		tools = withoutPlanTools(tools)
 	}
@@ -124,6 +124,16 @@ func prepareLLMRequest(ctx context.Context, s *ReActState) ([]port.ToolDefinitio
 	// （角色权限建模的固定组成，schema 大、数量少），裁剪会造成角色能力
 	// 静默缺失（TestSystemAssistantDeterministicAgentLoopPersistsTypedArtifacts）。
 	if !s.GovernedAssistant {
+		// 两阶段截断（Spec D1）：阶段一先用当前 messages 估算工具 allowance，
+		// 阶段二按 allowance 构建 stratum_skill 描述并置于工具面首位——描述恒
+		// fit 门槛，该工具在 fitToolList 贪心打包中永不被整工具丢弃（杜绝"零
+		// skill 可激活"的静默失败）。最终步 tools==nil（禁止调用工具）时跳过。
+		allowance := toolAllowanceFor(messages, s.Budget.ToolsCap, protectedUsers, correction, safetyRatio)
+		if tools != nil {
+			if skillTool := buildSkillTool(s.SkillCatalog, s.Actives, allowance); skillTool != nil {
+				tools = append([]port.ToolDefinition{*skillTool}, tools...)
+			}
+		}
 		tools = fitToolsToContextBudget(tools, messages, s.Budget.ToolsCap, protectedUsers, correction, safetyRatio)
 	}
 	toolTokens := 0
@@ -499,12 +509,21 @@ func fitToolsToContextBudget(tools []port.ToolDefinition, messages []port.LLMMes
 	if budget <= 0 || len(tools) == 0 {
 		return tools
 	}
+	return fitToolList(tools, toolAllowanceFor(messages, budget, protectedUsers, correction, safetyRatio))
+}
+
+// toolAllowanceFor 估算本步工具可用的 token allowance（Spec D1 阶段一）：压缩
+// 阈值减去受保护消息（anchor 头 + 最近用户轮次）的估算占用，余量即工具配额。
+// budget <= 0 返回 0，配合 fitToolsToContextBudget 的早退分支表示预算未初始化。
+func toolAllowanceFor(messages []port.LLMMessage, budget, protectedUsers int, correction, safetyRatio float64) int {
+	if budget <= 0 {
+		return 0
+	}
 	threshold := compactionThreshold(budget, 0, correction, safetyRatio)
 	groups := groupMessages(messages)
 	protectedMessages := flatten(groups[:anchorCount(groups)])
 	protectedMessages = append(protectedMessages, protectedUserMessages(groups, protectedUsers)...)
-	toolAllowance := max(threshold-tokenutil.EstimateMessages(toEstimate(protectedMessages)), 0)
-	return fitToolList(tools, toolAllowance)
+	return max(threshold-tokenutil.EstimateMessages(toEstimate(protectedMessages)), 0)
 }
 
 // protectedUserMessages collects the most recent protected user turns (the

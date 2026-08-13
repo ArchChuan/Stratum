@@ -296,10 +296,10 @@ func (s *capGWSequence) Route(_ context.Context, req port.CapabilityRequest) (po
 	return s.infinite, nil
 }
 
-func TestBuildReActGraph_StacksInstructionsAndUnionsMCPTools(t *testing.T) {
+func TestBuildReActGraph_StacksInstructionsAndKeepsAgentToolSurface(t *testing.T) {
 	stub := &capGWSequence{responses: []port.CapabilityResponse{
-		{ToolCalls: []port.ToolCall{{ID: "activate-1", Name: "skill-a", Arguments: map[string]any{}}}},
-		{ToolCalls: []port.ToolCall{{ID: "activate-2", Name: "skill-b", Arguments: map[string]any{}}}},
+		{ToolCalls: []port.ToolCall{{ID: "activate-1", Name: "stratum_skill", Arguments: map[string]any{"skill": "skill-a"}}}},
+		{ToolCalls: []port.ToolCall{{ID: "activate-2", Name: "stratum_skill", Arguments: map[string]any{"skill": "skill-b"}}}},
 		{Content: "done"},
 	}}
 	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
@@ -328,18 +328,20 @@ func TestBuildReActGraph_StacksInstructionsAndUnionsMCPTools(t *testing.T) {
 	secondMessages, _ := json.Marshal(stub.llmReqs[1].Messages)
 	require.Contains(t, string(secondMessages), "USE INSTRUCTION A")
 	require.NotContains(t, string(secondMessages), "USE INSTRUCTION B")
-	require.Equal(t, []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "skill-a", "skill-b", "mcp:orders:get", "stratum_recall_memory"}, toolNames(stub.llmReqs[1].Tools))
+	// 工具面 = stratum_skill 统一工具 + plan 工具 + agent 绑定全集（Spec D5），
+	// 激活 skill 不再隐藏/叠加 MCP 或 memory 工具，两轮工具面恒定。
+	agentSurface := []string{"stratum_skill", "stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "mcp:orders:get", "mcp:orders:delete", "stratum_recall_memory"}
+	require.Equal(t, agentSurface, toolNames(stub.llmReqs[1].Tools))
 
 	thirdMessages, _ := json.Marshal(stub.llmReqs[2].Messages)
 	require.Contains(t, string(thirdMessages), "USE INSTRUCTION A")
 	require.Contains(t, string(thirdMessages), "USE INSTRUCTION B")
-	// 并集:两个 skill 的 MCP 工具均暴露；skill-a 允许 user scope，memory 工具可见。
-	require.Equal(t, []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "skill-a", "skill-b", "mcp:orders:get", "mcp:orders:delete", "stratum_recall_memory"}, toolNames(stub.llmReqs[2].Tools))
+	require.Equal(t, agentSurface, toolNames(stub.llmReqs[2].Tools))
 }
 
-func TestBuildReActGraph_ActiveSkillIntersectsKnowledgeWorkspaces(t *testing.T) {
+func TestBuildReActGraph_ActiveSkillInheritsAgentKnowledgeWorkspaces(t *testing.T) {
 	stub := &capGWSequence{responses: []port.CapabilityResponse{
-		{ToolCalls: []port.ToolCall{{ID: "a1", Name: "skill-a", Arguments: map[string]any{}}}},
+		{ToolCalls: []port.ToolCall{{ID: "a1", Name: "stratum_skill", Arguments: map[string]any{"skill": "skill-a"}}}},
 		{ToolCalls: []port.ToolCall{{ID: "k1", Name: "stratum_search_knowledge", Arguments: map[string]any{"workspaces": []any{"kb-allowed", "kb-agent-only", "kb-skill-only"}, "query": "q"}}}},
 		{Content: "done"},
 	}}
@@ -357,7 +359,8 @@ func TestBuildReActGraph_ActiveSkillIntersectsKnowledgeWorkspaces(t *testing.T) 
 		},
 	}, graph.RunConfig[graph.ReActState]{MaxSteps: 8})
 	require.NoError(t, err)
-	require.Equal(t, []string{"kb-allowed"}, searched)
+	// 知识边界继承 agent 绑定（Spec D5）：skill 声明不再叠加/收窄，kb-skill-only 被剔除。
+	require.Equal(t, []string{"kb-allowed", "kb-agent-only"}, searched)
 }
 
 func TestBuildReActGraph_KnowledgeRevisionFailureStopsBeforeSecondLLMCall(t *testing.T) {
@@ -845,11 +848,11 @@ func guardedToolOutput(content string) port.GuardedToolResult {
 	return port.GuardedToolResult{ModelContent: content, Summary: content, Untrusted: true}
 }
 
-func TestBuildReActGraph_ReactivationReplacesEntryInPlace(t *testing.T) {
+func TestBuildReActGraph_ReactivatingActiveSkillIsIdempotent(t *testing.T) {
 	stub := &capGWSequence{responses: []port.CapabilityResponse{
-		{ToolCalls: []port.ToolCall{{ID: "activate-1", Name: "skill-a", Arguments: map[string]any{}}}},
-		{ToolCalls: []port.ToolCall{{ID: "activate-2", Name: "skill-a", Arguments: map[string]any{}}}},
-		{ToolCalls: []port.ToolCall{{ID: "activate-3", Name: "skill-b", Arguments: map[string]any{}}}},
+		{ToolCalls: []port.ToolCall{{ID: "activate-1", Name: "stratum_skill", Arguments: map[string]any{"skill": "skill-a"}}}},
+		{ToolCalls: []port.ToolCall{{ID: "activate-2", Name: "stratum_skill", Arguments: map[string]any{"skill": "skill-a"}}}},
+		{ToolCalls: []port.ToolCall{{ID: "activate-3", Name: "stratum_skill", Arguments: map[string]any{"skill": "skill-b"}}}},
 		{Content: "done"},
 	}}
 	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
@@ -871,25 +874,26 @@ func TestBuildReActGraph_ReactivationReplacesEntryInPlace(t *testing.T) {
 	}
 	out, err := cg.Invoke(context.Background(), state, graph.RunConfig[graph.ReActState]{MaxSteps: 10})
 	require.NoError(t, err)
-	// 同 SkillID 再次激活是原位替换而非追加：长度 2、位置保留。
+	// D6 幂等拦截：第二次激活 skill-a 被拦，Actives 仍按首次激活顺序累积为两个。
 	require.Len(t, out.Actives, 2)
 	require.Equal(t, []string{"skill-a", "skill-b"}, []string{out.Actives[0].SkillID, out.Actives[1].SkillID})
 
 	require.Len(t, stub.llmReqs, 4)
 	thirdMessages, _ := json.Marshal(stub.llmReqs[2].Messages)
-	// 重激活不重复注入指令：A 只出现一次。
+	// 重复激活不重复注入指令：A 只出现一次。
 	require.Equal(t, 1, strings.Count(string(thirdMessages), "USE INSTRUCTION A"))
 	require.NotContains(t, string(thirdMessages), "USE INSTRUCTION B")
 	fourthMessages, _ := json.Marshal(stub.llmReqs[3].Messages)
 	require.Equal(t, 1, strings.Count(string(fourthMessages), "USE INSTRUCTION A"))
 	require.Contains(t, string(fourthMessages), "USE INSTRUCTION B")
-	require.Equal(t, []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "skill-a", "skill-b", "mcp:orders:get", "mcp:orders:delete", "stratum_recall_memory"}, toolNames(stub.llmReqs[3].Tools))
+	agentSurface := []string{"stratum_skill", "stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "mcp:orders:get", "mcp:orders:delete", "stratum_recall_memory"}
+	require.Equal(t, agentSurface, toolNames(stub.llmReqs[3].Tools))
 }
 
-func TestBuildReActGraph_ActivesUnionKnowledgeWorkspaces(t *testing.T) {
+func TestBuildReActGraph_ActivesInheritAgentKnowledgeWorkspaces(t *testing.T) {
 	stub := &capGWSequence{responses: []port.CapabilityResponse{
-		{ToolCalls: []port.ToolCall{{ID: "a1", Name: "skill-a", Arguments: map[string]any{}}}},
-		{ToolCalls: []port.ToolCall{{ID: "b1", Name: "skill-b", Arguments: map[string]any{}}}},
+		{ToolCalls: []port.ToolCall{{ID: "a1", Name: "stratum_skill", Arguments: map[string]any{"skill": "skill-a"}}}},
+		{ToolCalls: []port.ToolCall{{ID: "b1", Name: "stratum_skill", Arguments: map[string]any{"skill": "skill-b"}}}},
 		{ToolCalls: []port.ToolCall{{ID: "k1", Name: "stratum_search_knowledge", Arguments: map[string]any{"workspaces": []any{"kb-allowed", "kb-agent-only", "kb-skill-only"}, "query": "q"}}}},
 		{Content: "done"},
 	}}
@@ -910,7 +914,7 @@ func TestBuildReActGraph_ActivesUnionKnowledgeWorkspaces(t *testing.T) {
 		},
 	}, graph.RunConfig[graph.ReActState]{MaxSteps: 8})
 	require.NoError(t, err)
-	// agent ∩ (∪ 两 skill) = kb-allowed ∪ kb-agent-only。
+	// 多 skill 并列激活后知识边界仍恒为 agent 绑定（Spec D5），skill 声明不再叠加/收窄。
 	require.Equal(t, []string{"kb-allowed", "kb-agent-only"}, searched)
 }
 
@@ -942,6 +946,7 @@ func TestMessagesWithActiveSkills(t *testing.T) {
 			},
 			want: []port.LLMMessage{
 				{Role: "system", Content: "system"},
+				{Role: "system", Content: "多个 skill 并列生效，指令冲突时由模型按任务意图自行取舍。"},
 				{Role: "system", Content: "Active Skill skill-a (revision rev-a):\nINST A"},
 				{Role: "system", Content: "Active Skill skill-b (revision rev-b):\nINST B"},
 				{Role: "user", Content: "task"},
@@ -955,6 +960,7 @@ func TestMessagesWithActiveSkills(t *testing.T) {
 				{Name: "skill-a", RevisionID: "rev-a", Instructions: "INST A"},
 			},
 			want: []port.LLMMessage{
+				{Role: "system", Content: "多个 skill 并列生效，指令冲突时由模型按任务意图自行取舍。"},
 				{Role: "system", Content: "Active Skill skill-b (revision rev-b):\nINST B"},
 				{Role: "system", Content: "Active Skill skill-a (revision rev-a):\nINST A"},
 				{Role: "user", Content: "task"},
@@ -969,120 +975,76 @@ func TestMessagesWithActiveSkills(t *testing.T) {
 	}
 }
 
-func TestAllowedKnowledgeWorkspacesUnionsActives(t *testing.T) {
+func TestAllowedKnowledgeWorkspacesInheritsAgentBinding(t *testing.T) {
 	cases := []struct {
 		name         string
 		requested    []string
 		agentAllowed []string
-		actives      []port.SkillActivation
 		want         []string
 	}{
 		{
-			name:         "no actives imposes no skill restriction",
+			name:         "requested within agent binding kept",
 			requested:    []string{"kb-allowed"},
 			agentAllowed: []string{"kb-allowed"},
-			actives:      nil,
 			want:         []string{"kb-allowed"},
 		},
 		{
-			name:         "single active intersects requested",
+			name:         "skill-declared-only workspace dropped",
 			requested:    []string{"kb-allowed", "kb-skill-only"},
 			agentAllowed: []string{"kb-allowed", "kb-agent-only"},
-			actives:      []port.SkillActivation{{KnowledgeWorkspaceIDs: []string{"kb-allowed", "kb-skill-only"}}},
 			want:         []string{"kb-allowed"},
 		},
 		{
-			name:         "union across two actives",
+			name:         "requested fully outside agent binding dropped",
 			requested:    []string{"kb-one", "kb-two", "kb-other"},
 			agentAllowed: []string{"kb-one", "kb-two", "kb-agent"},
-			actives: []port.SkillActivation{
-				{KnowledgeWorkspaceIDs: []string{"kb-one"}},
-				{KnowledgeWorkspaceIDs: []string{"kb-two"}},
-			},
-			want: []string{"kb-one", "kb-two"},
+			want:         []string{"kb-one", "kb-two"},
 		},
 		{
 			name:         "empty requested falls back to agent allowed",
 			requested:    nil,
 			agentAllowed: []string{"kb-agent"},
-			actives:      []port.SkillActivation{{KnowledgeWorkspaceIDs: []string{"kb-agent"}}},
 			want:         []string{"kb-agent"},
 		},
 		{
 			name:         "empty intersection yields nothing",
 			requested:    []string{"kb-requested"},
 			agentAllowed: []string{"kb-agent"},
-			actives:      []port.SkillActivation{{KnowledgeWorkspaceIDs: []string{"kb-skill"}}},
 			want:         []string{},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := graph.AllowedKnowledgeWorkspacesForTest(tc.requested, tc.agentAllowed, tc.actives)
+			got := graph.AllowedKnowledgeWorkspacesForTest(tc.requested, tc.agentAllowed)
 			require.Equal(t, tc.want, got)
 		})
 	}
 }
 
-func TestEffectiveTools_ScopesAcrossActives(t *testing.T) {
+func TestEffectiveTools_ToolSurfaceUnchangedByActives(t *testing.T) {
 	baseAvailable := []port.ToolDefinition{
 		{Name: "mcp:orders:get", ProviderType: "mcp"},
 		{Name: "mcp:orders:delete", ProviderType: "mcp"},
 		{Name: "stratum_recall_memory", ProviderType: "builtin"},
 		{Name: "stratum_search_knowledge", ProviderType: "builtin"},
 	}
-	cases := []struct {
-		name             string
-		actives          []port.SkillActivation
-		agentKnowledgeID []string
-		agentMemoryScope string
-		want             []string
-	}{
-		{
-			name:             "no actives keeps memory knowledge and mcp tools visible",
-			actives:          nil,
-			agentKnowledgeID: []string{"kb-one"},
-			agentMemoryScope: "user",
-			want:             []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "mcp:orders:get", "mcp:orders:delete", "stratum_recall_memory", "stratum_search_knowledge"},
-		},
-		{
-			name:             "second active allows memory scope",
-			actives:          []port.SkillActivation{{MCPToolIDs: []string{"mcp:orders:get"}}, {MemoryScopes: []string{"user"}, KnowledgeWorkspaceIDs: []string{"kb-one"}}},
-			agentKnowledgeID: []string{"kb-one"},
-			agentMemoryScope: "user",
-			want:             []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "mcp:orders:get", "stratum_recall_memory", "stratum_search_knowledge"},
-		},
-		{
-			name:             "no active allows memory scope hides memory tool",
-			actives:          []port.SkillActivation{{MCPToolIDs: []string{"mcp:orders:get"}, MemoryScopes: []string{"conversation"}, KnowledgeWorkspaceIDs: []string{"kb-one"}}},
-			agentKnowledgeID: []string{"kb-one"},
-			agentMemoryScope: "user",
-			want:             []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "mcp:orders:get", "stratum_search_knowledge"},
-		},
-		{
-			name:             "no active intersects agent knowledge hides knowledge tool",
-			actives:          []port.SkillActivation{{MCPToolIDs: []string{"mcp:orders:get"}, KnowledgeWorkspaceIDs: []string{"kb-skill-only"}}},
-			agentKnowledgeID: []string{"kb-one"},
-			agentMemoryScope: "user",
-			want:             []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "mcp:orders:get"},
-		},
-		{
-			name: "mcp tools union across actives",
-			actives: []port.SkillActivation{
-				{MCPToolIDs: []string{"mcp:orders:get"}, MemoryScopes: []string{"user"}, KnowledgeWorkspaceIDs: []string{"kb-one"}},
-				{MCPToolIDs: []string{"mcp:orders:delete"}, MemoryScopes: []string{"conversation"}, KnowledgeWorkspaceIDs: []string{"kb-one"}},
-			},
-			agentKnowledgeID: []string{"kb-one"},
-			agentMemoryScope: "user",
-			want:             []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "mcp:orders:get", "mcp:orders:delete", "stratum_recall_memory", "stratum_search_knowledge"},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := graph.EffectiveToolsForTest(baseAvailable, nil, tc.actives, tc.agentKnowledgeID, tc.agentMemoryScope, false)
-			require.Equal(t, tc.want, toolNames(got))
-		})
-	}
+	fullSurface := []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "mcp:orders:get", "mcp:orders:delete", "stratum_recall_memory", "stratum_search_knowledge"}
+	planTools := []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan"}
+
+	// 工具面 = plan 工具 + agent 绑定全集：激活与否不改变可见工具（Spec D5）。
+	// stratum_skill 由 prepareLLMRequest 按预算动态前置，不在本函数静态生成。
+	require.Equal(t, fullSurface, toolNames(graph.EffectiveToolsForTest(baseAvailable, false)))
+
+	// plan 工具若混入 AvailableTools 会被防御性去重，不重复暴露。
+	withPlanInAvailable := append([]port.ToolDefinition{
+		{Name: "stratum_create_plan", ProviderType: "builtin"},
+		{Name: "stratum_revise_plan", ProviderType: "builtin"},
+	}, baseAvailable...)
+	require.Equal(t, fullSurface, toolNames(graph.EffectiveToolsForTest(withPlanInAvailable, false)))
+
+	// governed assistant 短路：工具面 = available 原样，不追加 plan 工具。
+	require.Equal(t, []string{"mcp:orders:get", "mcp:orders:delete", "stratum_recall_memory", "stratum_search_knowledge"}, toolNames(graph.EffectiveToolsForTest(baseAvailable, true)))
+	require.Equal(t, planTools, toolNames(graph.EffectiveToolsForTest(nil, false)))
 }
 
 func TestUpsertActivationReplacesInPlaceOrAppends(t *testing.T) {

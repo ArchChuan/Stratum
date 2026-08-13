@@ -8,15 +8,13 @@ import (
 )
 
 type ToolAuthorizationInput struct {
-	TenantID          string
-	UserID            string
-	AgentID           string
-	ToolID            string
-	AgentAllowsTool   bool
-	ActiveSkill       bool
-	ActiveSkillAllows bool
-	PolicyResolved    bool
-	RiskLevel         domain.ToolRiskLevel
+	TenantID        string
+	UserID          string
+	AgentID         string
+	ToolID          string
+	AgentAllowsTool bool
+	PolicyResolved  bool
+	RiskLevel       domain.ToolRiskLevel
 }
 
 type ToolAuthorizer struct {
@@ -46,16 +44,14 @@ func (a *ToolAuthorizer) Authorize(ctx context.Context, input ToolAuthorizationI
 	}
 
 	req := domain.ToolAuthorizationRequest{
-		TenantID:          input.TenantID,
-		UserID:            input.UserID,
-		ToolID:            input.ToolID,
-		UserActive:        scope.UserActive,
-		UserAllowsTool:    scope.AllowsTool,
-		AgentAllowsTool:   input.AgentAllowsTool,
-		ActiveSkill:       input.ActiveSkill,
-		ActiveSkillAllows: input.ActiveSkillAllows,
-		PolicyResolved:    input.PolicyResolved,
-		RiskLevel:         input.RiskLevel,
+		TenantID:        input.TenantID,
+		UserID:          input.UserID,
+		ToolID:          input.ToolID,
+		UserActive:      scope.UserActive,
+		UserAllowsTool:  scope.AllowsTool,
+		AgentAllowsTool: input.AgentAllowsTool,
+		PolicyResolved:  input.PolicyResolved,
+		RiskLevel:       input.RiskLevel,
 	}
 	if input.AgentID == domain.SystemAssistantID {
 		// Platform assistant applies the strict L3b risk model (spec

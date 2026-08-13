@@ -67,3 +67,7 @@ func RestorePlanCheckpointStateForTest(raw json.RawMessage, catalog map[string]p
 }
 
 func IsFinalRequestForTest(s agentgraph.ReActState) bool { return isFinalRequest(s) }
+
+func ValidateSkillCatalogNamesForTest(catalog map[string]port.SkillActivation) error {
+	return validateSkillCatalogNames(catalog)
+}
