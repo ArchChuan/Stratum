@@ -37,6 +37,8 @@ interface Props {
   /** agents 列表加载失败：显示错误态 + 重试，而非静默空下拉（避免切换不了/会话看似消失）。 */
   agentsError?: boolean;
   onRetryAgents?: () => void;
+  /** agents 列表加载中：Select 与列表区显示 loading，避免首帧闪「暂无可用 Agent」。 */
+  agentsLoading?: boolean;
 }
 
 export const ChatConversationSidebar = ({
@@ -54,6 +56,7 @@ export const ChatConversationSidebar = ({
 	showAgentSelector = true,
   agentsError = false,
   onRetryAgents,
+  agentsLoading = false,
 }: Props) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
@@ -115,6 +118,7 @@ export const ChatConversationSidebar = ({
             onChange={onSelectAgent}
             options={agents.map((agent) => ({ value: agent.id, label: agent.name }))}
             size="small"
+            loading={agentsLoading}
           />
         ))}
       </div>
@@ -131,7 +135,7 @@ export const ChatConversationSidebar = ({
         </Button>
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 8px' }}>
-        {loadingConvs ? (
+        {loadingConvs || agentsLoading ? (
           <Skeleton active paragraph={{ rows: 4 }} style={{ padding: 8 }} />
         ) : (
           conversations.map((c) => (
@@ -245,13 +249,24 @@ export const ChatConversationSidebar = ({
             </div>
           ))
         )}
-        {!loadingConvs && conversations.length === 0 && selectedAgent && (
-          <Text
-            type="secondary"
-            style={{ fontSize: 12, padding: '8px', display: 'block', textAlign: 'center' }}
-          >
-            会话还是空的
-          </Text>
+        {!loadingConvs && !agentsLoading && conversations.length === 0 && (
+          selectedAgent ? (
+            <Text
+              type="secondary"
+              style={{ fontSize: 12, padding: '8px', display: 'block', textAlign: 'center' }}
+            >
+              会话还是空的
+            </Text>
+          ) : !agentsError ? (
+            // selectedAgent 为 null 时（agents 列表为空、无 isSystem 且无回退选择）
+            // 明确提示「暂无可用 Agent」，避免列表区静默空白、侧栏看似消失。
+            <Text
+              type="secondary"
+              style={{ fontSize: 12, padding: '8px', display: 'block', textAlign: 'center' }}
+            >
+              暂无可用 Agent
+            </Text>
+          ) : null
         )}
       </div>
     </div>

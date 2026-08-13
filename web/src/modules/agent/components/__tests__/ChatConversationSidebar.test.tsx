@@ -57,3 +57,44 @@ describe('ChatConversationSidebar agents 加载失败降级', () => {
     expect(dropdown?.textContent).toContain('平台使用小助手');
   });
 });
+
+describe('ChatConversationSidebar 无可用 Agent 空态', () => {
+  it('agents 为空且无选中 agent 时显示「暂无可用 Agent」，而非空白', () => {
+    render(
+      <ChatConversationSidebar
+        {...baseProps}
+        agents={[]}
+        selectedAgent={null}
+        conversations={[]}
+      />,
+    );
+    expect(screen.getByText('暂无可用 Agent')).toBeInTheDocument();
+  });
+
+  it('agents 加载中不显示「暂无可用 Agent」空态', () => {
+    render(
+      <ChatConversationSidebar
+        {...baseProps}
+        agents={[]}
+        selectedAgent={null}
+        conversations={[]}
+        agentsLoading
+      />,
+    );
+    expect(screen.queryByText('暂无可用 Agent')).not.toBeInTheDocument();
+  });
+
+  it('agents 加载失败时只显示错误态，不叠加「暂无可用 Agent」空态', () => {
+    render(
+      <ChatConversationSidebar
+        {...baseProps}
+        agents={[]}
+        selectedAgent={null}
+        conversations={[]}
+        agentsError
+      />,
+    );
+    expect(screen.getByText('Agent 列表加载失败')).toBeInTheDocument();
+    expect(screen.queryByText('暂无可用 Agent')).not.toBeInTheDocument();
+  });
+});

@@ -48,6 +48,8 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
   // agents 列表加载失败标记：失败时侧栏显示错误态+重试，而非静默当作「没有 Agent」
   //（避免 agents=[] 导致下拉空、切换不了、会话列表看似消失）。
   const [agentsError, setAgentsError] = useState(false);
+  // agents 列表加载中标记：侧栏 Select 与列表区显示 loading，避免首帧闪「暂无可用 Agent」。
+  const [agentsLoading, setAgentsLoading] = useState(false);
   // 重试计数：+1 即重新执行 agents 加载 effect。
   const [agentsReload, setAgentsReload] = useState(0);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(
@@ -111,6 +113,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      setAgentsLoading(true);
       try {
         if (fixedAgentId) {
           const assistant = await agentApi.get(fixedAgentId);
@@ -118,6 +121,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
           setAgents([assistant]);
           setSelectedAgent(fixedAgentId);
           setAgentsError(false);
+          setAgentsLoading(false);
           return;
         }
         const list = await agentApi.list();
@@ -128,15 +132,19 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
         // 不因 agents 列表失败而整个侧栏空白。
         setSelectedAgent((prev) => {
           if (prev && ordered.some((a) => a.id === prev)) return prev;
-          const defaultAgent = ordered.find((agent) => agent.isSystem)?.id ?? null;
+          // 无 isSystem agent 时回退到第一个 agent：selectedAgent 为 null 会让
+          // conversations effect 直接 return，会话列表永不加载、侧栏空白。
+          const defaultAgent = ordered.find((agent) => agent.isSystem)?.id ?? ordered[0]?.id ?? null;
           if (defaultAgent) sessionStorage.setItem(SS_AGENT, defaultAgent);
           else sessionStorage.removeItem(SS_AGENT);
           return defaultAgent;
         });
         setAgentsError(false);
+        setAgentsLoading(false);
       } catch {
         if (!cancelled) {
           setAgentsError(true);
+          setAgentsLoading(false);
           msg.error({ content: '加载 Agent 列表失败', duration: 0 });
         }
       }
@@ -454,6 +462,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
   return {
     agents,
     agentsError,
+    agentsLoading,
     reloadAgents,
     selectedAgent,
     setSelectedAgent,

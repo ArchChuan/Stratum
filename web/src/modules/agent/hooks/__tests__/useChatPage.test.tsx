@@ -160,6 +160,31 @@ describe('useChatPage tool approvals', () => {
     expect(result.current.selectedAgent).toBe('system');
   });
 
+  it('agents 存在但无 isSystem 时回退选择第一个 agent，会话列表照常加载', async () => {
+    mocks.listAgents.mockResolvedValue([
+      { id: 'regular-1', name: '普通 Agent A', isSystem: false },
+      { id: 'regular-2', name: '普通 Agent B', isSystem: false },
+    ]);
+    mocks.listConversations.mockResolvedValue([{ id: 'conv-1', name: '会话' }]);
+
+    const { result } = renderHook(() => useChatPage());
+
+    // 不再回退到 null（null 会让 conversations effect 直接 return，会话列表永不加载）
+    await waitFor(() => expect(result.current.selectedAgent).toBe('regular-1'));
+    await waitFor(() => expect(result.current.selectedConv).toBe('conv-1'));
+    expect(result.current.conversations).toHaveLength(1);
+  });
+
+  it('agents 为空且无 isSystem 时 selectedAgent 为 null 但加载态结束', async () => {
+    mocks.listAgents.mockResolvedValue([]);
+
+    const { result } = renderHook(() => useChatPage());
+
+    await waitFor(() => expect(result.current.agentsLoading).toBe(false));
+    expect(result.current.agents).toHaveLength(0);
+    expect(result.current.selectedAgent).toBeNull();
+  });
+
   it('hydrates streamed structured artifacts into the completed assistant message', async () => {
     mocks.listAgents.mockResolvedValue([{ id: 'system', name: '平台使用小助手', isSystem: true }]);
     mocks.listConversations.mockResolvedValue([{ id: 'conversation-1', name: 'Conversation' }]);
