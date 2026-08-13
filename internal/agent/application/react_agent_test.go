@@ -412,6 +412,7 @@ func TestBaseAgentExecutionSpanCarriesParamSnapshotAndPromptVersion(t *testing.T
 		agent.WithTenantID("tenant-1"),
 		agent.WithTemperature(0.7),
 		agent.WithMaxTokens(512),
+		agent.WithReasoningEffort("high"),
 		agent.WithCaptureParameters(true),
 	)
 	require.NoError(t, err)
@@ -426,6 +427,7 @@ func TestBaseAgentExecutionSpanCarriesParamSnapshotAndPromptVersion(t *testing.T
 	require.NotEmpty(t, execAttrs["stratum.params.sha256"])
 	require.InDelta(t, 0.7, execAttrs["stratum.params.temperature"], 1e-6)
 	require.Equal(t, int64(512), execAttrs["stratum.params.max_tokens"])
+	require.Equal(t, "high", execAttrs["stratum.params.reasoning_effort"])
 
 	llmAttrs := spanAttributes(byName["react.llm"][0])
 	require.InDelta(t, 0.7, llmAttrs["gen_ai.request.temperature"], 1e-6)
