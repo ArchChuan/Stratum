@@ -61,7 +61,7 @@ type fakeEmbedResolver struct {
 	err   error
 }
 
-func (f *fakeEmbedResolver) ResolveDefaultEmbeddingModel(_ context.Context, _ string) (string, error) {
+func (f *fakeEmbedResolver) ResolveDefaultEmbeddingModel(_ context.Context) (string, error) {
 	return f.model, f.err
 }
 

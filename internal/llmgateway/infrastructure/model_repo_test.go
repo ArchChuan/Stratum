@@ -2,8 +2,11 @@ package infrastructure_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
@@ -13,28 +16,45 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres/postgrestest"
 )
 
-func TestPgModelRepo_CRUD(t *testing.T) {
+// newModelTestRepos 创建共享 pool 的 provider/model repo，并返回公共
+// providers/models 表清理函数。public 表全局共享，测试间靠唯一 ID + cleanup
+// 隔离（providers 被 models FK 引用，先删 models 再删 providers）。
+func newModelTestRepos(t *testing.T) (*pgxpool.Pool, *infrastructure.PgProviderRepo, *infrastructure.PgModelRepo, func(providerID string, modelIDs ...string)) {
 	pool := postgrestest.NewPool(t)
-	tenantID := postgrestest.CreateTestTenant(t, pool)
 	providerRepo := infrastructure.NewPgProviderRepo(pool, testRepoKey, zap.NewNop(), observability.NoopMetrics{})
 	modelRepo := infrastructure.NewPgModelRepo(pool)
+	cleanup := func(providerID string, modelIDs ...string) {
+		t.Cleanup(func() {
+			for _, id := range modelIDs {
+				_, _ = pool.Exec(context.Background(), `DELETE FROM public.models WHERE id=$1`, id)
+			}
+			_, _ = pool.Exec(context.Background(), `DELETE FROM public.providers WHERE id=$1`, providerID)
+		})
+	}
+	return pool, providerRepo, modelRepo, cleanup
+}
+
+func newSeedProvider(prefix string) *domain.Provider {
+	return &domain.Provider{
+		ID:   fmt.Sprintf("test-%s-%d", prefix, time.Now().UnixNano()),
+		Name: "test-provider", Kind: domain.ProviderOpenAICompat,
+		BaseURL: "https://test.example.com/v1", APIKey: "sk-test", Enabled: true,
+	}
+}
+
+func TestPgModelRepo_CRUD(t *testing.T) {
+	_, providerRepo, modelRepo, cleanup := newModelTestRepos(t)
 	ctx := context.Background()
 
 	// Create a provider first (models depend on providers via FK)
-	prov := &domain.Provider{
-		ID:      "test-model-prov",
-		Name:    "test-provider",
-		Kind:    domain.ProviderOpenAICompat,
-		BaseURL: "https://test.example.com/v1",
-		APIKey:  "sk-test",
-		Enabled: true,
-	}
-	if err := providerRepo.Create(ctx, tenantID, prov); err != nil {
+	prov := newSeedProvider("model-crud-prov")
+	if err := providerRepo.Create(ctx, prov); err != nil {
 		t.Fatalf("create provider: %v", err)
 	}
+	cleanup(prov.ID)
 
 	m := &domain.Model{
-		ID:            "test-model-1",
+		ID:            fmt.Sprintf("test-model-1-%d", time.Now().UnixNano()),
 		ProviderID:    prov.ID,
 		Name:          "gpt-4",
 		DisplayName:   "GPT-4",
@@ -46,14 +66,15 @@ func TestPgModelRepo_CRUD(t *testing.T) {
 		Recommended:   true,
 		Enabled:       true,
 	}
+	cleanup(prov.ID, m.ID)
 
 	// Create
-	if err := modelRepo.Create(ctx, tenantID, m); err != nil {
+	if err := modelRepo.Create(ctx, m); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
 	// Get
-	got, err := modelRepo.Get(ctx, tenantID, m.ID)
+	got, err := modelRepo.Get(ctx, m.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -65,7 +86,7 @@ func TestPgModelRepo_CRUD(t *testing.T) {
 	}
 
 	// List with no filter
-	list, err := modelRepo.List(ctx, tenantID, port.ModelFilter{})
+	list, err := modelRepo.List(ctx, port.ModelFilter{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -74,7 +95,7 @@ func TestPgModelRepo_CRUD(t *testing.T) {
 	}
 
 	// List with provider filter
-	list, err = modelRepo.List(ctx, tenantID, port.ModelFilter{ProviderID: prov.ID})
+	list, err = modelRepo.List(ctx, port.ModelFilter{ProviderID: prov.ID})
 	if err != nil {
 		t.Fatalf("list by provider: %v", err)
 	}
@@ -83,7 +104,7 @@ func TestPgModelRepo_CRUD(t *testing.T) {
 	}
 
 	// List with capability filter
-	list, err = modelRepo.List(ctx, tenantID, port.ModelFilter{Capability: domain.CapVision})
+	list, err = modelRepo.List(ctx, port.ModelFilter{Capability: domain.CapVision})
 	if err != nil {
 		t.Fatalf("list by capability: %v", err)
 	}
@@ -92,7 +113,7 @@ func TestPgModelRepo_CRUD(t *testing.T) {
 	}
 
 	// List with non-matching capability
-	list, err = modelRepo.List(ctx, tenantID, port.ModelFilter{Capability: domain.CapEmbedding})
+	list, err = modelRepo.List(ctx, port.ModelFilter{Capability: domain.CapEmbedding})
 	if err != nil {
 		t.Fatalf("list by non-matching capability: %v", err)
 	}
@@ -102,7 +123,7 @@ func TestPgModelRepo_CRUD(t *testing.T) {
 
 	// List with enabled filter
 	enabled := true
-	list, err = modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled})
+	list, err = modelRepo.List(ctx, port.ModelFilter{Enabled: &enabled})
 	if err != nil {
 		t.Fatalf("list by enabled: %v", err)
 	}
@@ -113,10 +134,10 @@ func TestPgModelRepo_CRUD(t *testing.T) {
 	// Update
 	m.DisplayName = "GPT-4 Turbo"
 	m.ContextWindow = 128000
-	if err := modelRepo.Update(ctx, tenantID, m); err != nil {
+	if err := modelRepo.Update(ctx, m); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	got, err = modelRepo.Get(ctx, tenantID, m.ID)
+	got, err = modelRepo.Get(ctx, m.ID)
 	if err != nil {
 		t.Fatalf("get after update: %v", err)
 	}
@@ -128,10 +149,10 @@ func TestPgModelRepo_CRUD(t *testing.T) {
 	}
 
 	// Toggle
-	if err := modelRepo.Toggle(ctx, tenantID, m.ID, false); err != nil {
+	if err := modelRepo.Toggle(ctx, m.ID, false); err != nil {
 		t.Fatalf("toggle off: %v", err)
 	}
-	got, err = modelRepo.Get(ctx, tenantID, m.ID)
+	got, err = modelRepo.Get(ctx, m.ID)
 	if err != nil {
 		t.Fatalf("get after toggle: %v", err)
 	}
@@ -140,39 +161,29 @@ func TestPgModelRepo_CRUD(t *testing.T) {
 	}
 
 	// Toggle back
-	if err := modelRepo.Toggle(ctx, tenantID, m.ID, true); err != nil {
+	if err := modelRepo.Toggle(ctx, m.ID, true); err != nil {
 		t.Fatalf("toggle on: %v", err)
 	}
 
 	// Delete
-	if err := modelRepo.Delete(ctx, tenantID, m.ID); err != nil {
+	if err := modelRepo.Delete(ctx, m.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	_, err = modelRepo.Get(ctx, tenantID, m.ID)
+	_, err = modelRepo.Get(ctx, m.ID)
 	if err == nil {
 		t.Fatal("expected error after delete")
 	}
 }
 
 func TestPgModelRepo_UpsertDiscovered(t *testing.T) {
-	pool := postgrestest.NewPool(t)
-	tenantID := postgrestest.CreateTestTenant(t, pool)
-	providerRepo := infrastructure.NewPgProviderRepo(pool, testRepoKey, zap.NewNop(), observability.NoopMetrics{})
-	modelRepo := infrastructure.NewPgModelRepo(pool)
+	_, providerRepo, modelRepo, cleanup := newModelTestRepos(t)
 	ctx := context.Background()
 
-	// Create a provider
-	prov := &domain.Provider{
-		ID:      "test-upsert-prov",
-		Name:    "upsert-provider",
-		Kind:    domain.ProviderOpenAICompat,
-		BaseURL: "https://test.example.com/v1",
-		APIKey:  "sk-test",
-		Enabled: true,
-	}
-	if err := providerRepo.Create(ctx, tenantID, prov); err != nil {
+	prov := newSeedProvider("upsert-prov")
+	if err := providerRepo.Create(ctx, prov); err != nil {
 		t.Fatalf("create provider: %v", err)
 	}
+	cleanup(prov.ID)
 
 	// First discovery: insert two models
 	discovered := []domain.Model{
@@ -197,7 +208,7 @@ func TestPgModelRepo_UpsertDiscovered(t *testing.T) {
 		},
 	}
 
-	results, err := modelRepo.UpsertDiscovered(ctx, tenantID, prov.ID, discovered)
+	results, err := modelRepo.UpsertDiscovered(ctx, prov.ID, discovered)
 	if err != nil {
 		t.Fatalf("first upsert: %v", err)
 	}
@@ -219,7 +230,7 @@ func TestPgModelRepo_UpsertDiscovered(t *testing.T) {
 		},
 	}
 
-	results, err = modelRepo.UpsertDiscovered(ctx, tenantID, prov.ID, discovered)
+	results, err = modelRepo.UpsertDiscovered(ctx, prov.ID, discovered)
 	if err != nil {
 		t.Fatalf("second upsert: %v", err)
 	}
@@ -255,46 +266,42 @@ func TestPgModelRepo_UpsertDiscovered(t *testing.T) {
 // Toggle off and Update with enabled=false or capabilities without embedding
 // must clear the marker, and re-enabling must NOT restore it (the user re-marks).
 func TestPgModelRepo_DefaultEmbeddingSelfClean(t *testing.T) {
-	pool := postgrestest.NewPool(t)
-	tenantID := postgrestest.CreateTestTenant(t, pool)
-	providerRepo := infrastructure.NewPgProviderRepo(pool, testRepoKey, zap.NewNop(), observability.NoopMetrics{})
-	modelRepo := infrastructure.NewPgModelRepo(pool)
+	_, providerRepo, modelRepo, cleanup := newModelTestRepos(t)
 	ctx := context.Background()
 
-	prov := &domain.Provider{
-		ID: "test-selfclean-prov", Name: "sc-provider", Kind: domain.ProviderOpenAICompat,
-		BaseURL: "https://test.example.com/v1", APIKey: "sk-test", Enabled: true,
-	}
-	if err := providerRepo.Create(ctx, tenantID, prov); err != nil {
+	prov := newSeedProvider("selfclean-prov")
+	if err := providerRepo.Create(ctx, prov); err != nil {
 		t.Fatalf("create provider: %v", err)
 	}
 	em := &domain.Model{
-		ID: "test-embed-1", ProviderID: prov.ID, Name: "text-embedding-3", DisplayName: "Embed 3",
+		ID:         fmt.Sprintf("test-embed-1-%d", time.Now().UnixNano()),
+		ProviderID: prov.ID, Name: "text-embedding-3", DisplayName: "Embed 3",
 		Capabilities: []domain.ModelCapability{domain.CapEmbedding}, ContextWindow: 8192,
 		MaxTokens: 2048, Recommended: true, Enabled: true,
 	}
-	if err := modelRepo.Create(ctx, tenantID, em); err != nil {
+	cleanup(prov.ID, em.ID)
+	if err := modelRepo.Create(ctx, em); err != nil {
 		t.Fatalf("create embed model: %v", err)
 	}
-	if err := modelRepo.SetDefaultEmbedding(ctx, tenantID, em.ID, true); err != nil {
+	if err := modelRepo.SetDefaultEmbedding(ctx, em.ID, true); err != nil {
 		t.Fatalf("set default: %v", err)
 	}
 
 	t.Run("toggle off clears the marker and re-enable does not restore it", func(t *testing.T) {
-		if err := modelRepo.Toggle(ctx, tenantID, em.ID, false); err != nil {
+		if err := modelRepo.Toggle(ctx, em.ID, false); err != nil {
 			t.Fatalf("toggle off: %v", err)
 		}
-		got, err := modelRepo.Get(ctx, tenantID, em.ID)
+		got, err := modelRepo.Get(ctx, em.ID)
 		if err != nil {
 			t.Fatalf("get after toggle off: %v", err)
 		}
 		if got.DefaultEmbedding {
 			t.Error("marker should be cleared after disabling the default model")
 		}
-		if err := modelRepo.Toggle(ctx, tenantID, em.ID, true); err != nil {
+		if err := modelRepo.Toggle(ctx, em.ID, true); err != nil {
 			t.Fatalf("toggle on: %v", err)
 		}
-		got, err = modelRepo.Get(ctx, tenantID, em.ID)
+		got, err = modelRepo.Get(ctx, em.ID)
 		if err != nil {
 			t.Fatalf("get after toggle on: %v", err)
 		}
@@ -305,10 +312,10 @@ func TestPgModelRepo_DefaultEmbeddingSelfClean(t *testing.T) {
 
 	t.Run("update disabling clears the marker", func(t *testing.T) {
 		em.Enabled = false
-		if err := modelRepo.Update(ctx, tenantID, em); err != nil {
+		if err := modelRepo.Update(ctx, em); err != nil {
 			t.Fatalf("update disable: %v", err)
 		}
-		got, err := modelRepo.Get(ctx, tenantID, em.ID)
+		got, err := modelRepo.Get(ctx, em.ID)
 		if err != nil {
 			t.Fatalf("get after update disable: %v", err)
 		}
@@ -320,10 +327,10 @@ func TestPgModelRepo_DefaultEmbeddingSelfClean(t *testing.T) {
 	t.Run("update dropping embedding capability clears the marker", func(t *testing.T) {
 		em.Enabled = true
 		em.Capabilities = []domain.ModelCapability{domain.CapChat}
-		if err := modelRepo.Update(ctx, tenantID, em); err != nil {
+		if err := modelRepo.Update(ctx, em); err != nil {
 			t.Fatalf("update caps: %v", err)
 		}
-		got, err := modelRepo.Get(ctx, tenantID, em.ID)
+		got, err := modelRepo.Get(ctx, em.ID)
 		if err != nil {
 			t.Fatalf("get after update caps: %v", err)
 		}
@@ -334,37 +341,27 @@ func TestPgModelRepo_DefaultEmbeddingSelfClean(t *testing.T) {
 }
 
 func TestPgModelRepo_DeleteProviderManaged(t *testing.T) {
-	pool := postgrestest.NewPool(t)
-	tenantID := postgrestest.CreateTestTenant(t, pool)
-	providerRepo := infrastructure.NewPgProviderRepo(pool, testRepoKey, zap.NewNop(), observability.NoopMetrics{})
-	modelRepo := infrastructure.NewPgModelRepo(pool)
+	_, providerRepo, modelRepo, cleanup := newModelTestRepos(t)
 	ctx := context.Background()
 
-	prov := &domain.Provider{
-		ID:      "test-del-managed-prov",
-		Name:    "managed-provider",
-		Kind:    domain.ProviderOpenAICompat,
-		BaseURL: "https://test.example.com/v1",
-		APIKey:  "sk-test",
-		Enabled: true,
-	}
-	if err := providerRepo.Create(ctx, tenantID, prov); err != nil {
+	prov := newSeedProvider("del-managed-prov")
+	if err := providerRepo.Create(ctx, prov); err != nil {
 		t.Fatalf("create provider: %v", err)
 	}
-
 	m := &domain.Model{
-		ID:              "test-managed-model",
+		ID:              fmt.Sprintf("test-managed-model-%d", time.Now().UnixNano()),
 		ProviderID:      prov.ID,
 		Name:            "managed-model",
 		ProviderManaged: true,
 		Enabled:         true,
 	}
-	if err := modelRepo.Create(ctx, tenantID, m); err != nil {
+	cleanup(prov.ID, m.ID)
+	if err := modelRepo.Create(ctx, m); err != nil {
 		t.Fatalf("create managed model: %v", err)
 	}
 
 	// Deleting a provider-managed model should fail
-	err := modelRepo.Delete(ctx, tenantID, m.ID)
+	err := modelRepo.Delete(ctx, m.ID)
 	if err == nil {
 		t.Fatal("expected error deleting provider-managed model")
 	}

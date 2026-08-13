@@ -11,6 +11,7 @@ type ModelCapability string
 const (
 	CapChat      ModelCapability = "chat"
 	CapEmbedding ModelCapability = "embedding"
+	CapRerank    ModelCapability = "rerank"
 	CapVision    ModelCapability = "vision"
 	CapToolUse   ModelCapability = "tool_use"
 	CapReasoning ModelCapability = "reasoning"
@@ -29,7 +30,6 @@ var ErrModelNotFound = errors.New("model not found")
 // Model represents an LLM model that can be used for completions or embeddings.
 type Model struct {
 	ID               string            `json:"id"`
-	TenantID         string            `json:"tenantId"`
 	ProviderID       string            `json:"providerId"`
 	Name             string            `json:"name"`
 	DisplayName      string            `json:"displayName"`

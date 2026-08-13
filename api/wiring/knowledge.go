@@ -113,7 +113,20 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 		c.Knowledge.WorkspaceService.SetVectorStore(vs)
 		c.Knowledge.WorkspaceService.SetEditorRepo(persistence.NewPgResourceEditorRepo(db))
 	}
+	c.wireKnowledgeModelExists()
 	return nil
+}
+
+// wireKnowledgeModelExists 在 Platform 提供全局模型目录时注入 knowledge 的
+// ModelExists 适配器；WorkspaceService 未装配（无 DB）或目录缺失时跳过。
+// 单独成方法以控制 buildKnowledge 的圈复杂度。
+func (c *Container) wireKnowledgeModelExists() {
+	if c.Knowledge == nil || c.Knowledge.WorkspaceService == nil {
+		return
+	}
+	if c.Platform != nil && c.Platform.ModelRegistry != nil {
+		c.Knowledge.WorkspaceService.SetModelExists(knowledgeModelExistsAdapter{registry: c.Platform.ModelRegistry})
+	}
 }
 
 // RecoverStuckKnowledgeIngests transitions any doc rows left in
@@ -156,11 +169,11 @@ func buildEmbedResolver(
 	logger *zap.Logger,
 ) pipeline.EmbedServiceResolver {
 	return func(ctx context.Context, tenantID string) pipeline.EmbedClient {
-		model, err := registry.ResolveDefaultEmbeddingModel(ctx, tenantID)
+		model, err := registry.ResolveDefaultEmbeddingModel(ctx)
 		if err != nil || model == "" {
 			return nil
 		}
-		cfg, _, err := registry.ResolveEmbedding(ctx, tenantID, model)
+		cfg, _, err := registry.ResolveEmbedding(ctx, model)
 		if err != nil {
 			return nil
 		}
@@ -178,19 +191,63 @@ func buildKnowledgeEmbedResolver(
 		m := model
 		if m == "" {
 			var err error
-			m, err = registry.ResolveDefaultEmbeddingModel(ctx, tenantID)
+			m, err = registry.ResolveDefaultEmbeddingModel(ctx)
 			if err != nil || m == "" {
 				return nil
 			}
+		} else if !registryHasEmbeddingModel(ctx, registry, m) {
+			// 显式指定的 workspace 模型不在 managed 目录：不静默替换成默认
+			// embedding（那会改变 workspace 语义），按未配置处理（fail-closed）。
+			return nil
 		}
 
-		cfg, _, err := registry.ResolveEmbedding(ctx, tenantID, m)
+		cfg, _, err := registry.ResolveEmbedding(ctx, m)
 		if err != nil {
 			return nil
 		}
 		client := llmgateway.NewOpenAICompatClient(cfg, logger)
 		return embedding.NewEmbeddingServiceWithModel(client, m, logger)
 	}
+}
+
+// knowledgeModelExistsAdapter 把全局 ModelRegistry 目录查询适配为 knowledge
+// 的 ModelExists port（wiring 唯一适配点：knowledge 不 import llmgateway）。
+// 目录/DB 故障传播错误（fail-closed），不默认放行。
+type knowledgeModelExistsAdapter struct{ registry *llmgateway.ModelRegistry }
+
+func (a knowledgeModelExistsAdapter) Exists(ctx context.Context, model string, capability knowledgeport.ModelCapability) (bool, error) {
+	var names []string
+	var err error
+	switch capability {
+	case knowledgeport.CapRerank:
+		names, err = a.registry.ListRerankModelsByTenant(ctx)
+	default: // CapEmbedding
+		names, err = a.registry.ListEmbeddingModelsByTenant(ctx)
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, n := range names {
+		if n == model {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// registryHasEmbeddingModel 检查显式模型是否在 enabled 且 provider 可用的
+// embedding 目录中。目录读取失败按不存在处理（fail-closed）。
+func registryHasEmbeddingModel(ctx context.Context, registry *llmgateway.ModelRegistry, model string) bool {
+	names, err := registry.ListEmbeddingModelsByTenant(ctx)
+	if err != nil {
+		return false
+	}
+	for _, n := range names {
+		if n == model {
+			return true
+		}
+	}
+	return false
 }
 
 // SeedBuiltinKnowledgeDocs ingests official documentation catalog entries into
@@ -229,7 +286,7 @@ func (c *Container) SeedBuiltinKnowledgeDocs(ctx context.Context) {
 // seedBuiltinDocsForTenant 为单个 tenant 种子内置文档；无可用嵌入模型时
 // WARN 并跳过，不阻断启动。
 func (c *Container) seedBuiltinDocsForTenant(ctx context.Context, tid string) {
-	model, err := c.LLMGateway.Registry.ResolveDefaultEmbeddingModel(ctx, tid)
+	model, err := c.LLMGateway.Registry.ResolveDefaultEmbeddingModel(ctx)
 	if err != nil || model == "" {
 		c.Logger.Warn("knowledge.seed_builtin_docs.skip: no embedding model",
 			zap.String("tenant_id", tid))

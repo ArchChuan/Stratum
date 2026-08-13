@@ -43,10 +43,11 @@ fact_type 分类：
 
 // LLMExtractor adapts LLMClient to memport.LLMExtractor.
 type LLMExtractor struct {
-	client       LLMClient
-	params       PlatformParams
-	systemPrompt string
-	logger       *zap.Logger
+	client          LLMClient
+	params          PlatformParams
+	systemPrompt    string
+	extractionModel string
+	logger          *zap.Logger
 }
 
 func NewLLMExtractor(client LLMClient) *LLMExtractor {
@@ -59,6 +60,10 @@ func (e *LLMExtractor) SetPlatformParams(p PlatformParams) { e.params = p }
 // SetSystemPrompt overrides the extraction template with the mechanism
 // baseline prompt. Empty keeps the built-in extractionSystemPrompt fallback.
 func (e *LLMExtractor) SetSystemPrompt(p string) { e.systemPrompt = p }
+
+// SetExtractionModel sets the extraction model from the mechanism baseline.
+// Empty keeps the client's default resolution (pre-change behavior).
+func (e *LLMExtractor) SetExtractionModel(m string) { e.extractionModel = m }
 
 // WithLogger 注入降级日志记录器（结构化失败白名单摘要）。nil 安全。
 func (e *LLMExtractor) WithLogger(l *zap.Logger) *LLMExtractor {
@@ -89,6 +94,7 @@ func (e *LLMExtractor) maxFacts(ctx context.Context) int {
 func (e *LLMExtractor) ExtractFacts(ctx context.Context, userID, agentID string, message string) ([]*memport.ExtractedFact, error) {
 	system := fmt.Sprintf(e.systemPromptOr(), userID, agentID, e.maxFacts(ctx))
 	req := &memport.CompletionRequest{
+		Model: e.extractionModel,
 		Messages: []memport.CompletionMessage{
 			{Role: "system", Content: system},
 			{Role: "user", Content: message},

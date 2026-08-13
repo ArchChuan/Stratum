@@ -20,11 +20,11 @@ type resolverModelRepo struct {
 	err    error
 }
 
-func (r *resolverModelRepo) Create(context.Context, string, *llmdomain.Model) error { return r.err }
-func (r *resolverModelRepo) Get(context.Context, string, string) (*llmdomain.Model, error) {
+func (r *resolverModelRepo) Create(context.Context, *llmdomain.Model) error { return r.err }
+func (r *resolverModelRepo) Get(context.Context, string) (*llmdomain.Model, error) {
 	return nil, r.err
 }
-func (r *resolverModelRepo) List(_ context.Context, _ string, filter llmport.ModelFilter) ([]llmdomain.Model, error) {
+func (r *resolverModelRepo) List(_ context.Context, filter llmport.ModelFilter) ([]llmdomain.Model, error) {
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -40,15 +40,15 @@ func (r *resolverModelRepo) List(_ context.Context, _ string, filter llmport.Mod
 	}
 	return models, nil
 }
-func (r *resolverModelRepo) Update(context.Context, string, *llmdomain.Model) error { return r.err }
+func (r *resolverModelRepo) Update(context.Context, *llmdomain.Model) error { return r.err }
 func (r *resolverModelRepo) UpsertDiscovered(
-	context.Context, string, string, []llmdomain.Model,
+	context.Context, string, []llmdomain.Model,
 ) ([]llmdomain.Model, error) {
 	return nil, r.err
 }
-func (r *resolverModelRepo) Delete(context.Context, string, string) error       { return r.err }
-func (r *resolverModelRepo) Toggle(context.Context, string, string, bool) error { return r.err }
-func (r *resolverModelRepo) SetDefaultEmbedding(context.Context, string, string, bool) error {
+func (r *resolverModelRepo) Delete(context.Context, string) error       { return r.err }
+func (r *resolverModelRepo) Toggle(context.Context, string, bool) error { return r.err }
+func (r *resolverModelRepo) SetDefaultEmbedding(context.Context, string, bool) error {
 	return r.err
 }
 
@@ -65,16 +65,16 @@ type resolverProviderRepo struct {
 	providers map[string]*llmdomain.Provider
 }
 
-func (r *resolverProviderRepo) Create(context.Context, string, *llmdomain.Provider) error { return nil }
-func (r *resolverProviderRepo) Get(_ context.Context, _, id string) (*llmdomain.Provider, error) {
+func (r *resolverProviderRepo) Create(context.Context, *llmdomain.Provider) error { return nil }
+func (r *resolverProviderRepo) Get(_ context.Context, id string) (*llmdomain.Provider, error) {
 	provider, ok := r.providers[id]
 	if !ok {
 		return nil, errors.New("provider not found")
 	}
 	return provider, nil
 }
-func (r *resolverProviderRepo) GetMeta(ctx context.Context, tenantID, id string) (*llmdomain.Provider, error) {
-	provider, err := r.Get(ctx, tenantID, id)
+func (r *resolverProviderRepo) GetMeta(ctx context.Context, id string) (*llmdomain.Provider, error) {
+	provider, err := r.Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -82,11 +82,11 @@ func (r *resolverProviderRepo) GetMeta(ctx context.Context, tenantID, id string)
 	cp.APIKey = ""
 	return &cp, nil
 }
-func (r *resolverProviderRepo) List(context.Context, string) ([]llmdomain.Provider, error) {
+func (r *resolverProviderRepo) List(context.Context) ([]llmdomain.Provider, error) {
 	return nil, nil
 }
-func (r *resolverProviderRepo) Update(context.Context, string, *llmdomain.Provider) error { return nil }
-func (r *resolverProviderRepo) Delete(context.Context, string, string) error              { return nil }
+func (r *resolverProviderRepo) Update(context.Context, *llmdomain.Provider) error { return nil }
+func (r *resolverProviderRepo) Delete(context.Context, string) error              { return nil }
 
 func newResolverRegistry(models []llmdomain.Model, providers map[string]*llmdomain.Provider) *llmgateway.ModelRegistry {
 	return llmgateway.NewModelRegistry(

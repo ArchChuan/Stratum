@@ -72,7 +72,8 @@ export const executeAgentSkillMCPPack = async ({
     await page.getByLabel('样例输入').fill('执行 stateful MCP');
     await page.getByLabel('期望输出').fill('stateful MCP call completed');
     await page.getByLabel('执行指令').fill('必须调用绑定的 MCP 工具并返回结果。');
-    await page.getByLabel('所需 MCP 工具').fill(`mcp:${serverID}:stateful_echo`);
+    // skill 不再直接绑定 MCP 工具（d65933db 移除 skill requirements）；工具绑定
+    // 在下方 agent 创建步骤通过「MCP 工具」Select 完成，并由 agent_mcp_tool_links 断言。
     const skillResponse = waitForMutation(page, '/skills', 'POST');
     await page.getByRole('button', { name: '创建草稿' }).click();
     const skillCreated = await skillResponse;

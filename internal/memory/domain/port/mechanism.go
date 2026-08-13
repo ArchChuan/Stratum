@@ -14,6 +14,7 @@ type MechanismBaseline struct {
 	MemorySupersede  string // llm_superseder 判断模板（%s/%s）
 	EnrichModel      string // 管线富化模型（基线优先，env 兜底）
 	SummaryModel     string // 管线总结模型（基线优先，env 兜底）
+	ExtractionModel  string // llm_extractor 抽取模型（基线优先，env 兜底）
 }
 
 // MechanismBaselineResolver 按租户解析机制基线。err 非 nil 时调用方应保持

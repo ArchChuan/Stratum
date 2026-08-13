@@ -5,6 +5,7 @@ import { mechanismApi } from '../api/mechanism.api';
 import type { Profile, ProfileBaseline, ProfileStatus, UpsertProfileInput } from '../model/mechanism';
 
 import { PROMPT_TEXTAREA_MAX_LENGTH } from '@/constants';
+import { llmApi } from '@/modules/llm/api/llm.api';
 import { extractErrorMessage } from '@/shared/lib';
 
 const { Text } = Typography;
@@ -22,6 +23,8 @@ interface ProfileFormValues {
   compaction?: string;
   enrich_model?: string;
   summary_model?: string;
+  extraction_model?: string;
+  judge_model?: string;
 }
 
 const PROMPT_FIELDS: { name: keyof ProfileBaseline; label: string; tooltip: string }[] = [
@@ -31,6 +34,14 @@ const PROMPT_FIELDS: { name: keyof ProfileBaseline; label: string; tooltip: stri
   { name: 'memory_summarize', label: '周期总结模板', tooltip: 'history_summarizer 周期总结（无占位）' },
   { name: 'memory_supersede', label: '事实取代判断模板', tooltip: 'llm_superseder 判断模板，占位 %s/%s' },
   { name: 'compaction', label: '压缩指令模板', tooltip: 'history_compactor 压缩指令（无占位）' },
+];
+
+// 管线模型引用：数据源为全局 chat 模型目录（GET /models）。
+const MODEL_FIELDS: { name: keyof ProfileBaseline; label: string; tooltip: string }[] = [
+  { name: 'enrich_model', label: '记忆富化模型', tooltip: 'enricher 富化模型（命中档案时覆盖默认）' },
+  { name: 'summary_model', label: '记忆总结模型', tooltip: 'enricher 中文总结模型' },
+  { name: 'extraction_model', label: '记忆抽取模型', tooltip: 'llm_extractor 抽取模型' },
+  { name: 'judge_model', label: '幻觉校验模型', tooltip: 'fact-check LLM-as-Judge 判定模型' },
 ];
 
 const toFormValues = (p: Profile): ProfileFormValues => ({
@@ -45,16 +56,16 @@ const toFormValues = (p: Profile): ProfileFormValues => ({
   compaction: p.baseline?.compaction || undefined,
   enrich_model: p.baseline?.enrich_model || undefined,
   summary_model: p.baseline?.summary_model || undefined,
+  extraction_model: p.baseline?.extraction_model || undefined,
+  judge_model: p.baseline?.judge_model || undefined,
 });
 
 const toInput = (familyKey: string, v: ProfileFormValues): UpsertProfileInput => {
   const baseline: Partial<ProfileBaseline> = {};
-  for (const field of PROMPT_FIELDS) {
+  for (const field of [...PROMPT_FIELDS, ...MODEL_FIELDS]) {
     const value = v[field.name];
     if (value) baseline[field.name] = value;
   }
-  if (v.enrich_model) baseline.enrich_model = v.enrich_model;
-  if (v.summary_model) baseline.summary_model = v.summary_model;
   return {
     family_key: familyKey,
     display_name: v.display_name || undefined,
@@ -75,6 +86,15 @@ interface ProfileEditDrawerProps {
 export const ProfileEditDrawer = ({ profile, open, onClose, onSaved }: ProfileEditDrawerProps) => {
   const [form] = Form.useForm<ProfileFormValues>();
   const [saving, setSaving] = useState(false);
+  // 全局 chat 模型目录：管线模型引用下拉的数据源（GET /models）。
+  const [chatModels, setChatModels] = useState<string[]>([]);
+
+  useEffect(() => {
+    llmApi
+      .getCatalogue()
+      .then((c) => setChatModels(c.chatModels))
+      .catch(() => setChatModels([])); // 目录不可用降级为空下拉，不影响保存
+  }, []);
 
   useEffect(() => {
     if (open) {
@@ -165,14 +185,18 @@ export const ProfileEditDrawer = ({ profile, open, onClose, onSaved }: ProfileEd
         </Form.Item>
 
         <Divider orientation="left" plain style={{ margin: '8px 0 16px' }}>
-          管线模型引用
+          管线模型引用（数据源 = 全局模型目录）
         </Divider>
-        <Form.Item name="enrich_model" label="记忆富化模型" rules={[{ max: 128 }]}>
-          <Input placeholder="如 qwen-max" />
-        </Form.Item>
-        <Form.Item name="summary_model" label="记忆总结模型" rules={[{ max: 128 }]}>
-          <Input placeholder="如 qwen-max" />
-        </Form.Item>
+        {MODEL_FIELDS.map((field) => (
+          <Form.Item key={field.name} name={field.name} label={field.label} tooltip={field.tooltip}>
+            <Select
+              placeholder="从全局目录选择，留空 = 使用默认"
+              options={chatModels.map((m) => ({ value: m, label: m }))}
+              showSearch
+              allowClear
+            />
+          </Form.Item>
+        ))}
 
         <Divider orientation="left" plain style={{ margin: '8px 0 16px' }}>
           机制提示词模板（留空 = 使用种子默认）

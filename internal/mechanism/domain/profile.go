@@ -36,12 +36,15 @@ type BaselinePrompts struct {
 	MemorySummarize  string `json:"memory_summarize,omitempty"`  // history_summarizer 周期总结（无占位）
 	MemorySupersede  string `json:"memory_supersede,omitempty"`  // llm_superseder 判断模板（%s/%s）
 	Compaction       string `json:"compaction,omitempty"`        // history_compactor 压缩指令（无占位）
+	AgentFactCheck   string `json:"agent_factcheck,omitempty"`   // factcheck judge 判定模板（%s/%s）
 }
 
 // BaselineModels 是机制面管线模型引用（原 env EnrichModel/SummaryModel）。
 type BaselineModels struct {
-	EnrichModel  string `json:"enrich_model,omitempty"`
-	SummaryModel string `json:"summary_model,omitempty"`
+	EnrichModel     string `json:"enrich_model,omitempty"`
+	SummaryModel    string `json:"summary_model,omitempty"`
+	ExtractionModel string `json:"extraction_model,omitempty"` // llm_extractor 抽取模型
+	JudgeModel      string `json:"judge_model,omitempty"`      // factcheck LLM-as-Judge 判定模型
 }
 
 // BaselineRecall 是召回参数（注册表 legacy 假参数，接线语义确认前保持 nil）。

@@ -285,7 +285,7 @@ func TestResolveFallbackCandidatesOrderingAndCap(t *testing.T) {
 	chatProtos := map[domain.ProviderKind]infrastructure.ChatProtocol{domain.ProviderOpenAICompat: proto}
 	reg := infrastructure.NewModelRegistry(modelRepo, providerRepo, chatProtos, map[domain.ProviderKind]infrastructure.EmbedProtocol{}, 5*time.Minute)
 
-	cands, err := reg.ResolveFallbackCandidates(ctxWithTenant(), "test-tenant", "primary")
+	cands, err := reg.ResolveFallbackCandidates(ctxWithTenant(), "primary")
 	require.NoError(t, err)
 	names := make([]string, 0, len(cands))
 	for _, c := range cands {
@@ -360,7 +360,7 @@ func TestResolveFallbackCandidatesPrimaryMissingFails(t *testing.T) {
 	proto := newScriptedProto(nil)
 	chatProtos := map[domain.ProviderKind]infrastructure.ChatProtocol{domain.ProviderOpenAICompat: proto}
 	reg := infrastructure.NewModelRegistry(modelRepo, providerRepo, chatProtos, map[domain.ProviderKind]infrastructure.EmbedProtocol{}, 5*time.Minute)
-	_, err := reg.ResolveFallbackCandidates(ctxWithTenant(), "test-tenant", "ghost")
+	_, err := reg.ResolveFallbackCandidates(ctxWithTenant(), "ghost")
 	require.Error(t, err)
-	require.Contains(t, fmt.Sprintf("%v", err), "not found")
+	require.Contains(t, fmt.Sprintf("%v", err), "not resolved")
 }

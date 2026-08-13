@@ -10,20 +10,20 @@ import (
 )
 
 // providerFunc 把纯函数适配为 port.ModelContextProvider 桩。
-type providerFunc func(context.Context, string, string) (int, error)
+type providerFunc func(context.Context, string) (int, error)
 
-func (p providerFunc) GetChatModelContextWindow(ctx context.Context, tenantID, model string) (int, error) {
-	return p(ctx, tenantID, model)
+func (p providerFunc) GetChatModelContextWindow(ctx context.Context, model string) (int, error) {
+	return p(ctx, model)
 }
 
 // okWindow 返回 registry 命中固定窗口的 provider 桩。
 func okWindow(cw int) providerFunc {
-	return func(context.Context, string, string) (int, error) { return cw, nil }
+	return func(context.Context, string) (int, error) { return cw, nil }
 }
 
 // errWindow 返回 provider 报错的桩。
 func errWindow() providerFunc {
-	return func(context.Context, string, string) (int, error) { return 0, errors.New("catalog down") }
+	return func(context.Context, string) (int, error) { return 0, errors.New("catalog down") }
 }
 
 // vendorWindow 返回 vendor 静态表命中固定窗口的桩。
@@ -72,7 +72,7 @@ func TestResolveModelWindow(t *testing.T) {
 					return tc.vendor(model)
 				}
 			}
-			got, src := ResolveModelWindow(context.Background(), "tenant-1", "qwen-max", tc.provider, vendor)
+			got, src := ResolveModelWindow(context.Background(), "qwen-max", tc.provider, vendor)
 			if got != tc.want {
 				t.Fatalf("ResolveModelWindow() window = %d, want %d", got, tc.want)
 			}

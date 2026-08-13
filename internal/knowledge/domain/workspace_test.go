@@ -58,7 +58,8 @@ func TestNewWorkspaceRejectsInvalidConfig(t *testing.T) {
 		cfg  WorkspaceConfig
 		want error
 	}{
-		{"unsupported embedding model", WorkspaceConfig{EmbeddingModel: "nope", QueryMode: "hybrid", ChunkingStrategy: "recursive"}, ErrInvalidEmbeddingModel},
+		// 注意：embedding model 目录存在性由 application 层校验（port.ModelExists），
+		// domain Validate 只做结构校验（query/chunking/rerank/threshold）。
 		{"unsupported query mode", WorkspaceConfig{EmbeddingModel: "text-embedding-v3", QueryMode: "fuzzy", ChunkingStrategy: "recursive"}, ErrInvalidQueryMode},
 		{"unsupported chunking strategy", WorkspaceConfig{EmbeddingModel: "text-embedding-v3", QueryMode: "hybrid", ChunkingStrategy: "weird"}, ErrInvalidChunkingStrategy},
 		{"empty embedding model cannot default after explicit invalid", WorkspaceConfig{EmbeddingModel: "", QueryMode: "bad", ChunkingStrategy: "recursive"}, ErrInvalidQueryMode},
@@ -83,12 +84,11 @@ func TestWorkspaceConfigValidate(t *testing.T) {
 		mut  func(*WorkspaceConfig)
 		want error
 	}{
-		{"bad model", func(c *WorkspaceConfig) { c.EmbeddingModel = "x" }, ErrInvalidEmbeddingModel},
 		{"bad mode", func(c *WorkspaceConfig) { c.QueryMode = "x" }, ErrInvalidQueryMode},
 		{"bad strategy", func(c *WorkspaceConfig) { c.ChunkingStrategy = "x" }, ErrInvalidChunkingStrategy},
-		{"empty model", func(c *WorkspaceConfig) { c.EmbeddingModel = "" }, ErrInvalidEmbeddingModel},
+		// embedding model 存在性由 application 目录校验，domain 不检查空值/未知值。
 		{"external provider without model", func(c *WorkspaceConfig) { c.Reranking = "cohere" }, ErrInvalidRerankIdentity},
-		{"unknown rerank provider", func(c *WorkspaceConfig) { c.Reranking = "unknown:model" }, ErrInvalidRerankIdentity},
+		{"external provider with model passes", func(c *WorkspaceConfig) { c.Reranking = "unknown:model" }, nil},
 		{"threshold above range", func(c *WorkspaceConfig) { c.ScoreThreshold = 1.5 }, ErrInvalidScoreThreshold},
 		{"threshold below range", func(c *WorkspaceConfig) { c.ScoreThreshold = -0.1 }, ErrInvalidScoreThreshold},
 	} {
@@ -143,7 +143,7 @@ func TestMergeUpdate(t *testing.T) {
 		{"external rerank identity", WorkspaceConfig{Reranking: "cohere:rerank-v3.0"}, nil, func() WorkspaceConfig { c := base; c.Reranking = "cohere:rerank-v3.0"; return c }()},
 		{"builtin rerank identity", WorkspaceConfig{Reranking: "builtin-score-v1"}, nil, func() WorkspaceConfig { c := base; c.Reranking = "builtin-score-v1"; return c }()},
 		{"external rerank without model", WorkspaceConfig{Reranking: "cohere"}, ErrInvalidRerankIdentity, base},
-		{"unknown rerank provider", WorkspaceConfig{Reranking: "unknown:model"}, ErrInvalidRerankIdentity, base},
+		{"external provider with model applies", WorkspaceConfig{Reranking: "unknown:model"}, nil, func() WorkspaceConfig { c := base; c.Reranking = "unknown:model"; return c }()},
 		{"score threshold applied", WorkspaceConfig{ScoreThreshold: 0.5}, nil, func() WorkspaceConfig { c := base; c.ScoreThreshold = 0.5; return c }()},
 		{"score threshold above range", WorkspaceConfig{ScoreThreshold: 1.5}, ErrInvalidScoreThreshold, base},
 		{"rerank topk applied", WorkspaceConfig{RerankTopK: 3}, nil, func() WorkspaceConfig { c := base; c.RerankTopK = 3; return c }()},

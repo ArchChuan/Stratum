@@ -39,13 +39,6 @@ var AllowedChunkingStrategies = map[string]bool{
 	ChunkingStrategySemantic:           true,
 }
 
-// AllowedEmbeddingModels enumerates models the system can serve embeddings for.
-// Extend here when a new provider is wired up; service / handler must not redefine.
-var AllowedEmbeddingModels = map[string]bool{
-	"text-embedding-v3": true,
-	"embedding-3":       true,
-}
-
 // AllowedQueryModes enumerates RAG query strategies recognised by RAGService.
 var AllowedQueryModes = map[string]bool{
 	"vector": true,
@@ -53,13 +46,14 @@ var AllowedQueryModes = map[string]bool{
 	"hybrid": true,
 }
 
-// AllowedRerankIdentities enumerates rerank strategies recognised by
-// RAGService: "" (none), the local builtin scorer, and external providers in
-// "provider:model" form. Extend here when a new reranker is wired up.
+// AllowedRerankIdentities enumerates the local (internal) rerank strategies
+// recognised by RAGService: "" (none) and the builtin scorer. External
+// providers (e.g. cohere) are no longer whitelisted here — their existence is
+// validated against the global catalogue by the application layer
+// (port.ModelExists), keeping this domain check free of I/O.
 var AllowedRerankIdentities = map[string]bool{
 	"":                 true,
 	"builtin-score-v1": true,
-	"cohere":           true,
 }
 
 // SplitRerankIdentity splits "provider:model" style rerank identities;
@@ -117,26 +111,35 @@ func NewWorkspace(name, description string, cfg WorkspaceConfig, defaultChunkSiz
 	}, nil
 }
 
-// Validate checks that EmbeddingModel, QueryMode, ChunkingStrategy, and the
-// rerank settings fall within the allowed sets.
+// Validate checks that QueryMode, ChunkingStrategy, and the rerank settings
+// fall within the allowed sets. Embedding model existence in the global
+// catalogue is validated by the application layer (port.ModelExists) after
+// this pure structural check — domain stays free of I/O.
 func (c WorkspaceConfig) Validate() error {
-	if !AllowedEmbeddingModels[c.EmbeddingModel] {
-		return ErrInvalidEmbeddingModel
-	}
 	if !AllowedQueryModes[c.QueryMode] {
 		return ErrInvalidQueryMode
 	}
 	if !AllowedChunkingStrategies[c.ChunkingStrategy] {
 		return ErrInvalidChunkingStrategy
 	}
-	provider, model := SplitRerankIdentity(c.Reranking)
-	if !AllowedRerankIdentities[provider] || (provider == "cohere" && model == "") {
+	if !ValidRerankIdentity(c.Reranking) {
 		return ErrInvalidRerankIdentity
 	}
 	if c.ScoreThreshold < 0 || c.ScoreThreshold > 1 {
 		return ErrInvalidScoreThreshold
 	}
 	return nil
+}
+
+// ValidRerankIdentity 校验 rerank identity 结构：内部策略（""/builtin）直接
+// 合法；外部 provider 必须为 "provider:model" 形式（model 非空），provider
+// 存在性由 application 层目录校验（domain 不做 I/O）。
+func ValidRerankIdentity(identity string) bool {
+	provider, model := SplitRerankIdentity(identity)
+	if AllowedRerankIdentities[provider] {
+		return true
+	}
+	return model != ""
 }
 
 func applyDefaults(c WorkspaceConfig, defaultChunkSize, defaultTopK int) WorkspaceConfig {
@@ -208,8 +211,7 @@ func (c WorkspaceConfig) applyImmutableSettings(partial WorkspaceConfig) error {
 func (c WorkspaceConfig) applyRerankSettings(partial WorkspaceConfig) (WorkspaceConfig, error) {
 	out := c
 	if partial.Reranking != "" {
-		provider, model := SplitRerankIdentity(partial.Reranking)
-		if !AllowedRerankIdentities[provider] || (provider == "cohere" && model == "") {
+		if !ValidRerankIdentity(partial.Reranking) {
 			return c, ErrInvalidRerankIdentity
 		}
 		out.Reranking = partial.Reranking

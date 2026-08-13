@@ -181,6 +181,26 @@ func (c *collectionStub) DeleteByDocumentIDs(_ context.Context, collectionName s
 	return nil
 }
 
+// fakeModelExists 实现 port.ModelExists；目录为空时能力内模型不存在，
+// err 可脚本化目录查询失败。
+type fakeModelExists struct {
+	embedding map[string]bool
+	rerank    map[string]bool
+	err       error
+}
+
+func (f *fakeModelExists) Exists(_ context.Context, model string, capability port.ModelCapability) (bool, error) {
+	if f.err != nil {
+		return false, f.err
+	}
+	switch capability {
+	case port.CapRerank:
+		return f.rerank[model], nil
+	default:
+		return f.embedding[model], nil
+	}
+}
+
 // buildWorkspaceService 组装 WorkspaceService + 可选的 ingest 依赖。
 func buildWorkspaceService(repo *fakeWorkspaceRepo) (*WorkspaceService, *KnowledgeIngest) {
 	// parser 输出段落文本，确保 chunking 产生非空 chunks。
@@ -271,8 +291,9 @@ func TestWorkspaceCreateWithoutVectorStore(t *testing.T) {
 func TestWorkspaceCreateValidationAndErrors(t *testing.T) {
 	repo := newFakeWorkspaceRepo()
 	svc, _ := buildWorkspaceService(repo)
+	svc.SetModelExists(&fakeModelExists{embedding: map[string]bool{domain.DefaultEmbeddingModel: true}})
 
-	// 极端情况：非法 embedding model。
+	// 目录校验：非法 embedding model 不在全局目录。
 	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{
 		Name: "ws", Config: domain.WorkspaceConfig{EmbeddingModel: "nope"},
 	}, "user-1"); !errors.Is(err, domain.ErrInvalidEmbeddingModel) {
@@ -282,6 +303,35 @@ func TestWorkspaceCreateValidationAndErrors(t *testing.T) {
 	repo.createErr = errors.New("db down")
 	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{Name: "ws"}, "user-1"); err == nil {
 		t.Fatal("repo error must propagate")
+	}
+}
+
+func TestWorkspaceCreateValidatesRerankCatalogue(t *testing.T) {
+	repo := newFakeWorkspaceRepo()
+	svc, _ := buildWorkspaceService(repo)
+	catalogue := &fakeModelExists{
+		embedding: map[string]bool{domain.DefaultEmbeddingModel: true},
+		rerank:    map[string]bool{"rerank-v3": true},
+	}
+	svc.SetModelExists(catalogue)
+
+	// 外部 rerank provider 的模型不在目录 → 拒绝。
+	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{
+		Name: "ws", Config: domain.WorkspaceConfig{Reranking: "cohere:unknown"},
+	}, "user-1"); !errors.Is(err, domain.ErrInvalidRerankIdentity) {
+		t.Fatalf("rerank not in catalogue err = %v", err)
+	}
+	// 目录查询失败传播（fail-closed，不默认放行）。
+	catalogue.err = errors.New("catalogue down")
+	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{Name: "ws"}, "user-1"); err == nil {
+		t.Fatal("catalogue error must propagate")
+	}
+	// 目录含该 rerank 模型 → 创建成功。
+	catalogue.err = nil
+	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{
+		Name: "ws2", Config: domain.WorkspaceConfig{Reranking: "cohere:rerank-v3"},
+	}, "user-1"); err != nil {
+		t.Fatalf("rerank in catalogue create = %v", err)
 	}
 }
 

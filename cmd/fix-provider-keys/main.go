@@ -77,61 +77,19 @@ func run(args []string, getenv func(string) string, logger *zap.Logger, fix fixF
 	return nil
 }
 
-// fixProviderKeys 将各租户 providers 表中无前缀的历史明文 api key 加密回写。
-// public.tenants 缺失视为 0 租户（全新环境）；租户 schema 缺失跳过该租户；
-// 其余 DB 错误立即失败退出，防止静默漏修。日志只含 tenant/provider id，
-// 绝不输出 key 明文。
+// fixProviderKeys 将 public.providers 表中无前缀的历史明文 api key 加密回写。
+// providers 已提升为 public 平台全局目录（035 迁移），单次扫描即可覆盖全部行，
+// 不再按租户 schema 遍历。public.providers 缺失视为全新环境（正常返回）；
+// 其余 DB 错误立即失败退出，防止静默漏修。日志只含 provider id，绝不输出 key 明文。
 func fixProviderKeys(ctx context.Context, pool pgxPool, key [32]byte, logger *zap.Logger, dryRun bool) error {
-	rows, err := pool.Query(ctx, `SELECT id FROM public.tenants WHERE deleted_at IS NULL`)
+	rows, err := pool.Query(ctx,
+		`SELECT id, api_key FROM public.providers WHERE api_key <> '' AND api_key NOT LIKE 'enc:v1:%'`)
 	if err != nil {
 		if isRelationMissing(err) {
-			logger.Info("public.tenants does not exist, treat as zero tenants")
+			logger.Info("public.providers does not exist, treat as nothing to fix")
 			return nil
 		}
-		return fmt.Errorf("list tenants: %w", err)
-	}
-	defer rows.Close()
-
-	var tenantIDs []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return fmt.Errorf("scan tenant: %w", err)
-		}
-		tenantIDs = append(tenantIDs, id)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("list tenants: %w", err)
-	}
-
-	fixed, skippedTenants := 0, 0
-	for _, tenantID := range tenantIDs {
-		n, skipped, err := fixTenant(ctx, pool, key, tenantID, logger, dryRun)
-		if err != nil {
-			return err // 非表缺失错误必须中止
-		}
-		fixed += n
-		skippedTenants += skipped
-	}
-	logger.Info("fix-provider-keys summary",
-		zap.Int("tenants", len(tenantIDs)),
-		zap.Int("fixed", fixed),
-		zap.Int("skipped_tenants", skippedTenants),
-		zap.Bool("dry_run", dryRun))
-	return nil
-}
-
-// fixTenant 加密回填单个租户的明文 provider key，返回回填数与跳过的租户数。
-func fixTenant(ctx context.Context, pool pgxPool, key [32]byte, tenantID string, logger *zap.Logger, dryRun bool) (int, int, error) {
-	schema := "tenant_" + tenantID
-	rows, err := pool.Query(ctx,
-		`SELECT id, api_key FROM "`+schema+`".providers WHERE api_key <> '' AND api_key NOT LIKE 'enc:v1:%'`)
-	if err != nil {
-		if isRelationMissing(err) {
-			logger.Info("tenant schema not provisioned, skip", zap.String("tenant_id", tenantID))
-			return 0, 1, nil
-		}
-		return 0, 0, fmt.Errorf("list providers (tenant %s): %w", tenantID, err)
+		return fmt.Errorf("list providers: %w", err)
 	}
 	defer rows.Close()
 
@@ -140,36 +98,37 @@ func fixTenant(ctx context.Context, pool pgxPool, key [32]byte, tenantID string,
 	for rows.Next() {
 		var id, plain string
 		if err := rows.Scan(&id, &plain); err != nil {
-			return 0, 0, fmt.Errorf("scan provider (tenant %s): %w", tenantID, err)
+			return fmt.Errorf("scan provider: %w", err)
 		}
 		pendings = append(pendings, pending{id: id, plain: plain})
 	}
 	if err := rows.Err(); err != nil {
-		return 0, 0, fmt.Errorf("list providers (tenant %s): %w", tenantID, err)
+		return fmt.Errorf("list providers: %w", err)
 	}
 
 	fixed := 0
 	for _, p := range pendings {
 		if dryRun {
-			logger.Info("provider key would be fixed",
-				zap.String("tenant_id", tenantID), zap.String("provider_id", p.id))
+			logger.Info("provider key would be fixed", zap.String("provider_id", p.id))
 			fixed++
 			continue
 		}
 		ct, err := pkgcrypto.EncryptSecret(key, p.plain)
 		if err != nil {
-			return fixed, 0, fmt.Errorf("encrypt provider %s (tenant %s): %w", p.id, tenantID, err)
+			return fmt.Errorf("encrypt provider %s: %w", p.id, err)
 		}
 		if _, err := pool.Exec(ctx,
-			`UPDATE "`+schema+`".providers SET api_key=$1, updated_at=now() WHERE id=$2`,
+			`UPDATE public.providers SET api_key=$1, updated_at=now() WHERE id=$2`,
 			ct, p.id); err != nil {
-			return fixed, 0, fmt.Errorf("update provider %s (tenant %s): %w", p.id, tenantID, err)
+			return fmt.Errorf("update provider %s: %w", p.id, err)
 		}
-		logger.Info("provider key fixed",
-			zap.String("tenant_id", tenantID), zap.String("provider_id", p.id))
+		logger.Info("provider key fixed", zap.String("provider_id", p.id))
 		fixed++
 	}
-	return fixed, 0, nil
+	logger.Info("fix-provider-keys summary",
+		zap.Int("fixed", fixed),
+		zap.Bool("dry_run", dryRun))
+	return nil
 }
 
 // pgCodeUndefinedTable 是 PostgreSQL 的 SQLSTATE 42P01（relation does not exist）。

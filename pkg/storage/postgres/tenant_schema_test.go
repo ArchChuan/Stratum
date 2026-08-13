@@ -1,7 +1,9 @@
 package postgres_test
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -9,6 +11,8 @@ import (
 
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
+	"github.com/byteBuilderX/stratum/pkg/storage/postgres/postgrestest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -839,19 +843,105 @@ func TestTenantSchemaBackfillsChatMessageArtifactsAfterTableCreate(t *testing.T)
 	}
 }
 
-func TestTenantSchemaHasDefaultEmbeddingColumnAndIndex(t *testing.T) {
+func TestTenantSchemaDropsLegacyProviderModelTables(t *testing.T) {
+	// providers/models 已提升为 public 平台目录（迁移 035 + cmd/model-migrate 存量搬迁）。
+	// 存量清理由 ProvisionTenantSchema 显式 schema-qualified DROP 执行；模板禁止建这两张表，
+	// 也禁止无前缀 DROP——search_path 含 public 时无前缀 DROP 会顺延误删 public 平台目录。
 	schema, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(schema)
+	if strings.Contains(text, "CREATE TABLE IF NOT EXISTS models") {
+		t.Fatal("tenant_schema.sql must not create tenant-only models table")
+	}
+	if strings.Contains(text, "CREATE TABLE IF NOT EXISTS providers") {
+		t.Fatal("tenant_schema.sql must not create tenant-only providers table")
+	}
+	for _, forbidden := range []string{
+		"DROP TABLE IF EXISTS models",
+		"DROP TABLE IF EXISTS providers",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("tenant_schema.sql must not carry unqualified DROP %q (search_path may hit public)", forbidden)
+		}
+	}
+}
+
+func TestTenantSchemaProvisionsNoProviderModelTables(t *testing.T) {
+	// 新租户 provision 后 schema 内不得存在 providers/models 表。
+	pool := postgrestest.NewPool(t)
+	ctx := context.Background()
+	tenantID := postgrestest.CreateTestTenant(t, pool)
+
+	var exists bool
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables
+		 WHERE table_schema='tenant_`+tenantID+`' AND table_name IN ('providers','models'))`).Scan(&exists))
+	require.False(t, exists, "new tenant schema must not contain providers/models")
+}
+
+func TestProvisionTenantSchemaCleansLegacyTablesKeepsPublic(t *testing.T) {
+	// 存量租户：schema 内存在 legacy providers/models，public 平台目录已有数据。
+	// provision 幂等重跑后，legacy 表被清理，public 表不受波及。
+	pool := postgrestest.NewPool(t)
+	ctx := context.Background()
+	tenantID := postgrestest.CreateTestTenant(t, pool)
+	schema := "tenant_" + tenantID
+
+	_, err := pool.Exec(ctx, fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS "%s".providers (
+			id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, name TEXT NOT NULL,
+			kind TEXT NOT NULL, base_url TEXT NOT NULL DEFAULT '', api_key TEXT NOT NULL DEFAULT '',
+			default_model TEXT NOT NULL DEFAULT '', enabled BOOLEAN NOT NULL DEFAULT true,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			UNIQUE(tenant_id, name))`, schema))
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS "%s".models (
+			id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, provider_id TEXT NOT NULL
+				REFERENCES "%s".providers(id) ON DELETE CASCADE,
+			name TEXT NOT NULL, capabilities TEXT[] NOT NULL DEFAULT '{}',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			UNIQUE(tenant_id, provider_id, name))`, schema, schema))
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS public.providers (
+			id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, kind TEXT NOT NULL,
+			base_url TEXT NOT NULL DEFAULT '', api_key TEXT NOT NULL DEFAULT '',
+			default_model TEXT NOT NULL DEFAULT '', enabled BOOLEAN NOT NULL DEFAULT true,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`)
+	require.NoError(t, err)
+	// 注意：不清除 public.providers——与 model-migrate 等包并行共享同一测试库时，
+	// DROP 会误删对方数据；IF NOT EXISTS 幂等，保留即可。
+
+	require.NoError(t, postgres.ProvisionTenantSchema(ctx, pool, tenantID))
+
+	var legacyExists, publicExists bool
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables
+		 WHERE table_schema='`+schema+`' AND table_name IN ('providers','models'))`).Scan(&legacyExists))
+	require.False(t, legacyExists, "provision must clean legacy tenant providers/models")
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables
+		 WHERE table_schema='public' AND table_name='providers')`).Scan(&publicExists))
+	require.True(t, publicExists, "provision must not drop public platform catalog")
+}
+
+func TestPlatformModelCatalogCarriesDefaultEmbeddingUniqueMark(t *testing.T) {
+	// default_embedding 全局唯一标记由 public 035 迁移承担（原 tenant 表 idx 已移除）。
+	// 常量表达式索引 (true)：满足 WHERE 的行取同一常量，唯一约束强制全表最多一个默认标记。
+	up, err := os.ReadFile("../../migration/sql/035_platform_model_catalog.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(up)
 	for _, want := range []string{
-		"ADD COLUMN IF NOT EXISTS default_embedding BOOLEAN NOT NULL DEFAULT false",
-		"idx_models_default_embedding",
+		"ON models ((true))",
 		"WHERE default_embedding AND 'embedding' = ANY(capabilities)",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("tenant_schema.sql missing %q", want)
+			t.Fatalf("035 up.sql missing %q", want)
 		}
 	}
 }

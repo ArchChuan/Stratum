@@ -2951,7 +2951,7 @@ func (s *AgentService) resolveExecutionWindow(
 	explicit int,
 ) (int, agentgraph.WindowSource) {
 	modelWin, src := agentgraph.ResolveModelWindow(
-		ctx, tenantID, model, s.deps.ModelContextProvider, s.deps.VendorWindowLookup,
+		ctx, model, s.deps.ModelContextProvider, s.deps.VendorWindowLookup,
 	)
 	if modelWin > constants.MaxContextWindowTokens {
 		modelWin = constants.MaxContextWindowTokens

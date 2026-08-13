@@ -2,9 +2,12 @@ package infrastructure_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
@@ -20,14 +23,24 @@ var testRepoKey = [32]byte{
 	17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
 }
 
-func TestPgProviderRepo_CRUD(t *testing.T) {
+// newSeedProviderRepo 创建共享 pool 的 provider repo，并注册该 provider ID
+// 的 public.providers 行清理。public 表全局共享，测试间靠唯一 ID + cleanup 隔离。
+func newSeedProviderRepo(t *testing.T) (*pgxpool.Pool, *infrastructure.PgProviderRepo, string) {
 	pool := postgrestest.NewPool(t)
-	tenantID := postgrestest.CreateTestTenant(t, pool)
 	repo := infrastructure.NewPgProviderRepo(pool, testRepoKey, zap.NewNop(), observability.NoopMetrics{})
+	id := fmt.Sprintf("test-prov-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM public.providers WHERE id=$1`, id)
+	})
+	return pool, repo, id
+}
+
+func TestPgProviderRepo_CRUD(t *testing.T) {
+	pool, repo, providerID := newSeedProviderRepo(t)
 	ctx := context.Background()
 
 	p := &domain.Provider{
-		ID:      "test-prov-1",
+		ID:      providerID,
 		Name:    "test-qwen",
 		Kind:    domain.ProviderOpenAICompat,
 		BaseURL: "https://test.example.com/v1",
@@ -36,15 +49,15 @@ func TestPgProviderRepo_CRUD(t *testing.T) {
 	}
 
 	// Create
-	if err := repo.Create(ctx, tenantID, p); err != nil {
+	if err := repo.Create(ctx, p); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
-	// Create 必须把 API key 以密文落库：直接读 tenant schema 原始行验证
-	// 存储值不是明文，且解密后还原明文。
+	// Create 必须把 API key 以密文落库：直接读 public 原始行验证存储值不是明文，
+	// 且解密后还原明文。
 	var storedKey string
 	if err := pool.QueryRow(ctx,
-		`SELECT api_key FROM "tenant_`+tenantID+`".providers WHERE id=$1`, p.ID,
+		`SELECT api_key FROM public.providers WHERE id=$1`, p.ID,
 	).Scan(&storedKey); err != nil {
 		t.Fatalf("read raw row: %v", err)
 	}
@@ -60,7 +73,7 @@ func TestPgProviderRepo_CRUD(t *testing.T) {
 	}
 
 	// Get
-	got, err := repo.Get(ctx, tenantID, p.ID)
+	got, err := repo.Get(ctx, p.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -75,7 +88,7 @@ func TestPgProviderRepo_CRUD(t *testing.T) {
 	}
 
 	// List
-	list, err := repo.List(ctx, tenantID)
+	list, err := repo.List(ctx)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -86,10 +99,10 @@ func TestPgProviderRepo_CRUD(t *testing.T) {
 	// Update
 	p.Name = "test-qwen-2"
 	p.Kind = domain.ProviderAnthropic
-	if err := repo.Update(ctx, tenantID, p); err != nil {
+	if err := repo.Update(ctx, p); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	got, err = repo.Get(ctx, tenantID, p.ID)
+	got, err = repo.Get(ctx, p.ID)
 	if err != nil {
 		t.Fatalf("get after update: %v", err)
 	}
@@ -104,47 +117,40 @@ func TestPgProviderRepo_CRUD(t *testing.T) {
 	}
 
 	// Delete
-	if err := repo.Delete(ctx, tenantID, p.ID); err != nil {
+	if err := repo.Delete(ctx, p.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	_, err = repo.Get(ctx, tenantID, p.ID)
+	_, err = repo.Get(ctx, p.ID)
 	if err == nil {
 		t.Fatal("expected error after delete")
 	}
 }
 
 func TestPgProviderRepo_GetNotFound(t *testing.T) {
-	pool := postgrestest.NewPool(t)
-	tenantID := postgrestest.CreateTestTenant(t, pool)
-	repo := infrastructure.NewPgProviderRepo(pool, testRepoKey, zap.NewNop(), observability.NoopMetrics{})
+	_, repo, _ := newSeedProviderRepo(t)
 	ctx := context.Background()
 
-	_, err := repo.Get(ctx, tenantID, "nonexistent")
+	_, err := repo.Get(ctx, "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent provider")
 	}
 }
 
 func TestPgProviderRepo_DeleteNotFound(t *testing.T) {
-	pool := postgrestest.NewPool(t)
-	tenantID := postgrestest.CreateTestTenant(t, pool)
-	repo := infrastructure.NewPgProviderRepo(pool, testRepoKey, zap.NewNop(), observability.NoopMetrics{})
+	_, repo, _ := newSeedProviderRepo(t)
 	ctx := context.Background()
 
-	// Delete nonexistent should succeed (no rows affected is not an error in this implementation)
-	err := repo.Delete(ctx, tenantID, "nonexistent")
+	err := repo.Delete(ctx, "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for deleting nonexistent provider")
 	}
 }
 
 func TestPgProviderRepo_ListEmpty(t *testing.T) {
-	pool := postgrestest.NewPool(t)
-	tenantID := postgrestest.CreateTestTenant(t, pool)
-	repo := infrastructure.NewPgProviderRepo(pool, testRepoKey, zap.NewNop(), observability.NoopMetrics{})
+	_, repo, _ := newSeedProviderRepo(t)
 	ctx := context.Background()
 
-	list, err := repo.List(ctx, tenantID)
+	list, err := repo.List(ctx)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -157,25 +163,23 @@ func TestPgProviderRepo_ListEmpty(t *testing.T) {
 // 明文经 Get 返回原值（恢复运行时可用）、出现在 List 中（管理页可见），
 // 写路径仍由 Create/Update 加密。
 func TestPgProviderRepo_LegacyPlaintextReadable(t *testing.T) {
-	pool := postgrestest.NewPool(t)
-	tenantID := postgrestest.CreateTestTenant(t, pool)
-	repo := infrastructure.NewPgProviderRepo(pool, testRepoKey, zap.NewNop(), observability.NoopMetrics{})
+	pool, repo, providerID := newSeedProviderRepo(t)
 	ctx := context.Background()
 
 	p := &domain.Provider{
-		ID: "legacy-provider", Name: "legacy", Kind: domain.ProviderOpenAICompat,
+		ID: providerID, Name: "legacy", Kind: domain.ProviderOpenAICompat,
 		BaseURL: "https://legacy.example.com", APIKey: "sk-legacy", Enabled: true,
 	}
 	// 直接以明文写入（模拟历史数据）。
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO "tenant_`+tenantID+`".providers
-		 (id, tenant_id, name, kind, base_url, api_key, default_model, enabled)
-		 VALUES ($1,$2,$3,$4,$5,$6,'',true)`,
-		p.ID, tenantID, p.Name, string(p.Kind), p.BaseURL, p.APIKey); err != nil {
+		`INSERT INTO public.providers
+		 (id, name, kind, base_url, api_key, default_model, enabled)
+		 VALUES ($1,$2,$3,$4,$5,'',true)`,
+		p.ID, p.Name, string(p.Kind), p.BaseURL, p.APIKey); err != nil {
 		t.Fatalf("seed legacy row: %v", err)
 	}
 
-	got, err := repo.Get(ctx, tenantID, p.ID)
+	got, err := repo.Get(ctx, p.ID)
 	if err != nil {
 		t.Fatalf("get legacy plaintext provider must succeed (dual-read): %v", err)
 	}
@@ -183,7 +187,7 @@ func TestPgProviderRepo_LegacyPlaintextReadable(t *testing.T) {
 		t.Fatalf("get api key: got %q, want legacy plaintext as-is", got.APIKey)
 	}
 
-	list, err := repo.List(ctx, tenantID)
+	list, err := repo.List(ctx)
 	if err != nil {
 		t.Fatalf("list with legacy plaintext entry must not fail: %v", err)
 	}
@@ -195,19 +199,21 @@ func TestPgProviderRepo_LegacyPlaintextReadable(t *testing.T) {
 // TestPgProviderRepo_List_SkipsCorruptEntry 验证一条损坏密文不影响列表整体：
 // List 跳过解密失败的条目并返回其余 provider，管理页的编辑/删除入口保持可用。
 func TestPgProviderRepo_List_SkipsCorruptEntry(t *testing.T) {
-	pool := postgrestest.NewPool(t)
-	tenantID := postgrestest.CreateTestTenant(t, pool)
-	repo := infrastructure.NewPgProviderRepo(pool, testRepoKey, zap.NewNop(), observability.NoopMetrics{})
+	pool, repo, _ := newSeedProviderRepo(t)
 	ctx := context.Background()
 
+	suffix := time.Now().UnixNano()
 	insert := func(id, apiKey string) {
 		if _, err := pool.Exec(ctx,
-			`INSERT INTO "tenant_`+tenantID+`".providers
-			 (id, tenant_id, name, kind, base_url, api_key, default_model, enabled)
-			 VALUES ($1,$2,$3,$4,$5,$6,'',true)`,
-			id, tenantID, id, string(domain.ProviderOpenAICompat), "https://"+id+".example.com", apiKey); err != nil {
+			`INSERT INTO public.providers
+			 (id, name, kind, base_url, api_key, default_model, enabled)
+			 VALUES ($1,$2,$3,$4,$5,'',true)`,
+			id, id, string(domain.ProviderOpenAICompat), "https://"+id+".example.com", apiKey); err != nil {
 			t.Fatalf("seed row %s: %v", id, err)
 		}
+		t.Cleanup(func() {
+			_, _ = pool.Exec(context.Background(), `DELETE FROM public.providers WHERE id=$1`, id)
+		})
 	}
 	// 2 条损坏密文（payload 非法 base64 / 合法 base64 但 key 不匹配）+ 2 条正常记录。
 	otherKey := [32]byte{8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
@@ -216,9 +222,10 @@ func TestPgProviderRepo_List_SkipsCorruptEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encrypt wrong-key fixture: %v", err)
 	}
-	insert("corrupt-1", "enc:v1:not-valid-ciphertext!!!")
-	insert("corrupt-2", wrongKeyCt)
-	for _, id := range []string{"good-1", "good-2"} {
+	corrupt1, corrupt2 := fmt.Sprintf("corrupt-1-%d", suffix), fmt.Sprintf("corrupt-2-%d", suffix)
+	insert(corrupt1, "enc:v1:not-valid-ciphertext!!!")
+	insert(corrupt2, wrongKeyCt)
+	for _, id := range []string{fmt.Sprintf("good-1-%d", suffix), fmt.Sprintf("good-2-%d", suffix)} {
 		enc, err := crypto.EncryptSecret(testRepoKey, "sk-"+id)
 		if err != nil {
 			t.Fatalf("encrypt %s: %v", id, err)
@@ -226,7 +233,7 @@ func TestPgProviderRepo_List_SkipsCorruptEntry(t *testing.T) {
 		insert(id, enc)
 	}
 
-	list, err := repo.List(ctx, tenantID)
+	list, err := repo.List(ctx)
 	if err != nil {
 		t.Fatalf("list with corrupt entry must not fail wholesale: %v", err)
 	}
@@ -234,7 +241,7 @@ func TestPgProviderRepo_List_SkipsCorruptEntry(t *testing.T) {
 		t.Fatalf("list len: got %d, want 2 (corrupt entries skipped)", len(list))
 	}
 	for _, p := range list {
-		if p.ID == "corrupt-1" || p.ID == "corrupt-2" {
+		if p.ID == corrupt1 || p.ID == corrupt2 {
 			t.Fatalf("corrupt entry must be excluded from result: %+v", p)
 		}
 		if p.APIKey == "" || strings.HasPrefix(p.APIKey, "enc:v1:") {
@@ -243,8 +250,8 @@ func TestPgProviderRepo_List_SkipsCorruptEntry(t *testing.T) {
 	}
 
 	// Get 单条访问仍 fail closed：与 List 的可用性优先策略不同。
-	for _, id := range []string{"corrupt-1", "corrupt-2"} {
-		if _, err := repo.Get(ctx, tenantID, id); err == nil {
+	for _, id := range []string{corrupt1, corrupt2} {
+		if _, err := repo.Get(ctx, id); err == nil {
 			t.Fatalf("Get on corrupt entry %s must stay fail closed", id)
 		}
 	}

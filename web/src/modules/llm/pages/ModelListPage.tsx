@@ -23,7 +23,6 @@ import { useModels } from '../hooks/useModels';
 import type { Model, ModelCapability, UpdateModelInput } from '../model/llm';
 
 import { LLM_DEFAULT_PAGE_SIZE } from '@/constants';
-import { useTenantRole } from '@/modules/iam';
 import { extractErrorMessage } from '@/shared/lib';
 
 const { Text } = Typography;
@@ -39,7 +38,6 @@ const CAP_FILTER_OPTIONS: { label: string; value: ModelCapability }[] = [
 export function ModelListPage() {
   const { models, loading, refresh, toggleModel, updateModel, deleteModel, setDefaultEmbedding } =
     useModels();
-  const { isAdmin } = useTenantRole();
   const [capFilter, setCapFilter] = useState<ModelCapability | undefined>();
   const [editModel, setEditModel] = useState<Model | null>(null);
   const [editOpen, setEditOpen] = useState(false);
@@ -164,7 +162,6 @@ export function ModelListPage() {
         <Switch
           size="small"
           checked={_enabled}
-          disabled={!isAdmin}
           onChange={(checked) => toggleModel(record.id, checked)}
         />
       ),
@@ -175,29 +172,25 @@ export function ModelListPage() {
       width: 200,
       render: (_: unknown, record: Model) => (
         <span style={{ display: 'flex', gap: 8 }}>
-          <Button size="small" onClick={() => handleEdit(record)} disabled={!isAdmin}>
+          <Button size="small" onClick={() => handleEdit(record)}>
             编辑
           </Button>
-          {isAdmin &&
-            record.capabilities.includes('embedding') &&
-            record.enabled && (
-              <Button
-                size="small"
-                type={record.defaultEmbedding ? 'default' : 'primary'}
-                loading={defaultLoading === record.id}
-                onClick={() => void handleSetDefault(record)}
-              >
-                {record.defaultEmbedding ? '取消默认' : '设为默认'}
-              </Button>
-            )}
-          {isAdmin && (
+          {record.capabilities.includes('embedding') && record.enabled && (
             <Button
               size="small"
-              danger
-              icon={<DeleteOutlined />}
-              onClick={() => handleDelete(record)}
-            />
+              type={record.defaultEmbedding ? 'default' : 'primary'}
+              loading={defaultLoading === record.id}
+              onClick={() => void handleSetDefault(record)}
+            >
+              {record.defaultEmbedding ? '取消默认' : '设为默认'}
+            </Button>
           )}
+          <Button
+            size="small"
+            danger
+            icon={<DeleteOutlined />}
+            onClick={() => handleDelete(record)}
+          />
         </span>
       ),
     },

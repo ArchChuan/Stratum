@@ -22,7 +22,7 @@ type mockProviderRepo struct {
 	getErrs map[string]error
 }
 
-func (m *mockProviderRepo) Create(_ context.Context, _ string, p *domain.Provider) error {
+func (m *mockProviderRepo) Create(_ context.Context, p *domain.Provider) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -33,7 +33,7 @@ func (m *mockProviderRepo) Create(_ context.Context, _ string, p *domain.Provide
 	return nil
 }
 
-func (m *mockProviderRepo) Get(_ context.Context, _, id string) (*domain.Provider, error) {
+func (m *mockProviderRepo) Get(_ context.Context, id string) (*domain.Provider, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -47,7 +47,7 @@ func (m *mockProviderRepo) Get(_ context.Context, _, id string) (*domain.Provide
 	return p, nil
 }
 
-func (m *mockProviderRepo) GetMeta(_ context.Context, _, id string) (*domain.Provider, error) {
+func (m *mockProviderRepo) GetMeta(_ context.Context, id string) (*domain.Provider, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -60,7 +60,7 @@ func (m *mockProviderRepo) GetMeta(_ context.Context, _, id string) (*domain.Pro
 	return &cp, nil
 }
 
-func (m *mockProviderRepo) List(_ context.Context, _ string) ([]domain.Provider, error) {
+func (m *mockProviderRepo) List(_ context.Context) ([]domain.Provider, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -71,7 +71,7 @@ func (m *mockProviderRepo) List(_ context.Context, _ string) ([]domain.Provider,
 	return out, nil
 }
 
-func (m *mockProviderRepo) Update(_ context.Context, _ string, p *domain.Provider) error {
+func (m *mockProviderRepo) Update(_ context.Context, p *domain.Provider) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -82,7 +82,7 @@ func (m *mockProviderRepo) Update(_ context.Context, _ string, p *domain.Provide
 	return nil
 }
 
-func (m *mockProviderRepo) Delete(_ context.Context, _, id string) error {
+func (m *mockProviderRepo) Delete(_ context.Context, id string) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -98,11 +98,11 @@ type mockModelRepo struct {
 	err    error
 }
 
-func (m *mockModelRepo) Create(_ context.Context, _ string, _ *domain.Model) error {
+func (m *mockModelRepo) Create(_ context.Context, _ *domain.Model) error {
 	return m.err
 }
 
-func (m *mockModelRepo) Get(_ context.Context, _, id string) (*domain.Model, error) {
+func (m *mockModelRepo) Get(_ context.Context, id string) (*domain.Model, error) {
 	for _, mdl := range m.models {
 		if mdl.ID == id {
 			return &mdl, nil
@@ -111,18 +111,18 @@ func (m *mockModelRepo) Get(_ context.Context, _, id string) (*domain.Model, err
 	return nil, m.err
 }
 
-func (m *mockModelRepo) List(_ context.Context, _ string, _ port.ModelFilter) ([]domain.Model, error) {
+func (m *mockModelRepo) List(_ context.Context, _ port.ModelFilter) ([]domain.Model, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
 	return m.models, nil
 }
 
-func (m *mockModelRepo) Update(_ context.Context, _ string, _ *domain.Model) error {
+func (m *mockModelRepo) Update(_ context.Context, _ *domain.Model) error {
 	return m.err
 }
 
-func (m *mockModelRepo) UpsertDiscovered(_ context.Context, _, _ string, models []domain.Model) ([]domain.Model, error) {
+func (m *mockModelRepo) UpsertDiscovered(_ context.Context, _ string, models []domain.Model) ([]domain.Model, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -130,15 +130,15 @@ func (m *mockModelRepo) UpsertDiscovered(_ context.Context, _, _ string, models 
 	return models, nil
 }
 
-func (m *mockModelRepo) Delete(_ context.Context, _, _ string) error {
+func (m *mockModelRepo) Delete(_ context.Context, _ string) error {
 	return m.err
 }
 
-func (m *mockModelRepo) Toggle(_ context.Context, _, _ string, _ bool) error {
+func (m *mockModelRepo) Toggle(_ context.Context, _ string, _ bool) error {
 	return m.err
 }
 
-func (m *mockModelRepo) SetDefaultEmbedding(_ context.Context, _, _ string, _ bool) error {
+func (m *mockModelRepo) SetDefaultEmbedding(_ context.Context, _ string, _ bool) error {
 	return m.err
 }
 
@@ -203,11 +203,11 @@ func TestProviderService_Create_HappyPath(t *testing.T) {
 }
 
 type providerInvalidator struct {
-	tenants []string
+	calls int
 }
 
-func (i *providerInvalidator) Invalidate(tenantID string) {
-	i.tenants = append(i.tenants, tenantID)
+func (i *providerInvalidator) Invalidate() {
+	i.calls++
 }
 
 func TestProviderServiceInvalidatesRegistryAfterUpdate(t *testing.T) {
@@ -222,8 +222,8 @@ func TestProviderServiceInvalidatesRegistryAfterUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if len(invalidator.tenants) != 1 || invalidator.tenants[0] != "tenant-1" {
-		t.Fatalf("invalidations = %v", invalidator.tenants)
+	if invalidator.calls != 1 {
+		t.Fatalf("invalidations = %d, want 1", invalidator.calls)
 	}
 }
 
