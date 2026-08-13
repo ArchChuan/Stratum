@@ -18,9 +18,6 @@ const (
 	// MCPMaxConnectionsPerTenant caps per-tenant concurrent MCP connections.
 	MCPMaxConnectionsPerTenant = 10
 
-	// MCPStdioMessageMaxBytes is the per-message read limit for stdio responses.
-	MCPStdioMessageMaxBytes = 8 << 20 // 8 MiB
-
 	// MCPIdleEvictionInterval governs how often the idle-eviction scanner runs.
 	MCPIdleEvictionInterval = 60 * time.Second
 

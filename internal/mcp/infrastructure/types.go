@@ -97,12 +97,6 @@ type ConnectionPoolConfig struct {
 	MaxPerTenant int `yaml:"max_per_tenant"`
 	// IdleTimeout evicts clients that have been idle longer than this duration.
 	IdleTimeout time.Duration `yaml:"idle_timeout"`
-	// CgroupEnable enables cgroups v2 resource limits for stdio child processes.
-	CgroupEnable bool `yaml:"cgroup_enable"`
-	// MemoryLimit is the per-tenant cgroup memory limit (bytes).
-	MemoryLimit int64 `yaml:"memory_limit"`
-	// CPULimit is the per-tenant cgroup CPU quota (microseconds per 100ms).
-	CPULimit int64 `yaml:"cpu_limit"`
 	// MaxRetries is deprecated and unused — retained for config compatibility.
 	MaxRetries int `yaml:"max_retries"`
 	// RetryBackoff is deprecated and unused — retained for config compatibility.
