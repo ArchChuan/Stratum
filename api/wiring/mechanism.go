@@ -103,6 +103,7 @@ func (c *Container) mechanismBaselineForTenant(cfgModel string) memport.Mechanis
 			MemorySupersede:  b.Prompts.MemorySupersede,
 			EnrichModel:      b.Models.EnrichModel,
 			SummaryModel:     b.Models.SummaryModel,
+			ExtractionModel:  b.Models.ExtractionModel,
 		}, nil
 	}
 }

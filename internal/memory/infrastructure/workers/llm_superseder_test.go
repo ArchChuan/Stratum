@@ -185,6 +185,32 @@ func TestLLMSupersederUsesInjectedJudgePromptOverFallback(t *testing.T) {
 	}
 }
 
+// TestLLMSupersederUsesBaselineJudgeModel 验证判定请求显式携带机制基线
+// EnrichModel（superseder 与富化共用族基线，统一解析）。
+func TestLLMSupersederUsesBaselineJudgeModel(t *testing.T) {
+	var gotModel string
+	client := completionClientFunc(func(_ context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+		gotModel = req.Model
+		return &memport.CompletionResponse{Content: `{"supersedes":false,"reason":"ok"}`}, nil
+	})
+	judge := workers.NewLLMSuperseder(client)
+
+	if _, err := judge.JudgeSupersede(context.Background(), "old", "new"); err != nil {
+		t.Fatal(err)
+	}
+	if gotModel != "" {
+		t.Fatalf("expected empty model by default, got %q", gotModel)
+	}
+
+	judge.WithJudgeModel("qwen-turbo")
+	if _, err := judge.JudgeSupersede(context.Background(), "old", "new"); err != nil {
+		t.Fatal(err)
+	}
+	if gotModel != "qwen-turbo" {
+		t.Fatalf("expected request Model %q, got %q", "qwen-turbo", gotModel)
+	}
+}
+
 // TestLLMSupersederRetriesWithCorrectionOnInvalidJSON 验证判定解析失败时走
 // 带错重试：第 2 次请求附加 system-role correction（错误位置丢回模型）。
 func TestLLMSupersederRetriesWithCorrectionOnInvalidJSON(t *testing.T) {

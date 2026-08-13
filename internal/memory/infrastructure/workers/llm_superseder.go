@@ -32,6 +32,7 @@ type LLMSuperseder struct {
 	tenantID    string
 	resolver    TenantLLMResolver
 	judgePrompt string
+	judgeModel  string
 	logger      *zap.Logger
 }
 
@@ -48,6 +49,14 @@ func NewResolvingLLMSuperseder(tenantID string, resolver TenantLLMResolver) *LLM
 // mechanism baseline prompt. Empty keeps supersedePromptTemplate.
 func (s *LLMSuperseder) WithJudgePrompt(p string) *LLMSuperseder {
 	s.judgePrompt = p
+	return s
+}
+
+// WithJudgeModel sets the judgment model from the mechanism baseline
+// (EnrichModel 语义，与富化共用族基线). Empty keeps the client's default
+// resolution (pre-change behavior).
+func (s *LLMSuperseder) WithJudgeModel(m string) *LLMSuperseder {
+	s.judgeModel = m
 	return s
 }
 
@@ -79,6 +88,7 @@ func (s *LLMSuperseder) JudgeSupersede(ctx context.Context, oldFact, newFact str
 	}
 	prompt := fmt.Sprintf(s.judgePromptOr(), oldFact, newFact)
 	judgment, err := pipeline.CompleteStructured(ctx, client, &memport.CompletionRequest{
+		Model:     s.judgeModel,
 		Messages:  []memport.CompletionMessage{{Role: "user", Content: prompt}},
 		MaxTokens: 256,
 	}, parseSupersedeJudgment,

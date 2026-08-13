@@ -19,6 +19,7 @@ type LLMHistorySummarizer struct {
 	tenantID      string
 	resolver      TenantLLMResolver
 	summarizeTmpl string
+	summaryModel  string
 }
 
 var _ HistorySummarizer = (*LLMHistorySummarizer)(nil)
@@ -37,6 +38,14 @@ func NewResolvingLLMHistorySummarizer(tenantID string, resolver TenantLLMResolve
 // mechanism baseline prompt. Empty keeps summarizePrefix.
 func (s *LLMHistorySummarizer) WithSummarizePrompt(p string) *LLMHistorySummarizer {
 	s.summarizeTmpl = p
+	return s
+}
+
+// WithSummaryModel sets the summarization model from the mechanism baseline
+// (MEMORY_SUMMARY_MODEL 兜底值经 wiring 注入；基线优先覆盖).
+// Empty keeps the client's default resolution (pre-change behavior).
+func (s *LLMHistorySummarizer) WithSummaryModel(m string) *LLMHistorySummarizer {
+	s.summaryModel = m
 	return s
 }
 
@@ -64,7 +73,11 @@ func (s *LLMHistorySummarizer) SummarizeHistory(ctx context.Context, items []str
 		return "", fmt.Errorf("history llm unavailable")
 	}
 	prompt := s.summarizePrefixOr() + strings.Join(items, "\n")
-	resp, err := client.Complete(ctx, &memport.CompletionRequest{Messages: []memport.CompletionMessage{{Role: "user", Content: prompt}}, Temperature: .2})
+	resp, err := client.Complete(ctx, &memport.CompletionRequest{
+		Model:       s.summaryModel,
+		Messages:    []memport.CompletionMessage{{Role: "user", Content: prompt}},
+		Temperature: .2,
+	})
 	if err != nil {
 		return "", err
 	}

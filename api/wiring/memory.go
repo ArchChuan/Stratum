@@ -300,8 +300,11 @@ func makeLLMExtractResolver(llmRes *tenantCapabilityResolver, params pipeline.Pl
 		extractor := pipeline.NewLLMExtractor(memoryLLMAdapter{client: llm, tenantID: tenantID}).WithLogger(logger)
 		extractor.SetPlatformParams(params)
 		if baseline != nil {
-			if b, err := baseline(ctx, tenantID); err == nil && b.MemoryExtraction != "" {
-				extractor.SetSystemPrompt(b.MemoryExtraction)
+			if b, err := baseline(ctx, tenantID); err == nil {
+				if b.MemoryExtraction != "" {
+					extractor.SetSystemPrompt(b.MemoryExtraction)
+				}
+				extractor.SetExtractionModel(b.ExtractionModel)
 			}
 		}
 		return extractor
@@ -316,8 +319,11 @@ func makeLLMSupersederResolver(llmRes *tenantCapabilityResolver, baseline mempor
 		}
 		superseder := memworkers.NewLLMSuperseder(memoryLLMAdapter{client: llm, tenantID: tenantID}).WithLogger(logger)
 		if baseline != nil {
-			if b, err := baseline(ctx, tenantID); err == nil && b.MemorySupersede != "" {
-				superseder.WithJudgePrompt(b.MemorySupersede)
+			if b, err := baseline(ctx, tenantID); err == nil {
+				if b.MemorySupersede != "" {
+					superseder.WithJudgePrompt(b.MemorySupersede)
+				}
+				superseder.WithJudgeModel(b.EnrichModel)
 			}
 		}
 		return superseder
@@ -388,7 +394,8 @@ func BuildMemoryWorkers(c *Container) []interface {
 			memworkers.NewGCWorker(tid, factRepo, c.Logger).WithQueue(queue),
 		}
 		return appendTenantLLMWorkers(ws, tid, factRepo, historyRepo,
-			buildWorkerLLMResolver(llmRes), baseline, c.Logger)
+			buildWorkerLLMResolver(llmRes), baseline,
+			c.Config.MemoryPipeline.SummaryModel, c.Logger)
 	}, c.Logger)
 
 	result := []interface {
@@ -426,6 +433,7 @@ func appendTenantLLMWorkers(
 	historyRepo memport.HistoryRepo,
 	resolver memworkers.TenantLLMResolver,
 	baseline memport.MechanismBaselineResolver,
+	summaryModelFallback string,
 	logger *zap.Logger,
 ) memworkers.WorkerSet {
 	var summarizer memworkers.HistorySummarizer
@@ -443,12 +451,19 @@ func appendTenantLLMWorkers(
 		if b.MemorySupersede != "" {
 			superseder.WithJudgePrompt(b.MemorySupersede)
 		}
+		superseder.WithJudgeModel(b.EnrichModel)
 		workerSet = append(workerSet, memworkers.NewSupersedeWorker(tenantID, factRepo, superseder, logger))
 
 		historyProcessor := memworkers.NewResolvingLLMHistorySummarizer(tenantID, resolver)
 		if b.MemorySummarize != "" {
 			historyProcessor.WithSummarizePrompt(b.MemorySummarize)
 		}
+		// MEMORY_SUMMARY_MODEL 兜底接入：基线 SummaryModel 优先，env 值次之。
+		summaryModel := b.SummaryModel
+		if summaryModel == "" {
+			summaryModel = summaryModelFallback
+		}
+		historyProcessor.WithSummaryModel(summaryModel)
 		summarizer = historyProcessor
 		compressor = historyProcessor
 	}
