@@ -91,7 +91,7 @@ var proposalPayloadSchemas = map[domain.ResourceKind]*jschema.Schema{
 		jschema.RequiredProp("name", jschema.StringRange(1, 0, "")),
 		jschema.RequiredProp("description", jschema.String("")),
 		jschema.RequiredProp("model", jschema.String("")),
-		jschema.RequiredProp("maxIterations", jschema.Integer(jschema.Ptr(1), jschema.Ptr(20), "")),
+		jschema.RequiredProp("maxIterations", jschema.Integer(jschema.Ptr(constants.MinAgentMaxIterations), jschema.Ptr(constants.MaxAgentMaxIterations), "")),
 		jschema.RequiredProp("maxContextTokens", jschema.Integer(jschema.Ptr(1), nil, "")),
 		jschema.OptionalProp("systemPrompt", jschema.String("")),
 		jschema.OptionalProp("skillIds", jschema.Array(jschema.String(""), 0, 0, true, "")),
