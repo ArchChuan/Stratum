@@ -125,6 +125,10 @@ jobs:
           file: ./Dockerfile.ci
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+          # ACR 拒绝 buildx 默认 attestation 的 OCI empty manifest class,
+          # 必须禁用 provenance/sbom,否则 push 失败 denied: unknown manifest class。
+          provenance: false
+          sbom: false
           cache-from: type=gha,scope=backend
           cache-to: type=gha,scope=backend,mode=max
 
@@ -160,6 +164,9 @@ jobs:
           file: ./web/Dockerfile
           push: true
           tags: ${{ env.IMAGE_REPO }}/${{ env.IMAGE_NAME }}-frontend:${{ needs.candidate.outputs.sha }}
+          # 与 backend/adapter 一致:ACR 拒绝 buildx 默认 attestation,禁用 provenance/sbom。
+          provenance: false
+          sbom: false
           no-cache: true
 
   build-feishu-adapter:
@@ -200,6 +207,9 @@ jobs:
           file: ./docker/feishu-alert-adapter.Dockerfile
           push: true
           tags: ${{ env.IMAGE_REPO }}/stratum-feishu-alert-adapter:${{ needs.candidate.outputs.sha }}
+          # 同 backend:ACR 拒绝 buildx 默认 attestation 的 OCI empty manifest class。
+          provenance: false
+          sbom: false
           cache-from: type=gha,scope=feishu-alert-adapter
           cache-to: type=gha,scope=feishu-alert-adapter,mode=max
 
