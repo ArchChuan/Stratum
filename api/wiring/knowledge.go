@@ -113,7 +113,20 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 		c.Knowledge.WorkspaceService.SetVectorStore(vs)
 		c.Knowledge.WorkspaceService.SetEditorRepo(persistence.NewPgResourceEditorRepo(db))
 	}
+	c.wireKnowledgeModelExists()
 	return nil
+}
+
+// wireKnowledgeModelExists 在 Platform 提供全局模型目录时注入 knowledge 的
+// ModelExists 适配器；WorkspaceService 未装配（无 DB）或目录缺失时跳过。
+// 单独成方法以控制 buildKnowledge 的圈复杂度。
+func (c *Container) wireKnowledgeModelExists() {
+	if c.Knowledge == nil || c.Knowledge.WorkspaceService == nil {
+		return
+	}
+	if c.Platform != nil && c.Platform.ModelRegistry != nil {
+		c.Knowledge.WorkspaceService.SetModelExists(knowledgeModelExistsAdapter{registry: c.Platform.ModelRegistry})
+	}
 }
 
 // RecoverStuckKnowledgeIngests transitions any doc rows left in
@@ -195,6 +208,31 @@ func buildKnowledgeEmbedResolver(
 		client := llmgateway.NewOpenAICompatClient(cfg, logger)
 		return embedding.NewEmbeddingServiceWithModel(client, m, logger)
 	}
+}
+
+// knowledgeModelExistsAdapter 把全局 ModelRegistry 目录查询适配为 knowledge
+// 的 ModelExists port（wiring 唯一适配点：knowledge 不 import llmgateway）。
+// 目录/DB 故障传播错误（fail-closed），不默认放行。
+type knowledgeModelExistsAdapter struct{ registry *llmgateway.ModelRegistry }
+
+func (a knowledgeModelExistsAdapter) Exists(ctx context.Context, model string, capability knowledgeport.ModelCapability) (bool, error) {
+	var names []string
+	var err error
+	switch capability {
+	case knowledgeport.CapRerank:
+		names, err = a.registry.ListRerankModelsByTenant(ctx)
+	default: // CapEmbedding
+		names, err = a.registry.ListEmbeddingModelsByTenant(ctx)
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, n := range names {
+		if n == model {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // registryHasEmbeddingModel 检查显式模型是否在 enabled 且 provider 可用的

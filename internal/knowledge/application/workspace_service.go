@@ -80,6 +80,7 @@ type WorkspaceService struct {
 	vectorStore collectionProvisioner
 	roles       port.TenantRoleResolver
 	editorRepo  port.ResourceEditorRepo
+	modelExists port.ModelExists
 	logger      *zap.Logger
 }
 
@@ -103,6 +104,35 @@ func (s *WorkspaceService) SetTenantRoleResolver(r port.TenantRoleResolver) { s.
 // editor grants entirely (fail closed).
 func (s *WorkspaceService) SetEditorRepo(r port.ResourceEditorRepo) { s.editorRepo = r }
 
+// SetModelExists injects the global catalogue existence check used to
+// validate embedding/rerank model selection on create/update. Nil skips the
+// catalogue check (degraded/dev) — directory lookup is a config constraint,
+// not an authorization gate.
+func (s *WorkspaceService) SetModelExists(r port.ModelExists) { s.modelExists = r }
+
+// validateModelsInCatalogue 校验 embedding 模型与外部 rerank provider 存在于
+// 全局目录（enabled + 能力匹配）。modelExists 未注入（降级/dev/测试）时跳过
+// 目录校验——目录查询是配置约束而非授权，与机制基线同语义；目录查询失败
+// 传播（fail-closed，不默认放行）。
+func (s *WorkspaceService) validateModelsInCatalogue(ctx context.Context, cfg domain.WorkspaceConfig) error {
+	if s.modelExists == nil {
+		return nil
+	}
+	if ok, err := s.modelExists.Exists(ctx, cfg.EmbeddingModel, port.CapEmbedding); err != nil {
+		return fmt.Errorf("knowledge workspace: check embedding model %q: %w", cfg.EmbeddingModel, err)
+	} else if !ok {
+		return domain.ErrInvalidEmbeddingModel
+	}
+	if provider, model := domain.SplitRerankIdentity(cfg.Reranking); !domain.AllowedRerankIdentities[provider] {
+		if ok, err := s.modelExists.Exists(ctx, model, port.CapRerank); err != nil {
+			return fmt.Errorf("knowledge workspace: check rerank model %q: %w", model, err)
+		} else if !ok {
+			return domain.ErrInvalidRerankIdentity
+		}
+	}
+	return nil
+}
+
 // isPlatformManaged reports whether a workspace is owned by the platform and
 // must not be mutated through user-facing APIs.
 func isPlatformManaged(ws *domain.Workspace) bool {
@@ -118,6 +148,9 @@ func (s *WorkspaceService) CreateWorkspace(ctx context.Context, tenantID string,
 	}
 	ws, err := domain.NewWorkspace(in.Name, in.Description, in.Config, domain.DefaultChunkSize, domain.DefaultTopK)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.validateModelsInCatalogue(ctx, ws.Config); err != nil {
 		return nil, err
 	}
 	ws.CreatedBy = actorID
@@ -178,6 +211,9 @@ func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, tenantID, name s
 
 	newCfg, after, err := applyWorkspaceUpdate(current, in, renameTo)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.validateModelsInCatalogue(ctx, newCfg); err != nil {
 		return nil, err
 	}
 	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindKnowledge, current.ID, auditdomain.ChangeOpUpdate,

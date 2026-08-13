@@ -73,9 +73,7 @@ func validateScoreThreshold(threshold float64) error {
 }
 
 func validateRerankIdentity(identity string) error {
-	provider, model := domain.SplitRerankIdentity(identity)
-	if !domain.AllowedRerankIdentities[provider] ||
-		(model == "" && provider != "" && provider != RerankIdentityBuiltin) {
+	if !domain.ValidRerankIdentity(identity) {
 		return fmt.Errorf("knowledge retrieval snapshot: unsupported reranking %q", identity)
 	}
 	return nil

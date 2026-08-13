@@ -518,6 +518,12 @@ func (g *Gateway) ListEmbeddingModelsByTenant(ctx context.Context) ([]string, er
 	return g.registry.ListEmbeddingModelsByTenant(ctx)
 }
 
+// ListRerankModelsByTenant returns sorted enabled rerank model names from the
+// global catalog, delegating to the registry.
+func (g *Gateway) ListRerankModelsByTenant(ctx context.Context) ([]string, error) {
+	return g.registry.ListRerankModelsByTenant(ctx)
+}
+
 // WithGateway returns a new context carrying gw as the LLM gateway override.
 // 内部委派给 domain.WithCompleter，使消费方可仅依赖 domain 接口。
 func WithGateway(ctx context.Context, gw *Gateway) context.Context {

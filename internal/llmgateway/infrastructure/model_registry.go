@@ -434,6 +434,12 @@ func (r *ModelRegistry) ListEmbeddingModelsByTenant(ctx context.Context) ([]stri
 	return r.listModelsByCapability(ctx, domain.CapEmbedding)
 }
 
+// ListRerankModelsByTenant 返回全局 enabled rerank 模型名（排序）。目录化只
+// 约束模型选择：实际调用仍走 knowledge/infrastructure/rerank 独立 HTTP 服务。
+func (r *ModelRegistry) ListRerankModelsByTenant(ctx context.Context) ([]string, error) {
+	return r.listModelsByCapability(ctx, domain.CapRerank)
+}
+
 // ResolveDefaultEmbeddingModel 解析全局默认嵌入模型名：
 // 1. enabled 且 provider 可用且标记 default_embedding 的模型优先；
 // 2. 无标记 → enabled 列表第一个（保留 sort.Strings 字典序语义）；
@@ -508,6 +514,10 @@ func (r *ModelRegistry) supports(kind domain.ProviderKind, capability domain.Mod
 	case domain.CapEmbedding:
 		_, ok := r.embedProtos[kind]
 		return ok
+	case domain.CapRerank:
+		// cohere rerank 走独立 HTTP 服务（非 ModelRegistry 网关），此处仅约束
+		// 模型选择来源：rerank 能力模型只属于 cohere provider。
+		return kind == domain.ProviderCohere
 	default:
 		return false
 	}

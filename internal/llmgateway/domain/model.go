@@ -11,6 +11,7 @@ type ModelCapability string
 const (
 	CapChat      ModelCapability = "chat"
 	CapEmbedding ModelCapability = "embedding"
+	CapRerank    ModelCapability = "rerank"
 	CapVision    ModelCapability = "vision"
 	CapToolUse   ModelCapability = "tool_use"
 	CapReasoning ModelCapability = "reasoning"
