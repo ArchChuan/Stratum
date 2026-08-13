@@ -10,16 +10,15 @@ import (
 	"go.uber.org/zap"
 )
 
-// MCPToolHandle 将 MCP 工具包装为 Tool
+// MCPToolHandle 将 MCP 工具包装为 Tool。agent 生产路径只消费
+// GetID/GetName/GetDescription/GetType 与 Tool 元数据；工具执行经
+// agentMCPExecutor 走 ClientManager（tenant 作用域），不经 handle。
 type MCPToolHandle struct {
 	ID          string
 	Name        string
 	Description string
 	Type        string
 	Tool        *MCPTool
-	ServerID    string
-	Manager     *ClientManager
-	logger      *zap.Logger
 }
 
 // GetID 获取 ID
@@ -83,9 +82,6 @@ func (a *MCPToolCatalog) DiscoverTools(ctx context.Context) ([]*MCPToolHandle, e
 			Description: tool.Description,
 			Type:        "mcp",
 			Tool:        tool,
-			ServerID:    a.serverID,
-			Manager:     a.manager,
-			logger:      a.logger,
 		}
 
 		a.tools[toolID] = wrapper

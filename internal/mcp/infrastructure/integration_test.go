@@ -473,8 +473,6 @@ func TestMCPToolExecutionFlow(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	defer func() { _ = logger.Sync() }()
 
-	manager := NewClientManager(logger, nil, nil)
-
 	// 创建测试工具
 	tool := &MCPTool{
 		Name:        "test_tool",
@@ -494,9 +492,6 @@ func TestMCPToolExecutionFlow(t *testing.T) {
 		Description: "Test Tool",
 		Type:        "mcp",
 		Tool:        tool,
-		ServerID:    "test",
-		Manager:     manager,
-		logger:      logger,
 	}
 
 	// 验证技能属性

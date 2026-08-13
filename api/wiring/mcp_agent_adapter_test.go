@@ -21,8 +21,7 @@ func TestMCPAgentToolAdapterKeepsStableExposedIDAndRawToolName(t *testing.T) {
 	catalog := mcp.NewMCPToolCatalog("tenant-1", "orders", manager, logger)
 	catalog.AddToolForTest(&mcp.MCPToolHandle{
 		ID: "mcp:orders:get_order", Name: "get_order",
-		Tool:     &mcp.MCPTool{Name: "get_order", Description: "get"},
-		ServerID: "orders", Manager: manager,
+		Tool: &mcp.MCPTool{Name: "get_order", Description: "get"},
 	})
 	registry.RegisterCatalogForTest("tenant-1", "orders", catalog)
 

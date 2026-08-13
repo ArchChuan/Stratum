@@ -309,9 +309,6 @@ func TestClientManagerHealthReconnectClosesDisplacedClient(t *testing.T) {
 
 // TestMCPToolHandle 测试 MCP Skill 包装器
 func TestMCPToolHandle(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
-	manager := NewClientManager(logger, nil, nil)
-
 	tool := &MCPTool{
 		Name:        "test_tool",
 		Description: "Test Tool",
@@ -323,9 +320,6 @@ func TestMCPToolHandle(t *testing.T) {
 		Description: "Test Tool",
 		Type:        "mcp",
 		Tool:        tool,
-		ServerID:    "test",
-		Manager:     manager,
-		logger:      logger,
 	}
 
 	if wrapper.GetID() != "mcp:test:test_tool" {
