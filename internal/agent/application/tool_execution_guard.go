@@ -46,16 +46,12 @@ func (g *ToolExecutionGuard) Execute(ctx context.Context, req ToolExecutionReque
 	}
 	toolID := req.Tool.Name
 	agentAllows := slices.Contains(req.AgentToolIDs, toolID)
-	activeSkill := len(req.Actives) > 0
-	activeSkillAllows := !activeSkill || slices.ContainsFunc(req.Actives, func(a port.SkillActivation) bool {
-		return slices.Contains(a.MCPToolIDs, toolID)
-	})
 	risk := port.ParseToolRiskLevel(req.Tool.Metadata["risk_level"])
 	policyResolved, _ := req.Tool.Metadata["policy_resolved"].(bool)
 	decision := g.deps.Authorizer.Authorize(ctx, ToolAuthorizationInput{
 		TenantID: req.TenantID, UserID: req.UserID, AgentID: req.AgentID, ToolID: toolID,
-		AgentAllowsTool: agentAllows, ActiveSkill: activeSkill, ActiveSkillAllows: activeSkillAllows,
-		PolicyResolved: policyResolved, RiskLevel: risk,
+		AgentAllowsTool: agentAllows,
+		PolicyResolved:  policyResolved, RiskLevel: risk,
 	})
 	if decision.Effect == domain.ToolAuthorizationDeny {
 		return nil, fmt.Errorf("%w: %s", ErrToolAuthorizationDenied, decision.Reason)

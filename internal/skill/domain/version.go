@@ -31,11 +31,14 @@ type CapabilityExample struct {
 	ExpectedOutput any `json:"expectedOutput"`
 }
 
+// ActivationContract 对齐外部 skill 范式:name+description 是唯一必填;
+// InputSchema/OutputSchema 为可选(外部只需 name+description,平台不强制),
+// Confirmed 保留为作者确认契约就绪的发布门禁。
 type ActivationContract struct {
 	Name         string         `json:"name"`
 	Description  string         `json:"description"`
-	InputSchema  map[string]any `json:"inputSchema"`
-	OutputSchema map[string]any `json:"outputSchema"`
+	InputSchema  map[string]any `json:"inputSchema,omitempty"`
+	OutputSchema map[string]any `json:"outputSchema,omitempty"`
 	Confirmed    bool           `json:"confirmed"`
 }
 
@@ -93,12 +96,8 @@ func (c ActivationContract) Validate() error {
 	if strings.TrimSpace(c.Description) == "" {
 		return fmt.Errorf("activation description required: %w", ErrSkillNotPublishable)
 	}
-	if !isObjectSchema(c.InputSchema) {
-		return fmt.Errorf("input schema must be object schema: %w", ErrSkillNotPublishable)
-	}
-	if !isObjectSchema(c.OutputSchema) {
-		return fmt.Errorf("output schema must be object schema: %w", ErrSkillNotPublishable)
-	}
+	// InputSchema/OutputSchema 不再强制为 {"type":"object"}——外部 skill 范式
+	// 只需 name+description,契约负担向外部看齐。
 	if !c.Confirmed {
 		return fmt.Errorf("activation contract not confirmed: %w", ErrSkillNotPublishable)
 	}
@@ -151,12 +150,4 @@ func (v SkillRevision) ValidatePublishable(enabledTestCount int) error {
 		return err
 	}
 	return nil
-}
-
-func isObjectSchema(schema map[string]any) bool {
-	if schema == nil {
-		return false
-	}
-	typ, _ := schema["type"].(string)
-	return typ == "object"
 }

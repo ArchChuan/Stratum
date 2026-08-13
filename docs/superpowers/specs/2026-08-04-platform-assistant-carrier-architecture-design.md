@@ -34,7 +34,7 @@
 | 2 | 能力分层：L1 问答（RAG）+ 只读诊断；L2 四类资源配置写（管理员确认提案）；L3 工具执行（双路径） | 与 07-23 一/二期、07-29 阶段一/二对齐，能力按风险递增 | 一次全上 → 跨资源写入同时引入，无法分阶段验收 |
 | 3 | **L3 双路径**：L3a 平台业务工具（复用 07-29 ToolContract 风险分级：read 自动、write_reversible 一次确认、destructive/credential 二次确认）；L3b 租户外部 MCP 工具（新设计：复用 MCPToolPolicy read 自动 / write_reversible 审批 / destructive+unclassified 拒绝） | 平台工具与租户工具的信任模型不同：平台工具合同硬编码，租户工具凭据与策略归租户 | 只做平台工具 → 用户"实际上手做"的范围被限制在 Stratum 内部；只做外部工具 → 平台自身能力无法执行 |
 | 4 | 行为 skill 按能力拆 4 个：platform-guide（问答）、tenant-diagnostic（诊断）、resource-change（新，提案流程）、tool-execution（新，工具执行流程）；WhenToUse 互斥定义 | skill 粒度 = 行为意图粒度，互斥 WhenToUse 避免模型切换歧义 | 单一大 skill → 指令冲突、切换粒度粗；按工具拆 → skill 数量爆炸 |
-| 5 | 保留 `stratum_activate_skill` 单激活切换，模型按 WhenToUse 切换，**不加确定性兜底** | 激活机制已有实现且测试覆盖；`ComposeSystemAssistantProfile` 保留 AllowedSkills（system_assistant_profile.go:129-140），机制可行 | 加确定性兜底 → 需要路由规则硬编码，与"模型按 WhenToUse 决策"冲突 |
+| 5 | ~~保留 `stratum_activate_skill` 单激活切换~~ → 被 skill 触发范式重构 supersede：统一 `stratum_skill` 工具 + 多 skill 并列生效、冲突由模型自决（见 skill-skill-elegant-glacier 设计） | 激活机制已有实现且测试覆盖；`ComposeSystemAssistantProfile` 保留 AllowedSkills（system_assistant_profile.go:129-140），机制可行 | 加确定性兜底 → 需要路由规则硬编码，与"模型按 WhenToUse 决策"冲突 |
 | 6 | 文档语料源从内部开发规范换成面向平台用户的官方使用文档 | 现有 catalog 3 篇（agent.md / mcp-integration.md / knowledge-workspace.md）是内部开发规范，不适合对用户问答 | 继续用开发规范 → 暴露内部实现细节，问答质量差 |
 | 7 | 生成方式：半自动 pipeline——从 API 契约/配置项/UI 结构提取事实骨架生成初稿，人工审校补叙述 | 全人工维护跟不上功能演进；全自动生成叙述质量不可控 | 全人工 → 功能稳定后一次性重写成本高；全自动 → 事实与叙述失真 |
 | 8 | 生成时机：平台助手一、二期（含 07-29 各阶段）+ 相关功能稳定后全量执行；复用现有 officialdocs 分块 pipeline | 功能未稳定时生成的文档很快过时 | 边开发边生成 → 返工 |
@@ -150,7 +150,7 @@ WhenToUse 边界样例（互斥裁决）：
 
 ### 5.2 激活机制
 
-- 保留 `stratum_activate_skill` 单激活切换：同一时刻一个 active skill。
+- ~~保留 `stratum_activate_skill` 单激活切换：同一时刻一个 active skill。~~ → 被 skill 触发范式重构 supersede：统一 `stratum_skill` 工具（参数 `skill`）激活一个或多个 instruction bundle，多 skill 并列生效、冲突由模型自决；重复激活被入口层拦截。
 - 模型按 WhenToUse 语义切换，不加确定性兜底（决策 5）。
 - 已知风险：切换错误时行为引导不匹配；接受该风险，由工具层硬编码授权兜底（工具不可用则无法执行）。
 

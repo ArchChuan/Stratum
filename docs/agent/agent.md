@@ -81,11 +81,13 @@ type AgentConfig struct {
 
 ## Skill Activation
 
-- Run 启动时解析允许的 published/candidate Skill revision，并固定 revision ID。
-- 模型通过内置 `stratum_activate_skill` 激活一个或多个 instruction bundle；同一时刻允许多个 active Skill 叠加生效。
-- 同一 SkillID 再次激活原位替换该条目（保留原激活位置），不同 SkillID 激活则追加。
-- 激活后 system messages 按激活顺序注入全部已激活 revision 的 instructions（作为连续 system 消息块插在首条 system 消息之后）。
-- 权限保持 AND 边界：MCP 工具为 `Agent.mcpToolIds ∩ (∪ active Skill mcpToolIds)`（skill 维度取并集）；knowledge 为 `Agent workspaces ∩ (∪ active Skill workspaces)`；memory 为任一 active Skill 允许的 scope。
+- Run 启动时解析允许的 published/candidate Skill revision，并固定 revision ID；绑定集合内的 contract Name 必须唯一且不得与平台内置工具名冲突（fail-closed）。
+- 工具面收敛为**单一内置工具** `stratum_skill`（参数 `skill`，值为绑定集合内 skill 的 Name，回退 SkillID）。该工具描述动态列出绑定集合内每个 skill 的 name+description，已激活 skill 标注 `(已激活)`；描述按两阶段截断压缩进上下文预算（先算 allowance 再按 allowance 截断），保证工具在 `fitToolList` 贪心打包中恒被保留。绑定集为空时省略该工具。
+- 模型调用 `stratum_skill` 激活一个或多个 instruction bundle；同一时刻允许多个 active Skill 叠加生效，**冲突语义 = 并列 + 模型自决**（注入文本显式声明）。
+- 已激活 Skill 再次调用 `stratum_skill` 被拦截（幂等提示，不重复激活、不消耗轮次）。
+- 激活结果返回**注入位置指引**（不重复正文）：`Skill <name> (revision <id>) 已激活。完整指令已注入 system 消息『Active Skill <name> (revision <id>)』`。
+- 激活后 system messages 按激活顺序注入全部已激活 revision 的 instructions（作为连续 system 消息块插在首条 system 消息之后），标题格式 `Active Skill <name> (revision <id>)` 与指引一致。
+- 权限边界**继承 Agent 绑定**：激活 Skill 既不扩大也不缩小 Agent 的能力边界。MCP 工具面 = Agent allowlist 全集（不再按 Skill 声明收窄）；knowledge 按 `Agent workspaces` 过滤；memory 按 Agent 绑定 scope 执行。Skill 声明的 `MCPToolIDs/MemoryScopes/KnowledgeWorkspaceIDs` 降级为声明性元数据，不做运行时过滤。
 - Skill 不生成可执行 ToolDefinition，也不经过 CapabilityGateway。
 - Agent 可以不激活 Skill，直接使用 Agent allowlist 中的 MCP 工具。
 
@@ -99,9 +101,9 @@ type AgentConfig struct {
 
 | 工具 | 权限 |
 |---|---|
-| `stratum_activate_skill` | 当前 Run 的 Skill catalog |
-| `stratum_search_knowledge` | Agent workspaces ∩ (∪ active Skill workspaces) |
-| `stratum_recall_memory` | 任一 active Skill 允许的 memory scope |
+| `stratum_skill` | 当前 Run 的 Skill catalog（统一触发，参数 `skill`） |
+| `stratum_search_knowledge` | Agent workspaces |
+| `stratum_recall_memory` | Agent 绑定 memory scope |
 | `stratum_continue_reasoning` | Agent Loop 内部控制 |
 
 ## Context Budget And Compaction

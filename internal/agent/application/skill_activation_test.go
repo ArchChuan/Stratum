@@ -175,9 +175,9 @@ func TestAgentService_ExecuteSkillScenarioActivatesMultipleSkills(t *testing.T) 
 	require.Contains(t, string(encoded), "USE INSTRUCTION B")
 	// buildBuiltinTools 无条件追加 stratum_continue_reasoning；无 RAG/无 memory 时 available 仅此一项。
 	// qwen-turbo fallback 8000 窗口下 ToolsCap 有限：预算裁剪只裁 plan 工作流工具，
-	// 激活技能与授权能力工具必须全量保留（技能激活 = 用户显式功能开关）。
+	// 统一 stratum_skill 工具与授权能力工具必须全量保留（技能激活 = 用户显式功能开关）。
 	names := scenarioToolNames(req.LLM.Tools)
-	for _, mustKeep := range []string{"skill-a", "skill-b", "stratum_continue_reasoning"} {
+	for _, mustKeep := range []string{"stratum_skill", "stratum_continue_reasoning"} {
 		require.Contains(t, names, mustKeep, "激活技能/能力工具被预算裁剪: %v", names)
 	}
 }
@@ -236,6 +236,68 @@ func TestBaseAgent_CheckpointRestoredActivesOverrideSeededActives(t *testing.T) 
 	require.NoError(t, err)
 	require.Contains(t, string(encoded), "RESTORED INSTRUCTION")
 	require.NotContains(t, string(encoded), "SEED INSTRUCTION")
+}
+
+func TestValidateSkillCatalogNames_FailClosedOnCollision(t *testing.T) {
+	cases := []struct {
+		name    string
+		catalog map[string]port.SkillActivation
+		wantErr bool
+		errHint string
+	}{
+		{
+			name: "unique names accepted",
+			catalog: map[string]port.SkillActivation{
+				"skill-a": {SkillID: "skill-a", Name: "Alpha", RevisionID: "rev-a"},
+				"skill-b": {SkillID: "skill-b", Name: "Beta", RevisionID: "rev-b"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "empty name falls back to skill id and stays unique",
+			catalog: map[string]port.SkillActivation{
+				"skill-a": {SkillID: "skill-a", RevisionID: "rev-a"},
+				"skill-b": {SkillID: "skill-b", Name: "Beta", RevisionID: "rev-b"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "duplicate resolved name rejected",
+			catalog: map[string]port.SkillActivation{
+				"skill-a": {SkillID: "skill-a", Name: "Same", RevisionID: "rev-a"},
+				"skill-b": {SkillID: "skill-b", Name: "Same", RevisionID: "rev-b"},
+			},
+			wantErr: true,
+			errHint: "collides",
+		},
+		{
+			name: "reserved unified trigger name rejected",
+			catalog: map[string]port.SkillActivation{
+				"skill-a": {SkillID: "skill-a", Name: "stratum_skill", RevisionID: "rev-a"},
+			},
+			wantErr: true,
+			errHint: "reserved platform tool",
+		},
+		{
+			name: "reserved builtin tool name rejected",
+			catalog: map[string]port.SkillActivation{
+				"skill-a": {SkillID: "skill-a", Name: "stratum_recall_memory", RevisionID: "rev-a"},
+			},
+			wantErr: true,
+			errHint: "reserved platform tool",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := agent.ValidateSkillCatalogNamesForTest(tc.catalog)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.errHint)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
 }
 
 func scenarioToolNames(tools []port.ToolDefinition) []string {

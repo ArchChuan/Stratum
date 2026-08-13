@@ -16,19 +16,23 @@ func MessagesWithActiveSkillsForTest(messages []port.LLMMessage, actives []port.
 	return messagesWithActiveSkills(messages, actives)
 }
 
-func AllowedKnowledgeWorkspacesForTest(requested, agentAllowed []string, actives []port.SkillActivation) []string {
-	return allowedKnowledgeWorkspaces(requested, agentAllowed, actives)
+func AllowedKnowledgeWorkspacesForTest(requested, agentAllowed []string) []string {
+	return allowedKnowledgeWorkspaces(requested, agentAllowed)
 }
 
 func EffectiveToolsForTest(
 	available []port.ToolDefinition,
-	catalog map[string]port.SkillActivation,
-	actives []port.SkillActivation,
-	agentKnowledgeWorkspaceIDs []string,
-	agentMemoryScope string,
 	governedAssistant bool,
 ) []port.ToolDefinition {
-	return effectiveTools(available, catalog, actives, agentKnowledgeWorkspaceIDs, agentMemoryScope, governedAssistant)
+	return effectiveTools(available, governedAssistant)
+}
+
+func BuildSkillToolForTest(catalog map[string]port.SkillActivation, actives []port.SkillActivation, allowance int) *port.ToolDefinition {
+	return buildSkillTool(catalog, actives, allowance)
+}
+
+func BuildSkillCatalogLinesForTest(catalog map[string]port.SkillActivation, actives []port.SkillActivation) []string {
+	return buildSkillCatalogLines(catalog, actives)
 }
 
 func UpsertActivationForTest(actives []port.SkillActivation, activation port.SkillActivation) []port.SkillActivation {
