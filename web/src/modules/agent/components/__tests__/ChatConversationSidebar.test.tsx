@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { agentSchema } from '../../model/agent';
 import { ChatConversationSidebar } from '../ChatConversationSidebar';
 
 beforeAll(() =>
@@ -10,10 +11,12 @@ beforeAll(() =>
   ),
 );
 
+// agentSchema.parse 补全 Agent 必填字段（description/systemPrompt/llmModel 等），
+// 避免测试只用部分对象导致 tsc --noEmit 类型错误（CI frontend typecheck 门禁）。
 const baseProps = {
   agents: [
-    { id: 'agent-1', name: '普通 Agent', isSystem: false },
-    { id: 'stratum-platform-assistant', name: '平台使用小助手', isSystem: true },
+    agentSchema.parse({ id: 'agent-1', name: '普通 Agent', isSystem: false }),
+    agentSchema.parse({ id: 'stratum-platform-assistant', name: '平台使用小助手', isSystem: true }),
   ],
   selectedAgent: 'stratum-platform-assistant',
   onSelectAgent: vi.fn(),
