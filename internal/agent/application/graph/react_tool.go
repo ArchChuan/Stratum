@@ -588,6 +588,10 @@ func safeAssistantToolError(err error) string {
 		return "official evidence not found"
 	case errors.Is(err, domain.ErrDiagnosticForbidden):
 		return "diagnostic forbidden"
+	case errors.Is(err, domain.ErrInvalidSystemAssistantToolArguments):
+		// 参数解析失败（如 payload 非法）是模型可自纠的错误，明确返回
+		// 而非落入默认分支，否则 LLM 会把非法参数误判为环境不可用。
+		return "invalid tool arguments"
 	default:
 		return "evidence unavailable"
 	}
@@ -829,7 +833,8 @@ func assistantToolErrorCode(message string) string {
 		return "not_found"
 	case "diagnostic forbidden":
 		return "forbidden"
-	case "invalid official docs arguments", "invalid diagnostic arguments":
+	case "invalid official docs arguments", "invalid diagnostic arguments",
+		"invalid tool arguments", "invalid system assistant tool arguments":
 		return "invalid_arguments"
 	default:
 		return "unavailable"

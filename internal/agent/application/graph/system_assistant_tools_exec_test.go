@@ -184,6 +184,32 @@ func TestSystemAssistantDirectApplyToolErrorBecomesTypedArtifact(t *testing.T) {
 	require.NotEmpty(t, result.artifact.DirectApply.ErrorCode)
 }
 
+// TestSystemAssistantInvalidArgumentsMapsToRecoverableError guards the
+// argument-parsing error surface: a malformed payload must surface as
+// "invalid tool arguments" (a signal the model can self-correct) rather than
+// falling into the generic "evidence unavailable" bucket that implies the
+// platform is unhealthy.
+func TestSystemAssistantInvalidArgumentsMapsToRecoverableError(t *testing.T) {
+	state := &ReActState{
+		GovernedAssistant: true,
+		// 参数解析在装配闭包内（ApplyDirectFromTool → 严格解析器）执行；
+		// graph 层收到的是 callErr，这里直接模拟该错误以验证错误映射：
+		// 非法参数必须映射为模型可自纠的 "invalid tool arguments"，
+		// 而非默认的 "evidence unavailable"（暗示平台不健康）。
+		ResourceChangeApplyFn: func(context.Context, map[string]any) (domain.ApplyResult, error) {
+			return domain.ApplyResult{}, domain.ErrInvalidSystemAssistantToolArguments
+		},
+	}
+	result := execApplyResourceChangeTool(context.Background(), port.ToolCall{
+		Name:      domain.SystemAssistantToolApplyResourceChange,
+		Arguments: map[string]any{"resourceKind": "agent", "operation": "create"},
+	}, state, time.Now())
+	require.Equal(t, "invalid tool arguments", result.errMsg)
+	require.NotNil(t, result.artifact)
+	require.Equal(t, "error", result.artifact.DirectApply.Outcome)
+	require.Equal(t, "invalid_arguments", result.artifact.DirectApply.ErrorCode)
+}
+
 func TestSystemAssistantDirectApplyToolRoutesThroughDispatch(t *testing.T) {
 	state := &ReActState{
 		GovernedAssistant: true,

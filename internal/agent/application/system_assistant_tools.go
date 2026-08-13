@@ -2,8 +2,8 @@ package application
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
@@ -19,8 +19,6 @@ const (
 	ToolListModels            = domain.SystemAssistantToolListModels
 	ToolUpdateSystemModel     = domain.SystemAssistantToolUpdateSystemModel
 )
-
-var ErrInvalidSystemAssistantToolArguments = errors.New("invalid system assistant tool arguments")
 
 func SystemAssistantToolDefinitions() []port.ToolDefinition {
 	return []port.ToolDefinition{
@@ -149,24 +147,42 @@ func ParseResourceChangeToolArguments(args map[string]any) (domain.ResourceKind,
 	allowed := map[string]bool{"resourceKind": true, "operation": true, "resourceId": true, "payload": true}
 	for key := range args {
 		if !allowed[key] {
-			return "", "", "", nil, fmt.Errorf("%w: unknown field %s", ErrInvalidSystemAssistantToolArguments, key)
+			return "", "", "", nil, fmt.Errorf("%w: unknown field %s", domain.ErrInvalidSystemAssistantToolArguments, key)
 		}
 	}
 	kind, kindOK := args["resourceKind"].(string)
 	operation, operationOK := args["operation"].(string)
-	payload, payloadOK := args["payload"].(map[string]any)
+	payload, payloadOK := normalizeToolPayload(args["payload"])
 	resourceID, _ := args["resourceId"].(string)
 	if !kindOK || !operationOK || !payloadOK {
-		return "", "", "", nil, ErrInvalidSystemAssistantToolArguments
+		return "", "", "", nil, domain.ErrInvalidSystemAssistantToolArguments
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return "", "", "", nil, ErrInvalidSystemAssistantToolArguments
+		return "", "", "", nil, domain.ErrInvalidSystemAssistantToolArguments
 	}
 	resourceKind := domain.ResourceKind(kind)
 	proposalOperation := domain.ProposalOperation(operation)
 	if !resourceKind.Valid() || !proposalOperation.Valid() {
-		return "", "", "", nil, ErrInvalidSystemAssistantToolArguments
+		return "", "", "", nil, domain.ErrInvalidSystemAssistantToolArguments
 	}
 	return resourceKind, proposalOperation, resourceID, raw, nil
+}
+
+// normalizeToolPayload 容忍模型在严格嵌套对象 schema 下把 payload 序列化成
+// JSON 字符串的常见偏差（生产实测 glm-5 会传 payload="{\"name\": ...}"），
+// 归一化为 map 后统一走后续字段校验；非字符串或解析失败保持原样失败。
+func normalizeToolPayload(value any) (map[string]any, bool) {
+	if m, ok := value.(map[string]any); ok {
+		return m, true
+	}
+	raw, ok := value.(string)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return nil, false
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(raw), &m); err != nil || m == nil {
+		return nil, false
+	}
+	return m, true
 }

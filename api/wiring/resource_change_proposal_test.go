@@ -383,6 +383,26 @@ func TestApplyDirectFromToolRequiresTenantInContext(t *testing.T) {
 	require.ErrorContains(t, err, "invalid system assistant tool arguments")
 }
 
+// TestApplyDirectFromToolAcceptsStringifiedPayload covers the production tool
+// boundary variance where a model serializes the nested payload as a JSON
+// string (observed with glm-5). The adapter must decode it and reach the
+// agent service instead of failing argument parsing.
+func TestApplyDirectFromToolAcceptsStringifiedPayload(t *testing.T) {
+	agents := &proposalAgentFake{values: map[string]agentapp.AgentDTO{}}
+	adapter := NewResourceChangeProposalAdapters(agents, nil, nil, nil)
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	rawPayload := `{"name":"a","description":"d","model":"m","maxIterations":3,"maxContextTokens":100}`
+	args := map[string]any{
+		"resourceKind": "agent",
+		"operation":    "create",
+		"payload":      rawPayload,
+	}
+	result, err := adapter.ApplyDirectFromTool(ctx, "user-1", args)
+	require.NoError(t, err)
+	require.NotEmpty(t, result.ResourceID)
+	require.Equal(t, "user-1", agents.lastActorID)
+}
+
 // proposalRoleStub 固定角色的 TenantRoleResolver stub。
 type proposalRoleStub struct {
 	role string
