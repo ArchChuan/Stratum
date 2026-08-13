@@ -113,6 +113,8 @@ type ExecutionConfig struct {
 	ResourceChangeApplyFn     func(context.Context, map[string]any) (domain.ApplyResult, error)
 	ListModelsFn              func(context.Context) (map[string]any, error)
 	UpdateSystemModelFn       func(context.Context, string) (map[string]any, error)
+	ListAgentsFn              func(context.Context) (map[string]any, error)
+	ListMCPServersFn          func(context.Context) (map[string]any, error)
 	InternalToolResultGuardFn func(any) (port.GuardedToolResult, error)
 }
 
@@ -896,6 +898,8 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		ResourceChangeApplyFn:      ec.cfg.ResourceChangeApplyFn,
 		ListModelsFn:               ec.cfg.ListModelsFn,
 		UpdateSystemModelFn:        ec.cfg.UpdateSystemModelFn,
+		ListAgentsFn:               ec.cfg.ListAgentsFn,
+		ListMCPServersFn:           ec.cfg.ListMCPServersFn,
 		InternalToolResultGuardFn:  ec.cfg.InternalToolResultGuardFn,
 		MaxLLMSteps:                ec.cfg.MaxSteps,
 		MaxContextTokens:           maxTokens,
@@ -1421,6 +1425,20 @@ func WithListModelsFn(fn func(context.Context) (map[string]any, error)) Executio
 // assistant tool. The role gate lives inside the attached closure.
 func WithUpdateSystemModelFn(fn func(context.Context, string) (map[string]any, error)) ExecutionOption {
 	return func(cfg *ExecutionConfig) { cfg.UpdateSystemModelFn = fn }
+}
+
+// WithListAgentsFn attaches the in-process tenant agent catalog capability
+// (stratum_list_agents) used by the system assistant tool.
+func WithListAgentsFn(fn func(context.Context) (map[string]any, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.ListAgentsFn = fn }
+}
+
+// WithListMCPServersFn attaches the in-process MCP server catalog capability
+// (stratum_list_mcp_servers) used by the system assistant tool. The wiring
+// layer adapts the mcp context service through the port.MCPServerLister ACL;
+// a nil lister leaves the tool fail-closed ("tool unavailable").
+func WithListMCPServersFn(fn func(context.Context) (map[string]any, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.ListMCPServersFn = fn }
 }
 
 func withInternalToolResultGuard(fn func(any) (port.GuardedToolResult, error)) ExecutionOption {

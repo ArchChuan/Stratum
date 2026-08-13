@@ -158,6 +158,27 @@ func normalizeMCPToolResult(output any) (agentport.MCPToolResult, error) {
 
 type agentMCPPolicyResolver struct{ service *mcpapp.MCPService }
 
+// agentMCPServerLister 是 agentport.MCPServerLister 的薄 ACL：适配
+// *mcpapp.MCPService.ListServers 供系统助手 stratum_list_mcp_servers
+// 只读枚举。Tools 仅投影工具名，不携带 Tool 的 InputSchema/OutputSchema
+// 等内部契约，防止内部端点与描述进入系统助手模型可见面。
+type agentMCPServerLister struct{ service *mcpapp.MCPService }
+
+func (l agentMCPServerLister) ListMCPServers(ctx context.Context) ([]agentport.MCPServerSummary, error) {
+	servers := l.service.ListServers(ctx)
+	out := make([]agentport.MCPServerSummary, 0, len(servers))
+	for _, s := range servers {
+		names := make([]string, 0, len(s.Tools))
+		for _, t := range s.Tools {
+			names = append(names, t.Name)
+		}
+		out = append(out, agentport.MCPServerSummary{
+			ID: s.ID, Name: s.Name, Version: s.Version, Transport: s.Transport, Status: s.Status, Tools: names,
+		})
+	}
+	return out, nil
+}
+
 type mcpAgentToolAdapter struct{ registry *mcp.MCPToolRegistry }
 
 func (a mcpAgentToolAdapter) ToolsForServer(_ context.Context, tenantID, serverID string) []agentport.ToolDefinition {

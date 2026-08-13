@@ -268,7 +268,10 @@ func (a *ResourceChangeProposalAdapters) applyAgentChange(
 	if operation == agentdomain.OperationCreate {
 		value, err = a.agents.Create(ctx, agentapp.CreateAgentInput{
 			TenantID: tenantID, Name: change.Name, Type: "react", Description: change.Description,
-			LLMModel: change.Model, MaxIterations: change.MaxIterations, MaxContextTokens: change.MaxContextTokens,
+			// create 透传 systemPrompt：修复现存 silent-drop——AgentChange 早已
+			// 携带该字段，但 create 分支从未写入，模型创建的 agent 永远丢 prompt。
+			SystemPrompt: change.SystemPrompt, LLMModel: change.Model,
+			MaxIterations: change.MaxIterations, MaxContextTokens: change.MaxContextTokens,
 			AllowedSkills: change.SkillIDs, MCPToolIDs: change.MCPToolIDs,
 			KnowledgeWorkspaceIDs: change.WorkspaceIDs, MemoryScope: "user",
 			ActorID: actorID,
@@ -281,8 +284,14 @@ func (a *ResourceChangeProposalAdapters) applyAgentChange(
 		if existing.SystemKey != "" {
 			return agentdomain.ApplyResult{}, definiteApplyError(agentdomain.ErrSystemAssistantManaged)
 		}
+		// update 非空才覆盖 systemPrompt：buildUpdateConfig 对空串直接赋值会
+		// 清除既有 prompt，而 proposal 默认省略该字段，不能因省略而误清。
+		systemPrompt := existing.SystemPrompt
+		if change.SystemPrompt != "" {
+			systemPrompt = change.SystemPrompt
+		}
 		value, err = a.agents.Update(ctx, resourceID, agentapp.UpdateAgentInput{
-			Name: change.Name, Type: existing.Type, Description: change.Description, SystemPrompt: existing.SystemPrompt,
+			Name: change.Name, Type: existing.Type, Description: change.Description, SystemPrompt: systemPrompt,
 			LLMModel: change.Model, MaxIterations: change.MaxIterations, MaxContextTokens: change.MaxContextTokens,
 			AllowedSkills: change.SkillIDs, MCPToolIDs: change.MCPToolIDs,
 			KnowledgeWorkspaceIDs: change.WorkspaceIDs, MemoryScope: existing.MemoryScope,

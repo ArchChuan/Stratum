@@ -330,7 +330,7 @@ func TestSystemAssistantOfficialDocsArtifactsAndAreaGap(t *testing.T) {
 	require.NotContains(t, string(gotJSON), userB)
 
 	tools := agentapp.SystemAssistantToolDefinitions()
-	require.Len(t, tools, 6)
+	require.Len(t, tools, 8)
 	for _, tool := range tools {
 		require.Equal(t, domain.ProviderTypeInternal, tool.ProviderType)
 		require.NotEmpty(t, tool.InputSchema)
