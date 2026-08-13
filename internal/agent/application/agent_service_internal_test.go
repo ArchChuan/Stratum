@@ -384,7 +384,7 @@ func (mcpRevisionResolverFake) ResolveMCPRevision(
 
 type mcpToolProviderFake struct{}
 
-func (mcpToolProviderFake) ToolsForServer(context.Context, string) []port.ToolDefinition {
+func (mcpToolProviderFake) ToolsForServer(context.Context, string, string) []port.ToolDefinition {
 	return []port.ToolDefinition{{
 		Name: "mcp:server-1:lookup", ProviderType: domain.ProviderTypeMCP,
 		ServerID: "server-1", CapabilityID: "lookup",
@@ -433,7 +433,7 @@ func TestAssembleOptionsPinsMCPExperimentRevisionForTraceAndExecution(t *testing
 		t.Fatalf("MCP trace assignment = %#v", cfg.EvolutionTrace)
 	}
 	_, err = cfg.ToolExecutionFn(context.Background(), port.ToolExecutionRequest{
-		ToolCallID: "call-1", Tool: mcpToolProviderFake{}.ToolsForServer(context.Background(), "server-1")[0],
+		ToolCallID: "call-1", Tool: mcpToolProviderFake{}.ToolsForServer(context.Background(), "tenant-1", "server-1")[0],
 		Arguments: map[string]any{},
 	})
 	if err != nil {

@@ -14,8 +14,8 @@ type lifecycleRegistryFake struct {
 	unregistered string
 }
 
-func (f *lifecycleRegistryFake) RegisterServer(context.Context, string) error { return nil }
-func (f *lifecycleRegistryFake) UnregisterServer(serverID string) error {
+func (f *lifecycleRegistryFake) RegisterServer(context.Context, string, string) error { return nil }
+func (f *lifecycleRegistryFake) UnregisterServer(_ string, serverID string) error {
 	f.unregistered = serverID
 	return nil
 }

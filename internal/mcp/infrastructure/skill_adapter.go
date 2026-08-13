@@ -60,6 +60,7 @@ func (w *MCPToolHandle) Execute(ctx context.Context, input any) (any, error) {
 
 // MCPToolCatalog 适配器，管理 MCP Tools
 type MCPToolCatalog struct {
+	tenantID string
 	serverID string
 	manager  *ClientManager
 	tools    map[string]*MCPToolHandle
@@ -68,12 +69,13 @@ type MCPToolCatalog struct {
 }
 
 // NewMCPToolCatalog 创建新的适配器
-func NewMCPToolCatalog(serverID string, manager *ClientManager, logger *zap.Logger) *MCPToolCatalog {
+func NewMCPToolCatalog(tenantID, serverID string, manager *ClientManager, logger *zap.Logger) *MCPToolCatalog {
 	return &MCPToolCatalog{
+		tenantID: tenantID,
 		serverID: serverID,
 		manager:  manager,
 		tools:    make(map[string]*MCPToolHandle),
-		logger:   logger.Named("mcp.tool_catalog").With(zap.String("server_id", serverID)),
+		logger:   logger.Named("mcp.tool_catalog").With(zap.String("tenant_id", tenantID), zap.String("server_id", serverID)),
 	}
 }
 
@@ -149,19 +151,26 @@ type MCPToolRegistry struct {
 	logger   *zap.Logger
 }
 
+// registryKey scopes registry entries to one tenant. mcp_configs.id is only
+// unique within a tenant schema, so two tenants may name their server the same;
+// keying by tenantID:serverID prevents cross-tenant overwrite/leak.
+func registryKey(tenantID, serverID string) string {
+	return tenantID + ":" + serverID
+}
+
 // GetCatalogForServer returns the adapter for a specific server, or nil if not registered.
-func (r *MCPToolRegistry) GetCatalogForServer(serverID string) *MCPToolCatalog {
+func (r *MCPToolRegistry) GetCatalogForServer(tenantID, serverID string) *MCPToolCatalog {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.adapters[serverID]
+	return r.adapters[registryKey(tenantID, serverID)]
 }
 
 // RegisterCatalogForTest injects a pre-built adapter directly, bypassing DiscoverTools.
 // Intended for unit tests only.
-func (r *MCPToolRegistry) RegisterCatalogForTest(serverID string, adapter *MCPToolCatalog) {
+func (r *MCPToolRegistry) RegisterCatalogForTest(tenantID, serverID string, adapter *MCPToolCatalog) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.adapters[serverID] = adapter
+	r.adapters[registryKey(tenantID, serverID)] = adapter
 }
 
 // NewMCPToolRegistry 创建新的注册表
@@ -174,15 +183,16 @@ func NewMCPToolRegistry(manager *ClientManager, logger *zap.Logger) *MCPToolRegi
 }
 
 // RegisterServer 注册 MCP 服务器
-func (r *MCPToolRegistry) RegisterServer(ctx context.Context, serverID string) error {
+func (r *MCPToolRegistry) RegisterServer(ctx context.Context, tenantID, serverID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.adapters[serverID]; exists {
+	key := registryKey(tenantID, serverID)
+	if _, exists := r.adapters[key]; exists {
 		return fmt.Errorf("server already registered: %s", serverID)
 	}
 
-	adapter := NewMCPToolCatalog(serverID, r.manager, r.logger)
+	adapter := NewMCPToolCatalog(tenantID, serverID, r.manager, r.logger)
 
 	// 发现 Tools
 	_, err := adapter.DiscoverTools(ctx)
@@ -190,23 +200,26 @@ func (r *MCPToolRegistry) RegisterServer(ctx context.Context, serverID string) e
 		return err
 	}
 
-	r.adapters[serverID] = adapter
-	r.logger.Info("registered MCP server", zap.String("server_id", serverID))
+	r.adapters[key] = adapter
+	r.logger.Info("registered MCP server",
+		zap.String("tenant_id", tenantID), zap.String("server_id", serverID))
 
 	return nil
 }
 
 // UnregisterServer 注销 MCP 服务器
-func (r *MCPToolRegistry) UnregisterServer(serverID string) error {
+func (r *MCPToolRegistry) UnregisterServer(tenantID, serverID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.adapters[serverID]; !exists {
+	key := registryKey(tenantID, serverID)
+	if _, exists := r.adapters[key]; !exists {
 		return nil
 	}
 
-	delete(r.adapters, serverID)
-	r.logger.Info("unregistered MCP server", zap.String("server_id", serverID))
+	delete(r.adapters, key)
+	r.logger.Info("unregistered MCP server",
+		zap.String("tenant_id", tenantID), zap.String("server_id", serverID))
 
 	return nil
 }
@@ -254,11 +267,12 @@ func (r *MCPToolRegistry) RefreshTools(ctx context.Context) error {
 	}
 	r.mu.RUnlock()
 
-	for serverID, adapter := range adapters {
+	for _, adapter := range adapters {
 		_, err := adapter.DiscoverTools(ctx)
 		if err != nil {
 			r.logger.Warn("failed to refresh tools",
-				zap.String("server_id", serverID),
+				zap.String("tenant_id", adapter.tenantID),
+				zap.String("server_id", adapter.serverID),
 				zap.Error(err))
 		}
 	}

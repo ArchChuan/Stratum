@@ -412,7 +412,7 @@ func TestMCPIntegration(t *testing.T) {
 	}
 
 	// 测试技能适配器
-	adapter := NewMCPToolCatalog("test-server", manager, logger)
+	adapter := NewMCPToolCatalog("t1", "test-server", manager, logger)
 
 	// 验证适配器初始状态
 	if len(adapter.GetAllTools()) != 0 {

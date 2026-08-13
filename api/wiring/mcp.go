@@ -160,8 +160,8 @@ type agentMCPPolicyResolver struct{ service *mcpapp.MCPService }
 
 type mcpAgentToolAdapter struct{ registry *mcp.MCPToolRegistry }
 
-func (a mcpAgentToolAdapter) ToolsForServer(_ context.Context, serverID string) []agentport.ToolDefinition {
-	catalog := a.registry.GetCatalogForServer(serverID)
+func (a mcpAgentToolAdapter) ToolsForServer(_ context.Context, tenantID, serverID string) []agentport.ToolDefinition {
+	catalog := a.registry.GetCatalogForServer(tenantID, serverID)
 	if catalog == nil {
 		return nil
 	}

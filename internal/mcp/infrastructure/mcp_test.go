@@ -650,7 +650,7 @@ func TestCacheClear(t *testing.T) {
 func TestMCPToolCatalogGetAllTools(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	manager := NewClientManager(logger, nil, nil)
-	adapter := NewMCPToolCatalog("test", manager, logger)
+	adapter := NewMCPToolCatalog("t1", "test", manager, logger)
 
 	skills := adapter.GetAllTools()
 	if len(skills) != 0 {

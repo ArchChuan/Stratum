@@ -15,12 +15,12 @@ type toolRegistryPortAdapter struct {
 	r *MCPToolRegistry
 }
 
-func (a *toolRegistryPortAdapter) RegisterServer(ctx context.Context, serverID string) error {
-	return a.r.RegisterServer(ctx, serverID)
+func (a *toolRegistryPortAdapter) RegisterServer(ctx context.Context, tenantID, serverID string) error {
+	return a.r.RegisterServer(ctx, tenantID, serverID)
 }
 
-func (a *toolRegistryPortAdapter) UnregisterServer(serverID string) error {
-	return a.r.UnregisterServer(serverID)
+func (a *toolRegistryPortAdapter) UnregisterServer(tenantID, serverID string) error {
+	return a.r.UnregisterServer(tenantID, serverID)
 }
 
 // ServerManagerAsPort wraps ClientManager to satisfy port.ServerManager.

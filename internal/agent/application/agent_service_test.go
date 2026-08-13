@@ -46,7 +46,7 @@ func (preparationAgentRevisionResolver) ResolveAgentRevision(
 
 type preparationMCPTools struct{}
 
-func (preparationMCPTools) ToolsForServer(context.Context, string) []port.ToolDefinition {
+func (preparationMCPTools) ToolsForServer(context.Context, string, string) []port.ToolDefinition {
 	return []port.ToolDefinition{{
 		Name: "mcp:server-1:lookup", ProviderType: domain.ProviderTypeMCP,
 		ServerID: "server-1", CapabilityID: "lookup",
@@ -206,8 +206,8 @@ func (m *mockSkillLookup) LookupSkill(ctx context.Context, tenantID, skillID str
 
 type mockMCPTools struct{ mock.Mock }
 
-func (m *mockMCPTools) ToolsForServer(ctx context.Context, serverID string) []port.ToolDefinition {
-	args := m.Called(ctx, serverID)
+func (m *mockMCPTools) ToolsForServer(ctx context.Context, tenantID, serverID string) []port.ToolDefinition {
+	args := m.Called(ctx, tenantID, serverID)
 	out, _ := args.Get(0).([]port.ToolDefinition)
 	return out
 }
@@ -1013,7 +1013,7 @@ func TestAgentService_BuildExtraTools_Empty(t *testing.T) {
 func TestAgentService_BuildExtraTools_MCPDelegates(t *testing.T) {
 	repo := new(mockAgentRepo)
 	mcpProv := new(mockMCPTools)
-	mcpProv.On("ToolsForServer", mock.Anything, "srv1").Return([]port.ToolDefinition{
+	mcpProv.On("ToolsForServer", mock.Anything, "tenant-1", "srv1").Return([]port.ToolDefinition{
 		{Name: "mcp:srv1:search", Description: "web search"},
 	})
 	svc := application.NewAgentService(application.AgentServiceDeps{
@@ -1029,7 +1029,7 @@ func TestAgentService_BuildExtraTools_MCPDelegates(t *testing.T) {
 
 func TestAgentService_BuildExtraToolsAppliesTenantOwnedRiskPolicy(t *testing.T) {
 	mcpProv := new(mockMCPTools)
-	mcpProv.On("ToolsForServer", mock.Anything, "orders").Return([]port.ToolDefinition{{Name: "mcp:orders:get", CapabilityID: "get"}, {Name: "mcp:orders:delete", CapabilityID: "delete"}})
+	mcpProv.On("ToolsForServer", mock.Anything, "tenant-1", "orders").Return([]port.ToolDefinition{{Name: "mcp:orders:get", CapabilityID: "get"}, {Name: "mcp:orders:delete", CapabilityID: "delete"}})
 	svc := application.NewAgentService(application.AgentServiceDeps{
 		MCPTools:      mcpProv,
 		MCPToolPolicy: fakeMCPToolPolicyResolver{levels: map[string]port.ToolRiskLevel{"orders:get": port.ToolRiskRead, "orders:delete": port.ToolRiskDestructive}},
@@ -1042,7 +1042,7 @@ func TestAgentService_BuildExtraToolsAppliesTenantOwnedRiskPolicy(t *testing.T) 
 
 func TestAgentService_BuildExtraToolsDefaultsMissingRiskToUnclassified(t *testing.T) {
 	mcpProv := new(mockMCPTools)
-	mcpProv.On("ToolsForServer", mock.Anything, "orders").Return([]port.ToolDefinition{{Name: "mcp:orders:mystery", CapabilityID: "mystery"}})
+	mcpProv.On("ToolsForServer", mock.Anything, "tenant-1", "orders").Return([]port.ToolDefinition{{Name: "mcp:orders:mystery", CapabilityID: "mystery"}})
 	svc := application.NewAgentService(application.AgentServiceDeps{MCPTools: mcpProv, Logger: zap.NewNop()})
 	tools, _ := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", []string{"mcp:orders:mystery"}, nil)
 	assert.Equal(t, "unclassified", tools[0].Metadata["risk_level"])
