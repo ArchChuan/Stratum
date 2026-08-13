@@ -183,7 +183,8 @@ const executePack = async (
     return;
   }
   if (pack === 'agent-skill-mcp') {
-    completedActions.push(...await executeAgentSkillMCPPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL, backendURL }));
+    // 自审批保护要求审批人 ≠ 发起人：发起（tenantAdmin）+ 批准（systemAdmin 入租户为 owner）双 actor。
+    completedActions.push(...await executeAgentSkillMCPPack({ actor: actors.tenantAdmin, approver: actors.systemAdmin, pool, evidence, webURL, fixtureURL, backendURL }));
     return;
   }
   if (pack === 'workflow') {
