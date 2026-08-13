@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 )
@@ -147,6 +149,48 @@ func TestBuildContextMessagesWithCompaction(t *testing.T) {
 	}
 }
 
+// TestBuildContextMessages_UntrustedWrappers 验证 memory context 与压缩摘要
+// 在注入 system 消息时被 <untrusted_memory> / <untrusted_history> 结构标签
+// 包裹——这是防「指令洗白」的结构性标记：untrusted 内容升格为 system 级
+// 指令前必须有明确边界。
+func TestBuildContextMessages_UntrustedWrappers(t *testing.T) {
+	fc := &fakeCompactor{summary: "被逐出的历史摘要"}
+	// 窗口取大：小预算下 memory 会被 fitSystemAndMemory 的 head 配额截空，
+	// 无法验证 <untrusted_memory> 打标；这里保证 memory 与摘要都能注入。
+	msgs := application.BuildContextMessagesWithCompaction(
+		context.Background(), "你是助手", "记忆内容", makeHistory(30), "当前问题",
+		40000, 5, 0, 0, fc,
+	)
+	sys, hasSys := systemContent(msgs)
+	require.True(t, hasSys, "system message expected")
+
+	// 摘要位于 <untrusted_history> 内。
+	require.Contains(t, sys, "<untrusted_history>")
+	require.Contains(t, sys, "被逐出的历史摘要")
+	require.Contains(t, sys, "</untrusted_history>")
+
+	// memory 位于 <untrusted_memory> 内。
+	require.Contains(t, sys, "<untrusted_memory>")
+	require.Contains(t, sys, "记忆内容")
+	require.Contains(t, sys, "</untrusted_memory>")
+
+	// 标签有序且不重叠：history 先于 memory，各自闭合。
+	idxHistory := indexOf(sys, "<untrusted_history>")
+	idxHistoryEnd := indexOf(sys, "</untrusted_history>")
+	idxMemory := indexOf(sys, "<untrusted_memory>")
+	idxMemoryEnd := indexOf(sys, "</untrusted_memory>")
+	require.True(t, idxHistory < idxHistoryEnd && idxHistoryEnd <= idxMemory && idxMemory < idxMemoryEnd,
+		"wrapper 顺序或闭合异常: %s", sys)
+}
+
+func indexOf(s, sub string) int {
+	idx := strings.Index(s, sub)
+	if idx < 0 {
+		return -1
+	}
+	return idx
+}
+
 // TestCompaction_BackwardCompatible 保证：nil compactor 时与压缩失败降级
 // 路径逐条一致。窗口取 40000，避免小窗口被自动链输出预留（4096）吞成 0 usable。
 func TestCompaction_BackwardCompatible(t *testing.T) {
@@ -165,13 +209,15 @@ func TestCompaction_BackwardCompatible(t *testing.T) {
 	}
 }
 
-// 提取注入的摘要正文（marker 之后、system 结尾之前）。
+// 提取注入的摘要正文（marker 之后、system 结尾之前）。摘要被
+// <untrusted_history> 结构标签包裹，这里剥掉尾标签，使字节断言与
+// "摘要体截断到预留额度"的语义一致。
 func summaryBody(sys string) string {
 	idx := strings.Index(sys, marker)
 	if idx < 0 {
 		return ""
 	}
-	return sys[idx+len(marker):]
+	return strings.TrimSuffix(sys[idx+len(marker):], "\n</untrusted_history>")
 }
 
 // TestCompaction_SummaryReserveScalesWithBudget 验证摘要预留额度从固定

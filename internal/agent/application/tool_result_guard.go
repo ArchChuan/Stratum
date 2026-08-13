@@ -118,3 +118,22 @@ func validateToolResultSchema(schema map[string]any, value any) error {
 	}
 	return nil
 }
+
+// makeInternalToolResultGuard adapts a ToolResultGuard to the
+// InternalToolResultGuardFn signature, accepting both structured maps (system
+// assistant internal tools) and plain text (RAG/recall tool results). The
+// string case wraps content as an MCP text content so it flows through the
+// same Validate path — redaction, rune-bound truncation, and the
+// <untrusted_tool_result> wrapper — as every other untrusted tool result.
+func makeInternalToolResultGuard(guard *ToolResultGuard) func(any) (port.GuardedToolResult, error) {
+	return func(value any) (port.GuardedToolResult, error) {
+		switch typed := value.(type) {
+		case map[string]any:
+			return guard.Validate(port.MCPToolResult{StructuredContent: typed}, nil)
+		case string:
+			return guard.Validate(port.MCPToolResult{Content: []port.MCPContent{{Type: "text", Text: typed}}}, nil)
+		default:
+			return port.GuardedToolResult{}, ErrMCPToolResultSchema
+		}
+	}
+}
