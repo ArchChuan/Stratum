@@ -7,6 +7,7 @@ import type { GroupedModelOption } from '../model/agent';
 import { AgentMemoryConfig } from './AgentMemoryConfig';
 
 import {
+  AGENT_CONTEXT_WINDOW_RATIO,
   AGENT_MAX_CONTEXT_TOKENS_MAX,
   AGENT_MAX_CONTEXT_TOKENS_MIN,
   AGENT_MAX_CONTEXT_TOKENS_STEP,
@@ -59,6 +60,26 @@ export const AgentFormSections = ({
     if (!selectedModel) return false;
     return groupedModels.some((g) => g.models.some((m) => m.value === selectedModel && m.reasoning));
   }, [selectedModel, groupedModels]);
+  // 当前选中模型的上下文窗口；模型不在托管目录（不可用/退役）时窗口未知。
+  const selectedWindow = useMemo(() => {
+    if (!selectedModel) return undefined;
+    return groupedModels.flatMap((g) => g.models).find((m) => m.value === selectedModel)?.contextWindow;
+  }, [selectedModel, groupedModels]);
+  // 0.85×窗口 的推荐上下文预算（与后端 pkg/constants DefaultContextWindowRatio 同源）。
+  const recommendedContextTokens = selectedWindow ? Math.round(selectedWindow * AGENT_CONTEXT_WINDOW_RATIO) : undefined;
+
+  // 仅用户 change 时联动：当前值为自动（null/undefined/0）且窗口已知时填入推荐值；
+  // 显式值保留，清空/置 0 后再次选模型才回填，不破坏「0 = 自动」语义。
+  // 注意：onChange 触发时 Form store 尚未更新，Form.useWatch 返回旧值，必须用
+  // onChange 的 value 参数反查窗口，避免 stale closure 导致联动永远不触发。
+  const handleModelChange = (value: string) => {
+    const current = form.getFieldValue('maxContextTokens');
+    const isAuto = current === null || current === undefined || current === 0;
+    if (!isAuto) return;
+    const window = groupedModels.flatMap((g) => g.models).find((m) => m.value === value)?.contextWindow;
+    if (!window) return;
+    form.setFieldValue('maxContextTokens', Math.round(window * AGENT_CONTEXT_WINDOW_RATIO));
+  };
 
   return (
     <>
@@ -140,6 +161,7 @@ export const AgentFormSections = ({
           notFoundContent="模型管理中没有可用的推理模型"
           showSearch
           optionFilterProp="children"
+          onChange={handleModelChange}
         >
           {currentModel &&
             !groupedModels.some((g) => g.models.some((m) => m.value === currentModel)) && (
@@ -245,7 +267,11 @@ export const AgentFormSections = ({
                   label="最大上下文 Token"
                   name="maxContextTokens"
                   rules={[{ required: true, message: '请输入最大上下文 Token' }, { type: 'number', min: AGENT_MAX_CONTEXT_TOKENS_MIN, message: '最小值为 0（0 = 自动按模型窗口解析）' }]}
-                  extra="0 = 自动按模型窗口解析；推荐值：轻量对话 4000，标准 8000，长文档处理 32000-128000"
+                  extra={
+                    selectedWindow
+                      ? `推荐 ${recommendedContextTokens} tokens（模型窗口 ${selectedWindow} × ${Math.round(AGENT_CONTEXT_WINDOW_RATIO * 100)}%）；0 = 自动按模型窗口解析`
+                      : '0 = 自动按模型窗口解析'
+                  }
                 >
                   <InputNumber min={AGENT_MAX_CONTEXT_TOKENS_MIN} max={AGENT_MAX_CONTEXT_TOKENS_MAX} step={AGENT_MAX_CONTEXT_TOKENS_STEP} style={{ width: '100%' }} />
                 </Form.Item>

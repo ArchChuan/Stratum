@@ -108,7 +108,7 @@ type AgentConfig struct {
 
 ## Context Budget And Compaction
 
-`AgentConfig.MaxContextTokens` 控制 Agent 每次 LLM 请求的上下文上限；未配置时使用 `constants.DefaultAgentContextTokens`（8000）。当前运行行为分两层：
+`AgentConfig.MaxContextTokens` 控制 Agent 每次 LLM 请求的上下文上限；0 = 自动按模型窗口解析（窗口 known → `0.85×window`，未知 → `constants.DefaultAgentContextTokens`=32768）。当前运行行为分两层：
 
 1. 初始上下文由 `BuildContextMessagesWithCompaction` 组装，优先级为当前输入 > system prompt 保底 > memory（剩余预算最多 30%）> 会话历史。窗口外和超出预算的最老历史会交给 `HistoryCompactor` 生成摘要，摘要只注入当次请求的 system message。
 2. ReAct 循环（包括 Planning 子步骤的 ReAct）每次调用 LLM 前对消息副本估算 token；达到 `MaxContextTokens * LoopCompactionSafetyRatio`（当前 80%）后，保留 system/user 锚点和最近 3 个完整消息组，较老中间组整体压缩。assistant tool call 与对应 tool result 必须作为原子组保留或删除，禁止产生孤立消息。Reflect、Plan、Synthesize 的结构化单次请求不在本次循环压缩范围内。

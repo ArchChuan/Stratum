@@ -1,8 +1,20 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Form } from 'antd';
 import { describe, expect, it } from 'vitest';
 
 import { AgentFormSections } from './AgentFormSections';
+
+// rc-select 双层结构：role=option 的 ARIA 层（rc-virtual-list 无障碍包装）不绑定
+// onSelect；交互事件绑在 .ant-select-item-option 上。因此模拟选中必须操作
+// .ant-select-item-option，getByRole('option') 匹配的是 ARIA 层，点击无效。
+const pickModelOption = (container: HTMLElement, label: string) => {
+  fireEvent.mouseDown(container.querySelector('.ant-select-selector')!);
+  const option = Array.from(document.querySelectorAll('.ant-select-item-option')).find((el) =>
+    el.textContent?.includes(label),
+  )!;
+  fireEvent.mouseDown(option);
+  fireEvent.click(option);
+};
 
 describe('AgentFormSections', () => {
   it('limits max iterations to the product range with a slider', () => {
@@ -195,5 +207,75 @@ describe('AgentFormSections', () => {
     expect(contextTokens).toHaveAttribute('aria-valuemin', '0');
     expect(contextTokens).toHaveAttribute('aria-valuemax', '128000');
     expect(contextTokens).toHaveAttribute('step', '1000');
+  });
+
+  it('fills recommended context tokens from the selected model window when value is auto', async () => {
+    const { container } = render(
+      <Form>
+        <AgentFormSections
+          skills={[]}
+          mcpTools={[]}
+          workspaces={[]}
+          groupedModels={[{ provider: '托管厂商', models: [{ value: 'glm-5.2', label: 'glm-5.2', reasoning: false, contextWindow: 128000 }] }]}
+        />
+      </Form>,
+    );
+
+    pickModelOption(container, 'glm-5.2');
+
+    // 128000 × 0.85 = 108800，未显式设置时选中模型自动填入推荐值
+    await waitFor(() => expect(screen.getByLabelText(/最大上下文 Token/)).toHaveValue('108800'));
+  });
+
+  it('keeps an explicit maxContextTokens when the model changes', async () => {
+    const { container } = render(
+      <Form initialValues={{ maxContextTokens: 50000 }}>
+        <AgentFormSections
+          skills={[]}
+          mcpTools={[]}
+          workspaces={[]}
+          groupedModels={[{ provider: '托管厂商', models: [{ value: 'glm-5.2', label: 'glm-5.2', reasoning: false, contextWindow: 128000 }] }]}
+        />
+      </Form>,
+    );
+
+    pickModelOption(container, 'glm-5.2');
+
+    // 显式值不被联动覆盖
+    await waitFor(() => expect(screen.getByLabelText(/最大上下文 Token/)).toHaveValue('50000'));
+  });
+
+  it('does not fill tokens when the selected model has no known window', async () => {
+    const { container } = render(
+      <Form>
+        <AgentFormSections
+          skills={[]}
+          mcpTools={[]}
+          workspaces={[]}
+          groupedModels={[{ provider: '托管厂商', models: [{ value: 'unknown-model', label: 'unknown-model', reasoning: false }] }]}
+        />
+      </Form>,
+    );
+
+    pickModelOption(container, 'unknown-model');
+
+    await waitFor(() => expect(screen.getByLabelText(/最大上下文 Token/)).not.toHaveValue('108800'));
+    // 窗口未知 → 仅显示自动解析文案
+    expect(screen.getByText('0 = 自动按模型窗口解析')).toBeInTheDocument();
+  });
+
+  it('shows the recommended window text when the model window is known', () => {
+    render(
+      <Form initialValues={{ llmModel: 'glm-5.2' }}>
+        <AgentFormSections
+          skills={[]}
+          mcpTools={[]}
+          workspaces={[]}
+          groupedModels={[{ provider: '托管厂商', models: [{ value: 'glm-5.2', label: 'glm-5.2', reasoning: false, contextWindow: 128000 }] }]}
+        />
+      </Form>,
+    );
+
+    expect(screen.getByText('推荐 108800 tokens（模型窗口 128000 × 85%）；0 = 自动按模型窗口解析')).toBeInTheDocument();
   });
 });
