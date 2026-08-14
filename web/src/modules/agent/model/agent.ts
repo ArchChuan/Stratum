@@ -107,18 +107,18 @@ export const buildMemoryParameters = (values: MemoryParamValues): Record<string,
 
 export interface GroupedModelOption {
   provider: string;
-  models: { value: string; label: string; reasoning: boolean }[];
+  models: { value: string; label: string; reasoning: boolean; contextWindow?: number }[];
 }
 
 // 按厂商聚合模型下拉选项（创建/编辑 Agent 页共用）。
 // capabilities 可选：缺失时按默认推理名单推断（见 isReasoningModel），
 // 避免调用方为拿能力标志额外加一次请求。
 export const buildGroupedModels = (
-  models: Array<{ providerId: string; name: string; displayName?: string; capabilities?: string[] }>,
+  models: Array<{ providerId: string; name: string; displayName?: string; capabilities?: string[]; contextWindow?: number }>,
   providers: Array<{ id: string; name: string }>,
 ): GroupedModelOption[] => {
   const providerMap = new Map(providers.map((p) => [p.id, p.name]));
-  const grouped = new Map<string, { value: string; label: string; reasoning: boolean }[]>();
+  const grouped = new Map<string, { value: string; label: string; reasoning: boolean; contextWindow?: number }[]>();
   for (const m of models) {
     const providerName = providerMap.get(m.providerId) || m.providerId;
     if (!grouped.has(providerName)) grouped.set(providerName, []);
@@ -126,6 +126,7 @@ export const buildGroupedModels = (
       value: m.name,
       label: m.displayName || m.name,
       reasoning: isReasoningModel(m),
+      contextWindow: m.contextWindow,
     });
   }
   return Array.from(grouped.entries()).map(([provider, modelOptions]) => ({

@@ -4,7 +4,7 @@ import { Button, Form, Skeleton, Typography } from 'antd';
 import { AgentFormSections } from '../components/AgentFormSections';
 import { useEditAgentPage } from '../hooks/useEditAgentPage';
 
-import { AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
+import { AGENT_DEFAULT_MAX_CONTEXT_TOKENS, AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
 
 const { Title, Text } = Typography;
 
@@ -65,7 +65,7 @@ export const EditAgentPage = () => {
         onFinish={onFinish}
         initialValues={{
           maxIterations: AGENT_DEFAULT_MAX_ITERATIONS,
-          maxContextTokens: 8000,
+          maxContextTokens: AGENT_DEFAULT_MAX_CONTEXT_TOKENS,
           allowedSkills: [],
           memoryScope: 'user',
         }}

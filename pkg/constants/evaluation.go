@@ -7,8 +7,11 @@ package constants
 // to leave the production value untouched.
 const (
 	// TunableTemperatureMin/Max bound the LLM temperature parameter.
+	// Max is 1.0, not 2.0: the platform's OpenAI-compatible providers (Qwen /
+	// Zhipu) reject temperature > 1 with a 4xx that the gateway surfaces as
+	// 500 at execution. 1.0 also matches evaluation.optimizer/judge.temperature.
 	TunableTemperatureMin = 0.0
-	TunableTemperatureMax = 2.0
+	TunableTemperatureMax = 1.0
 
 	// TunableMaxTokensMin/Max bound max_tokens per LLM request. Min is 0 (unset).
 	TunableMaxTokensMin = 0

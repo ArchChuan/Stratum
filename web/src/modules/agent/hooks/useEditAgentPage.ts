@@ -11,7 +11,7 @@ import {
   type GroupedModelOption,
 } from '../model/agent';
 
-import { AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
+import { AGENT_DEFAULT_MAX_CONTEXT_TOKENS, AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
 import { knowledgeApi } from '@/modules/knowledge';
 import type { Workspace } from '@/modules/knowledge';
 import { llmApi } from '@/modules/llm';
@@ -78,7 +78,7 @@ export const useEditAgentPage = () => {
           systemPrompt: a.systemPrompt,
           llmModel: a.llmModel,
           maxIterations: a.maxIterations ?? AGENT_DEFAULT_MAX_ITERATIONS,
-          maxContextTokens: a.maxContextTokens ?? 8000,
+          maxContextTokens: a.maxContextTokens ?? AGENT_DEFAULT_MAX_CONTEXT_TOKENS,
           temperature: a.temperature,
           max_tokens: a.max_tokens,
           compaction_recent_groups: a.compaction_recent_groups,

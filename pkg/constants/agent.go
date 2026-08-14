@@ -3,7 +3,11 @@ package constants
 import "time"
 
 const (
-	DefaultAgentContextTokens   = 8000
+	// DefaultAgentContextTokens 是"模型窗口未知 + explicit=0"时的上下文预算兜底
+	// （ResolveAgentWindow default 分支）。0 = 自动按模型窗口解析：窗口 known 时走
+	// 0.85×window，未知时回落本常量。32768 保证兜底不至于像旧 8000 那样与
+	// outputReserve(4096) 形成预算账本矛盾（usable 远小于输出预留 → 智谱 400）。
+	DefaultAgentContextTokens   = 32768
 	DefaultSystemAssistantModel = "glm-5.2"
 	MinSystemPromptTokens       = 200
 	// MinAgentMaxIterations / MaxAgentMaxIterations bound the per-agent max
