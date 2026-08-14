@@ -1,56 +1,35 @@
 import { z } from 'zod';
 
-// 与 internal/audit/domain/audit.go 的 AuditEvent 精确对齐：
-// request_id/trace_id 非可选（无 omitempty），仅 before/after 可选。
-export const auditActorSchema = z.object({
-  actor_type: z.string(),
-  actor_id: z.string(),
-});
-
-export const auditEventSchema = z.object({
+// 与 proto/audit/audit.proto 对齐：字段 snake_case；before/after 为 JSONB
+// 投影（空投影后端返回 null，由 .optional() 容错）。
+export const resourceChangeAuditSchema = z.object({
   id: z.string(),
-  tenant_id: z.string(),
-  actor: auditActorSchema,
-  action: z.string(),
-  resource_type: z.string(),
+  resource_kind: z.string(),
   resource_id: z.string(),
-  // before/after 后端类型是 json.RawMessage（omitempty），序列化后是对象/数组。
+  operation: z.string(),
+  actor_id: z.string(),
+  actor_name: z.string(),
+  created_at: z.string(),
   before: z.unknown().optional(),
   after: z.unknown().optional(),
-  request_id: z.string(),
-  trace_id: z.string(),
-  risk_level: z.string(),
-  outcome: z.string(),
-  occurred_at: z.string(),
 });
 
-export const auditEventsPageSchema = z.object({
-  events: z.array(auditEventSchema),
+export const resourceChangeAuditsPageSchema = z.object({
+  events: z.array(resourceChangeAuditSchema),
   total: z.number().int().nonnegative(),
 });
 
-export type AuditEvent = z.infer<typeof auditEventSchema>;
+export type ResourceChangeAudit = z.infer<typeof resourceChangeAuditSchema>;
 
-// risk_level / outcome 是控制逻辑枚举，硬编码（后端无枚举端点）。
-// Record 模式参照 MCPServersPage 的 STATUS_MAP。
-export const RISK_LEVEL_LABELS: Record<string, string> = {
-  low: '低',
-  medium: '中',
-  high: '高',
-};
-
-export const RISK_LEVEL_COLORS: Record<string, string> = {
-  low: 'green',
-  medium: 'orange',
-  high: 'red',
-};
-
-export const OUTCOME_LABELS: Record<string, string> = {
-  success: '成功',
-  error: '失败',
-};
-
-export const OUTCOME_COLORS: Record<string, string> = {
-  success: 'green',
-  error: 'red',
+// operation 是控制逻辑枚举，硬编码（后端无枚举端点）。
+export const OPERATION_LABELS: Record<string, string> = {
+  create: '创建',
+  update: '更新',
+  delete: '删除',
+  publish: '发布',
+  promote: '发布',
+  rollback: '回滚',
+  reject: '拒绝',
+  pause: '暂停',
+  activate: '激活',
 };

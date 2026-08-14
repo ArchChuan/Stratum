@@ -136,6 +136,16 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
     });
   }
 
+  // 审计日志是租户级资源，租户 admin/owner 可见（owner 经 TENANT_ROLE_RANK
+  // 自动通过）；global_admin 若无租户 admin 角色则不可见。
+  if (user?.current_tenant && canManageTenant) {
+    base.push({
+      key: '/audit',
+      icon: <AuditOutlined />,
+      label: '审计日志',
+    });
+  }
+
   // 平台管理面合并自原「平台管理（租户 admin）」+「系统管理（global/system admin）」,
   // 现统一仅对 global admin（users.global_role='global_admin'）开放;其他角色菜单不可见、
   // URL 直达也被路由守卫与后端 RequireGlobalAdmin 双拦截。
@@ -154,11 +164,6 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
           key: '/prompts',
           icon: <FileTextOutlined />,
           label: '提示词管理',
-        },
-        {
-          key: '/audit',
-          icon: <AuditOutlined />,
-          label: '审计日志',
         },
         {
           key: '/mechanism/profiles',
@@ -192,7 +197,6 @@ export const resolveOpenKeys = (pathname: string): string[] => {
   if (
     pathname.startsWith('/models') ||
     pathname.startsWith('/prompts') ||
-    pathname.startsWith('/audit') ||
     pathname.startsWith('/mechanism') ||
     pathname.startsWith('/admin')
   )

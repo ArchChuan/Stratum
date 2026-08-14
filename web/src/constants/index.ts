@@ -84,3 +84,13 @@ export const REASONING_EFFORT_OPTIONS = [
   { value: 'medium', label: '中 — 平衡质量与成本' },
   { value: 'high', label: '高 — 更深推理，token 消耗放大' },
 ];
+
+// 资源变更审计的资源类型（与 internal/audit/domain/change_audit.go 对齐）。
+export const RESOURCE_KIND_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'agent', label: 'Agent' },
+  { value: 'skill', label: '技能' },
+  { value: 'mcp', label: 'MCP 服务器' },
+  { value: 'knowledge', label: '知识库' },
+  { value: 'workflow', label: '工作流' },
+  { value: 'evaluation', label: '评测' },
+];

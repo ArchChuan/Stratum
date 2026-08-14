@@ -9,18 +9,14 @@ vi.mock('@/services/client', () => ({ default: client }));
 
 const eventPayload = {
   id: 'evt-1',
-  tenant_id: 't1',
-  actor: { actor_type: 'user', actor_id: 'admin-1' },
-  action: 'POST /v1/agents',
-  resource_type: 'http_request',
-  resource_id: 'agent-1',
+  resource_kind: 'workflow',
+  resource_id: 'wf-1',
+  operation: 'create',
+  actor_id: 'admin-1',
+  actor_name: '管理员甲',
+  created_at: '2026-08-09T11:00:00Z',
   before: null,
-  after: { name: 'v2' },
-  request_id: 'req-1',
-  trace_id: 'trace-1',
-  risk_level: 'medium',
-  outcome: 'success',
-  occurred_at: '2026-08-09T11:00:00Z',
+  after: { status: 'draft' },
 };
 
 describe('audit api', () => {
@@ -29,23 +25,21 @@ describe('audit api', () => {
   });
 
   it('lists events with pagination through the shared client', async () => {
-    client.get.mockResolvedValue({ data: { events: [eventPayload], count: 1, total: 1 } });
+    client.get.mockResolvedValue({ data: { events: [eventPayload], total: 1 } });
     const page = await auditApi.listEvents({ page: 1, pageSize: 10 });
     expect(client.get).toHaveBeenCalledWith('/audit/events', { params: { page: 1, page_size: 10 } });
     expect(page.events).toHaveLength(1);
-    expect(page.events[0].occurred_at).toBe('2026-08-09T11:00:00Z');
+    expect(page.events[0].created_at).toBe('2026-08-09T11:00:00Z');
     expect(page.total).toBe(1);
   });
 
-  it('passes filters and RFC3339 time range to the query params', async () => {
-    client.get.mockResolvedValue({ data: { events: [], count: 0, total: 0 } });
+  it('passes resource_kind and actor_name filters plus RFC3339 time range', async () => {
+    client.get.mockResolvedValue({ data: { events: [], total: 0 } });
     await auditApi.listEvents({
       from: '2026-08-09T00:00:00Z',
       to: '2026-08-09T23:59:59Z',
-      action: 'POST /v1/agents',
-      risk_level: 'high',
-      outcome: 'error',
-      resource_type: 'http_request',
+      resourceKind: 'workflow',
+      actorName: '管理员甲',
       page: 2,
       pageSize: 50,
     });
@@ -55,16 +49,14 @@ describe('audit api', () => {
         page_size: 50,
         from: '2026-08-09T00:00:00Z',
         to: '2026-08-09T23:59:59Z',
-        action: 'POST /v1/agents',
-        risk_level: 'high',
-        outcome: 'error',
-        resource_type: 'http_request',
+        resource_kind: 'workflow',
+        actor_name: '管理员甲',
       },
     });
   });
 
   it('omits empty filter fields', async () => {
-    client.get.mockResolvedValue({ data: { events: [], count: 0, total: 0 } });
+    client.get.mockResolvedValue({ data: { events: [], total: 0 } });
     await auditApi.listEvents({ page: 1, pageSize: 20 });
     expect(client.get).toHaveBeenCalledWith('/audit/events', { params: { page: 1, page_size: 20 } });
   });
@@ -73,7 +65,7 @@ describe('audit api', () => {
     client.get.mockResolvedValue({ data: eventPayload });
     const event = await auditApi.getEvent('evt-1');
     expect(client.get).toHaveBeenCalledWith('/audit/events/evt-1');
-    expect(event.actor.actor_type).toBe('user');
+    expect(event.resource_kind).toBe('workflow');
   });
 
   it('rejects a malformed event row', async () => {
