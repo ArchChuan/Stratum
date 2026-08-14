@@ -55,16 +55,18 @@ const submitSearch = async (
   page: Page,
 ): Promise<{ status: number; rows: Array<Record<string, unknown>>; total: number }> => {
   const listResponse = waitForList(page);
-  await page.getByRole('button', { name: '查询' }).click();
+  // antd Button autoInsertSpace 会把 2 汉字按钮渲染为「查 询」,用 regex 匹配任意空白。
+  await page.getByRole('button', { name: /查\s*询/ }).click();
   const res = await listResponse;
   expect(res.status()).toBe(200);
   const body = await res.json() as { events: Array<Record<string, unknown>>; total: number };
   return { status: res.status(), rows: body.events, total: body.total };
 };
 
-// 通过 antd Select 选择资源类型（选项渲染在下拉浮层，限定 .ant-select-dropdown 防与表格文本冲突）。
+// antd Select 可点击区域是 .ant-select-selector,通过 Form.Item label 过滤定位
+// （getByLabel 对 antd Select 内部 input 关联不可靠,点击会超时）。
 const pickResourceKind = async (page: Page, label: string) => {
-  await page.getByLabel('资源类型').click();
+  await page.locator('.ant-form-item').filter({ hasText: '资源类型' }).locator('.ant-select-selector').click();
   const dropdown = page.locator('.ant-select-dropdown:visible');
   await dropdown.getByText(label, { exact: true }).click();
 };
@@ -116,6 +118,10 @@ const createWorkflowForAudit = async (
     && response.request().method() === 'POST'
   ));
   await page.getByLabel('工作流名称').fill(`E2E-Audit-${Date.now()}`);
+  // 「任务名称」为必填（否则 form.validateFields 失败,保存直接 return 不发请求）;
+  // 且 CreateWorkflowRequest.spec 为 required,空画布 spec 为空数组会 400,故加一个节点。
+  await page.getByLabel('任务名称').fill('审计验收');
+  await page.getByRole('button', { name: '添加人工审批节点' }).click();
   await page.getByRole('button', { name: '保存草稿' }).click();
   const created = await createResponse;
   expect(created.status()).toBe(201);
@@ -165,8 +171,8 @@ const verifyFilters = async (
   assertContains(kindRes.rows, definitionID, 'create', 'workflow');
 
   // 操作者：actor_name 兜底为 actor_id（e2e actor 无 display_name/github_login），
-  // 输入 actorID 模糊匹配即命中。
-  await page.getByLabel('操作者').fill(actorID);
+  // 输入 actorID 模糊匹配即命中。同样按 Form.Item label 过滤定位（getByLabel 不可靠）。
+  await page.locator('.ant-form-item').filter({ hasText: '操作者' }).locator('input').fill(actorID);
   const actorRes = await submitSearch(page);
   const actorTotal = await auditCount(pool, tenantID, 'tenant_id = $1 AND actor_id = $2', [tenantID, actorID]);
   expect(actorRes.total).toBe(actorTotal);
@@ -208,6 +214,9 @@ export const executeAuditPack = async ({
       `SELECT resource_kind, operation, actor_id,
          to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at
        FROM resource_change_audits WHERE resource_kind = 'workflow' AND resource_id = $1`, [definitionID]);
+    // 创建草稿后已导航到 /workflows/{id}/edit,先回到 /audit 列表页再验证筛选。
+    await page.goto(`${webURL}/audit`);
+    await expect(page.getByRole('heading', { name: '审计日志' })).toBeVisible();
     await verifyFilters(page, pool, tenantID, actorID, definitionID, createdRows, evidence);
 
     // 普通 member 无权限：前端 403 + 后端 API 403。

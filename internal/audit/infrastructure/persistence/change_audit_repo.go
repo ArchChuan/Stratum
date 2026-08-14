@@ -50,7 +50,7 @@ func (r *PgResourceChangeAuditRepo) List(
 	var total int
 	err := postgres.ExecTenantWith(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		where, args := buildChangeAuditWhere(tenantID, f)
-		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM resource_change_audits `+where, args...).Scan(&total); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM resource_change_audits r `+where, args...).Scan(&total); err != nil {
 			return fmt.Errorf("audit: count resource change audits: %w", err)
 		}
 		if total == 0 {
@@ -61,7 +61,7 @@ func (r *PgResourceChangeAuditRepo) List(
 		paging = append(paging, f.Limit, f.Offset)
 		rowsQuery := `SELECT id, resource_kind, resource_id, operation, actor_id, created_at,
 			before_projection, after_projection
-			FROM resource_change_audits ` + where + fmt.Sprintf(` ORDER BY created_at DESC, id DESC
+			FROM resource_change_audits r ` + where + fmt.Sprintf(` ORDER BY created_at DESC, id DESC
 			LIMIT $%d OFFSET $%d`, len(args)+1, len(args)+2)
 		got, err := tx.Query(ctx, rowsQuery, paging...)
 		if err != nil {
@@ -152,7 +152,7 @@ func buildChangeAuditWhere(tenantID string, f port.ResourceChangeAuditFilter) (s
 		args = append(args, `%`+f.ActorName+`%`)
 		idx := len(args)
 		conds = append(conds, fmt.Sprintf(
-			`(EXISTS (SELECT 1 FROM public.users u WHERE u.id = r.actor_id AND (u.display_name ILIKE $%[1]d OR u.github_login ILIKE $%[1]d)) OR r.actor_id ILIKE $%[1]d)`, idx))
+			`(EXISTS (SELECT 1 FROM public.users u WHERE u.id::text = r.actor_id AND (u.display_name ILIKE $%[1]d OR u.github_login ILIKE $%[1]d)) OR r.actor_id ILIKE $%[1]d)`, idx))
 	}
 	if f.From != nil {
 		args = append(args, *f.From)
