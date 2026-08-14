@@ -81,3 +81,24 @@ func TestProviderRuntime_unsupportedKind(t *testing.T) {
 	require.ErrorContains(t, err, `no protocol for kind "kafka"`)
 	require.ErrorContains(t, rt.Health(context.Background(), provider), `no protocol for kind "kafka"`)
 }
+
+// TestProviderRuntime_protocol_injectsZhipuCatalog 验证 protocol() 对智谱
+// baseURL 注入发现兜底目录，非智谱 provider 保持为空（行为不变）。
+func TestProviderRuntime_protocol_injectsZhipuCatalog(t *testing.T) {
+	rt := runtimeFixture(&stubProto{})
+
+	_, cfg, err := rt.protocol(domain.Provider{
+		Kind: domain.ProviderOpenAICompat, BaseURL: "https://open.bigmodel.cn/api/paas/v4",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, cfg.ModelCatalog)
+	require.Contains(t, cfg.ModelCatalog, "glm-4.6v")
+	require.Contains(t, cfg.ModelCatalog, "embedding-3")
+	require.NotContains(t, cfg.ModelCatalog, "glm-4.1v")
+
+	_, cfg, err = rt.protocol(domain.Provider{
+		Kind: domain.ProviderOpenAICompat, BaseURL: "https://api.example.com/v1",
+	})
+	require.NoError(t, err)
+	require.Empty(t, cfg.ModelCatalog)
+}

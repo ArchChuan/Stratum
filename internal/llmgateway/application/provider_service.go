@@ -208,7 +208,8 @@ func isEmbeddingModelName(lower string) bool {
 func isVisionModelName(lower string) bool {
 	for _, p := range []string{
 		"claude", "gpt-4o", "gpt-4.1", "gpt-4-turbo",
-		"gemini", "llava", "internvl", "glm-4v", "glm-4.1v",
+		"gemini", "llava", "internvl",
+		"glm-4v", "glm-4.1v", "glm-4.5v", "glm-4.6v", "glm-5v",
 		"qwen-vl", "yi-vl", "step-1v",
 	} {
 		if strings.HasPrefix(lower, p) {
@@ -226,7 +227,7 @@ func isReasoningModelName(lower string) bool {
 	if lower == "deepseek-reasoner" {
 		return true
 	}
-	for _, prefix := range []string{"o1", "o3", "o4", "qwq"} {
+	for _, prefix := range []string{"o1", "o3", "o4", "qwq", "glm-z1"} {
 		if strings.HasPrefix(lower, prefix) {
 			return true
 		}

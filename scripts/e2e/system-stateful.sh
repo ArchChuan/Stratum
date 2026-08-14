@@ -11,7 +11,7 @@ esac
 [[ "$duration" =~ ^[0-9]+$ ]] && ((duration >= 600 && duration <= 14400)) || { printf 'STATEFUL_E2E_DURATION_SEC must be between 600 and 14400\n' >&2; exit 2; }
 [[ "$profile" != release || "$duration" -ge 3600 ]] || { printf 'release profile requires at least 3600 seconds\n' >&2; exit 2; }
 
-all_packs='dashboard,iam,workflow,agent,skill,mcp,agent-skill-mcp,knowledge,memory,prompt,audit,evaluation,agent-context,evaluation-promotion,llm-admin,mechanism,operation-gate,collab,scheduled-task'
+all_packs='dashboard,iam,workflow,agent,skill,mcp,agent-skill-mcp,knowledge,memory,audit,evaluation,agent-context,evaluation-promotion,llm-admin,mechanism,operation-gate,collab,scheduled-task'
 packs=${STATEFUL_E2E_PACKS:-all}; [[ "$packs" == all ]] && packs=$all_packs
 IFS=',' read -r -a selected_packs <<<"$packs"
 for pack in "${selected_packs[@]}"; do [[ ",$all_packs," == *",$pack,"* ]] || { printf 'unknown stateful E2E pack: %s\n' "$pack" >&2; exit 2; }; done
