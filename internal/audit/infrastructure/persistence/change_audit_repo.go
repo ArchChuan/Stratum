@@ -180,8 +180,13 @@ func loadActorNames(
 	actorIDs []string,
 ) (map[string]actorNameRow, error) {
 	names := make(map[string]actorNameRow, len(actorIDs))
+	// id::text = ANY($1) 而非 id = ANY($1)：public.users.id 是 uuid，而 actor_id
+	// 可能是 system 占位符（evaluation-worker 等，见 actorDisplayName 兜底）或空串，
+	// uuid = ANY(text[]) 会被 PG 推断为 uuid[] 后逐元素 cast，非 uuid 值直接
+	// invalid input syntax for type uuid (22P02) → 整个 List 500。text 比较对任意
+	// actor 安全，查不到的行由 actorDisplayName 兜底展示 actor_id 原文。
 	rows, err := tx.Query(ctx, `SELECT id, COALESCE(display_name,''), COALESCE(github_login,'')
-		FROM public.users WHERE id = ANY($1)`, actorIDs)
+		FROM public.users WHERE id::text = ANY($1)`, actorIDs)
 	if err != nil {
 		return nil, fmt.Errorf("audit: load actor names: %w", err)
 	}

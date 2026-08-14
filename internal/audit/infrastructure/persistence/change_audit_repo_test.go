@@ -80,7 +80,10 @@ func TestPgResourceChangeAuditRepo_List_NoFilter(t *testing.T) {
 		}).
 			AddRow("a1", "workflow", "wf-1", "publish", "u-1", created, []byte(`{}`), []byte(`{"id":"wf-1"}`)).
 			AddRow("a2", "agent", "ag-1", "create", "worker", created, []byte(`{}`), []byte(`{}`)))
-	mock.ExpectQuery(`SELECT id, COALESCE\(display_name`).
+	// actor_id 支持 system 占位符（worker 非 uuid），必须 id::text = ANY($1) 而非
+	// id = ANY($1)——后者被 PG 推断为 uuid[] 后逐元素 cast，非 uuid 值直接
+	// invalid input syntax (22P02)。正则锁定 WHERE 条件防回归。
+	mock.ExpectQuery(`SELECT id, COALESCE\(display_name,''\), COALESCE\(github_login,''\)\s+FROM public\.users WHERE id::text = ANY\(\$1\)`).
 		WithArgs([]string{"u-1", "worker"}).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "display_name", "github_login"}).
 			AddRow("u-1", "李雷", "lilei"))
@@ -141,7 +144,7 @@ func TestPgResourceChangeAuditRepo_GetByID_Found(t *testing.T) {
 			"before_projection", "after_projection",
 		}).
 			AddRow("a1", "knowledge", "kb-1", "update", "u-1", created, []byte(`{"a":1}`), []byte(`{"a":2}`)))
-	mock.ExpectQuery(`SELECT id, COALESCE\(display_name`).
+	mock.ExpectQuery(`SELECT id, COALESCE\(display_name,''\), COALESCE\(github_login,''\)\s+FROM public\.users WHERE id::text = ANY\(\$1\)`).
 		WithArgs([]string{"u-1"}).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "display_name", "github_login"}).
 			AddRow("u-1", "", "lilei"))
