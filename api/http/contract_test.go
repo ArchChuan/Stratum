@@ -29,8 +29,8 @@ import (
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
-	auditapp "github.com/byteBuilderX/stratum/internal/audit/application"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
@@ -99,7 +99,6 @@ func TestContracts(t *testing.T) {
 	contractAdminTR := contractAdminTenantRepo{}
 	contractTenantR := contractTenantRepo{}
 	contractInvR := contractInvitationRepo{}
-	contractAuditRepo := contractAuditRepo{}
 
 	dddRouter := apihttp.NewRouter(&wiring.Container{
 		Config: cfg, Logger: logger,
@@ -152,8 +151,7 @@ func TestContracts(t *testing.T) {
 		},
 		Scheduler: &wiring.Scheduler{Service: contractSchedulerStub(logger)},
 		Audit: &wiring.Audit{
-			Recorder:     auditapp.NewAuditService(contractAuditRepo, observability.NoopMetrics{}, logger),
-			QueryService: auditapp.NewAuditService(contractAuditRepo, observability.NoopMetrics{}, logger),
+			QueryService: contractAuditRepo{},
 		},
 	})
 
@@ -164,7 +162,7 @@ func TestContracts(t *testing.T) {
 		"/evaluations/", "/dashboard/", "/resource-change-proposals/",
 		"/admin/providers", "/admin/models", "/admin/tenants",
 		"/tenant/", "/workflows", "/workflow-runs", "/workflow-approvals",
-		"/operation-proposals", "/scheduled-tasks",
+		"/operation-proposals", "/scheduled-tasks", "/audit",
 	}
 
 	files, err := filepath.Glob("testdata/contracts/*.golden.json")
@@ -634,19 +632,13 @@ func (contractCandidateRepo) Reject(context.Context, string, string, domain.Cand
 
 type contractAuditRepo struct{}
 
-func (contractAuditRepo) InsertBatch(_ context.Context, _ []auditdomain.AuditEvent) error {
-	return nil
+func (contractAuditRepo) List(_ context.Context, _ string, _ auditport.ResourceChangeAuditFilter) ([]auditport.ResourceChangeAuditRow, int, error) {
+	return nil, 0, nil
 }
-func (contractAuditRepo) Query(_ context.Context, _ auditdomain.AuditFilter) ([]auditdomain.AuditEvent, error) {
+
+func (contractAuditRepo) GetByID(_ context.Context, _, _ string) (*auditport.ResourceChangeAuditRow, error) {
 	return nil, nil
 }
-func (contractAuditRepo) Count(_ context.Context, _ auditdomain.AuditFilter) (int, error) {
-	return 0, nil
-}
-func (contractAuditRepo) GetByID(_ context.Context, _, _ string) (*auditdomain.AuditEvent, error) {
-	return nil, nil
-}
-func (contractAuditRepo) DeleteOlderThan(_ context.Context, _ time.Time) error { return nil }
 
 // contractSchedulerStub wires a real Service over stub ports so the DDD
 // router records deterministic scheduled-task responses.

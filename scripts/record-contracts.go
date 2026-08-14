@@ -30,6 +30,7 @@ import (
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
@@ -120,6 +121,7 @@ func buildDDDContainer(cfg *config.Config, key *rsa.PrivateKey, logger *zap.Logg
 			InvitationService: iamapp.NewInvitationService(contractInvR{}),
 		},
 		Scheduler: &wiring.Scheduler{Service: contractSchedulerStub(logger)},
+		Audit:     &wiring.Audit{QueryService: contractAuditRepo{}},
 	}
 }
 
@@ -128,6 +130,18 @@ func buildDDDContainer(cfg *config.Config, key *rsa.PrivateKey, logger *zap.Logg
 func contractSchedulerStub(logger *zap.Logger) *schedapp.Service {
 	return schedapp.NewService(contractSchedRepo{}, contractSchedRunner{}, contractSchedResolver{},
 		observability.NoopMetrics{}, logger, func() string { return "contract-task" }, time.Now)
+}
+
+// contractAuditRepo implements auditport.ResourceChangeAuditQuery so the DDD
+// router records deterministic resource-change audit responses.
+type contractAuditRepo struct{}
+
+func (contractAuditRepo) List(_ context.Context, _ string, _ auditport.ResourceChangeAuditFilter) ([]auditport.ResourceChangeAuditRow, int, error) {
+	return nil, 0, nil
+}
+
+func (contractAuditRepo) GetByID(_ context.Context, _, _ string) (*auditport.ResourceChangeAuditRow, error) {
+	return nil, nil
 }
 
 type contractSchedRepo struct{}
@@ -180,7 +194,8 @@ func isDDDAuthOverride(routePath string) (bool, iamport.TokenClaims) {
 		return true, adminClaims
 	case strings.HasPrefix(routePath, "/tenant/"), strings.HasPrefix(routePath, "/workflows"),
 		strings.HasPrefix(routePath, "/workflow-runs"), strings.HasPrefix(routePath, "/workflow-approvals"),
-		strings.HasPrefix(routePath, "/operation-proposals"), strings.HasPrefix(routePath, "/scheduled-tasks"):
+		strings.HasPrefix(routePath, "/operation-proposals"), strings.HasPrefix(routePath, "/scheduled-tasks"),
+		strings.HasPrefix(routePath, "/audit"):
 		return true, adminClaims
 	default:
 		return false, iamport.TokenClaims{}
@@ -393,8 +408,8 @@ func recordRoute(router http.Handler, method, path, outPath string) {
 
 type contractProvRepo struct{}
 
-func (contractProvRepo) Create(_ context.Context, _ string, _ *llmdomain.Provider) error { return nil }
-func (contractProvRepo) Get(_ context.Context, _ string, _ string) (*llmdomain.Provider, error) {
+func (contractProvRepo) Create(_ context.Context, _ *llmdomain.Provider) error { return nil }
+func (contractProvRepo) Get(_ context.Context, _ string) (*llmdomain.Provider, error) {
 	return &llmdomain.Provider{
 		ID: "contract-provider", Name: "stub", Kind: llmdomain.ProviderOpenAICompat,
 		BaseURL: "https://stub.example.com/v1", Enabled: true,
@@ -402,10 +417,10 @@ func (contractProvRepo) Get(_ context.Context, _ string, _ string) (*llmdomain.P
 		UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}, nil
 }
-func (contractProvRepo) List(_ context.Context, _ string) ([]llmdomain.Provider, error) {
+func (contractProvRepo) List(_ context.Context) ([]llmdomain.Provider, error) {
 	return nil, nil
 }
-func (contractProvRepo) GetMeta(_ context.Context, _ string, _ string) (*llmdomain.Provider, error) {
+func (contractProvRepo) GetMeta(_ context.Context, _ string) (*llmdomain.Provider, error) {
 	return &llmdomain.Provider{
 		ID: "contract-provider", Name: "stub", Kind: llmdomain.ProviderOpenAICompat,
 		BaseURL: "https://stub.example.com/v1", Enabled: true,
@@ -413,25 +428,25 @@ func (contractProvRepo) GetMeta(_ context.Context, _ string, _ string) (*llmdoma
 		UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}, nil
 }
-func (contractProvRepo) Update(_ context.Context, _ string, _ *llmdomain.Provider) error { return nil }
-func (contractProvRepo) Delete(_ context.Context, _ string, _ string) error              { return nil }
+func (contractProvRepo) Update(_ context.Context, _ *llmdomain.Provider) error { return nil }
+func (contractProvRepo) Delete(_ context.Context, _ string) error              { return nil }
 
 type contractModRepo struct{}
 
-func (contractModRepo) Create(_ context.Context, _ string, _ *llmdomain.Model) error { return nil }
-func (contractModRepo) Get(_ context.Context, _ string, _ string) (*llmdomain.Model, error) {
+func (contractModRepo) Create(_ context.Context, _ *llmdomain.Model) error { return nil }
+func (contractModRepo) Get(_ context.Context, _ string) (*llmdomain.Model, error) {
 	return nil, errStubNotFound
 }
-func (contractModRepo) List(_ context.Context, _ string, _ llmport.ModelFilter) ([]llmdomain.Model, error) {
+func (contractModRepo) List(_ context.Context, _ llmport.ModelFilter) ([]llmdomain.Model, error) {
 	return nil, nil
 }
-func (contractModRepo) Update(_ context.Context, _ string, _ *llmdomain.Model) error { return nil }
-func (contractModRepo) UpsertDiscovered(_ context.Context, _ string, _ string, _ []llmdomain.Model) ([]llmdomain.Model, error) {
+func (contractModRepo) Update(_ context.Context, _ *llmdomain.Model) error { return nil }
+func (contractModRepo) UpsertDiscovered(_ context.Context, _ string, _ []llmdomain.Model) ([]llmdomain.Model, error) {
 	return nil, nil
 }
-func (contractModRepo) Delete(_ context.Context, _ string, _ string) error         { return nil }
-func (contractModRepo) Toggle(_ context.Context, _ string, _ string, _ bool) error { return nil }
-func (contractModRepo) SetDefaultEmbedding(_ context.Context, _ string, _ string, _ bool) error {
+func (contractModRepo) Delete(_ context.Context, _ string) error         { return nil }
+func (contractModRepo) Toggle(_ context.Context, _ string, _ bool) error { return nil }
+func (contractModRepo) SetDefaultEmbedding(_ context.Context, _ string, _ bool) error {
 	return nil
 }
 

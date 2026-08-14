@@ -1,132 +1,124 @@
 package handler
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
-	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	"github.com/byteBuilderX/stratum/api/http/dto/gen"
+	"github.com/byteBuilderX/stratum/api/middleware"
 	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
-// AuditHandler serves the audit event read endpoints.
+// AuditHandler 提供租户资源变更审计的读取接口。租户取自 tenantIDFromCtx
+// （空字符串返回 false），不再使用宽容版 tenantIDFromGinKey。
 type AuditHandler struct {
-	query  auditport.AuditQueryService
+	query  auditport.ResourceChangeAuditQuery
 	logger *zap.Logger
 }
 
-// NewAuditHandler creates an audit HTTP handler.
-func NewAuditHandler(query auditport.AuditQueryService, logger *zap.Logger) *AuditHandler {
+func NewAuditHandler(query auditport.ResourceChangeAuditQuery, logger *zap.Logger) *AuditHandler {
 	return &AuditHandler{query: query, logger: logger}
 }
 
-// ListEvents returns a paginated list of audit events for the current tenant.
+// ListEvents 返回当前租户的资源变更审计分页列表。
 func (h *AuditHandler) ListEvents(c *gin.Context) {
-	tenantID, ok := tenantIDFromGinKey(c)
+	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
 		respondMissingTenant(c)
 		return
 	}
-	filter := parseAuditFilter(c, tenantID)
-	// Count 与 Query 用同一 filter；count 失败时 fail closed，不返回部分结果。
-	total, err := h.query.Count(c.Request.Context(), filter)
+	page, _ := strconv.ParseInt(c.DefaultQuery("page", "1"), 10, 32)
+	pageSize, _ := strconv.ParseInt(c.DefaultQuery("page_size", "20"), 10, 32)
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	filter := auditport.ResourceChangeAuditFilter{
+		ResourceKind: c.Query("resource_kind"),
+		ActorName:    c.Query("actor_name"),
+		Limit:        int(pageSize),
+		Offset:       int((page - 1) * pageSize),
+	}
+	filter = applyAuditTimeRange(filter, c.Query("from"), c.Query("to"))
+
+	rows, total, err := h.query.List(c.Request.Context(), tenantID, filter)
 	if err != nil {
-		h.logger.Error("audit: count events failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query audit events"})
+		h.logger.Error("audit: list resource change audits failed", zap.Error(err))
+		_ = c.Error(err)
 		return
 	}
-	events, err := h.query.Query(c.Request.Context(), filter)
-	if err != nil {
-		h.logger.Error("audit: list events failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query audit events"})
-		return
+	events := make([]gen.ResourceChangeAudit, 0, len(rows))
+	for _, row := range rows {
+		events = append(events, toResourceChangeAuditDTO(row))
 	}
-	// nil slice 序列化为 null，前端 zod schema 要求数组——空结果归一化为 []。
-	if events == nil {
-		events = []auditdomain.AuditEvent{}
-	}
-	c.JSON(http.StatusOK, gin.H{"events": events, "count": len(events), "total": total})
+	c.JSON(http.StatusOK, gin.H{"events": events, "total": total})
 }
 
-// parseAuditFilter 从 query string 解析审计筛选条件；无效时间戳静默忽略
-// （与历史行为一致）。分页参数 page/page_size（默认 1/50，保持旧行为）。
-func parseAuditFilter(c *gin.Context, tenantID string) auditdomain.AuditFilter {
-	page, pageSize := parsePageQuery(c, 1, 50)
-	filter := auditdomain.AuditFilter{
-		TenantID: tenantID,
-		Limit:    pageSize,
-		Offset:   (page - 1) * pageSize,
+// GetEvent 返回单条资源变更审计详情。
+func (h *AuditHandler) GetEvent(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
 	}
-	filter.From = parseTimeQuery(c, "from")
-	filter.To = parseTimeQuery(c, "to")
-	filter.Action = c.Query("action")
-	filter.RiskLevel = c.Query("risk_level")
-	filter.Outcome = c.Query("outcome")
-	filter.ResourceType = c.Query("resource_type")
+	row, err := h.query.GetByID(c.Request.Context(), tenantID, c.Param("id"))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	if row == nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusNotFound, errors.New("audit event not found")))
+		return
+	}
+	c.JSON(http.StatusOK, toResourceChangeAuditDTO(*row))
+}
+
+// applyAuditTimeRange 把 RFC3339 字符串解析进筛选范围；非法值静默忽略
+// （页面端 RangePicker 已保证合法格式）。
+func applyAuditTimeRange(filter auditport.ResourceChangeAuditFilter, from, to string) auditport.ResourceChangeAuditFilter {
+	if from != "" {
+		if parsed, err := time.Parse(time.RFC3339, from); err == nil {
+			filter.From = &parsed
+		}
+	}
+	if to != "" {
+		if parsed, err := time.Parse(time.RFC3339, to); err == nil {
+			filter.To = &parsed
+		}
+	}
 	return filter
 }
 
-// parsePageQuery 解析 page/page_size；非法值回退到默认值（与历史行为一致）。
-func parsePageQuery(c *gin.Context, defaultPage, defaultPageSize int) (int, int) {
-	page := defaultPage
-	if p := c.Query("page"); p != "" {
-		if n, err := strconv.Atoi(p); err == nil && n >= 1 {
-			page = n
+// toResourceChangeAuditDTO 把查询行映射为契约 DTO。before/after 为 JSONB
+// 投影，解到 map 后赋值（生成 DTO 字段为 map[string]any，见 gen/audit.go）。
+func toResourceChangeAuditDTO(row auditport.ResourceChangeAuditRow) gen.ResourceChangeAudit {
+	dto := gen.ResourceChangeAudit{
+		ID:           row.ID,
+		ResourceKind: row.ResourceKind,
+		ResourceID:   row.ResourceID,
+		Operation:    row.Operation,
+		ActorID:      row.ActorID,
+		ActorName:    row.ActorName,
+		CreatedAt:    row.CreatedAt.Format(time.RFC3339),
+	}
+	if len(row.Before) > 0 {
+		var obj map[string]any
+		if err := json.Unmarshal(row.Before, &obj); err == nil {
+			dto.Before = obj
 		}
 	}
-	pageSize := defaultPageSize
-	if ps := c.Query("page_size"); ps != "" {
-		if n, err := strconv.Atoi(ps); err == nil && n >= 1 {
-			pageSize = n
+	if len(row.After) > 0 {
+		var obj map[string]any
+		if err := json.Unmarshal(row.After, &obj); err == nil {
+			dto.After = obj
 		}
 	}
-	return page, pageSize
-}
-
-// parseTimeQuery 解析 RFC3339 时间参数；缺失或非法时返回零值（静默忽略）。
-func parseTimeQuery(c *gin.Context, key string) time.Time {
-	raw := c.Query(key)
-	if raw == "" {
-		return time.Time{}
-	}
-	t, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		return time.Time{}
-	}
-	return t
-}
-
-// GetEvent returns a single audit event by ID, scoped to the current tenant.
-func (h *AuditHandler) GetEvent(c *gin.Context) {
-	id := c.Param("id")
-	tenantID, ok := tenantIDFromGinKey(c)
-	if !ok {
-		respondMissingTenant(c)
-		return
-	}
-	event, err := h.query.GetByID(c.Request.Context(), tenantID, id)
-	if err != nil {
-		h.logger.Error("audit: get event failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get audit event"})
-		return
-	}
-	if event == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "audit event not found"})
-		return
-	}
-	c.JSON(http.StatusOK, event)
-}
-
-// tenantIDFromGinKey 读取 JWT 中间件写入的 auth.tenant_id gin key。
-// auth.tenant_id 由 JWT middleware 保证存在，但缺 key 或类型异常时仍要
-// fail closed（返回 401）而非对 type assertion panic——防御性修复。
-func tenantIDFromGinKey(c *gin.Context) (string, bool) {
-	val, exists := c.Get("auth.tenant_id")
-	if !exists {
-		return "", false
-	}
-	id, ok := val.(string)
-	return id, ok
+	return dto
 }

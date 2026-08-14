@@ -252,13 +252,7 @@ func (c *Container) buildAudit(ctx context.Context) error {
 	if db == nil {
 		return nil
 	}
-	c.Audit = buildAudit(db, c.Logger)
-	c.shutdown = append(c.shutdown, func(ctx context.Context) error {
-		if c.Audit != nil && c.Audit.Recorder != nil {
-			return c.Audit.Recorder.Stop(ctx)
-		}
-		return nil
-	})
+	c.Audit = buildAudit(db)
 	return nil
 }
 

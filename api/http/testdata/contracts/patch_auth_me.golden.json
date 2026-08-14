@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "PATCH",
+    "path": "/auth/me",
+    "body": {
+      "error": "EOF"
+    },
+    "want_status": 400
+  }
+]
