@@ -578,6 +578,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 - Consumes: Task 2 的 `FieldError interface { Field() string }`（语义上满足即可，不 import llmdomain）。
 - Produces: `func (e *ValidationError) Field() string`（nil-safe）。Task 5 的 `structured_output_test.go` 依赖它：`*port.ValidationError` 经内核 `errors.As(FieldError)` 命中后记 `invalid_field_<字段名>`。
+- **实施决策（用户已批准）**：`ValidationError` 原有导出字段 `Field string`，Go 禁止字段与同名方法共存，故字段改名 `Field→FieldName`（含全部构造点，行为不变），方法保留 `Field()` 满足接口契约。消费方只经 `errors.As`+`Field()` 取字段名，**禁止直接读 `FieldName` 字段**。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -592,7 +593,7 @@ import (
 )
 
 func TestValidationErrorField(t *testing.T) {
- e := &ValidationError{Location: "facts", Field: "fact_type", Value: "bad", Reason: "invalid enum"}
+ e := &ValidationError{Location: "facts", FieldName: "fact_type", Value: "bad", Reason: "invalid enum"}
  if got := e.Field(); got != "fact_type" {
   t.Fatalf("Field() = %q, want fact_type", got)
  }
@@ -619,7 +620,7 @@ func TestValidationErrorFieldNilSafe(t *testing.T) {
 - [ ] **Step 2: 验证失败**
 
 Run: `go test ./internal/memory/domain/port/...`
-Expected: 编译失败，报 `e.Field undefined (type *ValidationError has no field or method Field)`。
+Expected: 编译失败。改名后 `Field` 字段已不存在，`e.Field()` 报 `e.Field undefined (type *ValidationError has no field or method Field)`——这是预期的 RED。
 
 - [ ] **Step 3: 写实现**
 
@@ -629,11 +630,13 @@ Expected: 编译失败，报 `e.Field undefined (type *ValidationError has no fi
 // Field 返回字段名，实现 llmdomain.FieldError（结构化失败白名单摘要）。
 // nil-safe：typed-nil（(*ValidationError)(nil) 包进 error 接口）经 errors.As
 // 命中类型后由内核调用 Field() 不 panic，返回空串。
+// 字段名存于 FieldName：Go 禁止字段与方法同名，方法名固定为 Field 以满足
+// llmdomain.FieldError 契约（用户已批准字段改名）。
 func (e *ValidationError) Field() string {
  if e == nil {
   return ""
  }
- return e.Field
+ return e.FieldName
 }
 ```
 
