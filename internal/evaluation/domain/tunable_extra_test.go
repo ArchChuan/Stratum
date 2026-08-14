@@ -106,7 +106,7 @@ func TestTemperatureAndMaxTokensValidate(t *testing.T) {
 		good    []any
 		bad     []any
 	}{
-		{temperatureTunable{}, []any{0.0, 1.0, 2.0}, []any{"x", -0.1, 2.1, nil}},
+		{temperatureTunable{}, []any{0.0, 1.0}, []any{"x", -0.1, 1.1, 2.0, nil}},
 		{maxTokensTunable{}, []any{0.0, 256.0, 65536.0, 131072.0}, []any{"x", -0.1, 131073.0, nil}},
 	}
 	for _, tc := range cases {
@@ -126,7 +126,7 @@ func TestTemperatureAndMaxTokensValidate(t *testing.T) {
 func TestTunableSearchSpaces(t *testing.T) {
 	// 数值 tunable 有网格；prompt tunable 走 LLM 驱动，网格为空。
 	temp, maxTok, prompt := temperatureTunable{}, maxTokensTunable{}, promptTunable{}
-	if got := temp.SearchSpace(); got.Min != 0 || got.Max != 2 || got.Step != 0.1 {
+	if got := temp.SearchSpace(); got.Min != 0 || got.Max != 1 || got.Step != 0.1 {
 		t.Fatalf("temperature space = %+v", got)
 	}
 	if got := maxTok.SearchSpace(); got.Min != 0 || got.Max != 131072 {

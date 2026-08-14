@@ -149,9 +149,9 @@ func (r *ParametersRegistry) registerAgentParams() {
 	for _, def := range []ParameterDefinition{
 		{
 			Key: "agent.temperature", Scope: ScopeResource, Category: "agent",
-			DisplayName: "温度", Description: "采样温度,0 表示不设置(网关/provider 默认生效)",
+			DisplayName: "温度", Description: "控制输出随机性:值越低越确定保守,值越高越发散多样;范围 0~1,0 表示不设置(网关/provider 默认生效,通常 0.7)",
 			ValueType: TypeFloat, Default: 0.7,
-			VisualHint:     VisualHint{Control: ControlSlider, Min: f(0), Max: f(2), Step: f(0.1)},
+			VisualHint:     VisualHint{Control: ControlSlider, Min: f(0), Max: f(1), Step: f(0.1)},
 			Optimizable:    true,
 			EvaluationKeys: []string{"temperature"},
 		},
