@@ -1,0 +1,100 @@
+groups:
+  - name: stratum-workloads
+    rules:
+      - record: stratum:kube_pod_owner:deployment
+        expr: max by (namespace, pod, deployment) (max by (namespace, pod, replicaset) (label_replace(kube_pod_owner{namespace="stratum",owner_kind="ReplicaSet"}, "replicaset", "$1", "owner_name", "(.+)")) * on (namespace, replicaset) group_left (deployment) max by (namespace, replicaset, deployment) (label_replace(kube_replicaset_owner{namespace="stratum",owner_kind="Deployment"}, "deployment", "$1", "owner_name", "(.+)")))
+
+      - record: stratum:kube_pod:placement
+        expr: (max by (namespace, pod, node) (kube_pod_info{namespace="stratum"}) * on (namespace, pod) group_left (deployment) stratum:kube_pod_owner:deployment) or on (namespace, pod) max by (namespace, pod, node) (kube_pod_info{namespace="stratum"})
+
+      - alert: StratumNodeNotReady
+        expr: max by (node) (kube_node_status_condition{condition="Ready",status="true"} == 0) and on (node) max by (node) (kube_pod_info{namespace="stratum"})
+        for: 5m
+        labels:
+          severity: critical
+          service: stratum
+          environment: production
+          component: node
+        annotations:
+          summary: Stratum host node is not ready
+          description: The node hosting the remote Stratum environment has not been ready for five minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-resources
+          runbook_url: /docs/operations/alerts/workloads.md#node-not-ready
+
+      - alert: StratumPodRestartingFrequently
+        expr: (increase(kube_pod_container_status_restarts_total{namespace="stratum"}[10m]) > 3) * on (namespace, pod) group_left (node, deployment) stratum:kube_pod:placement
+        for: 2m
+        labels:
+          severity: warning
+          service: stratum
+          environment: production
+          component: workload
+          alert_family: pod-health
+        annotations:
+          summary: A Stratum container is restarting frequently
+          description: The container restarted more than three times in ten minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-resources
+          runbook_url: /docs/operations/alerts/workloads.md#pod-restarting-frequently
+
+      - alert: StratumPodCumulativeRestarts
+        expr: (increase(kube_pod_container_status_restarts_total{namespace="stratum"}[30m]) > 5) * on (namespace, pod) group_left (node, deployment) stratum:kube_pod:placement
+        for: 5m
+        labels:
+          severity: warning
+          service: stratum
+          environment: production
+          component: workload
+          alert_family: pod-health
+        annotations:
+          summary: A Stratum container has accumulated restarts over 30 minutes
+          description: The container restarted more than five times in the last 30 minutes without entering CrashLoopBackOff (current value {{ $value }}). This indicates intermittent crashes that recover too quickly for the CrashLooping alert.
+          dashboard_url: /d/stratum-resources
+          runbook_url: /docs/operations/alerts/workloads.md#pod-cumulative-restarts
+
+      - alert: StratumPodCrashLooping
+        expr: (kube_pod_container_status_waiting_reason{namespace="stratum",reason="CrashLoopBackOff"} == 1) * on (namespace, pod) group_left (node, deployment) stratum:kube_pod:placement
+        for: 5m
+        labels:
+          severity: critical
+          service: stratum
+          environment: production
+          component: workload
+          alert_family: pod-health
+        annotations:
+          summary: A Stratum container is crash looping
+          description: The container has remained in CrashLoopBackOff for five minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-resources
+          runbook_url: /docs/operations/alerts/workloads.md#pod-crash-looping
+
+      - alert: StratumPodPendingTooLong
+        expr: (kube_pod_status_phase{namespace="stratum",phase="Pending"} == 1) * on (namespace, pod) group_left (node, deployment) stratum:kube_pod:placement
+        for: 15m
+        labels:
+          severity: warning
+          service: stratum
+          environment: production
+          component: workload
+        annotations:
+          summary: A Stratum pod has remained pending
+          description: The pod has remained pending for fifteen minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-resources
+          runbook_url: /docs/operations/alerts/workloads.md#pod-pending-too-long
+
+      - alert: StratumPodUnhealthyExit
+        expr: |
+          (increase(kube_pod_container_status_restarts_total{namespace="stratum"}[2h]) >= 2
+            and on (namespace, pod, container)
+              kube_pod_container_status_last_terminated_reason{namespace="stratum",reason=~"Error|OOMKilled"})
+            * on (namespace, pod) group_left (node, deployment) stratum:kube_pod:placement
+        for: 5m
+        labels:
+          severity: warning
+          service: stratum
+          environment: production
+          component: workload
+          alert_family: pod-health
+        annotations:
+          summary: Stratum container exits with non-zero status repeatedly
+          description: A container restarted at least twice in two hours with a non-zero exit reason (current value {{ $value }}).
+          dashboard_url: /d/stratum-resources
+          runbook_url: /docs/operations/alerts/workloads.md#pod-unhealthy-exit

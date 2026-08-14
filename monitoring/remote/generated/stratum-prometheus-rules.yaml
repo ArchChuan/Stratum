@@ -1,0 +1,896 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stratum-remote-rules
+  namespace: monitoring
+  labels:
+    release: kps
+spec:
+  groups:
+    - name: stratum-reaper
+      rules:
+        - alert: StratumReaperDown
+          expr: (time() - reaper_last_cycle_timestamp_seconds) > 7200 and reaper_last_cycle_timestamp_seconds > 0
+          for: 10m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: reaper
+          annotations:
+            summary: Guest reaper has not run for over two hours
+            description: The guest reaper last cycle is more than 7200s ago (current value {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#reaper-down
+
+        - alert: StratumReaperDeleteErrors
+          expr: increase(reaper_delete_errors_total[1h]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: reaper
+          annotations:
+            summary: Guest reaper delete errors in the last hour
+            description: The guest reaper recorded delete errors in the last hour (increase {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#reaper-delete-errors
+
+        - alert: StratumReaperDeleteErrorsCritical
+          expr: increase(reaper_delete_errors_total[4h]) > 20
+          for: 15m
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: reaper
+          annotations:
+            summary: Guest reaper delete errors are accumulating
+            description: More than 20 guest reaper delete errors in four hours (current value {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#reaper-delete-errors-critical
+
+        - alert: StratumReaperCycleErrors
+          expr: increase(reaper_cycles_total{outcome="error"}[1h]) >= 3
+          for: 10m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: reaper
+          annotations:
+            summary: Guest reaper error cycles in the last hour
+            description: The guest reaper recorded at least three error cycles in the last hour (current value {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#reaper-cycle-errors
+
+    - name: stratum-background
+      rules:
+        - alert: StratumComponentStale
+          expr: (time() - component_last_cycle_timestamp_seconds{component=~"chat-cleanup|checkpoint-cleanup"}) > 172800
+          for: 30m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: background
+          annotations:
+            summary: A background component has not cycled for 48 hours
+            description: Component {{ $labels.component }} last cycled more than 172800s ago (current value {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#component-stale
+
+        - alert: StratumComponentErrorRate
+          expr: increase(component_errors_total[1h]) > 5
+          for: 10m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: background
+          annotations:
+            summary: Background component errors in the last hour
+            description: Component {{ $labels.component }} phase {{ $labels.phase }} recorded errors in the last hour (increase {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#component-error-rate
+
+    - name: stratum-panics
+      rules:
+        - alert: StratumGoroutinePanic
+          expr: increase(goroutine_panics_total[10m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: panic
+          annotations:
+            summary: Recovered goroutine panic in the last ten minutes
+            description: Component {{ $labels.component }} panicked in the last ten minutes (increase {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#goroutine-panic
+
+        - alert: StratumGoroutinePanicCritical
+          expr: increase(goroutine_panics_total[1h]) > 10
+          for: 10m
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: panic
+          annotations:
+            summary: Goroutine panic storm in the last hour
+            description: More than ten recovered panics in the last hour (current value {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#goroutine-panic-critical
+
+    - name: stratum-workflow
+      rules:
+        - alert: StratumWorkflowRunErrors
+          expr: increase(workflow_runs_total{status="error"}[10m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: workflow
+          annotations:
+            summary: Workflow run error in the last ten minutes
+            description: Tenant {{ $labels.tenant_id }} had workflow run errors in the last ten minutes (increase {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#workflow-run-errors
+
+        - alert: StratumWorkflowErrorRate
+          expr: increase(workflow_runs_total{status="error"}[30m]) > 20
+          for: 15m
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: workflow
+          annotations:
+            summary: Workflow errors exceed 20 in thirty minutes
+            description: Tenant {{ $labels.tenant_id }} accumulated more than 20 workflow errors in 30 minutes (current value {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#workflow-error-rate
+
+    - name: stratum-mcp
+      rules:
+        - alert: StratumMCPClientErrors
+          expr: increase(mcp_client_requests_total{status="error"}[10m]) > 3
+          for: 10m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: mcp
+          annotations:
+            summary: MCP client errors in the last ten minutes
+            description: Server {{ $labels.server_name }} operation {{ $labels.operation }} recorded errors (increase {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#mcp-client-errors
+
+        - alert: StratumMCPClientReconnects
+          expr: increase(mcp_client_reconnects_total[1h]) > 5
+          for: 10m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: mcp
+          annotations:
+            summary: MCP client reconnects in the last hour
+            description: Server {{ $labels.server_name }} reconnected frequently (increase {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#mcp-client-reconnects
+
+    - name: stratum-auth
+      rules:
+        - alert: StratumAuthFailures
+          expr: increase(auth_failures_total[10m]) > 5
+          for: 10m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: auth
+          annotations:
+            summary: Auth failures in the last ten minutes
+            description: Reason {{ $labels.reason }} recorded more than five failures in ten minutes (increase {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#auth-failures
+
+    - name: stratum-knowledge
+      rules:
+        - alert: StratumKnowledgeIngestFailures
+          expr: increase(knowledge_ingest_total{status=~"failed|error"}[30m]) > 3
+          for: 10m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: knowledge
+          annotations:
+            summary: Knowledge ingest failures in the last thirty minutes
+            description: Status {{ $labels.status }} recorded failures in the last 30 minutes (increase {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#knowledge-ingest-failures
+
+    - name: stratum-hermes
+      rules:
+        - alert: StratumHermesErrors
+          expr: increase(hermes_events_processed_total{status=~"publish_error|handler_error|unmarshal_error"}[10m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: hermes
+          annotations:
+            summary: Hermes event processing errors in the last ten minutes
+            description: Event {{ $labels.event_type }} status {{ $labels.status }} recorded errors (increase {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#hermes-errors
+
+    - name: stratum-memory-pipeline
+      rules:
+        - alert: StratumMemoryPipelinePanics
+          expr: increase(memory_pipeline_panics_total[10m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: memory
+          annotations:
+            summary: Memory pipeline panic in the last ten minutes
+            description: Component {{ $labels.component }} panicked in the memory pipeline (increase {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#memory-pipeline-panics
+
+        - alert: StratumMemoryDLQ
+          expr: increase(memory_dlq_total[1h]) > 5
+          for: 10m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: memory
+          annotations:
+            summary: Memory DLQ messages in the last hour
+            description: Tenant {{ $labels.tenant_id }} stage {{ $labels.stage }} accumulated DLQ messages (increase {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#memory-dlq
+
+        - alert: StratumMemoryDLQCritical
+          expr: increase(memory_dlq_total[1h]) > 50
+          for: 10m
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: memory
+          annotations:
+            summary: Memory DLQ backlog is critical
+            description: Tenant {{ $labels.tenant_id }} stage {{ $labels.stage }} accumulated more than 50 DLQ messages in an hour (current value {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#memory-dlq-critical
+
+        - alert: StratumMemoryEmbedUnavailable
+          expr: increase(memory_embed_unavailable_total[15m]) > 0
+          for: 10m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: memory
+          annotations:
+            summary: 租户无可用嵌入模型，记忆写入持续进入 DLQ
+            description: Tenant {{ $labels.tenant_id }} has no configured embedding model; memory writes are being dead-lettered (increase {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#memory-embed-unavailable
+
+    - name: stratum-memory-workers
+      rules:
+        - alert: StratumMemoryWorkerPanics
+          expr: increase(memory_worker_panics_total[10m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: memory
+          annotations:
+            summary: Memory worker panic in the last ten minutes
+            description: Worker {{ $labels.worker }} panicked in the last ten minutes (increase {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#memory-worker-panics
+
+        - alert: StratumMemoryWorkerErrorRate
+          expr: rate(memory_worker_messages_total{status="error"}[30m]) > 0.1
+          for: 15m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: memory
+          annotations:
+            summary: Memory worker error rate exceeds ten percent
+            description: Worker {{ $labels.worker }} tenant {{ $labels.tenant_id }} error rate is above 10% (current value {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#memory-worker-error-rate
+
+    - name: stratum-evaluation
+      rules:
+        - alert: StratumEvaluationJobErrors
+          expr: increase(evaluation_jobs_total{status=~"error|list_error"}[10m]) > 3
+          for: 10m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: evaluation
+          annotations:
+            summary: Evaluation job errors in the last ten minutes
+            description: Status {{ $labels.status }} recorded more than three errors in ten minutes (increase {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#evaluation-job-errors
+    - name: stratum-availability
+      rules:
+        - alert: StratumPublicEndpointDown
+          expr: absent(probe_success{service="stratum",environment="remote-test",target="stratum-public-health"}) * 0 or probe_success{service="stratum",environment="remote-test",target="stratum-public-health"} == 0
+          for: 3m
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: public-endpoint
+          annotations:
+            summary: Stratum public endpoint is unavailable
+            description: The remote public health probe has failed for three minutes (current value {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/availability.md#public-endpoint-down
+
+        - alert: StratumBackendUnavailable
+          expr: absent(kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum"}) * 0 or kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum"} == 0
+          for: 3m
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: backend
+          annotations:
+            summary: Stratum backend has no ready replicas
+            description: The backend deployment has had no ready replicas for three minutes (current value {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/availability.md#backend-unavailable
+
+        - alert: StratumFrontendUnavailable
+          expr: absent(kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum-frontend"}) * 0 or kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum-frontend"} == 0
+          for: 3m
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: frontend
+          annotations:
+            summary: Stratum frontend has no ready replicas
+            description: The frontend deployment has had no ready replicas for three minutes (current value {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/availability.md#frontend-unavailable
+
+        - alert: StratumTargetMissing
+          expr: absent(up{namespace="stratum",service="stratum",endpoint="http"}) or up{namespace="stratum",service="stratum",endpoint="http"} == 0
+          for: 10m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: backend
+          annotations:
+            summary: Stratum application target is missing
+            description: The expected Stratum scrape target has been absent or down for ten minutes (current value {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/availability.md#target-missing
+
+        - alert: StratumIngressBackendUnreachable
+          expr: |
+            sum(rate(traefik_service_requests_total{service="stratum-stratum@http",code=~"50[23]"}[5m]))
+              /
+            clamp_min(sum(rate(traefik_service_requests_total{service="stratum-stratum@http"}[5m])), 1)
+            > 0.10
+          for: 5m
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: ingress
+          annotations:
+            summary: Traefik reports high 502/503 rate to backend
+            description: More than 10% of requests from Traefik to the Stratum backend are returning 502 or 503 in the last five minutes (current value {{ $value }}). The backend pods may be crashing.
+            dashboard_url: /d/stratum-http
+            runbook_url: /docs/operations/alerts/availability.md#ingress-backend-unreachable
+    - name: stratum-capacity
+      rules:
+        - alert: StratumNodeMemoryLow
+          expr: (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10) * on (instance) group_left (node) label_replace(node_uname_info{job="node-exporter"}, "node", "$1", "nodename", "(.+)") and on (node) max by (node) (kube_pod_info{namespace="stratum"})
+          for: 15m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: node
+          annotations:
+            summary: Stratum host memory availability is low
+            description: Available node memory has remained below 10% for fifteen minutes (current ratio {{ $value }}).
+            dashboard_url: /d/stratum-resources
+            runbook_url: /docs/operations/alerts/capacity.md#node-memory-low
+
+        - alert: StratumNodeCPUHigh
+          expr: (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) > 0.85) * on (instance) group_left (node) label_replace(node_uname_info{job="node-exporter"}, "node", "$1", "nodename", "(.+)") and on (node) max by (node) (kube_pod_info{namespace="stratum"})
+          for: 15m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: node
+          annotations:
+            summary: Stratum host CPU utilization is high
+            description: Node CPU utilization has remained above 85% for fifteen minutes (current ratio {{ $value }}).
+            dashboard_url: /d/stratum-resources
+            runbook_url: /docs/operations/alerts/capacity.md#node-cpu-high
+
+        - alert: StratumNodeFilesystemLow
+          expr: (node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} < 0.15) * on (instance) group_left (node) label_replace(node_uname_info{job="node-exporter"}, "node", "$1", "nodename", "(.+)") and on (node) max by (node) (kube_pod_info{namespace="stratum"})
+          for: 15m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: storage
+          annotations:
+            summary: Stratum host filesystem space is low
+            description: Available filesystem space has remained below 15% for fifteen minutes (current ratio {{ $value }}).
+            dashboard_url: /d/stratum-resources
+            runbook_url: /docs/operations/alerts/capacity.md#node-filesystem-low
+
+        - alert: StratumNodeInodesLow
+          expr: (node_filesystem_files_free{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_files{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} < 0.15) * on (instance) group_left (node) label_replace(node_uname_info{job="node-exporter"}, "node", "$1", "nodename", "(.+)") and on (node) max by (node) (kube_pod_info{namespace="stratum"})
+          for: 15m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: storage
+          annotations:
+            summary: Stratum host filesystem inodes are low
+            description: Available filesystem inodes have remained below 15% for fifteen minutes (current ratio {{ $value }}).
+            dashboard_url: /d/stratum-resources
+            runbook_url: /docs/operations/alerts/capacity.md#node-inodes-low
+
+        - alert: StratumContainerMemoryNearLimit
+          expr: sum by (namespace, pod, container) (container_memory_working_set_bytes{namespace="stratum",container!="",container!="POD"}) / sum by (namespace, pod, container) (container_spec_memory_limit_bytes{namespace="stratum",container!="",container!="POD"}) > 0.90 and sum by (namespace, pod, container) (container_spec_memory_limit_bytes{namespace="stratum",container!="",container!="POD"}) > 0
+          for: 15m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: workload
+          annotations:
+            summary: A Stratum container is near its memory limit
+            description: Container working-set memory has remained above 90% of its limit for fifteen minutes (current ratio {{ $value }}).
+            dashboard_url: /d/stratum-resources
+            runbook_url: /docs/operations/alerts/capacity.md#container-memory-near-limit
+
+        - alert: StratumContainerCPUThrottled
+          expr: sum by (namespace, pod, container) (rate(container_cpu_cfs_throttled_periods_total{namespace="stratum",container!="",container!="POD"}[5m])) / sum by (namespace, pod, container) (rate(container_cpu_cfs_periods_total{namespace="stratum",container!="",container!="POD"}[5m])) > 0.25
+          for: 15m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: workload
+          annotations:
+            summary: A Stratum container is CPU throttled
+            description: More than 25% of container CPU periods have been throttled for fifteen minutes (current ratio {{ $value }}).
+            dashboard_url: /d/stratum-resources
+            runbook_url: /docs/operations/alerts/capacity.md#container-cpu-throttled
+
+        - alert: StratumPVCUsageHigh
+          expr: kubelet_volume_stats_used_bytes{namespace="stratum"} / kubelet_volume_stats_capacity_bytes{namespace="stratum"} > 0.80
+          for: 15m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: storage
+            alert_family: pvc-usage
+          annotations:
+            summary: A Stratum PVC is more than 80% full
+            description: Persistent volume usage has remained above 80% for fifteen minutes (current ratio {{ $value }}).
+            dashboard_url: /d/stratum-resources
+            runbook_url: /docs/operations/alerts/capacity.md#pvc-usage-high
+
+        - alert: StratumPVCUsageCritical
+          expr: kubelet_volume_stats_used_bytes{namespace="stratum"} / kubelet_volume_stats_capacity_bytes{namespace="stratum"} > 0.90
+          for: 5m
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: storage
+            alert_family: pvc-usage
+          annotations:
+            summary: A Stratum PVC is more than 90% full
+            description: Persistent volume usage has remained above 90% for five minutes (current ratio {{ $value }}).
+            dashboard_url: /d/stratum-resources
+            runbook_url: /docs/operations/alerts/capacity.md#pvc-usage-critical
+
+        - record: stratum:pvc_exhaustion_within_4d
+          expr: ((predict_linear(kubelet_volume_stats_available_bytes{namespace="stratum"}[6h], 4 * 24 * 60 * 60) < bool 0) == 1) and on (namespace, persistentvolumeclaim) (deriv(kubelet_volume_stats_used_bytes{namespace="stratum"}[6h]) > 0) and on (namespace, persistentvolumeclaim) kubelet_volume_stats_available_bytes{namespace="stratum"} and on (namespace, persistentvolumeclaim) kubelet_volume_stats_available_bytes{namespace="stratum"} offset 6h and on (namespace, persistentvolumeclaim) kube_persistentvolumeclaim_info{storageclass!="local-path"}
+
+        - record: stratum:pvc_exhaustion_within_1d
+          expr: ((predict_linear(kubelet_volume_stats_available_bytes{namespace="stratum"}[6h], 24 * 60 * 60) < bool 0) == 1) and on (namespace, persistentvolumeclaim) (deriv(kubelet_volume_stats_used_bytes{namespace="stratum"}[6h]) > 0) and on (namespace, persistentvolumeclaim) kubelet_volume_stats_available_bytes{namespace="stratum"} and on (namespace, persistentvolumeclaim) kubelet_volume_stats_available_bytes{namespace="stratum"} offset 6h and on (namespace, persistentvolumeclaim) kube_persistentvolumeclaim_info{storageclass!="local-path"}
+
+        - alert: StratumPVCExhaustionPredicted
+          expr: stratum:pvc_exhaustion_within_4d == 1
+          for: 15m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: storage
+            alert_family: pvc-exhaustion
+          annotations:
+            summary: A Stratum PVC may fill within four days
+            description: Six hours of positive storage growth predicts exhaustion within four days (current value {{ $value }}).
+            dashboard_url: /d/stratum-resources
+            runbook_url: /docs/operations/alerts/capacity.md#pvc-exhaustion-predicted
+
+        - alert: StratumPVCExhaustionImminent
+          expr: stratum:pvc_exhaustion_within_1d == 1
+          for: 5m
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: storage
+            alert_family: pvc-exhaustion
+          annotations:
+            summary: A Stratum PVC may fill within one day
+            description: Six hours of positive storage growth predicts exhaustion within one day (current value {{ $value }}).
+            dashboard_url: /d/stratum-resources
+            runbook_url: /docs/operations/alerts/capacity.md#pvc-exhaustion-imminent
+
+        - record: stratum:filesystem_exhaustion_within_4d
+          expr: (((predict_linear(node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"}[6h], 4 * 24 * 60 * 60) < bool 0) == 1) and on (instance, device, mountpoint, fstype) (deriv(node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"}[6h]) < 0) and on (instance, device, mountpoint, fstype) node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} and on (instance, device, mountpoint, fstype) node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} offset 6h) * on (instance) group_left (node) label_replace(node_uname_info{job="node-exporter"}, "node", "$1", "nodename", "(.+)") and on (node) max by (node) (kube_pod_info{namespace="stratum"})
+
+        - record: stratum:filesystem_exhaustion_within_1d
+          expr: (((predict_linear(node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"}[6h], 24 * 60 * 60) < bool 0) == 1) and on (instance, device, mountpoint, fstype) (deriv(node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"}[6h]) < 0) and on (instance, device, mountpoint, fstype) node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} and on (instance, device, mountpoint, fstype) node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} offset 6h) * on (instance) group_left (node) label_replace(node_uname_info{job="node-exporter"}, "node", "$1", "nodename", "(.+)") and on (node) max by (node) (kube_pod_info{namespace="stratum"})
+
+        - alert: StratumFilesystemExhaustionPredicted
+          expr: stratum:filesystem_exhaustion_within_4d == 1
+          for: 15m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: storage
+            alert_family: filesystem-exhaustion
+          annotations:
+            summary: A Stratum host filesystem may fill within four days
+            description: Six hours of positive filesystem growth predicts exhaustion within four days (current value {{ $value }}).
+            dashboard_url: /d/stratum-resources
+            runbook_url: /docs/operations/alerts/capacity.md#filesystem-exhaustion-predicted
+
+        - alert: StratumFilesystemExhaustionImminent
+          expr: stratum:filesystem_exhaustion_within_1d == 1
+          for: 5m
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: storage
+            alert_family: filesystem-exhaustion
+          annotations:
+            summary: A Stratum host filesystem may fill within one day
+            description: Six hours of positive filesystem growth predicts exhaustion within one day (current value {{ $value }}).
+            dashboard_url: /d/stratum-resources
+            runbook_url: /docs/operations/alerts/capacity.md#filesystem-exhaustion-imminent
+    - name: stratum-dependencies
+      rules:
+        - alert: StratumDependencyTargetMissing
+          expr: label_replace((absent(up{namespace="stratum",service="stratum-etcd-metrics",endpoint="metrics"}) or up{namespace="stratum",service="stratum-etcd-metrics",endpoint="metrics"} == 0), "dependency", "etcd", "service", ".*") or label_replace((absent(up{namespace="stratum",service="stratum-milvus-metrics",endpoint="metrics"}) or up{namespace="stratum",service="stratum-milvus-metrics",endpoint="metrics"} == 0), "dependency", "milvus", "service", ".*")
+          for: 10m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: dependency
+          annotations:
+            summary: A verified Stratum dependency metrics target is unavailable
+            description: Prometheus has been unable to scrape the dependency metrics endpoint for ten minutes (current value {{ $value }}).
+            dashboard_url: /d/stratum-dependencies
+            runbook_url: /docs/operations/alerts/dependencies.md#dependency-target-missing
+    - name: stratum-http-recording
+      interval: 1m
+      rules:
+        - record: stratum:http_requests:increase5m
+          expr: sum(increase(http_requests_total{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$"}[5m]))
+          labels:
+            service: stratum
+            environment: remote-test
+
+        - record: stratum:http_5xx_ratio:ratio5m
+          expr: sum(increase(http_requests_total{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$",status=~"5.."}[5m])) / clamp_min(sum(increase(http_requests_total{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$"}[5m])), 1)
+          labels:
+            service: stratum
+            environment: remote-test
+
+        - record: stratum:http_request_duration_seconds:p95_5m
+          expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$"}[5m])))
+          labels:
+            service: stratum
+            environment: remote-test
+
+        - record: stratum:http_requests_by_path:increase5m
+          expr: sum by (path) (increase(http_requests_total{namespace="stratum",service="stratum",endpoint="http",path!="unmatched",path!~"^/(health|livez|readyz|metrics)$",path!~".*/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}($|/).*"}[5m]))
+          labels:
+            service: stratum
+            environment: remote-test
+
+        - record: stratum:http_5xx_ratio_by_path:ratio5m
+          expr: sum by (path) (increase(http_requests_total{namespace="stratum",service="stratum",endpoint="http",path!="unmatched",path!~"^/(health|livez|readyz|metrics)$",path!~".*/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}($|/).*",status=~"5.."}[5m])) / clamp_min(sum by (path) (increase(http_requests_total{namespace="stratum",service="stratum",endpoint="http",path!="unmatched",path!~"^/(health|livez|readyz|metrics)$",path!~".*/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}($|/).*"}[5m])), 1)
+          labels:
+            service: stratum
+            environment: remote-test
+
+        - record: stratum:http_request_duration_seconds_by_path:p95_5m
+          expr: histogram_quantile(0.95, sum by (path, le) (rate(http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",path!="unmatched",path!~"^/(health|livez|readyz|metrics)$",path!~".*/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}($|/).*"}[5m])))
+          labels:
+            service: stratum
+            environment: remote-test
+
+        - alert: StratumHighHTTP5xxRate
+          expr: stratum:http_5xx_ratio:ratio5m{service="stratum",environment="remote-test"} > 0.05 and stratum:http_requests:increase5m{service="stratum",environment="remote-test"} >= 20
+          for: 10m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: http
+            alert_family: http-5xx-rate
+          annotations:
+            summary: Stratum HTTP 5xx rate is elevated
+            description: The five-minute HTTP 5xx ratio has exceeded 5% for ten minutes (current value {{ $value }}).
+            dashboard_url: /d/stratum-http
+            runbook_url: /docs/operations/alerts/http-performance.md#high-http-5xx-rate
+
+        - alert: StratumCriticalHTTP5xxRate
+          expr: stratum:http_5xx_ratio:ratio5m{service="stratum",environment="remote-test"} > 0.20 and stratum:http_requests:increase5m{service="stratum",environment="remote-test"} >= 20
+          for: 5m
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: http
+            alert_family: http-5xx-rate
+          annotations:
+            summary: Stratum HTTP 5xx rate is critical
+            description: The five-minute HTTP 5xx ratio has exceeded 20% for five minutes (current value {{ $value }}).
+            dashboard_url: /d/stratum-http
+            runbook_url: /docs/operations/alerts/http-performance.md#critical-http-5xx-rate
+
+        - alert: StratumHighHTTPP95Latency
+          expr: stratum:http_request_duration_seconds:p95_5m{service="stratum",environment="remote-test"} > 2 and on() sum(increase(http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$",le="+Inf"}[5m])) >= 20
+          for: 15m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: http
+            alert_family: http-p95-latency
+          annotations:
+            summary: Stratum HTTP P95 latency is elevated
+            description: The five-minute HTTP P95 latency has exceeded two seconds for fifteen minutes (current value {{ $value }}s).
+            dashboard_url: /d/stratum-http
+            runbook_url: /docs/operations/alerts/http-performance.md#high-http-p95-latency
+
+        - alert: StratumCriticalHTTPP95Latency
+          expr: stratum:http_request_duration_seconds:p95_5m{service="stratum",environment="remote-test"} > 5 and on() sum(increase(http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$",le="+Inf"}[5m])) >= 20
+          for: 5m
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: http
+            alert_family: http-p95-latency
+          annotations:
+            summary: Stratum HTTP P95 latency is critical
+            description: The five-minute HTTP P95 latency has exceeded five seconds for five minutes (current value {{ $value }}s).
+            dashboard_url: /d/stratum-http
+            runbook_url: /docs/operations/alerts/http-performance.md#critical-http-p95-latency
+    - name: stratum-monitoring
+      rules:
+        - alert: StratumPrometheusConfigReloadFailed
+          expr: min by (namespace) (prometheus_config_last_reload_successful{namespace="monitoring",service="kps-kube-prometheus-stack-prometheus",endpoint="http-web"}) == 0
+          for: 10m
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: prometheus
+          annotations:
+            summary: Prometheus configuration reload is failing
+            description: Prometheus has reported an unsuccessful configuration reload for ten minutes (current value {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/monitoring-system.md#prometheus-config-reload-failed
+
+        - alert: StratumPrometheusRuleEvaluationFailures
+          expr: sum by (namespace) (increase(prometheus_rule_evaluation_failures_total{namespace="monitoring",service="kps-kube-prometheus-stack-prometheus",endpoint="http-web"}[10m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: prometheus
+          annotations:
+            summary: Prometheus rule evaluations are failing
+            description: Prometheus recorded rule evaluation failures during the last ten minutes (current value {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/monitoring-system.md#prometheus-rule-evaluation-failures
+
+        - alert: StratumAlertmanagerNotificationFailures
+          expr: sum by (namespace) (increase(alertmanager_notifications_failed_total{namespace="monitoring",service="kps-kube-prometheus-stack-alertmanager",endpoint="http-web"}[10m])) > 0
+          for: 5m
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: alertmanager
+          annotations:
+            summary: Alertmanager notifications are failing
+            description: Alertmanager recorded notification delivery failures during the last ten minutes (current value {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/monitoring-system.md#alertmanager-notification-failures
+
+        - alert: StratumFeishuAdapterMissing
+          expr: absent(up{namespace="monitoring",service="stratum-feishu-alert-adapter",endpoint="http"}) or up{namespace="monitoring",service="stratum-feishu-alert-adapter",endpoint="http"} == 0
+          for: 10m
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: notification
+          annotations:
+            summary: Feishu alert adapter is unavailable
+            description: Prometheus has been unable to scrape the Feishu adapter for ten minutes (current value {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/monitoring-system.md#feishu-adapter-missing
+
+        - alert: StratumBlackboxExporterMissing
+          expr: absent(up{namespace="monitoring",service="stratum-blackbox-prometheus-blackbox-exporter",endpoint="http"}) or up{namespace="monitoring",service="stratum-blackbox-prometheus-blackbox-exporter",endpoint="http"} == 0
+          for: 10m
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: blackbox
+          annotations:
+            summary: Blackbox Exporter is unavailable
+            description: Prometheus has been unable to scrape Blackbox Exporter for ten minutes (current value {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/monitoring-system.md#blackbox-exporter-missing
+
+        - alert: StratumFeishuDeliveryFailures
+          expr: sum(increase(feishu_alert_delivery_total{namespace="monitoring",service="stratum-feishu-alert-adapter",endpoint="http",status="failed"}[10m])) > 0
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: notification
+          annotations:
+            summary: Feishu alert deliveries are failing
+            description: The Feishu adapter recorded at least one failed delivery during the last ten minutes (current value {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/monitoring-system.md#feishu-delivery-failures
+    - name: stratum-workloads
+      rules:
+        - record: stratum:kube_pod_owner:deployment
+          expr: max by (namespace, pod, deployment) (max by (namespace, pod, replicaset) (label_replace(kube_pod_owner{namespace="stratum",owner_kind="ReplicaSet"}, "replicaset", "$1", "owner_name", "(.+)")) * on (namespace, replicaset) group_left (deployment) max by (namespace, replicaset, deployment) (label_replace(kube_replicaset_owner{namespace="stratum",owner_kind="Deployment"}, "deployment", "$1", "owner_name", "(.+)")))
+
+        - record: stratum:kube_pod:placement
+          expr: (max by (namespace, pod, node) (kube_pod_info{namespace="stratum"}) * on (namespace, pod) group_left (deployment) stratum:kube_pod_owner:deployment) or on (namespace, pod) max by (namespace, pod, node) (kube_pod_info{namespace="stratum"})
+
+        - alert: StratumNodeNotReady
+          expr: max by (node) (kube_node_status_condition{condition="Ready",status="true"} == 0) and on (node) max by (node) (kube_pod_info{namespace="stratum"})
+          for: 5m
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: node
+          annotations:
+            summary: Stratum host node is not ready
+            description: The node hosting the remote Stratum environment has not been ready for five minutes (current value {{ $value }}).
+            dashboard_url: /d/stratum-resources
+            runbook_url: /docs/operations/alerts/workloads.md#node-not-ready
+
+        - alert: StratumPodRestartingFrequently
+          expr: (increase(kube_pod_container_status_restarts_total{namespace="stratum"}[10m]) > 3) * on (namespace, pod) group_left (node, deployment) stratum:kube_pod:placement
+          for: 2m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: workload
+            alert_family: pod-health
+          annotations:
+            summary: A Stratum container is restarting frequently
+            description: The container restarted more than three times in ten minutes (current value {{ $value }}).
+            dashboard_url: /d/stratum-resources
+            runbook_url: /docs/operations/alerts/workloads.md#pod-restarting-frequently
+
+        - alert: StratumPodCumulativeRestarts
+          expr: (increase(kube_pod_container_status_restarts_total{namespace="stratum"}[30m]) > 5) * on (namespace, pod) group_left (node, deployment) stratum:kube_pod:placement
+          for: 5m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: workload
+            alert_family: pod-health
+          annotations:
+            summary: A Stratum container has accumulated restarts over 30 minutes
+            description: The container restarted more than five times in the last 30 minutes without entering CrashLoopBackOff (current value {{ $value }}). This indicates intermittent crashes that recover too quickly for the CrashLooping alert.
+            dashboard_url: /d/stratum-resources
+            runbook_url: /docs/operations/alerts/workloads.md#pod-cumulative-restarts
+
+        - alert: StratumPodCrashLooping
+          expr: (kube_pod_container_status_waiting_reason{namespace="stratum",reason="CrashLoopBackOff"} == 1) * on (namespace, pod) group_left (node, deployment) stratum:kube_pod:placement
+          for: 5m
+          labels:
+            severity: critical
+            service: stratum
+            environment: remote-test
+            component: workload
+            alert_family: pod-health
+          annotations:
+            summary: A Stratum container is crash looping
+            description: The container has remained in CrashLoopBackOff for five minutes (current value {{ $value }}).
+            dashboard_url: /d/stratum-resources
+            runbook_url: /docs/operations/alerts/workloads.md#pod-crash-looping
+
+        - alert: StratumPodPendingTooLong
+          expr: (kube_pod_status_phase{namespace="stratum",phase="Pending"} == 1) * on (namespace, pod) group_left (node, deployment) stratum:kube_pod:placement
+          for: 15m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: workload
+          annotations:
+            summary: A Stratum pod has remained pending
+            description: The pod has remained pending for fifteen minutes (current value {{ $value }}).
+            dashboard_url: /d/stratum-resources
+            runbook_url: /docs/operations/alerts/workloads.md#pod-pending-too-long
+
+        - alert: StratumPodUnhealthyExit
+          expr: |
+            (increase(kube_pod_container_status_restarts_total{namespace="stratum"}[2h]) >= 2
+              and on (namespace, pod, container)
+                kube_pod_container_status_last_terminated_reason{namespace="stratum",reason=~"Error|OOMKilled"})
+              * on (namespace, pod) group_left (node, deployment) stratum:kube_pod:placement
+          for: 5m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: workload
+            alert_family: pod-health
+          annotations:
+            summary: Stratum container exits with non-zero status repeatedly
+            description: A container restarted at least twice in two hours with a non-zero exit reason (current value {{ $value }}).
+            dashboard_url: /d/stratum-resources
+            runbook_url: /docs/operations/alerts/workloads.md#pod-unhealthy-exit
