@@ -9,8 +9,23 @@ import (
 	"testing"
 
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+// TestZhipuModelCatalog 验证智谱 baseURL 命中返回全系目录，非智谱 baseURL
+// 返回 nil（行为不变）；目录排除实测 400 的 glm-4.1v。
+func TestZhipuModelCatalog(t *testing.T) {
+	catalog := llmgateway.ZhipuModelCatalog("https://open.bigmodel.cn/api/paas/v4")
+	require.NotEmpty(t, catalog)
+	require.Contains(t, catalog, "glm-4.6v")
+	require.Contains(t, catalog, "embedding-3")
+	require.Contains(t, catalog, "glm-z1-air")
+	require.NotContains(t, catalog, "glm-4.1v")
+
+	require.Nil(t, llmgateway.ZhipuModelCatalog("https://api.example.com/v1"))
+	require.Nil(t, llmgateway.ZhipuModelCatalog(""))
+}
 
 func TestZhipuClient_ModelsCoverStaticCatalog(t *testing.T) {
 	client := llmgateway.NewZhipuClient("test-key", zap.NewNop())

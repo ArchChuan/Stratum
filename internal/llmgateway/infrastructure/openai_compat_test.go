@@ -213,3 +213,27 @@ func TestOpenAICompatClient_ListModels_singlePageWithoutPagination(t *testing.T)
 	require.Len(t, models, 1)
 	require.Equal(t, 1, reqCount)
 }
+
+// TestOpenAICompatClient_ListModels_mergesCatalog 验证智谱目录兜底：
+// /models 动态结果在前，目录补漏，去重且保序。
+func TestOpenAICompatClient_ListModels_mergesCatalog(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"data":[{"id":"glm-4.5"},{"id":"glm-4.6v"}]}`)
+	}))
+	defer srv.Close()
+
+	client := NewOpenAICompatClient(ProviderConfig{
+		Name:         "test-zhipu",
+		BaseURL:      srv.URL,
+		APIKey:       "sk-test",
+		ModelCatalog: []string{"glm-4.5", "glm-4.6v", "glm-5v-turbo", "embedding-3"},
+	}, zap.NewNop())
+	models, err := client.ListModels(context.Background())
+	require.NoError(t, err)
+
+	names := make([]string, len(models))
+	for i, m := range models {
+		names[i] = m.Name
+	}
+	require.Equal(t, []string{"glm-4.5", "glm-4.6v", "glm-5v-turbo", "embedding-3"}, names)
+}
