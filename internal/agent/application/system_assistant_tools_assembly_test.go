@@ -365,6 +365,34 @@ func TestProposeToolVisibleToAllRoles(t *testing.T) {
 	require.True(t, names[domain.SystemAssistantToolApplyResourceChange], "apply must be visible to all roles")
 }
 
+// TestProposalToolSchemaIsLooseProjection 守护提案工具的模型可见 schema 为
+// 松散投影：payload 只声明 type:object、不再展开字段级约束（8 分支 oneOf
+// 全量 schema 每轮透传给 provider 是 prompt 膨胀主因，旧结构 5.7KB ≈ 2.9k
+// tokens，新结构 340B ≈ 170 tokens）。字段级校验由执行边界
+// validateProposalPayloadSchema 兜底，此处禁止回退为详细 schema。
+func TestProposalToolSchemaIsLooseProjection(t *testing.T) {
+	schema := proposalToolSchema()
+	require.NotContains(t, schema, "oneOf", "payload 字段约束不得以 oneOf 形式展开给模型")
+
+	props, ok := schema["properties"].(map[string]any)
+	require.True(t, ok, "schema must be a flat object with properties")
+
+	payload, ok := props["payload"].(map[string]any)
+	require.True(t, ok, "payload property must exist")
+	require.Equal(t, "object", payload["type"])
+	require.NotContains(t, payload, "properties", "payload 字段级 schema 不下沉到模型可见层")
+	require.NotContains(t, payload, "required")
+
+	// 顶层枚举保留，供模型在合法值内选填。
+	require.Equal(t, []any{"agent", "skill_draft", "mcp_config", "knowledge_workspace"},
+		props["resourceKind"].(map[string]any)["enum"])
+	require.Equal(t, []any{"create", "update"},
+		props["operation"].(map[string]any)["enum"])
+
+	// 必填顶层三键与运行时解析契约（ParseResourceChangeToolArguments）对齐。
+	require.Equal(t, []any{"resourceKind", "operation", "payload"}, schema["required"])
+}
+
 func TestAdminProposeAutoConfirmsAndApplies(t *testing.T) {
 	repo := newProposalRepoFake()
 	applier := &proposalApplierFake{result: domain.ApplyResult{ResourceID: "created"}}

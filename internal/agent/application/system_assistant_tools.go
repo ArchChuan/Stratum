@@ -82,9 +82,12 @@ func SystemAssistantToolDefinitions() []port.ToolDefinition {
 	}
 }
 
-// proposalPayloadSchemas 是提案/直改工具 payload 字段级校验与模型可见
-// InputSchema 的单一事实源：proposalToolSchema 生成模型可见 schema 与
-// validateProposalPayloadSchema 运行时校验共享此 map，避免两处约束漂移。
+// proposalPayloadSchemas 是提案/直改工具 payload 的字段级校验单一事实源：
+// validateProposalPayloadSchema 运行时校验经此 map 编译校验。模型可见
+// InputSchema（proposalToolSchema）只提供顶层松散投影，不再展开这些字段级
+// 约束——8 分支 oneOf 全量 schema 会在每轮请求重复透传给 provider，是 prompt
+// 膨胀与 prefill 延迟的主要来源（实测系统助手单轮 prompt_tokens≈5.2k 中约 70%
+// 来自这两个工具）。字段级校验统一在工具执行边界 fail-closed 执行。
 // 每个 resource kind 一个 payload schema（create/update 共用）。
 var proposalPayloadSchemas = map[domain.ResourceKind]*jschema.Schema{
 	domain.ResourceAgent: jschema.Must(jschema.ClosedObject(
@@ -121,25 +124,22 @@ var proposalPayloadSchemas = map[domain.ResourceKind]*jschema.Schema{
 	)),
 }
 
+// proposalToolSchema 生成提案/直改工具的模型可见 InputSchema（松散投影）。
+// 只提示顶层结构：resourceKind/operation 枚举 + payload 为任意对象。payload
+// 字段级约束不再展开给模型（每轮透传的 prefill 成本），由执行边界
+// ParseResourceChangeToolArguments → validateProposalPayloadSchema 对同一
+// proposalPayloadSchemas 运行时校验，失败回传 InvalidToolArgumentsError 中文
+// detail 供模型自纠，校验强度与安全路径不变。
 func proposalToolSchema() map[string]any {
-	kinds := []domain.ResourceKind{
-		domain.ResourceAgent, domain.ResourceSkillDraft, domain.ResourceMCPConfig, domain.ResourceKnowledgeWorkspace,
-	}
-	branches := make([]*jschema.Schema, 0, len(kinds)*2)
-	for _, kind := range kinds {
-		for _, operation := range []domain.ProposalOperation{domain.OperationCreate, domain.OperationUpdate} {
-			props := []jschema.Prop{
-				jschema.RequiredProp("resourceKind", jschema.Const(string(kind))),
-				jschema.RequiredProp("operation", jschema.Const(string(operation))),
-				jschema.RequiredProp("payload", proposalPayloadSchemas[kind]),
-			}
-			if operation == domain.OperationUpdate {
-				props = append(props, jschema.RequiredProp("resourceId", jschema.StringRange(1, 0, "")))
-			}
-			branches = append(branches, jschema.Must(jschema.ClosedObject(props...)))
-		}
-	}
-	return jschema.Must(jschema.OneOf(branches...)).Map()
+	return jschema.Must(jschema.ClosedObject(
+		jschema.RequiredProp("resourceKind", jschema.Must(jschema.Enum("",
+			string(domain.ResourceAgent), string(domain.ResourceSkillDraft),
+			string(domain.ResourceMCPConfig), string(domain.ResourceKnowledgeWorkspace)))),
+		jschema.RequiredProp("operation", jschema.Must(jschema.Enum("",
+			string(domain.OperationCreate), string(domain.OperationUpdate)))),
+		jschema.RequiredProp("payload", jschema.Must(jschema.Object())),
+		jschema.OptionalProp("resourceId", jschema.StringRange(1, 0, "")),
+	)).Map()
 }
 
 // validateProposalPayloadSchema 对 normalized payload 做字段级校验，返回携带
