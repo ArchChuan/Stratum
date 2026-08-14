@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 
+	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 )
 
@@ -20,24 +21,24 @@ import (
 type seqLLMStub struct {
 	mu       sync.Mutex
 	contents []string
-	requests [][]memport.CompletionMessage
+	requests [][]llmdomain.Message
 }
 
-func (s *seqLLMStub) Complete(_ context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+func (s *seqLLMStub) Complete(_ context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.requests = append(s.requests, append([]memport.CompletionMessage(nil), req.Messages...))
+	s.requests = append(s.requests, append([]llmdomain.Message(nil), req.Messages...))
 	idx := len(s.requests) - 1
 	if idx >= len(s.contents) {
 		idx = len(s.contents) - 1
 	}
-	return &memport.CompletionResponse{Content: s.contents[idx]}, nil
+	return &llmdomain.CompletionResponse{Content: s.contents[idx]}, nil
 }
 
 // errLLMStub 每次调用恒返回 err。
 type errLLMStub struct{ err error }
 
-func (s *errLLMStub) Complete(context.Context, *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+func (s *errLLMStub) Complete(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 	return nil, s.err
 }
 
@@ -69,7 +70,7 @@ func TestCompleteStructuredRetriesWithCorrection(t *testing.T) {
 		`[{"content":"a","importance":0.8,"fact_type":"skill"}]`, // 修复后合法
 	}}
 	_, err := CompleteStructured(context.Background(), llm,
-		&memport.CompletionRequest{Messages: []memport.CompletionMessage{{Role: "user", Content: "x"}}},
+		&llmdomain.CompletionRequest{Messages: []llmdomain.Message{{Role: "user", Content: "x"}}},
 		parseExtractedFacts, validateFactList, nil, "extract_facts")
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +95,7 @@ func TestCompleteStructuredRetriesWithCorrection(t *testing.T) {
 func TestCompleteStructuredFailFastOnProviderError(t *testing.T) {
 	llm := &errLLMStub{err: errors.New("upstream 500")}
 	_, err := CompleteStructured(context.Background(), llm,
-		&memport.CompletionRequest{Messages: []memport.CompletionMessage{{Role: "user", Content: "x"}}},
+		&llmdomain.CompletionRequest{Messages: []llmdomain.Message{{Role: "user", Content: "x"}}},
 		parseExtractedFacts, validateFactList, nil, "extract_facts")
 	if err == nil {
 		t.Fatal("provider error must propagate")
@@ -102,8 +103,8 @@ func TestCompleteStructuredFailFastOnProviderError(t *testing.T) {
 	if !strings.Contains(err.Error(), "llm complete") {
 		t.Fatalf("error must be wrapped with stage, got %v", err)
 	}
-	if errors.Is(err, ErrStructuredExtractionFailed) {
-		t.Fatalf("provider hard error must not be ErrStructuredExtractionFailed: %v", err)
+	if errors.Is(err, llmdomain.ErrStructuredOutputFailed) {
+		t.Fatalf("provider hard error must not be ErrStructuredOutputFailed: %v", err)
 	}
 }
 
@@ -115,10 +116,10 @@ func TestCompleteStructuredTypedErrorAfterRetries(t *testing.T) {
 		`[{"content":"a","importance":0.5,"fact_type":"` + badType + `"}]`,
 	}}
 	_, err := CompleteStructured(context.Background(), llm,
-		&memport.CompletionRequest{Messages: []memport.CompletionMessage{{Role: "user", Content: "x"}}},
+		&llmdomain.CompletionRequest{Messages: []llmdomain.Message{{Role: "user", Content: "x"}}},
 		parseExtractedFacts, validateFactList, nil, "extract_facts")
-	if !errors.Is(err, ErrStructuredExtractionFailed) {
-		t.Fatalf("err = %v, want ErrStructuredExtractionFailed", err)
+	if !errors.Is(err, llmdomain.ErrStructuredOutputFailed) {
+		t.Fatalf("err = %v, want ErrStructuredOutputFailed", err)
 	}
 	msg := err.Error()
 	for _, want := range []string{"attempts=3", "invalid_fields=fact_type"} {
@@ -178,10 +179,10 @@ func TestCompleteStructuredPIIWhitelistLogging(t *testing.T) {
 	}}
 	core, logs := observer.New(zapcore.WarnLevel)
 	_, err := CompleteStructured(context.Background(), llm,
-		&memport.CompletionRequest{Messages: []memport.CompletionMessage{{Role: "user", Content: secret}}},
+		&llmdomain.CompletionRequest{Messages: []llmdomain.Message{{Role: "user", Content: secret}}},
 		parseExtractedFacts, validateFactList, zap.New(core), "extract_facts")
-	if !errors.Is(err, ErrStructuredExtractionFailed) {
-		t.Fatalf("err = %v, want ErrStructuredExtractionFailed", err)
+	if !errors.Is(err, llmdomain.ErrStructuredOutputFailed) {
+		t.Fatalf("err = %v, want ErrStructuredOutputFailed", err)
 	}
 	if logs.FilterMessage("memory.structured.degraded").Len() != 1 {
 		t.Fatalf("degraded WARN must be emitted once, got %d", logs.FilterMessage("memory.structured.degraded").Len())

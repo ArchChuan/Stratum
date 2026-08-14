@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
+	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/persistence"
@@ -365,13 +366,7 @@ func (w *EnricherWorker) runSummaryAsyncSafe(ctx context.Context, ev *MemoryEnri
 
 func (w *EnricherWorker) callEnrichLLM(ctx context.Context, llm LLMClient, role, content string, eff effectiveConfig) (*EnrichmentResult, error) {
 	prompt := formatEnrichmentPrompt(eff.enrichmentTmpl, role, content)
-	req := &port.CompletionRequest{
-		Model: eff.model,
-		Messages: []port.CompletionMessage{
-			{Role: "user", Content: prompt},
-		},
-		Temperature: 0.1,
-	}
+	req := llmdomain.NewExtractRequest(eff.model, "", prompt, constants.MemoryEnrichLLMTemperature, 0)
 
 	llmCtx, cancel := context.WithTimeout(ctx, constants.MemoryEnrichLLMTimeout)
 	defer cancel()
@@ -499,13 +494,7 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnri
 		input = "[Previous Summary]: " + prevSummary + "\n\n[New Messages]:\n" + input
 	}
 	prompt := formatSummaryPrompt(eff.summaryTmpl, input)
-	req := &port.CompletionRequest{
-		Model: eff.summaryModel,
-		Messages: []port.CompletionMessage{
-			{Role: "user", Content: prompt},
-		},
-		Temperature: 0.3,
-	}
+	req := llmdomain.NewSummarizeRequest(eff.summaryModel, prompt, nil, 0)
 	llmCtx, cancel := context.WithTimeout(ctx, constants.MemorySummaryLLMTimeout)
 	defer cancel()
 	resp, err := llm.Complete(llmCtx, req)
