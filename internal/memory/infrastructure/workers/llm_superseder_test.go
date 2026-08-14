@@ -159,9 +159,9 @@ func TestResolvingLLMSupersederPropagatesContextCancellationBeforeClientCall(t *
 	require.Zero(t, clientCalls)
 }
 
-// TestLLMSupersederUsesInjectedJudgePromptOverFallback 验证机制基线判断模板
-// 注入优先、空值回退内置常量（现状行为），注入模板的 %s 占位照常渲染。
-func TestLLMSupersederUsesInjectedJudgePromptOverFallback(t *testing.T) {
+// TestLLMSupersederUsesFallbackJudgePrompt 验证判定模板走内置常量（mechanism
+// 移除后为唯一权威），%s 占位照常渲染。
+func TestLLMSupersederUsesFallbackJudgePrompt(t *testing.T) {
 	var got string
 	client := completionClientFunc(func(_ context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 		got = req.Messages[0].Content
@@ -175,19 +175,11 @@ func TestLLMSupersederUsesInjectedJudgePromptOverFallback(t *testing.T) {
 	if !strings.Contains(got, "旧事实：old") {
 		t.Fatalf("fallback template missing old fact slot: %q", got)
 	}
-
-	judge.WithJudgePrompt("判断模板 %s vs %s")
-	if _, err := judge.JudgeSupersede(context.Background(), "old", "new"); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(got, "判断模板 old vs new") {
-		t.Fatalf("injected template not used: %q", got)
-	}
 }
 
-// TestLLMSupersederUsesBaselineJudgeModel 验证判定请求显式携带机制基线
-// EnrichModel（superseder 与富化共用族基线，统一解析）。
-func TestLLMSupersederUsesBaselineJudgeModel(t *testing.T) {
+// TestLLMSupersederLeavesModelEmpty 验证判定请求 Model 为空（llmgateway client
+// 默认解析，pre-refactor 行为；金丝雀回归）。
+func TestLLMSupersederLeavesModelEmpty(t *testing.T) {
 	var gotModel string
 	client := completionClientFunc(func(_ context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 		gotModel = req.Model
@@ -200,14 +192,6 @@ func TestLLMSupersederUsesBaselineJudgeModel(t *testing.T) {
 	}
 	if gotModel != "" {
 		t.Fatalf("expected empty model by default, got %q", gotModel)
-	}
-
-	judge.WithJudgeModel("qwen-turbo")
-	if _, err := judge.JudgeSupersede(context.Background(), "old", "new"); err != nil {
-		t.Fatal(err)
-	}
-	if gotModel != "qwen-turbo" {
-		t.Fatalf("expected request Model %q, got %q", "qwen-turbo", gotModel)
 	}
 }
 

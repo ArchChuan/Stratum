@@ -72,7 +72,6 @@ type LLMHistoryCompactor struct {
 	model               string
 	logger              *zap.Logger
 	compactionMaxTokens int
-	systemPrompt        string
 }
 
 // NewLLMHistoryCompactor 构造摘要器。gw 为统一路由门面，model 指定用于
@@ -89,13 +88,6 @@ func NewLLMHistoryCompactor(gw port.CapabilityGateway, model string, logger *zap
 	return &LLMHistoryCompactor{gw: gw, model: model, logger: logger, compactionMaxTokens: compactionMaxTokens}
 }
 
-// WithCompactionPrompt 注入机制基线压缩指令（model_profiles 建档后由
-// wiring 解析注入）。空值保持 compactionSystemPrompt 兜底（现状行为）。
-func (c *LLMHistoryCompactor) WithCompactionPrompt(p string) *LLMHistoryCompactor {
-	c.systemPrompt = p
-	return c
-}
-
 // CompactHistory 把 messages 拼成一段可读对话，交由 LLM 生成要点摘要。
 // 空输入直接返回空摘要；gateway 出错则原样上抛，由调用方降级为截断。
 // Spec 第 4 节：总预算按时间片分摊到 1 主 + MaxCandidates 候选的每次尝试，
@@ -107,16 +99,12 @@ func (c *LLMHistoryCompactor) CompactHistory(ctx context.Context, messages []por
 
 	convo := renderConversation(messages)
 
-	systemPrompt := c.systemPrompt
-	if systemPrompt == "" {
-		systemPrompt = compactionSystemPrompt
-	}
 	req := port.CapabilityRequest{
 		Type: port.CapLLM,
 		LLM: &port.LLMCapRequest{
 			Model: c.model,
 			Messages: []port.LLMMessage{
-				{Role: "system", Content: systemPrompt},
+				{Role: "system", Content: compactionSystemPrompt},
 				{Role: "user", Content: convo},
 			},
 			Temperature:    0.3,
