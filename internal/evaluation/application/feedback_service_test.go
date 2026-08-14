@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 )
@@ -389,7 +390,8 @@ type feedbackExperimentRepo struct {
 	decisionCount int
 }
 
-func (f *feedbackExperimentRepo) Create(context.Context, string, domain.Experiment, domain.Deployment) error {
+func (f *feedbackExperimentRepo) Create(context.Context, string, domain.Experiment, domain.Deployment,
+	*auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (f *feedbackExperimentRepo) ValidatePrerequisites(context.Context, string, domain.ResourceRef,

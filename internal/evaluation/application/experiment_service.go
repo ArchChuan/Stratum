@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	"github.com/google/uuid"
@@ -15,6 +16,7 @@ type CreateExperimentInput struct {
 	Stable          domain.ResourceRef
 	Canary          domain.ResourceRef
 	SuiteRevisionID string
+	ActorID         string // 来自 handler userIDFromCtx；禁止从 request body 读取
 }
 
 type ExperimentCommandInput struct {
@@ -42,15 +44,8 @@ func (s *ExperimentService) Create(
 	tenantID string,
 	input CreateExperimentInput,
 ) (domain.Experiment, domain.Deployment, error) {
-	if err := input.Stable.Validate(); err != nil {
+	if err := validateExperimentInput(input); err != nil {
 		return domain.Experiment{}, domain.Deployment{}, err
-	}
-	if err := input.Canary.Validate(); err != nil {
-		return domain.Experiment{}, domain.Deployment{}, err
-	}
-	if input.Stable.Kind != input.Canary.Kind || input.Stable.ResourceID != input.Canary.ResourceID ||
-		input.Stable.RevisionID == input.Canary.RevisionID {
-		return domain.Experiment{}, domain.Deployment{}, errors.New("stable and canary must be different revisions of the same resource")
 	}
 	if err := s.repo.ValidatePrerequisites(ctx, tenantID, input.Stable, input.Canary, input.SuiteRevisionID); err != nil {
 		return domain.Experiment{}, domain.Deployment{}, err
@@ -67,7 +62,11 @@ func (s *ExperimentService) Create(
 		StableRevisionID: input.Stable.RevisionID, CanaryRevisionID: input.Canary.RevisionID,
 		CanaryPercent: experiment.Stage, ExperimentID: experiment.ID, PolicyVersion: 1,
 	}
-	if err := s.repo.Create(ctx, tenantID, experiment, deployment); err != nil {
+	ev, err := newExperimentChangeAudit(experiment, auditdomain.ChangeOpCreate, input.ActorID, nil, experimentSafeProjection(experiment))
+	if err != nil {
+		return domain.Experiment{}, domain.Deployment{}, err
+	}
+	if err := s.repo.Create(ctx, tenantID, experiment, deployment, ev); err != nil {
 		return domain.Experiment{}, domain.Deployment{}, err
 	}
 	return experiment, deployment, nil
@@ -81,16 +80,8 @@ func (s *ExperimentService) Enqueue(
 	tenantID string,
 	input CreateExperimentInput,
 ) (domain.Experiment, domain.Deployment, error) {
-	if err := input.Stable.Validate(); err != nil {
+	if err := validateExperimentInput(input); err != nil {
 		return domain.Experiment{}, domain.Deployment{}, err
-	}
-	if err := input.Canary.Validate(); err != nil {
-		return domain.Experiment{}, domain.Deployment{}, err
-	}
-	if input.Stable.Kind != input.Canary.Kind || input.Stable.ResourceID != input.Canary.ResourceID ||
-		input.Stable.RevisionID == input.Canary.RevisionID {
-		return domain.Experiment{}, domain.Deployment{}, errors.New(
-			"stable and canary must be different revisions of the same resource")
 	}
 	active, err := s.repo.HasRunningExperiment(ctx, tenantID, string(input.Stable.Kind), input.Stable.ResourceID)
 	if err != nil {
@@ -115,7 +106,11 @@ func (s *ExperimentService) Enqueue(
 		StableRevisionID: input.Stable.RevisionID, CanaryRevisionID: input.Canary.RevisionID,
 		CanaryPercent: 0, ExperimentID: experiment.ID, PolicyVersion: 1,
 	}
-	if err := s.repo.Create(ctx, tenantID, experiment, deployment); err != nil {
+	ev, err := newExperimentChangeAudit(experiment, auditdomain.ChangeOpCreate, input.ActorID, nil, experimentSafeProjection(experiment))
+	if err != nil {
+		return domain.Experiment{}, domain.Deployment{}, err
+	}
+	if err := s.repo.Create(ctx, tenantID, experiment, deployment, ev); err != nil {
 		return domain.Experiment{}, domain.Deployment{}, err
 	}
 	return experiment, deployment, nil
@@ -241,4 +236,20 @@ func (s *ExperimentService) ResolveAssignment(
 	return domain.RevisionAssignment{
 		RevisionID: deployment.StableRevisionID, ExperimentID: deployment.ExperimentID, Variant: "stable",
 	}, true, nil
+}
+
+// validateExperimentInput checks that stable/canary refs are valid and refer
+// to different revisions of the same resource.
+func validateExperimentInput(input CreateExperimentInput) error {
+	if err := input.Stable.Validate(); err != nil {
+		return err
+	}
+	if err := input.Canary.Validate(); err != nil {
+		return err
+	}
+	if input.Stable.Kind != input.Canary.Kind || input.Stable.ResourceID != input.Canary.ResourceID ||
+		input.Stable.RevisionID == input.Canary.RevisionID {
+		return errors.New("stable and canary must be different revisions of the same resource")
+	}
+	return nil
 }

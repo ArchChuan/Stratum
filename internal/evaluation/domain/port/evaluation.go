@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 )
 
@@ -193,7 +194,8 @@ type RevisionPayloadRef struct {
 type ExperimentRepository interface {
 	ValidatePrerequisites(ctx context.Context, tenantID string, stable, canary domain.ResourceRef,
 		suiteRevisionID string) error
-	Create(ctx context.Context, tenantID string, experiment domain.Experiment, deployment domain.Deployment) error
+	Create(ctx context.Context, tenantID string, experiment domain.Experiment, deployment domain.Deployment,
+		ev *auditdomain.ResourceChangeAuditEvent) error
 	Get(ctx context.Context, tenantID, experimentID string) (domain.Experiment, bool, error)
 	SaveDecision(
 		ctx context.Context,

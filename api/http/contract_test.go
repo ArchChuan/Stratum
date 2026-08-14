@@ -599,7 +599,7 @@ func (contractExperimentRepo) ValidatePrerequisites(context.Context, string, dom
 	domain.ResourceRef, string) error {
 	return nil
 }
-func (contractExperimentRepo) Create(context.Context, string, domain.Experiment, domain.Deployment) error {
+func (contractExperimentRepo) Create(context.Context, string, domain.Experiment, domain.Deployment, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (contractExperimentRepo) Get(context.Context, string, string) (domain.Experiment, bool, error) {

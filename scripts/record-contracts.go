@@ -645,7 +645,7 @@ func (contractExpRepo) ListPendingExperiments(context.Context, string, string, s
 func (contractExpRepo) ListRunningExperiments(context.Context, string) ([]domain.Experiment, error) {
 	return nil, nil
 }
-func (contractExpRepo) Create(context.Context, string, domain.Experiment, domain.Deployment) error {
+func (contractExpRepo) Create(context.Context, string, domain.Experiment, domain.Deployment, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (contractExpRepo) Get(context.Context, string, string) (domain.Experiment, bool, error) {
