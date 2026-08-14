@@ -32,12 +32,16 @@ func TestInferCapabilities(t *testing.T) {
 		{name: "qwen-vl 多模态", model: "qwen-vl-max", want: []domain.ModelCapability{domain.CapChat, domain.CapVision}},
 		{name: "qwen2-vl 多模态", model: "qwen2-vl-72b", want: []domain.ModelCapability{domain.CapChat, domain.CapVision}},
 		{name: "glm-4v 多模态", model: "glm-4v-plus", want: []domain.ModelCapability{domain.CapChat, domain.CapVision}},
+		{name: "glm-4.5v 多模态", model: "glm-4.5v", want: []domain.ModelCapability{domain.CapChat, domain.CapVision}},
+		{name: "glm-4.6v 多模态", model: "glm-4.6v", want: []domain.ModelCapability{domain.CapChat, domain.CapVision}},
+		{name: "glm-5v 多模态", model: "glm-5v-turbo", want: []domain.ModelCapability{domain.CapChat, domain.CapVision}},
 		{name: "gemini 多模态", model: "gemini-1.5-pro", want: []domain.ModelCapability{domain.CapChat, domain.CapVision}},
 		{name: "llava 多模态", model: "llava-v1.6-34b", want: []domain.ModelCapability{domain.CapChat, domain.CapVision}},
 		{name: "internvl 多模态", model: "internvl2-8b", want: []domain.ModelCapability{domain.CapChat, domain.CapVision}},
 		{name: "o 系推理", model: "o3-mini", want: []domain.ModelCapability{domain.CapChat, domain.CapReasoning}},
 		{name: "deepseek-reasoner 推理", model: "deepseek-reasoner", want: []domain.ModelCapability{domain.CapChat, domain.CapReasoning}},
 		{name: "qwq 推理", model: "qwq-32b", want: []domain.ModelCapability{domain.CapChat, domain.CapReasoning}},
+		{name: "glm-z1 推理", model: "glm-z1-air", want: []domain.ModelCapability{domain.CapChat, domain.CapReasoning}},
 		{name: "大写混合", model: "GPT-4O", want: []domain.ModelCapability{domain.CapChat, domain.CapVision}},
 	}
 	for _, tc := range tests {

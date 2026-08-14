@@ -110,7 +110,7 @@ stratum/
 
 | 域 | 表 | 关键字段 / 约束 |
 |----|----|----|
-| Agent | `agents` | id TEXT PK, name UNIQUE, type DEFAULT react, llm_model, embed_model, max_iterations DEFAULT 10, max_context_tokens DEFAULT 8000 |
+| Agent | `agents` | id TEXT PK, name UNIQUE, type DEFAULT react, llm_model, embed_model, max_iterations DEFAULT 10, max_context_tokens DEFAULT 0 |
 | | `agent_mcp_links` | (agent_id, server_id) CASCADE 双删 |
 | | `agent_skill_links` | (agent_id, skill_id) CASCADE |
 | | `agent_workspaces` | (agent_id, workspace_id) CASCADE |
