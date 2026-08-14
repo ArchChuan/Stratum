@@ -14,7 +14,6 @@ import {
   BranchesOutlined,
   HistoryOutlined,
   ScheduleOutlined,
-  FileTextOutlined,
   AuditOutlined,
   DatabaseOutlined,
   SafetyCertificateOutlined,
@@ -151,11 +150,6 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
           label: '模型管理',
         },
         {
-          key: '/prompts',
-          icon: <FileTextOutlined />,
-          label: '提示词管理',
-        },
-        {
           key: '/audit',
           icon: <AuditOutlined />,
           label: '审计日志',
@@ -191,7 +185,6 @@ export const resolveOpenKeys = (pathname: string): string[] => {
   if (pathname.startsWith('/tenant')) return ['tenant-group'];
   if (
     pathname.startsWith('/models') ||
-    pathname.startsWith('/prompts') ||
     pathname.startsWith('/audit') ||
     pathname.startsWith('/mechanism') ||
     pathname.startsWith('/admin')

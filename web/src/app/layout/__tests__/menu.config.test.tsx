@@ -65,7 +65,6 @@ describe('buildMenuItems', () => {
     render(<div>{adminLabels.map((label, index) => <div key={index}>{label}</div>)}</div>);
     // 平台管理面仅 global admin 可见:租户 admin 看不到合并后的组及其子项
     expect(screen.queryByText('平台管理')).not.toBeInTheDocument();
-    expect(screen.queryByText('提示词管理')).not.toBeInTheDocument();
     expect(screen.queryByText('审计日志')).not.toBeInTheDocument();
     expect(screen.queryByText('模型档案')).not.toBeInTheDocument();
     // 工具审批是独立菜单行,租户 admin 保留可见
@@ -80,7 +79,6 @@ describe('buildMenuItems', () => {
     render(<div>{memberLabels.map((label, index) => <div key={index}>{label}</div>)}</div>);
     expect(screen.queryByText('平台管理')).not.toBeInTheDocument();
     expect(screen.queryByText('模型管理')).not.toBeInTheDocument();
-    expect(screen.queryByText('提示词管理')).not.toBeInTheDocument();
     expect(screen.queryByText('审计日志')).not.toBeInTheDocument();
     expect(screen.queryByText('模型档案')).not.toBeInTheDocument();
     expect(screen.queryByText('全局租户')).not.toBeInTheDocument();
@@ -98,7 +96,6 @@ describe('buildMenuItems', () => {
     render(<div>{labels.map((label, index) => <div key={index}>{label}</div>)}</div>);
     expect(screen.getByText('平台管理')).toBeInTheDocument();
     expect(screen.getByText('模型管理')).toBeInTheDocument();
-    expect(screen.getByText('提示词管理')).toBeInTheDocument();
     expect(screen.getByText('审计日志')).toBeInTheDocument();
     expect(screen.getByText('模型档案')).toBeInTheDocument();
     expect(screen.getByText('全局租户')).toBeInTheDocument();
@@ -117,7 +114,6 @@ describe('buildMenuItems', () => {
 
   it('resolves platform admin paths to the merged open-key group', () => {
     expect(resolveOpenKeys('/models')).toEqual(['platform-admin-group']);
-    expect(resolveOpenKeys('/prompts')).toEqual(['platform-admin-group']);
     expect(resolveOpenKeys('/audit')).toEqual(['platform-admin-group']);
     expect(resolveOpenKeys('/mechanism/profiles')).toEqual(['platform-admin-group']);
     expect(resolveOpenKeys('/admin/tenants')).toEqual(['platform-admin-group']);
