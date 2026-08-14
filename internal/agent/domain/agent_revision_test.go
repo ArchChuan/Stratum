@@ -88,10 +88,10 @@ func TestAgentRevisionValidatesModelParameters(t *testing.T) {
 	}{
 		{name: "zero values are unset", params: ModelParameters{}},
 		{name: "temperature bounds inclusive", params: ModelParameters{Temperature: 0, MaxTokens: 0}},
-		{name: "temperature at max", params: ModelParameters{Temperature: 2, MaxTokens: 0}},
+		{name: "temperature at max", params: ModelParameters{Temperature: 1, MaxTokens: 0}},
 		{name: "max_tokens at max", params: ModelParameters{MaxTokens: 131072}},
 		{name: "temperature below min rejected", params: ModelParameters{Temperature: -0.1}, wantErr: true},
-		{name: "temperature above max rejected", params: ModelParameters{Temperature: 2.1}, wantErr: true},
+		{name: "temperature above max rejected", params: ModelParameters{Temperature: 1.1}, wantErr: true},
 		{name: "max_tokens below zero rejected", params: ModelParameters{MaxTokens: -1}, wantErr: true},
 		{name: "max_tokens above max rejected", params: ModelParameters{MaxTokens: 131073}, wantErr: true},
 		{name: "compaction recent groups at 0 auto", params: ModelParameters{CompactionRecentGroups: 0}},
