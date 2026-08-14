@@ -47,7 +47,7 @@ func (s *structuredFailureSummary) record(err error) {
 		if s.invalidFlds == nil {
 			s.invalidFlds = make(map[string]int)
 		}
-		s.invalidFlds[ve.Field]++
+		s.invalidFlds[ve.FieldName]++
 		return
 	}
 	s.parseErrors++

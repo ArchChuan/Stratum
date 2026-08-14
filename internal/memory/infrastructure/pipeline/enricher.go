@@ -405,16 +405,16 @@ func unitInterval(v float64) bool {
 // confidence ∈ [0,1]。返回 *port.ValidationError 或 nil。
 func (r EnrichmentResult) Validate() error {
 	if !unitInterval(r.Importance) {
-		return &port.ValidationError{Location: "enrichment", Field: "importance",
+		return &port.ValidationError{Location: "enrichment", FieldName: "importance",
 			Value: strconv.FormatFloat(r.Importance, 'g', -1, 64), Reason: "importance must be in [0,1]"}
 	}
 	for i, e := range r.Entities {
 		if strings.TrimSpace(e.Name) == "" {
-			return &port.ValidationError{Location: "enrichment", Field: "entities",
+			return &port.ValidationError{Location: "enrichment", FieldName: "entities",
 				Value: strconv.Itoa(i), Reason: "entity name must not be empty"}
 		}
 		if !unitInterval(e.Confidence) {
-			return &port.ValidationError{Location: "enrichment", Field: "entities",
+			return &port.ValidationError{Location: "enrichment", FieldName: "entities",
 				Value:  fmt.Sprintf("index %d confidence=%s", i, strconv.FormatFloat(e.Confidence, 'g', -1, 64)),
 				Reason: "entity confidence must be in [0,1]"}
 		}

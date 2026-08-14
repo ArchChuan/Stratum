@@ -132,7 +132,7 @@ func extractFactsStructured(
 			}
 			if allInvalid {
 				return &memport.ValidationError{
-					Location: "facts", Field: "facts",
+					Location: "facts", FieldName: "facts",
 					Reason: "no fact passed validation",
 				}
 			}
