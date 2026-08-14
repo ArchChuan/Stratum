@@ -1,5 +1,6 @@
 import { userSchema, type User } from '../model/auth';
 
+import { AUTH_REGISTER_TIMEOUT_MS } from '@/constants';
 import api from '@/services/client';
 
 type RefreshResp = { access_token: string };
@@ -39,7 +40,9 @@ export const authApi = {
     invitation_token?: string;
   }) =>
     api
-      .post<{ access_token: string; tenant_id: string }>('/auth/register', payload)
+      .post<{ access_token: string; tenant_id: string }>('/auth/register', payload, {
+        timeout: AUTH_REGISTER_TIMEOUT_MS,
+      })
       .then((r) => r.data),
   switchTenant: (tenantId: string) =>
     api
