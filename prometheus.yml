@@ -13,9 +13,9 @@ alerting:
     - static_configs:
         - targets: []
 
-# 规则文件
+# 规则文件（容器内挂载 monitoring/local/rules，由 render-monitoring-rules.sh local 渲染）
 rule_files:
-  - "alerts/*.yml"
+  - "/etc/prometheus/rules/*.yml"
 
 # 抓取配置
 scrape_configs:
@@ -30,6 +30,15 @@ scrape_configs:
       - targets: ['host.docker.internal:8080']
     metrics_path: '/metrics'
     scrape_interval: 15s
+    # 注入与远端 ServiceMonitor 一致的标签，使共享规则 expr 的
+    # namespace/service/endpoint 选择器在本地同样匹配
+    relabel_configs:
+      - target_label: namespace
+        replacement: stratum
+      - target_label: service
+        replacement: stratum
+      - target_label: endpoint
+        replacement: http
 
   # OTEL Collector 指标
   - job_name: 'otel-collector'

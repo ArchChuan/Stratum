@@ -1,0 +1,16 @@
+groups:
+  - name: stratum-dependencies
+    rules:
+      - alert: StratumDependencyTargetMissing
+        expr: label_replace((absent(up{namespace="stratum",service="stratum-etcd-metrics",endpoint="metrics"}) or up{namespace="stratum",service="stratum-etcd-metrics",endpoint="metrics"} == 0), "dependency", "etcd", "service", ".*") or label_replace((absent(up{namespace="stratum",service="stratum-milvus-metrics",endpoint="metrics"}) or up{namespace="stratum",service="stratum-milvus-metrics",endpoint="metrics"} == 0), "dependency", "milvus", "service", ".*")
+        for: 10m
+        labels:
+          severity: warning
+          service: stratum
+          environment: production
+          component: dependency
+        annotations:
+          summary: A verified Stratum dependency metrics target is unavailable
+          description: Prometheus has been unable to scrape the dependency metrics endpoint for ten minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-dependencies
+          runbook_url: /docs/operations/alerts/dependencies.md#dependency-target-missing

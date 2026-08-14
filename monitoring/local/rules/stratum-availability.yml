@@ -1,0 +1,76 @@
+groups:
+  - name: stratum-availability
+    rules:
+      - alert: StratumPublicEndpointDown
+        expr: absent(probe_success{service="stratum",environment="production",target="stratum-public-health"}) * 0 or probe_success{service="stratum",environment="production",target="stratum-public-health"} == 0
+        for: 3m
+        labels:
+          severity: critical
+          service: stratum
+          environment: production
+          component: public-endpoint
+        annotations:
+          summary: Stratum public endpoint is unavailable
+          description: The remote public health probe has failed for three minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/alerts/availability.md#public-endpoint-down
+
+      - alert: StratumBackendUnavailable
+        expr: absent(kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum"}) * 0 or kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum"} == 0
+        for: 3m
+        labels:
+          severity: critical
+          service: stratum
+          environment: production
+          component: backend
+        annotations:
+          summary: Stratum backend has no ready replicas
+          description: The backend deployment has had no ready replicas for three minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/alerts/availability.md#backend-unavailable
+
+      - alert: StratumFrontendUnavailable
+        expr: absent(kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum-frontend"}) * 0 or kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum-frontend"} == 0
+        for: 3m
+        labels:
+          severity: critical
+          service: stratum
+          environment: production
+          component: frontend
+        annotations:
+          summary: Stratum frontend has no ready replicas
+          description: The frontend deployment has had no ready replicas for three minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/alerts/availability.md#frontend-unavailable
+
+      - alert: StratumTargetMissing
+        expr: absent(up{namespace="stratum",service="stratum",endpoint="http"}) or up{namespace="stratum",service="stratum",endpoint="http"} == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: stratum
+          environment: production
+          component: backend
+        annotations:
+          summary: Stratum application target is missing
+          description: The expected Stratum scrape target has been absent or down for ten minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/alerts/availability.md#target-missing
+
+      - alert: StratumIngressBackendUnreachable
+        expr: |
+          sum(rate(traefik_service_requests_total{service="stratum-stratum@http",code=~"50[23]"}[5m]))
+            /
+          clamp_min(sum(rate(traefik_service_requests_total{service="stratum-stratum@http"}[5m])), 1)
+          > 0.10
+        for: 5m
+        labels:
+          severity: critical
+          service: stratum
+          environment: production
+          component: ingress
+        annotations:
+          summary: Traefik reports high 502/503 rate to backend
+          description: More than 10% of requests from Traefik to the Stratum backend are returning 502 or 503 in the last five minutes (current value {{ $value }}). The backend pods may be crashing.
+          dashboard_url: /d/stratum-http
+          runbook_url: /docs/operations/alerts/availability.md#ingress-backend-unreachable
