@@ -9,7 +9,6 @@ import (
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
-	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -90,6 +89,7 @@ func (r *PgExperimentRepository) Create(
 	tenantID string,
 	experiment domain.Experiment,
 	deployment domain.Deployment,
+	ev *auditdomain.ResourceChangeAuditEvent,
 ) error {
 	policyJSON, err := json.Marshal(experiment.Policy)
 	if err != nil {
@@ -130,7 +130,7 @@ func (r *PgExperimentRepository) Create(
 		if result.RowsAffected() != 1 {
 			return domain.ErrExperimentDeploymentConflict
 		}
-		return nil
+		return insertChangeAudit(ctx, tx, ev)
 	})
 }
 
@@ -275,8 +275,7 @@ func (r *PgExperimentRepository) ApplyCommand(
 		if current.StateVersion != command.ExpectedStateVersion {
 			return domain.ErrExperimentStateConflict
 		}
-		if !domain.CanApplyExperimentCommand(current.Status, action) ||
-			(action == domain.CommandPromote && (current.Recommendation != domain.DecisionPromote || current.SafetyStopped)) {
+		if !experimentCommandAllowed(*current, action) {
 			return domain.ErrExperimentCommandNotAllowed
 		}
 
@@ -285,7 +284,8 @@ func (r *PgExperimentRepository) ApplyCommand(
 			return err
 		}
 		newVersion := current.StateVersion + 1
-		if err := r.updateExperimentAndDeployment(ctx, tx, experimentID, action, *current, newStatus, newVersion); err != nil {
+		if err := r.updateExperimentAndDeployment(ctx, tx, experimentID, action, *current, newStatus, newVersion,
+			command.ActorID); err != nil {
 			return err
 		}
 
@@ -296,6 +296,11 @@ func (r *PgExperimentRepository) ApplyCommand(
 		if err := recordExperimentDecisionTx(ctx, tx, experimentID, action, command,
 			current.Status, newStatus, fingerprint, resultSnapshot); err != nil {
 			return err
+		}
+		if op, ok := experimentAuditOperation(action); ok {
+			if err := commandChangeAuditTx(ctx, tx, *current, newStatus, op, command.ActorID); err != nil {
+				return err
+			}
 		}
 		updated = resultSnapshot
 		return nil
@@ -361,6 +366,19 @@ func experimentCommandTargetStatus(action domain.ExperimentCommandAction) (domai
 	}
 }
 
+// experimentCommandAllowed reports whether action may be applied to the
+// experiment's current state. Promote additionally requires a promote
+// recommendation and that the experiment was not safety-stopped.
+func experimentCommandAllowed(current domain.Experiment, action domain.ExperimentCommandAction) bool {
+	if !domain.CanApplyExperimentCommand(current.Status, action) {
+		return false
+	}
+	if action == domain.CommandPromote {
+		return current.Recommendation == domain.DecisionPromote && !current.SafetyStopped
+	}
+	return true
+}
+
 // updateExperimentAndDeployment updates the experiment row and (when applicable)
 // the linked deployment row inside the same transaction.
 func (r *PgExperimentRepository) updateExperimentAndDeployment(
@@ -370,6 +388,7 @@ func (r *PgExperimentRepository) updateExperimentAndDeployment(
 	current domain.Experiment,
 	newStatus domain.ExperimentStatus,
 	newVersion int64,
+	actorID string,
 ) error {
 	_, err := tx.Exec(ctx, `UPDATE evaluation_experiments
 		SET status=$2, state_version=$3, recommendation='hold', updated_at=NOW(),
@@ -385,7 +404,7 @@ func (r *PgExperimentRepository) updateExperimentAndDeployment(
 		return r.applyDeploymentUpdate(ctx, tx, experimentID, `UPDATE evaluation_deployments
 			SET canary_percent=0, updated_at=NOW() WHERE experiment_id=$1`)
 	case domain.CommandPromote:
-		if err := promoteCandidateTx(ctx, tx, current); err != nil {
+		if err := promoteCandidateTx(ctx, tx, current, actorID); err != nil {
 			return err
 		}
 		return r.applyDeploymentUpdate(ctx, tx, experimentID,
@@ -441,31 +460,32 @@ func recordExperimentDecisionTx(
 	return err
 }
 
-// promoteChangeAuditTx records the evaluation worker's publish as a change
-// audit row in the SAME transaction as the promotion. The tenant comes from
-// the tenant context injected by execTenant; missing tenant context is a
-// caller bug and fails the promotion.
-func promoteChangeAuditTx(ctx context.Context, tx pgx.Tx, experiment domain.Experiment) error {
-	tc, ok := tenantdb.FromContext(ctx)
-	if !ok || tc.TenantID == "" {
-		return fmt.Errorf("experiment repository: promote change audit: missing tenant context")
+// experimentAuditOperation 把命令 action 映射为审计 op；promote 由
+// promoteChangeAuditTx 单独写入，此处不返回。
+func experimentAuditOperation(action domain.ExperimentCommandAction) (string, bool) {
+	switch action {
+	case domain.CommandActivate:
+		return auditdomain.ChangeOpActivate, true
+	case domain.CommandReject:
+		return auditdomain.ChangeOpReject, true
+	case domain.CommandPause:
+		return auditdomain.ChangeOpPause, true
+	case domain.CommandRollback:
+		return auditdomain.ChangeOpRollback, true
+	default:
+		return "", false
 	}
-	kind := auditdomain.ResourceKindAgent
-	if experiment.ResourceKind == domain.ResourceKindSkill {
-		kind = auditdomain.ResourceKindSkill
-	}
-	_, err := tx.Exec(ctx, auditdomain.ChangeAuditInsertSQL,
-		uuid.Must(uuid.NewV7()).String(), tc.TenantID,
-		kind, experiment.ResourceID, auditdomain.ChangeOpUpdate,
-		"evaluation-worker", auditdomain.ChangeActorSystem, auditdomain.ChangeSourceOptimization,
-		"", json.RawMessage(`{}`), json.RawMessage(`{}`))
-	if err != nil {
-		return fmt.Errorf("experiment repository: insert promote change audit: %w", err)
-	}
-	return nil
 }
 
-func promoteCandidateTx(ctx context.Context, tx pgx.Tx, experiment domain.Experiment) error {
+// promoteChangeAuditTx 在推广成功事务内写入 promotion 变更审计，actor 为发起
+// promote 的操作者（与激活/回滚等命令同一来源）。审计对象是实验本身，
+// resource_kind 恒为 "evaluation"。
+func promoteChangeAuditTx(ctx context.Context, tx pgx.Tx, experiment domain.Experiment, actorID string) error {
+	return insertProjectionAudit(ctx, tx, experiment.ID, auditdomain.ChangeOpPromote, actorID,
+		experimentProjectionTx(experiment), experimentProjectionTx(experiment))
+}
+
+func promoteCandidateTx(ctx context.Context, tx pgx.Tx, experiment domain.Experiment, actorID string) error {
 	var revisionResult pgconn.CommandTag
 	var err error
 	if experiment.ResourceKind == domain.ResourceKindSkill {
@@ -506,7 +526,7 @@ func promoteCandidateTx(ctx context.Context, tx pgx.Tx, experiment domain.Experi
 	if candidateResult.RowsAffected() != 1 {
 		return domain.ErrExperimentInvalidCandidate
 	}
-	return promoteChangeAuditTx(ctx, tx, experiment)
+	return promoteChangeAuditTx(ctx, tx, experiment, actorID)
 }
 
 func getExperimentTx(ctx context.Context, tx pgx.Tx, experimentID string, lock bool) (domain.Experiment, bool, error) {

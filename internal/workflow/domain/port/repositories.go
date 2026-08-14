@@ -4,14 +4,15 @@ import (
 	"context"
 	"time"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
 )
 
 type DefinitionRepository interface {
-	CreateDefinition(context.Context, string, *domain.Definition) error
+	CreateDefinition(context.Context, string, *domain.Definition, *auditdomain.ResourceChangeAuditEvent) error
 	GetDefinition(context.Context, string, string) (*domain.Definition, error)
-	UpdateDefinition(context.Context, string, *domain.Definition, int64) error
-	DeleteDefinition(context.Context, string, string) error
+	UpdateDefinition(context.Context, string, *domain.Definition, int64, *auditdomain.ResourceChangeAuditEvent) error
+	DeleteDefinition(context.Context, string, string, *auditdomain.ResourceChangeAuditEvent) error
 }
 
 type DefinitionListQuery struct {
@@ -25,7 +26,7 @@ type DefinitionQueryRepository interface {
 }
 
 type VersionRepository interface {
-	CreateVersion(context.Context, string, *domain.Version) error
+	CreateVersion(context.Context, string, *domain.Version, *auditdomain.ResourceChangeAuditEvent) error
 	GetVersion(context.Context, string, string) (*domain.Version, error)
 	NextVersionNumber(context.Context, string, string) (int64, error)
 }
@@ -40,7 +41,7 @@ type VersionQueryRepository interface {
 }
 
 type AtomicVersionPublisher interface {
-	CreateNextVersion(context.Context, string, *domain.Definition, string) (*domain.Version, error)
+	CreateNextVersion(context.Context, string, *domain.Definition, string, *auditdomain.ResourceChangeAuditEvent) (*domain.Version, error)
 }
 
 type RunRepository interface {

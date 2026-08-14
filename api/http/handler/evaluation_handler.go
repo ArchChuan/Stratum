@@ -482,8 +482,9 @@ func (h *EvaluationHandler) CreateExperiment(c *gin.Context) {
 		"canary":          map[string]any{"kind": string(canary.Kind), "id": canary.ResourceID, "revision_id": canary.RevisionID},
 		"suiteRevisionID": req.SuiteRevisionID}
 	h.requireApprovalOrExecute(c, "evaluation.create_experiment", args, http.StatusCreated, func() (any, error) {
+		actorID, _ := userIDFromCtx(c)
 		experiment, deployment, err := h.experiments.Create(c.Request.Context(), tenantID, evalapp.CreateExperimentInput{
-			Stable: stable, Canary: canary, SuiteRevisionID: req.SuiteRevisionID,
+			Stable: stable, Canary: canary, SuiteRevisionID: req.SuiteRevisionID, ActorID: actorID,
 		})
 		if err != nil {
 			return nil, err

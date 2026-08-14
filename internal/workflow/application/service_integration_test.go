@@ -39,7 +39,7 @@ func TestStage1CConcurrentStartAndPublishAreAtomic(t *testing.T) {
 	tenantCtx := postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
 	store := workflowpersist.NewPgStore(pool)
 	definitions := application.NewDefinitionService(store, store, uuid.NewString)
-	definition, err := definitions.Create(tenantCtx, tenantID, application.CreateDefinitionCommand{Name: "Concurrent", Spec: domain.Spec{Nodes: []domain.Node{{ID: "one", Type: domain.NodeTypeAgent, AgentID: "a"}}}})
+	definition, err := definitions.Create(tenantCtx, tenantID, application.CreateDefinitionCommand{Name: "Concurrent", Spec: domain.Spec{Nodes: []domain.Node{{ID: "one", Type: domain.NodeTypeAgent, AgentID: "a"}}}}, "u-int")
 	require.NoError(t, err)
 
 	type publishResult struct {
@@ -52,7 +52,7 @@ func TestStage1CConcurrentStartAndPublishAreAtomic(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			v, e := definitions.Publish(tenantCtx, tenantID, definition.ID)
+			v, e := definitions.Publish(tenantCtx, tenantID, definition.ID, "u-int")
 			published <- publishResult{v, e}
 		}()
 	}
@@ -139,9 +139,9 @@ func TestStage1ARealPostgresRunsTwoAgentNodesInOrder(t *testing.T) {
 	store, agents := workflowpersist.NewPgStore(pool), &agentStub{}
 	newID := uuid.NewString
 	definitions := application.NewDefinitionService(store, store, newID)
-	definition, err := definitions.Create(tenantCtx, tenantID, application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()})
+	definition, err := definitions.Create(tenantCtx, tenantID, application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-int")
 	require.NoError(t, err)
-	version, err := definitions.Publish(tenantCtx, tenantID, definition.ID)
+	version, err := definitions.Publish(tenantCtx, tenantID, definition.ID, "u-int")
 	require.NoError(t, err)
 	runs := application.NewRunService(store, store, agents, newID)
 	run, _, err := runs.Start(tenantCtx, tenantID, application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"query": "hello"}, IdempotencyKey: "e2e"})
@@ -176,9 +176,9 @@ func TestStage1BRealPostgresIndependentWorkerRunsDiamondAndPersistsEvents(t *tes
 	store, newID := workflowpersist.NewPgStore(pool), uuid.NewString
 	spec := domain.Spec{Nodes: []domain.Node{{ID: "start", Type: domain.NodeTypeAgent, AgentID: "a"}, {ID: "left", Type: domain.NodeTypeAgent, AgentID: "b"}, {ID: "right", Type: domain.NodeTypeAgent, AgentID: "c"}, {ID: "join", Type: domain.NodeTypeAgent, AgentID: "d"}}, Edges: []domain.Edge{{From: "start", To: "left"}, {From: "start", To: "right"}, {From: "left", To: "join"}, {From: "right", To: "join"}}, MaxConcurrency: 2}
 	definitions := application.NewDefinitionService(store, store, newID)
-	definition, err := definitions.Create(tenantCtx, tenantID, application.CreateDefinitionCommand{Name: "Diamond", Spec: spec})
+	definition, err := definitions.Create(tenantCtx, tenantID, application.CreateDefinitionCommand{Name: "Diamond", Spec: spec}, "u-int")
 	require.NoError(t, err)
-	version, err := definitions.Publish(tenantCtx, tenantID, definition.ID)
+	version, err := definitions.Publish(tenantCtx, tenantID, definition.ID, "u-int")
 	require.NoError(t, err)
 	runs := application.NewRunServiceWithRegistry(store, store, integrationRegistry{}, newID, zap.NewNop())
 	run, _, err := runs.Start(tenantCtx, tenantID, application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"query": "hello"}, IdempotencyKey: "independent-worker"})
@@ -215,9 +215,9 @@ func TestStage1CPauseResumeAcrossWorkersUsesPostgresCheckpoint(t *testing.T) {
 	tenantCtx := postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
 	store, newID := workflowpersist.NewPgStore(pool), uuid.NewString
 	definitions := application.NewDefinitionService(store, store, newID)
-	definition, err := definitions.Create(tenantCtx, tenantID, application.CreateDefinitionCommand{Name: "Resume", Spec: domain.Spec{Nodes: []domain.Node{{ID: "one", Type: domain.NodeTypeAgent, AgentID: "a"}}}})
+	definition, err := definitions.Create(tenantCtx, tenantID, application.CreateDefinitionCommand{Name: "Resume", Spec: domain.Spec{Nodes: []domain.Node{{ID: "one", Type: domain.NodeTypeAgent, AgentID: "a"}}}}, "u-int")
 	require.NoError(t, err)
-	version, err := definitions.Publish(tenantCtx, tenantID, definition.ID)
+	version, err := definitions.Publish(tenantCtx, tenantID, definition.ID, "u-int")
 	require.NoError(t, err)
 	runs := application.NewRunServiceWithRegistry(store, store, integrationRegistry{}, newID, zap.NewNop())
 	controls := application.NewControlService(store, newID)

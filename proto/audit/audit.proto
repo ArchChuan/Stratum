@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package stratum.audit;
+
+import "google/protobuf/struct.proto";
+
+// ResourceChangeAudit 是租户内资源变更审计的一行只读模型。
+message ResourceChangeAudit {
+  string id = 1;
+  string resource_kind = 2; // agent|skill|mcp|knowledge|workflow|evaluation
+  string resource_id = 3;
+  string operation = 4; // create|update|delete|publish|promote|rollback|reject|pause|activate
+  string actor_id = 5;
+  string actor_name = 6; // display_name > github_login > actor_id 兜底
+  string created_at = 7; // RFC3339
+  google.protobuf.Struct before = 8;
+  google.protobuf.Struct after = 9;
+}
+
+message ListResourceChangeAuditsRequest {
+  string resource_kind = 1;
+  string actor_name = 2;
+  string from = 3; // RFC3339
+  string to = 4; // RFC3339
+  int32 page = 5;
+  int32 page_size = 6;
+}
+
+message ListResourceChangeAuditsResponse {
+  repeated ResourceChangeAudit events = 1;
+  int32 total = 2;
+}

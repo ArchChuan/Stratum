@@ -14,34 +14,34 @@ import (
 func TestDefinitionServiceUpdate(t *testing.T) {
 	store, idgen := newMemoryStore(), &ids{}
 	svc := application.NewDefinitionService(store, store, idgen.NewID)
-	def, err := svc.Create(context.Background(), "t1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()})
+	def, err := svc.Create(context.Background(), "t1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
 	require.NoError(t, err)
 
 	// 正常更新：revision 匹配 → 字段生效、Revision 递增。
 	updated, err := svc.Update(context.Background(), "t1", def.ID, application.UpdateDefinitionCommand{
 		Name: "Renamed", Description: "new desc", ExpectedRevision: def.Revision,
-	})
+	}, "u-1")
 	require.NoError(t, err)
 	require.Equal(t, "Renamed", updated.Name)
 	require.Equal(t, def.Revision+1, updated.Revision)
 
 	// 极端情况：revision 冲突 → ErrRevisionConflict，不改动。
-	_, err = svc.Update(context.Background(), "t1", def.ID, application.UpdateDefinitionCommand{Name: "X", ExpectedRevision: 0})
+	_, err = svc.Update(context.Background(), "t1", def.ID, application.UpdateDefinitionCommand{Name: "X", ExpectedRevision: 0}, "u-1")
 	require.ErrorIs(t, err, domain.ErrRevisionConflict)
 
 	// 极端情况：空 name → ErrInvalidSpec。
-	_, err = svc.Update(context.Background(), "t1", def.ID, application.UpdateDefinitionCommand{Name: "", ExpectedRevision: updated.Revision})
+	_, err = svc.Update(context.Background(), "t1", def.ID, application.UpdateDefinitionCommand{Name: "", ExpectedRevision: updated.Revision}, "u-1")
 	require.ErrorIs(t, err, domain.ErrInvalidSpec)
 
 	// 极端情况：ghost id → GetDefinition 错误传播。
-	_, err = svc.Update(context.Background(), "t1", "ghost", application.UpdateDefinitionCommand{Name: "X", ExpectedRevision: 0})
+	_, err = svc.Update(context.Background(), "t1", "ghost", application.UpdateDefinitionCommand{Name: "X", ExpectedRevision: 0}, "u-1")
 	require.ErrorIs(t, err, domain.ErrNotFound)
 }
 
 func TestDefinitionServiceValidate(t *testing.T) {
 	store, idgen := newMemoryStore(), &ids{}
 	svc := application.NewDefinitionService(store, store, idgen.NewID)
-	def, err := svc.Create(context.Background(), "t1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()})
+	def, err := svc.Create(context.Background(), "t1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
 	require.NoError(t, err)
 
 	// 有效 spec 通过校验。
@@ -62,7 +62,7 @@ func TestDefinitionServiceValidate(t *testing.T) {
 func TestDefinitionServiceGetAndGetVersion(t *testing.T) {
 	store, idgen := newMemoryStore(), &ids{}
 	svc := application.NewDefinitionService(store, store, idgen.NewID)
-	def, err := svc.Create(context.Background(), "t1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()})
+	def, err := svc.Create(context.Background(), "t1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
 	require.NoError(t, err)
 
 	// Get 命中；Get ghost → ErrNotFound。
@@ -73,7 +73,7 @@ func TestDefinitionServiceGetAndGetVersion(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrNotFound)
 
 	// GetVersion：发布后命中；ghost → ErrNotFound。
-	version, err := svc.Publish(context.Background(), "t1", def.ID)
+	version, err := svc.Publish(context.Background(), "t1", def.ID, "u-1")
 	require.NoError(t, err)
 	v, err := svc.GetVersion(context.Background(), "t1", version.ID)
 	require.NoError(t, err)

@@ -9,17 +9,25 @@ import "encoding/json"
 
 // Resource kinds audited by the ownership/audit feature.
 const (
-	ResourceKindAgent     = "agent"
-	ResourceKindSkill     = "skill"
-	ResourceKindMCP       = "mcp"
-	ResourceKindKnowledge = "knowledge"
+	ResourceKindAgent      = "agent"
+	ResourceKindSkill      = "skill"
+	ResourceKindMCP        = "mcp"
+	ResourceKindKnowledge  = "knowledge"
+	ResourceKindWorkflow   = "workflow"   // 新增：工作流定义生命周期
+	ResourceKindEvaluation = "evaluation" // 新增：评测实验生命周期
 )
 
 // Operations recorded for each committed change.
 const (
-	ChangeOpCreate = "create"
-	ChangeOpUpdate = "update"
-	ChangeOpDelete = "delete"
+	ChangeOpCreate   = "create"
+	ChangeOpUpdate   = "update"
+	ChangeOpDelete   = "delete"
+	ChangeOpPublish  = "publish"  // 新增：workflow 版本发布
+	ChangeOpPromote  = "promote"  // 新增：evaluation 发布
+	ChangeOpRollback = "rollback" // 新增：evaluation 回滚
+	ChangeOpReject   = "reject"   // 新增：evaluation 拒绝
+	ChangeOpPause    = "pause"    // 新增：evaluation 暂停
+	ChangeOpActivate = "activate" // 新增：evaluation 激活 pending 实验
 )
 
 // Actor types: who performed the change.

@@ -2,10 +2,12 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 )
 
@@ -60,6 +62,39 @@ func TestExperimentServiceCreatesFivePercentCanaryDeployment(t *testing.T) {
 	}
 	if experiment.Stage != 5 || deployment.CanaryPercent != 5 || deployment.StableRevisionID != "version-1" {
 		t.Fatalf("unexpected experiment/deployment: %+v %+v", experiment, deployment)
+	}
+}
+
+func TestExperimentService_Create_WritesChangeAudit(t *testing.T) {
+	repo := &fakeExperimentRepo{}
+	svc := NewExperimentService(repo)
+	stable := domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "r-1", RevisionID: "rev-s"}
+	canary := domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "r-1", RevisionID: "rev-c"}
+	_, _, err := svc.Create(context.Background(), "tenant-1", CreateExperimentInput{
+		Stable: stable, Canary: canary, SuiteRevisionID: "suite-1", ActorID: "u-1",
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	ev := repo.lastAudit
+	if ev == nil {
+		t.Fatal("expected change audit event, got nil")
+	}
+	if ev.ResourceKind != auditdomain.ResourceKindEvaluation {
+		t.Fatalf("expected kind %q, got %q", auditdomain.ResourceKindEvaluation, ev.ResourceKind)
+	}
+	if ev.Operation != auditdomain.ChangeOpCreate {
+		t.Fatalf("expected op %q, got %q", auditdomain.ChangeOpCreate, ev.Operation)
+	}
+	if ev.ActorID != "u-1" {
+		t.Fatalf("expected actor u-1, got %q", ev.ActorID)
+	}
+	var after map[string]any
+	if err := json.Unmarshal(ev.After, &after); err != nil {
+		t.Fatalf("unmarshal after: %v", err)
+	}
+	if after["resource_kind"] != "skill" || after["resource_id"] != "r-1" || after["status"] != "running" {
+		t.Fatalf("unexpected after projection: %v", after)
 	}
 }
 
@@ -232,6 +267,7 @@ type fakeExperimentRepo struct {
 	prerequisiteErr   error
 	prerequisiteCalls int
 	createCalls       int
+	lastAudit         *auditdomain.ResourceChangeAuditEvent
 }
 
 type fakeEvaluationDecision struct {
@@ -270,9 +306,11 @@ func (f *fakeExperimentRepo) ApplyCommand(
 
 func (f *fakeExperimentRepo) Create(
 	_ context.Context, _ string, experiment domain.Experiment, deployment domain.Deployment,
+	ev *auditdomain.ResourceChangeAuditEvent,
 ) error {
 	f.createCalls++
 	f.experiment, f.deployment = experiment, deployment
+	f.lastAudit = ev
 	return nil
 }
 

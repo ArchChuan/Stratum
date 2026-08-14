@@ -1,328 +1,79 @@
-package handler_test
+package handler
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
-	"github.com/byteBuilderX/stratum/api/http/handler"
 	"github.com/byteBuilderX/stratum/api/middleware"
-	"github.com/byteBuilderX/stratum/internal/audit/domain"
 	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
-type fakeAuditQueryService struct {
-	queryFn   func(ctx context.Context, filter domain.AuditFilter) ([]domain.AuditEvent, error)
-	countFn   func(ctx context.Context, filter domain.AuditFilter) (int, error)
-	getByIDFn func(ctx context.Context, tenantID, id string) (*domain.AuditEvent, error)
+type stubAuditQuery struct {
+	rows  []auditport.ResourceChangeAuditRow
+	total int
+	byID  *auditport.ResourceChangeAuditRow
 }
 
-func (f *fakeAuditQueryService) Query(ctx context.Context, filter domain.AuditFilter) ([]domain.AuditEvent, error) {
-	if f.queryFn != nil {
-		return f.queryFn(ctx, filter)
-	}
-	return nil, nil
+func (s *stubAuditQuery) List(context.Context, string, auditport.ResourceChangeAuditFilter) ([]auditport.ResourceChangeAuditRow, int, error) {
+	return s.rows, s.total, nil
 }
 
-func (f *fakeAuditQueryService) Count(ctx context.Context, filter domain.AuditFilter) (int, error) {
-	if f.countFn != nil {
-		return f.countFn(ctx, filter)
-	}
-	return 0, nil
+func (s *stubAuditQuery) GetByID(context.Context, string, string) (*auditport.ResourceChangeAuditRow, error) {
+	return s.byID, nil
 }
 
-func (f *fakeAuditQueryService) GetByID(ctx context.Context, tenantID, id string) (*domain.AuditEvent, error) {
-	if f.getByIDFn != nil {
-		return f.getByIDFn(ctx, tenantID, id)
-	}
-	return nil, nil
-}
-
-func setupAuditHandlerRouter(q auditport.AuditQueryService) *gin.Engine {
-	gin.SetMode(gin.TestMode)
+// newAuditTestRouter 注入租户到 request context（tenantIDFromCtx 从 reqctx
+// 读取，不是 gin.Context），与 workflow_handler_test.go 的注入模式一致。
+func newAuditTestRouter(h *AuditHandler) *gin.Engine {
 	r := gin.New()
 	r.Use(middleware.ErrorHandler(zap.NewNop()))
 	r.Use(func(c *gin.Context) {
-		c.Set("auth.tenant_id", "t1")
+		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), "tenant-1"))
 		c.Next()
 	})
-	h := handler.NewAuditHandler(q, zap.NewNop())
-	audit := r.Group("/audit")
-	{
-		audit.GET("/events", h.ListEvents)
-		audit.GET("/events/:id", h.GetEvent)
-	}
+	r.GET("/audit/events", h.ListEvents)
+	r.GET("/audit/events/:id", h.GetEvent)
 	return r
 }
 
-func TestAuditHandler_ListEvents_EmptyResult(t *testing.T) {
-	// nil 是 PgAuditRepo.Query 无匹配行时的真实返回（GitHub #313：nil slice
-	// 序列化为 null，前端 zod schema 拒绝 null 导致"加载审计记录失败"）。
-	// 空 slice 与 nil 都必须归一化为 JSON 数组 []，不能输出 null。
-	cases := []struct {
-		name string
-		res  []domain.AuditEvent
-	}{
-		{name: "query returns nil", res: nil},
-		{name: "query returns empty slice", res: []domain.AuditEvent{}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			q := &fakeAuditQueryService{
-				queryFn: func(_ context.Context, _ domain.AuditFilter) ([]domain.AuditEvent, error) {
-					return tc.res, nil
-				},
-				countFn: func(_ context.Context, _ domain.AuditFilter) (int, error) {
-					return 0, nil
-				},
-			}
-			r := setupAuditHandlerRouter(q)
-
-			req := httptest.NewRequest(http.MethodGet, "/audit/events", nil) //nolint:noctx
-			w := httptest.NewRecorder()
-			r.ServeHTTP(w, req)
-
-			if w.Code != http.StatusOK {
-				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
-			}
-			var body map[string]interface{}
-			if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-				t.Fatal(err)
-			}
-			events, ok := body["events"].([]interface{})
-			if !ok {
-				t.Fatalf("events must be a JSON array, got %#v", body["events"])
-			}
-			if len(events) != 0 {
-				t.Errorf("expected 0 events, got %d", len(events))
-			}
-			if total, ok := body["total"].(float64); !ok || total != 0 {
-				t.Errorf("total=%#v, want 0", body["total"])
-			}
-		})
-	}
-}
-
-func TestAuditHandler_ListEvents_WithResults(t *testing.T) {
-	q := &fakeAuditQueryService{
-		queryFn: func(_ context.Context, _ domain.AuditFilter) ([]domain.AuditEvent, error) {
-			return []domain.AuditEvent{
-				{ID: "evt-1", Action: "POST /test"},
-			}, nil
+func TestAuditHandler_ListEvents(t *testing.T) {
+	h := NewAuditHandler(&stubAuditQuery{
+		rows: []auditport.ResourceChangeAuditRow{
+			{ID: "a1", ResourceKind: "workflow", ResourceID: "wf-1", Operation: "publish",
+				ActorID: "u-1", ActorName: "李雷", CreatedAt: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+				Before: json.RawMessage(`{}`), After: json.RawMessage(`{"id":"wf-1"}`)},
 		},
-		countFn: func(_ context.Context, _ domain.AuditFilter) (int, error) {
-			return 2, nil
-		},
-	}
-	r := setupAuditHandlerRouter(q)
+		total: 1,
+	}, zap.NewNop())
+	r := newAuditTestRouter(h)
 
-	req := httptest.NewRequest(http.MethodGet, "/audit/events", nil) //nolint:noctx
 	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/audit/events?resource_kind=workflow&page=1&page_size=20", nil)
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status=%d", w.Code)
-	}
-	var body map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&body)
-	events, ok := body["events"].([]interface{})
-	if !ok || len(events) != 1 {
-		t.Fatalf("expected 1 event, got %#v", body["events"])
-	}
-	if total, ok := body["total"].(float64); !ok || total != 2 {
-		t.Errorf("total=%#v, want 2 (pagination total)", body["total"])
-	}
-}
-
-func TestAuditHandler_ListEvents_Pagination(t *testing.T) {
-	var gotFilter domain.AuditFilter
-	countCalls := 0
-	queryCalls := 0
-	q := &fakeAuditQueryService{
-		queryFn: func(_ context.Context, f domain.AuditFilter) ([]domain.AuditEvent, error) {
-			queryCalls++
-			gotFilter = f
-			return nil, nil
-		},
-		countFn: func(_ context.Context, f domain.AuditFilter) (int, error) {
-			countCalls++
-			gotFilter = f
-			return 0, nil
-		},
-	}
-	r := setupAuditHandlerRouter(q)
-
-	req := httptest.NewRequest(http.MethodGet, "/audit/events?page=2&page_size=20", nil) //nolint:noctx
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status=%d", w.Code)
-	}
-	if countCalls != 1 || queryCalls != 1 {
-		t.Fatalf("countCalls=%d queryCalls=%d, want 1/1", countCalls, queryCalls)
-	}
-	if gotFilter.Limit != 20 {
-		t.Errorf("limit=%d, want 20 from page_size", gotFilter.Limit)
-	}
-	if gotFilter.Offset != 20 {
-		t.Errorf("offset=%d, want 20 = (page-1)*page_size", gotFilter.Offset)
-	}
-	if gotFilter.TenantID != "t1" {
-		t.Errorf("tenantID=%q, want t1", gotFilter.TenantID)
-	}
-}
-
-func TestAuditHandler_ListEvents_CountError(t *testing.T) {
-	q := &fakeAuditQueryService{
-		countFn: func(_ context.Context, _ domain.AuditFilter) (int, error) {
-			return 0, errors.New("db down")
-		},
-		queryFn: func(_ context.Context, _ domain.AuditFilter) ([]domain.AuditEvent, error) {
-			t.Error("Query must not be called when Count fails")
-			return nil, nil
-		},
-	}
-	r := setupAuditHandlerRouter(q)
-
-	req := httptest.NewRequest(http.MethodGet, "/audit/events", nil) //nolint:noctx
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status=%d, want 500 (fail closed on count error)", w.Code)
-	}
-}
-
-func TestAuditHandler_ListEvents_RepoError(t *testing.T) {
-	q := &fakeAuditQueryService{
-		queryFn: func(_ context.Context, _ domain.AuditFilter) ([]domain.AuditEvent, error) {
-			return nil, errors.New("db down")
-		},
-		countFn: func(_ context.Context, _ domain.AuditFilter) (int, error) {
-			return 0, nil
-		},
-	}
-	r := setupAuditHandlerRouter(q)
-
-	req := httptest.NewRequest(http.MethodGet, "/audit/events", nil) //nolint:noctx
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status=%d, want 500", w.Code)
-	}
-}
-
-func TestAuditHandler_GetEvent_Found(t *testing.T) {
-	q := &fakeAuditQueryService{
-		getByIDFn: func(_ context.Context, tenantID, id string) (*domain.AuditEvent, error) {
-			if tenantID != "t1" {
-				t.Errorf("tenantID=%q, want t1 (caller tenant must scope the read)", tenantID)
-			}
-			return &domain.AuditEvent{ID: id, Action: "POST /test"}, nil
-		},
-	}
-	r := setupAuditHandlerRouter(q)
-
-	req := httptest.NewRequest(http.MethodGet, "/audit/events/evt-1", nil) //nolint:noctx
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status=%d", w.Code)
-	}
-	var evt domain.AuditEvent
-	if err := json.NewDecoder(w.Body).Decode(&evt); err != nil {
-		t.Fatal(err)
-	}
-	if evt.ID != "evt-1" {
-		t.Errorf("id=%q, want evt-1", evt.ID)
-	}
+	require.Equal(t, http.StatusOK, w.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.Equal(t, float64(1), body["total"])
+	events := body["events"].([]any)
+	first := events[0].(map[string]any)
+	require.Equal(t, "李雷", first["actor_name"]) // gen DTO json tag 为 snake_case
+	require.Equal(t, "wf-1", first["resource_id"])
 }
 
 func TestAuditHandler_GetEvent_NotFound(t *testing.T) {
-	q := &fakeAuditQueryService{
-		getByIDFn: func(_ context.Context, _, id string) (*domain.AuditEvent, error) {
-			return nil, nil
-		},
-	}
-	r := setupAuditHandlerRouter(q)
-
-	req := httptest.NewRequest(http.MethodGet, "/audit/events/missing", nil) //nolint:noctx
+	h := NewAuditHandler(&stubAuditQuery{}, zap.NewNop())
+	r := newAuditTestRouter(h)
 	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/audit/events/missing", nil)
 	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("status=%d, want 404", w.Code)
-	}
-}
-
-func TestAuditHandler_GetEvent_RepoError(t *testing.T) {
-	q := &fakeAuditQueryService{
-		getByIDFn: func(_ context.Context, _, id string) (*domain.AuditEvent, error) {
-			return nil, errors.New("db down")
-		},
-	}
-	r := setupAuditHandlerRouter(q)
-
-	req := httptest.NewRequest(http.MethodGet, "/audit/events/evt-1", nil) //nolint:noctx
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status=%d, want 500", w.Code)
-	}
-}
-
-// setupAuditRouterWithoutTenant 不写 auth.tenant_id（模拟 middleware 缺 key）：
-// handler 必须 fail closed 返回 401，而不是对 type assertion panic。
-func setupAuditRouterWithoutTenant(q auditport.AuditQueryService) *gin.Engine {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-	r.Use(middleware.ErrorHandler(zap.NewNop()))
-	h := handler.NewAuditHandler(q, zap.NewNop())
-	audit := r.Group("/audit")
-	{
-		audit.GET("/events", h.ListEvents)
-		audit.GET("/events/:id", h.GetEvent)
-	}
-	return r
-}
-
-func TestAuditHandler_MissingTenant_FailsClosed(t *testing.T) {
-	q := &fakeAuditQueryService{
-		queryFn: func(_ context.Context, _ domain.AuditFilter) ([]domain.AuditEvent, error) {
-			t.Error("Query must not be called without a tenant")
-			return nil, nil
-		},
-		getByIDFn: func(_ context.Context, _, _ string) (*domain.AuditEvent, error) {
-			t.Error("GetByID must not be called without a tenant")
-			return nil, nil
-		},
-	}
-	r := setupAuditRouterWithoutTenant(q)
-
-	for _, tc := range []struct {
-		name string
-		path string
-	}{
-		{name: "list", path: "/audit/events"},
-		{name: "get", path: "/audit/events/evt-1"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, tc.path, nil) //nolint:noctx
-			w := httptest.NewRecorder()
-			// 断言不 panic：旧实现对 tid.(string) 直接断言，缺 key 时 panic。
-			r.ServeHTTP(w, req)
-			if w.Code != http.StatusUnauthorized {
-				t.Fatalf("status=%d, want 401 (fail closed)", w.Code)
-			}
-		})
-	}
+	require.Equal(t, http.StatusNotFound, w.Code)
 }

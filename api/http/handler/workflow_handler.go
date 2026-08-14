@@ -16,11 +16,11 @@ import (
 )
 
 type workflowDefinitionService interface {
-	Create(context.Context, string, workflowapp.CreateDefinitionCommand) (*workflowdomain.Definition, error)
-	Update(context.Context, string, string, workflowapp.UpdateDefinitionCommand) (*workflowdomain.Definition, error)
-	Delete(context.Context, string, string) error
+	Create(context.Context, string, workflowapp.CreateDefinitionCommand, string) (*workflowdomain.Definition, error)
+	Update(context.Context, string, string, workflowapp.UpdateDefinitionCommand, string) (*workflowdomain.Definition, error)
+	Delete(context.Context, string, string, string) error
 	Validate(context.Context, string, string) error
-	Publish(context.Context, string, string) (*workflowdomain.Version, error)
+	Publish(context.Context, string, string, string) (*workflowdomain.Version, error)
 	Get(context.Context, string, string) (*workflowdomain.Definition, error)
 	GetVersion(context.Context, string, string) (*workflowdomain.Version, error)
 	ListDefinitions(context.Context, string, workflowapp.ListDefinitionsQuery) (workflowapp.DefinitionPage, error)
@@ -139,12 +139,17 @@ func (h *WorkflowHandler) CreateDefinition(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
+	actor, ok := workflowActor(c)
+	if !ok {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, fmt.Errorf("authenticated actor required")))
+		return
+	}
 	var req gen.CreateWorkflowRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	definition, err := h.definitions.Create(c.Request.Context(), tenantID, workflowapp.CreateDefinitionCommand{Name: req.Name, Description: req.Description, Spec: req.Spec, InputSchema: req.InputSchema})
+	definition, err := h.definitions.Create(c.Request.Context(), tenantID, workflowapp.CreateDefinitionCommand{Name: req.Name, Description: req.Description, Spec: req.Spec, InputSchema: req.InputSchema}, actor.UserID)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -158,12 +163,17 @@ func (h *WorkflowHandler) UpdateDefinition(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
+	actor, ok := workflowActor(c)
+	if !ok {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, fmt.Errorf("authenticated actor required")))
+		return
+	}
 	var req gen.UpdateWorkflowRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	definition, err := h.definitions.Update(c.Request.Context(), tenantID, c.Param("id"), workflowapp.UpdateDefinitionCommand{Name: req.Name, Description: req.Description, Spec: req.Spec, InputSchema: req.InputSchema, ExpectedRevision: req.ExpectedRevision})
+	definition, err := h.definitions.Update(c.Request.Context(), tenantID, c.Param("id"), workflowapp.UpdateDefinitionCommand{Name: req.Name, Description: req.Description, Spec: req.Spec, InputSchema: req.InputSchema, ExpectedRevision: req.ExpectedRevision}, actor.UserID)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -177,7 +187,12 @@ func (h *WorkflowHandler) DeleteDefinition(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	if err := h.definitions.Delete(c.Request.Context(), tenantID, c.Param("id")); err != nil {
+	actor, ok := workflowActor(c)
+	if !ok {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, fmt.Errorf("authenticated actor required")))
+		return
+	}
+	if err := h.definitions.Delete(c.Request.Context(), tenantID, c.Param("id"), actor.UserID); err != nil {
 		_ = c.Error(err)
 		return
 	}
@@ -203,7 +218,12 @@ func (h *WorkflowHandler) PublishDefinition(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	version, err := h.definitions.Publish(c.Request.Context(), tenantID, c.Param("id"))
+	actor, ok := workflowActor(c)
+	if !ok {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, fmt.Errorf("authenticated actor required")))
+		return
+	}
+	version, err := h.definitions.Publish(c.Request.Context(), tenantID, c.Param("id"), actor.UserID)
 	if err != nil {
 		_ = c.Error(err)
 		return

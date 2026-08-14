@@ -182,7 +182,7 @@ func TestPgExperimentRepository_Create_success(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
-	require.NoError(t, repo.Create(context.Background(), "t1", experiment, deployment))
+	require.NoError(t, repo.Create(context.Background(), "t1", experiment, deployment, nil))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -204,7 +204,7 @@ func TestPgExperimentRepository_Create_deploymentConflict(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("INSERT", 0))
 	mock.ExpectRollback()
 
-	err = repo.Create(context.Background(), "t1", experiment, deployment)
+	err = repo.Create(context.Background(), "t1", experiment, deployment, nil)
 	require.ErrorIs(t, err, domain.ErrExperimentDeploymentConflict)
 }
 
@@ -223,7 +223,7 @@ func TestPgExperimentRepository_Create_insertFails(t *testing.T) {
 		WillReturnError(assertionErr())
 	mock.ExpectRollback()
 
-	err = repo.Create(context.Background(), "t1", experiment, deployment)
+	err = repo.Create(context.Background(), "t1", experiment, deployment, nil)
 	require.ErrorContains(t, err, "insert experiment")
 }
 
@@ -479,8 +479,9 @@ func TestPgExperimentRepository_ApplyCommand_promote_success(t *testing.T) {
 		WithArgs("canary-1", "prompt", "r-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectExec("INSERT INTO resource_change_audits").
-		WithArgs(pgxmock.AnyArg(), "t1", "agent", "r-1", "update", "evaluation-worker", "system", "optimization",
-			"", json.RawMessage(`{}`), json.RawMessage(`{}`)).
+		WithArgs(pgxmock.AnyArg(), "t1", "evaluation", "exp-1", "promote", "admin-1", "user", "api", "",
+			json.RawMessage(`{"resource_id":"r-1","resource_kind":"prompt","status":"running"}`),
+			json.RawMessage(`{"resource_id":"r-1","resource_kind":"prompt","status":"running"}`)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("UPDATE evaluation_deployments\n\t\t\tSET stable_revision_id").
 		WithArgs("exp-1", "canary-1").
@@ -524,6 +525,11 @@ func TestPgExperimentRepository_ApplyCommand_pause_success(t *testing.T) {
 		WithArgs(pgxmock.AnyArg(), "exp-1", "pause", string(command.ActorType), "admin-1",
 			"running", "paused", pgxmock.AnyArg(), "reason-1", "cmd-1").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec("INSERT INTO resource_change_audits").
+		WithArgs(pgxmock.AnyArg(), "t1", "evaluation", "exp-1", "pause", "admin-1", "user", "api", "",
+			json.RawMessage(`{"resource_id":"r-1","resource_kind":"prompt","status":"running"}`),
+			json.RawMessage(`{"resource_id":"r-1","resource_kind":"prompt","status":"paused"}`)).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
 	updated, err := repo.ApplyCommand(context.Background(), "t1", "exp-1", domain.CommandPause, command)
@@ -556,6 +562,11 @@ func TestPgExperimentRepository_ApplyCommand_rollback_success(t *testing.T) {
 	mock.ExpectExec("INSERT INTO experiment_decisions").
 		WithArgs(pgxmock.AnyArg(), "exp-1", "rollback", string(command.ActorType), "admin-1",
 			"paused", "rolled_back", pgxmock.AnyArg(), "reason-1", "cmd-1").
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec("INSERT INTO resource_change_audits").
+		WithArgs(pgxmock.AnyArg(), "t1", "evaluation", "exp-1", "rollback", "admin-1", "user", "api", "",
+			json.RawMessage(`{"resource_id":"r-1","resource_kind":"prompt","status":"paused"}`),
+			json.RawMessage(`{"resource_id":"r-1","resource_kind":"prompt","status":"rolled_back"}`)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
@@ -597,8 +608,9 @@ func TestPgExperimentRepository_ApplyCommand_promoteSkill(t *testing.T) {
 		WithArgs("canary-1", "skill", "skill-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectExec("INSERT INTO resource_change_audits").
-		WithArgs(pgxmock.AnyArg(), "t1", "skill", "skill-1", "update", "evaluation-worker", "system", "optimization",
-			"", json.RawMessage(`{}`), json.RawMessage(`{}`)).
+		WithArgs(pgxmock.AnyArg(), "t1", "evaluation", "exp-1", "promote", "admin-1", "user", "api", "",
+			json.RawMessage(`{"resource_id":"skill-1","resource_kind":"skill","status":"running"}`),
+			json.RawMessage(`{"resource_id":"skill-1","resource_kind":"skill","status":"running"}`)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("UPDATE evaluation_deployments\n\t\t\tSET stable_revision_id").
 		WithArgs("exp-1", "canary-1").

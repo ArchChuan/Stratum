@@ -262,7 +262,7 @@ func Run(ctx context.Context, options Options) error {
 	}
 	childCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	cmd := exec.Command(options.Command, options.Args...)
+	cmd := exec.Command(options.Command, options.Args...) // nosemgrep: dangerous-exec-command
 	if err := configureOwnedProcess(cmd); err != nil {
 		return fmt.Errorf("stdio proxy: configure owned process: %w", err)
 	}

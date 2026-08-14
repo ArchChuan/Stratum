@@ -121,7 +121,6 @@ func Run(ctx context.Context, cfg *config.Config, c *wiring.Container, logger *z
 	registerWorkflowWorker(appHarness, c, logger)
 	registerCollabWorker(appHarness, c, logger)
 	registerSchedulerWorker(appHarness, c, logger)
-	registerAuditCleanup(appHarness, c, logger)
 	c.ReadinessCheck = withPostgresReadiness(appHarness.HealthCheck, func(ctx context.Context) error {
 		db := c.DB()
 		if db == nil {
@@ -182,21 +181,6 @@ func (t *trackedWorker) goRun(ctx context.Context, run func(context.Context)) {
 // wait blocks until the tracked goroutine exits or the shutdown ctx expires.
 func (t *trackedWorker) wait(ctx context.Context) error {
 	return harnesspkg.WaitForGroup(ctx, &t.wg)
-}
-
-func registerAuditCleanup(appHarness *harnesspkg.Harness, c *wiring.Container, logger *zap.Logger) {
-	if c.Audit == nil {
-		return
-	}
-	worker := wiring.NewAuditCleanupWorker(c.Audit.Recorder, c.Audit.QueryService, logger)
-	var tw trackedWorker
-	mustRegister(appHarness, harnesspkg.NewSimpleComponent("audit-cleanup", logger,
-		harnesspkg.WithStartFunc(func(ctx context.Context) error {
-			tw.goRun(ctx, worker.Run)
-			return nil
-		}),
-		harnesspkg.WithStopFunc(tw.wait),
-	), logger)
 }
 
 func registerWorkflowWorker(appHarness *harnesspkg.Harness, c *wiring.Container, logger *zap.Logger) {

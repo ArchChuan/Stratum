@@ -135,6 +135,16 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
     });
   }
 
+  // 审计日志是租户级资源，租户 admin/owner 可见（owner 经 TENANT_ROLE_RANK
+  // 自动通过）；global_admin 若无租户 admin 角色则不可见。
+  if (user?.current_tenant && canManageTenant) {
+    base.push({
+      key: '/audit',
+      icon: <AuditOutlined />,
+      label: '审计日志',
+    });
+  }
+
   // 平台管理面合并自原「平台管理（租户 admin）」+「系统管理（global/system admin）」,
   // 现统一仅对 global admin（users.global_role='global_admin'）开放;其他角色菜单不可见、
   // URL 直达也被路由守卫与后端 RequireGlobalAdmin 双拦截。
@@ -150,11 +160,9 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
           label: '模型管理',
         },
         {
-          key: '/audit',
-          icon: <AuditOutlined />,
-          label: '审计日志',
-        },
-        {
+          // 平台级 /audit 已废弃：平台 HTTP 审计 public.audit_events 删除后，
+          // 审计日志仅以租户级顶层入口存在（见上），global admin 平台管理组不再包含。
+          // /prompts、/mechanism 随 main 移除提示词管理（#374）与机制基线存储化一并删除。
           key: '/admin/tenants',
           icon: <GlobalOutlined />,
           label: '全局租户',
@@ -180,7 +188,8 @@ export const resolveOpenKeys = (pathname: string): string[] => {
   if (pathname.startsWith('/tenant')) return ['tenant-group'];
   if (
     pathname.startsWith('/models') ||
-    pathname.startsWith('/audit') ||
+    // /prompts、/mechanism 路由已随 main 删除（提示词管理 #374、机制基线存储化撤销）
+    // /audit 是租户级顶层菜单项，不归入平台管理分组（openKeys 由顶层菜单直接管理）
     pathname.startsWith('/admin')
   )
     return ['platform-admin-group'];

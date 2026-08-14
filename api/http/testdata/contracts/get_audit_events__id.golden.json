@@ -1,0 +1,11 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "GET",
+    "path": "/audit/events/contract-id",
+    "want_status": 404,
+    "want_body": {
+      "error": "audit event not found"
+    }
+  }
+]

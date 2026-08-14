@@ -98,7 +98,9 @@ export const executeOperationGatePack = async ({ actor, adminActor, pool, eviden
     // ── 2. member 发起自修改 → 恒提案 202 ────────────────────────────────────
     await memberPage.goto(`${webURL}/agents`);
     const memberCard = memberPage.locator('.ant-card').filter({ hasText: agentName });
-    await expect(memberCard.getByRole('button', { name: '发起自修改' })).toBeVisible();
+    // soak 负载下 /agents 列表加载+渲染可能超过默认 5s（#282 同源 flake），先等卡片再等按钮。
+    await expect(memberCard).toBeVisible({ timeout: 15000 });
+    await expect(memberCard.getByRole('button', { name: '发起自修改' })).toBeVisible({ timeout: 15000 });
     await memberCard.getByRole('button', { name: '发起自修改' }).click();
     await expect(memberPage.locator('.ant-modal-content')).toContainText('发起自修改');
     // 描述改为与 agent 当前值不同的值，制造可落地的差异
@@ -135,7 +137,7 @@ export const executeOperationGatePack = async ({ actor, adminActor, pool, eviden
 
     // ── 4. 查看详情（去敏 diff）→ 开始审批 → reviewing ───────────────────────
     const proposalRow = adminPage.locator('tr').filter({ hasText: agentID });
-    await expect(proposalRow).toBeVisible();
+    await expect(proposalRow).toBeVisible({ timeout: 15000 });
     await expect(proposalRow).toContainText('自修改');
     await expect(proposalRow).toContainText('待审批');
     const detailResponse = waitForMutation(adminPage, `/operation-proposals/${firstProposalID}`, 'GET');
@@ -205,7 +207,7 @@ export const executeOperationGatePack = async ({ actor, adminActor, pool, eviden
     await adminPage.goto(`${webURL}/operation-proposals`);
     // 第一个 proposal 已 executed，不在待审列表；列表仅剩新提案
     const secondRow = adminPage.locator('tr').filter({ hasText: agentID });
-    await expect(secondRow).toBeVisible();
+    await expect(secondRow).toBeVisible({ timeout: 15000 });
     await expect(secondRow).toContainText('待审批');
     await secondRow.getByRole('button', { name: '查看' }).click();
     await adminPage.getByRole('button', { name: '开始审批' }).click();

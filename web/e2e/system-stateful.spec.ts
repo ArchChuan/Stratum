@@ -216,8 +216,11 @@ const executePack = async (
     return;
   }
   if (pack === 'audit') {
-    // /audit 收紧为仅 global admin 可访问,执行 actor 必须带 global_role='global_admin'。
-    completedActions.push(...await executeAuditPack({ actor: actors.systemAdmin, pool, evidence, webURL }));
+    // /audit 为租户级资源:租户 owner(tenantAdmin 非 global_admin)可见、普通 member 不可见,
+    // 对账 tenant schema resource_change_audits 并验证三种筛选。
+    completedActions.push(...await executeAuditPack({
+      actor: actors.tenantAdmin, member: actors.memberA, pool, evidence, webURL, backendURL,
+    }));
     return;
   }
   if (pack === 'llm-admin') {

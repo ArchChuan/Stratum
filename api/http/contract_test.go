@@ -29,8 +29,8 @@ import (
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
-	auditapp "github.com/byteBuilderX/stratum/internal/audit/application"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
@@ -99,7 +99,6 @@ func TestContracts(t *testing.T) {
 	contractAdminTR := contractAdminTenantRepo{}
 	contractTenantR := contractTenantRepo{}
 	contractInvR := contractInvitationRepo{}
-	contractAuditRepo := contractAuditRepo{}
 
 	dddRouter := apihttp.NewRouter(&wiring.Container{
 		Config: cfg, Logger: logger,
@@ -152,8 +151,7 @@ func TestContracts(t *testing.T) {
 		},
 		Scheduler: &wiring.Scheduler{Service: contractSchedulerStub(logger)},
 		Audit: &wiring.Audit{
-			Recorder:     auditapp.NewAuditService(contractAuditRepo, observability.NoopMetrics{}, logger),
-			QueryService: auditapp.NewAuditService(contractAuditRepo, observability.NoopMetrics{}, logger),
+			QueryService: contractAuditRepo{},
 		},
 	})
 
@@ -164,7 +162,7 @@ func TestContracts(t *testing.T) {
 		"/evaluations/", "/dashboard/", "/resource-change-proposals/",
 		"/admin/providers", "/admin/models", "/admin/tenants",
 		"/tenant/", "/workflows", "/workflow-runs", "/workflow-approvals",
-		"/operation-proposals", "/scheduled-tasks",
+		"/operation-proposals", "/scheduled-tasks", "/audit",
 	}
 
 	files, err := filepath.Glob("testdata/contracts/*.golden.json")
@@ -298,7 +296,7 @@ func (contractProviderRuntime) Health(_ context.Context, _ llmdomain.Provider) e
 
 type contractDefRepo struct{}
 
-func (contractDefRepo) CreateDefinition(_ context.Context, _ string, _ *workflowdomain.Definition) error {
+func (contractDefRepo) CreateDefinition(_ context.Context, _ string, _ *workflowdomain.Definition, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (contractDefRepo) GetDefinition(_ context.Context, _ string, _ string) (*workflowdomain.Definition, error) {
@@ -310,17 +308,19 @@ func (contractDefRepo) GetDefinition(_ context.Context, _ string, _ string) (*wo
 		UpdatedAt:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}, nil
 }
-func (contractDefRepo) UpdateDefinition(_ context.Context, _ string, _ *workflowdomain.Definition, _ int64) error {
+func (contractDefRepo) UpdateDefinition(_ context.Context, _ string, _ *workflowdomain.Definition, _ int64, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (contractDefRepo) DeleteDefinition(_ context.Context, _ string, _ string) error { return nil }
+func (contractDefRepo) DeleteDefinition(_ context.Context, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (contractDefRepo) ListDefinitions(_ context.Context, _ string, _ workflowport.DefinitionListQuery) ([]workflowdomain.Definition, int, error) {
 	return nil, 0, nil
 }
 
 type contractVersionRepo struct{}
 
-func (contractVersionRepo) CreateVersion(_ context.Context, _ string, _ *workflowdomain.Version) error {
+func (contractVersionRepo) CreateVersion(_ context.Context, _ string, _ *workflowdomain.Version, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (contractVersionRepo) GetVersion(_ context.Context, _ string, _ string) (*workflowdomain.Version, error) {
@@ -599,7 +599,7 @@ func (contractExperimentRepo) ValidatePrerequisites(context.Context, string, dom
 	domain.ResourceRef, string) error {
 	return nil
 }
-func (contractExperimentRepo) Create(context.Context, string, domain.Experiment, domain.Deployment) error {
+func (contractExperimentRepo) Create(context.Context, string, domain.Experiment, domain.Deployment, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (contractExperimentRepo) Get(context.Context, string, string) (domain.Experiment, bool, error) {
@@ -634,19 +634,13 @@ func (contractCandidateRepo) Reject(context.Context, string, string, domain.Cand
 
 type contractAuditRepo struct{}
 
-func (contractAuditRepo) InsertBatch(_ context.Context, _ []auditdomain.AuditEvent) error {
-	return nil
+func (contractAuditRepo) List(_ context.Context, _ string, _ auditport.ResourceChangeAuditFilter) ([]auditport.ResourceChangeAuditRow, int, error) {
+	return nil, 0, nil
 }
-func (contractAuditRepo) Query(_ context.Context, _ auditdomain.AuditFilter) ([]auditdomain.AuditEvent, error) {
+
+func (contractAuditRepo) GetByID(_ context.Context, _, _ string) (*auditport.ResourceChangeAuditRow, error) {
 	return nil, nil
 }
-func (contractAuditRepo) Count(_ context.Context, _ auditdomain.AuditFilter) (int, error) {
-	return 0, nil
-}
-func (contractAuditRepo) GetByID(_ context.Context, _, _ string) (*auditdomain.AuditEvent, error) {
-	return nil, nil
-}
-func (contractAuditRepo) DeleteOlderThan(_ context.Context, _ time.Time) error { return nil }
 
 // contractSchedulerStub wires a real Service over stub ports so the DDD
 // router records deterministic scheduled-task responses.

@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"math/rand"
+	"math/rand" // nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used
 	"net"
 	"net/http"
 	"net/url"

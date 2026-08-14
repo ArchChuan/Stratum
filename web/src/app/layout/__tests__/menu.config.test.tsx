@@ -65,7 +65,10 @@ describe('buildMenuItems', () => {
     render(<div>{adminLabels.map((label, index) => <div key={index}>{label}</div>)}</div>);
     // 平台管理面仅 global admin 可见:租户 admin 看不到合并后的组及其子项
     expect(screen.queryByText('平台管理')).not.toBeInTheDocument();
-    expect(screen.queryByText('审计日志')).not.toBeInTheDocument();
+    expect(screen.queryByText('提示词管理')).not.toBeInTheDocument();
+    expect(screen.queryByText('模型档案')).not.toBeInTheDocument();
+    // 审计日志已从平台管理组移出租户域,租户 admin 可见顶层项
+    expect(screen.getByText('审计日志')).toBeInTheDocument();
     // 工具审批是独立菜单行,租户 admin 保留可见
     expect(screen.getByText('工具审批')).toBeInTheDocument();
   });
@@ -94,7 +97,9 @@ describe('buildMenuItems', () => {
     render(<div>{labels.map((label, index) => <div key={index}>{label}</div>)}</div>);
     expect(screen.getByText('平台管理')).toBeInTheDocument();
     expect(screen.getByText('模型管理')).toBeInTheDocument();
-    expect(screen.getByText('审计日志')).toBeInTheDocument();
+    // /prompts、/mechanism 已随 main 删除（提示词管理 #374、机制基线存储化撤销）
+    // 审计日志已移出租户域:global_admin 作为租户 member(canManageTenant=false)不可见
+    expect(screen.queryByText('审计日志')).not.toBeInTheDocument();
     expect(screen.getByText('全局租户')).toBeInTheDocument();
     expect(screen.getByText('平台参数')).toBeInTheDocument();
   });
@@ -111,11 +116,34 @@ describe('buildMenuItems', () => {
 
   it('resolves platform admin paths to the merged open-key group', () => {
     expect(resolveOpenKeys('/models')).toEqual(['platform-admin-group']);
-    expect(resolveOpenKeys('/audit')).toEqual(['platform-admin-group']);
     expect(resolveOpenKeys('/admin/tenants')).toEqual(['platform-admin-group']);
     expect(resolveOpenKeys('/admin/settings')).toEqual(['platform-admin-group']);
     // 工具审批是独立菜单项,不再归入任何分组
     expect(resolveOpenKeys('/approvals')).toEqual([]);
+    // /prompts、/mechanism 路由已随 main 删除,不归入任何分组
+    expect(resolveOpenKeys('/prompts')).toEqual([]);
+    expect(resolveOpenKeys('/mechanism/profiles')).toEqual([]);
+  });
+
+  it('shows the audit log to tenant admins and owners as a top-level item', () => {
+    const labels = collectLabels(buildMenuItems({
+      sub: 'owner-1', tenant_id: 'tenant-1', role: 'owner', avatar_url: '', github_login: 'owner', username: '',
+      current_tenant: { id: 'tenant-1', name: 'Test', role: 'owner' },
+    }));
+    render(<div>{labels.map((label, index) => <div key={index}>{label}</div>)}</div>);
+    expect(screen.getByText('审计日志')).toBeInTheDocument();
+    // /audit 是顶层菜单项,不归入任何分组
+    expect(resolveOpenKeys('/audit')).toEqual([]);
+  });
+
+  it('hides the audit log from a global admin without tenant admin role', () => {
+    // global_admin 作为租户 member(canManageTenant=false)或无租户时不可见
+    const labels = collectLabels(buildMenuItems({
+      sub: 'ga-1', tenant_id: 'tenant-1', role: 'member', global_role: 'global_admin',
+      avatar_url: '', github_login: 'ga', username: '',
+    }));
+    render(<div>{labels.map((label, index) => <div key={index}>{label}</div>)}</div>);
+    expect(screen.queryByText('审计日志')).not.toBeInTheDocument();
   });
 
   it('does not expose execution history in navigation', () => {

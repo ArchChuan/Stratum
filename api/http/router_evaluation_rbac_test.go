@@ -12,6 +12,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/api/wiring"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/application"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
@@ -142,7 +143,8 @@ func (*evaluationExperimentRepoFake) ValidatePrerequisites(context.Context, stri
 	domain.ResourceRef, string) error {
 	return nil
 }
-func (*evaluationExperimentRepoFake) Create(context.Context, string, domain.Experiment, domain.Deployment) error {
+func (*evaluationExperimentRepoFake) Create(context.Context, string, domain.Experiment, domain.Deployment,
+	*auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (*evaluationExperimentRepoFake) Get(context.Context, string, string) (domain.Experiment, bool, error) {
