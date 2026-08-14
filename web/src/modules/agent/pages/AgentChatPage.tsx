@@ -116,7 +116,7 @@ export const AgentChatPage = ({
           {sidebar}
         </Drawer>
       ) : sidebar}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
         <ChatHeader
           agent={agentObj}
           isMobile={isMobile}
