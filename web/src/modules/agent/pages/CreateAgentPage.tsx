@@ -4,7 +4,7 @@ import { Button, Form, Typography } from 'antd';
 import { AgentFormSections } from '../components/AgentFormSections';
 import { useCreateAgentPage } from '../hooks/useCreateAgentPage';
 
-import { AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
+import { AGENT_DEFAULT_MAX_CONTEXT_TOKENS, AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
 import { useEditorCandidates } from '@/modules/iam';
 
 const { Title, Text } = Typography;
@@ -36,7 +36,7 @@ export const CreateAgentPage = () => {
         onFinish={onFinish}
         initialValues={{
           maxIterations: AGENT_DEFAULT_MAX_ITERATIONS,
-          maxContextTokens: 0, // 0 = 自动按模型窗口解析
+          maxContextTokens: AGENT_DEFAULT_MAX_CONTEXT_TOKENS, // 0 = 自动按模型窗口解析
           allowedSkills: [],
           memoryScope: 'user',
         }}
