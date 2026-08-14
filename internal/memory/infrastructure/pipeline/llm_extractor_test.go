@@ -2,8 +2,12 @@ package pipeline
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/byteBuilderX/stratum/pkg/constants"
 
 	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 )
@@ -59,5 +63,69 @@ func TestLLMExtractorLeavesModelEmpty(t *testing.T) {
 	}
 	if llm.model != "" {
 		t.Fatalf("expected empty model by default, got %q", llm.model)
+	}
+}
+
+// extractorResolverStub is a scripted ResourceParamResolver double keyed by
+// agentID; err short-circuits every resolve to exercise the degrade path.
+type extractorResolverStub struct {
+	perAgent map[string]any
+	err      error
+}
+
+func (s extractorResolverStub) Resolve(_ context.Context, _ string, agentID, _ string) (any, bool, error) {
+	if s.err != nil {
+		return nil, false, s.err
+	}
+	v, ok := s.perAgent[agentID]
+	return v, ok, nil
+}
+
+// TestLLMExtractorMaxFactsPerAgent 验证 memory.max_facts_per_extraction 按 agent
+// 解析注入抽取提示词:命中 agent 记录用其值,未命中回落常量默认。
+func TestLLMExtractorMaxFactsPerAgent(t *testing.T) {
+	llm := &extractorLLMStub{content: `[]`}
+	extractor := NewLLMExtractor(llm)
+	extractor.SetTenantID("t1")
+	extractor.SetResourceResolver(extractorResolverStub{perAgent: map[string]any{"agent-1": float64(35)}})
+
+	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-1", "msg"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(llm.prompt, "最多提取 35 条事实") {
+		t.Fatalf("per-agent max_facts not applied: %q", llm.prompt)
+	}
+
+	// 未记录的 agent → 回落常量默认。
+	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-other", "msg"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(llm.prompt, fmt.Sprintf("最多提取 %d 条事实", constants.MemoryMaxFactsPerExtraction)) {
+		t.Fatalf("fallback default not applied: %q", llm.prompt)
+	}
+}
+
+// TestLLMExtractorMaxFactsDegrade 验证 resolver 缺省/报错时 maxFacts 回落常量
+// 默认,不阻塞抽取。
+func TestLLMExtractorMaxFactsDegrade(t *testing.T) {
+	llm := &extractorLLMStub{content: `[]`}
+	extractor := NewLLMExtractor(llm)
+	extractor.SetTenantID("t1")
+
+	// 未接 resolver → 常量默认。
+	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-1", "msg"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(llm.prompt, fmt.Sprintf("最多提取 %d 条事实", constants.MemoryMaxFactsPerExtraction)) {
+		t.Fatalf("nil resolver must fall back to default: %q", llm.prompt)
+	}
+
+	// resolver 报错 → 常量默认。
+	extractor.SetResourceResolver(extractorResolverStub{err: errors.New("db down")})
+	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-1", "msg"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(llm.prompt, fmt.Sprintf("最多提取 %d 条事实", constants.MemoryMaxFactsPerExtraction)) {
+		t.Fatalf("resolver error must fall back to default: %q", llm.prompt)
 	}
 }

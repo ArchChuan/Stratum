@@ -342,6 +342,9 @@ func (validatingParametersProvider) Resolve(context.Context, string, map[string]
 func (validatingParametersProvider) ValidateResource(_ context.Context, _ map[string]any) error {
 	return nil
 }
+func (validatingParametersProvider) ValidateResourceKey(_ context.Context, _ string, _ any) error {
+	return nil
+}
 
 type rejectingParametersProvider struct{}
 
@@ -355,6 +358,9 @@ func (rejectingParametersProvider) ValidateResource(_ context.Context, declared 
 	if len(declared) == 0 {
 		return nil
 	}
+	return errors.New("agent.max_tokens: must be <= 8192, got out-of-bounds")
+}
+func (rejectingParametersProvider) ValidateResourceKey(_ context.Context, _ string, _ any) error {
 	return errors.New("agent.max_tokens: must be <= 8192, got out-of-bounds")
 }
 

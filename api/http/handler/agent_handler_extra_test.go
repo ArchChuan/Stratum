@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -315,6 +316,13 @@ func (p registryParamsProvider) Resolve(context.Context, string, map[string]any)
 func (p registryParamsProvider) ValidateResource(_ context.Context, declared map[string]any) error {
 	return p.svc.ValidateResourceValues(declared)
 }
+func (p registryParamsProvider) ValidateResourceKey(_ context.Context, key string, value any) error {
+	def, ok := p.svc.Registry().Get(key)
+	if !ok {
+		return fmt.Errorf("unknown parameter %s", key)
+	}
+	return def.Validate(value)
+}
 
 // TestAgentHandlerReasoningEffortEcho 守护 reasoning_effort 在 Create/Update 请求
 // 与响应间往返回显，并拒绝枚举外非法值（fail-closed，防绕过前端传非法档位）。
@@ -501,4 +509,36 @@ type fixedTenantRole struct{ role string }
 
 func (r fixedTenantRole) ResolveTenantRole(context.Context, string, string) (string, error) {
 	return r.role, nil
+}
+
+// TestAgentHandlerMemoryParametersEcho 守护 memory.* 参数经
+// UpdateAgentRequest.parameters 落库（agents.parameters JSONB 的 dotted 键，
+// 非采样字段），并在 Update/GET 响应回显供编辑页表单预填；越界值 fail-closed。
+func TestAgentHandlerMemoryParametersEcho(t *testing.T) {
+	paramsProvider := registryParamsProvider{svc: parametersapp.NewService(parametersdomain.NewParametersRegistry(), nil)}
+	newHandler := func(repo *mockAgentRepo) *AgentHandler {
+		return newTestAgentHandler(t, repo, nil, func(deps *agent.AgentServiceDeps) {
+			deps.ParametersProvider = paramsProvider
+		})
+	}
+
+	// Update 携带 memory.* dotted 键 → 落库并在响应回显。
+	repo := &mockAgentRepo{agents: []*domain.AgentConfig{{ID: "a1", Name: "Alpha", LLMModel: "qwen-max"}}}
+	h := newHandler(repo)
+	body := `{"name":"Alpha","llmModel":"qwen-max","maxIterations":5,"parameters":{"memory.max_facts_per_extraction":30,"memory.fact_injection_top_n":10}}`
+	w := doAgentReq(t, authedRoutes(h), http.MethodPut, "/agents/a1", body)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), `"memory.max_facts_per_extraction":30`)
+	require.Contains(t, w.Body.String(), `"memory.fact_injection_top_n":10`)
+
+	// GET 回读同一份 parameters（编辑页预填来源）。
+	w = doAgentReq(t, authedRoutes(h), http.MethodGet, "/agents/a1", "")
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), `"memory.max_facts_per_extraction":30`)
+
+	// 越界 memory.* 值被 registry 校验拒绝 → 400（绕过前端直调 API 也拦得住）。
+	h = newHandler(&mockAgentRepo{})
+	body = `{"name":"N","llmModel":"qwen-max","maxIterations":5,"parameters":{"memory.max_facts_per_extraction":999}}`
+	w = doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents", body)
+	require.Equal(t, http.StatusBadRequest, w.Code)
 }

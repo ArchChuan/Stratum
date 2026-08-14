@@ -1,0 +1,2 @@
+-- 036 down: 数据删除不可逆，无法恢复已从平台层删除的 memory.* 行。
+-- 目标值已迁移到 per-agent agents.parameters，不回填平台层。
