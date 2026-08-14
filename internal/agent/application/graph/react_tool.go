@@ -386,6 +386,8 @@ func execProposeResourceChangeTool(toolCtx context.Context, tc port.ToolCall, s 
 	}
 	callCtx, cancel := context.WithTimeout(toolCtx, constants.SystemAssistantToolTimeout)
 	defer cancel()
+	// proposal 为值类型 ResourceChangeProposalArtifact，错误分支访问 ID 不会 nil 解引用，属误报。
+	// nosemgrep: trailofbits.go.invalid-usage-of-modified-variable.invalid-usage-of-modified-variable
 	proposal, callErr := s.ProposalCreateFn(callCtx, tc.Arguments)
 	if callErr != nil {
 		message := safeAssistantToolError(callErr)
