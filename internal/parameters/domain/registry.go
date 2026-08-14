@@ -10,16 +10,18 @@ import (
 // evaluation loop and the frontend schema both read from it, replacing the
 // legacy hard-coded whitelists.
 type ParametersRegistry struct {
-	byKey        map[string]*ParameterDefinition
-	byEvalKey    map[string]string // evaluation bare-name → registry key
-	resourceKeys []string          // sorted resource-scope keys
+	byKey          map[string]*ParameterDefinition
+	byEvalKey      map[string]string   // evaluation bare-name → registry key
+	promptEvalKeys map[string]struct{} // gate-only prompt patch keys (no definition)
+	resourceKeys   []string            // sorted resource-scope keys
 }
 
 // NewParametersRegistry builds a registry with all built-in definitions.
 func NewParametersRegistry() *ParametersRegistry {
 	r := &ParametersRegistry{
-		byKey:     make(map[string]*ParameterDefinition, 40),
-		byEvalKey: make(map[string]string, 24),
+		byKey:          make(map[string]*ParameterDefinition, 40),
+		byEvalKey:      make(map[string]string, 24),
+		promptEvalKeys: make(map[string]struct{}, 6),
 	}
 	r.registerAgentParams()
 	r.registerRAGParams()
@@ -28,7 +30,7 @@ func NewParametersRegistry() *ParametersRegistry {
 	r.registerJudgeParams()
 	r.registerTraceParams()
 	r.registerMemoryParams()
-	r.registerPromptParams()
+	r.registerPromptEvaluationKeys()
 	r.resourceKeys = r.sortedScopeKeys(ScopeResource)
 	return r
 }
@@ -46,6 +48,9 @@ func (r *ParametersRegistry) Register(def ParameterDefinition) error {
 		if prev, exists := r.byEvalKey[evalKey]; exists && prev != def.Key {
 			return fmt.Errorf("parameter registry: evaluation key %q already mapped to %s", evalKey, prev)
 		}
+		if _, reserved := r.promptEvalKeys[evalKey]; reserved {
+			return fmt.Errorf("parameter registry: evaluation key %q reserved as gate-only prompt key", evalKey)
+		}
 		r.byEvalKey[evalKey] = def.Key
 	}
 	r.byKey[def.Key] = &def
@@ -59,9 +64,14 @@ func (r *ParametersRegistry) Get(key string) (*ParameterDefinition, bool) {
 }
 
 // IsEvaluationKey reports whether a bare evaluation key (e.g. "temperature")
-// is registered — the legacy whitelists are replaced by this check.
+// is registered — the legacy whitelists are replaced by this check. Prompt
+// patch keys (instructions, system_prompt, ...) are gate-only: valid candidate
+// patch fields, but with no parameter definition behind them.
 func (r *ParametersRegistry) IsEvaluationKey(bareKey string) bool {
-	_, ok := r.byEvalKey[bareKey]
+	if _, ok := r.byEvalKey[bareKey]; ok {
+		return true
+	}
+	_, ok := r.promptEvalKeys[bareKey]
 	return ok
 }
 
@@ -71,10 +81,19 @@ func (r *ParametersRegistry) KeyForEvaluation(bareKey string) (string, bool) {
 	return key, ok
 }
 
-// EvaluationKeys returns every registered bare evaluation key.
+// EvaluationKeys returns every registered bare evaluation key, including the
+// gate-only prompt patch keys. Candidate/critique whitelists pin themselves to
+// this set.
 func (r *ParametersRegistry) EvaluationKeys() []string {
-	keys := make([]string, 0, len(r.byEvalKey))
+	seen := make(map[string]struct{}, len(r.byEvalKey)+len(r.promptEvalKeys))
 	for k := range r.byEvalKey {
+		seen[k] = struct{}{}
+	}
+	for k := range r.promptEvalKeys {
+		seen[k] = struct{}{}
+	}
+	keys := make([]string, 0, len(seen))
+	for k := range seen {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
@@ -408,55 +427,20 @@ func (r *ParametersRegistry) registerMemoryParams() {
 	}
 }
 
-// registerPromptParams are the six legacy prompt keys. Values flow through the
-// existing prompt registry (agent>tenant>global); the platform default here is
-// the global tier. Frontend exposure stays at /prompts.
-func (r *ParametersRegistry) registerPromptParams() {
-	for _, def := range []ParameterDefinition{
-		{
-			Key: "prompt.system_prompt", Scope: ScopePlatform, Category: "prompt",
-			DisplayName: "系统提示词", Description: "全局系统提示词(经 prompt 注册表生效)",
-			ValueType: TypeString, Default: "",
-			VisualHint:  VisualHint{Control: ControlTextarea},
-			Optimizable: true, EvaluationKeys: []string{"system_prompt"},
-		},
-		{
-			Key: "prompt.instructions", Scope: ScopePlatform, Category: "prompt",
-			DisplayName: "行为指令", Description: "全局行为指令(经 prompt 注册表生效)",
-			ValueType: TypeString, Default: "",
-			VisualHint:  VisualHint{Control: ControlTextarea},
-			Optimizable: true, EvaluationKeys: []string{"instructions"},
-		},
-		{
-			Key: "prompt.memory_extraction_prompt", Scope: ScopePlatform, Category: "prompt",
-			DisplayName: "记忆抽取提示词", Description: "记忆抽取(经 prompt 注册表生效)",
-			ValueType: TypeString, Default: "",
-			VisualHint:  VisualHint{Control: ControlTextarea},
-			Optimizable: true, EvaluationKeys: []string{"memory_extraction_prompt"},
-		},
-		{
-			Key: "prompt.memory_summary_prompt", Scope: ScopePlatform, Category: "prompt",
-			DisplayName: "记忆摘要提示词", Description: "记忆摘要(经 prompt 注册表生效)",
-			ValueType: TypeString, Default: "",
-			VisualHint:  VisualHint{Control: ControlTextarea},
-			Optimizable: true, EvaluationKeys: []string{"memory_summary_prompt"},
-		},
-		{
-			Key: "prompt.memory_enrichment_prompt", Scope: ScopePlatform, Category: "prompt",
-			DisplayName: "记忆富化提示词", Description: "记忆富化(经 prompt 注册表生效)",
-			ValueType: TypeString, Default: "",
-			VisualHint:  VisualHint{Control: ControlTextarea},
-			Optimizable: true, EvaluationKeys: []string{"memory_enrichment_prompt"},
-		},
-		{
-			Key: "prompt.compaction_prompt", Scope: ScopePlatform, Category: "prompt",
-			DisplayName: "压缩提示词", Description: "上下文压缩(经 prompt 注册表生效)",
-			ValueType: TypeString, Default: "",
-			VisualHint:  VisualHint{Control: ControlTextarea},
-			Optimizable: true, EvaluationKeys: []string{"compaction_prompt"},
-		},
+// registerPromptEvaluationKeys registers the prompt patch bare keys as
+// gate-only evaluation keys. The prompt.* platform value definitions were
+// removed with the prompt-management feature; the bare keys survive only so
+// candidate-patch validation (validatePatchKeys) keeps admitting the prompt
+// fields the evaluation optimizer produces. They have no definition behind
+// them: KeyForEvaluation does not resolve them, and they are absent from
+// Schema/PlatformValues.
+func (r *ParametersRegistry) registerPromptEvaluationKeys() {
+	for _, bare := range []string{
+		"system_prompt", "instructions",
+		"memory_extraction_prompt", "memory_summary_prompt",
+		"memory_enrichment_prompt", "compaction_prompt",
 	} {
-		_ = r.Register(def)
+		r.promptEvalKeys[bare] = struct{}{}
 	}
 }
 
