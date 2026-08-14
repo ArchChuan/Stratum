@@ -31,7 +31,6 @@
     "/operation-proposals",
     "/collaborations",
     "/scheduled-tasks",
-    "/prompts",
     "/audit",
     "/memory",
     "/mechanism/profiles"
@@ -113,10 +112,6 @@
     "PUT /scheduled-tasks/:id",
     "DELETE /scheduled-tasks/:id",
     "PATCH /scheduled-tasks/:id/enabled",
-    "POST /prompts",
-    "POST /prompts/:key/versions/:version/publish",
-    "PUT /prompts/bindings",
-    "DELETE /prompts/bindings/:key/:scope",
     "PUT /mechanism/profiles",
     "POST /mechanism/matrix/runs",
     "POST /mechanism/matrix/adopt"
