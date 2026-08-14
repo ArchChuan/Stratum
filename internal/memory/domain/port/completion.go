@@ -1,32 +1,18 @@
 package port
 
-import "context"
+import (
+	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+)
 
-type CompletionMessage struct {
-	Role    string
-	Content string
-}
-
-// ResponseFormat 请求 provider 强制结构化输出（{"type":"json_object"}）。
-// memport 不能 import llmgateway domain（DDD：domain 仅依赖 stdlib + constants），
-// 因此这里是 llmgateway.ResponseFormat 的本地对等类型，由 wiring 适配透传。
-type ResponseFormat struct {
-	Type string
-}
-
-type CompletionRequest struct {
-	Model          string
-	Messages       []CompletionMessage
-	Temperature    float64
-	MaxTokens      int
-	ResponseFormat *ResponseFormat
-}
-
-type CompletionResponse struct {
-	Content          string
-	CompletionTokens int
-}
-
-type Completer interface {
-	Complete(ctx context.Context, req *CompletionRequest) (*CompletionResponse, error)
-}
+// 传输镜像退役桥接（过渡态，plan Task 8 删除本文件）。
+//
+// 此前 memport 是 llmgateway domain 的「有损镜像」：Temperature float64、无 json
+// tag、CompletionResponse 只留 Content+CompletionTokens，wiring 需手工逐字段转换。
+// 改为无损别名后类型逐字段一致，转换层删除；消费者按包逐个迁移到 llmdomain，
+// 迁移完成（Task 8）后本文件整体删除。llmdomain 是 spec §3 指定的唯一可跨
+// context import 的 domain。
+type CompletionMessage = llmdomain.Message
+type ResponseFormat = llmdomain.ResponseFormat
+type CompletionRequest = llmdomain.CompletionRequest
+type CompletionResponse = llmdomain.CompletionResponse
+type Completer = llmdomain.Completer

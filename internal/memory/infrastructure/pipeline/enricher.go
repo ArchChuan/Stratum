@@ -514,7 +514,7 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnri
 	}
 	summary := strings.TrimSpace(resp.Content)
 
-	if err := w.writeSummary(ctx, schema, ev, summary, resp.CompletionTokens); err != nil {
+	if err := w.writeSummary(ctx, schema, ev, summary, resp.Usage.CompletionTokens); err != nil {
 		return err
 	}
 
