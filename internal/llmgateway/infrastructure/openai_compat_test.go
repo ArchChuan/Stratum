@@ -158,3 +158,58 @@ func TestCompleteStream_MaxTokensFallback(t *testing.T) {
 		})
 	}
 }
+
+// TestOpenAICompatClient_ListModels_paginates 验证 has_more/last_id 翻页：
+// 第一页不带查询参数（最大兼容），后续页带 limit=100&after=<last_id>，
+// 聚合所有页并去分页终止。
+func TestOpenAICompatClient_ListModels_paginates(t *testing.T) {
+	var rawQueries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/models", r.URL.Path)
+		rawQueries = append(rawQueries, r.URL.RawQuery)
+		switch r.URL.Query().Get("after") {
+		case "":
+			_, _ = fmt.Fprint(w, `{"data":[{"id":"gpt-4o"},{"id":"gpt-4.1"}],"has_more":true,"last_id":"gpt-4.1"}`)
+		case "gpt-4.1":
+			_, _ = fmt.Fprint(w, `{"data":[{"id":"text-embedding-3-small"},{"id":"bge-m3"}],"has_more":false,"last_id":""}`)
+		default:
+			t.Errorf("unexpected after=%q", r.URL.Query().Get("after"))
+		}
+	}))
+	defer srv.Close()
+
+	client := NewOpenAICompatClient(ProviderConfig{
+		Name: "test-openai", BaseURL: srv.URL, APIKey: "sk-test",
+	}, zap.NewNop())
+	models, err := client.ListModels(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []DiscoveredModel{
+		{Name: "gpt-4o", ContextWindow: 128_000, MaxOutputTokens: 16_384},
+		{Name: "gpt-4.1", ContextWindow: 1_047_576, MaxOutputTokens: 32_768},
+		{Name: "text-embedding-3-small", ContextWindow: 8_191, MaxOutputTokens: 0},
+		{Name: "bge-m3"},
+	}, models)
+	require.Len(t, rawQueries, 2)
+	require.Equal(t, "", rawQueries[0], "first page must omit query params")
+	require.Equal(t, "limit=100&after=gpt-4.1", rawQueries[1])
+}
+
+// TestOpenAICompatClient_ListModels_singlePageWithoutPagination 验证不返回
+// 分页字段的兼容网关只请求一次，行为与分页改造前一致。
+func TestOpenAICompatClient_ListModels_singlePageWithoutPagination(t *testing.T) {
+	var reqCount int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqCount++
+		_, _ = fmt.Fprint(w, `{"data":[{"id":"gpt-4o"}]}`)
+	}))
+	defer srv.Close()
+
+	client := NewOpenAICompatClient(ProviderConfig{
+		Name: "test-openai", BaseURL: srv.URL, APIKey: "sk-test",
+	}, zap.NewNop())
+	models, err := client.ListModels(context.Background())
+	require.NoError(t, err)
+	require.Len(t, models, 1)
+	require.Equal(t, 1, reqCount)
+}

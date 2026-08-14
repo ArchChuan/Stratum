@@ -13,6 +13,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +31,10 @@ const (
 	cbFailureThreshold        = 5
 	cbRecoveryTimeout         = 30 * time.Second
 	maxModelListResponseBytes = 1 << 20
+	// maxModelDiscoveryPages 是模型发现翻页的安全上限。OpenAI /models 默认
+	// 每页 20 个、翻页每页 100 个，20 页可覆盖 2000+ 模型；同时防止
+	// has_more 恒为 true 的异常上游导致死循环。
+	maxModelDiscoveryPages = 20
 )
 
 // providerBreaker is a per-provider three-state circuit breaker.
@@ -171,8 +176,12 @@ func maxTokensFallback(req CompletionRequest) CompletionRequest {
 }
 
 // openaiModelsResponse is the JSON body from GET /models (OpenAI-compatible).
+// has_more/last_id 来自 OpenAI 官方分页契约；不返回分页字段的兼容网关
+// 两者为零值，翻页自然止于第一页，行为与分页改造前一致。
 type openaiModelsResponse struct {
-	Data []openaiModelItem `json:"data"`
+	Data    []openaiModelItem `json:"data"`
+	HasMore bool              `json:"has_more"`
+	LastID  string            `json:"last_id"`
 }
 
 type openaiModelItem struct {
@@ -663,10 +672,37 @@ func (c *OpenAICompatClient) ListModels(ctx context.Context) ([]DiscoveredModel,
 	return out, nil
 }
 
-// fetchModelNames calls GET /models and returns the raw name list.
+// fetchModelNames calls GET /models and returns the raw name list, following
+// OpenAI's has_more/last_id pagination. The first page omits query params for
+// maximum compatibility with strict OpenAI-compat gateways; only a page that
+// explicitly reports has_more=true and a non-empty last_id triggers follow-ups.
 func (c *OpenAICompatClient) fetchModelNames(ctx context.Context) ([]string, error) {
-	url := strings.TrimSuffix(c.cfg.BaseURL, "/") + "/models"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	base := strings.TrimSuffix(c.cfg.BaseURL, "/") + "/models"
+	var names []string
+	after := ""
+	for page := 0; page < maxModelDiscoveryPages; page++ {
+		u := base
+		if after != "" {
+			u = base + "?limit=100&after=" + url.QueryEscape(after)
+		}
+		out, err := c.fetchModelPage(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range out.Data {
+			names = append(names, m.ID)
+		}
+		if !out.HasMore || out.LastID == "" {
+			break
+		}
+		after = out.LastID
+	}
+	return names, nil
+}
+
+// fetchModelPage fetches and decodes a single page from GET /models.
+func (c *OpenAICompatClient) fetchModelPage(ctx context.Context, u string) (*openaiModelsResponse, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("%s: build models request: %w", c.cfg.Name, err)
 	}
@@ -687,22 +723,17 @@ func (c *OpenAICompatClient) fetchModelNames(ctx context.Context) ([]string, err
 		return nil, fmt.Errorf("%s: close models response: %w", c.cfg.Name, closeErr)
 	}
 	if len(raw) > maxModelListResponseBytes {
-		return nil, fmt.Errorf("%s: GET %s response exceeds size limit", c.cfg.Name, url)
+		return nil, fmt.Errorf("%s: GET %s response exceeds size limit", c.cfg.Name, u)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s: GET %s returned %d: check API key and base URL",
-			c.cfg.Name, url, resp.StatusCode)
+			c.cfg.Name, u, resp.StatusCode)
 	}
-
 	var out openaiModelsResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, fmt.Errorf("%s: decode models: %w", c.cfg.Name, err)
 	}
-	models := make([]string, len(out.Data))
-	for i, m := range out.Data {
-		models[i] = m.ID
-	}
-	return models, nil
+	return &out, nil
 }
 
 // ---------------------------------------------------------------------------

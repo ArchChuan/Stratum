@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -108,8 +109,12 @@ type anthropicSSEUsage struct {
 }
 
 // anthropicModelsResponse is the JSON body from GET /v1/models.
+// has_more/next_page_token 来自 Anthropic 分页契约；不返回的网关两者为零值，
+// 翻页自然止于第一页，行为与分页改造前一致。
 type anthropicModelsResponse struct {
-	Data []anthropicModelItem `json:"data"`
+	Data          []anthropicModelItem `json:"data"`
+	HasMore       bool                 `json:"has_more"`
+	NextPageToken string               `json:"next_page_token"`
 }
 
 type anthropicModelItem struct {
@@ -526,10 +531,40 @@ func (c *AnthropicClient) Health(ctx context.Context) error {
 	return err
 }
 
-// ListModels discovers models via GET /v1/models, including context_window metadata.
+// ListModels discovers models via GET /v1/models, including context_window
+// metadata, following Anthropic's has_more/next_page_token pagination. The
+// first page omits query params for compatibility; only a page explicitly
+// reporting has_more=true and a non-empty token triggers follow-ups.
 func (c *AnthropicClient) ListModels(ctx context.Context) ([]DiscoveredModel, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		strings.TrimSuffix(c.cfg.BaseURL, "/")+"/v1/models", nil)
+	base := strings.TrimSuffix(c.cfg.BaseURL, "/") + "/v1/models"
+	var models []DiscoveredModel
+	pageToken := ""
+	for page := 0; page < maxModelDiscoveryPages; page++ {
+		u := base
+		if pageToken != "" {
+			u = base + "?limit=100&page_token=" + url.QueryEscape(pageToken)
+		}
+		out, err := c.fetchModelPage(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range out.Data {
+			models = append(models, DiscoveredModel{
+				Name:          m.ID,
+				ContextWindow: m.ContextWindow,
+			})
+		}
+		if !out.HasMore || out.NextPageToken == "" {
+			break
+		}
+		pageToken = out.NextPageToken
+	}
+	return models, nil
+}
+
+// fetchModelPage fetches and decodes a single page from GET /v1/models.
+func (c *AnthropicClient) fetchModelPage(ctx context.Context, u string) (*anthropicModelsResponse, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("%s: build models request: %w", c.cfg.Name, err)
 	}
@@ -539,31 +574,24 @@ func (c *AnthropicClient) ListModels(ctx context.Context) ([]DiscoveredModel, er
 	if err != nil {
 		return nil, fmt.Errorf("%s: do models request: %w", c.cfg.Name, err)
 	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("%s: read models body: %w", c.cfg.Name, err)
+	raw, readErr := io.ReadAll(resp.Body)
+	closeErr := resp.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("%s: read models body: %w", c.cfg.Name, readErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("%s: close models response: %w", c.cfg.Name, closeErr)
 	}
 	if resp.StatusCode != http.StatusOK {
 		// 同 retryUntilOK：错误链不进完整 URL，内部 BaseURL 不出现在对外错误正文。
 		return nil, fmt.Errorf("%s: GET %s 返回 %d，请检查 provider kind 与 Base URL 是否正确（当前 kind=anthropic）: %w",
 			c.cfg.Name, "/v1/models", resp.StatusCode, domain.ErrUpstreamRequestFailed)
 	}
-
 	var out anthropicModelsResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, fmt.Errorf("%s: decode models: %w", c.cfg.Name, err)
 	}
-
-	models := make([]DiscoveredModel, len(out.Data))
-	for i, m := range out.Data {
-		models[i] = DiscoveredModel{
-			Name:          m.ID,
-			ContextWindow: m.ContextWindow,
-		}
-	}
-	return models, nil
+	return &out, nil
 }
 
 // setHeaders sets Anthropic-specific HTTP headers.
