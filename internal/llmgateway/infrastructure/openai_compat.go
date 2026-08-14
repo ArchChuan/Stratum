@@ -201,7 +201,8 @@ type ProviderConfig struct {
 	APIKey         string
 	HealthModel    string
 	Models         []string
-	EmbedBatchSize int // max texts per embedding request; 0 = use default (100)
+	ModelCatalog   []string // 发现兜底目录：ListModels 时与 GET /models 结果取并集；空 = 行为不变
+	EmbedBatchSize int      // max texts per embedding request; 0 = use default (100)
 }
 
 // OpenAICompatClient is an OpenAI-compatible provider that implements
@@ -734,10 +735,15 @@ func (c *OpenAICompatClient) Models() []string {
 }
 
 // ListModels discovers models via GET /models with static context-window fallback.
+// 智谱等网关的 /models 只返回 key 已开通的对话模型，视觉/嵌入/推理等实际可调用
+// 模型不在列表；cfg.ModelCatalog 提供目录兜底，与动态结果取并集（动态在前、目录补漏）。
 func (c *OpenAICompatClient) ListModels(ctx context.Context) ([]DiscoveredModel, error) {
 	names, err := c.fetchModelNames(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if len(c.cfg.ModelCatalog) > 0 {
+		names = mergeModelCatalog(names, c.cfg.ModelCatalog)
 	}
 	out := make([]DiscoveredModel, len(names))
 	for i, name := range names {
@@ -745,6 +751,28 @@ func (c *OpenAICompatClient) ListModels(ctx context.Context) ([]DiscoveredModel,
 		out[i] = DiscoveredModel{Name: name, ContextWindow: ctxWin, MaxOutputTokens: maxOut}
 	}
 	return out, nil
+}
+
+// mergeModelCatalog 将静态目录补漏进动态发现的模型列表：动态结果在前，
+// 目录中未出现的模型追加在后，保持顺序稳定。
+func mergeModelCatalog(discovered, catalog []string) []string {
+	seen := make(map[string]struct{}, len(discovered)+len(catalog))
+	merged := make([]string, 0, len(discovered)+len(catalog))
+	for _, name := range discovered {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		merged = append(merged, name)
+	}
+	for _, name := range catalog {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		merged = append(merged, name)
+	}
+	return merged
 }
 
 // fetchModelNames calls GET /models and returns the raw name list, following

@@ -286,6 +286,30 @@ func TestCompleteStream_NonJSONBodyNotInError(t *testing.T) {
 	require.Contains(t, err.Error(), "status 400")
 }
 
+// TestOpenAICompatClient_ListModels_mergesCatalog 验证智谱目录兜底：
+// /models 动态结果在前，目录补漏，去重且保序。
+func TestOpenAICompatClient_ListModels_mergesCatalog(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"data":[{"id":"glm-4.5"},{"id":"glm-4.6v"}]}`)
+	}))
+	defer srv.Close()
+
+	client := NewOpenAICompatClient(ProviderConfig{
+		Name:         "test-zhipu",
+		BaseURL:      srv.URL,
+		APIKey:       "sk-test",
+		ModelCatalog: []string{"glm-4.5", "glm-4.6v", "glm-5v-turbo", "embedding-3"},
+	}, zap.NewNop())
+	models, err := client.ListModels(context.Background())
+	require.NoError(t, err)
+
+	names := make([]string, len(models))
+	for i, m := range models {
+		names[i] = m.Name
+	}
+	require.Equal(t, []string{"glm-4.5", "glm-4.6v", "glm-5v-turbo", "embedding-3"}, names)
+}
+
 // TestErrorMessageFromBody 验证结构化 error.message 提取边界：仅 JSON error
 // 对象的非空 message 返回（截断+脱敏）；string error、非 JSON、空 message、
 // 空 body 均返回空串（防止任意上游文本进入错误正文）。
