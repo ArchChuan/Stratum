@@ -28,15 +28,15 @@ func TestDefinitionServiceRejectsPlatformManagedSkillRef(t *testing.T) {
 	svc := application.NewDefinitionService(store, store, idgen.NewID)
 	svc.SetSkillRefClassifier(builtinClassifier{})
 
-	_, err := svc.Create(context.Background(), "t1", application.CreateDefinitionCommand{Name: "Bad", Spec: skillRefSpec("builtin:platform-guide")})
+	_, err := svc.Create(context.Background(), "t1", application.CreateDefinitionCommand{Name: "Bad", Spec: skillRefSpec("builtin:platform-guide")}, "u-1")
 	require.ErrorIs(t, err, domain.ErrPlatformManagedSkill)
 
 	// 普通 skill 引用 Create/Update 均可保存。
-	def, err := svc.Create(context.Background(), "t1", application.CreateDefinitionCommand{Name: "Good", Spec: skillRefSpec("custom-skill")})
+	def, err := svc.Create(context.Background(), "t1", application.CreateDefinitionCommand{Name: "Good", Spec: skillRefSpec("custom-skill")}, "u-1")
 	require.NoError(t, err)
 	_, err = svc.Update(context.Background(), "t1", def.ID, application.UpdateDefinitionCommand{
 		Name: "Bad2", Spec: skillRefSpec("builtin:platform-guide"), ExpectedRevision: def.Revision,
-	})
+	}, "u-1")
 	require.ErrorIs(t, err, domain.ErrPlatformManagedSkill)
 }
 
@@ -46,6 +46,6 @@ func TestDefinitionServiceRejectsPlatformManagedSkillRef(t *testing.T) {
 func TestDefinitionServiceSkillRefClassifierNotWiredFailClosed(t *testing.T) {
 	store, idgen := newMemoryStore(), &ids{}
 	svc := application.NewDefinitionService(store, store, idgen.NewID)
-	_, err := svc.Create(context.Background(), "t1", application.CreateDefinitionCommand{Name: "No", Spec: skillRefSpec("custom-skill")})
+	_, err := svc.Create(context.Background(), "t1", application.CreateDefinitionCommand{Name: "No", Spec: skillRefSpec("custom-skill")}, "u-1")
 	require.ErrorIs(t, err, domain.ErrPlatformManagedSkill)
 }

@@ -296,7 +296,7 @@ func (contractProviderRuntime) Health(_ context.Context, _ llmdomain.Provider) e
 
 type contractDefRepo struct{}
 
-func (contractDefRepo) CreateDefinition(_ context.Context, _ string, _ *workflowdomain.Definition) error {
+func (contractDefRepo) CreateDefinition(_ context.Context, _ string, _ *workflowdomain.Definition, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (contractDefRepo) GetDefinition(_ context.Context, _ string, _ string) (*workflowdomain.Definition, error) {
@@ -308,17 +308,19 @@ func (contractDefRepo) GetDefinition(_ context.Context, _ string, _ string) (*wo
 		UpdatedAt:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}, nil
 }
-func (contractDefRepo) UpdateDefinition(_ context.Context, _ string, _ *workflowdomain.Definition, _ int64) error {
+func (contractDefRepo) UpdateDefinition(_ context.Context, _ string, _ *workflowdomain.Definition, _ int64, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (contractDefRepo) DeleteDefinition(_ context.Context, _ string, _ string) error { return nil }
+func (contractDefRepo) DeleteDefinition(_ context.Context, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (contractDefRepo) ListDefinitions(_ context.Context, _ string, _ workflowport.DefinitionListQuery) ([]workflowdomain.Definition, int, error) {
 	return nil, 0, nil
 }
 
 type contractVersionRepo struct{}
 
-func (contractVersionRepo) CreateVersion(_ context.Context, _ string, _ *workflowdomain.Version) error {
+func (contractVersionRepo) CreateVersion(_ context.Context, _ string, _ *workflowdomain.Version, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (contractVersionRepo) GetVersion(_ context.Context, _ string, _ string) (*workflowdomain.Version, error) {

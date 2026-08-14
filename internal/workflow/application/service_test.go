@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/workflow/application"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain/port"
@@ -22,10 +23,12 @@ type memoryStore struct {
 	versions    map[string]*domain.Version
 	runs        map[string]*domain.Run
 	attempts    map[string][]domain.NodeAttempt
+	auditEvents []*auditdomain.ResourceChangeAuditEvent
 }
 
-func (s *memoryStore) DeleteDefinition(_ context.Context, _, id string) error {
+func (s *memoryStore) DeleteDefinition(_ context.Context, _, id string, ev *auditdomain.ResourceChangeAuditEvent) error {
 	delete(s.definitions, id)
+	s.auditEvents = append(s.auditEvents, ev)
 	return nil
 }
 
@@ -33,8 +36,9 @@ func newMemoryStore() *memoryStore {
 	return &memoryStore{definitions: map[string]*domain.Definition{}, versions: map[string]*domain.Version{}, runs: map[string]*domain.Run{}, attempts: map[string][]domain.NodeAttempt{}}
 }
 
-func (s *memoryStore) CreateDefinition(_ context.Context, _ string, definition *domain.Definition) error {
+func (s *memoryStore) CreateDefinition(_ context.Context, _ string, definition *domain.Definition, ev *auditdomain.ResourceChangeAuditEvent) error {
 	s.definitions[definition.ID] = definition
+	s.auditEvents = append(s.auditEvents, ev)
 	return nil
 }
 func (s *memoryStore) GetDefinition(_ context.Context, _, id string) (*domain.Definition, error) {
@@ -45,15 +49,17 @@ func (s *memoryStore) GetDefinition(_ context.Context, _, id string) (*domain.De
 	copy := *row
 	return &copy, nil
 }
-func (s *memoryStore) UpdateDefinition(_ context.Context, _ string, definition *domain.Definition, expected int64) error {
+func (s *memoryStore) UpdateDefinition(_ context.Context, _ string, definition *domain.Definition, expected int64, ev *auditdomain.ResourceChangeAuditEvent) error {
 	if s.definitions[definition.ID].Revision != expected {
 		return domain.ErrRevisionConflict
 	}
 	s.definitions[definition.ID] = definition
+	s.auditEvents = append(s.auditEvents, ev)
 	return nil
 }
-func (s *memoryStore) CreateVersion(_ context.Context, _ string, version *domain.Version) error {
+func (s *memoryStore) CreateVersion(_ context.Context, _ string, version *domain.Version, ev *auditdomain.ResourceChangeAuditEvent) error {
 	s.versions[version.ID] = version
+	s.auditEvents = append(s.auditEvents, ev)
 	return nil
 }
 func (s *memoryStore) GetVersion(_ context.Context, _, id string) (*domain.Version, error) {
@@ -148,9 +154,9 @@ func workflowSpec() domain.Spec {
 func TestDefinitionServicePublishesVersion(t *testing.T) {
 	store, idgen := newMemoryStore(), &ids{}
 	svc := application.NewDefinitionService(store, store, idgen.NewID)
-	def, err := svc.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()})
+	def, err := svc.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
 	require.NoError(t, err)
-	version, err := svc.Publish(context.Background(), "tenant-1", def.ID)
+	version, err := svc.Publish(context.Background(), "tenant-1", def.ID, "u-1")
 	require.NoError(t, err)
 	require.Equal(t, def.ID, version.DefinitionID)
 	require.Equal(t, int64(1), version.Number)
@@ -161,10 +167,10 @@ func TestDefinitionServiceDeletesDraft(t *testing.T) {
 	svc := application.NewDefinitionService(store, store, idgen.NewID)
 	definition, err := svc.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{
 		Name: "Disposable", Spec: workflowSpec(),
-	})
+	}, "u-1")
 	require.NoError(t, err)
 
-	require.NoError(t, svc.Delete(context.Background(), "tenant-1", definition.ID))
+	require.NoError(t, svc.Delete(context.Background(), "tenant-1", definition.ID, "u-1"))
 	_, exists := store.definitions[definition.ID]
 	require.False(t, exists)
 }
@@ -172,9 +178,9 @@ func TestDefinitionServiceDeletesDraft(t *testing.T) {
 func TestRunServiceIdempotencyAndSequentialExecution(t *testing.T) {
 	store, idgen, agents := newMemoryStore(), &ids{}, &agentStub{}
 	defs := application.NewDefinitionService(store, store, idgen.NewID)
-	def, err := defs.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()})
+	def, err := defs.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
 	require.NoError(t, err)
-	version, err := defs.Publish(context.Background(), "tenant-1", def.ID)
+	version, err := defs.Publish(context.Background(), "tenant-1", def.ID, "u-1")
 	require.NoError(t, err)
 	runs := application.NewRunService(store, store, agents, idgen.NewID)
 
@@ -201,8 +207,8 @@ func TestRunServiceIdempotencyAndSequentialExecution(t *testing.T) {
 func TestRunServiceStopsAfterUpstreamFailure(t *testing.T) {
 	store, idgen, agents := newMemoryStore(), &ids{}, &agentStub{fail: "agent-1"}
 	defs := application.NewDefinitionService(store, store, idgen.NewID)
-	def, _ := defs.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()})
-	version, _ := defs.Publish(context.Background(), "tenant-1", def.ID)
+	def, _ := defs.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
+	version, _ := defs.Publish(context.Background(), "tenant-1", def.ID, "u-1")
 	runs := application.NewRunService(store, store, agents, idgen.NewID)
 	run, _, err := runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"task": "hello"}, IdempotencyKey: "failure"})
 	require.NoError(t, err)
@@ -217,8 +223,8 @@ func TestRunServiceStopsAfterUpstreamFailure(t *testing.T) {
 func TestRunServiceStartAsyncOnlyPersistsQueuedRun(t *testing.T) {
 	store, idgen, agents := newMemoryStore(), &ids{}, &agentStub{}
 	defs := application.NewDefinitionService(store, store, idgen.NewID)
-	def, _ := defs.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()})
-	version, _ := defs.Publish(context.Background(), "tenant-1", def.ID)
+	def, _ := defs.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
+	version, _ := defs.Publish(context.Background(), "tenant-1", def.ID, "u-1")
 	runs := application.NewRunService(store, store, agents, idgen.NewID)
 
 	run, created, err := runs.StartAsync(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"task": "hello"}, IdempotencyKey: "async", CreatedBy: "user-a"})
@@ -263,9 +269,9 @@ func TestRunServiceFailRunPropagatesCheckpointFailure(t *testing.T) {
 	agentErr := errors.New("agent two exploded")
 	agents := &scriptedFailAgent{err: agentErr}
 	defs := application.NewDefinitionService(store, store, idgen.NewID)
-	def, err := defs.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()})
+	def, err := defs.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
 	require.NoError(t, err)
-	version, err := defs.Publish(context.Background(), "tenant-1", def.ID)
+	version, err := defs.Publish(context.Background(), "tenant-1", def.ID, "u-1")
 	require.NoError(t, err)
 	core, observed := observer.New(zapcore.ErrorLevel)
 	runs := application.NewRunServiceWithRegistry(store, persistStore, agents, idgen.NewID, zap.New(core))
@@ -299,4 +305,21 @@ func (s *scriptedFailAgent) Execute(_ context.Context, request port.NodeExecutio
 		Output:  "output-" + request.Node.AgentID,
 		TraceID: "trace-" + request.Node.AgentID,
 	}, nil
+}
+
+func TestDefinitionService_Create_WritesChangeAudit(t *testing.T) {
+	store := newMemoryStore()
+	svc := application.NewDefinitionService(store, store, func() string { return "def-1" })
+	created, err := svc.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{
+		Name: "n", Description: "d", Spec: workflowSpec(),
+	}, "u-1")
+	require.NoError(t, err)
+	require.Equal(t, "def-1", created.ID)
+	require.Len(t, store.auditEvents, 1)
+	ev := store.auditEvents[0]
+	require.Equal(t, auditdomain.ResourceKindWorkflow, ev.ResourceKind)
+	require.Equal(t, "def-1", ev.ResourceID)
+	require.Equal(t, auditdomain.ChangeOpCreate, ev.Operation)
+	require.Equal(t, "u-1", ev.ActorID)
+	require.JSONEq(t, `{"id":"def-1","name":"n","description":"d"}`, string(ev.After))
 }

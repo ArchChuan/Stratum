@@ -249,9 +249,9 @@ func createPublishedRun(t *testing.T, store *dagStore, registry port.NodeExecuto
 		InputSchema: domain.InputSchema{TaskLabel: "任务", Fields: []domain.InputField{{
 			Key: "route", Label: "路由", Type: domain.InputFieldBoolean,
 		}}},
-	})
+	}, "u-1")
 	require.NoError(t, err)
-	version, err := definitions.Publish(context.Background(), "tenant-1", definition.ID)
+	version, err := definitions.Publish(context.Background(), "tenant-1", definition.ID, "u-1")
 	require.NoError(t, err)
 	runs := application.NewRunServiceWithRegistry(store, store, registry, ids.NewID, zap.NewNop())
 	run, _, err := runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"task": "执行 DAG", "route": true}, IdempotencyKey: "dag-key"})
@@ -625,9 +625,9 @@ func TestRunStartAndRecoveryUseDistinctAtomicEvents(t *testing.T) {
 	store := &startCheckpointStore{dagStore: base}
 	ids := &ids{}
 	definitions := application.NewDefinitionService(store, store, ids.NewID)
-	definition, err := definitions.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Events", Spec: domain.Spec{Nodes: []domain.Node{{ID: "one", Type: domain.NodeTypeAgent, AgentID: "a"}}}})
+	definition, err := definitions.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Events", Spec: domain.Spec{Nodes: []domain.Node{{ID: "one", Type: domain.NodeTypeAgent, AgentID: "a"}}}}, "u-1")
 	require.NoError(t, err)
-	version, err := definitions.Publish(context.Background(), "tenant-1", definition.ID)
+	version, err := definitions.Publish(context.Background(), "tenant-1", definition.ID, "u-1")
 	require.NoError(t, err)
 	runs := application.NewRunServiceWithRegistry(store, store, &scriptedRegistry{}, ids.NewID, zap.NewNop())
 	run, _, err := runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"task": "启动"}, IdempotencyKey: "start-event"})

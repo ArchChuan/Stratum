@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -69,7 +70,7 @@ func (s *DefinitionService) validateSkillRefs(spec domain.Spec) error {
 	return nil
 }
 
-func (s *DefinitionService) Create(ctx context.Context, tenantID string, cmd CreateDefinitionCommand) (*domain.Definition, error) {
+func (s *DefinitionService) Create(ctx context.Context, tenantID string, cmd CreateDefinitionCommand, actorID string) (*domain.Definition, error) {
 	definition, err := domain.NewDefinition(s.newID(), cmd.Name, cmd.Description, cmd.Spec, normalizeInputSchema(cmd.InputSchema))
 	if err != nil {
 		return nil, err
@@ -77,31 +78,48 @@ func (s *DefinitionService) Create(ctx context.Context, tenantID string, cmd Cre
 	if err := s.validateSkillRefs(cmd.Spec); err != nil {
 		return nil, err
 	}
-	if err := s.definitions.CreateDefinition(ctx, tenantID, definition); err != nil {
+	ev, err := newWorkflowChangeAudit(definition.ID, auditdomain.ChangeOpCreate, actorID, nil, workflowSafeProjection(definition))
+	if err != nil {
+		return nil, err
+	}
+	if err := s.definitions.CreateDefinition(ctx, tenantID, definition, ev); err != nil {
 		return nil, err
 	}
 	return definition, nil
 }
 
-func (s *DefinitionService) Update(ctx context.Context, tenantID, id string, cmd UpdateDefinitionCommand) (*domain.Definition, error) {
+func (s *DefinitionService) Update(ctx context.Context, tenantID, id string, cmd UpdateDefinitionCommand, actorID string) (*domain.Definition, error) {
 	definition, err := s.definitions.GetDefinition(ctx, tenantID, id)
 	if err != nil {
 		return nil, err
 	}
+	before := workflowSafeProjection(definition)
 	if err := definition.UpdateDraft(cmd.Name, cmd.Description, cmd.Spec, cmd.ExpectedRevision, normalizeInputSchema(cmd.InputSchema)); err != nil {
 		return nil, err
 	}
 	if err := s.validateSkillRefs(cmd.Spec); err != nil {
 		return nil, err
 	}
-	if err := s.definitions.UpdateDefinition(ctx, tenantID, definition, cmd.ExpectedRevision); err != nil {
+	ev, err := newWorkflowChangeAudit(id, auditdomain.ChangeOpUpdate, actorID, before, workflowSafeProjection(definition))
+	if err != nil {
+		return nil, err
+	}
+	if err := s.definitions.UpdateDefinition(ctx, tenantID, definition, cmd.ExpectedRevision, ev); err != nil {
 		return nil, err
 	}
 	return definition, nil
 }
 
-func (s *DefinitionService) Delete(ctx context.Context, tenantID, id string) error {
-	return s.definitions.DeleteDefinition(ctx, tenantID, id)
+func (s *DefinitionService) Delete(ctx context.Context, tenantID, id string, actorID string) error {
+	definition, err := s.definitions.GetDefinition(ctx, tenantID, id)
+	if err != nil {
+		return err
+	}
+	ev, err := newWorkflowChangeAudit(id, auditdomain.ChangeOpDelete, actorID, workflowSafeProjection(definition), nil)
+	if err != nil {
+		return err
+	}
+	return s.definitions.DeleteDefinition(ctx, tenantID, id, ev)
 }
 
 func normalizeInputSchema(schema domain.InputSchema) domain.InputSchema {
@@ -127,13 +145,18 @@ func (s *DefinitionService) GetVersion(ctx context.Context, tenantID, id string)
 	return s.versions.GetVersion(ctx, tenantID, id)
 }
 
-func (s *DefinitionService) Publish(ctx context.Context, tenantID, id string) (*domain.Version, error) {
+func (s *DefinitionService) Publish(ctx context.Context, tenantID, id string, actorID string) (*domain.Version, error) {
 	definition, err := s.definitions.GetDefinition(ctx, tenantID, id)
 	if err != nil {
 		return nil, err
 	}
+	projection := workflowSafeProjection(definition)
+	ev, err := newWorkflowChangeAudit(id, auditdomain.ChangeOpPublish, actorID, projection, projection)
+	if err != nil {
+		return nil, err
+	}
 	if publisher, ok := s.versions.(port.AtomicVersionPublisher); ok {
-		return publisher.CreateNextVersion(ctx, tenantID, definition, s.newID())
+		return publisher.CreateNextVersion(ctx, tenantID, definition, s.newID(), ev)
 	}
 	number, err := s.versions.NextVersionNumber(ctx, tenantID, id)
 	if err != nil {
@@ -143,7 +166,7 @@ func (s *DefinitionService) Publish(ctx context.Context, tenantID, id string) (*
 	if err != nil {
 		return nil, err
 	}
-	if err := s.versions.CreateVersion(ctx, tenantID, version); err != nil {
+	if err := s.versions.CreateVersion(ctx, tenantID, version, ev); err != nil {
 		return nil, err
 	}
 	return version, nil
