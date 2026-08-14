@@ -52,7 +52,7 @@ type memoryLLMAdapter struct {
 	tenantID string
 }
 
-func (a memoryLLMAdapter) Complete(ctx context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+func (a memoryLLMAdapter) Complete(ctx context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 	if a.client == nil {
 		return nil, fmt.Errorf("memory llm adapter: client is nil")
 	}
@@ -62,30 +62,14 @@ func (a memoryLLMAdapter) Complete(ctx context.Context, req *memport.CompletionR
 	if a.tenantID != "" {
 		ctx = reqctx.WithTenantID(ctx, a.tenantID)
 	}
-	messages := make([]llmdomain.Message, len(req.Messages))
-	for i, message := range req.Messages {
-		messages[i] = llmdomain.Message{Role: message.Role, Content: message.Content}
-	}
-	response, err := a.client.Complete(ctx, &llmdomain.CompletionRequest{
-		Model: req.Model, Messages: messages, Temperature: float32(req.Temperature), MaxTokens: req.MaxTokens,
-		ResponseFormat: toLLMResponseFormat(req.ResponseFormat),
-	})
+	resp, err := a.client.Complete(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	if response == nil {
+	if resp == nil {
 		return nil, fmt.Errorf("memory llm adapter: provider returned nil response")
 	}
-	return &memport.CompletionResponse{Content: response.Content, CompletionTokens: response.Usage.CompletionTokens}, nil
-}
-
-// toLLMResponseFormat 把 memport 的本地 ResponseFormat 适配到 llmgateway domain
-// （DDD：memport 不能 import llmgateway domain，此转换只在组合根做一次）。
-func toLLMResponseFormat(rf *memport.ResponseFormat) *llmdomain.ResponseFormat {
-	if rf == nil {
-		return nil
-	}
-	return &llmdomain.ResponseFormat{Type: rf.Type}
+	return resp, nil
 }
 
 // agentResourceParamResolver adapts the parameters resolver + agent repo to

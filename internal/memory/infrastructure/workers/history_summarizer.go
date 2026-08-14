@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
+	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 )
 
 // summarizePrefix 是周期总结指令前缀（现状硬编码值，mechanism 移除后为唯一权威）。
@@ -46,13 +46,7 @@ func (s *LLMHistorySummarizer) SummarizeHistory(ctx context.Context, items []str
 	if client == nil {
 		return "", fmt.Errorf("history llm unavailable")
 	}
-	prompt := summarizePrefix + strings.Join(items, "\n")
-	resp, err := client.Complete(ctx, &memport.CompletionRequest{
-		// 总结模型为空：交由 llmgateway client 默认解析（pre-refactor 行为）。
-		Model:       "",
-		Messages:    []memport.CompletionMessage{{Role: "user", Content: prompt}},
-		Temperature: .2,
-	})
+	resp, err := client.Complete(ctx, llmdomain.NewSummarizeRequest("", summarizePrefix, items, 0))
 	if err != nil {
 		return "", err
 	}

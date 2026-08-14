@@ -35,21 +35,21 @@ func inUnitInterval(v float64) bool {
 // 避免调用方把 typed-nil 误判为失败（闭包转 error 接口后 != nil 恒真）。
 func (f *ExtractedFact) Validate() error {
 	if f == nil {
-		return &ValidationError{Location: "fact", Field: "fact", Reason: "fact is nil"}
+		return &ValidationError{Location: "fact", FieldName: "fact", Reason: "fact is nil"}
 	}
 	if strings.TrimSpace(f.Content) == "" {
-		return &ValidationError{Location: "fact", Field: "content", Reason: "content must not be empty"}
+		return &ValidationError{Location: "fact", FieldName: "content", Reason: "content must not be empty"}
 	}
 	if !inUnitInterval(f.Importance) {
-		return &ValidationError{Location: "fact", Field: "importance",
+		return &ValidationError{Location: "fact", FieldName: "importance",
 			Value: strconv.FormatFloat(f.Importance, 'g', -1, 64), Reason: "importance must be in [0,1]"}
 	}
 	if !factTypeAllowSet[f.FactType] {
-		return &ValidationError{Location: "fact", Field: "fact_type",
+		return &ValidationError{Location: "fact", FieldName: "fact_type",
 			Value: f.FactType, Reason: "fact_type must be one of preference|skill|event|state|relationship|other"}
 	}
 	if f.Confidence != nil && !inUnitInterval(*f.Confidence) {
-		return &ValidationError{Location: "fact", Field: "confidence",
+		return &ValidationError{Location: "fact", FieldName: "confidence",
 			Value: strconv.FormatFloat(*f.Confidence, 'g', -1, 64), Reason: "confidence must be in [0,1]"}
 	}
 	return nil
@@ -58,10 +58,10 @@ func (f *ExtractedFact) Validate() error {
 // Validate 校验 supersede 判定：reason 长度 ≤ 上限（结构完整性）。
 func (j *SupersedeJudgment) Validate() error {
 	if j == nil {
-		return &ValidationError{Location: "judgment", Field: "judgment", Reason: "judgment is nil"}
+		return &ValidationError{Location: "judgment", FieldName: "judgment", Reason: "judgment is nil"}
 	}
 	if utf8.RuneCountInString(j.Reason) > maxSupersedeReasonRunes {
-		return &ValidationError{Location: "judgment", Field: "reason",
+		return &ValidationError{Location: "judgment", FieldName: "reason",
 			Reason: fmt.Sprintf("reason exceeds %d runes", maxSupersedeReasonRunes)}
 	}
 	return nil

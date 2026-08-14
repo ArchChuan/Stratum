@@ -9,7 +9,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/pkg/constants"
 
-	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
+	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 )
 
 type extractorLLMStub struct {
@@ -18,10 +18,10 @@ type extractorLLMStub struct {
 	model   string
 }
 
-func (s *extractorLLMStub) Complete(_ context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+func (s *extractorLLMStub) Complete(_ context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 	s.prompt = req.Messages[0].Content
 	s.model = req.Model
-	return &memport.CompletionResponse{Content: s.content}, nil
+	return &llmdomain.CompletionResponse{Content: s.content}, nil
 }
 
 func TestLLMExtractorDecodesFactTypeAndExplicitZeroConfidence(t *testing.T) {

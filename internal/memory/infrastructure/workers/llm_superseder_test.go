@@ -10,26 +10,26 @@ import (
 	"strings"
 	"testing"
 
-	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
+	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/workers"
 	"github.com/stretchr/testify/require"
 )
 
-type completionClientFunc func(context.Context, *memport.CompletionRequest) (*memport.CompletionResponse, error)
+type completionClientFunc func(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error)
 
-func (f completionClientFunc) Complete(ctx context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+func (f completionClientFunc) Complete(ctx context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 	return f(ctx, req)
 }
 
 func TestResolvingLLMSupersederUsesCurrentTenantClientOnEveryCall(t *testing.T) {
 	var resolved, calledA, calledB int
-	clientA := completionClientFunc(func(context.Context, *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+	clientA := completionClientFunc(func(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 		calledA++
-		return &memport.CompletionResponse{Content: `{"supersedes":false,"reason":"a"}`}, nil
+		return &llmdomain.CompletionResponse{Content: `{"supersedes":false,"reason":"a"}`}, nil
 	})
-	clientB := completionClientFunc(func(context.Context, *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+	clientB := completionClientFunc(func(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 		calledB++
-		return &memport.CompletionResponse{Content: `{"supersedes":true,"reason":"b"}`}, nil
+		return &llmdomain.CompletionResponse{Content: `{"supersedes":true,"reason":"b"}`}, nil
 	})
 	resolver := func(context.Context, string) (workers.TenantLLMClient, error) {
 		resolved++
@@ -65,10 +65,10 @@ func TestResolvingLLMSupersederRoutesThroughNewProviderGateway(t *testing.T) {
 	zhipuServer := completionServer(&zhipuCalls, true)
 	defer zhipuServer.Close()
 
-	clientA := completionClientFunc(func(ctx context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+	clientA := completionClientFunc(func(ctx context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 		return callCompletionServer(ctx, qwenServer.URL, req)
 	})
-	clientB := completionClientFunc(func(ctx context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+	clientB := completionClientFunc(func(ctx context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 		return callCompletionServer(ctx, zhipuServer.URL, req)
 	})
 	resolved := 0
@@ -90,7 +90,7 @@ func TestResolvingLLMSupersederRoutesThroughNewProviderGateway(t *testing.T) {
 	require.Equal(t, 1, zhipuCalls)
 }
 
-func callCompletionServer(ctx context.Context, baseURL string, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+func callCompletionServer(ctx context.Context, baseURL string, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 	body := map[string]interface{}{
 		"model":    req.Model,
 		"messages": []map[string]string{},
@@ -115,15 +115,15 @@ func callCompletionServer(ctx context.Context, baseURL string, req *memport.Comp
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
-	return &memport.CompletionResponse{Content: result.Choices[0].Message.Content}, nil
+	return &llmdomain.CompletionResponse{Content: result.Choices[0].Message.Content}, nil
 }
 
 func TestResolvingLLMSupersederDoesNotReuseClientAfterResolverFailure(t *testing.T) {
 	available := true
 	calls := 0
-	client := completionClientFunc(func(context.Context, *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+	client := completionClientFunc(func(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 		calls++
-		return &memport.CompletionResponse{Content: `{"supersedes":false,"reason":"ok"}`}, nil
+		return &llmdomain.CompletionResponse{Content: `{"supersedes":false,"reason":"ok"}`}, nil
 	})
 	resolver := func(context.Context, string) (workers.TenantLLMClient, error) {
 		if !available {
@@ -163,9 +163,9 @@ func TestResolvingLLMSupersederPropagatesContextCancellationBeforeClientCall(t *
 // 移除后为唯一权威），%s 占位照常渲染。
 func TestLLMSupersederUsesFallbackJudgePrompt(t *testing.T) {
 	var got string
-	client := completionClientFunc(func(_ context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+	client := completionClientFunc(func(_ context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 		got = req.Messages[0].Content
-		return &memport.CompletionResponse{Content: `{"supersedes":false,"reason":"ok"}`}, nil
+		return &llmdomain.CompletionResponse{Content: `{"supersedes":false,"reason":"ok"}`}, nil
 	})
 	judge := workers.NewLLMSuperseder(client)
 
@@ -181,9 +181,9 @@ func TestLLMSupersederUsesFallbackJudgePrompt(t *testing.T) {
 // 默认解析，pre-refactor 行为；金丝雀回归）。
 func TestLLMSupersederLeavesModelEmpty(t *testing.T) {
 	var gotModel string
-	client := completionClientFunc(func(_ context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+	client := completionClientFunc(func(_ context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 		gotModel = req.Model
-		return &memport.CompletionResponse{Content: `{"supersedes":false,"reason":"ok"}`}, nil
+		return &llmdomain.CompletionResponse{Content: `{"supersedes":false,"reason":"ok"}`}, nil
 	})
 	judge := workers.NewLLMSuperseder(client)
 
@@ -198,13 +198,13 @@ func TestLLMSupersederLeavesModelEmpty(t *testing.T) {
 // TestLLMSupersederRetriesWithCorrectionOnInvalidJSON 验证判定解析失败时走
 // 带错重试：第 2 次请求附加 system-role correction（错误位置丢回模型）。
 func TestLLMSupersederRetriesWithCorrectionOnInvalidJSON(t *testing.T) {
-	var requests [][]memport.CompletionMessage
-	client := completionClientFunc(func(_ context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
-		requests = append(requests, append([]memport.CompletionMessage(nil), req.Messages...))
+	var requests [][]llmdomain.Message
+	client := completionClientFunc(func(_ context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
+		requests = append(requests, append([]llmdomain.Message(nil), req.Messages...))
 		if len(requests) == 1 {
-			return &memport.CompletionResponse{Content: "not json at all"}, nil
+			return &llmdomain.CompletionResponse{Content: "not json at all"}, nil
 		}
-		return &memport.CompletionResponse{Content: `{"supersedes":true,"reason":"ok"}`}, nil
+		return &llmdomain.CompletionResponse{Content: `{"supersedes":true,"reason":"ok"}`}, nil
 	})
 	judge := workers.NewLLMSuperseder(client)
 

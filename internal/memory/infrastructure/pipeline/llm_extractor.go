@@ -8,6 +8,7 @@ import (
 
 	"go.uber.org/zap"
 
+	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
@@ -76,16 +77,9 @@ func (e *LLMExtractor) maxFacts(ctx context.Context, agentID string) int {
 }
 
 func (e *LLMExtractor) ExtractFacts(ctx context.Context, userID, agentID string, message string) ([]*memport.ExtractedFact, error) {
+	// 抽取模型为空：交由 llmgateway client 默认解析（pre-refactor 行为）。
 	system := fmt.Sprintf(extractionSystemPrompt, userID, agentID, e.maxFacts(ctx, agentID))
-	req := &memport.CompletionRequest{
-		// 抽取模型为空：交由 llmgateway client 默认解析（pre-refactor 行为）。
-		Model: "",
-		Messages: []memport.CompletionMessage{
-			{Role: "system", Content: system},
-			{Role: "user", Content: message},
-		},
-		MaxTokens: constants.MemoryExtractLLMMaxTokens,
-	}
+	req := llmdomain.NewExtractRequest("", system, message, 0, constants.MemoryExtractLLMMaxTokens)
 	return extractFactsStructured(ctx, e.client, req, e.logger)
 }
 
@@ -94,8 +88,8 @@ func (e *LLMExtractor) ExtractFacts(ctx context.Context, userID, agentID string,
 // 0 条通过才触发带错重试，耗尽返回 typed error（保留 MarkFailed/DLQ）。
 func extractFactsStructured(
 	ctx context.Context,
-	client memport.Completer,
-	req *memport.CompletionRequest,
+	client llmdomain.Completer,
+	req *llmdomain.CompletionRequest,
 	logger *zap.Logger,
 ) ([]*memport.ExtractedFact, error) {
 	var valid []*memport.ExtractedFact
@@ -117,7 +111,7 @@ func extractFactsStructured(
 			}
 			if allInvalid {
 				return &memport.ValidationError{
-					Location: "facts", Field: "facts",
+					Location: "facts", FieldName: "facts",
 					Reason: "no fact passed validation",
 				}
 			}
