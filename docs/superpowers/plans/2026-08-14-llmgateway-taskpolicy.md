@@ -996,14 +996,24 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 `internal/memory/infrastructure/workers/history_summarizer.go`：
 
 - import 删除 `memport`（仅此处用）、增加 `llmdomain`。
-- 第 75-80 行替换：
+- 原代码第 75-80 行：
 
 ```go
  prompt := s.summarizePrefixOr() + strings.Join(items, "\n")
+ resp, err := client.Complete(ctx, &memport.CompletionRequest{
+  Model:       s.summaryModel,
+  Messages:    []memport.CompletionMessage{{Role: "user", Content: prompt}},
+  Temperature: .2,
+ })
+```
+
+替换为（builder 内部拼接，`prompt` 变量删除）：
+
+```go
  resp, err := client.Complete(ctx, llmdomain.NewSummarizeRequest(s.summaryModel, s.summarizePrefixOr(), items, 0))
 ```
 
-注意 `prompt` 变量不再需要（builder 内部拼接），删除该行；`strings` import 如无其他使用一并删除（`SummarizeHistory` 是唯一 `strings.Join` 调用点，确认后删除）。
+`NewSummarizeRequest` 内容 = `summarizePrefixOr() + join(items, "\n")`，与原拼接一致；Temperature .2 → `TaskSummarizeTemperature`（同值）；新增 `NoPrimaryRetry=true` 是压缩路径已批准行为变更（spec §4，Global Constraints 覆盖）。删除 `prompt` 变量后 `strings` import 若无其他使用一并删除（`SummarizeHistory` 是唯一 `strings.Join` 调用点，确认后删除）。
 
 - [ ] **Step 4: llm_superseder.go 用 builder + 常量**
 
