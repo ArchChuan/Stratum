@@ -38,3 +38,10 @@ func IsValidReasoningEffort(effort string) bool {
 	}
 	return false
 }
+
+// 任务策略默认值 —— 由 llmdomain 构造器消费，禁止消费方内联。
+const (
+	// TaskSummarizeTemperature 是总结任务的默认温度（单轮文本生成，
+	// 低温度换取稳定压缩；压缩路径语义：主模型一次失败直接降级候选）。
+	TaskSummarizeTemperature float32 = 0.2
+)
