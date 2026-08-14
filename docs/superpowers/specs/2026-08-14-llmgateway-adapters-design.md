@@ -31,24 +31,29 @@
 ## 3. 架构不变式
 
 - `Gateway` 保持传输编排职责，不复制、不拆类继承。
-- 任务差异 = request 构造 + 结构化解析，落在 `llmgateway/application`。
+- 任务差异 = request 构造 + 结构化解析：request 构造落 `llmdomain` 领域构造层，结构化重试内核拆「非泛型内核（llmdomain）+ 泛型外壳（消费方）」。
+- 策略禁止落 `llmgateway/application`：CLAUDE.md 禁消费方 import 兄弟 context 的 application；`CompleteStructured` 是泛型函数，Go 泛型方法无法放入接口，经 wiring ACL 透传不可行。`llmdomain`（domain）不在此禁列，是唯一可跨 context import 的位置。
 - 分层：`llmgateway/{domain, application, infrastructure}`；domain 仅依赖 stdlib + `pkg/constants`；application 不 import pgx/Redis/NATS/Gin。
 - prompt 字符串归属消费方 context（memory 指令、evaluation rubric），llmgateway 只持有结构默认值。
 - 行为数字进 `pkg/constants/`，禁止内联。
 
-## 4. Workstream ③ 任务策略包
+## 4. Workstream ③ 任务策略（落点：llmdomain 领域层）
 
-新增 `internal/llmgateway/application/policy/`：
+新增 `internal/llmgateway/domain/` 领域构造层（domain 仅依赖 stdlib + `pkg/constants`，不 import zap）：
 
-- `ChatPolicy`：`Build(model, msgs, tools, effort) *domain.CompletionRequest`，原样透传。agent 现行链路可选接入，不强制。
-- `SummarizePolicy`：`Build(model, instructions, items)`，单轮 user/system，`Temperature=0.2`，锁 `MaxTokens`（`pkg/constants`），无 tools，`NoPrimaryRetry=true`（压缩路径语义：时间片内主模型一次失败直接降级候选）。
-- `ExtractPolicy`：构造 request（低 temp + `ResponseFormat=json_object`，由 gateway `applyCapabilityGate` 按模型能力清空 fail-closed）+ 接管 `CompleteStructured`（JSON 解析 + 逐条校验 + 带错重试 + 部分成功语义）从 `memory/pipeline` 上移。
-- 消费方重构：`history_summarizer`/`llm_superseder`/`llm_extractor`/`enricher`/`evaluation judge` 改走 policy，删除 inline 构造。prompt 字符串通过构造参数注入。
+- `NewChatRequest(model, msgs, tools, effort) *CompletionRequest`：原样透传。agent 现行链路可选接入，本次不强制。
+- `NewSummarizeRequest(model, instructions, items, maxTokens) *CompletionRequest`：单轮 user，`Temperature=0.2`（`pkg/constants`），锁 `MaxTokens`（参数传入），无 tools，`NoPrimaryRetry=true`（压缩路径语义：时间片内主模型一次失败直接降级候选）。
+- `NewExtractRequest(model, system, user, temperature, maxTokens) *CompletionRequest`：`ResponseFormat=json_object`，由 gateway `applyCapabilityGate` 按模型能力清空 fail-closed；temp/maxTokens 显式参数，消费方传各自常量。
+- `StructuredRetryLoop(ctx, client Completer, req, maxRetries, attempt) (string, error)`：非泛型重试内核（stdlib，不 import zap）。循环克隆 req、设 `response_format`、append correction（system role）、带错重试、attempts 统计；全部失败返回带白名单摘要（字段名）的 error。`FieldError` 接口：消费方 `ValidationError` 实现 `Field() string`，白名单降级日志。
+- 消费方保留薄泛型 `CompleteStructured[T]` 外壳（调内核），JSON 解析、逐条校验、部分成功语义（≥1 通过返回子集）留本地。
+- 消费方重构：`llm_extractor`/`enricher`/`llm_superseder`/`history_summarizer`/`evaluation judge` 改走 builder，删除 inline 构造。prompt 字符串经构造参数注入。
+- `memport` 传输镜像（`CompletionRequest`/`Completer`/`ResponseFormat`/`CompletionResponse`）退役；`memoryLLMAdapter` 收敛为仅 tenantID 注入。`port.ValidationError`/`ExtractedFact`/`SupersedeJudgment`/`LLMExtractor`/`LLMSuperseder` 保留（memory 领域类型）。
 
 决策要点：
 
 - Extract 的 `ResponseFormat` 由 gateway 能力门控兜底（不支持 json_object 的模型清空字段），请求侧可无条件设置。
-- `CompleteStructured` 上移后，`memory/pipeline` 不再持有该编排；移动测试随迁。
+- `StructuredRetryLoop` 内核上移 llmdomain，`memory/pipeline` 不再持有重试循环；移动测试随迁。
+- 行为数字进 `pkg/constants`：`TaskSummarizeTemperature`（0.2）入 `pkg/constants/llmgateway.go`；extract/summarize 的 maxTokens、enrich temp 沿用/新增 `pkg/constants/memory.go` 常量。
 
 ## 5. Workstream ② think 流式解析
 
@@ -112,7 +117,7 @@
 
 | Workstream | 测试 |
 |---|---|
-| ③ | policy builder 单测（temp/max_tokens/tools/json 断言）；memory worker 既有测试全绿（行为契约不变） |
+| ③ | llmdomain request builder 单测（temp/max_tokens/tools/NoPrimaryRetry/json 断言）；`StructuredRetryLoop` 内核单测（带错重试/白名单摘要）；memory worker 既有测试全绿（行为契约不变） |
 | ② | openai_compat 非流式/流式 `reasoning_content` 契约测试；anthropic thinking 块测试（非流式 + SSE delta）；SSE `thinking` 事件测试；前端渲染（headless） |
 | ① | `ResolveRerank` 解析链测试；cohere 协议适配器测试（迁移现有 `cohere_test.go`）；knowledge RAG rerank 接线集成测试 |
 
@@ -122,11 +127,11 @@
 
 - **接口签名改动（②）**：`CompleteStream` 回调签名波及 agent graph 与 memory completers，属机械改动但面广；用 `StreamDelta` 一次性收敛，避免 V2 平行接口永久残留。
 - **rerank 凭据迁移（①）**：config.yaml → catalog provider 行；cohere provider 行缺失时需先建行。破坏性迁移单独验证。
-- **Extract 上移（③）**：`CompleteStructured` 的带错重试/部分成功语义必须随迁不丢失，测试随迁。
+- **循环内核提取（③）**：`StructuredRetryLoop` 的带错重试/降级摘要语义必须随迁不丢失，测试随迁；部分成功语义（≥1 通过返回子集）保留在消费方外壳，行为契约不变。
 
 ## 10. 范围外
 
-- Agent 是否采用 `ChatPolicy`（可选，不强推）。
+- Agent 是否采用 `NewChatRequest`（可选，不强推，本次不接入）。
 - Anthropic thinking 多块结构化展示（YAGNI，单字符串）。
 - rerank fallback 链（单 provider，不做）。
 - 其他 provider 的 rerank 端点（本次仅 cohere）。
