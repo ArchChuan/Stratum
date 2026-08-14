@@ -571,3 +571,38 @@ func TestAnthropicToolsInRequest(t *testing.T) {
 	})
 	require.NoError(t, err)
 }
+
+// TestAnthropicClient_ListModels_paginates 验证 has_more/next_page_token
+// 翻页：第一页不带查询参数，后续页带 limit=100&page_token=<token>，
+// 聚合所有页并保留 context_window 元数据。
+func TestAnthropicClient_ListModels_paginates(t *testing.T) {
+	var rawQueries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/v1/models", r.URL.Path)
+		rawQueries = append(rawQueries, r.URL.RawQuery)
+		switch r.URL.Query().Get("page_token") {
+		case "":
+			_, _ = fmt.Fprint(w, `{"data":[{"id":"claude-sonnet-4","context_window":200000}],"has_more":true,"next_page_token":"tok2"}`)
+		case "tok2":
+			_, _ = fmt.Fprint(w, `{"data":[{"id":"claude-haiku-4","context_window":100000}],"has_more":false}`)
+		default:
+			t.Errorf("unexpected page_token=%q", r.URL.Query().Get("page_token"))
+		}
+	}))
+	defer srv.Close()
+
+	client := infrastructure.NewAnthropicClient(
+		infrastructure.ProviderConfig{Name: "test-anthropic", BaseURL: srv.URL, APIKey: "test-api-key"},
+		zap.NewNop(),
+	)
+	models, err := client.ListModels(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []infrastructure.DiscoveredModel{
+		{Name: "claude-sonnet-4", ContextWindow: 200000},
+		{Name: "claude-haiku-4", ContextWindow: 100000},
+	}, models)
+	require.Len(t, rawQueries, 2)
+	require.Equal(t, "", rawQueries[0], "first page must omit query params")
+	require.Equal(t, "limit=100&page_token=tok2", rawQueries[1])
+}
