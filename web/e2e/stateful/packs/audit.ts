@@ -1,8 +1,8 @@
 import { expect, type Page } from '@playwright/test';
 import type { QueryResultRow } from 'pg';
 
-import type { BrowserActor } from '../core/actors';
-import { requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
+import { restoreActorSession, type BrowserActor } from '../core/actors';
+import { addGeneratedActorMembership, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
 import type { EvidenceRecord } from '../core/evidence';
 
 interface AuditPackContext {
@@ -91,19 +91,22 @@ const verifyOwnerVisible = async (
   evidence.database.push('Audit event rows agree with the rendered list and total');
 };
 
-// 普通 member 前端路由守卫渲染 403，后端 RequireTenantRole("admin") 同样 403。
+// 普通 member 打开 /audit：PrivateRoute requiredTenantRole="admin" 在前端直接渲染
+// 403 Result（"仅管理员可访问此页面，普通成员无权限。"），AuditEventsPage 不挂载、
+// 不发首载 GET /audit/events；后端直接 API 调用同样 403。断言前端守卫文案 + 后端
+// API 403 双层。
 const verifyMemberDenied = async (
   page: Page, member: BrowserActor, backendURL: string, webURL: string, evidence: EvidenceRecord,
 ) => {
   await page.goto(`${webURL}/audit`);
-  await expect(page.getByText('仅管理员可访问此页面，普通成员无权限。', { exact: false })).toBeVisible();
+  await expect(page.getByText('仅管理员可访问此页面，普通成员无权限。')).toBeVisible();
   const memberToken = member.accessToken ?? '';
-  const denied = await page.request.get(`${backendURL}/audit/events`, {
+  const apiDenied = await page.request.get(`${backendURL}/audit/events`, {
     headers: { Authorization: `Bearer ${memberToken}` },
   });
-  expect(denied.status()).toBe(403);
-  evidence.ui.push('Audit page is denied for a plain tenant member');
-  evidence.http.push('GET /audit/events returned 403 for a plain tenant member');
+  expect(apiDenied.status()).toBe(403);
+  evidence.ui.push('Audit page shows the 403 guard for a plain tenant member');
+  evidence.http.push('GET /audit/events returned 403 for a plain tenant member (direct API)');
 };
 
 // 通过浏览器创建一条 workflow（POST /workflows 触发写端审计），返回 definition id，
@@ -220,6 +223,14 @@ export const executeAuditPack = async ({
     await verifyFilters(page, pool, tenantID, actorID, definitionID, createdRows, evidence);
 
     // 普通 member 无权限：前端 403 + 后端 API 403。
+    // #281：每个 guest 持有独立 sandbox 租户（owner），「普通 member 无权限」必须
+    // 先把 member 显式加入 actor 租户为 member 并换发 member claim 会话（与
+    // operation-gate/collab 同款模式），否则 member 在自己租户里是 owner，首载
+    // GET /audit/events 返回 200 而非 403。
+    const memberID = requireUUID(member.userID ?? '', 'member_user_id');
+    await addGeneratedActorMembership(pool, tenantID, memberID, 'member');
+    member.tenantID = tenantID;
+    await restoreActorSession(member, backendURL);
     const memberPage = await member.context.newPage();
     try {
       await verifyMemberDenied(memberPage, member, backendURL, webURL, evidence);
