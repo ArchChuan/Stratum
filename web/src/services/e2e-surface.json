@@ -32,8 +32,7 @@
     "/collaborations",
     "/scheduled-tasks",
     "/audit",
-    "/memory",
-    "/mechanism/profiles"
+    "/memory"
   ],
   "mutations": [
     "POST /auth/refresh",
@@ -111,9 +110,6 @@
     "POST /scheduled-tasks",
     "PUT /scheduled-tasks/:id",
     "DELETE /scheduled-tasks/:id",
-    "PATCH /scheduled-tasks/:id/enabled",
-    "PUT /mechanism/profiles",
-    "POST /mechanism/matrix/runs",
-    "POST /mechanism/matrix/adopt"
+    "PATCH /scheduled-tasks/:id/enabled"
   ]
 }

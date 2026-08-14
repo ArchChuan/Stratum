@@ -28,7 +28,6 @@ import { executeIAMPack } from './stateful/packs/iam';
 import { executeKnowledgePack } from './stateful/packs/knowledge';
 import { executeLLMAdminPack } from './stateful/packs/llm-admin';
 import { executeMCPPack } from './stateful/packs/mcp';
-import { executeMechanismPack } from './stateful/packs/mechanism';
 import { executeMemoryPack } from './stateful/packs/memory';
 import { executeOperationGatePack } from './stateful/packs/operation-gate';
 import { executePromptPack } from './stateful/packs/prompt';
@@ -229,10 +228,6 @@ const executePack = async (
   }
   if (pack === 'llm-admin') {
     completedActions.push(...await executeLLMAdminPack({ actor: actors.tenantAdmin, systemAdmin: actors.systemAdmin, pool, evidence, webURL, fixtureURL, backendURL }));
-    return;
-  }
-  if (pack === 'mechanism') {
-    completedActions.push(...await executeMechanismPack({ systemAdmin: actors.systemAdmin, pool, evidence, webURL, backendURL }));
     return;
   }
   if (pack === 'operation-gate') {

@@ -80,7 +80,7 @@ func TestPgSuiteRepositoryCreatePublishAndLoad(t *testing.T) {
 	neverPublished := domain.EvalSuite{ID: "suite-2", Name: "未发布基线", DraftRevisionID: "suite-rev-2"}
 	draftRev := domain.EvalSuiteRevision{
 		ID: "suite-rev-2", SuiteID: "suite-2", Status: domain.SuiteRevisionDraft,
-		ResourceKind: domain.ResourceKindMechanism,
+		ResourceKind: domain.ResourceKindSkill,
 		Cases:        []domain.EvalCase{{ID: "case-3", Name: "未发布", Input: "x", AssertionMode: domain.AssertionContains, Enabled: true}},
 	}
 	if err := repo.CreateSuite(ctx, tenantID, neverPublished, draftRev); err != nil {

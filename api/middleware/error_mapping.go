@@ -15,8 +15,6 @@ import (
 	knowledgedomain "github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
-	mechanismapp "github.com/byteBuilderX/stratum/internal/mechanism/application"
-	mechanismdomain "github.com/byteBuilderX/stratum/internal/mechanism/domain"
 	memoryapp "github.com/byteBuilderX/stratum/internal/memory/application"
 	memorydomain "github.com/byteBuilderX/stratum/internal/memory/domain"
 	scheddomain "github.com/byteBuilderX/stratum/internal/scheduler/domain"
@@ -73,9 +71,6 @@ var errorStatusTable = map[error]int{
 	agentdomain.ErrApprovalPolicyChanged:           http.StatusConflict,
 	agentdomain.ErrProposalNotFound:                http.StatusNotFound,
 	agentdomain.ErrNotFound:                        http.StatusNotFound,
-	mechanismapp.ErrProfileNotFound:                http.StatusNotFound,
-	mechanismapp.ErrMatrixNoProfiles:               http.StatusConflict,
-	mechanismapp.ErrAdoptInvalidTransition:         http.StatusConflict,
 	memoryapp.ErrNotFound:                          http.StatusNotFound,
 	memorydomain.ErrEntryNotFound:                  http.StatusNotFound,
 	memorydomain.ErrSessionNotFound:                http.StatusNotFound,
@@ -205,7 +200,6 @@ var errorStatusTable = map[error]int{
 	memorydomain.ErrEmptyContent:                   http.StatusBadRequest,
 	workflowdomain.ErrInvalidSpec:                  http.StatusBadRequest,
 	workflowdomain.ErrInvalidInputSchema:           http.StatusBadRequest,
-	mechanismdomain.ErrInvalidProfile:              http.StatusBadRequest,
 	mcpdomain.ErrUnsupportedTransport:              http.StatusBadRequest,
 	mcpdomain.ErrInvalidServerURL:                  http.StatusBadRequest,
 	mcpdomain.ErrUnsupportedAuth:                   http.StatusBadRequest,

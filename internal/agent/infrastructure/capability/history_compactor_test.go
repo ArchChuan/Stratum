@@ -163,9 +163,9 @@ func TestCompactionSlice(t *testing.T) {
 	}
 }
 
-// TestCompactHistory_UsesInjectedCompactionPromptOverFallback 验证机制基线
-// 压缩指令注入优先、空值回退内置常量（现状行为）。
-func TestCompactHistory_UsesInjectedCompactionPromptOverFallback(t *testing.T) {
+// TestCompactHistory_UsesBuiltinCompactionPrompt 验证压缩指令走内置常量
+// （mechanism 移除后为唯一权威）。
+func TestCompactHistory_UsesBuiltinCompactionPrompt(t *testing.T) {
 	gw := &scriptedCompactorGateway{}
 	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0)
 	msgs := []port.LLMMessage{{Role: "user", Content: "history"}}
@@ -176,13 +176,5 @@ func TestCompactHistory_UsesInjectedCompactionPromptOverFallback(t *testing.T) {
 	fallback := gw.calls[0].req.LLM.Messages[0].Content
 	if !strings.Contains(fallback, "对话历史压缩器") {
 		t.Fatalf("fallback compaction prompt missing: %q", fallback)
-	}
-
-	compactor.WithCompactionPrompt("注入压缩指令：")
-	if _, err := compactor.CompactHistory(context.Background(), msgs); err != nil {
-		t.Fatal(err)
-	}
-	if got := gw.calls[1].req.LLM.Messages[0].Content; got != "注入压缩指令：" {
-		t.Fatalf("injected compaction prompt not used: %q", got)
 	}
 }
