@@ -27,15 +27,26 @@ const mutate = async (pool: DatabasePool, tenantID: string, text: string, values
   await withTenantMutation(pool, tenantID, { text, values })
 );
 const openEvolution = async (page: Page) => {
+  // 命令（reject/promote/rollback/pause）后列表异步 reload：candidates 短暂清空
+  // → drawer 瞬关再重开。先等 reload 稳定、再关闭残留遮罩，避免拦截候选版本 tab。
+  await expect(page.locator('.ant-spin-spinning')).toHaveCount(0, { timeout: 15_000 });
+  await closeDrawerIfOpen(page);
   await page.getByRole('tab', { name: /候选版本/ }).click();
   await page.getByRole('button', { name: '进化操作' }).click();
   return page.getByRole('dialog', { name: '进化操作' });
 };
 const closeDrawerIfOpen = async (page: Page) => {
-  const drawer = page.locator('.ant-drawer:visible');
-  if (await drawer.count()) {
-    await page.locator('.ant-drawer-mask:visible').click({ position: { x: 5, y: 5 } });
-    await expect(drawer).toBeHidden();
+  // 单次 count 判断会漏在 drawer 瞬关窗口上，残留 mask 拦截后续点击
+  // （soak 实测 45s 仍被 ant-drawer-mask 拦截、候选版本 tab 点击超时）。
+  // 循环关闭直到 drawer 与其 mask 都消失。
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const drawer = page.locator('.ant-drawer:visible');
+    const mask = page.locator('.ant-drawer-mask:visible');
+    if (!(await drawer.count()) && !(await mask.count())) return;
+    await page.keyboard.press('Escape');
+    await mask.click({ position: { x: 5, y: 5 }, timeout: 5_000 }).catch(() => {});
+    await expect(drawer).toBeHidden({ timeout: 10_000 });
+    await expect(mask).toHaveCount(0, { timeout: 10_000 });
   }
 };
 
