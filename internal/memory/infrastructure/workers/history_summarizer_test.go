@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
+	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/workers"
 	"github.com/stretchr/testify/require"
 )
@@ -19,8 +19,8 @@ func TestResolvingHistoryProcessorResolvesForSummarizeAndCompress(t *testing.T) 
 		if resolved == 2 {
 			label = "summary-b"
 		}
-		return completionClientFunc(func(context.Context, *memport.CompletionRequest) (*memport.CompletionResponse, error) {
-			return &memport.CompletionResponse{Content: label}, nil
+		return completionClientFunc(func(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
+			return &llmdomain.CompletionResponse{Content: label}, nil
 		}), nil
 	}
 	processor := workers.NewResolvingLLMHistorySummarizer("tenant-1", resolver)
@@ -41,9 +41,9 @@ func TestResolvingHistoryProcessorRecoversWithoutReusingOldClient(t *testing.T) 
 		if !available {
 			return nil, errors.New("temporarily unavailable")
 		}
-		return completionClientFunc(func(context.Context, *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+		return completionClientFunc(func(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 			calls++
-			return &memport.CompletionResponse{Content: "recovered"}, nil
+			return &llmdomain.CompletionResponse{Content: "recovered"}, nil
 		}), nil
 	}
 	processor := workers.NewResolvingLLMHistorySummarizer("tenant-1", resolver)
@@ -62,9 +62,9 @@ func TestResolvingHistoryProcessorRecoversWithoutReusingOldClient(t *testing.T) 
 // 周期总结指令注入优先、空值回退内置前缀（现状行为）。
 func TestHistoryProcessorUsesInjectedSummarizePromptOverFallback(t *testing.T) {
 	var got string
-	client := completionClientFunc(func(_ context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+	client := completionClientFunc(func(_ context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 		got = req.Messages[0].Content
-		return &memport.CompletionResponse{Content: "s"}, nil
+		return &llmdomain.CompletionResponse{Content: "s"}, nil
 	})
 	processor := workers.NewLLMHistorySummarizer(client)
 
@@ -88,9 +88,9 @@ func TestHistoryProcessorUsesInjectedSummarizePromptOverFallback(t *testing.T) {
 // 的 SummaryModel（MEMORY_SUMMARY_MODEL 兜底经 wiring 注入后由基线覆盖）。
 func TestHistoryProcessorUsesBaselineSummaryModel(t *testing.T) {
 	var gotModel string
-	client := completionClientFunc(func(_ context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+	client := completionClientFunc(func(_ context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 		gotModel = req.Model
-		return &memport.CompletionResponse{Content: "s"}, nil
+		return &llmdomain.CompletionResponse{Content: "s"}, nil
 	})
 	processor := workers.NewLLMHistorySummarizer(client)
 

@@ -164,6 +164,8 @@ const (
 	MemorySupersedeLLMCallsPerRun   = 20   // max LLM judgments per RunOnce pass
 	MemoryInlineSupersedeFastThresh = 0.85 // similarity above which supersede is decided inline without LLM
 	MemoryInlineSupersedeLLMPerFact = 3    // max inline LLM calls per extracted fact during extraction
+	// MemorySupersedeJudgeMaxTokens 取代判定请求的 max_tokens 上限
+	MemorySupersedeJudgeMaxTokens = 256
 )
 
 // Facts quality filter — Phase 0 hardening
