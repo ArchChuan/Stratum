@@ -1,0 +1,99 @@
+groups:
+  - name: stratum-http-recording
+    interval: 1m
+    rules:
+      - record: stratum:http_requests:increase5m
+        expr: sum(increase(http_requests_total{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$"}[5m]))
+        labels:
+          service: stratum
+          environment: production
+
+      - record: stratum:http_5xx_ratio:ratio5m
+        expr: sum(increase(http_requests_total{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$",status=~"5.."}[5m])) / clamp_min(sum(increase(http_requests_total{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$"}[5m])), 1)
+        labels:
+          service: stratum
+          environment: production
+
+      - record: stratum:http_request_duration_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$"}[5m])))
+        labels:
+          service: stratum
+          environment: production
+
+      - record: stratum:http_requests_by_path:increase5m
+        expr: sum by (path) (increase(http_requests_total{namespace="stratum",service="stratum",endpoint="http",path!="unmatched",path!~"^/(health|livez|readyz|metrics)$",path!~".*/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}($|/).*"}[5m]))
+        labels:
+          service: stratum
+          environment: production
+
+      - record: stratum:http_5xx_ratio_by_path:ratio5m
+        expr: sum by (path) (increase(http_requests_total{namespace="stratum",service="stratum",endpoint="http",path!="unmatched",path!~"^/(health|livez|readyz|metrics)$",path!~".*/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}($|/).*",status=~"5.."}[5m])) / clamp_min(sum by (path) (increase(http_requests_total{namespace="stratum",service="stratum",endpoint="http",path!="unmatched",path!~"^/(health|livez|readyz|metrics)$",path!~".*/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}($|/).*"}[5m])), 1)
+        labels:
+          service: stratum
+          environment: production
+
+      - record: stratum:http_request_duration_seconds_by_path:p95_5m
+        expr: histogram_quantile(0.95, sum by (path, le) (rate(http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",path!="unmatched",path!~"^/(health|livez|readyz|metrics)$",path!~".*/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}($|/).*"}[5m])))
+        labels:
+          service: stratum
+          environment: production
+
+      - alert: StratumHighHTTP5xxRate
+        expr: stratum:http_5xx_ratio:ratio5m{service="stratum",environment="production"} > 0.05 and stratum:http_requests:increase5m{service="stratum",environment="production"} >= 20
+        for: 10m
+        labels:
+          severity: warning
+          service: stratum
+          environment: production
+          component: http
+          alert_family: http-5xx-rate
+        annotations:
+          summary: Stratum HTTP 5xx rate is elevated
+          description: The five-minute HTTP 5xx ratio has exceeded 5% for ten minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-http
+          runbook_url: /docs/operations/alerts/http-performance.md#high-http-5xx-rate
+
+      - alert: StratumCriticalHTTP5xxRate
+        expr: stratum:http_5xx_ratio:ratio5m{service="stratum",environment="production"} > 0.20 and stratum:http_requests:increase5m{service="stratum",environment="production"} >= 20
+        for: 5m
+        labels:
+          severity: critical
+          service: stratum
+          environment: production
+          component: http
+          alert_family: http-5xx-rate
+        annotations:
+          summary: Stratum HTTP 5xx rate is critical
+          description: The five-minute HTTP 5xx ratio has exceeded 20% for five minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-http
+          runbook_url: /docs/operations/alerts/http-performance.md#critical-http-5xx-rate
+
+      - alert: StratumHighHTTPP95Latency
+        expr: stratum:http_request_duration_seconds:p95_5m{service="stratum",environment="production"} > 2 and on() sum(increase(http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$",le="+Inf"}[5m])) >= 20
+        for: 15m
+        labels:
+          severity: warning
+          service: stratum
+          environment: production
+          component: http
+          alert_family: http-p95-latency
+        annotations:
+          summary: Stratum HTTP P95 latency is elevated
+          description: The five-minute HTTP P95 latency has exceeded two seconds for fifteen minutes (current value {{ $value }}s).
+          dashboard_url: /d/stratum-http
+          runbook_url: /docs/operations/alerts/http-performance.md#high-http-p95-latency
+
+      - alert: StratumCriticalHTTPP95Latency
+        expr: stratum:http_request_duration_seconds:p95_5m{service="stratum",environment="production"} > 5 and on() sum(increase(http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$",le="+Inf"}[5m])) >= 20
+        for: 5m
+        labels:
+          severity: critical
+          service: stratum
+          environment: production
+          component: http
+          alert_family: http-p95-latency
+        annotations:
+          summary: Stratum HTTP P95 latency is critical
+          description: The five-minute HTTP P95 latency has exceeded five seconds for five minutes (current value {{ $value }}s).
+          dashboard_url: /d/stratum-http
+          runbook_url: /docs/operations/alerts/http-performance.md#critical-http-p95-latency
