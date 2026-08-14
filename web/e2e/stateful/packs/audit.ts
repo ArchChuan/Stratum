@@ -165,7 +165,19 @@ const verifyFilters = async (
 ) => {
   const { created_at } = createdRows[0];
 
+  // 每个筛选测试独立：先点「重置」清空残留条件。antd inline Form 的
+  // resource_kind/actorName/range 会叠加——前一个筛选未清空时，API 实际条件
+  // （如 resource_kind='workflow' AND actor_name ILIKE …）与对账 SQL 不一致，
+  // 全量套件下同一租户积累多 pack 审计行后必挂（单 pack 因行少侥幸通过）。
+  // 重置按钮同「查询」为 2 汉字，antd autoInsertSpace 渲染为「重 置」，用 regex。
+  const resetFilters = async () => {
+    const listResponse = waitForList(page);
+    await page.getByRole('button', { name: /重\s*置/ }).click();
+    await listResponse;
+  };
+
   // 资源类型：Select 选「工作流」后查询。
+  await resetFilters();
   await pickResourceKind(page, '工作流');
   const kindRes = await submitSearch(page);
   const kindTotal = await auditCount(pool, tenantID,
@@ -175,6 +187,7 @@ const verifyFilters = async (
 
   // 操作者：actor_name 兜底为 actor_id（e2e actor 无 display_name/github_login），
   // 输入 actorID 模糊匹配即命中。同样按 Form.Item label 过滤定位（getByLabel 不可靠）。
+  await resetFilters();
   await page.locator('.ant-form-item').filter({ hasText: '操作者' }).locator('input').fill(actorID);
   const actorRes = await submitSearch(page);
   const actorTotal = await auditCount(pool, tenantID, 'tenant_id = $1 AND actor_id = $2', [tenantID, actorID]);
@@ -183,6 +196,7 @@ const verifyFilters = async (
 
   // 时间范围：RangePicker 两个输入框键入本地时间后 Enter（antd 解析为 dayjs，
   // onSearch 统一转 RFC3339 传给后端）。
+  await resetFilters();
   const target = new Date(created_at);
   const from = new Date(target.getTime() - 60_000);
   const to = new Date(target.getTime() + 60_000);
