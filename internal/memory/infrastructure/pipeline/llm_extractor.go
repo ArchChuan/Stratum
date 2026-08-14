@@ -12,13 +12,6 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
-// PlatformParams reads platform-layer parameter values (unified parameter
-// registry) used by the pipeline. Implemented by wiring; nil keeps the
-// pkg/constants defaults so unit tests and degraded startups behave as before.
-type PlatformParams interface {
-	Int(ctx context.Context, key string) (int, bool)
-}
-
 // extractionSystemPrompt 是抽取模板兜底（现状硬编码值）。机制基线
 // （model_profiles）建档后由 wiring 注入覆盖，空值维持现状行为。
 const extractionSystemPrompt = `你是一个长期记忆提取助手，负责从对话中提取关于用户（%s）的有价值事实，供 AI 助手（%s）在未来对话中使用。
@@ -43,8 +36,11 @@ fact_type 分类：
 
 // LLMExtractor adapts LLMClient to memport.LLMExtractor.
 type LLMExtractor struct {
-	client          LLMClient
-	params          PlatformParams
+	client   LLMClient
+	resolver memport.ResourceParamResolver
+	// tenantID is captured at construction (the extractor is built per tenant
+	// by the wiring seam); agentID arrives per ExtractFacts call.
+	tenantID        string
 	systemPrompt    string
 	extractionModel string
 	logger          *zap.Logger
@@ -54,8 +50,14 @@ func NewLLMExtractor(client LLMClient) *LLMExtractor {
 	return &LLMExtractor{client: client}
 }
 
-// SetPlatformParams wires the platform parameter reader (registry-backed).
-func (e *LLMExtractor) SetPlatformParams(p PlatformParams) { e.params = p }
+// SetResourceResolver wires the per-agent resource parameter resolver
+// (registry-backed); nil keeps the pkg/constants defaults.
+func (e *LLMExtractor) SetResourceResolver(r memport.ResourceParamResolver) { e.resolver = r }
+
+// SetTenantID sets the tenant identity for parameter resolution. The extractor
+// is constructed per tenant by the wiring seam, so the tenant is stable for
+// the extractor's lifetime.
+func (e *LLMExtractor) SetTenantID(t string) { e.tenantID = t }
 
 // SetSystemPrompt overrides the extraction template with the mechanism
 // baseline prompt. Empty keeps the built-in extractionSystemPrompt fallback.
@@ -79,20 +81,21 @@ func (e *LLMExtractor) systemPromptOr() string {
 	return extractionSystemPrompt
 }
 
-// maxFacts resolves memory.max_facts_per_extraction (platform layer),
-// falling back to the constant default when unset or unavailable.
-func (e *LLMExtractor) maxFacts(ctx context.Context) int {
-	if e.params == nil {
+// maxFacts resolves memory.max_facts_per_extraction for the target agent,
+// falling back to the constant default when unset, unresolved or unavailable.
+func (e *LLMExtractor) maxFacts(ctx context.Context, agentID string) int {
+	if e.resolver == nil {
 		return constants.MemoryMaxFactsPerExtraction
 	}
-	if v, ok := e.params.Int(ctx, "memory.max_facts_per_extraction"); ok {
-		return v
+	v, ok, err := e.resolver.Resolve(ctx, e.tenantID, agentID, "memory.max_facts_per_extraction")
+	if err != nil || !ok {
+		return constants.MemoryMaxFactsPerExtraction
 	}
-	return constants.MemoryMaxFactsPerExtraction
+	return coerceResourceInt(v, constants.MemoryMaxFactsPerExtraction)
 }
 
 func (e *LLMExtractor) ExtractFacts(ctx context.Context, userID, agentID string, message string) ([]*memport.ExtractedFact, error) {
-	system := fmt.Sprintf(e.systemPromptOr(), userID, agentID, e.maxFacts(ctx))
+	system := fmt.Sprintf(e.systemPromptOr(), userID, agentID, e.maxFacts(ctx, agentID))
 	req := &memport.CompletionRequest{
 		Model: e.extractionModel,
 		Messages: []memport.CompletionMessage{

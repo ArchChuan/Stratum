@@ -57,6 +57,24 @@ func (p resourceParameterProvider) ValidateResource(
 	return p.svc.ValidateResourceValues(declared)
 }
 
+// ValidateResourceKey validates a single resource-scope value by its full
+// dotted registry key (memory.* params, which ValidateResourceValues cannot
+// reach because it maps bare evaluation names). Unknown key and out-of-bounds
+// values return an error; nil service (db unavailable) degrades to no-op,
+// matching ValidateResource.
+func (p resourceParameterProvider) ValidateResourceKey(
+	_ context.Context, key string, value any,
+) error {
+	if p.svc == nil {
+		return nil
+	}
+	def, ok := p.svc.Registry().Get(key)
+	if !ok {
+		return fmt.Errorf("unknown parameter %s", key)
+	}
+	return def.Validate(value)
+}
+
 var _ agentport.ParametersProvider = resourceParameterProvider{}
 
 // agentParametersProvider wires the unified parameter registry resource

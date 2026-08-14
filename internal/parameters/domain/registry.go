@@ -383,40 +383,43 @@ func (r *ParametersRegistry) registerTraceParams() {
 }
 
 // registerMemoryParams covers the memory pipeline constants that are currently
-// hard-coded in pkg/constants/memory.go.
+// hard-coded in pkg/constants/memory.go. Resource-scope: bound to the agent
+// resource (agents.parameters JSONB), per-agent tuned. recall_top_k / long_term_top_k
+// have no runtime consumer (recall limit comes from the tool request) — registered
+// for search-space compatibility only, same as rag.query_rewrite.
 func (r *ParametersRegistry) registerMemoryParams() {
 	f := func(v float64) *float64 { return &v }
 	for _, def := range []ParameterDefinition{
 		{
-			Key: "memory.recall_top_k", Scope: ScopePlatform, Category: "memory",
+			Key: "memory.recall_top_k", Scope: ScopeResource, Category: "memory",
 			DisplayName: "记忆召回 Top-K", Description: "记忆召回返回条数",
 			ValueType: TypeInt, Default: int64(10),
 			VisualHint:  VisualHint{Control: ControlSlider, Min: f(1), Max: f(50), Step: f(1)},
 			Optimizable: true,
 		},
 		{
-			Key: "memory.fact_injection_top_n", Scope: ScopePlatform, Category: "memory",
+			Key: "memory.fact_injection_top_n", Scope: ScopeResource, Category: "memory",
 			DisplayName: "事实注入条数", Description: "会话上下文注入的抽取事实条数",
 			ValueType: TypeInt, Default: int64(8),
 			VisualHint:  VisualHint{Control: ControlSlider, Min: f(1), Max: f(20), Step: f(1)},
 			Optimizable: true,
 		},
 		{
-			Key: "memory.history_injection_top_n", Scope: ScopePlatform, Category: "memory",
+			Key: "memory.history_injection_top_n", Scope: ScopeResource, Category: "memory",
 			DisplayName: "历史注入条数", Description: "会话上下文注入的历史消息条数",
 			ValueType: TypeInt, Default: int64(3),
 			VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(10), Step: f(1)},
 			Optimizable: true,
 		},
 		{
-			Key: "memory.long_term_top_k", Scope: ScopePlatform, Category: "memory",
+			Key: "memory.long_term_top_k", Scope: ScopeResource, Category: "memory",
 			DisplayName: "长期记忆 Top-K", Description: "长期记忆检索条数",
 			ValueType: TypeInt, Default: int64(5),
 			VisualHint:  VisualHint{Control: ControlSlider, Min: f(1), Max: f(20), Step: f(1)},
 			Optimizable: true,
 		},
 		{
-			Key: "memory.max_facts_per_extraction", Scope: ScopePlatform, Category: "memory",
+			Key: "memory.max_facts_per_extraction", Scope: ScopeResource, Category: "memory",
 			DisplayName: "单次抽取事实上限", Description: "每次抽取的最大事实数",
 			ValueType: TypeInt, Default: int64(20),
 			VisualHint:  VisualHint{Control: ControlSlider, Min: f(1), Max: f(50), Step: f(1)},

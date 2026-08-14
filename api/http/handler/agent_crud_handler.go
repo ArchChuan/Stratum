@@ -80,6 +80,7 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 		KnowledgeWorkspaceIDs:  req.KnowledgeWorkspaceIDs,
 		MemoryScope:            req.MemoryScope,
 		CheckpointEnabled:      req.CheckpointEnabled,
+		Parameters:             req.Parameters,
 		Editors:                req.Editors,
 	})
 	if err != nil {
