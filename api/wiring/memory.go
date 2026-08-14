@@ -72,29 +72,48 @@ func (a memoryLLMAdapter) Complete(ctx context.Context, req *llmdomain.Completio
 	return resp, nil
 }
 
-// platformParameterReader adapts the parameters application service to the
-// pipeline's PlatformParams port (thin ACL; wiring is the only allowed
-// adapter seam). nil service (db unavailable) reports absent so consumers
-// keep their definition defaults.
-type platformParameterReader struct {
-	svc *parametersapp.Service
+// agentResourceParamResolver adapts the parameters resolver + agent repo to
+// the memory pipeline's per-agent resource-param port (thin ACL; wiring is
+// the only allowed adapter seam). agentRepo is captured as a closure because
+// buildMemory runs before buildAgent assigns c.Agent.AgentRepo; the closure
+// reads it lazily at resolve time (runtime), so the build-time nil is never
+// dereferenced. A nil service or repo reports absent so consumers keep their
+// definition defaults (degrade convention).
+type agentResourceParamResolver struct {
+	agentRepo func() port.AgentRepo
+	svc       *parametersapp.Service
 }
 
-func (r platformParameterReader) Int(ctx context.Context, key string) (int, bool) {
-	if r.svc == nil {
-		return 0, false
+func (r agentResourceParamResolver) Resolve(ctx context.Context, tenantID, agentID, key string) (any, bool, error) {
+	if r.svc == nil || r.agentRepo == nil {
+		return nil, false, nil
 	}
-	values, err := r.svc.PlatformValues(ctx)
-	if err != nil {
-		return 0, false
+	repo := r.agentRepo()
+	if repo == nil {
+		return nil, false, nil
 	}
-	switch v := values[key].(type) {
-	case float64:
-		return int(v), true
-	case int64:
-		return int(v), true
+	cfg, ok, err := repo.Get(reqctx.WithTenantID(ctx, tenantID), agentID)
+	if err != nil || !ok {
+		return nil, false, err
 	}
-	return 0, false
+	return r.svc.Resolver().Resolve(ctx, key, cfg.MemoryParameters)
+}
+
+// memoryResourceParamResolver builds the per-agent resource resolver, or nil
+// when the parameters registry is unavailable (degrade).
+func (c *Container) memoryResourceParamResolver() memport.ResourceParamResolver {
+	if c.Parameters == nil {
+		return nil
+	}
+	return agentResourceParamResolver{
+		agentRepo: func() port.AgentRepo {
+			if c.Agent == nil {
+				return nil
+			}
+			return c.Agent.AgentRepo
+		},
+		svc: c.Parameters.Service,
+	}
 }
 
 func (c *Container) buildMemory(ctx context.Context) error {
@@ -132,11 +151,7 @@ func (c *Container) buildMemoryService(mem *Memory, db *pgxpool.Pool, memRepo me
 		llmRes := newTenantCapabilityResolver(
 			c.LLMGateway.Registry, c.LLMGateway.Gateway, c.Logger,
 		).(*tenantCapabilityResolver)
-		var extractParams pipeline.PlatformParams
-		if c.Parameters != nil {
-			extractParams = platformParameterReader{svc: c.Parameters.Service}
-		}
-		mem.Service.SetLLMExtractResolver(makeLLMExtractResolver(llmRes, extractParams, c.Logger))
+		mem.Service.SetLLMExtractResolver(makeLLMExtractResolver(llmRes, c.memoryResourceParamResolver(), c.Logger))
 		mem.Service.SetLLMSupersederResolver(makeLLMSupersederResolver(llmRes, c.Logger))
 	}
 	if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
@@ -153,9 +168,7 @@ func (c *Container) buildMemoryInjector(mem *Memory, db *pgxpool.Pool) {
 	if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 		inj.SetEmbedResolver(c.Knowledge.EmbedResolver)
 	}
-	if c.Parameters != nil {
-		inj.SetPlatformParams(platformParameterReader{svc: c.Parameters.Service})
-	}
+	inj.SetResourceResolver(c.memoryResourceParamResolver())
 	mem.Injector = injectorAdapter{inj: inj}
 }
 
@@ -271,14 +284,15 @@ func (c *Container) attachPipelineDynamic(p *pipeline.Pipeline) {
 	p.WithDynamic(&dynamic)
 }
 
-func makeLLMExtractResolver(llmRes *tenantCapabilityResolver, params pipeline.PlatformParams, logger *zap.Logger) func(context.Context, string) memport.LLMExtractor {
+func makeLLMExtractResolver(llmRes *tenantCapabilityResolver, resolver memport.ResourceParamResolver, logger *zap.Logger) func(context.Context, string) memport.LLMExtractor {
 	return func(ctx context.Context, tenantID string) memport.LLMExtractor {
 		llm := llmRes.ResolveLLM(ctx, tenantID)
 		if llm == nil {
 			return nil
 		}
 		extractor := pipeline.NewLLMExtractor(memoryLLMAdapter{client: llm, tenantID: tenantID}).WithLogger(logger)
-		extractor.SetPlatformParams(params)
+		extractor.SetTenantID(tenantID)
+		extractor.SetResourceResolver(resolver)
 		return extractor
 	}
 }

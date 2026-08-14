@@ -27,7 +27,11 @@ type CreateAgentRequest struct {
 	KnowledgeWorkspaceIDs  []string `json:"knowledgeWorkspaceIds"`
 	MemoryScope            string   `json:"memoryScope"`
 	CheckpointEnabled      bool     `json:"checkpointEnabled"`
-	Editors                []string `json:"editors"`
+	// Parameters carries registry resource-scope values as a flat object; only
+	// the memory.* dotted keys persist on the agent (sampling keys stay on the
+	// explicit fields). Same merge semantics as UpdateAgentRequest.Parameters.
+	Parameters map[string]any `json:"parameters"`
+	Editors    []string       `json:"editors"`
 }
 
 // embedding model is immutable post-create.

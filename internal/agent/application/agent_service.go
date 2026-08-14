@@ -168,7 +168,12 @@ type CreateAgentInput struct {
 	KnowledgeWorkspaceIDs  []string
 	MemoryScope            string
 	CheckpointEnabled      bool
-	Editors                []string
+	// Parameters carries registry resource-scope values as a flat object;
+	// only the memory.* dotted keys persist on the agent (bare sampling keys
+	// remain expressed through the explicit fields above). Same merge
+	// semantics as UpdateAgentInput.Parameters.
+	Parameters map[string]any
+	Editors    []string
 }
 
 type UpdateAgentInput struct {
@@ -302,6 +307,10 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		return AgentDTO{}, err
 	}
 	id := uuid.Must(uuid.NewV7()).String()
+	memoryParams, err := s.validateAndExtractMemoryParameters(ctx, in.Parameters)
+	if err != nil {
+		return AgentDTO{}, err
+	}
 	cfg := &domain.AgentConfig{
 		ID:                     id,
 		Name:                   in.Name,
@@ -321,6 +330,7 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		KnowledgeWorkspaceIDs:  in.KnowledgeWorkspaceIDs,
 		MemoryScope:            in.MemoryScope,
 		CheckpointEnabled:      in.CheckpointEnabled,
+		MemoryParameters:       memoryParams,
 		Capabilities:           []domain.AgentCapability{},
 		CreatedBy:              in.ActorID,
 	}
@@ -656,6 +666,10 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	if err != nil {
 		return AgentDTO{}, err
 	}
+	// Promote (ReplaceParameters) 全量 replace 会清空 agents.parameters JSONB。
+	// memory.* 资源参数不属于 evaluation 候选空间,write-back patch 不携带它们,
+	// 故把存量值合并进覆盖集,防止 optimizer 写回把已配置的记忆参数抹掉。
+	in.Parameters = mergeParamsForReplace(existing.GetConfig().MemoryParameters, in.Parameters, in.ReplaceParameters)
 	cfg, err := s.buildUpdateConfig(ctx, id, in)
 	if err != nil {
 		return AgentDTO{}, err
@@ -693,6 +707,10 @@ func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in Upda
 	if err := validateAgentMaxIterations(in.MaxIterations); err != nil {
 		return nil, err
 	}
+	memoryParams, err := s.validateAndExtractMemoryParameters(ctx, in.Parameters)
+	if err != nil {
+		return nil, err
+	}
 	skills := in.AllowedSkills
 	if skills == nil {
 		skills = []string{}
@@ -716,6 +734,7 @@ func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in Upda
 		KnowledgeWorkspaceIDs:  in.KnowledgeWorkspaceIDs,
 		MemoryScope:            in.MemoryScope,
 		CheckpointEnabled:      in.CheckpointEnabled,
+		MemoryParameters:       memoryParams,
 	}
 	if err := s.validateWorkspaceBindings(ctx, reqctx.TenantIDFromContext(ctx), in.KnowledgeWorkspaceIDs); err != nil {
 		return nil, err
@@ -953,6 +972,62 @@ func applyParameterOverrides(in UpdateAgentInput) (float32, int, int, float32, s
 		reasoningEffort = v
 	}
 	return temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort
+}
+
+// validateAndExtractMemoryParameters pulls the memory.* resource-scope keys
+// (dotted form) out of a flat parameters map and validates each present value
+// against the registry. Zero values are dropped (0 = unset, symmetric with the
+// sampling merge pack — an explicit 0 never persists). Unknown memory.* keys
+// fail closed so garbage never lands in the opaque JSONB. A nil provider (db
+// unavailable) skips validation but still extracts, matching the sampling
+// degrade convention. Returns nil when no memory keys are present.
+func (s *AgentService) validateAndExtractMemoryParameters(ctx context.Context, parameters map[string]any) (map[string]any, error) {
+	var out map[string]any
+	for k, v := range parameters {
+		if !strings.HasPrefix(k, "memory.") {
+			continue
+		}
+		if n, ok := numericSampleValue(v); ok && n == 0 {
+			continue
+		}
+		if s.deps.ParametersProvider != nil {
+			if err := s.deps.ParametersProvider.ValidateResourceKey(ctx, k, v); err != nil {
+				return nil, fmt.Errorf("%w: agent service: validate memory parameter %s: %v",
+					domain.ErrInvalidSamplingParameters, k, err)
+			}
+		}
+		if out == nil {
+			out = map[string]any{}
+		}
+		out[k] = v
+	}
+	return out, nil
+}
+
+// mergeMemoryParameters overlays explicit memory.* keys onto a base set. A
+// promote (full-replace) write only carries evaluation sampling keys, so the
+// base preserves existing resource params that would otherwise be wiped by
+// the JSONB replace; present overlay keys win over the base.
+func mergeMemoryParameters(base, overlay map[string]any) map[string]any {
+	out := make(map[string]any, len(base)+len(overlay))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range overlay {
+		out[k] = v
+	}
+	return out
+}
+
+// mergeParamsForReplace preserves existing memory.* resource params across a
+// promote write: the optimizer write-back patch carries only evaluation
+// sampling keys, so a full JSONB replace without this merge would wipe
+// per-agent memory configuration. Merge-path writes pass through unchanged.
+func mergeParamsForReplace(existingMemory, params map[string]any, replace bool) map[string]any {
+	if !replace {
+		return params
+	}
+	return mergeMemoryParameters(existingMemory, params)
 }
 
 // numericSampleValue coerces a decoded JSON scalar (float64/int) to float64.
@@ -1231,6 +1306,10 @@ func samplingParameterMap(cfg *domain.AgentConfig) map[string]any {
 	}
 	if cfg.ReasoningEffort != "" {
 		params["reasoning_effort"] = cfg.ReasoningEffort
+	}
+	// memory.* dotted keys round-trip verbatim so the edit form can prefill.
+	for k, v := range cfg.MemoryParameters {
+		params[k] = v
 	}
 	return params
 }

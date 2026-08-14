@@ -69,6 +69,13 @@ export interface AgentFormValues {
   compaction_recent_groups?: number;
   compaction_safety_ratio?: number;
   reasoning_effort?: string;
+  // 记忆注入参数(agents.parameters JSONB 的 memory.* dotted 键,提交时经
+  // buildMemoryParameters 映射;null/undefined 不落库)
+  memoryMaxFactsPerExtraction?: number;
+  memoryFactInjectionTopN?: number;
+  memoryHistoryInjectionTopN?: number;
+  // registry 资源级参数的透传对象,只写 memory.* dotted 键
+  parameters?: Record<string, unknown>;
   allowedSkills?: string[];
   mcpToolIds?: string[];
   knowledgeWorkspaceIds?: string[];
@@ -76,6 +83,27 @@ export interface AgentFormValues {
   checkpointEnabled?: boolean;
   editors?: string[];
 }
+
+// buildMemoryParameters 把表单上的 memory.* 字段映射为 agents.parameters JSONB
+// 的 dotted 键。与后端 validateAndExtractMemoryParameters 的 0=unset 语义一致:
+// null/undefined 不产生键,空对象表示无 memory 覆盖(后端不落库)。
+export type MemoryParamValues = Pick<
+  AgentFormValues,
+  'memoryMaxFactsPerExtraction' | 'memoryFactInjectionTopN' | 'memoryHistoryInjectionTopN'
+>;
+export const buildMemoryParameters = (values: MemoryParamValues): Record<string, unknown> => {
+  const params: Record<string, unknown> = {};
+  if (values.memoryMaxFactsPerExtraction != null) {
+    params['memory.max_facts_per_extraction'] = values.memoryMaxFactsPerExtraction;
+  }
+  if (values.memoryFactInjectionTopN != null) {
+    params['memory.fact_injection_top_n'] = values.memoryFactInjectionTopN;
+  }
+  if (values.memoryHistoryInjectionTopN != null) {
+    params['memory.history_injection_top_n'] = values.memoryHistoryInjectionTopN;
+  }
+  return params;
+};
 
 export interface GroupedModelOption {
   provider: string;

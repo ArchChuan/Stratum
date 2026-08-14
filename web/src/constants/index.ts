@@ -82,6 +82,15 @@ export const MEMORY_SCOPE_OPTIONS = [
 export const MEMORY_DIAGNOSTICS_REFRESH_INTERVAL_MS = 30000; // 30s
 export const MEMORY_TOP_ENTITIES_LIMIT = 10;
 
+// 记忆注入参数控件 bounds，对齐 registry 中 memory.* resource-scope 的 VisualHint
+// （agents.parameters JSONB 的 dotted 键）。
+export const MEMORY_MAX_FACTS_MIN = 1;
+export const MEMORY_MAX_FACTS_MAX = 50;
+export const MEMORY_FACT_INJECTION_MIN = 1;
+export const MEMORY_FACT_INJECTION_MAX = 20;
+export const MEMORY_HISTORY_INJECTION_MIN = 0;
+export const MEMORY_HISTORY_INJECTION_MAX = 10;
+
 export const CHUNKING_STRATEGY_OPTIONS = [
   { value: 'structure_recursive', label: '结构感知（推荐）— Markdown 标题分层 + 递归分块' },
   { value: 'recursive', label: '递归分块 — 按字符边界递归切分' },

@@ -3,7 +3,13 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { agentApi } from '../api/agent.api';
-import { buildGroupedModels, type Agent, type AgentFormValues, type GroupedModelOption } from '../model/agent';
+import {
+  buildGroupedModels,
+  buildMemoryParameters,
+  type Agent,
+  type AgentFormValues,
+  type GroupedModelOption,
+} from '../model/agent';
 
 import { AGENT_DEFAULT_MAX_CONTEXT_TOKENS, AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
 import { knowledgeApi } from '@/modules/knowledge';
@@ -77,6 +83,10 @@ export const useEditAgentPage = () => {
           max_tokens: a.max_tokens,
           compaction_recent_groups: a.compaction_recent_groups,
           compaction_safety_ratio: a.compaction_safety_ratio,
+          // memory.* 存 agents.parameters JSONB 的 dotted 键，经 a.parameters 回显
+          memoryMaxFactsPerExtraction: memoryParam(a.parameters, 'memory.max_facts_per_extraction'),
+          memoryFactInjectionTopN: memoryParam(a.parameters, 'memory.fact_injection_top_n'),
+          memoryHistoryInjectionTopN: memoryParam(a.parameters, 'memory.history_injection_top_n'),
           allowedSkills: a.allowedSkills || [],
           mcpToolIds: a.mcpToolIds || [],
           knowledgeWorkspaceIds: a.knowledgeWorkspaceIds || [],
@@ -101,8 +111,15 @@ export const useEditAgentPage = () => {
     async (values: AgentFormValues) => {
       setLoading(true);
       try {
+        const { memoryMaxFactsPerExtraction, memoryFactInjectionTopN, memoryHistoryInjectionTopN, ...rest } = values;
+        const memoryParameters = buildMemoryParameters({
+          memoryMaxFactsPerExtraction,
+          memoryFactInjectionTopN,
+          memoryHistoryInjectionTopN,
+        });
         await agentApi.update(id, {
-          ...values,
+          ...rest,
+          ...(Object.keys(memoryParameters).length > 0 ? { parameters: memoryParameters } : {}),
           mcpToolIds: values.mcpToolIds || [],
           knowledgeWorkspaceIds: values.knowledgeWorkspaceIds || [],
         });
@@ -124,3 +141,11 @@ export const useEditAgentPage = () => {
     navigate, managementPath, onFinish,
   };
 };
+
+// memoryParam 从 GET 回显的 a.parameters（dotted memory.* 键）取数值，缺失或
+// 非数值时返回 undefined（表单控件显示空 = 不覆盖，回落 pkg/constants 默认）。
+function memoryParam(parameters: unknown, key: string): number | undefined {
+  if (typeof parameters !== 'object' || parameters === null) return undefined;
+  const v = (parameters as Record<string, unknown>)[key];
+  return typeof v === 'number' ? v : undefined;
+}

@@ -23,7 +23,7 @@ type EmbedServiceResolver func(ctx context.Context, tenantID string) EmbedClient
 // MemoryInjector fetches memory context (summaries, entities, long-term vectors)
 // and formats it for injection into the agent's system prompt.
 type MemoryInjector struct {
-	params     PlatformParams
+	resolver   port.ResourceParamResolver
 	pool       *pgxpool.Pool
 	txBeginner interface {
 		Begin(context.Context) (pgx.Tx, error)
@@ -47,19 +47,37 @@ func (inj *MemoryInjector) SetEmbedResolver(r EmbedServiceResolver) {
 	inj.embedResolver = r
 }
 
-// SetPlatformParams wires the platform parameter reader (registry-backed);
-// nil keeps the pkg/constants defaults.
-func (inj *MemoryInjector) SetPlatformParams(p PlatformParams) { inj.params = p }
+// SetResourceResolver wires the per-agent resource parameter resolver
+// (registry-backed); nil keeps the pkg/constants defaults.
+func (inj *MemoryInjector) SetResourceResolver(r port.ResourceParamResolver) { inj.resolver = r }
 
-// platformInt resolves one platform parameter, falling back to def.
-func (inj *MemoryInjector) platformInt(ctx context.Context, key string, def int) int {
-	if inj.params == nil {
+// resourceInt resolves one per-agent resource parameter, falling back to def.
+func (inj *MemoryInjector) resourceInt(ctx context.Context, ic InjectionContext, key string, def int) int {
+	if inj.resolver == nil {
 		return def
 	}
-	if v, ok := inj.params.Int(ctx, key); ok {
-		return v
+	v, ok, err := inj.resolver.Resolve(ctx, ic.TenantID, ic.AgentID, key)
+	if err != nil || !ok {
+		return def
 	}
-	return def
+	return coerceResourceInt(v, def)
+}
+
+// coerceResourceInt coerces a resolved resource-scope value (JSON-decoded
+// float64 or Go integer) to int, falling back to def on any non-numeric type.
+func coerceResourceInt(v any, def int) int {
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case float32:
+		return int(n)
+	case int:
+		return n
+	case int64:
+		return int(n)
+	default:
+		return def
+	}
 }
 
 // Pool returns the underlying connection pool (used by RecallHandler).
@@ -136,8 +154,9 @@ func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext
 	var facts []factRow
 	factCtx, cancelFacts := context.WithTimeout(ctx, constants.FactInjectionTimeout)
 	defer cancelFacts()
+	factTopN := inj.resourceInt(ctx, ic, "memory.fact_injection_top_n", constants.FactInjectionTopN)
 	factRows, err := tx.Query(factCtx, factInjectionQuery(),
-		ic.UserID, ic.AgentID, ic.Query, constants.FactInjectionConfidenceMin, constants.FactInjectionTopN,
+		ic.UserID, ic.AgentID, ic.Query, constants.FactInjectionConfidenceMin, factTopN,
 		scopeFilter.IncludeUserScope, scopeFilter.IncludeAgentScope)
 	if err == nil {
 		for factRows.Next() {
@@ -154,7 +173,7 @@ func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext
 
 	var history []historyRow
 	historyCtx, cancelHistory := context.WithTimeout(ctx, constants.HistoryReadTimeout)
-	historyTopN := inj.platformInt(ctx, "memory.history_injection_top_n", constants.HistoryInjectionTopN)
+	historyTopN := inj.resourceInt(ctx, ic, "memory.history_injection_top_n", constants.HistoryInjectionTopN)
 	historyRows, historyErr := tx.Query(historyCtx, historyInjectionQuery(), ic.UserID, ic.AgentID, ic.Query, historyTopN,
 		scopeFilter.IncludeUserScope, scopeFilter.IncludeAgentScope)
 	if historyErr == nil {

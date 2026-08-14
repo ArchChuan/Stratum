@@ -165,7 +165,7 @@ func TestServiceSetPlatformValues(t *testing.T) {
 	})
 
 	t.Run("rejects out-of-bounds value", func(t *testing.T) {
-		err := svc.SetPlatformValues(context.Background(), map[string]any{"memory.recall_top_k": 999}, "admin-1")
+		err := svc.SetPlatformValues(context.Background(), map[string]any{"evaluation.optimizer.temperature": 5}, "admin-1")
 		var invalid *domain.ErrInvalidParameter
 		if !domain.AsInvalidParameter(err, &invalid) {
 			t.Fatalf("want ErrInvalidParameter, got %v", err)
@@ -173,10 +173,10 @@ func TestServiceSetPlatformValues(t *testing.T) {
 	})
 
 	t.Run("merge semantics: partial write keeps existing", func(t *testing.T) {
-		_ = svc.SetPlatformValues(context.Background(), map[string]any{"memory.recall_top_k": 10}, "admin-1")
-		_ = svc.SetPlatformValues(context.Background(), map[string]any{"memory.fact_injection_top_n": 8}, "admin-1")
+		_ = svc.SetPlatformValues(context.Background(), map[string]any{"evaluation.optimizer.temperature": 0.5}, "admin-1")
+		_ = svc.SetPlatformValues(context.Background(), map[string]any{"evaluation.optimizer.max_tokens": 2048}, "admin-1")
 		// 第二次只写一个 key,不能清掉第一个。
-		if _, ok := store.values["memory.recall_top_k"]; !ok {
+		if _, ok := store.values["evaluation.optimizer.temperature"]; !ok {
 			t.Fatal("merge write must not wipe previously stored keys")
 		}
 	})
