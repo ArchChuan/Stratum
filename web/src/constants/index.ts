@@ -15,6 +15,11 @@ export const AGENT_MAX_CONTEXT_TOKENS_STEP = 1000;
 export const AGENT_DEFAULT_MAX_CONTEXT_TOKENS = 0;
 // 与后端 pkg/constants/agent.go DefaultContextWindowRatio 同源，后端为权威。
 export const AGENT_CONTEXT_WINDOW_RATIO = 0.85;
+// 与后端 pkg/constants/evaluation.go TunableTemperatureMin/Max 同源，后端为权威。
+// provider（Qwen/Zhipu）拒绝 >1，越界会在执行期 500。
+export const AGENT_TEMPERATURE_MIN = 0;
+export const AGENT_TEMPERATURE_MAX = 1;
+export const AGENT_TEMPERATURE_STEP = 0.1;
 
 export const DEFAULT_PAGE_SIZE = 20;
 export const COMPACT_PAGE_SIZE = 10;

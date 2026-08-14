@@ -16,6 +16,9 @@ import {
   AGENT_MAX_TOKENS_MIN,
   AGENT_MAX_TOKENS_STEP,
   AGENT_MIN_MAX_ITERATIONS,
+  AGENT_TEMPERATURE_MAX,
+  AGENT_TEMPERATURE_MIN,
+  AGENT_TEMPERATURE_STEP,
   REASONING_EFFORT_OPTIONS,
 } from '@/constants';
 import type { Member } from '@/modules/iam';
@@ -287,9 +290,21 @@ export const AgentFormSections = ({
                     <Form.Item
                       label="温度（temperature）"
                       name="temperature"
-                      extra="采样随机性：0 = 未设置（使用平台默认），通常 0.7"
+                      rules={[{
+                        type: 'number',
+                        min: AGENT_TEMPERATURE_MIN,
+                        max: AGENT_TEMPERATURE_MAX,
+                        message: `范围 ${AGENT_TEMPERATURE_MIN}~${AGENT_TEMPERATURE_MAX}（0 = 使用平台默认）`,
+                      }]}
+                      extra="控制输出的随机性与创造性：值越低，输出越确定、保守；值越高，输出越发散、多样。范围 0~1，0 = 未设置（使用平台默认，通常 0.7）"
                     >
-                      <Slider min={0} max={2} step={0.1} marks={{ 0: '0', 2: '2' }} ariaLabelForHandle="temperature" />
+                      <Slider
+                        min={AGENT_TEMPERATURE_MIN}
+                        max={AGENT_TEMPERATURE_MAX}
+                        step={AGENT_TEMPERATURE_STEP}
+                        marks={{ [AGENT_TEMPERATURE_MIN]: '0', [AGENT_TEMPERATURE_MAX]: '1' }}
+                        ariaLabelForHandle="temperature"
+                      />
                     </Form.Item>
                     {supportsReasoning && (
                       <Form.Item
