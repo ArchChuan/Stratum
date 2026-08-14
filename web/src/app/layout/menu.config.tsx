@@ -155,11 +155,6 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
           label: '审计日志',
         },
         {
-          key: '/mechanism/profiles',
-          icon: <DatabaseOutlined />,
-          label: '模型档案',
-        },
-        {
           key: '/admin/tenants',
           icon: <GlobalOutlined />,
           label: '全局租户',
@@ -186,7 +181,6 @@ export const resolveOpenKeys = (pathname: string): string[] => {
   if (
     pathname.startsWith('/models') ||
     pathname.startsWith('/audit') ||
-    pathname.startsWith('/mechanism') ||
     pathname.startsWith('/admin')
   )
     return ['platform-admin-group'];

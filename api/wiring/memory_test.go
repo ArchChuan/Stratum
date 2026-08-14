@@ -53,8 +53,7 @@ func TestBuildTenantLLMWorkersUsesDynamicProcessorsWithoutEagerResolve(t *testin
 		return completionClientForWiringTest{}, nil
 	}
 
-	// baseline nil：证明 worker 构造不因基线缺失而解析（懒注入，纯内存兜底）。
-	workerSet := appendTenantLLMWorkers(nil, "tenant-1", nil, nil, resolver, nil, "", zap.NewNop())
+	workerSet := appendTenantLLMWorkers(nil, "tenant-1", nil, nil, resolver, zap.NewNop())
 	if resolved != 0 {
 		t.Fatalf("tenant LLM resolved during worker construction: %d calls", resolved)
 	}

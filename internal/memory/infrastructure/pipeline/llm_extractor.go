@@ -12,8 +12,7 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
-// extractionSystemPrompt 是抽取模板兜底（现状硬编码值）。机制基线
-// （model_profiles）建档后由 wiring 注入覆盖，空值维持现状行为。
+// extractionSystemPrompt 是抽取模板（现状硬编码值，mechanism 移除后为唯一权威）。
 const extractionSystemPrompt = `你是一个长期记忆提取助手，负责从对话中提取关于用户（%s）的有价值事实，供 AI 助手（%s）在未来对话中使用。
 
 提取规则（严格执行）：
@@ -40,10 +39,8 @@ type LLMExtractor struct {
 	resolver memport.ResourceParamResolver
 	// tenantID is captured at construction (the extractor is built per tenant
 	// by the wiring seam); agentID arrives per ExtractFacts call.
-	tenantID        string
-	systemPrompt    string
-	extractionModel string
-	logger          *zap.Logger
+	tenantID string
+	logger   *zap.Logger
 }
 
 func NewLLMExtractor(client LLMClient) *LLMExtractor {
@@ -59,26 +56,10 @@ func (e *LLMExtractor) SetResourceResolver(r memport.ResourceParamResolver) { e.
 // the extractor's lifetime.
 func (e *LLMExtractor) SetTenantID(t string) { e.tenantID = t }
 
-// SetSystemPrompt overrides the extraction template with the mechanism
-// baseline prompt. Empty keeps the built-in extractionSystemPrompt fallback.
-func (e *LLMExtractor) SetSystemPrompt(p string) { e.systemPrompt = p }
-
-// SetExtractionModel sets the extraction model from the mechanism baseline.
-// Empty keeps the client's default resolution (pre-change behavior).
-func (e *LLMExtractor) SetExtractionModel(m string) { e.extractionModel = m }
-
 // WithLogger 注入降级日志记录器（结构化失败白名单摘要）。nil 安全。
 func (e *LLMExtractor) WithLogger(l *zap.Logger) *LLMExtractor {
 	e.logger = l
 	return e
-}
-
-// systemPromptOr 返回生效抽取模板：基线注入值优先，空则兜底内置常量。
-func (e *LLMExtractor) systemPromptOr() string {
-	if e.systemPrompt != "" {
-		return e.systemPrompt
-	}
-	return extractionSystemPrompt
 }
 
 // maxFacts resolves memory.max_facts_per_extraction for the target agent,
@@ -95,9 +76,10 @@ func (e *LLMExtractor) maxFacts(ctx context.Context, agentID string) int {
 }
 
 func (e *LLMExtractor) ExtractFacts(ctx context.Context, userID, agentID string, message string) ([]*memport.ExtractedFact, error) {
-	system := fmt.Sprintf(e.systemPromptOr(), userID, agentID, e.maxFacts(ctx, agentID))
+	system := fmt.Sprintf(extractionSystemPrompt, userID, agentID, e.maxFacts(ctx, agentID))
 	req := &memport.CompletionRequest{
-		Model: e.extractionModel,
+		// 抽取模型为空：交由 llmgateway client 默认解析（pre-refactor 行为）。
+		Model: "",
 		Messages: []memport.CompletionMessage{
 			{Role: "system", Content: system},
 			{Role: "user", Content: message},
