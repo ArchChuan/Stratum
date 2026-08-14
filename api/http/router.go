@@ -57,7 +57,6 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	registerMemory(r, c, requireActive)
 	registerAudit(r, c, requireActive)
 	registerMechanism(r, c, requireActive)
-	registerPrompt(r, c, requireActive)
 	registerLLMAdmin(r, c, requireActive)
 	if c.Config.AvatarDir != "" {
 		r.GET("/avatars/:filename", func(ctx *gin.Context) {
@@ -613,26 +612,6 @@ func registerMechanism(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 			matrix.POST("/adopt", h.AdoptProfile)
 		}
 	}
-}
-
-func registerPrompt(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
-	if c.Prompt == nil || c.Prompt.Registry == nil {
-		return
-	}
-	h := handler.NewPromptHandler(c.Prompt.Registry, c.Prompt.AB, c.Logger)
-
-	// 提示词管理面:仅 global admin 可管理,与前端菜单/路由守卫统一;
-	// 组内不再需要逐路由 adminMW,base 的 RequireGlobalAdmin 已覆盖全部。
-	prompts := r.Group("/prompts", protectedTenantMiddleware(c, middleware.RequireGlobalAdmin())...)
-	prompts.POST("", requireActive, h.CreatePrompt)
-	prompts.GET("", h.ListPrompts)
-	prompts.GET("/:key/versions", h.ListVersions)
-	prompts.POST("/:key/versions/:version/publish", requireActive, h.PublishVersion)
-
-	bindings := r.Group("/prompts/bindings", protectedTenantMiddleware(c, middleware.RequireGlobalAdmin())...)
-	bindings.GET("", requireActive, h.ListBindings)
-	bindings.PUT("", requireActive, h.UpsertBinding)
-	bindings.DELETE("/:key/:scope", requireActive, h.DeleteBinding)
 }
 
 func registerLLMAdmin(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {

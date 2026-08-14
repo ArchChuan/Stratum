@@ -46,7 +46,6 @@ type Container struct {
 	Scheduler            *Scheduler
 	Collab               *Collab
 	Audit                *Audit
-	Prompt               *Prompt
 	Mechanism            *Mechanism
 	ReadinessCheck       func(context.Context) map[string]error
 	RevisionObjectStore  pkgobjectstore.Store
@@ -75,7 +74,6 @@ func BuildContainer(ctx context.Context, cfg *config.Config, logger *zap.Logger)
 	steps := []buildStep{
 		{"storage", c.buildStorage},
 		{"audit", c.buildAudit},
-		{"prompt", c.buildPrompt},
 		{"mechanism", c.buildMechanism},
 		{"llmgateway", c.buildLLMGateway},
 		{"platform", c.buildPlatform},
@@ -262,16 +260,9 @@ func (c *Container) buildAudit(ctx context.Context) error {
 	return nil
 }
 
-func (c *Container) buildPrompt(ctx context.Context) error {
-	db := c.dbOrNil()
-	c.Prompt = buildPrompt(db)
-	return nil
-}
-
 func (c *Container) newFromExistingInitialSteps() []buildStep {
 	return []buildStep{
 		{"audit", c.buildAudit},
-		{"prompt", c.buildPrompt},
 		{"platform", c.buildPlatform},
 		{"parameters", c.buildParameters},
 		{"revision-object-store", c.buildRevisionObjectStore},

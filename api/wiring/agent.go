@@ -78,7 +78,6 @@ type Agent struct {
 	ProposalService      *agent.ResourceChangeProposalService
 	OperationGateService *agent.OperationGateService
 	OperationProposalSvc *agent.OperationProposalService
-	PromptResolver       *agent.PromptResolver
 }
 
 // ragSearchAdapter wraps *knowledge.RAGService to satisfy
@@ -376,7 +375,6 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		tenantRoleAdapter{service: tenantMemberService(c)}, systemAssistantDiagnosticCollectors(c, a),
 	)
 	deps.OfficialDocsSearch = officialdocs.Search
-	wirePromptResolver(c, a)
 	deps.DiagnosticProvider = a.DiagnosticProvider
 	a.Service = agent.NewAgentService(deps)
 	if db != nil && c.Skill != nil && c.MCP != nil && c.Knowledge != nil &&
@@ -479,15 +477,6 @@ func memoryBufferClosure(svc *memapp.MemoryService) func(ctx context.Context, te
 			MessageID:      uuid.Must(uuid.NewV7()).String(),
 			CreatedAt:      time.Now(),
 		})
-	}
-}
-
-// wirePromptResolver constructs the PromptResolver and injects the
-// centralized prompt registry for versioned prompt resolution.
-func wirePromptResolver(c *Container, a *Agent) {
-	a.PromptResolver = agent.NewPromptResolver(nil)
-	if c.Prompt != nil && c.Prompt.Registry != nil {
-		a.PromptResolver.SetRegistry(c.Prompt.Registry)
 	}
 }
 
