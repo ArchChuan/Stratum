@@ -34,6 +34,7 @@ export const ChatComposer = ({
   >
     <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
       <TextArea
+        aria-label="消息输入框"
         value={input}
         onChange={(e) => setInput(e.target.value)}
         onKeyDown={(e) => {

@@ -147,16 +147,26 @@ export const AppShell = ({ children }: AppShellProps) => {
     setRouteSwitching(true);
     const el = contentRef.current;
     let secondRaf = 0;
+    let revealTimer = 0;
+    // 幂等移除：双 rAF 优先（正常 ~2 帧移除），setTimeout 兜底防滞留。
+    // 主线程繁忙或标签页失焦时 rAF 可能长期不触发，遮罩滞留会全屏盖住内容
+    //（"UI 没了 + 页面卡住"，无 JS 报错）；兜底确保最终移除。
+    const reveal = () => {
+      if (el) el.style.transform = '';
+      setRouteSwitching(false);
+    };
     const firstRaf = requestAnimationFrame(() => {
       if (el) el.style.transform = 'translateZ(0)';
       secondRaf = requestAnimationFrame(() => {
-        if (el) el.style.transform = '';
-        setRouteSwitching(false);
+        secondRaf = 0;
+        reveal();
       });
     });
+    revealTimer = window.setTimeout(reveal, 2000);
     return () => {
       cancelAnimationFrame(firstRaf);
       if (secondRaf) cancelAnimationFrame(secondRaf);
+      window.clearTimeout(revealTimer);
     };
   }, [location.pathname]);
 
@@ -366,6 +376,10 @@ export const AppShell = ({ children }: AppShellProps) => {
             margin: 0,
             background: '#f5f7fa',
             minHeight: 'calc(100vh - 56px)',
+            // .route-blank 用 absolute inset:0 盖住内容区；Content 必须作为 positioned
+            // ancestor，否则遮罩以视口/外层 Layout 为 containing block，滞留时会全屏盖住
+            // 侧栏、Header 和内容（表现为"UI 没了 + 页面点不动"，且无 JS 报错）。
+            position: 'relative',
           }}
         >
           {children}

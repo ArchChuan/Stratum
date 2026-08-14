@@ -73,6 +73,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
   // Windows DComp 合成器把旧会话纹理投到新会话首帧（残影）。
   const [contentSwitching, setContentSwitching] = useState(false);
   const contentBlankRafRef = useRef<number>(0);
+  const contentBlankTimerRef = useRef<number>(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const pinnedToBottomRef = useRef(true); // auto-scroll only when user is at the bottom
@@ -193,6 +194,10 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
     // 避免旧遮罩在错误时机被移除。
     return () => {
       if (contentBlankRafRef.current) cancelAnimationFrame(contentBlankRafRef.current);
+      if (contentBlankTimerRef.current) {
+        window.clearTimeout(contentBlankTimerRef.current);
+        contentBlankTimerRef.current = 0;
+      }
     };
   }, [selectedConv]);
 
@@ -266,16 +271,30 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
         return;
       }
       // 双 rAF 后再移除遮罩：消息已 set、新纹理至少被合成一帧。
-      // 此时移除不会再生残影，与 AppShell route-blank 同构。
+      // 此时移除不会再生残影，与 AppShell route-blank 同构；
+      // setTimeout 兜底防 rAF 长期不触发（主线程忙/标签失焦）导致遮罩滞留。
+      const reveal = () => {
+        if (contentBlankRafRef.current) {
+          cancelAnimationFrame(contentBlankRafRef.current);
+          contentBlankRafRef.current = 0;
+        }
+        contentBlankTimerRef.current = 0;
+        setContentSwitching(false);
+      };
       contentBlankRafRef.current = requestAnimationFrame(() => {
         contentBlankRafRef.current = requestAnimationFrame(() => {
           contentBlankRafRef.current = 0;
-          setContentSwitching(false);
+          reveal();
         });
       });
+      contentBlankTimerRef.current = window.setTimeout(reveal, 2000);
     })();
     return () => {
       cancelled = true;
+      if (contentBlankTimerRef.current) {
+        window.clearTimeout(contentBlankTimerRef.current);
+        contentBlankTimerRef.current = 0;
+      }
     };
   }, [selectedConv]);
 
