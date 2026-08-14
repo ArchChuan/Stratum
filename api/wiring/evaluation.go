@@ -1042,7 +1042,6 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	}
 	service := evalapp.NewService(evaluationResourceRouter{adapters: resourceAdapters}, runRepo, traceReader, buildEvaluationJudge(c), suiteRepo)
 	jobService := evalapp.NewJobService(jobRepo, service)
-	c.buildMatrixEvaluation(suiteService, jobService, queryRepo, runRepo, resourceAdapters)
 	var rewriter evalapp.PromptRewriter
 	if c.Agent != nil && c.Agent.TenantResolver != nil {
 		rewriter = gatewayPromptRewriter{resolver: c.Agent.TenantResolver, params: c.Parameters.Service}
