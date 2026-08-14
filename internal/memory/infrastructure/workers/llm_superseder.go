@@ -7,8 +7,10 @@ import (
 
 	"go.uber.org/zap"
 
+	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 // supersedePromptTemplate 是判断模板（现状硬编码值，mechanism 移除后为唯一权威）。
@@ -61,12 +63,10 @@ func (s *LLMSuperseder) JudgeSupersede(ctx context.Context, oldFact, newFact str
 		return nil, fmt.Errorf("llm supersede: client unavailable")
 	}
 	prompt := fmt.Sprintf(supersedePromptTemplate, oldFact, newFact)
-	judgment, err := pipeline.CompleteStructured(ctx, client, &memport.CompletionRequest{
-		// 判定模型为空：交由 llmgateway client 默认解析（pre-refactor 行为）。
-		Model:     "",
-		Messages:  []memport.CompletionMessage{{Role: "user", Content: prompt}},
-		MaxTokens: 256,
-	}, parseSupersedeJudgment,
+	// 判定模型为空：交由 llmgateway client 默认解析（pre-refactor 行为）。
+	judgment, err := pipeline.CompleteStructured(ctx, client, llmdomain.NewExtractRequest(
+		"", "", prompt, 0, constants.MemorySupersedeJudgeMaxTokens,
+	), parseSupersedeJudgment,
 		func(j memport.SupersedeJudgment) error { return j.Validate() },
 		s.logger, "supersede")
 	if err != nil {

@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
-	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	memworkers "github.com/byteBuilderX/stratum/internal/memory/infrastructure/workers"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
@@ -62,8 +61,8 @@ func TestBuildTenantLLMWorkersUsesDynamicProcessorsWithoutEagerResolve(t *testin
 
 type completionClientForWiringTest struct{}
 
-func (completionClientForWiringTest) Complete(context.Context, *memport.CompletionRequest) (*memport.CompletionResponse, error) {
-	return &memport.CompletionResponse{}, nil
+func (completionClientForWiringTest) Complete(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
+	return &llmdomain.CompletionResponse{}, nil
 }
 
 type nilCompletionClientForWiringTest struct{}
@@ -74,7 +73,7 @@ func (nilCompletionClientForWiringTest) Complete(context.Context, *llmdomain.Com
 
 func TestMemoryLLMAdapterRejectsNilProviderResponse(t *testing.T) {
 	_, err := (memoryLLMAdapter{client: nilCompletionClientForWiringTest{}}).Complete(
-		context.Background(), &memport.CompletionRequest{},
+		context.Background(), &llmdomain.CompletionRequest{},
 	)
 	if err == nil {
 		t.Fatal("expected nil provider response to fail closed")
@@ -91,7 +90,7 @@ func (c *tenantCapturingClientForWiringTest) Complete(ctx context.Context, _ *ll
 func TestMemoryLLMAdapterInjectsTenantIntoContext(t *testing.T) {
 	client := &tenantCapturingClientForWiringTest{}
 	adapter := memoryLLMAdapter{client: client, tenantID: "tenant-123"}
-	if _, err := adapter.Complete(context.Background(), &memport.CompletionRequest{}); err != nil {
+	if _, err := adapter.Complete(context.Background(), &llmdomain.CompletionRequest{}); err != nil {
 		t.Fatal(err)
 	}
 	if client.gotTenant != "tenant-123" {
@@ -103,7 +102,7 @@ func TestMemoryLLMAdapterEmptyTenantKeepsContextTenant(t *testing.T) {
 	client := &tenantCapturingClientForWiringTest{}
 	adapter := memoryLLMAdapter{client: client}
 	ctx := reqctx.WithTenantID(context.Background(), "ctx-tenant")
-	if _, err := adapter.Complete(ctx, &memport.CompletionRequest{}); err != nil {
+	if _, err := adapter.Complete(ctx, &llmdomain.CompletionRequest{}); err != nil {
 		t.Fatal(err)
 	}
 	if client.gotTenant != "ctx-tenant" {
@@ -125,8 +124,8 @@ func TestMemoryLLMAdapterForwardsResponseFormat(t *testing.T) {
 	t.Run("json_object passthrough", func(t *testing.T) {
 		client := &requestCapturingGatewayCompleter{}
 		adapter := memoryLLMAdapter{client: client}
-		if _, err := adapter.Complete(context.Background(), &memport.CompletionRequest{
-			ResponseFormat: &memport.ResponseFormat{Type: "json_object"},
+		if _, err := adapter.Complete(context.Background(), &llmdomain.CompletionRequest{
+			ResponseFormat: &llmdomain.ResponseFormat{Type: "json_object"},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -141,7 +140,7 @@ func TestMemoryLLMAdapterForwardsResponseFormat(t *testing.T) {
 	t.Run("nil stays nil", func(t *testing.T) {
 		client := &requestCapturingGatewayCompleter{}
 		adapter := memoryLLMAdapter{client: client}
-		if _, err := adapter.Complete(context.Background(), &memport.CompletionRequest{}); err != nil {
+		if _, err := adapter.Complete(context.Background(), &llmdomain.CompletionRequest{}); err != nil {
 			t.Fatal(err)
 		}
 		if client.captured == nil || client.captured.ResponseFormat != nil {

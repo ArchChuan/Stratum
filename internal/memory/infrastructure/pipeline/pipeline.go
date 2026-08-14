@@ -12,7 +12,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"go.uber.org/zap"
 
-	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
+	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
@@ -28,7 +28,7 @@ type EmbedClient interface {
 
 // LLMClient performs a single non-streaming completion against an LLM provider.
 // Defined consumer-side; concrete *llmgateway.Gateway satisfies it structurally.
-type LLMClient = memport.Completer
+type LLMClient = llmdomain.Completer
 
 // LLMResolver returns a per-tenant LLM client at call time. Returns nil when
 // the tenant has no provider configured. Mirrors EmbedServiceResolver so the

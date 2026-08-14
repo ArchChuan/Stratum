@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
+	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/persistence"
@@ -309,13 +310,7 @@ func (w *EnricherWorker) runSummaryAsyncSafe(ctx context.Context, ev *MemoryEnri
 
 func (w *EnricherWorker) callEnrichLLM(ctx context.Context, llm LLMClient, role, content string) (*EnrichmentResult, error) {
 	prompt := formatEnrichmentPrompt(w.enrichmentTmpl, role, content)
-	req := &port.CompletionRequest{
-		Model: w.model,
-		Messages: []port.CompletionMessage{
-			{Role: "user", Content: prompt},
-		},
-		Temperature: 0.1,
-	}
+	req := llmdomain.NewExtractRequest(w.model, "", prompt, constants.MemoryEnrichLLMTemperature, 0)
 
 	llmCtx, cancel := context.WithTimeout(ctx, constants.MemoryEnrichLLMTimeout)
 	defer cancel()
@@ -349,16 +344,16 @@ func unitInterval(v float64) bool {
 // confidence ∈ [0,1]。返回 *port.ValidationError 或 nil。
 func (r EnrichmentResult) Validate() error {
 	if !unitInterval(r.Importance) {
-		return &port.ValidationError{Location: "enrichment", Field: "importance",
+		return &port.ValidationError{Location: "enrichment", FieldName: "importance",
 			Value: strconv.FormatFloat(r.Importance, 'g', -1, 64), Reason: "importance must be in [0,1]"}
 	}
 	for i, e := range r.Entities {
 		if strings.TrimSpace(e.Name) == "" {
-			return &port.ValidationError{Location: "enrichment", Field: "entities",
+			return &port.ValidationError{Location: "enrichment", FieldName: "entities",
 				Value: strconv.Itoa(i), Reason: "entity name must not be empty"}
 		}
 		if !unitInterval(e.Confidence) {
-			return &port.ValidationError{Location: "enrichment", Field: "entities",
+			return &port.ValidationError{Location: "enrichment", FieldName: "entities",
 				Value:  fmt.Sprintf("index %d confidence=%s", i, strconv.FormatFloat(e.Confidence, 'g', -1, 64)),
 				Reason: "entity confidence must be in [0,1]"}
 		}
@@ -443,13 +438,7 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnri
 		input = "[Previous Summary]: " + prevSummary + "\n\n[New Messages]:\n" + input
 	}
 	prompt := formatSummaryPrompt(w.summaryTmpl, input)
-	req := &port.CompletionRequest{
-		Model: w.summaryModel,
-		Messages: []port.CompletionMessage{
-			{Role: "user", Content: prompt},
-		},
-		Temperature: 0.3,
-	}
+	req := llmdomain.NewSummarizeRequest(w.summaryModel, prompt, nil, 0)
 	llmCtx, cancel := context.WithTimeout(ctx, constants.MemorySummaryLLMTimeout)
 	defer cancel()
 	resp, err := llm.Complete(llmCtx, req)
@@ -458,7 +447,7 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnri
 	}
 	summary := strings.TrimSpace(resp.Content)
 
-	if err := w.writeSummary(ctx, schema, ev, summary, resp.CompletionTokens); err != nil {
+	if err := w.writeSummary(ctx, schema, ev, summary, resp.Usage.CompletionTokens); err != nil {
 		return err
 	}
 
