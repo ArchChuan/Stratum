@@ -3,7 +3,13 @@ import { useCallback, useState } from 'react';
 
 import type { Agent, AgentFormValues } from '../model/agent';
 
-import { AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
+import {
+  AGENT_DEFAULT_MAX_CONTEXT_TOKENS,
+  AGENT_DEFAULT_MAX_ITERATIONS,
+  AGENT_MAX_CONTEXT_TOKENS_MAX,
+  AGENT_MAX_CONTEXT_TOKENS_MIN,
+  AGENT_MAX_CONTEXT_TOKENS_STEP,
+} from '@/constants';
 import { operationProposalApi } from '@/modules/operation-gate';
 import { extractErrorMessage } from '@/shared/lib';
 
@@ -81,7 +87,7 @@ export const AgentSelfModifyModal = ({ agent, open, onClose }: AgentSelfModifyMo
                 systemPrompt: agent.systemPrompt,
                 llmModel: agent.llmModel,
                 maxIterations: agent.maxIterations ?? AGENT_DEFAULT_MAX_ITERATIONS,
-                maxContextTokens: agent.maxContextTokens ?? 8000,
+                maxContextTokens: agent.maxContextTokens ?? AGENT_DEFAULT_MAX_CONTEXT_TOKENS,
                 memoryScope: agent.memoryScope || 'user',
                 checkpointEnabled: agent.checkpointEnabled ?? false,
               }
@@ -103,8 +109,12 @@ export const AgentSelfModifyModal = ({ agent, open, onClose }: AgentSelfModifyMo
         <Form.Item name="maxIterations" label="最大迭代次数">
           <InputNumber min={1} max={100} style={{ width: '100%' }} />
         </Form.Item>
-        <Form.Item name="maxContextTokens" label="最大上下文 Tokens">
-          <InputNumber min={1024} max={128000} step={1024} style={{ width: '100%' }} />
+        <Form.Item
+          name="maxContextTokens"
+          label="最大上下文 Tokens"
+          extra="0 = 自动按模型窗口解析（该弹窗模型为手动输入，不随窗口联动）"
+        >
+          <InputNumber min={AGENT_MAX_CONTEXT_TOKENS_MIN} max={AGENT_MAX_CONTEXT_TOKENS_MAX} step={AGENT_MAX_CONTEXT_TOKENS_STEP} style={{ width: '100%' }} />
         </Form.Item>
         <Form.Item name="memoryScope" label="记忆范围">
           <Input />

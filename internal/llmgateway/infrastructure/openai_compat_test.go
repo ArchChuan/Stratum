@@ -1,6 +1,7 @@
 package infrastructure
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -212,4 +213,109 @@ func TestOpenAICompatClient_ListModels_singlePageWithoutPagination(t *testing.T)
 	require.NoError(t, err)
 	require.Len(t, models, 1)
 	require.Equal(t, 1, reqCount)
+}
+
+// TestCompleteStream_400ContextLengthExceeded 验证流式路径（当前智谱 400
+// 根因所在）同样识别 context_length_exceeded 为永久语义错误；非语义 400
+// 错误正文携带结构化 error.message。
+func TestCompleteStream_400ContextLengthExceeded(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		wantCLE bool
+		wantMsg string
+	}{
+		{
+			name:    "error.code is context_length_exceeded",
+			body:    `{"error":{"code":"context_length_exceeded","message":"maximum context length reached"}}`,
+			wantCLE: true,
+		},
+		{
+			name:    "other 400 stays plain status error with message",
+			body:    `{"error":{"code":"invalid_request_error","message":"schema mismatch"}}`,
+			wantCLE: false,
+			wantMsg: "schema mismatch",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprint(w, tc.body)
+			}))
+			defer srv.Close()
+
+			client := NewOpenAICompatClient(ProviderConfig{
+				Name: "test-openai", BaseURL: srv.URL, APIKey: "sk-test",
+			}, zap.NewNop())
+			resp, err := client.CompleteStream(context.Background(),
+				&CompletionRequest{Model: "m1", Messages: []Message{{Role: "user", Content: "hi"}}},
+				func(string) {})
+			require.Nil(t, resp)
+			require.Error(t, err)
+			if tc.wantCLE {
+				require.True(t, IsContextLengthExceeded(err), "err = %v", err)
+			} else {
+				require.False(t, IsContextLengthExceeded(err), "err = %v", err)
+				require.Contains(t, err.Error(), "status 400")
+				require.Contains(t, err.Error(), tc.wantMsg)
+			}
+		})
+	}
+}
+
+// TestCompleteStream_NonJSONBodyNotInError 验证裸文本上游 body 不落入下游
+// 错误正文（红线：下游错误不落上游响应体），与
+// TestQwenClient_ErrorStatusExcludesUpstreamBody 同源守护。
+func TestCompleteStream_NonJSONBodyNotInError(t *testing.T) {
+	const marker = "raw-provider-secret-marker"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, marker)
+	}))
+	defer srv.Close()
+
+	client := NewOpenAICompatClient(ProviderConfig{
+		Name: "test-openai", BaseURL: srv.URL, APIKey: "sk-test",
+	}, zap.NewNop())
+	_, err := client.CompleteStream(context.Background(),
+		&CompletionRequest{Model: "m1", Messages: []Message{{Role: "user", Content: "hi"}}},
+		func(string) {})
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), marker, "non-JSON upstream body must not leak into error")
+	require.Contains(t, err.Error(), "status 400")
+}
+
+// TestErrorMessageFromBody 验证结构化 error.message 提取边界：仅 JSON error
+// 对象的非空 message 返回（截断+脱敏）；string error、非 JSON、空 message、
+// 空 body 均返回空串（防止任意上游文本进入错误正文）。
+func TestErrorMessageFromBody(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "object error message extracted", body: `{"error":{"message":"bad request: nope","code":"x"}}`, want: "bad request: nope"},
+		{name: "empty message", body: `{"error":{"message":""}}`, want: ""},
+		{name: "string error not extracted", body: `{"error":"invalid api key"}`, want: ""},
+		{name: "non-JSON body", body: "raw text marker", want: ""},
+		{name: "empty body", body: "", want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, errorMessageFromBody([]byte(tc.body)))
+		})
+	}
+}
+
+// TestRedactedBodySummary 验证凭据脱敏与超限截断：键值结构中的凭据
+// （api_key 等 namedCredential 键）被替换为 [REDACTED]，超过
+// streamErrorBodyMaxBytes 的 body 被截断。裸值（如自然语言里的 sk- 前缀）
+// 不在 RedactCredentials 匹配范围，属于设计预期。
+func TestRedactedBodySummary(t *testing.T) {
+	got := redactedBodySummary([]byte(`{"error":{"api_key":"sk-abcd1234","message":"auth failed"}}`))
+	require.NotContains(t, got, "sk-abcd1234")
+	require.Contains(t, got, "[REDACTED]")
+	big := bytes.Repeat([]byte("x"), streamErrorBodyMaxBytes+100)
+	require.Len(t, redactedBodySummary(big), streamErrorBodyMaxBytes)
 }

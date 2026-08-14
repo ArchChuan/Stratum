@@ -169,9 +169,17 @@ func endTime(span opikSpan) time.Time {
 	return span.StartTime
 }
 
+// errorMessage 透传 span 的错误信息到 OPIK error_info.message。Message 来自
+// OTel exception 事件（error.message），源头已在 gateway/llm 层经
+// RedactCredentials 脱敏，非空时直接透传，让 OPIK 携带上游可见的精确错误
+// （如智谱 error.message，供 agent 层可观测对账）；为空时用兜底文案。
+// 不透传 Type/Traceback（可能含内部路径或未脱敏正文）。
 func errorMessage(info *errorInfo) string {
 	if info == nil {
 		return ""
+	}
+	if info.Message != "" {
+		return info.Message
 	}
 	return "上游执行失败"
 }
