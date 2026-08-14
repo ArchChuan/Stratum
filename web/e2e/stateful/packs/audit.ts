@@ -198,8 +198,16 @@ const verifyFilters = async (
   // onSearch 统一转 RFC3339 传给后端）。
   await resetFilters();
   const target = new Date(created_at);
+  // RangePicker 输入为秒精度（formatLocal 无毫秒），dayjs 解析为整秒，API 收到的
+  // from/to 恒为 .000 毫秒。DB 对账若保留 created_at 的毫秒余数，会把落在
+  // [to.000, to.xxx] 窗口内的行计入（created_at 是审计 now()，几乎总带毫秒）；
+  // 全量套件同一租户积累多 pack 审计行后，某行恰好落入该窗口 → total 恒比 API 多 1
+  // （单 pack 因该租户只有当前 1 行、远离边界而侥幸通过）。对账必须用与 API 相同的
+  // 秒截断边界，故 setMilliseconds(0)。
   const from = new Date(target.getTime() - 60_000);
+  from.setMilliseconds(0);
   const to = new Date(target.getTime() + 60_000);
+  to.setMilliseconds(0);
   const rangeInputs = page.locator('.ant-picker-range .ant-picker-input input');
   await rangeInputs.nth(0).fill(formatLocal(from));
   await rangeInputs.nth(0).press('Enter');
