@@ -8,6 +8,7 @@ import (
 
 	"go.uber.org/zap"
 
+	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
@@ -19,8 +20,7 @@ type PlatformParams interface {
 	Int(ctx context.Context, key string) (int, bool)
 }
 
-// extractionSystemPrompt 是抽取模板兜底（现状硬编码值）。机制基线
-// （model_profiles）建档后由 wiring 注入覆盖，空值维持现状行为。
+// extractionSystemPrompt 是抽取模板（现状硬编码值，mechanism 移除后为唯一权威）。
 const extractionSystemPrompt = `你是一个长期记忆提取助手，负责从对话中提取关于用户（%s）的有价值事实，供 AI 助手（%s）在未来对话中使用。
 
 提取规则（严格执行）：
@@ -43,11 +43,9 @@ fact_type 分类：
 
 // LLMExtractor adapts LLMClient to memport.LLMExtractor.
 type LLMExtractor struct {
-	client          LLMClient
-	params          PlatformParams
-	systemPrompt    string
-	extractionModel string
-	logger          *zap.Logger
+	client LLMClient
+	params PlatformParams
+	logger *zap.Logger
 }
 
 func NewLLMExtractor(client LLMClient) *LLMExtractor {
@@ -57,26 +55,10 @@ func NewLLMExtractor(client LLMClient) *LLMExtractor {
 // SetPlatformParams wires the platform parameter reader (registry-backed).
 func (e *LLMExtractor) SetPlatformParams(p PlatformParams) { e.params = p }
 
-// SetSystemPrompt overrides the extraction template with the mechanism
-// baseline prompt. Empty keeps the built-in extractionSystemPrompt fallback.
-func (e *LLMExtractor) SetSystemPrompt(p string) { e.systemPrompt = p }
-
-// SetExtractionModel sets the extraction model from the mechanism baseline.
-// Empty keeps the client's default resolution (pre-change behavior).
-func (e *LLMExtractor) SetExtractionModel(m string) { e.extractionModel = m }
-
 // WithLogger 注入降级日志记录器（结构化失败白名单摘要）。nil 安全。
 func (e *LLMExtractor) WithLogger(l *zap.Logger) *LLMExtractor {
 	e.logger = l
 	return e
-}
-
-// systemPromptOr 返回生效抽取模板：基线注入值优先，空则兜底内置常量。
-func (e *LLMExtractor) systemPromptOr() string {
-	if e.systemPrompt != "" {
-		return e.systemPrompt
-	}
-	return extractionSystemPrompt
 }
 
 // maxFacts resolves memory.max_facts_per_extraction (platform layer),
@@ -92,15 +74,8 @@ func (e *LLMExtractor) maxFacts(ctx context.Context) int {
 }
 
 func (e *LLMExtractor) ExtractFacts(ctx context.Context, userID, agentID string, message string) ([]*memport.ExtractedFact, error) {
-	system := fmt.Sprintf(e.systemPromptOr(), userID, agentID, e.maxFacts(ctx))
-	req := &memport.CompletionRequest{
-		Model: e.extractionModel,
-		Messages: []memport.CompletionMessage{
-			{Role: "system", Content: system},
-			{Role: "user", Content: message},
-		},
-		MaxTokens: constants.MemoryExtractLLMMaxTokens,
-	}
+	system := fmt.Sprintf(extractionSystemPrompt, userID, agentID, e.maxFacts(ctx))
+	req := llmdomain.NewExtractRequest("", system, message, 0, constants.MemoryExtractLLMMaxTokens)
 	return extractFactsStructured(ctx, e.client, req, e.logger)
 }
 
@@ -109,8 +84,8 @@ func (e *LLMExtractor) ExtractFacts(ctx context.Context, userID, agentID string,
 // 0 条通过才触发带错重试，耗尽返回 typed error（保留 MarkFailed/DLQ）。
 func extractFactsStructured(
 	ctx context.Context,
-	client memport.Completer,
-	req *memport.CompletionRequest,
+	client llmdomain.Completer,
+	req *llmdomain.CompletionRequest,
 	logger *zap.Logger,
 ) ([]*memport.ExtractedFact, error) {
 	var valid []*memport.ExtractedFact
@@ -132,7 +107,7 @@ func extractFactsStructured(
 			}
 			if allInvalid {
 				return &memport.ValidationError{
-					Location: "facts", Field: "facts",
+					Location: "facts", FieldName: "facts",
 					Reason: "no fact passed validation",
 				}
 			}

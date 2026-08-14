@@ -28,10 +28,8 @@ import { executeIAMPack } from './stateful/packs/iam';
 import { executeKnowledgePack } from './stateful/packs/knowledge';
 import { executeLLMAdminPack } from './stateful/packs/llm-admin';
 import { executeMCPPack } from './stateful/packs/mcp';
-import { executeMechanismPack } from './stateful/packs/mechanism';
 import { executeMemoryPack } from './stateful/packs/memory';
 import { executeOperationGatePack } from './stateful/packs/operation-gate';
-import { executePromptPack } from './stateful/packs/prompt';
 import { executeScheduledTaskPack } from './stateful/packs/scheduled-task';
 import { executeSkillPack } from './stateful/packs/skill';
 import { executeWorkflowPack } from './stateful/packs/workflow';
@@ -217,11 +215,6 @@ const executePack = async (
     completedActions.push(...await executeMemoryPack({ actor: actors.memberA, pool, evidence, webURL }));
     return;
   }
-  if (pack === 'prompt') {
-    // /prompts 收紧为仅 global admin 可访问,执行 actor 必须带 global_role='global_admin'。
-    completedActions.push(...await executePromptPack({ actor: actors.systemAdmin, pool, evidence, webURL }));
-    return;
-  }
   if (pack === 'audit') {
     // /audit 为租户级资源:租户 owner(tenantAdmin 非 global_admin)可见、普通 member 不可见,
     // 对账 tenant schema resource_change_audits 并验证三种筛选。
@@ -232,10 +225,6 @@ const executePack = async (
   }
   if (pack === 'llm-admin') {
     completedActions.push(...await executeLLMAdminPack({ actor: actors.tenantAdmin, systemAdmin: actors.systemAdmin, pool, evidence, webURL, fixtureURL, backendURL }));
-    return;
-  }
-  if (pack === 'mechanism') {
-    completedActions.push(...await executeMechanismPack({ systemAdmin: actors.systemAdmin, pool, evidence, webURL, backendURL }));
     return;
   }
   if (pack === 'operation-gate') {

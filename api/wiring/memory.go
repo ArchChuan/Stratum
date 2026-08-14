@@ -52,7 +52,7 @@ type memoryLLMAdapter struct {
 	tenantID string
 }
 
-func (a memoryLLMAdapter) Complete(ctx context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+func (a memoryLLMAdapter) Complete(ctx context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 	if a.client == nil {
 		return nil, fmt.Errorf("memory llm adapter: client is nil")
 	}
@@ -62,30 +62,14 @@ func (a memoryLLMAdapter) Complete(ctx context.Context, req *memport.CompletionR
 	if a.tenantID != "" {
 		ctx = reqctx.WithTenantID(ctx, a.tenantID)
 	}
-	messages := make([]llmdomain.Message, len(req.Messages))
-	for i, message := range req.Messages {
-		messages[i] = llmdomain.Message{Role: message.Role, Content: message.Content}
-	}
-	response, err := a.client.Complete(ctx, &llmdomain.CompletionRequest{
-		Model: req.Model, Messages: messages, Temperature: float32(req.Temperature), MaxTokens: req.MaxTokens,
-		ResponseFormat: toLLMResponseFormat(req.ResponseFormat),
-	})
+	resp, err := a.client.Complete(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	if response == nil {
+	if resp == nil {
 		return nil, fmt.Errorf("memory llm adapter: provider returned nil response")
 	}
-	return &memport.CompletionResponse{Content: response.Content, CompletionTokens: response.Usage.CompletionTokens}, nil
-}
-
-// toLLMResponseFormat 把 memport 的本地 ResponseFormat 适配到 llmgateway domain
-// （DDD：memport 不能 import llmgateway domain，此转换只在组合根做一次）。
-func toLLMResponseFormat(rf *memport.ResponseFormat) *llmdomain.ResponseFormat {
-	if rf == nil {
-		return nil
-	}
-	return &llmdomain.ResponseFormat{Type: rf.Type}
+	return resp, nil
 }
 
 // platformParameterReader adapts the parameters application service to the
@@ -152,9 +136,8 @@ func (c *Container) buildMemoryService(mem *Memory, db *pgxpool.Pool, memRepo me
 		if c.Parameters != nil {
 			extractParams = platformParameterReader{svc: c.Parameters.Service}
 		}
-		baseline := c.mechanismBaselineForTenant(c.Config.MemoryPipeline.EnrichModel)
-		mem.Service.SetLLMExtractResolver(makeLLMExtractResolver(llmRes, extractParams, baseline, c.Logger))
-		mem.Service.SetLLMSupersederResolver(makeLLMSupersederResolver(llmRes, baseline, c.Logger))
+		mem.Service.SetLLMExtractResolver(makeLLMExtractResolver(llmRes, extractParams, c.Logger))
+		mem.Service.SetLLMSupersederResolver(makeLLMSupersederResolver(llmRes, c.Logger))
 	}
 	if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 		mem.Service.SetEmbedClientResolver(makeEmbedClientResolver(c.Knowledge.EmbedResolver))
@@ -257,9 +240,6 @@ func (c *Container) buildMemoryPipeline(mem *Memory, db *pgxpool.Pool) error {
 			return memoryLLMAdapter{client: gw, tenantID: tenantID}
 		})
 	}
-	// 机制基线（model_profiles 档案 → 种子兜底）注入 enricher：按现状
-	// EnrichModel 解析模型族，命中档案则覆盖富化/总结模板与模型。
-	p.SetMechanismBaseline(c.mechanismBaselineForTenant(pipelineCfg.EnrichModel))
 	mem.Pipeline = p
 	return nil
 }
@@ -291,7 +271,7 @@ func (c *Container) attachPipelineDynamic(p *pipeline.Pipeline) {
 	p.WithDynamic(&dynamic)
 }
 
-func makeLLMExtractResolver(llmRes *tenantCapabilityResolver, params pipeline.PlatformParams, baseline memport.MechanismBaselineResolver, logger *zap.Logger) func(context.Context, string) memport.LLMExtractor {
+func makeLLMExtractResolver(llmRes *tenantCapabilityResolver, params pipeline.PlatformParams, logger *zap.Logger) func(context.Context, string) memport.LLMExtractor {
 	return func(ctx context.Context, tenantID string) memport.LLMExtractor {
 		llm := llmRes.ResolveLLM(ctx, tenantID)
 		if llm == nil {
@@ -299,34 +279,17 @@ func makeLLMExtractResolver(llmRes *tenantCapabilityResolver, params pipeline.Pl
 		}
 		extractor := pipeline.NewLLMExtractor(memoryLLMAdapter{client: llm, tenantID: tenantID}).WithLogger(logger)
 		extractor.SetPlatformParams(params)
-		if baseline != nil {
-			if b, err := baseline(ctx, tenantID); err == nil {
-				if b.MemoryExtraction != "" {
-					extractor.SetSystemPrompt(b.MemoryExtraction)
-				}
-				extractor.SetExtractionModel(b.ExtractionModel)
-			}
-		}
 		return extractor
 	}
 }
 
-func makeLLMSupersederResolver(llmRes *tenantCapabilityResolver, baseline memport.MechanismBaselineResolver, logger *zap.Logger) func(context.Context, string) memport.LLMSuperseder {
+func makeLLMSupersederResolver(llmRes *tenantCapabilityResolver, logger *zap.Logger) func(context.Context, string) memport.LLMSuperseder {
 	return func(ctx context.Context, tenantID string) memport.LLMSuperseder {
 		llm := llmRes.ResolveLLM(ctx, tenantID)
 		if llm == nil {
 			return nil
 		}
-		superseder := memworkers.NewLLMSuperseder(memoryLLMAdapter{client: llm, tenantID: tenantID}).WithLogger(logger)
-		if baseline != nil {
-			if b, err := baseline(ctx, tenantID); err == nil {
-				if b.MemorySupersede != "" {
-					superseder.WithJudgePrompt(b.MemorySupersede)
-				}
-				superseder.WithJudgeModel(b.EnrichModel)
-			}
-		}
-		return superseder
+		return memworkers.NewLLMSuperseder(memoryLLMAdapter{client: llm, tenantID: tenantID}).WithLogger(logger)
 	}
 }
 
@@ -387,15 +350,13 @@ func BuildMemoryWorkers(c *Container) []interface {
 		).(*tenantCapabilityResolver)
 	}
 
-	baseline := c.mechanismBaselineForTenant(c.Config.MemoryPipeline.EnrichModel)
 	watcher := memworkers.NewTenantWatcher(db, func(tid string) memworkers.WorkerSet {
 		ws := memworkers.WorkerSet{
 			memworkers.NewExtractionWorker(tid, queue, c.Memory.Service, c.Logger),
 			memworkers.NewGCWorker(tid, factRepo, c.Logger).WithQueue(queue),
 		}
 		return appendTenantLLMWorkers(ws, tid, factRepo, historyRepo,
-			buildWorkerLLMResolver(llmRes), baseline,
-			c.Config.MemoryPipeline.SummaryModel, c.Logger)
+			buildWorkerLLMResolver(llmRes), c.Logger)
 	}, c.Logger)
 
 	result := []interface {
@@ -432,38 +393,18 @@ func appendTenantLLMWorkers(
 	factRepo memport.FactRepo,
 	historyRepo memport.HistoryRepo,
 	resolver memworkers.TenantLLMResolver,
-	baseline memport.MechanismBaselineResolver,
-	summaryModelFallback string,
 	logger *zap.Logger,
 ) memworkers.WorkerSet {
 	var summarizer memworkers.HistorySummarizer
 	var compressor memworkers.HistoryCompressor
 	if resolver != nil {
-		// 启动路径无 ctx：Background + helper 内部短超时兜底 DB 悬挂。
-		// 基线解析失败保持内置模板（现状行为），由机制基线解析处 Warn。
-		var b memport.MechanismBaseline
-		if baseline != nil {
-			if bl, err := baseline(context.Background(), tenantID); err == nil {
-				b = bl
-			}
-		}
-		superseder := memworkers.NewResolvingLLMSuperseder(tenantID, resolver).WithLogger(logger)
-		if b.MemorySupersede != "" {
-			superseder.WithJudgePrompt(b.MemorySupersede)
-		}
-		superseder.WithJudgeModel(b.EnrichModel)
-		workerSet = append(workerSet, memworkers.NewSupersedeWorker(tenantID, factRepo, superseder, logger))
-
+		workerSet = append(workerSet, memworkers.NewSupersedeWorker(
+			tenantID,
+			factRepo,
+			memworkers.NewResolvingLLMSuperseder(tenantID, resolver).WithLogger(logger),
+			logger,
+		))
 		historyProcessor := memworkers.NewResolvingLLMHistorySummarizer(tenantID, resolver)
-		if b.MemorySummarize != "" {
-			historyProcessor.WithSummarizePrompt(b.MemorySummarize)
-		}
-		// MEMORY_SUMMARY_MODEL 兜底接入：基线 SummaryModel 优先，env 值次之。
-		summaryModel := b.SummaryModel
-		if summaryModel == "" {
-			summaryModel = summaryModelFallback
-		}
-		historyProcessor.WithSummaryModel(summaryModel)
 		summarizer = historyProcessor
 		compressor = historyProcessor
 	}

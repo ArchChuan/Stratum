@@ -12,11 +12,9 @@ import { iamPublicRoutes, iamPrivateRoutes, useAuth } from '@/modules/iam';
 import { knowledgeRoutes } from '@/modules/knowledge';
 import { llmRoutes } from '@/modules/llm';
 import { mcpRoutes } from '@/modules/mcp';
-import { mechanismRoutes } from '@/modules/mechanism';
 import { memoryRoutes } from '@/modules/memory';
 import { operationGateRoutes } from '@/modules/operation-gate';
 import { parametersRoutes } from '@/modules/parameters';
-import { promptRoutes } from '@/modules/prompt';
 import { scheduledTaskRoutes } from '@/modules/scheduled-task';
 import { skillRoutes } from '@/modules/skill';
 import { workflowRoutes } from '@/modules/workflow';
@@ -48,11 +46,9 @@ export const AppRouter = () => {
         {workflowRoutes}
         {operationGateRoutes}
         {parametersRoutes}
-        {promptRoutes}
         {approvalsRoutes}
         {auditRoutes}
         {memoryRoutes}
-        {mechanismRoutes}
         {collabRoutes}
         {scheduledTaskRoutes}
         {iamPrivateRoutes}

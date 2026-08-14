@@ -1,7 +1,7 @@
 export const SYSTEM_PACKS = [
   'dashboard', 'iam', 'workflow', 'agent', 'skill', 'mcp', 'agent-skill-mcp',
-  'knowledge', 'memory', 'prompt', 'audit', 'evaluation', 'agent-context', 'evaluation-promotion',
-  'llm-admin', 'operation-gate', 'collab', 'scheduled-task', 'mechanism',
+  'knowledge', 'memory', 'audit', 'evaluation', 'agent-context', 'evaluation-promotion',
+  'llm-admin', 'operation-gate', 'collab', 'scheduled-task',
 ] as const;
 
 export type SystemPack = typeof SYSTEM_PACKS[number];

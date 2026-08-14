@@ -20,7 +20,6 @@ import (
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	parametersapp "github.com/byteBuilderX/stratum/internal/parameters/application"
-	promptapp "github.com/byteBuilderX/stratum/internal/prompt/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -531,13 +530,8 @@ func (r gatewayPromptRewriter) Rewrite(
 	return parsePromptRewritePatches(response.Content)
 }
 
-// judgeRubricKey is the prompt-registry key for the LLM judge rubric. A
-// published global template wins over the built-in default; tenants may
-// override it through the prompt registry's tenant scoping.
-const judgeRubricKey = "evaluation.judge.rubric"
-
-// judgeDefaultRubric is the built-in rubric used when no global template is
-// published. It asks for a binary verdict with a short justification.
+// judgeDefaultRubric is the built-in rubric used for LLM judge verdicts. It
+// asks for a binary verdict with a short justification.
 const judgeDefaultRubric = `你是一名严谨的评测法官。根据以下标准判断实际输出是否通过：
 1. 实际输出是否直接、完整地回答了输入要求；
 2. 与期望输出的一致性（期望输出为 null 或空时忽略该项）；
@@ -551,26 +545,20 @@ func buildEvaluationJudge(c *Container) evalport.LLMJudge {
 	if c.LLMGateway == nil || c.LLMGateway.Gateway == nil {
 		return nil
 	}
-	var prompts *promptapp.RegistryService
-	if c.Prompt != nil {
-		prompts = c.Prompt.Registry
-	}
 	return judgeAdapter{
 		completer: c.LLMGateway.Gateway,
 		params:    c.Parameters.Service,
-		prompts:   prompts,
 	}
 }
 
 // judgeAdapter implements evalport.LLMJudge over llmgateway's LLMCompleter.
 // The runtime switch and model/temperature come from platform parameters;
-// the rubric comes from the prompt registry (global template) unless the
-// case declares one explicitly. nil dependencies degrade conservatively:
-// disabled judge and built-in defaults, never a silent pass.
+// the rubric is the built-in default unless the case declares one
+// explicitly. nil dependencies degrade conservatively: disabled judge and
+// built-in defaults, never a silent pass.
 type judgeAdapter struct {
 	completer llmgatewaydomain.LLMCompleter
 	params    *parametersapp.Service
-	prompts   *promptapp.RegistryService
 }
 
 // Enabled reports the evaluation.judge.enabled platform parameter. Fail
@@ -618,14 +606,9 @@ func (j judgeAdapter) judgeTemperature(ctx context.Context) float32 {
 	return 0
 }
 
-func (j judgeAdapter) judgeRubric(ctx context.Context, requested string) string {
+func (j judgeAdapter) judgeRubric(_ context.Context, requested string) string {
 	if requested != "" {
 		return requested
-	}
-	if j.prompts != nil {
-		if rubric, err := j.prompts.GetEffectivePrompt(ctx, judgeRubricKey, "", "", ""); err == nil && rubric != "" {
-			return rubric
-		}
 	}
 	return judgeDefaultRubric
 }
@@ -1059,7 +1042,6 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	}
 	service := evalapp.NewService(evaluationResourceRouter{adapters: resourceAdapters}, runRepo, traceReader, buildEvaluationJudge(c), suiteRepo)
 	jobService := evalapp.NewJobService(jobRepo, service)
-	c.buildMatrixEvaluation(suiteService, jobService, queryRepo, runRepo, resourceAdapters)
 	var rewriter evalapp.PromptRewriter
 	if c.Agent != nil && c.Agent.TenantResolver != nil {
 		rewriter = gatewayPromptRewriter{resolver: c.Agent.TenantResolver, params: c.Parameters.Service}

@@ -53,8 +53,6 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	registerMCP(r, c, requireActive)
 	registerMemory(r, c, requireActive)
 	registerAudit(r, c, requireActive)
-	registerMechanism(r, c, requireActive)
-	registerPrompt(r, c, requireActive)
 	registerLLMAdmin(r, c, requireActive)
 	if c.Config.AvatarDir != "" {
 		r.GET("/avatars/:filename", func(ctx *gin.Context) {
@@ -580,56 +578,6 @@ func registerAudit(r *gin.Engine, c *wiring.Container, requireActive gin.Handler
 	auditGroup.Use(requireActive)
 	auditGroup.GET("/events", h.ListEvents)
 	auditGroup.GET("/events/:id", h.GetEvent)
-}
-
-// registerMechanism wires /mechanism/profiles — 机制基线（model_profiles）
-// 平台管理面。仅 global admin（users.global_role='global_admin'）可管理;
-// 普通租户（含其 admin）一律 403,经消费路径透明取用同一份档案、零感知。
-func registerMechanism(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
-	if c.Mechanism == nil || c.Mechanism.Service == nil {
-		return
-	}
-	h := handler.NewMechanismHandler(c.Mechanism.Service, c.Mechanism.Matrix, c.Logger)
-	profiles := r.Group("/mechanism/profiles",
-		protectedTenantMiddleware(c, middleware.RequireGlobalAdmin())...)
-	profiles.Use(requireActive)
-	{
-		profiles.GET("", h.List)
-		profiles.GET("/:familyKey", h.Get)
-		profiles.PUT("", h.Upsert)
-	}
-	// 评测矩阵工作台（阶段3）：与档案管理同权限门槛。evaluation 缺库时
-	// Matrix 为 nil → 不挂载（端点 404，而非空报告/静默降级）。
-	if c.Mechanism.Matrix != nil {
-		matrix := r.Group("/mechanism/matrix",
-			protectedTenantMiddleware(c, middleware.RequireGlobalAdmin())...)
-		matrix.Use(requireActive)
-		{
-			matrix.GET("", h.MatrixReport)
-			matrix.POST("/runs", h.RunMatrix)
-			matrix.POST("/adopt", h.AdoptProfile)
-		}
-	}
-}
-
-func registerPrompt(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
-	if c.Prompt == nil || c.Prompt.Registry == nil {
-		return
-	}
-	h := handler.NewPromptHandler(c.Prompt.Registry, c.Prompt.AB, c.Logger)
-
-	// 提示词管理面:仅 global admin 可管理,与前端菜单/路由守卫统一;
-	// 组内不再需要逐路由 adminMW,base 的 RequireGlobalAdmin 已覆盖全部。
-	prompts := r.Group("/prompts", protectedTenantMiddleware(c, middleware.RequireGlobalAdmin())...)
-	prompts.POST("", requireActive, h.CreatePrompt)
-	prompts.GET("", h.ListPrompts)
-	prompts.GET("/:key/versions", h.ListVersions)
-	prompts.POST("/:key/versions/:version/publish", requireActive, h.PublishVersion)
-
-	bindings := r.Group("/prompts/bindings", protectedTenantMiddleware(c, middleware.RequireGlobalAdmin())...)
-	bindings.GET("", requireActive, h.ListBindings)
-	bindings.PUT("", requireActive, h.UpsertBinding)
-	bindings.DELETE("/:key/:scope", requireActive, h.DeleteBinding)
 }
 
 func registerLLMAdmin(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {

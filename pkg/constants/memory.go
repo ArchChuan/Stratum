@@ -150,6 +150,7 @@ const (
 	MemoryMinFactLength         = 10   // min chars for a valid fact
 	MemoryMaxFactLength         = 500  // max chars for a valid fact
 	MemoryExtractLLMMaxTokens   = 4096 // JSON array of facts; 1024 truncates large conversations
+	MemoryEnrichLLMTemperature  = 0.1  // 富化抽取任务温度（低温度换取字段语义稳定）
 	// MemoryMaxStructuredRetries 结构化 JSON 输出解析/校验失败后的带错重试次数
 	// （共 MemoryMaxStructuredRetries+1 次尝试）。每次重试把具体错误位置/值/原因
 	// 作为 system-role correction 丢回模型。provider 硬错误不消耗重试（fail-fast）。
@@ -163,6 +164,8 @@ const (
 	MemorySupersedeLLMCallsPerRun   = 20   // max LLM judgments per RunOnce pass
 	MemoryInlineSupersedeFastThresh = 0.85 // similarity above which supersede is decided inline without LLM
 	MemoryInlineSupersedeLLMPerFact = 3    // max inline LLM calls per extracted fact during extraction
+	// MemorySupersedeJudgeMaxTokens 取代判定请求的 max_tokens 上限
+	MemorySupersedeJudgeMaxTokens = 256
 )
 
 // Facts quality filter — Phase 0 hardening

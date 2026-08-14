@@ -162,7 +162,7 @@ func TestSuiteServiceGetActiveRevision(t *testing.T) {
 
 	t.Run("published suite returns active revision", func(t *testing.T) {
 		suite, revision, err := svc.Create(context.Background(), "tenant-1", CreateSuiteInput{
-			Name: "机制基准集", ResourceKind: domain.ResourceKindMechanism,
+			Name: "技能基准集", ResourceKind: domain.ResourceKindSkill,
 			Cases: []domain.EvalCase{{Name: "抽取", Input: "x", AssertionMode: domain.AssertionJudge, Enabled: true}},
 		})
 		if err != nil {

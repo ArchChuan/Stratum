@@ -13,6 +13,7 @@ import (
 	"math/rand" // nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/safetext"
 	"go.uber.org/zap"
 )
 
@@ -30,6 +32,14 @@ const (
 	cbFailureThreshold        = 5
 	cbRecoveryTimeout         = 30 * time.Second
 	maxModelListResponseBytes = 1 << 20
+	// streamErrorBodyMaxBytes 是错误响应体读取上限：错误 body 只用于
+	// context_length 语义识别与日志/错误详情，截断即可，防止恶意或异常
+	// 上游返回超大 body 撑爆内存。
+	streamErrorBodyMaxBytes = 4096
+	// maxModelDiscoveryPages 是模型发现翻页的安全上限。OpenAI /models 默认
+	// 每页 20 个、翻页每页 100 个，20 页可覆盖 2000+ 模型；同时防止
+	// has_more 恒为 true 的异常上游导致死循环。
+	maxModelDiscoveryPages = 20
 )
 
 // providerBreaker is a per-provider three-state circuit breaker.
@@ -171,8 +181,12 @@ func maxTokensFallback(req CompletionRequest) CompletionRequest {
 }
 
 // openaiModelsResponse is the JSON body from GET /models (OpenAI-compatible).
+// has_more/last_id 来自 OpenAI 官方分页契约；不返回分页字段的兼容网关
+// 两者为零值，翻页自然止于第一页，行为与分页改造前一致。
 type openaiModelsResponse struct {
-	Data []openaiModelItem `json:"data"`
+	Data    []openaiModelItem `json:"data"`
+	HasMore bool              `json:"has_more"`
+	LastID  string            `json:"last_id"`
 }
 
 type openaiModelItem struct {
@@ -187,7 +201,8 @@ type ProviderConfig struct {
 	APIKey         string
 	HealthModel    string
 	Models         []string
-	EmbedBatchSize int // max texts per embedding request; 0 = use default (100)
+	ModelCatalog   []string // 发现兜底目录：ListModels 时与 GET /models 结果取并集；空 = 行为不变
+	EmbedBatchSize int      // max texts per embedding request; 0 = use default (100)
 }
 
 // OpenAICompatClient is an OpenAI-compatible provider that implements
@@ -300,6 +315,58 @@ func (c *OpenAICompatClient) Complete(ctx context.Context, req *CompletionReques
 	return nil, lastErr
 }
 
+// redactedBodySummary 返回错误响应体的脱敏摘要：先截断到
+// streamErrorBodyMaxBytes 字节，再经 safetext.RedactCredentials 脱敏，
+// 保证 authorization/password/token/api key/secret 键值不落入日志或错误
+// 正文。空 body 返回空串。
+func redactedBodySummary(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	if len(raw) > streamErrorBodyMaxBytes {
+		raw = raw[:streamErrorBodyMaxBytes]
+	}
+	return safetext.RedactCredentials(string(raw))
+}
+
+// errorMessageFromBody 从 OpenAI 兼容错误响应体中提取语义化 error.message。
+// 仅当 body 是 JSON 且 error 字段是对象（`{"error":{"message":"..."}}`，
+// 智谱/OpenAI 标准格式）时返回截断+脱敏后的 message；非 JSON 或 error 非
+// 对象（body 可能是裸文本/HTML/二进制等任意上游内容）返回空串——原始
+// 响应体不得落入下游错误正文（红线）。日志侧仍记 redactedBodySummary 的
+// 完整脱敏摘要。
+func errorMessageFromBody(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var payload struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil || payload.Error.Message == "" {
+		return ""
+	}
+	return redactedBodySummary([]byte(payload.Error.Message))
+}
+
+// streamErrorFromResponse 处理流式非 200 响应：读取限长响应体，识别
+// 400 context_length_exceeded 为永久语义错误（重试不可恢复，供 agent 层
+// 感知降级）；否则构造带结构化 error.message 详情的错误。返回错误本身与
+// 供日志的脱敏 body 摘要（RedactCredentials 已过滤凭据；非 JSON 或裸文本
+// 上游 body 不进错误正文，仅进脱敏日志）。
+func (c *OpenAICompatClient) streamErrorFromResponse(resp *http.Response) (bodySummary string, lastErr error) {
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, streamErrorBodyMaxBytes))
+	if resp.StatusCode == http.StatusBadRequest && isContextLengthBody(raw) {
+		return redactedBodySummary(raw), fmt.Errorf("%s: %w", c.cfg.Name, ErrContextLengthExceeded)
+	}
+	bodySummary = redactedBodySummary(raw)
+	if detail := errorMessageFromBody(raw); detail != "" {
+		return bodySummary, fmt.Errorf("%s: stream status %d: %s", c.cfg.Name, resp.StatusCode, detail)
+	}
+	return bodySummary, fmt.Errorf("%s: stream status %d", c.cfg.Name, resp.StatusCode)
+}
+
 // handleCompleteStatus 处理 Complete 的非 200 响应：识别 400
 // context_length_exceeded 为永久语义错误（重试不可恢复，供 agent 层感知
 // 降级）；429 按 Retry-After 等待；其余按 isRetryableHTTPStatus 分类。
@@ -326,7 +393,12 @@ func (c *OpenAICompatClient) handleCompleteStatus(
 	if resp.StatusCode == http.StatusBadRequest && isContextLengthBody(raw) {
 		return false, fmt.Errorf("%s: %w", c.cfg.Name, ErrContextLengthExceeded)
 	}
-	lastErr := fmt.Errorf("%s: complete status %d", c.cfg.Name, resp.StatusCode)
+	var lastErr error
+	if detail := errorMessageFromBody(raw); detail != "" {
+		lastErr = fmt.Errorf("%s: complete status %d: %s", c.cfg.Name, resp.StatusCode, detail)
+	} else {
+		lastErr = fmt.Errorf("%s: complete status %d", c.cfg.Name, resp.StatusCode)
+	}
 	if !isRetryableHTTPStatus(resp.StatusCode) {
 		c.logger.Error(c.cfg.Name+": http error (no retry)",
 			zap.String("model", model),
@@ -401,7 +473,10 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			_, _ = io.Copy(io.Discard, resp.Body)
+			// 读错误响应体（限长+脱敏）用于 context_length 语义识别与日志；
+			// body 可能较大，只保留前 streamErrorBodyMaxBytes 字节。
+			var errBody string
+			errBody, lastErr = c.streamErrorFromResponse(resp)
 			resp.Body.Close() // #nosec G104
 			// 429: respect Retry-After
 			if resp.StatusCode == http.StatusTooManyRequests {
@@ -413,17 +488,18 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 					}
 				}
 			}
-			lastErr = fmt.Errorf("%s: stream status %d", c.cfg.Name, resp.StatusCode)
 			if !isRetryableHTTPStatus(resp.StatusCode) {
 				c.logger.Error(c.cfg.Name+": stream error (no retry)",
 					zap.String("model", req.Model),
 					zap.Int("status", resp.StatusCode),
+					zap.String("error_body", errBody),
 				)
 				return nil, lastErr
 			}
 			c.logger.Warn(c.cfg.Name+": stream error, retrying",
 				zap.String("model", req.Model),
 				zap.Int("status", resp.StatusCode),
+				zap.String("error_body", errBody),
 				zap.Int("attempt", attempt+1),
 			)
 			continue
@@ -441,13 +517,22 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 		)
 		return nil, lastErr
 	}
+	result, err := c.readStreamBody(resp, idleCtx, req.Model, wrappedOnToken)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// readStreamBody drains a successfully-established SSE response into a
+// CompletionResponse, classifying premature EOF / truncation as errors.
+func (c *OpenAICompatClient) readStreamBody(resp *http.Response, idleCtx context.Context, model string, onToken func(string)) (*CompletionResponse, error) {
 	defer resp.Body.Close() //nolint:errcheck
 
-	// Stream established, read SSE events (no retry from here)
 	var result CompletionResponse
 	tcAcc := make(map[int]*streamToolCallDelta)
 	scanner := bufio.NewScanner(resp.Body)
-	streamDone, chunksWithContent := c.scanStream(scanner, &result, tcAcc, wrappedOnToken)
+	streamDone, chunksWithContent := c.scanStream(scanner, &result, tcAcc, onToken)
 	// convert accumulated deltas to ToolCall slice ordered by index
 	result.ToolCalls = convertToolCalls(tcAcc)
 	if err := scanner.Err(); err != nil {
@@ -463,12 +548,12 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 		if result.Content == "" && len(tcAcc) == 0 {
 			// 首个 chunk 前断开：连接正常建立但未产出任何内容，视为普通错误。
 			c.logger.Warn(c.cfg.Name+": stream ended before any data",
-				zap.String("model", req.Model))
+				zap.String("model", model))
 			return nil, fmt.Errorf("%s: stream ended before any data: %w", c.cfg.Name, io.EOF)
 		}
 		// 内容已开始输出但未收尾：截断，绝不 recordSuccess。
 		c.logger.Warn(c.cfg.Name+": stream truncated",
-			zap.String("model", req.Model),
+			zap.String("model", model),
 			zap.Int("chunks", chunksWithContent))
 		return nil, fmt.Errorf("%s: stream truncated: %w", c.cfg.Name, domain.ErrStreamTruncated)
 	}
@@ -650,10 +735,15 @@ func (c *OpenAICompatClient) Models() []string {
 }
 
 // ListModels discovers models via GET /models with static context-window fallback.
+// 智谱等网关的 /models 只返回 key 已开通的对话模型，视觉/嵌入/推理等实际可调用
+// 模型不在列表；cfg.ModelCatalog 提供目录兜底，与动态结果取并集（动态在前、目录补漏）。
 func (c *OpenAICompatClient) ListModels(ctx context.Context) ([]DiscoveredModel, error) {
 	names, err := c.fetchModelNames(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if len(c.cfg.ModelCatalog) > 0 {
+		names = mergeModelCatalog(names, c.cfg.ModelCatalog)
 	}
 	out := make([]DiscoveredModel, len(names))
 	for i, name := range names {
@@ -663,10 +753,59 @@ func (c *OpenAICompatClient) ListModels(ctx context.Context) ([]DiscoveredModel,
 	return out, nil
 }
 
-// fetchModelNames calls GET /models and returns the raw name list.
+// mergeModelCatalog 将静态目录补漏进动态发现的模型列表：动态结果在前，
+// 目录中未出现的模型追加在后，保持顺序稳定。
+func mergeModelCatalog(discovered, catalog []string) []string {
+	seen := make(map[string]struct{}, len(discovered)+len(catalog))
+	merged := make([]string, 0, len(discovered)+len(catalog))
+	for _, name := range discovered {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		merged = append(merged, name)
+	}
+	for _, name := range catalog {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		merged = append(merged, name)
+	}
+	return merged
+}
+
+// fetchModelNames calls GET /models and returns the raw name list, following
+// OpenAI's has_more/last_id pagination. The first page omits query params for
+// maximum compatibility with strict OpenAI-compat gateways; only a page that
+// explicitly reports has_more=true and a non-empty last_id triggers follow-ups.
 func (c *OpenAICompatClient) fetchModelNames(ctx context.Context) ([]string, error) {
-	url := strings.TrimSuffix(c.cfg.BaseURL, "/") + "/models"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	base := strings.TrimSuffix(c.cfg.BaseURL, "/") + "/models"
+	var names []string
+	after := ""
+	for page := 0; page < maxModelDiscoveryPages; page++ {
+		u := base
+		if after != "" {
+			u = base + "?limit=100&after=" + url.QueryEscape(after)
+		}
+		out, err := c.fetchModelPage(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range out.Data {
+			names = append(names, m.ID)
+		}
+		if !out.HasMore || out.LastID == "" {
+			break
+		}
+		after = out.LastID
+	}
+	return names, nil
+}
+
+// fetchModelPage fetches and decodes a single page from GET /models.
+func (c *OpenAICompatClient) fetchModelPage(ctx context.Context, u string) (*openaiModelsResponse, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("%s: build models request: %w", c.cfg.Name, err)
 	}
@@ -687,22 +826,17 @@ func (c *OpenAICompatClient) fetchModelNames(ctx context.Context) ([]string, err
 		return nil, fmt.Errorf("%s: close models response: %w", c.cfg.Name, closeErr)
 	}
 	if len(raw) > maxModelListResponseBytes {
-		return nil, fmt.Errorf("%s: GET %s response exceeds size limit", c.cfg.Name, url)
+		return nil, fmt.Errorf("%s: GET %s response exceeds size limit", c.cfg.Name, u)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s: GET %s returned %d: check API key and base URL",
-			c.cfg.Name, url, resp.StatusCode)
+			c.cfg.Name, u, resp.StatusCode)
 	}
-
 	var out openaiModelsResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, fmt.Errorf("%s: decode models: %w", c.cfg.Name, err)
 	}
-	models := make([]string, len(out.Data))
-	for i, m := range out.Data {
-		models[i] = m.ID
-	}
-	return models, nil
+	return &out, nil
 }
 
 // ---------------------------------------------------------------------------

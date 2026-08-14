@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -62,16 +63,16 @@ func TestPublicSchemaMigrationsRollBackStepwiseToZero(t *testing.T) {
 		}
 	}
 
-	// ── 阶段 2: 逆序逐版本回滚到 1,每步断言版本严格递减 ──
-	for step := 0; step < int(latest)-1; step++ {
-		want := latest - uint(step) - 1
+	// ── 阶段 2: 逆序逐版本回滚到最低版本,每步断言版本递减到下一份存在迁移 ──
+	versions := rollbackTestVersionList(t)
+	for _, want := range versions[1:] {
 		if err := m.Steps(-1); err != nil {
 			t.Fatalf("rollback to %d: %v", want, err)
 		}
 		assertRollbackVersion(t, m, want)
 	}
 
-	// ── 阶段 3: 最后一降 1 → 0:版本行被删,Version() 转 ErrNilVersion ──
+	// ── 阶段 3: 最后一降最低版本 → 0:版本行被删,Version() 转 ErrNilVersion ──
 	if err := m.Steps(-1); err != nil {
 		t.Fatalf("rollback to zero: %v", err)
 	}
@@ -176,13 +177,17 @@ func rollbackTestDropStaleDBs(t *testing.T, ctx context.Context, admin *pgx.Conn
 }
 
 // rollbackTestLatestVersion 从 sql/ 目录推导最新迁移版本,新增迁移自动覆盖。
-func rollbackTestLatestVersion(t *testing.T) uint {
+// rollbackTestVersionList 返回 sql 目录下全部编号迁移版本,降序排列。
+// 按实际文件序列而非连续编号推导,容忍删除中间迁移造成的版本空洞
+// (golang-migrate 的 Steps(-1) 取前一份存在的迁移文件)。
+func rollbackTestVersionList(t *testing.T) []uint {
 	t.Helper()
 	entries, err := os.ReadDir("sql")
 	if err != nil {
 		t.Fatalf("read migrations: %v", err)
 	}
-	var latest uint
+	seen := make(map[uint]bool)
+	var versions []uint
 	for _, entry := range entries {
 		name := entry.Name()
 		if !strings.HasSuffix(name, ".up.sql") {
@@ -193,14 +198,22 @@ func rollbackTestLatestVersion(t *testing.T) uint {
 		if err != nil {
 			t.Fatalf("parse migration version %q: %v", versionStr, err)
 		}
-		if uint(v) > latest {
-			latest = uint(v)
+		if !seen[uint(v)] {
+			seen[uint(v)] = true
+			versions = append(versions, uint(v))
 		}
 	}
-	if latest == 0 {
+	if len(versions) == 0 {
 		t.Fatal("no up migrations found")
 	}
-	return latest
+	sort.Slice(versions, func(i, j int) bool { return versions[i] > versions[j] })
+	return versions
+}
+
+func rollbackTestLatestVersion(t *testing.T) uint {
+	t.Helper()
+	versions := rollbackTestVersionList(t)
+	return versions[0]
 }
 
 // rollbackTestHasTable 冒烟断言 public schema 中表是否存在

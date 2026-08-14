@@ -168,19 +168,55 @@ func (s *ProviderService) invalidate() {
 }
 
 // inferCapabilities deduces model capabilities from the model name using
-// provider-agnostic naming conventions. All major LLM providers follow the
-// pattern of including "embed" in embedding model names. 推理模型按命名规则 +
-// exact-match 清单打标，必须保留 CapChat（否则被 capability='chat' 过滤出
-// Agent 下拉，feature 对目标模型不可用）。
+// provider-agnostic naming conventions. 嵌入模型独占 CapEmbedding（不混 chat）；
+// 其余至少 CapChat，多模态/推理模型按命名规则追加 CapVision/CapReasoning
+// （必须保留 CapChat，否则被 capability='chat' 过滤出 Agent 下拉）。推理打标与
+// infrastructure/model_catalog.go 的 reasoningModels 清单保持同步。
 func inferCapabilities(name string) []domain.ModelCapability {
 	lower := strings.ToLower(name)
-	if strings.Contains(lower, "embed") {
+	if isEmbeddingModelName(lower) {
 		return []domain.ModelCapability{domain.CapEmbedding}
 	}
-	if isReasoningModelName(lower) {
-		return []domain.ModelCapability{domain.CapChat, domain.CapReasoning}
+	caps := []domain.ModelCapability{domain.CapChat}
+	if isVisionModelName(lower) {
+		caps = append(caps, domain.CapVision)
 	}
-	return []domain.ModelCapability{domain.CapChat}
+	if isReasoningModelName(lower) {
+		caps = append(caps, domain.CapReasoning)
+	}
+	return caps
+}
+
+// isEmbeddingModelName 判断是否为嵌入模型命名。embed 子串是通用约定；
+// 扩展覆盖非 "embed" 命名的常见嵌入模型族（bge/m3e/e5/gte/text2vec），
+// 避免它们被误判为 chat 模型。
+func isEmbeddingModelName(lower string) bool {
+	if strings.Contains(lower, "embed") {
+		return true
+	}
+	for _, p := range []string{"bge", "m3e", "e5", "gte", "text2vec"} {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// isVisionModelName 判断是否为多模态模型。主流多模态模型族前缀 + "-vl"
+// 变体（qwen-vl/yi-vl 等）。命名匹配保持保守：只命中已知多模态族，避免
+// 短前缀误判。
+func isVisionModelName(lower string) bool {
+	for _, p := range []string{
+		"claude", "gpt-4o", "gpt-4.1", "gpt-4-turbo",
+		"gemini", "llava", "internvl",
+		"glm-4v", "glm-4.1v", "glm-4.5v", "glm-4.6v", "glm-5v",
+		"qwen-vl", "yi-vl", "step-1v",
+	} {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+	return strings.Contains(lower, "-vl")
 }
 
 // isReasoningModelName 判断模型名是否为已知推理模型。命名规则：o1/o3/o4、
@@ -191,7 +227,7 @@ func isReasoningModelName(lower string) bool {
 	if lower == "deepseek-reasoner" {
 		return true
 	}
-	for _, prefix := range []string{"o1", "o3", "o4", "qwq"} {
+	for _, prefix := range []string{"o1", "o3", "o4", "qwq", "glm-z1"} {
 		if strings.HasPrefix(lower, prefix) {
 			return true
 		}

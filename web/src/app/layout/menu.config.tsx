@@ -14,7 +14,6 @@ import {
   BranchesOutlined,
   HistoryOutlined,
   ScheduleOutlined,
-  FileTextOutlined,
   AuditOutlined,
   DatabaseOutlined,
   SafetyCertificateOutlined,
@@ -161,16 +160,9 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
           label: '模型管理',
         },
         {
-          key: '/prompts',
-          icon: <FileTextOutlined />,
-          label: '提示词管理',
-        },
-        {
-          key: '/mechanism/profiles',
-          icon: <DatabaseOutlined />,
-          label: '模型档案',
-        },
-        {
+          // 平台级 /audit 已废弃：平台 HTTP 审计 public.audit_events 删除后，
+          // 审计日志仅以租户级顶层入口存在（见上），global admin 平台管理组不再包含。
+          // /prompts、/mechanism 随 main 移除提示词管理（#374）与机制基线存储化一并删除。
           key: '/admin/tenants',
           icon: <GlobalOutlined />,
           label: '全局租户',
@@ -196,8 +188,8 @@ export const resolveOpenKeys = (pathname: string): string[] => {
   if (pathname.startsWith('/tenant')) return ['tenant-group'];
   if (
     pathname.startsWith('/models') ||
-    pathname.startsWith('/prompts') ||
-    pathname.startsWith('/mechanism') ||
+    // /prompts、/mechanism 路由已随 main 删除（提示词管理 #374、机制基线存储化撤销）
+    // /audit 是租户级顶层菜单项，不归入平台管理分组（openKeys 由顶层菜单直接管理）
     pathname.startsWith('/admin')
   )
     return ['platform-admin-group'];

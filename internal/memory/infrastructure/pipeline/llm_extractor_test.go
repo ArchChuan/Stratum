@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
+	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 )
 
 type extractorLLMStub struct {
@@ -14,10 +14,10 @@ type extractorLLMStub struct {
 	model   string
 }
 
-func (s *extractorLLMStub) Complete(_ context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+func (s *extractorLLMStub) Complete(_ context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 	s.prompt = req.Messages[0].Content
 	s.model = req.Model
-	return &memport.CompletionResponse{Content: s.content}, nil
+	return &llmdomain.CompletionResponse{Content: s.content}, nil
 }
 
 func TestLLMExtractorDecodesFactTypeAndExplicitZeroConfidence(t *testing.T) {
@@ -34,9 +34,9 @@ func TestLLMExtractorDecodesFactTypeAndExplicitZeroConfidence(t *testing.T) {
 	}
 }
 
-// TestLLMExtractorUsesInjectedSystemPromptOverFallback 验证机制基线抽取模板
-// 注入优先、空值回退内置常量（现状行为）；注入模板的占位照常渲染。
-func TestLLMExtractorUsesInjectedSystemPromptOverFallback(t *testing.T) {
+// TestLLMExtractorUsesFallbackSystemPrompt 验证抽取模板走内置常量（mechanism
+// 移除后为唯一权威），占位照常渲染。
+func TestLLMExtractorUsesFallbackSystemPrompt(t *testing.T) {
 	llm := &extractorLLMStub{content: `[]`}
 	extractor := NewLLMExtractor(llm)
 
@@ -46,35 +46,18 @@ func TestLLMExtractorUsesInjectedSystemPromptOverFallback(t *testing.T) {
 	if !strings.Contains(llm.prompt, "长期记忆提取助手") {
 		t.Fatalf("fallback prompt missing: %q", llm.prompt)
 	}
-
-	extractor.SetSystemPrompt("模板：用户 %s 助手 %s 上限 %d")
-	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-1", "msg"); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(llm.prompt, "模板：用户 user-1 助手 agent-1") {
-		t.Fatalf("injected prompt not used: %q", llm.prompt)
-	}
 }
 
-// TestLLMExtractorUsesBaselineExtractionModel 验证抽取请求显式携带机制基线
-// 的 ExtractionModel（profile 解析的唯一落点）。
-func TestLLMExtractorUsesBaselineExtractionModel(t *testing.T) {
+// TestLLMExtractorLeavesModelEmpty 验证抽取请求 Model 为空（llmgateway client
+// 默认解析，pre-refactor 行为；金丝雀回归）。
+func TestLLMExtractorLeavesModelEmpty(t *testing.T) {
 	llm := &extractorLLMStub{content: `[]`}
 	extractor := NewLLMExtractor(llm)
 
-	// 未注入 model：请求 Model 为空，走客户端默认解析（改造前行为）。
 	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-1", "msg"); err != nil {
 		t.Fatal(err)
 	}
 	if llm.model != "" {
 		t.Fatalf("expected empty model by default, got %q", llm.model)
-	}
-
-	extractor.SetExtractionModel("qwen-plus")
-	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-1", "msg"); err != nil {
-		t.Fatal(err)
-	}
-	if llm.model != "qwen-plus" {
-		t.Fatalf("expected request Model %q, got %q", "qwen-plus", llm.model)
 	}
 }

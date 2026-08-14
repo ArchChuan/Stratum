@@ -25,14 +25,14 @@ CREATE TABLE IF NOT EXISTS agents (
     system_prompt  TEXT NOT NULL DEFAULT '',
     llm_model      TEXT NOT NULL DEFAULT '',
     max_iterations INT  NOT NULL DEFAULT 10,
-    max_context_tokens INTEGER NOT NULL DEFAULT 8000,
+    max_context_tokens INTEGER NOT NULL DEFAULT 0,
     memory_scope   TEXT NOT NULL DEFAULT 'agent',
     created_by     TEXT NOT NULL DEFAULT '',
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL DEFAULT 8000;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE agents DROP COLUMN IF EXISTS embed_model;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_scope TEXT NOT NULL DEFAULT 'agent';
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS system_key TEXT;
@@ -67,7 +67,7 @@ BEGIN
         assistant_name,
         'react',
         '基于官方资料指导平台使用并诊断当前租户应用状态',
-        '', 'glm-5.2', 10, 8000, 'user', 'stratum.platform_assistant'
+        '', 'glm-5.2', 10, 0, 'user', 'stratum.platform_assistant'
     )
     ON CONFLICT (id) DO NOTHING;
 END $$;
@@ -1160,7 +1160,7 @@ UPDATE memory_entries SET scope = 'agent' WHERE agent_id IS NOT NULL AND scope =
 CREATE INDEX IF NOT EXISTS idx_memory_entries_user_id ON memory_entries (user_id);
 
 -- agents extensions
-ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL DEFAULT 8000;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE agents DROP COLUMN IF EXISTS embed_model;
 ALTER TABLE agents DROP COLUMN IF EXISTS persona;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS parameters JSONB NOT NULL DEFAULT '{}'::jsonb;
@@ -1343,7 +1343,15 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_scope TEXT NOT NULL DEFAULT '
 
 -- backfill agents created before max_iterations/max_context_tokens were wired in the form
 UPDATE agents SET max_iterations = 10 WHERE max_iterations = 0;
-UPDATE agents SET max_context_tokens = 8000 WHERE max_context_tokens = 0;
+-- max_context_tokens 0 = 自动按模型窗口解析（窗口 known → 0.85×window，未知 → 兜底常量）。
+-- 删除旧的 0→8000 回填：它会把"自动"语义的 0 重置为伪值 8000，且破坏下述迁移的幂等性。
+-- 系统助手种子曾写死 8000（存量租户），重置为 0 走自动。种子伪值恰为 8000，按值过滤无法区分
+-- 用户故意配置 8000——后者也会被重置为 0（取舍见 PR）。system_key 唯一部分索引保证只命中单行。
+UPDATE agents SET max_context_tokens = 0
+WHERE system_key = 'stratum.platform_assistant' AND max_context_tokens = 8000;
+-- 列 DEFAULT 统一为 0（=自动）：存量租户的 CREATE TABLE / ADD COLUMN IF NOT EXISTS 不改变已存在
+-- 列的 DEFAULT，需显式 ALTER；SET DEFAULT 幂等，可安全重放。
+ALTER TABLE agents ALTER COLUMN max_context_tokens SET DEFAULT 0;
 
 -- backfill timestamp columns added to existing tables
 ALTER TABLE skills ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();

@@ -19,7 +19,6 @@ import (
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
-	mechanismdomain "github.com/byteBuilderX/stratum/internal/mechanism/domain"
 	memapp "github.com/byteBuilderX/stratum/internal/memory/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -78,7 +77,6 @@ type Agent struct {
 	ProposalService      *agent.ResourceChangeProposalService
 	OperationGateService *agent.OperationGateService
 	OperationProposalSvc *agent.OperationProposalService
-	PromptResolver       *agent.PromptResolver
 }
 
 // ragSearchAdapter wraps *knowledge.RAGService to satisfy
@@ -242,22 +240,6 @@ func (r publishedSkillActivationResolver) ResolveSkills(
 	return catalog, nil
 }
 
-// compactionBaselinePrompt 取机制基线压缩指令（DB 档案 → 种子兜底），
-// 空串表示未建档或解析失败（保持内置指令，现状行为）。
-// factory 签名无 ctx，Background + 短超时兜底 DB 悬挂。
-func compactionBaselinePrompt(c *Container, model string) string {
-	if c.Mechanism == nil || c.Mechanism.BaselineResolver == nil {
-		return ""
-	}
-	bctx, cancel := context.WithTimeout(context.Background(), constants.AgentDBQueryTimeout)
-	defer cancel()
-	b, err := c.Mechanism.BaselineResolver(bctx, model)
-	if err != nil {
-		return ""
-	}
-	return b.Prompts.Compaction
-}
-
 func (c *Container) buildAgent(ctx context.Context) error {
 	db := c.dbOrNil()
 
@@ -331,11 +313,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		ModelDetailsProvider:    tenantModelDetailsProvider(a.TenantResolver),
 		VendorWindowLookup:      llmgateway.LookupModelSpec,
 		HistoryCompactorFactory: func(gw agentport.CapabilityGateway, model string, logger *zap.Logger, compactionMaxTokens int) agentport.HistoryCompactor {
-			compactor := capgateway.NewLLMHistoryCompactor(gw, model, logger, compactionMaxTokens)
-			if p := compactionBaselinePrompt(c, model); p != "" {
-				compactor.WithCompactionPrompt(p)
-			}
-			return compactor
+			return capgateway.NewLLMHistoryCompactor(gw, model, logger, compactionMaxTokens)
 		},
 		ChatStore:                 a.ChatStore,
 		EvidenceProvider:          a.EvidenceProvider,
@@ -376,7 +354,6 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		tenantRoleAdapter{service: tenantMemberService(c)}, systemAssistantDiagnosticCollectors(c, a),
 	)
 	deps.OfficialDocsSearch = officialdocs.Search
-	wirePromptResolver(c, a)
 	deps.DiagnosticProvider = a.DiagnosticProvider
 	a.Service = agent.NewAgentService(deps)
 	if db != nil && c.Skill != nil && c.MCP != nil && c.Knowledge != nil &&
@@ -482,32 +459,18 @@ func memoryBufferClosure(svc *memapp.MemoryService) func(ctx context.Context, te
 	}
 }
 
-// wirePromptResolver constructs the PromptResolver and injects the
-// centralized prompt registry for versioned prompt resolution.
-func wirePromptResolver(c *Container, a *Agent) {
-	a.PromptResolver = agent.NewPromptResolver(nil)
-	if c.Prompt != nil && c.Prompt.Registry != nil {
-		a.PromptResolver.SetRegistry(c.Prompt.Registry)
-	}
-}
-
 // agentFactCheckSettings 按开关 + gateway 可用性装配幻觉校验依赖（fail-closed：
-// 任一缺失返回 nil，collectGraphResult 不校验）。judge 模型与判定模板切机制
-// profile：env 值（agent.factcheck.judge.model）仅作 GetEffective 解析 key 与
-// 兜底，命中档案后取 Models.JudgeModel 与 Prompts.AgentFactCheck（seed 兜底）。
-// 不静默回落 evaluation.judge.model。EvidenceFn 留空，collectGraphResult 执行时
-// 用 RAGSearchFnWithEvidence 填充（per-execution 已带 tenant 权限）。
+// 任一缺失返回 nil，collectGraphResult 不校验）。judge 模型来自
+// agent.factcheck.judge.model，不静默回落 evaluation.judge.model。EvidenceFn
+// 留空，collectGraphResult 执行时用 RAGSearchFnWithEvidence 填充（per-execution
+// 已带 tenant 权限）。
 func agentFactCheckSettings(c *Container) *factcheck.Settings {
 	if !c.Config.AgentFactCheck.Enabled || c.LLMGateway == nil || c.LLMGateway.Gateway == nil {
 		return nil
 	}
-	var baseline func(context.Context, string) (mechanismdomain.Baseline, error)
-	if c.Mechanism != nil {
-		baseline = c.Mechanism.BaselineResolver
-	}
 	return &factcheck.Settings{
 		Enabled:   true,
-		Judge:     factCheckJudge{completer: c.LLMGateway.Gateway, model: c.Config.AgentFactCheck.JudgeModel, baseline: baseline},
+		Judge:     factCheckJudge{completer: c.LLMGateway.Gateway, model: c.Config.AgentFactCheck.JudgeModel},
 		TopK:      c.Config.AgentFactCheck.TopK,
 		MaxClaims: c.Config.AgentFactCheck.MaxClaims,
 		Logger:    c.Logger,
@@ -517,45 +480,28 @@ func agentFactCheckSettings(c *Container) *factcheck.Settings {
 // factCheckJudge 实现 factcheck.Judge（LLM-as-Judge 幻觉判定），走 llmgateway
 // completer + json_object 结构化输出（P1 A 层）。只消费 claim 聚合证据，不
 // 记录原始模型输出（日志白名单：judge 失败只记模型名，不记正文）。
-// baseline 为机制基线解析器（per-execution 懒解析，nil 时保持构造 model +
-// seed 模板，即改造前现状）；解析失败同 mechanismBaselineForTenant 语义回退
-// 现状——judge 是 advisory、profile 是配置源而非授权，不构成安全降级。
 type factCheckJudge struct {
 	completer llmgatewaydomain.LLMCompleter
 	model     string
-	baseline  func(context.Context, string) (mechanismdomain.Baseline, error)
 }
-
-// factcheckJudgeUserTemplate 判定模板兜底（baseline 缺失/解析失败时用），
-// 直接复用机制 seed——profile 是唯一权威，wiring 不另起一份文案。
-const factcheckJudgeUserTemplate = mechanismdomain.SeedAgentFactCheckPrompt
 
 func (j factCheckJudge) JudgeClaims(ctx context.Context, claims []string, evidence string) ([]domain.ClaimVerdict, error) {
 	claimsJSON, err := json.Marshal(claims)
 	if err != nil {
 		return nil, fmt.Errorf("factcheck judge: marshal claims: %w", err)
 	}
-	model := j.model
-	userTemplate := factcheckJudgeUserTemplate
-	if j.baseline != nil {
-		if b, err := j.baseline(ctx, j.model); err == nil {
-			if b.Models.JudgeModel != "" {
-				model = b.Models.JudgeModel
-			}
-			if b.Prompts.AgentFactCheck != "" {
-				userTemplate = b.Prompts.AgentFactCheck
-			}
-		}
-	}
 	resp, err := j.completer.Complete(ctx, &llmgatewaydomain.CompletionRequest{
-		Model:     model,
+		Model:     j.model,
 		MaxTokens: constants.AgentFactCheckJudgeMaxTokens,
 		ResponseFormat: &llmgatewaydomain.ResponseFormat{
 			Type: "json_object",
 		},
 		Messages: []llmgatewaydomain.Message{
 			{Role: "system", Content: "你是严谨的事实核查法官。只输出 JSON，不输出其他内容。"},
-			{Role: "user", Content: fmt.Sprintf(userTemplate, string(claimsJSON), evidence)},
+			{Role: "user", Content: fmt.Sprintf(
+				"对下列每条 claim，依据给定 RAG 证据判断其是否被支持。\n\nClaims:\n%s\n\nEvidence:\n%s\n\n输出 JSON：{\"claims\":[{\"text\":\"<claim>\",\"verdict\":\"SUPPORTED|CONTRADICTED|UNSUPPORTED\",\"risk\":<0-5>}]}。risk 越高越可疑；证据不足判 UNSUPPORTED。",
+				string(claimsJSON), evidence,
+			)},
 		},
 	})
 	if err != nil {

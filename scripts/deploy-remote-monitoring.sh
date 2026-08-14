@@ -102,15 +102,10 @@ validate_repository() {
 }
 
 render_prometheus_rules() {
+    # 复用共享渲染器（scripts/quality/render-monitoring-rules.sh），
+    # guard 的 remote-test --check 保证现场渲染结果与 commit 产物一致。
     local output="${INVENTORY_DIR}/stratum-prometheus-rules.yaml"
-    {
-        printf '%s\n' 'apiVersion: monitoring.coreos.com/v1' 'kind: PrometheusRule' 'metadata:' \
-            '  name: stratum-remote-rules' '  namespace: monitoring' '  labels:' '    release: kps' \
-            'spec:' '  groups:'
-        for rule_file in "${ROOT}"/monitoring/remote/rules/*.yaml; do
-            tail -n +2 "${rule_file}" | sed 's/^/  /'
-        done
-    } >"${output}"
+    bash "${ROOT}/scripts/quality/render-monitoring-rules.sh" remote-test --to "${output}"
     printf '%s\n' "${output}"
 }
 

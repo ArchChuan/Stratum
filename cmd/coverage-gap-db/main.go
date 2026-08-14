@@ -118,8 +118,8 @@ func computeCoverage(columns []column, refs []columnRef) coverageResult {
 	excludedTables := map[string]bool{
 		"webhook_deliveries": true, "webhooks": true,
 		"model_quotas": true, "model_usage": true, "model_presets": true,
-		"scheduled_tasks": true, "prompt_templates": true,
-		"exec_history": true, "entity_relations": true,
+		"scheduled_tasks": true,
+		"exec_history":    true, "entity_relations": true,
 		"memory_token_budgets": true, "sessions": true,
 		"entities": true, "llm_api_keys": true,
 		"agent_mcp_links": true, // deprecated

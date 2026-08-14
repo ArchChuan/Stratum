@@ -25,15 +25,12 @@ func TestRegistryRegistersAllBuiltinKeys(t *testing.T) {
 		}
 	}
 
-	// 存量搜索空间零收缩:14 参数 + 6 prompt 全部 Optimizable=true。
+	// 存量搜索空间零收缩:14 参数全部 Optimizable=true。
 	for _, key := range []string{
 		"agent.temperature", "agent.max_tokens", "agent.max_context_tokens",
 		"agent.max_iterations", "agent.model", "agent.bindings",
 		"rag.top_k", "rag.score_threshold", "rag.reranking", "rag.query_rewrite",
 		"mcp.enabled_tools", "mcp.timeout_ms", "mcp.max_retries",
-		"prompt.system_prompt", "prompt.instructions", "prompt.memory_extraction_prompt",
-		"prompt.memory_summary_prompt", "prompt.memory_enrichment_prompt",
-		"prompt.compaction_prompt",
 	} {
 		def, ok := r.Get(key)
 		if !ok {
@@ -72,12 +69,6 @@ func TestRegistryEvaluationKeyMapping(t *testing.T) {
 		"enabled_tools":            "mcp.enabled_tools",
 		"timeout_ms":               "mcp.timeout_ms",
 		"max_retries":              "mcp.max_retries",
-		"system_prompt":            "prompt.system_prompt",
-		"instructions":             "prompt.instructions",
-		"memory_extraction_prompt": "prompt.memory_extraction_prompt",
-		"memory_summary_prompt":    "prompt.memory_summary_prompt",
-		"memory_enrichment_prompt": "prompt.memory_enrichment_prompt",
-		"compaction_prompt":        "prompt.compaction_prompt",
 	} {
 		if !r.IsEvaluationKey(bare) {
 			t.Errorf("bare key %q must be registered", bare)
@@ -88,6 +79,34 @@ func TestRegistryEvaluationKeyMapping(t *testing.T) {
 	}
 	if r.IsEvaluationKey("bogus_key") {
 		t.Error("unknown bare key must not be registered")
+	}
+}
+
+// TestPromptEvaluationKeysAreGateOnly pins the decoupling: the 6 prompt patch
+// bare keys survive as gate-only evaluation keys (valid candidate-patch
+// fields for validatePatchKeys) but carry no parameter definition — they must
+// not resolve through KeyForEvaluation and must not appear in the schema.
+func TestPromptEvaluationKeysAreGateOnly(t *testing.T) {
+	r := NewParametersRegistry()
+	for _, bare := range []string{
+		"system_prompt", "instructions",
+		"memory_extraction_prompt", "memory_summary_prompt",
+		"memory_enrichment_prompt", "compaction_prompt",
+	} {
+		if !r.IsEvaluationKey(bare) {
+			t.Errorf("prompt key %q must stay a valid candidate-patch key (gate-only)", bare)
+		}
+		if _, ok := r.KeyForEvaluation(bare); ok {
+			t.Errorf("prompt key %q must not resolve to a parameter definition", bare)
+		}
+		if _, ok := r.Get("prompt." + bare); ok {
+			t.Errorf("prompt.%s definition must be removed from the registry", bare)
+		}
+	}
+	for _, def := range r.Schema() {
+		if def.Key[:7] == "prompt." {
+			t.Fatalf("schema must not expose prompt definitions, got %s", def.Key)
+		}
 	}
 }
 

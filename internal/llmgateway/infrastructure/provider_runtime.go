@@ -24,10 +24,11 @@ func (r *ProviderRuntime) protocol(provider domain.Provider) (ChatProtocol, Prov
 		return nil, ProviderConfig{}, fmt.Errorf("no protocol for kind %q", provider.Kind)
 	}
 	return proto, ProviderConfig{
-		Name:        provider.Name,
-		BaseURL:     provider.BaseURL,
-		APIKey:      provider.APIKey,
-		HealthModel: provider.DefaultModel,
+		Name:         provider.Name,
+		BaseURL:      provider.BaseURL,
+		APIKey:       provider.APIKey,
+		HealthModel:  provider.DefaultModel,
+		ModelCatalog: ZhipuModelCatalog(provider.BaseURL),
 	}, nil
 }
 

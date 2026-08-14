@@ -1,6 +1,7 @@
 package infrastructure
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -157,4 +158,188 @@ func TestCompleteStream_MaxTokensFallback(t *testing.T) {
 			require.Equal(t, tc.maxTokens, callerReq.MaxTokens, "caller req must not be mutated")
 		})
 	}
+}
+
+// TestOpenAICompatClient_ListModels_paginates 验证 has_more/last_id 翻页：
+// 第一页不带查询参数（最大兼容），后续页带 limit=100&after=<last_id>，
+// 聚合所有页并去分页终止。
+func TestOpenAICompatClient_ListModels_paginates(t *testing.T) {
+	var rawQueries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/models", r.URL.Path)
+		rawQueries = append(rawQueries, r.URL.RawQuery)
+		switch r.URL.Query().Get("after") {
+		case "":
+			_, _ = fmt.Fprint(w, `{"data":[{"id":"gpt-4o"},{"id":"gpt-4.1"}],"has_more":true,"last_id":"gpt-4.1"}`)
+		case "gpt-4.1":
+			_, _ = fmt.Fprint(w, `{"data":[{"id":"text-embedding-3-small"},{"id":"bge-m3"}],"has_more":false,"last_id":""}`)
+		default:
+			t.Errorf("unexpected after=%q", r.URL.Query().Get("after"))
+		}
+	}))
+	defer srv.Close()
+
+	client := NewOpenAICompatClient(ProviderConfig{
+		Name: "test-openai", BaseURL: srv.URL, APIKey: "sk-test",
+	}, zap.NewNop())
+	models, err := client.ListModels(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []DiscoveredModel{
+		{Name: "gpt-4o", ContextWindow: 128_000, MaxOutputTokens: 16_384},
+		{Name: "gpt-4.1", ContextWindow: 1_047_576, MaxOutputTokens: 32_768},
+		{Name: "text-embedding-3-small", ContextWindow: 8_191, MaxOutputTokens: 0},
+		{Name: "bge-m3"},
+	}, models)
+	require.Len(t, rawQueries, 2)
+	require.Equal(t, "", rawQueries[0], "first page must omit query params")
+	require.Equal(t, "limit=100&after=gpt-4.1", rawQueries[1])
+}
+
+// TestOpenAICompatClient_ListModels_singlePageWithoutPagination 验证不返回
+// 分页字段的兼容网关只请求一次，行为与分页改造前一致。
+func TestOpenAICompatClient_ListModels_singlePageWithoutPagination(t *testing.T) {
+	var reqCount int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqCount++
+		_, _ = fmt.Fprint(w, `{"data":[{"id":"gpt-4o"}]}`)
+	}))
+	defer srv.Close()
+
+	client := NewOpenAICompatClient(ProviderConfig{
+		Name: "test-openai", BaseURL: srv.URL, APIKey: "sk-test",
+	}, zap.NewNop())
+	models, err := client.ListModels(context.Background())
+	require.NoError(t, err)
+	require.Len(t, models, 1)
+	require.Equal(t, 1, reqCount)
+}
+
+// TestCompleteStream_400ContextLengthExceeded 验证流式路径（当前智谱 400
+// 根因所在）同样识别 context_length_exceeded 为永久语义错误；非语义 400
+// 错误正文携带结构化 error.message。
+func TestCompleteStream_400ContextLengthExceeded(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		wantCLE bool
+		wantMsg string
+	}{
+		{
+			name:    "error.code is context_length_exceeded",
+			body:    `{"error":{"code":"context_length_exceeded","message":"maximum context length reached"}}`,
+			wantCLE: true,
+		},
+		{
+			name:    "other 400 stays plain status error with message",
+			body:    `{"error":{"code":"invalid_request_error","message":"schema mismatch"}}`,
+			wantCLE: false,
+			wantMsg: "schema mismatch",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprint(w, tc.body)
+			}))
+			defer srv.Close()
+
+			client := NewOpenAICompatClient(ProviderConfig{
+				Name: "test-openai", BaseURL: srv.URL, APIKey: "sk-test",
+			}, zap.NewNop())
+			resp, err := client.CompleteStream(context.Background(),
+				&CompletionRequest{Model: "m1", Messages: []Message{{Role: "user", Content: "hi"}}},
+				func(string) {})
+			require.Nil(t, resp)
+			require.Error(t, err)
+			if tc.wantCLE {
+				require.True(t, IsContextLengthExceeded(err), "err = %v", err)
+			} else {
+				require.False(t, IsContextLengthExceeded(err), "err = %v", err)
+				require.Contains(t, err.Error(), "status 400")
+				require.Contains(t, err.Error(), tc.wantMsg)
+			}
+		})
+	}
+}
+
+// TestCompleteStream_NonJSONBodyNotInError 验证裸文本上游 body 不落入下游
+// 错误正文（红线：下游错误不落上游响应体），与
+// TestQwenClient_ErrorStatusExcludesUpstreamBody 同源守护。
+func TestCompleteStream_NonJSONBodyNotInError(t *testing.T) {
+	const marker = "raw-provider-secret-marker"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, marker)
+	}))
+	defer srv.Close()
+
+	client := NewOpenAICompatClient(ProviderConfig{
+		Name: "test-openai", BaseURL: srv.URL, APIKey: "sk-test",
+	}, zap.NewNop())
+	_, err := client.CompleteStream(context.Background(),
+		&CompletionRequest{Model: "m1", Messages: []Message{{Role: "user", Content: "hi"}}},
+		func(string) {})
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), marker, "non-JSON upstream body must not leak into error")
+	require.Contains(t, err.Error(), "status 400")
+}
+
+// TestOpenAICompatClient_ListModels_mergesCatalog 验证智谱目录兜底：
+// /models 动态结果在前，目录补漏，去重且保序。
+func TestOpenAICompatClient_ListModels_mergesCatalog(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"data":[{"id":"glm-4.5"},{"id":"glm-4.6v"}]}`)
+	}))
+	defer srv.Close()
+
+	client := NewOpenAICompatClient(ProviderConfig{
+		Name:         "test-zhipu",
+		BaseURL:      srv.URL,
+		APIKey:       "sk-test",
+		ModelCatalog: []string{"glm-4.5", "glm-4.6v", "glm-5v-turbo", "embedding-3"},
+	}, zap.NewNop())
+	models, err := client.ListModels(context.Background())
+	require.NoError(t, err)
+
+	names := make([]string, len(models))
+	for i, m := range models {
+		names[i] = m.Name
+	}
+	require.Equal(t, []string{"glm-4.5", "glm-4.6v", "glm-5v-turbo", "embedding-3"}, names)
+}
+
+// TestErrorMessageFromBody 验证结构化 error.message 提取边界：仅 JSON error
+// 对象的非空 message 返回（截断+脱敏）；string error、非 JSON、空 message、
+// 空 body 均返回空串（防止任意上游文本进入错误正文）。
+func TestErrorMessageFromBody(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "object error message extracted", body: `{"error":{"message":"bad request: nope","code":"x"}}`, want: "bad request: nope"},
+		{name: "empty message", body: `{"error":{"message":""}}`, want: ""},
+		{name: "string error not extracted", body: `{"error":"invalid api key"}`, want: ""},
+		{name: "non-JSON body", body: "raw text marker", want: ""},
+		{name: "empty body", body: "", want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, errorMessageFromBody([]byte(tc.body)))
+		})
+	}
+}
+
+// TestRedactedBodySummary 验证凭据脱敏与超限截断：键值结构中的凭据
+// （api_key 等 namedCredential 键）被替换为 [REDACTED]，超过
+// streamErrorBodyMaxBytes 的 body 被截断。裸值（如自然语言里的 sk- 前缀）
+// 不在 RedactCredentials 匹配范围，属于设计预期。
+func TestRedactedBodySummary(t *testing.T) {
+	got := redactedBodySummary([]byte(`{"error":{"api_key":"sk-abcd1234","message":"auth failed"}}`))
+	require.NotContains(t, got, "sk-abcd1234")
+	require.Contains(t, got, "[REDACTED]")
+	big := bytes.Repeat([]byte("x"), streamErrorBodyMaxBytes+100)
+	require.Len(t, redactedBodySummary(big), streamErrorBodyMaxBytes)
 }

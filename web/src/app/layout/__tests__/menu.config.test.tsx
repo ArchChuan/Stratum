@@ -81,9 +81,7 @@ describe('buildMenuItems', () => {
     render(<div>{memberLabels.map((label, index) => <div key={index}>{label}</div>)}</div>);
     expect(screen.queryByText('平台管理')).not.toBeInTheDocument();
     expect(screen.queryByText('模型管理')).not.toBeInTheDocument();
-    expect(screen.queryByText('提示词管理')).not.toBeInTheDocument();
     expect(screen.queryByText('审计日志')).not.toBeInTheDocument();
-    expect(screen.queryByText('模型档案')).not.toBeInTheDocument();
     expect(screen.queryByText('全局租户')).not.toBeInTheDocument();
     expect(screen.queryByText('平台参数')).not.toBeInTheDocument();
     // 工具审批同样对成员隐藏
@@ -99,10 +97,9 @@ describe('buildMenuItems', () => {
     render(<div>{labels.map((label, index) => <div key={index}>{label}</div>)}</div>);
     expect(screen.getByText('平台管理')).toBeInTheDocument();
     expect(screen.getByText('模型管理')).toBeInTheDocument();
-    expect(screen.getByText('提示词管理')).toBeInTheDocument();
+    // /prompts、/mechanism 已随 main 删除（提示词管理 #374、机制基线存储化撤销）
     // 审计日志已移出租户域:global_admin 作为租户 member(canManageTenant=false)不可见
     expect(screen.queryByText('审计日志')).not.toBeInTheDocument();
-    expect(screen.getByText('模型档案')).toBeInTheDocument();
     expect(screen.getByText('全局租户')).toBeInTheDocument();
     expect(screen.getByText('平台参数')).toBeInTheDocument();
   });
@@ -119,12 +116,13 @@ describe('buildMenuItems', () => {
 
   it('resolves platform admin paths to the merged open-key group', () => {
     expect(resolveOpenKeys('/models')).toEqual(['platform-admin-group']);
-    expect(resolveOpenKeys('/prompts')).toEqual(['platform-admin-group']);
-    expect(resolveOpenKeys('/mechanism/profiles')).toEqual(['platform-admin-group']);
     expect(resolveOpenKeys('/admin/tenants')).toEqual(['platform-admin-group']);
     expect(resolveOpenKeys('/admin/settings')).toEqual(['platform-admin-group']);
     // 工具审批是独立菜单项,不再归入任何分组
     expect(resolveOpenKeys('/approvals')).toEqual([]);
+    // /prompts、/mechanism 路由已随 main 删除,不归入任何分组
+    expect(resolveOpenKeys('/prompts')).toEqual([]);
+    expect(resolveOpenKeys('/mechanism/profiles')).toEqual([]);
   });
 
   it('shows the audit log to tenant admins and owners as a top-level item', () => {

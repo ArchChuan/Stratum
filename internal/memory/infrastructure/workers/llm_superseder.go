@@ -7,12 +7,13 @@ import (
 
 	"go.uber.org/zap"
 
+	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
-// supersedePromptTemplate 是判断模板兜底（现状硬编码值）。机制基线建档后
-// 由 wiring 注入覆盖，空值维持现状行为。
+// supersedePromptTemplate 是判断模板（现状硬编码值，mechanism 移除后为唯一权威）。
 const supersedePromptTemplate = `判断新事实是否应该取代旧事实。
 
 旧事实：%s
@@ -28,12 +29,10 @@ const supersedePromptTemplate = `判断新事实是否应该取代旧事实。
 
 // LLMSuperseder adapts an LLM client or tenant resolver to memport.LLMSuperseder.
 type LLMSuperseder struct {
-	client      pipeline.LLMClient
-	tenantID    string
-	resolver    TenantLLMResolver
-	judgePrompt string
-	judgeModel  string
-	logger      *zap.Logger
+	client   pipeline.LLMClient
+	tenantID string
+	resolver TenantLLMResolver
+	logger   *zap.Logger
 }
 
 func NewLLMSuperseder(client pipeline.LLMClient) *LLMSuperseder {
@@ -45,33 +44,10 @@ func NewResolvingLLMSuperseder(tenantID string, resolver TenantLLMResolver) *LLM
 	return &LLMSuperseder{tenantID: tenantID, resolver: resolver}
 }
 
-// WithJudgePrompt overrides the supersede judgment template with the
-// mechanism baseline prompt. Empty keeps supersedePromptTemplate.
-func (s *LLMSuperseder) WithJudgePrompt(p string) *LLMSuperseder {
-	s.judgePrompt = p
-	return s
-}
-
-// WithJudgeModel sets the judgment model from the mechanism baseline
-// (EnrichModel 语义，与富化共用族基线). Empty keeps the client's default
-// resolution (pre-change behavior).
-func (s *LLMSuperseder) WithJudgeModel(m string) *LLMSuperseder {
-	s.judgeModel = m
-	return s
-}
-
 // WithLogger 注入降级日志记录器（结构化失败白名单摘要）。nil 安全。
 func (s *LLMSuperseder) WithLogger(l *zap.Logger) *LLMSuperseder {
 	s.logger = l
 	return s
-}
-
-// judgePromptOr 返回生效模板：基线注入值优先，空则兜底内置常量。
-func (s *LLMSuperseder) judgePromptOr() string {
-	if s.judgePrompt != "" {
-		return s.judgePrompt
-	}
-	return supersedePromptTemplate
 }
 
 func (s *LLMSuperseder) JudgeSupersede(ctx context.Context, oldFact, newFact string) (*memport.SupersedeJudgment, error) {
@@ -86,12 +62,11 @@ func (s *LLMSuperseder) JudgeSupersede(ctx context.Context, oldFact, newFact str
 	if client == nil {
 		return nil, fmt.Errorf("llm supersede: client unavailable")
 	}
-	prompt := fmt.Sprintf(s.judgePromptOr(), oldFact, newFact)
-	judgment, err := pipeline.CompleteStructured(ctx, client, &memport.CompletionRequest{
-		Model:     s.judgeModel,
-		Messages:  []memport.CompletionMessage{{Role: "user", Content: prompt}},
-		MaxTokens: 256,
-	}, parseSupersedeJudgment,
+	prompt := fmt.Sprintf(supersedePromptTemplate, oldFact, newFact)
+	// 判定模型为空：交由 llmgateway client 默认解析（pre-refactor 行为）。
+	judgment, err := pipeline.CompleteStructured(ctx, client, llmdomain.NewExtractRequest(
+		"", "", prompt, 0, constants.MemorySupersedeJudgeMaxTokens,
+	), parseSupersedeJudgment,
 		func(j memport.SupersedeJudgment) error { return j.Validate() },
 		s.logger, "supersede")
 	if err != nil {
