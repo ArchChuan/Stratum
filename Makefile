@@ -278,6 +278,11 @@ e2e-attestation-check:
 		$$(if [ -n "$(E2E_REQUIRED_PROFILE)" ]; then echo "--required-profile $(E2E_REQUIRED_PROFILE)"; fi) \
 		--attestation-dir "$(E2E_ATTESTATION_DIR)"
 
+# ─── uncovered 报告 schema 校验：告警级，不 gate CI，仅 stateful E2E 后显式调用 ──
+check-e2e-report:
+	@echo "checking uncovered-report schema (alert-only; requires stateful E2E run)"
+	bash scripts/quality/check-e2e-uncovered-report.sh
+
 test-verification-entrypoints-test:
 	bash scripts/quality/test-verification-entrypoints-test.sh
 	bash scripts/quality/run-planned-checks-test.sh
