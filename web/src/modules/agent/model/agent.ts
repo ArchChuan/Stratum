@@ -23,7 +23,6 @@ export const agentSchema = z
     mcpToolIds: z.array(z.string()).nullish().transform((v) => v ?? []),
     knowledgeWorkspaceIds: z.array(z.string()).nullish().transform((v) => v ?? []),
     memoryScope: z.string().optional().default('user'),
-    checkpointEnabled: z.boolean().optional().default(false),
     isSystem: z.boolean().optional().default(false),
     managementMode: z.string().optional().default(''),
     created_at: z.string().optional(),
@@ -48,7 +47,6 @@ export interface Agent {
   mcpToolIds: string[];
   knowledgeWorkspaceIds: string[];
   memoryScope: string;
-  checkpointEnabled?: boolean;
   isSystem?: boolean;
   managementMode?: string;
   created_at?: string;
@@ -73,7 +71,6 @@ export interface AgentFormValues {
   mcpToolIds?: string[];
   knowledgeWorkspaceIds?: string[];
   memoryScope?: string;
-  checkpointEnabled?: boolean;
   editors?: string[];
 }
 
@@ -232,8 +229,11 @@ export interface ChatMessage {
 
 // query/context/variables 来自 proto 契约(gen);conversation_id 是 wire-only 字段
 // (后端 handler.ExecuteAgentRequest 绑定并用于会话连续性,dto 契约无此字段,parity 冻结)。
+// execution_id 同为 wire-only:断线续发时 SSE 首帧下发恢复键,前端保存并在断线
+// 重发请求中原样带回,供后端 resumeFromCheckpoint 定位检查点续跑。
 export interface ExecuteAgentPayload extends GenExecuteAgentRequest {
   conversation_id?: string;
+  execution_id?: string;
 }
 
 export interface AgentExecutionResult {
@@ -264,6 +264,9 @@ export interface StreamCallbacks {
   onDone: (data: AgentExecutionResult) => void;
 	onError: (err: Error) => void;
 	onApprovalRequired: (approval: ToolApproval) => void;
+	// 首帧恢复键(断线续接协议):SSE 首帧下发 execution_id,捕获后断线重发时
+	// 原样带回;仅存内存供消费方读取,不持久化。
+	onExecutionId?: (executionId: string) => void;
 }
 
 export interface ToolApproval {

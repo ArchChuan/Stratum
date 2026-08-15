@@ -132,8 +132,8 @@ func (r *Registry) GetSystemAssistant(ctx context.Context) (Agent, bool, error) 
 	return a, true, nil
 }
 
-func (r *Registry) UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (Agent, error) {
-	cfg, err := r.repo.UpdateSystemAssistantModel(ctx, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens, audit)
+func (r *Registry) UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, maxIterations int, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (Agent, error) {
+	cfg, err := r.repo.UpdateSystemAssistantModel(ctx, model, memoryScope, maxIterations, maxContextTokens, audit)
 	if err != nil {
 		return nil, fmt.Errorf("registry update system assistant model: %w", err)
 	}
@@ -146,8 +146,8 @@ func (r *Registry) UpdateSystemAssistantModel(ctx context.Context, model string,
 
 // UpdateSystemAssistantAll applies model fields + unchanged bindings in one
 // transaction, auditing once.
-func (r *Registry) UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, checkpointEnabled bool, maxIterations, maxContextTokens, maxTokens int, audit *auditdomain.ResourceChangeAuditEvent) (Agent, error) {
-	cfg, err := r.repo.UpdateSystemAssistantAll(ctx, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens, maxTokens, audit)
+func (r *Registry) UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, maxIterations, maxContextTokens, maxTokens int, audit *auditdomain.ResourceChangeAuditEvent) (Agent, error) {
+	cfg, err := r.repo.UpdateSystemAssistantAll(ctx, model, memoryScope, maxIterations, maxContextTokens, maxTokens, audit)
 	if err != nil {
 		return nil, fmt.Errorf("registry update system assistant: %w", err)
 	}
@@ -162,7 +162,7 @@ func (r *Registry) UpdateSystemAssistantAll(ctx context.Context, model, memorySc
 // reentrant path; no audit event — the platform seed/import callers are not
 // user-facing writes).
 func (r *Registry) UpdateSystemAssistant(ctx context.Context, cfg *domain.AgentConfig) error {
-	if _, err := r.repo.UpdateSystemAssistantModel(ctx, cfg.LLMModel, cfg.MemoryScope, cfg.CheckpointEnabled, cfg.MaxIterations, cfg.MaxContextTokens, nil); err != nil {
+	if _, err := r.repo.UpdateSystemAssistantModel(ctx, cfg.LLMModel, cfg.MemoryScope, cfg.MaxIterations, cfg.MaxContextTokens, nil); err != nil {
 		return fmt.Errorf("registry update system assistant: %w", err)
 	}
 	if r.logger != nil {

@@ -176,8 +176,7 @@ func ComposeSystemAssistantProfile(
 		CompactionRecentGroups: cfg.CompactionRecentGroups,
 		CompactionSafetyRatio:  cfg.CompactionSafetyRatio,
 		MemoryScope:            cfg.MemoryScope, SystemKey: profile.Key, IsSystem: true, ManagementMode: "platform",
-		CheckpointEnabled: cfg.CheckpointEnabled,
-		MCPToolIDs:        copyCfg.MCPToolIDs, KnowledgeWorkspaceIDs: copyCfg.KnowledgeWorkspaceIDs,
+		MCPToolIDs: copyCfg.MCPToolIDs, KnowledgeWorkspaceIDs: copyCfg.KnowledgeWorkspaceIDs,
 		AllowedSkills: copyCfg.AllowedSkills,
 	}, nil
 }

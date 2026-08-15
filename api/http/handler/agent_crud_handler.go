@@ -79,7 +79,6 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 		MCPToolIDs:             req.MCPToolIDs,
 		KnowledgeWorkspaceIDs:  req.KnowledgeWorkspaceIDs,
 		MemoryScope:            req.MemoryScope,
-		CheckpointEnabled:      req.CheckpointEnabled,
 		Editors:                req.Editors,
 	})
 	if err != nil {
@@ -150,7 +149,6 @@ func (h *AgentHandler) UpdateAgent(c *gin.Context) {
 		MCPToolIDs:             req.MCPToolIDs,
 		KnowledgeWorkspaceIDs:  req.KnowledgeWorkspaceIDs,
 		MemoryScope:            req.MemoryScope,
-		CheckpointEnabled:      req.CheckpointEnabled,
 	})
 	if err != nil {
 		_ = c.Error(err)

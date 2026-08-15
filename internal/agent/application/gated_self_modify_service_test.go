@@ -36,10 +36,10 @@ func (f *gateAgentRepoFake) Update(_ context.Context, cfg *domain.AgentConfig, _
 	f.agents[cfg.ID] = cfg
 	return nil
 }
-func (f *gateAgentRepoFake) UpdateSystemAssistantModel(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+func (f *gateAgentRepoFake) UpdateSystemAssistantModel(_ context.Context, _ string, _ string, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	return nil, nil
 }
-func (f *gateAgentRepoFake) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+func (f *gateAgentRepoFake) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ int, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	return nil, nil
 }
 func (f *gateAgentRepoFake) UpdateSystemAssistantBindings(context.Context, []string, []string, []string) (*domain.AgentConfig, error) {

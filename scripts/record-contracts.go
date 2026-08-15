@@ -324,7 +324,7 @@ func recordSelfModifyRoute(router http.Handler, tokens iamport.TokenService, rou
 	path := strings.ReplaceAll(routePath, ":id", "contract-id")
 	body := json.RawMessage(`{"name":"contract-renamed","description":"contract","systemPrompt":"prompt",
 "llmModel":"qwen-plus","maxIterations":10,"maxContextTokens":8000,"allowedSkills":[],
-"mcpToolIds":[],"knowledgeWorkspaceIds":[],"memoryScope":"user","checkpointEnabled":false}`)
+"mcpToolIds":[],"knowledgeWorkspaceIds":[],"memoryScope":"user"}`)
 	c := Case{
 		Name: "authenticated-pending", Method: http.MethodPost, Path: path, Body: body,
 		WantStatus: http.StatusAccepted,
@@ -393,8 +393,8 @@ func recordRoute(router http.Handler, method, path, outPath string) {
 
 type contractProvRepo struct{}
 
-func (contractProvRepo) Create(_ context.Context, _ string, _ *llmdomain.Provider) error { return nil }
-func (contractProvRepo) Get(_ context.Context, _ string, _ string) (*llmdomain.Provider, error) {
+func (contractProvRepo) Create(_ context.Context, _ *llmdomain.Provider) error { return nil }
+func (contractProvRepo) Get(_ context.Context, _ string) (*llmdomain.Provider, error) {
 	return &llmdomain.Provider{
 		ID: "contract-provider", Name: "stub", Kind: llmdomain.ProviderOpenAICompat,
 		BaseURL: "https://stub.example.com/v1", Enabled: true,
@@ -402,10 +402,10 @@ func (contractProvRepo) Get(_ context.Context, _ string, _ string) (*llmdomain.P
 		UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}, nil
 }
-func (contractProvRepo) List(_ context.Context, _ string) ([]llmdomain.Provider, error) {
+func (contractProvRepo) List(_ context.Context) ([]llmdomain.Provider, error) {
 	return nil, nil
 }
-func (contractProvRepo) GetMeta(_ context.Context, _ string, _ string) (*llmdomain.Provider, error) {
+func (contractProvRepo) GetMeta(_ context.Context, _ string) (*llmdomain.Provider, error) {
 	return &llmdomain.Provider{
 		ID: "contract-provider", Name: "stub", Kind: llmdomain.ProviderOpenAICompat,
 		BaseURL: "https://stub.example.com/v1", Enabled: true,
@@ -413,25 +413,25 @@ func (contractProvRepo) GetMeta(_ context.Context, _ string, _ string) (*llmdoma
 		UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}, nil
 }
-func (contractProvRepo) Update(_ context.Context, _ string, _ *llmdomain.Provider) error { return nil }
-func (contractProvRepo) Delete(_ context.Context, _ string, _ string) error              { return nil }
+func (contractProvRepo) Update(_ context.Context, _ *llmdomain.Provider) error { return nil }
+func (contractProvRepo) Delete(_ context.Context, _ string) error              { return nil }
 
 type contractModRepo struct{}
 
-func (contractModRepo) Create(_ context.Context, _ string, _ *llmdomain.Model) error { return nil }
-func (contractModRepo) Get(_ context.Context, _ string, _ string) (*llmdomain.Model, error) {
+func (contractModRepo) Create(_ context.Context, _ *llmdomain.Model) error { return nil }
+func (contractModRepo) Get(_ context.Context, _ string) (*llmdomain.Model, error) {
 	return nil, errStubNotFound
 }
-func (contractModRepo) List(_ context.Context, _ string, _ llmport.ModelFilter) ([]llmdomain.Model, error) {
+func (contractModRepo) List(_ context.Context, _ llmport.ModelFilter) ([]llmdomain.Model, error) {
 	return nil, nil
 }
-func (contractModRepo) Update(_ context.Context, _ string, _ *llmdomain.Model) error { return nil }
-func (contractModRepo) UpsertDiscovered(_ context.Context, _ string, _ string, _ []llmdomain.Model) ([]llmdomain.Model, error) {
+func (contractModRepo) Update(_ context.Context, _ *llmdomain.Model) error { return nil }
+func (contractModRepo) UpsertDiscovered(_ context.Context, _ string, _ []llmdomain.Model) ([]llmdomain.Model, error) {
 	return nil, nil
 }
-func (contractModRepo) Delete(_ context.Context, _ string, _ string) error         { return nil }
-func (contractModRepo) Toggle(_ context.Context, _ string, _ string, _ bool) error { return nil }
-func (contractModRepo) SetDefaultEmbedding(_ context.Context, _ string, _ string, _ bool) error {
+func (contractModRepo) Delete(_ context.Context, _ string) error         { return nil }
+func (contractModRepo) Toggle(_ context.Context, _ string, _ bool) error { return nil }
+func (contractModRepo) SetDefaultEmbedding(_ context.Context, _ string, _ bool) error {
 	return nil
 }
 
@@ -711,12 +711,12 @@ func (contractAgentRepo) Update(context.Context, *agentdomain.AgentConfig, *audi
 	return nil
 }
 func (contractAgentRepo) UpdateSystemAssistantModel(
-	context.Context, string, string, bool, int, int, *auditdomain.ResourceChangeAuditEvent,
+	context.Context, string, string, int, int, *auditdomain.ResourceChangeAuditEvent,
 ) (*agentdomain.AgentConfig, error) {
 	return nil, nil
 }
 func (contractAgentRepo) UpdateSystemAssistantAll(
-	context.Context, string, string, bool, int, int, int, *auditdomain.ResourceChangeAuditEvent,
+	context.Context, string, string, int, int, int, *auditdomain.ResourceChangeAuditEvent,
 ) (*agentdomain.AgentConfig, error) {
 	return nil, nil
 }

@@ -243,3 +243,116 @@ func TestOllamaProtocolUsesResolvedProviderConfig(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "ok", resp.Content)
 }
+
+func TestOllamaComplete_toolCalls(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// ollama 原生 /api/chat 响应:tool_calls 在 message.tool_calls,arguments 为对象
+		_, _ = fmt.Fprint(w, `{
+			"model": "qwen3",
+			"message": {
+				"role": "assistant",
+				"content": "",
+				"tool_calls": [
+					{"id": "call_1", "function": {"name": "get_time", "arguments": {"fmt": "HH:MM:SS"}}}
+				]
+			},
+			"done": true
+		}`)
+	}))
+	defer srv.Close()
+
+	client := infrastructure.NewOllamaClient(
+		infrastructure.ProviderConfig{Name: "test-ollama", BaseURL: srv.URL},
+		zap.NewNop(),
+	)
+	resp, err := client.Complete(context.Background(), &infrastructure.CompletionRequest{Model: "qwen3"})
+	require.NoError(t, err)
+	require.Len(t, resp.ToolCalls, 1)
+	tc := resp.ToolCalls[0]
+	require.Equal(t, "call_1", tc.ID)
+	require.Equal(t, "function", tc.Type)
+	require.Equal(t, "get_time", tc.Function.Name)
+	// arguments 对象 -> JSON 字符串
+	require.JSONEq(t, `{"fmt":"HH:MM:SS"}`, tc.Function.Arguments)
+}
+
+func TestOllamaCompleteStream_toolCalls(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		// ollama 原生流式:tool_calls 单 chunk 全量,后续 chunk 不再重复
+		_, _ = fmt.Fprint(w,
+			`{"model":"qwen3","message":{"role":"assistant","content":""},"done":false}`+"\n"+
+				`{"model":"qwen3","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_9","function":{"index":0,"name":"get_time","arguments":{}}}]},"done":false}`+"\n"+
+				`{"model":"qwen3","message":{"role":"assistant","content":""},"done":true,"eval_count":10,"prompt_eval_count":5}`+"\n",
+		)
+	}))
+	defer srv.Close()
+
+	client := infrastructure.NewOllamaClient(
+		infrastructure.ProviderConfig{Name: "test-ollama", BaseURL: srv.URL},
+		zap.NewNop(),
+	)
+	resp, err := client.CompleteStream(context.Background(),
+		&infrastructure.CompletionRequest{Model: "qwen3"}, func(string) {})
+	require.NoError(t, err)
+	require.Len(t, resp.ToolCalls, 1)
+	tc := resp.ToolCalls[0]
+	require.Equal(t, "call_9", tc.ID)
+	require.Equal(t, "get_time", tc.Function.Name)
+	require.JSONEq(t, `{}`, tc.Function.Arguments)
+}
+
+func TestOllamaComplete_preservesToolCallsInRequest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []struct {
+				Role      string `json:"role"`
+				Content   string `json:"content"`
+				ToolCalls []struct {
+					ID       string `json:"id"`
+					Function struct {
+						Name      string         `json:"name"`
+						Arguments map[string]any `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"messages"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		// 多轮恢复:assistant 消息必须带上一轮 tool_calls,arguments 转对象
+		require.Len(t, req.Messages, 1)
+		require.Equal(t, "assistant", req.Messages[0].Role)
+		require.Len(t, req.Messages[0].ToolCalls, 1)
+		tc := req.Messages[0].ToolCalls[0]
+		require.Equal(t, "call_1", tc.ID)
+		require.Equal(t, "get_time", tc.Function.Name)
+		require.Equal(t, map[string]any{"fmt": "HH:MM:SS"}, tc.Function.Arguments)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"model":"qwen3","message":{"role":"assistant","content":"ok"},"done":true}`)
+	}))
+	defer srv.Close()
+
+	client := infrastructure.NewOllamaClient(
+		infrastructure.ProviderConfig{Name: "test-ollama", BaseURL: srv.URL},
+		zap.NewNop(),
+	)
+	// 构造带 tool_calls 的 assistant 消息(模拟多轮历史)
+	argsMsg := `{"fmt":"HH:MM:SS"}`
+	msg := infrastructure.Message{
+		Role:    "assistant",
+		Content: "",
+		ToolCalls: []infrastructure.ToolCall{
+			{ID: "call_1", Type: "function", Function: struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}{Name: "get_time", Arguments: argsMsg}},
+		},
+	}
+	resp, err := client.Complete(context.Background(), &infrastructure.CompletionRequest{
+		Model:    "qwen3",
+		Messages: []infrastructure.Message{msg},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "ok", resp.Content)
+}

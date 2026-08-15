@@ -33,6 +33,10 @@ func TestPlanSubLoopTokensFoldIntoParentBudget(t *testing.T) {
 	}}
 	a := newReActAgent()
 	a.SetCapGateway(gw)
+	// 断点续接默认全开：plan 路径（create_plan/continue_plan/波次汇合）无条件
+	// 写 checkpoint，测试必须注入 writer，否则 ExecutePlanTool 报
+	// ErrPlanCheckpointRequired 使 plan 断裂、预算终止不触发。
+	a.SetCheckpointStore(&resumableCheckpointStore{})
 	// 预算 = 父图自身用量(400+400+500) + 子循环用量(600) − 1：只有折回后累计
 	// (1900) 才超限；折回前父图只看得到 1300，不会终止。
 	const budget = 1800

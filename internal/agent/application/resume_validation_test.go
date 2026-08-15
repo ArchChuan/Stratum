@@ -83,10 +83,10 @@ func (resumeAgentRepo) Remove(context.Context, string, *auditdomain.ResourceChan
 func (resumeAgentRepo) Update(context.Context, *domain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string, bool) error {
 	return nil
 }
-func (resumeAgentRepo) UpdateSystemAssistantModel(context.Context, string, string, bool, int, int, *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+func (resumeAgentRepo) UpdateSystemAssistantModel(context.Context, string, string, int, int, *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	return nil, nil
 }
-func (resumeAgentRepo) UpdateSystemAssistantAll(context.Context, string, string, bool, int, int, int, *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+func (resumeAgentRepo) UpdateSystemAssistantAll(context.Context, string, string, int, int, int, *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	return nil, nil
 }
 

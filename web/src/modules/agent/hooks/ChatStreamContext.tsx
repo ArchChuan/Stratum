@@ -27,6 +27,9 @@ interface StreamInternalState {
 	error: string | null;
 	failure: AgentExecutionFailure | null;
 	approval: ToolApproval | null;
+	// 断线续接恢复键:SSE 首帧下发,存内存仅暴露,断线重发由 executeAgentStream
+	// 内部携带,这里只做可读快照(刷新降级为重新执行,不持久化)。
+	executionId: string | null;
   ctrl: AbortController | null;
 }
 
@@ -39,6 +42,7 @@ export interface StreamSnapshot {
   result: AgentExecutionResult | null;
 	error: string | null;
 	approval: ToolApproval | null;
+	executionId: string | null;
 }
 
 interface ChatStreamContextValue {
@@ -76,6 +80,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
 		error: null,
 		failure: null,
 		approval: null,
+		executionId: null,
     ctrl: null,
   });
 
@@ -110,9 +115,14 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
 		s.error = null;
 		s.failure = null;
 		s.approval = null;
+		s.executionId = null;
     notify();
 
     const ctrl = executeAgentStream(agentId, payload, {
+      onExecutionId: (executionId) => {
+        if (stateRef.current.ctrl !== ctrl) return;
+        stateRef.current.executionId = executionId;
+      },
       onToken: (token) => {
         if (stateRef.current.ctrl !== ctrl) return;
         stateRef.current.content += token;
@@ -171,6 +181,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
       result: stateRef.current.result,
 		error: stateRef.current.error,
 		approval: stateRef.current.approval,
+		executionId: stateRef.current.executionId,
     }),
     [],
   );

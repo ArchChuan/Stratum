@@ -44,8 +44,9 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 		MaxSteps:       intOption(req.Options, "maxSteps"),
 		Timeout:        timeoutOption(req.Options, "timeout"),
 	}, agent.ExecMeta{
-		TenantID: tenantID,
-		TraceID:  middleware.GetTraceID(c),
+		TenantID:    tenantID,
+		TraceID:     middleware.GetTraceID(c),
+		ExecutionID: req.ExecutionID,
 	})
 
 	if err != nil {
@@ -92,16 +93,17 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 		writer.EnqueueData(string(payload))
 	}
 
-	execCtx, cancel, run, err := h.svc.ExecuteStream(clientCtx, id, agent.ExecRequest{
+	execCtx, cancel, run, executionID, err := h.svc.ExecuteStream(clientCtx, id, agent.ExecRequest{
 		Query:          req.Query,
 		ConversationID: req.ConversationID,
 		UserID:         userID,
 		MaxSteps:       intOption(req.Options, "maxSteps"),
 		Timeout:        timeoutOption(req.Options, "timeout"),
 	}, agent.ExecMeta{
-		TenantID: tenantID,
-		TraceID:  middleware.GetTraceID(c),
-		Stream:   true,
+		TenantID:    tenantID,
+		TraceID:     middleware.GetTraceID(c),
+		ExecutionID: req.ExecutionID,
+		Stream:      true,
 	}, tokenCb)
 	if err != nil {
 		_ = c.Error(err)
@@ -113,6 +115,10 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 	c.Header("X-Accel-Buffering", "no")
 	c.Header("Transfer-Encoding", "chunked")
 	defer cancel()
+	// 首帧下发恢复键:断线续发协议的前提,先于任何 token 帧(EnqueueData FIFO)。
+	// 客户端只要收到本帧即可在断线后携带 execution_id 重发续接。
+	firstFrame, _ := json.Marshal(map[string]string{"execution_id": executionID})
+	writer.EnqueueData(string(firstFrame))
 	writer.EnqueueComment("heartbeat")
 	go func() {
 		ticker := time.NewTicker(constants.SSEHeartbeatInterval)

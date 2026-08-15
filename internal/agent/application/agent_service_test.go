@@ -104,7 +104,7 @@ func TestAgentServicePreparationFailureRemainsObservable(t *testing.T) {
 		{
 			name: "execute stream",
 			run: func(ctx context.Context, svc *application.AgentService) error {
-				_, _, _, err := svc.ExecuteStream(ctx, "agent-1", application.ExecRequest{
+				_, _, _, _, err := svc.ExecuteStream(ctx, "agent-1", application.ExecRequest{
 					UserID: "user-1", Query: "use the lookup tool",
 				}, application.ExecMeta{TenantID: "tenant-1", TraceID: "business-trace-1"}, nil)
 				return err
@@ -182,6 +182,44 @@ func TestAgentServicePreparationFailureRemainsObservable(t *testing.T) {
 		})
 	}
 }
+
+// noAgentRevisionResolver 返回 found=false:执行不走 revision 分支,
+// 避免 buildRevisionAgent 的额外依赖,聚焦 execution_id 恢复键语义。
+type noAgentRevisionResolver struct{}
+
+func (noAgentRevisionResolver) ResolveAgentRevision(context.Context, string, string, string) (port.AgentRevisionAssignment, bool, error) {
+	return port.AgentRevisionAssignment{}, false, nil
+}
+
+// TestAgentService_ExecuteStream_ReusesProvidedExecutionID:断线续接协议要求
+// 服务端沿用调用方恢复键。ExecuteStream 传 meta.ExecutionID 必须原样返回,
+// 前端才能用同一 execution_id 重发续接;此前流式路径无条件新建 execution_id,
+// 带 ID 重发也永不 resume(先决 bug B1)。
+func TestAgentService_ExecuteStream_ReusesProvidedExecutionID(t *testing.T) {
+	repo := new(mockAgentRepo)
+	repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{
+		ID: "agent-1", Name: "Resume Agent", Type: domain.ReActAgent,
+		SystemPrompt: "resume prompt", LLMModel: "qwen-plus", MaxIterations: 3,
+	}, true, nil).Once()
+	svc := application.NewAgentService(application.AgentServiceDeps{
+		Registry:              application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		AgentRevisionResolver: noAgentRevisionResolver{},
+		SystemResourceGuard:   testSystemResourceGuard{},
+	})
+
+	execCtx, cancel, run, executionID, err := svc.ExecuteStream(
+		context.Background(), "agent-1",
+		application.ExecRequest{UserID: "user-1", Query: "continue the search"},
+		application.ExecMeta{TenantID: "tenant-1", TraceID: "trace-1", ExecutionID: "provided-exec-1"},
+		func(string) {},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, execCtx)
+	require.NotNil(t, cancel)
+	require.NotNil(t, run)
+	require.Equal(t, "provided-exec-1", executionID)
+	repo.AssertExpectations(t)
+}
 func (m *mockAgentRepo) GetSystemAssistant(ctx context.Context) (*domain.AgentConfig, bool, error) {
 	args := m.Called(ctx)
 	cfg, _ := args.Get(0).(*domain.AgentConfig)
@@ -198,13 +236,13 @@ func (m *mockAgentRepo) Remove(ctx context.Context, id string, _ *auditdomain.Re
 func (m *mockAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool) error {
 	return m.Called(ctx, cfg).Error(0)
 }
-func (m *mockAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
-	args := m.Called(ctx, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens)
+func (m *mockAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, maxIterations int, maxContextTokens int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+	args := m.Called(ctx, model, memoryScope, maxIterations, maxContextTokens)
 	cfg, _ := args.Get(0).(*domain.AgentConfig)
 	return cfg, args.Error(1)
 }
-func (m *mockAgentRepo) UpdateSystemAssistantAll(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int, maxTokens int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
-	args := m.Called(ctx, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens, maxTokens)
+func (m *mockAgentRepo) UpdateSystemAssistantAll(ctx context.Context, model string, memoryScope string, maxIterations int, maxContextTokens int, maxTokens int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+	args := m.Called(ctx, model, memoryScope, maxIterations, maxContextTokens, maxTokens)
 	cfg, _ := args.Get(0).(*domain.AgentConfig)
 	return cfg, args.Error(1)
 }
@@ -648,7 +686,7 @@ func TestAgentService_UpdateSystemAssistantModelUsesAtomicReturnedConfig(t *test
 	repo.On("GetSystemAssistant", ctx).Return(&domain.AgentConfig{
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "existing-model",
 	}, true, nil)
-	repo.On("UpdateSystemAssistantModel", ctx, "qwen-plus", "", false, 0, 0).Return(&domain.AgentConfig{
+	repo.On("UpdateSystemAssistantModel", ctx, "qwen-plus", "", 0, 0).Return(&domain.AgentConfig{
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "qwen-plus",
 	}, nil).Once()
 
@@ -688,7 +726,7 @@ func TestAgentService_UpdateSystemAssistantModelMarksUnexpectedReturnedModelNotR
 	repo.On("GetSystemAssistant", ctx).Return(&domain.AgentConfig{
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "existing-model",
 	}, true, nil)
-	repo.On("UpdateSystemAssistantModel", ctx, "qwen-plus", "", false, 0, 0).Return(&domain.AgentConfig{
+	repo.On("UpdateSystemAssistantModel", ctx, "qwen-plus", "", 0, 0).Return(&domain.AgentConfig{
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "qwen-plus-latest",
 	}, nil).Once()
 
@@ -714,7 +752,7 @@ func TestAgentService_UpdateSystemAssistantModelConcurrentCallsKeepAtomicResults
 	}, true, nil).Maybe()
 	models := []string{"qwen-plus", "qwen-max"}
 	for _, model := range models {
-		repo.On("UpdateSystemAssistantModel", ctx, model, "", false, 0, 0).Return(&domain.AgentConfig{
+		repo.On("UpdateSystemAssistantModel", ctx, model, "", 0, 0).Return(&domain.AgentConfig{
 			ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: model,
 		}, nil).Once()
 	}
@@ -781,7 +819,7 @@ func TestAgentService_UpdateSystemAssistantModelPropagatesPersistenceFailure(t *
 	repo.On("GetSystemAssistant", ctx).Return(&domain.AgentConfig{
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "existing-model",
 	}, true, nil)
-	repo.On("UpdateSystemAssistantModel", ctx, "qwen-plus", "", false, 0, 0).Return((*domain.AgentConfig)(nil), wantErr)
+	repo.On("UpdateSystemAssistantModel", ctx, "qwen-plus", "", 0, 0).Return((*domain.AgentConfig)(nil), wantErr)
 
 	_, err := svc.UpdateSystemAssistantModel(ctx, "qwen-plus", "user-1")
 	assert.ErrorIs(t, err, wantErr)
@@ -794,7 +832,7 @@ func TestAgentService_UpdateSystemAssistant_IgnoresName(t *testing.T) {
 	}
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
 	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
-	repo.On("UpdateSystemAssistantAll", ctx, "", "", false, 0, 0, 0).Return(cfg, nil)
+	repo.On("UpdateSystemAssistantAll", ctx, "", "", 0, 0, 0).Return(cfg, nil)
 
 	dto, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{
 		Name: "ignored",
@@ -812,7 +850,7 @@ func TestAgentServicePlatformAssistantModelOnlyUpdatePreservesSystemBindings(t *
 		MCPToolIDs: []string{"mcp:orders:get"},
 	}
 	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
-	repo.On("UpdateSystemAssistantAll", ctx, "new-model", "", false, 0, 0, 0).Return(&domain.AgentConfig{
+	repo.On("UpdateSystemAssistantAll", ctx, "new-model", "", 0, 0, 0).Return(&domain.AgentConfig{
 		ID: cfg.ID, SystemKey: cfg.SystemKey, LLMModel: "new-model", MCPToolIDs: cfg.MCPToolIDs,
 	}, nil)
 
@@ -831,7 +869,7 @@ func TestAgentServicePlatformAssistantRejectsBindingRemovalByPreservingManagedTo
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, MCPToolIDs: managedTools,
 	}
 	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
-	repo.On("UpdateSystemAssistantAll", ctx, "", "", false, 0, 0, 0).Return(cfg, nil)
+	repo.On("UpdateSystemAssistantAll", ctx, "", "", 0, 0, 0).Return(cfg, nil)
 
 	got, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{MCPToolIDs: []string{}})
 
@@ -849,7 +887,7 @@ func TestAgentServiceUpdateSystemAssistantPersistsMaxTokens(t *testing.T) {
 	}
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
 	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
-	repo.On("UpdateSystemAssistantAll", ctx, "", "", false, 0, 0, 2048).Return(&domain.AgentConfig{
+	repo.On("UpdateSystemAssistantAll", ctx, "", "", 0, 0, 2048).Return(&domain.AgentConfig{
 		ID: cfg.ID, SystemKey: cfg.SystemKey, MaxTokens: 2048,
 	}, nil)
 
@@ -868,7 +906,7 @@ func TestAgentServiceUpdateSystemAssistantZeroKeepsCurrentMaxTokens(t *testing.T
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
 	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
 	// 0 = 保留现值:merge 后传 cfg.MaxTokens(2048) 落库。
-	repo.On("UpdateSystemAssistantAll", ctx, "", "", false, 0, 0, 2048).Return(cfg, nil)
+	repo.On("UpdateSystemAssistantAll", ctx, "", "", 0, 0, 2048).Return(cfg, nil)
 
 	dto, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{})
 
@@ -986,7 +1024,7 @@ func TestAgentServiceUpdateSystemAssistantPersistsMaxIterations(t *testing.T) {
 	cfg := &domain.AgentConfig{ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey}
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
 	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
-	repo.On("UpdateSystemAssistantAll", ctx, "", "", false, 90, 0, 0).Return(&domain.AgentConfig{
+	repo.On("UpdateSystemAssistantAll", ctx, "", "", 90, 0, 0).Return(&domain.AgentConfig{
 		ID: cfg.ID, SystemKey: cfg.SystemKey, MaxIterations: 90,
 	}, nil)
 
@@ -1006,7 +1044,7 @@ func TestAgentServiceUpdateSystemAssistantZeroKeepsCurrentMaxIterations(t *testi
 	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
 	// 0 = 保留现值：merge 后传 cfg.MaxIterations(50) 落库，且不校验
 	// cfg.MaxIterations（B2 约束：PUT-0 不误拒 DB 遗留超界值）。
-	repo.On("UpdateSystemAssistantAll", ctx, "", "", false, 50, 0, 0).Return(cfg, nil)
+	repo.On("UpdateSystemAssistantAll", ctx, "", "", 50, 0, 0).Return(cfg, nil)
 
 	dto, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{})
 

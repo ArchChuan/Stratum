@@ -81,7 +81,6 @@ export const useEditAgentPage = () => {
           mcpToolIds: a.mcpToolIds || [],
           knowledgeWorkspaceIds: a.knowledgeWorkspaceIds || [],
           memoryScope: a.memoryScope || 'user',
-          checkpointEnabled: a.checkpointEnabled ?? false,
         });
       } catch (err) {
         if (!cancelled) {

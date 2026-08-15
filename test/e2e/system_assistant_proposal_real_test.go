@@ -485,7 +485,7 @@ func TestSystemAssistantProposalInProcessToolUsesRealMemberPermissions(t *testin
 	require.True(t, found)
 	existing.LLMModel = "deterministic-e2e-model"
 	_, err = agentRepo.UpdateSystemAssistantModel(
-		ctx, existing.LLMModel, existing.MemoryScope, existing.CheckpointEnabled,
+		ctx, existing.LLMModel, existing.MemoryScope,
 		existing.MaxIterations, existing.MaxContextTokens, nil,
 	)
 	require.NoError(t, err)

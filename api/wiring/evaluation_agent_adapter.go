@@ -165,7 +165,6 @@ func (a agentEvaluationAdapter) ApplyPublishedRevision(
 		MCPToolIDs:            existing.MCPToolIDs,
 		KnowledgeWorkspaceIDs: existing.KnowledgeWorkspaceIDs,
 		MemoryScope:           existing.MemoryScope,
-		CheckpointEnabled:     existing.CheckpointEnabled,
 	})
 	if err != nil {
 		return fmt.Errorf("evaluation Agent adapter: apply to agent: %w", err)

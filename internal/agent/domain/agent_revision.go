@@ -53,7 +53,6 @@ type AgentRevision struct {
 	MaxIterations          int             `json:"max_iterations"`
 	Bindings               []AgentBinding  `json:"bindings"`
 	MemoryScope            string          `json:"memory_scope,omitempty"`
-	CheckpointEnabled      bool            `json:"checkpoint_enabled,omitempty"`
 	StuckThreshold         int             `json:"stuck_threshold,omitempty"`
 	GlobalSystemSuffix     string          `json:"global_system_suffix,omitempty"`
 	MemoryInjectorRequired bool            `json:"memory_injector_required,omitempty"`

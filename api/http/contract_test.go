@@ -474,12 +474,12 @@ func (contractAgentRepo) Update(context.Context, *agentdomain.AgentConfig, *audi
 	return nil
 }
 func (contractAgentRepo) UpdateSystemAssistantModel(
-	context.Context, string, string, bool, int, int, *auditdomain.ResourceChangeAuditEvent,
+	context.Context, string, string, int, int, *auditdomain.ResourceChangeAuditEvent,
 ) (*agentdomain.AgentConfig, error) {
 	return nil, nil
 }
 func (contractAgentRepo) UpdateSystemAssistantAll(
-	context.Context, string, string, bool, int, int, int, *auditdomain.ResourceChangeAuditEvent,
+	context.Context, string, string, int, int, int, *auditdomain.ResourceChangeAuditEvent,
 ) (*agentdomain.AgentConfig, error) {
 	return nil, nil
 }

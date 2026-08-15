@@ -208,7 +208,6 @@ func (*resumableCheckpointStore) DeleteExpired(context.Context, string) (int64, 
 
 func TestBaseAgent_CheckpointRestoredActivesOverrideSeededActives(t *testing.T) {
 	a := newReActAgent()
-	a.CheckpointEnabled = true
 	payload, err := graph.EncodePlanCheckpoint(graph.PlanCheckpointPayload{
 		ActiveSkills: []graph.CheckpointSkillRef{{SkillID: "skill-restored", RevisionID: "rev-r"}},
 	})
@@ -306,4 +305,52 @@ func scenarioToolNames(tools []port.ToolDefinition) []string {
 		names[i] = tools[i].Name
 	}
 	return names
+}
+
+// TestBaseAgent_ResumeMergesToolMessagesFromCheckpoint:断点续接恢复键 = executionID,
+// checkpoint 只存工具维度快照(v2),恢复时 append 到 chat_messages 重建的 base 末尾。
+// 纯文本 user/assistant 不入快照,恢复上下文不重复历史。
+func TestBaseAgent_ResumeMergesToolMessagesFromCheckpoint(t *testing.T) {
+	a := newReActAgent()
+	assistantCall := port.LLMMessage{Role: "assistant", Content: "searching", ToolCalls: []port.ToolCall{{ID: "tc-1", Name: "search"}}}
+	toolMsg := port.LLMMessage{Role: "tool", ToolCallID: "tc-1", Content: `{"result":"ok"}`}
+	raw, err := graph.EncodeToolMessagesSnapshot([]port.LLMMessage{assistantCall, toolMsg})
+	require.NoError(t, err)
+	a.SetCheckpointStore(&resumableCheckpointStore{cp: &domain.AgentExecutionCheckpoint{
+		ID: "cp-1", ExecutionID: "exec-1", Status: "running", MessagesSnapshotJSON: raw,
+	}})
+	gw := &mockCapGW{responses: []port.CapabilityResponse{{Content: "done"}}}
+	a.SetCapGateway(gw)
+
+	_, err = a.Execute(context.Background(), "continue the search",
+		agent.WithTenantID("tenant-1"),
+		agent.WithExecutionID("exec-1"),
+	)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(gw.requests), 1)
+	msgs := gw.requests[0].LLM.Messages
+
+	// 工具维度消息 merge 到 base 末尾:assistant(tool_calls) 与 tool 结果都在。
+	var sawAssistantCall, sawTool bool
+	for _, m := range msgs {
+		if len(m.ToolCalls) > 0 && m.ToolCalls[0].ID == "tc-1" {
+			sawAssistantCall = true
+		}
+		if m.Role == "tool" && m.ToolCallID == "tc-1" {
+			sawTool = true
+		}
+	}
+	require.True(t, sawAssistantCall, "恢复上下文必须含 tool_calls 调用消息")
+	require.True(t, sawTool, "恢复上下文必须含 tool 结果消息")
+	// 恢复后从断点续跑:最后一条是 tool 结果。
+	require.Equal(t, "tool", msgs[len(msgs)-1].Role)
+
+	// 纯文本 user 只来自 chat_messages base,快照不含 user,不得重复。
+	userCount := 0
+	for _, m := range msgs {
+		if m.Role == "user" {
+			userCount++
+		}
+	}
+	require.Equal(t, 1, userCount, "恢复不得重复 user 消息")
 }

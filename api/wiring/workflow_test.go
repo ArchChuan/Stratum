@@ -46,7 +46,7 @@ func (f *workflowAgentServiceFake) ExecuteStream(
 	req agentapp.ExecRequest,
 	meta agentapp.ExecMeta,
 	tokenCb func(string),
-) (context.Context, context.CancelFunc, func() (*agentapp.AgentResult, int, error), error) {
+) (context.Context, context.CancelFunc, func() (*agentapp.AgentResult, int, error), string, error) {
 	f.agentID, f.req, f.meta = agentID, req, meta
 	execCtx, cancel := context.WithCancel(ctx)
 	return execCtx, cancel, func() (*agentapp.AgentResult, int, error) {
@@ -60,7 +60,7 @@ func (f *workflowAgentServiceFake) ExecuteStream(
 			return f.result, 10, nil
 		}
 		return &agentapp.AgentResult{Output: "done"}, 10, nil
-	}, nil
+	}, "exec-fake", nil
 }
 
 func TestWorkflowAgentExecutorDelegatesToAgentService(t *testing.T) {

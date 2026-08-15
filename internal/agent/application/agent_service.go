@@ -167,7 +167,6 @@ type CreateAgentInput struct {
 	MCPToolIDs             []string
 	KnowledgeWorkspaceIDs  []string
 	MemoryScope            string
-	CheckpointEnabled      bool
 	Editors                []string
 }
 
@@ -198,7 +197,6 @@ type UpdateAgentInput struct {
 	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
 	MemoryScope           string
-	CheckpointEnabled     bool
 }
 
 // AgentDTO is the wire shape returned by AgentService for transport
@@ -225,7 +223,6 @@ type AgentDTO struct {
 	SystemKey              string
 	IsSystem               bool
 	ManagementMode         string
-	CheckpointEnabled      bool
 	Parameters             map[string]any
 	Editors                []string
 }
@@ -320,7 +317,6 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		MCPToolIDs:             in.MCPToolIDs,
 		KnowledgeWorkspaceIDs:  in.KnowledgeWorkspaceIDs,
 		MemoryScope:            in.MemoryScope,
-		CheckpointEnabled:      in.CheckpointEnabled,
 		Capabilities:           []domain.AgentCapability{},
 		CreatedBy:              in.ActorID,
 	}
@@ -387,8 +383,7 @@ func (s *AgentService) SnapshotRevision(ctx context.Context, tenantID, id string
 	revision := domain.AgentRevision{
 		AgentID: cfg.ID, Type: cfg.Type, SystemPrompt: cfg.SystemPrompt, Model: cfg.LLMModel,
 		MaxIterations: cfg.MaxIterations, MemoryScope: cfg.MemoryScope,
-		CheckpointEnabled: cfg.CheckpointEnabled,
-		StuckThreshold:    cfg.StuckThreshold,
+		StuckThreshold: cfg.StuckThreshold,
 		ModelParameters: domain.ModelParameters{
 			MaxContextTokens:       cfg.MaxContextTokens,
 			Temperature:            cfg.Temperature,
@@ -499,7 +494,6 @@ func revisionConfig(revision domain.AgentRevision) *domain.AgentConfig {
 		CompactionRecentGroups: revision.ModelParameters.CompactionRecentGroups,
 		CompactionSafetyRatio:  revision.ModelParameters.CompactionSafetyRatio,
 		MemoryScope:            revision.MemoryScope,
-		CheckpointEnabled:      revision.CheckpointEnabled,
 		StuckThreshold:         revision.StuckThreshold,
 	}
 	for _, binding := range revision.Bindings {
@@ -596,7 +590,7 @@ func (s *AgentService) UpdateSystemAssistantModel(ctx context.Context, model str
 	if err != nil {
 		return SystemAssistantSettings{}, err
 	}
-	a, err := s.deps.Registry.UpdateSystemAssistantModel(ctx, model, existingCfg.MemoryScope, existingCfg.CheckpointEnabled, existingCfg.MaxIterations, existingCfg.MaxContextTokens, audit)
+	a, err := s.deps.Registry.UpdateSystemAssistantModel(ctx, model, existingCfg.MemoryScope, existingCfg.MaxIterations, existingCfg.MaxContextTokens, audit)
 	if err != nil {
 		return SystemAssistantSettings{}, fmt.Errorf("agent service update system assistant model: %w", err)
 	}
@@ -715,7 +709,6 @@ func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in Upda
 		MCPToolIDs:             in.MCPToolIDs,
 		KnowledgeWorkspaceIDs:  in.KnowledgeWorkspaceIDs,
 		MemoryScope:            in.MemoryScope,
-		CheckpointEnabled:      in.CheckpointEnabled,
 	}
 	if err := s.validateWorkspaceBindings(ctx, reqctx.TenantIDFromContext(ctx), in.KnowledgeWorkspaceIDs); err != nil {
 		return nil, err
@@ -1034,7 +1027,7 @@ func (s *AgentService) updateSystemAssistant(ctx context.Context, cfg *domain.Ag
 	if err != nil {
 		return AgentDTO{}, err
 	}
-	updated, err := s.deps.Registry.UpdateSystemAssistantAll(ctx, model, memoryScope, in.CheckpointEnabled, maxIterations, maxContextTokens, maxTokens, audit)
+	updated, err := s.deps.Registry.UpdateSystemAssistantAll(ctx, model, memoryScope, maxIterations, maxContextTokens, maxTokens, audit)
 	if err != nil {
 		return AgentDTO{}, fmt.Errorf("update system assistant: %w", err)
 	}
@@ -1206,7 +1199,6 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		MemoryScope:            cfg.MemoryScope,
 		SystemKey:              cfg.SystemKey,
 		IsSystem:               cfg.IsSystem,
-		CheckpointEnabled:      cfg.CheckpointEnabled,
 		ManagementMode:         cfg.ManagementMode,
 		Parameters:             samplingParameterMap(cfg),
 	}
@@ -1475,22 +1467,25 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 // the SSE write loop. cancel() releases the per-call deadline.
 func (s *AgentService) ExecuteStream(
 	ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, tokenCb func(string),
-) (execCtx context.Context, cancel context.CancelFunc, run func() (*AgentResult, int, error), err error) {
+) (execCtx context.Context, cancel context.CancelFunc, run func() (*AgentResult, int, error), executionID string, err error) {
 	a, ok, err := s.deps.Registry.Get(ctx, agentID)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("execute stream: get agent: %w", err)
+		return nil, nil, nil, "", fmt.Errorf("execute stream: get agent: %w", err)
 	}
 	if !ok {
-		return nil, nil, nil, ErrNotFound
+		return nil, nil, nil, "", ErrNotFound
 	}
 	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
-	executionID := uuid.Must(uuid.NewV7()).String()
+	// 复用调用方传入的 execution_id（断线续接的恢复键）：非空则沿用同一执行
+	// 供 resumeFromCheckpoint 定位 checkpoint，空则生成新 ID。此前无条件新建，
+	// 导致流式路径即使带 execution_id 也永远无法续接。
+	executionID = executionIDOrNew(meta.ExecutionID)
 	preparationStart := time.Now()
 	recordExecutionPreparation(ctx, a, req, meta, executionID)
 	a, assignment, err := s.resolveExecutionAgent(ctx, a, meta.TenantID, agentID, executionSubject(req, meta))
 	if err != nil {
 		recordExecutionPreparationFailure(ctx, preparationStart, "resolve_agent_revision")
-		return nil, nil, nil, fmt.Errorf("execute stream: resolve revision: %w", err)
+		return nil, nil, nil, "", fmt.Errorf("execute stream: resolve revision: %w", err)
 	}
 	applyAgentAssignment(&meta, agentID, assignment)
 	recordExecutionPreparation(ctx, a, req, meta, executionID)
@@ -1498,7 +1493,7 @@ func (s *AgentService) ExecuteStream(
 	if err != nil {
 		s.recordSystemAssistantRequest(a, "unknown", "error")
 		recordExecutionPreparationFailure(ctx, preparationStart, "assemble_options")
-		return nil, nil, nil, fmt.Errorf("execute stream: assemble options: %w", err)
+		return nil, nil, nil, "", fmt.Errorf("execute stream: assemble options: %w", err)
 	}
 	assistantCfg := &ExecutionConfig{}
 	assistantCfg.ApplyOptions(options)
@@ -1566,7 +1561,7 @@ func (s *AgentService) ExecuteStream(
 		}
 		return res, durationMs, runErr
 	}
-	return execCtx, cancel, run, nil
+	return execCtx, cancel, run, executionID, nil
 }
 
 // bufferMemoryTurn feeds one turn into the async memory-extraction buffer.

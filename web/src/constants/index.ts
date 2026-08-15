@@ -38,6 +38,11 @@ export const WORKFLOW_LAYOUT_MARGIN = 80;
 export const WORKFLOW_STREAM_RECONNECT_BASE_MS = 1000;
 export const WORKFLOW_STREAM_RECONNECT_MAX_MS = 10000;
 export const WORKFLOW_OUTPUT_MAX_CHARS = 100000;
+// Agent 流断点续接退避:断线/5xx 携带 execution_id 重发,指数退避从 1s 到 10s,
+// 最多 5 次重试仍不完整则报错(对齐 WORKFLOW_STREAM_RECONNECT 命名/数值风格)。
+export const AGENT_STREAM_RECONNECT_BASE_MS = 1000;
+export const AGENT_STREAM_RECONNECT_MAX_MS = 10000;
+export const AGENT_STREAM_RECONNECT_MAX_ATTEMPTS = 5;
 
 export const MCP_DEFAULT_TIMEOUT_SEC = 30;
 export const MCP_MAX_TIMEOUT_SEC = 300;
