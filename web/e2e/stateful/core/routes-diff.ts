@@ -21,6 +21,7 @@ const DOMAIN_PREFIXES: Array<[string, string]> = [
   ['/tenant', 'iam'],
   ['/admin', 'llm-admin'],
   ['/audit', 'audit'],
+  ['/dashboard', 'dashboard'],
 ];
 
 // normalizePath 去 query,并把 gin 具名参数段(:xxx)统一为 :param。

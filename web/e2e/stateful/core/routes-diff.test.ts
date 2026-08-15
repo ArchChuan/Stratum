@@ -95,6 +95,7 @@ describe('domainForPath', () => {
     expect(domainForPath('/workflow-runs/1')).toBe('workflow');
     expect(domainForPath('/agents/x/execute')).toBe('agent');
     expect(domainForPath('/auth/me')).toBe('iam');
+    expect(domainForPath('/dashboard/overview')).toBe('dashboard');
   });
 
   it('falls back to other for unknown prefixes', () => {
