@@ -133,3 +133,22 @@ export const buildUncoveredReport = (
     excluded: excluded.map(({ method, path, reason }) => ({ method, path, reason })),
   };
 };
+
+// mergeGoldenRoutes 把 golden 契约路径并入注册集:能匹配到已注册模板的忽略,
+// 匹配不到的(golden 漏记或 dump 缺路由)按归一化形态追加为额外待覆盖项。
+// golden 同一路径含多 auth 场景,追加前按 (method, path) 去重。
+export const mergeGoldenRoutes = (
+  registered: RouteShape[],
+  goldenRoutes: RouteShape[],
+): RouteShape[] => {
+  const extra: RouteShape[] = [];
+  const seen = new Set(registered.map(({ method, path }) => methodPathKey(method, path)));
+  for (const golden of goldenRoutes) {
+    if (matchTemplate(registered, golden.method, golden.path)) continue;
+    const key = methodPathKey(golden.method, golden.path);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    extra.push({ method: golden.method, path: normalizePath(golden.path) });
+  }
+  return [...registered, ...extra];
+};

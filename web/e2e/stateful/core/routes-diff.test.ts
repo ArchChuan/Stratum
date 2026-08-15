@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  buildUncoveredReport, diffRoutes, domainForPath, excludeRoutes, matchTemplate, normalizePath,
-  type RouteShape,
+  buildUncoveredReport, diffRoutes, domainForPath, excludeRoutes, matchTemplate, mergeGoldenRoutes,
+  normalizePath, type RouteShape,
 } from './routes-diff';
 
 const registered: RouteShape[] = [
@@ -121,5 +121,29 @@ describe('buildUncoveredReport', () => {
       { method: 'POST', path: '/mcp/servers/:param/reconnect', domain_hint: 'mcp' },
     ]);
     expect(report.excluded).toEqual([{ method: 'GET', path: '/health', reason: 'infra' }]);
+  });
+});
+
+describe('mergeGoldenRoutes', () => {
+  it('keeps registered routes that golden paths match, appends the rest once', () => {
+    const registered: RouteShape[] = [
+      { method: 'GET', path: '/agents/:id/execute' },
+      { method: 'GET', path: '/health' },
+    ];
+    const golden: RouteShape[] = [
+      // 固定值 canonical 能匹配到模板 /agents/:id/execute → 忽略
+      { method: 'GET', path: '/agents/contract-1/execute' },
+      // 模板形态匹配 → 忽略
+      { method: 'GET', path: '/agents/:id/execute' },
+      // dump 中不存在 → 追加一次(golden 同路径多 auth 场景需去重)
+      { method: 'POST', path: '/legacy-only/run' },
+      { method: 'POST', path: '/legacy-only/run' },
+    ];
+    const merged = mergeGoldenRoutes(registered, golden);
+    expect(merged).toEqual([
+      { method: 'GET', path: '/agents/:id/execute' },
+      { method: 'GET', path: '/health' },
+      { method: 'POST', path: '/legacy-only/run' },
+    ]);
   });
 });

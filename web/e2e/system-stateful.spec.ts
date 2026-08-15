@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { expect, test } from '@playwright/test';
@@ -17,7 +18,7 @@ import {
 } from './stateful/core/model';
 import { parseRuntimeOptions, type SystemPack } from './stateful/core/runtime';
 import { executeAcceptanceSchedule } from './stateful/core/scheduler';
-import { buildUncoveredReport, type RouteShape } from './stateful/core/routes-diff';
+import { buildUncoveredReport, mergeGoldenRoutes, type RouteShape } from './stateful/core/routes-diff';
 import { dashboardActions } from './stateful/packs/dashboard';
 import { executeAgentPack } from './stateful/packs/agent';
 import { executeAuditPack } from './stateful/packs/audit';
@@ -41,6 +42,7 @@ interface SafeResultItem { id: string; status: 'passed' }
 const runtime = parseRuntimeOptions(process.env);
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 const manifestPath = fileURLToPath(new URL('../../test/e2e/stateful/manifest.json', import.meta.url));
+const goldenDirPath = fileURLToPath(new URL('../../api/http/testdata/contracts', import.meta.url));
 
 test('system stateful acceptance', async ({ browser, browserName }) => {
   expect(browserName).toBe('chromium');
@@ -171,13 +173,10 @@ test('system stateful acceptance', async ({ browser, browserName }) => {
       { method: 'GET', path: '/metrics', reason: 'infra' },
       { method: 'GET', path: '/e2e/routes', reason: 'self' },
     ];
-    const report = buildUncoveredReport(
-      await fetchRegisteredRoutes(backendURL),
-      evidence.httpRequests,
-      excludedRoutes,
-      safeResults.tested_git_parent,
-      new Date().toISOString(),
-    );
+    const dumpRoutes = await fetchRegisteredRoutes(backendURL);
+    const registered = mergeGoldenRoutes(dumpRoutes, await loadGoldenRoutes(goldenDirPath));
+    const report = buildUncoveredReport(registered, evidence.httpRequests, excludedRoutes,
+      safeResults.tested_git_parent, new Date().toISOString());
     await writeFile(uncoveredReportPath, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
     uncoveredSummary =
       `${report.route_total} 注册路由,${report.covered.length} 已覆盖,` +
@@ -313,4 +312,22 @@ const fetchRegisteredRoutes = async (backendURL: string): Promise<RouteShape[]> 
   if (!response.ok) throw new Error(`GET /e2e/routes failed: ${response.status}`);
   const body = (await response.json()) as { routes: Array<{ method: string; path: string }> };
   return body.routes;
+};
+
+// loadGoldenRoutes 解析 golden 契约文件的 (method, path),供 cross-check 并集。
+// golden 是数组(同路径多 auth 场景),每个 entry 含 method/path。
+const loadGoldenRoutes = async (goldenDir: string): Promise<RouteShape[]> => {
+  const entries = await readdir(goldenDir);
+  const golden: RouteShape[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith('.golden.json')) continue;
+    const body = JSON.parse(await readFile(join(goldenDir, entry), 'utf8')) as
+      Array<{ method?: string; path?: string }>;
+    for (const item of body) {
+      if (typeof item.method === 'string' && typeof item.path === 'string') {
+        golden.push({ method: item.method, path: item.path });
+      }
+    }
+  }
+  return golden;
 };
