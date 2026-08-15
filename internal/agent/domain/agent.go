@@ -66,6 +66,17 @@ type AgentConfig struct {
 	// CompactionCooldownSec overrides the in-loop compaction cooldown.
 	// 0 = default constant.
 	CompactionCooldownSec int
+	// CompactionPrompt overrides the compaction system prompt. "" = the
+	// pkg/constants CompactionDefaultPrompt.
+	CompactionPrompt string
+	// CompactionTemperature overrides the compaction sampling temperature.
+	// 0 means unset: the constants CompactionDefaultTemperature applies.
+	// Same zero-unset semantics as Temperature (a real temperature of 0 is not
+	// expressible; documented limitation, no sentinel).
+	CompactionTemperature float32
+	// CompactionModel overrides the model used for compaction. "" = follow the
+	// primary LLMModel.
+	CompactionModel string
 	// MaxTokensPerExecution is the execution-wide LLM token budget. 0 = unlimited.
 	MaxTokensPerExecution int
 	// MemoryParameters holds the memory.* resource-scope registry keys

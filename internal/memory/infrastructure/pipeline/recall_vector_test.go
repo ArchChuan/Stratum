@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	storagemilvus "github.com/byteBuilderX/stratum/pkg/storage/milvus"
 	vector "github.com/byteBuilderX/stratum/pkg/vector"
@@ -45,6 +46,17 @@ func (f *fakeVectorSearcher) SearchWithFilter(_ context.Context, collectionName 
 
 func newTestRecallHandler(embed EmbedClient, vs vectorSearcher) *RecallHandler {
 	return &RecallHandler{logger: zap.NewNop(), embedSvc: embed, vectorDB: vs, metrics: observability.NoopMetrics{}}
+}
+
+// recallResolverStub 固定返回 memory.recall_top_k 的解析值(其余 key 缺席),
+// 用于验证召回条数接入。
+type recallResolverStub struct{ topK int }
+
+func (s recallResolverStub) Resolve(_ context.Context, _ string, _ string, key string) (any, bool, error) {
+	if key != "memory.recall_top_k" {
+		return nil, false, nil
+	}
+	return float64(s.topK), true, nil
 }
 
 // recallMetricSpy captures IncKnowledgeQuery calls so tests can assert the
@@ -288,5 +300,50 @@ func TestHandle_VectorOutageStillReturnsTextResults(t *testing.T) {
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestHandle_RecallTopKFallback 验证 memory.recall_top_k 接入:工具 limit 缺失/
+// 非法(≤0 或 >20)时解析该值,显式合法 limit 优先,resolver 缺失回退 5。经 text
+// 查询 SQL 的 LIMIT 参数(= req.Limit*2)断言。
+func TestHandle_RecallTopKFallback(t *testing.T) {
+	cases := []struct {
+		name     string
+		limit    int
+		resolver memport.ResourceParamResolver // nil → 回退 5
+		wantSQL  int                           // req.Limit*2 落到 SQL LIMIT
+	}{
+		{name: "invalid limit resolves recall_top_k", limit: 0, resolver: recallResolverStub{topK: 7}, wantSQL: 14},
+		{name: "over-limit resolved via recall_top_k", limit: 50, resolver: recallResolverStub{topK: 7}, wantSQL: 14},
+		{name: "nil resolver falls back to 5", limit: 0, resolver: nil, wantSQL: 10},
+		{name: "explicit legal limit wins", limit: 3, resolver: recallResolverStub{topK: 7}, wantSQL: 6},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pool, err := pgxmock.NewPool()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pool.Close()
+			pool.ExpectBegin()
+			pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+			pool.ExpectQuery("SELECT id, content, role, importance, created_at FROM memory_entries").
+				WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), tc.wantSQL).
+				WillReturnRows(pgxmock.NewRows([]string{"id", "content", "role", "importance", "created_at"}))
+			pool.ExpectRollback()
+
+			h := &RecallHandler{pool: pool, logger: zap.NewNop(), metrics: observability.NoopMetrics{}}
+			h.SetResourceResolver(tc.resolver)
+			input := map[string]any{"query": "x"}
+			if tc.limit != 0 {
+				input["limit"] = tc.limit
+			}
+			if _, err := h.Handle(context.Background(), "acme", "u1", "", "user", input); err != nil {
+				t.Fatal(err)
+			}
+			if err := pool.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

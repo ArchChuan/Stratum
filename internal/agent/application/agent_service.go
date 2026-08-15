@@ -50,8 +50,12 @@ type AgentServiceDeps struct {
 	ModelDetailsProvider      port.TenantModelDetailsProvider
 	// VendorWindowLookup 解析内置厂商静态能力表（窗口 + 最大输出）。
 	// 由 wiring 注入 llmgateway.LookupModelSpec；nil 时回退链跳过 vendor 层。
-	VendorWindowLookup      func(string) (int, int)
-	HistoryCompactorFactory func(port.CapabilityGateway, string, *zap.Logger, int) port.HistoryCompactor
+	VendorWindowLookup func(string) (int, int)
+	// HistoryCompactorFactory builds the history compactor for an execution.
+	// prompt/temperature are the effective compaction prompt & temperature
+	// (already resolved from cfg with constant fallback by the caller);
+	// temperature is clamped to [0,1].
+	HistoryCompactorFactory func(port.CapabilityGateway, string, *zap.Logger, int, string, float32) port.HistoryCompactor
 	MCPTools                port.MCPToolProvider
 	MCPToolExecutor         port.MCPToolExecutor
 	MCPToolPolicy           port.MCPToolPolicyResolver
@@ -163,10 +167,18 @@ type CreateAgentInput struct {
 	MaxTokens              int
 	CompactionRecentGroups int
 	CompactionSafetyRatio  float32
-	AllowedSkills          []string
-	MCPToolIDs             []string
-	KnowledgeWorkspaceIDs  []string
-	MemoryScope            string
+	// CompactionPrompt / CompactionTemperature / CompactionModel override the
+	// compaction prompt / temperature / model. 0 / "" = unset: the
+	// constants CompactionDefaultPrompt / CompactionDefaultTemperature / main
+	// LLMModel apply. The bare compaction_* keys in Parameters take precedence
+	// when present (map wins, same as the update path).
+	CompactionPrompt      string
+	CompactionTemperature float32
+	CompactionModel       string
+	AllowedSkills         []string
+	MCPToolIDs            []string
+	KnowledgeWorkspaceIDs []string
+	MemoryScope           string
 	// Parameters carries registry resource-scope values as a flat object;
 	// only the memory.* dotted keys persist on the agent (bare sampling keys
 	// remain expressed through the explicit fields above). Same merge
@@ -189,6 +201,12 @@ type UpdateAgentInput struct {
 	MaxTokens              int
 	CompactionRecentGroups int
 	CompactionSafetyRatio  float32
+	// CompactionPrompt / CompactionTemperature / CompactionModel override the
+	// compaction prompt / temperature / model; the bare compaction_* keys in
+	// Parameters take precedence when present (map wins).
+	CompactionPrompt      string
+	CompactionTemperature float32
+	CompactionModel       string
 	// Parameters carries the registry sampling parameters as a flat object;
 	// merge semantics — only present keys overwrite, and only non-zero values
 	// persist (0 = unset, never clears an existing value). Keys that appear
@@ -220,6 +238,9 @@ type AgentDTO struct {
 	MaxTokens              int
 	CompactionRecentGroups int
 	CompactionSafetyRatio  float32
+	CompactionPrompt       string
+	CompactionTemperature  float32
+	CompactionModel        string
 	AllowedSkills          []string
 	MCPToolIDs             []string
 	KnowledgeWorkspaceIDs  []string
@@ -246,7 +267,7 @@ type SystemAssistantSettings struct {
 // before persist. Zero means unset (gateway default) and is skipped; a nil
 // provider (db unavailable) degrades to no-op, matching resolve.
 func (s *AgentService) validateSamplingParams(
-	ctx context.Context, temperature float32, maxTokens, compactionRecentGroups int, compactionSafetyRatio float32, reasoningEffort string,
+	ctx context.Context, temperature float32, maxTokens, compactionRecentGroups int, compactionSafetyRatio float32, reasoningEffort string, compactionTemperature float32,
 ) error {
 	if s.deps.ParametersProvider == nil {
 		return nil
@@ -263,6 +284,11 @@ func (s *AgentService) validateSamplingParams(
 	}
 	if compactionSafetyRatio != 0 {
 		declared["compaction_safety_ratio"] = float64(compactionSafetyRatio)
+	}
+	// compaction_temperature 经 registry VisualHint [0,1] 写时拒绝越界
+	// (Qwen/Zhipu 拒收 >1 → 网关 500);0 = unset 跳过,与 temperature 一致。
+	if compactionTemperature != 0 {
+		declared["compaction_temperature"] = float64(compactionTemperature)
 	}
 	// ReasoningEffort "" = unset 跳过;非空必须在 low/medium/high 枚举内,否则
 	// 非法值会沿执行链路透传到网关对严格端点打 400,中止整条 fallback 链。
@@ -296,8 +322,11 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 	if err := s.checkOwnership(ctx, in.ActorID, in.ActorID, nil); err != nil {
 		return AgentDTO{}, err
 	}
+	// 压缩三值:顶层显式字段为基,bare compaction_* 键覆盖(map wins)。
+	compactionPrompt, compactionTemperature, compactionModel :=
+		unpackCompactionOverrides(in.Parameters, in.CompactionPrompt, in.CompactionTemperature, in.CompactionModel)
 	if err := s.validateSamplingParams(ctx, in.Temperature, in.MaxTokens,
-		in.CompactionRecentGroups, in.CompactionSafetyRatio, in.ReasoningEffort); err != nil {
+		in.CompactionRecentGroups, in.CompactionSafetyRatio, in.ReasoningEffort, compactionTemperature); err != nil {
 		return AgentDTO{}, err
 	}
 	if err := validateAgentMaxIterations(in.MaxIterations); err != nil {
@@ -322,6 +351,9 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		MaxTokens:              in.MaxTokens,
 		CompactionRecentGroups: in.CompactionRecentGroups,
 		CompactionSafetyRatio:  in.CompactionSafetyRatio,
+		CompactionPrompt:       compactionPrompt,
+		CompactionTemperature:  compactionTemperature,
+		CompactionModel:        compactionModel,
 		AllowedSkills:          in.AllowedSkills,
 		MCPToolIDs:             in.MCPToolIDs,
 		KnowledgeWorkspaceIDs:  in.KnowledgeWorkspaceIDs,
@@ -694,8 +726,8 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in UpdateAgentInput) (*domain.AgentConfig, error) {
 	// Parameters map keys take precedence over the top-level sampling fields
 	// (only present keys overwrite); validation runs on the merged result.
-	temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort := applyParameterOverrides(in)
-	if err := s.validateSamplingParams(ctx, temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort); err != nil {
+	temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort, compactionPrompt, compactionTemperature, compactionModel := applyParameterOverrides(in)
+	if err := s.validateSamplingParams(ctx, temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort, compactionTemperature); err != nil {
 		return nil, err
 	}
 	if err := validateAgentMaxIterations(in.MaxIterations); err != nil {
@@ -723,6 +755,9 @@ func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in Upda
 		MaxTokens:              maxTokens,
 		CompactionRecentGroups: recentGroups,
 		CompactionSafetyRatio:  safetyRatio,
+		CompactionPrompt:       compactionPrompt,
+		CompactionTemperature:  compactionTemperature,
+		CompactionModel:        compactionModel,
 		AllowedSkills:          skills,
 		MCPToolIDs:             in.MCPToolIDs,
 		KnowledgeWorkspaceIDs:  in.KnowledgeWorkspaceIDs,
@@ -942,12 +977,13 @@ func filterPlatformWorkspaces(c *AgentConfig, platformWSSet map[string]struct{},
 // top-level sampling fields. Only keys present in the map overwrite; map
 // values win over the top-level fields. Zero values pass through unchanged
 // (0 = unset, the merge pack skips them, so an explicit 0 never clears).
-func applyParameterOverrides(in UpdateAgentInput) (float32, int, int, float32, string) {
+func applyParameterOverrides(in UpdateAgentInput) (float32, int, int, float32, string, string, float32, string) {
 	temperature, maxTokens := in.Temperature, in.MaxTokens
 	recentGroups, safetyRatio := in.CompactionRecentGroups, in.CompactionSafetyRatio
 	reasoningEffort := in.ReasoningEffort
+	compactionPrompt, compactionTemperature, compactionModel := in.CompactionPrompt, in.CompactionTemperature, in.CompactionModel
 	if len(in.Parameters) == 0 {
-		return temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort
+		return temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort, compactionPrompt, compactionTemperature, compactionModel
 	}
 	if v, ok := numericSampleValue(in.Parameters["temperature"]); ok {
 		temperature = float32(v)
@@ -964,7 +1000,30 @@ func applyParameterOverrides(in UpdateAgentInput) (float32, int, int, float32, s
 	if v, ok := in.Parameters["reasoning_effort"].(string); ok {
 		reasoningEffort = v
 	}
-	return temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort
+	compactionPrompt, compactionTemperature, compactionModel =
+		unpackCompactionOverrides(in.Parameters, compactionPrompt, compactionTemperature, compactionModel)
+	return temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort, compactionPrompt, compactionTemperature, compactionModel
+}
+
+// unpackCompactionOverrides merges the bare compaction_prompt / _temperature /
+// _model keys onto the top-level compaction fields. Map wins over the explicit
+// fields, mirroring applyParameterOverrides. Prompt/model pass through as free
+// strings (no bounds); temperature flows into validateSamplingParams which
+// rejects out-of-[0,1] values via the registry VisualHint.
+func unpackCompactionOverrides(parameters map[string]any, prompt string, temperature float32, model string) (string, float32, string) {
+	if len(parameters) == 0 {
+		return prompt, temperature, model
+	}
+	if v, ok := parameters["compaction_prompt"].(string); ok {
+		prompt = v
+	}
+	if v, ok := numericSampleValue(parameters["compaction_temperature"]); ok {
+		temperature = float32(v)
+	}
+	if v, ok := parameters["compaction_model"].(string); ok {
+		model = v
+	}
+	return prompt, temperature, model
 }
 
 // validateAndExtractMemoryParameters pulls the memory.* resource-scope keys
@@ -1141,7 +1200,7 @@ func (s *AgentService) resolveSystemAssistantModel(ctx context.Context, tenantID
 // rewritten by PUT 0. Both fail closed with ErrInvalidSamplingParameters and
 // never persist.
 func (s *AgentService) mergeSystemAssistantMaxTokens(ctx context.Context, requested, persisted int) (int, error) {
-	if err := s.validateSamplingParams(ctx, 0, requested, 0, 0, ""); err != nil {
+	if err := s.validateSamplingParams(ctx, 0, requested, 0, 0, "", 0); err != nil {
 		return 0, err
 	}
 	maxTokens := requested
@@ -1149,7 +1208,7 @@ func (s *AgentService) mergeSystemAssistantMaxTokens(ctx context.Context, reques
 		maxTokens = persisted
 	}
 	if maxTokens != 0 {
-		if err := s.validateSamplingParams(ctx, 0, maxTokens, 0, 0, ""); err != nil {
+		if err := s.validateSamplingParams(ctx, 0, maxTokens, 0, 0, "", 0); err != nil {
 			return 0, err
 		}
 	}
@@ -1267,6 +1326,9 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		MaxTokens:              cfg.MaxTokens,
 		CompactionRecentGroups: cfg.CompactionRecentGroups,
 		CompactionSafetyRatio:  cfg.CompactionSafetyRatio,
+		CompactionPrompt:       cfg.CompactionPrompt,
+		CompactionTemperature:  cfg.CompactionTemperature,
+		CompactionModel:        cfg.CompactionModel,
 		AllowedSkills:          cfg.AllowedSkills,
 		MCPToolIDs:             cfg.MCPToolIDs,
 		KnowledgeWorkspaceIDs:  cfg.KnowledgeWorkspaceIDs,
@@ -1298,6 +1360,15 @@ func samplingParameterMap(cfg *domain.AgentConfig) map[string]any {
 	}
 	if cfg.ReasoningEffort != "" {
 		params["reasoning_effort"] = cfg.ReasoningEffort
+	}
+	if cfg.CompactionPrompt != "" {
+		params["compaction_prompt"] = cfg.CompactionPrompt
+	}
+	if cfg.CompactionTemperature != 0 {
+		params["compaction_temperature"] = cfg.CompactionTemperature
+	}
+	if cfg.CompactionModel != "" {
+		params["compaction_model"] = cfg.CompactionModel
 	}
 	// memory.* dotted keys round-trip verbatim so the edit form can prefill.
 	for k, v := range cfg.MemoryParameters {
@@ -2029,6 +2100,31 @@ func catalogFromActivations(activations []port.SkillActivation) map[string]port.
 	return catalog
 }
 
+// resolveCompactionParameters 解析压缩三值:空值回落 const 默认/主模型,
+// 温度钳制 [Min, Max]。供 assembleOptions 构造 compactor 前调用,保持
+// assembleOptions 本身零新增分支(存量函数不得恶化)。
+func resolveCompactionParameters(cfg *domain.AgentConfig) (prompt string, temperature float32, model string) {
+	prompt = cfg.CompactionPrompt
+	if prompt == "" {
+		prompt = constants.CompactionDefaultPrompt
+	}
+	temperature = cfg.CompactionTemperature
+	if temperature == 0 {
+		temperature = constants.CompactionDefaultTemperature
+	}
+	if temperature < constants.CompactionTemperatureMin {
+		temperature = constants.CompactionTemperatureMin
+	}
+	if temperature > constants.CompactionTemperatureMax {
+		temperature = constants.CompactionTemperatureMax
+	}
+	model = cfg.CompactionModel
+	if model == "" {
+		model = cfg.LLMModel
+	}
+	return prompt, temperature, model
+}
+
 // assembleOptions builds the ExecutionOption slice and resolves the
 // per-tenant CapabilityGateway. When meta.Stream is true, the returned
 // ctx carries the per-tenant LLM completer for streaming inner calls.
@@ -2089,8 +2185,11 @@ func (s *AgentService) assembleOptions(
 			}
 			if s.deps.HistoryCompactorFactory != nil {
 				// 压缩输出预算基于执行时解析窗口，与 agentExecContext 同一来源。
+				// 压缩三值直接读 cfg 顶层字段(空值回退 const/主模型):resolveEffectiveParameters
+				// 在 assembleOptions 之后才运行,不能依赖 dotted registry 路径。
 				compactionMaxTokens := constants.DynamicCompactionMaxTokens(window)
-				if compactor := s.deps.HistoryCompactorFactory(capGW, a.GetConfig().LLMModel, s.deps.Logger, compactionMaxTokens); compactor != nil {
+				prompt, temperature, model := resolveCompactionParameters(a.GetConfig())
+				if compactor := s.deps.HistoryCompactorFactory(capGW, model, s.deps.Logger, compactionMaxTokens, prompt, temperature); compactor != nil {
 					type historyCompactorSetter interface {
 						SetHistoryCompactor(port.HistoryCompactor)
 					}

@@ -111,9 +111,9 @@ config:
   githubCallbackUrl: "http://localhost:8080/auth/github/callback"
   secureCookies: "false"
   globalAdminGitHubLogin: "ArchChuan"
-  # memory pipeline 的 enrich LLM 模型名，必须是 tenant 模型 registry 中 enabled 的 chat 模型
-  # （resolve 按 enabled 过滤）。glm-4.5-air：轻量低成本，适合批量 enrich；禁用 :free 变体规避限流。
-  memoryEnrichModel: "glm-4.5-air"
+  # enrich LLM 模型已收口到平台参数 memory.enrich_model（ScopePlatform，运行态热改）。
+  # 迁移：确认 glm-4.5-air 已在模型目录注册为 enabled chat 模型后，由超管在
+  # 平台设置选择 memory.enrich_model=glm-4.5-air，再删本部署的 env（见 B3）。
   nacosUrl: ""
   nacosNamespace: ""
   nacosUsername: "nacos"

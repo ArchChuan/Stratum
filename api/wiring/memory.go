@@ -116,6 +116,31 @@ func (c *Container) memoryResourceParamResolver() memport.ResourceParamResolver 
 	}
 }
 
+// platformParamResolver adapts the parameters resolver to the memory domain's
+// platform-scope port for cross-agent background workers (thin ACL; wiring is
+// the only allowed adapter seam). declared=nil yields the pure platform value
+// or the definition default — exactly the ScopePlatform consumption contract.
+type platformParamResolver struct {
+	svc *parametersapp.Service
+}
+
+func (r platformParamResolver) ResolvePlatform(ctx context.Context, key string) (any, bool, error) {
+	if r.svc == nil {
+		return nil, false, nil
+	}
+	return r.svc.Resolver().Resolve(ctx, key, nil)
+}
+
+// memoryPlatformParamResolver builds the cross-agent platform resolver, or nil
+// when the parameters registry is unavailable (degrade). A nil resolver keeps
+// workers on their const defaults, matching pre-config behaviour.
+func (c *Container) memoryPlatformParamResolver() memport.PlatformParamResolver {
+	if c.Parameters == nil {
+		return nil
+	}
+	return platformParamResolver{svc: c.Parameters.Service}
+}
+
 func (c *Container) buildMemory(ctx context.Context) error {
 	memRepo := persistence.NewMemoryRepo(c.dbOrNil())
 	mem := &Memory{
@@ -152,7 +177,7 @@ func (c *Container) buildMemoryService(mem *Memory, db *pgxpool.Pool, memRepo me
 			c.LLMGateway.Registry, c.LLMGateway.Gateway, c.Logger,
 		).(*tenantCapabilityResolver)
 		mem.Service.SetLLMExtractResolver(makeLLMExtractResolver(llmRes, c.memoryResourceParamResolver(), c.Logger))
-		mem.Service.SetLLMSupersederResolver(makeLLMSupersederResolver(llmRes, c.Logger))
+		mem.Service.SetLLMSupersederResolver(makeLLMSupersederResolver(llmRes, c.memoryPlatformParamResolver(), c.Logger))
 	}
 	if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 		mem.Service.SetEmbedClientResolver(makeEmbedClientResolver(c.Knowledge.EmbedResolver))
@@ -184,6 +209,7 @@ func (c *Container) buildMemoryRecall(mem *Memory, db *pgxpool.Pool) {
 	if c.LLMGateway != nil && c.LLMGateway.Metrics != nil {
 		recallHandler.WithMetrics(c.LLMGateway.Metrics)
 	}
+	recallHandler.SetResourceResolver(c.memoryResourceParamResolver())
 	mem.RecallFn = func(ctx context.Context, tenantID, userID, agentID, scope string, input map[string]any) (string, error) {
 		return recallHandler.Handle(ctx, tenantID, userID, agentID, scope, input)
 	}
@@ -196,19 +222,14 @@ func (c *Container) buildMemoryRecall(mem *Memory, db *pgxpool.Pool) {
 func (c *Container) buildMemoryPipeline(mem *Memory, db *pgxpool.Pool) error {
 	mp := c.Config.MemoryPipeline
 	pipelineCfg := pipeline.Config{
-		Enabled:               mp.Enabled,
-		PollInterval:          mp.PollInterval,
-		BatchSize:             mp.BatchSize,
-		EmbedWorkers:          mp.EmbedWorkers,
-		EnrichWorkers:         mp.EnrichWorkers,
-		EmbedAckWait:          mp.EmbedAckWait,
-		EnrichAckWait:         mp.EnrichAckWait,
-		MaxDeliver:            mp.MaxDeliver,
-		EnrichModel:           mp.EnrichModel,
-		SummaryModel:          mp.SummaryModel,
-		SummaryTokenThreshold: mp.SummaryTokenThreshold,
-		EnrichmentPrompt:      mp.EnrichmentPrompt,
-		SummaryPrompt:         mp.SummaryPrompt,
+		Enabled:       mp.Enabled,
+		PollInterval:  mp.PollInterval,
+		BatchSize:     mp.BatchSize,
+		EmbedWorkers:  mp.EmbedWorkers,
+		EnrichWorkers: mp.EnrichWorkers,
+		EmbedAckWait:  mp.EmbedAckWait,
+		EnrichAckWait: mp.EnrichAckWait,
+		MaxDeliver:    mp.MaxDeliver,
 	}
 
 	if !pipelineCfg.Enabled || db == nil || c.Storage == nil || c.Storage.Milvus == nil {
@@ -253,6 +274,7 @@ func (c *Container) buildMemoryPipeline(mem *Memory, db *pgxpool.Pool) error {
 			return memoryLLMAdapter{client: gw, tenantID: tenantID}
 		})
 	}
+	p.SetPlatformParamResolver(c.memoryPlatformParamResolver())
 	mem.Pipeline = p
 	return nil
 }
@@ -297,13 +319,17 @@ func makeLLMExtractResolver(llmRes *tenantCapabilityResolver, resolver memport.R
 	}
 }
 
-func makeLLMSupersederResolver(llmRes *tenantCapabilityResolver, logger *zap.Logger) func(context.Context, string) memport.LLMSuperseder {
+func makeLLMSupersederResolver(llmRes *tenantCapabilityResolver, paramResolver memport.PlatformParamResolver, logger *zap.Logger) func(context.Context, string) memport.LLMSuperseder {
 	return func(ctx context.Context, tenantID string) memport.LLMSuperseder {
 		llm := llmRes.ResolveLLM(ctx, tenantID)
 		if llm == nil {
 			return nil
 		}
-		return memworkers.NewLLMSuperseder(memoryLLMAdapter{client: llm, tenantID: tenantID}).WithLogger(logger)
+		s := memworkers.NewLLMSuperseder(memoryLLMAdapter{client: llm, tenantID: tenantID}).WithLogger(logger)
+		if paramResolver != nil {
+			s = s.WithParamResolver(paramResolver)
+		}
+		return s
 	}
 }
 
@@ -370,7 +396,7 @@ func BuildMemoryWorkers(c *Container) []interface {
 			memworkers.NewGCWorker(tid, factRepo, c.Logger).WithQueue(queue),
 		}
 		return appendTenantLLMWorkers(ws, tid, factRepo, historyRepo,
-			buildWorkerLLMResolver(llmRes), c.Logger)
+			buildWorkerLLMResolver(llmRes), c.memoryPlatformParamResolver(), c.Logger)
 	}, c.Logger)
 
 	result := []interface {
@@ -407,18 +433,26 @@ func appendTenantLLMWorkers(
 	factRepo memport.FactRepo,
 	historyRepo memport.HistoryRepo,
 	resolver memworkers.TenantLLMResolver,
+	paramResolver memport.PlatformParamResolver,
 	logger *zap.Logger,
 ) memworkers.WorkerSet {
 	var summarizer memworkers.HistorySummarizer
 	var compressor memworkers.HistoryCompressor
 	if resolver != nil {
+		superseder := memworkers.NewResolvingLLMSuperseder(tenantID, resolver).WithLogger(logger)
+		if paramResolver != nil {
+			superseder = superseder.WithParamResolver(paramResolver)
+		}
 		workerSet = append(workerSet, memworkers.NewSupersedeWorker(
 			tenantID,
 			factRepo,
-			memworkers.NewResolvingLLMSuperseder(tenantID, resolver).WithLogger(logger),
+			superseder,
 			logger,
 		))
 		historyProcessor := memworkers.NewResolvingLLMHistorySummarizer(tenantID, resolver)
+		if paramResolver != nil {
+			historyProcessor = historyProcessor.WithParamResolver(paramResolver)
+		}
 		summarizer = historyProcessor
 		compressor = historyProcessor
 	}

@@ -22,6 +22,9 @@ type CreateAgentRequest struct {
 	MaxTokens              int      `json:"max_tokens"`
 	CompactionRecentGroups int      `json:"compaction_recent_groups"`
 	CompactionSafetyRatio  float32  `json:"compaction_safety_ratio"`
+	CompactionPrompt       string   `json:"compaction_prompt"`
+	CompactionTemperature  float32  `json:"compaction_temperature"`
+	CompactionModel        string   `json:"compaction_model"`
 	AllowedSkills          []string `json:"allowedSkills"`
 	MCPToolIDs             []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs  []string `json:"knowledgeWorkspaceIds"`
@@ -47,14 +50,18 @@ type UpdateAgentRequest struct {
 	MaxTokens              int      `json:"max_tokens"`
 	CompactionRecentGroups int      `json:"compaction_recent_groups"`
 	CompactionSafetyRatio  float32  `json:"compaction_safety_ratio"`
+	CompactionPrompt       string   `json:"compaction_prompt"`
+	CompactionTemperature  float32  `json:"compaction_temperature"`
+	CompactionModel        string   `json:"compaction_model"`
 	AllowedSkills          []string `json:"allowedSkills"`
 	MCPToolIDs             []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs  []string `json:"knowledgeWorkspaceIds"`
 	MemoryScope            string   `json:"memoryScope"`
 	// Parameters carries the registry sampling parameters as a flat object
 	// (temperature/max_tokens/compaction_recent_groups/compaction_safety_ratio/
-	// reasoning_effort). Merge semantics: only keys present in this map are
-	// written; a 0 value is unset and never overwrites a persisted value.
+	// reasoning_effort/compaction_prompt/compaction_temperature/compaction_model).
+	// Merge semantics: only keys present in this map are written; a 0 value is
+	// unset and never overwrites a persisted value.
 	Parameters map[string]any `json:"parameters"`
 }
 
@@ -72,6 +79,9 @@ type AgentResponse struct {
 	MaxTokens              int      `json:"max_tokens"`
 	CompactionRecentGroups int      `json:"compaction_recent_groups"`
 	CompactionSafetyRatio  float32  `json:"compaction_safety_ratio"`
+	CompactionPrompt       string   `json:"compaction_prompt"`
+	CompactionTemperature  float32  `json:"compaction_temperature"`
+	CompactionModel        string   `json:"compaction_model"`
 	AllowedSkills          []string `json:"allowedSkills"`
 	MCPToolIDs             []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs  []string `json:"knowledgeWorkspaceIds"`
@@ -125,6 +135,9 @@ func dtoToResponse(d agent.AgentDTO) AgentResponse {
 		MaxTokens:              d.MaxTokens,
 		CompactionRecentGroups: d.CompactionRecentGroups,
 		CompactionSafetyRatio:  d.CompactionSafetyRatio,
+		CompactionPrompt:       d.CompactionPrompt,
+		CompactionTemperature:  d.CompactionTemperature,
+		CompactionModel:        d.CompactionModel,
 		AllowedSkills:          d.AllowedSkills,
 		MCPToolIDs:             d.MCPToolIDs,
 		KnowledgeWorkspaceIDs:  d.KnowledgeWorkspaceIDs,

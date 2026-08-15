@@ -6,9 +6,11 @@ import (
 
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/parameters/application"
 	"github.com/byteBuilderX/stratum/internal/parameters/domain"
 	"github.com/byteBuilderX/stratum/internal/parameters/infrastructure/persistence"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 // Parameters groups the unified parameter registry services for wiring
@@ -59,9 +61,11 @@ func (p resourceParameterProvider) ValidateResource(
 
 // ValidateResourceKey validates a single resource-scope value by its full
 // dotted registry key (memory.* params, which ValidateResourceValues cannot
-// reach because it maps bare evaluation names). Unknown key and out-of-bounds
-// values return an error; nil service (db unavailable) degrades to no-op,
-// matching ValidateResource.
+// reach because it maps bare evaluation names). Platform-scope keys are
+// rejected fail-closed: they must never leak into agents.parameters (write
+// attribution is single-layer). Unknown key and out-of-bounds values return
+// an error; nil service (db unavailable) degrades to no-op, matching
+// ValidateResource.
 func (p resourceParameterProvider) ValidateResourceKey(
 	_ context.Context, key string, value any,
 ) error {
@@ -71,6 +75,9 @@ func (p resourceParameterProvider) ValidateResourceKey(
 	def, ok := p.svc.Registry().Get(key)
 	if !ok {
 		return fmt.Errorf("unknown parameter %s", key)
+	}
+	if def.Scope != domain.ScopeResource {
+		return fmt.Errorf("parameter %s is %s-scope, not writable at resource layer", key, def.Scope)
 	}
 	return def.Validate(value)
 }
@@ -121,5 +128,70 @@ func (c *Container) buildParameters(_ context.Context) error {
 	}
 	repo := persistence.NewPlatformRepository(db)
 	c.Parameters.Service = application.NewService(c.Parameters.Registry, repo)
+	c.injectModelDirectoryValidation()
 	return nil
+}
+
+// memoryWorkerModelKeys are the platform-scope model selectors rendered as a
+// provider→model picker; their stored value is a model name string validated
+// against the llmgateway enabled-chat directory at write time.
+var memoryWorkerModelKeys = []string{
+	"memory.enrich_model", "memory.summary_model",
+	"memory.history_summary_model", "memory.supersede_model",
+}
+
+// injectModelDirectoryValidation attaches a model-directory existence check to
+// the platform *_model keys. The check runs on PUT /admin/parameters
+// (SetPlatformValues → Normalize → ValidateFn) and fails closed when the model
+// is absent/disabled. The registry getter is lazy because buildParameters may
+// run before buildLLMGateway in some harness paths; it resolves at write time.
+func (c *Container) injectModelDirectoryValidation() {
+	for _, key := range memoryWorkerModelKeys {
+		def, ok := c.Parameters.Registry.Get(key)
+		if !ok {
+			continue
+		}
+		def.ValidateFn = c.validateModelInDirectory(key)
+	}
+}
+
+// validateModelInDirectory returns a ValidateFn that checks the model name
+// exists in the enabled chat model directory. Empty string = unset sentinel
+// passes (worker falls back to its const default); a registry unavailable at
+// write time rejects fail-closed rather than admitting a possibly-bogus model.
+func (c *Container) validateModelInDirectory(key string) func(any) error {
+	return func(value any) error {
+		model, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("%s: expected string model name", key)
+		}
+		if model == "" {
+			return nil
+		}
+		reg := c.modelRegistryOrNil()
+		if reg == nil {
+			return fmt.Errorf("%s: model directory unavailable", key)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), constants.PlatformModelValidationTimeout)
+		defer cancel()
+		models, err := reg.ListChatModelsByTenant(ctx)
+		if err != nil {
+			return fmt.Errorf("%s: validate model: %w", key, err)
+		}
+		for _, m := range models {
+			if m == model {
+				return nil
+			}
+		}
+		return fmt.Errorf("%s: model %q not in enabled chat model directory", key, model)
+	}
+}
+
+// modelRegistryOrNil returns the llmgateway model registry or nil when the
+// gateway was not wired (db unavailable / harness paths).
+func (c *Container) modelRegistryOrNil() *llmgateway.ModelRegistry {
+	if c.LLMGateway == nil {
+		return nil
+	}
+	return c.LLMGateway.Registry
 }

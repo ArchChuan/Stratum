@@ -3,6 +3,9 @@ package domain
 import (
 	"fmt"
 	"sort"
+	"strings"
+
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 // ParametersRegistry is the code-level central registry of all optimizable /
@@ -30,6 +33,7 @@ func NewParametersRegistry() *ParametersRegistry {
 	r.registerJudgeParams()
 	r.registerTraceParams()
 	r.registerMemoryParams()
+	r.registerMemoryWorkerParams()
 	r.registerPromptEvaluationKeys()
 	r.resourceKeys = r.sortedScopeKeys(ScopeResource)
 	return r
@@ -79,6 +83,21 @@ func (r *ParametersRegistry) IsEvaluationKey(bareKey string) bool {
 func (r *ParametersRegistry) KeyForEvaluation(bareKey string) (string, bool) {
 	key, ok := r.byEvalKey[bareKey]
 	return key, ok
+}
+
+// KeyByShortName resolves a bare key to a registry key by matching the last
+// dotted segment (e.g. "compaction_temperature" → "agent.compaction_temperature").
+// Used by ValidateResourceValues for resource params that must not carry an
+// EvaluationKeys alias (would pollute the evaluation search space and the
+// candidate/critique whitelist lockstep).
+func (r *ParametersRegistry) KeyByShortName(bareKey string) (string, bool) {
+	for key := range r.byKey {
+		lastDot := strings.LastIndex(key, ".")
+		if key[lastDot+1:] == bareKey {
+			return key, true
+		}
+	}
+	return "", false
 }
 
 // EvaluationKeys returns every registered bare evaluation key, including the
@@ -217,6 +236,33 @@ func (r *ParametersRegistry) registerAgentParams() {
 			VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(120), Step: f(5), Unit: "s"},
 			Optimizable: false,
 		},
+		// 压缩 prompt/temperature/model 三值:运行时从 AgentConfig 顶层字段直读
+		// (resolveEffectiveParameters 晚于 compactor 构造),此处仅登记 schema/
+		// 搜索空间。三 key 均不设 EvaluationKeys —— compaction_prompt 是 gate-only
+		// 保留 key(Register() 会拒绝);compaction_temperature 的 bare-key 写时越界
+		// 校验经 ValidateResourceValues 的 registry-key 短名匹配(短名匹配不进入
+		// byEvalKey,避免污染 candidate/critique whitelist lockstep)。
+		{
+			Key: "agent.compaction_prompt", Scope: ScopeResource, Category: "agent",
+			DisplayName: "压缩提示词", Description: "上下文压缩的系统提示词,空表示默认模板",
+			ValueType: TypeString, Default: "",
+			VisualHint:  VisualHint{Control: ControlTextarea},
+			Optimizable: false,
+		},
+		{
+			Key: "agent.compaction_temperature", Scope: ScopeResource, Category: "agent",
+			DisplayName: "压缩温度", Description: "上下文压缩采样温度,范围 0~1,0 表示默认常量",
+			ValueType: TypeFloat, Default: 0.0,
+			VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(1), Step: f(0.1)},
+			Optimizable: false,
+		},
+		{
+			Key: "agent.compaction_model", Scope: ScopeResource, Category: "agent",
+			DisplayName: "压缩模型", Description: "上下文压缩使用的独立模型,空表示跟随主模型",
+			ValueType: TypeString, Default: "",
+			VisualHint:  VisualHint{Control: ControlSelect},
+			Optimizable: false,
+		},
 		{
 			Key: "agent.max_tokens_per_execution", Scope: ScopeResource, Category: "agent",
 			DisplayName: "单次执行 Token 预算", Description: "本次执行累计 LLM token 上限,0 表示不设限",
@@ -318,7 +364,7 @@ func (r *ParametersRegistry) registerOptimizerParams() {
 			Key: "evaluation.optimizer.model", Scope: ScopePlatform, Category: "evaluation",
 			DisplayName: "优化器模型", Description: "提示词/参数优化器使用的 LLM 模型",
 			ValueType: TypeString, Default: "qwen-plus",
-			VisualHint:  VisualHint{Control: ControlSelect},
+			VisualHint:  VisualHint{Control: ControlModel},
 			Optimizable: true,
 		},
 		{
@@ -349,7 +395,7 @@ func (r *ParametersRegistry) registerJudgeParams() {
 			Key: "evaluation.judge.model", Scope: ScopePlatform, Category: "evaluation",
 			DisplayName: "评测法官模型", Description: "LLM judge 使用的模型(Phase 3,预留)",
 			ValueType: TypeString, Default: "qwen-plus",
-			VisualHint:  VisualHint{Control: ControlSelect},
+			VisualHint:  VisualHint{Control: ControlModel},
 			Optimizable: true,
 		},
 		{
@@ -393,8 +439,10 @@ func (r *ParametersRegistry) registerMemoryParams() {
 		{
 			Key: "memory.recall_top_k", Scope: ScopeResource, Category: "memory",
 			DisplayName: "记忆召回 Top-K", Description: "记忆召回返回条数",
-			ValueType: TypeInt, Default: int64(10),
-			VisualHint:  VisualHint{Control: ControlSlider, Min: f(1), Max: f(50), Step: f(1)},
+			// 默认 5 对齐运行时兜底(recall_tool Handle 非法 limit 回退)、
+			// Max 20 对齐工具上限;接入消费点后未配置 agent 走本默认,无行为漂移。
+			ValueType: TypeInt, Default: int64(5),
+			VisualHint:  VisualHint{Control: ControlSlider, Min: f(1), Max: f(20), Step: f(1)},
 			Optimizable: true,
 		},
 		{
@@ -412,8 +460,11 @@ func (r *ParametersRegistry) registerMemoryParams() {
 			Optimizable: true,
 		},
 		{
+			// Deprecated: 与 memory.recall_top_k 语义重复,保留注册仅兼容存量
+			// agents.parameters 残留 key(删除会破坏 promote 路径的
+			// ValidateResourceKey fail-closed);前端不渲染,不删。
 			Key: "memory.long_term_top_k", Scope: ScopeResource, Category: "memory",
-			DisplayName: "长期记忆 Top-K", Description: "长期记忆检索条数",
+			DisplayName: "长期记忆 Top-K", Description: "长期记忆检索条数(废弃,与 recall_top_k 重复)",
 			ValueType: TypeInt, Default: int64(5),
 			VisualHint:  VisualHint{Control: ControlSlider, Min: f(1), Max: f(20), Step: f(1)},
 			Optimizable: true,
@@ -424,6 +475,137 @@ func (r *ParametersRegistry) registerMemoryParams() {
 			ValueType: TypeInt, Default: int64(20),
 			VisualHint:  VisualHint{Control: ControlSlider, Min: f(1), Max: f(50), Step: f(1)},
 			Optimizable: true,
+		},
+		{
+			// 提取 prompt/model:agent 维度直接绑定,按 agent 逐条解析。prompt
+			// 非空时按 %s(userID)/%s(agentID)/%d(maxFacts) 插值;model 非空传给
+			// 提取请求,空 = 空串 → client 默认解析。
+			Key: "memory.extraction_prompt", Scope: ScopeResource, Category: "memory",
+			DisplayName: "提取提示词", Description: "记忆抽取的系统提示词,空表示默认模板",
+			ValueType: TypeString, Default: "",
+			VisualHint:  VisualHint{Control: ControlTextarea},
+			Optimizable: false,
+		},
+		{
+			Key: "memory.extraction_model", Scope: ScopeResource, Category: "memory",
+			DisplayName: "提取模型", Description: "记忆抽取使用的独立模型,空表示 client 默认",
+			ValueType: TypeString, Default: "",
+			VisualHint:  VisualHint{Control: ControlSelect},
+			Optimizable: false,
+		},
+	} {
+		_ = r.Register(def)
+	}
+}
+
+// registerMemoryWorkerParams covers the cross-agent background workers
+// (enrich / session summary / history summary / supersede). These are
+// platform-scope: applied globally to all tenants' batch LLM calls, written
+// via PUT /admin/parameters (RequireGlobalAdmin) into platform_settings and
+// resolved at runtime per call (hot-update, no restart). Defaults stay at the
+// current const fallback so an unset platform value degrades to the exact
+// behaviour shipped today. All keys are Optimizable:false with no
+// EvaluationKeys — they must not enter the evaluation search space nor clash
+// with the gate-only prompt keys. NOTE: the `memory.` prefix now carries both
+// scopes (resource per-agent keys above + these platform keys); scope is the
+// distinguishing axis, not the prefix.
+func (r *ParametersRegistry) registerMemoryWorkerParams() {
+	f := func(v float64) *float64 { return &v }
+	for _, def := range []ParameterDefinition{
+		{
+			Key: "memory.enrich_prompt", Scope: ScopePlatform, Category: "memory",
+			DisplayName: "记忆富化提示词", Description: "记忆富化 LLM 的系统提示词,空表示默认模板",
+			ValueType: TypeString, Default: "",
+			VisualHint:  VisualHint{Control: ControlTextarea},
+			Optimizable: false,
+		},
+		{
+			Key: "memory.enrich_temperature", Scope: ScopePlatform, Category: "memory",
+			DisplayName: "记忆富化温度", Description: "记忆富化 LLM 采样温度(0=默认,统一钳制 [0,1])",
+			ValueType: TypeFloat, Default: 0.1,
+			VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(1), Step: f(0.1)},
+			Optimizable: false,
+		},
+		{
+			Key: "memory.enrich_model", Scope: ScopePlatform, Category: "memory",
+			DisplayName: "记忆富化模型", Description: "记忆富化使用的 LLM 模型(模型管理目录选择)",
+			ValueType: TypeString, Default: "qwen-turbo",
+			VisualHint:  VisualHint{Control: ControlModel},
+			Optimizable: false,
+		},
+		{
+			Key: "memory.summary_prompt", Scope: ScopePlatform, Category: "memory",
+			DisplayName: "记忆摘要提示词", Description: "记忆会话摘要 LLM 的系统提示词,空表示默认模板",
+			ValueType: TypeString, Default: "",
+			VisualHint:  VisualHint{Control: ControlTextarea},
+			Optimizable: false,
+		},
+		{
+			Key: "memory.summary_temperature", Scope: ScopePlatform, Category: "memory",
+			DisplayName: "记忆摘要温度", Description: "记忆会话摘要 LLM 采样温度(0=默认,统一钳制 [0,1])",
+			ValueType: TypeFloat, Default: 0.2,
+			VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(1), Step: f(0.1)},
+			Optimizable: false,
+		},
+		{
+			// 必须注册非空默认:删冷 config 字段后 const 兜底链不能再给摘要
+			// 一个 qwen-turbo(那是富化模型),摘要维持 qwen-plus。
+			Key: "memory.summary_model", Scope: ScopePlatform, Category: "memory",
+			DisplayName: "记忆摘要模型", Description: "记忆会话摘要使用的 LLM 模型(模型管理目录选择)",
+			ValueType: TypeString, Default: "qwen-plus",
+			VisualHint:  VisualHint{Control: ControlModel},
+			Optimizable: false,
+		},
+		{
+			Key: "memory.history_summary_prompt", Scope: ScopePlatform, Category: "memory",
+			DisplayName: "历史摘要提示词", Description: "历史消息摘要 LLM 的系统提示词,空表示默认模板",
+			ValueType: TypeString, Default: "",
+			VisualHint:  VisualHint{Control: ControlTextarea},
+			Optimizable: false,
+		},
+		{
+			Key: "memory.history_summary_temperature", Scope: ScopePlatform, Category: "memory",
+			DisplayName: "历史摘要温度", Description: "历史消息摘要 LLM 采样温度(0=默认,统一钳制 [0,1])",
+			ValueType: TypeFloat, Default: 0.2,
+			VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(1), Step: f(0.1)},
+			Optimizable: false,
+		},
+		{
+			Key: "memory.history_summary_model", Scope: ScopePlatform, Category: "memory",
+			DisplayName: "历史摘要模型", Description: "历史消息摘要使用的 LLM 模型(模型管理目录选择)",
+			ValueType: TypeString, Default: "",
+			VisualHint:  VisualHint{Control: ControlModel},
+			Optimizable: false,
+		},
+		{
+			Key: "memory.supersede_prompt", Scope: ScopePlatform, Category: "memory",
+			DisplayName: "记忆取代提示词", Description: "记忆取代判定 LLM 的系统提示词,空表示默认模板",
+			ValueType: TypeString, Default: "",
+			VisualHint:  VisualHint{Control: ControlTextarea},
+			Optimizable: false,
+		},
+		{
+			Key: "memory.supersede_temperature", Scope: ScopePlatform, Category: "memory",
+			DisplayName: "记忆取代温度", Description: "记忆取代判定 LLM 采样温度(0=默认,统一钳制 [0,1])",
+			ValueType: TypeFloat, Default: 0.0,
+			VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(1), Step: f(0.1)},
+			Optimizable: false,
+		},
+		{
+			Key: "memory.supersede_model", Scope: ScopePlatform, Category: "memory",
+			DisplayName: "记忆取代模型", Description: "记忆取代判定使用的 LLM 模型(模型管理目录选择)",
+			ValueType: TypeString, Default: "",
+			VisualHint:  VisualHint{Control: ControlModel},
+			Optimizable: false,
+		},
+		{
+			// 会话摘要触发阈值:收口原冷 config 字段(EnricherSummaryTokenThreshold),
+			// 默认与常量单一事实源对齐,平台可调。
+			Key: "memory.summary_token_threshold", Scope: ScopePlatform, Category: "memory",
+			DisplayName: "摘要触发 Token 阈值", Description: "消息累积超过该阈值后触发记忆摘要",
+			ValueType: TypeInt, Default: int64(constants.EnricherSummaryTokenThreshold),
+			VisualHint:  VisualHint{Control: ControlSlider, Min: f(500), Max: f(10000), Step: f(500), Unit: "tokens"},
+			Optimizable: false,
 		},
 	} {
 		_ = r.Register(def)

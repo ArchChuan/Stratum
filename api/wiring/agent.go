@@ -316,8 +316,8 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		ModelContextProvider:    modelContextProvider(a.TenantResolver),
 		ModelDetailsProvider:    tenantModelDetailsProvider(a.TenantResolver),
 		VendorWindowLookup:      llmgateway.LookupModelSpec,
-		HistoryCompactorFactory: func(gw agentport.CapabilityGateway, model string, logger *zap.Logger, compactionMaxTokens int) agentport.HistoryCompactor {
-			return capgateway.NewLLMHistoryCompactor(gw, model, logger, compactionMaxTokens)
+		HistoryCompactorFactory: func(gw agentport.CapabilityGateway, model string, logger *zap.Logger, compactionMaxTokens int, prompt string, temperature float32) agentport.HistoryCompactor {
+			return capgateway.NewLLMHistoryCompactor(gw, model, logger, compactionMaxTokens, prompt, temperature)
 		},
 		ChatStore:                 a.ChatStore,
 		EvidenceProvider:          a.EvidenceProvider,

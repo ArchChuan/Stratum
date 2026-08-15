@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 export const visualHintSchema = z
   .object({
-    control: z.enum(['slider', 'select', 'toggle', 'textarea', 'number']),
+    control: z.enum(['slider', 'select', 'toggle', 'textarea', 'number', 'model']),
     min: z.number().optional(),
     max: z.number().optional(),
     step: z.number().optional(),

@@ -33,7 +33,6 @@ data:
   GITHUB_CALLBACK_URL: {{ .Values.config.githubCallbackUrl | quote }}
   SECURE_COOKIES: {{ .Values.config.secureCookies | quote }}
   GLOBAL_ADMIN_GITHUB_LOGIN: {{ .Values.config.globalAdminGitHubLogin | quote }}
-  MEMORY_ENRICH_MODEL: {{ .Values.config.memoryEnrichModel | quote }}
   NACOS_URL: {{ .Values.config.nacosUrl | quote }}
   NACOS_NAMESPACE: {{ .Values.config.nacosNamespace | quote }}
   NACOS_USERNAME: {{ .Values.config.nacosUsername | quote }}

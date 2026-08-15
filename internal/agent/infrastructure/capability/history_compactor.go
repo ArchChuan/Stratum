@@ -60,16 +60,13 @@ func compactionSlice(remaining time.Duration, attemptsLeft int) time.Duration {
 	return slice
 }
 
-// compactionSystemPrompt 指令 LLM 生成保留关键语义的要点摘要。
-const compactionSystemPrompt = "你是对话历史压缩器。请把以下对话压成不超过 500 字的要点摘要，" +
-	"以第三人称客观记录：保留关键事实、已达成的决定、以及尚未解决的问题；" +
-	"剔除寒暄与冗余细节。只输出摘要正文，不要任何前后缀。"
-
 // LLMHistoryCompactor 通过 CapabilityGateway 调用 LLM，实现
 // port.HistoryCompactor：把一段对话历史压缩成一条纯文本摘要。
 type LLMHistoryCompactor struct {
 	gw                  port.CapabilityGateway
 	model               string
+	prompt              string
+	temperature         float32
 	logger              *zap.Logger
 	compactionMaxTokens int
 }
@@ -77,15 +74,38 @@ type LLMHistoryCompactor struct {
 // NewLLMHistoryCompactor 构造摘要器。gw 为统一路由门面，model 指定用于
 // 压缩的模型（可与主对话模型不同，通常选更廉价的），logger 用于观测。
 // compactionMaxTokens 是压缩 LLM 调用的最大输出 token 数；传 0 则使用
-// 默认值 800。
-func NewLLMHistoryCompactor(gw port.CapabilityGateway, model string, logger *zap.Logger, compactionMaxTokens int) *LLMHistoryCompactor {
+// 默认值 800。prompt 是压缩系统提示词，空值回退
+// constants.CompactionDefaultPrompt；temperature 是采样温度，0 回退
+// constants.CompactionDefaultTemperature（调用方已钳制 [0,1]）。
+func NewLLMHistoryCompactor(gw port.CapabilityGateway, model string, logger *zap.Logger, compactionMaxTokens int, prompt string, temperature float32) *LLMHistoryCompactor {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	if compactionMaxTokens <= 0 {
 		compactionMaxTokens = 800
 	}
-	return &LLMHistoryCompactor{gw: gw, model: model, logger: logger, compactionMaxTokens: compactionMaxTokens}
+	if prompt == "" {
+		prompt = constants.CompactionDefaultPrompt
+	}
+	if temperature == 0 {
+		temperature = constants.CompactionDefaultTemperature
+	}
+	// 0=unset 已回退默认;其余值钳制 [0,1]——Qwen/Zhipu 拒收 >1(网关 500),
+	// <0 无意义。
+	if temperature < constants.CompactionTemperatureMin {
+		temperature = constants.CompactionTemperatureMin
+	}
+	if temperature > constants.CompactionTemperatureMax {
+		temperature = constants.CompactionTemperatureMax
+	}
+	return &LLMHistoryCompactor{
+		gw:                  gw,
+		model:               model,
+		prompt:              prompt,
+		temperature:         temperature,
+		logger:              logger,
+		compactionMaxTokens: compactionMaxTokens,
+	}
 }
 
 // CompactHistory 把 messages 拼成一段可读对话，交由 LLM 生成要点摘要。
@@ -104,10 +124,10 @@ func (c *LLMHistoryCompactor) CompactHistory(ctx context.Context, messages []por
 		LLM: &port.LLMCapRequest{
 			Model: c.model,
 			Messages: []port.LLMMessage{
-				{Role: "system", Content: compactionSystemPrompt},
+				{Role: "system", Content: c.prompt},
 				{Role: "user", Content: convo},
 			},
-			Temperature:    0.3,
+			Temperature:    c.temperature,
 			MaxTokens:      c.compactionMaxTokens,
 			NoPrimaryRetry: DefaultCompactionBudgetPolicy.NoPrimaryRetry,
 			MaxCandidates:  DefaultCompactionBudgetPolicy.MaxCandidates,

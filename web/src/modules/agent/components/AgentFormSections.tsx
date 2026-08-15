@@ -19,6 +19,8 @@ import {
   AGENT_TEMPERATURE_MAX,
   AGENT_TEMPERATURE_MIN,
   AGENT_TEMPERATURE_STEP,
+  COMPACTION_TEMP_MAX,
+  COMPACTION_TEMP_MIN,
   REASONING_EFFORT_OPTIONS,
 } from '@/constants';
 import type { Member } from '@/modules/iam';
@@ -337,9 +339,46 @@ export const AgentFormSections = ({
                       label="压缩安全比例（compaction_safety_ratio）"
                       name="compaction_safety_ratio"
                       extra="压缩阈值：0 = 未设置（使用平台默认）"
-                      style={{ marginBottom: 0 }}
                     >
                       <Slider min={0} max={0.95} step={0.05} marks={{ 0: '0', 0.95: '0.95' }} ariaLabelForHandle="compaction_safety_ratio" />
+                    </Form.Item>
+                    <Form.Item
+                      label="压缩提示词（compaction_prompt）"
+                      name="compaction_prompt"
+                      extra="压缩历史时的系统提示词；留空 = 使用内置默认压缩提示词"
+                    >
+                      <TextArea rows={4} placeholder="留空使用内置默认压缩提示词" />
+                    </Form.Item>
+                    <Form.Item
+                      label="压缩温度（compaction_temperature）"
+                      name="compaction_temperature"
+                      rules={[{
+                        type: 'number',
+                        min: COMPACTION_TEMP_MIN,
+                        max: COMPACTION_TEMP_MAX,
+                        message: `范围 ${COMPACTION_TEMP_MIN}~${COMPACTION_TEMP_MAX}（0 = 使用默认 0.3）`,
+                      }]}
+                      extra="压缩摘要的随机性：范围 0~1；0 = 未设置（使用默认 0.3）"
+                    >
+                      <Slider min={COMPACTION_TEMP_MIN} max={COMPACTION_TEMP_MAX} step={0.1} marks={{ 0: '0', 1: '1' }} ariaLabelForHandle="compaction_temperature" />
+                    </Form.Item>
+                    <Form.Item
+                      label="压缩模型（compaction_model）"
+                      name="compaction_model"
+                      extra="执行历史压缩所用的模型；留空 = 跟随主 LLM 模型"
+                      style={{ marginBottom: 0 }}
+                    >
+                      <Select allowClear placeholder="跟随主 LLM 模型" showSearch optionFilterProp="children">
+                        {groupedModels.map((group) => (
+                          <OptGroup key={group.provider} label={group.provider}>
+                            {group.models.map((m) => (
+                              <Option key={m.value} value={m.value}>
+                                {m.label}
+                              </Option>
+                            ))}
+                          </OptGroup>
+                        ))}
+                      </Select>
                     </Form.Item>
                   </>
                 )}
@@ -350,7 +389,7 @@ export const AgentFormSections = ({
       />
     </div>
 
-    <AgentMemoryConfig />
+    <AgentMemoryConfig groupedModels={groupedModels} />
   </>
   );
 };

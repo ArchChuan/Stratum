@@ -76,10 +76,45 @@ func (e *LLMExtractor) maxFacts(ctx context.Context, agentID string) int {
 	return coerceResourceInt(v, constants.MemoryMaxFactsPerExtraction)
 }
 
+// extractionPrompt resolves memory.extraction_prompt for the target agent.
+// 未设/解析失败回退内置 extractionSystemPrompt 模板;自定义 prompt 按
+// %s(userID)/%s(agentID)/%d(maxFacts) 插值(与默认模板同一占位符契约,文档
+// 注明自定义 prompt 应含占位符)。
+func (e *LLMExtractor) extractionPrompt(ctx context.Context, agentID, userID string, maxFacts int) string {
+	defaultPrompt := func() string { return fmt.Sprintf(extractionSystemPrompt, userID, agentID, maxFacts) }
+	if e.resolver == nil {
+		return defaultPrompt()
+	}
+	v, ok, err := e.resolver.Resolve(ctx, e.tenantID, agentID, "memory.extraction_prompt")
+	if err != nil || !ok {
+		return defaultPrompt()
+	}
+	s, ok := v.(string)
+	if !ok || strings.TrimSpace(s) == "" {
+		return defaultPrompt()
+	}
+	return fmt.Sprintf(s, userID, agentID, maxFacts)
+}
+
+// extractionModel resolves memory.extraction_model for the target agent;
+// "" 表示交由 llmgateway client 默认模型解析(pre-refactor 行为)。
+func (e *LLMExtractor) extractionModel(ctx context.Context, agentID string) string {
+	if e.resolver == nil {
+		return ""
+	}
+	v, ok, err := e.resolver.Resolve(ctx, e.tenantID, agentID, "memory.extraction_model")
+	if err != nil || !ok {
+		return ""
+	}
+	s, _ := v.(string)
+	return s
+}
+
 func (e *LLMExtractor) ExtractFacts(ctx context.Context, userID, agentID string, message string) ([]*memport.ExtractedFact, error) {
-	// 抽取模型为空：交由 llmgateway client 默认解析（pre-refactor 行为）。
-	system := fmt.Sprintf(extractionSystemPrompt, userID, agentID, e.maxFacts(ctx, agentID))
-	req := llmdomain.NewExtractRequest("", system, message, 0, constants.MemoryExtractLLMMaxTokens)
+	maxFacts := e.maxFacts(ctx, agentID)
+	system := e.extractionPrompt(ctx, agentID, userID, maxFacts)
+	model := e.extractionModel(ctx, agentID)
+	req := llmdomain.NewExtractRequest(model, system, message, 0, constants.MemoryExtractLLMMaxTokens)
 	return extractFactsStructured(ctx, e.client, req, e.logger)
 }
 

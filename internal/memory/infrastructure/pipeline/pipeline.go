@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
@@ -46,6 +47,7 @@ type Pipeline struct {
 	embedResolver EmbedServiceResolver
 	vectorDB      VectorStore
 	llmResolver   LLMResolver
+	paramResolver port.PlatformParamResolver
 	logger        *zap.Logger
 
 	// dynamic 是热更新调度参数源（Nacos 经 wiring 桥接），每轮由 poller re-read。
@@ -91,6 +93,14 @@ func (p *Pipeline) SetLLMResolver(r LLMResolver) {
 	p.llmResolver = r
 }
 
+// SetPlatformParamResolver sets the platform parameter resolver used by
+// enricher workers to resolve per-call LLM content settings (model /
+// temperature / prompt / threshold). Must be called before Start. Without it,
+// workers keep their const defaults, matching pre-config behaviour.
+func (p *Pipeline) SetPlatformParamResolver(r port.PlatformParamResolver) {
+	p.paramResolver = r
+}
+
 // WithDynamic 挂载热更新调度参数源（Nacos 经 wiring 桥接）。
 // 必须在 Start 之前调用。
 func (p *Pipeline) WithDynamic(d *atomic.Pointer[DynamicConfig]) *Pipeline {
@@ -107,12 +117,15 @@ func (p *Pipeline) buildPoller(js jetstream.JetStream) {
 	}
 }
 
-// buildEnricher 创建单个 enricher worker 并挂载可选的 LLM 解析器。
+// buildEnricher 创建单个 enricher worker 并挂载可选的 LLM/平台参数解析器。
 // 抽出为独立函数以保持 Start 复杂度在门禁内。
 func (p *Pipeline) buildEnricher(consumer jetstream.Consumer, js dlqPublisher, i int) *EnricherWorker {
 	worker := NewEnricherWorker(consumer, js, p.pool, p.logger, p.cfg)
 	if p.llmResolver != nil {
 		worker.WithLLMResolver(p.llmResolver)
+	}
+	if p.paramResolver != nil {
+		worker.WithParamResolver(p.paramResolver)
 	}
 	return worker
 }

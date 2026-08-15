@@ -96,6 +96,15 @@ export const MEMORY_FACT_INJECTION_MAX = 20;
 export const MEMORY_HISTORY_INJECTION_MIN = 0;
 export const MEMORY_HISTORY_INJECTION_MAX = 10;
 
+// 上下文压缩温度控件 bounds；后端 CompactionDefaultTemperature=0.3，写路径钳制
+// [0,1]（Qwen/Zhipu 拒收 >1）。0 = unset，回落 0.3。
+export const COMPACTION_TEMP_MIN = 0;
+export const COMPACTION_TEMP_MAX = 1;
+// 记忆召回条数控件 bounds；对齐 registry memory.recall_top_k（Default 5 / Max 20），
+// 后端 Handle 解析时 clamp [1,20]。
+export const RECALL_TOP_K_MIN = 1;
+export const RECALL_TOP_K_MAX = 20;
+
 export const CHUNKING_STRATEGY_OPTIONS = [
   { value: 'structure_recursive', label: '结构感知（推荐）— Markdown 标题分层 + 递归分块' },
   { value: 'recursive', label: '递归分块 — 按字符边界递归切分' },
