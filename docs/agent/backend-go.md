@@ -61,5 +61,7 @@ agent 子操作使用 `pkg/constants/timeouts.go` 分级常量：
   `GET /e2e/routes`(gin `Routes()` dump),与浏览器实测请求经模板匹配取差集;
   `domain_hint` 提示该补到哪个 pack。开发者/AI 照清单补 `manifest.json` capability +
   pack action,再跑 E2E 确认该项进入 `covered`。
+- **启动前提**:后端必须以 `STRATUM_E2E_MODE=true` 启动,`GET /e2e/routes` 才会注册、
+  报告才有路由数据;stateful E2E 脚本 `scripts/e2e/system-stateful.sh` 已设置该变量。
 - **排除集**:基础设施探活路由(`/health`、`/livez`、`/readyz`、`/metrics`)与
   `/e2e/routes` 自身在 spec 中显式排除,不要求浏览器 UI 覆盖。

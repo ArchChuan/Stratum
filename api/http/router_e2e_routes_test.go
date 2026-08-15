@@ -7,6 +7,11 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
+	"github.com/byteBuilderX/stratum/api/wiring"
+	"github.com/byteBuilderX/stratum/config"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 
 type e2eRoutesPayload struct {
@@ -47,5 +52,35 @@ func TestE2ERoutesEndpointListsRegisteredRoutes(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("GET /health missing from /e2e/routes dump")
+	}
+}
+
+func TestE2ERoutesAbsentWhenModeEnvUnset(t *testing.T) {
+	// 未设置 STRATUM_E2E_MODE 时,/e2e/routes 不得注册,生产路由不暴露路由清单。
+	t.Setenv("STRATUM_E2E_MODE", "")
+	gin.SetMode(gin.TestMode)
+
+	metrics := observability.NewPrometheusMetrics(zap.NewNop())
+	router := NewRouter(&wiring.Container{
+		Config: &config.Config{FrontendURL: "http://localhost:3002"},
+		Logger: zap.NewNop(),
+		Platform: &wiring.Platform{
+			Metrics: metrics,
+		},
+		LLMGateway: &wiring.LLMGateway{},
+		Skill:      &wiring.Skill{},
+		Agent:      &wiring.Agent{},
+		Knowledge:  &wiring.Knowledge{},
+		MCP:        &wiring.MCP{},
+	})
+
+	routes := router.Routes()
+	if len(routes) == 0 {
+		t.Fatal("router built with zero routes; assertion would be vacuous")
+	}
+	for _, route := range routes {
+		if route.Method == http.MethodGet && route.Path == "/e2e/routes" {
+			t.Fatal("GET /e2e/routes registered without STRATUM_E2E_MODE=true")
+		}
 	}
 }
