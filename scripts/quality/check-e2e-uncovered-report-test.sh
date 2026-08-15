@@ -35,4 +35,12 @@ if REPORT_PATH="$tmp/invalid.json" "$script" >/dev/null 2>&1; then
   echo "expected failure for missing domain_hint"; exit 1
 fi
 
+# 非法 JSON(截断对象):应单条清晰报错而非 6 条误导的 MISSING。
+printf '%s' '{"broken' > "$tmp/broken.json"
+if out=$(REPORT_PATH="$tmp/broken.json" "$script" 2>&1); then
+  echo "expected failure for invalid JSON"; exit 1
+fi
+[[ "$out" == *"报告不是合法 JSON 对象"* ]] \
+  || { echo "unexpected message for invalid JSON: $out"; exit 1; }
+
 echo "SELFTEST PASS: valid accepted, invalid rejected"

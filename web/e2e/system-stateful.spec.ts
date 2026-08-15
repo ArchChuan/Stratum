@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { expect, test } from '@playwright/test';
@@ -18,7 +17,8 @@ import {
 } from './stateful/core/model';
 import { parseRuntimeOptions, type SystemPack } from './stateful/core/runtime';
 import { executeAcceptanceSchedule } from './stateful/core/scheduler';
-import { buildUncoveredReport, mergeGoldenRoutes, type RouteShape } from './stateful/core/routes-diff';
+import { buildUncoveredReport, mergeGoldenRoutes } from './stateful/core/routes-diff';
+import { fetchRegisteredRoutes, loadGoldenRoutes, writeReport } from './stateful/core/routes-io';
 import { dashboardActions } from './stateful/packs/dashboard';
 import { executeAgentPack } from './stateful/packs/agent';
 import { executeAuditPack } from './stateful/packs/audit';
@@ -177,7 +177,7 @@ test('system stateful acceptance', async ({ browser, browserName }) => {
     const registered = mergeGoldenRoutes(dumpRoutes, await loadGoldenRoutes(goldenDirPath));
     const report = buildUncoveredReport(registered, evidence.httpRequests, excludedRoutes,
       safeResults.tested_git_parent, new Date().toISOString());
-    await writeFile(uncoveredReportPath, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
+    await writeReport(uncoveredReportPath, report);
     uncoveredSummary =
       `${report.route_total} 注册路由,${report.covered.length} 已覆盖,` +
       `${report.uncovered.length} 未覆盖(见 test/e2e/stateful/uncovered-report.json)`;
@@ -295,39 +295,14 @@ const recordHttpRequests = (
   evidence: EvidenceRecord,
   backendOrigin: string,
 ): void => {
+  const backendURL = new URL(backendOrigin);
   for (const actor of Object.values(contexts)) {
     const context: BrowserContext = actor.context;
     context.on('request', (request) => {
       if (request.resourceType() !== 'fetch' && request.resourceType() !== 'xhr') return;
       const url = new URL(request.url());
-      if (url.origin !== new URL(backendOrigin).origin) return;
+      if (url.origin !== backendURL.origin) return;
       evidence.httpRequests.add(`${request.method()} ${url.pathname}`);
     });
   }
-};
-
-// fetchRegisteredRoutes 从后端只读端点拉取注册路由模板全集(gin Routes() dump)。
-const fetchRegisteredRoutes = async (backendURL: string): Promise<RouteShape[]> => {
-  const response = await fetch(`${backendURL}/e2e/routes`);
-  if (!response.ok) throw new Error(`GET /e2e/routes failed: ${response.status}`);
-  const body = (await response.json()) as { routes: Array<{ method: string; path: string }> };
-  return body.routes;
-};
-
-// loadGoldenRoutes 解析 golden 契约文件的 (method, path),供 cross-check 并集。
-// golden 是数组(同路径多 auth 场景),每个 entry 含 method/path。
-const loadGoldenRoutes = async (goldenDir: string): Promise<RouteShape[]> => {
-  const entries = await readdir(goldenDir);
-  const golden: RouteShape[] = [];
-  for (const entry of entries) {
-    if (!entry.endsWith('.golden.json')) continue;
-    const body = JSON.parse(await readFile(join(goldenDir, entry), 'utf8')) as
-      Array<{ method?: string; path?: string }>;
-    for (const item of body) {
-      if (typeof item.method === 'string' && typeof item.path === 'string') {
-        golden.push({ method: item.method, path: item.path });
-      }
-    }
-  }
-  return golden;
 };

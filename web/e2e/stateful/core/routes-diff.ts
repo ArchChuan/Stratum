@@ -27,7 +27,7 @@ const DOMAIN_PREFIXES: Array<[string, string]> = [
 // normalizePath 去 query,并把 gin 具名参数段(:xxx)统一为 :param。
 // 固定值段(如 candidate-1)不做启发式猜测——运行时 id 的归一化由 matchTemplate 完成。
 export const normalizePath = (path: string): string => {
-  const withoutQuery = path.split('?')[0] ?? '';
+  const withoutQuery = path.split('?')[0];
   return withoutQuery
     .split('/')
     .map((segment) => (segment.startsWith(':') ? ':param' : segment))
@@ -37,30 +37,39 @@ export const normalizePath = (path: string): string => {
 export const methodPathKey = (method: string, path: string): string =>
   `${method} ${normalizePath(path)}`;
 
-// matchTemplate 用注册模板反向匹配运行时请求:静态段逐一相等,参数段
-// (:xxx 或 *xxx)匹配任意单段。命中返回模板自身(即归一化形态)。
-// gin 不允许同 method 同静态结构的两个模板并存,故匹配结果唯一。
+const segmentsOf = (path: string): string[] => path.split('/').filter(Boolean);
+
+const isStaticTemplate = (path: string): boolean =>
+  segmentsOf(path).every((segment) => !segment.startsWith(':') && !segment.startsWith('*'));
+
+const templateMatches = (templatePath: string, segments: string[]): boolean => {
+  const templateSegments = segmentsOf(templatePath);
+  if (templateSegments.length !== segments.length) return false;
+  return templateSegments.every((templateSegment, i) => {
+    // 参数段(:xxx 或 *xxx)匹配任意单段;静态段逐一相等。
+    if (templateSegment.startsWith(':') || templateSegment.startsWith('*')) return true;
+    return templateSegment === segments[i];
+  });
+};
+
+// matchTemplate 用注册模板反向匹配运行时请求,命中返回模板自身(即归一化形态)。
+// 两遍扫描:先匹配纯静态模板,再匹配含参数模板。gin 允许 /agents/:id 与
+// /agents/me 并存,静态路由注册顺序可能晚于参数路由;先扫静态可避免请求
+// /agents/me 被 :param 模板误吞。gin 不允许同 method 同静态结构并存,故
+// 同一遍内匹配结果唯一。
 export const matchTemplate = (
   registered: RouteShape[],
   method: string,
   path: string,
 ): RouteShape | null => {
-  const pathname = path.split('?')[0] ?? '';
+  const pathname = path.split('?')[0];
   const segments = pathname.split('/').filter(Boolean);
-  for (const route of registered) {
-    if (route.method !== method) continue;
-    const templateSegments = route.path.split('/').filter(Boolean);
-    if (templateSegments.length !== segments.length) continue;
-    let matched = true;
-    for (let i = 0; i < templateSegments.length; i += 1) {
-      const templateSegment = templateSegments[i];
-      if (templateSegment.startsWith(':') || templateSegment.startsWith('*')) continue;
-      if (templateSegment !== segments[i]) {
-        matched = false;
-        break;
-      }
-    }
-    if (matched) return route;
+  const sameMethod = registered.filter((route) => route.method === method);
+  for (const route of sameMethod) {
+    if (isStaticTemplate(route.path) && templateMatches(route.path, segments)) return route;
+  }
+  for (const route of sameMethod) {
+    if (!isStaticTemplate(route.path) && templateMatches(route.path, segments)) return route;
   }
   return null;
 };
@@ -130,7 +139,7 @@ export const buildUncoveredReport = (
       path,
       domain_hint: domainForPath(path),
     })),
-    excluded: excluded.map(({ method, path, reason }) => ({ method, path, reason })),
+    excluded,
   };
 };
 

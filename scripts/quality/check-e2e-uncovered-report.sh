@@ -8,6 +8,9 @@ report="${REPORT_PATH:-$repo_dir/test/e2e/stateful/uncovered-report.json}"
 
 [[ -f "$report" ]] || { echo "MISSING: $report (run stateful E2E first)"; exit 1; }
 
+jq -e 'type == "object"' "$report" >/dev/null 2>&1 \
+  || { echo "报告不是合法 JSON 对象"; exit 1; }
+
 issues=0
 
 for field in generated_at tested_git_parent route_total covered uncovered excluded; do

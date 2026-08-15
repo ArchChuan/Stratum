@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 
 	"github.com/gin-gonic/gin"
@@ -41,7 +42,10 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	registerModelCatalogue(r, c)
 	registerDashboard(r, c)
 	registerHealth(r, c)
-	registerE2ERoutes(r)
+	// 路由 dump 仅测试态暴露(STRATUM_E2E_MODE=true),生产不注册 /e2e/routes。
+	if os.Getenv("STRATUM_E2E_MODE") == "true" {
+		registerE2ERoutes(r)
+	}
 	registerSkills(r, c, requireActive)
 	registerEvaluations(r, c, requireActive)
 	registerAgents(r, c, requireActive)
@@ -325,7 +329,6 @@ func registerModelCatalogue(r *gin.Engine, c *wiring.Container) {
 	models.GET("", modelHandler.ListModels)
 }
 
-// registerHealth wires unauthenticated observability and health endpoints.
 // registerE2ERoutes exposes a read-only route inventory for the stateful
 // E2E coverage report. Paths are gin template form (e.g. /agents/:id).
 // Unauthenticated: it carries no business data, only route shapes.
@@ -343,6 +346,7 @@ func registerE2ERoutes(r *gin.Engine) {
 	})
 }
 
+// registerHealth wires unauthenticated observability and health endpoints.
 func registerHealth(r *gin.Engine, c *wiring.Container) {
 	r.GET("/metrics", gin.WrapH(c.Platform.Metrics.GetHandler()))
 	r.GET("/livez", func(ctx *gin.Context) {

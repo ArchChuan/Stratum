@@ -50,6 +50,20 @@ describe('matchTemplate', () => {
   it('returns null when no template matches', () => {
     expect(matchTemplate(registered, 'GET', '/not-a-route')).toBeNull();
   });
+
+  it('prefers a static template over a param template regardless of registration order', () => {
+    const staticSecond = [
+      { method: 'GET', path: '/agents/:id' },
+      { method: 'GET', path: '/agents/me' },
+    ];
+    // gin 允许 /agents/:id 与 /agents/me 并存;静态模板晚注册也不被 :param 吞掉。
+    expect(matchTemplate(staticSecond, 'GET', '/agents/me')).toEqual({
+      method: 'GET', path: '/agents/me',
+    });
+    expect(matchTemplate(staticSecond, 'GET', '/agents/abc')).toEqual({
+      method: 'GET', path: '/agents/:id',
+    });
+  });
 });
 
 describe('excludeRoutes', () => {

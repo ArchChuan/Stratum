@@ -17,6 +17,8 @@ type e2eRoutesPayload struct {
 }
 
 func TestE2ERoutesEndpointListsRegisteredRoutes(t *testing.T) {
+	// 路由 dump 由 STRATUM_E2E_MODE=true 门控;测试代表 e2e 模式下的行为。
+	t.Setenv("STRATUM_E2E_MODE", "true")
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.GET("/health", func(c *gin.Context) { c.Status(http.StatusOK) })
