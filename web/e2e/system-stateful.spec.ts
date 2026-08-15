@@ -4,18 +4,21 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { expect, test } from '@playwright/test';
+import type { BrowserContext } from '@playwright/test';
 
 import {
   createActorContexts, createGuestActor, restoreActorSession, type ActorLabel, type BrowserActor,
 } from './stateful/core/actors';
 import { createSafePool, deleteGeneratedActors } from './stateful/core/database';
 import { acceptanceError, acceptanceErrors } from './stateful/core/errors';
-import type { EvidenceRecord } from './stateful/core/evidence';
+import { emptyEvidence, type EvidenceRecord } from './stateful/core/evidence';
 import {
   capabilityDomainsForPacks, reconcileCapabilities, type ManifestCapability,
 } from './stateful/core/model';
 import { parseRuntimeOptions, type SystemPack } from './stateful/core/runtime';
 import { executeAcceptanceSchedule } from './stateful/core/scheduler';
+import { buildUncoveredReport, mergeGoldenRoutes } from './stateful/core/routes-diff';
+import { fetchRegisteredRoutes, loadGoldenRoutes, writeReport } from './stateful/core/routes-io';
 import { dashboardActions } from './stateful/packs/dashboard';
 import { executeAgentPack } from './stateful/packs/agent';
 import { executeAuditPack } from './stateful/packs/audit';
@@ -39,8 +42,7 @@ interface SafeResultItem { id: string; status: 'passed' }
 const runtime = parseRuntimeOptions(process.env);
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 const manifestPath = fileURLToPath(new URL('../../test/e2e/stateful/manifest.json', import.meta.url));
-
-const emptyEvidence = (): EvidenceRecord => ({ ui: [], http: [], database: [] });
+const goldenDirPath = fileURLToPath(new URL('../../api/http/testdata/contracts', import.meta.url));
 
 test('system stateful acceptance', async ({ browser, browserName }) => {
   expect(browserName).toBe('chromium');
@@ -63,6 +65,7 @@ test('system stateful acceptance', async ({ browser, browserName }) => {
   const contexts = await createActorContexts(browser);
   const actors = {} as Record<ActorLabel, BrowserActor>;
   const evidence = emptyEvidence();
+  recordHttpRequests(contexts, evidence, runtime.urls.api);
   const completedPacks: SafeResultItem[] = [];
   const completedActions: string[] = [];
   const startedAt = new Date();
@@ -155,6 +158,33 @@ test('system stateful acceptance', async ({ browser, browserName }) => {
     status: unverifiedCapabilities.length === 0 ? 'passed' : 'failed',
   };
   await writeFile(resultsPath, `${JSON.stringify(safeResults, null, 2)}\n`, { mode: 0o600 });
+  // ── 未覆盖路由报告(新用例沉淀)──────────────────────────────
+  // 仅告警不阻断:写入报告 + 打印摘要,不使测试失败。
+  // 与 unverified_capabilities(声明过没跑到→fail)互补——这个是"做到了但没说"。
+  const uncoveredReportPath = fileURLToPath(
+    new URL('../../test/e2e/stateful/uncovered-report.json', import.meta.url),
+  );
+  let uncoveredSummary = '';
+  try {
+    const excludedRoutes = [
+      { method: 'GET', path: '/health', reason: 'infra' },
+      { method: 'GET', path: '/livez', reason: 'infra' },
+      { method: 'GET', path: '/readyz', reason: 'infra' },
+      { method: 'GET', path: '/metrics', reason: 'infra' },
+      { method: 'GET', path: '/e2e/routes', reason: 'self' },
+    ];
+    const dumpRoutes = await fetchRegisteredRoutes(backendURL);
+    const registered = mergeGoldenRoutes(dumpRoutes, await loadGoldenRoutes(goldenDirPath));
+    const report = buildUncoveredReport(registered, evidence.httpRequests, excludedRoutes,
+      safeResults.tested_git_parent, new Date().toISOString());
+    await writeReport(uncoveredReportPath, report);
+    uncoveredSummary =
+      `${report.route_total} 注册路由,${report.covered.length} 已覆盖,` +
+      `${report.uncovered.length} 未覆盖(见 test/e2e/stateful/uncovered-report.json)`;
+  } catch (error) {
+    uncoveredSummary = `uncovered 报告生成失败(不影响验收): ${String(error)}`;
+  }
+  console.log(uncoveredSummary);
   expect(unverifiedCapabilities, 'every selected manifest capability must execute').toEqual([]);
 });
 
@@ -256,5 +286,23 @@ const executePack = async (
     }
   } finally {
     await page.close();
+  }
+};
+
+// recordHttpRequests 在每个 actor context 上采集后端 API 请求,供未覆盖路由差集。
+const recordHttpRequests = (
+  contexts: Record<ActorLabel, BrowserActor>,
+  evidence: EvidenceRecord,
+  backendOrigin: string,
+): void => {
+  const backendURL = new URL(backendOrigin);
+  for (const actor of Object.values(contexts)) {
+    const context: BrowserContext = actor.context;
+    context.on('request', (request) => {
+      if (request.resourceType() !== 'fetch' && request.resourceType() !== 'xhr') return;
+      const url = new URL(request.url());
+      if (url.origin !== backendURL.origin) return;
+      evidence.httpRequests.add(`${request.method()} ${url.pathname}`);
+    });
   }
 };

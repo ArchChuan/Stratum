@@ -130,6 +130,11 @@ bin/
 /web/test-results/
 /web/playwright-report/
 
+# E2E uncovered-routes report: local alert-only artifact, generated mid-run.
+# Must stay excluded so e2eattestation digest (git ls-files --others --exclude-standard)
+# does not see it appear between the source_before/source_after snapshots.
+test/e2e/stateful/uncovered-report.json
+
 # Pre-commit framework
 .pre-commit-framework/
 

@@ -41,7 +41,7 @@ func TestCheckpointLifecycleRealPostgres(t *testing.T) {
 	identity := domain.AgentExecutionCheckpoint{
 		ExecutionID:            "exec-lifecycle",
 		TraceID:                "trace-lifecycle",
-		ConversationID:         "conv-lifecycle",
+		ConversationID:         "11111111-1111-1111-1111-111111111111",
 		AgentID:                "agent-lifecycle",
 		UserID:                 "user-lifecycle",
 		CurrentNode:            "tool_execution",
@@ -88,7 +88,7 @@ func TestCheckpointLifecycleRealPostgres(t *testing.T) {
 		expired := domain.AgentExecutionCheckpoint{
 			ExecutionID:    expiredID,
 			TraceID:        "trace-expired",
-			ConversationID: "conv-expired",
+			ConversationID: "22222222-2222-2222-2222-222222222222",
 			AgentID:        "agent-lifecycle",
 			UserID:         "user-lifecycle",
 			CurrentNode:    "llm",
@@ -108,12 +108,33 @@ func TestCheckpointLifecycleRealPostgres(t *testing.T) {
 		}
 	})
 
+	// empty conversation_id roundtrip (checkpoint 全开后 evaluation run 无
+	// conversation:Upsert 必须写 NULL 而非空字符串,GetLatest 读回空串)
+	t.Run("empty conversation id roundtrip", func(t *testing.T) {
+		noConv := domain.AgentExecutionCheckpoint{
+			ExecutionID: "exec-no-conv", TraceID: "trace-no-conv",
+			ConversationID: "", AgentID: "agent-lifecycle", UserID: "user-lifecycle",
+			CurrentNode: "llm", StepIndex: 3, Status: "running",
+			ExpiresAt: time.Now().Add(time.Hour),
+		}
+		if err := store.Upsert(ctx, tenantID, noConv); err != nil {
+			t.Fatalf("upsert no-conv: %v", err)
+		}
+		restored, err := store.GetLatest(ctx, tenantID, "exec-no-conv")
+		if err != nil {
+			t.Fatalf("get latest no-conv: %v", err)
+		}
+		if restored.ConversationID != "" {
+			t.Fatalf("expected empty conversation_id, got %q", restored.ConversationID)
+		}
+	})
+
 	// upsert replaces previous row (ON CONFLICT on execution_id)
 	t.Run("upsert replaces previous", func(t *testing.T) {
 		replaced := domain.AgentExecutionCheckpoint{
 			ExecutionID:    "exec-lifecycle",
 			TraceID:        "trace-lifecycle",
-			ConversationID: "conv-lifecycle",
+			ConversationID: "11111111-1111-1111-1111-111111111111",
 			AgentID:        "agent-lifecycle",
 			UserID:         "user-lifecycle",
 			CurrentNode:    "final",
