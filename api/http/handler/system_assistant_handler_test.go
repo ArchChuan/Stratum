@@ -56,14 +56,14 @@ func (r *settingsAgentRepo) UpdateSystemAssistant(_ context.Context, cfg *domain
 	return nil
 }
 
-func (r *settingsAgentRepo) UpdateSystemAssistantModel(_ context.Context, model string, _ string, _ bool, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+func (r *settingsAgentRepo) UpdateSystemAssistantModel(_ context.Context, model string, _ string, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	if r.updateErr != nil {
 		return nil, r.updateErr
 	}
 	r.cfg.LLMModel = model
 	return r.cfg, nil
 }
-func (r *settingsAgentRepo) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+func (r *settingsAgentRepo) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ int, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	return r.cfg, nil
 }
 

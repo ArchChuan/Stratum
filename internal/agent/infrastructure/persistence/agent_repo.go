@@ -431,10 +431,10 @@ func (r *PgAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig, aud
 			return err
 		}
 		_, err = tx.Exec(ctx,
-			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope, system_key, checkpoint_enabled, created_by, parameters)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10,$11,$12)`,
+			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope, system_key, created_by, parameters)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10,$11)`,
 			cfg.ID, cfg.Name, string(cfg.Type), cfg.Description,
-			cfg.SystemPrompt, cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, cfg.CheckpointEnabled, cfg.CreatedBy, params,
+			cfg.SystemPrompt, cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, cfg.CreatedBy, params,
 		)
 		if err != nil {
 			var pgErr *pgconn.PgError
@@ -498,11 +498,11 @@ func (r *PgAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig, 
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
 			`SELECT id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope,
-			        COALESCE(system_key, ''), COALESCE(checkpoint_enabled, false), COALESCE(created_by, ''), parameters
+			        COALESCE(system_key, ''), COALESCE(created_by, ''), parameters
 			 FROM agents WHERE id = $1`, id).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
 				&cfg.SystemPrompt, &cfg.LLMModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope,
-				&cfg.SystemKey, &cfg.CheckpointEnabled, &cfg.CreatedBy, &rawParams); err != nil {
+				&cfg.SystemKey, &cfg.CreatedBy, &rawParams); err != nil {
 			return err
 		}
 		if err := unpackSamplingParameters(rawParams, &cfg); err != nil {
@@ -550,10 +550,10 @@ func (r *PgAgentRepo) GetSystemAssistant(ctx context.Context) (*domain.AgentConf
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
 			`SELECT id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens,
-			        memory_scope, system_key, COALESCE(checkpoint_enabled, false), COALESCE(created_by, ''), parameters
+			        memory_scope, system_key, COALESCE(created_by, ''), parameters
 			 FROM agents WHERE system_key = 'stratum.platform_assistant'`).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
-				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CheckpointEnabled, &cfg.CreatedBy, &rawParams); err != nil {
+				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CreatedBy, &rawParams); err != nil {
 			return err
 		}
 		if err := unpackSamplingParameters(rawParams, &cfg); err != nil {
@@ -620,7 +620,7 @@ func (r *PgAgentRepo) GetAll(ctx context.Context) ([]*domain.AgentConfig, error)
 func scanAgents(ctx context.Context, tx pgx.Tx) ([]*domain.AgentConfig, []string, error) {
 	rows, err := tx.Query(ctx,
 		`SELECT id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope,
-		        COALESCE(system_key, ''), COALESCE(checkpoint_enabled, false), COALESCE(created_by, ''), parameters
+		        COALESCE(system_key, ''), COALESCE(created_by, ''), parameters
 		 FROM agents ORDER BY created_at`)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list agents: %w", err)
@@ -634,7 +634,7 @@ func scanAgents(ctx context.Context, tx pgx.Tx) ([]*domain.AgentConfig, []string
 		var rawParams string
 		if err := rows.Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
 			&cfg.SystemPrompt, &cfg.LLMModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope,
-			&cfg.SystemKey, &cfg.CheckpointEnabled, &cfg.CreatedBy, &rawParams); err != nil {
+			&cfg.SystemKey, &cfg.CreatedBy, &rawParams); err != nil {
 			return nil, nil, fmt.Errorf("scan agent row: %w", err)
 		}
 		if err := unpackSamplingParameters(rawParams, &cfg); err != nil {
@@ -766,10 +766,10 @@ func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, audit
 			`UPDATE agents
 			 SET name=$1, description=$2, system_prompt=$3,
 			     llm_model=$4, max_iterations=$5, max_context_tokens=$6,
-			     memory_scope=$7, checkpoint_enabled=$8, `+parametersSet+`, updated_at=NOW()
-			 WHERE id=$10`,
+			     memory_scope=$7, `+parametersSet+`, updated_at=NOW()
+			 WHERE id=$9`,
 			cfg.Name, cfg.Description, cfg.SystemPrompt,
-			cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, cfg.CheckpointEnabled, params, cfg.ID,
+			cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, params, cfg.ID,
 		)
 		if err != nil {
 			return fmt.Errorf("update agent %s: %w", cfg.ID, err)
@@ -809,25 +809,25 @@ func samplingParameterSet(cfg *domain.AgentConfig, replaceParams bool) (string, 
 		return "", "", err
 	}
 	if replaceParams {
-		return "parameters=$9", params, nil
+		return "parameters=$8", params, nil
 	}
-	return "parameters=parameters || $9::jsonb", params, nil
+	return "parameters=parameters || $8::jsonb", params, nil
 }
 
 // UpdateSystemAssistantModel updates the platform assistant's model fields in
 // a single transaction, auditing the change. Ownership checks do not apply —
 // the platform assistant is exempt — but every change is still recorded.
-func (r *PgAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+func (r *PgAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, maxIterations int, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	var cfg domain.AgentConfig
 	var agentType string
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `UPDATE agents SET llm_model=$1, memory_scope=$2, checkpoint_enabled=$3,
-			max_iterations=$4, max_context_tokens=$5, updated_at=NOW()
+		if err := tx.QueryRow(ctx, `UPDATE agents SET llm_model=$1, memory_scope=$2,
+			max_iterations=$3, max_context_tokens=$4, updated_at=NOW()
 			WHERE system_key='stratum.platform_assistant'
 			RETURNING id, name, type, description, system_prompt, llm_model,
-			          max_iterations, max_context_tokens, memory_scope, system_key, checkpoint_enabled, created_by`, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens).
+			          max_iterations, max_context_tokens, memory_scope, system_key, created_by`, model, memoryScope, maxIterations, maxContextTokens).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
-				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CheckpointEnabled, &cfg.CreatedBy); err != nil {
+				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CreatedBy); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("update system assistant model: %w", domain.ErrNotFound)
 			}
@@ -856,7 +856,7 @@ func (r *PgAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model stri
 // (unchanged) bindings in ONE transaction so the change audit lands with the
 // business write atomically. Formerly UpdateSystemAssistantModel +
 // UpdateSystemAssistantBindings in two separate transactions.
-func (r *PgAgentRepo) UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, checkpointEnabled bool, maxIterations, maxContextTokens, maxTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+func (r *PgAgentRepo) UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, maxIterations, maxContextTokens, maxTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	var cfg domain.AgentConfig
 	var agentType string
 	var rawParams string
@@ -865,15 +865,15 @@ func (r *PgAgentRepo) UpdateSystemAssistantAll(ctx context.Context, model, memor
 		if err != nil {
 			return err
 		}
-		if err := tx.QueryRow(ctx, `UPDATE agents SET llm_model=$1, memory_scope=$2, checkpoint_enabled=$3,
-			max_iterations=$4, max_context_tokens=$5,
-			parameters = COALESCE(parameters, '{}'::jsonb) || $6::jsonb,
+		if err := tx.QueryRow(ctx, `UPDATE agents SET llm_model=$1, memory_scope=$2,
+			max_iterations=$3, max_context_tokens=$4,
+			parameters = COALESCE(parameters, '{}'::jsonb) || $5::jsonb,
 			updated_at=NOW()
 			WHERE system_key='stratum.platform_assistant'
 			RETURNING id, name, type, description, system_prompt, llm_model,
-			          max_iterations, max_context_tokens, memory_scope, system_key, checkpoint_enabled, created_by, parameters`, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens, fragment).
+			          max_iterations, max_context_tokens, memory_scope, system_key, created_by, parameters`, model, memoryScope, maxIterations, maxContextTokens, fragment).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
-				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CheckpointEnabled, &cfg.CreatedBy, &rawParams); err != nil {
+				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CreatedBy, &rawParams); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("update system assistant: %w", domain.ErrNotFound)
 			}

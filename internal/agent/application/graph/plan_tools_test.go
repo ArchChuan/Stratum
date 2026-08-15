@@ -27,7 +27,6 @@ func TestExecutePlanToolCreatesAndPersistsPlan(t *testing.T) {
 	writer := &checkpointWriterForPlanTest{}
 	state := graph.ReActState{
 		TenantID: "tenant-1", ExecutionID: "exec-1", TraceID: "trace-1", ConversationID: "conv-1", PlanCheckpointWriter: writer,
-		CheckpointEnabled:      true,
 		PlanCheckpointIdentity: graph.PlanCheckpointIdentity{CheckpointID: "cp-1", ExecutionID: "exec-1", TraceID: "trace-1", ConversationID: "conv-1"},
 		PlanIDSource:           sequencePlanIDs([]string{"plan-1", "node-1"}), PlanLimits: domain.PlanLimits{MaxNodes: 5, MaxRevisions: 5},
 	}
@@ -51,7 +50,7 @@ func TestExecutePlanToolReturnsCorrectionWithoutMutation(t *testing.T) {
 }
 
 func TestExecutePlanToolRequiresCheckpointWriter(t *testing.T) {
-	state := graph.ReActState{CheckpointEnabled: true, PlanIDSource: sequencePlanIDs([]string{"plan-1", "node-1"}), PlanLimits: domain.PlanLimits{MaxNodes: 5}}
+	state := graph.ReActState{PlanIDSource: sequencePlanIDs([]string{"plan-1", "node-1"}), PlanLimits: domain.PlanLimits{MaxNodes: 5}}
 	_, err := graph.ExecutePlanTool(context.Background(), &state, port.ToolCall{Name: "stratum_create_plan", Arguments: map[string]any{
 		"nodes": []any{map[string]any{"key": "one", "goal": "one"}},
 	}})

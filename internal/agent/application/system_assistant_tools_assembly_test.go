@@ -217,7 +217,7 @@ func TestSystemAssistantAdminUpdateSystemModelExecutes(t *testing.T) {
 	repo.On("GetSystemAssistant", ctx).Return(&domain.AgentConfig{
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "existing-model",
 	}, true, nil)
-	repo.On("UpdateSystemAssistantModel", ctx, "qwen-plus", "", false, 0, 0,
+	repo.On("UpdateSystemAssistantModel", ctx, "qwen-plus", "", 0, 0,
 		mock.MatchedBy(func(a *auditdomain.ResourceChangeAuditEvent) bool {
 			return a != nil && a.ActorID == "user-1" && a.Operation == auditdomain.ChangeOpUpdate &&
 				a.ResourceKind == auditdomain.ResourceKindAgent
@@ -326,19 +326,19 @@ func (m *mockAgentRepo) Update(_ context.Context, cfg *domain.AgentConfig, _ *au
 }
 
 func (m *mockAgentRepo) UpdateSystemAssistantModel(
-	ctx context.Context, model, memoryScope string, checkpointEnabled bool, maxIterations, maxContextTokens int,
+	ctx context.Context, model, memoryScope string, maxIterations, maxContextTokens int,
 	audit *auditdomain.ResourceChangeAuditEvent,
 ) (*domain.AgentConfig, error) {
-	args := m.Called(ctx, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens, audit)
+	args := m.Called(ctx, model, memoryScope, maxIterations, maxContextTokens, audit)
 	cfg, _ := args.Get(0).(*domain.AgentConfig)
 	return cfg, args.Error(1)
 }
 
 func (m *mockAgentRepo) UpdateSystemAssistantAll(
-	ctx context.Context, model, memoryScope string, checkpointEnabled bool, maxIterations, maxContextTokens, maxTokens int,
+	ctx context.Context, model, memoryScope string, maxIterations, maxContextTokens, maxTokens int,
 	_ *auditdomain.ResourceChangeAuditEvent,
 ) (*domain.AgentConfig, error) {
-	args := m.Called(ctx, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens, maxTokens)
+	args := m.Called(ctx, model, memoryScope, maxIterations, maxContextTokens, maxTokens)
 	cfg, _ := args.Get(0).(*domain.AgentConfig)
 	return cfg, args.Error(1)
 }

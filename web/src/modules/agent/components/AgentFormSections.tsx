@@ -1,5 +1,5 @@
 import { RobotOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
-import { Collapse, Form, Input, InputNumber, Select, Slider, Switch, Tag, Typography } from 'antd';
+import { Collapse, Form, Input, InputNumber, Select, Slider, Tag, Typography } from 'antd';
 import { useMemo } from 'react';
 
 import type { GroupedModelOption } from '../model/agent';
@@ -343,15 +343,6 @@ export const AgentFormSections = ({
                     </Form.Item>
                   </>
                 )}
-                <Form.Item
-                  label="执行断点续传"
-                  name="checkpointEnabled"
-                  valuePropName="checked"
-                  extra="启用后，长时间执行任务可在中断后从上次检查点恢复"
-                  style={{ marginBottom: 0 }}
-                >
-                  <Switch />
-                </Form.Item>
               </>
             ),
           },

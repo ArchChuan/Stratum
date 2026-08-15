@@ -26,7 +26,6 @@ type CreateAgentRequest struct {
 	MCPToolIDs             []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs  []string `json:"knowledgeWorkspaceIds"`
 	MemoryScope            string   `json:"memoryScope"`
-	CheckpointEnabled      bool     `json:"checkpointEnabled"`
 	// Parameters carries registry resource-scope values as a flat object; only
 	// the memory.* dotted keys persist on the agent (sampling keys stay on the
 	// explicit fields). Same merge semantics as UpdateAgentRequest.Parameters.
@@ -52,7 +51,6 @@ type UpdateAgentRequest struct {
 	MCPToolIDs             []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs  []string `json:"knowledgeWorkspaceIds"`
 	MemoryScope            string   `json:"memoryScope"`
-	CheckpointEnabled      bool     `json:"checkpointEnabled"`
 	// Parameters carries the registry sampling parameters as a flat object
 	// (temperature/max_tokens/compaction_recent_groups/compaction_safety_ratio/
 	// reasoning_effort). Merge semantics: only keys present in this map are
@@ -81,7 +79,6 @@ type AgentResponse struct {
 	MemoryScope            string   `json:"memoryScope"`
 	IsSystem               bool     `json:"isSystem"`
 	ManagementMode         string   `json:"managementMode"`
-	CheckpointEnabled      bool     `json:"checkpointEnabled"`
 	// Parameters echoes the persisted sampling parameters (0=unset keys
 	// omitted), symmetric with UpdateAgentRequest.parameters.
 	Parameters map[string]any `json:"parameters"`
@@ -92,6 +89,7 @@ type AgentResponse struct {
 type ExecuteAgentRequest struct {
 	Query          string                 `json:"query"`
 	ConversationID string                 `json:"conversation_id"`
+	ExecutionID    string                 `json:"execution_id"`
 	UserID         string                 `json:"user_id"`
 	Context        map[string]interface{} `json:"context"`
 	Options        map[string]interface{} `json:"options"`
@@ -134,7 +132,6 @@ func dtoToResponse(d agent.AgentDTO) AgentResponse {
 		MemoryScope:            d.MemoryScope,
 		IsSystem:               d.IsSystem,
 		ManagementMode:         d.ManagementMode,
-		CheckpointEnabled:      d.CheckpointEnabled,
 		Parameters:             d.Parameters,
 		Editors:                d.Editors,
 	}

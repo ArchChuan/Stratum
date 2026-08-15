@@ -166,7 +166,7 @@ func applyPlanOutcomes(ctx context.Context, state *ReActState, outcomes []PlanWa
 	if state == nil || state.ActivePlan == nil {
 		return nil, errors.New("plan runtime: active plan is required")
 	}
-	if state.CheckpointEnabled && state.PlanCheckpointWriter == nil {
+	if state.PlanCheckpointWriter == nil {
 		return nil, ErrPlanCheckpointRequired
 	}
 	if state.PlanIDSource == nil {
@@ -202,10 +202,8 @@ func applyPlanOutcome(ctx context.Context, state *ReActState, outcome PlanWaveOu
 	}
 	node.Attempts = append(node.Attempts, attempt)
 	state.ActivePlan.Revision++
-	if state.CheckpointEnabled {
-		if err := persistWaveCheckpoint(ctx, state, node); err != nil {
-			return failed, err
-		}
+	if err := persistWaveCheckpoint(ctx, state, node); err != nil {
+		return failed, err
 	}
 	return failed, nil
 }

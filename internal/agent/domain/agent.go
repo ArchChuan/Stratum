@@ -80,8 +80,7 @@ type AgentConfig struct {
 	// StuckThreshold > 0 enables lazy planning: after this many LLM rounds with
 	// no final answer the agent transitions to Reflect→Plan→Execute.
 	// 0 disables the feature (pure ReAct).
-	StuckThreshold    int
-	CheckpointEnabled bool
+	StuckThreshold int
 	// CreatedBy is the user who created the agent ("" for historical/platform rows).
 	CreatedBy string
 }

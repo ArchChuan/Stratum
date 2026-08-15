@@ -64,11 +64,11 @@ func (f *ownershipAgentRepoFake) Update(_ context.Context, cfg *domain.AgentConf
 	f.lastEditorActor = editorActor
 	return nil
 }
-func (f *ownershipAgentRepoFake) UpdateSystemAssistantModel(_ context.Context, _ string, _ string, _ bool, _ int, _ int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+func (f *ownershipAgentRepoFake) UpdateSystemAssistantModel(_ context.Context, _ string, _ string, _ int, _ int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	f.recordAudit(audit)
 	return nil, nil
 }
-func (f *ownershipAgentRepoFake) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+func (f *ownershipAgentRepoFake) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ int, _ int, _ int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	f.recordAudit(audit)
 	return nil, nil
 }

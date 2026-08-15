@@ -34,8 +34,9 @@ type ollamaChatRequest struct {
 }
 
 type ollamaChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string           `json:"role"`
+	Content   string           `json:"content"`
+	ToolCalls []ollamaToolCall `json:"tool_calls,omitempty"`
 }
 
 type ollamaChatOptions struct {
@@ -47,8 +48,9 @@ type ollamaChatResponse struct {
 	Model     string `json:"model"`
 	CreatedAt string `json:"created_at"`
 	Message   struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+		Role      string           `json:"role"`
+		Content   string           `json:"content"`
+		ToolCalls []ollamaToolCall `json:"tool_calls,omitempty"`
 	} `json:"message"`
 	Done            bool  `json:"done"`
 	TotalDuration   int64 `json:"total_duration"`
@@ -82,6 +84,67 @@ type ollamaToolFunction struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	Parameters  map[string]any `json:"parameters"`
+}
+
+// ollamaToolCall 是 ollama 原生 /api/chat 的 tool_calls 条目：arguments 为对象
+// （非 OpenAI 兼容的 JSON 字符串），流式下由单个 chunk 携带完整数组。
+type ollamaToolCall struct {
+	ID       string                 `json:"id,omitempty"`
+	Function ollamaToolCallFunction `json:"function"`
+}
+
+type ollamaToolCallFunction struct {
+	Index     int            `json:"index,omitempty"`
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments"`
+}
+
+// toOllamaToolCalls 把 domain ToolCall（arguments 为 JSON 字符串）转换为 ollama
+// 原生格式（arguments 为对象）。arguments 非合法 JSON 时跳过该调用，避免把坏
+// 消息发给上游。
+func toOllamaToolCalls(calls []domain.ToolCall) []ollamaToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]ollamaToolCall, 0, len(calls))
+	for _, c := range calls {
+		var args map[string]any
+		if err := json.Unmarshal([]byte(c.Function.Arguments), &args); err != nil {
+			continue
+		}
+		out = append(out, ollamaToolCall{
+			ID: c.ID,
+			Function: ollamaToolCallFunction{
+				Name:      c.Function.Name,
+				Arguments: args,
+			},
+		})
+	}
+	return out
+}
+
+// fromOllamaToolCalls 把 ollama 原生 tool_calls（arguments 为对象）转换为 domain
+// ToolCall（arguments 为 JSON 字符串）。空 name 或 Marshal 失败的条目被丢弃。
+// ollama 原生流式的 tool_calls 是单 chunk 全量快照，调用方按覆盖语义使用返回值。
+func fromOllamaToolCalls(calls []ollamaToolCall) []domain.ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]domain.ToolCall, 0, len(calls))
+	for _, c := range calls {
+		if c.Function.Name == "" {
+			continue
+		}
+		args, err := json.Marshal(c.Function.Arguments)
+		if err != nil {
+			continue
+		}
+		tc := domain.ToolCall{ID: c.ID, Type: "function"}
+		tc.Function.Name = c.Function.Name
+		tc.Function.Arguments = string(args)
+		out = append(out, tc)
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +231,10 @@ func parseNDJSONStream(scanner *bufio.Scanner, onToken func(string)) (Completion
 			result.Content += token
 			tokens++
 			onToken(token)
+		}
+		// ollama 原生流式的 tool_calls 是单 chunk 全量快照，覆盖式取最新一次。
+		if calls := chunk.Message.ToolCalls; len(calls) > 0 {
+			result.ToolCalls = fromOllamaToolCalls(calls)
 		}
 		if chunk.Done {
 			done = true
@@ -497,7 +564,13 @@ func (c *OllamaClient) BatchSize() int {
 func (c *OllamaClient) buildChatRequest(req *CompletionRequest, stream bool) ollamaChatRequest {
 	messages := make([]ollamaChatMessage, len(req.Messages))
 	for i, m := range req.Messages {
-		messages[i] = ollamaChatMessage{Role: m.Role, Content: m.Content}
+		// 多轮恢复时 assistant 消息必须携带上一轮的 tool_calls，ollama 才能
+		// 把工具结果关联到正确的调用。
+		messages[i] = ollamaChatMessage{
+			Role:      m.Role,
+			Content:   m.Content,
+			ToolCalls: toOllamaToolCalls(m.ToolCalls),
+		}
 	}
 
 	ollamaReq := ollamaChatRequest{
@@ -529,8 +602,9 @@ func (c *OllamaClient) buildChatRequest(req *CompletionRequest, stream bool) oll
 
 func (c *OllamaClient) toCompletionResponse(resp *ollamaChatResponse) *CompletionResponse {
 	return &CompletionResponse{
-		Content: resp.Message.Content,
-		Model:   resp.Model,
+		Content:   resp.Message.Content,
+		Model:     resp.Model,
+		ToolCalls: fromOllamaToolCalls(resp.Message.ToolCalls),
 		Usage: TokenUsage{
 			PromptTokens:     resp.PromptEvalCount,
 			CompletionTokens: resp.EvalCount,

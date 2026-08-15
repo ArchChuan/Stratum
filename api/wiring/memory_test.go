@@ -184,10 +184,10 @@ func (s *resolverAgentRepoStub) Remove(context.Context, string, *auditdomain.Res
 func (s *resolverAgentRepoStub) Update(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string, bool) error {
 	return nil
 }
-func (s *resolverAgentRepoStub) UpdateSystemAssistantModel(context.Context, string, string, bool, int, int, *auditdomain.ResourceChangeAuditEvent) (*agentdomain.AgentConfig, error) {
+func (s *resolverAgentRepoStub) UpdateSystemAssistantModel(context.Context, string, string, int, int, *auditdomain.ResourceChangeAuditEvent) (*agentdomain.AgentConfig, error) {
 	return nil, nil
 }
-func (s *resolverAgentRepoStub) UpdateSystemAssistantAll(context.Context, string, string, bool, int, int, int, *auditdomain.ResourceChangeAuditEvent) (*agentdomain.AgentConfig, error) {
+func (s *resolverAgentRepoStub) UpdateSystemAssistantAll(context.Context, string, string, int, int, int, *auditdomain.ResourceChangeAuditEvent) (*agentdomain.AgentConfig, error) {
 	return nil, nil
 }
 

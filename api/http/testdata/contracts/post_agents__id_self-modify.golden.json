@@ -13,8 +13,7 @@
       "allowedSkills": [],
       "mcpToolIds": [],
       "knowledgeWorkspaceIds": [],
-      "memoryScope": "user",
-      "checkpointEnabled": false
+      "memoryScope": "user"
     },
     "want_status": 202,
     "want_body_regex": "\\{\"proposalId\":\"[0-9a-f-]+\",\"reason\":\"pending_approval\",\"status\":\"pending_approval\"\\}"

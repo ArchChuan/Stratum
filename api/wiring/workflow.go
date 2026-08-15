@@ -23,7 +23,7 @@ import (
 type workflowAgentService interface {
 	Execute(context.Context, string, agentapp.ExecRequest, agentapp.ExecMeta) (*agentapp.AgentResult, int, error)
 	ExecuteStream(context.Context, string, agentapp.ExecRequest, agentapp.ExecMeta, func(string)) (
-		context.Context, context.CancelFunc, func() (*agentapp.AgentResult, int, error), error,
+		context.Context, context.CancelFunc, func() (*agentapp.AgentResult, int, error), string, error,
 	)
 	ExecuteSkillScenario(context.Context, string, agentapp.ExecRequest, agentapp.ExecMeta, []agentport.SkillActivation) (*agentapp.AgentResult, int, error)
 }
@@ -38,7 +38,7 @@ func (e workflowAgentExecutor) ExecuteAgent(
 	traceID := uuid.Must(uuid.NewV7()).String()
 	var callbackErr error
 	var cancel context.CancelFunc
-	_, streamCancel, run, err := e.agents.ExecuteStream(
+	_, streamCancel, run, _, err := e.agents.ExecuteStream(
 		ctx,
 		agentID,
 		agentapp.ExecRequest{Query: input, UserID: "workflow"},

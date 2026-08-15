@@ -641,7 +641,7 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 		MaxParallel: initState.PlanLimits.MaxConcurrentNodes,
 		MergeWave:   agentgraph.MergeReActWave,
 	}
-	if a.CheckpointEnabled && a.CheckpointStore != nil {
+	if a.CheckpointStore != nil {
 		runCfg.AfterStep = func(afterCtx context.Context, afterState agentgraph.ReActState) error {
 			return agentgraph.PersistReActCheckpoint(afterCtx, a.CheckpointStore, ec.cfg.TenantID, agentgraph.PlanCheckpointIdentity{
 				ExecutionID: ec.cfg.ExecutionID, TraceID: ec.cfg.TraceID, ConversationID: ec.cfg.ConversationID, AgentID: ec.agentID, UserID: ec.cfg.UserID,
@@ -776,7 +776,6 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 	)
 	initState := a.buildReActInitState(ec, initMessages, maxTokens)
 	initState.StuckThreshold = stuckThreshold
-	initState.CheckpointEnabled = a.CheckpointEnabled
 	if a.RecallMemoryFn != nil {
 		fn := a.RecallMemoryFn
 		initState.RecallMemoryFn = func(ctx context.Context, input map[string]any) (string, error) {
@@ -916,7 +915,6 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		// 循环侧任务 = 最新用户消息，经 WithTask 从 HistoryCap 扣减（I3）。
 		Budget: agentgraph.ComputeBudget(maxTokens, ec.cfg.OutputReserve,
 			float64(ec.cfg.CompactionSafetyRatio)).WithTask(taskTokensOf(initMessages)),
-		CheckpointEnabled:    a.CheckpointEnabled,
 		HistoryCompactor:     ec.historyCompactor,
 		PlanCheckpointWriter: a.CheckpointStore,
 		PlanCheckpointIdentity: agentgraph.PlanCheckpointIdentity{
@@ -1766,7 +1764,7 @@ func isResumableCheckpoint(s string) bool {
 func (a *BaseAgent) resumeFromCheckpoint(
 	ctx context.Context, ec agentExecContext, msgs []port.LLMMessage,
 ) (*domain.Plan, []port.SkillActivation, []port.LLMMessage) {
-	if !a.CheckpointEnabled || a.CheckpointStore == nil || ec.cfg.ExecutionID == "" {
+	if a.CheckpointStore == nil || ec.cfg.ExecutionID == "" {
 		return nil, nil, msgs
 	}
 	resumeCp, err := a.CheckpointStore.GetLatest(ctx, ec.cfg.TenantID, ec.cfg.ExecutionID)
@@ -1783,15 +1781,10 @@ func (a *BaseAgent) resumeFromCheckpoint(
 	return plan, actives, msgs
 }
 
+// restoreMessages 合并 checkpoint 快照与 chat_messages 重建的 base:
+// v2 增量快照(工具维度)append 到 base 末尾,旧二进制全量快照整体替换。
 func restoreMessages(raw json.RawMessage, fallback []port.LLMMessage) []port.LLMMessage {
-	if len(raw) == 0 {
-		return fallback
-	}
-	var saved []port.LLMMessage
-	if json.Unmarshal(raw, &saved) == nil {
-		return saved
-	}
-	return fallback
+	return agentgraph.MergeToolMessagesSnapshot(raw, fallback)
 }
 
 // skillRevisionHashes extracts skillID → revision hash from the skill catalog.

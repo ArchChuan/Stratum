@@ -339,7 +339,7 @@ func recordSelfModifyRoute(router http.Handler, tokens iamport.TokenService, rou
 	path := strings.ReplaceAll(routePath, ":id", "contract-id")
 	body := json.RawMessage(`{"name":"contract-renamed","description":"contract","systemPrompt":"prompt",
 "llmModel":"qwen-plus","maxIterations":10,"maxContextTokens":8000,"allowedSkills":[],
-"mcpToolIds":[],"knowledgeWorkspaceIds":[],"memoryScope":"user","checkpointEnabled":false}`)
+"mcpToolIds":[],"knowledgeWorkspaceIds":[],"memoryScope":"user"}`)
 	c := Case{
 		Name: "authenticated-pending", Method: http.MethodPost, Path: path, Body: body,
 		WantStatus: http.StatusAccepted,
@@ -728,12 +728,12 @@ func (contractAgentRepo) Update(context.Context, *agentdomain.AgentConfig, *audi
 	return nil
 }
 func (contractAgentRepo) UpdateSystemAssistantModel(
-	context.Context, string, string, bool, int, int, *auditdomain.ResourceChangeAuditEvent,
+	context.Context, string, string, int, int, *auditdomain.ResourceChangeAuditEvent,
 ) (*agentdomain.AgentConfig, error) {
 	return nil, nil
 }
 func (contractAgentRepo) UpdateSystemAssistantAll(
-	context.Context, string, string, bool, int, int, int, *auditdomain.ResourceChangeAuditEvent,
+	context.Context, string, string, int, int, int, *auditdomain.ResourceChangeAuditEvent,
 ) (*agentdomain.AgentConfig, error) {
 	return nil, nil
 }

@@ -36,7 +36,10 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL 
 ALTER TABLE agents DROP COLUMN IF EXISTS embed_model;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_scope TEXT NOT NULL DEFAULT 'agent';
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS system_key TEXT;
-ALTER TABLE agents ADD COLUMN IF NOT EXISTS checkpoint_enabled BOOLEAN NOT NULL DEFAULT false;
+-- 断点续接默认全开:新列默认 true,存量租户幂等回填。列保留不 DROP(滚动升级期
+-- 旧二进制仍读写),新代码已不读写该列。
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS checkpoint_enabled BOOLEAN NOT NULL DEFAULT true;
+UPDATE agents SET checkpoint_enabled = true WHERE checkpoint_enabled = false;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
 -- 采样参数(统一参数注册表 resource 层)。扁平标量 omitempty:
 -- temperature/max_tokens/compaction_recent_groups/compaction_safety_ratio,

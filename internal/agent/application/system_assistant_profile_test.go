@@ -62,7 +62,7 @@ func TestComposeSystemAssistantProfileReplacesProtectedFieldsAndPreservesTenantR
 		AllowedSkills: []string{"skill-1"}, MCPToolIDs: []string{"mcp-1"},
 		KnowledgeWorkspaceIDs:   []string{"knowledge-1"},
 		KnowledgeWorkspaceNames: []string{"Knowledge"}, KnowledgeWorkspaceDescriptions: []string{"tenant"},
-		Capabilities: []domain.AgentCapability{{Name: "tenant capability"}}, StuckThreshold: 7, CheckpointEnabled: true,
+		Capabilities: []domain.AgentCapability{{Name: "tenant capability"}}, StuckThreshold: 7,
 	}
 
 	got, err := ComposeSystemAssistantProfile(want, profile)
@@ -98,9 +98,6 @@ func TestComposeSystemAssistantProfileReplacesProtectedFieldsAndPreservesTenantR
 	if len(got.KnowledgeWorkspaceIDs) != 1 || got.KnowledgeWorkspaceIDs[0] != "knowledge-1" {
 		t.Fatal("tenant knowledge workspaces not preserved")
 	}
-	if got.CheckpointEnabled != want.CheckpointEnabled {
-		t.Fatalf("tenant checkpoint not preserved: got %v, want %v", got.CheckpointEnabled, want.CheckpointEnabled)
-	}
 	if len(got.KnowledgeWorkspaceNames) != 0 || len(got.KnowledgeWorkspaceDescriptions) != 0 ||
 		len(got.Capabilities) != 0 || got.StuckThreshold != 0 {
 		t.Fatalf("unexpected tenant extensions survived composition: %#v", got)
@@ -118,7 +115,6 @@ func TestComposeSystemAssistantProfileManagedBranchPreservesSamplingFields(t *te
 		MaxTokens:              2048,
 		CompactionRecentGroups: 4,
 		CompactionSafetyRatio:  0.8,
-		CheckpointEnabled:      true,
 	}
 
 	got, err := ComposeSystemAssistantProfile(want, profile)
@@ -129,9 +125,6 @@ func TestComposeSystemAssistantProfileManagedBranchPreservesSamplingFields(t *te
 		got.CompactionRecentGroups != want.CompactionRecentGroups ||
 		got.CompactionSafetyRatio != want.CompactionSafetyRatio {
 		t.Fatalf("managed branch dropped sampling fields: got %#v, want %#v", got, want)
-	}
-	if got.CheckpointEnabled != want.CheckpointEnabled {
-		t.Fatalf("tenant checkpoint not preserved: got %v, want %v", got.CheckpointEnabled, want.CheckpointEnabled)
 	}
 }
 
@@ -204,10 +197,10 @@ func (r systemAssistantProfileRepo) GetAll(context.Context) ([]*domain.AgentConf
 func (r systemAssistantProfileRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool) error {
 	return nil
 }
-func (r systemAssistantProfileRepo) UpdateSystemAssistantModel(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+func (r systemAssistantProfileRepo) UpdateSystemAssistantModel(_ context.Context, _ string, _ string, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	return nil, nil
 }
-func (r systemAssistantProfileRepo) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ bool, _ int, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+func (r systemAssistantProfileRepo) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ int, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	return nil, nil
 }
 func (r systemAssistantProfileRepo) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {

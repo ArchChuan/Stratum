@@ -1,4 +1,4 @@
-import { Form, Input, InputNumber, Modal, Switch, message } from 'antd';
+import { Form, Input, InputNumber, Modal, message } from 'antd';
 import { useCallback, useState } from 'react';
 
 import type { Agent, AgentFormValues } from '../model/agent';
@@ -89,7 +89,6 @@ export const AgentSelfModifyModal = ({ agent, open, onClose }: AgentSelfModifyMo
                 maxIterations: agent.maxIterations ?? AGENT_DEFAULT_MAX_ITERATIONS,
                 maxContextTokens: agent.maxContextTokens ?? AGENT_DEFAULT_MAX_CONTEXT_TOKENS,
                 memoryScope: agent.memoryScope || 'user',
-                checkpointEnabled: agent.checkpointEnabled ?? false,
               }
             : undefined
         }
@@ -118,9 +117,6 @@ export const AgentSelfModifyModal = ({ agent, open, onClose }: AgentSelfModifyMo
         </Form.Item>
         <Form.Item name="memoryScope" label="记忆范围">
           <Input />
-        </Form.Item>
-        <Form.Item name="checkpointEnabled" label="启用检查点" valuePropName="checked">
-          <Switch />
         </Form.Item>
       </Form>
     </Modal>

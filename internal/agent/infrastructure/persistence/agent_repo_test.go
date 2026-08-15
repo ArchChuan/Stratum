@@ -46,7 +46,7 @@ func TestAgentRepo_Register(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("INSERT INTO agents").
-		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "", false, "", "{}").
+		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "", "", "{}").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").
@@ -79,7 +79,7 @@ func TestAgentRepo_Register_WithMCP(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("INSERT INTO agents").
-		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "", false, "", "{}").
+		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "", "", "{}").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").
@@ -120,8 +120,8 @@ func TestAgentRepo_Get(t *testing.T) {
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("SELECT id, name").
 		WithArgs(pgxmock.AnyArg()).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "max_iterations", "max_context_tokens", "memory_scope", "system_key", "checkpoint_enabled", "created_by", "parameters"}).
-			AddRow("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 8000, "", "", false, "", "{}"))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "max_iterations", "max_context_tokens", "memory_scope", "system_key", "created_by", "parameters"}).
+			AddRow("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 8000, "", "", "", "{}"))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs("a1").
 		WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
@@ -166,7 +166,7 @@ func TestAgentRepo_GetNotFound(t *testing.T) {
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("SELECT id, name").
 		WithArgs("missing").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "max_iterations", "max_context_tokens", "memory_scope", "system_key", "checkpoint_enabled", "created_by", "parameters"}))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "max_iterations", "max_context_tokens", "memory_scope", "system_key", "created_by", "parameters"}))
 	pool.ExpectRollback()
 
 	repo := &PgAgentRepo{pool: pool}
@@ -243,7 +243,7 @@ func TestAgentRepo_Update_Success(t *testing.T) {
 	pool.ExpectQuery("SELECT COALESCE\\(system_key").
 		WithArgs("a1").WillReturnRows(pgxmock.NewRows([]string{"system_key"}).AddRow(""))
 	pool.ExpectExec("UPDATE agents").
-		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", false, "{}", "a1").
+		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", "{}", "a1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").
@@ -285,7 +285,7 @@ func TestAgentRepo_SamplingParametersRoundTrip(t *testing.T) {
 	// parameters 参数用 AnyArg:JSON map marshal 顺序不稳定,pack 内容
 	// 由 TestPackSamplingParameters 单独断言(顺序无关)。
 	pool.ExpectExec("UPDATE agents").
-		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", false, pgxmock.AnyArg(), "a1").
+		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", pgxmock.AnyArg(), "a1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").WillReturnResult(pgxmock.NewResult("DELETE", 0))
@@ -318,8 +318,8 @@ func TestAgentRepo_SamplingParametersRoundTrip(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "name", "type", "description", "system_prompt", "llm_model",
 			"max_iterations", "max_context_tokens", "memory_scope", "system_key",
-			"checkpoint_enabled", "created_by", "parameters",
-		}).AddRow("a1", "Beta", "react", "", "", "gpt-4o", 5, 0, "", "", false, "", `{"temperature":0.9,"compaction_recent_groups":3,"memory.fact_injection_top_n":8}`))
+			"created_by", "parameters",
+		}).AddRow("a1", "Beta", "react", "", "", "gpt-4o", 5, 0, "", "", "", `{"temperature":0.9,"compaction_recent_groups":3,"memory.fact_injection_top_n":8}`))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs("a1").WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
 	pool.ExpectQuery("SELECT server_id, tool_name FROM agent_mcp_tool_links").
@@ -427,7 +427,7 @@ func TestPackAllSamplingParameters_ReasoningEffortTier(t *testing.T) {
 }
 
 // TestAgentRepo_Update_MergeSQLShape pins the merge path SQL: form/API
-// updates must concatenate JSONB (`parameters || $9::jsonb`) so an old-style
+// updates must concatenate JSONB (`parameters || $8::jsonb`) so an old-style
 // client PUT that omits sampling fields cannot erase persisted values.
 // replaceParams=false is the only shape asserted here; the promote shape
 // (plain assignment) is covered by the SamplingParametersReplace test.
@@ -443,8 +443,8 @@ func TestAgentRepo_Update_MergeSQLShape(t *testing.T) {
 	pool.ExpectQuery("SELECT COALESCE\\(system_key").
 		WithArgs("a1").WillReturnRows(pgxmock.NewRows([]string{"system_key"}).AddRow(""))
 	// 完整 SQL 正则:merge 路径必须含 JSONB 拼接,禁止回落为整体覆盖。
-	pool.ExpectExec(`UPDATE agents[\s\S]*parameters\s*=\s*parameters\s*\|\|\s*\$9::jsonb[\s\S]*WHERE id=\$10`).
-		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", false, pgxmock.AnyArg(), "a1").
+	pool.ExpectExec(`UPDATE agents[\s\S]*parameters\s*=\s*parameters\s*\|\|\s*\$8::jsonb[\s\S]*WHERE id=\$9`).
+		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", pgxmock.AnyArg(), "a1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").WillReturnResult(pgxmock.NewResult("DELETE", 0))
@@ -485,7 +485,7 @@ func TestAgentRepo_SamplingParametersReplace(t *testing.T) {
 		WithArgs("a1").WillReturnRows(pgxmock.NewRows([]string{"system_key"}).AddRow(""))
 	// packAll 内容(含 null)由 TestPackAllSamplingParameters 断言。
 	pool.ExpectExec("UPDATE agents").
-		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", false, pgxmock.AnyArg(), "a1").
+		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", pgxmock.AnyArg(), "a1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").WillReturnResult(pgxmock.NewResult("DELETE", 0))
@@ -516,8 +516,8 @@ func TestAgentRepo_SamplingParametersReplace(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "name", "type", "description", "system_prompt", "llm_model",
 			"max_iterations", "max_context_tokens", "memory_scope", "system_key",
-			"checkpoint_enabled", "created_by", "parameters",
-		}).AddRow("a1", "Beta", "react", "", "", "gpt-4o", 5, 0, "", "", false, "", `{"temperature":null,"max_tokens":null,"compaction_recent_groups":2,"compaction_safety_ratio":null}`))
+			"created_by", "parameters",
+		}).AddRow("a1", "Beta", "react", "", "", "gpt-4o", 5, 0, "", "", "", `{"temperature":null,"max_tokens":null,"compaction_recent_groups":2,"compaction_safety_ratio":null}`))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs("a1").WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
 	pool.ExpectQuery("SELECT server_id, tool_name FROM agent_mcp_tool_links").
@@ -600,8 +600,8 @@ func TestAgentRepo_GetSystemAssistant(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("SELECT id, name").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "max_iterations", "max_context_tokens", "memory_scope", "system_key", "checkpoint_enabled", "created_by", "parameters"}).
-			AddRow("stratum-platform-assistant", "Stratum 系统助手", "react", "managed", "", "qwen-plus", 10, 8000, "user", "stratum.platform_assistant", false, "", "{}"))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "max_iterations", "max_context_tokens", "memory_scope", "system_key", "created_by", "parameters"}).
+			AddRow("stratum-platform-assistant", "Stratum 系统助手", "react", "managed", "", "qwen-plus", 10, 8000, "user", "stratum.platform_assistant", "", "{}"))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs("stratum-platform-assistant").WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
 	pool.ExpectQuery("SELECT server_id, tool_name FROM agent_mcp_tool_links").
@@ -633,11 +633,11 @@ func TestAgentRepo_UpdateSystemAssistantModel(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("UPDATE agents SET llm_model=\\$1.*updated_at=NOW\\(\\).*RETURNING id").
-		WithArgs("qwen-plus", "user", false, 10, 8000).WillReturnRows(pgxmock.NewRows([]string{
+		WithArgs("qwen-plus", "user", 10, 8000).WillReturnRows(pgxmock.NewRows([]string{
 		"id", "name", "type", "description", "system_prompt", "llm_model",
-		"max_iterations", "max_context_tokens", "memory_scope", "system_key", "checkpoint_enabled", "created_by",
+		"max_iterations", "max_context_tokens", "memory_scope", "system_key", "created_by",
 	}).AddRow(domain.SystemAssistantID, "平台助手", string(domain.ReActAgent), "", "", "qwen-plus", 5, 0,
-		"", domain.SystemAssistantKey, false, ""))
+		"", domain.SystemAssistantKey, ""))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs(domain.SystemAssistantID).WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
 	pool.ExpectQuery("SELECT server_id, tool_name FROM agent_mcp_tool_links").
@@ -647,7 +647,7 @@ func TestAgentRepo_UpdateSystemAssistantModel(t *testing.T) {
 	pool.ExpectCommit()
 
 	repo := &PgAgentRepo{pool: pool}
-	cfg, err := repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus", "user", false, 10, 8000, nil)
+	cfg, err := repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus", "user", 10, 8000, nil)
 	if err != nil {
 		t.Fatalf("UpdateSystemAssistantModel: %v", err)
 	}
@@ -669,11 +669,11 @@ func TestAgentRepo_UpdateSystemAssistantModelNotFound(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("UPDATE agents SET llm_model=\\$1.*updated_at=NOW\\(\\).*RETURNING id").
-		WithArgs("qwen-plus", "user", false, 10, 8000).WillReturnError(pgx.ErrNoRows)
+		WithArgs("qwen-plus", "user", 10, 8000).WillReturnError(pgx.ErrNoRows)
 	pool.ExpectRollback()
 
 	repo := &PgAgentRepo{pool: pool}
-	_, err = repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus", "user", false, 10, 8000, nil)
+	_, err = repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus", "user", 10, 8000, nil)
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("expected not found, got %v", err)
 	}
@@ -692,17 +692,17 @@ func TestAgentRepo_UpdateSystemAssistantModelRelationFailureRollsBack(t *testing
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("UPDATE agents SET llm_model=\\$1.*updated_at=NOW\\(\\).*RETURNING id").
-		WithArgs("qwen-plus", "user", false, 10, 8000).WillReturnRows(pgxmock.NewRows([]string{
+		WithArgs("qwen-plus", "user", 10, 8000).WillReturnRows(pgxmock.NewRows([]string{
 		"id", "name", "type", "description", "system_prompt", "llm_model",
-		"max_iterations", "max_context_tokens", "memory_scope", "system_key", "checkpoint_enabled", "created_by",
+		"max_iterations", "max_context_tokens", "memory_scope", "system_key", "created_by",
 	}).AddRow(domain.SystemAssistantID, "平台助手", string(domain.ReActAgent), "", "", "qwen-plus", 5, 0,
-		"", domain.SystemAssistantKey, false, ""))
+		"", domain.SystemAssistantKey, ""))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs(domain.SystemAssistantID).WillReturnError(errors.New("relations unavailable"))
 	pool.ExpectRollback()
 
 	repo := &PgAgentRepo{pool: pool}
-	cfg, err := repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus", "user", false, 10, 8000, nil)
+	cfg, err := repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus", "user", 10, 8000, nil)
 	if err == nil || cfg != nil || !strings.Contains(err.Error(), "relations unavailable") {
 		t.Fatalf("expected rollback relation error, cfg=%+v err=%v", cfg, err)
 	}
@@ -711,14 +711,14 @@ func TestAgentRepo_UpdateSystemAssistantModelRelationFailureRollsBack(t *testing
 	}
 }
 
-// systemAssistantUpdateRow builds the 13-column UPDATE ... RETURNING row shared
+// systemAssistantUpdateRow builds the 12-column UPDATE ... RETURNING row shared
 // by the UpdateSystemAssistantAll tests (parameters appended last).
 func systemAssistantUpdateRow() *pgxmock.Rows {
 	return pgxmock.NewRows([]string{
 		"id", "name", "type", "description", "system_prompt", "llm_model",
-		"max_iterations", "max_context_tokens", "memory_scope", "system_key", "checkpoint_enabled", "created_by", "parameters",
+		"max_iterations", "max_context_tokens", "memory_scope", "system_key", "created_by", "parameters",
 	}).AddRow(domain.SystemAssistantID, "平台助手", string(domain.ReActAgent), "", "", "qwen-plus", 10, 8000,
-		"user", domain.SystemAssistantKey, false, "", `{"temperature":0.5,"max_tokens":2048}`)
+		"user", domain.SystemAssistantKey, "", `{"temperature":0.5,"max_tokens":2048}`)
 }
 
 func TestAgentRepo_UpdateSystemAssistantAll_ParametersMergeAndReadback(t *testing.T) {
@@ -731,7 +731,7 @@ func TestAgentRepo_UpdateSystemAssistantAll_ParametersMergeAndReadback(t *testin
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("UPDATE agents SET llm_model=\\$1.*updated_at=NOW\\(\\).*RETURNING id").
-		WithArgs("qwen-plus", "user", false, 10, 8000, `{"max_tokens":2048}`).
+		WithArgs("qwen-plus", "user", 10, 8000, `{"max_tokens":2048}`).
 		WillReturnRows(systemAssistantUpdateRow())
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs(domain.SystemAssistantID).WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
@@ -742,7 +742,7 @@ func TestAgentRepo_UpdateSystemAssistantAll_ParametersMergeAndReadback(t *testin
 	pool.ExpectCommit()
 
 	repo := &PgAgentRepo{pool: pool}
-	cfg, err := repo.UpdateSystemAssistantAll(tenantCtx("t1"), "qwen-plus", "user", false, 10, 8000, 2048, nil)
+	cfg, err := repo.UpdateSystemAssistantAll(tenantCtx("t1"), "qwen-plus", "user", 10, 8000, 2048, nil)
 	if err != nil {
 		t.Fatalf("UpdateSystemAssistantAll: %v", err)
 	}
@@ -771,7 +771,7 @@ func TestAgentRepo_UpdateSystemAssistantAll_ZeroMaxTokensSendsEmptyFragment(t *t
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	// 0=unset:JSONB 拼接空对象,存量 parameters 不被清除。
 	pool.ExpectQuery("UPDATE agents SET llm_model=\\$1.*RETURNING id").
-		WithArgs("qwen-plus", "user", false, 10, 8000, `{}`).
+		WithArgs("qwen-plus", "user", 10, 8000, `{}`).
 		WillReturnRows(systemAssistantUpdateRow())
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs(domain.SystemAssistantID).WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
@@ -782,7 +782,7 @@ func TestAgentRepo_UpdateSystemAssistantAll_ZeroMaxTokensSendsEmptyFragment(t *t
 	pool.ExpectCommit()
 
 	repo := &PgAgentRepo{pool: pool}
-	cfg, err := repo.UpdateSystemAssistantAll(tenantCtx("t1"), "qwen-plus", "user", false, 10, 8000, 0, nil)
+	cfg, err := repo.UpdateSystemAssistantAll(tenantCtx("t1"), "qwen-plus", "user", 10, 8000, 0, nil)
 	if err != nil {
 		t.Fatalf("UpdateSystemAssistantAll: %v", err)
 	}
@@ -806,7 +806,7 @@ func TestAgentRepo_UpdateSystemAssistantAll_AuditFailureRollsBackParameters(t *t
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("UPDATE agents SET llm_model=\\$1.*RETURNING id").
-		WithArgs("qwen-plus", "user", false, 10, 8000, `{"max_tokens":2048}`).
+		WithArgs("qwen-plus", "user", 10, 8000, `{"max_tokens":2048}`).
 		WillReturnRows(systemAssistantUpdateRow())
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs(domain.SystemAssistantID).WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
@@ -825,7 +825,7 @@ func TestAgentRepo_UpdateSystemAssistantAll_AuditFailureRollsBackParameters(t *t
 		ResourceKind: auditdomain.ResourceKindAgent, ResourceID: domain.SystemAssistantID,
 		Operation: auditdomain.ChangeOpUpdate, ActorID: "user-1",
 	}
-	cfg, err := repo.UpdateSystemAssistantAll(tenantCtx("t1"), "qwen-plus", "user", false, 10, 8000, 2048, ev)
+	cfg, err := repo.UpdateSystemAssistantAll(tenantCtx("t1"), "qwen-plus", "user", 10, 8000, 2048, ev)
 	if err == nil || cfg != nil || !strings.Contains(err.Error(), "audit write failed") {
 		t.Fatalf("expected audit rollback error, cfg=%+v err=%v", cfg, err)
 	}
@@ -898,7 +898,7 @@ func TestAgentRepo_Register_WithEditors(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("INSERT INTO agents").
-		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "", false, "creator-1", "{}").
+		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "", "creator-1", "{}").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").
@@ -944,7 +944,7 @@ func TestAgentRepo_Register_ForgedEditorRollsBack(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("INSERT INTO agents").
-		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "", false, "creator-1", "{}").
+		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "", "creator-1", "{}").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").
@@ -995,7 +995,7 @@ func TestAgentRepo_Update_EditorActorRevalidates(t *testing.T) {
 		WithArgs("agent", "a1", "editor-1").
 		WillReturnRows(pgxmock.NewRows([]string{"bool"}).AddRow(true))
 	pool.ExpectExec("UPDATE agents").
-		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", false, "{}", "a1").
+		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", "{}", "a1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").

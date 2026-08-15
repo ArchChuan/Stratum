@@ -8,10 +8,71 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 const planCheckpointVersion = 1
+
+// 增量快照版本:ReAct checkpoint 只存工具维度消息(role=tool / 携带 tool_calls),
+// chat_messages 表已持久化 user/assistant 全量,恢复时把工具消息 merge 回
+// chat_messages 重建的 base,避免全量快照恢复造成重复历史。
+const messagesSnapshotVersion = 2
+
+// toolMessagesSnapshotEnvelope 是 MessagesSnapshotJSON 的 v2 信封:版本号 +
+// 工具维度消息集。旧二进制写裸 []port.LLMMessage 数组(v1,隐式版本 1)。
+type toolMessagesSnapshotEnvelope struct {
+	Version      int               `json:"version"`
+	ToolMessages []port.LLMMessage `json:"tool_messages"`
+}
+
+// ExtractToolMessages 提取工具维度消息:role=tool 或携带 tool_calls 的消息。
+// 纯文本 user/assistant 不入快照(chat_messages 已有);悬空 tool_calls 保留,
+// 与既有全量快照语义一致(恢复后 LLM 上下文仍含未完成调用)。
+func ExtractToolMessages(msgs []port.LLMMessage) []port.LLMMessage {
+	out := make([]port.LLMMessage, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Role == "tool" || len(m.ToolCalls) > 0 {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// EncodeToolMessagesSnapshot 序列化工具维度增量快照(v2 信封)。空消息集编码为
+// 空信封,恢复端视为无工具历史。
+func EncodeToolMessagesSnapshot(msgs []port.LLMMessage) (json.RawMessage, error) {
+	return json.Marshal(toolMessagesSnapshotEnvelope{
+		Version:      messagesSnapshotVersion,
+		ToolMessages: ExtractToolMessages(msgs),
+	})
+}
+
+// MergeToolMessagesSnapshot 把 checkpoint 的工具消息快照合并进恢复 base。
+// v2 信封:工具消息 append 到 base 末尾。base 由 chat_messages 历史 + 本轮 user
+// 输入重建,只含 user/assistant,与工具维度交集为空,无需去重;顺序
+// [system, history, user, assistant(tool_calls), tool, ...] 正确。
+// v1/裸数组(旧二进制全量快照,含 user/assistant/工具):整体替换 base,防止新旧
+// 混跑 append 造成重复历史。非法 JSON 返回 base(降级为无检查点恢复)。
+func MergeToolMessagesSnapshot(raw json.RawMessage, base []port.LLMMessage) []port.LLMMessage {
+	if len(raw) == 0 {
+		return base
+	}
+	var envelope toolMessagesSnapshotEnvelope
+	if err := json.Unmarshal(raw, &envelope); err == nil && envelope.Version == messagesSnapshotVersion {
+		if len(envelope.ToolMessages) == 0 {
+			return base
+		}
+		return append(base, envelope.ToolMessages...)
+	}
+	// v1/裸数组:整体替换。裸数组 JSON 解进 struct 必失败,走到这里;v2 信封对象
+	// 解进 []LLMMessage 也失败,同样降级返回 base。
+	var saved []port.LLMMessage
+	if json.Unmarshal(raw, &saved) == nil {
+		return saved
+	}
+	return base
+}
 
 // PlanCheckpointWriter is the narrow persistence boundary used by ReAct plan actions.
 type PlanCheckpointWriter interface {
@@ -187,6 +248,14 @@ func PersistReActCheckpoint(
 		ExpiresAt:        now.Add(constants.PlanCheckpointTTL),
 	}
 	if snapshot != nil {
+		// 增量快照:ReAct 只持久化工具维度消息(v2 信封),恢复时 merge 回
+		// chat_messages 重建的 base。禁止用 checkpointSnapshot 的全量 Messages
+		// (含 user/assistant,全量恢复会与 chat_messages 重复历史)。
+		if len(state.Messages) > 0 {
+			if encoded, err := EncodeToolMessagesSnapshot(state.Messages); err == nil {
+				snapshot.Messages = encoded
+			}
+		}
 		if len(snapshot.Messages) > 0 {
 			cp.MessagesSnapshotJSON = snapshot.Messages
 		}

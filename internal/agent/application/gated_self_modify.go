@@ -38,7 +38,6 @@ type SelfModifyRequest struct {
 	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
 	MemoryScope           string
-	CheckpointEnabled     bool
 }
 
 // GatedSelfModifyResult is the outcome of GatedSelfModify. DTO is populated
@@ -105,7 +104,6 @@ func (s *AgentService) GatedSelfModify(
 		MCPToolIDs:            req.MCPToolIDs,
 		KnowledgeWorkspaceIDs: req.KnowledgeWorkspaceIDs,
 		MemoryScope:           req.MemoryScope,
-		CheckpointEnabled:     req.CheckpointEnabled,
 		ActorID:               actorID,
 	})
 	if err != nil {

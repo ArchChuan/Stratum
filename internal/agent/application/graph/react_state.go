@@ -121,7 +121,6 @@ type ReActState struct {
 	PlanTemplateID         string
 	CurrentStepIndex       int
 	StepResults            []domain.StepResult
-	CheckpointEnabled      bool
 	ActivePlan             *domain.Plan
 	PlanCheckpointWriter   PlanCheckpointWriter
 	PlanCheckpointIdentity PlanCheckpointIdentity

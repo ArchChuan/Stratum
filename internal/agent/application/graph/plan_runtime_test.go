@@ -234,7 +234,7 @@ func runtimeStateWithPlan(nodes []domain.PlanNode) graph.ReActState {
 		TenantID: "tenant-1", ExecutionID: "exec-1", TraceID: "trace-1", ConversationID: "conv-1",
 		ActivePlan:   &domain.Plan{ID: "plan-1", Revision: 1, Status: domain.PlanStatusActive, Nodes: nodes},
 		PlanIDSource: func() string { return "generated" }, PlanLimits: domain.PlanLimits{MaxNodes: 10, MaxRevisions: 10, MaxConcurrentNodes: 2},
-		CheckpointEnabled: true, PlanCheckpointWriter: &checkpointWriterForPlanTest{}, PlanCheckpointIdentity: graph.PlanCheckpointIdentity{CheckpointID: "cp-1"},
+		PlanCheckpointWriter: &checkpointWriterForPlanTest{}, PlanCheckpointIdentity: graph.PlanCheckpointIdentity{CheckpointID: "cp-1"},
 	}
 }
 

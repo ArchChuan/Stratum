@@ -79,15 +79,13 @@ func ExecutePlanTool(ctx context.Context, state *ReActState, call port.ToolCall)
 	if identity.ConversationID == "" {
 		identity.ConversationID = state.ConversationID
 	}
-	if state.CheckpointEnabled {
-		if state.PlanCheckpointWriter == nil {
-			return "", ErrPlanCheckpointRequired
-		}
-		if err := PersistPlanCheckpoint(ctx, state.PlanCheckpointWriter, state.TenantID, identity, PlanCheckpointPayload{
-			Plan: next, RemainingNodeBudget: state.PlanLimits.MaxNodes - len(next.Nodes), RemainingRevisionBudget: state.PlanLimits.MaxRevisions - next.Revision,
-		}, checkpointSnapshot(state)); err != nil {
-			return "", err
-		}
+	if state.PlanCheckpointWriter == nil {
+		return "", ErrPlanCheckpointRequired
+	}
+	if err := PersistPlanCheckpoint(ctx, state.PlanCheckpointWriter, state.TenantID, identity, PlanCheckpointPayload{
+		Plan: next, RemainingNodeBudget: state.PlanLimits.MaxNodes - len(next.Nodes), RemainingRevisionBudget: state.PlanLimits.MaxRevisions - next.Revision,
+	}, checkpointSnapshot(state)); err != nil {
+		return "", err
 	}
 	state.ActivePlan = next
 	state.PlanCheckpointIdentity = identity
