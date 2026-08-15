@@ -4,13 +4,14 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { expect, test } from '@playwright/test';
+import type { BrowserContext } from '@playwright/test';
 
 import {
   createActorContexts, createGuestActor, restoreActorSession, type ActorLabel, type BrowserActor,
 } from './stateful/core/actors';
 import { createSafePool, deleteGeneratedActors } from './stateful/core/database';
 import { acceptanceError, acceptanceErrors } from './stateful/core/errors';
-import type { EvidenceRecord } from './stateful/core/evidence';
+import { emptyEvidence, type EvidenceRecord } from './stateful/core/evidence';
 import {
   capabilityDomainsForPacks, reconcileCapabilities, type ManifestCapability,
 } from './stateful/core/model';
@@ -40,8 +41,6 @@ const runtime = parseRuntimeOptions(process.env);
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 const manifestPath = fileURLToPath(new URL('../../test/e2e/stateful/manifest.json', import.meta.url));
 
-const emptyEvidence = (): EvidenceRecord => ({ ui: [], http: [], database: [] });
-
 test('system stateful acceptance', async ({ browser, browserName }) => {
   expect(browserName).toBe('chromium');
   const databaseURL = process.env.TEST_DATABASE_URL;
@@ -63,6 +62,7 @@ test('system stateful acceptance', async ({ browser, browserName }) => {
   const contexts = await createActorContexts(browser);
   const actors = {} as Record<ActorLabel, BrowserActor>;
   const evidence = emptyEvidence();
+  recordHttpRequests(contexts, evidence, runtime.urls.api);
   const completedPacks: SafeResultItem[] = [];
   const completedActions: string[] = [];
   const startedAt = new Date();
@@ -256,5 +256,22 @@ const executePack = async (
     }
   } finally {
     await page.close();
+  }
+};
+
+// recordHttpRequests 在每个 actor context 上采集后端 API 请求,供未覆盖路由差集。
+const recordHttpRequests = (
+  contexts: Record<ActorLabel, BrowserActor>,
+  evidence: EvidenceRecord,
+  backendOrigin: string,
+): void => {
+  for (const actor of Object.values(contexts)) {
+    const context: BrowserContext = actor.context;
+    context.on('request', (request) => {
+      if (request.resourceType() !== 'fetch' && request.resourceType() !== 'xhr') return;
+      const url = new URL(request.url());
+      if (url.origin !== new URL(backendOrigin).origin) return;
+      evidence.httpRequests.add(`${request.method()} ${url.pathname}`);
+    });
   }
 };
