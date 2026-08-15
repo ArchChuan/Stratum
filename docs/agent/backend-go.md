@@ -56,3 +56,10 @@ agent 子操作使用 `pkg/constants/timeouts.go` 分级常量：
 - 覆盖率 ≥80%，表驱动测试，mock 所有外部依赖，完整套件开 `-race`
 - **代码是主，测试是从**：测试断言与产品需求不符 → 改测试；实现违背需求 → 改代码。禁止"测试不过就改代码凑绿"
 - AI 写测试必须提供模板文件（如 `api/http/handler/tenant_handler_test.go`），指定"按这个模式给 X 写完整测试"，不要自由发挥
+- **新增 API 后如何发现未覆盖**:stateful E2E 跑完自动生成
+  `test/e2e/stateful/uncovered-report.json`(仅告警,不阻断)。注册路由全集来自
+  `GET /e2e/routes`(gin `Routes()` dump),与浏览器实测请求经模板匹配取差集;
+  `domain_hint` 提示该补到哪个 pack。开发者/AI 照清单补 `manifest.json` capability +
+  pack action,再跑 E2E 确认该项进入 `covered`。
+- **排除集**:基础设施探活路由(`/health`、`/livez`、`/readyz`、`/metrics`)与
+  `/e2e/routes` 自身在 spec 中显式排除,不要求浏览器 UI 覆盖。
