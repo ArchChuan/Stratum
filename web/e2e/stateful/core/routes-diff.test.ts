@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  diffRoutes, domainForPath, excludeRoutes, matchTemplate, normalizePath,
+  buildUncoveredReport, diffRoutes, domainForPath, excludeRoutes, matchTemplate, normalizePath,
   type RouteShape,
 } from './routes-diff';
 
@@ -100,5 +100,26 @@ describe('domainForPath', () => {
 
   it('falls back to other for unknown prefixes', () => {
     expect(domainForPath('/unknown-thing/x')).toBe('other');
+  });
+});
+
+describe('buildUncoveredReport', () => {
+  it('assembles a report with uncovered entries and domain hints', () => {
+    const registered: RouteShape[] = [
+      { method: 'GET', path: '/memory' },
+      { method: 'POST', path: '/mcp/servers/:serverId/reconnect' },
+      { method: 'GET', path: '/health' },
+    ];
+    const excluded = [{ method: 'GET', path: '/health', reason: 'infra' }];
+    const coveredRaw = new Set(['GET /memory']);
+    const report = buildUncoveredReport(registered, coveredRaw, excluded, 'abc123', '2026-08-15T00:00:00Z');
+    expect(report.route_total).toBe(3);
+    expect(report.generated_at).toBe('2026-08-15T00:00:00Z');
+    expect(report.tested_git_parent).toBe('abc123');
+    expect(report.covered).toEqual(['GET /memory']);
+    expect(report.uncovered).toEqual([
+      { method: 'POST', path: '/mcp/servers/:param/reconnect', domain_hint: 'mcp' },
+    ]);
+    expect(report.excluded).toEqual([{ method: 'GET', path: '/health', reason: 'infra' }]);
   });
 });

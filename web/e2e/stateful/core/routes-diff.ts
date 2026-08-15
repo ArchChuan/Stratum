@@ -100,3 +100,36 @@ export const domainForPath = (path: string): string => {
   }
   return 'other';
 };
+
+export type ExcludedRoute = RouteShape & { reason: string };
+
+export interface UncoveredReport {
+  generated_at: string;
+  tested_git_parent: string;
+  route_total: number;
+  covered: string[];
+  uncovered: Array<{ method: string; path: string; domain_hint: string }>;
+  excluded: Array<{ method: string; path: string; reason: string }>;
+}
+
+export const buildUncoveredReport = (
+  registered: RouteShape[],
+  coveredRaw: Set<string>,
+  excluded: ExcludedRoute[],
+  gitParent: string,
+  generatedAt: string,
+): UncoveredReport => {
+  const { covered, uncovered } = diffRoutes(registered, coveredRaw, excluded);
+  return {
+    generated_at: generatedAt,
+    tested_git_parent: gitParent,
+    route_total: registered.length,
+    covered,
+    uncovered: uncovered.map(({ method, path }) => ({
+      method,
+      path,
+      domain_hint: domainForPath(path),
+    })),
+    excluded: excluded.map(({ method, path, reason }) => ({ method, path, reason })),
+  };
+};

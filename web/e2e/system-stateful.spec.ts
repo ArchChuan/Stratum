@@ -17,6 +17,7 @@ import {
 } from './stateful/core/model';
 import { parseRuntimeOptions, type SystemPack } from './stateful/core/runtime';
 import { executeAcceptanceSchedule } from './stateful/core/scheduler';
+import { buildUncoveredReport, type RouteShape } from './stateful/core/routes-diff';
 import { dashboardActions } from './stateful/packs/dashboard';
 import { executeAgentPack } from './stateful/packs/agent';
 import { executeAuditPack } from './stateful/packs/audit';
@@ -155,6 +156,36 @@ test('system stateful acceptance', async ({ browser, browserName }) => {
     status: unverifiedCapabilities.length === 0 ? 'passed' : 'failed',
   };
   await writeFile(resultsPath, `${JSON.stringify(safeResults, null, 2)}\n`, { mode: 0o600 });
+  // ── 未覆盖路由报告(新用例沉淀)──────────────────────────────
+  // 仅告警不阻断:写入报告 + 打印摘要,不使测试失败。
+  // 与 unverified_capabilities(声明过没跑到→fail)互补——这个是"做到了但没说"。
+  const uncoveredReportPath = fileURLToPath(
+    new URL('../../test/e2e/stateful/uncovered-report.json', import.meta.url),
+  );
+  let uncoveredSummary = '';
+  try {
+    const excludedRoutes = [
+      { method: 'GET', path: '/health', reason: 'infra' },
+      { method: 'GET', path: '/livez', reason: 'infra' },
+      { method: 'GET', path: '/readyz', reason: 'infra' },
+      { method: 'GET', path: '/metrics', reason: 'infra' },
+      { method: 'GET', path: '/e2e/routes', reason: 'self' },
+    ];
+    const report = buildUncoveredReport(
+      await fetchRegisteredRoutes(backendURL),
+      evidence.httpRequests,
+      excludedRoutes,
+      safeResults.tested_git_parent,
+      new Date().toISOString(),
+    );
+    await writeFile(uncoveredReportPath, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
+    uncoveredSummary =
+      `${report.route_total} 注册路由,${report.covered.length} 已覆盖,` +
+      `${report.uncovered.length} 未覆盖(见 test/e2e/stateful/uncovered-report.json)`;
+  } catch (error) {
+    uncoveredSummary = `uncovered 报告生成失败(不影响验收): ${String(error)}`;
+  }
+  console.log(uncoveredSummary);
   expect(unverifiedCapabilities, 'every selected manifest capability must execute').toEqual([]);
 });
 
@@ -274,4 +305,12 @@ const recordHttpRequests = (
       evidence.httpRequests.add(`${request.method()} ${url.pathname}`);
     });
   }
+};
+
+// fetchRegisteredRoutes 从后端只读端点拉取注册路由模板全集(gin Routes() dump)。
+const fetchRegisteredRoutes = async (backendURL: string): Promise<RouteShape[]> => {
+  const response = await fetch(`${backendURL}/e2e/routes`);
+  if (!response.ok) throw new Error(`GET /e2e/routes failed: ${response.status}`);
+  const body = (await response.json()) as { routes: Array<{ method: string; path: string }> };
+  return body.routes;
 };
