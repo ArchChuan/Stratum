@@ -33,6 +33,14 @@ func (s *PgCheckpointStore) Upsert(
 		if checkpoint.RuntimeStateJSON == nil {
 			checkpoint.RuntimeStateJSON = json.RawMessage("{}")
 		}
+		// conversation_id UUID 列不接受空字符串(SQLSTATE 22P02);无
+		// conversation 的执行(如 evaluation run)必须写 NULL。
+		var conversationID any
+		if checkpoint.ConversationID == "" {
+			conversationID = nil
+		} else {
+			conversationID = checkpoint.ConversationID
+		}
 		_, err := tx.Exec(ctx,
 			`INSERT INTO agent_execution_checkpoints
 			 (execution_id, trace_id, conversation_id, agent_id, user_id, current_node,
@@ -54,7 +62,7 @@ func (s *PgCheckpointStore) Upsert(
 			    resume_reason = EXCLUDED.resume_reason,
 			    updated_at = NOW(),
 			    expires_at = EXCLUDED.expires_at`,
-			checkpoint.ExecutionID, checkpoint.TraceID, checkpoint.ConversationID,
+			checkpoint.ExecutionID, checkpoint.TraceID, conversationID,
 			checkpoint.AgentID, checkpoint.UserID, checkpoint.CurrentNode, checkpoint.StepIndex,
 			string(checkpoint.MessagesSnapshotJSON), string(checkpoint.PendingToolCallsJSON),
 			string(checkpoint.CompletedToolCallsJSON), string(checkpoint.RuntimeStateJSON),
@@ -91,7 +99,8 @@ func (s *PgCheckpointStore) GetLatest(
 	var checkpoint domain.AgentExecutionCheckpoint
 	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			`SELECT id, execution_id, trace_id, conversation_id, agent_id, user_id,
+			`SELECT id, execution_id, trace_id, COALESCE(conversation_id::text, '') AS conversation_id,
+				        agent_id, user_id,
 			        current_node, step_index, messages_snapshot_json, pending_tool_calls_json,
 			        completed_tool_calls_json, runtime_state_json, status, resume_reason,
 			        created_at, updated_at, expires_at
