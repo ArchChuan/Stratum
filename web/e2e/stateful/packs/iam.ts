@@ -36,10 +36,12 @@ const publicQuery = async <R extends QueryResultRow>(
   }
 };
 
-const waitForMutation = (page: Page, path: string, method: string) => page.waitForResponse((response) => (
+// 重负载下租户级联删除（DB+milvus+邀请清理）可慢至 10s+（backend latency 实测 10003ms），
+// 默认 20s 不够，慢操作显式传 timeout。
+const waitForMutation = (page: Page, path: string, method: string, timeout = 20000) => page.waitForResponse((response) => (
   new URL(response.url()).pathname === path
   && response.request().method() === method
-));
+), { timeout });
 
 const findTenantRow = async (page: Page, tenantName: string): Promise<Locator> => {
   const row = page.locator('tr').filter({ hasText: tenantName });
@@ -259,10 +261,16 @@ export const executeIAMPack = async ({
     }
 
     const initialAdminList = waitForMutation(systemAdminPage, '/admin/tenants', 'GET');
-    await systemAdminPage.goto(`${webURL}/admin/tenants`);
+    // goto 默认等待 load 事件，soak 负载下首次导航的模块图加载可能超过 30s 而停滞（#282 历史 flake）。
+    // 后续断言已等待真实内容（heading + GET 200 + spinner 消失），domcontentloaded 足够且更健壮。
+    await systemAdminPage.goto(`${webURL}/admin/tenants`, { waitUntil: 'domcontentloaded' });
     await expect(systemAdminPage.getByRole('heading', { name: '所有租户' })).toBeVisible();
     expect((await initialAdminList).status()).toBe(200);
-    await expect(systemAdminPage.locator('.ant-spin-spinning')).toHaveCount(0);
+    // loading 由 fetchTenants 的 finally 保证清除，spinner 消失是权威信号；
+    // soak 负载下 React 提交渲染可能超过默认 5s，给 15s 宽限。
+    await expect(systemAdminPage.locator('.ant-spin-spinning')).toHaveCount(0, { timeout: 15000 });
+    // 表格行或空态出现作为数据层就绪的内容佐证（空表时 AntD 渲染 placeholder 行）。
+    await expect(systemAdminPage.locator('.ant-table-tbody tr, .ant-empty').first()).toBeVisible();
     completed.push('iam.route.admin.tenants');
 
     const adminTenantName = `E2E-Admin-${Date.now()}`;
@@ -300,7 +308,9 @@ export const executeIAMPack = async ({
     await adminCreatedRow.locator('td').last().locator('button').nth(1).click();
     const adminCreatedConfirmation = systemAdminPage.locator('.ant-popover')
       .filter({ hasText: `确认删除租户「${adminTenantName}」？` });
-    const adminCreatedDelete = waitForMutation(systemAdminPage, `/admin/tenants/${adminTenantID}`, 'DELETE');
+    await expect(adminCreatedConfirmation).toBeVisible();
+    // 租户级联删除实测后端 latency 可达 10s+，等待窗口放宽到 30s（对齐 line 307 的 popover 模式）。
+    const adminCreatedDelete = waitForMutation(systemAdminPage, `/admin/tenants/${adminTenantID}`, 'DELETE', 30000);
     await adminCreatedConfirmation.locator('.ant-popconfirm-buttons .ant-btn-primary').click();
     expect((await adminCreatedDelete).status()).toBe(200);
     const adminDeletedRows = await publicQuery<{ count: string }>(pool,
@@ -330,7 +340,7 @@ export const executeIAMPack = async ({
     await deleteRow.locator('td').last().locator('button').nth(1).click();
     const deleteConfirmation = systemAdminPage.locator('.ant-popover').filter({ hasText: `确认删除租户「${renamedTenant}」？` });
     await expect(deleteConfirmation).toBeVisible();
-    const deleteResponse = waitForMutation(systemAdminPage, `/admin/tenants/${targetTenantID}`, 'DELETE');
+    const deleteResponse = waitForMutation(systemAdminPage, `/admin/tenants/${targetTenantID}`, 'DELETE', 30000);
     await deleteConfirmation.locator('.ant-popconfirm-buttons .ant-btn-primary').click();
     expect((await deleteResponse).status()).toBe(200);
     const deletedRows = await publicQuery<{ count: string }>(pool,

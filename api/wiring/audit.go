@@ -1,68 +1,22 @@
 package wiring
 
 import (
-	"context"
-	"time"
-
-	"github.com/byteBuilderX/stratum/internal/audit/application"
-	"github.com/byteBuilderX/stratum/internal/audit/infrastructure/persistence"
-	"github.com/byteBuilderX/stratum/pkg/constants"
-	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"go.uber.org/zap"
+
+	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
+	"github.com/byteBuilderX/stratum/internal/audit/infrastructure/persistence"
 )
 
-// Audit groups the audit recorder, query service, and cleanup worker.
+// Audit 承载资源变更审计的查询服务（平台级 HTTP 审计已废弃，见 spec F）。
 type Audit struct {
-	Recorder     *application.AuditService
-	QueryService *application.AuditService
+	QueryService auditport.ResourceChangeAuditQuery
 }
 
-func buildAudit(db *pgxpool.Pool, logger *zap.Logger) *Audit {
+func buildAudit(db *pgxpool.Pool) *Audit {
 	if db == nil {
 		return nil
 	}
-	repo := persistence.NewPgAuditRepo(db)
-	svc := application.NewAuditService(repo, observability.NoopMetrics{}, logger)
 	return &Audit{
-		Recorder:     svc,
-		QueryService: svc,
-	}
-}
-
-// AuditCleanupWorker runs periodic retention cleanup.
-type AuditCleanupWorker struct {
-	svc      *application.AuditService
-	querySvc *application.AuditService
-	interval time.Duration
-	logger   *zap.Logger
-}
-
-// NewAuditCleanupWorker creates a retention cleanup worker.
-func NewAuditCleanupWorker(svc, querySvc *application.AuditService, logger *zap.Logger) *AuditCleanupWorker {
-	return &AuditCleanupWorker{
-		svc:      svc,
-		querySvc: querySvc,
-		interval: time.Duration(constants.AuditCleanupInterval) * time.Hour,
-		logger:   logger,
-	}
-}
-
-// Run starts the periodic retention cleanup loop.
-func (w *AuditCleanupWorker) Run(ctx context.Context) {
-	ticker := time.NewTicker(w.interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			before := time.Now().Add(-time.Duration(constants.AuditRetentionDays) * 24 * time.Hour)
-			if err := w.svc.DeleteOlderThan(ctx, before); err != nil {
-				w.logger.Warn("audit cleanup: delete older failed", zap.Error(err))
-			} else {
-				w.logger.Debug("audit cleanup: completed", zap.Time("before", before))
-			}
-		case <-ctx.Done():
-			return
-		}
+		QueryService: persistence.NewPgResourceChangeAuditRepo(db),
 	}
 }

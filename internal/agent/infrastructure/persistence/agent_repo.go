@@ -84,6 +84,11 @@ func packSamplingParameters(cfg *domain.AgentConfig) (string, error) {
 	if cfg.ReasoningEffort != "" {
 		params["reasoning_effort"] = cfg.ReasoningEffort
 	}
+	// memory.* resource-scope keys are pre-filtered by the application layer
+	// (zeros dropped), so they copy verbatim onto the same JSONB.
+	for k, v := range cfg.MemoryParameters {
+		params[k] = v
+	}
 	b, err := json.Marshal(params)
 	if err != nil {
 		return "", fmt.Errorf("pack sampling parameters: %w", err)
@@ -123,6 +128,12 @@ func packAllSamplingParameters(cfg *domain.AgentConfig) (string, error) {
 		if isZeroSamplingValue(v) {
 			params[k] = nil
 		}
+	}
+	// memory.* resource params are not part of the evaluation candidate space;
+	// the application layer already merged existing values into the incoming
+	// patch, so they persist verbatim across the overall-replace write.
+	for k, v := range cfg.MemoryParameters {
+		params[k] = v
 	}
 	b, err := json.Marshal(params)
 	if err != nil {
@@ -173,7 +184,23 @@ func unpackSamplingParameters(raw string, cfg *domain.AgentConfig) error {
 		// JSON null (explicit clear) and absent both land as "" = unset.
 		cfg.ReasoningEffort = v
 	}
+	extractMemoryParameters(params, cfg)
 	return nil
+}
+
+// extractMemoryParameters copies memory.* dotted keys into cfg.MemoryParameters
+// verbatim; JSON null (explicit clear on a promote write) and absent both stay
+// absent so the pipeline falls back to the definition default and the edit
+// form sees an unset value.
+func extractMemoryParameters(params map[string]any, cfg *domain.AgentConfig) {
+	for k, v := range params {
+		if strings.HasPrefix(k, "memory.") && v != nil {
+			if cfg.MemoryParameters == nil {
+				cfg.MemoryParameters = map[string]any{}
+			}
+			cfg.MemoryParameters[k] = v
+		}
+	}
 }
 
 func numericValue(v any) (float64, bool) {

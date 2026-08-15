@@ -79,6 +79,7 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 		MCPToolIDs:             req.MCPToolIDs,
 		KnowledgeWorkspaceIDs:  req.KnowledgeWorkspaceIDs,
 		MemoryScope:            req.MemoryScope,
+		Parameters:             req.Parameters,
 		Editors:                req.Editors,
 	})
 	if err != nil {

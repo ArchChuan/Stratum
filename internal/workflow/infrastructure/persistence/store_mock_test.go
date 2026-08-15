@@ -50,7 +50,7 @@ func TestPgStore_tenantContextMismatchFailsClosed(t *testing.T) {
 	store := &PgStore{pool: mock}
 	ctx := postgres.WithTenant(context.Background(), &postgres.TenantContext{TenantID: "other"})
 
-	err := store.CreateDefinition(ctx, "t1", &domain.Definition{})
+	err := store.CreateDefinition(ctx, "t1", &domain.Definition{}, nil)
 	require.ErrorContains(t, err, "tenant context mismatch")
 	require.NoError(t, mock.ExpectationsWereMet(), "no SQL may run on a mismatched tenant")
 }
@@ -66,7 +66,7 @@ func TestPgStore_CreateDefinition_success(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
-	require.NoError(t, store.CreateDefinition(context.Background(), "t1", d))
+	require.NoError(t, store.CreateDefinition(context.Background(), "t1", d, nil))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -80,7 +80,7 @@ func TestPgStore_CreateDefinition_fails(t *testing.T) {
 		WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
-	err := store.CreateDefinition(context.Background(), "t1", &domain.Definition{})
+	err := store.CreateDefinition(context.Background(), "t1", &domain.Definition{}, nil)
 	require.ErrorIs(t, err, pgx.ErrTxClosed)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -199,7 +199,7 @@ func TestPgStore_UpdateDefinition_success(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
-	require.NoError(t, store.UpdateDefinition(context.Background(), "t1", d, 3))
+	require.NoError(t, store.UpdateDefinition(context.Background(), "t1", d, 3, nil))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -213,7 +213,7 @@ func TestPgStore_UpdateDefinition_staleRevision(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectRollback()
 
-	err := store.UpdateDefinition(context.Background(), "t1", &domain.Definition{ID: "d1", Revision: 1}, 9)
+	err := store.UpdateDefinition(context.Background(), "t1", &domain.Definition{ID: "d1", Revision: 1}, 9, nil)
 	require.ErrorIs(t, err, domain.ErrRevisionConflict)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -228,7 +228,7 @@ func TestPgStore_DeleteDefinition_success(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectCommit()
 
-	require.NoError(t, store.DeleteDefinition(context.Background(), "t1", "d1"))
+	require.NoError(t, store.DeleteDefinition(context.Background(), "t1", "d1", nil))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -242,7 +242,7 @@ func TestPgStore_DeleteDefinition_notFound(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	mock.ExpectRollback()
 
-	err := store.DeleteDefinition(context.Background(), "t1", "nope")
+	err := store.DeleteDefinition(context.Background(), "t1", "nope", nil)
 	require.ErrorIs(t, err, domain.ErrNotFound)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -258,7 +258,7 @@ func TestPgStore_CreateVersion_success(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
-	require.NoError(t, store.CreateVersion(context.Background(), "t1", v))
+	require.NoError(t, store.CreateVersion(context.Background(), "t1", v, nil))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -369,7 +369,7 @@ func TestPgStore_CreateNextVersion_success(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
-	created, err := store.CreateNextVersion(context.Background(), "t1", definition, "v-new")
+	created, err := store.CreateNextVersion(context.Background(), "t1", definition, "v-new", nil)
 	require.NoError(t, err)
 	require.NotNil(t, created)
 	require.Equal(t, int64(2), created.Number)
@@ -381,7 +381,7 @@ func TestPgStore_CreateNextVersion_invalidSpec(t *testing.T) {
 	store := &PgStore{pool: mock}
 
 	// Empty spec fails validation before any SQL runs.
-	_, err := store.CreateNextVersion(context.Background(), "t1", &domain.Definition{}, "v-new")
+	_, err := store.CreateNextVersion(context.Background(), "t1", &domain.Definition{}, "v-new", nil)
 	require.ErrorIs(t, err, domain.ErrInvalidSpec)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -400,7 +400,7 @@ func TestPgStore_CreateNextVersion_definitionMissing(t *testing.T) {
 		ID:          "nope",
 		Spec:        domain.Spec{Nodes: []domain.Node{{ID: "n1", Type: domain.NodeTypeApproval}}},
 		InputSchema: domain.InputSchema{TaskLabel: "task"},
-	}, "v-new")
+	}, "v-new", nil)
 	require.ErrorIs(t, err, domain.ErrNotFound)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

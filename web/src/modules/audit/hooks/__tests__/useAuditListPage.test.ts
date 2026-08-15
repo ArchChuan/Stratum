@@ -11,16 +11,14 @@ vi.spyOn(message, 'error').mockImplementation(() => undefined as never);
 
 const event = {
   id: 'evt-1',
-  tenant_id: 't1',
-  actor: { actor_type: 'user', actor_id: 'admin-1' },
-  action: 'POST /v1/agents',
-  resource_type: 'http_request',
-  resource_id: 'agent-1',
-  request_id: 'req-1',
-  trace_id: 'trace-1',
-  risk_level: 'medium',
-  outcome: 'success',
-  occurred_at: '2026-08-09T11:00:00Z',
+  resource_kind: 'workflow',
+  resource_id: 'wf-1',
+  operation: 'create',
+  actor_id: 'admin-1',
+  actor_name: '管理员甲',
+  created_at: '2026-08-09T11:00:00Z',
+  before: null,
+  after: { status: 'draft' },
 };
 
 describe('useAuditListPage', () => {
@@ -52,15 +50,15 @@ describe('useAuditListPage', () => {
     listEvents.mockResolvedValue({ events: [], total: 0 });
 
     await act(async () => {
-      result.current.applyFilters({ risk_level: 'high', outcome: 'error' });
+      result.current.applyFilters({ resourceKind: 'workflow', actorName: '管理员甲' });
     });
     expect(listEvents).toHaveBeenLastCalledWith({
       page: 1,
       pageSize: 20,
-      risk_level: 'high',
-      outcome: 'error',
+      resourceKind: 'workflow',
+      actorName: '管理员甲',
     });
-    expect(result.current.filters).toEqual({ risk_level: 'high', outcome: 'error' });
+    expect(result.current.filters).toEqual({ resourceKind: 'workflow', actorName: '管理员甲' });
   });
 
   it('refetches with the active filters on page change', async () => {
@@ -69,14 +67,14 @@ describe('useAuditListPage', () => {
     listEvents.mockResolvedValue({ events: [], total: 2 });
 
     await act(async () => {
-      result.current.applyFilters({ risk_level: 'high' });
+      result.current.applyFilters({ resourceKind: 'workflow' });
     });
     listEvents.mockResolvedValue({ events: [], total: 2 });
 
     await act(async () => {
       await result.current.handlePageChange(2, 10);
     });
-    expect(listEvents).toHaveBeenLastCalledWith({ page: 2, pageSize: 10, risk_level: 'high' });
+    expect(listEvents).toHaveBeenLastCalledWith({ page: 2, pageSize: 10, resourceKind: 'workflow' });
   });
 
   it('opens a detail and loads the full event', async () => {

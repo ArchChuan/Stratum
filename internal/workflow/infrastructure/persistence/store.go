@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
@@ -55,7 +56,7 @@ func (s *PgStore) exec(ctx context.Context, tenantID string, fn func(context.Con
 	return postgres.ExecTenantWith(ctx, s.pool, tenantID, fn)
 }
 
-func (s *PgStore) CreateDefinition(ctx context.Context, tenantID string, d *domain.Definition) error {
+func (s *PgStore) CreateDefinition(ctx context.Context, tenantID string, d *domain.Definition, ev *auditdomain.ResourceChangeAuditEvent) error {
 	spec, err := json.Marshal(d.Spec)
 	if err != nil {
 		return err
@@ -65,8 +66,10 @@ func (s *PgStore) CreateDefinition(ctx context.Context, tenantID string, d *doma
 		return err
 	}
 	return s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO workflow_definitions (id,name,description,draft_revision,draft_spec_json,draft_input_schema_json) VALUES ($1,$2,$3,$4,$5,$6)`, d.ID, d.Name, d.Description, d.Revision, string(spec), string(inputSchema))
-		return err
+		if _, err := tx.Exec(ctx, `INSERT INTO workflow_definitions (id,name,description,draft_revision,draft_spec_json,draft_input_schema_json) VALUES ($1,$2,$3,$4,$5,$6)`, d.ID, d.Name, d.Description, d.Revision, string(spec), string(inputSchema)); err != nil {
+			return err
+		}
+		return insertChangeAudit(ctx, tx, ev)
 	})
 }
 
@@ -125,7 +128,7 @@ func (s *PgStore) ListDefinitions(
 	return rows, total, err
 }
 
-func (s *PgStore) UpdateDefinition(ctx context.Context, tenantID string, d *domain.Definition, expected int64) error {
+func (s *PgStore) UpdateDefinition(ctx context.Context, tenantID string, d *domain.Definition, expected int64, ev *auditdomain.ResourceChangeAuditEvent) error {
 	spec, err := json.Marshal(d.Spec)
 	if err != nil {
 		return err
@@ -142,11 +145,11 @@ func (s *PgStore) UpdateDefinition(ctx context.Context, tenantID string, d *doma
 		if tag.RowsAffected() != 1 {
 			return domain.ErrRevisionConflict
 		}
-		return nil
+		return insertChangeAudit(ctx, tx, ev)
 	})
 }
 
-func (s *PgStore) DeleteDefinition(ctx context.Context, tenantID, id string) error {
+func (s *PgStore) DeleteDefinition(ctx context.Context, tenantID, id string, ev *auditdomain.ResourceChangeAuditEvent) error {
 	return s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `DELETE FROM workflow_definitions WHERE id=$1`, id)
 		if err != nil {
@@ -155,11 +158,11 @@ func (s *PgStore) DeleteDefinition(ctx context.Context, tenantID, id string) err
 		if tag.RowsAffected() != 1 {
 			return domain.ErrNotFound
 		}
-		return nil
+		return insertChangeAudit(ctx, tx, ev)
 	})
 }
 
-func (s *PgStore) CreateVersion(ctx context.Context, tenantID string, v *domain.Version) error {
+func (s *PgStore) CreateVersion(ctx context.Context, tenantID string, v *domain.Version, ev *auditdomain.ResourceChangeAuditEvent) error {
 	spec, err := json.Marshal(v.Spec)
 	if err != nil {
 		return err
@@ -169,8 +172,10 @@ func (s *PgStore) CreateVersion(ctx context.Context, tenantID string, v *domain.
 		return err
 	}
 	return s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO workflow_versions (id,definition_id,version_no,name,description,spec_json,input_schema_json) VALUES ($1,$2,$3,$4,$5,$6,$7)`, v.ID, v.DefinitionID, v.Number, v.Name, v.Description, string(spec), string(inputSchema))
-		return err
+		if _, err := tx.Exec(ctx, `INSERT INTO workflow_versions (id,definition_id,version_no,name,description,spec_json,input_schema_json) VALUES ($1,$2,$3,$4,$5,$6,$7)`, v.ID, v.DefinitionID, v.Number, v.Name, v.Description, string(spec), string(inputSchema)); err != nil {
+			return err
+		}
+		return insertChangeAudit(ctx, tx, ev)
 	})
 }
 
@@ -236,7 +241,7 @@ func (s *PgStore) NextVersionNumber(ctx context.Context, tenantID, definitionID 
 	return number, err
 }
 
-func (s *PgStore) CreateNextVersion(ctx context.Context, tenantID string, definition *domain.Definition, versionID string) (*domain.Version, error) {
+func (s *PgStore) CreateNextVersion(ctx context.Context, tenantID string, definition *domain.Definition, versionID string, ev *auditdomain.ResourceChangeAuditEvent) (*domain.Version, error) {
 	if err := domain.ValidateSpec(definition.Spec); err != nil {
 		return nil, err
 	}
@@ -265,6 +270,9 @@ func (s *PgStore) CreateNextVersion(ctx context.Context, tenantID string, defini
 			return err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO workflow_versions (id,definition_id,version_no,name,description,spec_json,input_schema_json) VALUES ($1,$2,$3,$4,$5,$6,$7)`, version.ID, version.DefinitionID, version.Number, version.Name, version.Description, string(raw), string(inputSchema)); err != nil {
+			return err
+		}
+		if err := insertChangeAudit(ctx, tx, ev); err != nil {
 			return err
 		}
 		created = version

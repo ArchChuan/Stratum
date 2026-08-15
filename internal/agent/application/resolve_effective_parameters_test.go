@@ -39,6 +39,10 @@ func (stubParametersProvider) ValidateResource(_ context.Context, _ map[string]a
 	return nil
 }
 
+func (stubParametersProvider) ValidateResourceKey(_ context.Context, _ string, _ any) error {
+	return nil
+}
+
 // testParamAgent is the smallest Agent that carries a config; execution
 // internals are irrelevant to the resolve step.
 type testParamAgent struct{ cfg *domain.AgentConfig }
@@ -172,6 +176,9 @@ func TestValidateSamplingParamsRejectsOutOfBoundsWithSentinel(t *testing.T) {
 type failingValidateProvider struct{ stubParametersProvider }
 
 func (failingValidateProvider) ValidateResource(_ context.Context, _ map[string]any) error {
+	return errors.New("agent.temperature: must be <= 2, got 3.5")
+}
+func (failingValidateProvider) ValidateResourceKey(_ context.Context, _ string, _ any) error {
 	return errors.New("agent.temperature: must be <= 2, got 3.5")
 }
 

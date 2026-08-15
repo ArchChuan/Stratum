@@ -149,7 +149,7 @@ func TestPgExperimentRepositoryHumanGates(t *testing.T) {
 			ResourceKind: duplicate.ResourceKind, ResourceID: duplicate.ResourceID,
 			StableRevisionID: duplicate.StableRevisionID, CanaryRevisionID: duplicate.CanaryRevisionID,
 			CanaryPercent: duplicate.Stage, ExperimentID: duplicate.ID,
-		}); !errors.Is(err, domain.ErrExperimentDeploymentConflict) {
+		}, nil); !errors.Is(err, domain.ErrExperimentDeploymentConflict) {
 			t.Fatalf("active deployment conflict error=%v", err)
 		}
 		if _, err := repo.ApplyCommand(ctx, tenantID, promote.ID, domain.CommandPromote,
@@ -228,7 +228,7 @@ func TestPgExperimentRepositoryHumanGates(t *testing.T) {
 				ResourceKind: kind, ResourceID: experiment.ResourceID,
 				StableRevisionID: experiment.StableRevisionID, CanaryRevisionID: experiment.CanaryRevisionID,
 				CanaryPercent: experiment.Stage, ExperimentID: experiment.ID, PolicyVersion: 1,
-			}); err != nil {
+			}, nil); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := repo.ApplyCommand(ctx, tenantID, experiment.ID, domain.CommandPromote,
@@ -338,7 +338,7 @@ func createCommandExperiment(
 		CanaryPercent: 5, ExperimentID: experiment.ID, PolicyVersion: 1,
 	}
 	seedCommandExperimentRevisions(t, ctx, repo.pool.(*pgxpool.Pool), tenantID, experiment)
-	if err := repo.Create(ctx, tenantID, experiment, deployment); err != nil {
+	if err := repo.Create(ctx, tenantID, experiment, deployment, nil); err != nil {
 		t.Fatal(err)
 	}
 	return experiment

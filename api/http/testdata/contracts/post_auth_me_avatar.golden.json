@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "POST",
+    "path": "/auth/me/avatar",
+    "body": {
+      "error": "authentication required"
+    },
+    "want_status": 401
+  }
+]

@@ -20,4 +20,10 @@ type ParametersProvider interface {
 	// out-of-bounds values return an error; callers skip 0=unset values
 	// before invoking.
 	ValidateResource(ctx context.Context, declared map[string]any) error
+	// ValidateResourceKey validates a single resource-scope value by its full
+	// dotted registry key (e.g. "memory.max_facts_per_extraction").
+	// ValidateResource cannot handle dotted keys (it maps bare evaluation
+	// names), so memory resource params use direct-key validation. A nil
+	// provider (db unavailable) degrades to no-op, matching ValidateResource.
+	ValidateResourceKey(ctx context.Context, key string, value any) error
 }

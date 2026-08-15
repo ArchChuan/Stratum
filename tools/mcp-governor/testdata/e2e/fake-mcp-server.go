@@ -76,6 +76,8 @@ func main() {
 func runStubbornTree() {
 	signal.Ignore(os.Interrupt, os.Signal(syscall.SIGTERM), os.Signal(syscall.SIGHUP))
 	writeTreePID("child", os.Getpid())
+	// e2e 测试辅助：刻意拉起的子进程树，完全受控，非注入面。
+	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
 	grandchild := exec.Command(os.Args[0], "stubborn-grandchild")
 	grandchild.Stdin = nil
 	grandchild.Stdout = os.Stdout

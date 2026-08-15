@@ -1,10 +1,12 @@
-import { Descriptions, Drawer, Skeleton, Tag, Typography } from 'antd';
+import { Descriptions, Drawer, Spin, Tag, Typography } from 'antd';
 
-import type { AuditEvent } from '../model/audit';
-import { OUTCOME_COLORS, OUTCOME_LABELS, RISK_LEVEL_COLORS, RISK_LEVEL_LABELS } from '../model/audit';
+import type { ResourceChangeAudit } from '../model/audit';
+import { OPERATION_LABELS } from '../model/audit';
+
+import { RESOURCE_KIND_OPTIONS } from '@/constants';
 
 interface AuditEventDrawerProps {
-  event: AuditEvent | null;
+  event: ResourceChangeAudit | null;
   loading: boolean;
   open: boolean;
   onClose: () => void;
@@ -38,43 +40,37 @@ const DiffBlock = ({ title, value }: { title: string; value?: unknown }) => {
 
 export const AuditEventDrawer = ({ event, loading, open, onClose }: AuditEventDrawerProps) => {
   return (
-    <Drawer title="审计事件详情" open={open} width={640} onClose={onClose}>
-      {loading ? (
-        <Skeleton active paragraph={{ rows: 8 }} />
-      ) : event ? (
-        <div>
-          <Descriptions size="small" column={1} bordered>
-            <Descriptions.Item label="事件 ID">{event.id}</Descriptions.Item>
-            <Descriptions.Item label="租户">{event.tenant_id}</Descriptions.Item>
-            <Descriptions.Item label="操作者">
-              {event.actor.actor_id}
-              <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
-                ({event.actor.actor_type})
-              </Typography.Text>
-            </Descriptions.Item>
-            <Descriptions.Item label="操作">{event.action}</Descriptions.Item>
-            <Descriptions.Item label="资源类型">{event.resource_type}</Descriptions.Item>
-            <Descriptions.Item label="资源 ID">{event.resource_id}</Descriptions.Item>
-            <Descriptions.Item label="风险">
-              <Tag color={RISK_LEVEL_COLORS[event.risk_level]}>{RISK_LEVEL_LABELS[event.risk_level] || event.risk_level}</Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="结果">
-              <Tag color={OUTCOME_COLORS[event.outcome]}>{OUTCOME_LABELS[event.outcome] || event.outcome}</Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="请求 ID">{event.request_id}</Descriptions.Item>
-            <Descriptions.Item label="Trace ID">{event.trace_id}</Descriptions.Item>
-            <Descriptions.Item label="发生时间">{new Date(event.occurred_at).toLocaleString()}</Descriptions.Item>
-          </Descriptions>
+    <Drawer title="审计详情" open={open} width={640} onClose={onClose}>
+      <Spin spinning={loading}>
+        {event ? (
+          <div>
+            <Descriptions size="small" column={1} bordered>
+              <Descriptions.Item label="时间">{new Date(event.created_at).toLocaleString()}</Descriptions.Item>
+              <Descriptions.Item label="操作者">
+                {event.actor_name}
+                <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
+                  ({event.actor_id})
+                </Typography.Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="资源类型">
+                {RESOURCE_KIND_OPTIONS.find((o) => o.value === event.resource_kind)?.label || event.resource_kind}
+              </Descriptions.Item>
+              <Descriptions.Item label="资源 ID">{event.resource_id}</Descriptions.Item>
+              <Descriptions.Item label="操作">
+                <Tag color="blue">{OPERATION_LABELS[event.operation] || event.operation}</Tag>
+              </Descriptions.Item>
+            </Descriptions>
 
-          <div style={{ marginTop: 16 }}>
-            <Typography.Title level={5}>变更快照</Typography.Title>
-            <DiffBlock title="变更前" value={event.before} />
-            <DiffBlock title="变更后" value={event.after} />
+            <div style={{ marginTop: 16 }}>
+              <Typography.Title level={5}>变更投影</Typography.Title>
+              <DiffBlock title="变更前" value={event.before} />
+              <DiffBlock title="变更后" value={event.after} />
+            </div>
           </div>
-        </div>
-      ) : (
-        <Typography.Text type="secondary">未找到审计事件</Typography.Text>
-      )}
+        ) : (
+          <Typography.Text type="secondary">未找到审计记录</Typography.Text>
+        )}
+      </Spin>
     </Drawer>
   );
 };

@@ -1,6 +1,9 @@
 // Behavioral constants — no UI styling numbers here.
 
 export const API_DEFAULT_TIMEOUT_MS = 10_000;
+// 注册创建租户需 provisioning 完整 tenant schema（百级 DDL），中等负载即可超 10s；
+// 低频重操作单独给更长预算，避免中途被 abort 留下半 provisioned 租户。
+export const AUTH_REGISTER_TIMEOUT_MS = 30_000;
 export const AGENT_EXEC_TIMEOUT_MS = 120_000;
 export const AGENT_DEFAULT_MAX_ITERATIONS = 10;
 export const AGENT_MIN_MAX_ITERATIONS = 1;
@@ -84,6 +87,15 @@ export const MEMORY_SCOPE_OPTIONS = [
 export const MEMORY_DIAGNOSTICS_REFRESH_INTERVAL_MS = 30000; // 30s
 export const MEMORY_TOP_ENTITIES_LIMIT = 10;
 
+// 记忆注入参数控件 bounds，对齐 registry 中 memory.* resource-scope 的 VisualHint
+// （agents.parameters JSONB 的 dotted 键）。
+export const MEMORY_MAX_FACTS_MIN = 1;
+export const MEMORY_MAX_FACTS_MAX = 50;
+export const MEMORY_FACT_INJECTION_MIN = 1;
+export const MEMORY_FACT_INJECTION_MAX = 20;
+export const MEMORY_HISTORY_INJECTION_MIN = 0;
+export const MEMORY_HISTORY_INJECTION_MAX = 10;
+
 export const CHUNKING_STRATEGY_OPTIONS = [
   { value: 'structure_recursive', label: '结构感知（推荐）— Markdown 标题分层 + 递归分块' },
   { value: 'recursive', label: '递归分块 — 按字符边界递归切分' },
@@ -97,4 +109,14 @@ export const REASONING_EFFORT_OPTIONS = [
   { value: 'low', label: '低 — 更快的响应，更少 token 消耗' },
   { value: 'medium', label: '中 — 平衡质量与成本' },
   { value: 'high', label: '高 — 更深推理，token 消耗放大' },
+];
+
+// 资源变更审计的资源类型（与 internal/audit/domain/change_audit.go 对齐）。
+export const RESOURCE_KIND_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'agent', label: 'Agent' },
+  { value: 'skill', label: '技能' },
+  { value: 'mcp', label: 'MCP 服务器' },
+  { value: 'knowledge', label: '知识库' },
+  { value: 'workflow', label: '工作流' },
+  { value: 'evaluation', label: '评测' },
 ];

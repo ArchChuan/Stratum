@@ -34,9 +34,6 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.CORSMiddleware(c.Config.FrontendURL))
 	r.Use(middleware.MetricsMiddleware(c.Platform.Metrics))
-	if c.Audit != nil && c.Audit.Recorder != nil {
-		r.Use(middleware.AuditMiddleware(c.Audit.Recorder))
-	}
 
 	requireActive := middleware.RequireActiveTenant(c.DB())
 
@@ -576,8 +573,8 @@ func registerAudit(r *gin.Engine, c *wiring.Container, requireActive gin.Handler
 		return
 	}
 	h := handler.NewAuditHandler(c.Audit.QueryService, c.Logger)
-	// 审计日志管理面:仅 global admin 可查询,与前端菜单/路由守卫统一。
-	auditGroup := r.Group("/audit", protectedTenantMiddleware(c, middleware.RequireGlobalAdmin())...)
+	// 审计日志:租户内 admin/owner 可见(owner 经 admin gate 通过)。
+	auditGroup := r.Group("/audit", protectedTenantMiddleware(c, middleware.RequireTenantRole("admin"))...)
 	auditGroup.Use(requireActive)
 	auditGroup.GET("/events", h.ListEvents)
 	auditGroup.GET("/events/:id", h.GetEvent)

@@ -30,6 +30,7 @@ import (
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
@@ -120,6 +121,7 @@ func buildDDDContainer(cfg *config.Config, key *rsa.PrivateKey, logger *zap.Logg
 			InvitationService: iamapp.NewInvitationService(contractInvR{}),
 		},
 		Scheduler: &wiring.Scheduler{Service: contractSchedulerStub(logger)},
+		Audit:     &wiring.Audit{QueryService: contractAuditRepo{}},
 	}
 }
 
@@ -128,6 +130,18 @@ func buildDDDContainer(cfg *config.Config, key *rsa.PrivateKey, logger *zap.Logg
 func contractSchedulerStub(logger *zap.Logger) *schedapp.Service {
 	return schedapp.NewService(contractSchedRepo{}, contractSchedRunner{}, contractSchedResolver{},
 		observability.NoopMetrics{}, logger, func() string { return "contract-task" }, time.Now)
+}
+
+// contractAuditRepo implements auditport.ResourceChangeAuditQuery so the DDD
+// router records deterministic resource-change audit responses.
+type contractAuditRepo struct{}
+
+func (contractAuditRepo) List(_ context.Context, _ string, _ auditport.ResourceChangeAuditFilter) ([]auditport.ResourceChangeAuditRow, int, error) {
+	return nil, 0, nil
+}
+
+func (contractAuditRepo) GetByID(_ context.Context, _, _ string) (*auditport.ResourceChangeAuditRow, error) {
+	return nil, nil
 }
 
 type contractSchedRepo struct{}
@@ -180,7 +194,8 @@ func isDDDAuthOverride(routePath string) (bool, iamport.TokenClaims) {
 		return true, adminClaims
 	case strings.HasPrefix(routePath, "/tenant/"), strings.HasPrefix(routePath, "/workflows"),
 		strings.HasPrefix(routePath, "/workflow-runs"), strings.HasPrefix(routePath, "/workflow-approvals"),
-		strings.HasPrefix(routePath, "/operation-proposals"), strings.HasPrefix(routePath, "/scheduled-tasks"):
+		strings.HasPrefix(routePath, "/operation-proposals"), strings.HasPrefix(routePath, "/scheduled-tasks"),
+		strings.HasPrefix(routePath, "/audit"):
 		return true, adminClaims
 	default:
 		return false, iamport.TokenClaims{}
@@ -446,7 +461,7 @@ func (contractProvRuntime) Health(_ context.Context, _ llmdomain.Provider) error
 
 type contractDefRepo struct{}
 
-func (contractDefRepo) CreateDefinition(_ context.Context, _ string, _ *workflowdomain.Definition) error {
+func (contractDefRepo) CreateDefinition(_ context.Context, _ string, _ *workflowdomain.Definition, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (contractDefRepo) GetDefinition(_ context.Context, _ string, _ string) (*workflowdomain.Definition, error) {
@@ -458,17 +473,19 @@ func (contractDefRepo) GetDefinition(_ context.Context, _ string, _ string) (*wo
 		UpdatedAt:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}, nil
 }
-func (contractDefRepo) UpdateDefinition(_ context.Context, _ string, _ *workflowdomain.Definition, _ int64) error {
+func (contractDefRepo) UpdateDefinition(_ context.Context, _ string, _ *workflowdomain.Definition, _ int64, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (contractDefRepo) DeleteDefinition(_ context.Context, _ string, _ string) error { return nil }
+func (contractDefRepo) DeleteDefinition(_ context.Context, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (contractDefRepo) ListDefinitions(_ context.Context, _ string, _ workflowport.DefinitionListQuery) ([]workflowdomain.Definition, int, error) {
 	return nil, 0, nil
 }
 
 type contractVerRepo struct{}
 
-func (contractVerRepo) CreateVersion(_ context.Context, _ string, _ *workflowdomain.Version) error {
+func (contractVerRepo) CreateVersion(_ context.Context, _ string, _ *workflowdomain.Version, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (contractVerRepo) GetVersion(_ context.Context, _ string, _ string) (*workflowdomain.Version, error) {
@@ -628,7 +645,7 @@ func (contractExpRepo) ListPendingExperiments(context.Context, string, string, s
 func (contractExpRepo) ListRunningExperiments(context.Context, string) ([]domain.Experiment, error) {
 	return nil, nil
 }
-func (contractExpRepo) Create(context.Context, string, domain.Experiment, domain.Deployment) error {
+func (contractExpRepo) Create(context.Context, string, domain.Experiment, domain.Deployment, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (contractExpRepo) Get(context.Context, string, string) (domain.Experiment, bool, error) {

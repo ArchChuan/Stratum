@@ -5,17 +5,16 @@ import { useCallback } from 'react';
 
 import { AuditEventDrawer } from '../components/AuditEventDrawer';
 import { useAuditListPage } from '../hooks/useAuditListPage';
-import type { AuditEvent } from '../model/audit';
-import { OUTCOME_COLORS, OUTCOME_LABELS, RISK_LEVEL_COLORS, RISK_LEVEL_LABELS } from '../model/audit';
+import type { ResourceChangeAudit } from '../model/audit';
+import { OPERATION_LABELS } from '../model/audit';
 
+import { RESOURCE_KIND_OPTIONS } from '@/constants';
 import { EmptyHint } from '@/shared/ui';
 
 interface FilterFormValues {
   range?: [Dayjs, Dayjs];
-  action?: string;
-  risk_level?: string;
-  outcome?: string;
-  resource_type?: string;
+  actorName?: string;
+  resourceKind?: string;
 }
 
 export const AuditEventsPage = () => {
@@ -41,10 +40,8 @@ export const AuditEventsPage = () => {
     applyFilters({
       from: values.range?.[0]?.toISOString(),
       to: values.range?.[1]?.toISOString(),
-      action: values.action?.trim() || undefined,
-      risk_level: values.risk_level,
-      outcome: values.outcome,
-      resource_type: values.resource_type?.trim() || undefined,
+      actorName: values.actorName?.trim() || undefined,
+      resourceKind: values.resourceKind,
     });
   }, [applyFilters]);
 
@@ -53,26 +50,24 @@ export const AuditEventsPage = () => {
     applyFilters({});
   }, [applyFilters, form]);
 
-  const columns: ColumnsType<AuditEvent> = [
+  const columns: ColumnsType<ResourceChangeAudit> = [
     {
       title: '时间',
-      dataIndex: 'occurred_at',
+      dataIndex: 'created_at',
       width: 160,
       render: (v: string) => new Date(v).toLocaleString(),
     },
-    { title: '操作者', dataIndex: ['actor', 'actor_id'], ellipsis: true, width: 140 },
-    { title: '操作', dataIndex: 'action', ellipsis: true },
+    { title: '操作者', dataIndex: 'actor_name', ellipsis: true, width: 140 },
     {
-      title: '风险·结果',
-      key: 'risk_outcome',
+      title: '资源类型',
+      dataIndex: 'resource_kind',
       width: 120,
-      render: (_, record) => (
-        <Space size={4}>
-          <Tag color={RISK_LEVEL_COLORS[record.risk_level]}>{RISK_LEVEL_LABELS[record.risk_level] || record.risk_level}</Tag>
-          <Tag color={OUTCOME_COLORS[record.outcome]}>{OUTCOME_LABELS[record.outcome] || record.outcome}</Tag>
-        </Space>
+      render: (v: string) => (
+        <Tag color="blue">{RESOURCE_KIND_OPTIONS.find((o) => o.value === v)?.label || v}</Tag>
       ),
     },
+    { title: '操作', dataIndex: 'operation', width: 100, render: (v: string) => OPERATION_LABELS[v] || v },
+    { title: '资源 ID', dataIndex: 'resource_id', ellipsis: true },
     {
       title: '操作',
       key: 'actions',
@@ -92,7 +87,7 @@ export const AuditEventsPage = () => {
           审计日志
         </Typography.Title>
         <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-          租户内操作审计事件，高风险变更留存变更前后快照
+          租户内资源变更审计，记录 agent / skill / MCP / 知识库 / 工作流 / 评测的创建、更新、删除与生命周期操作
         </Typography.Text>
       </div>
 
@@ -100,34 +95,11 @@ export const AuditEventsPage = () => {
         <Form.Item name="range" label="时间范围">
           <DatePicker.RangePicker showTime />
         </Form.Item>
-        <Form.Item name="action" label="操作">
-          <Input placeholder="如 POST /v1/agents" allowClear style={{ width: 180 }} />
+        <Form.Item name="actorName" label="操作者">
+          <Input placeholder="按姓名或登录名模糊搜索" allowClear style={{ width: 180 }} />
         </Form.Item>
-        <Form.Item name="risk_level" label="风险">
-          <Select
-            placeholder="全部"
-            allowClear
-            style={{ width: 96 }}
-            options={[
-              { value: 'low', label: '低' },
-              { value: 'medium', label: '中' },
-              { value: 'high', label: '高' },
-            ]}
-          />
-        </Form.Item>
-        <Form.Item name="outcome" label="结果">
-          <Select
-            placeholder="全部"
-            allowClear
-            style={{ width: 96 }}
-            options={[
-              { value: 'success', label: '成功' },
-              { value: 'error', label: '失败' },
-            ]}
-          />
-        </Form.Item>
-        <Form.Item name="resource_type" label="资源类型">
-          <Input placeholder="如 http_request" allowClear style={{ width: 140 }} />
+        <Form.Item name="resourceKind" label="资源类型">
+          <Select placeholder="全部" allowClear style={{ width: 160 }} options={RESOURCE_KIND_OPTIONS} />
         </Form.Item>
         <Form.Item>
           <Space>
@@ -139,7 +111,7 @@ export const AuditEventsPage = () => {
         </Form.Item>
       </Form>
 
-      <Table<AuditEvent>
+      <Table<ResourceChangeAudit>
         rowKey="id"
         columns={columns}
         dataSource={events}

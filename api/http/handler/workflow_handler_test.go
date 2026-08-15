@@ -58,15 +58,15 @@ type workflowDefinitionFake struct {
 	deletedID string
 }
 
-func (f *workflowDefinitionFake) Create(_ context.Context, _ string, cmd workflowapp.CreateDefinitionCommand) (*workflowdomain.Definition, error) {
+func (f *workflowDefinitionFake) Create(_ context.Context, _ string, cmd workflowapp.CreateDefinitionCommand, _ string) (*workflowdomain.Definition, error) {
 	f.created = &workflowdomain.Definition{ID: "wf-1", Name: cmd.Name, Revision: 1, Spec: cmd.Spec}
 	return f.created, nil
 }
-func (*workflowDefinitionFake) Update(context.Context, string, string, workflowapp.UpdateDefinitionCommand) (*workflowdomain.Definition, error) {
+func (*workflowDefinitionFake) Update(context.Context, string, string, workflowapp.UpdateDefinitionCommand, string) (*workflowdomain.Definition, error) {
 	return nil, nil
 }
 func (*workflowDefinitionFake) Validate(context.Context, string, string) error { return nil }
-func (*workflowDefinitionFake) Publish(context.Context, string, string) (*workflowdomain.Version, error) {
+func (*workflowDefinitionFake) Publish(context.Context, string, string, string) (*workflowdomain.Version, error) {
 	return nil, nil
 }
 func (f *workflowDefinitionFake) Get(context.Context, string, string) (*workflowdomain.Definition, error) {
@@ -81,7 +81,7 @@ func (f *workflowDefinitionFake) ListDefinitions(context.Context, string, workfl
 func (*workflowDefinitionFake) ListVersions(context.Context, string, string, workflowapp.ListVersionsQuery) (workflowapp.VersionPage, error) {
 	return workflowapp.VersionPage{Versions: []workflowapp.VersionSummary{{ID: "version-1", DefinitionID: "wf-1", Number: 1}}, Total: 1, Page: 1, PageSize: 20}, nil
 }
-func (f *workflowDefinitionFake) Delete(_ context.Context, _, id string) error {
+func (f *workflowDefinitionFake) Delete(_ context.Context, _, id string, _ string) error {
 	f.deletedID = id
 	return nil
 }
@@ -189,6 +189,8 @@ func TestWorkflowHandlerDeletesDraft(t *testing.T) {
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
 		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), "tenant-1"))
+		c.Set(middleware.ContextKeySub, "user-1")
+		c.Set(middleware.ContextKeyRole, "member")
 		c.Next()
 	})
 	router.DELETE("/workflows/:id", h.DeleteDefinition)

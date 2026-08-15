@@ -68,10 +68,15 @@ type AgentConfig struct {
 	CompactionCooldownSec int
 	// MaxTokensPerExecution is the execution-wide LLM token budget. 0 = unlimited.
 	MaxTokensPerExecution int
-	MemoryScope           string
-	SystemKey             string
-	IsSystem              bool
-	ManagementMode        string
+	// MemoryParameters holds the memory.* resource-scope registry keys
+	// (dotted form, e.g. "memory.max_facts_per_extraction"). Unlike the bare
+	// sampling keys above they are stored as-is and consumed by the memory
+	// pipeline per agent. Absent key = unset (definition default applies).
+	MemoryParameters map[string]any
+	MemoryScope      string
+	SystemKey        string
+	IsSystem         bool
+	ManagementMode   string
 	// StuckThreshold > 0 enables lazy planning: after this many LLM rounds with
 	// no final answer the agent transitions to Reflect→Plan→Execute.
 	// 0 disables the feature (pure ReAct).

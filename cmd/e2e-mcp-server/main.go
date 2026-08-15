@@ -286,8 +286,12 @@ func completionHandler(w http.ResponseWriter, r *http.Request) {
 				}}}, "finish_reason": "tool_calls",
 			}}}
 			encoded, _ := json.Marshal(chunk)
+			// SSE 协议要求 data: 前缀裸写，html/template 会破坏流（e2e 测试工具）。
+			// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter
 			_, _ = w.Write([]byte("data: " + string(encoded) + "\n\n"))
 		} else {
+			// SSE data 行同理（e2e 测试工具）。
+			// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter
 			_, _ = w.Write([]byte("data: {\"model\":\"" + model + "\",\"choices\":[{\"delta\":{\"content\":\"stateful stream completed\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":3,\"total_tokens\":7}}\n\n"))
 		}
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))

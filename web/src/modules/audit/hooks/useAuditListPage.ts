@@ -2,17 +2,15 @@ import { message } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { auditApi } from '../api/audit.api';
-import type { AuditEvent } from '../model/audit';
+import type { ResourceChangeAudit } from '../model/audit';
 
 import { usePagination } from '@/shared/hooks';
 
 export interface AuditFilters {
   from?: string;
   to?: string;
-  action?: string;
-  risk_level?: string;
-  outcome?: string;
-  resource_type?: string;
+  resourceKind?: string;
+  actorName?: string;
 }
 
 interface RequestError { response?: { data?: { error?: string } } }
@@ -20,11 +18,11 @@ interface RequestError { response?: { data?: { error?: string } } }
 const EMPTY_FILTERS: AuditFilters = {};
 
 export const useAuditListPage = () => {
-  const [events, setEvents] = useState<AuditEvent[]>([]);
+  const [events, setEvents] = useState<ResourceChangeAudit[]>([]);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState<AuditFilters>(EMPTY_FILTERS);
   const [detailId, setDetailId] = useState<string | null>(null);
-  const [detailEvent, setDetailEvent] = useState<AuditEvent | null>(null);
+  const [detailEvent, setDetailEvent] = useState<ResourceChangeAudit | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   // 请求序号：快速翻页/切换筛选时丢弃过期响应，避免旧数据覆盖新数据。
   const requestSeqRef = useRef(0);

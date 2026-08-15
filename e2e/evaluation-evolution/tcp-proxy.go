@@ -152,6 +152,8 @@ func main() {
 		writer.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(writer).Encode(map[string]any{"enabled": enabled, "active_connections": active})
 	})
+	// e2e 测试控制面（本机回环，非生产），无 TLS 属预期。
+	// nosemgrep: go.lang.security.audit.net.use-tls.use-tls
 	if err := http.ListenAndServe(requiredEnv("E2E_MILVUS_PROXY_CONTROL_ADDRESS"), handler); err != nil {
 		panic("serve Milvus proxy control failed")
 	}

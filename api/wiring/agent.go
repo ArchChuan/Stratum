@@ -55,8 +55,12 @@ func (l agentCheckpointTenantLister) list(ctx context.Context) ([]string, error)
 // so agents resolved from DB inherit those capabilities at construction
 // time. Service is the orchestration façade handlers consume.
 type Agent struct {
-	Registry            *agent.Registry
-	Service             *agent.AgentService
+	Registry *agent.Registry
+	Service  *agent.AgentService
+	// AgentRepo exposes the pg agent repository for cross-context consumers
+	// built earlier than buildAgent (memory pipeline). It is read lazily via
+	// closure so the nil window during startup is never dereferenced.
+	AgentRepo           agentport.AgentRepo
 	ChatStore           agent.ChatStore
 	EvidenceProvider    agentport.TraceEvidenceProvider
 	TracePayloadStore   agentport.TracePayloadStore
@@ -263,7 +267,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		BaseURL: c.Config.Opik.URL, Project: c.Config.Opik.Project, Workspace: c.Config.Opik.Workspace,
 		APIKey: c.Config.Opik.APIKey, Timeout: c.Config.Opik.Timeout,
 	})
-	a := &Agent{Registry: registry, EvidenceProvider: evidenceProvider}
+	a := &Agent{Registry: registry, EvidenceProvider: evidenceProvider, AgentRepo: repo}
 	if c.Config.TracePayload.Enabled {
 		store := agentobjects.NewStore(
 			c.revisionObjectClient, c.Config.TracePayload.Bucket, c.Platform.AESKey,
