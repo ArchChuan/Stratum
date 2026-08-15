@@ -41,6 +41,7 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	registerModelCatalogue(r, c)
 	registerDashboard(r, c)
 	registerHealth(r, c)
+	registerE2ERoutes(r)
 	registerSkills(r, c, requireActive)
 	registerEvaluations(r, c, requireActive)
 	registerAgents(r, c, requireActive)
@@ -325,6 +326,23 @@ func registerModelCatalogue(r *gin.Engine, c *wiring.Container) {
 }
 
 // registerHealth wires unauthenticated observability and health endpoints.
+// registerE2ERoutes exposes a read-only route inventory for the stateful
+// E2E coverage report. Paths are gin template form (e.g. /agents/:id).
+// Unauthenticated: it carries no business data, only route shapes.
+func registerE2ERoutes(r *gin.Engine) {
+	r.GET("/e2e/routes", func(ctx *gin.Context) {
+		type routeEntry struct {
+			Method string `json:"method"`
+			Path   string `json:"path"`
+		}
+		routes := make([]routeEntry, 0)
+		for _, route := range r.Routes() {
+			routes = append(routes, routeEntry{Method: route.Method, Path: route.Path})
+		}
+		ctx.JSON(http.StatusOK, gin.H{"routes": routes})
+	})
+}
+
 func registerHealth(r *gin.Engine, c *wiring.Container) {
 	r.GET("/metrics", gin.WrapH(c.Platform.Metrics.GetHandler()))
 	r.GET("/livez", func(ctx *gin.Context) {
