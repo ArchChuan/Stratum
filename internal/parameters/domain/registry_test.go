@@ -110,6 +110,91 @@ func TestPromptEvaluationKeysAreGateOnly(t *testing.T) {
 	}
 }
 
+// TestRegistryAgentMemoryParams 覆盖 agent 维度新 key:压缩三值、提取 prompt/
+// model、召回 top_k 校准、long_term_top_k 保留标注 deprecated。断言
+// agent.compaction_prompt 不进入 byEvalKey、不设 EvaluationKeys(防半注册回归)。
+func TestRegistryAgentMemoryParams(t *testing.T) {
+	r := NewParametersRegistry()
+
+	// 压缩三值:ScopeResource,均不可优化且无 EvaluationKeys —— compaction_prompt
+	// 是 registerPromptEvaluationKeys 保留的 gate-only bare key(若设 EvaluationKeys
+	// 则 Register() 拒绝);temperature 的 bare-key 写时校验经 ValidateResourceValues
+	// 的短名匹配(不进 byEvalKey,避免污染 candidate/critique whitelist lockstep)。
+	compaction := map[string]struct {
+		optimizable      bool
+		evalKeys         int
+		control          Control
+		wantMin, wantMax float64
+	}{
+		"agent.compaction_prompt":      {optimizable: false, evalKeys: 0, control: ControlTextarea},
+		"agent.compaction_temperature": {optimizable: false, evalKeys: 0, control: ControlSlider, wantMin: 0, wantMax: 1},
+		"agent.compaction_model":       {optimizable: false, evalKeys: 0, control: ControlSelect},
+	}
+	for key, want := range compaction {
+		def, ok := r.Get(key)
+		if !ok {
+			t.Fatalf("%s not registered", key)
+		}
+		if def.Scope != ScopeResource {
+			t.Errorf("%s scope = %q, want resource", key, def.Scope)
+		}
+		if def.Optimizable != want.optimizable {
+			t.Errorf("%s optimizable = %v, want %v", key, def.Optimizable, want.optimizable)
+		}
+		if len(def.EvaluationKeys) != want.evalKeys {
+			t.Errorf("%s EvaluationKeys = %v, want %d", key, def.EvaluationKeys, want.evalKeys)
+		}
+		if def.VisualHint.Control != want.control {
+			t.Errorf("%s control = %q, want %q", key, def.VisualHint.Control, want.control)
+		}
+		if def.VisualHint.Min != nil && *def.VisualHint.Min != want.wantMin {
+			t.Errorf("%s VisualHint.Min = %v, want %v", key, *def.VisualHint.Min, want.wantMin)
+		}
+		if def.VisualHint.Max != nil && *def.VisualHint.Max != want.wantMax {
+			t.Errorf("%s VisualHint.Max = %v, want %v", key, *def.VisualHint.Max, want.wantMax)
+		}
+	}
+	// 压缩温度 bare key 不进 byEvalKey(评测搜索空间干净),写时校验经短名匹配。
+	if got, ok := r.KeyForEvaluation("compaction_temperature"); ok {
+		t.Errorf("KeyForEvaluation(compaction_temperature) = %q, want unregistered", got)
+	}
+	if got, ok := r.KeyByShortName("compaction_temperature"); !ok || got != "agent.compaction_temperature" {
+		t.Errorf("KeyByShortName(compaction_temperature) = %q/%v, want agent.compaction_temperature/true", got, ok)
+	}
+
+	// 提取 prompt/model:ScopeResource,字符串自由校验,无 EvaluationKeys。
+	for _, key := range []string{"memory.extraction_prompt", "memory.extraction_model"} {
+		def, ok := r.Get(key)
+		if !ok {
+			t.Fatalf("%s not registered", key)
+		}
+		if def.Scope != ScopeResource || def.Optimizable {
+			t.Errorf("%s scope/optimizable = %q/%v, want resource/false", key, def.Scope, def.Optimizable)
+		}
+		if len(def.EvaluationKeys) != 0 {
+			t.Errorf("%s must not carry EvaluationKeys (string free-form), got %v", key, def.EvaluationKeys)
+		}
+	}
+
+	// 召回 top_k:Default 5(对齐运行时兜底)、Max 20(工具上限)。
+	recall, ok := r.Get("memory.recall_top_k")
+	if !ok {
+		t.Fatal("memory.recall_top_k not registered")
+	}
+	if d, ok := recall.Default.(int64); !ok || d != 5 {
+		t.Errorf("recall_top_k Default = %#v, want 5", recall.Default)
+	}
+	if recall.VisualHint.Max == nil || *recall.VisualHint.Max != 20 {
+		t.Errorf("recall_top_k VisualHint.Max = %v, want 20", recall.VisualHint.Max)
+	}
+
+	// long_term_top_k 保留注册(兼容存量 agents.parameters 残留 key,删会破坏
+	// ValidateResourceKey fail-closed 提升路径)。
+	if _, ok := r.Get("memory.long_term_top_k"); !ok {
+		t.Error("memory.long_term_top_k must stay registered (deprecated)")
+	}
+}
+
 func TestRegistryDuplicateKeyRejected(t *testing.T) {
 	r := NewParametersRegistry()
 	err := r.Register(ParameterDefinition{Key: "agent.temperature", Scope: ScopePlatform, ValueType: TypeFloat, Default: 1.0})

@@ -15,6 +15,7 @@ import {
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { parametersApi } from '../api/parameters.api';
+import { ProviderModelSelect } from '../components/ProviderModelSelect';
 import type {
   ParameterDefinition,
   PlatformSettingsFormValues,
@@ -75,6 +76,9 @@ const controlFor = (def: ParameterDefinition): ReactNode => {
           style={{ width: '100%', maxWidth: 240 }}
         />
       );
+    case 'model':
+      // 模型目录选择器（provider 分组）；存储值 = 模型名。
+      return <ProviderModelSelect />;
     case 'textarea':
       return (
         <TextArea
@@ -141,6 +145,9 @@ export const PlatformSettingsPage = () => {
       for (const def of defs.filter(renderable)) {
         const v = formValues[def.key];
         if (v === undefined || v === null) continue;
+        // 模型 key 等于定义默认时跳过提交：默认值由后端 resolver 兜底（DB 留空），
+        // 避免把未修改的默认模型名重复写库并在目录缺失时触发 ValidateFn 400。
+        if (def.visual_hint.control === 'model' && v === def.default) continue;
         patch[def.key] = v;
       }
       try {

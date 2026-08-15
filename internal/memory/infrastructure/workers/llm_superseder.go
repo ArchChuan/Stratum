@@ -29,10 +29,11 @@ const supersedePromptTemplate = `判断新事实是否应该取代旧事实。
 
 // LLMSuperseder adapts an LLM client or tenant resolver to memport.LLMSuperseder.
 type LLMSuperseder struct {
-	client   pipeline.LLMClient
-	tenantID string
-	resolver TenantLLMResolver
-	logger   *zap.Logger
+	client        pipeline.LLMClient
+	tenantID      string
+	resolver      TenantLLMResolver
+	paramResolver memport.PlatformParamResolver
+	logger        *zap.Logger
 }
 
 func NewLLMSuperseder(client pipeline.LLMClient) *LLMSuperseder {
@@ -50,6 +51,14 @@ func (s *LLMSuperseder) WithLogger(l *zap.Logger) *LLMSuperseder {
 	return s
 }
 
+// WithParamResolver sets the platform parameter resolver used to resolve
+// per-call supersede model/temperature/prompt. A nil resolver keeps the const
+// defaults.
+func (s *LLMSuperseder) WithParamResolver(r memport.PlatformParamResolver) *LLMSuperseder {
+	s.paramResolver = r
+	return s
+}
+
 func (s *LLMSuperseder) JudgeSupersede(ctx context.Context, oldFact, newFact string) (*memport.SupersedeJudgment, error) {
 	client := s.client
 	if s.resolver != nil {
@@ -62,10 +71,13 @@ func (s *LLMSuperseder) JudgeSupersede(ctx context.Context, oldFact, newFact str
 	if client == nil {
 		return nil, fmt.Errorf("llm supersede: client unavailable")
 	}
-	prompt := fmt.Sprintf(supersedePromptTemplate, oldFact, newFact)
+	model := resolvePlatformString(ctx, s.paramResolver, "memory.supersede_model", "")
+	temperature := resolvePlatformFloat(ctx, s.paramResolver, "memory.supersede_temperature", 0)
+	promptTmpl := resolvePlatformString(ctx, s.paramResolver, "memory.supersede_prompt", supersedePromptTemplate)
+	prompt := fmt.Sprintf(promptTmpl, oldFact, newFact)
 	// 判定模型为空：交由 llmgateway client 默认解析（pre-refactor 行为）。
 	judgment, err := pipeline.CompleteStructured(ctx, client, llmdomain.NewExtractRequest(
-		"", "", prompt, 0, constants.MemorySupersedeJudgeMaxTokens,
+		model, "", prompt, temperature, constants.MemorySupersedeJudgeMaxTokens,
 	), parseSupersedeJudgment,
 		func(j memport.SupersedeJudgment) error { return j.Validate() },
 		s.logger, "supersede")

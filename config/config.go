@@ -94,20 +94,17 @@ type TracePayloadConfig struct {
 }
 
 type MemoryPipelineConfig struct {
-	Enabled               bool
-	NatsURL               string
-	PollInterval          time.Duration
-	BatchSize             int
-	EmbedWorkers          int
-	EnrichWorkers         int
-	EmbedAckWait          time.Duration
-	EnrichAckWait         time.Duration
-	MaxDeliver            int
-	EnrichModel           string
-	SummaryModel          string
-	SummaryTokenThreshold int
-	EnrichmentPrompt      string
-	SummaryPrompt         string
+	Enabled       bool
+	NatsURL       string
+	PollInterval  time.Duration
+	BatchSize     int
+	EmbedWorkers  int
+	EnrichWorkers int
+	EmbedAckWait  time.Duration
+	EnrichAckWait time.Duration
+	MaxDeliver    int
+	// LLM content settings（模型/温度/提示词/摘要阈值）已收口到平台参数
+	// （ScopePlatform memory.* key，运行态热改），不再走冷 config。
 }
 
 // AgentFactCheckConfig 控制 agent 输出的幻觉校验（advisory，只展示）。
@@ -178,18 +175,15 @@ func Load() (*Config, error) {
 			UseTLS:    getEnv("TRACE_PAYLOAD_USE_TLS", "") == "true",
 		},
 		MemoryPipeline: MemoryPipelineConfig{
-			Enabled:               getEnv("MEMORY_PIPELINE_ENABLED", "") == "true",
-			NatsURL:               natsURL,
-			PollInterval:          constants.MemoryOutboxPollInterval,
-			BatchSize:             constants.MemoryOutboxBatchSize,
-			EmbedWorkers:          constants.EmbedderWorkerCount,
-			EnrichWorkers:         constants.EnricherWorkerCount,
-			EmbedAckWait:          constants.EmbedderAckWait,
-			EnrichAckWait:         constants.EnricherAckWait,
-			MaxDeliver:            constants.EmbedderMaxDeliver,
-			EnrichModel:           getEnv("MEMORY_ENRICH_MODEL", "qwen-turbo"),
-			SummaryModel:          getEnv("MEMORY_SUMMARY_MODEL", "qwen-plus"),
-			SummaryTokenThreshold: constants.EnricherSummaryTokenThreshold,
+			Enabled:       getEnv("MEMORY_PIPELINE_ENABLED", "") == "true",
+			NatsURL:       natsURL,
+			PollInterval:  constants.MemoryOutboxPollInterval,
+			BatchSize:     constants.MemoryOutboxBatchSize,
+			EmbedWorkers:  constants.EmbedderWorkerCount,
+			EnrichWorkers: constants.EnricherWorkerCount,
+			EmbedAckWait:  constants.EmbedderAckWait,
+			EnrichAckWait: constants.EnricherAckWait,
+			MaxDeliver:    constants.EmbedderMaxDeliver,
 		},
 		AgentFactCheck: AgentFactCheckConfig{
 			Enabled:    getEnv("AGENT_FACTCHECK_ENABLED", "") == "true",

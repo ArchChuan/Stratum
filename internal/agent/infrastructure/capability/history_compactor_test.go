@@ -23,7 +23,7 @@ func (g *deadlineRecordingGateway) Route(ctx context.Context, _ port.CapabilityR
 
 func TestLLMHistoryCompactor_UsesIndependentShortDeadline(t *testing.T) {
 	gw := &deadlineRecordingGateway{}
-	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0)
+	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, "", 0)
 	parent, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -68,7 +68,7 @@ func (g *scriptedCompactorGateway) Route(
 // 请求携带 NoPrimaryRetry=true、MaxCandidates=2。
 func TestCompactHistory_BudgetSlices(t *testing.T) {
 	gw := &scriptedCompactorGateway{results: []error{errors.New("route: 503 unavailable")}}
-	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0)
+	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, "", 0)
 
 	_, err := compactor.CompactHistory(context.Background(), []port.LLMMessage{{Role: "user", Content: "history"}})
 	require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestCompactHistory_BudgetExhaustedFailsFast(t *testing.T) {
 		errors.New("cand-a: 500 internal"),
 		errors.New("cand-b: 502 bad gateway"),
 	}}
-	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0)
+	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, "", 0)
 
 	start := time.Now()
 	_, err := compactor.CompactHistory(context.Background(), []port.LLMMessage{{Role: "user", Content: "history"}})
@@ -133,7 +133,7 @@ func TestCompactHistory_PermanentOrContextLengthStopsChain(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			gw := &scriptedCompactorGateway{results: []error{tc.err}}
-			compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0)
+			compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, "", 0)
 
 			_, err := compactor.CompactHistory(context.Background(), []port.LLMMessage{{Role: "user", Content: "history"}})
 			require.ErrorIs(t, err, tc.err)
@@ -167,7 +167,7 @@ func TestCompactionSlice(t *testing.T) {
 // （mechanism 移除后为唯一权威）。
 func TestCompactHistory_UsesBuiltinCompactionPrompt(t *testing.T) {
 	gw := &scriptedCompactorGateway{}
-	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0)
+	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, "", 0)
 	msgs := []port.LLMMessage{{Role: "user", Content: "history"}}
 
 	if _, err := compactor.CompactHistory(context.Background(), msgs); err != nil {

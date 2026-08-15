@@ -39,12 +39,18 @@ func (s *Service) Schema() []domain.ParameterDefinition { return s.registry.Sche
 
 // ValidateResourceValues validates resource-scope declared sampling values
 // against registry definitions, mapping bare JSONB keys (temperature,
-// max_tokens, ...) through EvaluationKeys. Unknown keys and out-of-bounds
-// values return an error. Callers skip 0=unset values before invoking —
-// an explicit zero is indistinguishable from an absent key.
+// max_tokens, ...) through EvaluationKeys. Resource keys that deliberately
+// carry no EvaluationKeys alias (e.g. agent.compaction_temperature — kept out
+// of the evaluation search space) fall back to a registry-key short-name match.
+// Unknown keys and out-of-bounds values return an error. Callers skip 0=unset
+// values before invoking — an explicit zero is indistinguishable from an
+// absent key.
 func (s *Service) ValidateResourceValues(declared map[string]any) error {
 	for bareKey, value := range declared {
 		key, ok := s.registry.KeyForEvaluation(bareKey)
+		if !ok {
+			key, ok = s.registry.KeyByShortName(bareKey)
+		}
 		if !ok {
 			return fmt.Errorf("unknown parameter %s", bareKey)
 		}

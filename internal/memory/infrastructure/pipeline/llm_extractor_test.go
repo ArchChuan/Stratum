@@ -73,6 +73,21 @@ type extractorResolverStub struct {
 	err      error
 }
 
+// keyedResolverStub 按 (agentID, key) 返回配置值,用于验证 extraction_prompt/model
+// 独立解析(区别于 max_facts 的 agent-only 桩——后者无法区分 key)。
+type keyedResolverStub struct {
+	vals map[string]any // "agentID:key" → value
+	err  error
+}
+
+func (s keyedResolverStub) Resolve(_ context.Context, _ string, agentID, key string) (any, bool, error) {
+	if s.err != nil {
+		return nil, false, s.err
+	}
+	v, ok := s.vals[agentID+":"+key]
+	return v, ok, nil
+}
+
 func (s extractorResolverStub) Resolve(_ context.Context, _ string, agentID, _ string) (any, bool, error) {
 	if s.err != nil {
 		return nil, false, s.err
@@ -127,5 +142,59 @@ func TestLLMExtractorMaxFactsDegrade(t *testing.T) {
 	}
 	if !strings.Contains(llm.prompt, fmt.Sprintf("最多提取 %d 条事实", constants.MemoryMaxFactsPerExtraction)) {
 		t.Fatalf("resolver error must fall back to default: %q", llm.prompt)
+	}
+}
+
+// TestLLMExtractorCustomExtractionPrompt 验证 memory.extraction_prompt 按 agent
+// 解析:非空自定义 prompt 按 %s(userID)/%s(agentID)/%d(maxFacts) 插值注入;缺失
+// 回落内置模板。
+func TestLLMExtractorCustomExtractionPrompt(t *testing.T) {
+	llm := &extractorLLMStub{content: `[]`}
+	extractor := NewLLMExtractor(llm)
+	extractor.SetTenantID("t1")
+	extractor.SetResourceResolver(keyedResolverStub{vals: map[string]any{
+		"agent-1:memory.extraction_prompt": "fact machine for %s / %s / %d",
+	}})
+
+	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-1", "msg"); err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("fact machine for user-1 / agent-1 / %d", constants.MemoryMaxFactsPerExtraction)
+	if llm.prompt != want {
+		t.Fatalf("custom prompt not interpolated: got %q want %q", llm.prompt, want)
+	}
+
+	// 未记录 agent → 内置模板。
+	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-other", "msg"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(llm.prompt, "长期记忆提取助手") {
+		t.Fatalf("missing agent must fall back to builtin: %q", llm.prompt)
+	}
+}
+
+// TestLLMExtractorCustomExtractionModel 验证 memory.extraction_model 非空时传入
+// 请求;缺失回落空串(client 默认解析)。
+func TestLLMExtractorCustomExtractionModel(t *testing.T) {
+	llm := &extractorLLMStub{content: `[]`}
+	extractor := NewLLMExtractor(llm)
+	extractor.SetTenantID("t1")
+	extractor.SetResourceResolver(keyedResolverStub{vals: map[string]any{
+		"agent-1:memory.extraction_model": "qwen-turbo",
+	}})
+
+	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-1", "msg"); err != nil {
+		t.Fatal(err)
+	}
+	if llm.model != "qwen-turbo" {
+		t.Fatalf("custom model not applied: got %q", llm.model)
+	}
+
+	// 未记录 agent → 空模型(默认解析)。
+	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-other", "msg"); err != nil {
+		t.Fatal(err)
+	}
+	if llm.model != "" {
+		t.Fatalf("missing model must fall back to empty: got %q", llm.model)
 	}
 }

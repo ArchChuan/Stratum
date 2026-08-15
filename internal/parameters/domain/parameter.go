@@ -44,6 +44,10 @@ const (
 	ControlToggle   Control = "toggle"
 	ControlTextarea Control = "textarea"
 	ControlNumber   Control = "number"
+	// ControlModel renders a provider-grouped model picker (llmgateway model
+	// directory: pick provider, then a model under it). The stored value is
+	// still the model name string, validated against the directory at write.
+	ControlModel Control = "model"
 )
 
 // VisualHint drives schema-driven frontend rendering.

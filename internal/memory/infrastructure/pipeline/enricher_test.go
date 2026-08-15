@@ -1,19 +1,80 @@
 package pipeline
 
 import (
+	"context"
 	"testing"
 
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
 
-// TestEnricherConstructorDefaults 验证构造时模型默认（cfg 空时 qwen-turbo）。
-// mechanism 基线移除后为唯一权威，行为等价 pre-refactor（金丝雀回归）。
-func TestEnricherConstructorDefaults(t *testing.T) {
+// stubPlatformResolver 返回固定 key→value 映射；缺失 key 返回 present=false，
+// 模拟平台存储未配置该 key。
+type stubPlatformResolver struct {
+	values map[string]any
+}
+
+func (s stubPlatformResolver) ResolvePlatform(_ context.Context, key string) (any, bool, error) {
+	v, ok := s.values[key]
+	return v, ok, nil
+}
+
+// TestEnricherResolveDefaults 验证解析期 const 兜底：resolver 缺失（nil）时
+// enrich/summary 设置回退 pkg/constants 默认（原构造期捕获逻辑迁为解析期后
+// 的行为等价金丝雀）。cfg 空时不再捕获 model 字段，构造只保留调度字段。
+func TestEnricherResolveDefaults(t *testing.T) {
 	w := NewEnricherWorker(nil, nil, nil, zap.NewNop(), Config{})
-	if w.model != "qwen-turbo" {
-		t.Fatalf("constructor default model = %q, want qwen-turbo", w.model)
+	ctx := context.Background()
+
+	enrich := w.resolveEnrichSettings(ctx)
+	if enrich.model != constants.MemoryEnrichDefaultModel {
+		t.Fatalf("enrich default model = %q, want %q", enrich.model, constants.MemoryEnrichDefaultModel)
 	}
-	if w.summaryModel != "qwen-turbo" {
-		t.Fatalf("constructor default summary model = %q, want qwen-turbo", w.summaryModel)
+	if enrich.temperature != constants.MemoryEnrichLLMTemperature {
+		t.Fatalf("enrich default temperature = %v, want %v", enrich.temperature, constants.MemoryEnrichLLMTemperature)
+	}
+
+	summary := w.resolveSummarySettings(ctx)
+	if summary.model != constants.MemorySummaryDefaultModel {
+		t.Fatalf("summary default model = %q, want %q", summary.model, constants.MemorySummaryDefaultModel)
+	}
+	if summary.temperature != constants.TaskSummarizeTemperature {
+		t.Fatalf("summary default temperature = %v, want %v", summary.temperature, constants.TaskSummarizeTemperature)
+	}
+	if summary.threshold != constants.EnricherSummaryTokenThreshold {
+		t.Fatalf("summary default threshold = %d, want %d", summary.threshold, constants.EnricherSummaryTokenThreshold)
+	}
+}
+
+// TestEnricherResolvePlatformValues 验证平台解析值生效：resolver 返回的平台
+// 模型/温度/阈值覆盖 const 默认（运行态热改的解析期断言）。
+func TestEnricherResolvePlatformValues(t *testing.T) {
+	w := NewEnricherWorker(nil, nil, nil, zap.NewNop(), Config{})
+	w.paramResolver = stubPlatformResolver{values: map[string]any{
+		"memory.enrich_model":            "glm-4.5-air",
+		"memory.enrich_temperature":      float64(0.3),
+		"memory.summary_model":           "qwen-max",
+		"memory.summary_temperature":     float64(0.5),
+		"memory.summary_token_threshold": int64(2500),
+	}}
+	ctx := context.Background()
+
+	enrich := w.resolveEnrichSettings(ctx)
+	if enrich.model != "glm-4.5-air" {
+		t.Fatalf("enrich platform model = %q, want glm-4.5-air", enrich.model)
+	}
+	if enrich.temperature != 0.3 {
+		t.Fatalf("enrich platform temperature = %v, want 0.3", enrich.temperature)
+	}
+
+	summary := w.resolveSummarySettings(ctx)
+	if summary.model != "qwen-max" {
+		t.Fatalf("summary platform model = %q, want qwen-max", summary.model)
+	}
+	if summary.temperature != 0.5 {
+		t.Fatalf("summary platform temperature = %v, want 0.5", summary.temperature)
+	}
+	if summary.threshold != 2500 {
+		t.Fatalf("summary platform threshold = %d, want 2500", summary.threshold)
 	}
 }

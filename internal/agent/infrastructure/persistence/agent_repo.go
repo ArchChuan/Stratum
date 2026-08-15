@@ -63,27 +63,20 @@ func editorEligible(ctx context.Context, tx pgx.Tx, tenantID, userID string) (bo
 
 // agents.parameters JSONB carries the sampling parameters as flat scalar
 // keys (temperature/max_tokens/compaction_recent_groups/
-// compaction_safety_ratio/reasoning_effort). An explicit 0 / "" is
-// indistinguishable from an absent key under omitempty, so 0/"" == unset ==
-// gateway/provider default. Keys match the registry evaluation keys so
-// promote can write them back without mapping.
+// compaction_safety_ratio/reasoning_effort + compaction_prompt/_temperature/
+// _model). An explicit 0 / "" is indistinguishable from an absent key under
+// omitempty, so 0/"" == unset == gateway/provider default. Keys match the
+// registry evaluation keys so promote can write them back without mapping.
 func packSamplingParameters(cfg *domain.AgentConfig) (string, error) {
 	params := map[string]any{}
-	if cfg.Temperature != 0 {
-		params["temperature"] = cfg.Temperature
-	}
-	if cfg.MaxTokens != 0 {
-		params["max_tokens"] = cfg.MaxTokens
-	}
-	if cfg.CompactionRecentGroups != 0 {
-		params["compaction_recent_groups"] = cfg.CompactionRecentGroups
-	}
-	if cfg.CompactionSafetyRatio != 0 {
-		params["compaction_safety_ratio"] = cfg.CompactionSafetyRatio
-	}
-	if cfg.ReasoningEffort != "" {
-		params["reasoning_effort"] = cfg.ReasoningEffort
-	}
+	putIfNonZero(params, "temperature", cfg.Temperature, float32(0))
+	putIfNonZero(params, "max_tokens", cfg.MaxTokens, 0)
+	putIfNonZero(params, "compaction_recent_groups", cfg.CompactionRecentGroups, 0)
+	putIfNonZero(params, "compaction_safety_ratio", cfg.CompactionSafetyRatio, float32(0))
+	putIfNonZero(params, "reasoning_effort", cfg.ReasoningEffort, "")
+	putIfNonZero(params, "compaction_prompt", cfg.CompactionPrompt, "")
+	putIfNonZero(params, "compaction_temperature", cfg.CompactionTemperature, float32(0))
+	putIfNonZero(params, "compaction_model", cfg.CompactionModel, "")
 	// memory.* resource-scope keys are pre-filtered by the application layer
 	// (zeros dropped), so they copy verbatim onto the same JSONB.
 	for k, v := range cfg.MemoryParameters {
@@ -94,6 +87,14 @@ func packSamplingParameters(cfg *domain.AgentConfig) (string, error) {
 		return "", fmt.Errorf("pack sampling parameters: %w", err)
 	}
 	return string(b), nil
+}
+
+// putIfNonZero writes key→v into params unless v equals the zero sentinel
+// (0 / ""), mirroring the skip-zero semantics of packSamplingParameters.
+func putIfNonZero[T comparable](params map[string]any, key string, v, zero T) {
+	if v != zero {
+		params[key] = v
+	}
 }
 
 // packMaxTokensFragment renders the parameters merge fragment for the system
@@ -122,6 +123,9 @@ func packAllSamplingParameters(cfg *domain.AgentConfig) (string, error) {
 		"compaction_recent_groups": cfg.CompactionRecentGroups,
 		"compaction_safety_ratio":  cfg.CompactionSafetyRatio,
 		"reasoning_effort":         cfg.ReasoningEffort,
+		"compaction_prompt":        cfg.CompactionPrompt,
+		"compaction_temperature":   cfg.CompactionTemperature,
+		"compaction_model":         cfg.CompactionModel,
 	}
 	// 0 / "" → nil → JSON null;非零/非空保持原值。
 	for k, v := range params {
@@ -158,8 +162,9 @@ func isZeroSamplingValue(v any) bool {
 	}
 }
 
-// unpackSamplingParameters fills the 4 sampling fields from JSONB; absent
-// keys leave the zero value (unset) untouched.
+// unpackSamplingParameters fills the sampling fields (temperature/max_tokens/
+// compaction×3 + reasoning_effort + compaction_prompt/_temperature/_model)
+// from JSONB; absent keys leave the zero value (unset) untouched.
 func unpackSamplingParameters(raw string, cfg *domain.AgentConfig) error {
 	if raw == "" {
 		return nil
@@ -168,24 +173,32 @@ func unpackSamplingParameters(raw string, cfg *domain.AgentConfig) error {
 	if err := json.Unmarshal([]byte(raw), &params); err != nil {
 		return fmt.Errorf("unpack sampling parameters: %w", err)
 	}
-	if v, ok := numericValue(params["temperature"]); ok {
-		cfg.Temperature = float32(v)
-	}
-	if v, ok := numericValue(params["max_tokens"]); ok {
-		cfg.MaxTokens = int(v)
-	}
-	if v, ok := numericValue(params["compaction_recent_groups"]); ok {
-		cfg.CompactionRecentGroups = int(v)
-	}
-	if v, ok := numericValue(params["compaction_safety_ratio"]); ok {
-		cfg.CompactionSafetyRatio = float32(v)
-	}
-	if v, ok := params["reasoning_effort"].(string); ok {
-		// JSON null (explicit clear) and absent both land as "" = unset.
-		cfg.ReasoningEffort = v
-	}
+	unpackNumber(params, "temperature", &cfg.Temperature)
+	unpackNumber(params, "max_tokens", &cfg.MaxTokens)
+	unpackNumber(params, "compaction_recent_groups", &cfg.CompactionRecentGroups)
+	unpackNumber(params, "compaction_safety_ratio", &cfg.CompactionSafetyRatio)
+	unpackString(params, "reasoning_effort", &cfg.ReasoningEffort)
+	unpackString(params, "compaction_prompt", &cfg.CompactionPrompt)
+	unpackNumber(params, "compaction_temperature", &cfg.CompactionTemperature)
+	unpackString(params, "compaction_model", &cfg.CompactionModel)
 	extractMemoryParameters(params, cfg)
 	return nil
+}
+
+// unpackNumber decodes a JSON numeric key into *dst. A JSON null (explicit
+// clear) or absent key both land as zero = unset, matching pack's skip-zero.
+func unpackNumber[T int | float32](params map[string]any, key string, dst *T) {
+	if v, ok := numericValue(params[key]); ok {
+		*dst = T(v)
+	}
+}
+
+// unpackString decodes a JSON string key into *dst. JSON null (explicit
+// clear) and absent both land as "" = unset.
+func unpackString(params map[string]any, key string, dst *string) {
+	if v, ok := params[key].(string); ok {
+		*dst = v
+	}
 }
 
 // extractMemoryParameters copies memory.* dotted keys into cfg.MemoryParameters

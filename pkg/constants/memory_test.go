@@ -17,8 +17,11 @@ func TestMemoryConstants(t *testing.T) {
 	}
 
 	// Recall
-	if constants.MemoryRecallTopK != 10 {
-		t.Errorf("expected recall topK 10")
+	if constants.MemoryRecallTopK != 5 {
+		t.Errorf("expected recall topK 5 (registry default 对齐)")
+	}
+	if constants.MemoryRecallMinTopK != 1 || constants.MemoryRecallMaxTopK != 20 {
+		t.Errorf("expected recall clamp [1,20]")
 	}
 	if constants.MemoryFrecencyLambda != 0.05 {
 		t.Errorf("expected lambda 0.05")

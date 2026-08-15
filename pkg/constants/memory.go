@@ -77,6 +77,9 @@ const (
 	MemoryEnrichLLMTimeout = 30 * time.Second
 	// MemorySummaryLLMTimeout 摘要 LLM 调用上限（事务外执行）。
 	MemorySummaryLLMTimeout = 60 * time.Second
+	// PlatformModelValidationTimeout 平台模型 key 写时校验模型目录的单次 DB 预算
+	// （PUT /admin/parameters 的 ValidateFn 内使用,避免目录查询挂死写路径）。
+	PlatformModelValidationTimeout = 3 * time.Second
 )
 
 // Memory Buffer - controls fact extraction pipeline batching
@@ -110,7 +113,12 @@ const (
 
 // Memory Recall - controls retrieval behavior
 const (
-	MemoryRecallTopK     = 10   // max facts per recall
+	// MemoryRecallTopK 是召回工具非法/缺失 limit 时的兜底条数。与 registry
+	// memory.recall_top_k 的 Default=5 对齐（接入消费点后未配置 agent 走同一值，
+	// 无 5→10 静默漂移）。
+	MemoryRecallTopK     = 5    // max facts per recall
+	MemoryRecallMinTopK  = 1    // clamp 下限
+	MemoryRecallMaxTopK  = 20   // clamp 上限（工具 docstring 的合法 limit 上界）
 	MemoryFrecencyLambda = 0.05 // decay rate for frecency scoring
 	MemoryRRFConstant    = 60   // RRF k parameter for hybrid retrieval fusion
 )
@@ -151,6 +159,13 @@ const (
 	MemoryMaxFactLength         = 500  // max chars for a valid fact
 	MemoryExtractLLMMaxTokens   = 4096 // JSON array of facts; 1024 truncates large conversations
 	MemoryEnrichLLMTemperature  = 0.1  // 富化抽取任务温度（低温度换取字段语义稳定）
+	// MemoryEnrichDefaultModel 富化模型 const 兜底（resolver 缺失/未配置时）。
+	// 与 registry memory.enrich_model 的 Default 保持一致，避免双源漂移。
+	MemoryEnrichDefaultModel = "qwen-turbo"
+	// MemorySummaryDefaultModel 会话摘要模型 const 兜底（resolver 缺失/未配置时）。
+	// 与 registry memory.summary_model 的 Default 保持一致；删除冷 config 后
+	// 必须保持非空，摘要不得降级到富化模型。
+	MemorySummaryDefaultModel = "qwen-plus"
 	// MemoryMaxStructuredRetries 结构化 JSON 输出解析/校验失败后的带错重试次数
 	// （共 MemoryMaxStructuredRetries+1 次尝试）。每次重试把具体错误位置/值/原因
 	// 作为 system-role correction 丢回模型。provider 硬错误不消耗重试（fail-fast）。

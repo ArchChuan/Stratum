@@ -277,12 +277,6 @@ spec:
                   name: {{ .Values.secrets.name | quote }}
                   key: NACOS_PASSWORD
                   optional: true
-            - name: MEMORY_ENRICH_MODEL
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ include "stratum.fullname" . }}-config
-                  key: MEMORY_ENRICH_MODEL
-                  optional: true
           livenessProbe:
             httpGet:
               path: /livez

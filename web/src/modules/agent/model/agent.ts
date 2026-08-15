@@ -18,6 +18,9 @@ export const agentSchema = z
     max_tokens: z.number().optional(),
     compaction_recent_groups: z.number().optional(),
     compaction_safety_ratio: z.number().optional(),
+    compaction_prompt: z.string().optional(),
+    compaction_temperature: z.number().optional(),
+    compaction_model: z.string().optional(),
     reasoning_effort: z.string().optional(),
     allowedSkills: z.array(z.string()).nullish().transform((v) => v ?? []),
     mcpToolIds: z.array(z.string()).nullish().transform((v) => v ?? []),
@@ -42,6 +45,9 @@ export interface Agent {
   max_tokens?: number;
   compaction_recent_groups?: number;
   compaction_safety_ratio?: number;
+  compaction_prompt?: string;
+  compaction_temperature?: number;
+  compaction_model?: string;
   reasoning_effort?: string;
   allowedSkills: string[];
   mcpToolIds: string[];
@@ -66,12 +72,20 @@ export interface AgentFormValues {
   max_tokens?: number;
   compaction_recent_groups?: number;
   compaction_safety_ratio?: number;
+  // 上下文压缩设置(顶层 DTO 字段,直接进 payload;字段名必须 snake_case 匹配后端
+  // json tag。空/0 = const 兜底:prompt→内置默认、temp→0.3、model→跟随主 LLMModel)
+  compaction_prompt?: string;
+  compaction_temperature?: number;
+  compaction_model?: string;
   reasoning_effort?: string;
-  // 记忆注入参数(agents.parameters JSONB 的 memory.* dotted 键,提交时经
-  // buildMemoryParameters 映射;null/undefined 不落库)
+  // 记忆注入/提取/召回参数(agents.parameters JSONB 的 memory.* dotted 键,
+  // 提交时经 buildMemoryParameters 映射;null/undefined 不落库)
   memoryMaxFactsPerExtraction?: number;
   memoryFactInjectionTopN?: number;
   memoryHistoryInjectionTopN?: number;
+  memoryExtractionPrompt?: string;
+  memoryExtractionModel?: string;
+  memoryRecallTopK?: number;
   // registry 资源级参数的透传对象,只写 memory.* dotted 键
   parameters?: Record<string, unknown>;
   allowedSkills?: string[];
@@ -86,7 +100,12 @@ export interface AgentFormValues {
 // null/undefined 不产生键,空对象表示无 memory 覆盖(后端不落库)。
 export type MemoryParamValues = Pick<
   AgentFormValues,
-  'memoryMaxFactsPerExtraction' | 'memoryFactInjectionTopN' | 'memoryHistoryInjectionTopN'
+  | 'memoryMaxFactsPerExtraction'
+  | 'memoryFactInjectionTopN'
+  | 'memoryHistoryInjectionTopN'
+  | 'memoryExtractionPrompt'
+  | 'memoryExtractionModel'
+  | 'memoryRecallTopK'
 >;
 export const buildMemoryParameters = (values: MemoryParamValues): Record<string, unknown> => {
   const params: Record<string, unknown> = {};
@@ -98,6 +117,15 @@ export const buildMemoryParameters = (values: MemoryParamValues): Record<string,
   }
   if (values.memoryHistoryInjectionTopN != null) {
     params['memory.history_injection_top_n'] = values.memoryHistoryInjectionTopN;
+  }
+  if (values.memoryExtractionPrompt != null) {
+    params['memory.extraction_prompt'] = values.memoryExtractionPrompt;
+  }
+  if (values.memoryExtractionModel != null) {
+    params['memory.extraction_model'] = values.memoryExtractionModel;
+  }
+  if (values.memoryRecallTopK != null) {
+    params['memory.recall_top_k'] = values.memoryRecallTopK;
   }
   return params;
 };

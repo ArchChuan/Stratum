@@ -83,10 +83,17 @@ export const useEditAgentPage = () => {
           max_tokens: a.max_tokens,
           compaction_recent_groups: a.compaction_recent_groups,
           compaction_safety_ratio: a.compaction_safety_ratio,
+          // compaction_prompt/temperature/model 是顶层 DTO 字段，GET 回显顶层。
+          compaction_prompt: a.compaction_prompt,
+          compaction_temperature: a.compaction_temperature,
+          compaction_model: a.compaction_model,
           // memory.* 存 agents.parameters JSONB 的 dotted 键，经 a.parameters 回显
           memoryMaxFactsPerExtraction: memoryParam(a.parameters, 'memory.max_facts_per_extraction'),
           memoryFactInjectionTopN: memoryParam(a.parameters, 'memory.fact_injection_top_n'),
           memoryHistoryInjectionTopN: memoryParam(a.parameters, 'memory.history_injection_top_n'),
+          memoryExtractionPrompt: memoryParam(a.parameters, 'memory.extraction_prompt'),
+          memoryExtractionModel: memoryParam(a.parameters, 'memory.extraction_model'),
+          memoryRecallTopK: memoryParam(a.parameters, 'memory.recall_top_k'),
           allowedSkills: a.allowedSkills || [],
           mcpToolIds: a.mcpToolIds || [],
           knowledgeWorkspaceIds: a.knowledgeWorkspaceIds || [],
@@ -110,11 +117,22 @@ export const useEditAgentPage = () => {
     async (values: AgentFormValues) => {
       setLoading(true);
       try {
-        const { memoryMaxFactsPerExtraction, memoryFactInjectionTopN, memoryHistoryInjectionTopN, ...rest } = values;
+        const {
+          memoryMaxFactsPerExtraction,
+          memoryFactInjectionTopN,
+          memoryHistoryInjectionTopN,
+          memoryExtractionPrompt,
+          memoryExtractionModel,
+          memoryRecallTopK,
+          ...rest
+        } = values;
         const memoryParameters = buildMemoryParameters({
           memoryMaxFactsPerExtraction,
           memoryFactInjectionTopN,
           memoryHistoryInjectionTopN,
+          memoryExtractionPrompt,
+          memoryExtractionModel,
+          memoryRecallTopK,
         });
         await agentApi.update(id, {
           ...rest,
@@ -141,10 +159,10 @@ export const useEditAgentPage = () => {
   };
 };
 
-// memoryParam 从 GET 回显的 a.parameters（dotted memory.* 键）取数值，缺失或
-// 非数值时返回 undefined（表单控件显示空 = 不覆盖，回落 pkg/constants 默认）。
-function memoryParam(parameters: unknown, key: string): number | undefined {
+// memoryParam 从 GET 回显的 a.parameters（dotted memory.* 键）取数值或字符串，
+// 缺失或类型不符时返回 undefined（表单控件显示空 = 不覆盖，回落默认）。
+function memoryParam<T extends string | number>(parameters: unknown, key: string): T | undefined {
   if (typeof parameters !== 'object' || parameters === null) return undefined;
   const v = (parameters as Record<string, unknown>)[key];
-  return typeof v === 'number' ? v : undefined;
+  return typeof v === 'number' || typeof v === 'string' ? (v as T) : undefined;
 }

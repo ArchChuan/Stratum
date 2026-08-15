@@ -4,8 +4,42 @@ import (
 	"context"
 	"time"
 
+	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"go.uber.org/zap"
 )
+
+// resolvePlatformString resolves a platform string param through r, returning
+// def when r is nil, the key is unset, or resolution fails. Shared by the
+// history summarizer and superseder cross-agent workers.
+func resolvePlatformString(ctx context.Context, r memport.PlatformParamResolver, key, def string) string {
+	if r == nil {
+		return def
+	}
+	v, ok, err := r.ResolvePlatform(ctx, key)
+	if err != nil || !ok {
+		return def
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return def
+}
+
+// resolvePlatformFloat resolves a platform float param through r, returning
+// def when r is nil, the key is unset (0), or resolution fails.
+func resolvePlatformFloat(ctx context.Context, r memport.PlatformParamResolver, key string, def float32) float32 {
+	if r == nil {
+		return def
+	}
+	v, ok, err := r.ResolvePlatform(ctx, key)
+	if err != nil || !ok {
+		return def
+	}
+	if f, ok := v.(float64); ok {
+		return float32(f)
+	}
+	return def
+}
 
 // SleepCtx sleeps for duration d, returning early if ctx is cancelled or stopCh is closed.
 // Returns true if the full duration elapsed, false if cancelled early.

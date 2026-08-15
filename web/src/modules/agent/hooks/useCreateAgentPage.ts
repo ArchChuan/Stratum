@@ -59,11 +59,22 @@ export const useCreateAgentPage = () => {
     async (values: AgentFormValues) => {
       setLoading(true);
       try {
-        const { memoryMaxFactsPerExtraction, memoryFactInjectionTopN, memoryHistoryInjectionTopN, ...rest } = values;
+        const {
+          memoryMaxFactsPerExtraction,
+          memoryFactInjectionTopN,
+          memoryHistoryInjectionTopN,
+          memoryExtractionPrompt,
+          memoryExtractionModel,
+          memoryRecallTopK,
+          ...rest
+        } = values;
         const memoryParameters = buildMemoryParameters({
           memoryMaxFactsPerExtraction,
           memoryFactInjectionTopN,
           memoryHistoryInjectionTopN,
+          memoryExtractionPrompt,
+          memoryExtractionModel,
+          memoryRecallTopK,
         });
         await agentApi.create({
           ...rest,

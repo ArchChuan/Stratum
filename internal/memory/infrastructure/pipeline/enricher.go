@@ -45,24 +45,23 @@ type EntityExtraction struct {
 // extraction, persists enrichment results, and triggers conversation
 // summaries when the token budget is exceeded.
 type EnricherWorker struct {
-	consumer       jetstream.Consumer
-	js             dlqPublisher
-	pool           *pgxpool.Pool
-	llmResolver    LLMResolver
-	logger         *zap.Logger
-	model          string
-	summaryModel   string
-	threshold      int
-	enrichmentTmpl string
-	summaryTmpl    string
-	stopCh         chan struct{}
-	stopOnce       sync.Once
-	ackWait        time.Duration
-	maxDeliver     int
-	snapshotRepo   port.ActiveSnapshotRepo
+	consumer      jetstream.Consumer
+	js            dlqPublisher
+	pool          *pgxpool.Pool
+	llmResolver   LLMResolver
+	paramResolver port.PlatformParamResolver
+	logger        *zap.Logger
+	stopCh        chan struct{}
+	stopOnce      sync.Once
+	ackWait       time.Duration
+	maxDeliver    int
+	snapshotRepo  port.ActiveSnapshotRepo
 }
 
 // NewEnricherWorker creates an enricher configured from the pipeline Config.
+// LLM content settings (model / temperature / prompt / threshold) are no
+// longer captured here: they resolve from the platform parameter store per
+// call, so admin edits apply without a worker restart.
 func NewEnricherWorker(
 	consumer jetstream.Consumer,
 	js dlqPublisher,
@@ -70,32 +69,15 @@ func NewEnricherWorker(
 	logger *zap.Logger,
 	cfg Config,
 ) *EnricherWorker {
-	model := cfg.EnrichModel
-	if model == "" {
-		model = "qwen-turbo"
-	}
-	summaryModel := cfg.SummaryModel
-	if summaryModel == "" {
-		summaryModel = model
-	}
-	threshold := cfg.SummaryTokenThreshold
-	if threshold == 0 {
-		threshold = constants.EnricherSummaryTokenThreshold
-	}
 	return &EnricherWorker{
-		consumer:       consumer,
-		js:             js,
-		pool:           pool,
-		logger:         logger,
-		model:          model,
-		summaryModel:   summaryModel,
-		threshold:      threshold,
-		enrichmentTmpl: cfg.EnrichmentPrompt,
-		summaryTmpl:    cfg.SummaryPrompt,
-		stopCh:         make(chan struct{}),
-		ackWait:        cfg.EnrichAckWait,
-		maxDeliver:     cfg.MaxDeliver,
-		snapshotRepo:   persistence.NewActiveSnapshotRepo(pool),
+		consumer:     consumer,
+		js:           js,
+		pool:         pool,
+		logger:       logger,
+		stopCh:       make(chan struct{}),
+		ackWait:      cfg.EnrichAckWait,
+		maxDeliver:   cfg.MaxDeliver,
+		snapshotRepo: persistence.NewActiveSnapshotRepo(pool),
 	}
 }
 
@@ -105,6 +87,96 @@ func NewEnricherWorker(
 func (w *EnricherWorker) WithLLMResolver(r LLMResolver) *EnricherWorker {
 	w.llmResolver = r
 	return w
+}
+
+// WithParamResolver sets the platform parameter resolver used to resolve
+// per-call LLM content settings. A nil resolver keeps the const defaults.
+func (w *EnricherWorker) WithParamResolver(r port.PlatformParamResolver) *EnricherWorker {
+	w.paramResolver = r
+	return w
+}
+
+// resolvePlatformString resolves a platform string param, falling back to def
+// when the resolver is absent, the value is unset, or resolution fails.
+func (w *EnricherWorker) resolvePlatformString(ctx context.Context, key, def string) string {
+	if w.paramResolver == nil {
+		return def
+	}
+	v, ok, err := w.paramResolver.ResolvePlatform(ctx, key)
+	if err != nil || !ok {
+		return def
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return def
+}
+
+// resolvePlatformFloat resolves a platform float param, falling back to def
+// when the resolver is absent, the value is unset (0), or resolution fails.
+func (w *EnricherWorker) resolvePlatformFloat(ctx context.Context, key string, def float32) float32 {
+	if w.paramResolver == nil {
+		return def
+	}
+	v, ok, err := w.paramResolver.ResolvePlatform(ctx, key)
+	if err != nil || !ok {
+		return def
+	}
+	if f, ok := v.(float64); ok {
+		return float32(f)
+	}
+	return def
+}
+
+// resolvePlatformInt resolves a platform int param, falling back to def when
+// the resolver is absent, the value is unset (0), or resolution fails.
+func (w *EnricherWorker) resolvePlatformInt(ctx context.Context, key string, def int) int {
+	if w.paramResolver == nil {
+		return def
+	}
+	v, ok, err := w.paramResolver.ResolvePlatform(ctx, key)
+	if err != nil || !ok {
+		return def
+	}
+	if i, ok := v.(int64); ok {
+		return int(i)
+	}
+	return def
+}
+
+// enrichSettings holds the per-call platform-resolved enrich LLM settings.
+type enrichSettings struct {
+	model       string
+	temperature float32
+}
+
+// resolveEnrichSettings resolves the enrich model/temperature for one event.
+// Empty model keeps the const default; the prompt is resolved separately and
+// empty falls through to the built-in template.
+func (w *EnricherWorker) resolveEnrichSettings(ctx context.Context) enrichSettings {
+	return enrichSettings{
+		model:       w.resolvePlatformString(ctx, "memory.enrich_model", constants.MemoryEnrichDefaultModel),
+		temperature: w.resolvePlatformFloat(ctx, "memory.enrich_temperature", constants.MemoryEnrichLLMTemperature),
+	}
+}
+
+// summarySettings holds the per-call platform-resolved session-summary LLM
+// settings plus the trigger threshold.
+type summarySettings struct {
+	model       string
+	temperature float32
+	threshold   int
+}
+
+// resolveSummarySettings resolves the summary model/temperature/threshold for
+// one event. Empty model keeps the const default; the prompt is resolved
+// separately and empty falls through to the built-in template.
+func (w *EnricherWorker) resolveSummarySettings(ctx context.Context) summarySettings {
+	return summarySettings{
+		model:       w.resolvePlatformString(ctx, "memory.summary_model", constants.MemorySummaryDefaultModel),
+		temperature: w.resolvePlatformFloat(ctx, "memory.summary_temperature", constants.TaskSummarizeTemperature),
+		threshold:   w.resolvePlatformInt(ctx, "memory.summary_token_threshold", constants.EnricherSummaryTokenThreshold),
+	}
 }
 
 // llmFor returns the LLMClient for tenantID. Prefers the resolver-supplied
@@ -309,8 +381,13 @@ func (w *EnricherWorker) runSummaryAsyncSafe(ctx context.Context, ev *MemoryEnri
 }
 
 func (w *EnricherWorker) callEnrichLLM(ctx context.Context, llm LLMClient, role, content string) (*EnrichmentResult, error) {
-	prompt := formatEnrichmentPrompt(w.enrichmentTmpl, role, content)
-	req := llmdomain.NewExtractRequest(w.model, "", prompt, constants.MemoryEnrichLLMTemperature, 0)
+	settings := w.resolveEnrichSettings(ctx)
+	promptTmpl := w.resolvePlatformString(ctx, "memory.enrich_prompt", "")
+	prompt := formatEnrichmentPrompt(promptTmpl, role, content)
+	w.logger.Debug("memory.enrich_resolved",
+		zap.String("model", settings.model),
+		zap.Float32("temperature", settings.temperature))
+	req := llmdomain.NewExtractRequest(settings.model, "", prompt, settings.temperature, 0)
 
 	llmCtx, cancel := context.WithTimeout(ctx, constants.MemoryEnrichLLMTimeout)
 	defer cancel()
@@ -420,8 +497,13 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnri
 		return nil
 	}
 
+	settings := w.resolveSummarySettings(ctx)
+	w.logger.Debug("memory.summary_resolved",
+		zap.String("model", settings.model),
+		zap.Float32("temperature", settings.temperature),
+		zap.Int("token_threshold", settings.threshold))
 	schema := "tenant_" + ev.TenantID
-	accumulated, prevSummary, sb, err := w.fetchSummaryInputs(ctx, schema, ev.ConversationID)
+	accumulated, prevSummary, sb, err := w.fetchSummaryInputs(ctx, schema, ev.ConversationID, settings.threshold)
 	if err != nil {
 		return err
 	}
@@ -437,8 +519,12 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnri
 	if prevSummary != "" {
 		input = "[Previous Summary]: " + prevSummary + "\n\n[New Messages]:\n" + input
 	}
-	prompt := formatSummaryPrompt(w.summaryTmpl, input)
-	req := llmdomain.NewSummarizeRequest(w.summaryModel, prompt, nil, 0)
+	promptTmpl := w.resolvePlatformString(ctx, "memory.summary_prompt", "")
+	prompt := formatSummaryPrompt(promptTmpl, input)
+	req := llmdomain.NewSummarizeRequest(settings.model, prompt, nil, 0)
+	// NewSummarizeRequest 内部固定 TaskSummarizeTemperature；平台配置的温度
+	// 在构造后覆盖，支持超管运行态调整摘要温度。
+	req.Temperature = settings.temperature
 	llmCtx, cancel := context.WithTimeout(ctx, constants.MemorySummaryLLMTimeout)
 	defer cancel()
 	resp, err := llm.Complete(llmCtx, req)
@@ -461,8 +547,10 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnri
 }
 
 // fetchSummaryInputs 在短事务里检查阈值并捞历史消息，立即释放事务后再去调 LLM。
-// 返回 (累计 token, 历史消息文本 builder, err)。当 builder 为 nil 时表示无需触发摘要。
-func (w *EnricherWorker) fetchSummaryInputs(ctx context.Context, schema, convID string) (int, string, *strings.Builder, error) {
+// threshold 由调用方（maybeTriggerSummary）解析平台 memory.summary_token_threshold，
+// 传参避免读取可变 worker 状态。返回 (累计 token, 历史消息文本 builder, err)。
+// 当 builder 为 nil 时表示无需触发摘要。
+func (w *EnricherWorker) fetchSummaryInputs(ctx context.Context, schema, convID string, threshold int) (int, string, *strings.Builder, error) {
 	tx, err := w.pool.Begin(ctx)
 	if err != nil {
 		return 0, "", nil, fmt.Errorf("begin tx: %w", err)
@@ -483,7 +571,7 @@ func (w *EnricherWorker) fetchSummaryInputs(ctx context.Context, schema, convID 
 		)`, convID).Scan(&accumulated); err != nil {
 		return 0, "", nil, fmt.Errorf("check token budget: %w", err)
 	}
-	if accumulated < w.threshold {
+	if accumulated < threshold {
 		return accumulated, "", nil, nil
 	}
 
