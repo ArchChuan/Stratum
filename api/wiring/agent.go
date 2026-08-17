@@ -420,6 +420,7 @@ func wireTaskCleanup(c *Container, a *Agent, ctx context.Context) {
 	)
 	a.TaskCleanup.Start(ctx)
 	c.shutdown = append(c.shutdown, func(context.Context) error {
+		a.CheckpointCleanup.Stop()
 		a.TaskCleanup.Stop()
 		return nil
 	})
