@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -75,15 +76,17 @@ func (s *PgCheckpointStore) Upsert(
 	})
 }
 
-// DeleteExpired removes checkpoints whose expires_at has passed,
-// excluding completed and failed ones. Returns the number of rows deleted.
+// DeleteExpired removes checkpoints whose expires_at has passed. Running/paused
+// rows inherit PlanCheckpointTTL via Upsert; terminal rows (completed/failed/
+// expired) gain CheckpointTerminalTTL at transition time, so finished executions
+// are reclaimed a fixed window after they finish rather than kept forever.
+// Returns the number of rows deleted.
 func (s *PgCheckpointStore) DeleteExpired(ctx context.Context, tenantID string) (int64, error) {
 	var deleted int64
 	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx,
 			`DELETE FROM agent_execution_checkpoints
-			  WHERE expires_at < NOW()
-			    AND status NOT IN ('completed', 'failed', 'expired')`)
+			  WHERE expires_at < NOW()`)
 		if err != nil {
 			return fmt.Errorf("checkpoint_store: delete expired: %w", err)
 		}
@@ -127,9 +130,10 @@ func (s *PgCheckpointStore) MarkCompleted(ctx context.Context, tenantID, executi
 	return execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
 			`UPDATE agent_execution_checkpoints
-			    SET status = 'completed', updated_at = NOW()
+			    SET status = 'completed', updated_at = NOW(),
+			        expires_at = NOW() + $2::interval
 			  WHERE execution_id = $1 AND status = 'running'`,
-			executionID,
+			executionID, constants.CheckpointTerminalTTL,
 		)
 		if err != nil {
 			return fmt.Errorf("checkpoint_store: mark completed: %w", err)
@@ -140,13 +144,19 @@ func (s *PgCheckpointStore) MarkCompleted(ctx context.Context, tenantID, executi
 
 // UpdateStatus transitions a checkpoint to the given status. Only updates
 // when the current status is 'running' to prevent overwriting terminal states.
+// Terminal transitions (completed/failed/expired) refresh expires_at with
+// CheckpointTerminalTTL so DeleteExpired reclaims them after the retention
+// window instead of keeping them forever.
 func (s *PgCheckpointStore) UpdateStatus(ctx context.Context, tenantID, executionID, status string) error {
 	return execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx,
 			`UPDATE agent_execution_checkpoints
-			    SET status = $1, updated_at = NOW()
+			    SET status = $1, updated_at = NOW(),
+			        expires_at = CASE WHEN $1 IN ('completed', 'failed', 'expired')
+			                          THEN NOW() + $3::interval
+			                          ELSE expires_at END
 			  WHERE execution_id = $2 AND status = 'running'`,
-			status, executionID,
+			status, executionID, constants.CheckpointTerminalTTL,
 		)
 		if err != nil {
 			return fmt.Errorf("checkpoint_store: update status: %w", err)

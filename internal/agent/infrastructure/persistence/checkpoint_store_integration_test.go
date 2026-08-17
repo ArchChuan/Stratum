@@ -71,14 +71,34 @@ func TestCheckpointLifecycleRealPostgres(t *testing.T) {
 		t.Fatalf("mark completed: %v", err)
 	}
 
-	// verify completed checkpoint is NOT deleted by DeleteExpired
-	t.Run("completed not deleted", func(t *testing.T) {
+	// MarkCompleted 已把 expires_at 续为 CheckpointTerminalTTL,保留窗口内的
+	// 已完成行必须被 DeleteExpired 保留
+	t.Run("completed within retention not deleted", func(t *testing.T) {
 		deleted, err := store.DeleteExpired(ctx, tenantID)
 		if err != nil {
 			t.Fatalf("delete expired: %v", err)
 		}
 		if deleted != 0 {
-			t.Fatalf("expected 0 deleted (completed), got %d", deleted)
+			t.Fatalf("expected 0 deleted (completed within retention), got %d", deleted)
+		}
+	})
+
+	// 超过 CheckpointTerminalTTL 的已完成行必须被回收,避免 terminal
+	// checkpoint 永久堆积在租户 schema(旧实现被 status NOT IN 排除)
+	t.Run("completed beyond retention is deleted", func(t *testing.T) {
+		_, err := pool.Exec(ctx,
+			`UPDATE "`+schema+`".agent_execution_checkpoints
+			    SET expires_at = NOW() - INTERVAL '8 days'
+			  WHERE execution_id = $1`, "exec-lifecycle")
+		if err != nil {
+			t.Fatalf("age completed row: %v", err)
+		}
+		deleted, err := store.DeleteExpired(ctx, tenantID)
+		if err != nil {
+			t.Fatalf("delete expired: %v", err)
+		}
+		if deleted != 1 {
+			t.Fatalf("expected 1 deleted (completed beyond retention), got %d", deleted)
 		}
 	})
 
