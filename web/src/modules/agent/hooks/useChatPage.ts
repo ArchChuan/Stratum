@@ -7,6 +7,7 @@ import {
   type Agent,
   type ChatMessage,
   type Conversation,
+  type TaskSnapshot,
   type ToolApproval,
 } from '../model/agent';
 
@@ -21,6 +22,23 @@ const normalizeArtifacts = (value: unknown) => {
   return parsed.success ? parsed.data : [];
 };
 
+// SSE done metadata 白名单透出（stratum_task_snapshot）：字段缺失或非对象时
+// 返回 undefined，消息不带摘要条（Task 11 契约：metadata 恒存在，只按快照键判断）。
+function parseTaskSnapshot(meta: Record<string, unknown> | undefined): TaskSnapshot | undefined {
+  const raw = meta?.['stratum_task_snapshot'];
+  if (!raw || typeof raw !== 'object') return undefined;
+  const s = raw as Partial<TaskSnapshot>;
+  if (!s.goal || !s.currentPhase) return undefined;
+  return {
+    goal: s.goal,
+    currentPhase: s.currentPhase,
+    completedSteps: s.completedSteps ?? [],
+    nextAction: s.nextAction ?? '',
+    status: s.status ?? 'active',
+    failures: s.failures,
+  };
+}
+
 // 组装临时消息（本地乐观渲染，尚未落库）
 const makeMessage = (msg: {
   id: string;
@@ -30,6 +48,7 @@ const makeMessage = (msg: {
   artifacts?: ChatMessage['artifacts'];
   interrupted?: boolean;
   sources?: ChatMessage['sources'];
+  taskSnapshot?: ChatMessage['taskSnapshot'];
 }): ChatMessage => ({
   id: msg.id,
   role: msg.role,
@@ -39,6 +58,7 @@ const makeMessage = (msg: {
   artifacts: msg.artifacts,
   interrupted: msg.interrupted,
   sources: msg.sources,
+  taskSnapshot: msg.taskSnapshot,
 });
 
 type UseChatPageOptions = { fixedAgentId?: string };
@@ -252,6 +272,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
                   artifacts: normalizeArtifacts(st.result?.artifacts),
                   // 滚动升级期旧后端无 sources 字段：?? [] 容错
                   sources: st.result?.sources ?? [],
+                  taskSnapshot: parseTaskSnapshot(st.result?.metadata),
                 }),
               ]);
             } else if (!hasUserMsg && st.userQuery) {

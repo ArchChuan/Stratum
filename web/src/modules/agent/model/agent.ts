@@ -271,6 +271,15 @@ export const chatMessageSchema = z
     interrupted: z.boolean().optional(),
   })
   .passthrough();
+/** 后端 TaskSnapshot 的 JSON 形态（camelCase 与 Go 对齐） */
+export interface TaskSnapshot {
+  goal: string;
+  currentPhase: string;
+  completedSteps: string[];
+  nextAction: string;
+  status: 'active' | 'completed' | 'abandoned';
+  failures?: number;
+}
 export interface ChatMessage {
   id?: string;
   role: string;
@@ -280,6 +289,8 @@ export interface ChatMessage {
   artifacts?: ExecutionArtifact[];
   interrupted?: boolean;
   sources?: ChatCitationSource[];
+  /** 跨会话目标进度摘要（stratum_task_snapshot 透出）；无则 undefined */
+  taskSnapshot?: TaskSnapshot;
   [key: string]: unknown;
 }
 
@@ -298,6 +309,7 @@ export interface AgentExecutionResult {
   artifacts?: ExecutionArtifact[];
   sources?: ChatCitationSource[];
   error?: string;
+  metadata?: Record<string, unknown>;  // SSE done 白名单透出（thoughtsJSON/toolCallsJSON/stratum_task_snapshot）
   [key: string]: unknown;
 }
 
