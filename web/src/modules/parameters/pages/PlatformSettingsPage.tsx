@@ -3,31 +3,26 @@ import {
   Card,
   Col,
   Form,
-  Input,
-  InputNumber,
   Row,
-  Select,
-  Slider,
-  Switch,
   Typography,
   message,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 
 import { parametersApi } from '../api/parameters.api';
-import { ProviderModelSelect } from '../components/ProviderModelSelect';
+import { ParameterControl } from '../components/ParameterControl';
+import { PromptDefaultViewer } from '../components/PromptDefaultViewer';
 import type {
   ParameterDefinition,
   PlatformSettingsFormValues,
   PlatformValues,
-  VisualHint,
 } from '../model/parameters';
 
 import { extractErrorMessage, isForbidden } from '@/shared/lib';
+import { DefaultHint } from '@/shared/ui';
 
 const { Text } = Typography;
-const { TextArea } = Input;
-const { Option } = Select;
 
 // 敏感参数(apiKey 类)永不渲染;资源 scope 由 Agent / 知识库表单各自承载。
 const renderable = (def: ParameterDefinition): boolean =>
@@ -36,59 +31,56 @@ const renderable = (def: ParameterDefinition): boolean =>
 const groupByCategory = (defs: ParameterDefinition[]): ParameterDefinition[] =>
   defs.filter(renderable);
 
-const sliderMarks = (hint: VisualHint): Record<number, string> => {
-  if (hint.max == null) return {};
-  return {
-    [hint.min ?? 0]: String(hint.min ?? 0),
-    [hint.max]: String(hint.max),
-  };
-};
+// 平台页可查看默认模板的提示词键（与后端 prompt-defaults 白名单对应，
+// agent.* 与 memory.extraction_prompt 在 Agent 编辑页展示）。
+const PROMPT_DEFAULT_KEYS = new Set([
+  'memory.enrich_prompt',
+  'memory.summary_prompt',
+  'memory.history_summary_prompt',
+  'memory.supersede_prompt',
+]);
 
-const controlFor = (def: ParameterDefinition): ReactNode => {
-  const hint: VisualHint = def.visual_hint;
-  switch (hint.control) {
-    case 'toggle':
-      return <Switch />;
-    case 'select': {
-      const options = (hint.options ?? []).map((opt) => String(opt));
-      return (
-        <Select
-          style={{ width: '100%', maxWidth: 240 }}
-          allowClear
-          placeholder="未设置（使用定义默认）"
-        >
-          {options.map((opt) => (
-            <Option key={opt} value={opt}>
-              {opt}
-            </Option>
-          ))}
-        </Select>
-      );
+// PlatformFieldItem 逐字段 watch 派生 unset（只重渲染本字段）。unset = 表单无值
+// 或 0/''（List 语义：非 0 默认后端已回填，缺失键即 0/''/nil 默认）。hint 只
+// 提示不写回；toggle 恒被 List 返回，无缺失场景，不渲染 hint。
+const PlatformFieldItem = ({ def }: { def: ParameterDefinition }) => {
+  const form = Form.useFormInstance();
+  const value = Form.useWatch(def.key, form);
+  const isToggle = def.visual_hint.control === 'toggle';
+  const unset = value == null || value === '' || value === 0;
+
+  let hint: ReactNode = null;
+  if (!isToggle && unset) {
+    const d = def.default;
+    if (d === undefined || d === null || d === '') {
+      hint = <Text type="secondary">未设置（使用定义默认）</Text>;
+    } else if (typeof d === 'number' && d === 0) {
+      hint = <DefaultHint value={0} suffix="（未设置）" />;
+    } else {
+      hint = <DefaultHint value={d} />;
     }
-    case 'slider':
-      return <Slider min={hint.min ?? 0} max={hint.max ?? 100} step={hint.step ?? 1} marks={sliderMarks(hint)} />;
-    case 'number':
-      return (
-        <InputNumber
-          min={hint.min ?? 0}
-          max={hint.max ?? undefined}
-          step={hint.step ?? 1}
-          style={{ width: '100%', maxWidth: 240 }}
-        />
-      );
-    case 'model':
-      // 模型目录选择器（provider 分组）；存储值 = 模型名。
-      return <ProviderModelSelect />;
-    case 'textarea':
-      return (
-        <TextArea
-          rows={4}
-          placeholder={typeof def.default === 'string' ? `默认：${def.default}` : undefined}
-        />
-      );
-    default:
-      return null;
   }
+
+  return (
+    <Form.Item
+      label={def.display_name || def.key}
+      name={def.key}
+      valuePropName={isToggle ? 'checked' : undefined}
+      tooltip={def.description || def.key}
+      extra={
+        hint !== null || (def.visual_hint.control === 'textarea' && PROMPT_DEFAULT_KEYS.has(def.key)) ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            {hint}
+            {def.visual_hint.control === 'textarea' && PROMPT_DEFAULT_KEYS.has(def.key) && (
+              <PromptDefaultViewer promptKey={def.key} />
+            )}
+          </div>
+        ) : undefined
+      }
+    >
+      <ParameterControl def={def} />
+    </Form.Item>
+  );
 };
 
 export const PlatformSettingsPage = () => {
@@ -186,14 +178,7 @@ export const PlatformSettingsPage = () => {
             <Row gutter={[24, 8]}>
               {defsInGroup.map((def) => (
                 <Col key={def.key} xs={24} md={12}>
-                  <Form.Item
-                    label={def.display_name || def.key}
-                    name={def.key}
-                    valuePropName={def.visual_hint.control === 'toggle' ? 'checked' : undefined}
-                    tooltip={def.description || def.key}
-                  >
-                    {controlFor(def)}
-                  </Form.Item>
+                  <PlatformFieldItem def={def} />
                 </Col>
               ))}
             </Row>

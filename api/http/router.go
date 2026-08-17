@@ -281,12 +281,14 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		tenantGroup.PATCH("/settings", requireActive, tenantHandler.UpdateSettings)
 		tenantGroup.DELETE("", middleware.RequireTenantRole("owner"), tenantHandler.DeleteSelf)
 	}
+	registerParameterTenantRoutes(r, c)
 
 	r.GET("/tenant/list", jwtMW, tenantHandler.ListUserTenants)
 }
 
 // registerParameterAdminRoutes wires the unified parameter registry admin
-// endpoints (schema + platform values) when the registry is wired.
+// endpoints (schema + platform values + prompt defaults) when the registry is
+// wired. Consumers of prompt-defaults: platform settings page (global admin).
 func registerParameterAdminRoutes(adminGroup *gin.RouterGroup, c *wiring.Container) {
 	if c.Parameters == nil || c.Parameters.Service == nil {
 		return
@@ -295,6 +297,20 @@ func registerParameterAdminRoutes(adminGroup *gin.RouterGroup, c *wiring.Contain
 	adminGroup.GET("/parameters/schema", paramHandler.Schema)
 	adminGroup.GET("/parameters", paramHandler.List)
 	adminGroup.PUT("/parameters", paramHandler.Update)
+	adminGroup.GET("/parameters/prompt-defaults", paramHandler.PromptDefaults)
+}
+
+// registerParameterTenantRoutes wires the tenant-scope twin of the prompt
+// defaults endpoint (read-only) for the agent edit page, whose consumer is a
+// tenant admin rather than a global admin. Registration is skipped when the
+// registry is unwired (same gate as the admin twin).
+func registerParameterTenantRoutes(r *gin.Engine, c *wiring.Container) {
+	if c.Parameters == nil || c.Parameters.Service == nil {
+		return
+	}
+	paramHandler := handler.NewParameterHandler(c.Parameters.Service, c.Logger)
+	tenantAdmin := r.Group("/parameters", protectedTenantMiddleware(c, middleware.RequireTenantRole("admin"))...)
+	tenantAdmin.GET("/prompt-defaults", paramHandler.PromptDefaults)
 }
 
 // dlqReplayAdapter 把 pipeline.ReplayService 适配到 handler 的消费方接口

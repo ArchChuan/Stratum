@@ -1,5 +1,7 @@
 export { DangerPopconfirm } from './DangerPopconfirm';
 export type { DangerPopconfirmProps } from './DangerPopconfirm';
+export { DefaultHint } from './DefaultHint';
+export type { DefaultHintProps } from './DefaultHint';
 export { EmptyHint } from './EmptyHint';
 export type { EmptyHintProps } from './EmptyHint';
 export { FormPage } from './FormPage';

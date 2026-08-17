@@ -13,20 +13,6 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
-// supersedePromptTemplate 是判断模板（现状硬编码值，mechanism 移除后为唯一权威）。
-const supersedePromptTemplate = `判断新事实是否应该取代旧事实。
-
-旧事实：%s
-新事实：%s
-
-判断标准：
-- 如果新事实是对旧事实的更新、纠正或推翻，则应取代（supersedes: true）
-- 如果两者描述不同方面或可以并存，则不取代（supersedes: false）
-- 如果新事实只是旧事实的子集或更模糊的表达，则不取代
-
-只输出 JSON，不加任何说明：
-{"supersedes": true/false, "reason": "简短说明"}`
-
 // LLMSuperseder adapts an LLM client or tenant resolver to memport.LLMSuperseder.
 type LLMSuperseder struct {
 	client        pipeline.LLMClient
@@ -73,7 +59,7 @@ func (s *LLMSuperseder) JudgeSupersede(ctx context.Context, oldFact, newFact str
 	}
 	model := resolvePlatformString(ctx, s.paramResolver, "memory.supersede_model", "")
 	temperature := resolvePlatformFloat(ctx, s.paramResolver, "memory.supersede_temperature", 0)
-	promptTmpl := resolvePlatformString(ctx, s.paramResolver, "memory.supersede_prompt", supersedePromptTemplate)
+	promptTmpl := resolvePlatformString(ctx, s.paramResolver, "memory.supersede_prompt", constants.MemorySupersedeDefaultPrompt)
 	prompt := fmt.Sprintf(promptTmpl, oldFact, newFact)
 	// 判定模型为空：交由 llmgateway client 默认解析（pre-refactor 行为）。
 	judgment, err := pipeline.CompleteStructured(ctx, client, llmdomain.NewExtractRequest(
