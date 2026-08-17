@@ -14,18 +14,19 @@ import (
 
 // mockTaskRepo 记录调用并返回可控结果，供挂点测试。
 type mockTaskRepo struct {
-	mu            sync.Mutex
-	claimCalls    int
-	saveCalls     int
-	claimedGen    int64
-	claimedTask   *domain.Task
-	claimOK       bool
-	claimErr      error
-	saveErr       error
-	latestActive  *domain.Task
-	latestErr     error
-	detachCalls   int
-	deleteExpired int64
+	mu                 sync.Mutex
+	claimCalls         int
+	saveCalls          int
+	claimedGen         int64
+	claimedTask        *domain.Task
+	claimOK            bool
+	claimErr           error
+	saveErr            error
+	latestActive       *domain.Task
+	latestErr          error
+	detachCalls        int
+	deleteExpired      int64
+	deleteExpiredCalls int
 }
 
 func (m *mockTaskRepo) Claim(ctx context.Context, tenantID, taskID, conversationID string, lease time.Duration) (*domain.Task, bool, error) {
@@ -66,6 +67,9 @@ func (m *mockTaskRepo) DetachConversation(ctx context.Context, tenantID, convers
 }
 
 func (m *mockTaskRepo) DeleteExpired(ctx context.Context, tenantID string) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deleteExpiredCalls++
 	return m.deleteExpired, nil
 }
 
