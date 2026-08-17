@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/pashagolub/pgxmock/v2"
 )
 
@@ -111,11 +112,42 @@ func TestCheckpointStore_MarkCompleted(t *testing.T) {
 	defer pool.Close()
 	store := NewPgCheckpointStore(pool)
 	expectTenantTx(pool)
-	pool.ExpectExec("UPDATE agent_execution_checkpoints").WithArgs("exec-1").
+	// 完成时把 expires_at 续为 CheckpointTerminalTTL,DeleteExpired 在窗口内
+	// 不回收,窗口过后才删除。
+	pool.ExpectExec("UPDATE agent_execution_checkpoints").WithArgs("exec-1", constants.CheckpointTerminalTTL).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectCommit()
 	if err := store.MarkCompleted(context.Background(), "t1", "exec-1"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestCheckpointStore_UpdateStatus(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	store := NewPgCheckpointStore(pool)
+	// terminal 转换(completed/failed/expired)必须携带保留窗口参数,DeleteExpired
+	// 才能在 7 天后回收;非 terminal(如 paused)同样传 TTL 参数但 CASE 分支不改
+	// expires_at,此处按 SQL 参数断言,行为差异由集成测试覆盖真实 Postgres。
+	expectTenantTx(pool)
+	pool.ExpectExec("UPDATE agent_execution_checkpoints").WithArgs("completed", "exec-1", constants.CheckpointTerminalTTL).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectCommit()
+	expectTenantTx(pool)
+	pool.ExpectExec("UPDATE agent_execution_checkpoints").WithArgs("paused", "exec-2", constants.CheckpointTerminalTTL).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectCommit()
+	if err := store.UpdateStatus(context.Background(), "t1", "exec-1", "completed"); err != nil {
+		t.Fatalf("terminal update: %v", err)
+	}
+	if err := store.UpdateStatus(context.Background(), "t1", "exec-2", "paused"); err != nil {
+		t.Fatalf("non-terminal update: %v", err)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)

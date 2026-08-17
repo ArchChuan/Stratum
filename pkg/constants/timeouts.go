@@ -58,6 +58,12 @@ const (
 	// 24h covers typical human-in-loop review + overnight processing windows.
 	PlanCheckpointTTL = 24 * time.Hour
 
+	// CheckpointTerminalTTL is how long completed/failed/expired checkpoints are
+	// kept before DeleteExpired reclaims them. Terminal rows gain this window at
+	// transition time, so finished executions remain debuggable for a week
+	// without accumulating in the tenant schema forever.
+	CheckpointTerminalTTL = 7 * 24 * time.Hour
+
 	// AgentReflectTimeout caps the single LLM call inside nodeReflect.
 	AgentReflectTimeout = 30 * time.Second
 	// AgentPlanTimeout caps the single LLM call inside nodePlan.
