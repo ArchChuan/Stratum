@@ -62,7 +62,7 @@ export const AgentMemoryConfig = ({ groupedModels }: AgentMemoryConfigProps) => 
     <Form.Item
       label="抽取提示词（memory.extraction_prompt）"
       name="memoryExtractionPrompt"
-      extra="记忆抽取系统提示词；留空 = 使用内置默认。自定义时建议保留 %s(userID)/%s(agentID)/%d(maxFacts) 占位符"
+      extra="记忆抽取规则；留空 = 使用内置默认。自定义内容仅作为附加规则，身份、数量上限与输出格式由系统统一处理，无需填写占位符"
     >
       <TextArea rows={4} placeholder="留空使用内置默认抽取提示词" />
     </Form.Item>

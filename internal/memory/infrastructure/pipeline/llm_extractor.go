@@ -13,15 +13,12 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
-// extractionSystemPrompt 是抽取模板（现状硬编码值，mechanism 移除后为唯一权威）。
-const extractionSystemPrompt = `你是一个长期记忆提取助手，负责从对话中提取关于用户（%s）的有价值事实，供 AI 助手（%s）在未来对话中使用。
+// extractionIdentityPrompt 是系统渲染、用户不可覆盖的部分：身份、数量上限、
+// fact_type 枚举与 JSON 输出协议。枚举与输出格式由领域模型/解析器固定，
+// 自定义 prompt 不得覆盖，否则抽取结果无法通过校验。
+const extractionIdentityPrompt = `你是一个长期记忆提取助手，负责从对话中提取关于用户（%s）的有价值事实，供 AI 助手（%s）在未来对话中使用。
 
-提取规则（严格执行）：
-- 只提取用户明确陈述、确认或展现的事实
-- 不提取：用户的提问、问候语、AI 助手的回复内容、工具调用的输出
-- 不提取泛化描述（如"用户提到了某件事"），只提取具体事实
-- 优先精确性：「用户偏好在 VS Code 中使用暗色主题」优于「用户有主题偏好」
-- 最多提取 %d 条事实；宁少勿滥，低价值事实直接忽略
+最多提取 %d 条事实；宁少勿滥，低价值事实直接忽略。
 
 fact_type 分类：
 - preference：用户的喜好、偏好、习惯
@@ -33,6 +30,14 @@ fact_type 分类：
 
 只输出 JSON 数组，不加任何说明或 markdown 标记：
 [{"content":"...","importance":0.0-1.0,"fact_type":"...","confidence":0.0-1.0,"entities":["实体名"]}]`
+
+// extractionRulesPrompt 是内置默认提取规则（memory.extraction_prompt 未自定义
+// 时使用）。身份/协议部分恒由系统渲染，用户自定义 prompt 只需写规则增量。
+const extractionRulesPrompt = `提取规则（严格执行）：
+- 只提取用户明确陈述、确认或展现的事实
+- 不提取：用户的提问、问候语、AI 助手的回复内容、工具调用的输出
+- 不提取泛化描述（如"用户提到了某件事"），只提取具体事实
+- 优先精确性：「用户偏好在 VS Code 中使用暗色主题」优于「用户有主题偏好」`
 
 // LLMExtractor adapts LLMClient to memport.LLMExtractor.
 type LLMExtractor struct {
@@ -76,24 +81,24 @@ func (e *LLMExtractor) maxFacts(ctx context.Context, agentID string) int {
 	return coerceResourceInt(v, constants.MemoryMaxFactsPerExtraction)
 }
 
-// extractionPrompt resolves memory.extraction_prompt for the target agent.
-// 未设/解析失败回退内置 extractionSystemPrompt 模板;自定义 prompt 按
-// %s(userID)/%s(agentID)/%d(maxFacts) 插值(与默认模板同一占位符契约,文档
-// 注明自定义 prompt 应含占位符)。
+// extractionPrompt 渲染抽取 system prompt：身份/上限/协议部分由系统固定渲染
+// （用户不可覆盖），规则部分取自定义 memory.extraction_prompt，未设/解析失败
+// 时回落内置默认规则。自定义 prompt 无需携带任何占位符。
 func (e *LLMExtractor) extractionPrompt(ctx context.Context, agentID, userID string, maxFacts int) string {
-	defaultPrompt := func() string { return fmt.Sprintf(extractionSystemPrompt, userID, agentID, maxFacts) }
+	identity := fmt.Sprintf(extractionIdentityPrompt, userID, agentID, maxFacts)
+	defaultRules := func() string { return identity + "\n\n" + extractionRulesPrompt }
 	if e.resolver == nil {
-		return defaultPrompt()
+		return defaultRules()
 	}
 	v, ok, err := e.resolver.Resolve(ctx, e.tenantID, agentID, "memory.extraction_prompt")
 	if err != nil || !ok {
-		return defaultPrompt()
+		return defaultRules()
 	}
 	s, ok := v.(string)
 	if !ok || strings.TrimSpace(s) == "" {
-		return defaultPrompt()
+		return defaultRules()
 	}
-	return fmt.Sprintf(s, userID, agentID, maxFacts)
+	return identity + "\n\n" + strings.TrimSpace(s)
 }
 
 // extractionModel resolves memory.extraction_model for the target agent;
