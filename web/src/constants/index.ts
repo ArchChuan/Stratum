@@ -91,13 +91,17 @@ export const MEMORY_DIAGNOSTICS_REFRESH_INTERVAL_MS = 30000; // 30s
 export const MEMORY_TOP_ENTITIES_LIMIT = 10;
 
 // 记忆注入参数控件 bounds，对齐 registry 中 memory.* resource-scope 的 VisualHint
-// （agents.parameters JSONB 的 dotted 键）。
+// （agents.parameters JSONB 的 dotted 键）。DEFAULT 对齐 registry Default，
+// 空值 = 不覆盖，回落系统默认。
 export const MEMORY_MAX_FACTS_MIN = 1;
 export const MEMORY_MAX_FACTS_MAX = 10;
+export const MEMORY_MAX_FACTS_DEFAULT = 10;
 export const MEMORY_FACT_INJECTION_MIN = 1;
 export const MEMORY_FACT_INJECTION_MAX = 20;
+export const MEMORY_FACT_INJECTION_DEFAULT = 8;
 export const MEMORY_HISTORY_INJECTION_MIN = 0;
 export const MEMORY_HISTORY_INJECTION_MAX = 10;
+export const MEMORY_HISTORY_INJECTION_DEFAULT = 3;
 
 // 上下文压缩温度控件 bounds；后端 CompactionDefaultTemperature=0.3，写路径钳制
 // [0,1]（Qwen/Zhipu 拒收 >1）。0 = unset，回落 0.3。
@@ -107,6 +111,7 @@ export const COMPACTION_TEMP_MAX = 1;
 // 后端 Handle 解析时 clamp [1,20]。
 export const RECALL_TOP_K_MIN = 1;
 export const RECALL_TOP_K_MAX = 20;
+export const RECALL_TOP_K_DEFAULT = 5;
 
 export const CHUNKING_STRATEGY_OPTIONS = [
   { value: 'structure_recursive', label: '结构感知（推荐）— Markdown 标题分层 + 递归分块' },
