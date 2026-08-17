@@ -113,9 +113,12 @@ func TestPromptDefaults_returnsAllWhitelistedTemplates(t *testing.T) {
 	if resp["agent.compaction_prompt"] != constants.CompactionDefaultPrompt {
 		t.Fatal("agent.compaction_prompt 与 constants.CompactionDefaultPrompt 不一致")
 	}
-	// 占位符契约：运行时替换的 %s/%d 必须保留在下发模板中。
-	if !strings.Contains(resp["memory.extraction_prompt"], "%s") || !strings.Contains(resp["memory.extraction_prompt"], "%d") {
-		t.Fatal("memory.extraction_prompt 缺少运行时可替换的占位符")
+	// 方案 B 契约：memory.extraction_prompt 是规则增量模板，身份、数量上限、
+	// fact_type 枚举与 JSON 输出协议由系统恒渲染（llm_extractor.go
+	// extractionIdentityPrompt），模板本身不含 %s/%d 占位符——下发模板中出现
+	// 占位符即契约回归。其余模板（compaction 等）保留运行时占位符契约。
+	if strings.Contains(resp["memory.extraction_prompt"], "%s") || strings.Contains(resp["memory.extraction_prompt"], "%d") {
+		t.Fatal("memory.extraction_prompt 是规则增量模板，不应包含运行时可替换的占位符")
 	}
 }
 

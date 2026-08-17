@@ -146,22 +146,33 @@ func TestLLMExtractorMaxFactsDegrade(t *testing.T) {
 }
 
 // TestLLMExtractorCustomExtractionPrompt 验证 memory.extraction_prompt 按 agent
-// 解析:非空自定义 prompt 按 %s(userID)/%s(agentID)/%d(maxFacts) 插值注入;缺失
-// 回落内置模板。
+// 解析：自定义 prompt 作为规则增量拼接在系统渲染的身份/协议之后，无需占位符
+// （裸 % 不做格式化，原样保留）；缺失回落内置默认规则。
 func TestLLMExtractorCustomExtractionPrompt(t *testing.T) {
 	llm := &extractorLLMStub{content: `[]`}
 	extractor := NewLLMExtractor(llm)
 	extractor.SetTenantID("t1")
 	extractor.SetResourceResolver(keyedResolverStub{vals: map[string]any{
-		"agent-1:memory.extraction_prompt": "fact machine for %s / %s / %d",
+		"agent-1:memory.extraction_prompt": "只提取 90% 置信度以上的偏好",
 	}})
 
 	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-1", "msg"); err != nil {
 		t.Fatal(err)
 	}
-	want := fmt.Sprintf("fact machine for user-1 / agent-1 / %d", constants.MemoryMaxFactsPerExtraction)
-	if llm.prompt != want {
-		t.Fatalf("custom prompt not interpolated: got %q want %q", llm.prompt, want)
+	// 身份/上限/协议恒由系统渲染，与自定义规则并存。
+	for _, want := range []string{
+		"关于用户（user-1）", "供 AI 助手（agent-1）",
+		fmt.Sprintf("最多提取 %d 条事实", constants.MemoryMaxFactsPerExtraction),
+		"只输出 JSON 数组",
+		"只提取 90% 置信度以上的偏好",
+	} {
+		if !strings.Contains(llm.prompt, want) {
+			t.Fatalf("custom prompt not merged: missing %q in %q", want, llm.prompt)
+		}
+	}
+	// 自定义规则替换内置默认规则。
+	if strings.Contains(llm.prompt, "只提取用户明确陈述") {
+		t.Fatalf("custom prompt must replace builtin rules: %q", llm.prompt)
 	}
 
 	// 未记录 agent → 内置模板。

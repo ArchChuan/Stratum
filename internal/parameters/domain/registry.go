@@ -478,8 +478,8 @@ func (r *ParametersRegistry) registerMemoryParams() {
 		},
 		{
 			// 提取 prompt/model:agent 维度直接绑定,按 agent 逐条解析。prompt
-			// 非空时按 %s(userID)/%s(agentID)/%d(maxFacts) 插值;model 非空传给
-			// 提取请求,空 = 空串 → client 默认解析。
+			// 非空时作为规则增量拼接在系统渲染的身份/上限/协议之后(无占位符);
+			// model 非空传给提取请求,空 = 空串 → client 默认解析。
 			Key: "memory.extraction_prompt", Scope: ScopeResource, Category: "memory",
 			DisplayName: "提取提示词", Description: "记忆抽取的系统提示词,空表示默认模板",
 			ValueType: TypeString, Default: "",

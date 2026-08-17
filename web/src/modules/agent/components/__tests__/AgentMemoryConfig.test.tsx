@@ -26,13 +26,16 @@ describe('AgentMemoryConfig', () => {
     expect(screen.getByText(/0 = 不注入历史/)).toBeInTheDocument();
   });
 
-  it('offers the extraction prompt viewer with placeholder notes', () => {
+  it('offers the extraction prompt viewer with rule-increment notes', () => {
     render(
       <Form>
         <AgentMemoryConfig groupedModels={[]} />
       </Form>,
     );
-    expect(screen.getByText(/%s\(userID\)/)).toBeInTheDocument();
+    // 方案 B：extraction_prompt 是规则增量，不提示任何 %s/%d 占位符。
+    expect(screen.getByText(/仅作为附加规则/)).toBeInTheDocument();
+    expect(screen.getByText(/无需填写占位符/)).toBeInTheDocument();
+    expect(screen.queryByText(/%s\(userID\)/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '查看默认提示词' })).toBeInTheDocument();
   });
 });
