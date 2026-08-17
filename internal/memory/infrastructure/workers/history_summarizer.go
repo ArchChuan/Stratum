@@ -10,10 +10,6 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
-// summarizePrefix 是周期总结指令前缀默认值（平台 memory.history_summary_prompt
-// 未配置时兜底）。
-const summarizePrefix = "Summarize this bounded period of user history. Preserve decisions, goals, preferences, and durable context; omit secrets and raw payloads.\n\n"
-
 type historyLLM = TenantLLMClient
 
 type LLMHistorySummarizer struct {
@@ -60,7 +56,7 @@ func (s *LLMHistorySummarizer) SummarizeHistory(ctx context.Context, items []str
 	}
 	model := resolvePlatformString(ctx, s.paramResolver, "memory.history_summary_model", "")
 	temperature := resolvePlatformFloat(ctx, s.paramResolver, "memory.history_summary_temperature", constants.TaskSummarizeTemperature)
-	prompt := resolvePlatformString(ctx, s.paramResolver, "memory.history_summary_prompt", summarizePrefix)
+	prompt := resolvePlatformString(ctx, s.paramResolver, "memory.history_summary_prompt", constants.MemoryHistorySummaryDefaultPrompt)
 	req := llmdomain.NewSummarizeRequest(model, prompt, items, 0)
 	// NewSummarizeRequest 内部固定 TaskSummarizeTemperature；平台配置的温度
 	// 在构造后覆盖。

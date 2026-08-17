@@ -7,6 +7,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/parameters/domain"
 	"github.com/byteBuilderX/stratum/internal/parameters/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 // Service is the parameters application facade consumed by handlers and by
@@ -93,6 +94,23 @@ func (s *Service) PlatformValues(ctx context.Context) (map[string]any, error) {
 		}
 	}
 	return out, nil
+}
+
+// PromptDefaults returns the visible default prompt templates by full registry
+// key. It is the whitelist backing the prompt-defaults endpoint: keys missing
+// from the platform store fall back to these templates at execution time, and
+// the frontend renders them for copy/view when a prompt field is unset.
+// Templates live in pkg/constants (single source), placeholders (%s/%d) are
+// runtime-substituted; extend this map when adding new default prompts.
+func (s *Service) PromptDefaults() map[string]string {
+	return map[string]string{
+		"agent.compaction_prompt":       constants.CompactionDefaultPrompt,
+		"memory.extraction_prompt":      constants.MemoryExtractionDefaultPrompt,
+		"memory.enrich_prompt":          constants.MemoryEnrichDefaultPrompt,
+		"memory.summary_prompt":         constants.MemorySummaryDefaultPrompt,
+		"memory.history_summary_prompt": constants.MemoryHistorySummaryDefaultPrompt,
+		"memory.supersede_prompt":       constants.MemorySupersedeDefaultPrompt,
+	}
 }
 
 // SetPlatformValues applies merge semantics: only keys present in input are

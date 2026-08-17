@@ -31,15 +31,6 @@ fact_type 分类：
 只输出 JSON 数组，不加任何说明或 markdown 标记：
 [{"content":"...","importance":0.0-1.0,"fact_type":"...","confidence":0.0-1.0,"entities":["实体名"]}]`
 
-// extractionRulesPrompt 是内置默认提取规则（memory.extraction_prompt 未自定义
-// 时使用）。身份/协议部分恒由系统渲染，用户自定义 prompt 只需写规则增量。
-const extractionRulesPrompt = `提取规则（严格执行）：
-- 只提取用户明确陈述、确认或展现的事实
-- 不提取：用户的提问、问候语、AI 助手的回复内容、工具调用的输出
-- 不提取泛化描述（如"用户提到了某件事"），只提取具体事实
-- 优先精确性：「用户偏好在 VS Code 中使用暗色主题」优于「用户有主题偏好」`
-
-// LLMExtractor adapts LLMClient to memport.LLMExtractor.
 type LLMExtractor struct {
 	client   LLMClient
 	resolver memport.ResourceParamResolver
@@ -86,7 +77,7 @@ func (e *LLMExtractor) maxFacts(ctx context.Context, agentID string) int {
 // 时回落内置默认规则。自定义 prompt 无需携带任何占位符。
 func (e *LLMExtractor) extractionPrompt(ctx context.Context, agentID, userID string, maxFacts int) string {
 	identity := fmt.Sprintf(extractionIdentityPrompt, userID, agentID, maxFacts)
-	defaultRules := func() string { return identity + "\n\n" + extractionRulesPrompt }
+	defaultRules := func() string { return identity + "\n\n" + constants.MemoryExtractionDefaultPrompt }
 	if e.resolver == nil {
 		return defaultRules()
 	}
