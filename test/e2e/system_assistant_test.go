@@ -17,6 +17,7 @@ import (
 	"github.com/byteBuilderX/stratum/api/http/handler"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
+	"github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/internal/agent/infrastructure/officialdocs"
@@ -383,9 +384,15 @@ func TestSystemAssistantDeterministicAgentLoopPersistsTypedArtifacts(t *testing.
 	}
 	require.Len(t, gateway.requests, 2)
 	// D6：工具全量暴露（不再按角色裁剪），确定性模型只选用 search/diagnose。
-	require.Len(t, gateway.requests[0].LLM.Tools, len(agentapp.SystemAssistantToolDefinitions()))
+	// plan 工具前置追加（修复：governed 系统助手同样暴露 plan 工具面），
+	// 后随 8 个内部工具；位置断言需偏移 plan 工具数。
+	planTools := graph.PlanToolDefinitions()
+	require.Len(t, gateway.requests[0].LLM.Tools, len(agentapp.SystemAssistantToolDefinitions())+len(planTools))
+	for i, tool := range planTools {
+		require.Equal(t, tool.Name, gateway.requests[0].LLM.Tools[i].Name)
+	}
 	for i, name := range []string{domain.SystemAssistantToolSearchOfficialDocs, domain.SystemAssistantToolDiagnoseTenant} {
-		require.Equal(t, name, gateway.requests[0].LLM.Tools[i].Name)
+		require.Equal(t, name, gateway.requests[0].LLM.Tools[len(planTools)+i].Name)
 	}
 
 	messages, err := chat.ListMessages(ctx, tenantID, conversation.ID, userID)

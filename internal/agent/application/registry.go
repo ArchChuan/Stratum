@@ -21,6 +21,7 @@ type Registry struct {
 	recallFn           port.RecallMemoryFn
 	globalSystemSuffix string
 	systemProfile      *SystemAssistantProfileSource
+	taskStore          port.TaskRepo
 }
 
 // NewRegistry constructs a Registry around a domain-port AgentRepo.
@@ -39,6 +40,11 @@ func (r *Registry) SetRecallMemoryFn(fn port.RecallMemoryFn) { r.recallFn = fn }
 // SetGlobalSystemSuffix injects a platform-level system prompt appended to every agent's prompt.
 func (r *Registry) SetGlobalSystemSuffix(s string) { r.globalSystemSuffix = s }
 
+// SetTaskStore injects the task persistence repo so agents hydrated via
+// Get/GetAll can persist cross-session task snapshots (persistTaskSnapshot
+// and the resume path both require it).
+func (r *Registry) SetTaskStore(store port.TaskRepo) { r.taskStore = store }
+
 func (r *Registry) hydrate(cfg *domain.AgentConfig) (Agent, error) {
 	var profile *domain.SystemAssistantProfile
 	if r.systemProfile != nil {
@@ -55,6 +61,9 @@ func (r *Registry) hydrate(cfg *domain.AgentConfig) (Agent, error) {
 	}
 	if r.recallFn != nil {
 		a.RecallMemoryFn = r.recallFn
+	}
+	if r.taskStore != nil {
+		a.TaskStore = r.taskStore
 	}
 	if r.globalSystemSuffix != "" && composed.SystemKey != domain.SystemAssistantKey {
 		a.GlobalSystemSuffix = r.globalSystemSuffix

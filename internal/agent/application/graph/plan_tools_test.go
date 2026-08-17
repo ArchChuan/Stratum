@@ -59,6 +59,18 @@ func TestExecutePlanToolRequiresCheckpointWriter(t *testing.T) {
 	require.Nil(t, state.ActivePlan)
 }
 
+func TestExecutePlanToolCompleteTask(t *testing.T) {
+	state := graph.ReActState{ActivePlan: &domain.Plan{ID: "plan-1", Revision: 1, Status: domain.PlanStatusActive}}
+	call := port.ToolCall{
+		ID: "call-1", Name: "stratum_complete_task",
+		Arguments: map[string]any{"expected_revision": int64(1)},
+	}
+	content, err := graph.ExecutePlanTool(context.Background(), &state, call)
+	require.NoError(t, err)
+	require.True(t, state.TaskCompleteRequested, "TaskCompleteRequested should be set")
+	require.Contains(t, content, "stratum_complete_task")
+}
+
 func sequencePlanIDs(values []string) func() string {
 	index := 0
 	return func() string {

@@ -62,6 +62,29 @@ type CheckpointRepo interface {
 	DeleteExpired(ctx context.Context, tenantID string) (int64, error)
 }
 
+// TaskRepo persists cross-session goal progress for agents. All methods touch
+// tenant-scoped agent_tasks and take an explicit tenantID.
+type TaskRepo interface {
+	// Claim 原子抢占/续约 task：条件更新（status=active 且未过期 且 无主/本会话/lease 过期），
+	// bump generation 作 fence，返回 claim 后的 task（含新 generation）与是否成功。
+	// 无行或不可 claim（completed/abandoned/被活跃会话占用）→ (nil, false, nil)。
+	Claim(ctx context.Context, tenantID, taskID, conversationID string, lease time.Duration) (*domain.Task, bool, error)
+	// Save 新建或乐观锁写回：INSERT 新行（generation=task.Generation）；已存在行仅当
+	// generation==expectedGeneration 时更新（claim bump 后 stale 写被拒），冲突返回
+	// ErrGenerationConflict。
+	Save(ctx context.Context, tenantID string, task domain.Task, expectedGeneration int64) error
+	// Get 加载单个 task；不存在返回 nil。
+	Get(ctx context.Context, tenantID, taskID string) (*domain.Task, error)
+	// GetLatestActiveForOwner 返回该 owner 最新的活跃 task（updated_at DESC），
+	// 无活跃 task 返回 nil。恢复入口。
+	GetLatestActiveForOwner(ctx context.Context, tenantID, agentID, userID string) (*domain.Task, error)
+	// DetachConversation 解除某会话的 task 引用（claimed_by='', lease 清空），
+	// task 本身保留。conversation 删除时在 DeleteConversation 事务内调用。
+	DetachConversation(ctx context.Context, tenantID, conversationID string) error
+	// DeleteExpired 回收 expires_at 已过的 task，返回删除行数。
+	DeleteExpired(ctx context.Context, tenantID string) (int64, error)
+}
+
 type ToolApprovalRepo interface {
 	Create(ctx context.Context, tenantID string, approval domain.ToolApproval) (string, error)
 	Get(ctx context.Context, tenantID, approvalID string) (domain.ToolApproval, error)

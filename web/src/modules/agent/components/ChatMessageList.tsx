@@ -9,6 +9,7 @@ import { ChatStepList } from './ChatStepList';
 import { DiagnosticReport } from './DiagnosticReport';
 import { ResourceChangeProposalCard } from './ResourceChangeProposalCard';
 import { SourceCardList } from './SourceCardList';
+import TaskProgressBanner from './TaskProgressBanner';
 
 const { Text } = Typography;
 
@@ -94,6 +95,9 @@ const MessageItem = memo(function MessageItem({
           <StreamingBubble content={m.content || ''} />
         ) : (
           <>
+            {m.role === 'assistant' && m.taskSnapshot ? (
+              <TaskProgressBanner snapshot={m.taskSnapshot} />
+            ) : null}
             <ChatMarkdown content={m.content || ''} />
             {m.artifacts?.map((artifact, index) => {
               const artifactCitations = artifact.citations ?? [];

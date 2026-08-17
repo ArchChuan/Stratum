@@ -16,6 +16,7 @@ import (
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -256,4 +257,37 @@ func TestAgentExecutionDonePayloadFactCheckAndDegraded(t *testing.T) {
 			t.Fatalf("done payload missing factCheck when set: %s", done)
 		}
 	})
+}
+
+// TestAgentExecutionDonePayloadWhitelistsTaskSnapshot 断言 SSE done 帧只透出白名单
+// key（stratum_task_snapshot）：应用层写入的 task 快照能到达前端，而 result.Metadata
+// 中任何其他键（如 admin_token）一律不透出。
+func TestAgentExecutionDonePayloadWhitelistsTaskSnapshot(t *testing.T) {
+	result := &domain.AgentResult{
+		AgentID:  "a1",
+		Output:   "ok",
+		Metadata: map[string]interface{}{},
+	}
+	result.Metadata[constants.TaskMetadataKey] = map[string]interface{}{"id": "task-1", "status": "in_progress"}
+	result.Metadata["admin_token"] = "sekrit"
+
+	done := agentExecutionDonePayload(result)
+	var decoded map[string]any
+	if err := json.Unmarshal(done, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	metadata, ok := decoded["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("done payload missing metadata object: %s", done)
+	}
+	if _, ok := metadata[constants.TaskMetadataKey]; !ok {
+		t.Fatalf("done payload metadata missing whitelisted %q: %s", constants.TaskMetadataKey, done)
+	}
+	if _, ok := metadata["admin_token"]; ok {
+		t.Fatalf("done payload leaked non-whitelisted metadata key admin_token: %s", done)
+	}
+	// 只允许 thoughtsJSON/toolCallsJSON + 白名单 task snapshot 三个键。
+	if len(metadata) != 3 {
+		t.Fatalf("metadata must contain only whitelisted keys, got %d: %s", len(metadata), done)
+	}
 }
