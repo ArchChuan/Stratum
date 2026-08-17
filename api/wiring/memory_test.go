@@ -226,7 +226,7 @@ func TestAgentResourceParamResolverFallback(t *testing.T) {
 
 	t.Run("declared memory value wins", func(t *testing.T) {
 		r := resolver(&resolverAgentRepoStub{ok: true, cfg: &agentdomain.AgentConfig{
-			MemoryParameters: map[string]any{"memory.max_facts_per_extraction": 35},
+			MemoryParameters: map[string]any{"memory.max_facts_per_extraction": 8},
 		}})
 		v, ok, err := r.Resolve(context.Background(), "t1", "a1", "memory.max_facts_per_extraction")
 		if err != nil {
@@ -236,16 +236,16 @@ func TestAgentResourceParamResolverFallback(t *testing.T) {
 			t.Fatal("declared value must resolve as present")
 		}
 		vv, isInt := v.(int64)
-		if !isInt || vv != 35 {
-			t.Fatalf("got v=%#v (%T), want int64(35)", v, v)
+		if !isInt || vv != 8 {
+			t.Fatalf("got v=%#v (%T), want int64(8)", v, v)
 		}
 	})
 
 	t.Run("absent declaration falls to definition default", func(t *testing.T) {
 		r := resolver(&resolverAgentRepoStub{ok: true, cfg: &agentdomain.AgentConfig{}})
 		v, ok, err := r.Resolve(context.Background(), "t1", "a1", "memory.max_facts_per_extraction")
-		if err != nil || !ok || v != int64(20) {
-			t.Fatalf("got (%v, %v, %v), want (20, true, nil)", v, ok, err)
+		if err != nil || !ok || v != int64(10) {
+			t.Fatalf("got (%v, %v, %v), want (10, true, nil)", v, ok, err)
 		}
 	})
 

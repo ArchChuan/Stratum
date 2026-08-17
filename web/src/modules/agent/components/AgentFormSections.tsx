@@ -8,6 +8,7 @@ import { AgentMemoryConfig } from './AgentMemoryConfig';
 
 import {
   AGENT_CONTEXT_WINDOW_RATIO,
+  AGENT_DEFAULT_MAX_OUTPUT_TOKENS,
   AGENT_MAX_CONTEXT_TOKENS_MAX,
   AGENT_MAX_CONTEXT_TOKENS_MIN,
   AGENT_MAX_CONTEXT_TOKENS_STEP,
@@ -72,6 +73,12 @@ export const AgentFormSections = ({
   }, [selectedModel, groupedModels]);
   // 0.85×窗口 的推荐上下文预算（与后端 pkg/constants DefaultContextWindowRatio 同源）。
   const recommendedContextTokens = selectedWindow ? Math.round(selectedWindow * AGENT_CONTEXT_WINDOW_RATIO) : undefined;
+  // 当前选中模型的最大输出（vendor maxOut）；模型不在托管目录（不可用/退役）时未知，
+  // 此时 max_tokens=0 回落 pkg/constants.DefaultOutputReserveTokens。
+  const selectedMaxTokens = useMemo(() => {
+    if (!selectedModel) return undefined;
+    return groupedModels.flatMap((g) => g.models).find((m) => m.value === selectedModel)?.maxTokens;
+  }, [selectedModel, groupedModels]);
 
   // 仅用户 change 时联动：当前值为自动（null/undefined/0）且窗口已知时填入推荐值；
   // 显式值保留，清空/置 0 后再次选模型才回填，不破坏「0 = 自动」语义。
@@ -283,7 +290,11 @@ export const AgentFormSections = ({
                 <Form.Item
                   label="最大生成 Token（max_tokens）"
                   name="max_tokens"
-                  extra="0 = 不修改（保留现有值）；未设置过则使用平台默认"
+                  extra={
+                    selectedMaxTokens && selectedMaxTokens > 0
+                      ? `推荐 ${selectedMaxTokens.toLocaleString()} tokens（模型最大输出）；0 = 不修改（保留现有值）`
+                      : `平台兜底 ${AGENT_DEFAULT_MAX_OUTPUT_TOKENS.toLocaleString()} tokens（模型未知时）；0 = 不修改（保留现有值）`
+                  }
                 >
                   <InputNumber min={AGENT_MAX_TOKENS_MIN} max={AGENT_MAX_TOKENS_MAX} step={AGENT_MAX_TOKENS_STEP} style={{ width: '100%' }} />
                 </Form.Item>
