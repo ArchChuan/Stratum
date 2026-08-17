@@ -147,4 +147,61 @@ func TestTaskLifecycleRealPostgres(t *testing.T) {
 	if got, err := repo.Get(ctx, tenantID, "plan-1"); err != nil || got != nil {
 		t.Fatalf("task should be reclaimed: got=%+v err=%v", got, err)
 	}
+
+	// ===== 多活跃 task 并存：同一 owner 可同时持有多个 active task，互不干扰 =====
+	// plan-1 已在上方被 DeleteExpired 回收，这里重建一对活跃 task，专门覆盖
+	// GetLatestActiveForOwner 在多活跃场景返回最新、且各自可独立 claim 的行为。
+	reborn := domain.Task{
+		ID: "plan-1", AgentID: "agent-1", UserID: "user-1", Goal: "迁移订单服务",
+		CurrentPhase: "1/2 完成", CompletedSteps: []string{"n1"}, NextAction: "验证迁移",
+		Status: domain.TaskStatusActive, ClaimedBy: "",
+		LeaseExpiresAt: time.Now().Add(-time.Hour), LastConversationID: "",
+		LastExecutionID: "exec-1", FailCount: 0, Generation: 0,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(), ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	if err := repo.Save(ctx, tenantID, reborn, 0); err != nil {
+		t.Fatalf("save coexist plan-1: %v", err)
+	}
+	coexist := domain.Task{
+		ID: "plan-2", AgentID: "agent-1", UserID: "user-1", Goal: "升级订单服务",
+		CurrentPhase: "0/2 准备", CompletedSteps: []string{}, NextAction: "评估影响",
+		Status: domain.TaskStatusActive, ClaimedBy: "",
+		LeaseExpiresAt: time.Now().Add(-time.Hour), LastConversationID: "",
+		LastExecutionID: "exec-2", FailCount: 0, Generation: 0,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(), ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	if err := repo.Save(ctx, tenantID, coexist, 0); err != nil {
+		t.Fatalf("save coexist plan-2: %v", err)
+	}
+	// plan-2 显式置为最新（updated_at +1min），GetLatestActiveForOwner 必须返回它
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE tenant_`+tenantID+`.agent_tasks SET updated_at = NOW() + INTERVAL '1 minute' WHERE id='plan-2'`); err != nil {
+		t.Fatal(err)
+	}
+	latest2, err := repo.GetLatestActiveForOwner(ctx, tenantID, "agent-1", "user-1")
+	if err != nil || latest2 == nil || latest2.ID != "plan-2" {
+		t.Fatalf("latest among two active should be plan-2: %+v err=%v", latest2, err)
+	}
+	// 两个 active task 共存：较旧的 plan-1 仍存在且 active
+	older, err := repo.Get(ctx, tenantID, "plan-1")
+	if err != nil || older == nil || older.Status != domain.TaskStatusActive {
+		t.Fatalf("older task should coexist active: %+v err=%v", older, err)
+	}
+	// 各自独立 claim 互不干扰：plan-1→convA、plan-2→convB，各回各的 claimed_by
+	convA := "33333333-3333-3333-3333-333333333333"
+	convB := "44444444-4444-4444-4444-444444444444"
+	if _, ok, err := repo.Claim(ctx, tenantID, "plan-1", convA, 30*time.Minute); err != nil || !ok {
+		t.Fatalf("claim coexist plan-1: ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := repo.Claim(ctx, tenantID, "plan-2", convB, 30*time.Minute); err != nil || !ok {
+		t.Fatalf("claim coexist plan-2: ok=%v err=%v", ok, err)
+	}
+	coexist1, err := repo.Get(ctx, tenantID, "plan-1")
+	if err != nil || coexist1 == nil || coexist1.ClaimedBy != convA {
+		t.Fatalf("coexist plan-1 claimed_by mismatch: %+v err=%v", coexist1, err)
+	}
+	coexist2, err := repo.Get(ctx, tenantID, "plan-2")
+	if err != nil || coexist2 == nil || coexist2.ClaimedBy != convB {
+		t.Fatalf("coexist plan-2 claimed_by mismatch: %+v err=%v", coexist2, err)
+	}
 }
