@@ -4,13 +4,17 @@ import { Form, Input, Select, Slider } from 'antd';
 import type { GroupedModelOption } from '../model/agent';
 
 import {
+  MEMORY_FACT_INJECTION_DEFAULT,
   MEMORY_FACT_INJECTION_MAX,
   MEMORY_FACT_INJECTION_MIN,
+  MEMORY_HISTORY_INJECTION_DEFAULT,
   MEMORY_HISTORY_INJECTION_MAX,
   MEMORY_HISTORY_INJECTION_MIN,
+  MEMORY_MAX_FACTS_DEFAULT,
   MEMORY_MAX_FACTS_MAX,
   MEMORY_MAX_FACTS_MIN,
   MEMORY_SCOPE_OPTIONS,
+  RECALL_TOP_K_DEFAULT,
   RECALL_TOP_K_MAX,
   RECALL_TOP_K_MIN,
 } from '@/constants';
@@ -46,7 +50,7 @@ export const AgentMemoryConfig = ({ groupedModels }: AgentMemoryConfigProps) => 
     <Form.Item
       label="单次抽取事实上限（memory.max_facts_per_extraction）"
       name="memoryMaxFactsPerExtraction"
-      extra="记忆抽取器每轮对话抽取并写入的最多事实条数，空 = 系统默认"
+      extra={`记忆抽取器每轮对话抽取并写入的最多事实条数，空 = 系统默认（${MEMORY_MAX_FACTS_DEFAULT}）`}
     >
       <Slider
         min={MEMORY_MAX_FACTS_MIN}
@@ -82,7 +86,7 @@ export const AgentMemoryConfig = ({ groupedModels }: AgentMemoryConfigProps) => 
     <Form.Item
       label="记忆召回条数（memory.recall_top_k）"
       name="memoryRecallTopK"
-      extra="执行时从记忆库召回并注入上下文的最多条目数，空 = 系统默认（5）"
+      extra={`执行时从记忆库召回并注入上下文的最多条目数，空 = 系统默认（${RECALL_TOP_K_DEFAULT}）`}
     >
       <Slider
         min={RECALL_TOP_K_MIN}
@@ -94,7 +98,7 @@ export const AgentMemoryConfig = ({ groupedModels }: AgentMemoryConfigProps) => 
     <Form.Item
       label="事实注入条数（memory.fact_injection_top_n）"
       name="memoryFactInjectionTopN"
-      extra="会话上下文注入的长期事实条数，空 = 系统默认"
+      extra={`会话上下文注入的长期事实条数，空 = 系统默认（${MEMORY_FACT_INJECTION_DEFAULT}）`}
     >
       <Slider
         min={MEMORY_FACT_INJECTION_MIN}
@@ -106,7 +110,7 @@ export const AgentMemoryConfig = ({ groupedModels }: AgentMemoryConfigProps) => 
     <Form.Item
       label="历史注入条数（memory.history_injection_top_n）"
       name="memoryHistoryInjectionTopN"
-      extra="会话上下文注入的历史消息条数，0 = 不注入历史，空 = 系统默认"
+      extra={`会话上下文注入的历史消息条数，0 = 不注入历史，空 = 系统默认（${MEMORY_HISTORY_INJECTION_DEFAULT}）`}
     >
       <Slider
         min={MEMORY_HISTORY_INJECTION_MIN}
