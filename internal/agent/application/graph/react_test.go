@@ -1044,8 +1044,10 @@ func TestEffectiveTools_ToolSurfaceUnchangedByActives(t *testing.T) {
 	}, baseAvailable...)
 	require.Equal(t, fullSurface, toolNames(graph.EffectiveToolsForTest(withPlanInAvailable, false)))
 
-	// governed assistant 短路：工具面 = available 原样，不追加 plan 工具。
-	require.Equal(t, []string{"mcp:orders:get", "mcp:orders:delete", "stratum_recall_memory", "stratum_search_knowledge"}, toolNames(graph.EffectiveToolsForTest(baseAvailable, true)))
+	// governed assistant 同样追加 plan 工具（agent_tasks 触发源，唯一真实用户
+	// 路径）；工具面 = plan 工具 + available，混入的 plan 工具仍防御性去重。
+	require.Equal(t, fullSurface, toolNames(graph.EffectiveToolsForTest(baseAvailable, true)))
+	require.Equal(t, planTools, toolNames(graph.EffectiveToolsForTest(nil, true)))
 	require.Equal(t, planTools, toolNames(graph.EffectiveToolsForTest(nil, false)))
 }
 

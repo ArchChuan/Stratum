@@ -193,11 +193,11 @@ func skillInputSchema() map[string]any {
 // effectiveTools 组装本步分发到 LLM 的工具集（Spec D5）：plan 工作流工具 + agent
 // 绑定全集（MCP + 内置知识/记忆/推理）。激活 skill 不再收窄工具面——工具面恒等于
 // agent 绑定全集；stratum_skill 统一工具由 prepareLLMRequest 按预算两阶段截断后
-// 置于首位并入，不在此静态生成。
+// 置于首位并入，不在此静态生成。governed assistant（系统助手）同样追加 plan 工具：
+// plan 工作流是 agent 目标持久化（agent_tasks）的触发源，系统助手是唯一真实用户
+// 路径，不追加则跨会话 task 链路对用户不可见；plan 工具仅操作内存/checkpoint 状态，
+// 无外部副作用，与角色能力契约无关。
 func effectiveTools(available []port.ToolDefinition, governedAssistant bool) []port.ToolDefinition {
-	if governedAssistant {
-		return append([]port.ToolDefinition(nil), available...)
-	}
 	out := make([]port.ToolDefinition, 0, len(available)+len(PlanToolDefinitions()))
 	out = append(out, PlanToolDefinitions()...)
 	for _, tool := range available {
@@ -208,6 +208,9 @@ func effectiveTools(available []port.ToolDefinition, governedAssistant bool) []p
 		}
 		out = append(out, tool)
 	}
+	// governedAssistant 不再影响工具面（plan 工具对系统助手同样暴露，见函数
+	// 注释）；其唯一剩余语义在 prepareLLMRequest 的裁剪跳过（角色能力契约）。
+	_ = governedAssistant
 	return out
 }
 
