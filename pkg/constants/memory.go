@@ -154,7 +154,10 @@ const (
 
 // Memory Extraction - LLM extraction limits
 const (
-	MemoryMaxFactsPerExtraction = 20   // max facts extracted per message
+	// MemoryMaxFactsPerExtraction 是单轮抽取最大事实数（prompt 软约束上限）。
+	// 与写入硬上限 FactPerRoundPersistLimit=10 对齐：registry Default/VisualHint.Max
+	// 与前端 Slider Max 同值，配置 N = 每轮入库 ≤N，避免"配了不生效"困惑。
+	MemoryMaxFactsPerExtraction = 10
 	MemoryMinFactLength         = 10   // min chars for a valid fact
 	MemoryMaxFactLength         = 500  // max chars for a valid fact
 	MemoryExtractLLMMaxTokens   = 4096 // JSON array of facts; 1024 truncates large conversations

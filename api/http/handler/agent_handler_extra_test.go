@@ -525,16 +525,16 @@ func TestAgentHandlerMemoryParametersEcho(t *testing.T) {
 	// Update 携带 memory.* dotted 键 → 落库并在响应回显。
 	repo := &mockAgentRepo{agents: []*domain.AgentConfig{{ID: "a1", Name: "Alpha", LLMModel: "qwen-max"}}}
 	h := newHandler(repo)
-	body := `{"name":"Alpha","llmModel":"qwen-max","maxIterations":5,"parameters":{"memory.max_facts_per_extraction":30,"memory.fact_injection_top_n":10}}`
+	body := `{"name":"Alpha","llmModel":"qwen-max","maxIterations":5,"parameters":{"memory.max_facts_per_extraction":8,"memory.fact_injection_top_n":10}}`
 	w := doAgentReq(t, authedRoutes(h), http.MethodPut, "/agents/a1", body)
 	require.Equal(t, http.StatusOK, w.Code)
-	require.Contains(t, w.Body.String(), `"memory.max_facts_per_extraction":30`)
+	require.Contains(t, w.Body.String(), `"memory.max_facts_per_extraction":8`)
 	require.Contains(t, w.Body.String(), `"memory.fact_injection_top_n":10`)
 
 	// GET 回读同一份 parameters（编辑页预填来源）。
 	w = doAgentReq(t, authedRoutes(h), http.MethodGet, "/agents/a1", "")
 	require.Equal(t, http.StatusOK, w.Code)
-	require.Contains(t, w.Body.String(), `"memory.max_facts_per_extraction":30`)
+	require.Contains(t, w.Body.String(), `"memory.max_facts_per_extraction":8`)
 
 	// 越界 memory.* 值被 registry 校验拒绝 → 400（绕过前端直调 API 也拦得住）。
 	h = newHandler(&mockAgentRepo{})
