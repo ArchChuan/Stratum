@@ -471,9 +471,9 @@ func (r *ParametersRegistry) registerMemoryParams() {
 		},
 		{
 			Key: "memory.max_facts_per_extraction", Scope: ScopeResource, Category: "memory",
-			DisplayName: "单次抽取事实上限", Description: "每次抽取的最大事实数",
-			ValueType: TypeInt, Default: int64(20),
-			VisualHint:  VisualHint{Control: ControlSlider, Min: f(1), Max: f(50), Step: f(1)},
+			DisplayName: "单次抽取事实上限", Description: "每轮抽取并写入的最大事实数,与写入硬上限对齐",
+			ValueType: TypeInt, Default: int64(10),
+			VisualHint:  VisualHint{Control: ControlSlider, Min: f(1), Max: f(10), Step: f(1)},
 			Optimizable: true,
 		},
 		{

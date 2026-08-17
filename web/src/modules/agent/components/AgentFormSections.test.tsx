@@ -87,7 +87,8 @@ describe('AgentFormSections', () => {
 
     const input = screen.getByLabelText(/最大生成 Token/);
     expect(input).toHaveValue('2048');
-    expect(screen.getByText('0 = 不修改（保留现有值）；未设置过则使用平台默认')).toBeInTheDocument();
+    // 无选中模型（groupedModels 为空）→ 展示平台兜底输出上限
+    expect(screen.getByText(/平台兜底 4,?096 tokens/)).toBeInTheDocument();
 
     fireEvent.change(input, { target: { value: '4096' } });
     expect(input).toHaveValue('4096');
@@ -103,6 +104,37 @@ describe('AgentFormSections', () => {
 
     const input = screen.getByLabelText(/最大生成 Token/);
     expect(input).toHaveValue('2048');
+  });
+
+  it('shows the recommended max output when the selected model has a known maxOut', () => {
+    render(
+      <Form initialValues={{ llmModel: 'glm-5.2' }}>
+        <AgentFormSections
+          skills={[]}
+          mcpTools={[]}
+          workspaces={[]}
+          groupedModels={[{ provider: '托管厂商', models: [{ value: 'glm-5.2', label: 'glm-5.2', reasoning: false, maxTokens: 8192 }] }]}
+        />
+      </Form>,
+    );
+
+    expect(screen.getByText(/推荐 8,?192 tokens（模型最大输出）；0 = 不修改（保留现有值）/)).toBeInTheDocument();
+  });
+
+  it('falls back to the platform default text when the selected model has no maxOut', () => {
+    render(
+      <Form initialValues={{ llmModel: 'retired-chat' }}>
+        <AgentFormSections
+          skills={[]}
+          mcpTools={[]}
+          workspaces={[]}
+          groupedModels={[{ provider: '托管厂商', models: [{ value: 'managed-chat', label: 'managed-chat', reasoning: false, maxTokens: 8192 }] }]}
+          currentModel="retired-chat"
+        />
+      </Form>,
+    );
+
+    expect(screen.getByText(/平台兜底 4,?096 tokens/)).toBeInTheDocument();
   });
 
   it('hides temperature and compaction fields for the system assistant only', () => {
@@ -277,5 +309,31 @@ describe('AgentFormSections', () => {
     );
 
     expect(screen.getByText('推荐 108800 tokens（模型窗口 128000 × 85%）；0 = 自动按模型窗口解析')).toBeInTheDocument();
+  });
+
+  it('expresses "system default" as 0 on memory sliders instead of an unreachable empty state', () => {
+    render(
+      <Form>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
+      </Form>,
+    );
+
+    // 0 = unset 通道：后端 validateAndExtractMemoryParameters 对数值 0 提前过滤，
+    // 等价不落库，回落 registry Default。min=0 让「系统默认」可操作，而不是只能
+    // 靠从未触摸控件才存在的空值（Slider 一旦拖动就无法回到空）。
+    const maxFacts = screen.getByRole('slider', { name: '单次抽取事实上限' });
+    expect(maxFacts).toHaveAttribute('aria-valuemin', '0');
+    expect(maxFacts).toHaveAttribute('aria-valuemax', '10');
+    expect(screen.getByText(/0 = 使用系统默认（10 条）/)).toBeInTheDocument();
+
+    const recall = screen.getByRole('slider', { name: '记忆召回条数' });
+    expect(recall).toHaveAttribute('aria-valuemin', '0');
+    expect(recall).toHaveAttribute('aria-valuemax', '20');
+    expect(screen.getByText(/0 = 使用系统默认（5 条）/)).toBeInTheDocument();
+
+    const factInjection = screen.getByRole('slider', { name: '事实注入条数' });
+    expect(factInjection).toHaveAttribute('aria-valuemin', '0');
+    expect(factInjection).toHaveAttribute('aria-valuemax', '20');
+    expect(screen.getByText(/0 = 使用系统默认（8 条）/)).toBeInTheDocument();
   });
 });

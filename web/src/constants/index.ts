@@ -23,6 +23,9 @@ export const AGENT_CONTEXT_WINDOW_RATIO = 0.85;
 export const AGENT_TEMPERATURE_MIN = 0;
 export const AGENT_TEMPERATURE_MAX = 1;
 export const AGENT_TEMPERATURE_STEP = 0.1;
+// max_tokens = 0 时回落后端 constants.DefaultOutputReserveTokens：模型 registry
+// 无 maxOut 或模型未知时的平台兜底输出上限，后端为权威。
+export const AGENT_DEFAULT_MAX_OUTPUT_TOKENS = 4096;
 
 export const DEFAULT_PAGE_SIZE = 20;
 export const COMPACT_PAGE_SIZE = 10;
@@ -87,23 +90,30 @@ export const MEMORY_SCOPE_OPTIONS = [
 export const MEMORY_DIAGNOSTICS_REFRESH_INTERVAL_MS = 30000; // 30s
 export const MEMORY_TOP_ENTITIES_LIMIT = 10;
 
-// 记忆注入参数控件 bounds，对齐 registry 中 memory.* resource-scope 的 VisualHint
-// （agents.parameters JSONB 的 dotted 键）。
-export const MEMORY_MAX_FACTS_MIN = 1;
-export const MEMORY_MAX_FACTS_MAX = 50;
-export const MEMORY_FACT_INJECTION_MIN = 1;
+// 记忆注入参数控件 bounds。min=0 是「0 = 系统默认」unset 通道：后端
+// validateAndExtractMemoryParameters 对数值 0 提前过滤（等价不落库），回落
+// registry Default；registry VisualHint.Min 仍是 1（约束优化器采样空间值域，
+// 与 UI 空值通道语义分离）。DEFAULT 对齐 registry Default。
+export const MEMORY_MAX_FACTS_MIN = 0;
+export const MEMORY_MAX_FACTS_MAX = 10;
+export const MEMORY_MAX_FACTS_DEFAULT = 10;
+export const MEMORY_FACT_INJECTION_MIN = 0;
 export const MEMORY_FACT_INJECTION_MAX = 20;
+export const MEMORY_FACT_INJECTION_DEFAULT = 8;
 export const MEMORY_HISTORY_INJECTION_MIN = 0;
 export const MEMORY_HISTORY_INJECTION_MAX = 10;
+export const MEMORY_HISTORY_INJECTION_DEFAULT = 3;
 
 // 上下文压缩温度控件 bounds；后端 CompactionDefaultTemperature=0.3，写路径钳制
 // [0,1]（Qwen/Zhipu 拒收 >1）。0 = unset，回落 0.3。
 export const COMPACTION_TEMP_MIN = 0;
 export const COMPACTION_TEMP_MAX = 1;
 // 记忆召回条数控件 bounds；对齐 registry memory.recall_top_k（Default 5 / Max 20），
-// 后端 Handle 解析时 clamp [1,20]。
-export const RECALL_TOP_K_MIN = 1;
+// 后端 Handle 解析时 clamp [1,20]；min=0 同 memory.* unset 通道（写路径提前过滤，
+// 不落库，回落 Default）。
+export const RECALL_TOP_K_MIN = 0;
 export const RECALL_TOP_K_MAX = 20;
+export const RECALL_TOP_K_DEFAULT = 5;
 
 export const CHUNKING_STRATEGY_OPTIONS = [
   { value: 'structure_recursive', label: '结构感知（推荐）— Markdown 标题分层 + 递归分块' },
