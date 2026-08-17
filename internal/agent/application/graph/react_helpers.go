@@ -27,7 +27,7 @@ func IsReservedToolName(name string) bool {
 	switch name {
 	case stratumSkillToolName, "stratum_search_knowledge", "stratum_recall_memory",
 		"stratum_continue_reasoning", "stratum_create_plan", "stratum_revise_plan",
-		"stratum_continue_plan", "stratum_cancel_plan":
+		"stratum_continue_plan", "stratum_cancel_plan", "stratum_complete_task":
 		return true
 	default:
 		return false
@@ -213,7 +213,7 @@ func effectiveTools(available []port.ToolDefinition, governedAssistant bool) []p
 
 func isReservedPlanTool(name string) bool {
 	switch name {
-	case "stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan":
+	case "stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "stratum_complete_task":
 		return true
 	default:
 		return false

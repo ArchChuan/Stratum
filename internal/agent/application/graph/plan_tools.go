@@ -23,6 +23,7 @@ func PlanToolDefinitions() []port.ToolDefinition {
 		)},
 		{Name: "stratum_continue_plan", Description: "Execute the active plan ready set.", InputSchema: planSchema()},
 		{Name: "stratum_cancel_plan", Description: "Cancel the active plan and all outstanding nodes.", InputSchema: planSchema()},
+		{Name: "stratum_complete_task", Description: "Mark the current goal as fully achieved and stop task tracking.", InputSchema: planSchema()},
 	}
 }
 
@@ -55,6 +56,11 @@ func ExecutePlanTool(ctx context.Context, state *ReActState, call port.ToolCall)
 		command.Kind = domain.PlanCommandContinue
 	case "stratum_cancel_plan":
 		command.Kind = domain.PlanCommandCancel
+	case "stratum_complete_task":
+		// 完成信号不修改 plan（ApplyPlanCommand 无此 command），仅记录状态；
+		// expected_revision 为 planSchema 强制参数，此处忽略（独立于 plan 版本）。
+		state.TaskCompleteRequested = true
+		return planObservation("stratum_complete_task", state.ActivePlan), nil
 	default:
 		return "", fmt.Errorf("plan tool: unknown reserved tool %q", call.Name)
 	}
@@ -121,10 +127,17 @@ func correction(toolName string, err error, plan *domain.Plan) string {
 }
 
 func planObservation(toolName string, plan *domain.Plan) string {
-	status := make(map[string]string, len(plan.Nodes))
-	for _, node := range plan.Nodes {
-		status[node.ID] = string(node.Status)
+	status := map[string]string{}
+	planID := ""
+	var revision int64
+	var planStatus domain.PlanStatus
+	if plan != nil {
+		planID, revision = plan.ID, plan.Revision
+		planStatus = plan.Status
+		for _, node := range plan.Nodes {
+			status[node.ID] = string(node.Status)
+		}
 	}
-	payload, _ := json.Marshal(map[string]any{"tool": toolName, "plan_id": plan.ID, "revision": plan.Revision, "status": plan.Status, "nodes": status})
+	payload, _ := json.Marshal(map[string]any{"tool": toolName, "plan_id": planID, "revision": revision, "status": planStatus, "nodes": status})
 	return string(payload)
 }
