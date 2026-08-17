@@ -347,6 +347,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
                 artifacts: normalizeArtifacts(streamResult.artifacts),
                 // P1.2: done payload 的 sources（旧后端无此字段，?? [] 容错）
                 sources: streamResult.sources ?? [],
+                taskSnapshot: parseTaskSnapshot(streamResult.metadata),
               }
             : m,
         ),
