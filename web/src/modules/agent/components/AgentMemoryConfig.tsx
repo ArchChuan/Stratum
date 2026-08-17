@@ -46,7 +46,7 @@ export const AgentMemoryConfig = ({ groupedModels }: AgentMemoryConfigProps) => 
     <Form.Item
       label="单次抽取事实上限（memory.max_facts_per_extraction）"
       name="memoryMaxFactsPerExtraction"
-      extra="记忆抽取器每轮对话抽取并写入的最多事实条数，空 = 系统默认"
+      extra="记忆抽取器每轮对话抽取并写入的最多事实条数，空 = 系统默认（10）"
     >
       <Slider
         min={MEMORY_MAX_FACTS_MIN}

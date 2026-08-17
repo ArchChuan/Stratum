@@ -93,7 +93,7 @@ export const MEMORY_TOP_ENTITIES_LIMIT = 10;
 // 记忆注入参数控件 bounds，对齐 registry 中 memory.* resource-scope 的 VisualHint
 // （agents.parameters JSONB 的 dotted 键）。
 export const MEMORY_MAX_FACTS_MIN = 1;
-export const MEMORY_MAX_FACTS_MAX = 50;
+export const MEMORY_MAX_FACTS_MAX = 10;
 export const MEMORY_FACT_INJECTION_MIN = 1;
 export const MEMORY_FACT_INJECTION_MAX = 20;
 export const MEMORY_HISTORY_INJECTION_MIN = 0;
