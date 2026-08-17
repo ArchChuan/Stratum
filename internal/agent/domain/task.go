@@ -12,6 +12,9 @@ var (
 	// ErrGenerationConflict 表示 task 写回时 generation 不匹配（被另一会话
 	// 接管后旧会话 stale 写），调用方应降级只读不重试。
 	ErrGenerationConflict = errors.New("task generation conflict")
+	// ErrTaskConversationGone 表示 detach 目标会话已不存在（空 conversationID），
+	// 防止批量子查询误伤无关 task。
+	ErrTaskConversationGone = errors.New("task conversation gone")
 )
 
 // TaskStatus 是 task 生命周期三态：active 可推进，completed 用户/LLM 明确完成
