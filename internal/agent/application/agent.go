@@ -613,6 +613,10 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	activePlan, restoredActives, initMessages := a.resumeFromCheckpoint(
 		ctx, ec, initMessages,
 	)
+	if activePlan == nil {
+		// 未恢复完整 checkpoint plan 才注入 task 摘要：两级同命中以 plan 为准。
+		initMessages = a.maybeInjectTaskResume(ctx, ec, initMessages)
+	}
 
 	initState := a.buildReActInitState(ec, initMessages, maxTokens)
 	initState.ActivePlan = activePlan
@@ -787,6 +791,7 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 		ctx, ec.systemPrompt, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow,
 		ec.cfg.OutputReserve, float64(ec.cfg.CompactionSafetyRatio), ec.historyCompactor,
 	)
+	initMessages = a.maybeInjectTaskResume(ctx, ec, initMessages)
 	initState := a.buildReActInitState(ec, initMessages, maxTokens)
 	initState.StuckThreshold = stuckThreshold
 	if a.RecallMemoryFn != nil {
