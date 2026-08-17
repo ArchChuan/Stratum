@@ -280,6 +280,9 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	if db != nil {
 		a.CheckpointStore = persistence.NewPgCheckpointStore(db)
 		a.TaskStore = persistence.NewPgTaskRepo(db)
+		// 任务持久化经 Registry 注入每个 hydrate 的 agent（persistTaskSnapshot
+		// 与恢复链路依赖 BaseAgent.TaskStore，必须与仓库实例同源）。
+		registry.SetTaskStore(a.TaskStore)
 		a.ApprovalStore = persistence.NewPgToolApprovalStore(db)
 		chatStore := persistence.NewPgChatStore(db, c.Logger)
 		// D9 会话删除级联：DeleteConversation 在同一租户事务内终结关联审批。

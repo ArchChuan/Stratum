@@ -8,6 +8,7 @@ import (
 
 	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
@@ -131,4 +132,84 @@ func agentExecContextForTest() agentExecContext {
 		agentID: "agent-1",
 		cfg:     &ExecutionConfig{TenantID: "tenant-1", UserID: "user-1", ExecutionID: "exec-1", ConversationID: "11111111-1111-1111-1111-111111111111"},
 	}
+}
+
+// TestRegistryHydratesTaskStore 守卫 wiring 装配断链：Registry 注入 TaskStore
+// 后，Get/hydrate 返回的 agent 必须携带该仓库，否则 persistTaskSnapshot 与
+// 恢复链路在生产恒早退（agent_tasks 永不落库）。
+func TestRegistryHydratesTaskStore(t *testing.T) {
+	repo := &registryAgentRepoFake{cfg: &domain.AgentConfig{ID: "agent-1", Name: "a"}}
+	registry := NewRegistry(repo, nil, zap.NewNop())
+	taskStore := &mockTaskRepo{}
+	registry.SetTaskStore(taskStore)
+
+	got, ok, err := registry.Get(context.Background(), "agent-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("agent not found")
+	}
+	base, isBase := got.(*BaseAgent)
+	if !isBase {
+		t.Fatalf("expected *BaseAgent, got %T", got)
+	}
+	if base.TaskStore == nil {
+		t.Fatal("TaskStore not hydrated into agent")
+	}
+	if base.TaskStore != taskStore {
+		t.Fatal("TaskStore mismatch: expected registry-injected repo")
+	}
+
+	// 未注入时保持 nil（旧行为不回归）。
+	registry2 := NewRegistry(repo, nil, zap.NewNop())
+	got2, _, err2 := registry2.Get(context.Background(), "agent-1")
+	if err2 != nil {
+		t.Fatal(err2)
+	}
+	if _, isBase := got2.(*BaseAgent); isBase && got2.(*BaseAgent).TaskStore != nil {
+		t.Fatal("TaskStore should stay nil without SetTaskStore")
+	}
+}
+
+type registryAgentRepoFake struct {
+	cfg *domain.AgentConfig
+}
+
+func (r *registryAgentRepoFake) Get(ctx context.Context, id string) (*domain.AgentConfig, bool, error) {
+	if r.cfg == nil || r.cfg.ID != id {
+		return nil, false, nil
+	}
+	return r.cfg, true, nil
+}
+
+func (r *registryAgentRepoFake) GetSystemAssistant(ctx context.Context) (*domain.AgentConfig, bool, error) {
+	return nil, false, nil
+}
+
+func (r *registryAgentRepoFake) GetAll(ctx context.Context) ([]*domain.AgentConfig, error) {
+	if r.cfg == nil {
+		return nil, nil
+	}
+	return []*domain.AgentConfig{r.cfg}, nil
+}
+
+func (r *registryAgentRepoFake) Register(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editors []string) error {
+	return nil
+}
+
+func (r *registryAgentRepoFake) Remove(ctx context.Context, id string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
+
+func (r *registryAgentRepoFake) UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, maxIterations, maxContextTokens, maxTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+	return r.cfg, nil
+}
+
+func (r *registryAgentRepoFake) UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, maxIterations int, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+	return r.cfg, nil
+}
+
+func (r *registryAgentRepoFake) Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string, replaceParams bool) error {
+	return nil
 }
