@@ -153,6 +153,9 @@ type ReActState struct {
 	// DegradeReason 是降级原因的固定枚举（如 "tool_stop_loss:<tool>"）。
 	// 禁止赋 err.Error()——错误正文含 plan_id/revision 等内部标识。
 	DegradeReason string
+	// TaskCompleteRequested 标记 LLM 调用了 stratum_complete_task（目标达成）。
+	// 执行结束时由挂点读入，task 状态转 completed。完成信号独立于 plan 状态。
+	TaskCompleteRequested bool
 }
 
 // countToolFailure 在工具失败处统一计数一次：先规范化错误消息取同错指纹，

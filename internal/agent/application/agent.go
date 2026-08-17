@@ -169,6 +169,7 @@ type BaseAgent struct {
 	CapGateway         port.CapabilityGateway
 	ChatStore          ChatStore
 	CheckpointStore    CheckpointStore
+	TaskStore          port.TaskRepo
 	MemoryInjector     port.MemoryInjector
 	HistoryCompactor   port.HistoryCompactor
 	RecallMemoryFn     port.RecallMemoryFn
@@ -229,6 +230,17 @@ func (a *BaseAgent) SetCheckpointStore(store CheckpointStore) {
 
 func (a *BaseAgent) WithCheckpointStore(store CheckpointStore) *BaseAgent {
 	a.SetCheckpointStore(store)
+	return a
+}
+
+func (a *BaseAgent) SetTaskStore(store port.TaskRepo) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.TaskStore = store
+}
+
+func (a *BaseAgent) WithTaskStore(store port.TaskRepo) *BaseAgent {
+	a.SetTaskStore(store)
 	return a
 }
 
@@ -601,6 +613,10 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	activePlan, restoredActives, initMessages := a.resumeFromCheckpoint(
 		ctx, ec, initMessages,
 	)
+	if activePlan == nil {
+		// 未恢复完整 checkpoint plan 才注入 task 摘要：两级同命中以 plan 为准。
+		initMessages = a.maybeInjectTaskResume(ctx, ec, initMessages)
+	}
 
 	initState := a.buildReActInitState(ec, initMessages, maxTokens)
 	initState.ActivePlan = activePlan
@@ -666,6 +682,7 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 		return fmt.Errorf("react: %w", runErr)
 	}
 	a.collectGraphResult(execCtx, result, finalState, ec)
+	a.persistTaskSnapshot(ctx, ec, finalState, result)
 	a.appendFinalAnswerEvent(result, finalState, ec)
 	a.mu.Lock()
 	a.State.StepsTaken = finalState.Steps
@@ -774,6 +791,7 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 		ctx, ec.systemPrompt, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow,
 		ec.cfg.OutputReserve, float64(ec.cfg.CompactionSafetyRatio), ec.historyCompactor,
 	)
+	initMessages = a.maybeInjectTaskResume(ctx, ec, initMessages)
 	initState := a.buildReActInitState(ec, initMessages, maxTokens)
 	initState.StuckThreshold = stuckThreshold
 	if a.RecallMemoryFn != nil {
@@ -811,6 +829,7 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 		return fmt.Errorf("planning: %w", runErr)
 	}
 	a.collectGraphResult(execCtx, result, finalState, ec)
+	a.persistTaskSnapshot(ctx, ec, finalState, result)
 	a.appendFinalAnswerEvent(result, finalState, ec)
 	a.mu.Lock()
 	a.State.StepsTaken = finalState.Steps
@@ -1008,6 +1027,108 @@ func (a *BaseAgent) collectGraphResult(ctx context.Context, result *AgentResult,
 	if finalState.TerminatedBy == agentgraph.CostBudgetTerminated {
 		result.TerminatedBy = finalState.TerminatedBy
 	}
+	// 完成信号（stratum_complete_task）记录到 result.Metadata 供透出。
+	if finalState.TaskCompleteRequested {
+		if result.Metadata == nil {
+			result.Metadata = map[string]interface{}{}
+		}
+		result.Metadata[constants.TaskMetadataCompleteKey] = true
+	}
+}
+
+// persistTaskSnapshot 在 ReAct/Planning 循环结束后从内存 finalState.ActivePlan
+// 提取 task 快照并写库。挂点必须读内存态：checkpoint 的 runtime_state 只编码
+// ActiveSkills、不编码 Plan（buildReActRuntimeState），且被最后一步 AfterStep
+// 覆盖。写路径旁路降级：任何失败不阻断已产出的响应（仿 MemoryBuffer 模式）。
+func (a *BaseAgent) persistTaskSnapshot(ctx context.Context, ec agentExecContext, finalState agentgraph.ReActState, result *AgentResult) {
+	if a.TaskStore == nil || finalState.ActivePlan == nil || finalState.ActivePlan.ID == "" {
+		return
+	}
+	// 完成信号透出（与 collectGraphResult 中同键写入幂等）：执行期已置位即标记，
+	// 即使 DB claim/save 降级失败也不丢该事实。
+	if finalState.TaskCompleteRequested {
+		markTaskComplete(result)
+	}
+	taskCtx, cancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
+	defer cancel()
+	snapshot := domain.BuildTaskSnapshot(finalState.ActivePlan, finalState.TaskCompleteRequested)
+
+	claimed, ok, err := a.TaskStore.Claim(taskCtx, ec.cfg.TenantID, finalState.ActivePlan.ID, ec.cfg.ConversationID, constants.TaskLeaseDuration)
+	if err != nil {
+		a.Logger.Error("agent: task claim failed, degrade read-only",
+			zap.String("agent_id", ec.agentID), zap.String("task_id", finalState.ActivePlan.ID), zap.Error(err))
+		return
+	}
+	if ok {
+		a.persistClaimedSnapshot(taskCtx, ec, claimed, snapshot, result)
+		return
+	}
+	a.persistNewSnapshot(taskCtx, ec, snapshot, finalState, result)
+}
+
+// markTaskComplete 将完成标志写入 result.Metadata（白名单 key）。
+func markTaskComplete(result *AgentResult) {
+	if result.Metadata == nil {
+		result.Metadata = map[string]interface{}{}
+	}
+	result.Metadata[constants.TaskMetadataCompleteKey] = true
+}
+
+// persistClaimedSnapshot 用本次提取覆盖已 claim 的 task 并写回；失败降级只读，
+// 不阻断已产出的响应。claim 已 bump generation，此写回带该 generation 作乐观锁。
+func (a *BaseAgent) persistClaimedSnapshot(ctx context.Context, ec agentExecContext, claimed *domain.Task, snapshot domain.TaskSnapshot, result *AgentResult) {
+	applySnapshot(claimed, snapshot, ec.cfg.ConversationID, ec.cfg.ExecutionID)
+	if err := a.TaskStore.Save(ctx, ec.cfg.TenantID, *claimed, claimed.Generation); err != nil {
+		a.Logger.Error("agent: task save failed, degrade",
+			zap.String("agent_id", ec.agentID), zap.String("task_id", claimed.ID), zap.Error(err))
+		return
+	}
+	a.attachTaskSnapshot(result, snapshot)
+}
+
+// persistNewSnapshot 在 claim 无行时区分"新建"与"不可 claim"：Get 命中已完成/
+// 被占 task 则降级只读；否则以 plan.ID 为稳定 task id 新建并写回。
+func (a *BaseAgent) persistNewSnapshot(ctx context.Context, ec agentExecContext, snapshot domain.TaskSnapshot, finalState agentgraph.ReActState, result *AgentResult) {
+	existing, getErr := a.TaskStore.Get(ctx, ec.cfg.TenantID, finalState.ActivePlan.ID)
+	if getErr == nil && existing != nil {
+		a.Logger.Warn("agent: task not claimable, degrade read-only",
+			zap.String("task_id", existing.ID), zap.String("status", string(existing.Status)))
+		return
+	}
+	newTask := snapshot.ToTask(finalState.ActivePlan.ID, ec.agentID, ec.cfg.UserID,
+		ec.cfg.ConversationID, ec.cfg.ExecutionID)
+	if err := a.TaskStore.Save(ctx, ec.cfg.TenantID, newTask, 0); err != nil {
+		a.Logger.Error("agent: task create failed, degrade",
+			zap.String("agent_id", ec.agentID), zap.String("task_id", newTask.ID), zap.Error(err))
+		return
+	}
+	a.attachTaskSnapshot(result, snapshot)
+}
+
+// applySnapshot 用本次提取结果覆盖已 claim 的 task，并顺延 lease/expiry、
+// 累加失败数。claim 已 bump generation，此写回带该 generation 作乐观锁。
+func applySnapshot(t *domain.Task, s domain.TaskSnapshot, conversationID, executionID string) {
+	now := time.Now()
+	t.Goal = s.Goal
+	t.CurrentPhase = s.CurrentPhase
+	t.CompletedSteps = s.CompletedSteps
+	t.NextAction = s.NextAction
+	t.Status = s.Status
+	t.ClaimedBy = conversationID
+	t.LeaseExpiresAt = now.Add(constants.TaskLeaseDuration)
+	t.LastConversationID = conversationID
+	t.LastExecutionID = executionID
+	t.FailCount += s.Failures
+	t.ExpiresAt = now.Add(constants.TaskExpiresAt)
+}
+
+// attachTaskSnapshot 将 task 快照写入 result.Metadata 供 SSE done 透出（白名单
+// key，见 handler）。已有 Metadata（如 complete 标志）保留。
+func (a *BaseAgent) attachTaskSnapshot(result *AgentResult, snapshot domain.TaskSnapshot) {
+	if result.Metadata == nil {
+		result.Metadata = map[string]interface{}{}
+	}
+	result.Metadata[constants.TaskMetadataKey] = snapshot
 }
 
 // firstStopLossReason 从止损工具集合构造固定枚举 DegradeReason。map 迭代序

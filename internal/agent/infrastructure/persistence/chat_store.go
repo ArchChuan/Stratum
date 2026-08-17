@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/safetext"
 	pgstore "github.com/byteBuilderX/stratum/pkg/storage/postgres"
@@ -47,6 +48,8 @@ type PgChatStore struct {
 	pool      chatPoolIface
 	logger    *zap.Logger
 	approvals ApprovalCascade
+	// taskDetach 在会话删除事务内解除 agent_tasks 引用（claimed_by 清空）。
+	taskDetach port.TaskRepo
 }
 
 // NewPgChatStore creates a PgChatStore. If logger is nil, a no-op logger is used.
@@ -61,6 +64,11 @@ func NewPgChatStore(pool *pgxpool.Pool, logger *zap.Logger) *PgChatStore {
 // 事务内终结该会话的审批：pending→cancelled、approved→voided。
 func (s *PgChatStore) SetApprovalCascade(approvals ApprovalCascade) {
 	s.approvals = approvals
+}
+
+// SetTaskDetach 装配会话删除时的 task detach 级联。
+func (s *PgChatStore) SetTaskDetach(repo port.TaskRepo) {
+	s.taskDetach = repo
 }
 
 // execTenantID is a thin package-level alias kept for checkpoint and
@@ -174,6 +182,12 @@ func (s *PgChatStore) DeleteConversation(ctx context.Context, tenantID, convID, 
 		// 已由 tenant_exec_test 验证），任何一步失败整体回滚，审批不会删一半留半。
 		if s.approvals != nil {
 			if err := s.approvals.CascadeByConversation(ctx, tenantID, convID); err != nil {
+				return err
+			}
+		}
+		// 生命周期解耦：会话删除只解除 task 引用，不级联删 task（跨会话推进语义）。
+		if s.taskDetach != nil {
+			if err := s.taskDetach.DetachConversation(ctx, tenantID, convID); err != nil {
 				return err
 			}
 		}
