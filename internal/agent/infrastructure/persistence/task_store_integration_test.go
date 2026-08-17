@@ -205,3 +205,66 @@ func TestTaskLifecycleRealPostgres(t *testing.T) {
 		t.Fatalf("coexist plan-2 claimed_by mismatch: %+v err=%v", coexist2, err)
 	}
 }
+
+// TestTaskDetachOnConversationDelete 覆盖生命周期解耦：删除会话只解除 agent_tasks
+// 的引用（claimed_by 清空、lease 置零），task 本身保留且仍为 active。
+//
+// 实现注记：DeleteConversation 的 approvals/detach/delete 全部在同一事务内，任何一步
+// 返回错误（含会话行不存在的 ErrNotFound）都会整体回滚。因此测试必须先建真实会话行，
+// 让删除走成功路径并提交，detach 才会持久化——否则断言的"已 detach"会被回滚推翻。
+func TestTaskDetachOnConversationDelete(t *testing.T) {
+	url := os.Getenv("STRATUM_TEST_POSTGRES_URL")
+	if url == "" {
+		t.Skip("STRATUM_TEST_POSTGRES_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := postgres.ProvisionPublicSchema(ctx, pool, zap.NewNop()); err != nil {
+		t.Fatal(err)
+	}
+	tenantID := fmt.Sprintf("tmp_task_detach_%d", time.Now().UnixNano())
+	schema := "tenant_" + tenantID
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "`+schema+`" CASCADE`) })
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	chat := NewPgChatStore(pool, zap.NewNop())
+	repo := NewPgTaskRepo(pool)
+	chat.SetTaskDetach(repo)
+	// 建真实会话行（user 与 task owner 一致），返回的 UUID 即 task claim 的会话
+	created, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, "user-2", "detach-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv := created.ID
+	// 建 task（owner agent-2/user-2）并 claim 该会话
+	if err := repo.Save(ctx, tenantID, domain.Task{
+		ID: "plan-9", AgentID: "agent-2", UserID: "user-2", Goal: "重构", Status: domain.TaskStatusActive,
+		ClaimedBy: conv, LeaseExpiresAt: time.Now().Add(time.Hour), LastConversationID: conv,
+		Generation: 0, CreatedAt: time.Now(), UpdatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
+	}, 0); err != nil {
+		t.Fatal(err)
+	}
+	// 删除会话 → detach 并提交
+	if err := chat.DeleteConversation(ctx, tenantID, conv, "user-2"); err != nil {
+		t.Fatalf("delete conversation: %v", err)
+	}
+	after, err := repo.Get(ctx, tenantID, "plan-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after == nil {
+		t.Fatal("task must survive conversation delete")
+	}
+	if after.ClaimedBy != "" || after.LeaseExpiresAt != (time.Time{}) {
+		t.Fatalf("task should be detached: claimed_by=%q lease=%s", after.ClaimedBy, after.LeaseExpiresAt)
+	}
+	if after.Status != domain.TaskStatusActive {
+		t.Fatalf("task must stay active, got %s", after.Status)
+	}
+}
