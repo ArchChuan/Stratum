@@ -11,10 +11,10 @@ describe('AgentMemoryConfig', () => {
         <AgentMemoryConfig groupedModels={[]} />
       </Form>,
     );
-    expect(screen.getByText(/空 = 系统默认（10）$/)).toBeInTheDocument();
-    expect(screen.getByText(/空 = 系统默认（8）$/)).toBeInTheDocument();
+    expect(screen.getByText(/0 = 使用系统默认（10 条）$/)).toBeInTheDocument();
+    expect(screen.getByText(/0 = 使用系统默认（8 条）$/)).toBeInTheDocument();
     expect(screen.getByText(/空 = 系统默认（3）$/)).toBeInTheDocument();
-    expect(screen.getByText(/空 = 系统默认（5）$/)).toBeInTheDocument();
+    expect(screen.getByText(/0 = 使用系统默认（5 条）$/)).toBeInTheDocument();
   });
 
   it('keeps the 0 = 不注入历史 semantic for history injection', () => {
