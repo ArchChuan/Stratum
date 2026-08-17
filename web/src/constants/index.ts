@@ -23,6 +23,9 @@ export const AGENT_CONTEXT_WINDOW_RATIO = 0.85;
 export const AGENT_TEMPERATURE_MIN = 0;
 export const AGENT_TEMPERATURE_MAX = 1;
 export const AGENT_TEMPERATURE_STEP = 0.1;
+// max_tokens = 0 时回落后端 constants.DefaultOutputReserveTokens：模型 registry
+// 无 maxOut 或模型未知时的平台兜底输出上限，后端为权威。
+export const AGENT_DEFAULT_MAX_OUTPUT_TOKENS = 4096;
 
 export const DEFAULT_PAGE_SIZE = 20;
 export const COMPACT_PAGE_SIZE = 10;

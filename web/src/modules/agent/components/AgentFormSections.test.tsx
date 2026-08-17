@@ -87,7 +87,8 @@ describe('AgentFormSections', () => {
 
     const input = screen.getByLabelText(/最大生成 Token/);
     expect(input).toHaveValue('2048');
-    expect(screen.getByText('0 = 不修改（保留现有值）；未设置过则使用平台默认')).toBeInTheDocument();
+    // 无选中模型（groupedModels 为空）→ 展示平台兜底输出上限
+    expect(screen.getByText(/平台兜底 4,?096 tokens/)).toBeInTheDocument();
 
     fireEvent.change(input, { target: { value: '4096' } });
     expect(input).toHaveValue('4096');
@@ -103,6 +104,37 @@ describe('AgentFormSections', () => {
 
     const input = screen.getByLabelText(/最大生成 Token/);
     expect(input).toHaveValue('2048');
+  });
+
+  it('shows the recommended max output when the selected model has a known maxOut', () => {
+    render(
+      <Form initialValues={{ llmModel: 'glm-5.2' }}>
+        <AgentFormSections
+          skills={[]}
+          mcpTools={[]}
+          workspaces={[]}
+          groupedModels={[{ provider: '托管厂商', models: [{ value: 'glm-5.2', label: 'glm-5.2', reasoning: false, maxTokens: 8192 }] }]}
+        />
+      </Form>,
+    );
+
+    expect(screen.getByText(/推荐 8,?192 tokens（模型最大输出）；0 = 不修改（保留现有值）/)).toBeInTheDocument();
+  });
+
+  it('falls back to the platform default text when the selected model has no maxOut', () => {
+    render(
+      <Form initialValues={{ llmModel: 'retired-chat' }}>
+        <AgentFormSections
+          skills={[]}
+          mcpTools={[]}
+          workspaces={[]}
+          groupedModels={[{ provider: '托管厂商', models: [{ value: 'managed-chat', label: 'managed-chat', reasoning: false, maxTokens: 8192 }] }]}
+          currentModel="retired-chat"
+        />
+      </Form>,
+    );
+
+    expect(screen.getByText(/平台兜底 4,?096 tokens/)).toBeInTheDocument();
   });
 
   it('hides temperature and compaction fields for the system assistant only', () => {
