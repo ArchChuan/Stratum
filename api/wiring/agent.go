@@ -67,7 +67,9 @@ type Agent struct {
 	RevisionObjectStore pkgobjectstore.Store
 	CheckpointStore     agent.CheckpointStore
 	CheckpointCleanup   *agent.CheckpointCleanupWorker
+	TaskCleanup         *agent.TaskCleanupWorker
 	ApprovalStore       agentport.ToolApprovalRepo
+	TaskStore           agentport.TaskRepo
 	ApprovalService     *agent.ToolApprovalService
 	// ActionExecutor 执行审批通过后的动作（D4/D5），由 buildEvaluation 在评测
 	// 组件就绪后装配；nil 时执行端点 fail closed。
@@ -277,10 +279,16 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	}
 	if db != nil {
 		a.CheckpointStore = persistence.NewPgCheckpointStore(db)
+		a.TaskStore = persistence.NewPgTaskRepo(db)
+		// 任务持久化经 Registry 注入每个 hydrate 的 agent（persistTaskSnapshot
+		// 与恢复链路依赖 BaseAgent.TaskStore，必须与仓库实例同源）。
+		registry.SetTaskStore(a.TaskStore)
 		a.ApprovalStore = persistence.NewPgToolApprovalStore(db)
 		chatStore := persistence.NewPgChatStore(db, c.Logger)
 		// D9 会话删除级联：DeleteConversation 在同一租户事务内终结关联审批。
 		chatStore.SetApprovalCascade(a.ApprovalStore)
+		// 生命周期解耦：会话删除只解除 task 引用，task 保留可恢复。
+		chatStore.SetTaskDetach(a.TaskStore)
 		a.ChatStore = chatStore
 		a.ApprovalService = agent.NewToolApprovalService(a.ApprovalStore, a.CheckpointStore, c.Platform.AESKey)
 		a.CheckpointCleanup = agent.NewCheckpointCleanupWorker(
@@ -291,10 +299,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 			c.platformMetrics(),
 		)
 		a.CheckpointCleanup.Start(ctx)
-		c.shutdown = append(c.shutdown, func(context.Context) error {
-			a.CheckpointCleanup.Stop()
-			return nil
-		})
+		wireTaskCleanup(c, a, ctx)
 		a.SkillLookup = persistence.NewPgSkillLookup(db)
 		var registry *llmgateway.ModelRegistry
 		var gw *llmgateway.Gateway
@@ -398,6 +403,30 @@ func (c *Container) injectTenantRoleResolvers(a *Agent) {
 	if c.Knowledge.RAGService != nil {
 		c.Knowledge.RAGService.SetTenantRoleResolver(roles)
 	}
+}
+
+// wireTaskCleanup assembles the TaskCleanupWorker for the DB-backed path and
+// registers its shutdown. Extracted from buildAgent to keep that wiring
+// function under the line-count gate; mirrors the inline CheckpointCleanup
+// construction.
+func wireTaskCleanup(c *Container, a *Agent, ctx context.Context) {
+	db := c.dbOrNil()
+	if db == nil {
+		return
+	}
+	a.TaskCleanup = agent.NewTaskCleanupWorker(
+		agentCheckpointTenantLister{pool: db}.list,
+		a.TaskStore,
+		constants.TaskCleanupInterval,
+		c.Logger,
+		c.platformMetrics(),
+	)
+	a.TaskCleanup.Start(ctx)
+	c.shutdown = append(c.shutdown, func(context.Context) error {
+		a.CheckpointCleanup.Stop()
+		a.TaskCleanup.Stop()
+		return nil
+	})
 }
 
 // wireOperationGate wires the T8 operation approval chain: the gate service

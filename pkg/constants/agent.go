@@ -73,6 +73,28 @@ const (
 	// 2048 覆盖 4 claims 的完整 verdict JSON 输出。
 	AgentFactCheckJudgeMaxTokens = 2048
 
+	// ---- agent task persistence (cross-session goal progress) ----
+
+	// TaskLeaseDuration 是 task 的 claim lease：推进一次刷新一次；无 heartbeat，
+	// 会话崩溃后 30 分钟自动释放，新会话可接管（复用 workflow claim 模式）。
+	TaskLeaseDuration = 30 * time.Minute
+	// TaskExpiresAt 是 task 自身保留窗口：30 天未推进则 CleanupExpired 回收。
+	TaskExpiresAt = 30 * 24 * time.Hour
+	// TaskFailThreshold 是恢复提示阈值：fail_count 达到后注入"上次多次失败，
+	// 是否继续"提示（不自动改状态）。
+	TaskFailThreshold = 3
+	// TaskCleanupInterval 是 TaskCleanupWorker 的清理周期。
+	TaskCleanupInterval = 10 * time.Minute
+	// TaskSemanticSimilarityThreshold 是恢复注入的语义相关阈值：新消息的
+	// bigram 覆盖 goal bigram 的比例达到该值才注入（0.25 = 每 4 个 bigram 至少
+	// 命中 1 个，中文 2 字词粒度）。
+	TaskSemanticSimilarityThreshold = 0.25
+	// TaskMetadataKey 是 AgentResult.Metadata 中 task snapshot 的透出键
+	// （白名单：仅此键 + TaskMetadataCompleteKey 透出前端，禁止透出其他 Metadata）。
+	TaskMetadataKey = "stratum_task_snapshot"
+	// TaskMetadataCompleteKey 标记本次执行中 LLM 调用了 stratum_complete_task。
+	TaskMetadataCompleteKey = "stratum_task_complete"
+
 	DefaultPlanMaxNodes           = 10
 	DefaultPlanMaxRevisions       = 20
 	DefaultPlanMaxAttemptsPerNode = 3

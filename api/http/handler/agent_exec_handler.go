@@ -173,9 +173,15 @@ func agentExecutionResultDTO(result *agent.AgentResult) AgentExecutionResult {
 	thoughtsJSON, _ := json.Marshal(result.Thoughts)
 	toolCallsJSON, _ := json.Marshal(result.ToolCalls)
 	artifacts := executionArtifactsResponse(result.Artifacts)
+	metadata := map[string]interface{}{"thoughtsJSON": string(thoughtsJSON), "toolCallsJSON": string(toolCallsJSON)}
+	// 白名单透出 task snapshot（跨会话目标进度摘要条）。禁止透出 result.Metadata
+	// 其他键——仅应用层写入的 task 数据可流出。
+	if v, ok := result.Metadata[constants.TaskMetadataKey]; ok {
+		metadata[constants.TaskMetadataKey] = v
+	}
 	return AgentExecutionResult{AgentID: result.AgentID, Input: result.Input, Output: result.Output, Steps: result.Steps,
 		TokensUsed: result.TokensUsed, Duration: result.Duration.String(), Thoughts: result.Thoughts, ToolCalls: result.ToolCalls,
-		Artifacts: artifacts, Metadata: map[string]interface{}{"thoughtsJSON": string(thoughtsJSON), "toolCallsJSON": string(toolCallsJSON)}}
+		Artifacts: artifacts, Metadata: metadata}
 }
 
 func executionArtifactsResponse(artifacts []domain.ExecutionArtifact) []domain.ExecutionArtifact {
@@ -205,7 +211,8 @@ func agentExecutionDonePayload(result *agent.AgentResult) []byte {
 		Degraded      bool                        `json:"degraded"`
 		DegradeReason string                      `json:"degradeReason,omitempty"`
 		FactCheck     *domain.FactCheckReport     `json:"factCheck,omitempty"`
-	}{true, dto.Output, dto.Steps, dto.TokensUsed, dto.Duration, dto.Artifacts, sources, result.Degraded, result.DegradeReason, result.FactCheck})
+		Metadata      map[string]interface{}      `json:"metadata,omitempty"`
+	}{true, dto.Output, dto.Steps, dto.TokensUsed, dto.Duration, dto.Artifacts, sources, result.Degraded, result.DegradeReason, result.FactCheck, dto.Metadata})
 	return payload
 }
 

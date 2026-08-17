@@ -330,7 +330,7 @@ func TestBuildReActGraph_StacksInstructionsAndKeepsAgentToolSurface(t *testing.T
 	require.NotContains(t, string(secondMessages), "USE INSTRUCTION B")
 	// 工具面 = stratum_skill 统一工具 + plan 工具 + agent 绑定全集（Spec D5），
 	// 激活 skill 不再隐藏/叠加 MCP 或 memory 工具，两轮工具面恒定。
-	agentSurface := []string{"stratum_skill", "stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "mcp:orders:get", "mcp:orders:delete", "stratum_recall_memory"}
+	agentSurface := []string{"stratum_skill", "stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "stratum_complete_task", "mcp:orders:get", "mcp:orders:delete", "stratum_recall_memory"}
 	require.Equal(t, agentSurface, toolNames(stub.llmReqs[1].Tools))
 
 	thirdMessages, _ := json.Marshal(stub.llmReqs[2].Messages)
@@ -887,7 +887,7 @@ func TestBuildReActGraph_ReactivatingActiveSkillIsIdempotent(t *testing.T) {
 	fourthMessages, _ := json.Marshal(stub.llmReqs[3].Messages)
 	require.Equal(t, 1, strings.Count(string(fourthMessages), "USE INSTRUCTION A"))
 	require.Contains(t, string(fourthMessages), "USE INSTRUCTION B")
-	agentSurface := []string{"stratum_skill", "stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "mcp:orders:get", "mcp:orders:delete", "stratum_recall_memory"}
+	agentSurface := []string{"stratum_skill", "stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "stratum_complete_task", "mcp:orders:get", "mcp:orders:delete", "stratum_recall_memory"}
 	require.Equal(t, agentSurface, toolNames(stub.llmReqs[3].Tools))
 }
 
@@ -1030,8 +1030,8 @@ func TestEffectiveTools_ToolSurfaceUnchangedByActives(t *testing.T) {
 		{Name: "stratum_recall_memory", ProviderType: "builtin"},
 		{Name: "stratum_search_knowledge", ProviderType: "builtin"},
 	}
-	fullSurface := []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "mcp:orders:get", "mcp:orders:delete", "stratum_recall_memory", "stratum_search_knowledge"}
-	planTools := []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan"}
+	fullSurface := []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "stratum_complete_task", "mcp:orders:get", "mcp:orders:delete", "stratum_recall_memory", "stratum_search_knowledge"}
+	planTools := []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "stratum_complete_task"}
 
 	// 工具面 = plan 工具 + agent 绑定全集：激活与否不改变可见工具（Spec D5）。
 	// stratum_skill 由 prepareLLMRequest 按预算动态前置，不在本函数静态生成。
@@ -1044,8 +1044,10 @@ func TestEffectiveTools_ToolSurfaceUnchangedByActives(t *testing.T) {
 	}, baseAvailable...)
 	require.Equal(t, fullSurface, toolNames(graph.EffectiveToolsForTest(withPlanInAvailable, false)))
 
-	// governed assistant 短路：工具面 = available 原样，不追加 plan 工具。
-	require.Equal(t, []string{"mcp:orders:get", "mcp:orders:delete", "stratum_recall_memory", "stratum_search_knowledge"}, toolNames(graph.EffectiveToolsForTest(baseAvailable, true)))
+	// governed assistant 同样追加 plan 工具（agent_tasks 触发源，唯一真实用户
+	// 路径）；工具面 = plan 工具 + available，混入的 plan 工具仍防御性去重。
+	require.Equal(t, fullSurface, toolNames(graph.EffectiveToolsForTest(baseAvailable, true)))
+	require.Equal(t, planTools, toolNames(graph.EffectiveToolsForTest(nil, true)))
 	require.Equal(t, planTools, toolNames(graph.EffectiveToolsForTest(nil, false)))
 }
 

@@ -773,6 +773,37 @@ ALTER TABLE agent_execution_checkpoints DROP CONSTRAINT IF EXISTS agent_executio
 ALTER TABLE agent_execution_checkpoints ADD CONSTRAINT agent_execution_checkpoints_status_check
     CHECK (status IN ('running', 'paused', 'waiting_approval', 'completed', 'failed', 'expired'));
 
+-- Agent tasks (T10): cross-session progress on a single goal.
+-- owner = (agent_id, user_id); multiple active tasks per owner are allowed.
+-- last_conversation_id is a soft reference: deleting a conversation detaches
+-- the task (claimed_by='', lease_expires_at=NULL) without deleting it.
+-- generation is a claim fence: every claim bumps it and saves carry the
+-- generation they saw, so a stale conversation cannot overwrite a task
+-- re-claimed by another conversation (mirrors workflow_runs.generation).
+CREATE TABLE IF NOT EXISTS agent_tasks (
+    id                   TEXT        PRIMARY KEY,
+    agent_id             TEXT        NOT NULL,
+    user_id              TEXT        NOT NULL,
+    goal                 TEXT        NOT NULL DEFAULT '',
+    current_phase        TEXT        NOT NULL DEFAULT '',
+    completed_steps      JSONB       NOT NULL DEFAULT '[]',
+    next_action          TEXT        NOT NULL DEFAULT '',
+    status               TEXT        NOT NULL CHECK (status IN ('active','completed','abandoned')),
+    claimed_by           TEXT        NOT NULL DEFAULT '',
+    lease_expires_at     TIMESTAMPTZ,
+    generation           BIGINT      NOT NULL DEFAULT 0,
+    last_conversation_id UUID,
+    last_execution_id    TEXT        NOT NULL DEFAULT '',
+    fail_count           INT         NOT NULL DEFAULT 0,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at           TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '30 days'
+);
+CREATE INDEX IF NOT EXISTS idx_agent_tasks_owner
+    ON agent_tasks (agent_id, user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_tasks_status
+    ON agent_tasks (status, expires_at);
+
 CREATE TABLE IF NOT EXISTS agent_tool_approvals (
     id                UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),
     decision_id       TEXT        NOT NULL DEFAULT '',
