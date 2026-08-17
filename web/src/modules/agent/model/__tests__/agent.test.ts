@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { agentSchema, chatMessageSchema } from '../agent';
+import { agentSchema, buildGroupedModels, chatMessageSchema } from '../agent';
 
 const baseAgent = {
   id: 'a1',
@@ -102,5 +102,25 @@ describe('agentSchema', () => {
       role: 'assistant',
       artifacts: [{ type: 'diagnostic_report', diagnosticReport: { facts: 'not-an-array' } }],
     })).toThrow();
+  });
+});
+
+describe('buildGroupedModels', () => {
+  it('透传模型的 contextWindow 与 maxTokens（vendor maxOut）用于默认值展示', () => {
+    const grouped = buildGroupedModels(
+      [{ providerId: 'p1', name: 'glm-5.2', capabilities: ['chat'], contextWindow: 128000, maxTokens: 8192 }],
+      [{ id: 'p1', name: '托管厂商' }],
+    );
+    expect(grouped).toEqual([
+      { provider: '托管厂商', models: [{ value: 'glm-5.2', label: 'glm-5.2', reasoning: false, contextWindow: 128000, maxTokens: 8192 }] },
+    ]);
+  });
+
+  it('缺 maxTokens / contextWindow 时选项不带该字段（回落平台默认文案）', () => {
+    const grouped = buildGroupedModels(
+      [{ providerId: 'p1', name: 'legacy-model', displayName: '旧模型', capabilities: ['chat'] }],
+      [{ id: 'p1', name: '托管厂商' }],
+    );
+    expect(grouped[0]?.models[0]).toEqual({ value: 'legacy-model', label: '旧模型', reasoning: false });
   });
 });
