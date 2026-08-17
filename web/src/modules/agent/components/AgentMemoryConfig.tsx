@@ -29,9 +29,9 @@ interface AgentMemoryConfigProps {
 }
 
 // 记忆参数。注入/提取/召回按 agent 生效：数值经 buildMemoryParameters 映射为
-// agents.parameters JSONB 的 memory.* dotted 键，空值 = 不覆盖，回落代码默认。
-// 提取模型选择器从模型管理目录选，存储值 = 模型名（后端校验目录存在性）。
-// long_term_top_k 与 recall_top_k 语义重复（registry 标注 deprecated），不渲染。
+// agents.parameters JSONB 的 memory.* dotted 键，0 = 不覆盖（后端写路径对数值 0
+// 提前过滤，等价不落库），回落代码默认。提取模型选择器从模型管理目录选，存储
+// 值 = 模型名（后端校验目录存在性）。long_term_top_k 语义重复，不渲染。
 export const AgentMemoryConfig = ({ groupedModels }: AgentMemoryConfigProps) => (
   <div
     style={{
@@ -50,7 +50,7 @@ export const AgentMemoryConfig = ({ groupedModels }: AgentMemoryConfigProps) => 
     <Form.Item
       label="单次抽取事实上限（memory.max_facts_per_extraction）"
       name="memoryMaxFactsPerExtraction"
-      extra={`记忆抽取器每轮对话抽取并写入的最多事实条数，空 = 系统默认（${MEMORY_MAX_FACTS_DEFAULT}）`}
+      extra={`记忆抽取器每轮对话抽取并写入的最多事实条数，0 = 使用系统默认（${MEMORY_MAX_FACTS_DEFAULT} 条）`}
     >
       <Slider
         min={MEMORY_MAX_FACTS_MIN}
@@ -86,7 +86,7 @@ export const AgentMemoryConfig = ({ groupedModels }: AgentMemoryConfigProps) => 
     <Form.Item
       label="记忆召回条数（memory.recall_top_k）"
       name="memoryRecallTopK"
-      extra={`执行时从记忆库召回并注入上下文的最多条目数，空 = 系统默认（${RECALL_TOP_K_DEFAULT}）`}
+      extra={`执行时从记忆库召回并注入上下文的最多条目数，0 = 使用系统默认（${RECALL_TOP_K_DEFAULT} 条）`}
     >
       <Slider
         min={RECALL_TOP_K_MIN}
@@ -98,7 +98,7 @@ export const AgentMemoryConfig = ({ groupedModels }: AgentMemoryConfigProps) => 
     <Form.Item
       label="事实注入条数（memory.fact_injection_top_n）"
       name="memoryFactInjectionTopN"
-      extra={`会话上下文注入的长期事实条数，空 = 系统默认（${MEMORY_FACT_INJECTION_DEFAULT}）`}
+      extra={`会话上下文注入的长期事实条数，0 = 使用系统默认（${MEMORY_FACT_INJECTION_DEFAULT} 条）`}
     >
       <Slider
         min={MEMORY_FACT_INJECTION_MIN}
