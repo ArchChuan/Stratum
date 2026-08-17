@@ -216,3 +216,82 @@ const (
 	MemoryDeletedRetention     = 30 * 24 * time.Hour // purge deleted after 30 days
 	MemorySupersededRetention  = 90 * 24 * time.Hour // purge superseded after 90 days
 )
+
+// Memory Prompt templates — 各 memory worker 的默认提示词模板唯一权威源。平台参数
+// memory.*_prompt 未配置时兜底；internal/parameters 的 prompt-defaults 白名单
+// 按这些键下发全文给前端展示。占位符契约与自定义 prompt 一致（%s/%d）。
+const (
+	// MemoryExtractionDefaultPrompt 是事实抽取模板（memory.extraction_prompt
+	// 未配置时兜底）。%s(userID)/%s(agentID)/%d(maxFacts) 占位符见
+	// llm_extractor.go extractionSystemPrompt 消费点。
+	MemoryExtractionDefaultPrompt = `你是一个长期记忆提取助手，负责从对话中提取关于用户（%s）的有价值事实，供 AI 助手（%s）在未来对话中使用。
+
+提取规则（严格执行）：
+- 只提取用户明确陈述、确认或展现的事实
+- 不提取：用户的提问、问候语、AI 助手的回复内容、工具调用的输出
+- 不提取泛化描述（如"用户提到了某件事"），只提取具体事实
+- 优先精确性：「用户偏好在 VS Code 中使用暗色主题」优于「用户有主题偏好」
+- 最多提取 %d 条事实；宁少勿滥，低价值事实直接忽略
+
+fact_type 分类：
+- preference：用户的喜好、偏好、习惯
+- skill：用户掌握的技能或专业知识
+- event：已发生的具体事件（过去时）
+- state：用户当前的状态或处境
+- relationship：用户与某人/某组织的关系
+- other：不属于以上分类的陈述性事实
+
+只输出 JSON 数组，不加任何说明或 markdown 标记：
+[{"content":"...","importance":0.0-1.0,"fact_type":"...","confidence":0.0-1.0,"entities":["实体名"]}]`
+
+	// MemoryEnrichDefaultPrompt 是对话富化模板（memory.enrich_prompt 未配置时
+	// 兜底）。%s(role)/%s(content) 占位符见 enricher_prompt.go formatEnrichmentPrompt。
+	MemoryEnrichDefaultPrompt = `分析以下对话消息，提取结构化元数据。
+
+只输出符合以下格式的 JSON，不加任何说明或 markdown 标记：
+{
+  "entities": [{"name": "...", "type": "person|product|concept|location|org", "confidence": 0.0-1.0}],
+  "importance": 0.0-1.0,
+  "token_estimate": 数字,
+  "keywords": ["关键词1", "关键词2"],
+  "work_context": ["当前工作、任务或约束"],
+  "personal_context": ["当前明确表达的个人偏好或状态"],
+  "top_of_mind": ["当前最关注的事项"]
+}
+
+规则：
+- importance 评分：0.9+ 决策/承诺；0.7-0.9 具体事实/偏好；0.3-0.7 一般上下文；<0.3 无实质内容（问候/感谢/简单确认）
+- entities：只提取置信度 >= 0.6 的具名实体
+- keywords：3-5 个最有检索价值的词语
+- token_estimate：消息内容的 token 数近似值
+- 三个 context 数组仅保留当前仍活跃、明确且必要的短句；每组最多 8 项，每项不超过 240 字；不要输出密码、令牌、密钥或原始整段消息
+
+消息（角色：%s）：
+%s`
+
+	// MemorySummaryDefaultPrompt 是会话摘要模板（memory.summary_prompt 未配置
+	// 时兜底）。%s(conversation) 占位符见 enricher_prompt.go formatSummaryPrompt。
+	MemorySummaryDefaultPrompt = `简洁总结以下对话，保留关键决策、确认的事实和待办事项。要求简短但完整，使用中文。
+
+对话内容：
+%s`
+
+	// MemoryHistorySummaryDefaultPrompt 是周期历史总结指令前缀（memory.
+	// history_summary_prompt 未配置时兜底），见 history_summarizer.go 消费点。
+	MemoryHistorySummaryDefaultPrompt = "Summarize this bounded period of user history. Preserve decisions, goals, preferences, and durable context; omit secrets and raw payloads.\n\n"
+
+	// MemorySupersedeDefaultPrompt 是事实取代判定模板（memory.supersede_prompt
+	// 未配置时兜底）。%s(oldFact)/%s(newFact) 占位符见 llm_superseder.go 消费点。
+	MemorySupersedeDefaultPrompt = `判断新事实是否应该取代旧事实。
+
+旧事实：%s
+新事实：%s
+
+判断标准：
+- 如果新事实是对旧事实的更新、纠正或推翻，则应取代（supersedes: true）
+- 如果两者描述不同方面或可以并存，则不取代（supersedes: false）
+- 如果新事实只是旧事实的子集或更模糊的表达，则不取代
+
+只输出 JSON，不加任何说明：
+{"supersedes": true/false, "reason": "简短说明"}`
+)

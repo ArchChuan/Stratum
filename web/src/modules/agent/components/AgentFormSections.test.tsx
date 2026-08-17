@@ -310,4 +310,46 @@ describe('AgentFormSections', () => {
 
     expect(screen.getByText('推荐 108800 tokens（模型窗口 128000 × 85%）；0 = 自动按模型窗口解析')).toBeInTheDocument();
   });
+
+  it('shows default hints for unset advanced fields', () => {
+    render(
+      <Form>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
+      </Form>,
+    );
+    expect(screen.getByText('默认：0.7')).toBeInTheDocument();
+    expect(screen.getByText('默认：0.8')).toBeInTheDocument();
+    expect(screen.getByText('默认：0.3')).toBeInTheDocument();
+  });
+
+  it('hides default hints once explicit values are set', () => {
+    render(
+      <Form initialValues={{ temperature: 0.5, compaction_safety_ratio: 0.9, compaction_temperature: 0.2 }}>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
+      </Form>,
+    );
+    expect(screen.queryByText('默认：0.7')).not.toBeInTheDocument();
+    expect(screen.queryByText('默认：0.8')).not.toBeInTheDocument();
+    expect(screen.queryByText('默认：0.3')).not.toBeInTheDocument();
+  });
+
+  it('offers 0（自动推导）for compaction_recent_groups without a disable path', () => {
+    render(
+      <Form>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
+      </Form>,
+    );
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: '压缩最近轮数（compaction_recent_groups）' }));
+    expect(screen.getByRole('option', { name: '0（自动推导）' })).toBeInTheDocument();
+  });
+
+  it('renders compaction prompt viewer next to the empty prompt field', () => {
+    render(
+      <Form>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
+      </Form>,
+    );
+    // compaction_prompt + AgentMemoryConfig 的 memory.extraction_prompt 各一个
+    expect(screen.getAllByRole('button', { name: '查看默认提示词' })).toHaveLength(2);
+  });
 });

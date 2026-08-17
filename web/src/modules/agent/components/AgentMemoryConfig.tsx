@@ -18,6 +18,7 @@ import {
   RECALL_TOP_K_MAX,
   RECALL_TOP_K_MIN,
 } from '@/constants';
+import { PromptDefaultViewer } from '@/modules/parameters/components/PromptDefaultViewer';
 import { SectionHeader } from '@/shared/ui';
 
 const { TextArea } = Input;
@@ -62,7 +63,12 @@ export const AgentMemoryConfig = ({ groupedModels }: AgentMemoryConfigProps) => 
     <Form.Item
       label="抽取提示词（memory.extraction_prompt）"
       name="memoryExtractionPrompt"
-      extra="记忆抽取系统提示词；留空 = 使用内置默认。自定义时建议保留 %s(userID)/%s(agentID)/%d(maxFacts) 占位符"
+      extra={
+        <>
+          记忆抽取系统提示词；留空 = 使用内置默认。自定义时建议保留 %s(userID)/%s(agentID)/%d(maxFacts) 占位符
+          <PromptDefaultViewer promptKey="memory.extraction_prompt" />
+        </>
+      }
     >
       <TextArea rows={4} placeholder="留空使用内置默认抽取提示词" />
     </Form.Item>

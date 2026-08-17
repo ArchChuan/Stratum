@@ -37,6 +37,15 @@ func (h *ParameterHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, values)
 }
 
+// PromptDefaults GET /admin/parameters/prompt-defaults — default prompt
+// templates by full registry key (whitelist in application.Service.
+// PromptDefaults). Consumers: platform settings page (global admin) and agent
+// edit page (tenant admin via the tenant-scope twin route). Pure read, no
+// error path.
+func (h *ParameterHandler) PromptDefaults(c *gin.Context) {
+	c.JSON(http.StatusOK, h.svc.PromptDefaults())
+}
+
 // Update PUT /admin/parameters — merge-write platform values. Only keys
 // present in the body are touched; every key must be platform-scope and pass
 // its definition validation.

@@ -23,6 +23,9 @@ export const AGENT_CONTEXT_WINDOW_RATIO = 0.85;
 export const AGENT_TEMPERATURE_MIN = 0;
 export const AGENT_TEMPERATURE_MAX = 1;
 export const AGENT_TEMPERATURE_STEP = 0.1;
+// temperature = 0（未设置）时回落后端 registry agent.temperature Default
+// （pkg/constants/agent.go，运行时权威；这里只用于提示展示）。
+export const AGENT_DEFAULT_TEMPERATURE = 0.7;
 // max_tokens = 0 时回落后端 constants.DefaultOutputReserveTokens：模型 registry
 // 无 maxOut 或模型未知时的平台兜底输出上限，后端为权威。
 export const AGENT_DEFAULT_MAX_OUTPUT_TOKENS = 4096;
@@ -72,6 +75,9 @@ export const LLM_DEFAULT_PAGE_SIZE = 20;
 export const KNOWLEDGE_DEFAULT_CHUNK_SIZE = 512;
 export const KNOWLEDGE_DEFAULT_CHUNK_OVERLAP = 64;
 export const KNOWLEDGE_DEFAULT_TOP_K = 5;
+// query_mode 未设置时的运行时默认（workspace.go DefaultQueryMode，后端为权威；
+// 与 rag.top_k 平台参数 10 的评测搜索空间语义无关）。
+export const KNOWLEDGE_DEFAULT_QUERY_MODE = 'hybrid';
 export const KNOWLEDGE_MIN_CHUNK_SIZE = 64;
 export const KNOWLEDGE_MAX_CHUNK_SIZE = 2048;
 export const KNOWLEDGE_MIN_CHUNK_OVERLAP = 0;
@@ -107,6 +113,12 @@ export const MEMORY_HISTORY_INJECTION_DEFAULT = 3;
 // [0,1]（Qwen/Zhipu 拒收 >1）。0 = unset，回落 0.3。
 export const COMPACTION_TEMP_MIN = 0;
 export const COMPACTION_TEMP_MAX = 1;
+export const COMPACTION_DEFAULT_TEMPERATURE = 0.3;
+// 压缩安全比例 0 = unset 时回落 LoopCompactionSafetyRatio（pkg/constants/agent.go）。
+export const COMPACTION_SAFETY_RATIO_DEFAULT = 0.8;
+// compaction_recent_groups = 0 时按上下文窗口自动推导组数（默认 3，
+// pkg/constants/agent.go LoopCompactionRecentGroups；仅提示展示，不写回）。
+export const COMPACTION_RECENT_GROUPS_DEFAULT = 3;
 // 记忆召回条数控件 bounds；对齐 registry memory.recall_top_k（Default 5 / Max 20），
 // 后端 Handle 解析时 clamp [1,20]。
 export const RECALL_TOP_K_MIN = 1;

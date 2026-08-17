@@ -9,6 +9,7 @@ import { AgentMemoryConfig } from './AgentMemoryConfig';
 import {
   AGENT_CONTEXT_WINDOW_RATIO,
   AGENT_DEFAULT_MAX_OUTPUT_TOKENS,
+  AGENT_DEFAULT_TEMPERATURE,
   AGENT_MAX_CONTEXT_TOKENS_MAX,
   AGENT_MAX_CONTEXT_TOKENS_MIN,
   AGENT_MAX_CONTEXT_TOKENS_STEP,
@@ -20,6 +21,9 @@ import {
   AGENT_TEMPERATURE_MAX,
   AGENT_TEMPERATURE_MIN,
   AGENT_TEMPERATURE_STEP,
+  COMPACTION_DEFAULT_TEMPERATURE,
+  COMPACTION_RECENT_GROUPS_DEFAULT,
+  COMPACTION_SAFETY_RATIO_DEFAULT,
   COMPACTION_TEMP_MAX,
   COMPACTION_TEMP_MIN,
   REASONING_EFFORT_OPTIONS,
@@ -27,8 +31,9 @@ import {
 import type { Member } from '@/modules/iam';
 import type { Workspace } from '@/modules/knowledge';
 import type { MCPToolOption } from '@/modules/mcp';
+import { PromptDefaultViewer } from '@/modules/parameters/components/PromptDefaultViewer';
 import type { Skill } from '@/modules/skill';
-import { SectionHeader } from '@/shared/ui';
+import { DefaultHint, SectionHeader } from '@/shared/ui';
 
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -79,6 +84,14 @@ export const AgentFormSections = ({
     if (!selectedModel) return undefined;
     return groupedModels.flatMap((g) => g.models).find((m) => m.value === selectedModel)?.maxTokens;
   }, [selectedModel, groupedModels]);
+  // 0 = 未设置（使用平台默认）的字段：watch 值派生 unset，仅在未设置时渲染
+  // DefaultHint（提示展示不写回，0=unset 语义不被破坏）。
+  const temperature = Form.useWatch('temperature', form);
+  const compactionSafetyRatio = Form.useWatch('compaction_safety_ratio', form);
+  const compactionTemperature = Form.useWatch('compaction_temperature', form);
+  const temperatureUnset = temperature == null || temperature === 0;
+  const safetyRatioUnset = compactionSafetyRatio == null || compactionSafetyRatio === 0;
+  const compactionTemperatureUnset = compactionTemperature == null || compactionTemperature === 0;
 
   // 仅用户 change 时联动：当前值为自动（null/undefined/0）且窗口已知时填入推荐值；
   // 显式值保留，清空/置 0 后再次选模型才回填，不破坏「0 = 自动」语义。
@@ -309,7 +322,12 @@ export const AgentFormSections = ({
                         max: AGENT_TEMPERATURE_MAX,
                         message: `范围 ${AGENT_TEMPERATURE_MIN}~${AGENT_TEMPERATURE_MAX}（0 = 使用平台默认）`,
                       }]}
-                      extra="控制输出的随机性与创造性：值越低，输出越确定、保守；值越高，输出越发散、多样。范围 0~1，0 = 未设置（使用平台默认，通常 0.7）"
+                      extra={
+                        <>
+                          控制输出的随机性与创造性：值越低，输出越确定、保守；值越高，输出越发散、多样。范围 0~1，0 = 未设置；
+                          {temperatureUnset && <DefaultHint value={AGENT_DEFAULT_TEMPERATURE} />}
+                        </>
+                      }
                     >
                       <Slider
                         min={AGENT_TEMPERATURE_MIN}
@@ -337,10 +355,10 @@ export const AgentFormSections = ({
                     <Form.Item
                       label="压缩最近轮数（compaction_recent_groups）"
                       name="compaction_recent_groups"
-                      extra="按轮次组压缩历史：0 = 不启用历史压缩"
+                      extra={`按轮次组压缩历史；0 = 自动推导（默认按上下文窗口推导，通常 ${COMPACTION_RECENT_GROUPS_DEFAULT} 组）`}
                     >
-                      <Select allowClear placeholder="0（不启用）">
-                        <Option value={0}>0（不启用）</Option>
+                      <Select allowClear placeholder="0（自动推导）">
+                        <Option value={0}>0（自动推导）</Option>
                         <Option value={2}>2 组</Option>
                         <Option value={3}>3 组</Option>
                         <Option value={5}>5 组</Option>
@@ -349,14 +367,24 @@ export const AgentFormSections = ({
                     <Form.Item
                       label="压缩安全比例（compaction_safety_ratio）"
                       name="compaction_safety_ratio"
-                      extra="压缩阈值：0 = 未设置（使用平台默认）"
+                      extra={
+                        <>
+                          压缩阈值：0 = 未设置（使用平台默认）；
+                          {safetyRatioUnset && <DefaultHint value={COMPACTION_SAFETY_RATIO_DEFAULT} />}
+                        </>
+                      }
                     >
                       <Slider min={0} max={0.95} step={0.05} marks={{ 0: '0', 0.95: '0.95' }} ariaLabelForHandle="compaction_safety_ratio" />
                     </Form.Item>
                     <Form.Item
                       label="压缩提示词（compaction_prompt）"
                       name="compaction_prompt"
-                      extra="压缩历史时的系统提示词；留空 = 使用内置默认压缩提示词"
+                      extra={
+                        <>
+                          压缩历史时的系统提示词；留空 = 使用内置默认压缩提示词
+                          <PromptDefaultViewer promptKey="agent.compaction_prompt" />
+                        </>
+                      }
                     >
                       <TextArea rows={4} placeholder="留空使用内置默认压缩提示词" />
                     </Form.Item>
@@ -367,9 +395,14 @@ export const AgentFormSections = ({
                         type: 'number',
                         min: COMPACTION_TEMP_MIN,
                         max: COMPACTION_TEMP_MAX,
-                        message: `范围 ${COMPACTION_TEMP_MIN}~${COMPACTION_TEMP_MAX}（0 = 使用默认 0.3）`,
+                        message: `范围 ${COMPACTION_TEMP_MIN}~${COMPACTION_TEMP_MAX}（0 = 使用默认 ${COMPACTION_DEFAULT_TEMPERATURE}）`,
                       }]}
-                      extra="压缩摘要的随机性：范围 0~1；0 = 未设置（使用默认 0.3）"
+                      extra={
+                        <>
+                          压缩摘要的随机性：范围 0~1；0 = 未设置（使用默认 {COMPACTION_DEFAULT_TEMPERATURE}）；
+                          {compactionTemperatureUnset && <DefaultHint value={COMPACTION_DEFAULT_TEMPERATURE} />}
+                        </>
+                      }
                     >
                       <Slider min={COMPACTION_TEMP_MIN} max={COMPACTION_TEMP_MAX} step={0.1} marks={{ 0: '0', 1: '1' }} ariaLabelForHandle="compaction_temperature" />
                     </Form.Item>
