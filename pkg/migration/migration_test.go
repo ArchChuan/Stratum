@@ -113,3 +113,38 @@ func TestRemoveTenantLLMAPIKeysMigration(t *testing.T) {
 		t.Fatal("down migration must not recreate deleted credentials")
 	}
 }
+
+func TestModelEditableParamsMigration(t *testing.T) {
+	t.Parallel()
+
+	up, err := os.ReadFile("sql/038_model_editable_params.up.sql")
+	if err != nil {
+		t.Fatalf("read up migration: %v", err)
+	}
+	down, err := os.ReadFile("sql/038_model_editable_params.down.sql")
+	if err != nil {
+		t.Fatalf("read down migration: %v", err)
+	}
+
+	upSQL := string(up)
+	for _, required := range []string{
+		"ALTER TABLE public.models ADD COLUMN IF NOT EXISTS",
+		"sampling_params",
+		"max_temperature",
+		"ALTER TABLE public.providers ADD COLUMN IF NOT EXISTS",
+		"extra_headers",
+		"default_sampling",
+	} {
+		if !strings.Contains(upSQL, required) {
+			t.Fatalf("up migration missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		"ALTER TABLE public.models DROP COLUMN IF EXISTS",
+		"ALTER TABLE public.providers DROP COLUMN IF EXISTS",
+	} {
+		if !strings.Contains(string(down), required) {
+			t.Fatalf("down migration missing %q", required)
+		}
+	}
+}
