@@ -24,12 +24,26 @@ import { DefaultHint } from '@/shared/ui';
 
 const { Text } = Typography;
 
-// 敏感参数(apiKey 类)永不渲染;资源 scope 由 Agent / 知识库表单各自承载。
-const renderable = (def: ParameterDefinition): boolean =>
-  def.scope === 'platform' && !def.sensitive;
+const EXCLUDED_KEYS = new Set(['memory.long_term_top_k', 'agent.bindings']);
 
-const groupByCategory = (defs: ParameterDefinition[]): ParameterDefinition[] =>
-  defs.filter(renderable);
+// 敏感参数(apiKey 类)和没有可编辑表单语义的复杂结构永不渲染。
+const renderable = (def: ParameterDefinition): boolean =>
+  !def.sensitive && !EXCLUDED_KEYS.has(def.key);
+
+const groupByCategory = (
+  defs: ParameterDefinition[],
+  scope: ParameterDefinition['scope'],
+): Array<[string, ParameterDefinition[]]> => {
+  const byCategory = new Map<string, ParameterDefinition[]>();
+  for (const def of defs) {
+    if (!renderable(def) || def.scope !== scope) continue;
+    const category = def.category || '其他';
+    const group = byCategory.get(category) ?? [];
+    group.push(def);
+    byCategory.set(category, group);
+  }
+  return Array.from(byCategory.entries());
+};
 
 // 平台页可查看默认模板的提示词键（与后端 prompt-defaults 白名单对应，
 // agent.* 与 memory.extraction_prompt 在 Agent 编辑页展示）。
@@ -83,6 +97,38 @@ const PlatformFieldItem = ({ def }: { def: ParameterDefinition }) => {
   );
 };
 
+const ParameterGroups = ({
+  groups,
+  loading,
+  resourceDefaults = false,
+}: {
+  groups: Array<[string, ParameterDefinition[]]>;
+  loading: boolean;
+  resourceDefaults?: boolean;
+}) => (
+  <>
+    {groups.map(([category, defsInGroup]) => (
+      <Card
+        key={category}
+        title={category}
+        loading={loading}
+        style={{ borderRadius: 12, border: '1px solid #f0f0f0', marginBottom: 16 }}
+      >
+        {resourceDefaults && category === 'agent' && (
+          <Text type="secondary">会影响所有未单独配置的 Agent</Text>
+        )}
+        <Row gutter={[24, 8]} style={resourceDefaults && category === 'agent' ? { marginTop: 8 } : undefined}>
+          {defsInGroup.map((def) => (
+            <Col key={def.key} xs={24} md={12}>
+              <PlatformFieldItem def={def} />
+            </Col>
+          ))}
+        </Row>
+      </Card>
+    ))}
+  </>
+);
+
 export const PlatformSettingsPage = () => {
   const [form] = Form.useForm<PlatformSettingsFormValues>();
   const [defs, setDefs] = useState<ParameterDefinition[]>([]);
@@ -119,16 +165,8 @@ export const PlatformSettingsPage = () => {
     };
   }, [form]);
 
-  const groups = useMemo(() => {
-    const byCategory = new Map<string, ParameterDefinition[]>();
-    for (const def of groupByCategory(defs)) {
-      const cat = def.category || '其他';
-      const list = byCategory.get(cat) ?? [];
-      list.push(def);
-      byCategory.set(cat, list);
-    }
-    return Array.from(byCategory.entries());
-  }, [defs]);
+  const platformGroups = useMemo(() => groupByCategory(defs, 'platform'), [defs]);
+  const resourceGroups = useMemo(() => groupByCategory(defs, 'resource'), [defs]);
 
   const onFinish = useCallback(
     async (formValues: PlatformSettingsFormValues) => {
@@ -163,27 +201,21 @@ export const PlatformSettingsPage = () => {
           平台参数
         </Typography.Title>
         <Text type="secondary">
-          全局可优化参数与提示词配置。0 = 未设置（使用定义默认）；资源级参数在 Agent / 知识库表单中各自配置。
+          全局参数与资源默认值配置。0 = 未设置（使用定义默认）；资源默认值仅在资源未配置时生效，资源级配置优先。
         </Text>
       </div>
 
       <Form form={form} layout="vertical" onFinish={onFinish}>
-        {groups.map(([category, defsInGroup]) => (
-          <Card
-            key={category}
-            title={category}
-            loading={loading}
-            style={{ borderRadius: 12, border: '1px solid #f0f0f0', marginBottom: 16 }}
-          >
-            <Row gutter={[24, 8]}>
-              {defsInGroup.map((def) => (
-                <Col key={def.key} xs={24} md={12}>
-                  <PlatformFieldItem def={def} />
-                </Col>
-              ))}
-            </Row>
-          </Card>
-        ))}
+        <Typography.Title level={5}>全局参数</Typography.Title>
+        <ParameterGroups groups={platformGroups} loading={loading} />
+
+        <Typography.Title level={5}>资源默认值</Typography.Title>
+        <Text type="secondary">
+          资源默认值仅在资源未配置时生效，资源级配置优先。
+        </Text>
+        <div style={{ marginTop: 16 }}>
+          <ParameterGroups groups={resourceGroups} loading={loading} resourceDefaults />
+        </div>
 
         <Form.Item style={{ marginBottom: 0 }}>
           <Button type="primary" htmlType="submit" loading={saving}>

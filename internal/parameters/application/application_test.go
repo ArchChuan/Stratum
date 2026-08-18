@@ -148,11 +148,16 @@ func TestServiceSetPlatformValues(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects resource-scope key (single attribution)", func(t *testing.T) {
-		err := svc.SetPlatformValues(context.Background(), map[string]any{"agent.temperature": 0.3}, "admin-1")
-		var invalid *domain.ErrInvalidParameter
-		if !domain.AsInvalidParameter(err, &invalid) {
-			t.Fatalf("want ErrInvalidParameter, got %v", err)
+	t.Run("sets resource-scope value as a platform default", func(t *testing.T) {
+		if err := svc.SetPlatformValues(
+			context.Background(),
+			map[string]any{"agent.temperature": 0.3},
+			"admin-1",
+		); err != nil {
+			t.Fatal(err)
+		}
+		if got := string(store.values["agent.temperature"]); got != "0.3" {
+			t.Fatalf("stored resource default = %s, want 0.3", got)
 		}
 	})
 
@@ -204,7 +209,7 @@ func TestServicePlatformValuesMergesDefaults(t *testing.T) {
 	if got := values["evaluation.optimizer.model"]; got != "qwen-plus" {
 		t.Fatalf("default value = %v, want qwen-plus", got)
 	}
-	if _, ok := values["agent.temperature"]; ok {
-		t.Fatal("resource-scope key must not appear in platform values")
+	if got := values["agent.temperature"]; got != 0.7 {
+		t.Fatalf("resource default = %v, want 0.7", got)
 	}
 }

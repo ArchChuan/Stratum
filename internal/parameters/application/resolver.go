@@ -9,9 +9,8 @@ import (
 	"github.com/byteBuilderX/stratum/internal/parameters/domain/port"
 )
 
-// Resolver implements the single-attribution two-level fallback resolution:
-// declared-layer value → platform default → definition default. There is no
-// priority-override matrix; each parameter is writable in exactly one layer.
+// Resolver implements three-level fallback resolution:
+// declared-layer value → platform default → definition default.
 //
 // 0=unset semantics: an explicit numeric 0 is indistinguishable from an
 // absent key (omitempty JSON), so a resolved numeric 0 means "not set" and
