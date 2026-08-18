@@ -7,5 +7,29 @@
     "want_body": {
       "error": "EOF"
     }
+  },
+  {
+    "name": "update-hides-extra-headers-write-only",
+    "method": "PUT",
+    "path": "/admin/providers/contract-provider",
+    "body": {
+      "name": "stub",
+      "kind": "openai_compat",
+      "baseUrl": "https://stub.example.com/v1",
+      "extraHeaders": {
+        "X-Tenant": "secret-value"
+      }
+    },
+    "want_status": 200,
+    "want_body": {
+      "id": "contract-provider",
+      "name": "stub",
+      "kind": "openai_compat",
+      "baseUrl": "https://stub.example.com/v1",
+      "defaultModel": "",
+      "enabled": true,
+      "createdAt": "2026-01-01T00:00:00Z",
+      "updatedAt": "2026-01-01T00:00:00Z"
+    }
   }
 ]
