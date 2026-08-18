@@ -84,6 +84,8 @@ export const AgentFormSections = ({
     if (!selectedModel) return undefined;
     return groupedModels.flatMap((g) => g.models).find((m) => m.value === selectedModel)?.maxTokens;
   }, [selectedModel, groupedModels]);
+  // 推理模型 max_tokens 语义 = thinking + answer，过低会截断思考（网关 floor 4096 兜底）。
+  const maxTokensReasoningHint = supportsReasoning ? '；推理模型该值含思考长度，过低会截断思考' : '';
   // 0 = 未设置（使用平台默认）的字段：watch 值派生 unset，仅在未设置时渲染
   // DefaultHint（提示展示不写回，0=unset 语义不被破坏）。
   const temperature = Form.useWatch('temperature', form);
@@ -304,9 +306,10 @@ export const AgentFormSections = ({
                   label="最大生成 Token（max_tokens）"
                   name="max_tokens"
                   extra={
-                    selectedMaxTokens && selectedMaxTokens > 0
-                      ? `推荐 ${selectedMaxTokens.toLocaleString()} tokens（模型最大输出）；0 = 不修改（保留现有值）`
-                      : `平台兜底 ${AGENT_DEFAULT_MAX_OUTPUT_TOKENS.toLocaleString()} tokens（模型未知时）；0 = 不修改（保留现有值）`
+                    (selectedMaxTokens && selectedMaxTokens > 0
+                      ? `推荐 ${selectedMaxTokens.toLocaleString()} tokens（模型最大输出）`
+                      : `平台兜底 ${AGENT_DEFAULT_MAX_OUTPUT_TOKENS.toLocaleString()} tokens（模型未知时）`) +
+                    `；0 = 不修改（保留现有值）${maxTokensReasoningHint}`
                   }
                 >
                   <InputNumber min={AGENT_MAX_TOKENS_MIN} max={AGENT_MAX_TOKENS_MAX} step={AGENT_MAX_TOKENS_STEP} style={{ width: '100%' }} />
