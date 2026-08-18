@@ -569,7 +569,9 @@ func execSearchKnowledgeTool(toolCtx context.Context, tc port.ToolCall, s *ReAct
 		zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
 		zap.Int64("latency_ms", time.Since(toolStart).Milliseconds()))
 	// RAG 内容源自租户知识库，属不可信数据：经 guard 打 <untrusted_tool_result>
-	// 结构标记后再进模型，防止知识内容作为指令被采纳。
+	// 结构标记后再进模型，防止知识内容作为指令被采纳。空内容不变量见
+	// noResultRefusalContent。
+	content = noResultRefusalContent(content, evidenceRes)
 	guardedContent, guardErr := guardUntrustedToolText(s.InternalToolResultGuardFn, content)
 	if guardErr != nil {
 		// fail-closed：guard 未装配或失败时不发送裸内容；evidence 元数据
@@ -577,7 +579,29 @@ func execSearchKnowledgeTool(toolCtx context.Context, tc port.ToolCall, s *ReAct
 		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: guardErr.Error(), content: "error: tool result validation failed", evidence: evidence}
 	}
 	s.appendCitationSources(evidenceRes)
+	// 透传无答案信号到执行结果：evidence 路径信号真实（nil=有答案）；
+	// plain 路径无信号可及，置 nil 表示本次检索未触发无答案。
+	if s.RAGSearchFnWithEvidence != nil {
+		s.NoAnswer = evidenceRes.NoAnswer
+	} else {
+		s.NoAnswer = nil
+	}
 	return toolExecResult{content: guardedContent, status: domain.ToolTraceStatusSuccess, evidence: evidence}
+}
+
+// noResultRefusalContent 空结果不变量：evidence 路径 content=="" ⇒
+// NoAnswer!=nil（聚合信号）。空内容不能当成功结果喂给模型——显式拒答模板
+// 替换空串（reason 为固定枚举，无注入风险）。替换发生在 guard 之前：模板
+// 文本与知识内容同属工具输出，统一走 guard 打标，保证无裸文本进模型。
+func noResultRefusalContent(content string, evidenceRes port.RAGSearchEvidence) string {
+	if content != "" {
+		return content
+	}
+	reason := domain.NoAnswerReason(constants.NoAnswerReasonNoSources)
+	if evidenceRes.NoAnswer != nil {
+		reason = evidenceRes.NoAnswer.Reason
+	}
+	return fmt.Sprintf(constants.AgentKnowledgeNoResultText, reason)
 }
 
 // appendCitationSources merges retrieval evidence into the execution's

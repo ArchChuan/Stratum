@@ -400,6 +400,26 @@ type AgentResult struct {
 	// 证据时为 nil，handler 透出 fact_check 时 omitempty 不出现。只展示，不进
 	// 工具决策、不写库为 ground truth。
 	FactCheck *FactCheckReport
+	// NoAnswer 是知识检索无答案的结构化信号（SSE done payload noAnswer）。
+	// 工具路径检索全空时填充，nil = 本次执行未触发无答案（无知识检索或至少
+	// 一个 workspace 有命中）。
+	NoAnswer *NoAnswerInfo
+}
+
+// NoAnswerReason 是知识检索无答案信号的固定枚举（值与 knowledge 侧一一
+// 对应，定义在 pkg/constants 单一事实源；agent 侧仅透传）。
+type NoAnswerReason string
+
+// NoAnswerInfo 是知识检索无答案的结构化信号，序列化为 done payload 的
+// noAnswer 字段（PascalCase，与 Sources 一致）。
+type NoAnswerInfo struct {
+	Reason         NoAnswerReason
+	RetrievedCount int     // 阈值过滤前候选数
+	FilteredCount  int     // 阈值过滤掉的条数
+	BestScore      float32 // 池内最高分（阈值过滤前采集）
+	Retried        bool    // 触底自动重试标记（P3 使用）
+	RewrittenQuery string  // 重试改写后的 query（P3 使用）
+	Detail         string  // 人读摘要，仅固定模板
 }
 
 // FactCheckInput 是幻觉校验的输入：agent 最终输出 + 可检索的 knowledge
