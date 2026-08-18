@@ -11,9 +11,9 @@ import (
 )
 
 // Service is the parameters application facade consumed by handlers and by
-// sibling contexts through the wiring ACL. It enforces single-attribution
-// (platform layer writes only platform-scope keys), per-key validation and
-// merge-write semantics.
+// sibling contexts through the wiring ACL. It enforces per-key validation and
+// merge-write semantics. Platform values are global settings for platform-scope
+// keys and fallback defaults for resource-scope keys.
 type Service struct {
 	registry *domain.ParametersRegistry
 	store    port.PlatformStore
@@ -80,7 +80,7 @@ func (s *Service) PlatformValues(ctx context.Context) (map[string]any, error) {
 	}
 
 	out := make(map[string]any, len(s.registry.Schema()))
-	for _, def := range s.registry.ForScope(domain.ScopePlatform) {
+	for _, def := range s.registry.Schema() {
 		if raw, ok := byKey[def.Key]; ok {
 			var value any
 			if err := json.Unmarshal(raw, &value); err != nil {
@@ -115,8 +115,9 @@ func (s *Service) PromptDefaults() map[string]string {
 
 // SetPlatformValues applies merge semantics: only keys present in input are
 // written (a legacy client PUT can never wipe stored values it does not
-// know). Every key must be platform-scope (single attribution) and pass its
-// definition's validation. updatedBy is audited on every written row.
+// know). Every registered key must pass its definition's validation.
+// Resource-scope keys are stored as platform defaults and apply only when a
+// resource has no declared value. updatedBy is audited on every written row.
 func (s *Service) SetPlatformValues(
 	ctx context.Context,
 	values map[string]any,
@@ -133,11 +134,6 @@ func (s *Service) SetPlatformValues(
 		def, ok := s.registry.Get(key)
 		if !ok {
 			return &domain.ErrInvalidParameter{Key: key, Err: fmt.Errorf("unknown parameter %s", key)}
-		}
-		if def.Scope != domain.ScopePlatform {
-			return &domain.ErrInvalidParameter{
-				Key: key, Err: fmt.Errorf("%s is %s-scope, not writable at platform layer", key, def.Scope),
-			}
 		}
 		value, err := def.Normalize(rawValue)
 		if err != nil {

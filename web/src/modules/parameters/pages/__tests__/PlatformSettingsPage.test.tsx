@@ -62,6 +62,58 @@ const defs = (): ParameterDefinition[] => [
 ];
 
 describe('PlatformSettingsPage', () => {
+  it('separates global parameters from resource defaults and excludes unsupported resource keys', async () => {
+    vi.mocked(parametersApi.schema).mockResolvedValue([
+      ...defs(),
+      {
+        key: 'agent.temperature',
+        scope: 'resource',
+        category: 'agent',
+        display_name: 'Agent 温度',
+        value_type: 'float',
+        default: 0.7,
+        description: '',
+        optimizable: true,
+        sensitive: false,
+        visual_hint: { control: 'slider', min: 0, max: 1, step: 0.1 },
+      },
+      {
+        key: 'memory.long_term_top_k',
+        scope: 'resource',
+        category: 'memory',
+        display_name: '废弃记忆参数',
+        value_type: 'int',
+        default: 5,
+        description: '',
+        optimizable: false,
+        sensitive: false,
+        visual_hint: { control: 'slider', min: 1, max: 20, step: 1 },
+      },
+      {
+        key: 'agent.bindings',
+        scope: 'resource',
+        category: 'agent',
+        display_name: 'Agent 绑定',
+        value_type: 'string',
+        default: null,
+        description: '',
+        optimizable: false,
+        sensitive: false,
+        visual_hint: { control: 'textarea' },
+      },
+    ]);
+    vi.mocked(parametersApi.list).mockResolvedValue({ 'agent.temperature': 0.3 });
+
+    render(<PlatformSettingsPage />);
+
+    expect(await screen.findByText('全局参数')).toBeInTheDocument();
+    expect(screen.getByText('资源默认值')).toBeInTheDocument();
+    expect(screen.getByText('Agent 温度')).toBeInTheDocument();
+    expect(screen.getByText('会影响所有未单独配置的 Agent')).toBeInTheDocument();
+    expect(screen.queryByText('废弃记忆参数')).not.toBeInTheDocument();
+    expect(screen.queryByText('Agent 绑定')).not.toBeInTheDocument();
+  });
+
   it('shows 默认：0（未设置） for a missing key with 0 default, and no hint for set keys', async () => {
     vi.mocked(parametersApi.schema).mockResolvedValue(defs());
     // 非 0 默认键被后端回填(已设置),0 默认键缺失
