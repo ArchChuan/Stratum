@@ -21,7 +21,6 @@ type CreateAgentRequest struct {
 	ReasoningEffort        string   `json:"reasoning_effort"`
 	MaxTokens              int      `json:"max_tokens"`
 	CompactionRecentGroups int      `json:"compaction_recent_groups"`
-	CompactionSafetyRatio  float32  `json:"compaction_safety_ratio"`
 	CompactionPrompt       string   `json:"compaction_prompt"`
 	CompactionTemperature  float32  `json:"compaction_temperature"`
 	CompactionModel        string   `json:"compaction_model"`
@@ -49,7 +48,6 @@ type UpdateAgentRequest struct {
 	ReasoningEffort        string   `json:"reasoning_effort"`
 	MaxTokens              int      `json:"max_tokens"`
 	CompactionRecentGroups int      `json:"compaction_recent_groups"`
-	CompactionSafetyRatio  float32  `json:"compaction_safety_ratio"`
 	CompactionPrompt       string   `json:"compaction_prompt"`
 	CompactionTemperature  float32  `json:"compaction_temperature"`
 	CompactionModel        string   `json:"compaction_model"`
@@ -58,8 +56,8 @@ type UpdateAgentRequest struct {
 	KnowledgeWorkspaceIDs  []string `json:"knowledgeWorkspaceIds"`
 	MemoryScope            string   `json:"memoryScope"`
 	// Parameters carries the registry sampling parameters as a flat object
-	// (temperature/max_tokens/compaction_recent_groups/compaction_safety_ratio/
-	// reasoning_effort/compaction_prompt/compaction_temperature/compaction_model).
+	// (temperature/max_tokens/compaction_recent_groups/reasoning_effort/
+	// compaction_prompt/compaction_temperature/compaction_model).
 	// Merge semantics: only keys present in this map are written; a 0 value is
 	// unset and never overwrites a persisted value.
 	Parameters map[string]any `json:"parameters"`
@@ -78,7 +76,6 @@ type AgentResponse struct {
 	ReasoningEffort        string   `json:"reasoning_effort"`
 	MaxTokens              int      `json:"max_tokens"`
 	CompactionRecentGroups int      `json:"compaction_recent_groups"`
-	CompactionSafetyRatio  float32  `json:"compaction_safety_ratio"`
 	CompactionPrompt       string   `json:"compaction_prompt"`
 	CompactionTemperature  float32  `json:"compaction_temperature"`
 	CompactionModel        string   `json:"compaction_model"`
@@ -134,7 +131,6 @@ func dtoToResponse(d agent.AgentDTO) AgentResponse {
 		ReasoningEffort:        d.ReasoningEffort,
 		MaxTokens:              d.MaxTokens,
 		CompactionRecentGroups: d.CompactionRecentGroups,
-		CompactionSafetyRatio:  d.CompactionSafetyRatio,
 		CompactionPrompt:       d.CompactionPrompt,
 		CompactionTemperature:  d.CompactionTemperature,
 		CompactionModel:        d.CompactionModel,

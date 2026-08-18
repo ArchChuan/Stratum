@@ -157,7 +157,6 @@ func (a agentEvaluationAdapter) ApplyPublishedRevision(
 		ReasoningEffort:        snapshot.ModelParameters.ReasoningEffort,
 		MaxTokens:              snapshot.ModelParameters.MaxTokens,
 		CompactionRecentGroups: snapshot.ModelParameters.CompactionRecentGroups,
-		CompactionSafetyRatio:  snapshot.ModelParameters.CompactionSafetyRatio,
 		// promote 写回 = 整体替换:零值采样参数必须以 JSONB null 清除旧值,
 		// 与表单路径的 merge 语义(零值不落库)区分。
 		ReplaceParameters:     true,
@@ -382,7 +381,7 @@ func parseAgentCandidatePatch(
 	for key, value := range patch.ParameterPatch {
 		switch key {
 		case "model", "max_context_tokens", "temperature", "max_tokens",
-			"compaction_recent_groups", "compaction_safety_ratio", "reasoning_effort":
+			"compaction_recent_groups", "reasoning_effort":
 			model, changed, err := parseModelParameterPatch(key, value, &params)
 			if err != nil {
 				return result, err
@@ -482,12 +481,6 @@ func applyModelNumericPatch(key string, value any, params *agentdomain.ModelPara
 			return nil
 		}, "compaction_recent_groups")
 		return "", changed, err
-	case "compaction_safety_ratio":
-		changed, err := applyNumericPatch(key, value, parseFloat, func(v any) error {
-			params.CompactionSafetyRatio = float32(v.(float64))
-			return nil
-		}, "compaction_safety_ratio")
-		return "", changed, err
 	}
 	return "", false, nil
 }
@@ -533,9 +526,6 @@ func validateParameterRange(key string, parsed any) error {
 			constants.TunableMaxTokensMin, constants.TunableMaxTokensMax)
 	case "compaction_recent_groups":
 		return validateDiscrete(key, parsed.(int), 0, 2, 3, 5)
-	case "compaction_safety_ratio":
-		return validateFloatRangeOrZero(key, parsed.(float64),
-			constants.TunableSafetyRatioMin, constants.TunableSafetyRatioMax)
 	}
 	return nil
 }
@@ -550,13 +540,6 @@ func validateIntRange(key string, v, min, max int) error {
 func validateFloatRange(key string, v, min, max float64) error {
 	if v < min || v > max {
 		return fmt.Errorf("evaluation Agent adapter: %s must be in [%v, %v]", key, min, max)
-	}
-	return nil
-}
-
-func validateFloatRangeOrZero(key string, v, min, max float64) error {
-	if v != 0 && (v < min || v > max) {
-		return fmt.Errorf("evaluation Agent adapter: %s must be 0 or in [%v, %v]", key, min, max)
 	}
 	return nil
 }

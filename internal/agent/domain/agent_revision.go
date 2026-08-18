@@ -32,8 +32,6 @@ type ModelParameters struct {
 	// CompactionRecentGroups overrides the per-execution recent-groups
 	// count during in-loop compaction. 0 = auto-derive from MaxContextTokens.
 	CompactionRecentGroups int `json:"compaction_recent_groups,omitempty"`
-	// CompactionSafetyRatio overrides the compaction safety ratio. 0 = default.
-	CompactionSafetyRatio float32 `json:"compaction_safety_ratio,omitempty"`
 }
 
 type AgentBinding struct {
@@ -219,18 +217,12 @@ func validateModelParameters(params ModelParameters) error {
 }
 
 // validateCompactionParameters bounds the compaction tunables: recent groups
-// come from a discrete set (0 = auto), safety ratio is 0 (default) or within
-// the tuned range.
+// come from a discrete set (0 = auto).
 func validateCompactionParameters(params ModelParameters) error {
 	switch params.CompactionRecentGroups {
 	case 0, 2, 3, 5:
 	default:
 		return fmt.Errorf("agent revision: compaction recent groups must be one of {0, 2, 3, 5}")
-	}
-	if params.CompactionSafetyRatio != 0 &&
-		(params.CompactionSafetyRatio < constants.TunableSafetyRatioMin || params.CompactionSafetyRatio > constants.TunableSafetyRatioMax) {
-		return fmt.Errorf("agent revision: compaction safety ratio must be 0 or in [%v, %v]",
-			constants.TunableSafetyRatioMin, constants.TunableSafetyRatioMax)
 	}
 	return nil
 }

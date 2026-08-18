@@ -13,8 +13,9 @@ type Budget struct {
 	TaskHint     int // 当前任务（最新用户输入）的 token 估算，WithTask 登记
 }
 
-// ComputeBudget 计算执行预算。safetyRatio 是 registry 参数
-// agent.compaction_safety_ratio（0 = 用 constants 默认）。
+// ComputeBudget 计算执行预算。safetyRatio 是组装侧安全余量比例，传 0 或
+// 非法值（≤0 或 ≥1）时回退 constants.ContextSafetyReserveRatio（0.2）——
+// 平台默认锁定值，不暴露用户配置。
 // outputReserve 是主模型输出预留（Task 3 的 maxOut / 显式 max_tokens / 常量）。
 // 任务扣减不在 ComputeBudget 内：TaskHint 由调用侧 WithTask 登记（组装侧
 // 是 currentInput，循环侧是最新用户消息），保持 ComputeBudget 纯窗口映射。

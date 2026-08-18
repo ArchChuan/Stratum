@@ -174,7 +174,6 @@ func ComposeSystemAssistantProfile(
 		Temperature:            cfg.Temperature,
 		MaxTokens:              cfg.MaxTokens,
 		CompactionRecentGroups: cfg.CompactionRecentGroups,
-		CompactionSafetyRatio:  cfg.CompactionSafetyRatio,
 		MemoryScope:            cfg.MemoryScope, SystemKey: profile.Key, IsSystem: true, ManagementMode: "platform",
 		MCPToolIDs: copyCfg.MCPToolIDs, KnowledgeWorkspaceIDs: copyCfg.KnowledgeWorkspaceIDs,
 		AllowedSkills: copyCfg.AllowedSkills,

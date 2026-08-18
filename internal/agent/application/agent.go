@@ -68,8 +68,6 @@ type ExecutionConfig struct {
 	// CompactionRecentGroups overrides in-loop compaction recent groups.
 	// 0 = auto-derive from MaxContextTokens.
 	CompactionRecentGroups int
-	// CompactionSafetyRatio overrides the compaction safety ratio. 0 = default.
-	CompactionSafetyRatio float32
 	// CompactionCooldownSec overrides the in-loop compaction cooldown window
 	// (seconds). 0 = default constant (constants.DefaultCompactionCooldown).
 	CompactionCooldownSec int
@@ -342,9 +340,6 @@ func (a *BaseAgent) snapshotExecutionConfig(cfg *ExecutionConfig) agentExecSnaps
 	if cfg.CompactionRecentGroups == 0 {
 		cfg.CompactionRecentGroups = a.CompactionRecentGroups
 	}
-	if cfg.CompactionSafetyRatio == 0 {
-		cfg.CompactionSafetyRatio = a.CompactionSafetyRatio
-	}
 	if cfg.CompactionCooldownSec == 0 {
 		cfg.CompactionCooldownSec = a.CompactionCooldownSec
 	}
@@ -539,7 +534,6 @@ func tunableSnapshot(cfg *ExecutionConfig, maxContextTokens int) map[string]any 
 		"max_tokens":               cfg.MaxTokens,
 		"max_context_tokens":       maxContextTokens,
 		"compaction_recent_groups": cfg.CompactionRecentGroups,
-		"compaction_safety_ratio":  cfg.CompactionSafetyRatio,
 	}
 	// ReasoningEffort 空串 = unset，不进 fingerprint：避免未设置档位时
 	// fingerprint 漂移，保持与 resolver 的 string-unset 语义一致。
@@ -610,11 +604,12 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	if maxTokens <= 0 {
 		maxTokens = constants.DefaultAgentContextTokens
 	}
-	// 组装侧与循环侧同一预算账本（I1）：safetyRatio 传同一 resolution 结果。
-	// globalSuffix 走豁免配额通道，预算紧张也不截断平台治理指令。
+	// 组装侧与循环侧同一预算账本（I1）：safetyRatio 锁定平台默认
+	// （产品规格：不暴露用户配置），传 0 → ComputeBudget 回退
+	// ContextSafetyReserveRatio（0.2）；循环侧 loopPolicy 锁 LoopCompactionSafetyRatio。
 	initMessages := BuildContextMessagesWithCompaction(
 		ctx, ec.systemPrompt, ec.globalSuffix, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow,
-		ec.cfg.OutputReserve, float64(ec.cfg.CompactionSafetyRatio), ec.historyCompactor,
+		ec.cfg.OutputReserve, 0, ec.historyCompactor,
 	)
 
 	// Resume from checkpoint if one exists.
@@ -795,11 +790,12 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 	if maxTokens <= 0 {
 		maxTokens = constants.DefaultAgentContextTokens
 	}
-	// 组装侧与循环侧同一预算账本（I1）：safetyRatio 传同一 resolution 结果。
-	// globalSuffix 走豁免配额通道，预算紧张也不截断平台治理指令。
+	// 组装侧与循环侧同一预算账本（I1）：safetyRatio 锁定平台默认
+	// （产品规格：不暴露用户配置），传 0 → ComputeBudget 回退
+	// ContextSafetyReserveRatio（0.2）；循环侧 loopPolicy 锁 LoopCompactionSafetyRatio。
 	initMessages := BuildContextMessagesWithCompaction(
 		ctx, ec.systemPrompt, ec.globalSuffix, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow,
-		ec.cfg.OutputReserve, float64(ec.cfg.CompactionSafetyRatio), ec.historyCompactor,
+		ec.cfg.OutputReserve, 0, ec.historyCompactor,
 	)
 	initMessages = a.maybeInjectTaskResume(ctx, ec, initMessages)
 	initState := a.buildReActInitState(ec, initMessages, maxTokens)
@@ -890,9 +886,8 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 	if ec.cfg.SystemAssistantMode {
 		availableTools = nil
 	}
-	// 压缩冷却默认启用（Spec 第 4 节）：0 = constants.DefaultCompactionCooldown，
-	// 与 CompactionSafetyRatio 的 0=default 语义一致。registry 参数
-	// agent.compaction_cooldown_sec 经 WithCompactionCooldownSec 覆盖。
+	// 压缩冷却默认启用（Spec 第 4 节）：0 = constants.DefaultCompactionCooldown。
+	// registry 参数 agent.compaction_cooldown_sec 经 WithCompactionCooldownSec 覆盖。
 	cooldownSec := ec.cfg.CompactionCooldownSec
 	if cooldownSec <= 0 {
 		cooldownSec = int(constants.DefaultCompactionCooldown.Seconds())
@@ -906,7 +901,6 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		ReasoningEffort:        ec.cfg.ReasoningEffort,
 		MaxTokens:              resolveMaxOutputTokens(ec.cfg.MaxTokens, ec.cfg.OutputReserve),
 		CompactionRecentGroups: ec.cfg.CompactionRecentGroups,
-		CompactionSafetyRatio:  ec.cfg.CompactionSafetyRatio,
 		CompactionCooldownSec:  cooldownSec,
 		// TokenCorrection must start at 1.0: the zero value would divide the
 		// compaction threshold by zero on the first step.
@@ -942,8 +936,7 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		MaxTokensPerExecution: ec.cfg.MaxTokensPerExecution,
 		// Budget 账本快照：一次执行一个，初始组装与 ReAct 循环共享同一来源。
 		// 循环侧任务 = 最新用户消息，经 WithTask 从 HistoryCap 扣减（I3）。
-		Budget: agentgraph.ComputeBudget(maxTokens, ec.cfg.OutputReserve,
-			float64(ec.cfg.CompactionSafetyRatio)).WithTask(taskTokensOf(initMessages)),
+		Budget:               agentgraph.ComputeBudget(maxTokens, ec.cfg.OutputReserve, 0).WithTask(taskTokensOf(initMessages)),
 		HistoryCompactor:     ec.historyCompactor,
 		PlanCheckpointWriter: a.CheckpointStore,
 		PlanCheckpointIdentity: agentgraph.PlanCheckpointIdentity{
@@ -1396,13 +1389,6 @@ func WithCompactionRecentGroups(recentGroups int) ExecutionOption {
 	}
 }
 
-// WithCompactionSafetyRatio overrides the compaction safety ratio. 0 = default.
-func WithCompactionSafetyRatio(ratio float32) ExecutionOption {
-	return func(cfg *ExecutionConfig) {
-		cfg.CompactionSafetyRatio = ratio
-	}
-}
-
 // WithCompactionCooldownSec sets the in-loop compaction cooldown in seconds.
 // 0 = default constant.
 func WithCompactionCooldownSec(sec int) ExecutionOption {
@@ -1686,7 +1672,6 @@ func agentExecutionAttributes(agentID, agentName string, agentType AgentType, cf
 			attribute.Int("stratum.params.max_tokens", cfg.MaxTokens),
 			attribute.Int("stratum.params.max_context_tokens", maxContextTokens),
 			attribute.Int("stratum.params.compaction_recent_groups", cfg.CompactionRecentGroups),
-			attribute.Float64("stratum.params.compaction_safety_ratio", float64(cfg.CompactionSafetyRatio)),
 		)
 		// reasoning_effort 只记录档位值（low/medium/high），不记录任何请求体。
 		if cfg.ReasoningEffort != "" {

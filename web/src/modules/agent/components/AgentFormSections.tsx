@@ -22,8 +22,6 @@ import {
   AGENT_TEMPERATURE_MIN,
   AGENT_TEMPERATURE_STEP,
   COMPACTION_DEFAULT_TEMPERATURE,
-  COMPACTION_RECENT_GROUPS_DEFAULT,
-  COMPACTION_SAFETY_RATIO_DEFAULT,
   COMPACTION_TEMP_MAX,
   COMPACTION_TEMP_MIN,
   REASONING_EFFORT_OPTIONS,
@@ -89,10 +87,8 @@ export const AgentFormSections = ({
   // 0 = 未设置（使用平台默认）的字段：watch 值派生 unset，仅在未设置时渲染
   // DefaultHint（提示展示不写回，0=unset 语义不被破坏）。
   const temperature = Form.useWatch('temperature', form);
-  const compactionSafetyRatio = Form.useWatch('compaction_safety_ratio', form);
   const compactionTemperature = Form.useWatch('compaction_temperature', form);
   const temperatureUnset = temperature == null || temperature === 0;
-  const safetyRatioUnset = compactionSafetyRatio == null || compactionSafetyRatio === 0;
   const compactionTemperatureUnset = compactionTemperature == null || compactionTemperature === 0;
 
   // 仅用户 change 时联动：当前值为自动（null/undefined/0）且窗口已知时填入推荐值；
@@ -358,7 +354,7 @@ export const AgentFormSections = ({
                     <Form.Item
                       label="压缩最近轮数（compaction_recent_groups）"
                       name="compaction_recent_groups"
-                      extra={`按轮次组压缩历史；0 = 自动推导（默认按上下文窗口推导，通常 ${COMPACTION_RECENT_GROUPS_DEFAULT} 组）`}
+                      extra="压缩时保留最近几组对话原文：0 = 自动推导（<16K 窗口 2 组，16K–64K 3 组，>64K 5 组）；显式设置后固定保留 N 组"
                     >
                       <Select allowClear placeholder="0（自动推导）">
                         <Option value={0}>0（自动推导）</Option>
@@ -366,18 +362,6 @@ export const AgentFormSections = ({
                         <Option value={3}>3 组</Option>
                         <Option value={5}>5 组</Option>
                       </Select>
-                    </Form.Item>
-                    <Form.Item
-                      label="压缩安全比例（compaction_safety_ratio）"
-                      name="compaction_safety_ratio"
-                      extra={
-                        <>
-                          压缩阈值：0 = 未设置（使用平台默认）；
-                          {safetyRatioUnset && <DefaultHint value={COMPACTION_SAFETY_RATIO_DEFAULT} />}
-                        </>
-                      }
-                    >
-                      <Slider min={0} max={0.95} step={0.05} marks={{ 0: '0', 0.95: '0.95' }} ariaLabelForHandle="compaction_safety_ratio" />
                     </Form.Item>
                     <Form.Item
                       label="压缩提示词（compaction_prompt）"

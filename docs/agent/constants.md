@@ -25,7 +25,7 @@ Agent 上下文相关常量位于 `pkg/constants/agent.go`：
 | `DefaultContextHistoryWindow` | 50 | `BuildContextMessages` 的直接调用兜底窗口 |
 | `MemoryBudgetRatio` | 0.3 | memory context 最多占剩余预算的比例 |
 | `LoopCompactionRecentGroups` | 3 | 循环压缩时优先保留的最近完整消息组数 |
-| `LoopCompactionSafetyRatio` | 0.8 | 触发循环内压缩的预算安全阈值 |
+| `LoopCompactionSafetyRatio` | 0.8 | 触发循环内压缩的预算安全阈值（固定平台默认，不暴露用户配置；2026-08-17 产品裁决） |
 
 ## 前端（TypeScript / TSX）
 

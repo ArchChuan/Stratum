@@ -166,7 +166,6 @@ type CreateAgentInput struct {
 	ReasoningEffort        string
 	MaxTokens              int
 	CompactionRecentGroups int
-	CompactionSafetyRatio  float32
 	// CompactionPrompt / CompactionTemperature / CompactionModel override the
 	// compaction prompt / temperature / model. 0 / "" = unset: the
 	// constants CompactionDefaultPrompt / CompactionDefaultTemperature / main
@@ -200,7 +199,6 @@ type UpdateAgentInput struct {
 	ReasoningEffort        string
 	MaxTokens              int
 	CompactionRecentGroups int
-	CompactionSafetyRatio  float32
 	// CompactionPrompt / CompactionTemperature / CompactionModel override the
 	// compaction prompt / temperature / model; the bare compaction_* keys in
 	// Parameters take precedence when present (map wins).
@@ -237,7 +235,6 @@ type AgentDTO struct {
 	ReasoningEffort        string
 	MaxTokens              int
 	CompactionRecentGroups int
-	CompactionSafetyRatio  float32
 	CompactionPrompt       string
 	CompactionTemperature  float32
 	CompactionModel        string
@@ -263,11 +260,12 @@ type SystemAssistantSettings struct {
 // Create persists a new agent for the tenant. Only owner/admin roles may
 // create; the caller becomes the resource owner (created_by).
 // validateSamplingParams rejects out-of-bounds sampling values
-// (temperature / max_tokens / compaction×2) against the parameter registry
-// before persist. Zero means unset (gateway default) and is skipped; a nil
+// (temperature / max_tokens / compaction_recent_groups / reasoning_effort /
+// compaction_temperature) against the parameter registry before persist.
+// Zero means unset (gateway default) and is skipped; a nil
 // provider (db unavailable) degrades to no-op, matching resolve.
 func (s *AgentService) validateSamplingParams(
-	ctx context.Context, temperature float32, maxTokens, compactionRecentGroups int, compactionSafetyRatio float32, reasoningEffort string, compactionTemperature float32,
+	ctx context.Context, temperature float32, maxTokens, compactionRecentGroups int, reasoningEffort string, compactionTemperature float32,
 ) error {
 	if s.deps.ParametersProvider == nil {
 		return nil
@@ -281,9 +279,6 @@ func (s *AgentService) validateSamplingParams(
 	}
 	if compactionRecentGroups != 0 {
 		declared["compaction_recent_groups"] = compactionRecentGroups
-	}
-	if compactionSafetyRatio != 0 {
-		declared["compaction_safety_ratio"] = float64(compactionSafetyRatio)
 	}
 	// compaction_temperature 经 registry VisualHint [0,1] 写时拒绝越界
 	// (Qwen/Zhipu 拒收 >1 → 网关 500);0 = unset 跳过,与 temperature 一致。
@@ -326,7 +321,7 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 	compactionPrompt, compactionTemperature, compactionModel :=
 		unpackCompactionOverrides(in.Parameters, in.CompactionPrompt, in.CompactionTemperature, in.CompactionModel)
 	if err := s.validateSamplingParams(ctx, in.Temperature, in.MaxTokens,
-		in.CompactionRecentGroups, in.CompactionSafetyRatio, in.ReasoningEffort, compactionTemperature); err != nil {
+		in.CompactionRecentGroups, in.ReasoningEffort, compactionTemperature); err != nil {
 		return AgentDTO{}, err
 	}
 	if err := validateAgentMaxIterations(in.MaxIterations); err != nil {
@@ -350,7 +345,6 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		ReasoningEffort:        in.ReasoningEffort,
 		MaxTokens:              in.MaxTokens,
 		CompactionRecentGroups: in.CompactionRecentGroups,
-		CompactionSafetyRatio:  in.CompactionSafetyRatio,
 		CompactionPrompt:       compactionPrompt,
 		CompactionTemperature:  compactionTemperature,
 		CompactionModel:        compactionModel,
@@ -431,7 +425,6 @@ func (s *AgentService) SnapshotRevision(ctx context.Context, tenantID, id string
 			Temperature:            cfg.Temperature,
 			MaxTokens:              cfg.MaxTokens,
 			CompactionRecentGroups: cfg.CompactionRecentGroups,
-			CompactionSafetyRatio:  cfg.CompactionSafetyRatio,
 		},
 		Bindings: make([]domain.AgentBinding, 0,
 			len(cfg.AllowedSkills)+len(cfg.MCPToolIDs)+len(cfg.KnowledgeWorkspaceIDs)),
@@ -534,7 +527,6 @@ func revisionConfig(revision domain.AgentRevision) *domain.AgentConfig {
 		Temperature:            revision.ModelParameters.Temperature,
 		MaxTokens:              revision.ModelParameters.MaxTokens,
 		CompactionRecentGroups: revision.ModelParameters.CompactionRecentGroups,
-		CompactionSafetyRatio:  revision.ModelParameters.CompactionSafetyRatio,
 		MemoryScope:            revision.MemoryScope,
 		StuckThreshold:         revision.StuckThreshold,
 	}
@@ -726,8 +718,8 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in UpdateAgentInput) (*domain.AgentConfig, error) {
 	// Parameters map keys take precedence over the top-level sampling fields
 	// (only present keys overwrite); validation runs on the merged result.
-	temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort, compactionPrompt, compactionTemperature, compactionModel := applyParameterOverrides(in)
-	if err := s.validateSamplingParams(ctx, temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort, compactionTemperature); err != nil {
+	temperature, maxTokens, recentGroups, reasoningEffort, compactionPrompt, compactionTemperature, compactionModel := applyParameterOverrides(in)
+	if err := s.validateSamplingParams(ctx, temperature, maxTokens, recentGroups, reasoningEffort, compactionTemperature); err != nil {
 		return nil, err
 	}
 	if err := validateAgentMaxIterations(in.MaxIterations); err != nil {
@@ -754,7 +746,6 @@ func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in Upda
 		ReasoningEffort:        reasoningEffort,
 		MaxTokens:              maxTokens,
 		CompactionRecentGroups: recentGroups,
-		CompactionSafetyRatio:  safetyRatio,
 		CompactionPrompt:       compactionPrompt,
 		CompactionTemperature:  compactionTemperature,
 		CompactionModel:        compactionModel,
@@ -977,13 +968,13 @@ func filterPlatformWorkspaces(c *AgentConfig, platformWSSet map[string]struct{},
 // top-level sampling fields. Only keys present in the map overwrite; map
 // values win over the top-level fields. Zero values pass through unchanged
 // (0 = unset, the merge pack skips them, so an explicit 0 never clears).
-func applyParameterOverrides(in UpdateAgentInput) (float32, int, int, float32, string, string, float32, string) {
+func applyParameterOverrides(in UpdateAgentInput) (float32, int, int, string, string, float32, string) {
 	temperature, maxTokens := in.Temperature, in.MaxTokens
-	recentGroups, safetyRatio := in.CompactionRecentGroups, in.CompactionSafetyRatio
+	recentGroups := in.CompactionRecentGroups
 	reasoningEffort := in.ReasoningEffort
 	compactionPrompt, compactionTemperature, compactionModel := in.CompactionPrompt, in.CompactionTemperature, in.CompactionModel
 	if len(in.Parameters) == 0 {
-		return temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort, compactionPrompt, compactionTemperature, compactionModel
+		return temperature, maxTokens, recentGroups, reasoningEffort, compactionPrompt, compactionTemperature, compactionModel
 	}
 	if v, ok := numericSampleValue(in.Parameters["temperature"]); ok {
 		temperature = float32(v)
@@ -994,15 +985,12 @@ func applyParameterOverrides(in UpdateAgentInput) (float32, int, int, float32, s
 	if v, ok := numericSampleValue(in.Parameters["compaction_recent_groups"]); ok {
 		recentGroups = int(v)
 	}
-	if v, ok := numericSampleValue(in.Parameters["compaction_safety_ratio"]); ok {
-		safetyRatio = float32(v)
-	}
 	if v, ok := in.Parameters["reasoning_effort"].(string); ok {
 		reasoningEffort = v
 	}
 	compactionPrompt, compactionTemperature, compactionModel =
 		unpackCompactionOverrides(in.Parameters, compactionPrompt, compactionTemperature, compactionModel)
-	return temperature, maxTokens, recentGroups, safetyRatio, reasoningEffort, compactionPrompt, compactionTemperature, compactionModel
+	return temperature, maxTokens, recentGroups, reasoningEffort, compactionPrompt, compactionTemperature, compactionModel
 }
 
 // unpackCompactionOverrides merges the bare compaction_prompt / _temperature /
@@ -1200,7 +1188,7 @@ func (s *AgentService) resolveSystemAssistantModel(ctx context.Context, tenantID
 // rewritten by PUT 0. Both fail closed with ErrInvalidSamplingParameters and
 // never persist.
 func (s *AgentService) mergeSystemAssistantMaxTokens(ctx context.Context, requested, persisted int) (int, error) {
-	if err := s.validateSamplingParams(ctx, 0, requested, 0, 0, "", 0); err != nil {
+	if err := s.validateSamplingParams(ctx, 0, requested, 0, "", 0); err != nil {
 		return 0, err
 	}
 	maxTokens := requested
@@ -1208,7 +1196,7 @@ func (s *AgentService) mergeSystemAssistantMaxTokens(ctx context.Context, reques
 		maxTokens = persisted
 	}
 	if maxTokens != 0 {
-		if err := s.validateSamplingParams(ctx, 0, maxTokens, 0, 0, "", 0); err != nil {
+		if err := s.validateSamplingParams(ctx, 0, maxTokens, 0, "", 0); err != nil {
 			return 0, err
 		}
 	}
@@ -1325,7 +1313,6 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		ReasoningEffort:        cfg.ReasoningEffort,
 		MaxTokens:              cfg.MaxTokens,
 		CompactionRecentGroups: cfg.CompactionRecentGroups,
-		CompactionSafetyRatio:  cfg.CompactionSafetyRatio,
 		CompactionPrompt:       cfg.CompactionPrompt,
 		CompactionTemperature:  cfg.CompactionTemperature,
 		CompactionModel:        cfg.CompactionModel,
@@ -1354,9 +1341,6 @@ func samplingParameterMap(cfg *domain.AgentConfig) map[string]any {
 	}
 	if cfg.CompactionRecentGroups != 0 {
 		params["compaction_recent_groups"] = cfg.CompactionRecentGroups
-	}
-	if cfg.CompactionSafetyRatio != 0 {
-		params["compaction_safety_ratio"] = cfg.CompactionSafetyRatio
 	}
 	if cfg.ReasoningEffort != "" {
 		params["reasoning_effort"] = cfg.ReasoningEffort
@@ -2573,7 +2557,6 @@ func (s *AgentService) resolveEffectiveParameters(
 		"agent.temperature":              cfg.Temperature,
 		"agent.max_tokens":               cfg.MaxTokens,
 		"agent.compaction_recent_groups": cfg.CompactionRecentGroups,
-		"agent.compaction_safety_ratio":  cfg.CompactionSafetyRatio,
 		"agent.compaction_cooldown_sec":  cfg.CompactionCooldownSec,
 		"agent.max_tokens_per_execution": cfg.MaxTokensPerExecution,
 	}
@@ -2592,7 +2575,6 @@ func (s *AgentService) resolveEffectiveParameters(
 	opts = appendIntOption(opts, effective, "agent.max_tokens", WithMaxTokens)
 	opts = appendStringOption(opts, effective, "agent.reasoning_effort", WithReasoningEffort)
 	opts = appendIntOption(opts, effective, "agent.compaction_recent_groups", WithCompactionRecentGroups)
-	opts = appendFloatOption(opts, effective, "agent.compaction_safety_ratio", WithCompactionSafetyRatio)
 	opts = appendIntOption(opts, effective, "agent.compaction_cooldown_sec", WithCompactionCooldownSec)
 	opts = appendIntOption(opts, effective, "agent.max_tokens_per_execution", WithMaxTokensPerExecution)
 	options = append(options, opts...)

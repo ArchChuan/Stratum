@@ -82,7 +82,6 @@ export const useEditAgentPage = () => {
           temperature: a.temperature,
           max_tokens: a.max_tokens,
           compaction_recent_groups: a.compaction_recent_groups,
-          compaction_safety_ratio: a.compaction_safety_ratio,
           // compaction_prompt/temperature/model 是顶层 DTO 字段，GET 回显顶层。
           compaction_prompt: a.compaction_prompt,
           compaction_temperature: a.compaction_temperature,

@@ -42,8 +42,9 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS checkpoint_enabled BOOLEAN NOT NULL 
 UPDATE agents SET checkpoint_enabled = true WHERE checkpoint_enabled = false;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
 -- 采样参数(统一参数注册表 resource 层)。扁平标量 omitempty:
--- temperature/max_tokens/compaction_recent_groups/compaction_safety_ratio,
--- 0 与缺键等价(unset → 网关/provider 默认)。
+-- temperature/max_tokens/compaction_recent_groups/reasoning_effort/compaction_*,
+-- 0 与缺键等价(unset → 网关/provider 默认)。compaction_safety_ratio 已于
+-- 2026-08-17 产品裁决全链路移除,存量 JSONB 旧键 inert(unpack 不读),不迁移。
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS parameters JSONB NOT NULL DEFAULT '{}'::jsonb;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_system_key
     ON agents(system_key) WHERE system_key IS NOT NULL;

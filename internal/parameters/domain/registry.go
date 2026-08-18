@@ -222,14 +222,6 @@ func (r *ParametersRegistry) registerAgentParams() {
 			Optimizable: true, EvaluationKeys: []string{"compaction_recent_groups"},
 		},
 		{
-			Key: "agent.compaction_safety_ratio", Scope: ScopeResource, Category: "agent",
-			DisplayName: "压缩安全比率", Description: "压缩安全比率,0 表示默认",
-			ValueType: TypeFloat, Default: 0.0,
-			VisualHint:     VisualHint{Control: ControlSlider, Min: f(0), Max: f(0.95), Step: f(0.05)},
-			Optimizable:    true,
-			EvaluationKeys: []string{"compaction_safety_ratio"},
-		},
-		{
 			Key: "agent.compaction_cooldown_sec", Scope: ScopeResource, Category: "agent",
 			DisplayName: "压缩冷却(秒)", Description: "压缩触发后的冷却窗口,0 表示默认常量",
 			ValueType: TypeInt, Default: int64(0),

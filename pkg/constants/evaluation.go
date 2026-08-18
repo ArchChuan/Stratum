@@ -26,10 +26,6 @@ const (
 	// TunableRecentGroupsMax caps compaction_recent_groups.
 	TunableRecentGroupsMax = 5
 
-	// TunableSafetyRatioMin/Max bound compaction_safety_ratio.
-	TunableSafetyRatioMin = 0.5
-	TunableSafetyRatioMax = 0.95
-
 	// JudgeMaxTokens caps a single LLM judge response; a verdict is a short
 	// JSON object, so a fixed cap keeps judge cost bounded regardless of
 	// provider. The judge itself is gated by evaluation.judge.enabled.

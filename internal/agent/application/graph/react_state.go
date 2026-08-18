@@ -97,8 +97,6 @@ type ReActState struct {
 	// CompactionRecentGroups overrides the recent-groups count during in-loop
 	// compaction. 0 = auto-derive from MaxContextTokens.
 	CompactionRecentGroups int
-	// CompactionSafetyRatio overrides the compaction safety ratio. 0 = default.
-	CompactionSafetyRatio float32
 	// TokenCorrection is the EMA correction factor applied to the compaction
 	// threshold, learned from the previous step's estimated-vs-actual prompt
 	// token ratio. Must be > 0; buildReActInitState initializes it to 1.0.

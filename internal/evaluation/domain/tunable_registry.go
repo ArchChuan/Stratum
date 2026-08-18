@@ -24,7 +24,6 @@ func (r *TunableRegistry) registerContextAndCompaction() {
 	for _, t := range []Tunable{
 		maxContextTokensTunable{},
 		compactionRecentGroupsTunable{},
-		compactionSafetyRatioTunable{},
 	} {
 		r.Register(t)
 	}

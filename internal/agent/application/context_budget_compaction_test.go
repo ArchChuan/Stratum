@@ -355,28 +355,6 @@ func TestBuildContextMessages_DegradedUsableKeepsMinimalHead(t *testing.T) {
 	}
 }
 
-// TestBuildContextMessages_SafetyRatioDrivesAssemblyBudget（I1）：组装侧必须
-// 使用与 ReAct 循环侧同一 compaction_safety_ratio 来源——宽松 ratio（0.5）
-// 放大了 history 配额，同一历史在 0.5 下全部保留、激进 ratio（0.8）下被
-// 截断；一次执行一个 usable。默认 ratio（0.2，ratio 传 0）余量更大，
-// 同历史也全保留，此处用显式 0.8 构造"截断 vs 保留"对比。
-func TestBuildContextMessages_SafetyRatioDrivesAssemblyBudget(t *testing.T) {
-	hist := makeHistory(200) // ≈33000 tokens，介于 0.8 与 0.5 ratio 的 HistoryCap 之间
-	loose := application.BuildContextMessagesWithCompaction(
-		context.Background(), "sys", "", "", hist, "q", 200000, 200, 0, 0.5, nil,
-	)
-	strict := application.BuildContextMessagesWithCompaction(
-		context.Background(), "sys", "", "", hist, "q", 200000, 200, 0, 0.8, nil,
-	)
-	if len(loose) <= len(strict) {
-		t.Fatalf("ratio 0.5 应保留更多历史：loose=%d strict=%d", len(loose), len(strict))
-	}
-	// 0.5 下 200 条历史全部保留（≈33100 < HistoryCap 57543）。
-	if len(loose) != len(hist)+2 {
-		t.Fatalf("ratio 0.5 应保留全部历史：loose=%d, want %d", len(loose), len(hist)+2)
-	}
-}
-
 // TestBuildContextMessages_TaskDeductedFromHistoryQuota（I3）：当前任务
 // （输入）的 token 从 history 配额扣减（Spec 第 2 节
 // history = usable − fixedHead − tools − task）——同窗口下任务越大，

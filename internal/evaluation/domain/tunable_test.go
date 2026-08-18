@@ -66,40 +66,11 @@ func TestCompactionRecentGroupsTunable_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestCompactionSafetyRatioTunable_RoundTrip(t *testing.T) {
-	tun := compactionSafetyRatioTunable{}
-	if tun.Key() != "compaction_safety_ratio" || tun.Category() != CatCompaction {
-		t.Fatalf("unexpected key/category: %q / %q", tun.Key(), tun.Category())
-	}
-	resource := map[string]any{}
-	if err := tun.Write(resource, 0.9); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	if v, _ := tun.Read(resource); v != 0.9 {
-		t.Fatalf("round-trip = %v, want 0.9", v)
-	}
-	if err := tun.Validate(0.0); err != nil {
-		t.Fatalf("Validate(0) must mean default: %v", err)
-	}
-	if err := tun.Validate(constants.TunableSafetyRatioMax); err != nil {
-		t.Fatalf("Validate(max) must accept: %v", err)
-	}
-	for _, bad := range []any{0.4, 1.0, -0.1, "0.8"} {
-		if err := tun.Validate(bad); err == nil {
-			t.Fatalf("Validate(%v) must reject out-of-range", bad)
-		}
-	}
-	space := tun.SearchSpace()
-	if space.Min != constants.TunableSafetyRatioMin || space.Max != constants.TunableSafetyRatioMax || space.Step != 0.05 {
-		t.Fatalf("search space = %+v", space)
-	}
-}
-
-// TestRegistryContextAndCompactionTunables 验证三个新 tunable 经注册表完整
+// TestRegistryContextAndCompactionTunables 验证新 tunable 经注册表完整
 // 参与 ReadSnapshot / ApplyPatches 往返。
 func TestRegistryContextAndCompactionTunables(t *testing.T) {
 	reg := NewTunableRegistry()
-	for _, key := range []string{"max_context_tokens", "compaction_recent_groups", "compaction_safety_ratio"} {
+	for _, key := range []string{"max_context_tokens", "compaction_recent_groups"} {
 		if reg.Get(key) == nil {
 			t.Fatalf("registry missing %s", key)
 		}
@@ -121,18 +92,16 @@ func TestRegistryContextAndCompactionTunables(t *testing.T) {
 	changes, err := reg.ApplyPatches(resource, map[string]any{
 		"max_context_tokens":       24576.0,
 		"compaction_recent_groups": 5.0,
-		"compaction_safety_ratio":  0.85,
 	})
 	if err != nil {
 		t.Fatalf("ApplyPatches: %v", err)
 	}
-	if len(changes) != 3 {
-		t.Fatalf("changes = %d, want 3", len(changes))
+	if len(changes) != 2 {
+		t.Fatalf("changes = %d, want 2", len(changes))
 	}
 	params, _ := resource["model_parameters"].(map[string]any)
 	if params["max_context_tokens"] != 24576.0 ||
-		params["compaction_recent_groups"] != 5.0 ||
-		params["compaction_safety_ratio"] != 0.85 {
+		params["compaction_recent_groups"] != 5.0 {
 		t.Fatalf("patches not persisted: %v", params)
 	}
 
