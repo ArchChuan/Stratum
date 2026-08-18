@@ -59,8 +59,11 @@ func (s *LLMHistorySummarizer) SummarizeHistory(ctx context.Context, items []str
 	prompt := resolvePlatformString(ctx, s.paramResolver, "memory.history_summary_prompt", constants.MemoryHistorySummaryDefaultPrompt)
 	req := llmdomain.NewSummarizeRequest(model, prompt, items, 0)
 	// NewSummarizeRequest 内部固定 TaskSummarizeTemperature；平台配置的温度
-	// 在构造后覆盖。
-	req.Temperature = temperature
+	// 在构造后覆盖（0 = 保留默认）。
+	if temperature != 0 {
+		v := float64(temperature)
+		req.Temperature = &v
+	}
 	resp, err := client.Complete(ctx, req)
 	if err != nil {
 		return "", err

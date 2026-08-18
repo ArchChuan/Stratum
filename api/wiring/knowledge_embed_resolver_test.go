@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
@@ -34,7 +35,9 @@ func (r *knowledgeModelRepo) Create(context.Context, *domain.Model) error { retu
 func (r *knowledgeModelRepo) Get(context.Context, string) (*domain.Model, error) {
 	return nil, nil
 }
-func (r *knowledgeModelRepo) Update(context.Context, *domain.Model) error { return nil }
+func (r *knowledgeModelRepo) Update(context.Context, *domain.Model, string, *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (r *knowledgeModelRepo) UpsertDiscovered(
 	context.Context, string, []domain.Model,
 ) ([]domain.Model, error) {
@@ -69,7 +72,9 @@ func (r *knowledgeProviderRepo) GetMeta(ctx context.Context, id string) (*domain
 	provider.APIKey = ""
 	return &provider, nil
 }
-func (r *knowledgeProviderRepo) Update(context.Context, *domain.Provider) error { return nil }
+func (r *knowledgeProviderRepo) Update(context.Context, *domain.Provider, string, *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (r *knowledgeProviderRepo) List(context.Context) ([]domain.Provider, error) {
 	return []domain.Provider{r.provider}, nil
 }

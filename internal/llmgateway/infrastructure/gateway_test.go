@@ -123,7 +123,7 @@ func TestGatewayOTelMarksFailureAsError(t *testing.T) {
 	modelRepo := &mockModelRepo{
 		models: []domain.Model{
 			{ID: "m1", ProviderID: "p1", Name: "qwen-turbo", Enabled: true,
-				Capabilities: []domain.ModelCapability{domain.CapChat}},
+				Capabilities: []domain.ModelCapability{domain.CapChat, domain.CapToolUse}},
 		},
 	}
 	providerRepo := &mockProviderRepo{
@@ -160,7 +160,7 @@ func TestGatewayLLMLogsExcludePromptToolAndResponsePayloads(t *testing.T) {
 	modelRepo := &mockModelRepo{
 		models: []domain.Model{
 			{ID: "m1", ProviderID: "p1", Name: "qwen-turbo", Enabled: true,
-				Capabilities: []domain.ModelCapability{domain.CapChat}},
+				Capabilities: []domain.ModelCapability{domain.CapChat, domain.CapToolUse}},
 		},
 	}
 	providerRepo := &mockProviderRepo{
@@ -383,7 +383,8 @@ func gatewayFixture(chat infrastructure.ChatProtocol, embed infrastructure.Embed
 	modelRepo := &mockModelRepo{
 		models: []domain.Model{
 			{ID: "m1", ProviderID: "p1", Name: "qwen-turbo", Enabled: true,
-				Capabilities: []domain.ModelCapability{domain.CapChat}},
+				ContextWindow: 32768, MaxTokens: 8192,
+				Capabilities: []domain.ModelCapability{domain.CapChat, domain.CapToolUse}},
 			{ID: "m2", ProviderID: "p2", Name: "text-embed", Enabled: true,
 				Capabilities: []domain.ModelCapability{domain.CapEmbedding}},
 		},

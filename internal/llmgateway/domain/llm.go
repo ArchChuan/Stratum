@@ -63,9 +63,13 @@ type ResponseFormat struct {
 }
 
 type CompletionRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Temperature float32   `json:"temperature,omitempty"`
+	Model    string    `json:"model"`
+	Messages []Message `json:"messages"`
+	// Temperature 是采样温度；nil = 未设置（模型/Provider 默认生效）。
+	// 指针表达「未设置」：float32 0 既是合法温度值也是合法默认，无法区分
+	// 显式 0（确定性采样）与未设置。模型管理权威数据（SamplingParams）
+	// 同用 *float64，注入零转换。
+	Temperature *float64 `json:"temperature,omitempty"`
 	// ReasoningEffort 是采样强度档位:""|low|medium|high。OpenAI 兼容协议
 	// 直传 body;Anthropic 由 provider 映射 extended_thinking。网关按候选
 	// 模型推理能力门控,未知/非推理模型清空,禁止盲透传(严格端点 400 是

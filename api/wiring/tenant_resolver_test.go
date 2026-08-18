@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	llmport "github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
@@ -40,7 +41,9 @@ func (r *resolverModelRepo) List(_ context.Context, filter llmport.ModelFilter) 
 	}
 	return models, nil
 }
-func (r *resolverModelRepo) Update(context.Context, *llmdomain.Model) error { return r.err }
+func (r *resolverModelRepo) Update(context.Context, *llmdomain.Model, string, *auditdomain.ResourceChangeAuditEvent) error {
+	return r.err
+}
 func (r *resolverModelRepo) UpsertDiscovered(
 	context.Context, string, []llmdomain.Model,
 ) ([]llmdomain.Model, error) {
@@ -85,7 +88,9 @@ func (r *resolverProviderRepo) GetMeta(ctx context.Context, id string) (*llmdoma
 func (r *resolverProviderRepo) List(context.Context) ([]llmdomain.Provider, error) {
 	return nil, nil
 }
-func (r *resolverProviderRepo) Update(context.Context, *llmdomain.Provider) error { return nil }
+func (r *resolverProviderRepo) Update(context.Context, *llmdomain.Provider, string, *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (r *resolverProviderRepo) Delete(context.Context, string) error              { return nil }
 
 func newResolverRegistry(models []llmdomain.Model, providers map[string]*llmdomain.Provider) *llmgateway.ModelRegistry {

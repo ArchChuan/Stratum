@@ -52,7 +52,7 @@ func TestJudgeAdapterJudgeUsesPlatformDefaultsAndParsesVerdict(t *testing.T) {
 	require.Equal(t, "回答完整", result.Message)
 
 	require.Equal(t, "qwen-plus", completer.got.Model)
-	require.Equal(t, float32(0), completer.got.Temperature)
+	require.Nil(t, completer.got.Temperature) // judge 温度 0 = unset，留给模型默认注入
 	require.Equal(t, 1024, completer.got.MaxTokens)
 	require.Contains(t, completer.got.Messages[1].Content, judgeDefaultRubric)
 	require.Contains(t, completer.got.Messages[1].Content, "Input:\n1")

@@ -43,6 +43,9 @@ type PrometheusMetrics struct {
 	llmRequestsTotal   *prometheus.CounterVec
 	llmRequestDuration *prometheus.HistogramVec
 	llmTokenUsage      *prometheus.CounterVec
+	// LLM – policy 治理（L1-L4）
+	llmPolicyBlockedTotal *prometheus.CounterVec
+	llmPolicyMissingTotal *prometheus.CounterVec
 	// LLM – AI-specific
 	llmTokenHistogram    *prometheus.HistogramVec
 	llmFirstTokenLatency *prometheus.HistogramVec
@@ -232,6 +235,14 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 		llmTokenUsage: factory.NewCounterVec(
 			prometheus.CounterOpts{Name: "llm_token_usage_total", Help: "Cumulative LLM tokens used"},
 			[]string{"model", "type"},
+		),
+		llmPolicyBlockedTotal: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "llm_policy_blocked_total", Help: "Requests blocked by model policy (L1-L4)"},
+			[]string{"model"},
+		),
+		llmPolicyMissingTotal: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "llm_policy_missing_total", Help: "Requests with no model policy record (authority missing)"},
+			[]string{"model"},
 		),
 
 		// LLM – AI-specific
@@ -632,6 +643,16 @@ func (m *PrometheusMetrics) IncRouteFallback(fromModel, toModel string) {
 
 func (m *PrometheusMetrics) RecordBudgetRatio(scope string, pct float64) {
 	m.budgetRatio.WithLabelValues(scope).Set(pct)
+}
+
+// --- Model policy (L1-L4) ---
+
+func (m *PrometheusMetrics) IncPolicyBlocked(model string) {
+	m.llmPolicyBlockedTotal.WithLabelValues(model).Inc()
+}
+
+func (m *PrometheusMetrics) IncPolicyMissing(model string) {
+	m.llmPolicyMissingTotal.WithLabelValues(model).Inc()
 }
 
 // --- Audit (F3) ---

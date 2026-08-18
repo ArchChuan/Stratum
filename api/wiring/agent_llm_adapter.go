@@ -60,10 +60,23 @@ func buildAgentLLMRequest(req *agentport.LLMCapRequest) *llmdomain.CompletionReq
 	}
 	return &llmdomain.CompletionRequest{
 		Model: req.Model, Messages: messages, Tools: tools, ToolChoice: choice,
-		Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxTokens: req.MaxTokens,
+		// agent 层 Temperature float32 0 = unset → nil（网关采样注入生效）。
+		Temperature:  temperaturePtrOrNil(req.Temperature),
+		ReasoningEffort: req.ReasoningEffort, MaxTokens: req.MaxTokens,
 		NoPrimaryRetry: req.NoPrimaryRetry,
 		MaxCandidates:  req.MaxCandidates,
 	}
+}
+
+// temperaturePtrOrNil 把 agent 的 float32 温度转成 *float64：0 = unset → nil
+// （agent 语义，见 domain AgentConfig.Temperature 注释），让网关按模型权威
+// 数据注入默认；非 0 → 显式值。
+func temperaturePtrOrNil(v float32) *float64 {
+	if v == 0 {
+		return nil
+	}
+	f := float64(v)
+	return &f
 }
 
 func buildAgentCapabilityResponse(traceID string, raw *llmdomain.CompletionResponse, duration time.Duration) agentport.CapabilityResponse {

@@ -84,9 +84,13 @@ func provisionPublicCatalog(t *testing.T, pool *pgxpool.Pool) {
 			api_key       TEXT NOT NULL DEFAULT '',
 			default_model TEXT NOT NULL DEFAULT '',
 			enabled       BOOLEAN NOT NULL DEFAULT true,
+			extra_headers JSONB NOT NULL DEFAULT '{}',
+			default_sampling JSONB NOT NULL DEFAULT '{}',
 			created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
 			updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
+		`ALTER TABLE public.providers ADD COLUMN IF NOT EXISTS extra_headers JSONB NOT NULL DEFAULT '{}'`,
+		`ALTER TABLE public.providers ADD COLUMN IF NOT EXISTS default_sampling JSONB NOT NULL DEFAULT '{}'`,
 		`CREATE TABLE IF NOT EXISTS public.models (
 			id                TEXT PRIMARY KEY,
 			provider_id       TEXT NOT NULL REFERENCES public.providers(id) ON DELETE CASCADE,
@@ -95,6 +99,8 @@ func provisionPublicCatalog(t *testing.T, pool *pgxpool.Pool) {
 			capabilities      TEXT[] NOT NULL DEFAULT '{}',
 			context_window    INT NOT NULL DEFAULT 0,
 			max_tokens        INT NOT NULL DEFAULT 0,
+			sampling_params   JSONB NOT NULL DEFAULT '{}',
+			max_temperature   DOUBLE PRECISION,
 			input_price       DOUBLE PRECISION NOT NULL DEFAULT 0,
 			output_price      DOUBLE PRECISION NOT NULL DEFAULT 0,
 			recommended       BOOLEAN NOT NULL DEFAULT false,
@@ -105,6 +111,8 @@ func provisionPublicCatalog(t *testing.T, pool *pgxpool.Pool) {
 			updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
 			UNIQUE(provider_id, name)
 		)`,
+		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS sampling_params JSONB NOT NULL DEFAULT '{}'`,
+		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS max_temperature DOUBLE PRECISION`,
 		`CREATE INDEX IF NOT EXISTS idx_models_provider ON public.models(provider_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_models_enabled ON public.models(enabled)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_models_default_embedding
@@ -656,7 +664,8 @@ func (h *providerHandlerProxy) Update(c *gin.Context) {
 		return
 	}
 	input.ID = c.Param("id")
-	provider, err := h.svc.Update(c.Request.Context(), tid, input)
+	actorID, _ := userIDFromGin(c)
+	provider, err := h.svc.Update(c.Request.Context(), tid, actorID, input)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -735,7 +744,8 @@ func (h *modelMgmtHandlerProxy) Update(c *gin.Context) {
 		return
 	}
 	input.ID = c.Param("id")
-	m, err := h.svc.Update(c.Request.Context(), tid, input)
+	actorID, _ := userIDFromGin(c)
+	m, err := h.svc.Update(c.Request.Context(), tid, actorID, input)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -774,6 +784,20 @@ func (h *modelMgmtHandlerProxy) Delete(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
+}
+
+// userIDFromGin mirrors handler.userIDFromCtx but operates on gin.Context
+// directly (the handler version reads from request context after injection).
+func userIDFromGin(c *gin.Context) (string, bool) {
+	uid, ok := c.Get("auth.sub")
+	if !ok {
+		return "", false
+	}
+	s, ok := uid.(string)
+	if s == "" {
+		return "", false
+	}
+	return s, ok
 }
 
 // tenantIDFromGin mirrors handler.tenantIDFromCtx but operates on gin.Context

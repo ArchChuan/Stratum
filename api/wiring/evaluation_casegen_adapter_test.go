@@ -135,7 +135,9 @@ func TestCaseGenAdapterUsesDefaultsAndParsesResponse(t *testing.T) {
 	require.Equal(t, "物流", got.Name)
 
 	require.Equal(t, "qwen-plus", completer.got.Model)
-	require.Equal(t, float32(0.2), completer.got.Temperature)
+	// float32(0.2) → *float64 有精度放大，按 epsilon 近似断言。
+	require.NotNil(t, completer.got.Temperature)
+	require.InDelta(t, 0.2, *completer.got.Temperature, 1e-6)
 	require.Equal(t, constants.CaseGenMaxTokens, completer.got.MaxTokens)
 	require.Contains(t, completer.got.Messages[0].Content, "评测用例生成器")
 	require.Contains(t, completer.got.Messages[1].Content, "用户查询：快递没更新")

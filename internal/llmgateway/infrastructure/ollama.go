@@ -577,10 +577,12 @@ func (c *OllamaClient) buildChatRequest(req *CompletionRequest, stream bool) oll
 		Model:    req.Model,
 		Messages: messages,
 		Stream:   stream,
-		Options: ollamaChatOptions{
-			Temperature: req.Temperature,
-			NumPredict:  req.MaxTokens,
-		},
+		Options:  ollamaChatOptions{NumPredict: req.MaxTokens},
+	}
+	// Temperature 指针化后消费：nil = 未设置，omitempty 省略（ollama 默认）；
+	// 显式值（含 0 = 确定性采样）必须发送。
+	if req.Temperature != nil {
+		ollamaReq.Options.Temperature = float32(*req.Temperature)
 	}
 
 	if len(req.Tools) > 0 {
