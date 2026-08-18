@@ -62,11 +62,17 @@ func fitSystemAndMemory(headCap int, systemPromptBase, memoryCtx string) (string
 
 // minimalHeadMessages 在预算耗尽（usable − task ≤ 0）时组装最小 head：
 // system prompt + 当前输入，memory 能装下才带——绝不丢弃 system prompt。
+// globalSuffix（全局系统提示词）豁免 head 配额、紧随 base 完整追加：
+// 它承载平台级安全/事实约束（如"事实与引用"四条款），截断会静默
+// 丢失治理指令，故不受 FixedHeadCap 约束。
 // 超窗发送交由规格收敛机制（400 context_length_exceeded → TokenCorrection
 // 下调阈值）处理，self-correction 才有机会启动（C1 回归防护）。
-func minimalHeadMessages(headCap int, systemPromptBase, memoryCtx, currentInput string) []port.LLMMessage {
+func minimalHeadMessages(headCap int, systemPromptBase, globalSuffix, memoryCtx, currentInput string) []port.LLMMessage {
 	systemPromptBase, memoryCtx = fitSystemAndMemory(headCap, systemPromptBase, memoryCtx)
 	systemFull := systemPromptBase
+	if globalSuffix != "" {
+		systemFull += "\n\n" + globalSuffix
+	}
 	if memoryCtx != "" {
 		systemFull += "\n\n" + agentgraph.WrapUntrustedSection("memory", memoryCtx)
 	}
@@ -88,10 +94,11 @@ func BuildContextMessages(
 ) []port.LLMMessage {
 	// 无压缩器时委托给完整实现，行为等同于历史版本（最老先丢）。
 	// outputReserve 传 0 走自动链（显式 > vendor > 常量），safetyRatio 传 0
-	// 走 constants 默认——此处无法感知执行参数。
+	// 走 constants 默认——此处无法感知执行参数。globalSuffix 传 ""：
+	// 旧签名调用方（无全局提示词概念）保持原行为。
 	return BuildContextMessagesWithCompaction(
 		context.Background(),
-		systemPromptBase, memoryCtx, history, currentInput,
+		systemPromptBase, "", memoryCtx, history, currentInput,
 		maxTokens, historyWindow, 0, 0, nil,
 	)
 }
@@ -102,7 +109,9 @@ func BuildContextMessages(
 // 预算优先级不变：task(currentInput) > systemPrompt(保底) > memoryCtx(≤30%) > history。
 // 差异只在预算来源：window → usable → 四配额（Spec 第 2 节账本），
 // system+memory 占用 FixedHeadCap 配额，history 占用 HistoryCap 配额，
-// task 永不压缩。history 溢出处理：
+// task 永不压缩。globalSuffix（平台级全局系统提示词）豁免 FixedHeadCap：
+// 它在 systemPromptBase 截断之后、summary/memory 之前完整追加，保证
+// 治理指令（事实约束、隐私边界等）在预算紧张时不丢失。history 溢出处理：
 //   - compactor == nil：溢出的最老消息被丢弃（与旧行为逐字节一致）。
 //   - compactor != nil：溢出消息先压缩成摘要，占用预留额度后注入 system。
 //
@@ -113,6 +122,7 @@ func BuildContextMessages(
 func BuildContextMessagesWithCompaction(
 	ctx context.Context,
 	systemPromptBase string,
+	globalSuffix string,
 	memoryCtx string,
 	history []*ChatMessage,
 	currentInput string,
@@ -147,7 +157,7 @@ func BuildContextMessagesWithCompaction(
 		// 收敛机制（400 context_length_exceeded → TokenCorrection 下调
 		// 阈值）处理。fallback 来源的 WARN 在 resolveExecutionWindow。
 		return minimalHeadMessages(max(b.FixedHeadCap, constants.MinSystemPromptTokens),
-			systemPromptBase, memoryCtx, currentInput)
+			systemPromptBase, globalSuffix, memoryCtx, currentInput)
 	}
 
 	// 2/3. System prompt 与 memory context — FixedHeadCap 配额内截断
@@ -193,8 +203,13 @@ func BuildContextMessagesWithCompaction(
 		}
 	}
 
-	// 5. Compose final system prompt: base + [summary] + memory.
+	// 5. Compose final system prompt: base + globalSuffix + [summary] + memory.
+	// globalSuffix 豁免 head 配额，在截断后的 base 之后完整追加——它是平台级
+	// 治理指令（事实/隐私约束），且先于 untrusted 内容注入，保持可信指令在前。
 	systemFull := systemPromptBase
+	if globalSuffix != "" {
+		systemFull += "\n\n" + globalSuffix
+	}
 	if summary != "" {
 		systemFull += "\n\n[早期对话摘要]\n" + agentgraph.WrapUntrustedSection("history", summary)
 	}
