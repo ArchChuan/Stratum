@@ -79,6 +79,10 @@ const (
 	AgentKnowledgeNoResultText = "Knowledge search returned no relevant results (reason: %s). " +
 		"Do not fabricate an answer; state clearly that no relevant information was found, " +
 		"or answer from general knowledge without claiming the knowledge base as a source."
+	// AgentSearchKnowledgeRefusalInstruction 是 stratum_search_knowledge 工具
+	// 描述的拒答指令后缀：检索无结果/证据不足时必须明说，禁止编造来源。
+	AgentSearchKnowledgeRefusalInstruction = " If the search returns no relevant results or the " +
+		"evidence is insufficient, say so explicitly; never fabricate an answer or invent sources."
 
 	// ---- agent task persistence (cross-session goal progress) ----
 
