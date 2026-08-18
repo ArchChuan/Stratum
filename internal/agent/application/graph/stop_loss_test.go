@@ -83,9 +83,11 @@ func TestStopLoss_DegradedFinalAnswerInstruction(t *testing.T) {
 	}
 	tools, msgs, _ := graph.PrepareLLMRequestForTest(context.Background(), state)
 	require.Empty(t, tools) // 最后一步禁工具
-	last := msgs[len(msgs)-1].Content
-	require.Contains(t, last, "Do not claim operations that were not verified")
-	require.NotContains(t, last, "provide your final answer now. Do not call any tools")
+	// 降级指令以 system role 注入头部（anchor 区），不追加在末尾与任务混淆。
+	instruction := lastSystemContent(msgs)
+	require.Contains(t, instruction, "Do not claim operations that were not verified")
+	require.NotContains(t, instruction, "provide your final answer now. Do not call any tools")
+	require.Contains(t, instruction, "inform the user that the maximum number of steps has been reached")
 }
 
 // 未降级（或仅单点止损未达整体）时 final-answer 用普通指令。
@@ -96,7 +98,21 @@ func TestStopLoss_NormalFinalAnswerWhenNotDegraded(t *testing.T) {
 		Messages:    []port.LLMMessage{{Role: "user", Content: "task"}},
 	}
 	_, msgs, _ := graph.PrepareLLMRequestForTest(context.Background(), state)
-	require.NotContains(t, msgs[len(msgs)-1].Content, "Do not claim operations that were not verified")
+	instruction := lastSystemContent(msgs)
+	require.NotContains(t, instruction, "Do not claim operations that were not verified")
+	require.Contains(t, instruction, "inform the user that the maximum number of steps has been reached")
+}
+
+// lastSystemContent 返回消息序列中最后一条 system 消息正文（测试侧收尾指令
+// 定位：指令以 system role 注入头部 anchor 区）。
+func lastSystemContent(msgs []port.LLMMessage) string {
+	var content string
+	for _, m := range msgs {
+		if m.Role == "system" {
+			content = m.Content
+		}
+	}
+	return content
 }
 
 // DegradeReason 是固定枚举，绝不含内部标识或原始错误正文：err 与 plan 里都带

@@ -129,7 +129,11 @@ func TestBuildReActGraph_FinalInstructionDoesNotReplaceCurrentTask(t *testing.T)
 	require.NoError(t, err)
 	require.Contains(t, string(encoded), "CURRENT TASK")
 	require.Contains(t, string(encoded), "maximum reasoning steps")
-	require.Contains(t, reqMessages[len(reqMessages)-1].Content, "maximum reasoning steps")
+	// 收尾指令以 system role 注入首个 system 消息之后（头部 anchor 区），
+	// 末尾仍是最新任务，指令不与用户任务混淆。
+	require.Equal(t, "CURRENT TASK", reqMessages[len(reqMessages)-1].Content)
+	require.Equal(t, "system", reqMessages[1].Role)
+	require.Contains(t, reqMessages[1].Content, "maximum reasoning steps")
 }
 
 func TestBuildReActGraph_ReservesContextBudgetForToolSchemas(t *testing.T) {
