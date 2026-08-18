@@ -17,7 +17,48 @@ type resolvedEntry struct {
 	config       ProviderConfig
 	provider     domain.Provider
 	capabilities []domain.ModelCapability
+	policy       *ModelPolicy
 	expires      time.Time
+}
+
+// ModelPolicy 是模型权威数据的运行时快照（缓存预计算，避免每请求 N+1
+// 查询 DB）。nil 表示模型记录不存在（权威数据缺失 → 网关 L1-L3 跳过 +
+// WARN + 指标）。
+type ModelPolicy struct {
+	MaxTokens        int
+	ContextWindow    int
+	MaxTemperature   *float64
+	SamplingDefaults *domain.SamplingParams
+	Capabilities     []domain.ModelCapability
+	Reasoning        bool
+}
+
+// policyFromModel 从模型记录构造 policy；nil 输入返回 nil。Reasoning 保持
+// DB∨catalog 并集语义（与 ResolveReasoning 旧逻辑一致）：DB capabilities
+// 含 CapReasoning 或 catalog 已知推理模型均视为推理模型，预计算后 cache
+// 短路不丢语义（catalog 是纯函数，无 DB 查询）。
+func policyFromModel(m *domain.Model) *ModelPolicy {
+	if m == nil {
+		return nil
+	}
+	reasoning := false
+	for _, c := range m.Capabilities {
+		if c == domain.CapReasoning {
+			reasoning = true
+			break
+		}
+	}
+	if !reasoning {
+		reasoning = ModelSupportsReasoning(m.Name)
+	}
+	return &ModelPolicy{
+		MaxTokens:        m.MaxTokens,
+		ContextWindow:    m.ContextWindow,
+		MaxTemperature:   m.MaxTemperature,
+		SamplingDefaults: m.SamplingParams,
+		Capabilities:     m.Capabilities,
+		Reasoning:        reasoning,
+	}
 }
 
 // errModelNotResolved 是全局解析链的内部 sentinel：某一级未命中，交由下一级
@@ -188,7 +229,7 @@ func (r *ModelRegistry) resolveExact(
 			HealthModel: provider.DefaultModel,
 			Models:      []string{m.Name},
 		}
-		r.cacheSet(cacheKey, cfg, *provider, m.Capabilities)
+		r.cacheSet(cacheKey, cfg, *provider, m.Capabilities, policyFromModel(&m))
 		return cfg, *provider, nil
 	}
 	return ProviderConfig{}, domain.Provider{}, errModelNotResolved
@@ -219,7 +260,7 @@ func (r *ModelRegistry) resolveProviderDefault(
 			HealthModel: p.DefaultModel,
 			Models:      []string{p.DefaultModel},
 		}
-		r.cacheSet(cacheKey, cfg, p, []domain.ModelCapability{capability})
+		r.cacheSet(cacheKey, cfg, p, []domain.ModelCapability{capability}, nil)
 		return cfg, p, nil
 	}
 	return ProviderConfig{}, domain.Provider{}, errModelNotResolved
@@ -267,7 +308,7 @@ func (r *ModelRegistry) resolveRecommended(
 		HealthModel: bestProvider.DefaultModel,
 		Models:      []string{best.Name},
 	}
-	r.cacheSet(cacheKey, cfg, *bestProvider, best.Capabilities)
+	r.cacheSet(cacheKey, cfg, *bestProvider, best.Capabilities, policyFromModel(&best))
 	return cfg, *bestProvider, nil
 }
 
@@ -289,7 +330,7 @@ func (r *ModelRegistry) resolveEmbeddingMarked(ctx context.Context, cacheKey str
 		HealthModel: c.p.DefaultModel,
 		Models:      []string{c.m.Name},
 	}
-	r.cacheSet(cacheKey, cfg, *c.p, c.m.Capabilities)
+	r.cacheSet(cacheKey, cfg, *c.p, c.m.Capabilities, policyFromModel(&c.m))
 	return cfg, *c.p, nil
 }
 
@@ -369,7 +410,7 @@ func (r *ModelRegistry) ResolveFallbackCandidates(ctx context.Context, primary s
 		}
 		// 复用 TTL 缓存语义：Warm/Resolve 已缓存的 entry 保持有效，
 		// 这里与缓存数据同源（同 modelRepo/providerRepo），直接写回。
-		r.cacheSet("chat:"+c.model.Name, cfg, c.provider, c.model.Capabilities)
+		r.cacheSet("chat:"+c.model.Name, cfg, c.provider, c.model.Capabilities, policyFromModel(&c.model))
 		proto, ok := r.chatProtos[c.provider.Kind]
 		if !ok {
 			continue
@@ -563,9 +604,9 @@ func (r *ModelRegistry) warmModel(ctx context.Context, m domain.Model) error {
 		}
 		switch cap {
 		case domain.CapChat:
-			r.cacheSet("chat:"+m.Name, cfg, *provider, m.Capabilities)
+			r.cacheSet("chat:"+m.Name, cfg, *provider, m.Capabilities, policyFromModel(&m))
 		case domain.CapEmbedding:
-			r.cacheSet("embed:"+m.Name, cfg, *provider, m.Capabilities)
+			r.cacheSet("embed:"+m.Name, cfg, *provider, m.Capabilities, policyFromModel(&m))
 		}
 	}
 	return nil
@@ -618,16 +659,27 @@ func (r *ModelRegistry) cacheGet(key string) *resolvedEntry {
 	return e
 }
 
-// cacheSet stores an entry in the cache.
-func (r *ModelRegistry) cacheSet(key string, cfg ProviderConfig, provider domain.Provider, capabilities []domain.ModelCapability) {
+// cacheSet stores an entry in the cache. policy 是该模型的权威数据快照
+// （cache 预计算）；无模型记录（②③④ 级解析）传 nil。
+func (r *ModelRegistry) cacheSet(key string, cfg ProviderConfig, provider domain.Provider, capabilities []domain.ModelCapability, policy *ModelPolicy) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.cache[key] = &resolvedEntry{
 		config:       cfg,
 		provider:     provider,
 		capabilities: capabilities,
+		policy:       policy,
 		expires:      time.Now().Add(r.cacheTTL),
 	}
+}
+
+// PolicyFor 返回模型权威数据快照（缓存命中）；miss 返回 nil（调用方按
+// 权威数据不存在处理，不触发 DB 查询）。
+func (r *ModelRegistry) PolicyFor(ctx context.Context, model string) *ModelPolicy {
+	if e := r.cacheGet("chat:" + model); e != nil {
+		return e.policy
+	}
+	return nil
 }
 
 // ResolveReasoning 判断模型是否为推理模型。能力来源并集：DB models.capabilities
@@ -635,7 +687,14 @@ func (r *ModelRegistry) cacheSet(key string, cfg ProviderConfig, provider domain
 // → true；否则 false。unknown 返回 false，fail-closed：网关据此清空
 // reasoning_effort，禁止对非推理/未知模型盲透传（严格端点 400 是永久错误，
 // 会中止整条 fallback 链）。
+//
+// 缓存预计算优先：cache entry 携带 policy（Warm/Resolve 已预热）时直接
+// 读取，不再查 DB（吸收解析路径的 N+1）；cache miss 或权威数据缺失
+// （policy nil）才回退旧 DB+catalog 解析。
 func (r *ModelRegistry) ResolveReasoning(ctx context.Context, modelName string) bool {
+	if e := r.cacheGet("chat:" + modelName); e != nil && e.policy != nil {
+		return e.policy.Reasoning
+	}
 	enabled := true
 	models, err := r.modelRepo.List(ctx, port.ModelFilter{Enabled: &enabled})
 	if err != nil {

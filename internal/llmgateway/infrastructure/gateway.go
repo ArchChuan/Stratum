@@ -131,6 +131,9 @@ type chainLink struct {
 	// 未知模型：invoke 对该 link 清空 response_format，防止严格端点 400
 	// （永久错误，中止整条 fallback 链）。
 	StructuredOutput bool
+	// Policy 是该模型的权威数据快照（DB 模型记录预计算）；nil = 权威数据
+	// 不存在（enforceModelPolicy 跳过 L1-L3，只做能力门控）。
+	Policy *ModelPolicy
 }
 
 // routedInfo 记录一次请求实际尝试过的模型链与最终成功模型。
@@ -190,6 +193,7 @@ func (g *Gateway) resolveChain(ctx context.Context, model string) ([]chainLink, 
 		Protocol:         proto,
 		Reasoning:        g.registry.ResolveReasoning(ctx, model),
 		StructuredOutput: g.registry.ResolveStructuredOutput(ctx, model),
+		Policy:           g.registry.PolicyFor(ctx, model),
 	}}
 	cands, err := g.registry.ResolveFallbackCandidates(ctx, model)
 	if err != nil {
@@ -202,6 +206,7 @@ func (g *Gateway) resolveChain(ctx context.Context, model string) ([]chainLink, 
 			Protocol:         c.Protocol,
 			Reasoning:        g.registry.ResolveReasoning(ctx, c.Model),
 			StructuredOutput: g.registry.ResolveStructuredOutput(ctx, c.Model),
+			Policy:           g.registry.PolicyFor(ctx, c.Model),
 		})
 	}
 	return links, nil
