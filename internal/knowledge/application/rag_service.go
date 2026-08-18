@@ -197,8 +197,11 @@ type RAGService struct {
 	// closed when unavailable.
 	docRepo      knowledgeport.DocRepo
 	roleResolver knowledgeport.TenantRoleResolver
-	metrics      observability.MetricsProvider
-	logger       *zap.Logger
+	// sufficiencyJudge 是生成前证据充分性门（仅 evidence 路径消费，Plain
+	// Query/API 面板零接触）；nil = 未装配，fail-closed 放行。
+	sufficiencyJudge knowledgeport.SufficiencyJudge
+	metrics          observability.MetricsProvider
+	logger           *zap.Logger
 }
 
 func NewRAGService(
@@ -221,6 +224,9 @@ func (rs *RAGService) SetMetrics(m observability.MetricsProvider)        { rs.me
 func (rs *RAGService) SetDocRepo(repo knowledgeport.DocRepo)             { rs.docRepo = repo }
 func (rs *RAGService) SetTenantRoleResolver(r knowledgeport.TenantRoleResolver) {
 	rs.roleResolver = r
+}
+func (rs *RAGService) SetSufficiencyJudge(j knowledgeport.SufficiencyJudge) {
+	rs.sufficiencyJudge = j
 }
 
 func (rs *RAGService) resolveEmbedder(ctx context.Context, req RAGQueryRequest) knowledgeport.Embedder {
@@ -1130,7 +1136,15 @@ func (rs *RAGService) BuildPrompt(question string, chunks []string) string {
 		prompt.WriteString("\n")
 	}
 
-	prompt.WriteString("Provide a clear, accurate answer based on the context above. If the context doesn't contain enough information, say so explicitly.")
+	// few-shot 正反例：把拒答行为教给主模型（system prompt 来自 DB，代码
+	// 侧只动模板）。反例刻意模拟"模型拿训练记忆硬答"的典型失败模式。
+	prompt.WriteString(`Provide a clear, accurate answer based on the context above.
+
+Rules:
+- Answer ONLY from the context. If the context doesn't contain enough information to answer, say so explicitly ("the knowledge base does not contain enough information") and do not guess.
+
+Example (good): context mentions no pricing → "The knowledge base does not contain pricing information."
+Example (bad): context mentions no pricing → "Pricing starts at $10/month." (fabricated from training data)`)
 
 	return prompt.String()
 }
@@ -1216,6 +1230,10 @@ func searchWorkspaceWithEvidence(ctx context.Context, rs *RAGService, tenantID, 
 	if err != nil {
 		return wsEvidenceResult{err: err}
 	}
+	// 充分性门（仅 evidence 路径）：判 INSUFFICIENT 时本 workspace 按无内容
+	// 处理（Sources 置空 + NoAnswer=insufficient_evidence），聚合按严重度
+	// 上报；fail-closed 降级原样放行。
+	out = rs.judgeSufficiencyGate(ctx, tenantID, ws, query, out)
 	titles := rs.documentTitles(ctx, tenantID, workspaceID)
 	sources := make([]RAGSearchSource, 0, len(out.Sources))
 	for _, src := range out.Sources {
