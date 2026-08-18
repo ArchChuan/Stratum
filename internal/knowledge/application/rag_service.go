@@ -84,7 +84,7 @@ func NewRAGSearchFn(rs *RAGService, tenantID, viewerID string) func(
 }
 
 func searchWorkspace(ctx context.Context, rs *RAGService, tenantID, viewerID, ws, query string, topK int) wsResult {
-	mode, effectiveTopK, embedModel, workspaceID, err := resolveWorkspaceConfig(ctx, rs, tenantID, ws, topK)
+	mode, effectiveTopK, embedModel, workspaceID, threshold, err := resolveWorkspaceConfig(ctx, rs, tenantID, ws, topK)
 	if err != nil {
 		return wsResult{err: err}
 	}
@@ -96,6 +96,9 @@ func searchWorkspace(ctx context.Context, rs *RAGService, tenantID, viewerID, ws
 		Mode:           mode,
 		TopK:           effectiveTopK,
 		EmbeddingModel: embedModel,
+		// workspace config 单一事实源：阈值缺省兜底（0=不过滤），避免
+		// 配置存库但不生效的装配断点。
+		ScoreThreshold: threshold,
 		ViewerID:       viewerID,
 		// System-actor contexts (privileged wiring paths such as eval workers)
 		// carry the same trust as an admin owner and bypass the D2 gate.
@@ -104,11 +107,11 @@ func searchWorkspace(ctx context.Context, rs *RAGService, tenantID, viewerID, ws
 	if err != nil {
 		return wsResult{err: err}
 	}
-	return wsResult{content: formatSources(out.Sources)}
+	return wsResult{content: formatSources(out.Sources), noAnswer: out.NoAnswer}
 }
 
 func resolveWorkspaceConfig(ctx context.Context, rs *RAGService, tenantID, ws string, topK int) (
-	mode string, effectiveTopK int, embedModel string, workspaceID string, err error,
+	mode string, effectiveTopK int, embedModel string, workspaceID string, threshold float32, err error,
 ) {
 	mode = domain.DefaultQueryMode
 	effectiveTopK = topK
@@ -128,6 +131,7 @@ func resolveWorkspaceConfig(ctx context.Context, rs *RAGService, tenantID, ws st
 		effectiveTopK = w.Config.TopK
 	}
 	embedModel = w.Config.EmbeddingModel
+	threshold = w.Config.ScoreThreshold
 	if w.Config.QueryMode != "" {
 		mode = w.Config.QueryMode
 	}
@@ -144,8 +148,9 @@ func formatSources(sources []Source) string {
 }
 
 type wsResult struct {
-	content string
-	err     error
+	content  string
+	noAnswer *NoAnswerInfo
+	err      error
 }
 
 // mergeResults concatenates per-workspace content with at-least-one
@@ -192,8 +197,11 @@ type RAGService struct {
 	// closed when unavailable.
 	docRepo      knowledgeport.DocRepo
 	roleResolver knowledgeport.TenantRoleResolver
-	metrics      observability.MetricsProvider
-	logger       *zap.Logger
+	// sufficiencyJudge 是生成前证据充分性门（仅 evidence 路径消费，Plain
+	// Query/API 面板零接触）；nil = 未装配，fail-closed 放行。
+	sufficiencyJudge knowledgeport.SufficiencyJudge
+	metrics          observability.MetricsProvider
+	logger           *zap.Logger
 }
 
 func NewRAGService(
@@ -216,6 +224,9 @@ func (rs *RAGService) SetMetrics(m observability.MetricsProvider)        { rs.me
 func (rs *RAGService) SetDocRepo(repo knowledgeport.DocRepo)             { rs.docRepo = repo }
 func (rs *RAGService) SetTenantRoleResolver(r knowledgeport.TenantRoleResolver) {
 	rs.roleResolver = r
+}
+func (rs *RAGService) SetSufficiencyJudge(j knowledgeport.SufficiencyJudge) {
+	rs.sufficiencyJudge = j
 }
 
 func (rs *RAGService) resolveEmbedder(ctx context.Context, req RAGQueryRequest) knowledgeport.Embedder {
@@ -257,6 +268,14 @@ type RAGQueryResult struct {
 	VectorResults []knowledgeport.VectorSearchResult
 	Mode          string
 	Latency       time.Duration
+	// NoAnswer 是无答案的结构化信号；nil = 有答案（Sources 非空）。信号与
+	// BestScore/CandidateCount 解耦：有答案路径也恒填充统计，供校准消费。
+	NoAnswer *NoAnswerInfo
+	// BestScore 是池内最高分（阈值过滤前采集），恒填充（无候选时 0）。
+	// 禁止从过滤后 sources 推导 max(score)——阈值 >0 时分布被截断。
+	BestScore float32
+	// CandidateCount 是阈值过滤前的候选数（rerank 入口池大小）。
+	CandidateCount int
 }
 
 type Source struct {
@@ -328,6 +347,7 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 	}
 	if !unrestricted && len(visibleDocIDs) == 0 {
 		// Nothing visible: an empty result without touching embed/Milvus/keyword.
+		result.NoAnswer = buildNoAnswer(NoAnswerAccessRestricted, 0, 0, 0)
 		result.Latency = time.Since(startTime)
 		return result, nil
 	}
@@ -345,17 +365,19 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 				if missingErr := rs.handleMissingCollection(ctx, req, searchName); missingErr != nil {
 					return nil, missingErr
 				}
+				result.NoAnswer = buildNoAnswer(NoAnswerNoSources, 0, 0, 0)
 				result.Latency = time.Since(startTime)
 				return result, nil
 			}
 			return nil, vErr
 		}
 		result.VectorResults = vectorResults
-		sources, rerankErr := rs.rerankSources(ctx, req, vectorToPool(vectorResults))
+		sources, stats, rerankErr := rs.rerankSources(ctx, req, vectorToPool(vectorResults))
 		if rerankErr != nil {
 			return nil, rerankErr
 		}
 		result.Sources = sources
+		rs.recordStats(result, stats)
 
 	case "keyword":
 		sources, legErr := rs.keywordLeg(ctx, req, visibleDocIDs)
@@ -363,14 +385,26 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 			return nil, legErr
 		}
 		result.Sources = sources
+		// keyword 腿无分数（P4 归一化前）：候选数即池大小，BestScore 恒 0。
+		rs.recordStats(result, rerankStats{poolSize: len(sources)})
 
 	case "hybrid":
-		vr, sources, legErr := rs.hybridLeg(ctx, req, collectionName, filterExpr, visibleDocIDs)
+		vr, sources, stats, legErr := rs.hybridLeg(ctx, req, collectionName, filterExpr, visibleDocIDs)
 		if legErr != nil {
 			return nil, legErr
 		}
 		result.VectorResults = vr
 		result.Sources = sources
+		rs.recordStats(result, stats)
+
+	default:
+		// graph 模式（AllowedQueryModes 含 graph 但检索器未实现）与空 mode
+		// 落空 switch：显式 unsupported_mode，防止误报 no_sources 污染校准。
+		result.NoAnswer = buildNoAnswer(NoAnswerUnsupportedMode, 0, 0, 0)
+	}
+
+	if result.NoAnswer != nil && rs.metrics != nil {
+		rs.metrics.IncNoAnswer(req.TenantID, string(result.NoAnswer.Reason))
 	}
 
 	result.Latency = time.Since(startTime)
@@ -460,13 +494,13 @@ func (rs *RAGService) keywordLeg(ctx context.Context, req RAGQueryRequest, docID
 
 // hybridLeg runs the hybrid retrieval leg: both the vector and keyword legs
 // receive the same visible doc-ID filter, so no unfiltered leg exists.
-func (rs *RAGService) hybridLeg(ctx context.Context, req RAGQueryRequest, collectionName, filterExpr string, docIDs []string) ([]knowledgeport.VectorSearchResult, []Source, error) {
+func (rs *RAGService) hybridLeg(ctx context.Context, req RAGQueryRequest, collectionName, filterExpr string, docIDs []string) ([]knowledgeport.VectorSearchResult, []Source, rerankStats, error) {
 	embedder := rs.resolveEmbedder(ctx, req)
 	if embedder == nil {
-		return nil, nil, fmt.Errorf("embedding service not configured: enable an embedding model in model management")
+		return nil, nil, rerankStats{}, fmt.Errorf("embedding service not configured: enable an embedding model in model management")
 	}
 	if rs.chunkRepo == nil {
-		return nil, nil, fmt.Errorf("hybrid search not available: chunk store not configured")
+		return nil, nil, rerankStats{}, fmt.Errorf("hybrid search not available: chunk store not configured")
 	}
 	legTopK := req.TopK * hybridLegRecallFactor
 	if widensRecall(req.Reranking) {
@@ -474,13 +508,13 @@ func (rs *RAGService) hybridLeg(ctx context.Context, req RAGQueryRequest, collec
 	}
 	vectorResults, pool, err := rs.hybridPool(ctx, req, collectionName, embedder, legTopK, filterExpr, docIDs)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, rerankStats{}, err
 	}
-	sources, rerankErr := rs.rerankSources(ctx, req, pool)
+	sources, stats, rerankErr := rs.rerankSources(ctx, req, pool)
 	if rerankErr != nil {
-		return nil, nil, rerankErr
+		return nil, nil, rerankStats{}, rerankErr
 	}
-	return vectorResults, sources, nil
+	return vectorResults, sources, stats, nil
 }
 
 // visibleDocIDs resolves the viewer's document whitelist per the D1
@@ -935,12 +969,23 @@ func rerankTopK(req RAGQueryRequest) int {
 	return req.TopK
 }
 
+// rerankStats 是 rerank 链路的池统计（阈值过滤前采集），供无答案信号与
+// 阈值校准消费。
+type rerankStats struct {
+	poolSize        int     // rerankSources 入口池大小（阈值过滤前候选数）
+	thresholdFilter int     // 阈值过滤掉的条数
+	bestScore       float32 // 入口池内最高分（rerank 覆盖前采集）
+}
+
 // rerankSources applies the request's rerank strategy to the candidate pool
 // and narrows it to the final count. External identities widen the recall
 // pool upstream; keyword-mode results never reach here (no scores). Threshold
 // filtering applies only to score-bearing sources, so it is safe for vector
-// (L2-normalized) and hybrid (RRF) pools alike.
-func (rs *RAGService) rerankSources(ctx context.Context, req RAGQueryRequest, pool []Source) ([]Source, error) {
+// (L2-normalized) and hybrid (RRF) pools alike. PoolSize/BestScore are
+// captured at entry (before rerankExternal truncation/overwrite) so no-answer
+// statistics reflect the true candidate distribution.
+func (rs *RAGService) rerankSources(ctx context.Context, req RAGQueryRequest, pool []Source) ([]Source, rerankStats, error) {
+	stats := rerankStats{poolSize: len(pool), bestScore: poolBestScore(pool)}
 	provider, model := rerankIdentity(req.Reranking)
 	switch provider {
 	case "builtin-score-v1":
@@ -950,17 +995,47 @@ func (rs *RAGService) rerankSources(ctx context.Context, req RAGQueryRequest, po
 	default:
 		narrowed, err := rs.rerankExternal(ctx, req, pool, model)
 		if err != nil {
-			return nil, err
+			return nil, stats, err
 		}
 		pool = narrowed
 	}
 	if req.ScoreThreshold > 0 {
+		before := len(pool)
 		pool = filterByScoreThreshold(pool, req.ScoreThreshold)
+		stats.thresholdFilter = before - len(pool)
 	}
 	if len(pool) > rerankTopK(req) {
 		pool = pool[:rerankTopK(req)]
 	}
-	return pool, nil
+	return pool, stats, nil
+}
+
+// poolBestScore returns the highest score in the pool. Pools without scores
+// (keyword leg, P4-normalized) yield 0; consumers treat 0 as "no data".
+func poolBestScore(pool []Source) float32 {
+	var best float32
+	for _, s := range pool {
+		if s.Score > best {
+			best = s.Score
+		}
+	}
+	return best
+}
+
+// recordStats fills the retrieval statistics on the result and closes out the
+// no-answer signal: non-empty Sources keep NoAnswer nil (has answer), an
+// empty result becomes threshold_filtered (filtered > 0) or no_sources.
+func (rs *RAGService) recordStats(result *RAGQueryResult, stats rerankStats) {
+	result.CandidateCount = stats.poolSize
+	result.BestScore = stats.bestScore
+	if len(result.Sources) > 0 {
+		return
+	}
+	if stats.thresholdFilter > 0 {
+		result.NoAnswer = buildNoAnswer(NoAnswerThresholdFiltered, stats.poolSize, stats.thresholdFilter, stats.bestScore)
+		return
+	}
+	result.NoAnswer = buildNoAnswer(NoAnswerNoSources, stats.poolSize, 0, stats.bestScore)
 }
 
 // rerankExternal re-scores the candidate pool with the configured external
@@ -1061,7 +1136,15 @@ func (rs *RAGService) BuildPrompt(question string, chunks []string) string {
 		prompt.WriteString("\n")
 	}
 
-	prompt.WriteString("Provide a clear, accurate answer based on the context above. If the context doesn't contain enough information, say so explicitly.")
+	// few-shot 正反例：把拒答行为教给主模型（system prompt 来自 DB，代码
+	// 侧只动模板）。反例刻意模拟"模型拿训练记忆硬答"的典型失败模式。
+	prompt.WriteString(`Provide a clear, accurate answer based on the context above.
+
+Rules:
+- Answer ONLY from the context. If the context doesn't contain enough information to answer, say so explicitly ("the knowledge base does not contain enough information") and do not guess.
+
+Example (good): context mentions no pricing → "The knowledge base does not contain pricing information."
+Example (bad): context mentions no pricing → "Pricing starts at $10/month." (fabricated from training data)`)
 
 	return prompt.String()
 }
@@ -1085,16 +1168,19 @@ type RAGSearchSource struct {
 // RAGSearchEvidence is the structured result of a knowledge search: the
 // concatenated context block plus per-chunk provenance. Wiring adapters map
 // it to the agent-side evidence type; the application layer keeps its own
-// type so knowledge never imports agent ports.
+// type so knowledge never imports agent ports. NoAnswer is nil when at least
+// one workspace produced sources (at-least-one aggregation).
 type RAGSearchEvidence struct {
-	Content string
-	Sources []RAGSearchSource
+	Content  string
+	Sources  []RAGSearchSource
+	NoAnswer *NoAnswerInfo
 }
 
 type wsEvidenceResult struct {
-	content string
-	sources []RAGSearchSource
-	err     error
+	content  string
+	sources  []RAGSearchSource
+	noAnswer *NoAnswerInfo
+	err      error
 }
 
 // NewRAGSearchEvidenceFn mirrors NewRAGSearchFn (same fan-out, concurrency
@@ -1123,7 +1209,7 @@ func NewRAGSearchEvidenceFn(rs *RAGService, tenantID, viewerID string) func(
 }
 
 func searchWorkspaceWithEvidence(ctx context.Context, rs *RAGService, tenantID, viewerID, ws, query string, topK int) wsEvidenceResult {
-	mode, effectiveTopK, embedModel, workspaceID, err := resolveWorkspaceConfig(ctx, rs, tenantID, ws, topK)
+	mode, effectiveTopK, embedModel, workspaceID, threshold, err := resolveWorkspaceConfig(ctx, rs, tenantID, ws, topK)
 	if err != nil {
 		return wsEvidenceResult{err: err}
 	}
@@ -1135,6 +1221,7 @@ func searchWorkspaceWithEvidence(ctx context.Context, rs *RAGService, tenantID, 
 		Mode:           mode,
 		TopK:           effectiveTopK,
 		EmbeddingModel: embedModel,
+		ScoreThreshold: threshold,
 		ViewerID:       viewerID,
 		// System-actor contexts (privileged wiring paths) carry admin-owner
 		// trust and bypass the D2 gate.
@@ -1143,6 +1230,10 @@ func searchWorkspaceWithEvidence(ctx context.Context, rs *RAGService, tenantID, 
 	if err != nil {
 		return wsEvidenceResult{err: err}
 	}
+	// 充分性门（仅 evidence 路径）：判 INSUFFICIENT 时本 workspace 按无内容
+	// 处理（Sources 置空 + NoAnswer=insufficient_evidence），聚合按严重度
+	// 上报；fail-closed 降级原样放行。
+	out = rs.judgeSufficiencyGate(ctx, tenantID, ws, query, out)
 	titles := rs.documentTitles(ctx, tenantID, workspaceID)
 	sources := make([]RAGSearchSource, 0, len(out.Sources))
 	for _, src := range out.Sources {
@@ -1157,7 +1248,7 @@ func searchWorkspaceWithEvidence(ctx context.Context, rs *RAGService, tenantID, 
 			HasScore:      src.Score != 0,
 		})
 	}
-	return wsEvidenceResult{content: formatSources(out.Sources), sources: sources}
+	return wsEvidenceResult{content: formatSources(out.Sources), sources: sources, noAnswer: out.NoAnswer}
 }
 
 // documentTitles maps doc ID to its source file name for citation display.
@@ -1199,10 +1290,13 @@ func truncateRunes(s string, n int) string {
 // mergeEvidenceResults keeps the same at-least-one semantics as mergeResults:
 // failed workspaces are skipped, successful ones contribute, and the first
 // error surfaces only when nothing was produced at all; partial failure
-// warns but keeps the successful content and their evidence.
+// warns but keeps the successful content and their evidence. The no-answer
+// signal aggregates the same way: any workspace with sources keeps NoAnswer
+// nil; when all succeed empty, the highest-severity reason wins.
 func (rs *RAGService) mergeEvidenceResults(results []wsEvidenceResult) (RAGSearchEvidence, error) {
 	var combined strings.Builder
 	var sources []RAGSearchSource
+	var noAnswer *NoAnswerInfo
 	var firstErr error
 	failures := 0
 	for _, r := range results {
@@ -1215,6 +1309,7 @@ func (rs *RAGService) mergeEvidenceResults(results []wsEvidenceResult) (RAGSearc
 		}
 		combined.WriteString(r.content)
 		sources = append(sources, r.sources...)
+		noAnswer = mergeNoAnswer(noAnswer, r.noAnswer)
 	}
 	if failures > 0 {
 		rs.logger.Warn("knowledge.rag.partial_failure",
@@ -1225,5 +1320,5 @@ func (rs *RAGService) mergeEvidenceResults(results []wsEvidenceResult) (RAGSearc
 	if combined.Len() == 0 && firstErr != nil {
 		return RAGSearchEvidence{}, firstErr
 	}
-	return RAGSearchEvidence{Content: combined.String(), Sources: sources}, nil
+	return RAGSearchEvidence{Content: combined.String(), Sources: sources, NoAnswer: noAnswer}, nil
 }

@@ -2495,6 +2495,7 @@ func appendEvidenceRAGOption(
 	return append(options, WithRAGSearchFnWithEvidence(func(rctx context.Context, workspaces []string, query string, topK int, viewerID string) (port.RAGSearchEvidence, error) {
 		var combined strings.Builder
 		var sources []port.RAGSearchSource
+		var noAnswer *domain.NoAnswerInfo
 		mutable := make([]string, 0, len(workspaces))
 		for _, workspace := range workspaces {
 			if _, hit := platformSet[workspace]; hit {
@@ -2522,8 +2523,13 @@ func appendEvidenceRAGOption(
 			}
 			combined.WriteString(ev.Content)
 			sources = append(sources, ev.Sources...)
+			// 聚合无答案信号：revision 部分无信号，证据部分信号在
+			// sources 仍为空时透传（revision 有内容即视为有答案）。
+			if len(sources) == 0 && ev.NoAnswer != nil {
+				noAnswer = ev.NoAnswer
+			}
 		}
-		return port.RAGSearchEvidence{Content: combined.String(), Sources: sources}, nil
+		return port.RAGSearchEvidence{Content: combined.String(), Sources: sources, NoAnswer: noAnswer}, nil
 	}))
 }
 

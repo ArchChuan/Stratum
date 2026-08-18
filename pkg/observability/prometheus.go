@@ -76,6 +76,10 @@ type PrometheusMetrics struct {
 	rerankRequestTotal    *prometheus.CounterVec
 	rerankDurationSeconds *prometheus.HistogramVec
 
+	// Knowledge NoAnswer / judge (F3)
+	noAnswerTotal       *prometheus.CounterVec
+	knowledgeJudgeTotal *prometheus.CounterVec
+
 	// Model Router (F3)
 	routeFallbackTotal *prometheus.CounterVec
 	budgetRatio        *prometheus.GaugeVec
@@ -366,6 +370,14 @@ func (m *PrometheusMetrics) registerF3Metrics(factory promauto.Factory, latencyB
 		prometheus.HistogramOpts{Name: "rerank_duration_seconds", Help: "Rerank request duration", Buckets: latencyBuckets},
 		[]string{"model"},
 	)
+	m.noAnswerTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "knowledge_no_answer_total", Help: "RAG queries ending without an answer, by tenant and reason"},
+		[]string{"tenant", "reason"},
+	)
+	m.knowledgeJudgeTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "knowledge_judge_total", Help: "Knowledge judge invocations by model and status"},
+		[]string{"model", "status"},
+	)
 	m.routeFallbackTotal = factory.NewCounterVec(
 		prometheus.CounterOpts{Name: "route_fallback_total", Help: "Model route fallback events"},
 		[]string{"from_model", "to_model"},
@@ -633,6 +645,16 @@ func (m *PrometheusMetrics) IncRerankRequest(tenantID, model, status string) {
 
 func (m *PrometheusMetrics) RecordRerankDuration(model string, seconds float64) {
 	m.rerankDurationSeconds.WithLabelValues(model).Observe(seconds)
+}
+
+// --- Knowledge NoAnswer / judge (F3) ---
+
+func (m *PrometheusMetrics) IncNoAnswer(tenantID, reason string) {
+	m.noAnswerTotal.WithLabelValues(tenantID, reason).Inc()
+}
+
+func (m *PrometheusMetrics) IncKnowledgeJudge(model, status string) {
+	m.knowledgeJudgeTotal.WithLabelValues(model, status).Inc()
 }
 
 // --- Model Router (F3) ---

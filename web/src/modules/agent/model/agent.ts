@@ -261,6 +261,30 @@ export interface ChatCitationSource {
   HasScore?: boolean;
 }
 
+// NoAnswerReason 与后端 pkg/constants 的 NoAnswerReason 枚举逐值对齐
+// （跨 context 单一事实源，值进入响应契约与指标 label）。
+export const noAnswerReasons = [
+  'no_sources',
+  'threshold_filtered',
+  'access_restricted',
+  'insufficient_evidence',
+  'unsupported_mode',
+] as const;
+export type NoAnswerReason = (typeof noAnswerReasons)[number];
+
+// NoAnswerInfo 是 SSE done payload 的 noAnswer 信号（JSON 字段名 PascalCase：
+// 后端 domain.NoAnswerInfo 无 tag，与 ChatCitationSource 同一序列化规则）。
+// nil=有答案（omitempty 不输出键）；非 nil=无答案且 reason 说明原因。
+export interface NoAnswerInfo {
+  Reason: NoAnswerReason;
+  RetrievedCount?: number;
+  FilteredCount?: number;
+  BestScore?: number;
+  Retried?: boolean;
+  RewrittenQuery?: string;
+  Detail?: string;
+}
+
 export const chatMessageSchema = z
   .object({
     id: z.string().optional(),
@@ -290,6 +314,8 @@ export interface ChatMessage {
   artifacts?: ExecutionArtifact[];
   interrupted?: boolean;
   sources?: ChatCitationSource[];
+  /** 无答案结构化信号（nil/缺失=有答案或旧后端）；用于渲染拒答提示 */
+  noAnswer?: NoAnswerInfo;
   /** 跨会话目标进度摘要（stratum_task_snapshot 透出）；无则 undefined */
   taskSnapshot?: TaskSnapshot;
   [key: string]: unknown;
@@ -309,6 +335,8 @@ export interface AgentExecutionResult {
   steps?: ChatStep[];
   artifacts?: ExecutionArtifact[];
   sources?: ChatCitationSource[];
+  /** 无答案结构化信号：nil/缺失=有答案（omitempty），渲染拒答提示用 */
+  noAnswer?: NoAnswerInfo;
   error?: string;
   metadata?: Record<string, unknown>;  // SSE done 白名单透出（thoughtsJSON/toolCallsJSON/stratum_task_snapshot）
   [key: string]: unknown;

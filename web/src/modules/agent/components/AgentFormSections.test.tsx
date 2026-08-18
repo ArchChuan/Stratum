@@ -384,7 +384,7 @@ describe('AgentFormSections', () => {
     expect(screen.getAllByRole('button', { name: '查看默认提示词' })).toHaveLength(2);
   });
 
-  it('expresses "system default" as 0 on memory sliders instead of an unreachable empty state', () => {
+  it('expresses the platform default as 0 on memory sliders instead of an unreachable empty state', () => {
     render(
       <Form>
         <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
@@ -392,21 +392,19 @@ describe('AgentFormSections', () => {
     );
 
     // 0 = unset 通道：后端 validateAndExtractMemoryParameters 对数值 0 提前过滤，
-    // 等价不落库，回落 registry Default。min=0 让「系统默认」可操作，而不是只能
+    // 等价不落库，回落平台默认或 registry Default。min=0 让「平台默认」可操作，而不是只能
     // 靠从未触摸控件才存在的空值（Slider 一旦拖动就无法回到空）。
     const maxFacts = screen.getByRole('slider', { name: '单次抽取事实上限' });
     expect(maxFacts).toHaveAttribute('aria-valuemin', '0');
     expect(maxFacts).toHaveAttribute('aria-valuemax', '10');
-    expect(screen.getByText(/0 = 使用系统默认（10 条）/)).toBeInTheDocument();
+    expect(screen.getAllByText(/0 = 使用平台默认（资源未配置时生效）/)).toHaveLength(3);
 
     const recall = screen.getByRole('slider', { name: '记忆召回条数' });
     expect(recall).toHaveAttribute('aria-valuemin', '0');
     expect(recall).toHaveAttribute('aria-valuemax', '20');
-    expect(screen.getByText(/0 = 使用系统默认（5 条）/)).toBeInTheDocument();
 
     const factInjection = screen.getByRole('slider', { name: '事实注入条数' });
     expect(factInjection).toHaveAttribute('aria-valuemin', '0');
     expect(factInjection).toHaveAttribute('aria-valuemax', '20');
-    expect(screen.getByText(/0 = 使用系统默认（8 条）/)).toBeInTheDocument();
   });
 });

@@ -73,6 +73,16 @@ const (
 	// claim 判定截断（finish_reason=length → JSON 半截 → 解析失败降级）；
 	// 2048 覆盖 4 claims 的完整 verdict JSON 输出。
 	AgentFactCheckJudgeMaxTokens = 2048
+	// AgentKnowledgeNoResultText 是知识检索空结果的拒答观察模板（%s = NoAnswer
+	// reason，固定枚举无注入风险）。空内容不能当成功结果喂给模型——模型看到
+	// "没找到"而非空串，避免靠训练记忆编造答案。
+	AgentKnowledgeNoResultText = "Knowledge search returned no relevant results (reason: %s). " +
+		"Do not fabricate an answer; state clearly that no relevant information was found, " +
+		"or answer from general knowledge without claiming the knowledge base as a source."
+	// AgentSearchKnowledgeRefusalInstruction 是 stratum_search_knowledge 工具
+	// 描述的拒答指令后缀：检索无结果/证据不足时必须明说，禁止编造来源。
+	AgentSearchKnowledgeRefusalInstruction = " If the search returns no relevant results or the " +
+		"evidence is insufficient, say so explicitly; never fabricate an answer or invent sources."
 
 	// ---- agent task persistence (cross-session goal progress) ----
 

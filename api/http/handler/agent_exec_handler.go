@@ -211,8 +211,9 @@ func agentExecutionDonePayload(result *agent.AgentResult) []byte {
 		Degraded      bool                        `json:"degraded"`
 		DegradeReason string                      `json:"degradeReason,omitempty"`
 		FactCheck     *domain.FactCheckReport     `json:"factCheck,omitempty"`
+		NoAnswer      *domain.NoAnswerInfo        `json:"noAnswer,omitempty"`
 		Metadata      map[string]interface{}      `json:"metadata,omitempty"`
-	}{true, dto.Output, dto.Steps, dto.TokensUsed, dto.Duration, dto.Artifacts, sources, result.Degraded, result.DegradeReason, result.FactCheck, dto.Metadata})
+	}{true, dto.Output, dto.Steps, dto.TokensUsed, dto.Duration, dto.Artifacts, sources, result.Degraded, result.DegradeReason, result.FactCheck, result.NoAnswer, dto.Metadata})
 	return payload
 }
 

@@ -34,6 +34,15 @@ const (
 	// RerankHTTPTimeout bounds a single external reranker call (10s).
 	RerankHTTPTimeout = 10 * time.Second
 
+	// NoAnswerReason* 是 RAG 无答案信号的固定枚举值（跨 context 单一事实源：
+	// knowledge 与 agent 两侧共同消费，禁止各自拼字符串；值进入响应契约与
+	// 指标 label，禁止动态拼接）。
+	NoAnswerReasonNoSources            = "no_sources"
+	NoAnswerReasonThresholdFiltered    = "threshold_filtered"
+	NoAnswerReasonAccessRestricted     = "access_restricted"
+	NoAnswerReasonInsufficientEvidence = "insufficient_evidence"
+	NoAnswerReasonUnsupportedMode      = "unsupported_mode"
+
 	// MaxMilvusFilterLen is the maximum byte length of a Milvus filter
 	// expression (docs: filters with large `in` lists may fail). When a
 	// doc-level whitelist exceeds this bound the vector leg degrades to
@@ -66,6 +75,18 @@ const (
 	// sources for citation display. Full chunk content stays in the LLM
 	// context; the snippet is display metadata only.
 	MaxSourceSnippetRunes = 200
+	// KnowledgeJudgeTimeout bounds a single sufficiency/faithfulness judge
+	// call; 超时按 fail-closed 降级为"未判定"，不阻塞检索/评估主链路。
+	KnowledgeJudgeTimeout = 15 * time.Second
+	// KnowledgeJudgeMaxTokens caps judge 输出（固定 JSON 结构，1024 充足）。
+	KnowledgeJudgeMaxTokens = 1024
+	// KnowledgeJudgeMaxEvidenceRunes 截断喂给 judge 的聚合证据，防止
+	// 多 workspace 拼接把上下文打爆（judge 只判断充分性，尾部内容
+	// 截断对结论影响有限；与 factcheck 不截断的差异是本方案的成本控制）。
+	KnowledgeJudgeMaxEvidenceRunes = 4000
+	// KnowledgeJudgeDefaultModel 是知识层 judge 的默认模型（独立于
+	// factcheck/evaluation judge，KNOWLEDGE_JUDGE_MODEL 可覆盖）。
+	KnowledgeJudgeDefaultModel = "qwen-turbo"
 )
 
 var milvusUnsafe = regexp.MustCompile(`[^a-zA-Z0-9_]`)

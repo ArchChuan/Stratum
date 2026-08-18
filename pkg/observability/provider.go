@@ -65,6 +65,10 @@ type MetricsProvider interface {
 	IncRerankRequest(tenantID, model, status string)
 	RecordRerankDuration(model string, seconds float64)
 
+	// Knowledge NoAnswer / judge (F3)
+	IncNoAnswer(tenantID, reason string)
+	IncKnowledgeJudge(model, status string)
+
 	// Model Router (F3)
 	IncRouteFallback(fromModel, toModel string)
 	RecordBudgetRatio(scope string, pct float64)
@@ -164,6 +168,8 @@ func (NoopMetrics) RecordAgentConversationTurn(_ string, _ int)                 
 func (NoopMetrics) IncScheduledFire(_, _ string)                                  {}
 func (NoopMetrics) IncRerankRequest(_, _, _ string)                               {}
 func (NoopMetrics) RecordRerankDuration(_ string, _ float64)                      {}
+func (NoopMetrics) IncNoAnswer(_, _ string)                                       {}
+func (NoopMetrics) IncKnowledgeJudge(_, _ string)                                 {}
 func (NoopMetrics) IncRouteFallback(_, _ string)                                  {}
 func (NoopMetrics) RecordBudgetRatio(_ string, _ float64)                         {}
 func (NoopMetrics) IncPolicyBlocked(_ string)                                     {}

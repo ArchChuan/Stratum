@@ -97,6 +97,13 @@ type WorkspaceConfig struct {
 	RerankTopK     int
 }
 
+// ScoreThresholdResetSentinel 是 MergeUpdate 对「显式 0」的编码：partial 合并
+// 以零值表示"未提供"，但 score_threshold=0 是合法值（关闭过滤）。handler
+// PATCH（整体替换契约）把用户填的 0 转成该负哨兵，domain 侧转回 0；proposal
+// 等 partial 调用方保持零值=未传语义，互不干扰。哨兵仅存在于内存转换瞬间，
+// 绝不落库。
+const ScoreThresholdResetSentinel float32 = -1
+
 // NewWorkspace constructs a Workspace, applying defaults to cfg and validating it.
 // Callers receive ErrInvalidEmbeddingModel / ErrInvalidQueryMode on bad input.
 func NewWorkspace(name, description string, cfg WorkspaceConfig, defaultChunkSize, defaultTopK int) (*Workspace, error) {
@@ -221,6 +228,10 @@ func (c WorkspaceConfig) applyRerankSettings(partial WorkspaceConfig) (Workspace
 			return c, ErrInvalidScoreThreshold
 		}
 		out.ScoreThreshold = partial.ScoreThreshold
+	} else if partial.ScoreThreshold == ScoreThresholdResetSentinel {
+		// 显式 0 重置：handler PATCH 整体替换契约把 0 编码为哨兵，partial
+		// 语义下零值=未传，0 只能经哨兵显式写入，防止"设了关不掉"。
+		out.ScoreThreshold = 0
 	}
 	if partial.RerankTopK > 0 {
 		out.RerankTopK = partial.RerankTopK
