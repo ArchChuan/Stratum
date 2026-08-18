@@ -92,6 +92,9 @@ type RetrievalEvaluation struct {
 	NoAnswer             bool     `json:"no_answer"`
 	RetrievedCount       int      `json:"retrieved_count"`
 	RetrievedDocumentIDs []string `json:"retrieved_document_ids,omitempty"`
+	// BestScore 是阈值过滤前池内最高分（校准样本数据源；有答案路径也填充，
+	// 0 = 无候选）。禁止从过滤后 sources 推导——阈值 >0 时分布被截断。
+	BestScore float32 `json:"best_score,omitempty"`
 }
 
 type RetrievalEvaluator struct {
@@ -108,12 +111,12 @@ func (e *RetrievalEvaluator) EvaluateRetrieval(
 	// The evaluation worker runs as a tenant-admin privileged path (no end-user
 	// viewer identity): SkipAccessCheck is the explicit bypass equivalent to
 	// the admin-owner exemption in the D1 matrix, never an implicit full scan.
-	sources, err := e.retrieveSources(ctx, snapshot, testCase.Query, "")
+	result, err := e.retrieveSources(ctx, snapshot, testCase.Query, "")
 	if err != nil {
 		return RetrievalEvaluation{}, err
 	}
-	documentIDs := make([]string, 0, min(snapshot.TopK, len(sources)))
-	for _, source := range sources {
+	documentIDs := make([]string, 0, min(snapshot.TopK, len(result.Sources)))
+	for _, source := range result.Sources {
 		documentIDs = append(documentIDs, source.DocumentID)
 	}
 	noAnswer := len(documentIDs) == 0
@@ -123,7 +126,8 @@ func (e *RetrievalEvaluator) EvaluateRetrieval(
 	}
 	citationCorrect := containsAllIDs(documentIDs, testCase.CitationDocumentIDs)
 	return RetrievalEvaluation{Relevant: relevant, CitationCorrect: citationCorrect,
-		NoAnswer: noAnswer, RetrievedCount: len(documentIDs), RetrievedDocumentIDs: documentIDs}, nil
+		NoAnswer: noAnswer, RetrievedCount: len(documentIDs), RetrievedDocumentIDs: documentIDs,
+		BestScore: result.BestScore}, nil
 }
 
 func (e *RetrievalEvaluator) RetrieveContext(
@@ -134,21 +138,25 @@ func (e *RetrievalEvaluator) RetrieveContext(
 	if viewerID == "" {
 		return "", errors.New("knowledge retrieval: viewer identity required")
 	}
-	sources, err := e.retrieveSources(ctx, snapshot, query, viewerID)
+	result, err := e.retrieveSources(ctx, snapshot, query, viewerID)
 	if err != nil {
 		return "", err
 	}
 	var content strings.Builder
-	for _, source := range sources {
+	for _, source := range result.Sources {
 		content.WriteString(source.Content)
 		content.WriteString("\n---\n")
 	}
 	return content.String(), nil
 }
 
+// retrieveSources runs one retrieval against the evaluator's retriever and
+// returns the full RAGQueryResult: callers read .Sources for content and
+// .BestScore for calibration data (threshold-filtered distribution is
+// truncated and must never be re-derived from final sources).
 func (e *RetrievalEvaluator) retrieveSources(
 	ctx context.Context, snapshot RetrievalSnapshot, rawQuery, viewerID string,
-) ([]Source, error) {
+) (*RAGQueryResult, error) {
 	if e == nil || e.retriever == nil {
 		return nil, errors.New("knowledge retrieval evaluator unavailable")
 	}
@@ -180,7 +188,7 @@ func (e *RetrievalEvaluator) retrieveSources(
 	}
 	// Rerank, threshold filtering, and TopK narrowing are all performed inside
 	// RAGService.Query; the evaluator must not re-implement them locally.
-	return result.Sources, nil
+	return result, nil
 }
 
 func rewriteEvaluationQuery(query, mode string) string {

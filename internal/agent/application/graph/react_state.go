@@ -60,6 +60,9 @@ type ReActState struct {
 	// chat UI: deduplicated by chunk ID, capped at MaxAgentResultSources,
 	// newest search winning. Populated only by evidence-capable searches.
 	CitationSources []port.RAGSearchSource
+	// NoAnswer 是最近一次知识检索的无答案信号（工具路径检索全空时填充，
+	// 拷贝自 evidence 结果；nil = 无知识检索或无答案未发生）。
+	NoAnswer *domain.NoAnswerInfo
 	// PromptVersions records the prompt key → content fingerprint map
 	// applied to this execution; startLLMTrace writes stratum.prompt.*
 	// attributes from it. nil means no version was resolved.

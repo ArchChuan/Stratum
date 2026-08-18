@@ -159,6 +159,21 @@ func TestMergeUpdate(t *testing.T) {
 			}
 		})
 	}
+
+	// 哨兵显式 0：partial 零值=未传（0 无法表达重置意图），handler PATCH
+	// 整体替换把用户填的 0 编码为负哨兵，domain 必须转回 0——否则
+	// score_threshold 设置后永远关不掉。
+	t.Run("score threshold reset via sentinel", func(t *testing.T) {
+		withThreshold := base
+		withThreshold.ScoreThreshold = 0.5
+		got, err := withThreshold.MergeUpdate(WorkspaceConfig{ScoreThreshold: ScoreThresholdResetSentinel})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.ScoreThreshold != 0 {
+			t.Errorf("expected threshold reset to 0, got %v", got.ScoreThreshold)
+		}
+	})
 }
 
 func TestWorkspaceMutations(t *testing.T) {

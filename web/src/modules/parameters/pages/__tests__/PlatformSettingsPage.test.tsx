@@ -71,7 +71,9 @@ describe('PlatformSettingsPage', () => {
 
     expect(await screen.findByText('评测温度')).toBeInTheDocument();
     expect(screen.getByText('默认：0（未设置）')).toBeInTheDocument();
-    expect(screen.queryByText('默认：0.1')).not.toBeInTheDocument();
+    // List 回填后 hint 消失：antd Form setFieldsValue 的 watch 更新可能滞后
+    // 于 schema 渲染一帧（慢机器上明显），同步 queryByText 会命中中间帧。
+    await waitFor(() => expect(screen.queryByText('默认：0.1')).not.toBeInTheDocument());
   });
 
   it('shows the non-zero default hint when the key is missing entirely', async () => {

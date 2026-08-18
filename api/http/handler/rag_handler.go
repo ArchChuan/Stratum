@@ -148,10 +148,14 @@ func (h *RAGHandler) Query(c *gin.Context) {
 	}
 
 	var embedModel, workspaceID string
+	var threshold float32
 	if h.wsService != nil {
 		if ws, err := h.wsService.GetWorkspace(c.Request.Context(), tenantID, req.Workspace); err == nil {
 			embedModel = ws.Config.EmbeddingModel
 			workspaceID = ws.ID
+			// workspace config 单一事实源：API 查询面板不传阈值，config 缺省
+			// 兜底（0=不过滤），保证配置保存后查询即生效。
+			threshold = ws.Config.ScoreThreshold
 		}
 	}
 
@@ -164,6 +168,7 @@ func (h *RAGHandler) Query(c *gin.Context) {
 		//nolint:gosec // TopK 已受 binding max=20 约束,不可能溢出 int(proto 契约)
 		TopK:           int(req.TopK),
 		EmbeddingModel: embedModel,
+		ScoreThreshold: threshold,
 		ViewerID:       actorID,
 	})
 	if err != nil {
@@ -180,12 +185,28 @@ func (h *RAGHandler) Query(c *gin.Context) {
 			"score":       src.Score,
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"answer":     result.Answer,
-		"sources":    sources,
-		"mode":       result.Mode,
-		"latency_ms": result.Latency.Milliseconds(),
-	})
+	response := gin.H{
+		"answer":          result.Answer,
+		"sources":         sources,
+		"mode":            result.Mode,
+		"latency_ms":      result.Latency.Milliseconds(),
+		"best_score":      result.BestScore,
+		"candidate_count": result.CandidateCount,
+	}
+	// 无答案信号：nil（有答案）时 omitempty 语义手控——键不存在，避免
+	// "no_answer": null 破坏前端 zod .nullable().optional() 之外的老 schema。
+	if result.NoAnswer != nil {
+		response["no_answer"] = gin.H{
+			"reason":          string(result.NoAnswer.Reason),
+			"retrieved_count": result.NoAnswer.RetrievedCount,
+			"filtered_count":  result.NoAnswer.FilteredCount,
+			"best_score":      result.NoAnswer.BestScore,
+			"retried":         result.NoAnswer.Retried,
+			"rewritten_query": result.NoAnswer.RewrittenQuery,
+			"detail":          result.NoAnswer.Detail,
+		}
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 func (h *RAGHandler) CreateWorkspace(c *gin.Context) {
@@ -281,6 +302,12 @@ func (h *RAGHandler) UpdateWorkspace(c *gin.Context) {
 	in := knowledge.UpdateWorkspaceInput{Name: req.Name, Description: req.Description}
 	if req.Config != nil {
 		cfg := fromDTOConfig(*req.Config)
+		// PATCH 契约 Config 整体替换：score_threshold=0 是显式"关闭过滤"，
+		// 但 MergeUpdate 的 partial 合并以零值=未传。用哨兵编码显式 0，
+		// domain 侧转回 0（0.99→0 的恢复默认必须真的写回）。
+		if cfg.ScoreThreshold == 0 {
+			cfg.ScoreThreshold = domain.ScoreThresholdResetSentinel
+		}
 		in.Config = &cfg
 	}
 
