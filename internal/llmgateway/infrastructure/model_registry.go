@@ -223,11 +223,12 @@ func (r *ModelRegistry) resolveExact(
 			continue
 		}
 		cfg := ProviderConfig{
-			Name:        provider.Name,
-			BaseURL:     provider.BaseURL,
-			APIKey:      provider.APIKey,
-			HealthModel: provider.DefaultModel,
-			Models:      []string{m.Name},
+			Name:         provider.Name,
+			BaseURL:      provider.BaseURL,
+			APIKey:       provider.APIKey,
+			HealthModel:  provider.DefaultModel,
+			Models:       []string{m.Name},
+			ExtraHeaders: provider.ExtraHeaders,
 		}
 		r.cacheSet(cacheKey, cfg, *provider, m.Capabilities, policyFromModel(&m))
 		return cfg, *provider, nil
@@ -254,11 +255,12 @@ func (r *ModelRegistry) resolveProviderDefault(
 			continue
 		}
 		cfg := ProviderConfig{
-			Name:        p.Name,
-			BaseURL:     p.BaseURL,
-			APIKey:      p.APIKey,
-			HealthModel: p.DefaultModel,
-			Models:      []string{p.DefaultModel},
+			Name:         p.Name,
+			BaseURL:      p.BaseURL,
+			APIKey:       p.APIKey,
+			HealthModel:  p.DefaultModel,
+			Models:       []string{p.DefaultModel},
+			ExtraHeaders: p.ExtraHeaders,
 		}
 		r.cacheSet(cacheKey, cfg, p, []domain.ModelCapability{capability}, nil)
 		return cfg, p, nil
@@ -302,11 +304,12 @@ func (r *ModelRegistry) resolveRecommended(
 		return ProviderConfig{}, domain.Provider{}, errModelNotResolved
 	}
 	cfg := ProviderConfig{
-		Name:        bestProvider.Name,
-		BaseURL:     bestProvider.BaseURL,
-		APIKey:      bestProvider.APIKey,
-		HealthModel: bestProvider.DefaultModel,
-		Models:      []string{best.Name},
+		Name:         bestProvider.Name,
+		BaseURL:      bestProvider.BaseURL,
+		APIKey:       bestProvider.APIKey,
+		HealthModel:  bestProvider.DefaultModel,
+		Models:       []string{best.Name},
+		ExtraHeaders: bestProvider.ExtraHeaders,
 	}
 	r.cacheSet(cacheKey, cfg, *bestProvider, best.Capabilities, policyFromModel(&best))
 	return cfg, *bestProvider, nil
@@ -324,11 +327,12 @@ func (r *ModelRegistry) resolveEmbeddingMarked(ctx context.Context, cacheKey str
 		return ProviderConfig{}, domain.Provider{}, errModelNotResolved
 	}
 	cfg := ProviderConfig{
-		Name:        c.p.Name,
-		BaseURL:     c.p.BaseURL,
-		APIKey:      c.p.APIKey,
-		HealthModel: c.p.DefaultModel,
-		Models:      []string{c.m.Name},
+		Name:         c.p.Name,
+		BaseURL:      c.p.BaseURL,
+		APIKey:       c.p.APIKey,
+		HealthModel:  c.p.DefaultModel,
+		Models:       []string{c.m.Name},
+		ExtraHeaders: c.p.ExtraHeaders,
 	}
 	r.cacheSet(cacheKey, cfg, *c.p, c.m.Capabilities, policyFromModel(&c.m))
 	return cfg, *c.p, nil
@@ -402,11 +406,12 @@ func (r *ModelRegistry) ResolveFallbackCandidates(ctx context.Context, primary s
 	result := make([]FallbackCandidate, 0, len(cands))
 	for _, c := range cands {
 		cfg := ProviderConfig{
-			Name:        c.provider.Name,
-			BaseURL:     c.provider.BaseURL,
-			APIKey:      c.provider.APIKey,
-			HealthModel: c.provider.DefaultModel,
-			Models:      []string{c.model.Name},
+			Name:         c.provider.Name,
+			BaseURL:      c.provider.BaseURL,
+			APIKey:       c.provider.APIKey,
+			HealthModel:  c.provider.DefaultModel,
+			Models:       []string{c.model.Name},
+			ExtraHeaders: c.provider.ExtraHeaders,
 		}
 		// 复用 TTL 缓存语义：Warm/Resolve 已缓存的 entry 保持有效，
 		// 这里与缓存数据同源（同 modelRepo/providerRepo），直接写回。
@@ -592,11 +597,12 @@ func (r *ModelRegistry) warmModel(ctx context.Context, m domain.Model) error {
 		return nil
 	}
 	cfg := ProviderConfig{
-		Name:        provider.Name,
-		BaseURL:     provider.BaseURL,
-		APIKey:      provider.APIKey,
-		HealthModel: provider.DefaultModel,
-		Models:      []string{m.Name},
+		Name:         provider.Name,
+		BaseURL:      provider.BaseURL,
+		APIKey:       provider.APIKey,
+		HealthModel:  provider.DefaultModel,
+		Models:       []string{m.Name},
+		ExtraHeaders: provider.ExtraHeaders,
 	}
 	for _, cap := range m.Capabilities {
 		if !r.supports(provider.Kind, cap) {

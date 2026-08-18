@@ -29,6 +29,7 @@ func (r *ProviderRuntime) protocol(provider domain.Provider) (ChatProtocol, Prov
 		APIKey:       provider.APIKey,
 		HealthModel:  provider.DefaultModel,
 		ModelCatalog: ZhipuModelCatalog(provider.BaseURL),
+		ExtraHeaders: provider.ExtraHeaders,
 	}, nil
 }
 

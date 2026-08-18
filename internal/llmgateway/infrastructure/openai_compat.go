@@ -203,6 +203,7 @@ type ProviderConfig struct {
 	Models         []string
 	ModelCatalog   []string // 发现兜底目录：ListModels 时与 GET /models 结果取并集；空 = 行为不变
 	EmbedBatchSize int      // max texts per embedding request; 0 = use default (100)
+	ExtraHeaders   map[string]string // provider 级附加请求头（写入门禁后只读）
 }
 
 // OpenAICompatClient is an OpenAI-compatible provider that implements
@@ -266,6 +267,7 @@ func (c *OpenAICompatClient) Complete(ctx context.Context, req *CompletionReques
 			return nil, fmt.Errorf("%s: build request: %w", c.cfg.Name, err)
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
+		applyExtraHeaders(httpReq.Header, c.cfg.ExtraHeaders)
 		httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 
 		resp, err := c.http.Do(httpReq)
@@ -460,8 +462,9 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 			return nil, fmt.Errorf("%s: build stream request: %w", c.cfg.Name, err)
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 		httpReq.Header.Set("Accept", "text/event-stream")
+		applyExtraHeaders(httpReq.Header, c.cfg.ExtraHeaders)
+		httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 
 		resp, err = c.streamHTTP.Do(httpReq)
 		if err != nil {
@@ -689,6 +692,7 @@ func (c *OpenAICompatClient) CreateEmbeddings(ctx context.Context, req *Embeddin
 		return nil, fmt.Errorf("%s: build embed request: %w", c.cfg.Name, err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	applyExtraHeaders(httpReq.Header, c.cfg.ExtraHeaders)
 	httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 
 	resp, err := c.http.Do(httpReq)
@@ -809,6 +813,7 @@ func (c *OpenAICompatClient) fetchModelPage(ctx context.Context, u string) (*ope
 	if err != nil {
 		return nil, fmt.Errorf("%s: build models request: %w", c.cfg.Name, err)
 	}
+	applyExtraHeaders(httpReq.Header, c.cfg.ExtraHeaders)
 	if c.cfg.APIKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 	}

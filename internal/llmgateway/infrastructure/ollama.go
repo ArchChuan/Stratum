@@ -186,6 +186,7 @@ func (c *OllamaClient) httpDo(ctx context.Context, path string, body []byte) ([]
 		return nil, 0, nil, fmt.Errorf("%s: build request: %w", c.cfg.Name, err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	applyExtraHeaders(httpReq.Header, c.cfg.ExtraHeaders)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
@@ -205,6 +206,7 @@ func (c *OllamaClient) httpDoStream(ctx context.Context, path string, body []byt
 		return nil, fmt.Errorf("%s: build stream request: %w", c.cfg.Name, err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	applyExtraHeaders(httpReq.Header, c.cfg.ExtraHeaders)
 	return c.streamHTTP.Do(httpReq)
 }
 
@@ -462,6 +464,7 @@ func (c *OllamaClient) Health(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("%s: build health request: %w", c.cfg.Name, err)
 	}
+	applyExtraHeaders(httpReq.Header, c.cfg.ExtraHeaders)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
@@ -527,6 +530,7 @@ func (c *OllamaClient) CreateEmbeddings(ctx context.Context, req *EmbeddingReque
 		return nil, fmt.Errorf("%s: build embed request: %w", c.cfg.Name, err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	applyExtraHeaders(httpReq.Header, c.cfg.ExtraHeaders)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
