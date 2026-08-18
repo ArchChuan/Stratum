@@ -58,20 +58,21 @@ func (h *ModelMgmtHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, m)
 }
 
-// Update PUT /admin/models/:id — updates a model's display and pricing fields.
+// Update PUT /admin/models/:id — updates a model's display, pricing and parameter fields.
 func (h *ModelMgmtHandler) Update(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
 		respondMissingTenant(c)
 		return
 	}
+	actorID, _ := userIDFromCtx(c)
 	var input llmapp.UpdateModelInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
 	input.ID = c.Param("id")
-	m, err := h.svc.Update(c.Request.Context(), tenantID, input)
+	m, err := h.svc.Update(c.Request.Context(), tenantID, actorID, input)
 	if err != nil {
 		_ = c.Error(err)
 		return

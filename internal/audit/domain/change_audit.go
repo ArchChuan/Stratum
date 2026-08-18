@@ -15,6 +15,8 @@ const (
 	ResourceKindKnowledge  = "knowledge"
 	ResourceKindWorkflow   = "workflow"   // 新增：工作流定义生命周期
 	ResourceKindEvaluation = "evaluation" // 新增：评测实验生命周期
+	ResourceKindModel      = "model"      // 新增：LLM 模型目录可编辑参数
+	ResourceKindProvider   = "provider"   // 新增：LLM provider 配置
 )
 
 // Operations recorded for each committed change.

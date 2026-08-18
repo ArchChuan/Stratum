@@ -134,7 +134,7 @@ func TestPgModelRepo_CRUD(t *testing.T) {
 	// Update
 	m.DisplayName = "GPT-4 Turbo"
 	m.ContextWindow = 128000
-	if err := modelRepo.Update(ctx, m); err != nil {
+	if err := modelRepo.Update(ctx, m, "t1", nil); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	got, err = modelRepo.Get(ctx, m.ID)
@@ -312,7 +312,7 @@ func TestPgModelRepo_DefaultEmbeddingSelfClean(t *testing.T) {
 
 	t.Run("update disabling clears the marker", func(t *testing.T) {
 		em.Enabled = false
-		if err := modelRepo.Update(ctx, em); err != nil {
+		if err := modelRepo.Update(ctx, em, "t1", nil); err != nil {
 			t.Fatalf("update disable: %v", err)
 		}
 		got, err := modelRepo.Get(ctx, em.ID)
@@ -327,7 +327,7 @@ func TestPgModelRepo_DefaultEmbeddingSelfClean(t *testing.T) {
 	t.Run("update dropping embedding capability clears the marker", func(t *testing.T) {
 		em.Enabled = true
 		em.Capabilities = []domain.ModelCapability{domain.CapChat}
-		if err := modelRepo.Update(ctx, em); err != nil {
+		if err := modelRepo.Update(ctx, em, "t1", nil); err != nil {
 			t.Fatalf("update caps: %v", err)
 		}
 		got, err := modelRepo.Get(ctx, em.ID)

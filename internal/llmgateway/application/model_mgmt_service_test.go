@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 )
@@ -36,7 +37,7 @@ func (r *modelMgmtRepo) Get(_ context.Context, id string) (*domain.Model, error)
 func (r *modelMgmtRepo) List(context.Context, port.ModelFilter) ([]domain.Model, error) {
 	return nil, r.err
 }
-func (r *modelMgmtRepo) Update(context.Context, *domain.Model) error { return r.err }
+func (r *modelMgmtRepo) Update(context.Context, *domain.Model, string, *auditdomain.ResourceChangeAuditEvent) error { return r.err }
 func (r *modelMgmtRepo) UpsertDiscovered(
 	context.Context, string, []domain.Model,
 ) ([]domain.Model, error) {

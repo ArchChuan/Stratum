@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 )
@@ -37,14 +38,19 @@ func NewPgModelRepo(pool *pgxpool.Pool) *PgModelRepo {
 // Create inserts a new model row and populates DB-generated timestamps on m.
 func (r *PgModelRepo) Create(ctx context.Context, m *domain.Model) error {
 	caps := modelCapsToStrings(m.Capabilities)
+	sampling, err := encodeSamplingParams(m.SamplingParams)
+	if err != nil {
+		return fmt.Errorf("create model: %w", err)
+	}
 	return r.pool.QueryRow(ctx,
 		`INSERT INTO public.models (id, provider_id, name, display_name, capabilities,
-		 context_window, max_tokens, input_price, output_price, recommended, enabled, provider_managed)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		 context_window, max_tokens, input_price, output_price, recommended, enabled, provider_managed,
+		 sampling_params, max_temperature)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		 RETURNING created_at, updated_at`,
 		m.ID, m.ProviderID, m.Name, m.DisplayName, caps,
 		m.ContextWindow, m.MaxTokens, m.InputPrice, m.OutputPrice,
-		m.Recommended, m.Enabled, m.ProviderManaged,
+		m.Recommended, m.Enabled, m.ProviderManaged, sampling, m.MaxTemperature,
 	).Scan(&m.CreatedAt, &m.UpdatedAt)
 }
 
@@ -52,17 +58,24 @@ func (r *PgModelRepo) Create(ctx context.Context, m *domain.Model) error {
 func (r *PgModelRepo) Get(ctx context.Context, id string) (*domain.Model, error) {
 	var m domain.Model
 	var caps []string
+	var sampling []byte
 	err := r.pool.QueryRow(ctx,
 		`SELECT id, provider_id, name, display_name, capabilities,
 		 context_window, max_tokens, input_price, output_price, recommended, default_embedding,
-		 enabled, provider_managed, created_at, updated_at FROM public.models WHERE id=$1`, id,
+		 enabled, provider_managed, sampling_params, max_temperature, created_at, updated_at
+		 FROM public.models WHERE id=$1`, id,
 	).Scan(&m.ID, &m.ProviderID, &m.Name, &m.DisplayName, &caps,
 		&m.ContextWindow, &m.MaxTokens, &m.InputPrice, &m.OutputPrice,
-		&m.Recommended, &m.DefaultEmbedding, &m.Enabled, &m.ProviderManaged, &m.CreatedAt, &m.UpdatedAt)
+		&m.Recommended, &m.DefaultEmbedding, &m.Enabled, &m.ProviderManaged,
+		&sampling, &m.MaxTemperature, &m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("get model: %w", err)
 	}
 	m.Capabilities = stringsToModelCaps(caps)
+	m.SamplingParams, err = decodeSamplingParams(sampling)
+	if err != nil {
+		return nil, fmt.Errorf("get model: %w", err)
+	}
 	return &m, nil
 }
 
@@ -70,7 +83,7 @@ func (r *PgModelRepo) Get(ctx context.Context, id string) (*domain.Model, error)
 func (r *PgModelRepo) List(ctx context.Context, filter port.ModelFilter) ([]domain.Model, error) {
 	query := `SELECT id, provider_id, name, display_name, capabilities,
 	          context_window, max_tokens, input_price, output_price, recommended, default_embedding,
-	          enabled, provider_managed, created_at, updated_at FROM public.models`
+	          enabled, provider_managed, sampling_params, max_temperature, created_at, updated_at FROM public.models`
 	var args []any
 	argIdx := 1
 	var conds []string
@@ -103,12 +116,18 @@ func (r *PgModelRepo) List(ctx context.Context, filter port.ModelFilter) ([]doma
 	for rows.Next() {
 		var m domain.Model
 		var caps []string
+		var sampling []byte
 		if err := rows.Scan(&m.ID, &m.ProviderID, &m.Name, &m.DisplayName, &caps,
 			&m.ContextWindow, &m.MaxTokens, &m.InputPrice, &m.OutputPrice,
-			&m.Recommended, &m.DefaultEmbedding, &m.Enabled, &m.ProviderManaged, &m.CreatedAt, &m.UpdatedAt); err != nil {
+			&m.Recommended, &m.DefaultEmbedding, &m.Enabled, &m.ProviderManaged,
+			&sampling, &m.MaxTemperature, &m.CreatedAt, &m.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("list models: scan: %w", err)
 		}
 		m.Capabilities = stringsToModelCaps(caps)
+		m.SamplingParams, err = decodeSamplingParams(sampling)
+		if err != nil {
+			return nil, fmt.Errorf("list models: %w", err)
+		}
 		out = append(out, m)
 	}
 	if err := rows.Err(); err != nil {
@@ -129,22 +148,42 @@ func joinConditions(conds []string) string {
 	return out
 }
 
-// Update modifies an editable model. Returns an error if not found.
-func (r *PgModelRepo) Update(ctx context.Context, m *domain.Model) error {
+// Update modifies an editable model and writes the resource change audit in the
+// same transaction (audit 表位于租户 schema，事务内 SET LOCAL search_path 切换；
+// tenantID 供审计归属)。Returns an error if not found。
+func (r *PgModelRepo) Update(ctx context.Context, m *domain.Model, tenantID string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	tx, err := beginTenantTx(ctx, r.pool, tenantID)
+	if err != nil {
+		return fmt.Errorf("update model: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	caps := modelCapsToStrings(m.Capabilities)
-	tag, err := r.pool.Exec(ctx,
+	sampling, err := encodeSamplingParams(m.SamplingParams)
+	if err != nil {
+		return fmt.Errorf("update model: %w", err)
+	}
+	tag, err := tx.Exec(ctx,
 		`UPDATE public.models SET display_name=$1, capabilities=$2, context_window=$3, max_tokens=$4,
 		 input_price=$5, output_price=$6, recommended=$7, enabled=$8, updated_at=now(),
+		 sampling_params=$9, max_temperature=$10,
 		 default_embedding = default_embedding AND $8 AND 'embedding' = ANY($2)
-		 WHERE id=$9`,
+		 WHERE id=$11`,
 		m.DisplayName, caps, m.ContextWindow, m.MaxTokens,
-		m.InputPrice, m.OutputPrice, m.Recommended, m.Enabled, m.ID,
+		m.InputPrice, m.OutputPrice, m.Recommended, m.Enabled,
+		sampling, m.MaxTemperature, m.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("update model: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("model not found: %s", m.ID)
+	}
+	if err := insertAuditTx(ctx, tx, tenantID, audit); err != nil {
+		return fmt.Errorf("update model: audit: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("update model: commit: %w", err)
 	}
 	return nil
 }
@@ -227,11 +266,12 @@ func (r *PgModelRepo) upsertSyncModel(ctx context.Context, tx pgx.Tx, providerID
 }
 
 // upsertReadBack 在事务内读回该 provider 全部模型（按 name 排序）并转为 domain.Model。
+// 新列 sampling_params/max_temperature 一并读回（默认 '{}'/NULL 时解码为 nil）。
 func (r *PgModelRepo) upsertReadBack(ctx context.Context, tx pgx.Tx, providerID string) ([]domain.Model, error) {
 	rows, err := tx.Query(ctx,
 		`SELECT id, provider_id, name, display_name, capabilities,
 		 context_window, max_tokens, input_price, output_price, recommended, default_embedding,
-		 enabled, provider_managed, created_at, updated_at
+		 enabled, provider_managed, sampling_params, max_temperature, created_at, updated_at
 		 FROM public.models WHERE provider_id=$1 ORDER BY name`,
 		providerID)
 	if err != nil {
@@ -242,13 +282,19 @@ func (r *PgModelRepo) upsertReadBack(ctx context.Context, tx pgx.Tx, providerID 
 	for rows.Next() {
 		var model domain.Model
 		var caps []string
+		var sampling []byte
 		if err := rows.Scan(&model.ID, &model.ProviderID, &model.Name,
 			&model.DisplayName, &caps, &model.ContextWindow, &model.MaxTokens,
 			&model.InputPrice, &model.OutputPrice, &model.Recommended, &model.DefaultEmbedding,
-			&model.Enabled, &model.ProviderManaged, &model.CreatedAt, &model.UpdatedAt); err != nil {
+			&model.Enabled, &model.ProviderManaged, &sampling, &model.MaxTemperature,
+			&model.CreatedAt, &model.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("upsert models: scan: %w", err)
 		}
 		model.Capabilities = stringsToModelCaps(caps)
+		model.SamplingParams, err = decodeSamplingParams(sampling)
+		if err != nil {
+			return nil, fmt.Errorf("upsert models: %w", err)
+		}
 		result = append(result, model)
 	}
 	if err := rows.Err(); err != nil {

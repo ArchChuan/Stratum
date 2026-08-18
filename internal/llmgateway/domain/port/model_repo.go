@@ -3,6 +3,8 @@ package port
 import (
 	"context"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 )
 
@@ -19,7 +21,9 @@ type ModelRepository interface {
 	Create(ctx context.Context, m *domain.Model) error
 	Get(ctx context.Context, id string) (*domain.Model, error)
 	List(ctx context.Context, filter ModelFilter) ([]domain.Model, error)
-	Update(ctx context.Context, m *domain.Model) error
+	// Update 更新模型记录并在同一事务内写入资源变更审计（审计表位于租户
+	// schema，事务内 SET LOCAL search_path 切换；tenantID 供审计归属）。
+	Update(ctx context.Context, m *domain.Model, tenantID string, audit *auditdomain.ResourceChangeAuditEvent) error
 	UpsertDiscovered(ctx context.Context, providerID string, models []domain.Model) ([]domain.Model, error)
 	Delete(ctx context.Context, id string) error
 	Toggle(ctx context.Context, id string, enabled bool) error

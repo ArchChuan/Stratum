@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 )
@@ -18,6 +19,11 @@ type UpdateModelInput struct {
 	InputPrice    float64                  `json:"inputPrice"`
 	OutputPrice   float64                  `json:"outputPrice"`
 	Recommended   bool                     `json:"recommended"`
+	// SamplingParams/MaxTemperature 为指针：nil（缺省或 null）= 保留现值；
+	// 非 nil（含空 struct/0）= 覆盖为提供值（空 = 清空默认采样）。
+	// MaxTokens 由 v1 的 clamp 语义升级为显式字段值（0 = 未配置，运行时注入）。
+	SamplingParams *domain.SamplingParams `json:"samplingParams"`
+	MaxTemperature *float64               `json:"maxTemperature"`
 }
 
 // ModelMgmtService wraps model CRUD operations that are initiated by
@@ -53,12 +59,18 @@ func (s *ModelMgmtService) Get(ctx context.Context, tenantID, id string) (*domai
 	return s.repo.Get(ctx, id)
 }
 
-// Update applies partial edits to a model's display and pricing fields.
-func (s *ModelMgmtService) Update(ctx context.Context, tenantID string, input UpdateModelInput) (*domain.Model, error) {
+// Update applies partial edits to a model's display, pricing and parameter
+// fields. 采样参数写时校验（temperature ≤ max_temperature 等）在持久化前
+// 执行；变更与审计在同一事务提交（repo.Update 内部）。
+func (s *ModelMgmtService) Update(ctx context.Context, tenantID, actorID string, input UpdateModelInput) (*domain.Model, error) {
+	if err := domain.ValidateSamplingWrite(input.SamplingParams, input.MaxTemperature); err != nil {
+		return nil, fmt.Errorf("model mgmt: validate: %w", err)
+	}
 	m, err := s.repo.Get(ctx, input.ID)
 	if err != nil {
 		return nil, fmt.Errorf("model mgmt: get: %w", err)
 	}
+	before := modelSafeProjection(m)
 	m.DisplayName = input.DisplayName
 	m.Capabilities = input.Capabilities
 	m.ContextWindow = input.ContextWindow
@@ -66,7 +78,18 @@ func (s *ModelMgmtService) Update(ctx context.Context, tenantID string, input Up
 	m.InputPrice = input.InputPrice
 	m.OutputPrice = input.OutputPrice
 	m.Recommended = input.Recommended
-	if err := s.repo.Update(ctx, m); err != nil {
+	if input.SamplingParams != nil {
+		m.SamplingParams = input.SamplingParams
+	}
+	if input.MaxTemperature != nil {
+		m.MaxTemperature = input.MaxTemperature
+	}
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindModel, m.ID, auditdomain.ChangeOpUpdate, actorID,
+		before, modelSafeProjection(m))
+	if err != nil {
+		return nil, err
+	}
+	if err := s.repo.Update(ctx, m, tenantID, audit); err != nil {
 		return nil, fmt.Errorf("model mgmt: update: %w", err)
 	}
 	s.invalidate()

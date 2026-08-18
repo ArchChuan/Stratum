@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 )
@@ -41,7 +42,7 @@ func TestModelMgmtUpdate(t *testing.T) {
 	repo := &modelMgmtRepo{model: domain.Model{ID: "m1"}}
 	svc := NewModelMgmtService(repo, inv)
 
-	m, err := svc.Update(context.Background(), "t1", UpdateModelInput{
+	m, err := svc.Update(context.Background(), "t1", "u1", UpdateModelInput{
 		ID: "m1", DisplayName: "DeepSeek V4", ContextWindow: 128, MaxTokens: 64,
 		InputPrice: 1.5, OutputPrice: 3.0, Recommended: true,
 		Capabilities: []domain.ModelCapability{domain.CapChat},
@@ -65,7 +66,7 @@ func TestModelMgmtUpdateErrors(t *testing.T) {
 	svc := NewModelMgmtService(repo, inv)
 
 	// 极端情况：Get 失败 → 包装错误，不 invalidate。
-	if _, err := svc.Update(context.Background(), "t1", UpdateModelInput{ID: "m1"}); err == nil {
+	if _, err := svc.Update(context.Background(), "t1", "u1", UpdateModelInput{ID: "m1"}); err == nil {
 		t.Fatal("get failure must error")
 	}
 	if inv.calls != 0 {
@@ -74,7 +75,7 @@ func TestModelMgmtUpdateErrors(t *testing.T) {
 
 	// 极端情况：Update 失败 → 包装错误，不 invalidate。
 	svc2 := NewModelMgmtService(&failUpdateRepo{modelMgmtRepo: modelMgmtRepo{model: domain.Model{ID: "m1"}}}, inv)
-	if _, err := svc2.Update(context.Background(), "t1", UpdateModelInput{ID: "m1"}); err == nil {
+	if _, err := svc2.Update(context.Background(), "t1", "u1", UpdateModelInput{ID: "m1"}); err == nil {
 		t.Fatal("update failure must error")
 	}
 	if inv.calls != 0 {
@@ -115,7 +116,7 @@ func (r *failUpdateRepo) Get(context.Context, string) (*domain.Model, error) {
 	return &r.model, nil
 }
 
-func (r *failUpdateRepo) Update(context.Context, *domain.Model) error {
+func (r *failUpdateRepo) Update(context.Context, *domain.Model, string, *auditdomain.ResourceChangeAuditEvent) error {
 	return errors.New("update boom")
 }
 

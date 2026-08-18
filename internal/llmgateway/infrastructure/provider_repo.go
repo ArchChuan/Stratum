@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/byteBuilderX/stratum/pkg/observability"
@@ -47,11 +48,21 @@ func (r *PgProviderRepo) Create(ctx context.Context, p *domain.Provider) error {
 	if err != nil {
 		return fmt.Errorf("create provider: encrypt api key: %w", err)
 	}
+	extra, err := encodeStringMap(p.ExtraHeaders)
+	if err != nil {
+		return fmt.Errorf("create provider: %w", err)
+	}
+	sampling, err := encodeJSONMap(p.DefaultSampling)
+	if err != nil {
+		return fmt.Errorf("create provider: %w", err)
+	}
 	return r.pool.QueryRow(ctx,
-		`INSERT INTO public.providers (id, name, kind, base_url, api_key, default_model, enabled)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7)
+		`INSERT INTO public.providers (id, name, kind, base_url, api_key, default_model, enabled,
+		 extra_headers, default_sampling)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 		 RETURNING created_at, updated_at`,
 		p.ID, p.Name, string(p.Kind), p.BaseURL, apiKey, p.DefaultModel, p.Enabled,
+		extra, sampling,
 	).Scan(&p.CreatedAt, &p.UpdatedAt)
 }
 
@@ -59,11 +70,13 @@ func (r *PgProviderRepo) Create(ctx context.Context, p *domain.Provider) error {
 func (r *PgProviderRepo) Get(ctx context.Context, id string) (*domain.Provider, error) {
 	var p domain.Provider
 	var kind string
+	var extra, sampling []byte
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, name, kind, base_url, api_key, default_model, enabled, created_at, updated_at
+		`SELECT id, name, kind, base_url, api_key, default_model, enabled,
+		 extra_headers, default_sampling, created_at, updated_at
 		 FROM public.providers WHERE id=$1`, id,
 	).Scan(&p.ID, &p.Name, &kind, &p.BaseURL, &p.APIKey, &p.DefaultModel, &p.Enabled,
-		&p.CreatedAt, &p.UpdatedAt)
+		&extra, &sampling, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("get provider: %w", err)
 	}
@@ -71,13 +84,22 @@ func (r *PgProviderRepo) Get(ctx context.Context, id string) (*domain.Provider, 
 		return nil, err
 	}
 	p.Kind = domain.ProviderKind(kind)
+	p.ExtraHeaders, err = decodeStringMap(extra)
+	if err != nil {
+		return nil, fmt.Errorf("get provider: %w", err)
+	}
+	p.DefaultSampling, err = decodeJSONMap(sampling)
+	if err != nil {
+		return nil, fmt.Errorf("get provider: %w", err)
+	}
 	return &p, nil
 }
 
 // List returns all providers, ordered by creation time.
 func (r *PgProviderRepo) List(ctx context.Context) ([]domain.Provider, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, name, kind, base_url, api_key, default_model, enabled, created_at, updated_at
+		`SELECT id, name, kind, base_url, api_key, default_model, enabled,
+		 extra_headers, default_sampling, created_at, updated_at
 		 FROM public.providers ORDER BY created_at`)
 	if err != nil {
 		return nil, fmt.Errorf("list providers: %w", err)
@@ -88,11 +110,20 @@ func (r *PgProviderRepo) List(ctx context.Context) ([]domain.Provider, error) {
 	for rows.Next() {
 		var p domain.Provider
 		var kind string
+		var extra, sampling []byte
 		if err := rows.Scan(&p.ID, &p.Name, &kind, &p.BaseURL, &p.APIKey,
-			&p.DefaultModel, &p.Enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			&p.DefaultModel, &p.Enabled, &extra, &sampling, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("list providers: scan: %w", err)
 		}
 		p.Kind = domain.ProviderKind(kind)
+		p.ExtraHeaders, err = decodeStringMap(extra)
+		if err != nil {
+			return nil, fmt.Errorf("list providers: %w", err)
+		}
+		p.DefaultSampling, err = decodeJSONMap(sampling)
+		if err != nil {
+			return nil, fmt.Errorf("list providers: %w", err)
+		}
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
@@ -124,15 +155,25 @@ func (r *PgProviderRepo) List(ctx context.Context) ([]domain.Provider, error) {
 func (r *PgProviderRepo) GetMeta(ctx context.Context, id string) (*domain.Provider, error) {
 	var p domain.Provider
 	var kind string
+	var extra, sampling []byte
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, name, kind, base_url, default_model, enabled, created_at, updated_at
+		`SELECT id, name, kind, base_url, default_model, enabled,
+		 extra_headers, default_sampling, created_at, updated_at
 		 FROM public.providers WHERE id=$1`, id,
 	).Scan(&p.ID, &p.Name, &kind, &p.BaseURL, &p.DefaultModel, &p.Enabled,
-		&p.CreatedAt, &p.UpdatedAt)
+		&extra, &sampling, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("get provider meta: %w", err)
 	}
 	p.Kind = domain.ProviderKind(kind)
+	p.ExtraHeaders, err = decodeStringMap(extra)
+	if err != nil {
+		return nil, fmt.Errorf("get provider meta: %w", err)
+	}
+	p.DefaultSampling, err = decodeJSONMap(sampling)
+	if err != nil {
+		return nil, fmt.Errorf("get provider meta: %w", err)
+	}
 	return &p, nil
 }
 
@@ -156,10 +197,12 @@ func (r *PgProviderRepo) decryptProviderKey(p *domain.Provider) error {
 	return nil
 }
 
-// Update modifies an existing provider. An empty APIKey keeps the stored
-// ciphertext unchanged (CASE WHEN); a non-empty APIKey is encrypted at rest
-// before being written. 与 GetMeta 配合：调用方不需要解密旧 key 也能重存。
-func (r *PgProviderRepo) Update(ctx context.Context, p *domain.Provider) error {
+// Update modifies an existing provider and writes the resource change audit in
+// the same transaction (audit 表位于租户 schema，事务内 SET LOCAL search_path
+// 切换；tenantID 供审计归属)。An empty APIKey keeps the stored ciphertext
+// unchanged (CASE WHEN); a non-empty APIKey is encrypted at rest before being
+// written. 与 GetMeta 配合：调用方不需要解密旧 key 也能重存。
+func (r *PgProviderRepo) Update(ctx context.Context, p *domain.Provider, tenantID string, audit *auditdomain.ResourceChangeAuditEvent) error {
 	apiKey := ""
 	if p.APIKey != "" {
 		enc, err := crypto.EncryptSecret(r.key, p.APIKey)
@@ -168,18 +211,40 @@ func (r *PgProviderRepo) Update(ctx context.Context, p *domain.Provider) error {
 		}
 		apiKey = enc
 	}
-	tag, err := r.pool.Exec(ctx,
+	extra, err := encodeStringMap(p.ExtraHeaders)
+	if err != nil {
+		return fmt.Errorf("update provider: %w", err)
+	}
+	sampling, err := encodeJSONMap(p.DefaultSampling)
+	if err != nil {
+		return fmt.Errorf("update provider: %w", err)
+	}
+	tx, err := beginTenantTx(ctx, r.pool, tenantID)
+	if err != nil {
+		return fmt.Errorf("update provider: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx,
 		`UPDATE public.providers SET name=$1, kind=$2, base_url=$3,
 		 api_key=CASE WHEN $4='' THEN api_key ELSE $4 END,
-		 default_model=$5, enabled=$6, updated_at=now()
-		 WHERE id=$7`,
-		p.Name, string(p.Kind), p.BaseURL, apiKey, p.DefaultModel, p.Enabled, p.ID,
+		 default_model=$5, enabled=$6, updated_at=now(),
+		 extra_headers=$7, default_sampling=$8
+		 WHERE id=$9`,
+		p.Name, string(p.Kind), p.BaseURL, apiKey, p.DefaultModel, p.Enabled,
+		extra, sampling, p.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("update provider: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("provider not found: %s", p.ID)
+	}
+	if err := insertAuditTx(ctx, tx, tenantID, audit); err != nil {
+		return fmt.Errorf("update provider: audit: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("update provider: commit: %w", err)
 	}
 	return nil
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 )
@@ -33,6 +34,11 @@ type UpdateProviderInput struct {
 	BaseURL      string              `json:"baseUrl"`
 	APIKey       string              `json:"apiKey"`
 	DefaultModel string              `json:"defaultModel"`
+	// ExtraHeaders/DefaultSampling 为指针：nil（缺省或 null）= 保留现值；
+	// 非 nil（含空 map）= 覆盖为提供值（空 = 清空）。extra_headers 键在
+	// 持久化前经黑名单校验（写时拒收，运行时不再拦截）。
+	ExtraHeaders    *map[string]string `json:"extraHeaders"`
+	DefaultSampling *map[string]any    `json:"defaultSampling"`
 }
 
 // ProviderService orchestrates LLM provider CRUD operations and
@@ -95,12 +101,19 @@ func (s *ProviderService) Get(ctx context.Context, tenantID, id string) (*domain
 // Update applies partial updates to an existing provider.
 // An empty APIKey means "keep existing". 元数据经 GetMeta 读取（不解密旧 key）：
 // 存量明文/损坏密文的 provider 带新 key 重新保存必须可用，先解密旧 key
-// 会把该 provider 永久锁死（Get 保持 fail closed 不变）。
-func (s *ProviderService) Update(ctx context.Context, tenantID string, input UpdateProviderInput) (*domain.Provider, error) {
+// 会把该 provider 永久锁死（Get 保持 fail closed 不变）。变更与审计在
+// 同一事务提交（repo.Update 内部）。
+func (s *ProviderService) Update(ctx context.Context, tenantID, actorID string, input UpdateProviderInput) (*domain.Provider, error) {
+	if input.ExtraHeaders != nil {
+		if err := domain.ValidateExtraHeaders(*input.ExtraHeaders); err != nil {
+			return nil, fmt.Errorf("provider service: validate: %w", err)
+		}
+	}
 	existing, err := s.repo.GetMeta(ctx, input.ID)
 	if err != nil {
 		return nil, fmt.Errorf("provider service: get for update: %w", err)
 	}
+	before := providerSafeProjection(existing)
 	existing.Name = input.Name
 	existing.Kind = input.Kind
 	existing.BaseURL = input.BaseURL
@@ -108,7 +121,18 @@ func (s *ProviderService) Update(ctx context.Context, tenantID string, input Upd
 	if input.APIKey != "" {
 		existing.APIKey = input.APIKey
 	}
-	if err := s.repo.Update(ctx, existing); err != nil {
+	if input.ExtraHeaders != nil {
+		existing.ExtraHeaders = *input.ExtraHeaders
+	}
+	if input.DefaultSampling != nil {
+		existing.DefaultSampling = *input.DefaultSampling
+	}
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindProvider, existing.ID, auditdomain.ChangeOpUpdate, actorID,
+		before, providerSafeProjection(existing))
+	if err != nil {
+		return nil, err
+	}
+	if err := s.repo.Update(ctx, existing, tenantID, audit); err != nil {
 		return nil, fmt.Errorf("provider service: update: %w", err)
 	}
 	s.invalidate()

@@ -61,13 +61,14 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
+	actorID, _ := userIDFromCtx(c)
 	var input llmapp.UpdateProviderInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
 	input.ID = c.Param("id")
-	provider, err := h.svc.Update(c.Request.Context(), tenantID, input)
+	provider, err := h.svc.Update(c.Request.Context(), tenantID, actorID, input)
 	if err != nil {
 		_ = c.Error(err)
 		return

@@ -261,7 +261,7 @@ func (contractProviderRepo) GetMeta(_ context.Context, _ string) (*llmdomain.Pro
 func (contractProviderRepo) List(_ context.Context) ([]llmdomain.Provider, error) {
 	return nil, nil
 }
-func (contractProviderRepo) Update(_ context.Context, _ *llmdomain.Provider) error {
+func (contractProviderRepo) Update(_ context.Context, _ *llmdomain.Provider, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (contractProviderRepo) Delete(_ context.Context, _ string) error { return nil }
@@ -275,7 +275,7 @@ func (contractModelRepo) Get(_ context.Context, _ string) (*llmdomain.Model, err
 func (contractModelRepo) List(_ context.Context, _ llmport.ModelFilter) ([]llmdomain.Model, error) {
 	return nil, nil
 }
-func (contractModelRepo) Update(_ context.Context, _ *llmdomain.Model) error { return nil }
+func (contractModelRepo) Update(_ context.Context, _ *llmdomain.Model, _ string, _ *auditdomain.ResourceChangeAuditEvent) error { return nil }
 func (contractModelRepo) UpsertDiscovered(_ context.Context, _ string, _ []llmdomain.Model) ([]llmdomain.Model, error) {
 	return nil, nil
 }

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
@@ -53,7 +54,7 @@ func (m *mockModelRepo) Get(ctx context.Context, id string) (*domain.Model, erro
 	return nil, m.err
 }
 
-func (m *mockModelRepo) Update(ctx context.Context, model *domain.Model) error {
+func (m *mockModelRepo) Update(ctx context.Context, model *domain.Model, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return m.err
 }
 
@@ -117,7 +118,7 @@ func (m *mockProviderRepo) List(ctx context.Context) ([]domain.Provider, error) 
 	return out, nil
 }
 
-func (m *mockProviderRepo) Update(ctx context.Context, p *domain.Provider) error {
+func (m *mockProviderRepo) Update(ctx context.Context, p *domain.Provider, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return m.err
 }
 
