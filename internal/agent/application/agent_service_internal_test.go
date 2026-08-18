@@ -7,6 +7,8 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -668,5 +670,46 @@ func TestRevisionConfigFiltersKnowledgeMetadataWithDisabledBinding(t *testing.T)
 		len(cfg.KnowledgeWorkspaceNames) != 1 || cfg.KnowledgeWorkspaceNames[0] != "One" ||
 		len(cfg.KnowledgeWorkspaceDescriptions) != 1 || cfg.KnowledgeWorkspaceDescriptions[0] != "first" {
 		t.Fatalf("disabled knowledge metadata leaked into config: %#v", cfg)
+	}
+}
+
+func TestAgentService_resolveOutputReserve_prefersDBModelMaxTokens(t *testing.T) {
+	cases := []struct {
+		name         string
+		explicit     int
+		details      []domain.TenantModelDetail
+		vendorMaxOut int
+		want         int
+	}{
+		// DB 模型 max_tokens 是权威链头：显式 0 时胜过 vendor 静态表。
+		{name: "db model max_tokens beats vendor table",
+			details:      []domain.TenantModelDetail{{Model: "qwen-turbo", MaxTokens: 8192}},
+			vendorMaxOut: 4096, want: 8192},
+		// 显式配置永远最高优先。
+		{name: "explicit max_tokens wins over db",
+			explicit: 2048, details: []domain.TenantModelDetail{{Model: "qwen-turbo", MaxTokens: 8192}},
+			vendorMaxOut: 4096, want: 2048},
+		// DB 权威 0（未知）→ vendor 表。
+		{name: "falls back to vendor table when db unknown",
+			details:      []domain.TenantModelDetail{{Model: "qwen-turbo"}},
+			vendorMaxOut: 4096, want: 4096},
+		// DB 与 vendor 都无 → 常量兜底。
+		{name: "falls back to default reserve",
+			details: []domain.TenantModelDetail{{Model: "qwen-turbo"}}, want: constants.DefaultOutputReserveTokens},
+		// 模型不在租户目录 → vendor 表。
+		{name: "missing model falls back to vendor table",
+			details:      []domain.TenantModelDetail{{Model: "other-model", MaxTokens: 8192}},
+			vendorMaxOut: 4096, want: 4096},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewAgentService(AgentServiceDeps{
+				ModelDetailsProvider: &assistantModelDetailsStub{details: tc.details},
+				VendorWindowLookup:   func(string) (int, int) { return 32768, tc.vendorMaxOut },
+				Logger:               zap.NewNop(),
+			})
+			got := svc.resolveOutputReserve(context.Background(), "tenant-1", "qwen-turbo", tc.explicit)
+			require.Equal(t, tc.want, got)
+		})
 	}
 }

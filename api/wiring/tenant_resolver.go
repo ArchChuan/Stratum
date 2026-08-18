@@ -167,6 +167,7 @@ func (r *tenantCapabilityResolver) ListTenantModelDetails(ctx context.Context, t
 			Capabilities:    capabilities,
 			Enabled:         m.Enabled,
 			ProviderManaged: m.ProviderManaged,
+			MaxTokens:       m.MaxTokens,
 		})
 	}
 	return details, nil

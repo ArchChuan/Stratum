@@ -22,6 +22,9 @@ type TenantModelDetail struct {
 	Capabilities    []string `json:"capabilities"`
 	Enabled         bool     `json:"enabled"`
 	ProviderManaged bool     `json:"providerManaged"`
+	// MaxTokens 是模型权威最大输出（0=未知）；预算账本链头读取，与
+	// llmgateway L1 注入保持一致，欠预留会被 provider 400 永久中止。
+	MaxTokens int `json:"maxTokens"`
 }
 
 // SystemAssistantProfile is an immutable, code-reviewed runtime definition.

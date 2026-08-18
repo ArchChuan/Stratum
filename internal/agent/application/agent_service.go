@@ -2140,8 +2140,8 @@ func (s *AgentService) assembleOptions(
 		WithMaxSteps(a.GetConfig().MaxIterations),
 		WithMaxContextTokens(window),
 		WithWindowSource(string(windowSrc)),
-		// outputReserve 与窗口同一来源链：显式 max_tokens > vendor maxOut > 常量。
-		WithOutputReserve(s.resolveOutputReserve(a.GetConfig().LLMModel, a.GetConfig().MaxTokens)),
+		// outputReserve 与窗口同一来源链：显式 max_tokens > DB 模型权威 > vendor maxOut > 常量。
+		WithOutputReserve(s.resolveOutputReserve(ctx, meta.TenantID, a.GetConfig().LLMModel, a.GetConfig().MaxTokens)),
 	}
 	if req.MaxSteps > 0 {
 		options = append(options, WithMaxSteps(req.MaxSteps))
@@ -3139,12 +3139,26 @@ func (s *AgentService) resolveExecutionWindow(
 }
 
 // resolveOutputReserve 解析主模型输出预留（Spec 第 2 节 outputReserve 来源链）：
-// 显式 cfg.MaxTokens（>0）> vendor 表 maxOut > DefaultOutputReserveTokens。
-// 局限：execution 级 effective-parameter 覆写对 max_tokens 的调整在此不可见
-// （service 层解析时以 agent 配置为准），保守方向一致，不放大可用窗口。
-func (s *AgentService) resolveOutputReserve(model string, explicitMaxTokens int) int {
+// 显式 cfg.MaxTokens（>0）> DB 模型 max_tokens（模型管理权威）> vendor 表
+// maxOut > DefaultOutputReserveTokens。DB 权威插在链头：预留 < 实际发送
+// max_tokens 时发送值会溢出上下文窗口被 provider 400 永久中止，预留必须
+// 与 llmgateway L1 注入一致。局限：execution 级 effective-parameter 覆写
+// 对 max_tokens 的调整在此不可见（service 层解析时以 agent 配置为准），
+// 保守方向一致，不放大可用窗口。
+func (s *AgentService) resolveOutputReserve(
+	ctx context.Context, tenantID, model string, explicitMaxTokens int,
+) int {
 	if explicitMaxTokens > 0 {
 		return explicitMaxTokens
+	}
+	if s.deps.ModelDetailsProvider != nil {
+		if details, err := s.deps.ModelDetailsProvider.ListTenantModelDetails(ctx, tenantID); err == nil {
+			for _, d := range details {
+				if d.Model == model && d.MaxTokens > 0 {
+					return d.MaxTokens
+				}
+			}
+		}
 	}
 	if s.deps.VendorWindowLookup != nil {
 		if _, maxOut := s.deps.VendorWindowLookup(model); maxOut > 0 {
