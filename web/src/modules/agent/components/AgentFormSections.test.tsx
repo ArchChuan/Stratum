@@ -137,6 +137,37 @@ describe('AgentFormSections', () => {
     expect(screen.getByText(/平台兜底 4,?096 tokens/)).toBeInTheDocument();
   });
 
+  it('warns about truncated thinking when the selected model supports reasoning', () => {
+    render(
+      <Form initialValues={{ llmModel: 'qwq-32b' }}>
+        <AgentFormSections
+          skills={[]}
+          mcpTools={[]}
+          workspaces={[]}
+          groupedModels={[{ provider: 'Qwen', models: [{ value: 'qwq-32b', label: 'qwq-32b', reasoning: true, maxTokens: 8192 }] }]}
+        />
+      </Form>,
+    );
+
+    expect(screen.getByText(/推理模型该值含思考长度，过低会截断思考/)).toBeInTheDocument();
+    expect(screen.getByText(/推荐 8,?192 tokens（模型最大输出）/)).toBeInTheDocument();
+  });
+
+  it('omits the reasoning hint for non-reasoning models', () => {
+    render(
+      <Form initialValues={{ llmModel: 'glm-5.2' }}>
+        <AgentFormSections
+          skills={[]}
+          mcpTools={[]}
+          workspaces={[]}
+          groupedModels={[{ provider: '托管厂商', models: [{ value: 'glm-5.2', label: 'glm-5.2', reasoning: false, maxTokens: 8192 }] }]}
+        />
+      </Form>,
+    );
+
+    expect(screen.queryByText(/推理模型该值含思考长度/)).not.toBeInTheDocument();
+  });
+
   it('hides temperature and compaction fields for the system assistant only', () => {
     const { rerender } = render(
       <Form>
