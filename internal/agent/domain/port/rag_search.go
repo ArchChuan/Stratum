@@ -37,10 +37,13 @@ type RAGSearchSource = domain.RAGSearchSource
 // RAGSearchEvidence is the structured result of a knowledge search: the
 // concatenated context block plus the chunk-level provenance that produced
 // it. Tool observations merge the provenance into their metadata so traces
-// record retrieval evidence alongside the injected context.
+// record retrieval evidence alongside the injected context. NoAnswer is
+// non-nil when the search aggregated to "no answer" across all workspaces
+// (reason explains why); nil means at least one workspace produced sources.
 type RAGSearchEvidence struct {
-	Content string
-	Sources []RAGSearchSource
+	Content  string
+	Sources  []RAGSearchSource
+	NoAnswer *domain.NoAnswerInfo
 }
 
 // RAGSearchEvidenceProvider is an optional capability of wiring adapters

@@ -111,10 +111,47 @@ export interface DocAccessValues {
   allowedRoleIDs?: string[];
 }
 
+// NoAnswerReason 与后端 pkg/constants 的 NoAnswerReason 枚举逐值对齐
+// （跨 context 单一事实源，值进入响应契约与指标 label）。
+export const noAnswerReasons = [
+  'no_sources',
+  'threshold_filtered',
+  'access_restricted',
+  'insufficient_evidence',
+  'unsupported_mode',
+] as const;
+export type NoAnswerReason = (typeof noAnswerReasons)[number];
+
+// 无答案结构化信号（snake_case 对齐 /knowledge/query 响应契约）。
+export interface NoAnswerInfo {
+  reason: NoAnswerReason;
+  retrieved_count: number;
+  filtered_count: number;
+  best_score: number;
+  retried: boolean;
+  rewritten_query: string;
+  detail: string;
+}
+
+export const noAnswerInfoSchema = z.object({
+  reason: z.enum(noAnswerReasons),
+  retrieved_count: z.number().optional().default(0),
+  filtered_count: z.number().optional().default(0),
+  best_score: z.number().optional().default(0),
+  retried: z.boolean().optional().default(false),
+  rewritten_query: z.string().optional().default(''),
+  detail: z.string().optional().default(''),
+});
+export type ParsedNoAnswerInfo = z.infer<typeof noAnswerInfoSchema>;
+
 export const queryResultSchema = z
   .object({
     answer: z.string().optional().default(''),
     sources: z.array(querySourceSchema).optional().default([]),
+    // 无答案信号：旧后端无此键，null 兼容（.nullable().optional()）。
+    no_answer: noAnswerInfoSchema.nullable().optional(),
+    best_score: z.number().optional().default(0),
+    candidate_count: z.number().optional().default(0),
   })
   .passthrough();
 export type QueryResult = z.infer<typeof queryResultSchema>;

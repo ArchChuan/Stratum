@@ -55,6 +55,23 @@ export const executeKnowledgePack = async ({ actor, pool, evidence, webURL, fixt
       "SELECT (config->>'top_k')::int AS top_k FROM rag_workspaces WHERE name=$1", [workspace]))
       .toEqual([{ top_k: 6 }]);
 
+    // ── P1 拒答场景 1：空库查询 → no_sources + best_score=0 ──────────────
+    // 上传文档前 query：响应带 no_answer.reason=no_sources（retrieved_count
+    // 为 0、best_score 恒填 0）；UI 拒答 Alert 替换绿色回答卡。
+    const emptyQueryResponse = waitFor(page, '/knowledge/query', 'POST');
+    await page.getByPlaceholder('输入查询问题...').fill('完全不存在的内容 e2e-empty');
+    await page.getByRole('button', { name: /查\s*询/ }).click();
+    const emptyQueryBody = await (await emptyQueryResponse).json();
+    expect(emptyQueryBody.no_answer.reason).toBe('no_sources');
+    expect(emptyQueryBody.no_answer.retrieved_count).toBe(0);
+    expect(emptyQueryBody.best_score).toBe(0);
+    expect(emptyQueryBody.candidate_count).toBe(0);
+    // Alert message 与 detail 都含「知识库中未检索到相关内容」，正则会命中
+    // 两个节点（strict mode violation），分别精确匹配 message 全文与 detail。
+    await expect(page.getByText('知识库中未检索到相关内容，未基于知识库作答。')).toBeVisible();
+    await expect(page.getByText('知识库中未检索到相关内容', { exact: true })).toBeVisible();
+    await expect(page.getByText('回答', { exact: true })).toHaveCount(0);
+
     const ingestResponse = waitFor(page, '/knowledge/ingest', 'POST');
     await page.locator('input[type="file"]').setInputFiles({
       name: 'stateful-knowledge.txt', mimeType: 'text/plain',
@@ -72,10 +89,49 @@ export const executeKnowledgePack = async ({ actor, pool, evidence, webURL, fixt
     await page.reload();
     await expect(page.getByText('stateful-knowledge.txt', { exact: true })).toBeVisible({ timeout: 15_000 });
 
+    // ── P1 拒答场景 2：阈值全滤 → threshold_filtered + best_score 透传 ────
+    // score_threshold=0.99 全滤：响应带 no_answer.reason=threshold_filtered
+    // + retrieved_count>0 + best_score>0（恒填充，不随过滤归零）；
+    // UI 拒答 Alert 显示过滤统计，绿色回答卡不渲染。
+    const thresholdInput = page.getByLabel('分数阈值');
+    await thresholdInput.fill('0.99');
+    const thresholdUpdate = waitFor(page, `/knowledge/workspaces/${workspace}`, 'PATCH');
+    await page.getByRole('button', { name: /保\s*存/ }).click();
+    expect((await thresholdUpdate).status()).toBe(200);
+    const thresholdRows = await rows<{ score_threshold: number }>(pool, tenantID,
+      "SELECT (config->>'score_threshold')::float AS score_threshold FROM rag_workspaces WHERE name=$1", [workspace]);
+    expect(thresholdRows[0]?.score_threshold).toBeCloseTo(0.99, 2);
+
+    const filteredQueryResponse = waitFor(page, '/knowledge/query', 'POST');
+    await page.getByPlaceholder('输入查询问题...').fill('stateful acceptance 验证什么？');
+    await page.getByRole('button', { name: /查\s*询/ }).click();
+    const filteredBody = await (await filteredQueryResponse).json();
+    expect(filteredBody.no_answer.reason).toBe('threshold_filtered');
+    expect(filteredBody.no_answer.retrieved_count).toBeGreaterThan(0);
+    expect(filteredBody.no_answer.filtered_count).toBeGreaterThan(0);
+    expect(filteredBody.best_score).toBeGreaterThan(0);
+    // 与场景 1 同理：精确匹配 message 全文；统计句断言 detail 节点。
+    await expect(page.getByText('检索到的候选均未达到相关性阈值，未基于知识库作答。')).toBeVisible();
+    await expect(page.getByText(/阈值过滤 \d+ 条/)).toBeVisible();
+    await expect(page.getByText('回答', { exact: true })).toHaveCount(0);
+
+    // ── P1 拒答场景 3：恢复默认 → 有答案、无 no_answer 键（omitempty）────
+    // score_threshold 回写 0：响应无 no_answer 键、best_score>0、sources
+    // 非空；UI 绿色回答卡恢复（响应逐字节兼容旧后端，仅新增字段）。
+    await thresholdInput.fill('0');
+    const restoreUpdate = waitFor(page, `/knowledge/workspaces/${workspace}`, 'PATCH');
+    await page.getByRole('button', { name: /保\s*存/ }).click();
+    expect((await restoreUpdate).status()).toBe(200);
+
     const queryResponse = waitFor(page, '/knowledge/query', 'POST');
     await page.getByPlaceholder('输入查询问题...').fill('stateful acceptance 验证什么？');
     await page.getByRole('button', { name: /查\s*询/ }).click();
     expect((await queryResponse).status()).toBe(200);
+    const queryBody = await (await queryResponse).json();
+    expect(queryBody.no_answer).toBeUndefined();
+    expect(queryBody.best_score).toBeGreaterThan(0);
+    expect(queryBody.sources.length).toBeGreaterThan(0);
+    await expect(page.getByText('回答', { exact: true })).toBeVisible();
     await expect(page.getByText(/stateful/i).last()).toBeVisible();
 
     const deleteDocumentButton = page.getByRole('button', { name: '删除文档' });
@@ -99,9 +155,9 @@ export const executeKnowledgePack = async ({ actor, pool, evidence, webURL, fixt
       'SELECT count(*)::text AS count FROM rag_workspaces WHERE name=$1', [workspace]))
       .toEqual([{ count: '0' }]);
 
-    evidence.ui.push('Knowledge CRUD, ingest, query, and document cleanup completed through Chromium controls');
-    evidence.http.push('Knowledge route and mutation responses succeeded');
-    evidence.database.push('Knowledge workspace and document state reconciled');
+    evidence.ui.push('Knowledge CRUD, ingest, query, no-answer refusal alerts, and document cleanup completed through Chromium controls');
+    evidence.http.push('Knowledge route, mutation, and query refusal responses succeeded');
+    evidence.database.push('Knowledge workspace, document, and config state reconciled');
   } finally {
     await runCleanupTasks([
       async () => {

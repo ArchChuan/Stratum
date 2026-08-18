@@ -144,6 +144,19 @@ func (a ragSearchAdapter) SearchKnowledgeWithEvidence(
 			Score: src.Score, HasScore: src.HasScore,
 		})
 	}
+	// NoAnswer 透传：knowledge 信号 → agent 域类型（字段一一对应，reason
+	// 枚举值跨 context 由 pkg/constants 单一事实源对齐）。
+	if ev.NoAnswer != nil {
+		out.NoAnswer = &domain.NoAnswerInfo{
+			Reason:         domain.NoAnswerReason(ev.NoAnswer.Reason),
+			RetrievedCount: ev.NoAnswer.RetrievedCount,
+			FilteredCount:  ev.NoAnswer.FilteredCount,
+			BestScore:      ev.NoAnswer.BestScore,
+			Retried:        ev.NoAnswer.Retried,
+			RewrittenQuery: ev.NoAnswer.RewrittenQuery,
+			Detail:         ev.NoAnswer.Detail,
+		}
+	}
 	return out, nil
 }
 

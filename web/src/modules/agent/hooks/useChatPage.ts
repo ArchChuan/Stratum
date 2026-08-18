@@ -48,6 +48,7 @@ const makeMessage = (msg: {
   artifacts?: ChatMessage['artifacts'];
   interrupted?: boolean;
   sources?: ChatMessage['sources'];
+  noAnswer?: ChatMessage['noAnswer'];
   taskSnapshot?: ChatMessage['taskSnapshot'];
 }): ChatMessage => ({
   id: msg.id,
@@ -58,6 +59,7 @@ const makeMessage = (msg: {
   artifacts: msg.artifacts,
   interrupted: msg.interrupted,
   sources: msg.sources,
+  noAnswer: msg.noAnswer,
   taskSnapshot: msg.taskSnapshot,
 });
 
@@ -272,6 +274,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
                   artifacts: normalizeArtifacts(st.result?.artifacts),
                   // 滚动升级期旧后端无 sources 字段：?? [] 容错
                   sources: st.result?.sources ?? [],
+                  noAnswer: st.result?.noAnswer,
                   taskSnapshot: parseTaskSnapshot(st.result?.metadata),
                 }),
               ]);
@@ -347,6 +350,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
                 artifacts: normalizeArtifacts(streamResult.artifacts),
                 // P1.2: done payload 的 sources（旧后端无此字段，?? [] 容错）
                 sources: streamResult.sources ?? [],
+                noAnswer: streamResult.noAnswer,
                 taskSnapshot: parseTaskSnapshot(streamResult.metadata),
               }
             : m,

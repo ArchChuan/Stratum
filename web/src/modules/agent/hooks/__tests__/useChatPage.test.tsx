@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { message } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { StreamSnapshot } from '../ChatStreamContext';
 import { useChatPage } from '../useChatPage';
 
 const mocks = vi.hoisted(() => ({
@@ -25,6 +26,8 @@ const mocks = vi.hoisted(() => ({
     accumulatedContent: '',
     streamResult: null as null | {
       output?: string;
+      sources?: unknown[];
+      noAnswer?: { Reason?: string; RetrievedCount?: number };
       artifacts?: Array<{ type: string; diagnosticReport?: { facts?: unknown[] } }>;
     },
     streamError: null,
@@ -34,7 +37,7 @@ const mocks = vi.hoisted(() => ({
     startStream: vi.fn(),
     cancelStream: vi.fn(),
 		clearStreamFailure: vi.fn(),
-    getStreamState: vi.fn(() => ({
+    getStreamState: vi.fn<() => StreamSnapshot>(() => ({
       streaming: false,
       conversationId: null,
       userQuery: null,
@@ -43,6 +46,7 @@ const mocks = vi.hoisted(() => ({
       result: null,
       error: null,
       approval: null,
+      executionId: null,
     })),
   },
 }));
@@ -220,5 +224,58 @@ describe('useChatPage tool approvals', () => {
 		expect(mocks.getAgent).toHaveBeenCalledWith(fixedID);
 		await act(async () => result.current.handleCreateConv());
 		expect(mocks.createConversation).toHaveBeenCalledWith(fixedID);
+	});
+
+	it('copies noAnswer from the SSE done payload into the assistant message', async () => {
+		mocks.listAgents.mockResolvedValue([{ id: 'system', name: '平台使用小助手', isSystem: true }]);
+		mocks.listConversations.mockResolvedValue([{ id: 'conversation-1', name: 'Conversation' }]);
+		const { result, rerender } = renderHook(() => useChatPage());
+		await waitFor(() => expect(result.current.selectedConv).toBe('conversation-1'));
+		act(() => result.current.setInput('哪些文档没有？'));
+		act(() => result.current.handleSend());
+
+		mocks.stream.streamConversationId = 'conversation-1';
+		mocks.stream.streamDone = true;
+		mocks.stream.streamResult = {
+			output: '未基于知识库作答',
+			sources: [],
+			noAnswer: { Reason: 'no_sources', RetrievedCount: 0 },
+		};
+		rerender();
+
+		await waitFor(() => {
+			const last = result.current.messages[result.current.messages.length - 1];
+			expect(last?.noAnswer?.Reason).toBe('no_sources');
+			expect(last?.sources).toEqual([]);
+		});
+	});
+
+	it('copies noAnswer from the restored stream result during conversation restore', async () => {
+		mocks.listAgents.mockResolvedValue([{ id: 'system', name: '平台使用小助手', isSystem: true }]);
+		mocks.listConversations.mockResolvedValue([{ id: 'conversation-1', name: 'Conversation' }]);
+		mocks.stream.getStreamState.mockReturnValue({
+			streaming: false,
+			conversationId: 'conversation-1',
+			userQuery: '重试的问题',
+			content: '未基于知识库作答',
+			done: true,
+			result: {
+				output: '未基于知识库作答',
+				sources: [],
+				noAnswer: { Reason: 'threshold_filtered', RetrievedCount: 5 },
+			},
+			error: null,
+			approval: null,
+			executionId: null,
+		});
+
+		const { result } = renderHook(() => useChatPage());
+		await waitFor(() => expect(result.current.selectedAgent).toBe('system'));
+		act(() => result.current.setSelectedAgent('system'));
+		await waitFor(() => expect(result.current.selectedConv).toBe('conversation-1'));
+
+		await waitFor(() => {
+			expect(result.current.messages.some((item) => item.noAnswer?.Reason === 'threshold_filtered')).toBe(true);
+		});
 	});
 });

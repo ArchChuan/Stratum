@@ -1002,6 +1002,7 @@ func (a *BaseAgent) collectGraphResult(ctx context.Context, result *AgentResult,
 	result.TraceEvents = enrichTraceEvents(finalState.TraceEvents, ec.cfg.TraceID, ec.cfg.ExecutionID, ec.cfg.ConversationID, ec.agentID, ec.cfg.UserID)
 	result.AssistantToolArtifacts = append([]domain.SystemAssistantToolArtifact(nil), finalState.AssistantToolArtifacts...)
 	result.Sources = append([]port.RAGSearchSource(nil), finalState.CitationSources...)
+	result.NoAnswer = finalState.NoAnswer
 	// 幻觉校验（advisory）：开关开 + 有证据 fn 才执行；checker 内部失败/超时
 	// 返回 nil，不阻塞执行。ViewerID（UserID）空时 checker fail-closed 跳过。
 	if ec.cfg.FactCheck != nil && ec.cfg.FactCheck.Enabled && ec.cfg.RAGSearchFnWithEvidence != nil {

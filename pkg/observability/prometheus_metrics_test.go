@@ -58,6 +58,8 @@ func exerciseAllMetrics(m MetricsProvider) {
 	m.IncScheduledFire("cron", "ok")
 	m.IncRerankRequest("tenant-1", "bge-m3", "ok")
 	m.RecordRerankDuration("bge-m3", 0.2)
+	m.IncNoAnswer("tenant-1", "threshold_filtered")
+	m.IncKnowledgeJudge("qwen-turbo", "ok")
 	m.IncRouteFallback("qwen-plus", "qwen-turbo")
 	m.RecordBudgetRatio("tenant-1", 42)
 	// Audit / Collab / Optimizer / Operation Gate / Schedule skew

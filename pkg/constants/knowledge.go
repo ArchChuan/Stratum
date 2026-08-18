@@ -34,6 +34,15 @@ const (
 	// RerankHTTPTimeout bounds a single external reranker call (10s).
 	RerankHTTPTimeout = 10 * time.Second
 
+	// NoAnswerReason* 是 RAG 无答案信号的固定枚举值（跨 context 单一事实源：
+	// knowledge 与 agent 两侧共同消费，禁止各自拼字符串；值进入响应契约与
+	// 指标 label，禁止动态拼接）。
+	NoAnswerReasonNoSources            = "no_sources"
+	NoAnswerReasonThresholdFiltered    = "threshold_filtered"
+	NoAnswerReasonAccessRestricted     = "access_restricted"
+	NoAnswerReasonInsufficientEvidence = "insufficient_evidence"
+	NoAnswerReasonUnsupportedMode      = "unsupported_mode"
+
 	// MaxMilvusFilterLen is the maximum byte length of a Milvus filter
 	// expression (docs: filters with large `in` lists may fail). When a
 	// doc-level whitelist exceeds this bound the vector leg degrades to
