@@ -283,6 +283,7 @@ type agentExecContext struct {
 	agentID          string
 	agentName        string
 	systemPrompt     string
+	globalSuffix     string
 	llmModel         string
 	capGW            port.CapabilityGateway
 	historyCompactor port.HistoryCompactor
@@ -299,19 +300,20 @@ type agentExecContext struct {
 // agentExecSnapshot is the immutable view of the mutable agent configuration
 // taken under lock at execution start, released before the long LLM call.
 type agentExecSnapshot struct {
-	agentID          string
-	agentName        string
-	agentType        domain.AgentType
-	systemPrompt     string
-	llmModel         string
-	capGW            port.CapabilityGateway
-	historyCompactor port.HistoryCompactor
-	chatStore        ChatStore
-	metrics          observability.MetricsProvider
-	workspaceNames   []string
-	workspaceDescs   []string
-	maxContextTokens int
-	memoryScope      string
+	agentID            string
+	agentName          string
+	agentType          domain.AgentType
+	systemPrompt       string
+	globalSystemSuffix string
+	llmModel           string
+	capGW              port.CapabilityGateway
+	historyCompactor   port.HistoryCompactor
+	chatStore          ChatStore
+	metrics            observability.MetricsProvider
+	workspaceNames     []string
+	workspaceDescs     []string
+	maxContextTokens   int
+	memoryScope        string
 }
 
 // snapshotExecutionConfig copies the mutable configuration under lock and
@@ -355,19 +357,23 @@ func (a *BaseAgent) snapshotExecutionConfig(cfg *ExecutionConfig) agentExecSnaps
 		cfg.MaxContextTokens = a.MaxContextTokens
 	}
 	return agentExecSnapshot{
-		agentID:          a.ID,
-		agentName:        a.Name,
-		agentType:        domain.ReActAgent,
-		systemPrompt:     a.SystemPrompt + globalSystemSuffix(a.GlobalSystemSuffix),
-		llmModel:         a.LLMModel,
-		capGW:            a.CapGateway,
-		historyCompactor: a.HistoryCompactor,
-		chatStore:        a.ChatStore,
-		metrics:          a.metrics,
-		workspaceNames:   a.KnowledgeWorkspaceNames,
-		workspaceDescs:   a.KnowledgeWorkspaceDescriptions,
-		maxContextTokens: cfg.MaxContextTokens,
-		memoryScope:      a.MemoryScope,
+		agentID:   a.ID,
+		agentName: a.Name,
+		agentType: domain.ReActAgent,
+		// 拆分而非拼接：systemPrompt 在预算组装（FixedHeadCap）内截断，
+		// globalSystemSuffix 豁免 head 配额完整注入（事实约束等治理指令
+		// 不得因预算紧张被静默丢弃）。
+		systemPrompt:       a.SystemPrompt,
+		globalSystemSuffix: a.GlobalSystemSuffix,
+		llmModel:           a.LLMModel,
+		capGW:              a.CapGateway,
+		historyCompactor:   a.HistoryCompactor,
+		chatStore:          a.ChatStore,
+		metrics:            a.metrics,
+		workspaceNames:     a.KnowledgeWorkspaceNames,
+		workspaceDescs:     a.KnowledgeWorkspaceDescriptions,
+		maxContextTokens:   cfg.MaxContextTokens,
+		memoryScope:        a.MemoryScope,
 	}
 }
 
@@ -402,8 +408,9 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	// applied to this execution (DB-loaded AgentConfig.SystemPrompt +
 	// global suffix). The production path does not go through the prompt
 	// registry, so the version is a content hash, not a registry revision.
+	// fingerprint 覆盖拼接后的完整 prompt：全局后缀是实际发送文本的一部分。
 	if cfg.SystemPromptVersion == "" && snap.systemPrompt != "" {
-		cfg.SystemPromptVersion = contentVersion(snap.systemPrompt)
+		cfg.SystemPromptVersion = contentVersion(snap.systemPrompt + globalSystemSuffix(snap.globalSystemSuffix))
 	}
 
 	tracer := otel.Tracer("stratum/agent")
@@ -433,7 +440,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 
 	ec := agentExecContext{
 		cfg: cfg, tracer: tracer, agentID: snap.agentID, agentName: snap.agentName,
-		systemPrompt: snap.systemPrompt, llmModel: snap.llmModel, capGW: snap.capGW,
+		systemPrompt: snap.systemPrompt, globalSuffix: snap.globalSystemSuffix, llmModel: snap.llmModel, capGW: snap.capGW,
 		historyCompactor: snap.historyCompactor, maxContextTokens: snap.maxContextTokens,
 		memoryScope: snap.memoryScope, workspaceNames: snap.workspaceNames,
 		workspaceDescs: snap.workspaceDescs, memCtx: memCtx, history: history,
@@ -493,7 +500,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	snap.metrics.RecordAgentExecutionDuration(snap.agentID, string(snap.agentType), result.Duration.Seconds())
 	snap.metrics.RecordAgentStepCount(snap.agentID, string(snap.agentType), result.Steps)
 
-	recordFingerprintAndKPI(snap.metrics, execSpan, requestSpan, snap.agentID, string(snap.agentType), snap.llmModel, snap.systemPrompt, cfg, snap.maxContextTokens, result, status)
+	recordFingerprintAndKPI(snap.metrics, execSpan, requestSpan, snap.agentID, string(snap.agentType), snap.llmModel, snap.systemPrompt+globalSystemSuffix(snap.globalSystemSuffix), cfg, snap.maxContextTokens, result, status)
 
 	return result, execErr
 }
@@ -604,8 +611,9 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 		maxTokens = constants.DefaultAgentContextTokens
 	}
 	// 组装侧与循环侧同一预算账本（I1）：safetyRatio 传同一 resolution 结果。
+	// globalSuffix 走豁免配额通道，预算紧张也不截断平台治理指令。
 	initMessages := BuildContextMessagesWithCompaction(
-		ctx, ec.systemPrompt, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow,
+		ctx, ec.systemPrompt, ec.globalSuffix, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow,
 		ec.cfg.OutputReserve, float64(ec.cfg.CompactionSafetyRatio), ec.historyCompactor,
 	)
 
@@ -704,7 +712,8 @@ func degradeFinalRequest(ctx context.Context, ec agentExecContext, finalState ag
 	if runErr == nil || !agentgraph.IsContextLengthExceeded(runErr) || !isFinalRequest(finalState) {
 		return finalState, runErr
 	}
-	retryMessages := agentgraph.BuildMinimalRetryMessages(ec.systemPrompt, ec.input, finalState.Messages, maxTokens)
+	// 最小请求同样携带完整全局后缀：降级重试不能丢失治理指令。
+	retryMessages := agentgraph.BuildMinimalRetryMessages(ec.systemPrompt+globalSystemSuffix(ec.globalSuffix), ec.input, finalState.Messages, maxTokens)
 	// 复用 routeLLM 语义：非流式单次 Route，RetryFn 对瞬态失败一层退避。
 	finalResp, retryErr := retryMinimalFinalRequest(ctx, ec, retryMessages)
 	if retryErr != nil {
@@ -787,8 +796,9 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 		maxTokens = constants.DefaultAgentContextTokens
 	}
 	// 组装侧与循环侧同一预算账本（I1）：safetyRatio 传同一 resolution 结果。
+	// globalSuffix 走豁免配额通道，预算紧张也不截断平台治理指令。
 	initMessages := BuildContextMessagesWithCompaction(
-		ctx, ec.systemPrompt, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow,
+		ctx, ec.systemPrompt, ec.globalSuffix, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow,
 		ec.cfg.OutputReserve, float64(ec.cfg.CompactionSafetyRatio), ec.historyCompactor,
 	)
 	initMessages = a.maybeInjectTaskResume(ctx, ec, initMessages)
@@ -954,7 +964,9 @@ func (a *BaseAgent) buildPlanNodeExecutor(ec agentExecContext, capGW port.Capabi
 		if graphErr != nil {
 			return agentgraph.PlanNodeExecutionResult{}, graphErr
 		}
-		systemMessage := port.LLMMessage{Role: "system", Content: ec.systemPrompt}
+		// 子循环 system 也携带完整全局后缀：plan 节点执行是独立 LLM 调用，
+		// 治理指令必须同步注入。
+		systemMessage := port.LLMMessage{Role: "system", Content: ec.systemPrompt + globalSystemSuffix(ec.globalSuffix)}
 		goal := node.Goal
 		if len(summaries) > 0 {
 			encoded, _ := json.Marshal(summaries)

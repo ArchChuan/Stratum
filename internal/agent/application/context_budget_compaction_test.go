@@ -123,7 +123,7 @@ func TestBuildContextMessagesWithCompaction(t *testing.T) {
 			}
 			msgs := application.BuildContextMessagesWithCompaction(
 				context.Background(),
-				"你是助手", "", makeHistory(tc.historyLen), "当前问题",
+				"你是助手", "", "", makeHistory(tc.historyLen), "当前问题",
 				tc.maxTokens, tc.window, tc.outputReserve, 0, c,
 			)
 
@@ -158,7 +158,7 @@ func TestBuildContextMessages_UntrustedWrappers(t *testing.T) {
 	// 窗口取大：小预算下 memory 会被 fitSystemAndMemory 的 head 配额截空，
 	// 无法验证 <untrusted_memory> 打标；这里保证 memory 与摘要都能注入。
 	msgs := application.BuildContextMessagesWithCompaction(
-		context.Background(), "你是助手", "记忆内容", makeHistory(30), "当前问题",
+		context.Background(), "你是助手", "", "记忆内容", makeHistory(30), "当前问题",
 		40000, 5, 0, 0, fc,
 	)
 	sys, hasSys := systemContent(msgs)
@@ -197,7 +197,7 @@ func TestCompaction_BackwardCompatible(t *testing.T) {
 	hist := makeHistory(30)
 	legacy := application.BuildContextMessages("sys", "mem", hist, "q", 40000, 5)
 	viaCompaction := application.BuildContextMessagesWithCompaction(
-		context.Background(), "sys", "mem", hist, "q", 40000, 5, 0, 0, nil,
+		context.Background(), "sys", "", "mem", hist, "q", 40000, 5, 0, 0, nil,
 	)
 	if len(legacy) != len(viaCompaction) {
 		t.Fatalf("长度不一致: legacy=%d compaction=%d", len(legacy), len(viaCompaction))
@@ -229,7 +229,7 @@ func TestCompaction_SummaryReserveScalesWithBudget(t *testing.T) {
 	const maxTokens = 300000
 	fc := &fakeCompactor{summary: marker + strings.Repeat("摘", 20000)}
 	msgs := application.BuildContextMessagesWithCompaction(
-		context.Background(), "你是助手", "", makeHistory(30), "当前问题",
+		context.Background(), "你是助手", "", "", makeHistory(30), "当前问题",
 		maxTokens, 5, 0, 0, fc,
 	)
 	if fc.callCount == 0 {
@@ -258,7 +258,7 @@ func TestCompaction_SummaryReserveCappedAtBudget(t *testing.T) {
 	const outputReserve = 50
 	fc := &fakeCompactor{summary: marker + strings.Repeat("摘", 20000)}
 	msgs := application.BuildContextMessagesWithCompaction(
-		context.Background(), "你是助手", "", makeHistory(30), "当前问题",
+		context.Background(), "你是助手", "", "", makeHistory(30), "当前问题",
 		maxTokens, 5, outputReserve, 0, fc,
 	)
 	if fc.callCount == 0 {
@@ -282,10 +282,10 @@ func TestCompaction_FailureRestoresPlainTruncationBudget(t *testing.T) {
 		hist[i] = &application.ChatMessage{Role: "user", Content: strings.Repeat("x", 360)}
 	}
 	want := application.BuildContextMessagesWithCompaction(
-		context.Background(), "sys", "mem", hist, "q", 500, 50, 50, 0, nil,
+		context.Background(), "sys", "", "mem", hist, "q", 500, 50, 50, 0, nil,
 	)
 	got := application.BuildContextMessagesWithCompaction(
-		context.Background(), "sys", "mem", hist, "q", 500, 50, 50, 0,
+		context.Background(), "sys", "", "mem", hist, "q", 500, 50, 50, 0,
 		&fakeCompactor{err: errors.New("unavailable")},
 	)
 
@@ -331,7 +331,7 @@ func TestBuildContextMessages_DegradedUsableKeepsMinimalHead(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			msgs := application.BuildContextMessagesWithCompaction(
 				context.Background(),
-				"你是助手", "记忆内容", makeHistory(5), tc.input,
+				"你是助手", "", "记忆内容", makeHistory(5), tc.input,
 				tc.maxTokens, 5, 0, tc.ratio, nil,
 			)
 			if tc.wantMinimal {
@@ -363,10 +363,10 @@ func TestBuildContextMessages_DegradedUsableKeepsMinimalHead(t *testing.T) {
 func TestBuildContextMessages_SafetyRatioDrivesAssemblyBudget(t *testing.T) {
 	hist := makeHistory(200) // ≈33000 tokens，介于 0.8 与 0.5 ratio 的 HistoryCap 之间
 	loose := application.BuildContextMessagesWithCompaction(
-		context.Background(), "sys", "", hist, "q", 200000, 200, 0, 0.5, nil,
+		context.Background(), "sys", "", "", hist, "q", 200000, 200, 0, 0.5, nil,
 	)
 	strict := application.BuildContextMessagesWithCompaction(
-		context.Background(), "sys", "", hist, "q", 200000, 200, 0, 0.8, nil,
+		context.Background(), "sys", "", "", hist, "q", 200000, 200, 0, 0.8, nil,
 	)
 	if len(loose) <= len(strict) {
 		t.Fatalf("ratio 0.5 应保留更多历史：loose=%d strict=%d", len(loose), len(strict))
@@ -384,14 +384,55 @@ func TestBuildContextMessages_SafetyRatioDrivesAssemblyBudget(t *testing.T) {
 func TestBuildContextMessages_TaskDeductedFromHistoryQuota(t *testing.T) {
 	hist := makeHistory(30) // ≈4950 tokens，两种任务下都超预算
 	small := application.BuildContextMessagesWithCompaction(
-		context.Background(), "sys", "", hist, "q", 5000, 50, 500, 0, nil,
+		context.Background(), "sys", "", "", hist, "q", 5000, 50, 500, 0, nil,
 	)
 	large := application.BuildContextMessagesWithCompaction(
-		context.Background(), "sys", "", hist, strings.Repeat("x", 600), 5000, 50, 500, 0, nil,
+		context.Background(), "sys", "", "", hist, strings.Repeat("x", 600), 5000, 50, 500, 0, nil,
 	)
 	// usable = 5000 − 4000 − 500 = 500；HistoryCap = 500−100−100−task。
 	// "q" → task 1 → 299（保留 1 条 165t 历史）；600 字节 → task 200 → 99（全丢）。
 	if len(small) <= len(large) {
 		t.Fatalf("任务越大 history 配额越小：small=%d large=%d", len(small), len(large))
+	}
+}
+
+// TestBuildContextMessages_GlobalSuffixExemptFromHeadCap 回归防护：全局系统
+// 提示词（平台级治理指令，如"事实与引用"四条款）豁免 FixedHeadCap——
+// 预算紧张时 systemPromptBase 被截断保头，但 globalSuffix 必须完整保留且
+// 紧跟截断后的 base。修复前 globalSuffix 与 base 拼接后整体截断，
+// 尾部治理指令被静默丢弃。
+func TestBuildContextMessages_GlobalSuffixExemptFromHeadCap(t *testing.T) {
+	const suffix = "【全局后缀】事实与引用条款完整内容"
+	longBase := strings.Repeat("基础指令", 600) // ≈2400 字符，远超任意 headCap
+
+	cases := []struct {
+		name      string
+		maxTokens int
+		ratio     float64
+	}{
+		// usable 钳 0 → minimal head 路径（system + user 恰 2 条）。
+		{name: "minimal head 路径", maxTokens: 2000},
+		// usable > 0 但头部配额紧张（aggressive 0.8）→ 正常组装路径截断 base。
+		{name: "正常组装预算紧张", maxTokens: 8000, ratio: 0.8},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msgs := application.BuildContextMessagesWithCompaction(
+				context.Background(), longBase, suffix, "记忆", makeHistory(0), "当前问题",
+				tc.maxTokens, 5, 0, tc.ratio, nil,
+			)
+			if len(msgs) != 2 {
+				t.Fatalf("应恰为 system + user 两条，实际 %d 条", len(msgs))
+			}
+			sys := msgs[0].Content
+			if !strings.Contains(sys, suffix) {
+				t.Fatalf("globalSuffix 未完整保留：system=%q", sys)
+			}
+			// 完整后缀位于截断后的 base 之后（有前缀内容 + 分隔符），
+			// 且 base 被截断而非整体丢弃。
+			if idx := strings.Index(sys, suffix); idx <= 0 {
+				t.Fatalf("globalSuffix 应紧跟截断后的 base，实际 idx=%d system=%q", idx, sys)
+			}
+		})
 	}
 }
