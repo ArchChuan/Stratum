@@ -75,6 +75,18 @@ const (
 	// sources for citation display. Full chunk content stays in the LLM
 	// context; the snippet is display metadata only.
 	MaxSourceSnippetRunes = 200
+	// KnowledgeJudgeTimeout bounds a single sufficiency/faithfulness judge
+	// call; 超时按 fail-closed 降级为"未判定"，不阻塞检索/评估主链路。
+	KnowledgeJudgeTimeout = 15 * time.Second
+	// KnowledgeJudgeMaxTokens caps judge 输出（固定 JSON 结构，1024 充足）。
+	KnowledgeJudgeMaxTokens = 1024
+	// KnowledgeJudgeMaxEvidenceRunes 截断喂给 judge 的聚合证据，防止
+	// 多 workspace 拼接把上下文打爆（judge 只判断充分性，尾部内容
+	// 截断对结论影响有限；与 factcheck 不截断的差异是本方案的成本控制）。
+	KnowledgeJudgeMaxEvidenceRunes = 4000
+	// KnowledgeJudgeDefaultModel 是知识层 judge 的默认模型（独立于
+	// factcheck/evaluation judge，KNOWLEDGE_JUDGE_MODEL 可覆盖）。
+	KnowledgeJudgeDefaultModel = "qwen-turbo"
 )
 
 var milvusUnsafe = regexp.MustCompile(`[^a-zA-Z0-9_]`)

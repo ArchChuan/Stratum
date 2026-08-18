@@ -77,6 +77,10 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 		// injectTenantRoleResolvers (same DB-backed adapter).
 		rag.SetDocRepo(docRepo)
 	}
+	// 证据充分性 judge（生成前门，仅 evidence 路径）：fail-closed——gateway
+	// 不可用或未启用时保持 nil，检索行为与不配置完全一致。单独成方法以
+	// 控制 buildKnowledge 的圈复杂度。
+	c.wireKnowledgeJudge(rag)
 	if c.Platform != nil && c.Platform.Metrics != nil {
 		ingest.SetMetrics(c.Platform.Metrics)
 		rag.SetMetrics(c.Platform.Metrics)
@@ -115,6 +119,24 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 	}
 	c.wireKnowledgeModelExists()
 	return nil
+}
+
+// wireKnowledgeJudge 在 LLM gateway 可用且 KNOWLEDGE_JUDGE_ENABLED 时注入
+// 证据充分性 judge；任一条件不满足保持 nil（fail-closed 放行）。单独成方法
+// 以控制 buildKnowledge 的圈复杂度。
+func (c *Container) wireKnowledgeJudge(rag *knowledge.RAGService) {
+	if c.LLMGateway == nil || c.LLMGateway.Gateway == nil || !c.Config.KnowledgeJudge.Enabled {
+		return
+	}
+	judge := knowledgeJudge{
+		completer: c.LLMGateway.Gateway,
+		model:     c.Config.KnowledgeJudge.Model,
+		timeout:   c.Config.KnowledgeJudge.Timeout,
+	}
+	if c.Platform != nil {
+		judge.metrics = c.Platform.Metrics
+	}
+	rag.SetSufficiencyJudge(judge)
 }
 
 // wireKnowledgeModelExists 在 Platform 提供全局模型目录时注入 knowledge 的

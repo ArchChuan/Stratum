@@ -1751,7 +1751,7 @@ func buildBuiltinTools(workspaceNames, workspaceDescs []string, hasRAG, hasMemor
 		}
 		tools = append(tools, port.ToolDefinition{
 			Name:         "stratum_search_knowledge",
-			Description:  strings.TrimRight(b.String(), "\n"),
+			Description:  strings.TrimRight(b.String(), "\n") + constants.AgentSearchKnowledgeRefusalInstruction,
 			ProviderType: domain.ProviderTypeBuiltin,
 			ProviderID:   "stratum_search_knowledge",
 			CapabilityID: "stratum_search_knowledge",

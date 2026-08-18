@@ -61,6 +61,7 @@ type Config struct {
 	TracePayload            TracePayloadConfig
 	MemoryPipeline          MemoryPipelineConfig
 	AgentFactCheck          AgentFactCheckConfig
+	KnowledgeJudge          KnowledgeJudgeConfig
 	// 热更新运行时状态（Nacos listener 写、wiring 注册回调读）
 	memoryDynamic          atomic.Pointer[MemoryPipelineDynamic]
 	memoryDynamicListeners []func(MemoryPipelineDynamic)
@@ -114,6 +115,15 @@ type AgentFactCheckConfig struct {
 	JudgeModel string
 	TopK       int
 	MaxClaims  int
+}
+
+// KnowledgeJudgeConfig 控制知识层证据充分性 judge（生成前门，仅 evidence
+// 路径挂载）。默认关闭（fail-closed）：未装配/失败/超时全部降级为"未判定"，
+// 行为与不配置时完全一致。模型独立于 factcheck/evaluation judge，不静默回落。
+type KnowledgeJudgeConfig struct {
+	Enabled bool
+	Model   string
+	Timeout time.Duration
 }
 
 func Load() (*Config, error) {
@@ -190,6 +200,12 @@ func Load() (*Config, error) {
 			JudgeModel: getEnv("AGENT_FACTCHECK_JUDGE_MODEL", constants.AgentFactCheckJudgeModel),
 			TopK:       getEnvInt("AGENT_FACTCHECK_TOPK", constants.AgentFactCheckTopK),
 			MaxClaims:  getEnvInt("AGENT_FACTCHECK_MAX_CLAIMS", constants.AgentFactCheckMaxClaims),
+		},
+		KnowledgeJudge: KnowledgeJudgeConfig{
+			Enabled: getEnv("KNOWLEDGE_JUDGE_ENABLED", "") == "true",
+			Model:   getEnv("KNOWLEDGE_JUDGE_MODEL", constants.KnowledgeJudgeDefaultModel),
+			Timeout: time.Duration(getEnvInt("KNOWLEDGE_JUDGE_TIMEOUT_SECONDS",
+				int(constants.KnowledgeJudgeTimeout.Seconds()))) * time.Second,
 		},
 	}
 	return cfg, nil
