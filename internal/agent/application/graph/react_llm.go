@@ -114,10 +114,12 @@ func prepareLLMRequest(ctx context.Context, s *ReActState) ([]port.ToolDefinitio
 		if s.Degraded || len(s.StopLossTools) > 0 {
 			instruction = constants.AgentDegradedFinalAnswerInstruction
 		}
-		messages = append(messages, port.LLMMessage{
-			Role:    "user",
+		// system 级注入：指令进入头部 anchor 区（压缩永不逐出），要求模型基于
+		// 已知分析/工具结果总结已做到的事，并明确告知用户已达最大迭代次数。
+		messages = insertSystemBlockAfterFirstSystem(messages, []port.LLMMessage{{
+			Role:    "system",
 			Content: instruction,
-		})
+		}})
 	}
 	// In-loop compaction: bound the complete request, including any final-step
 	// instruction, without mutating s.Messages (trace/history stay complete).

@@ -275,7 +275,13 @@ func messagesWithActiveSkills(messages []port.LLMMessage, actives []port.SkillAc
 		// D3：多个 skill 并列生效时显式声明冲突自决语义；单个 skill 无冲突不赘述。
 		instructions = append([]port.LLMMessage{{Role: "system", Content: skillParallelConflictNote}}, instructions...)
 	}
-	// 多条指令作为连续块整体插入首个 system 消息之后；逐个插入会反转顺序。
+	return insertSystemBlockAfterFirstSystem(messages, instructions)
+}
+
+// insertSystemBlockAfterFirstSystem 将多条 system 指令作为连续块插入首个
+// system 消息（system prompt）之后：头部 anchor 区压缩永不逐出，指令保持
+// system 级权威且不与历史消息混淆。无 system 消息时块置于最前。
+func insertSystemBlockAfterFirstSystem(messages []port.LLMMessage, instructions []port.LLMMessage) []port.LLMMessage {
 	out := make([]port.LLMMessage, 0, len(messages)+len(instructions))
 	if len(messages) > 0 && messages[0].Role == "system" {
 		out = append(out, messages[0])

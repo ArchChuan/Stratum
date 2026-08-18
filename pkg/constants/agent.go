@@ -50,11 +50,12 @@ const (
 	AgentDegradeReasonStopLossPrefix = "tool_stop_loss:"
 	// AgentToolStopLossObservation 是止损后返回给模型的观察文案（%s = 工具名）。
 	AgentToolStopLossObservation = "Tool %s has been stopped after repeated validation failures. Use an alternative approach."
-	// AgentFinalAnswerInstruction 是 ReAct 达步数上限强制收尾的用户指令。
-	AgentFinalAnswerInstruction = "You have reached the maximum reasoning steps. Based on your analysis and tool results so far, provide your final answer now. Do not call any tools."
+	// AgentFinalAnswerInstruction 是 ReAct 达步数上限强制收尾的 system 指令：
+	// 基于已有分析和工具结果总结已做到的事，并明确告知用户已达最大迭代次数。
+	AgentFinalAnswerInstruction = "You have reached the maximum reasoning steps. Summarize what has been accomplished so far based on your analysis and tool results, and explicitly inform the user that the maximum number of steps has been reached. Do not call any tools."
 	// AgentDegradedFinalAnswerInstruction 是降级执行的强制收尾指令：只基于已
-	// 确认事实回答，禁止声称完成了未验证的操作。
-	AgentDegradedFinalAnswerInstruction = "You have reached the maximum reasoning steps. Based on confirmed facts only, provide your final answer now. Do not claim operations that were not verified successfully. Do not call any tools."
+	// 确认事实总结已做到的事并告知用户已达上限，禁止声称完成了未验证的操作。
+	AgentDegradedFinalAnswerInstruction = "You have reached the maximum reasoning steps. Based on confirmed facts only, summarize what has been accomplished so far and explicitly inform the user that the maximum number of steps has been reached. Do not claim operations that were not verified successfully. Do not call any tools."
 
 	// AgentFactCheckMaxClaims 是幻觉校验最多拆分的 claim 数（控成本，超出截断）。
 	// 一次 judge 调用批量判定全部 claim，claim 过多会拉长单次生成 → 超时降级；
