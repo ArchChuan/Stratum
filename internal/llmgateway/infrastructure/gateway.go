@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 )
@@ -297,6 +298,7 @@ func (g *Gateway) invoke(
 	onToken func(string),
 ) (*CompletionResponse, bool, error) {
 	attemptReq := g.applyCapabilityGate(req, link)
+	attemptReq = g.applyMaxTokensPolicy(attemptReq, link)
 	if stream {
 		return g.invokeStream(ctx, attemptReq, link, onToken)
 	}
@@ -335,6 +337,49 @@ func (g *Gateway) applyCapabilityGate(req *CompletionRequest, link chainLink) *C
 		g.logger.Warn("llmgateway: response_format ignored for model without json_object support",
 			zap.String("model", link.Model),
 			zap.String("response_format", req.ResponseFormat.Type))
+	}
+	return &cloned
+}
+
+// applyMaxTokensPolicy 对本次尝试副本应用 max_tokens 策略（副本修改，绝不改共享 req）。
+// 只治理显式正值（>0），规则按序：
+//   - floor（仅 reasoning）：推理模型 max_tokens 语义 = thinking + answer，低于平台
+//     DefaultOutputReserveTokens 的显式值几乎必然是截断事故（思考长度模型自定），
+//     抬升到兜底值。Anthropic 的 thinkingForBudget 在 client 层做 budget+4096
+//     精细抬升，二者幂等不冲突。
+//   - clamp（已知上限）：LookupModelSpec 命中 maxOut > 0 且值超上限 → 压到 maxOut
+//   - WARN；未知模型（0/0）透传，provider 400 即反馈（显式错误、可恢复，与
+//     未知模型 effort 清空同策略）。clamp 在 floor 之后，硬上限优先。
+//
+// MaxTokens <= 0（未设置）一律不动：其语义属协议层——OpenAI-compat/Anthropic
+// maxTokensFallback 兜底 4096，ollama 0 = 无限（原生）。agent 执行路径 0 不出现
+// （resolveMaxOutputTokens 恒返回确定值），此处不越权改 0 的协议语义。
+func (g *Gateway) applyMaxTokensPolicy(req *CompletionRequest, link chainLink) *CompletionRequest {
+	if req.MaxTokens <= 0 {
+		return req
+	}
+	_, maxOut := LookupModelSpec(link.Model)
+	floored := link.Reasoning && req.MaxTokens < constants.DefaultOutputReserveTokens
+	clamped := maxOut > 0 && req.MaxTokens > maxOut
+	if !floored && !clamped {
+		return req
+	}
+	cloned := *req
+	cloned.Model = link.Model
+	if floored {
+		cloned.MaxTokens = constants.DefaultOutputReserveTokens
+		g.logger.Warn("llmgateway: max_tokens raised to floor for reasoning model",
+			zap.String("model", link.Model),
+			zap.Int("max_tokens", req.MaxTokens),
+			zap.Int("raised_to", constants.DefaultOutputReserveTokens))
+	}
+	if clamped {
+		// floored 值若超模型上限，同样被压回——能力是硬约束。
+		cloned.MaxTokens = maxOut
+		g.logger.Warn("llmgateway: max_tokens clamped to model max output",
+			zap.String("model", link.Model),
+			zap.Int("max_tokens", req.MaxTokens),
+			zap.Int("clamped_to", maxOut))
 	}
 	return &cloned
 }
