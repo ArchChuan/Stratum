@@ -37,3 +37,11 @@ type ResourceChangeAuditQuery interface {
 	// GetByID 查不到时返回 (nil, nil)。
 	GetByID(ctx context.Context, tenantID, id string) (*ResourceChangeAuditRow, error)
 }
+
+// PlatformResourceChangeAuditQuery reads public-catalog audit events. It must
+// never infer a tenant from request context; authorization is enforced by the
+// platform-admin route.
+type PlatformResourceChangeAuditQuery interface {
+	ListPlatform(ctx context.Context, filter ResourceChangeAuditFilter) ([]ResourceChangeAuditRow, int, error)
+	GetPlatformByID(ctx context.Context, id string) (*ResourceChangeAuditRow, error)
+}

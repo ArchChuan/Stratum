@@ -616,6 +616,17 @@ func registerAudit(r *gin.Engine, c *wiring.Container, requireActive gin.Handler
 	auditGroup.Use(requireActive)
 	auditGroup.GET("/events", h.ListEvents)
 	auditGroup.GET("/events/:id", h.GetEvent)
+	if c.Audit.PlatformQueryService != nil {
+		platformHandler := handler.NewPlatformAuditHandler(c.Audit.PlatformQueryService)
+		if c.Platform == nil || c.Platform.JWTService == nil {
+			return
+		}
+		platformAudit := r.Group("/admin/audit/platform",
+			middleware.JWTMiddleware(c.Platform.JWTService, c.Platform.Metrics),
+			middleware.RequireGlobalAdmin())
+		platformAudit.GET("/events", platformHandler.List)
+		platformAudit.GET("/events/:id", platformHandler.Get)
+	}
 }
 
 func registerLLMAdmin(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
