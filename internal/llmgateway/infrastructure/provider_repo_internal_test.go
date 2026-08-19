@@ -40,7 +40,7 @@ func providerFixture() *domain.Provider {
 }
 
 var providerColumns = []string{"id", "name", "kind", "base_url", "api_key",
-	"default_model", "enabled", "created_at", "updated_at"}
+	"default_model", "enabled", "extra_headers", "default_sampling", "created_at", "updated_at"}
 
 func providerRow(t *testing.T, p *domain.Provider) []any {
 	now := time.Now()
@@ -48,7 +48,7 @@ func providerRow(t *testing.T, p *domain.Provider) []any {
 	apiKey, err := crypto.EncryptSecret(testAESKey, p.APIKey)
 	require.NoError(t, err)
 	return []any{p.ID, p.Name, string(p.Kind), p.BaseURL, apiKey,
-		p.DefaultModel, p.Enabled, now, now}
+		p.DefaultModel, p.Enabled, []byte("{}"), []byte("{}"), now, now}
 }
 
 func TestProviderRepo_Create_success(t *testing.T) {
@@ -59,7 +59,7 @@ func TestProviderRepo_Create_success(t *testing.T) {
 	now := time.Now()
 	// api_key 参数是加密后的随机密文，无法等值匹配，用 AnyArg 校验参数个数与位置。
 	mock.ExpectQuery("INSERT INTO public.providers").
-		WithArgs(p.ID, p.Name, string(p.Kind), p.BaseURL, pgxmock.AnyArg(), p.DefaultModel, p.Enabled).
+		WithArgs(p.ID, p.Name, string(p.Kind), p.BaseURL, pgxmock.AnyArg(), p.DefaultModel, p.Enabled, "{}", "{}").
 		WillReturnRows(pgxmock.NewRows([]string{"created_at", "updated_at"}).AddRow(now, now))
 
 	require.NoError(t, repo.Create(context.Background(), p))
@@ -91,7 +91,7 @@ func TestProviderRepo_Create_writesCiphertext(t *testing.T) {
 
 	mock.ExpectQuery("INSERT INTO public.providers").
 		WithArgs(p.ID, p.Name, string(p.Kind), p.BaseURL,
-			prefixArg{prefix: "enc:v1:", not: p.APIKey}, p.DefaultModel, p.Enabled).
+			prefixArg{prefix: "enc:v1:", not: p.APIKey}, p.DefaultModel, p.Enabled, "{}", "{}").
 		WillReturnRows(pgxmock.NewRows([]string{"created_at", "updated_at"}).AddRow(now, now))
 
 	require.NoError(t, repo.Create(context.Background(), p))
@@ -109,7 +109,7 @@ func TestProviderRepo_Get_legacyPlaintextReadable(t *testing.T) {
 		WithArgs("p1").
 		WillReturnRows(pgxmock.NewRows(providerColumns).
 			AddRow(p.ID, p.Name, string(p.Kind), p.BaseURL, "sk-legacy-plaintext",
-				p.DefaultModel, p.Enabled, time.Now(), time.Now()))
+				p.DefaultModel, p.Enabled, []byte("{}"), []byte("{}"), time.Now(), time.Now()))
 
 	got, err := repo.Get(context.Background(), "p1")
 	require.NoError(t, err)
@@ -142,7 +142,7 @@ func TestProviderRepo_Get_corruptedCiphertextFailsClosed(t *testing.T) {
 				WithArgs("p1").
 				WillReturnRows(pgxmock.NewRows(providerColumns).
 					AddRow(p.ID, p.Name, string(p.Kind), p.BaseURL, tc.stored,
-						p.DefaultModel, p.Enabled, time.Now(), time.Now()))
+						p.DefaultModel, p.Enabled, []byte("{}"), []byte("{}"), time.Now(), time.Now()))
 
 			_, err := repo.Get(context.Background(), "p1")
 			require.ErrorContains(t, err, "请重新保存")
@@ -157,7 +157,7 @@ func TestProviderRepo_Create_queryFails(t *testing.T) {
 	repo := newMockProviderRepo(mock)
 
 	mock.ExpectQuery("INSERT INTO public.providers").
-		WithArgs(anyArgs(7)...).WillReturnError(pgx.ErrTxClosed)
+		WithArgs(anyArgs(9)...).WillReturnError(pgx.ErrTxClosed)
 
 	err := repo.Create(context.Background(), providerFixture())
 	require.ErrorIs(t, err, pgx.ErrTxClosed)
@@ -238,7 +238,7 @@ func TestProviderRepo_List_scanFails(t *testing.T) {
 		WithArgs().
 		WillReturnRows(pgxmock.NewRows(providerColumns).
 			AddRow(42, bad.Name, string(bad.Kind), bad.BaseURL, bad.APIKey,
-				bad.DefaultModel, bad.Enabled, time.Now(), time.Now()))
+				bad.DefaultModel, bad.Enabled, []byte("{}"), []byte("{}"), time.Now(), time.Now()))
 
 	_, err := repo.List(context.Background())
 	require.Error(t, err)
@@ -258,11 +258,16 @@ func TestProviderRepo_Update_successAndNotFound(t *testing.T) {
 			mock := newFactMock(t)
 			repo := newMockProviderRepo(mock)
 
-			mock.ExpectExec("UPDATE public.providers SET").
-				WithArgs(anyArgs(7)...).
+			mock.ExpectBegin()
+			mock.ExpectExec(`SET LOCAL search_path`).WillReturnResult(pgxmock.NewResult("SET", 0))
+			mock.ExpectExec(`UPDATE public.providers SET name=\$1, kind=\$2, base_url=\$3,\s+api_key=CASE WHEN \$4='' THEN api_key ELSE \$4 END,\s+default_model=\$5, enabled=\$6, updated_at=now\(\),\s+extra_headers=\$7, default_sampling=\$8\s+WHERE id=\$9`).
+				WithArgs(anyArgs(9)...).
 				WillReturnResult(pgxmock.NewResult("UPDATE", tc.affected))
+			if tc.wantErrMsg == "" {
+				mock.ExpectCommit()
+			}
 
-			err := repo.Update(context.Background(), providerFixture())
+			err := repo.Update(context.Background(), providerFixture(), "t1", nil)
 			if tc.wantErrMsg != "" {
 				require.ErrorContains(t, err, tc.wantErrMsg)
 			} else {
@@ -282,12 +287,12 @@ func TestProviderRepo_GetMeta_legacyPlaintextStillReadable(t *testing.T) {
 
 	p := providerFixture()
 	metaColumns := []string{"id", "name", "kind", "base_url",
-		"default_model", "enabled", "created_at", "updated_at"}
+		"default_model", "enabled", "extra_headers", "default_sampling", "created_at", "updated_at"}
 	mock.ExpectQuery("FROM public.providers WHERE id=\\$1").
 		WithArgs("p1").
 		WillReturnRows(pgxmock.NewRows(metaColumns).
 			AddRow(p.ID, p.Name, string(p.Kind), p.BaseURL,
-				p.DefaultModel, p.Enabled, time.Now(), time.Now()))
+				p.DefaultModel, p.Enabled, []byte("{}"), []byte("{}"), time.Now(), time.Now()))
 
 	got, err := repo.GetMeta(context.Background(), "p1")
 	require.NoError(t, err)
@@ -305,11 +310,14 @@ func TestProviderRepo_Update_keepsCiphertextWhenEmptyAPIKey(t *testing.T) {
 
 	p := providerFixture()
 	p.APIKey = ""
-	mock.ExpectExec("UPDATE public.providers SET").
-		WithArgs(p.Name, string(p.Kind), p.BaseURL, "", p.DefaultModel, p.Enabled, p.ID).
+	mock.ExpectBegin()
+	mock.ExpectExec(`SET LOCAL search_path`).WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectExec(`UPDATE public.providers SET name=\$1, kind=\$2, base_url=\$3,\s+api_key=CASE WHEN \$4='' THEN api_key ELSE \$4 END,\s+default_model=\$5, enabled=\$6, updated_at=now\(\),\s+extra_headers=\$7, default_sampling=\$8\s+WHERE id=\$9`).
+		WithArgs(p.Name, string(p.Kind), p.BaseURL, "", p.DefaultModel, p.Enabled, "{}", "{}", p.ID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
 
-	require.NoError(t, repo.Update(context.Background(), p))
+	require.NoError(t, repo.Update(context.Background(), p, "t1", nil))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -320,12 +328,15 @@ func TestProviderRepo_Update_writesNewCiphertext(t *testing.T) {
 	repo := newMockProviderRepo(mock)
 
 	p := providerFixture()
-	mock.ExpectExec("UPDATE public.providers SET").
+	mock.ExpectBegin()
+	mock.ExpectExec(`SET LOCAL search_path`).WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectExec(`UPDATE public.providers SET name=\$1, kind=\$2, base_url=\$3,\s+api_key=CASE WHEN \$4='' THEN api_key ELSE \$4 END,\s+default_model=\$5, enabled=\$6, updated_at=now\(\),\s+extra_headers=\$7, default_sampling=\$8\s+WHERE id=\$9`).
 		WithArgs(p.Name, string(p.Kind), p.BaseURL,
-			prefixArg{prefix: "enc:v1:", not: p.APIKey}, p.DefaultModel, p.Enabled, p.ID).
+			prefixArg{prefix: "enc:v1:", not: p.APIKey}, p.DefaultModel, p.Enabled, "{}", "{}", p.ID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
 
-	require.NoError(t, repo.Update(context.Background(), p))
+	require.NoError(t, repo.Update(context.Background(), p, "t1", nil))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -333,10 +344,12 @@ func TestProviderRepo_Update_execFails(t *testing.T) {
 	mock := newFactMock(t)
 	repo := newMockProviderRepo(mock)
 
-	mock.ExpectExec("UPDATE public.providers SET").
-		WithArgs(anyArgs(7)...).WillReturnError(pgx.ErrTxClosed)
+	mock.ExpectBegin()
+	mock.ExpectExec(`SET LOCAL search_path`).WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectExec(`UPDATE public.providers SET name=\$1, kind=\$2, base_url=\$3,\s+api_key=CASE WHEN \$4='' THEN api_key ELSE \$4 END,\s+default_model=\$5, enabled=\$6, updated_at=now\(\),\s+extra_headers=\$7, default_sampling=\$8\s+WHERE id=\$9`).
+		WithArgs(anyArgs(9)...).WillReturnError(pgx.ErrTxClosed)
 
-	err := repo.Update(context.Background(), providerFixture())
+	err := repo.Update(context.Background(), providerFixture(), "t1", nil)
 	require.ErrorContains(t, err, "update provider")
 	require.NoError(t, mock.ExpectationsWereMet())
 }

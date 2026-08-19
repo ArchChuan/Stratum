@@ -28,6 +28,16 @@ func NewChatRequest(model string, msgs []Message, tools []Tool, effort string) *
 	}
 }
 
+// temperaturePtr 把调用方的 float32 温度转成 *float64：0 = unset（agent 语义
+// 贯穿全链路）→ nil，让网关采样注入层生效；非 0 → 显式值。
+func temperaturePtr(v float32) *float64 {
+	if v == 0 {
+		return nil
+	}
+	f := float64(v)
+	return &f
+}
+
 // NewSummarizeRequest 构造单轮总结请求：
 //   - 单条 user 消息 = instructions + items（\n 连接，items 可为 nil）；
 //   - Temperature = TaskSummarizeTemperature（低温度稳定压缩）；
@@ -43,7 +53,7 @@ func NewSummarizeRequest(model, instructions string, items []string, maxTokens i
 	return &CompletionRequest{
 		Model:          model,
 		Messages:       []Message{{Role: "user", Content: content}},
-		Temperature:    constants.TaskSummarizeTemperature,
+		Temperature:    temperaturePtr(constants.TaskSummarizeTemperature),
 		MaxTokens:      maxTokens,
 		NoPrimaryRetry: true,
 	}
@@ -62,7 +72,7 @@ func NewExtractRequest(model, system, user string, temperature float32, maxToken
 	return &CompletionRequest{
 		Model:          model,
 		Messages:       msgs,
-		Temperature:    temperature,
+		Temperature:    temperaturePtr(temperature),
 		MaxTokens:      maxTokens,
 		ResponseFormat: JSONObject(),
 	}

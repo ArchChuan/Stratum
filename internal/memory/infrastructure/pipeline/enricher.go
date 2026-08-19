@@ -523,8 +523,11 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnri
 	prompt := formatSummaryPrompt(promptTmpl, input)
 	req := llmdomain.NewSummarizeRequest(settings.model, prompt, nil, 0)
 	// NewSummarizeRequest 内部固定 TaskSummarizeTemperature；平台配置的温度
-	// 在构造后覆盖，支持超管运行态调整摘要温度。
-	req.Temperature = settings.temperature
+	// 在构造后覆盖（0 = 保留默认），支持超管运行态调整摘要温度。
+	if settings.temperature != 0 {
+		v := float64(settings.temperature)
+		req.Temperature = &v
+	}
 	llmCtx, cancel := context.WithTimeout(ctx, constants.MemorySummaryLLMTimeout)
 	defer cancel()
 	resp, err := llm.Complete(llmCtx, req)

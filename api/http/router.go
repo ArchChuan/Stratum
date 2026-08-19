@@ -616,6 +616,17 @@ func registerAudit(r *gin.Engine, c *wiring.Container, requireActive gin.Handler
 	auditGroup.Use(requireActive)
 	auditGroup.GET("/events", h.ListEvents)
 	auditGroup.GET("/events/:id", h.GetEvent)
+	if c.Audit.PlatformQueryService != nil {
+		platformHandler := handler.NewPlatformAuditHandler(c.Audit.PlatformQueryService)
+		if c.Platform == nil || c.Platform.JWTService == nil {
+			return
+		}
+		platformAudit := r.Group("/admin/audit/platform",
+			middleware.JWTMiddleware(c.Platform.JWTService, c.Platform.Metrics),
+			middleware.RequireGlobalAdmin())
+		platformAudit.GET("/events", platformHandler.List)
+		platformAudit.GET("/events/:id", platformHandler.Get)
+	}
 }
 
 func registerLLMAdmin(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
@@ -624,7 +635,9 @@ func registerLLMAdmin(r *gin.Engine, c *wiring.Container, requireActive gin.Hand
 	}
 	providerH := handler.NewProviderHandler(c.LLMGateway.ProviderService)
 	modelMgmtH := handler.NewModelMgmtHandler(c.LLMGateway.ModelMgmtService)
-	adminMW := middleware.RequireTenantRole("admin")
+	// The catalog is public/platform-scoped. Tenant administrators may read it,
+	// but every mutation must be authorized by the global-admin claim.
+	adminMW := middleware.RequireGlobalAdmin()
 
 	// Providers: list is readable by any tenant member; write ops require admin.
 	providers := r.Group("/admin/providers", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
@@ -643,6 +656,7 @@ func registerLLMAdmin(r *gin.Engine, c *wiring.Container, requireActive gin.Hand
 		models.GET("", modelMgmtH.List)
 		models.GET("/:id", modelMgmtH.Get)
 		models.PUT("/:id", adminMW, modelMgmtH.Update)
+		models.PATCH("/:id/policy", adminMW, requireActive, modelMgmtH.UpdatePolicy)
 		models.PUT("/:id/default-embedding", adminMW, requireActive, modelMgmtH.SetDefaultEmbedding)
 		models.PATCH("/:id/toggle", adminMW, modelMgmtH.Toggle)
 		models.DELETE("/:id", adminMW, modelMgmtH.Delete)

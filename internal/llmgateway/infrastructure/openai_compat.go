@@ -201,8 +201,9 @@ type ProviderConfig struct {
 	APIKey         string
 	HealthModel    string
 	Models         []string
-	ModelCatalog   []string // 发现兜底目录：ListModels 时与 GET /models 结果取并集；空 = 行为不变
-	EmbedBatchSize int      // max texts per embedding request; 0 = use default (100)
+	ModelCatalog   []string          // 发现兜底目录：ListModels 时与 GET /models 结果取并集；空 = 行为不变
+	EmbedBatchSize int               // max texts per embedding request; 0 = use default (100)
+	ExtraHeaders   map[string]string // deprecated; not applied until separately reviewed
 }
 
 // OpenAICompatClient is an OpenAI-compatible provider that implements
@@ -460,8 +461,8 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 			return nil, fmt.Errorf("%s: build stream request: %w", c.cfg.Name, err)
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 		httpReq.Header.Set("Accept", "text/event-stream")
+		httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 
 		resp, err = c.streamHTTP.Do(httpReq)
 		if err != nil {

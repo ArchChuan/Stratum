@@ -27,10 +27,15 @@ func markPermanent(err error) error {
 	return &permanentError{err: err}
 }
 
-// IsPermanent 报告 err 链中是否含 permanent 标记。
+// permanentMarker 标记不应重试的错误；消费方（agent 重试层、history
+// compactor）以接口探测识别。permanentError、contextLengthExceededError、
+// policyBlockedError 均实现它。
+type permanentMarker interface{ Permanent() bool }
+
+// IsPermanent 报告 err（含包装链）是否带 permanent 标记。
 func IsPermanent(err error) bool {
-	var pe *permanentError
-	return errors.As(err, &pe)
+	var pm permanentMarker
+	return errors.As(err, &pm)
 }
 
 // ErrContextLengthExceeded 表示请求超出模型上下文窗口：不可恢复（重试依旧

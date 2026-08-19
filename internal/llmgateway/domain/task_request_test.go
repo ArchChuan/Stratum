@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"math"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -29,7 +30,7 @@ func TestNewChatRequestPassesThrough(t *testing.T) {
 	if req.ReasoningEffort != constants.ReasoningEffortHigh {
 		t.Fatalf("ReasoningEffort = %q, want %q", req.ReasoningEffort, constants.ReasoningEffortHigh)
 	}
-	if req.Temperature != 0 || req.ResponseFormat != nil || req.NoPrimaryRetry {
+	if req.Temperature != nil || req.ResponseFormat != nil || req.NoPrimaryRetry {
 		t.Fatalf("chat request must be passthrough with zero task defaults: %#v", req)
 	}
 }
@@ -46,7 +47,7 @@ func TestNewSummarizeRequest(t *testing.T) {
 	if req.Messages[0].Content != "压缩：a\nb" {
 		t.Fatalf("Content = %q, want instructions + items joined", req.Messages[0].Content)
 	}
-	if req.Temperature != constants.TaskSummarizeTemperature {
+	if req.Temperature == nil || *req.Temperature != float64(constants.TaskSummarizeTemperature) {
 		t.Fatalf("Temperature = %v, want %v", req.Temperature, constants.TaskSummarizeTemperature)
 	}
 	if req.MaxTokens != 512 {
@@ -73,7 +74,8 @@ func TestNewExtractRequest(t *testing.T) {
 		if len(req.Messages) != 2 || req.Messages[0].Role != "system" || req.Messages[1].Role != "user" {
 			t.Fatalf("Messages = %#v, want [system, user]", req.Messages)
 		}
-		if req.Temperature != 0.1 || req.MaxTokens != 4096 {
+		// float32(0.1) 转 float64 有精度放大（0.10000000149011612），按 epsilon 近似断言。
+		if req.Temperature == nil || math.Abs(*req.Temperature-0.1) > 1e-6 || req.MaxTokens != 4096 {
 			t.Fatalf("temp/maxTokens = %v/%d, want 0.1/4096", req.Temperature, req.MaxTokens)
 		}
 		if req.ResponseFormat == nil || req.ResponseFormat.Type != "json_object" {

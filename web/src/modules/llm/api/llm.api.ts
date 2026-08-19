@@ -1,4 +1,11 @@
-import type { CreateProviderInput, Model, Provider, UpdateModelInput, UpdateProviderInput } from '../model/llm';
+import type {
+  CreateProviderInput,
+  Model,
+  Provider,
+  UpdateModelInput,
+  UpdateModelPolicyInput,
+  UpdateProviderInput,
+} from '../model/llm';
 
 import api from '@/services/client';
 
@@ -81,6 +88,9 @@ export const llmApi = {
 
   updateModel: (id: string, data: UpdateModelInput) =>
     api.put(`/admin/models/${id}`, data),
+
+  updateModelPolicy: (id: string, data: UpdateModelPolicyInput) =>
+    api.patch<Model>(`/admin/models/${id}/policy`, data),
 
   toggleModel: async (id: string, enabled: boolean): Promise<void> => {
     await api.patch<MessageResponse>(`/admin/models/${id}/toggle`, { enabled });

@@ -594,7 +594,8 @@ func (c *AnthropicClient) fetchModelPage(ctx context.Context, u string) (*anthro
 	return &out, nil
 }
 
-// setHeaders sets Anthropic-specific HTTP headers.
+// setHeaders sets Anthropic-specific HTTP headers. extra_headers 先应用，
+// 鉴权头（x-api-key）后设置覆盖，用户配置无法改写鉴权。
 func (c *AnthropicClient) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", c.cfg.APIKey)

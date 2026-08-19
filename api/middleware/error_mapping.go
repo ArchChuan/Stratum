@@ -179,6 +179,8 @@ var errorStatusTable = map[error]int{
 	iamdomain.ErrUsernameTaken:                     http.StatusConflict,
 	knowledgedomain.ErrInvalidEmbeddingModel:       http.StatusBadRequest,
 	llmgatewaydomain.ErrModelNotEmbeddingEnabled:   http.StatusBadRequest,
+	llmgatewaydomain.ErrSamplingOutOfRange:         http.StatusBadRequest,
+	llmgatewaydomain.ErrCapabilityUnsupported:      http.StatusBadRequest,
 	knowledgedomain.ErrInvalidQueryMode:            http.StatusBadRequest,
 	knowledgedomain.ErrInvalidRerankIdentity:       http.StatusBadRequest,
 	knowledgedomain.ErrInvalidScoreThreshold:       http.StatusBadRequest,
@@ -233,6 +235,13 @@ func MapErrorToStatus(err error) int {
 	var maxBytesErr *http.MaxBytesError
 	if errors.As(err, &maxBytesErr) {
 		return http.StatusRequestEntityTooLarge
+	}
+
+	// L2 上下文窗口拦截：contextLengthExceededError 在 infrastructure 包（带
+	// ContextLengthExceeded() 方法），不跨包注册 table 条目，鸭子类型探测。
+	var ctxLen interface{ ContextLengthExceeded() bool }
+	if errors.As(err, &ctxLen) && ctxLen.ContextLengthExceeded() {
+		return http.StatusBadRequest
 	}
 
 	for sentinel, status := range errorStatusTable {

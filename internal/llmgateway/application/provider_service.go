@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 )
@@ -27,12 +28,13 @@ type CreateProviderInput struct {
 
 // UpdateProviderInput carries the fields that can be updated on a provider.
 type UpdateProviderInput struct {
-	ID           string              `json:"id"`
-	Name         string              `json:"name"`
-	Kind         domain.ProviderKind `json:"kind"`
-	BaseURL      string              `json:"baseUrl"`
-	APIKey       string              `json:"apiKey"`
-	DefaultModel string              `json:"defaultModel"`
+	ID              string              `json:"id"`
+	Name            string              `json:"name"`
+	Kind            domain.ProviderKind `json:"kind"`
+	BaseURL         string              `json:"baseUrl"`
+	APIKey          string              `json:"apiKey"`
+	DefaultModel    string              `json:"defaultModel"`
+	DefaultSampling *map[string]any     `json:"defaultSampling"`
 }
 
 // ProviderService orchestrates LLM provider CRUD operations and
@@ -95,12 +97,14 @@ func (s *ProviderService) Get(ctx context.Context, tenantID, id string) (*domain
 // Update applies partial updates to an existing provider.
 // An empty APIKey means "keep existing". 元数据经 GetMeta 读取（不解密旧 key）：
 // 存量明文/损坏密文的 provider 带新 key 重新保存必须可用，先解密旧 key
-// 会把该 provider 永久锁死（Get 保持 fail closed 不变）。
-func (s *ProviderService) Update(ctx context.Context, tenantID string, input UpdateProviderInput) (*domain.Provider, error) {
+// 会把该 provider 永久锁死（Get 保持 fail closed 不变）。变更与审计在
+// 同一事务提交（repo.Update 内部）。
+func (s *ProviderService) Update(ctx context.Context, tenantID, actorID string, input UpdateProviderInput) (*domain.Provider, error) {
 	existing, err := s.repo.GetMeta(ctx, input.ID)
 	if err != nil {
 		return nil, fmt.Errorf("provider service: get for update: %w", err)
 	}
+	before := providerSafeProjection(existing)
 	existing.Name = input.Name
 	existing.Kind = input.Kind
 	existing.BaseURL = input.BaseURL
@@ -108,7 +112,21 @@ func (s *ProviderService) Update(ctx context.Context, tenantID string, input Upd
 	if input.APIKey != "" {
 		existing.APIKey = input.APIKey
 	}
-	if err := s.repo.Update(ctx, existing); err != nil {
+	if input.DefaultSampling != nil {
+		existing.DefaultSampling = *input.DefaultSampling
+	}
+	audit, err := newChangeAudit(ctx, changeAuditInput{
+		Kind: auditdomain.ResourceKindProvider, ResourceID: existing.ID, Operation: auditdomain.ChangeOpUpdate,
+		ActorID: actorID, Before: before, After: providerSafeProjection(existing),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if platformRepo, ok := s.repo.(port.PlatformProviderRepository); ok {
+		if err := platformRepo.UpdatePlatform(ctx, existing, tenantID, audit); err != nil {
+			return nil, fmt.Errorf("provider service: update: %w", err)
+		}
+	} else if err := s.repo.Update(ctx, existing, tenantID, audit); err != nil {
 		return nil, fmt.Errorf("provider service: update: %w", err)
 	}
 	s.invalidate()
@@ -143,14 +161,16 @@ func (s *ProviderService) DiscoverModels(ctx context.Context, tenantID, provider
 	models := make([]domain.Model, 0, len(discovered))
 	for _, dm := range discovered {
 		models = append(models, domain.Model{
-			ProviderID:      providerID,
-			Name:            dm.Name,
-			DisplayName:     dm.Name,
-			Capabilities:    inferCapabilities(dm.Name),
-			ContextWindow:   dm.ContextWindow,
-			MaxTokens:       dm.MaxOutputTokens,
-			ProviderManaged: true,
-			Enabled:         true,
+			ProviderID:          providerID,
+			Name:                dm.Name,
+			DisplayName:         dm.Name,
+			Capabilities:        inferCapabilities(dm.Name),
+			ContextWindow:       dm.ContextWindow,
+			MaxTokens:           dm.MaxOutputTokens,
+			ContextWindowSource: domain.CapabilitySourceProviderAPI,
+			MaxTokensSource:     domain.CapabilitySourceProviderAPI,
+			ProviderManaged:     true,
+			Enabled:             true,
 		})
 	}
 	upserted, err := s.modelRepo.UpsertDiscovered(ctx, providerID, models)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/application"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
@@ -71,7 +72,7 @@ func (m *mockProviderRepo) List(_ context.Context) ([]domain.Provider, error) {
 	return out, nil
 }
 
-func (m *mockProviderRepo) Update(_ context.Context, p *domain.Provider) error {
+func (m *mockProviderRepo) Update(_ context.Context, p *domain.Provider, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -118,7 +119,7 @@ func (m *mockModelRepo) List(_ context.Context, _ port.ModelFilter) ([]domain.Mo
 	return m.models, nil
 }
 
-func (m *mockModelRepo) Update(_ context.Context, _ *domain.Model) error {
+func (m *mockModelRepo) Update(_ context.Context, _ *domain.Model, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return m.err
 }
 
@@ -216,7 +217,7 @@ func TestProviderServiceInvalidatesRegistryAfterUpdate(t *testing.T) {
 	invalidator := &providerInvalidator{}
 	svc := application.NewProviderService(pr, &mockModelRepo{}, &mockProviderRuntime{}, invalidator)
 
-	_, err := svc.Update(context.Background(), "tenant-1", application.UpdateProviderInput{
+	_, err := svc.Update(context.Background(), "tenant-1", "user-1", application.UpdateProviderInput{
 		ID: "provider-1", Name: "updated", Kind: domain.ProviderOpenAICompat,
 	})
 	if err != nil {
@@ -298,7 +299,7 @@ func TestProviderService_Update_HappyPath(t *testing.T) {
 		Name:    "New Name",
 		BaseURL: "https://new.url",
 	}
-	p, err := svc.Update(context.Background(), "t1", input)
+	p, err := svc.Update(context.Background(), "t1", "u1", input)
 	if err != nil {
 		t.Fatalf("Update failed: %v", err)
 	}
@@ -314,7 +315,7 @@ func TestProviderService_Update_NotFound(t *testing.T) {
 	pr := &mockProviderRepo{}
 	svc := newTestProviderService(pr, &mockModelRepo{}, nil)
 
-	_, err := svc.Update(context.Background(), "t1", application.UpdateProviderInput{ID: "nope"})
+	_, err := svc.Update(context.Background(), "t1", "u1", application.UpdateProviderInput{ID: "nope"})
 	if err == nil {
 		t.Fatal("expected error for unknown provider, got nil")
 	}
@@ -340,7 +341,7 @@ func TestProviderService_Update_ResaveKeyWhenGetFailsClosed(t *testing.T) {
 		APIKey:  "new-key",
 		BaseURL: "https://legacy.url",
 	}
-	p, err := svc.Update(context.Background(), "t1", input)
+	p, err := svc.Update(context.Background(), "t1", "u1", input)
 	if err != nil {
 		t.Fatalf("Update with new api key failed despite legacy plaintext: %v", err)
 	}

@@ -9,7 +9,8 @@ import (
 
 // Audit 承载资源变更审计的查询服务（平台级 HTTP 审计已废弃，见 spec F）。
 type Audit struct {
-	QueryService auditport.ResourceChangeAuditQuery
+	QueryService         auditport.ResourceChangeAuditQuery
+	PlatformQueryService auditport.PlatformResourceChangeAuditQuery
 }
 
 func buildAudit(db *pgxpool.Pool) *Audit {
@@ -17,6 +18,7 @@ func buildAudit(db *pgxpool.Pool) *Audit {
 		return nil
 	}
 	return &Audit{
-		QueryService: persistence.NewPgResourceChangeAuditRepo(db),
+		QueryService:         persistence.NewPgResourceChangeAuditRepo(db),
+		PlatformQueryService: persistence.NewPgResourceChangeAuditRepo(db),
 	}
 }

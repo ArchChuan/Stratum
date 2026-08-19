@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
@@ -16,11 +17,13 @@ import (
 // ---------------------------------------------------------------------------
 
 type mockModelRepo struct {
-	models []domain.Model
-	err    error
+	models    []domain.Model
+	err       error
+	listCalls int
 }
 
 func (m *mockModelRepo) List(ctx context.Context, filter port.ModelFilter) ([]domain.Model, error) {
+	m.listCalls++
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -53,7 +56,7 @@ func (m *mockModelRepo) Get(ctx context.Context, id string) (*domain.Model, erro
 	return nil, m.err
 }
 
-func (m *mockModelRepo) Update(ctx context.Context, model *domain.Model) error {
+func (m *mockModelRepo) Update(ctx context.Context, model *domain.Model, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return m.err
 }
 
@@ -117,7 +120,7 @@ func (m *mockProviderRepo) List(ctx context.Context) ([]domain.Provider, error) 
 	return out, nil
 }
 
-func (m *mockProviderRepo) Update(ctx context.Context, p *domain.Provider) error {
+func (m *mockProviderRepo) Update(ctx context.Context, p *domain.Provider, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return m.err
 }
 
@@ -162,6 +165,8 @@ func (m *mockEmbedProto) BatchSize() int {
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
+
+func float64Ptr(v float64) *float64 { return &v }
 
 func newTestRegistry(modelRepo *mockModelRepo, providerRepo *mockProviderRepo) *infrastructure.ModelRegistry {
 	chatProtos := map[domain.ProviderKind]infrastructure.ChatProtocol{
@@ -742,5 +747,98 @@ func TestResolveDefaultEmbeddingModel_ProviderLookupFailsClosed(t *testing.T) {
 
 	if _, err := reg.ResolveDefaultEmbeddingModel(context.Background()); err == nil {
 		t.Fatal("missing provider must fail the resolution closed")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ModelPolicy 预计算（Task 5）
+// ---------------------------------------------------------------------------
+
+// TestResolve_reasoningFromCachedPolicy_noSecondListCall 验证 policy 预计算
+// 吸收 ResolveReasoning 的 N+1：预热后 ResolveReasoning 不得再查 repo。
+func TestResolve_reasoningFromCachedPolicy_noSecondListCall(t *testing.T) {
+	providerID := "prov-reasoning"
+	providers := map[string]*domain.Provider{
+		providerID: {
+			ID: providerID, Name: "Reasoning Prov", Kind: domain.ProviderOpenAICompat,
+			BaseURL: "https://reasoning.test", APIKey: "sk-r", DefaultModel: "qwen-turbo", Enabled: true,
+		},
+	}
+	models := []domain.Model{
+		{ID: "m-r", ProviderID: providerID, Name: "qwen-turbo", Enabled: true,
+			Capabilities: []domain.ModelCapability{domain.CapChat, domain.CapReasoning}},
+	}
+	mr := &mockModelRepo{models: models}
+	reg := newTestRegistry(mr, &mockProviderRepo{providers: providers})
+
+	if _, _, err := reg.Resolve(context.Background(), "qwen-turbo"); err != nil {
+		t.Fatalf("unexpected resolve error: %v", err)
+	}
+	mr.listCalls = 0
+	if !reg.ResolveReasoning(context.Background(), "qwen-turbo") {
+		t.Fatal("ResolveReasoning = false, want true (CapReasoning from cached policy)")
+	}
+	if mr.listCalls != 0 {
+		t.Errorf("ResolveReasoning issued %d repo List calls, want 0 (policy precomputed)", mr.listCalls)
+	}
+}
+
+// TestPolicyFor_precomputedAndMissing 验证 PolicyFor：已解析模型返回预计算
+// policy；未解析模型返回 nil（不触发 DB 查询）。
+func TestPolicyFor_precomputedAndMissing(t *testing.T) {
+	providerID := "prov-policy"
+	providers := map[string]*domain.Provider{
+		providerID: {
+			ID: providerID, Name: "Policy Prov", Kind: domain.ProviderOpenAICompat,
+			BaseURL: "https://policy.test", APIKey: "sk-p", DefaultModel: "m-p", Enabled: true,
+		},
+	}
+	models := []domain.Model{
+		{ID: "m-p", ProviderID: providerID, Name: "m-p", Enabled: true,
+			Capabilities:  []domain.ModelCapability{domain.CapChat},
+			ContextWindow: 128000, MaxTokens: 32768,
+			SamplingParams: &domain.SamplingParams{Temperature: float64Ptr(0.5)}},
+	}
+	mr := &mockModelRepo{models: models}
+	reg := newTestRegistry(mr, &mockProviderRepo{providers: providers})
+
+	if _, _, err := reg.Resolve(context.Background(), "m-p"); err != nil {
+		t.Fatalf("unexpected resolve error: %v", err)
+	}
+	pol := reg.PolicyFor(context.Background(), "m-p")
+	if pol == nil {
+		t.Fatal("PolicyFor = nil for resolved model, want precomputed policy")
+	}
+	if pol.ContextWindow != 128000 || pol.MaxTokens != 32768 {
+		t.Errorf("policy context/max = %d/%d, want 128000/32768", pol.ContextWindow, pol.MaxTokens)
+	}
+	if pol.SamplingDefaults == nil || pol.SamplingDefaults.Temperature == nil || *pol.SamplingDefaults.Temperature != 0.5 {
+		t.Errorf("policy sampling defaults = %+v, want temperature 0.5", pol.SamplingDefaults)
+	}
+	if pol.Reasoning {
+		t.Error("policy.Reasoning = true, want false (no CapReasoning)")
+	}
+	if pol := reg.PolicyFor(context.Background(), "never-resolved"); pol != nil {
+		t.Errorf("PolicyFor(never-resolved) = %+v, want nil", pol)
+	}
+}
+
+// TestPolicyFor_noModelRecordFromDefaultChain 验证 ② 级兜底（provider
+// default_model 未入库）policy 为 nil：权威数据缺失语义，不误报能力。
+func TestPolicyFor_noModelRecordFromDefaultChain(t *testing.T) {
+	providerID := "prov-default"
+	providers := map[string]*domain.Provider{
+		providerID: {
+			ID: providerID, Name: "Default Prov", Kind: domain.ProviderOpenAICompat,
+			BaseURL: "https://default.test", APIKey: "sk-d", DefaultModel: "orphan-default", Enabled: true,
+		},
+	}
+	reg := newTestRegistry(&mockModelRepo{models: nil}, &mockProviderRepo{providers: providers})
+
+	if _, _, err := reg.Resolve(context.Background(), ""); err != nil {
+		t.Fatalf("unexpected resolve error: %v", err)
+	}
+	if pol := reg.PolicyFor(context.Background(), "orphan-default"); pol != nil {
+		t.Errorf("PolicyFor = %+v, want nil (model record absent)", pol)
 	}
 }

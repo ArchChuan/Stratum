@@ -99,7 +99,7 @@ func TestPgProviderRepo_CRUD(t *testing.T) {
 	// Update
 	p.Name = "test-qwen-2"
 	p.Kind = domain.ProviderAnthropic
-	if err := repo.Update(ctx, p); err != nil {
+	if err := repo.Update(ctx, p, "t1", nil); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	got, err = repo.Get(ctx, p.ID)

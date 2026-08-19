@@ -204,9 +204,10 @@ export const addGeneratedActorMembership = async (
 // admin API so the backend performs at-rest encryption itself (#281). Direct
 // SQL would leave a legacy plaintext row that the backend refuses to read.
 const reEncryptProviderKey = async (adminToken: string, backendURL: string, fixtureURL: string): Promise<void> => {
+  const platformToken = process.env.STATEFUL_GLOBAL_ADMIN_TOKEN || adminToken;
   const response = await fetch(`${backendURL}/admin/providers/stateful-qwen`, {
     method: 'PUT',
-    headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${platformToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       name: 'stateful-qwen',
       kind: 'openai_compat',

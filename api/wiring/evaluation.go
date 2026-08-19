@@ -619,7 +619,7 @@ func (j judgeAdapter) Judge(ctx context.Context, req evalport.JudgeRequest) (eva
 	}
 	response, err := j.completer.Complete(ctx, &llmgatewaydomain.CompletionRequest{
 		Model:       j.judgeModel(ctx, req.Model),
-		Temperature: j.judgeTemperature(ctx),
+		Temperature: temperaturePtrOrNil(j.judgeTemperature(ctx)),
 		MaxTokens:   constants.JudgeMaxTokens,
 		Messages: []llmgatewaydomain.Message{
 			{Role: "system", Content: "你是评测法官。只输出 JSON，不输出其他内容。"},
@@ -698,7 +698,7 @@ func (a casegenAdapter) Generate(ctx context.Context, req evalport.CaseGenReques
 	}
 	response, err := a.completer.Complete(ctx, &llmgatewaydomain.CompletionRequest{
 		Model:       a.genModel(ctx),
-		Temperature: 0.2,
+		Temperature: temperaturePtrOrNil(0.2),
 		MaxTokens:   constants.CaseGenMaxTokens,
 		Messages: []llmgatewaydomain.Message{
 			{Role: "system", Content: caseGenSystemPrompt},

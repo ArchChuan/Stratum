@@ -75,6 +75,11 @@ test('system stateful acceptance', async ({ browser, browserName }) => {
     for (const label of Object.keys(contexts) as ActorLabel[]) {
       actors[label] = await createGuestActor(contexts[label], webURL, backendURL, pool);
     }
+    // Public provider/model mutations require global_admin. Keep the token
+    // in-process so packs that execute as tenant actors can still prepare the
+    // shared synthetic catalog without weakening the product route.
+    if (!actors.systemAdmin.accessToken) throw new Error('system admin token is missing');
+    process.env.STATEFUL_GLOBAL_ADMIN_TOKEN = actors.systemAdmin.accessToken;
     const schedule = await executeAcceptanceSchedule({
       ...runtime,
       startedAtMs: startedAt.getTime(),
@@ -115,6 +120,7 @@ test('system stateful acceptance', async ({ browser, browserName }) => {
   } catch (error) {
     cleanupError = acceptanceError(cleanupError, error);
   }
+  delete process.env.STATEFUL_GLOBAL_ADMIN_TOKEN;
   cleanupPassed = cleanupError === undefined;
   const failure = acceptanceError(executionError, cleanupError);
   if (failure) throw failure;

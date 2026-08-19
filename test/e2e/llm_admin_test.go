@@ -84,9 +84,13 @@ func provisionPublicCatalog(t *testing.T, pool *pgxpool.Pool) {
 			api_key       TEXT NOT NULL DEFAULT '',
 			default_model TEXT NOT NULL DEFAULT '',
 			enabled       BOOLEAN NOT NULL DEFAULT true,
+			extra_headers JSONB NOT NULL DEFAULT '{}',
+			default_sampling JSONB NOT NULL DEFAULT '{}',
 			created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
 			updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
+		`ALTER TABLE public.providers ADD COLUMN IF NOT EXISTS extra_headers JSONB NOT NULL DEFAULT '{}'`,
+		`ALTER TABLE public.providers ADD COLUMN IF NOT EXISTS default_sampling JSONB NOT NULL DEFAULT '{}'`,
 		`CREATE TABLE IF NOT EXISTS public.models (
 			id                TEXT PRIMARY KEY,
 			provider_id       TEXT NOT NULL REFERENCES public.providers(id) ON DELETE CASCADE,
@@ -95,6 +99,8 @@ func provisionPublicCatalog(t *testing.T, pool *pgxpool.Pool) {
 			capabilities      TEXT[] NOT NULL DEFAULT '{}',
 			context_window    INT NOT NULL DEFAULT 0,
 			max_tokens        INT NOT NULL DEFAULT 0,
+			sampling_params   JSONB NOT NULL DEFAULT '{}',
+			max_temperature   DOUBLE PRECISION,
 			input_price       DOUBLE PRECISION NOT NULL DEFAULT 0,
 			output_price      DOUBLE PRECISION NOT NULL DEFAULT 0,
 			recommended       BOOLEAN NOT NULL DEFAULT false,
@@ -104,6 +110,30 @@ func provisionPublicCatalog(t *testing.T, pool *pgxpool.Pool) {
 			created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
 			updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
 			UNIQUE(provider_id, name)
+		)`,
+		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS sampling_params JSONB NOT NULL DEFAULT '{}'`,
+		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS max_temperature DOUBLE PRECISION`,
+		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS operator_context_window INT`,
+		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS operator_max_tokens INT`,
+		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS default_output_tokens INT`,
+		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS context_window_source TEXT NOT NULL DEFAULT 'legacy_unknown'`,
+		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS max_tokens_source TEXT NOT NULL DEFAULT 'legacy_unknown'`,
+		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS context_window_observed_at TIMESTAMPTZ`,
+		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS max_tokens_observed_at TIMESTAMPTZ`,
+		`CREATE TABLE IF NOT EXISTS public.platform_resource_change_audits (
+			id                TEXT PRIMARY KEY,
+			scope             TEXT NOT NULL DEFAULT 'platform',
+			resource_kind     TEXT NOT NULL,
+			resource_id       TEXT NOT NULL,
+			operation         TEXT NOT NULL,
+			actor_id          TEXT NOT NULL DEFAULT '',
+			actor_tenant_id   TEXT,
+			actor_type        TEXT NOT NULL DEFAULT 'user',
+			source            TEXT NOT NULL DEFAULT 'api',
+			proposal_id       TEXT NOT NULL DEFAULT '',
+			before_projection JSONB NOT NULL DEFAULT '{}',
+			after_projection  JSONB NOT NULL DEFAULT '{}',
+			created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_models_provider ON public.models(provider_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_models_enabled ON public.models(enabled)`,
@@ -394,14 +424,17 @@ func TestModelCRUDLifecycle(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"providerManaged"`)
 
 	// ── Update model ────────────────────────────────────────────────────────
-	updateJSON := `{"displayName":"Custom Name","capabilities":["chat","reasoning"],"contextWindow":128000,"maxTokens":4096,"inputPrice":0.01,"outputPrice":0.03,"recommended":true}`
+	updateJSON := fmt.Sprintf(
+		`{"displayName":"Custom Name","capabilities":["chat","reasoning"],"contextWindow":%d,"maxTokens":%d,"inputPrice":0.01,"outputPrice":0.03,"recommended":true}`,
+		model.ContextWindow, model.MaxTokens,
+	)
 	rec = env.request(http.MethodPut, "/admin/models/"+model.ID, updateJSON)
 	require.Equal(t, http.StatusOK, rec.Code, "update model should return 200")
 	var updated domain.Model
 	unMarshalBody(t, rec, &updated)
 	require.Equal(t, "Custom Name", updated.DisplayName)
-	require.Equal(t, 128000, updated.ContextWindow)
-	require.Equal(t, 4096, updated.MaxTokens)
+	require.Equal(t, model.ContextWindow, updated.ContextWindow)
+	require.Equal(t, model.MaxTokens, updated.MaxTokens)
 	require.Equal(t, 0.01, updated.InputPrice)
 	require.Equal(t, 0.03, updated.OutputPrice)
 	require.True(t, updated.Recommended)
@@ -656,7 +689,8 @@ func (h *providerHandlerProxy) Update(c *gin.Context) {
 		return
 	}
 	input.ID = c.Param("id")
-	provider, err := h.svc.Update(c.Request.Context(), tid, input)
+	actorID, _ := userIDFromGin(c)
+	provider, err := h.svc.Update(c.Request.Context(), tid, actorID, input)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -735,7 +769,8 @@ func (h *modelMgmtHandlerProxy) Update(c *gin.Context) {
 		return
 	}
 	input.ID = c.Param("id")
-	m, err := h.svc.Update(c.Request.Context(), tid, input)
+	actorID, _ := userIDFromGin(c)
+	m, err := h.svc.Update(c.Request.Context(), tid, actorID, input)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -774,6 +809,20 @@ func (h *modelMgmtHandlerProxy) Delete(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
+}
+
+// userIDFromGin mirrors handler.userIDFromCtx but operates on gin.Context
+// directly (the handler version reads from request context after injection).
+func userIDFromGin(c *gin.Context) (string, bool) {
+	uid, ok := c.Get("auth.sub")
+	if !ok {
+		return "", false
+	}
+	s, ok := uid.(string)
+	if s == "" {
+		return "", false
+	}
+	return s, ok
 }
 
 // tenantIDFromGin mirrors handler.tenantIDFromCtx but operates on gin.Context

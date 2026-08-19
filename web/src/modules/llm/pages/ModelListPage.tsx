@@ -20,7 +20,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { ModelCapabilityTags } from '../components/ModelCapabilityTags';
 import { ModelEditDrawer } from '../components/ModelEditDrawer';
 import { useModels } from '../hooks/useModels';
-import type { Model, ModelCapability, UpdateModelInput } from '../model/llm';
+import type { Model, ModelCapability, UpdateModelInput, UpdateModelPolicyInput } from '../model/llm';
 
 import { LLM_DEFAULT_PAGE_SIZE } from '@/constants';
 import { extractErrorMessage } from '@/shared/lib';
@@ -36,7 +36,7 @@ const CAP_FILTER_OPTIONS: { label: string; value: ModelCapability }[] = [
 ];
 
 export function ModelListPage() {
-  const { models, loading, refresh, toggleModel, updateModel, deleteModel, setDefaultEmbedding } =
+  const { models, loading, refresh, toggleModel, updateModel, updateModelPolicy, deleteModel, setDefaultEmbedding } =
     useModels();
   const [capFilter, setCapFilter] = useState<ModelCapability | undefined>();
   const [editModel, setEditModel] = useState<Model | null>(null);
@@ -56,10 +56,11 @@ export function ModelListPage() {
   }, []);
 
   const handleEditSubmit = useCallback(
-    async (id: string, values: UpdateModelInput) => {
+    async (id: string, values: UpdateModelInput, policy: UpdateModelPolicyInput) => {
       setEditLoading(true);
       try {
         await updateModel(id, values);
+        await updateModelPolicy(id, policy);
         message.success({ content: '模型已更新', duration: 2 });
         setEditOpen(false);
       } catch (err: unknown) {
@@ -68,7 +69,7 @@ export function ModelListPage() {
         setEditLoading(false);
       }
     },
-    [updateModel],
+    [updateModel, updateModelPolicy],
   );
 
   const handleSetDefault = useCallback(

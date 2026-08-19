@@ -43,6 +43,9 @@ type PrometheusMetrics struct {
 	llmRequestsTotal   *prometheus.CounterVec
 	llmRequestDuration *prometheus.HistogramVec
 	llmTokenUsage      *prometheus.CounterVec
+	// LLM – policy 治理（L1-L4）
+	llmPolicyBlockedTotal *prometheus.CounterVec
+	llmPolicyMissingTotal *prometheus.CounterVec
 	// LLM – AI-specific
 	llmTokenHistogram    *prometheus.HistogramVec
 	llmFirstTokenLatency *prometheus.HistogramVec
@@ -237,7 +240,6 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 			prometheus.CounterOpts{Name: "llm_token_usage_total", Help: "Cumulative LLM tokens used"},
 			[]string{"model", "type"},
 		),
-
 		// LLM – AI-specific
 		llmTokenHistogram: factory.NewHistogramVec(
 			prometheus.HistogramOpts{Name: "llm_token_count", Help: "Token count distribution per LLM call", Buckets: tokenBuckets},
@@ -288,9 +290,22 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 
 		logger: logger,
 	}
+	m.llmPolicyBlockedTotal, m.llmPolicyMissingTotal = newModelPolicyMetrics(factory)
 	m.registerF3Metrics(factory, latencyBuckets)
 	m.registerExtendedMetrics(factory)
 	return m
+}
+
+func newModelPolicyMetrics(factory promauto.Factory) (*prometheus.CounterVec, *prometheus.CounterVec) {
+	blocked := factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "llm_policy_blocked_total", Help: "Requests blocked by model policy (L1-L4)"},
+		[]string{"model"},
+	)
+	missing := factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "llm_policy_missing_total", Help: "Requests with no model policy record (authority missing)"},
+		[]string{"model"},
+	)
+	return blocked, missing
 }
 
 // registerReaperMetrics registers the reaper metric family. Must not be
@@ -654,6 +669,16 @@ func (m *PrometheusMetrics) IncRouteFallback(fromModel, toModel string) {
 
 func (m *PrometheusMetrics) RecordBudgetRatio(scope string, pct float64) {
 	m.budgetRatio.WithLabelValues(scope).Set(pct)
+}
+
+// --- Model policy (L1-L4) ---
+
+func (m *PrometheusMetrics) IncPolicyBlocked(model string) {
+	m.llmPolicyBlockedTotal.WithLabelValues(model).Inc()
+}
+
+func (m *PrometheusMetrics) IncPolicyMissing(model string) {
+	m.llmPolicyMissingTotal.WithLabelValues(model).Inc()
 }
 
 // --- Audit (F3) ---

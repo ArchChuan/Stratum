@@ -73,6 +73,10 @@ type MetricsProvider interface {
 	IncRouteFallback(fromModel, toModel string)
 	RecordBudgetRatio(scope string, pct float64)
 
+	// Model policy (L1-L4 治理)
+	IncPolicyBlocked(model string)
+	IncPolicyMissing(model string)
+
 	// Audit (F3)
 	IncAuditEvent(risk, outcome string)
 	RecordAuditWriteQueueDepth(depth int)
@@ -168,6 +172,8 @@ func (NoopMetrics) IncNoAnswer(_, _ string)                                     
 func (NoopMetrics) IncKnowledgeJudge(_, _ string)                                 {}
 func (NoopMetrics) IncRouteFallback(_, _ string)                                  {}
 func (NoopMetrics) RecordBudgetRatio(_ string, _ float64)                         {}
+func (NoopMetrics) IncPolicyBlocked(_ string)                                     {}
+func (NoopMetrics) IncPolicyMissing(_ string)                                     {}
 func (NoopMetrics) IncAuditEvent(_, _ string)                                     {}
 func (NoopMetrics) RecordAuditWriteQueueDepth(_ int)                              {}
 func (NoopMetrics) IncCollabPlan(_, _ string)                                     {}

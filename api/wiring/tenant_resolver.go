@@ -162,11 +162,16 @@ func (r *tenantCapabilityResolver) ListTenantModelDetails(ctx context.Context, t
 			capabilities = append(capabilities, string(capability))
 		}
 		details = append(details, agentdomain.TenantModelDetail{
-			Model:           m.Name,
-			Provider:        m.ProviderID,
-			Capabilities:    capabilities,
-			Enabled:         m.Enabled,
-			ProviderManaged: m.ProviderManaged,
+			Model:                  m.Name,
+			Provider:               m.ProviderID,
+			Capabilities:           capabilities,
+			Enabled:                m.Enabled,
+			ProviderManaged:        m.ProviderManaged,
+			MaxTokens:              m.MaxTokens,
+			EffectiveMaxTokens:     m.EffectivePolicy().MaxOutputTokens,
+			DefaultOutputTokens:    m.EffectivePolicy().DefaultOutputTokens,
+			EffectiveContextWindow: m.EffectivePolicy().ContextWindow,
+			PolicySource:           string(m.EffectivePolicy().MaxOutputSource),
 		})
 	}
 	return details, nil

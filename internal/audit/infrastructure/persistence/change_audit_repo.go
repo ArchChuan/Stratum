@@ -137,6 +137,82 @@ func (r *PgResourceChangeAuditRepo) GetByID(
 	return &row, nil
 }
 
+// ListPlatform reads the public platform audit table. It intentionally omits
+// tenant predicates because platform scope is authorized before the handler.
+func (r *PgResourceChangeAuditRepo) ListPlatform(
+	ctx context.Context,
+	f port.ResourceChangeAuditFilter,
+) ([]port.ResourceChangeAuditRow, int, error) {
+	if f.Limit <= 0 {
+		f.Limit = 20
+	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
+	where, args := buildPlatformAuditWhere(f)
+	result := make([]port.ResourceChangeAuditRow, 0)
+	var total int
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("audit: begin platform query: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM public.platform_resource_change_audits r `+where, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("audit: count platform resource change audits: %w", err)
+	}
+	paging := append(append([]any{}, args...), f.Limit, f.Offset)
+	query := `SELECT id, resource_kind, resource_id, operation, actor_id, created_at,
+		before_projection, after_projection
+		FROM public.platform_resource_change_audits r ` + where +
+		fmt.Sprintf(` ORDER BY created_at DESC, id DESC LIMIT $%d OFFSET $%d`, len(args)+1, len(args)+2)
+	dbRows, err := tx.Query(ctx, query, paging...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("audit: query platform resource change audits: %w", err)
+	}
+	defer dbRows.Close()
+	for dbRows.Next() {
+		var row port.ResourceChangeAuditRow
+		var before, after []byte
+		if err := dbRows.Scan(&row.ID, &row.ResourceKind, &row.ResourceID, &row.Operation,
+			&row.ActorID, &row.CreatedAt, &before, &after); err != nil {
+			return nil, 0, fmt.Errorf("audit: scan platform resource change audit: %w", err)
+		}
+		row.Before, row.After = json.RawMessage(before), json.RawMessage(after)
+		row.ActorName = row.ActorID
+		result = append(result, row)
+	}
+	if err := dbRows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("audit: iterate platform resource change audits: %w", err)
+	}
+	return result, total, nil
+}
+
+func (r *PgResourceChangeAuditRepo) GetPlatformByID(
+	ctx context.Context,
+	id string,
+) (*port.ResourceChangeAuditRow, error) {
+	var row port.ResourceChangeAuditRow
+	var before, after []byte
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("audit: begin platform get: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	err = tx.QueryRow(ctx, `SELECT id, resource_kind, resource_id, operation, actor_id,
+		created_at, before_projection, after_projection
+		FROM public.platform_resource_change_audits WHERE id=$1`, id).
+		Scan(&row.ID, &row.ResourceKind, &row.ResourceID, &row.Operation, &row.ActorID,
+			&row.CreatedAt, &before, &after)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("audit: get platform resource change audit: %w", err)
+	}
+	row.Before, row.After, row.ActorName = json.RawMessage(before), json.RawMessage(after), row.ActorID
+	return &row, nil
+}
+
 // buildChangeAuditWhere 构造带占位符的 WHERE。tenant_id 谓词恒存在（$1）。
 // actor_name 子串匹配：命中 public.users.display_name / github_login，或
 // actor_id 原文（覆盖 system actor 如 evaluation-worker）。返回的 where 以
@@ -163,6 +239,28 @@ func buildChangeAuditWhere(tenantID string, f port.ResourceChangeAuditFilter) (s
 		conds = append(conds, fmt.Sprintf(`created_at <= $%d`, len(args)))
 	}
 	return `WHERE ` + strings.Join(conds, ` AND `), args
+}
+
+func buildPlatformAuditWhere(f port.ResourceChangeAuditFilter) (string, []any) {
+	conds := []string{"scope = 'platform'"}
+	args := make([]any, 0, 3)
+	if f.ResourceKind != "" {
+		args = append(args, f.ResourceKind)
+		conds = append(conds, fmt.Sprintf("resource_kind = $%d", len(args)))
+	}
+	if f.ActorName != "" {
+		args = append(args, "%"+f.ActorName+"%")
+		conds = append(conds, fmt.Sprintf("actor_id ILIKE $%d", len(args)))
+	}
+	if f.From != nil {
+		args = append(args, *f.From)
+		conds = append(conds, fmt.Sprintf("created_at >= $%d", len(args)))
+	}
+	if f.To != nil {
+		args = append(args, *f.To)
+		conds = append(conds, fmt.Sprintf("created_at <= $%d", len(args)))
+	}
+	return "WHERE " + strings.Join(conds, " AND "), args
 }
 
 // actorNameRow 是 public.users 批量映射的中间载体。

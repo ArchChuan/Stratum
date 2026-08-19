@@ -14,7 +14,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
-	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 )
@@ -131,6 +130,9 @@ type chainLink struct {
 	// 未知模型：invoke 对该 link 清空 response_format，防止严格端点 400
 	// （永久错误，中止整条 fallback 链）。
 	StructuredOutput bool
+	// Policy 是该模型的权威数据快照（DB 模型记录预计算）；nil = 权威数据
+	// 不存在（enforceModelPolicy 跳过 L1-L3，只做能力门控）。
+	Policy *ModelPolicy
 }
 
 // routedInfo 记录一次请求实际尝试过的模型链与最终成功模型。
@@ -190,6 +192,7 @@ func (g *Gateway) resolveChain(ctx context.Context, model string) ([]chainLink, 
 		Protocol:         proto,
 		Reasoning:        g.registry.ResolveReasoning(ctx, model),
 		StructuredOutput: g.registry.ResolveStructuredOutput(ctx, model),
+		Policy:           g.registry.PolicyFor(ctx, model),
 	}}
 	cands, err := g.registry.ResolveFallbackCandidates(ctx, model)
 	if err != nil {
@@ -202,6 +205,7 @@ func (g *Gateway) resolveChain(ctx context.Context, model string) ([]chainLink, 
 			Protocol:         c.Protocol,
 			Reasoning:        g.registry.ResolveReasoning(ctx, c.Model),
 			StructuredOutput: g.registry.ResolveStructuredOutput(ctx, c.Model),
+			Policy:           g.registry.PolicyFor(ctx, c.Model),
 		})
 	}
 	return links, nil
@@ -298,7 +302,25 @@ func (g *Gateway) invoke(
 	onToken func(string),
 ) (*CompletionResponse, bool, error) {
 	attemptReq := g.applyCapabilityGate(req, link)
-	attemptReq = g.applyMaxTokensPolicy(attemptReq, link)
+	if link.Policy != nil {
+		// 模型权威数据存在：L1-L4 逐层治理（clamp/注入/窗口/采样/能力）。
+		// 拦截错误 = permanent（policyBlockedError 语义），中止整条 fallback
+		// 链：重试/降级依旧报错，且拦截是按 per-link policy 判定的，降级到
+		// 其他模型无意义。
+		enforced, err := EnforceModelPolicy(attemptReq, link.Policy, link.Reasoning)
+		if err != nil {
+			g.metrics.IncLLMRequest(link.Model, link.Config.Name, llmStatusError)
+			g.metrics.IncPolicyBlocked(link.Model)
+			g.logger.Warn("llmgateway: model policy blocked request",
+				zap.String("model", link.Model), zap.Error(err))
+			return nil, false, err
+		}
+		attemptReq = enforced
+	} else {
+		// 权威数据不存在（policy nil）：L1-L3 跳过，只做能力门控；计指标供
+		// 治理观测（与「UNKNOWN 不压制」同构，见 spec §4）。
+		g.metrics.IncPolicyMissing(link.Model)
+	}
 	if stream {
 		return g.invokeStream(ctx, attemptReq, link, onToken)
 	}
@@ -337,49 +359,6 @@ func (g *Gateway) applyCapabilityGate(req *CompletionRequest, link chainLink) *C
 		g.logger.Warn("llmgateway: response_format ignored for model without json_object support",
 			zap.String("model", link.Model),
 			zap.String("response_format", req.ResponseFormat.Type))
-	}
-	return &cloned
-}
-
-// applyMaxTokensPolicy 对本次尝试副本应用 max_tokens 策略（副本修改，绝不改共享 req）。
-// 只治理显式正值（>0），规则按序：
-//   - floor（仅 reasoning）：推理模型 max_tokens 语义 = thinking + answer，低于平台
-//     DefaultOutputReserveTokens 的显式值几乎必然是截断事故（思考长度模型自定），
-//     抬升到兜底值。Anthropic 的 thinkingForBudget 在 client 层做 budget+4096
-//     精细抬升，二者幂等不冲突。
-//   - clamp（已知上限）：LookupModelSpec 命中 maxOut > 0 且值超上限 → 压到 maxOut
-//   - WARN；未知模型（0/0）透传，provider 400 即反馈（显式错误、可恢复，与
-//     未知模型 effort 清空同策略）。clamp 在 floor 之后，硬上限优先。
-//
-// MaxTokens <= 0（未设置）一律不动：其语义属协议层——OpenAI-compat/Anthropic
-// maxTokensFallback 兜底 4096，ollama 0 = 无限（原生）。agent 执行路径 0 不出现
-// （resolveMaxOutputTokens 恒返回确定值），此处不越权改 0 的协议语义。
-func (g *Gateway) applyMaxTokensPolicy(req *CompletionRequest, link chainLink) *CompletionRequest {
-	if req.MaxTokens <= 0 {
-		return req
-	}
-	_, maxOut := LookupModelSpec(link.Model)
-	floored := link.Reasoning && req.MaxTokens < constants.DefaultOutputReserveTokens
-	clamped := maxOut > 0 && req.MaxTokens > maxOut
-	if !floored && !clamped {
-		return req
-	}
-	cloned := *req
-	cloned.Model = link.Model
-	if floored {
-		cloned.MaxTokens = constants.DefaultOutputReserveTokens
-		g.logger.Warn("llmgateway: max_tokens raised to floor for reasoning model",
-			zap.String("model", link.Model),
-			zap.Int("max_tokens", req.MaxTokens),
-			zap.Int("raised_to", constants.DefaultOutputReserveTokens))
-	}
-	if clamped {
-		// floored 值若超模型上限，同样被压回——能力是硬约束。
-		cloned.MaxTokens = maxOut
-		g.logger.Warn("llmgateway: max_tokens clamped to model max output",
-			zap.String("model", link.Model),
-			zap.Int("max_tokens", req.MaxTokens),
-			zap.Int("clamped_to", maxOut))
 	}
 	return &cloned
 }

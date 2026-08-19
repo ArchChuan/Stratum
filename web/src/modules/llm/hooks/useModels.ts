@@ -2,7 +2,7 @@ import { message } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 
 import { llmApi } from '../api/llm.api';
-import type { Model, UpdateModelInput } from '../model/llm';
+import type { Model, UpdateModelInput, UpdateModelPolicyInput } from '../model/llm';
 
 import { extractErrorMessage } from '@/shared/lib';
 
@@ -47,6 +47,16 @@ export function useModels() {
     }
   }, [fetch]);
 
+  const updateModelPolicy = useCallback(async (id: string, values: UpdateModelPolicyInput) => {
+    try {
+      await llmApi.updateModelPolicy(id, values);
+      message.success({ content: '运行策略已更新', duration: 2 });
+      await fetch();
+    } catch (err) {
+      message.error({ content: extractErrorMessage(err, '更新运行策略失败'), duration: 0 });
+    }
+  }, [fetch]);
+
   // 设置/取消默认嵌入会连带清除其他模型的标记，成功后整体刷新。
   const setDefaultEmbedding = useCallback(async (id: string, enabled: boolean) => {
     try {
@@ -78,6 +88,7 @@ export function useModels() {
     refresh: fetch,
     toggleModel,
     updateModel,
+    updateModelPolicy,
     deleteModel,
     setDefaultEmbedding,
   };
