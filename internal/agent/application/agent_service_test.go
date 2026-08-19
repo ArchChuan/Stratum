@@ -45,7 +45,10 @@ func (testSystemResourceGuard) PlatformManagedWorkspaceIDs(context.Context, stri
 	return nil, nil
 }
 
-type mockAgentRepo struct{ mock.Mock }
+type mockAgentRepo struct {
+	mock.Mock
+	lastSystemMemoryParameters map[string]any
+}
 
 type preparationAgentRevisionResolver struct{}
 
@@ -244,7 +247,8 @@ func (m *mockAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model st
 	cfg, _ := args.Get(0).(*domain.AgentConfig)
 	return cfg, args.Error(1)
 }
-func (m *mockAgentRepo) UpdateSystemAssistantAll(ctx context.Context, model string, memoryScope string, maxIterations int, maxContextTokens int, maxTokens int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+func (m *mockAgentRepo) UpdateSystemAssistantAll(ctx context.Context, model string, memoryScope string, maxIterations int, maxContextTokens int, maxTokens int, memoryParameters map[string]any, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+	m.lastSystemMemoryParameters = memoryParameters
 	args := m.Called(ctx, model, memoryScope, maxIterations, maxContextTokens, maxTokens)
 	cfg, _ := args.Get(0).(*domain.AgentConfig)
 	return cfg, args.Error(1)
@@ -909,6 +913,26 @@ func TestAgentServicePlatformAssistantModelOnlyUpdatePreservesSystemBindings(t *
 
 	assert.NoError(t, err)
 	assert.Equal(t, cfg.MCPToolIDs, got.MCPToolIDs)
+	repo.AssertExpectations(t)
+}
+
+func TestAgentServicePlatformAssistantPersistsMemoryParameters(t *testing.T) {
+	svc, repo := newTestService(t)
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	cfg := &domain.AgentConfig{ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey}
+	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
+	repo.On("UpdateSystemAssistantAll", ctx, "", "", 0, 0, 0).Return(&domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		MemoryParameters: map[string]any{"memory.recall_top_k": 9},
+	}, nil)
+
+	dto, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{
+		Parameters: map[string]any{"memory.recall_top_k": 9},
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, 9, dto.Parameters["memory.recall_top_k"])
+	assert.Equal(t, map[string]any{"memory.recall_top_k": 9}, repo.lastSystemMemoryParameters)
 	repo.AssertExpectations(t)
 }
 

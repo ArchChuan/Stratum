@@ -76,8 +76,8 @@ func packSamplingParameters(cfg *domain.AgentConfig) (string, error) {
 	putIfNonZero(params, "compaction_prompt", cfg.CompactionPrompt, "")
 	putIfNonZero(params, "compaction_temperature", cfg.CompactionTemperature, float32(0))
 	putIfNonZero(params, "compaction_model", cfg.CompactionModel, "")
-	// memory.* resource-scope keys are pre-filtered by the application layer
-	// (zeros dropped), so they copy verbatim onto the same JSONB.
+	// memory.* resource-scope keys use nil as a deletion marker. The merge SQL
+	// strips those nulls after overlaying this JSONB patch.
 	for k, v := range cfg.MemoryParameters {
 		params[k] = v
 	}
@@ -96,16 +96,20 @@ func putIfNonZero[T comparable](params map[string]any, key string, v, zero T) {
 	}
 }
 
-// packMaxTokensFragment renders the parameters merge fragment for the system
-// assistant update. 0 = unset (skip), mirroring packSamplingParameters' skip-zero
-// semantics so an old client PUT cannot erase stored sampling parameters.
-func packMaxTokensFragment(maxTokens int) (string, error) {
-	if maxTokens <= 0 {
-		return "{}", nil
+// packSystemAssistantParameters renders the parameters merge fragment for the
+// system assistant update. A zero max-token value is omitted so an old client
+// PUT cannot erase it; memory values may include nil deletion markers.
+func packSystemAssistantParameters(maxTokens int, memoryParameters map[string]any) (string, error) {
+	params := make(map[string]any, len(memoryParameters)+1)
+	if maxTokens > 0 {
+		params["max_tokens"] = maxTokens
 	}
-	b, err := json.Marshal(map[string]any{"max_tokens": maxTokens})
+	for key, value := range memoryParameters {
+		params[key] = value
+	}
+	b, err := json.Marshal(params)
 	if err != nil {
-		return "", fmt.Errorf("pack max tokens fragment: %w", err)
+		return "", fmt.Errorf("pack system assistant parameters: %w", err)
 	}
 	return string(b), nil
 }
@@ -804,9 +808,9 @@ func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, audit
 }
 
 // samplingParameterSet renders the parameters UPDATE fragment and packed JSON
-// for the merge (form/API) or replace (promote) semantics. merge 路径用 JSONB
-// 拼接:仅覆盖本次出现的 key,旧客户端 PUT 不清除已存参数;replace 路径整体
-// 覆盖,零值以 JSON null 显式清除。0=unset 语义见 pack 函数注释。
+// for the merge (form/API) or replace (promote) semantics. The merge path
+// overlays supplied keys and strips explicit null deletion markers; replace
+// paths keep nulls as their existing unset representation.
 func samplingParameterSet(cfg *domain.AgentConfig, replaceParams bool) (string, string, error) {
 	var params string
 	var err error
@@ -821,7 +825,7 @@ func samplingParameterSet(cfg *domain.AgentConfig, replaceParams bool) (string, 
 	if replaceParams {
 		return "parameters=$8", params, nil
 	}
-	return "parameters=parameters || $8::jsonb", params, nil
+	return "parameters=jsonb_strip_nulls(parameters || $8::jsonb)", params, nil
 }
 
 // UpdateSystemAssistantModel updates the platform assistant's model fields in
@@ -866,18 +870,18 @@ func (r *PgAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model stri
 // (unchanged) bindings in ONE transaction so the change audit lands with the
 // business write atomically. Formerly UpdateSystemAssistantModel +
 // UpdateSystemAssistantBindings in two separate transactions.
-func (r *PgAgentRepo) UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, maxIterations, maxContextTokens, maxTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+func (r *PgAgentRepo) UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, maxIterations, maxContextTokens, maxTokens int, memoryParameters map[string]any, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	var cfg domain.AgentConfig
 	var agentType string
 	var rawParams string
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		fragment, err := packMaxTokensFragment(maxTokens)
+		fragment, err := packSystemAssistantParameters(maxTokens, memoryParameters)
 		if err != nil {
 			return err
 		}
 		if err := tx.QueryRow(ctx, `UPDATE agents SET llm_model=$1, memory_scope=$2,
 			max_iterations=$3, max_context_tokens=$4,
-			parameters = COALESCE(parameters, '{}'::jsonb) || $5::jsonb,
+			parameters = jsonb_strip_nulls(COALESCE(parameters, '{}'::jsonb) || $5::jsonb),
 			updated_at=NOW()
 			WHERE system_key='stratum.platform_assistant'
 			RETURNING id, name, type, description, system_prompt, llm_model,

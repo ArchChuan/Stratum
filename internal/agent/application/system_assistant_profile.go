@@ -150,6 +150,7 @@ func ComposeSystemAssistantProfile(
 	copyCfg.KnowledgeWorkspaceDescriptions = append(
 		[]string(nil), cfg.KnowledgeWorkspaceDescriptions...,
 	)
+	copyCfg.MemoryParameters = cloneMemoryParameters(cfg.MemoryParameters)
 	if cfg.SystemKey != domain.SystemAssistantKey {
 		return &copyCfg, nil
 	}
@@ -174,8 +175,20 @@ func ComposeSystemAssistantProfile(
 		Temperature:            cfg.Temperature,
 		MaxTokens:              cfg.MaxTokens,
 		CompactionRecentGroups: cfg.CompactionRecentGroups,
+		MemoryParameters:       copyCfg.MemoryParameters,
 		MemoryScope:            cfg.MemoryScope, SystemKey: profile.Key, IsSystem: true, ManagementMode: "platform",
 		MCPToolIDs: copyCfg.MCPToolIDs, KnowledgeWorkspaceIDs: copyCfg.KnowledgeWorkspaceIDs,
 		AllowedSkills: copyCfg.AllowedSkills,
 	}, nil
+}
+
+func cloneMemoryParameters(parameters map[string]any) map[string]any {
+	if parameters == nil {
+		return nil
+	}
+	clone := make(map[string]any, len(parameters))
+	for key, value := range parameters {
+		clone[key] = value
+	}
+	return clone
 }

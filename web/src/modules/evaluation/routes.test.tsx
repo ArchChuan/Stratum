@@ -10,7 +10,7 @@ vi.mock('./pages/EvaluationCenterPage', () => ({ EvaluationCenterPage: () => <di
 describe('evaluation routes', () => {
   it('registers the private evaluations route', () => {
     render(
-      <MemoryRouter initialEntries={['/evaluations']} future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
+      <MemoryRouter initialEntries={['/evaluations']}>
         <Routes>{evaluationRoutes}</Routes>
       </MemoryRouter>,
     );

@@ -336,6 +336,7 @@ func (m *mockAgentRepo) UpdateSystemAssistantModel(
 
 func (m *mockAgentRepo) UpdateSystemAssistantAll(
 	ctx context.Context, model, memoryScope string, maxIterations, maxContextTokens, maxTokens int,
+	_ map[string]any,
 	_ *auditdomain.ResourceChangeAuditEvent,
 ) (*domain.AgentConfig, error) {
 	args := m.Called(ctx, model, memoryScope, maxIterations, maxContextTokens, maxTokens)

@@ -1016,32 +1016,46 @@ func unpackCompactionOverrides(parameters map[string]any, prompt string, tempera
 
 // validateAndExtractMemoryParameters pulls the memory.* resource-scope keys
 // (dotted form) out of a flat parameters map and validates each present value
-// against the registry. Zero values are dropped (0 = unset, symmetric with the
-// sampling merge pack — an explicit 0 never persists). Unknown memory.* keys
-// fail closed so garbage never lands in the opaque JSONB. A nil provider (db
-// unavailable) skips validation but still extracts, matching the sampling
-// degrade convention. Returns nil when no memory keys are present.
+// against the registry. Explicit null or numeric 0 values are deletion markers
+// for old per-agent overrides. Unknown memory.* keys fail closed so garbage
+// never lands in the opaque JSONB. A nil provider (db unavailable) skips
+// validation but still extracts, matching the sampling degrade convention.
+// Returns nil when no memory keys are present.
 func (s *AgentService) validateAndExtractMemoryParameters(ctx context.Context, parameters map[string]any) (map[string]any, error) {
 	var out map[string]any
 	for k, v := range parameters {
 		if !strings.HasPrefix(k, "memory.") {
 			continue
 		}
-		if n, ok := numericSampleValue(v); ok && n == 0 {
-			continue
-		}
-		if s.deps.ParametersProvider != nil {
-			if err := s.deps.ParametersProvider.ValidateResourceKey(ctx, k, v); err != nil {
-				return nil, fmt.Errorf("%w: agent service: validate memory parameter %s: %v",
-					domain.ErrInvalidSamplingParameters, k, err)
-			}
+		value, err := s.normalizeMemoryParameter(ctx, k, v)
+		if err != nil {
+			return nil, err
 		}
 		if out == nil {
 			out = map[string]any{}
 		}
-		out[k] = v
+		out[k] = value
 	}
 	return out, nil
+}
+
+func (s *AgentService) normalizeMemoryParameter(ctx context.Context, key string, value any) (any, error) {
+	if value == nil || isZeroMemoryParameter(value) {
+		return nil, nil
+	}
+	if s.deps.ParametersProvider == nil {
+		return value, nil
+	}
+	if err := s.deps.ParametersProvider.ValidateResourceKey(ctx, key, value); err != nil {
+		return nil, fmt.Errorf("%w: agent service: validate memory parameter %s: %v",
+			domain.ErrInvalidSamplingParameters, key, err)
+	}
+	return value, nil
+}
+
+func isZeroMemoryParameter(v any) bool {
+	n, ok := numericSampleValue(v)
+	return ok && n == 0
 }
 
 // mergeMemoryParameters overlays explicit memory.* keys onto a base set. A
@@ -1144,12 +1158,18 @@ func (s *AgentService) updateSystemAssistant(ctx context.Context, cfg *domain.Ag
 	if maxContextTokens <= 0 {
 		maxContextTokens = cfg.MaxContextTokens
 	}
+	memoryParameters, err := s.validateAndExtractMemoryParameters(ctx, in.Parameters)
+	if err != nil {
+		return AgentDTO{}, err
+	}
 	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindAgent, cfg.ID, auditdomain.ChangeOpUpdate, in.ActorID,
 		AgentSafeProjection(cfg), nil)
 	if err != nil {
 		return AgentDTO{}, err
 	}
-	updated, err := s.deps.Registry.UpdateSystemAssistantAll(ctx, model, memoryScope, maxIterations, maxContextTokens, maxTokens, audit)
+	updated, err := s.deps.Registry.UpdateSystemAssistantAll(
+		ctx, model, memoryScope, maxIterations, maxContextTokens, maxTokens, memoryParameters, audit,
+	)
 	if err != nil {
 		return AgentDTO{}, fmt.Errorf("update system assistant: %w", err)
 	}
