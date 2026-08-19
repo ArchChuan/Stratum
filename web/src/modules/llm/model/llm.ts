@@ -24,6 +24,11 @@ export interface Model {
   capabilities: ModelCapability[];
   contextWindow: number;
   maxTokens: number;
+  operatorContextWindow?: number;
+  operatorMaxTokens?: number;
+  defaultOutputTokens?: number;
+  contextWindowSource?: string;
+  maxTokensSource?: string;
   inputPrice: number;
   outputPrice: number;
   recommended: boolean;
@@ -57,4 +62,10 @@ export interface UpdateModelInput {
   inputPrice: number;
   outputPrice: number;
   recommended: boolean;
+}
+
+export interface UpdateModelPolicyInput {
+  operatorContextWindow?: number;
+  operatorMaxTokens?: number;
+  defaultOutputTokens?: number;
 }

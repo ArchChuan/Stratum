@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -9,6 +10,38 @@ import (
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 )
+
+func TestOptionalIntJSONStates(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		set   bool
+		value *int
+	}{
+		{name: "omitted preserves", input: `{}`, set: false},
+		{name: "null clears", input: `{"operatorMaxTokens":null}`, set: true},
+		{name: "value sets", input: `{"operatorMaxTokens":2048}`, set: true, value: intPtr(2048)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var input UpdateModelPolicyInput
+			if err := json.Unmarshal([]byte(tc.input), &input); err != nil {
+				t.Fatal(err)
+			}
+			if input.OperatorMaxTokens.Set != tc.set {
+				t.Fatalf("Set = %v, want %v", input.OperatorMaxTokens.Set, tc.set)
+			}
+			if tc.value == nil && input.OperatorMaxTokens.Value != nil {
+				t.Fatalf("Value = %v, want nil", *input.OperatorMaxTokens.Value)
+			}
+			if tc.value != nil && (input.OperatorMaxTokens.Value == nil || *input.OperatorMaxTokens.Value != *tc.value) {
+				t.Fatalf("Value = %v, want %v", input.OperatorMaxTokens.Value, *tc.value)
+			}
+		})
+	}
+}
+
+func intPtr(value int) *int { return &value }
 
 type modelMgmtRepo struct {
 	model        domain.Model

@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
@@ -31,11 +32,33 @@ type UpdateModelInput struct {
 // facts from being overwritten by policy edits.
 type UpdateModelPolicyInput struct {
 	ID                    string                 `json:"id"`
-	OperatorContextWindow *int                   `json:"operatorContextWindow"`
-	OperatorMaxTokens     *int                   `json:"operatorMaxTokens"`
-	DefaultOutputTokens   *int                   `json:"defaultOutputTokens"`
+	OperatorContextWindow OptionalInt            `json:"operatorContextWindow"`
+	OperatorMaxTokens     OptionalInt            `json:"operatorMaxTokens"`
+	DefaultOutputTokens   OptionalInt            `json:"defaultOutputTokens"`
 	SamplingParams        *domain.SamplingParams `json:"samplingParams"`
 	MaxTemperature        *float64               `json:"maxTemperature"`
+}
+
+// OptionalInt distinguishes an omitted PATCH field from an explicit JSON null.
+// Set=false means preserve, Set=true/Value=nil means clear, and a non-nil
+// Value means set the positive integer after final-state validation.
+type OptionalInt struct {
+	Set   bool
+	Value *int
+}
+
+func (v *OptionalInt) UnmarshalJSON(data []byte) error {
+	v.Set = true
+	if string(data) == "null" {
+		v.Value = nil
+		return nil
+	}
+	var value int
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	v.Value = &value
+	return nil
 }
 
 // ModelMgmtService wraps model CRUD operations that are initiated by
@@ -125,11 +148,11 @@ func (s *ModelMgmtService) UpdatePolicy(
 	if err != nil {
 		return nil, fmt.Errorf("model mgmt: get policy target: %w", err)
 	}
+	before := modelSafeProjection(m)
 	mergeModelPolicy(m, input)
 	if err := domain.ValidateOperatorPolicy(*m); err != nil {
 		return nil, fmt.Errorf("model mgmt: validate policy: %w", err)
 	}
-	before := modelSafeProjection(m)
 	audit, err := newChangeAudit(ctx, changeAuditInput{
 		Kind: auditdomain.ResourceKindModel, ResourceID: m.ID, Operation: auditdomain.ChangeOpUpdate,
 		ActorID: actorID, Before: before, After: modelSafeProjection(m),
@@ -155,14 +178,14 @@ func (s *ModelMgmtService) UpdatePolicy(
 }
 
 func mergeModelPolicy(m *domain.Model, input UpdateModelPolicyInput) {
-	if input.OperatorContextWindow != nil {
-		m.OperatorContextWindow = input.OperatorContextWindow
+	if input.OperatorContextWindow.Set {
+		m.OperatorContextWindow = input.OperatorContextWindow.Value
 	}
-	if input.OperatorMaxTokens != nil {
-		m.OperatorMaxTokens = input.OperatorMaxTokens
+	if input.OperatorMaxTokens.Set {
+		m.OperatorMaxTokens = input.OperatorMaxTokens.Value
 	}
-	if input.DefaultOutputTokens != nil {
-		m.DefaultOutputTokens = input.DefaultOutputTokens
+	if input.DefaultOutputTokens.Set {
+		m.DefaultOutputTokens = input.DefaultOutputTokens.Value
 	}
 	if input.SamplingParams != nil {
 		m.SamplingParams = input.SamplingParams
