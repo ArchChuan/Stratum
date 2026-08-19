@@ -69,7 +69,7 @@ export function ModelListPage() {
         setEditLoading(false);
       }
     },
-    [updateModel],
+    [updateModel, updateModelPolicy],
   );
 
   const handleSetDefault = useCallback(
