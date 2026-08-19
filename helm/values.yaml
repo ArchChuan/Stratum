@@ -11,12 +11,14 @@ imagePullSecrets: []
 
 podAnnotations:
   # Bump when the otel-collector Deployment/Service topology changes: the app's
-  # OTLP exporter connection is long-lived and kube-proxy iptables keeps DNAT'ing
-  # an ESTABLISHED connection to the old backend IP (stale conntrack). If that IP
-  # is reused by another collector, the app silently exports there and traces are
-  # lost with no error. Restarting the app breaks the pinned connection; a new
-  # value here forces the rollout. Set to "1" for the initial reconnect.
-  checksum/otel-collector: "1"
+  # OTLP exporter connection is long-lived and a wrong kube-proxy iptables DNAT
+  # (stale EndpointSlice sync) can pin the connection to a replaced collector
+  # backend IP. If that IP is reused by another collector, the app silently
+  # exports there and traces are lost with no error. Restarting the app breaks
+  # the pinned connection; a new value here forces the rollout.
+  # "1": first reconnect (rules were stale and pinned to the opik collector IP).
+  # "2": reconnect again after kube-proxy DNAT rules had self-healed to 10.42.0.72.
+  checksum/otel-collector: "2"
 
 podSecurityContext:
   runAsNonRoot: true
