@@ -26,6 +26,18 @@ type UpdateModelInput struct {
 	MaxTemperature *float64               `json:"maxTemperature"`
 }
 
+// UpdateModelPolicyInput updates only runtime policy fields. A nil pointer
+// preserves the current value; the dedicated endpoint prevents discovery
+// facts from being overwritten by policy edits.
+type UpdateModelPolicyInput struct {
+	ID                    string                 `json:"id"`
+	OperatorContextWindow *int                   `json:"operatorContextWindow"`
+	OperatorMaxTokens     *int                   `json:"operatorMaxTokens"`
+	DefaultOutputTokens   *int                   `json:"defaultOutputTokens"`
+	SamplingParams        *domain.SamplingParams `json:"samplingParams"`
+	MaxTemperature        *float64               `json:"maxTemperature"`
+}
+
 // ModelMgmtService wraps model CRUD operations that are initiated by
 // tenant administrators (as opposed to auto-discovery or runtime resolution).
 type ModelMgmtService struct {
@@ -84,16 +96,80 @@ func (s *ModelMgmtService) Update(ctx context.Context, tenantID, actorID string,
 	if input.MaxTemperature != nil {
 		m.MaxTemperature = input.MaxTemperature
 	}
-	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindModel, m.ID, auditdomain.ChangeOpUpdate, actorID,
-		before, modelSafeProjection(m))
+	audit, err := newChangeAudit(ctx, changeAuditInput{
+		Kind: auditdomain.ResourceKindModel, ResourceID: m.ID, Operation: auditdomain.ChangeOpUpdate,
+		ActorID: actorID, Before: before, After: modelSafeProjection(m),
+	})
 	if err != nil {
 		return nil, err
 	}
-	if err := s.repo.Update(ctx, m, tenantID, audit); err != nil {
+	if platformRepo, ok := s.repo.(port.PlatformModelRepository); ok {
+		if err := platformRepo.UpdatePlatform(ctx, m, tenantID, audit); err != nil {
+			return nil, fmt.Errorf("model mgmt: update: %w", err)
+		}
+	} else if err := s.repo.Update(ctx, m, tenantID, audit); err != nil {
 		return nil, fmt.Errorf("model mgmt: update: %w", err)
 	}
 	s.invalidate()
 	return m, nil
+}
+
+// UpdatePolicy applies a runtime policy without changing observed discovery
+// facts or catalog metadata.
+func (s *ModelMgmtService) UpdatePolicy(
+	ctx context.Context,
+	tenantID, actorID string,
+	input UpdateModelPolicyInput,
+) (*domain.Model, error) {
+	m, err := s.repo.Get(ctx, input.ID)
+	if err != nil {
+		return nil, fmt.Errorf("model mgmt: get policy target: %w", err)
+	}
+	mergeModelPolicy(m, input)
+	if err := domain.ValidateOperatorPolicy(*m); err != nil {
+		return nil, fmt.Errorf("model mgmt: validate policy: %w", err)
+	}
+	before := modelSafeProjection(m)
+	audit, err := newChangeAudit(ctx, changeAuditInput{
+		Kind: auditdomain.ResourceKindModel, ResourceID: m.ID, Operation: auditdomain.ChangeOpUpdate,
+		ActorID: actorID, Before: before, After: modelSafeProjection(m),
+	})
+	if err != nil {
+		return nil, err
+	}
+	policyRepo, ok := s.repo.(interface {
+		UpdatePolicy(context.Context, *domain.Model, string, *auditdomain.ResourceChangeAuditEvent) error
+	})
+	if !ok {
+		return nil, fmt.Errorf("model mgmt: policy repository unavailable")
+	}
+	if platformRepo, ok := s.repo.(port.PlatformModelRepository); ok {
+		if err := platformRepo.UpdatePlatform(ctx, m, tenantID, audit); err != nil {
+			return nil, fmt.Errorf("model mgmt: update policy: %w", err)
+		}
+	} else if err := policyRepo.UpdatePolicy(ctx, m, tenantID, audit); err != nil {
+		return nil, fmt.Errorf("model mgmt: update policy: %w", err)
+	}
+	s.invalidate()
+	return m, nil
+}
+
+func mergeModelPolicy(m *domain.Model, input UpdateModelPolicyInput) {
+	if input.OperatorContextWindow != nil {
+		m.OperatorContextWindow = input.OperatorContextWindow
+	}
+	if input.OperatorMaxTokens != nil {
+		m.OperatorMaxTokens = input.OperatorMaxTokens
+	}
+	if input.DefaultOutputTokens != nil {
+		m.DefaultOutputTokens = input.DefaultOutputTokens
+	}
+	if input.SamplingParams != nil {
+		m.SamplingParams = input.SamplingParams
+	}
+	if input.MaxTemperature != nil {
+		m.MaxTemperature = input.MaxTemperature
+	}
 }
 
 // Toggle enables or disables a model.

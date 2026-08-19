@@ -624,7 +624,9 @@ func registerLLMAdmin(r *gin.Engine, c *wiring.Container, requireActive gin.Hand
 	}
 	providerH := handler.NewProviderHandler(c.LLMGateway.ProviderService)
 	modelMgmtH := handler.NewModelMgmtHandler(c.LLMGateway.ModelMgmtService)
-	adminMW := middleware.RequireTenantRole("admin")
+	// The catalog is public/platform-scoped. Tenant administrators may read it,
+	// but every mutation must be authorized by the global-admin claim.
+	adminMW := middleware.RequireGlobalAdmin()
 
 	// Providers: list is readable by any tenant member; write ops require admin.
 	providers := r.Group("/admin/providers", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
@@ -643,6 +645,7 @@ func registerLLMAdmin(r *gin.Engine, c *wiring.Container, requireActive gin.Hand
 		models.GET("", modelMgmtH.List)
 		models.GET("/:id", modelMgmtH.Get)
 		models.PUT("/:id", adminMW, modelMgmtH.Update)
+		models.PATCH("/:id/policy", adminMW, requireActive, modelMgmtH.UpdatePolicy)
 		models.PUT("/:id/default-embedding", adminMW, requireActive, modelMgmtH.SetDefaultEmbedding)
 		models.PATCH("/:id/toggle", adminMW, modelMgmtH.Toggle)
 		models.DELETE("/:id", adminMW, modelMgmtH.Delete)

@@ -10,14 +10,23 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 )
 
+type changeAuditInput struct {
+	Kind       string
+	ResourceID string
+	Operation  string
+	ActorID    string
+	Before     any
+	After      any
+}
+
 // newChangeAudit builds the audit event for a business write. before/after are
 // safe projections (no credentials); nil means `{}`. A system actor in ctx
 // (evaluation worker) is recorded with actor_type=system, source=optimization
 // and overrides the caller-provided actor. 与 skill/knowledge 的副本保持同构。
-func newChangeAudit(ctx context.Context, kind, resourceID, op, actorID string, before, after any) (*auditdomain.ResourceChangeAuditEvent, error) {
+func newChangeAudit(ctx context.Context, input changeAuditInput) (*auditdomain.ResourceChangeAuditEvent, error) {
 	ev := &auditdomain.ResourceChangeAuditEvent{
-		ResourceKind: kind, ResourceID: resourceID, Operation: op,
-		ActorID: actorID, ActorType: auditdomain.ChangeActorUser,
+		ResourceKind: input.Kind, ResourceID: input.ResourceID, Operation: input.Operation,
+		ActorID: input.ActorID, ActorType: auditdomain.ChangeActorUser,
 	}
 	if sysActor := reqctx.SystemActorFromContext(ctx); sysActor != "" {
 		ev.ActorID = sysActor
@@ -32,14 +41,14 @@ func newChangeAudit(ctx context.Context, kind, resourceID, op, actorID string, b
 		ev.ProposalID = proposalID
 	}
 	var err error
-	if before != nil {
-		ev.Before, err = json.Marshal(before)
+	if input.Before != nil {
+		ev.Before, err = json.Marshal(input.Before)
 		if err != nil {
 			return nil, fmt.Errorf("change audit: marshal before: %w", err)
 		}
 	}
-	if after != nil {
-		ev.After, err = json.Marshal(after)
+	if input.After != nil {
+		ev.After, err = json.Marshal(input.After)
 		if err != nil {
 			return nil, fmt.Errorf("change audit: marshal after: %w", err)
 		}
@@ -69,6 +78,6 @@ func providerSafeProjection(p *domain.Provider) map[string]any {
 	return map[string]any{
 		"id": p.ID, "name": p.Name, "kind": p.Kind, "baseURL": p.BaseURL,
 		"defaultModel": p.DefaultModel, "enabled": p.Enabled,
-		"extraHeaders": p.ExtraHeaders, "defaultSampling": p.DefaultSampling,
+		"defaultSampling": p.DefaultSampling,
 	}
 }

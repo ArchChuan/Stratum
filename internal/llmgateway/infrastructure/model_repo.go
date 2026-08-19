@@ -62,12 +62,17 @@ func (r *PgModelRepo) Get(ctx context.Context, id string) (*domain.Model, error)
 	err := r.pool.QueryRow(ctx,
 		`SELECT id, provider_id, name, display_name, capabilities,
 		 context_window, max_tokens, input_price, output_price, recommended, default_embedding,
-		 enabled, provider_managed, sampling_params, max_temperature, created_at, updated_at
+		 enabled, provider_managed, sampling_params, max_temperature,
+		 operator_context_window, operator_max_tokens, default_output_tokens,
+		 context_window_source, max_tokens_source, context_window_observed_at, max_tokens_observed_at,
+		 created_at, updated_at
 		 FROM public.models WHERE id=$1`, id,
 	).Scan(&m.ID, &m.ProviderID, &m.Name, &m.DisplayName, &caps,
 		&m.ContextWindow, &m.MaxTokens, &m.InputPrice, &m.OutputPrice,
 		&m.Recommended, &m.DefaultEmbedding, &m.Enabled, &m.ProviderManaged,
-		&sampling, &m.MaxTemperature, &m.CreatedAt, &m.UpdatedAt)
+		&sampling, &m.MaxTemperature, &m.OperatorContextWindow, &m.OperatorMaxTokens, &m.DefaultOutputTokens,
+		&m.ContextWindowSource, &m.MaxTokensSource, &m.ContextWindowObservedAt, &m.MaxTokensObservedAt,
+		&m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("get model: %w", err)
 	}
@@ -83,7 +88,10 @@ func (r *PgModelRepo) Get(ctx context.Context, id string) (*domain.Model, error)
 func (r *PgModelRepo) List(ctx context.Context, filter port.ModelFilter) ([]domain.Model, error) {
 	query := `SELECT id, provider_id, name, display_name, capabilities,
 	          context_window, max_tokens, input_price, output_price, recommended, default_embedding,
-	          enabled, provider_managed, sampling_params, max_temperature, created_at, updated_at FROM public.models`
+	          enabled, provider_managed, sampling_params, max_temperature,
+	          operator_context_window, operator_max_tokens, default_output_tokens,
+	          context_window_source, max_tokens_source, context_window_observed_at, max_tokens_observed_at,
+	          created_at, updated_at FROM public.models`
 	var args []any
 	argIdx := 1
 	var conds []string
@@ -120,7 +128,9 @@ func (r *PgModelRepo) List(ctx context.Context, filter port.ModelFilter) ([]doma
 		if err := rows.Scan(&m.ID, &m.ProviderID, &m.Name, &m.DisplayName, &caps,
 			&m.ContextWindow, &m.MaxTokens, &m.InputPrice, &m.OutputPrice,
 			&m.Recommended, &m.DefaultEmbedding, &m.Enabled, &m.ProviderManaged,
-			&sampling, &m.MaxTemperature, &m.CreatedAt, &m.UpdatedAt); err != nil {
+			&sampling, &m.MaxTemperature, &m.OperatorContextWindow, &m.OperatorMaxTokens, &m.DefaultOutputTokens,
+			&m.ContextWindowSource, &m.MaxTokensSource, &m.ContextWindowObservedAt, &m.MaxTokensObservedAt,
+			&m.CreatedAt, &m.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("list models: scan: %w", err)
 		}
 		m.Capabilities = stringsToModelCaps(caps)
@@ -188,6 +198,87 @@ func (r *PgModelRepo) Update(ctx context.Context, m *domain.Model, tenantID stri
 	return nil
 }
 
+// UpdatePlatform performs a public-catalog mutation and writes its audit in
+// the same public transaction. actorTenantID is audit attribution only.
+func (r *PgModelRepo) UpdatePlatform(
+	ctx context.Context,
+	m *domain.Model,
+	actorTenantID string,
+	audit *auditdomain.ResourceChangeAuditEvent,
+) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("update platform model: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	caps := modelCapsToStrings(m.Capabilities)
+	sampling, err := encodeSamplingParams(m.SamplingParams)
+	if err != nil {
+		return fmt.Errorf("update platform model: %w", err)
+	}
+	tag, err := tx.Exec(ctx,
+		`UPDATE public.models SET display_name=$1, capabilities=$2, context_window=$3,
+		 max_tokens=$4, input_price=$5, output_price=$6, recommended=$7, enabled=$8,
+		 sampling_params=$9, max_temperature=$10, operator_context_window=$11,
+		 operator_max_tokens=$12, default_output_tokens=$13, updated_at=now(),
+		 default_embedding = default_embedding AND $8 AND 'embedding' = ANY($2)
+		 WHERE id=$14`,
+		m.DisplayName, caps, m.ContextWindow, m.MaxTokens, m.InputPrice, m.OutputPrice,
+		m.Recommended, m.Enabled, sampling, m.MaxTemperature, m.OperatorContextWindow,
+		m.OperatorMaxTokens, m.DefaultOutputTokens, m.ID)
+	if err != nil {
+		return fmt.Errorf("update platform model: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("model not found: %s", m.ID)
+	}
+	if err := insertPlatformAuditTx(ctx, tx, actorTenantID, audit); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("update platform model commit: %w", err)
+	}
+	return nil
+}
+
+// UpdatePolicy updates only operator/runtime policy columns. Discovery facts
+// and catalog metadata remain untouched.
+func (r *PgModelRepo) UpdatePolicy(
+	ctx context.Context,
+	m *domain.Model,
+	tenantID string,
+	audit *auditdomain.ResourceChangeAuditEvent,
+) error {
+	tx, err := beginTenantTx(ctx, r.pool, tenantID)
+	if err != nil {
+		return fmt.Errorf("update model policy: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	sampling, err := encodeSamplingParams(m.SamplingParams)
+	if err != nil {
+		return fmt.Errorf("update model policy: %w", err)
+	}
+	tag, err := tx.Exec(ctx,
+		`UPDATE public.models SET operator_context_window=$1, operator_max_tokens=$2,
+		 default_output_tokens=$3, sampling_params=$4, max_temperature=$5, updated_at=now()
+		 WHERE id=$6`,
+		m.OperatorContextWindow, m.OperatorMaxTokens, m.DefaultOutputTokens,
+		sampling, m.MaxTemperature, m.ID)
+	if err != nil {
+		return fmt.Errorf("update model policy: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("model not found: %s", m.ID)
+	}
+	if err := insertAuditTx(ctx, tx, tenantID, audit); err != nil {
+		return fmt.Errorf("update model policy audit: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("update model policy commit: %w", err)
+	}
+	return nil
+}
+
 // UpsertDiscovered syncs provider-managed models: disables stale entries,
 // inserts new ones, and re-enables existing ones while preserving user edits.
 // 全部在单事务内执行，保证 disable 阶段与写入/读回原子。
@@ -243,9 +334,11 @@ func (r *PgModelRepo) upsertSyncModel(ctx context.Context, tx pgx.Tx, providerID
 	).Scan(&existingID)
 	if err == nil {
 		_, err = tx.Exec(ctx,
-			`UPDATE public.models SET enabled=true, context_window=$1, max_tokens=$2, updated_at=now()
-			 WHERE id=$3`,
-			m.ContextWindow, m.MaxTokens, existingID)
+			`UPDATE public.models SET enabled=true, context_window=$1, max_tokens=$2,
+			 context_window_source=$3, max_tokens_source=$4,
+			 context_window_observed_at=now(), max_tokens_observed_at=now(), updated_at=now()
+			 WHERE id=$5`,
+			m.ContextWindow, m.MaxTokens, m.ContextWindowSource, m.MaxTokensSource, existingID)
 		if err != nil {
 			return fmt.Errorf("upsert models: update %s: %w", m.Name, err)
 		}
@@ -254,11 +347,13 @@ func (r *PgModelRepo) upsertSyncModel(ctx context.Context, tx pgx.Tx, providerID
 	// New model -- insert with defaults
 	_, err = tx.Exec(ctx,
 		`INSERT INTO public.models (id, provider_id, name, display_name, capabilities,
-		 context_window, max_tokens, input_price, output_price, recommended, enabled, provider_managed)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,true)`,
+		 context_window, max_tokens, input_price, output_price, recommended, enabled, provider_managed,
+		 context_window_source, max_tokens_source, context_window_observed_at, max_tokens_observed_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,true,$11,$12,now(),now())`,
 		uuid.Must(uuid.NewV7()).String(),
 		providerID, m.Name, m.DisplayName, caps,
-		m.ContextWindow, m.MaxTokens, m.InputPrice, m.OutputPrice, m.Recommended)
+		m.ContextWindow, m.MaxTokens, m.InputPrice, m.OutputPrice, m.Recommended,
+		m.ContextWindowSource, m.MaxTokensSource)
 	if err != nil {
 		return fmt.Errorf("upsert models: insert %s: %w", m.Name, err)
 	}
@@ -266,12 +361,15 @@ func (r *PgModelRepo) upsertSyncModel(ctx context.Context, tx pgx.Tx, providerID
 }
 
 // upsertReadBack 在事务内读回该 provider 全部模型（按 name 排序）并转为 domain.Model。
-// 新列 sampling_params/max_temperature 一并读回（默认 '{}'/NULL 时解码为 nil）。
+// 新列和运营策略一并读回（默认 '{}'/NULL 时解码为 nil）。
 func (r *PgModelRepo) upsertReadBack(ctx context.Context, tx pgx.Tx, providerID string) ([]domain.Model, error) {
 	rows, err := tx.Query(ctx,
 		`SELECT id, provider_id, name, display_name, capabilities,
 		 context_window, max_tokens, input_price, output_price, recommended, default_embedding,
-		 enabled, provider_managed, sampling_params, max_temperature, created_at, updated_at
+		 enabled, provider_managed, sampling_params, max_temperature,
+		 operator_context_window, operator_max_tokens, default_output_tokens,
+		 context_window_source, max_tokens_source, context_window_observed_at, max_tokens_observed_at,
+		 created_at, updated_at
 		 FROM public.models WHERE provider_id=$1 ORDER BY name`,
 		providerID)
 	if err != nil {
@@ -287,7 +385,9 @@ func (r *PgModelRepo) upsertReadBack(ctx context.Context, tx pgx.Tx, providerID 
 			&model.DisplayName, &caps, &model.ContextWindow, &model.MaxTokens,
 			&model.InputPrice, &model.OutputPrice, &model.Recommended, &model.DefaultEmbedding,
 			&model.Enabled, &model.ProviderManaged, &sampling, &model.MaxTemperature,
-			&model.CreatedAt, &model.UpdatedAt); err != nil {
+			&model.OperatorContextWindow, &model.OperatorMaxTokens, &model.DefaultOutputTokens,
+			&model.ContextWindowSource, &model.MaxTokensSource,
+			&model.ContextWindowObservedAt, &model.MaxTokensObservedAt, &model.CreatedAt, &model.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("upsert models: scan: %w", err)
 		}
 		model.Capabilities = stringsToModelCaps(caps)

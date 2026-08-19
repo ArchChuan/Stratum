@@ -148,3 +148,31 @@ func TestModelEditableParamsMigration(t *testing.T) {
 		}
 	}
 }
+
+func TestModelPolicyGovernanceMigration(t *testing.T) {
+	t.Parallel()
+	up, err := os.ReadFile("sql/039_model_policy_governance.up.sql")
+	if err != nil {
+		t.Fatalf("read up migration: %v", err)
+	}
+	down, err := os.ReadFile("sql/039_model_policy_governance.down.sql")
+	if err != nil {
+		t.Fatalf("read down migration: %v", err)
+	}
+	upSQL := string(up)
+	for _, required := range []string{
+		"operator_context_window",
+		"operator_max_tokens",
+		"default_output_tokens",
+		"context_window_source",
+		"max_tokens_source",
+		"platform_resource_change_audits",
+	} {
+		if !strings.Contains(upSQL, required) {
+			t.Fatalf("up migration missing %q", required)
+		}
+	}
+	if !strings.Contains(string(down), "platform_resource_change_audits") {
+		t.Fatal("down migration must drop platform audit table")
+	}
+}

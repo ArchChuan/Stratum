@@ -25,12 +25,14 @@ type resolvedEntry struct {
 // 查询 DB）。nil 表示模型记录不存在（权威数据缺失 → 网关 L1-L3 跳过 +
 // WARN + 指标）。
 type ModelPolicy struct {
-	MaxTokens        int
-	ContextWindow    int
-	MaxTemperature   *float64
-	SamplingDefaults *domain.SamplingParams
-	Capabilities     []domain.ModelCapability
-	Reasoning        bool
+	MaxTokens                int
+	ContextWindow            int
+	DefaultOutputTokens      int
+	MaxTemperature           *float64
+	SamplingDefaults         *domain.SamplingParams
+	ProviderSamplingDefaults *domain.SamplingParams
+	Capabilities             []domain.ModelCapability
+	Reasoning                bool
 }
 
 // policyFromModel 从模型记录构造 policy；nil 输入返回 nil。Reasoning 保持
@@ -51,14 +53,43 @@ func policyFromModel(m *domain.Model) *ModelPolicy {
 	if !reasoning {
 		reasoning = ModelSupportsReasoning(m.Name)
 	}
+	effective := m.EffectivePolicy()
 	return &ModelPolicy{
-		MaxTokens:        m.MaxTokens,
-		ContextWindow:    m.ContextWindow,
-		MaxTemperature:   m.MaxTemperature,
-		SamplingDefaults: m.SamplingParams,
-		Capabilities:     m.Capabilities,
-		Reasoning:        reasoning,
+		MaxTokens:           effective.MaxOutputTokens,
+		ContextWindow:       effective.ContextWindow,
+		DefaultOutputTokens: effective.DefaultOutputTokens,
+		MaxTemperature:      m.MaxTemperature,
+		SamplingDefaults:    m.SamplingParams,
+		Capabilities:        m.Capabilities,
+		Reasoning:           reasoning,
 	}
+}
+
+func policyFromProvider(p *domain.Provider) *ModelPolicy {
+	if p == nil {
+		return nil
+	}
+	return &ModelPolicy{ProviderSamplingDefaults: samplingParamsFromMap(p.DefaultSampling)}
+}
+
+func policyWithProvider(m *domain.Model, p *domain.Provider) *ModelPolicy {
+	policy := policyFromModel(m)
+	if policy == nil {
+		return policyFromProvider(p)
+	}
+	policy.ProviderSamplingDefaults = samplingParamsFromMap(p.DefaultSampling)
+	return policy
+}
+
+func samplingParamsFromMap(values map[string]any) *domain.SamplingParams {
+	if len(values) == 0 {
+		return nil
+	}
+	value, ok := values["temperature"].(float64)
+	if !ok {
+		return nil
+	}
+	return &domain.SamplingParams{Temperature: &value}
 }
 
 // errModelNotResolved 是全局解析链的内部 sentinel：某一级未命中，交由下一级
@@ -223,14 +254,13 @@ func (r *ModelRegistry) resolveExact(
 			continue
 		}
 		cfg := ProviderConfig{
-			Name:         provider.Name,
-			BaseURL:      provider.BaseURL,
-			APIKey:       provider.APIKey,
-			HealthModel:  provider.DefaultModel,
-			Models:       []string{m.Name},
-			ExtraHeaders: provider.ExtraHeaders,
+			Name:        provider.Name,
+			BaseURL:     provider.BaseURL,
+			APIKey:      provider.APIKey,
+			HealthModel: provider.DefaultModel,
+			Models:      []string{m.Name},
 		}
-		r.cacheSet(cacheKey, cfg, *provider, m.Capabilities, policyFromModel(&m))
+		r.cacheSet(cacheKey, cfg, *provider, m.Capabilities, policyWithProvider(&m, provider))
 		return cfg, *provider, nil
 	}
 	return ProviderConfig{}, domain.Provider{}, errModelNotResolved
@@ -255,14 +285,13 @@ func (r *ModelRegistry) resolveProviderDefault(
 			continue
 		}
 		cfg := ProviderConfig{
-			Name:         p.Name,
-			BaseURL:      p.BaseURL,
-			APIKey:       p.APIKey,
-			HealthModel:  p.DefaultModel,
-			Models:       []string{p.DefaultModel},
-			ExtraHeaders: p.ExtraHeaders,
+			Name:        p.Name,
+			BaseURL:     p.BaseURL,
+			APIKey:      p.APIKey,
+			HealthModel: p.DefaultModel,
+			Models:      []string{p.DefaultModel},
 		}
-		r.cacheSet(cacheKey, cfg, p, []domain.ModelCapability{capability}, nil)
+		r.cacheSet(cacheKey, cfg, p, []domain.ModelCapability{capability}, policyFromProvider(&p))
 		return cfg, p, nil
 	}
 	return ProviderConfig{}, domain.Provider{}, errModelNotResolved
@@ -304,14 +333,13 @@ func (r *ModelRegistry) resolveRecommended(
 		return ProviderConfig{}, domain.Provider{}, errModelNotResolved
 	}
 	cfg := ProviderConfig{
-		Name:         bestProvider.Name,
-		BaseURL:      bestProvider.BaseURL,
-		APIKey:       bestProvider.APIKey,
-		HealthModel:  bestProvider.DefaultModel,
-		Models:       []string{best.Name},
-		ExtraHeaders: bestProvider.ExtraHeaders,
+		Name:        bestProvider.Name,
+		BaseURL:     bestProvider.BaseURL,
+		APIKey:      bestProvider.APIKey,
+		HealthModel: bestProvider.DefaultModel,
+		Models:      []string{best.Name},
 	}
-	r.cacheSet(cacheKey, cfg, *bestProvider, best.Capabilities, policyFromModel(&best))
+	r.cacheSet(cacheKey, cfg, *bestProvider, best.Capabilities, policyWithProvider(&best, bestProvider))
 	return cfg, *bestProvider, nil
 }
 
@@ -327,14 +355,13 @@ func (r *ModelRegistry) resolveEmbeddingMarked(ctx context.Context, cacheKey str
 		return ProviderConfig{}, domain.Provider{}, errModelNotResolved
 	}
 	cfg := ProviderConfig{
-		Name:         c.p.Name,
-		BaseURL:      c.p.BaseURL,
-		APIKey:       c.p.APIKey,
-		HealthModel:  c.p.DefaultModel,
-		Models:       []string{c.m.Name},
-		ExtraHeaders: c.p.ExtraHeaders,
+		Name:        c.p.Name,
+		BaseURL:     c.p.BaseURL,
+		APIKey:      c.p.APIKey,
+		HealthModel: c.p.DefaultModel,
+		Models:      []string{c.m.Name},
 	}
-	r.cacheSet(cacheKey, cfg, *c.p, c.m.Capabilities, policyFromModel(&c.m))
+	r.cacheSet(cacheKey, cfg, *c.p, c.m.Capabilities, policyWithProvider(&c.m, c.p))
 	return cfg, *c.p, nil
 }
 
@@ -406,16 +433,15 @@ func (r *ModelRegistry) ResolveFallbackCandidates(ctx context.Context, primary s
 	result := make([]FallbackCandidate, 0, len(cands))
 	for _, c := range cands {
 		cfg := ProviderConfig{
-			Name:         c.provider.Name,
-			BaseURL:      c.provider.BaseURL,
-			APIKey:       c.provider.APIKey,
-			HealthModel:  c.provider.DefaultModel,
-			Models:       []string{c.model.Name},
-			ExtraHeaders: c.provider.ExtraHeaders,
+			Name:        c.provider.Name,
+			BaseURL:     c.provider.BaseURL,
+			APIKey:      c.provider.APIKey,
+			HealthModel: c.provider.DefaultModel,
+			Models:      []string{c.model.Name},
 		}
 		// 复用 TTL 缓存语义：Warm/Resolve 已缓存的 entry 保持有效，
 		// 这里与缓存数据同源（同 modelRepo/providerRepo），直接写回。
-		r.cacheSet("chat:"+c.model.Name, cfg, c.provider, c.model.Capabilities, policyFromModel(&c.model))
+		r.cacheSet("chat:"+c.model.Name, cfg, c.provider, c.model.Capabilities, policyWithProvider(&c.model, &c.provider))
 		proto, ok := r.chatProtos[c.provider.Kind]
 		if !ok {
 			continue
@@ -597,12 +623,11 @@ func (r *ModelRegistry) warmModel(ctx context.Context, m domain.Model) error {
 		return nil
 	}
 	cfg := ProviderConfig{
-		Name:         provider.Name,
-		BaseURL:      provider.BaseURL,
-		APIKey:       provider.APIKey,
-		HealthModel:  provider.DefaultModel,
-		Models:       []string{m.Name},
-		ExtraHeaders: provider.ExtraHeaders,
+		Name:        provider.Name,
+		BaseURL:     provider.BaseURL,
+		APIKey:      provider.APIKey,
+		HealthModel: provider.DefaultModel,
+		Models:      []string{m.Name},
 	}
 	for _, cap := range m.Capabilities {
 		if !r.supports(provider.Kind, cap) {
@@ -610,9 +635,9 @@ func (r *ModelRegistry) warmModel(ctx context.Context, m domain.Model) error {
 		}
 		switch cap {
 		case domain.CapChat:
-			r.cacheSet("chat:"+m.Name, cfg, *provider, m.Capabilities, policyFromModel(&m))
+			r.cacheSet("chat:"+m.Name, cfg, *provider, m.Capabilities, policyWithProvider(&m, provider))
 		case domain.CapEmbedding:
-			r.cacheSet("embed:"+m.Name, cfg, *provider, m.Capabilities, policyFromModel(&m))
+			r.cacheSet("embed:"+m.Name, cfg, *provider, m.Capabilities, policyWithProvider(&m, provider))
 		}
 	}
 	return nil

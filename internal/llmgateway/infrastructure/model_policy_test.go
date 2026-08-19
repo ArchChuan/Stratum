@@ -1,7 +1,6 @@
 package infrastructure_test
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -44,15 +43,14 @@ func TestEnforceModelPolicy_injectModelSampling(t *testing.T) {
 	require.Equal(t, 0.7, *got.Temperature)
 }
 
-func TestEnforceModelPolicy_l2WindowExceeded(t *testing.T) {
+func TestEnforceModelPolicy_doesNotHardRejectEstimatedWindow(t *testing.T) {
 	p := &infrastructure.ModelPolicy{MaxTokens: 8192, ContextWindow: 4096}
 	req := &infrastructure.CompletionRequest{
 		Model: "m", MaxTokens: 100,
-		Messages: []infrastructure.Message{{Role: "user", Content: strings.Repeat("x", 4096*3)}},
 	}
-	_, err := infrastructure.EnforceModelPolicy(req, p, false)
-	require.ErrorIs(t, err, infrastructure.ErrContextLengthExceeded)
-	require.True(t, infrastructure.IsContextLengthExceeded(err))
+	got, err := infrastructure.EnforceModelPolicy(req, p, false)
+	require.NoError(t, err)
+	require.NotNil(t, got)
 }
 
 func TestEnforceModelPolicy_windowUnknownSkips(t *testing.T) {

@@ -23,19 +23,24 @@ func modelFixture() *domain.Model {
 		Capabilities:  []domain.ModelCapability{domain.CapChat, domain.CapVision},
 		ContextWindow: 8192, MaxTokens: 4096, InputPrice: 10.0, OutputPrice: 30.0,
 		Recommended: true, Enabled: true,
+		ContextWindowSource: domain.CapabilitySourceLegacyUnknown,
+		MaxTokensSource:     domain.CapabilitySourceLegacyUnknown,
 	}
 }
 
 var modelColumns = []string{"id", "provider_id", "name", "display_name", "capabilities",
 	"context_window", "max_tokens", "input_price", "output_price", "recommended", "default_embedding",
-	"enabled", "provider_managed", "sampling_params", "max_temperature", "created_at", "updated_at"}
+	"enabled", "provider_managed", "sampling_params", "max_temperature",
+	"operator_context_window", "operator_max_tokens", "default_output_tokens",
+	"context_window_source", "max_tokens_source", "context_window_observed_at", "max_tokens_observed_at",
+	"created_at", "updated_at"}
 
 func modelRow(m *domain.Model) []any {
 	now := time.Now()
 	return []any{m.ID, m.ProviderID, m.Name, m.DisplayName,
 		[]string{"chat", "vision"}, m.ContextWindow, m.MaxTokens, m.InputPrice, m.OutputPrice,
 		m.Recommended, m.DefaultEmbedding, m.Enabled, m.ProviderManaged,
-		[]byte("{}"), nil, now, now}
+		[]byte("{}"), nil, nil, nil, nil, m.ContextWindowSource, m.MaxTokensSource, nil, nil, now, now}
 }
 
 func TestModelRepo_Create_success(t *testing.T) {
@@ -165,7 +170,8 @@ func TestModelRepo_List_scanFails(t *testing.T) {
 			AddRow(42, bad.ProviderID, bad.Name, bad.DisplayName, []string{"chat"},
 				bad.ContextWindow, bad.MaxTokens, bad.InputPrice, bad.OutputPrice,
 				bad.Recommended, bad.DefaultEmbedding, bad.Enabled, bad.ProviderManaged,
-				[]byte("{}"), nil, time.Now(), time.Now()))
+				[]byte("{}"), nil, nil, nil, nil, bad.ContextWindowSource, bad.MaxTokensSource,
+				nil, nil, time.Now(), time.Now()))
 
 	_, err := repo.List(context.Background(), port.ModelFilter{})
 	require.Error(t, err)
@@ -361,9 +367,11 @@ func TestModelRepo_UpsertDiscovered_newAndExisting(t *testing.T) {
 	now := time.Now()
 	discovered := []domain.Model{
 		{Name: "new-model", DisplayName: "New", Capabilities: []domain.ModelCapability{domain.CapChat},
-			ContextWindow: 8192, MaxTokens: 4096, InputPrice: 10.0, OutputPrice: 30.0, Recommended: true},
+			ContextWindow: 8192, MaxTokens: 4096, InputPrice: 10.0, OutputPrice: 30.0, Recommended: true,
+			ContextWindowSource: domain.CapabilitySourceProviderAPI, MaxTokensSource: domain.CapabilitySourceProviderAPI},
 		{Name: "existing-model", DisplayName: "Existing", Capabilities: []domain.ModelCapability{domain.CapChat},
-			ContextWindow: 128000, MaxTokens: 8192},
+			ContextWindow: 128000, MaxTokens: 8192,
+			ContextWindowSource: domain.CapabilitySourceProviderAPI, MaxTokensSource: domain.CapabilitySourceProviderAPI},
 	}
 	mock.ExpectBegin()
 	// disable phase
@@ -374,22 +382,25 @@ func TestModelRepo_UpsertDiscovered_newAndExisting(t *testing.T) {
 		WithArgs("p1", "new-model").WillReturnError(pgx.ErrNoRows)
 	mock.ExpectExec("INSERT INTO public.models").
 		WithArgs(pgxmock.AnyArg(), "p1", "new-model", "New", []string{"chat"},
-			8192, 4096, 10.0, 30.0, true).
+			8192, 4096, 10.0, 30.0, true, domain.CapabilitySourceProviderAPI, domain.CapabilitySourceProviderAPI).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	// existing model -> re-enable and sync context metadata
 	mock.ExpectQuery("SELECT id FROM public.models WHERE provider_id=\\$1 AND name=\\$2").
 		WithArgs("p1", "existing-model").
 		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("m-exist"))
 	mock.ExpectExec("UPDATE public.models SET enabled=true").
-		WithArgs(128000, 8192, "m-exist").WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+		WithArgs(128000, 8192, domain.CapabilitySourceProviderAPI, domain.CapabilitySourceProviderAPI, "m-exist").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	// read back
 	mock.ExpectQuery("FROM public.models WHERE provider_id=\\$1 ORDER BY name").
 		WithArgs("p1").
 		WillReturnRows(pgxmock.NewRows(modelColumns).
 			AddRow("m-new", "p1", "new-model", "New", []string{"chat"}, 8192, 4096, 10.0, 30.0, true, false, true, true,
-				[]byte("{}"), nil, now, now).
+				[]byte("{}"), nil, nil, nil, nil, domain.CapabilitySourceProviderAPI, domain.CapabilitySourceProviderAPI,
+				nil, nil, now, now).
 			AddRow("m-exist", "p1", "existing-model", "Existing", []string{"chat"}, 128000, 8192, 0.0, 0.0, false, false, true, true,
-				[]byte("{}"), nil, now, now))
+				[]byte("{}"), nil, nil, nil, nil, domain.CapabilitySourceProviderAPI, domain.CapabilitySourceProviderAPI,
+				nil, nil, now, now))
 	mock.ExpectCommit()
 
 	result, err := repo.UpsertDiscovered(context.Background(), "p1", discovered)
@@ -425,7 +436,7 @@ func TestModelRepo_UpsertDiscovered_insertFails(t *testing.T) {
 		WithArgs("p1", "new-model").WillReturnError(pgx.ErrNoRows)
 	mock.ExpectExec("INSERT INTO public.models").
 		WithArgs(pgxmock.AnyArg(), "p1", "new-model", "New", []string{"chat"},
-			8192, 4096, 10.0, 30.0, true).
+			8192, 4096, 10.0, 30.0, true, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
@@ -447,7 +458,7 @@ func TestModelRepo_UpsertDiscovered_updateFails(t *testing.T) {
 		WithArgs("p1", "existing").
 		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("m-exist"))
 	mock.ExpectExec("UPDATE public.models SET enabled=true").
-		WithArgs(1, 2, "m-exist").WillReturnError(pgx.ErrTxClosed)
+		WithArgs(1, 2, pgxmock.AnyArg(), pgxmock.AnyArg(), "m-exist").WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
 	_, err := repo.UpsertDiscovered(context.Background(), "p1",

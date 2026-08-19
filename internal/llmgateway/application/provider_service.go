@@ -28,17 +28,13 @@ type CreateProviderInput struct {
 
 // UpdateProviderInput carries the fields that can be updated on a provider.
 type UpdateProviderInput struct {
-	ID           string              `json:"id"`
-	Name         string              `json:"name"`
-	Kind         domain.ProviderKind `json:"kind"`
-	BaseURL      string              `json:"baseUrl"`
-	APIKey       string              `json:"apiKey"`
-	DefaultModel string              `json:"defaultModel"`
-	// ExtraHeaders/DefaultSampling 为指针：nil（缺省或 null）= 保留现值；
-	// 非 nil（含空 map）= 覆盖为提供值（空 = 清空）。extra_headers 键在
-	// 持久化前经黑名单校验（写时拒收，运行时不再拦截）。
-	ExtraHeaders    *map[string]string `json:"extraHeaders"`
-	DefaultSampling *map[string]any    `json:"defaultSampling"`
+	ID              string              `json:"id"`
+	Name            string              `json:"name"`
+	Kind            domain.ProviderKind `json:"kind"`
+	BaseURL         string              `json:"baseUrl"`
+	APIKey          string              `json:"apiKey"`
+	DefaultModel    string              `json:"defaultModel"`
+	DefaultSampling *map[string]any     `json:"defaultSampling"`
 }
 
 // ProviderService orchestrates LLM provider CRUD operations and
@@ -104,11 +100,6 @@ func (s *ProviderService) Get(ctx context.Context, tenantID, id string) (*domain
 // 会把该 provider 永久锁死（Get 保持 fail closed 不变）。变更与审计在
 // 同一事务提交（repo.Update 内部）。
 func (s *ProviderService) Update(ctx context.Context, tenantID, actorID string, input UpdateProviderInput) (*domain.Provider, error) {
-	if input.ExtraHeaders != nil {
-		if err := domain.ValidateExtraHeaders(*input.ExtraHeaders); err != nil {
-			return nil, fmt.Errorf("provider service: validate: %w", err)
-		}
-	}
 	existing, err := s.repo.GetMeta(ctx, input.ID)
 	if err != nil {
 		return nil, fmt.Errorf("provider service: get for update: %w", err)
@@ -121,18 +112,21 @@ func (s *ProviderService) Update(ctx context.Context, tenantID, actorID string, 
 	if input.APIKey != "" {
 		existing.APIKey = input.APIKey
 	}
-	if input.ExtraHeaders != nil {
-		existing.ExtraHeaders = *input.ExtraHeaders
-	}
 	if input.DefaultSampling != nil {
 		existing.DefaultSampling = *input.DefaultSampling
 	}
-	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindProvider, existing.ID, auditdomain.ChangeOpUpdate, actorID,
-		before, providerSafeProjection(existing))
+	audit, err := newChangeAudit(ctx, changeAuditInput{
+		Kind: auditdomain.ResourceKindProvider, ResourceID: existing.ID, Operation: auditdomain.ChangeOpUpdate,
+		ActorID: actorID, Before: before, After: providerSafeProjection(existing),
+	})
 	if err != nil {
 		return nil, err
 	}
-	if err := s.repo.Update(ctx, existing, tenantID, audit); err != nil {
+	if platformRepo, ok := s.repo.(port.PlatformProviderRepository); ok {
+		if err := platformRepo.UpdatePlatform(ctx, existing, tenantID, audit); err != nil {
+			return nil, fmt.Errorf("provider service: update: %w", err)
+		}
+	} else if err := s.repo.Update(ctx, existing, tenantID, audit); err != nil {
 		return nil, fmt.Errorf("provider service: update: %w", err)
 	}
 	s.invalidate()
@@ -167,14 +161,16 @@ func (s *ProviderService) DiscoverModels(ctx context.Context, tenantID, provider
 	models := make([]domain.Model, 0, len(discovered))
 	for _, dm := range discovered {
 		models = append(models, domain.Model{
-			ProviderID:      providerID,
-			Name:            dm.Name,
-			DisplayName:     dm.Name,
-			Capabilities:    inferCapabilities(dm.Name),
-			ContextWindow:   dm.ContextWindow,
-			MaxTokens:       dm.MaxOutputTokens,
-			ProviderManaged: true,
-			Enabled:         true,
+			ProviderID:          providerID,
+			Name:                dm.Name,
+			DisplayName:         dm.Name,
+			Capabilities:        inferCapabilities(dm.Name),
+			ContextWindow:       dm.ContextWindow,
+			MaxTokens:           dm.MaxOutputTokens,
+			ContextWindowSource: domain.CapabilitySourceProviderAPI,
+			MaxTokensSource:     domain.CapabilitySourceProviderAPI,
+			ProviderManaged:     true,
+			Enabled:             true,
 		})
 	}
 	upserted, err := s.modelRepo.UpsertDiscovered(ctx, providerID, models)

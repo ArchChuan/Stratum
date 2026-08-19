@@ -598,7 +598,6 @@ func (c *AnthropicClient) fetchModelPage(ctx context.Context, u string) (*anthro
 // 鉴权头（x-api-key）后设置覆盖，用户配置无法改写鉴权。
 func (c *AnthropicClient) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
-	applyExtraHeaders(req.Header, c.cfg.ExtraHeaders)
 	req.Header.Set("x-api-key", c.cfg.APIKey)
 	req.Header.Set("anthropic-version", anthropicVersion)
 }

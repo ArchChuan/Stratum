@@ -34,6 +34,5 @@ func TestMapErrorToStatus_LLMGatewaySentinels(t *testing.T) {
 // middleware 不依赖 infrastructure 包，经 duck-type 探测映射（error_mapping.go）。
 type contextLengthExceededStub struct{}
 
-func (contextLengthExceededStub) Error() string                { return "context length exceeded" }
-func (contextLengthExceededStub) ContextLengthExceeded() bool  { return true }
-
+func (contextLengthExceededStub) Error() string               { return "context length exceeded" }
+func (contextLengthExceededStub) ContextLengthExceeded() bool { return true }

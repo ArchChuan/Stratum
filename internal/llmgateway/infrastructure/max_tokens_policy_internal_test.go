@@ -37,8 +37,8 @@ func TestEnforceModelPolicy_MaxTokensGovernance(t *testing.T) {
 		{name: "policy nil passthrough", policy: nil, reasoning: false, maxTokens: 8192, wantTokens: 8192},
 		// 目录未知 + reasoning → floor 仍生效（floor 不依赖 maxOut）。
 		{name: "unknown reasoning model floor still applies", policy: &ModelPolicy{}, reasoning: true, maxTokens: 1024, wantTokens: constants.DefaultOutputReserveTokens, mutated: true},
-		// 0 = 未设置 → 注入 DB 模型值（spec §4 L1：请求 0 → 注入模型 max_tokens>0）。
-		{name: "unset injects model max_tokens", policy: &ModelPolicy{MaxTokens: 8192}, reasoning: true, maxTokens: 0, wantTokens: 8192, mutated: true},
+		// 0 = 未设置 → 仅注入独立默认输出，不能把能力上限当默认预算。
+		{name: "unset injects default output", policy: &ModelPolicy{MaxTokens: 8192, DefaultOutputTokens: 2048}, reasoning: true, maxTokens: 0, wantTokens: 2048, mutated: true},
 		// 0 = 未设置且 DB 上限未知（0）→ 保持 0（协议层兜底语义不动）。
 		{name: "unset with unknown max_tokens passthrough", policy: &ModelPolicy{}, reasoning: true, maxTokens: 0, wantTokens: 0},
 	}

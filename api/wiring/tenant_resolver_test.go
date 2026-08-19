@@ -91,7 +91,7 @@ func (r *resolverProviderRepo) List(context.Context) ([]llmdomain.Provider, erro
 func (r *resolverProviderRepo) Update(context.Context, *llmdomain.Provider, string, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (r *resolverProviderRepo) Delete(context.Context, string) error              { return nil }
+func (r *resolverProviderRepo) Delete(context.Context, string) error { return nil }
 
 func newResolverRegistry(models []llmdomain.Model, providers map[string]*llmdomain.Provider) *llmgateway.ModelRegistry {
 	return llmgateway.NewModelRegistry(

@@ -5,7 +5,7 @@ import "context"
 // DiscoveredModel carries metadata discovered from a provider's model list API.
 type DiscoveredModel struct {
 	Name            string // e.g. "gpt-4o", "claude-sonnet-4-5"
-	ContextWindow   int    // max input tokens; 0 = unknown
+	ContextWindow   int    // total context tokens; 0 = unknown
 	MaxOutputTokens int    // max output tokens; 0 = unknown
 }
 

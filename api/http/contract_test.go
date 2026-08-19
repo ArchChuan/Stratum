@@ -196,8 +196,13 @@ func TestContracts(t *testing.T) {
 				if useDDD {
 					var claims iamport.TokenClaims
 					switch {
-					case strings.HasPrefix(c.Path, "/admin/tenants"):
-						claims = iamport.TokenClaims{Sub: "contract-admin", GlobalRole: "global_admin"}
+					case strings.HasPrefix(c.Path, "/admin/tenants"),
+						strings.HasPrefix(c.Path, "/admin/providers"),
+						strings.HasPrefix(c.Path, "/admin/models"):
+						claims = iamport.TokenClaims{
+							Sub: "contract-admin", TenantID: "contract-tenant",
+							Role: "admin", GlobalRole: "global_admin",
+						}
 					default:
 						claims = iamport.TokenClaims{Sub: "contract-admin", TenantID: "contract-tenant", Role: "admin"}
 					}
@@ -275,7 +280,9 @@ func (contractModelRepo) Get(_ context.Context, _ string) (*llmdomain.Model, err
 func (contractModelRepo) List(_ context.Context, _ llmport.ModelFilter) ([]llmdomain.Model, error) {
 	return nil, nil
 }
-func (contractModelRepo) Update(_ context.Context, _ *llmdomain.Model, _ string, _ *auditdomain.ResourceChangeAuditEvent) error { return nil }
+func (contractModelRepo) Update(_ context.Context, _ *llmdomain.Model, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (contractModelRepo) UpsertDiscovered(_ context.Context, _ string, _ []llmdomain.Model) ([]llmdomain.Model, error) {
 	return nil, nil
 }

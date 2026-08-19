@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/byteBuilderX/stratum/internal/llmgateway/application"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	"github.com/byteBuilderX/stratum/internal/llmgateway/application"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 )

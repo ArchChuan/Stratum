@@ -24,3 +24,9 @@ type ProviderRepository interface {
 	Update(ctx context.Context, p *domain.Provider, tenantID string, audit *auditdomain.ResourceChangeAuditEvent) error
 	Delete(ctx context.Context, id string) error
 }
+
+// PlatformProviderRepository is the public-catalog mutation port. Production
+// implementations write the public resource and platform audit atomically.
+type PlatformProviderRepository interface {
+	UpdatePlatform(ctx context.Context, p *domain.Provider, actorTenantID string, audit *auditdomain.ResourceChangeAuditEvent) error
+}

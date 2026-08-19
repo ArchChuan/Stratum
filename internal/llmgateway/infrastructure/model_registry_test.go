@@ -795,7 +795,7 @@ func TestPolicyFor_precomputedAndMissing(t *testing.T) {
 	}
 	models := []domain.Model{
 		{ID: "m-p", ProviderID: providerID, Name: "m-p", Enabled: true,
-			Capabilities: []domain.ModelCapability{domain.CapChat},
+			Capabilities:  []domain.ModelCapability{domain.CapChat},
 			ContextWindow: 128000, MaxTokens: 32768,
 			SamplingParams: &domain.SamplingParams{Temperature: float64Ptr(0.5)}},
 	}

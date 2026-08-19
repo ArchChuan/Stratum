@@ -80,6 +80,28 @@ func (h *ModelMgmtHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, m)
 }
 
+// UpdatePolicy PATCH /admin/models/:id/policy updates runtime policy fields.
+func (h *ModelMgmtHandler) UpdatePolicy(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	actorID, _ := userIDFromCtx(c)
+	var input llmapp.UpdateModelPolicyInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	input.ID = c.Param("id")
+	m, err := h.svc.UpdatePolicy(c.Request.Context(), tenantID, actorID, input)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, m)
+}
+
 // Toggle PATCH /admin/models/:id/toggle — enables or disables a model.
 func (h *ModelMgmtHandler) Toggle(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)

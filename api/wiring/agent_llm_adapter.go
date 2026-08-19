@@ -61,7 +61,7 @@ func buildAgentLLMRequest(req *agentport.LLMCapRequest) *llmdomain.CompletionReq
 	return &llmdomain.CompletionRequest{
 		Model: req.Model, Messages: messages, Tools: tools, ToolChoice: choice,
 		// agent 层 Temperature float32 0 = unset → nil（网关采样注入生效）。
-		Temperature:  temperaturePtrOrNil(req.Temperature),
+		Temperature:     temperaturePtrOrNil(req.Temperature),
 		ReasoningEffort: req.ReasoningEffort, MaxTokens: req.MaxTokens,
 		NoPrimaryRetry: req.NoPrimaryRetry,
 		MaxCandidates:  req.MaxCandidates,

@@ -51,15 +51,18 @@ const (
 // resource change. Before/After carry opaque JSON projections; each owning
 // context marshals its own domain types at the boundary.
 type ResourceChangeAuditEvent struct {
-	ResourceKind string // agent|skill|mcp|knowledge
-	ResourceID   string
-	Operation    string // create|update|delete
-	ActorID      string
-	ActorType    string          // user|system_assistant|system
-	Source       string          // api|proposal_apply|optimization
-	ProposalID   string          // set when Source == proposal_apply
-	Before       json.RawMessage // projection of the pre-change state; {} for create
-	After        json.RawMessage // projection of the post-change state
+	EventID       string
+	Scope         string
+	ActorTenantID *string
+	ResourceKind  string // agent|skill|mcp|knowledge
+	ResourceID    string
+	Operation     string // create|update|delete
+	ActorID       string
+	ActorType     string          // user|system_assistant|system
+	Source        string          // api|proposal_apply|optimization
+	ProposalID    string          // set when Source == proposal_apply
+	Before        json.RawMessage // projection of the pre-change state; {} for create
+	After         json.RawMessage // projection of the post-change state
 }
 
 // Normalized returns a copy with storage defaults filled: empty before/after
@@ -87,6 +90,9 @@ func (ev *ResourceChangeAuditEvent) Normalized() *ResourceChangeAuditEvent {
 		source = ChangeSourceAPI
 	}
 	ev.Before, ev.After, ev.ActorType, ev.Source = before, after, actorType, source
+	if ev.Scope == "" {
+		ev.Scope = "tenant"
+	}
 	return ev
 }
 

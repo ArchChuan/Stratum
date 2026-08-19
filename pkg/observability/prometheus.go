@@ -240,15 +240,6 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 			prometheus.CounterOpts{Name: "llm_token_usage_total", Help: "Cumulative LLM tokens used"},
 			[]string{"model", "type"},
 		),
-		llmPolicyBlockedTotal: factory.NewCounterVec(
-			prometheus.CounterOpts{Name: "llm_policy_blocked_total", Help: "Requests blocked by model policy (L1-L4)"},
-			[]string{"model"},
-		),
-		llmPolicyMissingTotal: factory.NewCounterVec(
-			prometheus.CounterOpts{Name: "llm_policy_missing_total", Help: "Requests with no model policy record (authority missing)"},
-			[]string{"model"},
-		),
-
 		// LLM – AI-specific
 		llmTokenHistogram: factory.NewHistogramVec(
 			prometheus.HistogramOpts{Name: "llm_token_count", Help: "Token count distribution per LLM call", Buckets: tokenBuckets},
@@ -299,9 +290,22 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 
 		logger: logger,
 	}
+	m.llmPolicyBlockedTotal, m.llmPolicyMissingTotal = newModelPolicyMetrics(factory)
 	m.registerF3Metrics(factory, latencyBuckets)
 	m.registerExtendedMetrics(factory)
 	return m
+}
+
+func newModelPolicyMetrics(factory promauto.Factory) (*prometheus.CounterVec, *prometheus.CounterVec) {
+	blocked := factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "llm_policy_blocked_total", Help: "Requests blocked by model policy (L1-L4)"},
+		[]string{"model"},
+	)
+	missing := factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "llm_policy_missing_total", Help: "Requests with no model policy record (authority missing)"},
+		[]string{"model"},
+	)
+	return blocked, missing
 }
 
 // registerReaperMetrics registers the reaper metric family. Must not be

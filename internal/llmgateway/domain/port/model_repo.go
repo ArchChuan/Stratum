@@ -32,3 +32,10 @@ type ModelRepository interface {
 	// capability 含 embedding（fail-closed），否则返回错误。
 	SetDefaultEmbedding(ctx context.Context, id string, enabled bool) error
 }
+
+// PlatformModelRepository is implemented by the public-catalog repository.
+// It is optional to preserve lightweight unit-test fakes; production wiring
+// must use it for public model mutations and platform audit.
+type PlatformModelRepository interface {
+	UpdatePlatform(ctx context.Context, m *domain.Model, actorTenantID string, audit *auditdomain.ResourceChangeAuditEvent) error
+}

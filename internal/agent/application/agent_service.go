@@ -3157,14 +3157,8 @@ func (s *AgentService) resolveOutputReserve(
 	if explicitMaxTokens > 0 {
 		return explicitMaxTokens
 	}
-	if s.deps.ModelDetailsProvider != nil {
-		if details, err := s.deps.ModelDetailsProvider.ListTenantModelDetails(ctx, tenantID); err == nil {
-			for _, d := range details {
-				if d.Model == model && d.MaxTokens > 0 {
-					return d.MaxTokens
-				}
-			}
-		}
+	if reserve, ok := s.modelOutputReserve(ctx, tenantID, model); ok {
+		return reserve
 	}
 	if s.deps.VendorWindowLookup != nil {
 		if _, maxOut := s.deps.VendorWindowLookup(model); maxOut > 0 {
@@ -3172,4 +3166,30 @@ func (s *AgentService) resolveOutputReserve(
 		}
 	}
 	return constants.DefaultOutputReserveTokens
+}
+
+func (s *AgentService) modelOutputReserve(ctx context.Context, tenantID, model string) (int, bool) {
+	if s.deps.ModelDetailsProvider == nil {
+		return 0, false
+	}
+	details, err := s.deps.ModelDetailsProvider.ListTenantModelDetails(ctx, tenantID)
+	if err != nil {
+		return 0, false
+	}
+	for _, detail := range details {
+		if detail.Model != model {
+			continue
+		}
+		switch {
+		case detail.EffectiveMaxTokens > 0:
+			return detail.EffectiveMaxTokens, true
+		case detail.MaxTokens > 0:
+			return detail.MaxTokens, true
+		case detail.DefaultOutputTokens > 0:
+			return detail.DefaultOutputTokens, true
+		default:
+			return 0, false
+		}
+	}
+	return 0, false
 }

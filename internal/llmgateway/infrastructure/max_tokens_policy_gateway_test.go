@@ -42,8 +42,8 @@ func TestGatewayComplete_appliesMaxTokensPolicy(t *testing.T) {
 	require.Equal(t, 8192, proto.req.MaxTokens)
 }
 
-// 端到端：未设置（0）时注入 DB 模型值 8192（spec §4 L1：请求 0 → 注入模型值）。
-func TestGatewayComplete_policyInjectsModelMaxTokens(t *testing.T) {
+// 端到端：未设置时不把模型能力上限误当作默认输出预算。
+func TestGatewayComplete_policyDoesNotInjectModelMaxTokens(t *testing.T) {
 	proto := &captureChatProto{}
 	gateway, _, _ := gatewayFixture(proto, successEmbedProto{})
 	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
@@ -51,5 +51,5 @@ func TestGatewayComplete_policyInjectsModelMaxTokens(t *testing.T) {
 	_, err := gateway.Complete(ctx, &infrastructure.CompletionRequest{Model: "qwen-turbo"})
 	require.NoError(t, err)
 	require.NotNil(t, proto.req)
-	require.Equal(t, 8192, proto.req.MaxTokens)
+	require.Zero(t, proto.req.MaxTokens)
 }

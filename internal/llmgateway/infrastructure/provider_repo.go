@@ -249,6 +249,52 @@ func (r *PgProviderRepo) Update(ctx context.Context, p *domain.Provider, tenantI
 	return nil
 }
 
+// UpdatePlatform performs a public provider mutation and writes its audit in
+// the same public transaction. actorTenantID is audit attribution only.
+func (r *PgProviderRepo) UpdatePlatform(
+	ctx context.Context,
+	p *domain.Provider,
+	actorTenantID string,
+	audit *auditdomain.ResourceChangeAuditEvent,
+) error {
+	apiKey := ""
+	if p.APIKey != "" {
+		enc, err := crypto.EncryptSecret(r.key, p.APIKey)
+		if err != nil {
+			return fmt.Errorf("update platform provider: encrypt api key: %w", err)
+		}
+		apiKey = enc
+	}
+	sampling, err := encodeJSONMap(p.DefaultSampling)
+	if err != nil {
+		return fmt.Errorf("update platform provider: %w", err)
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("update platform provider begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx,
+		`UPDATE public.providers SET name=$1, kind=$2, base_url=$3,
+		 api_key=CASE WHEN $4='' THEN api_key ELSE $4 END,
+		 default_model=$5, enabled=$6, default_sampling=$7, updated_at=now()
+		 WHERE id=$8`,
+		p.Name, string(p.Kind), p.BaseURL, apiKey, p.DefaultModel, p.Enabled, sampling, p.ID)
+	if err != nil {
+		return fmt.Errorf("update platform provider: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("provider not found: %s", p.ID)
+	}
+	if err := insertPlatformAuditTx(ctx, tx, actorTenantID, audit); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("update platform provider commit: %w", err)
+	}
+	return nil
+}
+
 // Delete removes a provider by ID.
 func (r *PgProviderRepo) Delete(ctx context.Context, id string) error {
 	tag, err := r.pool.Exec(ctx, `DELETE FROM public.providers WHERE id=$1`, id)
