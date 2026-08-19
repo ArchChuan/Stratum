@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -8,6 +9,18 @@ import (
 
 	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
 )
+
+type platformAuditDTO struct {
+	ID           string          `json:"id"`
+	ResourceKind string          `json:"resource_kind"`
+	ResourceID   string          `json:"resource_id"`
+	Operation    string          `json:"operation"`
+	ActorID      string          `json:"actor_id"`
+	ActorName    string          `json:"actor_name"`
+	CreatedAt    string          `json:"created_at"`
+	Before       json.RawMessage `json:"before"`
+	After        json.RawMessage `json:"after"`
+}
 
 // PlatformAuditHandler exposes public-catalog audit events to global admins.
 type PlatformAuditHandler struct {
@@ -35,7 +48,16 @@ func (h *PlatformAuditHandler) List(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"events": rows, "total": total})
+	events := make([]platformAuditDTO, 0, len(rows))
+	for _, row := range rows {
+		events = append(events, platformAuditDTO{
+			ID: row.ID, ResourceKind: row.ResourceKind, ResourceID: row.ResourceID,
+			Operation: row.Operation, ActorID: row.ActorID, ActorName: row.ActorName,
+			CreatedAt: row.CreatedAt.UTC().Format("2006-01-02T15:04:05.999Z07:00"),
+			Before:    row.Before, After: row.After,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"events": events, "total": total})
 }
 
 func (h *PlatformAuditHandler) Get(c *gin.Context) {
@@ -48,5 +70,10 @@ func (h *PlatformAuditHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "audit event not found"})
 		return
 	}
-	c.JSON(http.StatusOK, row)
+	c.JSON(http.StatusOK, platformAuditDTO{
+		ID: row.ID, ResourceKind: row.ResourceKind, ResourceID: row.ResourceID,
+		Operation: row.Operation, ActorID: row.ActorID, ActorName: row.ActorName,
+		CreatedAt: row.CreatedAt.UTC().Format("2006-01-02T15:04:05.999Z07:00"),
+		Before:    row.Before, After: row.After,
+	})
 }
