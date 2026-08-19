@@ -39,7 +39,6 @@ const CurrentPath = () => {
 const renderShell = (initialPath = '/') => render(
   <MemoryRouter
     initialEntries={[initialPath]}
-    future={{ v7_relativeSplatPath: true, v7_startTransition: true }}
   >
     <AppShell>
       <CurrentPath />
@@ -96,7 +95,7 @@ describe('AppShell responsive navigation', () => {
 
     responsive.isMobile = false;
     view.rerender(
-      <MemoryRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
+      <MemoryRouter>
         <AppShell>
           <CurrentPath />
         </AppShell>

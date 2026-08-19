@@ -152,7 +152,7 @@ export const useEditAgentPage = () => {
         setLoading(false);
       }
     },
-    [id, navigate, agent?.isSystem],
+    [id, navigate, agent?.isSystem, agent?.parameters],
   );
 
   return {

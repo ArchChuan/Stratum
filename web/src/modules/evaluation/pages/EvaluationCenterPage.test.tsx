@@ -41,7 +41,6 @@ const renderPage = (entry = '/evaluations') => {
   render(
     <MemoryRouter
       initialEntries={[entry]}
-      future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
     >
       <EvaluationCenterPage />
       <LocationProbe />

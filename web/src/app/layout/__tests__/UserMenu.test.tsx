@@ -51,7 +51,7 @@ vi.mock('antd', async (importOriginal) => {
 });
 
 const renderMenu = () => render(
-  <MemoryRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
+  <MemoryRouter>
     <UserMenu />
   </MemoryRouter>,
 );
