@@ -29,6 +29,9 @@ spec:
           - --badger.directory-key=/badger/key
           - --badger.directory-value=/badger/data
           - --badger.consistency=true
+          # Admin HTTP server serves /metrics for Prometheus scraping (default
+          # port is 14269 but we pin it so the ServiceMonitor target is stable).
+          - --admin.http.host-port=:14269
         env:
         - name: SPAN_STORAGE_TYPE
           value: badger
@@ -41,6 +44,8 @@ spec:
           containerPort: 4317
         - name: otlp-http
           containerPort: 4318
+        - name: admin
+          containerPort: 14269
         volumeMounts:
         - name: data
           mountPath: /badger
@@ -98,6 +103,10 @@ spec:
   - name: otlp-http
     port: 4318
     targetPort: 4318
+  # Prometheus scrapes jaeger /metrics here (admin HTTP server).
+  - name: admin
+    port: 14269
+    targetPort: 14269
 ---
 # Traefik ingress for Jaeger UI at /jaeger
 apiVersion: networking.k8s.io/v1
@@ -228,6 +237,10 @@ data:
 
     service:
       extensions: [health_check]
+      telemetry:
+        metrics:
+          # Expose the collector's own /metrics for Prometheus scraping.
+          address: 0.0.0.0:8888
       pipelines:
         traces:
           receivers: [otlp]
@@ -286,6 +299,8 @@ spec:
           containerPort: 4318
         - name: health
           containerPort: 13133
+        - name: metrics
+          containerPort: 8888
         volumeMounts:
         - name: config
           mountPath: /conf
@@ -331,3 +346,7 @@ spec:
   - name: otlp-http
     port: 4318
     targetPort: 4318
+  # Prometheus scrapes the collector's /metrics here (service telemetry).
+  - name: metrics
+    port: 8888
+    targetPort: 8888
