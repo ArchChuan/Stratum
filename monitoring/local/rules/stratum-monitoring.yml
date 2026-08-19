@@ -83,3 +83,87 @@ groups:
           description: The Feishu adapter recorded at least one failed delivery during the last ten minutes (current value {{ $value }}).
           dashboard_url: /d/stratum-service-overview
           runbook_url: /docs/operations/alerts/monitoring-system.md#feishu-delivery-failures
+
+      - alert: StratumLokiUnavailable
+        expr: absent(up{namespace="monitoring",service="loki",endpoint="http"}) or up{namespace="monitoring",service="loki",endpoint="http"} == 0
+        for: 10m
+        labels:
+          severity: critical
+          service: stratum
+          environment: production
+          component: logging
+        annotations:
+          summary: Loki is unavailable
+          description: Prometheus has been unable to scrape Loki for ten minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/alerts/monitoring-system.md#loki-unavailable
+
+      - alert: StratumPromtailUnavailable
+        expr: absent(up{namespace="monitoring",service="promtail",endpoint="http"}) or up{namespace="monitoring",service="promtail",endpoint="http"} == 0
+        for: 10m
+        labels:
+          severity: critical
+          service: stratum
+          environment: production
+          component: logging
+        annotations:
+          summary: Promtail is unavailable
+          description: Prometheus has been unable to scrape Promtail for ten minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/alerts/monitoring-system.md#promtail-unavailable
+
+      - alert: StratumPromtailNoActiveFiles
+        expr: promtail_files_active_total{namespace="monitoring",service="promtail"} == 0
+        for: 10m
+        labels:
+          severity: critical
+          service: stratum
+          environment: production
+          component: logging
+        annotations:
+          summary: Promtail is not tailing any files
+          description: Promtail reports zero active log files for ten minutes (current value {{ $value }}); container logs are not reaching Loki.
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/alerts/monitoring-system.md#promtail-no-active-files
+
+      - alert: StratumJaegerUnavailable
+        expr: absent(up{namespace="monitoring",service="jaeger",endpoint="admin"}) or up{namespace="monitoring",service="jaeger",endpoint="admin"} == 0
+        for: 10m
+        labels:
+          severity: critical
+          service: stratum
+          environment: production
+          component: tracing
+        annotations:
+          summary: Jaeger is unavailable
+          description: Prometheus has been unable to scrape Jaeger for ten minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/alerts/monitoring-system.md#jaeger-unavailable
+
+      - alert: StratumOtelCollectorUnavailable
+        expr: absent(up{namespace="stratum",service="stratum-otel-collector",endpoint="metrics"}) or up{namespace="stratum",service="stratum-otel-collector",endpoint="metrics"} == 0
+        for: 10m
+        labels:
+          severity: critical
+          service: stratum
+          environment: production
+          component: tracing
+        annotations:
+          summary: OTel collector is unavailable
+          description: Prometheus has been unable to scrape the OTel collector for ten minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/alerts/monitoring-system.md#otel-collector-unavailable
+
+      - alert: StratumOtelExporterFailures
+        expr: sum by (exporter) (increase(otelcol_exporter_send_failed_spans{namespace="stratum",service="stratum-otel-collector",endpoint="metrics"}[10m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: stratum
+          environment: production
+          component: tracing
+        annotations:
+          summary: OTel collector is failing to export spans
+          description: The OTel collector recorded span export failures during the last ten minutes (current value {{ $value }}); traces may be missing.
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/alerts/monitoring-system.md#otel-exporter-failures

@@ -1,0 +1,88 @@
+# ServiceMonitors for the observability stack itself (Loki, Promtail,
+# Jaeger, OTel collector). Selected by the kps Prometheus via release:kps.
+#
+# These four components had NO scrape target until now: `up` contained no
+# loki/jaeger/promtail/otel series, so no alert could ever fire on a broken
+# logging or tracing path (e.g. promtail tailing zero files while Loki showed
+# no data). Each monitor scrapes the /metrics endpoint the component now
+# exposes (jaeger admin :14269, collector telemetry :8888, loki/promtail
+# :3100/:9080).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: stratum-loki
+  namespace: monitoring
+  labels:
+    release: kps
+spec:
+  selector:
+    matchLabels:
+      app: loki
+  namespaceSelector:
+    matchNames:
+      - monitoring
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: stratum-jaeger
+  namespace: monitoring
+  labels:
+    release: kps
+spec:
+  selector:
+    matchLabels:
+      app: jaeger
+  namespaceSelector:
+    matchNames:
+      - monitoring
+  endpoints:
+    - port: admin
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: stratum-promtail
+  namespace: monitoring
+  labels:
+    release: kps
+spec:
+  selector:
+    matchLabels:
+      app: promtail
+  namespaceSelector:
+    matchNames:
+      - monitoring
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: stratum-otel-collector
+  namespace: monitoring
+  labels:
+    release: kps
+spec:
+  selector:
+    matchLabels:
+      app: otel-collector
+  namespaceSelector:
+    matchNames:
+      - stratum
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s

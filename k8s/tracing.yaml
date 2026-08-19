@@ -1,5 +1,6 @@
 ---
-# Jaeger all-in-one (in-memory) — monitoring namespace
+# Jaeger all-in-one (badger persistent storage) — monitoring namespace
+# Traces survive pod restarts and redeploys via the jaeger-data PVC.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -22,13 +23,20 @@ spec:
         image: jaegertracing/all-in-one:1.58
         args:
           - --query.base-path=/jaeger
+          # Badger is Jaeger's embedded persistent store; ephemeral=false keeps
+          # data on the jaeger-data PVC across restarts.
+          - --badger.ephemeral=false
+          - --badger.directory-key=/badger/key
+          - --badger.directory-value=/badger/data
+          - --badger.consistency=true
+          # Admin HTTP server serves /metrics for Prometheus scraping (default
+          # port is 14269 but we pin it so the ServiceMonitor target is stable).
+          - --admin.http.host-port=:14269
         env:
         - name: SPAN_STORAGE_TYPE
-          value: memory
+          value: badger
         - name: COLLECTOR_OTLP_ENABLED
           value: "true"
-        - name: MEMORY_MAX_TRACES
-          value: "50000"
         ports:
         - name: ui
           containerPort: 16686
@@ -36,12 +44,17 @@ spec:
           containerPort: 4317
         - name: otlp-http
           containerPort: 4318
+        - name: admin
+          containerPort: 14269
+        volumeMounts:
+        - name: data
+          mountPath: /badger
         resources:
           requests:
-            memory: 128Mi
+            memory: 256Mi
             cpu: 50m
           limits:
-            memory: 512Mi
+            memory: 1Gi
             cpu: 500m
         readinessProbe:
           httpGet:
@@ -49,6 +62,26 @@ spec:
             port: 16686
           initialDelaySeconds: 5
           periodSeconds: 10
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: jaeger-data
+---
+# Jaeger trace storage — survives pod restarts and re-deploys
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jaeger-data
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/component: tracing
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
 ---
 apiVersion: v1
 kind: Service
@@ -70,6 +103,10 @@ spec:
   - name: otlp-http
     port: 4318
     targetPort: 4318
+  # Prometheus scrapes jaeger /metrics here (admin HTTP server).
+  - name: admin
+    port: 14269
+    targetPort: 14269
 ---
 # Traefik ingress for Jaeger UI at /jaeger
 apiVersion: networking.k8s.io/v1
@@ -171,6 +208,18 @@ data:
         endpoint: jaeger.monitoring.svc.cluster.local:4317
         tls:
           insecure: true
+        # Without a sending queue and retry, a transient Jaeger outage drops
+        # the whole export batch silently (observed: a 19.8s agent trace missing
+        # from Jaeger while neighbouring traces survived). bounded retry drains
+        # the queue after recovery instead of discarding spans.
+        sending_queue:
+          enabled: true
+          queue_size: 1024
+        retry_on_failure:
+          enabled: true
+          initial_interval: 1s
+          max_interval: 30s
+          max_elapsed_time: 60s
       otlphttp/opik:
         endpoint: ${env:OPIK_OTLP_ENDPOINT}
         headers:
@@ -188,6 +237,10 @@ data:
 
     service:
       extensions: [health_check]
+      telemetry:
+        metrics:
+          # Expose the collector's own /metrics for Prometheus scraping.
+          address: 0.0.0.0:8888
       pipelines:
         traces:
           receivers: [otlp]
@@ -246,6 +299,8 @@ spec:
           containerPort: 4318
         - name: health
           containerPort: 13133
+        - name: metrics
+          containerPort: 8888
         volumeMounts:
         - name: config
           mountPath: /conf
@@ -291,3 +346,7 @@ spec:
   - name: otlp-http
     port: 4318
     targetPort: 4318
+  # Prometheus scrapes the collector's /metrics here (service telemetry).
+  - name: metrics
+    port: 8888
+    targetPort: 8888

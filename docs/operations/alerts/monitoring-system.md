@@ -63,3 +63,53 @@ ServiceMonitor、端口和 rollout；只验证 Secret 存在与引用，不读�
 `feishu_alert_delivery_total{status="failed"}`，并在 Grafana 选择最近十分钟范围检查增量。检查失败计数、Pod
 状态和最近 webhook rotation；不要读取
 webhook 或上游正文。必要时重新应用受控 Secret 并 rollout，恢复后验证 firing/resolved 且失败计数停止增长。
+
+<a id="loki-unavailable"></a>
+
+## StratumLokiUnavailable
+
+影响：日志查询与告警数据源失明；紧急度：critical。查询
+`up{namespace="monitoring",service="loki"}`。检查 Loki Deployment、PVC 与 ServiceMonitor；回滚/re-apply 后确认
+target up 且写入日志可在 Grafana Loki 查询。
+
+<a id="promtail-unavailable"></a>
+
+## StratumPromtailUnavailable
+
+影响：节点日志采集完全中断；紧急度：critical。查询
+`up{namespace="monitoring",service="promtail"}`。检查 Promtail DaemonSet、hostPath 挂载与 ServiceMonitor；
+恢复后确认 target up。
+
+<a id="promtail-no-active-files"></a>
+
+## StratumPromtailNoActiveFiles
+
+影响：Promtail 存活但没 tail 到任何容器日志，Loki 持续无新数据——日志链路静默断裂（曾因 `__path__`
+glob 缺容器目录层级导致 `files_active_total=0`）。紧急度：critical。查询
+`promtail_files_active_total`。先在节点验证 `/var/log/pods/*<uid>/*/*.log` 能匹配（两级目录结构），再检查
+relabel 的 `__path__` 规则；恢复后 `files_active_total>0` 且日志持续写入。
+
+<a id="jaeger-unavailable"></a>
+
+## StratumJaegerUnavailable
+
+影响：trace 查询与采样接收失明；紧急度：critical。查询
+`up{namespace="monitoring",service="jaeger",endpoint="admin"}`。检查 Jaeger Deployment、badger PVC 与
+ServiceMonitor；恢复后确认 target up 且 trace 可查询。
+
+<a id="otel-collector-unavailable"></a>
+
+## StratumOtelCollectorUnavailable
+
+影响：app→collector→Jaeger/Opik 的 trace 管道中断；紧急度：critical。查询
+`up{namespace="stratum",service="stratum-otel-collector",endpoint="metrics"}`。检查 collector Deployment、
+`stratum-config` 中 `OPIK_OTLP_ENDPOINT` 是否存在（缺失会导致 CreateContainerConfigError）、ServiceMonitor；
+恢复后确认 target up 且新 trace 到达 Jaeger。
+
+<a id="otel-exporter-failures"></a>
+
+## StratumOtelExporterFailures
+
+影响：collector 导出 span 失败，trace 可能缺失（曾因无 sending_queue/retry 静默丢批次）；紧急度：warning。
+查询 `increase(otelcol_exporter_send_failed_spans[10m])` 并按 exporter 拆分。检查 Jaeger/Opik endpoint 可达性
+与导出器 queue/retry 配置；恢复后失败计数停止增长且 span 正常导出。
