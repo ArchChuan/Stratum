@@ -100,11 +100,6 @@ func TestAgentRevisionValidatesModelParameters(t *testing.T) {
 		{name: "compaction recent groups 5", params: ModelParameters{CompactionRecentGroups: 5}},
 		{name: "compaction recent groups 1 rejected", params: ModelParameters{CompactionRecentGroups: 1}, wantErr: true},
 		{name: "compaction recent groups 4 rejected", params: ModelParameters{CompactionRecentGroups: 4}, wantErr: true},
-		{name: "compaction safety ratio 0 default", params: ModelParameters{CompactionSafetyRatio: 0}},
-		{name: "compaction safety ratio at min", params: ModelParameters{CompactionSafetyRatio: 0.5}},
-		{name: "compaction safety ratio at max", params: ModelParameters{CompactionSafetyRatio: 0.95}},
-		{name: "compaction safety ratio below min rejected", params: ModelParameters{CompactionSafetyRatio: 0.49}, wantErr: true},
-		{name: "compaction safety ratio above max rejected", params: ModelParameters{CompactionSafetyRatio: 0.96}, wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -69,7 +69,7 @@
 ```
 window    = 阶段 B 解析结果（1M 硬 ceiling）
 usable    = window − safetyReserve − outputReserve
-             safetyReserve    = window × compaction_safety_ratio（registry 参数，未配置用 pkg/constants 默认）
+             safetyReserve    = window × ContextSafetyReserveRatio（固定平台默认 0.2，不暴露用户配置；2026-08-17 产品裁决移除 compaction_safety_ratio 参数）
              outputReserve    = 主模型 MaxTokens（响应预留，入账本）
 配额：
   fixedHead  system + memory   ≤ 20% usable（优先，min 200t 起步）

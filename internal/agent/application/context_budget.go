@@ -33,8 +33,8 @@ func truncateToTokenBudget(s string, budget int) string {
 
 // resolveLedgerBudget 解析 outputReserve 自动链并计算执行级预算账本。
 // 显式 max_tokens > vendor maxOut 的解析在 AgentService，此处仅兜底常量。
-// safetyRatio 与 ReAct 循环侧同一来源（execution 级 registry 参数
-// agent.compaction_safety_ratio）：一次执行一个 usable（I1）。
+// safetyRatio 锁定平台默认（产品规格：不暴露用户配置），传 0 →
+// ComputeBudget 回退 ContextSafetyReserveRatio（0.2）：一次执行一个 usable（I1）。
 func resolveLedgerBudget(maxTokens, outputReserve int, safetyRatio float64) agentgraph.Budget {
 	if outputReserve <= 0 {
 		outputReserve = constants.DefaultOutputReserveTokens

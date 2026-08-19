@@ -61,8 +61,6 @@ type AgentConfig struct {
 	// CompactionRecentGroups overrides in-loop compaction recent groups.
 	// 0 means auto-derive from MaxContextTokens.
 	CompactionRecentGroups int
-	// CompactionSafetyRatio overrides the compaction safety ratio. 0 = default.
-	CompactionSafetyRatio float32
 	// CompactionCooldownSec overrides the in-loop compaction cooldown.
 	// 0 = default constant.
 	CompactionCooldownSec int

@@ -114,7 +114,6 @@ func TestComposeSystemAssistantProfileManagedBranchPreservesSamplingFields(t *te
 		Temperature:            0.7,
 		MaxTokens:              2048,
 		CompactionRecentGroups: 4,
-		CompactionSafetyRatio:  0.8,
 	}
 
 	got, err := ComposeSystemAssistantProfile(want, profile)
@@ -122,8 +121,7 @@ func TestComposeSystemAssistantProfileManagedBranchPreservesSamplingFields(t *te
 		t.Fatalf("ComposeSystemAssistantProfile() error = %v", err)
 	}
 	if got.Temperature != want.Temperature || got.MaxTokens != want.MaxTokens ||
-		got.CompactionRecentGroups != want.CompactionRecentGroups ||
-		got.CompactionSafetyRatio != want.CompactionSafetyRatio {
+		got.CompactionRecentGroups != want.CompactionRecentGroups {
 		t.Fatalf("managed branch dropped sampling fields: got %#v, want %#v", got, want)
 	}
 }

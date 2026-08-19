@@ -42,7 +42,7 @@ func TestRegistryRegistersAllBuiltinKeys(t *testing.T) {
 	}
 
 	// 新开放的 compaction 搜索空间维度。
-	for _, key := range []string{"agent.compaction_recent_groups", "agent.compaction_safety_ratio"} {
+	for _, key := range []string{"agent.compaction_recent_groups"} {
 		def, ok := r.Get(key)
 		if !ok || !def.Optimizable {
 			t.Fatalf("newly opened key %s must be optimizable", key)
@@ -61,7 +61,6 @@ func TestRegistryEvaluationKeyMapping(t *testing.T) {
 		"model":                    "agent.model",
 		"bindings":                 "agent.bindings",
 		"compaction_recent_groups": "agent.compaction_recent_groups",
-		"compaction_safety_ratio":  "agent.compaction_safety_ratio",
 		"top_k":                    "rag.top_k",
 		"score_threshold":          "rag.score_threshold",
 		"reranking":                "rag.reranking",
