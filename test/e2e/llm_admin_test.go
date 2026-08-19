@@ -113,6 +113,28 @@ func provisionPublicCatalog(t *testing.T, pool *pgxpool.Pool) {
 		)`,
 		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS sampling_params JSONB NOT NULL DEFAULT '{}'`,
 		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS max_temperature DOUBLE PRECISION`,
+		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS operator_context_window INT`,
+		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS operator_max_tokens INT`,
+		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS default_output_tokens INT`,
+		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS context_window_source TEXT NOT NULL DEFAULT 'legacy_unknown'`,
+		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS max_tokens_source TEXT NOT NULL DEFAULT 'legacy_unknown'`,
+		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS context_window_observed_at TIMESTAMPTZ`,
+		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS max_tokens_observed_at TIMESTAMPTZ`,
+		`CREATE TABLE IF NOT EXISTS public.platform_resource_change_audits (
+			id                TEXT PRIMARY KEY,
+			scope             TEXT NOT NULL DEFAULT 'platform',
+			resource_kind     TEXT NOT NULL,
+			resource_id       TEXT NOT NULL,
+			operation         TEXT NOT NULL,
+			actor_id          TEXT NOT NULL DEFAULT '',
+			actor_tenant_id   TEXT,
+			actor_type        TEXT NOT NULL DEFAULT 'user',
+			source            TEXT NOT NULL DEFAULT 'api',
+			proposal_id       TEXT NOT NULL DEFAULT '',
+			before_projection JSONB NOT NULL DEFAULT '{}',
+			after_projection  JSONB NOT NULL DEFAULT '{}',
+			created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_models_provider ON public.models(provider_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_models_enabled ON public.models(enabled)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_models_default_embedding
@@ -402,14 +424,17 @@ func TestModelCRUDLifecycle(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"providerManaged"`)
 
 	// ── Update model ────────────────────────────────────────────────────────
-	updateJSON := `{"displayName":"Custom Name","capabilities":["chat","reasoning"],"contextWindow":128000,"maxTokens":4096,"inputPrice":0.01,"outputPrice":0.03,"recommended":true}`
+	updateJSON := fmt.Sprintf(
+		`{"displayName":"Custom Name","capabilities":["chat","reasoning"],"contextWindow":%d,"maxTokens":%d,"inputPrice":0.01,"outputPrice":0.03,"recommended":true}`,
+		model.ContextWindow, model.MaxTokens,
+	)
 	rec = env.request(http.MethodPut, "/admin/models/"+model.ID, updateJSON)
 	require.Equal(t, http.StatusOK, rec.Code, "update model should return 200")
 	var updated domain.Model
 	unMarshalBody(t, rec, &updated)
 	require.Equal(t, "Custom Name", updated.DisplayName)
-	require.Equal(t, 128000, updated.ContextWindow)
-	require.Equal(t, 4096, updated.MaxTokens)
+	require.Equal(t, model.ContextWindow, updated.ContextWindow)
+	require.Equal(t, model.MaxTokens, updated.MaxTokens)
 	require.Equal(t, 0.01, updated.InputPrice)
 	require.Equal(t, 0.03, updated.OutputPrice)
 	require.True(t, updated.Recommended)
