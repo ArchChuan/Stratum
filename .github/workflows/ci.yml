@@ -81,10 +81,15 @@ jobs:
       # 导致 apt-get update 整体失败;先移除该源再安装
       - name: Install ripgrep
         run: |
+          if command -v rg >/dev/null 2>&1; then
+            echo "ripgrep already available: $(command -v rg)"
+            exit 0
+          fi
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
             /etc/apt/sources.list.d/azure-cli.list \
             /etc/apt/sources.list.d/packages-microsoft-com.list
-          sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+          timeout 120s sudo apt-get update -qq
+          timeout 120s sudo apt-get install -y -qq ripgrep
 
       - name: Install frontend dependencies
         working-directory: web
