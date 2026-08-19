@@ -19,10 +19,12 @@ data:
   MILVUS_PORT: "19530"
 
   # OpenTelemetry 配置
-  OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
+  # 注意：本文件为 legacy 参考，CD 实际由 helm chart 渲染（config.otelCollectorEndpoint）。
+  # 端点必须是 stratum-otel-collector 服务名（无同名 otel-collector Service），否则 DNS 解析失败、tracing 静默失效。
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://stratum-otel-collector:4317"
   OTEL_SERVICE_NAME: "stratum-ai"
   OTEL_EXPORTER_TYPE: "otlp"
-  OTEL_SAMPLING_RATIO: "0.1"
+  OTEL_SAMPLING_RATIO: "1.0"
   OPIK_URL: "http://opik:5173/api"
   OPIK_OTLP_ENDPOINT: "http://opik:5173/api/v1/private/otel"
   OPIK_PROJECT: "stratum"
