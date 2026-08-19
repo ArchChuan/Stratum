@@ -645,15 +645,6 @@ jobs:
           kubectl rollout status deployment/jaeger -n monitoring --timeout=5m
           kubectl rollout status deployment/otel-collector -n stratum --timeout=5m
 
-      - name: Apply observability ServiceMonitors and alert rules
-        run: |
-          # Scrape targets + PrometheusRule for the observability stack. The
-          # kps Prometheus selects these via the release:kps label; the rule
-          # file is rendered from monitoring/remote/rules (single source,
-          # verified by render-monitoring-rules.sh --check).
-          kubectl apply -f monitoring/remote/resources/observability-monitors.yaml
-          kubectl apply -f monitoring/remote/generated/stratum-prometheus-rules.yaml
-
       - name: Diagnose deployment
         if: always()
         run: |

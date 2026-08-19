@@ -139,6 +139,7 @@ reconcile_monitoring() {
     kubectl apply -f "${adapter_manifest}"
     kubectl apply -f "${ROOT}/monitoring/remote/resources/dependency-monitors.yaml"
     kubectl apply -f "${ROOT}/monitoring/remote/resources/stratum-backend-monitor.yaml"
+    kubectl apply -f "${ROOT}/monitoring/remote/resources/observability-monitors.yaml"
     kubectl apply -f "${ROOT}/monitoring/remote/resources/dashboards.yaml"
     kubectl apply -f "$(render_prometheus_rules)"
 
