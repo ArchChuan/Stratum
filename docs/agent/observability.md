@@ -1,5 +1,81 @@
 # Observability Development Rules
 
+## Overview
+
+可观测能力由「三支柱 + 一条 Agent 证据专线」构成：Zap 日志、Prometheus 指标、OTel 追踪，外加 Opik 作为 Agent 执行的权威证据源。payload 与标准 span 分离存储，敏感内容不进入追踪后端。
+
+```mermaid
+flowchart TB
+    subgraph SRC["数据源 Source"]
+        direction TB
+        S1[Stratum 后端<br/>Zap 日志 · OTel spans · 指标]
+        S2[子域指标<br/>llm · agent · memory · knowledge · skill]
+        S3[K8s 工作负载<br/>kube-state / node-exporter / cAdvisor]
+        S4[Blackbox exporter<br/>依赖 target 探活]
+    end
+
+    subgraph COL["采集与传输 Collect"]
+        C1["/metrics :8080<br/>Prometheus scrape 30s"]
+        C2[stdout JSON 日志<br/>filelog → Collector<br/>仅本地 compose]
+        C3[OTel Collector<br/>tail sampling · 队列 PVC]
+        C4[AES-256-GCM<br/>payload 加密直写]
+    end
+
+    subgraph STO["存储 Store"]
+        T1[(Prometheus TSDB · PVC)]
+        T2[(Opik · Agent 证据权威)]
+        T6[(Jaeger · 远端 monitoring / 本地 dev)]
+        T3[(MinIO · 加密 payload)]
+        T4[(PostgreSQL · 控制面状态)]
+        T5[(Loki · 仅本地 compose)]
+    end
+
+    subgraph VIEW["展示与告警 View"]
+        V1[Grafana]
+        V2[Jaeger UI]
+        V3[Opik UI]
+        A1[Alertmanager → 飞书]
+    end
+
+    S1 --> C1
+    S2 --> C1
+    S3 --> C1
+    S4 --> C1
+    S1 -->|OTLP spans| C3
+    S1 --> C2
+    C1 --> T1
+    C3 --> T5
+    C3 -->|评测·实验·安全 100% / 普通 10%| T2
+    C3 -->|双写| T6
+    S1 --> C4 --> T3
+    S1 --> T4
+    T1 --> V1
+    T1 --> A1
+    T2 --> V3
+    T6 --> V2
+```
+
+### Trace 数据流向
+
+span 与 payload 是两条独立的落盘路径：span 走 Collector 采样后进入追踪后端，payload 在 Agent 侧加密直写 MinIO，span 只携带引用属性。
+
+```mermaid
+flowchart LR
+    SDK[OTel SDK<br/>InitTracingFromEnv] -->|OTLP| COL[OTel Collector<br/>tail sampling]
+    COL -->|评测·实验·安全事件 100% 保留| OPIK[(Opik<br/>OTLP/HTTP)]
+    COL -->|双写| JAEG[(Jaeger)]
+    COL -.->|瞬时不可达时持久化排队| PVC[(Collector 队列 PVC 2Gi)]
+    AGT[Agent 执行<br/>OTEL_CAPTURE_CONTENT=true] -->|脱敏 + AES-256-GCM| MIN[(MinIO<br/>.enc 对象)]
+    AGT -.->|span 只挂 payload_ref / sha256 / size| SDK
+```
+
+Trace 存储落点：
+
+- **标准 span** → Collector tail sampling 后双写 **Opik**(`opik-backend.opik:8080/v1/private/otel`)与 **Jaeger**。Opik 是外部部署(自管 MongoDB + ClickHouse)，repo 只做 ingest；本地 compose 额外 `logging` exporter。tail sampling 在 pipeline 的 processors 阶段统一生效，两个 exporter 拿到同一批采样后的 span——传统分布式追踪(Jaeger 查调用链)保留，但普通流量仅 10%，评测/实验/安全/错误/慢查询 100%。
+- **payload** → 不进 span 不进 PostgreSQL。启用 `OTEL_CAPTURE_CONTENT=true` 后先递归脱敏(`SanitizedTracePayload`)，再用平台 AES key 加密写入独立 MinIO bucket，对象路径 `object://<bucket>/<tenantID>/<traceID>/<uuid>-<kind>.enc`。span 只带 `opik.metadata.stratum.payload_ref / payload_sha256 / payload_size_bytes / payload_storage_status`。
+- **Collector 队列** → `file_storage/queue` 持久化到 PVC(`opik-otel-collector-queue`, 2Gi)，下游瞬时不可达时本地排队重试，不丢 trace。
+- **无 Collector 兜底** → `OTEL_EXPORTER_OTLP_ENDPOINT` 为空时 `InitOTelProvider` 不启动，回退 `logTracer`：trace/span ID 仅作为 `trace_id`/`span_id` 字段出现在 Zap 日志，不落追踪存储。
+
 ## Tracing (OpenTelemetry)
 
 ### Initialization
