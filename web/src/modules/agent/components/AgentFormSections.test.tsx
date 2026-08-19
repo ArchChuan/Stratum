@@ -177,7 +177,6 @@ describe('AgentFormSections', () => {
 
     expect(screen.queryByRole('slider', { name: 'temperature' })).not.toBeInTheDocument();
     expect(screen.queryByText('压缩最近轮数（compaction_recent_groups）')).not.toBeInTheDocument();
-    expect(screen.queryByText('压缩安全比例（compaction_safety_ratio）')).not.toBeInTheDocument();
 
     rerender(
       <Form>
@@ -349,18 +348,16 @@ describe('AgentFormSections', () => {
       </Form>,
     );
     expect(screen.getByText('默认：0.7')).toBeInTheDocument();
-    expect(screen.getByText('默认：0.8')).toBeInTheDocument();
     expect(screen.getByText('默认：0.3')).toBeInTheDocument();
   });
 
   it('hides default hints once explicit values are set', () => {
     render(
-      <Form initialValues={{ temperature: 0.5, compaction_safety_ratio: 0.9, compaction_temperature: 0.2 }}>
+      <Form initialValues={{ temperature: 0.5, compaction_temperature: 0.2 }}>
         <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
       </Form>,
     );
     expect(screen.queryByText('默认：0.7')).not.toBeInTheDocument();
-    expect(screen.queryByText('默认：0.8')).not.toBeInTheDocument();
     expect(screen.queryByText('默认：0.3')).not.toBeInTheDocument();
   });
 

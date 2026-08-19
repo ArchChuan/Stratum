@@ -368,17 +368,16 @@ func recordModelResolution(ctx context.Context, s *ReActState, resp port.Capabil
 }
 
 // loopPolicy resolves the in-loop compaction tunables from the run state:
-// 0 means auto-derive (recent groups from the window size, safety ratio from
-// the constant default), and a zero correction is treated as 1 (no correction).
+// 0 means auto-derive (recent groups from the window size), a zero correction
+// is treated as 1 (no correction), and the safety ratio is locked to the
+// platform default (product spec: not user-configurable — the value would
+// otherwise double as the assembly-side reserve ratio with opposite sign).
 func loopPolicy(s ReActState) (recentGroups int, safetyRatio, correction float64) {
 	recentGroups = s.CompactionRecentGroups
 	if recentGroups == 0 {
 		recentGroups = constants.DynamicRecentGroups(s.MaxContextTokens)
 	}
-	safetyRatio = float64(s.CompactionSafetyRatio)
-	if safetyRatio == 0 {
-		safetyRatio = constants.LoopCompactionSafetyRatio
-	}
+	safetyRatio = constants.LoopCompactionSafetyRatio
 	correction = s.TokenCorrection
 	if correction <= 0 {
 		correction = 1

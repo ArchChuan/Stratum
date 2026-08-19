@@ -8,7 +8,7 @@ import (
 
 // TestCandidateWhitelistStaysInLockstepWithRegistry pins 断层 6: the legacy
 // domain whitelist must be the registry's evaluation-key set (20 legacy keys
-// + 2 newly opened compaction keys). The registry is the source of truth;
+// + 1 newly opened compaction key). The registry is the source of truth;
 // adding a key to one side without the other fails here instead of drifting
 // silently across the 5 split validation points.
 func TestCandidateWhitelistStaysInLockstepWithRegistry(t *testing.T) {
@@ -45,18 +45,18 @@ func TestCandidateWhitelistStaysInLockstepWithRegistry(t *testing.T) {
 	}
 }
 
-// TestCandidateWhitelistCountAnchors20Plus2 pins the exact search-space
-// boundary: 14 parameter + 6 prompt legacy keys, plus the 2 newly opened
-// compaction keys and reasoning_effort — never fewer (收缩会把 MCP 闭环
+// TestCandidateWhitelistCountAnchors20Plus1 pins the exact search-space
+// boundary: 14 parameter + 6 prompt legacy keys, plus the 1 newly opened
+// compaction key and reasoning_effort — never fewer (收缩会把 MCP 闭环
 // 维度清零)。
-func TestCandidateWhitelistCountAnchors20Plus2(t *testing.T) {
-	if got := len(allowedParameterFields); got != 17 {
-		t.Fatalf("allowedParameterFields = %d keys, want 17 (14 legacy + 2 compaction + reasoning_effort)", got)
+func TestCandidateWhitelistCountAnchors20Plus1(t *testing.T) {
+	if got := len(allowedParameterFields); got != 16 {
+		t.Fatalf("allowedParameterFields = %d keys, want 16 (14 legacy + 1 compaction + reasoning_effort)", got)
 	}
 	if got := len(allowedPromptFields); got != 6 {
 		t.Fatalf("allowedPromptFields = %d keys, want 6", got)
 	}
-	for _, key := range []string{"compaction_recent_groups", "compaction_safety_ratio", "reasoning_effort"} {
+	for _, key := range []string{"compaction_recent_groups", "reasoning_effort"} {
 		if _, ok := allowedParameterFields[key]; !ok {
 			t.Errorf("newly opened key %q missing from candidate whitelist", key)
 		}

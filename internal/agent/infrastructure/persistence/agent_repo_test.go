@@ -299,11 +299,11 @@ func TestAgentRepo_SamplingParametersRoundTrip(t *testing.T) {
 	cfg := &domain.AgentConfig{
 		ID: "a1", Name: "Beta", LLMModel: "gpt-4o", MaxIterations: 5,
 		Temperature: 0.9, MaxTokens: 2048,
-		CompactionRecentGroups: 3, CompactionSafetyRatio: 0.85,
-		CompactionPrompt:      "focus on decisions",
-		CompactionTemperature: 0.4,
-		CompactionModel:       "qwen-turbo",
-		MemoryParameters:      map[string]any{"memory.fact_injection_top_n": 8},
+		CompactionRecentGroups: 3,
+		CompactionPrompt:       "focus on decisions",
+		CompactionTemperature:  0.4,
+		CompactionModel:        "qwen-turbo",
+		MemoryParameters:       map[string]any{"memory.fact_injection_top_n": 8},
 	}
 	if err := repo.Update(tenantCtx("t1"), cfg, nil, "", true); err != nil {
 		t.Fatalf("Update: %v", err)
@@ -351,8 +351,8 @@ func TestAgentRepo_SamplingParametersRoundTrip(t *testing.T) {
 	if got.CompactionModel != "qwen-turbo" {
 		t.Errorf("compaction_model = %q, want qwen-turbo", got.CompactionModel)
 	}
-	if got.MaxTokens != 0 || got.CompactionSafetyRatio != 0 {
-		t.Errorf("absent keys must stay unset(0): max_tokens=%d safety_ratio=%v", got.MaxTokens, got.CompactionSafetyRatio)
+	if got.MaxTokens != 0 {
+		t.Errorf("absent keys must stay unset(0): max_tokens=%d", got.MaxTokens)
 	}
 	if got.MemoryParameters["memory.fact_injection_top_n"] != float64(8) {
 		t.Errorf("memory.fact_injection_top_n = %v, want 8", got.MemoryParameters["memory.fact_injection_top_n"])
@@ -365,8 +365,8 @@ func TestAgentRepo_SamplingParametersRoundTrip(t *testing.T) {
 func TestPackSamplingParameters(t *testing.T) {
 	cfg := &domain.AgentConfig{
 		Temperature: 0.7, MaxTokens: 0,
-		CompactionRecentGroups: 2, CompactionSafetyRatio: 0,
-		MemoryParameters: map[string]any{"memory.fact_injection_top_n": 8},
+		CompactionRecentGroups: 2,
+		MemoryParameters:       map[string]any{"memory.fact_injection_top_n": 8},
 	}
 	raw, err := packSamplingParameters(cfg)
 	if err != nil {
@@ -391,8 +391,8 @@ func TestPackSamplingParameters(t *testing.T) {
 func TestPackAllSamplingParameters(t *testing.T) {
 	cfg := &domain.AgentConfig{
 		Temperature: 0.7, MaxTokens: 0,
-		CompactionRecentGroups: 2, CompactionSafetyRatio: 0,
-		MemoryParameters: map[string]any{"memory.max_facts_per_extraction": 20},
+		CompactionRecentGroups: 2,
+		MemoryParameters:       map[string]any{"memory.max_facts_per_extraction": 20},
 	}
 	raw, err := packAllSamplingParameters(cfg)
 	if err != nil {
@@ -402,17 +402,14 @@ func TestPackAllSamplingParameters(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &params); err != nil {
 		t.Fatal(err)
 	}
-	if len(params) != 9 {
-		t.Fatalf("packAll must carry all 8 sampling keys + memory.*, got %v", params)
+	if len(params) != 8 {
+		t.Fatalf("packAll must carry all 7 sampling keys + memory.*, got %v", params)
 	}
 	if params["temperature"] != 0.7 || params["compaction_recent_groups"] != float64(2) {
 		t.Errorf("non-zero fields must keep value: %v", params)
 	}
 	if v, ok := params["max_tokens"]; !ok || v != nil {
 		t.Errorf("zero max_tokens must serialize as explicit null, got %v", params["max_tokens"])
-	}
-	if v, ok := params["compaction_safety_ratio"]; !ok || v != nil {
-		t.Errorf("zero compaction_safety_ratio must serialize as explicit null, got %v", params["compaction_safety_ratio"])
 	}
 	if v, ok := params["reasoning_effort"]; !ok || v != nil {
 		t.Errorf("empty reasoning_effort must serialize as explicit null, got %v", params["reasoning_effort"])
@@ -535,7 +532,7 @@ func TestAgentRepo_SamplingParametersReplace(t *testing.T) {
 			"id", "name", "type", "description", "system_prompt", "llm_model",
 			"max_iterations", "max_context_tokens", "memory_scope", "system_key",
 			"created_by", "parameters",
-		}).AddRow("a1", "Beta", "react", "", "", "gpt-4o", 5, 0, "", "", "", `{"temperature":null,"max_tokens":null,"compaction_recent_groups":2,"compaction_safety_ratio":null}`))
+		}).AddRow("a1", "Beta", "react", "", "", "gpt-4o", 5, 0, "", "", "", `{"temperature":null,"max_tokens":null,"compaction_recent_groups":2}`))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs("a1").WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
 	pool.ExpectQuery("SELECT server_id, tool_name FROM agent_mcp_tool_links").
@@ -548,9 +545,9 @@ func TestAgentRepo_SamplingParametersReplace(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("Get: ok=%v err=%v", ok, err)
 	}
-	if got.Temperature != 0 || got.MaxTokens != 0 || got.CompactionSafetyRatio != 0 {
-		t.Errorf("null fields must resolve to unset(0): temp=%v max_tokens=%d safety=%v",
-			got.Temperature, got.MaxTokens, got.CompactionSafetyRatio)
+	if got.Temperature != 0 || got.MaxTokens != 0 {
+		t.Errorf("null fields must resolve to unset(0): temp=%v max_tokens=%d",
+			got.Temperature, got.MaxTokens)
 	}
 	if got.CompactionRecentGroups != 2 {
 		t.Errorf("compaction_recent_groups = %d, want 2", got.CompactionRecentGroups)

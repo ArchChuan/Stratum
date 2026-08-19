@@ -293,60 +293,6 @@ func (t compactionRecentGroupsTunable) SearchSpace() SearchRange {
 	return SearchRange{Discrete: []any{0, 2, 3, 5}}
 }
 
-// compactionSafetyRatioTunable tunes the safety ratio that triggers compaction
-// before the hard window ceiling. 0 = default ratio.
-type compactionSafetyRatioTunable struct{}
-
-func (t compactionSafetyRatioTunable) Key() string               { return "compaction_safety_ratio" }
-func (t compactionSafetyRatioTunable) DisplayName() string       { return "压缩安全比例" }
-func (t compactionSafetyRatioTunable) Category() TunableCategory { return CatCompaction }
-func (t compactionSafetyRatioTunable) DefaultValue() any         { return 0 }
-func (t compactionSafetyRatioTunable) VisualHint() VisualHint {
-	return VisualHint{Control: "slider", Min: constants.TunableSafetyRatioMin,
-		Max: constants.TunableSafetyRatioMax, Step: 0.05}
-}
-func (t compactionSafetyRatioTunable) Read(resource map[string]any) (any, error) {
-	params, _ := resource["model_parameters"].(map[string]any)
-	if params == nil {
-		return 0, nil
-	}
-	v, ok := params["compaction_safety_ratio"]
-	if !ok {
-		return 0, nil
-	}
-	return v, nil
-}
-func (t compactionSafetyRatioTunable) Write(resource map[string]any, value any) error {
-	v, ok := value.(float64)
-	if !ok {
-		return fmt.Errorf("compaction_safety_ratio: expected float64, got %T", value)
-	}
-	params, _ := resource["model_parameters"].(map[string]any)
-	if params == nil {
-		params = map[string]any{}
-		resource["model_parameters"] = params
-	}
-	params["compaction_safety_ratio"] = v
-	return nil
-}
-func (t compactionSafetyRatioTunable) Validate(value any) error {
-	v, ok := value.(float64)
-	if !ok {
-		return fmt.Errorf("compaction_safety_ratio: expected float64")
-	}
-	if v == 0 {
-		return nil // 0 = default ratio
-	}
-	if v < constants.TunableSafetyRatioMin || v > constants.TunableSafetyRatioMax {
-		return fmt.Errorf("compaction_safety_ratio: must be 0 or in [%v, %v]",
-			constants.TunableSafetyRatioMin, constants.TunableSafetyRatioMax)
-	}
-	return nil
-}
-func (t compactionSafetyRatioTunable) SearchSpace() SearchRange {
-	return SearchRange{Min: constants.TunableSafetyRatioMin, Max: constants.TunableSafetyRatioMax, Step: 0.05}
-}
-
 // ——— Prompt tunable (LLM-rewritten, no grid search) ———
 
 // promptTunable wraps a free-text prompt field. Search is LLM-driven, so
