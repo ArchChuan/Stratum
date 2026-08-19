@@ -282,6 +282,13 @@ spec:
     metadata:
       labels:
         app: promtail
+      annotations:
+        # Bump checksum/promtail-config when the promtail-config ConfigMap
+        # changes: ConfigMap edits alone do not restart DaemonSet pods, so a
+        # config fix would otherwise never reach a running promtail. The CD
+        # applies k8s/logging.yaml, and a template annotation change triggers
+        # the rollout. v2 = __path__ glob fix (container dir level).
+        checksum/promtail-config: "2"
     spec:
       serviceAccountName: promtail
       hostNetwork: true
