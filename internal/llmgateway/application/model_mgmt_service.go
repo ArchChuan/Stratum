@@ -105,11 +105,12 @@ func (s *ModelMgmtService) Update(ctx context.Context, tenantID, actorID string,
 	if err != nil {
 		return nil, fmt.Errorf("model mgmt: get: %w", err)
 	}
+	if err := validateObservedCapabilityUnchanged(*m, input); err != nil {
+		return nil, err
+	}
 	before := modelSafeProjection(m)
 	m.DisplayName = input.DisplayName
 	m.Capabilities = input.Capabilities
-	m.ContextWindow = input.ContextWindow
-	m.MaxTokens = input.MaxTokens
 	m.InputPrice = input.InputPrice
 	m.OutputPrice = input.OutputPrice
 	m.Recommended = input.Recommended
@@ -135,6 +136,16 @@ func (s *ModelMgmtService) Update(ctx context.Context, tenantID, actorID string,
 	}
 	s.invalidate()
 	return m, nil
+}
+
+func validateObservedCapabilityUnchanged(model domain.Model, input UpdateModelInput) error {
+	if input.ContextWindow > 0 && input.ContextWindow != model.ContextWindow {
+		return fmt.Errorf("model mgmt: context window is discovery-managed")
+	}
+	if input.MaxTokens > 0 && input.MaxTokens != model.MaxTokens {
+		return fmt.Errorf("model mgmt: max tokens is discovery-managed")
+	}
+	return nil
 }
 
 // UpdatePolicy applies a runtime policy without changing observed discovery

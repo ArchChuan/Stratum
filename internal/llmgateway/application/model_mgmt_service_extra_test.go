@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
@@ -39,7 +40,7 @@ func TestModelMgmtListGet(t *testing.T) {
 
 func TestModelMgmtUpdate(t *testing.T) {
 	inv := &recordingInvalidator{}
-	repo := &modelMgmtRepo{model: domain.Model{ID: "m1"}}
+	repo := &modelMgmtRepo{model: domain.Model{ID: "m1", ContextWindow: 128, MaxTokens: 64}}
 	svc := NewModelMgmtService(repo, inv)
 
 	m, err := svc.Update(context.Background(), "t1", "u1", UpdateModelInput{
@@ -57,6 +58,17 @@ func TestModelMgmtUpdate(t *testing.T) {
 	}
 	if inv.calls != 1 {
 		t.Fatalf("invalidations = %d, want 1", inv.calls)
+	}
+}
+
+func TestModelMgmtUpdateRejectsObservedCapabilityMutation(t *testing.T) {
+	repo := &modelMgmtRepo{model: domain.Model{ID: "m1", ContextWindow: 128, MaxTokens: 64}}
+	svc := NewModelMgmtService(repo)
+	_, err := svc.Update(context.Background(), "t1", "u1", UpdateModelInput{
+		ID: "m1", ContextWindow: 256, MaxTokens: 64,
+	})
+	if err == nil || !strings.Contains(err.Error(), "discovery-managed") {
+		t.Fatalf("Update error = %v, want discovery-managed rejection", err)
 	}
 }
 

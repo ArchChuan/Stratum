@@ -93,6 +93,17 @@ export function ModelEditDrawer({ open, model, onClose, onSubmit, loading }: Pro
           message="这些值只能收紧已知模型能力；留空表示沿用观测能力。"
           style={{ marginBottom: 16 }}
         />
+        <Button
+          size="small"
+          style={{ marginBottom: 16 }}
+          onClick={() => form.setFieldsValue({
+            operatorContextWindow: null,
+            operatorMaxTokens: null,
+            defaultOutputTokens: null,
+          })}
+        >
+          清除全部策略覆盖
+        </Button>
         <Form.Item name="operatorContextWindow" label="运营上下文上限 (tokens)">
           <InputNumber min={1} style={{ width: '100%' }} placeholder="未覆盖" />
         </Form.Item>

@@ -65,7 +65,7 @@ export interface UpdateModelInput {
 }
 
 export interface UpdateModelPolicyInput {
-  operatorContextWindow?: number;
-  operatorMaxTokens?: number;
-  defaultOutputTokens?: number;
+  operatorContextWindow?: number | null;
+  operatorMaxTokens?: number | null;
+  defaultOutputTokens?: number | null;
 }
