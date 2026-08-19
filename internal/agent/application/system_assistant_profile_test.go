@@ -114,6 +114,7 @@ func TestComposeSystemAssistantProfileManagedBranchPreservesSamplingFields(t *te
 		Temperature:            0.7,
 		MaxTokens:              2048,
 		CompactionRecentGroups: 4,
+		MemoryParameters:       map[string]any{"memory.recall_top_k": 9},
 	}
 
 	got, err := ComposeSystemAssistantProfile(want, profile)
@@ -123,6 +124,13 @@ func TestComposeSystemAssistantProfileManagedBranchPreservesSamplingFields(t *te
 	if got.Temperature != want.Temperature || got.MaxTokens != want.MaxTokens ||
 		got.CompactionRecentGroups != want.CompactionRecentGroups {
 		t.Fatalf("managed branch dropped sampling fields: got %#v, want %#v", got, want)
+	}
+	if got.MemoryParameters["memory.recall_top_k"] != 9 {
+		t.Fatalf("managed branch dropped memory parameters: got %#v", got.MemoryParameters)
+	}
+	got.MemoryParameters["memory.recall_top_k"] = 3
+	if want.MemoryParameters["memory.recall_top_k"] != 9 {
+		t.Fatal("managed branch retained caller memory parameter map")
 	}
 }
 
@@ -198,7 +206,7 @@ func (r systemAssistantProfileRepo) Update(_ context.Context, _ *domain.AgentCon
 func (r systemAssistantProfileRepo) UpdateSystemAssistantModel(_ context.Context, _ string, _ string, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	return nil, nil
 }
-func (r systemAssistantProfileRepo) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ int, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+func (r systemAssistantProfileRepo) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ int, _ int, _ int, _ map[string]any, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	return nil, nil
 }
 func (r systemAssistantProfileRepo) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {

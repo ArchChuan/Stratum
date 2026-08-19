@@ -202,7 +202,7 @@ func (r *registryAgentRepoFake) Remove(ctx context.Context, id string, audit *au
 	return nil
 }
 
-func (r *registryAgentRepoFake) UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, maxIterations, maxContextTokens, maxTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
+func (r *registryAgentRepoFake) UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, maxIterations, maxContextTokens, maxTokens int, _ map[string]any, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
 	return r.cfg, nil
 }
 
