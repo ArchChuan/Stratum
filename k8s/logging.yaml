@@ -216,12 +216,16 @@ data:
           - source_labels:
               - __meta_kubernetes_pod_label_app
             target_label: app
+          # __path__ must include the container directory: kubelet writes
+          # /var/log/pods/<ns>_<pod>_<uid>/<container>/0.log (two levels).
+          # Without the *$2 container glob, the *.$1* glob lands one level up
+          # and matches nothing -> promtail_files_active_total stays 0.
           - source_labels:
               - __meta_kubernetes_pod_uid
               - __meta_kubernetes_pod_container_name
             separator: /
             regex: (.+)/(.*)
-            replacement: /var/log/pods/*$1/*.log
+            replacement: /var/log/pods/*$1/*$2/*.log
             target_label: __path__
           - action: labelmap
             regex: __meta_kubernetes_pod_label_(.+)

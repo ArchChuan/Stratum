@@ -254,9 +254,19 @@ func InitOTelProvider(ctx context.Context, cfg *TraceConfig) (func(context.Conte
 		return nil, fmt.Errorf("otlp endpoint %s unreachable: %w", endpoint, err)
 	}
 
+	// WithRetry enables gRPC export-level retry with bounded backoff. Without
+	// it, a transient collector outage drops the whole batch silently: the
+	// BatchSpanProcessor does not retry failed exports by itself, so spans of
+	// in-flight traces (long agent executions included) are lost.
 	exporter, err := otlptracegrpc.New(ctx,
 		otlptracegrpc.WithEndpoint(endpoint),
 		otlptracegrpc.WithInsecure(),
+		otlptracegrpc.WithRetry(otlptracegrpc.RetryConfig{
+			Enabled:         true,
+			InitialInterval: 500 * time.Millisecond,
+			MaxInterval:     30 * time.Second,
+			MaxElapsedTime:  5 * time.Minute,
+		}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("otlp exporter: %w", err)
