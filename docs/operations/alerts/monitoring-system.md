@@ -113,3 +113,13 @@ ServiceMonitor；恢复后确认 target up 且 trace 可查询。
 影响：collector 导出 span 失败，trace 可能缺失（曾因无 sending_queue/retry 静默丢批次）；紧急度：warning。
 查询 `increase(otelcol_exporter_send_failed_spans[10m])` 并按 exporter 拆分。检查 Jaeger/Opik endpoint 可达性
 与导出器 queue/retry 配置；恢复后失败计数停止增长且 span 正常导出。
+
+<a id="otel-receiver-silent"></a>
+
+## StratumOtelReceiverSilent
+
+影响：后端在服务 HTTP 请求，但 collector 的 gRPC 传输零接收 span，trace 静默丢失；紧急度：warning。
+这是 collector "up=1 且导出失败=0" 也覆盖不到的盲区。典型根因：应用 exporter 长连接被 kube-proxy
+stale conntrack DNAT 钉在已删除的 collector backend IP 上（IP 被其它 collector 复用并应答成功），
+应用"以为在导出"实际送错目标。排查：比较 tcpdump 中目标 IP 与 `kubectl get endpoints stratum-otel-collector -n stratum`；
+确认应用 exporter 连接目标是服务 VIP 且 DNAT 到当前 backend；重启应用 Deployment 打断长连接即可恢复。
