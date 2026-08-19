@@ -115,7 +115,6 @@ jobs:
           images: ${{ env.IMAGE_REPO }}/${{ env.IMAGE_NAME }}-backend
           tags: |
             type=ref,event=branch
-            type=sha,prefix={{branch}}-
             type=raw,value=${{ needs.candidate.outputs.sha }}
 
       - name: Build and push backend

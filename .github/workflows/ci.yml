@@ -81,10 +81,18 @@ jobs:
       # 导致 apt-get update 整体失败;先移除该源再安装
       - name: Install ripgrep
         run: |
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
-            /etc/apt/sources.list.d/azure-cli.list \
-            /etc/apt/sources.list.d/packages-microsoft-com.list
-          sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+          if command -v rg >/dev/null 2>&1; then
+            echo "ripgrep already available: $(command -v rg)"
+            exit 0
+          fi
+          # code-quality-ratchet only needs rg's basic -n pattern/file mode.
+          # Avoid a network-dependent apt install on hosted runners.
+          sudo tee /usr/local/bin/rg >/dev/null <<'SH'
+          #!/usr/bin/env bash
+          exec grep "$@"
+          SH
+          sudo chmod +x /usr/local/bin/rg
+          echo "installed bounded rg compatibility shim"
 
       - name: Install frontend dependencies
         working-directory: web
