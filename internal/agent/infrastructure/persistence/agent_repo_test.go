@@ -442,8 +442,9 @@ func TestPackAllSamplingParameters_ReasoningEffortTier(t *testing.T) {
 }
 
 // TestAgentRepo_Update_MergeSQLShape pins the merge path SQL: form/API
-// updates must concatenate JSONB (`parameters || $8::jsonb`) so an old-style
-// client PUT that omits sampling fields cannot erase persisted values.
+// updates must concatenate JSONB and strip explicit null deletion markers, so
+// an old-style client PUT that omits sampling fields cannot erase persisted
+// values while an edited memory override can be cleared.
 // replaceParams=false is the only shape asserted here; the promote shape
 // (plain assignment) is covered by the SamplingParametersReplace test.
 func TestAgentRepo_Update_MergeSQLShape(t *testing.T) {
@@ -457,8 +458,8 @@ func TestAgentRepo_Update_MergeSQLShape(t *testing.T) {
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("SELECT COALESCE\\(system_key").
 		WithArgs("a1").WillReturnRows(pgxmock.NewRows([]string{"system_key"}).AddRow(""))
-	// 完整 SQL 正则:merge 路径必须含 JSONB 拼接,禁止回落为整体覆盖。
-	pool.ExpectExec(`UPDATE agents[\s\S]*parameters\s*=\s*parameters\s*\|\|\s*\$8::jsonb[\s\S]*WHERE id=\$9`).
+	// 完整 SQL 正则:merge 路径必须含 JSONB 拼接和 null 清理,禁止回落为整体覆盖。
+	pool.ExpectExec(`UPDATE agents[\s\S]*parameters\s*=\s*jsonb_strip_nulls\(parameters\s*\|\|\s*\$8::jsonb\)[\s\S]*WHERE id=\$9`).
 		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", pgxmock.AnyArg(), "a1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
@@ -757,7 +758,7 @@ func TestAgentRepo_UpdateSystemAssistantAll_ParametersMergeAndReadback(t *testin
 	pool.ExpectCommit()
 
 	repo := &PgAgentRepo{pool: pool}
-	cfg, err := repo.UpdateSystemAssistantAll(tenantCtx("t1"), "qwen-plus", "user", 10, 8000, 2048, nil)
+	cfg, err := repo.UpdateSystemAssistantAll(tenantCtx("t1"), "qwen-plus", "user", 10, 8000, 2048, nil, nil)
 	if err != nil {
 		t.Fatalf("UpdateSystemAssistantAll: %v", err)
 	}
@@ -797,12 +798,54 @@ func TestAgentRepo_UpdateSystemAssistantAll_ZeroMaxTokensSendsEmptyFragment(t *t
 	pool.ExpectCommit()
 
 	repo := &PgAgentRepo{pool: pool}
-	cfg, err := repo.UpdateSystemAssistantAll(tenantCtx("t1"), "qwen-plus", "user", 10, 8000, 0, nil)
+	cfg, err := repo.UpdateSystemAssistantAll(tenantCtx("t1"), "qwen-plus", "user", 10, 8000, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("UpdateSystemAssistantAll: %v", err)
 	}
 	if cfg.MaxTokens != 2048 {
 		t.Errorf("MaxTokens = %d, want 2048 (stored value read back unchanged)", cfg.MaxTokens)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestAgentRepo_UpdateSystemAssistantAll_MemoryParametersRoundTrip(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	pool.ExpectQuery("UPDATE agents SET llm_model=\\$1.*jsonb_strip_nulls.*RETURNING id").
+		WithArgs("qwen-plus", "user", 10, 8000, `{"memory.fact_injection_top_n":8}`).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "name", "type", "description", "system_prompt", "llm_model",
+			"max_iterations", "max_context_tokens", "memory_scope", "system_key", "created_by", "parameters",
+		}).AddRow(
+			domain.SystemAssistantID, "平台助手", string(domain.ReActAgent), "", "", "qwen-plus", 10, 8000,
+			"user", domain.SystemAssistantKey, "", `{"memory.fact_injection_top_n":8}`,
+		))
+	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
+		WithArgs(domain.SystemAssistantID).WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
+	pool.ExpectQuery("SELECT server_id, tool_name FROM agent_mcp_tool_links").
+		WithArgs(domain.SystemAssistantID).WillReturnRows(pgxmock.NewRows([]string{"server_id", "tool_name"}))
+	pool.ExpectQuery("SELECT aw.workspace_id").
+		WithArgs(domain.SystemAssistantID).WillReturnRows(pgxmock.NewRows([]string{"workspace_id", "name", "description"}))
+	pool.ExpectCommit()
+
+	repo := &PgAgentRepo{pool: pool}
+	cfg, err := repo.UpdateSystemAssistantAll(
+		tenantCtx("t1"), "qwen-plus", "user", 10, 8000, 0,
+		map[string]any{"memory.fact_injection_top_n": 8}, nil,
+	)
+	if err != nil {
+		t.Fatalf("UpdateSystemAssistantAll: %v", err)
+	}
+	if got := cfg.MemoryParameters["memory.fact_injection_top_n"]; got != float64(8) {
+		t.Errorf("memory.fact_injection_top_n = %v, want 8", got)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
@@ -840,7 +883,7 @@ func TestAgentRepo_UpdateSystemAssistantAll_AuditFailureRollsBackParameters(t *t
 		ResourceKind: auditdomain.ResourceKindAgent, ResourceID: domain.SystemAssistantID,
 		Operation: auditdomain.ChangeOpUpdate, ActorID: "user-1",
 	}
-	cfg, err := repo.UpdateSystemAssistantAll(tenantCtx("t1"), "qwen-plus", "user", 10, 8000, 2048, ev)
+	cfg, err := repo.UpdateSystemAssistantAll(tenantCtx("t1"), "qwen-plus", "user", 10, 8000, 2048, nil, ev)
 	if err == nil || cfg != nil || !strings.Contains(err.Error(), "audit write failed") {
 		t.Fatalf("expected audit rollback error, cfg=%+v err=%v", cfg, err)
 	}

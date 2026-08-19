@@ -187,7 +187,7 @@ func (s *resolverAgentRepoStub) Update(context.Context, *agentdomain.AgentConfig
 func (s *resolverAgentRepoStub) UpdateSystemAssistantModel(context.Context, string, string, int, int, *auditdomain.ResourceChangeAuditEvent) (*agentdomain.AgentConfig, error) {
 	return nil, nil
 }
-func (s *resolverAgentRepoStub) UpdateSystemAssistantAll(context.Context, string, string, int, int, int, *auditdomain.ResourceChangeAuditEvent) (*agentdomain.AgentConfig, error) {
+func (s *resolverAgentRepoStub) UpdateSystemAssistantAll(context.Context, string, string, int, int, int, map[string]any, *auditdomain.ResourceChangeAuditEvent) (*agentdomain.AgentConfig, error) {
 	return nil, nil
 }
 

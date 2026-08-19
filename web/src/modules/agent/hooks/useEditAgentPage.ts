@@ -125,14 +125,17 @@ export const useEditAgentPage = () => {
           memoryRecallTopK,
           ...rest
         } = values;
-        const memoryParameters = buildMemoryParameters({
-          memoryMaxFactsPerExtraction,
-          memoryFactInjectionTopN,
-          memoryHistoryInjectionTopN,
-          memoryExtractionPrompt,
-          memoryExtractionModel,
-          memoryRecallTopK,
-        });
+        const memoryParameters = buildMemoryParameters(
+          {
+            memoryMaxFactsPerExtraction,
+            memoryFactInjectionTopN,
+            memoryHistoryInjectionTopN,
+            memoryExtractionPrompt,
+            memoryExtractionModel,
+            memoryRecallTopK,
+          },
+          agent?.parameters,
+        );
         await agentApi.update(id, {
           ...rest,
           ...(Object.keys(memoryParameters).length > 0 ? { parameters: memoryParameters } : {}),
@@ -149,7 +152,7 @@ export const useEditAgentPage = () => {
         setLoading(false);
       }
     },
-    [id, navigate, agent?.isSystem],
+    [id, navigate, agent?.isSystem, agent?.parameters],
   );
 
   return {

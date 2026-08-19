@@ -155,8 +155,8 @@ func (r *Registry) UpdateSystemAssistantModel(ctx context.Context, model string,
 
 // UpdateSystemAssistantAll applies model fields + unchanged bindings in one
 // transaction, auditing once.
-func (r *Registry) UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, maxIterations, maxContextTokens, maxTokens int, audit *auditdomain.ResourceChangeAuditEvent) (Agent, error) {
-	cfg, err := r.repo.UpdateSystemAssistantAll(ctx, model, memoryScope, maxIterations, maxContextTokens, maxTokens, audit)
+func (r *Registry) UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, maxIterations, maxContextTokens, maxTokens int, memoryParameters map[string]any, audit *auditdomain.ResourceChangeAuditEvent) (Agent, error) {
+	cfg, err := r.repo.UpdateSystemAssistantAll(ctx, model, memoryScope, maxIterations, maxContextTokens, maxTokens, memoryParameters, audit)
 	if err != nil {
 		return nil, fmt.Errorf("registry update system assistant: %w", err)
 	}
