@@ -299,7 +299,9 @@ func completionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	content := "stateful sync completed"
-	if request.Model == "qwen-plus" && len(request.Tools) == 0 {
+	// 优化器请求按系统提示词标记识别，不再绑定具体模型名：模型默认值可能
+	// 随模型目录配置变化（代码内不写死兜底模型），按模型名分发会脆断。
+	if len(request.Tools) == 0 && strings.Contains(string(encodedMessages), "你是提示词优化器") {
 		content = optimizationContent
 	}
 	message := map[string]any{"role": "assistant", "content": content}
