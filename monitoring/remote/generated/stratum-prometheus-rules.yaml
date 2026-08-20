@@ -394,6 +394,20 @@ spec:
             description: More than 10 route fallbacks in the last fifteen minutes ({{ $labels.from_model }} -> {{ $labels.to_model }}, increase {{ $value }}).
             dashboard_url: /d/stratum-service-overview
             runbook_url: /docs/operations/alerts/business.md#route-fallback-surge
+
+        - alert: StratumLLMModelResolutionFailed
+          expr: increase(llm_model_resolution_errors_total[5m]) > 0
+          for: 2m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: llmgateway
+          annotations:
+            summary: LLM 模型解析失败：模型配置失效或无默认模型
+            description: Model resolution failed closed (model={{ $labels.model }}, reason={{ $labels.reason }}, increase {{ $value }}). Requested model is missing/disabled/unhealthy or no default model is configured; fix models/providers catalog.
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#llm-model-resolution-failed
     - name: stratum-availability
       rules:
         - alert: StratumPublicEndpointDown

@@ -229,3 +229,15 @@ RetryMigration 续传（failed/canceled 均支持断点续传）。
 `route_fallback_total{from_model,to_model}`；正常运行时主模型健康、回退应接近 0。频次骤升
 通常伴随主模型 unhealthy（与 `StratumModelUnhealthy` 配对告警）。处置：按 from_model 检查健康
 状态与 provider 连通性；若为上游侧故障，待恢复后回退自动回落。
+
+<a id="llm-model-resolution-failed"></a>
+
+## StratumLLMModelResolutionFailed
+
+影响：LLM 模型解析配置失效（5 分钟内有增量）；紧急度：warning。查询
+`increase(llm_model_resolution_errors_total[5m])`。代码内禁止写死兜底模型，模型名只能来自
+模型目录（models / providers 表）；两种场景必须告警而非静默降级：
+`reason=invalid_model`（显式请求的模型不在目录 / 已禁用 / provider 不健康，fail-closed 拒绝）
+与 `reason=no_default`（未显式指定模型且目录没有任何默认/推荐模型）。处置：按 model/reason
+检查模型管理页面的 models / providers 配置（default_model、enabled、recommended、
+default_embedding），修复后计数停止增长、告警自动恢复。

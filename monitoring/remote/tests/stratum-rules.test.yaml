@@ -1188,3 +1188,56 @@ tests:
       - eval_time: 6m
         alertname: StratumRouteFallbackSurge
         exp_alerts: []
+
+  - name: model resolution failure alert fires for invalid requested model
+    interval: 1m
+    input_series:
+      - series: 'llm_model_resolution_errors_total{model="ghost",reason="invalid_model"}'
+        values: '0+1x8'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: StratumLLMModelResolutionFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum
+              environment: remote-test
+              component: llmgateway
+              model: ghost
+              reason: invalid_model
+            exp_annotations:
+              summary: LLM 模型解析失败：模型配置失效或无默认模型
+              description: Model resolution failed closed (model=ghost, reason=invalid_model, increase 5). Requested model is missing/disabled/unhealthy or no default model is configured; fix models/providers catalog.
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/alerts/business.md#llm-model-resolution-failed
+
+  - name: model resolution failure alert fires when no default model configured
+    interval: 1m
+    input_series:
+      - series: 'llm_model_resolution_errors_total{model="",reason="no_default"}'
+        values: '0+1x8'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: StratumLLMModelResolutionFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum
+              environment: remote-test
+              component: llmgateway
+              reason: no_default
+            exp_annotations:
+              summary: LLM 模型解析失败：模型配置失效或无默认模型
+              description: Model resolution failed closed (model=, reason=no_default, increase 5). Requested model is missing/disabled/unhealthy or no default model is configured; fix models/providers catalog.
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/alerts/business.md#llm-model-resolution-failed
+
+  - name: model resolution baseline does not fire the failure alert
+    interval: 1m
+    input_series:
+      - series: 'llm_model_resolution_errors_total{model="ghost",reason="invalid_model"}'
+        values: '0x8'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: StratumLLMModelResolutionFailed
+        exp_alerts: []
