@@ -724,6 +724,44 @@ jobs:
             exit 1
           fi
 
+      - name: Clear stale conntrack entries to otel collector VIP
+        run: |
+          # A recreated app pod can reuse the old pod IP and OTLP src port. When
+          # that 5-tuple still has a stale DNAT entry in the node conntrack table
+          # (pinning to a replaced collector backend), the new exporter connection
+          # is hijacked to the stale backend IP and traces are silently lost —
+          # kube-proxy rules are never consulted for the already-established flow.
+          # Clearing entries to the collector Service VIP forces those flows to
+          # re-resolve through the current kube-proxy DNAT rules; the OTLP exporter
+          # then reconnects (same self-heal verified manually on the node).
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -i ~/.ssh/deploy_key root@${{ secrets.SSH_DEPLOY_HOST }} bash -s <<'REMOTE'
+          set -e
+          if ! command -v conntrack >/dev/null 2>&1; then
+            echo "installing conntrack-tools"
+            apt-get update -qq && apt-get install -y -qq conntrack
+          fi
+          VIP="$(kubectl get svc -n stratum stratum-otel-collector -o jsonpath='{.spec.clusterIP}')"
+          if [[ -z "$VIP" || "$VIP" == "None" ]]; then
+            echo "stratum-otel-collector has no ClusterIP; nothing to clean" >&2
+            exit 1
+          fi
+          before="$(conntrack -L -p tcp --dst "$VIP" --dport 4317 2>/dev/null | wc -l)"
+          set +e
+          conntrack -D -p tcp --dst "$VIP" --dport 4317
+          cleanup_rc=$?
+          set -e
+          # conntrack -D exits 1 when no flow matched the filter (nothing to
+          # delete) — benign during steady state. Any other non-zero exit is a
+          # real failure and must fail the deploy; do not swallow it.
+          if [[ "$cleanup_rc" -ne 0 && "$cleanup_rc" -ne 1 ]]; then
+            echo "conntrack -D to ${VIP}:4317 failed with rc=$cleanup_rc" >&2
+            exit "$cleanup_rc"
+          fi
+          after="$(conntrack -L -p tcp --dst "$VIP" --dport 4317 2>/dev/null | wc -l)"
+          echo "otel-collector conntrack flows to ${VIP}:4317: before=$before after=$after"
+          REMOTE
+
       - name: Prune stale node images after rollout
         run: |
           ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
