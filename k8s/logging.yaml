@@ -132,6 +132,14 @@ spec:
               mountPath: /etc/loki
             - name: data
               mountPath: /var/loki
+            # WAL is per-instance scratch state (replays only unflushed
+            # chunks). Storing it on the shared PVC let two instances interleave
+            # segments during a rollout, corrupting the WAL and bricking Loki
+            # startup ("segments are not sequential", observed 2026-08-20).
+            # An emptyDir shadows /var/loki/wal so every pod starts with a
+            # clean WAL; flushed chunks on the PVC are unaffected.
+            - name: wal
+              mountPath: /var/loki/wal
           resources:
             requests:
               memory: "256Mi"
@@ -160,6 +168,8 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: loki-data
+        - name: wal
+          emptyDir: {}
 ---
 # Loki Service
 apiVersion: v1
