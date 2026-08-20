@@ -347,14 +347,18 @@ func (errEmbedProto) BatchSize() int { return 8 }
 // llmMetricsSpy embeds NoopMetrics and records LLM metric calls.
 type llmMetricsSpy struct {
 	observability.NoopMetrics
-	requests   []string // model|provider|status
-	durations  int
-	tokenUsage []string // model|tokenType|count
-	ttft       int
+	requests         []string // model|provider|status
+	resolutionErrors []string // model|reason
+	durations        int
+	tokenUsage       []string // model|tokenType|count
+	ttft             int
 }
 
 func (s *llmMetricsSpy) IncLLMRequest(model, provider, status string) {
 	s.requests = append(s.requests, model+"|"+provider+"|"+status)
+}
+func (s *llmMetricsSpy) IncLLMModelResolutionError(model, reason string) {
+	s.resolutionErrors = append(s.resolutionErrors, model+"|"+reason)
 }
 func (s *llmMetricsSpy) RecordLLMRequestDuration(model, provider string, duration float64) {
 	s.durations++

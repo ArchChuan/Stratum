@@ -458,19 +458,18 @@ func evaluationSkillContext(
 
 type gatewayPromptRewriter struct {
 	resolver agentport.TenantCapabilityResolver
-	// params feeds evaluation.optimizer.* platform parameters into the
-	// rewrite request (model / temperature / max_tokens), replacing the
-	// legacy hard-coded qwen-plus/0.2/2048. nil degrades to those defaults
-	// (db unavailable); a read failure also keeps the definition defaults.
+	// params feeds evaluation.optimizer.* platform parameters into the rewrite
+	// request (model / temperature / max_tokens)。模型默认值为空：代码内不写死
+	// 兜底模型，空模型交由 llmgateway 从模型目录解析默认。
 	params *parametersapp.Service
 }
 
 // optimizerLLM picks the effective optimizer LLM spec from platform
-// parameters, falling back to the definition defaults.
+// parameters. 模型未配置（空）时交由 llmgateway 解析默认，绝不写死模型名。
 func (r gatewayPromptRewriter) optimizerLLM(
 	ctx context.Context,
 ) (model string, temperature float32, maxTokens int) {
-	model, temperature, maxTokens = "qwen-plus", 0.2, 2048
+	model, temperature, maxTokens = "", 0.2, 2048
 	if r.params == nil {
 		return model, temperature, maxTokens
 	}
@@ -580,16 +579,16 @@ func (j judgeAdapter) judgeModel(ctx context.Context, requested string) string {
 		return requested
 	}
 	if j.params == nil {
-		return "qwen-plus"
+		return ""
 	}
 	values, err := j.params.PlatformValues(ctx)
 	if err != nil {
-		return "qwen-plus"
+		return ""
 	}
 	if model, ok := values["evaluation.judge.model"].(string); ok && model != "" {
 		return model
 	}
-	return "qwen-plus"
+	return ""
 }
 
 func (j judgeAdapter) judgeTemperature(ctx context.Context) float32 {
@@ -719,7 +718,9 @@ func (a casegenAdapter) genModel(ctx context.Context) string {
 			}
 		}
 	}
-	return "qwen-plus"
+	// 模型未配置（空）时交由 llmgateway 从模型目录解析默认，代码内不写死
+	// 兜底模型。
+	return ""
 }
 
 // caseGenUserContent renders one sample for the generator, including the

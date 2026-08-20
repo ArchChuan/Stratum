@@ -33,6 +33,8 @@ func exerciseAllMetrics(m MetricsProvider) {
 	m.RecordResourceProposalDraftEdits("memory", "create", 2)
 	// LLM
 	m.IncLLMRequest("qwen-plus", "qwen", "ok")
+	m.IncLLMModelResolutionError("", "no_default")
+	m.IncLLMModelResolutionError("ghost", "invalid_model")
 	m.RecordLLMRequestDuration("qwen-plus", "qwen", 0.5)
 	m.IncLLMTokenUsage("qwen-plus", "prompt", 100)
 	m.RecordLLMTokenHistogram("qwen-plus", "completion", 50)

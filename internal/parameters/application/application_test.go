@@ -206,8 +206,8 @@ func TestServicePlatformValuesMergesDefaults(t *testing.T) {
 	if got := values["evaluation.optimizer.temperature"]; got != 0.5 {
 		t.Fatalf("stored value = %v, want 0.5", got)
 	}
-	if got := values["evaluation.optimizer.model"]; got != "qwen-plus" {
-		t.Fatalf("default value = %v, want qwen-plus", got)
+	if got := values["evaluation.optimizer.model"]; got != "" {
+		t.Fatalf("default value = %v, want empty (model must resolve from catalog, no hardcoded fallback)", got)
 	}
 	if got := values["agent.temperature"]; got != 0.7 {
 		t.Fatalf("resource default = %v, want 0.7", got)

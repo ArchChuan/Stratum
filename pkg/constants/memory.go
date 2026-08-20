@@ -162,13 +162,6 @@ const (
 	MemoryMaxFactLength         = 500  // max chars for a valid fact
 	MemoryExtractLLMMaxTokens   = 4096 // JSON array of facts; 1024 truncates large conversations
 	MemoryEnrichLLMTemperature  = 0.1  // 富化抽取任务温度（低温度换取字段语义稳定）
-	// MemoryEnrichDefaultModel 富化模型 const 兜底（resolver 缺失/未配置时）。
-	// 与 registry memory.enrich_model 的 Default 保持一致，避免双源漂移。
-	MemoryEnrichDefaultModel = "qwen-turbo"
-	// MemorySummaryDefaultModel 会话摘要模型 const 兜底（resolver 缺失/未配置时）。
-	// 与 registry memory.summary_model 的 Default 保持一致；删除冷 config 后
-	// 必须保持非空，摘要不得降级到富化模型。
-	MemorySummaryDefaultModel = "qwen-plus"
 	// MemoryMaxStructuredRetries 结构化 JSON 输出解析/校验失败后的带错重试次数
 	// （共 MemoryMaxStructuredRetries+1 次尝试）。每次重试把具体错误位置/值/原因
 	// 作为 system-role correction 丢回模型。provider 硬错误不消耗重试（fail-fast）。
