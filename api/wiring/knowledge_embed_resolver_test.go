@@ -2,11 +2,14 @@ package wiring
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
@@ -15,10 +18,14 @@ import (
 )
 
 type knowledgeModelRepo struct {
-	models []domain.Model
+	models  []domain.Model
+	listErr error
 }
 
 func (r *knowledgeModelRepo) List(_ context.Context, filter port.ModelFilter) ([]domain.Model, error) {
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
 	models := make([]domain.Model, 0, len(r.models))
 	for _, model := range r.models {
 		if filter.Enabled != nil && model.Enabled != *filter.Enabled {
@@ -104,8 +111,40 @@ func TestKnowledgeEmbedResolversUseManagedModels(t *testing.T) {
 
 	workspaceResolver := buildKnowledgeEmbedResolver(registry, zap.NewNop())
 	require.NotNil(t, workspaceResolver(context.Background(), "tenant-1", "managed-embedding"))
-	require.NotNil(t, workspaceResolver(context.Background(), "tenant-1", ""))
+	// 空模型/目录缺失均 fail-closed 返回 nil（无默认兜底）。
+	require.Nil(t, workspaceResolver(context.Background(), "tenant-1", ""))
 	require.Nil(t, workspaceResolver(context.Background(), "tenant-1", "not-managed"))
+}
+
+func TestKnowledgeEmbedResolverFailClosedOnCatalogueError(t *testing.T) {
+	core, logs := observer.New(zapcore.ErrorLevel)
+	logger := zap.New(core)
+
+	registry := llmgateway.NewModelRegistry(
+		&knowledgeModelRepo{
+			models: []domain.Model{{
+				ID: "embedding-1", ProviderID: "provider-1", Name: "managed-embedding",
+				Enabled: true, Capabilities: []domain.ModelCapability{domain.CapEmbedding},
+			}},
+			listErr: errors.New("catalogue db unavailable"),
+		},
+		&knowledgeProviderRepo{provider: domain.Provider{
+			ID: "provider-1", Kind: domain.ProviderOpenAICompat, Enabled: true,
+			BaseURL: "https://example.test/v1", APIKey: "test-key",
+		}},
+		nil,
+		map[domain.ProviderKind]llmgateway.EmbedProtocol{domain.ProviderOpenAICompat: nil},
+		time.Minute,
+	)
+
+	// 目录查询失败必须 fail-closed（nil）并输出 error 日志，不静默按不存在处理。
+	require.Nil(t, buildKnowledgeEmbedResolver(registry, logger)(context.Background(), "tenant-1", "embedding-1"))
+
+	entries := logs.FilterMessage("knowledge.embed.resolve_failed")
+	require.Equal(t, 1, entries.Len())
+	require.Equal(t, "embedding catalogue unavailable", entries.All()[0].ContextMap()["reason"])
+	require.Equal(t, "tenant-1", entries.All()[0].ContextMap()["tenant_id"])
+	require.Equal(t, "embedding-1", entries.All()[0].ContextMap()["model"])
 }
 
 func TestKnowledgeEmbedResolversReturnNilForEmptyCatalogue(t *testing.T) {

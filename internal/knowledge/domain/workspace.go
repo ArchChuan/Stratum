@@ -10,6 +10,7 @@ import (
 // names mirror these so the HTTP error mapping table can route both layers.
 var (
 	ErrInvalidEmbeddingModel     = errors.New("unsupported embedding model")
+	ErrEmbeddingModelRequired    = errors.New("embedding model is required")
 	ErrInvalidQueryMode          = errors.New("invalid query_mode")
 	ErrInvalidChunkingStrategy   = errors.New("invalid chunking_strategy")
 	ErrInvalidRerankIdentity     = errors.New("invalid reranking identity")
@@ -21,7 +22,6 @@ var (
 )
 
 const (
-	DefaultEmbeddingModel   = "text-embedding-v3"
 	DefaultQueryMode        = "hybrid"
 	DefaultChunkSize        = 512
 	DefaultChunkOverlap     = 64
@@ -122,6 +122,10 @@ func NewWorkspace(name, description string, cfg WorkspaceConfig, defaultChunkSiz
 // fall within the allowed sets. Embedding model existence in the global
 // catalogue is validated by the application layer (port.ModelExists) after
 // this pure structural check — domain stays free of I/O.
+// The embedding model must be explicitly configured: it is the only source of
+// truth (no static or dynamic default), so an empty value is rejected.
+// The check is deliberately last — structural errors (query mode, chunking,
+// rerank, threshold) keep priority over the missing-field error.
 func (c WorkspaceConfig) Validate() error {
 	if !AllowedQueryModes[c.QueryMode] {
 		return ErrInvalidQueryMode
@@ -134,6 +138,9 @@ func (c WorkspaceConfig) Validate() error {
 	}
 	if c.ScoreThreshold < 0 || c.ScoreThreshold > 1 {
 		return ErrInvalidScoreThreshold
+	}
+	if c.EmbeddingModel == "" {
+		return ErrEmbeddingModelRequired
 	}
 	return nil
 }
@@ -150,9 +157,6 @@ func ValidRerankIdentity(identity string) bool {
 }
 
 func applyDefaults(c WorkspaceConfig, defaultChunkSize, defaultTopK int) WorkspaceConfig {
-	if c.EmbeddingModel == "" {
-		c.EmbeddingModel = DefaultEmbeddingModel
-	}
 	if c.QueryMode == "" {
 		c.QueryMode = DefaultQueryMode
 	}

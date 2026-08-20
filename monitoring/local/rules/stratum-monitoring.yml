@@ -167,3 +167,28 @@ groups:
           description: The OTel collector recorded span export failures during the last ten minutes (current value {{ $value }}); traces may be missing.
           dashboard_url: /d/stratum-service-overview
           runbook_url: /docs/operations/alerts/monitoring-system.md#otel-exporter-failures
+
+      # 静默 span 丢失盲区：后端在服务请求，但 collector 的 gRPC 传输零接收。
+      # 典型触发是 exporter 长连接被 kube-proxy stale conntrack DNAT 钉在已删除的
+      # collector backend（IP 被复用），应用"以为在导出"实际全量送错目标。
+      # 现有 StratumOtelCollectorUnavailable/StratumOtelExporterFailures 都覆盖不到
+      # 该状态：collector up=1、导出失败=0、但接收=0。
+      - alert: StratumOtelReceiverSilent
+        expr: |
+          (
+            absent(otelcol_receiver_accepted_spans{namespace="stratum",service="stratum-otel-collector",transport="grpc"})
+            or
+            sum(increase(otelcol_receiver_accepted_spans{namespace="stratum",service="stratum-otel-collector",transport="grpc"}[10m])) == 0
+          )
+          and on() (sum(increase(http_requests_total{namespace="stratum",service="stratum"}[10m])) > 0)
+        for: 5m
+        labels:
+          severity: warning
+          service: stratum
+          environment: production
+          component: tracing
+        annotations:
+          summary: OTel collector receives no spans from the backend
+          description: The backend served HTTP requests during the last ten minutes but the OTel collector accepted zero spans on its gRPC transport (current value {{ $value }}); traces are being silently lost, likely a stale kube-proxy conntrack DNAT pinning the app exporter to a replaced collector backend or a misdirected exporter endpoint.
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/alerts/monitoring-system.md#otel-receiver-silent

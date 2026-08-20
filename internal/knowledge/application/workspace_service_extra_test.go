@@ -211,7 +211,8 @@ func buildWorkspaceService(repo *fakeWorkspaceRepo) (*WorkspaceService, *Knowled
 }
 
 func seedWorkspace(repo *fakeWorkspaceRepo, name string, managed bool) *domain.Workspace {
-	ws, err := domain.NewWorkspace(name, "desc", domain.WorkspaceConfig{}, domain.DefaultChunkSize, domain.DefaultTopK)
+	// 嵌入模型必须显式配置（无静态兜底），seed 构造补显式模型。
+	ws, err := domain.NewWorkspace(name, "desc", domain.WorkspaceConfig{EmbeddingModel: "text-embedding-v3"}, domain.DefaultChunkSize, domain.DefaultTopK)
 	if err != nil {
 		panic(err)
 	}
@@ -253,7 +254,7 @@ func TestWorkspaceCreateSuccessAndCollection(t *testing.T) {
 	svc.SetVectorStore(store)
 
 	ws, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{
-		Name: "ws1", Description: "d", Config: domain.WorkspaceConfig{},
+		Name: "ws1", Description: "d", Config: domain.WorkspaceConfig{EmbeddingModel: "text-embedding-v3"},
 	}, "user-1")
 	if err != nil {
 		t.Fatalf("create = %v", err)
@@ -283,7 +284,7 @@ func TestWorkspaceCreateWithoutVectorStore(t *testing.T) {
 	// 极端情况：vectorStore 未注入时跳过 collection 创建。
 	repo := newFakeWorkspaceRepo()
 	svc, _ := buildWorkspaceService(repo)
-	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{Name: "ws1"}, "user-1"); err != nil {
+	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{Name: "ws1", Config: domain.WorkspaceConfig{EmbeddingModel: "text-embedding-v3"}}, "user-1"); err != nil {
 		t.Fatalf("create = %v", err)
 	}
 }
@@ -291,7 +292,7 @@ func TestWorkspaceCreateWithoutVectorStore(t *testing.T) {
 func TestWorkspaceCreateValidationAndErrors(t *testing.T) {
 	repo := newFakeWorkspaceRepo()
 	svc, _ := buildWorkspaceService(repo)
-	svc.SetModelExists(&fakeModelExists{embedding: map[string]bool{domain.DefaultEmbeddingModel: true}})
+	svc.SetModelExists(&fakeModelExists{embedding: map[string]bool{"text-embedding-v3": true}})
 
 	// 目录校验：非法 embedding model 不在全局目录。
 	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{
@@ -299,9 +300,15 @@ func TestWorkspaceCreateValidationAndErrors(t *testing.T) {
 	}, "user-1"); !errors.Is(err, domain.ErrInvalidEmbeddingModel) {
 		t.Fatalf("invalid model err = %v", err)
 	}
+	// 必填校验：缺 embedding model 且其余字段合法 → 400 语义错误（无静态兜底）。
+	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{
+		Name: "ws-missing-model", Config: domain.WorkspaceConfig{QueryMode: "hybrid"},
+	}, "user-1"); !errors.Is(err, domain.ErrEmbeddingModelRequired) {
+		t.Fatalf("missing model err = %v", err)
+	}
 	// repo 错误传播。
 	repo.createErr = errors.New("db down")
-	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{Name: "ws"}, "user-1"); err == nil {
+	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{Name: "ws", Config: domain.WorkspaceConfig{EmbeddingModel: "text-embedding-v3"}}, "user-1"); err == nil {
 		t.Fatal("repo error must propagate")
 	}
 }
@@ -310,26 +317,26 @@ func TestWorkspaceCreateValidatesRerankCatalogue(t *testing.T) {
 	repo := newFakeWorkspaceRepo()
 	svc, _ := buildWorkspaceService(repo)
 	catalogue := &fakeModelExists{
-		embedding: map[string]bool{domain.DefaultEmbeddingModel: true},
+		embedding: map[string]bool{"text-embedding-v3": true},
 		rerank:    map[string]bool{"rerank-v3": true},
 	}
 	svc.SetModelExists(catalogue)
 
 	// 外部 rerank provider 的模型不在目录 → 拒绝。
 	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{
-		Name: "ws", Config: domain.WorkspaceConfig{Reranking: "cohere:unknown"},
+		Name: "ws", Config: domain.WorkspaceConfig{EmbeddingModel: "text-embedding-v3", Reranking: "cohere:unknown"},
 	}, "user-1"); !errors.Is(err, domain.ErrInvalidRerankIdentity) {
 		t.Fatalf("rerank not in catalogue err = %v", err)
 	}
 	// 目录查询失败传播（fail-closed，不默认放行）。
 	catalogue.err = errors.New("catalogue down")
-	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{Name: "ws"}, "user-1"); err == nil {
+	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{Name: "ws", Config: domain.WorkspaceConfig{EmbeddingModel: "text-embedding-v3"}}, "user-1"); err == nil {
 		t.Fatal("catalogue error must propagate")
 	}
 	// 目录含该 rerank 模型 → 创建成功。
 	catalogue.err = nil
 	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{
-		Name: "ws2", Config: domain.WorkspaceConfig{Reranking: "cohere:rerank-v3"},
+		Name: "ws2", Config: domain.WorkspaceConfig{EmbeddingModel: "text-embedding-v3", Reranking: "cohere:rerank-v3"},
 	}, "user-1"); err != nil {
 		t.Fatalf("rerank in catalogue create = %v", err)
 	}
@@ -343,7 +350,7 @@ func TestWorkspaceCreateRollsBackOnCollectionFailure(t *testing.T) {
 	svc, _ := buildWorkspaceService(repo)
 	svc.SetVectorStore(store)
 
-	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{Name: "ws1"}, "user-1"); err == nil {
+	if _, err := svc.CreateWorkspace(context.Background(), "t1", CreateWorkspaceInput{Name: "ws1", Config: domain.WorkspaceConfig{EmbeddingModel: "text-embedding-v3"}}, "user-1"); err == nil {
 		t.Fatal("collection failure must error")
 	}
 	if len(repo.deleted) != 1 || repo.deleted[0] != "ws1" {
@@ -550,7 +557,7 @@ func TestWorkspaceGetConfigAndWorkspaceQueries(t *testing.T) {
 	seedWorkspace(repo, "ws1", false)
 
 	cfg, err := svc.GetConfig(context.Background(), "t1", "ws1")
-	if err != nil || cfg.EmbeddingModel != domain.DefaultEmbeddingModel {
+	if err != nil || cfg.EmbeddingModel != "text-embedding-v3" {
 		t.Fatalf("config = %+v, %v", cfg, err)
 	}
 	if _, err := svc.GetConfig(context.Background(), "t1", "ghost"); !errors.Is(err, domain.ErrWorkspaceNotFound) {

@@ -209,6 +209,20 @@ groups:
           dashboard_url: /d/stratum-service-overview
           runbook_url: /docs/operations/alerts/business.md#knowledge-ingest-failures
 
+      - alert: StratumKnowledgeEmbedUnavailable
+        expr: increase(knowledge_embed_unavailable_total[15m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: stratum
+          environment: production
+          component: knowledge
+        annotations:
+          summary: Knowledge embedding model unavailable
+          description: Tenant {{ $labels.tenant }} has no usable embedding model for knowledge ingest/RAG (increase {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/alerts/business.md#knowledge-embed-unavailable
+
   - name: stratum-hermes
     rules:
       - alert: StratumHermesErrors

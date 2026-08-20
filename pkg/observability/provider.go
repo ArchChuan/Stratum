@@ -46,6 +46,7 @@ type MetricsProvider interface {
 	RecordKnowledgeIngestDuration(duration float64)
 	IncKnowledgeIngestInFlight()
 	DecKnowledgeIngestInFlight()
+	IncKnowledgeEmbedUnavailable(tenantID string)
 
 	// Hermes
 	IncHermesEvent(eventType string)
@@ -158,6 +159,7 @@ func (NoopMetrics) IncKnowledgeIngest(_ string)                                 
 func (NoopMetrics) RecordKnowledgeIngestDuration(_ float64)                       {}
 func (NoopMetrics) IncKnowledgeIngestInFlight()                                   {}
 func (NoopMetrics) DecKnowledgeIngestInFlight()                                   {}
+func (NoopMetrics) IncKnowledgeEmbedUnavailable(_ string)                         {}
 func (NoopMetrics) IncHermesEvent(_ string)                                       {}
 func (NoopMetrics) IncHermesEventProcessed(_, _ string)                           {}
 func (NoopMetrics) IncAgentTaskCompleted(_, _, _, _ string)                       {}
