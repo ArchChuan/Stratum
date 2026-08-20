@@ -71,9 +71,16 @@ verify_promtail_log_flow() {
         else
             metrics="$(curl -sf http://127.0.0.1:9080/metrics 2>/dev/null || true)"
         fi
+        # awk exits on the first match, closing the pipe while printf may
+        # still be writing a large /metrics body; under `set -o pipefail`
+        # that Broken pipe aborts the script even though this function is
+        # documented to never fail (observed 2026-08-21 on a big promtail
+        # /metrics dump). `|| true` keeps the documented contract: on any
+        # fetch/extract failure return empty and let the caller retry.
         printf '%s\n' "${metrics}" \
             | awk -v name="$1" \
-                '$1 ~ ("^" name) && $2 ~ /^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$/ {print $2; exit}'
+                '$1 ~ ("^" name) && $2 ~ /^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$/ {print $2; exit}' \
+            || true
     }
 
     # Numeric comparison that understands scientific notation (awk parses
