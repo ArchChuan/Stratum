@@ -48,7 +48,24 @@ rollout_on_config_change() {
 }
 
 verify_promtail_log_flow() {
-    local pod="" active="" sent_first="" sent_second="" attempt=""
+    local pod="" active="" sent_first="" sent_second="" attempt="" metric=""
+
+    # Returns the numeric value of a promtail counter, or empty on a transient
+    # fetch failure. Never fails the script: the caller retries and only fails
+    # after a sustained problem, so one flaky curl (e.g. exit 56 through the
+    # deploy runner tunnel) cannot abort a healthy deploy.
+    promtail_metric() {
+        curl -sf http://127.0.0.1:19090/metrics 2>/dev/null \
+            | awk -v name="$1" '$1 ~ ("^" name) && $2 ~ /^[0-9]+$/ {print $2; exit}' \
+            || true
+    }
+
+    port_forward_alive() {
+        if ! kill -0 "${pf_pid}" >/dev/null 2>&1; then
+            echo "error: promtail port-forward exited unexpectedly" >&2
+            exit 1
+        fi
+    }
 
     pod="$(kubectl get pod -n monitoring -l app=promtail \
         -o jsonpath='{.items[0].metadata.name}')"
@@ -64,10 +81,7 @@ verify_promtail_log_flow() {
           fi' EXIT
 
     for attempt in $(seq 1 30); do
-        if ! kill -0 "${pf_pid}" >/dev/null 2>&1; then
-            echo "error: promtail port-forward exited unexpectedly" >&2
-            exit 1
-        fi
+        port_forward_alive
         if curl -sf http://127.0.0.1:19090/ready >/dev/null 2>&1; then
             break
         fi
@@ -79,8 +93,8 @@ verify_promtail_log_flow() {
     fi
 
     for attempt in $(seq 1 30); do
-        active="$(curl -sf http://127.0.0.1:19090/metrics 2>/dev/null \
-            | awk '$1 ~ /^promtail_files_active_total$/ {print $2; exit}' || true)"
+        port_forward_alive
+        active="$(promtail_metric promtail_files_active_total)"
         if [[ "${active}" =~ ^[0-9]+$ && "${active}" -gt 0 ]]; then
             break
         fi
@@ -92,12 +106,23 @@ verify_promtail_log_flow() {
         exit 1
     fi
 
-    sent_first="$(curl -sf http://127.0.0.1:19090/metrics \
-        | awk '$1 ~ /^promtail_sent_bytes_total/ && $2 ~ /^[0-9]+$/ {print $2; exit}')"
+    for attempt in $(seq 1 5); do
+        port_forward_alive
+        sent_first="$(promtail_metric promtail_sent_bytes_total)"
+        if [[ "${sent_first}" =~ ^[0-9]+$ ]]; then
+            break
+        fi
+        sleep 2
+    done
+    if [[ ! "${sent_first}" =~ ^[0-9]+$ ]]; then
+        echo "error: cannot read promtail_sent_bytes_total (5 attempts)" >&2
+        exit 1
+    fi
+
     for attempt in $(seq 1 6); do
         sleep 5
-        sent_second="$(curl -sf http://127.0.0.1:19090/metrics \
-            | awk '$1 ~ /^promtail_sent_bytes_total/ && $2 ~ /^[0-9]+$/ {print $2; exit}')"
+        port_forward_alive
+        sent_second="$(promtail_metric promtail_sent_bytes_total)"
         if [[ "${sent_second}" =~ ^[0-9]+$ && "${sent_second}" -gt "${sent_first:-0}" ]]; then
             break
         fi
