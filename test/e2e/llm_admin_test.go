@@ -120,6 +120,8 @@ func provisionPublicCatalog(t *testing.T, pool *pgxpool.Pool) {
 		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS max_tokens_source TEXT NOT NULL DEFAULT 'legacy_unknown'`,
 		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS context_window_observed_at TIMESTAMPTZ`,
 		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS max_tokens_observed_at TIMESTAMPTZ`,
+		// 040: 平台级显式降级候选链 —— 与 pkg/migration/sql/040_model_fallback_candidates.up.sql 对齐。
+		`ALTER TABLE public.models ADD COLUMN IF NOT EXISTS fallback_candidates TEXT[] NOT NULL DEFAULT '{}'`,
 		`CREATE TABLE IF NOT EXISTS public.platform_resource_change_audits (
 			id                TEXT PRIMARY KEY,
 			scope             TEXT NOT NULL DEFAULT 'platform',
