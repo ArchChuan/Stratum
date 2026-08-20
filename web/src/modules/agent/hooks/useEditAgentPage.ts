@@ -69,7 +69,7 @@ export const useEditAgentPage = () => {
         } else {
           const failed = [modelsRes, providersRes].find((r) => r.status === 'rejected');
           if (failed && failed.status === 'rejected') {
-            message.error({ content: extractErrorMessage(failed.reason, '加载模型目录失败'), duration: 0 });
+            message.error({ content: extractErrorMessage(failed.reason, '加载模型目录失败'), duration: 3 });
           }
         }
         form.setFieldsValue({
@@ -100,7 +100,7 @@ export const useEditAgentPage = () => {
         });
       } catch (err) {
         if (!cancelled) {
-          message.error({ content: extractErrorMessage(err, '加载 Agent 信息失败'), duration: 0 });
+          message.error({ content: extractErrorMessage(err, '加载 Agent 信息失败'), duration: 3 });
           navigate('/agents');
         }
       } finally {
@@ -146,7 +146,7 @@ export const useEditAgentPage = () => {
         navigate(agent?.isSystem ? '/agents' : '/agents');
       } catch (err) {
         if (!isForbidden(err)) {
-          message.error({ content: extractErrorMessage(err, '保存失败'), duration: 0 });
+          message.error({ content: extractErrorMessage(err, '保存失败'), duration: 3 });
         }
       } finally {
         setLoading(false);

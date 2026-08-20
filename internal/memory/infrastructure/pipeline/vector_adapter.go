@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -68,6 +69,11 @@ func (a *MilvusVectorAdapter) ensureCollection(ctx context.Context, tenantID, mo
 	}
 	collectionName := memoryCollectionName(tenantID, model)
 	dim := a.resolveDim(ctx, tenantID)
+	if dim <= 0 {
+		// fail-closed：租户未显式配置记忆嵌入模型 → 不建 collection，Upsert
+		// 上层失败 → 消息进 DLQ。绝不回退默认维度建错集合。
+		return fmt.Errorf("memory collection %s: no embedding model configured for tenant", collectionName)
+	}
 	if err := a.vs.CreateCollectionWithDim(ctx, collectionName, dim); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			return err

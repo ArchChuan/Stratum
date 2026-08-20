@@ -43,3 +43,30 @@ message ListMemoryEntitiesResponse {
   repeated MemoryEntityResponse entities = 1;
   int64 total = 2;
 }
+
+// MemoryMigrationResponse 记忆嵌入模型平滑迁移记录（P5 确认制切换），
+// 状态机快照 {from, to, status, progress, total_facts}。
+message MemoryMigrationResponse {
+  int64 id = 1;
+  string from_model = 2;
+  string to_model = 3;
+  // status: migrating|done|failed|canceled。
+  string status = 4;
+  // progress 已回填事实数；total_facts 为迁移开始时 memory_facts 行数快照，
+  // 分母不随迁移期间写入漂移。
+  int32 progress = 5;
+  int32 total_facts = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+// MemoryMigrationCostResponse 迁移成本预览：存量已提取事实条数 + 预计回填时长（秒）。
+message MemoryMigrationCostResponse {
+  int64 fact_count = 1;
+  int64 estimated_seconds = 2;
+}
+
+// StartMemoryMigrationRequest 确认制启动 A→B 迁移；from 取租户当前生效模型。
+message StartMemoryMigrationRequest {
+  string to_model = 1;
+}

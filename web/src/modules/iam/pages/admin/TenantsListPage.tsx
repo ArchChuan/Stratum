@@ -36,7 +36,7 @@ export const TenantsListPage = () => {
       setPagination({ current: result.page, pageSize: result.page_size, total: result.total });
     } catch (err) {
       if (!isForbidden(err)) {
-        message.error({ content: '获取租户列表失败', duration: 0 });
+        message.error({ content: '获取租户列表失败', duration: 3 });
       }
     } finally {
       setLoading(false);
@@ -55,7 +55,7 @@ export const TenantsListPage = () => {
       void fetchTenants(pagination.current, pagination.pageSize);
     } catch (err) {
       if (!isForbidden(err)) {
-        message.error({ content: extractErrorMessage(err, '操作失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '操作失败'), duration: 3 });
       }
     }
   };
@@ -68,7 +68,7 @@ export const TenantsListPage = () => {
       void fetchTenants(pagination.current, pagination.pageSize);
     } catch (err) {
       if (!isForbidden(err)) {
-        message.error({ content: extractErrorMessage(err, '删除失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '删除失败'), duration: 3 });
       }
     } finally {
       setDeleteLoadingId(null);
@@ -83,7 +83,7 @@ export const TenantsListPage = () => {
       setCreateOpen(false);
       await fetchTenants(pagination.current, pagination.pageSize);
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '创建租户失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '创建租户失败'), duration: 3 });
       throw err;
     } finally {
       setCreateLoading(false);

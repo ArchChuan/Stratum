@@ -26,34 +26,32 @@ type memoryMgrSvc interface {
 	GetSummary(ctx context.Context, sessionCtx *application.SessionContext) (string, error)
 }
 
-// DefaultEmbedModelResolver resolves the tenant's default embedding model name;
-// implemented by llmgateway.ModelRegistry and injected via wiring. nil-safe:
-// 解析失败或无可用模型时 GetStats 返回 embed_model_configured=false。
-type DefaultEmbedModelResolver interface {
-	ResolveDefaultEmbeddingModel(ctx context.Context) (string, error)
+// MemoryEmbeddingModelResolver resolves the tenant's explicitly configured
+// memory embedding model name（tenants.settings.memory_embedding_model）;
+// implemented by wiring.tenantEmbeddingModelResolver and injected via wiring.
+// nil-safe: 未配置/解析失败时 GetStats 返回 embed_model_configured=false。
+type MemoryEmbeddingModelResolver interface {
+	ResolveMemoryEmbeddingModel(ctx context.Context, tenantID string) (string, error)
 }
 
 type UserMemoryHandler struct {
 	svc      userMemorySvc
 	mgr      memoryMgrSvc
-	embedSvc DefaultEmbedModelResolver
+	embedSvc MemoryEmbeddingModelResolver
 }
 
-func NewUserMemoryHandler(svc userMemorySvc, mgr memoryMgrSvc, embedSvc DefaultEmbedModelResolver) *UserMemoryHandler {
+func NewUserMemoryHandler(svc userMemorySvc, mgr memoryMgrSvc, embedSvc MemoryEmbeddingModelResolver) *UserMemoryHandler {
 	return &UserMemoryHandler{svc: svc, mgr: mgr, embedSvc: embedSvc}
 }
 
-// embedModelConfigured reports whether the tenant has a usable default
-// embedding model; resolver nil or error → false（fail-closed，永不 panic）。
+// embedModelConfigured reports whether the tenant has an explicitly configured
+// memory embedding model; resolver nil or error → false（fail-closed，永不 panic）。
 func (h *UserMemoryHandler) embedModelConfigured(ctx context.Context, tenantID string) bool {
 	if h.embedSvc == nil {
 		return false
 	}
-	model, err := h.embedSvc.ResolveDefaultEmbeddingModel(ctx)
-	if err != nil {
-		return false
-	}
-	return model != ""
+	model, err := h.embedSvc.ResolveMemoryEmbeddingModel(ctx, tenantID)
+	return err == nil && model != ""
 }
 
 func (h *UserMemoryHandler) ClearMemories(c *gin.Context) {

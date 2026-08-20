@@ -96,7 +96,7 @@ export const useKnowledgeDetailPage = () => {
       setDocuments(docs);
       return docs;
     } catch (err) {
-      message.error({ content: extractErrorMessage(err) || '获取文档列表失败', duration: 0 });
+      message.error({ content: extractErrorMessage(err) || '获取文档列表失败', duration: 3 });
       return [];
     } finally {
       setDocumentsLoading(false);
@@ -127,7 +127,7 @@ export const useKnowledgeDetailPage = () => {
       }
       lastLoadedConfig.current = values;
     } catch (err) {
-      message.error({ content: extractErrorMessage(err) || '获取知识库详情失败', duration: 0 });
+      message.error({ content: extractErrorMessage(err) || '获取知识库详情失败', duration: 3 });
     } finally {
       setStatsLoading(false);
     }
@@ -177,7 +177,7 @@ export const useKnowledgeDetailPage = () => {
         message.success({ content: '名称已更新', duration: 2 });
         navigate(`/knowledge/${encodeURIComponent(newName)}`);
       } catch (err) {
-        message.error({ content: extractErrorMessage(err) || '更新失败', duration: 0 });
+        message.error({ content: extractErrorMessage(err) || '更新失败', duration: 3 });
       }
     },
     [name, navigate],
@@ -190,7 +190,7 @@ export const useKnowledgeDetailPage = () => {
         message.success({ content: '描述已更新', duration: 2 });
         fetchStats();
       } catch (err) {
-        message.error({ content: extractErrorMessage(err) || '更新失败', duration: 0 });
+        message.error({ content: extractErrorMessage(err) || '更新失败', duration: 3 });
       }
     },
     [name, fetchStats],
@@ -216,7 +216,7 @@ export const useKnowledgeDetailPage = () => {
         fetchStats();
       } catch (err: unknown) {
         if (!isForbidden(err)) {
-          message.error({ content: extractErrorMessage(err) || '保存失败', duration: 0 });
+          message.error({ content: extractErrorMessage(err) || '保存失败', duration: 3 });
         }
       } finally {
         setConfigLoading(false);
@@ -250,14 +250,14 @@ export const useKnowledgeDetailPage = () => {
         const totalChunks = data?.total_chunks ?? 0;
         const errs = data?.errors ?? [];
         if (errs.length > 0) {
-          message.warning({ content: `上传完成，但存在错误：${errs[0]}`, duration: 0 });
+          message.warning({ content: `上传完成，但存在错误：${errs[0]}`, duration: 3 });
         } else {
           message.success({ content: `上传成功，共 ${totalChunks} 个分块`, duration: 2 });
         }
         fetchStats();
       } catch (err: unknown) {
         if (!isForbidden(err)) {
-          message.error({ content: extractErrorMessage(err) || '上传失败', duration: 0 });
+          message.error({ content: extractErrorMessage(err) || '上传失败', duration: 3 });
         }
       } finally {
         setUploadLoading(false);
@@ -285,7 +285,7 @@ export const useKnowledgeDetailPage = () => {
         setQueryResult(result);
       } catch (err) {
         if (gen === queryGenRef.current) {
-          message.error({ content: extractErrorMessage(err) || '查询失败', duration: 0 });
+          message.error({ content: extractErrorMessage(err) || '查询失败', duration: 3 });
         }
       } finally {
         if (gen === queryGenRef.current) setQueryLoading(false);
@@ -302,7 +302,7 @@ export const useKnowledgeDetailPage = () => {
         message.success({ content: '文档已删除', duration: 2 });
         await Promise.all([fetchDocuments(), fetchStats()]);
       } catch (err) {
-        message.error({ content: extractErrorMessage(err) || '删除文档失败', duration: 0 });
+        message.error({ content: extractErrorMessage(err) || '删除文档失败', duration: 3 });
       } finally {
         setDeletingDocumentID('');
       }
@@ -332,7 +332,7 @@ export const useKnowledgeDetailPage = () => {
         setEditOpen(false);
         await Promise.all([fetchDocuments(), fetchStats()]);
       } catch (err) {
-        message.error({ content: extractErrorMessage(err) || '设置权限失败', duration: 0 });
+        message.error({ content: extractErrorMessage(err) || '设置权限失败', duration: 3 });
       } finally {
         setAccessLoading(false);
       }

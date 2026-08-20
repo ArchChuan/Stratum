@@ -126,7 +126,7 @@ export const MyMemoriesPage = () => {
               description={
                 <span>
                   记忆可能无法写入，请到{' '}
-                  <Link to="/models">模型管理页</Link> 配置嵌入模型。
+                  <Link to="/tenant/settings">租户配置页</Link> 配置嵌入模型。
                 </span>
               }
             />

@@ -61,7 +61,7 @@ type fakeEmbedResolver struct {
 	err   error
 }
 
-func (f *fakeEmbedResolver) ResolveDefaultEmbeddingModel(_ context.Context) (string, error) {
+func (f *fakeEmbedResolver) ResolveMemoryEmbeddingModel(_ context.Context, _ string) (string, error) {
 	return f.model, f.err
 }
 
@@ -206,7 +206,7 @@ func TestListMemories_clampsInvalidPagination(t *testing.T) {
 func TestGetStats_embedModelConfigured(t *testing.T) {
 	cases := []struct {
 		name     string
-		resolver DefaultEmbedModelResolver
+		resolver MemoryEmbeddingModelResolver
 		want     bool
 	}{
 		{name: "resolver nil → false", resolver: nil, want: false},

@@ -38,7 +38,7 @@ export const useMyMemoriesPage = () => {
       setTotal(pageData.total);
     } catch (err) {
       if (seq !== requestSeqRef.current) return;
-      message.error({ content: (err as RequestError).response?.data?.error || '加载记忆失败', duration: 0 });
+      message.error({ content: (err as RequestError).response?.data?.error || '加载记忆失败', duration: 3 });
     } finally {
       if (seq === requestSeqRef.current) setLoading(false);
     }
@@ -50,7 +50,7 @@ export const useMyMemoriesPage = () => {
       const next = await memoryUserApi.getStats();
       setStats(next);
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '加载记忆统计失败', duration: 0 });
+      message.error({ content: (err as RequestError).response?.data?.error || '加载记忆统计失败', duration: 3 });
     } finally {
       setStatsLoading(false);
     }
@@ -66,7 +66,7 @@ export const useMyMemoriesPage = () => {
       setEntityTotal(pageData.total);
     } catch (err) {
       if (seq !== entityRequestSeqRef.current) return;
-      message.error({ content: (err as RequestError).response?.data?.error || '加载记忆实体失败', duration: 0 });
+      message.error({ content: (err as RequestError).response?.data?.error || '加载记忆实体失败', duration: 3 });
     } finally {
       if (seq === entityRequestSeqRef.current) setEntitiesLoading(false);
     }
@@ -98,7 +98,7 @@ export const useMyMemoriesPage = () => {
       void loadStats();
       await loadEntities(1, entityPageSize);
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '清空记忆失败', duration: 0 });
+      message.error({ content: (err as RequestError).response?.data?.error || '清空记忆失败', duration: 3 });
     } finally {
       setClearLoading(false);
     }

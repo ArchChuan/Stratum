@@ -124,6 +124,16 @@ type MetricsProvider interface {
 
 	// Auth
 	IncAuthFailure(reason string)
+
+	// Model availability & fallback (P6)
+	// RecordModelHealthTransition 在模型健康状态 from→to 转移后上报；Prometheus
+	// 实现把 gauge 置为 from=0 / to=1（kube-state 语义），Noop 安全跳过。
+	RecordModelHealthTransition(model, from, to string)
+	// SetMemoryMigrationProgress 设置某租户一次记忆迁移的当前进度（断点游标值），
+	// 供「迁移停滞」告警对同一 status 序列做 offset 差分。
+	SetMemoryMigrationProgress(tenantID, fromModel, toModel, status string, progress int)
+	// IncMemoryMigrationStalled 在扫描间隔间迁移进度未推进时累加（迁移停滞信号）。
+	IncMemoryMigrationStalled(tenantID, fromModel, toModel string)
 }
 
 // NoopMetrics satisfies MetricsProvider with no-ops. Safe for tests and disabled mode.
@@ -199,3 +209,6 @@ func (NoopMetrics) IncMCPClientRequest(_, _, _ string)                          
 func (NoopMetrics) IncMCPClientReconnect(_ string)                                {}
 func (NoopMetrics) IncEvaluationJob(_ string)                                     {}
 func (NoopMetrics) IncAuthFailure(_ string)                                       {}
+func (NoopMetrics) RecordModelHealthTransition(_, _, _ string)                    {}
+func (NoopMetrics) SetMemoryMigrationProgress(_ string, _, _, _ string, _ int)    {}
+func (NoopMetrics) IncMemoryMigrationStalled(_, _, _ string)                      {}

@@ -85,6 +85,11 @@ type PrometheusMetrics struct {
 	routeFallbackTotal *prometheus.CounterVec
 	budgetRatio        *prometheus.GaugeVec
 
+	// Model availability & fallback (P6)
+	modelHealthGauge        *prometheus.GaugeVec
+	memoryMigrationProgress *prometheus.GaugeVec
+	memoryMigrationStalled  *prometheus.CounterVec
+
 	// Audit (F3)
 	auditEventTotal      *prometheus.CounterVec
 	auditWriteQueueDepth prometheus.Gauge
@@ -406,6 +411,18 @@ func (m *PrometheusMetrics) registerF3Metrics(factory promauto.Factory, latencyB
 		prometheus.GaugeOpts{Name: "budget_ratio", Help: "Current budget consumption ratio"},
 		[]string{"scope"},
 	)
+	m.modelHealthGauge = factory.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "model_health", Help: "Current model health state (1 if the model is in that state)"},
+		[]string{"model", "status"},
+	)
+	m.memoryMigrationProgress = factory.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "memory_migration_progress", Help: "Memory embedding migration backfill cursor (facts re-embedded so far)"},
+		[]string{"tenant_id", "from_model", "to_model", "status"},
+	)
+	m.memoryMigrationStalled = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "memory_migration_stalled_total", Help: "Memory migration scan ticks with no progress advance"},
+		[]string{"tenant_id", "from_model", "to_model"},
+	)
 	m.auditEventTotal = factory.NewCounterVec(
 		prometheus.CounterOpts{Name: "audit_event_total", Help: "Audit events by risk level and outcome"},
 		[]string{"risk", "outcome"},
@@ -689,6 +706,26 @@ func (m *PrometheusMetrics) IncRouteFallback(fromModel, toModel string) {
 
 func (m *PrometheusMetrics) RecordBudgetRatio(scope string, pct float64) {
 	m.budgetRatio.WithLabelValues(scope).Set(pct)
+}
+
+// --- Model availability & fallback (P6) ---
+
+// RecordModelHealthTransition 把模型健康状态 gauge 置为 from=0 / to=1（kube-state
+// 语义）。from==to 时仍刷新 to=1，让持续健康/持续降级模型保持活络时间序列，
+// 供「unhealthy 持续 5min」类告警在该状态上做 for 判定。
+func (m *PrometheusMetrics) RecordModelHealthTransition(model, from, to string) {
+	if from != "" && from != to {
+		m.modelHealthGauge.WithLabelValues(model, from).Set(0)
+	}
+	m.modelHealthGauge.WithLabelValues(model, to).Set(1)
+}
+
+func (m *PrometheusMetrics) SetMemoryMigrationProgress(tenantID, fromModel, toModel, status string, progress int) {
+	m.memoryMigrationProgress.WithLabelValues(tenantID, fromModel, toModel, status).Set(float64(progress))
+}
+
+func (m *PrometheusMetrics) IncMemoryMigrationStalled(tenantID, fromModel, toModel string) {
+	m.memoryMigrationStalled.WithLabelValues(tenantID, fromModel, toModel).Inc()
 }
 
 // --- Model policy (L1-L4) ---

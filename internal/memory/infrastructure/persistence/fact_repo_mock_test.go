@@ -556,6 +556,77 @@ func TestFactRepo_ListUserFacts_queryFails(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestFactRepo_CountAll counts every memory_facts row regardless of status —
+// the snapshot denominator for migration progress, which must not drift when
+// facts are written concurrently mid-migration.
+func TestFactRepo_CountAll(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockFactRepo(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM memory_facts").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(12))
+	mock.ExpectCommit()
+
+	count, err := repo.CountAll(context.Background(), "t1")
+	require.NoError(t, err)
+	require.Equal(t, 12, count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFactRepo_CountAll_queryFails(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockFactRepo(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM memory_facts").
+		WillReturnError(pgx.ErrTxClosed)
+	mock.ExpectRollback()
+
+	_, err := repo.CountAll(context.Background(), "t1")
+	require.ErrorContains(t, err, "count all facts")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestFactRepo_ListAllFacts returns facts of any status ordered by created_at, id
+// — the stable cursor for migration backfill resume (offset = progress).
+func TestFactRepo_ListAllFacts(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockFactRepo(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("ORDER BY created_at, id").
+		WithArgs(5, 10).
+		WillReturnRows(pgxmock.NewRows(factColumns).
+			AddRow(factRow(nil, nil, nil)...).
+			AddRow(factRow(nil, nil, nil)...))
+	mock.ExpectCommit()
+
+	facts, err := repo.ListAllFacts(context.Background(), "t1", 5, 10)
+	require.NoError(t, err)
+	require.Len(t, facts, 2)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFactRepo_ListAllFacts_queryFails(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockFactRepo(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("ORDER BY created_at, id").
+		WithArgs(20, 0).
+		WillReturnError(pgx.ErrTxClosed)
+	mock.ExpectRollback()
+
+	_, err := repo.ListAllFacts(context.Background(), "t1", 20, 0)
+	require.ErrorContains(t, err, "list all facts")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestFactRepo_Delete(t *testing.T) {
 	mock := newFactMock(t)
 	repo := newMockFactRepo(mock)

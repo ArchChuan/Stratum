@@ -56,7 +56,7 @@ export const SkillWorkspacePage = () => {
   const perform = async (key: string, operation: () => Promise<SkillRevision>, success: string) => {
     setSaving(key);
     try { updateDraft(await operation()); message.success(success); }
-    catch (err) { message.error({ content: extractErrorMessage(err) || '保存失败', duration: 0 }); }
+    catch (err) { message.error({ content: extractErrorMessage(err) || '保存失败', duration: 3 }); }
     finally { setSaving(''); }
   };
   const publishDraft = async () => {
@@ -64,7 +64,7 @@ export const SkillWorkspacePage = () => {
     try {
       await skillApi.publish(skill.id);
     } catch (err) {
-      message.error({ content: extractErrorMessage(err) || '发布失败', duration: 0 });
+      message.error({ content: extractErrorMessage(err) || '发布失败', duration: 3 });
       setSaving('');
       return;
     }
@@ -140,7 +140,7 @@ export const SkillWorkspacePage = () => {
                     await skillApi.setEditors(skill.id, editorIDs);
                     message.success({ content: '编辑人已更新', duration: 2 });
                   } catch (err) {
-                    message.error({ content: extractErrorMessage(err) || '保存失败', duration: 0 });
+                    message.error({ content: extractErrorMessage(err) || '保存失败', duration: 3 });
                   } finally {
                     setSaving('');
                   }

@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { tenantApi } from '../../api/tenant.api';
+import { MemoryMigrationCard } from '../../components/MemoryMigrationCard';
 import { TenantBasicCard } from '../../components/TenantBasicCard';
 import { useTenantSettings } from '../../hooks/useTenantSettings';
 
@@ -39,7 +40,7 @@ export const SettingsPage = () => {
           navigate('/');
         } catch (err: unknown) {
           if (!isForbidden(err)) {
-            message.error({ content: extractErrorMessage(err, '删除失败'), duration: 0 });
+            message.error({ content: extractErrorMessage(err, '删除失败'), duration: 3 });
           }
         } finally {
           setDeleteLoading(false);
@@ -68,6 +69,10 @@ export const SettingsPage = () => {
           />
         </Col>
       </Row>
+
+      <div style={{ marginBottom: 16 }}>
+        <MemoryMigrationCard />
+      </div>
 
       {role === 'owner' && isDefault === false && (
         <div

@@ -206,6 +206,7 @@ reject_file "${REMOTE_MONITORING_DEPLOY}" \
     'monitoring deployment contains destructive or stale operations'
 
 OBSERVABILITY_DEPLOY="${ROOT}/scripts/deploy-observability-logging.sh"
+LOGGING_MANIFEST="${ROOT}/k8s/logging.yaml"
 require 'bash scripts/deploy-observability-logging\.sh' \
     'observability deploy script is not invoked by the workflow'
 require_file "${OBSERVABILITY_DEPLOY}" '^set -euo pipefail$' \
@@ -220,8 +221,18 @@ require_file "${OBSERVABILITY_DEPLOY}" 'rollout status daemonset/promtail' \
     'promtail rollout wait missing'
 require_file "${OBSERVABILITY_DEPLOY}" 'promtail_files_active_total' \
     'promtail active-file verification missing'
-require_file "${OBSERVABILITY_DEPLOY}" 'promtail_sent_bytes_total did not increase' \
+require_file "${OBSERVABILITY_DEPLOY}" 'promtail_sent_bytes_total stayed 0' \
     'Loki push verification missing'
+require_file "${OBSERVABILITY_DEPLOY}" 'SSH_DEPLOY_HOST' \
+    'log-flow verification must use direct node SSH'
+require 'SSH_DEPLOY_HOST:[[:space:]]*\$\{\{ secrets\.SSH_DEPLOY_HOST \}\}' \
+    'observability deploy step does not receive the node SSH host'
+require_file "${LOGGING_MANIFEST}" 'type:[[:space:]]*Recreate' \
+    'loki must use Recreate strategy (single-replica boltdb-shipper cannot roll in place)'
+require_file "${LOGGING_MANIFEST}" 'mountPath:[[:space:]]*/var/loki/wal' \
+    'loki WAL must be isolated per instance'
+require_file "${LOGGING_MANIFEST}" 'name:[[:space:]]*wal' \
+    'loki WAL emptyDir volume missing'
 
 verify_step_line=$(grep -n 'name: Verify deployment' "${WORKFLOW}" | tail -1 | cut -d: -f1)
 if [[ -z "${verify_step_line}" ]]; then

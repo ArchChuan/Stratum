@@ -210,6 +210,19 @@ func (m *MockFactRepo) PurgeSuperseded(ctx context.Context, tenantID string, old
 	return args.Int(0), args.Error(1)
 }
 
+func (m *MockFactRepo) CountAll(ctx context.Context, tenantID string) (int, error) {
+	args := m.Called(ctx, tenantID)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *MockFactRepo) ListAllFacts(ctx context.Context, tenantID string, limit, offset int) ([]*domain.MemoryFact, error) {
+	args := m.Called(ctx, tenantID, limit, offset)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.MemoryFact), args.Error(1)
+}
+
 type MockEntityRepo struct {
 	mock.Mock
 }

@@ -50,7 +50,7 @@ export const useKnowledgePage = () => {
         }
       } catch (err) {
         if (!cancelled && !isForbidden(err)) {
-          message.error({ content: extractErrorMessage(err, '获取知识库列表失败'), duration: 0 });
+          message.error({ content: extractErrorMessage(err, '获取知识库列表失败'), duration: 3 });
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -85,7 +85,7 @@ export const useKnowledgePage = () => {
         setWorkspaces(await knowledgeApi.list());
       } catch (err: unknown) {
         if (!isForbidden(err)) {
-          message.error({ content: extractErrorMessage(err, '创建失败'), duration: 0 });
+          message.error({ content: extractErrorMessage(err, '创建失败'), duration: 3 });
         }
       } finally {
         setCreateLoading(false);
@@ -101,7 +101,7 @@ export const useKnowledgePage = () => {
       setWorkspaces((prev) => prev.filter((w) => w.name !== name));
     } catch (err: unknown) {
       if (!isForbidden(err)) {
-        message.error({ content: extractErrorMessage(err, '删除失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '删除失败'), duration: 3 });
       }
     }
   }, []);

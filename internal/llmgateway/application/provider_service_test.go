@@ -139,10 +139,6 @@ func (m *mockModelRepo) Toggle(_ context.Context, _ string, _ bool) error {
 	return m.err
 }
 
-func (m *mockModelRepo) SetDefaultEmbedding(_ context.Context, _ string, _ bool) error {
-	return m.err
-}
-
 type mockProviderRuntime struct {
 	listModelsFn func(ctx context.Context, provider domain.Provider) ([]port.DiscoveredModel, error)
 	healthFn     func(ctx context.Context, provider domain.Provider) error

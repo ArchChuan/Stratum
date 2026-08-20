@@ -51,7 +51,7 @@ export const useApprovalsPage = () => {
       setPendingRows(rows);
     } catch (err) {
       if (seq !== pendingSeqRef.current) return;
-      message.error({ content: errorMessage(err, '加载待审批列表失败'), duration: 0 });
+      message.error({ content: errorMessage(err, '加载待审批列表失败'), duration: 3 });
     } finally {
       if (seq === pendingSeqRef.current) setPendingLoading(false);
     }
@@ -67,7 +67,7 @@ export const useApprovalsPage = () => {
       setTotal(data.total);
     } catch (err) {
       if (seq !== historySeqRef.current) return;
-      message.error({ content: errorMessage(err, '加载审批历史失败'), duration: 0 });
+      message.error({ content: errorMessage(err, '加载审批历史失败'), duration: 3 });
     } finally {
       if (seq === historySeqRef.current) setHistoryLoading(false);
     }
@@ -81,7 +81,7 @@ export const useApprovalsPage = () => {
       const pageData = await tenantApi.members(1, 100, ASSIGNABLE_ROLES);
       setApprovers(pageData.members);
     } catch (err) {
-      message.error({ content: errorMessage(err, '加载可指派成员失败'), duration: 0 });
+      message.error({ content: errorMessage(err, '加载可指派成员失败'), duration: 3 });
     } finally {
       setApproversLoading(false);
     }
@@ -117,7 +117,7 @@ export const useApprovalsPage = () => {
       setDetail(data);
     } catch (err) {
       if (seq !== detailSeqRef.current) return;
-      message.error({ content: errorMessage(err, '加载审批详情失败'), duration: 0 });
+      message.error({ content: errorMessage(err, '加载审批详情失败'), duration: 3 });
     } finally {
       if (seq === detailSeqRef.current) setDetailLoading(false);
     }
@@ -147,7 +147,7 @@ export const useApprovalsPage = () => {
       void refresh(activeTab);
       return true;
     } catch (err) {
-      message.error({ content: errorMessage(err, '操作失败'), duration: 0 });
+      message.error({ content: errorMessage(err, '操作失败'), duration: 3 });
       return false;
     } finally {
       setActionKey(null);
@@ -174,7 +174,7 @@ export const useApprovalsPage = () => {
       void refresh(activeTab);
       return true;
     } catch (err) {
-      message.error({ content: errorMessage(err, '指派失败'), duration: 0 });
+      message.error({ content: errorMessage(err, '指派失败'), duration: 3 });
       return false;
     } finally {
       setActionKey(null);

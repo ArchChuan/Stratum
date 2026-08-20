@@ -37,7 +37,7 @@ export const useSkillsListPage = () => {
       message.success({ content: '技能已删除', duration: 2 });
       setSkills((prev) => prev.filter((s) => s.id !== id));
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '删除失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '删除失败'), duration: 3 });
     }
   }, []);
 

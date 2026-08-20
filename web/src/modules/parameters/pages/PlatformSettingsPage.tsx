@@ -154,7 +154,7 @@ export const PlatformSettingsPage = () => {
         form.setFieldsValue(initial);
       } catch (err) {
         if (!cancelled) {
-          message.error({ content: extractErrorMessage(err, '加载平台参数失败'), duration: 0 });
+          message.error({ content: extractErrorMessage(err, '加载平台参数失败'), duration: 3 });
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -185,7 +185,7 @@ export const PlatformSettingsPage = () => {
         message.success({ content: '平台参数已保存', duration: 2 });
       } catch (err) {
         if (!isForbidden(err)) {
-          message.error({ content: extractErrorMessage(err, '保存平台参数失败'), duration: 0 });
+          message.error({ content: extractErrorMessage(err, '保存平台参数失败'), duration: 3 });
         }
       } finally {
         setSaving(false);

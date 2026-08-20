@@ -31,7 +31,7 @@ const WorkflowShortcut = ({ isMobile }: { isMobile: boolean }) => {
       const result = await workflowApi.listWorkflows({ page: 1, pageSize: WORKFLOW_DEFAULT_PAGE_SIZE });
       setWorkflows(result.workflows.map((workflow) => ({ value: workflow.id, label: workflow.name })));
     } catch (error: unknown) {
-      message.error({ content: extractErrorMessage(error, '操作失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(error, '操作失败'), duration: 3 });
     } finally {
       setWorkflowLoading(false);
     }

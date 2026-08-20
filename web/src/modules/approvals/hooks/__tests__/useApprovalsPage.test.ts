@@ -134,7 +134,7 @@ describe('useApprovalsPage', () => {
       ok = await result.current.decide('ap-1', 'rejected');
     });
     expect(ok).toBe(false);
-    expect(message.error).toHaveBeenCalledWith({ content: '操作失败', duration: 0 });
+    expect(message.error).toHaveBeenCalledWith({ content: '操作失败', duration: 3 });
   });
 
   it('assigns an approver via the tenant admin surface', async () => {

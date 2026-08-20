@@ -79,7 +79,7 @@ export const OnboardingPage = () => {
       }
       message.success({ content: '租户创建成功', duration: 2 });
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '创建失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '创建失败'), duration: 3 });
     } finally {
       setCreateLoading(false);
     }
@@ -106,7 +106,7 @@ export const OnboardingPage = () => {
       }
       message.success({ content: '加入成功', duration: 2 });
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '加入失败，邀请码无效或已过期'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '加入失败，邀请码无效或已过期'), duration: 3 });
     } finally {
       setJoinLoading(false);
     }

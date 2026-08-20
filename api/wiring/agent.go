@@ -505,30 +505,105 @@ func memoryBufferClosure(svc *memapp.MemoryService) func(ctx context.Context, te
 	}
 }
 
-// agentFactCheckSettings 按开关 + gateway 可用性装配幻觉校验依赖（fail-closed：
-// 任一缺失返回 nil，collectGraphResult 不校验）。judge 模型来自
-// agent.factcheck.judge.model，不静默回落 evaluation.judge.model。EvidenceFn
-// 留空，collectGraphResult 执行时用 RAGSearchFnWithEvidence 填充（per-execution
-// 已带 tenant 权限）。
+// agentFactCheckSettings 按参数注册表 + gateway 可用性装配幻觉校验依赖（fail-closed：
+// 任一缺失返回 nil，collectGraphResult 不校验）。judge 模型与 prompt 来自身份
+// agent.factcheck.* 平台参数，均不兜底默认值：空 = 禁用。EvidenceFn 留空，
+// collectGraphResult 执行时用 RAGSearchFnWithEvidence 填充（per-execution 已带
+// tenant 权限）。
 func agentFactCheckSettings(c *Container) *factcheck.Settings {
-	if !c.Config.AgentFactCheck.Enabled || c.LLMGateway == nil || c.LLMGateway.Gateway == nil {
+	settings, err := resolveFactCheckPlatformSettings(c)
+	if err != nil {
+		c.Logger.Warn("factcheck: platform settings resolve failed, disabled", zap.Error(err))
 		return nil
 	}
+	if settings == nil {
+		return nil
+	}
+	return settings
+}
+
+// resolveFactCheckPlatformSettings 从参数注册表解析 factcheck 平台配置。
+func resolveFactCheckPlatformSettings(c *Container) (*factcheck.Settings, error) {
+	if c.LLMGateway == nil || c.LLMGateway.Gateway == nil {
+		return nil, nil
+	}
+	if c.Parameters == nil || c.Parameters.Service == nil || c.Parameters.Registry == nil {
+		return nil, nil
+	}
+	ctx := context.Background()
+	r := c.Parameters.Service.Resolver()
+
+	enabled, _ := resolveFCParam[bool](r, ctx, "agent.factcheck.enabled")
+	if !enabled {
+		return nil, nil
+	}
+
+	model, _ := resolveFCParam[string](r, ctx, "agent.factcheck.judge.model")
+	if model == "" {
+		return nil, nil
+	}
+
+	prompt, _ := resolveFCParam[string](r, ctx, "agent.factcheck.judge.prompt")
+	if prompt == "" {
+		return nil, nil
+	}
+
+	topK, _ := resolveFCInt(r, ctx, "agent.factcheck.top_k")
+	maxClaims, _ := resolveFCInt(r, ctx, "agent.factcheck.max_claims")
+
 	return &factcheck.Settings{
 		Enabled:   true,
-		Judge:     factCheckJudge{completer: c.LLMGateway.Gateway, model: c.Config.AgentFactCheck.JudgeModel},
-		TopK:      c.Config.AgentFactCheck.TopK,
-		MaxClaims: c.Config.AgentFactCheck.MaxClaims,
+		Judge:     factCheckJudge{completer: c.LLMGateway.Gateway, model: model, prompt: prompt},
+		TopK:      topK,
+		MaxClaims: maxClaims,
 		Logger:    c.Logger,
+	}, nil
+}
+
+// fcResolver is the minimal interface for the parameter registry resolver.
+type fcResolver interface {
+	Resolve(ctx context.Context, key string, declared map[string]any) (any, bool, error)
+}
+
+// resolveFCParam resolves a typed bool/string parameter.
+func resolveFCParam[T bool | string](r fcResolver, ctx context.Context, key string) (T, bool) {
+	val, present, err := r.Resolve(ctx, key, nil)
+	if err != nil || !present {
+		var zero T
+		return zero, false
+	}
+	v, ok := val.(T)
+	if !ok {
+		var zero T
+		return zero, false
+	}
+	return v, true
+}
+
+// resolveFCInt resolves an int parameter via parsed int64 or float64.
+func resolveFCInt(r fcResolver, ctx context.Context, key string) (int, bool) {
+	val, present, err := r.Resolve(ctx, key, nil)
+	if err != nil || !present {
+		return 0, false
+	}
+	switch v := val.(type) {
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	default:
+		return 0, false
 	}
 }
 
 // factCheckJudge 实现 factcheck.Judge（LLM-as-Judge 幻觉判定），走 llmgateway
-// completer + json_object 结构化输出（P1 A 层）。只消费 claim 聚合证据，不
-// 记录原始模型输出（日志白名单：judge 失败只记模型名，不记正文）。
+// completer + json_object 结构化输出。prompt 是纯规则系统提示词（无占位符），
+// 程序构造的 user message 包含 claims 和 evidence 的填充。只消费 claim 聚合证据，
+// 不记录原始模型输出（日志白名单：judge 失败只记模型名，不记正文）。
 type factCheckJudge struct {
 	completer llmgatewaydomain.LLMCompleter
 	model     string
+	prompt    string
 }
 
 func (j factCheckJudge) JudgeClaims(ctx context.Context, claims []string, evidence string) ([]domain.ClaimVerdict, error) {
@@ -543,9 +618,9 @@ func (j factCheckJudge) JudgeClaims(ctx context.Context, claims []string, eviden
 			Type: "json_object",
 		},
 		Messages: []llmgatewaydomain.Message{
-			{Role: "system", Content: "你是严谨的事实核查法官。只输出 JSON，不输出其他内容。"},
+			{Role: "system", Content: j.prompt},
 			{Role: "user", Content: fmt.Sprintf(
-				"对下列每条 claim，依据给定 RAG 证据判断其是否被支持。\n\nClaims:\n%s\n\nEvidence:\n%s\n\n输出 JSON：{\"claims\":[{\"text\":\"<claim>\",\"verdict\":\"SUPPORTED|CONTRADICTED|UNSUPPORTED\",\"risk\":<0-5>}]}。risk 越高越可疑；证据不足判 UNSUPPORTED。",
+				"Claims:\n%s\n\nEvidence:\n%s\n\n输出 JSON：{\"claims\":[{\"text\":\"<claim>\",\"verdict\":\"SUPPORTED|CONTRADICTED|UNSUPPORTED\",\"risk\":<0-5>}]}。risk 越高越可疑；证据不足判 UNSUPPORTED。",
 				string(claimsJSON), evidence,
 			)},
 		},

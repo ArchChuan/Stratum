@@ -43,11 +43,11 @@ export const WorkspaceUploadZone = ({
         beforeUpload={(file) => {
           const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
           if (!ACCEPTED_EXTENSIONS.includes(ext)) {
-            message.error({ content: '仅支持 .txt .pdf .md .docx 文件', duration: 0 });
+            message.error({ content: '仅支持 .txt .pdf .md .docx 文件', duration: 3 });
             return Upload.LIST_IGNORE;
           }
           if (file.size > KNOWLEDGE_MAX_UPLOAD_SIZE_BYTES) {
-            message.error({ content: '单文件不能超过 10MB', duration: 0 });
+            message.error({ content: '单文件不能超过 10MB', duration: 3 });
             return Upload.LIST_IGNORE;
           }
           onUpload({ file, allowedUserIDs, allowedRoleIDs });

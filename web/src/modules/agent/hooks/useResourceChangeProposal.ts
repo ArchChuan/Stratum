@@ -29,7 +29,7 @@ export const useResourceChangeProposal = (id: string) => {
     if (!id) return;
     setLoading(true);
     try { setProposal(await proposalApi.get(id)); }
-    catch (error) { message.error({ content: errorContent(error), duration: 0 }); }
+    catch (error) { message.error({ content: errorContent(error), duration: 3 }); }
     finally { setLoading(false); }
   }, [id]);
 
@@ -42,7 +42,7 @@ export const useResourceChangeProposal = (id: string) => {
         const value = await proposalApi.get(id);
         if (!cancelled) setProposal(value);
       } catch (error) {
-        if (!cancelled) message.error({ content: errorContent(error), duration: 0 });
+        if (!cancelled) message.error({ content: errorContent(error), duration: 3 });
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -59,7 +59,7 @@ export const useResourceChangeProposal = (id: string) => {
       const value = await proposalApi.update(proposal.id, payload);
       setProposal((current) => preserveEvents(current, value));
       message.success({ content: '提案已保存', duration: 2 });
-    } catch (error) { message.error({ content: errorContent(error), duration: 0 }); }
+    } catch (error) { message.error({ content: errorContent(error), duration: 3 }); }
     finally { setSaving(false); }
   };
   const confirm = async () => {
@@ -69,7 +69,7 @@ export const useResourceChangeProposal = (id: string) => {
       const value = await proposalApi.confirm(proposal.id);
       setProposal((current) => preserveEvents(current, value));
       message.success({ content: '变更已应用', duration: 2 });
-    } catch (error) { message.error({ content: errorContent(error), duration: 0 }); void load(); }
+    } catch (error) { message.error({ content: errorContent(error), duration: 3 }); void load(); }
     finally { setConfirming(false); }
   };
   const cancel = async () => {
@@ -79,7 +79,7 @@ export const useResourceChangeProposal = (id: string) => {
       await proposalApi.cancel(proposal.id);
       message.success({ content: '提案已取消', duration: 2 });
       void load();
-    } catch (error) { message.error({ content: errorContent(error), duration: 0 }); }
+    } catch (error) { message.error({ content: errorContent(error), duration: 3 }); }
     finally { setCanceling(false); }
   };
 

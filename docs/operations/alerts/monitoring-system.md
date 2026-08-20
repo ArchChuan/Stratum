@@ -72,6 +72,13 @@ webhook 或上游正文。必要时重新应用受控 Secret 并 rollout，恢�
 `up{namespace="monitoring",service="loki"}`。检查 Loki Deployment、PVC 与 ServiceMonitor；回滚/re-apply 后确认
 target up 且写入日志可在 Grafana Loki 查询。
 
+2026-08 复盘：配置变更自动滚动曾触发单副本 Loki 的 RollingUpdate，新旧实例短暂并存于共享
+boltdb-shipper 索引（compactor delete store 锁超时）并交错写入共享 WAL，导致 WAL 段不连续
+（`segments are not sequential`）、Loki 无法启动。此后：Loki 使用 `Recreate` 策略（先停旧再起新），
+WAL 挂载为每实例 emptyDir（`/var/loki/wal`），杜绝双写损坏；已 flush 的 chunks 始终在 PVC 上。
+若 Loki 仍无法启动，检查 `kubectl logs` 中的 ingester/compactor 初始化错误，必要时在节点清理
+损坏的 WAL 目录（仅影响未 flush 数据），并确认 `strategy: Recreate` 与 emptyDir WAL 契约未被回退。
+
 <a id="promtail-unavailable"></a>
 
 ## StratumPromtailUnavailable
