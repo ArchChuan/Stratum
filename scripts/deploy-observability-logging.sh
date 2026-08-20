@@ -22,8 +22,11 @@ rollout_on_config_change() {
     local kind="$1" name="$2" namespace="$3" configmap="$4" config_key="$5"
     local raw="" sha="" annotation=""
 
+    # go-template index is used because kubectl jsonpath bracket syntax
+    # ({.data['key']}) does not handle keys containing dots/slashes on all
+    # supported kubectl versions; the escaped form is version-fragile too.
     raw="$(kubectl get configmap "${configmap}" -n "${namespace}" \
-        -o jsonpath="{.data['${config_key}']}" 2>/dev/null)" || {
+        -o go-template="{{ index .data \"${config_key}\" }}" 2>/dev/null)" || {
         echo "error: cannot read configmap ${namespace}/${configmap} key ${config_key}" >&2
         exit 1
     }
@@ -34,7 +37,7 @@ rollout_on_config_change() {
     sha="$(printf '%s' "${raw}" | sha256sum | awk '{print $1}')"
 
     annotation="$(kubectl get "${kind}" "${name}" -n "${namespace}" \
-        -o jsonpath="{.spec.template.metadata.annotations['checksum/config']}" 2>/dev/null || true)"
+        -o go-template='{{ with .spec.template.metadata.annotations }}{{ index . "checksum/config" }}{{ end }}' 2>/dev/null || true)"
     if [[ "${sha}" == "${annotation}" ]]; then
         echo "config unchanged for ${kind}/${name} (${configmap}): no rollout needed"
         return
