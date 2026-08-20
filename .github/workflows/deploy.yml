@@ -638,12 +638,10 @@ jobs:
           # carries OPIK_OTLP_ENDPOINT (added to the chart ConfigMap) that the
           # otel-collector env references — otherwise the pod fails with
           # CreateContainerConfigError on a missing configMap key.
-          kubectl apply -f k8s/logging.yaml
-          kubectl apply -f k8s/tracing.yaml
-          kubectl rollout status deployment/loki -n monitoring --timeout=5m
-          kubectl rollout status daemonset/promtail -n monitoring --timeout=5m
-          kubectl rollout status deployment/jaeger -n monitoring --timeout=5m
-          kubectl rollout status deployment/otel-collector -n stratum --timeout=5m
+          # The script rolls workloads whose mounted ConfigMap changed (kubectl
+          # apply alone does not) and fails closed unless Promtail is actively
+          # tailing files and pushing bytes to Loki.
+          bash scripts/deploy-observability-logging.sh
 
       - name: Apply observability ServiceMonitors and alert rules
         run: |

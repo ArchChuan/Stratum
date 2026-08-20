@@ -89,6 +89,14 @@ glob 缺容器目录层级导致 `files_active_total=0`）。紧急度：critica
 `promtail_files_active_total`。先在节点验证 `/var/log/pods/*<uid>/*/*.log` 能匹配（两级目录结构），再检查
 relabel 的 `__path__` 规则；恢复后 `files_active_total>0` 且日志持续写入。
 
+2026-08 根因复盘：修复已写入 `k8s/logging.yaml` 并合入 main，但 `kubectl apply` 只更新 ConfigMap，
+不会滚动重启 Promtail，运行中的进程继续使用旧配置（`promtail_sent_bytes_total=0` 持续数天）。此后
+`scripts/deploy-observability-logging.sh`（由 deploy.yml 调用）会在挂载 ConfigMap 内容变化时通过
+`checksum/config` 注解自动滚动重启 Promtail/Loki/OTel Collector，并在部署后校验
+`promtail_files_active_total>0` 且 `promtail_sent_bytes_total` 持续增长，失败即部署失败（fail closed）。
+若再次触发本告警：先确认最近一次 deploy 是否失败或跳过（workflow 日志中的 log flow verified 行），
+再按上述步骤检查节点目录与 relabel；配置类根因一律通过 CD 流水线修复，不要直接 kubectl apply 后不重启。
+
 <a id="jaeger-unavailable"></a>
 
 ## StratumJaegerUnavailable
