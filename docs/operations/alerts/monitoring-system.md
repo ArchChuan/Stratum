@@ -72,6 +72,13 @@ webhook 或上游正文。必要时重新应用受控 Secret 并 rollout，恢�
 `up{namespace="monitoring",service="loki"}`。检查 Loki Deployment、PVC 与 ServiceMonitor；回滚/re-apply 后确认
 target up 且写入日志可在 Grafana Loki 查询。
 
+2026-08 复盘：配置变更自动滚动曾触发单副本 Loki 的 RollingUpdate，新旧实例短暂并存于共享
+boltdb-shipper 索引（compactor delete store 锁超时）并交错写入共享 WAL，导致 WAL 段不连续
+（`segments are not sequential`）、Loki 无法启动。此后：Loki 使用 `Recreate` 策略（先停旧再起新），
+WAL 挂载为每实例 emptyDir（`/var/loki/wal`），杜绝双写损坏；已 flush 的 chunks 始终在 PVC 上。
+若 Loki 仍无法启动，检查 `kubectl logs` 中的 ingester/compactor 初始化错误，必要时在节点清理
+损坏的 WAL 目录（仅影响未 flush 数据），并确认 `strategy: Recreate` 与 emptyDir WAL 契约未被回退。
+
 <a id="promtail-unavailable"></a>
 
 ## StratumPromtailUnavailable
@@ -88,6 +95,14 @@ target up 且写入日志可在 Grafana Loki 查询。
 glob 缺容器目录层级导致 `files_active_total=0`）。紧急度：critical。查询
 `promtail_files_active_total`。先在节点验证 `/var/log/pods/*<uid>/*/*.log` 能匹配（两级目录结构），再检查
 relabel 的 `__path__` 规则；恢复后 `files_active_total>0` 且日志持续写入。
+
+2026-08 根因复盘：修复已写入 `k8s/logging.yaml` 并合入 main，但 `kubectl apply` 只更新 ConfigMap，
+不会滚动重启 Promtail，运行中的进程继续使用旧配置（`promtail_sent_bytes_total=0` 持续数天）。此后
+`scripts/deploy-observability-logging.sh`（由 deploy.yml 调用）会在挂载 ConfigMap 内容变化时通过
+`checksum/config` 注解自动滚动重启 Promtail/Loki/OTel Collector，并在部署后校验
+`promtail_files_active_total>0` 且 `promtail_sent_bytes_total` 持续增长，失败即部署失败（fail closed）。
+若再次触发本告警：先确认最近一次 deploy 是否失败或跳过（workflow 日志中的 log flow verified 行），
+再按上述步骤检查节点目录与 relabel；配置类根因一律通过 CD 流水线修复，不要直接 kubectl apply 后不重启。
 
 <a id="jaeger-unavailable"></a>
 
