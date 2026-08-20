@@ -20,7 +20,7 @@ export const useWorkflowExecution = (workflowId: string) => {
       if (!page.versions[0]) throw new Error('这个工作流还没有可运行的发布版本');
       return workflowApi.getWorkflowVersion(workflowId, page.versions[0].id);
     }).then((next) => { if (!cancelled) setVersion(next); }).catch((error: unknown) => {
-      if (!cancelled) message.error({ content: (error as RequestError).response?.data?.error || (error as Error).message || '操作失败', duration: 0 });
+      if (!cancelled) message.error({ content: (error as RequestError).response?.data?.error || (error as Error).message || '操作失败', duration: 3 });
     }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [workflowId]);
@@ -33,7 +33,7 @@ export const useWorkflowExecution = (workflowId: string) => {
       idempotencyKey.current = createIdempotencyKey();
       return result;
     } catch (error: unknown) {
-      message.error({ content: (error as RequestError).response?.data?.error || '操作失败', duration: 0 });
+      message.error({ content: (error as RequestError).response?.data?.error || '操作失败', duration: 3 });
       return null;
     } finally {
       setSubmitting(false);

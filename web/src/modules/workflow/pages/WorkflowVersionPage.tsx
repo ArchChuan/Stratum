@@ -21,7 +21,7 @@ export const WorkflowVersionPage = () => {
     workflowApi.getWorkflowVersion(id, versionId).then((next) => {
       if (!cancelled) setVersion(next);
     }).catch((error: unknown) => {
-      if (!cancelled) message.error({ content: (error as RequestError).response?.data?.error || '操作失败', duration: 0 });
+      if (!cancelled) message.error({ content: (error as RequestError).response?.data?.error || '操作失败', duration: 3 });
     }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [id, versionId]);

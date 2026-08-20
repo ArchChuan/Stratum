@@ -33,7 +33,7 @@ export const useWorkflowRunStream = (runId: string, refreshKey = 0) => {
           availableActions: detail.available_actions,
         });
       } catch {
-        if (!disposed) message.error({ content: '操作失败', duration: 0 });
+        if (!disposed) message.error({ content: '操作失败', duration: 3 });
       }
     };
 
@@ -70,7 +70,7 @@ export const useWorkflowRunStream = (runId: string, refreshKey = 0) => {
       if (disposed) return;
       update(createRunState(detail));
       connect();
-    }).catch(() => { if (!disposed) message.error({ content: '操作失败', duration: 0 }); });
+    }).catch(() => { if (!disposed) message.error({ content: '操作失败', duration: 3 }); });
 
     return () => { disposed = true; controller?.abort(); if (timer) clearTimeout(timer); };
   }, [refreshKey, runId]);

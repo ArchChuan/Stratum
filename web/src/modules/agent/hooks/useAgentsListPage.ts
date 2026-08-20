@@ -28,7 +28,7 @@ export const useAgentsListPage = () => {
         const list = await agentApi.list();
         if (!cancelled) setAgents(list);
       } catch {
-        if (!cancelled) message.error({ content: '获取 Agent 列表失败', duration: 0 });
+        if (!cancelled) message.error({ content: '获取 Agent 列表失败', duration: 3 });
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -40,7 +40,7 @@ export const useAgentsListPage = () => {
 
   const handleTaskSubmit = useCallback(async () => {
     if (!executingAgent || !taskQuery.trim()) {
-      message.warning({ content: '请输入任务内容', duration: 0 });
+      message.warning({ content: '请输入任务内容', duration: 3 });
       return;
     }
     setExecuting(true);
@@ -75,7 +75,7 @@ export const useAgentsListPage = () => {
       setAgents((prev) => prev.filter((a) => a.id !== agentId));
     } catch (err) {
       if (!isForbidden(err)) {
-        message.error({ content: extractErrorMessage(err) || '删除失败', duration: 0 });
+        message.error({ content: extractErrorMessage(err) || '删除失败', duration: 3 });
       }
     }
   }, []);

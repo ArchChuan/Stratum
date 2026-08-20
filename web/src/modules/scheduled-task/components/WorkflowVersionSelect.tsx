@@ -33,7 +33,7 @@ export function WorkflowVersionSelect() {
       const result = await workflowApi.listWorkflows({ page: 1, pageSize: SCHEDULED_TASK_WORKFLOW_SELECT_SIZE });
       setWorkflows(result.workflows);
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '加载工作流列表失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '加载工作流列表失败'), duration: 3 });
     } finally {
       setWorkflowLoading(false);
     }
@@ -48,7 +48,7 @@ export function WorkflowVersionSelect() {
       });
       setVersions(result.versions);
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '加载工作流版本失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '加载工作流版本失败'), duration: 3 });
     } finally {
       setVersionLoading(false);
     }

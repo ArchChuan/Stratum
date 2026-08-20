@@ -105,7 +105,7 @@ export function useMemoryMigration(): UseMemoryMigrationResult {
         setModelsLoading(false);
         const failed = [modelsRes, providersRes].find((r) => r.status === 'rejected');
         if (failed && failed.status === 'rejected') {
-          message.error({ content: extractErrorMessage(failed.reason, '加载模型目录失败'), duration: 0 });
+          message.error({ content: extractErrorMessage(failed.reason, '加载模型目录失败'), duration: 3 });
         }
       }
     })();
@@ -148,7 +148,7 @@ export function useMemoryMigration(): UseMemoryMigrationResult {
       setCost(c);
       return c;
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '获取迁移成本失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '获取迁移成本失败'), duration: 3 });
       return null;
     } finally {
       setCostLoading(false);
@@ -165,7 +165,7 @@ export function useMemoryMigration(): UseMemoryMigrationResult {
       setCost(null);
       message.success({ content: '迁移已启动，嵌入模型切换立即生效', duration: 2 });
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '启动迁移失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '启动迁移失败'), duration: 3 });
     } finally {
       setStarting(false);
     }
@@ -179,7 +179,7 @@ export function useMemoryMigration(): UseMemoryMigrationResult {
         await fetchMigration();
         message.success({ content: '迁移已取消', duration: 2 });
       } catch (err) {
-        message.error({ content: extractErrorMessage(err, '取消失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '取消失败'), duration: 3 });
       } finally {
         setCanceling(false);
       }
@@ -195,7 +195,7 @@ export function useMemoryMigration(): UseMemoryMigrationResult {
         await fetchMigration();
         message.success({ content: '已重新开始迁移', duration: 2 });
       } catch (err) {
-        message.error({ content: extractErrorMessage(err, '重试失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '重试失败'), duration: 3 });
       } finally {
         setRetrying(false);
       }

@@ -24,7 +24,7 @@ export const UserMenu = () => {
           await memoryUserApi.clearMyMemories();
           message.success({ content: '记忆已清空', duration: 2 });
         } catch (error) {
-          message.error({ content: extractErrorMessage(error, '清空失败，请稍后重试'), duration: 0 });
+          message.error({ content: extractErrorMessage(error, '清空失败，请稍后重试'), duration: 3 });
         }
       },
     });

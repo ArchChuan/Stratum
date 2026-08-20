@@ -58,7 +58,7 @@ describe('useMyMemoriesPage', () => {
     listMyMemories.mockRejectedValue(new Error('failed'));
     const { result } = renderHook(() => useMyMemoriesPage());
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(message.error).toHaveBeenCalledWith({ content: '加载记忆失败', duration: 0 });
+    expect(message.error).toHaveBeenCalledWith({ content: '加载记忆失败', duration: 3 });
     expect(result.current.memories).toEqual([]);
   });
 
@@ -66,14 +66,14 @@ describe('useMyMemoriesPage', () => {
     getStats.mockRejectedValue(new Error('failed'));
     const { result } = renderHook(() => useMyMemoriesPage());
     await waitFor(() => expect(result.current.statsLoading).toBe(false));
-    expect(message.error).toHaveBeenCalledWith({ content: '加载记忆统计失败', duration: 0 });
+    expect(message.error).toHaveBeenCalledWith({ content: '加载记忆统计失败', duration: 3 });
   });
 
   it('reports an error when entities fail', async () => {
     listMyEntities.mockRejectedValue(new Error('failed'));
     const { result } = renderHook(() => useMyMemoriesPage());
     await waitFor(() => expect(result.current.entitiesLoading).toBe(false));
-    expect(message.error).toHaveBeenCalledWith({ content: '加载记忆实体失败', duration: 0 });
+    expect(message.error).toHaveBeenCalledWith({ content: '加载记忆实体失败', duration: 3 });
     expect(result.current.entities).toEqual([]);
   });
 
@@ -149,6 +149,6 @@ describe('useMyMemoriesPage', () => {
     await act(async () => {
       await result.current.handleClearAll();
     });
-    expect(message.error).toHaveBeenCalledWith({ content: '清空记忆失败', duration: 0 });
+    expect(message.error).toHaveBeenCalledWith({ content: '清空记忆失败', duration: 3 });
   });
 });

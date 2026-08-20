@@ -65,7 +65,7 @@ export const DocPreviewDrawer = ({
       .catch((err) => {
         if (cancelled) return;
         setFailed(true);
-        message.error({ content: extractErrorMessage(err) || '加载预览失败', duration: 0 });
+        message.error({ content: extractErrorMessage(err) || '加载预览失败', duration: 3 });
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

@@ -29,7 +29,7 @@ export function useScheduledTasks() {
       setPage(data.page);
       setPageSize(data.pageSize);
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '加载定时任务失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '加载定时任务失败'), duration: 3 });
     } finally {
       setLoading(false);
     }
@@ -50,7 +50,7 @@ export function useScheduledTasks() {
       message.success({ content: '定时任务已创建', duration: 2 });
       await fetch();
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '创建定时任务失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '创建定时任务失败'), duration: 3 });
       throw err;
     } finally {
       setCreateLoading(false);
@@ -64,7 +64,7 @@ export function useScheduledTasks() {
       message.success({ content: '定时任务已更新', duration: 2 });
       await fetch();
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '更新定时任务失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '更新定时任务失败'), duration: 3 });
       throw err;
     } finally {
       setCreateLoading(false);
@@ -78,7 +78,7 @@ export function useScheduledTasks() {
       message.success({ content: '定时任务已删除', duration: 2 });
       await fetch();
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '删除定时任务失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '删除定时任务失败'), duration: 3 });
     } finally {
       setDeleteLoading(false);
     }
@@ -90,7 +90,7 @@ export function useScheduledTasks() {
       setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, enabled } : t)));
       message.success({ content: enabled ? '定时任务已启用' : '定时任务已停用', duration: 2 });
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '更新定时任务状态失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '更新定时任务状态失败'), duration: 3 });
     }
   }, []);
 

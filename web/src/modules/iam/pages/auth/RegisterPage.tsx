@@ -21,7 +21,7 @@ export const RegisterPage = () => {
     confirm: string;
   }) => {
     if (values.password !== values.confirm) {
-      message.error({ content: '两次输入的密码不一致', duration: 0 });
+      message.error({ content: '两次输入的密码不一致', duration: 3 });
       return;
     }
     setRegistering(true);
@@ -34,7 +34,7 @@ export const RegisterPage = () => {
       login(me, access_token);
       navigate('/', { replace: true });
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '注册失败，请稍后重试'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '注册失败，请稍后重试'), duration: 3 });
     } finally {
       setRegistering(false);
     }

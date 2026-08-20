@@ -20,7 +20,7 @@ export const useTenantSettings = () => {
       setIsDefault(settings.is_default ?? false);
     } catch (err: unknown) {
       if (!isForbidden(err)) {
-        message.error({ content: extractErrorMessage(err, '加载设置失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '加载设置失败'), duration: 3 });
       }
     } finally {
       // loading 初值 true (首帧 Skeleton);数据到达或失败后必须解锁,
@@ -48,7 +48,7 @@ export const useTenantSettings = () => {
       }
     } catch (err: unknown) {
       if (!isForbidden(err)) {
-        message.error({ content: extractErrorMessage(err, '保存失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '保存失败'), duration: 3 });
       }
     } finally {
       setLoading(false);

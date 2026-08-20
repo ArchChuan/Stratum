@@ -26,7 +26,7 @@ export const SkillEvaluationPanel = ({ skillId, stableRevisionId, isAdmin }: Ski
       await evaluationApi.createBaseline('skill', skillId);
       navigate(centerPath);
     } catch (error) {
-      message.error({ content: extractErrorMessage(error) || '建立评测基线失败', duration: 0 });
+      message.error({ content: extractErrorMessage(error) || '建立评测基线失败', duration: 3 });
     } finally {
       setBaselineLoading(false);
     }

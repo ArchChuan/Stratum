@@ -52,7 +52,7 @@ export const EvaluationCenterPage = () => {
   useEffect(() => { if (resourceId && !resource) setResourceId(''); }, [resource, resourceId]);
   const decide = async (action: () => Promise<unknown>, success: string) => {
     try { await action(); message.success({ content: success, duration: 2 }); }
-    catch (error) { message.error({ content: error instanceof Error ? error.message : '操作失败', duration: 0 }); }
+    catch (error) { message.error({ content: error instanceof Error ? error.message : '操作失败', duration: 3 }); }
   };
   const setKind = (value: ResourceKind | undefined) => {
     const next = new URLSearchParams(searchParams);
@@ -110,7 +110,7 @@ export const EvaluationCenterPage = () => {
           await center.reload();
           message.success({ content: '候选离线评测已进入运行队列', duration: 2 });
         } catch (error) {
-          message.error({ content: error instanceof Error ? error.message : '候选离线评测启动失败', duration: 0 });
+          message.error({ content: error instanceof Error ? error.message : '候选离线评测启动失败', duration: 3 });
           throw error;
         }
       }} />
@@ -132,7 +132,7 @@ export const EvaluationCenterPage = () => {
             assertion_mode: 'contains', enabled: true }] });
           message.success({ content: '评测已创建并进入运行队列', duration: 2 });
         } catch (error) {
-          message.error({ content: error instanceof Error ? error.message : '创建评测失败', duration: 0 });
+          message.error({ content: error instanceof Error ? error.message : '创建评测失败', duration: 3 });
           throw error;
         }
       }} />
@@ -148,7 +148,7 @@ export const EvaluationCenterPage = () => {
           await center.reload();
           message.success({ content: '优化候选已生成', duration: 2 });
         } catch (error) {
-          message.error({ content: error instanceof Error ? error.message : '生成优化候选失败', duration: 0 });
+          message.error({ content: error instanceof Error ? error.message : '生成优化候选失败', duration: 3 });
           throw error;
         }
       }}
@@ -163,7 +163,7 @@ export const EvaluationCenterPage = () => {
           await center.reload();
           message.success({ content: '金丝雀实验已创建', duration: 2 });
         } catch (error) {
-          message.error({ content: error instanceof Error ? error.message : '创建金丝雀失败', duration: 0 });
+          message.error({ content: error instanceof Error ? error.message : '创建金丝雀失败', duration: 3 });
           throw error;
         }
       }}
@@ -174,7 +174,7 @@ export const EvaluationCenterPage = () => {
           await center.reload();
           message.success({ content: '反馈已记录', duration: 2 });
         } catch (error) {
-          message.error({ content: error instanceof Error ? error.message : '记录反馈失败', duration: 0 });
+          message.error({ content: error instanceof Error ? error.message : '记录反馈失败', duration: 3 });
           throw error;
         }
       }} />

@@ -19,7 +19,7 @@ export function useProviders() {
       const data = await llmApi.listProviders();
       setProviders(data);
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '加载厂商列表失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '加载厂商列表失败'), duration: 3 });
     } finally {
       setLoading(false);
     }
@@ -36,7 +36,7 @@ export function useProviders() {
       message.success({ content: '厂商已创建', duration: 2 });
       await fetch();
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '创建厂商失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '创建厂商失败'), duration: 3 });
     } finally {
       setCreateLoading(false);
     }
@@ -49,7 +49,7 @@ export function useProviders() {
       message.success({ content: '厂商已更新', duration: 2 });
       await fetch();
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '更新厂商失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '更新厂商失败'), duration: 3 });
     } finally {
       setUpdateLoading(false);
     }
@@ -62,7 +62,7 @@ export function useProviders() {
       message.success({ content: '厂商已删除', duration: 2 });
       await fetch();
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '删除厂商失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '删除厂商失败'), duration: 3 });
     } finally {
       setDeleteLoading(false);
     }

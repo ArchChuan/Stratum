@@ -33,7 +33,7 @@ export const ProfilePage = () => {
       login({ ...user, avatar_url }, newToken);
       message.success({ content: '头像已更新', duration: 2 });
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '上传失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '上传失败'), duration: 3 });
     } finally {
       setUploading(false);
     }
@@ -63,11 +63,11 @@ export const ProfilePage = () => {
                   beforeUpload={(file) => {
                     const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
                     if (!ACCEPTED_AVATAR_EXTENSIONS.includes(ext)) {
-                      message.error({ content: '头像仅支持 JPG / PNG / WebP', duration: 0 });
+                      message.error({ content: '头像仅支持 JPG / PNG / WebP', duration: 3 });
                       return Upload.LIST_IGNORE;
                     }
                     if (file.size > AVATAR_MAX_UPLOAD_SIZE_BYTES) {
-                      message.error({ content: '头像不能超过 2MB', duration: 0 });
+                      message.error({ content: '头像不能超过 2MB', duration: 3 });
                       return Upload.LIST_IGNORE;
                     }
                     return false;

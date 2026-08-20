@@ -24,7 +24,7 @@ export const useWorkflowRuns = () => {
       setRuns(result.runs);
       setTotal(result.total);
     }).catch((error: unknown) => {
-      if (!cancelled) message.error({ content: extractErrorMessage(error, '操作失败'), duration: 0 });
+      if (!cancelled) message.error({ content: extractErrorMessage(error, '操作失败'), duration: 3 });
     }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [definitionId, page, pageSize, status]);

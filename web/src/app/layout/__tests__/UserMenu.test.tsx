@@ -90,7 +90,7 @@ describe('UserMenu memory interaction', () => {
     await waitFor(() => expect(message.success).toHaveBeenCalledWith({ content: '记忆已清空', duration: 2 }));
   });
 
-  it('shows the backend failure without auto-dismiss', async () => {
+  it('shows the backend failure toast with auto-dismiss', async () => {
     vi.mocked(memoryUserApi.clearMyMemories).mockRejectedValue(new Error('记忆服务暂不可用'));
     renderMenu();
     await openClearConfirmation();
@@ -98,7 +98,7 @@ describe('UserMenu memory interaction', () => {
     fireEvent.click(screen.getByRole('button', { name: '确认清空' }));
 
     await waitFor(() =>
-      expect(message.error).toHaveBeenCalledWith({ content: '记忆服务暂不可用', duration: 0 }),
+      expect(message.error).toHaveBeenCalledWith({ content: '记忆服务暂不可用', duration: 3 }),
     );
   });
 });

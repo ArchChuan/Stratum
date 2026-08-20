@@ -19,7 +19,7 @@ export const WorkflowRunActions = ({ state, onChanged }: { state: WorkflowRunSta
         onChanged();
       } catch (error: unknown) {
         const requestError = error as RequestError;
-        message.error({ content: requestError.response?.status === 409 ? '运行状态已变化，已重新加载最新状态' : requestError.response?.data?.error || '操作失败', duration: 0 });
+        message.error({ content: requestError.response?.status === 409 ? '运行状态已变化，已重新加载最新状态' : requestError.response?.data?.error || '操作失败', duration: 3 });
         onChanged();
       }
     },
