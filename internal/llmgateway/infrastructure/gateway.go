@@ -530,7 +530,15 @@ func (g *Gateway) logComplete(
 func (g *Gateway) CreateEmbeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error) {
 	cfg, proto, err := g.registry.ResolveEmbedding(ctx, req.Model)
 	if err != nil {
+		g.recordModelResolutionFailure(req.Model, err)
 		return nil, fmt.Errorf("llmgateway: resolve embedding model %q: %w", req.Model, err)
+	}
+	// 与 chat 同源：空模型时 registry 已解析出默认 embedding 模型名
+	// （cfg.Models[0]），必须回填到请求体，否则 provider 收到 "model": ""。
+	if req.Model == "" && len(cfg.Models) > 0 && cfg.Models[0] != "" {
+		cloned := *req
+		cloned.Model = cfg.Models[0]
+		req = &cloned
 	}
 	return proto.CreateEmbeddings(ctx, cfg, req)
 }
