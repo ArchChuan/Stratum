@@ -205,6 +205,24 @@ reject_file "${REMOTE_MONITORING_DEPLOY}" \
     'helm uninstall|kubectl delete .*(customresourcedefinition|crd|persistentvolumeclaim|pvc)|k8s/monitoring\.yaml' \
     'monitoring deployment contains destructive or stale operations'
 
+OBSERVABILITY_DEPLOY="${ROOT}/scripts/deploy-observability-logging.sh"
+require 'bash scripts/deploy-observability-logging\.sh' \
+    'observability deploy script is not invoked by the workflow'
+require_file "${OBSERVABILITY_DEPLOY}" '^set -euo pipefail$' \
+    'observability deploy strict shell mode missing'
+require_file "${OBSERVABILITY_DEPLOY}" 'kubectl apply -f .*k8s/logging\.yaml' \
+    'logging manifests are not applied by the observability deploy'
+require_file "${OBSERVABILITY_DEPLOY}" 'kubectl apply -f .*k8s/tracing\.yaml' \
+    'tracing manifests are not applied by the observability deploy'
+require_file "${OBSERVABILITY_DEPLOY}" 'checksum/config' \
+    'config checksum rollout mechanism missing'
+require_file "${OBSERVABILITY_DEPLOY}" 'rollout status daemonset/promtail' \
+    'promtail rollout wait missing'
+require_file "${OBSERVABILITY_DEPLOY}" 'promtail_files_active_total' \
+    'promtail active-file verification missing'
+require_file "${OBSERVABILITY_DEPLOY}" 'promtail_sent_bytes_total did not increase' \
+    'Loki push verification missing'
+
 verify_step_line=$(grep -n 'name: Verify deployment' "${WORKFLOW}" | tail -1 | cut -d: -f1)
 if [[ -z "${verify_step_line}" ]]; then
     echo 'deployment safety contract missing: healthy application rollout verification' >&2
