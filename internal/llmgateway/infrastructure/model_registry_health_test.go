@@ -52,10 +52,10 @@ func chatProvider() map[string]*domain.Provider {
 	}
 }
 
-// TestModelRegistry_ResolveExplicitUnhealthyFallsBackToHealthyDefault 验证 H1：
-// 显式指定的模型已 unhealthy 时视为未命中继续降级链，落回健康默认（不选中
-// 熔断模型，也不静默用不可用模型兜底）。
-func TestModelRegistry_ResolveExplicitUnhealthyFallsBackToHealthyDefault(t *testing.T) {
+// TestModelRegistry_ResolveExplicitUnhealthyFailsClosed 验证显式配置的模型
+// unhealthy 时 fail-closed：配置层失效必须暴露给监控报警，禁止静默降级到
+// 其他健康模型（代码内不写死兜底模型）。
+func TestModelRegistry_ResolveExplicitUnhealthyFailsClosed(t *testing.T) {
 	health, clock := newHealthRegistryWithClock(t)
 	registry := newChatRegistry(health, []domain.Model{
 		{Name: "bad-model", ProviderID: "p1", Capabilities: []domain.ModelCapability{domain.CapChat}},
@@ -63,9 +63,9 @@ func TestModelRegistry_ResolveExplicitUnhealthyFallsBackToHealthyDefault(t *test
 	}, chatProvider())
 	driveToUnhealthy(t, health, clock, "bad-model")
 
-	cfg, _, err := registry.Resolve(context.Background(), "bad-model")
-	require.NoError(t, err)
-	require.Equal(t, "good-model", cfg.Models[0])
+	_, _, err := registry.Resolve(context.Background(), "bad-model")
+	require.Error(t, err)
+	require.ErrorContains(t, err, infrastructure.ErrModelNotInCatalog.Error())
 }
 
 // TestModelRegistry_ResolveAllUnhealthyFailsClosed 验证 H1 链尾：全部候选
@@ -85,9 +85,10 @@ func TestModelRegistry_ResolveAllUnhealthyFailsClosed(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestModelRegistry_ResolveCacheHitButUnhealthyReResolves 验证 M1：TTL 缓存命中
-// 但模型转 unhealthy 后不走缓存，走解析链重选健康模型。
-func TestModelRegistry_ResolveCacheHitButUnhealthyReResolves(t *testing.T) {
+// TestModelRegistry_ResolveCacheHitButUnhealthyFailsClosed 验证 M1：TTL 缓存
+// 命中但模型转 unhealthy 后不走缓存，显式请求 fail-closed（不再降级到其他
+// 模型）。
+func TestModelRegistry_ResolveCacheHitButUnhealthyFailsClosed(t *testing.T) {
 	health, clock := newHealthRegistryWithClock(t)
 	registry := newChatRegistry(health, []domain.Model{
 		{Name: "primary", ProviderID: "p1", Capabilities: []domain.ModelCapability{domain.CapChat}},
@@ -99,11 +100,11 @@ func TestModelRegistry_ResolveCacheHitButUnhealthyReResolves(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "primary", cfg.Models[0])
 
-	// primary 转 unhealthy：缓存命中但不可用 → 重选健康默认
+	// primary 转 unhealthy：缓存命中但不可用 → 显式请求 fail-closed
 	driveToUnhealthy(t, health, clock, "primary")
-	cfg, _, err = registry.Resolve(context.Background(), "primary")
-	require.NoError(t, err)
-	require.Equal(t, "good-model", cfg.Models[0])
+	_, _, err = registry.Resolve(context.Background(), "primary")
+	require.Error(t, err)
+	require.ErrorContains(t, err, infrastructure.ErrModelNotInCatalog.Error())
 }
 
 // TestModelRegistry_ResolveDefaultSkipsUnhealthyProviderDefault 验证 ② 级：

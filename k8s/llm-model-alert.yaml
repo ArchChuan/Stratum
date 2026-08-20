@@ -1,0 +1,37 @@
+---
+# LLM 模型解析配置失效告警（模型设置治理）。
+#
+# 背景：模型来源的唯一事实源是模型目录（models / providers 表）；代码内禁止
+# 写死兜底模型。以下两种情况必须进入监控报警链路，而不是静默降级或吞错：
+#   - reason=invalid_model：显式请求的模型不在目录 / 已禁用 / provider 不可用，
+#     llmgateway fail-closed 拒绝请求；
+#   - reason=no_default：未显式指定模型且目录中没有任何默认/推荐模型
+#     （providers.default_model、models.recommended、default_embedding 均缺失）。
+#
+# 指标：llm_model_resolution_errors_total{model, reason}
+# 由 llmgateway Gateway.recordModelResolutionFailure 上报。
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stratum-llm-model-resolution
+  namespace: stratum
+  labels:
+    app: stratum
+spec:
+  groups:
+    - name: stratum-llm-model-resolution
+      rules:
+        - alert: StratumLLMModelResolutionFailed
+          expr: increase(llm_model_resolution_errors_total[5m]) > 0
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: LLM 模型解析失败：模型配置失效或无默认模型
+            description: >-
+              过去 5 分钟 llm_model_resolution_errors_total 出现增长
+              （model={{ $labels.model }}，reason={{ $labels.reason }}）。
+              显式请求的模型不存在/已禁用/不健康，或目录中没有可用的默认/推荐
+              模型。请检查模型管理目录的 models / providers 配置
+              （default_model、enabled、recommended、default_embedding），
+              修复后告警自动恢复。

@@ -84,9 +84,6 @@ const (
 	// 多 workspace 拼接把上下文打爆（judge 只判断充分性，尾部内容
 	// 截断对结论影响有限；与 factcheck 不截断的差异是本方案的成本控制）。
 	KnowledgeJudgeMaxEvidenceRunes = 4000
-	// KnowledgeJudgeDefaultModel 是知识层 judge 的默认模型（独立于
-	// factcheck/evaluation judge，KNOWLEDGE_JUDGE_MODEL 可覆盖）。
-	KnowledgeJudgeDefaultModel = "qwen-turbo"
 )
 
 var milvusUnsafe = regexp.MustCompile(`[^a-zA-Z0-9_]`)

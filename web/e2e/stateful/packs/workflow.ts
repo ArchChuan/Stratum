@@ -103,6 +103,10 @@ export const executeWorkflowPack = async ({
     const createdBody = await created.json() as { id: string; revision: number };
     definitionID = requireUUID(createdBody.id, 'workflow_definition_id');
     await expect(page).toHaveURL(`${webURL}/workflows/${definitionID}/edit`);
+    // 创建成功跳转编辑页后，旧表单会在加载窗口短暂可见，GET 完成时会重置表单；
+    // 必须等网络空闲且输入框回填服务器值后再修改，避免在加载过渡期输入被覆盖。
+    await page.waitForLoadState('networkidle');
+    await expect(page.getByLabel('工作流说明')).toHaveValue('全系统 stateful 浏览器验收');
     completed.push('workflow.mutation.post.workflows', 'workflow.route.workflows.id.edit');
     recordEvidence(evidence, 'workflow draft creation');
 

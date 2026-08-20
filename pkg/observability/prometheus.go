@@ -43,6 +43,8 @@ type PrometheusMetrics struct {
 	llmRequestsTotal   *prometheus.CounterVec
 	llmRequestDuration *prometheus.HistogramVec
 	llmTokenUsage      *prometheus.CounterVec
+	// LLM – 模型解析配置失效（无默认模型 / 请求失效模型）
+	llmModelResolutionErrors *prometheus.CounterVec
 	// LLM – policy 治理（L1-L4）
 	llmPolicyBlockedTotal *prometheus.CounterVec
 	llmPolicyMissingTotal *prometheus.CounterVec
@@ -462,6 +464,10 @@ func (m *PrometheusMetrics) registerF3Metrics(factory promauto.Factory, latencyB
 // implementation to keep NewPrometheusMetrics under the file-wide
 // 120-line ratchet limit.
 func (m *PrometheusMetrics) registerExtendedMetrics(factory promauto.Factory) {
+	m.llmModelResolutionErrors = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "llm_model_resolution_errors_total", Help: "LLM model resolution configuration failures (no default model or invalid requested model)"},
+		[]string{"model", "reason"},
+	)
 	m.componentCyclesTotal = factory.NewCounterVec(
 		prometheus.CounterOpts{Name: "component_cycles_total", Help: "Background component cycles by outcome"},
 		[]string{"component", "outcome"},
@@ -593,6 +599,12 @@ func (m *PrometheusMetrics) RecordResourceProposalDraftEdits(kind, operation str
 
 func (m *PrometheusMetrics) IncLLMRequest(model, provider, status string) {
 	m.llmRequestsTotal.WithLabelValues(model, provider, status).Inc()
+}
+
+// IncLLMModelResolutionError 记录模型解析配置失效（no_default / invalid_model）。
+// 配置层缺陷必须可观测：该指标接入告警规则，禁止代码内写死兜底模型。
+func (m *PrometheusMetrics) IncLLMModelResolutionError(model, reason string) {
+	m.llmModelResolutionErrors.WithLabelValues(model, reason).Inc()
 }
 
 func (m *PrometheusMetrics) RecordLLMRequestDuration(model, provider string, duration float64) {

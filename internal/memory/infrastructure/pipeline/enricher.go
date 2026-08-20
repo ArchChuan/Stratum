@@ -151,11 +151,11 @@ type enrichSettings struct {
 }
 
 // resolveEnrichSettings resolves the enrich model/temperature for one event.
-// Empty model keeps the const default; the prompt is resolved separately and
-// empty falls through to the built-in template.
+// 模型未配置（空）时交由 llmgateway 从模型目录解析默认，代码内不写死兜底
+// 模型；prompt 单独解析，空值回落内置模板。
 func (w *EnricherWorker) resolveEnrichSettings(ctx context.Context) enrichSettings {
 	return enrichSettings{
-		model:       w.resolvePlatformString(ctx, "memory.enrich_model", constants.MemoryEnrichDefaultModel),
+		model:       w.resolvePlatformString(ctx, "memory.enrich_model", ""),
 		temperature: w.resolvePlatformFloat(ctx, "memory.enrich_temperature", constants.MemoryEnrichLLMTemperature),
 	}
 }
@@ -169,11 +169,11 @@ type summarySettings struct {
 }
 
 // resolveSummarySettings resolves the summary model/temperature/threshold for
-// one event. Empty model keeps the const default; the prompt is resolved
-// separately and empty falls through to the built-in template.
+// one event. 模型未配置（空）时交由 llmgateway 从模型目录解析默认，代码内
+// 不写死兜底模型；prompt 单独解析，空值回落内置模板。
 func (w *EnricherWorker) resolveSummarySettings(ctx context.Context) summarySettings {
 	return summarySettings{
-		model:       w.resolvePlatformString(ctx, "memory.summary_model", constants.MemorySummaryDefaultModel),
+		model:       w.resolvePlatformString(ctx, "memory.summary_model", ""),
 		temperature: w.resolvePlatformFloat(ctx, "memory.summary_temperature", constants.TaskSummarizeTemperature),
 		threshold:   w.resolvePlatformInt(ctx, "memory.summary_token_threshold", constants.EnricherSummaryTokenThreshold),
 	}

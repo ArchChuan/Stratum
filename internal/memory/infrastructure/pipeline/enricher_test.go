@@ -19,24 +19,24 @@ func (s stubPlatformResolver) ResolvePlatform(_ context.Context, key string) (an
 	return v, ok, nil
 }
 
-// TestEnricherResolveDefaults 验证解析期 const 兜底：resolver 缺失（nil）时
-// enrich/summary 设置回退 pkg/constants 默认（原构造期捕获逻辑迁为解析期后
-// 的行为等价金丝雀）。cfg 空时不再捕获 model 字段，构造只保留调度字段。
+// TestEnricherResolveDefaults 验证解析期默认：resolver 缺失（nil）时
+// enrich/summary 模型默认必须为空——代码内不写死兜底模型，空模型交由
+// llmgateway 从模型目录解析默认；温度/阈值仍取 pkg/constants 默认。
 func TestEnricherResolveDefaults(t *testing.T) {
 	w := NewEnricherWorker(nil, nil, nil, zap.NewNop(), Config{})
 	ctx := context.Background()
 
 	enrich := w.resolveEnrichSettings(ctx)
-	if enrich.model != constants.MemoryEnrichDefaultModel {
-		t.Fatalf("enrich default model = %q, want %q", enrich.model, constants.MemoryEnrichDefaultModel)
+	if enrich.model != "" {
+		t.Fatalf("enrich default model = %q, want empty (gateway resolves from catalog)", enrich.model)
 	}
 	if enrich.temperature != constants.MemoryEnrichLLMTemperature {
 		t.Fatalf("enrich default temperature = %v, want %v", enrich.temperature, constants.MemoryEnrichLLMTemperature)
 	}
 
 	summary := w.resolveSummarySettings(ctx)
-	if summary.model != constants.MemorySummaryDefaultModel {
-		t.Fatalf("summary default model = %q, want %q", summary.model, constants.MemorySummaryDefaultModel)
+	if summary.model != "" {
+		t.Fatalf("summary default model = %q, want empty (gateway resolves from catalog)", summary.model)
 	}
 	if summary.temperature != constants.TaskSummarizeTemperature {
 		t.Fatalf("summary default temperature = %v, want %v", summary.temperature, constants.TaskSummarizeTemperature)
@@ -47,7 +47,7 @@ func TestEnricherResolveDefaults(t *testing.T) {
 }
 
 // TestEnricherResolvePlatformValues 验证平台解析值生效：resolver 返回的平台
-// 模型/温度/阈值覆盖 const 默认（运行态热改的解析期断言）。
+// 模型/温度/阈值覆盖空默认（运行态热改的解析期断言）。
 func TestEnricherResolvePlatformValues(t *testing.T) {
 	w := NewEnricherWorker(nil, nil, nil, zap.NewNop(), Config{})
 	w.paramResolver = stubPlatformResolver{values: map[string]any{

@@ -203,7 +203,9 @@ func Load() (*Config, error) {
 		},
 		KnowledgeJudge: KnowledgeJudgeConfig{
 			Enabled: getEnv("KNOWLEDGE_JUDGE_ENABLED", "") == "true",
-			Model:   getEnv("KNOWLEDGE_JUDGE_MODEL", constants.KnowledgeJudgeDefaultModel),
+			// 模型未配置（空）时交由 llmgateway 从模型目录解析默认；代码内
+			// 不写死兜底模型，配置的模型失效时由 llmgateway fail-closed + 告警。
+			Model: getEnv("KNOWLEDGE_JUDGE_MODEL", ""),
 			Timeout: time.Duration(getEnvInt("KNOWLEDGE_JUDGE_TIMEOUT_SECONDS",
 				int(constants.KnowledgeJudgeTimeout.Seconds()))) * time.Second,
 		},

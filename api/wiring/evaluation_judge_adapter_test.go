@@ -51,7 +51,7 @@ func TestJudgeAdapterJudgeUsesPlatformDefaultsAndParsesVerdict(t *testing.T) {
 	require.True(t, result.Passed)
 	require.Equal(t, "回答完整", result.Message)
 
-	require.Equal(t, "qwen-plus", completer.got.Model)
+	require.Empty(t, completer.got.Model, "模型默认必须为空：交由 llmgateway 从模型目录解析，代码内不写死兜底模型")
 	require.Nil(t, completer.got.Temperature) // judge 温度 0 = unset，留给模型默认注入
 	require.Equal(t, 1024, completer.got.MaxTokens)
 	require.Contains(t, completer.got.Messages[1].Content, judgeDefaultRubric)

@@ -348,15 +348,16 @@ func (r *ParametersRegistry) registerMCPParams() {
 	}
 }
 
-// registerOptimizerParams are the platform-level LLM optimizer defaults that
-// replace the hard-coded qwen-plus/0.2/2048 in gatewayPromptRewriter.
+// registerOptimizerParams are the platform-level LLM optimizer defaults.
+// 模型默认值必须为空：代码内不写死兜底模型，空模型交由 llmgateway 从模型
+// 目录解析默认；配置的模型失效时由 llmgateway fail-closed + 告警。
 func (r *ParametersRegistry) registerOptimizerParams() {
 	f := func(v float64) *float64 { return &v }
 	for _, def := range []ParameterDefinition{
 		{
 			Key: "evaluation.optimizer.model", Scope: ScopePlatform, Category: "evaluation",
 			DisplayName: "优化器模型", Description: "提示词/参数优化器使用的 LLM 模型",
-			ValueType: TypeString, Default: "qwen-plus",
+			ValueType: TypeString, Default: "",
 			VisualHint:  VisualHint{Control: ControlModel},
 			Optimizable: true,
 		},
@@ -387,7 +388,7 @@ func (r *ParametersRegistry) registerJudgeParams() {
 		{
 			Key: "evaluation.judge.model", Scope: ScopePlatform, Category: "evaluation",
 			DisplayName: "评测法官模型", Description: "LLM judge 使用的模型(Phase 3,预留)",
-			ValueType: TypeString, Default: "qwen-plus",
+			ValueType: TypeString, Default: "",
 			VisualHint:  VisualHint{Control: ControlModel},
 			Optimizable: true,
 		},
@@ -565,7 +566,7 @@ func (r *ParametersRegistry) registerMemoryWorkerParams() {
 		{
 			Key: "memory.enrich_model", Scope: ScopePlatform, Category: "memory",
 			DisplayName: "记忆富化模型", Description: "记忆富化使用的 LLM 模型(模型管理目录选择)",
-			ValueType: TypeString, Default: "qwen-turbo",
+			ValueType: TypeString, Default: "",
 			VisualHint:  VisualHint{Control: ControlModel},
 			Optimizable: false,
 		},
@@ -584,11 +585,11 @@ func (r *ParametersRegistry) registerMemoryWorkerParams() {
 			Optimizable: false,
 		},
 		{
-			// 必须注册非空默认:删冷 config 字段后 const 兜底链不能再给摘要
-			// 一个 qwen-turbo(那是富化模型),摘要维持 qwen-plus。
 			Key: "memory.summary_model", Scope: ScopePlatform, Category: "memory",
 			DisplayName: "记忆摘要模型", Description: "记忆会话摘要使用的 LLM 模型(模型管理目录选择)",
-			ValueType: TypeString, Default: "qwen-plus",
+			// 模型默认值必须为空：代码内不写死兜底模型，空模型交由
+			// llmgateway 从模型目录解析默认。
+			ValueType: TypeString, Default: "",
 			VisualHint:  VisualHint{Control: ControlModel},
 			Optimizable: false,
 		},

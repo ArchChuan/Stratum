@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
-	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres/postgrestest"
 	"github.com/stretchr/testify/require"
@@ -61,10 +60,6 @@ func TestTenantSchemaPlatformMCPDomainIdentityFieldsAreProtected(t *testing.T) {
 }
 
 func TestTenantSchemaDefaultsSystemAssistantModelWithoutOverwritingTenantChoice(t *testing.T) {
-	if constants.DefaultSystemAssistantModel != "glm-5.2" {
-		t.Fatalf("DefaultSystemAssistantModel = %q, want %q", constants.DefaultSystemAssistantModel, "glm-5.2")
-	}
-
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {
 		t.Fatal(err)
