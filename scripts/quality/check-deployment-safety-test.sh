@@ -223,6 +223,10 @@ require_file "${OBSERVABILITY_DEPLOY}" 'promtail_files_active_total' \
     'promtail active-file verification missing'
 require_file "${OBSERVABILITY_DEPLOY}" 'promtail_sent_bytes_total stayed 0' \
     'Loki push verification missing'
+require_file "${OBSERVABILITY_DEPLOY}" 'SSH_DEPLOY_HOST' \
+    'log-flow verification must use direct node SSH'
+require 'SSH_DEPLOY_HOST:[[:space:]]*\$\{\{ secrets\.SSH_DEPLOY_HOST \}\}' \
+    'observability deploy step does not receive the node SSH host'
 require_file "${LOGGING_MANIFEST}" 'type:[[:space:]]*Recreate' \
     'loki must use Recreate strategy (single-replica boltdb-shipper cannot roll in place)'
 require_file "${LOGGING_MANIFEST}" 'mountPath:[[:space:]]*/var/loki/wal' \

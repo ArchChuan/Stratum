@@ -14,10 +14,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Global so the EXIT trap can reference it after verify_promtail_log_flow
-# returns (a function-local would be unbound under set -u at trap time).
-pf_pid=""
-
 rollout_on_config_change() {
     local kind="$1" name="$2" namespace="$3" configmap="$4" config_key="$5"
     local raw="" sha="" annotation=""
@@ -48,52 +44,54 @@ rollout_on_config_change() {
 }
 
 verify_promtail_log_flow() {
-    local pod="" active="" sent_first="" sent_second="" attempt="" metric=""
+    local active="" sent_first="" sent_second="" attempt=""
+    local ssh_cmd=()
+
+    # Promtail runs hostNetwork on the single remote node. Verification through
+    # kubectl port-forward over the runner API tunnel proved flaky (repeated
+    # exit 56 / unreadable metrics, observed 2026-08-20); direct SSH to the
+    # node reuses the same channel as the conntrack-cleanup step. Without
+    # SSH_DEPLOY_HOST (local runs/tests) fall back to a local curl.
+    if [[ -n "${SSH_DEPLOY_HOST:-}" ]]; then
+        ssh_cmd=(ssh -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="${HOME}/.ssh/known_hosts" \
+            -i "${HOME}/.ssh/deploy_key" "root@${SSH_DEPLOY_HOST}")
+    fi
 
     # Returns the numeric value of a promtail counter, or empty on a transient
     # fetch failure. Never fails the script: the caller retries and only fails
-    # after a sustained problem, so one flaky curl (e.g. exit 56 through the
-    # deploy runner tunnel) cannot abort a healthy deploy.
+    # after a sustained problem.
     promtail_metric() {
-        curl -sf http://127.0.0.1:19090/metrics 2>/dev/null \
-            | awk -v name="$1" '$1 ~ ("^" name) && $2 ~ /^[0-9]+$/ {print $2; exit}' \
-            || true
+        local metrics=""
+        if [[ ${#ssh_cmd[@]} -gt 0 ]]; then
+            metrics="$("${ssh_cmd[@]}" 'curl -sf http://127.0.0.1:9080/metrics' 2>/dev/null || true)"
+        else
+            metrics="$(curl -sf http://127.0.0.1:9080/metrics 2>/dev/null || true)"
+        fi
+        printf '%s\n' "${metrics}" \
+            | awk -v name="$1" '$1 ~ ("^" name) && $2 ~ /^[0-9]+$/ {print $2; exit}'
     }
 
-    port_forward_alive() {
-        if ! kill -0 "${pf_pid}" >/dev/null 2>&1; then
-            echo "error: promtail port-forward exited unexpectedly" >&2
-            exit 1
+    promtail_ready() {
+        if [[ ${#ssh_cmd[@]} -gt 0 ]]; then
+            "${ssh_cmd[@]}" 'curl -sf http://127.0.0.1:9080/ready' >/dev/null 2>&1
+        else
+            curl -sf http://127.0.0.1:9080/ready >/dev/null 2>&1
         fi
     }
 
-    pod="$(kubectl get pod -n monitoring -l app=promtail \
-        -o jsonpath='{.items[0].metadata.name}')"
-    if [[ -z "${pod}" ]]; then
-        echo "error: no promtail pod found" >&2
-        exit 1
-    fi
-    kubectl port-forward "pod/${pod}" -n monitoring 19090:9080 >/dev/null 2>&1 &
-    pf_pid=$!
-    trap 'if [[ -n "${pf_pid:-}" ]]; then
-              kill "${pf_pid}" >/dev/null 2>&1 || true
-              wait "${pf_pid}" >/dev/null 2>&1 || true
-          fi' EXIT
-
     for attempt in $(seq 1 30); do
-        port_forward_alive
-        if curl -sf http://127.0.0.1:19090/ready >/dev/null 2>&1; then
+        if promtail_ready; then
             break
         fi
         sleep 2
     done
-    if ! curl -sf http://127.0.0.1:19090/ready >/dev/null 2>&1; then
-        echo "error: promtail did not become ready through port-forward" >&2
+    if ! promtail_ready; then
+        echo "error: promtail did not become ready (30 attempts)" >&2
         exit 1
     fi
 
     for attempt in $(seq 1 30); do
-        port_forward_alive
         active="$(promtail_metric promtail_files_active_total)"
         if [[ "${active}" =~ ^[0-9]+$ && "${active}" -gt 0 ]]; then
             break
@@ -106,8 +104,7 @@ verify_promtail_log_flow() {
         exit 1
     fi
 
-    for attempt in $(seq 1 5); do
-        port_forward_alive
+    for attempt in $(seq 1 10); do
         sent_first="$(promtail_metric promtail_sent_bytes_total)"
         if [[ "${sent_first}" =~ ^[0-9]+$ ]]; then
             break
@@ -115,7 +112,7 @@ verify_promtail_log_flow() {
         sleep 2
     done
     if [[ ! "${sent_first}" =~ ^[0-9]+$ ]]; then
-        echo "error: cannot read promtail_sent_bytes_total (5 attempts)" >&2
+        echo "error: cannot read promtail_sent_bytes_total (10 attempts)" >&2
         exit 1
     fi
 
@@ -129,7 +126,6 @@ verify_promtail_log_flow() {
 
     for attempt in $(seq 1 12); do
         sleep 5
-        port_forward_alive
         sent_second="$(promtail_metric promtail_sent_bytes_total)"
         if [[ "${sent_second}" =~ ^[0-9]+$ && "${sent_second}" -gt 0 ]]; then
             echo "log flow verified: files_active=${active}, sent_bytes ${sent_first} -> ${sent_second}"
