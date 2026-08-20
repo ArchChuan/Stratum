@@ -268,18 +268,19 @@ func (s *ModelMgmtService) validateFallbackCandidates(ctx context.Context, m *do
 	return validateCandidatesInCatalog(m.FallbackCandidates, chat)
 }
 
-// validateCandidateSet 校验候选结构：长度上限、非自身、去重。
+// validateCandidateSet 校验候选结构：长度上限、非自身、去重。全部失败路径都
+// wrap 领域 sentinel（ErrInvalidFallbackCandidates）以映射 4xx，绝不落入 5xx。
 func validateCandidateSet(candidates []string, self string) error {
 	if len(candidates) > constants.MaxModelFallbackCandidates {
-		return fmt.Errorf("model mgmt: fallback candidates exceed max %d", constants.MaxModelFallbackCandidates)
+		return fmt.Errorf("%w: fallback candidates exceed max %d", domain.ErrInvalidFallbackCandidates, constants.MaxModelFallbackCandidates)
 	}
 	seen := make(map[string]struct{}, len(candidates))
 	for _, name := range candidates {
 		if name == self {
-			return fmt.Errorf("model mgmt: fallback candidate %q must not be the model itself", name)
+			return fmt.Errorf("%w: fallback candidate %q must not be the model itself", domain.ErrInvalidFallbackCandidates, name)
 		}
 		if _, dup := seen[name]; dup {
-			return fmt.Errorf("model mgmt: duplicate fallback candidate %q", name)
+			return fmt.Errorf("%w: duplicate fallback candidate %q", domain.ErrInvalidFallbackCandidates, name)
 		}
 		seen[name] = struct{}{}
 	}
@@ -301,7 +302,7 @@ func validateCandidatesInCatalog(candidates []string, catalog []domain.Model) er
 	}
 	for _, name := range candidates {
 		if _, ok := available[name]; !ok {
-			return fmt.Errorf("model mgmt: fallback candidate %q is not an enabled chat model", name)
+			return fmt.Errorf("%w: fallback candidate %q is not an enabled chat model", domain.ErrInvalidFallbackCandidates, name)
 		}
 	}
 	return nil

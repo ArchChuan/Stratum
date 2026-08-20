@@ -28,6 +28,12 @@ var ErrModelNotEmbeddingEnabled = errors.New("model is not an enabled embedding 
 // to 4xx (404), never 5xx.
 var ErrModelNotFound = errors.New("model not found")
 
+// ErrInvalidFallbackCandidates indicates the model's explicit fallback
+// candidate list is structurally invalid (over max, self-reference, duplicate)
+// or references a model not enabled for chat. It is a client-input mistake and
+// must map to 4xx, never 5xx.
+var ErrInvalidFallbackCandidates = errors.New("invalid fallback candidates")
+
 // SamplingParams 是模型级默认采样参数；nil 表示未配置（回退 provider 层）。
 // 0=unset 语义与 agent 侧一致：请求未显式设置时注入。
 type SamplingParams struct {

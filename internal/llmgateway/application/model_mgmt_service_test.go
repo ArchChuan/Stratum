@@ -167,6 +167,11 @@ func TestModelMgmtServiceUpdatePolicyFallbackCandidates(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error %q does not contain %q", err.Error(), tc.want)
 			}
+			// fail-closed 语义的另一半：客户端输入错误必须命中领域 sentinel，
+			// 由错误中间件映射 4xx，而不是裸 error 落入 5xx。
+			if !errors.Is(err, domain.ErrInvalidFallbackCandidates) {
+				t.Fatalf("error %q must wrap domain.ErrInvalidFallbackCandidates for 4xx mapping", err.Error())
+			}
 			if repo.updated != nil {
 				t.Fatalf("repo must not be touched on rejected candidates, updated = %+v", repo.updated)
 			}
