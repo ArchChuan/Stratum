@@ -197,7 +197,7 @@ func Load() (*Config, error) {
 		},
 		AgentFactCheck: AgentFactCheckConfig{
 			Enabled:    getEnv("AGENT_FACTCHECK_ENABLED", "") == "true",
-			JudgeModel: getEnv("AGENT_FACTCHECK_JUDGE_MODEL", constants.AgentFactCheckJudgeModel),
+			JudgeModel: getEnv("AGENT_FACTCHECK_JUDGE_MODEL", ""),
 			TopK:       getEnvInt("AGENT_FACTCHECK_TOPK", constants.AgentFactCheckTopK),
 			MaxClaims:  getEnvInt("AGENT_FACTCHECK_MAX_CLAIMS", constants.AgentFactCheckMaxClaims),
 		},

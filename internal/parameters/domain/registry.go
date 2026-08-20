@@ -31,6 +31,7 @@ func NewParametersRegistry() *ParametersRegistry {
 	r.registerMCPParams()
 	r.registerOptimizerParams()
 	r.registerJudgeParams()
+	r.registerFactCheckParams()
 	r.registerTraceParams()
 	r.registerMemoryParams()
 	r.registerMemoryWorkerParams()
@@ -407,6 +408,49 @@ func (r *ParametersRegistry) registerJudgeParams() {
 	} {
 		_ = r.Register(def)
 	}
+}
+
+// registerFactCheckParams 是 agent 输出幻觉校验的平台级参数（factcheck /
+// LLM-as-Judge）。默认全部关闭/空：平台未配置时 collectGraphResult 不校验。
+// model 和 prompt 空 = 禁用，不兜底。
+func (r *ParametersRegistry) registerFactCheckParams() {
+	f := func(v float64) *float64 { return &v }
+	_ = r.Register(ParameterDefinition{
+		Key: "agent.factcheck.enabled", Scope: ScopePlatform, Category: "agent",
+		DisplayName: "启用 Agent 输出幻觉校验", Description: "是否启用 LLM-as-Judge 事后幻觉校验(advisory,只展示不阻断)",
+		ValueType: TypeBool, Default: false,
+		VisualHint:  VisualHint{Control: ControlToggle},
+		Optimizable: true,
+	})
+	_ = r.Register(ParameterDefinition{
+		Key: "agent.factcheck.judge.model", Scope: ScopePlatform, Category: "agent",
+		DisplayName: "幻觉校验 Judge 模型", Description: "LLM-as-Judge 使用的模型;空 = 禁用",
+		ValueType: TypeString, Default: "",
+		VisualHint:  VisualHint{Control: ControlModel},
+		Optimizable: true,
+	})
+	_ = r.Register(ParameterDefinition{
+		Key: "agent.factcheck.judge.prompt", Scope: ScopePlatform, Category: "agent",
+		DisplayName: "幻觉校验 Judge 提示词", Description: "Judge 的系统提示词(纯规则,无占位符);空 = 禁用",
+		ValueType: TypeString, Default: "",
+		VisualHint:  VisualHint{Control: ControlTextarea},
+		Optimizable: true,
+		Sensitive:   true,
+	})
+	_ = r.Register(ParameterDefinition{
+		Key: "agent.factcheck.top_k", Scope: ScopePlatform, Category: "agent",
+		DisplayName: "幻觉校验证据检索 TopK", Description: "每个 claim 的 RAG 检索 topK;0 = 使用代码常量默认",
+		ValueType: TypeInt, Default: int64(0),
+		VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(20), Step: f(1)},
+		Optimizable: true,
+	})
+	_ = r.Register(ParameterDefinition{
+		Key: "agent.factcheck.max_claims", Scope: ScopePlatform, Category: "agent",
+		DisplayName: "幻觉校验最大 Claim 数", Description: "最多拆分的 claim 数(控成本);0 = 使用代码常量默认",
+		ValueType: TypeInt, Default: int64(0),
+		VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(20), Step: f(1)},
+		Optimizable: true,
+	})
 }
 
 // registerTraceParams is the Phase 2 trace capture switch.
