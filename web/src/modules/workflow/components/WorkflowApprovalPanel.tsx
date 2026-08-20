@@ -15,7 +15,7 @@ export const WorkflowApprovalPanel = ({ approval, generation, onChanged }: { app
       try {
         await workflowApi.decideWorkflowApproval(approval.id, { run_id: approval.run_id, attempt_id: approval.attempt_id, expected_generation: generation, decision, comment });
         message.success({ content: '操作成功', duration: 2 }); onChanged();
-      } catch (error: unknown) { message.error({ content: (error as { response?: { data?: { error?: string } } }).response?.data?.error || '操作失败', duration: 0 }); onChanged(); }
+      } catch (error: unknown) { message.error({ content: (error as { response?: { data?: { error?: string } } }).response?.data?.error || '操作失败', duration: 3 }); onChanged(); }
     },
   });
   return <Card title="等待审批"><Paragraph>{approval.reason}</Paragraph><Text type="secondary">风险：{approval.risk}</Text><Input.TextArea aria-label="审批意见" value={comment} onChange={(event) => setComment(event.target.value)} /><Space><Button type="primary" onClick={() => decide('approve')}>批准</Button><Button danger onClick={() => decide('reject')}>拒绝</Button></Space></Card>;

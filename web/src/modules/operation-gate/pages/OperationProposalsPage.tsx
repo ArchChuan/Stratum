@@ -45,7 +45,7 @@ export const OperationProposalsPage = () => {
     try {
       setProposals(await operationProposalApi.listPending());
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '加载待审批操作失败', duration: 0 });
+      message.error({ content: (err as RequestError).response?.data?.error || '加载待审批操作失败', duration: 3 });
     } finally {
       setLoading(false);
     }
@@ -62,7 +62,7 @@ export const OperationProposalsPage = () => {
       setNote('');
       setDetailOpen(true);
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '加载操作详情失败', duration: 0 });
+      message.error({ content: (err as RequestError).response?.data?.error || '加载操作详情失败', duration: 3 });
     }
   }, []);
 
@@ -80,7 +80,7 @@ export const OperationProposalsPage = () => {
       await load();
       await openDetail(detail);
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '开始审批失败', duration: 0 });
+      message.error({ content: (err as RequestError).response?.data?.error || '开始审批失败', duration: 3 });
     } finally {
       setReviewing(false);
     }
@@ -101,7 +101,7 @@ export const OperationProposalsPage = () => {
           setDetailOpen(false);
           await load();
         } catch (err) {
-          message.error({ content: (err as RequestError).response?.data?.error || '批准失败', duration: 0 });
+          message.error({ content: (err as RequestError).response?.data?.error || '批准失败', duration: 3 });
         } finally {
           setApproving(false);
         }
@@ -128,7 +128,7 @@ export const OperationProposalsPage = () => {
           setDetailOpen(false);
           await load();
         } catch (err) {
-          message.error({ content: (err as RequestError).response?.data?.error || '拒绝失败', duration: 0 });
+          message.error({ content: (err as RequestError).response?.data?.error || '拒绝失败', duration: 3 });
         } finally {
           setRejecting(false);
         }

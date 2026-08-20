@@ -132,7 +132,7 @@ export const useEditMCPPage = (id: string) => {
         if (!cancelled) setInitialValues(configToFormValues(cfg));
       } catch (err) {
         if (!cancelled && !isForbidden(err)) {
-          message.error({ content: extractErrorMessage(err, '加载配置失败'), duration: 0 });
+          message.error({ content: extractErrorMessage(err, '加载配置失败'), duration: 3 });
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -149,7 +149,7 @@ export const useEditMCPPage = (id: string) => {
       navigate('/mcp');
     } catch (err) {
       if (!isForbidden(err)) {
-        message.error({ content: extractErrorMessage(err, '更新失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '更新失败'), duration: 3 });
       }
     } finally {
       setSubmitting(false);

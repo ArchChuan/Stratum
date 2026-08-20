@@ -31,14 +31,14 @@ export const useMCPServersPage = () => {
 
   const refreshServers = useCallback(async () => {
     const r = await fetchServers();
-    if (!r.ok) message.error({ content: '获取 MCP 服务器列表失败', duration: 0 });
+    if (!r.ok) message.error({ content: '获取 MCP 服务器列表失败', duration: 3 });
   }, [fetchServers]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const r = await fetchServers();
-      if (!cancelled && !r.ok) message.error({ content: '获取 MCP 服务器列表失败', duration: 0 });
+      if (!cancelled && !r.ok) message.error({ content: '获取 MCP 服务器列表失败', duration: 3 });
     })();
     return () => {
       cancelled = true;
@@ -53,7 +53,7 @@ export const useMCPServersPage = () => {
         refreshServers();
       } catch (err: unknown) {
         if (!isForbidden(err)) {
-          message.error({ content: extractErrorMessage(err) || '断开失败', duration: 0 });
+          message.error({ content: extractErrorMessage(err) || '断开失败', duration: 3 });
         }
       }
     },

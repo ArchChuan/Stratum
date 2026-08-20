@@ -37,7 +37,7 @@ export const useWorkflowDesigner = (workflowId?: string) => {
       rawDispatch({ type: 'server.reset', spec: applyAutoLayout(next.spec) });
       setDetailsDirty(false);
     }).catch((error: unknown) => {
-      if (!cancelled) message.error({ content: extractErrorMessage(error, '操作失败'), duration: 0 });
+      if (!cancelled) message.error({ content: extractErrorMessage(error, '操作失败'), duration: 3 });
     }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [workflowId]);
@@ -74,7 +74,7 @@ export const useWorkflowDesigner = (workflowId?: string) => {
         content: isConflict
           ? '草稿已被其他人修改，本地内容已保留，请刷新后重试'
           : extractErrorMessage(error, '操作失败'),
-        duration: 0,
+        duration: 3,
       });
       return null;
     } finally {
@@ -91,7 +91,7 @@ export const useWorkflowDesigner = (workflowId?: string) => {
       message.success({ content: '当前修订校验通过', duration: 2 });
       return true;
     } catch (error: unknown) {
-      message.error({ content: extractErrorMessage(error), duration: 0 });
+      message.error({ content: extractErrorMessage(error), duration: 3 });
       return false;
     } finally {
       setValidating(false);
@@ -106,7 +106,7 @@ export const useWorkflowDesigner = (workflowId?: string) => {
       message.success({ content: '工作流已发布', duration: 2 });
       return version;
     } catch (error: unknown) {
-      message.error({ content: extractErrorMessage(error), duration: 0 });
+      message.error({ content: extractErrorMessage(error), duration: 3 });
       return null;
     } finally {
       setPublishing(false);

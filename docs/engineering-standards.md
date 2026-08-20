@@ -305,7 +305,7 @@ PR 描述必须包含：What · Why · HowToTest。CI（lint/test/scan）全绿�
 - Agent：max_iterations slider 1-20；知识库绑定展示各自 description
 - 技能：版本化 instruction bundle 编辑 capability、activation、instructions 与 requirements；发布后由 Agent 激活，当前不提供独立执行入口
 - 记忆：当前用户入口可清空本人记忆；后端还提供添加、查询、删除、会话清理、统计，以及 active snapshot / dynamic History 派生记忆
-**交互三态**：进行中→按钮 loading / Skeleton；成功→`message.success` ≤2s；失败→`message.error` 不自动消失。
+**交互三态**：进行中→按钮 loading / Skeleton；成功→`message.success` ≤2s；失败→`message.error` 自动消失（约 3s）。
 **空状态**：所有列表必须有 Empty + 引导操作；无数据→"X 还是空的"；搜索无结果→"没有找到…"。
 **危险操作**：删除/停用/清空用 `Modal.confirm`，描述后果；必填用 `rules` 不用星号；`extra` 说明字段，`tooltip` 补充，不重叠。
 **命名约定**：Modal 开关 `createOpen/editOpen`；loading `createLoading/deleteLoading`；服务层函数动词+实体名 `createWorkspace`；Hook 返参直接解构不加 `state` 前缀。

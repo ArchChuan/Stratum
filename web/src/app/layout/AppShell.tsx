@@ -196,7 +196,7 @@ export const AppShell = ({ children }: AppShellProps) => {
       navigate('/', { replace: true });
     } catch (err) {
       if (!isForbidden(err)) {
-        message.error({ content: '切换租户失败', duration: 0 });
+        message.error({ content: '切换租户失败', duration: 3 });
       }
     } finally {
       setSwitchingTenant(false);
@@ -213,7 +213,7 @@ export const AppShell = ({ children }: AppShellProps) => {
       navigate('/', { replace: true });
     } catch (err) {
       if (!isForbidden(err)) {
-        message.error({ content: extractErrorMessage(err, '创建租户失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '创建租户失败'), duration: 3 });
       }
     } finally {
       setCreateTenantLoading(false);

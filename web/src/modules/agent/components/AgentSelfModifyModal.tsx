@@ -50,12 +50,12 @@ export const AgentSelfModifyModal = ({ agent, open, onClose }: AgentSelfModifyMo
       } else {
         message.success({ content: '修改已通过审批并生效', duration: 2 });
         if (result.usageWarning) {
-          message.warning({ content: result.usageWarning, duration: 0 });
+          message.warning({ content: result.usageWarning, duration: 3 });
         }
       }
       onClose();
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '提交自修改失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '提交自修改失败'), duration: 3 });
     } finally {
       setLoading(false);
     }

@@ -40,7 +40,7 @@ export function ModelEditDrawer({ open, model, onClose, onSubmit, loading }: Pro
         if (!cancelled) setChatModels(models);
       } catch (err) {
         if (!cancelled) {
-          message.error({ content: extractErrorMessage(err, '加载降级候选模型目录失败'), duration: 0 });
+          message.error({ content: extractErrorMessage(err, '加载降级候选模型目录失败'), duration: 3 });
         }
       }
     })();

@@ -62,7 +62,7 @@ export const CollaborationsPage = () => {
       setCollabs(await collaborationApi.list());
     } catch (err) {
       if (!isForbidden(err)) {
-        message.error({ content: extractErrorMessage(err, '加载协作任务失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '加载协作任务失败'), duration: 3 });
       }
     } finally {
       setLoading(false);
@@ -73,7 +73,7 @@ export const CollaborationsPage = () => {
     try {
       setAgents((await agentApi.list()).map((a) => a.id));
     } catch {
-      message.error({ content: '加载 Agent 列表失败', duration: 0 });
+      message.error({ content: '加载 Agent 列表失败', duration: 3 });
     }
   }, []);
 
@@ -108,7 +108,7 @@ export const CollaborationsPage = () => {
       await load();
     } catch (err) {
       if (!isForbidden(err)) {
-        message.error({ content: extractErrorMessage(err, '创建协作任务失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '创建协作任务失败'), duration: 3 });
       }
     } finally {
       setCreateLoading(false);
@@ -123,7 +123,7 @@ export const CollaborationsPage = () => {
       setDetailOpen(true);
     } catch (err) {
       if (!isForbidden(err)) {
-        message.error({ content: extractErrorMessage(err, '加载协作详情失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '加载协作详情失败'), duration: 3 });
       }
     }
   }, []);
@@ -142,7 +142,7 @@ export const CollaborationsPage = () => {
       await load();
     } catch (err) {
       if (!isForbidden(err)) {
-        message.error({ content: extractErrorMessage(err, '启动协作任务失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '启动协作任务失败'), duration: 3 });
       }
     } finally {
       setStartLoadingId(null);
@@ -160,7 +160,7 @@ export const CollaborationsPage = () => {
           await load();
         } catch (err) {
           if (!isForbidden(err)) {
-            message.error({ content: extractErrorMessage(err, '取消协作任务失败'), duration: 0 });
+            message.error({ content: extractErrorMessage(err, '取消协作任务失败'), duration: 3 });
           }
         }
       },

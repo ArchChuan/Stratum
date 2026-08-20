@@ -27,7 +27,7 @@ export const useDashboardPage = () => {
         const data = await dashboardApi.overview();
         if (!cancelled) setCounts(data);
       } catch {
-        if (!cancelled) message.error({ content: '加载概览数据失败', duration: 0 });
+        if (!cancelled) message.error({ content: '加载概览数据失败', duration: 3 });
       } finally {
         if (!cancelled) setLoading(false);
       }

@@ -26,7 +26,7 @@ export const useWorkflowResources = () => {
       if (agentResult.status === 'fulfilled') {
         setAgents(agentResult.value.map((agent) => ({ value: agent.id, label: agent.name })));
       } else {
-        message.error({ content: errorText(agentResult.reason), duration: 0 });
+        message.error({ content: errorText(agentResult.reason), duration: 3 });
       }
       if (skillResult.status === 'fulfilled') {
         // 系统内置 skill（isSystem）仅系统助手可挂载，workflow 选择列过滤；
@@ -38,12 +38,12 @@ export const useWorkflowResources = () => {
           label: `${skill.name}（已发布）`,
         })));
       } else {
-        message.error({ content: errorText(skillResult.reason), duration: 0 });
+        message.error({ content: errorText(skillResult.reason), duration: 3 });
       }
       if (mcpResult.status === 'fulfilled') {
         setMCPServers(mcpResult.value.map((server) => ({ value: server.id, label: server.name })));
       } else {
-        message.error({ content: errorText(mcpResult.reason), duration: 0 });
+        message.error({ content: errorText(mcpResult.reason), duration: 3 });
       }
     };
     void load();

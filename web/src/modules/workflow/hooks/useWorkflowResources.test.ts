@@ -38,7 +38,7 @@ describe('useWorkflowResources', () => {
     mocks.listMCPServers.mockResolvedValue([{ id: 'mcp-1', name: '知识服务' }]);
 
     const { result } = renderHook(() => useWorkflowResources());
-    await waitFor(() => expect(message.error).toHaveBeenCalledWith({ content: 'Agent 加载失败', duration: 0 }));
+    await waitFor(() => expect(message.error).toHaveBeenCalledWith({ content: 'Agent 加载失败', duration: 3 }));
     await act(async () => {});
 
     expect(result.current.mcpServers).toEqual([{ value: 'mcp-1', label: '知识服务' }]);

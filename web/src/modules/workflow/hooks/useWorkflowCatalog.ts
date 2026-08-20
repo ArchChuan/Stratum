@@ -26,7 +26,7 @@ export const useWorkflowCatalog = () => {
       })
       .catch((err) => {
         if (cancelled || isForbidden(err)) return;
-        message.error({ content: extractErrorMessage(err, '加载工作流失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '加载工作流失败'), duration: 3 });
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -47,7 +47,7 @@ export const useWorkflowCatalog = () => {
       setTotal((current) => Math.max(0, current - 1));
     } catch (err: unknown) {
       if (!isForbidden(err)) {
-        message.error({ content: extractErrorMessage(err, '删除工作流失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '删除工作流失败'), duration: 3 });
       }
     }
   };

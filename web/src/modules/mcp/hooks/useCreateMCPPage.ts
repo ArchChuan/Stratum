@@ -96,7 +96,7 @@ export const useCreateMCPPage = () => {
       message.success({ content: 'MCP 服务器已添加', duration: 2 });
       navigate('/mcp');
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '添加失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '添加失败'), duration: 3 });
     } finally {
       setSubmitting(false);
     }

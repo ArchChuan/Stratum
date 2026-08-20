@@ -46,7 +46,7 @@ export const useCreateAgentPage = () => {
       } else {
         const failed = [modelsRes, providersRes].find((r) => r.status === 'rejected');
         if (failed && failed.status === 'rejected') {
-          message.error({ content: extractErrorMessage(failed.reason, '加载模型目录失败'), duration: 0 });
+          message.error({ content: extractErrorMessage(failed.reason, '加载模型目录失败'), duration: 3 });
         }
       }
     })();
@@ -86,7 +86,7 @@ export const useCreateAgentPage = () => {
         navigate('/agents');
       } catch (err) {
         if (!isForbidden(err)) {
-          message.error({ content: extractErrorMessage(err, '创建失败'), duration: 0 });
+          message.error({ content: extractErrorMessage(err, '创建失败'), duration: 3 });
         }
       } finally {
         setLoading(false);

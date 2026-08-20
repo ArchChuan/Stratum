@@ -40,7 +40,7 @@ describe('useAuditListPage', () => {
     listEvents.mockRejectedValue(new Error('failed'));
     const { result } = renderHook(() => useAuditListPage());
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(message.error).toHaveBeenCalledWith({ content: '加载审计记录失败', duration: 0 });
+    expect(message.error).toHaveBeenCalledWith({ content: '加载审计记录失败', duration: 3 });
     expect(result.current.events).toEqual([]);
   });
 

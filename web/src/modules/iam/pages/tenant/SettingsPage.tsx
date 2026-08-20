@@ -40,7 +40,7 @@ export const SettingsPage = () => {
           navigate('/');
         } catch (err: unknown) {
           if (!isForbidden(err)) {
-            message.error({ content: extractErrorMessage(err, '删除失败'), duration: 0 });
+            message.error({ content: extractErrorMessage(err, '删除失败'), duration: 3 });
           }
         } finally {
           setDeleteLoading(false);
