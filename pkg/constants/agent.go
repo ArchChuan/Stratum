@@ -7,9 +7,8 @@ const (
 	// （ResolveAgentWindow default 分支）。0 = 自动按模型窗口解析：窗口 known 时走
 	// 0.85×window，未知时回落本常量。32768 保证兜底不至于像旧 8000 那样与
 	// outputReserve(4096) 形成预算账本矛盾（usable 远小于输出预留 → 智谱 400）。
-	DefaultAgentContextTokens   = 32768
-	DefaultSystemAssistantModel = "glm-5.2"
-	MinSystemPromptTokens       = 200
+	DefaultAgentContextTokens = 32768
+	MinSystemPromptTokens     = 200
 	// MinAgentMaxIterations / MaxAgentMaxIterations bound the per-agent max
 	// iteration count. Single source of truth shared by the frontend slider,
 	// AgentRevision.Validate, the HTTP create/update validation, the parameter
@@ -66,9 +65,6 @@ const (
 	// AgentFactCheckTimeout 是单次幻觉校验的整体时间预算；judge/检索失败或超时
 	// 降级为「不校验」（nil），不阻塞 agent 执行。
 	AgentFactCheckTimeout = 30 * time.Second
-	// AgentFactCheckJudgeModel 是幻觉校验 LLM-as-Judge 的默认模型（保留，
-	// 不得静默回落 evaluation.judge.model）。
-	AgentFactCheckJudgeModel = "qwen-turbo"
 	// AgentFactCheckJudgeMaxTokens 是 judge 单次输出预算。1024 会被批量
 	// claim 判定截断（finish_reason=length → JSON 半截 → 解析失败降级）；
 	// 2048 覆盖 4 claims 的完整 verdict JSON 输出。

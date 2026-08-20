@@ -127,14 +127,14 @@ func TestCaseGenAdapterUsesDefaultsAndParsesResponse(t *testing.T) {
 			Content: `{"name":"物流","input":"快递","expected_output":"结果","assertion_mode":"contains","reason":"来源"}`,
 		},
 	}
-	adapter := casegenAdapter{completer: completer} // no params -> optimizer default model
+	adapter := casegenAdapter{completer: completer} // no params -> 空模型交由 llmgateway 解析
 
 	got, err := adapter.Generate(context.Background(), caseGenSample())
 	require.NoError(t, err)
 	require.True(t, got.Valid)
 	require.Equal(t, "物流", got.Name)
 
-	require.Equal(t, "qwen-plus", completer.got.Model)
+	require.Empty(t, completer.got.Model, "模型默认必须为空：交由 llmgateway 从模型目录解析，代码内不写死兜底模型")
 	// float32(0.2) → *float64 有精度放大，按 epsilon 近似断言。
 	require.NotNil(t, completer.got.Temperature)
 	require.InDelta(t, 0.2, *completer.got.Temperature, 1e-6)

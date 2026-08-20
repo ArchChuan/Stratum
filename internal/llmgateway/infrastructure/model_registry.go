@@ -97,6 +97,16 @@ func samplingParamsFromMap(values map[string]any) *domain.SamplingParams {
 // 它不是业务可识别错误，不对外暴露。
 var errModelNotResolved = errors.New("model registry: model not resolved")
 
+// ErrModelNotInCatalog 表示显式请求的模型不在全局目录（未登记、已禁用或
+// provider 不可用）。配置层失效必须 fail-closed 并进入监控报警链路，禁止
+// 静默降级到其他模型。
+var ErrModelNotInCatalog = errors.New("llmgateway: requested model not in catalog")
+
+// ErrNoDefaultModel 表示请求未显式指定模型，且目录中没有任何可用的默认
+// 模型（provider default_model / recommended 均缺失）。无兜底模型属于配置
+// 缺陷，必须 fail-closed 并进入监控报警链路。
+var ErrNoDefaultModel = errors.New("llmgateway: no default model available")
+
 // ModelRegistry wraps a ModelRepository and ProviderRepository with an
 // in-memory cache and resolves model names to provider config + protocol.
 // models/providers 已提升为 public 平台全局目录，注册表不再区分租户维度。
@@ -258,6 +268,10 @@ func (r *ModelRegistry) resolveModel(
 		if !errors.Is(err, errModelNotResolved) {
 			return ProviderConfig{}, domain.Provider{}, err
 		}
+		// 显式请求的模型不在目录（未登记/已禁用/provider 不可用）：fail-closed，
+		// 禁止静默降级到 provider 默认或推荐模型——失效模型配置必须暴露给
+		// 监控报警链路，而不是悄悄换模型。
+		return ProviderConfig{}, domain.Provider{}, fmt.Errorf("%w: %q", ErrModelNotInCatalog, modelName)
 	}
 	for _, step := range []modelResolveStep{r.resolveProviderDefault, r.resolveRecommended} {
 		cfg, p, err := step(ctx, cacheKey, capability)
@@ -277,8 +291,10 @@ func (r *ModelRegistry) resolveModel(
 			return ProviderConfig{}, domain.Provider{}, err
 		}
 	}
+	// 未显式指定模型且目录无任何默认/推荐模型：配置缺陷，fail-closed 并进入
+	// 监控报警链路（代码内不写死兜底模型）。
 	return ProviderConfig{}, domain.Provider{}, fmt.Errorf(
-		"model registry: model %q not resolved: no default model in global catalog", modelName)
+		"%w: no default %s model in global catalog", ErrNoDefaultModel, capability)
 }
 
 // modelResolveStep 是全局解析链的一级兜底：返回 nil 表示命中；返回

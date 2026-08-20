@@ -3,7 +3,6 @@ package infrastructure_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -362,7 +361,7 @@ func TestResolveFallbackCandidatesPrimaryMissingFails(t *testing.T) {
 	reg := infrastructure.NewModelRegistry(modelRepo, providerRepo, chatProtos, map[domain.ProviderKind]infrastructure.EmbedProtocol{}, 5*time.Minute)
 	_, err := reg.ResolveFallbackCandidates(ctxWithTenant(), "ghost")
 	require.Error(t, err)
-	require.Contains(t, fmt.Sprintf("%v", err), "not resolved")
+	require.ErrorContains(t, err, infrastructure.ErrModelNotInCatalog.Error())
 }
 
 // fallbackCandsNames 提取候选链模型名，便于断言顺序。

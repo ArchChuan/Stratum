@@ -146,7 +146,7 @@ type routedInfo struct {
 func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*CompletionResponse, error) {
 	links, err := g.resolveChain(ctx, req.Model)
 	if err != nil {
-		g.metrics.IncLLMRequest(req.Model, "unknown", llmStatusError)
+		g.recordModelResolutionFailure(req.Model, err)
 		return nil, fmt.Errorf("llmgateway: resolve model %q: %w", req.Model, err)
 	}
 	g.logLLMRequest(ctx, req, links[0].Config, false)
@@ -166,7 +166,7 @@ func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*Comple
 func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, onToken func(string)) (*CompletionResponse, error) {
 	links, err := g.resolveChain(ctx, req.Model)
 	if err != nil {
-		g.metrics.IncLLMRequest(req.Model, "unknown", llmStatusError)
+		g.recordModelResolutionFailure(req.Model, err)
 		return nil, fmt.Errorf("llmgateway: resolve model %q: %w", req.Model, err)
 	}
 	g.logLLMRequest(ctx, req, links[0].Config, true)
@@ -186,13 +186,20 @@ func (g *Gateway) resolveChain(ctx context.Context, model string) ([]chainLink, 
 	if err != nil {
 		return nil, err
 	}
+	// 空模型（未显式指定）时，registry 已解析出 provider 默认/推荐模型名
+	// （cfg.Models[0]）；必须回填到链路，否则请求体携带 "model": "" 被
+	// provider 400 拒绝（本次生产事故根因）。显式模型命中目录时二者一致。
+	primaryModel := model
+	if len(cfg.Models) > 0 && cfg.Models[0] != "" {
+		primaryModel = cfg.Models[0]
+	}
 	links := []chainLink{{
-		Model:            model,
+		Model:            primaryModel,
 		Config:           cfg,
 		Protocol:         proto,
-		Reasoning:        g.registry.ResolveReasoning(ctx, model),
-		StructuredOutput: g.registry.ResolveStructuredOutput(ctx, model),
-		Policy:           g.registry.PolicyFor(ctx, model),
+		Reasoning:        g.registry.ResolveReasoning(ctx, primaryModel),
+		StructuredOutput: g.registry.ResolveStructuredOutput(ctx, primaryModel),
+		Policy:           g.registry.PolicyFor(ctx, primaryModel),
 	}}
 	cands, err := g.registry.ResolveFallbackCandidates(ctx, model)
 	if err != nil {
@@ -209,6 +216,22 @@ func (g *Gateway) resolveChain(ctx context.Context, model string) ([]chainLink, 
 		})
 	}
 	return links, nil
+}
+
+// recordModelResolutionFailure 将模型解析配置失效（无默认模型 / 请求失效
+// 模型）写入监控报警链路：ERROR 日志 + llm_model_resolution_errors_total
+// 指标。配置层缺陷禁止静默降级或吞错。
+func (g *Gateway) recordModelResolutionFailure(model string, err error) {
+	reason := "invalid_model"
+	if errors.Is(err, ErrNoDefaultModel) {
+		reason = "no_default"
+	}
+	g.metrics.IncLLMModelResolutionError(model, reason)
+	g.metrics.IncLLMRequest(model, "unknown", llmStatusError)
+	g.logger.Error("llmgateway.model_resolution_failed",
+		zap.String("model", model),
+		zap.String("reason", reason),
+		zap.Error(err))
 }
 
 // invokeWithFallback 沿链编排调用：主模型（i==0）瞬态失败立即重试 1 次

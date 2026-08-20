@@ -33,6 +33,7 @@ type MetricsProvider interface {
 
 	// LLM
 	IncLLMRequest(model, provider, status string)
+	IncLLMModelResolutionError(model, reason string)
 	RecordLLMRequestDuration(model, provider string, duration float64)
 	IncLLMTokenUsage(model, tokenType string, count int64)
 	RecordLLMTokenHistogram(model, tokenType string, count float64)
@@ -158,6 +159,7 @@ func (NoopMetrics) IncResourceProposal(_, _, _ string)                          
 func (NoopMetrics) RecordResourceProposalReviewDuration(_, _ string, _ float64)   {}
 func (NoopMetrics) RecordResourceProposalDraftEdits(_, _ string, _ int)           {}
 func (NoopMetrics) IncLLMRequest(_, _, _ string)                                  {}
+func (NoopMetrics) IncLLMModelResolutionError(_, _ string)                        {}
 func (NoopMetrics) RecordLLMRequestDuration(_, _ string, _ float64)               {}
 func (NoopMetrics) IncLLMTokenUsage(_, _ string, _ int64)                         {}
 func (NoopMetrics) RecordLLMTokenHistogram(_, _ string, _ float64)                {}

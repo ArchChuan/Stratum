@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
@@ -293,6 +295,34 @@ func TestModelRegistry_Resolve_ModelNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unknown model, got nil")
 	}
+}
+
+// TestModelRegistry_Resolve_ExplicitModelNotInCatalogFailsClosed 验证显式请求
+// 的模型不在目录时 fail-closed：即使存在 provider 默认模型，也禁止静默降级
+// 到默认模型（失效模型配置必须暴露给监控报警，而不是悄悄换模型）。
+func TestModelRegistry_Resolve_ExplicitModelNotInCatalogFailsClosed(t *testing.T) {
+	providerID := "prov-default"
+	providers := map[string]*domain.Provider{
+		providerID: {
+			ID: providerID, Name: "Default Prov", Kind: domain.ProviderOpenAICompat,
+			BaseURL: "https://default.test", APIKey: "sk-d", DefaultModel: "orphan-default", Enabled: true,
+		},
+	}
+	reg := newTestRegistry(&mockModelRepo{models: nil}, &mockProviderRepo{providers: providers})
+
+	_, _, err := reg.Resolve(context.Background(), "ghost")
+	require.Error(t, err)
+	require.ErrorContains(t, err, infrastructure.ErrModelNotInCatalog.Error())
+}
+
+// TestModelRegistry_Resolve_EmptyModelWithoutDefaultFailsClosed 验证空模型且
+// 目录中无任何默认/推荐模型时 fail-closed（无兜底模型必须走监控报警链路）。
+func TestModelRegistry_Resolve_EmptyModelWithoutDefaultFailsClosed(t *testing.T) {
+	reg := newTestRegistry(&mockModelRepo{models: nil}, &mockProviderRepo{providers: map[string]*domain.Provider{}})
+
+	_, _, err := reg.Resolve(context.Background(), "")
+	require.Error(t, err)
+	require.ErrorContains(t, err, infrastructure.ErrNoDefaultModel.Error())
 }
 
 func TestModelRegistry_Resolve_NoChatProtocol(t *testing.T) {
