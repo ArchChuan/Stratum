@@ -27,10 +27,10 @@ func (s *judgeCompleterStub) CompleteStream(context.Context, *llmgatewaydomain.C
 }
 
 // TestFactCheckJudgeUsesConstructedModelAndBuiltinTemplate 验证 factcheck judge
-// 请求 model 用构造 env 值、user 模板走内联硬编码（pre-refactor 行为）。
+// 请求 model 和 system prompt 均来自构造时传入的参数，user 消息承载程序填充的 claims/evidence。
 func TestFactCheckJudgeUsesConstructedModelAndBuiltinTemplate(t *testing.T) {
 	completer := &judgeCompleterStub{}
-	judge := factCheckJudge{completer: completer, model: "qwen-turbo"}
+	judge := factCheckJudge{completer: completer, model: "qwen-turbo", prompt: "你是严谨的事实核查法官。只输出 JSON。"}
 
 	if _, err := judge.JudgeClaims(context.Background(), []string{"c"}, "evidence"); err != nil {
 		t.Fatal(err)
@@ -38,11 +38,13 @@ func TestFactCheckJudgeUsesConstructedModelAndBuiltinTemplate(t *testing.T) {
 	if completer.model != "qwen-turbo" {
 		t.Fatalf("request model = %q, want constructed %q", completer.model, "qwen-turbo")
 	}
-	user := completer.messages[1].Content
-	if !strings.Contains(user, "对下列每条 claim") || !strings.Contains(user, "evidence") {
-		t.Fatalf("user message must carry builtin template, got %q", user)
+	// system prompt 是构造传入的纯规则文本
+	if got := completer.messages[0].Content; got != "你是严谨的事实核查法官。只输出 JSON。" {
+		t.Fatalf("system prompt must match constructed value, got %q", got)
 	}
-	if got := completer.messages[0].Content; got != "你是严谨的事实核查法官。只输出 JSON，不输出其他内容。" {
-		t.Fatalf("system prompt must stay the judge invariant, got %q", got)
+	// user 消息承载程序填充的 claims 和 evidence
+	user := completer.messages[1].Content
+	if !strings.Contains(user, "Claims:") || !strings.Contains(user, "evidence") {
+		t.Fatalf("user message must carry program-filled claims and evidence, got %q", user)
 	}
 }

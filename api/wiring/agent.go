@@ -523,12 +523,6 @@ func agentFactCheckSettings(c *Container) *factcheck.Settings {
 }
 
 // resolveFactCheckPlatformSettings 从参数注册表解析 factcheck 平台配置。
-// 返回 nil 的条件（任一成立则禁用）：
-//   - 参数注册表不可用（c.Parameters == nil）
-//   - agent.factcheck.enabled 不为 true
-//   - agent.factcheck.judge.model 为空
-//   - agent.factcheck.judge.prompt 为空
-//   - llmgateway 不可用
 func resolveFactCheckPlatformSettings(c *Container) (*factcheck.Settings, error) {
 	if c.LLMGateway == nil || c.LLMGateway.Gateway == nil {
 		return nil, nil
@@ -536,70 +530,70 @@ func resolveFactCheckPlatformSettings(c *Container) (*factcheck.Settings, error)
 	if c.Parameters == nil || c.Parameters.Service == nil || c.Parameters.Registry == nil {
 		return nil, nil
 	}
-	resolver := c.Parameters.Service.Resolver()
 	ctx := context.Background()
+	r := c.Parameters.Service.Resolver()
 
-	// 开关：必须显式 true
-	enabledVal, present, err := resolver.Resolve(ctx, "agent.factcheck.enabled", nil)
-	if err != nil || !present {
-		return nil, nil
-	}
-	enabled, ok := enabledVal.(bool)
-	if !ok || !enabled {
+	enabled, _ := resolveFCParam[bool](r, ctx, "agent.factcheck.enabled")
+	if !enabled {
 		return nil, nil
 	}
 
-	// 模型：空 = 禁用
-	modelVal, present, err := resolver.Resolve(ctx, "agent.factcheck.judge.model", nil)
-	if err != nil || !present {
-		return nil, nil
-	}
-	model, ok := modelVal.(string)
-	if !ok || model == "" {
+	model, _ := resolveFCParam[string](r, ctx, "agent.factcheck.judge.model")
+	if model == "" {
 		return nil, nil
 	}
 
-	// 提示词（纯规则，无占位符）：空 = 禁用
-	promptVal, present, err := resolver.Resolve(ctx, "agent.factcheck.judge.prompt", nil)
-	if err != nil || !present {
-		return nil, nil
-	}
-	prompt, ok := promptVal.(string)
-	if !ok || prompt == "" {
+	prompt, _ := resolveFCParam[string](r, ctx, "agent.factcheck.judge.prompt")
+	if prompt == "" {
 		return nil, nil
 	}
 
-	// top_k / max_claims：0 = 使用代码常量默认
-	topK := 0
-	if topKVal, present, err := resolver.Resolve(ctx, "agent.factcheck.top_k", nil); err == nil && present {
-		if v, ok := topKVal.(int64); ok {
-			topK = int(v)
-		}
-		if v, ok := topKVal.(float64); ok {
-			topK = int(v)
-		}
-	}
-	maxClaims := 0
-	if mcVal, present, err := resolver.Resolve(ctx, "agent.factcheck.max_claims", nil); err == nil && present {
-		if v, ok := mcVal.(int64); ok {
-			maxClaims = int(v)
-		}
-		if v, ok := mcVal.(float64); ok {
-			maxClaims = int(v)
-		}
-	}
+	topK, _ := resolveFCInt(r, ctx, "agent.factcheck.top_k")
+	maxClaims, _ := resolveFCInt(r, ctx, "agent.factcheck.max_claims")
 
 	return &factcheck.Settings{
-		Enabled: true,
-		Judge: factCheckJudge{
-			completer: c.LLMGateway.Gateway,
-			model:     model,
-			prompt:    prompt,
-		},
+		Enabled:   true,
+		Judge:     factCheckJudge{completer: c.LLMGateway.Gateway, model: model, prompt: prompt},
 		TopK:      topK,
 		MaxClaims: maxClaims,
 		Logger:    c.Logger,
 	}, nil
+}
+
+// fcResolver is the minimal interface for the parameter registry resolver.
+type fcResolver interface {
+	Resolve(ctx context.Context, key string, declared map[string]any) (any, bool, error)
+}
+
+// resolveFCParam resolves a typed bool/string parameter.
+func resolveFCParam[T bool | string](r fcResolver, ctx context.Context, key string) (T, bool) {
+	val, present, err := r.Resolve(ctx, key, nil)
+	if err != nil || !present {
+		var zero T
+		return zero, false
+	}
+	v, ok := val.(T)
+	if !ok {
+		var zero T
+		return zero, false
+	}
+	return v, true
+}
+
+// resolveFCInt resolves an int parameter via parsed int64 or float64.
+func resolveFCInt(r fcResolver, ctx context.Context, key string) (int, bool) {
+	val, present, err := r.Resolve(ctx, key, nil)
+	if err != nil || !present {
+		return 0, false
+	}
+	switch v := val.(type) {
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	default:
+		return 0, false
+	}
 }
 
 // factCheckJudge 实现 factcheck.Judge（LLM-as-Judge 幻觉判定），走 llmgateway
