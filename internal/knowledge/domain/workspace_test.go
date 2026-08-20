@@ -6,13 +6,14 @@ import (
 )
 
 func TestNewWorkspaceAppliesDefaults(t *testing.T) {
-	ws, err := NewWorkspace("kb", "desc", WorkspaceConfig{}, 1024, 10)
+	// 嵌入模型无静态兜底：必须显式配置（empty 由 Validate 拒绝）。
+	ws, err := NewWorkspace("kb", "desc", WorkspaceConfig{EmbeddingModel: "text-embedding-v3"}, 1024, 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	cfg := ws.Config
-	if cfg.EmbeddingModel != DefaultEmbeddingModel {
-		t.Errorf("expected default embedding model %q, got %q", DefaultEmbeddingModel, cfg.EmbeddingModel)
+	if cfg.EmbeddingModel != "text-embedding-v3" {
+		t.Errorf("expected explicit embedding model %q preserved, got %q", "text-embedding-v3", cfg.EmbeddingModel)
 	}
 	if cfg.QueryMode != DefaultQueryMode {
 		t.Errorf("expected default query mode %q, got %q", DefaultQueryMode, cfg.QueryMode)
@@ -58,11 +59,12 @@ func TestNewWorkspaceRejectsInvalidConfig(t *testing.T) {
 		cfg  WorkspaceConfig
 		want error
 	}{
-		// 注意：embedding model 目录存在性由 application 层校验（port.ModelExists），
-		// domain Validate 只做结构校验（query/chunking/rerank/threshold）。
+		// 注意：embedding model 目录存在性由 application 层校验（port.ModelExists）；
+		// domain Validate 校验空值（必填）与结构（query/chunking/rerank/threshold）。
 		{"unsupported query mode", WorkspaceConfig{EmbeddingModel: "text-embedding-v3", QueryMode: "fuzzy", ChunkingStrategy: "recursive"}, ErrInvalidQueryMode},
 		{"unsupported chunking strategy", WorkspaceConfig{EmbeddingModel: "text-embedding-v3", QueryMode: "hybrid", ChunkingStrategy: "weird"}, ErrInvalidChunkingStrategy},
-		{"empty embedding model cannot default after explicit invalid", WorkspaceConfig{EmbeddingModel: "", QueryMode: "bad", ChunkingStrategy: "recursive"}, ErrInvalidQueryMode},
+		{"empty embedding model after explicit invalid keeps structural priority", WorkspaceConfig{EmbeddingModel: "", QueryMode: "bad", ChunkingStrategy: "recursive"}, ErrInvalidQueryMode},
+		{"empty embedding model rejected (no static default)", WorkspaceConfig{EmbeddingModel: "", QueryMode: "hybrid", ChunkingStrategy: "recursive"}, ErrEmbeddingModelRequired},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -86,7 +88,8 @@ func TestWorkspaceConfigValidate(t *testing.T) {
 	}{
 		{"bad mode", func(c *WorkspaceConfig) { c.QueryMode = "x" }, ErrInvalidQueryMode},
 		{"bad strategy", func(c *WorkspaceConfig) { c.ChunkingStrategy = "x" }, ErrInvalidChunkingStrategy},
-		// embedding model 存在性由 application 目录校验，domain 不检查空值/未知值。
+		// 空值由 domain 校验（必填）；未知模型名由 application 目录校验（domain 不做 I/O）。
+		{"empty embedding model", func(c *WorkspaceConfig) { c.EmbeddingModel = "" }, ErrEmbeddingModelRequired},
 		{"external provider without model", func(c *WorkspaceConfig) { c.Reranking = "cohere" }, ErrInvalidRerankIdentity},
 		{"external provider with model passes", func(c *WorkspaceConfig) { c.Reranking = "unknown:model" }, nil},
 		{"threshold above range", func(c *WorkspaceConfig) { c.ScoreThreshold = 1.5 }, ErrInvalidScoreThreshold},
@@ -108,9 +111,10 @@ func TestApplyDefaultsBoundaries(t *testing.T) {
 		in   WorkspaceConfig
 		want WorkspaceConfig
 	}{
-		{"zero chunk size defaults", WorkspaceConfig{ChunkSize: 0, ChunkOverlap: 0, TopK: 0}, WorkspaceConfig{EmbeddingModel: DefaultEmbeddingModel, QueryMode: DefaultQueryMode, ChunkSize: 777, ChunkOverlap: DefaultChunkOverlap, TopK: 9, ChunkingStrategy: DefaultChunkingStrategy}},
-		{"negative chunk size defaults", WorkspaceConfig{ChunkSize: -1, ChunkOverlap: -5, TopK: -2}, WorkspaceConfig{EmbeddingModel: DefaultEmbeddingModel, QueryMode: DefaultQueryMode, ChunkSize: 777, ChunkOverlap: DefaultChunkOverlap, TopK: 9, ChunkingStrategy: DefaultChunkingStrategy}},
-		{"one chunk size defaults", WorkspaceConfig{ChunkSize: 1, ChunkOverlap: 1, TopK: 1}, WorkspaceConfig{EmbeddingModel: DefaultEmbeddingModel, QueryMode: DefaultQueryMode, ChunkSize: 1, ChunkOverlap: 1, TopK: 1, ChunkingStrategy: DefaultChunkingStrategy}},
+		// 嵌入模型无静态兜底：applyDefaults 对空模型原样留空，由 Validate 拒绝。
+		{"zero chunk size defaults", WorkspaceConfig{ChunkSize: 0, ChunkOverlap: 0, TopK: 0}, WorkspaceConfig{QueryMode: DefaultQueryMode, ChunkSize: 777, ChunkOverlap: DefaultChunkOverlap, TopK: 9, ChunkingStrategy: DefaultChunkingStrategy}},
+		{"negative chunk size defaults", WorkspaceConfig{ChunkSize: -1, ChunkOverlap: -5, TopK: -2}, WorkspaceConfig{QueryMode: DefaultQueryMode, ChunkSize: 777, ChunkOverlap: DefaultChunkOverlap, TopK: 9, ChunkingStrategy: DefaultChunkingStrategy}},
+		{"one chunk size defaults", WorkspaceConfig{ChunkSize: 1, ChunkOverlap: 1, TopK: 1}, WorkspaceConfig{QueryMode: DefaultQueryMode, ChunkSize: 1, ChunkOverlap: 1, TopK: 1, ChunkingStrategy: DefaultChunkingStrategy}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -202,6 +206,7 @@ func TestSentinelErrorsNonNil(t *testing.T) {
 		ErrWorkspaceNotFound, ErrWorkspaceConflict, ErrWorkspaceLinked,
 		ErrDuplicateDocument, ErrDocumentNotFound, ErrDocumentProcessing,
 		ErrChunkLimitExceeded, ErrIngestQueueFull, ErrPlatformManagedWorkspace,
+		ErrInvalidEmbeddingModel, ErrEmbeddingModelRequired,
 	} {
 		if err == nil {
 			t.Errorf("sentinel error is nil")

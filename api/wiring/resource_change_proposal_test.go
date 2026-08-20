@@ -129,11 +129,11 @@ func TestProposalMCPUpdateFailureHasUnknownOutcome(t *testing.T) {
 }
 
 func TestProposalKnowledgeUpdateCannotRenameWorkspace(t *testing.T) {
-	knowledge := &proposalKnowledgeFake{value: &knowledgedomain.Workspace{ID: "ws-1", Name: "docs", Description: "old", Config: knowledgedomain.WorkspaceConfig{EmbeddingModel: knowledgedomain.DefaultEmbeddingModel}}}
+	knowledge := &proposalKnowledgeFake{value: &knowledgedomain.Workspace{ID: "ws-1", Name: "docs", Description: "old", Config: knowledgedomain.WorkspaceConfig{EmbeddingModel: "text-embedding-v3"}}}
 	adapter := NewResourceChangeProposalAdapters(nil, nil, nil, knowledge)
 	_, err := adapter.ApplyResourceChange(context.Background(), agentdomain.ProposalEnvelope{
 		Proposal: agentdomain.ResourceChangeProposal{TenantID: "tenant-1", ResourceKind: agentdomain.ResourceKnowledgeWorkspace, ResourceID: "ws-1", Operation: agentdomain.OperationUpdate},
-		Payload:  &agentdomain.KnowledgeWorkspaceChange{Name: "renamed", Description: "new", EmbeddingModel: knowledgedomain.DefaultEmbeddingModel},
+		Payload:  &agentdomain.KnowledgeWorkspaceChange{Name: "renamed", Description: "new", EmbeddingModel: "text-embedding-v3"},
 	})
 	require.Error(t, err)
 	require.Equal(t, "docs", knowledge.value.Name)
@@ -148,7 +148,7 @@ func TestProposalKnowledgeUpdateResolvesApplyResultResourceID(t *testing.T) {
 			Operation: agentdomain.OperationCreate,
 		},
 		Payload: &agentdomain.KnowledgeWorkspaceChange{
-			Name: "docs", Description: "old", EmbeddingModel: knowledgedomain.DefaultEmbeddingModel,
+			Name: "docs", Description: "old", EmbeddingModel: "text-embedding-v3",
 		},
 	})
 	require.NoError(t, err)
@@ -165,7 +165,7 @@ func TestProposalKnowledgeUpdateResolvesApplyResultResourceID(t *testing.T) {
 	updated, err := adapter.ApplyResourceChange(context.Background(), agentdomain.ProposalEnvelope{
 		Proposal: proposal,
 		Payload: &agentdomain.KnowledgeWorkspaceChange{
-			Name: "docs", Description: "new", EmbeddingModel: knowledgedomain.DefaultEmbeddingModel,
+			Name: "docs", Description: "new", EmbeddingModel: "text-embedding-v3",
 		},
 	})
 	require.NoError(t, err)

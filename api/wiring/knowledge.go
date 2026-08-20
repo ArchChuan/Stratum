@@ -204,31 +204,55 @@ func buildEmbedResolver(
 	}
 }
 
-// buildKnowledgeEmbedResolver honours the workspace model and falls back to the managed embedding catalogue.
+// buildKnowledgeEmbedResolver resolves the workspace's explicitly configured
+// embedding model. There is no fallback: the model is the only source of truth
+// (an empty model or a model absent from the managed catalogue is a hard
+// failure, never a default substitution). Every failure path logs at error
+// level so missing/misconfigured embedding models surface in monitoring.
 func buildKnowledgeEmbedResolver(
 	registry *llmgateway.ModelRegistry,
 	logger *zap.Logger,
 ) knowledge.EmbedResolver {
 	return func(ctx context.Context, tenantID, model string) knowledge.EmbedClient {
-		m := model
-		if m == "" {
-			var err error
-			m, err = registry.ResolveDefaultEmbeddingModel(ctx)
-			if err != nil || m == "" {
-				return nil
-			}
-		} else if !registryHasEmbeddingModel(ctx, registry, m) {
-			// 显式指定的 workspace 模型不在 managed 目录：不静默替换成默认
-			// embedding（那会改变 workspace 语义），按未配置处理（fail-closed）。
+		if model == "" {
+			logger.Error("knowledge.embed.resolve_failed",
+				zap.String("reason", "empty embedding model"),
+				zap.String("tenant_id", tenantID),
+				zap.String("model", model))
 			return nil
 		}
 
-		cfg, _, err := registry.ResolveEmbedding(ctx, m)
+		has, err := registryHasEmbeddingModel(ctx, registry, model)
 		if err != nil {
+			// 目录查询失败：不静默按不存在处理，显式记 error（fail-closed）。
+			logger.Error("knowledge.embed.resolve_failed",
+				zap.String("reason", "embedding catalogue unavailable"),
+				zap.String("tenant_id", tenantID),
+				zap.String("model", model),
+				zap.Error(err))
+			return nil
+		}
+		if !has {
+			// 显式指定的 workspace 模型不在 managed 目录：不静默替换成默认
+			// embedding（那会改变 workspace 语义），按未配置处理（fail-closed）。
+			logger.Error("knowledge.embed.resolve_failed",
+				zap.String("reason", "embedding model not in catalogue"),
+				zap.String("tenant_id", tenantID),
+				zap.String("model", model))
+			return nil
+		}
+
+		cfg, _, err := registry.ResolveEmbedding(ctx, model)
+		if err != nil {
+			logger.Error("knowledge.embed.resolve_failed",
+				zap.String("reason", "resolve embedding failed"),
+				zap.String("tenant_id", tenantID),
+				zap.String("model", model),
+				zap.Error(err))
 			return nil
 		}
 		client := llmgateway.NewOpenAICompatClient(cfg, logger)
-		return embedding.NewEmbeddingServiceWithModel(client, m, logger)
+		return embedding.NewEmbeddingServiceWithModel(client, model, logger)
 	}
 }
 
@@ -258,18 +282,19 @@ func (a knowledgeModelExistsAdapter) Exists(ctx context.Context, model string, c
 }
 
 // registryHasEmbeddingModel 检查显式模型是否在 enabled 且 provider 可用的
-// embedding 目录中。目录读取失败按不存在处理（fail-closed）。
-func registryHasEmbeddingModel(ctx context.Context, registry *llmgateway.ModelRegistry, model string) bool {
+// embedding 目录中。目录读取失败向上传播 error（fail-closed，调用方记
+// error 日志），不静默按不存在处理。
+func registryHasEmbeddingModel(ctx context.Context, registry *llmgateway.ModelRegistry, model string) (bool, error) {
 	names, err := registry.ListEmbeddingModelsByTenant(ctx)
 	if err != nil {
-		return false
+		return false, err
 	}
 	for _, n := range names {
 		if n == model {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // SeedBuiltinKnowledgeDocs ingests official documentation catalog entries into

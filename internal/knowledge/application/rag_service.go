@@ -451,7 +451,7 @@ func (rs *RAGService) vectorLegSearch(ctx context.Context, req RAGQueryRequest, 
 	if widensRecall(req.Reranking) {
 		candidateTopK = req.TopK * constants.RerankWidenFactor
 	}
-	results, err := rs.queryVector(ctx, req.Question, searchName, candidateTopK, rs.resolveEmbedder(ctx, req), req.EmbeddingModel, legacy, filterExpr)
+	results, err := rs.queryVector(ctx, req.TenantID, req.Question, searchName, candidateTopK, rs.resolveEmbedder(ctx, req), req.EmbeddingModel, legacy, filterExpr)
 	if err != nil {
 		if errors.Is(err, errCollectionNotFound) {
 			return nil, err
@@ -497,6 +497,10 @@ func (rs *RAGService) keywordLeg(ctx context.Context, req RAGQueryRequest, docID
 func (rs *RAGService) hybridLeg(ctx context.Context, req RAGQueryRequest, collectionName, filterExpr string, docIDs []string) ([]knowledgeport.VectorSearchResult, []Source, rerankStats, error) {
 	embedder := rs.resolveEmbedder(ctx, req)
 	if embedder == nil {
+		// 嵌入模型不可用：fail-closed 且上报监控（触发 StratumKnowledgeEmbedUnavailable）。
+		if rs.metrics != nil {
+			rs.metrics.IncKnowledgeEmbedUnavailable(req.TenantID)
+		}
 		return nil, nil, rerankStats{}, fmt.Errorf("embedding service not configured: enable an embedding model in model management")
 	}
 	if rs.chunkRepo == nil {
@@ -729,7 +733,7 @@ func (rs *RAGService) hybridPool(ctx context.Context, req RAGQueryRequest, colle
 			vCh <- vRes{}
 			return
 		}
-		r, e := rs.queryVector(ctx, req.Question, searchName, legTopK, embedder, req.EmbeddingModel, legacy, filterExpr)
+		r, e := rs.queryVector(ctx, req.TenantID, req.Question, searchName, legTopK, embedder, req.EmbeddingModel, legacy, filterExpr)
 		vCh <- vRes{r, e}
 	}()
 	go func() {
@@ -873,10 +877,14 @@ func (rs *RAGService) resolveSearchCollection(ctx context.Context, collectionNam
 // instead of failing closed, per the spec's legacy-drift contract. expression
 // ("" when unrestricted) restricts results to the viewer's visible document
 // set.
-func (rs *RAGService) queryVector(ctx context.Context, question string, collection string, topK int, embedder knowledgeport.Embedder, embedModel string, legacy bool, expression string) ([]knowledgeport.VectorSearchResult, error) {
+func (rs *RAGService) queryVector(ctx context.Context, tenantID, question string, collection string, topK int, embedder knowledgeport.Embedder, embedModel string, legacy bool, expression string) ([]knowledgeport.VectorSearchResult, error) {
 	rs.logger.Debug("querying vector store")
 
 	if embedder == nil {
+		// 嵌入模型不可用：fail-closed 且上报监控（触发 StratumKnowledgeEmbedUnavailable）。
+		if rs.metrics != nil {
+			rs.metrics.IncKnowledgeEmbedUnavailable(tenantID)
+		}
 		return nil, fmt.Errorf("embedding service not configured: enable an embedding model in model management")
 	}
 
@@ -1106,7 +1114,7 @@ func (rs *RAGService) RetrieveRelevantChunks(ctx context.Context, tenantID, ques
 	}
 	collectionName := constants.CollectionName(tenantID, workspace, embedModel)
 
-	vectorResults, err := rs.queryVector(ctx, question, collectionName, topK, rs.embeddingSvc, embedModel, false, "")
+	vectorResults, err := rs.queryVector(ctx, tenantID, question, collectionName, topK, rs.embeddingSvc, embedModel, false, "")
 	if err != nil {
 		if isCollectionNotFound(err) {
 			return []string{}, nil

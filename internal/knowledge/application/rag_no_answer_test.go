@@ -191,6 +191,36 @@ func TestQueryBestScoreAlwaysFilled(t *testing.T) {
 	}
 }
 
+func TestRAGEmbedUnavailableCounterNilEmbedder(t *testing.T) {
+	// hybridLeg 与 queryVector 的 nil embedder 分支必须 fail-closed 且递增
+	// knowledge_embed_unavailable_total（触发 StratumKnowledgeEmbedUnavailable）。
+	// 每查询模式单分支可达（hybrid → hybridLeg；vector → queryVector），无双增。
+	metrics := &embedUnavailableMetrics{}
+	s := NewRAGService(nil, NewMockVectorStore(), zap.NewNop())
+	s.SetMetrics(metrics)
+
+	req := RAGQueryRequest{
+		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "q",
+		Mode: "hybrid", TopK: 2, EmbeddingModel: "embedding-3",
+	}
+
+	_, _, _, err := s.hybridLeg(context.Background(), req, "collection-1", "", nil)
+	if err == nil {
+		t.Fatal("hybridLeg: expected fail-closed error for nil embedder")
+	}
+	if tenantID, calls := metrics.lastInc(); calls != 1 || tenantID != "tenant-1" {
+		t.Fatalf("hybridLeg: expected 1 counter increment for tenant-1, got calls=%d tenant=%q", calls, tenantID)
+	}
+
+	_, err = s.queryVector(context.Background(), "tenant-1", "q", "collection-1", 2, nil, "embedding-3", false, "")
+	if err == nil {
+		t.Fatal("queryVector: expected fail-closed error for nil embedder")
+	}
+	if tenantID, calls := metrics.lastInc(); calls != 2 || tenantID != "tenant-1" {
+		t.Fatalf("queryVector: expected 2nd counter increment for tenant-1, got calls=%d tenant=%q", calls, tenantID)
+	}
+}
+
 func TestQueryNoAnswerNilMetricsSafe(t *testing.T) {
 	// NewRAGService 不注入 metrics：无答案路径必须 nil-safe，不得 panic。
 	s := NewRAGService(&mockEmbedder{dim: 3}, NewMockVectorStore(), zap.NewNop())

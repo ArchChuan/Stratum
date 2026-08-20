@@ -113,6 +113,30 @@ Pod 与日志，再查组件注册是否被配置关闭；恢复后时间戳刷�
 `increase(knowledge_ingest_total{status=~"failed|error"}[30m])`。检查 chunk/embed/写入链路与依赖
 （Milvus/LLM），修复后重跑失败任务并确认 ingest 计数恢复。
 
+<a id="knowledge-embed-unavailable"></a>
+
+## StratumKnowledgeEmbedUnavailable
+
+影响：知识库 ingest/RAG 的嵌入模型不可用（空模型 / 目录缺失 / 目录查询失败 / 解析失败）；
+紧急度：warning。查询 `increase(knowledge_embed_unavailable_total[15m])`。
+
+知识库嵌入模型只有显式配置一个来源（无默认兜底）。触发即代表该租户的 workspace 嵌入模型
+不可用，ingest 与 RAG 均 fail-closed。按 error 日志
+`knowledge.embed.resolve_failed` 的 `reason` 字段区分原因：
+`empty embedding model`（workspace 配置缺失）、`embedding model not in catalogue`
+（显式模型不在模型管理目录）、`embedding catalogue unavailable`（目录查询故障）、
+`resolve embedding failed`（provider 解析/连通失败）。
+
+处置：按 tenant 检查 workspace 的 embedding_model 配置与模型管理目录状态。缺模型的
+workspace 无法在创建后补填（模型不可变），需在模型管理启用/恢复对应模型，或新建 workspace。
+注意：缺模型的存量 workspace 读取/更新不会报 400（必填校验只作用于创建路径），以本计数为
+监控信号；此类 workspace 若走 semantic 分块策略，实际以 recursive 分块（chunk 阶段不触发
+本计数，直到 embed 阶段才 fail-closed）。
+
+关联告警：ingest 侧同一事件会同时触发 `StratumKnowledgeIngestFailures`（3/30m），属预期
+配对告警。本计数 label 为 `tenant`，与 memory 侧 `memory_embed_unavailable_total` 的
+`tenant_id` label 命名不一致，是两组件既有设计决策，跨组件聚合时需对齐 label。
+
 <a id="hermes-errors"></a>
 
 ## StratumHermesErrors

@@ -45,6 +45,7 @@ func exerciseAllMetrics(m MetricsProvider) {
 	m.RecordKnowledgeIngestDuration(1.5)
 	m.IncKnowledgeIngestInFlight()
 	m.DecKnowledgeIngestInFlight()
+	m.IncKnowledgeEmbedUnavailable("tenant-1")
 	// Hermes
 	m.IncHermesEvent("memory.raw")
 	m.IncHermesEventProcessed("memory.raw", "ok")

@@ -51,12 +51,13 @@ type PrometheusMetrics struct {
 	llmFirstTokenLatency *prometheus.HistogramVec
 
 	// Knowledge / Memory
-	knowledgeQueriesTotal   *prometheus.CounterVec
-	knowledgeQueryDuration  *prometheus.HistogramVec
-	memoryRetrievalDuration *prometheus.HistogramVec
-	knowledgeIngestTotal    *prometheus.CounterVec
-	knowledgeIngestDuration prometheus.Histogram
-	knowledgeIngestInFlight prometheus.Gauge
+	knowledgeQueriesTotal          *prometheus.CounterVec
+	knowledgeQueryDuration         *prometheus.HistogramVec
+	memoryRetrievalDuration        *prometheus.HistogramVec
+	knowledgeIngestTotal           *prometheus.CounterVec
+	knowledgeIngestDuration        prometheus.Histogram
+	knowledgeIngestInFlight        prometheus.Gauge
+	knowledgeEmbedUnavailableTotal *prometheus.CounterVec
 
 	// Hermes
 	hermesEventsTotal     *prometheus.CounterVec
@@ -277,7 +278,6 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 		knowledgeIngestInFlight: factory.NewGauge(
 			prometheus.GaugeOpts{Name: "knowledge_ingest_in_flight", Help: "In-flight knowledge ingest jobs"},
 		),
-
 		// Hermes
 		hermesEventsTotal: factory.NewCounterVec(
 			prometheus.CounterOpts{Name: "hermes_events_total", Help: "Total Hermes events published"},
@@ -293,7 +293,23 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 	m.llmPolicyBlockedTotal, m.llmPolicyMissingTotal = newModelPolicyMetrics(factory)
 	m.registerF3Metrics(factory, latencyBuckets)
 	m.registerExtendedMetrics(factory)
+	m.registerKnowledgeEmbedUnavailable(factory)
 	return m
+}
+
+// registerKnowledgeEmbedUnavailable registers the counter backing
+// StratumKnowledgeEmbedUnavailable (knowledge ingest/RAG embedding model
+// unavailable, fail-closed events). Kept out of the constructor literal to
+// stay under the function-length ratchet; the counter fires on the resolver
+// nil path so an unregistered (nil) vector would panic at runtime.
+func (m *PrometheusMetrics) registerKnowledgeEmbedUnavailable(factory promauto.Factory) {
+	m.knowledgeEmbedUnavailableTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "knowledge_embed_unavailable_total",
+			Help: "Knowledge ingest/RAG events where the embedding model is unavailable",
+		},
+		[]string{"tenant"},
+	)
 }
 
 func newModelPolicyMetrics(factory promauto.Factory) (*prometheus.CounterVec, *prometheus.CounterVec) {
@@ -590,6 +606,10 @@ func (m *PrometheusMetrics) RecordKnowledgeQueryDuration(queryType string, durat
 
 func (m *PrometheusMetrics) IncKnowledgeIngest(status string) {
 	m.knowledgeIngestTotal.WithLabelValues(status).Inc()
+}
+
+func (m *PrometheusMetrics) IncKnowledgeEmbedUnavailable(tenantID string) {
+	m.knowledgeEmbedUnavailableTotal.WithLabelValues(tenantID).Inc()
 }
 
 func (m *PrometheusMetrics) RecordKnowledgeIngestDuration(duration float64) {

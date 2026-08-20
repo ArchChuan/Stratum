@@ -8,8 +8,30 @@ import (
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"go.uber.org/zap"
 )
+
+// embedUnavailableMetrics captures IncKnowledgeEmbedUnavailable invocations.
+type embedUnavailableMetrics struct {
+	observability.NoopMetrics
+	mu       sync.Mutex
+	tenantID string
+	calls    int
+}
+
+func (m *embedUnavailableMetrics) IncKnowledgeEmbedUnavailable(tenantID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tenantID = tenantID
+	m.calls++
+}
+
+func (m *embedUnavailableMetrics) lastInc() (string, int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.tenantID, m.calls
+}
 
 func TestIngestDocumentRequest(t *testing.T) {
 	req := IngestDocumentRequest{
@@ -169,6 +191,26 @@ func TestIngestDocumentSemanticStrategyUsesWorkspaceEmbeddingModelForChunking(t 
 	}
 }
 
+func TestIngestEmbedUnavailableCounterOnNilEmbedClient(t *testing.T) {
+	// 无 resolver、无注入 embeddingSvc → resolveEmbedClient 返回 nil →
+	// doEmbedAndPersist fail-closed 并递增 knowledge_embed_unavailable_total。
+	ingest := NewKnowledgeIngest(&mockParser{}, document.NewChunkingService(), nil, nil, zap.NewNop())
+	metrics := &embedUnavailableMetrics{}
+	ingest.SetMetrics(metrics)
+
+	err := ingest.doEmbedAndPersist(context.Background(), IngestDocumentRequest{
+		TenantID: "tenant-a", WorkspaceID: "ws-a", EmbeddingModel: "missing-model",
+	}, knowledgeport.ChunkResult{Leaves: []knowledgeport.TextChunk{{Content: "x"}}})
+	if err == nil {
+		t.Fatal("expected fail-closed error for nil embed client")
+	}
+
+	tenantID, calls := metrics.lastInc()
+	if calls != 1 || tenantID != "tenant-a" {
+		t.Fatalf("expected 1 counter increment for tenant-a, got calls=%d tenant=%q", calls, tenantID)
+	}
+}
+
 func TestIngestDocumentUsesWorkspaceChunkSizeAndOverlap(t *testing.T) {
 	logger := zap.NewNop()
 	parser := &mockParser{out: "这是一段超过最小长度的知识库文档内容，用于验证分块参数会从知识库配置传入实际分块策略。" +
@@ -180,7 +222,7 @@ func TestIngestDocumentUsesWorkspaceChunkSizeAndOverlap(t *testing.T) {
 		TenantID:         "tenant-a",
 		Workspace:        "workspace-a",
 		WorkspaceID:      "workspace-id-a",
-		EmbeddingModel:   domain.DefaultEmbeddingModel,
+		EmbeddingModel:   "text-embedding-v3",
 		ChunkingStrategy: domain.ChunkingStrategyRecursive,
 		ChunkSize:        777,
 		ChunkOverlap:     123,

@@ -325,6 +325,8 @@ func (ki *KnowledgeIngest) doEmbedAndPersist(ctx context.Context, req IngestDocu
 
 	embedClient := ki.resolveEmbedClient(ctx, req)
 	if embedClient == nil {
+		// 嵌入模型不可用：fail-closed 且上报监控（触发 StratumKnowledgeEmbedUnavailable）。
+		ki.metrics.IncKnowledgeEmbedUnavailable(req.TenantID)
 		return fmt.Errorf("embedding service not configured: set an embedding model in workspace settings")
 	}
 

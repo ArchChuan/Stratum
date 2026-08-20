@@ -23,6 +23,7 @@ import (
 // imports keep compiling while the HTTP error mapping table can match either.
 var (
 	ErrInvalidEmbeddingModel   = domain.ErrInvalidEmbeddingModel
+	ErrEmbeddingModelRequired  = domain.ErrEmbeddingModelRequired
 	ErrInvalidQueryMode        = domain.ErrInvalidQueryMode
 	ErrEmbeddingModelImmutable = domain.ErrEmbeddingModelImmutable
 	ErrChunkSizeImmutable      = domain.ErrChunkSizeImmutable
