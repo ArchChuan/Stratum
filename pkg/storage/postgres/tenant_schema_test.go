@@ -59,24 +59,16 @@ func TestTenantSchemaPlatformMCPDomainIdentityFieldsAreProtected(t *testing.T) {
 	require.Equal(t, "platform_managed", value.FieldByName("ManagementMode").String())
 }
 
-func TestTenantSchemaDefaultsSystemAssistantModelWithoutOverwritingTenantChoice(t *testing.T) {
+func TestTenantSchemaSeedsPlatformAssistantWithoutHardcodedModel(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	sql := string(data)
-	for _, want := range []string{
-		"'', 'glm-5.2', 10, 0, 'user', 'stratum.platform_assistant'",
-		"UPDATE agents",
-		"SET llm_model = 'glm-5.2',",
-		"updated_at = NOW()",
-		"WHERE system_key = 'stratum.platform_assistant'",
-		"AND BTRIM(llm_model) = ''",
-	} {
-		if !strings.Contains(sql, want) {
-			t.Fatalf("tenant_schema.sql missing default model contract %q", want)
-		}
-	}
+	// 平台助手种子 llm_model 必须为空：模型由模型目录解析，代码内不写死
+	// 兜底模型；同时不得存在硬编码模型回填语句。
+	require.Contains(t, sql, "'', '', 10, 0, 'user', 'stratum.platform_assistant'")
+	require.NotContains(t, sql, "glm-5.2")
 }
 
 func TestTenantSchemaContainsSystemAssistantIdentityAndSeed(t *testing.T) {
@@ -103,7 +95,7 @@ func TestTenantSchemaContainsSystemAssistantIdentityAndSeed(t *testing.T) {
 		"'__stratum_platform_assistant__'",
 		"WHILE EXISTS",
 		"'基于官方资料指导平台使用并诊断当前租户应用状态'",
-		"'', 'glm-5.2', 10, 0, 'user', 'stratum.platform_assistant'",
+		"'', '', 10, 0, 'user', 'stratum.platform_assistant'",
 		"ON CONFLICT (id) DO NOTHING",
 		"stratum platform assistant identity conflict requires operator action",
 	} {

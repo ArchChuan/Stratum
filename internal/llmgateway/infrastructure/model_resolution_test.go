@@ -2,6 +2,7 @@ package infrastructure_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -103,6 +104,28 @@ func TestGatewayComplete_emptyModelWithoutDefaultRecordsAlertMetric(t *testing.T
 	require.Error(t, err)
 	require.Contains(t, spy.resolutionErrors, "|no_default")
 	require.Contains(t, spy.requests, "|unknown|error")
+}
+
+// TestGatewayComplete_registryFailureRecordsResolveErrorMetric 验证 registry
+// 基础设施故障（DB 不可用等非配置问题）不会被误归为 invalid_model，而是单独
+// 记入 resolve_error，避免告警 runbook 归因误导。
+func TestGatewayComplete_registryFailureRecordsResolveErrorMetric(t *testing.T) {
+	chatProtos := map[domain.ProviderKind]infrastructure.ChatProtocol{domain.ProviderOpenAICompat: &successChatProto{}}
+	reg := infrastructure.NewModelRegistry(
+		&mockModelRepo{err: errors.New("catalog db down")},
+		&mockProviderRepo{},
+		chatProtos,
+		map[domain.ProviderKind]infrastructure.EmbedProtocol{},
+		5*time.Minute,
+	)
+	spy := &llmMetricsSpy{}
+	gateway := infrastructure.NewGateway(reg, chatProtos, map[domain.ProviderKind]infrastructure.EmbedProtocol{}).WithMetrics(spy)
+	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
+
+	_, err := gateway.Complete(ctx, &infrastructure.CompletionRequest{Model: "glm-5"})
+	require.Error(t, err)
+	require.Contains(t, spy.resolutionErrors, "glm-5|resolve_error")
+	require.Contains(t, spy.requests, "glm-5|unknown|error")
 }
 
 // captureProto 记录请求体（含 response_format），用于验证空模型回填后能力
