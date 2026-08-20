@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stratum.local/schemas/rag-check.schema.json",
+  "title": "RAG retrieval check report",
+  "description": "Report emitted by cmd/e2e-rag-check. status mirrors the local-verification enum so the skill routes it uniformly; warnings are non-blocking by default (--fail-on-warn turns strong ones into failed).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "status",
+    "generated_at",
+    "dataset_dir",
+    "snapshot",
+    "config",
+    "provider",
+    "cases",
+    "aggregate",
+    "warnings",
+    "non_comparable"
+  ],
+  "properties": {
+    "version": { "const": 1 },
+    "status": { "enum": ["passed", "failed", "not_run", "infra_failed"] },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "dataset_dir": { "type": "string" },
+    "workspace": { "type": "string" },
+    "snapshot": { "$ref": "#/$defs/snapshot" },
+    "config": { "$ref": "#/$defs/effectiveConfig" },
+    "provider": { "$ref": "#/$defs/provider" },
+    "cases": { "type": "array", "items": { "$ref": "#/$defs/caseResult" } },
+    "aggregate": { "$ref": "#/$defs/aggregate" },
+    "baseline": { "$ref": "#/$defs/baseline" },
+    "baseline_delta": { "$ref": "#/$defs/baselineDelta" },
+    "warnings": { "type": "array", "items": { "$ref": "#/$defs/warning" } },
+    "non_comparable": { "type": "boolean" },
+    "skip_reason": { "type": "string" },
+    "residual_entities": { "type": "array", "items": { "type": "string" } },
+    "evidence": { "type": "array", "items": { "type": "string" } }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "not_run" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "skip_reason": { "type": "string", "minLength": 1 },
+          "cases": { "const": [] }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "non_comparable": { "const": true } }, "required": ["non_comparable"] },
+      "then": {
+        "properties": {
+          "baseline_delta": false,
+          "warnings": { "contains": { "anyOf": [
+            { "properties": { "id": { "const": "embedding_drift" } } },
+            { "properties": { "id": { "const": "config_drift" } } },
+            { "properties": { "id": { "const": "provider_drift" } } }
+          ] } }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["embedding_model", "query_mode", "top_k", "chunk_size", "chunk_overlap", "score_threshold", "reranking", "query_rewrite"],
+      "properties": {
+        "embedding_model": { "type": "string", "minLength": 1 },
+        "query_mode": { "enum": ["vector", "hybrid", "graph"] },
+        "top_k": { "const": 5 },
+        "chunk_size": { "type": "integer", "exclusiveMinimum": 0 },
+        "chunk_overlap": { "type": "integer", "minimum": 0 },
+        "score_threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+        "reranking": { "const": "" },
+        "query_rewrite": { "const": "none" }
+      }
+    },
+    "effectiveConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["embedding_model", "top_k", "score_threshold"],
+      "properties": {
+        "embedding_model": { "type": "string", "minLength": 1 },
+        "top_k": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "score_threshold": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["embedding_model", "provider_declared"],
+      "properties": {
+        "embedding_model": { "type": "string", "minLength": 1 },
+        "provider_base_url_hash": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+        "provider_declared": { "type": "boolean" }
+      }
+    },
+    "caseResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_id", "query", "mode", "expect_no_answer", "retrieved_count", "recall", "precision", "mrr", "ndcg", "relevant", "no_answer", "no_answer_pass", "citation_correct"],
+      "properties": {
+        "case_id": { "type": "string", "minLength": 1 },
+        "query": { "type": "string", "minLength": 1 },
+        "mode": { "enum": ["vector", "keyword", "hybrid"] },
+        "expect_no_answer": { "type": "boolean" },
+        "relevant_documents": { "type": "array", "items": { "type": "string" } },
+        "citation_documents": { "type": "array", "items": { "type": "string" } },
+        "retrieved_count": { "type": "integer", "minimum": 0 },
+        "retrieved_document_ids": { "type": "array", "items": { "type": "string" } },
+        "best_score": { "type": "number" },
+        "recall": { "type": "number", "minimum": 0, "maximum": 1 },
+        "precision": { "type": "number", "minimum": 0, "maximum": 1 },
+        "mrr": { "type": "number", "minimum": 0, "maximum": 1 },
+        "ndcg": { "type": "number", "minimum": 0, "maximum": 1 },
+        "relevant": { "type": "boolean" },
+        "no_answer": { "type": "boolean" },
+        "no_answer_pass": { "type": "boolean" },
+        "citation_correct": { "type": "boolean" }
+      }
+    },
+    "aggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_count", "non_no_answer_count", "no_answer_count", "recall", "precision", "mrr", "ndcg", "relevant_rate", "no_answer_pass_rate", "citation_pass_rate"],
+      "properties": {
+        "case_count": { "type": "integer", "minimum": 0 },
+        "non_no_answer_count": { "type": "integer", "minimum": 0 },
+        "no_answer_count": { "type": "integer", "minimum": 0 },
+        "recall": { "type": "number", "minimum": 0, "maximum": 1 },
+        "precision": { "type": "number", "minimum": 0, "maximum": 1 },
+        "mrr": { "type": "number", "minimum": 0, "maximum": 1 },
+        "ndcg": { "type": "number", "minimum": 0, "maximum": 1 },
+        "relevant_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "no_answer_pass_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "citation_pass_rate": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "warning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "level", "message"],
+      "properties": {
+        "id": { "enum": ["recall_zero", "empty_retrieval", "no_answer_regression", "ndcg_regression", "recall_regression", "mrr_regression", "embedding_drift", "config_drift", "provider_drift", "provider_not_declared"] },
+        "level": { "enum": ["strong", "warn"] },
+        "message": { "type": "string" },
+        "case_id": { "type": "string" }
+      }
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recorded_commit", "recorded_at", "provider", "config", "aggregate"],
+      "properties": {
+        "recorded_commit": { "type": "string", "minLength": 1 },
+        "recorded_at": { "type": "string", "format": "date-time" },
+        "provider": { "$ref": "#/$defs/provider" },
+        "config": { "$ref": "#/$defs/effectiveConfig" },
+        "aggregate": { "$ref": "#/$defs/aggregate" }
+      }
+    },
+    "baselineDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recall_delta", "mrr_delta", "ndcg_delta"],
+      "properties": {
+        "recall_delta": { "type": "number" },
+        "mrr_delta": { "type": "number" },
+        "ndcg_delta": { "type": "number" }
+      }
+    }
+  }
+}

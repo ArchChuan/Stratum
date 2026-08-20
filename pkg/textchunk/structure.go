@@ -40,7 +40,6 @@ func (s *StructureRecursiveStrategy) Chunk(ctx context.Context, text string, max
 		}
 
 		// Parent = full section (or capped at 2x maxRunes if huge).
-		parentID := makeID("parent", parentIdx)
 		parentContent := sec.content
 		if len(secRunes) > maxRunes*2 {
 			parentContent = string(secRunes[:maxRunes*2]) + "..."
@@ -50,11 +49,14 @@ func (s *StructureRecursiveStrategy) Chunk(ctx context.Context, text string, max
 			Index:   parentIdx,
 		})
 
-		// Children = recursive split of this section.
+		// Children = recursive split of this section. ParentID is the parent's
+		// ordinal (not makeID's "parent_<n>") because the persistence layer
+		// derives the parent chunk id as "<doc>_parent_<ordinal>" — the two must
+		// agree for the knowledge_chunks.parent_id FK to resolve.
 		childChunks := s.inner.split(sec.content, s.inner.separators, maxRunes, overlapRunes)
 		for i, child := range childChunks {
 			child.Index = len(leaves) + i
-			child.ParentID = parentID
+			child.ParentID = strconv.Itoa(parentIdx)
 			leaves = append(leaves, child)
 		}
 		parentIdx++

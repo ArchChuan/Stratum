@@ -46,6 +46,11 @@ export const executeAgentContextPack = async ({
       'SELECT id::text FROM rag_workspaces WHERE name=$1', [workspace]))[0].id;
 
     await page.locator('.ant-card').filter({ hasText: workspace }).getByRole('button', { name: '查看知识库' }).click();
+    // 进入详情页后先等页面渲染完成再上传：与 knowledge pack 对齐，避免 dev StrictMode
+    // 双挂载窗口内立即 setInputFiles 导致 rc-upload onChange 未触发（axios 从未发出，
+    // waitForResponse 45s 超时）。生产环境无双挂载，属测试夹具时序问题而非产品缺陷。
+    await expect(page).toHaveURL(`${webURL}/knowledge/${workspace}`);
+    await expect(page.getByRole('heading', { name: workspace })).toBeVisible();
     const ingestResponse = waitFor(page, '/knowledge/ingest', 'POST');
     await page.locator('input[type="file"]').setInputFiles({
       name: 'agent-context.txt', mimeType: 'text/plain', buffer: Buffer.from(`Context marker: ${knowledgeMarker}`),

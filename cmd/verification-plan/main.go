@@ -27,6 +27,7 @@ type plan struct {
 	Mode           string   `json:"mode"`
 	LocalChecks    []string `json:"local_checks"`
 	CIChecks       []string `json:"ci_checks"`
+	MatchedRules   []string `json:"matched_rules"`
 }
 
 func main() {
@@ -73,7 +74,8 @@ func run(args []string) error {
 	}
 	policy := manifest.Levels[risk]
 	result := plan{Version: 1, Commit: commit, ManifestDigest: "sha256:" + digest, RiskLevel: risk,
-		Mode: policy.Mode, LocalChecks: policy.LocalChecks, CIChecks: policy.CIChecks}
+		Mode: policy.Mode, LocalChecks: policy.LocalChecks, CIChecks: policy.CIChecks,
+		MatchedRules: verificationplan.MatchingRules(manifest, paths)}
 	return writePlan(*output, result)
 }
 

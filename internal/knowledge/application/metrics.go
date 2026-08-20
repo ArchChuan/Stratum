@@ -16,6 +16,7 @@ import (
 
 // RecallAtK is the fraction of relevant documents found in the top k results.
 func RecallAtK(retrieved, relevant []string, k int) float64 {
+	retrieved = dedupePreservingOrder(retrieved)
 	if len(relevant) == 0 || k <= 0 {
 		return 0
 	}
@@ -34,6 +35,7 @@ func RecallAtK(retrieved, relevant []string, k int) float64 {
 
 // PrecisionAtK is the fraction of the top k results that are relevant.
 func PrecisionAtK(retrieved, relevant []string, k int) float64 {
+	retrieved = dedupePreservingOrder(retrieved)
 	if k <= 0 {
 		return 0
 	}
@@ -56,6 +58,7 @@ func PrecisionAtK(retrieved, relevant []string, k int) float64 {
 // MRR is the reciprocal of the rank of the first relevant result, 0 when no
 // retrieved document is relevant.
 func MRR(retrieved, relevant []string) float64 {
+	retrieved = dedupePreservingOrder(retrieved)
 	rel := documentSet(relevant)
 	for i, id := range retrieved {
 		if rel[id] {
@@ -68,6 +71,7 @@ func MRR(retrieved, relevant []string) float64 {
 // NDCGAtK normalizes DCG@k over the ideal ordering where all relevant
 // documents are ranked first. Relevant set larger than k bounds IDCG at k.
 func NDCGAtK(retrieved, relevant []string, k int) float64 {
+	retrieved = dedupePreservingOrder(retrieved)
 	if k <= 0 {
 		return 0
 	}
@@ -98,6 +102,23 @@ func NDCGAtK(retrieved, relevant []string, k int) float64 {
 // RetrievalK is the rank window used for per-case and aggregated retrieval
 // metrics; it mirrors constants.DefaultRAGTopK so consumers never inline 5.
 var RetrievalK = constants.DefaultRAGTopK
+
+// dedupePreservingOrder removes duplicate document IDs keeping each first
+// occurrence's position. Retrieval yields chunk-level IDs where one document
+// can occupy several ranks; document-level metrics must count the first
+// appearance only or recall/nDCG exceed 1.
+func dedupePreservingOrder(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
 
 func documentSet(docs []string) map[string]bool {
 	set := make(map[string]bool, len(docs))

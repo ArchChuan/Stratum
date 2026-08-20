@@ -91,6 +91,37 @@ func TestEvaluateRetrievalCoversNoAnswerAndDependencyFailure(t *testing.T) {
 	}
 }
 
+func TestEvaluateRetrievalDedupesChunkLevelDocumentIDs(t *testing.T) {
+	// Chunk-level sources repeat one document across ranks; the evaluation must
+	// expose distinct document IDs so document-level metrics stay at most 1.
+	retriever := &fakeEvaluationRetriever{result: &RAGQueryResult{Sources: []Source{
+		{DocumentID: "doc-a", Content: "chunk 1", Score: 0.95},
+		{DocumentID: "doc-a", Content: "chunk 2", Score: 0.94},
+		{DocumentID: "doc-b", Content: "chunk 3", Score: 0.93},
+		{DocumentID: "doc-a", Content: "chunk 4", Score: 0.92},
+	}}}
+	result, err := NewRetrievalEvaluator(retriever).EvaluateRetrieval(
+		context.Background(), RetrievalSnapshot{
+			WorkspaceID: "workspace-1", WorkspaceName: "support", EmbeddingModel: "embedding-3",
+			QueryMode: "hybrid", TopK: 5, Reranking: RerankingNone, QueryRewrite: "none",
+		}, RetrievalCase{Query: "query", RelevantDocumentIDs: []string{"doc-a", "doc-b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(result.RetrievedDocumentIDs, ","); got != "doc-a,doc-b" {
+		t.Fatalf("dedup failed, got %q", got)
+	}
+	if result.RetrievedCount != 2 {
+		t.Fatalf("RetrievedCount = %d, want 2", result.RetrievedCount)
+	}
+	if got := RecallAtK(result.RetrievedDocumentIDs, []string{"doc-a", "doc-b"}, 5); got != 1 {
+		t.Fatalf("Recall@5 = %v, want 1", got)
+	}
+	if got := NDCGAtK(result.RetrievedDocumentIDs, []string{"doc-a", "doc-b"}, 5); got != 1 {
+		t.Fatalf("NDCG@5 = %v, want 1", got)
+	}
+}
+
 func TestEvaluateRetrievalSanitizesSensitiveDependencyFailure(t *testing.T) {
 	sensitive := errors.New("POST https://user:password@example.test/search?api_key=secret-token: " +
 		"response body contains private document content")

@@ -61,13 +61,36 @@ risk:
     - id: verification-kernel
       level: R3
       paths:
-        - .agents/skills/stratum-e2e-development/**
+        - .claude/skills/stratum-e2e-development/**
+        - .test/verification.yaml
+        - .test/schemas/verification-plan.schema.json
+        - .test/schemas/rag-check.schema.json
         - cmd/e2e-*/**
+        - cmd/verification-plan/**
         - internal/platform/e2eattestation/**
         - internal/platform/e2erunscope/**
+        - internal/platform/verificationplan/**
         - scripts/e2e/**
         - scripts/quality/test-verification-*.sh
         - test/e2e/**
+    - id: knowledge-retrieval
+      level: R3
+      paths:
+        - internal/knowledge/application/rag_service.go
+        - internal/knowledge/application/retrieval_evaluator.go
+        - internal/knowledge/application/metrics.go
+        - internal/knowledge/application/ingest_service.go
+        - internal/knowledge/application/no_answer.go
+        - internal/knowledge/application/workspace_service.go
+        - internal/knowledge/application/ownership.go
+        - internal/knowledge/application/workspace_binding.go
+        - internal/knowledge/domain/**
+        - internal/knowledge/infrastructure/**
+        - internal/llmgateway/infrastructure/embedding/**
+        - pkg/storage/milvus/**
+        - api/http/handler/rag_handler.go
+        - api/wiring/evaluation_knowledge_adapter.go
+        - test/e2e/knowledge/retrieval/**
     - id: agent-governance
       level: R3
       paths:

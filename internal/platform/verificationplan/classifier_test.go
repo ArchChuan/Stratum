@@ -84,6 +84,23 @@ func TestMatchGlobSupportsRecursivePaths(t *testing.T) {
 	require.False(t, matchGlob("docs/**", "internal/docs/service.go"))
 }
 
+func TestMatchingRulesPreservesManifestOrder(t *testing.T) {
+	t.Parallel()
+	manifest := Manifest{
+		Risk: RiskPolicy{Rules: []RiskRule{
+			{ID: "docs", Level: "R0", Paths: []string{"docs/**"}},
+			{ID: "auth", Level: "R3", Paths: []string{"internal/iam/**"}},
+			{ID: "memory", Level: "R3", Paths: []string{"internal/memory/**"}},
+		}},
+	}
+	require.Equal(t, []string{"docs", "memory"},
+		MatchingRules(manifest, []string{"docs/readme.md", "internal/memory/store.go"}))
+	require.Equal(t, []string{"auth"},
+		MatchingRules(manifest, []string{"internal/iam/auth.go"}))
+	require.Empty(t, MatchingRules(manifest, []string{"internal/unknown/thing.go"}))
+	require.Empty(t, MatchingRules(manifest, nil))
+}
+
 func validAuthorityPolicy() string {
 	return "  browser_e2e_authority: local\n  merge_authority: ci\n  deployment_authority: release_pipeline\n"
 }

@@ -110,7 +110,17 @@ export const executeWorkflowPack = async ({
     completed.push('workflow.mutation.post.workflows', 'workflow.route.workflows.id.edit');
     recordEvidence(evidence, 'workflow draft creation');
 
-    await page.getByLabel('工作流说明').fill('全系统 stateful 浏览器验收，已修改');
+    // 编辑页表单在定义 GET 完成后才异步水合（setFieldsValue 回填）。先等旧值出现，
+    // 确保水合完成再修改，避免保存时读到水合前的空值。
+    await expect(page.getByLabel('工作流说明')).toHaveValue('全系统 stateful 浏览器验收');
+    // 受控 TextArea 对 locator.fill() 的一次性 value 写入会闪回：DOM 值变了但 React
+    // store 未同步，后续渲染用旧值重置，导致保存的草稿 description 仍是旧值。改用
+    // 真实键盘输入（Ctrl+A 全选 + 逐字符），与真实用户逐字符输入一致，onChange→
+    // onValuesChange→designer.setDescription 逐次同步，值不会被覆盖。
+    const descriptionInput = page.getByLabel('工作流说明');
+    await descriptionInput.click();
+    await descriptionInput.press('Control+A');
+    await descriptionInput.pressSequentially('全系统 stateful 浏览器验收，已修改');
     const updateResponse = waitForMutation(page, `/workflows/${definitionID}/draft`, 'PUT');
     await page.getByRole('button', { name: '保存草稿' }).click();
     expect((await updateResponse).status()).toBe(200);

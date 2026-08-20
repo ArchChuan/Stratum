@@ -48,7 +48,7 @@ func compileSchema(t *testing.T, name string) *jsonschema.Schema {
 func basePlan() map[string]any {
 	return map[string]any{
 		"version": 1, "commit": hex(40), "manifest_digest": "sha256:" + hex(64),
-		"risk_level": "R3", "mode": "soak",
+		"risk_level": "R3", "mode": "soak", "matched_rules": []any{"knowledge-retrieval"},
 		"local_checks": []any{"unit", "e2e-soak"}, "ci_checks": []any{"unit", "security"},
 	}
 }
