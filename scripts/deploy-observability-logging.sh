@@ -60,7 +60,10 @@ verify_promtail_log_flow() {
 
     # Returns the numeric value of a promtail counter, or empty on a transient
     # fetch failure. Never fails the script: the caller retries and only fails
-    # after a sustained problem.
+    # after a sustained problem. Prometheus renders large counters in
+    # scientific notation (e.g. 2.3378258e+07), so the value pattern must
+    # accept both plain and exponent forms (observed 2026-08-20: a pure
+    # integer pattern silently matched nothing once sent_bytes crossed 1e7).
     promtail_metric() {
         local metrics=""
         if [[ ${#ssh_cmd[@]} -gt 0 ]]; then
@@ -69,7 +72,14 @@ verify_promtail_log_flow() {
             metrics="$(curl -sf http://127.0.0.1:9080/metrics 2>/dev/null || true)"
         fi
         printf '%s\n' "${metrics}" \
-            | awk -v name="$1" '$1 ~ ("^" name) && $2 ~ /^[0-9]+$/ {print $2; exit}'
+            | awk -v name="$1" \
+                '$1 ~ ("^" name) && $2 ~ /^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$/ {print $2; exit}'
+    }
+
+    # Numeric comparison that understands scientific notation (awk parses
+    # floats natively; bash arithmetic does not).
+    num_gt() {
+        awk -v a="$1" -v b="$2" 'BEGIN { exit !(a > b) }'
     }
 
     promtail_ready() {
@@ -106,12 +116,12 @@ verify_promtail_log_flow() {
 
     for attempt in $(seq 1 10); do
         sent_first="$(promtail_metric promtail_sent_bytes_total)"
-        if [[ "${sent_first}" =~ ^[0-9]+$ ]]; then
+        if [[ -n "${sent_first}" ]]; then
             break
         fi
         sleep 2
     done
-    if [[ ! "${sent_first}" =~ ^[0-9]+$ ]]; then
+    if [[ -z "${sent_first}" ]]; then
         echo "error: cannot read promtail_sent_bytes_total (10 attempts)" >&2
         exit 1
     fi
@@ -119,7 +129,7 @@ verify_promtail_log_flow() {
     # A quiet cluster can legitimately produce no new log lines for a minute,
     # so a flat counter is not a broken pipeline. Promtail counters start at 0
     # on pod start: any value > 0 proves at least one successful push to Loki.
-    if [[ "${sent_first}" -gt 0 ]]; then
+    if num_gt "${sent_first}" 0; then
         echo "log flow verified: files_active=${active}, sent_bytes=${sent_first} (promtail is pushing to Loki)"
         return
     fi
@@ -127,7 +137,7 @@ verify_promtail_log_flow() {
     for attempt in $(seq 1 12); do
         sleep 5
         sent_second="$(promtail_metric promtail_sent_bytes_total)"
-        if [[ "${sent_second}" =~ ^[0-9]+$ && "${sent_second}" -gt 0 ]]; then
+        if [[ -n "${sent_second}" ]] && num_gt "${sent_second}" 0; then
             echo "log flow verified: files_active=${active}, sent_bytes ${sent_first} -> ${sent_second}"
             return
         fi
