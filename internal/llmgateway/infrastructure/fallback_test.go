@@ -364,3 +364,103 @@ func TestResolveFallbackCandidatesPrimaryMissingFails(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, fmt.Sprintf("%v", err), "not resolved")
 }
+
+// fallbackCandsNames 提取候选链模型名，便于断言顺序。
+func fallbackCandsNames(cands []infrastructure.FallbackCandidate) []string {
+	names := make([]string, 0, len(cands))
+	for _, c := range cands {
+		names = append(names, c.Model)
+	}
+	return names
+}
+
+// TestResolveFallbackCandidatesExplicitPreferredOverImplicit 验证显式候选优先：
+// 主模型显式配置的候选按配置顺序入链（不受隐式同 provider/Recommended 排序
+// 影响），不足上限时由隐式规则补齐，且已显式配置的模型不被隐式重复引入。
+func TestResolveFallbackCandidatesExplicitPreferredOverImplicit(t *testing.T) {
+	models := []domain.Model{
+		{ID: "m-primary", ProviderID: "p1", Name: "primary", Enabled: true, Recommended: true,
+			Capabilities:       []domain.ModelCapability{domain.CapChat},
+			FallbackCandidates: []string{"cand-b", "cand-a"}},
+		{ID: "m-c1", ProviderID: "p1", Name: "cand-a", Enabled: true, Recommended: false,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
+		{ID: "m-c2", ProviderID: "p1", Name: "cand-b", Enabled: true, Recommended: false,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
+		{ID: "m-c3", ProviderID: "p1", Name: "cand-c", Enabled: true, Recommended: false,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
+	}
+	modelRepo := &mockModelRepo{models: models}
+	providerRepo := &mockProviderRepo{providers: map[string]*domain.Provider{
+		"p1": {ID: "p1", Name: "Test Provider", Kind: domain.ProviderOpenAICompat,
+			BaseURL: "https://api.test", APIKey: "sk-test", DefaultModel: "primary", Enabled: true},
+	}}
+	proto := newScriptedProto(nil)
+	chatProtos := map[domain.ProviderKind]infrastructure.ChatProtocol{domain.ProviderOpenAICompat: proto}
+	reg := infrastructure.NewModelRegistry(modelRepo, providerRepo, chatProtos,
+		map[domain.ProviderKind]infrastructure.EmbedProtocol{}, 5*time.Minute)
+
+	cands, err := reg.ResolveFallbackCandidates(ctxWithTenant(), "primary")
+	require.NoError(t, err)
+	// 显式顺序 cand-b → cand-a 保持；上限 3 内隐式补 cand-c（排除显式名）。
+	require.Equal(t, []string{"cand-b", "cand-a", "cand-c"}, fallbackCandsNames(cands))
+}
+
+// TestResolveFallbackCandidatesExplicitMissingSkippedImplicitFills 验证显式候选
+// 失效（不存在/退役）时容错跳过，并腾出位置由隐式规则补齐，链不为空。
+func TestResolveFallbackCandidatesExplicitMissingSkippedImplicitFills(t *testing.T) {
+	models := []domain.Model{
+		{ID: "m-primary", ProviderID: "p1", Name: "primary", Enabled: true, Recommended: true,
+			Capabilities:       []domain.ModelCapability{domain.CapChat},
+			FallbackCandidates: []string{"ghost", "cand-a"}},
+		{ID: "m-c1", ProviderID: "p1", Name: "cand-a", Enabled: true, Recommended: false,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
+		{ID: "m-c2", ProviderID: "p1", Name: "cand-b", Enabled: true, Recommended: false,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
+	}
+	modelRepo := &mockModelRepo{models: models}
+	providerRepo := &mockProviderRepo{providers: map[string]*domain.Provider{
+		"p1": {ID: "p1", Name: "Test Provider", Kind: domain.ProviderOpenAICompat,
+			BaseURL: "https://api.test", APIKey: "sk-test", DefaultModel: "primary", Enabled: true},
+	}}
+	proto := newScriptedProto(nil)
+	chatProtos := map[domain.ProviderKind]infrastructure.ChatProtocol{domain.ProviderOpenAICompat: proto}
+	reg := infrastructure.NewModelRegistry(modelRepo, providerRepo, chatProtos,
+		map[domain.ProviderKind]infrastructure.EmbedProtocol{}, 5*time.Minute)
+
+	cands, err := reg.ResolveFallbackCandidates(ctxWithTenant(), "primary")
+	require.NoError(t, err)
+	// ghost 不在目录被跳过；cand-a 显式入链；隐式排除 ghost/cand-a 后补 cand-b。
+	require.Equal(t, []string{"cand-a", "cand-b"}, fallbackCandsNames(cands))
+}
+
+// TestResolveFallbackCandidatesExplicitSkipsUnhealthy 验证显式候选已熔断时跳过：
+// unhealthy 候选既不显式入链，也不在隐式补齐中重复引入。
+func TestResolveFallbackCandidatesExplicitSkipsUnhealthy(t *testing.T) {
+	health, clock := newHealthRegistryWithClock(t)
+	models := []domain.Model{
+		{ID: "m-primary", ProviderID: "p1", Name: "primary", Enabled: true, Recommended: true,
+			Capabilities:       []domain.ModelCapability{domain.CapChat},
+			FallbackCandidates: []string{"bad-cand", "cand-a"}},
+		{ID: "m-c1", ProviderID: "p1", Name: "cand-a", Enabled: true, Recommended: false,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
+		{ID: "m-c2", ProviderID: "p1", Name: "bad-cand", Enabled: true, Recommended: false,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
+		{ID: "m-c3", ProviderID: "p1", Name: "cand-c", Enabled: true, Recommended: false,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
+	}
+	modelRepo := &mockModelRepo{models: models}
+	providerRepo := &mockProviderRepo{providers: map[string]*domain.Provider{
+		"p1": {ID: "p1", Name: "Test Provider", Kind: domain.ProviderOpenAICompat,
+			BaseURL: "https://api.test", APIKey: "sk-test", DefaultModel: "primary", Enabled: true},
+	}}
+	proto := newScriptedProto(nil)
+	chatProtos := map[domain.ProviderKind]infrastructure.ChatProtocol{domain.ProviderOpenAICompat: proto}
+	reg := infrastructure.NewModelRegistry(modelRepo, providerRepo, chatProtos,
+		map[domain.ProviderKind]infrastructure.EmbedProtocol{}, 5*time.Minute).WithHealth(health)
+	driveToUnhealthy(t, health, clock, "bad-cand")
+
+	cands, err := reg.ResolveFallbackCandidates(ctxWithTenant(), "primary")
+	require.NoError(t, err)
+	// bad-cand 熔断被跳过；cand-a 显式入链；隐式排除 bad-cand/cand-a 后补 cand-c。
+	require.Equal(t, []string{"cand-a", "cand-c"}, fallbackCandsNames(cands))
+}

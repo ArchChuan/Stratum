@@ -54,6 +54,7 @@ export const tenantApi = {
       tenant_id: data.tenant_id,
       tenant_name: data.tenant_name,
       is_default: data.is_default,
+      settings: data.settings ?? {},
     });
   },
   updateSettings: (patch: Record<string, unknown>) => api.patch('/tenant/settings', patch),

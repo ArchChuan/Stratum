@@ -203,11 +203,13 @@ func TestOpenAICompatProtocol_clientFor_isolatesBreakers(t *testing.T) {
 
 	cfgA := ProviderConfig{Name: "a", BaseURL: "http://one", APIKey: "k1"}
 	cfgB := ProviderConfig{Name: "b", BaseURL: "http://two", APIKey: "k2"}
-	clientA1 := proto.clientFor(cfgA)
-	clientA2 := proto.clientFor(cfgA)
-	clientB := proto.clientFor(cfgB)
+	clientA1 := proto.clientFor(cfgA, "model-a")
+	clientA2 := proto.clientFor(cfgA, "model-a")
+	clientAOther := proto.clientFor(cfgA, "model-b")
+	clientB := proto.clientFor(cfgB, "model-a")
 
 	require.Same(t, clientA1.breaker, clientA2.breaker)
+	require.NotSame(t, clientA1.breaker, clientAOther.breaker)
 	require.NotSame(t, clientA1.breaker, clientB.breaker)
 }
 

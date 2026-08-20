@@ -15,7 +15,7 @@ import (
 )
 
 // pgxPool 是 pgx 连接池的最小接口（public 平台目录数据，不走租户边界封装）。
-// Begin 用于需要多语句原子性的操作（UpsertDiscovered、SetDefaultEmbedding）。
+// Begin 用于需要多语句原子性的操作（UpsertDiscovered）。
 type pgxPool interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
@@ -64,6 +64,7 @@ func (r *PgModelRepo) Get(ctx context.Context, id string) (*domain.Model, error)
 		 context_window, max_tokens, input_price, output_price, recommended, default_embedding,
 		 enabled, provider_managed, sampling_params, max_temperature,
 		 operator_context_window, operator_max_tokens, default_output_tokens,
+		 fallback_candidates,
 		 context_window_source, max_tokens_source, context_window_observed_at, max_tokens_observed_at,
 		 created_at, updated_at
 		 FROM public.models WHERE id=$1`, id,
@@ -71,7 +72,7 @@ func (r *PgModelRepo) Get(ctx context.Context, id string) (*domain.Model, error)
 		&m.ContextWindow, &m.MaxTokens, &m.InputPrice, &m.OutputPrice,
 		&m.Recommended, &m.DefaultEmbedding, &m.Enabled, &m.ProviderManaged,
 		&sampling, &m.MaxTemperature, &m.OperatorContextWindow, &m.OperatorMaxTokens, &m.DefaultOutputTokens,
-		&m.ContextWindowSource, &m.MaxTokensSource, &m.ContextWindowObservedAt, &m.MaxTokensObservedAt,
+		&m.FallbackCandidates, &m.ContextWindowSource, &m.MaxTokensSource, &m.ContextWindowObservedAt, &m.MaxTokensObservedAt,
 		&m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("get model: %w", err)
@@ -90,6 +91,7 @@ func (r *PgModelRepo) List(ctx context.Context, filter port.ModelFilter) ([]doma
 	          context_window, max_tokens, input_price, output_price, recommended, default_embedding,
 	          enabled, provider_managed, sampling_params, max_temperature,
 	          operator_context_window, operator_max_tokens, default_output_tokens,
+	          fallback_candidates,
 	          context_window_source, max_tokens_source, context_window_observed_at, max_tokens_observed_at,
 	          created_at, updated_at FROM public.models`
 	var args []any
@@ -129,7 +131,7 @@ func (r *PgModelRepo) List(ctx context.Context, filter port.ModelFilter) ([]doma
 			&m.ContextWindow, &m.MaxTokens, &m.InputPrice, &m.OutputPrice,
 			&m.Recommended, &m.DefaultEmbedding, &m.Enabled, &m.ProviderManaged,
 			&sampling, &m.MaxTemperature, &m.OperatorContextWindow, &m.OperatorMaxTokens, &m.DefaultOutputTokens,
-			&m.ContextWindowSource, &m.MaxTokensSource, &m.ContextWindowObservedAt, &m.MaxTokensObservedAt,
+			&m.FallbackCandidates, &m.ContextWindowSource, &m.MaxTokensSource, &m.ContextWindowObservedAt, &m.MaxTokensObservedAt,
 			&m.CreatedAt, &m.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("list models: scan: %w", err)
 		}
@@ -176,12 +178,12 @@ func (r *PgModelRepo) Update(ctx context.Context, m *domain.Model, tenantID stri
 	tag, err := tx.Exec(ctx,
 		`UPDATE public.models SET display_name=$1, capabilities=$2, context_window=$3, max_tokens=$4,
 		 input_price=$5, output_price=$6, recommended=$7, enabled=$8, updated_at=now(),
-		 sampling_params=$9, max_temperature=$10,
+		 sampling_params=$9, max_temperature=$10, fallback_candidates=$11,
 		 default_embedding = default_embedding AND $8 AND 'embedding' = ANY($2)
-		 WHERE id=$11`,
+		 WHERE id=$12`,
 		m.DisplayName, caps, m.ContextWindow, m.MaxTokens,
 		m.InputPrice, m.OutputPrice, m.Recommended, m.Enabled,
-		sampling, m.MaxTemperature, m.ID,
+		sampling, m.MaxTemperature, m.FallbackCandidates, m.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("update model: %w", err)
@@ -220,12 +222,13 @@ func (r *PgModelRepo) UpdatePlatform(
 		`UPDATE public.models SET display_name=$1, capabilities=$2, context_window=$3,
 		 max_tokens=$4, input_price=$5, output_price=$6, recommended=$7, enabled=$8,
 		 sampling_params=$9, max_temperature=$10, operator_context_window=$11,
-		 operator_max_tokens=$12, default_output_tokens=$13, updated_at=now(),
+		 operator_max_tokens=$12, default_output_tokens=$13, fallback_candidates=$14,
+		 updated_at=now(),
 		 default_embedding = default_embedding AND $8 AND 'embedding' = ANY($2)
-		 WHERE id=$14`,
+		 WHERE id=$15`,
 		m.DisplayName, caps, m.ContextWindow, m.MaxTokens, m.InputPrice, m.OutputPrice,
 		m.Recommended, m.Enabled, sampling, m.MaxTemperature, m.OperatorContextWindow,
-		m.OperatorMaxTokens, m.DefaultOutputTokens, m.ID)
+		m.OperatorMaxTokens, m.DefaultOutputTokens, m.FallbackCandidates, m.ID)
 	if err != nil {
 		return fmt.Errorf("update platform model: %w", err)
 	}
@@ -260,10 +263,11 @@ func (r *PgModelRepo) UpdatePolicy(
 	}
 	tag, err := tx.Exec(ctx,
 		`UPDATE public.models SET operator_context_window=$1, operator_max_tokens=$2,
-		 default_output_tokens=$3, sampling_params=$4, max_temperature=$5, updated_at=now()
-		 WHERE id=$6`,
+		 default_output_tokens=$3, sampling_params=$4, max_temperature=$5,
+		 fallback_candidates=$6, updated_at=now()
+		 WHERE id=$7`,
 		m.OperatorContextWindow, m.OperatorMaxTokens, m.DefaultOutputTokens,
-		sampling, m.MaxTemperature, m.ID)
+		sampling, m.MaxTemperature, m.FallbackCandidates, m.ID)
 	if err != nil {
 		return fmt.Errorf("update model policy: %w", err)
 	}
@@ -368,6 +372,7 @@ func (r *PgModelRepo) upsertReadBack(ctx context.Context, tx pgx.Tx, providerID 
 		 context_window, max_tokens, input_price, output_price, recommended, default_embedding,
 		 enabled, provider_managed, sampling_params, max_temperature,
 		 operator_context_window, operator_max_tokens, default_output_tokens,
+		 fallback_candidates,
 		 context_window_source, max_tokens_source, context_window_observed_at, max_tokens_observed_at,
 		 created_at, updated_at
 		 FROM public.models WHERE provider_id=$1 ORDER BY name`,
@@ -386,7 +391,7 @@ func (r *PgModelRepo) upsertReadBack(ctx context.Context, tx pgx.Tx, providerID 
 			&model.InputPrice, &model.OutputPrice, &model.Recommended, &model.DefaultEmbedding,
 			&model.Enabled, &model.ProviderManaged, &sampling, &model.MaxTemperature,
 			&model.OperatorContextWindow, &model.OperatorMaxTokens, &model.DefaultOutputTokens,
-			&model.ContextWindowSource, &model.MaxTokensSource,
+			&model.FallbackCandidates, &model.ContextWindowSource, &model.MaxTokensSource,
 			&model.ContextWindowObservedAt, &model.MaxTokensObservedAt, &model.CreatedAt, &model.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("upsert models: scan: %w", err)
 		}
@@ -428,49 +433,6 @@ func (r *PgModelRepo) Toggle(ctx context.Context, id string, enabled bool) error
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("model not found: %s", id)
-	}
-	return nil
-}
-
-// SetDefaultEmbedding sets or clears the default-embedding marker for a model.
-// enabled=true clears all other markers globally first, then sets the target
-// in the same transaction (atomic clear-then-set). default_embedding 是全局
-// 唯一标记（035 partial unique index 兜底）。The target must be enabled and
-// carry the embedding capability; otherwise the call fails closed.
-func (r *PgModelRepo) SetDefaultEmbedding(ctx context.Context, id string, enabled bool) error {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("set default embedding: begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	if !enabled {
-		tag, err := tx.Exec(ctx,
-			`UPDATE public.models SET default_embedding=false WHERE id=$1`, id)
-		if err != nil {
-			return fmt.Errorf("clear default embedding: %w", err)
-		}
-		if tag.RowsAffected() == 0 {
-			return fmt.Errorf("model not found: %s: %w", id, domain.ErrModelNotFound)
-		}
-		return tx.Commit(ctx)
-	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE public.models SET default_embedding=false WHERE id<>$1`,
-		id); err != nil {
-		return fmt.Errorf("clear other default embeddings: %w", err)
-	}
-	tag, err := tx.Exec(ctx,
-		`UPDATE public.models SET default_embedding=true WHERE id=$1 AND enabled AND 'embedding' = ANY(capabilities)`,
-		id)
-	if err != nil {
-		return fmt.Errorf("set default embedding: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("model not found or not an enabled embedding model: %s: %w", id, domain.ErrModelNotFound)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("set default embedding: commit: %w", err)
 	}
 	return nil
 }

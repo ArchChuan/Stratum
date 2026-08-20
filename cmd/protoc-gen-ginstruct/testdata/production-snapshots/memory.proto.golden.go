@@ -42,3 +42,23 @@ type ListMemoryEntitiesResponse struct {
 	Entities []MemoryEntityResponse `json:"entities"`
 	Total    int64                  `json:"total"`
 }
+
+type MemoryMigrationResponse struct {
+	ID         int64     `json:"id"`
+	FromModel  string    `json:"from_model"`
+	ToModel    string    `json:"to_model"`
+	Status     string    `json:"status"`
+	Progress   int32     `json:"progress"`
+	TotalFacts int32     `json:"total_facts"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+type MemoryMigrationCostResponse struct {
+	FactCount        int64 `json:"fact_count"`
+	EstimatedSeconds int64 `json:"estimated_seconds"`
+}
+
+type StartMemoryMigrationRequest struct {
+	ToModel string `json:"to_model"`
+}

@@ -1370,6 +1370,24 @@ CREATE INDEX IF NOT EXISTS idx_extraction_queue_status ON memory_extraction_queu
 ALTER TABLE memory_extraction_queue ADD COLUMN IF NOT EXISTS conversation_id UUID REFERENCES chat_conversations(id) ON DELETE SET NULL;
 ALTER TABLE memory_extraction_queue ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'user';
 
+-- memory_migrations: 记忆嵌入模型平滑迁移状态机（P5 确认制切换）。
+-- tenant-scoped 表；回填 worker 逐任务 execTenant(ctx, tenantID, fn) 访问。
+-- total_facts = 迁移开始时 memory_facts 行数快照（progress 的分母，不随迁移期间
+-- 并发写入漂移）；progress 是断点续传游标（按 created_at,id 稳定排序的偏移）。
+-- status 状态机：migrating → done|failed|canceled；failed/canceled → migrating（重试）。
+CREATE TABLE IF NOT EXISTS memory_migrations (
+    id            BIGSERIAL PRIMARY KEY,
+    tenant_id     TEXT NOT NULL,
+    from_model    TEXT NOT NULL,
+    to_model      TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'migrating' CHECK (status IN ('migrating', 'done', 'failed', 'canceled')),
+    progress      INT NOT NULL DEFAULT 0,
+    total_facts   INT NOT NULL DEFAULT 0,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_memory_migrations_active ON memory_migrations (tenant_id, status, id);
+
 -- agents extensions for memory v2 config
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_enabled BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_write_scope TEXT NOT NULL DEFAULT 'user' CHECK (memory_write_scope IN ('user', 'agent'));

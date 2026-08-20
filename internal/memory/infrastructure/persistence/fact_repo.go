@@ -556,6 +556,44 @@ func (r *FactRepo) PurgeSuperseded(ctx context.Context, tenantID string, olderTh
 	return n, err
 }
 
+// CountAll 统计租户 memory_facts 的全部行数（任意状态）。用于迁移开始时快照
+// 进度分母；COUNT 在迁移期间的并发写入不会改变这个已固化的 total。
+func (r *FactRepo) CountAll(ctx context.Context, tenantID string) (int, error) {
+	var count int
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, "SELECT COUNT(*) FROM memory_facts").Scan(&count)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("count all facts: %w", err)
+	}
+	return count, nil
+}
+
+// ListAllFacts 分页返回租户全部事实（任意状态），按 created_at, id 稳定排序，
+// 作为迁移回填的主数据源。返回与 ListUserFacts 相同的列集，scanFacts 复用。
+func (r *FactRepo) ListAllFacts(ctx context.Context, tenantID string, limit, offset int) ([]*domain.MemoryFact, error) {
+	const query = `
+		SELECT id, user_id, agent_id, scope, conversation_id, content, importance,
+			status, superseded_by, access_count, last_accessed_at,
+			created_at, updated_at, frecency_score,
+			category, confidence, source
+		FROM memory_facts
+		ORDER BY created_at, id
+		LIMIT $1 OFFSET $2`
+
+	var facts []*domain.MemoryFact
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, query, limit, offset)
+		if err != nil {
+			return fmt.Errorf("list all facts: %w", err)
+		}
+		defer rows.Close()
+		facts, err = scanFacts(rows)
+		return err
+	})
+	return facts, err
+}
+
 func scanFacts(rows pgx.Rows) ([]*domain.MemoryFact, error) {
 	var facts []*domain.MemoryFact
 	for rows.Next() {

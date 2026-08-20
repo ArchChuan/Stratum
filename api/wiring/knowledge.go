@@ -62,8 +62,8 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 	if db != nil {
 		chunkRepo := persistence.NewChunkRepo(db)
 		docRepo = persistence.NewDocRepo(db)
-		if c.LLMGateway != nil && c.LLMGateway.Registry != nil {
-			pipelineResolver = buildEmbedResolver(c.LLMGateway.Registry, c.Logger)
+		if c.LLMGateway != nil && c.LLMGateway.TenantEmbeddingResolver != nil {
+			pipelineResolver = buildEmbedResolver(c.LLMGateway.TenantEmbeddingResolver, c.Logger)
 			knowledgeResolver = buildKnowledgeEmbedResolver(c.LLMGateway.Registry, c.Logger)
 		}
 		ingest.SetEmbedResolver(knowledgeResolver)
@@ -184,19 +184,28 @@ func (c *Container) RecoverStuckKnowledgeIngests(ctx context.Context) {
 	}
 }
 
-// buildEmbedResolver resolves the tenant's default embedding model via the
-// registry (marked default → first available → empty).
+// buildEmbedResolver resolves the tenant's explicitly configured memory
+// embedding model. 未配置或解析失败 → nil → embedder 死信（fail-closed），
+// 不再回退全局默认模型。失败路径 WARN 日志保证缺配置在监控中可见。
 func buildEmbedResolver(
-	registry *llmgateway.ModelRegistry,
+	resolver *tenantEmbeddingModelResolver,
 	logger *zap.Logger,
 ) pipeline.EmbedServiceResolver {
 	return func(ctx context.Context, tenantID string) pipeline.EmbedClient {
-		model, err := registry.ResolveDefaultEmbeddingModel(ctx)
+		model, err := resolver.ResolveMemoryEmbeddingModel(ctx, tenantID)
 		if err != nil || model == "" {
+			logger.Warn("memory.embed.resolve_failed",
+				zap.String("tenant_id", tenantID),
+				zap.String("reason", "no tenant embedding model configured"),
+				zap.Error(err))
 			return nil
 		}
-		cfg, _, err := registry.ResolveEmbedding(ctx, model)
+		cfg, _, err := resolver.registry.ResolveEmbeddingExact(ctx, model)
 		if err != nil {
+			logger.Warn("memory.embed.resolve_failed",
+				zap.String("tenant_id", tenantID),
+				zap.String("model", model),
+				zap.Error(err))
 			return nil
 		}
 		client := llmgateway.NewOpenAICompatClient(cfg, logger)
@@ -242,7 +251,7 @@ func buildKnowledgeEmbedResolver(
 			return nil
 		}
 
-		cfg, _, err := registry.ResolveEmbedding(ctx, model)
+		cfg, _, err := registry.ResolveEmbeddingExact(ctx, model)
 		if err != nil {
 			logger.Error("knowledge.embed.resolve_failed",
 				zap.String("reason", "resolve embedding failed"),
@@ -330,13 +339,17 @@ func (c *Container) SeedBuiltinKnowledgeDocs(ctx context.Context) {
 	}
 }
 
-// seedBuiltinDocsForTenant 为单个 tenant 种子内置文档；无可用嵌入模型时
-// WARN 并跳过，不阻断启动。
+// seedBuiltinDocsForTenant 为单个 tenant 种子内置文档；租户未显式配置记忆
+// 嵌入模型时 WARN 并跳过，不阻断启动（fail-closed：不擅自回退全局默认模型）。
 func (c *Container) seedBuiltinDocsForTenant(ctx context.Context, tid string) {
-	model, err := c.LLMGateway.Registry.ResolveDefaultEmbeddingModel(ctx)
+	if c.LLMGateway == nil || c.LLMGateway.TenantEmbeddingResolver == nil {
+		return
+	}
+	model, err := c.LLMGateway.TenantEmbeddingResolver.ResolveMemoryEmbeddingModel(ctx, tid)
 	if err != nil || model == "" {
-		c.Logger.Warn("knowledge.seed_builtin_docs.skip: no embedding model",
-			zap.String("tenant_id", tid))
+		c.Logger.Warn("knowledge.seed_builtin_docs.skip: tenant has no embedding model",
+			zap.String("tenant_id", tid),
+			zap.Error(err))
 		return
 	}
 	seeds.SeedBuiltinDocs(ctx, tid, model,

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import type { GroupedModelOption } from '@/modules/agent/model/agent';
 import { buildGroupedModels } from '@/modules/agent/model/agent';
 import { llmApi } from '@/modules/llm';
+import { ModelHealthBadge } from '@/modules/llm/components/ModelHealthBadge';
 import { extractErrorMessage } from '@/shared/lib';
 
 const { Option, OptGroup } = Select;
@@ -52,6 +53,10 @@ export const ProviderModelSelect = ({
   const currentMissing =
     value && !groupedModels.some((g) => g.models.some((m) => m.value === value));
 
+  // 不可用模型禁用：与后端解析链 isModelUsable 语义一致（unhealthy/halfOpen
+  // fail-closed 不选中），防止把熔断模型配成默认；degraded 仍可选（已降级但可用）。
+  const isUnusable = (health?: string) => health === 'unhealthy' || health === 'half_open';
+
   return (
     <Select
       value={value}
@@ -70,8 +75,11 @@ export const ProviderModelSelect = ({
       {groupedModels.map((group) => (
         <OptGroup key={group.provider} label={group.provider}>
           {group.models.map((m) => (
-            <Option key={m.value} value={m.value}>
-              {m.label}
+            <Option key={m.value} value={m.value} disabled={isUnusable(m.health)}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                {m.label}
+                <ModelHealthBadge health={m.health} />
+              </span>
             </Option>
           ))}
         </OptGroup>

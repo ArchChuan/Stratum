@@ -350,6 +350,50 @@ spec:
             description: Status {{ $labels.status }} recorded more than three errors in ten minutes (increase {{ $value }}).
             dashboard_url: /d/stratum-service-overview
             runbook_url: /docs/operations/alerts/business.md#evaluation-job-errors
+
+    - name: stratum-model
+      rules:
+        - alert: StratumModelUnhealthy
+          expr: model_health{status="unhealthy"} == 1
+          for: 5m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: llmgateway
+          annotations:
+            summary: 模型持续 unhealthy 超过 5 分钟
+            description: Model {{ $labels.model }} has been unhealthy for over five minutes; the resolution chain skips it (fail-closed).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#model-unhealthy
+
+        - alert: StratumMemoryMigrationStalled
+          expr: increase(memory_migration_stalled_total[15m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: memory
+          annotations:
+            summary: 记忆嵌入迁移扫描停滞
+            description: Migration from {{ $labels.from_model }} to {{ $labels.to_model }} for tenant {{ $labels.tenant_id }} made no progress across consecutive scans (increase {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#memory-migration-stalled
+
+        - alert: StratumRouteFallbackSurge
+          expr: increase(route_fallback_total[15m]) > 10
+          for: 5m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: llmgateway
+          annotations:
+            summary: 模型降级链回退频次异常升高
+            description: More than 10 route fallbacks in the last fifteen minutes ({{ $labels.from_model }} -> {{ $labels.to_model }}, increase {{ $value }}).
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#route-fallback-surge
     - name: stratum-availability
       rules:
         - alert: StratumPublicEndpointDown

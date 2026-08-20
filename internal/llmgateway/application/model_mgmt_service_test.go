@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
@@ -44,16 +46,11 @@ func TestOptionalIntJSONStates(t *testing.T) {
 func intPtr(value int) *int { return &value }
 
 type modelMgmtRepo struct {
-	model        domain.Model
-	models       []domain.Model
-	err          error
-	defaultCalls []modelDefaultCall
-}
-
-// modelDefaultCall records one SetDefaultEmbedding repo invocation.
-type modelDefaultCall struct {
-	id      string
-	enabled bool
+	model   domain.Model
+	models  []domain.Model
+	err     error
+	listErr error
+	updated *domain.Model
 }
 
 func (r *modelMgmtRepo) Create(context.Context, *domain.Model) error { return r.err }
@@ -68,7 +65,10 @@ func (r *modelMgmtRepo) Get(_ context.Context, id string) (*domain.Model, error)
 	return &model, r.err
 }
 func (r *modelMgmtRepo) List(context.Context, port.ModelFilter) ([]domain.Model, error) {
-	return nil, r.err
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
+	return r.models, r.err
 }
 func (r *modelMgmtRepo) Update(context.Context, *domain.Model, string, *auditdomain.ResourceChangeAuditEvent) error {
 	return r.err
@@ -80,8 +80,8 @@ func (r *modelMgmtRepo) UpsertDiscovered(
 }
 func (r *modelMgmtRepo) Delete(context.Context, string) error       { return r.err }
 func (r *modelMgmtRepo) Toggle(context.Context, string, bool) error { return r.err }
-func (r *modelMgmtRepo) SetDefaultEmbedding(_ context.Context, id string, enabled bool) error {
-	r.defaultCalls = append(r.defaultCalls, modelDefaultCall{id: id, enabled: enabled})
+func (r *modelMgmtRepo) UpdatePolicy(_ context.Context, m *domain.Model, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	r.updated = m
 	return r.err
 }
 
@@ -122,54 +122,118 @@ func TestModelMgmtServiceDoesNotInvalidateAfterFailedMutation(t *testing.T) {
 	}
 }
 
-func TestModelMgmtServiceSetDefaultEmbedding(t *testing.T) {
-	t.Run("rejects non-embedding model when enabling", func(t *testing.T) {
-		repo := &modelMgmtRepo{models: []domain.Model{
-			{ID: "m1", Name: "chat-x", Capabilities: []domain.ModelCapability{domain.CapChat}, Enabled: true},
+// TestModelMgmtServiceUpdatePolicyFallbackCandidates 覆盖显式降级候选写入校验
+// （fail-closed）：上限、非自身、去重、目录存在性（enabled+chat）、目录查询
+// 失败传播，以及成功路径的合并、nil 保留与空数组清空语义。
+func TestModelMgmtServiceUpdatePolicyFallbackCandidates(t *testing.T) {
+	catalog := func() *modelMgmtRepo {
+		return &modelMgmtRepo{models: []domain.Model{
+			{ID: "m-primary", Name: "primary", Enabled: true, Capabilities: []domain.ModelCapability{domain.CapChat}},
+			{ID: "m-ca", Name: "cand-a", Enabled: true, Capabilities: []domain.ModelCapability{domain.CapChat}},
+			{ID: "m-cb", Name: "cand-b", Enabled: true, Capabilities: []domain.ModelCapability{domain.CapChat}},
+			{ID: "m-dis", Name: "disabled-x", Enabled: false, Capabilities: []domain.ModelCapability{domain.CapChat}},
+			{ID: "m-emb", Name: "embed-x", Enabled: true, Capabilities: []domain.ModelCapability{domain.CapEmbedding}},
 		}}
-		svc := NewModelMgmtService(repo, invalidatorFunc(func() {
-			t.Fatal("must not invalidate on rejected set")
-		}))
-		if err := svc.SetDefaultEmbedding(context.Background(), "t1", "m1", true); err == nil {
-			t.Fatal("expected error for non-embedding model")
-		}
-	})
-	t.Run("rejects disabled model when enabling", func(t *testing.T) {
-		repo := &modelMgmtRepo{models: []domain.Model{
-			{ID: "m1", Name: "embed-x", Capabilities: []domain.ModelCapability{domain.CapEmbedding}, Enabled: false},
-		}}
-		svc := NewModelMgmtService(repo)
-		if err := svc.SetDefaultEmbedding(context.Background(), "t1", "m1", true); err == nil {
-			t.Fatal("expected error for disabled model")
-		}
-	})
-	t.Run("invalidates registry after successful set", func(t *testing.T) {
-		repo := &modelMgmtRepo{models: []domain.Model{
-			{ID: "m1", Name: "embed-x", Capabilities: []domain.ModelCapability{domain.CapEmbedding}, Enabled: true},
-		}}
+	}
+	cands := func(names ...string) *[]string {
+		v := append([]string(nil), names...)
+		return &v
+	}
+
+	rejectCases := []struct {
+		name  string
+		cands *[]string
+		want  string
+	}{
+		{"over max", cands("cand-a", "cand-b", "cand-a", "cand-a"), "exceed max"},
+		{"self reference", cands("primary"), "must not be the model itself"},
+		{"duplicate", cands("cand-a", "cand-a"), "duplicate fallback candidate"},
+		{"unknown model", cands("ghost"), "not an enabled chat model"},
+		{"disabled model", cands("disabled-x"), "not an enabled chat model"},
+		{"embedding-only model", cands("embed-x"), "not an enabled chat model"},
+	}
+	for _, tc := range rejectCases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := catalog()
+			svc := NewModelMgmtService(repo, invalidatorFunc(func() {
+				t.Fatal("must not invalidate on rejected candidates")
+			}))
+			_, err := svc.UpdatePolicy(context.Background(), "t1", "actor", UpdateModelPolicyInput{
+				ID: "m-primary", FallbackCandidates: tc.cands,
+			})
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tc.want)
+			}
+			// fail-closed 语义的另一半：客户端输入错误必须命中领域 sentinel，
+			// 由错误中间件映射 4xx，而不是裸 error 落入 5xx。
+			if !errors.Is(err, domain.ErrInvalidFallbackCandidates) {
+				t.Fatalf("error %q must wrap domain.ErrInvalidFallbackCandidates for 4xx mapping", err.Error())
+			}
+			if repo.updated != nil {
+				t.Fatalf("repo must not be touched on rejected candidates, updated = %+v", repo.updated)
+			}
+		})
+	}
+
+	t.Run("accepts valid candidates and persists merged", func(t *testing.T) {
+		repo := catalog()
 		invalidated := false
 		svc := NewModelMgmtService(repo, invalidatorFunc(func() { invalidated = true }))
-		if err := svc.SetDefaultEmbedding(context.Background(), "t1", "m1", true); err != nil {
+		_, err := svc.UpdatePolicy(context.Background(), "t1", "actor", UpdateModelPolicyInput{
+			ID: "m-primary", FallbackCandidates: cands("cand-b", "cand-a"),
+		})
+		if err != nil {
 			t.Fatal(err)
+		}
+		if repo.updated == nil || !slices.Equal(repo.updated.FallbackCandidates, []string{"cand-b", "cand-a"}) {
+			t.Fatalf("persisted candidates = %v, want [cand-b cand-a]", repo.updated.FallbackCandidates)
 		}
 		if !invalidated {
 			t.Fatal("expected registry invalidation")
 		}
 	})
-	t.Run("clears default embedding when disabling", func(t *testing.T) {
-		repo := &modelMgmtRepo{models: []domain.Model{
-			{ID: "m1", Name: "embed-x", Capabilities: []domain.ModelCapability{domain.CapEmbedding}, Enabled: true},
-		}}
-		invalidated := false
-		svc := NewModelMgmtService(repo, invalidatorFunc(func() { invalidated = true }))
-		if err := svc.SetDefaultEmbedding(context.Background(), "t1", "m1", false); err != nil {
+
+	t.Run("nil preserves existing candidates", func(t *testing.T) {
+		repo := catalog()
+		repo.models[0].FallbackCandidates = []string{"cand-a"}
+		svc := NewModelMgmtService(repo)
+		if _, err := svc.UpdatePolicy(context.Background(), "t1", "actor", UpdateModelPolicyInput{ID: "m-primary"}); err != nil {
 			t.Fatal(err)
 		}
-		if len(repo.defaultCalls) != 1 || repo.defaultCalls[0].id != "m1" || repo.defaultCalls[0].enabled {
-			t.Fatalf("SetDefaultEmbedding calls = %+v, want one clear for m1", repo.defaultCalls)
+		if !slices.Equal(repo.updated.FallbackCandidates, []string{"cand-a"}) {
+			t.Fatalf("preserved candidates = %v, want [cand-a]", repo.updated.FallbackCandidates)
 		}
-		if !invalidated {
-			t.Fatal("expected registry invalidation on clear")
+	})
+
+	t.Run("empty array clears candidates", func(t *testing.T) {
+		repo := catalog()
+		repo.models[0].FallbackCandidates = []string{"cand-a"}
+		svc := NewModelMgmtService(repo)
+		if _, err := svc.UpdatePolicy(context.Background(), "t1", "actor", UpdateModelPolicyInput{
+			ID: "m-primary", FallbackCandidates: &[]string{},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if len(repo.updated.FallbackCandidates) != 0 {
+			t.Fatalf("cleared candidates = %v, want empty", repo.updated.FallbackCandidates)
+		}
+	})
+
+	t.Run("catalog query failure propagates fail-closed", func(t *testing.T) {
+		repo := catalog()
+		repo.listErr = errors.New("db down")
+		svc := NewModelMgmtService(repo)
+		_, err := svc.UpdatePolicy(context.Background(), "t1", "actor", UpdateModelPolicyInput{
+			ID: "m-primary", FallbackCandidates: cands("cand-a"),
+		})
+		if err == nil {
+			t.Fatal("expected catalog query error to propagate")
+		}
+		if !strings.Contains(err.Error(), "list chat models") {
+			t.Fatalf("error %q does not mention catalog query", err.Error())
 		}
 	})
 }

@@ -2,7 +2,6 @@ package infrastructure
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -32,6 +31,7 @@ var modelColumns = []string{"id", "provider_id", "name", "display_name", "capabi
 	"context_window", "max_tokens", "input_price", "output_price", "recommended", "default_embedding",
 	"enabled", "provider_managed", "sampling_params", "max_temperature",
 	"operator_context_window", "operator_max_tokens", "default_output_tokens",
+	"fallback_candidates",
 	"context_window_source", "max_tokens_source", "context_window_observed_at", "max_tokens_observed_at",
 	"created_at", "updated_at"}
 
@@ -40,7 +40,8 @@ func modelRow(m *domain.Model) []any {
 	return []any{m.ID, m.ProviderID, m.Name, m.DisplayName,
 		[]string{"chat", "vision"}, m.ContextWindow, m.MaxTokens, m.InputPrice, m.OutputPrice,
 		m.Recommended, m.DefaultEmbedding, m.Enabled, m.ProviderManaged,
-		[]byte("{}"), nil, nil, nil, nil, m.ContextWindowSource, m.MaxTokensSource, nil, nil, now, now}
+		[]byte("{}"), nil, nil, nil, nil, m.FallbackCandidates,
+		m.ContextWindowSource, m.MaxTokensSource, nil, nil, now, now}
 }
 
 func TestModelRepo_Create_success(t *testing.T) {
@@ -170,7 +171,8 @@ func TestModelRepo_List_scanFails(t *testing.T) {
 			AddRow(42, bad.ProviderID, bad.Name, bad.DisplayName, []string{"chat"},
 				bad.ContextWindow, bad.MaxTokens, bad.InputPrice, bad.OutputPrice,
 				bad.Recommended, bad.DefaultEmbedding, bad.Enabled, bad.ProviderManaged,
-				[]byte("{}"), nil, nil, nil, nil, bad.ContextWindowSource, bad.MaxTokensSource,
+				[]byte("{}"), nil, nil, nil, nil, bad.FallbackCandidates,
+				bad.ContextWindowSource, bad.MaxTokensSource,
 				nil, nil, time.Now(), time.Now()))
 
 	_, err := repo.List(context.Background(), port.ModelFilter{})
@@ -185,9 +187,9 @@ func TestModelRepo_Update_success(t *testing.T) {
 	m := modelFixture()
 	mock.ExpectBegin()
 	mock.ExpectExec(`SET LOCAL search_path`).WillReturnResult(pgxmock.NewResult("SET", 0))
-	mock.ExpectExec(`UPDATE public.models SET display_name=\$1, capabilities=\$2, context_window=\$3, max_tokens=\$4,\s+input_price=\$5, output_price=\$6, recommended=\$7, enabled=\$8, updated_at=now\(\),\s+sampling_params=\$9, max_temperature=\$10,\s+default_embedding = default_embedding AND \$8 AND 'embedding' = ANY\(\$2\)\s+WHERE id=\$11`).
+	mock.ExpectExec(`UPDATE public.models SET display_name=\$1, capabilities=\$2, context_window=\$3, max_tokens=\$4,\s+input_price=\$5, output_price=\$6, recommended=\$7, enabled=\$8, updated_at=now\(\),\s+sampling_params=\$9, max_temperature=\$10, fallback_candidates=\$11,\s+default_embedding = default_embedding AND \$8 AND 'embedding' = ANY\(\$2\)\s+WHERE id=\$12`).
 		WithArgs(m.DisplayName, []string{"chat", "vision"}, m.ContextWindow, m.MaxTokens,
-			m.InputPrice, m.OutputPrice, m.Recommended, m.Enabled, "{}", (*float64)(nil), m.ID).
+			m.InputPrice, m.OutputPrice, m.Recommended, m.Enabled, "{}", (*float64)(nil), m.FallbackCandidates, m.ID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
@@ -201,8 +203,8 @@ func TestModelRepo_Update_notFound(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`SET LOCAL search_path`).WillReturnResult(pgxmock.NewResult("SET", 0))
-	mock.ExpectExec(`UPDATE public.models SET display_name=\$1, capabilities=\$2, context_window=\$3, max_tokens=\$4,\s+input_price=\$5, output_price=\$6, recommended=\$7, enabled=\$8, updated_at=now\(\),\s+sampling_params=\$9, max_temperature=\$10,\s+default_embedding = default_embedding AND \$8 AND 'embedding' = ANY\(\$2\)\s+WHERE id=\$11`).
-		WithArgs(anyArgs(11)...).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectExec(`UPDATE public.models SET display_name=\$1, capabilities=\$2, context_window=\$3, max_tokens=\$4,\s+input_price=\$5, output_price=\$6, recommended=\$7, enabled=\$8, updated_at=now\(\),\s+sampling_params=\$9, max_temperature=\$10, fallback_candidates=\$11,\s+default_embedding = default_embedding AND \$8 AND 'embedding' = ANY\(\$2\)\s+WHERE id=\$12`).
+		WithArgs(anyArgs(12)...).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := repo.Update(context.Background(), modelFixture(), "t1", nil)
 	require.ErrorContains(t, err, "model not found")
@@ -215,8 +217,8 @@ func TestModelRepo_Update_execFails(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`SET LOCAL search_path`).WillReturnResult(pgxmock.NewResult("SET", 0))
-	mock.ExpectExec(`UPDATE public.models SET display_name=\$1, capabilities=\$2, context_window=\$3, max_tokens=\$4,\s+input_price=\$5, output_price=\$6, recommended=\$7, enabled=\$8, updated_at=now\(\),\s+sampling_params=\$9, max_temperature=\$10,\s+default_embedding = default_embedding AND \$8 AND 'embedding' = ANY\(\$2\)\s+WHERE id=\$11`).
-		WithArgs(anyArgs(11)...).WillReturnError(pgx.ErrTxClosed)
+	mock.ExpectExec(`UPDATE public.models SET display_name=\$1, capabilities=\$2, context_window=\$3, max_tokens=\$4,\s+input_price=\$5, output_price=\$6, recommended=\$7, enabled=\$8, updated_at=now\(\),\s+sampling_params=\$9, max_temperature=\$10, fallback_candidates=\$11,\s+default_embedding = default_embedding AND \$8 AND 'embedding' = ANY\(\$2\)\s+WHERE id=\$12`).
+		WithArgs(anyArgs(12)...).WillReturnError(pgx.ErrTxClosed)
 
 	err := repo.Update(context.Background(), modelFixture(), "t1", nil)
 	require.ErrorContains(t, err, "update model")
@@ -269,97 +271,6 @@ func TestModelRepo_Toggle_notFound(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestPgModelRepoSetDefaultEmbedding(t *testing.T) {
-	tests := []struct {
-		name       string
-		enabled    bool
-		expectErr  bool
-		expectSQLs []string // 事务内期望执行顺序；expectErr 时末条 UPDATE 返回 RowsAffected=0
-		expectArgs [][]any  // 与 expectSQLs 一一对应的 UPDATE 参数
-	}{
-		{
-			name:    "sets default clears others atomically in one transaction",
-			enabled: true,
-			expectSQLs: []string{
-				`UPDATE public.models SET default_embedding=false WHERE id<>\$1`,
-				`UPDATE public.models SET default_embedding=true WHERE id=\$1 AND enabled AND 'embedding' = ANY\(capabilities\)`,
-			},
-			expectArgs: [][]any{
-				{"model-1"},
-				{"model-1"},
-			},
-		},
-		{
-			name:    "clears default for target only when disabled",
-			enabled: false,
-			expectSQLs: []string{
-				`UPDATE public.models SET default_embedding=false WHERE id=\$1`,
-			},
-			expectArgs: [][]any{
-				{"model-1"},
-			},
-		},
-		{
-			name:      "fails closed when target not enabled embedding model",
-			enabled:   true,
-			expectErr: true,
-			expectSQLs: []string{
-				`UPDATE public.models SET default_embedding=false WHERE id<>\$1`,
-				`UPDATE public.models SET default_embedding=true WHERE id=\$1 AND enabled AND 'embedding' = ANY\(capabilities\)`,
-			},
-			expectArgs: [][]any{
-				{"model-1"},
-				{"model-1"},
-			},
-		},
-		{
-			name:      "fails when clearing unknown model",
-			enabled:   false,
-			expectErr: true,
-			expectSQLs: []string{
-				`UPDATE public.models SET default_embedding=false WHERE id=\$1`,
-			},
-			expectArgs: [][]any{
-				{"model-1"},
-			},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			mock := newFactMock(t)
-			repo := newMockModelRepo(mock)
-
-			mock.ExpectBegin()
-			for i, sql := range tc.expectSQLs {
-				rows := int64(1)
-				if tc.expectErr && i == len(tc.expectSQLs)-1 {
-					rows = 0 // 目标 RowsAffected=0 → fail-closed 返回错误
-				}
-				mock.ExpectExec(sql).WithArgs(tc.expectArgs[i]...).WillReturnResult(pgxmock.NewResult("UPDATE", rows))
-			}
-			if tc.expectErr {
-				mock.ExpectRollback()
-			} else {
-				mock.ExpectCommit()
-			}
-
-			err := repo.SetDefaultEmbedding(context.Background(), "model-1", tc.enabled)
-			if tc.expectErr && err == nil {
-				t.Fatal("expected error, got nil")
-			}
-			if !tc.expectErr && err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if tc.expectErr && !errors.Is(err, domain.ErrModelNotFound) {
-				t.Fatalf("err = %v, want ErrModelNotFound", err)
-			}
-			if err := mock.ExpectationsWereMet(); err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
-}
-
 func TestModelRepo_UpsertDiscovered_newAndExisting(t *testing.T) {
 	mock := newFactMock(t)
 	repo := newMockModelRepo(mock)
@@ -396,10 +307,10 @@ func TestModelRepo_UpsertDiscovered_newAndExisting(t *testing.T) {
 		WithArgs("p1").
 		WillReturnRows(pgxmock.NewRows(modelColumns).
 			AddRow("m-new", "p1", "new-model", "New", []string{"chat"}, 8192, 4096, 10.0, 30.0, true, false, true, true,
-				[]byte("{}"), nil, nil, nil, nil, domain.CapabilitySourceProviderAPI, domain.CapabilitySourceProviderAPI,
+				[]byte("{}"), nil, nil, nil, nil, nil, domain.CapabilitySourceProviderAPI, domain.CapabilitySourceProviderAPI,
 				nil, nil, now, now).
 			AddRow("m-exist", "p1", "existing-model", "Existing", []string{"chat"}, 128000, 8192, 0.0, 0.0, false, false, true, true,
-				[]byte("{}"), nil, nil, nil, nil, domain.CapabilitySourceProviderAPI, domain.CapabilitySourceProviderAPI,
+				[]byte("{}"), nil, nil, nil, nil, nil, domain.CapabilitySourceProviderAPI, domain.CapabilitySourceProviderAPI,
 				nil, nil, now, now))
 	mock.ExpectCommit()
 

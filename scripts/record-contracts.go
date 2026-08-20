@@ -446,9 +446,6 @@ func (contractModRepo) UpsertDiscovered(_ context.Context, _ string, _ []llmdoma
 }
 func (contractModRepo) Delete(_ context.Context, _ string) error         { return nil }
 func (contractModRepo) Toggle(_ context.Context, _ string, _ bool) error { return nil }
-func (contractModRepo) SetDefaultEmbedding(_ context.Context, _ string, _ bool) error {
-	return nil
-}
 
 type contractProvRuntime struct{}
 

@@ -132,6 +132,99 @@ func (r *failUpdateRepo) Update(context.Context, *domain.Model, string, *auditdo
 	return errors.New("update boom")
 }
 
+// stubModelHealth 实现 port.ModelHealthProvider，返回可脚本化的健康状态。
+type stubModelHealth struct {
+	statuses map[string]string
+}
+
+func (s *stubModelHealth) ModelHealth(model string) string {
+	if s == nil {
+		return ""
+	}
+	return s.statuses[model]
+}
+
+// healthListRepo 覆盖 List 返回可断言模型列表（modelMgmtRepo.List 恒空）。
+type healthListRepo struct {
+	modelMgmtRepo
+	listed []domain.Model
+}
+
+func (r *healthListRepo) List(context.Context, port.ModelFilter) ([]domain.Model, error) {
+	return r.listed, r.err
+}
+
+// TestModelMgmtHealthProjection 验证目录投影附加运行时健康状态：
+// WithHealth 注入后 List/Get 带 health 字段；未注入或状态源未记录时
+// 保持空字符串（omitempty 不输出，前端按"未探活"展示）。
+func TestModelMgmtHealthProjection(t *testing.T) {
+	model := domain.Model{ID: "m1", Name: "qwen-plus"}
+	healthy := &stubModelHealth{statuses: map[string]string{"qwen-plus": "degraded"}}
+
+	cases := []struct {
+		name      string
+		svc       *ModelMgmtService
+		wantModel string
+		wantList  string
+	}{
+		{
+			name: "no health source keeps empty",
+			svc: NewModelMgmtService(&healthListRepo{
+				modelMgmtRepo: modelMgmtRepo{model: model},
+				listed:        []domain.Model{model},
+			}),
+			wantModel: "",
+			wantList:  "",
+		},
+		{
+			name: "health source projects status",
+			svc: NewModelMgmtService(&healthListRepo{
+				modelMgmtRepo: modelMgmtRepo{model: model},
+				listed:        []domain.Model{model},
+			}).WithHealth(healthy),
+			wantModel: "degraded",
+			wantList:  "degraded",
+		},
+		{
+			name: "unrecorded status keeps empty",
+			svc: NewModelMgmtService(&healthListRepo{
+				modelMgmtRepo: modelMgmtRepo{model: model},
+				listed:        []domain.Model{model},
+			}).WithHealth(&stubModelHealth{}),
+			wantModel: "",
+			wantList:  "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			listed, err := tc.svc.List(context.Background(), "t1", port.ModelFilter{})
+			if err != nil {
+				t.Fatalf("list = %v", err)
+			}
+			if len(listed) != 1 || listed[0].Health != tc.wantList {
+				t.Fatalf("list health = %q, want %q", listed[0].Health, tc.wantList)
+			}
+			got, err := tc.svc.Get(context.Background(), "t1", "m1")
+			if err != nil {
+				t.Fatalf("get = %v", err)
+			}
+			if got.Health != tc.wantModel {
+				t.Fatalf("get health = %q, want %q", got.Health, tc.wantModel)
+			}
+		})
+	}
+
+	// 极端情况：repo 错误传播时 List/Get 不吞错、不填充。
+	svc := NewModelMgmtService(&healthListRepo{modelMgmtRepo: modelMgmtRepo{err: errors.New("db down")}}).WithHealth(healthy)
+	if _, err := svc.List(context.Background(), "t1", port.ModelFilter{}); err == nil {
+		t.Fatal("list repo error must propagate")
+	}
+	if _, err := svc.Get(context.Background(), "t1", "m1"); err == nil {
+		t.Fatal("get repo error must propagate")
+	}
+}
+
 // fakeCatalog 实现 port.ModelCatalog，返回可脚本化的模型列表。
 type fakeCatalog struct {
 	chat      []string

@@ -23,6 +23,14 @@ func TestMapErrorToStatus_MemorySentinels(t *testing.T) {
 		{name: "invalid status", err: domain.ErrInvalidStatus, status: http.StatusBadRequest},
 		{name: "missing user", err: domain.ErrUserIDMismatch, status: http.StatusBadRequest},
 		{name: "empty content", err: domain.ErrEmptyContent, status: http.StatusBadRequest},
+		{name: "migration invalid tenant", err: domain.ErrMigrationInvalidTenant, status: http.StatusBadRequest},
+		{name: "migration empty model", err: domain.ErrMigrationEmptyModel, status: http.StatusBadRequest},
+		{name: "migration same model", err: domain.ErrMigrationSameModel, status: http.StatusBadRequest},
+		{name: "migration not found", err: domain.ErrMigrationNotFound, status: http.StatusNotFound},
+		{name: "migration already active", err: domain.ErrMigrationAlreadyActive, status: http.StatusConflict},
+		{name: "migration not active", err: domain.ErrMigrationNotActive, status: http.StatusConflict},
+		{name: "migration progress regressed", err: domain.ErrMigrationProgressRegressed, status: http.StatusConflict},
+		{name: "migration not retryable", err: domain.ErrMigrationNotRetryable, status: http.StatusConflict},
 	}
 
 	for _, tt := range tests {
