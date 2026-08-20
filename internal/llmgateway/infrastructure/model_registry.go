@@ -202,6 +202,26 @@ func (r *ModelRegistry) ResolveEmbedding(ctx context.Context, modelName string) 
 	return cfg, proto, nil
 }
 
+// ResolveEmbeddingExact 精确解析租户显式配置的嵌入模型：仅匹配目录中 enabled
+// 且支持 embedding 能力的同名模型，未命中返回 errModelNotResolved，绝不兜底
+// 到 provider 默认或推荐模型。用于租户显式配置的 fail-closed 校验——配置拼写
+// 错误必须暴露，而不是静默切换到其他模型。
+func (r *ModelRegistry) ResolveEmbeddingExact(ctx context.Context, modelName string) (ProviderConfig, EmbedProtocol, error) {
+	if modelName == "" {
+		return ProviderConfig{}, nil, errModelNotResolved
+	}
+	cacheKey := "embed:" + modelName
+	cfg, provider, err := r.resolveExact(ctx, modelName, cacheKey, domain.CapEmbedding)
+	if err != nil {
+		return ProviderConfig{}, nil, err
+	}
+	proto, ok := r.embedProtos[provider.Kind]
+	if !ok {
+		return ProviderConfig{}, nil, fmt.Errorf("model registry: no embed protocol for %q", provider.Kind)
+	}
+	return cfg, proto, nil
+}
+
 // chatFromEntry 从缓存 entry 取出 chat 协议并校验协议存在。
 func (r *ModelRegistry) chatFromEntry(e *resolvedEntry) (ProviderConfig, ChatProtocol, error) {
 	proto, ok := r.chatProtos[e.provider.Kind]
@@ -450,11 +470,13 @@ type FallbackCandidate struct {
 	Protocol ChatProtocol
 }
 
-// ResolveFallbackCandidates 有序列举主模型之外的可用 chat 模型（上限
+// ResolveFallbackCandidates 有序列举主模型之外的可用 chat 模型（总链长上限
 // constants.MaxModelFallbackCandidates），供 Gateway 在瞬态失败时降级。
-// 排序：与主模型同 provider 优先 → Recommended desc → name asc；
-// 跳过 disabled provider 与不支持 chat 协议的模型。primary 必须可解析，
-// 否则调用方无法发起主调用，直接返回解析错误。
+// 显式候选优先：主模型显式配置的 FallbackCandidates 按配置顺序优先入链，
+// 单项失效（退役/禁用/不健康/协议不支持）容错跳过；不足上限时由隐式规则
+// 兜底补齐（排除显式配置名，按同 provider 优先 → Recommended desc →
+// name asc 排序）。primary 必须可解析，否则调用方无法发起主调用，直接返回
+// 解析错误。
 func (r *ModelRegistry) ResolveFallbackCandidates(ctx context.Context, primary string) ([]FallbackCandidate, error) {
 	primaryCfg, _, err := r.Resolve(ctx, primary)
 	if err != nil {
@@ -466,33 +488,25 @@ func (r *ModelRegistry) ResolveFallbackCandidates(ctx context.Context, primary s
 	if len(primaryCfg.Models) > 0 {
 		resolvedPrimary = primaryCfg.Models[0]
 	}
-	cands, err := r.listFallbackCandidates(ctx, resolvedPrimary, primaryCfg.Name)
+	cands, primaryModel, err := r.listFallbackCandidates(ctx, resolvedPrimary, primaryCfg.Name)
 	if err != nil {
 		return nil, err
 	}
-	sort.SliceStable(cands, func(i, j int) bool { return candidateLess(cands[i], cands[j]) })
-	if len(cands) > constants.MaxModelFallbackCandidates {
-		cands = cands[:constants.MaxModelFallbackCandidates]
+	var explicitNames []string
+	if primaryModel != nil {
+		explicitNames = primaryModel.FallbackCandidates
 	}
-	result := make([]FallbackCandidate, 0, len(cands))
-	for _, c := range cands {
-		cfg := ProviderConfig{
-			Name:        c.provider.Name,
-			BaseURL:     c.provider.BaseURL,
-			APIKey:      c.provider.APIKey,
-			HealthModel: c.provider.DefaultModel,
-			Models:      []string{c.model.Name},
-		}
-		// 复用 TTL 缓存语义：Warm/Resolve 已缓存的 entry 保持有效，
-		// 这里与缓存数据同源（同 modelRepo/providerRepo），直接写回。
-		r.cacheSet("chat:"+c.model.Name, cfg, c.provider, c.model.Capabilities, policyWithProvider(&c.model, &c.provider))
-		proto, ok := r.chatProtos[c.provider.Kind]
-		if !ok {
-			continue
-		}
-		result = append(result, FallbackCandidate{Model: c.model.Name, Config: cfg, Protocol: proto})
+	explicit := r.resolveExplicitFallbackCandidates(primaryModel, cands)
+	implicit := r.listImplicitFallbackCandidates(cands, explicitNames, len(explicit))
+	// appendAssign: explicit 可能与调用方共享底层数组,先拷贝再拼接,避免后续
+	// chain[:N] 截断时意外修改 explicit 的底层数组。
+	chain := make([]FallbackCandidate, 0, len(explicit)+len(implicit))
+	chain = append(chain, explicit...)
+	chain = append(chain, implicit...)
+	if len(chain) > constants.MaxModelFallbackCandidates {
+		chain = chain[:constants.MaxModelFallbackCandidates]
 	}
-	return result, nil
+	return chain, nil
 }
 
 // fallbackCand 是候选模型及其 provider（samePrimary 标记与主模型同 provider）。
@@ -503,29 +517,119 @@ type fallbackCand struct {
 }
 
 // listFallbackCandidates 列举主模型之外的 enabled chat 模型，跳过 disabled
-// provider 与不支持 chat 协议的模型。
-func (r *ModelRegistry) listFallbackCandidates(ctx context.Context, primary, primaryProviderName string) ([]fallbackCand, error) {
+// provider 与不支持 chat 协议的模型；同时返回主模型完整对象（含显式候选配置，
+// 主模型不在 enabled chat 目录时为 nil，此时显式候选视为未配置）。
+func (r *ModelRegistry) listFallbackCandidates(ctx context.Context, primary, primaryProviderName string) ([]fallbackCand, *domain.Model, error) {
 	enabled := true
 	models, err := r.modelRepo.List(ctx, port.ModelFilter{Enabled: &enabled, Capability: domain.CapChat})
 	if err != nil {
-		return nil, fmt.Errorf("model registry: list models: %w", err)
+		return nil, nil, fmt.Errorf("model registry: list models: %w", err)
 	}
-	models = usableModels(models, r.isModelUsable)
-	cands := make([]fallbackCand, 0, len(models))
-	for _, m := range models {
+	// 主模型查找在健康过滤前：主模型可能瞬时不可用（unhealthy），但其显式
+	// 候选配置仍需读取，健康过滤只约束候选集合。
+	var primaryModel *domain.Model
+	for i := range models {
+		if models[i].Name == primary {
+			m := models[i]
+			primaryModel = &m
+			break
+		}
+	}
+	usable := usableModels(models, r.isModelUsable)
+	cands := make([]fallbackCand, 0, len(usable))
+	for _, m := range usable {
 		if m.Name == primary {
 			continue
 		}
 		provider, err := r.providerRepo.Get(ctx, m.ProviderID)
 		if err != nil {
-			return nil, fmt.Errorf("model registry: get provider: %w", err)
+			return nil, nil, fmt.Errorf("model registry: get provider: %w", err)
 		}
 		if !provider.Enabled || !r.supports(provider.Kind, domain.CapChat) {
 			continue
 		}
 		cands = append(cands, fallbackCand{model: m, provider: *provider, samePrimary: provider.Name == primaryProviderName})
 	}
-	return cands, nil
+	return cands, primaryModel, nil
+}
+
+// resolveExplicitFallbackCandidates 解析主模型显式配置的降级候选（有序，保持
+// 配置顺序）。逐项容错：候选不在当前可用 chat 目录（退役/禁用/不健康）、
+// provider 不可用或不支持 chat 协议时跳过该项，绝不因单项失效而中止整条链。
+// 返回实际构造成功的候选；配置名全集由调用方传给隐式兜底做排除，避免同一
+// 模型被显式与隐式重复引入。
+func (r *ModelRegistry) resolveExplicitFallbackCandidates(primaryModel *domain.Model, cands []fallbackCand) []FallbackCandidate {
+	if primaryModel == nil || len(primaryModel.FallbackCandidates) == 0 {
+		return nil
+	}
+	byName := make(map[string]fallbackCand, len(cands))
+	for _, c := range cands {
+		byName[c.model.Name] = c
+	}
+	result := make([]FallbackCandidate, 0, len(primaryModel.FallbackCandidates))
+	for _, name := range primaryModel.FallbackCandidates {
+		c, ok := byName[name]
+		if !ok {
+			continue
+		}
+		if cand, ok := r.buildFallbackCandidate(c); ok {
+			result = append(result, cand)
+		}
+	}
+	return result
+}
+
+// listImplicitFallbackCandidates 从可用候选池排除「显式配置的全部候选名」后，
+// 按同 provider 优先 → Recommended desc → name asc 排序，补齐到上限。已由
+// 显式候选占用的位置不补隐式；显式候选不足上限时隐式填充，保证链有降级
+// 兜底（显式配置项失效时不至于链空）。
+func (r *ModelRegistry) listImplicitFallbackCandidates(cands []fallbackCand, explicitNames []string, explicitUsed int) []FallbackCandidate {
+	if explicitUsed >= constants.MaxModelFallbackCandidates {
+		return nil
+	}
+	excluded := make(map[string]struct{}, len(explicitNames))
+	for _, n := range explicitNames {
+		excluded[n] = struct{}{}
+	}
+	pool := make([]fallbackCand, 0, len(cands))
+	for _, c := range cands {
+		if _, skip := excluded[c.model.Name]; skip {
+			continue
+		}
+		pool = append(pool, c)
+	}
+	sort.SliceStable(pool, func(i, j int) bool { return candidateLess(pool[i], pool[j]) })
+	remaining := constants.MaxModelFallbackCandidates - explicitUsed
+	if len(pool) > remaining {
+		pool = pool[:remaining]
+	}
+	result := make([]FallbackCandidate, 0, len(pool))
+	for _, c := range pool {
+		if cand, ok := r.buildFallbackCandidate(c); ok {
+			result = append(result, cand)
+		}
+	}
+	return result
+}
+
+// buildFallbackCandidate 为单个候选构造可调用配置并写回 TTL 缓存；provider
+// 不支持 chat 协议时返回 ok=false（调用方跳过该项）。
+func (r *ModelRegistry) buildFallbackCandidate(c fallbackCand) (FallbackCandidate, bool) {
+	cfg := ProviderConfig{
+		Name:        c.provider.Name,
+		BaseURL:     c.provider.BaseURL,
+		APIKey:      c.provider.APIKey,
+		HealthModel: c.provider.DefaultModel,
+		Models:      []string{c.model.Name},
+	}
+	// 复用 TTL 缓存语义：Warm/Resolve 已缓存的 entry 保持有效，这里与缓存
+	// 数据同源（同 modelRepo/providerRepo），直接写回。
+	r.cacheSet("chat:"+c.model.Name, cfg, c.provider, c.model.Capabilities, policyWithProvider(&c.model, &c.provider))
+	proto, ok := r.chatProtos[c.provider.Kind]
+	if !ok {
+		return FallbackCandidate{}, false
+	}
+	return FallbackCandidate{Model: c.model.Name, Config: cfg, Protocol: proto}, true
 }
 
 // candidateLess 是 fallback 候选的排序比较：同 provider 优先 → Recommended
@@ -589,6 +693,9 @@ func (r *ModelRegistry) ListModelsByTenantDetails(ctx context.Context) ([]domain
 		}
 		if !provider.Enabled {
 			continue
+		}
+		if r.health != nil {
+			m.Health = r.health.ModelHealth(m.Name)
 		}
 		details = append(details, m)
 	}

@@ -18,18 +18,6 @@ describe('llmApi', () => {
     vi.mocked(api.put).mockReset();
   });
 
-  it('sets default embedding', async () => {
-    await llmApi.setDefaultEmbedding('m1', true);
-
-    expect(api.put).toHaveBeenCalledWith('/admin/models/m1/default-embedding', { enabled: true });
-  });
-
-  it('unsets default embedding', async () => {
-    await llmApi.setDefaultEmbedding('m1', false);
-
-    expect(api.put).toHaveBeenCalledWith('/admin/models/m1/default-embedding', { enabled: false });
-  });
-
   it('toggles a model', async () => {
     await llmApi.toggleModel('m1', false);
 

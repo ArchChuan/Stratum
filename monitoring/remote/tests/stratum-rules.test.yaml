@@ -1101,3 +1101,90 @@ tests:
               description: Tenant tenant-1 had workflow run errors in the last ten minutes (increase 6).
               dashboard_url: /d/stratum-service-overview
               runbook_url: /docs/operations/alerts/business.md#workflow-run-errors
+
+  - name: model unhealthy alert fires after five minutes
+    interval: 1m
+    input_series:
+      - series: 'model_health{model="qwen-plus",status="unhealthy"}'
+        values: '1x8'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: StratumModelUnhealthy
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum
+              environment: remote-test
+              component: llmgateway
+              model: qwen-plus
+              status: unhealthy
+            exp_annotations:
+              summary: 模型持续 unhealthy 超过 5 分钟
+              description: Model qwen-plus has been unhealthy for over five minutes; the resolution chain skips it (fail-closed).
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/alerts/business.md#model-unhealthy
+
+  - name: model degraded does not fire the unhealthy alert
+    interval: 1m
+    input_series:
+      - series: 'model_health{model="qwen-plus",status="degraded"}'
+        values: '1x8'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: StratumModelUnhealthy
+        exp_alerts: []
+
+  - name: memory migration stalled alert fires on no-progress scans
+    interval: 1m
+    input_series:
+      - series: 'memory_migration_stalled_total{tenant_id="tenant-1",from_model="text-embedding-v1",to_model="text-embedding-v3"}'
+        values: '0+1x7'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: StratumMemoryMigrationStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum
+              environment: remote-test
+              component: memory
+              tenant_id: tenant-1
+              from_model: text-embedding-v1
+              to_model: text-embedding-v3
+            exp_annotations:
+              summary: 记忆嵌入迁移扫描停滞
+              description: Migration from text-embedding-v1 to text-embedding-v3 for tenant tenant-1 made no progress across consecutive scans (increase 6).
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/alerts/business.md#memory-migration-stalled
+
+  - name: route fallback surge alert fires above threshold
+    interval: 1m
+    input_series:
+      - series: 'route_fallback_total{from_model="qwen-plus",to_model="qwen-max"}'
+        values: '0+3x10'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: StratumRouteFallbackSurge
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum
+              environment: remote-test
+              component: llmgateway
+              from_model: qwen-plus
+              to_model: qwen-max
+            exp_annotations:
+              summary: 模型降级链回退频次异常升高
+              description: More than 10 route fallbacks in the last fifteen minutes (qwen-plus -> qwen-max, increase 27).
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/alerts/business.md#route-fallback-surge
+
+  - name: route fallback baseline does not fire the surge alert
+    interval: 1m
+    input_series:
+      - series: 'route_fallback_total{from_model="qwen-plus",to_model="qwen-max"}'
+        values: '0+1x8'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: StratumRouteFallbackSurge
+        exp_alerts: []

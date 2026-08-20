@@ -82,6 +82,14 @@ func (r *stubFactRepo) PurgeSuperseded(ctx context.Context, tenantID string, old
 	return 0, nil
 }
 
+func (r *stubFactRepo) CountAll(ctx context.Context, tenantID string) (int, error) {
+	return 0, nil
+}
+
+func (r *stubFactRepo) ListAllFacts(ctx context.Context, tenantID string, limit, offset int) ([]*domain.MemoryFact, error) {
+	return nil, nil
+}
+
 type stubSuperseder struct {
 	judgeFunc func(context.Context, string, string) (*port.SupersedeJudgment, error)
 }

@@ -8,7 +8,23 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 )
+
+// modelHealthMetricsSpy 记录健康状态转移上报（P6），嵌入 NoopMetrics 以满足
+// MetricsProvider 其余方法。
+type modelHealthMetricsSpy struct {
+	observability.NoopMetrics
+	transitions []modelHealthTransition
+}
+
+type modelHealthTransition struct {
+	model, from, to string
+}
+
+func (s *modelHealthMetricsSpy) RecordModelHealthTransition(model, from, to string) {
+	s.transitions = append(s.transitions, modelHealthTransition{model, from, to})
+}
 
 // fakeClock 是可推进的测试时钟，驱动健康状态机的时间相关转移。
 type fakeClock struct {
@@ -156,4 +172,70 @@ func TestHealthRegistry_LastErrorIsRedacted(t *testing.T) {
 	state := reg.Get("model-a")
 	require.NotContains(t, state.LastError, "sk-abc123token")
 	require.NotEmpty(t, state.LastError)
+}
+
+// TestHealthRegistry_ModelHealthProjection 验证目录投影读取：未记录状态返回
+// 空字符串（区别于 Get 的"默认 healthy"，供 UI 区分"尚未探活"），记录后返回
+// 状态字符串（实现 port.ModelHealthProvider）。
+func TestHealthRegistry_ModelHealthProjection(t *testing.T) {
+	clock := newFakeClock(time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC))
+	reg := infrastructure.NewHealthRegistry(clock.Now)
+	const model = "qwen-plus"
+
+	// 未记录：空字符串（未探活）
+	require.Empty(t, reg.ModelHealth(model))
+
+	// 记录成功 → healthy
+	reg.RecordSuccess(model)
+	require.Equal(t, string(infrastructure.ModelHealthHealthy), reg.ModelHealth(model))
+
+	// 连续失败达阈值 → degraded
+	for i := 0; i < 5; i++ {
+		reg.RecordFailure(model, errors.New("upstream 500"))
+	}
+	require.Equal(t, string(infrastructure.ModelHealthDegraded), reg.ModelHealth(model))
+}
+
+// TestHealthRegistry_ReportsTransitionsToMetrics 验证每次状态转移都会上报
+// model_health gauge（from→to），无 metrics 注入时安全跳过（不 panic）。
+func TestHealthRegistry_ReportsTransitionsToMetrics(t *testing.T) {
+	clock := newFakeClock(time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC))
+	spy := &modelHealthMetricsSpy{}
+	reg := infrastructure.NewHealthRegistry(clock.Now).WithMetrics(spy)
+	const model = "qwen-plus"
+
+	// healthy → degraded（连续失败达阈值）。每次调用都上报一次；状态未变时
+	// from==to（保持 healthy=1 活络），达到阈值的那次才转 degraded。
+	for i := 0; i < 5; i++ {
+		reg.RecordFailure(model, errors.New("upstream 500"))
+	}
+	require.Len(t, spy.transitions, 5)
+	require.Equal(t, modelHealthTransition{model: model, from: "healthy", to: "healthy"}, spy.transitions[0])
+	require.Equal(t, modelHealthTransition{model: model, from: "healthy", to: "degraded"}, spy.transitions[4])
+
+	// degraded → unhealthy（超 recovery 窗口）
+	clock.Advance(31 * time.Second)
+	reg.RecordFailure(model, errors.New("upstream 500"))
+	last := spy.transitions[len(spy.transitions)-1]
+	require.Equal(t, modelHealthTransition{model: model, from: "degraded", to: "unhealthy"}, last)
+
+	// unhealthy 到期放行探活 → halfOpen
+	clock.Advance(31 * time.Second)
+	require.True(t, reg.AllowProbe(model))
+	last = spy.transitions[len(spy.transitions)-1]
+	require.Equal(t, modelHealthTransition{model: model, from: "unhealthy", to: "half_open"}, last)
+
+	// halfOpen 探活成功 → healthy（恢复事件）
+	reg.RecordProbe(model, true, nil)
+	last = spy.transitions[len(spy.transitions)-1]
+	require.Equal(t, modelHealthTransition{model: model, from: "half_open", to: "healthy"}, last)
+}
+
+// TestHealthRegistry_WithoutMetricsIsSafe 无 metrics/logger 注入时状态机照常
+// 工作，不 panic（兼容既有测试装配与 db 不可用路径）。
+func TestHealthRegistry_WithoutMetricsIsSafe(t *testing.T) {
+	reg := infrastructure.NewHealthRegistry(nil)
+	reg.RecordSuccess("model-a")
+	reg.RecordFailure("model-a", errors.New("boom"))
+	require.Equal(t, infrastructure.ModelHealthHealthy, reg.Get("model-a").Status)
 }

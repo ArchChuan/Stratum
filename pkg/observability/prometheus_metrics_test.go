@@ -63,6 +63,10 @@ func exerciseAllMetrics(m MetricsProvider) {
 	m.IncKnowledgeJudge("qwen-turbo", "ok")
 	m.IncRouteFallback("qwen-plus", "qwen-turbo")
 	m.RecordBudgetRatio("tenant-1", 42)
+	// Model availability & fallback (P6)
+	m.RecordModelHealthTransition("qwen-plus", "healthy", "unhealthy")
+	m.SetMemoryMigrationProgress("tenant-1", "text-embedding-v1", "text-embedding-v3", "migrating", 30)
+	m.IncMemoryMigrationStalled("tenant-1", "text-embedding-v1", "text-embedding-v3")
 	// Audit / Collab / Optimizer / Operation Gate / Schedule skew
 	m.IncAuditEvent("high", "allowed")
 	m.RecordAuditWriteQueueDepth(3)

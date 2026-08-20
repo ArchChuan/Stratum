@@ -4,6 +4,9 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/safetext"
 )
 
@@ -50,6 +53,10 @@ type HealthRegistry struct {
 	models    map[string]*modelHealth
 	threshold int
 	recovery  time.Duration
+	// metrics / logger 可选：wiring 注入后上报 model_health gauge 与健康变化
+	// 事件日志；均为 nil 时完全无副作用（测试与无观测装配安全）。
+	metrics observability.MetricsProvider
+	logger  *zap.Logger
 }
 
 // NewHealthRegistry 构造健康 registry。now 为 nil 时使用 time.Now；
@@ -67,6 +74,35 @@ func NewHealthRegistry(now func() time.Time) *HealthRegistry {
 	}
 }
 
+// WithMetrics 注入指标上报（P6：model_health gauge + 健康变化事件日志）。
+func (r *HealthRegistry) WithMetrics(m observability.MetricsProvider) *HealthRegistry {
+	r.metrics = m
+	return r
+}
+
+// WithLogger 注入结构化日志器，用于健康变化事件日志（降级 WARN / 恢复 INFO）。
+func (r *HealthRegistry) WithLogger(l *zap.Logger) *HealthRegistry {
+	r.logger = l
+	return r
+}
+
+// report 在模型健康状态 from→to 转移后上报指标并记录事件日志。调用方持有写锁。
+func (r *HealthRegistry) report(model string, from, to ModelHealth) {
+	if r.metrics != nil {
+		r.metrics.RecordModelHealthTransition(model, string(from), string(to))
+	}
+	if r.logger == nil || from == to {
+		return
+	}
+	if to == ModelHealthHealthy {
+		r.logger.Info("model.health.recovered",
+			zap.String("model", model), zap.String("from", string(from)))
+		return
+	}
+	r.logger.Warn("model.health.degraded",
+		zap.String("model", model), zap.String("from", string(from)), zap.String("to", string(to)))
+}
+
 // entry 返回模型的状态机条目，不存在则初始化 healthy。
 func (r *HealthRegistry) entry(model string) *modelHealth {
 	e, ok := r.models[model]
@@ -82,11 +118,13 @@ func (r *HealthRegistry) RecordSuccess(model string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	e := r.entry(model)
+	from := e.status
 	e.status = ModelHealthHealthy
 	e.failures = 0
 	e.lastCheckAt = r.now()
 	e.lastError = ""
 	e.probing = false
+	r.report(model, from, ModelHealthHealthy)
 }
 
 // RecordFailure 记录一次失败调用，按当前状态转移：
@@ -101,6 +139,7 @@ func (r *HealthRegistry) RecordFailure(model string, err error) {
 	defer r.mu.Unlock()
 	e := r.entry(model)
 	now := r.now()
+	from := e.status
 	e.failures++
 	e.lastFailure = now
 	e.lastCheckAt = now
@@ -123,6 +162,7 @@ func (r *HealthRegistry) RecordFailure(model string, err error) {
 	case ModelHealthUnhealthy:
 		// 保持；由 AllowProbe 到期放行探测。
 	}
+	r.report(model, from, e.status)
 }
 
 // RecordProbe 记录一次主动探活结果。成功等同 RecordSuccess。失败比被动
@@ -138,6 +178,7 @@ func (r *HealthRegistry) RecordProbe(model string, ok bool, err error) {
 	defer r.mu.Unlock()
 	e := r.entry(model)
 	now := r.now()
+	from := e.status
 	e.failures++
 	e.lastFailure = now
 	e.lastCheckAt = now
@@ -158,6 +199,7 @@ func (r *HealthRegistry) RecordProbe(model string, ok bool, err error) {
 	case ModelHealthUnhealthy:
 		// 保持；由 AllowProbe 到期放行探测。
 	}
+	r.report(model, from, e.status)
 }
 
 // AllowProbe 判定探活 worker 是否应放行一次探测请求：
@@ -169,11 +211,13 @@ func (r *HealthRegistry) AllowProbe(model string) bool {
 	defer r.mu.Unlock()
 	e := r.entry(model)
 	now := r.now()
+	from := e.status
 	switch e.status {
 	case ModelHealthUnhealthy:
 		if now.Sub(e.lastFailure) >= r.recovery {
 			e.status = ModelHealthHalfOpen
 			e.probing = true
+			r.report(model, from, ModelHealthHalfOpen)
 			return true
 		}
 		return false
@@ -220,4 +264,18 @@ func (r *HealthRegistry) All() []ModelHealthState {
 		})
 	}
 	return out
+}
+
+// ModelHealth 返回模型健康状态字符串（healthy/degraded/unhealthy/half_open），
+// 未记录状态返回空字符串（区别于 Get 的"默认 healthy"：目录投影需区分
+// "尚未探活"与"探活确认健康"）。实现 port.ModelHealthProvider，供 application
+// 目录投影附加到响应。
+func (r *HealthRegistry) ModelHealth(model string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	e, ok := r.models[model]
+	if !ok {
+		return ""
+	}
+	return string(e.status)
 }

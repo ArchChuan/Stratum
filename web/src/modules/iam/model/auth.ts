@@ -49,6 +49,9 @@ export const tenantSettingsSchema = z
     tenant_id: z.string().optional(),
     tenant_name: z.string().optional().default(''),
     is_default: z.boolean().optional().default(false),
+    // tenants.settings JSONB 全量透传（memory_embedding_model 等键）；未知键
+    // strip 不阻塞解析，显式读取时按需取值。
+    settings: z.record(z.string(), z.unknown()).optional().default({}),
   })
   .strip();
 export type TenantSettings = z.infer<typeof tenantSettingsSchema>;

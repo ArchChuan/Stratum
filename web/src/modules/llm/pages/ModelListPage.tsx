@@ -12,13 +12,13 @@ import {
   Select,
   Switch,
   Table,
-  Tag,
   Typography,
 } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
 
 import { ModelCapabilityTags } from '../components/ModelCapabilityTags';
 import { ModelEditDrawer } from '../components/ModelEditDrawer';
+import { ModelHealthBadge } from '../components/ModelHealthBadge';
 import { useModels } from '../hooks/useModels';
 import type { Model, ModelCapability, UpdateModelInput, UpdateModelPolicyInput } from '../model/llm';
 
@@ -36,13 +36,11 @@ const CAP_FILTER_OPTIONS: { label: string; value: ModelCapability }[] = [
 ];
 
 export function ModelListPage() {
-  const { models, loading, refresh, toggleModel, updateModel, updateModelPolicy, deleteModel, setDefaultEmbedding } =
-    useModels();
+  const { models, loading, refresh, toggleModel, updateModel, updateModelPolicy, deleteModel } = useModels();
   const [capFilter, setCapFilter] = useState<ModelCapability | undefined>();
   const [editModel, setEditModel] = useState<Model | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [editLoading, setEditLoading] = useState(false);
-  const [defaultLoading, setDefaultLoading] = useState<string | null>(null);
 
   const filtered = useMemo(
     () =>
@@ -70,18 +68,6 @@ export function ModelListPage() {
       }
     },
     [updateModel, updateModelPolicy],
-  );
-
-  const handleSetDefault = useCallback(
-    async (record: Model) => {
-      setDefaultLoading(record.id);
-      try {
-        await setDefaultEmbedding(record.id, !record.defaultEmbedding);
-      } finally {
-        setDefaultLoading(null);
-      }
-    },
-    [setDefaultEmbedding],
   );
 
   const handleDelete = useCallback(
@@ -118,11 +104,6 @@ export function ModelListPage() {
               推荐
             </Text>
           )}
-          {record.defaultEmbedding && (
-            <Tag color="purple" style={{ marginLeft: 6, fontSize: 12 }}>
-              默认嵌入
-            </Tag>
-          )}
         </span>
       ),
     },
@@ -155,6 +136,13 @@ export function ModelListPage() {
       render: (v: number) => (v ? v.toLocaleString() : '-'),
     },
     {
+      title: '健康',
+      dataIndex: 'health',
+      key: 'health',
+      width: 100,
+      render: (health: string | undefined) => <ModelHealthBadge health={health} />,
+    },
+    {
       title: '状态',
       dataIndex: 'enabled',
       key: 'enabled',
@@ -176,16 +164,6 @@ export function ModelListPage() {
           <Button size="small" onClick={() => handleEdit(record)}>
             编辑
           </Button>
-          {record.capabilities.includes('embedding') && record.enabled && (
-            <Button
-              size="small"
-              type={record.defaultEmbedding ? 'default' : 'primary'}
-              loading={defaultLoading === record.id}
-              onClick={() => void handleSetDefault(record)}
-            >
-              {record.defaultEmbedding ? '取消默认' : '设为默认'}
-            </Button>
-          )}
           <Button
             size="small"
             danger

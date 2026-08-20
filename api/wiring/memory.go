@@ -10,6 +10,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/config"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	memory "github.com/byteBuilderX/stratum/internal/memory/application"
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
@@ -31,12 +32,13 @@ import (
 // follows the same availability (depends on the shared NATS connection),
 // and needs no shutdown code (no goroutines).
 type Memory struct {
-	Manager   *memory.MemoryManager
-	Service   *memory.MemoryService
-	Injector  port.MemoryInjector
-	Pipeline  *pipeline.Pipeline
-	DLQReplay *pipeline.ReplayService
-	RecallFn  port.RecallMemoryFn
+	Manager          *memory.MemoryManager
+	Service          *memory.MemoryService
+	MigrationService *memory.MemoryMigrationService
+	Injector         port.MemoryInjector
+	Pipeline         *pipeline.Pipeline
+	DLQReplay        *pipeline.ReplayService
+	RecallFn         port.RecallMemoryFn
 }
 
 type memoryGatewayCompleter interface {
@@ -151,9 +153,63 @@ func (c *Container) buildMemory(ctx context.Context) error {
 	c.buildMemoryService(mem, db, memRepo)
 	c.buildMemoryInjector(mem, db)
 	c.buildMemoryRecall(mem, db)
+	c.buildMemoryMigration(mem, db)
 
 	c.Memory = mem
 	return c.buildMemoryPipeline(mem, db)
+}
+
+// buildMemoryMigration 装配 P5 记忆嵌入模型平滑迁移服务（确认制切换 + 后台回填）。
+// 依赖 DB + Milvus；任一缺失则迁移服务保持 nil（fail-closed：无迁移能力，
+// 管理界面不展示迁移操作）。embed resolver 复用 knowledge 的 per-tenant+per-model
+// 解析（buildKnowledgeEmbedResolver，fail-closed——目标模型不可解析时回填标 failed）。
+func (c *Container) buildMemoryMigration(mem *Memory, db *pgxpool.Pool) {
+	if db == nil || c.Storage == nil || c.Storage.Milvus == nil {
+		return
+	}
+	svc := memory.NewMemoryMigrationService(
+		persistence.NewMigrationRepo(db),
+		persistence.NewFactRepo(db),
+		persistence.NewMilvusPortAdapter(c.Storage.Milvus),
+		c.Logger,
+	)
+	if c.Knowledge != nil && c.Knowledge.KnowledgeResolver != nil {
+		svc.SetEmbedResolver(makeMigrationEmbedResolver(c.Knowledge.KnowledgeResolver))
+	}
+	// P6 监控：迁移进度 gauge / 停滞计数器上报到导出 /metrics 的同一 registry
+	// （Platform.Metrics 与 LLMGateway.Metrics 同实例）。未装配时 NoopMetrics 安全跳过。
+	if c.LLMGateway != nil && c.LLMGateway.Metrics != nil {
+		svc.SetMetrics(c.LLMGateway.Metrics)
+	}
+	// IAM 在 memory 之后构建：闭包延迟读取 c.IAM，运行时才解引用
+	// （与 agentResourceParamResolver 的 lazy-closure 模式一致）。
+	svc.SetTenantLister(func(ctx context.Context) ([]string, error) {
+		if c.IAM == nil || c.IAM.TenantRepo == nil {
+			return nil, fmt.Errorf("memory migration: tenant repo not wired")
+		}
+		return c.IAM.TenantRepo.ListActiveTenantIDs(ctx)
+	})
+	svc.SetEffectiveModelSetter(func(ctx context.Context, tenantID, model string) error {
+		if c.IAM == nil || c.IAM.TenantService == nil {
+			return fmt.Errorf("memory migration: tenant service not wired")
+		}
+		return c.IAM.TenantService.SetSetting(ctx, tenantID, "memory_embedding_model", model)
+	})
+	mem.MigrationService = svc
+}
+
+// makeMigrationEmbedResolver 把 knowledge 的 per-tenant+per-model 嵌入解析器适配为
+// 迁移服务的 memport.EmbedClient 解析器。knowledge.EmbedClient 是 pipeline.EmbedClient
+// 的接口超集（多 EmbedBatch），显式接口转换后经 NewEmbedClientAdapter 适配；nil 传播
+// （fail-closed，backfill 因 embed 不可用标 failed，与 buildEmbedResolver 一致）。
+func makeMigrationEmbedResolver(embedRes knowledge.EmbedResolver) memory.EmbedClientResolverByModel {
+	return func(ctx context.Context, tenantID, model string) memport.EmbedClient {
+		ec := embedRes(ctx, tenantID, model)
+		if ec == nil {
+			return nil
+		}
+		return pipeline.NewEmbedClientAdapter(pipeline.EmbedClient(ec))
+	}
 }
 
 func (c *Container) buildMemoryService(mem *Memory, db *pgxpool.Pool, memRepo memport.MemoryRepo) {
@@ -279,16 +335,18 @@ func (c *Container) buildMemoryPipeline(mem *Memory, db *pgxpool.Pool) error {
 	return nil
 }
 
-// resolveEmbeddingDim 按租户默认 embedding 模型查维度表；模型未配置或解析失败
-// 时回退 1536（既有默认），保证 create-collection 维度始终可计算。
-// 独立成方法以保持 buildMemoryPipeline 复杂度在基线内。
+// resolveEmbeddingDim 按租户显式配置的记忆嵌入模型查维度表；未配置或解析失败
+// 返回 0 → MilvusVectorAdapter 跳过建 collection（fail-closed），不再回退
+// 1536 全局兜底。独立成方法以保持 buildMemoryPipeline 复杂度在基线内。
 func (c *Container) resolveEmbeddingDim(ctx context.Context, tenantID string) int {
-	if c.LLMGateway != nil && c.LLMGateway.Registry != nil {
-		if model, err := c.LLMGateway.Registry.ResolveDefaultEmbeddingModel(ctx); err == nil && model != "" {
-			return constants.DimensionForModel(model)
-		}
+	if c.LLMGateway == nil || c.LLMGateway.TenantEmbeddingResolver == nil {
+		return 0
 	}
-	return 1536
+	model, err := c.LLMGateway.TenantEmbeddingResolver.ResolveMemoryEmbeddingModel(ctx, tenantID)
+	if err != nil || model == "" {
+		return 0
+	}
+	return constants.DimensionForModel(model)
 }
 
 // attachPipelineDynamic 桥接热更新管道：config 层动态配置 → atomic 指针 →
@@ -359,14 +417,17 @@ func (a injectorAdapter) BuildContext(ctx context.Context, ic port.InjectionCont
 	})
 }
 
+// memoryWorker 是记忆后台 worker 的生命周期接口。
+type memoryWorker interface {
+	Start(context.Context)
+	Stop()
+}
+
 // BuildMemoryWorkers constructs memory background workers.
 // TenantWatcher replaces the static per-tenant startup loop — new tenants are
 // automatically picked up on the next 60s reconcile tick.
 // BufferScanner is global (Redis key names encode tenantID).
-func BuildMemoryWorkers(c *Container) []interface {
-	Start(context.Context)
-	Stop()
-} {
+func BuildMemoryWorkers(c *Container) []memoryWorker {
 	if c.Memory == nil || c.Memory.Service == nil {
 		return nil
 	}
@@ -399,10 +460,7 @@ func BuildMemoryWorkers(c *Container) []interface {
 			buildWorkerLLMResolver(llmRes), c.memoryPlatformParamResolver(), c.Logger)
 	}, c.Logger)
 
-	result := []interface {
-		Start(context.Context)
-		Stop()
-	}{watcher}
+	result := []memoryWorker{watcher}
 
 	if c.Storage != nil && c.Storage.Redis != nil {
 		store := persistence.NewRedisMessageBufferStore(c.Storage.Redis.Client())
@@ -411,7 +469,16 @@ func BuildMemoryWorkers(c *Container) []interface {
 		result = append(result, scanner)
 	}
 
-	return result
+	return appendMigrationWorker(result, c)
+}
+
+// appendMigrationWorker 追加记忆嵌入模型平滑迁移回填 worker：确认制切换后由该
+// worker 轮询所有租户的 active 迁移并渐进 re-embed 存量事实到目标模型 collection。
+func appendMigrationWorker(workers []memoryWorker, c *Container) []memoryWorker {
+	if c.Memory == nil || c.Memory.MigrationService == nil {
+		return workers
+	}
+	return append(workers, c.Memory.MigrationService)
 }
 
 func buildWorkerLLMResolver(llmRes *tenantCapabilityResolver) memworkers.TenantLLMResolver {

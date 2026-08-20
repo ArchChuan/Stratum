@@ -47,4 +47,12 @@ type FactRepo interface {
 	// archived facts are durable long-term memory and are never purged here.
 	// Returns the number of rows deleted.
 	PurgeSuperseded(ctx context.Context, tenantID string, olderThan time.Time, limit int) (int, error)
+
+	// CountAll 统计租户 memory_facts 的全部行数（任意状态）——迁移开始时的
+	// 快照总数（progress.total），口径不随迁移期间并发写入漂移。
+	CountAll(ctx context.Context, tenantID string) (int, error)
+
+	// ListAllFacts 分页返回租户全部事实（任意状态，按 created_at, id 稳定排序），
+	// 作为迁移回填的主数据源（key=fact.ID 幂等 Upsert，断点续传按 offset 推进）。
+	ListAllFacts(ctx context.Context, tenantID string, limit, offset int) ([]*domain.MemoryFact, error)
 }

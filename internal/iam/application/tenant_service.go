@@ -183,6 +183,26 @@ func (s *TenantService) UpdateSettings(ctx context.Context, tenantID, callerRole
 	return nil
 }
 
+// SetSetting 系统级写入单个租户设置键（供 wiring 启动 seed 等系统内部路径
+// 使用，无调用方角色校验；调用方须确认拥有系统权限）。读-合-写保证不覆盖
+// 其他键；llm_api_keys 禁止经此路径写入。失败路径与 UpdateSettings 一致：
+// 读取失败 fail-closed，损坏 JSON 不得被覆盖。
+func (s *TenantService) SetSetting(ctx context.Context, tenantID, key string, value any) error {
+	if key == "llm_api_keys" {
+		return ErrInvalidSettings
+	}
+	merged, err := s.readSettingsBaseline(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	merged[key] = value
+	settingsJSON, err := json.Marshal(merged)
+	if err != nil {
+		return ErrInvalidSettings
+	}
+	return s.repo.UpdateTenantSettings(ctx, tenantID, settingsJSON)
+}
+
 // readSettingsBaseline loads the stored tenant settings and parses them into
 // a merge baseline. Fail closed: a read failure or corrupt stored JSON must
 // never be replaced by an empty baseline.

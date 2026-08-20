@@ -136,18 +136,35 @@ const hasMemoryParameter = (parameters: unknown, key: string): boolean =>
 
 export interface GroupedModelOption {
   provider: string;
-  models: { value: string; label: string; reasoning: boolean; contextWindow?: number; maxTokens?: number }[];
+  models: {
+    value: string;
+    label: string;
+    reasoning: boolean;
+    contextWindow?: number;
+    maxTokens?: number;
+    // 运行时健康状态（healthy/degraded/unhealthy/half_open）；缺失 = 未探活。
+    health?: string;
+  }[];
 }
 
 // 按厂商聚合模型下拉选项（创建/编辑 Agent 页共用）。
 // capabilities 可选：缺失时按默认推理名单推断（见 isReasoningModel），
-// 避免调用方为拿能力标志额外加一次请求。
+// 避免调用方为拿能力标志额外加一次请求。health 透传模型运行时状态，
+// 供选择器按不可用模型禁用/打标（缺失时不推断健康）。
 export const buildGroupedModels = (
-  models: Array<{ providerId: string; name: string; displayName?: string; capabilities?: string[]; contextWindow?: number; maxTokens?: number }>,
+  models: Array<{
+    providerId: string;
+    name: string;
+    displayName?: string;
+    capabilities?: string[];
+    contextWindow?: number;
+    maxTokens?: number;
+    health?: string;
+  }>,
   providers: Array<{ id: string; name: string }>,
 ): GroupedModelOption[] => {
   const providerMap = new Map(providers.map((p) => [p.id, p.name]));
-  const grouped = new Map<string, { value: string; label: string; reasoning: boolean; contextWindow?: number; maxTokens?: number }[]>();
+  const grouped = new Map<string, GroupedModelOption['models']>();
   for (const m of models) {
     const providerName = providerMap.get(m.providerId) || m.providerId;
     if (!grouped.has(providerName)) grouped.set(providerName, []);
@@ -157,6 +174,7 @@ export const buildGroupedModels = (
       reasoning: isReasoningModel(m),
       contextWindow: m.contextWindow,
       maxTokens: m.maxTokens,
+      health: m.health,
     });
   }
   return Array.from(grouped.entries()).map(([provider, modelOptions]) => ({

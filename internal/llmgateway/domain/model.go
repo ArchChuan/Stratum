@@ -53,30 +53,40 @@ const (
 // ContextWindow is the total context capacity (input + output), not only the
 // provider's input limit. MaxTemperature is a sampling upper bound.
 type Model struct {
-	ID                      string            `json:"id"`
-	ProviderID              string            `json:"providerId"`
-	Name                    string            `json:"name"`
-	DisplayName             string            `json:"displayName"`
-	Capabilities            []ModelCapability `json:"capabilities"`
-	ContextWindow           int               `json:"contextWindow"`
-	MaxTokens               int               `json:"maxTokens"`
-	OperatorContextWindow   *int              `json:"operatorContextWindow,omitempty"`
-	OperatorMaxTokens       *int              `json:"operatorMaxTokens,omitempty"`
-	DefaultOutputTokens     *int              `json:"defaultOutputTokens,omitempty"`
-	ContextWindowSource     CapabilitySource  `json:"contextWindowSource"`
-	MaxTokensSource         CapabilitySource  `json:"maxTokensSource"`
-	ContextWindowObservedAt *time.Time        `json:"contextWindowObservedAt,omitempty"`
-	MaxTokensObservedAt     *time.Time        `json:"maxTokensObservedAt,omitempty"`
-	InputPrice              float64           `json:"inputPrice"`
-	OutputPrice             float64           `json:"outputPrice"`
-	Recommended             bool              `json:"recommended"`
-	DefaultEmbedding        bool              `json:"defaultEmbedding"`
-	Enabled                 bool              `json:"enabled"`
-	ProviderManaged         bool              `json:"providerManaged"`
-	SamplingParams          *SamplingParams   `json:"samplingParams,omitempty"`
-	MaxTemperature          *float64          `json:"maxTemperature,omitempty"`
-	CreatedAt               time.Time         `json:"createdAt"`
-	UpdatedAt               time.Time         `json:"updatedAt"`
+	ID                    string            `json:"id"`
+	ProviderID            string            `json:"providerId"`
+	Name                  string            `json:"name"`
+	DisplayName           string            `json:"displayName"`
+	Capabilities          []ModelCapability `json:"capabilities"`
+	ContextWindow         int               `json:"contextWindow"`
+	MaxTokens             int               `json:"maxTokens"`
+	OperatorContextWindow *int              `json:"operatorContextWindow,omitempty"`
+	OperatorMaxTokens     *int              `json:"operatorMaxTokens,omitempty"`
+	DefaultOutputTokens   *int              `json:"defaultOutputTokens,omitempty"`
+	// FallbackCandidates 是平台为模型显式配置的降级候选模型名（有序，最优先在
+	// 前）。解析链降级时显式候选优先，不足由注册表按隐式规则补齐到上限。仅对
+	// chat 能力有意义；候选须存在、enabled 且支持 chat，写入时 application 层
+	// fail-closed 校验，运行期解析仍逐项容错跳过失效候选。
+	FallbackCandidates      []string         `json:"fallbackCandidates,omitempty"`
+	ContextWindowSource     CapabilitySource `json:"contextWindowSource"`
+	MaxTokensSource         CapabilitySource `json:"maxTokensSource"`
+	ContextWindowObservedAt *time.Time       `json:"contextWindowObservedAt,omitempty"`
+	MaxTokensObservedAt     *time.Time       `json:"maxTokensObservedAt,omitempty"`
+	InputPrice              float64          `json:"inputPrice"`
+	OutputPrice             float64          `json:"outputPrice"`
+	Recommended             bool             `json:"recommended"`
+	DefaultEmbedding        bool             `json:"defaultEmbedding"`
+	Enabled                 bool             `json:"enabled"`
+	ProviderManaged         bool             `json:"providerManaged"`
+	// Health 是模型运行时健康状态（非持久化列），由目录投影填充。取值与
+	// llmgateway infrastructure 的 ModelHealth 一致（healthy/degraded/
+	// unhealthy/half_open）；空字符串表示尚未探活。仅用于展示与降级提示，
+	// 不参与解析决策。
+	Health         string          `json:"health,omitempty"`
+	SamplingParams *SamplingParams `json:"samplingParams,omitempty"`
+	MaxTemperature *float64        `json:"maxTemperature,omitempty"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	UpdatedAt      time.Time       `json:"updatedAt"`
 }
 
 // EffectiveModelPolicy is the immutable policy projection consumed by runtime

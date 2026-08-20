@@ -1,7 +1,13 @@
-import { Alert, Button, Descriptions, Divider, Drawer, Form, Input, InputNumber, Select, Space, Switch } from 'antd';
-import { useEffect } from 'react';
+import { Alert, Button, Descriptions, Divider, Drawer, Form, Input, InputNumber, message, Select, Space, Switch } from 'antd';
+import { useEffect, useState } from 'react';
 
 import type { Model, ModelCapability, UpdateModelInput, UpdateModelPolicyInput } from '../model/llm';
+
+import { llmApi } from '@/modules/llm';
+import { ModelHealthBadge } from '@/modules/llm/components/ModelHealthBadge';
+import { extractErrorMessage } from '@/shared/lib';
+
+const { Option } = Select;
 
 const CAP_OPTIONS: { label: string; value: ModelCapability }[] = [
   { label: '对话', value: 'chat' },
@@ -23,6 +29,29 @@ type EditValues = UpdateModelInput & UpdateModelPolicyInput;
 
 export function ModelEditDrawer({ open, model, onClose, onSubmit, loading }: Props) {
   const [form] = Form.useForm<EditValues>();
+  const [chatModels, setChatModels] = useState<Model[]>([]);
+
+  // 拉取 chat 模型目录供降级候选多选（排除当前模型自身在渲染时过滤）。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const models = await llmApi.listModels({ capability: 'chat' });
+        if (!cancelled) setChatModels(models);
+      } catch (err) {
+        if (!cancelled) {
+          message.error({ content: extractErrorMessage(err, '加载降级候选模型目录失败'), duration: 0 });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 不可用模型禁用：与后端解析链 isModelUsable 语义一致（unhealthy/halfOpen
+  // fail-closed 不选中），degraded 仍可选。
+  const isUnusable = (health?: string) => health === 'unhealthy' || health === 'half_open';
 
   useEffect(() => {
     if (model) {
@@ -35,6 +64,7 @@ export function ModelEditDrawer({ open, model, onClose, onSubmit, loading }: Pro
         operatorContextWindow: model.operatorContextWindow,
         operatorMaxTokens: model.operatorMaxTokens,
         defaultOutputTokens: model.defaultOutputTokens,
+        fallbackCandidates: model.fallbackCandidates ?? [],
       });
     }
   }, [model, form]);
@@ -71,6 +101,7 @@ export function ModelEditDrawer({ open, model, onClose, onSubmit, loading }: Pro
         operatorContextWindow: v.operatorContextWindow,
         operatorMaxTokens: v.operatorMaxTokens,
         defaultOutputTokens: v.defaultOutputTokens,
+        fallbackCandidates: v.fallbackCandidates,
       })}>
         <Form.Item name="displayName" label="显示名称">
           <Input placeholder={model?.name || ''} />
@@ -112,6 +143,31 @@ export function ModelEditDrawer({ open, model, onClose, onSubmit, loading }: Pro
         </Form.Item>
         <Form.Item name="defaultOutputTokens" label="默认输出预算 (tokens)">
           <InputNumber min={1} style={{ width: '100%' }} placeholder="协议默认" />
+        </Form.Item>
+        <Form.Item
+          name="fallbackCandidates"
+          label="降级候选模型"
+          extra="主模型失败时按顺序降级，最多 3 个；留空由平台按隐式规则补齐。"
+        >
+          <Select
+            mode="multiple"
+            allowClear
+            showSearch
+            optionFilterProp="children"
+            maxCount={3}
+            placeholder="选择候选（可多选）"
+          >
+            {chatModels
+              .filter((m) => m.name !== model?.name)
+              .map((m) => (
+                <Option key={m.name} value={m.name} disabled={isUnusable(m.health)}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    {m.displayName || m.name}
+                    <ModelHealthBadge health={m.health} />
+                  </span>
+                </Option>
+              ))}
+          </Select>
         </Form.Item>
         <Form.Item name="inputPrice" label="输入价格 ($/1M tokens)">
           <InputNumber min={0} step={0.01} style={{ width: '100%' }} placeholder="0" />

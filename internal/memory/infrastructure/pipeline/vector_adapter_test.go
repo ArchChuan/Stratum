@@ -1,7 +1,10 @@
 package pipeline
 
 import (
+	"context"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
 )
@@ -60,5 +63,35 @@ func TestEmbeddingServiceExposesModel(t *testing.T) {
 	svc := embedding.NewEmbeddingServiceWithModel(nil, "text-embedding-v3", nil)
 	if got := svc.Model(); got != "text-embedding-v3" {
 		t.Errorf("Model() = %q", got)
+	}
+}
+
+// TestEnsureCollectionFailClosedWhenNoDim pins the fail-closed gate in
+// ensureCollection: when the tenant's explicit embedding model cannot be
+// resolved to a dimension (dim ≤ 0), no collection is created and the error
+// propagates so the upstream Upsert fails → message goes to DLQ. A nil
+// VectorStore is safe here precisely because the error is returned before
+// the store is ever touched — proving we never fall back to a default
+// dimension and create a mis-shaped collection.
+func TestEnsureCollectionFailClosedWhenNoDim(t *testing.T) {
+	tests := []struct {
+		name string
+		dim  int
+	}{
+		{name: "dim zero", dim: 0},
+		{name: "dim negative", dim: -1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a := NewMilvusVectorAdapter(nil).WithDimResolver(func(context.Context, string) int {
+				return tc.dim
+			})
+			err := a.ensureCollection(context.Background(), "t1", "embedding-3")
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "no embedding model configured")
+			// fail-closed 路径绝不把集合标记为已创建。
+			_, marked := a.ensured.Load("t1/embedding-3")
+			require.False(t, marked)
+		})
 	}
 }

@@ -27,6 +27,9 @@ export interface Model {
   operatorContextWindow?: number;
   operatorMaxTokens?: number;
   defaultOutputTokens?: number;
+  // fallbackCandidates 是平台为模型显式配置的降级候选模型名（有序，最优先在
+  // 前）；未配置时由注册表按隐式规则补齐。
+  fallbackCandidates?: string[];
   contextWindowSource?: string;
   maxTokensSource?: string;
   inputPrice: number;
@@ -35,6 +38,8 @@ export interface Model {
   defaultEmbedding: boolean;
   enabled: boolean;
   providerManaged: boolean;
+  // 运行时健康状态（healthy/degraded/unhealthy/half_open）；未探活时为 undefined。
+  health?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -68,4 +73,7 @@ export interface UpdateModelPolicyInput {
   operatorContextWindow?: number | null;
   operatorMaxTokens?: number | null;
   defaultOutputTokens?: number | null;
+  // fallbackCandidates PATCH 语义：undefined=不发送（保留现值）；null=保留；
+  // 数组（含空）= 覆盖，空数组即清空显式候选、恢复纯隐式兜底。
+  fallbackCandidates?: string[] | null;
 }

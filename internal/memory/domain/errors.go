@@ -52,4 +52,21 @@ var (
 
 	// ErrFactSourceConflict is returned when one source identity is reused for a different payload.
 	ErrFactSourceConflict = errors.New("memory fact source identity payload conflict")
+
+	// ErrMigrationAlreadyActive 租户已有进行中迁移（唯一 active 不变量），拒绝重复触发。
+	ErrMigrationAlreadyActive = errors.New("memory migration already active")
+	// ErrMigrationNotFound 迁移记录不存在。
+	ErrMigrationNotFound = errors.New("memory migration not found")
+	// ErrMigrationInvalidTenant 迁移租户为空。
+	ErrMigrationInvalidTenant = errors.New("memory migration tenant required")
+	// ErrMigrationEmptyModel 迁移起止模型不能为空。
+	ErrMigrationEmptyModel = errors.New("memory migration model required")
+	// ErrMigrationSameModel 起止模型相同，无迁移必要。
+	ErrMigrationSameModel = errors.New("memory migration from and to model must differ")
+	// ErrMigrationNotActive 迁移不在 migrating 状态，无法推进/完成（已被取消或失败）。
+	ErrMigrationNotActive = errors.New("memory migration not active")
+	// ErrMigrationProgressRegressed 进度不得回退（断点续传单调不减）。
+	ErrMigrationProgressRegressed = errors.New("memory migration progress regressed")
+	// ErrMigrationNotRetryable 只有 failed/canceled 迁移可重试。
+	ErrMigrationNotRetryable = errors.New("memory migration not retryable")
 )

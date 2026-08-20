@@ -217,6 +217,19 @@ const (
 	MemorySupersededRetention  = 90 * 24 * time.Hour // purge superseded after 90 days
 )
 
+// MemoryMigration — 记忆嵌入模型平滑迁移（P5）回填 worker 与成本预览参数。
+const (
+	// MemoryMigrationScanInterval 回填 worker 轮询所有租户待处理迁移的间隔。
+	// 值 ≤1min：管理员确认切换后，迁移应在秒级内被 worker 拾起开始渐进回填。
+	MemoryMigrationScanInterval = 30 * time.Second
+	// MemoryMigrationPageSize 回填单次从 memory_facts 读取并批量 re-embed 的行数。
+	// 与 MemoryEmbedBatchSize 同级，控制单次 Milvus Upsert 的批次大小。
+	MemoryMigrationPageSize = 50
+	// MemoryMigrationPerFactEstimateMS 成本预览对单条事实 embed+upsert 的耗时
+	// 估算（毫秒），仅用于 UI 展示预计时长，非精确计量。
+	MemoryMigrationPerFactEstimateMS = 200
+)
+
 // Memory Prompt templates — 各 memory worker 的默认提示词模板唯一权威源。平台参数
 // memory.*_prompt 未配置时兜底；internal/parameters 的 prompt-defaults 白名单
 // 按这些键下发全文给前端展示。除 MemoryExtractionDefaultPrompt（规则增量、无

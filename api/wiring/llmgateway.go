@@ -6,6 +6,7 @@ import (
 
 	"go.uber.org/zap"
 
+	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
 	llmapp "github.com/byteBuilderX/stratum/internal/llmgateway/application"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
@@ -37,6 +38,10 @@ type LLMGateway struct {
 	Registry         *llmgateway.ModelRegistry
 	ProviderService  *llmapp.ProviderService
 	ModelMgmtService *llmapp.ModelMgmtService
+	// TenantEmbeddingResolver 解析租户显式配置的记忆嵌入模型
+	// （tenants.settings.memory_embedding_model），fail-closed。iam 构建晚于
+	// llmgateway，内部延迟绑定 c.IAM.TenantService。
+	TenantEmbeddingResolver *tenantEmbeddingModelResolver
 }
 
 func (c *Container) buildLLMGateway(ctx context.Context) error {
@@ -54,7 +59,7 @@ func (c *Container) buildLLMGateway(ctx context.Context) error {
 	// 平台级模型健康 registry：协议层调用结果被动同步 + 探活 worker 主动
 	// 驱动；ModelRegistry 据此做健康感知解析（unhealthy 模型视为未命中
 	// 继续降级，fail-closed 不选中熔断模型）。
-	health := llmgateway.NewHealthRegistry(nil)
+	health := llmgateway.NewHealthRegistry(nil).WithMetrics(metrics).WithLogger(c.Logger)
 
 	// Protocol singletons:
 	// - OpenAICompatProtocol wraps an OpenAICompatClient, satisfies ChatProtocol + EmbedProtocol.
@@ -121,7 +126,9 @@ func (c *Container) buildLLMGateway(ctx context.Context) error {
 	providerSvc := llmapp.NewProviderService(
 		providerRepo, modelRepo, llmgateway.NewProviderRuntime(chatProtos), registry,
 	)
-	mgmtSvc := llmapp.NewModelMgmtService(modelRepo, registry)
+	// 模型管理目录响应附加运行时健康状态（平台级 HealthRegistry 投影）；
+	// health 为 nil（db 不可用的测试装配）时目录不带 health 字段。
+	mgmtSvc := llmapp.NewModelMgmtService(modelRepo, registry).WithHealth(health)
 
 	c.LLMGateway = &LLMGateway{
 		Gateway:          gw,
@@ -130,6 +137,12 @@ func (c *Container) buildLLMGateway(ctx context.Context) error {
 		Registry:         registry,
 		ProviderService:  providerSvc,
 		ModelMgmtService: mgmtSvc,
+		TenantEmbeddingResolver: newTenantEmbeddingModelResolver(func() *iamapp.TenantService {
+			if c.IAM == nil {
+				return nil
+			}
+			return c.IAM.TenantService
+		}, registry, c.Logger),
 	}
 	return nil
 }

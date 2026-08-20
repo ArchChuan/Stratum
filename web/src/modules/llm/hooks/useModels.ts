@@ -57,17 +57,6 @@ export function useModels() {
     }
   }, [fetch]);
 
-  // 设置/取消默认嵌入会连带清除其他模型的标记，成功后整体刷新。
-  const setDefaultEmbedding = useCallback(async (id: string, enabled: boolean) => {
-    try {
-      await llmApi.setDefaultEmbedding(id, enabled);
-      message.success({ content: enabled ? '已设为默认嵌入' : '已取消默认嵌入', duration: 2 });
-      await fetch();
-    } catch (err) {
-      message.error({ content: extractErrorMessage(err, '设置默认嵌入失败'), duration: 0 });
-    }
-  }, [fetch]);
-
   const deleteModel = useCallback(async (id: string) => {
     setDeleteLoading(true);
     try {
@@ -90,6 +79,5 @@ export function useModels() {
     updateModel,
     updateModelPolicy,
     deleteModel,
-    setDefaultEmbedding,
   };
 }

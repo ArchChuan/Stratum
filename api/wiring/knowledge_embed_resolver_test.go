@@ -52,10 +52,6 @@ func (r *knowledgeModelRepo) UpsertDiscovered(
 }
 func (r *knowledgeModelRepo) Delete(context.Context, string) error       { return nil }
 func (r *knowledgeModelRepo) Toggle(context.Context, string, bool) error { return nil }
-func (r *knowledgeModelRepo) SetDefaultEmbedding(context.Context, string, bool) error {
-	return nil
-}
-
 func modelHasCapabilityForKnowledge(model domain.Model, capability domain.ModelCapability) bool {
 	for _, candidate := range model.Capabilities {
 		if candidate == capability {
@@ -106,8 +102,13 @@ func TestKnowledgeEmbedResolversUseManagedModels(t *testing.T) {
 		Capabilities: []domain.ModelCapability{domain.CapEmbedding},
 	}})
 
-	pipelineResolver := buildEmbedResolver(registry, zap.NewNop())
-	require.NotNil(t, pipelineResolver(context.Background(), "tenant-1"))
+	// pipeline resolver 只读租户显式配置：配置 managed-embedding → 解析出 client。
+	configured := newTestTenantEmbeddingResolver(
+		map[string]any{"memory_embedding_model": "managed-embedding"}, registry)
+	require.NotNil(t, buildEmbedResolver(configured, zap.NewNop())(context.Background(), "tenant-1"))
+	// 未配置租户 fail-closed → nil。
+	unconfigured := newTestTenantEmbeddingResolver(nil, registry)
+	require.Nil(t, buildEmbedResolver(unconfigured, zap.NewNop())(context.Background(), "tenant-1"))
 
 	workspaceResolver := buildKnowledgeEmbedResolver(registry, zap.NewNop())
 	require.NotNil(t, workspaceResolver(context.Background(), "tenant-1", "managed-embedding"))
@@ -150,6 +151,6 @@ func TestKnowledgeEmbedResolverFailClosedOnCatalogueError(t *testing.T) {
 func TestKnowledgeEmbedResolversReturnNilForEmptyCatalogue(t *testing.T) {
 	registry := newKnowledgeRegistry(nil)
 
-	require.Nil(t, buildEmbedResolver(registry, zap.NewNop())(context.Background(), "tenant-1"))
+	require.Nil(t, buildEmbedResolver(newTestTenantEmbeddingResolver(nil, registry), zap.NewNop())(context.Background(), "tenant-1"))
 	require.Nil(t, buildKnowledgeEmbedResolver(registry, zap.NewNop())(context.Background(), "tenant-1", ""))
 }
