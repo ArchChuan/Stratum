@@ -87,6 +87,20 @@ func Classify(manifest Manifest, paths []string, minimum string, release bool) (
 	return effective, nil
 }
 
+// MatchingRules returns the IDs of every rule whose path patterns match any of
+// the given paths, preserving manifest order. Consumers use it to select
+// risk-triggered verification steps (e.g. the RAG retrieval spot-check)
+// deterministically instead of re-deriving the file set in each skill.
+func MatchingRules(manifest Manifest, paths []string) []string {
+	var matched []string
+	for _, rule := range manifest.Risk.Rules {
+		if matchesAny(rule.Paths, paths) {
+			matched = append(matched, rule.ID)
+		}
+	}
+	return matched
+}
+
 func validate(manifest Manifest) error {
 	if manifest.Version != 1 || manifest.Risk.DefaultLevel == "" || manifest.Risk.ReleaseLevel != "R4" {
 		return errors.New("verification manifest policy is incomplete")

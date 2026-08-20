@@ -119,6 +119,9 @@ func (e *RetrievalEvaluator) EvaluateRetrieval(
 	for _, source := range result.Sources {
 		documentIDs = append(documentIDs, source.DocumentID)
 	}
+	// Sources are chunk-level; one document can occupy several ranks.
+	// Document-level metrics count the first occurrence only.
+	documentIDs = dedupePreservingOrder(documentIDs)
 	noAnswer := len(documentIDs) == 0
 	relevant := containsExpectedID(documentIDs, testCase.RelevantDocumentIDs)
 	if len(testCase.RelevantDocumentIDs) == 0 {

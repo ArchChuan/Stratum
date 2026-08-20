@@ -1,0 +1,74 @@
+version: 1
+snapshot:
+  embedding_model: embedding-3
+  query_mode: hybrid
+  top_k: 5
+  chunk_size: 512
+  chunk_overlap: 64
+  score_threshold: 0
+  reranking: ""
+  query_rewrite: none
+cases:
+  - id: vector_onboarding_signup_login
+    query: 新用户想注册账号并登录产品，应该从哪里开始操作？
+    mode: vector
+    relevant_documents: [onboarding.md]
+    expect_no_answer: false
+    note: 注册、登录、创建账号的完整流程只出现在 onboarding.md「注册与登录」锚点；faq.md「忘记密码」虽涉及登录场景但回答的是密码重置，不构成注册登录答案，可用于区分度校验。vector 语义检索对 faq/security 的「登录」一词近邻有天然区分能力。
+  - id: vector_billing_usage_overage
+    query: 怎么查看本月账单明细和实时用量额度，超额了会不会多收费？
+    mode: vector
+    relevant_documents: [billing.md]
+    expect_no_answer: false
+    note: 账单明细、实时用量、额度上限与超额计费的事实内容集中在 billing.md「计费周期与按量计费」「额度与配额管理」两个锚点；其余三篇不提供账单查看与用量/超额计费的具体说明（faq 仅泛泛提到订阅出账，onboarding 仅交叉引用计费文档），vector 语义归位 billing.md。
+  - id: hybrid_security_compliance_permission
+    query: 平台的数据加密和合规认证情况如何，访问敏感数据的权限又要怎么申请？
+    mode: hybrid
+    relevant_documents: [security-policy.md, onboarding.md]
+    citation_documents: [security-policy.md, onboarding.md]
+    expect_no_answer: false
+    note: 双主题 query。「数据加密」「合规认证」（ISO 27001/SOC 2）的事实主体在 security-policy.md，为更核心的主文档；「权限申请」的提交流程在 onboarding.md「邀请成员与申请权限」。答案需两篇完整上下文，故二者同时列为 citation_documents。注意「合规」一词在 billing.md 套餐描述与 onboarding.md 交叉引用中也出现，但语义主体仍是 security-policy.md，vector/hybrid 检索可归位。排序敏感：security-policy.md 应排在首位。
+  - id: hybrid_billing_seat_expansion
+    query: 团队席位不够用想扩容成员，这会影响套餐费用和配额吗，计费规则上会怎么变化？
+    mode: hybrid
+    relevant_documents: [billing.md, onboarding.md]
+    citation_documents: [billing.md, onboarding.md]
+    expect_no_answer: false
+    note: 双主题 query。「席位」「套餐配额」「计费规则」的主体在 billing.md「套餐版本」「额度与配额管理」，为主文档；「邀请成员」的操作流程在 onboarding.md「邀请成员与申请权限」。答案需两篇完整上下文，故二者同时列为 citation_documents。排序敏感：billing.md 应排在首位。
+  - id: keyword_billing_invoice_refund
+    query: 发票开具和退款申请
+    mode: keyword
+    relevant_documents: [billing.md]
+    expect_no_answer: false
+    note: keyword 模式下 plainto_tsquery('public.chinese_zh') 对全部词素做 AND，query 必须词素密集、全部落在目标文档内且不落入非目标文档。「发票/开具/退款/申请」全部出现在 billing.md「发票与退款」锚点；onboarding.md 虽含「申请」（权限申请语境）但缺发票/开具/退款，AND 不命中，TSV 唯一归位 billing.md。
+  - id: keyword_security_audit_retention
+    query: 审计日志保留期限
+    mode: keyword
+    relevant_documents: [security-policy.md]
+    expect_no_answer: false
+    note: keyword 模式 AND 语义，query 词素「审计/日志/保留/期限」全部且仅出现在 security-policy.md「审计日志」锚点（「保留期限为 180 天」）；其余三篇不含任何该组词素，TSV 唯一命中 security-policy.md。
+  - id: vector_faq_private_deployment
+    query: 平台可以部署在自己的服务器上吗，私有化部署怎么开通？
+    mode: vector
+    relevant_documents: [faq.md]
+    expect_no_answer: false
+    note: 「私有化部署」及开通方式仅见于 faq.md「支持哪些部署方式」；onboarding.md 的 SDK 环境切换属开发环境配置而非部署方式，billing.md 与 security-policy.md 均未讨论部署方式，vector 语义可区分。
+  - id: no_answer_offline_store_membership
+    query: 线下实体店的营业时间和会员积分兑换怎么安排？
+    mode: keyword
+    relevant_documents: []
+    expect_no_answer: true
+    note: 「线下/实体店/营业/会员/积分/兑换」等词素在四篇文档中完全不出现，主题（线下零售/会员积分）与 SaaS 产品文档无关。keyword 模式下 TSV AND 检索返回空，从而确定性地触发 no-answer 分支。选择 keyword 而非 hybrid/vector 的原因：vector 腿（Milvus L2 无距离截断）对非空 collection 恒返回 top-k，且本集 score_threshold=0（不启用阈值过滤），vector/hybrid 模式下 no-answer 分支不可达；keyword 腿对文档外词素空召回是唯一确定性的 no-answer 触发路径。
+  - id: hybrid_sdk_integration_fee
+    query: SDK 接入后如何配置开发环境，接入过程中会不会产生额外的接口调用费用？
+    mode: hybrid
+    relevant_documents: [onboarding.md, billing.md]
+    citation_documents: [onboarding.md, billing.md]
+    expect_no_answer: false
+    note: 双主题 query。「SDK 接入、环境切换与 token 配置」的主体在 onboarding.md「SDK 接入」，为主文档；「接口调用按量计费」在 billing.md「计费周期与按量计费」。答案需两篇完整上下文，故二者同时列为 citation_documents。排序敏感：onboarding.md 应排在首位。
+  - id: keyword_faq_trial
+    query: 免费试用多久
+    mode: keyword
+    relevant_documents: [faq.md]
+    expect_no_answer: false
+    note: keyword 模式 AND 语义，query 词素「免费/试用/多久」全部且仅出现在 faq.md「有免费试用吗，试用期多久」锚点；其余三篇不含「免费/试用/多久」任何词素，TSV 唯一命中 faq.md。

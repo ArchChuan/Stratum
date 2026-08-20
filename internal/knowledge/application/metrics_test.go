@@ -20,6 +20,7 @@ func TestRecallAtK(t *testing.T) {
 		{"empty relevant", []string{"a"}, nil, 2, 0},
 		{"empty retrieved", nil, []string{"a"}, 2, 0},
 		{"k beyond slice length", []string{"a"}, []string{"a", "b"}, 5, 0.5},
+		{"duplicate ids count once", []string{"a", "a", "a", "a", "a"}, []string{"a"}, 5, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -44,6 +45,7 @@ func TestPrecisionAtK(t *testing.T) {
 		{"k beyond slice length", []string{"a"}, []string{"a"}, 5, 1},
 		{"k zero", []string{"a"}, []string{"a"}, 0, 0},
 		{"no hits", []string{"x"}, []string{"a"}, 1, 0},
+		{"duplicate ids count once", []string{"a", "a", "a", "a", "a"}, []string{"a"}, 5, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -66,6 +68,7 @@ func TestMRR(t *testing.T) {
 		{"second result relevant", []string{"x", "b"}, []string{"b"}, 0.5},
 		{"no relevant result", []string{"x", "y"}, []string{"a"}, 0},
 		{"empty retrieved", nil, []string{"a"}, 0},
+		{"duplicate ids count once", []string{"a", "a", "a", "a"}, []string{"a"}, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -92,6 +95,7 @@ func TestNDCGAtK(t *testing.T) {
 		{"k zero", []string{"a"}, []string{"a"}, 0, 0},
 		{"no relevant", []string{"x"}, []string{"a"}, 1, 0},
 		{"empty retrieved", nil, []string{"a"}, 1, 0},
+		{"duplicate ids count once", []string{"a", "a", "a", "a", "a"}, []string{"a"}, 5, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
