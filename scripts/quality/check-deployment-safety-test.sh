@@ -221,7 +221,7 @@ require_file "${OBSERVABILITY_DEPLOY}" 'rollout status daemonset/promtail' \
     'promtail rollout wait missing'
 require_file "${OBSERVABILITY_DEPLOY}" 'promtail_files_active_total' \
     'promtail active-file verification missing'
-require_file "${OBSERVABILITY_DEPLOY}" 'promtail_sent_bytes_total did not increase' \
+require_file "${OBSERVABILITY_DEPLOY}" 'promtail_sent_bytes_total stayed 0' \
     'Loki push verification missing'
 require_file "${LOGGING_MANIFEST}" 'type:[[:space:]]*Recreate' \
     'loki must use Recreate strategy (single-replica boltdb-shipper cannot roll in place)'
