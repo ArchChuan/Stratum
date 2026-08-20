@@ -56,9 +56,7 @@ func TestProvisionTenantSchemaSystemAssistantModelBackfillPreservesTenantChoice(
 	for _, tt := range []struct {
 		name, model, wantModel string
 	}{
-		// 空模型保持为空（仅做空白规范化），运行时由 llmgateway 从模型目录
-		// 解析默认；代码与 DDL 不再写死兜底模型名。
-		{name: "empty managed model normalized for catalog resolution", model: "  ", wantModel: ""},
+		{name: "empty managed model", model: "  ", wantModel: "glm-5.2"},
 		{name: "tenant override", model: "qwen-plus", wantModel: "qwen-plus"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

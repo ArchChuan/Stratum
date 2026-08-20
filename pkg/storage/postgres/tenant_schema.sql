@@ -71,15 +71,13 @@ BEGIN
         assistant_name,
         'react',
         '基于官方资料指导平台使用并诊断当前租户应用状态',
-        '', '', 10, 0, 'user', 'stratum.platform_assistant'
+        '', 'glm-5.2', 10, 0, 'user', 'stratum.platform_assistant'
     )
     ON CONFLICT (id) DO NOTHING;
 END $$;
 
--- 空值规范化：平台助手 llm_model 为空/空白时归一为空串，交由 llmgateway
--- 从模型目录解析默认；禁止在代码/DDL 中写死兜底模型名。
 UPDATE agents
-SET llm_model = '',
+SET llm_model = 'glm-5.2',
     updated_at = NOW()
 WHERE system_key = 'stratum.platform_assistant'
   AND BTRIM(llm_model) = '';
