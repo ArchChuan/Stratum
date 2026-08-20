@@ -69,4 +69,7 @@ var (
 	ErrMigrationProgressRegressed = errors.New("memory migration progress regressed")
 	// ErrMigrationNotRetryable 只有 failed/canceled 迁移可重试。
 	ErrMigrationNotRetryable = errors.New("memory migration not retryable")
+	// ErrMigrationUnknownModel 目标模型不是目录中可解析的嵌入模型，拒绝启动迁移
+	// （fail-closed：避免生效模型被切到无效模型，产生不可回填的僵尸迁移）。
+	ErrMigrationUnknownModel = errors.New("memory migration target model not resolvable")
 )

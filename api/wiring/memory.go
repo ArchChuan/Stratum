@@ -159,6 +159,17 @@ func (c *Container) buildMemory(ctx context.Context) error {
 	return c.buildMemoryPipeline(mem, db)
 }
 
+// memoryModelValidator 校验目标记忆嵌入模型在目录中精确可解析（fail-closed）。
+// 复用 LLMGateway Registry.ResolveEmbeddingExact（无默认兜底）；Registry 未装配
+// 时拒绝启动迁移——宁可 400，也不把生效模型切到未校验模型。
+func (c *Container) memoryModelValidator(ctx context.Context, tenantID, model string) error {
+	if c.LLMGateway == nil || c.LLMGateway.Registry == nil {
+		return fmt.Errorf("memory migration: model registry not wired")
+	}
+	_, _, err := c.LLMGateway.Registry.ResolveEmbeddingExact(ctx, model)
+	return err
+}
+
 // buildMemoryMigration 装配 P5 记忆嵌入模型平滑迁移服务（确认制切换 + 后台回填）。
 // 依赖 DB + Milvus；任一缺失则迁移服务保持 nil（fail-closed：无迁移能力，
 // 管理界面不展示迁移操作）。embed resolver 复用 knowledge 的 per-tenant+per-model
@@ -195,6 +206,10 @@ func (c *Container) buildMemoryMigration(mem *Memory, db *pgxpool.Pool) {
 		}
 		return c.IAM.TenantService.SetSetting(ctx, tenantID, "memory_embedding_model", model)
 	})
+	// 目标模型可解析性校验（fail-closed）：StartMigration 登记前确认 toModel 是
+	// 目录中 enabled 的嵌入模型（ResolveEmbeddingExact 精确解析，无默认兜底），
+	// 拒绝把生效模型切到不存在的模型。与 SetEffectiveModelSetter 成对注入。
+	svc.SetModelValidator(c.memoryModelValidator)
 	mem.MigrationService = svc
 }
 

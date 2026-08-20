@@ -30,6 +30,12 @@ type TenantLister func(ctx context.Context) ([]string, error)
 // StartMigration runs it only after the migration record is durable.
 type EffectiveModelSetter func(ctx context.Context, tenantID, model string) error
 
+// EmbeddingModelValidator 校验目标模型是目录中可解析的嵌入模型（fail-closed）。
+// Wiring 注入 LLMGateway Registry.ResolveEmbeddingExact；StartMigration 在登记
+// 迁移前调用，返回错误则拒绝启动——避免生效模型被切到不存在的模型，产生无法
+// 回填的僵尸迁移。
+type EmbeddingModelValidator func(ctx context.Context, tenantID, model string) error
+
 // MigrationCost 是确认制切换的成本预览：存量已提取事实条数 + 预计回填时长。
 // 仅用于管理界面展示，非精确计量。
 type MigrationCost struct {
@@ -50,13 +56,14 @@ type MigrationCost struct {
 // 后台回填按 BufferScanner worker 模式运行：Start/run(ticker)/Stop，panic 后
 // 由 Start 外层重启。所有仓库访问逐任务 execTenant（租户隔离）。
 type MemoryMigrationService struct {
-	migrationRepo port.MigrationRepo
-	factRepo      port.FactRepo
-	vectorStore   port.VectorStore
-	embedResolver EmbedClientResolverByModel
-	listTenants   TenantLister
-	setModel      EffectiveModelSetter
-	logger        *zap.Logger
+	migrationRepo  port.MigrationRepo
+	factRepo       port.FactRepo
+	vectorStore    port.VectorStore
+	embedResolver  EmbedClientResolverByModel
+	listTenants    TenantLister
+	setModel       EffectiveModelSetter
+	modelValidator EmbeddingModelValidator
+	logger         *zap.Logger
 	// metrics 上报 memory_migration_progress gauge 与 stalled 计数器（P6）；
 	// wiring 注入，未注入时 NoopMetrics 无副作用。
 	metrics observability.MetricsProvider
@@ -113,6 +120,24 @@ func (s *MemoryMigrationService) SetTenantLister(l TenantLister) { s.listTenants
 // StartMigration (确认制：登记迁移后立即切生效模型，新数据直接进 B）。
 func (s *MemoryMigrationService) SetEffectiveModelSetter(f EffectiveModelSetter) { s.setModel = f }
 
+// SetModelValidator wires the target-model resolvability guard. StartMigration
+// rejects structurally-valid-but-unresolvable target models before they can be
+// persisted or switched into the tenant's effective setting.
+func (s *MemoryMigrationService) SetModelValidator(v EmbeddingModelValidator) { s.modelValidator = v }
+
+// validateTargetModel 校验目标模型在目录中可解析（fail-closed）。validator 未
+// 注入时直接放行（测试构造场景）；失败统一 wrap 领域 sentinel 以映射 400，
+// 绝不 5xx。
+func (s *MemoryMigrationService) validateTargetModel(ctx context.Context, tenantID, toModel string) error {
+	if s.modelValidator == nil {
+		return nil
+	}
+	if err := s.modelValidator(ctx, tenantID, toModel); err != nil {
+		return fmt.Errorf("start migration: %w (%w)", domain.ErrMigrationUnknownModel, err)
+	}
+	return nil
+}
+
 // StartMigration 确认制启动一次 A→B 迁移：
 //
 //  1. 校验租户无进行中迁移（唯一 active 不变量）。
@@ -144,6 +169,13 @@ func (s *MemoryMigrationService) StartMigration(ctx context.Context, tenantID, f
 	m, err := domain.NewMigration(tenantID, fromModel, toModel, total)
 	if err != nil {
 		return nil, fmt.Errorf("start migration: %w", err)
+	}
+	// fail-closed：目标模型必须是目录中可解析的嵌入模型，否则拒绝启动，防止生效
+	// 模型被切到无效模型（产生不可回填的僵尸迁移）。校验放在结构校验之后，保证
+	// 空/相同模型的错误语义由 NewMigration 优先给出。validator 未注入时跳过
+	// （测试构造场景）；生产 wiring 与 setModel 成对注入，均以 Registry 可用为前提。
+	if err := s.validateTargetModel(ctx, tenantID, toModel); err != nil {
+		return nil, err
 	}
 	id, err := s.migrationRepo.Create(ctx, tenantID, m)
 	if err != nil {

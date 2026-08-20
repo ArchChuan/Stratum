@@ -160,6 +160,30 @@ func TestStartMigrationFailsClosedWhenSetterNotWired(t *testing.T) {
 	factRepo.AssertNotCalled(t, "CountAll", mock.Anything, mock.Anything)
 }
 
+// TestStartMigrationRejectsUnresolvableTargetModel 覆盖 P5 缺陷修复（fail-closed）：
+// 目标模型不是目录中可解析的嵌入模型时，StartMigration 必须在登记迁移/切换生效
+// 模型之前拒绝启动（返回 ErrMigrationUnknownModel → 错误中间件映射 400），避免
+// 生效模型被切到无效模型，产生不可回填的僵尸迁移。
+func TestStartMigrationRejectsUnresolvableTargetModel(t *testing.T) {
+	ctx := context.Background()
+	migRepo, factRepo, _, svc := newMigrationService(t)
+	svc.SetEffectiveModelSetter(func(context.Context, string, string) error { return nil })
+	svc.SetModelValidator(func(ctx context.Context, tenantID, model string) error {
+		return errors.New("model registry: model not resolved")
+	})
+
+	migRepo.On("GetActive", ctx, migTestTenant).Return(nil, nil).Once()
+	factRepo.On("CountAll", ctx, migTestTenant).Return(5, nil).Once()
+
+	_, err := svc.StartMigration(ctx, migTestTenant, migFrom, migTo)
+	require.ErrorIs(t, err, domain.ErrMigrationUnknownModel)
+	// 校验失败在 Create 之前：不得落迁移记录，也不得触发 setModel 切换生效模型。
+	migRepo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything, mock.Anything)
+	migRepo.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything)
+	migRepo.AssertExpectations(t)
+	factRepo.AssertExpectations(t)
+}
+
 func TestCancelMigrationMarksCanceledAndKeepsModel(t *testing.T) {
 	ctx := context.Background()
 	migRepo, _, _, svc := newMigrationService(t)

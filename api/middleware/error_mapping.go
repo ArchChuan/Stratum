@@ -205,6 +205,7 @@ var errorStatusTable = map[error]int{
 	memorydomain.ErrMigrationInvalidTenant:         http.StatusBadRequest,
 	memorydomain.ErrMigrationEmptyModel:            http.StatusBadRequest,
 	memorydomain.ErrMigrationSameModel:             http.StatusBadRequest,
+	memorydomain.ErrMigrationUnknownModel:          http.StatusBadRequest,
 	memorydomain.ErrMigrationNotFound:              http.StatusNotFound,
 	memorydomain.ErrMigrationAlreadyActive:         http.StatusConflict,
 	memorydomain.ErrMigrationNotActive:             http.StatusConflict,
