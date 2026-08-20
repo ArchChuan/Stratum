@@ -285,17 +285,23 @@ ALTER TABLE models ADD COLUMN IF NOT EXISTS max_fallback_candidates INT NOT NULL
 
 **`memory_migrations`**：tenant-scoped 表（`tenant_schema.sql` 幂等）：
 
+- `total_facts` = 迁移开始时 `memory_facts` 行数快照（progress 的分母，不随迁移期间并发写入漂移）；
+- `progress` 是断点续传游标（按 `created_at,id` 稳定排序的偏移）；
+- 状态机 `migrating → done|failed|canceled`；`failed/canceled → migrating`（重试）。
+
 ```sql
 CREATE TABLE IF NOT EXISTS memory_migrations (
     id            BIGSERIAL PRIMARY KEY,
     tenant_id     TEXT NOT NULL,
     from_model    TEXT NOT NULL,
     to_model      TEXT NOT NULL,
-    status        TEXT NOT NULL DEFAULT 'migrating',  -- migrating|done|failed|canceled
+    status        TEXT NOT NULL DEFAULT 'migrating' CHECK (status IN ('migrating', 'done', 'failed', 'canceled')),
     progress      INT NOT NULL DEFAULT 0,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    total_facts   INT NOT NULL DEFAULT 0,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_memory_migrations_active ON memory_migrations (tenant_id, status, id);
 ```
 
 `memory_migrations` 是 tenant-scoped 表：repository 方法必须 `execTenant(ctx, tenantID, fn)`，port 方法显式含 `tenantID`。
