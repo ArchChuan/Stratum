@@ -677,6 +677,9 @@ func (c *OpenAICompatClient) BatchSize() int {
 }
 
 func (c *OpenAICompatClient) CreateEmbeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error) {
+	if !c.breaker.allow() {
+		return nil, fmt.Errorf("%s: circuit breaker open", c.cfg.Name)
+	}
 	body, err := json.Marshal(map[string]any{
 		"model": req.Model,
 		"input": req.Input,
@@ -694,12 +697,14 @@ func (c *OpenAICompatClient) CreateEmbeddings(ctx context.Context, req *Embeddin
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
+		c.breaker.recordFailure()
 		return nil, fmt.Errorf("%s: do embed request: %w", c.cfg.Name, err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.breaker.recordFailure()
 		return nil, fmt.Errorf("%s: read embed body: %w", c.cfg.Name, err)
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -707,11 +712,13 @@ func (c *OpenAICompatClient) CreateEmbeddings(ctx context.Context, req *Embeddin
 			zap.String("model", req.Model),
 			zap.Int("status", resp.StatusCode),
 		)
+		c.breaker.recordFailure()
 		return nil, fmt.Errorf("%s: embed status %d", c.cfg.Name, resp.StatusCode)
 	}
 
 	var out openAIEmbedResp
 	if err := json.Unmarshal(raw, &out); err != nil {
+		c.breaker.recordFailure()
 		return nil, fmt.Errorf("%s: decode embed response: %w", c.cfg.Name, err)
 	}
 
@@ -719,6 +726,7 @@ func (c *OpenAICompatClient) CreateEmbeddings(ctx context.Context, req *Embeddin
 	for i, d := range out.Data {
 		embeddings[i] = d.Embedding
 	}
+	c.breaker.recordSuccess()
 	return &EmbeddingResponse{Embeddings: embeddings}, nil
 }
 
@@ -888,6 +896,9 @@ func (c *OpenAICompatClient) EmbedBatchSize() int {
 type OpenAICompatProtocol struct {
 	client   *OpenAICompatClient
 	breakers sync.Map
+	// health 是模型健康 registry；nil 时跳过同步（探活/管理路径不污染状态机，
+	// 业务调用 Complete/CompleteStream/CreateEmbeddings 驱动被动信号）。
+	health *HealthRegistry
 }
 
 // NewOpenAICompatProtocol returns a protocol adapter backed by client.
@@ -895,8 +906,29 @@ func NewOpenAICompatProtocol(client *OpenAICompatClient) *OpenAICompatProtocol {
 	return &OpenAICompatProtocol{client: client}
 }
 
-func (p *OpenAICompatProtocol) clientFor(cfg ProviderConfig) *OpenAICompatClient {
-	key := fmt.Sprintf("%x", sha256.Sum256([]byte(cfg.Name+"\x00"+cfg.BaseURL+"\x00"+cfg.APIKey)))
+// WithHealth 注入健康 registry，使业务调用的成功/失败同步到健康状态机。
+func (p *OpenAICompatProtocol) WithHealth(r *HealthRegistry) *OpenAICompatProtocol {
+	p.health = r
+	return p
+}
+
+// recordHealth 按调用结果同步被动健康信号；health 未注入或调用失败源于
+// breaker open（模型已熔断）时保持既有状态不叠加计数噪音。
+func (p *OpenAICompatProtocol) recordHealth(model string, err error) {
+	if p.health == nil || model == "" {
+		return
+	}
+	if err != nil {
+		p.health.RecordFailure(model, err)
+		return
+	}
+	p.health.RecordSuccess(model)
+}
+
+// clientFor 返回绑定指定模型的客户端。熔断器 key 含 model 维度，同一 provider
+// 下不同模型各自熔断：一个模型连续失败不再拖累同 provider 其它模型。
+func (p *OpenAICompatProtocol) clientFor(cfg ProviderConfig, model string) *OpenAICompatClient {
+	key := fmt.Sprintf("%x", sha256.Sum256([]byte(cfg.Name+"\x00"+cfg.BaseURL+"\x00"+cfg.APIKey+"\x00"+model)))
 	breaker, _ := p.breakers.LoadOrStore(key, &providerBreaker{state: cbClosed})
 	return &OpenAICompatClient{
 		cfg:        cfg,
@@ -908,7 +940,9 @@ func (p *OpenAICompatProtocol) clientFor(cfg ProviderConfig) *OpenAICompatClient
 }
 
 func (p *OpenAICompatProtocol) Complete(ctx context.Context, cfg ProviderConfig, req *CompletionRequest) (*CompletionResponse, error) {
-	return p.clientFor(cfg).Complete(ctx, req)
+	resp, err := p.clientFor(cfg, req.Model).Complete(ctx, req)
+	p.recordHealth(req.Model, err)
+	return resp, err
 }
 
 func (p *OpenAICompatProtocol) CompleteStream(
@@ -917,15 +951,17 @@ func (p *OpenAICompatProtocol) CompleteStream(
 	req *CompletionRequest,
 	onToken func(string),
 ) (*CompletionResponse, error) {
-	return p.clientFor(cfg).CompleteStream(ctx, req, onToken)
+	resp, err := p.clientFor(cfg, req.Model).CompleteStream(ctx, req, onToken)
+	p.recordHealth(req.Model, err)
+	return resp, err
 }
 
 func (p *OpenAICompatProtocol) Health(ctx context.Context, cfg ProviderConfig) error {
-	return p.clientFor(cfg).Health(ctx)
+	return p.clientFor(cfg, cfg.HealthModel).Health(ctx)
 }
 
 func (p *OpenAICompatProtocol) ListModels(ctx context.Context, cfg ProviderConfig) ([]DiscoveredModel, error) {
-	return p.clientFor(cfg).ListModels(ctx)
+	return p.clientFor(cfg, cfg.HealthModel).ListModels(ctx)
 }
 
 func (p *OpenAICompatProtocol) CreateEmbeddings(
@@ -933,7 +969,9 @@ func (p *OpenAICompatProtocol) CreateEmbeddings(
 	cfg ProviderConfig,
 	req *EmbeddingRequest,
 ) (*EmbeddingResponse, error) {
-	return p.clientFor(cfg).CreateEmbeddings(ctx, req)
+	resp, err := p.clientFor(cfg, req.Model).CreateEmbeddings(ctx, req)
+	p.recordHealth(req.Model, err)
+	return resp, err
 }
 
 func (p *OpenAICompatProtocol) BatchSize() int {

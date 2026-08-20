@@ -51,6 +51,11 @@ func (c *Container) buildLLMGateway(ctx context.Context) error {
 	// cmd/server 是唯一运行 guest reaper 的进程；只有它导出 reaper 指标。
 	metrics.RegisterReaperMetrics()
 
+	// 平台级模型健康 registry：协议层调用结果被动同步 + 探活 worker 主动
+	// 驱动；ModelRegistry 据此做健康感知解析（unhealthy 模型视为未命中
+	// 继续降级，fail-closed 不选中熔断模型）。
+	health := llmgateway.NewHealthRegistry(nil)
+
 	// Protocol singletons:
 	// - OpenAICompatProtocol wraps an OpenAICompatClient, satisfies ChatProtocol + EmbedProtocol.
 	// - OllamaProtocol wraps an OllamaClient, satisfies ChatProtocol + EmbedProtocol.
@@ -59,19 +64,19 @@ func (c *Container) buildLLMGateway(ctx context.Context) error {
 		llmgateway.ProviderConfig{Name: "openai-compat"},
 		c.Logger,
 	)
-	openAICompatProto := llmgateway.NewOpenAICompatProtocol(openAICompatClient)
+	openAICompatProto := llmgateway.NewOpenAICompatProtocol(openAICompatClient).WithHealth(health)
 
 	ollamaClient := llmgateway.NewOllamaClient(
 		llmgateway.ProviderConfig{Name: "ollama"},
 		c.Logger,
 	)
-	ollamaProto := llmgateway.NewOllamaProtocol(ollamaClient)
+	ollamaProto := llmgateway.NewOllamaProtocol(ollamaClient).WithHealth(health)
 
 	anthropicClient := llmgateway.NewAnthropicClient(
 		llmgateway.ProviderConfig{Name: "anthropic"},
 		c.Logger,
 	)
-	anthropicProto := llmgateway.NewAnthropicProtocol(anthropicClient)
+	anthropicProto := llmgateway.NewAnthropicProtocol(anthropicClient).WithHealth(health)
 
 	chatProtos := map[domain.ProviderKind]llmgateway.ChatProtocol{
 		domain.ProviderOpenAICompat: openAICompatProto,
@@ -95,7 +100,7 @@ func (c *Container) buildLLMGateway(ctx context.Context) error {
 		modelRepo, providerRepo,
 		chatProtos, embedProtos,
 		constants.GatewayCacheTTL,
-	)
+	).WithHealth(health)
 	// 启动期预热全局目录一次；失败仅 WARN 不阻断——解析链内置 ②③④ 兜底
 	// 与 ⑤ fail-closed，运行时按需从 DB 惰性解析。
 	if err := registry.Warm(ctx); err != nil {
@@ -103,6 +108,15 @@ func (c *Container) buildLLMGateway(ctx context.Context) error {
 	}
 	gw := llmgateway.NewGateway(registry, chatProtos, embedProtos).
 		WithLogger(c.Logger).WithMetrics(metrics)
+
+	// 探活 worker：后台周期驱动 enabled 模型的主动健康信号，与被动熔断
+	// 状态机同步演进。Start 后随 ctx 退出，逆序关闭时 Stop 等待 goroutine。
+	prober := llmgateway.NewModelProber(modelRepo, providerRepo, chatProtos, embedProtos, health, c.Logger)
+	prober.Start(ctx)
+	c.shutdown = append(c.shutdown, func(context.Context) error {
+		prober.Stop()
+		return nil
+	})
 
 	providerSvc := llmapp.NewProviderService(
 		providerRepo, modelRepo, llmgateway.NewProviderRuntime(chatProtos), registry,

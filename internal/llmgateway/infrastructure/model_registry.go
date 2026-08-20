@@ -105,6 +105,7 @@ type ModelRegistry struct {
 	providerRepo port.ProviderRepository
 	chatProtos   map[domain.ProviderKind]ChatProtocol
 	embedProtos  map[domain.ProviderKind]EmbedProtocol
+	health       *HealthRegistry
 	cacheTTL     time.Duration
 
 	mu    sync.RWMutex
@@ -129,12 +130,46 @@ func NewModelRegistry(
 	}
 }
 
+// WithHealth 注入 HealthRegistry。解析链据此做健康感知：unhealthy/halfOpen
+// 模型视为未命中继续降级，显式指定同样不选中不可用模型（fail-closed）。
+// 未注入（纯配置/测试）时所有模型视为可用。
+func (r *ModelRegistry) WithHealth(h *HealthRegistry) *ModelRegistry {
+	r.health = h
+	return r
+}
+
+// isModelUsable 判定模型是否可被解析链选中：healthy/degraded → true（degraded
+// 已降级但仍可用）；unhealthy/halfOpen → false（已熔断，禁止选中）。health 未
+// 注入时恒 true。
+func (r *ModelRegistry) isModelUsable(model string) bool {
+	if r.health == nil {
+		return true
+	}
+	st := r.health.Get(model)
+	return st.Status != ModelHealthUnhealthy && st.Status != ModelHealthHalfOpen
+}
+
+// entryUsable 检查缓存 entry 对应的模型是否健康可用（M1：TTL 缓存命中前先
+// 查健康）。unhealthy/halfOpen 视为不可用，调用方应走解析链重选而非直接消费
+// 缓存。
+func (r *ModelRegistry) entryUsable(e *resolvedEntry) bool {
+	if r.health == nil {
+		return true
+	}
+	for _, m := range e.config.Models {
+		if !r.isModelUsable(m) {
+			return false
+		}
+	}
+	return true
+}
+
 // Resolve resolves modelName to a provider configuration and chat protocol.
 // 空 modelName 表示「未显式指定」，跳过 ① 精确匹配，直接走全局默认解析链
 // （② provider.default_model → ③ models.recommended → ⑤ fail-closed）。
 func (r *ModelRegistry) Resolve(ctx context.Context, modelName string) (ProviderConfig, ChatProtocol, error) {
 	cacheKey := "chat:" + modelName
-	if e := r.cacheGet(cacheKey); e != nil {
+	if e := r.cacheGet(cacheKey); e != nil && r.entryUsable(e) {
 		return r.chatFromEntry(e)
 	}
 	cfg, provider, err := r.resolveModel(ctx, modelName, cacheKey, domain.CapChat, false)
@@ -153,7 +188,7 @@ func (r *ModelRegistry) Resolve(ctx context.Context, modelName string) (Provider
 // default_embedding 标记 → ⑤ fail-closed）。
 func (r *ModelRegistry) ResolveEmbedding(ctx context.Context, modelName string) (ProviderConfig, EmbedProtocol, error) {
 	cacheKey := "embed:" + modelName
-	if e := r.cacheGet(cacheKey); e != nil {
+	if e := r.cacheGet(cacheKey); e != nil && r.entryUsable(e) {
 		return r.embedFromEntry(e)
 	}
 	cfg, provider, err := r.resolveModel(ctx, modelName, cacheKey, domain.CapEmbedding, true)
@@ -242,6 +277,7 @@ func (r *ModelRegistry) resolveExact(
 	if err != nil {
 		return ProviderConfig{}, domain.Provider{}, fmt.Errorf("model registry: list models: %w", err)
 	}
+	models = usableModels(models, r.isModelUsable)
 	for _, m := range models {
 		if m.Name != modelName {
 			continue
@@ -281,7 +317,7 @@ func (r *ModelRegistry) resolveProviderDefault(
 	sort.Slice(providers, func(i, j int) bool { return providers[i].Name < providers[j].Name })
 	for i := range providers {
 		p := providers[i]
-		if !p.Enabled || p.DefaultModel == "" || !r.supports(p.Kind, capability) {
+		if !p.Enabled || p.DefaultModel == "" || !r.supports(p.Kind, capability) || !r.isModelUsable(p.DefaultModel) {
 			continue
 		}
 		cfg := ProviderConfig{
@@ -310,6 +346,7 @@ func (r *ModelRegistry) resolveRecommended(
 	if err != nil {
 		return ProviderConfig{}, domain.Provider{}, fmt.Errorf("model registry: list recommended models: %w", err)
 	}
+	models = usableModels(models, r.isModelUsable)
 	var best domain.Model
 	var bestProvider *domain.Provider
 	found := false
@@ -380,6 +417,7 @@ func (r *ModelRegistry) pickEmbeddingCandidate(ctx context.Context) (*embeddingC
 	if err != nil {
 		return nil, fmt.Errorf("model registry: list embedding models: %w", err)
 	}
+	models = usableModels(models, r.isModelUsable)
 	sort.Slice(models, func(i, j int) bool { return models[i].Name < models[j].Name })
 	var marked, first *embeddingCandidate
 	for _, m := range models {
@@ -422,7 +460,13 @@ func (r *ModelRegistry) ResolveFallbackCandidates(ctx context.Context, primary s
 	if err != nil {
 		return nil, err
 	}
-	cands, err := r.listFallbackCandidates(ctx, primary, primaryCfg.Name)
+	// 排除「实际解析出的模型」而非入参 primary：显式指定模型不可用时可能
+	// 已降级到健康默认，避免同一模型既作 primary 又入候选。
+	resolvedPrimary := primary
+	if len(primaryCfg.Models) > 0 {
+		resolvedPrimary = primaryCfg.Models[0]
+	}
+	cands, err := r.listFallbackCandidates(ctx, resolvedPrimary, primaryCfg.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -466,6 +510,7 @@ func (r *ModelRegistry) listFallbackCandidates(ctx context.Context, primary, pri
 	if err != nil {
 		return nil, fmt.Errorf("model registry: list models: %w", err)
 	}
+	models = usableModels(models, r.isModelUsable)
 	cands := make([]fallbackCand, 0, len(models))
 	for _, m := range models {
 		if m.Name == primary {
@@ -576,6 +621,22 @@ func (r *ModelRegistry) listModelsByCapability(
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+// usableModels 过滤出健康可用的模型（usable 为 nil 即未注入健康 registry 时
+// 原样返回）。解析链各循环顶部先剔除不可用模型，避免循环内叠加健康分支抬高
+// 圈复杂度，也让「先剔除不可用，再选候选」的选择语义更清晰。
+func usableModels(models []domain.Model, usable func(string) bool) []domain.Model {
+	if usable == nil {
+		return models
+	}
+	out := make([]domain.Model, 0, len(models))
+	for _, m := range models {
+		if usable(m.Name) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 func (r *ModelRegistry) supports(kind domain.ProviderKind, capability domain.ModelCapability) bool {

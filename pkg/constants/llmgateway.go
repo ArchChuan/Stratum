@@ -1,10 +1,21 @@
 package constants
 
+import "time"
+
 // LLM 网关模型 fallback 链预算。
 const (
 	// MaxModelFallbackCandidates 是 fallback 候选模型数量上限（不含主模型）。
 	// 链总长上限 = 1（主模型）+ 该值；主模型失败时允许 1 次立即重试。
 	MaxModelFallbackCandidates = 3
+)
+
+// LLM 网关模型健康探活。
+const (
+	// ModelProbeInterval 是探活 worker 周期：后台遍历 enabled 模型驱动主动
+	// 健康信号，覆盖空闲模型无业务调用信号的空窗。
+	ModelProbeInterval = 60 * time.Second
+	// ModelProbeTimeout 是单模型探活的执行超时预算。
+	ModelProbeTimeout = 5 * time.Second
 )
 
 // ReasoningEffort 思考强度档位 → Anthropic extended_thinking budget_tokens。

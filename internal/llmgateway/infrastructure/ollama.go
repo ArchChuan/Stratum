@@ -515,7 +515,12 @@ func (c *OllamaClient) ListModels(ctx context.Context) ([]DiscoveredModel, error
 }
 
 // CreateEmbeddings sends a request to /api/embeddings.
+// 与 chat 一致参与 per-model 熔断：上游故障（网络/读体/状态码/解码）记录失败，
+// 成功记录成功，嵌入模型连续失败同样熔断隔离。
 func (c *OllamaClient) CreateEmbeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error) {
+	if !c.breaker.allow() {
+		return nil, fmt.Errorf("%s: circuit breaker open", c.cfg.Name)
+	}
 	body, err := json.Marshal(ollamaEmbedRequest{Model: req.Model, Input: req.Input})
 	if err != nil {
 		return nil, fmt.Errorf("%s: marshal embed request: %w", c.cfg.Name, err)
@@ -530,26 +535,31 @@ func (c *OllamaClient) CreateEmbeddings(ctx context.Context, req *EmbeddingReque
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
+		c.breaker.recordFailure()
 		return nil, fmt.Errorf("%s: do embed request: %w", c.cfg.Name, err)
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.breaker.recordFailure()
 		return nil, fmt.Errorf("%s: read embed body: %w", c.cfg.Name, err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		c.logger.Error(c.cfg.Name+": embed http error",
 			zap.Int("status", resp.StatusCode),
 		)
+		c.breaker.recordFailure()
 		return nil, fmt.Errorf("%s: embed status %d", c.cfg.Name, resp.StatusCode)
 	}
 
 	var out ollamaEmbedResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
+		c.breaker.recordFailure()
 		return nil, fmt.Errorf("%s: decode embed response: %w", c.cfg.Name, err)
 	}
 
+	c.breaker.recordSuccess()
 	return &EmbeddingResponse{Embeddings: out.Embeddings}, nil
 }
 
@@ -644,6 +654,9 @@ func sleepRetryAfter(ctx context.Context, header string) {
 type OllamaProtocol struct {
 	client   *OllamaClient
 	breakers sync.Map
+	// health 是模型健康 registry；nil 时跳过同步（探活/管理路径不污染状态机，
+	// 业务调用 Complete/CompleteStream/CreateEmbeddings 驱动被动信号）。
+	health *HealthRegistry
 }
 
 // NewOllamaProtocol returns a protocol adapter backed by client.
@@ -651,8 +664,29 @@ func NewOllamaProtocol(client *OllamaClient) *OllamaProtocol {
 	return &OllamaProtocol{client: client}
 }
 
-func (p *OllamaProtocol) clientFor(cfg ProviderConfig) *OllamaClient {
-	key := fmt.Sprintf("%x", sha256.Sum256([]byte(cfg.Name+"\x00"+cfg.BaseURL+"\x00"+cfg.APIKey)))
+// WithHealth 注入健康 registry，使业务调用的成功/失败同步到健康状态机。
+func (p *OllamaProtocol) WithHealth(r *HealthRegistry) *OllamaProtocol {
+	p.health = r
+	return p
+}
+
+// recordHealth 按调用结果同步被动健康信号；health 未注入或调用失败源于
+// breaker open（模型已熔断）时保持既有状态不叠加计数噪音。
+func (p *OllamaProtocol) recordHealth(model string, err error) {
+	if p.health == nil || model == "" {
+		return
+	}
+	if err != nil {
+		p.health.RecordFailure(model, err)
+		return
+	}
+	p.health.RecordSuccess(model)
+}
+
+// clientFor 返回绑定指定模型的客户端。熔断器 key 含 model 维度，同一 provider
+// 下不同模型各自熔断：一个模型连续失败不再拖累同 provider 其它模型。
+func (p *OllamaProtocol) clientFor(cfg ProviderConfig, model string) *OllamaClient {
+	key := fmt.Sprintf("%x", sha256.Sum256([]byte(cfg.Name+"\x00"+cfg.BaseURL+"\x00"+cfg.APIKey+"\x00"+model)))
 	breaker, _ := p.breakers.LoadOrStore(key, &providerBreaker{state: cbClosed})
 	return &OllamaClient{
 		cfg:        cfg,
@@ -665,27 +699,33 @@ func (p *OllamaProtocol) clientFor(cfg ProviderConfig) *OllamaClient {
 
 // Complete implements ChatProtocol.
 func (p *OllamaProtocol) Complete(ctx context.Context, cfg ProviderConfig, req *CompletionRequest) (*CompletionResponse, error) {
-	return p.clientFor(cfg).Complete(ctx, req)
+	resp, err := p.clientFor(cfg, req.Model).Complete(ctx, req)
+	p.recordHealth(req.Model, err)
+	return resp, err
 }
 
 // CompleteStream implements ChatProtocol.
 func (p *OllamaProtocol) CompleteStream(ctx context.Context, cfg ProviderConfig, req *CompletionRequest, onToken func(string)) (*CompletionResponse, error) {
-	return p.clientFor(cfg).CompleteStream(ctx, req, onToken)
+	resp, err := p.clientFor(cfg, req.Model).CompleteStream(ctx, req, onToken)
+	p.recordHealth(req.Model, err)
+	return resp, err
 }
 
 // Health implements ChatProtocol.
 func (p *OllamaProtocol) Health(ctx context.Context, cfg ProviderConfig) error {
-	return p.clientFor(cfg).Health(ctx)
+	return p.clientFor(cfg, cfg.HealthModel).Health(ctx)
 }
 
 // ListModels implements ChatProtocol.
 func (p *OllamaProtocol) ListModels(ctx context.Context, cfg ProviderConfig) ([]DiscoveredModel, error) {
-	return p.clientFor(cfg).ListModels(ctx)
+	return p.clientFor(cfg, cfg.HealthModel).ListModels(ctx)
 }
 
 // CreateEmbeddings implements EmbedProtocol.
 func (p *OllamaProtocol) CreateEmbeddings(ctx context.Context, cfg ProviderConfig, req *EmbeddingRequest) (*EmbeddingResponse, error) {
-	return p.clientFor(cfg).CreateEmbeddings(ctx, req)
+	resp, err := p.clientFor(cfg, req.Model).CreateEmbeddings(ctx, req)
+	p.recordHealth(req.Model, err)
+	return resp, err
 }
 
 // BatchSize implements EmbedProtocol.
