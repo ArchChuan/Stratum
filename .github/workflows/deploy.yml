@@ -632,6 +632,11 @@ jobs:
             -n stratum --atomic --wait --timeout=10m
 
       - name: Apply core observability manifests (Loki/Promtail/Jaeger/OTel collector)
+        env:
+          # Promtail verification curls the hostNetwork metrics endpoint
+          # directly over SSH (kubectl port-forward through the API tunnel was
+          # flaky); the deploy key is provisioned by the earlier tunnel step.
+          SSH_DEPLOY_HOST: ${{ secrets.SSH_DEPLOY_HOST }}
         run: |
           # Logging + tracing manifests are not part of the helm chart; apply
           # them here. Must run after the helm deploy so stratum-config already
