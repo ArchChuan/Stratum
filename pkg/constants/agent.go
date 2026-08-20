@@ -66,7 +66,7 @@ const (
 	// AgentFactCheckTimeout 是单次幻觉校验的整体时间预算；judge/检索失败或超时
 	// 降级为「不校验」（nil），不阻塞 agent 执行。
 	AgentFactCheckTimeout = 30 * time.Second
-	// AgentFactCheckJudgeModel 是幻觉校验 LLM-as-Judge 的默认模型（独立接线，
+	// AgentFactCheckJudgeModel 是幻觉校验 LLM-as-Judge 的默认模型（保留，
 	// 不得静默回落 evaluation.judge.model）。
 	AgentFactCheckJudgeModel = "qwen-turbo"
 	// AgentFactCheckJudgeMaxTokens 是 judge 单次输出预算。1024 会被批量
