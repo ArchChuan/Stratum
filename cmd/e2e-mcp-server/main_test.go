@@ -148,7 +148,9 @@ func TestHandlerServesOpenAICompatibleModels(t *testing.T) {
 	}
 }
 
-func TestCompletionReturnsOptimizationCandidatesForQwenPlus(t *testing.T) {
+// TestCompletionReturnsOptimizationCandidatesByPromptMarker 验证优化器请求按
+// 系统提示词标记识别（不再绑定具体模型名）。
+func TestCompletionReturnsOptimizationCandidatesByPromptMarker(t *testing.T) {
 	t.Parallel()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(
 		`{"model":"qwen-plus","messages":[{"role":"system","content":"你是提示词优化器。只生成候选内容，不决定发布。仅输出 JSON 数组。"}]}`))

@@ -219,12 +219,15 @@ func (g *Gateway) resolveChain(ctx context.Context, model string) ([]chainLink, 
 }
 
 // recordModelResolutionFailure 将模型解析配置失效（无默认模型 / 请求失效
-// 模型）写入监控报警链路：ERROR 日志 + llm_model_resolution_errors_total
-// 指标。配置层缺陷禁止静默降级或吞错。
+// 模型 / registry 基础设施故障）写入监控报警链路：ERROR 日志 +
+// llm_model_resolution_errors_total 指标。配置层缺陷禁止静默降级或吞错。
 func (g *Gateway) recordModelResolutionFailure(model string, err error) {
-	reason := "invalid_model"
-	if errors.Is(err, ErrNoDefaultModel) {
+	reason := "resolve_error"
+	switch {
+	case errors.Is(err, ErrNoDefaultModel):
 		reason = "no_default"
+	case errors.Is(err, ErrModelNotInCatalog):
+		reason = "invalid_model"
 	}
 	g.metrics.IncLLMModelResolutionError(model, reason)
 	g.metrics.IncLLMRequest(model, "unknown", llmStatusError)

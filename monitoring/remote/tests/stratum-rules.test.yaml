@@ -6,6 +6,7 @@ rule_files:
   - ../rules/stratum-dependencies.yaml
   - ../rules/stratum-monitoring.yaml
   - ../rules/stratum-ai.yaml
+  - ../rules/stratum-llm-model.yaml
 
 evaluation_interval: 1m
 
@@ -1188,3 +1189,23 @@ tests:
       - eval_time: 6m
         alertname: StratumRouteFallbackSurge
         exp_alerts: []
+
+  - name: llm model resolution failure fires and recovers
+    interval: 1m
+    input_series:
+      - series: 'llm_model_resolution_errors_total{model="",reason="no_default"}'
+        values: '0+1x8'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: StratumLLMModelResolutionFailed
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: StratumLLMModelResolutionFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum
+              environment: remote-test
+              component: llm-gateway
+              model: ""
+              reason: no_default
