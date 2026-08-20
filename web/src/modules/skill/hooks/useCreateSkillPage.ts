@@ -20,7 +20,7 @@ export const useCreateSkillPage = () => {
       navigate(`/skills/${workspace.skill.id}/workspace`);
     } catch (err: unknown) {
       if (!isForbidden(err)) {
-        message.error({ content: extractErrorMessage(err, '创建失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '创建失败'), duration: 3 });
       }
     } finally {
       setLoading(false);

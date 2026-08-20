@@ -29,6 +29,6 @@ describe('useDashboardPage', () => {
     const { result } = renderHook(() => useDashboardPage());
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(Object.values(result.current.counts).every((value) => value === 0)).toBe(true);
-    expect(message.error).toHaveBeenCalledWith({ content: '加载概览数据失败', duration: 0 });
+    expect(message.error).toHaveBeenCalledWith({ content: '加载概览数据失败', duration: 3 });
   });
 });

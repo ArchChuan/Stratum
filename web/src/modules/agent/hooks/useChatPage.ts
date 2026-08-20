@@ -168,7 +168,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
         if (!cancelled) {
           setAgentsError(true);
           setAgentsLoading(false);
-          msg.error({ content: '加载 Agent 列表失败', duration: 0 });
+          msg.error({ content: '加载 Agent 列表失败', duration: 3 });
         }
       }
     })();
@@ -196,7 +196,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
         const found = convs.find((c) => c.id === last);
         setSelectedConv(found ? found.id : convs[0]?.id ?? null);
       } catch {
-        if (!cancelled) msg.error({ content: '加载会话列表失败', duration: 0 });
+        if (!cancelled) msg.error({ content: '加载会话列表失败', duration: 3 });
       } finally {
         if (!cancelled) setLoadingConvs(false);
       }
@@ -286,7 +286,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
           }
         }
       } catch {
-        if (!cancelled) msg.error({ content: '加载消息历史失败', duration: 0 });
+        if (!cancelled) msg.error({ content: '加载消息历史失败', duration: 3 });
       } finally {
         if (!cancelled) setLoadingMsgs(false);
       }
@@ -430,7 +430,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
       setConversations((prev) => [conv, ...prev]);
       setSelectedConv(conv.id);
     } catch {
-      msg.error({ content: '创建会话失败', duration: 0 });
+      msg.error({ content: '创建会话失败', duration: 3 });
     }
   }, [selectedAgent]);
 
@@ -439,7 +439,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
       await conversationApi.rename(convId, name);
       setConversations((prev) => prev.map((c) => (c.id === convId ? { ...c, name } : c)));
     } catch {
-      msg.error({ content: '重命名失败', duration: 0 });
+      msg.error({ content: '重命名失败', duration: 3 });
     }
   }, []);
 
@@ -451,7 +451,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
         setConversations(next);
         if (selectedConv === convId) setSelectedConv(next[0]?.id ?? null);
       } catch {
-        msg.error({ content: '删除会话失败', duration: 0 });
+        msg.error({ content: '删除会话失败', duration: 3 });
       }
     },
     [conversations, selectedConv],
@@ -483,7 +483,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
       )));
       msg.error({
         content: status === 'unknown_outcome' ? '工具执行结果未知，需要人工对账' : detail,
-        duration: 0,
+        duration: 3,
       });
     } finally {
       setApprovalActionId(null);
@@ -496,7 +496,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
       setPendingApprovals((rows) => rows.filter((row) => row.approvalId !== approvalID));
       msg.success({ content: '已拒绝工具执行', duration: 2 });
     } catch (err) {
-      msg.error({ content: extractErrorMessage(err, '拒绝审批失败'), duration: 0 });
+      msg.error({ content: extractErrorMessage(err, '拒绝审批失败'), duration: 3 });
     } finally {
       setApprovalActionId(null);
     }

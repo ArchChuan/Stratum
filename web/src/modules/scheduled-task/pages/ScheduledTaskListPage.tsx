@@ -72,7 +72,7 @@ export function ScheduledTaskListPage() {
       });
       setCreateOpen(false);
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '创建定时任务失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '创建定时任务失败'), duration: 3 });
     }
   }, [createTask]);
 
@@ -89,7 +89,7 @@ export function ScheduledTaskListPage() {
       setEditOpen(false);
       setEditing(null);
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '更新定时任务失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '更新定时任务失败'), duration: 3 });
     }
   }, [editing, updateTask]);
 

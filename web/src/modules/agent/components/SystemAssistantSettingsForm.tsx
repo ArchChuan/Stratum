@@ -36,7 +36,7 @@ export const SystemAssistantSettingsForm = ({ onCancel, onSaved }: Props) => {
         if (cancelled) return;
         const detail = extractErrorMessage(err, '加载助手模型失败');
         setLoadError(detail);
-        message.error({ content: detail, duration: 0 });
+        message.error({ content: detail, duration: 3 });
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -60,7 +60,7 @@ export const SystemAssistantSettingsForm = ({ onCancel, onSaved }: Props) => {
       onSaved(settings.llmModel);
     } catch (err) {
       if (activeRef.current && mutationGeneration === mutationGenerationRef.current) {
-        message.error({ content: extractErrorMessage(err, '更新助手模型失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '更新助手模型失败'), duration: 3 });
       }
     } finally {
       if (activeRef.current && mutationGeneration === mutationGenerationRef.current) {

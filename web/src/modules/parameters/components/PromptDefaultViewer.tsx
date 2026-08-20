@@ -41,7 +41,7 @@ export const PromptDefaultViewer = ({ promptKey, label = '查看默认提示词'
       templateCache.set(promptKey, content);
       setTemplate(content);
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '加载默认提示词失败'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '加载默认提示词失败'), duration: 3 });
       setOpen(false);
     } finally {
       setLoading(false);

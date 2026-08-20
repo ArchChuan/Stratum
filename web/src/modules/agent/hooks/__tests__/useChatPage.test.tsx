@@ -116,7 +116,7 @@ describe('useChatPage tool approvals', () => {
     expect(result.current.pendingApprovals[0]?.status).toBe('unknown_outcome');
     expect(message.error).toHaveBeenCalledWith({
       content: '工具执行结果未知，需要人工对账',
-      duration: 0,
+      duration: 3,
     });
   });
 

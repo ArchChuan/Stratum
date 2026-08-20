@@ -38,7 +38,7 @@ export const useAuditListPage = () => {
       setTotal(pageData.total);
     } catch (err) {
       if (seq !== requestSeqRef.current) return;
-      message.error({ content: (err as RequestError).response?.data?.error || '加载审计记录失败', duration: 0 });
+      message.error({ content: (err as RequestError).response?.data?.error || '加载审计记录失败', duration: 3 });
     } finally {
       if (seq === requestSeqRef.current) setLoading(false);
     }
@@ -68,7 +68,7 @@ export const useAuditListPage = () => {
       const event = await auditApi.getEvent(id);
       setDetailEvent(event);
     } catch (err) {
-      message.error({ content: (err as RequestError).response?.data?.error || '加载审计详情失败', duration: 0 });
+      message.error({ content: (err as RequestError).response?.data?.error || '加载审计详情失败', duration: 3 });
     } finally {
       setDetailLoading(false);
     }

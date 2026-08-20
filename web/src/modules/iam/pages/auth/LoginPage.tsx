@@ -36,7 +36,7 @@ export const LoginPage = () => {
       );
       navigate('/', { replace: true });
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '访客登录失败，请稍后重试'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '访客登录失败，请稍后重试'), duration: 3 });
       setGuestLoading(false);
     }
   };
@@ -49,7 +49,7 @@ export const LoginPage = () => {
       login(me, access_token);
       navigate('/', { replace: true });
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '用户名或密码错误'), duration: 0 });
+      message.error({ content: extractErrorMessage(err, '用户名或密码错误'), duration: 3 });
     } finally {
       setLoginLoading(false);
     }

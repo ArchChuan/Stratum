@@ -62,7 +62,7 @@ export function ModelListPage() {
         message.success({ content: '模型已更新', duration: 2 });
         setEditOpen(false);
       } catch (err: unknown) {
-        message.error({ content: extractErrorMessage(err, '更新模型失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '更新模型失败'), duration: 3 });
       } finally {
         setEditLoading(false);
       }

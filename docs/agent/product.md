@@ -30,7 +30,7 @@
 
 ## 交互三态
 
-进行中 → 按钮 loading / Skeleton；成功 → `message.success` ≤2s；失败 → `message.error` 不自动消失。
+进行中 → 按钮 loading / Skeleton；成功 → `message.success` ≤2s；失败 → `message.error` 自动消失（约 3s）。
 
 ## 空状态
 

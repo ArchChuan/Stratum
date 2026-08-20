@@ -59,7 +59,7 @@ export const useTenantMembers = () => {
       return data;
     } catch (err) {
       if (gen === reqGenRef.current && !isForbidden(err)) {
-        message.error({ content: extractErrorMessage(err, '获取成员列表失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '获取成员列表失败'), duration: 3 });
       }
       return undefined;
     } finally {
@@ -79,7 +79,7 @@ export const useTenantMembers = () => {
       message.success({ content: '邀请码已生成', duration: 2 });
     } catch (err) {
       if (!isForbidden(err)) {
-        message.error({ content: extractErrorMessage(err, '邀请失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '邀请失败'), duration: 3 });
       }
     } finally {
       setInviteLoading(false);
@@ -97,7 +97,7 @@ export const useTenantMembers = () => {
       }
     } catch (err) {
       if (!isForbidden(err)) {
-        message.error({ content: extractErrorMessage(err, '移除失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '移除失败'), duration: 3 });
       }
     }
   };
@@ -110,7 +110,7 @@ export const useTenantMembers = () => {
       void fetchPage(current, pageSize);
     } catch (err) {
       if (!isForbidden(err)) {
-        message.error({ content: extractErrorMessage(err, '更新角色失败'), duration: 0 });
+        message.error({ content: extractErrorMessage(err, '更新角色失败'), duration: 3 });
       }
     }
   };
