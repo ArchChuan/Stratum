@@ -71,9 +71,12 @@ verify_promtail_log_flow() {
         else
             metrics="$(curl -sf http://127.0.0.1:9080/metrics 2>/dev/null || true)"
         fi
-        printf '%s\n' "${metrics}" \
-            | awk -v name="$1" \
-                '$1 ~ ("^" name) && $2 ~ /^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$/ {print $2; exit}'
+        # here-string 而非管道：awk 命中首个匹配即 exit，metrics 较大时
+        # printf 会收到 SIGPIPE，在 set -o pipefail 下导致部署失败
+        # （observed 2026-08-20: promtail sent_bytes 越过 1e7 后偶发）。
+        awk -v name="$1" \
+            '$1 ~ ("^" name) && $2 ~ /^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$/ {print $2; exit}' \
+            <<<"${metrics}"
     }
 
     # Numeric comparison that understands scientific notation (awk parses
