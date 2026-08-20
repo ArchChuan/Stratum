@@ -99,6 +99,13 @@ metadata:
     app.kubernetes.io/component: logging
 spec:
   replicas: 1
+  # Single-replica boltdb-shipper on a shared PVC cannot run two instances
+  # concurrently: a RollingUpdate briefly starts the new pod next to the old
+  # one and the newcomer fails with "init compactor: failed to init delete
+  # store: timeout" (index lock contention), hanging the rollout. Recreate
+  # terminates the old pod before the new one starts.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: loki
