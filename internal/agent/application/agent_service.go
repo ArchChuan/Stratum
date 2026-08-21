@@ -62,13 +62,16 @@ type AgentServiceDeps struct {
 	// MCPServerLister 供系统助手 stratum_list_mcp_servers 只读枚举当前租户
 	// 已连接的 MCP server。由 wiring 以薄 ACL 适配 mcp context 的 MCPService；
 	// nil 时该工具 fail-closed（graph 层 ListMCPServersFn 未装配）。
-	MCPServerLister           port.MCPServerLister
-	ToolAuthorizer            *ToolAuthorizer
-	ApprovalService           *ToolApprovalService
-	ChatStore                 ChatStore
-	EvidenceProvider          port.TraceEvidenceProvider
-	TracePayloadStore         port.TracePayloadStore
-	CheckpointStore           CheckpointStore
+	MCPServerLister   port.MCPServerLister
+	ToolAuthorizer    *ToolAuthorizer
+	ApprovalService   *ToolApprovalService
+	ChatStore         ChatStore
+	EvidenceProvider  port.TraceEvidenceProvider
+	TracePayloadStore port.TracePayloadStore
+	CheckpointStore   CheckpointStore
+	// CompactionStore 跨轮复用压缩摘要存储。nil 时组装侧保持无复用行为
+	// （与旧 BuildContextMessagesWithCompaction 逐字节一致）。
+	CompactionStore           port.CompactionStore
 	MemoryCleaner             port.AgentMemoryCleaner
 	MemoryBuffer              port.BufferMemoryFn
 	MemoryInjector            port.MemoryInjector
@@ -2206,6 +2209,7 @@ func (s *AgentService) assembleOptions(
 	}
 	s.attachChatStore(a)
 	s.attachCheckpointStore(a)
+	s.attachCompactionStore(a)
 
 	options = append(options,
 		WithTenantID(meta.TenantID),
@@ -2674,6 +2678,21 @@ func (s *AgentService) attachCheckpointStore(a Agent) {
 		if setter, ok := a.(checkpointStoreSetter); ok {
 			setter.SetCheckpointStore(s.deps.CheckpointStore)
 		}
+	}
+}
+
+// attachCompactionStore wires the shared compaction summary store onto the
+// running agent when the agent type supports it. nil store keeps assembly
+// side in the legacy no-reuse behavior.
+func (s *AgentService) attachCompactionStore(a Agent) {
+	if s.deps.CompactionStore == nil {
+		return
+	}
+	type compactionStoreSetter interface {
+		SetCompactionStore(port.CompactionStore)
+	}
+	if setter, ok := a.(compactionStoreSetter); ok {
+		setter.SetCompactionStore(s.deps.CompactionStore)
 	}
 }
 
