@@ -15,6 +15,15 @@ tests, contract goldens, security checks, and builds. Browser tools are absent f
 `ci_checks` identifier in `.test/verification.yaml` maps to a workflow job, and the compatibility aggregate fails unless
 every required dependency result is `success`.
 
+## CI-owned local skip
+
+`run-planned-checks.sh` honors `CI_OWNED=1`: when a local check for the selected risk level also appears in the
+manifest's `ci_checks` (backed by a real job above), it is skipped locally instead of re-run. Only checks CI does not
+cover (e.g. `docs-lint`, E2E) stay local. Every skipped unit is printed as `skipped (CI-owned): <check>` — explicit,
+never silent. If the plan lacks a `ci_checks` declaration the run fails closed (runs everything rather than risk a
+missed skip). Use it when CI is already green for the branch and you only need local E2E plus targeted tests:
+`CI_OWNED=1 make test-verify-before-pr`. Off by default; behavior is unchanged without it.
+
 ## Release pipeline authority
 
 For a `workflow_run` deployment, the candidate is `github.event.workflow_run.head_sha`. It must be a successful CI run
