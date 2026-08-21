@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"math"
 	"strings"
 
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -28,13 +29,20 @@ func NewChatRequest(model string, msgs []Message, tools []Tool, effort string) *
 	}
 }
 
+// RoundTemperature 把温度收敛到 2 位小数：智谱等 OpenAI 兼容端点在请求体
+// 校验小数点位数（超过 2 位返回 400）。float32→float64 直转会把 0.1 变成
+// 0.10000000149011612，必须先舍入再发送，避免 provider 契约 400。
+func RoundTemperature(v float64) float64 {
+	return math.Round(v*100) / 100
+}
+
 // temperaturePtr 把调用方的 float32 温度转成 *float64：0 = unset（agent 语义
-// 贯穿全链路）→ nil，让网关采样注入层生效；非 0 → 显式值。
+// 贯穿全链路）→ nil，让网关采样注入层生效；非 0 → 显式值（2 位小数）。
 func temperaturePtr(v float32) *float64 {
 	if v == 0 {
 		return nil
 	}
-	f := float64(v)
+	f := RoundTemperature(float64(v))
 	return &f
 }
 

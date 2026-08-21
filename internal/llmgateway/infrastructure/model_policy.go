@@ -71,7 +71,7 @@ func injectTemperature(requested *float64, policy *ModelPolicy) (*float64, bool)
 		policy.SamplingDefaults, policy.ProviderSamplingDefaults,
 	} {
 		if defaults != nil && defaults.Temperature != nil {
-			value := *defaults.Temperature
+			value := domain.RoundTemperature(*defaults.Temperature)
 			return &value, true
 		}
 	}

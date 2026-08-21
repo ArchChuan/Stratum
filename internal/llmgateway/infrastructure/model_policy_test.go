@@ -43,6 +43,17 @@ func TestEnforceModelPolicy_injectModelSampling(t *testing.T) {
 	require.Equal(t, 0.7, *got.Temperature)
 }
 
+// TestEnforceModelPolicy_injectedTemperatureRoundedToTwoDecimals 保证采样默认
+// 温度注入时同样舍入到 2 位小数（智谱 400 契约：temperature 最多 2 位小数）。
+func TestEnforceModelPolicy_injectedTemperatureRoundedToTwoDecimals(t *testing.T) {
+	p := &infrastructure.ModelPolicy{MaxTokens: 8192,
+		SamplingDefaults: &domain.SamplingParams{Temperature: floatPtr(0.30000000000000004)}}
+	req := &infrastructure.CompletionRequest{Model: "m", MaxTokens: 100}
+	got, err := infrastructure.EnforceModelPolicy(req, p, false)
+	require.NoError(t, err)
+	require.Equal(t, 0.3, *got.Temperature)
+}
+
 func TestEnforceModelPolicy_doesNotHardRejectEstimatedWindow(t *testing.T) {
 	p := &infrastructure.ModelPolicy{MaxTokens: 8192, ContextWindow: 4096}
 	req := &infrastructure.CompletionRequest{
