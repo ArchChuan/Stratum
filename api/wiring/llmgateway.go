@@ -6,10 +6,10 @@ import (
 
 	"go.uber.org/zap"
 
-	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
 	llmapp "github.com/byteBuilderX/stratum/internal/llmgateway/application"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
+	parametersapp "github.com/byteBuilderX/stratum/internal/parameters/application"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/byteBuilderX/stratum/pkg/observability"
@@ -38,9 +38,9 @@ type LLMGateway struct {
 	Registry         *llmgateway.ModelRegistry
 	ProviderService  *llmapp.ProviderService
 	ModelMgmtService *llmapp.ModelMgmtService
-	// TenantEmbeddingResolver 解析租户显式配置的记忆嵌入模型
-	// （tenants.settings.memory_embedding_model），fail-closed。iam 构建晚于
-	// llmgateway，内部延迟绑定 c.IAM.TenantService。
+	// TenantEmbeddingResolver 解析平台参数 memory.embedding_model（全局，
+	// platform_settings），fail-closed。parameters 构建晚于 llmgateway，
+	// 内部延迟绑定 c.Parameters.Service。
 	TenantEmbeddingResolver *tenantEmbeddingModelResolver
 }
 
@@ -137,11 +137,11 @@ func (c *Container) buildLLMGateway(ctx context.Context) error {
 		Registry:         registry,
 		ProviderService:  providerSvc,
 		ModelMgmtService: mgmtSvc,
-		TenantEmbeddingResolver: newTenantEmbeddingModelResolver(func() *iamapp.TenantService {
-			if c.IAM == nil {
+		TenantEmbeddingResolver: newTenantEmbeddingModelResolver(func() *parametersapp.Service {
+			if c.Parameters == nil {
 				return nil
 			}
-			return c.IAM.TenantService
+			return c.Parameters.Service
 		}, registry, c.Logger),
 	}
 	return nil
