@@ -161,12 +161,12 @@ func (r *safeJobRunner) count() int {
 func TestWorkerPollOnceErrors(t *testing.T) {
 	// 极端情况：lister 失败 → 返回错误。
 	worker := NewWorker(fakeTenantListerErr{}, &fakeTenantJobRunner{}, time.Second, observability.NoopMetrics{})
-	if err := worker.PollOnce(context.Background()); err == nil {
+	if _, err := worker.PollOnce(context.Background()); err == nil {
 		t.Fatal("lister failure must error")
 	}
 	// 极端情况：runner 失败 → 聚合错误，其余 tenant 继续。
 	worker = NewWorker(fakeTenantLister{ids: []string{"a", "b"}}, &fakeRunnerErr{}, time.Second, observability.NoopMetrics{})
-	if err := worker.PollOnce(context.Background()); err == nil {
+	if _, err := worker.PollOnce(context.Background()); err == nil {
 		t.Fatal("runner failure must error")
 	}
 }

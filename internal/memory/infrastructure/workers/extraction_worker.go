@@ -66,7 +66,7 @@ func (w *ExtractionWorker) run(ctx context.Context) {
 
 		if task == nil {
 			backoff = constants.MemoryFetchBackoffBase
-			if !SleepCtx(ctx, w.stopCh, backoff) {
+			if !SleepCtx(ctx, w.stopCh, constants.MemoryQueueEmptyBackoff) {
 				return
 			}
 			continue

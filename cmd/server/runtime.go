@@ -190,7 +190,7 @@ func registerWorkflowWorker(appHarness *harnesspkg.Harness, c *wiring.Container,
 	var tw trackedWorker
 	mustRegister(appHarness, harnesspkg.NewSimpleComponent("workflow-worker", logger,
 		harnesspkg.WithStartFunc(func(ctx context.Context) error {
-			tw.goRun(ctx, func(runCtx context.Context) { c.Workflow.Worker.Run(runCtx, 250*time.Millisecond) })
+			tw.goRun(ctx, func(runCtx context.Context) { c.Workflow.Worker.Run(runCtx, constants.WorkflowIdleInterval) })
 			return nil
 		}),
 		harnesspkg.WithStopFunc(tw.wait),
@@ -205,7 +205,7 @@ func registerCollabWorker(appHarness *harnesspkg.Harness, c *wiring.Container, l
 	var tw trackedWorker
 	mustRegister(appHarness, harnesspkg.NewSimpleComponent("collab-worker", logger,
 		harnesspkg.WithStartFunc(func(ctx context.Context) error {
-			tw.goRun(ctx, func(runCtx context.Context) { c.Collab.Worker.Run(runCtx, 250*time.Millisecond) })
+			tw.goRun(ctx, func(runCtx context.Context) { c.Collab.Worker.Run(runCtx, constants.CollabIdleInterval) })
 			return nil
 		}),
 		harnesspkg.WithStopFunc(tw.wait),

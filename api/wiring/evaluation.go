@@ -1058,7 +1058,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	worker := evalapp.NewWorker(
 		evaluationTenantLister{pool: db},
 		evalapp.NewMultiRunner(jobService, experimentRunner),
-		time.Second,
+		constants.EvaluationIdleInterval,
 		c.platformMetrics(),
 	)
 	worker.Start(ctx)
