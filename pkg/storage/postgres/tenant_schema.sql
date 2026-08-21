@@ -731,6 +731,29 @@ CREATE INDEX IF NOT EXISTS idx_chat_msg_trace
 CREATE INDEX IF NOT EXISTS idx_chat_msg_conv
     ON chat_messages (conversation_id, created_at ASC);
 
+-- Per-conversation compaction summaries reused across turns. Distinct from
+-- memory_summaries: this stores the *conversation-continuity* summary produced
+-- by the compaction path (assemble + loop sides share it), anchored by
+-- chat_messages.id (UUID v7, time-ordered) so covered_until can be compared
+-- with `id > covered_until`. One row per conversation; covered_until advances
+-- monotonically as older rounds get compacted. Schema mirrors memory_summaries'
+-- anchoring fields but is semantically independent (D7).
+CREATE TABLE IF NOT EXISTS chat_compaction_summaries (
+    id              UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),
+    conversation_id UUID        NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+    covered_until   UUID        NOT NULL,
+    summary         TEXT        NOT NULL,
+    source_start    UUID        NOT NULL,
+    source_end      UUID        NOT NULL,
+    version         INT         NOT NULL DEFAULT 1,
+    token_count     INT         NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (conversation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_chat_compaction_conversation
+    ON chat_compaction_summaries (conversation_id);
+
 CREATE TABLE IF NOT EXISTS agent_workspaces (
     agent_id     TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     workspace_id UUID NOT NULL REFERENCES rag_workspaces(id) ON DELETE CASCADE,

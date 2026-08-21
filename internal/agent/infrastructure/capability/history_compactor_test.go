@@ -178,3 +178,68 @@ func TestCompactHistory_UsesBuiltinCompactionPrompt(t *testing.T) {
 		t.Fatalf("fallback compaction prompt missing: %q", fallback)
 	}
 }
+
+// TestRenderConversation_ToolPairFormat 验证 D9 配对渲染：工具调用对
+// （assistant + ToolCalls 与其 tool 结果）渲染为 [Tool] name(args) → result，
+// 工具名与参数不再丢失；未配对的 tool 结果以 [Tool result] 行保留，普通
+// 消息保持 Role: Content 格式。
+func TestRenderConversation_ToolPairFormat(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []port.LLMMessage
+		want string
+	}{
+		{
+			name: "普通消息按角色渲染",
+			in:   []port.LLMMessage{{Role: "user", Content: "你好"}},
+			want: "User: 你好\n",
+		},
+		{
+			name: "工具调用对渲染为配对格式",
+			in: []port.LLMMessage{
+				{Role: "assistant", ToolCalls: []port.ToolCall{{ID: "c1", Name: "calc", Arguments: map[string]any{"expr": "1+1"}}}},
+				{Role: "tool", Content: "2", ToolCallID: "c1"},
+			},
+			want: "[Tool] calc({\"expr\":\"1+1\"}) → 2\n",
+		},
+		{
+			name: "未配对 tool 结果保留为孤儿行",
+			in:   []port.LLMMessage{{Role: "tool", Content: "orphan result", ToolCallID: "c9"}},
+			want: "[Tool result] orphan result\n",
+		},
+		{
+			name: "空参数工具调用输出空括号",
+			in: []port.LLMMessage{
+				{Role: "assistant", ToolCalls: []port.ToolCall{{ID: "c2", Name: "ping", Arguments: map[string]any{}}}},
+				{Role: "tool", Content: "pong", ToolCallID: "c2"},
+			},
+			want: "[Tool] ping() → pong\n",
+		},
+		{
+			name: "多条工具调用顺序输出",
+			in: []port.LLMMessage{
+				{Role: "assistant", ToolCalls: []port.ToolCall{
+					{ID: "c1", Name: "a", Arguments: map[string]any{"x": "1"}},
+					{ID: "c2", Name: "b", Arguments: map[string]any{"y": "2"}},
+				}},
+				{Role: "tool", Content: "A", ToolCallID: "c1"},
+				{Role: "tool", Content: "B", ToolCallID: "c2"},
+			},
+			want: "[Tool] a({\"x\":\"1\"}) → A\n[Tool] b({\"y\":\"2\"}) → B\n",
+		},
+		{
+			name: "调用与结果分离仍正确配对",
+			in: []port.LLMMessage{
+				{Role: "assistant", ToolCalls: []port.ToolCall{{ID: "c1", Name: "lookup", Arguments: map[string]any{"k": "v"}}}},
+				{Role: "user", Content: "continue"},
+				{Role: "tool", Content: "found", ToolCallID: "c1"},
+			},
+			want: "[Tool] lookup({\"k\":\"v\"}) → found\nUser: continue\n",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, renderConversation(tc.in))
+		})
+	}
+}

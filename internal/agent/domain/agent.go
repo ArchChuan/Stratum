@@ -160,6 +160,25 @@ const (
 	ChatMessageVisibilityInternal = "internal"
 )
 
+// CompactionCoverage 是一次组装侧加载时从共享压缩摘要存储读到的覆盖信息：
+// 该会话已有多少历史被压成摘要、覆盖游标落在哪条 chat_messages.id 之后。
+// covered_until 为空串表示尚无覆盖（首次压缩）。
+type CompactionCoverage struct {
+	CoveredUntil string // 已压缩段最后一条消息 id（chat_messages.id，UUID v7 时间有序）
+	Summary      string // 覆盖段的结构化摘要正文（§3.4 格式）
+	Version      int
+}
+
+// CompactionSegment 是一次组装侧压缩后要回写共享存储的段信息。
+type CompactionSegment struct {
+	ConversationID string
+	CoveredUntil   string // 本次被压掉的最后一条消息 id（单调推进）
+	Summary        string // 结构化摘要正文
+	SourceStart    string
+	SourceEnd      string
+	TokenCount     int
+}
+
 const (
 	ExecStatusSuccess         = "success"
 	ExecStatusError           = "error"

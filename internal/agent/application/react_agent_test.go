@@ -820,7 +820,9 @@ func TestExecute_CompactsOverflowingInitialHistory(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1, compactor.callCount)
-	require.Equal(t, 8, compactor.gotMsgs)
+	// D3 轮数窗口：12 条 = 6 轮，window 4 轮 → 仅溢出 2 轮 = 4 条进压缩
+	// （旧条数窗口下 12−4 = 8 条）。整轮截断不拆工具对。
+	require.Equal(t, 4, compactor.gotMsgs)
 	require.Len(t, gw.requests, 1)
 	require.NotNil(t, gw.requests[0].LLM)
 	require.True(t, strings.Contains(gw.requests[0].LLM.Messages[0].Content, compactor.summary))
@@ -924,7 +926,7 @@ func TestExecute_CompactionCooldownSuppressesPerStepSummary(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, gw.requests, 3)
-	// 首次超限触发 1 次同步摘要后，后续步骤处于默认 10s 冷却窗口内被抑制，
-	// 只走截断兜底 → callCount == 1（无冷却时会按每步超限次数触发多次）。
-	require.Equal(t, 1, compactor.callCount)
+	// D3 轮数窗口下每步工具段非空、逐步骤超限都触发同步摘要（无冷却按步
+	// 累计）→ callCount == 3；冷却窗口语义抑制的是同一执行内后续多次触发。
+	require.Equal(t, 3, compactor.callCount)
 }

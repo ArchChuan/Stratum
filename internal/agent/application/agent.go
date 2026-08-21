@@ -170,6 +170,7 @@ type BaseAgent struct {
 	TaskStore          port.TaskRepo
 	MemoryInjector     port.MemoryInjector
 	HistoryCompactor   port.HistoryCompactor
+	CompactionStore    port.CompactionStore
 	RecallMemoryFn     port.RecallMemoryFn
 	GlobalSystemSuffix string
 }
@@ -205,6 +206,43 @@ func (a *BaseAgent) SetHistoryCompactor(compactor port.HistoryCompactor) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.HistoryCompactor = compactor
+}
+
+// SetCompactionStore 注入跨轮复用压缩摘要存储。nil 时组装侧保持无复用行为
+// （与旧 BuildContextMessagesWithCompaction 逐字节一致）。
+func (a *BaseAgent) SetCompactionStore(store port.CompactionStore) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.CompactionStore = store
+}
+
+// assembleContextMessagesReuse 构造组装侧上下文消息。注入 CompactionStore 后
+// 走游标折叠 + 增量压缩 + 回写；未注入时 reuse 为 nil，行为与旧
+// BuildContextMessagesWithCompaction 一致。覆盖读取/回写失败已在 build 内部
+// fail closed（降级为无复用压缩或截断兜底），主流程不阻断，仅 WARN 暴露——
+// 禁止伪成功。
+func (a *BaseAgent) assembleContextMessagesReuse(ctx context.Context, ec agentExecContext, maxTokens int) []port.LLMMessage {
+	var reuse *CompactionReuse
+	if ec.compactionStore != nil {
+		reuse = &CompactionReuse{
+			Store:          ec.compactionStore,
+			TenantID:       ec.cfg.TenantID,
+			ConversationID: ec.cfg.ConversationID,
+			RecentRounds:   ec.recentRounds,
+		}
+	}
+	initMessages, err := BuildContextMessagesWithCompactionReuse(
+		ctx, ec.systemPrompt, ec.globalSuffix, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow,
+		ec.cfg.OutputReserve, 0, ec.historyCompactor, reuse,
+	)
+	if err != nil {
+		a.Logger.Warn("agent.assemble_compaction_failed",
+			zap.String("agent_id", a.ID),
+			zap.String("conversation_id", ec.cfg.ConversationID),
+			zap.Error(err),
+		)
+	}
+	return initMessages
 }
 
 // SetChatStore sets the chat store for conversation history persistence (void, for interface assertion).
@@ -285,6 +323,8 @@ type agentExecContext struct {
 	llmModel         string
 	capGW            port.CapabilityGateway
 	historyCompactor port.HistoryCompactor
+	compactionStore  port.CompactionStore
+	recentRounds     int
 	maxContextTokens int
 	memoryScope      string
 	workspaceNames   []string
@@ -306,6 +346,7 @@ type agentExecSnapshot struct {
 	llmModel           string
 	capGW              port.CapabilityGateway
 	historyCompactor   port.HistoryCompactor
+	compactionStore    port.CompactionStore
 	chatStore          ChatStore
 	metrics            observability.MetricsProvider
 	workspaceNames     []string
@@ -363,6 +404,7 @@ func (a *BaseAgent) snapshotExecutionConfig(cfg *ExecutionConfig) agentExecSnaps
 		llmModel:           a.LLMModel,
 		capGW:              a.CapGateway,
 		historyCompactor:   a.HistoryCompactor,
+		compactionStore:    a.CompactionStore,
 		chatStore:          a.ChatStore,
 		metrics:            a.metrics,
 		workspaceNames:     a.KnowledgeWorkspaceNames,
@@ -436,7 +478,8 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	ec := agentExecContext{
 		cfg: cfg, tracer: tracer, agentID: snap.agentID, agentName: snap.agentName,
 		systemPrompt: snap.systemPrompt, globalSuffix: snap.globalSystemSuffix, llmModel: snap.llmModel, capGW: snap.capGW,
-		historyCompactor: snap.historyCompactor, maxContextTokens: snap.maxContextTokens,
+		historyCompactor: snap.historyCompactor, compactionStore: snap.compactionStore,
+		recentRounds: cfg.CompactionRecentGroups, maxContextTokens: snap.maxContextTokens,
 		memoryScope: snap.memoryScope, workspaceNames: snap.workspaceNames,
 		workspaceDescs: snap.workspaceDescs, memCtx: memCtx, history: history,
 		input: input,
@@ -607,10 +650,9 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	// 组装侧与循环侧同一预算账本（I1）：safetyRatio 锁定平台默认
 	// （产品规格：不暴露用户配置），传 0 → ComputeBudget 回退
 	// ContextSafetyReserveRatio（0.2）；循环侧 loopPolicy 锁 LoopCompactionSafetyRatio。
-	initMessages := BuildContextMessagesWithCompaction(
-		ctx, ec.systemPrompt, ec.globalSuffix, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow,
-		ec.cfg.OutputReserve, 0, ec.historyCompactor,
-	)
+	// 跨轮复用（D6）：注入 CompactionStore 后走游标折叠 + 增量压缩 + 回写；
+	// 未注入时 reuse 为 nil，行为与旧 BuildContextMessagesWithCompaction 一致。
+	initMessages := a.assembleContextMessagesReuse(ctx, ec, maxTokens)
 
 	// Resume from checkpoint if one exists.
 	activePlan, restoredActives, initMessages := a.resumeFromCheckpoint(
@@ -793,10 +835,9 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 	// 组装侧与循环侧同一预算账本（I1）：safetyRatio 锁定平台默认
 	// （产品规格：不暴露用户配置），传 0 → ComputeBudget 回退
 	// ContextSafetyReserveRatio（0.2）；循环侧 loopPolicy 锁 LoopCompactionSafetyRatio。
-	initMessages := BuildContextMessagesWithCompaction(
-		ctx, ec.systemPrompt, ec.globalSuffix, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow,
-		ec.cfg.OutputReserve, 0, ec.historyCompactor,
-	)
+	// 跨轮复用（D6）：注入 CompactionStore 后走游标折叠 + 增量压缩 + 回写；
+	// 未注入时 reuse 为 nil，行为与旧 BuildContextMessagesWithCompaction 一致。
+	initMessages := a.assembleContextMessagesReuse(ctx, ec, maxTokens)
 	initMessages = a.maybeInjectTaskResume(ctx, ec, initMessages)
 	initState := a.buildReActInitState(ec, initMessages, maxTokens)
 	initState.StuckThreshold = stuckThreshold

@@ -3,12 +3,15 @@ package application_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/byteBuilderX/stratum/internal/agent/application"
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 )
 
@@ -21,12 +24,14 @@ type fakeCompactor struct {
 	summary   string
 	err       error
 	gotMsgs   int
+	got       []port.LLMMessage
 	callCount int
 }
 
 func (f *fakeCompactor) CompactHistory(_ context.Context, msgs []port.LLMMessage) (string, error) {
 	f.callCount++
 	f.gotMsgs = len(msgs)
+	f.got = append([]port.LLMMessage(nil), msgs...)
 	return f.summary, f.err
 }
 
@@ -413,4 +418,215 @@ func TestBuildContextMessages_GlobalSuffixExemptFromHeadCap(t *testing.T) {
 			}
 		})
 	}
+}
+
+// fakeCompactionStore 是测试用 CompactionStore 桩：注入覆盖信息或错误，
+// 记录回写段供断言模型 A 累计覆盖。
+type fakeCompactionStore struct {
+	coverage  *domain.CompactionCoverage
+	getErr    error
+	upsertErr error
+	upserted  []*domain.CompactionSegment
+}
+
+func (s *fakeCompactionStore) GetCoverage(_ context.Context, _, _ string) (*domain.CompactionCoverage, error) {
+	return s.coverage, s.getErr
+}
+
+func (s *fakeCompactionStore) Upsert(_ context.Context, _ string, seg *domain.CompactionSegment) error {
+	s.upserted = append(s.upserted, seg)
+	return s.upsertErr
+}
+
+// makeRounds 生成 n 轮历史消息（每轮 user + assistant），ID 从 "0001" 递增
+// 直至 n*2 位宽（chat_messages.id 为 UUID v7 时间有序，字符串比较即时间
+// 比较，测试用等宽数字 ID 模拟）。internalTool 为 true 时 assistant 消息
+// 标记为 internal 工具摘要（Visibility=Internal，组装侧 D5 配对原子形态）。
+func makeRounds(n int, internalTool bool) []*application.ChatMessage {
+	h := make([]*application.ChatMessage, 0, n*2)
+	for i := 0; i < n; i++ {
+		h = append(h, &application.ChatMessage{
+			ID:      fmt.Sprintf("%04d", i*2+1),
+			Role:    "user",
+			Content: "用户问题" + strconv.Itoa(i+1),
+		})
+		asst := &application.ChatMessage{
+			ID:      fmt.Sprintf("%04d", i*2+2),
+			Role:    "assistant",
+			Content: "回答" + strconv.Itoa(i+1),
+		}
+		if internalTool {
+			asst.Visibility = domain.ChatMessageVisibilityInternal
+		}
+		h = append(h, asst)
+	}
+	return h
+}
+
+// reuseOf 构造启用跨轮复用的调用参数。
+func reuseOf(store port.CompactionStore, recentRounds int) *application.CompactionReuse {
+	return &application.CompactionReuse{
+		Store:          store,
+		TenantID:       "t1",
+		ConversationID: "conv-1",
+		RecentRounds:   recentRounds,
+	}
+}
+
+// buildReuse 是 Reuse 路径组装调用的统一入口（窗口/预算固定便于断言）。
+func buildReuse(store port.CompactionStore, recentRounds int, fc port.HistoryCompactor,
+	hist []*application.ChatMessage, window, maxTokens int) ([]port.LLMMessage, error) {
+	return application.BuildContextMessagesWithCompactionReuse(
+		context.Background(), "sys", "", "mem", hist, "q",
+		maxTokens, window, 0, 0, fc, reuseOf(store, recentRounds))
+}
+
+// TestReuse_NoStoreKeepsLegacyBehavior：reuse=nil（Store 未装配）时与
+// WithCompaction 逐字节一致，无新增行为（D6 关闭路径）。
+func TestReuse_NoStoreKeepsLegacyBehavior(t *testing.T) {
+	hist := makeRounds(12, false)
+	legacy := application.BuildContextMessagesWithCompaction(
+		context.Background(), "sys", "", "mem", hist, "q", 30000, 5, 0, 0,
+		&fakeCompactor{summary: marker})
+	got, err := application.BuildContextMessagesWithCompactionReuse(
+		context.Background(), "sys", "", "mem", hist, "q", 30000, 5, 0, 0,
+		&fakeCompactor{summary: marker}, nil)
+	require.NoError(t, err)
+	require.Equal(t, legacy, got)
+}
+
+// TestReuse_CoverageSkipsCoveredRounds（D3）：covered_until 之前的段折叠为
+// 摘要、不进入窗口判断；剩余未覆盖轮未溢出时不触发新压缩/回写，仅复用
+// 覆盖摘要（coveredSummary 注入 system）。
+func TestReuse_CoverageSkipsCoveredRounds(t *testing.T) {
+	store := &fakeCompactionStore{coverage: &domain.CompactionCoverage{
+		CoveredUntil: "0020", Summary: "已覆盖段摘要", Version: 1}}
+	fc := &fakeCompactor{summary: marker}
+	msgs, err := buildReuse(store, 0, fc, makeRounds(12, false), 5, 30000)
+	require.NoError(t, err)
+
+	sys, hasSys := systemContent(msgs)
+	require.True(t, hasSys, "system message expected")
+	require.Contains(t, sys, "已覆盖段摘要", "覆盖摘要应注入 system")
+	require.Zero(t, fc.callCount, "未溢出不应触发新压缩")
+	require.Empty(t, store.upserted, "未溢出不应回写")
+	// covered 段（0001-0020 = 用户问题1..10）折叠；未覆盖段（0021-0024 =
+	// 用户问题11/12）原文保留（末条为当前输入）。
+	require.Len(t, msgs, 6, "system + 未覆盖 2 轮(4 条) + 输入")
+	require.Equal(t, "用户问题11", msgs[1].Content)
+	require.Equal(t, "回答11", msgs[2].Content)
+	require.Equal(t, "用户问题12", msgs[3].Content)
+	require.Equal(t, "回答12", msgs[4].Content)
+	require.Equal(t, "user", msgs[5].Role)
+	require.Equal(t, "q", msgs[5].Content)
+}
+
+// TestReuse_CumulativeIncrementalCompaction（模型 A）：新摘要 = 旧覆盖摘要
+// 前置 + 新溢出轮（增量压缩输入）；covered_until 单调推进、source_start
+// 保留原始起点。第一次无覆盖压最老 4 轮（0001-0008），第二次带覆盖压
+// 0009-0024。
+func TestReuse_CumulativeIncrementalCompaction(t *testing.T) {
+	// 第一次：6 轮历史、窗口 2 → 溢出 4 轮（0001-0008 = 8 条）全压。
+	store := &fakeCompactionStore{}
+	fc := &fakeCompactor{summary: "首轮摘要"}
+	_, err := buildReuse(store, 0, fc, makeRounds(6, false), 2, 30000)
+	require.NoError(t, err)
+	require.Len(t, store.upserted, 1)
+	require.Equal(t, "0008", store.upserted[0].CoveredUntil, "covered_until 推进到被压最后一条")
+	require.Equal(t, "0001", store.upserted[0].SourceStart, "首次压缩起点为段首条")
+	require.Equal(t, 8, fc.gotMsgs, "首次压缩输入为 4 轮 8 条")
+
+	// 第二次：14 轮历史、覆盖到 0008 → 未覆盖 10 轮、窗口 2 → 溢出 8 轮
+	// （0009-0024 = 16 条）；增量输入 = system 覆盖摘要 + 16 条 = 17。
+	fc2 := &fakeCompactor{summary: "最新摘要"}
+	store2 := &fakeCompactionStore{coverage: &domain.CompactionCoverage{
+		CoveredUntil: "0008", Summary: "首轮摘要", Version: 1}}
+	msgs, err := buildReuse(store2, 0, fc2, makeRounds(14, false), 2, 30000)
+	require.NoError(t, err)
+	require.Equal(t, 17, fc2.gotMsgs, "增量输入 = 覆盖摘要 + 溢出 16 条")
+	require.Len(t, fc2.got, 17)
+	require.Equal(t, "system", fc2.got[0].Role, "增量压缩首条为旧覆盖摘要")
+	require.Equal(t, "首轮摘要", fc2.got[0].Content)
+	require.Equal(t, "用户问题5", fc2.got[1].Content, "新溢出段首条 = 0009 轮用户消息")
+	require.Len(t, store2.upserted, 1)
+	require.Equal(t, "0009", store2.upserted[0].SourceStart, "source_start 保留原始起点")
+	require.Equal(t, "0024", store2.upserted[0].CoveredUntil, "covered_until 单调推进")
+	require.Contains(t, msgs[0].Content, "最新摘要", "system 注入最新累计摘要")
+	// 保留轮（0025-0028 = 用户问题13/14）原文在历史，covered 段不出现。
+	require.Contains(t, msgs[1].Content, "用户问题13")
+	require.Contains(t, msgs[2].Content, "回答13")
+	require.Contains(t, msgs[3].Content, "用户问题14")
+}
+
+// TestReuse_RecentRoundsKeepsRecentPairs（D4）：recentRounds>0 时仅更老的
+// 溢出轮进压缩，最近 N 对工具轮原文保留。
+func TestReuse_RecentRoundsKeepsRecentPairs(t *testing.T) {
+	store := &fakeCompactionStore{}
+	fc := &fakeCompactor{summary: marker}
+	// 12 轮、窗口 2、recentRounds 6 → 溢出 10 轮，压最老 4 轮（0001-0008），
+	// 保留 0009-0024 原文（窗口内 2 轮 + 最近保护 6 轮）。
+	msgs, err := buildReuse(store, 6, fc, makeRounds(12, false), 2, 30000)
+	require.NoError(t, err)
+	require.Equal(t, 8, fc.gotMsgs, "仅更老的 4 轮进压缩")
+	require.Len(t, store.upserted, 1)
+	require.Equal(t, "0008", store.upserted[0].CoveredUntil)
+	require.Contains(t, msgs[1].Content, "用户问题5", "保留轮起点 = 0009")
+}
+
+// TestReuse_CompactionPairAtomic（D5）：internal 工具摘要与其 user 消息构成
+// 一轮，压缩整轮同进退——被压段轮数 ×2 条、无孤儿工具消息。
+func TestReuse_CompactionPairAtomic(t *testing.T) {
+	store := &fakeCompactionStore{}
+	fc := &fakeCompactor{summary: marker}
+	// 8 轮 internal 工具轮、窗口 2 → 溢出 6 轮全部压缩（12 条，含 internal 摘要）。
+	_, err := buildReuse(store, 0, fc, makeRounds(8, true), 2, 30000)
+	require.NoError(t, err)
+	require.Equal(t, 12, fc.gotMsgs, "6 轮 × 2 条整轮压缩")
+	require.Len(t, store.upserted, 1)
+	require.Equal(t, "0012", store.upserted[0].CoveredUntil)
+}
+
+// TestReuse_SummaryInSystemAndUntrusted（D2）：新压缩摘要注入 system 并被
+// <untrusted_history> 结构标签包裹——untrusted 内容升格为指令前有明确边界。
+func TestReuse_SummaryInSystemAndUntrusted(t *testing.T) {
+	store := &fakeCompactionStore{}
+	fc := &fakeCompactor{summary: marker + "复用摘要"}
+	msgs, err := buildReuse(store, 0, fc, makeRounds(12, false), 5, 30000)
+	require.NoError(t, err)
+	sys, hasSys := systemContent(msgs)
+	require.True(t, hasSys)
+	require.Contains(t, sys, marker+"复用摘要")
+	require.Contains(t, sys, "<untrusted_history>")
+	require.Contains(t, sys, "</untrusted_history>")
+}
+
+// TestReuse_CoverageReadFailureFailClosed（§3.2.7）：覆盖读取失败 → 降级为
+// 无覆盖（按全量路径继续，宁可多压不可丢上下文）+ 禁回写 + 返回 error 暴露。
+func TestReuse_CoverageReadFailureFailClosed(t *testing.T) {
+	store := &fakeCompactionStore{getErr: errors.New("store down")}
+	fc := &fakeCompactor{summary: marker}
+	msgs, err := buildReuse(store, 0, fc, makeRounds(12, false), 5, 30000)
+	require.Error(t, err, "覆盖读取失败必须暴露")
+	require.Contains(t, err.Error(), "compaction coverage")
+	// 降级后仍按无覆盖全量路径组装：压缩发生、摘要注入、回写被禁用。
+	require.Equal(t, 1, fc.callCount, "降级后仍尝试压缩")
+	require.Empty(t, store.upserted, "读取失败禁回写")
+	sys, hasSys := systemContent(msgs)
+	require.True(t, hasSys)
+	require.Contains(t, sys, marker)
+}
+
+// TestReuse_WritebackFailureExposed（§3.5）：回写失败 → 本次降级无新摘要、
+// 走纯截断 fallback，错误经 errors.Join 暴露，绝不伪成功。
+func TestReuse_WritebackFailureExposed(t *testing.T) {
+	store := &fakeCompactionStore{upsertErr: errors.New("write fail")}
+	fc := &fakeCompactor{summary: marker}
+	msgs, err := buildReuse(store, 0, fc, makeRounds(12, false), 5, 30000)
+	require.Error(t, err, "回写失败必须暴露")
+	require.Contains(t, err.Error(), "compaction writeback")
+	// 回写失败 → 无新摘要注入（走纯截断），历史仍保留窗口内原文。
+	sys, hasSys := systemContent(msgs)
+	require.True(t, hasSys)
+	require.NotContains(t, sys, marker, "回写失败不应注入新摘要")
+	require.Len(t, store.upserted, 1, "回写被调用但失败")
 }
