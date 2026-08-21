@@ -49,7 +49,7 @@ export const ProviderModelSelect = ({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [capability]);
 
   // 当前值不在目录（退役/未发现）时保留显示为 disabled Option，避免 placeholder
   // 显示"未设置"却隐藏提交值；与 AgentFormSections currentModel 模式一致。
