@@ -53,6 +53,9 @@ export const ParameterControl = ({ def }: { def: ParameterDefinition }): ReactNo
     case 'model':
       // 模型目录选择器（provider 分组）；存储值 = 模型名。
       return <ProviderModelSelect />;
+    case 'embedding_model':
+      // 嵌入模型目录选择器（provider 分组）；存储值 = 模型名。
+      return <ProviderModelSelect capability="embedding" />;
     case 'textarea':
       return (
         <TextArea
