@@ -286,6 +286,7 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 	if llm == nil {
 		deadLetterWithOrphan(ctx, w.js, msg, stopHeartbeat, deadLetterDetails{
 			Stage: "enrich", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "llm_service_unavailable",
+			TraceID: traceID,
 		}, w.vectorCleaner, w.logger, ev.TenantID, ev.MessageID, "memory.enrich.dlq")
 		return
 	}
@@ -298,6 +299,7 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
 		retryOrDeadLetterWithOrphan(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "enrich", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "llm_failed",
+			TraceID: traceID,
 		}, w.vectorCleaner, w.logger, ev.TenantID, ev.MessageID, "memory.enrich.retry_or_dlq")
 		return
 	}
@@ -310,6 +312,7 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
 		retryOrDeadLetterWithOrphan(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "enrich", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "persist_failed",
+			TraceID: traceID,
 		}, w.vectorCleaner, w.logger, ev.TenantID, ev.MessageID, "memory.enrich.retry_or_dlq")
 		return
 	}
@@ -385,6 +388,10 @@ func (w *EnricherWorker) runSummaryAsyncSafe(ctx context.Context, ev *MemoryEnri
 func (w *EnricherWorker) callEnrichLLM(ctx context.Context, llm LLMClient, role, content string) (*EnrichmentResult, error) {
 	settings := w.resolveEnrichSettings(ctx)
 	promptTmpl := w.resolvePlatformString(ctx, "memory.enrich_prompt", "")
+	if strings.TrimSpace(promptTmpl) == "" {
+		// fail-closed：无显式配置不允许空 system prompt 静默调用 LLM。
+		return nil, fmt.Errorf("memory enrich: memory.enrich_prompt not configured (fail-closed)")
+	}
 	prompt := formatEnrichmentPrompt(promptTmpl, role, content)
 	w.logger.Debug("memory.enrich_resolved",
 		zap.String("model", settings.model),
@@ -522,6 +529,14 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnri
 		input = "[Previous Summary]: " + prevSummary + "\n\n[New Messages]:\n" + input
 	}
 	promptTmpl := w.resolvePlatformString(ctx, "memory.summary_prompt", "")
+	if strings.TrimSpace(promptTmpl) == "" {
+		// fail-closed：摘要提示词未配置 → 记 ERROR 并跳过（不阻塞 enrich 主链路）。
+		w.logger.Error("memory.summary.skip_prompt_not_configured",
+			zap.String("trace_id", ev.TraceID),
+			zap.String("conversation_id", ev.ConversationID))
+		summaryTriggered.Inc()
+		return nil
+	}
 	prompt := formatSummaryPrompt(promptTmpl, input)
 	req := llmdomain.NewSummarizeRequest(settings.model, prompt, nil, 0)
 	// NewSummarizeRequest 内部固定 TaskSummarizeTemperature；平台配置的温度

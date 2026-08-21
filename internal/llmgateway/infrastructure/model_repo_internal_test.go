@@ -236,7 +236,7 @@ func TestModelRepo_Delete_success(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestModelRepo_Delete_providerManaged(t *testing.T) {
+func TestModelRepo_Delete_notFound(t *testing.T) {
 	mock := newFactMock(t)
 	repo := newMockModelRepo(mock)
 
@@ -244,7 +244,7 @@ func TestModelRepo_Delete_providerManaged(t *testing.T) {
 		WithArgs("m1").WillReturnResult(pgxmock.NewResult("DELETE", 0))
 
 	err := repo.Delete(context.Background(), "m1")
-	require.ErrorContains(t, err, "provider-managed")
+	require.ErrorContains(t, err, "model not found")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

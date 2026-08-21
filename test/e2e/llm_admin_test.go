@@ -458,10 +458,10 @@ func TestModelCRUDLifecycle(t *testing.T) {
 	unMarshalBody(t, rec, &single)
 	require.True(t, single.Enabled, "model should be re-enabled")
 
-	// ── Delete provider-managed model must fail ─────────────────────────────
+	// ── Delete provider-managed model is allowed ────────────────────────────
 	rec = env.request(http.MethodDelete, "/admin/models/"+model.ID, "")
-	require.NotEqual(t, http.StatusOK, rec.Code,
-		"provider-managed models cannot be deleted directly")
+	require.Equal(t, http.StatusOK, rec.Code,
+		"provider-managed models can be deleted directly (re-discovered on next sync)")
 }
 
 // =============================================================================

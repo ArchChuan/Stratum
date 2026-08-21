@@ -23,6 +23,7 @@ type DeadLetterEvent struct {
 	TenantID       string    `json:"tenant_id"`
 	Stage          string    `json:"stage"`
 	ErrorCode      string    `json:"error_code"`
+	TraceID        string    `json:"trace_id,omitempty"`
 	OriginalStream string    `json:"original_stream,omitempty"`
 	OriginalSubj   string    `json:"original_subject"`
 	Consumer       string    `json:"consumer,omitempty"`
@@ -39,6 +40,7 @@ type deadLetterDetails struct {
 	TenantID  string
 	MessageID string
 	ErrorCode string
+	TraceID   string
 }
 
 func deadLetter(ctx context.Context, pub dlqPublisher, msg jetstream.Msg, details deadLetterDetails) error {
@@ -75,6 +77,7 @@ func deadLetterWithHeartbeat(
 		TenantID:     details.TenantID,
 		Stage:        details.Stage,
 		ErrorCode:    details.ErrorCode,
+		TraceID:      details.TraceID,
 		OriginalSubj: msg.Subject(),
 		FailedAt:     time.Now().UTC(),
 	}

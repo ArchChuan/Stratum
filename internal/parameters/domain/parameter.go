@@ -48,6 +48,8 @@ const (
 	// directory: pick provider, then a model under it). The stored value is
 	// still the model name string, validated against the directory at write.
 	ControlModel Control = "model"
+	// ControlEmbeddingModel renders an embedding-model picker (capability=embedding).
+	ControlEmbeddingModel Control = "embedding_model"
 )
 
 // VisualHint drives schema-driven frontend rendering.

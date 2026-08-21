@@ -87,7 +87,6 @@ func BuildContainer(ctx context.Context, cfg *config.Config, logger *zap.Logger)
 		{"scheduler", c.buildScheduler},
 		{"collab", c.buildCollab},
 		{"evaluation", c.buildEvaluation},
-		{"embedding-seed", c.seedMemoryEmbeddingModels},
 	}
 
 	for _, step := range steps {

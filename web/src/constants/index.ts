@@ -96,7 +96,6 @@ export const MEMORY_SCOPE_OPTIONS = [
 export const MEMORY_DIAGNOSTICS_REFRESH_INTERVAL_MS = 30000; // 30s
 export const MEMORY_TOP_ENTITIES_LIMIT = 10;
 // 记忆嵌入模型迁移进行中的轮询间隔：migrating 期间前端轮询进度，避免高频打后端。
-export const MEMORY_MIGRATION_POLL_MS = 4000;
 
 // 记忆注入参数控件 bounds。min=0 是「0 = 系统默认」unset 通道：后端
 // validateAndExtractMemoryParameters 对数值 0 提前过滤（等价不落库），回落

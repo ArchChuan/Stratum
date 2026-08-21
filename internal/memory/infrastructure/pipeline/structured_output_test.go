@@ -142,7 +142,7 @@ func TestExtractFactsPartialSuccess(t *testing.T) {
 		`[{"content":"good","importance":0.7,"fact_type":"state"},
 		  {"content":"","importance":0.7,"fact_type":"state"}]`, // 第 2 条 content 空
 	}}
-	facts, err := NewLLMExtractor(llm).ExtractFacts(context.Background(), "user-1", "agent-1", "msg")
+	facts, err := newConfiguredExtractor(llm, nil).ExtractFacts(context.Background(), "user-1", "agent-1", "msg")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestExtractFactsPartialSuccess(t *testing.T) {
 // 非校验失败、不触发重试（避免把「无事实」误判为失败走 DLQ）。
 func TestExtractFactsEmptyArrayIsValid(t *testing.T) {
 	llm := &seqLLMStub{contents: []string{"[]"}}
-	facts, err := NewLLMExtractor(llm).ExtractFacts(context.Background(), "user-1", "agent-1", "msg")
+	facts, err := newConfiguredExtractor(llm, nil).ExtractFacts(context.Background(), "user-1", "agent-1", "msg")
 	if err != nil {
 		t.Fatal(err)
 	}

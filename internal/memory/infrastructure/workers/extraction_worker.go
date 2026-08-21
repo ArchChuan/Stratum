@@ -3,6 +3,7 @@ package workers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -84,9 +85,11 @@ func (w *ExtractionWorker) processTask(ctx context.Context, task *port.Extractio
 		if r := recover(); r != nil {
 			w.logger.Error("memory.extraction_worker.panic",
 				zap.Int64("task_id", task.ID),
+				zap.String("trace_id", task.TraceID),
 				zap.String("error_code", "extraction_panic"),
 				zap.Stack("stack"))
-			if err := w.queue.MarkFailed(ctx, task.TenantID, task.ID, task.UpdatedAt, "extraction_panic"); err != nil {
+			if err := w.queue.MarkFailed(ctx, task.TenantID, task.ID, task.UpdatedAt,
+				fmt.Sprintf("extraction_panic: %v", r)); err != nil {
 				w.logger.Error("memory.extraction_worker.mark_failed_failed", zap.Int64("task_id", task.ID), zap.Error(err))
 			}
 			incWorkerMessages("extraction", task.UserID, "panic")
@@ -114,8 +117,10 @@ func (w *ExtractionWorker) processTask(ctx context.Context, task *port.Extractio
 	if err != nil {
 		w.logger.Warn("memory.extraction_worker.extract_failed",
 			zap.Int64("task_id", task.ID),
-			zap.String("error_code", "extraction_failed"))
-		if markErr := w.queue.MarkFailed(ctx, task.TenantID, task.ID, task.UpdatedAt, "extraction_failed"); markErr != nil {
+			zap.String("trace_id", task.TraceID),
+			zap.String("error_code", "extraction_failed"),
+			zap.Error(err))
+		if markErr := w.queue.MarkFailed(ctx, task.TenantID, task.ID, task.UpdatedAt, err.Error()); markErr != nil {
 			w.logger.Error("memory.extraction_worker.mark_failed_failed", zap.Int64("task_id", task.ID), zap.Error(markErr))
 		}
 		incWorkerMessages("extraction", task.UserID, "error")
@@ -133,6 +138,7 @@ func (w *ExtractionWorker) processTask(ctx context.Context, task *port.Extractio
 	observeWorkerDuration("extraction", task.UserID, time.Since(start).Seconds())
 	w.logger.Debug("memory.extraction_worker.task_completed",
 		zap.Int64("task_id", task.ID),
+		zap.String("trace_id", task.TraceID),
 		zap.Int64("latency_ms", time.Since(start).Milliseconds()))
 }
 

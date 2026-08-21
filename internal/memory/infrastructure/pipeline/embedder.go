@@ -125,6 +125,7 @@ func (w *EmbedderWorker) deadLetterWithoutEmbedder(ctx context.Context, msg jets
 	embedUnavailableTotal.WithLabelValues(ev.TenantID).Inc()
 	if dlqErr := deadLetterWithHeartbeat(ctx, w.js, msg, stopHeartbeat, deadLetterDetails{
 		Stage: "embed", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "embed_service_unavailable",
+		TraceID: ev.TraceID,
 	}); dlqErr != nil {
 		w.logger.Error("memory.embed.dlq", zap.Error(dlqErr))
 	}
@@ -189,6 +190,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		embedTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
 		retryOrDeadLetterWithOrphan(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "embed", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "embedding_failed",
+			TraceID: traceID,
 		}, w.vectorCleaner, w.logger, ev.TenantID, ev.MessageID, "memory.embed.retry_or_dlq")
 		return
 	}
@@ -209,6 +211,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 			zap.String("tenant_id", ev.TenantID))
 		if dlqErr := deadLetterWithHeartbeat(ctx, w.js, msg, stopHeartbeat, deadLetterDetails{
 			Stage: "embed", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "vector_store_unavailable",
+			TraceID: traceID,
 		}); dlqErr != nil {
 			w.logger.Error("memory.embed.dlq", zap.Error(dlqErr))
 		}
@@ -222,6 +225,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		embedTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
 		retryOrDeadLetterWithOrphan(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "embed", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "vector_upsert_failed",
+			TraceID: traceID,
 		}, w.vectorCleaner, w.logger, ev.TenantID, ev.MessageID, "memory.embed.retry_or_dlq")
 		return
 	}
@@ -238,6 +242,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		// retryOrDeadLetterWithOrphan 在 dead-letter 时删除。
 		retryOrDeadLetterWithOrphan(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "embed", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "marshal_enriched_failed",
+			TraceID: traceID,
 		}, w.vectorCleaner, w.logger, ev.TenantID, ev.MessageID, "memory.embed.retry_or_dlq")
 		return
 	}
@@ -252,6 +257,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		// 向量已写入但 enriched 事件发布失败并终止：消息终止后向量成为孤儿。
 		retryOrDeadLetterWithOrphan(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "embed", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "publish_enriched_failed",
+			TraceID: traceID,
 		}, w.vectorCleaner, w.logger, ev.TenantID, ev.MessageID, "memory.embed.retry_or_dlq")
 		return
 	}
