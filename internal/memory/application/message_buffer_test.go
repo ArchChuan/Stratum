@@ -112,15 +112,22 @@ func TestBufferMessage_FlushAt2Min(t *testing.T) {
 }
 
 type fakeMessageBufferStore struct {
-	lists   map[string][]string
-	hashes  map[string]map[string]string
-	deleted map[string]bool
+	lists    map[string][]string
+	hashes   map[string]map[string]string
+	deleted  map[string]bool
+	lockHeld map[string]string
 
 	hSetNXErr  error
 	hIncrByErr error
 	hSetErr    error
 	expireErr  error
 	delErr     error
+	removeErr  error
+	lockErr    error
+
+	// onLRangeAfter 在 LRange 返回快照之后触发，用于在测试中模拟
+	// "flush 读快照后、清理前"恰好到达的新消息。
+	onLRangeAfter func(key string)
 }
 
 func newFakeMessageBufferStore() *fakeMessageBufferStore {
@@ -193,7 +200,11 @@ func (s *fakeMessageBufferStore) LIndex(_ context.Context, key string, index int
 
 func (s *fakeMessageBufferStore) LRange(_ context.Context, key string, start, stop int64) ([]string, error) {
 	if start == 0 && stop == -1 {
-		return append([]string(nil), s.lists[key]...), nil
+		snapshot := append([]string(nil), s.lists[key]...)
+		if s.onLRangeAfter != nil {
+			s.onLRangeAfter(key)
+		}
+		return snapshot, nil
 	}
 	return nil, nil
 }
@@ -206,6 +217,65 @@ func (s *fakeMessageBufferStore) Del(_ context.Context, keys ...string) error {
 		s.deleted[key] = true
 		delete(s.lists, key)
 		delete(s.hashes, key)
+	}
+	return nil
+}
+
+// RemoveValues 镜像 Redis Lua 语义：按值删除所有匹配项；每个值仅当其实际
+// 删除过（removed>0）才回扣一次 byte_size；列表清空时删除两个 key。
+func (s *fakeMessageBufferStore) RemoveValues(_ context.Context, key, metaKey string, values []string, sizes []int64) error {
+	if s.removeErr != nil {
+		return s.removeErr
+	}
+	for i, v := range values {
+		removed := false
+		kept := make([]string, 0, len(s.lists[key]))
+		for _, item := range s.lists[key] {
+			if item == v && !removed {
+				removed = true
+				continue
+			}
+			if item != v {
+				kept = append(kept, item)
+			}
+		}
+		s.lists[key] = kept
+		if removed {
+			if s.hashes[metaKey] == nil {
+				s.hashes[metaKey] = make(map[string]string)
+			}
+			var current int64
+			_, _ = fmt.Sscan(s.hashes[metaKey]["byte_size"], &current)
+			current -= sizes[i]
+			s.hashes[metaKey]["byte_size"] = fmt.Sprint(current)
+		}
+	}
+	if len(s.lists[key]) == 0 {
+		delete(s.lists, key)
+		delete(s.hashes, metaKey)
+		s.deleted[key] = true
+		s.deleted[metaKey] = true
+	}
+	return nil
+}
+
+func (s *fakeMessageBufferStore) TryAcquireFlushLock(_ context.Context, key, token string, _ time.Duration) (bool, error) {
+	if s.lockErr != nil {
+		return false, s.lockErr
+	}
+	if s.lockHeld == nil {
+		s.lockHeld = make(map[string]string)
+	}
+	if _, held := s.lockHeld[key]; held {
+		return false, nil
+	}
+	s.lockHeld[key] = token
+	return true, nil
+}
+
+func (s *fakeMessageBufferStore) ReleaseFlushLock(_ context.Context, key, token string) error {
+	if s.lockHeld[key] == token {
+		delete(s.lockHeld, key)
 	}
 	return nil
 }
@@ -255,7 +325,7 @@ func TestMessageBuffer_MetaWriteFailure_FailsClosed(t *testing.T) {
 // next retry instead of silently dropping the low-value messages.
 func TestMessageBuffer_Flush_DeleteFailure_RetainsMessages(t *testing.T) {
 	store := newFakeMessageBufferStore()
-	store.delErr = errors.New("redis unavailable")
+	store.removeErr = errors.New("redis unavailable")
 	buffer := NewMessageBuffer(store, new(MockExtractionQueue))
 
 	var lastErr error
@@ -269,8 +339,116 @@ func TestMessageBuffer_Flush_DeleteFailure_RetainsMessages(t *testing.T) {
 		})
 	}
 	require.Error(t, lastErr)
-	assert.Contains(t, lastErr.Error(), "redis del")
+	assert.Contains(t, lastErr.Error(), "redis remove values")
 	assert.Len(t, store.lists[key], constants.MemoryBufferFlushSize,
 		"messages must stay in Redis after a failed delete")
 	assert.Empty(t, store.deleted)
+}
+
+// TestMessageBuffer_FlushDoesNotLoseTailArrival 复现 flush 的
+// LRange → Enqueue → 清理 窗口竞态：快照之后到达的新消息不得被整 key 删除。
+func TestMessageBuffer_FlushDoesNotLoseTailArrival(t *testing.T) {
+	store := newFakeMessageBufferStore()
+	queue := new(MockExtractionQueue)
+	buffer := NewMessageBuffer(store, queue)
+
+	ctx := context.Background()
+	key := "memory:buffer:tenant1:user1:agent1:conv1"
+	queue.On("Enqueue", mock.Anything, "tenant1", mock.Anything).Return(nil).Times(2)
+
+	// 前 4 条不触发 flush；第 5 条触发。flush 的 LRange 返回快照后注入一条
+	// "恰好到达"的新消息——模拟单实例下 LRange 与清理之间的写入窗口。
+	store.onLRangeAfter = func(k string) {
+		_ = store.RPush(ctx, k, mustMarshalBufferMessage("tail", "tail content padding enough content padding enough padding", time.Now()))
+	}
+
+	for i := 1; i <= constants.MemoryBufferFlushSize; i++ {
+		require.NoError(t, buffer.BufferMessage(ctx, &BufferMessageRequest{
+			TenantID: "tenant1", UserID: "user1", AgentID: "agent1",
+			ConversationID: "conv1", Scope: "session",
+			MessageID: fmt.Sprintf("msg%d", i), Role: "user",
+			Content: "content padding enough", CreatedAt: time.Now(),
+		}))
+	}
+
+	// 第 5 条触发 flush：tail 不在快照中，必须保留在 Redis 等待下一轮。
+	require.Len(t, store.lists[key], 1, "tail 消息不得被整 key 删除")
+	require.Contains(t, store.lists[key][0], "tail")
+
+	// 下一轮 flush 把 tail 入队（不丢失）。
+	store.onLRangeAfter = nil // 模拟窗口只出现一次，后续 flush 不再注入
+	require.NoError(t, buffer.flush(ctx, key, "tenant1", "user1", "agent1", "conv1", "session"))
+	queue.AssertNumberOfCalls(t, "Enqueue", 2)
+	var secondTask *port.ExtractionTask
+	for _, call := range queue.Calls {
+		if task, ok := call.Arguments.Get(2).(*port.ExtractionTask); ok {
+			secondTask = task
+		}
+	}
+	require.NotNil(t, secondTask)
+	assert.Contains(t, secondTask.Content, "tail")
+	assert.Empty(t, store.lists[key])
+}
+
+// TestMessageBuffer_FlushSkipsWhenAnotherFlusherHoldsLock 验证单飞锁：
+// 其他 flusher 正在排水时本轮必须跳过，既不入队也不清理。
+func TestMessageBuffer_FlushSkipsWhenAnotherFlusherHoldsLock(t *testing.T) {
+	store := newFakeMessageBufferStore()
+	queue := new(MockExtractionQueue)
+	buffer := NewMessageBuffer(store, queue)
+
+	ctx := context.Background()
+	key := "memory:buffer:tenant1:user1:agent1:conv1"
+	store.lockHeld = map[string]string{key + ":flush": "other-flusher"}
+
+	for i := 1; i <= constants.MemoryBufferFlushSize; i++ {
+		require.NoError(t, buffer.BufferMessage(ctx, &BufferMessageRequest{
+			TenantID: "tenant1", UserID: "user1", AgentID: "agent1",
+			ConversationID: "conv1", Scope: "session",
+			MessageID: fmt.Sprintf("msg%d", i), Role: "user",
+			Content: "content padding enough", CreatedAt: time.Now(),
+		}))
+	}
+
+	queue.AssertNotCalled(t, "Enqueue", mock.Anything, mock.Anything, mock.Anything)
+	require.Len(t, store.lists[key], constants.MemoryBufferFlushSize,
+		"锁被持有时 flush 必须跳过且保留消息，等待持锁者完成")
+}
+
+// TestMessageBuffer_FlushRemoveValuesFailure_RetainsMessages pin：Enqueue 成功
+// 后值精确删除失败必须返回错误且保留消息（下轮重读 + Enqueue 幂等去重后补
+// 删），不允许吞错导致消息永久滞留或丢失。
+func TestMessageBuffer_FlushRemoveValuesFailure_RetainsMessages(t *testing.T) {
+	store := newFakeMessageBufferStore()
+	store.removeErr = errors.New("redis unavailable")
+	queue := new(MockExtractionQueue)
+	buffer := NewMessageBuffer(store, queue)
+
+	ctx := context.Background()
+	key := "memory:buffer:tenant1:user1:agent1:conv1"
+	queue.On("Enqueue", mock.Anything, "tenant1", mock.Anything).Return(nil).Once()
+
+	var lastErr error
+	for i := 1; i <= constants.MemoryBufferFlushSize; i++ {
+		lastErr = buffer.BufferMessage(ctx, &BufferMessageRequest{
+			TenantID: "tenant1", UserID: "user1", AgentID: "agent1",
+			ConversationID: "conv1", Scope: "session",
+			MessageID: fmt.Sprintf("msg%d", i), Role: "user",
+			Content: "content padding enough", CreatedAt: time.Now(),
+		})
+	}
+	require.Error(t, lastErr)
+	assert.Contains(t, lastErr.Error(), "redis remove values")
+	require.Len(t, store.lists[key], constants.MemoryBufferFlushSize,
+		"删除失败后消息必须保留在 Redis（Enqueue 已幂等，下轮补删）")
+}
+
+func mustMarshalBufferMessage(messageID, content string, createdAt time.Time) []byte {
+	data, _ := json.Marshal(&BufferMessageRequest{
+		TenantID: "tenant1", UserID: "user1", AgentID: "agent1",
+		ConversationID: "conv1", Scope: "session",
+		MessageID: messageID, Role: "user",
+		Content: content, CreatedAt: createdAt,
+	})
+	return data
 }

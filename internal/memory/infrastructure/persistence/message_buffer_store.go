@@ -63,6 +63,53 @@ func (s *RedisMessageBufferStore) Del(ctx context.Context, keys ...string) error
 	return s.client.Del(ctx, keys...).Err()
 }
 
+// drainValuesScript 原子地按值删除列表项并回扣 byte_size：
+//   - LREM 每次只删除 flush 快照里读到的具体值——flush 读快照之后到达的新
+//     消息不在 ARGV 中，绝不会被误删；
+//   - 只有实际删除（removed > 0）才回扣 byte_size，多 flusher 因单飞锁串行，
+//     回扣精确不重复；
+//   - 列表清空时同时删除 list 与 meta，状态完全复位。
+const drainValuesScript = `
+for i = 1, #ARGV, 2 do
+  local removed = redis.call('LREM', KEYS[1], 0, ARGV[i])
+  if removed > 0 then
+    redis.call('HINCRBY', KEYS[2], 'byte_size', -tonumber(ARGV[i + 1]))
+  end
+end
+if tonumber(redis.call('LLEN', KEYS[1])) == 0 then
+  redis.call('DEL', KEYS[1], KEYS[2])
+end
+return 0
+`
+
+func (s *RedisMessageBufferStore) RemoveValues(ctx context.Context, key, metaKey string, values []string, sizes []int64) error {
+	if len(values) == 0 {
+		return nil
+	}
+	args := make([]interface{}, 0, len(values)*2)
+	for i, v := range values {
+		args = append(args, v, sizes[i])
+	}
+	return s.client.Eval(ctx, drainValuesScript, []string{key, metaKey}, args...).Err()
+}
+
+func (s *RedisMessageBufferStore) TryAcquireFlushLock(ctx context.Context, key, token string, ttl time.Duration) (bool, error) {
+	return s.client.SetNX(ctx, key, token, ttl).Result()
+}
+
+// releaseFlushLockScript 仅当锁仍属于当前 token 时删除——TTL 过期后其他
+// flusher 已接管时不会误删别人的锁。
+const releaseFlushLockScript = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0
+`
+
+func (s *RedisMessageBufferStore) ReleaseFlushLock(ctx context.Context, key, token string) error {
+	return s.client.Eval(ctx, releaseFlushLockScript, []string{key}, token).Err()
+}
+
 func (s *RedisMessageBufferStore) Scan(ctx context.Context, cursor uint64, match string, count int64) ([]string, uint64, error) {
 	return s.client.Scan(ctx, cursor, match, count).Result()
 }
