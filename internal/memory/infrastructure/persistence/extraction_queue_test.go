@@ -2,6 +2,7 @@ package persistence_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,7 +118,13 @@ func TestExtractionQueue_MarkFailed(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx, `SELECT status, retry_count, error_msg FROM tenant_test_queue.memory_extraction_queue WHERE id=$1`, task.ID).Scan(&status, &retryCount, &storedError))
 	require.Equal(t, "pending", status)
 	require.Equal(t, 1, retryCount)
-	require.Equal(t, "extraction_failed", storedError)
+	require.Equal(t, testErr, storedError)
+
+	// 超长错误文本被截断到 200 字符，便于队列自诊断且不放大日志。
+	longErr := strings.Repeat("x", 300)
+	require.NoError(t, queue.MarkFailed(ctx, testQueueTenant, task.ID, claimed.UpdatedAt, longErr))
+	require.NoError(t, pool.QueryRow(ctx, `SELECT error_msg FROM tenant_test_queue.memory_extraction_queue WHERE id=$1`, task.ID).Scan(&storedError))
+	require.Len(t, []rune(storedError), 200)
 }
 
 func TestExtractionQueue_DeleteOldCompleted(t *testing.T) {
