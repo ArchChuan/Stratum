@@ -39,6 +39,73 @@ func TestRedisMessageBufferStore_LIndexReturnsExistingValue(t *testing.T) {
 	assert.Equal(t, "hello", value)
 }
 
+func TestRedisMessageBufferStore_RemoveValues_RemovesOnlyGivenValues(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { assert.NoError(t, client.Close()) })
+	ctx := context.Background()
+	store := NewRedisMessageBufferStore(client)
+
+	require.NoError(t, store.RPush(ctx, "messages", []byte("v1")))
+	require.NoError(t, store.RPush(ctx, "messages", []byte("v2")))
+	require.NoError(t, store.RPush(ctx, "messages", []byte("v3")))
+	_, err := store.HIncrBy(ctx, "messages:meta", "byte_size", 30)
+	require.NoError(t, err)
+
+	require.NoError(t, store.RemoveValues(ctx, "messages", "messages:meta", []string{"v1", "v2"}, []int64{10, 10}))
+
+	left, err := client.LRange(ctx, "messages", 0, -1).Result()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"v3"}, left, "只删除给定的值，快照之外的值必须保留")
+	meta, err := store.HGetAll(ctx, "messages:meta")
+	require.NoError(t, err)
+	assert.Equal(t, "10", meta["byte_size"], "byte_size 只按实际删除的值回扣")
+}
+
+func TestRedisMessageBufferStore_RemoveValues_DeletesKeysWhenEmpty(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { assert.NoError(t, client.Close()) })
+	ctx := context.Background()
+	store := NewRedisMessageBufferStore(client)
+
+	require.NoError(t, store.RPush(ctx, "messages", []byte("v1")))
+	_, err := store.HIncrBy(ctx, "messages:meta", "byte_size", 10)
+	require.NoError(t, err)
+
+	require.NoError(t, store.RemoveValues(ctx, "messages", "messages:meta", []string{"v1"}, []int64{10}))
+
+	n, err := client.Exists(ctx, "messages", "messages:meta").Result()
+	require.NoError(t, err)
+	assert.Zero(t, n, "列表清空后 list 与 meta 必须一起删除，状态完全复位")
+}
+
+func TestRedisMessageBufferStore_FlushLock_SingleFlight(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { assert.NoError(t, client.Close()) })
+	ctx := context.Background()
+	store := NewRedisMessageBufferStore(client)
+
+	ok, err := store.TryAcquireFlushLock(ctx, "lock:key", "token-a", time.Minute)
+	require.NoError(t, err)
+	assert.True(t, ok)
+
+	ok, err = store.TryAcquireFlushLock(ctx, "lock:key", "token-b", time.Minute)
+	require.NoError(t, err)
+	assert.False(t, ok, "同一 key 只允许一个 flusher")
+
+	require.NoError(t, store.ReleaseFlushLock(ctx, "lock:key", "token-b"))
+	ok, err = store.TryAcquireFlushLock(ctx, "lock:key", "token-c", time.Minute)
+	require.NoError(t, err)
+	assert.False(t, ok, "非持有者释放不得生效（TTL 前锁仍属于 token-a）")
+
+	require.NoError(t, store.ReleaseFlushLock(ctx, "lock:key", "token-a"))
+	ok, err = store.TryAcquireFlushLock(ctx, "lock:key", "token-c", time.Minute)
+	require.NoError(t, err)
+	assert.True(t, ok, "持有者释放后锁可重新获取")
+}
+
 func TestRedisMessageBufferStore_NilClient(t *testing.T) {
 	assert.Nil(t, NewRedisMessageBufferStore(nil))
 }
