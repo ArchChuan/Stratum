@@ -4,6 +4,7 @@ import {
   Col,
   Form,
   Row,
+  Skeleton,
   Typography,
   message,
 } from 'antd';
@@ -56,7 +57,10 @@ const PlatformFieldItem = ({ def }: { def: ParameterDefinition }) => {
   let hint: ReactNode = null;
   if (!isToggle && unset) {
     const d = def.default;
-    if (d === undefined || d === null || d === '') {
+    if (def.visual_hint.control === 'embedding_model') {
+      // 嵌入模型未设置 = fail-closed（记忆写入失败并告警），非"使用定义默认"。
+      hint = <Text type="secondary">未设置（记忆写入将失败并告警）</Text>;
+    } else if (d === undefined || d === null || d === '') {
       hint = <Text type="secondary">未设置（使用定义默认）</Text>;
     } else if (typeof d === 'number' && d === 0) {
       hint = <DefaultHint value={0} suffix="（未设置）" />;
@@ -162,6 +166,12 @@ export const PlatformSettingsPage = () => {
       for (const def of defs.filter(renderable)) {
         const v = formValues[def.key];
         if (v === undefined || v === null) continue;
+        // embedding_model 允许显式清空（undefined/空串 → 提交空串）：
+        // 回退"未配置"即 fail-closed + 告警；缺失时写空串与未设置语义一致。
+        if (def.visual_hint.control === 'embedding_model') {
+          patch[def.key] = v === undefined || v === null ? '' : v;
+          continue;
+        }
         // 模型 key 等于定义默认时跳过提交：默认值由后端 resolver 兜底（DB 留空），
         // 避免把未修改的默认模型名重复写库并在目录缺失时触发 ValidateFn 400。
         if (def.visual_hint.control === 'model' && v === def.default) continue;
@@ -180,6 +190,16 @@ export const PlatformSettingsPage = () => {
     },
     [defs],
   );
+
+  // 加载期间只渲染明确加载态，避免"标题+卡片骨架+保存按钮"的半成品展示页
+  // （数据就绪后一次性渲染可编辑配置页）。置于全部 hooks 之后，保持 hook 顺序稳定。
+  if (loading) {
+    return (
+      <div style={{ maxWidth: 960, margin: '0 auto', padding: '24px 16px' }}>
+        <Skeleton active paragraph={{ rows: 8 }} />
+      </div>
+    );
+  }
 
   return (
     <div style={{ maxWidth: 960, margin: '0 auto', padding: '24px 16px' }}>
