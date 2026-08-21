@@ -14,6 +14,7 @@ import {
   RECALL_TOP_K_MAX,
   RECALL_TOP_K_MIN,
 } from '@/constants';
+import { ModelOptionLabel } from '@/modules/llm/components/ModelOptionLabel';
 import { PromptDefaultViewer } from '@/modules/parameters/components/PromptDefaultViewer';
 import { SectionHeader } from '@/shared/ui';
 
@@ -78,7 +79,7 @@ export const AgentMemoryConfig = ({ groupedModels }: AgentMemoryConfigProps) => 
           <OptGroup key={group.provider} label={group.provider}>
             {group.models.map((m) => (
               <Option key={m.value} value={m.value}>
-                {m.label}
+                <ModelOptionLabel label={m.label} capabilities={m.capabilities} />
               </Option>
             ))}
           </OptGroup>

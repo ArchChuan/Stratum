@@ -28,6 +28,7 @@ import {
 } from '@/constants';
 import type { Member } from '@/modules/iam';
 import type { Workspace } from '@/modules/knowledge';
+import { ModelOptionLabel } from '@/modules/llm/components/ModelOptionLabel';
 import type { MCPToolOption } from '@/modules/mcp';
 import { PromptDefaultViewer } from '@/modules/parameters/components/PromptDefaultViewer';
 import type { Skill } from '@/modules/skill';
@@ -196,7 +197,7 @@ export const AgentFormSections = ({
             <OptGroup key={group.provider} label={group.provider}>
               {group.models.map((m) => (
                 <Option key={m.value} value={m.value}>
-                  {m.label}
+                  <ModelOptionLabel label={m.label} capabilities={m.capabilities} />
                 </Option>
               ))}
             </OptGroup>
@@ -404,7 +405,7 @@ export const AgentFormSections = ({
                           <OptGroup key={group.provider} label={group.provider}>
                             {group.models.map((m) => (
                               <Option key={m.value} value={m.value}>
-                                {m.label}
+                                <ModelOptionLabel label={m.label} capabilities={m.capabilities} />
                               </Option>
                             ))}
                           </OptGroup>

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import type { GroupedModelOption } from '@/modules/agent/model/agent';
 import { buildGroupedModels } from '@/modules/agent/model/agent';
 import { llmApi } from '@/modules/llm';
-import { ModelHealthBadge } from '@/modules/llm/components/ModelHealthBadge';
+import { ModelOptionLabel } from '@/modules/llm/components/ModelOptionLabel';
 import { extractErrorMessage } from '@/shared/lib';
 
 const { Option, OptGroup } = Select;
@@ -76,10 +76,7 @@ export const ProviderModelSelect = ({
         <OptGroup key={group.provider} label={group.provider}>
           {group.models.map((m) => (
             <Option key={m.value} value={m.value} disabled={isUnusable(m.health)}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                {m.label}
-                <ModelHealthBadge health={m.health} />
-              </span>
+              <ModelOptionLabel label={m.label} capabilities={m.capabilities} health={m.health} showHealth />
             </Option>
           ))}
         </OptGroup>
