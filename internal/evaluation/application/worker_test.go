@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,7 +52,7 @@ func TestWorkerIdlesWhenNoWork(t *testing.T) {
 	cancel()
 	<-done
 
-	if got := len(runner.tenants); got < 2 || got > 6 {
+	if got := runner.count(); got < 2 || got > 6 {
 		t.Fatalf("expected 2-6 polls over 600ms with 150ms idle, got %d (no-work loop must idle, not spin)", got)
 	}
 }
@@ -61,11 +62,20 @@ type fakeTenantLister struct{ ids []string }
 func (f fakeTenantLister) ListTenantIDs(context.Context) ([]string, error) { return f.ids, nil }
 
 type fakeTenantJobRunner struct {
+	mu      sync.Mutex
 	tenants []string
 	worked  bool
 }
 
 func (f *fakeTenantJobRunner) RunOnce(_ context.Context, tenantID, _ string, _ time.Duration) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.tenants = append(f.tenants, tenantID)
 	return f.worked, nil
+}
+
+func (f *fakeTenantJobRunner) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.tenants)
 }
