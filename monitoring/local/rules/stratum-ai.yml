@@ -359,20 +359,6 @@ groups:
           dashboard_url: /d/stratum-service-overview
           runbook_url: /docs/operations/alerts/business.md#model-unhealthy
 
-      - alert: StratumMemoryMigrationStalled
-        expr: increase(memory_migration_stalled_total[15m]) > 0
-        for: 5m
-        labels:
-          severity: warning
-          service: stratum
-          environment: production
-          component: memory
-        annotations:
-          summary: 记忆嵌入迁移扫描停滞
-          description: Migration from {{ $labels.from_model }} to {{ $labels.to_model }} for tenant {{ $labels.tenant_id }} made no progress across consecutive scans (increase {{ $value }}).
-          dashboard_url: /d/stratum-service-overview
-          runbook_url: /docs/operations/alerts/business.md#memory-migration-stalled
-
       - alert: StratumRouteFallbackSurge
         expr: increase(route_fallback_total[15m]) > 10
         for: 5m
