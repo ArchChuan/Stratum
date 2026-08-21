@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -160,6 +161,57 @@ func (r *MemoryRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID str
 			if _, err := tx.Exec(ctx, query, agentID); err != nil {
 				return fmt.Errorf("memory: delete agent lifecycle data: %w", err)
 			}
+		}
+		return nil
+	})
+}
+
+// ListExpired returns up to limit ids of memory entries that must be physically
+// removed: entries whose expires_at predates now (per-entry expiry), or entries
+// without expires_at whose created_at predates createdBefore (episodic TTL).
+// Ordered by created_at for stable bounded draining; the GC deletes vectors
+// first, then the rows, so PG stays the source of truth.
+func (r *MemoryRepo) ListExpired(ctx context.Context, tenantID string, now, createdBefore time.Time, limit int) ([]string, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	var ids []string
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT id::text FROM memory_entries
+			 WHERE expires_at < $1 OR (expires_at IS NULL AND created_at < $2)
+			 ORDER BY created_at ASC, id ASC LIMIT $3`,
+			now, createdBefore, limit)
+		if err != nil {
+			return fmt.Errorf("list expired entries: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return fmt.Errorf("scan expired entry id: %w", err)
+			}
+			ids = append(ids, id)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+// DeleteByIDs removes the given entry rows in one tenant transaction. Missing
+// ids are no-ops; callers delete vectors first so a failed row delete can be
+// retried idempotently on the next GC pass.
+func (r *MemoryRepo) DeleteByIDs(ctx context.Context, tenantID string, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `DELETE FROM memory_entries WHERE id::text = ANY($1)`, ids)
+		if err != nil {
+			return fmt.Errorf("delete memory entries by ids: %w", err)
 		}
 		return nil
 	})

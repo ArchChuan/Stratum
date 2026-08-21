@@ -326,6 +326,9 @@ func (c *Container) buildMemoryPipeline(mem *Memory, db *pgxpool.Pool) error {
 
 	vectorAdapter := pipeline.NewMilvusVectorAdapter(c.Storage.Milvus).WithDimResolver(dimResolver)
 	p := pipeline.New(pipelineCfg, db, c.Storage.NATS, vectorAdapter, c.Logger)
+	// 孤儿向量清理：embedder 写向量后 enrich 阶段永久失败时按 message_id 删除，
+	// 避免无 memory_entries 行的向量被召回。
+	p.SetEntryVectorDeleter(persistence.NewMilvusPortAdapter(c.Storage.Milvus))
 	c.attachPipelineDynamic(p)
 	if c.LLMGateway != nil && c.LLMGateway.Metrics != nil {
 		pipeline.RegisterMetrics(c.LLMGateway.Metrics.Registerer())
@@ -454,6 +457,8 @@ func BuildMemoryWorkers(c *Container) []memoryWorker {
 	factRepo := persistence.NewFactRepo(db)
 	historyRepo := persistence.NewHistoryRepo(db)
 	queue := persistence.NewExtractionQueue(db)
+	memoryRepo := persistence.NewMemoryRepo(db)
+	vectorStore := buildMemoryWorkerVectorStore(c)
 
 	if c.LLMGateway != nil && c.LLMGateway.Metrics != nil {
 		memworkers.RegisterMetrics(c.LLMGateway.Metrics.Registerer())
@@ -469,9 +474,10 @@ func BuildMemoryWorkers(c *Container) []memoryWorker {
 	watcher := memworkers.NewTenantWatcher(db, func(tid string) memworkers.WorkerSet {
 		ws := memworkers.WorkerSet{
 			memworkers.NewExtractionWorker(tid, queue, c.Memory.Service, c.Logger),
-			memworkers.NewGCWorker(tid, factRepo, c.Logger).WithQueue(queue),
+			memworkers.NewGCWorker(tid, factRepo, c.Logger).WithQueue(queue).
+				WithMemoryRepo(memoryRepo).WithVectorStore(vectorStore),
 		}
-		return appendTenantLLMWorkers(ws, tid, factRepo, historyRepo,
+		return appendTenantLLMWorkers(ws, tid, factRepo, historyRepo, vectorStore,
 			buildWorkerLLMResolver(llmRes), c.memoryPlatformParamResolver(), c.Logger)
 	}, c.Logger)
 
@@ -485,6 +491,15 @@ func BuildMemoryWorkers(c *Container) []memoryWorker {
 	}
 
 	return appendMigrationWorker(result, c)
+}
+
+// buildMemoryWorkerVectorStore 返回 memory worker 共用的 Milvus adapter；
+// Milvus 未装配时返回 nil，对应清理路径安全跳过。
+func buildMemoryWorkerVectorStore(c *Container) memport.VectorStore {
+	if c.Storage != nil && c.Storage.Milvus != nil {
+		return persistence.NewMilvusPortAdapter(c.Storage.Milvus)
+	}
+	return nil
 }
 
 // appendMigrationWorker 追加记忆嵌入模型平滑迁移回填 worker：确认制切换后由该
@@ -514,6 +529,7 @@ func appendTenantLLMWorkers(
 	tenantID string,
 	factRepo memport.FactRepo,
 	historyRepo memport.HistoryRepo,
+	vectorStore memport.VectorStore,
 	resolver memworkers.TenantLLMResolver,
 	paramResolver memport.PlatformParamResolver,
 	logger *zap.Logger,
@@ -530,7 +546,7 @@ func appendTenantLLMWorkers(
 			factRepo,
 			superseder,
 			logger,
-		))
+		).WithVectorStore(vectorStore))
 		historyProcessor := memworkers.NewResolvingLLMHistorySummarizer(tenantID, resolver)
 		if paramResolver != nil {
 			historyProcessor = historyProcessor.WithParamResolver(paramResolver)
@@ -538,5 +554,6 @@ func appendTenantLLMWorkers(
 		summarizer = historyProcessor
 		compressor = historyProcessor
 	}
-	return append(workerSet, memworkers.NewHistoryWorker(tenantID, historyRepo, summarizer, compressor, logger))
+	return append(workerSet, memworkers.NewHistoryWorker(tenantID, historyRepo, summarizer, compressor, logger).
+		WithVectorStore(vectorStore))
 }

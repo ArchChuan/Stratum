@@ -86,7 +86,8 @@ const historyReplacementQuery = `
 
 const archiveColdFactsQuery = `UPDATE memory_facts SET status='archived', updated_at=NOW()
 	WHERE status='active' AND last_accessed_at < $1 AND importance < $2 AND confidence < $3
-	  AND category <> 'preference' AND source <> 'explicit_user'`
+	  AND category <> 'preference' AND source <> 'explicit_user'
+	RETURNING id::text`
 
 const historyRelevanceQuery = `SELECT summary,tier FROM memory_summaries
 	WHERE user_id = $1 AND status='active' AND aggregation_key IS NOT NULL
@@ -192,14 +193,27 @@ func (r *HistoryRepo) Maintain(ctx context.Context, tenantID string) error {
 	})
 }
 
-func (r *HistoryRepo) ArchiveColdFacts(ctx context.Context, tenantID string) (int, error) {
-	var n int64
+func (r *HistoryRepo) ArchiveColdFacts(ctx context.Context, tenantID string) ([]string, error) {
+	var ids []string
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, archiveColdFactsQuery, time.Now().UTC().Add(-constants.HistoryArchiveInactiveAge), constants.HistoryProtectedImportance, constants.HistoryProtectedConfidence)
-		n = tag.RowsAffected()
-		return err
+		rows, err := tx.Query(ctx, archiveColdFactsQuery,
+			time.Now().UTC().Add(-constants.HistoryArchiveInactiveAge),
+			constants.HistoryProtectedImportance,
+			constants.HistoryProtectedConfidence)
+		if err != nil {
+			return fmt.Errorf("archive cold facts: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return fmt.Errorf("scan archived fact id: %w", err)
+			}
+			ids = append(ids, id)
+		}
+		return rows.Err()
 	})
-	return int(n), err
+	return ids, err
 }
 
 func (r *HistoryRepo) SearchRelevant(ctx context.Context, tenantID, userID, agentID, query string, limit int) ([]domain.HistorySegment, error) {

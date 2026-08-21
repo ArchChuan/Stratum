@@ -170,18 +170,14 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 				continue
 			}
 			if candidate.Similarity >= constants.MemoryInlineSupersedeFastThresh {
-				if merr := candidate.Fact.MarkSuperseded(fact.ID); merr == nil {
-					_ = s.factRepo.Update(ctx, req.TenantID, candidate.Fact)
-				}
+				s.supersedeCandidate(ctx, req.TenantID, candidate, fact.ID)
 				continue
 			}
 			if judge != nil && llmCallsThisFact < constants.MemoryInlineSupersedeLLMPerFact {
 				judgment, jerr := judge.JudgeSupersede(ctx, candidate.Fact.Content, fact.Content)
 				llmCallsThisFact++
 				if jerr == nil && judgment.Supersedes {
-					if merr := candidate.Fact.MarkSuperseded(fact.ID); merr == nil {
-						_ = s.factRepo.Update(ctx, req.TenantID, candidate.Fact)
-					}
+					s.supersedeCandidate(ctx, req.TenantID, candidate, fact.ID)
 				}
 			}
 		}
@@ -227,6 +223,33 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 		zap.Int("facts_stored", len(indexedFacts)),
 	)
 	return nil
+}
+
+// supersedeCandidate marks a candidate superseded, persists the status, and
+// deletes its vector so stale content stops being recalled. Returns true only
+// when the PG status update succeeded. Vector deletion is best-effort with
+// ERROR surfacing: the daily GC purge backstops missed deletions once the row
+// passes retention, and recall filters non-active facts regardless.
+func (s *MemoryService) supersedeCandidate(ctx context.Context, tenantID string, candidate *port.SupersedeCandidate, newFactID string) bool {
+	if err := candidate.Fact.MarkSuperseded(newFactID); err != nil {
+		return false
+	}
+	if err := s.factRepo.Update(ctx, tenantID, candidate.Fact); err != nil {
+		s.logger.Error("memory.extract_facts: supersede update failed",
+			zap.String("tenant_id", tenantID),
+			zap.String("fact_id", candidate.Fact.ID),
+			zap.Error(err))
+		return false
+	}
+	if s.vectorStore != nil {
+		if err := s.vectorStore.DeleteFactVectors(ctx, tenantID, []string{candidate.Fact.ID}); err != nil {
+			s.logger.Error("memory.extract_facts: supersede vector delete failed",
+				zap.String("tenant_id", tenantID),
+				zap.String("fact_id", candidate.Fact.ID),
+				zap.Error(err))
+		}
+	}
+	return true
 }
 
 // normalizeEntity finds or creates an entity, returning its ID.
