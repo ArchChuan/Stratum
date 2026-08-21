@@ -120,3 +120,16 @@ type ChatRepo interface {
 	CleanupExpired(ctx context.Context, tenantID string) error
 	DeleteByAgent(ctx context.Context, tenantID, agentID string) error
 }
+
+// CompactionStore 持久化跨轮复用的压缩摘要。组装侧与循环侧共用同一存储：
+// 组装侧读写（covered_until 单调推进），循环侧只读组装侧已生成的摘要。
+// 与 memory_summaries 语义独立（对话连续性 vs facts/偏好），独立建表。
+//
+// 契约：
+//   - GetCoverage 无覆盖时返回 (nil, nil)，不返回错误。
+//   - Upsert 按 conversation_id upsert（每会话一条），覆盖已存在段并递增 version。
+//   - 任何持久化失败都必须返回 error 供调用方降级，禁止吞错。
+type CompactionStore interface {
+	GetCoverage(ctx context.Context, tenantID, conversationID string) (*domain.CompactionCoverage, error)
+	Upsert(ctx context.Context, tenantID string, seg *domain.CompactionSegment) error
+}

@@ -2,6 +2,7 @@ package capgateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -180,22 +181,74 @@ func (c *LLMHistoryCompactor) finishSuccess(messages []port.LLMMessage, content 
 }
 
 // renderConversation 把消息按 "Role: Content" 逐行拼成一段对话文本。
+// 工具调用对（assistant + ToolCalls 与其 tool 结果）渲染为配对格式
+// [Tool] name(args) → result：工具名与参数不再丢失（R3），result 只取
+// 已脱敏的 tool 消息 Content（D8——上游把 guarded.ModelContent 写入
+// Content，raw 永不进渲染）。未配对的 tool 结果（无对应调用）以
+// [Tool result] 行输出，避免静默丢失。普通消息保持原有 Role: Content 格式。
 func renderConversation(messages []port.LLMMessage) string {
+	callIDs, results := collectToolPairs(messages)
 	var b strings.Builder
 	for _, m := range messages {
-		role := m.Role
-		switch role {
-		case "user":
-			role = "User"
-		case "assistant":
-			role = "Assistant"
-		case "system":
-			role = "System"
-		}
-		b.WriteString(role)
-		b.WriteString(": ")
-		b.WriteString(m.Content)
-		b.WriteByte('\n')
+		renderLine(&b, m, callIDs, results)
 	}
 	return b.String()
+}
+
+// collectToolPairs 第一遍扫描：收集所有已声明工具调用 ID 与其 tool 结果，
+// 供渲染时配对（未配对的 tool 结果以 [Tool result] 行保留，不静默丢失）。
+func collectToolPairs(messages []port.LLMMessage) (map[string]struct{}, map[string]string) {
+	callIDs := make(map[string]struct{}, len(messages))
+	results := make(map[string]string, len(messages))
+	for _, m := range messages {
+		for _, tc := range m.ToolCalls {
+			callIDs[tc.ID] = struct{}{}
+		}
+		if m.Role == "tool" && m.ToolCallID != "" {
+			results[m.ToolCallID] = m.Content
+		}
+	}
+	return callIDs, results
+}
+
+// renderLine 渲染单条消息：工具调用对输出 [Tool] name(args) → result，
+// 未配对 tool 结果输出 [Tool result]，普通消息保持 Role: Content。
+func renderLine(b *strings.Builder, m port.LLMMessage, callIDs map[string]struct{}, results map[string]string) {
+	switch {
+	case len(m.ToolCalls) > 0:
+		for _, tc := range m.ToolCalls {
+			b.WriteString("[Tool] " + tc.Name + "(" + marshalArgs(tc.Arguments) + ") → " + results[tc.ID] + "\n")
+		}
+	case m.Role == "tool":
+		if _, paired := callIDs[m.ToolCallID]; !paired {
+			b.WriteString("[Tool result] " + m.Content + "\n")
+		}
+	default:
+		b.WriteString(displayRole(m.Role) + ": " + m.Content + "\n")
+	}
+}
+
+// displayRole 把 role 映射为渲染用的大小写首字母名称；未识别 role 原样输出。
+func displayRole(role string) string {
+	switch role {
+	case "user":
+		return "User"
+	case "assistant":
+		return "Assistant"
+	case "system":
+		return "System"
+	}
+	return role
+}
+
+// marshalArgs 把工具调用参数序列化为渲染文本（与循环侧 toEstimate 同源：
+// json.Marshal；失败返回空串——仅影响渲染，不阻断压缩）。
+func marshalArgs(args map[string]any) string {
+	if len(args) == 0 {
+		return ""
+	}
+	if s, err := json.Marshal(args); err == nil {
+		return string(s)
+	}
+	return ""
 }
