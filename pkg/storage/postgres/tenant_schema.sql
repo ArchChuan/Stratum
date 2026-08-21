@@ -1373,6 +1373,7 @@ CREATE TABLE IF NOT EXISTS memory_extraction_queue (
 CREATE INDEX IF NOT EXISTS idx_extraction_queue_status ON memory_extraction_queue (status, created_at);
 ALTER TABLE memory_extraction_queue ADD COLUMN IF NOT EXISTS conversation_id UUID REFERENCES chat_conversations(id) ON DELETE SET NULL;
 ALTER TABLE memory_extraction_queue ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'user';
+ALTER TABLE memory_extraction_queue ADD COLUMN IF NOT EXISTS trace_id TEXT;
 
 -- memory_migrations: 记忆嵌入模型平滑迁移状态机（P5 确认制切换）。
 -- tenant-scoped 表；回填 worker 逐任务 execTenant(ctx, tenantID, fn) 访问。

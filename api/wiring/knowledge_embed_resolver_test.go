@@ -104,7 +104,7 @@ func TestKnowledgeEmbedResolversUseManagedModels(t *testing.T) {
 
 	// pipeline resolver 只读租户显式配置：配置 managed-embedding → 解析出 client。
 	configured := newTestTenantEmbeddingResolver(
-		map[string]any{"memory_embedding_model": "managed-embedding"}, registry)
+		map[string]any{"memory.embedding_model": "managed-embedding"}, registry)
 	require.NotNil(t, buildEmbedResolver(configured, zap.NewNop())(context.Background(), "tenant-1"))
 	// 未配置租户 fail-closed → nil。
 	unconfigured := newTestTenantEmbeddingResolver(nil, registry)

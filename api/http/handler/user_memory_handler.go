@@ -26,8 +26,8 @@ type memoryMgrSvc interface {
 	GetSummary(ctx context.Context, sessionCtx *application.SessionContext) (string, error)
 }
 
-// MemoryEmbeddingModelResolver resolves the tenant's explicitly configured
-// memory embedding model name（tenants.settings.memory_embedding_model）;
+// MemoryEmbeddingModelResolver resolves the configured memory embedding model
+// name（平台参数 memory.embedding_model，全局）;
 // implemented by wiring.tenantEmbeddingModelResolver and injected via wiring.
 // nil-safe: 未配置/解析失败时 GetStats 返回 embed_model_configured=false。
 type MemoryEmbeddingModelResolver interface {

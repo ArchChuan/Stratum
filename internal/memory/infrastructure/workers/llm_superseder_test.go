@@ -39,7 +39,7 @@ func TestResolvingLLMSupersederUsesCurrentTenantClientOnEveryCall(t *testing.T) 
 		return clientB, nil
 	}
 
-	judge := workers.NewResolvingLLMSuperseder("tenant-1", resolver)
+	judge := newResolvingTestSuperseder("tenant-1", resolver)
 	first, err := judge.JudgeSupersede(context.Background(), "old", "new")
 	require.NoError(t, err)
 	require.False(t, first.Supersedes)
@@ -72,7 +72,7 @@ func TestResolvingLLMSupersederRoutesThroughNewProviderGateway(t *testing.T) {
 		return callCompletionServer(ctx, zhipuServer.URL, req)
 	})
 	resolved := 0
-	judge := workers.NewResolvingLLMSuperseder("tenant-1", func(context.Context, string) (workers.TenantLLMClient, error) {
+	judge := newResolvingTestSuperseder("tenant-1", func(context.Context, string) (workers.TenantLLMClient, error) {
 		resolved++
 		if resolved == 1 {
 			return clientA, nil
@@ -131,7 +131,7 @@ func TestResolvingLLMSupersederDoesNotReuseClientAfterResolverFailure(t *testing
 		}
 		return client, nil
 	}
-	judge := workers.NewResolvingLLMSuperseder("tenant-1", resolver)
+	judge := newResolvingTestSuperseder("tenant-1", resolver)
 
 	_, err := judge.JudgeSupersede(context.Background(), "old", "new")
 	require.NoError(t, err)
@@ -150,7 +150,7 @@ func TestResolvingLLMSupersederPropagatesContextCancellationBeforeClientCall(t *
 	resolver := func(ctx context.Context, _ string) (workers.TenantLLMClient, error) {
 		return nil, ctx.Err()
 	}
-	judge := workers.NewResolvingLLMSuperseder("tenant-1", resolver)
+	judge := newResolvingTestSuperseder("tenant-1", resolver)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -159,22 +159,16 @@ func TestResolvingLLMSupersederPropagatesContextCancellationBeforeClientCall(t *
 	require.Zero(t, clientCalls)
 }
 
-// TestLLMSupersederUsesFallbackJudgePrompt 验证判定模板走内置常量（mechanism
-// 移除后为唯一权威），%s 占位照常渲染。
-func TestLLMSupersederUsesFallbackJudgePrompt(t *testing.T) {
-	var got string
-	client := completionClientFunc(func(_ context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
-		got = req.Messages[0].Content
+// TestLLMSupersederFailsClosedWithoutPrompt 验证未配置 supersede_prompt 即失败
+// （fail-closed，无内置模板兜底）。
+func TestLLMSupersederFailsClosedWithoutPrompt(t *testing.T) {
+	client := completionClientFunc(func(_ context.Context, _ *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 		return &llmdomain.CompletionResponse{Content: `{"supersedes":false,"reason":"ok"}`}, nil
 	})
 	judge := workers.NewLLMSuperseder(client)
 
-	if _, err := judge.JudgeSupersede(context.Background(), "old", "new"); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(got, "旧事实：old") {
-		t.Fatalf("fallback template missing old fact slot: %q", got)
-	}
+	_, err := judge.JudgeSupersede(context.Background(), "old", "new")
+	require.ErrorContains(t, err, "memory.supersede_prompt not configured")
 }
 
 // TestLLMSupersederLeavesModelEmpty 验证判定请求 Model 为空（llmgateway client
@@ -185,7 +179,7 @@ func TestLLMSupersederLeavesModelEmpty(t *testing.T) {
 		gotModel = req.Model
 		return &llmdomain.CompletionResponse{Content: `{"supersedes":false,"reason":"ok"}`}, nil
 	})
-	judge := workers.NewLLMSuperseder(client)
+	judge := newTestSuperseder(client)
 
 	if _, err := judge.JudgeSupersede(context.Background(), "old", "new"); err != nil {
 		t.Fatal(err)
@@ -206,7 +200,7 @@ func TestLLMSupersederRetriesWithCorrectionOnInvalidJSON(t *testing.T) {
 		}
 		return &llmdomain.CompletionResponse{Content: `{"supersedes":true,"reason":"ok"}`}, nil
 	})
-	judge := workers.NewLLMSuperseder(client)
+	judge := newTestSuperseder(client)
 
 	got, err := judge.JudgeSupersede(context.Background(), "old", "new")
 	if err != nil {

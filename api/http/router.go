@@ -281,7 +281,6 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		tenantGroup.PATCH("/settings", requireActive, tenantHandler.UpdateSettings)
 		tenantGroup.DELETE("", middleware.RequireTenantRole("owner"), tenantHandler.DeleteSelf)
 	}
-	registerMemoryMigrationRoutes(tenantGroup, c, requireActive)
 	registerParameterTenantRoutes(r, c)
 
 	r.GET("/tenant/list", jwtMW, tenantHandler.ListUserTenants)
@@ -602,28 +601,6 @@ func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 	g.GET("/entities", userHandler.GetEntities)
 	g.GET("/summary/:session_id", userHandler.GetSummary)
 	g.DELETE("/session/:session_id", userHandler.ClearSession)
-}
-
-// registerMemoryMigrationRoutes wires P5 记忆嵌入模型平滑迁移管理端点。迁移是租户
-// 配置面：查询（current/cost）租户成员可见，变更（start/cancel/retry）仅租户
-// admin/owner（确认制）。MigrationService 未装配（无 DB/Milvus）时跳过。
-func registerMemoryMigrationRoutes(tenantGroup *gin.RouterGroup, c *wiring.Container, requireActive gin.HandlerFunc) {
-	if c.Memory == nil || c.Memory.MigrationService == nil {
-		return
-	}
-	// LLMGateway 可能未构建（DB 不可用），handler 内部对 nil resolver fail-closed。
-	var embedSvc handler.MemoryEmbeddingModelResolver
-	if c.LLMGateway != nil {
-		embedSvc = c.LLMGateway.TenantEmbeddingResolver
-	}
-	h := handler.NewMemoryMigrationHandler(c.Memory.MigrationService, embedSvc)
-	mig := tenantGroup.Group("/memory/migrations")
-	mig.GET("/current", h.GetCurrent)
-	mig.GET("/cost", h.GetCost)
-	migAdmin := mig.Group("", middleware.RequireTenantRole("admin"), requireActive)
-	migAdmin.POST("", h.Start)
-	migAdmin.POST("/:id/cancel", h.Cancel)
-	migAdmin.POST("/:id/retry", h.Retry)
 }
 
 // registerLLMAdmin wires /admin/providers and /admin/models under JWT + tenant

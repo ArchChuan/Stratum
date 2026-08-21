@@ -166,10 +166,10 @@ func TestExtractionWorker_HandlesExtractionError(t *testing.T) {
 	worker.Start(ctx)
 
 	require.Equal(t, int64(456), failedID, "should mark failed")
-	require.Equal(t, "extraction_failed", failReason)
-	for _, entry := range observed.All() {
-		require.NotContains(t, entry.Message+fmt.Sprint(entry.ContextMap()), "secret-token-123")
-	}
+	require.Equal(t, "llm timeout: secret-token-123", failReason)
+	// 失败日志必须携带底层错误（需求：extract_failed 带 err 字段），
+	// 供定位根因；队列侧以截断文本自诊断。
+	require.Contains(t, fmt.Sprint(observed.All()), "llm timeout")
 }
 
 func TestExtractionWorker_GracefulShutdown(t *testing.T) {

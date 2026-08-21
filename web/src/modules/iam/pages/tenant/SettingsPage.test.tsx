@@ -11,10 +11,6 @@ vi.mock('../../hooks/useTenantSettings', () => ({
 }));
 
 // 迁移卡片自身有网络依赖（迁移记录 + 模型目录 + 租户 settings），在页面级测试中
-// 桩掉，聚焦租户删除可见性逻辑；卡片行为由 __tests__/MemoryMigrationCard.test.tsx 覆盖。
-vi.mock('../../components/MemoryMigrationCard', () => ({
-  MemoryMigrationCard: () => null,
-}));
 
 describe('SettingsPage tenant deletion visibility', () => {
   beforeEach(() => {

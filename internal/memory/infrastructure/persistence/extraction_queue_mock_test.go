@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
@@ -32,7 +33,7 @@ func TestExtractionQueue_Enqueue_new(t *testing.T) {
 	mock.ExpectQuery("SELECT id FROM memory_extraction_queue WHERE message_id").
 		WithArgs("m1").WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery("INSERT INTO memory_extraction_queue").
-		WithArgs("m1", "u1", &ag, &cv, "agent", "hi").
+		WithArgs("m1", "u1", &ag, &cv, "agent", "hi", pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow(int64(42)))
 	mock.ExpectCommit()
 
@@ -69,7 +70,7 @@ func TestExtractionQueue_Enqueue_nilOptionalIDs(t *testing.T) {
 	mock.ExpectQuery("SELECT id FROM memory_extraction_queue WHERE message_id").
 		WithArgs("m2").WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery("INSERT INTO memory_extraction_queue").
-		WithArgs("m2", "u2", (*string)(nil), (*string)(nil), "user", "c").
+		WithArgs("m2", "u2", (*string)(nil), (*string)(nil), "user", "c", pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow(int64(7)))
 	mock.ExpectCommit()
 
@@ -90,7 +91,7 @@ func TestExtractionQueue_Enqueue_staleConversationFkeyRetry(t *testing.T) {
 	mock.ExpectQuery("SELECT id FROM memory_extraction_queue WHERE message_id").
 		WithArgs("m1").WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery("INSERT INTO memory_extraction_queue").
-		WithArgs("m1", "u1", &task.AgentID, &task.ConversationID, "agent", "hi").
+		WithArgs("m1", "u1", &task.AgentID, &task.ConversationID, "agent", "hi", pgxmock.AnyArg()).
 		WillReturnError(fkErr)
 	mock.ExpectRollback()
 	// Second attempt drops the stale conversation reference.
@@ -100,7 +101,7 @@ func TestExtractionQueue_Enqueue_staleConversationFkeyRetry(t *testing.T) {
 	mock.ExpectQuery("SELECT id FROM memory_extraction_queue WHERE message_id").
 		WithArgs("m1").WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery("INSERT INTO memory_extraction_queue").
-		WithArgs("m1", "u1", &task.AgentID, (*string)(nil), "agent", "hi").
+		WithArgs("m1", "u1", &task.AgentID, (*string)(nil), "agent", "hi", pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow(int64(5)))
 	mock.ExpectCommit()
 
@@ -152,7 +153,7 @@ func TestExtractionQueue_Enqueue_insertFails(t *testing.T) {
 	mock.ExpectQuery("SELECT id FROM memory_extraction_queue WHERE message_id").
 		WithArgs("m1").WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery("INSERT INTO memory_extraction_queue").
-		WithArgs(anyArgs(6)...).WillReturnError(pgx.ErrTxClosed)
+		WithArgs(anyArgs(7)...).WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
 	task := extractionTaskFixture()
@@ -167,13 +168,14 @@ func TestExtractionQueue_Dequeue_success(t *testing.T) {
 
 	now := ts()
 	ag, cv := "ag1", "c1"
+	trace := "trace-1"
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectQuery("UPDATE memory_extraction_queue").
 		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "message_id", "user_id", "agent_id", "conversation_id",
-			"scope", "content", "status", "retry_count", "error_msg", "created_at", "updated_at"}).
-			AddRow(int64(42), "m1", "u1", &ag, &cv, "user", "content", "processing", 1, nil, now, now))
+			"scope", "content", "status", "retry_count", "error_msg", "trace_id", "created_at", "updated_at"}).
+			AddRow(int64(42), "m1", "u1", &ag, &cv, "user", "content", "processing", 1, nil, &trace, now, now))
 	mock.ExpectCommit()
 
 	task, err := q.Dequeue(context.Background(), "t1")
@@ -184,6 +186,7 @@ func TestExtractionQueue_Dequeue_success(t *testing.T) {
 	require.Equal(t, "c1", task.ConversationID)
 	require.Equal(t, "user", task.Scope)
 	require.Equal(t, 1, task.RetryCount)
+	require.Equal(t, "trace-1", task.TraceID)
 	require.Equal(t, "t1", task.TenantID)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -198,8 +201,8 @@ func TestExtractionQueue_Dequeue_successNilPointers(t *testing.T) {
 	mock.ExpectQuery("UPDATE memory_extraction_queue").
 		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "message_id", "user_id", "agent_id", "conversation_id",
-			"scope", "content", "status", "retry_count", "error_msg", "created_at", "updated_at"}).
-			AddRow(int64(1), "m1", "u1", nil, nil, "user", "content", "pending", 0, nil, now, now))
+			"scope", "content", "status", "retry_count", "error_msg", "trace_id", "created_at", "updated_at"}).
+			AddRow(int64(1), "m1", "u1", nil, nil, "user", "content", "pending", 0, nil, nil, now, now))
 	mock.ExpectCommit()
 
 	task, err := q.Dequeue(context.Background(), "t1")
@@ -296,7 +299,7 @@ func TestExtractionQueue_MarkFailed_success(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectExec("retry_count < 2").
-		WithArgs(int64(42), claimed, "extraction_failed").
+		WithArgs(int64(42), claimed, "unknown_error").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
@@ -336,20 +339,18 @@ func TestExtractionQueue_MarkFailed_execFails(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestSafeExtractionErrorCode(t *testing.T) {
+func TestTruncateExtractionError(t *testing.T) {
 	cases := []struct {
 		name, in, want string
 	}{
-		{name: "known extraction_failed", in: "extraction_failed", want: "extraction_failed"},
-		{name: "known extraction_panic", in: "extraction_panic", want: "extraction_panic"},
-		{name: "known invalid_payload", in: "invalid_payload", want: "invalid_payload"},
-		{name: "empty falls back", in: "", want: "extraction_failed"},
-		{name: "unknown falls back", in: "random", want: "extraction_failed"},
-		{name: "sql injection attempt falls back", in: "x'; DROP TABLE memory_extraction_queue; --", want: "extraction_failed"},
+		{name: "short kept verbatim", in: "llm timeout", want: "llm timeout"},
+		{name: "empty stays empty", in: "", want: ""},
+		{name: "whitespace trimmed", in: "  llm timeout  ", want: "llm timeout"},
+		{name: "over 200 runes truncated", in: strings.Repeat("x", 300), want: strings.Repeat("x", 200)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, safeExtractionErrorCode(tc.in))
+			require.Equal(t, tc.want, truncateExtractionError(tc.in))
 		})
 	}
 }

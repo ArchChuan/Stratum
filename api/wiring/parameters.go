@@ -6,7 +6,6 @@ import (
 
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/parameters/application"
 	"github.com/byteBuilderX/stratum/internal/parameters/domain"
 	"github.com/byteBuilderX/stratum/internal/parameters/infrastructure/persistence"
@@ -140,6 +139,19 @@ var memoryWorkerModelKeys = []string{
 	"memory.history_summary_model", "memory.supersede_model",
 }
 
+// memoryWorkerEmbeddingModelKeys are the platform-scope embedding model
+// selectors; validated against the enabled-embedding directory (kept separate
+// from the chat-only chain above so embedding models are never rejected by a
+// chat catalog lookup).
+var memoryWorkerEmbeddingModelKeys = []string{"memory.embedding_model"}
+
+// modelDirectory abstracts the llmgateway model catalog lookups used by the
+// platform parameter write-time validation (chat + embedding).
+type modelDirectory interface {
+	ListChatModelsByTenant(context.Context) ([]string, error)
+	ListEmbeddingModelsByTenant(context.Context) ([]string, error)
+}
+
 // injectModelDirectoryValidation attaches a model-directory existence check to
 // the platform *_model keys. The check runs on PUT /admin/parameters
 // (SetPlatformValues → Normalize → ValidateFn) and fails closed when the model
@@ -152,6 +164,13 @@ func (c *Container) injectModelDirectoryValidation() {
 			continue
 		}
 		def.ValidateFn = c.validateModelInDirectory(key)
+	}
+	for _, key := range memoryWorkerEmbeddingModelKeys {
+		def, ok := c.Parameters.Registry.Get(key)
+		if !ok {
+			continue
+		}
+		def.ValidateFn = c.validateEmbeddingModelInDirectory(key)
 	}
 }
 
@@ -187,9 +206,44 @@ func (c *Container) validateModelInDirectory(key string) func(any) error {
 	}
 }
 
+// validateEmbeddingModelInDirectory 校验模型名存在于 enabled embedding 目录；
+// 空串 = 未设置哨兵放行（fail-closed 由运行期解析负责）。
+func validateEmbeddingModelInDirectory(dir modelDirectory, key string) func(any) error {
+	return func(value any) error {
+		model, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("%s: expected string model name", key)
+		}
+		if model == "" {
+			return nil
+		}
+		if dir == nil {
+			return fmt.Errorf("%s: model directory unavailable", key)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), constants.PlatformModelValidationTimeout)
+		defer cancel()
+		models, err := dir.ListEmbeddingModelsByTenant(ctx)
+		if err != nil {
+			return fmt.Errorf("%s: validate embedding model: %w", key, err)
+		}
+		for _, m := range models {
+			if m == model {
+				return nil
+			}
+		}
+		return fmt.Errorf("%s: model %q not in enabled embedding model directory", key, model)
+	}
+}
+
+// validateEmbeddingModelInDirectoryContainer wires the embedding catalog lookup
+// through the container at write time (lazy, mirroring validateModelInDirectory).
+func (c *Container) validateEmbeddingModelInDirectory(key string) func(any) error {
+	return validateEmbeddingModelInDirectory(c.modelRegistryOrNil(), key)
+}
+
 // modelRegistryOrNil returns the llmgateway model registry or nil when the
 // gateway was not wired (db unavailable / harness paths).
-func (c *Container) modelRegistryOrNil() *llmgateway.ModelRegistry {
+func (c *Container) modelRegistryOrNil() modelDirectory {
 	if c.LLMGateway == nil {
 		return nil
 	}
