@@ -74,7 +74,7 @@ export function ModelListPage() {
     (record: Model) => {
       Modal.confirm({
         title: '确认删除',
-        content: `确定要删除模型 "${record.displayName || record.name}" 吗？`,
+        content: `确定要删除模型 "${record.displayName || record.name}" 吗？该模型由厂商发现管理，删除后再次执行发现模型可能重新加入目录；若为默认嵌入模型或被平台参数/降级链引用，相关解析将失败，请先调整配置。`,
         okText: '删除',
         okType: 'danger',
         cancelText: '取消',

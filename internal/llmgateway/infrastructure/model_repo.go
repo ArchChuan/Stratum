@@ -408,15 +408,17 @@ func (r *PgModelRepo) upsertReadBack(ctx context.Context, tx pgx.Tx, providerID 
 	return result, nil
 }
 
-// Delete removes a non-provider-managed model by ID.
+// Delete removes a model by ID regardless of provider-managed flag.
+// 删除后该厂商再次"发现模型"会按 upsertSyncModel 重新插入（删除语义 =
+// "直到下次发现前不出现"）。
 func (r *PgModelRepo) Delete(ctx context.Context, id string) error {
 	tag, err := r.pool.Exec(ctx,
-		`DELETE FROM public.models WHERE id=$1 AND provider_managed=false`, id)
+		`DELETE FROM public.models WHERE id=$1`, id)
 	if err != nil {
 		return fmt.Errorf("delete model: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("model not found or is provider-managed: %s", id)
+		return fmt.Errorf("model not found: %s", id)
 	}
 	return nil
 }
