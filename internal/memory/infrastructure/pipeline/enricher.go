@@ -50,6 +50,7 @@ type EnricherWorker struct {
 	pool          *pgxpool.Pool
 	llmResolver   LLMResolver
 	paramResolver port.PlatformParamResolver
+	vectorCleaner entryVectorDeleter
 	logger        *zap.Logger
 	stopCh        chan struct{}
 	stopOnce      sync.Once
@@ -93,6 +94,13 @@ func (w *EnricherWorker) WithLLMResolver(r LLMResolver) *EnricherWorker {
 // per-call LLM content settings. A nil resolver keeps the const defaults.
 func (w *EnricherWorker) WithParamResolver(r port.PlatformParamResolver) *EnricherWorker {
 	w.paramResolver = r
+	return w
+}
+
+// WithEntryVectorDeleter wires the cleaner used to remove orphan vectors when
+// enrichment dead-letters after the embedder already wrote the vector.
+func (w *EnricherWorker) WithEntryVectorDeleter(d entryVectorDeleter) *EnricherWorker {
+	w.vectorCleaner = d
 	return w
 }
 
@@ -276,11 +284,9 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 
 	llm := w.llmFor(ctx, ev.TenantID)
 	if llm == nil {
-		if dlqErr := deadLetterWithHeartbeat(ctx, w.js, msg, stopHeartbeat, deadLetterDetails{
+		deadLetterWithOrphan(ctx, w.js, msg, stopHeartbeat, deadLetterDetails{
 			Stage: "enrich", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "llm_service_unavailable",
-		}); dlqErr != nil {
-			w.logger.Error("memory.enrich.dlq", zap.Error(dlqErr))
-		}
+		}, w.vectorCleaner, w.logger, ev.TenantID, ev.MessageID, "memory.enrich.dlq")
 		return
 	}
 	enrichment, err := w.callEnrichLLM(ctx, llm, ev.Role, ev.Content)
@@ -290,11 +296,9 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
 		enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
-		if retryErr := retryOrDeadLetterWithHeartbeat(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
+		retryOrDeadLetterWithOrphan(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "enrich", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "llm_failed",
-		}); retryErr != nil {
-			w.logger.Error("memory.enrich.retry_or_dlq", zap.Error(retryErr))
-		}
+		}, w.vectorCleaner, w.logger, ev.TenantID, ev.MessageID, "memory.enrich.retry_or_dlq")
 		return
 	}
 
@@ -304,11 +308,9 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
 		enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
-		if retryErr := retryOrDeadLetterWithHeartbeat(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
+		retryOrDeadLetterWithOrphan(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "enrich", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "persist_failed",
-		}); retryErr != nil {
-			w.logger.Error("memory.enrich.retry_or_dlq", zap.Error(retryErr))
-		}
+		}, w.vectorCleaner, w.logger, ev.TenantID, ev.MessageID, "memory.enrich.retry_or_dlq")
 		return
 	}
 	_ = w.refreshActiveSnapshot(ctx, ev, enrichment)

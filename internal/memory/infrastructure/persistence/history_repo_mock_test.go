@@ -315,14 +315,14 @@ func TestHistoryRepo_ArchiveColdFacts_success(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	mock.ExpectExec("UPDATE memory_facts SET status='archived'").
+	mock.ExpectQuery("UPDATE memory_facts SET status='archived'").
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 4))
+		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("fact-1").AddRow("fact-2"))
 	mock.ExpectCommit()
 
-	n, err := repo.ArchiveColdFacts(context.Background(), "t1")
+	ids, err := repo.ArchiveColdFacts(context.Background(), "t1")
 	require.NoError(t, err)
-	require.Equal(t, 4, n)
+	require.Equal(t, []string{"fact-1", "fact-2"}, ids)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -332,7 +332,7 @@ func TestHistoryRepo_ArchiveColdFacts_execFails(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	mock.ExpectExec("UPDATE memory_facts SET status='archived'").
+	mock.ExpectQuery("UPDATE memory_facts SET status='archived'").
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()

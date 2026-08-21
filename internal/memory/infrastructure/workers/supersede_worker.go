@@ -14,12 +14,13 @@ import (
 
 // SupersedeWorker periodically checks for superseded facts.
 type SupersedeWorker struct {
-	tenantID string
-	factRepo port.FactRepo
-	judge    port.LLMSuperseder
-	logger   *zap.Logger
-	stopCh   chan struct{}
-	stopOnce sync.Once
+	tenantID    string
+	factRepo    port.FactRepo
+	judge       port.LLMSuperseder
+	vectorStore port.VectorStore
+	logger      *zap.Logger
+	stopCh      chan struct{}
+	stopOnce    sync.Once
 }
 
 // NewSupersedeWorker creates a supersede worker for a specific tenant.
@@ -31,6 +32,13 @@ func NewSupersedeWorker(tenantID string, repo port.FactRepo, judge port.LLMSuper
 		logger:   logger,
 		stopCh:   make(chan struct{}),
 	}
+}
+
+// WithVectorStore wires the vector store used to delete superseded facts'
+// vectors so stale content stops being recalled.
+func (w *SupersedeWorker) WithVectorStore(vs port.VectorStore) *SupersedeWorker {
+	w.vectorStore = vs
+	return w
 }
 
 func (w *SupersedeWorker) Start(ctx context.Context) {
@@ -144,6 +152,7 @@ outer:
 						zap.Error(err))
 					continue
 				}
+				w.deleteSupersededVector(ctx, fact.TenantID, candidate.Fact.ID)
 
 				supersededCount++
 				w.logger.Info("memory.supersede_worker.superseded",
@@ -160,6 +169,22 @@ outer:
 			zap.Int64("latency_ms", time.Since(start).Milliseconds()))
 		incWorkerMessages("supersede", w.tenantID, "success")
 		observeWorkerDuration("supersede", w.tenantID, time.Since(start).Seconds())
+	}
+}
+
+// deleteSupersededVector removes the superseded fact's vector. Best-effort
+// with ERROR surfacing: the daily GC purge backstops missed deletions once the
+// row passes retention, and recall filters non-active facts regardless, so a
+// failed delete never leaks stale facts into recall.
+func (w *SupersedeWorker) deleteSupersededVector(ctx context.Context, tenantID, factID string) {
+	if w.vectorStore == nil {
+		return
+	}
+	if err := w.vectorStore.DeleteFactVectors(ctx, tenantID, []string{factID}); err != nil {
+		w.logger.Error("memory.supersede_worker.vector_delete_failed",
+			zap.String("tenant_id", tenantID),
+			zap.String("fact_id", factID),
+			zap.Error(err))
 	}
 }
 

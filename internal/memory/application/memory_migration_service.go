@@ -398,6 +398,15 @@ func (s *MemoryMigrationService) buildDocs(ctx context.Context, tenantID, model 
 	}
 	docs := make([]*port.VectorDoc, 0, len(facts))
 	for _, fact := range facts {
+		// 回填只面向 active 事实：superseded/archived 的向量已被生命周期清理
+		// 删除，迁移不得把非 active 事实重新嵌入复活。
+		if fact.Status != domain.FactStatusActive {
+			s.logger.Debug("memory.migration.skip_non_active",
+				zap.String("tenant_id", tenantID),
+				zap.String("fact_id", fact.ID),
+				zap.String("status", string(fact.Status)))
+			continue
+		}
 		vector, err := embedder.Embed(ctx, fact.Content)
 		if err != nil {
 			return nil, fmt.Errorf("memory migration: embed fact %s: %w", fact.ID, err)

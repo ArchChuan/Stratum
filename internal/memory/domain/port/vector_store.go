@@ -62,6 +62,17 @@ type VectorStore interface {
 	// DeleteAllByAgent removes all vectors for an agent from the tenant's memory collection.
 	DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error
 
+	// DeleteEntryVectors removes the given raw-turn entry ids from every
+	// memory_<tenant> collection (legacy and model-suffixed). Used by the
+	// episodic TTL GC, which drives deletion from PG ids.
+	DeleteEntryVectors(ctx context.Context, tenantID string, ids []string) error
+
+	// DeleteFactVectors removes the given fact ids from every
+	// memory_facts_<tenant> collection (legacy and model-suffixed). Used when
+	// a fact leaves the active set (supersede/archive) and by the GC
+	// reconcile pass so vectors converge to PG status.
+	DeleteFactVectors(ctx context.Context, tenantID string, ids []string) error
+
 	// CreateCollection initializes a vector collection with specified dimension.
 	CreateCollection(ctx context.Context, collectionName string, dimension int) error
 }

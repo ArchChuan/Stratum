@@ -563,6 +563,41 @@ func TestMigrationReportsProgressMetrics(t *testing.T) {
 	vs.AssertExpectations(t)
 }
 
+func TestBackfillSkipsNonActiveFacts(t *testing.T) {
+	ctx := context.Background()
+	migRepo, factRepo, vs, svc := newMigrationService(t)
+	embed := new(MockEmbedClient)
+	svc.SetEmbedResolver(stubEmbedResolver(embed))
+	svc.SetTenantLister(func(context.Context) ([]string, error) { return []string{migTestTenant}, nil })
+
+	m := testMigration(domain.MigrationStatusMigrating)
+	m.TotalFacts = 2
+	facts := makeFacts(2)
+	facts[1].Status = domain.FactStatusSuperseded
+	upserted := map[string][]*port.VectorDoc{}
+
+	migRepo.On("GetActive", ctx, migTestTenant).Return(m, nil).Once()
+	factRepo.On("ListAllFacts", ctx, migTestTenant, constants.MemoryMigrationPageSize, 0).Return(facts, nil).Once()
+	embed.On("Embed", ctx, "fact content a").Return([]float32{0.1, 0.2}, nil)
+	vs.On("Upsert", ctx, mock.Anything, mock.Anything).Return(nil).
+		Run(func(args mock.Arguments) {
+			collection := args.Get(1).(string)
+			docs := args.Get(2).([]*port.VectorDoc)
+			upserted[collection] = append(upserted[collection], docs...)
+		}).Once()
+	migRepo.On("Advance", ctx, migTestTenant, int64(7), 2).Return(true, nil).Once()
+	migRepo.On("Complete", ctx, migTestTenant, int64(7), domain.MigrationStatusDone).Return(true, nil).Once()
+
+	svc.ProcessPending(ctx)
+
+	collection := "memory_facts_t1_text_embedding_v3"
+	require.Len(t, upserted[collection], 1, "superseded/archived 事实不得被迁移回填复活")
+	require.Equal(t, facts[0].ID, upserted[collection][0].ID)
+	migRepo.AssertExpectations(t)
+	factRepo.AssertExpectations(t)
+	vs.AssertExpectations(t)
+}
+
 // TestTrackStallIncrementsCounterOnNoProgress 验证连续扫描间隔间进度未推进时
 // 上报停滞计数器；迁移进入终态后停止跟踪。
 func TestTrackStallIncrementsCounterOnNoProgress(t *testing.T) {

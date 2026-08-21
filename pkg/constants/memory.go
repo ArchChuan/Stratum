@@ -128,9 +128,16 @@ const (
 	MemoryRRFConstant    = 60   // RRF k parameter for hybrid retrieval fusion
 )
 
-// Memory GC - controls soft-delete cleanup
+// Memory GC - controls soft-delete and episodic TTL cleanup
 const (
 	MemorySoftDeleteRetention = 30 * 24 * time.Hour // 30 days
+	// MemoryEpisodicTTL is the retention window for the raw-turn episodic
+	// layer (memory_entries + memory_<tenant>_<model> vectors). Raw dialogue
+	// value decays fast; industry practice bounds episodic stores at 30-90
+	// days. 90d matches MemorySupersededRetention so both layers share the
+	// same retention cadence. Entries with an explicit expires_at are removed
+	// at their own expiry, independently of this cutoff.
+	MemoryEpisodicTTL = 90 * 24 * time.Hour
 )
 
 // Dynamic long-term History policy. Values are centralized so workers,

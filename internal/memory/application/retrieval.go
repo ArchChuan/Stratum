@@ -79,30 +79,7 @@ func (s *MemoryService) RecallMemory(ctx context.Context, req *RecallMemoryReque
 	}
 
 	// Step 6: Calculate RRF score for each fact
-	k := float64(constants.MemoryRRFConstant)
-	var scored []scoredFact
-
-	for id := range allIDs {
-		vectorRank := vectorRanks[id]
-		trigramRank := trigramRanks[id]
-
-		// RRF formula: score = 1/(k+rank_vector) + 1/(k+rank_trigram)
-		rrfScore := 0.0
-		if vectorRank > 0 {
-			rrfScore += 1.0 / (k + float64(vectorRank))
-		}
-		if trigramRank > 0 {
-			rrfScore += 1.0 / (k + float64(trigramRank))
-		}
-
-		// Fetch full fact
-		fact, err := s.factRepo.GetByID(ctx, req.TenantID, id)
-		if err != nil {
-			continue // skip if not found
-		}
-
-		scored = append(scored, scoredFact{fact: fact, score: rrfScore})
-	}
+	scored := s.collectRecallableFacts(ctx, req, allIDs, vectorRanks, trigramRanks)
 
 	// Step 7: Sort by RRF score descending
 	sort.Slice(scored, func(i, j int) bool {
@@ -138,6 +115,33 @@ func (s *MemoryService) RecallMemory(ctx context.Context, req *RecallMemoryReque
 	}
 
 	return &RecallMemoryResponse{Facts: dtos}, nil
+}
+
+// collectRecallableFacts 对 RRF 候选 id 拉取完整事实并只保留 active 状态。
+// 向量侧可能残留 superseded/archived 的陈旧向量（metadata 无 status 字段，
+// GetByID 不过滤状态），与 trigram 侧 status='active' 语义对齐：非 active
+// 或查询失败一律跳过，不进入召回结果。
+func (s *MemoryService) collectRecallableFacts(ctx context.Context, req *RecallMemoryRequest, allIDs map[string]bool, vectorRanks, trigramRanks map[string]int) []scoredFact {
+	k := float64(constants.MemoryRRFConstant)
+	var scored []scoredFact
+	for id := range allIDs {
+		rrfScore := 0.0
+		if vectorRank := vectorRanks[id]; vectorRank > 0 {
+			rrfScore += 1.0 / (k + float64(vectorRank))
+		}
+		if trigramRank := trigramRanks[id]; trigramRank > 0 {
+			rrfScore += 1.0 / (k + float64(trigramRank))
+		}
+		fact, err := s.factRepo.GetByID(ctx, req.TenantID, id)
+		if err != nil {
+			continue // skip if not found
+		}
+		if fact.Status != domain.FactStatusActive {
+			continue
+		}
+		scored = append(scored, scoredFact{fact: fact, score: rrfScore})
+	}
+	return scored
 }
 
 // errCollectionNotFound distinguishes a missing Milvus collection from other

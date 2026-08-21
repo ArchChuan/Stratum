@@ -52,7 +52,7 @@ func TestBuildTenantLLMWorkersUsesDynamicProcessorsWithoutEagerResolve(t *testin
 		return completionClientForWiringTest{}, nil
 	}
 
-	workerSet := appendTenantLLMWorkers(nil, "tenant-1", nil, nil, resolver, nil, zap.NewNop())
+	workerSet := appendTenantLLMWorkers(nil, "tenant-1", nil, nil, nil, resolver, nil, zap.NewNop())
 	if resolved != 0 {
 		t.Fatalf("tenant LLM resolved during worker construction: %d calls", resolved)
 	}

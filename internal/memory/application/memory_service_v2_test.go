@@ -109,6 +109,12 @@ func (m *cleanupMemoryRepo) DeleteAllByUser(ctx context.Context, tenantID, userI
 func (m *cleanupMemoryRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error {
 	return m.Called(ctx, tenantID, agentID).Error(0)
 }
+func (m *cleanupMemoryRepo) ListExpired(context.Context, string, time.Time, time.Time, int) ([]string, error) {
+	return nil, nil
+}
+func (m *cleanupMemoryRepo) DeleteByIDs(context.Context, string, []string) error {
+	return nil
+}
 func (m *cleanupMemoryRepo) Stats(context.Context, string) (*domain.MemoryStats, error) {
 	return nil, nil
 }
@@ -205,9 +211,12 @@ func (m *MockFactRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID s
 	return args.Get(0).([]string), args.Error(1)
 }
 
-func (m *MockFactRepo) PurgeSuperseded(ctx context.Context, tenantID string, olderThan time.Time, limit int) (int, error) {
+func (m *MockFactRepo) PurgeSuperseded(ctx context.Context, tenantID string, olderThan time.Time, limit int) ([]string, error) {
 	args := m.Called(ctx, tenantID, olderThan, limit)
-	return args.Int(0), args.Error(1)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]string), args.Error(1)
 }
 
 func (m *MockFactRepo) CountAll(ctx context.Context, tenantID string) (int, error) {
@@ -337,6 +346,16 @@ func (m *MockVectorStore) DeleteAllByUser(ctx context.Context, tenantID, userID 
 
 func (m *MockVectorStore) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error {
 	args := m.Called(ctx, tenantID, agentID)
+	return args.Error(0)
+}
+
+func (m *MockVectorStore) DeleteEntryVectors(ctx context.Context, tenantID string, ids []string) error {
+	args := m.Called(ctx, tenantID, ids)
+	return args.Error(0)
+}
+
+func (m *MockVectorStore) DeleteFactVectors(ctx context.Context, tenantID string, ids []string) error {
+	args := m.Called(ctx, tenantID, ids)
 	return args.Error(0)
 }
 

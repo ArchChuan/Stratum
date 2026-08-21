@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -55,6 +56,19 @@ func (m *mockMemoryRepo) DeleteAllByUser(ctx context.Context, tenantID, userID s
 
 func (m *mockMemoryRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error {
 	args := m.Called(ctx, tenantID, agentID)
+	return args.Error(0)
+}
+
+func (m *mockMemoryRepo) ListExpired(ctx context.Context, tenantID string, now, createdBefore time.Time, limit int) ([]string, error) {
+	args := m.Called(ctx, tenantID, now, createdBefore, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]string), args.Error(1)
+}
+
+func (m *mockMemoryRepo) DeleteByIDs(ctx context.Context, tenantID string, ids []string) error {
+	args := m.Called(ctx, tenantID, ids)
 	return args.Error(0)
 }
 

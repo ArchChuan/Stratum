@@ -532,9 +532,9 @@ func (r *FactRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID strin
 // status='superseded' rows are eligible — archived facts are long-term memory
 // and must survive GC. Uses a bounded ctid subquery so a single pass never
 // deletes an unbounded number of rows.
-func (r *FactRepo) PurgeSuperseded(ctx context.Context, tenantID string, olderThan time.Time, limit int) (int, error) {
+func (r *FactRepo) PurgeSuperseded(ctx context.Context, tenantID string, olderThan time.Time, limit int) ([]string, error) {
 	if limit <= 0 {
-		return 0, nil
+		return nil, nil
 	}
 	const query = `
 		DELETE FROM memory_facts
@@ -542,18 +542,26 @@ func (r *FactRepo) PurgeSuperseded(ctx context.Context, tenantID string, olderTh
 			SELECT ctid FROM memory_facts
 			WHERE status = 'superseded' AND updated_at < $1
 			LIMIT $2
-		)`
+		)
+		RETURNING id::text`
 
-	var n int
+	var ids []string
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, query, olderThan, limit)
+		rows, err := tx.Query(ctx, query, olderThan, limit)
 		if err != nil {
 			return translatePgError(err, "purge superseded facts")
 		}
-		n = int(tag.RowsAffected())
-		return nil
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return fmt.Errorf("scan purged fact id: %w", err)
+			}
+			ids = append(ids, id)
+		}
+		return rows.Err()
 	})
-	return n, err
+	return ids, err
 }
 
 // CountAll 统计租户 memory_facts 的全部行数（任意状态）。用于迁移开始时快照
