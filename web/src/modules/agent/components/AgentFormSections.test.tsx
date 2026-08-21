@@ -426,8 +426,8 @@ describe('AgentFormSections', () => {
         <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
       </Form>,
     );
-    // compaction_prompt + AgentMemoryConfig 的 memory.extraction_prompt 各一个
-    expect(screen.getAllByRole('button', { name: '查看默认提示词' })).toHaveLength(2);
+    // 仅 agent.compaction_prompt 保留默认模板 viewer（memory.* 已 fail-closed）。
+    expect(screen.getAllByRole('button', { name: '查看默认提示词' })).toHaveLength(1);
   });
 
   it('expresses the platform default as 0 on memory sliders instead of an unreachable empty state', () => {

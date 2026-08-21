@@ -12,7 +12,6 @@ import type { ReactNode } from 'react';
 
 import { parametersApi } from '../api/parameters.api';
 import { ParameterControl } from '../components/ParameterControl';
-import { PromptDefaultViewer } from '../components/PromptDefaultViewer';
 import type {
   ParameterDefinition,
   PlatformSettingsFormValues,
@@ -45,15 +44,6 @@ const groupByCategory = (
   return Array.from(byCategory.entries());
 };
 
-// 平台页可查看默认模板的提示词键（与后端 prompt-defaults 白名单对应，
-// agent.* 与 memory.extraction_prompt 在 Agent 编辑页展示）。
-const PROMPT_DEFAULT_KEYS = new Set([
-  'memory.enrich_prompt',
-  'memory.summary_prompt',
-  'memory.history_summary_prompt',
-  'memory.supersede_prompt',
-]);
-
 // PlatformFieldItem 逐字段 watch 派生 unset（只重渲染本字段）。unset = 表单无值
 // 或 0/''（List 语义：非 0 默认后端已回填，缺失键即 0/''/nil 默认）。hint 只
 // 提示不写回；toggle 恒被 List 返回，无缺失场景，不渲染 hint。
@@ -82,12 +72,9 @@ const PlatformFieldItem = ({ def }: { def: ParameterDefinition }) => {
       valuePropName={isToggle ? 'checked' : undefined}
       tooltip={def.description || def.key}
       extra={
-        hint !== null || (def.visual_hint.control === 'textarea' && PROMPT_DEFAULT_KEYS.has(def.key)) ? (
+        hint !== null ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             {hint}
-            {def.visual_hint.control === 'textarea' && PROMPT_DEFAULT_KEYS.has(def.key) && (
-              <PromptDefaultViewer promptKey={def.key} />
-            )}
           </div>
         ) : undefined
       }

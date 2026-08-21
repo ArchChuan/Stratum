@@ -13,29 +13,29 @@ vi.mock('../../api/parameters.api', () => ({
   parametersApi: { promptDefaults: vi.fn() },
 }));
 
-const TEMPLATE = '你是记忆抽取助手，为 %s 抽取 %d 条事实。';
+const TEMPLATE = '压缩对话历史，保留关键决策。';
 
 describe('PromptDefaultViewer', () => {
   it('opens a modal and renders the full template from the endpoint', async () => {
     vi.mocked(parametersApi.promptDefaults).mockResolvedValue({
-      'memory.extraction_prompt': TEMPLATE,
+      'agent.compaction_prompt': TEMPLATE,
     });
 
-    render(<PromptDefaultViewer promptKey="memory.extraction_prompt" />);
+    render(<PromptDefaultViewer promptKey="agent.compaction_prompt" />);
     fireEvent.click(screen.getByRole('button', { name: '查看默认提示词' }));
 
     expect(await screen.findByDisplayValue(TEMPLATE)).toBeInTheDocument();
-    expect(screen.getByText('memory.extraction_prompt（未配置时执行按此模板兜底；含 %s/%d 占位符，运行时替换）')).toBeInTheDocument();
+    expect(screen.getByText(/未配置时执行按此模板兜底/)).toBeInTheDocument();
   });
 
   it('copies the full template text', async () => {
     vi.mocked(parametersApi.promptDefaults).mockResolvedValue({
-      'memory.extraction_prompt': TEMPLATE,
+      'agent.compaction_prompt': TEMPLATE,
     });
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
 
-    render(<PromptDefaultViewer promptKey="memory.extraction_prompt" />);
+    render(<PromptDefaultViewer promptKey="agent.compaction_prompt" />);
     fireEvent.click(screen.getByRole('button', { name: '查看默认提示词' }));
     fireEvent.click(await screen.findByRole('button', { name: '复制全文' }));
 
