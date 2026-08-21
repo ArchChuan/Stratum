@@ -18,12 +18,14 @@ repos:
         pass_filenames: false
         types: [go]
 
-      # golangci-lint (v2)
+      # golangci-lint (v2) — 并发与 go-vet 同源限流：多 worktree 并发 commit 时
+      # 负载感知降并发，避免 12 路并行 go env 风暴卡死机器（2026-08-21 事故：
+      # pre-commit 卡 75 分钟，把负载推到 190+）。
       - id: golangci-lint
         name: golangci-lint
         language: system
-        entry: golangci-lint
-        args: [run, --timeout=5m]
+        entry: bash
+        args: [-c, "golangci-lint run --timeout=5m --concurrency=$(bash scripts/quality/go-parallelism.sh) ./..."]
         pass_filenames: false
         types: [go]
 
