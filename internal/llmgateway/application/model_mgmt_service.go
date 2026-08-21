@@ -326,7 +326,7 @@ func hasCapability(caps []domain.ModelCapability, want domain.ModelCapability) b
 	return false
 }
 
-// Delete removes a non-provider-managed model by ID.
+// Delete removes a model by ID（provider-managed 亦可删；再次发现会重新插入）。
 func (s *ModelMgmtService) Delete(ctx context.Context, tenantID, id string) error {
 	if err := s.repo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("model mgmt: delete: %w", err)

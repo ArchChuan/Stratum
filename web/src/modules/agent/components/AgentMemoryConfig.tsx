@@ -15,7 +15,6 @@ import {
   RECALL_TOP_K_MIN,
 } from '@/constants';
 import { filterModelOption, ModelOptionLabel } from '@/modules/llm/components/ModelOptionLabel';
-import { PromptDefaultViewer } from '@/modules/parameters/components/PromptDefaultViewer';
 import { SectionHeader } from '@/shared/ui';
 
 const { TextArea } = Input;
@@ -62,12 +61,11 @@ export const AgentMemoryConfig = ({ groupedModels }: AgentMemoryConfigProps) => 
       name="memoryExtractionPrompt"
       extra={
         <>
-          记忆抽取规则；留空 = 使用内置默认。自定义内容仅作为附加规则，身份、数量上限与输出格式由系统统一处理，无需填写占位符
-          <PromptDefaultViewer promptKey="memory.extraction_prompt" />
+          必填：完整系统提示词，支持 {'{user_id}'}/{'{agent_id}'}/{'{max_facts}'} 占位符（运行时替换）；未配置时记忆抽取将失败（fail-closed）
         </>
       }
     >
-      <TextArea rows={4} placeholder="留空使用内置默认抽取提示词" />
+      <TextArea rows={4} placeholder="请填写完整抽取提示词（必填）" />
     </Form.Item>
     <Form.Item
       label="抽取模型（memory.extraction_model）"

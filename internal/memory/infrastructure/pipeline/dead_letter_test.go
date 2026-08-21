@@ -45,6 +45,18 @@ type fakeJetStreamMsg struct {
 	termDelay            time.Duration
 }
 
+// TestDeadLetterEventIncludesTraceID 断言 DLQ envelope 携带 trace_id，
+// 供告警定位与重放对账（无需反解 payload）。
+func TestDeadLetterEventIncludesTraceID(t *testing.T) {
+	ev := DeadLetterEvent{
+		MessageID: "m1", TenantID: "t1", Stage: "embed",
+		ErrorCode: "embed_service_unavailable", TraceID: "abc123",
+	}
+	raw, err := json.Marshal(ev)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), `"trace_id":"abc123"`)
+}
+
 func (m *fakeJetStreamMsg) Metadata() (*jetstream.MsgMetadata, error) {
 	return m.metadata, m.metadataErr
 }

@@ -248,7 +248,7 @@ func TestSupersedeWorkerRecoversWhenResolvingClientBecomesAvailable(t *testing.T
 			return &llmdomain.CompletionResponse{Content: `{"supersedes":true,"reason":"updated"}`}, nil
 		}), nil
 	}
-	worker := workers.NewSupersedeWorker("tenant-1", repo, workers.NewResolvingLLMSuperseder("tenant-1", resolver), zap.NewNop())
+	worker := workers.NewSupersedeWorker("tenant-1", repo, newResolvingTestSuperseder("tenant-1", resolver), zap.NewNop())
 
 	worker.RunOnce(context.Background())
 	require.Zero(t, updates)

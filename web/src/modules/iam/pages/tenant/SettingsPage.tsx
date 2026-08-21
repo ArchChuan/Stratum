@@ -3,7 +3,6 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { tenantApi } from '../../api/tenant.api';
-import { MemoryMigrationCard } from '../../components/MemoryMigrationCard';
 import { TenantBasicCard } from '../../components/TenantBasicCard';
 import { useTenantSettings } from '../../hooks/useTenantSettings';
 
@@ -71,7 +70,6 @@ export const SettingsPage = () => {
       </Row>
 
       <div style={{ marginBottom: 16 }}>
-        <MemoryMigrationCard />
       </div>
 
       {role === 'owner' && isDefault === false && (

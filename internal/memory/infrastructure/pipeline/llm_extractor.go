@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"go.uber.org/zap"
@@ -12,24 +13,6 @@ import (
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
-
-// extractionIdentityPrompt 是系统渲染、用户不可覆盖的部分：身份、数量上限、
-// fact_type 枚举与 JSON 输出协议。枚举与输出格式由领域模型/解析器固定，
-// 自定义 prompt 不得覆盖，否则抽取结果无法通过校验。
-const extractionIdentityPrompt = `你是一个长期记忆提取助手，负责从对话中提取关于用户（%s）的有价值事实，供 AI 助手（%s）在未来对话中使用。
-
-最多提取 %d 条事实；宁少勿滥，低价值事实直接忽略。
-
-fact_type 分类：
-- preference：用户的喜好、偏好、习惯
-- skill：用户掌握的技能或专业知识
-- event：已发生的具体事件（过去时）
-- state：用户当前的状态或处境
-- relationship：用户与某人/某组织的关系
-- other：不属于以上分类的陈述性事实
-
-只输出 JSON 数组，不加任何说明或 markdown 标记：
-[{"content":"...","importance":0.0-1.0,"fact_type":"...","confidence":0.0-1.0,"entities":["实体名"]}]`
 
 type LLMExtractor struct {
 	client   LLMClient
@@ -72,24 +55,26 @@ func (e *LLMExtractor) maxFacts(ctx context.Context, agentID string) int {
 	return coerceResourceInt(v, constants.MemoryMaxFactsPerExtraction)
 }
 
-// extractionPrompt 渲染抽取 system prompt：身份/上限/协议部分由系统固定渲染
-// （用户不可覆盖），规则部分取自定义 memory.extraction_prompt，未设/解析失败
-// 时回落内置默认规则。自定义 prompt 无需携带任何占位符。
-func (e *LLMExtractor) extractionPrompt(ctx context.Context, agentID, userID string, maxFacts int) string {
-	identity := fmt.Sprintf(extractionIdentityPrompt, userID, agentID, maxFacts)
-	defaultRules := func() string { return identity + "\n\n" + constants.MemoryExtractionDefaultPrompt }
+// extractionPrompt 渲染抽取 system prompt：memory.extraction_prompt（resource
+// scope）承载**完整**系统提示词，代码渲染 {user_id}/{agent_id}/{max_facts}
+// 占位符；未配置/空 → 错误（fail-closed，无任何内置模板兜底）。JSON 输出契约
+// 由 parseExtractedFacts/Validate 强制，不依赖提示词文本。
+func (e *LLMExtractor) extractionPrompt(ctx context.Context, agentID, userID string, maxFacts int) (string, error) {
 	if e.resolver == nil {
-		return defaultRules()
+		return "", fmt.Errorf("memory extraction: memory.extraction_prompt not configured (fail-closed)")
 	}
-	v, ok, err := e.resolver.Resolve(ctx, e.tenantID, agentID, "memory.extraction_prompt")
-	if err != nil || !ok {
-		return defaultRules()
+	v, _, err := e.resolver.Resolve(ctx, e.tenantID, agentID, "memory.extraction_prompt")
+	if err != nil {
+		return "", fmt.Errorf("memory extraction: resolve prompt: %w", err)
 	}
 	s, ok := v.(string)
 	if !ok || strings.TrimSpace(s) == "" {
-		return defaultRules()
+		return "", fmt.Errorf("memory extraction: memory.extraction_prompt not configured (fail-closed)")
 	}
-	return identity + "\n\n" + strings.TrimSpace(s)
+	s = strings.ReplaceAll(s, "{user_id}", userID)
+	s = strings.ReplaceAll(s, "{agent_id}", agentID)
+	s = strings.ReplaceAll(s, "{max_facts}", strconv.Itoa(maxFacts))
+	return s, nil
 }
 
 // extractionModel resolves memory.extraction_model for the target agent;
@@ -108,7 +93,10 @@ func (e *LLMExtractor) extractionModel(ctx context.Context, agentID string) stri
 
 func (e *LLMExtractor) ExtractFacts(ctx context.Context, userID, agentID string, message string) ([]*memport.ExtractedFact, error) {
 	maxFacts := e.maxFacts(ctx, agentID)
-	system := e.extractionPrompt(ctx, agentID, userID, maxFacts)
+	system, err := e.extractionPrompt(ctx, agentID, userID, maxFacts)
+	if err != nil {
+		return nil, err
+	}
 	model := e.extractionModel(ctx, agentID)
 	req := llmdomain.NewExtractRequest(model, system, message, 0, constants.MemoryExtractLLMMaxTokens)
 	return extractFactsStructured(ctx, e.client, req, e.logger)

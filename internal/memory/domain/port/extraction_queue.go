@@ -17,6 +17,7 @@ type ExtractionTask struct {
 	Content        string // JSON-encoded []MessageDTO
 	Status         string
 	RetryCount     int
+	TraceID        string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }

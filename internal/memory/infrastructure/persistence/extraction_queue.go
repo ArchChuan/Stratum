@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/google/uuid"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -31,6 +34,9 @@ func (q *ExtractionQueue) execTenant(ctx context.Context, tenantID string, fn fu
 }
 
 func (q *ExtractionQueue) Enqueue(ctx context.Context, tenantID string, task *port.ExtractionTask) error {
+	if task.TraceID == "" {
+		task.TraceID = uuid.NewString()
+	}
 	var agentID *string
 	if task.AgentID != "" {
 		agentID = &task.AgentID
@@ -53,10 +59,10 @@ func (q *ExtractionQueue) Enqueue(ctx context.Context, tenantID string, task *po
 			}
 			return tx.QueryRow(ctx, `
 				INSERT INTO memory_extraction_queue
-					(message_id, user_id, agent_id, conversation_id, scope, content, status, retry_count)
-				VALUES ($1, $2, $3, $4, $5, $6, 'pending', 0)
+					(message_id, user_id, agent_id, conversation_id, scope, content, status, retry_count, trace_id)
+				VALUES ($1, $2, $3, $4, $5, $6, 'pending', 0, $7)
 				RETURNING id`,
-				task.MessageID, task.UserID, agentID, conversationID, task.Scope, task.Content,
+				task.MessageID, task.UserID, agentID, conversationID, task.Scope, task.Content, task.TraceID,
 			).Scan(&task.ID)
 		})
 	}
@@ -75,7 +81,7 @@ func (q *ExtractionQueue) Dequeue(ctx context.Context, tenantID string) (*port.E
 	var result *port.ExtractionTask
 	err := q.execTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		var task port.ExtractionTask
-		var agentID, conversationID, errorMsg *string
+		var agentID, conversationID, errorMsg, traceID *string
 		err := tx.QueryRow(ctx, `
 			UPDATE memory_extraction_queue
 			SET status = 'processing', updated_at = NOW()
@@ -88,10 +94,10 @@ func (q *ExtractionQueue) Dequeue(ctx context.Context, tenantID string) (*port.E
 				FOR UPDATE SKIP LOCKED
 			)
 			RETURNING id, message_id, user_id, agent_id, conversation_id, scope, content,
-			          status, retry_count, error_msg, created_at, updated_at`,
+			          status, retry_count, error_msg, trace_id, created_at, updated_at`,
 			constants.MemoryExtractionLease.Seconds()).Scan(&task.ID, &task.MessageID, &task.UserID, &agentID, &conversationID,
 			&task.Scope, &task.Content, &task.Status, &task.RetryCount, &errorMsg,
-			&task.CreatedAt, &task.UpdatedAt)
+			&traceID, &task.CreatedAt, &task.UpdatedAt)
 		if err != nil {
 			if err.Error() == "no rows in result set" {
 				return nil
@@ -103,6 +109,9 @@ func (q *ExtractionQueue) Dequeue(ctx context.Context, tenantID string) (*port.E
 		}
 		if conversationID != nil {
 			task.ConversationID = *conversationID
+		}
+		if traceID != nil {
+			task.TraceID = *traceID
 		}
 		task.TenantID = tenantID
 		result = &task
@@ -125,7 +134,7 @@ func (q *ExtractionQueue) MarkCompleted(ctx context.Context, tenantID string, ta
 }
 
 func (q *ExtractionQueue) MarkFailed(ctx context.Context, tenantID string, taskID int64, claimedAt time.Time, errMsg string) error {
-	errMsg = safeExtractionErrorCode(errMsg)
+	errMsg = truncateExtractionError(errMsg)
 	return q.execTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			UPDATE memory_extraction_queue SET
@@ -144,13 +153,14 @@ func (q *ExtractionQueue) MarkFailed(ctx context.Context, tenantID string, taskI
 	})
 }
 
-func safeExtractionErrorCode(value string) string {
-	switch value {
-	case "extraction_failed", "extraction_panic", "invalid_payload":
-		return value
-	default:
-		return "extraction_failed"
+// truncateExtractionError 保留可诊断的底层错误文本（≤200 字符），供队列侧
+// 自诊断；不记录 PII/原始响应体。
+func truncateExtractionError(value string) string {
+	runes := []rune(strings.TrimSpace(value))
+	if len(runes) > 200 {
+		runes = runes[:200]
 	}
+	return string(runes)
 }
 
 func (q *ExtractionQueue) DeleteOldCompleted(ctx context.Context, tenantID string, retentionDays int) (int, error) {

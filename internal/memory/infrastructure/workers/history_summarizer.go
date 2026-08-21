@@ -56,7 +56,11 @@ func (s *LLMHistorySummarizer) SummarizeHistory(ctx context.Context, items []str
 	}
 	model := resolvePlatformString(ctx, s.paramResolver, "memory.history_summary_model", "")
 	temperature := resolvePlatformFloat(ctx, s.paramResolver, "memory.history_summary_temperature", constants.TaskSummarizeTemperature)
-	prompt := resolvePlatformString(ctx, s.paramResolver, "memory.history_summary_prompt", constants.MemoryHistorySummaryDefaultPrompt)
+	prompt := resolvePlatformString(ctx, s.paramResolver, "memory.history_summary_prompt", "")
+	if strings.TrimSpace(prompt) == "" {
+		// fail-closed：无显式配置不允许空提示词调用总结模型。
+		return "", fmt.Errorf("memory history summary: memory.history_summary_prompt not configured (fail-closed)")
+	}
 	req := llmdomain.NewSummarizeRequest(model, prompt, items, 0)
 	// NewSummarizeRequest 内部固定 TaskSummarizeTemperature；平台配置的温度
 	// 在构造后覆盖（0 = 保留默认）。
