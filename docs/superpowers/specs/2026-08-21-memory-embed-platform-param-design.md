@@ -13,6 +13,8 @@
 3. 平台参数页刷新后不再先出现"纯展示/骨架"前置页，改为明确加载态后一次性渲染可编辑配置页。
 4. 模型目录支持删除模型（放开 `provider_managed` 限制，当前目录 25 个模型全部为 provider-managed，删除按钮形同虚设）。
 5. extraction worker 失败日志补全 `err` 字段（现仅记 error_code，无法定位根因）。
+6. 嵌入模型平台参数**未配置即失败 + 告警**，启动路径不再自动 seed 兜底（S1，用户确认）。
+7. 存量两处写死提示词（`pkg/constants/memory.go` 的 `memory.*_prompt` 定义默认、`llm_extractor.go` 的 `extractionIdentityPrompt`）**不再作为兜底**：提示词必须显式配置，未配置即失败 + 告警（S2，用户确认）。
 
 ## 2. 现状盘点（代码证据）
 
@@ -70,9 +72,11 @@
 - 移除读 `tenants.settings` 的逻辑；`IsMemoryEmbeddingModelConfigured` 与逐租户 seed 删除。
 - wiring（`api/wiring/llmgateway.go:140`）注入 `func() *parametersapp.Service { if c.Parameters == nil { return nil }; return c.Parameters.Service }`。
 
-**启动 seed**（保留 `embedding-seed` wiring step，语义改为平台级）：
+**启动路径（S1：未配置即失败 + 告警）**：
 
-- 若 `platform_settings.memory.embedding_model` 未设置：`Registry.ResolveDefaultEmbeddingModel(ctx)`（当前=embedding-3）经 `parameters.Service.SetPlatformValues(ctx, {"memory.embedding_model": model}, "seed")` 一次性写入。存量租户不 fail-closed，平台页有可见值；已设置则跳过（幂等）。
+- **删除** `seedMemoryEmbeddingModels` 与 `embedding-seed` wiring step（不再自动回填任何默认嵌入模型）。
+- 平台参数未设置 → `ResolveMemoryEmbeddingModel` fail-closed → `memory.embed.resolve_failed` WARN 日志 + `memory_embed_unavailable_total` 指标 + `StratumMemoryEmbedUnavailable` 告警；消息进 DLQ 不丢。
+- 部署时由管理员在平台参数页显式配置（代码零兜底；存量两个租户当前值为 embedding-3，上线时在平台页设置一次）。
 
 **迁移卡片下线**：
 
@@ -103,32 +107,37 @@
 | 路径 | 无写死 | 无兜底时的失败可观测 |
 |---|---|---|
 | `memory.embedding_model` 参数 | Default `""`，代码零模型字面量 | resolver 返回 `errMemoryEmbeddingNotConfigured` → `buildEmbedResolver` WARN `memory.embed.resolve_failed`（含 tenant/err）→ embedder DLQ `embed_service_unavailable` + `memory_embed_unavailable_total` → 告警 `StratumMemoryEmbedUnavailable`；日志与 DLQ 事件均携带 `trace_id` |
-| 启动 seed | 从目录解析 `models.default_embedding` 标记，非代码字面量 | 目录无默认 → seed ERROR 日志且不写平台参数（保持 fail-closed） |
-| extraction worker | 无新增写死 | 本次补 `zap.Error(err)` 后失败日志带根因；已有 `StratumMemoryWorkerErrorRate` 告警 |
+| `memory.*_prompt`（extraction/enrich/summary/history_summary/supersede） | 定义 Default 改为 `""`，删除 constants 兜底提示词 | 未配置 → 对应 worker 返回明确错误 + ERROR/WARN 日志（含 trace_id）+ `memory_dlq_total`/`memory_worker_messages_total` → 告警 `StratumMemoryDLQ`/`StratumMemoryWorkerErrorRate` |
+| extraction 身份模板 | 删除 `extractionIdentityPrompt` 写死，`memory.extraction_prompt`（resource scope）承载完整系统提示词（支持 `{user_id}`/`{agent_id}`/`{max_facts}` 占位符） | 未配置 → extractor 返回明确错误 → 抽取任务失败（队列 error_msg 保留）+ `zap.Error(err)` 日志 + `StratumMemoryWorkerErrorRate` |
 | 平台参数保存 | registry 校验（未知 key/非法值 → 400） | 失败走统一错误中间件 + 前端错误提示 |
 
-**存量例外（不随本次扩面，需用户确认 S2）**：
+**trace 说明**：memory 各 worker 的 LLM 调用暂无 OTEL span 导出，trace 目前以 `trace_id` 在日志与 DLQ 事件中传递（满足"记录 trace"）；span 级链路另立任务。
 
-- `pkg/constants/memory.go` 中 `memory.*_prompt` 的默认提示词是**注册表定义默认**（沿用"未配置用定义默认"语义），非新增写死。
-- `llm_extractor.go` 的 `extractionIdentityPrompt` 系统身份模板为代码写死（注释声明用户不可覆盖，属既有设计）。
-- memory 各 worker 的 LLM 调用无 OTEL span 导出，trace 目前以 `trace_id` 在日志与 DLQ 中传递；如需 span 级链路，另立任务。
+### 3.6 存量写死提示词兜底移除（S2）
 
-**待确认子决策**：
-
-- S1：启动 seed 保留"目录驱动自动写入平台参数"（推荐，保证存量租户连续、可审计），还是改为纯 fail-closed（平台参数未设置即失败+告警，管理员显式配置）？
-- S2：存量写死提示词（constants 默认 / extraction 身份模板）是否纳入本次改造？（推荐不纳入，另立任务，避免破坏现有未配置租户的提取/富化。）
+- `internal/parameters/domain/registry.go`：`memory.extraction_prompt`、`memory.enrich_prompt`、`memory.summary_prompt`、`memory.history_summary_prompt`、`memory.supersede_prompt` 的 `Default` 全部改为 `""`。
+- 删除 `pkg/constants/memory.go` 中对应五个 `Memory*DefaultPrompt` 常量及其引用（worker 兜底、`PromptDefaults()` map、前端 `PROMPT_DEFAULT_KEYS` 与默认模板展示）。
+- 消费方 fail-closed：
+  - enricher（`memory.enrich_prompt` 空）→ 该事件处理失败 → 重试/死信（错误码 + 日志 + 指标）。
+  - session summary（`memory.summary_prompt` 空）→ 异步摘要任务记 ERROR + 指标，不阻塞 enrich 主链路。
+  - superseder（`memory.supersede_prompt` 空）→ 判定失败 → 抽取任务失败（错误 + 日志 + 指标）。
+  - history summarizer（`memory.history_summary_prompt` 空）→ 周期总结失败（错误 + 日志 + 指标）。
+  - extractor（`memory.extraction_prompt` 空）→ 抽取任务失败（明确错误 + `zap.Error(err)` 日志 + 指标）。
+- 兼容性影响：现有未显式配置提示词的租户，提取/富化/摘要将**失败并告警**（用户已确认接受）；agent 维度 `memory.extraction_prompt` 需在 Agent 配置中显式设置。
+- `agent.compaction_prompt` 等非 memory.* 提示词默认不在本次范围（未列入"两处存量写死"）。
 
 ## 4. 数据与契约影响
 
 - 无新增表、无 tenant DDL、无 proto 变更。
-- 新增 `platform_settings` 行由 seed 写入（幂等）；`tenants.settings.memory_embedding_model` 存量键保留但不再被读取（无害）。
+- 无自动写入 `platform_settings`（S1：部署时由管理员在平台页显式配置）；`tenants.settings.memory_embedding_model` 存量键保留但不再被读取（无害）。
+- `PromptDefaults()` 与前端默认提示词展示同步移除五个 memory 键。
 - 平台参数 schema 由 registry 动态下发，无 golden 契约变更预期（实现时验证 `api/http/contract_test.go` 不受影响）。
 
 ## 5. 测试与验收
 
-- Go：registry 断言（scope/control/optimizable/evalKeys）、resolver 三分支（平台参数命中/未设置 fail-closed/目录不可解析）、seed 幂等、model repo 删除行为反转、`go vet && go test -short ./...`、`make code-quality`、`make risk-guardrails`。
+- Go：registry 断言（scope/control/optimizable/evalKeys、`memory.*_prompt` Default 为空）、resolver 三分支（平台参数命中/未设置 fail-closed/目录不可解析）、各 worker 提示词空值 fail-closed、model repo 删除行为反转、`go vet && go test -short ./...`、`make code-quality`、`make risk-guardrails`。
 - 前端：`make fe-lint && make fe-build`；PlatformSettingsPage 加载态测试、SettingsPage 无迁移卡片、删除确认文案。
-- E2E（stratum-e2e-development，本地 Docker + headless）：平台参数页刷新无前置展示页；保存 `memory.embedding_model` 后记忆链路生效（outbox→embed→enrich→entity）；模型目录删除模型成功并刷新读回；租户设置页无迁移卡片；构造 extraction 失败任务观察日志含 err。
+- E2E（stratum-e2e-development，本地 Docker + headless）：平台参数页刷新无前置展示页；平台参数未设置时记忆链路 fail-closed 并触发指标/告警；保存 `memory.embedding_model` 与 `memory.enrich_prompt` 后记忆链路生效（outbox→embed→enrich→entity）；模型目录删除模型成功并刷新读回；租户设置页无迁移卡片；构造 extraction 未配置提示词任务观察日志含 err。
 - 远端部署需用户明确许可后另行执行。
 
 ## 6. 决策记录
@@ -136,11 +145,12 @@
 | # | 决策点 | 结论 |
 |---|---|---|
 | D1 | 嵌入模型配置来源 | 平台参数全局唯一来源（用户确认）；`tenants.settings` 键不再读取 |
-| D2 | 存量租户连续性 | 启动 seed 将平台参数一次性写入当前默认嵌入模型（embedding-3） |
+| D2 | 存量租户连续性 | 不再自动 seed（S1）：未配置即失败 + 告警；部署时管理员在平台页显式配置 |
 | D3 | 租户迁移卡片 | 下线（用户确认）：移除租户页卡片与租户迁移路由，切换入口收敛到平台参数页 |
 | D4 | 模型删除 | 放开 provider-managed 限制（用户确认），删除为"直到下次发现前不出现"，前端提示重新发现 |
 | D5 | 平台页加载 | 页面级 Skeleton 加载态，不渲染半成品展示页 |
 | D6 | 日志 | extract_failed 带 err 与 error_code |
 | D7 | 无写死 + 失败可观测 | 代码零模型/提示词字面量；无兜底时错误+日志+trace+指标告警（硬性要求） |
+| D8 | 存量提示词兜底 | 移除（S2）：五个 `memory.*_prompt` 定义默认清空 + 删除 extraction 身份模板；未配置即失败 + 告警 |
 | S1 | seed 行为 | 待用户确认：目录驱动自动写入（推荐） vs 纯 fail-closed |
 | S2 | 存量写死提示词 | 待用户确认：不纳入（推荐） vs 纳入改造 |
