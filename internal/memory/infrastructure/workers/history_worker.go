@@ -22,13 +22,14 @@ type HistoryCompressor interface {
 const historyAggregationMaxBatchesPerRun = 4
 
 type HistoryWorker struct {
-	tenantID   string
-	repo       port.HistoryRepo
-	summarizer HistorySummarizer
-	compressor HistoryCompressor
-	logger     *zap.Logger
-	stopCh     chan struct{}
-	stopOnce   sync.Once
+	tenantID    string
+	repo        port.HistoryRepo
+	summarizer  HistorySummarizer
+	compressor  HistoryCompressor
+	vectorStore port.VectorStore
+	logger      *zap.Logger
+	stopCh      chan struct{}
+	stopOnce    sync.Once
 }
 
 func NewHistoryWorker(tenantID string, repo port.HistoryRepo, summarizer HistorySummarizer, compressor HistoryCompressor, logger *zap.Logger) *HistoryWorker {
@@ -36,6 +37,13 @@ func NewHistoryWorker(tenantID string, repo port.HistoryRepo, summarizer History
 		logger = zap.NewNop()
 	}
 	return &HistoryWorker{tenantID: tenantID, repo: repo, summarizer: summarizer, compressor: compressor, logger: logger, stopCh: make(chan struct{})}
+}
+
+// WithVectorStore wires the vector store used to delete archived facts'
+// vectors so the vector store converges to PG status.
+func (w *HistoryWorker) WithVectorStore(vs port.VectorStore) *HistoryWorker {
+	w.vectorStore = vs
+	return w
 }
 func (w *HistoryWorker) Start(ctx context.Context) {
 	runWithRestart(ctx, w.stopCh, w.logger, "memory.history_worker", w.run)
@@ -75,8 +83,16 @@ func (w *HistoryWorker) RunOnce(ctx context.Context) {
 		w.logger.Warn("memory.history.maintain_failed", zap.Error(err))
 	}
 	w.compressNext(ctx)
-	if _, err := w.repo.ArchiveColdFacts(ctx, w.tenantID); err != nil {
+	archivedIDs, err := w.repo.ArchiveColdFacts(ctx, w.tenantID)
+	if err != nil {
 		w.logger.Warn("memory.history.archive_facts_failed", zap.Error(err))
+	} else if len(archivedIDs) > 0 && w.vectorStore != nil {
+		if err := w.vectorStore.DeleteFactVectors(ctx, w.tenantID, archivedIDs); err != nil {
+			w.logger.Error("memory.history.archive_fact_vectors_failed",
+				zap.String("tenant_id", w.tenantID),
+				zap.Int("count", len(archivedIDs)),
+				zap.Error(err))
+		}
 	}
 	incWorkerMessages("history", w.tenantID, "success")
 	observeWorkerDuration("history", w.tenantID, time.Since(start).Seconds())

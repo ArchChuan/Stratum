@@ -304,6 +304,14 @@ func (m *mockVectorStore) DeleteAllByUser(_ context.Context, _, _ string) error 
 
 func (m *mockVectorStore) DeleteAllByAgent(_ context.Context, _, _ string) error { return nil }
 
+func (m *mockVectorStore) DeleteEntryVectors(_ context.Context, _ string, _ []string) error {
+	return nil
+}
+
+func (m *mockVectorStore) DeleteFactVectors(_ context.Context, _ string, _ []string) error {
+	return nil
+}
+
 func (m *mockVectorStore) CreateCollection(ctx context.Context, collectionName string, dimension int) error {
 	return nil // no-op for in-memory mock
 }

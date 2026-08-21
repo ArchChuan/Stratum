@@ -18,7 +18,7 @@ import (
 type stubFactRepo struct {
 	findCandidatesFunc func(context.Context, string, string, string, string, float64, float64) ([]*port.SupersedeCandidate, error)
 	updateFunc         func(context.Context, string, *domain.MemoryFact) error
-	purgeFunc          func(context.Context, string, time.Time, int) (int, error)
+	purgeFunc          func(context.Context, string, time.Time, int) ([]string, error)
 }
 
 func (r *stubFactRepo) Create(ctx context.Context, tenantID string, fact *domain.MemoryFact) error {
@@ -75,11 +75,11 @@ func (r *stubFactRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID s
 	return nil, nil
 }
 
-func (r *stubFactRepo) PurgeSuperseded(ctx context.Context, tenantID string, olderThan time.Time, limit int) (int, error) {
+func (r *stubFactRepo) PurgeSuperseded(ctx context.Context, tenantID string, olderThan time.Time, limit int) ([]string, error) {
 	if r.purgeFunc != nil {
 		return r.purgeFunc(ctx, tenantID, olderThan, limit)
 	}
-	return 0, nil
+	return nil, nil
 }
 
 func (r *stubFactRepo) CountAll(ctx context.Context, tenantID string) (int, error) {
@@ -126,6 +126,49 @@ func TestSupersedeWorker_MarksSuperseeded(t *testing.T) {
 
 	require.NotNil(t, updatedFact, "should update fact")
 	require.Equal(t, "superseded", updatedFact.Status, "should mark as superseded")
+}
+
+func TestSupersedeWorker_DeletesVectorOnSupersede(t *testing.T) {
+	oldFact, _ := domain.NewFact("", "user1", "agent1", "", string(domain.ScopeUser), "I like tea", 0.7, nil)
+	repo := &stubFactRepo{
+		findCandidatesFunc: func(context.Context, string, string, string, string, float64, float64) ([]*port.SupersedeCandidate, error) {
+			return []*port.SupersedeCandidate{{Fact: oldFact, Similarity: 0.75}}, nil
+		},
+	}
+	vectors := &stubVectorStore{}
+	superseder := &stubSuperseder{
+		judgeFunc: func(context.Context, string, string) (*port.SupersedeJudgment, error) {
+			return &port.SupersedeJudgment{Supersedes: true, Reason: "preference changed"}, nil
+		},
+	}
+	worker := workers.NewSupersedeWorker("tenant-1", repo, superseder, zap.NewNop()).WithVectorStore(vectors)
+
+	worker.RunOnce(context.Background())
+
+	require.Equal(t, [][]string{{oldFact.ID}}, vectors.deletedFactIDs)
+}
+
+func TestSupersedeWorker_NoVectorDeleteOnUpdateFailure(t *testing.T) {
+	oldFact, _ := domain.NewFact("", "user1", "agent1", "", string(domain.ScopeUser), "I like tea", 0.7, nil)
+	repo := &stubFactRepo{
+		findCandidatesFunc: func(context.Context, string, string, string, string, float64, float64) ([]*port.SupersedeCandidate, error) {
+			return []*port.SupersedeCandidate{{Fact: oldFact, Similarity: 0.75}}, nil
+		},
+		updateFunc: func(context.Context, string, *domain.MemoryFact) error {
+			return errors.New("update failed")
+		},
+	}
+	vectors := &stubVectorStore{}
+	superseder := &stubSuperseder{
+		judgeFunc: func(context.Context, string, string) (*port.SupersedeJudgment, error) {
+			return &port.SupersedeJudgment{Supersedes: true, Reason: "preference changed"}, nil
+		},
+	}
+	worker := workers.NewSupersedeWorker("tenant-1", repo, superseder, zap.NewNop()).WithVectorStore(vectors)
+
+	worker.RunOnce(context.Background())
+
+	require.Empty(t, vectors.deletedFactIDs)
 }
 
 func TestSupersedeWorker_KeepsOnNoSupersede(t *testing.T) {

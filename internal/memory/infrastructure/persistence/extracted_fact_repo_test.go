@@ -54,6 +54,12 @@ func (*failOnceVectorStore) DeleteAllByUser(context.Context, string, string) err
 func (*failOnceVectorStore) DeleteAllByAgent(context.Context, string, string) error {
 	return nil
 }
+func (*failOnceVectorStore) DeleteEntryVectors(context.Context, string, []string) error {
+	return nil
+}
+func (*failOnceVectorStore) DeleteFactVectors(context.Context, string, []string) error {
+	return nil
+}
 func (*failOnceVectorStore) CreateCollection(context.Context, string, int) error { return nil }
 
 func extractedFactWrite(t *testing.T, tenantID, userID, agentID, scope, message string, ordinal int, content, hash string, entities ...string) *port.ExtractedFactWrite {

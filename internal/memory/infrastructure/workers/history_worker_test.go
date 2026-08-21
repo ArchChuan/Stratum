@@ -7,7 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
+	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 )
 
 type fakeHistoryRepo struct {
@@ -16,6 +19,7 @@ type fakeHistoryRepo struct {
 	overflow                                              *domain.HistoryOverflowGroup
 	overflowErr, upsertErr, replaceErr                    error
 	nextCalls, upserts, lifecycle, archives, replacements int
+	archivedIDs                                           []string
 	replacement                                           *domain.HistorySegment
 	upserted                                              *domain.HistorySegment
 	replacedIDs                                           []string
@@ -48,14 +52,60 @@ func (f *fakeHistoryRepo) ReplaceOverflow(_ context.Context, _ string, replaceme
 	return f.replaceErr
 }
 func (f *fakeHistoryRepo) Maintain(context.Context, string) error { f.lifecycle++; return nil }
-func (f *fakeHistoryRepo) ArchiveColdFacts(context.Context, string) (int, error) {
+func (f *fakeHistoryRepo) ArchiveColdFacts(context.Context, string) ([]string, error) {
 	f.archives++
-	return 0, nil
+	return f.archivedIDs, nil
 }
 
 type fakeHistorySummarizer struct {
 	summary string
 	err     error
+}
+
+type fakeVectorStore struct {
+	deletedFactIDs [][]string
+}
+
+func (f *fakeVectorStore) Upsert(context.Context, string, []*port.VectorDoc) error { return nil }
+func (f *fakeVectorStore) Search(context.Context, string, []float32, int, port.VectorSearchFilter) ([]*port.VectorDoc, error) {
+	return nil, nil
+}
+func (f *fakeVectorStore) Delete(context.Context, string, []string) error { return nil }
+func (f *fakeVectorStore) DeleteAllByUser(context.Context, string, string) error {
+	return nil
+}
+func (f *fakeVectorStore) DeleteAllByAgent(context.Context, string, string) error {
+	return nil
+}
+func (f *fakeVectorStore) DeleteEntryVectors(context.Context, string, []string) error {
+	return nil
+}
+func (f *fakeVectorStore) DeleteFactVectors(_ context.Context, _ string, ids []string) error {
+	f.deletedFactIDs = append(f.deletedFactIDs, ids)
+	return nil
+}
+func (f *fakeVectorStore) CreateCollection(context.Context, string, int) error { return nil }
+
+func TestHistoryWorker_DeletesVectorsForArchivedFacts(t *testing.T) {
+	repo := &fakeHistoryRepo{archivedIDs: []string{"f1", "f2"}}
+	vectors := &fakeVectorStore{}
+	w := NewHistoryWorker("tenant-1", repo, fakeHistorySummarizer{summary: "s"}, nil, nil).
+		WithVectorStore(vectors)
+
+	w.RunOnce(context.Background())
+
+	require.Equal(t, [][]string{{"f1", "f2"}}, vectors.deletedFactIDs)
+}
+
+func TestHistoryWorker_NoVectorDeleteWhenNothingArchived(t *testing.T) {
+	repo := &fakeHistoryRepo{}
+	vectors := &fakeVectorStore{}
+	w := NewHistoryWorker("tenant-1", repo, fakeHistorySummarizer{summary: "s"}, nil, nil).
+		WithVectorStore(vectors)
+
+	w.RunOnce(context.Background())
+
+	require.Empty(t, vectors.deletedFactIDs)
 }
 
 func (f fakeHistorySummarizer) SummarizeHistory(context.Context, []string) (string, error) {

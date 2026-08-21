@@ -26,6 +26,7 @@ type EmbedderWorker struct {
 	embedSvc      EmbedClient
 	embedResolver EmbedServiceResolver
 	vectorDB      VectorStore
+	vectorCleaner entryVectorDeleter
 	logger        *zap.Logger
 	stopCh        chan struct{}
 	stopOnce      sync.Once
@@ -58,6 +59,14 @@ func NewEmbedderWorker(
 // WithEmbedResolver sets a per-tenant embedding resolver as fallback when embedSvc is nil.
 func (w *EmbedderWorker) WithEmbedResolver(r EmbedServiceResolver) *EmbedderWorker {
 	w.embedResolver = r
+	return w
+}
+
+// WithEntryVectorDeleter wires the cleaner used to remove orphan vectors when
+// an enriched event can never be published (marshal failure after the vector
+// was already written).
+func (w *EmbedderWorker) WithEntryVectorDeleter(d entryVectorDeleter) *EmbedderWorker {
+	w.vectorCleaner = d
 	return w
 }
 
@@ -179,12 +188,10 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 			zap.String("tenant_id", ev.TenantID),
 			zap.Error(err))
 		embedTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
-		if retryErr := retryOrDeadLetterWithHeartbeat(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
+		retryOrDeadLetterWithOrphan(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "embed", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "embedding_failed",
 			TraceID: traceID,
-		}); retryErr != nil {
-			w.logger.Error("memory.embed.retry_or_dlq", zap.Error(retryErr))
-		}
+		}, w.vectorCleaner, w.logger, ev.TenantID, ev.MessageID, "memory.embed.retry_or_dlq")
 		return
 	}
 
@@ -216,12 +223,10 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
 		embedTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
-		if retryErr := retryOrDeadLetterWithHeartbeat(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
+		retryOrDeadLetterWithOrphan(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "embed", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "vector_upsert_failed",
 			TraceID: traceID,
-		}); retryErr != nil {
-			w.logger.Error("memory.embed.retry_or_dlq", zap.Error(retryErr))
-		}
+		}, w.vectorCleaner, w.logger, ev.TenantID, ev.MessageID, "memory.embed.retry_or_dlq")
 		return
 	}
 
@@ -233,12 +238,12 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 	if err != nil {
 		w.logger.Error("memory.embed.marshal_enriched", zap.String("trace_id", traceID), zap.Error(err))
 		embedTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
-		if retryErr := retryOrDeadLetterWithHeartbeat(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
+		// 向量已写入但 enriched 事件无法发布：消息终止后向量成为孤儿，由
+		// retryOrDeadLetterWithOrphan 在 dead-letter 时删除。
+		retryOrDeadLetterWithOrphan(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "embed", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "marshal_enriched_failed",
 			TraceID: traceID,
-		}); retryErr != nil {
-			w.logger.Error("memory.embed.retry_or_dlq", zap.Error(retryErr))
-		}
+		}, w.vectorCleaner, w.logger, ev.TenantID, ev.MessageID, "memory.embed.retry_or_dlq")
 		return
 	}
 
@@ -249,12 +254,11 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
 		embedTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
-		if retryErr := retryOrDeadLetterWithHeartbeat(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
+		// 向量已写入但 enriched 事件发布失败并终止：消息终止后向量成为孤儿。
+		retryOrDeadLetterWithOrphan(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "embed", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "publish_enriched_failed",
 			TraceID: traceID,
-		}); retryErr != nil {
-			w.logger.Error("memory.embed.retry_or_dlq", zap.Error(retryErr))
-		}
+		}, w.vectorCleaner, w.logger, ev.TenantID, ev.MessageID, "memory.embed.retry_or_dlq")
 		return
 	}
 

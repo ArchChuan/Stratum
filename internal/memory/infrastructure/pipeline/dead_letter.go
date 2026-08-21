@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
+	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
@@ -126,23 +127,26 @@ func retryOrDeadLetterWithHeartbeat(
 	maxDeliver int,
 	stopHeartbeat func(),
 	details deadLetterDetails,
-) error {
+) (bool, error) {
 	meta, err := msg.Metadata()
 	if err != nil {
 		stopHeartbeat()
 		_ = msg.Nak()
-		return fmt.Errorf("read message metadata: %w", err)
+		return false, fmt.Errorf("read message metadata: %w", err)
 	}
 	if meta == nil {
 		stopHeartbeat()
 		_ = msg.Nak()
-		return fmt.Errorf("read message metadata: empty metadata")
+		return false, fmt.Errorf("read message metadata: empty metadata")
 	}
 	if maxDeliver > 0 && meta.NumDelivered >= uint64(maxDeliver) {
-		return deadLetterWithHeartbeat(ctx, pub, msg, stopHeartbeat, details)
+		if err := deadLetterWithHeartbeat(ctx, pub, msg, stopHeartbeat, details); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 	stopHeartbeat()
-	return msg.NakWithDelay(constants.MemoryFetchBackoffBase)
+	return false, msg.NakWithDelay(constants.MemoryFetchBackoffBase)
 }
 
 func retryOrDeadLetter(
@@ -151,8 +155,75 @@ func retryOrDeadLetter(
 	msg jetstream.Msg,
 	maxDeliver int,
 	details deadLetterDetails,
-) error {
+) (bool, error) {
 	return retryOrDeadLetterWithHeartbeat(ctx, pub, msg, maxDeliver, func() {}, details)
+}
+
+// retryOrDeadLetterWithOrphan 执行重试/DLQ 决策；仅当消息被永久终止
+// （dead-lettered）后删除 embedder 已写入的孤儿向量。调用点不感知
+// dead-letter 判定细节，保持 worker 主流程复杂度在门禁内。
+func retryOrDeadLetterWithOrphan(
+	ctx context.Context,
+	pub dlqPublisher,
+	msg jetstream.Msg,
+	maxDeliver int,
+	stopHeartbeat func(),
+	details deadLetterDetails,
+	cleaner entryVectorDeleter,
+	logger *zap.Logger,
+	tenantID, messageID, event string,
+) {
+	deadLettered, retryErr := retryOrDeadLetterWithHeartbeat(ctx, pub, msg, maxDeliver, stopHeartbeat, details)
+	if retryErr != nil {
+		logger.Error(event, zap.Error(retryErr))
+		return
+	}
+	if deadLettered {
+		deleteOrphanEntryVector(ctx, cleaner, logger, tenantID, messageID)
+	}
+}
+
+// deadLetterWithOrphan 永久终止消息（不重试）并删除孤儿向量；dead-letter
+// 失败时以 event 记录错误。
+func deadLetterWithOrphan(
+	ctx context.Context,
+	pub dlqPublisher,
+	msg jetstream.Msg,
+	stopHeartbeat func(),
+	details deadLetterDetails,
+	cleaner entryVectorDeleter,
+	logger *zap.Logger,
+	tenantID, messageID, event string,
+) {
+	if dlqErr := deadLetterWithHeartbeat(ctx, pub, msg, stopHeartbeat, details); dlqErr != nil {
+		logger.Error(event, zap.Error(dlqErr))
+		return
+	}
+	deleteOrphanEntryVector(ctx, cleaner, logger, tenantID, messageID)
+}
+
+// entryVectorDeleter removes raw-turn vectors by id across a tenant's memory
+// collections. The embedder writes the vector before the enrich stage runs, so
+// a permanently dead-lettered enriched event leaves an orphan vector with no
+// memory_entries row; deletion here closes that gap (replay recreates it).
+type entryVectorDeleter interface {
+	DeleteEntryVectors(ctx context.Context, tenantID string, ids []string) error
+}
+
+// deleteOrphanEntryVector removes the embedder-written vector only after the
+// message was actually terminated (dead-lettered), never on retry. Failures
+// are ERROR-logged: the message is already gone so there is no safe way to
+// propagate; the recall PG-side filter keeps the orphan invisible to users.
+func deleteOrphanEntryVector(ctx context.Context, cleaner entryVectorDeleter, logger *zap.Logger, tenantID, messageID string) {
+	if cleaner == nil || messageID == "" {
+		return
+	}
+	if err := cleaner.DeleteEntryVectors(ctx, tenantID, []string{messageID}); err != nil {
+		logger.Error("memory.pipeline.orphan_vector_delete_failed",
+			zap.String("tenant_id", tenantID),
+			zap.String("message_id", messageID),
+			zap.Error(err))
+	}
 }
 
 func startProgressHeartbeat(msg jetstream.Msg, interval time.Duration) func() {

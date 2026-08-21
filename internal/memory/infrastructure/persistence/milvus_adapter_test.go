@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	storagemilvus "github.com/byteBuilderX/stratum/pkg/storage/milvus"
 )
@@ -23,6 +25,8 @@ type fakeMilvusStore struct {
 	lists             map[string][]string
 	listCalls         []string
 	listErr           error
+	primaryErrors     []error
+	primaryCalls      []string
 }
 
 func (f *fakeMilvusStore) SearchWithFilter(_ context.Context, _ string, _ []float32, _ int, expression string, _ ...string) ([]storagemilvus.SearchResult, error) {
@@ -38,7 +42,13 @@ func (f *fakeMilvusStore) Insert(context.Context, string, []storagemilvus.Docume
 
 func (f *fakeMilvusStore) DeleteByPrimaryIDs(_ context.Context, collection string, ids []string) error {
 	f.primaryCollection, f.primaryIDs = collection, ids
-	return nil
+	f.primaryCalls = append(f.primaryCalls, collection+":"+strings.Join(ids, ","))
+	if len(f.primaryErrors) == 0 {
+		return nil
+	}
+	err := f.primaryErrors[0]
+	f.primaryErrors = f.primaryErrors[1:]
+	return err
 }
 
 func (f *fakeMilvusStore) DeleteByFilter(_ context.Context, collection, expr string) error {
@@ -70,6 +80,52 @@ func TestMilvusPortAdapterDeleteUsesPrimaryIDs(t *testing.T) {
 	if store.primaryCollection != "memory_facts_tenant_1" || strings.Join(store.primaryIDs, ",") != "fact-1,fact-2" {
 		t.Fatalf("primary delete = %q %v", store.primaryCollection, store.primaryIDs)
 	}
+}
+
+func TestMilvusPortAdapterDeleteEntryVectorsCoversLegacyAndModelSuffixed(t *testing.T) {
+	store := &fakeMilvusStore{lists: map[string][]string{
+		"memory_tenant_1_": {"memory_tenant_1_text_embedding_v2"},
+	}}
+	adapter := NewMilvusPortAdapter(store)
+
+	require.NoError(t, adapter.DeleteEntryVectors(context.Background(), "tenant-1", []string{"e1", "e2"}))
+	require.Equal(t, []string{
+		"memory_tenant_1:e1,e2",
+		"memory_tenant_1_text_embedding_v2:e1,e2",
+	}, store.primaryCalls)
+}
+
+func TestMilvusPortAdapterDeleteFactVectorsAggregatesErrors(t *testing.T) {
+	store := &fakeMilvusStore{
+		lists: map[string][]string{"memory_facts_tenant_1_": {"memory_facts_tenant_1_text_embedding_v3"}},
+		primaryErrors: []error{
+			errors.New("legacy failed"),
+			errors.New("suffixed failed"),
+		},
+	}
+	adapter := NewMilvusPortAdapter(store)
+
+	err := adapter.DeleteFactVectors(context.Background(), "tenant-1", []string{"f1"})
+	require.ErrorContains(t, err, "legacy failed")
+	require.ErrorContains(t, err, "suffixed failed")
+}
+
+func TestMilvusPortAdapterDeleteVectorsByIDs_SurfacesListingFailure(t *testing.T) {
+	store := &fakeMilvusStore{listErr: errors.New("list collections failed")}
+	adapter := NewMilvusPortAdapter(store)
+
+	err := adapter.DeleteFactVectors(context.Background(), "tenant-1", []string{"f1"})
+	require.ErrorContains(t, err, "list collections")
+}
+
+func TestMilvusPortAdapterDeleteVectorsByIDs_EmptyIDsNoOp(t *testing.T) {
+	store := &fakeMilvusStore{}
+	adapter := NewMilvusPortAdapter(store)
+
+	require.NoError(t, adapter.DeleteEntryVectors(context.Background(), "tenant-1", nil))
+	require.NoError(t, adapter.DeleteFactVectors(context.Background(), "tenant-1", nil))
+	require.Empty(t, store.primaryCalls)
+	require.Empty(t, store.listCalls)
 }
 
 func TestMilvusPortAdapterDeleteAllByUserCleansBothCollectionsAndAggregatesErrors(t *testing.T) {
