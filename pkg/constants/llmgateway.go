@@ -12,8 +12,12 @@ const (
 // LLM 网关模型健康探活。
 const (
 	// ModelProbeInterval 是探活 worker 周期：后台遍历 enabled 模型驱动主动
-	// 健康信号，覆盖空闲模型无业务调用信号的空窗。
-	ModelProbeInterval = 60 * time.Second
+	// 健康信号，覆盖空闲模型无业务调用信号的空窗。周期每缩短 1 倍，对全部
+	// enabled 模型的真实探活调用量就放大 1 倍（probe 走真实 Complete，生产
+	// 按次/token 计费）；60s 会让 11+ 个 enabled 模型每轮真实调用，成本压力
+	// 大。10min 在健康信号新鲜度（熔断半开放恢复窗口内仍由被动信号兜底）与
+	// 探活成本间取平衡。
+	ModelProbeInterval = 10 * time.Minute
 	// ModelProbeTimeout 是单模型探活的执行超时预算。
 	ModelProbeTimeout = 5 * time.Second
 )

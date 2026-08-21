@@ -376,6 +376,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	if c.Memory != nil && c.Memory.Service != nil {
 		deps.MemoryCleaner = c.Memory.Service
 		deps.MemoryBuffer = memoryBufferClosure(c.Memory.Service)
+		deps.TrajectoryReflection = trajectoryReflectionClosure(c)
 	}
 	a.DiagnosticProvider = newSystemAssistantDiagnosticAdapter(
 		tenantRoleAdapter{service: tenantMemberService(c)}, systemAssistantDiagnosticCollectors(c, a),

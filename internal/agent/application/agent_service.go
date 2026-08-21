@@ -74,6 +74,7 @@ type AgentServiceDeps struct {
 	CompactionStore           port.CompactionStore
 	MemoryCleaner             port.AgentMemoryCleaner
 	MemoryBuffer              port.BufferMemoryFn
+	TrajectoryReflection      port.EnqueueTrajectoryReflectionFn
 	MemoryInjector            port.MemoryInjector
 	RecallMemory              port.RecallMemoryFn
 	Metrics                   observability.MetricsProvider
@@ -1614,6 +1615,8 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 		s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "user", req.Query)
 		s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "assistant", result.Output)
 	}
+	// 任务结束轨迹反思：与 fact 提取并列的链路，fail-open 显式降级。
+	s.enqueueTrajectoryReflection(ctx, meta, req, agentID, a.GetConfig().MemoryScope, executionID, result, assistantCfg.SystemAssistantMode)
 	return result, durationMs, err
 }
 
@@ -1716,6 +1719,7 @@ func (s *AgentService) ExecuteStream(
 			s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "user", req.Query)
 			s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "assistant", res.Output)
 		}
+		s.enqueueTrajectoryReflection(ctx, meta, req, agentID, a.GetConfig().MemoryScope, executionID, res, assistantCfg.SystemAssistantMode)
 		return res, durationMs, runErr
 	}
 	return execCtx, cancel, run, executionID, nil
@@ -1736,6 +1740,68 @@ func (s *AgentService) bufferMemoryTurn(ctx context.Context, meta ExecMeta, req 
 			zap.String("role", role),
 			zap.Error(err))
 	}
+}
+
+// enqueueTrajectoryReflection 任务结束时把工具调用摘要异步入队轨迹反思
+// （与 fact 提取并列的链路 B）。原始 tool steps 不进入记忆：只传截断/脱敏
+// 后的参数摘要与错误指纹。失败 fail-open 显式降级，不阻断已交付响应。
+func (s *AgentService) enqueueTrajectoryReflection(
+	ctx context.Context,
+	meta ExecMeta,
+	req ExecRequest,
+	agentID, scope, executionID string,
+	result *domain.AgentResult,
+	systemAssistant bool,
+) {
+	if systemAssistant || s.deps.TrajectoryReflection == nil || result == nil || executionID == "" {
+		return
+	}
+	if len(result.ToolCalls) == 0 {
+		return
+	}
+	calls := make([]port.TrajectoryToolCallVO, 0, len(result.ToolCalls))
+	for _, tc := range result.ToolCalls {
+		status := domain.ToolTraceStatusSuccess
+		var errMsg string
+		if tc.Error != nil {
+			status = domain.ToolTraceStatusError
+			errMsg = tc.Error.Error()
+		}
+		var argsPreview string
+		if tc.Input != nil {
+			argsPreview = observability.SafeTracePayload(tc.Input, constants.MemoryReflectionArgsSummaryMaxRunes).Preview
+		}
+		calls = append(calls, port.TrajectoryToolCallVO{
+			ToolName:    tc.ToolName,
+			ArgsSummary: argsPreview,
+			Status:      status,
+			ErrorMsg:    errMsg,
+			DurationMS:  tc.Duration.Milliseconds(),
+		})
+	}
+	explicit := containsRememberKeyword(req.Query)
+	if err := s.deps.TrajectoryReflection(
+		ctx,
+		meta.TenantID, req.UserID, agentID, req.ConversationID, scope, executionID,
+		req.Query, result.Output, result.TerminatedBy, calls, explicit,
+	); err != nil {
+		s.deps.Logger.Warn("agent.trajectory_reflection_failed",
+			zap.String("tenant_id", meta.TenantID),
+			zap.String("conversation_id", req.ConversationID),
+			zap.String("execution_id", executionID),
+			zap.Error(err))
+	}
+}
+
+// containsRememberKeyword 检测用户显式"记住"指令，作为反思触发 gate 的
+// 显式档位（关键词常量集中管理）。
+func containsRememberKeyword(query string) bool {
+	for _, kw := range constants.MemoryExplicitRememberKeywords {
+		if strings.Contains(query, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *AgentService) recordSystemAssistantRequest(a Agent, roleClass, outcome string) {

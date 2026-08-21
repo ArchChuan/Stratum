@@ -47,6 +47,20 @@ func (m *JetStreamManager) EnsureStreams(ctx context.Context) error {
 			MaxAge:    constants.MemoryDLQMaxAge,
 			Storage:   jetstream.FileStorage,
 		},
+		{
+			Name:      constants.MemoryExtractionStream,
+			Subjects:  []string{constants.MemoryExtractionSubject + ".>"},
+			Retention: jetstream.WorkQueuePolicy,
+			MaxAge:    constants.MemoryStreamMaxAge,
+			Storage:   jetstream.FileStorage,
+		},
+		{
+			Name:      constants.MemoryReflectionStream,
+			Subjects:  []string{constants.MemoryReflectionSubject + ".>"},
+			Retention: jetstream.WorkQueuePolicy,
+			MaxAge:    constants.MemoryStreamMaxAge,
+			Storage:   jetstream.FileStorage,
+		},
 	}
 
 	for _, cfg := range streams {

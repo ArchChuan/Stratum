@@ -1,0 +1,4 @@
+-- memory_extraction_queue 已退役：任务传输层收口到 NATS JetStream
+-- （memory.extraction.{tenant}）。Tenant-only 清理语句（DROP TABLE IF EXISTS
+-- memory_extraction_queue）在 pkg/storage/postgres/tenant_schema.sql，由租户
+-- provision 幂等应用；本迁移只是 public schema 标记。

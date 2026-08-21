@@ -16,6 +16,9 @@ const (
 	FactSourceLLMExtraction = "llm_extraction"
 	FactSourceExplicitUser  = "explicit_user"
 	FactSourceManualAPI     = "manual_api"
+	// FactSourceTrajectoryReflection 标记由工具轨迹反思链路产出的记忆条目。
+	// 与 chat 文本事实共用 supersede 链；来源只是 provenance，不是冲突赢家。
+	FactSourceTrajectoryReflection = "trajectory_reflection"
 )
 
 // factCategoryAllowSet 合法分类白名单（Phase 0）
@@ -29,9 +32,10 @@ var factCategoryAllowSet = map[string]bool{
 }
 
 var factSourceAllowSet = map[string]bool{
-	FactSourceLLMExtraction: true,
-	FactSourceExplicitUser:  true,
-	FactSourceManualAPI:     true,
+	FactSourceLLMExtraction:        true,
+	FactSourceExplicitUser:         true,
+	FactSourceManualAPI:            true,
+	FactSourceTrajectoryReflection: true,
 }
 
 // factTypeToCategory maps LLM fact_type strings to canonical Category values.

@@ -172,6 +172,9 @@ func (b *MessageBuffer) drainBuffer(ctx context.Context, key, tenantID, userID, 
 	if err != nil {
 		return fmt.Errorf("marshal messages: %w", err)
 	}
+	if b.queue == nil {
+		return fmt.Errorf("extraction queue not configured")
+	}
 
 	task := &port.ExtractionTask{
 		TenantID:       tenantID,

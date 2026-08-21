@@ -49,10 +49,10 @@ func newTestRecallHandler(embed EmbedClient, vs vectorSearcher) *RecallHandler {
 }
 
 // recallResolverStub 固定返回 memory.recall_top_k 的解析值(其余 key 缺席),
-// 用于验证召回条数接入。
+// 用于验证召回条数接入（平台级语义：ResolvePlatform 只按 key 解析）。
 type recallResolverStub struct{ topK int }
 
-func (s recallResolverStub) Resolve(_ context.Context, _ string, _ string, key string) (any, bool, error) {
+func (s recallResolverStub) ResolvePlatform(_ context.Context, key string) (any, bool, error) {
 	if key != "memory.recall_top_k" {
 		return nil, false, nil
 	}
@@ -310,7 +310,7 @@ func TestHandle_RecallTopKFallback(t *testing.T) {
 	cases := []struct {
 		name     string
 		limit    int
-		resolver memport.ResourceParamResolver // nil → 回退 5
+		resolver memport.PlatformParamResolver // nil → 回退 5
 		wantSQL  int                           // req.Limit*2 落到 SQL LIMIT
 	}{
 		{name: "invalid limit resolves recall_top_k", limit: 0, resolver: recallResolverStub{topK: 7}, wantSQL: 14},
@@ -333,7 +333,7 @@ func TestHandle_RecallTopKFallback(t *testing.T) {
 			pool.ExpectRollback()
 
 			h := &RecallHandler{pool: pool, logger: zap.NewNop(), metrics: observability.NoopMetrics{}}
-			h.SetResourceResolver(tc.resolver)
+			h.SetPlatformParamResolver(tc.resolver)
 			input := map[string]any{"query": "x"}
 			if tc.limit != 0 {
 				input["limit"] = tc.limit
