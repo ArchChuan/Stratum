@@ -46,6 +46,7 @@ type Pipeline struct {
 	jsm           *JetStreamManager
 	embedResolver EmbedServiceResolver
 	vectorDB      VectorStore
+	vectorCleaner entryVectorDeleter
 	llmResolver   LLMResolver
 	paramResolver port.PlatformParamResolver
 	logger        *zap.Logger
@@ -83,6 +84,13 @@ func New(
 // Must be called before Start.
 func (p *Pipeline) SetEmbedResolver(r EmbedServiceResolver) {
 	p.embedResolver = r
+}
+
+// SetEntryVectorDeleter wires the cleaner used to remove orphan vectors when a
+// pipeline stage dead-letters after the embedder already wrote the vector.
+// Must be called before Start.
+func (p *Pipeline) SetEntryVectorDeleter(d entryVectorDeleter) {
+	p.vectorCleaner = d
 }
 
 // SetLLMResolver sets a per-tenant LLM resolver used by EnricherWorkers.
@@ -126,6 +134,9 @@ func (p *Pipeline) buildEnricher(consumer jetstream.Consumer, js dlqPublisher, i
 	}
 	if p.paramResolver != nil {
 		worker.WithParamResolver(p.paramResolver)
+	}
+	if p.vectorCleaner != nil {
+		worker.WithEntryVectorDeleter(p.vectorCleaner)
 	}
 	return worker
 }
@@ -187,6 +198,9 @@ func (p *Pipeline) Start(ctx context.Context) error {
 		)
 		if p.embedResolver != nil {
 			worker.WithEmbedResolver(p.embedResolver)
+		}
+		if p.vectorCleaner != nil {
+			worker.WithEntryVectorDeleter(p.vectorCleaner)
 		}
 		p.embedders = append(p.embedders, worker)
 		label := fmt.Sprintf("embed-worker-%d", i)

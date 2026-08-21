@@ -1193,6 +1193,10 @@ ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 
 UPDATE memory_entries SET scope = 'agent' WHERE agent_id IS NOT NULL AND scope = 'user';
 
 CREATE INDEX IF NOT EXISTS idx_memory_entries_user_id ON memory_entries (user_id);
+-- episodic TTL GC 扫描：created_at 覆盖无 expires_at 的 90 天截止，expires_at
+-- 覆盖 per-entry 过期（短时记忆），两者都是清理查询的边界条件。
+CREATE INDEX IF NOT EXISTS idx_memory_entries_created_at ON memory_entries (created_at);
+CREATE INDEX IF NOT EXISTS idx_memory_entries_expires_at ON memory_entries (expires_at) WHERE expires_at IS NOT NULL;
 
 -- agents extensions
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL DEFAULT 0;

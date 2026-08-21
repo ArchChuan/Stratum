@@ -9,6 +9,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 func TestExtractFacts_Success(t *testing.T) {
@@ -75,6 +76,46 @@ func TestExtractFacts_Success(t *testing.T) {
 	entityRepo.AssertExpectations(t)
 	embedClient.AssertExpectations(t)
 	vectorStore.AssertExpectations(t)
+}
+
+func TestExtractFacts_SupersedeDeletesCandidateVector(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping extraction orchestration test")
+	}
+
+	ctx := context.Background()
+	factRepo := new(MockFactRepo)
+	entityRepo := new(MockEntityRepo)
+	queue := new(MockExtractionQueue)
+	vectorStore := new(MockVectorStore)
+	llmExtract := new(MockLLMExtractor)
+	embedClient := new(MockEmbedClient)
+
+	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, llmExtract, embedClient, nil, nil)
+
+	candidate, _ := domain.NewFact("", "user1", "agent1", "", "user", "I like tea", 0.7, nil)
+
+	llmExtract.On("ExtractFacts", ctx, "user1", "agent1", mock.Anything).Return([]*port.ExtractedFact{
+		{Content: "I like coffee now", Importance: 0.8, Entities: []string{}},
+	}, nil)
+	factRepo.On("FindSupersedeCandidates", ctx, "tenant1", mock.Anything, "I like coffee now", mock.Anything, mock.Anything).
+		Return([]*port.SupersedeCandidate{
+			{Fact: candidate, Similarity: constants.MemoryInlineSupersedeFastThresh + 0.01},
+		}, nil)
+	factRepo.On("Create", ctx, "tenant1", mock.AnythingOfType("*domain.MemoryFact")).Return(nil)
+	factRepo.On("Update", ctx, "tenant1", mock.AnythingOfType("*domain.MemoryFact")).Return(nil)
+	embedClient.On("Embed", ctx, "I like coffee now").Return([]float32{0.1, 0.2, 0.3}, nil)
+	vectorStore.On("Upsert", ctx, mock.Anything, mock.Anything).Return(nil)
+	vectorStore.On("DeleteFactVectors", ctx, "tenant1", []string{candidate.ID}).Return(nil)
+
+	req := &ExtractFactsRequest{
+		TenantID: "tenant1", UserID: "user1", AgentID: "agent1", Scope: "user",
+		ConversationID: "conv1",
+		Messages:       []MessageDTO{{Role: "user", Content: "content"}},
+	}
+	err := svc.ExtractFacts(ctx, req)
+	assert.NoError(t, err)
+	vectorStore.AssertCalled(t, "DeleteFactVectors", ctx, "tenant1", []string{candidate.ID})
 }
 
 func TestExtractFacts_EntityUpdate(t *testing.T) {

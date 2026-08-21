@@ -155,12 +155,14 @@ func TestRetryOrDeadLetterUsesDLQOnLastDelivery(t *testing.T) {
 	}
 	pub := &fakeDLQPublisher{}
 
-	retryOrDeadLetter(context.Background(), pub, msg, 5, deadLetterDetails{
+	deadLettered, err := retryOrDeadLetter(context.Background(), pub, msg, 5, deadLetterDetails{
 		Stage:     "enrich",
 		TenantID:  "tenant-a",
 		MessageID: "message-a",
 		ErrorCode: "llm_failed",
 	})
+	require.NoError(t, err)
+	assert.True(t, deadLettered)
 
 	assert.Equal(t, 1, msg.termCount)
 	assert.Zero(t, msg.nakCount)
@@ -171,7 +173,7 @@ func TestRetryOrDeadLetterNilMetadataNaksWithoutPanic(t *testing.T) {
 	pub := &fakeDLQPublisher{}
 
 	assert.NotPanics(t, func() {
-		err := retryOrDeadLetter(context.Background(), pub, msg, 5, deadLetterDetails{
+		_, err := retryOrDeadLetter(context.Background(), pub, msg, 5, deadLetterDetails{
 			Stage: "enrich", TenantID: "tenant-a", ErrorCode: "llm_failed",
 		})
 		require.Error(t, err)
