@@ -515,10 +515,11 @@ func (r *ParametersRegistry) registerMemoryParams() {
 		},
 		{
 			// 提取 prompt/model:agent 维度直接绑定,按 agent 逐条解析。prompt
-			// 非空时作为规则增量拼接在系统渲染的身份/上限/协议之后(无占位符);
-			// model 非空传给提取请求,空 = 空串 → client 默认解析。
+			// 为**完整**系统提示词（支持 {user_id}/{agent_id}/{max_facts} 占位符），
+			// 未配置即失败（fail-closed，无内置模板兜底）；model 非空传给提取请求,
+			// 空 = 空串 → client 默认解析。
 			Key: "memory.extraction_prompt", Scope: ScopeResource, Category: "memory",
-			DisplayName: "提取提示词", Description: "记忆抽取的系统提示词,空表示默认模板",
+			DisplayName: "提取提示词", Description: "记忆抽取的完整系统提示词(必填,支持 {user_id}/{agent_id}/{max_facts} 占位符),未配置即失败",
 			ValueType: TypeString, Default: "",
 			VisualHint:  VisualHint{Control: ControlTextarea},
 			Optimizable: false,
@@ -539,9 +540,9 @@ func (r *ParametersRegistry) registerMemoryParams() {
 // (enrich / session summary / history summary / supersede). These are
 // platform-scope: applied globally to all tenants' batch LLM calls, written
 // via PUT /admin/parameters (RequireGlobalAdmin) into platform_settings and
-// resolved at runtime per call (hot-update, no restart). Defaults stay at the
-// current const fallback so an unset platform value degrades to the exact
-// behaviour shipped today. All keys are Optimizable:false with no
+// resolved at runtime per call (hot-update, no restart). Prompt keys carry no
+// built-in default: unset → fail-closed（记忆写入/后台 LLM 任务失败并告警）。
+// All keys are Optimizable:false with no
 // EvaluationKeys — they must not enter the evaluation search space nor clash
 // with the gate-only prompt keys. NOTE: the `memory.` prefix now carries both
 // scopes (resource per-agent keys above + these platform keys); scope is the
@@ -551,7 +552,7 @@ func (r *ParametersRegistry) registerMemoryWorkerParams() {
 	for _, def := range []ParameterDefinition{
 		{
 			Key: "memory.enrich_prompt", Scope: ScopePlatform, Category: "memory",
-			DisplayName: "记忆富化提示词", Description: "记忆富化 LLM 的系统提示词,空表示默认模板",
+			DisplayName: "记忆富化提示词", Description: "记忆富化 LLM 的系统提示词(必填,支持 %s(角色)/%s(消息) 占位符),未配置即失败",
 			ValueType: TypeString, Default: "",
 			VisualHint:  VisualHint{Control: ControlTextarea},
 			Optimizable: false,
@@ -572,7 +573,7 @@ func (r *ParametersRegistry) registerMemoryWorkerParams() {
 		},
 		{
 			Key: "memory.summary_prompt", Scope: ScopePlatform, Category: "memory",
-			DisplayName: "记忆摘要提示词", Description: "记忆会话摘要 LLM 的系统提示词,空表示默认模板",
+			DisplayName: "记忆摘要提示词", Description: "记忆会话摘要 LLM 的系统提示词(必填,支持 %s 占位符),未配置即失败",
 			ValueType: TypeString, Default: "",
 			VisualHint:  VisualHint{Control: ControlTextarea},
 			Optimizable: false,
@@ -603,7 +604,7 @@ func (r *ParametersRegistry) registerMemoryWorkerParams() {
 		},
 		{
 			Key: "memory.history_summary_prompt", Scope: ScopePlatform, Category: "memory",
-			DisplayName: "历史摘要提示词", Description: "历史消息摘要 LLM 的系统提示词,空表示默认模板",
+			DisplayName: "历史摘要提示词", Description: "历史消息摘要 LLM 的系统提示词(必填),未配置即失败",
 			ValueType: TypeString, Default: "",
 			VisualHint:  VisualHint{Control: ControlTextarea},
 			Optimizable: false,
@@ -624,7 +625,7 @@ func (r *ParametersRegistry) registerMemoryWorkerParams() {
 		},
 		{
 			Key: "memory.supersede_prompt", Scope: ScopePlatform, Category: "memory",
-			DisplayName: "记忆取代提示词", Description: "记忆取代判定 LLM 的系统提示词,空表示默认模板",
+			DisplayName: "记忆取代提示词", Description: "记忆取代判定 LLM 的系统提示词(必填,支持 %s(旧事实)/%s(新事实) 占位符),未配置即失败",
 			ValueType: TypeString, Default: "",
 			VisualHint:  VisualHint{Control: ControlTextarea},
 			Optimizable: false,
