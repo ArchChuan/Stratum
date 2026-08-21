@@ -19,7 +19,6 @@ type GCWorker struct {
 	factRepo    port.FactRepo
 	memoryRepo  port.MemoryRepo // optional: episodic TTL cleanup
 	vectorStore port.VectorStore
-	queue       port.ExtractionQueue // optional: purge old completed queue tasks
 	logger      *zap.Logger
 	stopCh      chan struct{}
 	stopOnce    sync.Once
@@ -33,12 +32,6 @@ func NewGCWorker(tenantID string, repo port.FactRepo, logger *zap.Logger) *GCWor
 		logger:   logger,
 		stopCh:   make(chan struct{}),
 	}
-}
-
-// WithQueue sets an optional extraction queue for purging old completed tasks.
-func (w *GCWorker) WithQueue(q port.ExtractionQueue) *GCWorker {
-	w.queue = q
-	return w
 }
 
 // WithMemoryRepo wires the memory entry repo used for episodic TTL cleanup.
@@ -89,26 +82,10 @@ func (w *GCWorker) RunOnce(ctx context.Context) {
 	}()
 
 	start := time.Now()
-	hasErr := false
-
-	if w.queue != nil {
-		n, err := w.queue.DeleteOldCompleted(ctx, w.tenantID, constants.MemoryGCQueueRetentionDays)
-		if err != nil {
-			w.logger.Error("memory.gc_worker.delete_old_completed_failed",
-				zap.String("tenant_id", w.tenantID), zap.Error(err))
-			hasErr = true
-		} else if n > 0 {
-			w.logger.Info("memory.gc_worker.deleted_old_completed",
-				zap.String("tenant_id", w.tenantID), zap.Int("count", n))
-		}
-	}
 
 	w.purgeSupersededFacts(ctx)
 	w.purgeExpiredEntries(ctx)
 	status := "success"
-	if hasErr {
-		status = "error"
-	}
 	incWorkerMessages("gc", w.tenantID, status)
 	observeWorkerDuration("gc", w.tenantID, time.Since(start).Seconds())
 }

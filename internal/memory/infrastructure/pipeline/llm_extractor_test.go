@@ -16,25 +16,29 @@ type extractorLLMStub struct {
 	content string
 	prompt  string
 	model   string
+	user    string
 }
 
 func (s *extractorLLMStub) Complete(_ context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
 	s.prompt = req.Messages[0].Content
 	s.model = req.Model
+	if len(req.Messages) > 1 {
+		s.user = req.Messages[len(req.Messages)-1].Content
+	}
 	return &llmdomain.CompletionResponse{Content: s.content}, nil
 }
 
-// keyedResolverStub 按 (agentID, key) 返回配置值。
+// keyedResolverStub 按 key 返回平台级配置值（记忆配置统一平台级）。
 type keyedResolverStub struct {
-	vals map[string]any // "agentID:key" → value
+	vals map[string]any // key → value
 	err  error
 }
 
-func (s keyedResolverStub) Resolve(_ context.Context, _ string, agentID, key string) (any, bool, error) {
+func (s keyedResolverStub) ResolvePlatform(_ context.Context, key string) (any, bool, error) {
 	if s.err != nil {
 		return nil, false, s.err
 	}
-	v, ok := s.vals[agentID+":"+key]
+	v, ok := s.vals[key]
 	return v, ok, nil
 }
 
@@ -44,14 +48,14 @@ const testExtractionPrompt = "你是长期记忆提取助手，服务用户 {use
 // memory.extraction_prompt 必填，代码渲染占位符）。
 func newConfiguredExtractor(llm llmdomain.Completer, extra map[string]any) *LLMExtractor {
 	vals := map[string]any{
-		"agent-1:memory.extraction_prompt": testExtractionPrompt,
+		"memory.extraction_prompt": testExtractionPrompt,
 	}
 	for k, v := range extra {
 		vals[k] = v
 	}
 	e := NewLLMExtractor(llm)
 	e.SetTenantID("t1")
-	e.SetResourceResolver(keyedResolverStub{vals: vals})
+	e.SetPlatformParamResolver(keyedResolverStub{vals: vals})
 	return e
 }
 
@@ -95,18 +99,18 @@ func TestLLMExtractorLeavesModelEmpty(t *testing.T) {
 	}
 }
 
-// TestLLMExtractorMaxFactsPerAgent 验证 memory.max_facts_per_extraction 按 agent
+// TestLLMExtractorMaxFactsPlatform 验证 memory.max_facts_per_extraction 平台级
 // 解析并渲染进完整提示词；未命中回落常量默认。
-func TestLLMExtractorMaxFactsPerAgent(t *testing.T) {
+func TestLLMExtractorMaxFactsPlatform(t *testing.T) {
 	llm := &extractorLLMStub{content: `[]`}
 	extractor := newConfiguredExtractor(llm, map[string]any{
-		"agent-1:memory.max_facts_per_extraction": float64(35),
+		"memory.max_facts_per_extraction": float64(35),
 	})
 	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-1", "msg"); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(llm.prompt, "最多提取 35 条事实") {
-		t.Fatalf("per-agent max_facts not applied: %q", llm.prompt)
+		t.Fatalf("platform max_facts not applied: %q", llm.prompt)
 	}
 }
 
@@ -115,8 +119,8 @@ func TestLLMExtractorMaxFactsDegrade(t *testing.T) {
 	llm := &extractorLLMStub{content: `[]`}
 	extractor := NewLLMExtractor(llm)
 	extractor.SetTenantID("t1")
-	extractor.SetResourceResolver(keyedResolverStub{vals: map[string]any{
-		"agent-1:memory.extraction_prompt": testExtractionPrompt,
+	extractor.SetPlatformParamResolver(keyedResolverStub{vals: map[string]any{
+		"memory.extraction_prompt": testExtractionPrompt,
 	}})
 	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-1", "msg"); err != nil {
 		t.Fatal(err)
@@ -127,14 +131,14 @@ func TestLLMExtractorMaxFactsDegrade(t *testing.T) {
 }
 
 // TestLLMExtractorCustomExtractionPrompt 验证 memory.extraction_prompt 为完整
-// 系统提示词并按占位符渲染；缺失 agent → fail-closed（无内置兜底）。
+// 系统提示词并按占位符渲染；未配置 → fail-closed（无内置兜底）。
 func TestLLMExtractorCustomExtractionPrompt(t *testing.T) {
 	llm := &extractorLLMStub{content: `[]`}
 	extractor := NewLLMExtractor(llm)
 	extractor.SetTenantID("t1")
 	custom := "记忆助手：用户 {user_id}，助手 {agent_id}，上限 {max_facts} 条。只输出 JSON。"
-	extractor.SetResourceResolver(keyedResolverStub{vals: map[string]any{
-		"agent-1:memory.extraction_prompt": custom,
+	extractor.SetPlatformParamResolver(keyedResolverStub{vals: map[string]any{
+		"memory.extraction_prompt": custom,
 	}})
 
 	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-1", "msg"); err != nil {
@@ -148,10 +152,6 @@ func TestLLMExtractorCustomExtractionPrompt(t *testing.T) {
 	if strings.Contains(llm.prompt, "长期记忆提取助手") && !strings.Contains(custom, "长期记忆提取助手") {
 		t.Fatalf("custom prompt must be used verbatim (no builtin injected): %q", llm.prompt)
 	}
-
-	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-other", "msg"); err == nil {
-		t.Fatal("missing agent prompt must fail closed")
-	}
 }
 
 // TestLLMExtractorCustomExtractionModel 验证 memory.extraction_model 非空时传入
@@ -160,9 +160,9 @@ func TestLLMExtractorCustomExtractionModel(t *testing.T) {
 	llm := &extractorLLMStub{content: `[]`}
 	extractor := NewLLMExtractor(llm)
 	extractor.SetTenantID("t1")
-	extractor.SetResourceResolver(keyedResolverStub{vals: map[string]any{
-		"agent-1:memory.extraction_prompt": testExtractionPrompt,
-		"agent-1:memory.extraction_model":  "qwen-turbo",
+	extractor.SetPlatformParamResolver(keyedResolverStub{vals: map[string]any{
+		"memory.extraction_prompt": testExtractionPrompt,
+		"memory.extraction_model":  "qwen-turbo",
 	}})
 
 	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-1", "msg"); err != nil {
@@ -179,7 +179,7 @@ func TestLLMExtractorResolverErrorPropagates(t *testing.T) {
 	llm := &extractorLLMStub{content: `[]`}
 	extractor := NewLLMExtractor(llm)
 	extractor.SetTenantID("t1")
-	extractor.SetResourceResolver(keyedResolverStub{err: errors.New("db down")})
+	extractor.SetPlatformParamResolver(keyedResolverStub{err: errors.New("db down")})
 	if _, err := extractor.ExtractFacts(context.Background(), "user-1", "agent-1", "msg"); err == nil || !strings.Contains(err.Error(), "resolve prompt") {
 		t.Fatalf("resolver error must propagate, got %v", err)
 	}

@@ -2,10 +2,12 @@ package wiring
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync/atomic"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/nats-io/nats.go"
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/config"
@@ -37,6 +39,12 @@ type Memory struct {
 	Pipeline  *pipeline.Pipeline
 	DLQReplay *pipeline.ReplayService
 	RecallFn  port.RecallMemoryFn
+	// ExtractionQueue 是 Redis buffer flush 后的 NATS 提取任务发布器；
+	// pipeline 未启用时为 nil（buffer flush 显式降级）。
+	ExtractionQueue memport.ExtractionQueue
+	// ReflectionPublisher 是任务结束轨迹反思的 NATS 发布器；pipeline 未启用
+	// 时为 nil（agent 主路径 fail-open 降级）。
+	ReflectionPublisher *pipeline.NATSReflectionPublisher
 }
 
 type memoryGatewayCompleter interface {
@@ -70,50 +78,6 @@ func (a memoryLLMAdapter) Complete(ctx context.Context, req *llmdomain.Completio
 		return nil, fmt.Errorf("memory llm adapter: provider returned nil response")
 	}
 	return resp, nil
-}
-
-// agentResourceParamResolver adapts the parameters resolver + agent repo to
-// the memory pipeline's per-agent resource-param port (thin ACL; wiring is
-// the only allowed adapter seam). agentRepo is captured as a closure because
-// buildMemory runs before buildAgent assigns c.Agent.AgentRepo; the closure
-// reads it lazily at resolve time (runtime), so the build-time nil is never
-// dereferenced. A nil service or repo reports absent so consumers keep their
-// definition defaults (degrade convention).
-type agentResourceParamResolver struct {
-	agentRepo func() port.AgentRepo
-	svc       *parametersapp.Service
-}
-
-func (r agentResourceParamResolver) Resolve(ctx context.Context, tenantID, agentID, key string) (any, bool, error) {
-	if r.svc == nil || r.agentRepo == nil {
-		return nil, false, nil
-	}
-	repo := r.agentRepo()
-	if repo == nil {
-		return nil, false, nil
-	}
-	cfg, ok, err := repo.Get(reqctx.WithTenantID(ctx, tenantID), agentID)
-	if err != nil || !ok {
-		return nil, false, err
-	}
-	return r.svc.Resolver().Resolve(ctx, key, cfg.MemoryParameters)
-}
-
-// memoryResourceParamResolver builds the per-agent resource resolver, or nil
-// when the parameters registry is unavailable (degrade).
-func (c *Container) memoryResourceParamResolver() memport.ResourceParamResolver {
-	if c.Parameters == nil {
-		return nil
-	}
-	return agentResourceParamResolver{
-		agentRepo: func() port.AgentRepo {
-			if c.Agent == nil {
-				return nil
-			}
-			return c.Agent.AgentRepo
-		},
-		svc: c.Parameters.Service,
-	}
 }
 
 // platformParamResolver adapts the parameters resolver to the memory domain's
@@ -162,22 +126,24 @@ func (c *Container) buildMemoryService(mem *Memory, db *pgxpool.Pool, memRepo me
 	}
 	factRepo := persistence.NewFactRepo(db)
 	entityRepo := persistence.NewEntityRepo(db)
-	queue := persistence.NewExtractionQueue(db)
 
 	var messageBufferStore memport.MessageBufferStore
 	if c.Storage != nil && c.Storage.Redis != nil {
 		messageBufferStore = persistence.NewRedisMessageBufferStore(c.Storage.Redis.Client())
 	}
 
-	mem.Service = memory.NewMemoryService(factRepo, entityRepo, queue, nil, nil, nil, messageBufferStore, c.Logger)
+	// 提取任务队列由 buildMemoryPipeline 在 NATS 就绪后通过
+	// SetExtractionQueue 注入；此处传 nil，flush 路径显式降级。
+	mem.Service = memory.NewMemoryService(factRepo, entityRepo, nil, nil, nil, nil, messageBufferStore, c.Logger)
 	mem.Service.SetMemoryRepo(memRepo)
 
 	if c.LLMGateway != nil && c.LLMGateway.Registry != nil {
 		llmRes := newTenantCapabilityResolver(
 			c.LLMGateway.Registry, c.LLMGateway.Gateway, c.Logger,
 		).(*tenantCapabilityResolver)
-		mem.Service.SetLLMExtractResolver(makeLLMExtractResolver(llmRes, c.memoryResourceParamResolver(), c.Logger))
+		mem.Service.SetLLMExtractResolver(makeLLMExtractResolver(llmRes, c.memoryPlatformParamResolver(), c.Logger))
 		mem.Service.SetLLMSupersederResolver(makeLLMSupersederResolver(llmRes, c.memoryPlatformParamResolver(), c.Logger))
+		mem.Service.SetTrajectoryReflectorResolver(makeTrajectoryReflectorResolver(llmRes, c.memoryPlatformParamResolver(), c.Logger))
 	}
 	if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 		mem.Service.SetEmbedClientResolver(makeEmbedClientResolver(c.Knowledge.EmbedResolver))
@@ -193,7 +159,7 @@ func (c *Container) buildMemoryInjector(mem *Memory, db *pgxpool.Pool) {
 	if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 		inj.SetEmbedResolver(c.Knowledge.EmbedResolver)
 	}
-	inj.SetResourceResolver(c.memoryResourceParamResolver())
+	inj.SetPlatformParamResolver(c.memoryPlatformParamResolver())
 	mem.Injector = injectorAdapter{inj: inj}
 }
 
@@ -209,7 +175,7 @@ func (c *Container) buildMemoryRecall(mem *Memory, db *pgxpool.Pool) {
 	if c.LLMGateway != nil && c.LLMGateway.Metrics != nil {
 		recallHandler.WithMetrics(c.LLMGateway.Metrics)
 	}
-	recallHandler.SetResourceResolver(c.memoryResourceParamResolver())
+	recallHandler.SetPlatformParamResolver(c.memoryPlatformParamResolver())
 	mem.RecallFn = func(ctx context.Context, tenantID, userID, agentID, scope string, input map[string]any) (string, error) {
 		return recallHandler.Handle(ctx, tenantID, userID, agentID, scope, input)
 	}
@@ -278,6 +244,35 @@ func (c *Container) buildMemoryPipeline(mem *Memory, db *pgxpool.Pool) error {
 		})
 	}
 	p.SetPlatformParamResolver(c.memoryPlatformParamResolver())
+
+	return c.finalizeMemoryPipeline(mem, p, c.Storage.NATS)
+}
+
+// attachMemoryTaskPublishers 装配提取/反思 NATS 任务发布器与 pipeline 消费
+// service：Redis 只负责攒批，NATS JetStream 为任务传输层，PG 不再作为
+// 消息队列。
+func (c *Container) attachMemoryTaskPublishers(mem *Memory, p *pipeline.Pipeline, nc *nats.Conn) error {
+	jsm, err := pipeline.NewJetStreamManager(nc, c.Logger)
+	if err != nil {
+		return fmt.Errorf("memory jetstream manager: %w", err)
+	}
+	js := jsm.JS()
+	mem.ExtractionQueue = pipeline.NewNATSExtractionPublisher(js, c.Logger)
+	mem.ReflectionPublisher = pipeline.NewNATSReflectionPublisher(js, c.Logger)
+	if mem.Service != nil {
+		mem.Service.SetExtractionQueue(mem.ExtractionQueue)
+	}
+	p.SetExtractionService(mem.Service)
+	p.SetReflectionService(mem.Service)
+	return nil
+}
+
+// finalizeMemoryPipeline 装配任务发布器后挂载 pipeline 到 container。
+// 独立成函数保持 buildMemoryPipeline 复杂度在基线内。
+func (c *Container) finalizeMemoryPipeline(mem *Memory, p *pipeline.Pipeline, nc *nats.Conn) error {
+	if err := c.attachMemoryTaskPublishers(mem, p, nc); err != nil {
+		return err
+	}
 	mem.Pipeline = p
 	return nil
 }
@@ -311,7 +306,7 @@ func (c *Container) attachPipelineDynamic(p *pipeline.Pipeline) {
 	p.WithDynamic(&dynamic)
 }
 
-func makeLLMExtractResolver(llmRes *tenantCapabilityResolver, resolver memport.ResourceParamResolver, logger *zap.Logger) func(context.Context, string) memport.LLMExtractor {
+func makeLLMExtractResolver(llmRes *tenantCapabilityResolver, resolver memport.PlatformParamResolver, logger *zap.Logger) func(context.Context, string) memport.LLMExtractor {
 	return func(ctx context.Context, tenantID string) memport.LLMExtractor {
 		llm := llmRes.ResolveLLM(ctx, tenantID)
 		if llm == nil {
@@ -319,8 +314,71 @@ func makeLLMExtractResolver(llmRes *tenantCapabilityResolver, resolver memport.R
 		}
 		extractor := pipeline.NewLLMExtractor(memoryLLMAdapter{client: llm, tenantID: tenantID}).WithLogger(logger)
 		extractor.SetTenantID(tenantID)
-		extractor.SetResourceResolver(resolver)
+		extractor.SetPlatformParamResolver(resolver)
 		return extractor
+	}
+}
+
+// trajectoryReflectionClosure 把 agent 任务结束钩子适配到 memory 反思链路：
+// VO 转骨架输入 → 确定性压缩 → NATS 入队。原始 tool steps 不进入链路，
+// 失败由调用方按 fail-open 显式降级。
+func trajectoryReflectionClosure(c *Container) port.EnqueueTrajectoryReflectionFn {
+	return func(
+		ctx context.Context,
+		tenantID, userID, agentID, conversationID, scope, executionID, taskGoal, resultSummary, terminatedBy string,
+		calls []port.TrajectoryToolCallVO,
+		explicitMemory bool,
+	) error {
+		if c.Memory == nil || c.Memory.ReflectionPublisher == nil {
+			return fmt.Errorf("trajectory reflection: NATS publisher not configured")
+		}
+		inputs := make([]memory.ToolCallInput, 0, len(calls))
+		for _, tc := range calls {
+			inputs = append(inputs, memory.ToolCallInput{
+				ToolName:    tc.ToolName,
+				ArgsSummary: tc.ArgsSummary,
+				Status:      tc.Status,
+				ErrorMsg:    tc.ErrorMsg,
+				DurationMS:  tc.DurationMS,
+			})
+		}
+		skeleton, err := memory.BuildTrajectorySkeleton(executionID, taskGoal, resultSummary, terminatedBy, inputs)
+		if err != nil {
+			return fmt.Errorf("trajectory reflection: build skeleton: %w", err)
+		}
+		raw, err := json.Marshal(skeleton)
+		if err != nil {
+			return fmt.Errorf("trajectory reflection: marshal skeleton: %w", err)
+		}
+		return c.Memory.ReflectionPublisher.Enqueue(ctx, &memport.ReflectionTask{
+			TenantID:       tenantID,
+			UserID:         userID,
+			AgentID:        agentID,
+			ConversationID: conversationID,
+			Scope:          scope,
+			ExecutionID:    executionID,
+			Skeleton:       raw,
+			ExplicitMemory: explicitMemory,
+		})
+	}
+}
+
+// makeTrajectoryReflectorResolver 构建按租户解析的轨迹反思器：模型走租户
+// LLM gateway，提示词/模型参数走平台级 resolver（不与 agent 绑定）。
+func makeTrajectoryReflectorResolver(
+	llmRes *tenantCapabilityResolver,
+	paramResolver memport.PlatformParamResolver,
+	logger *zap.Logger,
+) memory.TrajectoryReflectorResolver {
+	return func(ctx context.Context, tenantID string) memport.TrajectoryReflector {
+		llm := llmRes.ResolveLLM(ctx, tenantID)
+		if llm == nil {
+			return nil
+		}
+		reflector := pipeline.NewTrajectoryReflector(memoryLLMAdapter{client: llm, tenantID: tenantID}).WithLogger(logger)
+		reflector.SetTenantID(tenantID)
+		reflector.SetParamResolver(paramResolver)
+		return reflector
 	}
 }
 
@@ -385,7 +443,6 @@ func BuildMemoryWorkers(c *Container) []memoryWorker {
 
 	factRepo := persistence.NewFactRepo(db)
 	historyRepo := persistence.NewHistoryRepo(db)
-	queue := persistence.NewExtractionQueue(db)
 	memoryRepo := persistence.NewMemoryRepo(db)
 	vectorStore := buildMemoryWorkerVectorStore(c)
 
@@ -402,8 +459,7 @@ func BuildMemoryWorkers(c *Container) []memoryWorker {
 
 	watcher := memworkers.NewTenantWatcher(db, func(tid string) memworkers.WorkerSet {
 		ws := memworkers.WorkerSet{
-			memworkers.NewExtractionWorker(tid, queue, c.Memory.Service, c.Logger),
-			memworkers.NewGCWorker(tid, factRepo, c.Logger).WithQueue(queue).
+			memworkers.NewGCWorker(tid, factRepo, c.Logger).
 				WithMemoryRepo(memoryRepo).WithVectorStore(vectorStore),
 		}
 		return appendTenantLLMWorkers(ws, tid, factRepo, historyRepo, vectorStore,
@@ -412,14 +468,23 @@ func BuildMemoryWorkers(c *Container) []memoryWorker {
 
 	result := []memoryWorker{watcher}
 
-	if c.Storage != nil && c.Storage.Redis != nil {
-		store := persistence.NewRedisMessageBufferStore(c.Storage.Redis.Client())
-		scanner := memory.NewBufferScanner(store, queue, c.Logger)
-		scanner.SetMetrics(c.Platform.Metrics)
-		result = append(result, scanner)
+	if w := c.bufferScannerWorker(); w != nil {
+		result = append(result, w)
 	}
 
 	return result
+}
+
+// bufferScannerWorker 构建 Redis buffer 扫描 worker；pipeline 未启用（NATS
+// 发布器缺失）时返回 nil，buffer flush 在调用方显式降级。
+func (c *Container) bufferScannerWorker() memoryWorker {
+	if c.Storage == nil || c.Storage.Redis == nil || c.Memory == nil || c.Memory.ExtractionQueue == nil {
+		return nil
+	}
+	store := persistence.NewRedisMessageBufferStore(c.Storage.Redis.Client())
+	scanner := memory.NewBufferScanner(store, c.Memory.ExtractionQueue, c.Logger)
+	scanner.SetMetrics(c.Platform.Metrics)
+	return scanner
 }
 
 // buildMemoryWorkerVectorStore 返回 memory worker 共用的 Milvus adapter；

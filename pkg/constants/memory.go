@@ -40,6 +40,12 @@ const (
 	MemoryRawSubject      = "memory.raw"
 	MemoryEnrichedSubject = "memory.enriched"
 	MemoryDLQSubject      = "memory.dlq"
+	// MemoryExtractionStream 承载对话事实提取任务（Redis buffer flush 后发布）。
+	MemoryExtractionStream  = "MEMORY_EXTRACTION"
+	MemoryExtractionSubject = "memory.extraction"
+	// MemoryReflectionStream 承载任务结束后的工具轨迹反思任务。
+	MemoryReflectionStream  = "MEMORY_REFLECTION"
+	MemoryReflectionSubject = "memory.reflection"
 )
 
 // Embedder
@@ -62,6 +68,42 @@ const (
 	EnricherSummaryMaxMessages    = 100 // max messages fetched per summary to avoid unbounded query
 	MemoryLongTermTopK            = 5
 )
+
+// Extraction / Reflection NATS consumers
+const (
+	ExtractionConsumerName = "extraction-worker"
+	ExtractionAckWait      = 60 * time.Second
+	ExtractionMaxDeliver   = 3 // 与 PG 队列 retry_count<2（共 3 次尝试）一致
+	ExtractionWorkerCount  = 1
+	ReflectionConsumerName = "reflection-worker"
+	ReflectionAckWait      = 60 * time.Second
+	ReflectionMaxDeliver   = 5
+	ReflectionWorkerCount  = 1
+)
+
+// Trajectory reflection policy
+const (
+	// MemoryReflectionMinToolCalls 是触发反思的最小工具调用数（初值，可调）。
+	MemoryReflectionMinToolCalls = 3
+	// MemoryReflectionSkeletonMaxBytes 是轨迹骨架序列化后的上限；超出按工具截断。
+	MemoryReflectionSkeletonMaxBytes = 8 * 1024
+	// MemoryReflectionMaxEntries 是单任务反思候选的最大持久化条数。
+	MemoryReflectionMaxEntries = 5
+	// MemoryReflectionStepMax 是骨架保留的最大步骤数，防止超长任务撑爆提示词。
+	MemoryReflectionStepMax = 50
+	// MemoryReflectionLLMMaxTokens 是反思 LLM 输出的 max_tokens 上限。
+	MemoryReflectionLLMMaxTokens = 4096
+	// MemoryReflectionArgsSummaryMaxRunes 是单步参数摘要的最大 rune 数。
+	MemoryReflectionArgsSummaryMaxRunes = 200
+	// MemoryReflectionErrorFingerprintMaxRunes 是错误指纹的最大 rune 数。
+	MemoryReflectionErrorFingerprintMaxRunes = 200
+	// MemoryReflectionResultSummaryMaxRunes 是任务结果摘要的最大 rune 数。
+	MemoryReflectionResultSummaryMaxRunes = 500
+)
+
+// MemoryExplicitRememberKeywords 是用户显式"记住"指令的关键词（agent 侧
+// 检测后置入反思触发 gate）。中文按字面匹配，英文区分大小写不敏感。
+var MemoryExplicitRememberKeywords = []string{"记住", "remember", "REMEMBER"}
 
 // Pipeline runtime safeguards.
 const (

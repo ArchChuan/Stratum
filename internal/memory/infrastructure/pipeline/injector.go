@@ -23,7 +23,7 @@ type EmbedServiceResolver func(ctx context.Context, tenantID string) EmbedClient
 // MemoryInjector fetches memory context (summaries, entities, long-term vectors)
 // and formats it for injection into the agent's system prompt.
 type MemoryInjector struct {
-	resolver   port.ResourceParamResolver
+	resolver   port.PlatformParamResolver
 	pool       *pgxpool.Pool
 	txBeginner interface {
 		Begin(context.Context) (pgx.Tx, error)
@@ -47,16 +47,17 @@ func (inj *MemoryInjector) SetEmbedResolver(r EmbedServiceResolver) {
 	inj.embedResolver = r
 }
 
-// SetResourceResolver wires the per-agent resource parameter resolver
-// (registry-backed); nil keeps the pkg/constants defaults.
-func (inj *MemoryInjector) SetResourceResolver(r port.ResourceParamResolver) { inj.resolver = r }
+// SetPlatformParamResolver wires the platform parameter resolver
+// (registry-backed); nil keeps the pkg/constants defaults. 记忆相关配置统一
+// 平台级，不与 agent 绑定。
+func (inj *MemoryInjector) SetPlatformParamResolver(r port.PlatformParamResolver) { inj.resolver = r }
 
-// resourceInt resolves one per-agent resource parameter, falling back to def.
-func (inj *MemoryInjector) resourceInt(ctx context.Context, ic InjectionContext, key string, def int) int {
+// resourceInt resolves one platform memory parameter, falling back to def.
+func (inj *MemoryInjector) resourceInt(ctx context.Context, key string, def int) int {
 	if inj.resolver == nil {
 		return def
 	}
-	v, ok, err := inj.resolver.Resolve(ctx, ic.TenantID, ic.AgentID, key)
+	v, ok, err := inj.resolver.ResolvePlatform(ctx, key)
 	if err != nil || !ok {
 		return def
 	}
@@ -154,7 +155,7 @@ func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext
 	var facts []factRow
 	factCtx, cancelFacts := context.WithTimeout(ctx, constants.FactInjectionTimeout)
 	defer cancelFacts()
-	factTopN := inj.resourceInt(ctx, ic, "memory.fact_injection_top_n", constants.FactInjectionTopN)
+	factTopN := inj.resourceInt(ctx, "memory.fact_injection_top_n", constants.FactInjectionTopN)
 	factRows, err := tx.Query(factCtx, factInjectionQuery(),
 		ic.UserID, ic.AgentID, ic.Query, constants.FactInjectionConfidenceMin, factTopN,
 		scopeFilter.IncludeUserScope, scopeFilter.IncludeAgentScope)
@@ -173,7 +174,7 @@ func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext
 
 	var history []historyRow
 	historyCtx, cancelHistory := context.WithTimeout(ctx, constants.HistoryReadTimeout)
-	historyTopN := inj.resourceInt(ctx, ic, "memory.history_injection_top_n", constants.HistoryInjectionTopN)
+	historyTopN := inj.resourceInt(ctx, "memory.history_injection_top_n", constants.HistoryInjectionTopN)
 	historyRows, historyErr := tx.Query(historyCtx, historyInjectionQuery(), ic.UserID, ic.AgentID, ic.Query, historyTopN,
 		scopeFilter.IncludeUserScope, scopeFilter.IncludeAgentScope)
 	if historyErr == nil {

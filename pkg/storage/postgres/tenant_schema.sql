@@ -1357,23 +1357,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_entities_name_type_scope
 -- backfill: entity_repo.go uses rebuild_after; older schema had last_profile_rebuild_at only
 ALTER TABLE memory_entities ADD COLUMN IF NOT EXISTS rebuild_after TIMESTAMPTZ;
 
--- extraction_queue: async LLM extraction tasks
-CREATE TABLE IF NOT EXISTS memory_extraction_queue (
-    id          BIGSERIAL PRIMARY KEY,
-    message_id  TEXT NOT NULL,
-    user_id     TEXT NOT NULL,
-    agent_id    TEXT,
-    content     TEXT NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
-    retry_count INT NOT NULL DEFAULT 0,
-    error_msg   TEXT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_extraction_queue_status ON memory_extraction_queue (status, created_at);
-ALTER TABLE memory_extraction_queue ADD COLUMN IF NOT EXISTS conversation_id UUID REFERENCES chat_conversations(id) ON DELETE SET NULL;
-ALTER TABLE memory_extraction_queue ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'user';
-ALTER TABLE memory_extraction_queue ADD COLUMN IF NOT EXISTS trace_id TEXT;
+-- extraction_queue: 已退役。任务传输层收口到 NATS JetStream
+-- （memory.extraction.{tenant}），PG 不再作为消息队列。存量租户幂等清理
+-- （配合 Go 引用清零与 public 标记迁移 042；队列内仅剩 transient 任务数据）。
+DROP TABLE IF EXISTS memory_extraction_queue;
 
 -- memory_migrations: 记忆嵌入模型平滑迁移状态机（P5 确认制切换）。
 -- tenant-scoped 表；回填 worker 逐任务 execTenant(ctx, tenantID, fn) 访问。

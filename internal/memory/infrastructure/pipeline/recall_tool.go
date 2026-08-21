@@ -85,7 +85,7 @@ type RecallHandler struct {
 	embedResolver EmbedServiceResolver
 	vectorDB      vectorSearcher
 	metrics       observability.MetricsProvider
-	resolver      memport.ResourceParamResolver
+	resolver      memport.PlatformParamResolver
 }
 
 // NewRecallHandler creates a RecallHandler backed by the given pool.
@@ -106,18 +106,18 @@ func (h *RecallHandler) WithMetrics(m observability.MetricsProvider) *RecallHand
 	return h
 }
 
-// SetResourceResolver wires the per-agent resource parameter resolver
+// SetPlatformParamResolver wires the platform parameter resolver
 // (registry-backed); nil keeps the constant default for recall_top_k.
-func (h *RecallHandler) SetResourceResolver(r memport.ResourceParamResolver) { h.resolver = r }
+func (h *RecallHandler) SetPlatformParamResolver(r memport.PlatformParamResolver) { h.resolver = r }
 
-// recallTopK 在工具 limit 缺失/非法时解析 memory.recall_top_k（clamp [1,20]）。
-// 解析失败或 resolver 缺失回退 constants.MemoryRecallTopK(5)——与 registry
-// Default=5 对齐，避免未配置 agent 5→10 静默漂移。
-func (h *RecallHandler) recallTopK(ctx context.Context, tenantID, agentID string) int {
+// recallTopK 在工具 limit 缺失/非法时解析 memory.recall_top_k（平台级，
+// clamp [1,20]）。解析失败或 resolver 缺失回退 constants.MemoryRecallTopK(5)
+// ——与 registry Default=5 对齐，避免未配置 5→10 静默漂移。
+func (h *RecallHandler) recallTopK(ctx context.Context) int {
 	if h.resolver == nil {
 		return constants.MemoryRecallTopK
 	}
-	v, ok, err := h.resolver.Resolve(ctx, tenantID, agentID, "memory.recall_top_k")
+	v, ok, err := h.resolver.ResolvePlatform(ctx, "memory.recall_top_k")
 	if err != nil || !ok {
 		return constants.MemoryRecallTopK
 	}
@@ -149,7 +149,7 @@ func (h *RecallHandler) Handle(ctx context.Context, tenantID, userID, agentID, s
 	// 工具显式传合法 limit(1-20) 优先;缺失/非法时回退 memory.recall_top_k
 	// (agent 维度,失败回退 5)。
 	if req.Limit <= 0 || req.Limit > constants.MemoryRecallMaxTopK {
-		req.Limit = h.recallTopK(ctx, tenantID, agentID)
+		req.Limit = h.recallTopK(ctx)
 	}
 
 	vectorCandidates, vecErr := h.tryVectorSearch(ctx, tenantID, userID, agentID, scope, req)

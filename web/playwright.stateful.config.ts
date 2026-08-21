@@ -22,7 +22,10 @@ export default defineConfig({
     baseURL: process.env.E2E_WEB_URL ?? 'http://127.0.0.1:15173',
     headless: true,
     actionTimeout: 45_000,
-    navigationTimeout: 30_000,
+    // 与 playwright.config.ts 一致：soak 长跑下 Vite dev 冷启动/依赖预构建
+    // 可能让首次页面 load 尖峰超过 30s（WSL2 内存压力），放宽导航预算避免
+    // 页面加载抖动误判失败；断言/动作仍保持默认灵敏度。
+    navigationTimeout: 60_000,
     screenshot: 'off',
     trace: 'off',
   },
