@@ -242,3 +242,28 @@ func TestParameterDefinitionValidateAndNormalize(t *testing.T) {
 		})
 	}
 }
+
+// TestRegistryMemoryEmbeddingModel 断言平台级记忆嵌入模型参数定义：
+// ScopePlatform、embedding_model 控件、不可优化、无评测 key（防半注册回归）。
+func TestRegistryMemoryEmbeddingModel(t *testing.T) {
+	r := NewParametersRegistry()
+	def, ok := r.Get("memory.embedding_model")
+	if !ok {
+		t.Fatal("memory.embedding_model not registered")
+	}
+	if def.Scope != ScopePlatform {
+		t.Errorf("scope = %q, want platform", def.Scope)
+	}
+	if def.VisualHint.Control != ControlEmbeddingModel {
+		t.Errorf("control = %q, want embedding_model", def.VisualHint.Control)
+	}
+	if def.Optimizable {
+		t.Error("optimizable must be false")
+	}
+	if len(def.EvaluationKeys) != 0 {
+		t.Errorf("evaluation keys = %v, want none", def.EvaluationKeys)
+	}
+	if def.Default != "" {
+		t.Errorf("default = %v, want empty (fail-closed)", def.Default)
+	}
+}

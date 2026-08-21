@@ -594,6 +594,14 @@ func (r *ParametersRegistry) registerMemoryWorkerParams() {
 			Optimizable: false,
 		},
 		{
+			Key: "memory.embedding_model", Scope: ScopePlatform, Category: "memory",
+			DisplayName: "记忆嵌入模型",
+			Description: "全局记忆嵌入模型（模型管理目录选择）；未设置时记忆写入 fail-closed 并告警",
+			ValueType:   TypeString, Default: "",
+			VisualHint:  VisualHint{Control: ControlEmbeddingModel},
+			Optimizable: false,
+		},
+		{
 			Key: "memory.history_summary_prompt", Scope: ScopePlatform, Category: "memory",
 			DisplayName: "历史摘要提示词", Description: "历史消息摘要 LLM 的系统提示词,空表示默认模板",
 			ValueType: TypeString, Default: "",
