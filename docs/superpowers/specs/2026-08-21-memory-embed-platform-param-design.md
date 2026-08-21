@@ -94,6 +94,30 @@
 - 前端确认框文案补充："该模型由厂商发现管理，删除后对厂商再次执行发现模型可能重新加入目录"。
 - 测试：`TestPgModelRepo_DeleteProviderManaged` 改为"provider-managed 模型可删除 + 删除后 Get 报 not found"；`UpsertDiscovered` 覆盖"再次发现会重新插入"。
 
+### 3.5 无写死模型/提示词与失败可观测（硬性要求）
+
+原则（用户确认）：**代码内禁止新增写死的模型名或提示词**；模型一律来自参数/模型目录，提示词一律来自参数。若最终无兜底，必须 fail-closed，且满足：明确错误 + 结构化日志 + 记录/保留 trace + 指标与告警，禁止静默降级。
+
+**本改动合规矩阵**：
+
+| 路径 | 无写死 | 无兜底时的失败可观测 |
+|---|---|---|
+| `memory.embedding_model` 参数 | Default `""`，代码零模型字面量 | resolver 返回 `errMemoryEmbeddingNotConfigured` → `buildEmbedResolver` WARN `memory.embed.resolve_failed`（含 tenant/err）→ embedder DLQ `embed_service_unavailable` + `memory_embed_unavailable_total` → 告警 `StratumMemoryEmbedUnavailable`；日志与 DLQ 事件均携带 `trace_id` |
+| 启动 seed | 从目录解析 `models.default_embedding` 标记，非代码字面量 | 目录无默认 → seed ERROR 日志且不写平台参数（保持 fail-closed） |
+| extraction worker | 无新增写死 | 本次补 `zap.Error(err)` 后失败日志带根因；已有 `StratumMemoryWorkerErrorRate` 告警 |
+| 平台参数保存 | registry 校验（未知 key/非法值 → 400） | 失败走统一错误中间件 + 前端错误提示 |
+
+**存量例外（不随本次扩面，需用户确认 S2）**：
+
+- `pkg/constants/memory.go` 中 `memory.*_prompt` 的默认提示词是**注册表定义默认**（沿用"未配置用定义默认"语义），非新增写死。
+- `llm_extractor.go` 的 `extractionIdentityPrompt` 系统身份模板为代码写死（注释声明用户不可覆盖，属既有设计）。
+- memory 各 worker 的 LLM 调用无 OTEL span 导出，trace 目前以 `trace_id` 在日志与 DLQ 中传递；如需 span 级链路，另立任务。
+
+**待确认子决策**：
+
+- S1：启动 seed 保留"目录驱动自动写入平台参数"（推荐，保证存量租户连续、可审计），还是改为纯 fail-closed（平台参数未设置即失败+告警，管理员显式配置）？
+- S2：存量写死提示词（constants 默认 / extraction 身份模板）是否纳入本次改造？（推荐不纳入，另立任务，避免破坏现有未配置租户的提取/富化。）
+
 ## 4. 数据与契约影响
 
 - 无新增表、无 tenant DDL、无 proto 变更。
@@ -117,3 +141,6 @@
 | D4 | 模型删除 | 放开 provider-managed 限制（用户确认），删除为"直到下次发现前不出现"，前端提示重新发现 |
 | D5 | 平台页加载 | 页面级 Skeleton 加载态，不渲染半成品展示页 |
 | D6 | 日志 | extract_failed 带 err 与 error_code |
+| D7 | 无写死 + 失败可观测 | 代码零模型/提示词字面量；无兜底时错误+日志+trace+指标告警（硬性要求） |
+| S1 | seed 行为 | 待用户确认：目录驱动自动写入（推荐） vs 纯 fail-closed |
+| S2 | 存量写死提示词 | 待用户确认：不纳入（推荐） vs 纳入改造 |
