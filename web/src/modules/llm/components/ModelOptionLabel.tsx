@@ -3,6 +3,20 @@ import type { ModelCapability } from '../model/llm';
 import { ModelCapabilityTags } from './ModelCapabilityTags';
 import { ModelHealthBadge } from './ModelHealthBadge';
 
+// AntD Select showSearch 的过滤函数：Option children 是 ModelOptionLabel 组件
+//（React element，AntD 默认 filterOption 无法对其取文本），改按 Option 的
+// label（显示名）/ value（模型名）纯文本匹配，恢复模型搜索能力。
+export const filterModelOption = (
+  input: string,
+  option?: { label?: unknown; value?: unknown },
+): boolean => {
+  const q = input.toLowerCase();
+  return (
+    String(option?.label ?? '').toLowerCase().includes(q) ||
+    String(option?.value ?? '').toLowerCase().includes(q)
+  );
+};
+
 interface ModelOptionLabelProps {
   label: string;
   // 模型能力标签；空数组不渲染标签（未知模型不臆测能力）。

@@ -141,7 +141,8 @@ export interface GroupedModelOption {
     value: string;
     label: string;
     // 模型能力标签（chat/embedding/vision/tool_use/reasoning），供模型选择器展示。
-    capabilities: ModelCapability[];
+    // 可选：buildGroupedModels 总是产出（空数组兜底）；外部构造者可省略。
+    capabilities?: ModelCapability[];
     reasoning: boolean;
     contextWindow?: number;
     maxTokens?: number;

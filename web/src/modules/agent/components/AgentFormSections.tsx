@@ -28,7 +28,7 @@ import {
 } from '@/constants';
 import type { Member } from '@/modules/iam';
 import type { Workspace } from '@/modules/knowledge';
-import { ModelOptionLabel } from '@/modules/llm/components/ModelOptionLabel';
+import { filterModelOption, ModelOptionLabel } from '@/modules/llm/components/ModelOptionLabel';
 import type { MCPToolOption } from '@/modules/mcp';
 import { PromptDefaultViewer } from '@/modules/parameters/components/PromptDefaultViewer';
 import type { Skill } from '@/modules/skill';
@@ -184,7 +184,7 @@ export const AgentFormSections = ({
           placeholder="选择推理模型"
           notFoundContent="模型管理中没有可用的推理模型"
           showSearch
-          optionFilterProp="children"
+          filterOption={filterModelOption}
           onChange={handleModelChange}
         >
           {currentModel &&
@@ -196,7 +196,7 @@ export const AgentFormSections = ({
           {groupedModels.map((group) => (
             <OptGroup key={group.provider} label={group.provider}>
               {group.models.map((m) => (
-                <Option key={m.value} value={m.value}>
+                <Option key={m.value} value={m.value} label={m.label}>
                   <ModelOptionLabel label={m.label} capabilities={m.capabilities} />
                 </Option>
               ))}
@@ -400,11 +400,11 @@ export const AgentFormSections = ({
                       extra="执行历史压缩所用的模型；留空 = 跟随主 LLM 模型"
                       style={{ marginBottom: 0 }}
                     >
-                      <Select allowClear placeholder="跟随主 LLM 模型" showSearch optionFilterProp="children">
+                      <Select allowClear placeholder="跟随主 LLM 模型" showSearch filterOption={filterModelOption}>
                         {groupedModels.map((group) => (
                           <OptGroup key={group.provider} label={group.provider}>
                             {group.models.map((m) => (
-                              <Option key={m.value} value={m.value}>
+                              <Option key={m.value} value={m.value} label={m.label}>
                                 <ModelOptionLabel label={m.label} capabilities={m.capabilities} />
                               </Option>
                             ))}

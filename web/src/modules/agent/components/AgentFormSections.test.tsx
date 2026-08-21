@@ -46,19 +46,68 @@ describe('AgentFormSections', () => {
     expect(screen.queryByText(/qwen-plus/)).not.toBeInTheDocument();
   });
 
-  it('allows filtering a large model catalogue by name', () => {
+  it('filters a large model catalogue by search text', async () => {
     render(
       <Form>
         <AgentFormSections
           skills={[]}
           mcpTools={[]}
           workspaces={[]}
-          groupedModels={[{ provider: 'Qwen', models: [{ value: 'qwen-max', label: 'qwen-max', reasoning: false }] }]}
+          groupedModels={[
+            {
+              provider: 'Qwen',
+              models: [
+                { value: 'qwen-max', label: 'qwen-max', capabilities: ['chat'], reasoning: false },
+                { value: 'qwen-plus', label: 'qwen-plus', capabilities: ['chat'], reasoning: false },
+              ],
+            },
+          ]}
         />
       </Form>,
     );
 
-    expect(screen.getByRole('combobox', { name: 'LLM 模型' })).not.toHaveAttribute('readonly');
+    // Option children 是 ModelOptionLabel 组件（React element），AntD 默认
+    // filterOption 无法对其取文本；必须按自定义 filterModelOption 匹配
+    // label/value 纯文本，showSearch 才恢复搜索能力。
+    const combobox = screen.getByRole('combobox', { name: 'LLM 模型' });
+    fireEvent.mouseDown(combobox);
+    fireEvent.input(combobox, { target: { value: 'qwen-max' } });
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: /qwen-max/ })).toBeInTheDocument();
+      expect(screen.queryByRole('option', { name: /qwen-plus/ })).not.toBeInTheDocument();
+    });
+  });
+
+  it('renders model capability tags in the LLM model dropdown', () => {
+    render(
+      <Form>
+        <AgentFormSections
+          skills={[]}
+          mcpTools={[]}
+          workspaces={[]}
+          groupedModels={[
+            {
+              provider: 'Zhipu',
+              models: [
+                { value: 'glm-5', label: 'GLM-5', capabilities: ['chat', 'tool_use', 'vision'], reasoning: false },
+              ],
+            },
+          ]}
+        />
+      </Form>,
+    );
+
+    // rc-select 双层结构：role=option 的 ARIA 层文本只有 value（小写模型名），
+    // ModelOptionLabel 渲染的中文能力标签在 .ant-select-item-option 层（下拉
+    // portal 在 document.body，不在组件 container 内；与 pickModelOption helper
+    // 的 document 查询一致），必须在该层断言。
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'LLM 模型' }));
+    const option = Array.from(document.querySelectorAll('.ant-select-item-option')).find((el) =>
+      el.textContent?.includes('GLM-5'),
+    )!;
+    expect(option.textContent).toContain('对话');
+    expect(option.textContent).toContain('工具调用');
+    expect(option.textContent).toContain('视觉');
   });
 
   it('labels an unavailable current model without adding it to new forms', () => {
