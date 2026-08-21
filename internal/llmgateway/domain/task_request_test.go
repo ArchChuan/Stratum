@@ -47,8 +47,8 @@ func TestNewSummarizeRequest(t *testing.T) {
 	if req.Messages[0].Content != "压缩：a\nb" {
 		t.Fatalf("Content = %q, want instructions + items joined", req.Messages[0].Content)
 	}
-	if req.Temperature == nil || *req.Temperature != float64(constants.TaskSummarizeTemperature) {
-		t.Fatalf("Temperature = %v, want %v", req.Temperature, constants.TaskSummarizeTemperature)
+	if req.Temperature == nil || *req.Temperature != 0.2 {
+		t.Fatalf("Temperature = %v, want summarize default 0.2 (rounded)", req.Temperature)
 	}
 	if req.MaxTokens != 512 {
 		t.Fatalf("MaxTokens = %d, want 512", req.MaxTokens)
@@ -65,6 +65,20 @@ func TestNewSummarizeRequestNilItems(t *testing.T) {
 	req := NewSummarizeRequest("m", "指令", nil, 0)
 	if req.Messages[0].Content != "指令" {
 		t.Fatalf("nil items must keep instructions only, got %q", req.Messages[0].Content)
+	}
+}
+
+// TestTemperaturePtrRoundsToTwoDecimals 防智谱等端点对温度 >2 位小数返回 400：
+// float32(0.1) 直转 float64 会变成 0.10000000149011612，必须舍入到 0.1。
+func TestTemperaturePtrRoundsToTwoDecimals(t *testing.T) {
+	if got := temperaturePtr(0.1); got == nil || *got != 0.1 {
+		t.Fatalf("temperaturePtr(0.1) = %v, want 0.1", got)
+	}
+	if got := temperaturePtr(0); got != nil {
+		t.Fatalf("temperaturePtr(0) = %v, want nil (unset)", got)
+	}
+	if got := temperaturePtr(0.125); got == nil || *got != 0.13 {
+		t.Fatalf("temperaturePtr(0.125) = %v, want 0.13", got)
 	}
 }
 
