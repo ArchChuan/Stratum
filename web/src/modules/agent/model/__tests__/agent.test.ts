@@ -112,7 +112,21 @@ describe('buildGroupedModels', () => {
       [{ id: 'p1', name: '托管厂商' }],
     );
     expect(grouped).toEqual([
-      { provider: '托管厂商', models: [{ value: 'glm-5.2', label: 'glm-5.2', reasoning: false, contextWindow: 128000, maxTokens: 8192 }] },
+      { provider: '托管厂商', models: [{ value: 'glm-5.2', label: 'glm-5.2', capabilities: ['chat'], reasoning: false, contextWindow: 128000, maxTokens: 8192 }] },
+    ]);
+  });
+
+  it('透传能力标签并回退空数组（供模型选择器展示能力）', () => {
+    const grouped = buildGroupedModels(
+      [
+        { providerId: 'p1', name: 'glm-5.2', capabilities: ['chat', 'tool_use'] },
+        { providerId: 'p1', name: 'legacy-model', displayName: '旧模型' },
+      ],
+      [{ id: 'p1', name: '托管厂商' }],
+    );
+    expect(grouped[0]?.models).toEqual([
+      { value: 'glm-5.2', label: 'glm-5.2', capabilities: ['chat', 'tool_use'], reasoning: false },
+      { value: 'legacy-model', label: '旧模型', capabilities: [], reasoning: false },
     ]);
   });
 
@@ -121,6 +135,6 @@ describe('buildGroupedModels', () => {
       [{ providerId: 'p1', name: 'legacy-model', displayName: '旧模型', capabilities: ['chat'] }],
       [{ id: 'p1', name: '托管厂商' }],
     );
-    expect(grouped[0]?.models[0]).toEqual({ value: 'legacy-model', label: '旧模型', reasoning: false });
+    expect(grouped[0]?.models[0]).toEqual({ value: 'legacy-model', label: '旧模型', capabilities: ['chat'], reasoning: false });
   });
 });

@@ -14,6 +14,7 @@ import {
   RECALL_TOP_K_MAX,
   RECALL_TOP_K_MIN,
 } from '@/constants';
+import { filterModelOption, ModelOptionLabel } from '@/modules/llm/components/ModelOptionLabel';
 import { PromptDefaultViewer } from '@/modules/parameters/components/PromptDefaultViewer';
 import { SectionHeader } from '@/shared/ui';
 
@@ -73,12 +74,12 @@ export const AgentMemoryConfig = ({ groupedModels }: AgentMemoryConfigProps) => 
       name="memoryExtractionModel"
       extra="执行记忆抽取所用的模型；留空 = 使用全局默认"
     >
-      <Select allowClear placeholder="使用全局默认" showSearch optionFilterProp="children">
+      <Select allowClear placeholder="使用全局默认" showSearch filterOption={filterModelOption}>
         {groupedModels.map((group) => (
           <OptGroup key={group.provider} label={group.provider}>
             {group.models.map((m) => (
-              <Option key={m.value} value={m.value}>
-                {m.label}
+              <Option key={m.value} value={m.value} label={m.label}>
+                <ModelOptionLabel label={m.label} capabilities={m.capabilities} />
               </Option>
             ))}
           </OptGroup>

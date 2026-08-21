@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { resourceChangeProposalArtifactSchema } from './proposal';
 
+import type { ModelCapability } from '@/modules/llm/model/llm';
 import type { ExecuteAgentRequest as GenExecuteAgentRequest } from '@/services/gen/agent';
 
 export const agentSchema = z
@@ -139,6 +140,9 @@ export interface GroupedModelOption {
   models: {
     value: string;
     label: string;
+    // 模型能力标签（chat/embedding/vision/tool_use/reasoning），供模型选择器展示。
+    // 可选：buildGroupedModels 总是产出（空数组兜底）；外部构造者可省略。
+    capabilities?: ModelCapability[];
     reasoning: boolean;
     contextWindow?: number;
     maxTokens?: number;
@@ -156,7 +160,7 @@ export const buildGroupedModels = (
     providerId: string;
     name: string;
     displayName?: string;
-    capabilities?: string[];
+    capabilities?: ModelCapability[];
     contextWindow?: number;
     maxTokens?: number;
     health?: string;
@@ -171,6 +175,7 @@ export const buildGroupedModels = (
     grouped.get(providerName)!.push({
       value: m.name,
       label: m.displayName || m.name,
+      capabilities: m.capabilities ?? [],
       reasoning: isReasoningModel(m),
       contextWindow: m.contextWindow,
       maxTokens: m.maxTokens,
