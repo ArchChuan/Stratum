@@ -69,6 +69,9 @@ const (
 	MemoryFetchBackoffBase = 200 * time.Millisecond
 	// MemoryFetchBackoffMax 退避上限。
 	MemoryFetchBackoffMax = 10 * time.Second
+	// MemoryQueueEmptyBackoff 是抽取队列为空时的最小轮询间隔：
+	// 队列空时不得紧接重查，避免多租户空转打满 DB（2026-08-21 CPU 打满事故）。
+	MemoryQueueEmptyBackoff = 1 * time.Second
 	// MemoryOutboxPublishTimeout 限制单次 NATS Publish 的最长阻塞时间。
 	// Publish 在 outbox 取出行事务提交后执行（事务内禁止网络 IO），
 	// 该超时防止 NATS 慢/断连时 poll 循环卡死。

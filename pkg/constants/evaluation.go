@@ -1,6 +1,15 @@
 // Package constants — evaluation tunable bounds.
 package constants
 
+import "time"
+
+// Worker polling bounds.
+const (
+	// EvaluationIdleInterval 是评估 worker 无待办 job/实验时的空转等待：
+	// 空队列时按该间隔轮询，禁止每租户每秒空查（2026-08-21 CPU 打满事故）。
+	EvaluationIdleInterval = 2 * time.Second
+)
+
 // Tunable parameter bounds shared by the evaluation domain (tunable
 // registration), the AgentRevision model validation, and the evaluation
 // Agent adapter. Zero means "unset": a candidate may always express unset

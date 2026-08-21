@@ -19,19 +19,19 @@ type TenantJobRunner interface {
 }
 
 type Worker struct {
-	lister   TenantLister
-	runner   TenantJobRunner
-	interval time.Duration
-	workerID string
-	metrics  observability.MetricsProvider
-	stopCh   chan struct{}
-	stopOnce sync.Once
-	wg       sync.WaitGroup
+	lister       TenantLister
+	runner       TenantJobRunner
+	idleInterval time.Duration
+	workerID     string
+	metrics      observability.MetricsProvider
+	stopCh       chan struct{}
+	stopOnce     sync.Once
+	wg           sync.WaitGroup
 }
 
-func NewWorker(lister TenantLister, runner TenantJobRunner, interval time.Duration, metrics observability.MetricsProvider) *Worker {
+func NewWorker(lister TenantLister, runner TenantJobRunner, idleInterval time.Duration, metrics observability.MetricsProvider) *Worker {
 	return &Worker{
-		lister: lister, runner: runner, interval: interval,
+		lister: lister, runner: runner, idleInterval: idleInterval,
 		workerID: uuid.Must(uuid.NewV7()).String(),
 		metrics:  metrics,
 		stopCh:   make(chan struct{}),
@@ -42,16 +42,27 @@ func (w *Worker) Start(ctx context.Context) {
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
-		ticker := time.NewTicker(w.interval)
-		defer ticker.Stop()
+		idleTicker := time.NewTicker(w.idleInterval)
+		defer idleTicker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-w.stopCh:
 				return
-			case <-ticker.C:
-				_ = w.PollOnce(ctx)
+			default:
+			}
+			// 有工作时紧接轮询；空转时等待 idle 间隔，禁止无退避空轮询。
+			worked, _ := w.PollOnce(ctx)
+			if worked {
+				continue
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-w.stopCh:
+				return
+			case <-idleTicker.C:
 			}
 		}
 	}()
@@ -62,23 +73,27 @@ func (w *Worker) Stop() {
 	w.wg.Wait()
 }
 
-func (w *Worker) PollOnce(ctx context.Context) error {
+func (w *Worker) PollOnce(ctx context.Context) (bool, error) {
 	tenantIDs, err := w.lister.ListTenantIDs(ctx)
 	if err != nil {
 		w.metrics.IncEvaluationJob("list_error")
-		return err
+		return false, err
 	}
 	var failures []error
+	anyWork := false
 	for _, tenantID := range tenantIDs {
-		_, err := w.runner.RunOnce(ctx, tenantID, w.workerID, time.Minute)
+		worked, err := w.runner.RunOnce(ctx, tenantID, w.workerID, time.Minute)
 		if err != nil {
 			failures = append(failures, err)
 			w.metrics.IncEvaluationJob("error")
 		} else {
 			w.metrics.IncEvaluationJob("ok")
+			if worked {
+				anyWork = true
+			}
 		}
 	}
-	return errors.Join(failures...)
+	return anyWork, errors.Join(failures...)
 }
 
 // NewMultiRunner returns a TenantJobRunner that delegates to each runner

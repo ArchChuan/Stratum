@@ -16,6 +16,7 @@
 - **共享指针 TOCTOU**（反例：VectorStore.client，2026-06-27）：不要 `if vs.client == nil { ensureConnected() }; use vs.client`——check 与 use 之间 client 可能被换走。用 `getClient(ctx)` 在锁内取出局部副本再用
 - **带缓冲 channel + ctx 超时必须排水**（反例：doConnect，2026-06-27）：`ctx.Done()` 提前返回后，后台 goroutine 仍会写 `resultCh`，无人读取则泄漏 gRPC 连接。必须 `select { case res := <-resultCh: if res.err == nil { res.client.Close() } }` 排水
 - **早期错误路径必须 drain WaitGroup**（反例：Pipeline.Start，2026-06-27）：中途 `cancel()` 返回前必须 `p.wg.Wait()`，否则已启动的 goroutine 悬挂
+- **Worker/轮询空队列必须退避**（2026-08-21 CPU 打满事故）：队列/表为空时必须最小间隔空转（默认 ≥1s），有工作才紧接轮询，禁止无退避空轮询。全库统一：evaluation 空转 `EvaluationIdleInterval`（2s）、collab/workflow 空转 `CollabIdleInterval`/`WorkflowIdleInterval`（1s）、memory extraction 空队列 `MemoryQueueEmptyBackoff`（1s）。新增轮询 worker 必须复用这些常量或等价退避
 
 ## pgx v5 JSONB 编码
 

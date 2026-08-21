@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -197,5 +198,39 @@ func TestExtractionWorker_GracefulShutdown(t *testing.T) {
 		// OK
 	case <-time.After(1 * time.Second):
 		t.Fatal("worker did not stop within 1s")
+	}
+}
+
+func TestExtractionWorker_EmptyQueueBackoff(t *testing.T) {
+	var mu sync.Mutex
+	var dequeues []time.Time
+	queue := &stubExtractionQueue{
+		dequeueFunc: func(context.Context, string) (*port.ExtractionTask, error) {
+			mu.Lock()
+			dequeues = append(dequeues, time.Now())
+			mu.Unlock()
+			return nil, nil // idle
+		},
+	}
+
+	worker := workers.NewExtractionWorker("tenant1", queue, &stubFactExtractor{}, zap.NewNop())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		worker.Start(ctx)
+		close(done)
+	}()
+
+	time.Sleep(1100 * time.Millisecond)
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.GreaterOrEqual(t, len(dequeues), 2, "should poll at least twice over 1.1s")
+	for i := 1; i < len(dequeues); i++ {
+		require.GreaterOrEqual(t, dequeues[i].Sub(dequeues[i-1]), 900*time.Millisecond,
+			"empty-queue polls must be spaced by the empty backoff")
 	}
 }
