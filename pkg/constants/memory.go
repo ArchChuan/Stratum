@@ -89,6 +89,11 @@ const (
 const (
 	MemoryBufferFlushSize     = 5 // flush after K messages
 	MemoryBufferFlushInterval = 2 * time.Minute
+	// MemoryBufferFlushLockTTL bounds how long a flusher may hold the per-key
+	// single-flight lock. A crashed flusher (process kill, network partition)
+	// releases via TTL so the buffer is never starved; a live flush completes
+	// in milliseconds, so 30s is far beyond the critical section.
+	MemoryBufferFlushLockTTL = 30 * time.Second
 	// MemoryBufferKeyTTL is a sliding safety TTL on the Redis list key.
 	// Prevents leaked keys when a conversation ends before K or T flush triggers
 	// (e.g. tab closed, server restart). Reset on every push so slow but active
