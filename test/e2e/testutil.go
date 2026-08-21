@@ -171,11 +171,17 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 	return env
 }
 
+// stubExtractionQueue 是 E2E 用的 Enqueue-only 队列替身：NATS 传输链路由
+// pipeline 集成测试覆盖，E2E 聚焦事实提取语义本身。
+type stubExtractionQueue struct{}
+
+func (stubExtractionQueue) Enqueue(context.Context, string, *port.ExtractionTask) error { return nil }
+
 // newMemoryService constructs MemoryService with mocked LLM extractor.
 func newMemoryService(pool *pgxpool.Pool, redis *redis.Client) (*application.MemoryService, port.FactRepo, port.EntityRepo, port.ExtractionQueue) {
 	factRepo := persistence.NewFactRepo(pool)
 	entityRepo := persistence.NewEntityRepo(pool)
-	queue := persistence.NewExtractionQueue(pool)
+	queue := stubExtractionQueue{}
 	messageBufferStore := persistence.NewRedisMessageBufferStore(redis)
 
 	service := application.NewMemoryService(

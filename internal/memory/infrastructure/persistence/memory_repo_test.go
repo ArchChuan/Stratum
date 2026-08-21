@@ -75,7 +75,7 @@ func TestMemoryRepoDeleteAllByUserCleansOwnedLifecycleRowsAtomically(t *testing.
 
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	for _, table := range []string{"memory_outbox", "memory_extraction_queue", "memory_summaries", "memory_active_snapshots", "memory_entries"} {
+	for _, table := range []string{"memory_outbox", "memory_summaries", "memory_active_snapshots", "memory_entries"} {
 		pool.ExpectExec("DELETE FROM " + table + " WHERE user_id = \\$1").
 			WithArgs("user-1").
 			WillReturnResult(pgxmock.NewResult("DELETE", 1))
@@ -103,7 +103,7 @@ func TestMemoryRepoDeleteAllByAgentRollsBackLifecycleFailure(t *testing.T) {
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("DELETE FROM memory_outbox WHERE agent_id = \\$1").
 		WithArgs("agent-1").WillReturnResult(pgxmock.NewResult("DELETE", 1))
-	pool.ExpectExec("DELETE FROM memory_extraction_queue WHERE agent_id = \\$1").
+	pool.ExpectExec("DELETE FROM memory_summaries WHERE agent_id = \\$1 AND scope = 'agent'").
 		WithArgs("agent-1").WillReturnError(wantErr)
 	pool.ExpectRollback()
 

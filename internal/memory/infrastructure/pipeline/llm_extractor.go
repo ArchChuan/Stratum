@@ -16,7 +16,7 @@ import (
 
 type LLMExtractor struct {
 	client   LLMClient
-	resolver memport.ResourceParamResolver
+	resolver memport.PlatformParamResolver
 	// tenantID is captured at construction (the extractor is built per tenant
 	// by the wiring seam); agentID arrives per ExtractFacts call.
 	tenantID string
@@ -27,9 +27,10 @@ func NewLLMExtractor(client LLMClient) *LLMExtractor {
 	return &LLMExtractor{client: client}
 }
 
-// SetResourceResolver wires the per-agent resource parameter resolver
-// (registry-backed); nil keeps the pkg/constants defaults.
-func (e *LLMExtractor) SetResourceResolver(r memport.ResourceParamResolver) { e.resolver = r }
+// SetPlatformParamResolver wires the platform parameter resolver
+// (registry-backed); nil keeps the pkg/constants defaults. 记忆相关配置统一
+// 平台级，不与 agent 绑定。
+func (e *LLMExtractor) SetPlatformParamResolver(r memport.PlatformParamResolver) { e.resolver = r }
 
 // SetTenantID sets the tenant identity for parameter resolution. The extractor
 // is constructed per tenant by the wiring seam, so the tenant is stable for
@@ -42,13 +43,13 @@ func (e *LLMExtractor) WithLogger(l *zap.Logger) *LLMExtractor {
 	return e
 }
 
-// maxFacts resolves memory.max_facts_per_extraction for the target agent,
+// maxFacts resolves memory.max_facts_per_extraction（平台级），
 // falling back to the constant default when unset, unresolved or unavailable.
-func (e *LLMExtractor) maxFacts(ctx context.Context, agentID string) int {
+func (e *LLMExtractor) maxFacts(ctx context.Context) int {
 	if e.resolver == nil {
 		return constants.MemoryMaxFactsPerExtraction
 	}
-	v, ok, err := e.resolver.Resolve(ctx, e.tenantID, agentID, "memory.max_facts_per_extraction")
+	v, ok, err := e.resolver.ResolvePlatform(ctx, "memory.max_facts_per_extraction")
 	if err != nil || !ok {
 		return constants.MemoryMaxFactsPerExtraction
 	}
@@ -63,7 +64,7 @@ func (e *LLMExtractor) extractionPrompt(ctx context.Context, agentID, userID str
 	if e.resolver == nil {
 		return "", fmt.Errorf("memory extraction: memory.extraction_prompt not configured (fail-closed)")
 	}
-	v, _, err := e.resolver.Resolve(ctx, e.tenantID, agentID, "memory.extraction_prompt")
+	v, _, err := e.resolver.ResolvePlatform(ctx, "memory.extraction_prompt")
 	if err != nil {
 		return "", fmt.Errorf("memory extraction: resolve prompt: %w", err)
 	}
@@ -77,13 +78,13 @@ func (e *LLMExtractor) extractionPrompt(ctx context.Context, agentID, userID str
 	return s, nil
 }
 
-// extractionModel resolves memory.extraction_model for the target agent;
+// extractionModel resolves memory.extraction_model（平台级）；
 // "" 表示交由 llmgateway client 默认模型解析(pre-refactor 行为)。
-func (e *LLMExtractor) extractionModel(ctx context.Context, agentID string) string {
+func (e *LLMExtractor) extractionModel(ctx context.Context) string {
 	if e.resolver == nil {
 		return ""
 	}
-	v, ok, err := e.resolver.Resolve(ctx, e.tenantID, agentID, "memory.extraction_model")
+	v, ok, err := e.resolver.ResolvePlatform(ctx, "memory.extraction_model")
 	if err != nil || !ok {
 		return ""
 	}
@@ -92,12 +93,12 @@ func (e *LLMExtractor) extractionModel(ctx context.Context, agentID string) stri
 }
 
 func (e *LLMExtractor) ExtractFacts(ctx context.Context, userID, agentID string, message string) ([]*memport.ExtractedFact, error) {
-	maxFacts := e.maxFacts(ctx, agentID)
+	maxFacts := e.maxFacts(ctx)
 	system, err := e.extractionPrompt(ctx, agentID, userID, maxFacts)
 	if err != nil {
 		return nil, err
 	}
-	model := e.extractionModel(ctx, agentID)
+	model := e.extractionModel(ctx)
 	req := llmdomain.NewExtractRequest(model, system, message, 0, constants.MemoryExtractLLMMaxTokens)
 	return extractFactsStructured(ctx, e.client, req, e.logger)
 }

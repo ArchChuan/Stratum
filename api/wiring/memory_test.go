@@ -3,16 +3,12 @@ package wiring
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/config"
-	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
-	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
-	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	memworkers "github.com/byteBuilderX/stratum/internal/memory/infrastructure/workers"
 	parametersapp "github.com/byteBuilderX/stratum/internal/parameters/application"
@@ -157,40 +153,6 @@ func TestMemoryLLMAdapterForwardsResponseFormat(t *testing.T) {
 	})
 }
 
-// resolverAgentRepoStub implements only Get (used through the lazily-captured
-// func() agentport.AgentRepo seam); every other method is an unreachable no-op.
-type resolverAgentRepoStub struct {
-	cfg *agentdomain.AgentConfig
-	ok  bool
-	err error
-}
-
-func (s *resolverAgentRepoStub) Get(context.Context, string) (*agentdomain.AgentConfig, bool, error) {
-	return s.cfg, s.ok, s.err
-}
-
-func (s *resolverAgentRepoStub) Register(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, []string) error {
-	return nil
-}
-func (s *resolverAgentRepoStub) GetSystemAssistant(context.Context) (*agentdomain.AgentConfig, bool, error) {
-	return nil, false, nil
-}
-func (s *resolverAgentRepoStub) GetAll(context.Context) ([]*agentdomain.AgentConfig, error) {
-	return nil, nil
-}
-func (s *resolverAgentRepoStub) Remove(context.Context, string, *auditdomain.ResourceChangeAuditEvent) error {
-	return nil
-}
-func (s *resolverAgentRepoStub) Update(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string, bool) error {
-	return nil
-}
-func (s *resolverAgentRepoStub) UpdateSystemAssistantModel(context.Context, string, string, int, int, *auditdomain.ResourceChangeAuditEvent) (*agentdomain.AgentConfig, error) {
-	return nil, nil
-}
-func (s *resolverAgentRepoStub) UpdateSystemAssistantAll(context.Context, string, string, int, int, int, map[string]any, *auditdomain.ResourceChangeAuditEvent) (*agentdomain.AgentConfig, error) {
-	return nil, nil
-}
-
 // wiringPlatformStore is an in-memory PlatformStore for adapter tests (the
 // parameters application package keeps its own copy; wiring must not import it).
 type wiringPlatformStore struct {
@@ -215,60 +177,33 @@ func (m *wiringPlatformStore) GetAll(_ context.Context) ([]parametersport.Platfo
 	return out, nil
 }
 
-// TestAgentResourceParamResolverFallback 守护 agentResourceParamResolver 的编排:
-// 命中 agent 记录用其声明值;无声明回落 registry 默认(迁移删平台行后不再有
-// platform 中间层);repo 缺失/不存在/报错一律 fail-closed 到 absent。
-func TestAgentResourceParamResolverFallback(t *testing.T) {
+// TestPlatformParamResolverFallback 守护 platformParamResolver 的编排：
+// 平台声明值优先；无声明回落 registry 定义默认；svc 缺失 fail-closed 到 absent。
+func TestPlatformParamResolverFallback(t *testing.T) {
 	svc := parametersapp.NewService(parametersdomain.NewParametersRegistry(), &wiringPlatformStore{values: map[string]json.RawMessage{}})
-	resolver := func(repo agentport.AgentRepo) agentResourceParamResolver {
-		return agentResourceParamResolver{agentRepo: func() agentport.AgentRepo { return repo }, svc: svc}
-	}
+	r := platformParamResolver{svc: svc}
 
-	t.Run("declared memory value wins", func(t *testing.T) {
-		r := resolver(&resolverAgentRepoStub{ok: true, cfg: &agentdomain.AgentConfig{
-			MemoryParameters: map[string]any{"memory.max_facts_per_extraction": 8},
-		}})
-		v, ok, err := r.Resolve(context.Background(), "t1", "a1", "memory.max_facts_per_extraction")
-		if err != nil {
-			t.Fatalf("resolve error: %v", err)
-		}
-		if !ok {
-			t.Fatal("declared value must resolve as present")
-		}
-		vv, isInt := v.(int64)
-		if !isInt || vv != 8 {
-			t.Fatalf("got v=%#v (%T), want int64(8)", v, v)
+	t.Run("platform declared value wins", func(t *testing.T) {
+		store := &wiringPlatformStore{values: map[string]json.RawMessage{
+			"memory.max_facts_per_extraction": json.RawMessage(`8`),
+		}}
+		r2 := platformParamResolver{svc: parametersapp.NewService(parametersdomain.NewParametersRegistry(), store)}
+		v, ok, err := r2.ResolvePlatform(context.Background(), "memory.max_facts_per_extraction")
+		if err != nil || !ok || v == nil {
+			t.Fatalf("got (%v, %v, %v), want platform value present", v, ok, err)
 		}
 	})
 
-	t.Run("absent declaration falls to definition default", func(t *testing.T) {
-		r := resolver(&resolverAgentRepoStub{ok: true, cfg: &agentdomain.AgentConfig{}})
-		v, ok, err := r.Resolve(context.Background(), "t1", "a1", "memory.max_facts_per_extraction")
-		if err != nil || !ok || v != int64(10) {
-			t.Fatalf("got (%v, %v, %v), want (10, true, nil)", v, ok, err)
+	t.Run("absent platform value falls to definition default", func(t *testing.T) {
+		v, ok, err := r.ResolvePlatform(context.Background(), "memory.max_facts_per_extraction")
+		if err != nil || !ok || v == nil {
+			t.Fatalf("got (%v, %v, %v), want definition default present", v, ok, err)
 		}
 	})
 
-	t.Run("agent not found reports absent", func(t *testing.T) {
-		r := resolver(&resolverAgentRepoStub{ok: false})
-		if _, ok, err := r.Resolve(context.Background(), "t1", "a1", "memory.max_facts_per_extraction"); ok || err != nil {
-			t.Fatalf("got (%v, %v), want (false, nil)", ok, err)
-		}
-	})
-
-	t.Run("repo error propagates", func(t *testing.T) {
-		r := resolver(&resolverAgentRepoStub{err: errors.New("db down")})
-		if _, _, err := r.Resolve(context.Background(), "t1", "a1", "memory.max_facts_per_extraction"); err == nil {
-			t.Fatal("repo error must propagate, not degrade silently")
-		}
-	})
-
-	t.Run("nil service or repo stays absent (build-order degrade)", func(t *testing.T) {
-		r := agentResourceParamResolver{agentRepo: func() agentport.AgentRepo { return nil }, svc: svc}
-		if _, ok, err := r.Resolve(context.Background(), "t1", "a1", "memory.max_facts_per_extraction"); ok || err != nil {
-			t.Fatalf("nil repo must be absent: (%v, %v)", ok, err)
-		}
-		if _, ok, err := (agentResourceParamResolver{agentRepo: func() agentport.AgentRepo { return &resolverAgentRepoStub{ok: true, cfg: &agentdomain.AgentConfig{}} }, svc: nil}).Resolve(context.Background(), "t1", "a1", "memory.max_facts_per_extraction"); ok || err != nil {
+	t.Run("nil service stays absent", func(t *testing.T) {
+		var nilResolver platformParamResolver
+		if _, ok, err := nilResolver.ResolvePlatform(context.Background(), "memory.max_facts_per_extraction"); ok || err != nil {
 			t.Fatalf("nil svc must be absent: (%v, %v)", ok, err)
 		}
 	})

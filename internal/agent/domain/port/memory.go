@@ -43,3 +43,23 @@ type AgentMemoryCleaner interface {
 // Wiring constructs this as a closure over memory.MemoryService so application stays free
 // of cross-context imports.
 type BufferMemoryFn func(ctx context.Context, tenantID, userID, agentID, conversationID, scope, role, content string) error
+
+// TrajectoryToolCallVO 是任务结束轨迹反思的最小工具调用摘要（agent 侧视图，
+// ArgsSummary 已完成截断/脱敏）。原始 tool steps 不进入记忆链路。
+type TrajectoryToolCallVO struct {
+	ToolName    string
+	ArgsSummary string
+	Status      string
+	ErrorMsg    string
+	DurationMS  int64
+}
+
+// EnqueueTrajectoryReflectionFn 任务结束时把压缩后的轨迹骨架异步入队反思。
+// 由 wiring 适配 memory 反思链路；失败按 fail-open 显式降级（与
+// BufferMemoryFn 同模式），不阻断已交付的响应。
+type EnqueueTrajectoryReflectionFn func(
+	ctx context.Context,
+	tenantID, userID, agentID, conversationID, scope, executionID, taskGoal, resultSummary, terminatedBy string,
+	calls []TrajectoryToolCallVO,
+	explicitMemory bool,
+) error

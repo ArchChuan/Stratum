@@ -246,7 +246,7 @@ func TestMemoryRepo_DeleteAllByUser_execFails(t *testing.T) {
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectExec("DELETE FROM memory_outbox WHERE user_id = \\$1").
 		WithArgs("u1").WillReturnResult(pgxmock.NewResult("DELETE", 1))
-	mock.ExpectExec("DELETE FROM memory_extraction_queue WHERE user_id = \\$1").
+	mock.ExpectExec("DELETE FROM memory_summaries WHERE user_id = \\$1").
 		WithArgs("u1").WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
