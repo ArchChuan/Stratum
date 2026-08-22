@@ -64,6 +64,9 @@ export const useCreateAgentPage = () => {
         } = values;
         await agentApi.create({
           ...rest,
+          // memoryScope 字段不在创建表单渲染，initialValues 不会随 antd 提交：
+          // 显式带默认 'user'，否则落库空串导致用户级记忆永不注入（agent-context E2E）。
+          memoryScope: values.memoryScope || 'user',
           mcpToolIds: values.mcpToolIds || [],
           knowledgeWorkspaceIds: values.knowledgeWorkspaceIds || [],
         });

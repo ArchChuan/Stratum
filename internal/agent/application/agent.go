@@ -95,7 +95,10 @@ type ExecutionConfig struct {
 	CaptureParameters bool
 	// SystemPromptVersion is the content fingerprint of the system prompt
 	// actually applied to this execution; 0 = unset leaves it empty.
-	SystemPromptVersion       string
+	SystemPromptVersion string
+	// GlobalSystemSuffix 是本次执行解析后的全局系统提示词（平台参数
+	// agent.system_prompt，执行时解析，未配置 fail-closed）。
+	GlobalSystemSuffix        string
 	ExtraTools                []port.ToolDefinition
 	SkillCatalog              map[string]port.SkillActivation
 	ToolExecutionFn           port.ToolExecutionFn
@@ -158,21 +161,26 @@ type Agent interface {
 // BaseAgent provides common functionality for all agent implementations
 type BaseAgent struct {
 	*AgentConfig
-	Logger             *zap.Logger
-	metrics            observability.MetricsProvider
-	Ledger             agentgraph.TokenRecorder
-	State              AgentState
-	Memory             []Message
-	mu                 sync.Mutex
-	CapGateway         port.CapabilityGateway
-	ChatStore          ChatStore
-	CheckpointStore    CheckpointStore
-	TaskStore          port.TaskRepo
-	MemoryInjector     port.MemoryInjector
-	HistoryCompactor   port.HistoryCompactor
-	CompactionStore    port.CompactionStore
-	RecallMemoryFn     port.RecallMemoryFn
+	Logger           *zap.Logger
+	metrics          observability.MetricsProvider
+	Ledger           agentgraph.TokenRecorder
+	State            AgentState
+	Memory           []Message
+	mu               sync.Mutex
+	CapGateway       port.CapabilityGateway
+	ChatStore        ChatStore
+	CheckpointStore  CheckpointStore
+	TaskStore        port.TaskRepo
+	MemoryInjector   port.MemoryInjector
+	HistoryCompactor port.HistoryCompactor
+	CompactionStore  port.CompactionStore
+	RecallMemoryFn   port.RecallMemoryFn
+	// GlobalSystemSuffix 是测试/无 resolver 直构路径的全局系统提示词回退；
+	// 生产链路经 PlatformPromptResolver 解析 agent.system_prompt（fail-closed）。
 	GlobalSystemSuffix string
+	// PlatformPromptResolver 解析平台级提示词参数（agent.system_prompt /
+	// agent.compaction_prompt），运行时热更新。
+	PlatformPromptResolver port.PlatformPromptResolver
 }
 
 // NewBaseAgent creates a new base agent
@@ -392,6 +400,10 @@ func (a *BaseAgent) snapshotExecutionConfig(cfg *ExecutionConfig) agentExecSnaps
 	if cfg.MaxContextTokens == 0 {
 		cfg.MaxContextTokens = a.MaxContextTokens
 	}
+	globalSuffix := cfg.GlobalSystemSuffix
+	if globalSuffix == "" {
+		globalSuffix = a.GlobalSystemSuffix
+	}
 	return agentExecSnapshot{
 		agentID:   a.ID,
 		agentName: a.Name,
@@ -400,7 +412,7 @@ func (a *BaseAgent) snapshotExecutionConfig(cfg *ExecutionConfig) agentExecSnaps
 		// globalSystemSuffix 豁免 head 配额完整注入（事实约束等治理指令
 		// 不得因预算紧张被静默丢弃）。
 		systemPrompt:       a.SystemPrompt,
-		globalSystemSuffix: a.GlobalSystemSuffix,
+		globalSystemSuffix: globalSuffix,
 		llmModel:           a.LLMModel,
 		capGW:              a.CapGateway,
 		historyCompactor:   a.HistoryCompactor,
@@ -423,6 +435,38 @@ func globalSystemSuffix(suffix string) string {
 	return "\n\n" + suffix
 }
 
+// resolveGlobalSystemSuffix 解析平台级全局系统提示词 agent.system_prompt。
+// 对所有 agent 一视同仁（含内置平台助手）：统一追加全局后缀。
+// 生产链路 resolver 恒注入：未配置/空 → fail-closed 错误，禁止静默无后缀执行。
+// resolver 为 nil 仅测试直构路径允许，回退 agent 字段（生产为空）。
+func (a *BaseAgent) resolveGlobalSystemSuffix(ctx context.Context) (string, error) {
+	if a.PlatformPromptResolver == nil {
+		return a.GlobalSystemSuffix, nil
+	}
+	v, ok, err := a.PlatformPromptResolver.ResolvePlatform(ctx, "agent.system_prompt")
+	if err != nil {
+		return "", fmt.Errorf("agent: resolve global system prompt: %w", err)
+	}
+	if !ok {
+		return "", fmt.Errorf("agent: agent.system_prompt not configured (fail-closed)")
+	}
+	suffix, ok := v.(string)
+	if !ok || strings.TrimSpace(suffix) == "" {
+		return "", fmt.Errorf("agent: agent.system_prompt not configured (fail-closed)")
+	}
+	return suffix, nil
+}
+
+// effectiveSystemPromptVersion returns the caller-provided version when set,
+// otherwise a content fingerprint of the applied system prompt (base prompt +
+// global suffix)。
+func effectiveSystemPromptVersion(version, systemPrompt, globalSuffix string) string {
+	if version != "" || systemPrompt == "" {
+		return version
+	}
+	return contentVersion(systemPrompt + globalSystemSuffix(globalSuffix))
+}
+
 // contentVersion returns a stable short fingerprint (first 16 hex chars of
 // the SHA-256 digest) of a text blob. Used as the prompt version key so
 // trace consumers can group executions by prompt without storing full
@@ -438,6 +482,14 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	cfg := &ExecutionConfig{}
 	cfg.ApplyOptions(options)
 
+	// 全局系统提示词执行时解析（平台参数 agent.system_prompt，未配置
+	// fail-closed，无环境变量/代码兜底）；所有 agent 统一追加。
+	suffix, err := a.resolveGlobalSystemSuffix(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cfg.GlobalSystemSuffix = suffix
+
 	// Snapshot mutable fields under lock, then release before the long LLM call.
 	snap := a.snapshotExecutionConfig(cfg)
 
@@ -446,9 +498,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	// global suffix). The production path does not go through the prompt
 	// registry, so the version is a content hash, not a registry revision.
 	// fingerprint 覆盖拼接后的完整 prompt：全局后缀是实际发送文本的一部分。
-	if cfg.SystemPromptVersion == "" && snap.systemPrompt != "" {
-		cfg.SystemPromptVersion = contentVersion(snap.systemPrompt + globalSystemSuffix(snap.globalSystemSuffix))
-	}
+	cfg.SystemPromptVersion = effectiveSystemPromptVersion(cfg.SystemPromptVersion, snap.systemPrompt, snap.globalSystemSuffix)
 
 	tracer := otel.Tracer("stratum/agent")
 	executionAttrs := agentExecutionAttributes(snap.agentID, snap.agentName, snap.agentType, *cfg, snap.maxContextTokens)

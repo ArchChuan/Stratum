@@ -344,5 +344,4 @@ const (
 	TunableMemoryExtractionPrompt = "memory_extraction_prompt"
 	TunableMemorySummaryPrompt    = "memory_summary_prompt"
 	TunableMemoryEnrichmentPrompt = "memory_enrichment_prompt"
-	TunableCompactionPrompt       = "compaction_prompt"
 )

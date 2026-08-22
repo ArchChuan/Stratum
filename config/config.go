@@ -42,27 +42,26 @@ type Config struct {
 	// MCPAllowPrivateTargets 允许 MCP 客户端连接 loopback/私网目标。仅
 	// e2e/本地验证环境设置（fixture 监听 127.0.0.1）；生产必须保持 false，
 	// 否则 SSRF 护栏（URLPolicyStrict）被整体削弱。
-	MCPAllowPrivateTargets  bool
-	GlobalAdminGitHubLogin  string
-	FrontendURL             string
-	GitHubCallbackURL       string
-	SecureCookies           bool
-	GlobalAgentSystemPrompt string
-	QwenBaseURL             string
-	ZhipuBaseURL            string
-	RerankBaseURL           string
-	RerankAPIKey            string
-	RerankModel             string
-	NacosURL                string
-	NacosNamespace          string
-	NacosUsername           string
-	NacosPassword           string
-	Opik                    OpikConfig
-	TracePayload            TracePayloadConfig
-	MemoryPipeline          MemoryPipelineConfig
-	AgentFactCheck          AgentFactCheckConfig
-	KnowledgeJudge          KnowledgeJudgeConfig
-	KnowledgeRerank         KnowledgeRerankConfig
+	MCPAllowPrivateTargets bool
+	GlobalAdminGitHubLogin string
+	FrontendURL            string
+	GitHubCallbackURL      string
+	SecureCookies          bool
+	QwenBaseURL            string
+	ZhipuBaseURL           string
+	RerankBaseURL          string
+	RerankAPIKey           string
+	RerankModel            string
+	NacosURL               string
+	NacosNamespace         string
+	NacosUsername          string
+	NacosPassword          string
+	Opik                   OpikConfig
+	TracePayload           TracePayloadConfig
+	MemoryPipeline         MemoryPipelineConfig
+	AgentFactCheck         AgentFactCheckConfig
+	KnowledgeJudge         KnowledgeJudgeConfig
+	KnowledgeRerank        KnowledgeRerankConfig
 	// 热更新运行时状态（Nacos listener 写、wiring 注册回调读）
 	memoryDynamic          atomic.Pointer[MemoryPipelineDynamic]
 	memoryDynamicListeners []func(MemoryPipelineDynamic)
@@ -155,39 +154,38 @@ func Load() (*Config, error) {
 		PasswordAuthEnabled: getEnv("PASSWORD_AUTH_ENABLED", "") == "true",
 		// 默认开启受限沙箱模式：前端登录页有访客试用入口，直接禁用会破坏试用流程；
 		// 沙箱隔离使 guest 只能访问自己的空租户，部署方可用 GUEST_AUTH_ENABLED=false 完全关闭。
-		GuestAuthEnabled:        getEnv("GUEST_AUTH_ENABLED", "true") == "true",
-		AdminUsername:           getEnv("STRATUM_ADMIN_USERNAME", ""),
-		AdminPassword:           getEnv("STRATUM_ADMIN_PASSWORD", ""),
-		AvatarDir:               getEnv("AVATAR_DIR", "/data/avatars"),
-		Port:                    getEnv("PORT", "8080"),
-		NatsURL:                 natsURL,
-		MilvusHost:              getEnv("MILVUS_HOST", "localhost"),
-		MilvusPort:              getEnv("MILVUS_PORT", "19530"),
-		OtelEndpoint:            getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"),
-		PostgresURL:             getEnv("POSTGRES_URL", "postgres://stratum:stratum@localhost:5432/stratum?sslmode=disable"),
-		RedisURL:                getEnv("REDIS_URL", "redis://localhost:6379"),
-		GitHubClientID:          getEnv("GITHUB_CLIENT_ID", ""),
-		GitHubClientSecret:      getEnv("GITHUB_CLIENT_SECRET", ""),
-		GitHubAuthorizeURL:      authorizeURL,
-		GitHubTokenURL:          tokenURL,
-		GitHubUserURL:           userURL,
-		JWTPrivateKeyPEM:        getEnv("JWT_PRIVATE_KEY_PEM", ""),
-		DataEncryptionKey:       getEnv("DATA_ENCRYPTION_KEY", ""),
-		MCPAllowPrivateTargets:  os.Getenv("MCP_ALLOW_PRIVATE_TARGETS") == "true",
-		GlobalAdminGitHubLogin:  getEnv("GLOBAL_ADMIN_GITHUB_LOGIN", "ArchChuan"),
-		FrontendURL:             getEnv("FRONTEND_URL", "http://localhost:3002"),
-		GitHubCallbackURL:       getEnv("GITHUB_CALLBACK_URL", "http://localhost:8080/auth/github/callback"),
-		SecureCookies:           getEnv("SECURE_COOKIES", "") == "true",
-		GlobalAgentSystemPrompt: getEnv("GLOBAL_AGENT_SYSTEM_PROMPT", ""),
-		QwenBaseURL:             getEnv("QWEN_BASE_URL", ""),
-		ZhipuBaseURL:            getEnv("ZHIPU_BASE_URL", ""),
-		RerankBaseURL:           getEnv("RERANK_BASE_URL", ""),
-		RerankAPIKey:            getEnv("RERANK_API_KEY", ""),
-		RerankModel:             getEnv("RERANK_MODEL", "rerank-v3.0"),
-		NacosURL:                getEnv("NACOS_URL", ""),
-		NacosNamespace:          getEnv("NACOS_NAMESPACE", ""),
-		NacosUsername:           getEnv("NACOS_USERNAME", ""),
-		NacosPassword:           getEnv("NACOS_PASSWORD", ""),
+		GuestAuthEnabled:       getEnv("GUEST_AUTH_ENABLED", "true") == "true",
+		AdminUsername:          getEnv("STRATUM_ADMIN_USERNAME", ""),
+		AdminPassword:          getEnv("STRATUM_ADMIN_PASSWORD", ""),
+		AvatarDir:              getEnv("AVATAR_DIR", "/data/avatars"),
+		Port:                   getEnv("PORT", "8080"),
+		NatsURL:                natsURL,
+		MilvusHost:             getEnv("MILVUS_HOST", "localhost"),
+		MilvusPort:             getEnv("MILVUS_PORT", "19530"),
+		OtelEndpoint:           getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"),
+		PostgresURL:            getEnv("POSTGRES_URL", "postgres://stratum:stratum@localhost:5432/stratum?sslmode=disable"),
+		RedisURL:               getEnv("REDIS_URL", "redis://localhost:6379"),
+		GitHubClientID:         getEnv("GITHUB_CLIENT_ID", ""),
+		GitHubClientSecret:     getEnv("GITHUB_CLIENT_SECRET", ""),
+		GitHubAuthorizeURL:     authorizeURL,
+		GitHubTokenURL:         tokenURL,
+		GitHubUserURL:          userURL,
+		JWTPrivateKeyPEM:       getEnv("JWT_PRIVATE_KEY_PEM", ""),
+		DataEncryptionKey:      getEnv("DATA_ENCRYPTION_KEY", ""),
+		MCPAllowPrivateTargets: os.Getenv("MCP_ALLOW_PRIVATE_TARGETS") == "true",
+		GlobalAdminGitHubLogin: getEnv("GLOBAL_ADMIN_GITHUB_LOGIN", "ArchChuan"),
+		FrontendURL:            getEnv("FRONTEND_URL", "http://localhost:3002"),
+		GitHubCallbackURL:      getEnv("GITHUB_CALLBACK_URL", "http://localhost:8080/auth/github/callback"),
+		SecureCookies:          getEnv("SECURE_COOKIES", "") == "true",
+		QwenBaseURL:            getEnv("QWEN_BASE_URL", ""),
+		ZhipuBaseURL:           getEnv("ZHIPU_BASE_URL", ""),
+		RerankBaseURL:          getEnv("RERANK_BASE_URL", ""),
+		RerankAPIKey:           getEnv("RERANK_API_KEY", ""),
+		RerankModel:            getEnv("RERANK_MODEL", "rerank-v3.0"),
+		NacosURL:               getEnv("NACOS_URL", ""),
+		NacosNamespace:         getEnv("NACOS_NAMESPACE", ""),
+		NacosUsername:          getEnv("NACOS_USERNAME", ""),
+		NacosPassword:          getEnv("NACOS_PASSWORD", ""),
 		Opik: OpikConfig{
 			URL:       getEnv("OPIK_URL", ""),
 			Project:   getEnv("OPIK_PROJECT", "stratum"),

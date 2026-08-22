@@ -291,7 +291,7 @@ var allowedParams = map[string]bool{
 var allowedPrompts = map[string]bool{
 	"instructions": true, "system_prompt": true,
 	"memory_extraction_prompt": true, "memory_summary_prompt": true,
-	"memory_enrichment_prompt": true, "compaction_prompt": true,
+	"memory_enrichment_prompt": true,
 }
 
 func isAllowedParameter(key string) bool { return allowedParams[key] }

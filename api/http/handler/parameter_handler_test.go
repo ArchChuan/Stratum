@@ -14,7 +14,6 @@ import (
 	paramapp "github.com/byteBuilderX/stratum/internal/parameters/application"
 	paramdomain "github.com/byteBuilderX/stratum/internal/parameters/domain"
 	"github.com/byteBuilderX/stratum/internal/parameters/domain/port"
-	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 // fakePlatformStore implements port.PlatformStore for handler tests; each
@@ -62,7 +61,6 @@ func (f *fakePlatformStore) GetAll(ctx context.Context) ([]port.PlatformValue, e
 func setupParameterRouter(h *ParameterHandler) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.GET("/admin/parameters/prompt-defaults", h.PromptDefaults)
 	r.GET("/admin/parameters", h.List)
 	r.PUT("/admin/parameters", h.Update)
 	return r
@@ -73,36 +71,6 @@ func newTestParameterHandler(store port.PlatformStore) *ParameterHandler {
 		paramapp.NewService(paramdomain.NewParametersRegistry(), store),
 		zap.NewNop(),
 	)
-}
-
-// TestPromptDefaults_returnsCompactionTemplate 断言 prompt-defaults 仅保留
-// agent.compaction_prompt：memory.*_prompt 已改为显式配置、未配置即失败
-// （fail-closed），不再下发任何内置模板。
-func TestPromptDefaults_returnsCompactionTemplate(t *testing.T) {
-	r := setupParameterRouter(newTestParameterHandler(&fakePlatformStore{}))
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodGet, "/admin/parameters/prompt-defaults", nil) //nolint:noctx
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp map[string]string
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatal(err)
-	}
-	for _, key := range []string{
-		"memory.extraction_prompt", "memory.enrich_prompt", "memory.summary_prompt",
-		"memory.history_summary_prompt", "memory.supersede_prompt",
-	} {
-		if _, ok := resp[key]; ok {
-			t.Fatalf("memory prompt key %s must not be in prompt-defaults after S2", key)
-		}
-	}
-	if got, ok := resp["agent.compaction_prompt"]; !ok || got != constants.CompactionDefaultPrompt {
-		t.Fatal("agent.compaction_prompt 与 constants.CompactionDefaultPrompt 不一致")
-	}
 }
 
 func TestListPlatformValues_returnsStoredAndNonZeroDefaults(t *testing.T) {

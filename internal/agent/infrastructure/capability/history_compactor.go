@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -65,47 +66,106 @@ func compactionSlice(remaining time.Duration, attemptsLeft int) time.Duration {
 // port.HistoryCompactor：把一段对话历史压缩成一条纯文本摘要。
 type LLMHistoryCompactor struct {
 	gw                  port.CapabilityGateway
-	model               string
-	prompt              string
-	temperature         float32
 	logger              *zap.Logger
+	promptResolver      port.PlatformPromptResolver
 	compactionMaxTokens int
 }
 
-// NewLLMHistoryCompactor 构造摘要器。gw 为统一路由门面，model 指定用于
-// 压缩的模型（可与主对话模型不同，通常选更廉价的），logger 用于观测。
+// NewLLMHistoryCompactor 构造摘要器。gw 为统一路由门面，logger 用于观测。
 // compactionMaxTokens 是压缩 LLM 调用的最大输出 token 数；传 0 则使用
-// 默认值 800。prompt 是压缩系统提示词，空值回退
-// constants.CompactionDefaultPrompt；temperature 是采样温度，0 回退
-// constants.CompactionDefaultTemperature（调用方已钳制 [0,1]）。
-func NewLLMHistoryCompactor(gw port.CapabilityGateway, model string, logger *zap.Logger, compactionMaxTokens int, prompt string, temperature float32) *LLMHistoryCompactor {
+// constants.CompactionMaxTokensCeiling。promptResolver 是平台级压缩配置的
+// 唯一来源：提示词/温度/模型（agent.compaction_prompt/_temperature/_model）
+// 在每次压缩时统一从这里解析，所有 agent（含内置助手）共用同一套配置，
+// 无 per-agent 副本。
+func NewLLMHistoryCompactor(gw port.CapabilityGateway, logger *zap.Logger, compactionMaxTokens int, promptResolver port.PlatformPromptResolver) *LLMHistoryCompactor {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	if compactionMaxTokens <= 0 {
-		compactionMaxTokens = 800
+		compactionMaxTokens = constants.CompactionMaxTokensCeiling
 	}
-	if prompt == "" {
-		prompt = constants.CompactionDefaultPrompt
+	return &LLMHistoryCompactor{
+		gw:                  gw,
+		logger:              logger,
+		promptResolver:      promptResolver,
+		compactionMaxTokens: compactionMaxTokens,
 	}
-	if temperature == 0 {
-		temperature = constants.CompactionDefaultTemperature
+}
+
+// resolvePrompt 解析平台级压缩提示词。未配置/空 → fail-closed 错误，禁止
+// 空 system prompt 静默调用 LLM（对齐 memory.*_prompt 模式）。
+func (c *LLMHistoryCompactor) resolvePrompt(ctx context.Context) (string, error) {
+	if c.promptResolver == nil {
+		return "", fmt.Errorf("history compactor: agent.compaction_prompt not configured (fail-closed)")
 	}
-	// 0=unset 已回退默认;其余值钳制 [0,1]——Qwen/Zhipu 拒收 >1(网关 500),
-	// <0 无意义。
+	v, ok, err := c.promptResolver.ResolvePlatform(ctx, "agent.compaction_prompt")
+	if err != nil {
+		return "", fmt.Errorf("history compactor: resolve compaction prompt: %w", err)
+	}
+	if !ok {
+		return "", fmt.Errorf("history compactor: agent.compaction_prompt not configured (fail-closed)")
+	}
+	prompt, ok := v.(string)
+	if !ok || strings.TrimSpace(prompt) == "" {
+		return "", fmt.Errorf("history compactor: agent.compaction_prompt not configured (fail-closed)")
+	}
+	return prompt, nil
+}
+
+// resolveTemperature 解析平台级压缩温度 agent.compaction_temperature。
+// 未配置/0 → constants.CompactionDefaultTemperature；随后钳制 [0,1]
+// （Qwen/Zhipu 拒收 >1 → 网关 500）。
+func (c *LLMHistoryCompactor) resolveTemperature(ctx context.Context) (float32, error) {
+	temperature := float32(constants.CompactionDefaultTemperature)
+	if c.promptResolver != nil {
+		v, ok, err := c.promptResolver.ResolvePlatform(ctx, "agent.compaction_temperature")
+		if err != nil {
+			return 0, fmt.Errorf("history compactor: resolve compaction temperature: %w", err)
+		}
+		if f, convOK := toFloat32(v); ok && convOK && f != 0 {
+			temperature = f
+		}
+	}
 	if temperature < constants.CompactionTemperatureMin {
 		temperature = constants.CompactionTemperatureMin
 	}
 	if temperature > constants.CompactionTemperatureMax {
 		temperature = constants.CompactionTemperatureMax
 	}
-	return &LLMHistoryCompactor{
-		gw:                  gw,
-		model:               model,
-		prompt:              prompt,
-		temperature:         temperature,
-		logger:              logger,
-		compactionMaxTokens: compactionMaxTokens,
+	return temperature, nil
+}
+
+// resolveModel 解析平台级压缩模型 agent.compaction_model。未配置/空 →
+// 空串交由网关默认模型解析（对齐 memory.*_model 的“空 = client 默认”）。
+func (c *LLMHistoryCompactor) resolveModel(ctx context.Context) (string, error) {
+	if c.promptResolver == nil {
+		return "", nil
+	}
+	v, ok, err := c.promptResolver.ResolvePlatform(ctx, "agent.compaction_model")
+	if err != nil {
+		return "", fmt.Errorf("history compactor: resolve compaction model: %w", err)
+	}
+	if !ok {
+		return "", nil
+	}
+	model, _ := v.(string)
+	return strings.TrimSpace(model), nil
+}
+
+// toFloat32 converts a ResolvePlatform numeric value (JSON numbers arrive as
+// float64) to float32; non-numeric values return ok=false.
+func toFloat32(v any) (float32, bool) {
+	switch n := v.(type) {
+	case float64:
+		return float32(n), true
+	case float32:
+		return n, true
+	case int:
+		return float32(n), true
+	case int64:
+		return float32(n), true
+	default:
+		return 0, false
 	}
 }
 
@@ -118,17 +178,21 @@ func (c *LLMHistoryCompactor) CompactHistory(ctx context.Context, messages []por
 		return "", nil
 	}
 
+	settings, err := c.resolveSettings(ctx)
+	if err != nil {
+		return "", err
+	}
 	convo := renderConversation(messages)
 
 	req := port.CapabilityRequest{
 		Type: port.CapLLM,
 		LLM: &port.LLMCapRequest{
-			Model: c.model,
+			Model: settings.model,
 			Messages: []port.LLMMessage{
-				{Role: "system", Content: c.prompt},
+				{Role: "system", Content: settings.prompt},
 				{Role: "user", Content: convo},
 			},
-			Temperature:    c.temperature,
+			Temperature:    settings.temperature,
 			MaxTokens:      c.compactionMaxTokens,
 			NoPrimaryRetry: DefaultCompactionBudgetPolicy.NoPrimaryRetry,
 			MaxCandidates:  DefaultCompactionBudgetPolicy.MaxCandidates,
@@ -162,12 +226,37 @@ func (c *LLMHistoryCompactor) CompactHistory(ctx context.Context, messages []por
 		// 其余视为瞬态失败，进入下一时间片尝试候选。
 	}
 	c.logger.Warn("history_compactor: gateway route failed",
-		zap.String("model", c.model),
+		zap.String("model", settings.model),
 		zap.Int("messages", len(messages)),
 		zap.Int("attempts", attempts),
 		zap.Error(lastErr),
 	)
 	return "", lastErr
+}
+
+// compactionSettings 是单次压缩的平台级三值（提示词/温度/模型）。
+type compactionSettings struct {
+	prompt      string
+	temperature float32
+	model       string
+}
+
+// resolveSettings 一次性解析压缩三值：prompt 未配置 fail-closed，temperature
+// 0 = 默认常量，model 空 = 网关默认。
+func (c *LLMHistoryCompactor) resolveSettings(ctx context.Context) (compactionSettings, error) {
+	prompt, err := c.resolvePrompt(ctx)
+	if err != nil {
+		return compactionSettings{}, err
+	}
+	temperature, err := c.resolveTemperature(ctx)
+	if err != nil {
+		return compactionSettings{}, err
+	}
+	model, err := c.resolveModel(ctx)
+	if err != nil {
+		return compactionSettings{}, err
+	}
+	return compactionSettings{prompt: prompt, temperature: temperature, model: model}, nil
 }
 
 // finishSuccess 归一化成功响应并记录摘要观测日志。

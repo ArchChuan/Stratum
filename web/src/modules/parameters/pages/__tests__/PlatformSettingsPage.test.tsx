@@ -6,7 +6,7 @@ import type { ParameterDefinition } from '../../model/parameters';
 import { PlatformSettingsPage } from '../PlatformSettingsPage';
 
 vi.mock('../../api/parameters.api', () => ({
-  parametersApi: { schema: vi.fn(), list: vi.fn(), update: vi.fn(), promptDefaults: vi.fn() },
+  parametersApi: { schema: vi.fn(), list: vi.fn(), update: vi.fn() },
 }));
 
 vi.mock('@/modules/llm', () => ({
