@@ -18,8 +18,6 @@ export const agentSchema = z
     temperature: z.number().optional(),
     max_tokens: z.number().optional(),
     compaction_recent_groups: z.number().optional(),
-    compaction_temperature: z.number().optional(),
-    compaction_model: z.string().optional(),
     reasoning_effort: z.string().optional(),
     allowedSkills: z.array(z.string()).nullish().transform((v) => v ?? []),
     mcpToolIds: z.array(z.string()).nullish().transform((v) => v ?? []),
@@ -43,8 +41,6 @@ export interface Agent {
   temperature?: number;
   max_tokens?: number;
   compaction_recent_groups?: number;
-  compaction_temperature?: number;
-  compaction_model?: string;
   reasoning_effort?: string;
   allowedSkills: string[];
   mcpToolIds: string[];
@@ -68,11 +64,6 @@ export interface AgentFormValues {
   temperature?: number;
   max_tokens?: number;
   compaction_recent_groups?: number;
-  // 上下文压缩设置(顶层 DTO 字段,直接进 payload;字段名必须 snake_case 匹配后端
-  // json tag。空/0 = const 兜底:temp→0.3、model→跟随主 LLMModel;
-  // prompt 已迁平台参数,不在 agent 表单)
-  compaction_temperature?: number;
-  compaction_model?: string;
   reasoning_effort?: string;
   allowedSkills?: string[];
   mcpToolIds?: string[];

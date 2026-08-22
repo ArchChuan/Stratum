@@ -15,21 +15,37 @@ type deadlineRecordingGateway struct {
 	deadline time.Time
 }
 
-// stubPromptResolver 提供固定压缩提示词，供 compactor 测试注入。
+// stubPromptResolver 提供平台级压缩配置（提示词/温度/模型），供 compactor
+// 测试注入；未设置的键按 ResolvePlatform 的未配置语义返回 present=false。
 type stubPromptResolver struct {
-	value string
+	prompt      string
+	temperature float64
+	model       string
 }
 
-func (s stubPromptResolver) ResolvePlatform(_ context.Context, _ string) (any, bool, error) {
-	if s.value == "" {
-		return nil, false, nil
+func (s stubPromptResolver) ResolvePlatform(_ context.Context, key string) (any, bool, error) {
+	switch key {
+	case "agent.compaction_temperature":
+		if s.temperature == 0 {
+			return nil, false, nil
+		}
+		return s.temperature, true, nil
+	case "agent.compaction_model":
+		if s.model == "" {
+			return nil, false, nil
+		}
+		return s.model, true, nil
+	default:
+		if s.prompt == "" {
+			return nil, false, nil
+		}
+		return s.prompt, true, nil
 	}
-	return s.value, true, nil
 }
 
 const testCompactionPrompt = "你是对话历史压缩器。"
 
-var testPromptResolver = stubPromptResolver{value: testCompactionPrompt}
+var testPromptResolver = stubPromptResolver{prompt: testCompactionPrompt, temperature: 0.3, model: "qwen-turbo"}
 
 func (g *deadlineRecordingGateway) Route(ctx context.Context, _ port.CapabilityRequest) (port.CapabilityResponse, error) {
 	g.deadline, _ = ctx.Deadline()
@@ -38,7 +54,7 @@ func (g *deadlineRecordingGateway) Route(ctx context.Context, _ port.CapabilityR
 
 func TestLLMHistoryCompactor_UsesIndependentShortDeadline(t *testing.T) {
 	gw := &deadlineRecordingGateway{}
-	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, testPromptResolver, 0)
+	compactor := NewLLMHistoryCompactor(gw, nil, 0, testPromptResolver)
 	parent, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -83,7 +99,7 @@ func (g *scriptedCompactorGateway) Route(
 // 请求携带 NoPrimaryRetry=true、MaxCandidates=2。
 func TestCompactHistory_BudgetSlices(t *testing.T) {
 	gw := &scriptedCompactorGateway{results: []error{errors.New("route: 503 unavailable")}}
-	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, testPromptResolver, 0)
+	compactor := NewLLMHistoryCompactor(gw, nil, 0, testPromptResolver)
 
 	_, err := compactor.CompactHistory(context.Background(), []port.LLMMessage{{Role: "user", Content: "history"}})
 	require.NoError(t, err)
@@ -109,7 +125,7 @@ func TestCompactHistory_BudgetExhaustedFailsFast(t *testing.T) {
 		errors.New("cand-a: 500 internal"),
 		errors.New("cand-b: 502 bad gateway"),
 	}}
-	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, testPromptResolver, 0)
+	compactor := NewLLMHistoryCompactor(gw, nil, 0, testPromptResolver)
 
 	start := time.Now()
 	_, err := compactor.CompactHistory(context.Background(), []port.LLMMessage{{Role: "user", Content: "history"}})
@@ -148,7 +164,7 @@ func TestCompactHistory_PermanentOrContextLengthStopsChain(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			gw := &scriptedCompactorGateway{results: []error{tc.err}}
-			compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, testPromptResolver, 0)
+			compactor := NewLLMHistoryCompactor(gw, nil, 0, testPromptResolver)
 
 			_, err := compactor.CompactHistory(context.Background(), []port.LLMMessage{{Role: "user", Content: "history"}})
 			require.ErrorIs(t, err, tc.err)
@@ -178,23 +194,45 @@ func TestCompactionSlice(t *testing.T) {
 	}
 }
 
-// TestCompactHistory_ResolvesPlatformPrompt 验证压缩提示词走平台参数：
-// 配置后注入请求；未配置/无 resolver → fail-closed 错误，禁止空 prompt 调 LLM。
-func TestCompactHistory_ResolvesPlatformPrompt(t *testing.T) {
+// TestCompactHistory_ResolvesPlatformConfig 验证压缩三值（提示词/温度/模型）
+// 全部来自平台参数（唯一来源）：配置后注入请求；温度未配置 → 常量默认、
+// 模型未配置 → 网关默认（空串）；提示词未配置/无 resolver → fail-closed，
+// 禁止空 prompt 调 LLM。
+func TestCompactHistory_ResolvesPlatformConfig(t *testing.T) {
 	gw := &scriptedCompactorGateway{}
 	msgs := []port.LLMMessage{{Role: "user", Content: "history"}}
 
-	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, testPromptResolver, 0)
+	compactor := NewLLMHistoryCompactor(gw, nil, 0, testPromptResolver)
 	if _, err := compactor.CompactHistory(context.Background(), msgs); err != nil {
-		t.Fatalf("configured prompt: %v", err)
+		t.Fatalf("configured platform config: %v", err)
 	}
 	if got := gw.calls[0].req.LLM.Messages[0].Content; got != testCompactionPrompt {
 		t.Fatalf("compaction prompt = %q, want %q", got, testCompactionPrompt)
 	}
+	if got := gw.calls[0].req.LLM.Temperature; got != 0.3 {
+		t.Fatalf("compaction temperature = %v, want platform 0.3", got)
+	}
+	if got := gw.calls[0].req.LLM.Model; got != "qwen-turbo" {
+		t.Fatalf("compaction model = %q, want platform qwen-turbo", got)
+	}
+
+	// 温度/模型未配置 → 常量默认/网关默认（空串），仍为同一平台来源语义。
+	gwDefault := &scriptedCompactorGateway{}
+	defaultResolver := stubPromptResolver{prompt: testCompactionPrompt}
+	if _, err := NewLLMHistoryCompactor(gwDefault, nil, 0, defaultResolver).
+		CompactHistory(context.Background(), msgs); err != nil {
+		t.Fatalf("defaults: %v", err)
+	}
+	if got := gwDefault.calls[0].req.LLM.Temperature; got != float32(constants.CompactionDefaultTemperature) {
+		t.Fatalf("unset platform temperature = %v, want constant default %v", got, constants.CompactionDefaultTemperature)
+	}
+	if got := gwDefault.calls[0].req.LLM.Model; got != "" {
+		t.Fatalf("unset platform model = %q, want gateway default (empty)", got)
+	}
 
 	// 无 resolver → fail-closed。
 	gw2 := &scriptedCompactorGateway{}
-	unwired := NewLLMHistoryCompactor(gw2, "qwen", nil, 0, nil, 0)
+	unwired := NewLLMHistoryCompactor(gw2, nil, 0, nil)
 	if _, err := unwired.CompactHistory(context.Background(), msgs); err == nil {
 		t.Fatal("nil resolver must fail closed")
 	}
@@ -204,7 +242,7 @@ func TestCompactHistory_ResolvesPlatformPrompt(t *testing.T) {
 
 	// 平台参数未配置（present=false）→ fail-closed。
 	gw3 := &scriptedCompactorGateway{}
-	unset := NewLLMHistoryCompactor(gw3, "qwen", nil, 0, stubPromptResolver{}, 0)
+	unset := NewLLMHistoryCompactor(gw3, nil, 0, stubPromptResolver{})
 	if _, err := unset.CompactHistory(context.Background(), msgs); err == nil {
 		t.Fatal("unset platform prompt must fail closed")
 	}

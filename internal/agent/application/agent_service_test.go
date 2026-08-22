@@ -13,9 +13,6 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
-	parametersapp "github.com/byteBuilderX/stratum/internal/parameters/application"
-	parametersdomain "github.com/byteBuilderX/stratum/internal/parameters/domain"
-	parametersport "github.com/byteBuilderX/stratum/internal/parameters/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -411,48 +408,6 @@ func (rejectingParametersProvider) ValidateResourceKey(_ context.Context, _ stri
 
 var _ port.ParametersProvider = validatingParametersProvider{}
 var _ port.ParametersProvider = rejectingParametersProvider{}
-
-// realRegistryProvider validates declared sampling values against the real
-// parameter registry (bare keys mapped via EvaluationKeys → agent.*/memory.*
-// definitions), mirroring the production wiring ACL. This lets write-time
-// tests assert the actual compaction_temperature [0,1] bound rather than
-// blanket rejection.
-type realRegistryProvider struct {
-	svc *parametersapp.Service
-}
-
-func (p realRegistryProvider) ResolveForResource(context.Context, map[string]any) (map[string]any, error) {
-	return nil, nil
-}
-func (p realRegistryProvider) Resolve(context.Context, string, map[string]any) (any, bool, error) {
-	return nil, false, nil
-}
-func (p realRegistryProvider) ValidateResource(_ context.Context, declared map[string]any) error {
-	return p.svc.ValidateResourceValues(declared)
-}
-func (p realRegistryProvider) ValidateResourceKey(_ context.Context, key string, value any) error {
-	def, ok := p.svc.Registry().Get(key)
-	if !ok {
-		return fmt.Errorf("unknown parameter %s", key)
-	}
-	return def.Validate(value)
-}
-
-var _ port.ParametersProvider = realRegistryProvider{}
-
-// noopPlatformStore satisfies the parameters PlatformStore without persisting
-// (ValidateResource/ValidateResourceKey never touch it in service tests).
-type noopPlatformStore struct{}
-
-func (noopPlatformStore) GetValue(context.Context, string) (json.RawMessage, bool, error) {
-	return nil, false, nil
-}
-func (noopPlatformStore) SetValue(context.Context, string, json.RawMessage, string) error {
-	return nil
-}
-func (noopPlatformStore) GetAll(context.Context) ([]parametersport.PlatformValue, error) {
-	return nil, nil
-}
 
 // ---------- tests ----------
 
@@ -1090,97 +1045,6 @@ func TestAgentServiceUpdateMaxIterationsValidation(t *testing.T) {
 			repo.AssertExpectations(t)
 		})
 	}
-}
-
-// TestAgentServiceCreateCompactionRoundtrip 验证压缩温度/模型 bare key 往返:
-// Parameters 中的 compaction_temperature/_model 覆盖顶层显式字段(map wins),
-// 落 cfg,再由 cfgToDTO + samplingParameterMap 回读一致。compaction_prompt
-// 已迁平台参数,不在 agent 配置。pack/unpack 落库侧由 agent_repo 的
-// SamplingParametersRoundTrip 独立覆盖。
-func TestAgentServiceCreateCompactionRoundtrip(t *testing.T) {
-	svc, repo := newTestService(t)
-	var got *domain.AgentConfig
-	repo.On("Register", mock.Anything, mock.Anything).
-		Run(func(args mock.Arguments) { got = args.Get(1).(*domain.AgentConfig) }).
-		Return(nil)
-
-	dto, err := svc.Create(context.Background(), application.CreateAgentInput{
-		TenantID: "tenant-1", ActorID: "user-1", Name: "new",
-		Type: string(domain.ReActAgent), LLMModel: "qwen-plus",
-		Parameters: map[string]any{
-			"compaction_temperature": 0.4,
-			"compaction_model":       "qwen-turbo",
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, got, "Register must capture the config")
-	assert.Equal(t, float32(0.4), got.CompactionTemperature)
-	assert.Equal(t, "qwen-turbo", got.CompactionModel)
-	// DTO 回读:cfgToDTO 顶层字段 + samplingParameterMap bare keys 双通道一致。
-	assert.Equal(t, float32(0.4), dto.CompactionTemperature)
-	assert.Equal(t, "qwen-turbo", dto.CompactionModel)
-	assert.Equal(t, float32(0.4), dto.Parameters["compaction_temperature"])
-	assert.Equal(t, "qwen-turbo", dto.Parameters["compaction_model"])
-	repo.AssertExpectations(t)
-}
-
-// TestAgentServiceRejectsOutOfBoundsCompactionTemperature 验证 Create + Update
-// 双路径写时越界温度被拒:bare compaction_temperature 超出 [0,1] 触发真实 registry
-// 校验 → ErrInvalidSamplingParameters 且不落库;0.5 合法放行(证明非 blanket
-// 拒绝,是真实边界)。
-func TestAgentServiceRejectsOutOfBoundsCompactionTemperature(t *testing.T) {
-	provider := realRegistryProvider{svc: parametersapp.NewService(parametersdomain.NewParametersRegistry(), noopPlatformStore{})}
-	cases := []struct {
-		name       string
-		outOfRange float64
-	}{
-		{name: "above 1", outOfRange: 1.5},
-		{name: "below 0", outOfRange: -0.1},
-	}
-
-	t.Run("create rejects out-of-range", func(t *testing.T) {
-		for _, tc := range cases {
-			t.Run(tc.name, func(t *testing.T) {
-				svc, repo := newTestServiceWithProvider(t, provider)
-				_, err := svc.Create(context.Background(), application.CreateAgentInput{
-					TenantID: "tenant-1", ActorID: "user-1", Name: "new",
-					Type: string(domain.ReActAgent), LLMModel: "qwen-plus",
-					Parameters: map[string]any{"compaction_temperature": tc.outOfRange},
-				})
-				require.ErrorIs(t, err, domain.ErrInvalidSamplingParameters)
-				repo.AssertNotCalled(t, "Register", mock.Anything, mock.Anything)
-			})
-		}
-	})
-
-	t.Run("update rejects out-of-range", func(t *testing.T) {
-		for _, tc := range cases {
-			t.Run(tc.name, func(t *testing.T) {
-				svc, repo := newTestServiceWithProvider(t, provider)
-				cfg := &domain.AgentConfig{ID: "agent-1", Name: "old", Type: domain.ReActAgent, CreatedBy: "user-1"}
-				repo.On("Get", mock.Anything, "agent-1").Return(cfg, true, nil).Once()
-				_, err := svc.Update(context.Background(), "agent-1", application.UpdateAgentInput{
-					ActorID:    "user-1",
-					Parameters: map[string]any{"compaction_temperature": tc.outOfRange},
-				})
-				require.ErrorIs(t, err, domain.ErrInvalidSamplingParameters)
-				repo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
-			})
-		}
-	})
-
-	t.Run("in-range compaction temperature passes write validation", func(t *testing.T) {
-		svc, repo := newTestServiceWithProvider(t, provider)
-		repo.On("Register", mock.Anything, mock.Anything).Return(nil)
-		dto, err := svc.Create(context.Background(), application.CreateAgentInput{
-			TenantID: "tenant-1", ActorID: "user-1", Name: "new",
-			Type: string(domain.ReActAgent), LLMModel: "qwen-plus",
-			Parameters: map[string]any{"compaction_temperature": 0.5},
-		})
-		require.NoError(t, err)
-		assert.Equal(t, float32(0.5), dto.CompactionTemperature)
-		repo.AssertExpectations(t)
-	})
 }
 
 // updateSystemAssistant maxIterations 通道测试：只校验显式非零 in.MaxIterations

@@ -21,8 +21,6 @@ type CreateAgentRequest struct {
 	ReasoningEffort        string   `json:"reasoning_effort"`
 	MaxTokens              int      `json:"max_tokens"`
 	CompactionRecentGroups int      `json:"compaction_recent_groups"`
-	CompactionTemperature  float32  `json:"compaction_temperature"`
-	CompactionModel        string   `json:"compaction_model"`
 	AllowedSkills          []string `json:"allowedSkills"`
 	MCPToolIDs             []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs  []string `json:"knowledgeWorkspaceIds"`
@@ -47,15 +45,13 @@ type UpdateAgentRequest struct {
 	ReasoningEffort        string   `json:"reasoning_effort"`
 	MaxTokens              int      `json:"max_tokens"`
 	CompactionRecentGroups int      `json:"compaction_recent_groups"`
-	CompactionTemperature  float32  `json:"compaction_temperature"`
-	CompactionModel        string   `json:"compaction_model"`
 	AllowedSkills          []string `json:"allowedSkills"`
 	MCPToolIDs             []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs  []string `json:"knowledgeWorkspaceIds"`
 	MemoryScope            string   `json:"memoryScope"`
 	// Parameters carries the registry sampling parameters as a flat object
-	// (temperature/max_tokens/compaction_recent_groups/reasoning_effort/
-	// compaction_temperature/compaction_model；compaction_prompt 已迁平台参数)。
+	// (temperature/max_tokens/compaction_recent_groups/reasoning_effort)。
+	// 压缩三值（提示词/温度/模型）为平台级参数，不在 agent 上暴露/保存。
 	// Merge semantics: only keys present in this map are written; a 0 value is
 	// unset and never overwrites a persisted value.
 	Parameters map[string]any `json:"parameters"`
@@ -74,8 +70,6 @@ type AgentResponse struct {
 	ReasoningEffort        string   `json:"reasoning_effort"`
 	MaxTokens              int      `json:"max_tokens"`
 	CompactionRecentGroups int      `json:"compaction_recent_groups"`
-	CompactionTemperature  float32  `json:"compaction_temperature"`
-	CompactionModel        string   `json:"compaction_model"`
 	AllowedSkills          []string `json:"allowedSkills"`
 	MCPToolIDs             []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs  []string `json:"knowledgeWorkspaceIds"`
@@ -128,8 +122,6 @@ func dtoToResponse(d agent.AgentDTO) AgentResponse {
 		ReasoningEffort:        d.ReasoningEffort,
 		MaxTokens:              d.MaxTokens,
 		CompactionRecentGroups: d.CompactionRecentGroups,
-		CompactionTemperature:  d.CompactionTemperature,
-		CompactionModel:        d.CompactionModel,
 		AllowedSkills:          d.AllowedSkills,
 		MCPToolIDs:             d.MCPToolIDs,
 		KnowledgeWorkspaceIDs:  d.KnowledgeWorkspaceIDs,

@@ -230,26 +230,6 @@ func (r *ParametersRegistry) registerAgentParams() {
 			VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(120), Step: f(5), Unit: "s"},
 			Optimizable: false,
 		},
-		// 压缩 temperature/model 两值:运行时从 AgentConfig 顶层字段直读
-		// (resolveEffectiveParameters 晚于 compactor 构造),此处仅登记 schema/
-		// 搜索空间。两 key 均不设 EvaluationKeys —— compaction_temperature 的
-		// bare-key 写时越界校验经 ValidateResourceValues 的 registry-key 短名
-		// 匹配(短名匹配不进入 byEvalKey,避免污染 candidate/critique whitelist
-		// lockstep)。压缩提示词已迁移为平台级参数(registerAgentPlatformParams)。
-		{
-			Key: "agent.compaction_temperature", Scope: ScopeResource, Category: "agent",
-			DisplayName: "压缩温度", Description: "上下文压缩采样温度,范围 0~1,0 表示默认常量",
-			ValueType: TypeFloat, Default: 0.0,
-			VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(1), Step: f(0.1)},
-			Optimizable: false,
-		},
-		{
-			Key: "agent.compaction_model", Scope: ScopeResource, Category: "agent",
-			DisplayName: "压缩模型", Description: "上下文压缩使用的独立模型,空表示跟随主模型",
-			ValueType: TypeString, Default: "",
-			VisualHint:  VisualHint{Control: ControlSelect},
-			Optimizable: false,
-		},
 		{
 			Key: "agent.max_tokens_per_execution", Scope: ScopeResource, Category: "agent",
 			DisplayName: "单次执行 Token 预算", Description: "本次执行累计 LLM token 上限,0 表示不设限",
@@ -270,16 +250,33 @@ func (r *ParametersRegistry) registerAgentParams() {
 	}
 }
 
-// registerAgentPlatformParams covers platform-scope agent prompts. Both keys
-// carry no built-in default: unset → fail-closed（执行/压缩失败并告警），对齐
-// memory.*_prompt 的显式配置模式。
+// registerAgentPlatformParams covers platform-scope agent compaction config.
+// 压缩三值（提示词/温度/模型）是唯一平台来源：所有 agent（含内置助手）主链路
+// 统一从这里读取，agent 资源不再保存/暴露 per-agent 副本——一套存储模型、
+// 一套共用配置。prompt 未配置即压缩失败（fail-closed，对齐 memory.*_prompt）；
+// temperature 0 = 默认常量；model 空 = 网关默认模型。
 func (r *ParametersRegistry) registerAgentPlatformParams() {
+	f := func(v float64) *float64 { return &v }
 	for _, def := range []ParameterDefinition{
 		{
 			Key: "agent.compaction_prompt", Scope: ScopePlatform, Category: "agent",
 			DisplayName: "压缩提示词", Description: "上下文压缩的完整系统提示词(必填),未配置即压缩失败",
 			ValueType: TypeString, Default: "",
 			VisualHint:  VisualHint{Control: ControlTextarea},
+			Optimizable: false,
+		},
+		{
+			Key: "agent.compaction_temperature", Scope: ScopePlatform, Category: "agent",
+			DisplayName: "压缩温度", Description: "上下文压缩采样温度,范围 0~1,0 表示默认常量",
+			ValueType: TypeFloat, Default: 0.0,
+			VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(1), Step: f(0.1)},
+			Optimizable: false,
+		},
+		{
+			Key: "agent.compaction_model", Scope: ScopePlatform, Category: "agent",
+			DisplayName: "压缩模型", Description: "上下文压缩使用的独立模型(模型管理目录选择),空表示网关默认",
+			ValueType: TypeString, Default: "",
+			VisualHint:  VisualHint{Control: ControlModel},
 			Optimizable: false,
 		},
 		{

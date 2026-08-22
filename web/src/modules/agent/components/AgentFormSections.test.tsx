@@ -397,17 +397,15 @@ describe('AgentFormSections', () => {
       </Form>,
     );
     expect(screen.getByText('默认：0.7')).toBeInTheDocument();
-    expect(screen.getByText('默认：0.3')).toBeInTheDocument();
   });
 
   it('hides default hints once explicit values are set', () => {
     render(
-      <Form initialValues={{ temperature: 0.5, compaction_temperature: 0.2 }}>
+      <Form initialValues={{ temperature: 0.5 }}>
         <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
       </Form>,
     );
     expect(screen.queryByText('默认：0.7')).not.toBeInTheDocument();
-    expect(screen.queryByText('默认：0.3')).not.toBeInTheDocument();
   });
 
   it('offers 0（自动推导）for compaction_recent_groups without a disable path', () => {
