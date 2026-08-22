@@ -19,6 +19,9 @@ var (
 	ErrChunkSizeImmutable        = errors.New("chunk_size is immutable after creation")
 	ErrChunkOverlapImmutable     = errors.New("chunk_overlap is immutable after creation")
 	ErrChunkingStrategyImmutable = errors.New("chunking_strategy is immutable after creation")
+	ErrRerankModelRequired       = errors.New("rerank model is required")
+	ErrInvalidRerankModel        = errors.New("unsupported rerank model")
+	ErrInvalidJudgeModel         = errors.New("unsupported judge model")
 )
 
 const (
@@ -95,6 +98,11 @@ type WorkspaceConfig struct {
 	Reranking      string
 	ScoreThreshold float32
 	RerankTopK     int
+	// RerankModel 是 builtin-score-v1 的 LLM 语义重排模型（workspace 显式配置）；
+	// 空 = builtin 未装配（保存被拒，见 Validate）。JudgeModel 是证据充分性 judge
+	// 模型；空 = judge 门关闭（fail-closed 放行）。
+	RerankModel string
+	JudgeModel  string
 }
 
 // ScoreThresholdResetSentinel 是 MergeUpdate 对「显式 0」的编码：partial 合并
@@ -103,6 +111,18 @@ type WorkspaceConfig struct {
 // 等 partial 调用方保持零值=未传语义，互不干扰。哨兵仅存在于内存转换瞬间，
 // 绝不落库。
 const ScoreThresholdResetSentinel float32 = -1
+
+// RerankingResetSentinel / RerankModelResetSentinel / JudgeModelResetSentinel 是
+// MergeUpdate 对字符串字段「显式清空」的编码：partial 合并以零值表示"未提供"，
+// 但 reranking/rerank_model/judge_model 的 "" 是合法关闭值。handler PATCH（整体
+// 替换契约）把用户显式传的 "" 转成这些 NUL 前缀哨兵，domain 侧转回 ""；proposal
+// 等 partial 调用方保持零值=未传语义，互不干扰。哨兵仅存在于内存转换瞬间，绝不
+// 落库（NUL 字节也保证不会与任何真实 JSONB 值碰撞）。
+const (
+	RerankingResetSentinel   = "\x00rerank_reset"
+	RerankModelResetSentinel = "\x00rerank_model_reset"
+	JudgeModelResetSentinel  = "\x00judge_model_reset"
+)
 
 // NewWorkspace constructs a Workspace, applying defaults to cfg and validating it.
 // Callers receive ErrInvalidEmbeddingModel / ErrInvalidQueryMode on bad input.
@@ -141,6 +161,9 @@ func (c WorkspaceConfig) Validate() error {
 	}
 	if c.EmbeddingModel == "" {
 		return ErrEmbeddingModelRequired
+	}
+	if c.Reranking == "builtin-score-v1" && c.RerankModel == "" {
+		return ErrRerankModelRequired
 	}
 	return nil
 }
@@ -221,11 +244,11 @@ func (c WorkspaceConfig) applyImmutableSettings(partial WorkspaceConfig) error {
 // score threshold before applying.
 func (c WorkspaceConfig) applyRerankSettings(partial WorkspaceConfig) (WorkspaceConfig, error) {
 	out := c
-	if partial.Reranking != "" {
-		if !ValidRerankIdentity(partial.Reranking) {
+	if reranking, ok := mergeResetField(out.Reranking, partial.Reranking, RerankingResetSentinel); ok {
+		if !ValidRerankIdentity(reranking) {
 			return c, ErrInvalidRerankIdentity
 		}
-		out.Reranking = partial.Reranking
+		out.Reranking = reranking
 	}
 	if partial.ScoreThreshold > 0 {
 		if partial.ScoreThreshold > 1 {
@@ -240,7 +263,29 @@ func (c WorkspaceConfig) applyRerankSettings(partial WorkspaceConfig) (Workspace
 	if partial.RerankTopK > 0 {
 		out.RerankTopK = partial.RerankTopK
 	}
+	if rerankModel, ok := mergeResetField(out.RerankModel, partial.RerankModel, RerankModelResetSentinel); ok {
+		out.RerankModel = rerankModel
+	}
+	if judgeModel, ok := mergeResetField(out.JudgeModel, partial.JudgeModel, JudgeModelResetSentinel); ok {
+		out.JudgeModel = judgeModel
+	}
 	return out, nil
+}
+
+// mergeResetField applies the reset-sentinel merge for a string config field:
+// the sentinel clears to "", non-empty overrides, zero value preserves current.
+// The sentinel branch comes first so a NUL-prefixed sentinel never reaches a
+// non-empty validation path. Returns the merged value and whether an update
+// was requested (sentinel or explicit non-empty).
+func mergeResetField(current, partial, sentinel string) (string, bool) {
+	switch {
+	case partial == sentinel:
+		return "", true
+	case partial != "":
+		return partial, true
+	default:
+		return current, false
+	}
 }
 
 // Rename mutates Name; reserved for future when name editing is allowed.
