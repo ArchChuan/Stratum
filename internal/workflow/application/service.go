@@ -14,6 +14,7 @@ import (
 	"time"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -37,20 +38,34 @@ type UpdateDefinitionCommand struct {
 }
 
 type DefinitionService struct {
-	definitions port.DefinitionRepository
-	versions    port.VersionRepository
-	newID       func() string
-	skillRefs   port.SkillRefClassifier
+	definitions  port.DefinitionRepository
+	versions     port.VersionRepository
+	newID        func() string
+	skillRefs    port.SkillRefClassifier
+	failureAudit auditport.FailureAuditRecorder
+	logger       *zap.Logger
 }
 
 func NewDefinitionService(definitions port.DefinitionRepository, versions port.VersionRepository, newID func() string) *DefinitionService {
-	return &DefinitionService{definitions: definitions, versions: versions, newID: newID}
+	return &DefinitionService{definitions: definitions, versions: versions, newID: newID, logger: zap.NewNop()}
 }
 
 // SetSkillRefClassifier 注入 skill 引用判定器;传 nil 恢复默认 fail-closed
 // (skill 节点在无法判定时被拒绝),禁止漏接线导致内置 skill 定义静默保存。
 func (s *DefinitionService) SetSkillRefClassifier(c port.SkillRefClassifier) {
 	s.skillRefs = c
+}
+
+// SetFailureAuditRecorder 注入失败资源操作审计。未注入时跳过记录。
+func (s *DefinitionService) SetFailureAuditRecorder(r auditport.FailureAuditRecorder) {
+	s.failureAudit = r
+}
+
+// SetLogger 注入日志器（默认 Nop，测试与生产均可覆盖）。
+func (s *DefinitionService) SetLogger(l *zap.Logger) {
+	if l != nil {
+		s.logger = l
+	}
 }
 
 // validateSkillRefs 拒绝引用系统内置 skill 的 workflow 节点。classifier 未
@@ -83,6 +98,7 @@ func (s *DefinitionService) Create(ctx context.Context, tenantID string, cmd Cre
 		return nil, err
 	}
 	if err := s.definitions.CreateDefinition(ctx, tenantID, definition, ev); err != nil {
+		s.recordFailure(ctx, definition.ID, "create", err)
 		return nil, err
 	}
 	return definition, nil
@@ -105,6 +121,7 @@ func (s *DefinitionService) Update(ctx context.Context, tenantID, id string, cmd
 		return nil, err
 	}
 	if err := s.definitions.UpdateDefinition(ctx, tenantID, definition, cmd.ExpectedRevision, ev); err != nil {
+		s.recordFailure(ctx, id, "update", err)
 		return nil, err
 	}
 	return definition, nil
@@ -156,7 +173,12 @@ func (s *DefinitionService) Publish(ctx context.Context, tenantID, id string, ac
 		return nil, err
 	}
 	if publisher, ok := s.versions.(port.AtomicVersionPublisher); ok {
-		return publisher.CreateNextVersion(ctx, tenantID, definition, s.newID(), ev)
+		version, err := publisher.CreateNextVersion(ctx, tenantID, definition, s.newID(), ev)
+		if err != nil {
+			s.recordFailure(ctx, id, "publish", err)
+			return nil, err
+		}
+		return version, nil
 	}
 	number, err := s.versions.NextVersionNumber(ctx, tenantID, id)
 	if err != nil {
@@ -167,9 +189,29 @@ func (s *DefinitionService) Publish(ctx context.Context, tenantID, id string, ac
 		return nil, err
 	}
 	if err := s.versions.CreateVersion(ctx, tenantID, version, ev); err != nil {
+		s.recordFailure(ctx, id, "publish", err)
 		return nil, err
 	}
 	return version, nil
+}
+
+// recordFailure 旁路记录一次失败的工作流创建/更新/发布（best-effort）。
+// 记录失败仅 WARN，不改变主流程错误。
+func (s *DefinitionService) recordFailure(ctx context.Context, id, op string, err error) {
+	if s.failureAudit == nil {
+		return
+	}
+	if recordErr := s.failureAudit.Record(ctx, auditport.ResourceFailure{
+		ResourceKind: auditdomain.ResourceKindWorkflow,
+		ResourceID:   id,
+		Operation:    op,
+		ErrorCode:    auditport.ClassifyFailure(err),
+	}); recordErr != nil {
+		s.logger.Warn("failed to record workflow failure audit",
+			zap.String("definition_id", id),
+			zap.String("op", op),
+			zap.Error(recordErr))
+	}
 }
 
 type StartRunCommand struct {

@@ -22,6 +22,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
@@ -95,6 +96,8 @@ type AgentServiceDeps struct {
 	// EvidenceFn 留空，执行时由 RAGSearchFnWithEvidence 填充。
 	FactCheck *factcheck.Settings
 	Logger    *zap.Logger
+	// FailureAudit 旁路记录失败的资源操作（best-effort，nil 时跳过）。
+	FailureAudit auditport.FailureAuditRecorder
 }
 
 // AgentService aggregates agent CRUD + Execute/ExecuteStream and shields
@@ -377,6 +380,7 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		return AgentDTO{}, err
 	}
 	if err := s.deps.Registry.Register(ctx, a, audit, in.Editors); err != nil {
+		s.recordFailure(ctx, id, "create", err)
 		return AgentDTO{}, err
 	}
 	s.deps.Logger.Info("agent created", zap.String("id", id), zap.String("name", in.Name))
@@ -703,6 +707,7 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 		return AgentDTO{}, err
 	}
 	if err := s.deps.Registry.Update(ctx, cfg, audit, editorActor, in.ReplaceParameters); err != nil {
+		s.recordFailure(ctx, id, "update", err)
 		return AgentDTO{}, err
 	}
 	s.deps.Logger.Info("agent updated", zap.String("id", id), zap.String("name", in.Name))
@@ -716,6 +721,25 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 		return AgentDTO{}, ErrNotFound
 	}
 	return cfgToDTO(fresh.GetConfig()), nil
+}
+
+// recordFailure 旁路记录一次失败的 agent 创建/更新（best-effort）。
+// 记录失败仅 WARN，不改变主流程错误。
+func (s *AgentService) recordFailure(ctx context.Context, id, op string, err error) {
+	if s.deps.FailureAudit == nil {
+		return
+	}
+	if recordErr := s.deps.FailureAudit.Record(ctx, auditport.ResourceFailure{
+		ResourceKind: auditdomain.ResourceKindAgent,
+		ResourceID:   id,
+		Operation:    op,
+		ErrorCode:    auditport.ClassifyFailure(err),
+	}); recordErr != nil {
+		s.deps.Logger.Warn("failed to record agent failure audit",
+			zap.String("agent_id", id),
+			zap.String("op", op),
+			zap.Error(recordErr))
+	}
 }
 
 // buildUpdateConfig validates the sampling parameters and assembles the

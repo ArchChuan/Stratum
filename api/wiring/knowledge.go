@@ -121,6 +121,7 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 		c.Knowledge.WorkspaceService.SetDocRepo(docRepo)
 		c.Knowledge.WorkspaceService.SetVectorStore(vs)
 		c.Knowledge.WorkspaceService.SetEditorRepo(persistence.NewPgResourceEditorRepo(db))
+		c.Knowledge.WorkspaceService.SetFailureAuditRecorder(failureRecorderOf(c))
 	}
 	c.wireKnowledgeModelExists()
 	return nil
