@@ -78,3 +78,18 @@ func TestEnricherResolvePlatformValues(t *testing.T) {
 		t.Fatalf("summary platform threshold = %d, want 2500", summary.threshold)
 	}
 }
+
+// TestNewSummaryLLMRequestRoundsPlatformTemperature 回归 PR #441 漏网覆盖点：
+// 会话摘要请求的平台温度必须经 PlatformTemperaturePtr 舍入 2 位小数，
+// float64(float32(0.2)) 直转会变成 0.20000000298023224 触发智谱 400；
+// 平台温度 0 保持 unset（nil，走网关默认）。
+func TestNewSummaryLLMRequestRoundsPlatformTemperature(t *testing.T) {
+	req := newSummaryLLMRequest(summarySettings{model: "qwen-max", temperature: 0.2}, "prompt")
+	if req.Temperature == nil || *req.Temperature != 0.2 {
+		t.Fatalf("platform summary temperature = %v, want 0.2 (2 位小数)", req.Temperature)
+	}
+	zero := newSummaryLLMRequest(summarySettings{model: "qwen-max", temperature: 0}, "prompt")
+	if zero.Temperature != nil {
+		t.Fatalf("zero platform temperature must keep unset (nil), got %v", zero.Temperature)
+	}
+}

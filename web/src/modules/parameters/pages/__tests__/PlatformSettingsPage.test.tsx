@@ -69,6 +69,21 @@ const defs = (): ParameterDefinition[] => [
 ];
 
 describe('PlatformSettingsPage', () => {
+  it('populates loaded platform values into editable fields', async () => {
+    vi.mocked(parametersApi.schema).mockResolvedValue(defs());
+    // 平台值必须回填到控件：这是"刷新后编辑参数变空"类回归的防线。
+    vi.mocked(parametersApi.list).mockResolvedValue({
+      'memory.enrich_prompt': '平台级富化提示词',
+      'memory.supersede_prompt': '平台级取代提示词',
+      'memory.enrich_temperature': 0.9,
+    });
+
+    render(<PlatformSettingsPage />);
+
+    expect(await screen.findByDisplayValue('平台级富化提示词')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('平台级取代提示词')).toBeInTheDocument();
+  });
+
   it('separates global parameters from resource defaults and excludes unsupported resource keys', async () => {
     vi.mocked(parametersApi.schema).mockResolvedValue([
       ...defs(),

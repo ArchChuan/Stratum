@@ -87,3 +87,47 @@ func TestHistoryProcessorLeavesModelEmpty(t *testing.T) {
 		t.Fatalf("expected empty model by default, got %q", gotModel)
 	}
 }
+
+// TestHistoryProcessorRoundsPlatformTemperature 回归 PR #441 漏网覆盖点：
+// memory.history_summary_temperature 平台配置必须经 PlatformTemperaturePtr
+// 舍入 2 位小数，float64(float32(0.2)) 直转会变成 0.20000000298023224 触发
+// 智谱 400。
+func TestHistoryProcessorRoundsPlatformTemperature(t *testing.T) {
+	var got *float64
+	client := completionClientFunc(func(_ context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
+		got = req.Temperature
+		return &llmdomain.CompletionResponse{Content: "s"}, nil
+	})
+	processor := workers.NewLLMHistorySummarizer(client).WithParamResolver(fakePlatformParamResolver{vals: map[string]any{
+		"memory.history_summary_prompt":      testHistorySummaryPrompt,
+		"memory.history_summary_temperature": float64(0.2),
+	}})
+
+	if _, err := processor.SummarizeHistory(context.Background(), []string{"item"}); err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || *got != 0.2 {
+		t.Fatalf("platform summary temperature = %v, want 0.2 (2 位小数)", got)
+	}
+}
+
+// TestHistoryProcessorZeroTemperatureStaysUnset 平台温度 0 = 保留默认
+// （nil → 网关采样注入层生效），不能覆盖成显式 0。
+func TestHistoryProcessorZeroTemperatureStaysUnset(t *testing.T) {
+	var got *float64
+	client := completionClientFunc(func(_ context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
+		got = req.Temperature
+		return &llmdomain.CompletionResponse{Content: "s"}, nil
+	})
+	processor := workers.NewLLMHistorySummarizer(client).WithParamResolver(fakePlatformParamResolver{vals: map[string]any{
+		"memory.history_summary_prompt":      testHistorySummaryPrompt,
+		"memory.history_summary_temperature": float64(0),
+	}})
+
+	if _, err := processor.SummarizeHistory(context.Background(), []string{"item"}); err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatalf("zero platform temperature must keep unset (nil), got %v", got)
+	}
+}
