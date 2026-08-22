@@ -209,17 +209,6 @@ workspace 无法在创建后补填（模型不可变），需在模型管理启�
 （`model.health.degraded` WARN 日志带 model/from/to），修复后确认 `model_health` 回到
 healthy（`model.health.recovered` INFO 日志）。
 
-<a id="memory-migration-stalled"></a>
-
-## StratumMemoryMigrationStalled
-
-影响：记忆嵌入迁移后台扫描连续两拍未推进进度；紧急度：warning。查询
-`increase(memory_migration_stalled_total[15m])`。按 tenant_id/from_model/to_model 定位迁移。
-停滞通常由 embed provider 连续失败（buildDocs 逐条 embed 失败 → 迁移标记 failed，不会停滞）、
-仓库查询挂起或 worker panic 重启循环导致。处置：检查 `memory.migration.worker.*` 日志与
-`memory.migration.*` 迁移事件日志；确认 embed resolver 对目标模型可用后，用管理接口
-RetryMigration 续传（failed/canceled 均支持断点续传）。
-
 <a id="route-fallback-surge"></a>
 
 ## StratumRouteFallbackSurge

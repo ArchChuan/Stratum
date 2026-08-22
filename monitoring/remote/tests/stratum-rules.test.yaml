@@ -1135,29 +1135,6 @@ tests:
         alertname: StratumModelUnhealthy
         exp_alerts: []
 
-  - name: memory migration stalled alert fires on no-progress scans
-    interval: 1m
-    input_series:
-      - series: 'memory_migration_stalled_total{tenant_id="tenant-1",from_model="text-embedding-v1",to_model="text-embedding-v3"}'
-        values: '0+1x7'
-    alert_rule_test:
-      - eval_time: 6m
-        alertname: StratumMemoryMigrationStalled
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              service: stratum
-              environment: remote-test
-              component: memory
-              tenant_id: tenant-1
-              from_model: text-embedding-v1
-              to_model: text-embedding-v3
-            exp_annotations:
-              summary: 记忆嵌入迁移扫描停滞
-              description: Migration from text-embedding-v1 to text-embedding-v3 for tenant tenant-1 made no progress across consecutive scans (increase 6).
-              dashboard_url: /d/stratum-service-overview
-              runbook_url: /docs/operations/alerts/business.md#memory-migration-stalled
-
   - name: route fallback surge alert fires above threshold
     interval: 1m
     input_series:
