@@ -36,9 +36,11 @@ func RoundTemperature(v float64) float64 {
 	return math.Round(v*100) / 100
 }
 
-// temperaturePtr 把调用方的 float32 温度转成 *float64：0 = unset（agent 语义
-// 贯穿全链路）→ nil，让网关采样注入层生效；非 0 → 显式值（2 位小数）。
-func temperaturePtr(v float32) *float64 {
+// PlatformTemperaturePtr 把调用方的 float32 温度转成 *float64：0 = unset
+// （agent 语义贯穿全链路）→ nil，让网关采样注入层生效；非 0 → 显式值
+// （2 位小数舍入）。平台参数覆盖点必须复用本函数，禁止 float64(float32)
+// 直转绕过舍入——智谱等端点校验小数位数，超 2 位返回 400。
+func PlatformTemperaturePtr(v float32) *float64 {
 	if v == 0 {
 		return nil
 	}
@@ -61,7 +63,7 @@ func NewSummarizeRequest(model, instructions string, items []string, maxTokens i
 	return &CompletionRequest{
 		Model:          model,
 		Messages:       []Message{{Role: "user", Content: content}},
-		Temperature:    temperaturePtr(constants.TaskSummarizeTemperature),
+		Temperature:    PlatformTemperaturePtr(constants.TaskSummarizeTemperature),
 		MaxTokens:      maxTokens,
 		NoPrimaryRetry: true,
 	}
@@ -80,7 +82,7 @@ func NewExtractRequest(model, system, user string, temperature float32, maxToken
 	return &CompletionRequest{
 		Model:          model,
 		Messages:       msgs,
-		Temperature:    temperaturePtr(temperature),
+		Temperature:    PlatformTemperaturePtr(temperature),
 		MaxTokens:      maxTokens,
 		ResponseFormat: JSONObject(),
 	}

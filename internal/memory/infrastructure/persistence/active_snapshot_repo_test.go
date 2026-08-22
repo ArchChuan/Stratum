@@ -21,7 +21,7 @@ func TestActiveSnapshotRepoUpsertOverwritesScopedSnapshot(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec(regexp.QuoteMeta("ON CONFLICT (user_id, agent_id) DO UPDATE SET")).
-		WithArgs(s.UserID, s.AgentID, s.WorkContext, s.PersonalContext, s.TopOfMind, []byte(`{"type":"message","reference":"msg-2"}`), s.ExpiresAt, s.UpdatedAt, s.Status).
+		WithArgs(s.UserID, s.AgentID, s.WorkContext, s.PersonalContext, s.TopOfMind, string(`{"type":"message","reference":"msg-2"}`), s.ExpiresAt, s.UpdatedAt, s.Status).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	pool.ExpectCommit()
 
