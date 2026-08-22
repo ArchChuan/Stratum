@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -2627,13 +2628,14 @@ func (s *AgentService) resolveTooling(
 	return extraTools, skillCatalog, "unknown", nil
 }
 
-// resolveEffectiveParameters merges platform defaults into the execution
-// options at the assemble point (no caching). Agent-config values — the
-// resource-declared layer — already flow into execution through the
-// snapshotExecutionConfig backfill; the provider fills in platform defaults
-// only where the resource left the key at 0=unset. Resolution errors degrade
-// to unset (execution keeps gateway defaults): parameters are an
-// optimization input, not an execution gate.
+// resolveEffectiveParameters resolves the resource-declared execution
+// parameters at the assemble point (no caching). Agent-config values flow
+// into execution through the snapshotExecutionConfig backfill and the
+// provider returns only declared non-unset values — there is no platform
+// default fallback. Keys the resource left unset are surfaced with a WARN
+// (log + trace attribute) and execution keeps each key's documented default
+// (gateway/provider/constant). Resolution errors degrade to unset:
+// parameters are an optimization input, not an execution gate.
 func (s *AgentService) resolveEffectiveParameters(
 	ctx context.Context,
 	a Agent,
@@ -2660,6 +2662,14 @@ func (s *AgentService) resolveEffectiveParameters(
 		s.deps.Logger.Warn("agent execute: resolve effective parameters, keeping defaults", zap.Error(err))
 		return options
 	}
+	if unset := unsetResourceKeys(declared, effective); len(unset) > 0 {
+		s.deps.Logger.Warn("agent execute: resource parameters unset, documented defaults apply",
+			zap.String("agent_id", cfg.ID),
+			zap.Strings("unset_keys", unset))
+		if span := oteltrace.SpanFromContext(ctx); span.IsRecording() {
+			span.SetAttributes(attribute.String("agent.parameters.unset_keys", strings.Join(unset, ",")))
+		}
+	}
 	opts := []ExecutionOption{}
 	opts = appendFloatOption(opts, effective, "agent.temperature", WithTemperature)
 	opts = appendIntOption(opts, effective, "agent.max_tokens", WithMaxTokens)
@@ -2674,6 +2684,21 @@ func (s *AgentService) resolveEffectiveParameters(
 		options = append(options, opt)
 	}
 	return options
+}
+
+// unsetResourceKeys returns the declared resource keys that resolved to
+// unset (absent from the effective map). Explicit 0 = unset, so a declared
+// zero key is reported too — the resource did not configure it and no
+// platform/default fallback applies. Sorted for stable log/trace output.
+func unsetResourceKeys(declared, effective map[string]any) []string {
+	var keys []string
+	for key := range declared {
+		if _, ok := effective[key]; !ok {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // appendIntOption appends the ExecutionOption produced by set when the resolved
