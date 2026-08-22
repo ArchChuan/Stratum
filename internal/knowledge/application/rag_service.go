@@ -200,6 +200,11 @@ type RAGService struct {
 	// sufficiencyJudge 是生成前证据充分性门（仅 evidence 路径消费，Plain
 	// Query/API 面板零接触）；nil = 未装配，fail-closed 放行。
 	sufficiencyJudge knowledgeport.SufficiencyJudge
+	// semanticReranker 是 builtin-score-v1 的 LLM 语义重排器；nil = 未装配
+	// （fail-open，builtin 走纯召回分数排序）。semanticTopN 是精排候选上限
+	// （≤0 由 wiring 在注入前回落 RerankLLMTopN）。
+	semanticReranker knowledgeport.Reranker
+	semanticTopN     int
 	metrics          observability.MetricsProvider
 	logger           *zap.Logger
 }
@@ -227,6 +232,13 @@ func (rs *RAGService) SetTenantRoleResolver(r knowledgeport.TenantRoleResolver) 
 }
 func (rs *RAGService) SetSufficiencyJudge(j knowledgeport.SufficiencyJudge) {
 	rs.sufficiencyJudge = j
+}
+
+// SetSemanticReranker 注入 builtin-score-v1 的 LLM 语义重排器；wiring 在注入
+// 前把 ≤0 的 topN 解析为 RerankLLMTopN 默认。
+func (rs *RAGService) SetSemanticReranker(r knowledgeport.Reranker, topN int) {
+	rs.semanticReranker = r
+	rs.semanticTopN = topN
 }
 
 func (rs *RAGService) resolveEmbedder(ctx context.Context, req RAGQueryRequest) knowledgeport.Embedder {
@@ -997,6 +1009,7 @@ func (rs *RAGService) rerankSources(ctx context.Context, req RAGQueryRequest, po
 	provider, model := rerankIdentity(req.Reranking)
 	switch provider {
 	case "builtin-score-v1":
+		pool = rs.rerankBuiltinSemantic(ctx, req, pool)
 		sort.SliceStable(pool, func(i, j int) bool { return pool[i].Score > pool[j].Score })
 	case "":
 		// no rerank: keep retrieval order
@@ -1083,6 +1096,73 @@ func (rs *RAGService) rerankExternal(ctx context.Context, req RAGQueryRequest, p
 		}
 	}
 	return reordered, nil
+}
+
+// rerankSemantic 用平台 LLM 语义重排器对召回池精排：先按召回分数取前
+// semanticTopN 条（与池取 min）listwise 打分，未被打分的候选按召回分补尾。
+// LLM 分数覆盖召回分数；返回后由 rerankSources 统一降序排序（LLM 分与召回
+// 分同池混排）。失败向上传播，调用方按 fail-open 降级。
+func (rs *RAGService) rerankSemantic(ctx context.Context, req RAGQueryRequest, pool []Source) ([]Source, error) {
+	topN := min(rs.semanticTopN, len(pool))
+	if topN < 2 {
+		return pool, nil // 单候选/空池语义重排无意义，保持池走排序
+	}
+	docs := make([]string, topN) // 截断由重排器内部负责
+	for i := range docs {
+		docs[i] = pool[i].Content
+	}
+	// Model 传空哨兵：LLM 重排器用平台配置模型，忽略该字段。
+	results, err := rs.semanticReranker.Rerank(ctx, knowledgeport.RerankRequest{
+		Query: req.Question, Documents: docs, Model: "", TopN: topN,
+	})
+	if err != nil {
+		return nil, err
+	}
+	narrowed := make([]Source, 0, topN)
+	used := make(map[int]struct{}, len(results))
+	for _, r := range results {
+		if r.Index < 0 || r.Index >= topN {
+			continue
+		}
+		if _, ok := used[r.Index]; ok {
+			continue
+		}
+		used[r.Index] = struct{}{}
+		s := pool[r.Index]
+		s.Score = r.Score
+		narrowed = append(narrowed, s)
+	}
+	return fillUnscoredTail(narrowed, used, pool, topN), nil
+}
+
+// rerankBuiltinSemantic 是 builtin-score-v1 的 LLM 语义精排入口：注入的重排器
+// 存在且池 ≥2 时打分，失败 fail-open 降级为召回分数排序（WARN + degraded 指标），
+// 检索永不失败。未装配/小池直接返回原池，由 rerankSources 统一排序。
+func (rs *RAGService) rerankBuiltinSemantic(ctx context.Context, req RAGQueryRequest, pool []Source) []Source {
+	if rs.semanticReranker == nil || len(pool) < 2 {
+		return pool
+	}
+	narrowed, err := rs.rerankSemantic(ctx, req, pool)
+	if err != nil {
+		rs.logger.Warn("knowledge.retrieval.llm_rerank_degraded",
+			zap.Error(err), zap.Int("pool_size", len(pool)), zap.Int("top_n", rs.semanticTopN))
+		if rs.metrics != nil {
+			rs.metrics.IncRerankRequest(reqctx.TenantIDFromContext(ctx), "builtin-llm", "degraded")
+		}
+		return pool
+	}
+	return narrowed
+}
+
+// fillUnscoredTail 用召回分补足未被打分的候选（LLM 结果去重后），把 narrowed
+// 补齐到 topN 条。
+func fillUnscoredTail(narrowed []Source, used map[int]struct{}, pool []Source, topN int) []Source {
+	for i := 0; i < topN && len(narrowed) < topN; i++ {
+		if _, ok := used[i]; !ok {
+			narrowed = append(narrowed, pool[i]) // 未被打分候选按召回分补尾
+		}
+	}
+	return narrowed
 }
 
 func filterByScoreThreshold(pool []Source, threshold float32) []Source {

@@ -62,6 +62,7 @@ type Config struct {
 	MemoryPipeline          MemoryPipelineConfig
 	AgentFactCheck          AgentFactCheckConfig
 	KnowledgeJudge          KnowledgeJudgeConfig
+	KnowledgeRerank         KnowledgeRerankConfig
 	// 热更新运行时状态（Nacos listener 写、wiring 注册回调读）
 	memoryDynamic          atomic.Pointer[MemoryPipelineDynamic]
 	memoryDynamicListeners []func(MemoryPipelineDynamic)
@@ -75,6 +76,12 @@ type Config struct {
 // 指针接收者：Config 含 atomic.Pointer/sync.RWMutex 后不可按值复制（vet copylocks）。
 func (c *Config) RerankConfigured() bool {
 	return c.RerankBaseURL != ""
+}
+
+// RerankLLMConfigured reports whether the builtin semantic rerank backend is
+// available. The model is the single switch: an empty model disables it.
+func (c *Config) RerankLLMConfigured() bool {
+	return c.KnowledgeRerank.Model != ""
 }
 
 type OpikConfig struct {
@@ -124,6 +131,18 @@ type KnowledgeJudgeConfig struct {
 	Enabled bool
 	Model   string
 	Timeout time.Duration
+}
+
+// KnowledgeRerankConfig 控制 builtin-score-v1 的 LLM 语义重排（平台级，全租户
+// 统一）。默认关闭（fail-open）：Model 未配置/重排器未装配/调用失败全部降级
+// 为召回分数排序，检索行为与不配置时完全一致。
+type KnowledgeRerankConfig struct {
+	// Model 是语义重排模型（必须存在于 chat 目录，wiring 启动时校验；
+	// 空 = 关闭语义重排）。
+	Model   string
+	Timeout time.Duration
+	// TopN 是精排候选上限（≤0 回落 RerankLLMTopN）。
+	TopN int
 }
 
 func Load() (*Config, error) {
@@ -208,6 +227,12 @@ func Load() (*Config, error) {
 			Model: getEnv("KNOWLEDGE_JUDGE_MODEL", ""),
 			Timeout: time.Duration(getEnvInt("KNOWLEDGE_JUDGE_TIMEOUT_SECONDS",
 				int(constants.KnowledgeJudgeTimeout.Seconds()))) * time.Second,
+		},
+		KnowledgeRerank: KnowledgeRerankConfig{
+			Model: getEnv("KNOWLEDGE_RERANK_MODEL", ""),
+			Timeout: time.Duration(getEnvInt("KNOWLEDGE_RERANK_TIMEOUT_SECONDS",
+				int(constants.RerankLLMTimeout.Seconds()))) * time.Second,
+			TopN: getEnvInt("KNOWLEDGE_RERANK_TOPN", constants.RerankLLMTopN),
 		},
 	}
 	return cfg, nil

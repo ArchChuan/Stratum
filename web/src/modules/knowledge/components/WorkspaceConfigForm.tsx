@@ -91,7 +91,7 @@ export const WorkspaceConfigForm = ({ form, loading, onSubmit }: WorkspaceConfig
             placeholder={defaultPlaceholder(topK == null, `默认：${KNOWLEDGE_DEFAULT_TOP_K}`)}
           />
         </Form.Item>
-        <Form.Item label="重排策略" name="reranking" tooltip="内置重排按相关度二次排序；外部重排需在模型管理中配置">
+        <Form.Item label="重排策略" name="reranking" tooltip="内置重排由平台 LLM 模型语义精排，需在模型管理中配置重排模型；未配置时自动降级为分数排序。外部重排需在模型管理中配置">
           <Select style={{ width: '100%', maxWidth: 140 }} allowClear placeholder="关闭">
             <Option value="">关闭</Option>
             <Option value="builtin-score-v1">内置重排</Option>

@@ -18,6 +18,7 @@ import (
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/httpclient"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/textchunk"
 	vectorstore "github.com/byteBuilderX/stratum/pkg/vector"
 )
@@ -81,6 +82,9 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 	// 不可用或未启用时保持 nil，检索行为与不配置完全一致。单独成方法以
 	// 控制 buildKnowledge 的圈复杂度。
 	c.wireKnowledgeJudge(rag)
+	// builtin-score-v1 的 LLM 语义重排（fail-open）：未配置/模型不在 chat 目录
+	// 时保持未装配，builtin 走纯召回分数排序。
+	c.wireSemanticReranker(ctx, rag)
 	if c.Platform != nil && c.Platform.Metrics != nil {
 		ingest.SetMetrics(c.Platform.Metrics)
 		rag.SetMetrics(c.Platform.Metrics)
@@ -137,6 +141,67 @@ func (c *Container) wireKnowledgeJudge(rag *knowledge.RAGService) {
 		judge.metrics = c.Platform.Metrics
 	}
 	rag.SetSufficiencyJudge(judge)
+}
+
+// wireSemanticReranker 在 LLM gateway 可用、KNOWLEDGE_RERANK_MODEL 已配置且
+// 模型在 chat 目录时注入 builtin-score-v1 的语义重排器；任一条件不满足保持
+// 未装配（fail-open，builtin 走纯召回分数排序）。单独成方法以控制
+// buildKnowledge 的圈复杂度。
+func (c *Container) wireSemanticReranker(ctx context.Context, rag *knowledge.RAGService) {
+	if r, topN := c.semanticRerankerDeps(ctx); r != nil {
+		rag.SetSemanticReranker(r, topN)
+	}
+}
+
+// semanticRerankerDeps 解析并构建 LLM 语义重排器；任一前置条件不满足返回
+// (nil, 0)。topN/timeout 的 ≤0 默认值在此解析（回落常量），使 wiring 层
+// 单测可直接验证注入决策而无需构造完整 Gateway（RAGService.semanticReranker
+// 为 application 包未导出字段，行为探针会因 Gateway.Complete nil-panic）。
+func (c *Container) semanticRerankerDeps(ctx context.Context) (knowledgeport.Reranker, int) {
+	if c.LLMGateway == nil || c.LLMGateway.Gateway == nil || !c.Config.RerankLLMConfigured() {
+		return nil, 0
+	}
+	krc := c.Config.KnowledgeRerank
+	if !c.llmRerankModelInCatalogue(ctx, krc.Model) {
+		// fail-open 装配：模型不在 chat 目录 → WARN + 不注入，builtin 走纯排序。
+		// 配置错误在启动期暴露，而非运行期每查询失败（review F7）。
+		c.Logger.Warn("knowledge.rerank.model_unavailable",
+			zap.String("model", krc.Model), zap.String("reason", "model not in chat catalogue"))
+		return nil, 0
+	}
+	topN := krc.TopN
+	if topN <= 0 {
+		topN = constants.RerankLLMTopN
+	}
+	timeout := krc.Timeout
+	if timeout <= 0 {
+		timeout = constants.RerankLLMTimeout
+	}
+	var metrics observability.MetricsProvider
+	if c.Platform != nil {
+		metrics = c.Platform.Metrics // c.Platform 可能为 nil（review H2）
+	}
+	return newLLMReranker(c.LLMGateway.Gateway, krc.Model, timeout, metrics, c.Logger), topN
+}
+
+// llmRerankModelInCatalogue 检查平台配置的重排模型是否在 enabled 的 chat 目录
+// 中。目录查询失败或 registry 缺失按"不在目录"处理（fail-open 不注入、告警，
+// 不阻断启动）。
+func (c *Container) llmRerankModelInCatalogue(ctx context.Context, model string) bool {
+	if c.LLMGateway == nil || c.LLMGateway.Registry == nil {
+		return false
+	}
+	names, err := c.LLMGateway.Registry.ListChatModelsByTenant(ctx)
+	if err != nil {
+		c.Logger.Warn("knowledge.rerank.catalogue_unavailable", zap.Error(err))
+		return false
+	}
+	for _, n := range names {
+		if n == model {
+			return true
+		}
+	}
+	return false
 }
 
 // wireKnowledgeModelExists 在 Platform 提供全局模型目录时注入 knowledge 的
