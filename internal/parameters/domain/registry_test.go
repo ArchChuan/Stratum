@@ -296,3 +296,24 @@ func TestRegistryMemoryEmbeddingModel(t *testing.T) {
 		t.Errorf("default = %v, want empty (fail-closed)", def.Default)
 	}
 }
+
+// TestFactCheckJudgePromptIsPlatformEditable pins the platform-page contract:
+// agent.factcheck.judge.prompt 必须保持 platform 域、非 sensitive（平台参数页
+// 永不渲染敏感参数）、textarea 可编辑。回归 #420:误标 Sensitive 导致提示词
+// 被前端过滤,页面只显示其余 factcheck 参数。
+func TestFactCheckJudgePromptIsPlatformEditable(t *testing.T) {
+	r := NewParametersRegistry()
+	def, ok := r.Get("agent.factcheck.judge.prompt")
+	if !ok {
+		t.Fatal("agent.factcheck.judge.prompt not registered")
+	}
+	if def.Scope != ScopePlatform {
+		t.Errorf("scope = %q, want platform", def.Scope)
+	}
+	if def.Sensitive {
+		t.Error("judge prompt must not be Sensitive: platform settings page never renders sensitive params")
+	}
+	if def.VisualHint.Control != ControlTextarea {
+		t.Errorf("control = %q, want textarea", def.VisualHint.Control)
+	}
+}
