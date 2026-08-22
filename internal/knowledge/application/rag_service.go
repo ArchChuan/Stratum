@@ -84,25 +84,27 @@ func NewRAGSearchFn(rs *RAGService, tenantID, viewerID string) func(
 }
 
 func searchWorkspace(ctx context.Context, rs *RAGService, tenantID, viewerID, ws, query string, topK int) wsResult {
-	mode, effectiveTopK, embedModel, workspaceID, threshold, err := resolveWorkspaceConfig(ctx, rs, tenantID, ws, topK)
+	rw, err := resolveWorkspaceConfig(ctx, rs, tenantID, ws, topK)
 	if err != nil {
 		return wsResult{err: err}
 	}
 	out, err := rs.Query(ctx, RAGQueryRequest{
-		WorkspaceID:    workspaceID,
+		WorkspaceID:    rw.workspaceID,
 		Workspace:      ws,
 		Question:       query,
 		TenantID:       tenantID,
-		Mode:           mode,
-		TopK:           effectiveTopK,
-		EmbeddingModel: embedModel,
+		Mode:           rw.mode,
+		TopK:           rw.effectiveTopK,
+		EmbeddingModel: rw.embedModel,
 		// workspace config 单一事实源：阈值缺省兜底（0=不过滤），避免
 		// 配置存库但不生效的装配断点。
-		ScoreThreshold: threshold,
+		ScoreThreshold: rw.threshold,
 		ViewerID:       viewerID,
 		// System-actor contexts (privileged wiring paths such as eval workers)
 		// carry the same trust as an admin owner and bypass the D2 gate.
 		SkipAccessCheck: reqctx.SystemActorFromContext(ctx) != "",
+		RerankModel:     rw.rerankModel,
+		JudgeModel:      rw.judgeModel,
 	})
 	if err != nil {
 		return wsResult{err: err}
@@ -110,32 +112,45 @@ func searchWorkspace(ctx context.Context, rs *RAGService, tenantID, viewerID, ws
 	return wsResult{content: formatSources(out.Sources), noAnswer: out.NoAnswer}
 }
 
-func resolveWorkspaceConfig(ctx context.Context, rs *RAGService, tenantID, ws string, topK int) (
-	mode string, effectiveTopK int, embedModel string, workspaceID string, threshold float32, err error,
-) {
-	mode = domain.DefaultQueryMode
-	effectiveTopK = topK
+// resolvedWorkspace 收敛 resolveWorkspaceConfig 的多返回值，避免 6 值元组
+// 解构位错（review I2）。
+type resolvedWorkspace struct {
+	mode          string
+	effectiveTopK int
+	embedModel    string
+	workspaceID   string
+	threshold     float32
+	rerankModel   string
+	judgeModel    string
+}
+
+func resolveWorkspaceConfig(ctx context.Context, rs *RAGService, tenantID, ws string, topK int) (resolvedWorkspace, error) {
+	rw := resolvedWorkspace{mode: domain.DefaultQueryMode, effectiveTopK: topK}
 	if rs.wsRepo == nil {
-		return
+		return rw, nil
 	}
 	w, getErr := rs.wsRepo.GetByName(ctx, tenantID, ws)
 	if getErr != nil {
-		err = ErrRAGDependency
-		return
+		return rw, ErrRAGDependency
 	}
 	if w == nil {
-		return
+		return rw, nil
 	}
-	workspaceID = w.ID
+	rw.workspaceID = w.ID
 	if w.Config.TopK > 0 {
-		effectiveTopK = w.Config.TopK
+		rw.effectiveTopK = w.Config.TopK
 	}
-	embedModel = w.Config.EmbeddingModel
-	threshold = w.Config.ScoreThreshold
+	rw.embedModel = w.Config.EmbeddingModel
+	rw.threshold = w.Config.ScoreThreshold
 	if w.Config.QueryMode != "" {
-		mode = w.Config.QueryMode
+		rw.mode = w.Config.QueryMode
 	}
-	return
+	// 模型来自 workspace 显式配置（Global Constraint 1/5）：RerankModel 供 builtin
+	// 重排消费（当前触发面是 snapshot/evaluation 路径，Plain Query/API 面板
+	// Reranking 恒空，字段暂为潜在）；JudgeModel 由证据充分性门消费。
+	rw.rerankModel = w.Config.RerankModel
+	rw.judgeModel = w.Config.JudgeModel
+	return rw, nil
 }
 
 func formatSources(sources []Source) string {
@@ -197,9 +212,9 @@ type RAGService struct {
 	// closed when unavailable.
 	docRepo      knowledgeport.DocRepo
 	roleResolver knowledgeport.TenantRoleResolver
-	// sufficiencyJudge 是生成前证据充分性门（仅 evidence 路径消费，Plain
-	// Query/API 面板零接触）；nil = 未装配，fail-closed 放行。
-	sufficiencyJudge knowledgeport.SufficiencyJudge
+	// judgeResolver 按请求中的 judge 模型解析证据充分性 judge（仅 evidence 路径
+	// 消费，Plain Query/API 面板零接触）；nil/解析失败 = fail-closed 放行。
+	judgeResolver SufficiencyJudgeResolver
 	// semanticReranker 是 builtin-score-v1 的 LLM 语义重排器；nil = 未装配
 	// （fail-open，builtin 走纯召回分数排序）。semanticTopN 是精排候选上限
 	// （≤0 由 wiring 在注入前回落 RerankLLMTopN）。
@@ -230,8 +245,8 @@ func (rs *RAGService) SetDocRepo(repo knowledgeport.DocRepo)             { rs.do
 func (rs *RAGService) SetTenantRoleResolver(r knowledgeport.TenantRoleResolver) {
 	rs.roleResolver = r
 }
-func (rs *RAGService) SetSufficiencyJudge(j knowledgeport.SufficiencyJudge) {
-	rs.sufficiencyJudge = j
+func (rs *RAGService) SetSufficiencyJudgeResolver(r SufficiencyJudgeResolver) {
+	rs.judgeResolver = r
 }
 
 // SetSemanticReranker 注入 builtin-score-v1 的 LLM 语义重排器；wiring 在注入
@@ -249,6 +264,11 @@ func (rs *RAGService) resolveEmbedder(ctx context.Context, req RAGQueryRequest) 
 	}
 	return rs.embeddingSvc
 }
+
+// SufficiencyJudgeResolver 按请求中的 judge 模型解析证据充分性 judge；模型未知/
+// 目录校验失败返回 error（fail-closed 放行）。wiring 注入闭包，application 不
+// import llmgateway（跨 context 接口定义在消费方）。
+type SufficiencyJudgeResolver func(ctx context.Context, model string) (knowledgeport.SufficiencyJudge, error)
 
 type RAGQueryRequest struct {
 	Question       string
@@ -272,6 +292,11 @@ type RAGQueryRequest struct {
 	// of the admin-owner exemption in the D1 matrix. Business callers must
 	// never set it.
 	SkipAccessCheck bool
+	// RerankModel 是 builtin-score-v1 的 LLM 语义重排模型（workspace 显式配置）；
+	// 仅 Reranking=builtin-score-v1 时消费，空模型由重排器 fail-open 拒绝。
+	RerankModel string
+	// JudgeModel 是证据充分性 judge 模型（workspace 显式配置）；空 = 关闭 judge 门。
+	JudgeModel string
 }
 
 type RAGQueryResult struct {
@@ -1111,9 +1136,8 @@ func (rs *RAGService) rerankSemantic(ctx context.Context, req RAGQueryRequest, p
 	for i := range docs {
 		docs[i] = pool[i].Content
 	}
-	// Model 传空哨兵：LLM 重排器用平台配置模型，忽略该字段。
 	results, err := rs.semanticReranker.Rerank(ctx, knowledgeport.RerankRequest{
-		Query: req.Question, Documents: docs, Model: "", TopN: topN,
+		Query: req.Question, Documents: docs, Model: req.RerankModel, TopN: topN,
 	})
 	if err != nil {
 		return nil, err
@@ -1297,23 +1321,25 @@ func NewRAGSearchEvidenceFn(rs *RAGService, tenantID, viewerID string) func(
 }
 
 func searchWorkspaceWithEvidence(ctx context.Context, rs *RAGService, tenantID, viewerID, ws, query string, topK int) wsEvidenceResult {
-	mode, effectiveTopK, embedModel, workspaceID, threshold, err := resolveWorkspaceConfig(ctx, rs, tenantID, ws, topK)
+	rw, err := resolveWorkspaceConfig(ctx, rs, tenantID, ws, topK)
 	if err != nil {
 		return wsEvidenceResult{err: err}
 	}
 	out, err := rs.Query(ctx, RAGQueryRequest{
-		WorkspaceID:    workspaceID,
+		WorkspaceID:    rw.workspaceID,
 		Workspace:      ws,
 		Question:       query,
 		TenantID:       tenantID,
-		Mode:           mode,
-		TopK:           effectiveTopK,
-		EmbeddingModel: embedModel,
-		ScoreThreshold: threshold,
+		Mode:           rw.mode,
+		TopK:           rw.effectiveTopK,
+		EmbeddingModel: rw.embedModel,
+		ScoreThreshold: rw.threshold,
 		ViewerID:       viewerID,
 		// System-actor contexts (privileged wiring paths) carry admin-owner
 		// trust and bypass the D2 gate.
 		SkipAccessCheck: reqctx.SystemActorFromContext(ctx) != "",
+		RerankModel:     rw.rerankModel,
+		JudgeModel:      rw.judgeModel,
 	})
 	if err != nil {
 		return wsEvidenceResult{err: err}
@@ -1321,12 +1347,12 @@ func searchWorkspaceWithEvidence(ctx context.Context, rs *RAGService, tenantID, 
 	// 充分性门（仅 evidence 路径）：判 INSUFFICIENT 时本 workspace 按无内容
 	// 处理（Sources 置空 + NoAnswer=insufficient_evidence），聚合按严重度
 	// 上报；fail-closed 降级原样放行。
-	out = rs.judgeSufficiencyGate(ctx, tenantID, ws, query, out)
-	titles := rs.documentTitles(ctx, tenantID, workspaceID)
+	out = rs.judgeSufficiencyGate(ctx, tenantID, ws, query, rw.judgeModel, out)
+	titles := rs.documentTitles(ctx, tenantID, rw.workspaceID)
 	sources := make([]RAGSearchSource, 0, len(out.Sources))
 	for _, src := range out.Sources {
 		sources = append(sources, RAGSearchSource{
-			WorkspaceID:   workspaceID,
+			WorkspaceID:   rw.workspaceID,
 			WorkspaceName: ws,
 			ChunkID:       src.ChunkID,
 			DocumentID:    src.DocumentID,

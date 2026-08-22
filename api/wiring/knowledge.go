@@ -125,22 +125,23 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 	return nil
 }
 
-// wireKnowledgeJudge 在 LLM gateway 可用且 KNOWLEDGE_JUDGE_ENABLED 时注入
-// 证据充分性 judge；任一条件不满足保持 nil（fail-closed 放行）。单独成方法
-// 以控制 buildKnowledge 的圈复杂度。
+// wireKnowledgeJudge 在 LLM gateway 可用且 KNOWLEDGE_JUDGE_ENABLED 时注入证据
+// 充分性 judge 解析器；任一条件不满足保持未装配（judgeResolver nil，fail-closed
+// 放行）。模型在运行期从请求解析（workspace 显式 JudgeModel），resolver 闭包
+// 每次查询按需构造实例。单独成方法以控制 buildKnowledge 的圈复杂度。
 func (c *Container) wireKnowledgeJudge(rag *knowledge.RAGService) {
 	if c.LLMGateway == nil || c.LLMGateway.Gateway == nil || !c.Config.KnowledgeJudge.Enabled {
 		return
 	}
-	judge := knowledgeJudge{
-		completer: c.LLMGateway.Gateway,
-		model:     c.Config.KnowledgeJudge.Model,
-		timeout:   c.Config.KnowledgeJudge.Timeout,
-	}
+	completer := c.LLMGateway.Gateway
+	timeout := c.Config.KnowledgeJudge.Timeout
+	var metrics observability.MetricsProvider
 	if c.Platform != nil {
-		judge.metrics = c.Platform.Metrics
+		metrics = c.Platform.Metrics
 	}
-	rag.SetSufficiencyJudge(judge)
+	rag.SetSufficiencyJudgeResolver(func(ctx context.Context, model string) (knowledgeport.SufficiencyJudge, error) {
+		return &knowledgeJudge{completer: completer, model: model, timeout: timeout, metrics: metrics}, nil
+	})
 }
 
 // wireSemanticReranker 在 LLM gateway 可用、KNOWLEDGE_RERANK_MODEL 已配置且

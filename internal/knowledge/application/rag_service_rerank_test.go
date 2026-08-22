@@ -351,6 +351,7 @@ func TestRAGQueryBuiltinSemanticRerankRescores(t *testing.T) {
 		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
 		ViewerID: "test-user",
 		TopK:     3, EmbeddingModel: "embedding-3", Reranking: "builtin-score-v1",
+		RerankModel: "qwen-turbo",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -358,8 +359,8 @@ func TestRAGQueryBuiltinSemanticRerankRescores(t *testing.T) {
 	if reranker.calls != 1 {
 		t.Fatalf("semantic rerank calls=%d, want 1", reranker.calls)
 	}
-	if reranker.lastReq.Model != "" {
-		t.Fatalf("semantic rerank must pass empty model sentinel, got %q", reranker.lastReq.Model)
+	if reranker.lastReq.Model != "qwen-turbo" {
+		t.Fatalf("semantic rerank must pass workspace rerank model, got %q", reranker.lastReq.Model)
 	}
 	if len(reranker.lastReq.Documents) != 3 || reranker.lastReq.TopN != 3 {
 		t.Fatalf("semantic rerank must score the whole pool: %+v", reranker.lastReq)
@@ -390,6 +391,7 @@ func TestRAGQueryBuiltinSemanticRerankFailsOpenOnError(t *testing.T) {
 		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
 		ViewerID: "test-user",
 		TopK:     3, EmbeddingModel: "embedding-3", Reranking: "builtin-score-v1",
+		RerankModel: "qwen-turbo",
 	})
 	if err != nil {
 		t.Fatalf("rerank failure must not fail the query: %v", err)
@@ -416,6 +418,7 @@ func TestRAGQueryBuiltinSemanticRerankSkipsTinyPool(t *testing.T) {
 		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
 		ViewerID: "test-user",
 		TopK:     1, EmbeddingModel: "embedding-3", Reranking: "builtin-score-v1",
+		RerankModel: "qwen-turbo",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -442,7 +445,7 @@ func TestRerankSemanticNarrowsToTopN(t *testing.T) {
 	service := vectorRAGService(nil)
 	service.SetSemanticReranker(reranker, 5)
 
-	narrowed, err := service.rerankSemantic(context.Background(), RAGQueryRequest{Question: "q"}, pool)
+	narrowed, err := service.rerankSemantic(context.Background(), RAGQueryRequest{Question: "q", RerankModel: "qwen-turbo"}, pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,6 +478,7 @@ func TestRAGQueryBuiltinSemanticRerankPartialTailFill(t *testing.T) {
 		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
 		ViewerID: "test-user",
 		TopK:     3, EmbeddingModel: "embedding-3", Reranking: "builtin-score-v1",
+		RerankModel: "qwen-turbo",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -507,6 +511,7 @@ func TestRAGQueryBuiltinSemanticRerankEmptyLLMResultsFillsTail(t *testing.T) {
 		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
 		ViewerID: "test-user",
 		TopK:     3, EmbeddingModel: "embedding-3", Reranking: "builtin-score-v1",
+		RerankModel: "qwen-turbo",
 	})
 	if err != nil {
 		t.Fatal(err)
