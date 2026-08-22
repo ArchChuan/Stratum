@@ -84,6 +84,17 @@ const (
 	// 多 workspace 拼接把上下文打爆（judge 只判断充分性，尾部内容
 	// 截断对结论影响有限；与 factcheck 不截断的差异是本方案的成本控制）。
 	KnowledgeJudgeMaxEvidenceRunes = 4000
+	// RerankLLMTopN 是 builtin-score-v1 LLM 语义重排的精排候选上限（默认）：
+	// 先按召回分数取前 N 条再 listwise 打分，池更小则全量精排。
+	// 须 ≥ 常用 TopK（默认 5）；配置值 < 工作区 TopK 时最终条数受此硬上限约束。
+	RerankLLMTopN = 10
+	// RerankLLMMaxTokens caps 语义重排输出（固定 JSON 结构，1024 充足）。
+	RerankLLMMaxTokens = 1024
+	// RerankLLMTimeout bounds 单次 LLM 重排调用；超时按 fail-open 降级为分数排序。
+	RerankLLMTimeout = 5 * time.Second
+	// RerankLLMMaxDocRunes 截断喂给重排模型的候选正文（token 成本控制；只影响
+	// 相关性打分上下文，不影响检索正文）。
+	RerankLLMMaxDocRunes = 500
 )
 
 var milvusUnsafe = regexp.MustCompile(`[^a-zA-Z0-9_]`)
