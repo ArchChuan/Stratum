@@ -1207,5 +1207,18 @@ tests:
               service: stratum
               environment: remote-test
               component: llm-gateway
-              model: ""
+              # no_default 场景下 model 为空串:Prometheus 将空标签值归一化为
+              # 缺失,告警上不会出现 model 标签(与 got 实测一致)。
               reason: no_default
+            exp_annotations:
+              summary: LLM 模型解析失败：模型配置失效或无默认模型
+              description: >-
+                过去 5 分钟 llm_model_resolution_errors_total 出现增长
+                （model=，reason=no_default）。
+                invalid_model：显式请求的模型不存在/已禁用/不健康；no_default：
+                目录中无可用的默认/推荐模型；resolve_error：注册表解析故障。
+                请检查模型管理目录的 models / providers 配置
+                （default_model、enabled、recommended、default_embedding），
+                修复后告警自动恢复。
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/alerts/business.md#llm-model-resolution-failed
