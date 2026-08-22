@@ -104,9 +104,6 @@ export const COMPACTION_TEMP_MAX = 1;
 export const COMPACTION_DEFAULT_TEMPERATURE = 0.3;
 // 压缩安全比例 0 = unset 时回落 LoopCompactionSafetyRatio（pkg/constants/agent.go）。
 export const COMPACTION_SAFETY_RATIO_DEFAULT = 0.8;
-// compaction_recent_groups = 0 时按上下文窗口自动推导组数（默认 3，
-// pkg/constants/agent.go LoopCompactionRecentGroups；仅提示展示，不写回）。
-export const COMPACTION_RECENT_GROUPS_DEFAULT = 3;
 export const CHUNKING_STRATEGY_OPTIONS = [
   { value: 'structure_recursive', label: '结构感知（推荐）— Markdown 标题分层 + 递归分块' },
   { value: 'recursive', label: '递归分块 — 按字符边界递归切分' },

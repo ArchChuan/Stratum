@@ -17,7 +17,6 @@ export const agentSchema = z
     maxContextTokens: z.number().optional(),
     temperature: z.number().optional(),
     max_tokens: z.number().optional(),
-    compaction_recent_groups: z.number().optional(),
     reasoning_effort: z.string().optional(),
     allowedSkills: z.array(z.string()).nullish().transform((v) => v ?? []),
     mcpToolIds: z.array(z.string()).nullish().transform((v) => v ?? []),
@@ -40,7 +39,6 @@ export interface Agent {
   maxContextTokens?: number;
   temperature?: number;
   max_tokens?: number;
-  compaction_recent_groups?: number;
   reasoning_effort?: string;
   allowedSkills: string[];
   mcpToolIds: string[];
@@ -63,7 +61,6 @@ export interface AgentFormValues {
   // 采样参数(agents.parameters JSONB,merge 语义:0=unset 不落库)
   temperature?: number;
   max_tokens?: number;
-  compaction_recent_groups?: number;
   reasoning_effort?: string;
   allowedSkills?: string[];
   mcpToolIds?: string[];

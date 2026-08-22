@@ -7,7 +7,7 @@
 
 | # | 决策 | 结论 |
 |---|---|---|
-| D1 | 压缩配置 | 压缩三值（提示词/温度/模型）全部迁平台级（`agent.compaction_prompt/_temperature/_model`）；删除 `CompactionDefaultPrompt` 代码常量与 per-agent 字段/表单/DTO/落库路径；压缩器内部统一从平台 resolver 读取（唯一来源，所有 agent 含内置助手一致）。prompt 未配置即失败，temperature 0 = 默认常量，model 空 = 网关默认 |
+| D1 | 压缩配置（五值） | 压缩三值（提示词/温度/模型）与最近轮数/冷却（`agent.compaction_prompt/_temperature/_model/_recent_groups/_cooldown_sec`）全部迁平台级；删除代码常量/兜底与 per-agent 字段/表单/DTO/落库路径/评测搜索空间；压缩器内部统一从平台 resolver 读取（唯一来源，所有 agent 含内置助手一致）。prompt 未配置即失败，temperature 0 = 默认常量，model 空 = 网关默认，recent_groups/cooldown 0 = unset 回退消费端默认。平台助手与普通 agent 完全同构，唯一差异为内置工具/Skill/知识库挂载 |
 | D2 | 全局系统提示词 | 删除 `GLOBAL_AGENT_SYSTEM_PROMPT` 环境变量读取；新增平台参数 `agent.system_prompt`（追加到所有 agent 的 system prompt，含内置平台助手）；执行时解析，未配置即失败 |
 | D3 | 内置平台助手提示词 | 删除 `systemAssistantPrompt`/`systemAssistantPromptV3` 代码常量与 `SystemAssistantProfile.SystemPrompt`；提示词存 `agents.system_prompt` DB 字段（seed + 存量租户幂等回填），`ComposeSystemAssistantProfile` 不再用代码覆盖 |
 

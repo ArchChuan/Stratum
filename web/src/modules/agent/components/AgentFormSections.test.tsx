@@ -217,7 +217,7 @@ describe('AgentFormSections', () => {
     expect(screen.queryByText(/推理模型该值含思考长度/)).not.toBeInTheDocument();
   });
 
-  it('hides temperature and compaction fields for the system assistant only', () => {
+  it('hides temperature field for the system assistant only', () => {
     const { rerender } = render(
       <Form>
         <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} isSystem />
@@ -225,7 +225,6 @@ describe('AgentFormSections', () => {
     );
 
     expect(screen.queryByRole('slider', { name: 'temperature' })).not.toBeInTheDocument();
-    expect(screen.queryByText('压缩最近轮数（compaction_recent_groups）')).not.toBeInTheDocument();
 
     rerender(
       <Form>
@@ -234,7 +233,6 @@ describe('AgentFormSections', () => {
     );
 
     expect(screen.getByRole('slider', { name: 'temperature' })).toBeInTheDocument();
-    expect(screen.getByText('压缩最近轮数（compaction_recent_groups）')).toBeInTheDocument();
   });
 
   it('shows reasoning effort selector only for reasoning-capable models', () => {
@@ -406,16 +404,6 @@ describe('AgentFormSections', () => {
       </Form>,
     );
     expect(screen.queryByText('默认：0.7')).not.toBeInTheDocument();
-  });
-
-  it('offers 0（自动推导）for compaction_recent_groups without a disable path', () => {
-    render(
-      <Form>
-        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
-      </Form>,
-    );
-    fireEvent.mouseDown(screen.getByRole('combobox', { name: '压缩最近轮数（compaction_recent_groups）' }));
-    expect(screen.getByRole('option', { name: '0（自动推导）' })).toBeInTheDocument();
   });
 
 });

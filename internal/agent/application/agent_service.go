@@ -163,23 +163,22 @@ func (s *AgentService) SetMCPToolExecutor(executor port.MCPToolExecutor) {
 // CreateAgentInput is the create-agent payload application receives from
 // transport.
 type CreateAgentInput struct {
-	TenantID               string
-	ActorID                string
-	Name                   string
-	Type                   string
-	Description            string
-	SystemPrompt           string
-	LLMModel               string
-	MaxIterations          int
-	MaxContextTokens       int
-	Temperature            float32
-	ReasoningEffort        string
-	MaxTokens              int
-	CompactionRecentGroups int
-	AllowedSkills          []string
-	MCPToolIDs             []string
-	KnowledgeWorkspaceIDs  []string
-	MemoryScope            string
+	TenantID              string
+	ActorID               string
+	Name                  string
+	Type                  string
+	Description           string
+	SystemPrompt          string
+	LLMModel              string
+	MaxIterations         int
+	MaxContextTokens      int
+	Temperature           float32
+	ReasoningEffort       string
+	MaxTokens             int
+	AllowedSkills         []string
+	MCPToolIDs            []string
+	KnowledgeWorkspaceIDs []string
+	MemoryScope           string
 	// Parameters carries registry resource-scope values as a flat object;
 	// only the memory.* dotted keys persist on the agent (bare sampling keys
 	// remain expressed through the explicit fields above). Same merge
@@ -189,18 +188,17 @@ type CreateAgentInput struct {
 }
 
 type UpdateAgentInput struct {
-	ActorID                string
-	Name                   string
-	Type                   string
-	Description            string
-	SystemPrompt           string
-	LLMModel               string
-	MaxIterations          int
-	MaxContextTokens       int
-	Temperature            float32
-	ReasoningEffort        string
-	MaxTokens              int
-	CompactionRecentGroups int
+	ActorID          string
+	Name             string
+	Type             string
+	Description      string
+	SystemPrompt     string
+	LLMModel         string
+	MaxIterations    int
+	MaxContextTokens int
+	Temperature      float32
+	ReasoningEffort  string
+	MaxTokens        int
 	// Parameters carries the registry sampling parameters as a flat object;
 	// merge semantics — only present keys overwrite, and only non-zero values
 	// persist (0 = unset, never clears an existing value). Keys that appear
@@ -219,28 +217,27 @@ type UpdateAgentInput struct {
 // AgentDTO is the wire shape returned by AgentService for transport
 // rendering. Strings only — handler reuses field-for-field.
 type AgentDTO struct {
-	ID                     string
-	Name                   string
-	Type                   string
-	Description            string
-	SystemPrompt           string
-	LLMModel               string
-	MaxIterations          int
-	MaxContextTokens       int
-	Temperature            float32
-	ReasoningEffort        string
-	MaxTokens              int
-	CompactionRecentGroups int
-	AllowedSkills          []string
-	MCPToolIDs             []string
-	KnowledgeWorkspaceIDs  []string
-	CreatedAt              string
-	MemoryScope            string
-	SystemKey              string
-	IsSystem               bool
-	ManagementMode         string
-	Parameters             map[string]any
-	Editors                []string
+	ID                    string
+	Name                  string
+	Type                  string
+	Description           string
+	SystemPrompt          string
+	LLMModel              string
+	MaxIterations         int
+	MaxContextTokens      int
+	Temperature           float32
+	ReasoningEffort       string
+	MaxTokens             int
+	AllowedSkills         []string
+	MCPToolIDs            []string
+	KnowledgeWorkspaceIDs []string
+	CreatedAt             string
+	MemoryScope           string
+	SystemKey             string
+	IsSystem              bool
+	ManagementMode        string
+	Parameters            map[string]any
+	Editors               []string
 }
 
 type SystemAssistantSettings struct {
@@ -253,13 +250,13 @@ type SystemAssistantSettings struct {
 // Create persists a new agent for the tenant. Only owner/admin roles may
 // create; the caller becomes the resource owner (created_by).
 // validateSamplingParams rejects out-of-bounds sampling values
-// (temperature / max_tokens / compaction_recent_groups / reasoning_effort)
-// against the parameter registry before persist. 压缩三值（提示词/温度/模型）
-// 是平台级参数，不走 per-agent 写时校验。
+// (temperature / max_tokens / reasoning_effort) against the parameter
+// registry before persist. 压缩五值（提示词/温度/模型/最近轮数/冷却）是平台级
+// 参数，不走 per-agent 写时校验。
 // Zero means unset (gateway default) and is skipped; a nil
 // provider (db unavailable) degrades to no-op, matching resolve.
 func (s *AgentService) validateSamplingParams(
-	ctx context.Context, temperature float32, maxTokens, compactionRecentGroups int, reasoningEffort string,
+	ctx context.Context, temperature float32, maxTokens int, reasoningEffort string,
 ) error {
 	if s.deps.ParametersProvider == nil {
 		return nil
@@ -270,9 +267,6 @@ func (s *AgentService) validateSamplingParams(
 	}
 	if maxTokens != 0 {
 		declared["max_tokens"] = maxTokens
-	}
-	if compactionRecentGroups != 0 {
-		declared["compaction_recent_groups"] = compactionRecentGroups
 	}
 	// ReasoningEffort "" = unset 跳过;非空必须在 low/medium/high 枚举内,否则
 	// 非法值会沿执行链路透传到网关对严格端点打 400,中止整条 fallback 链。
@@ -306,10 +300,10 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 	if err := s.checkOwnership(ctx, in.ActorID, in.ActorID, nil); err != nil {
 		return AgentDTO{}, err
 	}
-	// 压缩三值（提示词/温度/模型）为平台级参数，不进入 agent 配置；
-	// 所有 agent 主链路统一从平台 resolver 读取。
+	// 压缩五值（提示词/温度/模型/最近轮数/冷却）为平台级参数，不进入 agent
+	// 配置；所有 agent 主链路统一从平台 resolver 读取。
 	if err := s.validateSamplingParams(ctx, in.Temperature, in.MaxTokens,
-		in.CompactionRecentGroups, in.ReasoningEffort); err != nil {
+		in.ReasoningEffort); err != nil {
 		return AgentDTO{}, err
 	}
 	if err := validateAgentMaxIterations(in.MaxIterations); err != nil {
@@ -321,25 +315,24 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		return AgentDTO{}, err
 	}
 	cfg := &domain.AgentConfig{
-		ID:                     id,
-		Name:                   in.Name,
-		Type:                   parseAgentTypeWire(in.Type),
-		Description:            in.Description,
-		SystemPrompt:           in.SystemPrompt,
-		LLMModel:               in.LLMModel,
-		MaxIterations:          in.MaxIterations,
-		MaxContextTokens:       in.MaxContextTokens, // 0 = 未配置，执行时两阶段解析
-		Temperature:            in.Temperature,
-		ReasoningEffort:        in.ReasoningEffort,
-		MaxTokens:              in.MaxTokens,
-		CompactionRecentGroups: in.CompactionRecentGroups,
-		AllowedSkills:          in.AllowedSkills,
-		MCPToolIDs:             in.MCPToolIDs,
-		KnowledgeWorkspaceIDs:  in.KnowledgeWorkspaceIDs,
-		MemoryScope:            in.MemoryScope,
-		MemoryParameters:       memoryParams,
-		Capabilities:           []domain.AgentCapability{},
-		CreatedBy:              in.ActorID,
+		ID:                    id,
+		Name:                  in.Name,
+		Type:                  parseAgentTypeWire(in.Type),
+		Description:           in.Description,
+		SystemPrompt:          in.SystemPrompt,
+		LLMModel:              in.LLMModel,
+		MaxIterations:         in.MaxIterations,
+		MaxContextTokens:      in.MaxContextTokens, // 0 = 未配置，执行时两阶段解析
+		Temperature:           in.Temperature,
+		ReasoningEffort:       in.ReasoningEffort,
+		MaxTokens:             in.MaxTokens,
+		AllowedSkills:         in.AllowedSkills,
+		MCPToolIDs:            in.MCPToolIDs,
+		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
+		MemoryScope:           in.MemoryScope,
+		MemoryParameters:      memoryParams,
+		Capabilities:          []domain.AgentCapability{},
+		CreatedBy:             in.ActorID,
 	}
 
 	if err := s.validateWorkspaceBindings(ctx, in.TenantID, in.KnowledgeWorkspaceIDs); err != nil {
@@ -407,10 +400,9 @@ func (s *AgentService) SnapshotRevision(ctx context.Context, tenantID, id string
 		MaxIterations: cfg.MaxIterations, MemoryScope: cfg.MemoryScope,
 		StuckThreshold: cfg.StuckThreshold,
 		ModelParameters: domain.ModelParameters{
-			MaxContextTokens:       cfg.MaxContextTokens,
-			Temperature:            cfg.Temperature,
-			MaxTokens:              cfg.MaxTokens,
-			CompactionRecentGroups: cfg.CompactionRecentGroups,
+			MaxContextTokens: cfg.MaxContextTokens,
+			Temperature:      cfg.Temperature,
+			MaxTokens:        cfg.MaxTokens,
 		},
 		Bindings: make([]domain.AgentBinding, 0,
 			len(cfg.AllowedSkills)+len(cfg.MCPToolIDs)+len(cfg.KnowledgeWorkspaceIDs)),
@@ -510,12 +502,11 @@ func revisionConfig(revision domain.AgentRevision) *domain.AgentConfig {
 	cfg := &domain.AgentConfig{
 		ID: revision.AgentID, Type: revision.Type, SystemPrompt: revision.SystemPrompt,
 		LLMModel: revision.Model, MaxIterations: revision.MaxIterations,
-		MaxContextTokens:       revision.ModelParameters.MaxContextTokens,
-		Temperature:            revision.ModelParameters.Temperature,
-		MaxTokens:              revision.ModelParameters.MaxTokens,
-		CompactionRecentGroups: revision.ModelParameters.CompactionRecentGroups,
-		MemoryScope:            revision.MemoryScope,
-		StuckThreshold:         revision.StuckThreshold,
+		MaxContextTokens: revision.ModelParameters.MaxContextTokens,
+		Temperature:      revision.ModelParameters.Temperature,
+		MaxTokens:        revision.ModelParameters.MaxTokens,
+		MemoryScope:      revision.MemoryScope,
+		StuckThreshold:   revision.StuckThreshold,
 	}
 	for _, binding := range revision.Bindings {
 		if !binding.Enabled {
@@ -725,8 +716,8 @@ func (s *AgentService) recordFailure(ctx context.Context, id, op string, err err
 func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in UpdateAgentInput) (*domain.AgentConfig, error) {
 	// Parameters map keys take precedence over the top-level sampling fields
 	// (only present keys overwrite); validation runs on the merged result.
-	temperature, maxTokens, recentGroups, reasoningEffort := applyParameterOverrides(in)
-	if err := s.validateSamplingParams(ctx, temperature, maxTokens, recentGroups, reasoningEffort); err != nil {
+	temperature, maxTokens, reasoningEffort := applyParameterOverrides(in)
+	if err := s.validateSamplingParams(ctx, temperature, maxTokens, reasoningEffort); err != nil {
 		return nil, err
 	}
 	if err := validateAgentMaxIterations(in.MaxIterations); err != nil {
@@ -741,23 +732,22 @@ func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in Upda
 		skills = []string{}
 	}
 	cfg := &domain.AgentConfig{
-		ID:                     id,
-		Name:                   in.Name,
-		Type:                   parseAgentTypeWire(in.Type),
-		Description:            in.Description,
-		SystemPrompt:           in.SystemPrompt,
-		LLMModel:               in.LLMModel,
-		MaxIterations:          in.MaxIterations,
-		MaxContextTokens:       in.MaxContextTokens, // 0 = 未配置，执行时两阶段解析
-		Temperature:            temperature,
-		ReasoningEffort:        reasoningEffort,
-		MaxTokens:              maxTokens,
-		CompactionRecentGroups: recentGroups,
-		AllowedSkills:          skills,
-		MCPToolIDs:             in.MCPToolIDs,
-		KnowledgeWorkspaceIDs:  in.KnowledgeWorkspaceIDs,
-		MemoryScope:            in.MemoryScope,
-		MemoryParameters:       memoryParams,
+		ID:                    id,
+		Name:                  in.Name,
+		Type:                  parseAgentTypeWire(in.Type),
+		Description:           in.Description,
+		SystemPrompt:          in.SystemPrompt,
+		LLMModel:              in.LLMModel,
+		MaxIterations:         in.MaxIterations,
+		MaxContextTokens:      in.MaxContextTokens, // 0 = 未配置，执行时两阶段解析
+		Temperature:           temperature,
+		ReasoningEffort:       reasoningEffort,
+		MaxTokens:             maxTokens,
+		AllowedSkills:         skills,
+		MCPToolIDs:            in.MCPToolIDs,
+		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
+		MemoryScope:           in.MemoryScope,
+		MemoryParameters:      memoryParams,
 	}
 	if err := s.validateWorkspaceBindings(ctx, reqctx.TenantIDFromContext(ctx), in.KnowledgeWorkspaceIDs); err != nil {
 		return nil, err
@@ -972,13 +962,13 @@ func filterPlatformWorkspaces(c *AgentConfig, platformWSSet map[string]struct{},
 // top-level sampling fields. Only keys present in the map overwrite; map
 // values win over the top-level fields. Zero values pass through unchanged
 // (0 = unset, the merge pack skips them, so an explicit 0 never clears).
-// 压缩三值（提示词/温度/模型）为平台级参数，不在此合并、不进 agent 配置。
-func applyParameterOverrides(in UpdateAgentInput) (float32, int, int, string) {
+// 压缩五值（提示词/温度/模型/最近轮数/冷却）为平台级参数，不在此合并、不进
+// agent 配置。
+func applyParameterOverrides(in UpdateAgentInput) (float32, int, string) {
 	temperature, maxTokens := in.Temperature, in.MaxTokens
-	recentGroups := in.CompactionRecentGroups
 	reasoningEffort := in.ReasoningEffort
 	if len(in.Parameters) == 0 {
-		return temperature, maxTokens, recentGroups, reasoningEffort
+		return temperature, maxTokens, reasoningEffort
 	}
 	if v, ok := numericSampleValue(in.Parameters["temperature"]); ok {
 		temperature = float32(v)
@@ -986,13 +976,10 @@ func applyParameterOverrides(in UpdateAgentInput) (float32, int, int, string) {
 	if v, ok := numericSampleValue(in.Parameters["max_tokens"]); ok {
 		maxTokens = int(v)
 	}
-	if v, ok := numericSampleValue(in.Parameters["compaction_recent_groups"]); ok {
-		recentGroups = int(v)
-	}
 	if v, ok := in.Parameters["reasoning_effort"].(string); ok {
 		reasoningEffort = v
 	}
-	return temperature, maxTokens, recentGroups, reasoningEffort
+	return temperature, maxTokens, reasoningEffort
 }
 
 // validateAndExtractMemoryParameters pulls the memory.* resource-scope keys
@@ -1189,7 +1176,7 @@ func (s *AgentService) resolveSystemAssistantModel(ctx context.Context, tenantID
 // rewritten by PUT 0. Both fail closed with ErrInvalidSamplingParameters and
 // never persist.
 func (s *AgentService) mergeSystemAssistantMaxTokens(ctx context.Context, requested, persisted int) (int, error) {
-	if err := s.validateSamplingParams(ctx, 0, requested, 0, ""); err != nil {
+	if err := s.validateSamplingParams(ctx, 0, requested, ""); err != nil {
 		return 0, err
 	}
 	maxTokens := requested
@@ -1197,7 +1184,7 @@ func (s *AgentService) mergeSystemAssistantMaxTokens(ctx context.Context, reques
 		maxTokens = persisted
 	}
 	if maxTokens != 0 {
-		if err := s.validateSamplingParams(ctx, 0, maxTokens, 0, ""); err != nil {
+		if err := s.validateSamplingParams(ctx, 0, maxTokens, ""); err != nil {
 			return 0, err
 		}
 	}
@@ -1302,27 +1289,26 @@ func parseAgentTypeWire(t string) domain.AgentType {
 
 func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 	return AgentDTO{
-		ID:                     cfg.ID,
-		Name:                   cfg.Name,
-		Type:                   string(domain.ReActAgent),
-		Description:            cfg.Description,
-		SystemPrompt:           cfg.SystemPrompt,
-		LLMModel:               cfg.LLMModel,
-		MaxIterations:          cfg.MaxIterations,
-		MaxContextTokens:       cfg.MaxContextTokens,
-		Temperature:            cfg.Temperature,
-		ReasoningEffort:        cfg.ReasoningEffort,
-		MaxTokens:              cfg.MaxTokens,
-		CompactionRecentGroups: cfg.CompactionRecentGroups,
-		AllowedSkills:          cfg.AllowedSkills,
-		MCPToolIDs:             cfg.MCPToolIDs,
-		KnowledgeWorkspaceIDs:  cfg.KnowledgeWorkspaceIDs,
-		CreatedAt:              time.Now().Format(time.RFC3339),
-		MemoryScope:            cfg.MemoryScope,
-		SystemKey:              cfg.SystemKey,
-		IsSystem:               cfg.IsSystem,
-		ManagementMode:         cfg.ManagementMode,
-		Parameters:             samplingParameterMap(cfg),
+		ID:                    cfg.ID,
+		Name:                  cfg.Name,
+		Type:                  string(domain.ReActAgent),
+		Description:           cfg.Description,
+		SystemPrompt:          cfg.SystemPrompt,
+		LLMModel:              cfg.LLMModel,
+		MaxIterations:         cfg.MaxIterations,
+		MaxContextTokens:      cfg.MaxContextTokens,
+		Temperature:           cfg.Temperature,
+		ReasoningEffort:       cfg.ReasoningEffort,
+		MaxTokens:             cfg.MaxTokens,
+		AllowedSkills:         cfg.AllowedSkills,
+		MCPToolIDs:            cfg.MCPToolIDs,
+		KnowledgeWorkspaceIDs: cfg.KnowledgeWorkspaceIDs,
+		CreatedAt:             time.Now().Format(time.RFC3339),
+		MemoryScope:           cfg.MemoryScope,
+		SystemKey:             cfg.SystemKey,
+		IsSystem:              cfg.IsSystem,
+		ManagementMode:        cfg.ManagementMode,
+		Parameters:            samplingParameterMap(cfg),
 	}
 }
 
@@ -1336,9 +1322,6 @@ func samplingParameterMap(cfg *domain.AgentConfig) map[string]any {
 	}
 	if cfg.MaxTokens != 0 {
 		params["max_tokens"] = cfg.MaxTokens
-	}
-	if cfg.CompactionRecentGroups != 0 {
-		params["compaction_recent_groups"] = cfg.CompactionRecentGroups
 	}
 	if cfg.ReasoningEffort != "" {
 		params["reasoning_effort"] = cfg.ReasoningEffort
@@ -2586,8 +2569,6 @@ func (s *AgentService) resolveEffectiveParameters(
 	declared := map[string]any{
 		"agent.temperature":              cfg.Temperature,
 		"agent.max_tokens":               cfg.MaxTokens,
-		"agent.compaction_recent_groups": cfg.CompactionRecentGroups,
-		"agent.compaction_cooldown_sec":  cfg.CompactionCooldownSec,
 		"agent.max_tokens_per_execution": cfg.MaxTokensPerExecution,
 	}
 	// ReasoningEffort 用 "" 作 unset 哨兵,但 resolver.isUnset 只认零值:空串放
@@ -2612,8 +2593,6 @@ func (s *AgentService) resolveEffectiveParameters(
 	opts = appendFloatOption(opts, effective, "agent.temperature", WithTemperature)
 	opts = appendIntOption(opts, effective, "agent.max_tokens", WithMaxTokens)
 	opts = appendStringOption(opts, effective, "agent.reasoning_effort", WithReasoningEffort)
-	opts = appendIntOption(opts, effective, "agent.compaction_recent_groups", WithCompactionRecentGroups)
-	opts = appendIntOption(opts, effective, "agent.compaction_cooldown_sec", WithCompactionCooldownSec)
 	opts = appendIntOption(opts, effective, "agent.max_tokens_per_execution", WithMaxTokensPerExecution)
 	options = append(options, opts...)
 	// Platform-scope execution toggles are resolved individually; they are
