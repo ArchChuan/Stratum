@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/byteBuilderX/stratum/config"
 	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
@@ -15,8 +14,6 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-	"go.uber.org/zap/zaptest/observer"
 )
 
 // llmRerankerCompleterStub captures the completion request for assertions.
@@ -75,13 +72,13 @@ func (m *rerankMetricRecorder) RecordRerankDuration(model string, seconds float6
 }
 
 func newLLMRerankerStub(stub *llmRerankerCompleterStub, metrics observability.MetricsProvider) *llmReranker {
-	return newLLMReranker(stub, "qwen-turbo", constants.RerankLLMTimeout, metrics, zap.NewNop())
+	return newLLMReranker(stub, constants.RerankLLMTimeout, metrics, zap.NewNop())
 }
 
 func TestLLMRerankerParsesScoresAndConfiguresDeterministicCall(t *testing.T) {
 	stub := &llmRerankerCompleterStub{content: `{"scores":[{"index":1,"score":0.9},{"index":0,"score":0.4}]}`}
 	got, err := newLLMRerankerStub(stub, nil).Rerank(context.Background(), knowledgeport.RerankRequest{
-		Query: "q", Documents: []string{"a", "b"}, TopN: 2,
+		Query: "q", Documents: []string{"a", "b"}, Model: "qwen-turbo", TopN: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +102,7 @@ func TestLLMRerankerTruncatesCandidates(t *testing.T) {
 	long := strings.Repeat("长", constants.RerankLLMMaxDocRunes*2)
 	stub := &llmRerankerCompleterStub{content: `{"scores":[]}`}
 	if _, err := newLLMRerankerStub(stub, nil).Rerank(context.Background(), knowledgeport.RerankRequest{
-		Query: "q", Documents: []string{long}, TopN: 1,
+		Query: "q", Documents: []string{long}, Model: "qwen-turbo", TopN: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +116,7 @@ func TestLLMRerankerTruncatesCandidates(t *testing.T) {
 func TestLLMRerankerDedupsAndSkipsInvalidIndex(t *testing.T) {
 	stub := &llmRerankerCompleterStub{content: `{"scores":[{"index":0,"score":0.9},{"index":0,"score":0.1},{"index":99,"score":0.8},{"index":-1,"score":0.7}]}`}
 	got, err := newLLMRerankerStub(stub, nil).Rerank(context.Background(), knowledgeport.RerankRequest{
-		Query: "q", Documents: []string{"a", "b"}, TopN: 2,
+		Query: "q", Documents: []string{"a", "b"}, Model: "qwen-turbo", TopN: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -136,7 +133,7 @@ func TestLLMRerankerSurfacesErrors(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := newLLMRerankerStub(stub, nil).Rerank(context.Background(), knowledgeport.RerankRequest{
-				Query: "q", Documents: []string{"a", "b"},
+				Query: "q", Documents: []string{"a", "b"}, Model: "qwen-turbo",
 			}); err == nil {
 				t.Fatal("must surface an error")
 			}
@@ -147,7 +144,7 @@ func TestLLMRerankerSurfacesErrors(t *testing.T) {
 func TestLLMRerankerEmptyScoresIsEmptyResult(t *testing.T) {
 	stub := &llmRerankerCompleterStub{content: `{"scores":[]}`}
 	got, err := newLLMRerankerStub(stub, nil).Rerank(context.Background(), knowledgeport.RerankRequest{
-		Query: "q", Documents: []string{"a", "b"},
+		Query: "q", Documents: []string{"a", "b"}, Model: "qwen-turbo",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -159,8 +156,8 @@ func TestLLMRerankerEmptyScoresIsEmptyResult(t *testing.T) {
 
 func TestLLMRerankerNilMetricsTolerated(t *testing.T) {
 	stub := &llmRerankerCompleterStub{content: `{"scores":[]}`}
-	if _, err := newLLMReranker(stub, "m", 0, nil, zap.NewNop()).Rerank(context.Background(), knowledgeport.RerankRequest{
-		Query: "q", Documents: []string{"a"},
+	if _, err := newLLMReranker(stub, 0, nil, zap.NewNop()).Rerank(context.Background(), knowledgeport.RerankRequest{
+		Query: "q", Documents: []string{"a"}, Model: "qwen-turbo",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +168,7 @@ func TestLLMRerankerRecordsMetrics(t *testing.T) {
 
 	m := &rerankMetricRecorder{}
 	stub := &llmRerankerCompleterStub{content: `{"scores":[{"index":0,"score":1}]}`}
-	if _, err := newLLMRerankerStub(stub, m).Rerank(ctx, knowledgeport.RerankRequest{Query: "q", Documents: []string{"a"}}); err != nil {
+	if _, err := newLLMRerankerStub(stub, m).Rerank(ctx, knowledgeport.RerankRequest{Query: "q", Documents: []string{"a"}, Model: "qwen-turbo"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(m.inc) != 1 || m.inc[0] != "tenant-1:builtin-llm:ok" {
@@ -183,7 +180,7 @@ func TestLLMRerankerRecordsMetrics(t *testing.T) {
 
 	m2 := &rerankMetricRecorder{}
 	failStub := &llmRerankerCompleterStub{err: errors.New("boom")}
-	if _, err := newLLMRerankerStub(failStub, m2).Rerank(ctx, knowledgeport.RerankRequest{Query: "q", Documents: []string{"a"}}); err == nil {
+	if _, err := newLLMRerankerStub(failStub, m2).Rerank(ctx, knowledgeport.RerankRequest{Query: "q", Documents: []string{"a"}, Model: "qwen-turbo"}); err == nil {
 		t.Fatal("must fail")
 	}
 	if len(m2.inc) != 1 || m2.inc[0] != "tenant-1:builtin-llm:error" {
@@ -203,21 +200,21 @@ func TestLLMRerankerAppliesTimeoutBudget(t *testing.T) {
 }
 
 func TestLLMRerankerTimeoutCancelsBlockedCompleter(t *testing.T) {
-	r := newLLMReranker(blockingCompleter{}, "m", 20*time.Millisecond, nil, zap.NewNop())
-	_, err := r.Rerank(context.Background(), knowledgeport.RerankRequest{Query: "q", Documents: []string{"a"}})
+	r := newLLMReranker(blockingCompleter{}, 20*time.Millisecond, nil, zap.NewNop())
+	_, err := r.Rerank(context.Background(), knowledgeport.RerankRequest{Query: "q", Documents: []string{"a"}, Model: "qwen-turbo"})
 	if err == nil {
 		t.Fatal("blocked completer must be cancelled by the timeout")
 	}
 }
 
-// hasLogMessage reports whether any captured log entry carries the message.
-func hasLogMessage(entries []observer.LoggedEntry, msg string) bool {
-	for _, e := range entries {
-		if e.Message == msg {
-			return true
-		}
+func TestLLMRerankerRejectsEmptyModel(t *testing.T) {
+	r := newLLMReranker(&llmRerankerCompleterStub{}, constants.RerankLLMTimeout, nil, zap.NewNop())
+	_, err := r.Rerank(context.Background(), knowledgeport.RerankRequest{
+		Query: "q", Documents: []string{"d1", "d2"}, Model: "", TopN: 2,
+	})
+	if err == nil {
+		t.Fatal("empty model must be rejected (fail-open via error), not silently defaulted")
 	}
-	return false
 }
 
 // newSemanticRerankContainer builds a minimal Container whose chat catalogue
@@ -225,7 +222,7 @@ func hasLogMessage(entries []observer.LoggedEntry, msg string) bool {
 // （其 chatProtos 传 nil → ModelRegistry.supports(CapChat) 恒 false，chat 模型
 // 全被 listModelsByCapability 过滤掉）；显式注入 chat 协议 map 使
 // ListChatModelsByTenant 能返回该模型。
-func newSemanticRerankContainer(model string, topN int) *Container {
+func newSemanticRerankContainer(model string) *Container {
 	var models []llmgatewaydomain.Model
 	if model != "" {
 		models = []llmgatewaydomain.Model{{
@@ -234,7 +231,6 @@ func newSemanticRerankContainer(model string, topN int) *Container {
 		}}
 	}
 	return &Container{
-		Config: &config.Config{KnowledgeRerank: config.KnowledgeRerankConfig{Model: model, TopN: topN}},
 		Logger: zap.NewNop(),
 		LLMGateway: &LLMGateway{
 			Gateway: llmgateway.NewGateway(nil, nil, nil),
@@ -253,93 +249,47 @@ func newSemanticRerankContainer(model string, topN int) *Container {
 }
 
 func TestSemanticRerankerDepsGates(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("nil gateway not injected", func(t *testing.T) {
-		c := newSemanticRerankContainer("qwen-turbo", 0)
-		c.LLMGateway = nil
-		if r, topN := c.semanticRerankerDeps(ctx); r != nil || topN != 0 {
-			t.Fatalf("nil gateway must not inject: r=%v topN=%d", r, topN)
+	t.Run("gateway 不可用不注入", func(t *testing.T) {
+		c := &Container{LLMGateway: nil}
+		if r, topN := c.semanticRerankerDeps(); r != nil || topN != 0 {
+			t.Fatalf("semanticRerankerDeps(nil gateway) = (%v, %d), want (nil, 0)", r, topN)
 		}
 	})
-	t.Run("nil gateway pointer not injected", func(t *testing.T) {
-		c := newSemanticRerankContainer("qwen-turbo", 0)
-		c.LLMGateway.Gateway = nil
-		if r, _ := c.semanticRerankerDeps(ctx); r != nil {
-			t.Fatalf("nil gateway pointer must not inject: r=%v", r)
+	t.Run("gateway 可用即注入（模型运行期解析）", func(t *testing.T) {
+		c := &Container{
+			LLMGateway: &LLMGateway{Gateway: llmgateway.NewGateway(nil, nil, nil)},
+			Logger:     zap.NewNop(),
 		}
-	})
-	t.Run("empty model not injected", func(t *testing.T) {
-		c := newSemanticRerankContainer("", 0)
-		if r, topN := c.semanticRerankerDeps(ctx); r != nil || topN != 0 {
-			t.Fatalf("empty model must not inject: r=%v topN=%d", r, topN)
-		}
-	})
-	t.Run("model absent from catalogue not injected", func(t *testing.T) {
-		core, logs := observer.New(zapcore.WarnLevel)
-		c := newSemanticRerankContainer("qwen-turbo", 0)
-		c.Config = &config.Config{KnowledgeRerank: config.KnowledgeRerankConfig{Model: "not-managed", TopN: 5}}
-		c.Logger = zap.New(core)
-		if r, topN := c.semanticRerankerDeps(ctx); r != nil || topN != 0 {
-			t.Fatalf("absent model must not inject: r=%v topN=%d", r, topN)
-		}
-		if !hasLogMessage(logs.All(), "knowledge.rerank.model_unavailable") {
-			t.Fatal("absent model must WARN at wiring time")
-		}
-	})
-	t.Run("defaults resolved when zero", func(t *testing.T) {
-		c := newSemanticRerankContainer("qwen-turbo", 0) // TopN=0, Timeout=0, Platform=nil
-		r, topN := c.semanticRerankerDeps(ctx)
-		lr, ok := r.(*llmReranker)
-		if !ok || lr == nil {
-			t.Fatalf("must inject llmReranker, got %T", r)
+		r, topN := c.semanticRerankerDeps()
+		if r == nil {
+			t.Fatal("semanticRerankerDeps with gateway must inject reranker")
 		}
 		if topN != constants.RerankLLMTopN {
-			t.Fatalf("topN=%d want default %d", topN, constants.RerankLLMTopN)
-		}
-		if lr.timeout != constants.RerankLLMTimeout {
-			t.Fatalf("timeout=%v want default %v", lr.timeout, constants.RerankLLMTimeout)
-		}
-		if lr.model != "qwen-turbo" {
-			t.Fatalf("model=%q", lr.model)
-		}
-		if lr.metrics != nil {
-			t.Fatal("nil platform must yield nil metrics")
-		}
-	})
-	t.Run("explicit values kept", func(t *testing.T) {
-		c := newSemanticRerankContainer("qwen-turbo", 0)
-		c.Config = &config.Config{KnowledgeRerank: config.KnowledgeRerankConfig{
-			Model: "qwen-turbo", TopN: 3, Timeout: 7 * time.Second,
-		}}
-		r, topN := c.semanticRerankerDeps(ctx)
-		lr := r.(*llmReranker)
-		if topN != 3 || lr.timeout != 7*time.Second {
-			t.Fatalf("topN=%d timeout=%v", topN, lr.timeout)
+			t.Fatalf("topN = %d, want %d", topN, constants.RerankLLMTopN)
 		}
 	})
 }
 
-func TestLLMRankModelInCatalogue(t *testing.T) {
+func TestLLMChatModelInCatalogue(t *testing.T) {
 	ctx := context.Background()
-	managed := newSemanticRerankContainer("qwen-turbo", 0)
+	managed := newSemanticRerankContainer("qwen-turbo")
 
-	if !managed.llmRerankModelInCatalogue(ctx, "qwen-turbo") {
+	if !managed.llmChatModelInCatalogue(ctx, "qwen-turbo") {
 		t.Fatal("managed chat model must be found")
 	}
-	if managed.llmRerankModelInCatalogue(ctx, "missing") {
+	if managed.llmChatModelInCatalogue(ctx, "missing") {
 		t.Fatal("absent model must not be found")
 	}
 
-	nilRegistry := newSemanticRerankContainer("qwen-turbo", 0)
+	nilRegistry := newSemanticRerankContainer("qwen-turbo")
 	nilRegistry.LLMGateway.Registry = nil
-	if nilRegistry.llmRerankModelInCatalogue(ctx, "qwen-turbo") {
+	if nilRegistry.llmChatModelInCatalogue(ctx, "qwen-turbo") {
 		t.Fatal("nil registry must report not found")
 	}
 
-	nilGateway := newSemanticRerankContainer("qwen-turbo", 0)
+	nilGateway := newSemanticRerankContainer("qwen-turbo")
 	nilGateway.LLMGateway = nil
-	if nilGateway.llmRerankModelInCatalogue(ctx, "qwen-turbo") {
+	if nilGateway.llmChatModelInCatalogue(ctx, "qwen-turbo") {
 		t.Fatal("nil gateway must report not found")
 	}
 }

@@ -3,6 +3,7 @@ package wiring
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -18,10 +19,10 @@ import (
 // llmReranker 是 builtin-score-v1 的 LLM 语义重排器（listwise）：复用平台 LLM
 // 网关对候选按查询相关性打分，接口与外部 reranker 同形
 // （knowledgeport.Reranker）。放在组合根（与 knowledgeJudge 同先例），
-// knowledge/infrastructure/rerank 保持对兄弟 context 零依赖。
+// knowledge/infrastructure/rerank 保持对兄弟 context 零依赖。模型在运行期
+// 从请求读取（workspace 显式配置），wiring 不做平台级模型绑定。
 type llmReranker struct {
 	completer llmgatewaydomain.LLMCompleter // Gateway 结构性满足
-	model     string                        // 平台配置重排模型（chat 目录校验在 wiring 层）
 	timeout   time.Duration                 // 单次调用预算（≤0 回落 RerankLLMTimeout）
 	metrics   observability.MetricsProvider // 可为 nil（跳过指标记录）
 	logger    *zap.Logger
@@ -29,12 +30,11 @@ type llmReranker struct {
 
 func newLLMReranker(
 	completer llmgatewaydomain.LLMCompleter,
-	model string,
 	timeout time.Duration,
 	metrics observability.MetricsProvider,
 	logger *zap.Logger,
 ) *llmReranker {
-	return &llmReranker{completer: completer, model: model, timeout: timeout, metrics: metrics, logger: logger}
+	return &llmReranker{completer: completer, timeout: timeout, metrics: metrics, logger: logger}
 }
 
 func (r *llmReranker) rerankTimeout() time.Duration {
@@ -50,6 +50,12 @@ func (r *llmReranker) rerankTimeout() time.Duration {
 // 的补尾与最终排序由调用方负责。失败/超时/解析失败返回 error（fail-open，
 // 调用方降级为召回分数排序）。
 func (r *llmReranker) Rerank(ctx context.Context, req knowledgeport.RerankRequest) ([]knowledgeport.RerankResult, error) {
+	// 空模型显式拒绝（fail-open 由调用方降级）：Gateway.resolveChain 会对空模型
+	// 静默回填 provider 默认模型，不挡在这里则未配置模型的 builtin 会用错模型
+	// 重排而非降级（review C1）。
+	if req.Model == "" {
+		return nil, errors.New("llm rerank: empty model")
+	}
 	ctx, cancel := context.WithTimeout(ctx, r.rerankTimeout())
 	defer cancel()
 
@@ -65,7 +71,7 @@ func (r *llmReranker) Rerank(ctx context.Context, req knowledgeport.RerankReques
 	zero := float64(0) // 显式 0 = 确定性采样，避免 provider 默认温度（review M4/F2）
 	start := time.Now()
 	resp, err := r.completer.Complete(ctx, &llmgatewaydomain.CompletionRequest{
-		Model:     r.model,
+		Model:     req.Model,
 		MaxTokens: constants.RerankLLMMaxTokens,
 		ResponseFormat: &llmgatewaydomain.ResponseFormat{
 			Type: "json_object",

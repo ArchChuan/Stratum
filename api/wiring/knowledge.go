@@ -2,6 +2,7 @@ package wiring
 
 import (
 	"context"
+	"fmt"
 
 	"go.uber.org/zap"
 
@@ -79,12 +80,12 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 		rag.SetDocRepo(docRepo)
 	}
 	// 证据充分性 judge（生成前门，仅 evidence 路径）：fail-closed——gateway
-	// 不可用或未启用时保持 nil，检索行为与不配置完全一致。单独成方法以
-	// 控制 buildKnowledge 的圈复杂度。
+	// 不可用时保持 nil，检索行为与不配置完全一致。单独成方法以控制
+	// buildKnowledge 的圈复杂度。
 	c.wireKnowledgeJudge(rag)
-	// builtin-score-v1 的 LLM 语义重排（fail-open）：未配置/模型不在 chat 目录
-	// 时保持未装配，builtin 走纯召回分数排序。
-	c.wireSemanticReranker(ctx, rag)
+	// builtin-score-v1 的 LLM 语义重排（fail-open）：gateway 不可用时保持
+	// 未装配，builtin 走纯召回分数排序；模型在运行期从请求读取。
+	c.wireSemanticReranker(rag)
 	if c.Platform != nil && c.Platform.Metrics != nil {
 		ingest.SetMetrics(c.Platform.Metrics)
 		rag.SetMetrics(c.Platform.Metrics)
@@ -125,76 +126,61 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 	return nil
 }
 
-// wireKnowledgeJudge 在 LLM gateway 可用且 KNOWLEDGE_JUDGE_ENABLED 时注入证据
-// 充分性 judge 解析器；任一条件不满足保持未装配（judgeResolver nil，fail-closed
-// 放行）。模型在运行期从请求解析（workspace 显式 JudgeModel），resolver 闭包
-// 每次查询按需构造实例。单独成方法以控制 buildKnowledge 的圈复杂度。
+// wireKnowledgeJudge 在 LLM gateway 可用时注入证据充分性 judge 解析器；gateway
+// 不可用 → 不注入（judgeResolver nil，fail-closed 放行）。模型从请求解析
+// （workspace 显式 JudgeModel），resolver 校验模型在 enabled chat 目录后装配
+// （目录未知 → 返回 error → 调用方 WARN + 放行）。judge 门开关由 JudgeModel
+// 空/非空表达，不再有平台级 KNOWLEDGE_JUDGE_ENABLED。单独成方法以控制
+// buildKnowledge 的圈复杂度。
 func (c *Container) wireKnowledgeJudge(rag *knowledge.RAGService) {
-	if c.LLMGateway == nil || c.LLMGateway.Gateway == nil || !c.Config.KnowledgeJudge.Enabled {
+	if c.LLMGateway == nil || c.LLMGateway.Gateway == nil {
 		return
 	}
 	completer := c.LLMGateway.Gateway
-	timeout := c.Config.KnowledgeJudge.Timeout
 	var metrics observability.MetricsProvider
 	if c.Platform != nil {
 		metrics = c.Platform.Metrics
 	}
 	rag.SetSufficiencyJudgeResolver(func(ctx context.Context, model string) (knowledgeport.SufficiencyJudge, error) {
-		return &knowledgeJudge{completer: completer, model: model, timeout: timeout, metrics: metrics}, nil
+		if !c.llmChatModelInCatalogue(ctx, model) {
+			return nil, fmt.Errorf("knowledge judge: model %q not in chat catalogue", model)
+		}
+		return &knowledgeJudge{completer: completer, model: model, timeout: constants.KnowledgeJudgeTimeout, metrics: metrics}, nil
 	})
 }
 
-// wireSemanticReranker 在 LLM gateway 可用、KNOWLEDGE_RERANK_MODEL 已配置且
-// 模型在 chat 目录时注入 builtin-score-v1 的语义重排器；任一条件不满足保持
-// 未装配（fail-open，builtin 走纯召回分数排序）。单独成方法以控制
+// wireSemanticReranker 在 LLM gateway 可用时注入 builtin-score-v1 的语义重排器；
+// 模型在运行期从请求读取（workspace 显式配置），wiring 不做模型目录预检（目录
+// 校验在 application 保存路径，运行期失败 fail-open 兜底）。单独成方法以控制
 // buildKnowledge 的圈复杂度。
-func (c *Container) wireSemanticReranker(ctx context.Context, rag *knowledge.RAGService) {
-	if r, topN := c.semanticRerankerDeps(ctx); r != nil {
+func (c *Container) wireSemanticReranker(rag *knowledge.RAGService) {
+	if r, topN := c.semanticRerankerDeps(); r != nil {
 		rag.SetSemanticReranker(r, topN)
 	}
 }
 
-// semanticRerankerDeps 解析并构建 LLM 语义重排器；任一前置条件不满足返回
-// (nil, 0)。topN/timeout 的 ≤0 默认值在此解析（回落常量），使 wiring 层
-// 单测可直接验证注入决策而无需构造完整 Gateway（RAGService.semanticReranker
-// 为 application 包未导出字段，行为探针会因 Gateway.Complete nil-panic）。
-func (c *Container) semanticRerankerDeps(ctx context.Context) (knowledgeport.Reranker, int) {
-	if c.LLMGateway == nil || c.LLMGateway.Gateway == nil || !c.Config.RerankLLMConfigured() {
+// semanticRerankerDeps 构建 LLM 语义重排器；gateway 不可用返回 (nil, 0)。
+// topN/timeout 用常量默认（RerankLLMTopN/RerankLLMTimeout，行为数字禁止内联）。
+func (c *Container) semanticRerankerDeps() (knowledgeport.Reranker, int) {
+	if c.LLMGateway == nil || c.LLMGateway.Gateway == nil {
 		return nil, 0
-	}
-	krc := c.Config.KnowledgeRerank
-	if !c.llmRerankModelInCatalogue(ctx, krc.Model) {
-		// fail-open 装配：模型不在 chat 目录 → WARN + 不注入，builtin 走纯排序。
-		// 配置错误在启动期暴露，而非运行期每查询失败（review F7）。
-		c.Logger.Warn("knowledge.rerank.model_unavailable",
-			zap.String("model", krc.Model), zap.String("reason", "model not in chat catalogue"))
-		return nil, 0
-	}
-	topN := krc.TopN
-	if topN <= 0 {
-		topN = constants.RerankLLMTopN
-	}
-	timeout := krc.Timeout
-	if timeout <= 0 {
-		timeout = constants.RerankLLMTimeout
 	}
 	var metrics observability.MetricsProvider
 	if c.Platform != nil {
 		metrics = c.Platform.Metrics // c.Platform 可能为 nil（review H2）
 	}
-	return newLLMReranker(c.LLMGateway.Gateway, krc.Model, timeout, metrics, c.Logger), topN
+	return newLLMReranker(c.LLMGateway.Gateway, constants.RerankLLMTimeout, metrics, c.Logger), constants.RerankLLMTopN
 }
 
-// llmRerankModelInCatalogue 检查平台配置的重排模型是否在 enabled 的 chat 目录
-// 中。目录查询失败或 registry 缺失按"不在目录"处理（fail-open 不注入、告警，
-// 不阻断启动）。
-func (c *Container) llmRerankModelInCatalogue(ctx context.Context, model string) bool {
+// llmChatModelInCatalogue 检查模型是否在 enabled 的 chat 目录中。目录查询失败或
+// registry 缺失按"不在目录"处理（judge fail-closed 放行、告警，不阻断启动）。
+func (c *Container) llmChatModelInCatalogue(ctx context.Context, model string) bool {
 	if c.LLMGateway == nil || c.LLMGateway.Registry == nil {
 		return false
 	}
 	names, err := c.LLMGateway.Registry.ListChatModelsByTenant(ctx)
 	if err != nil {
-		c.Logger.Warn("knowledge.rerank.catalogue_unavailable", zap.Error(err))
+		c.Logger.Warn("knowledge.judge.catalogue_unavailable", zap.Error(err))
 		return false
 	}
 	for _, n := range names {
