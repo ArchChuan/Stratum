@@ -22,6 +22,8 @@ interface ConfigValues {
   chunk_overlap?: number;
   top_k?: number;
   reranking?: string;
+  rerank_model?: string;
+  judge_model?: string;
   score_threshold?: number;
   rerank_top_k?: number;
 }
@@ -29,6 +31,7 @@ interface ConfigValues {
 interface WorkspaceConfigFormProps {
   form: FormInstance<ConfigValues>;
   loading: boolean;
+  chatModels: string[];
   onSubmit: (values: ConfigValues) => void;
 }
 
@@ -38,13 +41,14 @@ interface WorkspaceConfigFormProps {
 const defaultPlaceholder = (unset: boolean, text: string): string | undefined =>
   unset ? text : undefined;
 
-export const WorkspaceConfigForm = ({ form, loading, onSubmit }: WorkspaceConfigFormProps) => {
+export const WorkspaceConfigForm = ({ form, loading, chatModels, onSubmit }: WorkspaceConfigFormProps) => {
   const queryMode = Form.useWatch('query_mode', form);
   const chunkSize = Form.useWatch('chunk_size', form);
   const chunkOverlap = Form.useWatch('chunk_overlap', form);
   const topK = Form.useWatch('top_k', form);
   const scoreThreshold = Form.useWatch('score_threshold', form);
   const rerankTopK = Form.useWatch('rerank_top_k', form);
+  const reranking = Form.useWatch('reranking', form);
 
   return (
     <Card
@@ -91,7 +95,7 @@ export const WorkspaceConfigForm = ({ form, loading, onSubmit }: WorkspaceConfig
             placeholder={defaultPlaceholder(topK == null, `默认：${KNOWLEDGE_DEFAULT_TOP_K}`)}
           />
         </Form.Item>
-        <Form.Item label="重排策略" name="reranking" tooltip="内置重排由平台 LLM 模型语义精排，需在模型管理中配置重排模型；未配置时自动降级为分数排序。外部重排需在模型管理中配置">
+        <Form.Item label="重排策略" name="reranking" tooltip="内置重排需在模型管理中配置重排模型；未配置模型时无法保存。外部重排需在模型管理中配置">
           <Select style={{ width: '100%', maxWidth: 140 }} allowClear placeholder="关闭">
             <Option value="">关闭</Option>
             <Option value="builtin-score-v1">内置重排</Option>
@@ -112,6 +116,30 @@ export const WorkspaceConfigForm = ({ form, loading, onSubmit }: WorkspaceConfig
             max={20}
             style={{ width: '100%', maxWidth: 120 }}
             placeholder={defaultPlaceholder(rerankTopK == null, '默认：0（跟随 Top-K）')}
+          />
+        </Form.Item>
+        {reranking === 'builtin-score-v1' && (
+          <Form.Item
+            label="重排模型"
+            name="rerank_model"
+            preserve={false}
+            rules={[{ required: true, message: '内置重排必须选择重排模型' }]}
+            tooltip="内置重排的 LLM 语义精排模型（chat 目录）；切换重排策略即关闭"
+          >
+            <Select
+              style={{ width: '100%', maxWidth: 160 }}
+              placeholder="选择重排模型"
+              allowClear
+              options={chatModels.map((m) => ({ label: m, value: m }))}
+            />
+          </Form.Item>
+        )}
+        <Form.Item label="判断模型" name="judge_model" tooltip="证据充分性判断模型（chat 目录）；清空即关闭判断门">
+          <Select
+            style={{ width: '100%', maxWidth: 160 }}
+            placeholder="选择判断模型"
+            allowClear
+            options={chatModels.map((m) => ({ label: m, value: m }))}
           />
         </Form.Item>
         <Form.Item>

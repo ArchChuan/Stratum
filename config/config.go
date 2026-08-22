@@ -60,8 +60,6 @@ type Config struct {
 	TracePayload           TracePayloadConfig
 	MemoryPipeline         MemoryPipelineConfig
 	AgentFactCheck         AgentFactCheckConfig
-	KnowledgeJudge         KnowledgeJudgeConfig
-	KnowledgeRerank        KnowledgeRerankConfig
 	// 热更新运行时状态（Nacos listener 写、wiring 注册回调读）
 	memoryDynamic          atomic.Pointer[MemoryPipelineDynamic]
 	memoryDynamicListeners []func(MemoryPipelineDynamic)
@@ -75,12 +73,6 @@ type Config struct {
 // 指针接收者：Config 含 atomic.Pointer/sync.RWMutex 后不可按值复制（vet copylocks）。
 func (c *Config) RerankConfigured() bool {
 	return c.RerankBaseURL != ""
-}
-
-// RerankLLMConfigured reports whether the builtin semantic rerank backend is
-// available. The model is the single switch: an empty model disables it.
-func (c *Config) RerankLLMConfigured() bool {
-	return c.KnowledgeRerank.Model != ""
 }
 
 type OpikConfig struct {
@@ -121,27 +113,6 @@ type AgentFactCheckConfig struct {
 	JudgeModel string
 	TopK       int
 	MaxClaims  int
-}
-
-// KnowledgeJudgeConfig 控制知识层证据充分性 judge（生成前门，仅 evidence
-// 路径挂载）。默认关闭（fail-closed）：未装配/失败/超时全部降级为"未判定"，
-// 行为与不配置时完全一致。模型独立于 factcheck/evaluation judge，不静默回落。
-type KnowledgeJudgeConfig struct {
-	Enabled bool
-	Model   string
-	Timeout time.Duration
-}
-
-// KnowledgeRerankConfig 控制 builtin-score-v1 的 LLM 语义重排（平台级，全租户
-// 统一）。默认关闭（fail-open）：Model 未配置/重排器未装配/调用失败全部降级
-// 为召回分数排序，检索行为与不配置时完全一致。
-type KnowledgeRerankConfig struct {
-	// Model 是语义重排模型（必须存在于 chat 目录，wiring 启动时校验；
-	// 空 = 关闭语义重排）。
-	Model   string
-	Timeout time.Duration
-	// TopN 是精排候选上限（≤0 回落 RerankLLMTopN）。
-	TopN int
 }
 
 func Load() (*Config, error) {
@@ -217,20 +188,6 @@ func Load() (*Config, error) {
 			JudgeModel: getEnv("AGENT_FACTCHECK_JUDGE_MODEL", ""),
 			TopK:       getEnvInt("AGENT_FACTCHECK_TOPK", constants.AgentFactCheckTopK),
 			MaxClaims:  getEnvInt("AGENT_FACTCHECK_MAX_CLAIMS", constants.AgentFactCheckMaxClaims),
-		},
-		KnowledgeJudge: KnowledgeJudgeConfig{
-			Enabled: getEnv("KNOWLEDGE_JUDGE_ENABLED", "") == "true",
-			// 模型未配置（空）时交由 llmgateway 从模型目录解析默认；代码内
-			// 不写死兜底模型，配置的模型失效时由 llmgateway fail-closed + 告警。
-			Model: getEnv("KNOWLEDGE_JUDGE_MODEL", ""),
-			Timeout: time.Duration(getEnvInt("KNOWLEDGE_JUDGE_TIMEOUT_SECONDS",
-				int(constants.KnowledgeJudgeTimeout.Seconds()))) * time.Second,
-		},
-		KnowledgeRerank: KnowledgeRerankConfig{
-			Model: getEnv("KNOWLEDGE_RERANK_MODEL", ""),
-			Timeout: time.Duration(getEnvInt("KNOWLEDGE_RERANK_TIMEOUT_SECONDS",
-				int(constants.RerankLLMTimeout.Seconds()))) * time.Second,
-			TopN: getEnvInt("KNOWLEDGE_RERANK_TOPN", constants.RerankLLMTopN),
 		},
 	}
 	return cfg, nil

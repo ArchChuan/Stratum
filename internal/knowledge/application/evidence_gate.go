@@ -12,16 +12,31 @@ import (
 // searchWorkspaceWithEvidence 调用）：相似度阈值回答"像不像"，judge 回答
 // "能不能推出结论"。判 INSUFFICIENT 时该 workspace 按无内容处理（Sources
 // 置空 + NoAnswer=insufficient_evidence，维持 content=="" ⇒ NoAnswer!=nil
-// 不变量），经聚合严重度排序上报。fail-closed：judge 未装配/调用失败/超时
-// → 原样放行（WARN 留痕），行为与不配置时完全一致，绝不误杀检索。
-func (rs *RAGService) judgeSufficiencyGate(ctx context.Context, tenantID, workspace, query string, result *RAGQueryResult) *RAGQueryResult {
-	if rs.sufficiencyJudge == nil || len(result.Sources) == 0 {
+// 不变量），经聚合严重度排序上报。fail-closed：model 为空（judge 门关闭）/
+// resolver 未装配/解析失败/调用失败/超时 → 原样放行（WARN 留痕），行为与不
+// 配置时完全一致，绝不误杀检索。
+func (rs *RAGService) judgeSufficiencyGate(ctx context.Context, tenantID, workspace, query, model string, result *RAGQueryResult) *RAGQueryResult {
+	if model == "" || rs.judgeResolver == nil || len(result.Sources) == 0 {
 		return result
 	}
-	verdict, err := rs.sufficiencyJudge.JudgeSufficiency(ctx, query, formatSources(result.Sources))
+	judge, err := rs.judgeResolver(ctx, model)
 	if err != nil {
 		rs.logger.Warn("knowledge.judge.sufficiency_degraded",
-			zap.String("tenant_id", tenantID), zap.String("workspace", workspace), zap.Error(err))
+			zap.String("tenant_id", tenantID), zap.String("workspace", workspace),
+			zap.String("model", model), zap.Error(err))
+		return result
+	}
+	if judge == nil {
+		rs.logger.Warn("knowledge.judge.sufficiency_unavailable",
+			zap.String("tenant_id", tenantID), zap.String("workspace", workspace),
+			zap.String("model", model))
+		return result
+	}
+	verdict, err := judge.JudgeSufficiency(ctx, query, formatSources(result.Sources))
+	if err != nil {
+		rs.logger.Warn("knowledge.judge.sufficiency_degraded",
+			zap.String("tenant_id", tenantID), zap.String("workspace", workspace),
+			zap.String("model", model), zap.Error(err))
 		return result
 	}
 	if verdict != port.SufficiencyInsufficient {

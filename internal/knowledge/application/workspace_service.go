@@ -29,6 +29,9 @@ var (
 	ErrEmbeddingModelImmutable = domain.ErrEmbeddingModelImmutable
 	ErrChunkSizeImmutable      = domain.ErrChunkSizeImmutable
 	ErrChunkOverlapImmutable   = domain.ErrChunkOverlapImmutable
+	ErrInvalidRerankModel      = domain.ErrInvalidRerankModel
+	ErrRerankModelRequired     = domain.ErrRerankModelRequired
+	ErrInvalidJudgeModel       = domain.ErrInvalidJudgeModel
 )
 
 // collectionProvisioner is a minimal port for workspace vector collection lifecycle.
@@ -122,20 +125,62 @@ func (s *WorkspaceService) SetFailureAuditRecorder(r auditport.FailureAuditRecor
 // 全局目录（enabled + 能力匹配）。modelExists 未注入（降级/dev/测试）时跳过
 // 目录校验——目录查询是配置约束而非授权，与机制基线同语义；目录查询失败
 // 传播（fail-closed，不默认放行）。
+// builtinRerankMissingModel 判断 builtin-score-v1 是否缺少显式 rerank_model。
+// 拆成独立布尔方法以控制 validateModelsInCatalogue 的圈复杂度（Ratchet
+// 裁定：行为必须保持不变，仅允许等价重构）。
+func (s *WorkspaceService) builtinRerankMissingModel(cfg domain.WorkspaceConfig) bool {
+	return cfg.Reranking == "builtin-score-v1" && cfg.RerankModel == ""
+}
+
+// rerankModelRequiresCatalogueCheck 判定 rerank_model 是否需要目录校验。
+// spec §4.3：仅 reranking=builtin-score-v1 时校验；否则 rerank_model 是休眠字段，
+// 不参与校验、不要求存在（fail-open 降级）。拆成独立布尔方法以控制
+// validateModelsInCatalogue 的圈复杂度（同 builtinRerankMissingModel 模式）。
+func (s *WorkspaceService) rerankModelRequiresCatalogueCheck(cfg domain.WorkspaceConfig) bool {
+	return cfg.Reranking == RerankIdentityBuiltin && cfg.RerankModel != ""
+}
+
+// checkModelInCatalogue 对单个模型做目录存在性校验；目录查询失败传播包装错误
+// （fail-closed，5xx），仅 !ok 返回 400 配置错误（notFoundErr）。
+func (s *WorkspaceService) checkModelInCatalogue(ctx context.Context, model string, capability port.ModelCapability, wrapMsg string, notFoundErr error) error {
+	ok, err := s.modelExists.Exists(ctx, model, capability)
+	if err != nil {
+		return fmt.Errorf("%s %q: %w", wrapMsg, model, err)
+	}
+	if !ok {
+		return notFoundErr
+	}
+	return nil
+}
+
 func (s *WorkspaceService) validateModelsInCatalogue(ctx context.Context, cfg domain.WorkspaceConfig) error {
+	// builtin 空模型检查放在 modelExists==nil 判断之前：PATCH 更新不调 Validate
+	// （MergeUpdate 只做 partial 合并），必须在这里兜住显式拒绝（Global Constraint 2）。
+	if s.builtinRerankMissingModel(cfg) {
+		return domain.ErrRerankModelRequired
+	}
 	if s.modelExists == nil {
 		return nil
 	}
-	if ok, err := s.modelExists.Exists(ctx, cfg.EmbeddingModel, port.CapEmbedding); err != nil {
-		return fmt.Errorf("knowledge workspace: check embedding model %q: %w", cfg.EmbeddingModel, err)
-	} else if !ok {
-		return domain.ErrInvalidEmbeddingModel
+	if err := s.checkModelInCatalogue(ctx, cfg.EmbeddingModel, port.CapEmbedding, "knowledge workspace: check embedding model", domain.ErrInvalidEmbeddingModel); err != nil {
+		return err
+	}
+	// rerank/judge 模型必须是 enabled chat 目录中的模型（Global Constraint 5）。
+	// 目录查询失败传播包装错误（5xx），仅 !ok 返回 400 配置错误。
+	// spec §4.3：仅 reranking=builtin 时校验 rerank_model，否则为休眠字段。
+	if s.rerankModelRequiresCatalogueCheck(cfg) {
+		if err := s.checkModelInCatalogue(ctx, cfg.RerankModel, port.CapChat, "knowledge workspace: check rerank model", domain.ErrInvalidRerankModel); err != nil {
+			return err
+		}
+	}
+	if cfg.JudgeModel != "" {
+		if err := s.checkModelInCatalogue(ctx, cfg.JudgeModel, port.CapChat, "knowledge workspace: check judge model", domain.ErrInvalidJudgeModel); err != nil {
+			return err
+		}
 	}
 	if provider, model := domain.SplitRerankIdentity(cfg.Reranking); !domain.AllowedRerankIdentities[provider] {
-		if ok, err := s.modelExists.Exists(ctx, model, port.CapRerank); err != nil {
-			return fmt.Errorf("knowledge workspace: check rerank model %q: %w", model, err)
-		} else if !ok {
-			return domain.ErrInvalidRerankIdentity
+		if err := s.checkModelInCatalogue(ctx, model, port.CapRerank, "knowledge workspace: check rerank model", domain.ErrInvalidRerankIdentity); err != nil {
+			return err
 		}
 	}
 	return nil

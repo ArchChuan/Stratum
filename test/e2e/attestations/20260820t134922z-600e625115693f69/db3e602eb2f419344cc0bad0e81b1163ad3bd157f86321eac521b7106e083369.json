@@ -1,0 +1,128 @@
+{
+  "schema_version": 2,
+  "source_digest": "db3e602eb2f419344cc0bad0e81b1163ad3bd157f86321eac521b7106e083369",
+  "manifest_digest": "beec6e9ecc7b7e9aa924f3199ee5b2a9e36530a87ba0c02894e7525ad3d3498d",
+  "policy_manifest_digest": "716bc30a6332d700f6d753511871d1b4e975fb66a4df6384990070ffc9bdaad8",
+  "tested_git_parent": "87e390aaef4cdfd710de27a7e85c64e259111992",
+  "browser": {
+    "name": "chromium",
+    "version": "149.0.7827.55"
+  },
+  "mode": "short",
+  "seed": 1,
+  "started_at": "2026-08-20T13:49:29.693Z",
+  "duration_seconds": 18,
+  "host_class": "developer",
+  "packs": [
+    {
+      "id": "workflow",
+      "status": "passed"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "workflow.mutation.delete.workflows.workflowid",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.post.workflow.approvals.approvalid.decision",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.post.workflow.runs",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.post.workflow.runs.runid.cancel",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.post.workflow.runs.runid.manual.interventions.effectid.resolve",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.post.workflow.runs.runid.pause",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.post.workflow.runs.runid.resume",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.post.workflows",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.post.workflows.workflowid.publish",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.post.workflows.workflowid.validate",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.put.workflows.workflowid.draft",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.route.workflow.runs",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.route.workflow.runs.runid",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.route.workflows",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.route.workflows.id.edit",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.route.workflows.id.run",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.route.workflows.id.versions.versionid",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.route.workflows.new",
+      "status": "passed"
+    }
+  ],
+  "action_count": 18,
+  "sequence_digest": "86dfea1b86036a9f211d3f2d82933cadd55e83c671ef1368141d7b0856156db1",
+  "evidence": {
+    "ui": 6,
+    "http": 6,
+    "database": 6,
+    "reconciled": 18
+  },
+  "artifacts": [],
+  "cleanup": {
+    "passed": true,
+    "residual_entity_ids": []
+  },
+  "unverified_capabilities": [],
+  "risk_classification": "short",
+  "status": "passed",
+  "run_topology": {
+    "run_id": "20260820t134922z-600e625115693f69",
+    "host": "127.0.0.1",
+    "ports": {
+      "backend": 42201,
+      "fixture": 36425,
+      "frontend": 41385,
+      "oauth": 42347
+    },
+    "database_name": "stratum_e2e_20260820t134922z_600e625115693f69"
+  },
+  "owned_cleanup": {
+    "database_dropped": true,
+    "lease_removed": true
+  },
+  "expires_at": "2026-08-23T13:49:53.775229861Z"
+}

@@ -9,6 +9,8 @@ export const workspaceConfigSchema = z
     query_mode: z.string().optional(),
     top_k: z.number().optional(),
     reranking: z.string().optional(),
+    rerank_model: z.string().optional(),
+    judge_model: z.string().optional(),
     score_threshold: z.number().optional(),
     rerank_top_k: z.number().optional(),
   })
