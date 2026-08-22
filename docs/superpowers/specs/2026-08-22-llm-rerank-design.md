@@ -215,8 +215,18 @@ func (rs *RAGService) rerankSemantic(ctx context.Context, req RAGQueryRequest, p
 
 ```go
 func (c *Container) wireSemanticReranker(ctx context.Context, rag *knowledge.RAGService) {
+    if r, topN := c.semanticRerankerDeps(ctx); r != nil {
+        rag.SetSemanticReranker(r, topN)
+    }
+}
+
+// semanticRerankerDeps 解析并构建 LLM 语义重排器；任一前置条件不满足返回
+// (nil, 0)。topN/timeout 的 ≤0 默认值在此解析（回落常量），使 wiring 层
+// 单测可直接验证注入决策而无需构造完整 Gateway（RAGService.semanticReranker
+// 为 application 包未导出字段，行为探针会因 Gateway.Complete nil-panic）。
+func (c *Container) semanticRerankerDeps(ctx context.Context) (knowledgeport.Reranker, int) {
     if c.LLMGateway == nil || c.LLMGateway.Gateway == nil || !c.Config.RerankLLMConfigured() {
-        return
+        return nil, 0
     }
     krc := c.Config.KnowledgeRerank
     if !c.llmRerankModelInCatalogue(ctx, krc.Model) {
@@ -224,7 +234,7 @@ func (c *Container) wireSemanticReranker(ctx context.Context, rag *knowledge.RAG
         // 配置错误在启动期暴露，而非运行期每查询失败（review F7）。
         c.Logger.Warn("knowledge.rerank.model_unavailable",
             zap.String("model", krc.Model), zap.String("reason", "model not in chat catalogue"))
-        return
+        return nil, 0
     }
     topN := krc.TopN
     if topN <= 0 {
@@ -238,8 +248,7 @@ func (c *Container) wireSemanticReranker(ctx context.Context, rag *knowledge.RAG
     if c.Platform != nil {
         metrics = c.Platform.Metrics // c.Platform 可能为 nil（review H2）
     }
-    rag.SetSemanticReranker(newLLMReranker(
-        c.LLMGateway.Gateway, krc.Model, timeout, metrics, c.Logger), topN)
+    return newLLMReranker(c.LLMGateway.Gateway, krc.Model, timeout, metrics, c.Logger), topN
 }
 
 // llmRerankModelInCatalogue 检查平台配置的重排模型是否在 chat 模型目录。

@@ -7,12 +7,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/byteBuilderX/stratum/config"
 	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // llmRerankerCompleterStub captures the completion request for assertions.
@@ -203,5 +207,139 @@ func TestLLMRerankerTimeoutCancelsBlockedCompleter(t *testing.T) {
 	_, err := r.Rerank(context.Background(), knowledgeport.RerankRequest{Query: "q", Documents: []string{"a"}})
 	if err == nil {
 		t.Fatal("blocked completer must be cancelled by the timeout")
+	}
+}
+
+// hasLogMessage reports whether any captured log entry carries the message.
+func hasLogMessage(entries []observer.LoggedEntry, msg string) bool {
+	for _, e := range entries {
+		if e.Message == msg {
+			return true
+		}
+	}
+	return false
+}
+
+// newSemanticRerankContainer builds a minimal Container whose chat catalogue
+// holds exactly `model` (empty → empty catalogue). 不复用 newKnowledgeRegistry
+// （其 chatProtos 传 nil → ModelRegistry.supports(CapChat) 恒 false，chat 模型
+// 全被 listModelsByCapability 过滤掉）；显式注入 chat 协议 map 使
+// ListChatModelsByTenant 能返回该模型。
+func newSemanticRerankContainer(model string, topN int) *Container {
+	var models []llmgatewaydomain.Model
+	if model != "" {
+		models = []llmgatewaydomain.Model{{
+			ID: model, ProviderID: "provider-1", Name: model, Enabled: true,
+			Capabilities: []llmgatewaydomain.ModelCapability{llmgatewaydomain.CapChat},
+		}}
+	}
+	return &Container{
+		Config: &config.Config{KnowledgeRerank: config.KnowledgeRerankConfig{Model: model, TopN: topN}},
+		Logger: zap.NewNop(),
+		LLMGateway: &LLMGateway{
+			Gateway: llmgateway.NewGateway(nil, nil, nil),
+			Registry: llmgateway.NewModelRegistry(
+				&knowledgeModelRepo{models: models},
+				&knowledgeProviderRepo{provider: llmgatewaydomain.Provider{
+					ID: "provider-1", Kind: llmgatewaydomain.ProviderOpenAICompat, Enabled: true,
+					BaseURL: "https://example.test/v1", APIKey: "test-key",
+				}},
+				map[llmgatewaydomain.ProviderKind]llmgateway.ChatProtocol{llmgatewaydomain.ProviderOpenAICompat: nil},
+				map[llmgatewaydomain.ProviderKind]llmgateway.EmbedProtocol{llmgatewaydomain.ProviderOpenAICompat: nil},
+				time.Minute,
+			),
+		},
+	}
+}
+
+func TestSemanticRerankerDepsGates(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("nil gateway not injected", func(t *testing.T) {
+		c := newSemanticRerankContainer("qwen-turbo", 0)
+		c.LLMGateway = nil
+		if r, topN := c.semanticRerankerDeps(ctx); r != nil || topN != 0 {
+			t.Fatalf("nil gateway must not inject: r=%v topN=%d", r, topN)
+		}
+	})
+	t.Run("nil gateway pointer not injected", func(t *testing.T) {
+		c := newSemanticRerankContainer("qwen-turbo", 0)
+		c.LLMGateway.Gateway = nil
+		if r, _ := c.semanticRerankerDeps(ctx); r != nil {
+			t.Fatalf("nil gateway pointer must not inject: r=%v", r)
+		}
+	})
+	t.Run("empty model not injected", func(t *testing.T) {
+		c := newSemanticRerankContainer("", 0)
+		if r, topN := c.semanticRerankerDeps(ctx); r != nil || topN != 0 {
+			t.Fatalf("empty model must not inject: r=%v topN=%d", r, topN)
+		}
+	})
+	t.Run("model absent from catalogue not injected", func(t *testing.T) {
+		core, logs := observer.New(zapcore.WarnLevel)
+		c := newSemanticRerankContainer("qwen-turbo", 0)
+		c.Config = &config.Config{KnowledgeRerank: config.KnowledgeRerankConfig{Model: "not-managed", TopN: 5}}
+		c.Logger = zap.New(core)
+		if r, topN := c.semanticRerankerDeps(ctx); r != nil || topN != 0 {
+			t.Fatalf("absent model must not inject: r=%v topN=%d", r, topN)
+		}
+		if !hasLogMessage(logs.All(), "knowledge.rerank.model_unavailable") {
+			t.Fatal("absent model must WARN at wiring time")
+		}
+	})
+	t.Run("defaults resolved when zero", func(t *testing.T) {
+		c := newSemanticRerankContainer("qwen-turbo", 0) // TopN=0, Timeout=0, Platform=nil
+		r, topN := c.semanticRerankerDeps(ctx)
+		lr, ok := r.(*llmReranker)
+		if !ok || lr == nil {
+			t.Fatalf("must inject llmReranker, got %T", r)
+		}
+		if topN != constants.RerankLLMTopN {
+			t.Fatalf("topN=%d want default %d", topN, constants.RerankLLMTopN)
+		}
+		if lr.timeout != constants.RerankLLMTimeout {
+			t.Fatalf("timeout=%v want default %v", lr.timeout, constants.RerankLLMTimeout)
+		}
+		if lr.model != "qwen-turbo" {
+			t.Fatalf("model=%q", lr.model)
+		}
+		if lr.metrics != nil {
+			t.Fatal("nil platform must yield nil metrics")
+		}
+	})
+	t.Run("explicit values kept", func(t *testing.T) {
+		c := newSemanticRerankContainer("qwen-turbo", 0)
+		c.Config = &config.Config{KnowledgeRerank: config.KnowledgeRerankConfig{
+			Model: "qwen-turbo", TopN: 3, Timeout: 7 * time.Second,
+		}}
+		r, topN := c.semanticRerankerDeps(ctx)
+		lr := r.(*llmReranker)
+		if topN != 3 || lr.timeout != 7*time.Second {
+			t.Fatalf("topN=%d timeout=%v", topN, lr.timeout)
+		}
+	})
+}
+
+func TestLLMRankModelInCatalogue(t *testing.T) {
+	ctx := context.Background()
+	managed := newSemanticRerankContainer("qwen-turbo", 0)
+
+	if !managed.llmRerankModelInCatalogue(ctx, "qwen-turbo") {
+		t.Fatal("managed chat model must be found")
+	}
+	if managed.llmRerankModelInCatalogue(ctx, "missing") {
+		t.Fatal("absent model must not be found")
+	}
+
+	nilRegistry := newSemanticRerankContainer("qwen-turbo", 0)
+	nilRegistry.LLMGateway.Registry = nil
+	if nilRegistry.llmRerankModelInCatalogue(ctx, "qwen-turbo") {
+		t.Fatal("nil registry must report not found")
+	}
+
+	nilGateway := newSemanticRerankContainer("qwen-turbo", 0)
+	nilGateway.LLMGateway = nil
+	if nilGateway.llmRerankModelInCatalogue(ctx, "qwen-turbo") {
+		t.Fatal("nil gateway must report not found")
 	}
 }
