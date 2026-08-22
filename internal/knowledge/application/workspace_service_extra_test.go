@@ -186,6 +186,7 @@ func (c *collectionStub) DeleteByDocumentIDs(_ context.Context, collectionName s
 type fakeModelExists struct {
 	embedding map[string]bool
 	rerank    map[string]bool
+	chat      map[string]bool
 	err       error
 }
 
@@ -196,6 +197,8 @@ func (f *fakeModelExists) Exists(_ context.Context, model string, capability por
 	switch capability {
 	case port.CapRerank:
 		return f.rerank[model], nil
+	case port.CapChat:
+		return f.chat[model], nil
 	default:
 		return f.embedding[model], nil
 	}
@@ -779,4 +782,53 @@ type stubTenantRole struct{ role string }
 
 func (s stubTenantRole) ResolveTenantRole(_ context.Context, _, _ string) (string, error) {
 	return s.role, nil
+}
+
+func TestValidateModelsInCatalogueChatModels(t *testing.T) {
+	base := domain.WorkspaceConfig{EmbeddingModel: "text-embedding-v3"}
+	catalogue := &fakeModelExists{
+		embedding: map[string]bool{"text-embedding-v3": true},
+		chat:      map[string]bool{"qwen-turbo": true},
+	}
+	svc := &WorkspaceService{modelExists: catalogue, logger: zap.NewNop()}
+
+	t.Run("rerank_model 不在 chat 目录拒绝", func(t *testing.T) {
+		cfg := base
+		cfg.RerankModel = "qwen-max"
+		if err := svc.validateModelsInCatalogue(context.Background(), cfg); !errors.Is(err, domain.ErrInvalidRerankModel) {
+			t.Fatalf("err = %v, want ErrInvalidRerankModel", err)
+		}
+	})
+	t.Run("judge_model 不在 chat 目录拒绝", func(t *testing.T) {
+		cfg := base
+		cfg.JudgeModel = "qwen-max"
+		if err := svc.validateModelsInCatalogue(context.Background(), cfg); !errors.Is(err, domain.ErrInvalidJudgeModel) {
+			t.Fatalf("err = %v, want ErrInvalidJudgeModel", err)
+		}
+	})
+	t.Run("chat 目录模型通过", func(t *testing.T) {
+		cfg := base
+		cfg.RerankModel = "qwen-turbo"
+		cfg.JudgeModel = "qwen-turbo"
+		if err := svc.validateModelsInCatalogue(context.Background(), cfg); err != nil {
+			t.Fatalf("err = %v, want nil", err)
+		}
+	})
+	t.Run("目录查询失败传播（5xx 而非 400）", func(t *testing.T) {
+		svc.modelExists = &fakeModelExists{embedding: map[string]bool{"text-embedding-v3": true}, err: errors.New("db down")}
+		cfg := base
+		cfg.JudgeModel = "qwen-turbo"
+		err := svc.validateModelsInCatalogue(context.Background(), cfg)
+		if err == nil || errors.Is(err, domain.ErrInvalidJudgeModel) {
+			t.Fatalf("err = %v, want wrapped db error, not ErrInvalidJudgeModel", err)
+		}
+	})
+	t.Run("builtin 空 rerank_model 在 modelExists 为 nil 时也拒绝", func(t *testing.T) {
+		svc.modelExists = nil
+		cfg := base
+		cfg.Reranking = "builtin-score-v1"
+		if err := svc.validateModelsInCatalogue(context.Background(), cfg); !errors.Is(err, domain.ErrRerankModelRequired) {
+			t.Fatalf("err = %v, want ErrRerankModelRequired", err)
+		}
+	})
 }

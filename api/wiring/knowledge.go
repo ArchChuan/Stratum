@@ -341,6 +341,8 @@ func (a knowledgeModelExistsAdapter) Exists(ctx context.Context, model string, c
 	switch capability {
 	case knowledgeport.CapRerank:
 		names, err = a.registry.ListRerankModelsByTenant(ctx)
+	case knowledgeport.CapChat:
+		names, err = a.registry.ListChatModelsByTenant(ctx)
 	default: // CapEmbedding
 		names, err = a.registry.ListEmbeddingModelsByTenant(ctx)
 	}
