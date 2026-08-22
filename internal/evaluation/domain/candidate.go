@@ -27,7 +27,6 @@ var allowedPromptFields = map[string]struct{}{
 	"memory_extraction_prompt": {},
 	"memory_summary_prompt":    {},
 	"memory_enrichment_prompt": {},
-	"compaction_prompt":        {},
 }
 
 func GenerateParameterPatches(searchSpace map[string][]any) ([]map[string]any, error) {

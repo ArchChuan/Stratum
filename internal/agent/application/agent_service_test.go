@@ -527,7 +527,6 @@ func TestAgentService_SnapshotRevisionCapturesAuthorizedBindings(t *testing.T) {
 func TestAgentService_SnapshotRevisionPreservesExecutionParity(t *testing.T) {
 	repo := new(mockAgentRepo)
 	registry := application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop())
-	registry.SetGlobalSystemSuffix("platform rules")
 	registry.SetMemoryInjector(stubMemoryInjector{})
 	registry.SetRecallMemoryFn(func(context.Context, string, string, string, string, map[string]any) (string, error) {
 		return "", nil
@@ -541,7 +540,8 @@ func TestAgentService_SnapshotRevisionPreservesExecutionParity(t *testing.T) {
 
 	revision, err := svc.SnapshotRevision(context.Background(), "tenant-1", "agent-1")
 	assert.NoError(t, err)
-	assert.Equal(t, "platform rules", revision.GlobalSystemSuffix)
+	// 全局系统提示词改由平台参数在 Execute 时解析，revision 不再携带后缀。
+	assert.Equal(t, "", revision.GlobalSystemSuffix)
 	assert.Equal(t, 2, revision.StuckThreshold)
 	var knowledge domain.AgentBinding
 	for _, binding := range revision.Bindings {
@@ -1092,10 +1092,11 @@ func TestAgentServiceUpdateMaxIterationsValidation(t *testing.T) {
 	}
 }
 
-// TestAgentServiceCreateCompactionRoundtrip 验证三 bare 压缩 key 往返:
-// Parameters 中的 compaction_prompt/_temperature/_model 覆盖顶层显式字段
-// (map wins),落 cfg,再由 cfgToDTO + samplingParameterMap 回读一致。pack/
-// unpack 落库侧由 agent_repo 的 SamplingParametersRoundTrip 独立覆盖。
+// TestAgentServiceCreateCompactionRoundtrip 验证压缩温度/模型 bare key 往返:
+// Parameters 中的 compaction_temperature/_model 覆盖顶层显式字段(map wins),
+// 落 cfg,再由 cfgToDTO + samplingParameterMap 回读一致。compaction_prompt
+// 已迁平台参数,不在 agent 配置。pack/unpack 落库侧由 agent_repo 的
+// SamplingParametersRoundTrip 独立覆盖。
 func TestAgentServiceCreateCompactionRoundtrip(t *testing.T) {
 	svc, repo := newTestService(t)
 	var got *domain.AgentConfig
@@ -1106,23 +1107,18 @@ func TestAgentServiceCreateCompactionRoundtrip(t *testing.T) {
 	dto, err := svc.Create(context.Background(), application.CreateAgentInput{
 		TenantID: "tenant-1", ActorID: "user-1", Name: "new",
 		Type: string(domain.ReActAgent), LLMModel: "qwen-plus",
-		CompactionPrompt: "top-level explicit", // 顶层显式字段为基,bare key 覆盖
 		Parameters: map[string]any{
-			"compaction_prompt":      "bare wins",
 			"compaction_temperature": 0.4,
 			"compaction_model":       "qwen-turbo",
 		},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, got, "Register must capture the config")
-	assert.Equal(t, "bare wins", got.CompactionPrompt)
 	assert.Equal(t, float32(0.4), got.CompactionTemperature)
 	assert.Equal(t, "qwen-turbo", got.CompactionModel)
 	// DTO 回读:cfgToDTO 顶层字段 + samplingParameterMap bare keys 双通道一致。
-	assert.Equal(t, "bare wins", dto.CompactionPrompt)
 	assert.Equal(t, float32(0.4), dto.CompactionTemperature)
 	assert.Equal(t, "qwen-turbo", dto.CompactionModel)
-	assert.Equal(t, "bare wins", dto.Parameters["compaction_prompt"])
 	assert.Equal(t, float32(0.4), dto.Parameters["compaction_temperature"])
 	assert.Equal(t, "qwen-turbo", dto.Parameters["compaction_model"])
 	repo.AssertExpectations(t)

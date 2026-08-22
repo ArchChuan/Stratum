@@ -21,7 +21,6 @@ type CreateAgentRequest struct {
 	ReasoningEffort        string   `json:"reasoning_effort"`
 	MaxTokens              int      `json:"max_tokens"`
 	CompactionRecentGroups int      `json:"compaction_recent_groups"`
-	CompactionPrompt       string   `json:"compaction_prompt"`
 	CompactionTemperature  float32  `json:"compaction_temperature"`
 	CompactionModel        string   `json:"compaction_model"`
 	AllowedSkills          []string `json:"allowedSkills"`
@@ -48,7 +47,6 @@ type UpdateAgentRequest struct {
 	ReasoningEffort        string   `json:"reasoning_effort"`
 	MaxTokens              int      `json:"max_tokens"`
 	CompactionRecentGroups int      `json:"compaction_recent_groups"`
-	CompactionPrompt       string   `json:"compaction_prompt"`
 	CompactionTemperature  float32  `json:"compaction_temperature"`
 	CompactionModel        string   `json:"compaction_model"`
 	AllowedSkills          []string `json:"allowedSkills"`
@@ -57,7 +55,7 @@ type UpdateAgentRequest struct {
 	MemoryScope            string   `json:"memoryScope"`
 	// Parameters carries the registry sampling parameters as a flat object
 	// (temperature/max_tokens/compaction_recent_groups/reasoning_effort/
-	// compaction_prompt/compaction_temperature/compaction_model).
+	// compaction_temperature/compaction_model；compaction_prompt 已迁平台参数)。
 	// Merge semantics: only keys present in this map are written; a 0 value is
 	// unset and never overwrites a persisted value.
 	Parameters map[string]any `json:"parameters"`
@@ -76,7 +74,6 @@ type AgentResponse struct {
 	ReasoningEffort        string   `json:"reasoning_effort"`
 	MaxTokens              int      `json:"max_tokens"`
 	CompactionRecentGroups int      `json:"compaction_recent_groups"`
-	CompactionPrompt       string   `json:"compaction_prompt"`
 	CompactionTemperature  float32  `json:"compaction_temperature"`
 	CompactionModel        string   `json:"compaction_model"`
 	AllowedSkills          []string `json:"allowedSkills"`
@@ -131,7 +128,6 @@ func dtoToResponse(d agent.AgentDTO) AgentResponse {
 		ReasoningEffort:        d.ReasoningEffort,
 		MaxTokens:              d.MaxTokens,
 		CompactionRecentGroups: d.CompactionRecentGroups,
-		CompactionPrompt:       d.CompactionPrompt,
 		CompactionTemperature:  d.CompactionTemperature,
 		CompactionModel:        d.CompactionModel,
 		AllowedSkills:          d.AllowedSkills,

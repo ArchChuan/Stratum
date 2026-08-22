@@ -34,10 +34,6 @@ export type ParameterDefinition = z.infer<typeof parameterDefinitionSchema>;
 // PlatformValues:key → 当前生效的平台层值(0=unset 由后端按定义裁剪)。
 export type PlatformValues = Record<string, unknown>;
 
-// prompt-defaults 端点返回:registry key → 默认提示词模板全文(白名单)。
-export const promptDefaultsSchema = z.record(z.string());
-export type PromptDefaults = z.infer<typeof promptDefaultsSchema>;
-
 export interface PlatformSettingsFormValues {
   [key: string]: number | string | boolean | undefined;
 }

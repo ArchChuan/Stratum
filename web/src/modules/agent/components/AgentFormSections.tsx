@@ -29,7 +29,6 @@ import type { Member } from '@/modules/iam';
 import type { Workspace } from '@/modules/knowledge';
 import { filterModelOption, ModelOptionLabel } from '@/modules/llm/components/ModelOptionLabel';
 import type { MCPToolOption } from '@/modules/mcp';
-import { PromptDefaultViewer } from '@/modules/parameters/components/PromptDefaultViewer';
 import type { Skill } from '@/modules/skill';
 import { DefaultHint, SectionHeader } from '@/shared/ui';
 
@@ -362,18 +361,6 @@ export const AgentFormSections = ({
                         <Option value={3}>3 组</Option>
                         <Option value={5}>5 组</Option>
                       </Select>
-                    </Form.Item>
-                    <Form.Item
-                      label="压缩提示词（compaction_prompt）"
-                      name="compaction_prompt"
-                      extra={
-                        <>
-                          压缩历史时的系统提示词；留空 = 使用内置默认压缩提示词
-                          <PromptDefaultViewer promptKey="agent.compaction_prompt" />
-                        </>
-                      }
-                    >
-                      <TextArea rows={4} placeholder="留空使用内置默认压缩提示词" />
                     </Form.Item>
                     <Form.Item
                       label="压缩温度（compaction_temperature）"

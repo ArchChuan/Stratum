@@ -420,14 +420,4 @@ describe('AgentFormSections', () => {
     expect(screen.getByRole('option', { name: '0（自动推导）' })).toBeInTheDocument();
   });
 
-  it('renders compaction prompt viewer next to the empty prompt field', () => {
-    render(
-      <Form>
-        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
-      </Form>,
-    );
-    // 仅 agent.compaction_prompt 保留默认模板 viewer（memory.* 已 fail-closed）。
-    expect(screen.getAllByRole('button', { name: '查看默认提示词' })).toHaveLength(1);
-  });
-
 });

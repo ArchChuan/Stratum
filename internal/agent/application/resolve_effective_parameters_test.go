@@ -311,7 +311,7 @@ func TestApplyParameterOverridesMapWinsAndOnlyPresentKeysOverwrite(t *testing.T)
 			"reasoning_effort": "high",
 		},
 	}
-	temperature, maxTokens, recentGroups, reasoningEffort, _, _, _ := applyParameterOverrides(in)
+	temperature, maxTokens, recentGroups, reasoningEffort, _, _ := applyParameterOverrides(in)
 
 	if temperature != 0.3 {
 		t.Errorf("temperature = %v, want 0.3 (map wins)", temperature)
@@ -335,7 +335,7 @@ func TestApplyParameterOverridesEmptyMapIsNoop(t *testing.T) {
 		CompactionRecentGroups: 3,
 		ReasoningEffort:        "low",
 	}
-	temperature, maxTokens, recentGroups, reasoningEffort, _, _, _ := applyParameterOverrides(in)
+	temperature, maxTokens, recentGroups, reasoningEffort, _, _ := applyParameterOverrides(in)
 
 	if temperature != 0.9 || maxTokens != 2048 || recentGroups != 3 {
 		t.Errorf("empty map must be a no-op, got %v/%d/%d",
@@ -353,7 +353,7 @@ func TestApplyParameterOverridesExplicitZeroIsUnset(t *testing.T) {
 		Temperature: 0.9,
 		Parameters:  map[string]any{"temperature": 0},
 	}
-	temperature, _, _, _, _, _, _ := applyParameterOverrides(in)
+	temperature, _, _, _, _, _ := applyParameterOverrides(in)
 
 	if temperature != 0 {
 		t.Errorf("temperature = %v, want 0 (explicit 0 maps to unset; pack skips it)", temperature)

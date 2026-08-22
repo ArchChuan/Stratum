@@ -115,11 +115,6 @@ const (
 	// 建议默认 10s，实现时按压测验证）。registry 参数 agent.compaction_cooldown_sec
 	// 覆盖它（0 = 本常量）。
 	DefaultCompactionCooldown = 10 * time.Second
-	// CompactionDefaultPrompt 是上下文压缩的默认系统提示词（agent 未配置
-	// compaction_prompt 时的兜底，承接原 history_compactor.compactionSystemPrompt）。
-	CompactionDefaultPrompt = "你是对话历史压缩器。请把以下对话压成不超过 500 字的要点摘要，" +
-		"以第三人称客观记录：保留关键事实、已达成的决定、以及尚未解决的问题；" +
-		"剔除寒暄与冗余细节。只输出摘要正文，不要任何前后缀。"
 	// CompactionDefaultTemperature 是上下文压缩的默认温度（agent 配置 0 = 未设置
 	// 时的兜底）。Qwen/Zhipu 拒收 >1 的温度，运行时必须钳制 [0,1]。
 	CompactionDefaultTemperature = 0.3

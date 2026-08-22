@@ -44,7 +44,6 @@ func (r *TunableRegistry) registerPrompts() {
 		promptTunable{key: TunableMemoryExtractionPrompt, displayName: "记忆抽取提示词", fieldPath: "memory_extraction_prompt"},
 		promptTunable{key: TunableMemorySummaryPrompt, displayName: "记忆摘要提示词", fieldPath: "memory_summary_prompt"},
 		promptTunable{key: TunableMemoryEnrichmentPrompt, displayName: "记忆富化提示词", fieldPath: "memory_enrichment_prompt"},
-		promptTunable{key: TunableCompactionPrompt, displayName: "压缩提示词", fieldPath: "compaction_prompt"},
 	} {
 		r.Register(t)
 	}

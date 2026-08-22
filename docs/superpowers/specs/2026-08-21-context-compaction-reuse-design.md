@@ -118,7 +118,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_compaction_conversation ON chat_compaction_s
 1. **渲染配对格式**（D9）：`renderConversation`（history_compactor.go:183-200）增加工具对渲染分支——`m.ToolCalls` 非空时输出 `[Tool] name(args) → result`，tool 消息输出 `result`；只读已脱敏内容（`guarded.ModelContent`，react_tool.go:702、:748），不读 raw。修复 `"Assistant: \n"` 丢参数缺陷（R3）。
 2. **配对已对齐**：`groupMessages`（compaction.go:31-51）已把 assistant(ToolCalls) 吸收后续 tool 消息成原子组；`toEstimate`（:259-275）已折叠 ToolCalls name+arguments 进 token 估算——保持，并将 `recentGroups` 语义写入组装侧（对称）。
 3. **共享预算账本**：两侧共享 `ComputeBudget` 四配额，保持现状；循环侧 `TokenCorrection` 与冷却保留。
-4. **摘要 schema 对齐**：循环侧 `summarizeMiddle` 注入的 prompt 改用与组装侧一致的 `CompactionDefaultPrompt` + 工具配对渲染输出，保证两侧产出的摘要格式一致（共享存储的消费方不区分来源）。
+4. **摘要 schema 对齐**：循环侧 `summarizeMiddle` 注入的 prompt 改用与组装侧一致的平台参数 `agent.compaction_prompt` + 工具配对渲染输出，保证两侧产出的摘要格式一致（共享存储的消费方不区分来源）。
 
 ### 3.4 结构化摘要 schema
 
@@ -140,7 +140,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_compaction_conversation ON chat_compaction_s
 - [步骤] 用户目标 → 工具 {name}({参数摘要}) → 结果 {Summary 截断}
 ```
 
-- 各节对齐 `CompactionDefaultPrompt`（pkg/constants/agent.go:120-122）「保留关键事实、已达成的决定、尚未解决的问题」。
+- 各节对齐平台参数 `agent.compaction_prompt`（2026-08-22 起压缩提示词迁平台级，无代码常量兜底）「保留关键事实、已达成的决定、尚未解决的问题」。
 - 工具行只含 `ToolName + Arguments 摘要 + Summary`（已脱敏），关键数值/状态保留，禁止带原始结果。
 - 循环侧与组装侧共同遵循，是共享存储的写入契约（D6）。
 
@@ -221,7 +221,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_compaction_conversation ON chat_compaction_s
 - `ComputeBudget` 四配额账本、`HistoryCompactor` 接口签名（`messages 按时间正序、仅 user/assistant 轮次` 契约语义随渲染格式扩展，不改签名）
 - `memory_summaries`/`HistoryWorker`（记忆语义独立，D7）
 - 循环侧 `groupMessages`/`markAnchors`/`flatten`/`toEstimate` 结构、`TokenCorrection`、冷却
-- `CompactionDefaultPrompt`（schema 各节对齐它，不改其文本）
+- `agent.compaction_prompt` 平台参数（schema 各节对齐它，运维在平台参数页配置全文）
 - `steps_json` 列（本方案不新增写入；独立后续任务）
 
 ---

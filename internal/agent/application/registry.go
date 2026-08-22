@@ -15,13 +15,13 @@ import (
 // Registry orchestrates Agent CRUD via a port-backed AgentRepo and
 // hydrates returned Agents with capability/memory/recall hooks.
 type Registry struct {
-	repo               port.AgentRepo
-	logger             *zap.Logger
-	memInjector        port.MemoryInjector
-	recallFn           port.RecallMemoryFn
-	globalSystemSuffix string
-	systemProfile      *SystemAssistantProfileSource
-	taskStore          port.TaskRepo
+	repo           port.AgentRepo
+	logger         *zap.Logger
+	memInjector    port.MemoryInjector
+	recallFn       port.RecallMemoryFn
+	platformPrompt port.PlatformPromptResolver
+	systemProfile  *SystemAssistantProfileSource
+	taskStore      port.TaskRepo
 }
 
 // NewRegistry constructs a Registry around a domain-port AgentRepo.
@@ -37,8 +37,12 @@ func (r *Registry) SetMemoryInjector(inj port.MemoryInjector) { r.memInjector = 
 // SetRecallMemoryFn injects a recall_memory tool handler.
 func (r *Registry) SetRecallMemoryFn(fn port.RecallMemoryFn) { r.recallFn = fn }
 
-// SetGlobalSystemSuffix injects a platform-level system prompt appended to every agent's prompt.
-func (r *Registry) SetGlobalSystemSuffix(s string) { r.globalSystemSuffix = s }
+// SetPlatformPromptResolver injects the platform prompt resolver used to
+// resolve agent.system_prompt（全局系统提示词）at execution time. 未配置即
+// 执行 fail-closed；nil 仅在测试直构路径允许（回退 agent 字段）。
+func (r *Registry) SetPlatformPromptResolver(resolver port.PlatformPromptResolver) {
+	r.platformPrompt = resolver
+}
 
 // SetTaskStore injects the task persistence repo so agents hydrated via
 // Get/GetAll can persist cross-session task snapshots (persistTaskSnapshot
@@ -65,9 +69,7 @@ func (r *Registry) hydrate(cfg *domain.AgentConfig) (Agent, error) {
 	if r.taskStore != nil {
 		a.TaskStore = r.taskStore
 	}
-	if r.globalSystemSuffix != "" && composed.SystemKey != domain.SystemAssistantKey {
-		a.GlobalSystemSuffix = r.globalSystemSuffix
-	}
+	a.PlatformPromptResolver = r.platformPrompt
 	return a, nil
 }
 

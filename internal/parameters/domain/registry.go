@@ -27,6 +27,7 @@ func NewParametersRegistry() *ParametersRegistry {
 		promptEvalKeys: make(map[string]struct{}, 6),
 	}
 	r.registerAgentParams()
+	r.registerAgentPlatformParams()
 	r.registerRAGParams()
 	r.registerMCPParams()
 	r.registerOptimizerParams()
@@ -229,19 +230,12 @@ func (r *ParametersRegistry) registerAgentParams() {
 			VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(120), Step: f(5), Unit: "s"},
 			Optimizable: false,
 		},
-		// 压缩 prompt/temperature/model 三值:运行时从 AgentConfig 顶层字段直读
+		// 压缩 temperature/model 两值:运行时从 AgentConfig 顶层字段直读
 		// (resolveEffectiveParameters 晚于 compactor 构造),此处仅登记 schema/
-		// 搜索空间。三 key 均不设 EvaluationKeys —— compaction_prompt 是 gate-only
-		// 保留 key(Register() 会拒绝);compaction_temperature 的 bare-key 写时越界
-		// 校验经 ValidateResourceValues 的 registry-key 短名匹配(短名匹配不进入
-		// byEvalKey,避免污染 candidate/critique whitelist lockstep)。
-		{
-			Key: "agent.compaction_prompt", Scope: ScopeResource, Category: "agent",
-			DisplayName: "压缩提示词", Description: "上下文压缩的系统提示词,空表示默认模板",
-			ValueType: TypeString, Default: "",
-			VisualHint:  VisualHint{Control: ControlTextarea},
-			Optimizable: false,
-		},
+		// 搜索空间。两 key 均不设 EvaluationKeys —— compaction_temperature 的
+		// bare-key 写时越界校验经 ValidateResourceValues 的 registry-key 短名
+		// 匹配(短名匹配不进入 byEvalKey,避免污染 candidate/critique whitelist
+		// lockstep)。压缩提示词已迁移为平台级参数(registerAgentPlatformParams)。
 		{
 			Key: "agent.compaction_temperature", Scope: ScopeResource, Category: "agent",
 			DisplayName: "压缩温度", Description: "上下文压缩采样温度,范围 0~1,0 表示默认常量",
@@ -270,6 +264,30 @@ func (r *ParametersRegistry) registerAgentParams() {
 			VisualHint:  VisualHint{Control: ControlTextarea},
 			Optimizable: true, EvaluationKeys: []string{"bindings"},
 			ValidateFn: func(any) error { return nil },
+		},
+	} {
+		_ = r.Register(def)
+	}
+}
+
+// registerAgentPlatformParams covers platform-scope agent prompts. Both keys
+// carry no built-in default: unset → fail-closed（执行/压缩失败并告警），对齐
+// memory.*_prompt 的显式配置模式。
+func (r *ParametersRegistry) registerAgentPlatformParams() {
+	for _, def := range []ParameterDefinition{
+		{
+			Key: "agent.compaction_prompt", Scope: ScopePlatform, Category: "agent",
+			DisplayName: "压缩提示词", Description: "上下文压缩的完整系统提示词(必填),未配置即压缩失败",
+			ValueType: TypeString, Default: "",
+			VisualHint:  VisualHint{Control: ControlTextarea},
+			Optimizable: false,
+		},
+		{
+			Key: "agent.system_prompt", Scope: ScopePlatform, Category: "agent",
+			DisplayName: "全局系统提示词", Description: "追加到所有 agent 系统提示词的全局系统提示词(必填),未配置即执行失败",
+			ValueType: TypeString, Default: "",
+			VisualHint:  VisualHint{Control: ControlTextarea},
+			Optimizable: false,
 		},
 	} {
 		_ = r.Register(def)
@@ -688,7 +706,7 @@ func (r *ParametersRegistry) registerPromptEvaluationKeys() {
 	for _, bare := range []string{
 		"system_prompt", "instructions",
 		"memory_extraction_prompt", "memory_summary_prompt",
-		"memory_enrichment_prompt", "compaction_prompt",
+		"memory_enrichment_prompt",
 	} {
 		r.promptEvalKeys[bare] = struct{}{}
 	}

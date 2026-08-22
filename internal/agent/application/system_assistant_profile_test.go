@@ -13,6 +13,57 @@ import (
 	"go.uber.org/zap"
 )
 
+// stubPromptResolver 提供固定平台提示词值，供 Registry 注入测试。
+type stubPromptResolver struct {
+	value string
+}
+
+func (s stubPromptResolver) ResolvePlatform(_ context.Context, _ string) (any, bool, error) {
+	if s.value == "" {
+		return nil, false, nil
+	}
+	return s.value, true, nil
+}
+
+// TestResolveGlobalSystemSuffix 验证全局系统提示词解析语义：平台参数已配置 →
+// 返回后缀；未配置/无 resolver → fail-closed；系统助手与普通 agent 一视同仁；
+// nil resolver（测试直构）回退 agent 字段。
+func TestResolveGlobalSystemSuffix(t *testing.T) {
+	base := NewBaseAgent(&domain.AgentConfig{ID: "agent-1"}, zap.NewNop())
+
+	// 已配置 → 返回后缀。
+	base.PlatformPromptResolver = stubPromptResolver{value: "platform rules"}
+	suffix, err := base.resolveGlobalSystemSuffix(context.Background())
+	if err != nil {
+		t.Fatalf("configured resolver: %v", err)
+	}
+	if suffix != "platform rules" {
+		t.Fatalf("suffix = %q, want platform rules", suffix)
+	}
+
+	// 未配置（present=false）→ fail-closed。
+	base.PlatformPromptResolver = stubPromptResolver{}
+	if _, err := base.resolveGlobalSystemSuffix(context.Background()); err == nil {
+		t.Fatal("unset platform prompt must fail closed")
+	}
+
+	// 系统助手与普通 agent 一视同仁，同样追加全局后缀。
+	assistant := NewBaseAgent(&domain.AgentConfig{
+		ID: "assistant-1", SystemKey: domain.SystemAssistantKey,
+	}, zap.NewNop())
+	assistant.PlatformPromptResolver = stubPromptResolver{value: "platform rules"}
+	if suffix, err := assistant.resolveGlobalSystemSuffix(context.Background()); err != nil || suffix != "platform rules" {
+		t.Fatalf("system assistant suffix = %q, err = %v, want platform rules", suffix, err)
+	}
+
+	// nil resolver（测试直构路径）回退 agent 字段。
+	direct := NewBaseAgent(&domain.AgentConfig{ID: "agent-2"}, zap.NewNop())
+	direct.GlobalSystemSuffix = "direct rules"
+	if suffix, err := direct.resolveGlobalSystemSuffix(context.Background()); err != nil || suffix != "direct rules" {
+		t.Fatalf("direct fallback suffix = %q, err = %v", suffix, err)
+	}
+}
+
 func TestComposeSystemAssistantProfileOrdinaryAgentPassthrough(t *testing.T) {
 	want := &domain.AgentConfig{
 		ID: "agent-1", Name: "Tenant Agent", SystemPrompt: "tenant prompt",
@@ -79,8 +130,8 @@ func TestComposeSystemAssistantProfileReplacesProtectedFieldsAndPreservesTenantR
 	if got.Description != want.Description {
 		t.Fatalf("DB text field Description not preserved: got %q, want %q", got.Description, want.Description)
 	}
-	if got.SystemPrompt != profile.SystemPrompt {
-		t.Fatalf("SystemPrompt not from profile: got %q, want %q", got.SystemPrompt, profile.SystemPrompt)
+	if got.SystemPrompt != want.SystemPrompt {
+		t.Fatalf("SystemPrompt not preserved from DB: got %q, want %q", got.SystemPrompt, want.SystemPrompt)
 	}
 	if got.MaxIterations != want.MaxIterations || got.MaxContextTokens != want.MaxContextTokens {
 		t.Fatalf("tenant budgets not preserved: got MaxIterations=%d MaxContextTokens=%d, want %d / %d",
@@ -163,17 +214,20 @@ func TestComposeSystemAssistantProfileFailsClosedForInvalidProfile(t *testing.T)
 func TestComposeSystemAssistantProfileUsesCodeReviewedVersionInsteadOfMutableInput(t *testing.T) {
 	profile := BuiltinSystemAssistantProfile()
 	profile.Name = "tampered name"
-	profile.SystemPrompt = "tampered prompt"
 
 	got, err := ComposeSystemAssistantProfile(&domain.AgentConfig{
 		ID: "assistant-1", SystemKey: domain.SystemAssistantKey,
+		SystemPrompt: "tenant db prompt",
 	}, profile)
 	if err != nil {
 		t.Fatalf("ComposeSystemAssistantProfile() error = %v", err)
 	}
 	want := BuiltinSystemAssistantProfile()
-	if got.Name != want.Name || got.SystemPrompt != want.SystemPrompt {
-		t.Fatalf("mutable profile input reached runtime: %#v", got)
+	if got.Name != want.Name {
+		t.Fatalf("mutable profile name reached runtime: %#v", got)
+	}
+	if got.SystemPrompt != "tenant db prompt" {
+		t.Fatalf("system prompt must come from DB field, got %q", got.SystemPrompt)
 	}
 }
 
@@ -300,7 +354,7 @@ func TestSystemAssistantProfileTraceFailsClosedWithoutSharedSource(t *testing.T)
 	}
 }
 
-func TestSystemAssistantProfileManagedRuntimeDoesNotAppendGlobalSuffix(t *testing.T) {
+func TestSystemAssistantProfileManagedRuntimeAppendsGlobalSuffix(t *testing.T) {
 	source, err := NewBuiltinSystemAssistantProfileSource(domain.CurrentSystemAssistantProfileVersion)
 	if err != nil {
 		t.Fatalf("NewBuiltinSystemAssistantProfileSource() error = %v", err)
@@ -308,15 +362,15 @@ func TestSystemAssistantProfileManagedRuntimeDoesNotAppendGlobalSuffix(t *testin
 	registry := NewRegistry(systemAssistantProfileRepo{cfgs: []*domain.AgentConfig{
 		{ID: "assistant-1", SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model"},
 	}}, source, zap.NewNop())
-	registry.SetGlobalSystemSuffix("tenant-global-suffix")
+	registry.SetPlatformPromptResolver(stubPromptResolver{value: "tenant-global-suffix"})
 
 	agent, found, err := registry.Get(context.Background(), "assistant-1")
 	if err != nil || !found {
 		t.Fatalf("Registry.Get() found = %v, error = %v", found, err)
 	}
 	base := agent.(*BaseAgent)
-	if base.GlobalSystemSuffix != "" {
-		t.Fatalf("managed runtime suffix = %q, want empty", base.GlobalSystemSuffix)
+	if base.PlatformPromptResolver == nil {
+		t.Fatal("managed agent must carry platform prompt resolver (Execute 对所有 agent 统一追加全局后缀)")
 	}
 	managedGateway := &systemAssistantPromptGateway{}
 	base.SetCapGateway(managedGateway)
@@ -327,20 +381,20 @@ func TestSystemAssistantProfileManagedRuntimeDoesNotAppendGlobalSuffix(t *testin
 		WithMaxContextTokens(30000)); err != nil {
 		t.Fatalf("managed Execute() error = %v", err)
 	}
-	if got := managedGateway.request.LLM.Messages[0].Content; strings.Contains(got, "tenant-global-suffix") {
-		t.Fatalf("managed effective prompt contains global suffix: %q", got)
+	if got := managedGateway.request.LLM.Messages[0].Content; !strings.Contains(got, "tenant-global-suffix") {
+		t.Fatalf("managed effective prompt omits global suffix: %q", got)
 	}
 
 	registry = NewRegistry(systemAssistantProfileRepo{cfgs: []*domain.AgentConfig{
 		{ID: "agent-1", SystemPrompt: "tenant prompt"},
 	}}, source, zap.NewNop())
-	registry.SetGlobalSystemSuffix("tenant-global-suffix")
+	registry.SetPlatformPromptResolver(stubPromptResolver{value: "tenant-global-suffix"})
 	agent, found, err = registry.Get(context.Background(), "agent-1")
 	if err != nil || !found {
 		t.Fatalf("Registry.Get() found = %v, error = %v", found, err)
 	}
-	if got := agent.(*BaseAgent).GlobalSystemSuffix; got != "tenant-global-suffix" {
-		t.Fatalf("ordinary runtime suffix = %q", got)
+	if got := agent.(*BaseAgent).PlatformPromptResolver; got == nil {
+		t.Fatal("ordinary agent must carry platform prompt resolver")
 	}
 	ordinary := agent.(*BaseAgent)
 	ordinaryGateway := &systemAssistantPromptGateway{}
@@ -362,7 +416,6 @@ func TestSystemAssistantProfileRollbackSourceKeepsRuntimeAndTraceOnSameImmutable
 	}
 	snapshot := source.Profile()
 	snapshot.Version = "mutated"
-	snapshot.SystemPrompt = "mutated prompt"
 
 	registry := NewRegistry(systemAssistantProfileRepo{cfgs: []*domain.AgentConfig{
 		{ID: "assistant-1", SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model"},
@@ -389,34 +442,15 @@ func TestSystemAssistantProfileRollbackSourceKeepsRuntimeAndTraceOnSameImmutable
 	}
 }
 
-func TestSystemAssistantProfileV3RelaxesProposalBoundaryForDirectApply(t *testing.T) {
-	source, err := NewBuiltinSystemAssistantProfileSource(domain.CurrentSystemAssistantProfileVersion)
-	require.NoError(t, err)
-	require.Equal(t, "2026-08-08.v3", domain.CurrentSystemAssistantProfileVersion)
-	prompt := source.Profile().SystemPrompt
-
-	// The direct-apply tool boundary is now in the prompt.
-	require.Contains(t, prompt, "stratum_apply_resource_change")
-	require.Contains(t, prompt, "confirm the intent")
-	require.Contains(t, prompt, "Prefer the proposal workflow")
-	// The old blanket proposal-only ban is gone.
-	require.NotContains(t, prompt, "never modify tenant resources outside the proposal workflow")
-	// Delete, credential, IAM and publishing stays forbidden.
-	require.Contains(t, prompt, "Deletion, credential changes, IAM operations, and publishing remain forbidden")
-}
-
 func TestSystemAssistantProfileKeepsHistoricalVersions(t *testing.T) {
 	profiles := BuiltinSystemAssistantProfiles()
 	require.Contains(t, profiles, "2026-07-22.v0")
 	require.Contains(t, profiles, "2026-08-04.v2")
 	old, err := NewBuiltinSystemAssistantProfileSource("2026-08-04.v2")
 	require.NoError(t, err)
-	// Historical versions keep the proposal-only prompt, not the v3 text.
-	require.NotContains(t, old.Profile().SystemPrompt, "stratum_apply_resource_change")
-	require.Contains(t, old.Profile().SystemPrompt, "never modify tenant resources outside the proposal workflow")
+	// 提示词由内置 agent 实例 DB 字段承载；profile 仅保留版本化元数据。
 	require.Equal(t, "2026-08-04.v2", old.Profile().Version)
 	// The current version resolves through the active constant.
 	current := BuiltinSystemAssistantProfiles()[domain.CurrentSystemAssistantProfileVersion]
 	require.Equal(t, "2026-08-08.v3", current.Version)
-	require.NotEqual(t, old.Profile().SystemPrompt, current.SystemPrompt)
 }

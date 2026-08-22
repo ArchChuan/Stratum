@@ -129,6 +129,16 @@ func (a ragSearchAdapter) SearchKnowledge(
 	return knowledge.NewRAGSearchFn(a.rag, tenantID, viewerID)(ctx, workspaceIDs, query, topK)
 }
 
+// agentPlatformPromptResolver 装配 agent 侧平台提示词解析器（复用参数注册表
+// 平台解析器，与 memory 侧同源）。参数服务不可用时返回 nil——生产 wiring 恒
+// 注入，nil 仅测试/降级路径出现，消费方 fail-closed。
+func (c *Container) agentPlatformPromptResolver() agentport.PlatformPromptResolver {
+	if c.Parameters == nil || c.Parameters.Service == nil {
+		return nil
+	}
+	return platformParamResolver{svc: c.Parameters.Service}
+}
+
 // SearchKnowledgeWithEvidence implements agentport.RAGSearchEvidenceProvider:
 // same fan-out as SearchKnowledge but retaining chunk-level provenance so
 // agent tool observations can record retrieval evidence.
@@ -274,9 +284,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	if c.Memory != nil && c.Memory.Injector != nil {
 		registry.SetMemoryInjector(c.Memory.Injector)
 	}
-	if c.Config.GlobalAgentSystemPrompt != "" {
-		registry.SetGlobalSystemSuffix(c.Config.GlobalAgentSystemPrompt)
-	}
+	registry.SetPlatformPromptResolver(c.agentPlatformPromptResolver())
 	if c.Memory != nil && c.Memory.RecallFn != nil {
 		registry.SetRecallMemoryFn(c.Memory.RecallFn)
 	}
@@ -338,9 +346,10 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		ModelContextProvider:    modelContextProvider(a.TenantResolver),
 		ModelDetailsProvider:    tenantModelDetailsProvider(a.TenantResolver),
 		VendorWindowLookup:      llmgateway.LookupModelSpec,
-		HistoryCompactorFactory: func(gw agentport.CapabilityGateway, model string, logger *zap.Logger, compactionMaxTokens int, prompt string, temperature float32) agentport.HistoryCompactor {
-			return capgateway.NewLLMHistoryCompactor(gw, model, logger, compactionMaxTokens, prompt, temperature)
+		HistoryCompactorFactory: func(gw agentport.CapabilityGateway, model string, logger *zap.Logger, compactionMaxTokens int, temperature float32) agentport.HistoryCompactor {
+			return capgateway.NewLLMHistoryCompactor(gw, model, logger, compactionMaxTokens, c.agentPlatformPromptResolver(), temperature)
 		},
+		PlatformPromptResolver:    c.agentPlatformPromptResolver(),
 		ChatStore:                 a.ChatStore,
 		EvidenceProvider:          a.EvidenceProvider,
 		TracePayloadStore:         a.TracePayloadStore,

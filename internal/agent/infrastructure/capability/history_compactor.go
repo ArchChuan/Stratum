@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -66,27 +67,24 @@ func compactionSlice(remaining time.Duration, attemptsLeft int) time.Duration {
 type LLMHistoryCompactor struct {
 	gw                  port.CapabilityGateway
 	model               string
-	prompt              string
 	temperature         float32
 	logger              *zap.Logger
+	promptResolver      port.PlatformPromptResolver
 	compactionMaxTokens int
 }
 
 // NewLLMHistoryCompactor 构造摘要器。gw 为统一路由门面，model 指定用于
 // 压缩的模型（可与主对话模型不同，通常选更廉价的），logger 用于观测。
 // compactionMaxTokens 是压缩 LLM 调用的最大输出 token 数；传 0 则使用
-// 默认值 800。prompt 是压缩系统提示词，空值回退
-// constants.CompactionDefaultPrompt；temperature 是采样温度，0 回退
-// constants.CompactionDefaultTemperature（调用方已钳制 [0,1]）。
-func NewLLMHistoryCompactor(gw port.CapabilityGateway, model string, logger *zap.Logger, compactionMaxTokens int, prompt string, temperature float32) *LLMHistoryCompactor {
+// constants.CompactionMaxTokensCeiling。promptResolver 解析平台级压缩提示词
+// agent.compaction_prompt（fail-closed，无代码兜底）；temperature 是采样温度，
+// 0 回退 constants.CompactionDefaultTemperature（调用方已钳制 [0,1]）。
+func NewLLMHistoryCompactor(gw port.CapabilityGateway, model string, logger *zap.Logger, compactionMaxTokens int, promptResolver port.PlatformPromptResolver, temperature float32) *LLMHistoryCompactor {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	if compactionMaxTokens <= 0 {
-		compactionMaxTokens = 800
-	}
-	if prompt == "" {
-		prompt = constants.CompactionDefaultPrompt
+		compactionMaxTokens = constants.CompactionMaxTokensCeiling
 	}
 	if temperature == 0 {
 		temperature = constants.CompactionDefaultTemperature
@@ -102,11 +100,31 @@ func NewLLMHistoryCompactor(gw port.CapabilityGateway, model string, logger *zap
 	return &LLMHistoryCompactor{
 		gw:                  gw,
 		model:               model,
-		prompt:              prompt,
 		temperature:         temperature,
 		logger:              logger,
+		promptResolver:      promptResolver,
 		compactionMaxTokens: compactionMaxTokens,
 	}
+}
+
+// resolvePrompt 解析平台级压缩提示词。未配置/空 → fail-closed 错误，禁止
+// 空 system prompt 静默调用 LLM（对齐 memory.*_prompt 模式）。
+func (c *LLMHistoryCompactor) resolvePrompt(ctx context.Context) (string, error) {
+	if c.promptResolver == nil {
+		return "", fmt.Errorf("history compactor: agent.compaction_prompt not configured (fail-closed)")
+	}
+	v, ok, err := c.promptResolver.ResolvePlatform(ctx, "agent.compaction_prompt")
+	if err != nil {
+		return "", fmt.Errorf("history compactor: resolve compaction prompt: %w", err)
+	}
+	if !ok {
+		return "", fmt.Errorf("history compactor: agent.compaction_prompt not configured (fail-closed)")
+	}
+	prompt, ok := v.(string)
+	if !ok || strings.TrimSpace(prompt) == "" {
+		return "", fmt.Errorf("history compactor: agent.compaction_prompt not configured (fail-closed)")
+	}
+	return prompt, nil
 }
 
 // CompactHistory 把 messages 拼成一段可读对话，交由 LLM 生成要点摘要。
@@ -118,6 +136,10 @@ func (c *LLMHistoryCompactor) CompactHistory(ctx context.Context, messages []por
 		return "", nil
 	}
 
+	prompt, err := c.resolvePrompt(ctx)
+	if err != nil {
+		return "", err
+	}
 	convo := renderConversation(messages)
 
 	req := port.CapabilityRequest{
@@ -125,7 +147,7 @@ func (c *LLMHistoryCompactor) CompactHistory(ctx context.Context, messages []por
 		LLM: &port.LLMCapRequest{
 			Model: c.model,
 			Messages: []port.LLMMessage{
-				{Role: "system", Content: c.prompt},
+				{Role: "system", Content: prompt},
 				{Role: "user", Content: convo},
 			},
 			Temperature:    c.temperature,

@@ -64,9 +64,6 @@ type AgentConfig struct {
 	// CompactionCooldownSec overrides the in-loop compaction cooldown.
 	// 0 = default constant.
 	CompactionCooldownSec int
-	// CompactionPrompt overrides the compaction system prompt. "" = the
-	// pkg/constants CompactionDefaultPrompt.
-	CompactionPrompt string
 	// CompactionTemperature overrides the compaction sampling temperature.
 	// 0 means unset: the constants CompactionDefaultTemperature applies.
 	// Same zero-unset semantics as Temperature (a real temperature of 0 is not

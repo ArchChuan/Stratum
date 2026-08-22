@@ -4,7 +4,6 @@ import {
   parameterDefinitionSchema,
   type ParameterDefinition,
   type PlatformValues,
-  promptDefaultsSchema,
 } from '../model/parameters';
 
 import api from '@/services/client';
@@ -25,13 +24,4 @@ export const parametersApi = {
   /** PUT /admin/parameters — merge 写平台值；仅平台 scope 键（资源级键后端拒绝）。 */
   update: (values: PlatformValues): Promise<PlatformValues> =>
     api.put('/admin/parameters', values),
-
-  /**
-   * GET /parameters/prompt-defaults — 默认提示词模板白名单(registry key → 全文)。
-   * 平台页走 admin 通道,agent 编辑页走租户 admin 通道(同一数据,双组注册)。
-   */
-  promptDefaults: async (): Promise<Record<string, string>> => {
-    const res = await api.get('/parameters/prompt-defaults');
-    return promptDefaultsSchema.parse(res.data ?? {});
-  },
 };

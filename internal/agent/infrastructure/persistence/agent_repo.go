@@ -63,17 +63,16 @@ func editorEligible(ctx context.Context, tx pgx.Tx, tenantID, userID string) (bo
 
 // agents.parameters JSONB carries the sampling parameters as flat scalar
 // keys (temperature/max_tokens/compaction_recent_groups/reasoning_effort +
-// compaction_prompt/_temperature/_model). An explicit 0 / "" is
-// indistinguishable from an absent key under omitempty, so 0/"" == unset ==
-// gateway/provider default. Keys match the registry evaluation keys so
-// promote can write them back without mapping.
+// compaction_temperature/_model；compaction_prompt 已迁平台参数，不再落 agent)。
+// An explicit 0 / "" is indistinguishable from an absent key under omitempty,
+// so 0/"" == unset == gateway/provider default. Keys match the registry
+// evaluation keys so promote can write them back without mapping.
 func packSamplingParameters(cfg *domain.AgentConfig) (string, error) {
 	params := map[string]any{}
 	putIfNonZero(params, "temperature", cfg.Temperature, float32(0))
 	putIfNonZero(params, "max_tokens", cfg.MaxTokens, 0)
 	putIfNonZero(params, "compaction_recent_groups", cfg.CompactionRecentGroups, 0)
 	putIfNonZero(params, "reasoning_effort", cfg.ReasoningEffort, "")
-	putIfNonZero(params, "compaction_prompt", cfg.CompactionPrompt, "")
 	putIfNonZero(params, "compaction_temperature", cfg.CompactionTemperature, float32(0))
 	putIfNonZero(params, "compaction_model", cfg.CompactionModel, "")
 	// memory.* resource-scope keys use nil as a deletion marker. The merge SQL
@@ -125,7 +124,6 @@ func packAllSamplingParameters(cfg *domain.AgentConfig) (string, error) {
 		"max_tokens":               cfg.MaxTokens,
 		"compaction_recent_groups": cfg.CompactionRecentGroups,
 		"reasoning_effort":         cfg.ReasoningEffort,
-		"compaction_prompt":        cfg.CompactionPrompt,
 		"compaction_temperature":   cfg.CompactionTemperature,
 		"compaction_model":         cfg.CompactionModel,
 	}
@@ -165,8 +163,9 @@ func isZeroSamplingValue(v any) bool {
 }
 
 // unpackSamplingParameters fills the sampling fields (temperature/max_tokens/
-// compaction×3 + reasoning_effort + compaction_prompt/_temperature/_model)
-// from JSONB; absent keys leave the zero value (unset) untouched.
+// compaction×3 + reasoning_effort + compaction_temperature/_model) from JSONB;
+// absent keys leave the zero value (unset) untouched. 存量 JSONB 中的
+// compaction_prompt 键 inert（unpack 不读）。
 func unpackSamplingParameters(raw string, cfg *domain.AgentConfig) error {
 	if raw == "" {
 		return nil
@@ -179,7 +178,6 @@ func unpackSamplingParameters(raw string, cfg *domain.AgentConfig) error {
 	unpackNumber(params, "max_tokens", &cfg.MaxTokens)
 	unpackNumber(params, "compaction_recent_groups", &cfg.CompactionRecentGroups)
 	unpackString(params, "reasoning_effort", &cfg.ReasoningEffort)
-	unpackString(params, "compaction_prompt", &cfg.CompactionPrompt)
 	unpackNumber(params, "compaction_temperature", &cfg.CompactionTemperature)
 	unpackString(params, "compaction_model", &cfg.CompactionModel)
 	extractMemoryParameters(params, cfg)

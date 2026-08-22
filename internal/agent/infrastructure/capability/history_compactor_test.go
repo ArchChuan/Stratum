@@ -3,7 +3,6 @@ package capgateway
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +15,22 @@ type deadlineRecordingGateway struct {
 	deadline time.Time
 }
 
+// stubPromptResolver 提供固定压缩提示词，供 compactor 测试注入。
+type stubPromptResolver struct {
+	value string
+}
+
+func (s stubPromptResolver) ResolvePlatform(_ context.Context, _ string) (any, bool, error) {
+	if s.value == "" {
+		return nil, false, nil
+	}
+	return s.value, true, nil
+}
+
+const testCompactionPrompt = "你是对话历史压缩器。"
+
+var testPromptResolver = stubPromptResolver{value: testCompactionPrompt}
+
 func (g *deadlineRecordingGateway) Route(ctx context.Context, _ port.CapabilityRequest) (port.CapabilityResponse, error) {
 	g.deadline, _ = ctx.Deadline()
 	return port.CapabilityResponse{Content: "summary"}, nil
@@ -23,7 +38,7 @@ func (g *deadlineRecordingGateway) Route(ctx context.Context, _ port.CapabilityR
 
 func TestLLMHistoryCompactor_UsesIndependentShortDeadline(t *testing.T) {
 	gw := &deadlineRecordingGateway{}
-	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, "", 0)
+	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, testPromptResolver, 0)
 	parent, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -68,7 +83,7 @@ func (g *scriptedCompactorGateway) Route(
 // 请求携带 NoPrimaryRetry=true、MaxCandidates=2。
 func TestCompactHistory_BudgetSlices(t *testing.T) {
 	gw := &scriptedCompactorGateway{results: []error{errors.New("route: 503 unavailable")}}
-	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, "", 0)
+	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, testPromptResolver, 0)
 
 	_, err := compactor.CompactHistory(context.Background(), []port.LLMMessage{{Role: "user", Content: "history"}})
 	require.NoError(t, err)
@@ -94,7 +109,7 @@ func TestCompactHistory_BudgetExhaustedFailsFast(t *testing.T) {
 		errors.New("cand-a: 500 internal"),
 		errors.New("cand-b: 502 bad gateway"),
 	}}
-	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, "", 0)
+	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, testPromptResolver, 0)
 
 	start := time.Now()
 	_, err := compactor.CompactHistory(context.Background(), []port.LLMMessage{{Role: "user", Content: "history"}})
@@ -133,7 +148,7 @@ func TestCompactHistory_PermanentOrContextLengthStopsChain(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			gw := &scriptedCompactorGateway{results: []error{tc.err}}
-			compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, "", 0)
+			compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, testPromptResolver, 0)
 
 			_, err := compactor.CompactHistory(context.Background(), []port.LLMMessage{{Role: "user", Content: "history"}})
 			require.ErrorIs(t, err, tc.err)
@@ -163,19 +178,35 @@ func TestCompactionSlice(t *testing.T) {
 	}
 }
 
-// TestCompactHistory_UsesBuiltinCompactionPrompt 验证压缩指令走内置常量
-// （mechanism 移除后为唯一权威）。
-func TestCompactHistory_UsesBuiltinCompactionPrompt(t *testing.T) {
+// TestCompactHistory_ResolvesPlatformPrompt 验证压缩提示词走平台参数：
+// 配置后注入请求；未配置/无 resolver → fail-closed 错误，禁止空 prompt 调 LLM。
+func TestCompactHistory_ResolvesPlatformPrompt(t *testing.T) {
 	gw := &scriptedCompactorGateway{}
-	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, "", 0)
 	msgs := []port.LLMMessage{{Role: "user", Content: "history"}}
 
+	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0, testPromptResolver, 0)
 	if _, err := compactor.CompactHistory(context.Background(), msgs); err != nil {
-		t.Fatal(err)
+		t.Fatalf("configured prompt: %v", err)
 	}
-	fallback := gw.calls[0].req.LLM.Messages[0].Content
-	if !strings.Contains(fallback, "对话历史压缩器") {
-		t.Fatalf("fallback compaction prompt missing: %q", fallback)
+	if got := gw.calls[0].req.LLM.Messages[0].Content; got != testCompactionPrompt {
+		t.Fatalf("compaction prompt = %q, want %q", got, testCompactionPrompt)
+	}
+
+	// 无 resolver → fail-closed。
+	gw2 := &scriptedCompactorGateway{}
+	unwired := NewLLMHistoryCompactor(gw2, "qwen", nil, 0, nil, 0)
+	if _, err := unwired.CompactHistory(context.Background(), msgs); err == nil {
+		t.Fatal("nil resolver must fail closed")
+	}
+	if len(gw2.calls) != 0 {
+		t.Fatal("fail-closed 不得发起 LLM 调用")
+	}
+
+	// 平台参数未配置（present=false）→ fail-closed。
+	gw3 := &scriptedCompactorGateway{}
+	unset := NewLLMHistoryCompactor(gw3, "qwen", nil, 0, stubPromptResolver{}, 0)
+	if _, err := unset.CompactHistory(context.Background(), msgs); err == nil {
+		t.Fatal("unset platform prompt must fail closed")
 	}
 }
 

@@ -33,13 +33,13 @@ type TenantModelDetail struct {
 
 // SystemAssistantProfile is an immutable, code-reviewed runtime definition.
 // Old versions remain addressable so historical traces and rollback targets
-// continue to resolve after a new version becomes active.
+// continue to resolve after a new version becomes active. 系统提示词不再随
+// profile 走代码常量，由内置 agent 实例的 agents.system_prompt DB 字段承载。
 type SystemAssistantProfile struct {
 	Key              string
 	Version          string
 	Name             string
 	Description      string
-	SystemPrompt     string
 	MaxIterations    int
 	MaxContextTokens int
 }
