@@ -1145,7 +1145,7 @@ func (rs *RAGService) rerankBuiltinSemantic(ctx context.Context, req RAGQueryReq
 	narrowed, err := rs.rerankSemantic(ctx, req, pool)
 	if err != nil {
 		rs.logger.Warn("knowledge.retrieval.llm_rerank_degraded",
-			zap.Error(err), zap.Int("pool_size", len(pool)))
+			zap.Error(err), zap.Int("pool_size", len(pool)), zap.Int("top_n", rs.semanticTopN))
 		if rs.metrics != nil {
 			rs.metrics.IncRerankRequest(reqctx.TenantIDFromContext(ctx), "builtin-llm", "degraded")
 		}

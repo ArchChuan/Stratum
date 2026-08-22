@@ -491,3 +491,36 @@ func TestRAGQueryBuiltinSemanticRerankPartialTailFill(t *testing.T) {
 		t.Fatalf("tail-filled candidates keep recall scores, got %+v", got.Sources[1:])
 	}
 }
+
+func TestRAGQueryBuiltinSemanticRerankEmptyLLMResultsFillsTail(t *testing.T) {
+	vectors := NewMockVectorStore()
+	vectors.SetSearchResults([]knowledgeport.VectorSearchResult{
+		{ID: "chunk-a", SourceDocument: "doc-a", Content: "a", Score: 0.8},
+		{ID: "chunk-b", SourceDocument: "doc-b", Content: "b", Score: 0.7},
+		{ID: "chunk-c", SourceDocument: "doc-c", Content: "c", Score: 0.6},
+	})
+	reranker := &fakeReranker{results: []knowledgeport.RerankResult{}} // LLM 返回空
+	service := vectorRAGService(vectors)
+	service.SetSemanticReranker(reranker, 10)
+
+	got, err := service.Query(context.Background(), RAGQueryRequest{
+		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
+		ViewerID: "test-user",
+		TopK:     3, EmbeddingModel: "embedding-3", Reranking: "builtin-score-v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reranker.calls != 1 {
+		t.Fatalf("semantic rerank must be invoked for a 3-candidate pool, calls=%d", reranker.calls)
+	}
+	// LLM 空结果 → 全池按召回分补尾（sim 降序 = L2 升序），无重复无越界。
+	if len(got.Sources) != 3 {
+		t.Fatalf("sources=%+v", got.Sources)
+	}
+	if got.Sources[0].ChunkID != "chunk-c" || got.Sources[0].Score != l2ToSim(0.6) ||
+		got.Sources[1].ChunkID != "chunk-b" || got.Sources[1].Score != l2ToSim(0.7) ||
+		got.Sources[2].ChunkID != "chunk-a" || got.Sources[2].Score != l2ToSim(0.8) {
+		t.Fatalf("tail-filled candidates keep recall scores, got %+v", got.Sources)
+	}
+}
