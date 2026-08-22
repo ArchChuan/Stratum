@@ -3,6 +3,8 @@
 # 使 #4.2 校验（builtin 空模型保存拒绝）上线后不受影响。
 # rag_workspaces 是 tenant-only 表（tenant_schema.sql），编号迁移只操作 public
 # schema，故按 public.tenants 枚举逐 tenant_<id> schema 幂等执行。
+# schema 名形如 tenant_<uuid>（含连字符），PostgreSQL 中未加引号的标识符
+# 不允许 '-',必须用 "..." 包裹，否则语法错误（syntax error at or near "-"）。
 # 用法：DATABASE_URL=postgres://... bash scripts/knowledge-rerank-workspaces-migration.sh
 set -euo pipefail
 
@@ -16,7 +18,7 @@ for schema in $schemas; do
   # -tA 元组模式会吞掉 UPDATE 命令标签（UPDATE N），本身不输出行；用 RETURNING
   # 产出被改行并以 wc -l 计数，否则 affected 恒为 0。
   n=$(psql "$DATABASE_URL" -tAc \
-    "UPDATE ${schema}.rag_workspaces SET config = config || '{\"reranking\":\"\"}' \
+    "UPDATE \"${schema}\".rag_workspaces SET config = config || '{\"reranking\":\"\"}' \
      WHERE config->>'reranking' = 'builtin-score-v1' \
        AND (config->>'rerank_model' IS NULL OR config->>'rerank_model' = '') RETURNING id" \
     | wc -l)
