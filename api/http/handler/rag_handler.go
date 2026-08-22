@@ -1,7 +1,10 @@
 package handler
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
@@ -53,7 +56,9 @@ func toDTOConfig(c domain.WorkspaceConfig) gen.WorkspaceConfig {
 		Reranking:      c.Reranking,
 		ScoreThreshold: c.ScoreThreshold,
 		//nolint:gosec // 同 ChunkSize
-		RerankTopK: int32(c.RerankTopK),
+		RerankTopK:  int32(c.RerankTopK),
+		RerankModel: c.RerankModel,
+		JudgeModel:  c.JudgeModel,
 	}
 }
 
@@ -68,6 +73,8 @@ func fromDTOConfig(c gen.WorkspaceConfig) domain.WorkspaceConfig {
 		Reranking:        c.Reranking,
 		ScoreThreshold:   c.ScoreThreshold,
 		RerankTopK:       int(c.RerankTopK),
+		RerankModel:      c.RerankModel,
+		JudgeModel:       c.JudgeModel,
 	}
 }
 
@@ -294,6 +301,15 @@ func (h *RAGHandler) UpdateWorkspace(c *gin.Context) {
 	}
 
 	var req gen.UpdateWorkspaceRequest
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	// 显式空字符串字段（"reranking":"" / "rerank_model":"" / "judge_model":""）
+	// 是合法"关闭/清空"值，但 MergeUpdate 的 partial 合并以零值=未传，编码为
+	// NUL 前缀 sentinel 区分显式清空（与 ScoreThresholdResetSentinel 同构）。
+	c.Request.Body = io.NopCloser(bytes.NewReader(encodeResetSentinels(body)))
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -587,4 +603,27 @@ func (h *RAGHandler) PreviewDocument(c *gin.Context) {
 		ChunkCount:    int32(preview.ChunkCount), //nolint:gosec // 分块数来自重组结果,不可能溢出 int32(proto 契约)
 		Segments:      segments,
 	})
+}
+
+// encodeResetSentinels 把 PATCH 请求体中显式空字符串字段编码为重置哨兵。匹配
+// 原始 JSON 字节的 `"key":""`（紧凑 JSON，axios 序列化格式），替换为
+// sentinelJSON 生成的转义字面量 —— NUL 字节必须转义为 \u0000 才是合法 JSON，
+// 不能直接塞裸 NUL 字节（否则 ShouldBindJSON 解析失败）。
+func encodeResetSentinels(raw []byte) []byte {
+	raw = resetReplace(raw, `"reranking":""`, `"reranking":`, domain.RerankingResetSentinel)
+	raw = resetReplace(raw, `"rerank_model":""`, `"rerank_model":`, domain.RerankModelResetSentinel)
+	raw = resetReplace(raw, `"judge_model":""`, `"judge_model":`, domain.JudgeModelResetSentinel)
+	return raw
+}
+
+// resetReplace 把 raw 中 emptyLit（如 `"reranking":""`）替换为
+// keyLit+sentinelJSON(sentinel)（如 `"reranking":"\u0000rerank_reset"`）。
+func resetReplace(raw []byte, emptyLit, keyLit, sentinel string) []byte {
+	return bytes.ReplaceAll(raw, []byte(emptyLit), []byte(keyLit+sentinelJSON(sentinel)))
+}
+
+// sentinelJSON 返回 sentinel 字符串的合法 JSON 字面量（控制字符转义为 \u0000）。
+func sentinelJSON(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }

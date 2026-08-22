@@ -12,6 +12,7 @@ import type {
 
 import { KNOWLEDGE_DEFAULT_TOP_K } from '@/constants';
 import { tenantApi, useAuth, type Member } from '@/modules/iam';
+import { llmApi } from '@/modules/llm';
 import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 const DOC_POLL_INTERVAL_MS = 5000;
@@ -24,6 +25,8 @@ interface ConfigValues {
   chunk_overlap?: number;
   top_k?: number;
   reranking?: string;
+  rerank_model?: string;
+  judge_model?: string;
   score_threshold?: number;
   rerank_top_k?: number;
 }
@@ -45,6 +48,8 @@ export const useKnowledgeDetailPage = () => {
   const [configForm] = Form.useForm<ConfigValues>();
   const lastLoadedConfig = useRef<ConfigValues>({});
   const [configLoading, setConfigLoading] = useState(false);
+  // 模型下拉数据源：chat 目录（复用模型管理 API getCatalogue）。
+  const [chatModels, setChatModels] = useState<string[]>([]);
   const [uploadLoading, setUploadLoading] = useState(false);
   const [queryForm] = Form.useForm<QueryValues>();
   const [queryLoading, setQueryLoading] = useState(false);
@@ -89,6 +94,23 @@ export const useKnowledgeDetailPage = () => {
     };
   }, []);
 
+  // 加载 chat 目录模型列表；失败降级为空数组（下拉为空，不阻断页面）
+  useEffect(() => {
+    let cancelled = false;
+    llmApi
+      .getCatalogue()
+      .then((catalogue) => {
+        if (cancelled) return;
+        setChatModels(catalogue.chatModels ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setChatModels([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const fetchDocuments = useCallback(async (): Promise<KnowledgeDocument[]> => {
     setDocumentsLoading(true);
     try {
@@ -115,6 +137,8 @@ export const useKnowledgeDetailPage = () => {
         query_mode: data.config?.query_mode,
         top_k: data.config?.top_k,
         reranking: data.config?.reranking,
+        rerank_model: data.config?.rerank_model,
+        judge_model: data.config?.judge_model,
         score_threshold: data.config?.score_threshold,
         rerank_top_k: data.config?.rerank_top_k,
       };
@@ -210,6 +234,10 @@ export const useKnowledgeDetailPage = () => {
             reranking: values.reranking,
             score_threshold: values.score_threshold,
             rerank_top_k: values.rerank_top_k,
+            // 仅 builtin 时随 Field 存在，否则 undefined → JSON 省略 → 后端 dormant 保留
+            rerank_model: values.rerank_model,
+            // 清空必须发 ""（allowClear 置 undefined 会被 JSON 丢弃 → 后端 partial 保留旧值 → 判断门关不掉）
+            judge_model: values.judge_model ?? '',
           },
         });
         message.success({ content: '配置已保存', duration: 2 });
@@ -353,6 +381,7 @@ export const useKnowledgeDetailPage = () => {
     statsLoading,
     configForm,
     configLoading,
+    chatModels,
     uploadLoading,
     queryForm,
     queryLoading,

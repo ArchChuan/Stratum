@@ -213,3 +213,121 @@ func TestSentinelErrorsNonNil(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkspaceConfigValidateRerankModel(t *testing.T) {
+	base := WorkspaceConfig{
+		EmbeddingModel:   "text-embedding-v3",
+		QueryMode:        "hybrid",
+		ChunkingStrategy: "recursive",
+	}
+	cases := []struct {
+		name    string
+		cfg     WorkspaceConfig
+		wantErr error
+	}{
+		{
+			name: "builtin rerank 无模型拒绝",
+			cfg: func() WorkspaceConfig {
+				c := base
+				c.Reranking = "builtin-score-v1"
+				return c
+			}(),
+			wantErr: ErrRerankModelRequired,
+		},
+		{
+			name: "builtin rerank 有模型通过",
+			cfg: func() WorkspaceConfig {
+				c := base
+				c.Reranking = "builtin-score-v1"
+				c.RerankModel = "qwen-turbo"
+				return c
+			}(),
+		},
+		{
+			name: "外部 rerank 不需要 rerank_model",
+			cfg: func() WorkspaceConfig {
+				c := base
+				c.Reranking = "cohere:rerank-multilingual-v3.0"
+				return c
+			}(),
+		},
+		{
+			name: "judge_model 空可通过（门关闭）",
+			cfg:  base,
+		},
+		{
+			name: "embedding 缺失优先于 rerank 缺失",
+			cfg: func() WorkspaceConfig {
+				c := base
+				c.EmbeddingModel = ""
+				c.Reranking = "builtin-score-v1"
+				return c
+			}(),
+			wantErr: ErrEmbeddingModelRequired,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.cfg.Validate()
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Fatalf("Validate() = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Validate() = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestMergeUpdateRerankModelSentinels(t *testing.T) {
+	base := WorkspaceConfig{
+		EmbeddingModel:   "text-embedding-v3",
+		QueryMode:        "hybrid",
+		ChunkingStrategy: "recursive",
+		Reranking:        "builtin-score-v1",
+		RerankModel:      "qwen-turbo",
+		JudgeModel:       "qwen-plus",
+	}
+	t.Run("显式清空 judge_model（sentinel）", func(t *testing.T) {
+		got, err := base.MergeUpdate(WorkspaceConfig{JudgeModel: JudgeModelResetSentinel})
+		if err != nil {
+			t.Fatalf("MergeUpdate() error = %v", err)
+		}
+		if got.JudgeModel != "" {
+			t.Fatalf("JudgeModel = %q, want cleared", got.JudgeModel)
+		}
+		if got.RerankModel != "qwen-turbo" {
+			t.Fatalf("RerankModel must be untouched, got %q", got.RerankModel)
+		}
+	})
+	t.Run("零值 judge_model 不覆盖（partial 语义）", func(t *testing.T) {
+		got, err := base.MergeUpdate(WorkspaceConfig{})
+		if err != nil {
+			t.Fatalf("MergeUpdate() error = %v", err)
+		}
+		if got.JudgeModel != "qwen-plus" {
+			t.Fatalf("JudgeModel = %q, want preserved", got.JudgeModel)
+		}
+	})
+	t.Run("显式设置 rerank_model 覆盖", func(t *testing.T) {
+		got, err := base.MergeUpdate(WorkspaceConfig{RerankModel: "qwen-max"})
+		if err != nil {
+			t.Fatalf("MergeUpdate() error = %v", err)
+		}
+		if got.RerankModel != "qwen-max" {
+			t.Fatalf("RerankModel = %q, want qwen-max", got.RerankModel)
+		}
+	})
+	t.Run("显式清空 reranking（sentinel）", func(t *testing.T) {
+		got, err := base.MergeUpdate(WorkspaceConfig{Reranking: RerankingResetSentinel})
+		if err != nil {
+			t.Fatalf("MergeUpdate() error = %v", err)
+		}
+		if got.Reranking != "" {
+			t.Fatalf("Reranking = %q, want cleared", got.Reranking)
+		}
+	})
+}

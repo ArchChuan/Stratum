@@ -36,6 +36,9 @@ type jsonbConfig struct {
 	Reranking        string  `json:"reranking,omitempty"`
 	ScoreThreshold   float32 `json:"score_threshold,omitempty"`
 	RerankTopK       int     `json:"rerank_top_k,omitempty"`
+	// 不带 omitempty：空模型也显式落键，迁移谓词依赖（见 TestJSONBEmptyModelsWriteEmptyKeys）。
+	RerankModel string `json:"rerank_model"`
+	JudgeModel  string `json:"judge_model"`
 }
 
 func toJSONB(c domain.WorkspaceConfig) string {
@@ -49,6 +52,8 @@ func toJSONB(c domain.WorkspaceConfig) string {
 		Reranking:        c.Reranking,
 		ScoreThreshold:   c.ScoreThreshold,
 		RerankTopK:       c.RerankTopK,
+		RerankModel:      c.RerankModel,
+		JudgeModel:       c.JudgeModel,
 	})
 	return string(b)
 }
@@ -64,6 +69,8 @@ func fromJSONB(c jsonbConfig) domain.WorkspaceConfig {
 		Reranking:        c.Reranking,
 		ScoreThreshold:   c.ScoreThreshold,
 		RerankTopK:       c.RerankTopK,
+		RerankModel:      c.RerankModel,
+		JudgeModel:       c.JudgeModel,
 	}
 }
 

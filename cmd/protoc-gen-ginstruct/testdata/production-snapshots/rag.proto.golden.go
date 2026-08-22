@@ -17,6 +17,8 @@ type WorkspaceConfig struct {
 	Reranking        string  `json:"reranking"`
 	ScoreThreshold   float32 `json:"score_threshold"`
 	RerankTopK       int32   `json:"rerank_top_k"`
+	RerankModel      string  `json:"rerank_model"`
+	JudgeModel       string  `json:"judge_model"`
 }
 
 type QueryRequest struct {

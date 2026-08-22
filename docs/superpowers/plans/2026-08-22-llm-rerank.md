@@ -1,10 +1,16 @@
 # LLM 语义重排（builtin-score-v1）实现计划
 
+> **⚠️ 已过期（2026-08-22 迁移）**：本文档描述的平台级 `KNOWLEDGE_JUDGE_*` / `KNOWLEDGE_RERANK_*` env 配置已被 workspace 显式配置（`rerank_model`/`judge_model`）取代，详见 `docs/superpowers/specs/2026-08-22-llm-rerank-design.md` 与 `docs/superpowers/plans/2026-08-22-llm-rerank-workspace-config.md`。
+>
+> **迁移映射（2026-08-22）**：本计划中的平台级 env 模型配置已全部删除，替换为 workspace config JSONB 显式字段（无 env、无兜底）：`KNOWLEDGE_RERANK_MODEL` → `rerank_model`、`KNOWLEDGE_RERANK_TIMEOUT_SECONDS` → 常量 `RerankLLMTimeout`、`KNOWLEDGE_RERANK_TOPN` → 常量 `RerankLLMTopN`、`KNOWLEDGE_JUDGE_ENABLED` → 空/非空 `judge_model` 表达开关、`KNOWLEDGE_JUDGE_MODEL` → `judge_model`、`KNOWLEDGE_JUDGE_TIMEOUT_SECONDS` → 常量 `KnowledgeJudgeTimeout`。下方正文保留为 v1 平台级 env 实现的历史记录，不再与当前代码一致。
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 把 RAG 内置重排策略 `builtin-score-v1` 从确定性 no-op 改造为 LLM 语义重排：复用平台 LLM 网关对召回池前 `TopN` 条 listwise 打分并覆盖 Score，未配置/失败/超时时 fail-open 降级为召回分数排序，检索永不因重排失败。
 
 **Architecture:** 新增 wiring 组合根的 `llmReranker`（与 `knowledgeJudge` 同先例：`api/wiring/` 下，复用 `LLMCompleter.Complete` + `json_object` + `Temperature=0`），通过 `RAGService.SetSemanticReranker` 注入；`rerankSources` 的 builtin 分支改为"装配则精排、否则纯排序"。平台级配置 `KNOWLEDGE_RERANK_MODEL/_TIMEOUT_SECONDS/_TOPN`，启动期校验模型在 chat 目录。
+
+> **已迁移（2026-08-22）**：本段所述平台级 `KNOWLEDGE_RERANK_MODEL/_TIMEOUT_SECONDS/_TOPN` 配置已删除，模型改为 workspace 显式 `rerank_model`（timeout/topN 用常量 `RerankLLMTimeout`/`RerankLLMTopN`），见 `docs/superpowers/plans/2026-08-22-llm-rerank-workspace-config.md`。
 
 **Tech Stack:** Go 1.25（stdlib + zap + 既有 llmgateway/knowledge wiring）、React 18 + Ant Design（仅改 tooltip 文案）。
 
@@ -31,9 +37,13 @@
 - Modify: `config/config.go:78`（`RerankConfigured` 后加 `RerankLLMConfigured`）、`config/config.go:127`（`KnowledgeJudgeConfig` 后加 `KnowledgeRerankConfig`）、`config/config.go:204-211`（`KnowledgeJudge` 装配后加 `KnowledgeRerank` 装配）
 - Test: `config/config_test.go`（新增 `TestLoadKnowledgeRerankConfig`）
 
+> **已迁移（2026-08-22）**：本 Task 的 `KnowledgeRerankConfig` 结构与 `RerankLLMConfigured()` 方法已在 workspace 显式配置迁移中删除（`config/config.go` 不再有 `Config.KnowledgeRerank` / `KnowledgeJudgeConfig`）；仅 `constants.RerankLLM*` 行为常量保留，模型配置走 workspace `rerank_model`/`judge_model`。
+
 **Interfaces:**
 
 - Produces: `config.Config.KnowledgeRerank`（`config.KnowledgeRerankConfig{Model string; Timeout time.Duration; TopN int}`）、`(*Config).RerankLLMConfigured() bool`、`constants.RerankLLMTopN = 10`、`constants.RerankLLMMaxTokens = 1024`、`constants.RerankLLMTimeout = 5 * time.Second`、`constants.RerankLLMMaxDocRunes = 500`。后续 Task 2/4 依赖 `RerankLLMTimeout`/`RerankLLMTopN`/`RerankLLMMaxTokens`/`RerankLLMMaxDocRunes` 与 `Config.KnowledgeRerank`。
+
+> **已迁移（2026-08-22）**：`Config.KnowledgeRerank`/`KnowledgeRerankConfig`/`RerankLLMConfigured` 均已在 workspace 显式配置迁移中删除；`RerankLLM*` 行为常量不变。模型来源见 `docs/superpowers/specs/2026-08-22-llm-rerank-design.md` §4.1/§4.2。
 
 - [ ] **Step 1: 新增 4 个常量**
 
@@ -54,6 +64,8 @@
 ```
 
 - [ ] **Step 2: 写 failing config 测试**
+
+> **已迁移（2026-08-22）**：下述 `TestLoadKnowledgeRerankConfig` 用例及其 `KNOWLEDGE_RERANK_*` env 断言已在 workspace 显式配置迁移中删除（config 层不再加载这些 env）。
 
 在 `config/config_test.go` 末尾追加（import 块需加 `"github.com/byteBuilderX/stratum/pkg/constants"`，其余 `os/strings/testing/time` 已有）：
 
@@ -152,6 +164,8 @@ type KnowledgeRerankConfig struct {
    TopN: getEnvInt("KNOWLEDGE_RERANK_TOPN", constants.RerankLLMTopN),
   },
 ```
+
+> **已迁移（2026-08-22）**：以上 `getEnv("KNOWLEDGE_RERANK_*")` 平台级 env 绑定已全部删除；模型改为 workspace 显式 `rerank_model`，timeout/topN 用常量，不再有平台级 env。
 
 - [ ] **Step 5: 运行测试确认 PASS**
 
@@ -855,6 +869,9 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 **Interfaces:**
 
 - Consumes: `Container.LLMGateway.Gateway`、`Container.LLMGateway.Registry`（`*llmgateway.ModelRegistry`）、`Container.Config.KnowledgeRerank` + `RerankLLMConfigured()`（Task 1）、`Container.Platform.Metrics`（可为 nil）、`newLLMReranker`（Task 2）、`knowledge.RAGService.SetSemanticReranker`（Task 3）、`llmgateway.ModelRegistry.ListChatModelsByTenant(ctx) ([]string, error)`。
+
+> **已迁移（2026-08-22）**：`Container.Config.KnowledgeRerank`/`RerankLLMConfigured`/`llmRerankModelInCatalogue` 均已删除；`wireSemanticReranker` 改为仅按 gateway 可用性注入，模型运行期从 `req.RerankModel`（workspace 显式配置）读取。
+
 - Produces: `(*Container).wireSemanticReranker(ctx, rag)`（buildKnowledge 调用点）、`(*Container).semanticRerankerDeps(ctx) (knowledgeport.Reranker, int)`（测试面）、`(*Container).llmRerankModelInCatalogue(ctx, model) bool`。后续无 Task 消费，但 spec §4.4 需一致。
 
 - [ ] **Step 1: 写 failing wiring 注入测试**
@@ -1087,6 +1104,8 @@ func (c *Container) llmRerankModelInCatalogue(ctx context.Context, model string)
  return false
 }
 ```
+
+> **已迁移（2026-08-22）**：该实现形态已改为仅按 gateway 可用性注入（`KNOWLEDGE_RERANK_MODEL` 平台级配置与目录预检已删除），模型运行期从 `req.RerankModel` 读取并经空模型守卫 fail-open，见 `docs/superpowers/plans/2026-08-22-llm-rerank-workspace-config.md` Task 6。
 
 - [ ] **Step 4: 更新 spec §4.4 代码块**
 

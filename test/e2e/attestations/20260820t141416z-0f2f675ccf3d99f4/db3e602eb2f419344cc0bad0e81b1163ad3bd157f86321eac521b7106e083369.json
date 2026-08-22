@@ -1,0 +1,88 @@
+{
+  "schema_version": 2,
+  "source_digest": "db3e602eb2f419344cc0bad0e81b1163ad3bd157f86321eac521b7106e083369",
+  "manifest_digest": "beec6e9ecc7b7e9aa924f3199ee5b2a9e36530a87ba0c02894e7525ad3d3498d",
+  "policy_manifest_digest": "716bc30a6332d700f6d753511871d1b4e975fb66a4df6384990070ffc9bdaad8",
+  "tested_git_parent": "87e390aaef4cdfd710de27a7e85c64e259111992",
+  "browser": {
+    "name": "chromium",
+    "version": "149.0.7827.55"
+  },
+  "mode": "short",
+  "seed": 1,
+  "started_at": "2026-08-20T14:14:28.906Z",
+  "duration_seconds": 38,
+  "host_class": "developer",
+  "packs": [
+    {
+      "id": "knowledge",
+      "status": "passed"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "knowledge.mutation.delete.knowledge.workspaces.name",
+      "status": "passed"
+    },
+    {
+      "id": "knowledge.mutation.delete.knowledge.workspaces.name.documents.documentid",
+      "status": "passed"
+    },
+    {
+      "id": "knowledge.mutation.patch.knowledge.workspaces.name",
+      "status": "passed"
+    },
+    {
+      "id": "knowledge.mutation.post.knowledge.ingest",
+      "status": "passed"
+    },
+    {
+      "id": "knowledge.mutation.post.knowledge.query",
+      "status": "passed"
+    },
+    {
+      "id": "knowledge.mutation.post.knowledge.workspaces",
+      "status": "passed"
+    },
+    {
+      "id": "knowledge.route.knowledge",
+      "status": "passed"
+    },
+    {
+      "id": "knowledge.route.knowledge.name",
+      "status": "passed"
+    }
+  ],
+  "action_count": 8,
+  "sequence_digest": "209012fa1a6a0e29372e9bb135a136f9dc1b9060f18388e9549a5bdb671bd1c2",
+  "evidence": {
+    "ui": 1,
+    "http": 1,
+    "database": 1,
+    "reconciled": 8
+  },
+  "artifacts": [],
+  "cleanup": {
+    "passed": true,
+    "residual_entity_ids": []
+  },
+  "unverified_capabilities": [],
+  "risk_classification": "short",
+  "status": "passed",
+  "run_topology": {
+    "run_id": "20260820t141416z-0f2f675ccf3d99f4",
+    "host": "127.0.0.1",
+    "ports": {
+      "backend": 37133,
+      "fixture": 34447,
+      "frontend": 46087,
+      "oauth": 46273
+    },
+    "database_name": "stratum_e2e_20260820t141416z_0f2f675ccf3d99f4"
+  },
+  "owned_cleanup": {
+    "database_dropped": true,
+    "lease_removed": true
+  },
+  "expires_at": "2026-08-23T14:15:16.016498687Z"
+}

@@ -10,6 +10,7 @@ type ModelCapability string
 const (
 	CapEmbedding ModelCapability = "embedding"
 	CapRerank    ModelCapability = "rerank"
+	CapChat      ModelCapability = "chat"
 )
 
 // ModelExists reports whether model exists in the global enabled catalogue

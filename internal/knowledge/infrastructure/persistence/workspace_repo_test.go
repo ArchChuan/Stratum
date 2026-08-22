@@ -62,3 +62,35 @@ func TestWorkspaceConfigJSONBRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestJSONBRoundTripRerankAndJudgeModels(t *testing.T) {
+	in := domain.WorkspaceConfig{
+		EmbeddingModel:   "text-embedding-v3",
+		ChunkSize:        512,
+		ChunkOverlap:     64,
+		QueryMode:        "hybrid",
+		TopK:             5,
+		ChunkingStrategy: "recursive",
+		Reranking:        "builtin-score-v1",
+		RerankModel:      "qwen-turbo",
+		JudgeModel:       "qwen-plus",
+	}
+	var jc jsonbConfig
+	_ = json.Unmarshal([]byte(toJSONB(in)), &jc)
+	out := fromJSONB(jc)
+	if out.RerankModel != "qwen-turbo" || out.JudgeModel != "qwen-plus" {
+		t.Fatalf("round-trip lost models: RerankModel=%q JudgeModel=%q", out.RerankModel, out.JudgeModel)
+	}
+	if !strings.Contains(toJSONB(in), `"rerank_model":"qwen-turbo"`) {
+		t.Fatalf("rerank_model key missing/omitempty in JSON: %s", toJSONB(in))
+	}
+}
+
+func TestJSONBEmptyModelsWriteEmptyKeys(t *testing.T) {
+	// 空模型也写入显式键（不带 omitempty）：部署后新行必有键，迁移谓词
+	// config->>'rerank_model' IS NULL 只命中部署前旧行。
+	cfg := domain.WorkspaceConfig{EmbeddingModel: "text-embedding-v3"}
+	if got := toJSONB(cfg); !strings.Contains(got, `"rerank_model":""`) || !strings.Contains(got, `"judge_model":""`) {
+		t.Fatalf("empty models must serialize explicit empty keys, got: %s", got)
+	}
+}

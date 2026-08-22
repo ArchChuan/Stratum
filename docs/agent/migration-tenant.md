@@ -46,3 +46,7 @@
 2. 在租户 schema 定义中追加 `DROP` 语句清理存量租户
 
 判断标准：`rg "table_name" -g '*.go'` 零引用后，再核对 SQL、测试和运行期动态表名，确认无消费者才可删除。
+
+## 存量 workspace 迁移（运维脚本）
+
+迁移存量 builtin 空模型 workspace 时，先执行 `scripts/knowledge-rerank-workspaces-migration.sh`（运维动作，须用户许可），再部署代码；顺序不可反（校验上线后受影响 workspace 的保存会被拒，存在保存拒绝窗口）。

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -13,20 +14,26 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
+	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 )
 
 // ragModelExistsStub 实现 knowledgeport.ModelExists；目录为空时任何模型都不存在
-// （使非法 embedding 模型在 application 层被拒）。
+// （使非法 embedding 模型在 application 层被拒）。CapChat 仅认 qwen-turbo，
+// rerank/judge 模型目录校验按模型名判定。
 type ragModelExistsStub struct{ embedding map[string]bool }
 
 func (m ragModelExistsStub) Exists(_ context.Context, model string, capability knowledgeport.ModelCapability) (bool, error) {
-	if capability == knowledgeport.CapRerank {
+	switch capability {
+	case knowledgeport.CapRerank:
 		return false, nil
+	case knowledgeport.CapChat:
+		return model == "qwen-turbo", nil
+	default:
+		return m.embedding[model], nil
 	}
-	return m.embedding[model], nil
 }
 
 // injectRAGTenant sets a tenant context for RAG handler tests.
@@ -207,5 +214,62 @@ func TestDeleteWorkspace_MissingTenant(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("want 401, got %d", w.Code)
+	}
+}
+
+// TestUpdateWorkspaceRejectsBuiltinWithoutRerankModel 守护 Global Constraint 2:
+// builtin-score-v1 但 workspace 无显式 rerank_model → PATCH 必须 400
+// （ErrRerankModelRequired），不自动降级、不静默兜底。显式空字符串经 sentinel
+// 编码后在 domain 合并层清空，application 层目录校验拒绝。
+func TestUpdateWorkspaceRejectsBuiltinWithoutRerankModel(t *testing.T) {
+	ws, err := domain.NewWorkspace("kb", "desc",
+		domain.WorkspaceConfig{EmbeddingModel: "text-embedding-v3"}, domain.DefaultChunkSize, domain.DefaultTopK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws.ID = "wsid-1"
+	svc := knowledge.NewWorkspaceService(&previewWorkspaceRepo{ws: ws}, nil, zap.NewNop())
+	svc.SetTenantRoleResolver(fixedTenantRole{role: "owner"})
+	svc.SetModelExists(ragModelExistsStub{embedding: map[string]bool{"text-embedding-v3": true}})
+
+	r := newRouterWithErrorHandler()
+	r.PATCH("/knowledge/workspaces/:name", injectRAGTenant("tenant-1"), func(c *gin.Context) {
+		NewRAGHandler(nil, svc, zap.NewNop()).UpdateWorkspace(c)
+	})
+
+	body := `{"config":{"embedding_model":"text-embedding-v3","reranking":"builtin-score-v1","rerank_model":""}}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/knowledge/workspaces/kb", strings.NewReader(body))
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestDTOConfigRoundTripRerankModels 守护 RerankModel/JudgeModel 经
+// toDTOConfig/fromDTOConfig 双向映射不丢失。
+func TestDTOConfigRoundTripRerankModels(t *testing.T) {
+	in := domain.WorkspaceConfig{
+		EmbeddingModel: "text-embedding-v3", QueryMode: "hybrid", Reranking: "builtin-score-v1",
+		RerankModel: "qwen-turbo", JudgeModel: "qwen-plus",
+	}
+	got := fromDTOConfig(toDTOConfig(in))
+	if got.RerankModel != "qwen-turbo" || got.JudgeModel != "qwen-plus" {
+		t.Fatalf("round-trip lost models: RerankModel=%q JudgeModel=%q", got.RerankModel, got.JudgeModel)
+	}
+}
+
+// TestEncodeResetSentinels 守护 PATCH 显式空字符串字段编码为 NUL 前缀 sentinel
+// （与 ScoreThresholdResetSentinel 同构），且产物仍是合法 JSON。
+func TestEncodeResetSentinels(t *testing.T) {
+	raw := []byte(`{"reranking":"","rerank_model":"","judge_model":""}`)
+	got := string(encodeResetSentinels(raw))
+	if !strings.Contains(got, `"reranking":"\u0000rerank_reset"`) ||
+		!strings.Contains(got, `"rerank_model":"\u0000rerank_model_reset"`) ||
+		!strings.Contains(got, `"judge_model":"\u0000judge_model_reset"`) {
+		t.Fatalf("sentinel encoding wrong: %s", got)
+	}
+	if !json.Valid([]byte(got)) {
+		t.Fatalf("encoded body is not valid JSON: %s", got)
 	}
 }
