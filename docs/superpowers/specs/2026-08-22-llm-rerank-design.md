@@ -28,6 +28,14 @@ v1 已实现平台级 env 配置（`KNOWLEDGE_RERANK_MODEL` / `KNOWLEDGE_JUDGE_*
 4. **重排范围**：仅对 top-N 精排 —— 先按召回分数取前 N 条（`RerankLLMTopN=10`，与池大小取 min），再做一次 listwise 打分。
 5. **模型来源唯一**：模型从 workspace 配置解析，经 `port.ModelExists`（capability `CapChat`）校验在 enabled chat 目录；不存在 → 保存被拒（仿 embedding_model 先例）。
 
+### judge 门：为什么存在（证据充分性门）
+
+judge 门是 v1 引入的生成前门，本版只把它的模型配置迁到 workspace（`judge_model`），语义不变。它解决的是相似度阈值覆盖不到的失败模式：
+
+- **相似度阈值回答"像不像"，judge 回答"能不能推出结论"**，两者正交。阈值过滤低相似度块；judge 处理"相似度高但语义对不上"的证据——例如问"多租户数据隔离怎么做"，知识库里只有一段技术架构文档提到"数据隔离"（向量/关键词都命中，相似度高），但它没有回答操作步骤。此时若基于这段证据生成，模型会**编造**答案，这是 RAG 幻觉的主要来源。
+- **判 INSUFFICIENT 会怎样**（`evidence_gate.go:33-37`）：Sources 置空 + `NoAnswer=insufficient_evidence`，主链路直接走"证据不足，无法回答"，绝不基于无关证据生成。**fail-closed**：未装配 / workspace 未配 `judge_model` / 调用失败 / 超时 → WARN + 原样放行，行为与不配置时一致，绝不误杀检索（rerank 是 fail-open 降级排序、judge 是 fail-closed 放行，方向不同是因为 rerank 降级不产生错误答案，而 judge 一旦误判会砍掉本可回答的问题）。
+- **业界对照**：有同构机制但非主流框架标准件——CRAG（2024，检索质量评估器，评估 correct/incorrect/ambiguous）最接近但它是"纠正检索"而非"拒绝回答"；Self-RAG 是"按需检索"；groundedness 校验（Cohere / LlamaIndex citation）是**事后**校验答案是否有依据，而我们提前到**生成前**。结论：judge 门是"知识库问答宁可不答也不胡编"的产品决策，与外部重排 / embedding 先例同属工程合理设计。
+
 ## 2. 现状代码走查
 
 ### 2.1 数据量
