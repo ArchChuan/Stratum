@@ -92,7 +92,7 @@ func Classify(manifest Manifest, paths []string, minimum string, release bool) (
 // risk-triggered verification steps (e.g. the RAG retrieval spot-check)
 // deterministically instead of re-deriving the file set in each skill.
 func MatchingRules(manifest Manifest, paths []string) []string {
-	var matched []string
+	matched := make([]string, 0, len(manifest.Risk.Rules))
 	for _, rule := range manifest.Risk.Rules {
 		if matchesAny(rule.Paths, paths) {
 			matched = append(matched, rule.ID)
