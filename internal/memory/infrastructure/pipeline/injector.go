@@ -151,26 +151,7 @@ func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext
 	rows.Close() // must close before issuing next query on same tx
 
 	// Fetch top long-term facts ordered by frecency score
-	inj.logger.Debug("buildcontext: querying facts", zap.String("user_id", ic.UserID), zap.String("agent_id", ic.AgentID), zap.String("tenant_id", ic.TenantID))
-	var facts []factRow
-	factCtx, cancelFacts := context.WithTimeout(ctx, constants.FactInjectionTimeout)
-	defer cancelFacts()
-	factTopN := inj.resourceInt(ctx, "memory.fact_injection_top_n", constants.FactInjectionTopN)
-	factRows, err := tx.Query(factCtx, factInjectionQuery(),
-		ic.UserID, ic.AgentID, ic.Query, constants.FactInjectionConfidenceMin, factTopN,
-		scopeFilter.IncludeUserScope, scopeFilter.IncludeAgentScope)
-	if err == nil {
-		for factRows.Next() {
-			var fact factRow
-			if err := factRows.Scan(&fact.content, &fact.category); err == nil {
-				facts = append(facts, fact)
-			}
-		}
-		factRows.Close()
-		inj.logger.Debug("buildcontext: facts loaded", zap.Int("count", len(facts)))
-	} else {
-		inj.logger.Warn("buildcontext: facts query failed", zap.Error(err))
-	}
+	facts := inj.loadFacts(ctx, tx, ic, scopeFilter)
 
 	var history []historyRow
 	historyCtx, cancelHistory := context.WithTimeout(ctx, constants.HistoryReadTimeout)
@@ -194,6 +175,38 @@ func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext
 		return "", nil
 	}
 	return renderMemoryContext(snapshot, summary, entityNames, facts, history, constants.MemoryInjectionCharBudget), nil
+}
+
+// loadFacts 查询并收集可注入事实。pgx 行迭代错误延迟到 Rows.Err() 才暴露，
+// 必须显式检查：吞掉会静默丢失事实注入（只 log count=0）。
+func (inj *MemoryInjector) loadFacts(ctx context.Context, tx pgx.Tx, ic InjectionContext, scopeFilter domain.ScopeFilter) []factRow {
+	inj.logger.Debug("buildcontext: querying facts",
+		zap.String("user_id", ic.UserID), zap.String("agent_id", ic.AgentID), zap.String("tenant_id", ic.TenantID))
+	var facts []factRow
+	factCtx, cancelFacts := context.WithTimeout(ctx, constants.FactInjectionTimeout)
+	defer cancelFacts()
+	factTopN := inj.resourceInt(ctx, "memory.fact_injection_top_n", constants.FactInjectionTopN)
+	factRows, err := tx.Query(factCtx, factInjectionQuery(),
+		ic.UserID, ic.AgentID, ic.Query, constants.FactInjectionConfidenceMin, factTopN,
+		scopeFilter.IncludeUserScope, scopeFilter.IncludeAgentScope)
+	if err != nil {
+		inj.logger.Warn("buildcontext: facts query failed", zap.Error(err))
+		return nil
+	}
+	for factRows.Next() {
+		var fact factRow
+		if err := factRows.Scan(&fact.content, &fact.category); err == nil {
+			facts = append(facts, fact)
+		}
+	}
+	rowErr := factRows.Err()
+	factRows.Close()
+	if rowErr != nil {
+		inj.logger.Warn("buildcontext: facts query error", zap.Error(rowErr))
+		return nil
+	}
+	inj.logger.Debug("buildcontext: facts loaded", zap.Int("count", len(facts)))
+	return facts
 }
 
 func (inj *MemoryInjector) loadActiveSnapshot(ctx context.Context, ic InjectionContext, filter domain.ScopeFilter) *domain.ActiveSnapshot {

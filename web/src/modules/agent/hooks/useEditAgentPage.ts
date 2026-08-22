@@ -81,10 +81,7 @@ export const useEditAgentPage = () => {
           temperature: a.temperature,
           max_tokens: a.max_tokens,
           compaction_recent_groups: a.compaction_recent_groups,
-          // compaction_prompt/temperature/model 是顶层 DTO 字段，GET 回显顶层。
-          compaction_prompt: a.compaction_prompt,
-          compaction_temperature: a.compaction_temperature,
-          compaction_model: a.compaction_model,
+          // 压缩三值（提示词/温度/模型）为平台级参数，不在 agent 表单/存储。
           allowedSkills: a.allowedSkills || [],
           mcpToolIds: a.mcpToolIds || [],
           knowledgeWorkspaceIds: a.knowledgeWorkspaceIds || [],

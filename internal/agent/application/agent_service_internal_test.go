@@ -333,14 +333,12 @@ func TestAssembleOptionsLoadsPinnedKnowledgeRevisionWithoutReassignment(t *testi
 func TestAssembleOptionsBuildsHistoryCompactorFromTenantGateway(t *testing.T) {
 	gateway := capabilityGatewayFake{}
 	compactor := historyCompactorFake{}
-	var factoryModel string
 	svc := NewAgentService(AgentServiceDeps{
 		TenantResolver: tenantResolverFake{gateway: gateway},
-		HistoryCompactorFactory: func(got port.CapabilityGateway, model string, _ *zap.Logger, _ int, _ string, _ float32) port.HistoryCompactor {
+		HistoryCompactorFactory: func(got port.CapabilityGateway, _ *zap.Logger, _ int) port.HistoryCompactor {
 			if got != gateway {
 				t.Fatalf("factory gateway = %#v, want tenant gateway", got)
 			}
-			factoryModel = model
 			return compactor
 		},
 	})
@@ -357,9 +355,6 @@ func TestAssembleOptionsBuildsHistoryCompactorFromTenantGateway(t *testing.T) {
 	}
 	if a.compactor != compactor {
 		t.Fatal("history compactor was not attached")
-	}
-	if factoryModel != "qwen-plus" {
-		t.Fatalf("factory model = %q", factoryModel)
 	}
 }
 

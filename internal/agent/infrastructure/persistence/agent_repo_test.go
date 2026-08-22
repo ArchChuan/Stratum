@@ -300,9 +300,6 @@ func TestAgentRepo_SamplingParametersRoundTrip(t *testing.T) {
 		ID: "a1", Name: "Beta", LLMModel: "gpt-4o", MaxIterations: 5,
 		Temperature: 0.9, MaxTokens: 2048,
 		CompactionRecentGroups: 3,
-		CompactionPrompt:       "focus on decisions",
-		CompactionTemperature:  0.4,
-		CompactionModel:        "qwen-turbo",
 		MemoryParameters:       map[string]any{"memory.fact_injection_top_n": 8},
 	}
 	if err := repo.Update(tenantCtx("t1"), cfg, nil, "", true); err != nil {
@@ -314,6 +311,7 @@ func TestAgentRepo_SamplingParametersRoundTrip(t *testing.T) {
 
 	// 回读:DB 存 {temperature:0.9, compaction_recent_groups:3, memory.fact_injection_top_n:8},
 	// Get 必须解回采样字段与 memory.* dotted 键,缺键保持 0=unset。
+	// 压缩三值已迁平台参数,不再落 agent JSONB。
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("SELECT id, name").
@@ -322,7 +320,7 @@ func TestAgentRepo_SamplingParametersRoundTrip(t *testing.T) {
 			"id", "name", "type", "description", "system_prompt", "llm_model",
 			"max_iterations", "max_context_tokens", "memory_scope", "system_key",
 			"created_by", "parameters",
-		}).AddRow("a1", "Beta", "react", "", "", "gpt-4o", 5, 0, "", "", "", `{"temperature":0.9,"compaction_recent_groups":3,"compaction_prompt":"focus on decisions","compaction_temperature":0.4,"compaction_model":"qwen-turbo","memory.fact_injection_top_n":8}`))
+		}).AddRow("a1", "Beta", "react", "", "", "gpt-4o", 5, 0, "", "", "", `{"temperature":0.9,"compaction_recent_groups":3,"memory.fact_injection_top_n":8}`))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs("a1").WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
 	pool.ExpectQuery("SELECT server_id, tool_name FROM agent_mcp_tool_links").
@@ -340,16 +338,6 @@ func TestAgentRepo_SamplingParametersRoundTrip(t *testing.T) {
 	}
 	if got.CompactionRecentGroups != 3 {
 		t.Errorf("compaction_recent_groups = %d, want 3", got.CompactionRecentGroups)
-	}
-	// 压缩三值非空必须 pack 落库并 unpack 回读一致。
-	if got.CompactionPrompt != "focus on decisions" {
-		t.Errorf("compaction_prompt = %q, want focus on decisions", got.CompactionPrompt)
-	}
-	if got.CompactionTemperature != 0.4 {
-		t.Errorf("compaction_temperature = %v, want 0.4", got.CompactionTemperature)
-	}
-	if got.CompactionModel != "qwen-turbo" {
-		t.Errorf("compaction_model = %q, want qwen-turbo", got.CompactionModel)
 	}
 	if got.MaxTokens != 0 {
 		t.Errorf("absent keys must stay unset(0): max_tokens=%d", got.MaxTokens)
@@ -402,8 +390,8 @@ func TestPackAllSamplingParameters(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &params); err != nil {
 		t.Fatal(err)
 	}
-	if len(params) != 8 {
-		t.Fatalf("packAll must carry all 7 sampling keys + memory.*, got %v", params)
+	if len(params) != 5 {
+		t.Fatalf("packAll must carry all 4 sampling keys + memory.*, got %v", params)
 	}
 	if params["temperature"] != 0.7 || params["compaction_recent_groups"] != float64(2) {
 		t.Errorf("non-zero fields must keep value: %v", params)
@@ -413,11 +401,6 @@ func TestPackAllSamplingParameters(t *testing.T) {
 	}
 	if v, ok := params["reasoning_effort"]; !ok || v != nil {
 		t.Errorf("empty reasoning_effort must serialize as explicit null, got %v", params["reasoning_effort"])
-	}
-	for _, k := range []string{"compaction_prompt", "compaction_temperature", "compaction_model"} {
-		if v, ok := params[k]; !ok || v != nil {
-			t.Errorf("zero %s must serialize as explicit null (overall-replace reset), got %v", k, params[k])
-		}
 	}
 	if params["memory.max_facts_per_extraction"] != float64(20) {
 		t.Errorf("memory.* must survive overall-replace write, got %v", params["memory.max_facts_per_extraction"])

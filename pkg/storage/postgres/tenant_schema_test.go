@@ -66,12 +66,13 @@ func TestTenantSchemaDefaultsSystemAssistantModelWithoutOverwritingTenantChoice(
 	}
 	sql := string(data)
 	for _, want := range []string{
-		"'', 'glm-5.2', 10, 0, 'user', 'stratum.platform_assistant'",
+		"'glm-5.2', 10, 0, 'user', 'stratum.platform_assistant'",
 		"UPDATE agents",
 		"SET llm_model = 'glm-5.2',",
 		"updated_at = NOW()",
 		"WHERE system_key = 'stratum.platform_assistant'",
 		"AND BTRIM(llm_model) = ''",
+		"BTRIM(COALESCE(system_prompt, '')) = ''",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("tenant_schema.sql missing default model contract %q", want)
@@ -103,7 +104,9 @@ func TestTenantSchemaContainsSystemAssistantIdentityAndSeed(t *testing.T) {
 		"'__stratum_platform_assistant__'",
 		"WHILE EXISTS",
 		"'基于官方资料指导平台使用并诊断当前租户应用状态'",
-		"'', 'glm-5.2', 10, 0, 'user', 'stratum.platform_assistant'",
+		"'glm-5.2', 10, 0, 'user', 'stratum.platform_assistant'",
+		"stratum_apply_resource_change",
+		"Deletion, credential changes, IAM operations, and publishing remain forbidden",
 		"ON CONFLICT (id) DO NOTHING",
 		"stratum platform assistant identity conflict requires operator action",
 	} {

@@ -7,7 +7,6 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/parameters/domain"
 	"github.com/byteBuilderX/stratum/internal/parameters/domain/port"
-	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 // Service is the parameters application facade consumed by handlers and by
@@ -100,15 +99,6 @@ func (s *Service) PlatformValues(ctx context.Context) (map[string]any, error) {
 		}
 	}
 	return out, nil
-}
-
-// PromptDefaults returns the visible default prompt templates by full registry
-// key. 仅保留 agent.compaction_prompt：memory.*_prompt 已改为显式配置、
-// 未配置即失败（fail-closed），不再下发任何内置模板。
-func (s *Service) PromptDefaults() map[string]string {
-	return map[string]string{
-		"agent.compaction_prompt": constants.CompactionDefaultPrompt,
-	}
 }
 
 // SetPlatformValues applies merge semantics: only keys present in input are

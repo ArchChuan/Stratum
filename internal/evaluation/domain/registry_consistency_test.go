@@ -53,8 +53,8 @@ func TestCandidateWhitelistCountAnchors20Plus1(t *testing.T) {
 	if got := len(allowedParameterFields); got != 16 {
 		t.Fatalf("allowedParameterFields = %d keys, want 16 (14 legacy + 1 compaction + reasoning_effort)", got)
 	}
-	if got := len(allowedPromptFields); got != 6 {
-		t.Fatalf("allowedPromptFields = %d keys, want 6", got)
+	if got := len(allowedPromptFields); got != 5 {
+		t.Fatalf("allowedPromptFields = %d keys, want 5 (compaction_prompt 已迁平台参数)", got)
 	}
 	for _, key := range []string{"compaction_recent_groups", "reasoning_effort"} {
 		if _, ok := allowedParameterFields[key]; !ok {

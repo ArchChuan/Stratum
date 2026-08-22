@@ -172,6 +172,17 @@ prepare_database() {
   phase=migration
   migration_command=${STATEFUL_E2E_MIGRATION_COMMAND:-"cd '$repo_dir' && go run ./cmd/migrate-public --sql-dir '$repo_dir/pkg/migration/sql'"}
   bash -c "$migration_command"
+  phase=platform-params-seed
+  # 提示词平台化（fail-closed）前提：agent.system_prompt / agent.compaction_prompt
+  # 未配置时 agent 执行/压缩 fail-closed，与生产一致。E2E 环境在此预置测试值。
+  seed_command=${STATEFUL_E2E_PLATFORM_PARAMS_SEED_COMMAND:-"pg=\$(docker ps --format '{{.Names}} {{.Ports}}' | awk '/0.0.0.0:5432->/{print \$1; exit}'); [ -n \"\$pg\" ] && docker exec -i \"\$pg\" psql \"$TEST_DATABASE_URL\" -v ON_ERROR_STOP=1"}
+  bash -c "$seed_command" <<'SQL' || return 1
+INSERT INTO public.platform_settings (key, value, updated_by, updated_at)
+VALUES
+  ('agent.system_prompt', '"你是 Stratum E2E 测试助手。回答前优先调用可用工具验证，禁止编造。\n\n## 工具调用\n- 回答事实性问题前必须先调用工具。\n- 工具失败时如实说明，禁止声称成功。"', 'stateful-e2e', NOW()),
+  ('agent.compaction_prompt', '"你是对话历史压缩器。把以下对话压成要点摘要，保留关键事实、已达成的决定与未解决问题，只输出摘要正文。"', 'stateful-e2e', NOW())
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = NOW();
+SQL
 }
 start_services() {
   phase=service-startup

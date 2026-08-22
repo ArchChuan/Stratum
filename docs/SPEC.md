@@ -225,7 +225,6 @@ stratum/
 | `FRONTEND_URL` | × | `http://localhost:3002` | CORS 与登录跳转 |
 | `GLOBAL_ADMIN_GITHUB_LOGIN` | × | `ArchChuan` | 全局管理员登录名 |
 | `SECURE_COOKIES` | × | false | 仅字符串 `true` 开启 |
-| `GLOBAL_AGENT_SYSTEM_PROMPT` | × | 空 | 全局 Agent system prompt |
 | `MEMORY_PIPELINE_ENABLED` | × | false | 启用异步记忆流水线 |
 | `MEMORY_ENRICH_MODEL` / `MEMORY_SUMMARY_MODEL` | × | `qwen-turbo` / `qwen-plus` | Memory pipeline 模型 |
 

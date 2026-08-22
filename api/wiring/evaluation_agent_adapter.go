@@ -366,8 +366,7 @@ func parseAgentCandidatePatch(
 			result.SystemPrompt = prompt
 		case "memory_extraction_prompt",
 			"memory_summary_prompt",
-			"memory_enrichment_prompt",
-			"compaction_prompt":
+			"memory_enrichment_prompt":
 			if result.PromptOverrides == nil {
 				result.PromptOverrides = make(map[string]string)
 			}

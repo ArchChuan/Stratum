@@ -235,7 +235,8 @@ func categoryToTunables(cat domain.TunableCategory) []string {
 	case domain.CatPlanning:
 		return []string{"max_iterations", "max_context_tokens"}
 	case domain.CatCompaction:
-		return []string{domain.TunableCompactionPrompt}
+		// 压缩提示词已迁平台参数，不在 agent 调优搜索空间内。
+		return nil
 	case domain.CatPrompt:
 		return []string{domain.TunableSystemPrompt}
 	default:

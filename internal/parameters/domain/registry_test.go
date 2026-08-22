@@ -81,7 +81,7 @@ func TestRegistryEvaluationKeyMapping(t *testing.T) {
 	}
 }
 
-// TestPromptEvaluationKeysAreGateOnly pins the decoupling: the 6 prompt patch
+// TestPromptEvaluationKeysAreGateOnly pins the decoupling: the 5 prompt patch
 // bare keys survive as gate-only evaluation keys (valid candidate-patch
 // fields for validatePatchKeys) but carry no parameter definition — they must
 // not resolve through KeyForEvaluation and must not appear in the schema.
@@ -90,7 +90,7 @@ func TestPromptEvaluationKeysAreGateOnly(t *testing.T) {
 	for _, bare := range []string{
 		"system_prompt", "instructions",
 		"memory_extraction_prompt", "memory_summary_prompt",
-		"memory_enrichment_prompt", "compaction_prompt",
+		"memory_enrichment_prompt",
 	} {
 		if !r.IsEvaluationKey(bare) {
 			t.Errorf("prompt key %q must stay a valid candidate-patch key (gate-only)", bare)
@@ -109,39 +109,55 @@ func TestPromptEvaluationKeysAreGateOnly(t *testing.T) {
 	}
 }
 
-// TestRegistryAgentMemoryParams 覆盖 agent 维度新 key:压缩三值、提取 prompt/
-// model、召回 top_k 校准、long_term_top_k 保留标注 deprecated。断言
-// agent.compaction_prompt 不进入 byEvalKey、不设 EvaluationKeys(防半注册回归)。
+// TestRegistryAgentMemoryParams 覆盖 agent 维度新 key:压缩温度/模型、平台级
+// 压缩/全局提示词、提取 prompt/model、召回 top_k 校准、long_term_top_k 保留
+// 标注 deprecated。断言 compaction 温度/模型不进入 byEvalKey、不设
+// EvaluationKeys(防半注册回归)。
 func TestRegistryAgentMemoryParams(t *testing.T) {
 	r := NewParametersRegistry()
 
-	// 压缩三值:ScopeResource,均不可优化且无 EvaluationKeys —— compaction_prompt
-	// 是 registerPromptEvaluationKeys 保留的 gate-only bare key(若设 EvaluationKeys
-	// 则 Register() 拒绝);temperature 的 bare-key 写时校验经 ValidateResourceValues
-	// 的短名匹配(不进 byEvalKey,避免污染 candidate/critique whitelist lockstep)。
-	compaction := map[string]struct {
-		optimizable      bool
-		evalKeys         int
-		control          Control
-		wantMin, wantMax float64
-	}{
-		"agent.compaction_prompt":      {optimizable: false, evalKeys: 0, control: ControlTextarea},
-		"agent.compaction_temperature": {optimizable: false, evalKeys: 0, control: ControlSlider, wantMin: 0, wantMax: 1},
-		"agent.compaction_model":       {optimizable: false, evalKeys: 0, control: ControlSelect},
+	// 压缩温度 bare key 不进 byEvalKey(评测搜索空间干净),写时校验经短名匹配。
+	if got, ok := r.KeyForEvaluation("compaction_temperature"); ok {
+		t.Errorf("KeyForEvaluation(compaction_temperature) = %q, want unregistered", got)
 	}
-	for key, want := range compaction {
+	if got, ok := r.KeyByShortName("compaction_temperature"); !ok || got != "agent.compaction_temperature" {
+		t.Errorf("KeyByShortName(compaction_temperature) = %q/%v, want agent.compaction_temperature/true", got, ok)
+	}
+
+	// 平台级提示词:agent.compaction_prompt / agent.system_prompt（fail-closed,
+	// 无默认模板）,不进入 byEvalKey。
+	for _, key := range []string{"agent.compaction_prompt", "agent.system_prompt"} {
 		def, ok := r.Get(key)
 		if !ok {
 			t.Fatalf("%s not registered", key)
 		}
-		if def.Scope != ScopeResource {
-			t.Errorf("%s scope = %q, want resource", key, def.Scope)
+		if def.Scope != ScopePlatform || def.Optimizable || def.Default != "" {
+			t.Errorf("%s scope/optimizable/default = %q/%v/%v, want platform/false/empty", key, def.Scope, def.Optimizable, def.Default)
 		}
-		if def.Optimizable != want.optimizable {
-			t.Errorf("%s optimizable = %v, want %v", key, def.Optimizable, want.optimizable)
+		if def.VisualHint.Control != ControlTextarea {
+			t.Errorf("%s control = %q, want textarea", key, def.VisualHint.Control)
 		}
-		if len(def.EvaluationKeys) != want.evalKeys {
-			t.Errorf("%s EvaluationKeys = %v, want %d", key, def.EvaluationKeys, want.evalKeys)
+		if _, ok := r.KeyForEvaluation("compaction_prompt"); ok {
+			t.Error("KeyForEvaluation(compaction_prompt) must stay unregistered")
+		}
+	}
+
+	// 压缩温度/模型:平台级共用配置（唯一来源，所有 agent 一致），不可优化、
+	// 无 EvaluationKeys；temperature 0 = 默认常量，model 空 = 网关默认。
+	platformCompaction := map[string]struct {
+		control          Control
+		wantMin, wantMax float64
+	}{
+		"agent.compaction_temperature": {control: ControlSlider, wantMin: 0, wantMax: 1},
+		"agent.compaction_model":       {control: ControlModel},
+	}
+	for key, want := range platformCompaction {
+		def, ok := r.Get(key)
+		if !ok {
+			t.Fatalf("%s not registered", key)
+		}
+		if def.Scope != ScopePlatform || def.Optimizable || len(def.EvaluationKeys) != 0 {
+			t.Errorf("%s scope/optimizable/evalKeys = %q/%v/%d, want platform/false/0", key, def.Scope, def.Optimizable, len(def.EvaluationKeys))
 		}
 		if def.VisualHint.Control != want.control {
 			t.Errorf("%s control = %q, want %q", key, def.VisualHint.Control, want.control)
@@ -152,13 +168,6 @@ func TestRegistryAgentMemoryParams(t *testing.T) {
 		if def.VisualHint.Max != nil && *def.VisualHint.Max != want.wantMax {
 			t.Errorf("%s VisualHint.Max = %v, want %v", key, *def.VisualHint.Max, want.wantMax)
 		}
-	}
-	// 压缩温度 bare key 不进 byEvalKey(评测搜索空间干净),写时校验经短名匹配。
-	if got, ok := r.KeyForEvaluation("compaction_temperature"); ok {
-		t.Errorf("KeyForEvaluation(compaction_temperature) = %q, want unregistered", got)
-	}
-	if got, ok := r.KeyByShortName("compaction_temperature"); !ok || got != "agent.compaction_temperature" {
-		t.Errorf("KeyByShortName(compaction_temperature) = %q/%v, want agent.compaction_temperature/true", got, ok)
 	}
 
 	// 提取/反思 prompt/model:ScopePlatform（记忆配置平台化,编辑入口在平台参数页）,

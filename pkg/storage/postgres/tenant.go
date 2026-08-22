@@ -307,28 +307,68 @@ func stripSQLLineComments(stmt string) string {
 	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
-// splitStatements splits on `;` while respecting `$$` dollar-quote blocks
-// so that PL/pgSQL function bodies with internal semicolons are not torn apart.
+// splitStatements splits on `;` while respecting `$$` dollar-quote blocks and
+// single-quoted string literals so that PL/pgSQL function bodies and
+// multi-line string values with internal semicolons are not torn apart
+// (e.g. 内置平台助手提示词正文含分号)。
 func splitStatements(sql string) []string {
 	sql = stripSQLLineComments(sql)
 	var stmts []string
-	inDollarQuote := false
+	inDollar := false
+	inSingle := false
 	start := 0
 	for i := 0; i < len(sql); i++ {
-		if i+1 < len(sql) && sql[i] == '$' && sql[i+1] == '$' {
-			inDollarQuote = !inDollarQuote
+		switch {
+		case inSingle:
+			inSingle = !endSingleQuote(sql, &i)
+		case inDollar:
+			inDollar = !isDollarQuoteEnd(sql, &i)
+		case sql[i] == '\'':
+			inSingle = true
+		case isDollarQuoteStart(sql, i):
+			inDollar = true
 			i++
-			continue
-		}
-		if sql[i] == ';' && !inDollarQuote {
-			if s := strings.TrimSpace(sql[start:i]); s != "" {
-				stmts = append(stmts, s)
-			}
+		case sql[i] == ';':
+			stmts = appendStatement(stmts, sql[start:i])
 			start = i + 1
 		}
 	}
-	if s := strings.TrimSpace(sql[start:]); s != "" {
-		stmts = append(stmts, s)
+	return appendStatement(stmts, sql[start:])
+}
+
+// isDollarQuoteStart reports whether the bytes at i open a `$$` quote.
+func isDollarQuoteStart(sql string, i int) bool {
+	return i+1 < len(sql) && sql[i] == '$' && sql[i+1] == '$'
+}
+
+// isDollarQuoteEnd reports whether the bytes at i close a `$$` quote and
+// advances past the second `$`.
+func isDollarQuoteEnd(sql string, i *int) bool {
+	if !isDollarQuoteStart(sql, *i) {
+		return false
+	}
+	*i++
+	return true
+}
+
+// endSingleQuote reports whether the quote at i closes a single-quoted string
+// literal. A doubled `”` is an escaped quote inside the literal and does not
+// close it.
+func endSingleQuote(sql string, i *int) bool {
+	if sql[*i] != '\'' {
+		return false
+	}
+	if *i+1 < len(sql) && sql[*i+1] == '\'' {
+		*i++
+		return false
+	}
+	return true
+}
+
+// appendStatement appends a trimmed non-empty statement chunk.
+func appendStatement(stmts []string, raw string) []string {
+	if s := strings.TrimSpace(raw); s != "" {
+		return append(stmts, s)
 	}
 	return stmts
 }
