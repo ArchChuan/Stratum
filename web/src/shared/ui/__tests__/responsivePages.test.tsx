@@ -67,7 +67,7 @@ describe('responsive page contracts', () => {
             description="https://example.test/a/very/long/path"
             onBack={vi.fn()}
           />
-          <WorkspaceConfigForm form={form} loading={false} onSubmit={vi.fn()} />
+          <WorkspaceConfigForm form={form} loading={false} chatModels={[]} onSubmit={vi.fn()} />
         </>
       );
     };

@@ -18,6 +18,7 @@ export const KnowledgeDetailPage = () => {
     statsLoading,
     configForm,
     configLoading,
+    chatModels,
     uploadLoading,
     queryForm,
     queryLoading,
@@ -64,7 +65,7 @@ export const KnowledgeDetailPage = () => {
       <WorkspaceStatsCard stats={stats ?? undefined} docCount={documents.length || undefined} />
 
       {isAdmin && (
-        <WorkspaceConfigForm form={configForm} loading={configLoading} onSubmit={handleConfigSave} />
+        <WorkspaceConfigForm form={configForm} loading={configLoading} chatModels={chatModels} onSubmit={handleConfigSave} />
       )}
 
       {isAdmin && (
