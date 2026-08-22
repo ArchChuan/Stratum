@@ -42,24 +42,24 @@ type Config struct {
 	// MCPAllowPrivateTargets 允许 MCP 客户端连接 loopback/私网目标。仅
 	// e2e/本地验证环境设置（fixture 监听 127.0.0.1）；生产必须保持 false，
 	// 否则 SSRF 护栏（URLPolicyStrict）被整体削弱。
-	MCPAllowPrivateTargets  bool
-	GlobalAdminGitHubLogin  string
-	FrontendURL             string
-	GitHubCallbackURL       string
-	SecureCookies           bool
-	QwenBaseURL             string
-	ZhipuBaseURL            string
-	RerankBaseURL           string
-	RerankAPIKey            string
-	RerankModel             string
-	NacosURL                string
-	NacosNamespace          string
-	NacosUsername           string
-	NacosPassword           string
-	Opik                    OpikConfig
-	TracePayload            TracePayloadConfig
-	MemoryPipeline          MemoryPipelineConfig
-	AgentFactCheck          AgentFactCheckConfig
+	MCPAllowPrivateTargets bool
+	GlobalAdminGitHubLogin string
+	FrontendURL            string
+	GitHubCallbackURL      string
+	SecureCookies          bool
+	QwenBaseURL            string
+	ZhipuBaseURL           string
+	RerankBaseURL          string
+	RerankAPIKey           string
+	RerankModel            string
+	NacosURL               string
+	NacosNamespace         string
+	NacosUsername          string
+	NacosPassword          string
+	Opik                   OpikConfig
+	TracePayload           TracePayloadConfig
+	MemoryPipeline         MemoryPipelineConfig
+	AgentFactCheck         AgentFactCheckConfig
 	// 热更新运行时状态（Nacos listener 写、wiring 注册回调读）
 	memoryDynamic          atomic.Pointer[MemoryPipelineDynamic]
 	memoryDynamicListeners []func(MemoryPipelineDynamic)
