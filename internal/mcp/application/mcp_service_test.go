@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
 	"github.com/byteBuilderX/stratum/internal/mcp/domain"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -141,6 +143,46 @@ func (f *lifecycleManagerFake) GetServerInfo(context.Context, string) *domain.Se
 func (f *lifecycleManagerFake) GetAllServerInfo(context.Context) []*domain.ServerInfo    { return nil }
 func (f *lifecycleManagerFake) RemoveTenant(context.Context, string) error               { return nil }
 func (f *lifecycleManagerFake) Quota(context.Context) domain.Quota                       { return domain.Quota{} }
+
+type failingConnectManager struct {
+	lifecycleManagerFake
+	connectErr error
+}
+
+func (f *failingConnectManager) Connect(_ context.Context, _ *domain.ServerConfig, _ []string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return f.connectErr
+}
+
+func (f *failingConnectManager) GetServerConfig(context.Context, string) (*domain.ServerConfig, error) {
+	return nil, domain.ErrServerNotFound
+}
+
+type failureRecorderFake struct {
+	records []auditport.ResourceFailure
+}
+
+func (f *failureRecorderFake) Record(_ context.Context, r auditport.ResourceFailure) error {
+	f.records = append(f.records, r)
+	return nil
+}
+
+func TestConnectServerFailureRecordsFailureAudit(t *testing.T) {
+	manager := &failingConnectManager{connectErr: domain.ErrTransportFailed}
+	recorder := &failureRecorderFake{}
+	service := NewMCPService(&lifecycleRegistryFake{}, manager, zap.NewNop())
+	service.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	service.SetFailureAuditRecorder(recorder)
+
+	err := service.ConnectServer(t.Context(), &domain.ServerConfig{
+		ID: "srv-1", Name: "s1", Transport: "http", URL: "https://example.com/mcp",
+	}, nil, "user-1")
+
+	require.ErrorIs(t, err, domain.ErrTransportFailed)
+	require.Len(t, recorder.records, 1)
+	require.Equal(t, "srv-1", recorder.records[0].ResourceID)
+	require.Equal(t, "connect", recorder.records[0].Operation)
+	require.Equal(t, "transport", recorder.records[0].ErrorCode)
+}
 
 func TestDeleteServerUnregistersDiscoveredTools(t *testing.T) {
 	registry := &lifecycleRegistryFake{}

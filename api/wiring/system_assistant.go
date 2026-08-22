@@ -2,19 +2,23 @@ package wiring
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
 	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
+	workflowapp "github.com/byteBuilderX/stratum/internal/workflow/application"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"golang.org/x/sync/errgroup"
@@ -30,6 +34,24 @@ type systemAssistantDiagnosticAdapter struct {
 	mu         sync.RWMutex
 	roles      agentport.TenantRoleResolver
 	collectors map[domain.DiagnosticArea]diagnosticAreaCollector
+	auditQuery auditport.ResourceChangeAuditQuery
+}
+
+// newDiagnosticProvider 装配平台助手诊断适配器（含失败资源操作审计查询）。
+func newDiagnosticProvider(c *Container, a *Agent) *systemAssistantDiagnosticAdapter {
+	adapter := newSystemAssistantDiagnosticAdapter(
+		tenantRoleAdapter{service: tenantMemberService(c)}, systemAssistantDiagnosticCollectors(c, a),
+	)
+	adapter.SetFailureAuditQuery(auditQueryOf(c))
+	return adapter
+}
+
+// SetFailureAuditQuery 注入租户资源变更审计查询，用于失败资源操作诊断。
+// 未注入时失败记录收集跳过（其他诊断区不受影响）。
+func (a *systemAssistantDiagnosticAdapter) SetFailureAuditQuery(q auditport.ResourceChangeAuditQuery) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.auditQuery = q
 }
 
 func (a *systemAssistantDiagnosticAdapter) setSkillEvaluationReader(
@@ -112,6 +134,7 @@ func (a *systemAssistantDiagnosticAdapter) CollectAuthorized(
 		})
 	}
 	_ = group.Wait()
+	a.collectResourceFailureFacts(ctx, req, &evidence)
 	sort.SliceStable(evidence.Facts, func(i, j int) bool {
 		if evidence.Facts[i].Area == evidence.Facts[j].Area {
 			return evidence.Facts[i].ObjectID < evidence.Facts[j].ObjectID
@@ -121,6 +144,82 @@ func (a *systemAssistantDiagnosticAdapter) CollectAuthorized(
 	sort.SliceStable(evidence.Gaps, func(i, j int) bool { return evidence.Gaps[i].Area < evidence.Gaps[j].Area })
 	sort.SliceStable(evidence.AreaResults, func(i, j int) bool { return evidence.AreaResults[i].Area < evidence.AreaResults[j].Area })
 	return evidence, nil
+}
+
+// failureKindByArea 把诊断区映射为资源变更审计的 resource_kind。
+var failureKindByArea = map[domain.DiagnosticArea]string{
+	domain.DiagnosticAreaAgent:     "agent",
+	domain.DiagnosticAreaSkill:     "skill",
+	domain.DiagnosticAreaMCP:       "mcp",
+	domain.DiagnosticAreaKnowledge: "knowledge",
+	domain.DiagnosticAreaWorkflow:  "workflow",
+}
+
+// collectResourceFailureFacts 收集最近失败的资源操作作为诊断事实。self 范围
+// 强制只读当前用户（actor_id）相关的记录；tenant 范围仅限已授权的
+// admin/owner（AuthorizeDiagnosticRequest 已强制角色）。审计查询未注入时跳过。
+func (a *systemAssistantDiagnosticAdapter) collectResourceFailureFacts(
+	ctx context.Context, req domain.DiagnosticRequest, evidence *domain.DiagnosticEvidence,
+) {
+	a.mu.RLock()
+	query := a.auditQuery
+	a.mu.RUnlock()
+	if query == nil || req.TenantID == "" {
+		return
+	}
+	readCtx, cancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
+	defer cancel()
+	for _, area := range req.Areas {
+		kind, ok := failureKindByArea[area]
+		if !ok {
+			continue
+		}
+		filter := auditport.ResourceChangeAuditFilter{
+			ResourceKind: kind,
+			Limit:        constants.SystemAssistantFailureAuditMaxRows,
+		}
+		if req.Scope == domain.DiagnosticScopeSelf {
+			filter.ActorID = req.UserID
+		}
+		rows, _, err := query.List(readCtx, req.TenantID, filter)
+		if err != nil {
+			evidence.Gaps = append(evidence.Gaps, domain.EvidenceGap{
+				Area: area, Code: domain.DiagnosticGapUnavailable,
+			})
+			continue
+		}
+		for _, row := range rows {
+			op, code := failureOperation(row)
+			if op == "" {
+				continue
+			}
+			evidence.Facts = append(evidence.Facts, domain.DiagnosticFact{
+				Area:       area,
+				ObjectID:   row.ResourceID,
+				Statement:  "failed_" + op + "=" + code,
+				Source:     "resource_change_audit",
+				ObservedAt: row.CreatedAt,
+			})
+		}
+	}
+}
+
+// failureOperation 从审计行提取失败操作与错误类别。只有 operation 以
+// _failed 结尾、after_projection 标注 status=failed 的行才算失败记录。
+func failureOperation(row auditport.ResourceChangeAuditRow) (string, string) {
+	const suffix = "_failed"
+	if !strings.HasSuffix(row.Operation, suffix) {
+		return "", ""
+	}
+	code := "unknown"
+	var after struct {
+		Status    string `json:"status"`
+		ErrorCode string `json:"error_code"`
+	}
+	if err := json.Unmarshal(row.After, &after); err == nil && after.Status == "failed" && after.ErrorCode != "" {
+		code = after.ErrorCode
+	}
+	return strings.TrimSuffix(row.Operation, suffix), code
 }
 
 func diagnosticSafeGapCode(err error) string {
@@ -174,12 +273,49 @@ func systemAssistantDiagnosticCollectors(c *Container, a *Agent) map[domain.Diag
 	if c.Knowledge != nil && c.Knowledge.WorkspaceService != nil {
 		collectors[domain.DiagnosticAreaKnowledge] = knowledgeDiagnosticCollector(c.Knowledge.WorkspaceService, memberBindings)
 	}
+	registerWorkflowDiagnosticCollector(collectors, c)
 	if a != nil && a.TenantResolver != nil {
 		if details, ok := a.TenantResolver.(agentport.TenantModelDetailsProvider); ok {
 			collectors[domain.DiagnosticAreaModel] = modelDiagnosticCollector(details)
 		}
 	}
 	return collectors
+}
+
+// registerWorkflowDiagnosticCollector 注册工作流诊断收集器（装配可用时）。
+func registerWorkflowDiagnosticCollector(collectors map[domain.DiagnosticArea]diagnosticAreaCollector, c *Container) {
+	if c.Workflow != nil && c.Workflow.DefinitionService != nil {
+		collectors[domain.DiagnosticAreaWorkflow] = workflowDiagnosticCollector(c.Workflow.DefinitionService)
+	}
+}
+
+// workflowDiagnosticCollector 收集工作流定义状态（tenant 范围）。self 范围
+// 不暴露定义列表（DefinitionSummary 不含 creator，避免越权展示），失败记录
+// 由 collectResourceFailureFacts 按 actor 过滤后单独暴露。
+func workflowDiagnosticCollector(definitions *workflowapp.DefinitionService) diagnosticAreaCollector {
+	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, []domain.EvidenceGap, error) {
+		if req.Scope == domain.DiagnosticScopeSelf {
+			return nil, nil, nil
+		}
+		page, err := definitions.ListDefinitions(
+			diagnosticTenantContext(ctx, req), req.TenantID,
+			workflowapp.ListDefinitionsQuery{Page: 1, PageSize: 20},
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		facts := make([]domain.DiagnosticFact, 0, len(page.Workflows))
+		for _, def := range page.Workflows {
+			facts = append(facts, domain.DiagnosticFact{
+				Area:       domain.DiagnosticAreaWorkflow,
+				ObjectID:   def.ID,
+				Statement:  "definition=" + def.Name + " revision=" + strconv.FormatInt(def.Revision, 10),
+				Source:     "workflow_definition",
+				ObservedAt: def.UpdatedAt,
+			})
+		}
+		return facts, nil, nil
+	}
 }
 
 func diagnosticTenantContext(ctx context.Context, req domain.DiagnosticRequest) context.Context {

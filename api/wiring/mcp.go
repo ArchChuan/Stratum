@@ -239,6 +239,9 @@ func (c *Container) buildMCP(ctx context.Context) error {
 		mcp.ServerManagerAsPort(manager),
 		c.Logger,
 	)
+	if c.Audit != nil && c.Audit.FailureRecorder != nil {
+		svc.SetFailureAuditRecorder(c.Audit.FailureRecorder)
+	}
 	if db != nil {
 		svc.SetToolPolicyRepo(mcp.NewPgToolPolicyRepo(db))
 	}

@@ -193,6 +193,8 @@ func (c *Container) buildWorkflow(_ context.Context) error {
 	runs := workflowapp.NewRunServiceWithRegistry(store, store, registry, newID, c.Logger)
 	defService := workflowapp.NewDefinitionService(store, store, newID)
 	defService.SetSkillRefClassifier(builtinSkillRefClassifier{})
+	defService.SetFailureAuditRecorder(failureRecorderOf(c))
+	defService.SetLogger(c.Logger)
 	c.Workflow = &Workflow{DefinitionService: defService, RunService: runs, ControlService: workflowapp.NewControlService(store, newID)}
 	c.Workflow.Worker = workflowapp.NewWorker("workflow-"+newID(), store, workflowRunAdvancer{runs: runs}, 30*time.Second, c.platformMetrics())
 	return nil

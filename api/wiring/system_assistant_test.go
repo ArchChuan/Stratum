@@ -2,6 +2,7 @@ package wiring
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
 	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
@@ -61,6 +63,79 @@ func TestAgentDiagnosticCollectorFiltersUpstreamBeforeLimit(t *testing.T) {
 	require.Equal(t, "user-1", provider.opts.UserID)
 	require.Len(t, facts, 1)
 	require.Equal(t, "mine", facts[0].ObjectID)
+}
+
+type failureAuditQueryStub struct {
+	lastFilter auditport.ResourceChangeAuditFilter
+	rows       map[string][]auditport.ResourceChangeAuditRow
+}
+
+func (f *failureAuditQueryStub) List(_ context.Context, _ string, filter auditport.ResourceChangeAuditFilter) ([]auditport.ResourceChangeAuditRow, int, error) {
+	f.lastFilter = filter
+	return f.rows[filter.ResourceKind], len(f.rows[filter.ResourceKind]), nil
+}
+
+func (*failureAuditQueryStub) GetByID(context.Context, string, string) (*auditport.ResourceChangeAuditRow, error) {
+	return nil, nil
+}
+
+func failureRow(id, op, actor, code string) auditport.ResourceChangeAuditRow {
+	after, _ := json.Marshal(map[string]string{"status": "failed", "error_code": code})
+	return auditport.ResourceChangeAuditRow{
+		ID: id, ResourceKind: "mcp", ResourceID: id, Operation: op,
+		ActorID: actor, CreatedAt: time.Now().UTC(), After: after,
+	}
+}
+
+func TestFailureOperationParsing(t *testing.T) {
+	op, code := failureOperation(failureRow("srv-1", "connect_failed", "u-1", "transport"))
+	require.Equal(t, "connect", op)
+	require.Equal(t, "transport", code)
+
+	op, code = failureOperation(failureRow("srv-2", "create", "u-1", "transport"))
+	require.Empty(t, op)
+	require.Empty(t, code)
+}
+
+func TestCollectResourceFailureFactsSelfScopeFiltersByActor(t *testing.T) {
+	query := &failureAuditQueryStub{rows: map[string][]auditport.ResourceChangeAuditRow{
+		"mcp": {failureRow("srv-1", "connect_failed", "u-1", "transport")},
+	}}
+	adapter := newSystemAssistantDiagnosticAdapter(diagnosticRoleStub{role: "member"}, nil)
+	adapter.SetFailureAuditQuery(query)
+
+	evidence := domain.DiagnosticEvidence{}
+	adapter.collectResourceFailureFacts(context.Background(), domain.DiagnosticRequest{
+		TenantID: "t-1", UserID: "u-1", Scope: domain.DiagnosticScopeSelf,
+		Areas: []domain.DiagnosticArea{domain.DiagnosticAreaMCP},
+	}, &evidence)
+
+	require.Equal(t, "u-1", query.lastFilter.ActorID)
+	require.Equal(t, "mcp", query.lastFilter.ResourceKind)
+	require.Len(t, evidence.Facts, 1)
+	require.Equal(t, "failed_connect=transport", evidence.Facts[0].Statement)
+	require.Equal(t, "srv-1", evidence.Facts[0].ObjectID)
+}
+
+func TestCollectResourceFailureFactsTenantScopeNoActorFilter(t *testing.T) {
+	query := &failureAuditQueryStub{rows: map[string][]auditport.ResourceChangeAuditRow{
+		"workflow": {
+			failureRow("wf-1", "publish_failed", "u-1", "unknown"),
+			failureRow("wf-2", "create", "u-2", "unknown"), // 非失败操作应被跳过
+		},
+	}}
+	adapter := newSystemAssistantDiagnosticAdapter(diagnosticRoleStub{role: "admin"}, nil)
+	adapter.SetFailureAuditQuery(query)
+
+	evidence := domain.DiagnosticEvidence{}
+	adapter.collectResourceFailureFacts(context.Background(), domain.DiagnosticRequest{
+		TenantID: "t-1", UserID: "admin-1", Scope: domain.DiagnosticScopeTenant,
+		Areas: []domain.DiagnosticArea{domain.DiagnosticAreaWorkflow},
+	}, &evidence)
+
+	require.Empty(t, query.lastFilter.ActorID)
+	require.Len(t, evidence.Facts, 1)
+	require.Equal(t, "failed_publish=unknown", evidence.Facts[0].Statement)
 }
 
 func (s diagnosticRoleStub) ResolveTenantRole(context.Context, string, string) (string, error) {

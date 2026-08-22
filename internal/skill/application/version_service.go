@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
 	"github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/byteBuilderX/stratum/internal/skill/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
@@ -78,10 +79,11 @@ type CandidateInput struct {
 }
 
 type VersionService struct {
-	repo       port.VersionRepo
-	logger     *zap.Logger
-	roles      port.TenantRoleResolver
-	editorRepo port.SkillResourceEditorRepo
+	repo         port.VersionRepo
+	logger       *zap.Logger
+	roles        port.TenantRoleResolver
+	editorRepo   port.SkillResourceEditorRepo
+	failureAudit auditport.FailureAuditRecorder
 }
 
 func NewVersionService(repo port.VersionRepo, logger *zap.Logger) *VersionService {
@@ -96,6 +98,11 @@ func (s *VersionService) SetTenantRoleResolver(r port.TenantRoleResolver) { s.ro
 // admin-editor row of the ownership matrix. A nil repo denies every
 // editor-granted update (fail closed).
 func (s *VersionService) SetEditorRepo(r port.SkillResourceEditorRepo) { s.editorRepo = r }
+
+// SetFailureAuditRecorder 注入失败资源操作审计。未注入时跳过记录。
+func (s *VersionService) SetFailureAuditRecorder(r auditport.FailureAuditRecorder) {
+	s.failureAudit = r
+}
 
 func (s *VersionService) CreateSkillDraft(ctx context.Context, in CreateSkillDraftInput) (SkillWorkspaceView, error) {
 	// create encodes "the creator owns the resource": only owner/admin may create.
@@ -147,6 +154,7 @@ func (s *VersionService) CreateSkillDraft(ctx context.Context, in CreateSkillDra
 		return SkillWorkspaceView{}, err
 	}
 	if err := s.repo.InsertSkillWithDraft(ctx, skill, draft, audit, in.Editors); err != nil {
+		s.recordFailure(ctx, skillID, "create", err)
 		return SkillWorkspaceView{}, err
 	}
 	s.logger.Info("skill draft created", zap.String("skill_id", skillID), zap.String("draft_revision_id", draftID))
@@ -180,7 +188,31 @@ func (s *VersionService) PublishDraft(ctx context.Context, skillID, actorID stri
 	if err != nil {
 		return domain.SkillRevision{}, err
 	}
-	return s.repo.PublishDraft(ctx, skillID, draft.ID, next, checks, audit, editorActor)
+	published, err := s.repo.PublishDraft(ctx, skillID, draft.ID, next, checks, audit, editorActor)
+	if err != nil {
+		s.recordFailure(ctx, skillID, "publish", err)
+		return domain.SkillRevision{}, err
+	}
+	return published, nil
+}
+
+// recordFailure 旁路记录一次失败的 skill 创建/发布（best-effort）。
+// 记录失败仅 WARN，不改变主流程错误。
+func (s *VersionService) recordFailure(ctx context.Context, skillID, op string, err error) {
+	if s.failureAudit == nil {
+		return
+	}
+	if recordErr := s.failureAudit.Record(ctx, auditport.ResourceFailure{
+		ResourceKind: auditdomain.ResourceKindSkill,
+		ResourceID:   skillID,
+		Operation:    op,
+		ErrorCode:    auditport.ClassifyFailure(err),
+	}); recordErr != nil {
+		s.logger.Warn("failed to record skill failure audit",
+			zap.String("skill_id", skillID),
+			zap.String("op", op),
+			zap.Error(recordErr))
+	}
 }
 
 // loadPublishDraft loads the skill and its draft revision, enforcing the
