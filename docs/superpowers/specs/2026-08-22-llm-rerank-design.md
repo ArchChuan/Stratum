@@ -1,8 +1,8 @@
-# 内置重排改造为 LLM 语义重排设计
+# 内置重排改造为 LLM 语义重排设计（workspace 显式模型配置）
 
 日期：2026-08-22
-状态：待实现（设计已获批准）
-范围：`internal/knowledge/application/rag_service.go`、`api/wiring/llm_reranker.go`（新增，仿 `knowledge_judge.go` 先例）、`internal/knowledge/domain/port/reranker.go`（复用）、`api/wiring/knowledge.go`、`config/config.go`、`pkg/constants/knowledge.go`、`web/src/modules/knowledge/components/WorkspaceConfigForm.tsx`。
+状态：设计修订中（v1 已实现并部署，本版将模型配置从平台级 env 迁移到 workspace 显式配置）
+范围：`proto/knowledge/rag.proto`、`internal/knowledge/domain/workspace.go`、`internal/knowledge/application/{rag_service.go,workspace_service.go,evidence_gate.go}`、`internal/knowledge/infrastructure/persistence/workspace_repo.go`、`api/wiring/{knowledge.go,llm_reranker.go,knowledge_judge.go}`、`config/config.go`、`pkg/constants/knowledge.go`、`web/src/modules/knowledge/components/WorkspaceConfigForm.tsx`。
 
 ## 1. 背景与问题
 
@@ -16,11 +16,17 @@ RAG 检索流水线为：召回（vector / hybrid / keyword）→ 重排（reran
 - 复用平台已有的 LLM 网关能力（`LLMGateway.Gateway` / `LLMCompleter.Complete`），与 `knowledgeJudge`（证据充分性 judge）同一先例。
 - 数据外发走平台已有 chat provider（Qwen / Zhipu），信任边界与普通 chat 一致，无新第三方。
 
-### 已确认的决策
+v1 已实现平台级 env 配置（`KNOWLEDGE_RERANK_MODEL` / `KNOWLEDGE_JUDGE_*`）并部署生产。**本版是配置层重构**：模型配置不再走 env，而是与 `embedding_model` 同构、逐知识库显式配置，贯彻"模型配置属于 DB 模型治理，不属于 env"的既定原则。
 
-1. **配置层级**：平台级配置（env 前缀 `KNOWLEDGE_RERANK_*`），全平台统一，仿 `KnowledgeJudgeConfig`。
-2. **失败语义**：fail-open —— LLM 重排未配置 / 调用失败 / 超时 / 解析失败 → WARN + 指标（degraded）→ 降级为按召回分数排序（等价当前 builtin 行为）。检索永不因重排失败。
-3. **重排范围**：仅对 top-N 精排 —— 先按召回分数取前 N 条（N 与池大小取 min），再做一次 listwise 打分。
+### 已确认的决策（用户裁决）
+
+1. **配置层级**：两个模型（judge + rerank）都必须显式配置在 workspace 配置中（`rerank_model` / `judge_model`），无 env、无 Recommended 兜底。空 = 关闭对应能力（`reranking` 非 builtin 时 `rerank_model` 不适用；`judge_model` 空 = judge 门关闭）。
+2. **显式拒绝**：`reranking=builtin-score-v1` 但 workspace 没有 `rerank_model` 时，保存/更新必须返回验证错误（仿 `ErrEmbeddingModelRequired`），不自动降级、不静默兜底。
+3. **失败语义**：
+   - rerank **fail-open** —— LLM 重排调用失败 / 超时 / 解析失败 → WARN + degraded 指标 → 降级为按召回分数排序，检索永不因重排失败。
+   - judge **fail-closed** —— judge 未装配 / 调用失败 / 超时 → WARN + 放行，行为与不配置时一致，绝不误杀检索。
+4. **重排范围**：仅对 top-N 精排 —— 先按召回分数取前 N 条（`RerankLLMTopN=10`，与池大小取 min），再做一次 listwise 打分。
+5. **模型来源唯一**：模型从 workspace 配置解析，经 `port.ModelExists`（capability `CapChat`）校验在 enabled chat 目录；不存在 → 保存被拒（仿 embedding_model 先例）。
 
 ## 2. 现状代码走查
 
@@ -44,305 +50,333 @@ vector/hybrid 召回 → pool（已按分数降序）
   → ScoreThreshold 过滤 → topK 截断 → 主链路（≤ TopK 条）
 ```
 
-- `rerankSources`（`rag_service.go:995-1019`）：重排分派核心。
-- `rerankExternal`（`rag_service.go:1052-1086`）：Cohere 外部重排先例 —— `s.Score = r.Score` 覆盖分数、池收敛为返回结果、`MinRerankCandidates`（池 < 3 跳过）、`RerankMaxCandidates`（≤ 50）。
-- `rerankStats{poolSize, bestScore, thresholdFilter}`（入口采集，重排前）——校准数据不受重排影响。
-- `knowledgeJudge`（`api/wiring/knowledge_judge.go`）：LLM 判别先例 —— `context.WithTimeout`、`ResponseFormat json_object`、`MaxTokens`、`truncateRunes`。
+- `rerankSources`（`rag_service.go:1007`）：重排分派核心；`builtin-score-v1` 分支在 `rerankSemantic`（1105-1136，`Model: ""` 空哨兵）+ `rerankBuiltinSemantic`（1141-1155，fail-open 入口）。
+- `searchWorkspace`（`rag_service.go:86`）与 `searchWorkspaceWithEvidence`（1299）都先 `resolveWorkspaceConfig`（113，取 workspace config → 构造 `RAGQueryRequest`）→ `rs.Query`。**workspace config 在重排 / judge 调用点前已加载**，新模型字段在此填充进 `RAGQueryRequest`。
+- `judgeSufficiencyGate`（`evidence_gate.go:17`）：仅 evidence 路径挂载（`searchWorkspaceWithEvidence` 1324 调用）。判 INSUFFICIENT → `RAGQueryResult{NoAnswer: insufficient_evidence}`（Sources 置空，维持 `content=="" ⇒ NoAnswer!=nil` 不变量）。fail-closed。
+- `rerankExternal`（1052）：Cohere 先例 —— `s.Score = r.Score` 覆盖、池收敛、`MinRerankCandidates=3`、`RerankMaxCandidates≤50`。
+- `knowledgeJudge`（`api/wiring/knowledge_judge.go:15`）：LLM 判别先例 —— `context.WithTimeout`、`ResponseFormat json_object`、`MaxTokens`、`truncateRunes`。
+- `llmReranker`（`api/wiring/llm_reranker.go:22`）：listwise 打分，`Temperature` 显式 0；**`model` 是构造期固定字段（`r.model`，第 68 行 `Model: r.model`）** —— 本版改为从 `req.Model` 读取。
 - `LLMCompleter`（`internal/llmgateway/domain/llm.go`）：`Complete(ctx, *CompletionRequest) (*CompletionResponse, error)`。
+
+### 2.3 模型治理现状（DB，非 env）
+
+- `ModelRegistry`（`internal/llmgateway/infrastructure/model_registry.go`）：Provider/Model 存 DB，前端模型管理 UI 维护；`ListChatModelsByTenant` / `ListEmbeddingModelsByTenant` / `ListRerankModelsByTenant`；capability：`CapChat` / `CapEmbedding` / `CapRerank`。
+- `knowledgeport.ModelExists`（`model_exists.go:18`）：`Exists(ctx, model string, capability port.ModelCapability) (bool, error)`；`WorkspaceService.SetModelExists` 注入，保存时校验 `embedding_model`（`workspace_service.go:125` → `ErrInvalidEmbeddingModel`）。
+
+### 2.4 待清理的 env 模型配置（本版全部删除）
+
+| env | 配置对象 | 去向 |
+|---|---|---|
+| `KNOWLEDGE_RERANK_MODEL` / `_TIMEOUT_SECONDS` / `_TOPN` | `KnowledgeRerankConfig` | 删除；`rerank_model` 入 workspace，timeout/topN 用常量 |
+| `KNOWLEDGE_JUDGE_ENABLED` / `_MODEL` / `_TIMEOUT_SECONDS` | `KnowledgeJudgeConfig` | 删除；`judge_model` 入 workspace，timeout 用常量 |
+| `AGENT_FACTCHECK_ENABLED` / `_JUDGE_MODEL` / `_TOPK` / `_MAX_CLAIMS` | `AgentFactCheckConfig`（agent 输出幻觉校验，advisory） | **保留不变**（agent 域，不在本次范围） |
 
 ## 3. 目标与非目标
 
 ### 目标
 
 1. `builtin-score-v1` 产生语义增量：基于 LLM 语义对候选重新排序。
-2. 平台级配置重排模型，全平台统一生效。
-3. fail-open：重排不可用时检索行为与当前完全一致（按召回分数排序）。
-4. 阈值过滤 / topK 截断 / 校准统计链路不变。
-5. 不引入新第三方依赖，不修改 proto 契约。
+2. **重排 / judge 模型逐知识库显式配置**，从 enabled chat 目录选择，无 env、无平台兜底。
+3. `reranking=builtin-score-v1` 未配 `rerank_model` → 保存时显式拒绝（仿 `ErrEmbeddingModelRequired`）。
+4. fail-open / fail-closed 失败语义不变：rerank 降级排序、judge 放行，均 WARN 留痕 + 指标。
+5. 阈值过滤 / topK 截断 / 校准统计链路不变。
+6. 不引入新第三方依赖；删除全部 knowledge 域模型 env。
 
 ### 非目标
 
 - 不引入 cross-encoder。
 - 不改变外部重排（`cohere:xxx`）行为。
+- 不动 `AgentFactCheckConfig`（agent 域幻觉校验）。
 - 不做多模型 listwise 组合 / LLM 交叉对比排序。
-- 不新增 HTTP API / DTO 字段。
+- 不新增 HTTP API / DTO 契约破坏（proto 字段为 additive 追加）。
 
 ## 4. 设计
 
-### 4.1 配置（平台级）
+### 4.1 WorkspaceConfig 新增字段（domain + proto + JSONB）
 
-`config/config.go` 新增，仿 `KnowledgeJudgeConfig`：
+`internal/knowledge/domain/workspace.go` `WorkspaceConfig` 新增：
 
 ```go
-type KnowledgeRerankConfig struct {
-    Model   string        // 重排 chat 模型；空 = 未启用（builtin 降级为纯排序）
-    Timeout time.Duration // 单次 LLM 调用预算；0 用默认 RerankLLMTimeout
-    TopN    int           // 先按召回分数取前 N 条精排；0 用默认 RerankLLMTopN
+RerankModel string // builtin-score-v1 的 LLM 语义重排模型（chat 目录）；空 = 该策略不适用
+JudgeModel  string // evidence 路径证据充分性 judge 模型（chat 目录）；空 = judge 门关闭
+```
+
+`proto/knowledge/rag.proto` `WorkspaceConfig` 追加（additive，字段 1-9 不动）：
+
+```proto
+string rerank_model = 10; // builtin-score-v1 语义重排模型（chat 目录）
+string judge_model  = 11; // evidence 路径充分性 judge 模型（chat 目录），空 = 关闭
+```
+
+`internal/knowledge/infrastructure/persistence/workspace_repo.go` `jsonbConfig` 追加 `json:"rerank_model"` / `json:"judge_model"`，`toJSONB` / `fromJSONB` 同步映射（仿 `embedding_model`）。
+
+### 4.2 domain 校验（显式拒绝）
+
+`WorkspaceConfig.Validate`（`workspace.go:129`）在结构检查之后、`ErrEmbeddingModelRequired` 之前追加：
+
+```go
+if c.Reranking == "builtin-score-v1" && c.RerankModel == "" {
+    return ErrRerankModelRequired
 }
 ```
 
-- `Config` 新增字段 `KnowledgeRerank KnowledgeRerankConfig`。
-- env：`KNOWLEDGE_RERANK_MODEL` / `KNOWLEDGE_RERANK_TIMEOUT_SECONDS` / `KNOWLEDGE_RERANK_TOPN`。
-- 新增 `func (c *Config) RerankLLMConfigured() bool { return c.KnowledgeRerank.Model != "" }`。
-- 模型未配置时由 llmgateway 从模型目录解析；不写死兜底模型，与 `KnowledgeJudgeConfig.Model` 注释一致。
+- 新增 `ErrRerankModelRequired`（`workspace.go:16` 附近，与 `ErrEmbeddingModelRequired` 同形）。
+- **只有 `reranking=builtin-score-v1` 才要求 `rerank_model`**：`reranking=""`（关闭）或外部 `provider:model` 时不适用。judge_model 不强制（空 = 关闭 judge 门，可选增强）。
+- 与 embedding 同构：`Validate` 是纯结构检查，目录存在性校验在 application 层（见 §4.3）。
 
-### 4.2 重排器（`api/wiring/llm_reranker.go`，新增）
+### 4.3 application 层目录校验（仿 embedding 先例）
 
-**复用 `knowledgeport.Reranker` 接口**（`reranker.go`：`Rerank(ctx, RerankRequest{Query, Documents, Model, TopN}) ([]RerankResult{Index, Score}, error)`），与 Cohere 同形，无新接口。
-
-**位置决策（review M3）**：LLM 消费适配器放组合根 `api/wiring/`，与 `knowledgeJudge` 同一先例。`architecture_test.go` 注释把"knowledge 零 LLM 依赖约束：judge 接口在 domain/port 消费，实现只在组合根"定为 knowledge 既定约束；`knowledge/infrastructure/rerank` 保持兄弟 context 零依赖（`cohere.go` 只依赖自身 context + `pkg/`），不引入首个跨 context 依赖。
+`internal/knowledge/application/workspace_service.go` 复用现有 `port.ModelExists`（`SetModelExists` 已注入），在保存/更新 workspace 的结构校验后追加：
 
 ```go
-type llmReranker struct {
-    completer llmgatewaydomain.LLMCompleter // Gateway 结构性满足
-    model     string                        // 平台配置重排模型
-    timeout   time.Duration                 // 单次调用预算
-    metrics   observability.MetricsProvider // 可为 nil
-    logger    *zap.Logger
+// 仿 ErrInvalidEmbeddingModel 分支（workspace_service.go:125）
+if wcfg.Reranking == "builtin-score-v1" {
+    ok, err := s.modelExists.Exists(ctx, wcfg.RerankModel, port.CapChat)
+    if err != nil { return domain.ErrInvalidRerankModel } // fail-closed：目录查询失败拒绝保存
+    if !ok { return domain.ErrInvalidRerankModel }
+}
+if wcfg.JudgeModel != "" {
+    ok, err := s.modelExists.Exists(ctx, wcfg.JudgeModel, port.CapChat)
+    if err != nil || !ok { return domain.ErrInvalidJudgeModel }
 }
 ```
 
-`topN` 不存结构：重排器从 `RerankRequest.TopN` 读取（接口已传），与 Cohere 一致。构造函数 `newLLMReranker(completer, model, timeout, metrics, logger)`。
+- **knowledge port 需新增 `CapChat`**：`internal/knowledge/domain/port/model_exists.go` 现有 `CapEmbedding` / `CapRerank`，无 `CapChat`。新增 `CapChat ModelCapability = "chat"`，并在 `knowledgeModelExistsAdapter.Exists`（`api/wiring/knowledge.go:338`）的 switch 增加 `case knowledgeport.CapChat: names, err = a.registry.ListChatModelsByTenant(ctx)`（registry 已有该方法）。
+- capability 用 `CapChat`：内置重排与 judge 都是 chat 补全（listwise / 判别），不是专用 rerank 模型（Cohere 的 `CapRerank`）。
+- 错误传播：目录查询失败按"模型无效"拒绝保存（fail-closed），不静默放行。
 
-`Rerank(ctx, req)` 流程（照抄 `knowledgeJudge` 先例）：
+### 4.4 模型传递进检索（RAGQueryRequest + resolveWorkspaceConfig）
 
-1. 对 `req.Documents` 逐条 `truncateRunes(doc, RerankLLMMaxDocRunes)` 截断（wiring 包已有 `truncateRunes`；截断是 LLM 输入预算，属重排器实现细节，调用方传完整候选）。
-2. 构造 **listwise** prompt：
-   - 系统："你是严谨的检索相关性评分法官。只输出 JSON，不输出其他内容。"
-   - 用户：列出编号候选（正文已截断）+ 查询，要求输出 `{"scores":[{"index":i,"score":0..1},...]}`。
-3. `ResponseFormat: &llmgatewaydomain.ResponseFormat{Type: "json_object"}`、`MaxTokens: RerankLLMMaxTokens`、**`Temperature` 显式设 0**（确定性采样，评估快照回放可复现；review M4/F2）。
-4. `ctx, cancel := context.WithTimeout(ctx, r.timeout)`，`defer cancel()`。
-5. 调用 `r.completer.Complete`；镜像 Cohere `record()`：成功记 `IncRerankRequest(reqctx.TenantIDFromContext(ctx), "builtin-llm", "ok")` + `RecordRerankDuration`；调用失败记 `"error"` 后返回 error（`metrics` 可为 nil，跳过记录）。tenant 从 `reqctx` 取——`RerankRequest` 无 tenant 字段，与 Cohere 一致（review L2）。
-6. 解析 scores：按 `index` 映射回候选返回；**对重复 index 去重**（LLM JSON 输出不保证唯一，保留首次出现）。**结果不足 topN 时的补尾由调用方 `rerankSemantic` 负责**（§4.3），本层只返回 LLM 实际给出的结果。
-7. 失败 / 超时 / 解析失败 → 返回 error（调用方降级），不 panic。
-
-**指标标签统一为固定 `builtin-llm`**（不暴露平台重排模型名），三态：`ok`（LLM 重排成功，Rerank 内记）、`error`（LLM 调用失败，Rerank 内记）、`degraded`（检索降级为分数排序，调用方记），可算 degraded 率。
-
-> **截断职责**：`truncateRunes` 仅存在于 `internal/knowledge/application`、`api/wiring`、`internal/agent/application`（均未导出）。重排器位于 `api/wiring`，在内部用 wiring 的 `truncateRunes` 完成候选截断，调用方传完整候选；补尾去重由本层与调用方双保险。
-
-### 4.3 `RAGService` 改造
-
-`RAGService` 新增字段 `semanticReranker knowledgeport.Reranker` 与 `semanticTopN int`（精排候选上限），注入点：
+`RAGQueryRequest`（`rag_service.go:253`）新增内部字段（**非 DTO**，无契约影响）：
 
 ```go
-func (rs *RAGService) SetSemanticReranker(r knowledgeport.Reranker, topN int)
-// wiring 在注入前解析默认：topN <= 0 时用 constants.RerankLLMTopN
+RerankModel string // 由 resolveWorkspaceConfig 从 workspace config 填充
+JudgeModel  string // 同上，evidence 路径 judge 门使用
 ```
 
-`rerankSources`（`rag_service.go:999`）`builtin-score-v1` 分支改造：
+`resolveWorkspaceConfig`（`rag_service.go:113`）返回值追加 `rerankModel, judgeModel string`，从 `w.Config.RerankModel` / `w.Config.JudgeModel` 填充；`searchWorkspace`（86）与 `searchWorkspaceWithEvidence`（1299）构造 `RAGQueryRequest` 时带上。
+
+> **实现提示**：原返回值已 6 个（含 err），追加后 8 个，可读性差。实现时把返回值收敛为结构体（如 `type resolvedWorkspace struct { mode, effectiveTopK, embedModel, workspaceID, rerankModel, judgeModel string; threshold float32 }`），两个调用点同步适配。
+
+**`rerankSemantic`**（`rag_service.go:1105`）把空哨兵 `Model: ""` 改为：
 
 ```go
-case "builtin-score-v1":
-    if rs.semanticReranker != nil && len(pool) >= 2 {
-        narrowed, err := rs.rerankSemantic(ctx, req, pool)
-        if err != nil {
-            // fail-open：不返回 error，降级为召回分数排序；degraded 指标用
-            // 固定标签（不暴露平台重排模型名）。tenant 从 ctx 取号（RerankRequest
-            // 无 tenant 字段，与 Cohere 一致）。日志 WARN 且不含 query/chunk/
-            // response 原文（红线）；告警由 degraded 指标率驱动，避免降级期间
-            // 每查询 ERROR 洪水（review F5 的 ERROR 建议不采纳，理由见 §8）。
-            rs.logger.Warn("knowledge.retrieval.llm_rerank_degraded",
-                zap.Error(err), zap.Int("pool_size", len(pool)))
-            if rs.metrics != nil {
-                rs.metrics.IncRerankRequest(reqctx.TenantIDFromContext(ctx), "builtin-llm", "degraded")
-            }
-        } else {
-            pool = narrowed
-        }
-    }
-    sort.SliceStable(pool, func(i, j int) bool { return pool[i].Score > pool[j].Score })
+results, err := rs.semanticReranker.Rerank(ctx, knowledgeport.RerankRequest{
+    Query: req.Question, Documents: docs, Model: req.RerankModel, TopN: topN,
+})
 ```
 
-新增 `rerankSemantic`：
+**`llmReranker`**（`api/wiring/llm_reranker.go:22`）移除构造期 `model` 字段，`Rerank` 改用 `req.Model`：
 
 ```go
-func (rs *RAGService) rerankSemantic(ctx context.Context, req RAGQueryRequest, pool []Source) ([]Source, error) {
-    topN := min(rs.semanticTopN, len(pool)) // 精排候选数与池取 min
-    if topN < 2 {
-        return pool, nil // 单候选/空语义重排无意义，fail-open 保持池走排序
+Model: req.Model, // 逐 workspace 模型（第 68 行 r.model → req.Model）
+```
+
+- `req.Model == ""` 防御性返回 error（调用方 fail-open 降级）；正常路径 `Validate` 已保证 builtin 有模型。
+- `newLLMReranker` 签名改为 `newLLMReranker(completer, timeout, metrics, logger)`。
+
+### 4.5 judge resolver（per-workspace 模型，DDD 合规）
+
+judge 是接口（`SufficiencyJudge.JudgeSufficiency(ctx, query, evidence)`），模型不能像 rerank 那样从请求参数读。采用 **resolver** 模式，application 只消费 domain/port 接口，模型装配留在组合根：
+
+`rag_service.go`：`SetSufficiencyJudge`（单实例注入）改为：
+
+```go
+// RAGService 字段
+sufficiencyJudgeResolver func(ctx context.Context, model string) (port.SufficiencyJudge, error)
+
+func (rs *RAGService) SetSufficiencyJudgeResolver(
+    r func(ctx context.Context, model string) (port.SufficiencyJudge, error),
+) { rs.sufficiencyJudgeResolver = r }
+```
+
+`evidence_gate.go` `judgeSufficiencyGate` 签名追加 `model string`，逻辑改为：
+
+```go
+func (rs *RAGService) judgeSufficiencyGate(ctx context.Context, tenantID, workspace, query, model string, result *RAGQueryResult) *RAGQueryResult {
+    if rs.sufficiencyJudgeResolver == nil || model == "" || len(result.Sources) == 0 {
+        return result // 未装配 / workspace 未配 judge_model / 无证据 → 不判
     }
-    docs := make([]string, topN) // 前 topN 条 Content；截断由重排器内部负责（§4.2）
-    for i := range docs {
-        docs[i] = pool[i].Content
+    judge, err := rs.sufficiencyJudgeResolver(ctx, model)
+    if err != nil || judge == nil {
+        rs.logger.Warn("knowledge.judge.sufficiency_degraded",
+            zap.String("tenant_id", tenantID), zap.String("workspace", workspace), zap.Error(err))
+        return result // fail-closed：解析失败放行，不误杀
     }
-    // Model 传空哨兵：LLM 重排器内部用平台配置模型，忽略该字段；传
-    // req.Reranking（builtin-score-v1[:model]）会误导为请求级模型（review L3）。
-    results, err := rs.semanticReranker.Rerank(ctx, knowledgeport.RerankRequest{
-        Query: req.Question, Documents: docs, Model: "", TopN: topN,
-    })
+    verdict, err := judge.JudgeSufficiency(ctx, query, formatSources(result.Sources))
     if err != nil {
-        return nil, err
+        rs.logger.Warn("knowledge.judge.sufficiency_degraded", /* 同上 */)
+        return result
     }
-    narrowed := make([]Source, 0, topN)
-    used := make(map[int]struct{}, len(results))
-    for _, r := range results {
-        if r.Index < 0 || r.Index >= topN {
-            continue
-        }
-        if _, ok := used[r.Index]; ok {
-            continue // 重排器已去重，此处防御性保留
-        }
-        used[r.Index] = struct{}{}
-        s := pool[r.Index]
-        s.Score = r.Score // LLM 分数覆盖召回分数（与 rerankExternal 先例一致）
-        narrowed = append(narrowed, s)
+    if verdict != port.SufficiencyInsufficient {
+        return result
     }
-    // 补尾：LLM 返回不足 topN 时按原序补入未被打分的候选，Score 沿用原召回
-    // 分数（不覆盖）——仅发生在 LLM 部分返回的异常路径，其候选在 LLM 分数
-    // 空间阈值下可能被过滤，属预期语义（review M2）。
-    for i := 0; i < topN && len(narrowed) < topN; i++ {
-        if _, ok := used[i]; !ok {
-            narrowed = append(narrowed, pool[i])
-        }
+    // INSUFFICIENT → 置空 Sources + NoAnswer（保持 content=="" ⇒ NoAnswer!=nil 不变量）
+    if rs.metrics != nil {
+        rs.metrics.IncNoAnswer(tenantID, constants.NoAnswerReasonInsufficientEvidence)
     }
-    // 不做内部排序：收敛后的池统一由 rerankSources 的 sort.SliceStable 排序，
-    // 与降级路径同构，避免双重排序（review L1）。
-    return narrowed, nil
+    return &RAGQueryResult{
+        NoAnswer:       buildNoAnswer(NoAnswerInsufficientEvidence, result.CandidateCount, 0, result.BestScore),
+        BestScore:      result.BestScore,
+        CandidateCount: result.CandidateCount,
+    }
 }
 ```
 
-关键语义：
-
-- **topN 与池取 min**：池子 ≤ N 全量精排；池子 > N 只精排召回分数前 N，第 N+1 名以后不参与最终结果（"仅对 top-N 精排"的边界）。
-- **topN < 2 守卫**：`semanticTopN <= 1` 或池 < 2 时保持池不变走排序（fail-open，防止 `topN=0` 覆盖空池破坏检索，review M1）。与外部重排 `MinRerankCandidates=3` 的差异是有意的：LLM 一次 listwise 调用成本低于外部，2 条即起排。
-- **覆盖 Score**：与 `rerankExternal`（`s.Score = r.Score` + 池收敛）先例一致，池内分数单一来源（LLM 分数），阈值过滤基于 LLM 分数；补尾候选沿用原召回分数（本段补尾循环）。
-- **池收敛为 topN 条**：重排后池子即精排候选，阈值过滤 / 截断在其上进行。`semanticTopN` 因此是最终条数的硬上限（配置须 ≥ 常用 TopK，默认 10 > 5，review M5）。
-- `len(pool) >= 2` 才调用：单候选重排无意义（避免白付 LLM 延迟）。
-
-### 4.4 Wiring（`api/wiring/knowledge.go`）
-
-仿 `wireKnowledgeJudge` 新增 `wireSemanticReranker`，在 `buildKnowledge` 中调用（`buildKnowledge(ctx)` 有 ctx，传入目录校验）：
+调用点（`searchWorkspaceWithEvidence` 1324）传入 `req.JudgeModel`：
 
 ```go
-func (c *Container) wireSemanticReranker(ctx context.Context, rag *knowledge.RAGService) {
-    if r, topN := c.semanticRerankerDeps(ctx); r != nil {
-        rag.SetSemanticReranker(r, topN)
-    }
-}
+out = rs.judgeSufficiencyGate(ctx, tenantID, ws, query, req.JudgeModel, out)
+```
 
-// semanticRerankerDeps 解析并构建 LLM 语义重排器；任一前置条件不满足返回
-// (nil, 0)。topN/timeout 的 ≤0 默认值在此解析（回落常量），使 wiring 层
-// 单测可直接验证注入决策而无需构造完整 Gateway（RAGService.semanticReranker
-// 为 application 包未导出字段，行为探针会因 Gateway.Complete nil-panic）。
-func (c *Container) semanticRerankerDeps(ctx context.Context) (knowledgeport.Reranker, int) {
-    if c.LLMGateway == nil || c.LLMGateway.Gateway == nil || !c.Config.RerankLLMConfigured() {
-        return nil, 0
+**wiring resolver**（`api/wiring/knowledge.go` `wireKnowledgeJudge` 改造）：
+
+```go
+func (c *Container) wireKnowledgeJudge(rag *knowledge.RAGService) {
+    if c.LLMGateway == nil || c.LLMGateway.Gateway == nil {
+        return // gateway 不可用 → 不装配（fail-closed 放行）
     }
-    krc := c.Config.KnowledgeRerank
-    if !c.llmRerankModelInCatalogue(ctx, krc.Model) {
-        // fail-open 装配：模型不在 chat 目录 → WARN + 不注入，builtin 走纯排序。
-        // 配置错误在启动期暴露，而非运行期每查询失败（review F7）。
-        c.Logger.Warn("knowledge.rerank.model_unavailable",
-            zap.String("model", krc.Model), zap.String("reason", "model not in chat catalogue"))
-        return nil, 0
-    }
-    topN := krc.TopN
-    if topN <= 0 {
-        topN = constants.RerankLLMTopN
-    }
-    timeout := krc.Timeout
-    if timeout <= 0 {
-        timeout = constants.RerankLLMTimeout
+    rag.SetSufficiencyJudgeResolver(func(_ context.Context, model string) (knowledgeport.SufficiencyJudge, error) {
+        if model == "" {
+            return nil, nil // workspace 未配 judge_model → 不判
+        }
+        j := knowledgeJudge{
+            completer: c.LLMGateway.Gateway,
+            model:     model, // 逐 workspace 模型
+            timeout:   constants.KnowledgeJudgeTimeout,
+        }
+        if c.Platform != nil {
+            j.metrics = c.Platform.Metrics
+        }
+        return j, nil
+    })
+}
+```
+
+- **无缓存**：`knowledgeJudge` 无状态（共享 completer + 动态 model），每次构造廉价；模型目录校验已在保存时完成，resolver 不重复查目录。
+- 目录查询失败的 fail-closed 由 §4.3 保存时兜底；运行期 judge 调用失败由 `judgeSufficiencyGate` 放行。
+
+### 4.6 wiring / config 清理（删除全部 knowledge 域模型 env）
+
+`config/config.go`：
+
+- 删除 `KnowledgeRerankConfig` struct 及 `RerankLLMConfigured()`。
+- 删除 `KnowledgeJudgeConfig` struct。
+- 删除 6 个 env 绑定：`KNOWLEDGE_RERANK_MODEL` / `_TIMEOUT_SECONDS` / `_TOPN`、`KNOWLEDGE_JUDGE_ENABLED` / `_MODEL` / `_TIMEOUT_SECONDS`。
+- **保留 `AgentFactCheckConfig`（`AGENT_FACTCHECK_*`）不动**。
+
+`api/wiring/knowledge.go`：
+
+- `semanticRerankerDeps` 简化：删除 `RerankLLMConfigured()` 检查、`llmRerankModelInCatalogue` 调用、`krc.Model` 传参。gateway 可用即注入：
+
+```go
+func (c *Container) wireSemanticReranker(rag *knowledge.RAGService) {
+    if c.LLMGateway == nil || c.LLMGateway.Gateway == nil {
+        return
     }
     var metrics observability.MetricsProvider
     if c.Platform != nil {
-        metrics = c.Platform.Metrics // c.Platform 可能为 nil（review H2）
+        metrics = c.Platform.Metrics
     }
-    return newLLMReranker(c.LLMGateway.Gateway, krc.Model, timeout, metrics, c.Logger), topN
-}
-
-// llmRerankModelInCatalogue 检查平台配置的重排模型是否在 chat 模型目录。
-// 目录查询失败按"不在目录"处理（fail-open 不注入），不静默放行。
-func (c *Container) llmRerankModelInCatalogue(ctx context.Context, model string) bool {
-    if c.LLMGateway == nil || c.LLMGateway.Registry == nil {
-        return false
-    }
-    names, err := c.LLMGateway.Registry.ListChatModelsByTenant(ctx)
-    if err != nil {
-        c.Logger.Warn("knowledge.rerank.catalogue_unavailable", zap.Error(err))
-        return false
-    }
-    for _, n := range names {
-        if n == model {
-            return true
-        }
-    }
-    return false
+    rag.SetSemanticReranker(
+        newLLMReranker(c.LLMGateway.Gateway, constants.RerankLLMTimeout, metrics, c.Logger),
+        constants.RerankLLMTopN,
+    )
 }
 ```
 
-`Platform.Metrics` 可能为 nil（`c.Platform` 判断），由 `llmReranker` 容忍 nil metrics。
+- 删除 `llmRerankModelInCatalogue`（模型目录校验移到保存时，§4.3）。
+- `knowledge_judge.go` 不动（struct 保留 `model` 字段，由 resolver 动态填充）。
 
-### 4.5 常量（`pkg/constants/knowledge.go`）
+`pkg/constants/knowledge.go`：`RerankLLMTopN=10`、`RerankLLMMaxTokens=1024`、`RerankLLMTimeout=5s`、`RerankLLMMaxDocRunes=500` 保持不变（行为数字，非模型配置）。
 
-| 常量 | 值 | 语义 |
-|---|---|---|
-| `RerankLLMTopN` | 10 | 精排候选上限（默认），须 ≥ 常用 TopK（默认 5）；配置 < 工作区 TopK 时，最终条数受 `semanticTopN` 硬上限约束（review M5） |
-| `RerankLLMMaxTokens` | 1024 | LLM 输出预算 |
-| `RerankLLMTimeout` | 5s | 单次调用预算（review F4：15s 尾部延迟过大，下调至 5s） |
-| `RerankLLMMaxDocRunes` | 500 | 单候选正文截断 |
+### 4.7 前端（WorkspaceConfigForm.tsx）
 
-### 4.6 前端（`WorkspaceConfigForm.tsx`）
+新增「重排模型」「判断模型」两个下拉，数据源为 chat 模型目录（复用模型管理 API，`ListChatModelsByTenant`）：
 
-`builtin-score-v1` tooltip 更新："内置重排由平台 LLM 模型语义精排，需在模型管理中配置重排模型；未配置时自动降级为分数排序。外部重排需在模型管理中配置"（保留原"外部重排需在模型管理中配置"指引，review L3）。`AllowedRerankIdentities` / `SplitRerankIdentity` / `ValidRerankIdentity` 不变。
+- **重排模型**：仅 `reranking=builtin-score-v1` 时显示/必填（antd `rules` + 后端 `Validate` 双重校验）。tooltip："内置重排使用所选模型对候选语义精排；未配置模型时无法启用内置重排。外部重排需在模型管理中配置"。
+- **判断模型**：可选；tooltip："配置后，证据检索会先判断证据能否支撑结论，不足时回答'证据不足'（不胡编）。留空 = 关闭判断门"。
+- `ConfigValues` 接口 / 表单回填同步追加 `rerank_model` / `judge_model`。
+- 后端保存失败（`ErrRerankModelRequired` / `ErrInvalidRerankModel` / `ErrInvalidJudgeModel`）统一走现有 `message.error` 约定，错误正文由 handler 冻结的 `{"error":"..."}` 给出。
 
-### 4.7 数据流（最终形态）
+### 4.8 数据流（最终形态）
 
 ```
-vector/hybrid 召回 → pool（召回分数降序）
-  → [builtin 分支] 取前 min(TopN, len(pool)) → LLM listwise 打分 → 覆盖 Score → 池收敛
-  → 降级路径：保持召回分数排序
-  → ScoreThreshold 过滤（基于 LLM 分数）
-  → topK 截断（超才截）
-  → 主链路 ≤ TopK 条
+保存 workspace：reranking=builtin-score-v1 且无 rerank_model → 拒绝（ErrRerankModelRequired）
+                rerank_model / judge_model 非空 → Exists(_, CapChat) 校验，无效 → 拒绝
+
+查询（vector/hybrid）：
+  resolveWorkspaceConfig → RAGQueryRequest{RerankModel, JudgeModel} 填充
+  → pool（召回分数降序）
+  → [builtin 分支] req.RerankModel → RerankRequest.Model → LLM listwise 打分
+     → 覆盖 Score → 池收敛 min(RerankLLMTopN, len(pool))
+     → 降级路径：模型为空/调用失败/超时 → WARN + degraded → 召回分数排序
+  → ScoreThreshold 过滤（基于 LLM 分数）→ topK 截断 → 主链路 ≤ TopK 条
+
+evidence 路径（searchWorkspaceWithEvidence）：
+  → judgeSufficiencyGate(req.JudgeModel)
+     → resolver 解析 judge → JudgeSufficiency
+     → INSUFFICIENT → Sources 置空 + NoAnswer=insufficient_evidence
+     → 未装配/空模型/失败/超时 → WARN + 放行
 ```
 
 ## 5. 错误处理与降级
 
-- **未配置模型 / 模型不在目录**：`semanticReranker == nil` → 保持现行为（排序），零调用。
-- **调用失败 / 超时 / 解析失败**：`rerankSemantic` 返回 error → WARN 日志 + `IncRerankRequest(..., "degraded")` 指标 → 池不变 → 按召回分数排序。检索不失败。
+- **保存拒绝（显式）**：`reranking=builtin-score-v1` 无 `rerank_model` → `ErrRerankModelRequired`；模型不在 chat 目录 / 目录查询失败 → `ErrInvalidRerankModel` / `ErrInvalidJudgeModel`。均不自动降级。
+- **rerank 调用失败 / 超时 / 解析失败**：`rerankSemantic` 返回 error → WARN `knowledge.retrieval.llm_rerank_degraded`（含 `pool_size` / `top_n`，不含 query/chunk/response 原文）→ `IncRerankRequest(..., "degraded")` → 池不变 → 召回分数排序。检索不失败。
+- **`req.Model == ""`（防御）**：`llmReranker.Rerank` 返回 error → 走降级（正常路径 `Validate` 已保证不触发）。
 - **`len(pool) < 2` / `topN < 2`**：跳过 LLM，直接排序。
-- **LLM 返回缺 index / 非法 index / 重复 index**：跳过非法、去重重复；返回不足 topN 时按原序补入未被打分的候选，**Score 沿用原召回分数**（不覆盖）——补尾仅在异常路径发生，其候选在 LLM 分数空间阈值下可能被过滤（review M2）。
-- **日志红线（review F5）**：降级 / 失败日志只记录 model / topN / pool_size / error 摘要，**禁止记录 query / chunk / response 原文**；重排失败不落任何检索正文。
+- **judge 未装配 / workspace 未配 `judge_model` / 解析失败 / 调用失败 / 超时**：WARN `knowledge.judge.sufficiency_degraded` → 放行，行为与不配置一致。
+- **日志红线**：降级 / 失败日志只记录 tenant / workspace / model 名 / error 摘要，**禁止记录 query / chunk / response 原文**；重排与 judge 失败不落任何检索正文。
 
-## 6. 评估影响
+## 6. 迁移
+
+存量 tenant 的 workspace 若 `reranking=builtin-score-v1` 且无 `rerank_model`，升级后保存会被 `Validate` 拒绝。迁移策略：
+
+1. **推荐**：一次性 SQL（tenant 表 `workspaces` JSONB 更新）——把 `reranking="builtin-score-v1"` 且无 `rerank_model` 的 workspace 的 `reranking` 置空（`""`）。新实现下无模型 builtin 本就是降级排序，清空为"关闭重排"语义等价，保存不再被拒。
+2. 备选：管理员在模型管理配置模型后逐库保存补全。
+3. 启动路径检测：`knowledge` 启动时不拦截（fail-open 原则）；在 `workspace` 列表/编辑接口返回时，前端对 builtin 无模型的 workspace 显示引导文案（"内置重排需配置重排模型"），不阻塞其他操作。
+
+> 生产现状：`KNOWLEDGE_RERANK_MODEL` 生产未配置 → 语义重排实际关闭（fail-open 降级排序）。迁移后由各 workspace 显式启用。
+
+## 7. 评估影响
 
 - evaluation 默认 `RerankingNone`（`retrieval_evaluator.go`），不受影响。
 - 显式 `builtin-score-v1` 快照会触发 LLM 重排；失败自动降级，不阻塞评估（fail-open）。
-- **可复现性（review M4/F2）**：`Temperature=0` 固定采样，同一快照跨运行排序确定性大幅提升。不做 `SkipSemanticRerank` 评估旁路——评估应测产品真实行为（builtin 语义已从 score-desc 变更为 LLM 语义），温度 0 已收敛抖动；若未来评估对比出现不稳定，再加旁路。
-- `rerankAvailable`（Cohere 装配标志）不变。
-- `rerankStats.poolSize / bestScore` 在重排前采集，校准数据（`RAGQueryResult.BestScore / CandidateCount`、evaluation 校准）不受重排影响。
+- **可复现性**：`Temperature=0` 固定采样（`llm_reranker.go:65` 保持），同一快照跨运行排序确定性提升。不做 `SkipSemanticRerank` 评估旁路——评估应测产品真实行为。
+- `rerankAvailable`（Cohere 装配标志）不变；`rerankStats.poolSize / bestScore` 重排前采集，校准数据不受影响。
+- **契约测试**：proto 新增 `rerank_model` / `judge_model` → generated DTO 变化 → `api/http/contract_test.go` golden **additive 更新**（与 v1"golden 无需改"不同；实现时确认零值是否序列化为 `""`）。
 
-## 7. 测试
+## 8. 测试
 
-1. **`llm_reranker` 单测**（wiring 包）：prompt 构造；候选截断；JSON 解析（正常 / 缺 index / 非法 index / 重复 index / 坏 JSON / 超量 scores）；超时传播（fake completer 阻塞 → context deadline）；nil metrics 容忍；`Temperature=0` 断言（fake completer 捕获请求）。
-2. **`rag_service` 单测**：
-   - 注入 semanticReranker → builtin 走 LLM，Score 被覆盖，池收敛；
-   - `semanticReranker == nil` → 降级排序（现行为）；
-   - LLM 失败 → degraded 指标 + 降级排序，不返回 error；
-   - `len(pool) < 2` / `topN=0/1` → 跳过 LLM，池不变（review M1）；
-   - topN 与池取 min（池 3 条 → 精排 3 条；池 20 条 → 精排 topN 条，第 topN+1 名不返回）；
-   - LLM 部分返回 index → 补尾沿用原召回 Score + 阈值过滤在 LLM 分数空间执行的差异断言（review M2/L2）。
-3. **wiring 测试**：Model 空不注入 / 非空且在目录注入 / 非空不在目录不注入（WARN）/ gateway nil 不注入 / `c.Platform == nil` 不 panic（review H2/F7）。
-4. **config 测试**：`KNOWLEDGE_RERANK_MODEL` / `_TIMEOUT_SECONDS` / `_TOPN` 环境变量解析与默认回落（review L4）。
-5. **契约测试**：字段值不变，`api/http/contract_test.go` golden 无需改。
-6. **回归**：`go vet && go test -short ./...`；代码质量门禁（新函数复杂度 / 行数）。
+1. **domain `Validate`**：`reranking=builtin-score-v1` + 空 `rerank_model` → `ErrRerankModelRequired`；外部 rerank / 空 `reranking` 不要求模型；`embedding_model` 检查优先级不变。
+2. **application 保存校验**：builtin + 有效 chat 模型 → 通过；模型不在目录 → `ErrInvalidRerankModel`；目录查询失败 → 拒绝（fail-closed）；`judge_model` 非空无效 → `ErrInvalidJudgeModel`；`judge_model` 空 → 通过（关闭门）。
+3. **`rag_service`**：
+   - `resolveWorkspaceConfig` 填充 `RerankModel` / `JudgeModel`；
+   - `rerankSemantic` 传 `req.RerankModel`（非空哨兵）到 `RerankRequest.Model`；
+   - judge resolver：workspace 配模型 → 判定生效；空模型 → 放行；resolver 失败 → WARN + 放行（fail-closed）；
+   - 既有 fail-open / 降级 / topN 与池取 min / 补尾用例保持。
+4. **wiring**：gateway 可用即注入 reranker（不再校验模型）；resolver 动态构造 judge（model 从参数）；gateway nil 不注入。
+5. **config**：删除 6 个 env 后 `Load()` 测试更新（`AgentFactCheckConfig` 保留用例）。
+6. **契约测试**：golden additive 更新，字段值契约不变。
+7. **回归**：`go vet && go test -short ./...`；代码质量门禁（新函数复杂度 / 行数）。
 
-## 8. 风险与开放点
+## 9. 风险与开放点
 
-- **阈值跨分数空间（review F3）**：LLM 覆盖 Score 后，`ScoreThreshold` 过滤基于 LLM 分数（0-1）而非召回分数（vector 相似度 / hybrid RRF ~0.016）；fail-open 降级时同一阈值又回到召回分数空间。这是启用/降级重排的固有语义翻转，与 Cohere 外部重排先例一致：对 hybrid 模式阈值终于生效，但用户已配阈值在切换重排后行为变化。不引入 `score_space` 指标标签（避免过度设计；部署期阈值调试靠降级路径日志 + degraded 率）。`BestScore / CandidateCount` 校准不受影响。
-- **降级日志级别（review F5 的分歧记录）**：配置但失败打 WARN（非 ERROR）——降级期间每查询失败会造成多工作区扇出下的 ERROR 洪水；告警由 `degraded` 指标率驱动（Prometheus rule）。若团队偏好日志告警，可升为 ERROR 并配 sampling/限流，属部署决策，不在代码内硬编码。
-- **LLM 打分稳定性**：listwise 排序质量依赖模型，靠 `TopN` 上限 + 降级兜底。若模型输出质量差，结果等价于原始排序（fail-open 不恶化）。
-- **token 成本**：单次查询 ≤ `TopN × RerankLLMMaxDocRunes` ≈ 10 × 500 runes 输入 + 输出，量级可控。
-- **指标**：标签统一固定 `builtin-llm`，不暴露平台重排模型名，不涉敏感信息。
-- **BestScore 跨空间（review F8）**：`BestScore` 语义继承自 Cohere 外部重排先例（LLM/外部分数与召回分数混用），非本次引入；evaluation 校准数据仍可比，但跨重排配置的横向对比需注意分数空间差异。
-- **结果集差异（review F9）**：LLM 成功路径池收敛为 `semanticTopN` 条；降级路径保持召回池。`retrieved_count` 在两种路径下可能不同（配置 `semanticTopN < TopK` 时成功路径更少），属预期。
-- **启动期模型校验（review F7）**：重排模型不在 chat 目录 → WARN + 不注入（fail-open 装配），配置错误在启动期暴露而非运行期每查询失败。
+- **阈值跨分数空间**（同 v1）：LLM 覆盖 Score 后 `ScoreThreshold` 过滤基于 LLM 分数（0-1）；fail-open 降级时回到召回分数空间。与 Cohere 外部重排先例一致，是启用/降级重排的固有语义。`BestScore / CandidateCount` 校准不受影响。
+- **存量 workspace 保存拒绝**：§6 迁移 SQL 需覆盖所有 tenant（含历史租户），tenant_schema 与编号迁移的差异（JSONB 无需 DDL）已规避——`rerank_model` / `judge_model` 是 JSONB 内字段，**无新增列，不涉及 tenant DDL / 编号迁移**。
+- **judge resolver 每查询构造**：无状态对象，代价可忽略；若未来模型目录校验需在运行期重复，再引入缓存（当前不 YAGNI）。
+- **降级日志级别**：配置但失败打 WARN（非 ERROR）——降级期间多工作区扇出下避免 ERROR 洪水；告警由 degraded 指标率驱动。与 v1 裁决一致。
+- **token 成本**：单次查询 ≤ `RerankLLMTopN × RerankLLMMaxDocRunes` ≈ 10 × 500 runes 输入 + 输出，量级可控。
+- **指标**：标签固定 `builtin-llm`，不暴露模型名（模型现为 workspace 级，更不落日志）。
+- **模型治理一致性**：embedding_model 走 `ModelExists(CapEmbedding)`，本版 rerank/judge 走 `ModelExists(CapChat)`——能力区分由目录 capability 决定，不做跨能力自动降级。
 
-## 9. 验收标准
+## 10. 验收标准
 
-1. 配置 `KNOWLEDGE_RERANK_MODEL` 后，`builtin-score-v1` 查询对 top-N 候选产生语义排序，分数为 LLM 分数。
-2. 未配置 / LLM 失败 / 超时时，`builtin-score-v1` 行为与现状完全一致（召回分数排序），日志 WARN + degraded 指标。
-3. 最终返回条数 ≤ TopK；召回池不足 TopK 时全部返回。
-4. `go test -short ./...` 全绿，代码质量门禁通过。
-5. 契约测试 golden 不变。
+1. 保存 workspace：`reranking=builtin-score-v1` 无 `rerank_model` → 返回 `ErrRerankModelRequired`（前端展示引导）。
+2. 配置 `rerank_model`（chat 目录内）后，builtin 查询对 top-N 候选产生语义排序，分数为 LLM 分数。
+3. LLM 调用失败 / 超时 → WARN + degraded 指标 + 召回分数排序，检索不失败。
+4. `judge_model` 配置后 evidence 路径：证据不足 → `NoAnswer=insufficient_evidence`；未配 / 失败 → 放行。
+5. 全部 knowledge 域模型 env（6 个）从 `config/config.go` 删除，`AgentFactCheckConfig` 保留。
+6. 最终返回条数 ≤ TopK；召回池不足 TopK 时全部返回。
+7. `go test -short ./...` 全绿，代码质量门禁通过，契约测试 golden 已 additive 更新。
