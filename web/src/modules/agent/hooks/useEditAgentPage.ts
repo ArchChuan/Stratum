@@ -80,8 +80,8 @@ export const useEditAgentPage = () => {
           maxContextTokens: a.maxContextTokens ?? AGENT_DEFAULT_MAX_CONTEXT_TOKENS,
           temperature: a.temperature,
           max_tokens: a.max_tokens,
-          compaction_recent_groups: a.compaction_recent_groups,
-          // 压缩三值（提示词/温度/模型）为平台级参数，不在 agent 表单/存储。
+          // 压缩五值（提示词/温度/模型/最近轮数/冷却）为平台级参数，
+          // 不在 agent 表单/存储。
           allowedSkills: a.allowedSkills || [],
           mcpToolIds: a.mcpToolIds || [],
           knowledgeWorkspaceIds: a.knowledgeWorkspaceIds || [],

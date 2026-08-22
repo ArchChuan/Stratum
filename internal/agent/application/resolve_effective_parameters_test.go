@@ -71,7 +71,6 @@ func TestResolveEffectiveParametersMergesPlatformDefaultsWhenResourceUnset(t *te
 		ParametersProvider: stubParametersProvider{effective: map[string]any{
 			"agent.temperature":              0.5,
 			"agent.max_tokens":               int64(2048),
-			"agent.compaction_recent_groups": int64(3),
 			"agent.max_tokens_per_execution": int64(50000),
 		}},
 		Logger: zap.NewNop(),
@@ -85,9 +84,6 @@ func TestResolveEffectiveParametersMergesPlatformDefaultsWhenResourceUnset(t *te
 	}
 	if cfg.MaxTokens != 2048 {
 		t.Errorf("MaxTokens = %d, want 2048", cfg.MaxTokens)
-	}
-	if cfg.CompactionRecentGroups != 3 {
-		t.Errorf("CompactionRecentGroups = %d, want 3", cfg.CompactionRecentGroups)
 	}
 	if cfg.MaxTokensPerExecution != 50000 {
 		t.Errorf("MaxTokensPerExecution = %d, want 50000 (platform default, resource unset)", cfg.MaxTokensPerExecution)
@@ -202,7 +198,7 @@ func TestValidateSamplingParamsRejectsOutOfBoundsWithSentinel(t *testing.T) {
 		ParametersProvider: failingValidateProvider{},
 		Logger:             zap.NewNop(),
 	})
-	err := svc.validateSamplingParams(context.Background(), 3.5, 0, 0, "")
+	err := svc.validateSamplingParams(context.Background(), 3.5, 0, "")
 	if err == nil {
 		t.Fatal("expected error for out-of-bounds temperature")
 	}
@@ -232,14 +228,14 @@ func TestValidateSamplingParamsSkipsUnsetValues(t *testing.T) {
 		ParametersProvider: failingValidateProvider{},
 		Logger:             zap.NewNop(),
 	})
-	if err := svc.validateSamplingParams(context.Background(), 0, 0, 0, ""); err != nil {
+	if err := svc.validateSamplingParams(context.Background(), 0, 0, ""); err != nil {
 		t.Errorf("all-unset must pass validation, got %v", err)
 	}
 }
 
 func TestValidateSamplingParamsNilProviderIsNoop(t *testing.T) {
 	svc := NewAgentService(AgentServiceDeps{Logger: zap.NewNop()})
-	if err := svc.validateSamplingParams(context.Background(), 0.9, 2048, 3, "high"); err != nil {
+	if err := svc.validateSamplingParams(context.Background(), 0.9, 2048, "high"); err != nil {
 		t.Errorf("nil provider must degrade to no-op, got %v", err)
 	}
 }
@@ -301,26 +297,22 @@ func TestApplyParameterOverridesMapWinsAndOnlyPresentKeysOverwrite(t *testing.T)
 	// Parameters map keys take precedence over the top-level sampling fields;
 	// keys absent from the map keep the top-level value (merge semantics).
 	in := UpdateAgentInput{
-		Temperature:            0.9,
-		MaxTokens:              2048,
-		CompactionRecentGroups: 3,
-		ReasoningEffort:        "medium",
+		Temperature:     0.9,
+		MaxTokens:       2048,
+		ReasoningEffort: "medium",
 		Parameters: map[string]any{
 			"temperature":      0.3,
 			"max_tokens":       float64(4096),
 			"reasoning_effort": "high",
 		},
 	}
-	temperature, maxTokens, recentGroups, reasoningEffort := applyParameterOverrides(in)
+	temperature, maxTokens, reasoningEffort := applyParameterOverrides(in)
 
 	if temperature != 0.3 {
 		t.Errorf("temperature = %v, want 0.3 (map wins)", temperature)
 	}
 	if maxTokens != 4096 {
 		t.Errorf("max_tokens = %d, want 4096 (map wins)", maxTokens)
-	}
-	if recentGroups != 3 {
-		t.Errorf("compaction_recent_groups = %d, want 3 (absent key keeps top-level)", recentGroups)
 	}
 	if reasoningEffort != "high" {
 		t.Errorf("reasoning_effort = %q, want \"high\" (map wins)", reasoningEffort)
@@ -330,16 +322,14 @@ func TestApplyParameterOverridesMapWinsAndOnlyPresentKeysOverwrite(t *testing.T)
 func TestApplyParameterOverridesEmptyMapIsNoop(t *testing.T) {
 	// 旧客户端 PUT(无 parameters 对象)不得改变采样字段:merge 不清除已存值。
 	in := UpdateAgentInput{
-		Temperature:            0.9,
-		MaxTokens:              2048,
-		CompactionRecentGroups: 3,
-		ReasoningEffort:        "low",
+		Temperature:     0.9,
+		MaxTokens:       2048,
+		ReasoningEffort: "low",
 	}
-	temperature, maxTokens, recentGroups, reasoningEffort := applyParameterOverrides(in)
+	temperature, maxTokens, reasoningEffort := applyParameterOverrides(in)
 
-	if temperature != 0.9 || maxTokens != 2048 || recentGroups != 3 {
-		t.Errorf("empty map must be a no-op, got %v/%d/%d",
-			temperature, maxTokens, recentGroups)
+	if temperature != 0.9 || maxTokens != 2048 {
+		t.Errorf("empty map must be a no-op, got %v/%d", temperature, maxTokens)
 	}
 	if reasoningEffort != "low" {
 		t.Errorf("reasoning_effort = %q, want \"low\" (absent key keeps top-level)", reasoningEffort)
@@ -353,7 +343,7 @@ func TestApplyParameterOverridesExplicitZeroIsUnset(t *testing.T) {
 		Temperature: 0.9,
 		Parameters:  map[string]any{"temperature": 0},
 	}
-	temperature, _, _, _ := applyParameterOverrides(in)
+	temperature, _, _ := applyParameterOverrides(in)
 
 	if temperature != 0 {
 		t.Errorf("temperature = %v, want 0 (explicit 0 maps to unset; pack skips it)", temperature)
@@ -372,9 +362,8 @@ func TestBuildUpdateConfigMergesDeclaredParameters(t *testing.T) {
 		LLMModel:         "qwen-plus",
 		MaxContextTokens: 100,
 		Parameters: map[string]any{
-			"temperature":              0.3,
-			"max_tokens":               float64(4096),
-			"compaction_recent_groups": float64(5),
+			"temperature": 0.3,
+			"max_tokens":  float64(4096),
 		},
 	})
 	if err != nil {
@@ -382,27 +371,5 @@ func TestBuildUpdateConfigMergesDeclaredParameters(t *testing.T) {
 	}
 	if cfg.Temperature != 0.3 || cfg.MaxTokens != 4096 {
 		t.Errorf("sampling fields not merged: temp=%v maxTokens=%d", cfg.Temperature, cfg.MaxTokens)
-	}
-	if cfg.CompactionRecentGroups != 5 {
-		t.Errorf("compaction fields not merged: groups=%d",
-			cfg.CompactionRecentGroups)
-	}
-}
-
-func TestResolveEffectiveParametersCooldownKey(t *testing.T) {
-	// agent.compaction_cooldown_sec 是资源层声明的可调参数：资源未设（0）时
-	// 平台默认值流入执行配置。
-	svc := NewAgentService(AgentServiceDeps{
-		ParametersProvider: stubParametersProvider{effective: map[string]any{
-			"agent.compaction_cooldown_sec": int64(15),
-		}},
-		Logger: zap.NewNop(),
-	})
-	agent := &testParamAgent{cfg: &domain.AgentConfig{}}
-
-	cfg := applyOptions(svc.resolveEffectiveParameters(context.Background(), agent, nil))
-
-	if cfg.CompactionCooldownSec != 15 {
-		t.Errorf("CompactionCooldownSec = %d, want 15 (platform default, resource unset)", cfg.CompactionCooldownSec)
 	}
 }
