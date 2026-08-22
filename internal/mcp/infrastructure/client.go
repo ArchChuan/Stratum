@@ -344,6 +344,15 @@ func mcpToolInputSchema(schema any) map[string]any {
 	return map[string]any{}
 }
 
+// supportsResourcesCapability reports whether the server's initialize result
+// declares the resources capability. Many hosted MCP services (e.g. 阿里云
+// 百炼 MCP) only declare tools and return an error for resources/list;
+// probing such a server unconditionally fails the whole connect (discover MCP
+// resources), so resource discovery is skipped when the capability is absent.
+func supportsResourcesCapability(init *mcp.InitializeResult) bool {
+	return init != nil && init.Capabilities != nil && init.Capabilities.Resources != nil
+}
+
 // ListResources 列出所有资源
 func (c *BaseClient) ListResources(ctx context.Context) ([]*MCPResource, error) {
 	if err := c.ensureConnected(ctx); err != nil {
@@ -354,6 +363,9 @@ func (c *BaseClient) ListResources(ctx context.Context) ([]*MCPResource, error) 
 	c.mu.RUnlock()
 	if session == nil {
 		return nil, ErrClientClosed
+	}
+	if !supportsResourcesCapability(session.InitializeResult()) {
+		return []*MCPResource{}, nil
 	}
 
 	result, err := session.ListResources(ctx, &mcp.ListResourcesParams{})

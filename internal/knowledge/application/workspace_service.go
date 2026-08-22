@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -75,14 +76,15 @@ type IngestUploadResult struct {
 
 // WorkspaceService orchestrates workspace CRUD + ingest validation.
 type WorkspaceService struct {
-	repo        port.WorkspaceRepo
-	ingestSvc   *KnowledgeIngest
-	docRepo     port.DocRepo
-	vectorStore collectionProvisioner
-	roles       port.TenantRoleResolver
-	editorRepo  port.ResourceEditorRepo
-	modelExists port.ModelExists
-	logger      *zap.Logger
+	repo         port.WorkspaceRepo
+	ingestSvc    *KnowledgeIngest
+	docRepo      port.DocRepo
+	vectorStore  collectionProvisioner
+	roles        port.TenantRoleResolver
+	editorRepo   port.ResourceEditorRepo
+	modelExists  port.ModelExists
+	failureAudit auditport.FailureAuditRecorder
+	logger       *zap.Logger
 }
 
 // NewWorkspaceService constructs a WorkspaceService.
@@ -110,6 +112,11 @@ func (s *WorkspaceService) SetEditorRepo(r port.ResourceEditorRepo) { s.editorRe
 // catalogue check (degraded/dev) — directory lookup is a config constraint,
 // not an authorization gate.
 func (s *WorkspaceService) SetModelExists(r port.ModelExists) { s.modelExists = r }
+
+// SetFailureAuditRecorder 注入失败资源操作审计。未注入时跳过记录。
+func (s *WorkspaceService) SetFailureAuditRecorder(r auditport.FailureAuditRecorder) {
+	s.failureAudit = r
+}
 
 // validateModelsInCatalogue 校验 embedding 模型与外部 rerank provider 存在于
 // 全局目录（enabled + 能力匹配）。modelExists 未注入（降级/dev/测试）时跳过
@@ -161,6 +168,7 @@ func (s *WorkspaceService) CreateWorkspace(ctx context.Context, tenantID string,
 		return nil, err
 	}
 	if err := s.repo.Create(ctx, tenantID, ws, in.Editors, audit); err != nil {
+		s.recordFailure(ctx, ws.ID, "create", err)
 		return nil, err
 	}
 	if s.vectorStore != nil {
@@ -172,6 +180,7 @@ func (s *WorkspaceService) CreateWorkspace(ctx context.Context, tenantID string,
 				zap.String("collection", col),
 				zap.Error(err))
 			_ = s.repo.Delete(ctx, tenantID, ws.Name, nil)
+			s.recordFailure(ctx, ws.ID, "create", fmt.Errorf("knowledge workspace: %w", err))
 			return nil, fmt.Errorf("failed to create vector collection: %w", err)
 		}
 		s.logger.Info("knowledge.workspace.collection_created",
@@ -223,10 +232,30 @@ func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, tenantID, name s
 		return nil, err
 	}
 	if err := s.repo.UpdateWorkspaceAll(ctx, tenantID, name, renameTo, in.Description, newCfg, editorActor, audit); err != nil {
+		s.recordFailure(ctx, current.ID, "update", err)
 		return nil, err
 	}
 	// after is the merged copy; no further in-memory sync needed.
 	return after, nil
+}
+
+// recordFailure 旁路记录一次失败的知识库工作区创建/更新（best-effort）。
+// 记录失败仅 WARN，不改变主流程错误。
+func (s *WorkspaceService) recordFailure(ctx context.Context, id, op string, err error) {
+	if s.failureAudit == nil {
+		return
+	}
+	if recordErr := s.failureAudit.Record(ctx, auditport.ResourceFailure{
+		ResourceKind: auditdomain.ResourceKindKnowledge,
+		ResourceID:   id,
+		Operation:    op,
+		ErrorCode:    auditport.ClassifyFailure(err),
+	}); recordErr != nil {
+		s.logger.Warn("failed to record knowledge workspace failure audit",
+			zap.String("workspace_id", id),
+			zap.String("op", op),
+			zap.Error(recordErr))
+	}
 }
 
 // resolveUpdateActor applies the ownership matrix with the editor grant on

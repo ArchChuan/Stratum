@@ -11,6 +11,7 @@ import (
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -57,6 +58,17 @@ func TestPublicErrorHidesUpstreamBaseURL(t *testing.T) {
 	}
 	if strings.Contains(got.Message, "10.0.0.5") || strings.Contains(got.Message, "http") {
 		t.Fatalf("public message leaks internal URL: %q", got.Message)
+	}
+}
+
+func TestPublicErrorDescribesMCPTransportFailure(t *testing.T) {
+	err := fmt.Errorf("discover MCP resources: %w", mcpdomain.ErrTransportFailed)
+	got := DescribePublicError(err, http.StatusBadGateway)
+	if got.Message != "连接 MCP 服务器失败：服务器未响应或协议不兼容，请检查服务器地址与认证配置" {
+		t.Fatalf("DescribePublicError() = %#v", got)
+	}
+	if got.Code != "" {
+		t.Fatalf("unexpected code: %#v", got)
 	}
 }
 

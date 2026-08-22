@@ -6,6 +6,7 @@ import (
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 )
 
 const CodeSystemAssistantModelUnavailable = "SYSTEM_ASSISTANT_MODEL_UNAVAILABLE"
@@ -26,6 +27,17 @@ func DescribePublicError(err error, status int) PublicErrorDescriptor {
 	// 只对客户端暴露固定消息；内部细节保留在 ERROR 日志（middleware 记录完整 err）。
 	if errors.Is(err, llmgatewaydomain.ErrUpstreamRequestFailed) {
 		return PublicErrorDescriptor{Message: "上游模型服务请求失败，请稍后重试"}
+	}
+	// MCP 连接/发现失败：错误链只含安全 sentinel，对外固定中文消息，不暴露
+	// 上游地址与响应细节。发现阶段失败（如服务器未实现 resources/list）在
+	// 客户端能力感知修复后不再出现，此分支覆盖真实不可达/协议不兼容场景。
+	if errors.Is(err, mcpdomain.ErrTransportFailed) {
+		return PublicErrorDescriptor{
+			Message: "连接 MCP 服务器失败：服务器未响应或协议不兼容，请检查服务器地址与认证配置",
+		}
+	}
+	if errors.Is(err, mcpdomain.ErrSessionMissing) {
+		return PublicErrorDescriptor{Message: "MCP 连接已断开，请重新连接后再试"}
 	}
 	if msg, ok := approvalPublicMessage(err); ok {
 		return PublicErrorDescriptor{Message: msg}

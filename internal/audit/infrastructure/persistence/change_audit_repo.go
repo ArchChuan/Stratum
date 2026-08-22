@@ -230,6 +230,10 @@ func buildChangeAuditWhere(tenantID string, f port.ResourceChangeAuditFilter) (s
 		conds = append(conds, fmt.Sprintf(
 			`(EXISTS (SELECT 1 FROM public.users u WHERE u.id::text = r.actor_id AND (u.display_name ILIKE $%[1]d OR u.github_login ILIKE $%[1]d)) OR r.actor_id ILIKE $%[1]d)`, idx))
 	}
+	if f.ActorID != "" {
+		args = append(args, f.ActorID)
+		conds = append(conds, fmt.Sprintf(`r.actor_id = $%d`, len(args)))
+	}
 	if f.From != nil {
 		args = append(args, *f.From)
 		conds = append(conds, fmt.Sprintf(`created_at >= $%d`, len(args)))

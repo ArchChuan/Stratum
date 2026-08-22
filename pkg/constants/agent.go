@@ -23,7 +23,8 @@ const (
 	AgentToolTraceMaxRawTextBytes                = 64 * 1024
 	SystemAssistantToolMaxJSONBytes              = 32 * 1024
 	SystemAssistantQueryMaxRunes                 = 500
-	SystemAssistantAreasMaxCount                 = 5
+	SystemAssistantAreasMaxCount                 = 6
+	SystemAssistantFailureAuditMaxRows           = 20
 	SystemAssistantCitationMaxCount              = 5
 	SystemAssistantDiagnosticFactsMaxCount       = 100
 	SystemAssistantDiagnosticGapsMaxCount        = 20

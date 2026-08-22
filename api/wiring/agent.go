@@ -359,6 +359,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		ToolAuthorizer:            agent.NewToolAuthorizer(agentToolUserScopeResolver{members: tenantMemberService(c)}),
 		WorkspaceBindingValidator: workspaceBindingAdapter{ws: knowledgeWorkspaceService(c)},
 		SystemResourceGuard:       newSystemResourceGuard(mcpServiceOf(c), knowledgeWorkspaceService(c)),
+		FailureAudit:              failureRecorderOf(c),
 		Logger:                    c.Logger,
 	}
 	if db != nil {
@@ -387,9 +388,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		deps.MemoryBuffer = memoryBufferClosure(c.Memory.Service)
 		deps.TrajectoryReflection = trajectoryReflectionClosure(c)
 	}
-	a.DiagnosticProvider = newSystemAssistantDiagnosticAdapter(
-		tenantRoleAdapter{service: tenantMemberService(c)}, systemAssistantDiagnosticCollectors(c, a),
-	)
+	a.DiagnosticProvider = newDiagnosticProvider(c, a)
 	deps.OfficialDocsSearch = officialdocs.Search
 	deps.DiagnosticProvider = a.DiagnosticProvider
 	a.Service = agent.NewAgentService(deps)
