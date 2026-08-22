@@ -186,28 +186,21 @@ func TestAgentEvaluationAdapterParsesModelParameters(t *testing.T) {
 			}
 		}
 	})
-	t.Run("accepts compaction keys", func(t *testing.T) {
+	t.Run("accepts max_context_tokens", func(t *testing.T) {
 		parsed, err := parseAgentCandidatePatch(baseline, evaldomain.CandidatePatch{
-			ParameterPatch: map[string]any{
-				"max_context_tokens":       16384,
-				"compaction_recent_groups": 5,
-			},
+			ParameterPatch: map[string]any{"max_context_tokens": 16384},
 		})
 		if err != nil {
-			t.Fatalf("expected compaction parameters to be accepted: %v", err)
+			t.Fatalf("expected max_context_tokens to be accepted: %v", err)
 		}
-		if parsed.ModelParameters == nil ||
-			parsed.ModelParameters.MaxContextTokens != 16384 ||
-			parsed.ModelParameters.CompactionRecentGroups != 5 {
-			t.Fatalf("compaction parameters not written back: %#v", parsed.ModelParameters)
+		if parsed.ModelParameters == nil || parsed.ModelParameters.MaxContextTokens != 16384 {
+			t.Fatalf("max_context_tokens not written back: %#v", parsed.ModelParameters)
 		}
 	})
-	t.Run("rejects invalid compaction values", func(t *testing.T) {
+	t.Run("rejects invalid model values", func(t *testing.T) {
 		for _, patch := range []map[string]any{
-			{"compaction_recent_groups": 4},   // outside {0,2,3,5}
-			{"compaction_recent_groups": "3"}, // non-integer
-			{"max_context_tokens": -1},        // negative window
-			{"max_context_tokens": 40000},     // above 32768
+			{"max_context_tokens": -1},    // negative window
+			{"max_context_tokens": 40000}, // above 32768
 		} {
 			_, err := parseAgentCandidatePatch(baseline, evaldomain.CandidatePatch{
 				ParameterPatch: patch,
@@ -215,19 +208,6 @@ func TestAgentEvaluationAdapterParsesModelParameters(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected patch %v to be rejected", patch)
 			}
-		}
-	})
-	t.Run("accepts zero compaction values as auto", func(t *testing.T) {
-		parsed, err := parseAgentCandidatePatch(baseline, evaldomain.CandidatePatch{
-			ParameterPatch: map[string]any{
-				"compaction_recent_groups": 0,
-			},
-		})
-		if err != nil {
-			t.Fatalf("expected zero/auto values to be accepted: %v", err)
-		}
-		if parsed.ModelParameters.CompactionRecentGroups != 0 {
-			t.Fatalf("auto values not written back: %#v", parsed.ModelParameters)
 		}
 	})
 	t.Run("accepts valid reasoning_effort and writes it back", func(t *testing.T) {

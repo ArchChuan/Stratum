@@ -299,8 +299,7 @@ func TestAgentRepo_SamplingParametersRoundTrip(t *testing.T) {
 	cfg := &domain.AgentConfig{
 		ID: "a1", Name: "Beta", LLMModel: "gpt-4o", MaxIterations: 5,
 		Temperature: 0.9, MaxTokens: 2048,
-		CompactionRecentGroups: 3,
-		MemoryParameters:       map[string]any{"memory.fact_injection_top_n": 8},
+		MemoryParameters: map[string]any{"memory.fact_injection_top_n": 8},
 	}
 	if err := repo.Update(tenantCtx("t1"), cfg, nil, "", true); err != nil {
 		t.Fatalf("Update: %v", err)
@@ -309,9 +308,9 @@ func TestAgentRepo_SamplingParametersRoundTrip(t *testing.T) {
 		t.Errorf("unmet expectations: %v", err)
 	}
 
-	// 回读:DB 存 {temperature:0.9, compaction_recent_groups:3, memory.fact_injection_top_n:8},
+	// 回读:DB 存 {temperature:0.9, memory.fact_injection_top_n:8},
 	// Get 必须解回采样字段与 memory.* dotted 键,缺键保持 0=unset。
-	// 压缩三值已迁平台参数,不再落 agent JSONB。
+	// 压缩配置已迁平台参数,不再落 agent JSONB。
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("SELECT id, name").
@@ -320,7 +319,7 @@ func TestAgentRepo_SamplingParametersRoundTrip(t *testing.T) {
 			"id", "name", "type", "description", "system_prompt", "llm_model",
 			"max_iterations", "max_context_tokens", "memory_scope", "system_key",
 			"created_by", "parameters",
-		}).AddRow("a1", "Beta", "react", "", "", "gpt-4o", 5, 0, "", "", "", `{"temperature":0.9,"compaction_recent_groups":3,"memory.fact_injection_top_n":8}`))
+		}).AddRow("a1", "Beta", "react", "", "", "gpt-4o", 5, 0, "", "", "", `{"temperature":0.9,"memory.fact_injection_top_n":8}`))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs("a1").WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
 	pool.ExpectQuery("SELECT server_id, tool_name FROM agent_mcp_tool_links").
@@ -336,9 +335,6 @@ func TestAgentRepo_SamplingParametersRoundTrip(t *testing.T) {
 	if got.Temperature != 0.9 {
 		t.Errorf("temperature = %v, want 0.9", got.Temperature)
 	}
-	if got.CompactionRecentGroups != 3 {
-		t.Errorf("compaction_recent_groups = %d, want 3", got.CompactionRecentGroups)
-	}
 	if got.MaxTokens != 0 {
 		t.Errorf("absent keys must stay unset(0): max_tokens=%d", got.MaxTokens)
 	}
@@ -353,8 +349,7 @@ func TestAgentRepo_SamplingParametersRoundTrip(t *testing.T) {
 func TestPackSamplingParameters(t *testing.T) {
 	cfg := &domain.AgentConfig{
 		Temperature: 0.7, MaxTokens: 0,
-		CompactionRecentGroups: 2,
-		MemoryParameters:       map[string]any{"memory.fact_injection_top_n": 8},
+		MemoryParameters: map[string]any{"memory.fact_injection_top_n": 8},
 	}
 	raw, err := packSamplingParameters(cfg)
 	if err != nil {
@@ -364,7 +359,7 @@ func TestPackSamplingParameters(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &params); err != nil {
 		t.Fatal(err)
 	}
-	if len(params) != 3 || params["temperature"] != 0.7 || params["compaction_recent_groups"] != float64(2) {
+	if len(params) != 2 || params["temperature"] != 0.7 {
 		t.Fatalf("packed = %v, want only non-zero sampling keys", params)
 	}
 	if params["memory.fact_injection_top_n"] != float64(8) {
@@ -379,8 +374,7 @@ func TestPackSamplingParameters(t *testing.T) {
 func TestPackAllSamplingParameters(t *testing.T) {
 	cfg := &domain.AgentConfig{
 		Temperature: 0.7, MaxTokens: 0,
-		CompactionRecentGroups: 2,
-		MemoryParameters:       map[string]any{"memory.max_facts_per_extraction": 20},
+		MemoryParameters: map[string]any{"memory.max_facts_per_extraction": 20},
 	}
 	raw, err := packAllSamplingParameters(cfg)
 	if err != nil {
@@ -390,10 +384,10 @@ func TestPackAllSamplingParameters(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &params); err != nil {
 		t.Fatal(err)
 	}
-	if len(params) != 5 {
-		t.Fatalf("packAll must carry all 4 sampling keys + memory.*, got %v", params)
+	if len(params) != 4 {
+		t.Fatalf("packAll must carry all 3 sampling keys + memory.*, got %v", params)
 	}
-	if params["temperature"] != 0.7 || params["compaction_recent_groups"] != float64(2) {
+	if params["temperature"] != 0.7 {
 		t.Errorf("non-zero fields must keep value: %v", params)
 	}
 	if v, ok := params["max_tokens"]; !ok || v != nil {
@@ -456,7 +450,7 @@ func TestAgentRepo_Update_MergeSQLShape(t *testing.T) {
 	repo := &PgAgentRepo{pool: pool}
 	cfg := &domain.AgentConfig{
 		ID: "a1", Name: "Beta", LLMModel: "gpt-4o", MaxIterations: 5,
-		Temperature: 0.3, CompactionRecentGroups: 3,
+		Temperature: 0.3,
 	}
 	// replaceParams=false = 表单/API merge 路径。
 	if err := repo.Update(tenantCtx("t1"), cfg, nil, "", false); err != nil {
@@ -506,7 +500,7 @@ func TestAgentRepo_SamplingParametersReplace(t *testing.T) {
 		t.Errorf("unmet expectations: %v", err)
 	}
 
-	// 回读:DB 存 {temperature:null, max_tokens:null, compaction_recent_groups:2,...}
+	// 回读:DB 存 {temperature:null, max_tokens:null,...}
 	// null 必须解回 0=unset(null 与缺键同义)。
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
@@ -516,7 +510,7 @@ func TestAgentRepo_SamplingParametersReplace(t *testing.T) {
 			"id", "name", "type", "description", "system_prompt", "llm_model",
 			"max_iterations", "max_context_tokens", "memory_scope", "system_key",
 			"created_by", "parameters",
-		}).AddRow("a1", "Beta", "react", "", "", "gpt-4o", 5, 0, "", "", "", `{"temperature":null,"max_tokens":null,"compaction_recent_groups":2}`))
+		}).AddRow("a1", "Beta", "react", "", "", "gpt-4o", 5, 0, "", "", "", `{"temperature":null,"max_tokens":null}`))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs("a1").WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
 	pool.ExpectQuery("SELECT server_id, tool_name FROM agent_mcp_tool_links").
@@ -532,9 +526,6 @@ func TestAgentRepo_SamplingParametersReplace(t *testing.T) {
 	if got.Temperature != 0 || got.MaxTokens != 0 {
 		t.Errorf("null fields must resolve to unset(0): temp=%v max_tokens=%d",
 			got.Temperature, got.MaxTokens)
-	}
-	if got.CompactionRecentGroups != 2 {
-		t.Errorf("compaction_recent_groups = %d, want 2", got.CompactionRecentGroups)
 	}
 }
 

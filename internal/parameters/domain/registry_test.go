@@ -41,33 +41,25 @@ func TestRegistryRegistersAllBuiltinKeys(t *testing.T) {
 		}
 	}
 
-	// 新开放的 compaction 搜索空间维度。
-	for _, key := range []string{"agent.compaction_recent_groups"} {
-		def, ok := r.Get(key)
-		if !ok || !def.Optimizable {
-			t.Fatalf("newly opened key %s must be optimizable", key)
-		}
-	}
 }
 
 func TestRegistryEvaluationKeyMapping(t *testing.T) {
 	r := NewParametersRegistry()
 	for bare, want := range map[string]string{
-		"temperature":              "agent.temperature",
-		"max_tokens":               "agent.max_tokens",
-		"maxTokens":                "agent.max_tokens",
-		"max_context_tokens":       "agent.max_context_tokens",
-		"max_iterations":           "agent.max_iterations",
-		"model":                    "agent.model",
-		"bindings":                 "agent.bindings",
-		"compaction_recent_groups": "agent.compaction_recent_groups",
-		"top_k":                    "rag.top_k",
-		"score_threshold":          "rag.score_threshold",
-		"reranking":                "rag.reranking",
-		"query_rewrite":            "rag.query_rewrite",
-		"enabled_tools":            "mcp.enabled_tools",
-		"timeout_ms":               "mcp.timeout_ms",
-		"max_retries":              "mcp.max_retries",
+		"temperature":        "agent.temperature",
+		"max_tokens":         "agent.max_tokens",
+		"maxTokens":          "agent.max_tokens",
+		"max_context_tokens": "agent.max_context_tokens",
+		"max_iterations":     "agent.max_iterations",
+		"model":              "agent.model",
+		"bindings":           "agent.bindings",
+		"top_k":              "rag.top_k",
+		"score_threshold":    "rag.score_threshold",
+		"reranking":          "rag.reranking",
+		"query_rewrite":      "rag.query_rewrite",
+		"enabled_tools":      "mcp.enabled_tools",
+		"timeout_ms":         "mcp.timeout_ms",
+		"max_retries":        "mcp.max_retries",
 	} {
 		if !r.IsEvaluationKey(bare) {
 			t.Errorf("bare key %q must be registered", bare)
@@ -258,8 +250,6 @@ func TestParameterDefinitionValidateAndNormalize(t *testing.T) {
 		{name: "bool", key: "rag.reranking", value: true, wantOK: true, wantVal: true},
 		{name: "bool wrong type", key: "rag.reranking", value: "yes", wantOK: false},
 		{name: "string", key: "agent.model", value: "qwen-plus", wantOK: true},
-		{name: "compaction select option", key: "agent.compaction_recent_groups", value: 3, wantOK: true, wantVal: int64(3)},
-		{name: "compaction non-option int", key: "agent.compaction_recent_groups", value: 4, wantOK: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

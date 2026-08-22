@@ -145,18 +145,17 @@ func (a agentEvaluationAdapter) ApplyPublishedRevision(
 	}
 	// Preserve every field except those the optimization pipeline is authorized to change.
 	_, err = a.agentUpdater.Update(ctx, agentID, agentapp.UpdateAgentInput{
-		ActorID:                evaluationWorker,
-		Name:                   existing.Name,
-		Type:                   existing.Type,
-		Description:            existing.Description,
-		SystemPrompt:           snapshot.SystemPrompt,
-		LLMModel:               snapshot.Model,
-		MaxIterations:          snapshot.MaxIterations,
-		MaxContextTokens:       snapshot.ModelParameters.MaxContextTokens,
-		Temperature:            snapshot.ModelParameters.Temperature,
-		ReasoningEffort:        snapshot.ModelParameters.ReasoningEffort,
-		MaxTokens:              snapshot.ModelParameters.MaxTokens,
-		CompactionRecentGroups: snapshot.ModelParameters.CompactionRecentGroups,
+		ActorID:          evaluationWorker,
+		Name:             existing.Name,
+		Type:             existing.Type,
+		Description:      existing.Description,
+		SystemPrompt:     snapshot.SystemPrompt,
+		LLMModel:         snapshot.Model,
+		MaxIterations:    snapshot.MaxIterations,
+		MaxContextTokens: snapshot.ModelParameters.MaxContextTokens,
+		Temperature:      snapshot.ModelParameters.Temperature,
+		ReasoningEffort:  snapshot.ModelParameters.ReasoningEffort,
+		MaxTokens:        snapshot.ModelParameters.MaxTokens,
 		// promote 写回 = 整体替换:零值采样参数必须以 JSONB null 清除旧值,
 		// 与表单路径的 merge 语义(零值不落库)区分。
 		ReplaceParameters:     true,
@@ -380,7 +379,7 @@ func parseAgentCandidatePatch(
 	for key, value := range patch.ParameterPatch {
 		switch key {
 		case "model", "max_context_tokens", "temperature", "max_tokens",
-			"compaction_recent_groups", "reasoning_effort":
+			"reasoning_effort":
 			model, changed, err := parseModelParameterPatch(key, value, &params)
 			if err != nil {
 				return result, err
@@ -474,12 +473,6 @@ func applyModelNumericPatch(key string, value any, params *agentdomain.ModelPara
 			return nil
 		}, "max_tokens")
 		return "", changed, err
-	case "compaction_recent_groups":
-		changed, err := applyNumericPatch(key, value, parseInteger, func(v any) error {
-			params.CompactionRecentGroups = v.(int)
-			return nil
-		}, "compaction_recent_groups")
-		return "", changed, err
 	}
 	return "", false, nil
 }
@@ -523,8 +516,6 @@ func validateParameterRange(key string, parsed any) error {
 	case "max_tokens":
 		return validateIntRange(key, parsed.(int),
 			constants.TunableMaxTokensMin, constants.TunableMaxTokensMax)
-	case "compaction_recent_groups":
-		return validateDiscrete(key, parsed.(int), 0, 2, 3, 5)
 	}
 	return nil
 }
@@ -541,15 +532,6 @@ func validateFloatRange(key string, v, min, max float64) error {
 		return fmt.Errorf("evaluation Agent adapter: %s must be in [%v, %v]", key, min, max)
 	}
 	return nil
-}
-
-func validateDiscrete(key string, v int, allowed ...int) error {
-	for _, a := range allowed {
-		if v == a {
-			return nil
-		}
-	}
-	return fmt.Errorf("evaluation Agent adapter: %s must be one of %v", key, allowed)
 }
 
 func bindingPatch(value any) ([]agentdomain.AgentBinding, error) {

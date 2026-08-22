@@ -217,20 +217,6 @@ func (r *ParametersRegistry) registerAgentParams() {
 			EvaluationKeys: []string{"model"},
 		},
 		{
-			Key: "agent.compaction_recent_groups", Scope: ScopeResource, Category: "agent",
-			DisplayName: "压缩最近组数", Description: "循环内压缩的 recent groups,0 表示从 MaxContextTokens 自动推导",
-			ValueType: TypeInt, Default: int64(0),
-			VisualHint:  VisualHint{Control: ControlSelect, Options: []any{int64(0), int64(2), int64(3), int64(5)}},
-			Optimizable: true, EvaluationKeys: []string{"compaction_recent_groups"},
-		},
-		{
-			Key: "agent.compaction_cooldown_sec", Scope: ScopeResource, Category: "agent",
-			DisplayName: "压缩冷却(秒)", Description: "压缩触发后的冷却窗口,0 表示默认常量",
-			ValueType: TypeInt, Default: int64(0),
-			VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(120), Step: f(5), Unit: "s"},
-			Optimizable: false,
-		},
-		{
 			Key: "agent.max_tokens_per_execution", Scope: ScopeResource, Category: "agent",
 			DisplayName: "单次执行 Token 预算", Description: "本次执行累计 LLM token 上限,0 表示不设限",
 			ValueType: TypeInt, Default: int64(0),
@@ -251,10 +237,11 @@ func (r *ParametersRegistry) registerAgentParams() {
 }
 
 // registerAgentPlatformParams covers platform-scope agent compaction config.
-// 压缩三值（提示词/温度/模型）是唯一平台来源：所有 agent（含内置助手）主链路
-// 统一从这里读取，agent 资源不再保存/暴露 per-agent 副本——一套存储模型、
-// 一套共用配置。prompt 未配置即压缩失败（fail-closed，对齐 memory.*_prompt）；
-// temperature 0 = 默认常量；model 空 = 网关默认模型。
+// 压缩五值（提示词/温度/模型/最近组数/冷却）是唯一平台来源：所有 agent（含
+// 内置助手）主链路统一从这里读取，agent 资源不再保存/暴露 per-agent 副本——
+// 一套存储模型、一套共用配置。prompt 未配置即压缩失败（fail-closed，对齐
+// memory.*_prompt）；temperature 0 = 默认常量；model 空 = 网关默认模型；
+// recent_groups 0 = 按上下文窗口自动推导；cooldown 0 = 默认常量。
 func (r *ParametersRegistry) registerAgentPlatformParams() {
 	f := func(v float64) *float64 { return &v }
 	for _, def := range []ParameterDefinition{
@@ -277,6 +264,20 @@ func (r *ParametersRegistry) registerAgentPlatformParams() {
 			DisplayName: "压缩模型", Description: "上下文压缩使用的独立模型(模型管理目录选择),空表示网关默认",
 			ValueType: TypeString, Default: "",
 			VisualHint:  VisualHint{Control: ControlModel},
+			Optimizable: false,
+		},
+		{
+			Key: "agent.compaction_recent_groups", Scope: ScopePlatform, Category: "agent",
+			DisplayName: "压缩最近轮数", Description: "循环内压缩保留的最近组数,0 表示按上下文窗口自动推导",
+			ValueType: TypeInt, Default: int64(0),
+			VisualHint:  VisualHint{Control: ControlSelect, Options: []any{int64(0), int64(2), int64(3), int64(5)}},
+			Optimizable: false,
+		},
+		{
+			Key: "agent.compaction_cooldown_sec", Scope: ScopePlatform, Category: "agent",
+			DisplayName: "压缩冷却(秒)", Description: "压缩触发后的冷却窗口,0 表示默认常量",
+			ValueType: TypeInt, Default: int64(0),
+			VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(120), Step: f(5), Unit: "s"},
 			Optimizable: false,
 		},
 		{

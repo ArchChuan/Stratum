@@ -94,12 +94,6 @@ func TestAgentRevisionValidatesModelParameters(t *testing.T) {
 		{name: "temperature above max rejected", params: ModelParameters{Temperature: 1.1}, wantErr: true},
 		{name: "max_tokens below zero rejected", params: ModelParameters{MaxTokens: -1}, wantErr: true},
 		{name: "max_tokens above max rejected", params: ModelParameters{MaxTokens: 131073}, wantErr: true},
-		{name: "compaction recent groups at 0 auto", params: ModelParameters{CompactionRecentGroups: 0}},
-		{name: "compaction recent groups 2", params: ModelParameters{CompactionRecentGroups: 2}},
-		{name: "compaction recent groups 3", params: ModelParameters{CompactionRecentGroups: 3}},
-		{name: "compaction recent groups 5", params: ModelParameters{CompactionRecentGroups: 5}},
-		{name: "compaction recent groups 1 rejected", params: ModelParameters{CompactionRecentGroups: 1}, wantErr: true},
-		{name: "compaction recent groups 4 rejected", params: ModelParameters{CompactionRecentGroups: 4}, wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
