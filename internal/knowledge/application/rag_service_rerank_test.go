@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
@@ -329,5 +331,163 @@ func TestRAGQueryHybridExternalRerankWidensBothLegs(t *testing.T) {
 	}
 	if len(got.Sources) != 1 {
 		t.Fatalf("hybrid rerank must narrow to TopN: %+v", got.Sources)
+	}
+}
+
+func TestRAGQueryBuiltinSemanticRerankRescores(t *testing.T) {
+	vectors := NewMockVectorStore()
+	vectors.SetSearchResults([]knowledgeport.VectorSearchResult{
+		{ID: "chunk-a", SourceDocument: "doc-a", Content: "a", Score: 0.9},
+		{ID: "chunk-b", SourceDocument: "doc-b", Content: "b", Score: 0.1},
+		{ID: "chunk-c", SourceDocument: "doc-c", Content: "c", Score: 0.5},
+	})
+	reranker := &fakeReranker{results: []knowledgeport.RerankResult{
+		{Index: 2, Score: 0.9}, {Index: 0, Score: 0.5}, {Index: 1, Score: 0.2},
+	}}
+	service := vectorRAGService(vectors)
+	service.SetSemanticReranker(reranker, 10)
+
+	got, err := service.Query(context.Background(), RAGQueryRequest{
+		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
+		ViewerID: "test-user",
+		TopK:     3, EmbeddingModel: "embedding-3", Reranking: "builtin-score-v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reranker.calls != 1 {
+		t.Fatalf("semantic rerank calls=%d, want 1", reranker.calls)
+	}
+	if reranker.lastReq.Model != "" {
+		t.Fatalf("semantic rerank must pass empty model sentinel, got %q", reranker.lastReq.Model)
+	}
+	if len(reranker.lastReq.Documents) != 3 || reranker.lastReq.TopN != 3 {
+		t.Fatalf("semantic rerank must score the whole pool: %+v", reranker.lastReq)
+	}
+	// LLM 分数覆盖召回分数，结果按 LLM 分数降序。
+	if len(got.Sources) != 3 || got.Sources[0].ChunkID != "chunk-c" || got.Sources[0].Score != 0.9 ||
+		got.Sources[1].ChunkID != "chunk-a" || got.Sources[1].Score != 0.5 ||
+		got.Sources[2].ChunkID != "chunk-b" || got.Sources[2].Score != 0.2 {
+		t.Fatalf("sources=%+v", got.Sources)
+	}
+}
+
+func TestRAGQueryBuiltinSemanticRerankFailsOpenOnError(t *testing.T) {
+	vectors := NewMockVectorStore()
+	vectors.SetSearchResults([]knowledgeport.VectorSearchResult{
+		{ID: "chunk-a", SourceDocument: "doc-a", Content: "a", Score: 0.1},
+		{ID: "chunk-b", SourceDocument: "doc-b", Content: "b", Score: 0.05},
+		{ID: "chunk-c", SourceDocument: "doc-c", Content: "c", Score: 0.2},
+	})
+	reranker := &fakeReranker{err: errors.New("llm down")}
+	metrics := &rerankMetrics{}
+	service := vectorRAGService(vectors)
+	service.SetSemanticReranker(reranker, 10)
+	service.SetMetrics(metrics)
+
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	got, err := service.Query(ctx, RAGQueryRequest{
+		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
+		ViewerID: "test-user",
+		TopK:     3, EmbeddingModel: "embedding-3", Reranking: "builtin-score-v1",
+	})
+	if err != nil {
+		t.Fatalf("rerank failure must not fail the query: %v", err)
+	}
+	// fail-open：保持召回分数排序（chunk-b 的 L2 最小 → 相似度最高）。
+	if len(got.Sources) != 3 || got.Sources[0].ChunkID != "chunk-b" || got.Sources[0].Score != l2ToSim(0.05) {
+		t.Fatalf("fallback must keep recall-score ordering: %+v", got.Sources)
+	}
+	if len(metrics.requests) != 1 || metrics.requests[0] != "tenant-1:builtin-llm:degraded" {
+		t.Fatalf("metrics=%v", metrics.requests)
+	}
+}
+
+func TestRAGQueryBuiltinSemanticRerankSkipsTinyPool(t *testing.T) {
+	vectors := NewMockVectorStore()
+	vectors.SetSearchResults([]knowledgeport.VectorSearchResult{
+		{ID: "chunk-a", SourceDocument: "doc-a", Content: "a", Score: 0.5},
+	})
+	reranker := &fakeReranker{}
+	service := vectorRAGService(vectors)
+	service.SetSemanticReranker(reranker, 10)
+
+	got, err := service.Query(context.Background(), RAGQueryRequest{
+		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
+		ViewerID: "test-user",
+		TopK:     1, EmbeddingModel: "embedding-3", Reranking: "builtin-score-v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reranker.calls != 0 {
+		t.Fatal("single-candidate pool must skip the LLM call")
+	}
+	if len(got.Sources) != 1 || got.Sources[0].ChunkID != "chunk-a" {
+		t.Fatalf("skipped rerank keeps retrieval order: %+v", got.Sources)
+	}
+}
+
+func TestRerankSemanticNarrowsToTopN(t *testing.T) {
+	pool := make([]Source, 0, 20)
+	for i := 0; i < 20; i++ {
+		pool = append(pool, Source{
+			DocumentID: "doc", ChunkID: fmt.Sprintf("chunk-%02d", i),
+			Content: fmt.Sprintf("content %d", i), Score: float32(20 - i),
+		})
+	}
+	reranker := &fakeReranker{results: []knowledgeport.RerankResult{
+		{Index: 0, Score: 1.0}, {Index: 1, Score: 0.9}, {Index: 2, Score: 0.8},
+	}}
+	service := vectorRAGService(nil)
+	service.SetSemanticReranker(reranker, 5)
+
+	narrowed, err := service.rerankSemantic(context.Background(), RAGQueryRequest{Question: "q"}, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 池 20 条 > semanticTopN 5 → 只精排召回分前 5；返回 5 条。
+	if reranker.calls != 1 || len(reranker.lastReq.Documents) != 5 || reranker.lastReq.TopN != 5 {
+		t.Fatalf("semantic rerank must score the top-5 recall candidates: %+v", reranker.lastReq)
+	}
+	if len(narrowed) != 5 {
+		t.Fatalf("narrowed pool = %d, want 5", len(narrowed))
+	}
+	if narrowed[0].ChunkID != "chunk-00" || narrowed[0].Score != 1.0 {
+		t.Fatalf("LLM rescored candidate first: %+v", narrowed[0])
+	}
+}
+
+func TestRAGQueryBuiltinSemanticRerankPartialTailFill(t *testing.T) {
+	vectors := NewMockVectorStore()
+	vectors.SetSearchResults([]knowledgeport.VectorSearchResult{
+		{ID: "chunk-a", SourceDocument: "doc-a", Content: "a", Score: 0.8},
+		{ID: "chunk-b", SourceDocument: "doc-b", Content: "b", Score: 0.7},
+		{ID: "chunk-c", SourceDocument: "doc-c", Content: "c", Score: 0.6},
+	})
+	reranker := &fakeReranker{results: []knowledgeport.RerankResult{
+		{Index: 2, Score: 0.9}, // LLM 只返回第 3 条
+	}}
+	service := vectorRAGService(vectors)
+	service.SetSemanticReranker(reranker, 10)
+
+	got, err := service.Query(context.Background(), RAGQueryRequest{
+		TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
+		ViewerID: "test-user",
+		TopK:     3, EmbeddingModel: "embedding-3", Reranking: "builtin-score-v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// LLM 只给 chunk-c 0.9；chunk-a/b 未被打分，按召回分（L2 0.8/0.7→sim）补尾。
+	if len(got.Sources) != 3 {
+		t.Fatalf("sources=%+v", got.Sources)
+	}
+	if got.Sources[0].ChunkID != "chunk-c" || got.Sources[0].Score != 0.9 {
+		t.Fatalf("LLM-scored candidate must sort first, got %+v", got.Sources[0])
+	}
+	if got.Sources[1].ChunkID != "chunk-b" || got.Sources[1].Score != l2ToSim(0.7) ||
+		got.Sources[2].ChunkID != "chunk-a" || got.Sources[2].Score != l2ToSim(0.8) {
+		t.Fatalf("tail-filled candidates keep recall scores, got %+v", got.Sources[1:])
 	}
 }
