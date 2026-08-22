@@ -29,4 +29,24 @@ describe('ParameterControl', () => {
     render(<ParameterControl def={embeddingDef()} />);
     expect(screen.getByRole('combobox')).toBeTruthy();
   });
+
+  it('renders a model directory combobox for model hint (extraction/reflection models)', () => {
+    render(
+      <ParameterControl
+        def={{
+          key: 'memory.extraction_model',
+          scope: 'platform',
+          category: '记忆',
+          display_name: '提取模型',
+          value_type: 'string',
+          default: '',
+          description: '',
+          optimizable: false,
+          sensitive: false,
+          visual_hint: { control: 'model' },
+        }}
+      />,
+    );
+    expect(screen.getByRole('combobox')).toBeTruthy();
+  });
 });

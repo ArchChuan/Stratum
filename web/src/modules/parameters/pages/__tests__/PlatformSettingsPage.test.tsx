@@ -68,8 +68,12 @@ const defs = (): ParameterDefinition[] => [
   },
 ];
 
+const clickTab = (name: string) => {
+  fireEvent.click(screen.getByRole('tab', { name }));
+};
+
 describe('PlatformSettingsPage', () => {
-  it('populates loaded platform values into editable fields', async () => {
+  it('groups platform params into domain tabs and populates loaded values', async () => {
     vi.mocked(parametersApi.schema).mockResolvedValue(defs());
     // 平台值必须回填到控件：这是"刷新后编辑参数变空"类回归的防线。
     vi.mocked(parametersApi.list).mockResolvedValue({
@@ -80,11 +84,14 @@ describe('PlatformSettingsPage', () => {
 
     render(<PlatformSettingsPage />);
 
+    expect(await screen.findByRole('tab', { name: '记忆' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '评测' })).toBeInTheDocument();
+    // 默认激活第一个领域 tab,加载值回填到控件。
     expect(await screen.findByDisplayValue('平台级富化提示词')).toBeInTheDocument();
     expect(screen.getByDisplayValue('平台级取代提示词')).toBeInTheDocument();
   });
 
-  it('separates global parameters from resource defaults and excludes unsupported resource keys', async () => {
+  it('never renders resource defaults: resource-scope keys belong to the resource layer', async () => {
     vi.mocked(parametersApi.schema).mockResolvedValue([
       ...defs(),
       {
@@ -128,26 +135,29 @@ describe('PlatformSettingsPage', () => {
 
     render(<PlatformSettingsPage />);
 
-    expect(await screen.findByText('全局参数')).toBeInTheDocument();
-    expect(screen.getByText('资源默认值')).toBeInTheDocument();
-    expect(screen.getByText('Agent 温度')).toBeInTheDocument();
-    expect(screen.getByText('会影响所有未单独配置的 Agent')).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: '记忆' })).toBeInTheDocument();
+    expect(screen.queryByText('资源默认值')).not.toBeInTheDocument();
+    expect(screen.queryByText('Agent 温度')).not.toBeInTheDocument();
     expect(screen.queryByText('废弃记忆参数')).not.toBeInTheDocument();
     expect(screen.queryByText('Agent 绑定')).not.toBeInTheDocument();
+    expect(screen.queryByText('会影响所有未单独配置的 Agent')).not.toBeInTheDocument();
   });
 
-  it('shows 默认：0（未设置） for a missing key with 0 default, and no hint for set keys', async () => {
+  it('shows per-tab default hints for missing keys and hides hints for set keys', async () => {
     vi.mocked(parametersApi.schema).mockResolvedValue(defs());
     // 非 0 默认键被后端回填(已设置),0 默认键缺失
     vi.mocked(parametersApi.list).mockResolvedValue({ 'memory.enrich_temperature': 0.9 });
 
     render(<PlatformSettingsPage />);
 
-    expect(await screen.findByText('评测温度')).toBeInTheDocument();
-    expect(screen.getByText('默认：0（未设置）')).toBeInTheDocument();
+    expect(await screen.findByText('记忆丰富温度')).toBeInTheDocument();
     // List 回填后 hint 消失：antd Form setFieldsValue 的 watch 更新可能滞后
     // 于 schema 渲染一帧（慢机器上明显），同步 queryByText 会命中中间帧。
     await waitFor(() => expect(screen.queryByText('默认：0.1')).not.toBeInTheDocument());
+
+    clickTab('评测');
+    expect(screen.getByText('评测温度')).toBeInTheDocument();
+    expect(screen.getByText('默认：0（未设置）')).toBeInTheDocument();
   });
 
   it('shows the non-zero default hint when the key is missing entirely', async () => {
@@ -157,6 +167,7 @@ describe('PlatformSettingsPage', () => {
     render(<PlatformSettingsPage />);
 
     expect(await screen.findByText('默认：0.1')).toBeInTheDocument();
+    clickTab('评测');
     expect(screen.getByText('默认：0（未设置）')).toBeInTheDocument();
   });
 
@@ -191,10 +202,45 @@ describe('PlatformSettingsPage', () => {
 
     render(<PlatformSettingsPage />);
 
-    expect(await screen.findByText('RAG 开关')).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: '其他' })).toBeInTheDocument();
+    expect(screen.getByText('RAG 开关')).toBeInTheDocument();
     // toggle 恒被 List 返回,无缺失场景,不渲染 hint(副标题含"未设置"文案,故精确匹配 hint 文本)
     expect(screen.queryByText('默认：', { exact: false })).not.toBeInTheDocument();
     expect(screen.queryByText('未设置（使用定义默认）')).not.toBeInTheDocument();
+  });
+
+  it('saves only the active tab keys (per-domain independent save)', async () => {
+    vi.mocked(parametersApi.schema).mockResolvedValue(defs());
+    vi.mocked(parametersApi.list).mockResolvedValue({
+      'memory.enrich_temperature': 0.9,
+      'evaluation.judge.temperature': 0.5,
+    });
+    vi.mocked(parametersApi.update).mockResolvedValue({});
+
+    render(<PlatformSettingsPage />);
+    await screen.findByText('记忆丰富温度');
+
+    fireEvent.click(screen.getByRole('button', { name: '保存记忆参数' }));
+    await waitFor(() =>
+      expect(parametersApi.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({ 'memory.enrich_temperature': 0.9 }),
+      ),
+    );
+    // 记忆 tab 保存只提交记忆领域 key,不包含评测 key。
+    const memoryCalls = vi.mocked(parametersApi.update).mock.calls;
+    const memoryCall = memoryCalls[memoryCalls.length - 1][0] as Record<string, unknown>;
+    expect(Object.keys(memoryCall).every((k) => k.startsWith('memory.'))).toBe(true);
+
+    clickTab('评测');
+    fireEvent.click(screen.getByRole('button', { name: '保存评测参数' }));
+    await waitFor(() =>
+      expect(parametersApi.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({ 'evaluation.judge.temperature': 0.5 }),
+      ),
+    );
+    const evalCalls = vi.mocked(parametersApi.update).mock.calls;
+    const evalCall = evalCalls[evalCalls.length - 1][0] as Record<string, unknown>;
+    expect(Object.keys(evalCall).every((k) => k.startsWith('evaluation.'))).toBe(true);
   });
 
   it('submits only keys present in the form (zero write-back for unset keys)', async () => {
@@ -203,9 +249,9 @@ describe('PlatformSettingsPage', () => {
     vi.mocked(parametersApi.update).mockResolvedValue({});
 
     render(<PlatformSettingsPage />);
-    await screen.findByText('评测温度');
+    await screen.findByText('记忆丰富温度');
 
-    fireEvent.click(screen.getByRole('button', { name: '保存平台参数' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存记忆参数' }));
 
     await waitFor(() => expect(parametersApi.update).toHaveBeenCalledWith({}));
   });
@@ -216,9 +262,9 @@ describe('PlatformSettingsPage', () => {
 
     render(<PlatformSettingsPage />);
 
-    // 只渲染明确加载态，不出现"保存平台参数"等半成品展示页元素。
+    // 只渲染明确加载态，不出现"保存X参数"等半成品展示页元素。
     expect(document.querySelector('.ant-skeleton')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: '保存平台参数' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '保存记忆参数' })).not.toBeInTheDocument();
   });
 
   it('submits empty embedding_model value to clear it back to unset (fail-closed)', async () => {
@@ -245,7 +291,7 @@ describe('PlatformSettingsPage', () => {
     render(<PlatformSettingsPage />);
     await screen.findByText('记忆嵌入模型');
 
-    fireEvent.click(screen.getByRole('button', { name: '保存平台参数' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存记忆参数' }));
 
     await waitFor(() =>
       expect(parametersApi.update).toHaveBeenCalledWith(

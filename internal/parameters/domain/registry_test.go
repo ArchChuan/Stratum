@@ -179,6 +179,18 @@ func TestRegistryAgentMemoryParams(t *testing.T) {
 		}
 	}
 
+	// 提取/反思模型:模型目录选择器(ControlModel),下拉数据来自模型管理;
+	// 不得用无 options 的 select(空下拉 bug 回归)。
+	for _, key := range []string{"memory.extraction_model", "memory.reflection_model"} {
+		def, ok := r.Get(key)
+		if !ok {
+			t.Fatalf("%s not registered", key)
+		}
+		if def.VisualHint.Control != ControlModel {
+			t.Errorf("%s control = %q, want model picker (ControlModel)", key, def.VisualHint.Control)
+		}
+	}
+
 	// 记忆数值参数:ScopePlatform（平台参数页编辑,0=unset 回落定义默认）。
 	for _, key := range []string{
 		"memory.recall_top_k", "memory.fact_injection_top_n",

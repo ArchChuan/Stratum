@@ -43,6 +43,21 @@ func TestAgentLLMAdapterMapsTextAndToolCalls(t *testing.T) {
 	}
 }
 
+// TestTemperaturePtrOrNilRoundsToTwoDecimals 回归 Agent ReAct 主链路温度泄漏：
+// float64(float32(0.7)) 直转变成 0.699999988079071，智谱等端点校验小数位返回
+// 400；0 = unset → nil（网关按模型权威数据注入默认）。
+func TestTemperaturePtrOrNilRoundsToTwoDecimals(t *testing.T) {
+	if got := temperaturePtrOrNil(0.7); got == nil || *got != 0.7 {
+		t.Fatalf("temperaturePtrOrNil(0.7) = %v, want 0.7 (2 位小数)", got)
+	}
+	if got := temperaturePtrOrNil(0.1); got == nil || *got != 0.1 {
+		t.Fatalf("temperaturePtrOrNil(0.1) = %v, want 0.1", got)
+	}
+	if got := temperaturePtrOrNil(0); got != nil {
+		t.Fatalf("temperaturePtrOrNil(0) = %v, want nil (unset)", got)
+	}
+}
+
 func TestAgentLLMAdapterPropagatesProviderError(t *testing.T) {
 	_, err := newAgentLLMAdapter(agentLLMStub{err: errors.New("upstream down")}).Route(context.Background(), agentport.CapabilityRequest{
 		Type: agentport.CapLLM, LLM: &agentport.LLMCapRequest{},

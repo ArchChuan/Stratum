@@ -70,13 +70,12 @@ func buildAgentLLMRequest(req *agentport.LLMCapRequest) *llmdomain.CompletionReq
 
 // temperaturePtrOrNil 把 agent 的 float32 温度转成 *float64：0 = unset → nil
 // （agent 语义，见 domain AgentConfig.Temperature 注释），让网关按模型权威
-// 数据注入默认；非 0 → 显式值。
+// 数据注入默认；非 0 → 显式值（2 位小数舍入）。必须复用
+// llmgateway.PlatformTemperaturePtr：float64(float32(0.7)) 直转会变成
+// 0.699999988079071，触发智谱等端点的小数位校验 400（Agent ReAct 主链路
+// 与 evaluation judge 均经本函数）。
 func temperaturePtrOrNil(v float32) *float64 {
-	if v == 0 {
-		return nil
-	}
-	f := float64(v)
-	return &f
+	return llmdomain.PlatformTemperaturePtr(v)
 }
 
 func buildAgentCapabilityResponse(traceID string, raw *llmdomain.CompletionResponse, duration time.Duration) agentport.CapabilityResponse {

@@ -36,55 +36,56 @@ func newTestStore() *memStore {
 	return &memStore{values: make(map[string]json.RawMessage)}
 }
 
-func TestResolverTwoLevelFallback(t *testing.T) {
+func TestResolverPlatformTwoLevelFallback(t *testing.T) {
 	registry := domain.NewParametersRegistry()
 	store := newTestStore()
-	// 平台默认:temperature=0.9(定义默认 0.7)
-	store.values["agent.temperature"] = json.RawMessage(`0.9`)
+	// 平台级 key:存储值 → 定义默认两级兜底(全局参数契约)。
+	store.values["memory.recall_top_k"] = json.RawMessage(`9`)
+	store.values["agent.factcheck.top_k"] = json.RawMessage(`6`)
 	resolver := NewResolver(registry, store)
 
-	t.Run("declared wins over platform default", func(t *testing.T) {
-		value, present, err := resolver.Resolve(context.Background(), "agent.temperature", map[string]any{"agent.temperature": 0.3})
+	t.Run("declared wins over stored platform value", func(t *testing.T) {
+		value, present, err := resolver.Resolve(context.Background(), "memory.recall_top_k", map[string]any{"memory.recall_top_k": 3})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !present || value != 0.3 {
-			t.Fatalf("got (%v, %v), want (0.3, true)", value, present)
+		if !present || value != int64(3) {
+			t.Fatalf("got (%v, %v), want (3, true)", value, present)
 		}
 	})
 
-	t.Run("platform default applies when declared absent", func(t *testing.T) {
-		value, present, err := resolver.Resolve(context.Background(), "agent.temperature", nil)
+	t.Run("stored platform value applies when declared absent", func(t *testing.T) {
+		value, present, err := resolver.Resolve(context.Background(), "memory.recall_top_k", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !present || value != 0.9 {
-			t.Fatalf("got (%v, %v), want (0.9, true)", value, present)
+		if !present || value != int64(9) {
+			t.Fatalf("got (%v, %v), want (9, true)", value, present)
 		}
 	})
 
 	t.Run("definition default applies when both tiers unset", func(t *testing.T) {
-		value, present, err := resolver.Resolve(context.Background(), "agent.max_iterations", nil)
+		value, present, err := resolver.Resolve(context.Background(), "memory.fact_injection_top_n", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !present || value != int64(10) {
-			t.Fatalf("got (%v, %v), want (10, true)", value, present)
+		if !present || value != int64(8) {
+			t.Fatalf("got (%v, %v), want (8, true)", value, present)
 		}
 	})
 
-	t.Run("declared zero is unset, falls to platform default", func(t *testing.T) {
-		value, present, err := resolver.Resolve(context.Background(), "agent.temperature", map[string]any{"agent.temperature": 0})
+	t.Run("declared zero is unset, falls to stored platform value", func(t *testing.T) {
+		value, present, err := resolver.Resolve(context.Background(), "agent.factcheck.top_k", map[string]any{"agent.factcheck.top_k": 0})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !present || value != 0.9 {
-			t.Fatalf("got (%v, %v), want (0.9, true): explicit 0 == unset", value, present)
+		if !present || value != int64(6) {
+			t.Fatalf("got (%v, %v), want (6, true): explicit 0 == unset", value, present)
 		}
 	})
 
 	t.Run("zero default resolves to unset", func(t *testing.T) {
-		value, present, err := resolver.Resolve(context.Background(), "agent.max_tokens", nil)
+		value, present, err := resolver.Resolve(context.Background(), "evaluation.judge.temperature", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -100,7 +101,55 @@ func TestResolverTwoLevelFallback(t *testing.T) {
 	})
 }
 
-func TestResolverResolveForResource(t *testing.T) {
+func TestResolverResourceDeclaredOnly(t *testing.T) {
+	registry := domain.NewParametersRegistry()
+	store := newTestStore()
+	// 平台存储里残留的资源级值必须被忽略:资源默认值已下线,资源配置只在资源层。
+	store.values["agent.temperature"] = json.RawMessage(`0.9`)
+	resolver := NewResolver(registry, store)
+
+	t.Run("declared value resolves", func(t *testing.T) {
+		value, present, err := resolver.Resolve(context.Background(), "agent.temperature", map[string]any{"agent.temperature": 0.3})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !present || value != 0.3 {
+			t.Fatalf("got (%v, %v), want (0.3, true)", value, present)
+		}
+	})
+
+	t.Run("absent declared resolves to unset despite stored platform value", func(t *testing.T) {
+		value, present, err := resolver.Resolve(context.Background(), "agent.temperature", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if present || value != nil {
+			t.Fatalf("got (%v, %v), want (nil, false): no platform default for resource keys", value, present)
+		}
+	})
+
+	t.Run("definition default never applies", func(t *testing.T) {
+		value, present, err := resolver.Resolve(context.Background(), "agent.max_iterations", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if present || value != nil {
+			t.Fatalf("got (%v, %v), want (nil, false): definition default must not apply", value, present)
+		}
+	})
+
+	t.Run("declared zero is unset", func(t *testing.T) {
+		value, present, err := resolver.Resolve(context.Background(), "agent.temperature", map[string]any{"agent.temperature": 0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if present || value != nil {
+			t.Fatalf("got (%v, %v), want (nil, false): explicit 0 == unset", value, present)
+		}
+	})
+}
+
+func TestResolverResolveForResourceDeclaredOnly(t *testing.T) {
 	registry := domain.NewParametersRegistry()
 	store := newTestStore()
 	store.values["agent.temperature"] = json.RawMessage(`0.9`)
@@ -112,9 +161,9 @@ func TestResolverResolveForResource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// temperature 从平台默认 0.9;max_tokens 声明 2048;其余 0 默认的不出现。
-	if got := effective["agent.temperature"]; got != 0.9 {
-		t.Fatalf("temperature = %v, want 0.9", got)
+	// 只返回声明值:平台存储的 temperature 0.9 不再进入资源生效值。
+	if _, ok := effective["agent.temperature"]; ok {
+		t.Fatal("platform-stored resource default must not be applied")
 	}
 	if got := effective["agent.max_tokens"]; got != int64(2048) {
 		t.Fatalf("max_tokens = %v, want 2048", got)
@@ -122,8 +171,8 @@ func TestResolverResolveForResource(t *testing.T) {
 	if _, ok := effective["agent.max_context_tokens"]; ok {
 		t.Fatal("0-default key must not appear in effective map")
 	}
-	if _, ok := effective["agent.max_iterations"]; !ok {
-		t.Fatal("non-zero default key must appear in effective map")
+	if _, ok := effective["agent.max_iterations"]; ok {
+		t.Fatal("definition default must not apply for resource keys")
 	}
 	if _, ok := effective["agent.bindings"]; ok {
 		t.Fatal("bindings has no default and must stay absent")
@@ -148,16 +197,18 @@ func TestServiceSetPlatformValues(t *testing.T) {
 		}
 	})
 
-	t.Run("sets resource-scope value as a platform default", func(t *testing.T) {
-		if err := svc.SetPlatformValues(
+	t.Run("rejects resource-scope value (no platform resource defaults)", func(t *testing.T) {
+		err := svc.SetPlatformValues(
 			context.Background(),
 			map[string]any{"agent.temperature": 0.3},
 			"admin-1",
-		); err != nil {
-			t.Fatal(err)
+		)
+		var invalid *domain.ErrInvalidParameter
+		if !domain.AsInvalidParameter(err, &invalid) {
+			t.Fatalf("want ErrInvalidParameter, got %v", err)
 		}
-		if got := string(store.values["agent.temperature"]); got != "0.3" {
-			t.Fatalf("stored resource default = %s, want 0.3", got)
+		if _, ok := store.values["agent.temperature"]; ok {
+			t.Fatal("resource-scope key must not be stored as a platform default")
 		}
 	})
 
@@ -209,7 +260,7 @@ func TestServicePlatformValuesMergesDefaults(t *testing.T) {
 	if got := values["evaluation.optimizer.model"]; got != "" {
 		t.Fatalf("default value = %v, want empty (model must resolve from catalog, no hardcoded fallback)", got)
 	}
-	if got := values["agent.temperature"]; got != 0.7 {
-		t.Fatalf("resource default = %v, want 0.7", got)
+	if _, ok := values["agent.temperature"]; ok {
+		t.Fatal("resource-scope key must not be returned by PlatformValues")
 	}
 }

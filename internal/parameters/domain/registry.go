@@ -528,9 +528,9 @@ func (r *ParametersRegistry) registerMemoryParams() {
 		},
 		{
 			Key: "memory.extraction_model", Scope: ScopePlatform, Category: "memory",
-			DisplayName: "提取模型", Description: "记忆抽取使用的独立模型,空表示 client 默认",
+			DisplayName: "提取模型", Description: "记忆抽取使用的独立模型(模型管理目录选择),空表示 client 默认",
 			ValueType: TypeString, Default: "",
-			VisualHint:  VisualHint{Control: ControlSelect},
+			VisualHint:  VisualHint{Control: ControlModel},
 			Optimizable: false,
 		},
 		{
@@ -545,9 +545,9 @@ func (r *ParametersRegistry) registerMemoryParams() {
 		},
 		{
 			Key: "memory.reflection_model", Scope: ScopePlatform, Category: "memory",
-			DisplayName: "反思模型", Description: "工具轨迹反思使用的独立模型,空表示 client 默认",
+			DisplayName: "反思模型", Description: "工具轨迹反思使用的独立模型(模型管理目录选择),空表示 client 默认",
 			ValueType: TypeString, Default: "",
-			VisualHint:  VisualHint{Control: ControlSelect},
+			VisualHint:  VisualHint{Control: ControlModel},
 			Optimizable: false,
 		},
 	} {
