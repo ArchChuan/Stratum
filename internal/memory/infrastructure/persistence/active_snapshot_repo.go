@@ -47,7 +47,7 @@ func (r *ActiveSnapshotRepo) Upsert(ctx context.Context, snapshot *domain.Active
 				status = EXCLUDED.status
 			WHERE EXCLUDED.updated_at > memory_active_snapshots.updated_at`,
 			snapshot.UserID, snapshot.AgentID, snapshot.WorkContext, snapshot.PersonalContext,
-			snapshot.TopOfMind, source, snapshot.ExpiresAt, snapshot.UpdatedAt, snapshot.Status)
+			snapshot.TopOfMind, string(source), snapshot.ExpiresAt, snapshot.UpdatedAt, snapshot.Status)
 		return err
 	})
 }

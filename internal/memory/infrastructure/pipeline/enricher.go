@@ -538,13 +538,7 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnri
 		return nil
 	}
 	prompt := formatSummaryPrompt(promptTmpl, input)
-	req := llmdomain.NewSummarizeRequest(settings.model, prompt, nil, 0)
-	// NewSummarizeRequest 内部固定 TaskSummarizeTemperature；平台配置的温度
-	// 在构造后覆盖（0 = 保留默认），支持超管运行态调整摘要温度。
-	if settings.temperature != 0 {
-		v := float64(settings.temperature)
-		req.Temperature = &v
-	}
+	req := newSummaryLLMRequest(settings, prompt)
 	llmCtx, cancel := context.WithTimeout(ctx, constants.MemorySummaryLLMTimeout)
 	defer cancel()
 	resp, err := llm.Complete(llmCtx, req)
@@ -564,6 +558,16 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnri
 		zap.Int("token_budget", accumulated),
 		zap.Int("summary_length", len(summary)))
 	return nil
+}
+
+// newSummaryLLMRequest 构造会话摘要 LLM 请求：平台配置的温度（memory.summary_temperature，
+// 0 = 保留默认）经 llmgateway.PlatformTemperaturePtr 统一舍入到 2 位小数。
+// 禁止 float64(float32) 直转覆盖 Temperature——会把 0.1 放大成 0.10000000149011612，
+// 触发智谱等端点的小数位校验 400（PR #441 修复后仍有两处覆盖点漏网）。
+func newSummaryLLMRequest(settings summarySettings, prompt string) *llmdomain.CompletionRequest {
+	req := llmdomain.NewSummarizeRequest(settings.model, prompt, nil, 0)
+	req.Temperature = llmdomain.PlatformTemperaturePtr(settings.temperature)
+	return req
 }
 
 // fetchSummaryInputs 在短事务里检查阈值并捞历史消息，立即释放事务后再去调 LLM。

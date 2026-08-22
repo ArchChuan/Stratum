@@ -63,11 +63,9 @@ func (s *LLMHistorySummarizer) SummarizeHistory(ctx context.Context, items []str
 	}
 	req := llmdomain.NewSummarizeRequest(model, prompt, items, 0)
 	// NewSummarizeRequest 内部固定 TaskSummarizeTemperature；平台配置的温度
-	// 在构造后覆盖（0 = 保留默认）。
-	if temperature != 0 {
-		v := float64(temperature)
-		req.Temperature = &v
-	}
+	// 在构造后覆盖（0 = 保留默认）。必须经 PlatformTemperaturePtr 舍入 2 位，
+	// float64(float32) 直转会把 0.1 放大成 0.10000000149011612，触发智谱 400。
+	req.Temperature = llmdomain.PlatformTemperaturePtr(temperature)
 	resp, err := client.Complete(ctx, req)
 	if err != nil {
 		return "", err

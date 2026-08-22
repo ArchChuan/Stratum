@@ -68,17 +68,17 @@ func TestNewSummarizeRequestNilItems(t *testing.T) {
 	}
 }
 
-// TestTemperaturePtrRoundsToTwoDecimals 防智谱等端点对温度 >2 位小数返回 400：
+// TestPlatformTemperaturePtrRoundsToTwoDecimals 防智谱等端点对温度 >2 位小数返回 400：
 // float32(0.1) 直转 float64 会变成 0.10000000149011612，必须舍入到 0.1。
-func TestTemperaturePtrRoundsToTwoDecimals(t *testing.T) {
-	if got := temperaturePtr(0.1); got == nil || *got != 0.1 {
-		t.Fatalf("temperaturePtr(0.1) = %v, want 0.1", got)
+func TestPlatformTemperaturePtrRoundsToTwoDecimals(t *testing.T) {
+	if got := PlatformTemperaturePtr(0.1); got == nil || *got != 0.1 {
+		t.Fatalf("PlatformTemperaturePtr(0.1) = %v, want 0.1", got)
 	}
-	if got := temperaturePtr(0); got != nil {
-		t.Fatalf("temperaturePtr(0) = %v, want nil (unset)", got)
+	if got := PlatformTemperaturePtr(0); got != nil {
+		t.Fatalf("PlatformTemperaturePtr(0) = %v, want nil (unset)", got)
 	}
-	if got := temperaturePtr(0.125); got == nil || *got != 0.13 {
-		t.Fatalf("temperaturePtr(0.125) = %v, want 0.13", got)
+	if got := PlatformTemperaturePtr(0.125); got == nil || *got != 0.13 {
+		t.Fatalf("PlatformTemperaturePtr(0.125) = %v, want 0.13", got)
 	}
 }
 
