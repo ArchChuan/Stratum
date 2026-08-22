@@ -9,6 +9,8 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // stubParametersProvider is a minimal ParametersProvider double: resolution
@@ -129,6 +131,52 @@ func TestResolveEffectiveParametersAllUnsetKeepsDefaults(t *testing.T) {
 
 	if cfg.Temperature != 0 || cfg.MaxTokens != 0 {
 		t.Errorf("expected all unset, got %+v", cfg)
+	}
+}
+
+func TestResolveEffectiveParametersWarnsWhenResourceParamsUnset(t *testing.T) {
+	// 资源参数未配置不再有平台默认兜底:必须打 WARN(带 agent_id 与 unset_keys),
+	// 执行仍按各参数文档规则落到网关/provider/常量默认。
+	core, logs := observer.New(zapcore.WarnLevel)
+	svc := NewAgentService(AgentServiceDeps{
+		ParametersProvider: stubParametersProvider{effective: map[string]any{}},
+		Logger:             zap.New(core),
+	})
+	agent := &testParamAgent{cfg: &domain.AgentConfig{ID: "agent-1"}}
+
+	svc.resolveEffectiveParameters(context.Background(), agent, nil)
+
+	var entry *observer.LoggedEntry
+	for i := range logs.All() {
+		cur := logs.All()[i]
+		if strings.Contains(cur.Message, "resource parameters unset") {
+			entry = &cur
+			break
+		}
+	}
+	if entry == nil {
+		t.Fatal("expected WARN log when resource parameters are unset")
+	}
+	if got := entry.ContextMap()["agent_id"]; got != "agent-1" {
+		t.Errorf("agent_id = %v, want agent-1", got)
+	}
+	raw, ok := entry.ContextMap()["unset_keys"]
+	if !ok {
+		t.Fatal("unset_keys field missing")
+	}
+	var keys []string
+	switch v := raw.(type) {
+	case []string:
+		keys = v
+	case []any:
+		for _, k := range v {
+			if s, ok := k.(string); ok {
+				keys = append(keys, s)
+			}
+		}
+	}
+	if len(keys) == 0 {
+		t.Fatal("unset_keys must list the unconfigured resource keys")
 	}
 }
 

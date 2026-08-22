@@ -22,7 +22,7 @@ export const parametersApi = {
     return (res.data ?? {}) as PlatformValues;
   },
 
-  /** PUT /admin/parameters — merge 写平台值；资源 scope 键作为平台默认值。 */
+  /** PUT /admin/parameters — merge 写平台值；仅平台 scope 键（资源级键后端拒绝）。 */
   update: (values: PlatformValues): Promise<PlatformValues> =>
     api.put('/admin/parameters', values),
 

@@ -12,8 +12,9 @@ import (
 
 // Service is the parameters application facade consumed by handlers and by
 // sibling contexts through the wiring ACL. It enforces per-key validation and
-// merge-write semantics. Platform values are global settings for platform-scope
-// keys and fallback defaults for resource-scope keys.
+// merge-write semantics. Platform values are global settings for
+// platform-scope keys only; resource-scope keys are configured at the
+// resource layer and rejected from platform writes.
 type Service struct {
 	registry *domain.ParametersRegistry
 	store    port.PlatformStore
@@ -66,9 +67,11 @@ func (s *Service) ValidateResourceValues(declared map[string]any) error {
 	return nil
 }
 
-// PlatformValues returns the current effective platform-layer values: stored
-// value when present, otherwise the definition default. Absent numeric-0
-// defaults are omitted so the frontend sees "unset".
+// PlatformValues returns the current effective platform-layer values for
+// platform-scope keys: stored value when present, otherwise the definition
+// default. Resource-scope keys are never returned — resources own their
+// required configuration and platform settings hold no resource defaults.
+// Absent numeric-0 defaults are omitted so the frontend sees "unset".
 func (s *Service) PlatformValues(ctx context.Context) (map[string]any, error) {
 	stored, err := s.store.GetAll(ctx)
 	if err != nil {
@@ -81,6 +84,9 @@ func (s *Service) PlatformValues(ctx context.Context) (map[string]any, error) {
 
 	out := make(map[string]any, len(s.registry.Schema()))
 	for _, def := range s.registry.Schema() {
+		if def.Scope != domain.ScopePlatform {
+			continue
+		}
 		if raw, ok := byKey[def.Key]; ok {
 			var value any
 			if err := json.Unmarshal(raw, &value); err != nil {
@@ -107,9 +113,10 @@ func (s *Service) PromptDefaults() map[string]string {
 
 // SetPlatformValues applies merge semantics: only keys present in input are
 // written (a legacy client PUT can never wipe stored values it does not
-// know). Every registered key must pass its definition's validation.
-// Resource-scope keys are stored as platform defaults and apply only when a
-// resource has no declared value. updatedBy is audited on every written row.
+// know). Every key must be platform-scope and pass its definition's
+// validation. Resource-scope keys are rejected fail-closed: resources
+// configure them at the resource layer, not as platform defaults. updatedBy
+// is audited on every written row.
 func (s *Service) SetPlatformValues(
 	ctx context.Context,
 	values map[string]any,
@@ -126,6 +133,15 @@ func (s *Service) SetPlatformValues(
 		def, ok := s.registry.Get(key)
 		if !ok {
 			return &domain.ErrInvalidParameter{Key: key, Err: fmt.Errorf("unknown parameter %s", key)}
+		}
+		if def.Scope != domain.ScopePlatform {
+			return &domain.ErrInvalidParameter{
+				Key: key,
+				Err: fmt.Errorf(
+					"parameter %s is %s-scope: resource parameters are configured at the resource layer, not as platform defaults",
+					key, def.Scope,
+				),
+			}
 		}
 		value, err := def.Normalize(rawValue)
 		if err != nil {
