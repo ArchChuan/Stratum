@@ -794,6 +794,7 @@ func TestValidateModelsInCatalogueChatModels(t *testing.T) {
 
 	t.Run("rerank_model 不在 chat 目录拒绝", func(t *testing.T) {
 		cfg := base
+		cfg.Reranking = RerankIdentityBuiltin
 		cfg.RerankModel = "qwen-max"
 		if err := svc.validateModelsInCatalogue(context.Background(), cfg); !errors.Is(err, domain.ErrInvalidRerankModel) {
 			t.Fatalf("err = %v, want ErrInvalidRerankModel", err)
@@ -808,10 +809,19 @@ func TestValidateModelsInCatalogueChatModels(t *testing.T) {
 	})
 	t.Run("chat 目录模型通过", func(t *testing.T) {
 		cfg := base
+		cfg.Reranking = RerankIdentityBuiltin
 		cfg.RerankModel = "qwen-turbo"
 		cfg.JudgeModel = "qwen-turbo"
 		if err := svc.validateModelsInCatalogue(context.Background(), cfg); err != nil {
 			t.Fatalf("err = %v, want nil", err)
+		}
+	})
+	t.Run("休眠 rerank_model 不校验（reranking 非 builtin）", func(t *testing.T) {
+		cfg := base
+		cfg.Reranking = ""
+		cfg.RerankModel = "qwen-max"
+		if err := svc.validateModelsInCatalogue(context.Background(), cfg); err != nil {
+			t.Fatalf("err = %v, want nil（休眠 rerank_model 不参与目录校验）", err)
 		}
 	})
 	t.Run("目录查询失败传播（5xx 而非 400）", func(t *testing.T) {

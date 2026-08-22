@@ -132,6 +132,14 @@ func (s *WorkspaceService) builtinRerankMissingModel(cfg domain.WorkspaceConfig)
 	return cfg.Reranking == "builtin-score-v1" && cfg.RerankModel == ""
 }
 
+// rerankModelRequiresCatalogueCheck 判定 rerank_model 是否需要目录校验。
+// spec §4.3：仅 reranking=builtin-score-v1 时校验；否则 rerank_model 是休眠字段，
+// 不参与校验、不要求存在（fail-open 降级）。拆成独立布尔方法以控制
+// validateModelsInCatalogue 的圈复杂度（同 builtinRerankMissingModel 模式）。
+func (s *WorkspaceService) rerankModelRequiresCatalogueCheck(cfg domain.WorkspaceConfig) bool {
+	return cfg.Reranking == RerankIdentityBuiltin && cfg.RerankModel != ""
+}
+
 // checkModelInCatalogue 对单个模型做目录存在性校验；目录查询失败传播包装错误
 // （fail-closed，5xx），仅 !ok 返回 400 配置错误（notFoundErr）。
 func (s *WorkspaceService) checkModelInCatalogue(ctx context.Context, model string, capability port.ModelCapability, wrapMsg string, notFoundErr error) error {
@@ -159,7 +167,8 @@ func (s *WorkspaceService) validateModelsInCatalogue(ctx context.Context, cfg do
 	}
 	// rerank/judge 模型必须是 enabled chat 目录中的模型（Global Constraint 5）。
 	// 目录查询失败传播包装错误（5xx），仅 !ok 返回 400 配置错误。
-	if cfg.RerankModel != "" {
+	// spec §4.3：仅 reranking=builtin 时校验 rerank_model，否则为休眠字段。
+	if s.rerankModelRequiresCatalogueCheck(cfg) {
 		if err := s.checkModelInCatalogue(ctx, cfg.RerankModel, port.CapChat, "knowledge workspace: check rerank model", domain.ErrInvalidRerankModel); err != nil {
 			return err
 		}
