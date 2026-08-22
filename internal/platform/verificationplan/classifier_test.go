@@ -99,6 +99,12 @@ func TestMatchingRulesPreservesManifestOrder(t *testing.T) {
 		MatchingRules(manifest, []string{"internal/iam/auth.go"}))
 	require.Empty(t, MatchingRules(manifest, []string{"internal/unknown/thing.go"}))
 	require.Empty(t, MatchingRules(manifest, nil))
+
+	// 回归:无规则命中必须返回空数组而非 nil——plan 的 JSON 序列化会把 nil
+	// 写成 null,违反 matched_rules 的 array schema,导致 make test-verify-before-pr
+	// 对不触及风险路径的改动(如纯参数定义)在计划校验阶段直接失败。
+	require.NotNil(t, MatchingRules(manifest, []string{"internal/unknown/thing.go"}))
+	require.NotNil(t, MatchingRules(manifest, nil))
 }
 
 func validAuthorityPolicy() string {

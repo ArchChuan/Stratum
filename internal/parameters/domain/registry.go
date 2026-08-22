@@ -452,7 +452,6 @@ func (r *ParametersRegistry) registerFactCheckParams() {
 		ValueType: TypeString, Default: "",
 		VisualHint:  VisualHint{Control: ControlTextarea},
 		Optimizable: true,
-		Sensitive:   true,
 	})
 	_ = r.Register(ParameterDefinition{
 		Key: "agent.factcheck.top_k", Scope: ScopePlatform, Category: "agent",
