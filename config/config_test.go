@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 func TestLoadGitHubOAuthEndpointDefaults(t *testing.T) {
@@ -200,5 +202,46 @@ func TestMemoryPipelineDynamicZeroWhenUnset(t *testing.T) {
 	cfg := &Config{}
 	if got := cfg.LoadMemoryPipelineDynamic(); got != (MemoryPipelineDynamic{}) {
 		t.Fatalf("expected zero value, got %+v", got)
+	}
+}
+
+func TestLoadKnowledgeRerankConfig(t *testing.T) {
+	t.Setenv("KNOWLEDGE_RERANK_MODEL", "")
+	t.Setenv("KNOWLEDGE_RERANK_TIMEOUT_SECONDS", "")
+	t.Setenv("KNOWLEDGE_RERANK_TOPN", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.KnowledgeRerank.Model != "" {
+		t.Fatalf("model default must be empty, got %q", cfg.KnowledgeRerank.Model)
+	}
+	if cfg.RerankLLMConfigured() {
+		t.Fatal("empty model must not report configured")
+	}
+	if cfg.KnowledgeRerank.Timeout != constants.RerankLLMTimeout {
+		t.Fatalf("timeout default = %v, want %v", cfg.KnowledgeRerank.Timeout, constants.RerankLLMTimeout)
+	}
+	if cfg.KnowledgeRerank.TopN != constants.RerankLLMTopN {
+		t.Fatalf("topN default = %d, want %d", cfg.KnowledgeRerank.TopN, constants.RerankLLMTopN)
+	}
+
+	t.Setenv("KNOWLEDGE_RERANK_MODEL", "qwen-turbo")
+	t.Setenv("KNOWLEDGE_RERANK_TIMEOUT_SECONDS", "7")
+	t.Setenv("KNOWLEDGE_RERANK_TOPN", "3")
+
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if !cfg.RerankLLMConfigured() || cfg.KnowledgeRerank.Model != "qwen-turbo" {
+		t.Fatalf("explicit model not applied: %+v", cfg.KnowledgeRerank)
+	}
+	if cfg.KnowledgeRerank.Timeout != 7*time.Second {
+		t.Fatalf("timeout = %v, want 7s", cfg.KnowledgeRerank.Timeout)
+	}
+	if cfg.KnowledgeRerank.TopN != 3 {
+		t.Fatalf("topN = %d, want 3", cfg.KnowledgeRerank.TopN)
 	}
 }
