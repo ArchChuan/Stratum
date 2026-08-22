@@ -70,6 +70,7 @@ const (
 	DiagnosticAreaMCP       DiagnosticArea = "mcp"
 	DiagnosticAreaKnowledge DiagnosticArea = "knowledge"
 	DiagnosticAreaModel     DiagnosticArea = "model"
+	DiagnosticAreaWorkflow  DiagnosticArea = "workflow"
 )
 
 const (
@@ -282,7 +283,7 @@ type TenantModelDiagnosticStatus struct {
 
 func (a DiagnosticArea) Valid() bool {
 	switch a {
-	case DiagnosticAreaAgent, DiagnosticAreaSkill, DiagnosticAreaMCP, DiagnosticAreaKnowledge, DiagnosticAreaModel:
+	case DiagnosticAreaAgent, DiagnosticAreaSkill, DiagnosticAreaMCP, DiagnosticAreaKnowledge, DiagnosticAreaModel, DiagnosticAreaWorkflow:
 		return true
 	default:
 		return false

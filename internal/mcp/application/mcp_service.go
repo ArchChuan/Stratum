@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
 	"github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/byteBuilderX/stratum/internal/mcp/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
@@ -36,6 +37,7 @@ type MCPService struct {
 	manager      port.ServerManager
 	toolPolicies port.ToolPolicyRepo
 	roles        port.TenantRoleResolver
+	failureAudit auditport.FailureAuditRecorder
 	logger       *zap.Logger
 }
 
@@ -44,6 +46,10 @@ func (s *MCPService) SetToolPolicyRepo(repo port.ToolPolicyRepo) { s.toolPolicie
 // SetTenantRoleResolver injects the tenant role resolver used by ownership
 // checks. A nil resolver fails all writes closed (ownership unverifiable).
 func (s *MCPService) SetTenantRoleResolver(r port.TenantRoleResolver) { s.roles = r }
+
+// SetFailureAuditRecorder 注入失败资源操作审计。未注入时失败记录跳过
+// （不影响主流程错误）。
+func (s *MCPService) SetFailureAuditRecorder(r auditport.FailureAuditRecorder) { s.failureAudit = r }
 
 func (s *MCPService) GetToolRisk(ctx context.Context, serverID, toolName string) (domain.ToolRiskLevel, error) {
 	if s.toolPolicies == nil {
@@ -163,6 +169,7 @@ func (s *MCPService) ConnectServer(ctx context.Context, cfg *domain.ServerConfig
 		return err
 	}
 	if err := s.manager.Connect(ctx, cfg, editors, editorActor, audit); err != nil {
+		s.recordConnectFailure(ctx, cfg, "connect", err)
 		return err
 	}
 	s.logger.Info("mcp.server_connected",
@@ -173,6 +180,29 @@ func (s *MCPService) ConnectServer(ctx context.Context, cfg *domain.ServerConfig
 		s.logger.Warn("failed to register MCP tools", zap.String("server_id", cfg.ID), zap.Error(err))
 	}
 	return nil
+}
+
+// recordConnectFailure 旁路记录一次失败的 MCP 连接/更新（best-effort）。
+// 分类只写短错误码，detail 不携带 URL 或凭据；记录失败仅 WARN 不阻断主错误。
+func (s *MCPService) recordConnectFailure(ctx context.Context, cfg *domain.ServerConfig, op string, err error) {
+	if s.failureAudit == nil {
+		return
+	}
+	code := auditport.ClassifyFailure(err)
+	if errors.Is(err, domain.ErrTransportFailed) {
+		code = "transport"
+	}
+	if recordErr := s.failureAudit.Record(ctx, auditport.ResourceFailure{
+		ResourceKind: auditdomain.ResourceKindMCP,
+		ResourceID:   cfg.ID,
+		Operation:    op,
+		ErrorCode:    code,
+	}); recordErr != nil {
+		s.logger.Warn("failed to record MCP failure audit",
+			zap.String("server_id", cfg.ID),
+			zap.String("op", op),
+			zap.Error(recordErr))
+	}
 }
 
 // resolveConnectOp decides the upsert semantics of ConnectServer:
@@ -292,6 +322,7 @@ func (s *MCPService) UpdateServer(ctx context.Context, cfg *domain.ServerConfig,
 		return err
 	}
 	if err := s.manager.UpdateServer(ctx, merged, editorActor, audit); err != nil {
+		s.recordConnectFailure(ctx, merged, "update", err)
 		return err
 	}
 	s.logger.Info("mcp.server_updated", zap.String("server_id", cfg.ID))

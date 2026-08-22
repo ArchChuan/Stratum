@@ -24,6 +24,7 @@ type ResourceChangeAuditRow struct {
 type ResourceChangeAuditFilter struct {
 	ResourceKind string
 	ActorName    string // 子串模糊匹配 display_name/github_login/actor_id 原文
+	ActorID      string // actor_id 精确匹配（自诊断范围限制：只能读自己相关的记录）
 	From         *time.Time
 	To           *time.Time
 	Limit        int
