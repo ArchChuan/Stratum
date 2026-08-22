@@ -22,11 +22,21 @@ EOF
 chmod +x "$test_dir/make" "$test_dir/go"
 
 run_case() {
-  local checks=$1 expected=$2
+  local checks=$1 expected=$2 ci=${3:-}
   : >"$log"
-  jq -n --argjson checks "$checks" '{local_checks:$checks}' >"$test_dir/plan.json"
-  PATH="$test_dir:$PATH" TEST_VERIFY_PLAN_PATH="$test_dir/plan.json" \
-    bash "$root/scripts/quality/run-planned-checks.sh"
+  if [[ -n "$ci" ]]; then
+    jq -n --argjson checks "$checks" --argjson ci "$ci" \
+      '{local_checks:$checks,ci_checks:$ci}' >"$test_dir/plan.json"
+  else
+    jq -n --argjson checks "$checks" '{local_checks:$checks}' >"$test_dir/plan.json"
+  fi
+  if [[ -n "$ci" ]]; then
+    PATH="$test_dir:$PATH" TEST_VERIFY_PLAN_PATH="$test_dir/plan.json" CI_OWNED=1 \
+      bash "$root/scripts/quality/run-planned-checks.sh"
+  else
+    PATH="$test_dir:$PATH" TEST_VERIFY_PLAN_PATH="$test_dir/plan.json" \
+      bash "$root/scripts/quality/run-planned-checks.sh"
+  fi
   # `-p N` 是负载感知动态值（CI 2 核→1，本地 12 核→4），契约只守结构不守具体值
   actual=$(paste -sd' ' "$log" | sed -E 's/-p [0-9]+/-p N/g')
   if [[ "$actual" != "$expected" ]]; then
@@ -40,5 +50,23 @@ run_case '["static","unit","build","code-quality"]' \
   'make:risk-guardrails code-quality go:vet ./... go:list ./... go:test -short -p N github.com/byteBuilderX/stratum/internal/agent go:build -p N ./cmd/server make:fe-lint fe-build'
 run_case '["static","unit","integration","contract","domain-failure-paths","e2e-short","e2e-soak"]' \
   'make:risk-guardrails code-quality go:vet ./... go:list ./... go:test -short -p N github.com/byteBuilderX/stratum/internal/agent make:contract-test'
+
+# CI_OWNED=1：CI 兜底的单元全部跳过，本地只保留非 CI 项（E2E 由 before-pr 脚本的 run_browser_mode 执行）
+run_case '["static","unit","integration","contract","code-quality","e2e-short"]' \
+  '' '["static","unit","integration","contract","build"]'
+# CI_OWNED=1：docs-lint 不在 ci_checks，保留执行；static/build 由 CI 兜底跳过
+run_case '["docs-lint","static","build"]' \
+  'make:agent-instructions-check' '["static","unit","integration","contract","build","security","risk-guardrails"]'
+# CI_OWNED=1：R3 全量 local 集（含 domain-failure-paths），全部由 CI 兜底 → 无本地 make/go 调用
+run_case '["static","unit","integration","contract","domain-failure-paths","e2e-soak"]' \
+  '' '["static","unit","integration","contract","build","security","risk-guardrails"]'
+
+# CI_OWNED=1 但 plan 缺 ci_checks 声明 → fail closed（宁可全跑也不误跳过）
+jq -n '{local_checks:["static"]}' >"$test_dir/plan.json"
+if PATH="$test_dir:$PATH" TEST_VERIFY_PLAN_PATH="$test_dir/plan.json" CI_OWNED=1 \
+  bash "$root/scripts/quality/run-planned-checks.sh" 2>/dev/null; then
+  printf 'CI_OWNED without ci_checks must fail closed\n' >&2
+  exit 1
+fi
 
 printf 'planned local check behavior passed\n'

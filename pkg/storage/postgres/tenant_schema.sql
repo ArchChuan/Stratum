@@ -731,6 +731,29 @@ CREATE INDEX IF NOT EXISTS idx_chat_msg_trace
 CREATE INDEX IF NOT EXISTS idx_chat_msg_conv
     ON chat_messages (conversation_id, created_at ASC);
 
+-- Per-conversation compaction summaries reused across turns. Distinct from
+-- memory_summaries: this stores the *conversation-continuity* summary produced
+-- by the compaction path (assemble + loop sides share it), anchored by
+-- chat_messages.id (UUID v7, time-ordered) so covered_until can be compared
+-- with `id > covered_until`. One row per conversation; covered_until advances
+-- monotonically as older rounds get compacted. Schema mirrors memory_summaries'
+-- anchoring fields but is semantically independent (D7).
+CREATE TABLE IF NOT EXISTS chat_compaction_summaries (
+    id              UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),
+    conversation_id UUID        NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+    covered_until   UUID        NOT NULL,
+    summary         TEXT        NOT NULL,
+    source_start    UUID        NOT NULL,
+    source_end      UUID        NOT NULL,
+    version         INT         NOT NULL DEFAULT 1,
+    token_count     INT         NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (conversation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_chat_compaction_conversation
+    ON chat_compaction_summaries (conversation_id);
+
 CREATE TABLE IF NOT EXISTS agent_workspaces (
     agent_id     TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     workspace_id UUID NOT NULL REFERENCES rag_workspaces(id) ON DELETE CASCADE,
@@ -1193,6 +1216,10 @@ ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 
 UPDATE memory_entries SET scope = 'agent' WHERE agent_id IS NOT NULL AND scope = 'user';
 
 CREATE INDEX IF NOT EXISTS idx_memory_entries_user_id ON memory_entries (user_id);
+-- episodic TTL GC 扫描：created_at 覆盖无 expires_at 的 90 天截止，expires_at
+-- 覆盖 per-entry 过期（短时记忆），两者都是清理查询的边界条件。
+CREATE INDEX IF NOT EXISTS idx_memory_entries_created_at ON memory_entries (created_at);
+CREATE INDEX IF NOT EXISTS idx_memory_entries_expires_at ON memory_entries (expires_at) WHERE expires_at IS NOT NULL;
 
 -- agents extensions
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL DEFAULT 0;
@@ -1353,22 +1380,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_entities_name_type_scope
 -- backfill: entity_repo.go uses rebuild_after; older schema had last_profile_rebuild_at only
 ALTER TABLE memory_entities ADD COLUMN IF NOT EXISTS rebuild_after TIMESTAMPTZ;
 
--- extraction_queue: async LLM extraction tasks
-CREATE TABLE IF NOT EXISTS memory_extraction_queue (
-    id          BIGSERIAL PRIMARY KEY,
-    message_id  TEXT NOT NULL,
-    user_id     TEXT NOT NULL,
-    agent_id    TEXT,
-    content     TEXT NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
-    retry_count INT NOT NULL DEFAULT 0,
-    error_msg   TEXT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_extraction_queue_status ON memory_extraction_queue (status, created_at);
-ALTER TABLE memory_extraction_queue ADD COLUMN IF NOT EXISTS conversation_id UUID REFERENCES chat_conversations(id) ON DELETE SET NULL;
-ALTER TABLE memory_extraction_queue ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'user';
+-- extraction_queue: 已退役。任务传输层收口到 NATS JetStream
+-- （memory.extraction.{tenant}），PG 不再作为消息队列。存量租户幂等清理
+-- （配合 Go 引用清零与 public 标记迁移 042；队列内仅剩 transient 任务数据）。
+DROP TABLE IF EXISTS memory_extraction_queue;
 
 -- memory_migrations: 记忆嵌入模型平滑迁移状态机（P5 确认制切换）。
 -- tenant-scoped 表；回填 worker 逐任务 execTenant(ctx, tenantID, fn) 访问。

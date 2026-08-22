@@ -744,9 +744,9 @@ func TestFactRepo_PurgeSuperseded_limitZero(t *testing.T) {
 	mock := newFactMock(t)
 	repo := newMockFactRepo(mock)
 	// No SQL expected: non-positive limit short-circuits.
-	n, err := repo.PurgeSuperseded(context.Background(), "t1", ts(), 0)
+	ids, err := repo.PurgeSuperseded(context.Background(), "t1", ts(), 0)
 	require.NoError(t, err)
-	require.Zero(t, n)
+	require.Nil(t, ids)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -756,14 +756,14 @@ func TestFactRepo_PurgeSuperseded_success(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	mock.ExpectExec("DELETE FROM memory_facts").
+	mock.ExpectQuery("DELETE FROM memory_facts").
 		WithArgs(pgxmock.AnyArg(), 100).
-		WillReturnResult(pgxmock.NewResult("DELETE", 5))
+		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("f1").AddRow("f2"))
 	mock.ExpectCommit()
 
-	n, err := repo.PurgeSuperseded(context.Background(), "t1", ts(), 100)
+	ids, err := repo.PurgeSuperseded(context.Background(), "t1", ts(), 100)
 	require.NoError(t, err)
-	require.Equal(t, 5, n)
+	require.Equal(t, []string{"f1", "f2"}, ids)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -773,7 +773,7 @@ func TestFactRepo_PurgeSuperseded_execFails(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	mock.ExpectExec("DELETE FROM memory_facts").
+	mock.ExpectQuery("DELETE FROM memory_facts").
 		WithArgs(anyArgs(2)...).
 		WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()

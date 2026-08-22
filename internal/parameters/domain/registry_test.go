@@ -161,17 +161,35 @@ func TestRegistryAgentMemoryParams(t *testing.T) {
 		t.Errorf("KeyByShortName(compaction_temperature) = %q/%v, want agent.compaction_temperature/true", got, ok)
 	}
 
-	// 提取 prompt/model:ScopeResource,字符串自由校验,无 EvaluationKeys。
-	for _, key := range []string{"memory.extraction_prompt", "memory.extraction_model"} {
+	// 提取/反思 prompt/model:ScopePlatform（记忆配置平台化,编辑入口在平台参数页）,
+	// 字符串自由校验,无 EvaluationKeys。
+	for _, key := range []string{
+		"memory.extraction_prompt", "memory.extraction_model",
+		"memory.reflection_prompt", "memory.reflection_model",
+	} {
 		def, ok := r.Get(key)
 		if !ok {
 			t.Fatalf("%s not registered", key)
 		}
-		if def.Scope != ScopeResource || def.Optimizable {
-			t.Errorf("%s scope/optimizable = %q/%v, want resource/false", key, def.Scope, def.Optimizable)
+		if def.Scope != ScopePlatform || def.Optimizable {
+			t.Errorf("%s scope/optimizable = %q/%v, want platform/false", key, def.Scope, def.Optimizable)
 		}
 		if len(def.EvaluationKeys) != 0 {
 			t.Errorf("%s must not carry EvaluationKeys (string free-form), got %v", key, def.EvaluationKeys)
+		}
+	}
+
+	// 记忆数值参数:ScopePlatform（平台参数页编辑,0=unset 回落定义默认）。
+	for _, key := range []string{
+		"memory.recall_top_k", "memory.fact_injection_top_n",
+		"memory.history_injection_top_n", "memory.max_facts_per_extraction",
+	} {
+		def, ok := r.Get(key)
+		if !ok {
+			t.Fatalf("%s not registered", key)
+		}
+		if def.Scope != ScopePlatform {
+			t.Errorf("%s scope = %q, want platform", key, def.Scope)
 		}
 	}
 
@@ -240,5 +258,30 @@ func TestParameterDefinitionValidateAndNormalize(t *testing.T) {
 				t.Fatalf("Normalize(%v) must fail", tc.value)
 			}
 		})
+	}
+}
+
+// TestRegistryMemoryEmbeddingModel 断言平台级记忆嵌入模型参数定义：
+// ScopePlatform、embedding_model 控件、不可优化、无评测 key（防半注册回归）。
+func TestRegistryMemoryEmbeddingModel(t *testing.T) {
+	r := NewParametersRegistry()
+	def, ok := r.Get("memory.embedding_model")
+	if !ok {
+		t.Fatal("memory.embedding_model not registered")
+	}
+	if def.Scope != ScopePlatform {
+		t.Errorf("scope = %q, want platform", def.Scope)
+	}
+	if def.VisualHint.Control != ControlEmbeddingModel {
+		t.Errorf("control = %q, want embedding_model", def.VisualHint.Control)
+	}
+	if def.Optimizable {
+		t.Error("optimizable must be false")
+	}
+	if len(def.EvaluationKeys) != 0 {
+		t.Errorf("evaluation keys = %v, want none", def.EvaluationKeys)
+	}
+	if def.Default != "" {
+		t.Errorf("default = %v, want empty (fail-closed)", def.Default)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -59,7 +60,11 @@ func (s *LLMSuperseder) JudgeSupersede(ctx context.Context, oldFact, newFact str
 	}
 	model := resolvePlatformString(ctx, s.paramResolver, "memory.supersede_model", "")
 	temperature := resolvePlatformFloat(ctx, s.paramResolver, "memory.supersede_temperature", 0)
-	promptTmpl := resolvePlatformString(ctx, s.paramResolver, "memory.supersede_prompt", constants.MemorySupersedeDefaultPrompt)
+	promptTmpl := resolvePlatformString(ctx, s.paramResolver, "memory.supersede_prompt", "")
+	if strings.TrimSpace(promptTmpl) == "" {
+		// fail-closed：无显式配置不允许空提示词调用判定模型。
+		return nil, fmt.Errorf("memory supersede: memory.supersede_prompt not configured (fail-closed)")
+	}
 	prompt := fmt.Sprintf(promptTmpl, oldFact, newFact)
 	// 判定模型为空：交由 llmgateway client 默认解析（pre-refactor 行为）。
 	judgment, err := pipeline.CompleteStructured(ctx, client, llmdomain.NewExtractRequest(

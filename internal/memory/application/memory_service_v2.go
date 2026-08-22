@@ -20,6 +20,9 @@ type EmbedClientResolver func(ctx context.Context, tenantID string) port.EmbedCl
 // LLMSupersederResolver resolves a per-tenant LLM supersede judge at call time.
 type LLMSupersederResolver func(ctx context.Context, tenantID string) port.LLMSuperseder
 
+// TrajectoryReflectorResolver resolves a per-tenant trajectory reflector at call time.
+type TrajectoryReflectorResolver func(ctx context.Context, tenantID string) port.TrajectoryReflector
+
 // MemoryService orchestrates fact extraction, retrieval, entity management, context building.
 type MemoryService struct {
 	factRepo    port.FactRepo
@@ -29,11 +32,13 @@ type MemoryService struct {
 	vectorStore port.VectorStore
 	llmExtract  port.LLMExtractor
 	embedClient port.EmbedClient
+	reflector   port.TrajectoryReflector
 	buffer      *MessageBuffer
 	logger      *zap.Logger
 
 	llmExtractResolver  LLMExtractorResolver
 	embedClientResolver EmbedClientResolver
+	reflectorResolver   TrajectoryReflectorResolver
 	judge               port.LLMSuperseder
 	judgeResolver       LLMSupersederResolver
 }
@@ -67,6 +72,10 @@ func NewMemoryService(
 // SetVectorStore wires a vector store for cleanup operations (called during wiring after Milvus init).
 func (s *MemoryService) SetVectorStore(vs port.VectorStore) { s.vectorStore = vs }
 
+// SetExtractionQueue wires the NATS extraction publisher used by the Redis
+// buffer flush. NATS 未就绪时为 nil，flush 路径显式降级（不静默吞错）。
+func (s *MemoryService) SetExtractionQueue(q port.ExtractionQueue) { s.queue = q }
+
 // SetMemoryRepo wires the memory entry repo for bulk deletion (called during wiring).
 func (s *MemoryService) SetMemoryRepo(r port.MemoryRepo) { s.memoryRepo = r }
 
@@ -83,6 +92,14 @@ func (s *MemoryService) SetLLMSuperseder(j port.LLMSuperseder) { s.judge = j }
 // Preferred over SetLLMSuperseder in multi-tenant wiring: the LLM gateway is resolved
 // per tenant, so a singleton judge would apply one tenant's model to another's facts.
 func (s *MemoryService) SetLLMSupersederResolver(r LLMSupersederResolver) { s.judgeResolver = r }
+
+// SetTrajectoryReflector wires a singleton trajectory reflector (used when resolver is nil).
+func (s *MemoryService) SetTrajectoryReflector(r port.TrajectoryReflector) { s.reflector = r }
+
+// SetTrajectoryReflectorResolver wires a per-tenant trajectory reflector resolver.
+func (s *MemoryService) SetTrajectoryReflectorResolver(r TrajectoryReflectorResolver) {
+	s.reflectorResolver = r
+}
 
 // currentEmbedModel 返回当前默认嵌入模型名；无可用模型时返回 ""（legacy 名兜底）。
 func (s *MemoryService) currentEmbedModel(ctx context.Context, tenantID string) string {

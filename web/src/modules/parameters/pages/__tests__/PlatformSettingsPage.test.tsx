@@ -9,6 +9,13 @@ vi.mock('../../api/parameters.api', () => ({
   parametersApi: { schema: vi.fn(), list: vi.fn(), update: vi.fn(), promptDefaults: vi.fn() },
 }));
 
+vi.mock('@/modules/llm', () => ({
+  llmApi: {
+    listModels: vi.fn().mockResolvedValue([]),
+    listProviders: vi.fn().mockResolvedValue([]),
+  },
+}));
+
 // 平台 scope 定义：非 0 默认值由 List 回填，缺失键 = 0/''/nil 默认（0=unset）。
 const defs = (): ParameterDefinition[] => [
   {
@@ -62,6 +69,21 @@ const defs = (): ParameterDefinition[] => [
 ];
 
 describe('PlatformSettingsPage', () => {
+  it('populates loaded platform values into editable fields', async () => {
+    vi.mocked(parametersApi.schema).mockResolvedValue(defs());
+    // 平台值必须回填到控件：这是"刷新后编辑参数变空"类回归的防线。
+    vi.mocked(parametersApi.list).mockResolvedValue({
+      'memory.enrich_prompt': '平台级富化提示词',
+      'memory.supersede_prompt': '平台级取代提示词',
+      'memory.enrich_temperature': 0.9,
+    });
+
+    render(<PlatformSettingsPage />);
+
+    expect(await screen.findByDisplayValue('平台级富化提示词')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('平台级取代提示词')).toBeInTheDocument();
+  });
+
   it('separates global parameters from resource defaults and excludes unsupported resource keys', async () => {
     vi.mocked(parametersApi.schema).mockResolvedValue([
       ...defs(),
@@ -138,7 +160,7 @@ describe('PlatformSettingsPage', () => {
     expect(screen.getByText('默认：0（未设置）')).toBeInTheDocument();
   });
 
-  it('shows 未设置（使用定义默认） for string keys with empty default and renders prompt viewers', async () => {
+  it('shows 未设置（使用定义默认） for string keys with empty default and no prompt viewers', async () => {
     vi.mocked(parametersApi.schema).mockResolvedValue(defs());
     vi.mocked(parametersApi.list).mockResolvedValue({});
 
@@ -146,7 +168,8 @@ describe('PlatformSettingsPage', () => {
 
     expect(await screen.findByText('记忆取代提示词')).toBeInTheDocument();
     expect(screen.getAllByText('未设置（使用定义默认）')).toHaveLength(2);
-    expect(screen.getAllByRole('button', { name: '查看默认提示词' })).toHaveLength(2);
+    // S2：memory.*_prompt 无内置模板，不再渲染"查看默认提示词"。
+    expect(screen.queryByRole('button', { name: '查看默认提示词' })).not.toBeInTheDocument();
   });
 
   it('renders no hint for toggle keys', async () => {
@@ -185,5 +208,49 @@ describe('PlatformSettingsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存平台参数' }));
 
     await waitFor(() => expect(parametersApi.update).toHaveBeenCalledWith({}));
+  });
+
+  it('renders a page-level skeleton while loading and no editable page chrome', async () => {
+    vi.mocked(parametersApi.schema).mockImplementation(() => new Promise(() => {}));
+    vi.mocked(parametersApi.list).mockImplementation(() => new Promise(() => {}));
+
+    render(<PlatformSettingsPage />);
+
+    // 只渲染明确加载态，不出现"保存平台参数"等半成品展示页元素。
+    expect(document.querySelector('.ant-skeleton')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '保存平台参数' })).not.toBeInTheDocument();
+  });
+
+  it('submits empty embedding_model value to clear it back to unset (fail-closed)', async () => {
+    vi.mocked(parametersApi.schema).mockResolvedValue([
+      ...defs(),
+      {
+        key: 'memory.embedding_model',
+        scope: 'platform',
+        category: '记忆',
+        display_name: '记忆嵌入模型',
+        value_type: 'string',
+        default: '',
+        description: '',
+        optimizable: false,
+        sensitive: false,
+        visual_hint: { control: 'embedding_model' },
+      },
+    ]);
+    // 平台值已清空（空串）→ 保存时显式提交空串 = 主动未配置（fail-closed），
+    // 不做"等于默认跳过"。
+    vi.mocked(parametersApi.list).mockResolvedValue({ 'memory.embedding_model': '' });
+    vi.mocked(parametersApi.update).mockResolvedValue({});
+
+    render(<PlatformSettingsPage />);
+    await screen.findByText('记忆嵌入模型');
+
+    fireEvent.click(screen.getByRole('button', { name: '保存平台参数' }));
+
+    await waitFor(() =>
+      expect(parametersApi.update).toHaveBeenCalledWith(
+        expect.objectContaining({ 'memory.embedding_model': '' }),
+      ),
+    );
   });
 });

@@ -247,6 +247,12 @@ services:
       context: .
       dockerfile: docker/postgres-zhparser.Dockerfile
     image: stratum-postgres-zhparser:local
+    # 本地开发机 CPU 保护（2026-08-21）：后台 worker 轮询失控曾把 postgres/pgbouncer 打到 40%+ CPU，
+    # 限制单容器最多 1 核，避免占满 WSL 与 Windows 共享的物理 CPU。
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
     environment:
       POSTGRES_USER: stratum
       POSTGRES_PASSWORD: stratum
@@ -263,6 +269,10 @@ services:
     build:
       context: .
       dockerfile: docker/pgbouncer.Dockerfile
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
     ports:
       - "6432:6432"
     volumes:

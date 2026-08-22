@@ -367,20 +367,6 @@ spec:
             dashboard_url: /d/stratum-service-overview
             runbook_url: /docs/operations/alerts/business.md#model-unhealthy
 
-        - alert: StratumMemoryMigrationStalled
-          expr: increase(memory_migration_stalled_total[15m]) > 0
-          for: 5m
-          labels:
-            severity: warning
-            service: stratum
-            environment: remote-test
-            component: memory
-          annotations:
-            summary: 记忆嵌入迁移扫描停滞
-            description: Migration from {{ $labels.from_model }} to {{ $labels.to_model }} for tenant {{ $labels.tenant_id }} made no progress across consecutive scans (increase {{ $value }}).
-            dashboard_url: /d/stratum-service-overview
-            runbook_url: /docs/operations/alerts/business.md#memory-migration-stalled
-
         - alert: StratumRouteFallbackSurge
           expr: increase(route_fallback_total[15m]) > 10
           for: 5m
@@ -769,6 +755,28 @@ spec:
             description: The five-minute HTTP P95 latency has exceeded five seconds for five minutes (current value {{ $value }}s).
             dashboard_url: /d/stratum-http
             runbook_url: /docs/operations/alerts/http-performance.md#critical-http-p95-latency
+    - name: stratum-llm-model
+      rules:
+        - alert: StratumLLMModelResolutionFailed
+          expr: increase(llm_model_resolution_errors_total[5m]) > 0
+          for: 2m
+          labels:
+            severity: warning
+            service: stratum
+            environment: remote-test
+            component: llm-gateway
+          annotations:
+            summary: LLM 模型解析失败：模型配置失效或无默认模型
+            description: >-
+              过去 5 分钟 llm_model_resolution_errors_total 出现增长
+              （model={{ $labels.model }}，reason={{ $labels.reason }}）。
+              invalid_model：显式请求的模型不存在/已禁用/不健康；no_default：
+              目录中无可用的默认/推荐模型；resolve_error：注册表解析故障。
+              请检查模型管理目录的 models / providers 配置
+              （default_model、enabled、recommended、default_embedding），
+              修复后告警自动恢复。
+            dashboard_url: /d/stratum-service-overview
+            runbook_url: /docs/operations/alerts/business.md#llm-model-resolution-failed
     - name: stratum-monitoring
       rules:
         - alert: StratumPrometheusConfigReloadFailed

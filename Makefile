@@ -92,7 +92,7 @@ be-fmt:
 be-lint: proto-gen
 	@command -v golangci-lint >/dev/null 2>&1 || \
 		(echo "安装 golangci-lint: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest" && exit 1)
-	golangci-lint run --timeout=5m ./...
+	golangci-lint run --timeout=5m --concurrency="$(shell bash scripts/quality/go-parallelism.sh)" ./...
 
 be-test: proto-gen
 	go test -v -race -coverprofile=coverage.out ./... -timeout=5m $(GO_TEST_FLAGS)

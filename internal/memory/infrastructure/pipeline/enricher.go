@@ -50,6 +50,7 @@ type EnricherWorker struct {
 	pool          *pgxpool.Pool
 	llmResolver   LLMResolver
 	paramResolver port.PlatformParamResolver
+	vectorCleaner entryVectorDeleter
 	logger        *zap.Logger
 	stopCh        chan struct{}
 	stopOnce      sync.Once
@@ -93,6 +94,13 @@ func (w *EnricherWorker) WithLLMResolver(r LLMResolver) *EnricherWorker {
 // per-call LLM content settings. A nil resolver keeps the const defaults.
 func (w *EnricherWorker) WithParamResolver(r port.PlatformParamResolver) *EnricherWorker {
 	w.paramResolver = r
+	return w
+}
+
+// WithEntryVectorDeleter wires the cleaner used to remove orphan vectors when
+// enrichment dead-letters after the embedder already wrote the vector.
+func (w *EnricherWorker) WithEntryVectorDeleter(d entryVectorDeleter) *EnricherWorker {
+	w.vectorCleaner = d
 	return w
 }
 
@@ -276,11 +284,10 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 
 	llm := w.llmFor(ctx, ev.TenantID)
 	if llm == nil {
-		if dlqErr := deadLetterWithHeartbeat(ctx, w.js, msg, stopHeartbeat, deadLetterDetails{
+		deadLetterWithOrphan(ctx, w.js, msg, stopHeartbeat, deadLetterDetails{
 			Stage: "enrich", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "llm_service_unavailable",
-		}); dlqErr != nil {
-			w.logger.Error("memory.enrich.dlq", zap.Error(dlqErr))
-		}
+			TraceID: traceID,
+		}, w.vectorCleaner, w.logger, ev.TenantID, ev.MessageID, "memory.enrich.dlq")
 		return
 	}
 	enrichment, err := w.callEnrichLLM(ctx, llm, ev.Role, ev.Content)
@@ -290,11 +297,10 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
 		enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
-		if retryErr := retryOrDeadLetterWithHeartbeat(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
+		retryOrDeadLetterWithOrphan(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "enrich", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "llm_failed",
-		}); retryErr != nil {
-			w.logger.Error("memory.enrich.retry_or_dlq", zap.Error(retryErr))
-		}
+			TraceID: traceID,
+		}, w.vectorCleaner, w.logger, ev.TenantID, ev.MessageID, "memory.enrich.retry_or_dlq")
 		return
 	}
 
@@ -304,11 +310,10 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
 		enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
-		if retryErr := retryOrDeadLetterWithHeartbeat(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
+		retryOrDeadLetterWithOrphan(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "enrich", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "persist_failed",
-		}); retryErr != nil {
-			w.logger.Error("memory.enrich.retry_or_dlq", zap.Error(retryErr))
-		}
+			TraceID: traceID,
+		}, w.vectorCleaner, w.logger, ev.TenantID, ev.MessageID, "memory.enrich.retry_or_dlq")
 		return
 	}
 	_ = w.refreshActiveSnapshot(ctx, ev, enrichment)
@@ -383,6 +388,10 @@ func (w *EnricherWorker) runSummaryAsyncSafe(ctx context.Context, ev *MemoryEnri
 func (w *EnricherWorker) callEnrichLLM(ctx context.Context, llm LLMClient, role, content string) (*EnrichmentResult, error) {
 	settings := w.resolveEnrichSettings(ctx)
 	promptTmpl := w.resolvePlatformString(ctx, "memory.enrich_prompt", "")
+	if strings.TrimSpace(promptTmpl) == "" {
+		// fail-closed：无显式配置不允许空 system prompt 静默调用 LLM。
+		return nil, fmt.Errorf("memory enrich: memory.enrich_prompt not configured (fail-closed)")
+	}
 	prompt := formatEnrichmentPrompt(promptTmpl, role, content)
 	w.logger.Debug("memory.enrich_resolved",
 		zap.String("model", settings.model),
@@ -520,14 +529,16 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnri
 		input = "[Previous Summary]: " + prevSummary + "\n\n[New Messages]:\n" + input
 	}
 	promptTmpl := w.resolvePlatformString(ctx, "memory.summary_prompt", "")
-	prompt := formatSummaryPrompt(promptTmpl, input)
-	req := llmdomain.NewSummarizeRequest(settings.model, prompt, nil, 0)
-	// NewSummarizeRequest 内部固定 TaskSummarizeTemperature；平台配置的温度
-	// 在构造后覆盖（0 = 保留默认），支持超管运行态调整摘要温度。
-	if settings.temperature != 0 {
-		v := float64(settings.temperature)
-		req.Temperature = &v
+	if strings.TrimSpace(promptTmpl) == "" {
+		// fail-closed：摘要提示词未配置 → 记 ERROR 并跳过（不阻塞 enrich 主链路）。
+		w.logger.Error("memory.summary.skip_prompt_not_configured",
+			zap.String("trace_id", ev.TraceID),
+			zap.String("conversation_id", ev.ConversationID))
+		summaryTriggered.Inc()
+		return nil
 	}
+	prompt := formatSummaryPrompt(promptTmpl, input)
+	req := newSummaryLLMRequest(settings, prompt)
 	llmCtx, cancel := context.WithTimeout(ctx, constants.MemorySummaryLLMTimeout)
 	defer cancel()
 	resp, err := llm.Complete(llmCtx, req)
@@ -547,6 +558,16 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnri
 		zap.Int("token_budget", accumulated),
 		zap.Int("summary_length", len(summary)))
 	return nil
+}
+
+// newSummaryLLMRequest 构造会话摘要 LLM 请求：平台配置的温度（memory.summary_temperature，
+// 0 = 保留默认）经 llmgateway.PlatformTemperaturePtr 统一舍入到 2 位小数。
+// 禁止 float64(float32) 直转覆盖 Temperature——会把 0.1 放大成 0.10000000149011612，
+// 触发智谱等端点的小数位校验 400（PR #441 修复后仍有两处覆盖点漏网）。
+func newSummaryLLMRequest(settings summarySettings, prompt string) *llmdomain.CompletionRequest {
+	req := llmdomain.NewSummarizeRequest(settings.model, prompt, nil, 0)
+	req.Temperature = llmdomain.PlatformTemperaturePtr(settings.temperature)
+	return req
 }
 
 // fetchSummaryInputs 在短事务里检查阈值并捞历史消息，立即释放事务后再去调 LLM。

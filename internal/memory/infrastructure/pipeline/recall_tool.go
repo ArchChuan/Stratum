@@ -85,7 +85,7 @@ type RecallHandler struct {
 	embedResolver EmbedServiceResolver
 	vectorDB      vectorSearcher
 	metrics       observability.MetricsProvider
-	resolver      memport.ResourceParamResolver
+	resolver      memport.PlatformParamResolver
 }
 
 // NewRecallHandler creates a RecallHandler backed by the given pool.
@@ -106,18 +106,18 @@ func (h *RecallHandler) WithMetrics(m observability.MetricsProvider) *RecallHand
 	return h
 }
 
-// SetResourceResolver wires the per-agent resource parameter resolver
+// SetPlatformParamResolver wires the platform parameter resolver
 // (registry-backed); nil keeps the constant default for recall_top_k.
-func (h *RecallHandler) SetResourceResolver(r memport.ResourceParamResolver) { h.resolver = r }
+func (h *RecallHandler) SetPlatformParamResolver(r memport.PlatformParamResolver) { h.resolver = r }
 
-// recallTopK 在工具 limit 缺失/非法时解析 memory.recall_top_k（clamp [1,20]）。
-// 解析失败或 resolver 缺失回退 constants.MemoryRecallTopK(5)——与 registry
-// Default=5 对齐，避免未配置 agent 5→10 静默漂移。
-func (h *RecallHandler) recallTopK(ctx context.Context, tenantID, agentID string) int {
+// recallTopK 在工具 limit 缺失/非法时解析 memory.recall_top_k（平台级，
+// clamp [1,20]）。解析失败或 resolver 缺失回退 constants.MemoryRecallTopK(5)
+// ——与 registry Default=5 对齐，避免未配置 5→10 静默漂移。
+func (h *RecallHandler) recallTopK(ctx context.Context) int {
 	if h.resolver == nil {
 		return constants.MemoryRecallTopK
 	}
-	v, ok, err := h.resolver.Resolve(ctx, tenantID, agentID, "memory.recall_top_k")
+	v, ok, err := h.resolver.ResolvePlatform(ctx, "memory.recall_top_k")
 	if err != nil || !ok {
 		return constants.MemoryRecallTopK
 	}
@@ -149,7 +149,7 @@ func (h *RecallHandler) Handle(ctx context.Context, tenantID, userID, agentID, s
 	// 工具显式传合法 limit(1-20) 优先;缺失/非法时回退 memory.recall_top_k
 	// (agent 维度,失败回退 5)。
 	if req.Limit <= 0 || req.Limit > constants.MemoryRecallMaxTopK {
-		req.Limit = h.recallTopK(ctx, tenantID, agentID)
+		req.Limit = h.recallTopK(ctx)
 	}
 
 	vectorCandidates, vecErr := h.tryVectorSearch(ctx, tenantID, userID, agentID, scope, req)
@@ -214,16 +214,30 @@ func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID, a
 		expr = fmt.Sprintf(`user_id == "%s" && scope == "user"`, userID)
 	}
 
-	// 候选集合 = 当前模型的新名 collection（raw + facts）∪ legacy 名（升级前
-	// 数据）。SearchWithFilter 对不存在的 collection 报错被跳过，dim mismatch
-	// （模型切换后旧集合维度不符）同样跳过——天然实现 legacy 回退（不
-	// fail-closed），详见 searchAllCollections 的错误分类。
+	// 候选集合 = raw 与 facts 分组（各自 新名 ∪ legacy 名）。向量 metadata 没有
+	// status/expiry 字段，必须回 PG 校验：facts 只保留 status='active'，raw 只
+	// 保留未过期的 memory_entries——与文本侧语义对齐，即使生命周期清理尚未
+	// 运行也保证召回正确。SearchWithFilter 对不存在的 collection 报错被跳过，
+	// dim mismatch（模型切换后旧集合维度不符）同样跳过——天然 legacy 回退
+	// （不 fail-closed），详见 searchAllCollections 的错误分类。
 	// embedSvc 已由上方 guard 保证非 nil；Model() 可能为空串 → legacy-only。
-	merged, searchErr := h.searchAllCollections(ctx, recallCandidateCollections(tenantID, embedSvc.Model()), vec, req.Limit*2, expr)
+	rawCols, factsCols := recallCandidateCollectionGroups(tenantID, embedSvc.Model())
+	rawResults, rawOutage := h.searchAllCollections(ctx, rawCols, vec, req.Limit*2, expr)
+	factsResults, factsOutage := h.searchAllCollections(ctx, factsCols, vec, req.Limit*2, expr)
 
+	rawResults, factsResults, err = h.filterRecallResults(ctx, tenantID, rawResults, factsResults)
+	if err != nil {
+		return nil, err
+	}
+
+	merged := make([]vector.SearchResult, 0, len(rawResults)+len(factsResults))
+	merged = append(merged, rawResults...)
+	merged = append(merged, factsResults...)
 	// Sort by ascending L2 distance (smaller = more similar) so downstream RRF
 	// ranks the closest match across both collections first.
 	sort.Slice(merged, func(i, j int) bool { return merged[i].Score < merged[j].Score })
+	outage := errors.Join(rawOutage, factsOutage)
+	recordVectorDegradation(h.metrics, outage)
 
 	var entries []recallCandidate
 	for _, r := range merged {
@@ -236,20 +250,140 @@ func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID, a
 			})
 		}
 	}
-	return entries, searchErr
+	return entries, outage
+}
+
+// filterRecallResults 分别过滤 raw 与 facts 候选：raw 只保留未过期的
+// memory_entries，facts 只保留 active 状态。任一过滤失败即 fail-closed——
+// 未验证的候选不得进入召回。
+func (h *RecallHandler) filterRecallResults(ctx context.Context, tenantID string, rawResults, factsResults []vector.SearchResult) ([]vector.SearchResult, []vector.SearchResult, error) {
+	rawResults, err := h.keepLiveEntryResults(ctx, tenantID, rawResults)
+	if err != nil {
+		return nil, nil, fmt.Errorf("filter raw recall candidates: %w", err)
+	}
+	factsResults, err = h.keepActiveFactResults(ctx, tenantID, factsResults)
+	if err != nil {
+		return nil, nil, fmt.Errorf("filter fact recall candidates: %w", err)
+	}
+	return rawResults, factsResults, nil
+}
+
+// recordVectorDegradation 在向量路径发生 outage 时发一次 degraded 信号。
+// 分组搜索后整个向量路径只记一次：任一分组 outage 都代表向量库降级，避免
+// 同一查询重复计数。
+func recordVectorDegradation(metrics observability.MetricsProvider, outage error) {
+	if outage != nil {
+		metrics.IncKnowledgeQuery("recall", "degraded")
+	}
 }
 
 // recallCandidateCollections 返回查询候选：模型非空 → [新 raw, legacy raw,
 // 新 facts, legacy facts]（升级后数据在新名，升级前在 legacy 名）；模型未知
 // → 仅 legacy 对（空模型后缀的新名无意义且升级前数据都在旧名）。
 func recallCandidateCollections(tenantID, embedModel string) []string {
+	raw, facts := recallCandidateCollectionGroups(tenantID, embedModel)
+	return append(raw, facts...)
+}
+
+// recallCandidateCollectionGroups 按 raw/facts 分组返回候选集合列表，使向量
+// 结果能在回 PG 校验时区分来源（raw 校验过期、facts 校验 active 状态）。
+func recallCandidateCollectionGroups(tenantID, embedModel string) (raw, facts []string) {
 	if embedModel == "" {
-		return []string{memoryCollectionLegacyName(tenantID), memoryFactsCollectionLegacyName(tenantID)}
+		return []string{memoryCollectionLegacyName(tenantID)}, []string{memoryFactsCollectionLegacyName(tenantID)}
 	}
 	return []string{
-		memoryCollectionName(tenantID, embedModel), memoryCollectionLegacyName(tenantID),
-		memoryFactsCollectionName(tenantID, embedModel), memoryFactsCollectionLegacyName(tenantID),
+			memoryCollectionName(tenantID, embedModel), memoryCollectionLegacyName(tenantID),
+		}, []string{
+			memoryFactsCollectionName(tenantID, embedModel), memoryFactsCollectionLegacyName(tenantID),
+		}
+}
+
+// keepActiveFactResults keeps only fact-sourced results whose PG row is still
+// active. Superseded/archived facts must not be recalled even if their vectors
+// linger (e.g. deletion failed or predates this change); the trigram side
+// already filters status='active', so this aligns both legs.
+func (h *RecallHandler) keepActiveFactResults(ctx context.Context, tenantID string, results []vector.SearchResult) ([]vector.SearchResult, error) {
+	return h.intersectResults(ctx, tenantID, results,
+		`SELECT id::text FROM memory_facts WHERE id::text = ANY($1) AND status = 'active'`)
+}
+
+// keepLiveEntryResults keeps only raw-turn results whose memory_entries row is
+// not expired (per-entry expires_at or the global episodic TTL). Vectors are
+// physically cleaned by the daily GC; the PG-side filter closes the window in
+// between so expired entries never surface.
+func (h *RecallHandler) keepLiveEntryResults(ctx context.Context, tenantID string, results []vector.SearchResult) ([]vector.SearchResult, error) {
+	return h.intersectResults(ctx, tenantID, results,
+		`SELECT id::text FROM memory_entries WHERE id::text = ANY($1) AND (expires_at IS NULL OR expires_at > NOW())`)
+}
+
+// intersectResults filters results down to ids present in the PG table under
+// query. Candidate count is bounded (≤ 2*topK); the transaction is read-only
+// and rolled back. Fail-closed: a filter query error drops the whole group so
+// unverifiable candidates never surface (the caller degrades to text recall).
+func (h *RecallHandler) intersectResults(ctx context.Context, tenantID string, results []vector.SearchResult, query string) ([]vector.SearchResult, error) {
+	if len(results) == 0 || h.pool == nil {
+		return results, nil
 	}
+	ids := collectResultIDs(results)
+	if len(ids) == 0 {
+		return results, nil
+	}
+	keep, err := h.queryKeepIDs(ctx, tenantID, query, ids)
+	if err != nil {
+		return nil, err
+	}
+	return filterResultsByIDs(results, keep), nil
+}
+
+// collectResultIDs 提取结果的非空 id，保持原有顺序。
+func collectResultIDs(results []vector.SearchResult) []string {
+	ids := make([]string, 0, len(results))
+	for _, r := range results {
+		if r.ID != "" {
+			ids = append(ids, r.ID)
+		}
+	}
+	return ids
+}
+
+// filterResultsByIDs 只保留 keep 集合中的结果（复用原切片底层数组）。
+func filterResultsByIDs(results []vector.SearchResult, keep map[string]struct{}) []vector.SearchResult {
+	out := results[:0]
+	for _, r := range results {
+		if _, ok := keep[r.ID]; ok {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// queryKeepIDs 以只读事务查询 ids 在 PG 表中的有效集合。Fail-closed：查询
+// 失败返回错误，调用方丢弃整组候选（未验证的候选不得进入召回）。
+func (h *RecallHandler) queryKeepIDs(ctx context.Context, tenantID, query string, ids []string) (map[string]struct{}, error) {
+	schema := "tenant_" + tenantID
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL search_path = %s, public", pgx.Identifier{schema}.Sanitize())); err != nil {
+		return nil, fmt.Errorf("set schema: %w", err)
+	}
+	rows, err := tx.Query(ctx, query, ids)
+	if err != nil {
+		return nil, fmt.Errorf("query recall filter: %w", err)
+	}
+	defer rows.Close()
+	keep := make(map[string]struct{}, len(ids))
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan recall filter id: %w", err)
+		}
+		keep[id] = struct{}{}
+	}
+	return keep, rows.Err()
 }
 
 // searchAllCollections 对每个候选 collection 查询并合并结果；单个 collection
@@ -283,7 +417,6 @@ func (h *RecallHandler) searchAllCollections(ctx context.Context, collections []
 		}
 		if outageErr == nil {
 			outageErr = err
-			h.metrics.IncKnowledgeQuery("recall", "degraded")
 		}
 		h.logger.Error("memory.recall.vector_search_failed",
 			zap.String("collection", collection), zap.Error(err))

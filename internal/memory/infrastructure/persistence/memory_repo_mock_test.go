@@ -246,7 +246,7 @@ func TestMemoryRepo_DeleteAllByUser_execFails(t *testing.T) {
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectExec("DELETE FROM memory_outbox WHERE user_id = \\$1").
 		WithArgs("u1").WillReturnResult(pgxmock.NewResult("DELETE", 1))
-	mock.ExpectExec("DELETE FROM memory_extraction_queue WHERE user_id = \\$1").
+	mock.ExpectExec("DELETE FROM memory_summaries WHERE user_id = \\$1").
 		WithArgs("u1").WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
@@ -366,5 +366,89 @@ func TestMemoryRepo_GetSummary_queryFails(t *testing.T) {
 
 	_, err := repo.GetSummary(context.Background(), "t1", "s1")
 	require.ErrorIs(t, err, pgx.ErrTxClosed)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMemoryRepo_ListExpired_success(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockMemoryRepo(mock)
+
+	now := ts()
+	cutoff := now.AddDate(0, 0, -90)
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("SELECT id::text FROM memory_entries").
+		WithArgs(now, cutoff, 100).
+		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("e1").AddRow("e2"))
+	mock.ExpectCommit()
+
+	ids, err := repo.ListExpired(context.Background(), "t1", now, cutoff, 100)
+	require.NoError(t, err)
+	require.Equal(t, []string{"e1", "e2"}, ids)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMemoryRepo_ListExpired_limitZeroShortCircuit(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockMemoryRepo(mock)
+
+	ids, err := repo.ListExpired(context.Background(), "t1", ts(), ts(), 0)
+	require.NoError(t, err)
+	require.Nil(t, ids)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMemoryRepo_ListExpired_queryFails(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockMemoryRepo(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("SELECT id::text FROM memory_entries").
+		WithArgs(ts(), ts(), 100).
+		WillReturnError(pgx.ErrTxClosed)
+	mock.ExpectRollback()
+
+	_, err := repo.ListExpired(context.Background(), "t1", ts(), ts(), 100)
+	require.ErrorContains(t, err, "list expired entries")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMemoryRepo_DeleteByIDs_success(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockMemoryRepo(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectExec("DELETE FROM memory_entries WHERE id::text = ANY").
+		WithArgs([]string{"e1", "e2"}).
+		WillReturnResult(pgxmock.NewResult("DELETE", 2))
+	mock.ExpectCommit()
+
+	require.NoError(t, repo.DeleteByIDs(context.Background(), "t1", []string{"e1", "e2"}))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMemoryRepo_DeleteByIDs_emptyShortCircuit(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockMemoryRepo(mock)
+
+	require.NoError(t, repo.DeleteByIDs(context.Background(), "t1", nil))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMemoryRepo_DeleteByIDs_execFails(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockMemoryRepo(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectExec("DELETE FROM memory_entries WHERE id::text = ANY").
+		WithArgs([]string{"e1"}).
+		WillReturnError(pgx.ErrTxClosed)
+	mock.ExpectRollback()
+
+	err := repo.DeleteByIDs(context.Background(), "t1", []string{"e1"})
+	require.ErrorContains(t, err, "delete memory entries by ids")
 	require.NoError(t, mock.ExpectationsWereMet())
 }

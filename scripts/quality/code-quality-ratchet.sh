@@ -96,6 +96,7 @@ if command -v golangci-lint >/dev/null 2>&1; then
     done < <(printf '%s\n' "${selected[@]}" | xargs -n1 dirname | LC_ALL=C sort -u)
   fi
   duplicate_output="$(cd "${ROOT}" && golangci-lint run --no-config --enable-only=dupl --tests=false \
+    --concurrency "$(bash scripts/quality/go-parallelism.sh)" \
     --max-issues-per-linter=0 --max-same-issues=0 "${duplicate_targets[@]}" 2>&1 || true)"
   if [[ -n "${duplicate_output}" && "${duplicate_output}" != '0 issues.' ]]; then
     echo 'warning: duplicate-code candidates (non-blocking):' >&2

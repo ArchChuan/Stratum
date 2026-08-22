@@ -219,12 +219,15 @@ func (g *Gateway) resolveChain(ctx context.Context, model string) ([]chainLink, 
 }
 
 // recordModelResolutionFailure 将模型解析配置失效（无默认模型 / 请求失效
-// 模型）写入监控报警链路：ERROR 日志 + llm_model_resolution_errors_total
-// 指标。配置层缺陷禁止静默降级或吞错。
+// 模型 / registry 基础设施故障）写入监控报警链路：ERROR 日志 +
+// llm_model_resolution_errors_total 指标。配置层缺陷禁止静默降级或吞错。
 func (g *Gateway) recordModelResolutionFailure(model string, err error) {
-	reason := "invalid_model"
-	if errors.Is(err, ErrNoDefaultModel) {
+	reason := "resolve_error"
+	switch {
+	case errors.Is(err, ErrNoDefaultModel):
 		reason = "no_default"
+	case errors.Is(err, ErrModelNotInCatalog):
+		reason = "invalid_model"
 	}
 	g.metrics.IncLLMModelResolutionError(model, reason)
 	g.metrics.IncLLMRequest(model, "unknown", llmStatusError)
@@ -530,7 +533,15 @@ func (g *Gateway) logComplete(
 func (g *Gateway) CreateEmbeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error) {
 	cfg, proto, err := g.registry.ResolveEmbedding(ctx, req.Model)
 	if err != nil {
+		g.recordModelResolutionFailure(req.Model, err)
 		return nil, fmt.Errorf("llmgateway: resolve embedding model %q: %w", req.Model, err)
+	}
+	// 与 chat 同源：空模型时 registry 已解析出默认 embedding 模型名
+	// （cfg.Models[0]），必须回填到请求体，否则 provider 收到 "model": ""。
+	if req.Model == "" && len(cfg.Models) > 0 && cfg.Models[0] != "" {
+		cloned := *req
+		cloned.Model = cfg.Models[0]
+		req = &cloned
 	}
 	return proto.CreateEmbeddings(ctx, cfg, req)
 }

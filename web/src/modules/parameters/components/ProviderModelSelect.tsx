@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import type { GroupedModelOption } from '@/modules/agent/model/agent';
 import { buildGroupedModels } from '@/modules/agent/model/agent';
 import { llmApi } from '@/modules/llm';
-import { ModelHealthBadge } from '@/modules/llm/components/ModelHealthBadge';
+import { ModelOptionLabel } from '@/modules/llm/components/ModelOptionLabel';
 import { extractErrorMessage } from '@/shared/lib';
 
 const { Option, OptGroup } = Select;
@@ -13,16 +13,19 @@ interface ProviderModelSelectProps {
   value?: string;
   onChange?: (value: string) => void;
   placeholder?: string;
+  /** 模型能力：chat（默认）或 embedding；决定目录拉取范围。 */
+  capability?: 'chat' | 'embedding';
 }
 
-// 平台参数页的模型选择器：从模型管理目录拉取 chat 模型，按 provider 分组渲染
-//（先选 provider 再选模型）。存储值 = 模型名（字符串），与后端取值语义一致；
-// 写入校验目录存在性由后端 ValidateFn 承担（fail-closed）。空值 = 未设置，
-// 使用定义默认。
+// 平台参数页的模型选择器：从模型管理目录按能力（chat/embedding）拉取模型，
+// 按 provider 分组渲染（先选 provider 再选模型）。存储值 = 模型名（字符串），
+// 与后端取值语义一致；写入校验目录存在性由后端 ValidateFn 承担（fail-closed）。
+// 空值 = 未设置，使用定义默认。
 export const ProviderModelSelect = ({
   value,
   onChange,
   placeholder = '未设置（使用定义默认）',
+  capability = 'chat',
 }: ProviderModelSelectProps) => {
   const [groupedModels, setGroupedModels] = useState<GroupedModelOption[]>([]);
 
@@ -30,7 +33,7 @@ export const ProviderModelSelect = ({
     let cancelled = false;
     (async () => {
       const [modelsRes, providersRes] = await Promise.allSettled([
-        llmApi.listModels({ capability: 'chat' }),
+        llmApi.listModels({ capability }),
         llmApi.listProviders(),
       ]);
       if (cancelled) return;
@@ -46,7 +49,7 @@ export const ProviderModelSelect = ({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [capability]);
 
   // 当前值不在目录（退役/未发现）时保留显示为 disabled Option，避免 placeholder
   // 显示"未设置"却隐藏提交值；与 AgentFormSections currentModel 模式一致。
@@ -76,10 +79,7 @@ export const ProviderModelSelect = ({
         <OptGroup key={group.provider} label={group.provider}>
           {group.models.map((m) => (
             <Option key={m.value} value={m.value} disabled={isUnusable(m.health)}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                {m.label}
-                <ModelHealthBadge health={m.health} />
-              </span>
+              <ModelOptionLabel label={m.label} capabilities={m.capabilities} health={m.health} showHealth />
             </Option>
           ))}
         </OptGroup>

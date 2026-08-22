@@ -79,145 +79,22 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 		)
 	}
 
+	return s.persistExtractedFacts(ctx, req, indexedFacts, domain.FactSourceLLMExtraction)
+}
+
+// persistExtractedFacts 是 ExtractFacts 与轨迹反思共享的持久化链：
+// supersede 冲突消解 → entity 归一化 → 事实写入 → 向量入库。
+// source 区分来源（llm_extraction / trajectory_reflection），provenance
+// 由 req 的 source 身份（message_id/task_id/ordinal）承载。
+func (s *MemoryService) persistExtractedFacts(
+	ctx context.Context,
+	req *ExtractFactsRequest,
+	indexedFacts []indexedExtractedFact,
+	source string,
+) error {
 	for _, indexedFact := range indexedFacts {
-		extractedFact := indexedFact.Fact
-		var canonical *canonicalExtractedFact
-		if req.SourceMessageID != "" || req.SourceTaskID != 0 {
-			canonical, err = canonicalizeExtractedFact(req, extractedFact, indexedFact.OriginalOrdinal)
-			if err != nil {
-				return fmt.Errorf("canonicalize extracted fact: %w", err)
-			}
-			extractedFact.Entities = canonical.Entities
-		}
-		writeFilter := domain.ScopeFilter{TenantID: req.TenantID, UserID: req.UserID, AgentID: req.AgentID}
-		if req.Scope == string(domain.ScopeAgent) {
-			writeFilter.IncludeAgentScope = true
-		} else {
-			writeFilter.IncludeUserScope = true
-		}
-		candidates, err := s.factRepo.FindSupersedeCandidates(
-			ctx,
-			req.TenantID,
-			writeFilter,
-			extractedFact.Content,
-			constants.MemorySupersedeCandidateMin,
-			float64(constants.MemorySupersedeCandidateMax),
-		)
-		if err != nil {
-			return fmt.Errorf("find supersede candidates: %w", err)
-		}
-
-		// Phase 0: 构造带 category/confidence/source 的事实
-		category := domain.FactTypeToCategory(extractedFact.FactType)
-		confidence := effectiveConfidence(extractedFact)
-		fact, err := domain.NewFactWithMeta(
-			req.TenantID,
-			req.UserID,
-			req.AgentID,
-			req.ConversationID,
-			req.Scope,
-			extractedFact.Content,
-			extractedFact.Importance,
-			confidence,
-			category,
-			domain.FactSourceLLMExtraction,
-			extractedFact.Entities,
-		)
-		if err != nil {
-			return fmt.Errorf("new fact: %w", err)
-		}
-		attemptedFactID := fact.ID
-
-		created := true
-		if canonical != nil {
-			writer, ok := s.factRepo.(port.ExtractedFactWriter)
-			if !ok {
-				return fmt.Errorf("atomic extracted fact writer not available: %w", domain.ErrInvalidFactSourceIdentity)
-			}
-			fact, created, err = writer.CreateExtracted(ctx, req.TenantID, &port.ExtractedFactWrite{
-				Fact: fact, Identity: canonical.Identity, PayloadHash: canonical.PayloadHash, EntityNames: canonical.Entities,
-			})
-		} else {
-			for _, entityName := range extractedFact.Entities {
-				if _, normalizeErr := s.normalizeEntity(ctx, req.TenantID, req.UserID, req.AgentID, req.Scope, entityName); normalizeErr != nil {
-					return fmt.Errorf("normalize entity %q: %w", entityName, normalizeErr)
-				}
-			}
-			err = s.factRepo.Create(ctx, req.TenantID, fact)
-		}
-		if err != nil {
-			s.logger.Error("memory.extract_facts: persist fact failed",
-				zap.String("tenant_id", req.TenantID),
-				zap.String("fact_id", attemptedFactID),
-				zap.Error(err),
-			)
-			return fmt.Errorf("insert fact: %w", err)
-		}
-
-		// Resolve the supersede judge: singleton if set, else per-tenant resolver.
-		judge := s.judge
-		if judge == nil && s.judgeResolver != nil {
-			judge = s.judgeResolver(ctx, req.TenantID)
-		}
-
-		// Inline supersede: high-similarity → direct; mid-range → LLM (max 3/fact).
-		llmCallsThisFact := 0
-		for _, candidate := range candidates {
-			if !created {
-				break
-			}
-			if candidate.Fact.ID == fact.ID {
-				continue
-			}
-			if candidate.Similarity >= constants.MemoryInlineSupersedeFastThresh {
-				if merr := candidate.Fact.MarkSuperseded(fact.ID); merr == nil {
-					_ = s.factRepo.Update(ctx, req.TenantID, candidate.Fact)
-				}
-				continue
-			}
-			if judge != nil && llmCallsThisFact < constants.MemoryInlineSupersedeLLMPerFact {
-				judgment, jerr := judge.JudgeSupersede(ctx, candidate.Fact.Content, fact.Content)
-				llmCallsThisFact++
-				if jerr == nil && judgment.Supersedes {
-					if merr := candidate.Fact.MarkSuperseded(fact.ID); merr == nil {
-						_ = s.factRepo.Update(ctx, req.TenantID, candidate.Fact)
-					}
-				}
-			}
-		}
-
-		embedder := s.embedClient
-		if embedder == nil && s.embedClientResolver != nil {
-			embedder = s.embedClientResolver(ctx, req.TenantID)
-		}
-		if embedder == nil {
-			return fmt.Errorf("embed client not available for tenant %s", req.TenantID)
-		}
-		vector, err := embedder.Embed(ctx, fact.Content)
-		if err != nil {
-			return fmt.Errorf("embed text: %w", err)
-		}
-
-		collectionName := factsCollectionName(req.TenantID, embedder.Model())
-		// Phase 0: vector metadata 包含 category/confidence/source，不含敏感原文以外的新增字段
-		doc := &port.VectorDoc{
-			ID:        fact.ID,
-			Embedding: vector,
-			Metadata: map[string]interface{}{
-				"user_id":         fact.UserID,
-				"agent_id":        fact.AgentID,
-				"conversation_id": fact.ConversationID,
-				"scope":           string(fact.Scope),
-				"content":         fact.Content,
-				"importance":      fact.Importance,
-				"category":        fact.Category,
-				"confidence":      fact.Confidence,
-				"source":          fact.Source,
-			},
-		}
-
-		if err := s.vectorStore.Upsert(ctx, collectionName, []*port.VectorDoc{doc}); err != nil {
-			return fmt.Errorf("upsert vector: %w", err)
+		if err := s.persistExtractedFact(ctx, req, indexedFact, source); err != nil {
+			return err
 		}
 	}
 
@@ -227,6 +104,243 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 		zap.Int("facts_stored", len(indexedFacts)),
 	)
 	return nil
+}
+
+// persistExtractedFact 持久化单条提取/反思事实：canonical 身份 → supersede
+// 候选 → 事实写入 → 冲突消解 → 向量入库。
+func (s *MemoryService) persistExtractedFact(
+	ctx context.Context,
+	req *ExtractFactsRequest,
+	indexedFact indexedExtractedFact,
+	source string,
+) error {
+	extractedFact := indexedFact.Fact
+	canonical, err := s.resolveCanonicalFact(req, extractedFact, indexedFact.OriginalOrdinal)
+	if err != nil {
+		return err
+	}
+	candidates, err := s.supersedeCandidatesFor(ctx, req, extractedFact.Content)
+	if err != nil {
+		return err
+	}
+	fact, err := s.newFactFromExtracted(req, extractedFact, source)
+	if err != nil {
+		return err
+	}
+	attemptedFactID := fact.ID
+	written, created, err := s.writeExtractedFact(ctx, req, fact, canonical, extractedFact.Entities)
+	if err != nil {
+		s.logger.Error("memory.extract_facts: persist fact failed",
+			zap.String("tenant_id", req.TenantID),
+			zap.String("fact_id", attemptedFactID),
+			zap.Error(err),
+		)
+		return fmt.Errorf("insert fact: %w", err)
+	}
+	s.applySupersedeJudgments(ctx, req, candidates, written, created)
+	return s.embedAndStoreFactVector(ctx, req, written)
+}
+
+// resolveCanonicalFact 在存在稳定 source 身份时计算 canonical 事实；否则返回
+// nil（走普通创建路径）。
+func (s *MemoryService) resolveCanonicalFact(
+	req *ExtractFactsRequest,
+	extractedFact *port.ExtractedFact,
+	ordinal int,
+) (*canonicalExtractedFact, error) {
+	if req.SourceMessageID == "" && req.SourceTaskID == 0 {
+		return nil, nil
+	}
+	canonical, err := canonicalizeExtractedFact(req, extractedFact, ordinal)
+	if err != nil {
+		return nil, fmt.Errorf("canonicalize extracted fact: %w", err)
+	}
+	extractedFact.Entities = canonical.Entities
+	return canonical, nil
+}
+
+// supersedeCandidatesFor 按 scope 查询与新内容冲突的既有事实候选。
+func (s *MemoryService) supersedeCandidatesFor(ctx context.Context, req *ExtractFactsRequest, content string) ([]*port.SupersedeCandidate, error) {
+	writeFilter := domain.ScopeFilter{TenantID: req.TenantID, UserID: req.UserID, AgentID: req.AgentID}
+	if req.Scope == string(domain.ScopeAgent) {
+		writeFilter.IncludeAgentScope = true
+	} else {
+		writeFilter.IncludeUserScope = true
+	}
+	return s.factRepo.FindSupersedeCandidates(
+		ctx,
+		req.TenantID,
+		writeFilter,
+		content,
+		constants.MemorySupersedeCandidateMin,
+		float64(constants.MemorySupersedeCandidateMax),
+	)
+}
+
+// newFactFromExtracted 构造带 category/confidence/source 的事实实体。
+func (s *MemoryService) newFactFromExtracted(
+	req *ExtractFactsRequest,
+	extractedFact *port.ExtractedFact,
+	source string,
+) (*domain.MemoryFact, error) {
+	category := domain.FactTypeToCategory(extractedFact.FactType)
+	confidence := effectiveConfidence(extractedFact)
+	fact, err := domain.NewFactWithMeta(
+		req.TenantID,
+		req.UserID,
+		req.AgentID,
+		req.ConversationID,
+		req.Scope,
+		extractedFact.Content,
+		extractedFact.Importance,
+		confidence,
+		category,
+		source,
+		extractedFact.Entities,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("new fact: %w", err)
+	}
+	return fact, nil
+}
+
+// writeExtractedFact 写入事实行：canonical 身份走幂等 writer，否则普通创建
+// 并归一化实体。返回写入后的事实（CreateExtracted 可能返回既有行）。
+func (s *MemoryService) writeExtractedFact(
+	ctx context.Context,
+	req *ExtractFactsRequest,
+	fact *domain.MemoryFact,
+	canonical *canonicalExtractedFact,
+	entityNames []string,
+) (*domain.MemoryFact, bool, error) {
+	if canonical != nil {
+		writer, ok := s.factRepo.(port.ExtractedFactWriter)
+		if !ok {
+			return nil, false, fmt.Errorf("atomic extracted fact writer not available: %w", domain.ErrInvalidFactSourceIdentity)
+		}
+		return writer.CreateExtracted(ctx, req.TenantID, &port.ExtractedFactWrite{
+			Fact: fact, Identity: canonical.Identity, PayloadHash: canonical.PayloadHash, EntityNames: canonical.Entities,
+		})
+	}
+	for _, entityName := range entityNames {
+		if _, err := s.normalizeEntity(ctx, req.TenantID, req.UserID, req.AgentID, req.Scope, entityName); err != nil {
+			return nil, false, fmt.Errorf("normalize entity %q: %w", entityName, err)
+		}
+	}
+	return fact, true, s.factRepo.Create(ctx, req.TenantID, fact)
+}
+
+// applySupersedeJudgments 对新写入事实做冲突消解：高相似直接 supersede，
+// 中相似交给 LLM 判定（每事实最多 3 次）。
+func (s *MemoryService) applySupersedeJudgments(
+	ctx context.Context,
+	req *ExtractFactsRequest,
+	candidates []*port.SupersedeCandidate,
+	fact *domain.MemoryFact,
+	created bool,
+) {
+	if !created {
+		return
+	}
+	judge := s.judge
+	if judge == nil && s.judgeResolver != nil {
+		judge = s.judgeResolver(ctx, req.TenantID)
+	}
+	llmCalls := 0
+	for _, candidate := range candidates {
+		if candidate.Fact.ID == fact.ID {
+			continue
+		}
+		if candidate.Similarity >= constants.MemoryInlineSupersedeFastThresh {
+			s.supersedeCandidate(ctx, req.TenantID, candidate, fact.ID)
+			continue
+		}
+		llmCalls = judgeSupersede(ctx, s, judge, req.TenantID, candidate, fact, llmCalls)
+	}
+}
+
+// judgeSupersede 执行单次 LLM 冲突判定（每事实最多 MemoryInlineSupersedeLLMPerFact
+// 次），返回更新后的调用计数。judge 为空时保持原计数。
+func judgeSupersede(
+	ctx context.Context,
+	svc *MemoryService,
+	judge port.LLMSuperseder,
+	tenantID string,
+	candidate *port.SupersedeCandidate,
+	fact *domain.MemoryFact,
+	llmCalls int,
+) int {
+	if judge != nil && llmCalls < constants.MemoryInlineSupersedeLLMPerFact {
+		judgment, jerr := judge.JudgeSupersede(ctx, candidate.Fact.Content, fact.Content)
+		llmCalls++
+		if jerr == nil && judgment.Supersedes {
+			svc.supersedeCandidate(ctx, tenantID, candidate, fact.ID)
+		}
+	}
+	return llmCalls
+}
+
+// embedAndStoreFactVector 为事实生成向量并写入 Milvus collection。
+func (s *MemoryService) embedAndStoreFactVector(ctx context.Context, req *ExtractFactsRequest, fact *domain.MemoryFact) error {
+	embedder := s.embedClient
+	if embedder == nil && s.embedClientResolver != nil {
+		embedder = s.embedClientResolver(ctx, req.TenantID)
+	}
+	if embedder == nil {
+		return fmt.Errorf("embed client not available for tenant %s", req.TenantID)
+	}
+	vector, err := embedder.Embed(ctx, fact.Content)
+	if err != nil {
+		return fmt.Errorf("embed text: %w", err)
+	}
+	collectionName := factsCollectionName(req.TenantID, embedder.Model())
+	// vector metadata 包含 category/confidence/source，不含敏感原文以外的新增字段
+	doc := &port.VectorDoc{
+		ID:        fact.ID,
+		Embedding: vector,
+		Metadata: map[string]interface{}{
+			"user_id":         fact.UserID,
+			"agent_id":        fact.AgentID,
+			"conversation_id": fact.ConversationID,
+			"scope":           string(fact.Scope),
+			"content":         fact.Content,
+			"importance":      fact.Importance,
+			"category":        fact.Category,
+			"confidence":      fact.Confidence,
+			"source":          fact.Source,
+		},
+	}
+	if err := s.vectorStore.Upsert(ctx, collectionName, []*port.VectorDoc{doc}); err != nil {
+		return fmt.Errorf("upsert vector: %w", err)
+	}
+	return nil
+}
+
+// supersedeCandidate marks a candidate superseded, persists the status, and
+// deletes its vector so stale content stops being recalled. Returns true only
+// when the PG status update succeeded. Vector deletion is best-effort with
+// ERROR surfacing: the daily GC purge backstops missed deletions once the row
+// passes retention, and recall filters non-active facts regardless.
+func (s *MemoryService) supersedeCandidate(ctx context.Context, tenantID string, candidate *port.SupersedeCandidate, newFactID string) bool {
+	if err := candidate.Fact.MarkSuperseded(newFactID); err != nil {
+		return false
+	}
+	if err := s.factRepo.Update(ctx, tenantID, candidate.Fact); err != nil {
+		s.logger.Error("memory.extract_facts: supersede update failed",
+			zap.String("tenant_id", tenantID),
+			zap.String("fact_id", candidate.Fact.ID),
+			zap.Error(err))
+		return false
+	}
+	if s.vectorStore != nil {
+		if err := s.vectorStore.DeleteFactVectors(ctx, tenantID, []string{candidate.Fact.ID}); err != nil {
+			s.logger.Error("memory.extract_facts: supersede vector delete failed",
+				zap.String("tenant_id", tenantID),
+				zap.String("fact_id", candidate.Fact.ID),
+				zap.Error(err))
+		}
+	}
+	return true
 }
 
 // normalizeEntity finds or creates an entity, returning its ID.

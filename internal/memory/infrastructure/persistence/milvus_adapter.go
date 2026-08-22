@@ -269,3 +269,45 @@ func memoryCollectionLegacyName(tenantID string) string {
 func legacyMemoryCollections(tenantID string) []string {
 	return []string{memoryFactsCollectionLegacyName(tenantID), memoryCollectionLegacyName(tenantID)}
 }
+
+// DeleteEntryVectors removes the given raw-turn entry ids from the tenant's
+// memory_ collections (legacy + every model-suffixed). The episodic TTL GC
+// drives deletion from PG ids, so rows and vectors stay consistent.
+func (a *MilvusPortAdapter) DeleteEntryVectors(ctx context.Context, tenantID string, ids []string) error {
+	return a.deleteByIDsFromFamily(ctx, tenantID, "memory_", memoryCollectionLegacyName(tenantID), ids)
+}
+
+// DeleteFactVectors removes the given fact ids from the tenant's
+// memory_facts_ collections (legacy + every model-suffixed). Called when a
+// fact leaves the active set and by the GC reconcile so vectors converge to
+// PG status even if an immediate deletion failed.
+func (a *MilvusPortAdapter) DeleteFactVectors(ctx context.Context, tenantID string, ids []string) error {
+	return a.deleteByIDsFromFamily(ctx, tenantID, "memory_facts_", memoryFactsCollectionLegacyName(tenantID), ids)
+}
+
+// deleteByIDsFromFamily deletes the given ids from the tenant's legacy
+// collection plus every model-suffixed collection matching the family prefix.
+// DeleteByPrimaryIDs tolerates missing collections; listing failures surface
+// instead of silently leaking model-suffixed collections (same rule as
+// deleteFromAllCollections).
+func (a *MilvusPortAdapter) deleteByIDsFromFamily(ctx context.Context, tenantID, prefix, legacy string, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	var errs []error
+	if err := a.vs.DeleteByPrimaryIDs(ctx, legacy, ids); err != nil {
+		errs = append(errs, fmt.Errorf("%s: %w", legacy, err))
+	}
+	tid := strings.ReplaceAll(tenantID, "-", "_")
+	listedPrefix := prefix + tid + "_"
+	modelSuffixed, listErr := a.vs.ListCollections(ctx, listedPrefix)
+	if listErr != nil {
+		errs = append(errs, fmt.Errorf("list collections %q: %w", listedPrefix, listErr))
+	}
+	for _, collection := range modelSuffixed {
+		if err := a.vs.DeleteByPrimaryIDs(ctx, collection, ids); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", collection, err))
+		}
+	}
+	return errors.Join(errs...)
+}

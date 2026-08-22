@@ -1,0 +1,2 @@
+-- Rollback is intentionally a no-op to preserve tenant data; re-enabling the
+-- PG queue would require restoring the tenant-schema DDL and backfill.

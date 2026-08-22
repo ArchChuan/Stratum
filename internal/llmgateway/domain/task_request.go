@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"math"
 	"strings"
 
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -28,13 +29,22 @@ func NewChatRequest(model string, msgs []Message, tools []Tool, effort string) *
 	}
 }
 
-// temperaturePtr 把调用方的 float32 温度转成 *float64：0 = unset（agent 语义
-// 贯穿全链路）→ nil，让网关采样注入层生效；非 0 → 显式值。
-func temperaturePtr(v float32) *float64 {
+// RoundTemperature 把温度收敛到 2 位小数：智谱等 OpenAI 兼容端点在请求体
+// 校验小数点位数（超过 2 位返回 400）。float32→float64 直转会把 0.1 变成
+// 0.10000000149011612，必须先舍入再发送，避免 provider 契约 400。
+func RoundTemperature(v float64) float64 {
+	return math.Round(v*100) / 100
+}
+
+// PlatformTemperaturePtr 把调用方的 float32 温度转成 *float64：0 = unset
+// （agent 语义贯穿全链路）→ nil，让网关采样注入层生效；非 0 → 显式值
+// （2 位小数舍入）。平台参数覆盖点必须复用本函数，禁止 float64(float32)
+// 直转绕过舍入——智谱等端点校验小数位数，超 2 位返回 400。
+func PlatformTemperaturePtr(v float32) *float64 {
 	if v == 0 {
 		return nil
 	}
-	f := float64(v)
+	f := RoundTemperature(float64(v))
 	return &f
 }
 
@@ -53,7 +63,7 @@ func NewSummarizeRequest(model, instructions string, items []string, maxTokens i
 	return &CompletionRequest{
 		Model:          model,
 		Messages:       []Message{{Role: "user", Content: content}},
-		Temperature:    temperaturePtr(constants.TaskSummarizeTemperature),
+		Temperature:    PlatformTemperaturePtr(constants.TaskSummarizeTemperature),
 		MaxTokens:      maxTokens,
 		NoPrimaryRetry: true,
 	}
@@ -72,7 +82,7 @@ func NewExtractRequest(model, system, user string, temperature float32, maxToken
 	return &CompletionRequest{
 		Model:          model,
 		Messages:       msgs,
-		Temperature:    temperaturePtr(temperature),
+		Temperature:    PlatformTemperaturePtr(temperature),
 		MaxTokens:      maxTokens,
 		ResponseFormat: JSONObject(),
 	}

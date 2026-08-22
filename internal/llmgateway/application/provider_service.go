@@ -189,15 +189,19 @@ func (s *ProviderService) invalidate() {
 
 // inferCapabilities deduces model capabilities from the model name using
 // provider-agnostic naming conventions. 嵌入模型独占 CapEmbedding（不混 chat）；
-// 其余至少 CapChat，多模态/推理模型按命名规则追加 CapVision/CapReasoning
+// 其余至少 CapChat+CapToolUse，多模态/推理模型按命名规则追加 CapVision/CapReasoning
 // （必须保留 CapChat，否则被 capability='chat' 过滤出 Agent 下拉）。推理打标与
 // infrastructure/model_catalog.go 的 reasoningModels 清单保持同步。
+// CapToolUse 对 chat 模型默认开启：主流 OpenAI-compatible chat 模型均支持
+// function calling，网关 L4 按能力集拦截需要工具调用的请求；若某模型实际
+// 不支持，管理员可在模型管理手动去掉 tool_use 标签（误标时由 provider 运行时
+// 报错暴露，可自愈，与"空能力集 = unknown 放行"语义互不影响）。
 func inferCapabilities(name string) []domain.ModelCapability {
 	lower := strings.ToLower(name)
 	if isEmbeddingModelName(lower) {
 		return []domain.ModelCapability{domain.CapEmbedding}
 	}
-	caps := []domain.ModelCapability{domain.CapChat}
+	caps := []domain.ModelCapability{domain.CapChat, domain.CapToolUse}
 	if isVisionModelName(lower) {
 		caps = append(caps, domain.CapVision)
 	}

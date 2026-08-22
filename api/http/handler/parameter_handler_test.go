@@ -75,7 +75,10 @@ func newTestParameterHandler(store port.PlatformStore) *ParameterHandler {
 	)
 }
 
-func TestPromptDefaults_returnsAllWhitelistedTemplates(t *testing.T) {
+// TestPromptDefaults_returnsCompactionTemplate 断言 prompt-defaults 仅保留
+// agent.compaction_prompt：memory.*_prompt 已改为显式配置、未配置即失败
+// （fail-closed），不再下发任何内置模板。
+func TestPromptDefaults_returnsCompactionTemplate(t *testing.T) {
 	r := setupParameterRouter(newTestParameterHandler(&fakePlatformStore{}))
 
 	w := httptest.NewRecorder()
@@ -89,36 +92,16 @@ func TestPromptDefaults_returnsAllWhitelistedTemplates(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	wantKeys := []string{
-		"agent.compaction_prompt",
-		"memory.extraction_prompt",
-		"memory.enrich_prompt",
-		"memory.summary_prompt",
-		"memory.history_summary_prompt",
-		"memory.supersede_prompt",
-	}
-	for _, key := range wantKeys {
-		got, ok := resp[key]
-		if !ok {
-			t.Fatalf("missing key %s in response %v", key, resp)
-		}
-		if strings.TrimSpace(got) == "" {
-			t.Fatalf("key %s is empty", key)
+	for _, key := range []string{
+		"memory.extraction_prompt", "memory.enrich_prompt", "memory.summary_prompt",
+		"memory.history_summary_prompt", "memory.supersede_prompt",
+	} {
+		if _, ok := resp[key]; ok {
+			t.Fatalf("memory prompt key %s must not be in prompt-defaults after S2", key)
 		}
 	}
-	// 模板与 pkg/constants 逐字节一致，防止搬移漂移。
-	if resp["memory.extraction_prompt"] != constants.MemoryExtractionDefaultPrompt {
-		t.Fatal("memory.extraction_prompt 与 constants.MemoryExtractionDefaultPrompt 不一致")
-	}
-	if resp["agent.compaction_prompt"] != constants.CompactionDefaultPrompt {
+	if got, ok := resp["agent.compaction_prompt"]; !ok || got != constants.CompactionDefaultPrompt {
 		t.Fatal("agent.compaction_prompt 与 constants.CompactionDefaultPrompt 不一致")
-	}
-	// 方案 B 契约：memory.extraction_prompt 是规则增量模板，身份、数量上限、
-	// fact_type 枚举与 JSON 输出协议由系统恒渲染（llm_extractor.go
-	// extractionIdentityPrompt），模板本身不含 %s/%d 占位符——下发模板中出现
-	// 占位符即契约回归。其余模板（compaction 等）保留运行时占位符契约。
-	if strings.Contains(resp["memory.extraction_prompt"], "%s") || strings.Contains(resp["memory.extraction_prompt"], "%d") {
-		t.Fatal("memory.extraction_prompt 是规则增量模板，不应包含运行时可替换的占位符")
 	}
 }
 

@@ -12,5 +12,8 @@ type HistoryRepo interface {
 	NextOverflow(ctx context.Context, tenantID string, recentMax, earlierMax, limit int) (*domain.HistoryOverflowGroup, error)
 	ReplaceOverflow(ctx context.Context, tenantID string, replacement *domain.HistorySegment, sourceIDs []string) error
 	Maintain(ctx context.Context, tenantID string) error
-	ArchiveColdFacts(ctx context.Context, tenantID string) (int, error)
+	// ArchiveColdFacts marks cold active facts as archived and returns the
+	// archived ids so the caller can delete their vectors (status change must
+	// be reflected in the vector store).
+	ArchiveColdFacts(ctx context.Context, tenantID string) ([]string, error)
 }

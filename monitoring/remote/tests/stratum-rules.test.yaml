@@ -6,6 +6,7 @@ rule_files:
   - ../rules/stratum-dependencies.yaml
   - ../rules/stratum-monitoring.yaml
   - ../rules/stratum-ai.yaml
+  - ../rules/stratum-llm-model.yaml
 
 evaluation_interval: 1m
 
@@ -1134,29 +1135,6 @@ tests:
         alertname: StratumModelUnhealthy
         exp_alerts: []
 
-  - name: memory migration stalled alert fires on no-progress scans
-    interval: 1m
-    input_series:
-      - series: 'memory_migration_stalled_total{tenant_id="tenant-1",from_model="text-embedding-v1",to_model="text-embedding-v3"}'
-        values: '0+1x7'
-    alert_rule_test:
-      - eval_time: 6m
-        alertname: StratumMemoryMigrationStalled
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              service: stratum
-              environment: remote-test
-              component: memory
-              tenant_id: tenant-1
-              from_model: text-embedding-v1
-              to_model: text-embedding-v3
-            exp_annotations:
-              summary: 记忆嵌入迁移扫描停滞
-              description: Migration from text-embedding-v1 to text-embedding-v3 for tenant tenant-1 made no progress across consecutive scans (increase 6).
-              dashboard_url: /d/stratum-service-overview
-              runbook_url: /docs/operations/alerts/business.md#memory-migration-stalled
-
   - name: route fallback surge alert fires above threshold
     interval: 1m
     input_series:
@@ -1188,3 +1166,36 @@ tests:
       - eval_time: 6m
         alertname: StratumRouteFallbackSurge
         exp_alerts: []
+
+  - name: llm model resolution failure fires and recovers
+    interval: 1m
+    input_series:
+      - series: 'llm_model_resolution_errors_total{model="",reason="no_default"}'
+        values: '0+1x8'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: StratumLLMModelResolutionFailed
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: StratumLLMModelResolutionFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum
+              environment: remote-test
+              component: llm-gateway
+              # no_default 场景下 model 为空串:Prometheus 将空标签值归一化为
+              # 缺失,告警上不会出现 model 标签(与 got 实测一致)。
+              reason: no_default
+            exp_annotations:
+              summary: LLM 模型解析失败：模型配置失效或无默认模型
+              description: >-
+                过去 5 分钟 llm_model_resolution_errors_total 出现增长
+                （model=，reason=no_default）。
+                invalid_model：显式请求的模型不存在/已禁用/不健康；no_default：
+                目录中无可用的默认/推荐模型；resolve_error：注册表解析故障。
+                请检查模型管理目录的 models / providers 配置
+                （default_model、enabled、recommended、default_embedding），
+                修复后告警自动恢复。
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/alerts/business.md#llm-model-resolution-failed

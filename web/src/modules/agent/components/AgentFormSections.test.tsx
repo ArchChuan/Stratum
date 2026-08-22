@@ -46,19 +46,68 @@ describe('AgentFormSections', () => {
     expect(screen.queryByText(/qwen-plus/)).not.toBeInTheDocument();
   });
 
-  it('allows filtering a large model catalogue by name', () => {
+  it('filters a large model catalogue by search text', async () => {
     render(
       <Form>
         <AgentFormSections
           skills={[]}
           mcpTools={[]}
           workspaces={[]}
-          groupedModels={[{ provider: 'Qwen', models: [{ value: 'qwen-max', label: 'qwen-max', reasoning: false }] }]}
+          groupedModels={[
+            {
+              provider: 'Qwen',
+              models: [
+                { value: 'qwen-max', label: 'qwen-max', capabilities: ['chat'], reasoning: false },
+                { value: 'qwen-plus', label: 'qwen-plus', capabilities: ['chat'], reasoning: false },
+              ],
+            },
+          ]}
         />
       </Form>,
     );
 
-    expect(screen.getByRole('combobox', { name: 'LLM 模型' })).not.toHaveAttribute('readonly');
+    // Option children 是 ModelOptionLabel 组件（React element），AntD 默认
+    // filterOption 无法对其取文本；必须按自定义 filterModelOption 匹配
+    // label/value 纯文本，showSearch 才恢复搜索能力。
+    const combobox = screen.getByRole('combobox', { name: 'LLM 模型' });
+    fireEvent.mouseDown(combobox);
+    fireEvent.input(combobox, { target: { value: 'qwen-max' } });
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: /qwen-max/ })).toBeInTheDocument();
+      expect(screen.queryByRole('option', { name: /qwen-plus/ })).not.toBeInTheDocument();
+    });
+  });
+
+  it('renders model capability tags in the LLM model dropdown', () => {
+    render(
+      <Form>
+        <AgentFormSections
+          skills={[]}
+          mcpTools={[]}
+          workspaces={[]}
+          groupedModels={[
+            {
+              provider: 'Zhipu',
+              models: [
+                { value: 'glm-5', label: 'GLM-5', capabilities: ['chat', 'tool_use', 'vision'], reasoning: false },
+              ],
+            },
+          ]}
+        />
+      </Form>,
+    );
+
+    // rc-select 双层结构：role=option 的 ARIA 层文本只有 value（小写模型名），
+    // ModelOptionLabel 渲染的中文能力标签在 .ant-select-item-option 层（下拉
+    // portal 在 document.body，不在组件 container 内；与 pickModelOption helper
+    // 的 document 查询一致），必须在该层断言。
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'LLM 模型' }));
+    const option = Array.from(document.querySelectorAll('.ant-select-item-option')).find((el) =>
+      el.textContent?.includes('GLM-5'),
+    )!;
+    expect(option.textContent).toContain('对话');
+    expect(option.textContent).toContain('工具调用');
+    expect(option.textContent).toContain('视觉');
   });
 
   it('labels an unavailable current model without adding it to new forms', () => {
@@ -377,31 +426,8 @@ describe('AgentFormSections', () => {
         <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
       </Form>,
     );
-    // compaction_prompt + AgentMemoryConfig 的 memory.extraction_prompt 各一个
-    expect(screen.getAllByRole('button', { name: '查看默认提示词' })).toHaveLength(2);
+    // 仅 agent.compaction_prompt 保留默认模板 viewer（memory.* 已 fail-closed）。
+    expect(screen.getAllByRole('button', { name: '查看默认提示词' })).toHaveLength(1);
   });
 
-  it('expresses the platform default as 0 on memory sliders instead of an unreachable empty state', () => {
-    render(
-      <Form>
-        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
-      </Form>,
-    );
-
-    // 0 = unset 通道：后端 validateAndExtractMemoryParameters 对数值 0 提前过滤，
-    // 等价不落库，回落平台默认或 registry Default。min=0 让「平台默认」可操作，而不是只能
-    // 靠从未触摸控件才存在的空值（Slider 一旦拖动就无法回到空）。
-    const maxFacts = screen.getByRole('slider', { name: '单次抽取事实上限' });
-    expect(maxFacts).toHaveAttribute('aria-valuemin', '0');
-    expect(maxFacts).toHaveAttribute('aria-valuemax', '10');
-    expect(screen.getAllByText(/0 = 使用平台默认（资源未配置时生效）/)).toHaveLength(3);
-
-    const recall = screen.getByRole('slider', { name: '记忆召回条数' });
-    expect(recall).toHaveAttribute('aria-valuemin', '0');
-    expect(recall).toHaveAttribute('aria-valuemax', '20');
-
-    const factInjection = screen.getByRole('slider', { name: '事实注入条数' });
-    expect(factInjection).toHaveAttribute('aria-valuemin', '0');
-    expect(factInjection).toHaveAttribute('aria-valuemax', '20');
-  });
 });

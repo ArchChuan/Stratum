@@ -261,7 +261,7 @@ func TestPgModelRepo_UpsertDiscovered(t *testing.T) {
 	}
 }
 
-func TestPgModelRepo_DeleteProviderManaged(t *testing.T) {
+func TestPgModelRepo_DeleteProviderManagedAllowed(t *testing.T) {
 	_, providerRepo, modelRepo, cleanup := newModelTestRepos(t)
 	ctx := context.Background()
 
@@ -281,9 +281,12 @@ func TestPgModelRepo_DeleteProviderManaged(t *testing.T) {
 		t.Fatalf("create managed model: %v", err)
 	}
 
-	// Deleting a provider-managed model should fail
+	// provider-managed 模型允许删除；删除后 Get 报 not found。
 	err := modelRepo.Delete(ctx, m.ID)
-	if err == nil {
-		t.Fatal("expected error deleting provider-managed model")
+	if err != nil {
+		t.Fatalf("delete provider-managed model should succeed: %v", err)
+	}
+	if _, err := modelRepo.Get(ctx, m.ID); err == nil {
+		t.Fatal("expected not found after delete")
 	}
 }

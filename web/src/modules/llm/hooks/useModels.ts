@@ -37,10 +37,11 @@ export function useModels() {
     }
   }, []);
 
+  // updateModel/updateModelPolicy 只负责数据更新 + 列表刷新，成功反馈由页面层
+  // 统一弹一次 toast（ModelListPage.handleEditSubmit），避免编辑保存弹出多个成功提示。
   const updateModel = useCallback(async (id: string, values: UpdateModelInput) => {
     try {
       await llmApi.updateModel(id, values);
-      message.success({ content: '模型已更新', duration: 2 });
       await fetch();
     } catch (err) {
       message.error({ content: extractErrorMessage(err, '更新模型失败'), duration: 3 });
@@ -50,7 +51,6 @@ export function useModels() {
   const updateModelPolicy = useCallback(async (id: string, values: UpdateModelPolicyInput) => {
     try {
       await llmApi.updateModelPolicy(id, values);
-      message.success({ content: '运行策略已更新', duration: 2 });
       await fetch();
     } catch (err) {
       message.error({ content: extractErrorMessage(err, '更新运行策略失败'), duration: 3 });

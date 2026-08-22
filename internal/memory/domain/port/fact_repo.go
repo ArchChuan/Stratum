@@ -45,8 +45,9 @@ type FactRepo interface {
 	// than olderThan, capped at limit rows per call. It targets only
 	// status='superseded' (facts replaced by newer ones — true dead weight);
 	// archived facts are durable long-term memory and are never purged here.
-	// Returns the number of rows deleted.
-	PurgeSuperseded(ctx context.Context, tenantID string, olderThan time.Time, limit int) (int, error)
+	// Returns the ids of the deleted rows so the caller can remove their
+	// vectors (the GC backstop for superseded facts past retention).
+	PurgeSuperseded(ctx context.Context, tenantID string, olderThan time.Time, limit int) ([]string, error)
 
 	// CountAll 统计租户 memory_facts 的全部行数（任意状态）——迁移开始时的
 	// 快照总数（progress.total），口径不随迁移期间并发写入漂移。

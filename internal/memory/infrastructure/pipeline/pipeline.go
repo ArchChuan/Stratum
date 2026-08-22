@@ -46,8 +46,11 @@ type Pipeline struct {
 	jsm           *JetStreamManager
 	embedResolver EmbedServiceResolver
 	vectorDB      VectorStore
+	vectorCleaner entryVectorDeleter
 	llmResolver   LLMResolver
 	paramResolver port.PlatformParamResolver
+	extractSvc    port.FactExtractionService
+	reflectSvc    port.ReflectionService
 	logger        *zap.Logger
 
 	// dynamic 是热更新调度参数源（Nacos 经 wiring 桥接），每轮由 poller re-read。
@@ -56,6 +59,8 @@ type Pipeline struct {
 	poller    *OutboxPoller
 	embedders []*EmbedderWorker
 	enrichers []*EnricherWorker
+	extractor *ExtractionConsumerWorker
+	reflector *ReflectionWorker
 
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
@@ -85,6 +90,13 @@ func (p *Pipeline) SetEmbedResolver(r EmbedServiceResolver) {
 	p.embedResolver = r
 }
 
+// SetEntryVectorDeleter wires the cleaner used to remove orphan vectors when a
+// pipeline stage dead-letters after the embedder already wrote the vector.
+// Must be called before Start.
+func (p *Pipeline) SetEntryVectorDeleter(d entryVectorDeleter) {
+	p.vectorCleaner = d
+}
+
 // SetLLMResolver sets a per-tenant LLM resolver used by EnricherWorkers.
 // Must be called before Start. Without it, enrich/summary fall back to the
 // shared p.llm (which has no provider clients in production), so callers
@@ -100,6 +112,14 @@ func (p *Pipeline) SetLLMResolver(r LLMResolver) {
 func (p *Pipeline) SetPlatformParamResolver(r port.PlatformParamResolver) {
 	p.paramResolver = r
 }
+
+// SetExtractionService wires the fact extraction service consumed from the
+// extraction subject. Must be called before Start.
+func (p *Pipeline) SetExtractionService(s port.FactExtractionService) { p.extractSvc = s }
+
+// SetReflectionService wires the trajectory reflection service consumed from
+// the reflection subject. Must be called before Start.
+func (p *Pipeline) SetReflectionService(s port.ReflectionService) { p.reflectSvc = s }
 
 // WithDynamic 挂载热更新调度参数源（Nacos 经 wiring 桥接）。
 // 必须在 Start 之前调用。
@@ -126,6 +146,9 @@ func (p *Pipeline) buildEnricher(consumer jetstream.Consumer, js dlqPublisher, i
 	}
 	if p.paramResolver != nil {
 		worker.WithParamResolver(p.paramResolver)
+	}
+	if p.vectorCleaner != nil {
+		worker.WithEntryVectorDeleter(p.vectorCleaner)
 	}
 	return worker
 }
@@ -168,25 +191,53 @@ func (p *Pipeline) Start(ctx context.Context) error {
 		runWithRestart(pipeCtx, "outbox-poller", p.logger, p.poller.Start)
 	}()
 
-	// Embedder workers
-	embedConsumer, err := jsm.CreateConsumer(ctx,
+	if err := p.startEmbedWorkers(ctx, jsm, js, pipeCtx); err != nil {
+		return abortPipelineStart(p, cancel, err)
+	}
+	if err := p.startEnrichWorkers(ctx, jsm, js, pipeCtx); err != nil {
+		return abortPipelineStart(p, cancel, err)
+	}
+
+	if err := p.startTaskConsumers(ctx, jsm, js, pipeCtx); err != nil {
+		return abortPipelineStart(p, cancel, err)
+	}
+
+	p.logger.Info("memory pipeline started",
+		zap.Int("embed_workers", p.cfg.EmbedWorkers),
+		zap.Int("enrich_workers", p.cfg.EnrichWorkers),
+		zap.Bool("embed_resolver_set", p.embedResolver != nil),
+		zap.Bool("llm_resolver_set", p.llmResolver != nil),
+		zap.Bool("extraction_consumer_set", p.extractSvc != nil),
+		zap.Bool("reflection_consumer_set", p.reflectSvc != nil))
+
+	return nil
+}
+
+// startEmbedWorkers 创建 memory.raw 的 embed 消费 worker。
+func (p *Pipeline) startEmbedWorkers(
+	ctx context.Context,
+	jsm *JetStreamManager,
+	js jetstream.JetStream,
+	pipeCtx context.Context,
+) error {
+	consumer, err := jsm.CreateConsumer(ctx,
 		constants.MemoryRawStream,
 		constants.EmbedderConsumerName,
 		constants.MemoryRawSubject+".>",
 		p.cfg.EmbedAckWait,
 		p.cfg.MaxDeliver)
 	if err != nil {
-		cancel()
-		p.wg.Wait()
 		return fmt.Errorf("create embed consumer: %w", err)
 	}
-
 	for i := 0; i < p.cfg.EmbedWorkers; i++ {
 		worker := NewEmbedderWorker(
-			embedConsumer, js, nil, p.vectorDB, p.logger, p.cfg.EmbedAckWait, p.cfg.MaxDeliver,
+			consumer, js, nil, p.vectorDB, p.logger, p.cfg.EmbedAckWait, p.cfg.MaxDeliver,
 		)
 		if p.embedResolver != nil {
 			worker.WithEmbedResolver(p.embedResolver)
+		}
+		if p.vectorCleaner != nil {
+			worker.WithEntryVectorDeleter(p.vectorCleaner)
 		}
 		p.embedders = append(p.embedders, worker)
 		label := fmt.Sprintf("embed-worker-%d", i)
@@ -196,22 +247,27 @@ func (p *Pipeline) Start(ctx context.Context) error {
 			runWithRestart(pipeCtx, label, p.logger, worker.Start)
 		}()
 	}
+	return nil
+}
 
-	// Enricher workers
-	enrichConsumer, err := jsm.CreateConsumer(ctx,
+// startEnrichWorkers 创建 memory.enriched 的 enrich 消费 worker。
+func (p *Pipeline) startEnrichWorkers(
+	ctx context.Context,
+	jsm *JetStreamManager,
+	js jetstream.JetStream,
+	pipeCtx context.Context,
+) error {
+	consumer, err := jsm.CreateConsumer(ctx,
 		constants.MemoryEnrichedStream,
 		constants.EnricherConsumerName,
 		constants.MemoryEnrichedSubject+".>",
 		p.cfg.EnrichAckWait,
 		p.cfg.MaxDeliver)
 	if err != nil {
-		cancel()
-		p.wg.Wait()
 		return fmt.Errorf("create enrich consumer: %w", err)
 	}
-
 	for i := 0; i < p.cfg.EnrichWorkers; i++ {
-		worker := p.buildEnricher(enrichConsumer, js, i)
+		worker := p.buildEnricher(consumer, js, i)
 		p.enrichers = append(p.enrichers, worker)
 		label := fmt.Sprintf("enrich-worker-%d", i)
 		p.wg.Add(1)
@@ -220,14 +276,95 @@ func (p *Pipeline) Start(ctx context.Context) error {
 			runWithRestart(pipeCtx, label, p.logger, worker.Start)
 		}()
 	}
-
-	p.logger.Info("memory pipeline started",
-		zap.Int("embed_workers", p.cfg.EmbedWorkers),
-		zap.Int("enrich_workers", p.cfg.EnrichWorkers),
-		zap.Bool("embed_resolver_set", p.embedResolver != nil),
-		zap.Bool("llm_resolver_set", p.llmResolver != nil))
-
 	return nil
+}
+
+// startTaskConsumers 创建提取与反思两类任务消费 worker（任一失败即中止启动）。
+func (p *Pipeline) startTaskConsumers(
+	ctx context.Context,
+	jsm *JetStreamManager,
+	js jetstream.JetStream,
+	pipeCtx context.Context,
+) error {
+	if err := p.startExtractionWorkers(ctx, jsm, js, pipeCtx); err != nil {
+		return err
+	}
+	return p.startReflectionWorkers(ctx, jsm, js, pipeCtx)
+}
+
+// startExtractionWorkers 创建 memory.extraction.{tenant} 的消费 worker。
+// service 未装配时跳过（pipeline 可仅跑 raw/enriched 链路）。
+func (p *Pipeline) startExtractionWorkers(
+	ctx context.Context,
+	jsm *JetStreamManager,
+	js jetstream.JetStream,
+	pipeCtx context.Context,
+) error {
+	if p.extractSvc == nil {
+		return nil
+	}
+	consumer, err := jsm.CreateConsumer(ctx,
+		constants.MemoryExtractionStream,
+		constants.ExtractionConsumerName,
+		constants.MemoryExtractionSubject+".>",
+		constants.ExtractionAckWait,
+		constants.ExtractionMaxDeliver)
+	if err != nil {
+		return fmt.Errorf("create extraction consumer: %w", err)
+	}
+	for i := 0; i < constants.ExtractionWorkerCount; i++ {
+		worker := NewExtractionConsumerWorker(consumer, js, p.extractSvc, p.logger,
+			constants.ExtractionAckWait, constants.ExtractionMaxDeliver)
+		p.extractor = worker
+		label := fmt.Sprintf("extraction-worker-%d", i)
+		p.wg.Add(1)
+		go func() {
+			defer p.wg.Done()
+			runWithRestart(pipeCtx, label, p.logger, worker.Start)
+		}()
+	}
+	return nil
+}
+
+// startReflectionWorkers 创建 memory.reflection.{tenant} 的消费 worker。
+func (p *Pipeline) startReflectionWorkers(
+	ctx context.Context,
+	jsm *JetStreamManager,
+	js jetstream.JetStream,
+	pipeCtx context.Context,
+) error {
+	if p.reflectSvc == nil {
+		return nil
+	}
+	consumer, err := jsm.CreateConsumer(ctx,
+		constants.MemoryReflectionStream,
+		constants.ReflectionConsumerName,
+		constants.MemoryReflectionSubject+".>",
+		constants.ReflectionAckWait,
+		constants.ReflectionMaxDeliver)
+	if err != nil {
+		return fmt.Errorf("create reflection consumer: %w", err)
+	}
+	for i := 0; i < constants.ReflectionWorkerCount; i++ {
+		worker := NewReflectionWorker(consumer, js, p.reflectSvc, p.logger,
+			constants.ReflectionAckWait, constants.ReflectionMaxDeliver)
+		p.reflector = worker
+		label := fmt.Sprintf("reflection-worker-%d", i)
+		p.wg.Add(1)
+		go func() {
+			defer p.wg.Done()
+			runWithRestart(pipeCtx, label, p.logger, worker.Start)
+		}()
+	}
+	return nil
+}
+
+// abortPipelineStart 在消费者创建失败时取消 worker 上下文并等待退出，
+// 再返回原始错误（避免启动失败泄漏 goroutine）。
+func abortPipelineStart(p *Pipeline, cancel context.CancelFunc, err error) error {
+	cancel()
+	p.wg.Wait()
+	return err
 }
 
 // Stop gracefully shuts down all workers and waits for goroutines to exit.
@@ -250,6 +387,12 @@ func (p *Pipeline) Stop() {
 		}
 		for _, w := range p.enrichers {
 			w.Stop()
+		}
+		if p.extractor != nil {
+			p.extractor.Stop()
+		}
+		if p.reflector != nil {
+			p.reflector.Stop()
 		}
 
 		p.wg.Wait()

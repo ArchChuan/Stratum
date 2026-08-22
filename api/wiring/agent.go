@@ -66,11 +66,14 @@ type Agent struct {
 	TracePayloadStore   agentport.TracePayloadStore
 	RevisionObjectStore pkgobjectstore.Store
 	CheckpointStore     agent.CheckpointStore
-	CheckpointCleanup   *agent.CheckpointCleanupWorker
-	TaskCleanup         *agent.TaskCleanupWorker
-	ApprovalStore       agentport.ToolApprovalRepo
-	TaskStore           agentport.TaskRepo
-	ApprovalService     *agent.ToolApprovalService
+	// CompactionStore 跨轮复用压缩摘要存储（模型 A 累计覆盖）。nil 时组装侧
+	// 保持无复用行为。
+	CompactionStore   agentport.CompactionStore
+	CheckpointCleanup *agent.CheckpointCleanupWorker
+	TaskCleanup       *agent.TaskCleanupWorker
+	ApprovalStore     agentport.ToolApprovalRepo
+	TaskStore         agentport.TaskRepo
+	ApprovalService   *agent.ToolApprovalService
 	// ActionExecutor 执行审批通过后的动作（D4/D5），由 buildEvaluation 在评测
 	// 组件就绪后装配；nil 时执行端点 fail closed。
 	ActionExecutor agentport.ApprovalActionExecutor
@@ -303,6 +306,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		// 生命周期解耦：会话删除只解除 task 引用，task 保留可恢复。
 		chatStore.SetTaskDetach(a.TaskStore)
 		a.ChatStore = chatStore
+		a.CompactionStore = persistence.NewPgCompactionStore(db)
 		a.ApprovalService = agent.NewToolApprovalService(a.ApprovalStore, a.CheckpointStore, c.Platform.AESKey)
 		a.CheckpointCleanup = agent.NewCheckpointCleanupWorker(
 			agentCheckpointTenantLister{pool: db}.list,
@@ -341,6 +345,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		EvidenceProvider:          a.EvidenceProvider,
 		TracePayloadStore:         a.TracePayloadStore,
 		CheckpointStore:           a.CheckpointStore,
+		CompactionStore:           a.CompactionStore,
 		ApprovalService:           a.ApprovalService,
 		ToolAuthorizer:            agent.NewToolAuthorizer(agentToolUserScopeResolver{members: tenantMemberService(c)}),
 		WorkspaceBindingValidator: workspaceBindingAdapter{ws: knowledgeWorkspaceService(c)},
@@ -371,6 +376,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	if c.Memory != nil && c.Memory.Service != nil {
 		deps.MemoryCleaner = c.Memory.Service
 		deps.MemoryBuffer = memoryBufferClosure(c.Memory.Service)
+		deps.TrajectoryReflection = trajectoryReflectionClosure(c)
 	}
 	a.DiagnosticProvider = newSystemAssistantDiagnosticAdapter(
 		tenantRoleAdapter{service: tenantMemberService(c)}, systemAssistantDiagnosticCollectors(c, a),

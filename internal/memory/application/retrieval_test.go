@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
@@ -74,6 +75,43 @@ func TestRecallMemory_HybridRetrieval(t *testing.T) {
 	embedClient.AssertExpectations(t)
 	vectorStore.AssertExpectations(t)
 	factRepo.AssertExpectations(t)
+}
+
+func TestRecallMemory_ExcludesSupersededFacts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping hybrid retrieval test")
+	}
+
+	ctx := context.Background()
+	factRepo := new(MockFactRepo)
+	entityRepo := new(MockEntityRepo)
+	queue := new(MockExtractionQueue)
+	vectorStore := new(MockVectorStore)
+	llmExtract := new(MockLLMExtractor)
+	embedClient := new(MockEmbedClient)
+
+	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, llmExtract, embedClient, nil, nil)
+
+	// 向量残留了一个已 superseded 的事实（例如删除失败或改动前存量）：
+	// 召回必须按 PG status 过滤，不得返回。
+	stale, _ := domain.NewFact("", "user1", "agent1", "", "user", "Old preference", 0.8, nil)
+	stale.Status = domain.FactStatusSuperseded
+
+	embedClient.On("Embed", ctx, "coffee").Return([]float32{0.1, 0.2, 0.3}, nil)
+	vectorStore.On("Search", ctx, "memory_facts_tenant1_text_embedding_v3", mock.Anything, mock.Anything, mock.Anything).
+		Return([]*port.VectorDoc{{ID: stale.ID, Similarity: 0.9}}, nil)
+	vectorStore.On("Search", ctx, "memory_facts_tenant1", mock.Anything, mock.Anything, mock.Anything).
+		Return([]*port.VectorDoc{}, nil)
+	factRepo.On("SearchByContent", ctx, "tenant1", mock.Anything, "coffee", mock.Anything).
+		Return([]*domain.MemoryFact{}, nil)
+	factRepo.On("GetByID", ctx, "tenant1", stale.ID).Return(stale, nil)
+
+	resp, err := svc.RecallMemory(ctx, &RecallMemoryRequest{
+		TenantID: "tenant1", UserID: "user1", Query: "coffee", TopK: 5,
+	})
+	require.NoError(t, err)
+	require.Empty(t, resp.Facts, "superseded fact must not be recalled")
+	factRepo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestRecallMemoryUsesScopeSafeVectorFilter(t *testing.T) {

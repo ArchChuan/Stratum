@@ -209,17 +209,6 @@ workspace 无法在创建后补填（模型不可变），需在模型管理启�
 （`model.health.degraded` WARN 日志带 model/from/to），修复后确认 `model_health` 回到
 healthy（`model.health.recovered` INFO 日志）。
 
-<a id="memory-migration-stalled"></a>
-
-## StratumMemoryMigrationStalled
-
-影响：记忆嵌入迁移后台扫描连续两拍未推进进度；紧急度：warning。查询
-`increase(memory_migration_stalled_total[15m])`。按 tenant_id/from_model/to_model 定位迁移。
-停滞通常由 embed provider 连续失败（buildDocs 逐条 embed 失败 → 迁移标记 failed，不会停滞）、
-仓库查询挂起或 worker panic 重启循环导致。处置：检查 `memory.migration.worker.*` 日志与
-`memory.migration.*` 迁移事件日志；确认 embed resolver 对目标模型可用后，用管理接口
-RetryMigration 续传（failed/canceled 均支持断点续传）。
-
 <a id="route-fallback-surge"></a>
 
 ## StratumRouteFallbackSurge
@@ -229,3 +218,16 @@ RetryMigration 续传（failed/canceled 均支持断点续传）。
 `route_fallback_total{from_model,to_model}`；正常运行时主模型健康、回退应接近 0。频次骤升
 通常伴随主模型 unhealthy（与 `StratumModelUnhealthy` 配对告警）。处置：按 from_model 检查健康
 状态与 provider 连通性；若为上游侧故障，待恢复后回退自动回落。
+
+<a id="llm-model-resolution-failed"></a>
+
+## StratumLLMModelResolutionFailed
+
+影响：llmgateway 模型解析配置失效（5 分钟内 `llm_model_resolution_errors_total` 增长）；
+紧急度：warning。reason 归因：
+`invalid_model` 显式请求的模型不在目录/已禁用/不健康（fail-closed，不再静默降级）；
+`no_default` 未显式指定模型且目录中无默认/推荐模型；`resolve_error` 注册表解析故障
+（DB 不可用等基础设施问题）。处置：按 model/reason 检查模型管理目录的
+models（enabled、recommended、default_embedding）与 providers（default_model）配置；
+`resolve_error` 同时检查 PostgreSQL 可用性与 llmgateway 日志
+（`llmgateway.model_resolution_failed` ERROR）。修复配置后指标停止增长，告警自动恢复。

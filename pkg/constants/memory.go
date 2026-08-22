@@ -40,6 +40,12 @@ const (
 	MemoryRawSubject      = "memory.raw"
 	MemoryEnrichedSubject = "memory.enriched"
 	MemoryDLQSubject      = "memory.dlq"
+	// MemoryExtractionStream 承载对话事实提取任务（Redis buffer flush 后发布）。
+	MemoryExtractionStream  = "MEMORY_EXTRACTION"
+	MemoryExtractionSubject = "memory.extraction"
+	// MemoryReflectionStream 承载任务结束后的工具轨迹反思任务。
+	MemoryReflectionStream  = "MEMORY_REFLECTION"
+	MemoryReflectionSubject = "memory.reflection"
 )
 
 // Embedder
@@ -63,12 +69,51 @@ const (
 	MemoryLongTermTopK            = 5
 )
 
+// Extraction / Reflection NATS consumers
+const (
+	ExtractionConsumerName = "extraction-worker"
+	ExtractionAckWait      = 60 * time.Second
+	ExtractionMaxDeliver   = 3 // 与 PG 队列 retry_count<2（共 3 次尝试）一致
+	ExtractionWorkerCount  = 1
+	ReflectionConsumerName = "reflection-worker"
+	ReflectionAckWait      = 60 * time.Second
+	ReflectionMaxDeliver   = 5
+	ReflectionWorkerCount  = 1
+)
+
+// Trajectory reflection policy
+const (
+	// MemoryReflectionMinToolCalls 是触发反思的最小工具调用数（初值，可调）。
+	MemoryReflectionMinToolCalls = 3
+	// MemoryReflectionSkeletonMaxBytes 是轨迹骨架序列化后的上限；超出按工具截断。
+	MemoryReflectionSkeletonMaxBytes = 8 * 1024
+	// MemoryReflectionMaxEntries 是单任务反思候选的最大持久化条数。
+	MemoryReflectionMaxEntries = 5
+	// MemoryReflectionStepMax 是骨架保留的最大步骤数，防止超长任务撑爆提示词。
+	MemoryReflectionStepMax = 50
+	// MemoryReflectionLLMMaxTokens 是反思 LLM 输出的 max_tokens 上限。
+	MemoryReflectionLLMMaxTokens = 4096
+	// MemoryReflectionArgsSummaryMaxRunes 是单步参数摘要的最大 rune 数。
+	MemoryReflectionArgsSummaryMaxRunes = 200
+	// MemoryReflectionErrorFingerprintMaxRunes 是错误指纹的最大 rune 数。
+	MemoryReflectionErrorFingerprintMaxRunes = 200
+	// MemoryReflectionResultSummaryMaxRunes 是任务结果摘要的最大 rune 数。
+	MemoryReflectionResultSummaryMaxRunes = 500
+)
+
+// MemoryExplicitRememberKeywords 是用户显式"记住"指令的关键词（agent 侧
+// 检测后置入反思触发 gate）。中文按字面匹配，英文区分大小写不敏感。
+var MemoryExplicitRememberKeywords = []string{"记住", "remember", "REMEMBER"}
+
 // Pipeline runtime safeguards.
 const (
 	// MemoryFetchBackoffBase 是 JetStream Fetch 失败后的初始退避，避免 NATS 抖动时 worker 100% CPU 自旋。
 	MemoryFetchBackoffBase = 200 * time.Millisecond
 	// MemoryFetchBackoffMax 退避上限。
 	MemoryFetchBackoffMax = 10 * time.Second
+	// MemoryQueueEmptyBackoff 是抽取队列为空时的最小轮询间隔：
+	// 队列空时不得紧接重查，避免多租户空转打满 DB（2026-08-21 CPU 打满事故）。
+	MemoryQueueEmptyBackoff = 1 * time.Second
 	// MemoryOutboxPublishTimeout 限制单次 NATS Publish 的最长阻塞时间。
 	// Publish 在 outbox 取出行事务提交后执行（事务内禁止网络 IO），
 	// 该超时防止 NATS 慢/断连时 poll 循环卡死。
@@ -86,6 +131,11 @@ const (
 const (
 	MemoryBufferFlushSize     = 5 // flush after K messages
 	MemoryBufferFlushInterval = 2 * time.Minute
+	// MemoryBufferFlushLockTTL bounds how long a flusher may hold the per-key
+	// single-flight lock. A crashed flusher (process kill, network partition)
+	// releases via TTL so the buffer is never starved; a live flush completes
+	// in milliseconds, so 30s is far beyond the critical section.
+	MemoryBufferFlushLockTTL = 30 * time.Second
 	// MemoryBufferKeyTTL is a sliding safety TTL on the Redis list key.
 	// Prevents leaked keys when a conversation ends before K or T flush triggers
 	// (e.g. tab closed, server restart). Reset on every push so slow but active
@@ -123,9 +173,16 @@ const (
 	MemoryRRFConstant    = 60   // RRF k parameter for hybrid retrieval fusion
 )
 
-// Memory GC - controls soft-delete cleanup
+// Memory GC - controls soft-delete and episodic TTL cleanup
 const (
 	MemorySoftDeleteRetention = 30 * 24 * time.Hour // 30 days
+	// MemoryEpisodicTTL is the retention window for the raw-turn episodic
+	// layer (memory_entries + memory_<tenant>_<model> vectors). Raw dialogue
+	// value decays fast; industry practice bounds episodic stores at 30-90
+	// days. 90d matches MemorySupersededRetention so both layers share the
+	// same retention cadence. Entries with an explicit expires_at are removed
+	// at their own expiry, independently of this cutoff.
+	MemoryEpisodicTTL = 90 * 24 * time.Hour
 )
 
 // Dynamic long-term History policy. Values are centralized so workers,
@@ -221,71 +278,4 @@ const (
 	// MemoryMigrationPerFactEstimateMS 成本预览对单条事实 embed+upsert 的耗时
 	// 估算（毫秒），仅用于 UI 展示预计时长，非精确计量。
 	MemoryMigrationPerFactEstimateMS = 200
-)
-
-// Memory Prompt templates — 各 memory worker 的默认提示词模板唯一权威源。平台参数
-// memory.*_prompt 未配置时兜底；internal/parameters 的 prompt-defaults 白名单
-// 按这些键下发全文给前端展示。除 MemoryExtractionDefaultPrompt（规则增量、无
-// 占位符，身份/上限/协议由系统恒渲染）外，其余模板保留 %s/%d 占位符契约。
-const (
-	// MemoryExtractionDefaultPrompt 是内置默认提取规则（memory.extraction_prompt
-	// 未配置时兜底，由 llm_extractor.go 在系统渲染的身份行后拼接）。规则不含
-	// 任何占位符：身份、数量上限、fact_type 枚举与 JSON 输出协议恒由系统渲染，
-	// 用户自定义 prompt 只需写规则增量。
-	MemoryExtractionDefaultPrompt = `提取规则（严格执行）：
-- 只提取用户明确陈述、确认或展现的事实
-- 不提取：用户的提问、问候语、AI 助手的回复内容、工具调用的输出
-- 不提取泛化描述（如"用户提到了某件事"），只提取具体事实
-- 优先精确性：「用户偏好在 VS Code 中使用暗色主题」优于「用户有主题偏好」`
-
-	// MemoryEnrichDefaultPrompt 是对话富化模板（memory.enrich_prompt 未配置时
-	// 兜底）。%s(role)/%s(content) 占位符见 enricher_prompt.go formatEnrichmentPrompt。
-	MemoryEnrichDefaultPrompt = `分析以下对话消息，提取结构化元数据。
-
-只输出符合以下格式的 JSON，不加任何说明或 markdown 标记：
-{
-  "entities": [{"name": "...", "type": "person|product|concept|location|org", "confidence": 0.0-1.0}],
-  "importance": 0.0-1.0,
-  "token_estimate": 数字,
-  "keywords": ["关键词1", "关键词2"],
-  "work_context": ["当前工作、任务或约束"],
-  "personal_context": ["当前明确表达的个人偏好或状态"],
-  "top_of_mind": ["当前最关注的事项"]
-}
-
-规则：
-- importance 评分：0.9+ 决策/承诺；0.7-0.9 具体事实/偏好；0.3-0.7 一般上下文；<0.3 无实质内容（问候/感谢/简单确认）
-- entities：只提取置信度 >= 0.6 的具名实体
-- keywords：3-5 个最有检索价值的词语
-- token_estimate：消息内容的 token 数近似值
-- 三个 context 数组仅保留当前仍活跃、明确且必要的短句；每组最多 8 项，每项不超过 240 字；不要输出密码、令牌、密钥或原始整段消息
-
-消息（角色：%s）：
-%s`
-
-	// MemorySummaryDefaultPrompt 是会话摘要模板（memory.summary_prompt 未配置
-	// 时兜底）。%s(conversation) 占位符见 enricher_prompt.go formatSummaryPrompt。
-	MemorySummaryDefaultPrompt = `简洁总结以下对话，保留关键决策、确认的事实和待办事项。要求简短但完整，使用中文。
-
-对话内容：
-%s`
-
-	// MemoryHistorySummaryDefaultPrompt 是周期历史总结指令前缀（memory.
-	// history_summary_prompt 未配置时兜底），见 history_summarizer.go 消费点。
-	MemoryHistorySummaryDefaultPrompt = "Summarize this bounded period of user history. Preserve decisions, goals, preferences, and durable context; omit secrets and raw payloads.\n\n"
-
-	// MemorySupersedeDefaultPrompt 是事实取代判定模板（memory.supersede_prompt
-	// 未配置时兜底）。%s(oldFact)/%s(newFact) 占位符见 llm_superseder.go 消费点。
-	MemorySupersedeDefaultPrompt = `判断新事实是否应该取代旧事实。
-
-旧事实：%s
-新事实：%s
-
-判断标准：
-- 如果新事实是对旧事实的更新、纠正或推翻，则应取代（supersedes: true）
-- 如果两者描述不同方面或可以并存，则不取代（supersedes: false）
-- 如果新事实只是旧事实的子集或更模糊的表达，则不取代
-
-只输出 JSON，不加任何说明：
-{"supersedes": true/false, "reason": "简短说明"}`
 )
