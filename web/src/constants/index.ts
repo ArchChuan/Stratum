@@ -97,20 +97,6 @@ export const MEMORY_DIAGNOSTICS_REFRESH_INTERVAL_MS = 30000; // 30s
 export const MEMORY_TOP_ENTITIES_LIMIT = 10;
 // 记忆嵌入模型迁移进行中的轮询间隔：migrating 期间前端轮询进度，避免高频打后端。
 
-// 记忆注入参数控件 bounds。min=0 是「0 = 系统默认」unset 通道：后端
-// validateAndExtractMemoryParameters 对数值 0 提前过滤（等价不落库），回落
-// registry Default；registry VisualHint.Min 仍是 1（约束优化器采样空间值域，
-// 与 UI 空值通道语义分离）。DEFAULT 对齐 registry Default。
-export const MEMORY_MAX_FACTS_MIN = 0;
-export const MEMORY_MAX_FACTS_MAX = 10;
-export const MEMORY_MAX_FACTS_DEFAULT = 10;
-export const MEMORY_FACT_INJECTION_MIN = 0;
-export const MEMORY_FACT_INJECTION_MAX = 20;
-export const MEMORY_FACT_INJECTION_DEFAULT = 8;
-export const MEMORY_HISTORY_INJECTION_MIN = 0;
-export const MEMORY_HISTORY_INJECTION_MAX = 10;
-export const MEMORY_HISTORY_INJECTION_DEFAULT = 3;
-
 // 上下文压缩温度控件 bounds；后端 CompactionDefaultTemperature=0.3，写路径钳制
 // [0,1]（Qwen/Zhipu 拒收 >1）。0 = unset，回落 0.3。
 export const COMPACTION_TEMP_MIN = 0;
@@ -121,13 +107,6 @@ export const COMPACTION_SAFETY_RATIO_DEFAULT = 0.8;
 // compaction_recent_groups = 0 时按上下文窗口自动推导组数（默认 3，
 // pkg/constants/agent.go LoopCompactionRecentGroups；仅提示展示，不写回）。
 export const COMPACTION_RECENT_GROUPS_DEFAULT = 3;
-// 记忆召回条数控件 bounds；对齐 registry memory.recall_top_k（Default 5 / Max 20），
-// 后端 Handle 解析时 clamp [1,20]；min=0 同 memory.* unset 通道（写路径提前过滤，
-// 不落库，回落 Default）。
-export const RECALL_TOP_K_MIN = 0;
-export const RECALL_TOP_K_MAX = 20;
-export const RECALL_TOP_K_DEFAULT = 5;
-
 export const CHUNKING_STRATEGY_OPTIONS = [
   { value: 'structure_recursive', label: '结构感知（推荐）— Markdown 标题分层 + 递归分块' },
   { value: 'recursive', label: '递归分块 — 按字符边界递归切分' },

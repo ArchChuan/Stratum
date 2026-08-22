@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { agentApi } from '../api/agent.api';
-import { buildGroupedModels, buildMemoryParameters, type AgentFormValues, type GroupedModelOption } from '../model/agent';
+import { buildGroupedModels, type AgentFormValues, type GroupedModelOption } from '../model/agent';
 
 import { knowledgeApi } from '@/modules/knowledge';
 import type { Workspace } from '@/modules/knowledge';
@@ -60,25 +60,10 @@ export const useCreateAgentPage = () => {
       setLoading(true);
       try {
         const {
-          memoryMaxFactsPerExtraction,
-          memoryFactInjectionTopN,
-          memoryHistoryInjectionTopN,
-          memoryExtractionPrompt,
-          memoryExtractionModel,
-          memoryRecallTopK,
           ...rest
         } = values;
-        const memoryParameters = buildMemoryParameters({
-          memoryMaxFactsPerExtraction,
-          memoryFactInjectionTopN,
-          memoryHistoryInjectionTopN,
-          memoryExtractionPrompt,
-          memoryExtractionModel,
-          memoryRecallTopK,
-        });
         await agentApi.create({
           ...rest,
-          ...(Object.keys(memoryParameters).length > 0 ? { parameters: memoryParameters } : {}),
           mcpToolIds: values.mcpToolIds || [],
           knowledgeWorkspaceIds: values.knowledgeWorkspaceIds || [],
         });

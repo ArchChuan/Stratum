@@ -161,17 +161,35 @@ func TestRegistryAgentMemoryParams(t *testing.T) {
 		t.Errorf("KeyByShortName(compaction_temperature) = %q/%v, want agent.compaction_temperature/true", got, ok)
 	}
 
-	// 提取 prompt/model:ScopeResource,字符串自由校验,无 EvaluationKeys。
-	for _, key := range []string{"memory.extraction_prompt", "memory.extraction_model"} {
+	// 提取/反思 prompt/model:ScopePlatform（记忆配置平台化,编辑入口在平台参数页）,
+	// 字符串自由校验,无 EvaluationKeys。
+	for _, key := range []string{
+		"memory.extraction_prompt", "memory.extraction_model",
+		"memory.reflection_prompt", "memory.reflection_model",
+	} {
 		def, ok := r.Get(key)
 		if !ok {
 			t.Fatalf("%s not registered", key)
 		}
-		if def.Scope != ScopeResource || def.Optimizable {
-			t.Errorf("%s scope/optimizable = %q/%v, want resource/false", key, def.Scope, def.Optimizable)
+		if def.Scope != ScopePlatform || def.Optimizable {
+			t.Errorf("%s scope/optimizable = %q/%v, want platform/false", key, def.Scope, def.Optimizable)
 		}
 		if len(def.EvaluationKeys) != 0 {
 			t.Errorf("%s must not carry EvaluationKeys (string free-form), got %v", key, def.EvaluationKeys)
+		}
+	}
+
+	// 记忆数值参数:ScopePlatform（平台参数页编辑,0=unset 回落定义默认）。
+	for _, key := range []string{
+		"memory.recall_top_k", "memory.fact_injection_top_n",
+		"memory.history_injection_top_n", "memory.max_facts_per_extraction",
+	} {
+		def, ok := r.Get(key)
+		if !ok {
+			t.Fatalf("%s not registered", key)
+		}
+		if def.Scope != ScopePlatform {
+			t.Errorf("%s scope = %q, want platform", key, def.Scope)
 		}
 	}
 
