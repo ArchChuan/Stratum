@@ -4,7 +4,6 @@ import { useMemo } from 'react';
 
 import type { GroupedModelOption } from '../model/agent';
 
-import { AgentMemoryConfig } from './AgentMemoryConfig';
 
 import {
   AGENT_CONTEXT_WINDOW_RATIO,
@@ -421,7 +420,6 @@ export const AgentFormSections = ({
       />
     </div>
 
-    <AgentMemoryConfig groupedModels={groupedModels} />
   </>
   );
 };

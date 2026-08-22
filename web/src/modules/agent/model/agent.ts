@@ -76,64 +76,12 @@ export interface AgentFormValues {
   compaction_temperature?: number;
   compaction_model?: string;
   reasoning_effort?: string;
-  // 记忆注入/提取/召回参数(agents.parameters JSONB 的 memory.* dotted 键,
-  // 提交时经 buildMemoryParameters 映射;null/undefined 不落库)
-  memoryMaxFactsPerExtraction?: number;
-  memoryFactInjectionTopN?: number;
-  memoryHistoryInjectionTopN?: number;
-  memoryExtractionPrompt?: string;
-  memoryExtractionModel?: string;
-  memoryRecallTopK?: number;
-  // registry 资源级参数的透传对象,只写 memory.* dotted 键
-  parameters?: Record<string, unknown>;
   allowedSkills?: string[];
   mcpToolIds?: string[];
   knowledgeWorkspaceIds?: string[];
   memoryScope?: string;
   editors?: string[];
 }
-
-// buildMemoryParameters 把表单上的 memory.* 字段映射为 agents.parameters JSONB
-// 的 dotted 键。编辑已有 Agent 时，已保存字段被清空会以 null 作为删除标记，
-// 后端据此移除旧覆盖并回落平台默认；新建 Agent 的空字段仍不发送。
-export type MemoryParamValues = Pick<
-  AgentFormValues,
-  | 'memoryMaxFactsPerExtraction'
-  | 'memoryFactInjectionTopN'
-  | 'memoryHistoryInjectionTopN'
-  | 'memoryExtractionPrompt'
-  | 'memoryExtractionModel'
-  | 'memoryRecallTopK'
->;
-export const buildMemoryParameters = (
-  values: MemoryParamValues,
-  existingParameters?: unknown,
-): Record<string, unknown> => {
-  const params: Record<string, unknown> = {};
-  const fields: Array<[string, string | number | undefined]> = [
-    ['memory.max_facts_per_extraction', values.memoryMaxFactsPerExtraction],
-    ['memory.fact_injection_top_n', values.memoryFactInjectionTopN],
-    ['memory.history_injection_top_n', values.memoryHistoryInjectionTopN],
-    ['memory.extraction_prompt', values.memoryExtractionPrompt],
-    ['memory.extraction_model', values.memoryExtractionModel],
-    ['memory.recall_top_k', values.memoryRecallTopK],
-  ];
-  for (const [key, value] of fields) {
-    if (value != null) {
-      params[key] = value;
-      continue;
-    }
-    if (hasMemoryParameter(existingParameters, key)) {
-      params[key] = null;
-    }
-  }
-  return params;
-};
-
-const hasMemoryParameter = (parameters: unknown, key: string): boolean =>
-  typeof parameters === 'object' &&
-  parameters !== null &&
-  Object.prototype.hasOwnProperty.call(parameters, key);
 
 export interface GroupedModelOption {
   provider: string;

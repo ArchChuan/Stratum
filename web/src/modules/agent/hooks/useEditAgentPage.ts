@@ -5,7 +5,6 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { agentApi } from '../api/agent.api';
 import {
   buildGroupedModels,
-  buildMemoryParameters,
   type Agent,
   type AgentFormValues,
   type GroupedModelOption,
@@ -86,13 +85,6 @@ export const useEditAgentPage = () => {
           compaction_prompt: a.compaction_prompt,
           compaction_temperature: a.compaction_temperature,
           compaction_model: a.compaction_model,
-          // memory.* 存 agents.parameters JSONB 的 dotted 键，经 a.parameters 回显
-          memoryMaxFactsPerExtraction: memoryParam(a.parameters, 'memory.max_facts_per_extraction'),
-          memoryFactInjectionTopN: memoryParam(a.parameters, 'memory.fact_injection_top_n'),
-          memoryHistoryInjectionTopN: memoryParam(a.parameters, 'memory.history_injection_top_n'),
-          memoryExtractionPrompt: memoryParam(a.parameters, 'memory.extraction_prompt'),
-          memoryExtractionModel: memoryParam(a.parameters, 'memory.extraction_model'),
-          memoryRecallTopK: memoryParam(a.parameters, 'memory.recall_top_k'),
           allowedSkills: a.allowedSkills || [],
           mcpToolIds: a.mcpToolIds || [],
           knowledgeWorkspaceIds: a.knowledgeWorkspaceIds || [],
@@ -117,28 +109,10 @@ export const useEditAgentPage = () => {
       setLoading(true);
       try {
         const {
-          memoryMaxFactsPerExtraction,
-          memoryFactInjectionTopN,
-          memoryHistoryInjectionTopN,
-          memoryExtractionPrompt,
-          memoryExtractionModel,
-          memoryRecallTopK,
           ...rest
         } = values;
-        const memoryParameters = buildMemoryParameters(
-          {
-            memoryMaxFactsPerExtraction,
-            memoryFactInjectionTopN,
-            memoryHistoryInjectionTopN,
-            memoryExtractionPrompt,
-            memoryExtractionModel,
-            memoryRecallTopK,
-          },
-          agent?.parameters,
-        );
         await agentApi.update(id, {
           ...rest,
-          ...(Object.keys(memoryParameters).length > 0 ? { parameters: memoryParameters } : {}),
           mcpToolIds: values.mcpToolIds || [],
           knowledgeWorkspaceIds: values.knowledgeWorkspaceIds || [],
         });
@@ -152,7 +126,7 @@ export const useEditAgentPage = () => {
         setLoading(false);
       }
     },
-    [id, navigate, agent?.isSystem, agent?.parameters],
+    [id, navigate, agent?.isSystem],
   );
 
   return {
@@ -160,11 +134,3 @@ export const useEditAgentPage = () => {
     navigate, managementPath, onFinish,
   };
 };
-
-// memoryParam 从 GET 回显的 a.parameters（dotted memory.* 键）取数值或字符串，
-// 缺失或类型不符时返回 undefined（表单控件显示空 = 不覆盖，回落默认）。
-function memoryParam<T extends string | number>(parameters: unknown, key: string): T | undefined {
-  if (typeof parameters !== 'object' || parameters === null) return undefined;
-  const v = (parameters as Record<string, unknown>)[key];
-  return typeof v === 'number' || typeof v === 'string' ? (v as T) : undefined;
-}

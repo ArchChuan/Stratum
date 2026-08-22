@@ -82,38 +82,4 @@ describe('useEditAgentPage', () => {
 		expect(mocks.navigate).toHaveBeenCalledWith(wantPath);
 	});
 
-  it('sends deletion markers when saved memory overrides are cleared', async () => {
-    vi.mocked(agentApi.get).mockResolvedValue({
-      ...agent(mocks.id, false),
-      parameters: {
-        'memory.max_facts_per_extraction': 8,
-        'memory.extraction_model': 'old-model',
-      },
-    });
-    vi.mocked(agentApi.update).mockResolvedValue({} as never);
-    const { result } = renderHook(() => useEditAgentPage());
-    await waitFor(() => expect(result.current.agent).toBeDefined());
-
-    await act(async () => result.current.onFinish({
-      name: mocks.id,
-      description: '',
-      systemPrompt: '',
-      llmModel: 'glm-5.2',
-      maxIterations: 10,
-      maxContextTokens: 8000,
-      memoryMaxFactsPerExtraction: 0,
-      memoryExtractionModel: undefined,
-      allowedSkills: [],
-      mcpToolIds: [],
-      knowledgeWorkspaceIds: [],
-      memoryScope: 'user',
-    }));
-
-    expect(agentApi.update).toHaveBeenCalledWith(mocks.id, expect.objectContaining({
-      parameters: {
-        'memory.max_facts_per_extraction': 0,
-        'memory.extraction_model': null,
-      },
-    }));
-  });
 });
