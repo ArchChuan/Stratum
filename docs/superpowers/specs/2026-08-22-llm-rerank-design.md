@@ -424,7 +424,7 @@ evidence 路径（searchWorkspaceWithEvidence）：
      AND (config->>'rerank_model' IS NULL OR config->>'rerank_model' = '');
    ```
 
-   执行脚本：先 `SELECT id FROM public.tenants WHERE deleted_at IS NULL` 枚举全部 tenant（含历史租户），对每个 schema 跑上述 UPDATE 并把 `tenant_<id>` 替换为实际 schema 名；报告每库影响行数以便对账。
+   执行脚本：运维脚本 `scripts/knowledge-rerank-workspaces-migration.sh` 已实现逐 tenant schema 迁移——按 `SELECT id FROM public.tenants WHERE deleted_at IS NULL` 枚举全部 tenant（含历史租户），对每个 schema 跑上述 UPDATE 并把 `tenant_<id>` 替换为实际 schema 名；以 `RETURNING` + `wc -l` 报告每库影响行数以便对账（幂等，可重复执行）。
 
    **部署排序（关键）**：§4.2 校验上线后，受影响 workspace 的任何保存都会被拒。迁移 SQL 必须在代码部署**之前/同时**执行，否则存在「迁移前保存被拒」窗口。远端生产写入按项目规则先获用户许可。
 
