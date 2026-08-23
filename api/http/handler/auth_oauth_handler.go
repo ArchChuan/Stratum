@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
+	"github.com/byteBuilderX/stratum/internal/iam/application"
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
 	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -100,18 +101,9 @@ func (h *AuthHandler) GitHubCallback(c *gin.Context) {
 	}
 
 	if lookupErr == nil && exists && len(tenants) > 0 {
-		var targetTenantID, tenantRole string
-		for _, t := range tenants {
-			if !t.IsDefault {
-				targetTenantID = t.TenantID
-				tenantRole = t.Role
-				break
-			}
-		}
-		if targetTenantID == "" {
-			targetTenantID = tenants[0].TenantID
-			tenantRole = tenants[0].Role
-		}
+		// 登录进入顺序与密码登录一致：优先自己创建的租户（非默认 + owner），
+		// 其次加入的非默认租户，最后回退默认租户。
+		targetTenantID, tenantRole := application.SelectPreferredTenant(tenants)
 
 		// Derive SystemRole from tenant memberships
 		memberships := make([]domain.TenantMembership, len(tenants))
