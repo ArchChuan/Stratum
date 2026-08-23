@@ -14,7 +14,7 @@ run_docs_checks() {
 }
 
 run_static_checks() {
-  "$make_command" risk-guardrails code-quality
+  "${gen_make_command[@]}" risk-guardrails code-quality
   "${clean_env[@]}" "$go_command" vet ./...
 }
 
@@ -27,11 +27,11 @@ run_go_tests() {
 
 run_build_checks() {
   "$go_command" build -p "$go_parallelism" ./cmd/server
-  "$make_command" fe-lint fe-build
+  "${gen_make_command[@]}" fe-lint fe-build
 }
 
 run_contract_checks() {
-  "$make_command" contract-test
+  "${gen_make_command[@]}" contract-test
 }
 
 [[ -f "$plan" ]] || { printf 'verification plan is missing: %s\n' "$plan" >&2; exit 1; }
@@ -78,18 +78,70 @@ while IFS= read -r check; do
   esac
 done < <(jq -er '.local_checks[]' "$plan")
 
-run_unless_ci_owned() {
+# 生成物并发竞态防护:
+# - code-quality/fe-lint/fe-build 的 make 目标都无条件重跑 proto-gen(buf generate),
+#   并行组各自重跑会竞态写 api/http/dto/gen 与 web/src/services/gen。
+# - 解法:先串行生成一次(改了 .proto 时保证最新),再让静态/构建/契约组的
+#   make 全部带 `-o proto-gen`(GNU make:该目标视为 up-to-date、跳过 recipe),
+#   从根上杜绝重复写。docs 组(agent-instructions-check)不依赖生成物,保持普通 make。
+# - CI_OWNED 模式下 CI 兜底组全部跳过、无并发;串行 proto-gen 仅在实际要跑
+#   go test/go build/contract 且未被 CI 兜底时才执行。
+need_gen=false
+if [[ "$tests" == true && "$ci_skip_tests" != true ]] ||
+   [[ "$build" == true && "$ci_skip_build" != true ]] ||
+   [[ "$contract" == true && "$ci_skip_contract" != true ]]; then
+  need_gen=true
+fi
+gen_make_command=("$make_command")
+if [[ "$need_gen" == true ]]; then
+  "$make_command" proto-gen
+  # 数组保存 make + `-o proto-gen`(GNU make:目标视为 up-to-date、跳过 recipe),
+  # 不能拼成带空格的字符串,否则整串会被当做一个命令名。
+  gen_make_command=("$make_command" -o proto-gen)
+fi
+
+# 五组并行运行:每组输出进独立日志,失败时统一回放(前 300 行),传播全部失败
+# 而非首个;成功组静默(保持终端整洁),CI 兜底跳过显式暴露。
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/stratum-planned-checks.XXXXXX")
+trap 'rm -rf "$tmpdir"' EXIT
+
+declare -a group_pids=() group_names=() group_codes=()
+launch_group() {
   local name=$1 skip=$2
   shift 2
   if [[ "$skip" == true ]]; then
     printf 'skipped (CI-owned): %s\n' "$name" >&2
     return 0
   fi
-  "$@"
+  ( "$@" >"$tmpdir/$name.log" 2>&1 ) &
+  group_pids+=("$!")
+  group_names+=("$name")
 }
 
-[[ "$docs" != true ]] || run_unless_ci_owned docs-lint "$ci_skip_docs" run_docs_checks
-[[ "$static" != true ]] || run_unless_ci_owned static "$ci_skip_static" run_static_checks
-[[ "$tests" != true ]] || run_unless_ci_owned tests "$ci_skip_tests" run_go_tests
-[[ "$build" != true ]] || run_unless_ci_owned build "$ci_skip_build" run_build_checks
-[[ "$contract" != true ]] || run_unless_ci_owned contract "$ci_skip_contract" run_contract_checks
+[[ "$docs" != true ]] || launch_group docs-lint "$ci_skip_docs" run_docs_checks
+[[ "$static" != true ]] || launch_group static "$ci_skip_static" run_static_checks
+[[ "$tests" != true ]] || launch_group tests "$ci_skip_tests" run_go_tests
+[[ "$build" != true ]] || launch_group build "$ci_skip_build" run_build_checks
+[[ "$contract" != true ]] || launch_group contract "$ci_skip_contract" run_contract_checks
+
+failed=0
+for i in "${!group_pids[@]}"; do
+  rc=0
+  wait "${group_pids[$i]}" || rc=$?
+  group_codes[$i]=$rc
+  if ((rc == 0)); then
+    printf 'ok: %s\n' "${group_names[$i]}"
+  else
+    printf 'failed: %s\n' "${group_names[$i]}" >&2
+  fi
+done
+
+for i in "${!group_names[@]}"; do
+  if ((group_codes[$i] != 0)); then
+    failed=1
+    printf '\n--- 失败组输出: %s ---\n' "${group_names[$i]}" >&2
+    sed -n '1,300p' "$tmpdir/${group_names[$i]}.log" >&2
+  fi
+done
+
+exit "$failed"

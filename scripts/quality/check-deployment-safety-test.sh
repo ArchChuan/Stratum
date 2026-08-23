@@ -91,7 +91,15 @@ done
 if [[ "${has_workflow_run_ci}" != "true" ]]; then
     require_job build-frontend '^    needs:[[:space:]]*test$' 'frontend test dependency'
 fi
-require_job build-frontend 'no-cache:[[:space:]]*true' 'frontend GHA cache disabled (BuildKit bug)'
+# 前端缓存契约:#219 的 no-cache 是 BuildKit overlay bug("cannot replace to directory
+# with file")的 workaround;根因是 node_modules 未排除出构建上下文。根因已修
+# (web/.dockerignore 排除 node_modules + Dockerfile 依赖层序),契约改为强制
+# gha cache scope + 根因不变量,并禁止 no-cache workaround 复活。
+require_job build-frontend 'cache-from:[[:space:]]*type=gha,scope=frontend' 'frontend cache import scope'
+require_job build-frontend 'cache-to:[[:space:]]*type=gha,scope=frontend,mode=max' 'frontend cache export scope'
+reject 'no-cache:[[:space:]]*true' 'frontend no-cache workaround must not be reintroduced'
+require_file "${ROOT}/web/.dockerignore" '^node_modules$' 'web/.dockerignore must exclude node_modules (BuildKit overlay root cause)'
+require_file "${ROOT}/web/Dockerfile" 'COPY package\.json package-lock\.json \./' 'frontend Dockerfile must cache the npm ci layer'
 require 'digest:[[:space:]]*\$\{\{ steps\.adapter-build\.outputs\.digest \}\}' \
     'adapter build digest job output'
 require 'adapter-digest:[[:space:]]*\$\{\{ needs\.build-feishu-adapter\.outputs\.digest \}\}' \
