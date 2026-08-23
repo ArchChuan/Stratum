@@ -156,6 +156,10 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
+      # gha cache 需要 docker-container driver;默认 docker driver 不支持 cache export
+      # （backend/adapter 均有 setup-buildx-action,frontend 恢复 gha cache 时必须对齐）。
+      - uses: docker/setup-buildx-action@v3
+
       - name: Build and push frontend
         uses: docker/build-push-action@v5
         with:
