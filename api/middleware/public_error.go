@@ -9,7 +9,13 @@ import (
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 )
 
-const CodeSystemAssistantModelUnavailable = "SYSTEM_ASSISTANT_MODEL_UNAVAILABLE"
+const (
+	CodeSystemAssistantModelUnavailable = "SYSTEM_ASSISTANT_MODEL_UNAVAILABLE"
+	// CodeSystemPromptNotConfigured 平台全局系统提示词 fail-closed 未配置。
+	CodeSystemPromptNotConfigured = "SYSTEM_PROMPT_NOT_CONFIGURED"
+	// CodeCompactionPromptNotConfigured 平台压缩提示词 fail-closed 未配置。
+	CodeCompactionPromptNotConfigured = "COMPACTION_PROMPT_NOT_CONFIGURED"
+)
 
 type PublicErrorDescriptor struct {
 	Message string
@@ -21,6 +27,20 @@ func DescribePublicError(err error, status int) PublicErrorDescriptor {
 		return PublicErrorDescriptor{
 			Message: "租户尚未配置平台助手模型",
 			Code:    CodeSystemAssistantModelUnavailable,
+		}
+	}
+	// 平台 fail-closed 参数未配置：全局系统提示词/压缩提示词缺失是部署/配置回归
+	// （如迁移后 DB 空串），对客户端暴露固定中文与专用 code，便于管理员定位。
+	if errors.Is(err, agentdomain.ErrSystemPromptNotConfigured) {
+		return PublicErrorDescriptor{
+			Message: "平台未配置全局系统提示词（agent.system_prompt），请联系平台管理员在参数配置中补全后重试",
+			Code:    CodeSystemPromptNotConfigured,
+		}
+	}
+	if errors.Is(err, agentdomain.ErrCompactionPromptNotConfigured) {
+		return PublicErrorDescriptor{
+			Message: "平台未配置对话历史压缩提示词（agent.compaction_prompt），请联系平台管理员在参数配置中补全后重试",
+			Code:    CodeCompactionPromptNotConfigured,
 		}
 	}
 	// ErrUpstreamRequestFailed 的 wrap 链含内部 BaseURL/上游响应细节，

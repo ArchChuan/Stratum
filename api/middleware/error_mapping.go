@@ -57,6 +57,8 @@ var errorStatusTable = map[error]int{
 	llmgatewaydomain.ErrUpstreamRequestFailed:      http.StatusBadGateway,
 	agentdomain.ErrEvidenceUnavailable:             http.StatusServiceUnavailable,
 	agentdomain.ErrAssistantModelUnavailable:       http.StatusServiceUnavailable,
+	agentdomain.ErrSystemPromptNotConfigured:       http.StatusServiceUnavailable,
+	agentdomain.ErrCompactionPromptNotConfigured:   http.StatusServiceUnavailable,
 	agentdomain.ErrEvidenceInvalid:                 http.StatusBadGateway,
 	pgx.ErrNoRows:                                  http.StatusNotFound,
 	agentdomain.ErrEvidenceNotFound:                http.StatusNotFound,
