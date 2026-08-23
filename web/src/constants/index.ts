@@ -52,6 +52,8 @@ export const WORKFLOW_OUTPUT_MAX_CHARS = 100000;
 export const AGENT_STREAM_RECONNECT_BASE_MS = 1000;
 export const AGENT_STREAM_RECONNECT_MAX_MS = 10000;
 export const AGENT_STREAM_RECONNECT_MAX_ATTEMPTS = 5;
+// 审批铃铛待办轮询周期（角标数据复用 ListPending，无独立端点）。
+export const APPROVAL_POLL_MS = 30000;
 
 export const MCP_DEFAULT_TIMEOUT_SEC = 30;
 export const MCP_MAX_TIMEOUT_SEC = 300;
