@@ -87,6 +87,8 @@ for job_scope in build-backend:backend build-feishu-adapter:feishu-alert-adapter
     fi
     require_job "${job}" "cache-from:[[:space:]]*type=gha,scope=${scope}" "${scope} cache import scope"
     require_job "${job}" "cache-to:[[:space:]]*type=gha,scope=${scope},mode=max" "${scope} cache export scope"
+    require_job "${job}" 'docker/setup-buildx-action@v3' \
+        "${scope} gha cache requires docker-container driver (setup-buildx-action)"
 done
 if [[ "${has_workflow_run_ci}" != "true" ]]; then
     require_job build-frontend '^    needs:[[:space:]]*test$' 'frontend test dependency'
@@ -94,9 +96,13 @@ fi
 # 前端缓存契约:#219 的 no-cache 是 BuildKit overlay bug("cannot replace to directory
 # with file")的 workaround;根因是 node_modules 未排除出构建上下文。根因已修
 # (web/.dockerignore 排除 node_modules + Dockerfile 依赖层序),契约改为强制
-# gha cache scope + 根因不变量,并禁止 no-cache workaround 复活。
+# gha cache scope + 根因不变量,并禁止 no-cache workaround 复活。gha cache 还
+# 依赖 docker-container driver,缺少 setup-buildx-action 会报 "Cache export is
+# not supported for the docker driver"(部署回归 1d3a31e4),一并锁死。
 require_job build-frontend 'cache-from:[[:space:]]*type=gha,scope=frontend' 'frontend cache import scope'
 require_job build-frontend 'cache-to:[[:space:]]*type=gha,scope=frontend,mode=max' 'frontend cache export scope'
+require_job build-frontend 'docker/setup-buildx-action@v3' \
+    'frontend gha cache requires docker-container driver (setup-buildx-action)'
 reject 'no-cache:[[:space:]]*true' 'frontend no-cache workaround must not be reintroduced'
 require_file "${ROOT}/web/.dockerignore" '^node_modules$' 'web/.dockerignore must exclude node_modules (BuildKit overlay root cause)'
 require_file "${ROOT}/web/Dockerfile" 'COPY package\.json package-lock\.json \./' 'frontend Dockerfile must cache the npm ci layer'
