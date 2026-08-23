@@ -27,6 +27,14 @@ const center = vi.hoisted(() => ({
 }));
 const useCenter = vi.hoisted(() => vi.fn(() => center));
 vi.mock('../hooks/useEvaluationCenter', () => ({ useEvaluationCenter: useCenter }));
+// 组件创建/操作后调用 message.success/error,antd 的 rc-notification 定时器
+// (duration 2-3s)会在测试 teardown 后触发 setState → "window is not defined",
+// 造成 vitest 计 1 error 的偶发失败。mock 掉 message,避免真实 notification 定时器。
+const messageMocks = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+vi.mock('antd', async () => ({
+  ...(await vi.importActual<typeof import('antd')>('antd')),
+  message: { success: messageMocks.success, error: messageMocks.error },
+}));
 
 const LocationProbe = () => {
   const location = useLocation();
