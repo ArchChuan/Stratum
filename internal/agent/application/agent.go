@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -81,7 +82,13 @@ type ExecutionConfig struct {
 	TenantID              string
 	TraceID               string
 	ExecutionID           string
-	RAGSearchFn           func(ctx context.Context, workspaces []string, query string, topK int, viewerID string) (string, error)
+	// ApprovalResumeID 是审批续跑注入的已批准审批 ID。非空时
+	// resumeFromCheckpoint 把 waiting_approval checkpoint 视为可恢复
+	// （checkpoint 无工具快照，从 chat 历史 + 本轮 query 全量重跑，语义与
+	// ResumeToolApproval 一致）；空串保持旧语义——waiting_approval 不恢复，
+	// 重跑路径由 guard 对匹配工具重新发起审批。
+	ApprovalResumeID string
+	RAGSearchFn      func(ctx context.Context, workspaces []string, query string, topK int, viewerID string) (string, error)
 	// RAGSearchFnWithEvidence is the evidence-capable knowledge search hook
 	// (port.RAGSearchEvidenceProvider). When set, the knowledge tool prefers
 	// it over RAGSearchFn so tool observations carry retrieval provenance;
@@ -725,15 +732,7 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 			return fn(ctx, ec.cfg.TenantID, ec.cfg.UserID, ec.agentID, ec.memoryScope, input)
 		}
 	}
-	var execCtx context.Context
-	var cancel context.CancelFunc
-	if ec.cfg.Timeout > 0 {
-		execCtx, cancel = context.WithTimeout(ctx, ec.cfg.Timeout)
-	} else {
-		execCtx, cancel = context.WithCancel(ctx)
-	}
-	execCtx = reqctx.WithTraceID(execCtx, ec.cfg.TraceID)
-	execCtx = reqctx.WithTenantID(execCtx, ec.cfg.TenantID)
+	execCtx, cancel := newReActExecContext(ctx, ec)
 	defer cancel()
 	// Graph steps count both LLM and Tool node executions.
 	// MaxLLMSteps (set in buildReActInitState from ec.cfg.MaxSteps)
@@ -768,14 +767,52 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	// 最终请求 context_length_exceeded 降级（Spec D4）：循环已结束、工具成本
 	// 已花，最小请求必然小于原请求，只重试一次；成功返回答案，仍失败终止。
 	finalState, runErr = degradeFinalRequest(graphCtx, ec, finalState, runErr, maxTokens)
-	if runErr == nil && a.CheckpointStore != nil {
-		markCtx, markCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
-		_ = a.CheckpointStore.MarkCompleted(markCtx, ec.cfg.TenantID, ec.cfg.ExecutionID)
-		markCancel()
-	}
+	a.finalizeReActCheckpoint(ctx, ec, runErr)
 	if runErr != nil {
 		return fmt.Errorf("react: %w", runErr)
 	}
+	a.collectReActResult(execCtx, ctx, ec, result, finalState)
+	return nil
+}
+
+// newReActExecContext 构建 ReAct 执行上下文：有超时预算时用 WithTimeout，否则
+// 可取消上下文；注入 trace/tenant 供内层流式调用读取。cancel 由调用方 defer。
+func newReActExecContext(ctx context.Context, ec agentExecContext) (context.Context, context.CancelFunc) {
+	var execCtx context.Context
+	var cancel context.CancelFunc
+	if ec.cfg.Timeout > 0 {
+		execCtx, cancel = context.WithTimeout(ctx, ec.cfg.Timeout)
+	} else {
+		execCtx, cancel = context.WithCancel(ctx)
+	}
+	execCtx = reqctx.WithTraceID(execCtx, ec.cfg.TraceID)
+	execCtx = reqctx.WithTenantID(execCtx, ec.cfg.TenantID)
+	return execCtx, cancel
+}
+
+// finalizeReActCheckpoint ReAct 循环结束后的 checkpoint 收尾：成功 MarkCompleted；
+// 运行错误写终态 failed；cancelled/deadline(断线续跑)与审批等待(waiting_approval)
+// 保留原状,由新鲜度窗口兜底僵尸 running checkpoint。审批续跑失败不在此写终态:
+// 抢占后交给 application 层 finishApprovalResume 统一收尾(未消费批准回滚
+// waiting_approval 供重试,已消费才写 failed,见 SECURITY-MEDIUM-2)。
+func (a *BaseAgent) finalizeReActCheckpoint(ctx context.Context, ec agentExecContext, runErr error) {
+	if a.CheckpointStore == nil {
+		return
+	}
+	markCtx, markCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
+	defer markCancel()
+	if runErr == nil {
+		_ = a.CheckpointStore.MarkCompleted(markCtx, ec.cfg.TenantID, ec.cfg.ExecutionID)
+		return
+	}
+	if !retainRunningError(runErr) && ec.cfg.ApprovalResumeID == "" {
+		_ = a.CheckpointStore.Terminate(markCtx, ec.cfg.TenantID, ec.cfg.ExecutionID, "failed")
+	}
+}
+
+// collectReActResult 汇总终态到 result：图结果、任务快照、最终事件、步骤计数与
+// 工具调用列表。
+func (a *BaseAgent) collectReActResult(execCtx, ctx context.Context, ec agentExecContext, result *AgentResult, finalState agentgraph.ReActState) {
 	a.collectGraphResult(execCtx, result, finalState, ec)
 	a.persistTaskSnapshot(ctx, ec, finalState, result)
 	a.appendFinalAnswerEvent(result, finalState, ec)
@@ -785,7 +822,6 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	for _, tc := range finalState.AllToolCalls {
 		result.ToolCalls = append(result.ToolCalls, ToolCall{ToolName: tc.Name, Input: tc.Arguments})
 	}
-	return nil
 }
 
 // degradeFinalRequest 处理最终请求 context_length_exceeded 降级（Spec D4）：
@@ -1538,6 +1574,16 @@ func WithExecutionID(id string) ExecutionOption {
 	}
 }
 
+// WithApprovalResume marks this execution as an approval-resume rerun for the
+// given approved approval ID. It lets resumeFromCheckpoint treat a
+// waiting_approval checkpoint as resumable, and pairs with the guard options
+// built by buildApprovalResumeOptions that inject the approved tool call.
+func WithApprovalResume(id string) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.ApprovalResumeID = id
+	}
+}
+
 // WithRAGSearchFn injects a knowledge-base search function for the
 // search_knowledge tool. viewerID is the end user scoping retrieval.
 func WithRAGSearchFn(fn func(ctx context.Context, workspaces []string, query string, topK int, viewerID string) (string, error)) ExecutionOption {
@@ -1964,6 +2010,21 @@ func boundExecutionArtifactsJSON(artifacts []domain.ExecutionArtifact) []domain.
 	}
 }
 
+// retainRunningError reports whether a run error must keep the checkpoint in
+// its current state rather than terminating it:
+//   - context.Canceled / DeadlineExceeded: client disconnect or per-call timeout.
+//     The execution may still be resumed via GetActiveExecution (refreshed page
+//     or another device); the freshness window reclaims stale zombies later.
+//   - port.ToolApprovalRequiredError: the checkpoint is already waiting_approval;
+//     terminating it would orphan the in-flight approval request.
+func retainRunningError(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var approvalErr *port.ToolApprovalRequiredError
+	return errors.As(err, &approvalErr)
+}
+
 // isResumableCheckpoint reports whether a checkpoint with status s can be
 // resumed (running or paused).
 func isResumableCheckpoint(s string) bool {
@@ -1978,7 +2039,15 @@ func (a *BaseAgent) resumeFromCheckpoint(
 		return nil, nil, msgs
 	}
 	resumeCp, err := a.CheckpointStore.GetLatest(ctx, ec.cfg.TenantID, ec.cfg.ExecutionID)
-	if err != nil || resumeCp == nil || !isResumableCheckpoint(resumeCp.Status) {
+	// waiting_approval 仅在审批续跑（WithApprovalResume 注入批准 ID）时恢复：
+	// 该 checkpoint 的 messages snapshot 为空、runtime 仅存 approval_id，
+	// restoreMessages/restorePlanCheckpointState 落回 base，即从 chat 历史 +
+	// 本轮 query 全量重跑（H1 语义，与 ResumeToolApproval 一致）。
+	if err != nil || resumeCp == nil {
+		return nil, nil, msgs
+	}
+	if !isResumableCheckpoint(resumeCp.Status) &&
+		(resumeCp.Status != domain.ExecStatusWaitingApproval || ec.cfg.ApprovalResumeID == "") {
 		return nil, nil, msgs
 	}
 	a.Logger.Info("agent: resuming from checkpoint",

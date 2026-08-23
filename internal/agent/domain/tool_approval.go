@@ -78,31 +78,38 @@ func ValidateToolApprovalTransition(from, to ToolApprovalStatus) error {
 }
 
 type ToolApproval struct {
-	ID                       string     `json:"id"`
-	DecisionID               string     `json:"decision_id"`
-	ExecutionID              string     `json:"execution_id"`
-	TraceID                  string     `json:"trace_id"`
-	AgentID                  string     `json:"agent_id"`
-	UserID                   string     `json:"user_id"`
-	ToolCallID               string     `json:"tool_call_id"`
-	ServerID                 string     `json:"server_id"`
-	ToolName                 string     `json:"tool_name"`
-	RiskLevel                string     `json:"risk_level"`
-	ArgumentsDigest          string     `json:"arguments_digest"`
-	SkillRevisionsDigest     string     `json:"skill_revisions_digest"`
-	MCPRevisionsDigest       string     `json:"mcp_revisions_digest"`
-	KnowledgeRevisionsDigest string     `json:"knowledge_revisions_digest"`
-	PolicyVersion            string     `json:"policy_version"`
-	SubjectKind              string     `json:"subject_kind"`
-	AssignedApprover         string     `json:"assigned_approver,omitempty"`
-	InvalidationReason       string     `json:"invalidation_reason,omitempty"`
-	ConversationID           string     `json:"conversation_id,omitempty"`
-	EncryptedPayload         string     `json:"-"`
-	Status                   string     `json:"status"`
-	DecidedBy                string     `json:"decided_by,omitempty"`
-	DecisionReason           string     `json:"decision_reason,omitempty"`
-	CreatedAt                time.Time  `json:"created_at"`
-	DecidedAt                *time.Time `json:"decided_at,omitempty"`
-	ExecutedAt               *time.Time `json:"executed_at,omitempty"`
-	ExpiresAt                time.Time  `json:"expires_at"`
+	ID string `json:"id"`
+	// DecisionID/ExecutionID/TraceID/ToolCallID 加 omitempty：member 历史 DTO 清零后
+	// 序列化不输出（SECURITY-MEDIUM-3 剔除恢复键与内部追踪字段），admin/owner 正常输出。
+	DecisionID               string `json:"decision_id,omitempty"`
+	ExecutionID              string `json:"execution_id,omitempty"`
+	TraceID                  string `json:"trace_id,omitempty"`
+	AgentID                  string `json:"agent_id"`
+	UserID                   string `json:"user_id"`
+	ToolCallID               string `json:"tool_call_id,omitempty"`
+	ServerID                 string `json:"server_id"`
+	ToolName                 string `json:"tool_name"`
+	RiskLevel                string `json:"risk_level"`
+	ArgumentsDigest          string `json:"arguments_digest"`
+	SkillRevisionsDigest     string `json:"skill_revisions_digest"`
+	MCPRevisionsDigest       string `json:"mcp_revisions_digest"`
+	KnowledgeRevisionsDigest string `json:"knowledge_revisions_digest"`
+	PolicyVersion            string `json:"policy_version"`
+	SubjectKind              string `json:"subject_kind"`
+	AssignedApprover         string `json:"assigned_approver,omitempty"`
+	InvalidationReason       string `json:"invalidation_reason,omitempty"`
+	ConversationID           string `json:"conversation_id,omitempty"`
+	EncryptedPayload         string `json:"-"`
+	Status                   string `json:"status"`
+	DecidedBy                string `json:"decided_by,omitempty"`
+	// 展示昵称（display_name > github_login > raw id），由 service 层批量解析填充，
+	// 禁止 raw user_id 直接展示给用户（用户要求：发起人/处理人用昵称）。
+	UserDisplayName      string     `json:"user_display_name,omitempty"`
+	AssignedApproverName string     `json:"assigned_approver_name,omitempty"`
+	DecidedByName        string     `json:"decided_by_name,omitempty"`
+	DecisionReason       string     `json:"decision_reason,omitempty"`
+	CreatedAt            time.Time  `json:"created_at"`
+	DecidedAt            *time.Time `json:"decided_at,omitempty"`
+	ExecutedAt           *time.Time `json:"executed_at,omitempty"`
+	ExpiresAt            time.Time  `json:"expires_at"`
 }

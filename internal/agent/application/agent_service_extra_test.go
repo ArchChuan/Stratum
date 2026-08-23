@@ -350,3 +350,13 @@ func (noopCheckpointStore) GetLatest(context.Context, string, string) (*domain.A
 func (noopCheckpointStore) MarkCompleted(context.Context, string, string) error        { return nil }
 func (noopCheckpointStore) UpdateStatus(context.Context, string, string, string) error { return nil }
 func (noopCheckpointStore) DeleteExpired(context.Context, string) (int64, error)       { return 0, nil }
+func (noopCheckpointStore) GetLatestActiveByConversation(context.Context, string, string) (*domain.AgentExecutionCheckpoint, error) {
+	return nil, nil
+}
+func (noopCheckpointStore) UpdateStatusFrom(context.Context, string, string, string, string) error {
+	return nil
+}
+func (noopCheckpointStore) AdvanceRunGeneration(context.Context, string, string, int) error {
+	return nil
+}
+func (noopCheckpointStore) Terminate(context.Context, string, string, string) error { return nil }

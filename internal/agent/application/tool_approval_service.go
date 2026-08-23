@@ -75,20 +75,24 @@ type ToolApprovalPayload struct {
 
 // ApprovalDetail 审批详情下发（admin/owner 工作台），Payload 为解密并脱敏后的参数。
 type ApprovalDetail struct {
-	ID                 string         `json:"id"`
-	SubjectKind        string         `json:"subject_kind"`
-	ToolName           string         `json:"tool_name"`
-	ServerID           string         `json:"server_id"`
-	RiskLevel          string         `json:"risk_level"`
-	Status             string         `json:"status"`
-	UserID             string         `json:"user_id"`
-	AssignedApprover   string         `json:"assigned_approver,omitempty"`
-	InvalidationReason string         `json:"invalidation_reason,omitempty"`
-	CreatedAt          time.Time      `json:"created_at"`
-	ExpiresAt          time.Time      `json:"expires_at"`
-	DecidedBy          string         `json:"decided_by,omitempty"`
-	DecisionReason     string         `json:"decision_reason,omitempty"`
-	Payload            map[string]any `json:"payload,omitempty"` // 解密后脱敏
+	ID                 string    `json:"id"`
+	SubjectKind        string    `json:"subject_kind"`
+	ToolName           string    `json:"tool_name"`
+	ServerID           string    `json:"server_id"`
+	RiskLevel          string    `json:"risk_level"`
+	Status             string    `json:"status"`
+	UserID             string    `json:"user_id"`
+	AssignedApprover   string    `json:"assigned_approver,omitempty"`
+	InvalidationReason string    `json:"invalidation_reason,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	ExpiresAt          time.Time `json:"expires_at"`
+	DecidedBy          string    `json:"decided_by,omitempty"`
+	DecisionReason     string    `json:"decision_reason,omitempty"`
+	// 展示昵称（display_name > github_login > raw id），service 层批量解析填充。
+	UserDisplayName      string         `json:"user_display_name,omitempty"`
+	AssignedApproverName string         `json:"assigned_approver_name,omitempty"`
+	DecidedByName        string         `json:"decided_by_name,omitempty"`
+	Payload              map[string]any `json:"payload,omitempty"` // 解密后脱敏
 }
 
 type ToolApprovalService struct {
@@ -96,6 +100,7 @@ type ToolApprovalService struct {
 	checkpoints port.CheckpointRepo
 	key         [32]byte
 	roles       port.TenantRoleResolver
+	names       port.ActorNameResolver
 	now         func() time.Time
 }
 
@@ -107,6 +112,12 @@ func NewToolApprovalService(repo port.ToolApprovalRepo, checkpoints port.Checkpo
 // 由 wiring injectTenantRoleResolvers 统一装配。
 func (s *ToolApprovalService) SetTenantRoleResolver(resolver port.TenantRoleResolver) {
 	s.roles = resolver
+}
+
+// SetActorNameResolver 注入昵称解析器（iam 基础设施实现），由 wiring 装配。
+// 未注入时列表/详情保留 raw id 展示（降级），注入后查询失败必须传播错误（fail-closed）。
+func (s *ToolApprovalService) SetActorNameResolver(resolver port.ActorNameResolver) {
+	s.names = resolver
 }
 
 // validateAssignee D8：指定审批人必须本身是 admin/owner（软绑定，落地为工作台 PUT assignee）。
@@ -342,6 +353,84 @@ func (s *ToolApprovalService) resolveRole(ctx context.Context, tenantID, userID 
 	return s.roles.ResolveTenantRole(ctx, tenantID, userID)
 }
 
+// resolveRowNames 批量解析行内发起人/指派审批人/处理人昵称（display_name > github_login > raw id）。
+// resolver 未注入（nil）时静默跳过（保留 raw id，降级）；注入但查询失败返回错误（fail-closed，
+// 禁止默认名掩盖故障）。空 id 或查不到的行回退 raw id 原文。
+func (s *ToolApprovalService) resolveRowNames(ctx context.Context, rows []domain.ToolApproval) error {
+	if s.names == nil || len(rows) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(rows)*3)
+	seen := make(map[string]struct{})
+	add := func(id string) {
+		if id == "" {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	for i := range rows {
+		add(rows[i].UserID)
+		add(rows[i].AssignedApprover)
+		add(rows[i].DecidedBy)
+	}
+	names, err := s.names.ResolveActorNames(ctx, ids)
+	if err != nil {
+		return fmt.Errorf("resolve approval actor names: %w", err)
+	}
+	for i := range rows {
+		rows[i].UserDisplayName = orRawID(names[rows[i].UserID], rows[i].UserID)
+		rows[i].AssignedApproverName = orRawID(names[rows[i].AssignedApprover], rows[i].AssignedApprover)
+		rows[i].DecidedByName = orRawID(names[rows[i].DecidedBy], rows[i].DecidedBy)
+	}
+	return nil
+}
+
+// orRawID 昵称为空（未注入/查不到）时回退 raw id；两者皆空则空（omitempty 不输出）。
+func orRawID(name, raw string) string {
+	if name != "" {
+		return name
+	}
+	return raw
+}
+
+// resolveDetailNames 批量解析单条详情的发起人/指派审批人/处理人昵称。
+// resolver 未注入（nil）时直接回退 raw id（降级），注入后查询失败传播错误（fail-closed）。
+func (s *ToolApprovalService) resolveDetailNames(ctx context.Context, detail *ApprovalDetail, ids []string) error {
+	if s.names == nil {
+		detail.UserDisplayName = detail.UserID
+		detail.AssignedApproverName = detail.AssignedApprover
+		detail.DecidedByName = detail.DecidedBy
+		return nil
+	}
+	unique := make([]string, 0, len(ids))
+	seen := make(map[string]struct{})
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	if len(unique) == 0 {
+		return nil
+	}
+	names, err := s.names.ResolveActorNames(ctx, unique)
+	if err != nil {
+		return fmt.Errorf("resolve approval actor names: %w", err)
+	}
+	detail.UserDisplayName = orRawID(names[detail.UserID], detail.UserID)
+	detail.AssignedApproverName = orRawID(names[detail.AssignedApprover], detail.AssignedApprover)
+	detail.DecidedByName = orRawID(names[detail.DecidedBy], detail.DecidedBy)
+	return nil
+}
+
 func (s *ToolApprovalService) MarkExecuted(ctx context.Context, tenantID, id string) error {
 	return s.repo.MarkExecuted(ctx, tenantID, id)
 }
@@ -417,33 +506,84 @@ func (s *ToolApprovalService) ListPending(ctx context.Context, tenantID, actor s
 	if role == "admin" || role == "owner" {
 		userID = ""
 	}
-	return s.repo.ListPending(ctx, tenantID, userID)
+	rows, err := s.repo.ListPending(ctx, tenantID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.resolveRowNames(ctx, rows); err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
-// ListHistory 仅 admin/owner 可查全租户历史（member 拒绝，fail closed）。
+// ApprovalStatus returns only an approval row's current status (no payload
+// decryption, no sensitive fields). Used by GetActiveExecution so the initiator's
+// frontend can distinguish "approved, awaiting resume" from "still pending" when
+// polling a waiting_approval checkpoint after a refresh. The authorization gate
+// lives in GetActiveExecution (conversation ownership); this is a bare status
+// read for an already-authorized execution.
+func (s *ToolApprovalService) ApprovalStatus(ctx context.Context, tenantID, approvalID string) (string, error) {
+	if s.repo == nil {
+		return "", nil
+	}
+	row, err := s.repo.Get(ctx, tenantID, approvalID)
+	if err != nil {
+		return "", err
+	}
+	return row.Status, nil
+}
+
+// ListHistory 按调用者身份过滤历史（D4/M5）：member 仅看自己发起的（user_id=actor），
+// admin/owner 看全租户。角色由 resolver 现查（单事实源）。返回前批量解析昵称。
 func (s *ToolApprovalService) ListHistory(ctx context.Context, tenantID string, page, pageSize int, actor string) ([]domain.ToolApproval, int, error) {
 	role, err := s.resolveRole(ctx, tenantID, actor)
 	if err != nil {
 		return nil, 0, err
 	}
-	if role != "admin" && role != "owner" {
-		return nil, 0, domain.ErrApprovalRoleDenied
+	userID := actor
+	if role == "admin" || role == "owner" {
+		userID = ""
 	}
-	return s.repo.ListHistory(ctx, tenantID, page, pageSize)
+	rows, total, err := s.repo.ListHistory(ctx, tenantID, userID, page, pageSize)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := s.resolveRowNames(ctx, rows); err != nil {
+		return nil, 0, err
+	}
+	if role != "admin" && role != "owner" {
+		redactHistoryForMember(rows)
+	}
+	return rows, total, nil
 }
 
-// ApprovalDetail 仅 admin/owner 可看；payload 解密后脱敏下发，禁止暴露凭据字段。
+// redactHistoryForMember 剔除 member 视角不该暴露的字段（SECURITY-MEDIUM-3）：
+// execution_id/trace_id/decision_id/tool_call_id/conversation_id——恢复键与内部追踪信息，
+// 避免发起人拿到可续跑他人执行或定位内部决策链路。admin/owner 工作台保留全字段。
+func redactHistoryForMember(rows []domain.ToolApproval) {
+	for i := range rows {
+		rows[i].ExecutionID = ""
+		rows[i].TraceID = ""
+		rows[i].DecisionID = ""
+		rows[i].ToolCallID = ""
+		rows[i].ConversationID = ""
+	}
+}
+
+// ApprovalDetail admin/owner 全量可看；member 仅当审批归属自己（row.UserID==actor）时放行，
+// 非归属统一返回 ErrApprovalNotFound（404，关闭存在性 oracle，SECURITY-LOW）。
+// 返回前解析昵称；payload 解密后脱敏下发，禁止暴露凭据字段。
 func (s *ToolApprovalService) ApprovalDetail(ctx context.Context, tenantID, id, actor string) (ApprovalDetail, error) {
 	role, err := s.resolveRole(ctx, tenantID, actor)
 	if err != nil {
 		return ApprovalDetail{}, err
 	}
-	if role != "admin" && role != "owner" {
-		return ApprovalDetail{}, domain.ErrApprovalRoleDenied
-	}
 	row, err := s.repo.Get(ctx, tenantID, id)
 	if err != nil {
 		return ApprovalDetail{}, err
+	}
+	if role != "admin" && role != "owner" && row.UserID != actor {
+		return ApprovalDetail{}, domain.ErrApprovalNotFound
 	}
 	detail := ApprovalDetail{
 		ID: row.ID, SubjectKind: row.SubjectKind, ToolName: row.ToolName, ServerID: row.ServerID,
@@ -451,6 +591,9 @@ func (s *ToolApprovalService) ApprovalDetail(ctx context.Context, tenantID, id, 
 		AssignedApprover: row.AssignedApprover, InvalidationReason: row.InvalidationReason,
 		CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt, DecidedBy: row.DecidedBy,
 		DecisionReason: row.DecisionReason,
+	}
+	if err := s.resolveDetailNames(ctx, &detail, []string{row.UserID, row.AssignedApprover, row.DecidedBy}); err != nil {
+		return ApprovalDetail{}, err
 	}
 	if row.EncryptedPayload != "" {
 		plain, err := pkgcrypto.Decrypt(s.key, row.EncryptedPayload)

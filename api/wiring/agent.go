@@ -16,6 +16,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/infrastructure/officialdocs"
 	agentopik "github.com/byteBuilderX/stratum/internal/agent/infrastructure/opik"
 	persistence "github.com/byteBuilderX/stratum/internal/agent/infrastructure/persistence"
+	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
@@ -316,6 +317,8 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		a.ChatStore = chatStore
 		a.CompactionStore = persistence.NewPgCompactionStore(db)
 		a.ApprovalService = agent.NewToolApprovalService(a.ApprovalStore, a.CheckpointStore, c.Platform.AESKey)
+		// 审批列表/详情的昵称解析（display_name > github_login > raw id），iam 全局 users 表。
+		a.ApprovalService.SetActorNameResolver(iampersistence.NewPgActorNameResolver(db))
 		a.CheckpointCleanup = agent.NewCheckpointCleanupWorker(
 			agentCheckpointTenantLister{pool: db}.list,
 			a.CheckpointStore,

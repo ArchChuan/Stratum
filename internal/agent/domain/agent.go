@@ -361,9 +361,20 @@ type AgentExecutionCheckpoint struct {
 	RuntimeStateJSON       json.RawMessage `json:"runtime_state_json"`
 	Status                 string          `json:"status"`
 	ResumeReason           string          `json:"resume_reason"`
-	CreatedAt              time.Time       `json:"created_at"`
-	UpdatedAt              time.Time       `json:"updated_at"`
-	ExpiresAt              time.Time       `json:"expires_at"`
+	// UserQuery is the user query of the current execution round. Written once
+	// by ensureInitialCheckpoint (and by approval wait rows via Upsert ON
+	// CONFLICT retention) so a session with no first-step checkpoint yet can
+	// still be discovered by GetActiveExecution and resumed verbatim. It is
+	// never updated per-step — plan checkpoints preserve the original round.
+	UserQuery string `json:"user_query"`
+	// RunGeneration is the resume-generation fence. Every continuation entry
+	// atomically increments it (AdvanceRunGeneration) so two tabs/devices
+	// racing to resume the same execution cannot both win — the loser's CAS
+	// fails and it reports "already running elsewhere".
+	RunGeneration int       `json:"run_generation"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	ExpiresAt     time.Time `json:"expires_at"`
 }
 
 // AgentResult holds the output of a completed agent execution.
