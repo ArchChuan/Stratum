@@ -156,6 +156,11 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
+      # gha cache 导出需要 buildx 的 docker-container driver（默认 docker driver
+      # 报 "Cache export is not supported for the docker driver"）；与 build-backend
+      # 作业保持一致，否则 Build Frontend 每次部署都失败。
+      - uses: docker/setup-buildx-action@v3
+
       - name: Build and push frontend
         uses: docker/build-push-action@v5
         with:
