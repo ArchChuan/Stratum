@@ -206,6 +206,19 @@ func (*resumableCheckpointStore) DeleteExpired(context.Context, string) (int64, 
 	return 0, nil
 }
 
+func (*resumableCheckpointStore) GetLatestActiveByConversation(context.Context, string, string) (*domain.AgentExecutionCheckpoint, error) {
+	return nil, nil
+}
+func (*resumableCheckpointStore) UpdateStatusFrom(context.Context, string, string, string, string) error {
+	return nil
+}
+func (*resumableCheckpointStore) AdvanceRunGeneration(context.Context, string, string, int) error {
+	return nil
+}
+func (*resumableCheckpointStore) Terminate(context.Context, string, string, string) error {
+	return nil
+}
+
 func TestBaseAgent_CheckpointRestoredActivesOverrideSeededActives(t *testing.T) {
 	a := newReActAgent()
 	payload, err := graph.EncodePlanCheckpoint(graph.PlanCheckpointPayload{

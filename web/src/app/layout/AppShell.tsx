@@ -33,6 +33,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { UserMenu } from './UserMenu';
 import { buildMenuItems, resolveOpenKeys } from './menu.config';
 
+import { ApprovalNotificationBell } from '@/modules/approvals';
 import { useAuth, authApi } from '@/modules/iam';
 import api from '@/services/client';
 import { useResponsive } from '@/shared/hooks';
@@ -366,6 +367,7 @@ export const AppShell = ({ children }: AppShellProps) => {
             )}
           </Space>
 
+          <ApprovalNotificationBell />
           <UserMenu />
         </Header>
 

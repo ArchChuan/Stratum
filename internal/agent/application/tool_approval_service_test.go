@@ -72,7 +72,11 @@ func (f *approvalRepoFake) ListPending(_ context.Context, _, userID string) ([]d
 	}
 	return []domain.ToolApproval{f.row}, nil
 }
-func (f *approvalRepoFake) ListHistory(_ context.Context, _ string, _, _ int) ([]domain.ToolApproval, int, error) {
+func (f *approvalRepoFake) ListHistory(_ context.Context, _, userID string, _, _ int) ([]domain.ToolApproval, int, error) {
+	f.lastListUserID = userID
+	if f.row.ID != "" {
+		return []domain.ToolApproval{f.row}, 1, nil
+	}
 	return nil, 0, nil
 }
 func (f *approvalRepoFake) Invalidate(_ context.Context, _, _, reason string) error {
@@ -474,6 +478,14 @@ func (f *checkpointFake) GetLatest(context.Context, string, string) (*domain.Age
 func (f *checkpointFake) MarkCompleted(context.Context, string, string) error        { return nil }
 func (f *checkpointFake) UpdateStatus(context.Context, string, string, string) error { return nil }
 func (f *checkpointFake) DeleteExpired(context.Context, string) (int64, error)       { return 0, nil }
+func (f *checkpointFake) GetLatestActiveByConversation(context.Context, string, string) (*domain.AgentExecutionCheckpoint, error) {
+	return nil, errors.New("unused")
+}
+func (f *checkpointFake) UpdateStatusFrom(context.Context, string, string, string, string) error {
+	return nil
+}
+func (f *checkpointFake) AdvanceRunGeneration(context.Context, string, string, int) error { return nil }
+func (f *checkpointFake) Terminate(context.Context, string, string, string) error         { return nil }
 
 type fakeRoleResolver struct {
 	role  string
@@ -491,6 +503,21 @@ func (f *fakeRoleResolver) ResolveTenantRole(_ context.Context, _ string, userID
 		}
 	}
 	return f.role, nil
+}
+
+// fakeActorNameResolver 固定返回预置昵称映射（M5 昵称解析测试）。
+type fakeActorNameResolver struct {
+	names map[string]string
+}
+
+func (r *fakeActorNameResolver) ResolveActorNames(_ context.Context, ids []string) (map[string]string, error) {
+	out := make(map[string]string, len(ids))
+	for _, id := range ids {
+		if n, ok := r.names[id]; ok {
+			out[id] = n
+		}
+	}
+	return out, nil
 }
 
 type fakeApprovalExecutor struct {
@@ -588,19 +615,59 @@ func TestDecideFailClosedWithoutRoleResolver(t *testing.T) {
 	require.Contains(t, err.Error(), "role resolver unavailable")
 }
 
-func TestMemberHistoryAndDetailDenied(t *testing.T) {
+// M5/D4 放宽：member 历史仅看自己发起的（service 注入 userID=actor 过滤，不再拒绝）；
+// 详情仅归属自己可看，非归属统一 404（关闭存在性 oracle）；SetAssignee 仍要求 admin/owner。
+func TestMemberHistoryScopedAndDetailOwnedOnly(t *testing.T) {
 	repo := &approvalRepoFake{}
 	svc := NewToolApprovalService(repo, nil, crypto.DeriveAESKey("test"))
 	svc.SetTenantRoleResolver(&fakeRoleResolver{role: "member"})
-	if _, _, err := svc.ListHistory(context.Background(), "tenant-1", 1, 20, "user-1"); !errors.Is(err, domain.ErrApprovalRoleDenied) {
-		t.Fatalf("expected ErrApprovalRoleDenied for member history, got %v", err)
+	// member 历史：userID=actor 透传 repo（过滤本人发起），total 与列表由 store 层保持一致。
+	if _, _, err := svc.ListHistory(context.Background(), "tenant-1", 1, 20, "user-1"); err != nil {
+		t.Fatalf("member history should pass through with userID scope, got %v", err)
 	}
-	if _, err := svc.ApprovalDetail(context.Background(), "tenant-1", "a1", "user-1"); !errors.Is(err, domain.ErrApprovalRoleDenied) {
-		t.Fatalf("expected ErrApprovalRoleDenied for member detail, got %v", err)
+	require.Equal(t, "user-1", repo.lastListUserID, "member 历史必须按 userID=actor 过滤")
+	// member 详情：非归属（row.UserID 为空）统一 404（关闭存在性 oracle）。
+	if _, err := svc.ApprovalDetail(context.Background(), "tenant-1", "a1", "user-1"); !errors.Is(err, domain.ErrApprovalNotFound) {
+		t.Fatalf("expected ErrApprovalNotFound for member non-owned detail, got %v", err)
 	}
+	// member 详情：归属自己（row.UserID==actor）放行。
+	repo.row.UserID = "user-1"
+	if _, err := svc.ApprovalDetail(context.Background(), "tenant-1", "a1", "user-1"); err != nil {
+		t.Fatalf("member owned detail should be allowed, got %v", err)
+	}
+	// SetAssignee 仍要求 admin/owner（member 拒绝，fail closed）。
 	if err := svc.SetAssignee(context.Background(), "tenant-1", "a1", "user-3", "user-1"); !errors.Is(err, domain.ErrApprovalRoleDenied) {
 		t.Fatalf("expected ErrApprovalRoleDenied for member assignee, got %v", err)
 	}
+}
+
+// M5：admin/owner 历史不过滤（userID="" 全租户工作台）；昵称解析注入后填充展示名。
+func TestHistoryAdminScopesAllAndResolvesNames(t *testing.T) {
+	repo := &approvalRepoFake{}
+	repo.row = domain.ToolApproval{
+		ID: "a1", UserID: "user-1", AssignedApprover: "user-2", DecidedBy: "user-2",
+		EncryptedPayload: mustEncrypt(t, ToolApprovalPayload{UserID: "user-1", SubjectKind: domain.SubjectKindMCPTool}),
+	}
+	svc := NewToolApprovalService(repo, nil, crypto.DeriveAESKey("test"))
+	svc.SetTenantRoleResolver(&fakeRoleResolver{roles: map[string]string{"user-admin": "admin"}})
+	svc.SetActorNameResolver(&fakeActorNameResolver{names: map[string]string{
+		"user-1": "张三", "user-2": "李四",
+	}})
+	rows, _, err := svc.ListHistory(context.Background(), "tenant-1", 1, 20, "user-admin")
+	if err != nil {
+		t.Fatalf("admin history should be scoped to whole tenant, got %v", err)
+	}
+	require.Empty(t, repo.lastListUserID, "admin/owner 历史必须全租户（userID 为空）")
+	// 昵称解析：列表行填充展示名（张三/李四），而非 raw id。
+	require.Len(t, rows, 1)
+	require.Equal(t, "张三", rows[0].UserDisplayName)
+	require.Equal(t, "李四", rows[0].AssignedApproverName)
+	require.Equal(t, "李四", rows[0].DecidedByName)
+	// 详情同样填充昵称。
+	detail, err := svc.ApprovalDetail(context.Background(), "tenant-1", "a1", "user-admin")
+	require.NoError(t, err)
+	require.Equal(t, "张三", detail.UserDisplayName)
+	require.Equal(t, "李四", detail.DecidedByName)
 }
 
 func TestSetAssigneeRequiresAdminTarget(t *testing.T) {

@@ -2,6 +2,7 @@ import { expect, test, type Page, type Route } from '@playwright/test';
 
 type ApprovalStatus =
   | 'pending'
+  | 'approved'
   | 'expired'
   | 'unknown_outcome'
   | 'authorization_denied';
@@ -13,23 +14,24 @@ interface ApprovalFixture {
   server_id: string;
   risk_level: string;
   status: ApprovalStatus;
+  conversation_id?: string;
   expires_at?: string;
 }
 
 interface HarnessOptions {
   role?: 'admin' | 'member';
   approvals?: ApprovalFixture[];
-  resumeStatus?: number;
-  resumeError?: string;
 }
 
 const json = (route: Route, body: unknown, status = 200) =>
   route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
+// M3/M4:对话页审批卡片只读契约。审批操作(批准/拒绝/执行)收敛到审批中心(/approvals),
+// 对话页对 admin/member 一律只读提示;approved 态提供"继续执行"手动兜底(自动续跑走轮询)。
 async function installHarness(page: Page, options: HarnessOptions = {}) {
   const role = options.role ?? 'admin';
   const approvals = [...(options.approvals ?? [])];
-  const calls = { decisions: 0, resumes: 0, streams: 0 };
+  const calls = { streams: 0 };
 
   await page.route('**/auth/refresh', (route) => json(route, { access_token: 'e2e-token' }));
   await page.route('**/auth/me', (route) =>
@@ -44,21 +46,6 @@ async function installHarness(page: Page, options: HarnessOptions = {}) {
   await page.route('**/agents/tool-approvals', (route) =>
     json(route, { approvals }),
   );
-  await page.route('**/agents/tool-approvals/*/decision', async (route) => {
-    calls.decisions += 1;
-    const body = route.request().postDataJSON() as { decision: 'approved' | 'rejected' };
-    if (body.decision === 'rejected') approvals.splice(0, approvals.length);
-    await json(route, { status: body.decision });
-  });
-  await page.route('**/agents/tool-approvals/*/resume', async (route) => {
-    calls.resumes += 1;
-    if (options.resumeStatus) {
-      await json(route, { error: options.resumeError }, options.resumeStatus);
-      return;
-    }
-    approvals.splice(0, approvals.length);
-    await json(route, { status: 'completed', output: '删除操作已完成', steps: 1, tokensUsed: 8 });
-  });
   await page.route('**/agents/agent-1/execute/stream', async (route) => {
     calls.streams += 1;
     await route.fulfill({
@@ -72,6 +59,11 @@ async function installHarness(page: Page, options: HarnessOptions = {}) {
   );
   await page.route('**/conversations/conversation-1/messages', (route) =>
     json(route, { messages: [] }),
+  );
+  // 审批等待卡片轮询 active-execution:route-mock 下无真实后端,统一返回 404(none),
+  // 避免把无执行误判为续跑目标;非 404 错误(DB 抖动)会抛出让测试暴露(SECURITY-MEDIUM-1)。
+  await page.route('**/conversations/conversation-1/active-execution', (route) =>
+    json(route, { status: 'none' }, 404),
   );
   await page.route('**/agents', (route) =>
     json(route, {
@@ -114,6 +106,7 @@ const pendingApproval = (status: ApprovalStatus = 'pending'): ApprovalFixture =>
   server_id: 'orders',
   risk_level: 'destructive',
   status,
+  conversation_id: 'conversation-1',
 });
 
 test('read-only tool execution completes without approval', async ({ page }) => {
@@ -124,31 +117,30 @@ test('read-only tool execution completes without approval', async ({ page }) => 
 
   await expect(page.getByText('读取完成')).toBeVisible();
   expect(calls.streams).toBe(1);
-  expect(calls.decisions).toBe(0);
-  expect(calls.resumes).toBe(0);
 });
 
-test('destructive tool pauses for admin approval and executes exactly once', async ({ page }) => {
-  const calls = await installHarness(page, { approvals: [pendingApproval()] });
+test('destructive tool shows a read-only card linking to the approval center', async ({ page }) => {
+  await installHarness(page, { approvals: [pendingApproval()] });
   await openChat(page);
 
-  const approve = page.getByRole('button', { name: '批准并继续' });
-  await expect(approve).toBeVisible();
-  await approve.dblclick();
-
-  await expect(page.getByText('删除操作已完成')).toBeVisible();
-  expect(calls.decisions).toBe(1);
-  expect(calls.resumes).toBe(1);
+  await expect(page.getByText('工具 delete_order 等待审批', { exact: true })).toBeVisible();
+  // M3/M4:对话页不再提供批准/拒绝按钮,审批操作收敛到审批中心。
+  await expect(page.getByRole('button', { name: '批准并继续' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '拒绝' })).toHaveCount(0);
+  const goCenter = page.getByRole('button', { name: '前往审批中心' });
+  await expect(goCenter).toBeVisible();
+  await goCenter.click();
+  await page.waitForURL('**/approvals');
 });
 
-test('admin can reject a destructive tool without executing it', async ({ page }) => {
-  const calls = await installHarness(page, { approvals: [pendingApproval()] });
+test('approved approval offers a manual resume command on the read-only card', async ({ page }) => {
+  await installHarness(page, { approvals: [pendingApproval('approved')] });
   await openChat(page);
-  await page.getByRole('button', { name: '拒绝' }).click();
 
-  await expect(page.getByText('工具 delete_order 等待审批')).not.toBeVisible();
-  expect(calls.decisions).toBe(1);
-  expect(calls.resumes).toBe(0);
+  await expect(page.getByText('工具 delete_order 已批准', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '继续执行' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '批准并继续' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '拒绝' })).toHaveCount(0);
 });
 
 for (const [status, text] of [
@@ -156,39 +148,25 @@ for (const [status, text] of [
   ['authorization_denied', '权限已变更，工具执行已阻止'],
   ['unknown_outcome', '工具执行结果未知，需要人工对账'],
 ] as const) {
-  test(`${status} is a terminal state without retry actions`, async ({ page }) => {
-    const calls = await installHarness(page, { approvals: [pendingApproval(status)] });
+  test(`${status} is a terminal state without actions on the read-only card`, async ({ page }) => {
+    await installHarness(page, { approvals: [pendingApproval(status)] });
     await openChat(page);
 
     await expect(page.getByText(text)).toBeVisible();
-    await expect(page.getByRole('button', { name: '批准并继续' })).toHaveCount(0);
-    expect(calls.decisions).toBe(0);
-    expect(calls.resumes).toBe(0);
+    // terminal 态:不提供"前往审批中心"导航与"继续执行",审批已定格。
+    await expect(page.getByRole('button', { name: '前往审批中心' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '继续执行' })).toHaveCount(0);
   });
 }
 
-test('unknown outcome returned by resume becomes reconciliation work', async ({ page }) => {
-  const calls = await installHarness(page, {
-    approvals: [pendingApproval()],
-    resumeStatus: 409,
-    resumeError: 'tool approval outcome is unknown',
-  });
-  await openChat(page);
-  await page.getByRole('button', { name: '批准并继续' }).click();
-
-  await expect(page.locator('.ant-alert-message').getByText('工具执行结果未知，需要人工对账')).toBeVisible();
-  await expect(page.getByRole('button', { name: '批准并继续' })).toHaveCount(0);
-  expect(calls.decisions).toBe(1);
-  expect(calls.resumes).toBe(1);
-});
-
-test('member sees only own-tenant approval explanation and no commands', async ({ page }) => {
-  const calls = await installHarness(page, { role: 'member', approvals: [pendingApproval()] });
+test('member sees the same read-only card without any command', async ({ page }) => {
+  await installHarness(page, { role: 'member', approvals: [pendingApproval()] });
   await openChat(page);
 
-  await expect(page.getByText('需要租户管理员处理')).toBeVisible();
+  await expect(page.getByText('工具 delete_order 等待审批', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '前往审批中心' })).toBeVisible();
   await expect(page.getByRole('button', { name: '批准并继续' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '拒绝' })).toHaveCount(0);
+  // 只读视角不暴露任何敏感字段(member 历史/详情 DTO 剔除恢复键,对话页同理)。
   await expect(page.getByText('cross-tenant-secret')).toHaveCount(0);
-  expect(calls.decisions).toBe(0);
-  expect(calls.resumes).toBe(0);
 });

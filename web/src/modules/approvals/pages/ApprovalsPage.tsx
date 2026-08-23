@@ -9,9 +9,11 @@ import {
   useApprovalsPage, type ApprovalsTab,
 } from '../hooks/useApprovalsPage';
 
+import { useTenantRole } from '@/modules/iam';
 import { EmptyHint } from '@/shared/ui';
 
 export const ApprovalsPage = () => {
+  const { isAdmin } = useTenantRole();
   const {
     activeTab,
     pendingRows,
@@ -75,6 +77,9 @@ export const ApprovalsPage = () => {
     onLoadApprovers: () => void loadApprovers(),
     onOpenDetail: (id) => void openDetail(id),
     onOpenDecide: openDecide,
+    // member 只读：不展示批准/拒绝/指派操作（M4 产品决策：待办收敛到铃铛+工作台，
+    // 发起人仅查看自己发起的审批状态）。
+    readonly: !isAdmin,
   });
   const historyColumns = buildHistoryColumns((id) => void openDetail(id));
 
@@ -85,7 +90,9 @@ export const ApprovalsPage = () => {
           工具审批
         </Typography.Title>
         <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-          管理员审批 Agent 请求的高风险工具调用
+          {isAdmin
+            ? '管理员审批 Agent 请求的高风险工具调用'
+            : '查看我发起的审批请求与状态'}
         </Typography.Text>
       </div>
 
@@ -146,6 +153,7 @@ export const ApprovalsPage = () => {
         detail={detail}
         loading={detailLoading}
         open={detail !== null}
+        readonly={!isAdmin}
         executeLoading={detail ? isActionLoading('execute', detail.id) : false}
         onExecute={confirmExecute}
         onClose={closeDetail}

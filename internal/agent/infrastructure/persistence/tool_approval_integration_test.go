@@ -292,29 +292,45 @@ func TestToolApprovalListHistoryPaged(t *testing.T) {
 	}
 	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID, UserID: "admin", Role: postgres.RoleTenantAdmin})
 	store := persistence.NewPgToolApprovalStore(pool)
-	for i := 0; i < 5; i++ {
-		// Create 固定写入 pending；历史用例经显式 UPDATE 置为 executed。
+	// 7 行历史：5 行 user-1 + 2 行 user-2，用于验证 member（userID 过滤）与 admin（全量）的 total 一致性。
+	create := func(userID string) {
 		id, err := store.Create(ctx, tenantID, domain.ToolApproval{
 			DecisionID: uuid.NewString(), ExecutionID: uuid.NewString(), TraceID: "t", AgentID: "a",
-			UserID: "user-1", ToolCallID: uuid.NewString(), ServerID: "srv", ToolName: "tool",
+			UserID: userID, ToolCallID: uuid.NewString(), ServerID: "srv", ToolName: "tool",
 			RiskLevel: "unclassified", EncryptedPayload: "enc",
 			ExpiresAt: time.Now().Add(time.Hour), SubjectKind: domain.SubjectKindMCPTool,
 			ConversationID: "c",
 		})
 		if err != nil {
-			t.Fatalf("create %d: %v", i, err)
+			t.Fatalf("create: %v", err)
 		}
+		// Create 固定写入 pending；历史用例经显式 UPDATE 置为 executed。
 		if _, err := pool.Exec(ctx,
 			`UPDATE "`+schema+`".agent_tool_approvals SET status='executed' WHERE id=$1`, id); err != nil {
-			t.Fatalf("set executed %d: %v", i, err)
+			t.Fatalf("set executed: %v", err)
 		}
 	}
-	rows, total, err := store.ListHistory(ctx, tenantID, 1, 2)
+	for i := 0; i < 5; i++ {
+		create("user-1")
+	}
+	for i := 0; i < 2; i++ {
+		create("user-2")
+	}
+	// admin（userID=""）：全租户 total=7。
+	_, total, err := store.ListHistory(ctx, tenantID, "", 1, 10)
 	if err != nil {
-		t.Fatalf("list history: %v", err)
+		t.Fatalf("admin list history: %v", err)
+	}
+	if total != 7 {
+		t.Fatalf("expected admin total 7, got %d", total)
+	}
+	// member（userID="user-1"）：COUNT 与 SELECT 同步过滤 → total=5 与列表一致（H3）。
+	rows, total, err := store.ListHistory(ctx, tenantID, "user-1", 1, 2)
+	if err != nil {
+		t.Fatalf("member list history: %v", err)
 	}
 	if total != 5 {
-		t.Fatalf("expected total 5, got %d", total)
+		t.Fatalf("expected member total 5, got %d", total)
 	}
 	if len(rows) != 2 {
 		t.Fatalf("expected page size 2, got %d", len(rows))
@@ -322,6 +338,9 @@ func TestToolApprovalListHistoryPaged(t *testing.T) {
 	for _, r := range rows {
 		if r.Status != "executed" {
 			t.Fatalf("expected history rows executed, got %q", r.Status)
+		}
+		if r.UserID != "user-1" {
+			t.Fatalf("member list must only contain own rows, got user %q", r.UserID)
 		}
 	}
 }

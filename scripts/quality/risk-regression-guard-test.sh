@@ -203,7 +203,7 @@ assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
 assert_file_contains "${ROOT}/web/e2e/stateful/packs/agent-skill-mcp.ts" \
   'agents\.tool\.approvals\.id\.decision' 'browser tool approval decision capability'
 assert_file_contains "${ROOT}/web/e2e/stateful/packs/agent-skill-mcp.ts" \
-  'agents\.tool\.approvals\.id\.resume' 'browser tool approval resume capability'
+  'agents\.id\.execute\.stream' 'browser tool approval streaming resume capability'
 assert_file_contains "${ROOT}/scripts/quality/tool-permission-test.sh" \
   'FakeServer' 'deterministic fake MCP test selection'
 

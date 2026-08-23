@@ -9,6 +9,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -1483,79 +1484,21 @@ func recordExecutionPreparationFailure(ctx context.Context, start time.Time, sta
 }
 
 func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta) (*AgentResult, int, error) {
-	a, ok, err := s.deps.Registry.Get(ctx, agentID)
-	if err != nil {
-		return nil, 0, fmt.Errorf("execute agent: get agent: %w", err)
-	}
-	if !ok {
-		return nil, 0, ErrNotFound
-	}
-	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
 	executionID := executionIDOrNew(meta.ExecutionID)
-	preparationStart := time.Now()
-	recordExecutionPreparation(ctx, a, req, meta, executionID)
-	a, assignment, err := s.resolveExecutionAgent(ctx, a, meta.TenantID, agentID, executionSubject(req, meta))
+	a, req, meta, _, options, cfg, resuming, consumedApproval, err := s.prepareAgentExecution(ctx, agentID, req, meta, executionID)
 	if err != nil {
-		recordExecutionPreparationFailure(ctx, preparationStart, "resolve_agent_revision")
-		return nil, 0, fmt.Errorf("execute agent: resolve revision: %w", err)
+		return nil, 0, err
 	}
-	applyAgentAssignment(&meta, agentID, assignment)
-	recordExecutionPreparation(ctx, a, req, meta, executionID)
-	_, options, err := s.assembleOptions(ctx, a, req, meta, executionID)
-	if err != nil {
-		s.recordSystemAssistantRequest(a, "unknown", "error")
-		recordExecutionPreparationFailure(ctx, preparationStart, "assemble_options")
-		return nil, 0, fmt.Errorf("execute agent: assemble options: %w", err)
-	}
-	options = append(options, WithExecutionID(executionID))
-	assistantCfg := &ExecutionConfig{}
-	assistantCfg.ApplyOptions(options)
-
-	s.deps.Logger.Debug("agent.execute",
-		zap.String("agent_id", agentID),
-		zap.String("trace_id", meta.TraceID),
-		zap.String("tenant_id", meta.TenantID),
-		zap.String("user_id", req.UserID),
-		zap.String("conversation_id", req.ConversationID),
-	)
-
+	s.logAgentExecutionDebug("agent.execute", agentID, meta, req)
 	execCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
 
 	start := time.Now()
 	result, err := a.Execute(execCtx, req.Query, options...)
 	durationMs := int(time.Since(start).Milliseconds())
-	if assistantCfg.SystemAssistantMode && s.deps.Metrics != nil {
-		outcome := "success"
-		if err != nil {
-			outcome = "error"
-		} else if hasFailedAssistantArtifact(result) {
-			outcome = "evidence_error"
-		}
-		s.deps.Metrics.IncSystemAssistantRequest(assistantCfg.SystemAssistantRoleClass,
-			assistantCfg.EvolutionTrace.ResourceManifest["system-assistant-profile"], outcome)
-	}
-
-	if err != nil {
-		s.deps.Logger.Error("agent.execute",
-			zap.String("agent_id", agentID),
-			zap.String("trace_id", meta.TraceID),
-			zap.String("tenant_id", meta.TenantID),
-			zap.String("user_id", req.UserID),
-			zap.Int("duration_ms", durationMs),
-			zap.Error(err),
-		)
-	} else {
-		s.deps.Logger.Info("agent.execute",
-			zap.String("agent_id", agentID),
-			zap.String("trace_id", meta.TraceID),
-			zap.String("tenant_id", meta.TenantID),
-			zap.String("user_id", req.UserID),
-			zap.Int("duration_ms", durationMs),
-		)
-	}
-
-	if err == nil && result != nil && s.deps.MemoryBuffer != nil && !assistantCfg.SystemAssistantMode {
+	s.recordSystemAssistantExecution(cfg, result, err)
+	s.logAgentExecution("agent.execute", agentID, meta, req, durationMs, err)
+	if err == nil && result != nil && !cfg.SystemAssistantMode {
 		// MemoryBuffer 是执行成功后的旁路异步摄取（Redis buffer，供后台记忆
 		// 提取）。答案已交付，缓冲失败不阻断响应——降级决策，但错误必须显式
 		// 处理并记录，禁止静默吞掉。
@@ -1564,7 +1507,10 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 		s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "assistant", result.Output)
 	}
 	// 任务结束轨迹反思：与 fact 提取并列的链路，fail-open 显式降级。
-	s.enqueueTrajectoryReflection(ctx, meta, req, agentID, a.GetConfig().MemoryScope, executionID, result, assistantCfg.SystemAssistantMode)
+	s.enqueueTrajectoryReflection(ctx, meta, req, agentID, a.GetConfig().MemoryScope, executionID, result, cfg.SystemAssistantMode)
+	if resuming {
+		err = s.finishApprovalResume(ctx, meta.TenantID, executionID, consumedApproval, err)
+	}
 	return result, durationMs, err
 }
 
@@ -1576,101 +1522,157 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 func (s *AgentService) ExecuteStream(
 	ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, tokenCb func(string),
 ) (execCtx context.Context, cancel context.CancelFunc, run func() (*AgentResult, int, error), executionID string, err error) {
-	a, ok, err := s.deps.Registry.Get(ctx, agentID)
-	if err != nil {
-		return nil, nil, nil, "", fmt.Errorf("execute stream: get agent: %w", err)
-	}
-	if !ok {
-		return nil, nil, nil, "", ErrNotFound
-	}
-	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
 	// 复用调用方传入的 execution_id（断线续接的恢复键）：非空则沿用同一执行
-	// 供 resumeFromCheckpoint 定位 checkpoint，空则生成新 ID。此前无条件新建，
-	// 导致流式路径即使带 execution_id 也永远无法续接。
+	// 供 resumeFromCheckpoint 定位 checkpoint，空则生成新 ID（此前无条件新建，
+	// 导致流式路径即使带 execution_id 也永远无法续接）。
 	executionID = executionIDOrNew(meta.ExecutionID)
-	preparationStart := time.Now()
-	recordExecutionPreparation(ctx, a, req, meta, executionID)
-	a, assignment, err := s.resolveExecutionAgent(ctx, a, meta.TenantID, agentID, executionSubject(req, meta))
+	a, req, meta, streamCtx, options, cfg, resuming, consumedApproval, err := s.prepareAgentExecution(ctx, agentID, req, meta, executionID)
 	if err != nil {
-		recordExecutionPreparationFailure(ctx, preparationStart, "resolve_agent_revision")
-		return nil, nil, nil, "", fmt.Errorf("execute stream: resolve revision: %w", err)
+		return nil, nil, nil, "", err
 	}
-	applyAgentAssignment(&meta, agentID, assignment)
-	recordExecutionPreparation(ctx, a, req, meta, executionID)
-	streamCtx, options, err := s.assembleOptions(ctx, a, req, meta, executionID)
-	if err != nil {
-		s.recordSystemAssistantRequest(a, "unknown", "error")
-		recordExecutionPreparationFailure(ctx, preparationStart, "assemble_options")
-		return nil, nil, nil, "", fmt.Errorf("execute stream: assemble options: %w", err)
-	}
-	assistantCfg := &ExecutionConfig{}
-	assistantCfg.ApplyOptions(options)
 	var firstToken sync.Once
 	var streamStarted time.Time
 	wrappedTokenCb := tokenCb
-	if assistantCfg.SystemAssistantMode && s.deps.Metrics != nil {
+	if cfg.SystemAssistantMode && s.deps.Metrics != nil {
 		wrappedTokenCb = func(token string) {
 			firstToken.Do(func() {
-				s.deps.Metrics.RecordSystemAssistantTTFT(assistantCfg.SystemAssistantRoleClass,
-					assistantCfg.EvolutionTrace.ResourceManifest["system-assistant-profile"], time.Since(streamStarted).Seconds())
+				s.deps.Metrics.RecordSystemAssistantTTFT(cfg.SystemAssistantRoleClass,
+					cfg.EvolutionTrace.ResourceManifest["system-assistant-profile"], time.Since(streamStarted).Seconds())
 			})
 			if tokenCb != nil {
 				tokenCb(token)
 			}
 		}
 	}
-	options = append(options, WithTokenCallback(wrappedTokenCb))
-	options = append(options, WithExecutionID(executionID))
+	// 总是追加 token callback：run 闭包延迟执行，回调捕获 cfg 在调用期已确定。
+	options = append(options, WithTokenCallback(wrappedTokenCb), WithExecutionID(executionID))
 
 	execCtx, cancel = context.WithCancel(context.WithoutCancel(streamCtx))
 	run = func() (*AgentResult, int, error) {
-		s.deps.Logger.Debug("agent.execute_stream",
-			zap.String("agent_id", agentID),
-			zap.String("trace_id", meta.TraceID),
-			zap.String("tenant_id", meta.TenantID),
-			zap.String("user_id", req.UserID),
-			zap.String("conversation_id", req.ConversationID),
-		)
+		s.logAgentExecutionDebug("agent.execute_stream", agentID, meta, req)
 		start := time.Now()
 		streamStarted = start
 		res, runErr := a.Execute(execCtx, req.Query, options...)
 		durationMs := int(time.Since(start).Milliseconds())
-		if assistantCfg.SystemAssistantMode && s.deps.Metrics != nil {
-			outcome := "success"
-			if runErr != nil {
-				outcome = "error"
-			} else if hasFailedAssistantArtifact(res) {
-				outcome = "evidence_error"
-			}
-			s.deps.Metrics.IncSystemAssistantRequest(assistantCfg.SystemAssistantRoleClass,
-				assistantCfg.EvolutionTrace.ResourceManifest["system-assistant-profile"], outcome)
-		}
-		if runErr != nil {
-			s.deps.Logger.Error("agent.execute_stream",
-				zap.String("agent_id", agentID),
-				zap.String("trace_id", meta.TraceID),
-				zap.String("tenant_id", meta.TenantID),
-				zap.Int("duration_ms", durationMs),
-				zap.Error(runErr),
-			)
-		} else {
-			s.deps.Logger.Info("agent.execute_stream",
-				zap.String("agent_id", agentID),
-				zap.String("trace_id", meta.TraceID),
-				zap.String("tenant_id", meta.TenantID),
-				zap.Int("duration_ms", durationMs),
-			)
-		}
-		if runErr == nil && res != nil && !assistantCfg.SystemAssistantMode {
+		s.recordSystemAssistantExecution(cfg, res, runErr)
+		s.logAgentExecution("agent.execute_stream", agentID, meta, req, durationMs, runErr)
+		if runErr == nil && res != nil && !cfg.SystemAssistantMode {
 			// 降级决策与 Execute 路径一致：答案已交付，旁路记忆缓冲失败只记日志。
 			scope := a.GetConfig().MemoryScope
 			s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "user", req.Query)
 			s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "assistant", res.Output)
 		}
-		s.enqueueTrajectoryReflection(ctx, meta, req, agentID, a.GetConfig().MemoryScope, executionID, res, assistantCfg.SystemAssistantMode)
+		s.enqueueTrajectoryReflection(ctx, meta, req, agentID, a.GetConfig().MemoryScope, executionID, res, cfg.SystemAssistantMode)
+		if resuming {
+			// 审批续跑收尾：成功/消费标记推进 checkpoint；失败且未消费批准时
+			// 回滚 running→waiting_approval，让 member 可重试同一批准。
+			runErr = s.finishApprovalResume(ctx, meta.TenantID, executionID, consumedApproval, runErr)
+		}
 		return res, durationMs, runErr
 	}
 	return execCtx, cancel, run, executionID, nil
+}
+
+// prepareAgentExecution 是 Execute/ExecuteStream 的公共准备链：Registry 解析
+// Agent → ensure 会话与 init checkpoint → 实验 revision 解析 → 审批续跑抢占并
+// 重写 req/meta → assembleOptions → 追加恢复选项。返回重写后的 req/meta、
+// streamCtx（仅流式使用，供携带 per-tenant LLM completer）、options、cfg、
+// 续跑标记与 consumed 判定。错误已在链内 wrap 到统一语义，调用方原样上抛。
+func (s *AgentService) prepareAgentExecution(
+	ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, executionID string,
+) (a Agent, outReq ExecRequest, outMeta ExecMeta, streamCtx context.Context, options []ExecutionOption, cfg *ExecutionConfig, resuming bool, consumed func() bool, err error) {
+	a, ok, err := s.deps.Registry.Get(ctx, agentID)
+	if err != nil {
+		return nil, req, meta, nil, nil, nil, false, nil, fmt.Errorf("get agent: %w", err)
+	}
+	if !ok {
+		return nil, req, meta, nil, nil, nil, false, nil, ErrNotFound
+	}
+	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
+	s.ensureInitialCheckpoint(ctx, meta, req, agentID, executionID)
+	preparationStart := time.Now()
+	recordExecutionPreparation(ctx, a, req, meta, executionID)
+	a, assignment, err := s.resolveExecutionAgent(ctx, a, meta.TenantID, agentID, executionSubject(req, meta))
+	if err != nil {
+		recordExecutionPreparationFailure(ctx, preparationStart, "resolve_agent_revision")
+		return nil, req, meta, nil, nil, nil, false, nil, fmt.Errorf("resolve revision: %w", err)
+	}
+	applyAgentAssignment(&meta, agentID, assignment)
+	recordExecutionPreparation(ctx, a, req, meta, executionID)
+	// 审批续跑：命中 waiting_approval checkpoint 则抢占并把 req/meta 重写为
+	// 批准载荷快照；buildApprovalResumeOptions 追加在 assembleOptions 之后。
+	approvalPayload, approvalID, resuming, req, meta, err := s.maybeResumeApproval(ctx, agentID, req, meta, executionID)
+	if err != nil {
+		recordExecutionPreparationFailure(ctx, preparationStart, "assemble_options")
+		return nil, req, meta, nil, nil, nil, false, nil, fmt.Errorf("resume approval: %w", err)
+	}
+	streamCtx, options, err = s.assembleOptions(ctx, a, req, meta, executionID)
+	if err != nil {
+		s.recordSystemAssistantRequest(a, "unknown", "error")
+		recordExecutionPreparationFailure(ctx, preparationStart, "assemble_options")
+		return nil, req, meta, nil, nil, nil, false, nil, fmt.Errorf("assemble options: %w", err)
+	}
+	if resuming {
+		var resumeOpts []ExecutionOption
+		resumeOpts, consumed, err = s.buildApprovalResumeOptions(ctx, meta.TenantID, a, approvalPayload, approvalID)
+		if err != nil {
+			recordExecutionPreparationFailure(ctx, preparationStart, "assemble_options")
+			return nil, req, meta, nil, nil, nil, false, nil, fmt.Errorf("resume approval options: %w", err)
+		}
+		options = append(options, resumeOpts...)
+	}
+	options = append(options, WithExecutionID(executionID))
+	cfg = &ExecutionConfig{}
+	cfg.ApplyOptions(options)
+	return a, req, meta, streamCtx, options, cfg, resuming, consumed, nil
+}
+
+// logAgentExecutionDebug 记录执行前 Debug 日志（含会话维度，供恢复排查）。
+func (s *AgentService) logAgentExecutionDebug(operation, agentID string, meta ExecMeta, req ExecRequest) {
+	s.deps.Logger.Debug(operation,
+		zap.String("agent_id", agentID),
+		zap.String("trace_id", meta.TraceID),
+		zap.String("tenant_id", meta.TenantID),
+		zap.String("user_id", req.UserID),
+		zap.String("conversation_id", req.ConversationID),
+	)
+}
+
+// recordSystemAssistantExecution 记录系统助手执行结果指标（fail-open 侧通道）。
+func (s *AgentService) recordSystemAssistantExecution(cfg *ExecutionConfig, result *AgentResult, err error) {
+	if !cfg.SystemAssistantMode || s.deps.Metrics == nil {
+		return
+	}
+	outcome := "success"
+	if err != nil {
+		outcome = "error"
+	} else if hasFailedAssistantArtifact(result) {
+		outcome = "evidence_error"
+	}
+	s.deps.Metrics.IncSystemAssistantRequest(cfg.SystemAssistantRoleClass,
+		cfg.EvolutionTrace.ResourceManifest["system-assistant-profile"], outcome)
+}
+
+// logAgentExecution 统一记录执行结果日志（错误 ERROR / 成功 INFO）。
+func (s *AgentService) logAgentExecution(operation, agentID string, meta ExecMeta, req ExecRequest, durationMs int, err error) {
+	if err != nil {
+		s.deps.Logger.Error(operation,
+			zap.String("agent_id", agentID),
+			zap.String("trace_id", meta.TraceID),
+			zap.String("tenant_id", meta.TenantID),
+			zap.String("user_id", req.UserID),
+			zap.Int("duration_ms", durationMs),
+			zap.Error(err),
+		)
+		return
+	}
+	s.deps.Logger.Info(operation,
+		zap.String("agent_id", agentID),
+		zap.String("trace_id", meta.TraceID),
+		zap.String("tenant_id", meta.TenantID),
+		zap.String("user_id", req.UserID),
+		zap.Int("duration_ms", durationMs),
+	)
 }
 
 // bufferMemoryTurn feeds one turn into the async memory-extraction buffer.
@@ -1892,47 +1894,17 @@ func (s *AgentService) ResumeToolApproval(ctx context.Context, tenantID, approva
 	if err != nil {
 		return nil, 0, fmt.Errorf("resume tool approval: assemble options: %w", err)
 	}
-	if len(payload.PinnedSkillRevisions) > 0 && s.deps.SkillActivationResolver != nil {
-		refs := make([]port.SkillRevisionRef, 0, len(payload.PinnedSkillRevisions))
-		for skillID, revisionID := range payload.PinnedSkillRevisions {
-			refs = append(refs, port.SkillRevisionRef{SkillID: skillID, RevisionID: revisionID})
-		}
-		catalog, resolveErr := s.deps.SkillActivationResolver.ResolveSkills(ctx, tenantID, refs)
-		if resolveErr != nil {
-			return nil, 0, resolveErr
-		}
-		options = append(options, WithSkillCatalog(catalog))
+	// 复用 buildApprovalResumeOptions：恢复键（WithExecutionID + WithApprovalResume）
+	// + PinnedSkillRevisions 目录 + 覆盖式 guard（首个与批准一致的调用走 ExecuteApproved
+	// CAS 单次消费）。与流式续跑共用，消除重复。
+	resumeOpts, consumed, err := s.buildApprovalResumeOptions(ctx, tenantID, a, payload, approvalID)
+	if err != nil {
+		return nil, 0, err
 	}
-	used := false
-	guard := NewToolExecutionGuard(ToolExecutionGuardDeps{
-		Authorizer: s.deps.ToolAuthorizer,
-		Executor:   s.deps.MCPToolExecutor,
-		ExecuteApproved: func(callCtx context.Context, request ToolExecutionRequest) (port.MCPToolResult, error) {
-			used = true
-			return s.deps.ApprovalService.ExecuteApproved(
-				callCtx, tenantID, approvalID, request.Tool.ServerID,
-				request.Tool.CapabilityID, request.Arguments, s.deps.MCPToolExecutor,
-			)
-		},
-	})
-	options = append(options, WithExecutionID(payload.ExecutionID), WithToolExecutionFn(func(
-		callCtx context.Context, request port.ToolExecutionRequest,
-	) (any, error) {
-		request.TenantID = tenantID
-		request.UserID = payload.UserID
-		request.AgentID = payload.AgentID
-		request.TraceID = payload.TraceID
-		request.ExecutionID = payload.ExecutionID
-		request.AgentToolIDs = a.GetConfig().MCPToolIDs
-		if !used && request.Tool.ServerID == payload.ServerID &&
-			request.Tool.CapabilityID == payload.ToolName && reflect.DeepEqual(request.Arguments, payload.Arguments) {
-			request.ApprovalID = approvalID
-		}
-		return guard.Execute(callCtx, request)
-	}))
+	options = append(options, resumeOpts...)
 	start := time.Now()
 	result, runErr := a.Execute(context.WithoutCancel(ctx), payload.Query, options...)
-	runErr = approvedToolResumeError(used, runErr)
+	runErr = approvedToolResumeError(consumed(), runErr)
 	duration := int(time.Since(start).Milliseconds())
 	runErr = completeApprovalResume(ctx, s.deps.CheckpointStore, tenantID, payload.ExecutionID, runErr)
 	return result, duration, runErr
@@ -2061,6 +2033,363 @@ func completeApprovalResume(
 		return fmt.Errorf("complete approved tool checkpoint: %w", err)
 	}
 	return nil
+}
+
+// ActiveExecution is the refresh-resume view of a conversation's in-flight
+// execution, returned by GetActiveExecution for the frontend to reconnect a
+// streamed run after a hard refresh (session continuity).
+type ActiveExecution struct {
+	ExecutionID string `json:"execution_id"`
+	AgentID     string `json:"agent_id"`
+	Status      string `json:"status"`
+	ApprovalID  string `json:"approval_id,omitempty"`
+	// ApprovalStatus 仅 waiting_approval 时填充审批行当前状态
+	// （pending/approved/rejected/expired/...）：批准后 checkpoint 仍停在
+	// waiting_approval，发起人前端需区分"已批准待续跑"与"仍等待"才能自动续跑；
+	// 只透出状态字符串，不含任何敏感字段。
+	ApprovalStatus string    `json:"approval_status,omitempty"`
+	UserQuery      string    `json:"user_query,omitempty"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// GetActiveExecution returns the conversation's fresh in-flight execution for
+// the actor, or (nil, nil) when none exists (404-none). Fail-closed ownership
+// gate: a member must own the conversation; only admin/owner may read a
+// conversation they do not own. Any DB read failure is returned as an error
+// (→ 500) and is never folded into the 404-none sentinel — a transient read
+// failure must not masquerade as "no active execution" and trigger a fresh
+// run (duplicate execution / duplicate approval).
+func (s *AgentService) GetActiveExecution(ctx context.Context, tenantID, conversationID, actor string) (*ActiveExecution, error) {
+	if s.deps.ChatStore == nil || s.deps.CheckpointStore == nil {
+		return nil, nil
+	}
+	allowed, err := s.resolveActiveExecutionAccess(ctx, tenantID, conversationID, actor)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, nil
+	}
+	checkpoint, err := s.deps.CheckpointStore.GetLatestActiveByConversation(ctx, tenantID, conversationID)
+	if err != nil {
+		return nil, fmt.Errorf("get active execution: get checkpoint: %w", err)
+	}
+	if checkpoint == nil {
+		return nil, nil
+	}
+	out := &ActiveExecution{
+		ExecutionID: checkpoint.ExecutionID,
+		AgentID:     checkpoint.AgentID,
+		Status:      checkpoint.Status,
+		UserQuery:   checkpoint.UserQuery,
+		UpdatedAt:   checkpoint.UpdatedAt,
+	}
+	if checkpoint.Status == domain.ExecStatusWaitingApproval {
+		s.populateApprovalStatus(ctx, tenantID, approvalIDFromRuntimeState(checkpoint.RuntimeStateJSON), out)
+	}
+	return out, nil
+}
+
+// resolveActiveExecutionAccess 会话归属校验（fail-closed）：member 必须拥有会话；
+// admin/owner 可读他人会话。会话不存在或非归属 member 一律返回不放行（404-none
+// 哨兵），关闭存在性 oracle——非归属成员无法探测会话是否存在。角色现查（resolver
+// 缺失/失败原样上抛，不折叠成 404，防 DB 抖动被误判为"无活跃执行"）。
+func (s *AgentService) resolveActiveExecutionAccess(ctx context.Context, tenantID, conversationID, actor string) (bool, error) {
+	conv, err := s.deps.ChatStore.GetConversation(ctx, tenantID, conversationID)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("get active execution: get conversation: %w", err)
+	}
+	if conv.UserID == actor {
+		return true, nil
+	}
+	role, err := s.deps.TenantRoleResolver.ResolveTenantRole(ctx, tenantID, actor)
+	if err != nil {
+		return false, fmt.Errorf("get active execution: resolve role: %w", err)
+	}
+	return role == "admin" || role == "owner", nil
+}
+
+// populateApprovalStatus 读取 waiting_approval 审批行状态字符串供前端轮询，只透出
+// 状态字符串、不泄露任何敏感字段。读取失败仅记录（fail-open）：前端保持等待态下轮
+// 重试，不影响 active-execution 本身（会话归属校验在调用方已完成）。
+func (s *AgentService) populateApprovalStatus(ctx context.Context, tenantID, approvalID string, out *ActiveExecution) {
+	if approvalID == "" {
+		return
+	}
+	// ApprovalID 是恢复键的关联标识，ApprovalService 缺位时也照常透出；
+	// 状态查询失败仅记录（fail-open）：前端保持等待态下轮重试。
+	out.ApprovalID = approvalID
+	if s.deps.ApprovalService == nil {
+		return
+	}
+	if st, err := s.deps.ApprovalService.ApprovalStatus(ctx, tenantID, approvalID); err == nil {
+		out.ApprovalStatus = st
+	} else {
+		s.deps.Logger.Warn("agent: read approval status for active execution failed",
+			zap.String("approval_id", approvalID),
+			zap.Error(err))
+	}
+}
+
+// ensureInitialCheckpoint records the "running(init)" checkpoint of a brand-new
+// execution so the conversation has a discoverable in-flight state before the
+// first per-step checkpoint is written. It stores the round's user_query
+// (written once, retained by later Upsert ON CONFLICT) so a session whose run
+// just started can be resumed verbatim after a refresh. Continuation entries
+// (meta.ExecutionID != "") never touch the existing checkpoint. Init-checkpoint
+// failure is logged and does not abort the run (fail-open, explicit): the row
+// simply does not exist, so nothing can be mis-resumed.
+func (s *AgentService) ensureInitialCheckpoint(ctx context.Context, meta ExecMeta, req ExecRequest, agentID, executionID string) {
+	if meta.ExecutionID != "" || s.deps.CheckpointStore == nil {
+		return
+	}
+	markCtx, markCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
+	defer markCancel()
+	checkpoint := domain.AgentExecutionCheckpoint{
+		ExecutionID:    executionID,
+		TraceID:        meta.TraceID,
+		ConversationID: req.ConversationID,
+		AgentID:        agentID,
+		UserID:         req.UserID,
+		Status:         "running",
+		ResumeReason:   "init",
+		ExpiresAt:      time.Now().Add(constants.PlanCheckpointTTL),
+		UserQuery:      req.Query,
+		RunGeneration:  1,
+	}
+	if err := s.deps.CheckpointStore.Upsert(markCtx, meta.TenantID, checkpoint); err != nil {
+		s.deps.Logger.Warn("agent: initial checkpoint failed",
+			zap.String("execution_id", executionID),
+			zap.Error(err))
+	}
+}
+
+// approvalIDFromRuntimeState extracts the approval_id stored by
+// createApprovalCheckpoint into a waiting_approval checkpoint's runtime state.
+func approvalIDFromRuntimeState(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var state struct {
+		ApprovalID string `json:"approval_id"`
+	}
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return ""
+	}
+	return state.ApprovalID
+}
+
+// resolveApprovalResume 解析 executionID 对应的 waiting_approval checkpoint 并
+// 校验审批续跑资格。返回 (payload, approvalID, checkpoint)；checkpoint 为 nil
+// 表示非审批续跑（无恢复键 / 无 checkpoint / 非 waiting_approval / 无审批 ID）。
+// SECURITY-HIGH：非发起人（payload.UserID != actor）须为 admin/owner 现查角色，
+// 否则 fail-closed 拒绝；审批过期 Invalidate、会话删除 Void、策略变更 Invalidate
+// 复用 validateApprovalResume 的恢复层校验；未批准/已作废错误原样上抛（transport
+// 据此幂等恢复"等待审批"卡片，不销毁审批）。
+func (s *AgentService) resolveApprovalResume(
+	ctx context.Context, tenantID, actor, executionID, agentID string,
+) (ToolApprovalPayload, string, *domain.AgentExecutionCheckpoint, error) {
+	cp, approvalID, err := s.approvalResumeCheckpoint(ctx, tenantID, executionID)
+	if err != nil {
+		return ToolApprovalPayload{}, "", nil, err
+	}
+	if cp == nil {
+		return ToolApprovalPayload{}, "", nil, nil
+	}
+	payload, err := s.deps.ApprovalService.ApprovedPayload(ctx, tenantID, approvalID)
+	if err != nil {
+		if errors.Is(err, ErrApprovalNotApproved) || errors.Is(err, domain.ErrApprovalInvalidated) {
+			return ToolApprovalPayload{}, approvalID, cp, err
+		}
+		return ToolApprovalPayload{}, "", nil, s.handleApprovedPayloadError(ctx, tenantID, approvalID, err)
+	}
+	if err := s.authorizeApprovalActor(ctx, tenantID, actor, payload, cp); err != nil {
+		return ToolApprovalPayload{}, "", nil, err
+	}
+	if err := s.validateApprovalBinding(agentID, payload); err != nil {
+		return ToolApprovalPayload{}, "", nil, err
+	}
+	if err := s.validateApprovalResume(ctx, tenantID, approvalID, payload); err != nil {
+		return ToolApprovalPayload{}, "", nil, err
+	}
+	return payload, approvalID, cp, nil
+}
+
+// approvalResumeCheckpoint 定位 executionID 对应的 waiting_approval checkpoint 并
+// 提取 approval_id。非审批续跑（无恢复键 / 无 checkpoint / 非 waiting_approval /
+// 无审批 ID）返回 (nil, "", nil)；DB 读取失败原样上抛。
+func (s *AgentService) approvalResumeCheckpoint(
+	ctx context.Context, tenantID, executionID string,
+) (*domain.AgentExecutionCheckpoint, string, error) {
+	if executionID == "" || s.deps.CheckpointStore == nil ||
+		s.deps.ApprovalService == nil || s.deps.MCPToolExecutor == nil {
+		return nil, "", nil
+	}
+	cp, err := s.deps.CheckpointStore.GetLatest(ctx, tenantID, executionID)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve approval resume: get checkpoint: %w", err)
+	}
+	if cp == nil || cp.Status != domain.ExecStatusWaitingApproval {
+		return nil, "", nil
+	}
+	approvalID := approvalIDFromRuntimeState(cp.RuntimeStateJSON)
+	if approvalID == "" {
+		return nil, "", nil
+	}
+	return cp, approvalID, nil
+}
+
+// validateApprovalBinding URL 上的 agentID 必须与审批载荷 AgentID 一致，防止拿
+// A 的审批续跑 B 的执行。
+func (s *AgentService) validateApprovalBinding(agentID string, payload ToolApprovalPayload) error {
+	if agentID != "" && payload.AgentID != "" && agentID != payload.AgentID {
+		return ErrApprovalBindingMismatch
+	}
+	return nil
+}
+
+// authorizeApprovalActor 审批续跑的归属校验（SECURITY-HIGH）：发起人放行且
+// checkpoint 归属须与发起人一致（双保险）；非发起人须为 admin/owner（角色现查，
+// resolver 缺失/失败 fail-closed，不读 JWT role claim）。
+func (s *AgentService) authorizeApprovalActor(
+	ctx context.Context, tenantID, actor string, payload ToolApprovalPayload, cp *domain.AgentExecutionCheckpoint,
+) error {
+	if payload.UserID == actor {
+		if cp.UserID != "" && cp.UserID != actor {
+			return domain.ErrApprovalRoleDenied
+		}
+		return nil
+	}
+	role, err := s.deps.TenantRoleResolver.ResolveTenantRole(ctx, tenantID, actor)
+	if err != nil {
+		return fmt.Errorf("resolve approval resume: resolve role: %w", err)
+	}
+	if role != "admin" && role != "owner" {
+		return domain.ErrApprovalRoleDenied
+	}
+	return nil
+}
+
+// claimApprovalResume 抢占 waiting_approval checkpoint：先分代 CAS
+// （AdvanceRunGeneration，双 tab/双设备只放一个胜出），再把状态 CAS 为 running
+// （B3 + SECURITY-MEDIUM-2 的抢占）。任一失败 = 并发续跑已胜出，返回错误由
+// transport 映射 409"已在其他窗口执行"。
+func (s *AgentService) claimApprovalResume(ctx context.Context, tenantID, executionID string, cp *domain.AgentExecutionCheckpoint) error {
+	if err := s.deps.CheckpointStore.AdvanceRunGeneration(ctx, tenantID, executionID, cp.RunGeneration); err != nil {
+		return fmt.Errorf("resume approval: %w: another window already resumed execution", err)
+	}
+	if err := s.deps.CheckpointStore.UpdateStatusFrom(ctx, tenantID, executionID, domain.ExecStatusWaitingApproval, "running"); err != nil {
+		return fmt.Errorf("resume approval: claim checkpoint: %w", err)
+	}
+	return nil
+}
+
+// maybeResumeApproval 是 Execute/ExecuteStream 的统一审批续跑入口：命中
+// waiting_approval checkpoint 时抢占并把 req/meta 重写为批准载荷快照（query/
+// 发起人/会话/知识 pin），供 assembleOptions 使用。调用方须在 assembleOptions
+// 后追加 buildApprovalResumeOptions，并在收尾调用 finishApprovalResume。错误
+// 原样上抛（越权/过期/策略变/并发抢占失败）。
+func (s *AgentService) maybeResumeApproval(
+	ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, executionID string,
+) (payload ToolApprovalPayload, approvalID string, resuming bool, outReq ExecRequest, outMeta ExecMeta, err error) {
+	payload, approvalID, cp, err := s.resolveApprovalResume(ctx, meta.TenantID, req.UserID, executionID, agentID)
+	if err != nil {
+		return payload, approvalID, false, req, meta, err
+	}
+	if cp == nil {
+		return ToolApprovalPayload{}, "", false, req, meta, nil
+	}
+	if err := s.claimApprovalResume(ctx, meta.TenantID, executionID, cp); err != nil {
+		return ToolApprovalPayload{}, "", false, req, meta, err
+	}
+	// 重跑以批准载荷为准：发起人/会话/query 必须是审批时快照，否则续跑会写到
+	// 别的会话或以错误身份执行。
+	req.Query = payload.Query
+	req.UserID = payload.UserID
+	req.ConversationID = payload.ConversationID
+	meta.KnowledgeAssignmentsPinned = true
+	meta.PinnedKnowledgeRevisions = payload.PinnedKnowledgeRevisions
+	return payload, approvalID, true, req, meta, nil
+}
+
+// buildApprovalResumeOptions 构造审批续跑的执行选项：恢复键（WithExecutionID +
+// WithApprovalResume）与覆盖式 guard。guard 对首个与批准一致的调用
+// （server/capability/arguments 匹配）注入 approvalID 走 ExecuteApproved 的
+// CAS 单次消费；后续不一致调用回退正常授权/审批路径。返回 consumed 判定函数
+// （本轮重跑是否真的消费了批准），供收尾判定回滚条件。ResumeToolApproval 与
+// 流式续跑共用，消除重复。
+func (s *AgentService) buildApprovalResumeOptions(
+	ctx context.Context, tenantID string, a Agent, payload ToolApprovalPayload, approvalID string,
+) ([]ExecutionOption, func() bool, error) {
+	options := make([]ExecutionOption, 0, 3)
+	if len(payload.PinnedSkillRevisions) > 0 && s.deps.SkillActivationResolver != nil {
+		refs := make([]port.SkillRevisionRef, 0, len(payload.PinnedSkillRevisions))
+		for skillID, revisionID := range payload.PinnedSkillRevisions {
+			refs = append(refs, port.SkillRevisionRef{SkillID: skillID, RevisionID: revisionID})
+		}
+		catalog, err := s.deps.SkillActivationResolver.ResolveSkills(ctx, tenantID, refs)
+		if err != nil {
+			return nil, nil, err
+		}
+		options = append(options, WithSkillCatalog(catalog))
+	}
+	consumed := false
+	guard := NewToolExecutionGuard(ToolExecutionGuardDeps{
+		Authorizer: s.deps.ToolAuthorizer,
+		Executor:   s.deps.MCPToolExecutor,
+		ExecuteApproved: func(callCtx context.Context, request ToolExecutionRequest) (port.MCPToolResult, error) {
+			consumed = true
+			return s.deps.ApprovalService.ExecuteApproved(
+				callCtx, tenantID, approvalID, request.Tool.ServerID,
+				request.Tool.CapabilityID, request.Arguments, s.deps.MCPToolExecutor,
+			)
+		},
+	})
+	options = append(options, WithExecutionID(payload.ExecutionID), WithApprovalResume(approvalID),
+		WithToolExecutionFn(func(callCtx context.Context, request port.ToolExecutionRequest) (any, error) {
+			request.TenantID = tenantID
+			request.UserID = payload.UserID
+			request.AgentID = payload.AgentID
+			request.TraceID = payload.TraceID
+			request.ExecutionID = payload.ExecutionID
+			request.AgentToolIDs = a.GetConfig().MCPToolIDs
+			if !consumed && request.Tool.ServerID == payload.ServerID &&
+				request.Tool.CapabilityID == payload.ToolName && reflect.DeepEqual(request.Arguments, payload.Arguments) {
+				request.ApprovalID = approvalID
+			}
+			return guard.Execute(callCtx, request)
+		}))
+	return options, func() bool { return consumed }, nil
+}
+
+// finishApprovalResume 审批续跑收尾（SECURITY-MEDIUM-2）：成功 → MarkCompleted；
+// 审批等待/断线类错误保留 checkpoint 现状（新审批已把状态写回 waiting_approval）；
+// 真实失败且批准未被本轮消费 → 回滚 waiting_approval，发起人可重试同一批准；
+// 已消费（ExecuteApproved CAS 已把 approved→executed）→ 写终态 failed 保留
+// 对账历史。
+func (s *AgentService) finishApprovalResume(ctx context.Context, tenantID, executionID string, consumed func() bool, runErr error) error {
+	if s.deps.CheckpointStore == nil {
+		return runErr
+	}
+	if runErr == nil {
+		return completeApprovalResume(ctx, s.deps.CheckpointStore, tenantID, executionID, nil)
+	}
+	if retainRunningError(runErr) {
+		return runErr
+	}
+	if consumed == nil || !consumed() {
+		if rbErr := s.deps.CheckpointStore.UpdateStatusFrom(ctx, tenantID, executionID, "running", domain.ExecStatusWaitingApproval); rbErr != nil {
+			return errors.Join(runErr, fmt.Errorf("rollback approval checkpoint: %w", rbErr))
+		}
+		return runErr
+	}
+	if termErr := s.deps.CheckpointStore.Terminate(ctx, tenantID, executionID, "failed"); termErr != nil {
+		return errors.Join(runErr, fmt.Errorf("terminate approval checkpoint: %w", termErr))
+	}
+	return runErr
 }
 
 // PauseExecution marks a running execution's checkpoint as paused so it can be

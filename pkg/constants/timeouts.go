@@ -64,6 +64,14 @@ const (
 	// without accumulating in the tenant schema forever.
 	CheckpointTerminalTTL = 7 * 24 * time.Hour
 
+	// ActiveExecutionFreshnessWindow is how recently a running/paused checkpoint
+	// must have been updated for GetLatestActiveByConversation to treat it as an
+	// active execution. Prevents stale "zombie" running rows (client disconnect
+	// without terminal write) from being resumed long after the run died.
+	// waiting_approval rows are exempt — their updated_at does not advance while
+	// a human reviews the approval, so they are gated only by expires_at.
+	ActiveExecutionFreshnessWindow = 15 * time.Minute
+
 	// AgentReflectTimeout caps the single LLM call inside nodeReflect.
 	AgentReflectTimeout = 30 * time.Second
 	// AgentPlanTimeout caps the single LLM call inside nodePlan.

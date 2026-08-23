@@ -22,6 +22,8 @@ interface ApprovalDetailDrawerProps {
   detail: ApprovalDetail | null;
   loading: boolean;
   open: boolean;
+  // member 只读视角（M4）：隐藏"执行"按钮，仅查看。
+  readonly?: boolean;
   executeLoading: boolean;
   onExecute: (id: string) => void;
   onClose: () => void;
@@ -31,6 +33,7 @@ export const ApprovalDetailDrawer = ({
   detail,
   loading,
   open,
+  readonly = false,
   executeLoading,
   onExecute,
   onClose,
@@ -38,6 +41,7 @@ export const ApprovalDetailDrawer = ({
   // 执行按钮需同时满足已批准且未过期；过期后按钮隐藏，避免展示必然失败的动作。
   // 后端执行路径仍独立校验（fail closed），此处仅为展示层纵深防御。
   const canExecute =
+    !readonly &&
     detail?.status === 'approved' &&
     !!detail.expires_at &&
     new Date(detail.expires_at).getTime() > Date.now();
@@ -73,16 +77,18 @@ export const ApprovalDetailDrawer = ({
                 {riskLevelLabel(detail.risk_level)}
               </Tag>
             </Descriptions.Item>
-            <Descriptions.Item label="发起人">{detail.user_id}</Descriptions.Item>
-            <Descriptions.Item label="指派审批人">{detail.assigned_approver || '未指派'}</Descriptions.Item>
+            <Descriptions.Item label="发起人">{detail.user_display_name || detail.user_id}</Descriptions.Item>
+            <Descriptions.Item label="指派审批人">{detail.assigned_approver_name || detail.assigned_approver || '未指派'}</Descriptions.Item>
             <Descriptions.Item label="创建时间">
               {new Date(detail.created_at).toLocaleString()}
             </Descriptions.Item>
             <Descriptions.Item label="过期时间">
               {new Date(detail.expires_at).toLocaleString()}
             </Descriptions.Item>
-            {detail.decided_by && (
-              <Descriptions.Item label="处理人">{detail.decided_by}</Descriptions.Item>
+            {(detail.decided_by_name || detail.decided_by) && (
+              <Descriptions.Item label="处理人">
+                {detail.decided_by_name || detail.decided_by}
+              </Descriptions.Item>
             )}
             {detail.decision_reason && (
               <Descriptions.Item label="处理原因">{detail.decision_reason}</Descriptions.Item>

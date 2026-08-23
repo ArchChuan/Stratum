@@ -806,10 +806,20 @@ CREATE TABLE IF NOT EXISTS agent_execution_checkpoints (
     runtime_state_json        JSONB       NOT NULL DEFAULT '{}',
     status                    TEXT        NOT NULL CHECK (status IN ('running', 'paused', 'waiting_approval', 'completed', 'failed', 'expired')),
     resume_reason             TEXT        NOT NULL DEFAULT '',
+    -- user_query: 当前执行轮次的用户 query（ensureInitialCheckpoint 写入，
+    -- 各步 Persist 保留不覆盖），供 active-execution 发现与刷新续跑重建。
+    -- run_generation: 续跑分代栅栏（AdvanceRunGeneration CAS 递增，双 tab/设备
+    -- 抢占只有一方胜出）。
+    user_query                TEXT        NOT NULL DEFAULT '',
+    run_generation            INT         NOT NULL DEFAULT 1,
     created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at                TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '24 hours'
 );
+-- 历史租户幂等升级：CREATE TABLE 内嵌新列只对新租户生效，存量租户必须
+-- ADD COLUMN IF NOT EXISTS 补齐，否则旧表缺列导致后续查询报错。
+ALTER TABLE agent_execution_checkpoints ADD COLUMN IF NOT EXISTS user_query TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_execution_checkpoints ADD COLUMN IF NOT EXISTS run_generation INT NOT NULL DEFAULT 1;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_execution_checkpoints_execution
     ON agent_execution_checkpoints (execution_id);
 CREATE INDEX IF NOT EXISTS idx_agent_execution_checkpoints_status

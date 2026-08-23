@@ -2,6 +2,7 @@ import { DEFAULT_PAGE_SIZE } from '@/constants';
 import api from '@/services/client';
 
 // 审批行（待审批/历史共用）。字段对齐后端 domain.ToolApproval 与 handler DTO 的 JSON tag。
+// 昵称字段由后端批量解析（display_name > github_login > actor_id，M5），缺失时前端回退 raw id。
 export interface ApprovalRow {
   id: string;
   subject_kind: string;
@@ -10,12 +11,15 @@ export interface ApprovalRow {
   risk_level: string;
   status: string;
   user_id: string;
+  user_display_name?: string;
   assigned_approver?: string;
+  assigned_approver_name?: string;
   invalidation_reason?: string;
   conversation_id?: string;
   created_at: string;
   expires_at: string;
   decided_by?: string;
+  decided_by_name?: string;
   decision_reason?: string;
 }
 

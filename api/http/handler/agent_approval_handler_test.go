@@ -55,7 +55,7 @@ func (f *toolApprovalRepoFake) MarkExecuted(_ context.Context, _, _ string) erro
 func (*toolApprovalRepoFake) ListPending(context.Context, string, string) ([]agentdomain.ToolApproval, error) {
 	return nil, nil
 }
-func (f *toolApprovalRepoFake) ListHistory(_ context.Context, _ string, _, _ int) ([]agentdomain.ToolApproval, int, error) {
+func (f *toolApprovalRepoFake) ListHistory(_ context.Context, _ string, _ string, _, _ int) ([]agentdomain.ToolApproval, int, error) {
 	return f.listHistory, f.total, nil
 }
 func (*toolApprovalRepoFake) Invalidate(context.Context, string, string, string) error { return nil }
@@ -168,11 +168,14 @@ func TestAgentHandlerListApprovalHistory(t *testing.T) {
 	require.Contains(t, w.Body.String(), `"page":2`)
 	require.Contains(t, w.Body.String(), `"page_size":10`)
 
-	// member 角色：service 内 resolver 现查拒绝，fail closed。
-	hMember, _ := newApprovalTestHandler(t, "member", nil)
+	// member 角色（M5/D4 放宽）：service 内 resolver 现查后仅返回本人发起的，200 而非 403。
+	hMember, repoMember := newApprovalTestHandler(t, "member", nil)
+	repoMember.listHistory = []agentdomain.ToolApproval{{ID: "approval-m", Status: "executed"}}
+	repoMember.total = 1
 	w = doApprovalReq(t, approvalRoutes(hMember, withApprovalContext("member")),
 		http.MethodGet, "/tool-approvals/history", "")
-	require.Equal(t, http.StatusForbidden, w.Code)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), `"approval-m"`)
 }
 
 func TestAgentHandlerGetApprovalDetail(t *testing.T) {
@@ -188,10 +191,19 @@ func TestAgentHandlerGetApprovalDetail(t *testing.T) {
 	require.Contains(t, w.Body.String(), `"operation":"pause_experiment"`)
 	require.NotContains(t, w.Body.String(), "EncryptedPayload")
 
-	hMember, _ := newApprovalTestHandler(t, "member", nil)
-	w = doApprovalReq(t, approvalRoutes(hMember, withApprovalContext("member")),
+	// member 归属自己发起的审批（makeApprovalRow 的 row.UserID="u1"==actor）：可看详情（M5/D4），200。
+	hMemberOwned, repoMember := newApprovalTestHandler(t, "member", nil)
+	makeApprovalRow(t, repoMember)
+	w = doApprovalReq(t, approvalRoutes(hMemberOwned, withApprovalContext("member")),
 		http.MethodGet, "/tool-approvals/approval-1", "")
-	require.Equal(t, http.StatusForbidden, w.Code)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), `"id":"approval-1"`)
+
+	// member 非归属审批（row.UserID 改为他人）：统一 404，关闭存在性 oracle。
+	repoMember.row.UserID = "other-user"
+	w = doApprovalReq(t, approvalRoutes(hMemberOwned, withApprovalContext("member")),
+		http.MethodGet, "/tool-approvals/approval-1", "")
+	require.Equal(t, http.StatusNotFound, w.Code)
 
 	// 缺 tenant 上下文 → 401。
 	w = doApprovalReq(t, approvalRoutes(h),

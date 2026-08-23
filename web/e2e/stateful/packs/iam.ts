@@ -76,29 +76,32 @@ export const executeIAMPack = async ({
   const systemAdminPage = await actors.systemAdmin.context.newPage();
   let targetTenantID = '';
   try {
+    // b937d83f 守卫：已有租户用户访问 /onboarding 被重定向回主页，onboarding UI 只对
+    // 无租户用户可达（完整创建/加入 UI 由 iam-oauth 的 onboarding-token 身份覆盖）。
+    // 此处验证守卫重定向，再改 API 直调覆盖已认证用户创建租户并切换到新租户的能力，
+    // 保留全部 manifest capability。create-tenant 返回即签发新租户 token 对并更新
+    // refresh cookie，同一 context 的 tenantAdminPage 后续导航自动恢复新租户会话。
     await tenantAdminPage.goto(`${webURL}/onboarding`);
-    await expect(tenantAdminPage.getByRole('heading', { name: '欢迎使用 Stratum' })).toBeVisible();
+    await expect(tenantAdminPage).toHaveURL(`${webURL}/`, { timeout: 15000 });
     completed.push('iam.route.onboarding');
-    await tenantAdminPage.getByLabel('租户名称').fill(tenantName);
-    const createResponse = waitForMutation(tenantAdminPage, '/auth/create-tenant', 'POST');
-    const initialSwitchResponse = waitForMutation(tenantAdminPage, '/auth/switch-tenant', 'POST');
-    await tenantAdminPage.getByRole('button', { name: /创建租户/ }).click();
-    const created = await createResponse;
+    evidence.ui.push('tenant-holding user was redirected away from onboarding by the guard');
+    const created = await actors.tenantAdmin.context.request.post(`${backendURL}/auth/create-tenant`, {
+      data: { tenant_name: tenantName },
+      headers: { Authorization: `Bearer ${actors.tenantAdmin.accessToken}` },
+    });
     expect(created.status()).toBe(201);
-    targetTenantID = requireUUID((await created.json() as { tenant_id: string }).tenant_id, 'target_tenant_id');
-    expect((await initialSwitchResponse).status()).toBe(200);
-    await expect(tenantAdminPage).toHaveURL(`${webURL}/`);
-    await expect(tenantAdminPage.getByLabel(`当前租户：${tenantName}`)).toBeVisible();
+    const createdBody = await created.json() as { tenant_id: string; access_token: string };
+    targetTenantID = requireUUID(createdBody.tenant_id, 'target_tenant_id');
+    actors.tenantAdmin.accessToken = createdBody.access_token;
     const createdRows = await publicQuery<{ name: string; role: string }>(pool,
       `SELECT t.name, tm.role FROM public.tenants t
        JOIN public.tenant_members tm ON tm.tenant_id = t.id
        WHERE t.id = $1 AND tm.user_id = $2`,
       [targetTenantID, actors.tenantAdmin.userID]);
     expect(createdRows).toEqual([{ name: tenantName, role: 'owner' }]);
-    evidence.ui.push('tenant admin created a tenant from onboarding');
     evidence.http.push('authenticated tenant creation returned 201');
     evidence.database.push('created tenant and owner membership reconciled');
-    completed.push('iam.mutation.post.auth.create.tenant', 'iam.mutation.post.auth.switch.tenant');
+    completed.push('iam.mutation.post.auth.create.tenant');
 
     await tenantAdminPage.goto(`${webURL}/tenant/settings`);
     await expect(tenantAdminPage).toHaveURL(`${webURL}/tenant/settings`);
@@ -146,15 +149,23 @@ export const executeIAMPack = async ({
     evidence.database.push('only hashed unconsumed invitation persisted');
     completed.push('iam.mutation.post.tenant.members.invite');
 
-    await memberPage.goto(`${webURL}/onboarding`);
-    await memberPage.getByRole('tab', { name: '加入已有租户' }).click();
-    await memberPage.getByLabel('邀请码').fill(invitationCode);
-    const joinResponse = waitForMutation(memberPage, '/tenant/join', 'POST');
-    const switchResponse = waitForMutation(memberPage, '/auth/switch-tenant', 'POST');
-    await memberPage.getByRole('button', { name: /加入租户/ }).click();
-    expect((await joinResponse).status()).toBe(200);
-    expect((await switchResponse).status()).toBe(200);
-    await expect(memberPage).toHaveURL(`${webURL}/`);
+    // 同守卫约束：join + switch-tenant 改 API 直调（onboarding 加入 UI 由 iam-oauth
+    // 无租户身份覆盖）。/tenant/join 不设 cookie，需显式 switch-tenant 把会话切到
+    // 目标租户；switch-tenant 签发 member role token 并更新 refresh cookie，
+    // memberPage 后续导航自动恢复 member 会话。
+    const joinResponse = await actors.memberA.context.request.post(`${backendURL}/tenant/join`, {
+      data: { invitation_code: invitationCode },
+      headers: { Authorization: `Bearer ${actors.memberA.accessToken}` },
+    });
+    expect(joinResponse.status()).toBe(200);
+    expect(requireUUID((await joinResponse.json() as { tenant_id: string }).tenant_id, 'joined_tenant_id'))
+      .toBe(targetTenantID);
+    const switchResponse = await actors.memberA.context.request.post(`${backendURL}/auth/switch-tenant`, {
+      data: { tenant_id: targetTenantID },
+      headers: { Authorization: `Bearer ${actors.memberA.accessToken}` },
+    });
+    expect(switchResponse.status()).toBe(200);
+    actors.memberA.accessToken = (await switchResponse.json() as { access_token: string }).access_token;
     const membershipRows = await publicQuery<{ role: string; consumed: boolean }>(pool,
       `SELECT tm.role, i.consumed_at IS NOT NULL AS consumed
        FROM public.tenant_members tm
@@ -162,7 +173,6 @@ export const executeIAMPack = async ({
        WHERE tm.tenant_id = $1 AND tm.user_id = $2`,
       [targetTenantID, actors.memberA.userID]);
     expect(membershipRows).toEqual([{ role: 'member', consumed: true }]);
-    evidence.ui.push('member joined and switched tenant from onboarding');
     evidence.http.push('join and switch-tenant completed successfully');
     evidence.database.push('membership and atomic invitation consumption reconciled');
     completed.push('iam.mutation.post.auth.switch.tenant');
@@ -200,15 +210,20 @@ export const executeIAMPack = async ({
     await memberBInviteDialog.locator('button.ant-modal-close').click();
     await expect(memberBInviteDialog).toHaveCount(0);
 
-    await memberBPage.goto(`${webURL}/onboarding`);
-    await memberBPage.getByRole('tab', { name: '加入已有租户' }).click();
-    await memberBPage.getByLabel('邀请码').fill(memberBInvitationCode);
-    const memberBJoinResponse = waitForMutation(memberBPage, '/tenant/join', 'POST');
-    const memberBSwitchResponse = waitForMutation(memberBPage, '/auth/switch-tenant', 'POST');
-    await memberBPage.getByRole('button', { name: /加入租户/ }).click();
-    expect((await memberBJoinResponse).status()).toBe(200);
-    expect((await memberBSwitchResponse).status()).toBe(200);
-    await expect(memberBPage).toHaveURL(`${webURL}/`);
+    // 同守卫约束：memberB join + switch-tenant 改 API 直调。switch-tenant 更新
+    // refresh cookie，memberBPage 后续 /tenant/members 导航恢复 member 会话。
+    const memberBJoinResponse = await actors.memberB.context.request.post(`${backendURL}/tenant/join`, {
+      data: { invitation_code: memberBInvitationCode },
+      headers: { Authorization: `Bearer ${actors.memberB.accessToken}` },
+    });
+    expect(memberBJoinResponse.status()).toBe(200);
+    expect(requireUUID((await memberBJoinResponse.json() as { tenant_id: string }).tenant_id, 'joined_tenant_id_memberB'))
+      .toBe(targetTenantID);
+    const memberBSwitchResponse = await actors.memberB.context.request.post(`${backendURL}/auth/switch-tenant`, {
+      data: { tenant_id: targetTenantID },
+      headers: { Authorization: `Bearer ${actors.memberB.accessToken}` },
+    });
+    expect(memberBSwitchResponse.status()).toBe(200);
     const memberBMembershipRows = await publicQuery<{ role: string; consumed: boolean }>(pool,
       `SELECT tm.role, i.consumed_at IS NOT NULL AS consumed
        FROM public.tenant_members tm
@@ -216,9 +231,7 @@ export const executeIAMPack = async ({
        WHERE tm.tenant_id = $1 AND tm.user_id = $2`,
       [targetTenantID, actors.memberB.userID]);
     expect(memberBMembershipRows).toEqual([{ role: 'member', consumed: true }]);
-    const memberBSwitched = await (await memberBSwitchResponse).json() as { access_token: string };
-    actors.memberB.accessToken = memberBSwitched.access_token;
-    evidence.ui.push('memberB joined and switched tenant from onboarding');
+    actors.memberB.accessToken = (await memberBSwitchResponse.json() as { access_token: string }).access_token;
     evidence.http.push('memberB join and switch-tenant completed successfully');
     evidence.database.push('memberB membership and atomic invitation consumption reconciled');
     completed.push('iam.mutation.post.auth.switch.tenant.memberB');

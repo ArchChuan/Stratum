@@ -9,7 +9,7 @@ export const approvalsRoutes = [
     key="approvals"
     path="/approvals"
     element={
-      <PrivateRoute requiredTenantRole="admin">
+      <PrivateRoute requiredTenantRole="member">
         <ApprovalsPage />
       </PrivateRoute>
     }

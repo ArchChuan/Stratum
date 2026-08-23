@@ -93,13 +93,13 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
       icon: <DatabaseOutlined />,
       label: '我的记忆',
     },
-    canManageTenant
-      ? {
-          key: '/approvals',
-          icon: <SafetyCertificateOutlined />,
-          label: '工具审批',
-        }
-      : null,
+    // 审批中心对 member 开放（发起人查看自己发起的审批），故常显；操作能力按角色
+    // 在页面内区分（admin/owner 批准/拒绝/指派，member 只读）。
+    {
+      key: '/approvals',
+      icon: <SafetyCertificateOutlined />,
+      label: '审批中心',
+    },
     {
       key: 'mcp-group',
       icon: <ApiOutlined />,

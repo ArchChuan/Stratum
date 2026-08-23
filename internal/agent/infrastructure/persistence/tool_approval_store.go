@@ -132,7 +132,7 @@ func (s *PgToolApprovalStore) ListPending(ctx context.Context, tenantID, userID 
 	out := []domain.ToolApproval{}
 	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		query := `SELECT id,execution_id,trace_id,agent_id,user_id,tool_call_id,server_id,tool_name,risk_level,
-		 subject_kind,assigned_approver,status,created_at,expires_at FROM agent_tool_approvals
+		 subject_kind,assigned_approver,conversation_id,status,created_at,expires_at FROM agent_tool_approvals
 		 WHERE status='pending' AND expires_at>NOW()`
 		args := []any{}
 		if userID != "" {
@@ -150,7 +150,7 @@ func (s *PgToolApprovalStore) ListPending(ctx context.Context, tenantID, userID 
 		defer rows.Close()
 		for rows.Next() {
 			var a domain.ToolApproval
-			if err := rows.Scan(&a.ID, &a.ExecutionID, &a.TraceID, &a.AgentID, &a.UserID, &a.ToolCallID, &a.ServerID, &a.ToolName, &a.RiskLevel, &a.SubjectKind, &a.AssignedApprover, &a.Status, &a.CreatedAt, &a.ExpiresAt); err != nil {
+			if err := rows.Scan(&a.ID, &a.ExecutionID, &a.TraceID, &a.AgentID, &a.UserID, &a.ToolCallID, &a.ServerID, &a.ToolName, &a.RiskLevel, &a.SubjectKind, &a.AssignedApprover, &a.ConversationID, &a.Status, &a.CreatedAt, &a.ExpiresAt); err != nil {
 				return err
 			}
 			out = append(out, a)
@@ -160,12 +160,24 @@ func (s *PgToolApprovalStore) ListPending(ctx context.Context, tenantID, userID 
 	return out, err
 }
 
-func (s *PgToolApprovalStore) ListHistory(ctx context.Context, tenantID string, page, pageSize int) ([]domain.ToolApproval, int, error) {
+func (s *PgToolApprovalStore) ListHistory(ctx context.Context, tenantID, userID string, page, pageSize int) ([]domain.ToolApproval, int, error) {
 	out := []domain.ToolApproval{}
 	total := 0
+	// userID 非空（member 语义）时 COUNT 与 SELECT 同步过滤，保证 total 与列表一致（H3）。
+	where := ` WHERE status <> 'pending'`
+	args := []any{}
+	if userID != "" {
+		where += ` AND user_id=$1`
+		args = append(args, userID)
+	}
+	// LIMIT/OFFSET 占位符：user 过滤占用 $1 时 LIMIT 为 $2/$3，否则为 $1/$2（保持绑定顺序正确）。
+	limitIdx, offsetIdx := "$1", "$2"
+	if userID != "" {
+		limitIdx, offsetIdx = "$2", "$3"
+	}
 	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
-			`SELECT COUNT(*) FROM agent_tool_approvals WHERE status <> 'pending'`).Scan(&total); err != nil {
+			`SELECT COUNT(*) FROM agent_tool_approvals`+where, args...).Scan(&total); err != nil {
 			return err
 		}
 		if page < approvalHistoryPageMin {
@@ -174,12 +186,13 @@ func (s *PgToolApprovalStore) ListHistory(ctx context.Context, tenantID string, 
 		if pageSize < approvalHistoryPageMin || pageSize > approvalHistoryPageSizeMax {
 			pageSize = approvalHistoryPageSizeDefault
 		}
+		selectArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
 		rows, err := tx.Query(ctx,
 			`SELECT id,decision_id,execution_id,trace_id,agent_id,user_id,tool_call_id,server_id,tool_name,
 			 risk_level,subject_kind,assigned_approver,invalidation_reason,conversation_id,policy_version,
 			 encrypted_payload,status,decided_by,decision_reason,created_at,decided_at,executed_at,expires_at
-			 FROM agent_tool_approvals WHERE status <> 'pending' ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
-			pageSize, (page-1)*pageSize)
+			 FROM agent_tool_approvals`+where+` ORDER BY created_at DESC LIMIT `+limitIdx+` OFFSET `+offsetIdx,
+			selectArgs...)
 		if err != nil {
 			return err
 		}

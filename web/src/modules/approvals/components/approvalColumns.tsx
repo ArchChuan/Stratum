@@ -12,10 +12,17 @@ export interface PendingColumnsContext {
   onLoadApprovers: () => void;
   onOpenDetail: (id: string) => void;
   onOpenDecide: (id: string, decision: ApprovalDecision) => void;
+  // member 只读视角（M4）：隐藏批准/拒绝/指派操作，仅保留详情。
+  readonly?: boolean;
 }
 
 const assignableOptions = (approvers: PendingColumnsContext['approvers']) =>
   approvers.map((m) => ({ value: m.user_id, label: m.github_login || m.user_id }));
+
+// 昵称回退链：后端解析的 display_name > 原始 user_id（M5）。
+const displayName = (row: ApprovalRow): string => row.user_display_name || row.user_id;
+const approverName = (row: ApprovalRow): string =>
+  row.assigned_approver_name || row.assigned_approver || '未指派';
 
 export const buildPendingColumns = (ctx: PendingColumnsContext): ColumnsType<ApprovalRow> => [
   {
@@ -47,26 +54,29 @@ export const buildPendingColumns = (ctx: PendingColumnsContext): ColumnsType<App
       <Tag color={v === 'destructive' ? 'red' : 'blue'}>{riskLevelLabel(v)}</Tag>
     ),
   },
-  { title: '发起人', dataIndex: 'user_id', ellipsis: true, width: 140 },
+  { title: '发起人', dataIndex: 'user_id', ellipsis: true, width: 140, render: (_, record) => displayName(record) },
   {
     title: '指派审批人',
     key: 'assigned_approver',
     width: 150,
-    render: (_, record) => (
-      <Select
-        size="small"
-        loading={ctx.approversLoading}
-        value={record.assigned_approver}
-        placeholder="未指派"
-        style={{ width: 132 }}
-        options={assignableOptions(ctx.approvers)}
-        onChange={(v) => ctx.onAssign(record.id, v)}
-        disabled={ctx.isActionLoading('assign', record.id)}
-        onDropdownVisibleChange={(open) => {
-          if (open && ctx.approvers.length === 0) ctx.onLoadApprovers();
-        }}
-      />
-    ),
+    render: (_, record) =>
+      ctx.readonly ? (
+        <Typography.Text>{approverName(record)}</Typography.Text>
+      ) : (
+        <Select
+          size="small"
+          loading={ctx.approversLoading}
+          value={record.assigned_approver}
+          placeholder="未指派"
+          style={{ width: 132 }}
+          options={assignableOptions(ctx.approvers)}
+          onChange={(v) => ctx.onAssign(record.id, v)}
+          disabled={ctx.isActionLoading('assign', record.id)}
+          onDropdownVisibleChange={(open) => {
+            if (open && ctx.approvers.length === 0) ctx.onLoadApprovers();
+          }}
+        />
+      ),
   },
   {
     title: '创建时间',
@@ -77,29 +87,33 @@ export const buildPendingColumns = (ctx: PendingColumnsContext): ColumnsType<App
   {
     title: '操作',
     key: 'actions',
-    width: 200,
+    width: ctx.readonly ? 80 : 200,
     render: (_, record) => (
       <Space size={0}>
         <Button type="link" size="small" onClick={() => ctx.onOpenDetail(record.id)}>
           详情
         </Button>
-        <Button
-          type="link"
-          size="small"
-          disabled={ctx.isActionLoading('approve', record.id)}
-          onClick={() => ctx.onOpenDecide(record.id, 'approved')}
-        >
-          批准
-        </Button>
-        <Button
-          type="link"
-          size="small"
-          danger
-          disabled={ctx.isActionLoading('reject', record.id)}
-          onClick={() => ctx.onOpenDecide(record.id, 'rejected')}
-        >
-          拒绝
-        </Button>
+        {!ctx.readonly && (
+          <>
+            <Button
+              type="link"
+              size="small"
+              disabled={ctx.isActionLoading('approve', record.id)}
+              onClick={() => ctx.onOpenDecide(record.id, 'approved')}
+            >
+              批准
+            </Button>
+            <Button
+              type="link"
+              size="small"
+              danger
+              disabled={ctx.isActionLoading('reject', record.id)}
+              onClick={() => ctx.onOpenDecide(record.id, 'rejected')}
+            >
+              拒绝
+            </Button>
+          </>
+        )}
       </Space>
     ),
   },
@@ -135,7 +149,7 @@ export const buildHistoryColumns = (onOpenDetail: (id: string) => void): Columns
       <Tag color={v === 'destructive' ? 'red' : 'blue'}>{riskLevelLabel(v)}</Tag>
     ),
   },
-  { title: '发起人', dataIndex: 'user_id', ellipsis: true, width: 140 },
+  { title: '发起人', dataIndex: 'user_id', ellipsis: true, width: 140, render: (_, record) => displayName(record) },
   {
     title: '状态',
     dataIndex: 'status',
@@ -144,9 +158,9 @@ export const buildHistoryColumns = (onOpenDetail: (id: string) => void): Columns
   },
   {
     title: '处理人',
-    dataIndex: 'decided_by',
+    dataIndex: 'decided_by_name',
     width: 140,
-    render: (v?: string) => v || '-',
+    render: (_, record) => record.decided_by_name || record.decided_by || '-',
   },
   {
     title: '创建时间',

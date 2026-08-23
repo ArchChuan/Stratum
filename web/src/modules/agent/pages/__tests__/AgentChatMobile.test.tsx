@@ -12,11 +12,11 @@ const mocks = vi.hoisted(() => ({
   rename: vi.fn(),
   remove: vi.fn(),
   send: vi.fn(),
-  approve: vi.fn(),
-  reject: vi.fn(),
 	isAdmin: true,
-	pendingApprovals: [] as Array<Record<string, string>>,
-	approvalActionId: null as string | null,
+	waitingApproval: null as null | Record<string, string>,
+	streaming: false,
+	manualResumeWaiting: vi.fn(),
+	navigate: vi.fn(),
 	streamFailure: null as null | { message: string; code?: string; status?: number },
 	clearStreamFailure: vi.fn(),
   agents: [
@@ -28,6 +28,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/shared/hooks/useResponsive', () => ({
   useResponsive: () => ({ isMobile: mocks.isMobile, isCompact: mocks.isMobile }),
+}));
+
+vi.mock('react-router-dom', async () => ({
+  ...(await vi.importActual<typeof import('react-router-dom')>('react-router-dom')),
+  // 审批提示卡用 useNavigate 跳转审批中心;测试无 Router context,提供空实现。
+  useNavigate: () => mocks.navigate,
 }));
 
 vi.mock('@/modules/iam', () => ({
@@ -61,12 +67,11 @@ vi.mock('../../hooks/useChatPage', () => ({
     handleCreateConv: mocks.create,
     handleRenameConv: mocks.rename,
     handleDeleteConv: mocks.remove,
-	pendingApprovals: mocks.pendingApprovals,
-		approvalActionId: mocks.approvalActionId,
+	waitingApproval: mocks.waitingApproval,
+		streaming: mocks.streaming,
+		manualResumeWaiting: mocks.manualResumeWaiting,
 		streamFailure: mocks.streamFailure,
 		clearStreamFailure: mocks.clearStreamFailure,
-    handleApprove: mocks.approve,
-    handleReject: mocks.reject,
   }),
 }));
 
@@ -75,8 +80,8 @@ describe('AgentChatPage mobile layout', () => {
 		vi.clearAllMocks();
 		mocks.isMobile = true;
 		mocks.isAdmin = true;
-		mocks.pendingApprovals = [];
-		mocks.approvalActionId = null;
+		mocks.waitingApproval = null;
+		mocks.streaming = false;
 		mocks.streamFailure = null;
 		mocks.agents = [
       { id: 'agent-1', name: '移动 Agent', description: '测试', llmModel: 'gpt-test' },
@@ -166,26 +171,24 @@ describe('AgentChatPage mobile layout', () => {
     expect(container.querySelector('style')?.textContent).toContain('prefers-reduced-motion: reduce');
   });
 
-	it('shows approval commands only to tenant administrators', () => {
-		mocks.pendingApprovals = [{
+	it('shows a read-only approval notice with navigation to the approval center', () => {
+		mocks.waitingApproval = {
 			approvalId: 'approval-1', agentId: 'agent-1', toolName: 'delete',
 			serverId: 'orders', riskLevel: 'destructive', status: 'pending',
-		}];
-		const view = render(<AgentChatPage />);
-		expect(screen.getByRole('button', { name: '批准并继续' })).toBeInTheDocument();
-		expect(screen.getByRole('button', { name: '拒绝' })).toBeInTheDocument();
-
-		mocks.isAdmin = false;
-		view.rerender(<AgentChatPage />);
+		};
+		render(<AgentChatPage />);
+		// M3/M4:审批操作收敛到审批中心,对话页对所有人只读,不提供批准/拒绝按钮。
+		expect(screen.getByText('工具 delete 等待审批')).toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: '批准并继续' })).not.toBeInTheDocument();
-		expect(screen.getByText('需要租户管理员处理')).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: '拒绝' })).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: '前往审批中心' })).toBeInTheDocument();
 	});
 
 	it('renders unknown outcomes as non-retryable reconciliation work', () => {
-		mocks.pendingApprovals = [{
+		mocks.waitingApproval = {
 			approvalId: 'approval-1', agentId: 'agent-1', toolName: 'delete',
 			serverId: 'orders', riskLevel: 'destructive', status: 'unknown_outcome',
-		}];
+		};
 		render(<AgentChatPage />);
 		expect(screen.getByText('工具执行结果未知，需要人工对账')).toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: '批准并继续' })).not.toBeInTheDocument();
@@ -194,10 +197,10 @@ describe('AgentChatPage mobile layout', () => {
 	it.each(['cancelled', 'voided', 'invalidated'])(
 		'renders %s as invalidated without approve controls',
 		(status) => {
-			mocks.pendingApprovals = [{
+			mocks.waitingApproval = {
 				approvalId: `approval-${status}`, agentId: 'agent-1', toolName: 'delete',
 				serverId: 'orders', riskLevel: 'destructive', status,
-			}];
+			};
 			render(<AgentChatPage />);
 			expect(screen.getByText('工具审批已失效')).toBeInTheDocument();
 			expect(screen.queryByRole('button', { name: '批准并继续' })).not.toBeInTheDocument();
@@ -205,31 +208,31 @@ describe('AgentChatPage mobile layout', () => {
 	);
 
 	it('shows the mapped reason for conversation-delete invalidation', () => {
-		mocks.pendingApprovals = [{
+		mocks.waitingApproval = {
 			approvalId: 'approval-voided', agentId: 'agent-1', toolName: 'delete',
 			serverId: 'orders', riskLevel: 'destructive', status: 'voided',
 			invalidationReason: 'conversation_deleted',
-		}];
+		};
 		render(<AgentChatPage />);
 		expect(screen.getByText('工具审批已失效：会话已删除')).toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: '批准并继续' })).not.toBeInTheDocument();
 	});
 
 	it('renders authorization_denied as a terminal blocked state', () => {
-		mocks.pendingApprovals = [{
+		mocks.waitingApproval = {
 			approvalId: 'approval-blocked', agentId: 'agent-1', toolName: 'delete',
 			serverId: 'orders', riskLevel: 'destructive', status: 'authorization_denied',
-		}];
+		};
 		render(<AgentChatPage />);
 		expect(screen.getByText('权限已变更，工具执行已阻止')).toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: '批准并继续' })).not.toBeInTheDocument();
 	});
 
 	it('renders an expired status as terminal without approve controls', () => {
-		mocks.pendingApprovals = [{
+		mocks.waitingApproval = {
 			approvalId: 'approval-expired', agentId: 'agent-1', toolName: 'delete',
 			serverId: 'orders', riskLevel: 'destructive', status: 'expired',
-		}];
+		};
 		render(<AgentChatPage />);
 		expect(screen.getByText('工具审批已过期')).toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: '批准并继续' })).not.toBeInTheDocument();
@@ -237,11 +240,11 @@ describe('AgentChatPage mobile layout', () => {
 
 	it('prefers status-based invalidation over clock expiry', () => {
 		// cancelled 的审批即使 expiresAt 已过，也应显示"已失效"而非"已过期"。
-		mocks.pendingApprovals = [{
+		mocks.waitingApproval = {
 			approvalId: 'approval-invalidated', agentId: 'agent-1', toolName: 'delete',
 			serverId: 'orders', riskLevel: 'destructive', status: 'cancelled',
 			expiresAt: '2020-01-01T00:00:00Z', invalidationReason: 'conversation_deleted',
-		}];
+		};
 		render(<AgentChatPage />);
 		expect(screen.getByText('工具审批已失效：会话已删除')).toBeInTheDocument();
 		expect(screen.queryByText('工具审批已过期')).not.toBeInTheDocument();

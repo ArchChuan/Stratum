@@ -60,6 +60,24 @@ type CheckpointRepo interface {
 	MarkCompleted(ctx context.Context, tenantID, executionID string) error
 	UpdateStatus(ctx context.Context, tenantID, executionID, status string) error
 	DeleteExpired(ctx context.Context, tenantID string) (int64, error)
+	// GetLatestActiveByConversation returns the freshest active checkpoint for a
+	// conversation (status in running/paused/waiting_approval, not expired).
+	// Freshness window (ActiveExecutionFreshnessWindow) applies only to
+	// running/paused — a waiting_approval row's updated_at does not advance
+	// while a human reviews the approval, so it is gated solely by expires_at.
+	// Returns (nil, nil) when no active checkpoint exists.
+	GetLatestActiveByConversation(ctx context.Context, tenantID, conversationID string) (*domain.AgentExecutionCheckpoint, error)
+	// UpdateStatusFrom CAS-transitions a checkpoint from one status to another.
+	// Used to claim a waiting_approval checkpoint before resuming: only the
+	// tab/device that wins the CAS may continue the execution.
+	UpdateStatusFrom(ctx context.Context, tenantID, executionID, from, to string) error
+	// AdvanceRunGeneration atomically increments the resume-generation fence
+	// only when it still equals expect. A failure means a concurrent resume
+	// already won the race (double-tab/double-device protection).
+	AdvanceRunGeneration(ctx context.Context, tenantID, executionID string, expect int) error
+	// Terminate moves a checkpoint to a terminal status (failed/expired) with a
+	// refreshed expires_at so DeleteExpired reclaims it after retention.
+	Terminate(ctx context.Context, tenantID, executionID, status string) error
 }
 
 // TaskRepo persists cross-session goal progress for agents. All methods touch
@@ -96,8 +114,9 @@ type ToolApprovalRepo interface {
 	// ListPending 返回未过期 pending 审批；userID 非空时仅返回该用户发起的（member 语义）。
 	ListPending(ctx context.Context, tenantID, userID string) ([]domain.ToolApproval, error)
 	// ListHistory 返回非 pending 状态（decided/executed/expired/invalidated/voided/cancelled）分页列表，
-	// 第二返回值为总数（admin/owner 工作台用）。
-	ListHistory(ctx context.Context, tenantID string, page, pageSize int) ([]domain.ToolApproval, int, error)
+	// 第二返回值为总数（admin/owner 工作台用）。userID 非空时仅返回该用户发起的
+	// （member 语义），COUNT 与 SELECT 同步按 user_id 过滤保证 total 与列表一致。
+	ListHistory(ctx context.Context, tenantID, userID string, page, pageSize int) ([]domain.ToolApproval, int, error)
 	// Invalidate CAS：仅 approved/executing → invalidated，写入 invalidation_reason（审批语义失效）。
 	Invalidate(ctx context.Context, tenantID, id, reason string) error
 	// Void CAS：仅 approved → voided，写入 invalidation_reason（执行上下文销毁）。

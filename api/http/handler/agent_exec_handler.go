@@ -55,6 +55,12 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 			c.JSON(http.StatusAccepted, gin.H{"status": "waiting_approval", "approvalId": approvalErr.ApprovalID, "toolCallId": approvalErr.ToolCallID, "serverId": approvalErr.ServerID, "toolName": approvalErr.ToolName, "riskLevel": approvalErr.RiskLevel})
 			return
 		}
+		// 续跑竞态：带 execution_id 续跑但审批其实还在等待中（未批准）。
+		// 幂等返回 202，前端据此恢复"等待审批"卡片而非报错/重复创建。
+		if errors.Is(err, agent.ErrApprovalNotApproved) {
+			c.JSON(http.StatusAccepted, gin.H{"status": "waiting_approval"})
+			return
+		}
 		if errors.Is(err, agent.ErrNotFound) {
 			_ = c.Error(err)
 			return
@@ -68,6 +74,32 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 
 func respondAgentExecutionError(c *gin.Context, err error) {
 	_ = c.Error(err)
+}
+
+// GetActiveExecution reports a conversation's in-flight execution for session
+// continuity after a hard refresh. A 404 {"status":"none"} means genuinely no
+// active execution (or the actor lacks ownership — existence oracle closed);
+// any transient DB failure surfaces as a 500 so the frontend never mistakes a
+// read failure for "no active execution" and silently starts a duplicate run.
+func (h *AgentHandler) GetActiveExecution(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	userID, _ := userIDFromCtx(c)
+	convID := c.Param("convID")
+
+	active, err := h.svc.GetActiveExecution(c.Request.Context(), tenantID, convID, userID)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	if active == nil {
+		c.JSON(http.StatusNotFound, gin.H{"status": "none"})
+		return
+	}
+	c.JSON(http.StatusOK, active)
 }
 
 // ExecuteAgentStream runs an agent and streams tokens via SSE.
@@ -106,6 +138,12 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 		Stream:      true,
 	}, tokenCb)
 	if err != nil {
+		// 续跑竞态：携带 execution_id 重发续跑，但审批其实还在等待中（未批准）。
+		// 幂等返回 202，前端据此恢复"等待审批"卡片而非报错/重复创建。
+		if errors.Is(err, agent.ErrApprovalNotApproved) {
+			c.JSON(http.StatusAccepted, gin.H{"status": "waiting_approval"})
+			return
+		}
 		_ = c.Error(err)
 		return
 	}

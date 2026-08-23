@@ -69,8 +69,8 @@ describe('buildMenuItems', () => {
     expect(screen.queryByText('模型档案')).not.toBeInTheDocument();
     // 审计日志已从平台管理组移出租户域,租户 admin 可见顶层项
     expect(screen.getByText('审计日志')).toBeInTheDocument();
-    // 工具审批是独立菜单行,租户 admin 保留可见
-    expect(screen.getByText('工具审批')).toBeInTheDocument();
+    // 审批中心对 member 开放(发起人查看自己发起的审批),租户 admin 常显
+    expect(screen.getByText('审批中心')).toBeInTheDocument();
   });
 
   it('hides the platform admin group from members', () => {
@@ -84,8 +84,8 @@ describe('buildMenuItems', () => {
     expect(screen.queryByText('审计日志')).not.toBeInTheDocument();
     expect(screen.queryByText('全局租户')).not.toBeInTheDocument();
     expect(screen.queryByText('平台参数')).not.toBeInTheDocument();
-    // 工具审批同样对成员隐藏
-    expect(screen.queryByText('工具审批')).not.toBeInTheDocument();
+    // 审批中心对 member 常显:发起人需入口查看自己发起的审批(只读视角在页面内区分)
+    expect(screen.getByText('审批中心')).toBeInTheDocument();
   });
 
   it('shows the merged platform admin group only to global admin', () => {
@@ -104,13 +104,13 @@ describe('buildMenuItems', () => {
     expect(screen.getByText('平台参数')).toBeInTheDocument();
   });
 
-  it('shows 工具审批 to tenant admins even when not global admin', () => {
+  it('shows 审批中心 to tenant admins even when not global admin', () => {
     const labels = collectLabels(buildMenuItems({
       sub: 'owner-1', tenant_id: 'tenant-1', role: 'owner', avatar_url: '', github_login: 'owner', username: '',
       current_tenant: { id: 'tenant-1', name: 'Test', role: 'owner' },
     }));
     render(<div>{labels.map((label, index) => <div key={index}>{label}</div>)}</div>);
-    expect(screen.getByText('工具审批')).toBeInTheDocument();
+    expect(screen.getByText('审批中心')).toBeInTheDocument();
     expect(screen.queryByText('平台管理')).not.toBeInTheDocument();
   });
 

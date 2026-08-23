@@ -434,8 +434,10 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		agents.POST("/tool-approvals/:approvalID/decision", requireAdmin, requireActive, agentHandler.DecideToolApproval)
 		agents.POST("/tool-approvals/:approvalID/resume", requireAdmin, requireActive, agentHandler.ResumeToolApproval)
 		// D4：审批工作台——历史/详情/执行/指定审批人。
-		agents.GET("/tool-approvals/history", requireAdmin, requireActive, agentHandler.ListApprovalHistory)
-		agents.GET("/tool-approvals/:approvalID", requireAdmin, requireActive, agentHandler.GetApprovalDetail)
+		// history/detail 对 member 开放（M4/D4）：service 内做"发起人或 admin/owner"归属校验，
+		// member 仅看自己发起的、详情归属自己，非归属 404（关闭 oracle）。decision/execute/assignee 仍 requireAdmin。
+		agents.GET("/tool-approvals/history", requireActive, agentHandler.ListApprovalHistory)
+		agents.GET("/tool-approvals/:approvalID", requireActive, agentHandler.GetApprovalDetail)
 		agents.POST("/tool-approvals/:approvalID/execute", requireAdmin, requireActive, agentHandler.ExecuteApproval)
 		agents.PUT("/tool-approvals/:approvalID/assignee", requireAdmin, requireActive, agentHandler.SetApprovalAssignee)
 		agents.GET("/system/settings", agentHandler.GetSettings)
@@ -463,6 +465,9 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		conversations.DELETE("/:convID", chatHandler.DeleteConversation)
 		conversations.GET("/:convID/messages", chatHandler.ListMessages)
 		conversations.POST("/:convID/messages", chatHandler.AddMessage)
+		// 会话刷新恢复：返回该会话的进行中执行（running/paused/waiting_approval）
+		// 及其恢复键 execution_id；member 级，服务内做会话归属校验。
+		conversations.GET("/:convID/active-execution", agentHandler.GetActiveExecution)
 	}
 }
 

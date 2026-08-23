@@ -1,5 +1,6 @@
 import { Alert, Button, Drawer, Space, Typography } from 'antd';
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 import { ChatComposer } from '../components/ChatComposer';
 import { ChatConversationSidebar } from '../components/ChatConversationSidebar';
@@ -47,18 +48,15 @@ export const AgentChatPage = ({
     handleCreateConv,
     handleRenameConv,
     handleDeleteConv,
-    pendingApprovals,
-    approvalActionId,
-    handleApprove,
-		handleReject,
+    waitingApproval,
+    streaming,
+    manualResumeWaiting,
 		streamFailure,
 		contentSwitching,
   } = useChatPage({ fixedAgentId });
 
   const agentObj = agents.find((a) => a.id === selectedAgent);
-  const pendingApproval = pendingApprovals.find(
-    (item) => !item.agentId || item.agentId === selectedAgent,
-  );
+  const pendingApproval = waitingApproval;
 	const assistantModelUnavailable = !!(
 		agentObj?.isSystem &&
 		streamFailure?.code === 'SYSTEM_ASSISTANT_MODEL_UNAVAILABLE'
@@ -139,11 +137,9 @@ export const AgentChatPage = ({
         {pendingApproval && (
           <ApprovalGate
             approval={pendingApproval}
-            isAdmin={isAdmin}
             isMobile={isMobile}
-            loading={approvalActionId === pendingApproval.approvalId}
-            onApprove={handleApprove}
-            onReject={handleReject}
+            streaming={streaming}
+            onResume={manualResumeWaiting}
           />
         )}
 				{assistantModelUnavailable && (
@@ -172,11 +168,9 @@ export const AgentChatPage = ({
 
 type ApprovalGateProps = {
   approval: ReturnType<typeof useChatPage>['pendingApprovals'][number];
-  isAdmin: boolean;
   isMobile: boolean;
-  loading: boolean;
-  onApprove: (approvalId: string) => void;
-  onReject: (approvalId: string) => void;
+  streaming: boolean;
+  onResume: () => void;
 };
 
 const APPROVAL_INVALIDATION_LABELS: Record<string, string> = {
@@ -214,11 +208,18 @@ const resolveApprovalGate = (approval: ApprovalGateProps['approval']): ApprovalG
   if (expired) {
     return { terminal: true, message: '工具审批已过期' };
   }
+  if (approval.status === 'approved') {
+    return { terminal: false, message: `工具 ${approval.toolName} 已批准` };
+  }
   return { terminal: false, message: `工具 ${approval.toolName} 等待审批` };
 };
 
-const ApprovalGate = ({ approval, isAdmin, isMobile, loading, onApprove, onReject }: ApprovalGateProps) => {
+// 只读审批提示卡片:审批操作收敛到审批中心(/approvals),对话页不再打扰审批人。
+// approved 态由轮询自动流式续跑;离线/自动续跑未触发时提供手动"继续执行"兜底。
+const ApprovalGate = ({ approval, isMobile, streaming, onResume }: ApprovalGateProps) => {
+  const navigate = useNavigate();
   const { terminal, message } = resolveApprovalGate(approval);
+  const approved = approval.status === 'approved';
 
   return (
     <Alert
@@ -230,24 +231,14 @@ const ApprovalGate = ({ approval, isAdmin, isMobile, loading, onApprove, onRejec
           <Typography.Text>
             风险等级：{approval.riskLevel} · Server：{approval.serverId}
           </Typography.Text>
-          {!terminal && !isAdmin && <Typography.Text type="secondary">需要租户管理员处理</Typography.Text>}
-          {!terminal && isAdmin && (
+          {!terminal && (
             <Space>
-              <Button
-                type="primary"
-                danger
-                loading={loading}
-                onClick={() => onApprove(approval.approvalId)}
-              >
-                批准并继续
-              </Button>
-              <Button
-                aria-label="拒绝"
-                disabled={loading}
-                onClick={() => onReject(approval.approvalId)}
-              >
-                拒绝
-              </Button>
+              <Button onClick={() => navigate('/approvals')}>前往审批中心</Button>
+              {approved && (
+                <Button type="primary" disabled={streaming} onClick={onResume}>
+                  {streaming ? '自动续跑中…' : '继续执行'}
+                </Button>
+              )}
             </Space>
           )}
         </Space>

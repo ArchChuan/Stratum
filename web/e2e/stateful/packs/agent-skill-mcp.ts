@@ -139,30 +139,30 @@ export const executeAgentSkillMCPPack = async ({
     await addGeneratedActorMembership(pool, tenantID, approverID, 'owner');
     await restoreActorSession({ ...approver, tenantID }, backendURL);
     approverPage = await approver.context.newPage();
-    // 新页面尚未导航到同源 origin，直接读写 sessionStorage 会被拒绝；先访问首页建立同源会话。
-    await approverPage.goto(`${webURL}/`);
-    await approverPage.evaluate((id) => sessionStorage.setItem('chat:lastAgentId', id), agentID);
-    await approverPage.goto(`${webURL}/chat`);
-    await expect(approverPage.getByText('工具 stateful_echo 等待审批', { exact: true })).toBeVisible({ timeout: 120_000 });
-
+    // M3/M4:审批操作收敛到审批中心(/approvals),对话页不再提供批准/拒绝按钮。
+    // 审批人从工作台批准;发起人 page 保持打开,轮询 active-execution 检测到
+    // approved 后自动流式续跑(execute/stream),输出回流发起人原会话。
+    await approverPage.goto(`${webURL}/approvals`);
+    await expect(approverPage.getByText('工具审批', { exact: true })).toBeVisible({ timeout: 120_000 });
+    const approvalRow = approverPage.locator('tr').filter({ hasText: 'stateful_echo' }).first();
+    await expect(approvalRow).toBeVisible({ timeout: 120_000 });
     const decisionResponse = approverPage.waitForResponse((response) => (
       /\/agents\/tool-approvals\/[^/]+\/decision$/.test(new URL(response.url()).pathname)
       && response.request().method() === 'POST'
     ));
-    const resumeResponse = approverPage.waitForResponse((response) => (
-      /\/agents\/tool-approvals\/[^/]+\/resume$/.test(new URL(response.url()).pathname)
-      && response.request().method() === 'POST'
-    ));
-    await approverPage.getByRole('button', { name: '批准并继续' }).click();
+    await approvalRow.getByRole('button', { name: '批准' }).click();
+    // Modal okText 双汉字会被 antd 自动插空格("批准"→"批 准")，用正则同时覆盖两种文案。
+    await approverPage.locator('.ant-modal').getByRole('button', { name: /批\s*准/ }).click();
     expect((await decisionResponse).status()).toBe(200);
-    expect((await resumeResponse).status()).toBe(200);
-    // resume 同步返回执行结果，handleApprove 把输出追加到 approverPage 会话。
-    await expect(approverPage.getByText('stateful sync completed', { exact: true }).last()).toBeVisible({ timeout: 120_000 });
+    // 发起人 page 轮询 active-execution 自动续跑,SSE 输出流式回流(复用原消息追加)。
+    // 续跑走 execute/stream 流式,fake LLM 对 stream 返回 "stateful stream completed"
+    // (sync 文案 "stateful sync completed" 仅非流式 execute 返回)。
+    await expect(page.getByText('stateful stream completed', { exact: true }).last()).toBeVisible({ timeout: 120_000 });
     const approvals = await rows<{ status: string }>(pool, tenantID,
       'SELECT status FROM agent_tool_approvals WHERE agent_id=$1 ORDER BY created_at DESC LIMIT 1', [agentID]);
     expect(approvals).toEqual([{ status: 'executed' }]);
-    evidence.ui.push('Agent Skill MCP approval and resume completed through Chromium controls');
-    evidence.http.push('Agent Skill MCP decision, resume, provider, and tool calls succeeded');
+    evidence.ui.push('Agent Skill MCP approval from approval center with automatic streaming resume');
+    evidence.http.push('Agent Skill MCP decision and resumed execute stream succeeded');
     evidence.database.push('Agent Skill MCP approval reached executed state');
 
 		await page.goto(`${webURL}/agents`);
@@ -191,6 +191,6 @@ export const executeAgentSkillMCPPack = async ({
   }
   return [
     'agent.mutation.post.agents.tool.approvals.id.decision',
-    'agent.mutation.post.agents.tool.approvals.id.resume',
+    'agent.mutation.post.agents.id.execute.stream',
   ];
 };

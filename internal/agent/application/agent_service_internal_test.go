@@ -81,6 +81,18 @@ func (f completionFailureCheckpoint) UpdateStatus(context.Context, string, strin
 func (f completionFailureCheckpoint) DeleteExpired(context.Context, string) (int64, error) {
 	return 0, nil
 }
+func (f completionFailureCheckpoint) GetLatestActiveByConversation(context.Context, string, string) (*domain.AgentExecutionCheckpoint, error) {
+	return nil, nil
+}
+func (f completionFailureCheckpoint) UpdateStatusFrom(context.Context, string, string, string, string) error {
+	return nil
+}
+func (f completionFailureCheckpoint) AdvanceRunGeneration(context.Context, string, string, int) error {
+	return nil
+}
+func (f completionFailureCheckpoint) Terminate(context.Context, string, string, string) error {
+	return nil
+}
 
 func TestCompleteApprovalResumePropagatesCheckpointPersistenceFailure(t *testing.T) {
 	persistErr := errors.New("checkpoint unavailable")

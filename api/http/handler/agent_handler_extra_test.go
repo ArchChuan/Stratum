@@ -132,6 +132,16 @@ func (f fakeCheckpointStore) UpdateStatus(context.Context, string, string, strin
 	return f.updateErr
 }
 func (f fakeCheckpointStore) DeleteExpired(context.Context, string) (int64, error) { return 0, nil }
+func (f fakeCheckpointStore) GetLatestActiveByConversation(context.Context, string, string) (*domain.AgentExecutionCheckpoint, error) {
+	return nil, nil
+}
+func (f fakeCheckpointStore) UpdateStatusFrom(context.Context, string, string, string, string) error {
+	return nil
+}
+func (f fakeCheckpointStore) AdvanceRunGeneration(context.Context, string, string, int) error {
+	return nil
+}
+func (f fakeCheckpointStore) Terminate(context.Context, string, string, string) error { return nil }
 
 func newTestAgentHandler(t *testing.T, repo *mockAgentRepo, evidence port.TraceEvidenceProvider, mut func(*agent.AgentServiceDeps)) *AgentHandler {
 	t.Helper()
