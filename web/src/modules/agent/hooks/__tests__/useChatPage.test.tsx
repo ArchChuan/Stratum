@@ -1,5 +1,4 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { message } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { StreamSnapshot } from '../ChatStreamContext';
@@ -58,6 +57,7 @@ vi.mock('../../api/agent.api', () => ({
     listToolApprovals: mocks.listApprovals,
     decideToolApproval: mocks.decide,
     resumeToolApproval: mocks.resume,
+    getActiveExecution: vi.fn().mockResolvedValue(null),
   },
   conversationApi: {
     list: mocks.listConversations,
@@ -92,32 +92,6 @@ describe('useChatPage tool approvals', () => {
     mocks.stream.streamDone = false;
     mocks.stream.streamApproval = null;
 		mocks.stream.streamFailure = null;
-  });
-
-  it('turns an unknown resume result into non-retryable reconciliation work', async () => {
-    mocks.approval = {
-      approvalId: 'approval-1',
-      agentId: 'agent-1',
-      toolName: 'delete',
-      serverId: 'orders',
-      riskLevel: 'destructive',
-      status: 'pending',
-    };
-    mocks.listApprovals.mockResolvedValue([mocks.approval]);
-    mocks.resume.mockRejectedValue({
-      response: { data: { error: 'tool approval outcome is unknown' } },
-    });
-
-    const { result } = renderHook(() => useChatPage());
-    await waitFor(() => expect(result.current.pendingApprovals).toHaveLength(1));
-
-    await act(async () => result.current.handleApprove('approval-1'));
-
-    expect(result.current.pendingApprovals[0]?.status).toBe('unknown_outcome');
-    expect(message.error).toHaveBeenCalledWith({
-      content: '工具执行结果未知，需要人工对账',
-      duration: 3,
-    });
   });
 
   it('replaces an empty streamed assistant message with an approval waiting state', async () => {

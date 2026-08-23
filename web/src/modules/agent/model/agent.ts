@@ -336,6 +336,23 @@ export interface ToolApproval {
 	status: 'pending' | 'approved' | 'rejected' | 'expired' | 'unknown_outcome' | 'authorization_denied' | 'cancelled' | 'voided' | 'invalidated' | string;
 	expiresAt?: string;
 	invalidationReason?: string;
+	// 审批归属会话：ListPending 透出（member 已按自己过滤）、SSE 等待审批帧由发起
+	// 会话页补附；对话页卡片按此过滤当前会话，审批工作台复用。
+	conversationId?: string;
+}
+
+// 会话"进行中执行"视图（后端 GET /conversations/:convID/active-execution）。
+// status: running | paused | waiting_approval；waiting_approval 时附 approval_id 与
+// approval_status（区分"已批准待续跑"与"仍待审批"）。无活跃执行时后端返回 404，
+// API 层统一折叠为 null（非 404 错误向上抛，禁止当作无执行）。
+export interface ActiveExecution {
+	executionId: string;
+	agentId: string;
+	status: string;
+	approvalId?: string;
+	approvalStatus?: string;
+	userQuery?: string;
+	updatedAt?: string;
 }
 
 export interface ToolApprovalResumeResult {

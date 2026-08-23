@@ -18,6 +18,9 @@ vi.mock('@/modules/iam', () => ({
     tenants: [{ tenant_id: 'tenant-1', name: authState.tenantName }],
     switchTenant: vi.fn(),
   }),
+  // ApprovalNotificationBell 经 approvals barrel 间接引入 llmRoutes → PrivateRoute，
+  // mock 边界需提供该导出（与 evaluation/routes.test.tsx 同款）。
+  PrivateRoute: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 vi.mock('../UserMenu', () => ({ UserMenu: () => <div>用户菜单</div> }));

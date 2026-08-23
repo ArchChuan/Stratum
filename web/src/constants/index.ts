@@ -4,7 +4,6 @@ export const API_DEFAULT_TIMEOUT_MS = 10_000;
 // 注册创建租户需 provisioning 完整 tenant schema（百级 DDL），中等负载即可超 10s；
 // 低频重操作单独给更长预算，避免中途被 abort 留下半 provisioned 租户。
 export const AUTH_REGISTER_TIMEOUT_MS = 30_000;
-export const AGENT_EXEC_TIMEOUT_MS = 120_000;
 export const AGENT_DEFAULT_MAX_ITERATIONS = 10;
 export const AGENT_MIN_MAX_ITERATIONS = 1;
 export const AGENT_MAX_MAX_ITERATIONS = 90;
@@ -54,6 +53,8 @@ export const AGENT_STREAM_RECONNECT_MAX_MS = 10000;
 export const AGENT_STREAM_RECONNECT_MAX_ATTEMPTS = 5;
 // 审批铃铛待办轮询周期（角标数据复用 ListPending，无独立端点）。
 export const APPROVAL_POLL_MS = 30000;
+// 审批等待态卡片轮询 active-execution 的周期：批准后自动流式续跑的判定源。
+export const ACTIVE_EXECUTION_POLL_MS = 2000;
 
 export const MCP_DEFAULT_TIMEOUT_SEC = 30;
 export const MCP_MAX_TIMEOUT_SEC = 300;

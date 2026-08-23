@@ -7,6 +7,7 @@ export type {
   ApprovalRow,
 } from './api';
 export { approvalsRoutes } from './routes';
+export { ApprovalNotificationBell } from './components/ApprovalNotificationBell';
 export {
   APPROVAL_STATUS_COLORS,
   APPROVAL_STATUS_LABELS,
