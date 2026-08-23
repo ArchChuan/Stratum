@@ -263,6 +263,18 @@ func TestMergeToolMessagesSnapshotInvalidJSONReturnsBase(t *testing.T) {
 	require.Equal(t, base, graph.MergeToolMessagesSnapshot(json.RawMessage(`{"version":99,"tool_messages":[]}`), base))
 }
 
+func TestMergeToolMessagesSnapshotEmptyArrayDoesNotWipeBase(t *testing.T) {
+	// 回归(M1 ensureInitialCheckpoint):init checkpoint 的 MessagesSnapshotJSON 为
+	// nil,经 PgCheckpointStore.Upsert 归一为 JSON `[]`;若把空数组当 v1 全量快照
+	// 整体替换,会清空组装好的 base(system/memory/user),首轮 LLM 请求 messages 变空。
+	base := []port.LLMMessage{
+		{Role: "system", Content: "sys"}, {Role: "user", Content: "hi"},
+	}
+	require.Equal(t, base, graph.MergeToolMessagesSnapshot(json.RawMessage(`[]`), base))
+	// JSON null 同样无快照语义,返回 base。
+	require.Equal(t, base, graph.MergeToolMessagesSnapshot(json.RawMessage(`null`), base))
+}
+
 func TestPersistReActCheckpointWritesToolDimensionSnapshot(t *testing.T) {
 	writer := &checkpointWriterForPlanTest{}
 	state := &graph.ReActState{

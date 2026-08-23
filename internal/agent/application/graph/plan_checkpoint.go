@@ -66,9 +66,13 @@ func MergeToolMessagesSnapshot(raw json.RawMessage, base []port.LLMMessage) []po
 		return append(base, envelope.ToolMessages...)
 	}
 	// v1/裸数组:整体替换。裸数组 JSON 解进 struct 必失败,走到这里;v2 信封对象
-	// 解进 []LLMMessage 也失败,同样降级返回 base。
+	// 解进 []LLMMessage 也失败,同样降级返回 base。空数组(`[]`)与 JSON `null`
+	// 语义等同"无快照":ensureInitialCheckpoint 的 init checkpoint 其
+	// MessagesSnapshotJSON 为 nil,经 PgCheckpointStore.Upsert 归一为 `[]`;
+	// 若把空数组当 v1 全量快照整体替换,会清空组装好的 base(system/memory/user),
+	// 首轮 LLM 请求 messages 变空(M1 回归)。真实 v1 全量快照恒非空。
 	var saved []port.LLMMessage
-	if json.Unmarshal(raw, &saved) == nil {
+	if json.Unmarshal(raw, &saved) == nil && len(saved) > 0 {
 		return saved
 	}
 	return base
