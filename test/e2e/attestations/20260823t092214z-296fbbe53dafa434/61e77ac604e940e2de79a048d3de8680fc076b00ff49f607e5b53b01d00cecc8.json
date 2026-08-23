@@ -1,0 +1,141 @@
+{
+  "schema_version": 2,
+  "source_digest": "61e77ac604e940e2de79a048d3de8680fc076b00ff49f607e5b53b01d00cecc8",
+  "manifest_digest": "beec6e9ecc7b7e9aa924f3199ee5b2a9e36530a87ba0c02894e7525ad3d3498d",
+  "policy_manifest_digest": "716bc30a6332d700f6d753511871d1b4e975fb66a4df6384990070ffc9bdaad8",
+  "tested_git_parent": "ab21c8b46debd3b62c6f87c28dbdfc9d99889933",
+  "browser": {
+    "name": "chromium",
+    "version": "149.0.7827.55"
+  },
+  "mode": "soak",
+  "acceptance_profile": "test",
+  "seed": 1,
+  "started_at": "2026-08-23T09:22:28.427Z",
+  "duration_seconds": 611,
+  "host_class": "developer",
+  "packs": [
+    {
+      "id": "iam",
+      "status": "passed"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "iam.mutation.delete.admin.tenants.tenantid",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.delete.tenant",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.delete.tenant.members.userid",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.patch.admin.tenants.tenantid",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.patch.tenant.members.userid.role",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.patch.tenant.settings",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.post.admin.tenants",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.post.auth.create.tenant",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.post.auth.guest",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.post.auth.logout",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.post.auth.oauth.exchange",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.post.auth.refresh",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.post.auth.register",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.post.auth.switch.tenant",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.post.tenant.members.invite",
+      "status": "passed"
+    },
+    {
+      "id": "iam.route.admin.tenants",
+      "status": "passed"
+    },
+    {
+      "id": "iam.route.auth.callback",
+      "status": "passed"
+    },
+    {
+      "id": "iam.route.login",
+      "status": "passed"
+    },
+    {
+      "id": "iam.route.onboarding",
+      "status": "passed"
+    },
+    {
+      "id": "iam.route.tenant.members",
+      "status": "passed"
+    },
+    {
+      "id": "iam.route.tenant.settings",
+      "status": "passed"
+    }
+  ],
+  "action_count": 644,
+  "sequence_digest": "28d0616ea50fe02f3b022b5eaf38fea72a6973b75f6dce00a85eee7ea4ca9407",
+  "evidence": {
+    "ui": 364,
+    "http": 336,
+    "database": 336,
+    "reconciled": 644
+  },
+  "artifacts": [],
+  "cleanup": {
+    "passed": true,
+    "residual_entity_ids": []
+  },
+  "unverified_capabilities": [],
+  "risk_classification": "soak",
+  "status": "passed",
+  "run_topology": {
+    "run_id": "20260823t092214z-296fbbe53dafa434",
+    "host": "127.0.0.1",
+    "ports": {
+      "backend": 43673,
+      "fixture": 35631,
+      "frontend": 42607,
+      "oauth": 44961
+    },
+    "database_name": "stratum_e2e_20260823t092214z_296fbbe53dafa434"
+  },
+  "owned_cleanup": {
+    "database_dropped": true,
+    "lease_removed": true
+  },
+  "expires_at": "2026-08-26T09:32:43.456443598Z"
+}

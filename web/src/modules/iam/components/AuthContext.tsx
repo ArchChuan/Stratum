@@ -127,7 +127,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const login = (userData: User, token: string) => {
     updateToken(token);
     markAuthReady();
-    setUser(userData);
+    // /auth/me 不返回 current_tenant；若等异步租户名请求完成再补，
+    // 登录后首帧会是"已登录但无租户"状态，PrivateRoute 会跳到 /onboarding。
+    // 先同步用 tenant_id 构造 current_tenant，异步请求只负责补全租户名。
+    setUser(buildUser(userData, userData.current_tenant?.name || ''));
     Promise.all([fetchTenantName(token), fetchTenants(token)]).then(
       ([tenantName, tenantList]) => {
         setUser(buildUser(userData, tenantName));
