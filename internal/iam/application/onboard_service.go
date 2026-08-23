@@ -158,7 +158,9 @@ func (s *OnboardService) FindUsernameByUserID(ctx context.Context, userID string
 	return s.repo.FindUsernameByUserID(ctx, userID)
 }
 
-// GetUserTenantByUserID returns the user's default tenant by UUID.
+// GetUserTenantByUserID returns the tenant a user should land in at login:
+// first the non-default tenant they created (owner), else the first
+// non-default tenant they joined, else the default tenant.
 func (s *OnboardService) GetUserTenantByUserID(ctx context.Context, userID string) (string, string, error) {
 	return s.repo.GetUserTenantByUserID(ctx, userID)
 }

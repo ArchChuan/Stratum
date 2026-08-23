@@ -229,6 +229,114 @@ func TestAuthHandler_GitHubCallback_RedirectsReturningUserWithCodeOnly(t *testin
 	}
 }
 
+func TestAuthHandler_GitHubCallback_ReturningUserPrefersOwnedNonDefaultTenant(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwtSvc := iamtoken.NewJWTService(key)
+	store := &oauthExchangeStoreFake{createCode: "one-time-code"}
+	h := handler.NewAuthHandler(handler.AuthHandlerDeps{
+		GitHubClient: githubOAuthFake{},
+		JWTService:   jwtSvc,
+		TokenStore:   &refreshTokenStoreFake{},
+		OnboardSvc: application.NewOnboardService(onboardRepoFake{exists: true, tenants: []domain.TenantInfo{
+			{TenantID: "default-1", IsDefault: true, Role: "member"},
+			{TenantID: "joined-1", Role: "member"},
+			{TenantID: "created-1", Role: "owner"},
+		}}),
+		OAuthExchangeStore: store,
+		Logger:             zap.NewNop(),
+		CallbackURL:        "http://api.test/auth/github/callback",
+		FrontendURL:        "https://app.test",
+	})
+	r := setupAuthRouter(h)
+	req := httptest.NewRequest(http.MethodGet, "/auth/github/callback?code=github-code&state=state", nil) //nolint:noctx
+	req.AddCookie(&http.Cookie{Name: "oauth_state", Value: "state"})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assertOAuthCodeOnlyRedirect(t, w, "one-time-code")
+	gotTenant := accessTokenTenantID(t, jwtSvc, store.created.AccessToken)
+	if gotTenant != "created-1" {
+		t.Fatalf("returning user landed in tenant %q, want created-1 (owner before joined)", gotTenant)
+	}
+}
+
+func TestAuthHandler_GitHubCallback_ReturningUserFallsBackToJoinedNonDefaultTenant(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwtSvc := iamtoken.NewJWTService(key)
+	store := &oauthExchangeStoreFake{createCode: "one-time-code"}
+	h := handler.NewAuthHandler(handler.AuthHandlerDeps{
+		GitHubClient: githubOAuthFake{},
+		JWTService:   jwtSvc,
+		TokenStore:   &refreshTokenStoreFake{},
+		OnboardSvc: application.NewOnboardService(onboardRepoFake{exists: true, tenants: []domain.TenantInfo{
+			{TenantID: "default-1", IsDefault: true, Role: "member"},
+			{TenantID: "joined-1", Role: "member"},
+		}}),
+		OAuthExchangeStore: store,
+		Logger:             zap.NewNop(),
+		CallbackURL:        "http://api.test/auth/github/callback",
+		FrontendURL:        "https://app.test",
+	})
+	r := setupAuthRouter(h)
+	req := httptest.NewRequest(http.MethodGet, "/auth/github/callback?code=github-code&state=state", nil) //nolint:noctx
+	req.AddCookie(&http.Cookie{Name: "oauth_state", Value: "state"})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assertOAuthCodeOnlyRedirect(t, w, "one-time-code")
+	gotTenant := accessTokenTenantID(t, jwtSvc, store.created.AccessToken)
+	if gotTenant != "joined-1" {
+		t.Fatalf("returning user landed in tenant %q, want joined-1 (non-default before default)", gotTenant)
+	}
+}
+
+func TestAuthHandler_GitHubCallback_ReturningUserFallsBackToDefaultTenant(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwtSvc := iamtoken.NewJWTService(key)
+	store := &oauthExchangeStoreFake{createCode: "one-time-code"}
+	h := handler.NewAuthHandler(handler.AuthHandlerDeps{
+		GitHubClient: githubOAuthFake{},
+		JWTService:   jwtSvc,
+		TokenStore:   &refreshTokenStoreFake{},
+		OnboardSvc: application.NewOnboardService(onboardRepoFake{exists: true, tenants: []domain.TenantInfo{
+			{TenantID: "default-1", IsDefault: true, Role: "member"},
+		}}),
+		OAuthExchangeStore: store,
+		Logger:             zap.NewNop(),
+		CallbackURL:        "http://api.test/auth/github/callback",
+		FrontendURL:        "https://app.test",
+	})
+	r := setupAuthRouter(h)
+	req := httptest.NewRequest(http.MethodGet, "/auth/github/callback?code=github-code&state=state", nil) //nolint:noctx
+	req.AddCookie(&http.Cookie{Name: "oauth_state", Value: "state"})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assertOAuthCodeOnlyRedirect(t, w, "one-time-code")
+	gotTenant := accessTokenTenantID(t, jwtSvc, store.created.AccessToken)
+	if gotTenant != "default-1" {
+		t.Fatalf("returning user landed in tenant %q, want default-1 (default when no non-default)", gotTenant)
+	}
+}
+
+func accessTokenTenantID(t *testing.T, svc iamport.TokenService, token string) string {
+	t.Helper()
+	claims, err := svc.Verify(token)
+	if err != nil {
+		t.Fatalf("verify access token: %v", err)
+	}
+	return claims.TenantID
+}
+
 func TestAuthHandler_GitHubCallback_RedirectsOnboardingWithCodeOnly(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
