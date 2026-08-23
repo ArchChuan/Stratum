@@ -29,9 +29,6 @@ type ModelParameters struct {
 	// ReasoningEffort 是推理强度档位:""(unset)|low|medium|high。空串跳过,
 	// 非空必须落在枚举内(validateModelParameters 防 optimizer 绕过 enum)。
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
-	// CompactionRecentGroups overrides the per-execution recent-groups
-	// count during in-loop compaction. 0 = auto-derive from MaxContextTokens.
-	CompactionRecentGroups int `json:"compaction_recent_groups,omitempty"`
 }
 
 type AgentBinding struct {
@@ -212,17 +209,6 @@ func validateModelParameters(params ModelParameters) error {
 	// 非法值写进 revision 会沿 promote 透传到网关打严格端点 400(永久错误)。
 	if !constants.IsValidReasoningEffort(params.ReasoningEffort) {
 		return errors.New("agent revision: reasoning_effort must be one of low/medium/high")
-	}
-	return validateCompactionParameters(params)
-}
-
-// validateCompactionParameters bounds the compaction tunables: recent groups
-// come from a discrete set (0 = auto).
-func validateCompactionParameters(params ModelParameters) error {
-	switch params.CompactionRecentGroups {
-	case 0, 2, 3, 5:
-	default:
-		return fmt.Errorf("agent revision: compaction recent groups must be one of {0, 2, 3, 5}")
 	}
 	return nil
 }

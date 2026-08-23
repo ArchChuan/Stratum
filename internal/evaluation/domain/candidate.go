@@ -17,8 +17,7 @@ var allowedParameterFields = map[string]struct{}{
 	"max_context_tokens": {}, "max_iterations": {}, "bindings": {},
 	"enabled_tools": {}, "timeout_ms": {}, "max_retries": {},
 	"top_k": {}, "score_threshold": {}, "reranking": {}, "query_rewrite": {},
-	"compaction_recent_groups": {},
-	"reasoning_effort":         {},
+	"reasoning_effort": {},
 }
 
 var allowedPromptFields = map[string]struct{}{

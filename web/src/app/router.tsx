@@ -1,4 +1,4 @@
-import { Routes, useLocation } from 'react-router-dom';
+import { Navigate, Routes, useLocation } from 'react-router-dom';
 
 import { AppShell } from './layout/AppShell';
 
@@ -25,9 +25,16 @@ const AUTH_PATHS = ['/login', '/auth/callback', '/onboarding'];
 export const MANAGED_ROUTE_PATHS = systemE2ESurface.routes;
 
 export const AppRouter = () => {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
   const location = useLocation();
   const isAuthPage = AUTH_PATHS.some((p) => location.pathname.startsWith(p));
+
+  // 注册/登录成功后用户必有租户（新用户默认进默认租户）；若因历史竞态、
+  // 旧缓存或直接访问停留在 /onboarding，会话一旦恢复（current_tenant 就绪）
+  // 就应回主页，onboarding 不应成为已登录用户的中间页。
+  if (!loading && location.pathname === '/onboarding' && user?.current_tenant) {
+    return <Navigate to="/" replace />;
+  }
 
   if (isAuthPage) {
     return <Routes>{iamPublicRoutes}</Routes>;

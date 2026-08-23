@@ -240,59 +240,6 @@ func (t maxContextTokensTunable) SearchSpace() SearchRange {
 		Step: constants.TunableMaxContextTokensStep}
 }
 
-// ——— Compaction tunables ———
-
-// compactionRecentGroupsTunable tunes how many recent message groups stay
-// verbatim during in-loop compaction. 0 = auto-derive from the window.
-type compactionRecentGroupsTunable struct{}
-
-func (t compactionRecentGroupsTunable) Key() string               { return "compaction_recent_groups" }
-func (t compactionRecentGroupsTunable) DisplayName() string       { return "保留最近组数" }
-func (t compactionRecentGroupsTunable) Category() TunableCategory { return CatCompaction }
-func (t compactionRecentGroupsTunable) DefaultValue() any         { return 0 }
-func (t compactionRecentGroupsTunable) VisualHint() VisualHint {
-	return VisualHint{Control: "select", Options: []any{0, 2, 3, 5}}
-}
-func (t compactionRecentGroupsTunable) Read(resource map[string]any) (any, error) {
-	params, _ := resource["model_parameters"].(map[string]any)
-	if params == nil {
-		return 0, nil
-	}
-	v, ok := params["compaction_recent_groups"]
-	if !ok {
-		return 0, nil
-	}
-	return v, nil
-}
-func (t compactionRecentGroupsTunable) Write(resource map[string]any, value any) error {
-	v, ok := value.(float64)
-	if !ok {
-		return fmt.Errorf("compaction_recent_groups: expected float64, got %T", value)
-	}
-	params, _ := resource["model_parameters"].(map[string]any)
-	if params == nil {
-		params = map[string]any{}
-		resource["model_parameters"] = params
-	}
-	params["compaction_recent_groups"] = v
-	return nil
-}
-func (t compactionRecentGroupsTunable) Validate(value any) error {
-	v, ok := value.(float64)
-	if !ok {
-		return fmt.Errorf("compaction_recent_groups: expected float64")
-	}
-	switch v {
-	case 0, 2, 3, 5:
-		return nil
-	default:
-		return fmt.Errorf("compaction_recent_groups: must be one of {0, 2, 3, 5}")
-	}
-}
-func (t compactionRecentGroupsTunable) SearchSpace() SearchRange {
-	return SearchRange{Discrete: []any{0, 2, 3, 5}}
-}
-
 // ——— Prompt tunable (LLM-rewritten, no grid search) ———
 
 // promptTunable wraps a free-text prompt field. Search is LLM-driven, so

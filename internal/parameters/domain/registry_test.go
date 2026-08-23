@@ -41,33 +41,25 @@ func TestRegistryRegistersAllBuiltinKeys(t *testing.T) {
 		}
 	}
 
-	// 新开放的 compaction 搜索空间维度。
-	for _, key := range []string{"agent.compaction_recent_groups"} {
-		def, ok := r.Get(key)
-		if !ok || !def.Optimizable {
-			t.Fatalf("newly opened key %s must be optimizable", key)
-		}
-	}
 }
 
 func TestRegistryEvaluationKeyMapping(t *testing.T) {
 	r := NewParametersRegistry()
 	for bare, want := range map[string]string{
-		"temperature":              "agent.temperature",
-		"max_tokens":               "agent.max_tokens",
-		"maxTokens":                "agent.max_tokens",
-		"max_context_tokens":       "agent.max_context_tokens",
-		"max_iterations":           "agent.max_iterations",
-		"model":                    "agent.model",
-		"bindings":                 "agent.bindings",
-		"compaction_recent_groups": "agent.compaction_recent_groups",
-		"top_k":                    "rag.top_k",
-		"score_threshold":          "rag.score_threshold",
-		"reranking":                "rag.reranking",
-		"query_rewrite":            "rag.query_rewrite",
-		"enabled_tools":            "mcp.enabled_tools",
-		"timeout_ms":               "mcp.timeout_ms",
-		"max_retries":              "mcp.max_retries",
+		"temperature":        "agent.temperature",
+		"max_tokens":         "agent.max_tokens",
+		"maxTokens":          "agent.max_tokens",
+		"max_context_tokens": "agent.max_context_tokens",
+		"max_iterations":     "agent.max_iterations",
+		"model":              "agent.model",
+		"bindings":           "agent.bindings",
+		"top_k":              "rag.top_k",
+		"score_threshold":    "rag.score_threshold",
+		"reranking":          "rag.reranking",
+		"query_rewrite":      "rag.query_rewrite",
+		"enabled_tools":      "mcp.enabled_tools",
+		"timeout_ms":         "mcp.timeout_ms",
+		"max_retries":        "mcp.max_retries",
 	} {
 		if !r.IsEvaluationKey(bare) {
 			t.Errorf("bare key %q must be registered", bare)
@@ -258,8 +250,6 @@ func TestParameterDefinitionValidateAndNormalize(t *testing.T) {
 		{name: "bool", key: "rag.reranking", value: true, wantOK: true, wantVal: true},
 		{name: "bool wrong type", key: "rag.reranking", value: "yes", wantOK: false},
 		{name: "string", key: "agent.model", value: "qwen-plus", wantOK: true},
-		{name: "compaction select option", key: "agent.compaction_recent_groups", value: 3, wantOK: true, wantVal: int64(3)},
-		{name: "compaction non-option int", key: "agent.compaction_recent_groups", value: 4, wantOK: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -304,5 +294,26 @@ func TestRegistryMemoryEmbeddingModel(t *testing.T) {
 	}
 	if def.Default != "" {
 		t.Errorf("default = %v, want empty (fail-closed)", def.Default)
+	}
+}
+
+// TestFactCheckJudgePromptIsPlatformEditable pins the platform-page contract:
+// agent.factcheck.judge.prompt 必须保持 platform 域、非 sensitive（平台参数页
+// 永不渲染敏感参数）、textarea 可编辑。回归 #420:误标 Sensitive 导致提示词
+// 被前端过滤,页面只显示其余 factcheck 参数。
+func TestFactCheckJudgePromptIsPlatformEditable(t *testing.T) {
+	r := NewParametersRegistry()
+	def, ok := r.Get("agent.factcheck.judge.prompt")
+	if !ok {
+		t.Fatal("agent.factcheck.judge.prompt not registered")
+	}
+	if def.Scope != ScopePlatform {
+		t.Errorf("scope = %q, want platform", def.Scope)
+	}
+	if def.Sensitive {
+		t.Error("judge prompt must not be Sensitive: platform settings page never renders sensitive params")
+	}
+	if def.VisualHint.Control != ControlTextarea {
+		t.Errorf("control = %q, want textarea", def.VisualHint.Control)
 	}
 }

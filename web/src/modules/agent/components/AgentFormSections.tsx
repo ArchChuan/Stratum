@@ -345,18 +345,6 @@ export const AgentFormSections = ({
                         </Select>
                       </Form.Item>
                     )}
-                    <Form.Item
-                      label="压缩最近轮数（compaction_recent_groups）"
-                      name="compaction_recent_groups"
-                      extra="压缩时保留最近几组对话原文：0 = 自动推导（<16K 窗口 2 组，16K–64K 3 组，>64K 5 组）；显式设置后固定保留 N 组"
-                    >
-                      <Select allowClear placeholder="0（自动推导）">
-                        <Option value={0}>0（自动推导）</Option>
-                        <Option value={2}>2 组</Option>
-                        <Option value={3}>3 组</Option>
-                        <Option value={5}>5 组</Option>
-                      </Select>
-                    </Form.Item>
                   </>
                 )}
               </>

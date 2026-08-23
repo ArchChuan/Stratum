@@ -8,7 +8,7 @@
 	docker-start \
 	k8s-deploy k8s-delete k8s-logs \
 	helm-install helm-upgrade helm-uninstall helm-diff helm-lint \
-	migration-guardrails migration-db-guardrails e2e-attestation-check test-verify-plan test-verify-fast test-verify-before-pr test-verify-local test-verify-ci \
+	migration-guardrails migration-db-guardrails migration-script-guardrails e2e-attestation-check test-verify-plan test-verify-fast test-verify-before-pr test-verify-local test-verify-ci \
 	test-verify-attestation test-verify-report full-regression ci-backend ci-frontend ci-docker \
 	cd-deploy-dev cd-deploy-staging cd-deploy-prod cd-validate ci-cd-full \
 	agent-instructions agent-instructions-check \
@@ -222,6 +222,14 @@ migration-guardrails:
 migration-db-guardrails: export STRATUM_TEST_POSTGRES_URL ?= postgres://stratum:stratum@localhost:5432/stratum?sslmode=disable
 migration-db-guardrails:
 	go test ./pkg/migration ./pkg/storage/postgres -count=1 -v $(GO_TEST_FLAGS)
+
+# ─── Migration 脚本护栏：真实 PG 回归迁移脚本（需 make infra-up 或本地 PG）──
+# 覆盖 knowledge-rerank-workspaces-migration.sh 的计数修复：用 CTE count(*) 替代
+# RETURNING id | wc -l，验证 0/1/N 精确计数 + 幂等重跑 0 影响。需 psql CLI，
+# CI 的 migration job 无 psql、共享库有 go-test 残留，故不挂默认 CI，作为手动门禁。
+migration-script-guardrails: export DATABASE_URL ?= postgres://stratum:stratum@localhost:5432/stratum?sslmode=disable
+migration-script-guardrails:
+	bash scripts/knowledge-rerank-workspaces-migration-test.sh
 
 # ─── 架构护栏：验证守卫脚本逻辑 + 全量硬扫描 api/wiring 裸 SQL ─────────────
 # 历史 2 处违规（evaluation.go / agent.go）已下沉到 infrastructure repo，

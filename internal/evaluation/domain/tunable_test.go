@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"reflect"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -38,39 +37,11 @@ func TestMaxContextTokensTunable_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestCompactionRecentGroupsTunable_RoundTrip(t *testing.T) {
-	tun := compactionRecentGroupsTunable{}
-	if tun.Key() != "compaction_recent_groups" || tun.Category() != CatCompaction {
-		t.Fatalf("unexpected key/category: %q / %q", tun.Key(), tun.Category())
-	}
-	resource := map[string]any{}
-	if err := tun.Write(resource, 5.0); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	if v, _ := tun.Read(resource); v != 5.0 {
-		t.Fatalf("round-trip = %v, want 5", v)
-	}
-	for _, ok := range []float64{0, 2, 3, 5} {
-		if err := tun.Validate(ok); err != nil {
-			t.Fatalf("Validate(%v) must accept: %v", ok, err)
-		}
-	}
-	for _, bad := range []any{4.0, 1.0, 6.0, "3"} {
-		if err := tun.Validate(bad); err == nil {
-			t.Fatalf("Validate(%v) must reject outside {0,2,3,5}", bad)
-		}
-	}
-	space := tun.SearchSpace()
-	if !reflect.DeepEqual(space.Discrete, []any{0, 2, 3, 5}) {
-		t.Fatalf("search space = %v, want {0,2,3,5}", space.Discrete)
-	}
-}
-
-// TestRegistryContextAndCompactionTunables 验证新 tunable 经注册表完整
+// TestRegistryContextTunables 验证新 tunable 经注册表完整
 // 参与 ReadSnapshot / ApplyPatches 往返。
-func TestRegistryContextAndCompactionTunables(t *testing.T) {
+func TestRegistryContextTunables(t *testing.T) {
 	reg := NewTunableRegistry()
-	for _, key := range []string{"max_context_tokens", "compaction_recent_groups"} {
+	for _, key := range []string{"max_context_tokens"} {
 		if reg.Get(key) == nil {
 			t.Fatalf("registry missing %s", key)
 		}
@@ -90,28 +61,16 @@ func TestRegistryContextAndCompactionTunables(t *testing.T) {
 	}
 
 	changes, err := reg.ApplyPatches(resource, map[string]any{
-		"max_context_tokens":       24576.0,
-		"compaction_recent_groups": 5.0,
+		"max_context_tokens": 24576.0,
 	})
 	if err != nil {
 		t.Fatalf("ApplyPatches: %v", err)
 	}
-	if len(changes) != 2 {
-		t.Fatalf("changes = %d, want 2", len(changes))
+	if len(changes) != 1 {
+		t.Fatalf("changes = %d, want 1", len(changes))
 	}
 	params, _ := resource["model_parameters"].(map[string]any)
-	if params["max_context_tokens"] != 24576.0 ||
-		params["compaction_recent_groups"] != 5.0 {
+	if params["max_context_tokens"] != 24576.0 {
 		t.Fatalf("patches not persisted: %v", params)
-	}
-
-	// 非法 patch 必须整体失败且不污染快照。
-	if _, err := reg.ApplyPatches(resource, map[string]any{
-		"compaction_recent_groups": 4.0,
-	}); err == nil {
-		t.Fatal("invalid compaction_recent_groups patch must be rejected")
-	}
-	if params["compaction_recent_groups"] != 5.0 {
-		t.Fatalf("failed patch must not mutate resource: %v", params)
 	}
 }

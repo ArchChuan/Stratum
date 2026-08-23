@@ -126,15 +126,14 @@ func ComposeSystemAssistantProfile(
 		Description: cfg.Description,
 		// 系统提示词由内置 agent 实例的 agents.system_prompt DB 字段承载，
 		// 代码不再覆盖（存量租户由 tenant_schema 幂等回填）。
-		SystemPrompt:           cfg.SystemPrompt,
-		LLMModel:               cfg.LLMModel,
-		MaxIterations:          cfg.MaxIterations,
-		MaxContextTokens:       cfg.MaxContextTokens,
-		Temperature:            cfg.Temperature,
-		MaxTokens:              cfg.MaxTokens,
-		CompactionRecentGroups: cfg.CompactionRecentGroups,
-		MemoryParameters:       copyCfg.MemoryParameters,
-		MemoryScope:            cfg.MemoryScope, SystemKey: profile.Key, IsSystem: true, ManagementMode: "platform",
+		SystemPrompt:     cfg.SystemPrompt,
+		LLMModel:         cfg.LLMModel,
+		MaxIterations:    cfg.MaxIterations,
+		MaxContextTokens: cfg.MaxContextTokens,
+		Temperature:      cfg.Temperature,
+		MaxTokens:        cfg.MaxTokens,
+		MemoryParameters: copyCfg.MemoryParameters,
+		MemoryScope:      cfg.MemoryScope, SystemKey: profile.Key, IsSystem: true, ManagementMode: "platform",
 		MCPToolIDs: copyCfg.MCPToolIDs, KnowledgeWorkspaceIDs: copyCfg.KnowledgeWorkspaceIDs,
 		AllowedSkills: copyCfg.AllowedSkills,
 	}, nil

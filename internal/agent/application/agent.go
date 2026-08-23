@@ -393,12 +393,6 @@ func (a *BaseAgent) snapshotExecutionConfig(cfg *ExecutionConfig) agentExecSnaps
 	if cfg.MaxTokens == 0 {
 		cfg.MaxTokens = a.MaxTokens
 	}
-	if cfg.CompactionRecentGroups == 0 {
-		cfg.CompactionRecentGroups = a.CompactionRecentGroups
-	}
-	if cfg.CompactionCooldownSec == 0 {
-		cfg.CompactionCooldownSec = a.CompactionCooldownSec
-	}
 	if cfg.MaxTokensPerExecution == 0 {
 		cfg.MaxTokensPerExecution = a.MaxTokensPerExecution
 	}
@@ -455,13 +449,71 @@ func (a *BaseAgent) resolveGlobalSystemSuffix(ctx context.Context) (string, erro
 		return "", fmt.Errorf("agent: resolve global system prompt: %w", err)
 	}
 	if !ok {
-		return "", fmt.Errorf("agent: agent.system_prompt not configured (fail-closed)")
+		return "", fmt.Errorf("agent: %w", domain.ErrSystemPromptNotConfigured)
 	}
 	suffix, ok := v.(string)
 	if !ok || strings.TrimSpace(suffix) == "" {
-		return "", fmt.Errorf("agent: agent.system_prompt not configured (fail-closed)")
+		return "", fmt.Errorf("agent: %w", domain.ErrSystemPromptNotConfigured)
 	}
 	return suffix, nil
+}
+
+// platformExecutionParams 是执行时从平台参数解析的全局后缀与压缩行为值。
+type platformExecutionParams struct {
+	globalSuffix string
+	recentGroups int
+	cooldownSec  int
+}
+
+// resolvePlatformExecutionParams 汇总执行时平台参数：全局系统提示词
+// （fail-closed）+ 压缩最近轮数/冷却（0=unset，消费端按文档默认处理）。
+func (a *BaseAgent) resolvePlatformExecutionParams(ctx context.Context) (platformExecutionParams, error) {
+	suffix, err := a.resolveGlobalSystemSuffix(ctx)
+	if err != nil {
+		return platformExecutionParams{}, err
+	}
+	return platformExecutionParams{
+		globalSuffix: suffix,
+		recentGroups: a.resolvePlatformInt(ctx, "agent.compaction_recent_groups"),
+		cooldownSec:  a.resolvePlatformInt(ctx, "agent.compaction_cooldown_sec"),
+	}, nil
+}
+
+// applyPlatformExecutionParams 把解析后的平台值写入执行配置：全局后缀恒写入；
+// recent groups/cooldown 仅填空（option 显式值优先，0=unset 与 snapshot
+// backfill 语义一致）。
+func applyPlatformExecutionParams(cfg *ExecutionConfig, params platformExecutionParams) {
+	cfg.GlobalSystemSuffix = params.globalSuffix
+	if cfg.CompactionRecentGroups == 0 {
+		cfg.CompactionRecentGroups = params.recentGroups
+	}
+	if cfg.CompactionCooldownSec == 0 {
+		cfg.CompactionCooldownSec = params.cooldownSec
+	}
+}
+
+// resolvePlatformInt 解析平台级整数参数；未配置/解析失败回退 0（0=unset 语义，
+// 优化输入不是执行门禁，不回退代码常量）。
+func (a *BaseAgent) resolvePlatformInt(ctx context.Context, key string) int {
+	if a.PlatformPromptResolver == nil {
+		return 0
+	}
+	v, ok, err := a.PlatformPromptResolver.ResolvePlatform(ctx, key)
+	if err != nil || !ok {
+		return 0
+	}
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case float32:
+		return int(n)
+	case int:
+		return n
+	case int64:
+		return int(n)
+	default:
+		return 0
+	}
 }
 
 // effectiveSystemPromptVersion returns the caller-provided version when set,
@@ -489,13 +541,13 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	cfg := &ExecutionConfig{}
 	cfg.ApplyOptions(options)
 
-	// 全局系统提示词执行时解析（平台参数 agent.system_prompt，未配置
-	// fail-closed，无环境变量/代码兜底）；所有 agent 统一追加。
-	suffix, err := a.resolveGlobalSystemSuffix(ctx)
+	// 执行时平台参数解析：全局系统提示词（未配置 fail-closed）+ 压缩最近轮数/
+	// 冷却（0=unset 回退消费端默认）。所有 agent（含内置助手）同源。
+	params, err := a.resolvePlatformExecutionParams(ctx)
 	if err != nil {
 		return nil, err
 	}
-	cfg.GlobalSystemSuffix = suffix
+	applyPlatformExecutionParams(cfg, params)
 
 	// Snapshot mutable fields under lock, then release before the long LLM call.
 	snap := a.snapshotExecutionConfig(cfg)
@@ -1013,8 +1065,9 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 	if ec.cfg.SystemAssistantMode {
 		availableTools = nil
 	}
-	// 压缩冷却默认启用（Spec 第 4 节）：0 = constants.DefaultCompactionCooldown。
-	// registry 参数 agent.compaction_cooldown_sec 经 WithCompactionCooldownSec 覆盖。
+	// 压缩冷却默认启用（Spec 第 4 节）：平台参数 agent.compaction_cooldown_sec
+	// 已在 Execute 解析进 cfg；0 = constants.DefaultCompactionCooldown，option
+	// 仍可覆盖。
 	cooldownSec := ec.cfg.CompactionCooldownSec
 	if cooldownSec <= 0 {
 		cooldownSec = int(constants.DefaultCompactionCooldown.Seconds())

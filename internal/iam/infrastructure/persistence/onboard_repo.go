@@ -161,19 +161,24 @@ func (r *OnboardRepo) FindUsernameByUserID(ctx context.Context, userID string) (
 	return username, nil
 }
 
-// GetUserTenantByUserID returns the user's default tenant ID and role by user UUID.
+// GetUserTenantByUserID returns the tenant a user should land in at login:
+// first the non-default tenant they created (owner), else the first non-default
+// tenant they joined, else the default tenant. Ties break by tenant creation
+// order; soft-deleted tenants are skipped.
 func (r *OnboardRepo) GetUserTenantByUserID(ctx context.Context, userID string) (string, string, error) {
 	var tid, role string
 	err := r.db.QueryRow(ctx,
 		`SELECT tm.tenant_id::text, COALESCE(tm.role, 'member')
 		 FROM tenant_members tm
 		 JOIN tenants t ON t.id = tm.tenant_id
-		 WHERE tm.user_id = $1 AND t.is_default = true`,
+		 WHERE tm.user_id = $1 AND t.deleted_at IS NULL
+		 ORDER BY t.is_default ASC, (tm.role = 'owner') DESC, t.created_at ASC
+		 LIMIT 1`,
 		userID,
 	).Scan(&tid, &role)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", "", fmt.Errorf("onboard_repo: user %s has no default tenant: %w", userID, domain.ErrMemberNotFound)
+			return "", "", fmt.Errorf("onboard_repo: user %s has no tenant membership: %w", userID, domain.ErrMemberNotFound)
 		}
 		return "", "", fmt.Errorf("onboard_repo: get user tenant by id: %w", err)
 	}

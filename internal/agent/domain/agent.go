@@ -58,12 +58,6 @@ type AgentConfig struct {
 	ReasoningEffort string
 	// MaxTokens 0 means unset: no explicit output cap.
 	MaxTokens int
-	// CompactionRecentGroups overrides in-loop compaction recent groups.
-	// 0 means auto-derive from MaxContextTokens.
-	CompactionRecentGroups int
-	// CompactionCooldownSec overrides the in-loop compaction cooldown.
-	// 0 = default constant.
-	CompactionCooldownSec int
 	// MaxTokensPerExecution is the execution-wide LLM token budget. 0 = unlimited.
 	MaxTokensPerExecution int
 	// MemoryParameters holds the memory.* resource-scope registry keys

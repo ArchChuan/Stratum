@@ -261,6 +261,10 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    # 全量 -race 套件只在 PR 上跑:合并 main 时 PR 已完整验证过同一树,
+    # 重复跑只拖慢 CD 前置(workflow_run 等 CI success)。合并后的树由
+    # build 冒烟(编译+vet)+lint+contract+migration-rollback+安全扫描兜底。
+    if: ${{ github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -314,6 +318,9 @@ jobs:
   workflow-e2e:
     name: Workflow E2E
     runs-on: ubuntu-latest
+    # 窄范围集成 E2E 与 platform-assistant-e2e 一样只在 PR 上跑,
+    # 避免 merge main 后重复执行;合并后由 build 冒烟 + CD 真实部署验证。
+    if: ${{ github.event_name == 'pull_request' }}
     services:
       postgres:
         image: postgres:16-alpine
@@ -346,6 +353,8 @@ jobs:
   platform-assistant-e2e:
     name: Platform Assistant PostgreSQL E2E
     runs-on: ubuntu-latest
+    # 只在 PR 上跑(理由同 test/workflow-e2e):main push 由 build 冒烟兜底。
+    if: ${{ github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -364,6 +373,10 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     needs: [guardrails, lint, test, contract, workflow-e2e, platform-assistant-e2e]
+    # PR 上保持原语义(所有依赖成功才跑);main push 上 test/workflow-e2e/
+    # platform-assistant-e2e 被跳过(PR 已验证),build 作为编译+vet 冒烟仍执行,
+    # 保证合并树 ./cmd/server 能编译,CD 不会在 build-backend 阶段才暴露。
+    if: ${{ github.event_name != 'pull_request' || success() }}
     steps:
       - uses: actions/checkout@v4
 

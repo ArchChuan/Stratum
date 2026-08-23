@@ -166,7 +166,11 @@ jobs:
           # 与 backend/adapter 一致:ACR 拒绝 buildx 默认 attestation,禁用 provenance/sbom。
           provenance: false
           sbom: false
-          no-cache: true
+          # #219 用 no-cache 绕过 BuildKit overlay bug;根因(web/.dockerignore 排除
+          # node_modules + Dockerfile 依赖层序)已修,恢复 gha cache,源码变更只重跑
+          # npm ci 之后的层,省去每次部署的前端冷构建。
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max
 
   build-feishu-adapter:
     name: Build Feishu Alert Adapter

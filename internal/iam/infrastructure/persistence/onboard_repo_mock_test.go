@@ -265,7 +265,24 @@ func TestGetUserTenantByUserID_success(t *testing.T) {
 	mock := newIAMMock(t)
 	repo := NewOnboardRepo(mock)
 
-	mock.ExpectQuery("t\\.is_default = true").
+	// 选择顺序必须符合登录规格：非默认(自己创建 owner 优先、其次加入) -> 默认；
+	// 同优先级按租户创建时间正序，且排除已软删除租户。
+	mock.ExpectQuery("ORDER BY t\\.is_default ASC, \\(tm\\.role = 'owner'\\) DESC, t\\.created_at ASC\\s+LIMIT 1").
+		WithArgs("u1").
+		WillReturnRows(pgxmock.NewRows([]string{"tid", "role"}).AddRow("t1", "member"))
+
+	tid, role, err := repo.GetUserTenantByUserID(context.Background(), "u1")
+	require.NoError(t, err)
+	require.Equal(t, "t1", tid)
+	require.Equal(t, "member", role)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetUserTenantByUserID_filtersDeletedTenants(t *testing.T) {
+	mock := newIAMMock(t)
+	repo := NewOnboardRepo(mock)
+
+	mock.ExpectQuery("AND t\\.deleted_at IS NULL").
 		WithArgs("u1").
 		WillReturnRows(pgxmock.NewRows([]string{"tid", "role"}).AddRow("t1", "owner"))
 
@@ -276,11 +293,11 @@ func TestGetUserTenantByUserID_success(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestGetUserTenantByUserID_noDefaultTenant(t *testing.T) {
+func TestGetUserTenantByUserID_noMembership(t *testing.T) {
 	mock := newIAMMock(t)
 	repo := NewOnboardRepo(mock)
 
-	mock.ExpectQuery("t\\.is_default = true").
+	mock.ExpectQuery("ORDER BY t\\.is_default ASC").
 		WithArgs("u1").
 		WillReturnError(pgx.ErrNoRows)
 
@@ -293,7 +310,7 @@ func TestGetUserTenantByUserID_queryFails(t *testing.T) {
 	mock := newIAMMock(t)
 	repo := NewOnboardRepo(mock)
 
-	mock.ExpectQuery("t\\.is_default = true").
+	mock.ExpectQuery("ORDER BY t\\.is_default ASC").
 		WithArgs("u1").
 		WillReturnError(pgx.ErrTxClosed)
 

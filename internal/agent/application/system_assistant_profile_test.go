@@ -25,6 +25,47 @@ func (s stubPromptResolver) ResolvePlatform(_ context.Context, _ string) (any, b
 	return s.value, true, nil
 }
 
+// keyedPromptResolver 按 key 返回平台参数值，供执行时平台解析测试。
+type keyedPromptResolver struct {
+	values map[string]any
+}
+
+func (r keyedPromptResolver) ResolvePlatform(_ context.Context, key string) (any, bool, error) {
+	if v, ok := r.values[key]; ok {
+		return v, true, nil
+	}
+	return nil, false, nil
+}
+
+// TestResolvePlatformExecutionParams 验证执行时平台参数解析：全局后缀 fail-closed，
+// 压缩最近轮数/冷却未配置回退 0（0=unset，消费端按文档默认处理）。
+func TestResolvePlatformExecutionParams(t *testing.T) {
+	base := NewBaseAgent(&domain.AgentConfig{ID: "agent-1"}, zap.NewNop())
+	base.PlatformPromptResolver = keyedPromptResolver{values: map[string]any{
+		"agent.system_prompt":            "platform rules",
+		"agent.compaction_recent_groups": float64(3),
+		"agent.compaction_cooldown_sec":  float64(15),
+	}}
+
+	params, err := base.resolvePlatformExecutionParams(context.Background())
+	if err != nil {
+		t.Fatalf("resolvePlatformExecutionParams: %v", err)
+	}
+	if params.globalSuffix != "platform rules" || params.recentGroups != 3 || params.cooldownSec != 15 {
+		t.Fatalf("params = %+v, want suffix/platform rules, groups 3, cooldown 15", params)
+	}
+
+	// 未配置 → recent/cooldown 回退 0，后缀 fail-closed。
+	unset := NewBaseAgent(&domain.AgentConfig{ID: "agent-2"}, zap.NewNop())
+	unset.PlatformPromptResolver = keyedPromptResolver{values: map[string]any{}}
+	if _, err := unset.resolvePlatformExecutionParams(context.Background()); err == nil {
+		t.Fatal("unset global suffix must fail closed")
+	}
+	if got := unset.resolvePlatformInt(context.Background(), "agent.compaction_recent_groups"); got != 0 {
+		t.Fatalf("unset recent groups = %d, want 0", got)
+	}
+}
+
 // TestResolveGlobalSystemSuffix 验证全局系统提示词解析语义：平台参数已配置 →
 // 返回后缀；未配置/无 resolver → fail-closed；系统助手与普通 agent 一视同仁；
 // nil resolver（测试直构）回退 agent 字段。
@@ -161,19 +202,17 @@ func TestComposeSystemAssistantProfileManagedBranchPreservesSamplingFields(t *te
 	profile := BuiltinSystemAssistantProfile()
 	want := &domain.AgentConfig{
 		ID: "assistant-1", SystemKey: domain.SystemAssistantKey,
-		LLMModel:               "qwen-plus",
-		Temperature:            0.7,
-		MaxTokens:              2048,
-		CompactionRecentGroups: 4,
-		MemoryParameters:       map[string]any{"memory.recall_top_k": 9},
+		LLMModel:         "qwen-plus",
+		Temperature:      0.7,
+		MaxTokens:        2048,
+		MemoryParameters: map[string]any{"memory.recall_top_k": 9},
 	}
 
 	got, err := ComposeSystemAssistantProfile(want, profile)
 	if err != nil {
 		t.Fatalf("ComposeSystemAssistantProfile() error = %v", err)
 	}
-	if got.Temperature != want.Temperature || got.MaxTokens != want.MaxTokens ||
-		got.CompactionRecentGroups != want.CompactionRecentGroups {
+	if got.Temperature != want.Temperature || got.MaxTokens != want.MaxTokens {
 		t.Fatalf("managed branch dropped sampling fields: got %#v, want %#v", got, want)
 	}
 	if got.MemoryParameters["memory.recall_top_k"] != 9 {
