@@ -1,0 +1,17 @@
+# 构建上下文瘦身 + BuildKit overlay 冲突根因修复。
+#
+# #219/#220 的 "cannot replace to directory with file" 根源是 node_modules
+# 未排除出上下文:COPY . . 会把本地 node_modules 的目录元数据带进 overlay,
+# 与 npm ci 生成的 node_modules 层冲突。排除后 COPY 不再携带 node_modules,
+# npm ci 层可安全命中 layer 缓存(配合 gha cache 生效)。
+#
+# 注意:web/.env.production 等 .env 文件参与 Vite 构建(--mode production),
+# 不得排除。dist/.git 等构建产物与本地噪音同样不入镜。
+node_modules
+dist
+.git
+.gitignore
+.vite
+*.log
+npm-debug.log*
+.DS_Store

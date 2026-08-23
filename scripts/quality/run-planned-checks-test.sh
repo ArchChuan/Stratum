@@ -37,8 +37,9 @@ run_case() {
     PATH="$test_dir:$PATH" TEST_VERIFY_PLAN_PATH="$test_dir/plan.json" \
       bash "$root/scripts/quality/run-planned-checks.sh"
   fi
-  # `-p N` 是负载感知动态值（CI 2 核→1，本地 12 核→4），契约只守结构不守具体值
-  actual=$(paste -sd' ' "$log" | sed -E 's/-p [0-9]+/-p N/g')
+  # `-p N` 是负载感知动态值（CI 2 核→1，本地 12 核→4），契约只守结构不守具体值。
+  # 分组并行执行后组间顺序不确定，契约只守"执行了哪些命令"而非先后次序，先排序再比较。
+  actual=$(sort "$log" | paste -sd' ' | sed -E 's/-p [0-9]+/-p N/g')
   if [[ "$actual" != "$expected" ]]; then
     printf 'planned checks: got %q, want %q\n' "$actual" "$expected" >&2
     exit 1
@@ -47,9 +48,9 @@ run_case() {
 
 run_case '["docs-lint"]' 'make:agent-instructions-check'
 run_case '["static","unit","build","code-quality"]' \
-  'make:risk-guardrails code-quality go:vet ./... go:list ./... go:test -short -p N github.com/byteBuilderX/stratum/internal/agent go:build -p N ./cmd/server make:fe-lint fe-build'
+  'go:build -p N ./cmd/server go:list ./... go:test -short -p N github.com/byteBuilderX/stratum/internal/agent go:vet ./... make:-o proto-gen fe-lint fe-build make:-o proto-gen risk-guardrails code-quality make:proto-gen'
 run_case '["static","unit","integration","contract","domain-failure-paths","e2e-short","e2e-soak"]' \
-  'make:risk-guardrails code-quality go:vet ./... go:list ./... go:test -short -p N github.com/byteBuilderX/stratum/internal/agent make:contract-test'
+  'go:list ./... go:test -short -p N github.com/byteBuilderX/stratum/internal/agent go:vet ./... make:-o proto-gen contract-test make:-o proto-gen risk-guardrails code-quality make:proto-gen'
 
 # CI_OWNED=1：CI 兜底的单元全部跳过，本地只保留非 CI 项（E2E 由 before-pr 脚本的 run_browser_mode 执行）
 run_case '["static","unit","integration","contract","code-quality","e2e-short"]' \
