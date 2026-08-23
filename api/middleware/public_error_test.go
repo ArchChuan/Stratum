@@ -163,3 +163,69 @@ func TestErrorHandlerDoesNotLeakUnknownServerError(t *testing.T) {
 		t.Fatalf("body = %q, want %q", response.Body.String(), wantBody)
 	}
 }
+
+// 平台 fail-closed 参数未配置（system_prompt / compaction_prompt）必须映射为
+// 具体中文与专用 code，而非笼统的 "internal server error"——用户可读、管理员可定位。
+func TestPublicErrorDescribesFailClosedPromptSentinels(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want PublicErrorDescriptor
+	}{
+		{
+			name: "system_prompt",
+			err:  fmt.Errorf("agent: %w", agentdomain.ErrSystemPromptNotConfigured),
+			want: PublicErrorDescriptor{
+				Message: "平台未配置全局系统提示词（agent.system_prompt），请联系平台管理员在参数配置中补全后重试",
+				Code:    CodeSystemPromptNotConfigured,
+			},
+		},
+		{
+			name: "compaction_prompt",
+			err:  fmt.Errorf("history compactor: %w", agentdomain.ErrCompactionPromptNotConfigured),
+			want: PublicErrorDescriptor{
+				Message: "平台未配置对话历史压缩提示词（agent.compaction_prompt），请联系平台管理员在参数配置中补全后重试",
+				Code:    CodeCompactionPromptNotConfigured,
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DescribePublicError(tc.err, http.StatusServiceUnavailable)
+			if got != tc.want {
+				t.Fatalf("DescribePublicError() = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMapErrorToStatusMapsFailClosedPromptToServiceUnavailable(t *testing.T) {
+	if got := MapErrorToStatus(agentdomain.ErrSystemPromptNotConfigured); got != http.StatusServiceUnavailable {
+		t.Fatalf("MapErrorToStatus(system) = %d, want %d", got, http.StatusServiceUnavailable)
+	}
+	if got := MapErrorToStatus(agentdomain.ErrCompactionPromptNotConfigured); got != http.StatusServiceUnavailable {
+		t.Fatalf("MapErrorToStatus(compaction) = %d, want %d", got, http.StatusServiceUnavailable)
+	}
+}
+
+// SSE/HTTP 错误契约：fail-closed 未配置经 ErrorHandler 透出 code + 具体中文，
+// 前端据此渲染可读错误而非笼统 500。
+func TestErrorHandlerReturnsFailClosedPromptContract(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(ErrorHandler(zap.NewNop()))
+	router.GET("/assistant", func(c *gin.Context) {
+		_ = c.Error(fmt.Errorf("agent: %w", agentdomain.ErrSystemPromptNotConfigured))
+	})
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/assistant", nil))
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+	wantBody := "{\"code\":\"SYSTEM_PROMPT_NOT_CONFIGURED\",\"error\":\"平台未配置全局系统提示词（agent.system_prompt），请联系平台管理员在参数配置中补全后重试\"}"
+	if response.Body.String() != wantBody {
+		t.Fatalf("body = %q, want %q", response.Body.String(), wantBody)
+	}
+}

@@ -39,4 +39,11 @@ var (
 	ErrPlatformManagedSkillBinding = errors.New("platform-managed skill cannot be bound to a regular agent")
 	// ErrPlatformManagedMCPServerBinding 标记"平台托管 MCP server 挂载到普通 agent"边界。
 	ErrPlatformManagedMCPServerBinding = errors.New("platform-managed MCP server cannot be bound to a regular agent")
+	// ErrSystemPromptNotConfigured 标记平台全局系统提示词 agent.system_prompt 未配置
+	// （fail-closed：禁止空后缀静默执行）。错误文本保留 "not configured (fail-closed)"
+	// 后缀以兼容既有日志检索；作为 sentinel 供 middleware 映射为可读中文。
+	ErrSystemPromptNotConfigured = errors.New("agent.system_prompt not configured (fail-closed)")
+	// ErrCompactionPromptNotConfigured 标记平台压缩提示词 agent.compaction_prompt 未配置
+	// （fail-closed：禁止空 system prompt 静默调用 LLM）。
+	ErrCompactionPromptNotConfigured = errors.New("agent.compaction_prompt not configured (fail-closed)")
 )

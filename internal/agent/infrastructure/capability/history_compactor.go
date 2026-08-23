@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
@@ -96,18 +97,18 @@ func NewLLMHistoryCompactor(gw port.CapabilityGateway, logger *zap.Logger, compa
 // 空 system prompt 静默调用 LLM（对齐 memory.*_prompt 模式）。
 func (c *LLMHistoryCompactor) resolvePrompt(ctx context.Context) (string, error) {
 	if c.promptResolver == nil {
-		return "", fmt.Errorf("history compactor: agent.compaction_prompt not configured (fail-closed)")
+		return "", fmt.Errorf("history compactor: %w", domain.ErrCompactionPromptNotConfigured)
 	}
 	v, ok, err := c.promptResolver.ResolvePlatform(ctx, "agent.compaction_prompt")
 	if err != nil {
 		return "", fmt.Errorf("history compactor: resolve compaction prompt: %w", err)
 	}
 	if !ok {
-		return "", fmt.Errorf("history compactor: agent.compaction_prompt not configured (fail-closed)")
+		return "", fmt.Errorf("history compactor: %w", domain.ErrCompactionPromptNotConfigured)
 	}
 	prompt, ok := v.(string)
 	if !ok || strings.TrimSpace(prompt) == "" {
-		return "", fmt.Errorf("history compactor: agent.compaction_prompt not configured (fail-closed)")
+		return "", fmt.Errorf("history compactor: %w", domain.ErrCompactionPromptNotConfigured)
 	}
 	return prompt, nil
 }

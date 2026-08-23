@@ -442,11 +442,11 @@ func (a *BaseAgent) resolveGlobalSystemSuffix(ctx context.Context) (string, erro
 		return "", fmt.Errorf("agent: resolve global system prompt: %w", err)
 	}
 	if !ok {
-		return "", fmt.Errorf("agent: agent.system_prompt not configured (fail-closed)")
+		return "", fmt.Errorf("agent: %w", domain.ErrSystemPromptNotConfigured)
 	}
 	suffix, ok := v.(string)
 	if !ok || strings.TrimSpace(suffix) == "" {
-		return "", fmt.Errorf("agent: agent.system_prompt not configured (fail-closed)")
+		return "", fmt.Errorf("agent: %w", domain.ErrSystemPromptNotConfigured)
 	}
 	return suffix, nil
 }
