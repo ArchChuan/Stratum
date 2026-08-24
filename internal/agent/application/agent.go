@@ -699,7 +699,11 @@ func startAgentExecuteSpan(
 	tracer oteltrace.Tracer,
 	executionAttrs []attribute.KeyValue,
 ) (context.Context, oteltrace.Span) {
-	execAttrs := append(executionAttrs, attribute.Bool(observability.AgentExecuteAttrKey, true))
+	// copy-then-append：避免就地修改调用方底层数组，同时让 gocritic appendAssign
+	// 看到 append 结果赋回同一变量（execAttrs := append(executionAttrs, ...) 会被误报）。
+	execAttrs := make([]attribute.KeyValue, 0, len(executionAttrs)+1)
+	execAttrs = append(execAttrs, executionAttrs...)
+	execAttrs = append(execAttrs, attribute.Bool(observability.AgentExecuteAttrKey, true))
 	return tracer.Start(ctx, "agent.execute",
 		oteltrace.WithNewRoot(),
 		oteltrace.WithAttributes(execAttrs...),
