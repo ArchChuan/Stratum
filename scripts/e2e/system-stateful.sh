@@ -175,13 +175,22 @@ prepare_database() {
   phase=platform-params-seed
   # 提示词平台化（fail-closed）前提：agent.system_prompt / agent.compaction_prompt
   # 未配置时 agent 执行/压缩 fail-closed，与生产一致。E2E 环境在此预置测试值。
+  # P1 后读取已切到 production label 快照（platform_config_versions /
+  # platform_config_labels），直写 platform_settings 不再生效。seed 填充 agent 组
+  # version-1 快照（backfill 生成的空快照），production/latest label 已指向
+  # version-1，等价于系统在初始空配置上预置测试提示词。
   seed_command=${STATEFUL_E2E_PLATFORM_PARAMS_SEED_COMMAND:-"pg=\$(docker ps --format '{{.Names}} {{.Ports}}' | awk '/0.0.0.0:5432->/{print \$1; exit}'); [ -n \"\$pg\" ] && docker exec -i \"\$pg\" psql \"$TEST_DATABASE_URL\" -v ON_ERROR_STOP=1"}
   bash -c "$seed_command" <<'SQL' || return 1
-INSERT INTO public.platform_settings (key, value, updated_by, updated_at)
-VALUES
-  ('agent.system_prompt', '"你是 Stratum E2E 测试助手。回答前优先调用可用工具验证，禁止编造。\n\n## 工具调用\n- 回答事实性问题前必须先调用工具。\n- 工具失败时如实说明，禁止声称成功。"', 'stateful-e2e', NOW()),
-  ('agent.compaction_prompt', '"你是对话历史压缩器。把以下对话压成要点摘要，保留关键事实、已达成的决定与未解决问题，只输出摘要正文。"', 'stateful-e2e', NOW())
-ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = NOW();
+UPDATE public.platform_config_versions
+SET snapshot = '{
+  "agent.system_prompt": "你是 Stratum E2E 测试助手。回答前优先调用可用工具验证，禁止编造。\n\n## 工具调用\n- 回答事实性问题前必须先调用工具。\n- 工具失败时如实说明，禁止声称成功。",
+  "agent.compaction_prompt": "你是对话历史压缩器。把以下对话压成要点摘要，保留关键事实、已达成的决定与未解决问题，只输出摘要正文。"
+}'::jsonb,
+    message = 'stateful-e2e platform params seed',
+    created_by = 'stateful-e2e'
+WHERE group_key = 'agent'
+  AND version_seq = 1
+  AND status = 'published';
 SQL
 }
 start_services() {
