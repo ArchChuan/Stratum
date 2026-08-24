@@ -294,6 +294,11 @@ func registerParameterAdminRoutes(adminGroup *gin.RouterGroup, c *wiring.Contain
 	adminGroup.GET("/parameters/schema", paramHandler.Schema)
 	adminGroup.GET("/parameters", paramHandler.List)
 	adminGroup.PUT("/parameters", paramHandler.Update)
+	// 版本化配置端点（版本历史 / 创建草稿 / 发布 / 回滚），同组 RequireGlobalAdmin。
+	adminGroup.GET("/parameters/versions/:groupKey", paramHandler.Versions)
+	adminGroup.POST("/parameters/versions/:groupKey", paramHandler.CreateDraft)
+	adminGroup.POST("/parameters/versions/:groupKey/:versionID/publish", paramHandler.Publish)
+	adminGroup.POST("/parameters/versions/:groupKey/:versionID/rollback", paramHandler.Rollback)
 }
 
 // dlqReplayAdapter 把 pipeline.ReplayService 适配到 handler 的消费方接口

@@ -177,6 +177,34 @@ func (m *wiringPlatformStore) GetAll(_ context.Context) ([]parametersport.Platfo
 	return out, nil
 }
 
+// GetSnapshot 按 GroupForKey 过滤出该组快照（模拟 production label 所指版本
+// 的不可变快照）；GetValue 保留读取路径的单一 key 查询语义。
+func (m *wiringPlatformStore) GetSnapshot(_ context.Context, groupKey string) (map[string]json.RawMessage, error) {
+	out := make(map[string]json.RawMessage)
+	for key, raw := range m.values {
+		if parametersdomain.GroupForKey(key) == groupKey {
+			out[key] = raw
+		}
+	}
+	return out, nil
+}
+
+func (m *wiringPlatformStore) CreateDraft(_ context.Context, _ string, _ map[string]json.RawMessage, _, _ string) (parametersport.PlatformVersion, error) {
+	return parametersport.PlatformVersion{}, nil
+}
+
+func (m *wiringPlatformStore) Publish(_ context.Context, _ string, _ int64, _ string) error {
+	return nil
+}
+
+func (m *wiringPlatformStore) Rollback(_ context.Context, _ string, _ int64, _ string) error {
+	return nil
+}
+
+func (m *wiringPlatformStore) ListVersions(_ context.Context, _ string) ([]parametersport.PlatformVersion, error) {
+	return []parametersport.PlatformVersion{}, nil
+}
+
 // TestPlatformParamResolverFallback 守护 platformParamResolver 的编排：
 // 平台声明值优先；无声明回落 registry 定义默认；svc 缺失 fail-closed 到 absent。
 func TestPlatformParamResolverFallback(t *testing.T) {

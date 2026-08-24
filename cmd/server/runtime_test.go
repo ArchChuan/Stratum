@@ -204,3 +204,32 @@ func TestRunGuestReaperSurvivesTickPanic(t *testing.T) {
 		t.Error("IncGoroutinePanic was not called after recovery")
 	}
 }
+
+func TestParseSamplingRatio(t *testing.T) {
+	cases := []struct {
+		name  string
+		raw   string
+		want  float64
+		valid bool
+	}{
+		{name: "empty falls back", raw: "", want: 1.0, valid: false},
+		{name: "zero point five", raw: "0.5", want: 0.5, valid: true},
+		{name: "one", raw: "1", want: 1.0, valid: true},
+		{name: "zero rejected", raw: "0", want: 1.0, valid: false},
+		{name: "negative rejected", raw: "-0.1", want: 1.0, valid: false},
+		{name: "over one rejected", raw: "1.5", want: 1.0, valid: false},
+		{name: "garbage rejected", raw: "abc", want: 1.0, valid: false},
+		// NaN 对 <=0 和 >1 两个比较都恒 false，必须显式拦截，否则 TraceIDRatioBased(NaN)
+		// 会静默变成全量采样（fail-safe 绕过）。
+		{name: "NaN rejected", raw: "NaN", want: 1.0, valid: false},
+		{name: "nan rejected", raw: "nan", want: 1.0, valid: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parseSamplingRatio(tc.raw)
+			if ok != tc.valid || got != tc.want {
+				t.Errorf("parseSamplingRatio(%q) = (%v, %v), want (%v, %v)", tc.raw, got, ok, tc.want, tc.valid)
+			}
+		})
+	}
+}

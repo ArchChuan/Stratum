@@ -17,6 +17,9 @@ const (
 	ResourceKindEvaluation = "evaluation" // 新增：评测实验生命周期
 	ResourceKindModel      = "model"      // 新增：LLM 模型目录可编辑参数
 	ResourceKindProvider   = "provider"   // 新增：LLM provider 配置
+	// ResourceKindPlatformConfig = "platform_config"：平台配置分组（agent/
+	// memory/evaluation/trace）的版本发布/回滚审计，ResourceID 为 group_key。
+	ResourceKindPlatformConfig = "platform_config"
 )
 
 // Operations recorded for each committed change.
@@ -104,3 +107,14 @@ const ChangeAuditInsertSQL = `INSERT INTO resource_change_audits
     (id, tenant_id, resource_kind, resource_id, operation, actor_id, actor_type,
      source, proposal_id, before_projection, after_projection)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`
+
+// PlatformChangeAuditInsertSQL is the shared column contract for persisting a
+// public-catalog audit row (platform_resource_change_audits) inside the same
+// public transaction as the business change. Callers pass $6 as the actor's
+// tenant (NULL for global-admin platform ops) and $1..$11 otherwise mirroring
+// ResourceChangeAuditEvent. Column list must stay in lockstep with the 039
+// migration DDL (asserted by change_audit_insert_test.go).
+const PlatformChangeAuditInsertSQL = `INSERT INTO public.platform_resource_change_audits
+    (id, scope, resource_kind, resource_id, operation, actor_id, actor_tenant_id,
+     actor_type, source, proposal_id, before_projection, after_projection)
+    VALUES ($1,'platform',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`

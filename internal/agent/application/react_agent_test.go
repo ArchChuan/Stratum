@@ -12,6 +12,7 @@ import (
 	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
@@ -387,6 +388,49 @@ func TestBaseAgentOTelHierarchyFollowsReActGraphContext(t *testing.T) {
 	require.Equal(t, "tool-revision-1", toolAttrs["opik.metadata.stratum.resource_revision_id"])
 	require.NotEmpty(t, toolAttrs["stratum.arguments.sha256"])
 	require.NotEmpty(t, toolAttrs["stratum.result.sha256"])
+}
+
+// TestBaseAgentHTTPDroppedParentStillSamplesAgentExecute is the HTTP-entry
+// regression guard for the P0 sampler: with OTEL_SAMPLING_RATIO=0.1-style head
+// sampling the otelgin root span is dropped, and if agent.execute were its
+// child span ParentBased would short-circuit on the parent's sampling bit and
+// never call the agent sampler — the whole agent trace would vanish before
+// reaching the collector. agent.execute must be its own root (WithNewRoot) and
+// carry the agent attribute so NewAgentSampler always RecordAndSample's it.
+func TestBaseAgentHTTPDroppedParentStillSamplesAgentExecute(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(
+		sdktrace.WithSpanProcessor(recorder),
+		// ratio=0：非 agent 根全丢，agent.execute 恒采（模拟生产 0.1 的极端形态）。
+		sdktrace.WithSampler(sdktrace.ParentBased(observability.NewAgentSampler(0))),
+	)
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previous)
+		_ = provider.Shutdown(context.Background())
+	})
+
+	// 模拟 HTTP 入口：先在请求 ctx 创建被丢弃的 otelgin 根 span。
+	httpCtx, httpSpan := provider.Tracer("stratum/test").Start(context.Background(), "POST /agents/:id/execute")
+	defer httpSpan.End()
+	require.False(t, httpSpan.SpanContext().IsSampled(), "HTTP root must be dropped at ratio 0")
+
+	a := newReActAgent()
+	a.SetCapGateway(&mockCapGW{responses: []port.CapabilityResponse{{Content: "answer"}}})
+	_, err := a.Execute(httpCtx, "question", agent.WithTenantID("tenant-1"))
+	require.NoError(t, err)
+
+	var execSpan sdktrace.ReadOnlySpan
+	for _, s := range recorder.Ended() {
+		if s.Name() == "agent.execute" {
+			execSpan = s
+			break
+		}
+	}
+	require.NotNil(t, execSpan, "agent.execute span must exist")
+	require.True(t, execSpan.SpanContext().IsSampled(), "agent.execute must stay sampled when its HTTP parent is dropped")
+	require.False(t, execSpan.Parent().IsValid(), "agent.execute must be a new root (WithNewRoot), not a child of the dropped HTTP span")
 }
 
 // TestBaseAgentExecutionSpanCarriesParamSnapshotAndPromptVersion verifies the

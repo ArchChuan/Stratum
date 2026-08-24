@@ -2,11 +2,14 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	paramapp "github.com/byteBuilderX/stratum/internal/parameters/application"
 	"github.com/byteBuilderX/stratum/internal/parameters/domain"
+	"github.com/byteBuilderX/stratum/internal/parameters/domain/port"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -73,4 +76,115 @@ func (h *ParameterHandler) Update(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, updated)
+}
+
+// createDraftRequest is the POST /admin/parameters/versions/:groupKey body.
+// snapshot carries the platform-scope keys to change (merged over the current
+// production snapshot); message is the operator's human-readable note.
+type createDraftRequest struct {
+	Snapshot map[string]any `json:"snapshot"`
+	Message  string         `json:"message"`
+}
+
+// Versions GET /admin/parameters/versions/:groupKey — the full version history
+// (newest first) with each immutable snapshot; the configuration audit view
+// diffs against base_version_id.
+func (h *ParameterHandler) Versions(c *gin.Context) {
+	versions, err := h.svc.Versions(c.Request.Context(), c.Param("groupKey"))
+	if err != nil {
+		h.renderVersionError(c, err)
+		return
+	}
+	if versions == nil {
+		versions = []port.PlatformVersion{}
+	}
+	c.JSON(http.StatusOK, versions)
+}
+
+// CreateDraft POST /admin/parameters/versions/:groupKey — validates and stores
+// a draft snapshot for the group (the only editable state). Actor comes from
+// the JWT; the body never carries by/tenant.
+func (h *ParameterHandler) CreateDraft(c *gin.Context) {
+	var body createDraftRequest
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON body: " + err.Error()})
+		return
+	}
+	actor := c.GetString(middleware.ContextKeySub)
+	version, err := h.svc.CreateDraft(c.Request.Context(), c.Param("groupKey"), body.Snapshot, body.Message, actor)
+	if err != nil {
+		var bad *domain.ErrInvalidParameter
+		if ok := domain.AsInvalidParameter(err, &bad); ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": bad.Error()})
+			return
+		}
+		h.renderVersionError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, version)
+}
+
+// Publish POST /admin/parameters/versions/:groupKey/:versionID/publish —
+// promotes a draft to published and moves the production/latest labels.
+func (h *ParameterHandler) Publish(c *gin.Context) {
+	versionID, ok := parseVersionID(c)
+	if !ok {
+		return
+	}
+	if err := h.svc.Publish(c.Request.Context(), c.Param("groupKey"), versionID, c.GetString(middleware.ContextKeySub)); err != nil {
+		h.renderVersionError(c, err)
+		return
+	}
+	// 返回生效值（production 快照），与 GET /admin/parameters 一致。
+	values, err := h.svc.PlatformValues(c.Request.Context())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, values)
+}
+
+// Rollback POST /admin/parameters/versions/:groupKey/:versionID/rollback —
+// moves the production/latest labels onto a historical published version.
+func (h *ParameterHandler) Rollback(c *gin.Context) {
+	versionID, ok := parseVersionID(c)
+	if !ok {
+		return
+	}
+	if err := h.svc.Rollback(c.Request.Context(), c.Param("groupKey"), versionID, c.GetString(middleware.ContextKeySub)); err != nil {
+		h.renderVersionError(c, err)
+		return
+	}
+	values, err := h.svc.PlatformValues(c.Request.Context())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, values)
+}
+
+// parseVersionID extracts the :versionID path parameter as int64, emitting a
+// 400 on malformed input.
+func parseVersionID(c *gin.Context) (int64, bool) {
+	id, err := strconv.ParseInt(c.Param("versionID"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid version id"})
+		return 0, false
+	}
+	return id, true
+}
+
+// renderVersionError maps version-domain errors to HTTP statuses; everything
+// else falls through to the unified error middleware (500).
+func (h *ParameterHandler) renderVersionError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, domain.ErrGroupNotFound), errors.Is(err, domain.ErrVersionNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	case errors.Is(err, domain.ErrVersionNotDraft), errors.Is(err, domain.ErrVersionNotPublished):
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	case errors.Is(err, domain.ErrConcurrentPublish):
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	default:
+		_ = c.Error(err)
+	}
 }

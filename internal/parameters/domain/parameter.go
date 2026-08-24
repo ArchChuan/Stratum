@@ -68,6 +68,7 @@ type VisualHint struct {
 type ParameterDefinition struct {
 	Key         string     `json:"key"`
 	Scope       Scope      `json:"scope"`
+	GroupKey    string     `json:"group_key,omitempty"` // 平台分组归属（agent/memory/evaluation/trace），仅 ScopePlatform 必有
 	Category    string     `json:"category"`
 	DisplayName string     `json:"display_name"` // 用户可见中文名
 	Description string     `json:"description"`

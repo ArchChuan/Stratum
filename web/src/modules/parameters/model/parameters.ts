@@ -37,3 +37,22 @@ export type PlatformValues = Record<string, unknown>;
 export interface PlatformSettingsFormValues {
   [key: string]: number | string | boolean | undefined;
 }
+
+// PlatformConfigVersion 是分组版本历史的一行（配置变更审计视图）。snapshot 是
+// 不可变快照，base_version_id 指向发布时生效的 production 版本（diff 链）。
+// is_current 由服务端按 production label 推导（前端不跨组拼快照字符串比对），
+// 标记该行就是当前生效版本。
+export type PlatformVersionStatus = 'draft' | 'published' | 'archived';
+
+export interface PlatformConfigVersion {
+  id: number;
+  group_key: string;
+  version_seq: number;
+  status: PlatformVersionStatus;
+  is_current: boolean;
+  snapshot: Record<string, unknown>;
+  base_version_id: number | null;
+  message: string;
+  created_by: string;
+  created_at: string;
+}

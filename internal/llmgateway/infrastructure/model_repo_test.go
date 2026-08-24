@@ -65,6 +65,9 @@ func TestPgModelRepo_CRUD(t *testing.T) {
 		OutputPrice:   30.0,
 		Recommended:   true,
 		Enabled:       true,
+		// 039 迁移给 fallback_candidates 加了 NOT NULL 约束，Update 写该列，
+		// nil 切片会被 pgx 写成 NULL 而违反约束（既有测试缺陷，与本特性无关）。
+		FallbackCandidates: []string{},
 	}
 	cleanup(prov.ID, m.ID)
 

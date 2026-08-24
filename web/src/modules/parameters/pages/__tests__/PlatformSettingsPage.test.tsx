@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { parametersApi } from '../../api/parameters.api';
@@ -6,7 +6,15 @@ import type { ParameterDefinition } from '../../model/parameters';
 import { PlatformSettingsPage } from '../PlatformSettingsPage';
 
 vi.mock('../../api/parameters.api', () => ({
-  parametersApi: { schema: vi.fn(), list: vi.fn(), update: vi.fn() },
+  parametersApi: {
+    schema: vi.fn(),
+    list: vi.fn(),
+    update: vi.fn(),
+    versions: vi.fn(),
+    createDraft: vi.fn(),
+    publish: vi.fn(),
+    rollback: vi.fn(),
+  },
 }));
 
 vi.mock('@/modules/llm', () => ({
@@ -297,6 +305,173 @@ describe('PlatformSettingsPage', () => {
       expect(parametersApi.update).toHaveBeenCalledWith(
         expect.objectContaining({ 'memory.embedding_model': '' }),
       ),
+    );
+  });
+
+  // —— 版本历史（配置变更审计视图）——
+
+  // 仅后端有分组映射的 category（英文 agent/memory/evaluation/trace）挂版本历史；
+  // 中文字段名 category 无映射，不触发版本拉取（既有用例已覆盖）。
+  const memoryDefs = (): ParameterDefinition[] => [
+    {
+      key: 'memory.enrich_temperature',
+      scope: 'platform',
+      category: 'memory',
+      display_name: '记忆丰富温度',
+      value_type: 'float',
+      default: 0.1,
+      description: '',
+      optimizable: false,
+      sensitive: false,
+      visual_hint: { control: 'slider', min: 0, max: 1, step: 0.05 },
+    },
+  ];
+  const version = (
+    id: number,
+    seq: number,
+    status: 'draft' | 'published' | 'archived',
+    isCurrent: boolean,
+    snapshot: Record<string, unknown>,
+    base: number | null,
+    message: string,
+    createdBy: string,
+  ) => ({
+    id,
+    group_key: 'memory',
+    version_seq: seq,
+    status,
+    is_current: isCurrent,
+    snapshot,
+    base_version_id: base,
+    message,
+    created_by: createdBy,
+    created_at: '2026-08-20T10:00:00Z',
+  });
+
+  it('renders version history as config audit view with current badge and base diff', async () => {
+    vi.mocked(parametersApi.schema).mockResolvedValue(memoryDefs());
+    vi.mocked(parametersApi.list).mockResolvedValue({ 'memory.enrich_temperature': 0.9 });
+    vi.mocked(parametersApi.versions).mockResolvedValue([
+      version(2, 2, 'published', true, { 'memory.enrich_temperature': 0.9 }, 1, '调高温度', 'admin-1'),
+      version(1, 1, 'published', false, { 'memory.enrich_temperature': 0.1 }, null, '初始化', 'system'),
+    ]);
+
+    render(<PlatformSettingsPage />);
+
+    // 版本历史 = 审计视图标题与行信息（操作者/备注/版本号）。
+    expect(await screen.findByText('版本历史（配置变更审计）')).toBeInTheDocument();
+    expect(screen.getByText('v2')).toBeInTheDocument();
+    expect(screen.getByText('调高温度')).toBeInTheDocument();
+    expect(screen.getByText('admin-1')).toBeInTheDocument();
+    // backfill 的 system 归因展示为中文"系统"。
+    expect(screen.getByText('系统')).toBeInTheDocument();
+    // 服务端 is_current=true（production label 指向 v2）→ 当前生效徽标（v2 自身不回滚）。
+    expect(screen.getByText('当前生效')).toBeInTheDocument();
+    // antd 对双中文按钮自动插空格（"回 滚"），用正则匹配。
+    expect(screen.getAllByRole('button', { name: /回\s*滚/ })).toHaveLength(1);
+
+    // 展开 v2 行 → 相对 base(v1) 的逐 key diff：0.1 → 0.9。
+    // diff 表里的参数名与表单 label 同名，用 getAllByText 断言展开区出现。
+    fireEvent.click(screen.getAllByRole('button', { name: /expand row/i })[0]);
+    await waitFor(() =>
+      expect(screen.getAllByText('记忆丰富温度').length).toBeGreaterThanOrEqual(1),
+    );
+    expect(screen.getByText('0.1')).toBeInTheDocument();
+    expect(screen.getByText('0.9')).toBeInTheDocument();
+  });
+
+  it('renders diff add/remove markers for keys missing on one side', async () => {
+    vi.mocked(parametersApi.schema).mockResolvedValue(memoryDefs());
+    vi.mocked(parametersApi.list).mockResolvedValue({
+      'memory.enrich_temperature': 0.9,
+      'memory.new_param': 'x',
+    });
+    vi.mocked(parametersApi.versions).mockResolvedValue([
+      version(
+        2,
+        2,
+        'published',
+        true,
+        { 'memory.enrich_temperature': 0.9, 'memory.new_param': 'x' },
+        1,
+        '新增参数',
+        'admin-1',
+      ),
+      version(
+        1,
+        1,
+        'published',
+        false,
+        { 'memory.enrich_temperature': 0.1, 'memory.removed_param': 'old' },
+        null,
+        '初始化',
+        'system',
+      ),
+    ]);
+
+    render(<PlatformSettingsPage />);
+    await screen.findByText('版本历史（配置变更审计）');
+
+    // v2 vs base(v1)：enrich_temperature 值变更、new_param 基线下不存在（新增）、
+    // removed_param 目标缺失（删除）——三类 diff 必须各自渲染标注。
+    fireEvent.click(screen.getAllByRole('button', { name: /expand row/i })[0]);
+    await waitFor(() => expect(screen.getByText('新增')).toBeInTheDocument());
+    expect(screen.getByText('删除')).toBeInTheDocument();
+    expect(screen.getByText('0.9')).toBeInTheDocument();
+  });
+
+  it('publishes a draft version after confirmation', async () => {
+    vi.mocked(parametersApi.schema).mockResolvedValue(memoryDefs());
+    vi.mocked(parametersApi.list).mockResolvedValue({ 'memory.enrich_temperature': 0.9 });
+    vi.mocked(parametersApi.versions).mockResolvedValue([
+      version(3, 3, 'draft', false, { 'memory.enrich_temperature': 0.7 }, 2, '草稿调温', 'admin-1'),
+      version(2, 2, 'published', true, { 'memory.enrich_temperature': 0.9 }, 1, '调高温度', 'admin-1'),
+      version(1, 1, 'published', false, { 'memory.enrich_temperature': 0.1 }, null, '初始化', 'system'),
+    ]);
+    vi.mocked(parametersApi.publish).mockResolvedValue({ 'memory.enrich_temperature': 0.7 });
+
+    render(<PlatformSettingsPage />);
+    await screen.findByText('版本历史（配置变更审计）');
+    // 初始拉取版本历史；记录基线计数。
+    await waitFor(() => expect(parametersApi.versions).toHaveBeenCalled());
+    const before = vi.mocked(parametersApi.versions).mock.calls.length;
+
+    // 仅草稿行有"发布"按钮；确认弹窗后调用 publish(groupKey, versionId)。
+    fireEvent.click(screen.getByRole('button', { name: /发\s*布/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: /发\s*布/ }));
+
+    await waitFor(() => expect(parametersApi.publish).toHaveBeenCalledWith('memory', 3));
+    // 发布成功 → 生效快照回传 → refreshTick 递增 → 版本历史重拉（计数增长）。
+    await waitFor(() =>
+      expect(vi.mocked(parametersApi.versions).mock.calls.length).toBeGreaterThan(before),
+    );
+  });
+
+  it('rolls back to a historical published version after confirmation', async () => {
+    vi.mocked(parametersApi.schema).mockResolvedValue(memoryDefs());
+    vi.mocked(parametersApi.list).mockResolvedValue({ 'memory.enrich_temperature': 0.9 });
+    vi.mocked(parametersApi.versions).mockResolvedValue([
+      version(2, 2, 'published', true, { 'memory.enrich_temperature': 0.9 }, 1, '调高温度', 'admin-1'),
+      version(1, 1, 'published', false, { 'memory.enrich_temperature': 0.5 }, null, '初始化', 'system'),
+    ]);
+    vi.mocked(parametersApi.rollback).mockResolvedValue({ 'memory.enrich_temperature': 0.5 });
+
+    render(<PlatformSettingsPage />);
+    await screen.findByText('版本历史（配置变更审计）');
+    // 初始拉取版本历史；记录基线计数。
+    await waitFor(() => expect(parametersApi.versions).toHaveBeenCalled());
+    const before = vi.mocked(parametersApi.versions).mock.calls.length;
+
+    // v1 非当前生效 → 有回滚按钮；v2 当前生效 → 无回滚按钮。
+    fireEvent.click(screen.getByRole('button', { name: /回\s*滚/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: /回\s*滚/ }));
+
+    await waitFor(() => expect(parametersApi.rollback).toHaveBeenCalledWith('memory', 1));
+    // 回滚不产生新版本，但生效快照变化 → 版本历史重拉（计数增长）。
+    await waitFor(() =>
+      expect(vi.mocked(parametersApi.versions).mock.calls.length).toBeGreaterThan(before),
     );
   });
 });
