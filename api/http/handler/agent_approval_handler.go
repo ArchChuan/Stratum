@@ -54,7 +54,8 @@ func (h *AgentHandler) ResumeToolApproval(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	result, _, err := h.svc.ResumeToolApproval(c.Request.Context(), tenantID, c.Param("approvalID"))
+	actor, _ := userIDFromCtx(c)
+	result, _, err := h.svc.ResumeToolApproval(c.Request.Context(), tenantID, actor, c.Param("approvalID"))
 	if err != nil {
 		_ = c.Error(err)
 		return

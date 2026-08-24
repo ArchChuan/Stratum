@@ -3,7 +3,7 @@
 
 export const APPROVAL_STATUS_LABELS: Record<string, string> = {
   pending: '待审批',
-  approved: '已批准',
+  approved: '已批准·待执行',
   rejected: '已拒绝',
   expired: '已过期',
   executing: '执行中',
