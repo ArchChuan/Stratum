@@ -10,6 +10,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -563,7 +564,7 @@ func TestResolveTooling_NoActor_AuthorizeFailure_FallsBackToMember(t *testing.T)
 	require.Equal(t, "member", authorization.RoleClass)
 }
 
-// D18：HTTP 执行带 UserID，Authorize 失败维持 fail-closed。
+// D18：HTTP 执行带真实 UUID actor（JWT sub 派生），Authorize 失败维持 fail-closed。
 func TestResolveTooling_HTTPActor_AuthorizeFailure_FailsClosed(t *testing.T) {
 	diagnostics := &assistantDiagnosticStub{authorizeErr: errors.New("authorize unavailable")}
 	svc := NewAgentService(AgentServiceDeps{
@@ -577,8 +578,32 @@ func TestResolveTooling_HTTPActor_AuthorizeFailure_FailsClosed(t *testing.T) {
 	authorization := &domain.DiagnosticAuthorization{}
 	_, _, _, err := svc.resolveTooling(t.Context(),
 		ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"},
-		ExecRequest{UserID: "user-1"},
+		ExecRequest{UserID: uuid.NewString()},
 		agent, "subject-1", authorization)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "authorize unavailable")
+}
+
+// D18：内部执行（collab/workflow）使用合成非 UUID 标识，Authorize 失败
+// 同样回退 member（self 范围），不阻断合法内部流程。
+func TestResolveTooling_SyntheticUser_AuthorizeFailure_FallsBackToMember(t *testing.T) {
+	diagnostics := &assistantDiagnosticStub{authorizeErr: errors.New("authorize unavailable")}
+	svc := NewAgentService(AgentServiceDeps{
+		Registry:             NewRegistry(nil, zap.NewNop()),
+		DiagnosticProvider:   diagnostics,
+		TenantModelValidator: &strictModelValidatorStub{},
+	})
+	agent := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model",
+	}}
+	for _, userID := range []string{"collab:plan-01h0", "workflow"} {
+		authorization := &domain.DiagnosticAuthorization{}
+		_, _, roleClass, err := svc.resolveTooling(t.Context(),
+			ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"},
+			ExecRequest{UserID: userID},
+			agent, "subject-1", authorization)
+		require.NoError(t, err)
+		require.Equal(t, "member", roleClass)
+		require.Equal(t, "member", authorization.RoleClass)
+	}
 }

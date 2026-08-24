@@ -2639,10 +2639,12 @@ func (s *AgentService) resolveTooling(
 			Areas: []domain.DiagnosticArea{domain.DiagnosticAreaAgent, domain.DiagnosticAreaSkill, domain.DiagnosticAreaMCP, domain.DiagnosticAreaKnowledge, domain.DiagnosticAreaModel},
 		})
 		if authorizeErr != nil {
-			// D18：无 HTTP actor 的内部执行（revision/评估/工作流）没有用户
-			// 上下文，Authorize 失败回退 member（self 范围），禁止 fail-open
-			// 但也不阻断合法内部流程；HTTP 执行带 UserID，维持 fail-closed。
-			if strings.TrimSpace(req.UserID) == "" {
+			// D18：无 HTTP actor 的内部执行（revision/评估/工作流/collab）没有
+			// 真实用户身份——UserID 为空或是合成标识（"collab:"+planID、
+			// "workflow"），Authorize 失败回退 member（self 范围），禁止
+			// fail-open 但也不阻断合法内部流程；HTTP 执行带真实 UUID actor
+			// （JWT sub 派生），维持 fail-closed。
+			if !isRealActor(req.UserID) {
 				roleClass = "member"
 				*authorization = domain.DiagnosticAuthorization{RoleClass: "member"}
 			} else {
@@ -2653,6 +2655,20 @@ func (s *AgentService) resolveTooling(
 		}
 	}
 	return extraTools, skillCatalog, roleClass, nil
+}
+
+// isRealActor 判断 UserID 是否为真实租户成员身份（UUID）。内部执行
+// （collab/workflow/revision/评估）使用合成标识（"collab:"+planID、
+// "workflow"）或空串，不参与角色门禁：Authorize 失败回退 member，禁止
+// fail-open 但也不阻断合法内部流程；真实 HTTP actor 由 JWT sub 派生且
+// 恒为 UUID，维持 fail-closed。
+func isRealActor(userID string) bool {
+	id := strings.TrimSpace(userID)
+	if id == "" {
+		return false
+	}
+	_, err := uuid.Parse(id)
+	return err == nil
 }
 
 // resolveEffectiveParameters resolves the resource-declared execution
