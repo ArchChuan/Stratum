@@ -101,7 +101,7 @@ func TestTenantSchemaContainsSystemAssistantIdentityAndSeed(t *testing.T) {
 	for _, want := range []string{
 		"ON agents(system_key) WHERE system_key IS NOT NULL",
 		"'stratum-platform-assistant'",
-		"'__stratum_platform_assistant__'",
+		"'平台使用助手'",
 		"WHILE EXISTS",
 		"'基于官方资料指导平台使用并诊断当前租户应用状态'",
 		"'glm-5.2', 10, 0, 'user', 'stratum.platform_assistant'",

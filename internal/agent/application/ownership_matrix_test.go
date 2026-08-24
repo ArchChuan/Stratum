@@ -44,9 +44,6 @@ func (f *ownershipAgentRepoFake) Get(_ context.Context, id string) (*domain.Agen
 	cfg, ok := f.agents[id]
 	return cfg, ok, nil
 }
-func (f *ownershipAgentRepoFake) GetSystemAssistant(context.Context) (*domain.AgentConfig, bool, error) {
-	return nil, false, nil
-}
 func (f *ownershipAgentRepoFake) GetAll(context.Context) ([]*domain.AgentConfig, error) {
 	return nil, nil
 }
@@ -64,14 +61,6 @@ func (f *ownershipAgentRepoFake) Update(_ context.Context, cfg *domain.AgentConf
 	f.lastEditorActor = editorActor
 	return nil
 }
-func (f *ownershipAgentRepoFake) UpdateSystemAssistantModel(_ context.Context, _ string, _ string, _ int, _ int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
-	f.recordAudit(audit)
-	return nil, nil
-}
-func (f *ownershipAgentRepoFake) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ int, _ int, _ int, _ map[string]any, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
-	f.recordAudit(audit)
-	return nil, nil
-}
 
 var _ port.AgentRepo = (*ownershipAgentRepoFake)(nil)
 
@@ -87,7 +76,7 @@ func (f failingTenantRoleResolver) ResolveTenantRole(context.Context, string, st
 // the role resolver and an optional editor repo are injected per test row.
 func newOwnershipAgentService(repo port.AgentRepo, editors ...port.ResourceEditorRepo) *application.AgentService {
 	deps := application.AgentServiceDeps{
-		Registry: application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry: application.NewRegistry(repo, zap.NewNop()),
 		Logger:   zap.NewNop(),
 	}
 	if len(editors) > 0 {

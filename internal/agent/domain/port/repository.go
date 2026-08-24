@@ -27,7 +27,6 @@ type AgentRepo interface {
 	// transaction fails with domain.ErrEditorNotEligible.
 	Register(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editors []string) error
 	Get(ctx context.Context, id string) (*domain.AgentConfig, bool, error)
-	GetSystemAssistant(ctx context.Context) (*domain.AgentConfig, bool, error)
 	GetAll(ctx context.Context) ([]*domain.AgentConfig, error)
 	Remove(ctx context.Context, id string, audit *auditdomain.ResourceChangeAuditEvent) error
 	// Update replaces an agent's mutable fields. When editorActor is non-empty
@@ -40,8 +39,6 @@ type AgentRepo interface {
 	// clear previously persisted values), false = merge (zero fields are
 	// omitted so an old client PUT cannot erase stored sampling parameters).
 	Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string, replaceParams bool) error
-	UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, maxIterations int, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error)
-	UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, maxIterations, maxContextTokens, maxTokens int, memoryParameters map[string]any, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error)
 }
 
 // AgentSkillBinding resolves which agent is wired to a given skill through the

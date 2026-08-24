@@ -468,12 +468,6 @@ func (s *MCPService) GetServerConfig(ctx context.Context, serverID string) (*dom
 	return s.manager.GetServerConfig(ctx, serverID)
 }
 
-// PlatformManagedServerIDs 返回平台托管 server ID 全集,供 wiring 的
-// SystemResourceGuard 批量净化与挂载校验(避免逐 server 查询)。
-func (s *MCPService) PlatformManagedServerIDs(ctx context.Context) ([]string, error) {
-	return s.manager.ListPlatformManagedServerIDs(ctx)
-}
-
 // ListEditors returns the granted editor set of an MCP server.
 func (s *MCPService) ListEditors(ctx context.Context, tenantID, serverID string) ([]string, error) {
 	return s.manager.ListEditors(ctx, tenantID, serverID)

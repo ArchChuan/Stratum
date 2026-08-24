@@ -72,7 +72,7 @@ func TestProvisionTenantSchemaSystemAssistantModelBackfillPreservesTenantChoice(
 				t.Fatal(err)
 			}
 			if _, err := pool.Exec(ctx, `INSERT INTO "`+schema+`".agents (id, name, llm_model, system_key)
-				VALUES ('stratum-platform-assistant', '__stratum_platform_assistant__', $1, $2)`, tt.model, systemAssistantKey); err != nil {
+				VALUES ('stratum-platform-assistant', '平台使用助手', $1, $2)`, tt.model, systemAssistantKey); err != nil {
 				t.Fatal(err)
 			}
 			if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {

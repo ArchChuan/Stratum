@@ -65,10 +65,10 @@ export const AgentChatPage = ({
   const agentObj = agents.find((a) => a.id === selectedAgent);
   // 正常等待态(waitingApproval)与终态护栏转手动(terminalApproval)共用审批卡片:
   // 终态卡片展示终态文案,护栏触发时提供「让 Agent 继续」手动入口。
+  // 等化后模型不可用告警对所有 agent 生效（普通 agent 同样要求模型在租户列表）。
   const pendingApproval = waitingApproval ?? terminalApproval;
 	const assistantModelUnavailable = !!(
-		agentObj?.isSystem &&
-		streamFailure?.code === 'SYSTEM_ASSISTANT_MODEL_UNAVAILABLE'
+		streamFailure?.code === 'ASSISTANT_MODEL_UNAVAILABLE'
 	);
   const sidebar = (
     <ChatConversationSidebar
@@ -128,7 +128,6 @@ export const AgentChatPage = ({
           agent={agentObj}
           isMobile={isMobile}
           onOpenConversations={() => setConversationDrawerOpen(true)}
-          isAdmin={isAdmin}
         />
         <ChatMessageList
           messages={messages}
@@ -162,8 +161,8 @@ export const AgentChatPage = ({
 						type="error"
 						showIcon
 						message={isAdmin
-							? '租户尚未配置平台助手模型'
-							: '租户尚未配置平台助手模型，请联系租户管理员配置'}
+							? '该 Agent 尚未配置可用模型'
+							: '该 Agent 尚未配置可用模型，请联系租户管理员配置'}
 						action={undefined}
 					/>
 				)}

@@ -139,7 +139,7 @@ func agentExecContextForTest() agentExecContext {
 // 恢复链路在生产恒早退（agent_tasks 永不落库）。
 func TestRegistryHydratesTaskStore(t *testing.T) {
 	repo := &registryAgentRepoFake{cfg: &domain.AgentConfig{ID: "agent-1", Name: "a"}}
-	registry := NewRegistry(repo, nil, zap.NewNop())
+	registry := NewRegistry(repo, zap.NewNop())
 	taskStore := &mockTaskRepo{}
 	registry.SetTaskStore(taskStore)
 
@@ -162,7 +162,7 @@ func TestRegistryHydratesTaskStore(t *testing.T) {
 	}
 
 	// 未注入时保持 nil（旧行为不回归）。
-	registry2 := NewRegistry(repo, nil, zap.NewNop())
+	registry2 := NewRegistry(repo, zap.NewNop())
 	got2, _, err2 := registry2.Get(context.Background(), "agent-1")
 	if err2 != nil {
 		t.Fatal(err2)
@@ -183,10 +183,6 @@ func (r *registryAgentRepoFake) Get(ctx context.Context, id string) (*domain.Age
 	return r.cfg, true, nil
 }
 
-func (r *registryAgentRepoFake) GetSystemAssistant(ctx context.Context) (*domain.AgentConfig, bool, error) {
-	return nil, false, nil
-}
-
 func (r *registryAgentRepoFake) GetAll(ctx context.Context) ([]*domain.AgentConfig, error) {
 	if r.cfg == nil {
 		return nil, nil
@@ -200,14 +196,6 @@ func (r *registryAgentRepoFake) Register(ctx context.Context, cfg *domain.AgentC
 
 func (r *registryAgentRepoFake) Remove(ctx context.Context, id string, audit *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
-}
-
-func (r *registryAgentRepoFake) UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, maxIterations, maxContextTokens, maxTokens int, _ map[string]any, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
-	return r.cfg, nil
-}
-
-func (r *registryAgentRepoFake) UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, maxIterations int, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
-	return r.cfg, nil
 }
 
 func (r *registryAgentRepoFake) Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string, replaceParams bool) error {

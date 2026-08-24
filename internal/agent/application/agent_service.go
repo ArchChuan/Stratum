@@ -91,10 +91,7 @@ type AgentServiceDeps struct {
 	OperationGate             port.OperationGate
 	TenantRoleResolver        port.TenantRoleResolver
 	WorkspaceBindingValidator port.WorkspaceBindingValidator
-	// SystemResourceGuard 判定 MCP server 是否平台托管(写路径 A2 + 运行时净化 C)。
-	// 由 wiring 注入 TTL 缓存适配器;nil 时对非空 MCP 绑定 fail closed。
-	SystemResourceGuard port.SystemResourceGuard
-	ParametersProvider  port.ParametersProvider
+	ParametersProvider        port.ParametersProvider
 	// FactCheck 是幻觉校验配置（nil/Enabled=false = 关闭，fail-closed）。
 	// EvidenceFn 留空，执行时由 RAGSearchFnWithEvidence 填充。
 	FactCheck *factcheck.Settings
@@ -249,8 +246,6 @@ type AgentDTO struct {
 	DelegateMaxDepth        int
 	DelegateDefaultMaxSteps int
 	SystemKey               string
-	IsSystem                bool
-	ManagementMode          string
 	Parameters              map[string]any
 	Editors                 []string
 }
@@ -356,9 +351,6 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 	if err := s.validateWorkspaceBindings(ctx, in.TenantID, in.KnowledgeWorkspaceIDs); err != nil {
 		return AgentDTO{}, err
 	}
-	if err := s.validateSystemBindings(ctx, in.TenantID, in.AllowedSkills, in.MCPToolIDs); err != nil {
-		return AgentDTO{}, err
-	}
 	a := NewBaseAgent(cfg, s.deps.Logger)
 	if s.deps.Metrics != nil {
 		a = a.WithMetrics(s.deps.Metrics)
@@ -410,9 +402,6 @@ func (s *AgentService) SnapshotRevision(ctx context.Context, tenantID, id string
 		return domain.AgentRevision{}, ErrNotFound
 	}
 	cfg := a.GetConfig()
-	if cfg.SystemKey == domain.SystemAssistantKey {
-		return domain.AgentRevision{}, domain.ErrSystemAssistantRevisionUnsupported
-	}
 	revision := domain.AgentRevision{
 		AgentID: cfg.ID, Type: cfg.Type, SystemPrompt: cfg.SystemPrompt, Model: cfg.LLMModel,
 		MaxIterations: cfg.MaxIterations, MemoryScope: cfg.MemoryScope,
@@ -464,9 +453,6 @@ func (s *AgentService) ExecuteRevision(
 	if strings.TrimSpace(meta.TenantID) == "" {
 		return nil, 0, fmt.Errorf("agent service: tenant id required")
 	}
-	if revision.AgentID == domain.SystemAssistantID {
-		return nil, 0, domain.ErrSystemAssistantRevisionUnsupported
-	}
 	if err := revision.Validate(); err != nil {
 		return nil, 0, fmt.Errorf("agent service: validate revision: %w", err)
 	}
@@ -495,9 +481,6 @@ func revisionExecutionContext(ctx context.Context) (context.Context, context.Can
 }
 
 func (s *AgentService) buildRevisionAgent(revision domain.AgentRevision) (*BaseAgent, error) {
-	if revision.AgentID == domain.SystemAssistantID {
-		return nil, domain.ErrSystemAssistantRevisionUnsupported
-	}
 	if revision.MemoryInjectorRequired && s.deps.MemoryInjector == nil {
 		return nil, fmt.Errorf("agent service: revision requires memory injector")
 	}
@@ -556,103 +539,6 @@ func (s *AgentService) List(ctx context.Context) ([]AgentDTO, error) {
 	}
 	return out, nil
 }
-
-func (s *AgentService) GetSystemAssistantSettings(ctx context.Context) (SystemAssistantSettings, error) {
-	a, found, err := s.deps.Registry.GetSystemAssistant(ctx)
-	if err != nil {
-		return SystemAssistantSettings{}, fmt.Errorf("agent service get system assistant settings: %w", err)
-	}
-	if !found {
-		return SystemAssistantSettings{}, ErrNotFound
-	}
-	return s.systemAssistantSettings(ctx, a)
-}
-
-func (s *AgentService) systemAssistantSettings(ctx context.Context, a Agent) (SystemAssistantSettings, error) {
-	cfg := a.GetConfig()
-	tenantID := reqctx.TenantIDFromContext(ctx)
-	if tenantID == "" {
-		return SystemAssistantSettings{}, fmt.Errorf("agent service get system assistant settings: tenant id required")
-	}
-	models, err := s.listTenantChatModels(ctx, tenantID)
-	if err != nil {
-		return SystemAssistantSettings{}, fmt.Errorf("agent service list tenant models: %w", err)
-	}
-	settings := SystemAssistantSettings{
-		AgentID: cfg.ID, Model: cfg.LLMModel, AvailableModels: append([]string(nil), models...),
-	}
-	if strings.TrimSpace(cfg.LLMModel) == "" {
-		return settings, nil
-	}
-	if s.deps.TenantModelValidator == nil {
-		return SystemAssistantSettings{}, fmt.Errorf("agent service validate system assistant model: validator unavailable")
-	}
-	if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, tenantID, cfg.LLMModel); err != nil {
-		if errors.Is(err, domain.ErrAssistantModelUnavailable) ||
-			errors.Is(err, domain.ErrInvalidSystemAssistantModel) {
-			return settings, nil
-		}
-		return SystemAssistantSettings{}, fmt.Errorf("agent service validate system assistant model: %w", err)
-	}
-	settings.Ready = true
-	return settings, nil
-}
-
-func (s *AgentService) UpdateSystemAssistantModel(ctx context.Context, model string, actorID string) (SystemAssistantSettings, error) {
-	model, tenantID, err := s.validateSystemAssistantModel(ctx, model)
-	if err != nil {
-		return SystemAssistantSettings{}, err
-	}
-	models, err := s.listTenantChatModels(ctx, tenantID)
-	if err != nil {
-		return SystemAssistantSettings{}, err
-	}
-	existing, found, err := s.deps.Registry.GetSystemAssistant(ctx)
-	if err != nil {
-		return SystemAssistantSettings{}, fmt.Errorf("agent service update system assistant model: %w", err)
-	}
-	if !found {
-		return SystemAssistantSettings{}, ErrNotFound
-	}
-	existingCfg := existing.GetConfig()
-	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindAgent, existingCfg.ID, auditdomain.ChangeOpUpdate, actorID,
-		AgentSafeProjection(existingCfg), nil)
-	if err != nil {
-		return SystemAssistantSettings{}, err
-	}
-	a, err := s.deps.Registry.UpdateSystemAssistantModel(ctx, model, existingCfg.MemoryScope, existingCfg.MaxIterations, existingCfg.MaxContextTokens, audit)
-	if err != nil {
-		return SystemAssistantSettings{}, fmt.Errorf("agent service update system assistant model: %w", err)
-	}
-	cfg := a.GetConfig()
-	return SystemAssistantSettings{
-		AgentID: cfg.ID, Model: cfg.LLMModel,
-		Ready: cfg.LLMModel == model, AvailableModels: models,
-	}, nil
-}
-
-func (s *AgentService) validateSystemAssistantModel(ctx context.Context, model string) (string, string, error) {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return "", "", domain.ErrInvalidSystemAssistantModel
-	}
-	if s.deps.TenantModelValidator == nil {
-		return "", "", fmt.Errorf("agent service validate system assistant model: validator unavailable")
-	}
-	tenantID := reqctx.TenantIDFromContext(ctx)
-	if tenantID == "" {
-		return "", "", fmt.Errorf("agent service validate system assistant model: tenant id required")
-	}
-	if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, tenantID, model); err != nil {
-		if errors.Is(err, domain.ErrAssistantModelUnavailable) ||
-			errors.Is(err, domain.ErrInvalidSystemAssistantModel) {
-			return "", "", domain.ErrInvalidSystemAssistantModel
-		}
-		return "", "", fmt.Errorf("agent service validate system assistant model: %w", err)
-	}
-	return model, tenantID, nil
-}
-
 func (s *AgentService) listTenantChatModels(ctx context.Context, tenantID string) ([]string, error) {
 	if s.deps.TenantModelCatalog == nil {
 		return nil, fmt.Errorf("agent service list tenant models: catalog unavailable")
@@ -673,9 +559,6 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	if !ok {
 		return AgentDTO{}, ErrNotFound
 	}
-	if existing.GetConfig().SystemKey != "" {
-		return s.updateSystemAssistant(ctx, existing.GetConfig(), in)
-	}
 	// 委托开关 *bool 语义:缺省(nil)继承已存值,显式 false 才关闭。Update 是
 	// 全量列 UPDATE,不在此合并会把缺省字段误写成 false,覆盖管理员的显式开启。
 	in.DelegateEnabled = resolveDelegateEnabled(existing.GetConfig().DelegateEnabled, in.DelegateEnabled)
@@ -683,6 +566,7 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	// system prompt）把管理员配置的深度/步数静默打回运行时默认。
 	in.DelegateMaxDepth = resolveDelegateInt(existing.GetConfig().DelegateMaxDepth, in.DelegateMaxDepth)
 	in.DelegateDefaultMaxSteps = resolveDelegateInt(existing.GetConfig().DelegateDefaultMaxSteps, in.DelegateDefaultMaxSteps)
+
 	editorActor, err := s.resolveUpdateEditorActor(ctx, in.ActorID, id, existing.GetConfig().CreatedBy)
 	if err != nil {
 		return AgentDTO{}, err
@@ -800,9 +684,6 @@ func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in Upda
 	if err := s.validateWorkspaceBindings(ctx, reqctx.TenantIDFromContext(ctx), in.KnowledgeWorkspaceIDs); err != nil {
 		return nil, err
 	}
-	if err := s.validateSystemBindings(ctx, reqctx.TenantIDFromContext(ctx), in.AllowedSkills, in.MCPToolIDs); err != nil {
-		return nil, err
-	}
 	return cfg, nil
 }
 
@@ -818,192 +699,6 @@ func (s *AgentService) validateWorkspaceBindings(ctx context.Context, tenantID s
 		return fmt.Errorf("agent: workspace binding validation unavailable (validator not wired)")
 	}
 	return s.deps.WorkspaceBindingValidator.ValidateWorkspaceBindings(ctx, tenantID, workspaceIDs)
-}
-
-// validateSystemBindings 拒绝把系统内置资源挂载到普通 agent(写路径 fail closed)。
-// skill 按 builtin: 前缀直接判;MCP tool id 形如 mcp:<server>:<tool>,命中平台托管
-// server 即拒绝。畸形/空段 id(如 mcp::tool)维持现状不 reject 且显式跳过 guard
-// 查询,避免空段无法命中平台 server 却触发意外 DB 失败路径。workspace 已由
-// validateWorkspaceBindings 内部校验 platform_managed 覆盖,不在此重复。系统助手
-// (SystemKey != "")更新走 updateSystemAssistant,不经 Create/buildUpdateConfig,
-// 本校验天然不拦系统助手挂载。
-func (s *AgentService) validateSystemBindings(ctx context.Context, tenantID string, skills, mcpToolIDs []string) error {
-	if err := rejectBuiltinSkillBindings(skills); err != nil {
-		return err
-	}
-	return rejectPlatformMCPServerBindings(ctx, tenantID, mcpToolIDs, s.deps.SystemResourceGuard)
-}
-
-// rejectBuiltinSkillBindings rejects any builtin: skill id in the requested
-// mount set (platform-seeded skills are system-assistant only).
-func rejectBuiltinSkillBindings(skills []string) error {
-	for _, id := range skills {
-		if strings.HasPrefix(id, "builtin:") {
-			return fmt.Errorf("agent: skill %q is platform-managed and cannot be bound: %w", id, domain.ErrPlatformManagedSkillBinding)
-		}
-	}
-	return nil
-}
-
-// rejectPlatformMCPServerBindings rejects MCP tools whose mcp:<server>:<tool>
-// server is platform-managed. Malformed/empty-segment ids (e.g. mcp::tool) are
-// kept as-is (they cannot target a platform server) and skip the guard query.
-// A nil guard fails closed when non-empty bindings are present.
-func rejectPlatformMCPServerBindings(ctx context.Context, tenantID string, mcpToolIDs []string, guard port.SystemResourceGuard) error {
-	if guard == nil {
-		if len(mcpToolIDs) == 0 {
-			return nil
-		}
-		return fmt.Errorf("agent: MCP binding validation unavailable (system resource guard not wired)")
-	}
-	for _, toolID := range mcpToolIDs {
-		parts := strings.Split(toolID, ":")
-		if len(parts) != 3 || parts[0] != "mcp" || parts[1] == "" || parts[2] == "" {
-			continue
-		}
-		managed, err := guard.IsPlatformManagedMCPServer(ctx, tenantID, parts[1])
-		if err != nil {
-			return fmt.Errorf("agent: MCP binding validation for server %q: %w", parts[1], err)
-		}
-		if managed {
-			return fmt.Errorf("agent: MCP server %q is platform-managed and cannot be bound: %w", parts[1], domain.ErrPlatformManagedMCPServerBinding)
-		}
-	}
-	return nil
-}
-
-// sanitizeRuntimeBindings 对非系统 agent 在装配前清除平台内置资源绑定
-// (in-place mutate AgentConfig)。BaseAgent 内嵌 *AgentConfig,本方法在
-// application 包内可直接持 a.mu 锁 mutate —— 与 snapshotExecutionConfig
-// (:349 读 KnowledgeWorkspaceNames/Descriptions)共用同一把锁串行,并发
-// Execute 无数据竞争;mutate 必达 snapshot 及 assembleOptions 内全部读点
-// (buildExtraToolsChecked / knowledgeAssignments / ToolExecutionFn 闭包 /
-// RAG gate),隔离无需额外接线。
-//
-// 返回被剔除的 platform workspace name 集,供 RAG 闭包再交集(E4 兜底,防
-// mutate 漏掉的任何路径仍被实时检索)。零绑定 agent 短路,不发批量查询;
-// guard 为 nil 或批量查询失败且无缓存时 fail closed(禁止默认放行)。
-func (s *AgentService) sanitizeRuntimeBindings(
-	ctx context.Context, tenantID string, a Agent,
-) ([]string, error) {
-	cfg := a.GetConfig()
-	if len(cfg.AllowedSkills) == 0 && len(cfg.MCPToolIDs) == 0 && len(cfg.KnowledgeWorkspaceIDs) == 0 {
-		return nil, nil
-	}
-	if s.deps.SystemResourceGuard == nil {
-		return nil, fmt.Errorf("agent: runtime binding sanitization unavailable (system resource guard not wired)")
-	}
-	platformMCP, err := s.deps.SystemResourceGuard.PlatformManagedMCPServerIDs(ctx, tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("agent: resolve platform mcp servers: %w", err)
-	}
-	platformWS, err := s.deps.SystemResourceGuard.PlatformManagedWorkspaceIDs(ctx, tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("agent: resolve platform workspaces: %w", err)
-	}
-	platformMCPSet := toSet(platformMCP)
-	platformWSSet := toSet(platformWS)
-
-	var removedWSNames []string
-	apply := func(c *AgentConfig) {
-		changedSkills := false
-		c.AllowedSkills, changedSkills = filterBuiltinSkills(c.AllowedSkills)
-		changedTools := false
-		c.MCPToolIDs, changedTools = filterPlatformMCPTools(c.MCPToolIDs, platformMCPSet)
-		// KnowledgeWorkspaceIDs/Names/Descriptions 三组同序(agent_repo 同查询
-		// 填充),按索引同步剔除,否则只滤 IDs 会漏 search_knowledge enum。
-		changedWS := false
-		if len(c.KnowledgeWorkspaceIDs) > 0 {
-			changedWS = filterPlatformWorkspaces(c, platformWSSet, &removedWSNames)
-		}
-		if changedSkills || changedTools || changedWS {
-			s.deps.Logger.Warn("agent: runtime sanitized platform-managed bindings",
-				zap.String("agent_id", cfg.ID),
-				zap.String("tenant_id", tenantID))
-		}
-	}
-
-	if ba, ok := a.(*BaseAgent); ok {
-		ba.mu.Lock()
-		defer ba.mu.Unlock()
-		apply(ba.AgentConfig)
-	} else {
-		apply(cfg)
-	}
-	return removedWSNames, nil
-}
-
-// toSet converts an id list into a set for O(1) membership checks.
-func toSet(ids []string) map[string]struct{} {
-	set := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		set[id] = struct{}{}
-	}
-	return set
-}
-
-// filterBuiltinSkills drops builtin skills (ID prefix builtin:) in place,
-// reporting whether any row was removed.
-func filterBuiltinSkills(skills []string) ([]string, bool) {
-	kept := skills[:0]
-	changed := false
-	for _, id := range skills {
-		if strings.HasPrefix(id, "builtin:") {
-			changed = true
-			continue
-		}
-		kept = append(kept, id)
-	}
-	return kept, changed
-}
-
-// filterPlatformMCPTools drops MCP tools whose mcp:<server>:<tool> server is in
-// the platform set. Malformed/empty-segment ids (e.g. mcp::tool) are kept as-is
-// (they cannot target a platform server), matching the write-path guard.
-func filterPlatformMCPTools(tools []string, platformMCPSet map[string]struct{}) ([]string, bool) {
-	kept := tools[:0]
-	changed := false
-	for _, toolID := range tools {
-		parts := strings.Split(toolID, ":")
-		if len(parts) == 3 && parts[0] == "mcp" && parts[1] != "" && parts[2] != "" {
-			if _, hit := platformMCPSet[parts[1]]; hit {
-				changed = true
-				continue
-			}
-		}
-		kept = append(kept, toolID)
-	}
-	return kept, changed
-}
-
-// filterPlatformWorkspaces drops platform-managed workspaces from the three
-// parallel slices (IDs/Names/Descriptions share index order, filled by the same
-// repo query), collecting removed names for the RAG closure re-intersection.
-func filterPlatformWorkspaces(c *AgentConfig, platformWSSet map[string]struct{}, removedWSNames *[]string) bool {
-	keptIDs := c.KnowledgeWorkspaceIDs[:0]
-	keptNames := c.KnowledgeWorkspaceNames[:0]
-	keptDescs := c.KnowledgeWorkspaceDescriptions[:0]
-	changed := false
-	for index, id := range c.KnowledgeWorkspaceIDs {
-		if _, hit := platformWSSet[id]; hit {
-			changed = true
-			if index < len(c.KnowledgeWorkspaceNames) {
-				*removedWSNames = append(*removedWSNames, c.KnowledgeWorkspaceNames[index])
-			}
-			continue
-		}
-		keptIDs = append(keptIDs, id)
-		if index < len(c.KnowledgeWorkspaceNames) {
-			keptNames = append(keptNames, c.KnowledgeWorkspaceNames[index])
-		}
-		if index < len(c.KnowledgeWorkspaceDescriptions) {
-			keptDescs = append(keptDescs, c.KnowledgeWorkspaceDescriptions[index])
-		}
-	}
-	c.KnowledgeWorkspaceIDs = keptIDs
-	c.KnowledgeWorkspaceNames = keptNames
-	c.KnowledgeWorkspaceDescriptions = keptDescs
-	return changed
 }
 
 // applyParameterOverrides merges the declared parameters map onto the
@@ -1140,106 +835,6 @@ func (s *AgentService) resolveUpdateEditorActor(ctx context.Context, actorID, re
 	}
 	return actorID, nil
 }
-
-func (s *AgentService) updateSystemAssistant(ctx context.Context, cfg *domain.AgentConfig, in UpdateAgentInput) (AgentDTO, error) {
-	tenantID := reqctx.TenantIDFromContext(ctx)
-	if tenantID == "" {
-		return AgentDTO{}, fmt.Errorf("update system assistant: tenant id required")
-	}
-	// 平台助手不参与思考强度配置:前端以 !isSystem 守卫隐藏,这里 fail closed
-	// 拒绝任何直调 API 携带的非空 effort,防止经网关对严格端点打 400。
-	if in.ReasoningEffort != "" {
-		return AgentDTO{}, domain.ErrInvalidSamplingParameters
-	}
-	model, err := s.resolveSystemAssistantModel(ctx, tenantID, cfg.LLMModel, in.LLMModel)
-	if err != nil {
-		return AgentDTO{}, err
-	}
-	maxTokens, err := s.mergeSystemAssistantMaxTokens(ctx, in.MaxTokens, cfg.MaxTokens)
-	if err != nil {
-		return AgentDTO{}, err
-	}
-	// 只校验显式传入的非零 in.MaxIterations（B2）：0 = 保留原值，不校验
-	// cfg.MaxIterations——防止 PUT-0 对 DB 遗留超界值的系统助手误拒，破坏
-	// ComposeSystemAssistantProfile 保留租户预算的契约。
-	if err := validateAgentMaxIterations(in.MaxIterations); err != nil {
-		return AgentDTO{}, err
-	}
-	memoryScope := in.MemoryScope
-	maxIterations := in.MaxIterations
-	if maxIterations <= 0 {
-		maxIterations = cfg.MaxIterations
-	}
-	maxContextTokens := in.MaxContextTokens
-	if maxContextTokens <= 0 {
-		maxContextTokens = cfg.MaxContextTokens
-	}
-	memoryParameters, err := s.validateAndExtractMemoryParameters(ctx, in.Parameters)
-	if err != nil {
-		return AgentDTO{}, err
-	}
-	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindAgent, cfg.ID, auditdomain.ChangeOpUpdate, in.ActorID,
-		AgentSafeProjection(cfg), nil)
-	if err != nil {
-		return AgentDTO{}, err
-	}
-	updated, err := s.deps.Registry.UpdateSystemAssistantAll(
-		ctx, model, memoryScope, maxIterations, maxContextTokens, maxTokens, memoryParameters, audit,
-	)
-	if err != nil {
-		return AgentDTO{}, fmt.Errorf("update system assistant: %w", err)
-	}
-	s.deps.Logger.Info("system assistant updated", zap.String("id", cfg.ID))
-	return cfgToDTO(updated.GetConfig()), nil
-}
-
-// resolveSystemAssistantModel merges the requested model with the persisted
-// value (unset keeps current) and validates only genuine changes, keeping the
-// settings-channel sentinel mapping.
-func (s *AgentService) resolveSystemAssistantModel(ctx context.Context, tenantID, persisted, requested string) (string, error) {
-	model := requested
-	if model == "" {
-		model = persisted
-	}
-	if model == persisted {
-		return model, nil
-	}
-	if s.deps.TenantModelValidator == nil {
-		return model, nil
-	}
-	if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, tenantID, model); err != nil {
-		if errors.Is(err, domain.ErrAssistantModelUnavailable) ||
-			errors.Is(err, domain.ErrInvalidSystemAssistantModel) {
-			return "", domain.ErrInvalidSystemAssistantModel
-		}
-		return "", fmt.Errorf("update system assistant model: %w", err)
-	}
-	return model, nil
-}
-
-// mergeSystemAssistantMaxTokens merges the requested max_tokens with the
-// persisted value (0 = keep current) and validates both input and merged
-// result. The pre-merge check rejects out-of-bounds PUT values; the post-merge
-// check stops a legacy out-of-bounds persisted value from being silently
-// rewritten by PUT 0. Both fail closed with ErrInvalidSamplingParameters and
-// never persist.
-func (s *AgentService) mergeSystemAssistantMaxTokens(ctx context.Context, requested, persisted int) (int, error) {
-	if err := s.validateSamplingParams(ctx, 0, requested, ""); err != nil {
-		return 0, err
-	}
-	maxTokens := requested
-	if maxTokens <= 0 {
-		maxTokens = persisted
-	}
-	if maxTokens != 0 {
-		if err := s.validateSamplingParams(ctx, 0, maxTokens, ""); err != nil {
-			return 0, err
-		}
-	}
-	return maxTokens, nil
-}
-
-// Delete removes an agent and cascades deletion to conversations and memories.
 func (s *AgentService) Delete(ctx context.Context, tenantID, id, actorID string) error {
 	existing, ok, err := s.deps.Registry.Get(ctx, id)
 	if err != nil {
@@ -1247,9 +842,6 @@ func (s *AgentService) Delete(ctx context.Context, tenantID, id, actorID string)
 	}
 	if !ok {
 		return ErrNotFound
-	}
-	if existing.GetConfig().SystemKey != "" {
-		return domain.ErrSystemAssistantManaged
 	}
 	// Delete stays creator/owner-only: editors do not grant delete rights.
 	if err := s.checkOwnership(ctx, actorID, existing.GetConfig().CreatedBy, nil); err != nil {
@@ -1287,9 +879,6 @@ func (s *AgentService) SetEditors(ctx context.Context, id, actorID string, edito
 		return ErrNotFound
 	}
 	cfg := existing.GetConfig()
-	if cfg.SystemKey != "" {
-		return domain.ErrSystemAssistantManaged
-	}
 	// Editors can never grant delete rights, so SetEditors reuses the
 	// creator/owner-only base matrix.
 	if err := s.checkOwnership(ctx, actorID, cfg.CreatedBy, nil); err != nil {
@@ -1357,8 +946,6 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		DelegateMaxDepth:        cfg.DelegateMaxDepth,
 		DelegateDefaultMaxSteps: cfg.DelegateDefaultMaxSteps,
 		SystemKey:               cfg.SystemKey,
-		IsSystem:                cfg.IsSystem,
-		ManagementMode:          cfg.ManagementMode,
 		Parameters:              samplingParameterMap(cfg),
 	}
 }
@@ -1455,7 +1042,7 @@ func (s *AgentService) resolveExecutionAgent(
 	current Agent,
 	tenantID, agentID, subjectID string,
 ) (Agent, port.AgentRevisionAssignment, error) {
-	if current.GetConfig().SystemKey == domain.SystemAssistantKey || s.deps.AgentRevisionResolver == nil {
+	if s.deps.AgentRevisionResolver == nil {
 		return current, port.AgentRevisionAssignment{}, nil
 	}
 	assignment, found, err := s.deps.AgentRevisionResolver.ResolveAgentRevision(
@@ -1551,7 +1138,7 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 	durationMs := int(time.Since(start).Milliseconds())
 	s.recordSystemAssistantExecution(cfg, result, err)
 	s.logAgentExecution("agent.execute", agentID, meta, req, durationMs, err)
-	if err == nil && result != nil && !cfg.SystemAssistantMode {
+	if err == nil && result != nil {
 		// MemoryBuffer 是执行成功后的旁路异步摄取（Redis buffer，供后台记忆
 		// 提取）。答案已交付，缓冲失败不阻断响应——降级决策，但错误必须显式
 		// 处理并记录，禁止静默吞掉。
@@ -1560,7 +1147,7 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 		s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "assistant", result.Output)
 	}
 	// 任务结束轨迹反思：与 fact 提取并列的链路，fail-open 显式降级。
-	s.enqueueTrajectoryReflection(ctx, meta, req, agentID, a.GetConfig().MemoryScope, executionID, result, cfg.SystemAssistantMode)
+	s.enqueueTrajectoryReflection(ctx, meta, req, agentID, a.GetConfig().MemoryScope, executionID, result)
 	if resuming {
 		err = s.finishApprovalResume(ctx, meta.TenantID, executionID, consumedApproval, terminal, err)
 	}
@@ -1586,11 +1173,11 @@ func (s *AgentService) ExecuteStream(
 	var firstToken sync.Once
 	var streamStarted time.Time
 	wrappedTokenCb := tokenCb
-	if cfg.SystemAssistantMode && s.deps.Metrics != nil {
+	if s.deps.Metrics != nil {
 		wrappedTokenCb = func(token string) {
 			firstToken.Do(func() {
-				s.deps.Metrics.RecordSystemAssistantTTFT(cfg.SystemAssistantRoleClass,
-					cfg.EvolutionTrace.ResourceManifest["system-assistant-profile"], time.Since(streamStarted).Seconds())
+				s.deps.Metrics.RecordSystemAssistantTTFT(cfg.AssistantRoleClass,
+					"", time.Since(streamStarted).Seconds())
 			})
 			if tokenCb != nil {
 				tokenCb(token)
@@ -1609,13 +1196,13 @@ func (s *AgentService) ExecuteStream(
 		durationMs := int(time.Since(start).Milliseconds())
 		s.recordSystemAssistantExecution(cfg, res, runErr)
 		s.logAgentExecution("agent.execute_stream", agentID, meta, req, durationMs, runErr)
-		if runErr == nil && res != nil && !cfg.SystemAssistantMode {
+		if runErr == nil && res != nil {
 			// 降级决策与 Execute 路径一致：答案已交付，旁路记忆缓冲失败只记日志。
 			scope := a.GetConfig().MemoryScope
 			s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "user", req.Query)
 			s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "assistant", res.Output)
 		}
-		s.enqueueTrajectoryReflection(ctx, meta, req, agentID, a.GetConfig().MemoryScope, executionID, res, cfg.SystemAssistantMode)
+		s.enqueueTrajectoryReflection(ctx, meta, req, agentID, a.GetConfig().MemoryScope, executionID, res)
 		if resuming {
 			// 审批续跑收尾：成功/消费标记推进 checkpoint；失败且未消费批准时
 			// 回滚 running→waiting_approval，让 member 可重试同一批准。
@@ -1693,7 +1280,7 @@ func (s *AgentService) logAgentExecutionDebug(operation, agentID string, meta Ex
 
 // recordSystemAssistantExecution 记录系统助手执行结果指标（fail-open 侧通道）。
 func (s *AgentService) recordSystemAssistantExecution(cfg *ExecutionConfig, result *AgentResult, err error) {
-	if !cfg.SystemAssistantMode || s.deps.Metrics == nil {
+	if s.deps.Metrics == nil {
 		return
 	}
 	outcome := "success"
@@ -1702,8 +1289,7 @@ func (s *AgentService) recordSystemAssistantExecution(cfg *ExecutionConfig, resu
 	} else if hasFailedAssistantArtifact(result) {
 		outcome = "evidence_error"
 	}
-	s.deps.Metrics.IncSystemAssistantRequest(cfg.SystemAssistantRoleClass,
-		cfg.EvolutionTrace.ResourceManifest["system-assistant-profile"], outcome)
+	s.deps.Metrics.IncSystemAssistantRequest(cfg.AssistantRoleClass, "", outcome)
 }
 
 // logAgentExecution 统一记录执行结果日志（错误 ERROR / 成功 INFO）。
@@ -1754,9 +1340,8 @@ func (s *AgentService) enqueueTrajectoryReflection(
 	req ExecRequest,
 	agentID, scope, executionID string,
 	result *domain.AgentResult,
-	systemAssistant bool,
 ) {
-	if systemAssistant || s.deps.TrajectoryReflection == nil || result == nil || executionID == "" {
+	if s.deps.TrajectoryReflection == nil || result == nil || executionID == "" {
 		return
 	}
 	if len(result.ToolCalls) == 0 {
@@ -1808,16 +1393,10 @@ func containsRememberKeyword(query string) bool {
 }
 
 func (s *AgentService) recordSystemAssistantRequest(a Agent, roleClass, outcome string) {
-	if a == nil || a.GetConfig().SystemKey != domain.SystemAssistantKey || s.deps.Metrics == nil {
+	if a == nil || s.deps.Metrics == nil {
 		return
 	}
-	version := domain.CurrentSystemAssistantProfileVersion
-	if s.deps.Registry != nil {
-		if resolved, err := s.deps.Registry.systemAssistantProfileVersion(); err == nil {
-			version = resolved
-		}
-	}
-	s.deps.Metrics.IncSystemAssistantRequest(roleClass, version, outcome)
+	s.deps.Metrics.IncSystemAssistantRequest(roleClass, "", outcome)
 }
 
 func hasFailedAssistantArtifact(result *AgentResult) bool {
@@ -2683,30 +2262,18 @@ func (s *AgentService) assembleOptions(
 	if req.Timeout > 0 {
 		options = append(options, WithTimeout(req.Timeout))
 	}
-	isSystemAssistant := a.GetConfig().SystemKey == domain.SystemAssistantKey
-	if isSystemAssistant {
-		model := strings.TrimSpace(a.GetConfig().LLMModel)
-		if model == "" || s.deps.TenantModelValidator == nil {
+	// D16：模型校验对所有 agent 生效（平台助手等同化，普通 agent 同样要求
+	// 模型在租户可用列表）。空 model / validator 缺失 → ErrAssistantModelUnavailable
+	// (503)；模型不在租户列表 → ErrInvalidAgentModel → 503（执行期请求不合法模型）。
+	model := strings.TrimSpace(a.GetConfig().LLMModel)
+	if model == "" || s.deps.TenantModelValidator == nil {
+		return ctx, nil, domain.ErrAssistantModelUnavailable
+	}
+	if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, meta.TenantID, model); err != nil {
+		if errors.Is(err, domain.ErrInvalidAgentModel) {
 			return ctx, nil, domain.ErrAssistantModelUnavailable
 		}
-		if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, meta.TenantID, model); err != nil {
-			if errors.Is(err, domain.ErrInvalidSystemAssistantModel) {
-				return ctx, nil, domain.ErrAssistantModelUnavailable
-			}
-			return ctx, nil, fmt.Errorf("assemble system assistant model: %w", err)
-		}
-	}
-	// 平台内置资源仅系统助手可挂载:普通 agent 在装配前清除 builtin 技能、
-	// platform MCP server 工具与 platform workspace 绑定(in-place mutate
-	// AgentConfig,与 snapshotExecutionConfig 同锁串行,覆盖下方全部读点)。
-	// 返回被剔除的 workspace name 集,供 RAG 闭包再交集。系统助手保留全部。
-	var removedWSNames []string
-	if !isSystemAssistant {
-		var sanitizeErr error
-		removedWSNames, sanitizeErr = s.sanitizeRuntimeBindings(ctx, meta.TenantID, a)
-		if sanitizeErr != nil {
-			return ctx, nil, sanitizeErr
-		}
+		return ctx, nil, fmt.Errorf("assemble agent model: %w", err)
 	}
 	if s.deps.TenantResolver != nil {
 		if capGW, ok := s.deps.TenantResolver.Resolve(ctx, meta.TenantID); ok {
@@ -2762,7 +2329,7 @@ func (s *AgentService) assembleOptions(
 	var authorization domain.DiagnosticAuthorization
 	var toolingErr error
 	extraTools, skillCatalog, roleClass, toolingErr = s.resolveTooling(
-		ctx, meta, req, a, subjectID, isSystemAssistant, &authorization,
+		ctx, meta, req, a, subjectID, &authorization,
 	)
 	if toolingErr != nil {
 		return ctx, nil, toolingErr
@@ -2772,11 +2339,7 @@ func (s *AgentService) assembleOptions(
 		evolutionTrace.ResourceManifest = make(map[string]string)
 	}
 	if a.GetConfig().SystemKey == domain.SystemAssistantKey {
-		profileVersion, err := s.deps.Registry.systemAssistantProfileVersion()
-		if err != nil {
-			return ctx, nil, fmt.Errorf("assemble system assistant profile trace: %w", err)
-		}
-		evolutionTrace.ResourceManifest["system-assistant-profile"] = profileVersion
+		evolutionTrace.ResourceManifest["system-assistant-profile"] = domain.CurrentSystemAssistantProfileVersion
 	}
 	if evolutionTrace.ExperimentAssignments == nil {
 		evolutionTrace.ExperimentAssignments = make(map[string]ExperimentAssignment)
@@ -2882,11 +2445,6 @@ func (s *AgentService) assembleOptions(
 		WithSkillCatalog(skillCatalog),
 		WithEvolutionTraceMetadata(evolutionTrace),
 	)
-	if isSystemAssistant {
-		profileVersion := evolutionTrace.ResourceManifest["system-assistant-profile"]
-		options = append(options, s.systemAssistantExecutionOptions(ctx, meta, req, roleClass, authorization, profileVersion)...)
-		return ctx, options, nil
-	}
 	if s.deps.ToolAuthorizer != nil {
 		agentID, userID, conversationID, query := a.GetConfig().ID, req.UserID, req.ConversationID, req.Query
 		pinned := make(map[string]string, len(skillCatalog))
@@ -2934,13 +2492,18 @@ func (s *AgentService) assembleOptions(
 		}))
 	}
 	if s.deps.RAGSearch != nil && len(a.GetConfig().KnowledgeWorkspaceIDs) > 0 {
-		options = appendRAGSearchOptions(options, meta.TenantID, s.deps.RAGSearch, knowledgeAssignments, removedWSNames)
+		options = appendRAGSearchOptions(options, meta.TenantID, s.deps.RAGSearch, knowledgeAssignments)
 	}
 	options = applyFactCheckOption(options, s.deps.FactCheck)
-	// 普通 agent 同样装配内部工具结果 guard：RAG/recall 工具结果的
+	// 所有 agent 统一装配内部工具结果 guard：RAG/recall/8 运维工具结果的
 	// <untrusted_tool_result> 标记依赖 InternalToolResultGuardFn，漏装配会让
 	// 这些工具在 guard 上 fail-closed 报错。无条件装配，对无 RAG agent 无害。
-	options = append(options, withInternalToolResultGuard(makeInternalToolResultGuard(NewToolResultGuard())))
+	options = append(options, withAssistantRoleClass(roleClass),
+		withInternalToolResultGuard(makeInternalToolResultGuard(NewToolResultGuard())))
+	// 8 个内置运维工具的 in-process 能力闭包对所有 agent 注入（等化后通用；
+	// 写路径角色门禁在闭包内按 roleClass fail-closed）。
+	options = append(options, s.assistantExecutionOptions(ctx, meta, req, roleClass, authorization,
+		evolutionTrace.ResourceManifest["system-assistant-profile"], a.GetConfig().ID)...)
 	return ctx, s.resolveEffectiveParameters(ctx, a, options), nil
 }
 
@@ -2965,19 +2528,11 @@ func appendRAGSearchOptions(
 	tenantID string,
 	search port.RAGSearchProvider,
 	knowledgeAssignments map[string]port.KnowledgeRevisionAssignment,
-	platformWorkspaces []string,
 ) []ExecutionOption {
-	platformSet := make(map[string]struct{}, len(platformWorkspaces))
-	for _, workspace := range platformWorkspaces {
-		platformSet[workspace] = struct{}{}
-	}
 	options = append(options, WithRAGSearchFn(func(rctx context.Context, workspaces []string, query string, topK int, viewerID string) (string, error) {
 		var combined strings.Builder
 		mutable := make([]string, 0, len(workspaces))
 		for _, workspace := range workspaces {
-			if _, hit := platformSet[workspace]; hit {
-				continue
-			}
 			assignment, found := knowledgeAssignments[workspace]
 			if !found {
 				mutable = append(mutable, workspace)
@@ -3002,7 +2557,7 @@ func appendRAGSearchOptions(
 		}
 		return combined.String(), nil
 	}))
-	return appendEvidenceRAGOption(options, search, tenantID, knowledgeAssignments, platformWorkspaces)
+	return appendEvidenceRAGOption(options, search, tenantID, knowledgeAssignments)
 }
 
 // appendEvidenceRAGOption wires the evidence-capable search variant when the
@@ -3010,22 +2565,15 @@ func appendRAGSearchOptions(
 // the plain variant; revision snapshots have no provenance path, so they
 // contribute content only. The options slice is returned unchanged when the
 // provider lacks evidence support (existing behavior preserved).
-// platformWorkspaces are intersected out of mutable (same guard as the plain
-// variant, see appendRAGSearchOptions).
 func appendEvidenceRAGOption(
 	options []ExecutionOption,
 	search port.RAGSearchProvider,
 	tenantID string,
 	knowledgeAssignments map[string]port.KnowledgeRevisionAssignment,
-	platformWorkspaces []string,
 ) []ExecutionOption {
 	evidenceProvider, ok := search.(port.RAGSearchEvidenceProvider)
 	if !ok {
 		return options
-	}
-	platformSet := make(map[string]struct{}, len(platformWorkspaces))
-	for _, workspace := range platformWorkspaces {
-		platformSet[workspace] = struct{}{}
 	}
 	return append(options, WithRAGSearchFnWithEvidence(func(rctx context.Context, workspaces []string, query string, topK int, viewerID string) (port.RAGSearchEvidence, error) {
 		var combined strings.Builder
@@ -3033,9 +2581,6 @@ func appendEvidenceRAGOption(
 		var noAnswer *domain.NoAnswerInfo
 		mutable := make([]string, 0, len(workspaces))
 		for _, workspace := range workspaces {
-			if _, hit := platformSet[workspace]; hit {
-				continue
-			}
 			assignment, found := knowledgeAssignments[workspace]
 			if !found {
 				mutable = append(mutable, workspace)
@@ -3068,24 +2613,62 @@ func appendEvidenceRAGOption(
 	}))
 }
 
-// resolveTooling resolves the skill/tool catalog for an agent: the system
-// assistant profile for system agents (populating authorization), or the
-// per-tenant buildExtraToolsChecked for ordinary agents. This mirrors the
-// isSystemAssistant branch of assembleOptions so the branch count stays flat.
+// resolveTooling resolves the skill/tool catalog for an agent: the per-tenant
+// buildExtraToolsChecked plus the 8 generic in-process tools, authorizing the
+// current member for the role class that gates the write paths. 平台助手与
+// 普通 Agent 等同化后统一走此路径（能力拉起，不区分对待）。
 func (s *AgentService) resolveTooling(
-	ctx context.Context, meta ExecMeta, req ExecRequest, a Agent, subjectID string, isSystemAssistant bool,
+	ctx context.Context, meta ExecMeta, req ExecRequest, a Agent, subjectID string,
 	authorization *domain.DiagnosticAuthorization,
 ) (extraTools []port.ToolDefinition, skillCatalog map[string]port.SkillActivation, roleClass string, err error) {
-	if isSystemAssistant {
-		return s.resolveSystemAssistantTooling(ctx, meta, req, a, subjectID, authorization)
-	}
 	extraTools, skillCatalog, err = s.buildExtraToolsChecked(
 		ctx, meta.TenantID, subjectID, a.GetConfig().MCPToolIDs, a.GetConfig().AllowedSkills,
 	)
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("resolve experiment resources: %w", err)
 	}
-	return extraTools, skillCatalog, "unknown", nil
+	// 8 个内置运维工具对所有 agent 通用。角色门禁统一由 DiagnosticProvider
+	// 解析：写操作 admin/owner、member 在装配闭包内 fail-closed；只读
+	// list 类所有角色可用。
+	extraTools = append(extraTools, SystemAssistantToolDefinitions()...)
+	roleClass = "unknown"
+	if s.deps.DiagnosticProvider != nil {
+		var authorizeErr error
+		*authorization, authorizeErr = s.deps.DiagnosticProvider.Authorize(ctx, domain.DiagnosticRequest{
+			TenantID: meta.TenantID, UserID: req.UserID,
+			Areas: []domain.DiagnosticArea{domain.DiagnosticAreaAgent, domain.DiagnosticAreaSkill, domain.DiagnosticAreaMCP, domain.DiagnosticAreaKnowledge, domain.DiagnosticAreaModel},
+		})
+		if authorizeErr != nil {
+			// D18：无 HTTP actor 的内部执行（revision/评估/工作流/collab）没有
+			// 真实用户身份——UserID 为空或是合成标识（"collab:"+planID、
+			// "workflow"），Authorize 失败回退 member（self 范围），禁止
+			// fail-open 但也不阻断合法内部流程；HTTP 执行带真实 UUID actor
+			// （JWT sub 派生），维持 fail-closed。
+			if !isRealActor(req.UserID) {
+				roleClass = "member"
+				*authorization = domain.DiagnosticAuthorization{RoleClass: "member"}
+			} else {
+				return nil, nil, "", authorizeErr
+			}
+		} else {
+			roleClass = boundedAssistantRoleClass(authorization.RoleClass)
+		}
+	}
+	return extraTools, skillCatalog, roleClass, nil
+}
+
+// isRealActor 判断 UserID 是否为真实租户成员身份（UUID）。内部执行
+// （collab/workflow/revision/评估）使用合成标识（"collab:"+planID、
+// "workflow"）或空串，不参与角色门禁：Authorize 失败回退 member，禁止
+// fail-open 但也不阻断合法内部流程；真实 HTTP actor 由 JWT sub 派生且
+// 恒为 UUID，维持 fail-closed。
+func isRealActor(userID string) bool {
+	id := strings.TrimSpace(userID)
+	if id == "" {
+		return false
+	}
+	_, err := uuid.Parse(id)
+	return err == nil
 }
 
 // resolveEffectiveParameters resolves the resource-declared execution
@@ -3243,47 +2826,18 @@ func (s *AgentService) attachCompactionStore(a Agent) {
 	}
 }
 
-// resolveSystemAssistantTooling authorizes the current member, derives the
-// bounded role class, and builds the in-process platform tools plus the skill
-// catalog for the system assistant.
-func (s *AgentService) resolveSystemAssistantTooling(
-	ctx context.Context,
-	meta ExecMeta,
-	req ExecRequest,
-	a Agent,
-	subjectID string,
-	authorization *domain.DiagnosticAuthorization,
-) ([]port.ToolDefinition, map[string]port.SkillActivation, string, error) {
-	roleClass := "unknown"
-	if s.deps.DiagnosticProvider != nil {
-		var authorizeErr error
-		*authorization, authorizeErr = s.deps.DiagnosticProvider.Authorize(ctx, domain.DiagnosticRequest{
-			TenantID: meta.TenantID, UserID: req.UserID,
-			Areas: []domain.DiagnosticArea{domain.DiagnosticAreaAgent, domain.DiagnosticAreaSkill, domain.DiagnosticAreaMCP, domain.DiagnosticAreaKnowledge, domain.DiagnosticAreaModel},
-		})
-		if authorizeErr != nil {
-			return nil, nil, "", authorizeErr
-		}
-		roleClass = boundedAssistantRoleClass(authorization.RoleClass)
-	}
-	extraTools := SystemAssistantToolDefinitions()
-	skillCatalog, catalogErr := s.buildSkillCatalog(ctx, meta.TenantID, subjectID, a.GetConfig().AllowedSkills)
-	if catalogErr != nil {
-		return nil, nil, "", fmt.Errorf("resolve experiment resources: %w", catalogErr)
-	}
-	return extraTools, skillCatalog, roleClass, nil
-}
-
-// systemAssistantExecutionOptions attaches the in-process capability callbacks
-// (official docs search, tenant diagnostics, governed proposals) plus the
-// bounded result guard for the system assistant execution.
-func (s *AgentService) systemAssistantExecutionOptions(
+// assistantExecutionOptions attaches the in-process capability callbacks
+// (official docs search, tenant diagnostics, governed proposals, model/agent/
+// MCP listing) shared by all agents. 平台助手等同化后 8 运维工具对所有 agent
+// 通用，roleClass 门禁在写路径闭包内 fail-closed。
+func (s *AgentService) assistantExecutionOptions(
 	ctx context.Context,
 	meta ExecMeta,
 	req ExecRequest,
 	roleClass string,
 	authorization domain.DiagnosticAuthorization,
 	profileVersion string,
+	agentID string,
 ) []ExecutionOption {
 	var options []ExecutionOption
 	if s.deps.OfficialDocsSearch != nil {
@@ -3315,7 +2869,6 @@ func (s *AgentService) systemAssistantExecutionOptions(
 			return evidence, diagnosticErr
 		}))
 	}
-	guard := NewToolResultGuard()
 	if s.deps.ProposalService != nil {
 		proposalService := s.deps.ProposalService
 		tenantID, actorID, conversationID := meta.TenantID, req.UserID, req.ConversationID
@@ -3372,17 +2925,74 @@ func (s *AgentService) systemAssistantExecutionOptions(
 			return applier(callCtx, actorID, args)
 		}))
 	}
-	options = s.appendSystemModelToolOptions(options, meta, req, roleClass)
-	options = append(options, WithSystemAssistantMode(), withSystemAssistantRoleClass(roleClass),
-		withInternalToolResultGuard(makeInternalToolResultGuard(guard)))
+	options = s.appendSystemModelToolOptions(options, meta, req, roleClass, agentID)
 	return options
+}
+
+// updateAgentModelForTool updates an agent's chat model through the ordinary
+// Update path (validation + audit + atomic), returning the settings projection
+// the model tool surface renders. 平台助手等同化后不再有专属 registry 方法，
+// 写路径走普通流程并受普通 ownership 矩阵约束（owner 放行、admin/member
+// 按 created_by/editors 判定，seed created_by=” 故 admin 默认被拒）。
+func (s *AgentService) updateAgentModelForTool(callCtx context.Context, agentID, actorID, model string) (SystemAssistantSettings, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return SystemAssistantSettings{}, domain.ErrInvalidAgentModel
+	}
+	tenantID := reqctx.TenantIDFromContext(callCtx)
+	if tenantID == "" {
+		return SystemAssistantSettings{}, fmt.Errorf("agent service update agent model: tenant id required")
+	}
+	if s.deps.TenantModelValidator != nil {
+		if err := s.deps.TenantModelValidator.ValidateTenantChatModel(callCtx, tenantID, model); err != nil {
+			return SystemAssistantSettings{}, err
+		}
+	}
+	existing, found, err := s.deps.Registry.Get(callCtx, agentID)
+	if err != nil {
+		return SystemAssistantSettings{}, fmt.Errorf("agent service update agent model: %w", err)
+	}
+	if !found {
+		return SystemAssistantSettings{}, ErrNotFound
+	}
+	cfg := existing.GetConfig()
+	// buildUpdateConfig 全量构造：未填字段会以零值清空存量，故从 existing
+	// 继承全部可变字段，仅替换 LLMModel。
+	_, err = s.Update(callCtx, agentID, UpdateAgentInput{
+		ActorID:               actorID,
+		Name:                  cfg.Name,
+		Type:                  string(cfg.Type),
+		Description:           cfg.Description,
+		SystemPrompt:          cfg.SystemPrompt,
+		LLMModel:              model,
+		MaxIterations:         cfg.MaxIterations,
+		MaxContextTokens:      cfg.MaxContextTokens,
+		Temperature:           cfg.Temperature,
+		ReasoningEffort:       cfg.ReasoningEffort,
+		MaxTokens:             cfg.MaxTokens,
+		Parameters:            cfg.MemoryParameters,
+		AllowedSkills:         cfg.AllowedSkills,
+		MCPToolIDs:            cfg.MCPToolIDs,
+		KnowledgeWorkspaceIDs: cfg.KnowledgeWorkspaceIDs,
+		MemoryScope:           cfg.MemoryScope,
+	})
+	if err != nil {
+		return SystemAssistantSettings{}, err
+	}
+	models, err := s.listTenantChatModels(callCtx, tenantID)
+	if err != nil {
+		return SystemAssistantSettings{}, err
+	}
+	return SystemAssistantSettings{
+		AgentID: agentID, Model: model, Ready: true, AvailableModels: models,
+	}, nil
 }
 
 // appendSystemModelToolOptions 装配模型工具闭包：list_models 全角色可见；
 // update_system_model 写路径在闭包内按 roleClass fail closed，member 明确
 // 拒绝且不触达 Registry。提取为独立方法以控制主函数圈复杂度。
 func (s *AgentService) appendSystemModelToolOptions(
-	options []ExecutionOption, meta ExecMeta, req ExecRequest, roleClass string,
+	options []ExecutionOption, meta ExecMeta, req ExecRequest, roleClass string, defaultAgentID string,
 ) []ExecutionOption {
 	if s.deps.ModelDetailsProvider != nil {
 		details := s.deps.ModelDetailsProvider
@@ -3396,12 +3006,19 @@ func (s *AgentService) appendSystemModelToolOptions(
 	}
 	if s.deps.Registry != nil {
 		actorID := req.UserID
-		updateModel := func(callCtx context.Context, model string) (map[string]any, error) {
+		updateModel := func(callCtx context.Context, model, agentID string) (map[string]any, error) {
 			if roleClass != "admin" && roleClass != "owner" {
 				// 写路径 fail closed：member 明确拒绝，不触达 Registry。
-				return nil, errors.New("更新平台助手模型需要管理员权限")
+				return nil, errors.New("更新 Agent 模型需要管理员权限")
 			}
-			settings, updateErr := s.UpdateSystemAssistantModel(callCtx, model, actorID)
+			targetID := strings.TrimSpace(agentID)
+			if targetID == "" {
+				targetID = defaultAgentID
+			}
+			if strings.TrimSpace(targetID) == "" {
+				return nil, fmt.Errorf("update agent model: agent id required")
+			}
+			settings, updateErr := s.updateAgentModelForTool(callCtx, targetID, actorID, model)
 			if updateErr != nil {
 				return nil, updateErr
 			}

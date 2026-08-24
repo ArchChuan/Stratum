@@ -12,33 +12,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// stubSystemResourceGuard scripts SystemResourceGuard lookups: platform sets
-// default to empty (isolation semantics off for legacy tests that only
-// exercise assembly paths), error fields force the fail-closed paths.
-type stubSystemResourceGuard struct {
-	platformMCP []string
-	platformWS  []string
-	mcpErr      error
-	wsErr       error
-}
-
-func (g stubSystemResourceGuard) IsPlatformManagedMCPServer(_ context.Context, _, serverID string) (bool, error) {
-	for _, id := range g.platformMCP {
-		if id == serverID {
-			return true, nil
-		}
-	}
-	return false, g.mcpErr
-}
-
-func (g stubSystemResourceGuard) PlatformManagedMCPServerIDs(_ context.Context, _ string) ([]string, error) {
-	return g.platformMCP, g.mcpErr
-}
-
-func (g stubSystemResourceGuard) PlatformManagedWorkspaceIDs(_ context.Context, _ string) ([]string, error) {
-	return g.platformWS, g.wsErr
-}
-
 func TestParseAgentTypeWireIsCompatibilityOnly(t *testing.T) {
 	for _, value := range []string{"react", "planning", "cot", "tool_calling", "rag", "swarm", "legacy"} {
 		if got := parseAgentTypeWire(value); got != domain.ReActAgent {
@@ -227,8 +200,8 @@ func (a *optionCaptureAgent) Reset()               {}
 func (a *optionCaptureAgent) GetMemory() []Message { return nil }
 
 func TestAssembleOptionsIncludesExecutionID(t *testing.T) {
-	svc := NewAgentService(AgentServiceDeps{})
-	agent := &optionCaptureAgent{config: &domain.AgentConfig{ID: "agent-1", MaxIterations: 3}}
+	svc := NewAgentService(AgentServiceDeps{TenantModelValidator: &stubTenantModelValidator{}})
+	agent := &optionCaptureAgent{config: &domain.AgentConfig{ID: "agent-1", LLMModel: "test-model", MaxIterations: 3}}
 	_, options, err := svc.assembleOptions(
 		context.Background(), agent, ExecRequest{}, ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1",
 	)
@@ -255,10 +228,10 @@ func TestAssembleOptionsPinsKnowledgeExperimentRevisionForTraceAndSearch(t *test
 	svc := NewAgentService(AgentServiceDeps{
 		KnowledgeRevisionResolver: resolver,
 		RAGSearch:                 search,
-		SystemResourceGuard:       stubSystemResourceGuard{},
+		TenantModelValidator:      &stubTenantModelValidator{},
 	})
 	agent := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: "agent-1", MaxIterations: 3, KnowledgeWorkspaceIDs: []string{"workspace-1"},
+		ID: "agent-1", LLMModel: "test-model", MaxIterations: 3, KnowledgeWorkspaceIDs: []string{"workspace-1"},
 		KnowledgeWorkspaceNames: []string{"Knowledge One"},
 	}}
 	_, options, err := svc.assembleOptions(context.Background(), agent,
@@ -294,11 +267,11 @@ func TestAssembleOptionsClassifiesKnowledgeRevisionSearchFailure(t *testing.T) {
 		KnowledgeRevisionResolver: &knowledgeRevisionResolverFake{assignment: port.KnowledgeRevisionAssignment{
 			Revision: revision, ExperimentID: "experiment-1", Variant: "canary",
 		}},
-		RAGSearch:           search,
-		SystemResourceGuard: stubSystemResourceGuard{},
+		RAGSearch:            search,
+		TenantModelValidator: &stubTenantModelValidator{},
 	})
 	agent := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: "agent-1", MaxIterations: 3, KnowledgeWorkspaceIDs: []string{"workspace-1"},
+		ID: "agent-1", LLMModel: "test-model", MaxIterations: 3, KnowledgeWorkspaceIDs: []string{"workspace-1"},
 		KnowledgeWorkspaceNames: []string{"Knowledge One"},
 	}}
 	_, options, err := svc.assembleOptions(context.Background(), agent, ExecRequest{ConversationID: "conversation-1"},
@@ -325,9 +298,9 @@ func TestAssembleOptionsLoadsPinnedKnowledgeRevisionWithoutReassignment(t *testi
 		Reranking: "none", QueryRewrite: "none",
 	}
 	resolver := &knowledgeRevisionResolverFake{assignment: port.KnowledgeRevisionAssignment{Revision: revision}}
-	svc := NewAgentService(AgentServiceDeps{KnowledgeRevisionResolver: resolver, RAGSearch: &knowledgeRevisionSearchFake{}, SystemResourceGuard: stubSystemResourceGuard{}})
+	svc := NewAgentService(AgentServiceDeps{KnowledgeRevisionResolver: resolver, RAGSearch: &knowledgeRevisionSearchFake{}, TenantModelValidator: &stubTenantModelValidator{}})
 	agent := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: "agent-1", MaxIterations: 3, KnowledgeWorkspaceIDs: []string{"workspace-1"},
+		ID: "agent-1", LLMModel: "test-model", MaxIterations: 3, KnowledgeWorkspaceIDs: []string{"workspace-1"},
 		KnowledgeWorkspaceNames: []string{"Knowledge One"},
 	}}
 	_, _, err := svc.assembleOptions(context.Background(), agent,
@@ -346,7 +319,8 @@ func TestAssembleOptionsBuildsHistoryCompactorFromTenantGateway(t *testing.T) {
 	gateway := capabilityGatewayFake{}
 	compactor := historyCompactorFake{}
 	svc := NewAgentService(AgentServiceDeps{
-		TenantResolver: tenantResolverFake{gateway: gateway},
+		TenantResolver:       tenantResolverFake{gateway: gateway},
+		TenantModelValidator: &stubTenantModelValidator{},
 		HistoryCompactorFactory: func(got port.CapabilityGateway, _ *zap.Logger, _ int) port.HistoryCompactor {
 			if got != gateway {
 				t.Fatalf("factory gateway = %#v, want tenant gateway", got)
@@ -459,10 +433,10 @@ func TestAssembleOptionsPinsMCPExperimentRevisionForTraceAndExecution(t *testing
 		MCPToolExecutor: executor, ToolAuthorizer: NewToolAuthorizer(stubToolUserScopeResolver{
 			scope: port.ToolUserScope{UserActive: true, AllowsTool: true},
 		}),
-		SystemResourceGuard: stubSystemResourceGuard{},
+		TenantModelValidator: &stubTenantModelValidator{},
 	})
 	a := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: "agent-1", MaxIterations: 3, MCPToolIDs: []string{"mcp:server-1:lookup"},
+		ID: "agent-1", LLMModel: "test-model", MaxIterations: 3, MCPToolIDs: []string{"mcp:server-1:lookup"},
 	}}
 
 	_, options, err := svc.assembleOptions(context.Background(), a, ExecRequest{UserID: "user-1"},
@@ -540,10 +514,10 @@ func TestAssembleOptionsFailsClosedWhenExperimentAssignmentFails(t *testing.T) {
 	wantErr := errors.New("experiment store unavailable")
 	svc := NewAgentService(AgentServiceDeps{
 		SkillRevisionResolver: failingExperimentRevisionResolver{err: wantErr},
-		SystemResourceGuard:   stubSystemResourceGuard{},
+		TenantModelValidator:  &stubTenantModelValidator{},
 	})
 	a := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: "agent-1", MaxIterations: 3, AllowedSkills: []string{"skill-1"},
+		ID: "agent-1", LLMModel: "test-model", MaxIterations: 3, AllowedSkills: []string{"skill-1"},
 	}}
 
 	_, _, err := svc.assembleOptions(
@@ -558,10 +532,10 @@ func TestAssembleOptionsFailsClosedWhenExperimentRevisionLoadFails(t *testing.T)
 	wantErr := errors.New("revision store unavailable")
 	svc := NewAgentService(AgentServiceDeps{
 		SkillActivationResolver: failingSkillActivationResolver{err: wantErr},
-		SystemResourceGuard:     stubSystemResourceGuard{},
+		TenantModelValidator:    &stubTenantModelValidator{},
 	})
 	a := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: "agent-1", MaxIterations: 3, AllowedSkills: []string{"skill-1"},
+		ID: "agent-1", LLMModel: "test-model", MaxIterations: 3, AllowedSkills: []string{"skill-1"},
 	}}
 
 	_, _, err := svc.assembleOptions(
@@ -576,10 +550,11 @@ func TestAssembleOptionsAttributesEveryExperimentDeterministically(t *testing.T)
 	svc := NewAgentService(AgentServiceDeps{
 		SkillRevisionResolver:   multiExperimentRevisionResolver{},
 		SkillActivationResolver: multiExperimentActivationResolver{},
-		SystemResourceGuard:     stubSystemResourceGuard{},
+		TenantModelValidator:    &stubTenantModelValidator{},
 	})
 	a := &optionCaptureAgent{config: &domain.AgentConfig{
 		ID:            "agent-1",
+		LLMModel:      "test-model",
 		MaxIterations: 3,
 		AllowedSkills: []string{"skill-b", "skill-a"},
 	}}
@@ -659,12 +634,11 @@ func TestRevisionAgentOnlyInstallsSnapshotRequiredHooks(t *testing.T) {
 	}
 }
 
-func TestBuildRevisionAgentRejectsCraftedSystemAssistantRevision(t *testing.T) {
+func TestBuildRevisionAgentAcceptsSystemAssistantRevision(t *testing.T) {
 	svc := NewAgentService(AgentServiceDeps{Logger: zap.NewNop()})
-	_, err := svc.buildRevisionAgent(domain.AgentRevision{AgentID: domain.SystemAssistantID})
-	if !errors.Is(err, domain.ErrSystemAssistantRevisionUnsupported) {
-		t.Fatalf("buildRevisionAgent() error = %v", err)
-	}
+	agent, err := svc.buildRevisionAgent(domain.AgentRevision{AgentID: domain.SystemAssistantID})
+	require.NoError(t, err)
+	require.Equal(t, domain.SystemAssistantID, agent.GetConfig().ID)
 }
 
 func TestRevisionConfigFiltersKnowledgeMetadataWithDisabledBinding(t *testing.T) {

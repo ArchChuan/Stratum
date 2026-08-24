@@ -277,12 +277,11 @@ func (r publishedSkillActivationResolver) ResolveSkills(
 func (c *Container) buildAgent(ctx context.Context) error {
 	db := c.dbOrNil()
 
-	systemAssistantProfile := agent.BuiltinSystemAssistantProfileSource()
 	var repo agentport.AgentRepo
 	if db != nil {
 		repo = persistence.NewPgAgentRepo(db)
 	}
-	registry := agent.NewRegistry(repo, systemAssistantProfile, c.Logger)
+	registry := agent.NewRegistry(repo, c.Logger)
 	if c.Memory != nil && c.Memory.Injector != nil {
 		registry.SetMemoryInjector(c.Memory.Injector)
 	}
@@ -362,7 +361,6 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		ApprovalService:           a.ApprovalService,
 		ToolAuthorizer:            agent.NewToolAuthorizer(agentToolUserScopeResolver{members: tenantMemberService(c)}),
 		WorkspaceBindingValidator: workspaceBindingAdapter{ws: knowledgeWorkspaceService(c)},
-		SystemResourceGuard:       newSystemResourceGuard(mcpServiceOf(c), knowledgeWorkspaceService(c)),
 		FailureAudit:              failureRecorderOf(c),
 		Logger:                    c.Logger,
 	}

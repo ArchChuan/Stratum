@@ -24,7 +24,7 @@ export const workspaceSchema = z
     description: z.string().optional().default(''),
     config: workspaceConfigSchema.optional(),
     // management_mode: 'platform_managed' 即系统内置知识库（如 stratum_docs）。
-    // 普通 agent 挂载选择列须过滤，仅系统助手可挂载（后端 A1 写校验强制）。
+    // 挂载已对普通 agent 开放，写保护仍由后端 workspace_service 强制。
     management_mode: z.string().optional(),
   })
   .passthrough();

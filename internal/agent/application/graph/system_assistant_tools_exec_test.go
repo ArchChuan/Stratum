@@ -23,7 +23,6 @@ func testAssistantGuard(value any) (port.GuardedToolResult, error) {
 
 func TestSystemAssistantToolsExecuteInProcessAndBuildArtifacts(t *testing.T) {
 	state := &ReActState{
-		GovernedAssistant: true,
 		OfficialDocsSearchFn: func(_ context.Context, query string) ([]domain.Citation, error) {
 			return []domain.Citation{{Title: query, URL: "/docs/agent"}}, nil
 		},
@@ -81,10 +80,10 @@ func TestSystemAssistantToolsFailClosedWhenUnavailable(t *testing.T) {
 		{name: "ungoverned docs", state: ReActState{}, call: func(s *ReActState) toolExecResult {
 			return execOfficialDocsSearchTool(context.Background(), port.ToolCall{}, s, time.Now())
 		}},
-		{name: "nil diagnostic fn", state: ReActState{GovernedAssistant: true}, call: func(s *ReActState) toolExecResult {
+		{name: "nil diagnostic fn", state: ReActState{}, call: func(s *ReActState) toolExecResult {
 			return execDiagnoseTenantTool(context.Background(), port.ToolCall{}, s, time.Now())
 		}},
-		{name: "nil proposal fn", state: ReActState{GovernedAssistant: true}, call: func(s *ReActState) toolExecResult {
+		{name: "nil proposal fn", state: ReActState{}, call: func(s *ReActState) toolExecResult {
 			return execProposeResourceChangeTool(context.Background(), port.ToolCall{}, s, time.Now())
 		}},
 	}
@@ -100,7 +99,6 @@ func TestSystemAssistantToolsFailClosedWhenUnavailable(t *testing.T) {
 func TestSystemAssistantDirectApplyToolExecutesAndBuildsArtifact(t *testing.T) {
 	deadlineSeen := false
 	state := &ReActState{
-		GovernedAssistant: true,
 		ResourceChangeApplyFn: func(callCtx context.Context, _ map[string]any) (domain.ApplyResult, error) {
 			if _, ok := callCtx.Deadline(); ok {
 				deadlineSeen = true
@@ -133,37 +131,20 @@ func TestSystemAssistantDirectApplyToolExecutesAndBuildsArtifact(t *testing.T) {
 }
 
 func TestSystemAssistantDirectApplyToolFailClosed(t *testing.T) {
-	applyFnCalled := false
-	fn := func(context.Context, map[string]any) (domain.ApplyResult, error) {
-		applyFnCalled = true
-		return domain.ApplyResult{}, nil
-	}
-	tests := []struct {
-		name  string
-		state ReActState
-	}{
-		{name: "ungoverned assistant", state: ReActState{ResourceChangeApplyFn: fn}},
-		{name: "unwired apply fn", state: ReActState{GovernedAssistant: true}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			applyFnCalled = false
-			result := execApplyResourceChangeTool(context.Background(), port.ToolCall{
-				Name: domain.SystemAssistantToolApplyResourceChange, Arguments: map[string]any{},
-			}, &tc.state, time.Now())
-			require.Equal(t, domain.ToolTraceStatusError, result.status)
-			require.False(t, applyFnCalled, "apply fn must not be called when the tool is unavailable")
-			// The tool is unavailable before any apply happens, so no typed
-			// artifact is produced — the error surface is the message alone.
-			require.Nil(t, result.artifact)
-			require.Contains(t, result.content, "tool unavailable")
-		})
-	}
+	// 等化后 apply 工具对所有 agent 通用：只要装配了 ResourceChangeApplyFn 就
+	// 可调用（角色门禁在装配闭包内）。此处只验证 Fn 未装配时 fail-closed。
+	result := execApplyResourceChangeTool(context.Background(), port.ToolCall{
+		Name: domain.SystemAssistantToolApplyResourceChange, Arguments: map[string]any{},
+	}, &ReActState{}, time.Now())
+	require.Equal(t, domain.ToolTraceStatusError, result.status)
+	// The tool is unavailable before any apply happens, so no typed artifact
+	// is produced — the error surface is the message alone.
+	require.Nil(t, result.artifact)
+	require.Contains(t, result.content, "tool unavailable")
 }
 
 func TestSystemAssistantDirectApplyToolErrorBecomesTypedArtifact(t *testing.T) {
 	state := &ReActState{
-		GovernedAssistant: true,
 		ResourceChangeApplyFn: func(context.Context, map[string]any) (domain.ApplyResult, error) {
 			return domain.ApplyResult{}, errors.New("ownership denied")
 		},
@@ -191,7 +172,6 @@ func TestSystemAssistantDirectApplyToolErrorBecomesTypedArtifact(t *testing.T) {
 // platform is unhealthy.
 func TestSystemAssistantInvalidArgumentsMapsToRecoverableError(t *testing.T) {
 	state := &ReActState{
-		GovernedAssistant: true,
 		// 参数解析在装配闭包内（ApplyDirectFromTool → 严格解析器）执行；
 		// graph 层收到的是 callErr，这里直接模拟该错误以验证错误映射：
 		// 非法参数必须映射为模型可自纠的 "invalid tool arguments"，
@@ -212,7 +192,6 @@ func TestSystemAssistantInvalidArgumentsMapsToRecoverableError(t *testing.T) {
 
 func TestSystemAssistantDirectApplyToolRoutesThroughDispatch(t *testing.T) {
 	state := &ReActState{
-		GovernedAssistant: true,
 		ResourceChangeApplyFn: func(context.Context, map[string]any) (domain.ApplyResult, error) {
 			return domain.ApplyResult{ResourceID: "skill-1"}, nil
 		},
@@ -233,7 +212,6 @@ func TestSystemAssistantDirectApplyToolRoutesThroughDispatch(t *testing.T) {
 
 func TestSystemAssistantListModelsToolExecutesAndBuildsArtifact(t *testing.T) {
 	state := &ReActState{
-		GovernedAssistant: true,
 		ListModelsFn: func(_ context.Context) (map[string]any, error) {
 			return map[string]any{"models": []domain.TenantModelDetail{
 				{Model: "qwen-plus", Capabilities: []string{"chat"}, Enabled: true},
@@ -254,8 +232,7 @@ func TestSystemAssistantListModelsToolExecutesAndBuildsArtifact(t *testing.T) {
 func TestSystemAssistantUpdateSystemModelToolValidatesModelArgument(t *testing.T) {
 	var seen string
 	state := &ReActState{
-		GovernedAssistant: true,
-		UpdateSystemModelFn: func(_ context.Context, model string) (map[string]any, error) {
+		UpdateSystemModelFn: func(_ context.Context, model, _ string) (map[string]any, error) {
 			seen = model
 			return map[string]any{"model": model, "ready": true}, nil
 		},
@@ -286,7 +263,6 @@ func TestSafeAssistantToolErrorSentinelMapping(t *testing.T) {
 		{"proposal forbidden", domain.ErrProposalForbidden, "proposal forbidden"},
 		{"proposal invalid", domain.ErrProposalInvalid, "invalid proposal payload"},
 		{"proposal expired", domain.ErrProposalExpired, "proposal expired"},
-		{"system managed", domain.ErrSystemAssistantManaged, "resource is system-managed"},
 		{"invalid args carries detail", &domain.InvalidToolArgumentsError{Detail: "缺少必填字段 name"}, "invalid tool arguments: 缺少必填字段 name"},
 		{"bare invalid args", domain.ErrInvalidSystemAssistantToolArguments, "invalid tool arguments"},
 		{"apply definite failure unwraps sentinel", &port.ResourceApplyError{Outcome: port.ResourceApplyDefiniteFailure, Err: domain.ErrProposalForbidden}, "proposal forbidden"},
@@ -322,7 +298,6 @@ func TestAssistantToolErrorCodeMapping(t *testing.T) {
 
 func TestSystemAssistantListAgentsToolExecutesAndBuildsArtifact(t *testing.T) {
 	state := &ReActState{
-		GovernedAssistant: true,
 		ListAgentsFn: func(_ context.Context) (map[string]any, error) {
 			return map[string]any{"agents": []map[string]any{{"id": "a1", "name": "sales"}}}, nil
 		},
@@ -340,7 +315,6 @@ func TestSystemAssistantListAgentsToolExecutesAndBuildsArtifact(t *testing.T) {
 
 func TestSystemAssistantListMCPServersToolExecutesAndBuildsArtifact(t *testing.T) {
 	state := &ReActState{
-		GovernedAssistant: true,
 		ListMCPServersFn: func(_ context.Context) (map[string]any, error) {
 			return map[string]any{"servers": []map[string]any{{"name": "docs", "status": "connected"}}}, nil
 		},
@@ -372,7 +346,7 @@ func TestSystemAssistantListToolsFailClosedWhenUnavailable(t *testing.T) {
 	}
 	for _, tc := range states {
 		t.Run(tc.name, func(t *testing.T) {
-			result := tc.call(&ReActState{GovernedAssistant: true})
+			result := tc.call(&ReActState{})
 			require.Equal(t, domain.ToolTraceStatusError, result.status)
 			require.Contains(t, result.content, "tool unavailable")
 		})
@@ -381,11 +355,10 @@ func TestSystemAssistantListToolsFailClosedWhenUnavailable(t *testing.T) {
 
 func TestSystemAssistantModelToolsRouteThroughDispatch(t *testing.T) {
 	state := &ReActState{
-		GovernedAssistant: true,
 		ListModelsFn: func(_ context.Context) (map[string]any, error) {
 			return map[string]any{"models": []domain.TenantModelDetail{}}, nil
 		},
-		UpdateSystemModelFn: func(_ context.Context, model string) (map[string]any, error) {
+		UpdateSystemModelFn: func(_ context.Context, model, _ string) (map[string]any, error) {
 			return map[string]any{"model": model, "ready": true}, nil
 		},
 		InternalToolResultGuardFn: testAssistantGuard,

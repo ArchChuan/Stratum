@@ -20,11 +20,8 @@ func AllowedKnowledgeWorkspacesForTest(requested, agentAllowed []string) []strin
 	return allowedKnowledgeWorkspaces(requested, agentAllowed)
 }
 
-func EffectiveToolsForTest(
-	available []port.ToolDefinition,
-	governedAssistant bool,
-) []port.ToolDefinition {
-	return effectiveTools(available, governedAssistant)
+func EffectiveToolsForTest(available []port.ToolDefinition) []port.ToolDefinition {
+	return effectiveTools(available)
 }
 
 func BuildSkillToolForTest(catalog map[string]port.SkillActivation, actives []port.SkillActivation, allowance int) *port.ToolDefinition {

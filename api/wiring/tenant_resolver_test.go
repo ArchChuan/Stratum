@@ -125,7 +125,7 @@ func TestTenantCapabilityResolverUsesRegistryForDiagnosticsAndValidation(t *test
 	require.NoError(t, resolver.ValidateTenantChatModel(context.Background(), "tenant-1", "chat-model"))
 	require.ErrorIs(t,
 		resolver.ValidateTenantChatModel(context.Background(), "tenant-1", "unknown"),
-		agentdomain.ErrInvalidSystemAssistantModel,
+		agentdomain.ErrInvalidAgentModel,
 	)
 	require.Equal(t, []string{"chat-model"}, mustListTenantChatModels(t, resolver))
 }

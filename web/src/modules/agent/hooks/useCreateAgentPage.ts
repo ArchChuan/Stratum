@@ -34,12 +34,12 @@ export const useCreateAgentPage = () => {
         llmApi.listProviders(),
       ]);
       if (cancelled) return;
-      // 系统内置资源（isSystem skill / platform_managed workspace）仅系统助手可
-      // 挂载，创建页是普通 agent，选择列过滤掉。
-      if (skillsRes.status === 'fulfilled') setSkills(skillsRes.value.filter((s) => !s.isSystem));
+      // 等化后 builtin skill / platform workspace 对普通 agent 开放挂载，
+      // 选择列不再过滤系统内置资源。
+      if (skillsRes.status === 'fulfilled') setSkills(skillsRes.value);
       if (mcpRes.status === 'fulfilled') setMcpTools(mcpRes.value);
       if (workspacesRes.status === 'fulfilled') {
-        setWorkspaces(workspacesRes.value.filter((w) => w.management_mode !== 'platform_managed'));
+        setWorkspaces(workspacesRes.value);
       }
       if (modelsRes.status === 'fulfilled' && providersRes.status === 'fulfilled') {
         setGroupedModels(buildGroupedModels(modelsRes.value, providersRes.value));
@@ -64,8 +64,8 @@ export const useCreateAgentPage = () => {
         } = values;
         await agentApi.create({
           ...rest,
-          // memoryScope 字段不在创建表单渲染，initialValues 不会随 antd 提交：
-          // 显式带默认 'user'，否则落库空串导致用户级记忆永不注入（agent-context E2E）。
+          // memoryScope 在表单高级设置中必选（创建页 initialValues 默认 'user'），
+          // 提交值恒非空；保留 || 'user' 兜底，防止旧表单快照提交空串。
           memoryScope: values.memoryScope || 'user',
           mcpToolIds: values.mcpToolIds || [],
           knowledgeWorkspaceIds: values.knowledgeWorkspaceIds || [],

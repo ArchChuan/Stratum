@@ -51,7 +51,7 @@ export const EditAgentPage = () => {
         </Button>
         <div>
           <Title level={4} style={{ margin: 0 }}>
-            {agent?.isSystem ? '平台助手设置' : '编辑 Agent'}
+            {'编辑 Agent'}
           </Title>
           <Text type="secondary" style={{ fontSize: 13 }}>
             修改 Agent 配置
@@ -76,7 +76,6 @@ export const EditAgentPage = () => {
           workspaces={workspaces}
           groupedModels={groupedModels}
           currentModel={agent?.llmModel}
-          isSystem={agent?.isSystem}
         />
 
         <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>

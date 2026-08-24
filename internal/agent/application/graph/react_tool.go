@@ -73,11 +73,9 @@ func executeToolCall(ctx context.Context, s ReActState, tc port.ToolCall, capGW 
 	tracer := otel.Tracer("stratum/agent")
 	argumentsPayload := observability.SafeTracePayload(tc.Arguments, constants.AgentToolTraceMaxRawJSONBytes)
 	toolAttributes := buildToolAttributes(tc, s, provider, argumentsPayload)
-	if !s.GovernedAssistant {
-		toolAttributes = append(toolAttributes, tracePayloadAttributes(
-			ctx, s.TracePayloadStore, s.TenantID, s.TraceID, "tool-arguments", tc.Arguments,
-		)...)
-	}
+	toolAttributes = append(toolAttributes, tracePayloadAttributes(
+		ctx, s.TracePayloadStore, s.TenantID, s.TraceID, "tool-arguments", tc.Arguments,
+	)...)
 	toolCtx, toolSpan := tracer.Start(ctx, "react.tool",
 		oteltrace.WithAttributes(toolAttributes...),
 	)
@@ -103,11 +101,9 @@ func executeToolCall(ctx context.Context, s ReActState, tc port.ToolCall, capGW 
 	recordToolErrorArtifact(&s, provider.CapabilityID, toolStart, result)
 	toolLatencyMs := time.Since(toolStart).Milliseconds()
 	recordToolSpanResult(toolSpan, result.errMsg, result.content, toolLatencyMs)
-	if !s.GovernedAssistant {
-		toolSpan.SetAttributes(tracePayloadAttributes(
-			toolCtx, s.TracePayloadStore, s.TenantID, s.TraceID, "tool-result", result.content,
-		)...)
-	}
+	toolSpan.SetAttributes(tracePayloadAttributes(
+		toolCtx, s.TracePayloadStore, s.TenantID, s.TraceID, "tool-result", result.content,
+	)...)
 	appendToolObservation(&s, tc, provider, result, toolStart, toolLatencyMs)
 	appendToolTraceEvent(&s, tc, provider, result, toolStart, toolLatencyMs)
 	s.Messages = append(s.Messages, port.LLMMessage{
@@ -215,7 +211,7 @@ func dispatchSystemAssistantTool(toolCtx context.Context, tc port.ToolCall, s *R
 }
 
 func execOfficialDocsSearchTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
-	if !s.GovernedAssistant || s.OfficialDocsSearchFn == nil {
+	if s.OfficialDocsSearchFn == nil {
 		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "official docs tool unavailable", content: "error: tool unavailable"}
 	}
 	query, parseErr := domain.ParseOfficialDocsToolArguments(tc.Arguments)
@@ -244,7 +240,7 @@ func execOfficialDocsSearchTool(toolCtx context.Context, tc port.ToolCall, s *Re
 }
 
 func execDiagnoseTenantTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
-	if !s.GovernedAssistant || s.DiagnosticFn == nil {
+	if s.DiagnosticFn == nil {
 		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "diagnostic tool unavailable", content: "error: tool unavailable"}
 	}
 	areas, parseErr := domain.ParseDiagnosticToolArguments(tc.Arguments)
@@ -275,7 +271,7 @@ func execDiagnoseTenantTool(toolCtx context.Context, tc port.ToolCall, s *ReActS
 // execListModelsTool 只读：返回当前租户全量可配置模型清单（含停用/
 // embedding，标注 enabled 与能力）。对任意角色可用，结果经守卫限界。
 func execListModelsTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
-	if !s.GovernedAssistant || s.ListModelsFn == nil {
+	if s.ListModelsFn == nil {
 		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "list models tool unavailable", content: "error: tool unavailable"}
 	}
 	callCtx, cancel := context.WithTimeout(toolCtx, constants.SystemAssistantToolTimeout)
@@ -302,7 +298,7 @@ func execListModelsTool(toolCtx context.Context, tc port.ToolCall, s *ReActState
 // （id/name/type/description/model 等，不含 systemPrompt/systemKey）。
 // 对任意角色可用，结果经守卫限界。
 func execListAgentsTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
-	if !s.GovernedAssistant || s.ListAgentsFn == nil {
+	if s.ListAgentsFn == nil {
 		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "list agents tool unavailable", content: "error: tool unavailable"}
 	}
 	callCtx, cancel := context.WithTimeout(toolCtx, constants.SystemAssistantToolTimeout)
@@ -329,7 +325,7 @@ func execListAgentsTool(toolCtx context.Context, tc port.ToolCall, s *ReActState
 // （名称/状态/传输/工具名列表，不携带工具 InputSchema/OutputSchema 等内部
 // 契约）。对任意角色可用，结果经守卫限界。
 func execListMCPServersTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
-	if !s.GovernedAssistant || s.ListMCPServersFn == nil {
+	if s.ListMCPServersFn == nil {
 		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "list mcp servers tool unavailable", content: "error: tool unavailable"}
 	}
 	callCtx, cancel := context.WithTimeout(toolCtx, constants.SystemAssistantToolTimeout)
@@ -355,15 +351,16 @@ func execListMCPServersTool(toolCtx context.Context, tc port.ToolCall, s *ReActS
 // execUpdateSystemModelTool 写路径：model 参数必填；角色门禁（member
 // 拒绝）位于装配闭包内，graph 层只负责参数校验与守卫。
 func execUpdateSystemModelTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
-	if !s.GovernedAssistant || s.UpdateSystemModelFn == nil {
+	if s.UpdateSystemModelFn == nil {
 		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "update system model tool unavailable", content: "error: tool unavailable"}
 	}
 	model, _ := tc.Arguments["model"].(string)
 	if model == "" {
 		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "invalid tool arguments", content: "error: invalid tool arguments: model required"}
 	}
+	agentID, _ := tc.Arguments["agentId"].(string)
 	callCtx, cancel := context.WithTimeout(toolCtx, constants.SystemAssistantToolTimeout)
-	content, callErr := s.UpdateSystemModelFn(callCtx, model)
+	content, callErr := s.UpdateSystemModelFn(callCtx, model, agentID)
 	cancel()
 	if callErr != nil {
 		message := safeAssistantToolError(callErr)
@@ -383,7 +380,7 @@ func execUpdateSystemModelTool(toolCtx context.Context, tc port.ToolCall, s *ReA
 }
 
 func execProposeResourceChangeTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
-	if !s.GovernedAssistant || s.ProposalCreateFn == nil {
+	if s.ProposalCreateFn == nil {
 		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "proposal tool unavailable", content: "error: tool unavailable"}
 	}
 	callCtx, cancel := context.WithTimeout(toolCtx, constants.SystemAssistantToolTimeout)
@@ -415,7 +412,7 @@ func execProposeResourceChangeTool(toolCtx context.Context, tc port.ToolCall, s 
 }
 
 func execApplyResourceChangeTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
-	if !s.GovernedAssistant || s.ResourceChangeApplyFn == nil {
+	if s.ResourceChangeApplyFn == nil {
 		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "resource change apply tool unavailable", content: "error: tool unavailable"}
 	}
 	// Artifact-only extraction: strict argument validation (whitelist fields,
@@ -725,6 +722,7 @@ func isSystemAssistantTool(toolName string) bool {
 	case domain.SystemAssistantToolSearchOfficialDocs,
 		domain.SystemAssistantToolDiagnoseTenant,
 		domain.SystemAssistantToolProposeResourceChange,
+		domain.SystemAssistantToolApplyResourceChange,
 		domain.SystemAssistantToolListModels,
 		domain.SystemAssistantToolUpdateSystemModel,
 		domain.SystemAssistantToolListAgents,
@@ -795,8 +793,6 @@ func matchAssistantToolSentinel(err error) (string, bool) {
 		return "invalid proposal payload", true
 	case errors.Is(err, domain.ErrProposalExpired):
 		return "proposal expired", true
-	case errors.Is(err, domain.ErrSystemAssistantManaged):
-		return "resource is system-managed", true
 	case errors.Is(err, domain.ErrInvalidSystemAssistantToolArguments):
 		// 参数解析失败（如 payload 非法）是模型可自纠的错误，明确返回
 		// 而非落入默认分支，否则 LLM 会把非法参数误判为环境不可用。

@@ -15,8 +15,8 @@ beforeAll(() =>
 // 避免测试只用部分对象导致 tsc --noEmit 类型错误（CI frontend typecheck 门禁）。
 const baseProps = {
   agents: [
-    agentSchema.parse({ id: 'agent-1', name: '普通 Agent', isSystem: false }),
-    agentSchema.parse({ id: 'stratum-platform-assistant', name: '平台使用小助手', isSystem: true }),
+    agentSchema.parse({ id: 'agent-1', name: '普通 Agent' }),
+    agentSchema.parse({ id: 'stratum-platform-assistant', name: '平台使用小助手' }),
   ],
   selectedAgent: 'stratum-platform-assistant',
   onSelectAgent: vi.fn(),

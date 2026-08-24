@@ -21,8 +21,8 @@ func TestPublicErrorDescribesWrappedAssistantModelUnavailable(t *testing.T) {
 
 	got := DescribePublicError(err, http.StatusServiceUnavailable)
 	want := PublicErrorDescriptor{
-		Message: "租户尚未配置平台助手模型",
-		Code:    CodeSystemAssistantModelUnavailable,
+		Message: "该 Agent 尚未配置可用模型",
+		Code:    CodeAssistantModelUnavailable,
 	}
 	if got != want {
 		t.Fatalf("DescribePublicError() = %#v, want %#v", got, want)
@@ -110,7 +110,7 @@ func TestErrorHandlerReturnsAssistantModelUnavailableContract(t *testing.T) {
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
 	}
-	wantBody := "{\"code\":\"SYSTEM_ASSISTANT_MODEL_UNAVAILABLE\",\"error\":\"租户尚未配置平台助手模型\"}"
+	wantBody := "{\"code\":\"ASSISTANT_MODEL_UNAVAILABLE\",\"error\":\"该 Agent 尚未配置可用模型\"}"
 	if response.Body.String() != wantBody {
 		t.Fatalf("body = %q, want %q", response.Body.String(), wantBody)
 	}

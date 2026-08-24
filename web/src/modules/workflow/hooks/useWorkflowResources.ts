@@ -29,9 +29,8 @@ export const useWorkflowResources = () => {
         message.error({ content: errorText(agentResult.reason), duration: 3 });
       }
       if (skillResult.status === 'fulfilled') {
-        // 系统内置 skill（isSystem）仅系统助手可挂载，workflow 选择列过滤；
-        // 后端 G 定义校验（保存拒 builtin ref）+ 执行守卫兜底。
-        const published = skillResult.value.filter((skill) => skill.activeRevisionId && !skill.isSystem);
+        // 等化后 builtin skill 对普通 workflow 开放挂载：只保留已发布修订。
+        const published = skillResult.value.filter((skill) => skill.activeRevisionId);
         setSkills(published.map((skill) => ({ value: skill.id, label: skill.name })));
         setSkillRevisions(published.map((skill) => ({
           value: skill.activeRevisionId as string,

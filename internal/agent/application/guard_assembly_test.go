@@ -41,8 +41,8 @@ func TestMakeInternalToolResultGuard_StringAndMap(t *testing.T) {
 // assembleOptions 装配内部工具结果 guard：缺装配会导致 RAG/recall 工具
 // 在 guard 上 fail-closed 报错，是「工具结果打标」防线的装配回归点。
 func TestAssembleOptions_OrdinaryAgentWiresInternalGuard(t *testing.T) {
-	svc := NewAgentService(AgentServiceDeps{})
-	agent := &optionCaptureAgent{config: &domain.AgentConfig{ID: "agent-1", MaxIterations: 3}}
+	svc := NewAgentService(AgentServiceDeps{TenantModelValidator: &stubTenantModelValidator{}})
+	agent := &optionCaptureAgent{config: &domain.AgentConfig{ID: "agent-1", LLMModel: "test-model", MaxIterations: 3}}
 	_, options, err := svc.assembleOptions(
 		context.Background(), agent, ExecRequest{}, ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1",
 	)

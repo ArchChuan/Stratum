@@ -28,8 +28,6 @@ export const agentSchema = z
     delegateEnabled: z.boolean().optional().default(false),
     delegateMaxDepth: z.number().optional(),
     delegateDefaultMaxSteps: z.number().optional(),
-    isSystem: z.boolean().optional().default(false),
-    managementMode: z.string().optional().default(''),
     created_at: z.string().optional(),
     updated_at: z.string().optional(),
   })
@@ -53,8 +51,6 @@ export interface Agent {
   delegateEnabled?: boolean;
   delegateMaxDepth?: number;
   delegateDefaultMaxSteps?: number;
-  isSystem?: boolean;
-  managementMode?: string;
   created_at?: string;
   updated_at?: string;
   [key: string]: unknown;
@@ -324,13 +320,6 @@ export interface AgentExecutionFailure {
   status?: number;
 }
 
-export const systemAssistantSettingsSchema = z.object({
-  agentId: z.string(),
-  llmModel: z.string(),
-  ready: z.boolean(),
-  availableModels: z.array(z.string()),
-});
-export type SystemAssistantSettings = z.infer<typeof systemAssistantSettingsSchema>;
 
 export interface StreamCallbacks {
   onToken: (token: string) => void;

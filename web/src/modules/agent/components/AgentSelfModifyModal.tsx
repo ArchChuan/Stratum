@@ -1,4 +1,4 @@
-import { Form, Input, InputNumber, Modal, message } from 'antd';
+import { Form, Input, InputNumber, Modal, Select, message } from 'antd';
 import { useCallback, useState } from 'react';
 
 import type { Agent, AgentFormValues } from '../model/agent';
@@ -9,6 +9,7 @@ import {
   AGENT_MAX_CONTEXT_TOKENS_MAX,
   AGENT_MAX_CONTEXT_TOKENS_MIN,
   AGENT_MAX_CONTEXT_TOKENS_STEP,
+  MEMORY_SCOPE_OPTIONS,
 } from '@/constants';
 import { operationProposalApi } from '@/modules/operation-gate';
 import { extractErrorMessage } from '@/shared/lib';
@@ -115,8 +116,18 @@ export const AgentSelfModifyModal = ({ agent, open, onClose }: AgentSelfModifyMo
         >
           <InputNumber min={AGENT_MAX_CONTEXT_TOKENS_MIN} max={AGENT_MAX_CONTEXT_TOKENS_MAX} step={AGENT_MAX_CONTEXT_TOKENS_STEP} style={{ width: '100%' }} />
         </Form.Item>
-        <Form.Item name="memoryScope" label="记忆范围">
-          <Input />
+        <Form.Item
+          name="memoryScope"
+          label="记忆范围"
+          rules={[{ required: true, message: '请选择记忆范围' }]}
+        >
+          <Select placeholder="选择记忆范围">
+            {MEMORY_SCOPE_OPTIONS.map((o) => (
+              <Select.Option key={o.value} value={o.value}>
+                {o.label}
+              </Select.Option>
+            ))}
+          </Select>
         </Form.Item>
       </Form>
     </Modal>

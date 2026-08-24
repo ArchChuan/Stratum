@@ -1039,20 +1039,17 @@ func TestEffectiveTools_ToolSurfaceUnchangedByActives(t *testing.T) {
 
 	// 工具面 = plan 工具 + agent 绑定全集：激活与否不改变可见工具（Spec D5）。
 	// stratum_skill 由 prepareLLMRequest 按预算动态前置，不在本函数静态生成。
-	require.Equal(t, fullSurface, toolNames(graph.EffectiveToolsForTest(baseAvailable, false)))
+	require.Equal(t, fullSurface, toolNames(graph.EffectiveToolsForTest(baseAvailable)))
 
 	// plan 工具若混入 AvailableTools 会被防御性去重，不重复暴露。
 	withPlanInAvailable := append([]port.ToolDefinition{
 		{Name: "stratum_create_plan", ProviderType: "builtin"},
 		{Name: "stratum_revise_plan", ProviderType: "builtin"},
 	}, baseAvailable...)
-	require.Equal(t, fullSurface, toolNames(graph.EffectiveToolsForTest(withPlanInAvailable, false)))
+	require.Equal(t, fullSurface, toolNames(graph.EffectiveToolsForTest(withPlanInAvailable)))
 
-	// governed assistant 同样追加 plan 工具（agent_tasks 触发源，唯一真实用户
-	// 路径）；工具面 = plan 工具 + available，混入的 plan 工具仍防御性去重。
-	require.Equal(t, fullSurface, toolNames(graph.EffectiveToolsForTest(baseAvailable, true)))
-	require.Equal(t, planTools, toolNames(graph.EffectiveToolsForTest(nil, true)))
-	require.Equal(t, planTools, toolNames(graph.EffectiveToolsForTest(nil, false)))
+	// 空 available 时工具面 = plan 工具（agent_tasks 触发源，唯一真实用户路径）。
+	require.Equal(t, planTools, toolNames(graph.EffectiveToolsForTest(nil)))
 }
 
 func TestUpsertActivationReplacesInPlaceOrAppends(t *testing.T) {

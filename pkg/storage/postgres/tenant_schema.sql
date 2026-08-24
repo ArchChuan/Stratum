@@ -57,7 +57,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_system_key
 
 DO $$
 DECLARE
-    assistant_name TEXT := '__stratum_platform_assistant__';
+    assistant_name TEXT := '平台使用助手';
     suffix INTEGER := 0;
 BEGIN
     WHILE EXISTS (
@@ -66,7 +66,7 @@ BEGIN
           AND id <> 'stratum-platform-assistant'
     ) LOOP
         suffix := suffix + 1;
-        assistant_name := '__stratum_platform_assistant__' || suffix::TEXT;
+        assistant_name := '平台使用助手' || suffix::TEXT;
     END LOOP;
 
     INSERT INTO agents (
@@ -89,6 +89,14 @@ Unavailable diagnostic evidence is an evidence gap; it must never be reported as
     )
     ON CONFLICT (id) DO NOTHING;
 END $$;
+
+-- D11: 存量租户 seed 展示名友好化回填：旧 `__stratum_platform_assistant__` → 中文名。
+-- 等化后平台助手与普通 Agent 一致，命名仅是展示名；后端/前端均按 id/system_key 判断。
+UPDATE agents
+SET name = '平台使用助手',
+    updated_at = NOW()
+WHERE system_key = 'stratum.platform_assistant'
+  AND name = '__stratum_platform_assistant__';
 
 -- 内置平台助手提示词存 DB 字段（不再由代码常量覆盖）:存量租户空值幂等回填。
 UPDATE agents

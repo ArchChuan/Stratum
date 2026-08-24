@@ -31,7 +31,7 @@ func (v *recordingBindingValidator) ValidateWorkspaceBindings(_ context.Context,
 func newBindingTestService(t *testing.T, validator port.WorkspaceBindingValidator) *AgentService {
 	t.Helper()
 	return NewAgentService(AgentServiceDeps{
-		Registry:                  NewRegistry(&gateAgentRepoFake{agents: map[string]*domain.AgentConfig{}}, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry:                  NewRegistry(&gateAgentRepoFake{agents: map[string]*domain.AgentConfig{}}, zap.NewNop()),
 		TenantRoleResolver:        stubTenantRole{role: "owner"},
 		WorkspaceBindingValidator: validator,
 		Logger:                    zap.NewNop(),
@@ -53,7 +53,7 @@ func TestCreateRejectsUnknownWorkspaceBinding(t *testing.T) {
 func TestCreateFailsClosedWithoutValidator(t *testing.T) {
 	// Un-wired validator + non-empty bindings → rejected (D10 fail closed).
 	svc := NewAgentService(AgentServiceDeps{
-		Registry:           NewRegistry(&gateAgentRepoFake{agents: map[string]*domain.AgentConfig{}}, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry:           NewRegistry(&gateAgentRepoFake{agents: map[string]*domain.AgentConfig{}}, zap.NewNop()),
 		TenantRoleResolver: stubTenantRole{role: "owner"},
 		Logger:             zap.NewNop(),
 	})

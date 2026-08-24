@@ -258,8 +258,8 @@ export const ChatConversationSidebar = ({
               会话还是空的
             </Text>
           ) : !agentsError ? (
-            // selectedAgent 为 null 时（agents 列表为空、无 isSystem 且无回退选择）
-            // 明确提示「暂无可用 Agent」，避免列表区静默空白、侧栏看似消失。
+            // selectedAgent 为 null 时（agents 列表为空、无回退选择）明确提示
+            // 「暂无可用 Agent」，避免列表区静默空白、侧栏看似消失。
             <Text
               type="secondary"
               style={{ fontSize: 12, padding: '8px', display: 'block', textAlign: 'center' }}

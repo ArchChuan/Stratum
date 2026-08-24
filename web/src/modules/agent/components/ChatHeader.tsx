@@ -15,7 +15,6 @@ interface Props {
   agent?: Agent;
   isMobile?: boolean;
   onOpenConversations?: () => void;
-  isAdmin?: boolean;
 }
 
 const WorkflowShortcut = ({ isMobile }: { isMobile: boolean }) => {
@@ -59,7 +58,6 @@ export const ChatHeader = ({
   agent,
   isMobile = false,
   onOpenConversations,
-  isAdmin = false,
 }: Props) => {
   const inRouter = useInRouterContext();
   return (
@@ -87,11 +85,6 @@ export const ChatHeader = ({
     <RobotOutlined style={{ fontSize: 18, color: '#2563eb' }} />
     <Space size={6} wrap style={{ minWidth: 0 }}>
       <Text strong style={{ fontSize: 15 }}>{agent?.name || '请选择 Agent'}</Text>
-      {agent?.isSystem && (
-        <Tag color="blue" bordered={false} style={{ marginInlineEnd: 0, fontSize: 10 }}>
-          系统内置
-        </Tag>
-      )}
     </Space>
     {agent?.llmModel && (
       <Tag color="blue" style={{ fontSize: 11 }}>
@@ -101,11 +94,6 @@ export const ChatHeader = ({
     {agent?.description && !isMobile && (
       <Text type="secondary" style={{ fontSize: 12 }} ellipsis>
         {agent.description}
-      </Text>
-    )}
-    {agent?.isSystem && !agent.llmModel && !isAdmin && (
-      <Text type="secondary" style={{ fontSize: 12, overflowWrap: 'anywhere' }}>
-        尚未配置模型，请联系租户管理员
       </Text>
     )}
     <Space size={8} wrap style={{ marginInlineStart: 'auto' }}>

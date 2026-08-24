@@ -92,24 +92,6 @@ func putIfNonZero[T comparable](params map[string]any, key string, v, zero T) {
 	}
 }
 
-// packSystemAssistantParameters renders the parameters merge fragment for the
-// system assistant update. A zero max-token value is omitted so an old client
-// PUT cannot erase it; memory values may include nil deletion markers.
-func packSystemAssistantParameters(maxTokens int, memoryParameters map[string]any) (string, error) {
-	params := make(map[string]any, len(memoryParameters)+1)
-	if maxTokens > 0 {
-		params["max_tokens"] = maxTokens
-	}
-	for key, value := range memoryParameters {
-		params[key] = value
-	}
-	b, err := json.Marshal(params)
-	if err != nil {
-		return "", fmt.Errorf("pack system assistant parameters: %w", err)
-	}
-	return string(b), nil
-}
-
 // packAllSamplingParameters builds the full JSONB map including explicit
 // nulls for zero sampling fields. A JSONB null == explicit clear: under
 // overall-replace semantics (promote) a zero field must erase a previously
@@ -539,46 +521,6 @@ func (r *PgAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig, 
 		return nil, false, err
 	}
 	cfg.Type = domain.AgentType(agentType)
-	setManagedIdentity(&cfg)
-	cfg.AllowedSkills = nonNil(cfg.AllowedSkills)
-	cfg.MCPToolIDs = nonNil(cfg.MCPToolIDs)
-	cfg.KnowledgeWorkspaceIDs = nonNil(cfg.KnowledgeWorkspaceIDs)
-	return &cfg, true, nil
-}
-
-func (r *PgAgentRepo) GetSystemAssistant(ctx context.Context) (*domain.AgentConfig, bool, error) {
-	// 平台助手不进参数闭环(采样参数不优化、不走 promote 写回),但快照读取
-	// 与普通 agent 同形状,一并补读 parameters 列保持 schema 一致。
-	var cfg domain.AgentConfig
-	var agentType string
-	var rawParams string
-	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx,
-			`SELECT id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens,
-			        memory_scope, system_key, COALESCE(created_by, ''), parameters,
-			        delegate_enabled, delegate_max_depth, delegate_default_max_steps
-			 FROM agents WHERE system_key = 'stratum.platform_assistant'`).
-			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
-				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CreatedBy, &rawParams,
-				&cfg.DelegateEnabled, &cfg.DelegateMaxDepth, &cfg.DelegateDefaultMaxSteps); err != nil {
-			return err
-		}
-		if err := unpackSamplingParameters(rawParams, &cfg); err != nil {
-			return err
-		}
-		if err := loadAgentRelations(ctx, tx, &cfg); err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, false, nil
-		}
-		return nil, false, err
-	}
-	cfg.Type = domain.AgentType(agentType)
-	setManagedIdentity(&cfg)
 	cfg.AllowedSkills = nonNil(cfg.AllowedSkills)
 	cfg.MCPToolIDs = nonNil(cfg.MCPToolIDs)
 	cfg.KnowledgeWorkspaceIDs = nonNil(cfg.KnowledgeWorkspaceIDs)
@@ -589,6 +531,7 @@ func (r *PgAgentRepo) GetSystemAssistant(ctx context.Context) (*domain.AgentConf
 //
 // Uses 4 batched queries (agents + 3 association tables via WHERE agent_id = ANY($1))
 // instead of fanning out per-agent loaders, so cost is O(1) round-trips, not O(N).
+
 func (r *PgAgentRepo) GetAll(ctx context.Context) ([]*domain.AgentConfig, error) {
 	var out []*domain.AgentConfig
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -650,7 +593,6 @@ func scanAgents(ctx context.Context, tx pgx.Tx) ([]*domain.AgentConfig, []string
 			return nil, nil, fmt.Errorf("scan agent row: %w", err)
 		}
 		cfg.Type = domain.AgentType(agentType)
-		setManagedIdentity(&cfg)
 		cfgs = append(cfgs, &cfg)
 		ids = append(ids, cfg.ID)
 	}
@@ -731,9 +673,6 @@ func nonNil(s []string) []string {
 // same transaction.
 func (r *PgAgentRepo) Remove(ctx context.Context, id string, audit *auditdomain.ResourceChangeAuditEvent) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := rejectManagedAssistant(ctx, tx, id); err != nil {
-			return err
-		}
 		tag, err := tx.Exec(ctx, `DELETE FROM agents WHERE id = $1`, id)
 		if err != nil {
 			return err
@@ -761,9 +700,6 @@ func (r *PgAgentRepo) Remove(ctx context.Context, id string, audit *auditdomain.
 // fields become explicit nulls), false = merge (zero fields omitted).
 func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string, replaceParams bool) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := rejectManagedAssistant(ctx, tx, cfg.ID); err != nil {
-			return err
-		}
 		if err := revalidateEditorIfActor(ctx, tx, resourceEditorKind, cfg.ID, editorActor); err != nil {
 			return fmt.Errorf("update agent %s: %w", cfg.ID, err)
 		}
@@ -826,132 +762,6 @@ func samplingParameterSet(cfg *domain.AgentConfig, replaceParams bool) (string, 
 	return "parameters=jsonb_strip_nulls(parameters || $8::jsonb)", params, nil
 }
 
-// UpdateSystemAssistantModel updates the platform assistant's model fields in
-// a single transaction, auditing the change. Ownership checks do not apply —
-// the platform assistant is exempt — but every change is still recorded.
-func (r *PgAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, maxIterations int, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
-	var cfg domain.AgentConfig
-	var agentType string
-	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `UPDATE agents SET llm_model=$1, memory_scope=$2,
-			max_iterations=$3, max_context_tokens=$4, updated_at=NOW()
-			WHERE system_key='stratum.platform_assistant'
-			RETURNING id, name, type, description, system_prompt, llm_model,
-			          max_iterations, max_context_tokens, memory_scope, system_key, created_by`, model, memoryScope, maxIterations, maxContextTokens).
-			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
-				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CreatedBy); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return fmt.Errorf("update system assistant model: %w", domain.ErrNotFound)
-			}
-			return fmt.Errorf("update system assistant model: %w", err)
-		}
-		if err := loadAgentRelations(ctx, tx, &cfg); err != nil {
-			return fmt.Errorf("update system assistant model relations: %w", err)
-		}
-		if err := insertChangeAudit(ctx, tx, audit); err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	cfg.Type = domain.AgentType(agentType)
-	setManagedIdentity(&cfg)
-	cfg.AllowedSkills = nonNil(cfg.AllowedSkills)
-	cfg.MCPToolIDs = nonNil(cfg.MCPToolIDs)
-	cfg.KnowledgeWorkspaceIDs = nonNil(cfg.KnowledgeWorkspaceIDs)
-	return &cfg, nil
-}
-
-// UpdateSystemAssistantAll applies the platform assistant's model fields and
-// (unchanged) bindings in ONE transaction so the change audit lands with the
-// business write atomically. Formerly UpdateSystemAssistantModel +
-// UpdateSystemAssistantBindings in two separate transactions.
-func (r *PgAgentRepo) UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, maxIterations, maxContextTokens, maxTokens int, memoryParameters map[string]any, audit *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
-	var cfg domain.AgentConfig
-	var agentType string
-	var rawParams string
-	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		fragment, err := packSystemAssistantParameters(maxTokens, memoryParameters)
-		if err != nil {
-			return err
-		}
-		if err := tx.QueryRow(ctx, `UPDATE agents SET llm_model=$1, memory_scope=$2,
-			max_iterations=$3, max_context_tokens=$4,
-			parameters = jsonb_strip_nulls(COALESCE(parameters, '{}'::jsonb) || $5::jsonb),
-			updated_at=NOW()
-			WHERE system_key='stratum.platform_assistant'
-			RETURNING id, name, type, description, system_prompt, llm_model,
-			          max_iterations, max_context_tokens, memory_scope, system_key, created_by, parameters`, model, memoryScope, maxIterations, maxContextTokens, fragment).
-			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
-				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CreatedBy, &rawParams); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return fmt.Errorf("update system assistant: %w", domain.ErrNotFound)
-			}
-			return fmt.Errorf("update system assistant: %w", err)
-		}
-		if err := unpackSamplingParameters(rawParams, &cfg); err != nil {
-			return fmt.Errorf("update system assistant: %w", err)
-		}
-		if err := loadAgentRelations(ctx, tx, &cfg); err != nil {
-			return fmt.Errorf("update system assistant relations: %w", err)
-		}
-		if err := insertChangeAudit(ctx, tx, audit); err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	cfg.Type = domain.AgentType(agentType)
-	setManagedIdentity(&cfg)
-	cfg.AllowedSkills = nonNil(cfg.AllowedSkills)
-	cfg.MCPToolIDs = nonNil(cfg.MCPToolIDs)
-	cfg.KnowledgeWorkspaceIDs = nonNil(cfg.KnowledgeWorkspaceIDs)
-	return &cfg, nil
-}
-
-func rejectManagedAssistant(ctx context.Context, tx pgx.Tx, id string) error {
-	var systemKey string
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(system_key, '') FROM agents WHERE id = $1`, id).Scan(&systemKey); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("agent %s: %w", id, domain.ErrNotFound)
-		}
-		return fmt.Errorf("load agent %s system key: %w", id, err)
-	}
-	if systemKey != "" {
-		return domain.ErrSystemAssistantManaged
-	}
-	return nil
-}
-
-func setManagedIdentity(cfg *domain.AgentConfig) {
-	if cfg.SystemKey != "" {
-		cfg.IsSystem = true
-		cfg.ManagementMode = "platform"
-	}
-}
-
-func loadAgentRelations(ctx context.Context, tx pgx.Tx, cfg *domain.AgentConfig) error {
-	var err error
-	if cfg.AllowedSkills, err = loadSkillIDs(ctx, tx, cfg.ID); err != nil {
-		return err
-	}
-	if cfg.MCPToolIDs, err = loadMCPToolIDs(ctx, tx, cfg.ID); err != nil {
-		return err
-	}
-	cfg.KnowledgeWorkspaceIDs, cfg.KnowledgeWorkspaceNames, cfg.KnowledgeWorkspaceDescriptions, err =
-		loadKnowledgeWorkspaces(ctx, tx, cfg.ID)
-	return err
-}
-
-// FindAgentBySkill returns the id of an agent bound to skillID via
-// agent_skill_links, or found=false when no agent references the skill.
-// Ordering by agent_id makes the pick deterministic when several agents share
-// the skill. This owns the agent_skill_links read that the evaluation
-// composition root previously issued as raw SQL from api/wiring.
 func (r *PgAgentRepo) FindAgentBySkill(ctx context.Context, skillID string) (string, bool, error) {
 	var agentID string
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {

@@ -448,8 +448,6 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		// 审批；越权由 service 层 row.UserID 归属校验兜底（ErrApprovalNotFound 关闭 oracle）。
 		agents.POST("/tool-approvals/:approvalID/cancel", requireActive, agentHandler.CancelToolApproval)
 		agents.PUT("/tool-approvals/:approvalID/assignee", requireAdmin, requireActive, agentHandler.SetApprovalAssignee)
-		agents.GET("/system/settings", agentHandler.GetSettings)
-		agents.PUT("/system/settings", requireAdmin, requireActive, agentHandler.UpdateModel)
 		agents.GET("/:id", agentHandler.GetAgent)
 		execLimiter := newRateLimiterStore(c, middleware.LLMExecRate, middleware.LLMExecBurst)
 		execRateLimit := middleware.RateLimitByKey(execLimiter, func(c *gin.Context) string {

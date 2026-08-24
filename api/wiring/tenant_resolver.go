@@ -118,7 +118,7 @@ func (r *tenantCapabilityResolver) ValidateTenantChatModel(ctx context.Context, 
 			return nil
 		}
 	}
-	return agentdomain.ErrInvalidSystemAssistantModel
+	return agentdomain.ErrInvalidAgentModel
 }
 
 func (r *tenantCapabilityResolver) ListTenantChatModels(ctx context.Context, tenantID string) ([]string, error) {
@@ -128,7 +128,7 @@ func (r *tenantCapabilityResolver) ListTenantChatModels(ctx context.Context, ten
 	names, err := r.registry.ListChatModelsByTenant(ctx)
 	if err != nil {
 		if errors.Is(err, agentdomain.ErrAssistantModelUnavailable) ||
-			errors.Is(err, agentdomain.ErrInvalidSystemAssistantModel) {
+			errors.Is(err, agentdomain.ErrInvalidAgentModel) {
 			return []string{}, nil
 		}
 		return nil, fmt.Errorf("tenant llm model catalogue: %w", err)

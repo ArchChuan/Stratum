@@ -171,7 +171,7 @@ func (f *fakeEvidenceProvider) ResolveBatch(context.Context, string, []string) (
 
 func serviceWithEvidence(provider port.TraceEvidenceProvider) *agent.AgentService {
 	return agent.NewAgentService(agent.AgentServiceDeps{
-		Registry:         agent.NewRegistry(new(mockAgentRepo), agent.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry:         agent.NewRegistry(new(mockAgentRepo), zap.NewNop()),
 		EvidenceProvider: provider,
 		Logger:           zap.NewNop(),
 	})

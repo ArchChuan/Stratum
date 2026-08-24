@@ -50,9 +50,10 @@ func SystemAssistantToolDefinitions() []port.ToolDefinition {
 		{
 			Name: ToolUpdateSystemModel, ProviderType: domain.ProviderTypeInternal,
 			ProviderID: ToolUpdateSystemModel, CapabilityID: ToolUpdateSystemModel,
-			Description: "更新平台助手（系统助手）使用的模型。需要管理员权限，member 调用会被拒绝。",
+			Description: "更新 Agent 使用的模型（默认当前 Agent，可指定 agentId 更新其他 Agent）。需要管理员权限，member 调用会被拒绝。",
 			InputSchema: jschema.Must(jschema.ClosedObject(
 				jschema.RequiredProp("model", jschema.StringRange(1, 0, "")),
+				jschema.OptionalProp("agentId", jschema.StringRange(1, 0, "要更新的 Agent ID，缺省为当前执行的 Agent")),
 			)).Map(),
 		},
 		{

@@ -122,9 +122,6 @@ func TestPlatformManagedServerSystemKeyFailsClosedWithoutManagementMode(t *testi
 func (f *lifecycleManagerFake) ListTools(context.Context, string) ([]*domain.Tool, error) {
 	return nil, nil
 }
-func (f *lifecycleManagerFake) ListPlatformManagedServerIDs(context.Context) ([]string, error) {
-	return nil, nil
-}
 func (f *lifecycleManagerFake) ListEditors(context.Context, string, string) ([]string, error) {
 	return append([]string(nil), f.editors...), nil
 }

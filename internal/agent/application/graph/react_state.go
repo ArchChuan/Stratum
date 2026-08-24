@@ -35,7 +35,6 @@ type ReActState struct {
 	Actives                    []port.SkillActivation
 	TracePayloadStore          port.TracePayloadStore
 	ToolExecutionFn            port.ToolExecutionFn
-	GovernedAssistant          bool
 	AssistantToolArtifacts     []domain.SystemAssistantToolArtifact
 	ExecutionID                string
 	AgentKnowledgeWorkspaceIDs []string
@@ -73,7 +72,7 @@ type ReActState struct {
 	ProposalCreateFn          func(context.Context, map[string]any) (domain.ResourceChangeProposalArtifact, error)
 	ResourceChangeApplyFn     func(context.Context, map[string]any) (domain.ApplyResult, error)
 	ListModelsFn              func(context.Context) (map[string]any, error)
-	UpdateSystemModelFn       func(context.Context, string) (map[string]any, error)
+	UpdateSystemModelFn       func(_ context.Context, model, agentID string) (map[string]any, error)
 	ListAgentsFn              func(context.Context) (map[string]any, error)
 	ListMCPServersFn          func(context.Context) (map[string]any, error)
 	InternalToolResultGuardFn func(any) (port.GuardedToolResult, error)

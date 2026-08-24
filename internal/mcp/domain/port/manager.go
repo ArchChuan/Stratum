@@ -27,10 +27,6 @@ type ServerManager interface {
 	UpdateServer(ctx context.Context, cfg *domain.ServerConfig, editorActor string, audit *auditdomain.ResourceChangeAuditEvent) error
 	Delete(ctx context.Context, serverID string, audit *auditdomain.ResourceChangeAuditEvent) error
 	GetServerConfig(ctx context.Context, serverID string) (*domain.ServerConfig, error)
-	// ListPlatformManagedServerIDs 返回平台托管(platform_managed)server ID 全集。
-	// 谓词对齐 isPlatformManaged(system_key != '' OR management_mode='platform_managed');
-	// 供 wiring 的 SystemResourceGuard 做批量净化与挂载校验,避免逐 server 查询。
-	ListPlatformManagedServerIDs(ctx context.Context) ([]string, error)
 	ListTools(ctx context.Context, serverID string) ([]*domain.Tool, error)
 	ListResources(ctx context.Context, serverID string) ([]*domain.Resource, error)
 	GetServerInfo(ctx context.Context, serverID string) *domain.ServerInfo

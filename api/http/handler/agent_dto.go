@@ -23,7 +23,7 @@ type CreateAgentRequest struct {
 	AllowedSkills         []string `json:"allowedSkills"`
 	MCPToolIDs            []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
-	MemoryScope           string   `json:"memoryScope"`
+	MemoryScope           string   `json:"memoryScope" binding:"required"`
 	// DelegateEnabled 开启 stratum_delegate 子 agent 派发；DelegateMaxDepth /
 	// DelegateDefaultMaxSteps 0=unset → 运行时回落全局默认。
 	DelegateEnabled         bool `json:"delegateEnabled"`
@@ -51,7 +51,7 @@ type UpdateAgentRequest struct {
 	AllowedSkills         []string `json:"allowedSkills"`
 	MCPToolIDs            []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
-	MemoryScope           string   `json:"memoryScope"`
+	MemoryScope           string   `json:"memoryScope" binding:"required"`
 	// 委托配置同 CreateAgentRequest；DelegateEnabled 为 *bool:缺省(nil)保留现有值,
 	// 显式 false 才关闭(存量默认关闭,Update 全量列写不能把缺省当显式 false 覆盖);
 	// 深度/默认步数 0=unset 不覆盖已存值。
@@ -86,8 +86,6 @@ type AgentResponse struct {
 	DelegateEnabled         bool     `json:"delegateEnabled"`
 	DelegateMaxDepth        int      `json:"delegateMaxDepth"`
 	DelegateDefaultMaxSteps int      `json:"delegateDefaultMaxSteps"`
-	IsSystem                bool     `json:"isSystem"`
-	ManagementMode          string   `json:"managementMode"`
 	// Parameters echoes the persisted sampling parameters (0=unset keys
 	// omitted), symmetric with UpdateAgentRequest.parameters.
 	Parameters map[string]any `json:"parameters"`
@@ -140,8 +138,6 @@ func dtoToResponse(d agent.AgentDTO) AgentResponse {
 		DelegateEnabled:         d.DelegateEnabled,
 		DelegateMaxDepth:        d.DelegateMaxDepth,
 		DelegateDefaultMaxSteps: d.DelegateDefaultMaxSteps,
-		IsSystem:                d.IsSystem,
-		ManagementMode:          d.ManagementMode,
 		Parameters:              d.Parameters,
 		Editors:                 d.Editors,
 	}

@@ -172,7 +172,6 @@ func TestSystemAssistantProposalRealServices(t *testing.T) {
 	agentSvc := agentapp.NewAgentService(agentapp.AgentServiceDeps{
 		Registry: agentapp.NewRegistry(
 			agentRepo,
-			agentapp.BuiltinSystemAssistantProfileSource(),
 			zap.NewNop(),
 		),
 		TenantRoleResolver: roles,
@@ -480,20 +479,17 @@ func TestSystemAssistantProposalInProcessToolUsesRealMemberPermissions(t *testin
 
 	agentRepo := agentpersist.NewPgAgentRepo(pool)
 	ctx := assistantTenantContext(tenantID, adminID, tenantdb.RoleTenantAdmin)
-	existing, found, err := agentRepo.GetSystemAssistant(ctx)
+	existing, found, err := agentRepo.Get(ctx, domain.SystemAssistantID)
 	require.NoError(t, err)
 	require.True(t, found)
 	existing.LLMModel = "deterministic-e2e-model"
-	_, err = agentRepo.UpdateSystemAssistantModel(
-		ctx, existing.LLMModel, existing.MemoryScope,
-		existing.MaxIterations, existing.MaxContextTokens, nil,
-	)
+	err = agentRepo.Update(ctx, existing, nil, "", false)
 	require.NoError(t, err)
 
 	chat := agentpersist.NewPgChatStore(pool, zap.NewNop())
 	gateway := &proposalToolGateway{}
 	service := agentapp.NewAgentService(agentapp.AgentServiceDeps{
-		Registry:             agentapp.NewRegistry(agentRepo, agentapp.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry:             agentapp.NewRegistry(agentRepo, zap.NewNop()),
 		TenantResolver:       deterministicTenantResolver{gateway: gateway},
 		TenantModelValidator: deterministicModelValidator{},
 		TenantModelCatalog:   deterministicModelValidator{},
@@ -538,7 +534,7 @@ func TestSystemAssistantProposalInProcessToolUsesRealMemberPermissions(t *testin
 	// member 通过真实执行路径调用提案工具：ProposalCreateFn 全角色注入（D6），
 	// member 创建待审提案，不会自动确认/应用。
 	memberService := agentapp.NewAgentService(agentapp.AgentServiceDeps{
-		Registry:             agentapp.NewRegistry(agentRepo, agentapp.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry:             agentapp.NewRegistry(agentRepo, zap.NewNop()),
 		TenantResolver:       deterministicTenantResolver{gateway: &proposalToolGateway{}},
 		TenantModelValidator: deterministicModelValidator{},
 		TenantModelCatalog:   deterministicModelValidator{},

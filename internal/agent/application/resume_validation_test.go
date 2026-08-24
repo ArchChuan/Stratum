@@ -71,9 +71,6 @@ func (resumeAgentRepo) Register(context.Context, *domain.AgentConfig, *auditdoma
 func (resumeAgentRepo) Get(context.Context, string) (*domain.AgentConfig, bool, error) {
 	return nil, false, nil
 }
-func (resumeAgentRepo) GetSystemAssistant(context.Context) (*domain.AgentConfig, bool, error) {
-	return nil, false, nil
-}
 func (resumeAgentRepo) GetAll(context.Context) ([]*domain.AgentConfig, error) {
 	return nil, nil
 }
@@ -82,12 +79,6 @@ func (resumeAgentRepo) Remove(context.Context, string, *auditdomain.ResourceChan
 }
 func (resumeAgentRepo) Update(context.Context, *domain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string, bool) error {
 	return nil
-}
-func (resumeAgentRepo) UpdateSystemAssistantModel(context.Context, string, string, int, int, *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
-	return nil, nil
-}
-func (resumeAgentRepo) UpdateSystemAssistantAll(context.Context, string, string, int, int, int, map[string]any, *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
-	return nil, nil
 }
 
 // approvedToolApproval 构造一个已批准、未过期、绑定字段一致的审批（复用 Request 加密链路），
@@ -233,7 +224,7 @@ func TestResumeToolApprovalNonMCPSubjectSkipsPolicyCheck(t *testing.T) {
 		ConversationID: "conv-alive", Query: "resume", Arguments: map[string]any{"id": "1"},
 		SubjectKind: domain.SubjectKindEvaluationAction,
 	})
-	registry := NewRegistry(resumeAgentRepo{}, BuiltinSystemAssistantProfileSource(), zap.NewNop())
+	registry := NewRegistry(resumeAgentRepo{}, zap.NewNop())
 	svc := resumeValidationService(approvalSvc,
 		resumeChatRepo{conv: &domain.ChatConversation{ID: "conv-alive"}},
 		resumePolicyStub{risk: port.ToolRiskRead}, registry)
@@ -272,7 +263,7 @@ func TestResumeToolApprovalPolicyUnchangedKeepsApproval(t *testing.T) {
 		ToolCallID: "tc1", ServerID: "srv", ToolName: "get", RiskLevel: port.ToolRiskRead,
 		ConversationID: "conv-alive", Query: "resume", Arguments: map[string]any{"id": "1"},
 	})
-	registry := NewRegistry(resumeAgentRepo{}, BuiltinSystemAssistantProfileSource(), zap.NewNop())
+	registry := NewRegistry(resumeAgentRepo{}, zap.NewNop())
 	svc := resumeValidationService(approvalSvc,
 		resumeChatRepo{conv: &domain.ChatConversation{ID: "conv-alive"}},
 		resumePolicyStub{risk: port.ToolRiskRead}, registry)

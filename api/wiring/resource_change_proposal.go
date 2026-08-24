@@ -107,9 +107,6 @@ func (a *ResourceChangeProposalAdapters) ResolveBaseline(
 		if err != nil {
 			return agentport.ResourceBaseline{}, err
 		}
-		if value.SystemKey != "" {
-			return agentport.ResourceBaseline{}, agentdomain.ErrSystemAssistantManaged
-		}
 		projection = agentChangeProjection(value)
 	case agentdomain.ResourceSkillDraft:
 		value, err := a.skills.GetWorkspace(ctx, proposal.ResourceID, proposal.ProposerID)
@@ -280,9 +277,6 @@ func (a *ResourceChangeProposalAdapters) applyAgentChange(
 		existing, getErr := a.agents.Get(ctx, resourceID)
 		if getErr != nil {
 			return agentdomain.ApplyResult{}, definiteApplyError(getErr)
-		}
-		if existing.SystemKey != "" {
-			return agentdomain.ApplyResult{}, definiteApplyError(agentdomain.ErrSystemAssistantManaged)
 		}
 		// update 非空才覆盖 systemPrompt：buildUpdateConfig 对空串直接赋值会
 		// 清除既有 prompt，而 proposal 默认省略该字段，不能因省略而误清。

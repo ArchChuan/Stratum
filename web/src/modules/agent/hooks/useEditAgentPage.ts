@@ -52,16 +52,14 @@ export const useEditAgentPage = () => {
           llmApi.listModels({ capability: 'chat' }), llmApi.listProviders(),
         ]);
         if (cancelled) return;
-        // 系统内置资源（isSystem skill / platform_managed workspace）仅系统助手
-        // 可挂载。系统助手 disabled 表单仍显示全部（供展示）；普通 agent 选择列
-        // 过滤。prefilled 不滤：普通 agent 已挂 platform 资源保存时由后端
-        // A1/A2 拒 409，前端展示错误即可。
+        // 等化后 builtin skill / platform workspace 对普通 agent 开放挂载，
+        // 编辑页选择列不再过滤系统内置资源。
         if (skillsRes.status === 'fulfilled') {
-          setSkills(a.isSystem ? skillsRes.value : skillsRes.value.filter((s) => !s.isSystem));
+          setSkills(skillsRes.value);
         }
         if (mcpRes.status === 'fulfilled') setMcpTools(mcpRes.value);
         if (workspacesRes.status === 'fulfilled') {
-          setWorkspaces(a.isSystem ? workspacesRes.value : workspacesRes.value.filter((w) => w.management_mode !== 'platform_managed'));
+          setWorkspaces(workspacesRes.value);
         }
         if (modelsRes.status === 'fulfilled' && providersRes.status === 'fulfilled') {
           setGroupedModels(buildGroupedModels(modelsRes.value, providersRes.value));
@@ -119,7 +117,7 @@ export const useEditAgentPage = () => {
           knowledgeWorkspaceIds: values.knowledgeWorkspaceIds || [],
         });
         message.success({ content: `Agent "${values.name}" 保存成功`, duration: 2 });
-        navigate(agent?.isSystem ? '/agents' : '/agents');
+        navigate('/agents');
       } catch (err) {
         if (!isForbidden(err)) {
           message.error({ content: extractErrorMessage(err, '保存失败'), duration: 3 });
@@ -128,7 +126,7 @@ export const useEditAgentPage = () => {
         setLoading(false);
       }
     },
-    [id, navigate, agent?.isSystem],
+    [id, navigate],
   );
 
   return {

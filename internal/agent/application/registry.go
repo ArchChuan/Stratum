@@ -20,15 +20,12 @@ type Registry struct {
 	memInjector    port.MemoryInjector
 	recallFn       port.RecallMemoryFn
 	platformPrompt port.PlatformPromptResolver
-	systemProfile  *SystemAssistantProfileSource
 	taskStore      port.TaskRepo
 }
 
 // NewRegistry constructs a Registry around a domain-port AgentRepo.
-func NewRegistry(
-	repo port.AgentRepo, systemProfile *SystemAssistantProfileSource, logger *zap.Logger,
-) *Registry {
-	return &Registry{repo: repo, systemProfile: systemProfile, logger: logger}
+func NewRegistry(repo port.AgentRepo, logger *zap.Logger) *Registry {
+	return &Registry{repo: repo, logger: logger}
 }
 
 // SetMemoryInjector injects a MemoryInjector so agents created via Get/GetAll have it wired.
@@ -50,16 +47,7 @@ func (r *Registry) SetPlatformPromptResolver(resolver port.PlatformPromptResolve
 func (r *Registry) SetTaskStore(store port.TaskRepo) { r.taskStore = store }
 
 func (r *Registry) hydrate(cfg *domain.AgentConfig) (Agent, error) {
-	var profile *domain.SystemAssistantProfile
-	if r.systemProfile != nil {
-		selected := r.systemProfile.Profile()
-		profile = &selected
-	}
-	composed, err := ComposeSystemAssistantProfile(cfg, profile)
-	if err != nil {
-		return nil, fmt.Errorf("registry hydrate agent: %w", err)
-	}
-	a := NewBaseAgent(composed, r.logger)
+	a := NewBaseAgent(cfg, r.logger)
 	if r.memInjector != nil {
 		a.MemoryInjector = r.memInjector
 	}
@@ -71,13 +59,6 @@ func (r *Registry) hydrate(cfg *domain.AgentConfig) (Agent, error) {
 	}
 	a.PlatformPromptResolver = r.platformPrompt
 	return a, nil
-}
-
-func (r *Registry) systemAssistantProfileVersion() (string, error) {
-	if r == nil || r.systemProfile == nil || r.systemProfile.Version() == "" {
-		return "", fmt.Errorf("registry system assistant profile: profile source unavailable")
-	}
-	return r.systemProfile.Version(), nil
 }
 
 // Register persists a new agent, auditing the create in the same transaction.
@@ -126,60 +107,6 @@ func (r *Registry) GetAll(ctx context.Context) ([]Agent, error) {
 		out = append(out, agent)
 	}
 	return out, nil
-}
-
-func (r *Registry) GetSystemAssistant(ctx context.Context) (Agent, bool, error) {
-	cfg, found, err := r.repo.GetSystemAssistant(ctx)
-	if err != nil {
-		return nil, false, fmt.Errorf("registry get system assistant: %w", err)
-	}
-	if !found {
-		return nil, false, nil
-	}
-	a, err := r.hydrate(cfg)
-	if err != nil {
-		return nil, false, fmt.Errorf("registry get system assistant: %w", err)
-	}
-	return a, true, nil
-}
-
-func (r *Registry) UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, maxIterations int, maxContextTokens int, audit *auditdomain.ResourceChangeAuditEvent) (Agent, error) {
-	cfg, err := r.repo.UpdateSystemAssistantModel(ctx, model, memoryScope, maxIterations, maxContextTokens, audit)
-	if err != nil {
-		return nil, fmt.Errorf("registry update system assistant model: %w", err)
-	}
-	a, err := r.hydrate(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("registry update system assistant model: %w", err)
-	}
-	return a, nil
-}
-
-// UpdateSystemAssistantAll applies model fields + unchanged bindings in one
-// transaction, auditing once.
-func (r *Registry) UpdateSystemAssistantAll(ctx context.Context, model, memoryScope string, maxIterations, maxContextTokens, maxTokens int, memoryParameters map[string]any, audit *auditdomain.ResourceChangeAuditEvent) (Agent, error) {
-	cfg, err := r.repo.UpdateSystemAssistantAll(ctx, model, memoryScope, maxIterations, maxContextTokens, maxTokens, memoryParameters, audit)
-	if err != nil {
-		return nil, fmt.Errorf("registry update system assistant: %w", err)
-	}
-	a, err := r.hydrate(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("registry update system assistant: %w", err)
-	}
-	return a, nil
-}
-
-// UpdateSystemAssistant persists a system-assistant config (internal
-// reentrant path; no audit event — the platform seed/import callers are not
-// user-facing writes).
-func (r *Registry) UpdateSystemAssistant(ctx context.Context, cfg *domain.AgentConfig) error {
-	if _, err := r.repo.UpdateSystemAssistantModel(ctx, cfg.LLMModel, cfg.MemoryScope, cfg.MaxIterations, cfg.MaxContextTokens, nil); err != nil {
-		return fmt.Errorf("registry update system assistant: %w", err)
-	}
-	if r.logger != nil {
-		r.logger.Info("system assistant updated", zap.String("id", cfg.ID))
-	}
-	return nil
 }
 
 // Remove deletes an agent, auditing the delete in the same transaction.

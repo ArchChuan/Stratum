@@ -97,7 +97,7 @@ type deterministicModelValidator struct{}
 
 func (deterministicModelValidator) ValidateTenantChatModel(_ context.Context, _ string, model string) error {
 	if model != "deterministic-e2e-model" {
-		return domain.ErrInvalidSystemAssistantModel
+		return domain.ErrInvalidAgentModel
 	}
 	return nil
 }
@@ -210,8 +210,6 @@ func TestSystemAssistantTenantIsolationAndRoleScope(t *testing.T) {
 			if item.SystemKey == domain.SystemAssistantKey {
 				managed++
 				require.Equal(t, domain.SystemAssistantID, item.ID)
-				require.True(t, item.IsSystem)
-				require.Equal(t, "platform", item.ManagementMode)
 			}
 		}
 		require.Equal(t, 1, managed, "each tenant must contain exactly one managed assistant")
@@ -219,28 +217,20 @@ func TestSystemAssistantTenantIsolationAndRoleScope(t *testing.T) {
 
 	ctxA := assistantTenantContext(tenants[0], users[tenants[0]][0], tenantdb.RoleTenantAdmin)
 	ctxB := assistantTenantContext(tenants[1], users[tenants[1]][0], tenantdb.RoleTenantAdmin)
-	existing, found, err := repo.GetSystemAssistant(ctxA)
+	existing, found, err := repo.Get(ctxA, domain.SystemAssistantID)
 	require.NoError(t, err)
 	require.True(t, found)
 	existing.LLMModel = "deterministic-e2e-model"
-	_, err = repo.UpdateSystemAssistantModel(ctxA, existing.LLMModel, existing.MemoryScope, existing.MaxIterations, existing.MaxContextTokens, nil)
+	err = repo.Update(ctxA, existing, nil, "", false)
 	require.NoError(t, err)
-	updated, found, err := repo.GetSystemAssistant(ctxA)
+	updated, found, err := repo.Get(ctxA, domain.SystemAssistantID)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, "deterministic-e2e-model", updated.LLMModel)
-	other, found, err := repo.GetSystemAssistant(ctxB)
+	other, found, err := repo.Get(ctxB, domain.SystemAssistantID)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, "glm-5.2", other.LLMModel, "tenant A model selection must not cross into tenant B")
-
-	profile, err := agentapp.ComposeSystemAssistantProfile(updated, agentapp.BuiltinSystemAssistantProfile())
-	require.NoError(t, err)
-	require.Equal(t, domain.CurrentSystemAssistantProfileVersion,
-		agentapp.BuiltinSystemAssistantProfileSource().Version())
-	require.Equal(t, []string{"builtin:platform-guide", "builtin:tenant-diagnostic", "builtin:resource-change", "builtin:tool-execution"}, profile.AllowedSkills)
-	require.Empty(t, profile.MCPToolIDs)
-	require.Equal(t, []string{"a0a0a0a0-0000-0000-0000-000000000001"}, profile.KnowledgeWorkspaceIDs)
 
 	roles := systemAssistantRoleResolver{roles: map[string]string{
 		tenants[0] + ":" + users[tenants[0]][0]: "admin",
@@ -265,10 +255,10 @@ func TestSystemAssistantTenantIsolationAndRoleScope(t *testing.T) {
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), "sensitive detail")
 
-	_, _, err = repo.GetSystemAssistant(assistantTenantContext("bad tenant!", users[tenants[0]][0], tenantdb.RoleTenantAdmin))
+	_, _, err = repo.Get(assistantTenantContext("bad tenant!", users[tenants[0]][0], tenantdb.RoleTenantAdmin), domain.SystemAssistantID)
 	require.Error(t, err)
-	require.ErrorIs(t, repo.Remove(ctxA, domain.SystemAssistantID, nil), domain.ErrSystemAssistantManaged)
-	require.ErrorIs(t, repo.Update(ctxA, &domain.AgentConfig{ID: domain.SystemAssistantID}, nil, "", false), domain.ErrSystemAssistantManaged)
+	require.NoError(t, repo.Update(ctxA, &domain.AgentConfig{ID: domain.SystemAssistantID}, nil, "", false))
+	require.NoError(t, repo.Remove(ctxA, domain.SystemAssistantID, nil))
 }
 
 func TestSystemAssistantOfficialDocsArtifactsAndAreaGap(t *testing.T) {
@@ -343,16 +333,16 @@ func TestSystemAssistantDeterministicAgentLoopPersistsTypedArtifacts(t *testing.
 	tenantID, userID := tenants[0], uuid.NewString()
 	ctx := assistantTenantContext(tenantID, userID, tenantdb.RoleTenantAdmin)
 	repo := agentpersist.NewPgAgentRepo(pool)
-	existing, found, err := repo.GetSystemAssistant(ctx)
+	existing, found, err := repo.Get(ctx, domain.SystemAssistantID)
 	require.NoError(t, err)
 	require.True(t, found)
 	existing.LLMModel = "deterministic-e2e-model"
-	_, err = repo.UpdateSystemAssistantModel(ctx, existing.LLMModel, existing.MemoryScope, existing.MaxIterations, existing.MaxContextTokens, nil)
+	err = repo.Update(ctx, existing, nil, "", false)
 	require.NoError(t, err)
 
 	gateway := &deterministicAssistantGateway{}
 	chat := agentpersist.NewPgChatStore(pool, zap.NewNop())
-	registry := agentapp.NewRegistry(repo, agentapp.BuiltinSystemAssistantProfileSource(), zap.NewNop())
+	registry := agentapp.NewRegistry(repo, zap.NewNop())
 	service := agentapp.NewAgentService(agentapp.AgentServiceDeps{
 		Registry: registry, TenantResolver: deterministicTenantResolver{gateway: gateway},
 		TenantModelValidator: deterministicModelValidator{}, TenantModelCatalog: deterministicModelValidator{}, ChatStore: chat,
@@ -387,12 +377,12 @@ func TestSystemAssistantDeterministicAgentLoopPersistsTypedArtifacts(t *testing.
 	// plan 工具前置追加（修复：governed 系统助手同样暴露 plan 工具面），
 	// 后随 8 个内部工具；位置断言需偏移 plan 工具数。
 	planTools := graph.PlanToolDefinitions()
-	require.Len(t, gateway.requests[0].LLM.Tools, len(agentapp.SystemAssistantToolDefinitions())+len(planTools))
+	require.Len(t, gateway.requests[0].LLM.Tools, len(agentapp.SystemAssistantToolDefinitions())+len(planTools)+1)
 	for i, tool := range planTools {
 		require.Equal(t, tool.Name, gateway.requests[0].LLM.Tools[i].Name)
 	}
 	for i, name := range []string{domain.SystemAssistantToolSearchOfficialDocs, domain.SystemAssistantToolDiagnoseTenant} {
-		require.Equal(t, name, gateway.requests[0].LLM.Tools[len(planTools)+i].Name)
+		require.Equal(t, name, gateway.requests[0].LLM.Tools[len(planTools)+1+i].Name)
 	}
 
 	messages, err := chat.ListMessages(ctx, tenantID, conversation.ID, userID)
@@ -415,8 +405,14 @@ func TestSystemAssistantHTTPContractsUseRealHandlerServiceAndPostgres(t *testing
 	tenantID, userID := tenants[0], uuid.NewString()
 	repo := agentpersist.NewPgAgentRepo(pool)
 	service := agentapp.NewAgentService(agentapp.AgentServiceDeps{
-		Registry:             agentapp.NewRegistry(repo, agentapp.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
-		TenantModelValidator: deterministicModelValidator{}, TenantModelCatalog: deterministicModelValidator{}, Logger: zap.NewNop(),
+		Registry:             agentapp.NewRegistry(repo, zap.NewNop()),
+		TenantModelValidator: deterministicModelValidator{}, TenantModelCatalog: deterministicModelValidator{},
+		// 等同化后平台助手走普通权限矩阵：owner 恒放行（seed created_by=''，
+		// admin 因 created_by 不匹配被拒），验证 owner 可普通管理平台助手。
+		TenantRoleResolver: systemAssistantRoleResolver{roles: map[string]string{
+			tenantID + ":" + userID: "owner",
+		}},
+		Logger: zap.NewNop(),
 	})
 	h := handler.NewAgentHandler(service, zap.NewNop())
 	gin.SetMode(gin.TestMode)
@@ -430,8 +426,6 @@ func TestSystemAssistantHTTPContractsUseRealHandlerServiceAndPostgres(t *testing
 		c.Next()
 	}, middleware.InjectTenantContext())
 	router.GET("/agents", middleware.RequireTenantRole("member"), h.GetAllAgents)
-	router.GET("/agents/system/settings", middleware.RequireTenantRole("member"), h.GetSettings)
-	router.PUT("/agents/system/settings", middleware.RequireTenantRole("admin"), h.UpdateModel)
 	router.PUT("/agents/:id", middleware.RequireTenantRole("admin"), h.UpdateAgent)
 	router.DELETE("/agents/:id", middleware.RequireTenantRole("admin"), h.DeleteAgent)
 
@@ -450,39 +444,25 @@ func TestSystemAssistantHTTPContractsUseRealHandlerServiceAndPostgres(t *testing
 	list := request(http.MethodGet, "/agents", "member", "")
 	require.Equal(t, http.StatusOK, list.Code)
 	require.Contains(t, list.Body.String(), domain.SystemAssistantID)
-	settings := request(http.MethodGet, "/agents/system/settings", "member", "")
-	require.Equal(t, http.StatusOK, settings.Code)
-	require.JSONEq(t,
-		`{"agentId":"stratum-platform-assistant","llmModel":"glm-5.2","ready":false,"availableModels":["deterministic-e2e-model"]}`,
-		settings.Body.String())
-	require.Equal(t, http.StatusForbidden,
-		request(http.MethodPut, "/agents/system/settings", "member", `{"llmModel":"deterministic-e2e-model"}`).Code)
-	updated := request(http.MethodPut, "/agents/system/settings", "admin", `{"llmModel":"deterministic-e2e-model"}`)
-	require.Equal(t, http.StatusOK, updated.Code)
-	require.JSONEq(t,
-		`{"agentId":"stratum-platform-assistant","llmModel":"deterministic-e2e-model","ready":true,"availableModels":["deterministic-e2e-model"]}`,
-		updated.Body.String())
-	readback := request(http.MethodGet, "/agents/system/settings", "member", "")
-	require.Equal(t, http.StatusOK, readback.Code)
-	require.Contains(t, readback.Body.String(), `"llmModel":"deterministic-e2e-model"`)
 	bindings := request(http.MethodPut, "/agents/"+domain.SystemAssistantID, "admin",
 		`{"name":"tampered","llmModel":"deterministic-e2e-model",`+
-			`"allowedSkills":[],"mcpToolIds":[],"knowledgeWorkspaceIds":[]}`)
+			`"memoryScope":"user","allowedSkills":[],"mcpToolIds":[],`+
+			`"knowledgeWorkspaceIds":[]}`)
 	require.Equal(t, http.StatusOK, bindings.Code)
 	require.Contains(t, bindings.Body.String(), `"id":"stratum-platform-assistant"`)
-	require.Contains(t, bindings.Body.String(), `"isSystem":true`)
-	require.Contains(t, bindings.Body.String(), `"managementMode":"platform"`)
-	require.NotContains(t, bindings.Body.String(), `"name":"tampered"`)
-	persisted, found, err := repo.GetSystemAssistant(
-		assistantTenantContext(tenantID, userID, tenantdb.RoleTenantAdmin))
+	persisted, found, err := repo.Get(
+		assistantTenantContext(tenantID, userID, tenantdb.RoleTenantAdmin), domain.SystemAssistantID)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, domain.SystemAssistantID, persisted.ID)
 	require.Equal(t, domain.SystemAssistantKey, persisted.SystemKey)
-	require.Equal(t, []string{"builtin:platform-guide", "builtin:tenant-diagnostic", "builtin:resource-change", "builtin:tool-execution"}, persisted.AllowedSkills)
+	require.Equal(t, "tampered", persisted.Name, "普通字段经普通 Update 路径落库")
+	// 等同化后无专属保留：传入空数组按普通 replace 语义清空 seed 资源。
+	require.Empty(t, persisted.AllowedSkills)
 	require.Empty(t, persisted.MCPToolIDs)
-	require.Equal(t, []string{"a0a0a0a0-0000-0000-0000-000000000001"}, persisted.KnowledgeWorkspaceIDs)
-	require.Equal(t, http.StatusConflict,
+	require.Empty(t, persisted.KnowledgeWorkspaceIDs)
+	// 等同化后平台助手可普通删除：owner 恒放行（seed created_by=''）。
+	require.Equal(t, http.StatusOK,
 		request(http.MethodDelete, "/agents/"+domain.SystemAssistantID, "admin", "").Code)
 }
 

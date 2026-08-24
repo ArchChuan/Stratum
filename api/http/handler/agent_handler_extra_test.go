@@ -46,17 +46,6 @@ func (m *mockAgentRepo) Get(_ context.Context, id string) (*domain.AgentConfig, 
 	}
 	return nil, false, nil
 }
-func (m *mockAgentRepo) GetSystemAssistant(context.Context) (*domain.AgentConfig, bool, error) {
-	if m.err != nil {
-		return nil, false, m.err
-	}
-	for _, a := range m.agents {
-		if a.IsSystem {
-			return a, true, nil
-		}
-	}
-	return nil, false, nil
-}
 func (m *mockAgentRepo) GetAll(context.Context) ([]*domain.AgentConfig, error) {
 	return m.agents, m.err
 }
@@ -78,15 +67,6 @@ func (m *mockAgentRepo) Update(_ context.Context, cfg *domain.AgentConfig, _ *au
 		}
 	}
 	return nil
-}
-func (m *mockAgentRepo) UpdateSystemAssistantModel(_ context.Context, _ string, _ string, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
-	return nil, m.err
-}
-func (*mockAgentRepo) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ int, _ int, _ int, _ map[string]any, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
-	return nil, nil
-}
-func (m *mockAgentRepo) UpdateSystemAssistantBindings(context.Context, []string, []string, []string) (*domain.AgentConfig, error) {
-	return nil, m.err
 }
 
 // fakeEvidence 是 TraceEvidenceProvider 的可脚本化 stub。
@@ -146,7 +126,7 @@ func (f fakeCheckpointStore) Terminate(context.Context, string, string, string) 
 func newTestAgentHandler(t *testing.T, repo *mockAgentRepo, evidence port.TraceEvidenceProvider, mut func(*agent.AgentServiceDeps)) *AgentHandler {
 	t.Helper()
 	deps := agent.AgentServiceDeps{
-		Registry:         agent.NewRegistry(repo, agent.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry:         agent.NewRegistry(repo, zap.NewNop()),
 		EvidenceProvider: evidence,
 		Logger:           zap.NewNop(),
 	}
@@ -260,7 +240,7 @@ func TestAgentHandlerGetAgent(t *testing.T) {
 
 func TestAgentHandlerCreateAgent(t *testing.T) {
 	h := newTestAgentHandler(t, &mockAgentRepo{}, nil, nil)
-	valid := `{"name":"N","llmModel":"qwen-max","maxIterations":5}`
+	valid := `{"name":"N","llmModel":"qwen-max","maxIterations":5,"memoryScope":"user"}`
 
 	// 缺 tenant → 401。
 	w := doAgentReq(t, agentRoutes(h), http.MethodPost, "/agents", valid)
@@ -272,6 +252,12 @@ func TestAgentHandlerCreateAgent(t *testing.T) {
 
 	// 极端情况：缺少 required 字段 → 400。
 	w = doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents", `{}`)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+
+	// 记忆范围必选：缺省或空串 → 400（平台助手与普通 Agent 等同后创建接口必选）。
+	w = doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents", `{"name":"N","llmModel":"qwen-max","maxIterations":5}`)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	w = doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents", `{"name":"N","llmModel":"qwen-max","maxIterations":5,"memoryScope":""}`)
 	require.Equal(t, http.StatusBadRequest, w.Code)
 
 	// 成功 → 201。
@@ -288,7 +274,7 @@ func TestAgentHandlerCreateAgent(t *testing.T) {
 func TestAgentHandlerUpdateAgent(t *testing.T) {
 	repo := &mockAgentRepo{agents: []*domain.AgentConfig{{ID: "a1", Name: "Alpha", LLMModel: "qwen-max"}}}
 	h := newTestAgentHandler(t, repo, nil, nil)
-	valid := `{"name":"Renamed","llmModel":"qwen-max","maxIterations":3}`
+	valid := `{"name":"Renamed","llmModel":"qwen-max","maxIterations":3,"memoryScope":"user"}`
 
 	// 极端情况：不存在 → 404。
 	w := doAgentReq(t, authedRoutes(h), http.MethodPut, "/agents/missing", valid)
@@ -296,6 +282,10 @@ func TestAgentHandlerUpdateAgent(t *testing.T) {
 
 	// 极端情况：非法 JSON → 400。
 	w = doAgentReq(t, authedRoutes(h), http.MethodPut, "/agents/a1", "{")
+	require.Equal(t, http.StatusBadRequest, w.Code)
+
+	// 记忆范围必选：缺省 → 400。
+	w = doAgentReq(t, authedRoutes(h), http.MethodPut, "/agents/a1", `{"name":"Renamed","llmModel":"qwen-max","maxIterations":3}`)
 	require.Equal(t, http.StatusBadRequest, w.Code)
 
 	// 成功 → 200。
@@ -346,7 +336,7 @@ func TestAgentHandlerReasoningEffortEcho(t *testing.T) {
 
 	// Create 成功回显高档位。
 	h := newHandler(&mockAgentRepo{})
-	body := `{"name":"N","llmModel":"qwen-max","maxIterations":5,"reasoning_effort":"high"}`
+	body := `{"name":"N","llmModel":"qwen-max","maxIterations":5,"memoryScope":"user","reasoning_effort":"high"}`
 	w := doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents", body)
 	require.Equal(t, http.StatusCreated, w.Code)
 	require.Contains(t, w.Body.String(), `"reasoning_effort":"high"`)
@@ -354,7 +344,7 @@ func TestAgentHandlerReasoningEffortEcho(t *testing.T) {
 	// Update 成功回显中档位。
 	repo := &mockAgentRepo{agents: []*domain.AgentConfig{{ID: "a1", Name: "Alpha", LLMModel: "qwen-max"}}}
 	h = newHandler(repo)
-	body = `{"name":"Renamed","llmModel":"qwen-max","maxIterations":3,"reasoning_effort":"medium"}`
+	body = `{"name":"Renamed","llmModel":"qwen-max","maxIterations":3,"memoryScope":"user","reasoning_effort":"medium"}`
 	w = doAgentReq(t, authedRoutes(h), http.MethodPut, "/agents/a1", body)
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Contains(t, w.Body.String(), `"reasoning_effort":"medium"`)
@@ -378,11 +368,11 @@ func TestAgentHandlerDeleteAgent(t *testing.T) {
 	w = doAgentReq(t, authedRoutes(h), http.MethodDelete, "/agents/missing", "")
 	require.Equal(t, http.StatusNotFound, w.Code)
 
-	// 极端情况：system assistant 禁止删除 → 409。
+	// 等同化后 system assistant 与普通 agent 一致可删除 → 200。
 	sys := &mockAgentRepo{agents: []*domain.AgentConfig{{ID: "sys-1", SystemKey: "system_assistant"}}}
 	h = newTestAgentHandler(t, sys, nil, nil)
 	w = doAgentReq(t, authedRoutes(h), http.MethodDelete, "/agents/sys-1", "")
-	require.Equal(t, http.StatusConflict, w.Code)
+	require.Equal(t, http.StatusOK, w.Code)
 
 	// 极端情况：删除失败 → 500。
 	h = newTestAgentHandler(t, repo, nil, nil)
@@ -535,7 +525,7 @@ func TestAgentHandlerMemoryParametersEcho(t *testing.T) {
 	// Update 携带 memory.* dotted 键 → 落库并在响应回显。
 	repo := &mockAgentRepo{agents: []*domain.AgentConfig{{ID: "a1", Name: "Alpha", LLMModel: "qwen-max"}}}
 	h := newHandler(repo)
-	body := `{"name":"Alpha","llmModel":"qwen-max","maxIterations":5,"parameters":{"memory.max_facts_per_extraction":8,"memory.fact_injection_top_n":10}}`
+	body := `{"name":"Alpha","llmModel":"qwen-max","maxIterations":5,"memoryScope":"user","parameters":{"memory.max_facts_per_extraction":8,"memory.fact_injection_top_n":10}}`
 	w := doAgentReq(t, authedRoutes(h), http.MethodPut, "/agents/a1", body)
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Contains(t, w.Body.String(), `"memory.max_facts_per_extraction":8`)
