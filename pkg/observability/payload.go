@@ -50,7 +50,7 @@ func sanitizeTraceValue(value any) any {
 	case map[string]any:
 		out := make(map[string]any, len(typed))
 		for key, item := range typed {
-			if isTraceSensitiveKey(key) {
+			if isTraceSensitiveKey(key) && !isExemptUsageValue(key, item) {
 				out[key] = traceRedactedValue
 				continue
 			}
@@ -69,13 +69,38 @@ func sanitizeTraceValue(value any) any {
 }
 
 func isTraceSensitiveKey(key string) bool {
-	normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
+	normalized := normalizedTraceKey(key)
 	for _, fragment := range []string{"password", "token", "api_key", "apikey", "authorization", "secret"} {
 		if strings.Contains(normalized, fragment) {
 			return true
 		}
 	}
 	return false
+}
+
+// isExemptUsageValue 只豁免 LLM 用量计数：命中白名单 key 且值为数值标量时才放行
+// （记录 token 消耗而非认证凭据）。字符串塞入白名单 key 仍按敏感值打码，堵住
+// 经 usage 字段夹带凭据绕过三层脱敏的通道（security 中-1）。
+func isExemptUsageValue(key string, value any) bool {
+	switch normalizedTraceKey(key) {
+	case "tokens_used", "total_tokens", "prompt_tokens", "completion_tokens":
+		return isNumericScalar(value)
+	default:
+		return false
+	}
+}
+
+func isNumericScalar(value any) bool {
+	switch value.(type) {
+	case float64, float32, int, int64, int32, uint, uint64, json.Number:
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizedTraceKey(key string) string {
+	return strings.ToLower(strings.ReplaceAll(key, "-", "_"))
 }
 
 func truncateTraceRunes(value string, maxRunes int) (string, bool) {

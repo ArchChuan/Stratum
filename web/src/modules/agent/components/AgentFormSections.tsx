@@ -1,5 +1,5 @@
-import { RobotOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
-import { Collapse, Form, Input, InputNumber, Select, Slider, Tag, Typography } from 'antd';
+import { BranchesOutlined, RobotOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { Collapse, Form, Input, InputNumber, Select, Slider, Switch, Tag, Typography } from 'antd';
 import { useMemo } from 'react';
 
 import type { GroupedModelOption } from '../model/agent';
@@ -7,6 +7,10 @@ import type { GroupedModelOption } from '../model/agent';
 
 import {
   AGENT_CONTEXT_WINDOW_RATIO,
+  AGENT_DELEGATE_DEFAULT_MAX_DEPTH,
+  AGENT_DELEGATE_DEFAULT_MAX_STEPS,
+  AGENT_DELEGATE_MAX_DEPTH,
+  AGENT_DELEGATE_MAX_STEPS,
   AGENT_DEFAULT_MAX_OUTPUT_TOKENS,
   AGENT_DEFAULT_TEMPERATURE,
   AGENT_MAX_CONTEXT_TOKENS_MAX,
@@ -59,6 +63,8 @@ export const AgentFormSections = ({
 }: AgentFormSectionsProps) => {
   const form = Form.useFormInstance();
   const selectedModel = Form.useWatch('llmModel', form);
+  // 委托开关关闭时禁用深度/步数输入（避免「改了不生效」的误导）。
+  const delegateEnabled = Form.useWatch('delegateEnabled', form) ?? true;
   // 当前选中模型是否支持推理；未选中或模型不在托管目录（不可用/退役）时视为
   // 非推理，隐藏思考强度控件（fail-closed，与网关 unknown→清空+WARN 一致）。
   const supportsReasoning = useMemo(() => {
@@ -353,6 +359,48 @@ export const AgentFormSections = ({
         ]}
       />
     </div>
+
+    {!isSystem && (
+      <div
+        className="responsive-form-section"
+        style={{
+          background: '#fff',
+          borderRadius: 12,
+          border: '1px solid #f0f0f0',
+          padding: 24,
+          marginBottom: 16,
+        }}
+      >
+        <SectionHeader
+          icon={<BranchesOutlined />}
+          title="子 Agent 委托"
+          subtitle="开启后将边界清晰的子任务委托给隔离的子 Agent 执行"
+        />
+        <Form.Item
+          label="启用子 Agent 委托"
+          name="delegateEnabled"
+          valuePropName="checked"
+          extra="开启后该 Agent 可将子任务委托给隔离的子 Agent（复用当前完整配置）执行并回传摘要；只读子任务风险与父 Agent 相同"
+        >
+          <Switch />
+        </Form.Item>
+        <Form.Item
+          label="最大委托深度"
+          name="delegateMaxDepth"
+          extra={`子 Agent 可继续嵌套派发的层数：1 = 仅主 Agent 直接派发一层（默认）；2 = 允许子 Agent 再派发一层；0 = 未设置（回落后端默认 ${AGENT_DELEGATE_DEFAULT_MAX_DEPTH}）`}
+        >
+          <InputNumber min={0} max={AGENT_DELEGATE_MAX_DEPTH} step={1} style={{ width: '100%' }} disabled={!delegateEnabled} />
+        </Form.Item>
+        <Form.Item
+          label="委托默认最大推理步数"
+          name="delegateDefaultMaxSteps"
+          style={{ marginBottom: 0 }}
+          extra={`子 Agent 单次委托的最大推理轮数上限；0 = 未设置（回落后端默认 ${AGENT_DELEGATE_DEFAULT_MAX_STEPS}），最高 ${AGENT_DELEGATE_MAX_STEPS}`}
+        >
+          <InputNumber min={0} max={AGENT_DELEGATE_MAX_STEPS} step={1} style={{ width: '100%' }} disabled={!delegateEnabled} />
+        </Form.Item>
+      </div>
+    )}
 
   </>
   );

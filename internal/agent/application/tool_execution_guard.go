@@ -60,33 +60,66 @@ func (g *ToolExecutionGuard) Execute(ctx context.Context, req ToolExecutionReque
 		return nil, err
 	}
 	if req.ApprovalID != "" {
-		if g.deps.ExecuteApproved == nil {
-			return nil, fmt.Errorf("execute approved tool: runtime unavailable")
-		}
-		result, err := g.deps.ExecuteApproved(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		return g.deps.ResultGuard.Validate(result, req.Tool.OutputSchema)
+		return g.executeApproved(ctx, req)
 	}
 	if decision.Effect == domain.ToolAuthorizationRequireApproval {
-		approvalID := ""
-		if g.deps.RequestApproval != nil {
-			var err error
-			approvalID, err = g.deps.RequestApproval(ctx, port.ToolApprovalRequest{
-				TenantID: req.TenantID, TraceID: req.TraceID, ExecutionID: req.ExecutionID,
-				ToolCallID: req.ToolCallID, ServerID: req.Tool.ServerID,
-				ToolName: req.Tool.CapabilityID, RiskLevel: decision.RiskLevel, Arguments: req.Arguments,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("create tool approval: %w", err)
-			}
-		}
-		return nil, &port.ToolApprovalRequiredError{
-			ApprovalID: approvalID, ToolCallID: req.ToolCallID, ServerID: req.Tool.ServerID,
-			ToolName: req.Tool.CapabilityID, RiskLevel: decision.RiskLevel,
+		return g.requestApproval(ctx, req, decision)
+	}
+	if req.DelegateExecutor != nil {
+		return g.executeDelegate(ctx, req)
+	}
+	return g.executeMCP(ctx, req, decision)
+}
+
+// executeApproved runs a tool call that carries a pre-issued approval ID,
+// normalizing its result through the ResultGuard.
+func (g *ToolExecutionGuard) executeApproved(ctx context.Context, req ToolExecutionRequest) (any, error) {
+	if g.deps.ExecuteApproved == nil {
+		return nil, fmt.Errorf("execute approved tool: runtime unavailable")
+	}
+	result, err := g.deps.ExecuteApproved(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return g.deps.ResultGuard.Validate(result, req.Tool.OutputSchema)
+}
+
+// requestApproval creates a pending approval and returns
+// ToolApprovalRequiredError so the caller pauses for human decision.
+func (g *ToolExecutionGuard) requestApproval(ctx context.Context, req ToolExecutionRequest, decision domain.ToolAuthorizationDecision) (any, error) {
+	approvalID := ""
+	if g.deps.RequestApproval != nil {
+		var err error
+		approvalID, err = g.deps.RequestApproval(ctx, port.ToolApprovalRequest{
+			TenantID: req.TenantID, TraceID: req.TraceID, ExecutionID: req.ExecutionID,
+			ToolCallID: req.ToolCallID, ServerID: req.Tool.ServerID,
+			ToolName: req.Tool.CapabilityID, RiskLevel: decision.RiskLevel, Arguments: req.Arguments,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create tool approval: %w", err)
 		}
 	}
+	return nil, &port.ToolApprovalRequiredError{
+		ApprovalID: approvalID, ToolCallID: req.ToolCallID, ServerID: req.Tool.ServerID,
+		ToolName: req.Tool.CapabilityID, RiskLevel: decision.RiskLevel,
+	}
+}
+
+// executeDelegate runs the stratum_delegate branch without touching the MCP
+// executor: authorization and jsonschema validation already happened above, so
+// the closure is invoked directly and its result still flows through the
+// ResultGuard (redaction/truncation/<untrusted_tool_result> wrapping).
+func (g *ToolExecutionGuard) executeDelegate(ctx context.Context, req ToolExecutionRequest) (any, error) {
+	result, err := req.DelegateExecutor(ctx, req.Arguments)
+	if err != nil {
+		return nil, err
+	}
+	return g.deps.ResultGuard.Validate(result, req.Tool.OutputSchema)
+}
+
+// executeMCP runs the regular MCP tool path (optionally a specific revision),
+// translating the executor result through the ResultGuard.
+func (g *ToolExecutionGuard) executeMCP(ctx context.Context, req ToolExecutionRequest, decision domain.ToolAuthorizationDecision) (any, error) {
 	if g.deps.Executor == nil {
 		return nil, fmt.Errorf("MCP tool executor not configured")
 	}

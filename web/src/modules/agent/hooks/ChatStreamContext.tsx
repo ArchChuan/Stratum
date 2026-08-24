@@ -13,6 +13,7 @@ import { executeAgentStream } from '../api/agent.api';
 import type {
   AgentExecutionFailure,
   AgentExecutionResult,
+  DelegateStatusView,
   ExecuteAgentPayload,
   ToolApproval,
 } from '../model/agent';
@@ -30,6 +31,9 @@ interface StreamInternalState {
 	// 断线续接恢复键:SSE 首帧下发,存内存仅暴露,断线重发由 executeAgentStream
 	// 内部携带,这里只做可读快照(刷新降级为重新执行,不持久化)。
 	executionId: string | null;
+	// 委托子 agent 进度(SSE delegate_status):running 时展示 banner,finished 清空;
+	// 非持久化,断线重连由 execution_id 恢复后服务端重新下发。
+	delegateStatus: DelegateStatusView;
 		conflict: boolean;
   ctrl: AbortController | null;
 }
@@ -44,6 +48,7 @@ export interface StreamSnapshot {
 	error: string | null;
 	approval: ToolApproval | null;
 	executionId: string | null;
+	delegateStatus: DelegateStatusView;
 	conflict: boolean;
 }
 
@@ -57,6 +62,7 @@ interface ChatStreamContextValue {
 	streamApproval: ToolApproval | null;
 	streamConflict: boolean;
 	streamFailure: AgentExecutionFailure | null;
+	streamDelegateStatus: DelegateStatusView;
   startStream: (agentId: string, payload: ExecuteAgentPayload) => void;
   cancelStream: () => void;
 	clearStreamFailure: () => void;
@@ -84,6 +90,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
 		failure: null,
 		approval: null,
 		executionId: null,
+		delegateStatus: null,
 		conflict: false,
     ctrl: null,
   });
@@ -120,6 +127,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
 		s.failure = null;
 		s.approval = null;
 		s.executionId = null;
+		s.delegateStatus = null;
 		s.conflict = false;
     notify();
 
@@ -136,6 +144,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
       onDone: (data) => {
         if (stateRef.current.ctrl !== ctrl) return;
         stateRef.current.done = true;
+        stateRef.current.delegateStatus = null; // 终态清理:断连/错误时不残留 banner
         stateRef.current.result = data;
         stateRef.current.ctrl = null;
         notify(); // immediate: stream is over
@@ -143,6 +152,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
 		onError: (err) => {
         if (stateRef.current.ctrl !== ctrl) return;
         stateRef.current.done = true;
+		stateRef.current.delegateStatus = null;
 		// F3 双 tab 并发续跑败者：另一窗口已抢占并流式（后端 claimApprovalResume
 		// CAS 失败 → 409）。静默等待胜方结果，不污染对话气泡、不上抛错误；审批
 		// 卡片终态由 active-execution 轮询刷新。
@@ -166,8 +176,22 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
 		},
 		onApprovalRequired: (approval) => {
 			if (stateRef.current.ctrl !== ctrl) return;
-			stateRef.current.done = true; stateRef.current.approval = approval; stateRef.current.ctrl = null; notify();
+			stateRef.current.done = true; stateRef.current.delegateStatus = null; stateRef.current.approval = approval; stateRef.current.ctrl = null; notify();
 		},
+			onDelegateEvent: (evt) => {
+				if (stateRef.current.ctrl !== ctrl) return;
+				const convId = stateRef.current.conversationId;
+				// finished 且非 failed 时清空：running→finished 仅反映子循环结束，
+				// 最终回答由后续轮次自然呈现；failed 保留失败 Tag 直至终态清理。
+				if (evt.delegate_status === 'running') {
+					stateRef.current.delegateStatus = { status: 'running', goal: evt.goal, delegateId: evt.delegate_id, conversationId: convId };
+				} else if (evt.delegate_status === 'finished' && evt.result_status === 'failed') {
+					stateRef.current.delegateStatus = { status: 'finished', resultStatus: 'failed', goal: evt.goal, delegateId: evt.delegate_id, summary: evt.summary, conversationId: convId };
+				} else {
+					stateRef.current.delegateStatus = null;
+				}
+				notify();
+			},
     });
     s.ctrl = ctrl;
   }, [notify, scheduleNotify]);
@@ -177,6 +201,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
     if (s.ctrl) {
       s.ctrl.abort();
       s.ctrl = null;
+      s.delegateStatus = null;
       s.done = true;
       notify();
     }
@@ -199,6 +224,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
 		error: stateRef.current.error,
 		approval: stateRef.current.approval,
 		executionId: stateRef.current.executionId,
+		delegateStatus: stateRef.current.delegateStatus,
 		conflict: stateRef.current.conflict,
     }),
     [],
@@ -217,6 +243,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
       streamApproval: stateRef.current.approval,
       streamConflict: stateRef.current.conflict,
       streamFailure: stateRef.current.failure,
+      streamDelegateStatus: stateRef.current.delegateStatus,
       startStream,
       cancelStream,
       clearStreamFailure,

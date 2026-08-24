@@ -45,6 +45,7 @@ const mocks = vi.hoisted(() => ({
       result: null,
       error: null,
       approval: null,
+      delegateStatus: null,
       executionId: null,
       conflict: false,
     })),
@@ -241,6 +242,7 @@ describe('useChatPage tool approvals', () => {
 			},
 			error: null,
 			approval: null,
+			delegateStatus: null,
 			executionId: null,
 			conflict: false,
 		});

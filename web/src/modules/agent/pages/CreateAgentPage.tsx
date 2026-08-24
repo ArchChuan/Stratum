@@ -39,6 +39,9 @@ export const CreateAgentPage = () => {
           maxContextTokens: AGENT_DEFAULT_MAX_CONTEXT_TOKENS, // 0 = 自动按模型窗口解析
           allowedSkills: [],
           memoryScope: 'user',
+          // 委托默认关闭（DB DEFAULT false）：委托是显式能力，新建 agent 默认不派发，
+          // 管理员在表单显式开启。深度/默认步数留空 = 0=unset，后端回落全局默认。
+          delegateEnabled: false,
         }}
       >
         <AgentFormSections

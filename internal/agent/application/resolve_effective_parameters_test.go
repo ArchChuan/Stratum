@@ -357,10 +357,12 @@ func TestBuildUpdateConfigMergesDeclaredParameters(t *testing.T) {
 		ParametersProvider: stubParametersProvider{},
 		Logger:             zap.NewNop(),
 	})
+	enabled := true
 	cfg, err := svc.buildUpdateConfig(context.Background(), "agent-1", UpdateAgentInput{
 		Name:             "e2e",
 		LLMModel:         "qwen-plus",
 		MaxContextTokens: 100,
+		DelegateEnabled:  &enabled,
 		Parameters: map[string]any{
 			"temperature": 0.3,
 			"max_tokens":  float64(4096),

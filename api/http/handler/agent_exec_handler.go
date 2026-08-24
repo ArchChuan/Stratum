@@ -15,6 +15,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
+	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -119,6 +120,20 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 
 	writer := newSSEEventWriter(c.Writer)
 
+	// 委托进度帧：stratum_delegate 子 agent 进入/结束时推送，供前端渲染
+	// "子 agent 正在执行"占位（消除委托期间主对话静默）。
+	delegateCb := func(ev agentgraph.DelegateEvent) {
+		payload, _ := json.Marshal(map[string]any{
+			"delegate_status": string(ev.Status),
+			"delegate_id":     ev.DelegateID,
+			"goal":            ev.Goal,
+			"summary":         ev.Summary,
+			"tokens_used":     ev.TokensUsed,
+			"result_status":   ev.ResultStatus,
+		})
+		writer.EnqueueData(string(payload))
+	}
+
 	clientCtx := c.Request.Context()
 	tokenCb := func(token string) {
 		payload, _ := json.Marshal(map[string]string{"token": token})
@@ -132,10 +147,11 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 		MaxSteps:       intOption(req.Options, "maxSteps"),
 		Timeout:        timeoutOption(req.Options, "timeout"),
 	}, agent.ExecMeta{
-		TenantID:    tenantID,
-		TraceID:     middleware.GetTraceID(c),
-		ExecutionID: req.ExecutionID,
-		Stream:      true,
+		TenantID:        tenantID,
+		TraceID:         middleware.GetTraceID(c),
+		ExecutionID:     req.ExecutionID,
+		Stream:          true,
+		DelegateEventCb: delegateCb,
 	}, tokenCb)
 	if err != nil {
 		// 续跑竞态：携带 execution_id 重发续跑，但审批其实还在等待中（未批准）。
