@@ -127,7 +127,7 @@ func TestResumeToolApprovalConversationGone(t *testing.T) {
 	})
 	svc := resumeValidationService(approvalSvc, resumeChatRepo{convErr: domain.ErrNotFound}, resumePolicyStub{}, nil)
 
-	_, _, err := svc.ResumeToolApproval(context.Background(), "t1", "approval-1")
+	_, _, err := svc.ResumeToolApproval(context.Background(), "t1", "u1", "approval-1")
 	require.ErrorIs(t, err, domain.ErrApprovalConversationGone)
 	require.Equal(t, []string{"conversation_deleted"}, repo.voidReasons)
 	require.Empty(t, repo.invalidateReasons, "会话删除校验短路，不应走到策略重查")
@@ -145,7 +145,7 @@ func TestResumeToolApprovalPolicyChanged(t *testing.T) {
 		resumeChatRepo{conv: &domain.ChatConversation{ID: "conv-alive"}},
 		resumePolicyStub{risk: port.ToolRiskRead}, nil)
 
-	_, _, err := svc.ResumeToolApproval(context.Background(), "t1", "approval-1")
+	_, _, err := svc.ResumeToolApproval(context.Background(), "t1", "u1", "approval-1")
 	require.ErrorIs(t, err, domain.ErrApprovalPolicyChanged)
 	require.Equal(t, []string{"policy_changed"}, repo.invalidateReasons)
 	require.Empty(t, repo.voidReasons, "策略重查失败走 Invalidate，不应 Void")
@@ -163,7 +163,7 @@ func TestResumeToolApprovalPolicyResolveErrorFailClosed(t *testing.T) {
 		resumeChatRepo{conv: &domain.ChatConversation{ID: "conv-alive"}},
 		resumePolicyStub{err: domain.ErrNotFound}, nil)
 
-	_, _, err := svc.ResumeToolApproval(context.Background(), "t1", "approval-1")
+	_, _, err := svc.ResumeToolApproval(context.Background(), "t1", "u1", "approval-1")
 	require.ErrorIs(t, err, domain.ErrNotFound, "resolver 错误应原样传播（fail closed）")
 	require.NotErrorIs(t, err, domain.ErrApprovalPolicyChanged)
 	require.Empty(t, repo.invalidateReasons, "unresolved 不 Invalidate")
@@ -181,7 +181,7 @@ func TestResumeToolApprovalExpiredInvalidates(t *testing.T) {
 	repo.row.ExpiresAt = time.Now().Add(-time.Minute) // 已过期
 	svc := resumeValidationService(approvalSvc, resumeChatRepo{}, resumePolicyStub{}, nil)
 
-	_, _, err := svc.ResumeToolApproval(context.Background(), "t1", "approval-1")
+	_, _, err := svc.ResumeToolApproval(context.Background(), "t1", "u1", "approval-1")
 	require.ErrorIs(t, err, ErrApprovalExpired)
 	require.Equal(t, []string{"expired"}, repo.invalidateReasons)
 	require.Empty(t, repo.voidReasons)
@@ -199,7 +199,7 @@ func TestResumeToolApprovalVoidFailureJoins(t *testing.T) {
 	repo.voidErr = dbDown
 	svc := resumeValidationService(approvalSvc, resumeChatRepo{convErr: domain.ErrNotFound}, resumePolicyStub{}, nil)
 
-	_, _, err := svc.ResumeToolApproval(context.Background(), "t1", "approval-1")
+	_, _, err := svc.ResumeToolApproval(context.Background(), "t1", "u1", "approval-1")
 	require.ErrorIs(t, err, domain.ErrNotFound)
 	require.ErrorIs(t, err, dbDown)
 	require.Equal(t, []string{"conversation_deleted"}, repo.voidReasons)
@@ -218,7 +218,7 @@ func TestResumeToolApprovalInvalidateFailureJoins(t *testing.T) {
 		resumeChatRepo{conv: &domain.ChatConversation{ID: "conv-alive"}},
 		resumePolicyStub{risk: port.ToolRiskRead}, nil)
 
-	_, _, err := svc.ResumeToolApproval(context.Background(), "t1", "approval-1")
+	_, _, err := svc.ResumeToolApproval(context.Background(), "t1", "u1", "approval-1")
 	require.ErrorIs(t, err, dbDown)
 	require.Equal(t, []string{"policy_changed"}, repo.invalidateReasons)
 }
@@ -238,7 +238,7 @@ func TestResumeToolApprovalNonMCPSubjectSkipsPolicyCheck(t *testing.T) {
 		resumeChatRepo{conv: &domain.ChatConversation{ID: "conv-alive"}},
 		resumePolicyStub{risk: port.ToolRiskRead}, registry)
 
-	_, _, err := svc.ResumeToolApproval(context.Background(), "t1", "approval-1")
+	_, _, err := svc.ResumeToolApproval(context.Background(), "t1", "u1", "approval-1")
 	require.ErrorIs(t, err, ErrNotFound, "非 MCP 审批跳过策略重查后走正常恢复链")
 	require.NotErrorIs(t, err, domain.ErrApprovalPolicyChanged)
 	require.Empty(t, repo.invalidateReasons, "SubjectKind 门控后不得误 Invalidate")
@@ -257,7 +257,7 @@ func TestResumeToolApprovalEmptyRiskFailClosed(t *testing.T) {
 		resumeChatRepo{conv: &domain.ChatConversation{ID: "conv-alive"}},
 		resumePolicyStub{risk: ""}, nil)
 
-	_, _, err := svc.ResumeToolApproval(context.Background(), "t1", "approval-1")
+	_, _, err := svc.ResumeToolApproval(context.Background(), "t1", "u1", "approval-1")
 	require.Error(t, err, "空风险应 fail closed")
 	require.NotErrorIs(t, err, domain.ErrApprovalPolicyChanged)
 	require.Empty(t, repo.invalidateReasons, "空风险不 Invalidate")
@@ -277,7 +277,7 @@ func TestResumeToolApprovalPolicyUnchangedKeepsApproval(t *testing.T) {
 		resumeChatRepo{conv: &domain.ChatConversation{ID: "conv-alive"}},
 		resumePolicyStub{risk: port.ToolRiskRead}, registry)
 
-	_, _, err := svc.ResumeToolApproval(context.Background(), "t1", "approval-1")
+	_, _, err := svc.ResumeToolApproval(context.Background(), "t1", "u1", "approval-1")
 	require.ErrorIs(t, err, ErrNotFound, "校验通过后走正常恢复链，不应返回分类错误")
 	require.NotErrorIs(t, err, domain.ErrApprovalPolicyChanged)
 	require.NotErrorIs(t, err, domain.ErrApprovalConversationGone)

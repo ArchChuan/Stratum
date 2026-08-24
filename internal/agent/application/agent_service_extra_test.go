@@ -239,7 +239,7 @@ func TestAgentServiceApprovalMethodsFailClosed(t *testing.T) {
 	require.Error(t, err)
 	err = svc.DecideToolApproval(context.Background(), "t1", "a1", "approve", "u1", "ok")
 	require.Error(t, err)
-	_, _, err = svc.ResumeToolApproval(context.Background(), "t1", "a1")
+	_, _, err = svc.ResumeToolApproval(context.Background(), "t1", "u1", "a1")
 	require.Error(t, err)
 }
 

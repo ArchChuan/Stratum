@@ -63,6 +63,13 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 		if s.TerminatedBy != "" {
 			return s, nil
 		}
+		// 工具审批续跑（C2b）：跳过轮直接返回，不调 routeLLM、不 Steps++、不记账。
+		// 条件边依据末尾消息路由——合成的 assistant+tool_calls 必然走 nodeTool。
+		// 消费后立即清零，保证每轮只跳一次。
+		if s.SkipNextLLM {
+			s.SkipNextLLM = false
+			return s, nil
+		}
 		start := time.Now()
 
 		tools, messages, _ := prepareLLMRequest(ctx, &s)

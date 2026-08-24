@@ -93,6 +93,8 @@ const (
 	TaskFailThreshold = 3
 	// TaskCleanupInterval 是 TaskCleanupWorker 的清理周期。
 	TaskCleanupInterval = 10 * time.Minute
+	// ApprovalCleanupInterval 是 ApprovalCleanupWorker 的清理周期。
+	ApprovalCleanupInterval = 10 * time.Minute
 	// TaskSemanticSimilarityThreshold 是恢复注入的语义相关阈值：新消息的
 	// bigram 覆盖 goal bigram 的比例达到该值才注入（0.25 = 每 4 个 bigram 至少
 	// 命中 1 个，中文 2 字词粒度）。

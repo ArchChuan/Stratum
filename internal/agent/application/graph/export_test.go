@@ -65,3 +65,7 @@ func PlanSlotChildStateForTest(s ReActState) ReActState {
 func MakeToolNodeForTest(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReActState] {
 	return makeToolNode(capGW, logger)
 }
+
+func MakeLLMNodeForTest(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap.Logger) NodeFunc[ReActState] {
+	return makeLLMNode(capGW, ledger, logger)
+}
