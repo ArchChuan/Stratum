@@ -1,9 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { Modal } from 'antd';
 import { createRef } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentChatPage } from '../AgentChatPage';
-import { Modal } from 'antd';
 
 const mocks = vi.hoisted(() => ({
   isMobile: true,
