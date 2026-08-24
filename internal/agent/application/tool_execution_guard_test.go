@@ -5,9 +5,11 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
+	"github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
-	"github.com/stretchr/testify/require"
 )
 
 type countingMCPExecutor struct {
@@ -202,6 +204,94 @@ func TestToolExecutionGuardValidatesArgumentsBeforeExecution(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrToolArgumentsInvalid)
 	require.Zero(t, executor.calls)
+}
+
+func delegateGuardRequest(delegate port.DelegateToolRunFunc) ToolExecutionRequest {
+	req := authorizedToolExecutionRequest()
+	req.Tool = port.ToolDefinition{
+		Name: graph.StratumDelegateToolName, ProviderType: domain.ProviderTypeBuiltin,
+		InputSchema: map[string]any{
+			"type": "object", "required": []any{"goal"},
+			"properties": map[string]any{
+				"goal":      map[string]any{"type": "string", "minLength": 1},
+				"max_steps": map[string]any{"type": "integer"},
+			},
+		},
+		Metadata: map[string]any{"risk_level": "read", "policy_resolved": true},
+	}
+	req.Arguments = map[string]any{"goal": "summarize file"}
+	req.AgentToolIDs = []string{graph.StratumDelegateToolName}
+	req.DelegateExecutor = delegate
+	return req
+}
+
+// TestToolExecutionGuardDispatchesDelegateBeforeExecutor 验证 stratum_delegate 走
+// guard 全链路：授权 + jsonschema 通过后直接调用 delegate 闭包（不经 MCP executor），
+// 结果仍经 ResultGuard 打 untrusted 标记。
+func TestToolExecutionGuardDispatchesDelegateBeforeExecutor(t *testing.T) {
+	executor := &countingMCPExecutor{}
+	guard := NewToolExecutionGuard(ToolExecutionGuardDeps{
+		Authorizer: NewToolAuthorizer(stubToolUserScopeResolver{
+			scope: port.ToolUserScope{UserActive: true, AllowsTool: true},
+		}),
+		Executor: executor,
+	})
+
+	called := false
+	req := delegateGuardRequest(func(_ context.Context, args map[string]any) (port.MCPToolResult, error) {
+		called = true
+		require.Equal(t, "summarize file", args["goal"])
+		return port.MCPToolResult{StructuredContent: map[string]any{
+			"summary": "done", "status": "success", "tokens_used": 42,
+		}}, nil
+	})
+
+	output, err := guard.Execute(context.Background(), req)
+	require.NoError(t, err)
+	require.True(t, called, "delegate 闭包必须被调用")
+	// 结果经 ResultGuard 包裹为 <untrusted_tool_result>，且不触碰 MCP executor。
+	guarded, ok := output.(port.GuardedToolResult)
+	require.True(t, ok)
+	require.True(t, guarded.Untrusted)
+	require.Contains(t, guarded.ModelContent, "<untrusted_tool_result>")
+	require.Contains(t, guarded.ModelContent, `"tokens_used":42`)
+	require.Zero(t, executor.calls)
+}
+
+func TestToolExecutionGuardDelegateInvalidArgumentsRejected(t *testing.T) {
+	guard := NewToolExecutionGuard(ToolExecutionGuardDeps{
+		Authorizer: NewToolAuthorizer(stubToolUserScopeResolver{
+			scope: port.ToolUserScope{UserActive: true, AllowsTool: true},
+		}),
+	})
+	executorCalled := false
+	req := delegateGuardRequest(func(_ context.Context, _ map[string]any) (port.MCPToolResult, error) {
+		executorCalled = true
+		return port.MCPToolResult{}, nil
+	})
+	req.Arguments = map[string]any{} // 缺必填 goal
+
+	_, err := guard.Execute(context.Background(), req)
+	require.ErrorIs(t, err, ErrToolArgumentsInvalid)
+	require.False(t, executorCalled, "非法参数不得调用 delegate 闭包")
+}
+
+func TestToolExecutionGuardDelegateNotAllowlistedDenied(t *testing.T) {
+	guard := NewToolExecutionGuard(ToolExecutionGuardDeps{
+		Authorizer: NewToolAuthorizer(stubToolUserScopeResolver{
+			scope: port.ToolUserScope{UserActive: true, AllowsTool: true},
+		}),
+	})
+	executorCalled := false
+	req := delegateGuardRequest(func(_ context.Context, _ map[string]any) (port.MCPToolResult, error) {
+		executorCalled = true
+		return port.MCPToolResult{}, nil
+	})
+	req.AgentToolIDs = []string{"mcp:orders:get"} // 未把 delegate 列入 AgentToolIDs
+
+	_, err := guard.Execute(context.Background(), req)
+	require.ErrorIs(t, err, ErrToolAuthorizationDenied)
+	require.False(t, executorCalled, "未授权工具不得调用 delegate 闭包")
 }
 
 func TestSystemAssistantToolInputSchemasCompileForSharedExecutionGuard(t *testing.T) {

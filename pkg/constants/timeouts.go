@@ -80,4 +80,9 @@ const (
 	AgentSynthesizeTimeout     = 30 * time.Second
 	AgentMCPToolCallTimeout    = 30 * time.Second
 	SystemAssistantToolTimeout = 10 * time.Second
+
+	// DelegateExecutionTimeout caps the overall wall-clock budget of a single
+	// stratum_delegate sub-agent run. Streaming LLM calls have no single flat
+	// timeout; this bounds the whole child invocation (guard→closure→Invoke).
+	DelegateExecutionTimeout = 3 * time.Minute
 )

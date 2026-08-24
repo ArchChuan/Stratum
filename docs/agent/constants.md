@@ -26,6 +26,13 @@ Agent 上下文相关常量位于 `pkg/constants/agent.go`：
 | `MemoryBudgetRatio` | 0.3 | memory context 最多占剩余预算的比例 |
 | `LoopCompactionRecentGroups` | 3 | 循环压缩时优先保留的最近完整消息组数 |
 | `LoopCompactionSafetyRatio` | 0.8 | 触发循环内压缩的预算安全阈值（固定平台默认，不暴露用户配置；2026-08-17 产品裁决） |
+| `MaxDelegateDepth` | 2 | 委托深度全局硬上限（clamp 兜底）；per-agent 默认 1 可放宽到 2 |
+| `DefaultDelegateMaxDepth` | 1 | per-agent `delegate_max_depth` 0=unset 回落；默认"仅主→子一层" |
+| `DefaultDelegateMaxLLMSteps` | 5 | per-agent `delegate_default_max_steps` 0=unset 回落 |
+| `MaxDelegateMaxLLMSteps` | 10 | delegate max_steps 参数硬上限（schema maximum + clamp） |
+| `DelegateMaxGoalRunes` | 2000 | delegate goal 长度上限 |
+| `DelegateSummaryMaxRunes` | 4000 | 子 agent 摘要回传前截断 |
+| `DelegateExecutionTimeout` | 3min | 单次 delegate 整体 wall-clock 上限 |
 
 ## 前端（TypeScript / TSX）
 
