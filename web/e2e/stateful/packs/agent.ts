@@ -34,8 +34,8 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL, fixtureU
     expect((await listResponse).status()).toBe(200);
     await expect(page).toHaveURL(`${webURL}/agents`);
     await expect(page.getByRole('heading', { name: 'Agent 列表' })).toBeVisible();
-    await expect(page.getByText('Stratum 平台助手', { exact: true }).first()).toBeVisible();
-    completed.push('agent.route.agents', 'agent.route.agents.includesSystemAssistant');
+    await expect(page.getByText('平台使用助手', { exact: true }).first()).toBeVisible();
+    completed.push('agent.route.agents', 'agent.route.agents.includesPlatformSeed');
 
     const catResp = waitForMutation(page, '/admin/models', 'GET');
     await page.getByRole('button', { name: '创建 Agent' }).click();
@@ -142,10 +142,10 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL, fixtureU
     completed.push('agent.mutation.delete.conversations.convid');
 
     await page.goto(`${webURL}/agents`);
-    const systemCard = page.locator('.ant-card').filter({ hasText: 'Stratum 平台助手' });
+    const systemCard = page.locator('.ant-card').filter({ hasText: '平台使用助手' });
     await systemCard.getByRole('button', { name: '编辑 Agent' }).click();
     await expect(page).toHaveURL(`${webURL}/agents/stratum-platform-assistant/edit`);
-    await expect(page.getByRole('heading', { name: '平台助手设置' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '编辑 Agent' })).toBeVisible();
 
     const settingsModelInput = page.getByRole('combobox', { name: 'LLM 模型' });
     await expect(settingsModelInput).toBeEnabled();
@@ -159,7 +159,7 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL, fixtureU
     const savedSystemModel = await rows<{ llm_model: string }>(pool, tenantID,
       "SELECT llm_model FROM agents WHERE system_key='stratum.platform_assistant'", []);
     expect(savedSystemModel[0]?.llm_model).toBeTruthy();
-    completed.push('agent.mutation.put.agents.system.settings');
+    completed.push('agent.mutation.put.agents.platformSeed');
     recordEvidence(evidence, 'system assistant model settings');
 
     await page.goto(`${webURL}/agents`);

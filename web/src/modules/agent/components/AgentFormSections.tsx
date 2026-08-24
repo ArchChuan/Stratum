@@ -369,8 +369,7 @@ export const AgentFormSections = ({
       />
     </div>
 
-    {!isSystem && (
-      <div
+    <div
         className="responsive-form-section"
         style={{
           background: '#fff',
@@ -409,7 +408,6 @@ export const AgentFormSections = ({
           <InputNumber min={0} max={AGENT_DELEGATE_MAX_STEPS} step={1} style={{ width: '100%' }} disabled={!delegateEnabled} />
         </Form.Item>
       </div>
-    )}
 
   </>
   );

@@ -409,6 +409,7 @@ describe('AgentFormSections', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: '提交' }));
     expect(await screen.findByText('请选择记忆范围')).toBeInTheDocument();
+  });
 
   it('renders the delegate section and reflects explicit enabled', () => {
     render(
