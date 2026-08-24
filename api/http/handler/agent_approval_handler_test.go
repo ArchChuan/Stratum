@@ -67,6 +67,15 @@ func (f *toolApprovalRepoFake) UpdateAssignee(_ context.Context, _, _, assignee 
 func (*toolApprovalRepoFake) CascadeByConversation(context.Context, string, string) error {
 	return nil
 }
+func (*toolApprovalRepoFake) ListActionable(context.Context, string, string) ([]agentdomain.ToolApproval, error) {
+	return nil, nil
+}
+func (*toolApprovalRepoFake) InvalidateStaleForTool(context.Context, string, string, string, string) (int64, error) {
+	return 0, nil
+}
+func (*toolApprovalRepoFake) ExpireStale(context.Context, string) (int64, error) {
+	return 0, nil
+}
 
 // fakeApprovalActionExecutor 记录调用并返回固定输出，验证 executor 与 handler 的装配。
 type fakeApprovalActionExecutor struct {

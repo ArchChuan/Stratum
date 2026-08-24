@@ -19,7 +19,9 @@ export const useApprovalNotifications = () => {
     try {
       const data = await approvalApi.listPending();
       if (seq !== seqRef.current) return;
-      setRows(data);
+      // 显式过滤 pending-only：角标只计待审批，防未来端点改含 approved 待执行态时
+      // 误把"已批准待执行"当待办数计入角标。
+      setRows(data.filter((r) => r.status === 'pending'));
     } catch {
       // 铃铛轮询失败静默忽略，不弹错误打扰用户；下次轮询/聚焦时自动重试。
     } finally {

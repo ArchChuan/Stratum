@@ -26,6 +26,10 @@ type approvalRepoFake struct {
 	pendingN                                            int // 返回给 ListPending 的审批数（配额测试用）
 	voidReasons, invalidateReasons                      []string
 	voidErr, invalidateErr                              error // 恢复层终结动作硬失败注入（Join 路径测试）
+	// 方案 C / F2 调用审计：记录 InvalidateStaleForTool 与配额/列表查询的实际调用，
+	// 供"作废旧 pending 先于创建"与"配额仅计 pending"两个回归断言使用。
+	invalidateStaleCalls, listPendingCalls, listActionableCalls int
+	invalidateStaleErr                                          error
 }
 
 func (f *approvalRepoFake) Create(_ context.Context, _ string, row domain.ToolApproval) (string, error) {
@@ -62,6 +66,7 @@ func (f *approvalRepoFake) MarkOutcomeUnknown(_ context.Context, _, _ string) er
 	return f.unknownErr
 }
 func (f *approvalRepoFake) ListPending(_ context.Context, _, userID string) ([]domain.ToolApproval, error) {
+	f.listPendingCalls++
 	f.lastListUserID = userID
 	if f.pendingN > 0 {
 		out := make([]domain.ToolApproval, f.pendingN)
@@ -93,6 +98,21 @@ func (f *approvalRepoFake) UpdateAssignee(_ context.Context, _, _, assignee stri
 }
 func (f *approvalRepoFake) CascadeByConversation(_ context.Context, _, _ string) error {
 	return nil
+}
+func (f *approvalRepoFake) ListActionable(_ context.Context, _, userID string) ([]domain.ToolApproval, error) {
+	f.listActionableCalls++
+	f.lastListUserID = userID
+	if f.row.ID != "" {
+		return []domain.ToolApproval{f.row}, nil
+	}
+	return nil, nil
+}
+func (f *approvalRepoFake) InvalidateStaleForTool(_ context.Context, _, _, _, _ string) (int64, error) {
+	f.invalidateStaleCalls++
+	return 0, f.invalidateStaleErr
+}
+func (f *approvalRepoFake) ExpireStale(_ context.Context, _ string) (int64, error) {
+	return 0, nil
 }
 
 func TestToolApprovalServiceRequestDeniesWhenPendingQuotaExhausted(t *testing.T) {

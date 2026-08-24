@@ -30,6 +30,7 @@ interface StreamInternalState {
 	// 断线续接恢复键:SSE 首帧下发,存内存仅暴露,断线重发由 executeAgentStream
 	// 内部携带,这里只做可读快照(刷新降级为重新执行,不持久化)。
 	executionId: string | null;
+		conflict: boolean;
   ctrl: AbortController | null;
 }
 
@@ -43,6 +44,7 @@ export interface StreamSnapshot {
 	error: string | null;
 	approval: ToolApproval | null;
 	executionId: string | null;
+	conflict: boolean;
 }
 
 interface ChatStreamContextValue {
@@ -53,6 +55,7 @@ interface ChatStreamContextValue {
   streamError: string | null;
 	streamDone: boolean;
 	streamApproval: ToolApproval | null;
+	streamConflict: boolean;
 	streamFailure: AgentExecutionFailure | null;
   startStream: (agentId: string, payload: ExecuteAgentPayload) => void;
   cancelStream: () => void;
@@ -81,6 +84,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
 		failure: null,
 		approval: null,
 		executionId: null,
+		conflict: false,
     ctrl: null,
   });
 
@@ -116,6 +120,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
 		s.failure = null;
 		s.approval = null;
 		s.executionId = null;
+		s.conflict = false;
     notify();
 
     const ctrl = executeAgentStream(agentId, payload, {
@@ -138,6 +143,18 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
 		onError: (err) => {
         if (stateRef.current.ctrl !== ctrl) return;
         stateRef.current.done = true;
+		// F3 双 tab 并发续跑败者：另一窗口已抢占并流式（后端 claimApprovalResume
+		// CAS 失败 → 409）。静默等待胜方结果，不污染对话气泡、不上抛错误；审批
+		// 卡片终态由 active-execution 轮询刷新。
+	if ((err as Error & { status?: number }).status === 409) {
+		stateRef.current.error = null;
+		stateRef.current.failure = null;
+		stateRef.current.ctrl = null;
+		// 双 tab 并发续跑败者标记:useChatPage 据此保留占位消息并交轮询做败方同步。
+		stateRef.current.conflict = true;
+		notify();
+		return;
+	}
 		stateRef.current.error = err.message || String(err);
 		stateRef.current.failure = {
 			message: err.message || String(err),
@@ -182,6 +199,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
 		error: stateRef.current.error,
 		approval: stateRef.current.approval,
 		executionId: stateRef.current.executionId,
+		conflict: stateRef.current.conflict,
     }),
     [],
   );
@@ -197,6 +215,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
       streamError: stateRef.current.error,
       streamDone: stateRef.current.done,
       streamApproval: stateRef.current.approval,
+      streamConflict: stateRef.current.conflict,
       streamFailure: stateRef.current.failure,
       startStream,
       cancelStream,

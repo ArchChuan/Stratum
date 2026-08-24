@@ -160,6 +160,69 @@ func (s *PgToolApprovalStore) ListPending(ctx context.Context, tenantID, userID 
 	return out, err
 }
 
+func (s *PgToolApprovalStore) ListActionable(ctx context.Context, tenantID, userID string) ([]domain.ToolApproval, error) {
+	out := []domain.ToolApproval{}
+	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		query := `SELECT id,execution_id,trace_id,agent_id,user_id,tool_call_id,server_id,tool_name,risk_level,
+		 subject_kind,assigned_approver,conversation_id,status,created_at,expires_at FROM agent_tool_approvals
+		 WHERE status IN ('pending','approved') AND expires_at>NOW()`
+		args := []any{}
+		if userID != "" {
+			query += ` AND user_id=$1`
+			args = append(args, userID)
+			// 指定给当前用户的最前（软绑定优先级提示，D8）
+			query += ` ORDER BY CASE WHEN assigned_approver=$1 THEN 0 ELSE 1 END, created_at`
+		} else {
+			query += ` ORDER BY created_at`
+		}
+		rows, err := tx.Query(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var a domain.ToolApproval
+			if err := rows.Scan(&a.ID, &a.ExecutionID, &a.TraceID, &a.AgentID, &a.UserID, &a.ToolCallID, &a.ServerID, &a.ToolName, &a.RiskLevel, &a.SubjectKind, &a.AssignedApprover, &a.ConversationID, &a.Status, &a.CreatedAt, &a.ExpiresAt); err != nil {
+				return err
+			}
+			out = append(out, a)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+func (s *PgToolApprovalStore) InvalidateStaleForTool(ctx context.Context, tenantID, executionID, serverID, toolName string) (int64, error) {
+	var n int64
+	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE agent_tool_approvals SET status='invalidated', invalidation_reason='superseded',
+		 decided_at=NOW(), decided_by='system:superseded'
+		 WHERE execution_id=$1 AND server_id=$2 AND tool_name=$3
+		   AND subject_kind='mcp_tool' AND status='pending' AND expires_at>NOW()`, executionID, serverID, toolName)
+		if err != nil {
+			return err
+		}
+		n = tag.RowsAffected()
+		return nil
+	})
+	return n, err
+}
+
+func (s *PgToolApprovalStore) ExpireStale(ctx context.Context, tenantID string) (int64, error) {
+	var n int64
+	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE agent_tool_approvals SET status='expired', decided_by='system:expiry',
+ decided_at=NOW()
+ WHERE expires_at<NOW() AND status IN ('pending','approved')`)
+		if err != nil {
+			return err
+		}
+		n = tag.RowsAffected()
+		return nil
+	})
+	return n, err
+}
+
 func (s *PgToolApprovalStore) ListHistory(ctx context.Context, tenantID, userID string, page, pageSize int) ([]domain.ToolApproval, int, error) {
 	out := []domain.ToolApproval{}
 	total := 0

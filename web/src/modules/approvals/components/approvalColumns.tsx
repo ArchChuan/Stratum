@@ -54,6 +54,12 @@ export const buildPendingColumns = (ctx: PendingColumnsContext): ColumnsType<App
       <Tag color={v === 'destructive' ? 'red' : 'blue'}>{riskLevelLabel(v)}</Tag>
     ),
   },
+  {
+    title: '状态',
+    dataIndex: 'status',
+    width: 110,
+    render: (v: string) => <Tag color={APPROVAL_STATUS_COLORS[v]}>{statusLabel(v)}</Tag>,
+  },
   { title: '发起人', dataIndex: 'user_id', ellipsis: true, width: 140, render: (_, record) => displayName(record) },
   {
     title: '指派审批人',
@@ -93,7 +99,7 @@ export const buildPendingColumns = (ctx: PendingColumnsContext): ColumnsType<App
         <Button type="link" size="small" onClick={() => ctx.onOpenDetail(record.id)}>
           详情
         </Button>
-        {!ctx.readonly && (
+        {!ctx.readonly && record.status === 'pending' && (
           <>
             <Button
               type="link"

@@ -88,7 +88,12 @@ type ExecutionConfig struct {
 	// ResumeToolApproval 一致）；空串保持旧语义——waiting_approval 不恢复，
 	// 重跑路径由 guard 对匹配工具重新发起审批。
 	ApprovalResumeID string
-	RAGSearchFn      func(ctx context.Context, workspaces []string, query string, topK int, viewerID string) (string, error)
+	// ApprovalResumePayload 是审批续跑注入的已批准载荷（C2a）：非空时
+	// executeReAct 在 buildReActInitState 后据此从批准参数合成 assistant
+	// 工具调用消息（P1）并置 SkipNextLLM，使已批准的工具调用直接执行，不再
+	// 经 LLM 重新生成参数（修复审批续跑无限循环）。
+	ApprovalResumePayload *ToolApprovalPayload
+	RAGSearchFn           func(ctx context.Context, workspaces []string, query string, topK int, viewerID string) (string, error)
 	// RAGSearchFnWithEvidence is the evidence-capable knowledge search hook
 	// (port.RAGSearchEvidenceProvider). When set, the knowledge tool prefers
 	// it over RAGSearchFn so tool observations carry retrieval provenance;
@@ -803,6 +808,20 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	}
 
 	initState := a.buildReActInitState(ec, initMessages, maxTokens)
+	// 审批续跑 C2c：从已批准载荷合成 assistant 工具调用消息（P1）并置
+	// SkipNextLLM，使已批准的工具调用直接执行，不再经 LLM 重新生成参数。
+	// 查不到工具（被删/改名）时回退 LLM 原路径（不构成死循环）。
+	if ec.cfg.ApprovalResumePayload != nil {
+		var ok bool
+		initState, ok = synthesizeApprovalResume(initState, *ec.cfg.ApprovalResumePayload)
+		if !ok {
+			a.Logger.Info("agent: approval resume tool not found, falling back to llm",
+				zap.String("execution_id", ec.cfg.ExecutionID),
+				zap.String("server_id", ec.cfg.ApprovalResumePayload.ServerID),
+				zap.String("tool", ec.cfg.ApprovalResumePayload.ToolName),
+			)
+		}
+	}
 	initState.ActivePlan = activePlan
 	if len(restoredActives) > 0 {
 		initState.Actives = restoredActives
@@ -855,6 +874,48 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	}
 	a.collectReActResult(execCtx, ctx, ec, result, finalState)
 	return nil
+}
+
+// synthesizeApprovalResume 从已批准载荷合成 assistant 工具调用消息（P1）追加到
+// 恢复 Messages 并置 SkipNextLLM（C2c）：审批续跑时使已批准的工具调用直接执行，
+// 不再经 LLM 重新生成参数。AvailableTools 中按 ServerID+CapabilityID 查表取
+// Name（payload.ToolName 是 capability id，非显示名）；查不到（工具被删/改名）
+// 回退不合成不跳过，走 LLM 原路径（工具被删时 LLM 也调不到，不构成死循环）。
+// 返回 (state, true) 表示已合成。
+func synthesizeApprovalResume(state agentgraph.ReActState, payload ToolApprovalPayload) (agentgraph.ReActState, bool) {
+	var toolName string
+	for _, td := range state.AvailableTools {
+		if td.ServerID == payload.ServerID && td.CapabilityID == payload.ToolName {
+			toolName = td.Name
+			break
+		}
+	}
+	if toolName == "" {
+		return state, false
+	}
+	callID := payload.ToolCallID
+	if callID == "" {
+		callID = uuid.NewString()
+	} else {
+		// 恢复消息已存在同 ID 时生成新唯一 ID，避免 LLM 上下文孤立重复 tool_call。
+		for _, m := range state.Messages {
+			for _, tc := range m.ToolCalls {
+				if tc.ID == callID {
+					callID = uuid.NewString()
+				}
+			}
+		}
+	}
+	state.Messages = append(state.Messages, port.LLMMessage{
+		Role: "assistant",
+		ToolCalls: []port.ToolCall{{
+			ID:        callID,
+			Name:      toolName,
+			Arguments: payload.Arguments,
+		}},
+	})
+	state.SkipNextLLM = true
+	return state, true
 }
 
 // newReActExecContext 构建 ReAct 执行上下文：有超时预算时用 WithTimeout，否则
@@ -1668,6 +1729,16 @@ func WithExecutionID(id string) ExecutionOption {
 func WithApprovalResume(id string) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.ApprovalResumeID = id
+	}
+}
+
+// WithApprovalResumePayload 注入已批准的 ToolApprovalPayload（C2a）：审批续跑时
+// executeReAct 据此从批准参数合成 assistant 工具调用消息（P1）并置 SkipNextLLM，
+// 使已批准的工具调用在审批通过后直接执行（修复续跑无限循环）。与
+// WithApprovalResume 成对使用，由 buildApprovalResumeOptions 追加。
+func WithApprovalResumePayload(payload ToolApprovalPayload) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.ApprovalResumePayload = &payload
 	}
 }
 

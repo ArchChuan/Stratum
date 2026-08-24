@@ -49,6 +49,7 @@ export const AgentChatPage = ({
     handleRenameConv,
     handleDeleteConv,
     waitingApproval,
+    resumeBlocked,
     streaming,
     manualResumeWaiting,
 		streamFailure,
@@ -139,6 +140,7 @@ export const AgentChatPage = ({
             approval={pendingApproval}
             isMobile={isMobile}
             streaming={streaming}
+            blocked={resumeBlocked}
             onResume={manualResumeWaiting}
           />
         )}
@@ -170,6 +172,7 @@ type ApprovalGateProps = {
   approval: ReturnType<typeof useChatPage>['pendingApprovals'][number];
   isMobile: boolean;
   streaming: boolean;
+  blocked: boolean;
   onResume: () => void;
 };
 
@@ -216,16 +219,20 @@ const resolveApprovalGate = (approval: ApprovalGateProps['approval']): ApprovalG
 
 // 只读审批提示卡片:审批操作收敛到审批中心(/approvals),对话页不再打扰审批人。
 // approved 态由轮询自动流式续跑;离线/自动续跑未触发时提供手动"继续执行"兜底。
-const ApprovalGate = ({ approval, isMobile, streaming, onResume }: ApprovalGateProps) => {
+const ApprovalGate = ({ approval, isMobile, streaming, blocked, onResume }: ApprovalGateProps) => {
   const navigate = useNavigate();
   const { terminal, message } = resolveApprovalGate(approval);
   const approved = approval.status === 'approved';
+  // H1/H3: 自动续跑失败(工具执行失败/参数校验不过)后置阻塞态 → 卡片给出失败文案,
+  // 「继续执行」按钮保留为手动重试入口(点击经 manualResumeWaiting 解除阻塞重新续跑)。
+  const failed = approved && blocked;
+  const gateMessage = failed ? `工具 ${approval.toolName} 自动执行失败，可手动重试` : message;
 
   return (
     <Alert
-      type={terminal ? 'error' : 'warning'}
+      type={terminal || failed ? 'error' : 'warning'}
       showIcon
-      message={message}
+      message={gateMessage}
       description={(
         <Space direction={isMobile ? 'vertical' : 'horizontal'} wrap>
           <Typography.Text>
