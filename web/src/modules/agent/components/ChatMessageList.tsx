@@ -14,6 +14,10 @@ import TaskProgressBanner from './TaskProgressBanner';
 
 const { Text } = Typography;
 
+// 委托目标可能很长(goal 上限 2000 字符),banner 只展示截断前缀。
+const truncateDisplay = (text: string, max: number) =>
+  text.length > max ? `${text.slice(0, max)}…` : text;
+
 interface Props {
   messages: ChatMessage[];
   loadingMsgs: boolean;
@@ -26,6 +30,7 @@ interface Props {
   pinnedToBottomRef: MutableRefObject<boolean>;
   isMobile?: boolean;
   contentSwitching?: boolean;
+  delegateStatus?: { status: 'running'; goal?: string; delegateId?: string } | null;
 }
 
 // StreamingBubble renders plain text + blinking cursor during streaming to avoid
@@ -152,6 +157,7 @@ export const ChatMessageList = ({
   pinnedToBottomRef,
   isMobile = false,
   contentSwitching = false,
+  delegateStatus = null,
 }: Props) => {
   // The last message is the in-flight assistant bubble while streaming.
   const streamingMsgId = sending && messages.length > 0 ? messages[messages.length - 1].id : null;
@@ -228,6 +234,21 @@ export const ChatMessageList = ({
             <Text type="secondary" style={{ fontSize: 12 }}>
               Agent 正在处理…
             </Text>
+          </div>
+        )}
+        {delegateStatus?.status === 'running' && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              alignSelf: 'flex-start',
+            }}
+          >
+            <Spin size="small" />
+            <Tag color="blue">
+              子 Agent 正在执行{delegateStatus.goal ? `：${truncateDisplay(delegateStatus.goal, 30)}` : ''}
+            </Tag>
           </div>
         )}
           <div ref={bottomRef} />

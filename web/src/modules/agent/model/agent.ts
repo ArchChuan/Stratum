@@ -22,6 +22,12 @@ export const agentSchema = z
     mcpToolIds: z.array(z.string()).nullish().transform((v) => v ?? []),
     knowledgeWorkspaceIds: z.array(z.string()).nullish().transform((v) => v ?? []),
     memoryScope: z.string().optional().default('user'),
+    // stratum_delegate 子 Agent 派发：delegateEnabled 缺失按 false（存量默认关闭，
+    // 委托是显式能力，避免未评估风险的 Agent 静默获得子 Agent 派发能力）；
+    // 深度/默认步数 0=unset → 运行时回落全局默认（pkg/constants/agent.go）。
+    delegateEnabled: z.boolean().optional().default(false),
+    delegateMaxDepth: z.number().optional(),
+    delegateDefaultMaxSteps: z.number().optional(),
     isSystem: z.boolean().optional().default(false),
     managementMode: z.string().optional().default(''),
     created_at: z.string().optional(),
@@ -44,6 +50,9 @@ export interface Agent {
   mcpToolIds: string[];
   knowledgeWorkspaceIds: string[];
   memoryScope: string;
+  delegateEnabled?: boolean;
+  delegateMaxDepth?: number;
+  delegateDefaultMaxSteps?: number;
   isSystem?: boolean;
   managementMode?: string;
   created_at?: string;
@@ -66,6 +75,10 @@ export interface AgentFormValues {
   mcpToolIds?: string[];
   knowledgeWorkspaceIds?: string[];
   memoryScope?: string;
+  // stratum_delegate 子 Agent 派发配置；数值 0=unset → 运行时回落全局默认。
+  delegateEnabled?: boolean;
+  delegateMaxDepth?: number;
+  delegateDefaultMaxSteps?: number;
   editors?: string[];
 }
 
@@ -325,6 +338,18 @@ export interface StreamCallbacks {
 	// 首帧恢复键(断线续接协议):SSE 首帧下发 execution_id,捕获后断线重发时
 	// 原样带回;仅存内存供消费方读取,不持久化。
 	onExecutionId?: (executionId: string) => void;
+	// 委托进度帧(SSE delegate_status):running 时子 agent 正在执行、finished 时
+	// 已结束;非终止帧,不影响主流(断线重发仍由 execution_id 恢复)。
+	onDelegateEvent?: (evt: DelegateEventPayload) => void;
+}
+
+// 委托子 agent 进度事件(SSE delegate_status 帧 payload,后端白名单直通)。
+export interface DelegateEventPayload {
+	delegate_status: 'running' | 'finished';
+	delegate_id?: string;
+	goal?: string;
+	summary?: string;
+	tokens_used?: number;
 }
 
 export interface ToolApproval {

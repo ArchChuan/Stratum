@@ -28,6 +28,15 @@ export const AGENT_DEFAULT_TEMPERATURE = 0.7;
 // max_tokens = 0 时回落后端 constants.DefaultOutputReserveTokens：模型 registry
 // 无 maxOut 或模型未知时的平台兜底输出上限，后端为权威。
 export const AGENT_DEFAULT_MAX_OUTPUT_TOKENS = 4096;
+// 子 Agent 委托（stratum_delegate）：与后端 pkg/constants/agent.go 同源，后端为权威。
+// delegateMaxDepth 0=unset → 运行时回落 DefaultDelegateMaxDepth(1)，clamp 到 MaxDelegateDepth(2)；
+// 表单允许显式输入 0 表达「未设置」（update 语义 0=unset 不覆盖已存值）。
+export const AGENT_DELEGATE_DEFAULT_MAX_DEPTH = 1;
+export const AGENT_DELEGATE_MAX_DEPTH = 2;
+// delegateDefaultMaxSteps 0=unset → 回落 DefaultDelegateMaxLLMSteps(5)；
+// max_steps 参数硬上限 10（schema maximum + 运行时 clamp）。
+export const AGENT_DELEGATE_DEFAULT_MAX_STEPS = 5;
+export const AGENT_DELEGATE_MAX_STEPS = 10;
 
 export const DEFAULT_PAGE_SIZE = 20;
 export const COMPACT_PAGE_SIZE = 10;

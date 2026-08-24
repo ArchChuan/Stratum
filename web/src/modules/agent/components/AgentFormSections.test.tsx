@@ -406,4 +406,43 @@ describe('AgentFormSections', () => {
     expect(screen.queryByText('默认：0.7')).not.toBeInTheDocument();
   });
 
+  it('renders the delegate section with delegation enabled by default', () => {
+    render(
+      <Form initialValues={{ delegateEnabled: true }}>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
+      </Form>,
+    );
+    expect(screen.getByText('子 Agent 委托')).toBeInTheDocument();
+    // DB DEFAULT true：只读子任务风险=父本身，默认开启，管理员可显式关闭。
+    expect(screen.getByRole('switch', { name: '启用子 Agent 委托' })).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('keeps delegate depth and default steps within product bounds', () => {
+    render(
+      <Form initialValues={{ delegateMaxDepth: 1, delegateDefaultMaxSteps: 5 }}>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
+      </Form>,
+    );
+    // 深度 0=unset → 回落默认 1；clamp 到硬上限 2（pkg/constants/agent.go 同源）。
+    const depth = screen.getByLabelText(/最大委托深度/);
+    expect(depth).toHaveAttribute('aria-valuemin', '0');
+    expect(depth).toHaveAttribute('aria-valuemax', '2');
+    expect(depth).toHaveValue('1');
+    // 默认步数 0=unset → 回落默认 5；参数硬上限 10。
+    const steps = screen.getByLabelText(/委托默认最大推理步数/);
+    expect(steps).toHaveAttribute('aria-valuemin', '0');
+    expect(steps).toHaveAttribute('aria-valuemax', '10');
+    expect(steps).toHaveValue('5');
+  });
+
+  it('hides the delegate section for the system assistant', () => {
+    render(
+      <Form>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} isSystem />
+      </Form>,
+    );
+    // 系统助手 availableTools=nil，不暴露 delegate 工具面，表单不展示委托配置。
+    expect(screen.queryByText('子 Agent 委托')).not.toBeInTheDocument();
+  });
+
 });

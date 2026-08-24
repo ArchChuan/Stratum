@@ -21,13 +21,18 @@ import (
 // 该名字不与任何 skill 激活名冲突（buildSkillCatalog 侧拒绝保留名）。
 const stratumSkillToolName = "stratum_skill"
 
+// StratumDelegateToolName 是内置委托工具（stratum_delegate）的保留名。导出给
+// application 层接线（AgentToolIDs 追加）与工具可见性过滤引用。
+const StratumDelegateToolName = "stratum_delegate"
+
 // IsReservedToolName 报告 name 是否命中平台内置工具保留名。skill 激活名冲突时
 // 由 buildSkillCatalog fail-closed 拒绝，避免统一工具分发被内置工具截胡或歧义。
 func IsReservedToolName(name string) bool {
 	switch name {
 	case stratumSkillToolName, "stratum_search_knowledge", "stratum_recall_memory",
 		"stratum_continue_reasoning", "stratum_create_plan", "stratum_revise_plan",
-		"stratum_continue_plan", "stratum_cancel_plan", "stratum_complete_task":
+		"stratum_continue_plan", "stratum_cancel_plan", "stratum_complete_task",
+		StratumDelegateToolName:
 		return true
 	default:
 		return false
@@ -296,7 +301,49 @@ func summarizeToolObservation(name, content, status, errMsg string) string {
 	if status == domain.ToolTraceStatusError {
 		return truncateRunes(fmt.Sprintf("%s failed: %s", name, errMsg), 800)
 	}
+	// stratum_delegate 的观察正文是 ResultGuard 包裹的结构化外壳 {summary,status,
+	// tokens_used}，解析成可读中文摘要（工具观察摘要消息 / ToolObservation.Summary
+	// / trace 共用），避免向用户展示原始 <untrusted_tool_result> JSON shell。
+	// 外壳解析失败回落原文——可读性是增强而非契约，绝不静默丢弃工具结果。
+	if name == StratumDelegateToolName {
+		return truncateRunes(delegateObservationSummary(content), 800)
+	}
 	return truncateRunes(fmt.Sprintf("%s returned: %s", name, content), 800)
+}
+
+// delegateObservationSummary 把 stratum_delegate 的结构化外壳观察转成可读文本：
+// 从 ResultGuard 包裹正文（可能带 [TRUNCATED] 后缀）中切出 JSON 对象，解析
+// {summary, status, tokens_used}。status 按白名单映射中文标签；字段缺失/解析
+// 失败回落原文（fail-open，绝不 fail 工具链路）。
+func delegateObservationSummary(content string) string {
+	body := content
+	if start := strings.Index(body, "{"); start >= 0 {
+		if end := strings.LastIndex(body[start:], "}"); end >= 0 {
+			body = body[start : start+end+1]
+		}
+	}
+	var shell struct {
+		Summary    string `json:"summary"`
+		Status     string `json:"status"`
+		TokensUsed int    `json:"tokens_used"`
+	}
+	if err := json.Unmarshal([]byte(body), &shell); err != nil || shell.Summary == "" {
+		return content
+	}
+	return fmt.Sprintf("委托子 Agent %s：%s（tokens_used=%d）", delegateStatusLabel(shell.Status), shell.Summary, shell.TokensUsed)
+}
+
+// delegateStatusLabel 把结构化外壳 status 白名单映射为中文标签；未知值回落「完成」
+// （partial fallback，与 application 层 parseDelegateStatus 语义一致）。
+func delegateStatusLabel(status string) string {
+	switch status {
+	case string(DelegateStatusPartial):
+		return "部分完成"
+	case string(DelegateStatusFailed):
+		return "执行失败"
+	default: // success 或未知 → 完成
+		return "完成"
+	}
 }
 
 func truncateRunes(s string, maxRunes int) string {

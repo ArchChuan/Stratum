@@ -75,6 +75,17 @@ type AgentConfig struct {
 	StuckThreshold int
 	// CreatedBy is the user who created the agent ("" for historical/platform rows).
 	CreatedBy string
+	// ---- stratum_delegate sub-agent dispatch (Step 0) ----
+	// DelegateEnabled 是否允许该 agent 将子任务委托给隔离子 agent。DB 默认 false：
+	// 委托是显式能力，存量 agent 默认关闭，管理员在编辑页按 agent 开启，避免
+	// 未评估风险的 agent 静默获得子 agent 派发能力。
+	DelegateEnabled bool
+	// DelegateMaxDepth 委托深度上限（0=unset → 回落 DefaultDelegateMaxDepth，再
+	// clamp 到 MaxDelegateDepth 全局硬上限）。默认 1 = "仅主→子一层"。
+	DelegateMaxDepth int
+	// DelegateDefaultMaxSteps 子循环未显式传 max_steps 时的默认推理步数（0=unset
+	// → 回落 DefaultDelegateMaxLLMSteps）。
+	DelegateDefaultMaxSteps int
 }
 
 // PlanStep is a single goal inside an agent execution plan.

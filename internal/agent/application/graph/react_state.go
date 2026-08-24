@@ -157,6 +157,28 @@ type ReActState struct {
 	// TaskCompleteRequested 标记 LLM 调用了 stratum_complete_task（目标达成）。
 	// 执行结束时由挂点读入，task 状态转 completed。完成信号独立于 plan 状态。
 	TaskCompleteRequested bool
+
+	// ---- stratum_delegate sub-agent dispatch ----
+	// DelegateDepth 是当前委托深度：0 = 主循环；子循环 = parent.DelegateDepth + 1。
+	// child := parent 值拷贝继承，无需额外传播。
+	DelegateDepth int
+	// DelegateEnabled 标记本次执行是否允许 delegate（agent 配置 delegate_enabled）。
+	// false 时工具从 availableTools 过滤（Step 6），execDelegateTool 仍 fail-closed
+	// 兜底（Step 5），双保险。
+	DelegateEnabled bool
+	// DelegateMaxDepth 是本次执行的委托深度上限（0=unset 已在 buildReActInitState
+	// 回落默认并 clamp 到 constants.MaxDelegateDepth）。过滤与门限用同一判据
+	// DelegateDepth >= DelegateMaxDepth：默认 1 = "仅主→子一层"。
+	DelegateMaxDepth int
+	// DelegateDefaultMaxSteps 是子循环未显式传 max_steps 时的步数回落。
+	DelegateDefaultMaxSteps int
+	// DelegateExecutor 执行委托子循环（application 层 buildDelegateExecutor 附着）。
+	// nil = 配置错误，execDelegateTool 返回 Error 观察。
+	DelegateExecutor DelegateExecutor
+	// OnDelegateEvent 在 delegate 进入/结束时回调（SSE delegate_status 帧出口）。
+	// 非 nil 时 execDelegateTool 在发起子循环前回调 running 帧，buildDelegateClosure
+	// 在子循环结束（成功或失败）后回调 finished 帧。
+	OnDelegateEvent func(DelegateEvent)
 }
 
 // countToolFailure 在工具失败处统一计数一次：先规范化错误消息取同错指纹，

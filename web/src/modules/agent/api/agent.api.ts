@@ -146,7 +146,7 @@ const clearSessionExec = (conversationId: string): void => {
 export const executeAgentStream = (
   id: string,
   payload: ExecuteAgentPayload,
-	{ onToken, onDone, onError, onApprovalRequired, onExecutionId }: StreamCallbacks,
+	{ onToken, onDone, onError, onApprovalRequired, onExecutionId, onDelegateEvent }: StreamCallbacks,
 ): AbortController => {
   // 自愈连接器:断点续接协议的服务端协作端。SSE 首帧(无条件、先于任何 token
   // 帧)下发 execution_id 作为恢复键,断线(网络/5xx)以指数退避携带同一
@@ -200,13 +200,23 @@ export const executeAgentStream = (
       executionId || storedExecId ? { ...payload, execution_id: executionId || storedExecId } : payload,
       {
         onEvent: (evt) => {
-          const event = evt as { execution_id?: string; error?: string; code?: string; done?: boolean; token?: unknown; status?: string; approvalId?: string; toolName?: string; serverId?: string; riskLevel?: string };
+          const event = evt as { execution_id?: string; error?: string; code?: string; done?: boolean; token?: unknown; status?: string; approvalId?: string; toolName?: string; serverId?: string; riskLevel?: string; delegate_status?: string; delegate_id?: string; goal?: string; summary?: string; tokens_used?: number };
           if (event.execution_id) {
             executionId = event.execution_id;
             onExecutionId?.(event.execution_id);
             // 刷新连续性快路径:首帧恢复键写入 sessionStorage(非凭据、不进 URL)。
             if (payload.conversation_id) writeSessionExec(payload.conversation_id, payload.query || '', event.execution_id);
             return true; // 恢复键首帧,非终止,继续接收 token
+          }
+          if (event.delegate_status) {
+            onDelegateEvent?.({ // 委托进度帧:非终止,只透出渲染层
+              delegate_status: event.delegate_status as 'running' | 'finished',
+              delegate_id: event.delegate_id,
+              goal: event.goal,
+              summary: event.summary,
+              tokens_used: event.tokens_used,
+            });
+            return true;
           }
           if (event.status === 'waiting_approval' && event.approvalId) {
             completed = true;
