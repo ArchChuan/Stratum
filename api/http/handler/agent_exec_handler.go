@@ -129,6 +129,7 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 			"goal":            ev.Goal,
 			"summary":         ev.Summary,
 			"tokens_used":     ev.TokensUsed,
+			"result_status":   ev.ResultStatus,
 		})
 		writer.EnqueueData(string(payload))
 	}

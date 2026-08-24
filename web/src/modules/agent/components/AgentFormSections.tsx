@@ -63,6 +63,8 @@ export const AgentFormSections = ({
 }: AgentFormSectionsProps) => {
   const form = Form.useFormInstance();
   const selectedModel = Form.useWatch('llmModel', form);
+  // 委托开关关闭时禁用深度/步数输入（避免「改了不生效」的误导）。
+  const delegateEnabled = Form.useWatch('delegateEnabled', form) ?? true;
   // 当前选中模型是否支持推理；未选中或模型不在托管目录（不可用/退役）时视为
   // 非推理，隐藏思考强度控件（fail-closed，与网关 unknown→清空+WARN 一致）。
   const supportsReasoning = useMemo(() => {
@@ -387,7 +389,7 @@ export const AgentFormSections = ({
           name="delegateMaxDepth"
           extra={`子 Agent 可继续嵌套派发的层数：1 = 仅主 Agent 直接派发一层（默认）；2 = 允许子 Agent 再派发一层；0 = 未设置（回落后端默认 ${AGENT_DELEGATE_DEFAULT_MAX_DEPTH}）`}
         >
-          <InputNumber min={0} max={AGENT_DELEGATE_MAX_DEPTH} step={1} style={{ width: '100%' }} />
+          <InputNumber min={0} max={AGENT_DELEGATE_MAX_DEPTH} step={1} style={{ width: '100%' }} disabled={!delegateEnabled} />
         </Form.Item>
         <Form.Item
           label="委托默认最大推理步数"
@@ -395,7 +397,7 @@ export const AgentFormSections = ({
           style={{ marginBottom: 0 }}
           extra={`子 Agent 单次委托的最大推理轮数上限；0 = 未设置（回落后端默认 ${AGENT_DELEGATE_DEFAULT_MAX_STEPS}），最高 ${AGENT_DELEGATE_MAX_STEPS}`}
         >
-          <InputNumber min={0} max={AGENT_DELEGATE_MAX_STEPS} step={1} style={{ width: '100%' }} />
+          <InputNumber min={0} max={AGENT_DELEGATE_MAX_STEPS} step={1} style={{ width: '100%' }} disabled={!delegateEnabled} />
         </Form.Item>
       </div>
     )}

@@ -1249,7 +1249,9 @@ func (a *BaseAgent) buildDelegateExecutor(ec agentExecContext, capGW port.Capabi
 			a.Logger.Error("delegate sub-agent failed", zap.String("agent_id", ec.agentID),
 				zap.String("trace_id", ec.cfg.TraceID), zap.String("conversation_id", ec.cfg.ConversationID),
 				zap.String("delegate_id", delegateID), zap.Error(invokeErr))
-			return agentgraph.DelegateOutput{}, fmt.Errorf("delegate sub-agent invoke: %w", invokeErr)
+			// 失败路径也回传 DelegateID：graph 层 finished 失败帧据此关联 running 帧
+			// 与日志链路（成功帧同源）。
+			return agentgraph.DelegateOutput{DelegateID: delegateID}, fmt.Errorf("delegate sub-agent invoke: %w", invokeErr)
 		}
 		return agentgraph.DelegateOutput{
 			Summary:    parseDelegateSummary(final.Output),

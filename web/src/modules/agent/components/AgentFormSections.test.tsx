@@ -406,15 +406,27 @@ describe('AgentFormSections', () => {
     expect(screen.queryByText('默认：0.7')).not.toBeInTheDocument();
   });
 
-  it('renders the delegate section with delegation enabled by default', () => {
+  it('renders the delegate section and reflects explicit enabled', () => {
     render(
       <Form initialValues={{ delegateEnabled: true }}>
         <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
       </Form>,
     );
     expect(screen.getByText('子 Agent 委托')).toBeInTheDocument();
-    // DB DEFAULT true：只读子任务风险=父本身，默认开启，管理员可显式关闭。
+    // 存量默认关闭委托（DB DEFAULT false）；此处显式传 true 断言开启态回显。
     expect(screen.getByRole('switch', { name: '启用子 Agent 委托' })).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('disables delegate depth and default steps when delegation is off', () => {
+    render(
+      <Form initialValues={{ delegateEnabled: false }}>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
+      </Form>,
+    );
+    expect(screen.getByRole('switch', { name: '启用子 Agent 委托' })).toHaveAttribute('aria-checked', 'false');
+    // 开关关闭时深度/步数输入禁用，避免「改了不生效」的误导。
+    expect(screen.getByLabelText(/最大委托深度/)).toBeDisabled();
+    expect(screen.getByLabelText(/委托默认最大推理步数/)).toBeDisabled();
   });
 
   it('keeps delegate depth and default steps within product bounds', () => {

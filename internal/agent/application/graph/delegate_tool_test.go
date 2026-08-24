@@ -352,8 +352,8 @@ func TestExecDelegateTool_EmitsRunningEvent(t *testing.T) {
 }
 
 // TestBuildDelegateClosure_EmitsFinishedEvent 验证 finished 事件：成功路径携带
-// DelegateID/Summary/TokensUsed；失败路径结果字段为空（清除 running 帧），且不
-// 折回 token。
+// DelegateID/Summary/TokensUsed/ResultStatus；失败路径仍发 finished 帧，携带
+// failed 结果状态 + DelegateID + 固定安全文案（不折回 token）。
 func TestBuildDelegateClosure_EmitsFinishedEvent(t *testing.T) {
 	t.Run("success carries result", func(t *testing.T) {
 		var events []DelegateEvent
@@ -372,13 +372,15 @@ func TestBuildDelegateClosure_EmitsFinishedEvent(t *testing.T) {
 		require.Equal(t, "d1", ev.DelegateID)
 		require.Equal(t, "done", ev.Summary)
 		require.Equal(t, 42, ev.TokensUsed)
+		require.Equal(t, string(DelegateStatusSuccess), ev.ResultStatus)
 	})
 
-	t.Run("error emits finished without result", func(t *testing.T) {
+	t.Run("error emits finished with failed result", func(t *testing.T) {
 		var events []DelegateEvent
 		s := &ReActState{
+			// 真实路径失败时 agent.go 仍回传带 DelegateID 的 DelegateOutput（成功帧同源）。
 			DelegateExecutor: func(context.Context, *ReActState, DelegateInput) (DelegateOutput, error) {
-				return DelegateOutput{}, context.DeadlineExceeded
+				return DelegateOutput{DelegateID: "d1"}, context.DeadlineExceeded
 			},
 			OnDelegateEvent: func(ev DelegateEvent) { events = append(events, ev) },
 			TotalTokens:     10,
@@ -389,8 +391,9 @@ func TestBuildDelegateClosure_EmitsFinishedEvent(t *testing.T) {
 		ev := events[0]
 		require.Equal(t, DelegateEventFinished, ev.Status)
 		require.Equal(t, "g", ev.Goal)
-		require.Empty(t, ev.DelegateID)
-		require.Empty(t, ev.Summary)
+		require.Equal(t, "d1", ev.DelegateID, "失败帧携带 delegate_id 与成功帧同源")
+		require.Equal(t, string(DelegateStatusFailed), ev.ResultStatus, "失败帧携带 failed 结果状态")
+		require.Equal(t, "委托子 Agent 执行失败", ev.Summary, "失败帧 summary 用固定安全文案")
 		require.Zero(t, ev.TokensUsed)
 		require.Equal(t, 10, s.TotalTokens, "失败不得折回 token")
 	})

@@ -200,7 +200,7 @@ export const executeAgentStream = (
       executionId || storedExecId ? { ...payload, execution_id: executionId || storedExecId } : payload,
       {
         onEvent: (evt) => {
-          const event = evt as { execution_id?: string; error?: string; code?: string; done?: boolean; token?: unknown; status?: string; approvalId?: string; toolName?: string; serverId?: string; riskLevel?: string; delegate_status?: string; delegate_id?: string; goal?: string; summary?: string; tokens_used?: number };
+          const event = evt as { execution_id?: string; error?: string; code?: string; done?: boolean; token?: unknown; status?: string; approvalId?: string; toolName?: string; serverId?: string; riskLevel?: string; delegate_status?: string; result_status?: string; delegate_id?: string; goal?: string; summary?: string; tokens_used?: number };
           if (event.execution_id) {
             executionId = event.execution_id;
             onExecutionId?.(event.execution_id);
@@ -211,6 +211,7 @@ export const executeAgentStream = (
           if (event.delegate_status) {
             onDelegateEvent?.({ // 委托进度帧:非终止,只透出渲染层
               delegate_status: event.delegate_status as 'running' | 'finished',
+              result_status: event.result_status as 'success' | 'partial' | 'failed' | undefined,
               delegate_id: event.delegate_id,
               goal: event.goal,
               summary: event.summary,

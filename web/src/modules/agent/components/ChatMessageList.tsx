@@ -2,7 +2,7 @@ import { RobotOutlined, ThunderboltOutlined, UserOutlined } from '@ant-design/ic
 import { Empty, Skeleton, Spin, Tag, Typography } from 'antd';
 import { memo, type MutableRefObject, type RefObject, useEffect } from 'react';
 
-import type { ChatMessage } from '../model/agent';
+import type { ChatMessage, DelegateStatusView } from '../model/agent';
 
 import { BUBBLE, ChatMarkdown } from './ChatMarkdown';
 import { ChatStepList } from './ChatStepList';
@@ -30,7 +30,7 @@ interface Props {
   pinnedToBottomRef: MutableRefObject<boolean>;
   isMobile?: boolean;
   contentSwitching?: boolean;
-  delegateStatus?: { status: 'running'; goal?: string; delegateId?: string } | null;
+  delegateStatus?: DelegateStatusView;
 }
 
 // StreamingBubble renders plain text + blinking cursor during streaming to avoid
@@ -162,6 +162,14 @@ export const ChatMessageList = ({
   // The last message is the in-flight assistant bubble while streaming.
   const streamingMsgId = sending && messages.length > 0 ? messages[messages.length - 1].id : null;
 
+  // 跨会话隔离:delegate 状态属于发起它的会话,切走后不展示(避免 A 会话委托的
+  // running/failed banner 泄漏到 B 会话);conversationId 为空(极早期)时仍展示。
+  const activeDelegate =
+    delegateStatus &&
+    (!delegateStatus.conversationId || !selectedConv || delegateStatus.conversationId === selectedConv)
+      ? delegateStatus
+      : null;
+
   // Detect manual scroll: unpin when user scrolls up, re-pin when near bottom.
   useEffect(() => {
     const el = scrollContainerRef.current;
@@ -236,7 +244,7 @@ export const ChatMessageList = ({
             </Text>
           </div>
         )}
-        {delegateStatus?.status === 'running' && (
+        {activeDelegate?.status === 'running' && (
           <div
             style={{
               display: 'flex',
@@ -247,7 +255,21 @@ export const ChatMessageList = ({
           >
             <Spin size="small" />
             <Tag color="blue">
-              子 Agent 正在执行{delegateStatus.goal ? `：${truncateDisplay(delegateStatus.goal, 30)}` : ''}
+              子 Agent 正在执行{activeDelegate.goal ? `：${truncateDisplay(activeDelegate.goal, 30)}` : ''}
+            </Tag>
+          </div>
+        )}
+        {activeDelegate?.status === 'finished' && activeDelegate.resultStatus === 'failed' && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              alignSelf: 'flex-start',
+            }}
+          >
+            <Tag color="red">
+              子 Agent 委托失败{activeDelegate.goal ? `：${truncateDisplay(activeDelegate.goal, 30)}` : ''}
             </Tag>
           </div>
         )}

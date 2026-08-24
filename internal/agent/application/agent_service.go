@@ -680,6 +680,10 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	// 委托开关 *bool 语义:缺省(nil)继承已存值,显式 false 才关闭。Update 是
 	// 全量列 UPDATE,不在此合并会把缺省字段误写成 false,覆盖管理员的显式开启。
 	in.DelegateEnabled = resolveDelegateEnabled(existing.GetConfig().DelegateEnabled, in.DelegateEnabled)
+	// 委托深度/默认步数 0=unset：缺省继承已存值，防止无关编辑（如只改
+	// system prompt）把管理员配置的深度/步数静默打回运行时默认。
+	in.DelegateMaxDepth = resolveDelegateInt(existing.GetConfig().DelegateMaxDepth, in.DelegateMaxDepth)
+	in.DelegateDefaultMaxSteps = resolveDelegateInt(existing.GetConfig().DelegateDefaultMaxSteps, in.DelegateDefaultMaxSteps)
 	editorActor, err := s.resolveUpdateEditorActor(ctx, in.ActorID, id, existing.GetConfig().CreatedBy)
 	if err != nil {
 		return AgentDTO{}, err
@@ -722,6 +726,16 @@ func resolveDelegateEnabled(existing bool, in *bool) *bool {
 		return in
 	}
 	return &existing
+}
+
+// resolveDelegateInt 归一化 Update 委托数值参数的 0=unset 缺省语义：0（请求缺省
+// 字段）继承已存值，非 0 直接采用。与 resolveDelegateEnabled 的 *bool 语义一致，
+// 防止无关编辑把管理员配置的委托深度/默认步数静默重置为运行时默认。
+func resolveDelegateInt(existing, in int) int {
+	if in != 0 {
+		return in
+	}
+	return existing
 }
 
 // recordFailure 旁路记录一次失败的 agent 创建/更新（best-effort）。

@@ -13,6 +13,7 @@ import { executeAgentStream } from '../api/agent.api';
 import type {
   AgentExecutionFailure,
   AgentExecutionResult,
+  DelegateStatusView,
   ExecuteAgentPayload,
   ToolApproval,
 } from '../model/agent';
@@ -32,7 +33,7 @@ interface StreamInternalState {
 	executionId: string | null;
 	// 委托子 agent 进度(SSE delegate_status):running 时展示 banner,finished 清空;
 	// 非持久化,断线重连由 execution_id 恢复后服务端重新下发。
-	delegateStatus: { status: 'running'; goal?: string; delegateId?: string } | null;
+	delegateStatus: DelegateStatusView;
   ctrl: AbortController | null;
 }
 
@@ -46,7 +47,7 @@ export interface StreamSnapshot {
 	error: string | null;
 	approval: ToolApproval | null;
 	executionId: string | null;
-	delegateStatus: { status: 'running'; goal?: string; delegateId?: string } | null;
+	delegateStatus: DelegateStatusView;
 }
 
 interface ChatStreamContextValue {
@@ -58,7 +59,7 @@ interface ChatStreamContextValue {
 	streamDone: boolean;
 	streamApproval: ToolApproval | null;
 	streamFailure: AgentExecutionFailure | null;
-	streamDelegateStatus: { status: 'running'; goal?: string; delegateId?: string } | null;
+	streamDelegateStatus: DelegateStatusView;
   startStream: (agentId: string, payload: ExecuteAgentPayload) => void;
   cancelStream: () => void;
 	clearStreamFailure: () => void;
@@ -160,14 +161,20 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
 			if (stateRef.current.ctrl !== ctrl) return;
 			stateRef.current.done = true; stateRef.current.delegateStatus = null; stateRef.current.approval = approval; stateRef.current.ctrl = null; notify();
 		},
-		onDelegateEvent: (evt) => {
-			if (stateRef.current.ctrl !== ctrl) return;
-			stateRef.current.delegateStatus =
-				evt.delegate_status === 'running'
-					? { status: 'running', goal: evt.goal, delegateId: evt.delegate_id }
-					: null;
-			notify();
-		},
+			onDelegateEvent: (evt) => {
+				if (stateRef.current.ctrl !== ctrl) return;
+				const convId = stateRef.current.conversationId;
+				// finished 且非 failed 时清空：running→finished 仅反映子循环结束，
+				// 最终回答由后续轮次自然呈现；failed 保留失败 Tag 直至终态清理。
+				if (evt.delegate_status === 'running') {
+					stateRef.current.delegateStatus = { status: 'running', goal: evt.goal, delegateId: evt.delegate_id, conversationId: convId };
+				} else if (evt.delegate_status === 'finished' && evt.result_status === 'failed') {
+					stateRef.current.delegateStatus = { status: 'finished', resultStatus: 'failed', goal: evt.goal, delegateId: evt.delegate_id, summary: evt.summary, conversationId: convId };
+				} else {
+					stateRef.current.delegateStatus = null;
+				}
+				notify();
+			},
     });
     s.ctrl = ctrl;
   }, [notify, scheduleNotify]);

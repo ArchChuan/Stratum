@@ -346,11 +346,28 @@ export interface StreamCallbacks {
 // 委托子 agent 进度事件(SSE delegate_status 帧 payload,后端白名单直通)。
 export interface DelegateEventPayload {
 	delegate_status: 'running' | 'finished';
+	result_status?: 'success' | 'partial' | 'failed';
 	delegate_id?: string;
 	goal?: string;
 	summary?: string;
 	tokens_used?: number;
 }
+
+// 委托子 agent 进度渲染态(由 DelegateEventPayload 经 ChatStreamContext 收敛)。
+// conversationId 用于跨会话隔离:渲染端仅当与当前会话一致时才展示,避免 A 会话的
+// running/failed banner 泄漏到 B 会话。finished 且非 failed 时上游直接清空(最终
+// 回答自然呈现),仅 failed 保留失败 Tag 直至终态清理。
+export type DelegateStatusView =
+  | { status: 'running'; goal?: string; delegateId?: string; conversationId?: string | null }
+  | {
+      status: 'finished';
+      resultStatus: 'failed';
+      goal?: string;
+      delegateId?: string;
+      summary?: string;
+      conversationId?: string | null;
+    }
+  | null;
 
 export interface ToolApproval {
 	approvalId: string;

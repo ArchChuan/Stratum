@@ -56,18 +56,20 @@ const (
 	// DelegateEventRunning 在子循环发起前回调一次（用户可见"子 agent 正在执行"）。
 	DelegateEventRunning DelegateEventStatus = "running"
 	// DelegateEventFinished 在子循环结束（成功或失败）时回调，清除 running 帧并
-	// 携带结果（成功路径含摘要/用量；失败路径结果字段为空）。
+	// 携带结果：成功/部分完成含摘要与用量；失败路径 result_status=failed，
+	// summary 为固定安全文案，原始错误只进日志。
 	DelegateEventFinished DelegateEventStatus = "finished"
 )
 
 // DelegateEvent 是 delegate 状态事件，经 ReActState.OnDelegateEvent 回调转成
 // SSE delegate_status 帧出口（子任务进入/结束时各回调一次）。
 type DelegateEvent struct {
-	DelegateID string
-	Goal       string
-	Status     DelegateEventStatus
-	Summary    string
-	TokensUsed int
+	DelegateID   string
+	Goal         string
+	Status       DelegateEventStatus
+	ResultStatus string
+	Summary      string
+	TokensUsed   int
 }
 
 // DelegateExecutor 执行委托子循环。闭包内必须使用值拷贝 child := parent 并整体
@@ -128,7 +130,8 @@ func execDelegateTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, 
 		logger.Error("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
 			zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
 			zap.Int64("latency_ms", toolLatencyMs), zap.Error(callErr))
-		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: callErr.Error(), content: fmt.Sprintf("error: %v", callErr)}
+		// 原始错误只进日志；观察正文用固定中文模板（不把子循环内部标识泄入下游错误正文）。
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "delegate sub-agent execution failed", content: "委托子 Agent 执行失败"}
 	case toolOutput != nil:
 		logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
 			zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
@@ -167,9 +170,14 @@ func buildDelegateClosure(s *ReActState) port.DelegateToolRunFunc {
 		input := parseDelegateArgs(args)
 		out, err := s.DelegateExecutor(ctx, s, input)
 		if err != nil {
-			// 子循环失败：仍发一次 finished 事件清除 running 帧（结果字段为空）。
+			// 子循环失败：仍发一次 finished 帧清除 running，携带 failed 结果状态与
+			// delegate_id（与成功帧同源），summary 用固定安全文案，原始错误只进日志。
 			if s.OnDelegateEvent != nil {
-				s.OnDelegateEvent(DelegateEvent{Goal: input.Goal, Status: DelegateEventFinished})
+				s.OnDelegateEvent(DelegateEvent{
+					DelegateID: out.DelegateID, Goal: input.Goal,
+					Status: DelegateEventFinished, ResultStatus: string(DelegateStatusFailed),
+					Summary: "委托子 Agent 执行失败",
+				})
 			}
 			return port.MCPToolResult{}, err
 		}
@@ -177,7 +185,8 @@ func buildDelegateClosure(s *ReActState) port.DelegateToolRunFunc {
 		if s.OnDelegateEvent != nil {
 			s.OnDelegateEvent(DelegateEvent{
 				DelegateID: out.DelegateID, Goal: input.Goal,
-				Status: DelegateEventFinished, Summary: out.Summary, TokensUsed: out.TokensUsed,
+				Status: DelegateEventFinished, ResultStatus: out.Status,
+				Summary: out.Summary, TokensUsed: out.TokensUsed,
 			})
 		}
 		return port.MCPToolResult{StructuredContent: delegateShellContent(out)}, nil
