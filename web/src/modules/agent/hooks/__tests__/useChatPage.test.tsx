@@ -416,7 +416,7 @@ describe('useChatPage tool approvals', () => {
     // getActiveExecution；该 mock 只被轮询消费，调用序即轮询序。
     mocks.stream.getStreamState.mockReturnValue({
       streaming: false, conversationId: 'conversation-1', userQuery: '执行删除', content: '',
-      done: false, result: null, error: null, approval: null, executionId: null, conflict: false,
+      done: false, result: null, error: null, approval: null, delegateStatus: null, executionId: null, conflict: false,
     });
     // 卡片 approvalId 与 active approvalId 错配：poll 置终态分支按 active.approvalId
     // 匹配更新卡片 → 卡片保持 pending → waitingApproval 存活 → 第二次轮询发生，
