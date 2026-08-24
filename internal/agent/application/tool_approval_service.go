@@ -461,6 +461,71 @@ func (s *ToolApprovalService) Invalidate(ctx context.Context, tenantID, id, reas
 	return s.repo.Invalidate(ctx, tenantID, id, reason)
 }
 
+// CancelApproval 主动取消审批（pending→cancelled）。发起人本人（member）可取消自己的；
+// admin/owner 可代撤。校验顺序（与 ApprovalDetail 同构，关闭存在性 oracle）：角色(fail
+// closed) → Get → 归属校验（用 row.UserID 而非解密 payload，防 TOCTOU/旁路）→ 状态/过期/
+// 解密（pendingPayload）→ CAS。decision_reason 参数化：发起人自撤 vs admin 代撤可区分。
+func (s *ToolApprovalService) CancelApproval(ctx context.Context, tenantID, id, actor string) error {
+	role, err := s.resolveRole(ctx, tenantID, actor)
+	if err != nil {
+		return err
+	}
+	row, err := s.repo.Get(ctx, tenantID, id)
+	if err != nil {
+		return err
+	}
+	if role != "admin" && role != "owner" && row.UserID != actor {
+		return domain.ErrApprovalNotFound
+	}
+	payload, err := s.pendingPayload(ctx, tenantID, id)
+	if err != nil {
+		return err
+	}
+	reason := "cancelled_by_initiator"
+	if payload.UserID != actor {
+		reason = "cancelled_by_approver"
+	}
+	return s.repo.Cancel(ctx, tenantID, id, actor, reason, s.now())
+}
+
+// TerminalResumePayload 读取终态审批（cancelled/rejected）的已解密载荷，供终态续跑
+// synthesizeApprovalResume 使用。按 row.Status 显式枚举——绝不放行 pending（保持 202 等待
+// 语义），杜绝"错误类型兜底"误吞 pending/executing/executed（安全 review 高优）。终态行不做
+// 过期门控：rejected/cancelled 即使已过 expires_at 也应放行（堵住"轮询到 rejected 恰逢过期"
+// 的续跑断链竞态，后端 review H1）。
+func (s *ToolApprovalService) TerminalResumePayload(ctx context.Context, tenantID, approvalID string) (ToolApprovalPayload, string, error) {
+	row, err := s.repo.Get(ctx, tenantID, approvalID)
+	if err != nil {
+		return ToolApprovalPayload{}, "", err
+	}
+	switch row.Status {
+	case string(domain.ToolApprovalCancelled), string(domain.ToolApprovalRejected):
+		// 终态放行，不过期门控：工具反正被 ApprovedPayload 拒绝、不会执行。
+	default:
+		// 非终态：pending（未过期）→ ErrApprovalNotApproved 保持 202；pending（已过期）→
+		// ErrApprovalExpired；invalidated → ErrApprovalInvalidated；voided/executing/executed/approved
+		// → ErrApprovalNotApproved；unknown_outcome → ErrApprovalOutcomeUnknown。
+		if row.Status == string(domain.ToolApprovalOutcomeUnknown) {
+			return ToolApprovalPayload{}, "", ErrApprovalOutcomeUnknown
+		}
+		if row.Status == string(domain.ToolApprovalInvalidated) {
+			return ToolApprovalPayload{}, "", domain.ErrApprovalInvalidated
+		}
+		if !row.ExpiresAt.After(s.now()) {
+			return ToolApprovalPayload{}, "", ErrApprovalExpired
+		}
+		return ToolApprovalPayload{}, "", ErrApprovalNotApproved
+	}
+	payload, err := decryptPayload(s.key, row.EncryptedPayload)
+	if err != nil {
+		return ToolApprovalPayload{}, "", err
+	}
+	if mismatches := toolApprovalBindingMismatches(tenantID, row, payload); len(mismatches) > 0 {
+		return ToolApprovalPayload{}, "", fmt.Errorf("%w: %s", ErrApprovalBindingMismatch, strings.Join(mismatches, ","))
+	}
+	return payload, row.Status, nil
+}
+
 // matchApprovedCallDigest 校验已批准载荷与本次执行的 server/tool/参数一致
 // （CanonicalToolArgumentsDigest 与 ApprovedPayload binding 同源）。抽离自
 // ExecuteApproved，保持其复杂度在棘轮基线内。

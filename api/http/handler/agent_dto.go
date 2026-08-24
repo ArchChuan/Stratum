@@ -24,6 +24,11 @@ type CreateAgentRequest struct {
 	MCPToolIDs            []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
 	MemoryScope           string   `json:"memoryScope" binding:"required"`
+	// DelegateEnabled 开启 stratum_delegate 子 agent 派发；DelegateMaxDepth /
+	// DelegateDefaultMaxSteps 0=unset → 运行时回落全局默认。
+	DelegateEnabled         bool `json:"delegateEnabled"`
+	DelegateMaxDepth        int  `json:"delegateMaxDepth"`
+	DelegateDefaultMaxSteps int  `json:"delegateDefaultMaxSteps"`
 	// Parameters carries registry resource-scope values as a flat object; only
 	// the memory.* dotted keys persist on the agent (sampling keys stay on the
 	// explicit fields). Same merge semantics as UpdateAgentRequest.Parameters.
@@ -47,6 +52,12 @@ type UpdateAgentRequest struct {
 	MCPToolIDs            []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
 	MemoryScope           string   `json:"memoryScope" binding:"required"`
+	// 委托配置同 CreateAgentRequest；DelegateEnabled 为 *bool:缺省(nil)保留现有值,
+	// 显式 false 才关闭(存量默认关闭,Update 全量列写不能把缺省当显式 false 覆盖);
+	// 深度/默认步数 0=unset 不覆盖已存值。
+	DelegateEnabled         *bool `json:"delegateEnabled"`
+	DelegateMaxDepth        int   `json:"delegateMaxDepth"`
+	DelegateDefaultMaxSteps int   `json:"delegateDefaultMaxSteps"`
 	// Parameters carries the registry sampling parameters as a flat object
 	// (temperature/max_tokens/reasoning_effort；压缩配置已迁平台参数)。
 	// 压缩三值（提示词/温度/模型）为平台级参数，不在 agent 上暴露/保存。
@@ -56,22 +67,25 @@ type UpdateAgentRequest struct {
 }
 
 type AgentResponse struct {
-	ID                    string   `json:"id"`
-	Name                  string   `json:"name"`
-	Type                  string   `json:"type"`
-	Description           string   `json:"description"`
-	SystemPrompt          string   `json:"systemPrompt"`
-	LLMModel              string   `json:"llmModel"`
-	MaxIterations         int      `json:"maxIterations"`
-	MaxContextTokens      int      `json:"maxContextTokens"`
-	Temperature           float32  `json:"temperature"`
-	ReasoningEffort       string   `json:"reasoning_effort"`
-	MaxTokens             int      `json:"max_tokens"`
-	AllowedSkills         []string `json:"allowedSkills"`
-	MCPToolIDs            []string `json:"mcpToolIds"`
-	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
-	CreatedAt             string   `json:"createdAt"`
-	MemoryScope           string   `json:"memoryScope"`
+	ID                      string   `json:"id"`
+	Name                    string   `json:"name"`
+	Type                    string   `json:"type"`
+	Description             string   `json:"description"`
+	SystemPrompt            string   `json:"systemPrompt"`
+	LLMModel                string   `json:"llmModel"`
+	MaxIterations           int      `json:"maxIterations"`
+	MaxContextTokens        int      `json:"maxContextTokens"`
+	Temperature             float32  `json:"temperature"`
+	ReasoningEffort         string   `json:"reasoning_effort"`
+	MaxTokens               int      `json:"max_tokens"`
+	AllowedSkills           []string `json:"allowedSkills"`
+	MCPToolIDs              []string `json:"mcpToolIds"`
+	KnowledgeWorkspaceIDs   []string `json:"knowledgeWorkspaceIds"`
+	CreatedAt               string   `json:"createdAt"`
+	MemoryScope             string   `json:"memoryScope"`
+	DelegateEnabled         bool     `json:"delegateEnabled"`
+	DelegateMaxDepth        int      `json:"delegateMaxDepth"`
+	DelegateDefaultMaxSteps int      `json:"delegateDefaultMaxSteps"`
 	// Parameters echoes the persisted sampling parameters (0=unset keys
 	// omitted), symmetric with UpdateAgentRequest.parameters.
 	Parameters map[string]any `json:"parameters"`
@@ -105,23 +119,26 @@ type AgentExecutionResult struct {
 // dtoToResponse maps the service-side AgentDTO to the wire AgentResponse.
 func dtoToResponse(d agent.AgentDTO) AgentResponse {
 	return AgentResponse{
-		ID:                    d.ID,
-		Name:                  d.Name,
-		Type:                  d.Type,
-		Description:           d.Description,
-		SystemPrompt:          d.SystemPrompt,
-		LLMModel:              d.LLMModel,
-		MaxIterations:         d.MaxIterations,
-		MaxContextTokens:      d.MaxContextTokens,
-		Temperature:           d.Temperature,
-		ReasoningEffort:       d.ReasoningEffort,
-		MaxTokens:             d.MaxTokens,
-		AllowedSkills:         d.AllowedSkills,
-		MCPToolIDs:            d.MCPToolIDs,
-		KnowledgeWorkspaceIDs: d.KnowledgeWorkspaceIDs,
-		CreatedAt:             d.CreatedAt,
-		MemoryScope:           d.MemoryScope,
-		Parameters:            d.Parameters,
-		Editors:               d.Editors,
+		ID:                      d.ID,
+		Name:                    d.Name,
+		Type:                    d.Type,
+		Description:             d.Description,
+		SystemPrompt:            d.SystemPrompt,
+		LLMModel:                d.LLMModel,
+		MaxIterations:           d.MaxIterations,
+		MaxContextTokens:        d.MaxContextTokens,
+		Temperature:             d.Temperature,
+		ReasoningEffort:         d.ReasoningEffort,
+		MaxTokens:               d.MaxTokens,
+		AllowedSkills:           d.AllowedSkills,
+		MCPToolIDs:              d.MCPToolIDs,
+		KnowledgeWorkspaceIDs:   d.KnowledgeWorkspaceIDs,
+		CreatedAt:               d.CreatedAt,
+		MemoryScope:             d.MemoryScope,
+		DelegateEnabled:         d.DelegateEnabled,
+		DelegateMaxDepth:        d.DelegateMaxDepth,
+		DelegateDefaultMaxSteps: d.DelegateDefaultMaxSteps,
+		Parameters:              d.Parameters,
+		Editors:                 d.Editors,
 	}
 }

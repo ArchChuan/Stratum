@@ -61,6 +61,7 @@ func TestExecutionFingerprintSensitiveToEachField(t *testing.T) {
 		{"model resolved", mutate(func(f *ExecutionFingerprint) { f.ModelResolved = "other" })},
 		{"routed via", mutate(func(f *ExecutionFingerprint) { f.ModelRoutedVia = []string{"x"} })},
 		{"prompt version", mutate(func(f *ExecutionFingerprint) { f.PromptVersion = "v2" })},
+		{"config version", mutate(func(f *ExecutionFingerprint) { f.ConfigVersion = "c2" })},
 		{"skill revision", mutate(func(f *ExecutionFingerprint) { f.SkillRevisions["s"] = "2" })},
 		{"tunable", mutate(func(f *ExecutionFingerprint) { f.TunableSnapshot["t"] = 2 })},
 		{"ab bucket", mutate(func(f *ExecutionFingerprint) { f.ABBucket = 1 })},

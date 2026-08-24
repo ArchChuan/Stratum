@@ -19,6 +19,10 @@ type ExecutionFingerprint struct {
 	ModelRoutedVia []string `json:"model_routed_via,omitempty"`
 	// PromptVersion identifies the effective prompt, e.g. "system_prompt:v3".
 	PromptVersion string `json:"prompt_version"`
+	// ConfigVersion fingerprints the effective tunable parameter snapshot at
+	// execution time (same source as stratum.params.sha256): ties attribution
+	// to the parameter configuration that produced the run.
+	ConfigVersion string `json:"config_version,omitempty"`
 	// SkillRevisions maps skillID → revision content hash at execution time.
 	SkillRevisions map[string]string `json:"skill_revisions,omitempty"`
 	// TunableSnapshot captures runtime parameters that affect behaviour:
@@ -38,6 +42,7 @@ func (f ExecutionFingerprint) ContentHash() string {
 		ModelResolved   string            `json:"model_resolved"`
 		ModelRoutedVia  []string          `json:"model_routed_via,omitempty"`
 		PromptVersion   string            `json:"prompt_version"`
+		ConfigVersion   string            `json:"config_version,omitempty"`
 		SkillRevisions  map[string]string `json:"skill_revisions,omitempty"`
 		TunableSnapshot map[string]any    `json:"tunable_snapshot,omitempty"`
 		ABBucket        int               `json:"ab_bucket"`
@@ -46,6 +51,7 @@ func (f ExecutionFingerprint) ContentHash() string {
 		ModelResolved:  f.ModelResolved,
 		ModelRoutedVia: f.ModelRoutedVia,
 		PromptVersion:  f.PromptVersion,
+		ConfigVersion:  f.ConfigVersion,
 		SkillRevisions: f.SkillRevisions,
 		ABBucket:       f.ABBucket,
 	}

@@ -415,10 +415,11 @@ func (r *PgAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig, aud
 			return err
 		}
 		_, err = tx.Exec(ctx,
-			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope, system_key, created_by, parameters)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10,$11)`,
+			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope, system_key, created_by, parameters, delegate_enabled, delegate_max_depth, delegate_default_max_steps)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10,$11,$12,$13,$14)`,
 			cfg.ID, cfg.Name, string(cfg.Type), cfg.Description,
 			cfg.SystemPrompt, cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, cfg.CreatedBy, params,
+			cfg.DelegateEnabled, cfg.DelegateMaxDepth, cfg.DelegateDefaultMaxSteps,
 		)
 		if err != nil {
 			var pgErr *pgconn.PgError
@@ -482,11 +483,13 @@ func (r *PgAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig, 
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
 			`SELECT id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope,
-			        COALESCE(system_key, ''), COALESCE(created_by, ''), parameters
+			        COALESCE(system_key, ''), COALESCE(created_by, ''), parameters,
+			        delegate_enabled, delegate_max_depth, delegate_default_max_steps
 			 FROM agents WHERE id = $1`, id).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
 				&cfg.SystemPrompt, &cfg.LLMModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope,
-				&cfg.SystemKey, &cfg.CreatedBy, &rawParams); err != nil {
+				&cfg.SystemKey, &cfg.CreatedBy, &rawParams,
+				&cfg.DelegateEnabled, &cfg.DelegateMaxDepth, &cfg.DelegateDefaultMaxSteps); err != nil {
 			return err
 		}
 		if err := unpackSamplingParameters(rawParams, &cfg); err != nil {
@@ -523,6 +526,11 @@ func (r *PgAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig, 
 	cfg.KnowledgeWorkspaceIDs = nonNil(cfg.KnowledgeWorkspaceIDs)
 	return &cfg, true, nil
 }
+
+// GetAll returns all agents in the tenant schema.
+//
+// Uses 4 batched queries (agents + 3 association tables via WHERE agent_id = ANY($1))
+// instead of fanning out per-agent loaders, so cost is O(1) round-trips, not O(N).
 
 func (r *PgAgentRepo) GetAll(ctx context.Context) ([]*domain.AgentConfig, error) {
 	var out []*domain.AgentConfig
@@ -562,7 +570,8 @@ func (r *PgAgentRepo) GetAll(ctx context.Context) ([]*domain.AgentConfig, error)
 func scanAgents(ctx context.Context, tx pgx.Tx) ([]*domain.AgentConfig, []string, error) {
 	rows, err := tx.Query(ctx,
 		`SELECT id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope,
-		        COALESCE(system_key, ''), COALESCE(created_by, ''), parameters
+		        COALESCE(system_key, ''), COALESCE(created_by, ''), parameters,
+		        delegate_enabled, delegate_max_depth, delegate_default_max_steps
 		 FROM agents ORDER BY created_at`)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list agents: %w", err)
@@ -576,7 +585,8 @@ func scanAgents(ctx context.Context, tx pgx.Tx) ([]*domain.AgentConfig, []string
 		var rawParams string
 		if err := rows.Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
 			&cfg.SystemPrompt, &cfg.LLMModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope,
-			&cfg.SystemKey, &cfg.CreatedBy, &rawParams); err != nil {
+			&cfg.SystemKey, &cfg.CreatedBy, &rawParams,
+			&cfg.DelegateEnabled, &cfg.DelegateMaxDepth, &cfg.DelegateDefaultMaxSteps); err != nil {
 			return nil, nil, fmt.Errorf("scan agent row: %w", err)
 		}
 		if err := unpackSamplingParameters(rawParams, &cfg); err != nil {
@@ -701,10 +711,13 @@ func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, audit
 			`UPDATE agents
 			 SET name=$1, description=$2, system_prompt=$3,
 			     llm_model=$4, max_iterations=$5, max_context_tokens=$6,
-			     memory_scope=$7, `+parametersSet+`, updated_at=NOW()
-			 WHERE id=$9`,
+			     memory_scope=$7, `+parametersSet+`,
+			     delegate_enabled=$9, delegate_max_depth=$10, delegate_default_max_steps=$11,
+			     updated_at=NOW()
+			 WHERE id=$12`,
 			cfg.Name, cfg.Description, cfg.SystemPrompt,
-			cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, params, cfg.ID,
+			cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, params,
+			cfg.DelegateEnabled, cfg.DelegateMaxDepth, cfg.DelegateDefaultMaxSteps, cfg.ID,
 		)
 		if err != nil {
 			return fmt.Errorf("update agent %s: %w", cfg.ID, err)

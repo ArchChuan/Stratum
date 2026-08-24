@@ -409,6 +409,47 @@ describe('AgentFormSections', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: '提交' }));
     expect(await screen.findByText('请选择记忆范围')).toBeInTheDocument();
+
+  it('renders the delegate section and reflects explicit enabled', () => {
+    render(
+      <Form initialValues={{ delegateEnabled: true }}>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
+      </Form>,
+    );
+    expect(screen.getByText('子 Agent 委托')).toBeInTheDocument();
+    // 存量默认关闭委托（DB DEFAULT false）；此处显式传 true 断言开启态回显。
+    expect(screen.getByRole('switch', { name: '启用子 Agent 委托' })).toHaveAttribute('aria-checked', 'true');
   });
+
+  it('disables delegate depth and default steps when delegation is off', () => {
+    render(
+      <Form initialValues={{ delegateEnabled: false }}>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
+      </Form>,
+    );
+    expect(screen.getByRole('switch', { name: '启用子 Agent 委托' })).toHaveAttribute('aria-checked', 'false');
+    // 开关关闭时深度/步数输入禁用，避免「改了不生效」的误导。
+    expect(screen.getByLabelText(/最大委托深度/)).toBeDisabled();
+    expect(screen.getByLabelText(/委托默认最大推理步数/)).toBeDisabled();
+  });
+
+  it('keeps delegate depth and default steps within product bounds', () => {
+    render(
+      <Form initialValues={{ delegateMaxDepth: 1, delegateDefaultMaxSteps: 5 }}>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
+      </Form>,
+    );
+    // 深度 0=unset → 回落默认 1；clamp 到硬上限 2（pkg/constants/agent.go 同源）。
+    const depth = screen.getByLabelText(/最大委托深度/);
+    expect(depth).toHaveAttribute('aria-valuemin', '0');
+    expect(depth).toHaveAttribute('aria-valuemax', '2');
+    expect(depth).toHaveValue('1');
+    // 默认步数 0=unset → 回落默认 5；参数硬上限 10。
+    const steps = screen.getByLabelText(/委托默认最大推理步数/);
+    expect(steps).toHaveAttribute('aria-valuemin', '0');
+    expect(steps).toHaveAttribute('aria-valuemax', '10');
+    expect(steps).toHaveValue('5');
+  });
+
 
 });

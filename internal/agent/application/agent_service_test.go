@@ -529,6 +529,119 @@ func TestAgentService_List(t *testing.T) {
 	assert.Equal(t, "react", list[1].Type)
 }
 
+func TestAgentServiceCreateMaxIterationsValidation(t *testing.T) {
+	tests := []struct {
+		name          string
+		maxIterations int
+		wantErr       bool
+	}{
+		{name: "unset zero", maxIterations: 0, wantErr: false},
+		{name: "lower boundary", maxIterations: 1, wantErr: false},
+		{name: "upper boundary 90", maxIterations: 90, wantErr: false},
+		{name: "exceeds 90", maxIterations: 91, wantErr: true},
+		{name: "negative", maxIterations: -1, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, repo := newTestService(t)
+			repo.On("Register", mock.Anything, mock.Anything).Return(nil)
+			_, err := svc.Create(context.Background(), application.CreateAgentInput{
+				TenantID: "tenant-1", ActorID: "user-1", Name: "new",
+				Type: string(domain.ReActAgent), LLMModel: "qwen-plus", MaxIterations: tc.maxIterations,
+			})
+			if tc.wantErr {
+				require.ErrorIs(t, err, domain.ErrInvalidMaxIterations)
+				repo.AssertNotCalled(t, "Register", mock.Anything, mock.Anything)
+				return
+			}
+			require.NoError(t, err)
+			repo.AssertExpectations(t)
+		})
+	}
+}
+
+// 普通 update（非系统助手）maxIterations 校验：91/-1 在 buildUpdateConfig
+// 拒绝且不落库，90/0 通过并走 Registry.Update。
+
+func TestAgentServiceUpdateMaxIterationsValidation(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name          string
+		maxIterations int
+		wantErr       bool
+	}{
+		{name: "unset zero keeps current", maxIterations: 0, wantErr: false},
+		{name: "upper boundary 90", maxIterations: 90, wantErr: false},
+		{name: "exceeds 90", maxIterations: 91, wantErr: true},
+		{name: "negative", maxIterations: -1, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, repo := newTestService(t)
+			cfg := &domain.AgentConfig{ID: "agent-1", Name: "old", Type: domain.ReActAgent, CreatedBy: "user-1"}
+			repo.On("Get", mock.Anything, "agent-1").Return(cfg, true, nil).Once()
+			if !tc.wantErr {
+				updated := &domain.AgentConfig{ID: "agent-1", Name: "old", Type: domain.ReActAgent,
+					CreatedBy: "user-1", MaxIterations: tc.maxIterations}
+				repo.On("Update", mock.Anything, mock.Anything).Return(nil).Once()
+				repo.On("Get", mock.Anything, "agent-1").Return(updated, true, nil).Once()
+			}
+			_, err := svc.Update(ctx, "agent-1", application.UpdateAgentInput{
+				ActorID: "user-1", MaxIterations: tc.maxIterations,
+			})
+			if tc.wantErr {
+				require.ErrorIs(t, err, domain.ErrInvalidMaxIterations)
+				repo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
+				return
+			}
+			require.NoError(t, err)
+			repo.AssertExpectations(t)
+		})
+	}
+}
+
+// TestAgentServiceUpdateDelegateEnabledNilPreservesExisting 验证 delegate_enabled
+// 的 *bool 缺省语义:Update 缺省(nil)必须继承已存值,显式 true/false 才覆盖。
+// 存量默认关闭 + Update 全量列写,不在此合并会把未携带字段当显式 false 改写。
+
+func TestAgentServiceUpdateDelegateEnabledNilPreservesExisting(t *testing.T) {
+	ctx := context.Background()
+	boolp := func(v bool) *bool { return &v }
+	tests := []struct {
+		name     string
+		existing bool
+		want     bool
+		input    *bool
+	}{
+		{name: "nil preserves existing true", existing: true, want: true},
+		{name: "nil preserves existing false", existing: false, want: false},
+		{name: "explicit true overrides existing false", existing: false, want: true, input: boolp(true)},
+		{name: "explicit false overrides existing true", existing: true, want: false, input: boolp(false)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, repo := newTestService(t)
+			existing := &domain.AgentConfig{ID: "agent-1", Name: "old", Type: domain.ReActAgent,
+				CreatedBy: "user-1", DelegateEnabled: tc.existing}
+			repo.On("Get", mock.Anything, "agent-1").Return(existing, true, nil).Once()
+			repo.On("Update", mock.Anything, mock.Anything).Return(nil).Once().Run(func(args mock.Arguments) {
+				cfg := args.Get(1).(*domain.AgentConfig)
+				require.Equal(t, tc.want, cfg.DelegateEnabled,
+					"持久化的 DelegateEnabled 必须为 %v", tc.want)
+			})
+			repo.On("Get", mock.Anything, "agent-1").Return(existing, true, nil).Once()
+			_, err := svc.Update(ctx, "agent-1", application.UpdateAgentInput{
+				ActorID: "user-1", DelegateEnabled: tc.input,
+			})
+			require.NoError(t, err)
+			repo.AssertExpectations(t)
+		})
+	}
+}
+
+// updateSystemAssistant maxIterations 通道测试：只校验显式非零 in.MaxIterations
+// （B2），0 = 保留原值，90 合法落库，91 越界 400 且不落库。
+
 func TestAgentService_DeleteSystemAssistantGoesThroughOwnership(t *testing.T) {
 	repo := new(mockAgentRepo)
 	registry := application.NewRegistry(repo, zap.NewNop())

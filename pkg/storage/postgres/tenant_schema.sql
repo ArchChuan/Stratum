@@ -46,6 +46,12 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
 -- 0 与缺键等价(unset → 网关/provider 默认)。compaction_safety_ratio 已于
 -- 2026-08-17 产品裁决全链路移除,存量 JSONB 旧键 inert(unpack 不读),不迁移。
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS parameters JSONB NOT NULL DEFAULT '{}'::jsonb;
+-- stratum_delegate 子 agent 派发配置。delegate_enabled 默认 false(存量默认关闭,
+-- 委托是显式能力,管理员在编辑页按 agent 开启,避免未评估风险的 agent 静默获得
+-- 子 agent 派发能力);深度/默认步数 0=unset → 运行时回落全局默认。
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS delegate_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS delegate_max_depth INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS delegate_default_max_steps INTEGER NOT NULL DEFAULT 0;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_system_key
     ON agents(system_key) WHERE system_key IS NOT NULL;
 

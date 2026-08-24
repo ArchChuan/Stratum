@@ -186,13 +186,20 @@ func startLLMTrace(ctx context.Context, s *ReActState, messages []port.LLMMessag
 	if s.MaxTokens > 0 {
 		llmAttributes = append(llmAttributes, attribute.Int("gen_ai.request.max_tokens", s.MaxTokens))
 	}
-	// Prompt version fingerprint ties the LLM request to the system prompt
-	// revision that produced it.
+	// Prompt version fingerprints tie the LLM request to the prompt revision and
+	// effective config that produced it. system_prompt keeps the legacy
+	// (key, version) pair so existing dashboards stay valid; config is emitted
+	// under its own attribute because a single (key, version) pair cannot carry
+	// both. Written deterministically (no map iteration) so repeated reads of a
+	// span never observe a random winner.
 	if version, ok := s.PromptVersions["system_prompt"]; ok && version != "" {
 		llmAttributes = append(llmAttributes,
 			attribute.String("stratum.prompt.key", "system_prompt"),
 			attribute.String("stratum.prompt.version", version),
 		)
+	}
+	if version, ok := s.PromptVersions["config"]; ok && version != "" {
+		llmAttributes = append(llmAttributes, attribute.String("stratum.prompt.config", version))
 	}
 	llmAttributes = append(llmAttributes, tracePayloadAttributes(
 		ctx, s.TracePayloadStore, s.TenantID, s.TraceID, "llm-input",

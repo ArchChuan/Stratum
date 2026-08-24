@@ -53,6 +53,29 @@ func (s *staticStore) GetAll(_ context.Context) ([]port.PlatformValue, error) {
 	return out, nil
 }
 
+// GetSnapshot 按 GroupForKey 过滤出该组快照（staticStore 保持只读）。
+func (s *staticStore) GetSnapshot(_ context.Context, groupKey string) (map[string]json.RawMessage, error) {
+	out := make(map[string]json.RawMessage)
+	for key, raw := range s.values {
+		if pdomain.GroupForKey(key) == groupKey {
+			out[key] = raw
+		}
+	}
+	return out, nil
+}
+
+func (s *staticStore) CreateDraft(_ context.Context, _ string, _ map[string]json.RawMessage, _, _ string) (port.PlatformVersion, error) {
+	return port.PlatformVersion{}, nil
+}
+
+func (s *staticStore) Publish(_ context.Context, _ string, _ int64, _ string) error { return nil }
+
+func (s *staticStore) Rollback(_ context.Context, _ string, _ int64, _ string) error { return nil }
+
+func (s *staticStore) ListVersions(_ context.Context, _ string) ([]port.PlatformVersion, error) {
+	return []port.PlatformVersion{}, nil
+}
+
 func caseGenSample() evalport.CaseGenRequest {
 	return evalport.CaseGenRequest{
 		ResourceKind: domain.ResourceKindSkill,

@@ -42,6 +42,35 @@ func (s *fakePlatformStore) GetAll(context.Context) ([]port.PlatformValue, error
 	return nil, nil
 }
 
+// GetSnapshot 按 GroupForKey 过滤出该组快照；err 非空时传播（fail-closed 用例
+// 依赖读取路径的 DB 错误上抛）。
+func (s *fakePlatformStore) GetSnapshot(_ context.Context, groupKey string) (map[string]json.RawMessage, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	out := make(map[string]json.RawMessage)
+	for key, raw := range s.values {
+		if parametersdomain.GroupForKey(key) == groupKey {
+			out[key] = json.RawMessage(raw)
+		}
+	}
+	return out, nil
+}
+
+func (s *fakePlatformStore) CreateDraft(_ context.Context, _ string, _ map[string]json.RawMessage, _, _ string) (port.PlatformVersion, error) {
+	return port.PlatformVersion{}, nil
+}
+
+func (s *fakePlatformStore) Publish(_ context.Context, _ string, _ int64, _ string) error { return nil }
+
+func (s *fakePlatformStore) Rollback(_ context.Context, _ string, _ int64, _ string) error {
+	return nil
+}
+
+func (s *fakePlatformStore) ListVersions(_ context.Context, _ string) ([]port.PlatformVersion, error) {
+	return []port.PlatformVersion{}, nil
+}
+
 // newTestTenantEmbeddingResolver 构造一个平台参数里含给定配置的
 // tenantEmbeddingModelResolver（值 key 为 "memory.embedding_model"），
 // registry 复用 knowledge 目录。

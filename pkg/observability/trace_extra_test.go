@@ -5,6 +5,9 @@ import (
 	"errors"
 	"testing"
 
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -119,6 +122,72 @@ func TestDefaultTraceConfigValues(t *testing.T) {
 	}
 	if cfg.SamplingRatio != 1.0 {
 		t.Errorf("SamplingRatio = %v, want 1.0", cfg.SamplingRatio)
+	}
+}
+
+// sampler 四类断言：agent 根恒采、非 agent 根按 ratio、子 span 跟随父决策。
+
+func TestAgentSamplerAgentRootAlwaysSampled(t *testing.T) {
+	// ratio=0（其余全部丢弃）时，带 agent 属性的根 span 仍必须 RecordAndSample。
+	s := NewAgentSampler(0)
+	res := s.ShouldSample(sdktrace.SamplingParameters{
+		Name:       "agent.execute",
+		Kind:       trace.SpanKindInternal,
+		Attributes: []attribute.KeyValue{attribute.Bool(AgentExecuteAttrKey, true)},
+	})
+	if res.Decision != sdktrace.RecordAndSample {
+		t.Errorf("agent root decision = %v, want RecordAndSample", res.Decision)
+	}
+}
+
+func TestAgentSamplerRootWithoutAgentAttrDelegatesToRatio(t *testing.T) {
+	// 非 agent 根 span 不做恒采：ratio=0 必弃、ratio=1 必采，证明决策委派给
+	// TraceIDRatioBased（而非恒采恒弃）。ratio 中间值的精确边界由 SDK 自身
+	// 单测覆盖，这里验证委派接线。
+	params := sdktrace.SamplingParameters{
+		TraceID: trace.TraceID([16]byte{0x01}),
+		Name:    "other.op",
+		Kind:    trace.SpanKindInternal,
+	}
+
+	if got := NewAgentSampler(0).ShouldSample(params); got.Decision != sdktrace.Drop {
+		t.Errorf("ratio=0 decision = %v, want Drop", got.Decision)
+	}
+	if got := NewAgentSampler(1).ShouldSample(params); got.Decision != sdktrace.RecordAndSample {
+		t.Errorf("ratio=1 decision = %v, want RecordAndSample", got.Decision)
+	}
+}
+
+func TestParentBasedChildFollowsParent(t *testing.T) {
+	// ParentBased(agentSampler)：子 span 不重新决策，跟随父 span 采样位。
+	parentCtx := func(sampled bool) context.Context {
+		flags := trace.TraceFlags(0)
+		if sampled {
+			flags = trace.FlagsSampled
+		}
+		sc := trace.NewSpanContext(trace.SpanContextConfig{
+			TraceID:    trace.TraceID([16]byte{0xAB, 0x01}),
+			SpanID:     trace.SpanID([8]byte{0xCD, 0x02}),
+			TraceFlags: flags,
+		})
+		return trace.ContextWithSpanContext(context.Background(), sc)
+	}
+
+	s := sdktrace.ParentBased(NewAgentSampler(0)) // agent 恒采，但子 span 走父决策
+	childParams := func(parent context.Context) sdktrace.SamplingParameters {
+		return sdktrace.SamplingParameters{
+			ParentContext: parent,
+			TraceID:       trace.TraceID([16]byte{0xAB, 0x01}),
+			Name:          "agent.execute.child",
+			Kind:          trace.SpanKindInternal,
+		}
+	}
+
+	if got := s.ShouldSample(childParams(parentCtx(true))); got.Decision != sdktrace.RecordAndSample {
+		t.Errorf("sampled parent child = %v, want RecordAndSample", got.Decision)
+	}
+	if got := s.ShouldSample(childParams(parentCtx(false))); got.Decision != sdktrace.Drop {
+		t.Errorf("dropped parent child = %v, want Drop", got.Decision)
 	}
 }
 

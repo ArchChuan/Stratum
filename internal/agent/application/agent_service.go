@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -176,6 +177,12 @@ type CreateAgentInput struct {
 	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
 	MemoryScope           string
+	// DelegateEnabled/MaxDepth/DefaultMaxSteps 控制 stratum_delegate 子 agent
+	// 派发：开启后主循环可将子任务委托给复用本配置的隔离子 agent。深度/步数
+	// 0=unset → 运行时回落全局默认。
+	DelegateEnabled         bool
+	DelegateMaxDepth        int
+	DelegateDefaultMaxSteps int
 	// Parameters carries registry resource-scope values as a flat object;
 	// only the memory.* dotted keys persist on the agent (bare sampling keys
 	// remain expressed through the explicit fields above). Same merge
@@ -209,30 +216,38 @@ type UpdateAgentInput struct {
 	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
 	MemoryScope           string
+	// 委托配置同 CreateAgentInput；DelegateEnabled 为 *bool:缺省(nil)保留已存值,
+	// 显式 false 才关闭(存量默认关闭,Update 全量列写不能把缺省当显式 false 覆盖)。
+	DelegateEnabled         *bool
+	DelegateMaxDepth        int
+	DelegateDefaultMaxSteps int
 }
 
 // AgentDTO is the wire shape returned by AgentService for transport
 // rendering. Strings only — handler reuses field-for-field.
 type AgentDTO struct {
-	ID                    string
-	Name                  string
-	Type                  string
-	Description           string
-	SystemPrompt          string
-	LLMModel              string
-	MaxIterations         int
-	MaxContextTokens      int
-	Temperature           float32
-	ReasoningEffort       string
-	MaxTokens             int
-	AllowedSkills         []string
-	MCPToolIDs            []string
-	KnowledgeWorkspaceIDs []string
-	CreatedAt             string
-	MemoryScope           string
-	SystemKey             string
-	Parameters            map[string]any
-	Editors               []string
+	ID                      string
+	Name                    string
+	Type                    string
+	Description             string
+	SystemPrompt            string
+	LLMModel                string
+	MaxIterations           int
+	MaxContextTokens        int
+	Temperature             float32
+	ReasoningEffort         string
+	MaxTokens               int
+	AllowedSkills           []string
+	MCPToolIDs              []string
+	KnowledgeWorkspaceIDs   []string
+	CreatedAt               string
+	MemoryScope             string
+	DelegateEnabled         bool
+	DelegateMaxDepth        int
+	DelegateDefaultMaxSteps int
+	SystemKey               string
+	Parameters              map[string]any
+	Editors                 []string
 }
 
 type SystemAssistantSettings struct {
@@ -310,24 +325,27 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		return AgentDTO{}, err
 	}
 	cfg := &domain.AgentConfig{
-		ID:                    id,
-		Name:                  in.Name,
-		Type:                  parseAgentTypeWire(in.Type),
-		Description:           in.Description,
-		SystemPrompt:          in.SystemPrompt,
-		LLMModel:              in.LLMModel,
-		MaxIterations:         in.MaxIterations,
-		MaxContextTokens:      in.MaxContextTokens, // 0 = 未配置，执行时两阶段解析
-		Temperature:           in.Temperature,
-		ReasoningEffort:       in.ReasoningEffort,
-		MaxTokens:             in.MaxTokens,
-		AllowedSkills:         in.AllowedSkills,
-		MCPToolIDs:            in.MCPToolIDs,
-		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
-		MemoryScope:           in.MemoryScope,
-		MemoryParameters:      memoryParams,
-		Capabilities:          []domain.AgentCapability{},
-		CreatedBy:             in.ActorID,
+		ID:                      id,
+		Name:                    in.Name,
+		Type:                    parseAgentTypeWire(in.Type),
+		Description:             in.Description,
+		SystemPrompt:            in.SystemPrompt,
+		LLMModel:                in.LLMModel,
+		MaxIterations:           in.MaxIterations,
+		MaxContextTokens:        in.MaxContextTokens, // 0 = 未配置，执行时两阶段解析
+		Temperature:             in.Temperature,
+		ReasoningEffort:         in.ReasoningEffort,
+		MaxTokens:               in.MaxTokens,
+		AllowedSkills:           in.AllowedSkills,
+		MCPToolIDs:              in.MCPToolIDs,
+		KnowledgeWorkspaceIDs:   in.KnowledgeWorkspaceIDs,
+		MemoryScope:             in.MemoryScope,
+		DelegateEnabled:         in.DelegateEnabled,
+		DelegateMaxDepth:        in.DelegateMaxDepth,
+		DelegateDefaultMaxSteps: in.DelegateDefaultMaxSteps,
+		MemoryParameters:        memoryParams,
+		Capabilities:            []domain.AgentCapability{},
+		CreatedBy:               in.ActorID,
 	}
 
 	if err := s.validateWorkspaceBindings(ctx, in.TenantID, in.KnowledgeWorkspaceIDs); err != nil {
@@ -541,6 +559,14 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	if !ok {
 		return AgentDTO{}, ErrNotFound
 	}
+	// 委托开关 *bool 语义:缺省(nil)继承已存值,显式 false 才关闭。Update 是
+	// 全量列 UPDATE,不在此合并会把缺省字段误写成 false,覆盖管理员的显式开启。
+	in.DelegateEnabled = resolveDelegateEnabled(existing.GetConfig().DelegateEnabled, in.DelegateEnabled)
+	// 委托深度/默认步数 0=unset：缺省继承已存值，防止无关编辑（如只改
+	// system prompt）把管理员配置的深度/步数静默打回运行时默认。
+	in.DelegateMaxDepth = resolveDelegateInt(existing.GetConfig().DelegateMaxDepth, in.DelegateMaxDepth)
+	in.DelegateDefaultMaxSteps = resolveDelegateInt(existing.GetConfig().DelegateDefaultMaxSteps, in.DelegateDefaultMaxSteps)
+
 	editorActor, err := s.resolveUpdateEditorActor(ctx, in.ActorID, id, existing.GetConfig().CreatedBy)
 	if err != nil {
 		return AgentDTO{}, err
@@ -573,6 +599,26 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 		return AgentDTO{}, ErrNotFound
 	}
 	return cfgToDTO(fresh.GetConfig()), nil
+}
+
+// resolveDelegateEnabled 归一化 Update 委托开关的 *bool 缺省语义：nil（请求缺省
+// 字段）继承已存值，非 nil（含显式 false）直接采用。Update 走全量列 UPDATE，缺省
+// 必须落到已存值，否则会把管理员显式开启的委托误写回 false。
+func resolveDelegateEnabled(existing bool, in *bool) *bool {
+	if in != nil {
+		return in
+	}
+	return &existing
+}
+
+// resolveDelegateInt 归一化 Update 委托数值参数的 0=unset 缺省语义：0（请求缺省
+// 字段）继承已存值，非 0 直接采用。与 resolveDelegateEnabled 的 *bool 语义一致，
+// 防止无关编辑把管理员配置的委托深度/默认步数静默重置为运行时默认。
+func resolveDelegateInt(existing, in int) int {
+	if in != 0 {
+		return in
+	}
+	return existing
 }
 
 // recordFailure 旁路记录一次失败的 agent 创建/更新（best-effort）。
@@ -615,22 +661,25 @@ func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in Upda
 		skills = []string{}
 	}
 	cfg := &domain.AgentConfig{
-		ID:                    id,
-		Name:                  in.Name,
-		Type:                  parseAgentTypeWire(in.Type),
-		Description:           in.Description,
-		SystemPrompt:          in.SystemPrompt,
-		LLMModel:              in.LLMModel,
-		MaxIterations:         in.MaxIterations,
-		MaxContextTokens:      in.MaxContextTokens, // 0 = 未配置，执行时两阶段解析
-		Temperature:           temperature,
-		ReasoningEffort:       reasoningEffort,
-		MaxTokens:             maxTokens,
-		AllowedSkills:         skills,
-		MCPToolIDs:            in.MCPToolIDs,
-		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
-		MemoryScope:           in.MemoryScope,
-		MemoryParameters:      memoryParams,
+		ID:                      id,
+		Name:                    in.Name,
+		Type:                    parseAgentTypeWire(in.Type),
+		Description:             in.Description,
+		SystemPrompt:            in.SystemPrompt,
+		LLMModel:                in.LLMModel,
+		MaxIterations:           in.MaxIterations,
+		MaxContextTokens:        in.MaxContextTokens, // 0 = 未配置，执行时两阶段解析
+		Temperature:             temperature,
+		ReasoningEffort:         reasoningEffort,
+		MaxTokens:               maxTokens,
+		AllowedSkills:           skills,
+		MCPToolIDs:              in.MCPToolIDs,
+		KnowledgeWorkspaceIDs:   in.KnowledgeWorkspaceIDs,
+		MemoryScope:             in.MemoryScope,
+		DelegateEnabled:         *in.DelegateEnabled, // Update 已把 nil 解析为已存值
+		DelegateMaxDepth:        in.DelegateMaxDepth,
+		DelegateDefaultMaxSteps: in.DelegateDefaultMaxSteps,
+		MemoryParameters:        memoryParams,
 	}
 	if err := s.validateWorkspaceBindings(ctx, reqctx.TenantIDFromContext(ctx), in.KnowledgeWorkspaceIDs); err != nil {
 		return nil, err
@@ -877,24 +926,27 @@ func parseAgentTypeWire(t string) domain.AgentType {
 
 func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 	return AgentDTO{
-		ID:                    cfg.ID,
-		Name:                  cfg.Name,
-		Type:                  string(domain.ReActAgent),
-		Description:           cfg.Description,
-		SystemPrompt:          cfg.SystemPrompt,
-		LLMModel:              cfg.LLMModel,
-		MaxIterations:         cfg.MaxIterations,
-		MaxContextTokens:      cfg.MaxContextTokens,
-		Temperature:           cfg.Temperature,
-		ReasoningEffort:       cfg.ReasoningEffort,
-		MaxTokens:             cfg.MaxTokens,
-		AllowedSkills:         cfg.AllowedSkills,
-		MCPToolIDs:            cfg.MCPToolIDs,
-		KnowledgeWorkspaceIDs: cfg.KnowledgeWorkspaceIDs,
-		CreatedAt:             time.Now().Format(time.RFC3339),
-		MemoryScope:           cfg.MemoryScope,
-		SystemKey:             cfg.SystemKey,
-		Parameters:            samplingParameterMap(cfg),
+		ID:                      cfg.ID,
+		Name:                    cfg.Name,
+		Type:                    string(domain.ReActAgent),
+		Description:             cfg.Description,
+		SystemPrompt:            cfg.SystemPrompt,
+		LLMModel:                cfg.LLMModel,
+		MaxIterations:           cfg.MaxIterations,
+		MaxContextTokens:        cfg.MaxContextTokens,
+		Temperature:             cfg.Temperature,
+		ReasoningEffort:         cfg.ReasoningEffort,
+		MaxTokens:               cfg.MaxTokens,
+		AllowedSkills:           cfg.AllowedSkills,
+		MCPToolIDs:              cfg.MCPToolIDs,
+		KnowledgeWorkspaceIDs:   cfg.KnowledgeWorkspaceIDs,
+		CreatedAt:               time.Now().Format(time.RFC3339),
+		MemoryScope:             cfg.MemoryScope,
+		DelegateEnabled:         cfg.DelegateEnabled,
+		DelegateMaxDepth:        cfg.DelegateMaxDepth,
+		DelegateDefaultMaxSteps: cfg.DelegateDefaultMaxSteps,
+		SystemKey:               cfg.SystemKey,
+		Parameters:              samplingParameterMap(cfg),
 	}
 }
 
@@ -939,6 +991,9 @@ type ExecMeta struct {
 	EvolutionTrace             EvolutionTraceMetadata
 	KnowledgeAssignmentsPinned bool
 	PinnedKnowledgeRevisions   map[string]port.KnowledgeRevisionPin
+	// DelegateEventCb 在委托子 agent 进入/结束时回调（SSE delegate_status 帧
+	// 出口）。仅流式路径由 handler 注入；nil = 不推送委托进度。
+	DelegateEventCb func(agentgraph.DelegateEvent)
 }
 
 // ExecutionRowDTO is the wire shape emitted by ListExecutions.
@@ -1070,7 +1125,7 @@ func recordExecutionPreparationFailure(ctx context.Context, start time.Time, sta
 
 func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta) (*AgentResult, int, error) {
 	executionID := executionIDOrNew(meta.ExecutionID)
-	a, req, meta, _, options, cfg, resuming, consumedApproval, err := s.prepareAgentExecution(ctx, agentID, req, meta, executionID)
+	a, req, meta, _, options, cfg, resuming, terminal, consumedApproval, err := s.prepareAgentExecution(ctx, agentID, req, meta, executionID)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1094,7 +1149,7 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 	// 任务结束轨迹反思：与 fact 提取并列的链路，fail-open 显式降级。
 	s.enqueueTrajectoryReflection(ctx, meta, req, agentID, a.GetConfig().MemoryScope, executionID, result)
 	if resuming {
-		err = s.finishApprovalResume(ctx, meta.TenantID, executionID, consumedApproval, err)
+		err = s.finishApprovalResume(ctx, meta.TenantID, executionID, consumedApproval, terminal, err)
 	}
 	return result, durationMs, err
 }
@@ -1111,7 +1166,7 @@ func (s *AgentService) ExecuteStream(
 	// 供 resumeFromCheckpoint 定位 checkpoint，空则生成新 ID（此前无条件新建，
 	// 导致流式路径即使带 execution_id 也永远无法续接）。
 	executionID = executionIDOrNew(meta.ExecutionID)
-	a, req, meta, streamCtx, options, cfg, resuming, consumedApproval, err := s.prepareAgentExecution(ctx, agentID, req, meta, executionID)
+	a, req, meta, streamCtx, options, cfg, resuming, terminal, consumedApproval, err := s.prepareAgentExecution(ctx, agentID, req, meta, executionID)
 	if err != nil {
 		return nil, nil, nil, "", err
 	}
@@ -1130,7 +1185,7 @@ func (s *AgentService) ExecuteStream(
 		}
 	}
 	// 总是追加 token callback：run 闭包延迟执行，回调捕获 cfg 在调用期已确定。
-	options = append(options, WithTokenCallback(wrappedTokenCb), WithExecutionID(executionID))
+	options = append(options, WithTokenCallback(wrappedTokenCb), WithDelegateEventCallback(meta.DelegateEventCb), WithExecutionID(executionID))
 
 	execCtx, cancel = context.WithCancel(context.WithoutCancel(streamCtx))
 	run = func() (*AgentResult, int, error) {
@@ -1151,7 +1206,7 @@ func (s *AgentService) ExecuteStream(
 		if resuming {
 			// 审批续跑收尾：成功/消费标记推进 checkpoint；失败且未消费批准时
 			// 回滚 running→waiting_approval，让 member 可重试同一批准。
-			runErr = s.finishApprovalResume(ctx, meta.TenantID, executionID, consumedApproval, runErr)
+			runErr = s.finishApprovalResume(ctx, meta.TenantID, executionID, consumedApproval, terminal, runErr)
 		}
 		return res, durationMs, runErr
 	}
@@ -1165,13 +1220,13 @@ func (s *AgentService) ExecuteStream(
 // 续跑标记与 consumed 判定。错误已在链内 wrap 到统一语义，调用方原样上抛。
 func (s *AgentService) prepareAgentExecution(
 	ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, executionID string,
-) (a Agent, outReq ExecRequest, outMeta ExecMeta, streamCtx context.Context, options []ExecutionOption, cfg *ExecutionConfig, resuming bool, consumed func() bool, err error) {
+) (a Agent, outReq ExecRequest, outMeta ExecMeta, streamCtx context.Context, options []ExecutionOption, cfg *ExecutionConfig, resuming bool, terminal bool, consumed func() bool, err error) {
 	a, ok, err := s.deps.Registry.Get(ctx, agentID)
 	if err != nil {
-		return nil, req, meta, nil, nil, nil, false, nil, fmt.Errorf("get agent: %w", err)
+		return nil, req, meta, nil, nil, nil, false, false, nil, fmt.Errorf("get agent: %w", err)
 	}
 	if !ok {
-		return nil, req, meta, nil, nil, nil, false, nil, ErrNotFound
+		return nil, req, meta, nil, nil, nil, false, false, nil, ErrNotFound
 	}
 	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
 	s.ensureInitialCheckpoint(ctx, meta, req, agentID, executionID)
@@ -1180,36 +1235,36 @@ func (s *AgentService) prepareAgentExecution(
 	a, assignment, err := s.resolveExecutionAgent(ctx, a, meta.TenantID, agentID, executionSubject(req, meta))
 	if err != nil {
 		recordExecutionPreparationFailure(ctx, preparationStart, "resolve_agent_revision")
-		return nil, req, meta, nil, nil, nil, false, nil, fmt.Errorf("resolve revision: %w", err)
+		return nil, req, meta, nil, nil, nil, false, false, nil, fmt.Errorf("resolve revision: %w", err)
 	}
 	applyAgentAssignment(&meta, agentID, assignment)
 	recordExecutionPreparation(ctx, a, req, meta, executionID)
 	// 审批续跑：命中 waiting_approval checkpoint 则抢占并把 req/meta 重写为
 	// 批准载荷快照；buildApprovalResumeOptions 追加在 assembleOptions 之后。
-	approvalPayload, approvalID, resuming, req, meta, err := s.maybeResumeApproval(ctx, agentID, req, meta, executionID)
+	approvalPayload, approvalID, resuming, terminal, req, meta, err := s.maybeResumeApproval(ctx, agentID, req, meta, executionID)
 	if err != nil {
 		recordExecutionPreparationFailure(ctx, preparationStart, "assemble_options")
-		return nil, req, meta, nil, nil, nil, false, nil, fmt.Errorf("resume approval: %w", err)
+		return nil, req, meta, nil, nil, nil, false, false, nil, fmt.Errorf("resume approval: %w", err)
 	}
 	streamCtx, options, err = s.assembleOptions(ctx, a, req, meta, executionID)
 	if err != nil {
 		s.recordSystemAssistantRequest(a, "unknown", "error")
 		recordExecutionPreparationFailure(ctx, preparationStart, "assemble_options")
-		return nil, req, meta, nil, nil, nil, false, nil, fmt.Errorf("assemble options: %w", err)
+		return nil, req, meta, nil, nil, nil, false, false, nil, fmt.Errorf("assemble options: %w", err)
 	}
 	if resuming {
 		var resumeOpts []ExecutionOption
-		resumeOpts, consumed, err = s.buildApprovalResumeOptions(ctx, meta.TenantID, a, approvalPayload, approvalID)
+		resumeOpts, consumed, err = s.buildApprovalResumeOptions(ctx, meta.TenantID, a, approvalPayload, approvalID, terminal)
 		if err != nil {
 			recordExecutionPreparationFailure(ctx, preparationStart, "assemble_options")
-			return nil, req, meta, nil, nil, nil, false, nil, fmt.Errorf("resume approval options: %w", err)
+			return nil, req, meta, nil, nil, nil, false, false, nil, fmt.Errorf("resume approval options: %w", err)
 		}
 		options = append(options, resumeOpts...)
 	}
 	options = append(options, WithExecutionID(executionID))
 	cfg = &ExecutionConfig{}
 	cfg.ApplyOptions(options)
-	return a, req, meta, streamCtx, options, cfg, resuming, consumed, nil
+	return a, req, meta, streamCtx, options, cfg, resuming, terminal, consumed, nil
 }
 
 // logAgentExecutionDebug 记录执行前 Debug 日志（含会话维度，供恢复排查）。
@@ -1422,6 +1477,16 @@ func (s *AgentService) DecideToolApproval(ctx context.Context, tenantID, id, dec
 	return s.deps.ApprovalService.Decide(ctx, tenantID, id, decision, actor, reason)
 }
 
+// CancelToolApproval 取消待批审批：仅发起人本人（或 admin/owner 代撤）可取消，
+// pending→cancelled。越权/不存在统一 ErrApprovalNotFound（关闭存在性 oracle，与
+// ApprovalDetail 同构）；已决定/已过期返回 ErrApprovalAlreadyDecided/ErrApprovalExpired。
+func (s *AgentService) CancelToolApproval(ctx context.Context, tenantID, actor, approvalID string) error {
+	if s.deps.ApprovalService == nil {
+		return errors.New("tool approval service not configured")
+	}
+	return s.deps.ApprovalService.CancelApproval(ctx, tenantID, approvalID, actor)
+}
+
 // ListApprovalHistory 分页查询租户审批历史（actor 用于内部角色现查，空值放行返回全部）。
 func (s *AgentService) ListApprovalHistory(ctx context.Context, tenantID string, page, pageSize int, actor string) ([]domain.ToolApproval, int, error) {
 	if s.deps.ApprovalService == nil {
@@ -1495,7 +1560,7 @@ func (s *AgentService) ResumeToolApproval(ctx context.Context, tenantID, actor, 
 	// 复用 buildApprovalResumeOptions：恢复键（WithExecutionID + WithApprovalResume）
 	// + PinnedSkillRevisions 目录 + 覆盖式 guard（首个与批准一致的调用走 ExecuteApproved
 	// CAS 单次消费）。与流式续跑共用，消除重复。
-	resumeOpts, consumed, err := s.buildApprovalResumeOptions(ctx, tenantID, a, payload, approvalID)
+	resumeOpts, consumed, err := s.buildApprovalResumeOptions(ctx, tenantID, a, payload, approvalID, false)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1790,31 +1855,76 @@ func approvalIDFromRuntimeState(raw json.RawMessage) string {
 // 据此幂等恢复"等待审批"卡片，不销毁审批）。
 func (s *AgentService) resolveApprovalResume(
 	ctx context.Context, tenantID, actor, executionID, agentID string,
-) (ToolApprovalPayload, string, *domain.AgentExecutionCheckpoint, error) {
+) (ToolApprovalPayload, string, *domain.AgentExecutionCheckpoint, bool, error) {
 	cp, approvalID, err := s.approvalResumeCheckpoint(ctx, tenantID, executionID)
 	if err != nil {
-		return ToolApprovalPayload{}, "", nil, err
+		return ToolApprovalPayload{}, "", nil, false, err
 	}
 	if cp == nil {
-		return ToolApprovalPayload{}, "", nil, nil
+		return ToolApprovalPayload{}, "", nil, false, nil
 	}
 	payload, err := s.deps.ApprovalService.ApprovedPayload(ctx, tenantID, approvalID)
 	if err != nil {
-		if errors.Is(err, ErrApprovalNotApproved) || errors.Is(err, domain.ErrApprovalInvalidated) {
-			return ToolApprovalPayload{}, approvalID, cp, err
-		}
-		return ToolApprovalPayload{}, "", nil, s.handleApprovedPayloadError(ctx, tenantID, approvalID, err)
+		// 终态审批（已拒绝/已取消）：放行续跑，把"审批未通过"当作一次工具执行失败
+		// 交给 LLM 收尾——工具不会执行（guard 对终态返回拒绝错误），主链路继续而非卡死。
+		return s.resolveApprovalResumeApprovedError(ctx, tenantID, actor, approvalID, agentID, cp, err)
 	}
 	if err := s.authorizeApprovalActor(ctx, tenantID, actor, payload, cp); err != nil {
-		return ToolApprovalPayload{}, "", nil, err
+		return ToolApprovalPayload{}, "", nil, false, err
 	}
 	if err := s.validateApprovalBinding(agentID, payload); err != nil {
-		return ToolApprovalPayload{}, "", nil, err
+		return ToolApprovalPayload{}, "", nil, false, err
 	}
 	if err := s.validateApprovalResume(ctx, tenantID, approvalID, payload); err != nil {
-		return ToolApprovalPayload{}, "", nil, err
+		return ToolApprovalPayload{}, "", nil, false, err
 	}
-	return payload, approvalID, cp, nil
+	return payload, approvalID, cp, false, nil
+}
+
+// resolveApprovalResumeApprovedError ApprovedPayload 失败分支：先试终态放行
+// （cancelled/rejected → terminal=true，主链路继续），再按哨兵映射非终态错误
+// （ErrApprovalNotApproved→202 等待、ErrApprovalExpired→410、invalidated→409）。
+// 抽离使 resolveApprovalResume 主流程仅保留 checkpoint 定位与 approved 校验，
+// 复杂度回到棘轮目标内。
+func (s *AgentService) resolveApprovalResumeApprovedError(
+	ctx context.Context, tenantID, actor, approvalID, agentID string, cp *domain.AgentExecutionCheckpoint, err error,
+) (ToolApprovalPayload, string, *domain.AgentExecutionCheckpoint, bool, error) {
+	if terminalPayload, terminal, terr := s.resolveTerminalApprovalResume(ctx, tenantID, actor, approvalID, agentID, cp); terr != nil {
+		return ToolApprovalPayload{}, "", nil, false, terr
+	} else if terminal {
+		return terminalPayload, approvalID, cp, true, nil
+	}
+	if errors.Is(err, ErrApprovalNotApproved) || errors.Is(err, domain.ErrApprovalInvalidated) {
+		return ToolApprovalPayload{}, approvalID, cp, false, err
+	}
+	return ToolApprovalPayload{}, "", nil, false, s.handleApprovedPayloadError(ctx, tenantID, approvalID, err)
+}
+
+// resolveTerminalApprovalResume 终态审批（已拒绝/已取消）续跑判定。TerminalResumePayload
+// 按 row.Status 显式枚举——仅 cancelled/rejected 放行，绝不放行 pending（误吞 pending
+// 会绕过"审批未通过前必须等待"的门控）；终态行不做过期门控（已过 expires_at 的
+// rejected/cancelled 仍放行，否则轮询到终态恰逢过期的竞态会断链）。非终态返回
+// (payload, false, nil)，上层照旧走 ApprovedPayload 错误分支（ErrApprovalNotApproved
+// →202 等待、ErrApprovalExpired→410、invalidated→409）。校验错误（越权/会话删除/
+// binding mismatch）原样上抛。
+func (s *AgentService) resolveTerminalApprovalResume(
+	ctx context.Context, tenantID, actor, approvalID, agentID string, cp *domain.AgentExecutionCheckpoint,
+) (ToolApprovalPayload, bool, error) {
+	payload, _, err := s.deps.ApprovalService.TerminalResumePayload(ctx, tenantID, approvalID)
+	if err != nil {
+		return ToolApprovalPayload{}, false, nil
+	}
+	if err := s.authorizeApprovalActor(ctx, tenantID, actor, payload, cp); err != nil {
+		return ToolApprovalPayload{}, true, err
+	}
+	if err := s.validateApprovalBinding(agentID, payload); err != nil {
+		return ToolApprovalPayload{}, true, err
+	}
+	// 保留会话校验：终态续跑同样避免向已删除会话写入。
+	if err := s.validateApprovalConversation(ctx, tenantID, approvalID, payload); err != nil {
+		return ToolApprovalPayload{}, true, err
+	}
+	return payload, true, nil
 }
 
 // approvalResumeCheckpoint 定位 executionID 对应的 waiting_approval 或 running
@@ -1904,17 +2014,17 @@ func (s *AgentService) claimApprovalResume(ctx context.Context, tenantID, execut
 // P1 直接执行；并发窗口由 ExecuteApproved 的 ClaimExecution CAS 保证单次消费。
 func (s *AgentService) maybeResumeApproval(
 	ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, executionID string,
-) (payload ToolApprovalPayload, approvalID string, resuming bool, outReq ExecRequest, outMeta ExecMeta, err error) {
-	payload, approvalID, cp, err := s.resolveApprovalResume(ctx, meta.TenantID, req.UserID, executionID, agentID)
+) (payload ToolApprovalPayload, approvalID string, resuming bool, terminal bool, outReq ExecRequest, outMeta ExecMeta, err error) {
+	payload, approvalID, cp, terminal, err := s.resolveApprovalResume(ctx, meta.TenantID, req.UserID, executionID, agentID)
 	if err != nil {
-		return payload, approvalID, false, req, meta, err
+		return payload, approvalID, false, false, req, meta, err
 	}
 	if cp == nil {
-		return ToolApprovalPayload{}, "", false, req, meta, nil
+		return ToolApprovalPayload{}, "", false, false, req, meta, nil
 	}
 	if cp.Status == domain.ExecStatusWaitingApproval {
 		if err := s.claimApprovalResume(ctx, meta.TenantID, executionID, cp); err != nil {
-			return ToolApprovalPayload{}, "", false, req, meta, err
+			return ToolApprovalPayload{}, "", false, false, req, meta, err
 		}
 	}
 	// 重跑以批准载荷为准：发起人/会话/query 必须是审批时快照，否则续跑会写到
@@ -1924,7 +2034,7 @@ func (s *AgentService) maybeResumeApproval(
 	req.ConversationID = payload.ConversationID
 	meta.KnowledgeAssignmentsPinned = true
 	meta.PinnedKnowledgeRevisions = payload.PinnedKnowledgeRevisions
-	return payload, approvalID, true, req, meta, nil
+	return payload, approvalID, true, terminal, req, meta, nil
 }
 
 // buildApprovalResumeOptions 构造审批续跑的执行选项：恢复键（WithExecutionID +
@@ -1934,7 +2044,7 @@ func (s *AgentService) maybeResumeApproval(
 // （本轮重跑是否真的消费了批准），供收尾判定回滚条件。ResumeToolApproval 与
 // 流式续跑共用，消除重复。
 func (s *AgentService) buildApprovalResumeOptions(
-	ctx context.Context, tenantID string, a Agent, payload ToolApprovalPayload, approvalID string,
+	ctx context.Context, tenantID string, a Agent, payload ToolApprovalPayload, approvalID string, terminal bool,
 ) ([]ExecutionOption, func() bool, error) {
 	options := make([]ExecutionOption, 0, 3)
 	if len(payload.PinnedSkillRevisions) > 0 && s.deps.SkillActivationResolver != nil {
@@ -1953,32 +2063,17 @@ func (s *AgentService) buildApprovalResumeOptions(
 		Authorizer: s.deps.ToolAuthorizer,
 		Executor:   s.deps.MCPToolExecutor,
 		ExecuteApproved: func(callCtx context.Context, request ToolExecutionRequest) (port.MCPToolResult, error) {
-			result, err := s.deps.ApprovalService.ExecuteApproved(
-				callCtx, tenantID, approvalID, request.Tool.ServerID,
-				request.Tool.CapabilityID, request.Arguments, s.deps.MCPToolExecutor,
-			)
-			// C2d：consumed 仅在决定被原子消费（ExecuteApproved 内部 ClaimExecution
-			// CAS 成功）后置位；claim 失败（并发已消费/过期）与工具未发送/必然失败
-			// （行已 ReleaseExecution 回滚 approved）都不算消费——收尾回滚
-			// waiting_approval，批准仍可再次消费。
-			switch {
-			case err == nil:
-				consumed = true
-			case errors.Is(err, domain.ErrApprovalAlreadyExecuted):
-				consumed = false
-			default:
-				var execErr *port.MCPToolExecutionError
-				if errors.As(err, &execErr) &&
-					(execErr.Outcome == port.ToolExecutionOutcomeNotSent || execErr.Outcome == port.ToolExecutionOutcomeDefiniteFailure) {
-					consumed = false
-				} else {
-					consumed = true
-				}
-			}
-			return result, err
+			return s.executeApprovedForResume(callCtx, tenantID, approvalID, request, terminal, &consumed)
 		},
 	})
-	options = append(options, WithExecutionID(payload.ExecutionID), WithApprovalResume(approvalID),
+	resumeKeyOpts := []ExecutionOption{WithExecutionID(payload.ExecutionID)}
+	// 终态模式（已拒绝/已取消）不追加 WithApprovalResume：finalizeReActCheckpoint 按
+	// 普通执行收尾写终态，否则 resumeFromCheckpoint 走"恢复 running"路径导致重复
+	// P1 注入。approved 模式保留恢复键。
+	if !terminal {
+		resumeKeyOpts = append(resumeKeyOpts, WithApprovalResume(approvalID))
+	}
+	resumeKeyOpts = append(resumeKeyOpts,
 		// C2a：注入已批准载荷，executeReAct 据此合成 P1 直接执行，不再经 LLM
 		// 重新生成参数（修复审批续跑无限循环）。
 		WithApprovalResumePayload(payload),
@@ -1988,7 +2083,8 @@ func (s *AgentService) buildApprovalResumeOptions(
 			request.AgentID = payload.AgentID
 			request.TraceID = payload.TraceID
 			request.ExecutionID = payload.ExecutionID
-			request.AgentToolIDs = a.GetConfig().MCPToolIDs
+			request.AgentToolIDs = slices.Clone(a.GetConfig().MCPToolIDs)
+			request.AgentToolIDs = append(request.AgentToolIDs, agentgraph.StratumDelegateToolName)
 			if !consumed && request.Tool.ServerID == payload.ServerID &&
 				request.Tool.CapabilityID == payload.ToolName {
 				// C2d 加固：canonical digest 比较（与 ApprovedPayload binding 校验同源），
@@ -1999,7 +2095,42 @@ func (s *AgentService) buildApprovalResumeOptions(
 			}
 			return guard.Execute(callCtx, request)
 		}))
+	options = append(options, resumeKeyOpts...)
 	return options, func() bool { return consumed }, nil
+}
+
+// executeApprovedForResume 审批续跑的 ExecuteApproved 封装：C2d 原子消费判定 +
+// 终态模式友好文案。consumed 仅在决定被原子消费（ExecuteApproved 内部 ClaimExecution
+// CAS 成功）后置位；claim 失败（并发已消费/过期）与工具未发送/必然失败（行已
+// ReleaseExecution 回滚 approved）都不算消费——收尾回滚 waiting_approval，批准仍可
+// 再次消费。终态模式（已拒绝/已取消）ExecuteApproved 必然返回 ErrApprovalNotApproved，
+// 包装为友好文案（%w 保留哨兵 + 行为约束），LLM 感知后自行收尾。approved 模式保持
+// 原样，不影响 C2 幂等/恢复卡片。
+func (s *AgentService) executeApprovedForResume(
+	callCtx context.Context, tenantID, approvalID string, request ToolExecutionRequest, terminal bool, consumed *bool,
+) (port.MCPToolResult, error) {
+	result, err := s.deps.ApprovalService.ExecuteApproved(
+		callCtx, tenantID, approvalID, request.Tool.ServerID,
+		request.Tool.CapabilityID, request.Arguments, s.deps.MCPToolExecutor,
+	)
+	switch {
+	case err == nil:
+		*consumed = true
+	case errors.Is(err, domain.ErrApprovalAlreadyExecuted):
+		*consumed = false
+	default:
+		var execErr *port.MCPToolExecutionError
+		if errors.As(err, &execErr) &&
+			(execErr.Outcome == port.ToolExecutionOutcomeNotSent || execErr.Outcome == port.ToolExecutionOutcomeDefiniteFailure) {
+			*consumed = false
+		} else {
+			*consumed = true
+		}
+	}
+	if terminal && err != nil {
+		err = fmt.Errorf("%w：工具审批未通过（已被拒绝或取消），工具未执行，请勿重试该工具", err)
+	}
+	return result, err
 }
 
 // finishApprovalResume 审批续跑收尾（SECURITY-MEDIUM-2）：成功 → MarkCompleted；
@@ -2008,9 +2139,14 @@ func (s *AgentService) buildApprovalResumeOptions(
 // 保留 running 交给胜者 MarkCompleted，不回滚不销毁）；真实失败且批准未被本轮消费
 // → 回滚 waiting_approval，发起人可重试同一批准；已消费（ExecuteApproved CAS 已把
 // approved→executed）→ 写终态 failed 保留对账历史。
-func (s *AgentService) finishApprovalResume(ctx context.Context, tenantID, executionID string, consumed func() bool, runErr error) error {
+func (s *AgentService) finishApprovalResume(ctx context.Context, tenantID, executionID string, consumed func() bool, terminal bool, runErr error) error {
 	if s.deps.CheckpointStore == nil {
 		return runErr
+	}
+	// 终态模式（已拒绝/已取消）：checkpoint 终态已由 finalizeReActCheckpoint 写入。
+	// 收尾抽到 finishTerminalApprovalResume，见其注释（不回滚/不二次 Terminate）。
+	if terminal {
+		return finishTerminalApprovalResume(ctx, s.deps.CheckpointStore, tenantID, executionID, runErr)
 	}
 	if runErr == nil {
 		return completeApprovalResume(ctx, s.deps.CheckpointStore, tenantID, executionID, nil)
@@ -2026,6 +2162,20 @@ func (s *AgentService) finishApprovalResume(ctx context.Context, tenantID, execu
 	}
 	if termErr := s.deps.CheckpointStore.Terminate(ctx, tenantID, executionID, "failed"); termErr != nil {
 		return errors.Join(runErr, fmt.Errorf("terminate approval checkpoint: %w", termErr))
+	}
+	return runErr
+}
+
+// finishTerminalApprovalResume 终态审批（已拒绝/已取消）续跑收尾：checkpoint 终态已由
+// finalizeReActCheckpoint 写入（runErr==nil→MarkCompleted、runErr!=nil→Terminate failed）。
+// runErr==nil 时 MarkCompleted 幂等（仅对 running 行生效，不查 RowsAffected）；runErr!=nil
+// 直接 return——绝不再回滚 waiting_approval（否则前端轮询 cancelled→再续跑→再回滚，死
+// 循环），也绝不二次 Terminate（finalizeReActCheckpoint 已写终态，双写报错）。
+func finishTerminalApprovalResume(
+	ctx context.Context, checkpoints CheckpointStore, tenantID, executionID string, runErr error,
+) error {
+	if runErr == nil {
+		return completeApprovalResume(ctx, checkpoints, tenantID, executionID, nil)
 	}
 	return runErr
 }
@@ -2335,7 +2485,8 @@ func (s *AgentService) assembleOptions(
 			request.AgentID = agentID
 			request.TraceID = meta.TraceID
 			request.ExecutionID = executionID
-			request.AgentToolIDs = a.GetConfig().MCPToolIDs
+			request.AgentToolIDs = slices.Clone(a.GetConfig().MCPToolIDs)
+			request.AgentToolIDs = append(request.AgentToolIDs, agentgraph.StratumDelegateToolName)
 			request.MCPRevisionID = mcpAssignments[request.Tool.ServerID].RevisionID
 			return guard.Execute(callCtx, request)
 		}))

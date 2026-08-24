@@ -30,11 +30,7 @@ func insertPlatformAuditTx(
 	if actorTenantID != "" {
 		tenant = actorTenantID
 	}
-	_, err := tx.Exec(ctx,
-		`INSERT INTO public.platform_resource_change_audits
-		 (id, scope, resource_kind, resource_id, operation, actor_id, actor_tenant_id,
-		  actor_type, source, proposal_id, before_projection, after_projection)
-		 VALUES ($1,'platform',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+	_, err := tx.Exec(ctx, auditdomain.PlatformChangeAuditInsertSQL,
 		eventID, ev.ResourceKind, ev.ResourceID, ev.Operation, ev.ActorID, tenant,
 		ev.ActorType, ev.Source, ev.ProposalID, ev.Before, ev.After)
 	if err != nil {

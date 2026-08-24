@@ -79,6 +79,9 @@ type ExecutionConfig struct {
 	AvailableTools        []string
 	Stream                bool
 	TokenCallback         func(string)
+	// DelegateEventCallback 在委托子 agent 进入/结束时回调（SSE delegate_status
+	// 帧出口）。仅流式路径由 ExecuteStream 注入；nil = 不推送委托进度。
+	DelegateEventCallback func(agentgraph.DelegateEvent)
 	TenantID              string
 	TraceID               string
 	ExecutionID           string
@@ -136,6 +139,13 @@ type ExecutionConfig struct {
 	// 与 TopK/MaxClaims 由 wiring 装配；EvidenceFn 留空，collectGraphResult 执行
 	// 时用 RAGSearchFnWithEvidence 填充（per-execution 已带 tenant 权限上下文）。
 	FactCheck *factcheck.Settings
+	// ---- stratum_delegate 委托参数（Step 6）----
+	// 三个字段由 snapshotExecutionConfig 从 agent 配置回填：数值 0=unset（回落
+	// 全局默认）；DelegateEnabled 是 bool 无 unset 哨兵，无条件拷贝 agent 配置
+	// （执行级不可覆盖，忠实"复用当前 agent 配置"）。
+	DelegateEnabled         bool
+	DelegateMaxDepth        int
+	DelegateDefaultMaxSteps int
 }
 
 // EvolutionTraceMetadata attributes an execution to evaluation and rollout evidence.
@@ -407,6 +417,15 @@ func (a *BaseAgent) snapshotExecutionConfig(cfg *ExecutionConfig) agentExecSnaps
 	if cfg.MaxContextTokens == 0 {
 		cfg.MaxContextTokens = a.MaxContextTokens
 	}
+	// delegate 数值参数 0=unset 回填 agent 配置；bool DelegateEnabled 无哨兵，
+	// 无条件拷贝（执行级不可覆盖，见 ExecutionConfig 注释）。
+	if cfg.DelegateMaxDepth == 0 {
+		cfg.DelegateMaxDepth = a.DelegateMaxDepth
+	}
+	if cfg.DelegateDefaultMaxSteps == 0 {
+		cfg.DelegateDefaultMaxSteps = a.DelegateDefaultMaxSteps
+	}
+	cfg.DelegateEnabled = a.DelegateEnabled
 	globalSuffix := cfg.GlobalSystemSuffix
 	if globalSuffix == "" {
 		globalSuffix = a.GlobalSystemSuffix
@@ -541,6 +560,16 @@ func contentVersion(text string) string {
 	return hex.EncodeToString(sum[:])[:16]
 }
 
+// tunableConfigVersion fingerprints the effective tunable parameter snapshot
+// with the same contentVersion used for stratum.params.sha256, so the ReAct
+// promptVersions["config"] and the execution-span params hash always agree.
+// One source of truth for the config fingerprint — no third hash scheme
+// (P1 trace-fingerprint upgrade, follows contentVersion contract).
+func tunableConfigVersion(cfg *ExecutionConfig, maxContextTokens int) string {
+	paramsJSON, _ := json.Marshal(tunableSnapshot(cfg, maxContextTokens))
+	return contentVersion(string(paramsJSON))
+}
+
 func (a *BaseAgent) Execute(ctx context.Context, input string, options ...ExecutionOption) (*AgentResult, error) {
 	startTime := time.Now()
 
@@ -568,10 +597,10 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	tracer := otel.Tracer("stratum/agent")
 	executionAttrs := agentExecutionAttributes(snap.agentID, snap.agentName, snap.agentType, *cfg, snap.maxContextTokens)
 	requestSpan := oteltrace.SpanFromContext(ctx)
+	// requestSpan 属性注入保留，供被保留的 HTTP trace 关联 agent 元数据。
 	requestSpan.SetAttributes(executionAttrs...)
-	ctx, execSpan := tracer.Start(ctx, "agent.execute",
-		oteltrace.WithAttributes(executionAttrs...),
-	)
+	// agent.execute 恒为独立根 span（WithNewRoot），理由见 startAgentExecuteSpan。
+	ctx, execSpan := startAgentExecuteSpan(ctx, tracer, executionAttrs)
 	defer execSpan.End()
 
 	memCtx, memErr := a.injectMemoryContext(ctx, tracer, cfg, snap.agentID, snap.memoryScope, input)
@@ -658,6 +687,30 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	return result, execErr
 }
 
+// startAgentExecuteSpan 创建 agent.execute 独立根 span（WithNewRoot）：SDK
+// 采样器只对无父 root span 调用 ShouldSample（见 pkg/observability
+// agentSampler），带专用属性即 100% 采样，collector tail_sampling 也按此 keep。
+// HTTP/工作流等上游根 span 不加此属性、保持各自采样率，但 agent 执行本体从
+// 任何入口触发都独立成根而恒采样——否则 HTTP 入口的 agent.execute 是 otelgin
+// 根的子 span，ParentBased 会按父采样位短路，OTEL_SAMPLING_RATIO=0.1 下 90%
+// 被 SDK 丢弃，collector 规则救不回。独立根不破坏业务关联：trace_id 来自请求
+// payload（cfg.TraceID），非 OTEL span 链路。
+func startAgentExecuteSpan(
+	ctx context.Context,
+	tracer oteltrace.Tracer,
+	executionAttrs []attribute.KeyValue,
+) (context.Context, oteltrace.Span) {
+	// copy-then-append：避免就地修改调用方底层数组，同时让 gocritic appendAssign
+	// 看到 append 结果赋回同一变量（execAttrs := append(executionAttrs, ...) 会被误报）。
+	execAttrs := make([]attribute.KeyValue, 0, len(executionAttrs)+1)
+	execAttrs = append(execAttrs, executionAttrs...)
+	execAttrs = append(execAttrs, attribute.Bool(observability.AgentExecuteAttrKey, true))
+	return tracer.Start(ctx, "agent.execute",
+		oteltrace.WithNewRoot(),
+		oteltrace.WithAttributes(execAttrs...),
+	)
+}
+
 func recordFingerprintAndKPI(
 	metrics observability.MetricsProvider,
 	execSpan, requestSpan oteltrace.Span,
@@ -678,7 +731,7 @@ func recordFingerprintAndKPI(
 		resolved = result.ModelResolved
 	}
 	fp := CaptureFingerprint(resolved, result.ModelRoutedVia, systemPrompt, skillRevisionHashes(cfg.SkillCatalog),
-		tunableSnapshot(cfg, maxContextTokens), 0)
+		tunableConfigVersion(cfg, maxContextTokens), tunableSnapshot(cfg, maxContextTokens), 0)
 	fpAttrs := fingerprintAttributes(fp)
 	execSpan.SetAttributes(fpAttrs...)
 	requestSpan.SetAttributes(fpAttrs...)
@@ -798,7 +851,9 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 		initState.Actives = restoredActives
 	}
 	initState.PlanNodeExecutor = a.buildPlanNodeExecutor(ec, ec.capGW)
+	initState.DelegateExecutor = a.buildDelegateExecutor(ec, ec.capGW)
 	if a.RecallMemoryFn != nil {
+
 		fn := a.RecallMemoryFn
 		initState.RecallMemoryFn = func(ctx context.Context, input map[string]any) (string, error) {
 			return fn(ctx, ec.cfg.TenantID, ec.cfg.UserID, ec.agentID, ec.memoryScope, input)
@@ -1041,6 +1096,7 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 	initMessages = a.maybeInjectTaskResume(ctx, ec, initMessages)
 	initState := a.buildReActInitState(ec, initMessages, maxTokens)
 	initState.StuckThreshold = stuckThreshold
+	initState.DelegateExecutor = a.buildDelegateExecutor(ec, ec.capGW)
 	if a.RecallMemoryFn != nil {
 		fn := a.RecallMemoryFn
 		initState.RecallMemoryFn = func(ctx context.Context, input map[string]any) (string, error) {
@@ -1100,13 +1156,17 @@ func taskTokensOf(msgs []port.LLMMessage) int {
 }
 
 // promptVersionMap builds the prompt key → version fingerprint map carried
-// into the ReAct loop. Only the system prompt is fingerprinted today;
-// registry-driven prompts (if re-introduced) add their own keys here.
-func promptVersionMap(systemPromptVersion string) map[string]string {
-	if systemPromptVersion == "" {
-		return nil
+// into the ReAct loop. system_prompt is recorded only when a prompt revision
+// is applied; config (the effective tunable snapshot fingerprint) is always
+// present so the run stays attributable even with an empty system prompt.
+// Never returns nil — the config key must survive the empty-prompt boundary
+// (previously a nil map dropped the whole map).
+func promptVersionMap(systemPromptVersion, configVersion string) map[string]string {
+	m := map[string]string{"config": configVersion}
+	if systemPromptVersion != "" {
+		m["system_prompt"] = systemPromptVersion
 	}
-	return map[string]string{"system_prompt": systemPromptVersion}
+	return m
 }
 
 // resolveMaxOutputTokens 解析单次 LLM 请求的输出上限：显式 MaxTokens >
@@ -1124,6 +1184,14 @@ func resolveMaxOutputTokens(explicit, reserve int) int {
 func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port.LLMMessage, maxTokens int) agentgraph.ReActState {
 	availableTools := buildBuiltinTools(ec.workspaceNames, ec.workspaceDescs,
 		len(ec.workspaceNames) > 0 && ec.cfg.RAGSearchFn != nil, a.MemoryInjector != nil)
+	// delegate 启停过滤：未启用时不暴露 stratum_delegate 工具，避免模型浪费轮次
+	// （execDelegateTool 的 fail-closed 兜底仍在）。mergeTools 后过滤，ExtraTools
+	// 侧若混入同名也一并剔除。
+	available := mergeTools(availableTools, ec.cfg.ExtraTools, a.Logger)
+	if !ec.cfg.DelegateEnabled {
+		available = withoutDelegateTool(available)
+	}
+
 	// 压缩冷却默认启用（Spec 第 4 节）：平台参数 agent.compaction_cooldown_sec
 	// 已在 Execute 解析进 cfg；0 = constants.DefaultCompactionCooldown，option
 	// 仍可覆盖。
@@ -1146,7 +1214,8 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		TokenCorrection:            1.0,
 		Messages:                   initMessages,
 		OnToken:                    ec.cfg.TokenCallback,
-		AvailableTools:             mergeTools(availableTools, ec.cfg.ExtraTools, a.Logger),
+		OnDelegateEvent:            ec.cfg.DelegateEventCallback,
+		AvailableTools:             available,
 		SkillCatalog:               ec.cfg.SkillCatalog,
 		Actives:                    ec.cfg.Actives,
 		TracePayloadStore:          ec.cfg.TracePayloadStore,
@@ -1157,7 +1226,7 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		ViewerID:                   ec.cfg.UserID,
 		RAGSearchFn:                ec.cfg.RAGSearchFn,
 		RAGSearchFnWithEvidence:    ec.cfg.RAGSearchFnWithEvidence,
-		PromptVersions:             promptVersionMap(ec.cfg.SystemPromptVersion),
+		PromptVersions:             promptVersionMap(ec.cfg.SystemPromptVersion, tunableConfigVersion(ec.cfg, maxTokens)),
 		OfficialDocsSearchFn:       ec.cfg.OfficialDocsSearchFn,
 		DiagnosticFn:               ec.cfg.DiagnosticFn,
 		ProposalCreateFn:           ec.cfg.ProposalCreateFn,
@@ -1172,6 +1241,11 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		// 成本预算：registry 参数 agent.max_tokens_per_execution 经
 		// WithMaxTokensPerExecution 覆盖，0 = 不设限（Spec 第 3 节）。
 		MaxTokensPerExecution: ec.cfg.MaxTokensPerExecution,
+		// 委托参数：深度/步数 0=unset 在此归一化（回落全局默认 + clamp 硬上限）；
+		// 启用状态直接取 ExecutionConfig（snapshot 已回填 agent 配置）。
+		DelegateEnabled:         ec.cfg.DelegateEnabled,
+		DelegateMaxDepth:        resolvedDelegateMaxDepth(ec.cfg.DelegateMaxDepth),
+		DelegateDefaultMaxSteps: resolvedDelegateDefaultSteps(ec.cfg.DelegateDefaultMaxSteps),
 		// Budget 账本快照：一次执行一个，初始组装与 ReAct 循环共享同一来源。
 		// 循环侧任务 = 最新用户消息，经 WithTask 从 HistoryCap 扣减（I3）。
 		Budget:               agentgraph.ComputeBudget(maxTokens, ec.cfg.OutputReserve, 0).WithTask(taskTokensOf(initMessages)),
@@ -1224,6 +1298,154 @@ func (a *BaseAgent) buildPlanNodeExecutor(ec agentExecContext, capGW port.Capabi
 			TokensUsed: final.TotalTokens - child.TotalTokens,
 		}, nil
 	}
+}
+
+// buildDelegateExecutor 构造 stratum_delegate 的执行器（application 层闭包，经
+// guard 的 DelegateExecutor 分支调用）。镜像 buildPlanNodeExecutor：child := parent
+// 值拷贝复用同一 agent 配置，独立 Messages 隔离上下文窗口，只回传摘要+token 增量。
+// 委托参数（深度/默认步数）已由 buildReActInitState 从 ExecutionConfig 填入 parent，
+// 子循环继承。
+func (a *BaseAgent) buildDelegateExecutor(ec agentExecContext, capGW port.CapabilityGateway) agentgraph.DelegateExecutor {
+	return func(childCtx context.Context, parent *agentgraph.ReActState, input agentgraph.DelegateInput) (agentgraph.DelegateOutput, error) {
+		nodeGraph, graphErr := agentgraph.BuildReActGraph(capGW, a.Ledger, a.Logger)
+		if graphErr != nil {
+			return agentgraph.DelegateOutput{}, graphErr
+		}
+		delegateID := uuid.NewString()
+		// 子循环 system 携带父 system prompt + 已算好的 memCtx + 全局后缀（复用父
+		// 执行记忆，零成本）。user 消息 = goal + 结构化外壳摘要指令。
+		systemMessage := port.LLMMessage{Role: "system", Content: ec.systemPrompt + ec.memCtx + globalSystemSuffix(ec.globalSuffix)}
+		userMessage := port.LLMMessage{Role: "user", Content: input.Goal + "\n\n" + agentgraph.DelegateSummaryInstruction}
+		child := *parent
+		// 步数门限按子循环自身重新计数：父循环已消耗的 Steps 不得在子循环首调即
+		// 触发 MaxLLMSteps 强制收尾（R17，security review）。预算仍由 child.Budget
+		// 继承，不受此重置影响。
+		child.Steps = 0
+		child.Messages = []port.LLMMessage{systemMessage, userMessage}
+		child.DelegateDepth = parent.DelegateDepth + 1
+		child.ActivePlan = nil
+		child.PlanToolsDisabled = true
+		// 子循环的任务是委托目标：预算快照按新任务重新扣减 history 配额（I3，
+		// 对齐 buildPlanNodeExecutor 的 WithTask）。
+		child.Budget = child.Budget.WithTask(tokenutil.EstimateText(input.Goal))
+		// 深度参数化过滤：仅当达到深度上限才移除 delegate 工具（默认 MaxDepth=1
+		// 时子循环不可再委托；MaxDepth=2 时 depth=1 的子循环仍可再委托一层）。
+		if child.DelegateDepth >= child.DelegateMaxDepth {
+			child.AvailableTools = withoutDelegateTool(child.AvailableTools)
+		}
+		maxSteps := agentgraph.MaxDelegateSteps(input.MaxSteps, child.DelegateDefaultMaxSteps)
+		child.MaxLLMSteps = maxSteps
+		// 子循环输出经摘要回传，不向父链流式 token（OnToken 置 nil）。
+		child.OnToken = nil
+		subSteps := maxSteps*2 + 1
+		// running/finished 帧由 graph 层 buildDelegateClosure 成对回调(SSE),此处
+		// 不再发空 status 事件;delegateID 仅用于 finished 帧与日志关联。
+		final, invokeErr := nodeGraph.Invoke(childCtx, child, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: subSteps})
+		if invokeErr != nil {
+			// 原始错误只进日志（wrap 上抛给 guard）；观察正文由 graph 层固定模板
+			// 承载，不把内部标识泄入下游错误正文。
+			a.Logger.Error("delegate sub-agent failed", zap.String("agent_id", ec.agentID),
+				zap.String("trace_id", ec.cfg.TraceID), zap.String("conversation_id", ec.cfg.ConversationID),
+				zap.String("delegate_id", delegateID), zap.Error(invokeErr))
+			// 失败路径也回传 DelegateID：graph 层 finished 失败帧据此关联 running 帧
+			// 与日志链路（成功帧同源）。
+			return agentgraph.DelegateOutput{DelegateID: delegateID}, fmt.Errorf("delegate sub-agent invoke: %w", invokeErr)
+		}
+		return agentgraph.DelegateOutput{
+			Summary:    parseDelegateSummary(final.Output),
+			Status:     parseDelegateStatus(final.Output),
+			TokensUsed: final.TotalTokens - child.TotalTokens,
+			StepsUsed:  final.Steps,
+			DelegateID: delegateID,
+		}, nil
+	}
+}
+
+// resolvedDelegateMaxDepth 归一化 per-agent 委托深度：0=unset 回落默认，clamp 到
+// 全局硬上限（MaxDelegateDepth），防误配导致深度失控。
+func resolvedDelegateMaxDepth(v int) int {
+	if v <= 0 {
+		v = constants.DefaultDelegateMaxDepth
+	}
+	if v > constants.MaxDelegateDepth {
+		v = constants.MaxDelegateDepth
+	}
+	return v
+}
+
+// resolvedDelegateDefaultSteps 归一化 per-agent 默认步数：0=unset 回落默认，clamp
+// 到 MaxDelegateMaxLLMSteps（与工具 schema maximum 一致）。
+func resolvedDelegateDefaultSteps(v int) int {
+	if v <= 0 {
+		v = constants.DefaultDelegateMaxLLMSteps
+	}
+	if v > constants.MaxDelegateMaxLLMSteps {
+		v = constants.MaxDelegateMaxLLMSteps
+	}
+	return v
+}
+
+// withoutDelegateTool 从工具面移除 stratum_delegate（未启用或已达深度上限时）。
+// 返回新 slice，不改写调用方 slice 底层数组。
+func withoutDelegateTool(tools []port.ToolDefinition) []port.ToolDefinition {
+	out := make([]port.ToolDefinition, 0, len(tools))
+	for _, td := range tools {
+		if td.Name == agentgraph.StratumDelegateToolName {
+			continue
+		}
+		out = append(out, td)
+	}
+	return out
+}
+
+// parseDelegateStatus 从子循环 final.Output 提取结构化外壳的 status 字段
+// （"success"|"partial"|"failed"）。子循环可能未按指令输出 JSON：整体解码失败时
+// 扫描最后一个 '{'..'}' 子串兜底，字段非法/缺失回落 partial，绝不 fail 主循环。
+// 外壳解析归属 application 层（graph 层只打包不回读）。
+func parseDelegateStatus(output string) string {
+	body := output
+	if !json.Valid([]byte(body)) {
+		if start := strings.LastIndex(body, "{"); start >= 0 {
+			if end := strings.LastIndex(body[start:], "}"); end >= 0 {
+				body = body[start : start+end+1]
+			}
+		}
+	}
+	var shell struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(body), &shell); err != nil {
+		return string(agentgraph.DelegateStatusPartial)
+	}
+	switch shell.Status {
+	case string(agentgraph.DelegateStatusSuccess), string(agentgraph.DelegateStatusPartial), string(agentgraph.DelegateStatusFailed):
+		return shell.Status
+	default:
+		return string(agentgraph.DelegateStatusPartial)
+	}
+}
+
+// parseDelegateSummary 从子循环 final.Output 提取结构化外壳的 summary 字段
+// （可读中文摘要），避免把子 agent 的原始 JSON 外壳原文塞给父上下文（M1，
+// product review）。解析逻辑与 parseDelegateStatus 对齐：整体解码失败时扫描最后
+// 一个 '{'..'}' 子串兜底；成功解析出非空 summary 才替换，否则回落原文——子循环
+// 未按指令输出 JSON 时原文即自然语言，可读性不受影响。
+func parseDelegateSummary(output string) string {
+	body := output
+	if !json.Valid([]byte(body)) {
+		if start := strings.LastIndex(body, "{"); start >= 0 {
+			if end := strings.LastIndex(body[start:], "}"); end >= 0 {
+				body = body[start : start+end+1]
+			}
+		}
+	}
+	var shell struct {
+		Summary string `json:"summary"`
+	}
+	if err := json.Unmarshal([]byte(body), &shell); err != nil || shell.Summary == "" {
+		return output
+	}
+	return shell.Summary
 }
 
 // recordTerminatedBy 在循环 span 上记录业务终止原因（Spec 第 3 节）。
@@ -1666,6 +1888,15 @@ func WithTokenCallback(cb func(string)) ExecutionOption {
 	}
 }
 
+// WithDelegateEventCallback sets a per-delegate progress callback (running /
+// finished), emitted by execDelegateTool through the ReAct state. It does not
+// enable streaming by itself; pair with WithTokenCallback on streamed paths.
+func WithDelegateEventCallback(cb func(agentgraph.DelegateEvent)) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.DelegateEventCallback = cb
+	}
+}
+
 // WithTenantID sets the tenant ID for the execution context.
 func WithTenantID(id string) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
@@ -1881,7 +2112,6 @@ func agentExecutionAttributes(agentID, agentName string, agentType AgentType, cf
 	}
 	manifest, _ := json.Marshal(resourceManifest)
 	assignments, _ := json.Marshal(experimentAssignments)
-	paramsJSON, _ := json.Marshal(tunableSnapshot(&cfg, maxContextTokens))
 	attrs := []attribute.KeyValue{
 		attribute.String("agent.id", agentID),
 		attribute.String("agent.type", string(agentType)),
@@ -1910,7 +2140,7 @@ func agentExecutionAttributes(agentID, agentName string, agentType AgentType, cf
 		attribute.String("opik.metadata.stratum.experiment_variant", cfg.EvolutionTrace.Variant),
 		attribute.String("opik.metadata.stratum.experiment_assignments", string(assignments)),
 		attribute.String("opik.metadata.stratum.resource_manifest", string(manifest)),
-		attribute.String("stratum.params.sha256", contentVersion(string(paramsJSON))),
+		attribute.String("stratum.params.sha256", tunableConfigVersion(&cfg, maxContextTokens)),
 	}
 	// 窗口来源与解析值必须始终可观测（Spec 第 1 节），不随
 	// CaptureParameters 门控；WindowSource 为空（preparation span）时不记录。
@@ -2041,6 +2271,23 @@ func buildBuiltinTools(workspaceNames, workspaceDescs []string, hasRAG, hasMemor
 		CapabilityID: "stratum_continue_reasoning",
 		NodeType:     domain.ObservationTypeAgent,
 		InputSchema:  jschema.Must(jschema.Object()).Map(),
+	})
+	// stratum_delegate：始终注册（定义恒定，不随 agent 漂移）。走 guard 全链路，
+	// 故 Metadata 显式声明 risk_level=read + policy_resolved=true（与 MCP 工具同构，
+	// AuthorizeTool 走无审批路径）。启停由 buildReActInitState 按 DelegateEnabled
+	// 过滤工具面 + execDelegateTool fail-closed 双保险。
+	tools = append(tools, port.ToolDefinition{
+		Name:         agentgraph.StratumDelegateToolName,
+		Description:  "Delegate a well-scoped sub-task to an isolated sub-agent that reuses your current configuration (same model, system prompt, tools, and knowledge). The sub-agent runs in a separate context window and returns a concise summary. Use it when a sub-task has clear boundaries and would benefit from isolated reasoning without polluting your context.",
+		ProviderType: domain.ProviderTypeBuiltin,
+		ProviderID:   agentgraph.StratumDelegateToolName,
+		CapabilityID: agentgraph.StratumDelegateToolName,
+		NodeType:     domain.ObservationTypeTool,
+		InputSchema: jschema.Must(jschema.Object(
+			jschema.RequiredProp("goal", jschema.StringRange(1, constants.DelegateMaxGoalRunes, "Self-contained goal for the sub-agent")),
+			jschema.OptionalProp("max_steps", jschema.Integer(jschema.Ptr(1), jschema.Ptr(constants.MaxDelegateMaxLLMSteps), "Max reasoning steps for the sub-agent (default from agent config, capped at 10)")),
+		)).Map(),
+		Metadata: map[string]any{"risk_level": "read", "policy_resolved": true},
 	})
 	return tools
 }
@@ -2207,6 +2454,9 @@ func fingerprintAttributes(fp *domain.ExecutionFingerprint) []attribute.KeyValue
 		attribute.String("stratum.fingerprint.prompt_version", fp.PromptVersion),
 		attribute.String("stratum.fingerprint.content_hash", fp.ContentHash()),
 		attribute.Int("stratum.fingerprint.ab_bucket", fp.ABBucket),
+	}
+	if fp.ConfigVersion != "" {
+		attrs = append(attrs, attribute.String("stratum.fingerprint.config", fp.ConfigVersion))
 	}
 	if len(fp.ModelRoutedVia) > 0 {
 		b, _ := json.Marshal(fp.ModelRoutedVia)

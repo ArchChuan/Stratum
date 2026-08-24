@@ -80,6 +80,16 @@ type ToolExecutionRequest struct {
 	ApprovalID    string
 	PolicyVersion string
 	MCPRevisionID string
+	// DelegateExecutor, when non-nil, routes the request to a sub-agent delegate
+	// execution instead of the MCP executor. It lives on the port layer because
+	// the graph package cannot import the application package that builds it.
+	// Additive field: zero value (nil) keeps every existing call site compiling.
+	DelegateExecutor DelegateToolRunFunc
 }
+
+// DelegateToolRunFunc executes a stratum_delegate tool call. Arguments is the
+// parsed delegate input ({goal, max_steps}); the returned MCPToolResult carries
+// the structured {summary, status, tokens_used} shell as text content.
+type DelegateToolRunFunc func(context.Context, map[string]any) (MCPToolResult, error)
 
 type ToolExecutionFn func(context.Context, ToolExecutionRequest) (any, error)

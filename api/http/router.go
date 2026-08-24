@@ -294,6 +294,11 @@ func registerParameterAdminRoutes(adminGroup *gin.RouterGroup, c *wiring.Contain
 	adminGroup.GET("/parameters/schema", paramHandler.Schema)
 	adminGroup.GET("/parameters", paramHandler.List)
 	adminGroup.PUT("/parameters", paramHandler.Update)
+	// 版本化配置端点（版本历史 / 创建草稿 / 发布 / 回滚），同组 RequireGlobalAdmin。
+	adminGroup.GET("/parameters/versions/:groupKey", paramHandler.Versions)
+	adminGroup.POST("/parameters/versions/:groupKey", paramHandler.CreateDraft)
+	adminGroup.POST("/parameters/versions/:groupKey/:versionID/publish", paramHandler.Publish)
+	adminGroup.POST("/parameters/versions/:groupKey/:versionID/rollback", paramHandler.Rollback)
 }
 
 // dlqReplayAdapter 把 pipeline.ReplayService 适配到 handler 的消费方接口
@@ -439,6 +444,9 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		agents.GET("/tool-approvals/history", requireActive, agentHandler.ListApprovalHistory)
 		agents.GET("/tool-approvals/:approvalID", requireActive, agentHandler.GetApprovalDetail)
 		agents.POST("/tool-approvals/:approvalID/execute", requireAdmin, requireActive, agentHandler.ExecuteApproval)
+		// 取消待批审批：requireActive 而非 requireAdmin——发起人（member）要能取消自己的
+		// 审批；越权由 service 层 row.UserID 归属校验兜底（ErrApprovalNotFound 关闭 oracle）。
+		agents.POST("/tool-approvals/:approvalID/cancel", requireActive, agentHandler.CancelToolApproval)
 		agents.PUT("/tool-approvals/:approvalID/assignee", requireAdmin, requireActive, agentHandler.SetApprovalAssignee)
 		agents.GET("/:id", agentHandler.GetAgent)
 		execLimiter := newRateLimiterStore(c, middleware.LLMExecRate, middleware.LLMExecBurst)

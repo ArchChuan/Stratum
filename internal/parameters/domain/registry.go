@@ -8,6 +8,33 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
+// 平台配置分组。GroupKey 是单一归属（每个平台参数恰好属于一组），
+// 与 043 迁移 platform_config_groups 的 seed 一一对应（registry 不变量
+// 测试守护一致性）。分组映射硬编码，禁止从外部配置读。
+const (
+	GroupAgent      = "agent"
+	GroupMemory     = "memory"
+	GroupEvaluation = "evaluation"
+	GroupTrace      = "trace"
+)
+
+// GroupForKey 从参数 key 推导平台分组（硬编码前缀映射，与 043 迁移
+// backfill 的 CASE 表达式一一对应）。非平台前缀返回空串——只对
+// ScopePlatform 键消费，资源键不进入平台快照。
+func GroupForKey(key string) string {
+	switch {
+	case strings.HasPrefix(key, "agent."):
+		return GroupAgent
+	case strings.HasPrefix(key, "memory."):
+		return GroupMemory
+	case strings.HasPrefix(key, "evaluation."):
+		return GroupEvaluation
+	case key == "trace.capture_parameters":
+		return GroupTrace
+	}
+	return ""
+}
+
 // ParametersRegistry is the code-level central registry of all optimizable /
 // tunable parameters. Built at startup from built-in definitions; the
 // evaluation loop and the frontend schema both read from it, replacing the
@@ -46,6 +73,11 @@ func NewParametersRegistry() *ParametersRegistry {
 func (r *ParametersRegistry) Register(def ParameterDefinition) error {
 	if def.Key == "" {
 		return fmt.Errorf("parameter registry: empty key")
+	}
+	// 平台参数自动推导分组归属（显式 GroupKey 可覆盖默认）；单一归属保证
+	// 每个平台键恰好属于一组。资源参数无分组，不参与平台快照。
+	if def.Scope == ScopePlatform && def.GroupKey == "" {
+		def.GroupKey = GroupForKey(def.Key)
 	}
 	if _, exists := r.byKey[def.Key]; exists {
 		return fmt.Errorf("parameter registry: duplicate key %s", def.Key)

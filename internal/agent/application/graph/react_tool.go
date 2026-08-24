@@ -175,6 +175,8 @@ func dispatchToolCall(toolCtx context.Context, tc port.ToolCall, s *ReActState, 
 		return execSearchKnowledgeTool(toolCtx, tc, s, toolStart, logger)
 	case "stratum_recall_memory":
 		return execRecallMemoryTool(toolCtx, tc, s, toolStart, logger)
+	case StratumDelegateToolName:
+		return execDelegateTool(toolCtx, tc, s, toolStart, logger)
 	default:
 		if result, matched := dispatchSystemAssistantTool(toolCtx, tc, s, toolStart); matched {
 			return result
@@ -963,6 +965,10 @@ func classifyToolProvider(name string, tools []port.ToolDefinition) toolProvider
 		return toolProviderRef{ToolType: domain.ToolTypeBuiltinRAG, ProviderType: domain.ProviderTypeBuiltin, ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
 	case "stratum_recall_memory":
 		return toolProviderRef{ToolType: domain.ToolTypeBuiltinMemory, ProviderType: domain.ProviderTypeBuiltin, ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
+	case StratumDelegateToolName:
+		// 委托走 guard 全链路（Authorization → jsonschema → ResultGuard），观测归因
+		// 对齐 stratum_continue_reasoning 风格：builtin provider / internal tool。
+		return toolProviderRef{ToolType: domain.ToolTypeInternal, ProviderType: domain.ProviderTypeBuiltin, ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
 	case "stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "stratum_complete_task":
 		return toolProviderRef{ToolType: domain.ToolTypeInternal, ProviderType: domain.ProviderTypeInternal, ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
 	default:

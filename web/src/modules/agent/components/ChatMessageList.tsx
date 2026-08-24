@@ -2,7 +2,7 @@ import { RobotOutlined, ThunderboltOutlined, UserOutlined } from '@ant-design/ic
 import { Empty, Skeleton, Spin, Tag, Typography } from 'antd';
 import { memo, type MutableRefObject, type RefObject, useEffect } from 'react';
 
-import type { ChatMessage } from '../model/agent';
+import type { ChatMessage, DelegateStatusView } from '../model/agent';
 
 import { BUBBLE, ChatMarkdown } from './ChatMarkdown';
 import { ChatStepList } from './ChatStepList';
@@ -13,6 +13,10 @@ import { SourceCardList } from './SourceCardList';
 import TaskProgressBanner from './TaskProgressBanner';
 
 const { Text } = Typography;
+
+// 委托目标可能很长(goal 上限 2000 字符),banner 只展示截断前缀。
+const truncateDisplay = (text: string, max: number) =>
+  text.length > max ? `${text.slice(0, max)}…` : text;
 
 interface Props {
   messages: ChatMessage[];
@@ -26,6 +30,7 @@ interface Props {
   pinnedToBottomRef: MutableRefObject<boolean>;
   isMobile?: boolean;
   contentSwitching?: boolean;
+  delegateStatus?: DelegateStatusView;
 }
 
 // StreamingBubble renders plain text + blinking cursor during streaming to avoid
@@ -132,6 +137,11 @@ const MessageItem = memo(function MessageItem({
             <Tag color="orange">已中断</Tag>
           </div>
         )}
+        {m.approvalRejected && (
+          <div style={{ marginTop: 6 }}>
+            <Tag color="volcano">工具审批未通过，该工具未执行</Tag>
+          </div>
+        )}
         {m.role === 'assistant' && !streaming && (
           <ChatStepList steps={m.steps} />
         )}
@@ -152,9 +162,18 @@ export const ChatMessageList = ({
   pinnedToBottomRef,
   isMobile = false,
   contentSwitching = false,
+  delegateStatus = null,
 }: Props) => {
   // The last message is the in-flight assistant bubble while streaming.
   const streamingMsgId = sending && messages.length > 0 ? messages[messages.length - 1].id : null;
+
+  // 跨会话隔离:delegate 状态属于发起它的会话,切走后不展示(避免 A 会话委托的
+  // running/failed banner 泄漏到 B 会话);conversationId 为空(极早期)时仍展示。
+  const activeDelegate =
+    delegateStatus &&
+    (!delegateStatus.conversationId || !selectedConv || delegateStatus.conversationId === selectedConv)
+      ? delegateStatus
+      : null;
 
   // Detect manual scroll: unpin when user scrolls up, re-pin when near bottom.
   useEffect(() => {
@@ -228,6 +247,35 @@ export const ChatMessageList = ({
             <Text type="secondary" style={{ fontSize: 12 }}>
               Agent 正在处理…
             </Text>
+          </div>
+        )}
+        {activeDelegate?.status === 'running' && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              alignSelf: 'flex-start',
+            }}
+          >
+            <Spin size="small" />
+            <Tag color="blue">
+              子 Agent 正在执行{activeDelegate.goal ? `：${truncateDisplay(activeDelegate.goal, 30)}` : ''}
+            </Tag>
+          </div>
+        )}
+        {activeDelegate?.status === 'finished' && activeDelegate.resultStatus === 'failed' && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              alignSelf: 'flex-start',
+            }}
+          >
+            <Tag color="red">
+              子 Agent 委托失败{activeDelegate.goal ? `：${truncateDisplay(activeDelegate.goal, 30)}` : ''}
+            </Tag>
           </div>
         )}
           <div ref={bottomRef} />
