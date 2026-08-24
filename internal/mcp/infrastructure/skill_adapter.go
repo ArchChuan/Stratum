@@ -198,6 +198,35 @@ func (r *MCPToolRegistry) RegisterServer(ctx context.Context, tenantID, serverID
 	return nil
 }
 
+// EnsureCatalog 返回 tenant:server 的工具目录；目录缺失时实时发现并注册
+// （幂等）。与 RegisterServer 的"已存在即报错"语义不同，EnsureCatalog 对
+// 已存在目录直接返回，供两条路径复用：backend 重启后 restoreServer 重建
+// catalog（治本），以及 agent 工具暴露时 GetCatalogForServer 命中 nil 的
+// 实时兜底（防御，会触发 manager 的懒恢复连接）。
+func (r *MCPToolRegistry) EnsureCatalog(ctx context.Context, tenantID, serverID string) (*MCPToolCatalog, error) {
+	if tenantID == "" {
+		// fail closed: 与 RegisterServer 一致，拒绝落进共享 "":serverID 桶。
+		return nil, errors.New("mcp registry: tenantID is required")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	key := registryKey(tenantID, serverID)
+	if catalog, exists := r.adapters[key]; exists {
+		return catalog, nil
+	}
+
+	adapter := NewMCPToolCatalog(tenantID, serverID, r.manager, r.logger)
+	if _, err := adapter.DiscoverTools(ctx); err != nil {
+		return nil, err
+	}
+
+	r.adapters[key] = adapter
+	r.logger.Info("registered MCP server",
+		zap.String("tenant_id", tenantID), zap.String("server_id", serverID))
+	return adapter, nil
+}
+
 // UnregisterServer 注销 MCP 服务器
 func (r *MCPToolRegistry) UnregisterServer(tenantID, serverID string) error {
 	if tenantID == "" {

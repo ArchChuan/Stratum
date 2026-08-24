@@ -3284,6 +3284,15 @@ func (s *AgentService) buildMCPTools(
 			tools = append(tools, tool)
 		}
 	}
+	if len(mcpToolIDs) > 0 && len(tools) == 0 {
+		// 显式暴露工具缺失：agent 绑定了 MCP 工具但最终一个都没暴露。
+		// 此前静默 drop，远端故障表现为"模型无 MCP 工具可调用"却无任何日志，
+		// 排查困难。这里显式告警（含绑定 ID，便于定位是 catalog 空还是
+		// 服务端未返回对应工具）。
+		s.deps.Logger.Warn("agent bound MCP tools but none exposed",
+			zap.String("tenant_id", tenantID),
+			zap.Strings("bound_tool_ids", mcpToolIDs))
+	}
 	return tools
 }
 

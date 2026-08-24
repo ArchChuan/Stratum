@@ -66,6 +66,12 @@ type ClientManager struct {
 	// 加解密对零值密钥对称可用，因此零值必须由 WithSecretKey 拒绝——
 	// 否则 wiring 漏传时落到公开常量密钥（伪安全），密文形同明文。
 	secretKey [32]byte
+
+	// onServerRestored 由 wiring 注入：restoreServer 连接成功后重建
+	// MCPToolRegistry 的 catalog。registry 依赖 manager（构造时传入），
+	// 直接持有会成环，因此用回调解耦——否则 backend 重启后 catalog 保持
+	// 为空，agent 绑定的 MCP 工具会被 buildMCPTools 静默丢弃。
+	onServerRestored func(context.Context, string, string) error
 }
 
 // WithSecretKey 注入 at-rest 加密密钥。由组合根在构造后立即调用；
@@ -113,6 +119,14 @@ func NewClientManager(
 		return c
 	}
 	return manager
+}
+
+// SetOnServerRestored injects a hook invoked after restoreServer successfully
+// reconnects an MCP server during RestoreFromDB. Wiring wires it to
+// MCPToolRegistry.EnsureCatalog so the tool catalog is rebuilt on startup;
+// without it the registry stays empty until an admin edits that server.
+func (m *ClientManager) SetOnServerRestored(fn func(context.Context, string, string) error) {
+	m.onServerRestored = fn
 }
 
 // SetMetrics injects the observability MetricsProvider (no-ops until set).
@@ -552,6 +566,15 @@ func (m *ClientManager) getOrRestoreClient(ctx context.Context, serverID string)
 	return nil, fmt.Errorf("client not found: %s", serverID)
 }
 
+// GetOrRestoreClient returns the live client for serverID, lazily reconnecting
+// from persisted config when the client was evicted by the idle reaper or
+// dropped by a transient reconnect. Agent tool execution uses this path so a
+// long-idle (or briefly disconnected) MCP server recovers on the next tool
+// call instead of failing with "client not found".
+func (m *ClientManager) GetOrRestoreClient(ctx context.Context, serverID string) (MCPClient, error) {
+	return m.getOrRestoreClient(ctx, serverID)
+}
+
 // waitForClient polls GetClient until the client appears or the timeout expires.
 func (m *ClientManager) waitForClient(ctx context.Context, serverID string, timeout time.Duration) MCPClient {
 	deadline := time.Now().Add(timeout)
@@ -891,19 +914,42 @@ func (m *ClientManager) swapReconnectClient(ctx context.Context, key string, can
 // （reconnectClient），并发失败风暴收敛为每 server 一次重建。
 func (m *ClientManager) performHealthCheck() {
 	m.mu.RLock()
+	clients := make([]struct {
+		key    string
+		client MCPClient
+	}, 0, len(m.clients))
+	for k, v := range m.clients {
+		clients = append(clients, struct {
+			key    string
+			client MCPClient
+		}{k, v})
+	}
+	m.mu.RUnlock()
+
+	// 主动 ping 探活（协议保活）：服务端单方面关闭的 streamable-http session
+	// 在本端仍可能显示 healthy，只有主动 ping 才能发现并重建。仅连接死亡
+	// （ErrSessionMissing / ErrClientClosed / ErrTransportTimeout）才走单飞
+	// 重连；transient 拒绝（429/5xx，ErrTransportFailed 投影）由 HealthCheck
+	// 标记 unhealthy 但不重建——SDK 会为该类错误保持连接，重建反而触发
+	// 不必要的重连循环。
 	var unhealthy []struct {
 		key    string
 		client MCPClient
 	}
-	for k, v := range m.clients {
-		if !v.IsHealthy() {
-			unhealthy = append(unhealthy, struct {
-				key    string
-				client MCPClient
-			}{k, v})
+	for _, entry := range clients {
+		wasHealthy := entry.client.IsHealthy()
+		ctx, cancel := context.WithTimeout(m.serverCtx, 10*time.Second)
+		err := entry.client.HealthCheck(ctx)
+		cancel()
+		if !wasHealthy {
+			// 存量不健康：维持原有语义，单飞重建。
+			unhealthy = append(unhealthy, entry)
+		} else if err != nil && unhealthyError(err) {
+			// 主动探活发现连接死亡（服务端单方面关闭的 session）；transient
+			// 拒绝（ErrTransportFailed）不在此列，HealthCheck 仅标记 unhealthy。
+			unhealthy = append(unhealthy, entry)
 		}
 	}
-	m.mu.RUnlock()
 
 	for _, entry := range unhealthy {
 		ctx, cancel := context.WithTimeout(m.serverCtx, 10*time.Second)
@@ -1059,6 +1105,17 @@ func (m *ClientManager) restoreServer(ctx context.Context, tenantID string, cfg 
 		m.logger.Info("RestoreFromDB: reconnected MCP server",
 			zap.String("tenant_id", tenantID),
 			zap.String("server_id", cfg.ID))
+		// 重建 registry catalog（wiring 注入的 EnsureCatalog）。缺失时
+		// buildMCPTools 会静默丢弃 agent 绑定的 MCP 工具，直到 admin 重存
+		// 该 server 才恢复——重启后必须在这里补齐。失败仅 warn，不阻塞启动。
+		if m.onServerRestored != nil {
+			if regErr := m.onServerRestored(connectCtx, tenantID, cfg.ID); regErr != nil {
+				m.logger.Warn("RestoreFromDB: failed to rebuild MCP tool catalog",
+					zap.String("tenant_id", tenantID),
+					zap.String("server_id", cfg.ID),
+					zap.Error(regErr))
+			}
+		}
 	}
 }
 

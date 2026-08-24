@@ -61,6 +61,9 @@ type MCPClient interface {
 	Disconnect(ctx context.Context) error
 	IsConnected() bool
 	IsHealthy() bool
+	// HealthCheck 探活（协议 ping）。manager 的周期性健康检查对每个在册
+	// client 调用它来保活连接并发现服务端单方面关闭的 session。
+	HealthCheck(ctx context.Context) error
 	CallTool(ctx context.Context, toolName string, input interface{}) (interface{}, error)
 	ListTools(ctx context.Context) ([]*MCPTool, error)
 	ListResources(ctx context.Context) ([]*MCPResource, error)
@@ -433,6 +436,10 @@ func (c *BaseClient) HealthCheck(ctx context.Context) error {
 	} else if err == nil {
 		c.healthy = true
 		c.lastHealthy = time.Now()
+		// ping 是保活流量：成功也刷新 lastActivity，否则仅被 health check
+		// ping 而无工具调用的连接会被 idle eviction 按 LastActivity 误驱逐
+		// （驱逐后 agent 工具调用需重建连接，造成不必要的延迟）。
+		c.lastActivity = time.Now()
 	}
 	c.mu.Unlock()
 

@@ -36,6 +36,12 @@ func (f *fakeMCPClient) Disconnect(context.Context) error {
 }
 func (f *fakeMCPClient) IsConnected() bool { return true }
 func (f *fakeMCPClient) IsHealthy() bool   { return f.healthy }
+func (f *fakeMCPClient) HealthCheck(context.Context) error {
+	if !f.healthy {
+		return errors.New("mcp client unhealthy")
+	}
+	return nil
+}
 func (f *fakeMCPClient) LastActivity() time.Time {
 	if f.lastActivity.IsZero() {
 		return time.Now()
@@ -406,4 +412,143 @@ func TestSwapReconnectClientConcurrentWithDisconnect(t *testing.T) {
 	_, present := m.clients[key]
 	m.mu.RUnlock()
 	require.False(t, present, "no client may survive after teardown of its server")
+}
+
+// pingFailMCPClient 表面 healthy，但主动 ping（HealthCheck）总是暴露连接死亡
+// （服务端单方面关闭 session 的模拟）：用于验证 performHealthCheck 的主动探活
+// 能发现这种"本地仍显示 healthy、实际已死"的连接并触发单飞重建。
+type pingFailMCPClient struct {
+	healthy         bool
+	disconnectCalls int
+}
+
+func (c *pingFailMCPClient) Connect(context.Context) error { return nil }
+func (c *pingFailMCPClient) Disconnect(context.Context) error {
+	c.disconnectCalls++
+	return nil
+}
+func (c *pingFailMCPClient) IsConnected() bool { return true }
+func (c *pingFailMCPClient) IsHealthy() bool   { return c.healthy }
+func (c *pingFailMCPClient) HealthCheck(context.Context) error {
+	return mcpdomain.ErrSessionMissing
+}
+func (c *pingFailMCPClient) CallTool(context.Context, string, any) (any, error) { return nil, nil }
+func (c *pingFailMCPClient) ListTools(context.Context) ([]*MCPTool, error)      { return nil, nil }
+func (c *pingFailMCPClient) ListResources(context.Context) ([]*MCPResource, error) {
+	return nil, nil
+}
+func (c *pingFailMCPClient) GetServerInfo() *MCPServerInfo { return &MCPServerInfo{} }
+func (c *pingFailMCPClient) LastActivity() time.Time       { return time.Now() }
+
+// TestMCPToolRegistryEnsureCatalogIdempotent 验证 EnsureCatalog（治本 + 防御的
+// 共用入口）：目录缺失时实时发现并注册，重复调用幂等返回同一 adapter。
+func TestMCPToolRegistryEnsureCatalogIdempotent(t *testing.T) {
+	logger := zap.NewNop()
+	client := &fakeMCPClient{tools: []*MCPTool{{Name: "search", Description: "Search"}}}
+	m := managerWithClients(t, "t1", map[string]MCPClient{"t1:s1": client})
+	r := NewMCPToolRegistry(m, logger)
+
+	c1, err := r.EnsureCatalog(tenantCtx(t, "t1"), "t1", "s1")
+	require.NoError(t, err)
+	require.NotNil(t, c1)
+	require.Len(t, c1.GetAllTools(), 1)
+	require.Equal(t, "mcp:s1:search", c1.GetAllTools()[0].ID)
+
+	// 幂等：目录已存在时直接返回，不重复发现。
+	c2, err := r.EnsureCatalog(tenantCtx(t, "t1"), "t1", "s1")
+	require.NoError(t, err)
+	require.Same(t, c1, c2)
+
+	// 空 tenant fail-closed：不得落进共享 "":serverID 桶。
+	_, err = r.EnsureCatalog(tenantCtx(t, "t1"), "", "s1")
+	require.Error(t, err)
+	require.Nil(t, r.GetCatalogForServer("", "s1"))
+
+	// 未连接 server：实时发现失败 → 错误传播且不注册。
+	_, err = r.EnsureCatalog(tenantCtx(t, "t1"), "t1", "ghost")
+	require.Error(t, err)
+	require.Nil(t, r.GetCatalogForServer("t1", "ghost"))
+}
+
+// TestRestoreServerRebuildsCatalog 验证治本路径：backend 重启后 restoreServer
+// 连接成功即触发 onServerRestored 回调（wiring 注入 EnsureCatalog），registry
+// catalog 重建，agent 绑定工具不再被静默丢弃。
+func TestRestoreServerRebuildsCatalog(t *testing.T) {
+	logger := zap.NewNop()
+	client := &fakeMCPClient{tools: []*MCPTool{{Name: "search", Description: "Search"}}}
+	m := newManagerWithFactory(t, func(*MCPServerConfig, *zap.Logger) MCPClient { return client })
+	r := NewMCPToolRegistry(m, logger)
+
+	cbCalled := false
+	m.SetOnServerRestored(func(ctx context.Context, tenantID, serverID string) error {
+		cbCalled = true
+		_, err := r.EnsureCatalog(ctx, tenantID, serverID)
+		return err
+	})
+
+	cfg := &MCPServerConfig{ID: "s1", Name: "Server 1", Transport: "http", Version: "v1"}
+	m.restoreServer(tenantCtx(t, "t1"), "t1", cfg)
+
+	require.True(t, cbCalled, "restoreServer must invoke the catalog rebuild hook on success")
+	catalog := r.GetCatalogForServer("t1", "s1")
+	require.NotNil(t, catalog, "catalog must be rebuilt after restore")
+	require.Len(t, catalog.GetAllTools(), 1)
+	require.Equal(t, "mcp:s1:search", catalog.GetAllTools()[0].ID)
+}
+
+// TestRestoreServerConnectFailureSkipsRebuild 验证失败分支：连接失败时不触发
+// catalog 重建（回调不调用），连接恢复只能靠后续健康检查或显式 reconnect。
+func TestRestoreServerConnectFailureSkipsRebuild(t *testing.T) {
+	logger := zap.NewNop()
+	client := &fakeMCPClient{connectErr: errors.New("refused")}
+	m := newManagerWithFactory(t, func(*MCPServerConfig, *zap.Logger) MCPClient { return client })
+	r := NewMCPToolRegistry(m, logger)
+
+	cbCalled := false
+	m.SetOnServerRestored(func(ctx context.Context, tenantID, serverID string) error {
+		cbCalled = true
+		_, err := r.EnsureCatalog(ctx, tenantID, serverID)
+		return err
+	})
+
+	m.restoreServer(tenantCtx(t, "t1"), "t1", &MCPServerConfig{ID: "s1", Transport: "http"})
+	require.False(t, cbCalled)
+	require.Nil(t, r.GetCatalogForServer("t1", "s1"))
+}
+
+// TestClientManagerHealthCheckPingsAndReconnectsDeadSession 验证保活 A：
+// performHealthCheck 主动 ping，发现表面 healthy 但实际已死（服务端单方面关闭
+// session）的连接并单飞重建——修复前只靠 isHealthy 状态无法发现这类死连接。
+func TestClientManagerHealthCheckPingsAndReconnectsDeadSession(t *testing.T) {
+	manager := NewClientManager(zap.NewNop(), nil, nil)
+	key := tenantKey("", "server-1")
+	old := &pingFailMCPClient{healthy: true}
+	manager.clients[key] = old
+	manager.configs[key] = &MCPServerConfig{ID: "server-1", Name: "test", Transport: "http"}
+	var fresh *reconnectMCPClient
+	manager.clientFactory = func(*MCPServerConfig, *zap.Logger) MCPClient {
+		fresh = &reconnectMCPClient{}
+		return fresh
+	}
+
+	manager.performHealthCheck()
+
+	require.Equal(t, 1, old.disconnectCalls, "dead-session client must be displaced")
+	require.Same(t, fresh, manager.clients[key], "fresh client must be installed after ping-detected death")
+}
+
+// TestClientManagerHealthCheckKeepsHealthyClient 验证健康连接被 ping 后保持不
+// 动（无重建、无断开），避免对正常连接产生无谓的 churn。
+func TestClientManagerHealthCheckKeepsHealthyClient(t *testing.T) {
+	manager := NewClientManager(zap.NewNop(), nil, nil)
+	key := tenantKey("", "server-1")
+	stable := &reconnectMCPClient{healthy: true}
+	manager.clients[key] = stable
+	manager.configs[key] = &MCPServerConfig{ID: "server-1", Name: "test", Transport: "http"}
+	manager.clientFactory = func(*MCPServerConfig, *zap.Logger) MCPClient { return &reconnectMCPClient{} }
+
+	manager.performHealthCheck()
+
+	require.Zero(t, stable.disconnectCalls, "healthy client must not be displaced")
+	require.Same(t, stable, manager.clients[key])
 }

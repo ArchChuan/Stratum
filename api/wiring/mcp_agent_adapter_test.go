@@ -12,6 +12,8 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestMCPAgentToolAdapterKeepsStableExposedIDAndRawToolName(t *testing.T) {
@@ -31,20 +33,46 @@ func TestMCPAgentToolAdapterKeepsStableExposedIDAndRawToolName(t *testing.T) {
 	}
 }
 
+// TestMCPAgentToolAdapterFallsBackToLiveDiscoveryOnMissingCatalog 验证防御兜底：
+// catalog 缺失（backend 重启后未重建，或从未经 admin 写入触发注册）时，
+// ToolsForServer 实时走 EnsureCatalog 发现；发现失败（无 client 等）显式 warn
+// 并返回 nil，不再静默丢工具。真正的成功兜底路径由 EnsureCatalog 幂等测试与
+// 远端 E2E 覆盖。
+func TestMCPAgentToolAdapterFallsBackToLiveDiscoveryOnMissingCatalog(t *testing.T) {
+	manager := mcp.NewClientManager(zap.NewNop(), nil, nil)
+	registry := mcp.NewMCPToolRegistry(manager, zap.NewNop())
+	core, logs := observer.New(zapcore.WarnLevel)
+	adapter := mcpAgentToolAdapter{registry: registry, logger: zap.New(core)}
+
+	tools := adapter.ToolsForServer(context.Background(), "tenant-1", "ghost")
+
+	require.Nil(t, tools)
+	warns := logs.FilterMessage("MCP tool catalog missing; live discovery failed")
+	require.Equal(t, 1, warns.Len(), "fallback failure must be logged explicitly, not silently dropped")
+}
+
 type stubMCPClientResolver struct {
 	client mcp.MCPClient
 }
 
 func (r stubMCPClientResolver) GetClient(context.Context, string) mcp.MCPClient { return r.client }
 
+func (r stubMCPClientResolver) GetOrRestoreClient(_ context.Context, _ string) (mcp.MCPClient, error) {
+	if r.client == nil {
+		return nil, errors.New("client not found")
+	}
+	return r.client, nil
+}
+
 type failingAgentMCPClient struct {
 	err error
 }
 
-func (c failingAgentMCPClient) Connect(context.Context) error    { return nil }
-func (c failingAgentMCPClient) Disconnect(context.Context) error { return nil }
-func (c failingAgentMCPClient) IsConnected() bool                { return true }
-func (c failingAgentMCPClient) IsHealthy() bool                  { return true }
+func (c failingAgentMCPClient) Connect(context.Context) error     { return nil }
+func (c failingAgentMCPClient) Disconnect(context.Context) error  { return nil }
+func (c failingAgentMCPClient) IsConnected() bool                 { return true }
+func (c failingAgentMCPClient) IsHealthy() bool                   { return true }
+func (c failingAgentMCPClient) HealthCheck(context.Context) error { return nil }
 func (c failingAgentMCPClient) CallTool(context.Context, string, interface{}) (interface{}, error) {
 	return nil, c.err
 }

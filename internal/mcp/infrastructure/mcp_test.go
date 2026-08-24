@@ -110,6 +110,12 @@ func (c *reconnectMCPClient) Connect(context.Context) error    { c.healthy = tru
 func (c *reconnectMCPClient) Disconnect(context.Context) error { c.disconnectCalls++; return nil }
 func (c *reconnectMCPClient) IsConnected() bool                { return true }
 func (c *reconnectMCPClient) IsHealthy() bool                  { return c.healthy }
+func (c *reconnectMCPClient) HealthCheck(context.Context) error {
+	if !c.healthy {
+		return errors.New("mcp client unhealthy")
+	}
+	return nil
+}
 func (c *reconnectMCPClient) CallTool(context.Context, string, interface{}) (interface{}, error) {
 	return nil, nil
 }
@@ -130,9 +136,10 @@ func (c *blockingMCPClient) Connect(ctx context.Context) error {
 	}
 }
 
-func (c *blockingMCPClient) Disconnect(context.Context) error { return nil }
-func (c *blockingMCPClient) IsConnected() bool                { return true }
-func (c *blockingMCPClient) IsHealthy() bool                  { return true }
+func (c *blockingMCPClient) Disconnect(context.Context) error  { return nil }
+func (c *blockingMCPClient) IsConnected() bool                 { return true }
+func (c *blockingMCPClient) IsHealthy() bool                   { return true }
+func (c *blockingMCPClient) HealthCheck(context.Context) error { return nil }
 func (c *blockingMCPClient) CallTool(context.Context, string, interface{}) (interface{}, error) {
 	return nil, nil
 }
@@ -569,6 +576,7 @@ func (c *revisionClientFake) Connect(context.Context) error {
 func (c *revisionClientFake) Disconnect(context.Context) error { c.disconnectCalls++; return nil }
 func (*revisionClientFake) IsConnected() bool                  { return true }
 func (*revisionClientFake) IsHealthy() bool                    { return true }
+func (*revisionClientFake) HealthCheck(context.Context) error  { return nil }
 func (c *revisionClientFake) CallTool(context.Context, string, interface{}) (interface{}, error) {
 	return c.result, nil
 }
