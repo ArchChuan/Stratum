@@ -15,6 +15,7 @@ import {
 import { useChatStream } from './ChatStreamContext';
 
 import { ACTIVE_EXECUTION_POLL_MS } from '@/constants';
+import { useAuth } from '@/modules/iam';
 
 const SS_AGENT = 'chat:lastAgentId';
 const ssConv = (aid: string) => `chat:lastConvId:${aid}`;
@@ -29,8 +30,9 @@ const terminalApprovalLabel = (status: string): string => {
       return '审批已拒绝';
     case 'expired':
       return '审批已过期';
-    case 'invalidated':
     case 'cancelled':
+      return '审批已取消';
+    case 'invalidated':
     case 'voided':
       return '审批已失效';
     case 'completed':
@@ -88,6 +90,7 @@ const makeMessage = (msg: {
 type UseChatPageOptions = { fixedAgentId?: string };
 
 export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
+  const { user } = useAuth();
   const [agents, setAgents] = useState<Agent[]>([]);
   // agents 列表加载失败标记：失败时侧栏显示错误态+重试，而非静默当作「没有 Agent」
   //（避免 agents=[] 导致下拉空、切换不了、会话列表看似消失）。
@@ -130,6 +133,13 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
   const resumeFailedExecIdsRef = useRef<Set<string>>(new Set());
   // 当前会话「自动续跑失败、需手动重试」态:供审批卡片显示可解释文案而非空转。
   const [resumeBlocked, setResumeBlocked] = useState(false);
+  // 终态护栏:同一会话连续 rejected/cancelled 终态触发续跑的次数;>=2 后不再自动
+  // 续跑,转手动入口(「是否让 Agent 继续?」)。会话切换重置。
+  const terminalResumeCountRef = useRef(0);
+  // 阻塞态可解释文案:H3 工具失败 vs 终态多次未通过 区分展示,ApprovalGate 覆盖默认。
+  const [resumeBlockedLabel, setResumeBlockedLabel] = useState('');
+  // 终态续跑标记:续跑成功收尾时给消息打「该工具未执行」持久痕迹(仿 interrupted)。
+  const terminalResumeMarkRef = useRef(false);
   useEffect(() => {
     agentIdRef.current = selectedAgent;
   });
@@ -152,6 +162,8 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
 
   useEffect(() => {
     clearStreamFailure();
+    // 终态护栏会话内计数:切会话/切 agent 重置。
+    terminalResumeCountRef.current = 0;
   }, [selectedAgent, selectedConv, clearStreamFailure]);
 
   useEffect(() => {
@@ -162,17 +174,23 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
   // SSE 等待审批帧并入待办:补附会话 id(发起人卡片按当前会话过滤用)。
   useEffect(() => {
     if (!streamApproval) return;
-    const withConv = { ...streamApproval, conversationId: streamConversationId || undefined };
+    // SSE 等待审批帧只发给发起执行流的会话本人;补附 userId(user.sub) 供对话页
+    // 「取消」按钮据此仅对发起人本人展示(admin 兜底走审批中心「拒绝」职责)。
+    const withConv = {
+      ...streamApproval,
+      conversationId: streamConversationId || undefined,
+      userId: user?.sub || streamApproval.userId,
+    };
     setPendingApprovals((rows) =>
       rows.some((r) => r.approvalId === withConv.approvalId) ? rows : [...rows, withConv],
     );
-  }, [streamApproval, streamConversationId]);
+  }, [streamApproval, streamConversationId, user?.sub]);
 
   // 自动续跑(审批已批准 / 刷新恢复 running|paused 共用):复用现有 SSE 链路,
   // 携带 execution_id 从 checkpoint 续流;token 追加到 streamMsgIdRef 对应消息,
   // 不新增 assistant 消息、不打断上下文。
   const doApprovalResume = useCallback(
-    (agentId: string, executionId: string, query: string) => {
+    (agentId: string, executionId: string, query: string, placeholder?: string) => {
       if (!selectedConv) return;
       resumingExecIdRef.current = executionId;
       setSending(true);
@@ -184,7 +202,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
         streamMsgIdRef.current = msgId;
         setMessages((prev) => [
           ...prev,
-          makeMessage({ id: msgId, role: 'assistant', content: '已批准，继续执行中…' }),
+          makeMessage({ id: msgId, role: 'assistant', content: placeholder ?? '已批准，继续执行中…' }),
         ]);
       }
       startStream(agentId, {
@@ -511,6 +529,9 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
         setResumeBlocked(false);
         setPendingApprovals((rows) => rows.filter((r) => r.conversationId !== selectedConv));
       }
+      // 终态续跑(取消/被拒)成功收尾:消费标记,给占位消息打「该工具未执行」持久痕迹。
+      const terminalMarked = terminalResumeMarkRef.current;
+      terminalResumeMarkRef.current = false;
       const finalContent = streamResult.output || accumulatedContent;
       setMessages((prev) =>
         prev.map((m) =>
@@ -518,6 +539,7 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
             ? {
                 ...m,
                 content: finalContent,
+                approvalRejected: terminalMarked || undefined,
                 steps: streamResult.steps,
                 artifacts: normalizeArtifacts(streamResult.artifacts),
                 // P1.2: done payload 的 sources（旧后端无此字段，?? [] 容错）
@@ -567,6 +589,15 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
     if (!selectedConv) return undefined;
     return pendingApprovals.find(
       (r) => r.conversationId === selectedConv && !isTerminalApproval(String(r.status)),
+    );
+  }, [pendingApprovals, selectedConv]);
+
+  // 终态审批(被拒/已取消):展示终态文案;终态护栏(连续 2 次未通过)转手动时,
+  // ApprovalGate 据此提供「让 Agent 继续」入口。
+  const terminalApproval = useMemo(() => {
+    if (!selectedConv) return undefined;
+    return pendingApprovals.find(
+      (r) => r.conversationId === selectedConv && (r.status === 'rejected' || r.status === 'cancelled'),
     );
   }, [pendingApprovals, selectedConv]);
 
@@ -630,6 +661,29 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
               ),
             );
           }
+          // 终态续跑(主需求):rejected/cancelled → 复用自动续跑链路,LLM 感知工具
+          // 未执行后自行收尾。防重:流已在跑/该 execution 在途/H3 失败集 跳过。
+          if (active.approvalStatus === 'rejected' || active.approvalStatus === 'cancelled') {
+            if (streamStateRef.current().streaming) return;
+            if (resumingExecIdRef.current === active.executionId) return;
+            if (resumeFailedExecIdsRef.current.has(active.executionId)) {
+              setResumeBlocked(true);
+              return;
+            }
+            // 终态护栏:同一会话连续 2 次未通过后不再自动续跑,转手动入口。
+            terminalResumeCountRef.current += 1;
+            if (terminalResumeCountRef.current >= 2) {
+              setResumeBlocked(true);
+              setResumeBlockedLabel('已多次审批未通过，是否让 Agent 继续？');
+              return;
+            }
+            terminalResumeMarkRef.current = true;
+            const placeholder =
+              active.approvalStatus === 'cancelled'
+                ? '已取消该工具，Agent 正在收尾…'
+                : '审批未通过，Agent 正在收尾…';
+            doApprovalResume(active.agentId, active.executionId, active.userQuery, placeholder);
+          }
         }
       } catch {
         // 非 404(DB 抖动)保持现状,下轮重试;不误判终态。
@@ -669,15 +723,90 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
         msg.warning({ content: '当前审批尚未通过，无法继续执行', duration: 3 });
         return;
       }
-      // 手动重试即显式授权:解除该 execution 的失败阻塞后重新续跑。
+      // 手动重试即显式授权:解除该 execution 的失败阻塞与终态护栏计数后重新续跑。
       resumeFailedExecIdsRef.current.delete(active.executionId);
       setResumeBlocked(false);
+      setResumeBlockedLabel('');
+      terminalResumeCountRef.current = 0;
       setPendingApprovals((rows) => rows.filter((r) => r.approvalId !== active.approvalId));
       doApprovalResume(active.agentId, active.executionId, active.userQuery);
     } catch {
       msg.error({ content: '无法确认执行状态，请稍后重试', duration: 3 });
     }
   }, [selectedConv, waitingApproval, doApprovalResume]);
+
+  // 发起人主动取消待批审批:先同步设 in-flight 标记防双触发(轮询/按钮并发,产品
+  // review 低优)→ 调后端取消(pending→cancelled)→ 乐观置卡片终态 + 场景气泡 →
+  // 取 active-execution 拿 executionId 续跑(取消即工具未执行 → 主链路收尾)。
+  const cancelWaitingApproval = useCallback(async () => {
+    if (!selectedConv || !waitingApproval) return;
+    const approvalId = waitingApproval.approvalId;
+    // 已有在途续跑(如轮询刚触发 approved 自动续跑)则不再叠加标记,避免取消失败
+    // 误清在途 id。
+    const hadInflight = resumingExecIdRef.current !== null;
+    if (!hadInflight) resumingExecIdRef.current = `cancel-${approvalId}`;
+    try {
+      await agentApi.cancelToolApproval(approvalId);
+    } catch (err) {
+      if (!hadInflight) resumingExecIdRef.current = null;
+      const status = (err as { status?: number })?.status;
+      if (status === 409) {
+        msg.warning({ content: '该审批已被处理，无需再取消', duration: 3 });
+      } else {
+        msg.error({ content: '取消失败，请稍后重试', duration: 3 });
+      }
+      return;
+    }
+    setPendingApprovals((rows) =>
+      rows.map((r) => (r.approvalId === approvalId ? { ...r, status: 'cancelled' } : r)),
+    );
+    if (streamMsgIdRef.current) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === streamMsgIdRef.current ? { ...m, content: '已取消该工具，Agent 正在收尾…' } : m,
+        ),
+      );
+    }
+    try {
+      const active = await agentApi.getActiveExecution(selectedConv);
+      if (
+        active &&
+        active.userQuery &&
+        (active.status === 'waiting_approval' || active.status === 'running' || active.status === 'paused')
+      ) {
+        terminalResumeCountRef.current = 0;
+        terminalResumeMarkRef.current = true;
+        doApprovalResume(active.agentId, active.executionId, active.userQuery, '已取消该工具，Agent 正在收尾…');
+      }
+    } catch {
+      // 取不到执行状态:卡片已置终态、占位气泡已收敛,不阻塞用户;轮询兜底。
+    }
+  }, [selectedConv, waitingApproval, doApprovalResume]);
+
+  // 终态护栏转手动「让 Agent 继续」:用户显式确认后对 rejected/cancelled 执行续跑
+  // (无 approved 守卫,与 manualResumeWaiting 区分)。成功收尾打持久痕迹。
+  const resumeTerminal = useCallback(async () => {
+    if (!selectedConv || !terminalApproval) return;
+    try {
+      const active = await agentApi.getActiveExecution(selectedConv);
+      if (!active || !active.userQuery) {
+        msg.warning({ content: '无法确认执行状态，请稍后重试', duration: 3 });
+        return;
+      }
+      if (active.status === 'completed') {
+        msg.info({ content: '该执行已完成，无需重复操作', duration: 3 });
+        return;
+      }
+      terminalResumeCountRef.current = 0;
+      setResumeBlocked(false);
+      setResumeBlockedLabel('');
+      setPendingApprovals((rows) => rows.filter((r) => r.conversationId !== selectedConv));
+      terminalResumeMarkRef.current = true;
+      doApprovalResume(active.agentId, active.executionId, active.userQuery, '审批未通过，Agent 正在收尾…');
+    } catch {
+      msg.error({ content: '无法确认执行状态，请稍后重试', duration: 3 });
+    }
+  }, [selectedConv, terminalApproval, doApprovalResume]);
 
   const lastMsgCountRef = useRef(0);
   useEffect(() => {
@@ -786,9 +915,13 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
     handleDeleteConv,
     pendingApprovals,
     waitingApproval,
+    terminalApproval,
     resumeBlocked,
+    resumeBlockedLabel,
     streaming,
     manualResumeWaiting,
+    cancelWaitingApproval,
+    resumeTerminal,
     streamFailure,
     clearStreamFailure,
     cancelStream,

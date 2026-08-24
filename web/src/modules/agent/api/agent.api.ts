@@ -58,9 +58,11 @@ export const agentApi = {
 			serverId: String(row.server_id || ''), riskLevel: String(row.risk_level || ''), status: String(row.status || ''), expiresAt: String(row.expires_at || ''),
 			invalidationReason: row.invalidation_reason ? String(row.invalidation_reason) : undefined,
 			conversationId: row.conversation_id ? String(row.conversation_id) : undefined,
+			userId: row.user_id ? String(row.user_id) : undefined,
 		}));
 	},
 	decideToolApproval: (id: string, decision: 'approved' | 'rejected', reason = '') => api.post(`/agents/tool-approvals/${id}/decision`, { decision, reason }),
+	cancelToolApproval: (id: string) => api.post(`/agents/tool-approvals/${id}/cancel`),
 	// M6：工作台手动兜底入口；后端逐步骤超时 + maxSteps 上限，HTTP 层不设超时。
 	resumeToolApproval: async (id: string): Promise<ToolApprovalResumeResult> => {
 		const res = await api.post(`/agents/tool-approvals/${id}/resume`, undefined, { timeout: 0 });

@@ -1,4 +1,4 @@
-import { Alert, Button, Drawer, Space, Typography } from 'antd';
+import { Alert, Button, Drawer, Modal, Space, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -8,7 +8,7 @@ import { ChatHeader } from '../components/ChatHeader';
 import { ChatMessageList } from '../components/ChatMessageList';
 import { useChatPage } from '../hooks/useChatPage';
 
-import { useTenantRole } from '@/modules/iam';
+import { useAuth, useTenantRole } from '@/modules/iam';
 import { useResponsive } from '@/shared/hooks/useResponsive';
 
 type AgentChatPageProps = {
@@ -25,6 +25,7 @@ export const AgentChatPage = ({
   const { isMobile } = useResponsive();
   const [conversationDrawerOpen, setConversationDrawerOpen] = useState(false);
   const { isAdmin } = useTenantRole();
+  const { user } = useAuth();
   const {
     agents,
     agentsError,
@@ -49,15 +50,21 @@ export const AgentChatPage = ({
     handleRenameConv,
     handleDeleteConv,
     waitingApproval,
+    terminalApproval,
     resumeBlocked,
+    resumeBlockedLabel,
     streaming,
     manualResumeWaiting,
+    cancelWaitingApproval,
+    resumeTerminal,
 		streamFailure,
 		contentSwitching,
   } = useChatPage({ fixedAgentId });
 
   const agentObj = agents.find((a) => a.id === selectedAgent);
-  const pendingApproval = waitingApproval;
+  // 正常等待态(waitingApproval)与终态护栏转手动(terminalApproval)共用审批卡片:
+  // 终态卡片展示终态文案,护栏触发时提供「让 Agent 继续」手动入口。
+  const pendingApproval = waitingApproval ?? terminalApproval;
 	const assistantModelUnavailable = !!(
 		agentObj?.isSystem &&
 		streamFailure?.code === 'SYSTEM_ASSISTANT_MODEL_UNAVAILABLE'
@@ -141,7 +148,11 @@ export const AgentChatPage = ({
             isMobile={isMobile}
             streaming={streaming}
             blocked={resumeBlocked}
+            blockedLabel={resumeBlockedLabel}
             onResume={manualResumeWaiting}
+            onResumeTerminal={resumeTerminal}
+            onCancel={cancelWaitingApproval}
+            userSub={user?.sub}
           />
         )}
 				{assistantModelUnavailable && (
@@ -173,7 +184,11 @@ type ApprovalGateProps = {
   isMobile: boolean;
   streaming: boolean;
   blocked: boolean;
+  blockedLabel?: string;
   onResume: () => void;
+  onResumeTerminal: () => void;
+  onCancel: () => void;
+  userSub?: string;
 };
 
 const APPROVAL_INVALIDATION_LABELS: Record<string, string> = {
@@ -197,14 +212,29 @@ const resolveApprovalGate = (approval: ApprovalGateProps['approval']): ApprovalG
   if (approval.status === 'authorization_denied') {
     return { terminal: true, message: '权限已变更，工具执行已阻止' };
   }
-  const invalidated = approval.status === 'cancelled' ||
-    approval.status === 'voided' ||
+  const invalidated = approval.status === 'voided' ||
     approval.status === 'invalidated';
+  // cancelled 独立显示「已取消」(产品 review ③);带级联失效原因(会话删除/策略变更
+  // 等)时优先显示失效原因,不混入「已过期」时钟判定。
+  if (approval.status === 'cancelled') {
+    const reason = approval.invalidationReason
+      ? `：${APPROVAL_INVALIDATION_LABELS[approval.invalidationReason] || approval.invalidationReason}`
+      : '';
+    return { terminal: true, message: reason ? `工具审批已失效${reason}` : '工具审批已取消' };
+  }
   if (invalidated) {
     const reason = approval.invalidationReason
       ? `：${APPROVAL_INVALIDATION_LABELS[approval.invalidationReason] || approval.invalidationReason}`
       : '';
     return { terminal: true, message: `工具审批已失效${reason}` };
+  }
+  // 被拒/已完成:终态(与 useChatPage isTerminalApproval 对齐)。rejected 触发终态
+  // 续跑(LLM 收尾),卡片展示终态文案;completed 仅作对账展示。
+  if (approval.status === 'rejected') {
+    return { terminal: true, message: '工具审批未通过' };
+  }
+  if (approval.status === 'completed') {
+    return { terminal: true, message: '审批已完成' };
   }
   const expired = approval.status === 'expired' ||
     (!!approval.expiresAt && new Date(approval.expiresAt).getTime() <= Date.now());
@@ -219,14 +249,29 @@ const resolveApprovalGate = (approval: ApprovalGateProps['approval']): ApprovalG
 
 // 只读审批提示卡片:审批操作收敛到审批中心(/approvals),对话页不再打扰审批人。
 // approved 态由轮询自动流式续跑;离线/自动续跑未触发时提供手动"继续执行"兜底。
-const ApprovalGate = ({ approval, isMobile, streaming, blocked, onResume }: ApprovalGateProps) => {
+const ApprovalGate = ({
+  approval,
+  isMobile,
+  streaming,
+  blocked,
+  blockedLabel,
+  onResume,
+  onResumeTerminal,
+  onCancel,
+  userSub,
+}: ApprovalGateProps) => {
   const navigate = useNavigate();
   const { terminal, message } = resolveApprovalGate(approval);
   const approved = approval.status === 'approved';
-  // H1/H3: 自动续跑失败(工具执行失败/参数校验不过)后置阻塞态 → 卡片给出失败文案,
-  // 「继续执行」按钮保留为手动重试入口(点击经 manualResumeWaiting 解除阻塞重新续跑)。
+  // H1/H3: 自动续跑失败(工具执行失败/参数校验不过/终态多次未通过)后置阻塞态 → 卡片
+  // 给出可解释文案(blockedLabel 区分场景),按钮保留为手动入口。
   const failed = approved && blocked;
-  const gateMessage = failed ? `工具 ${approval.toolName} 自动执行失败，可手动重试` : message;
+  const gateMessage = failed ? blockedLabel || `工具 ${approval.toolName} 自动执行失败，可手动重试` : message;
+  // 取消按钮仅发起人本人可见(pending 且 userId===当前用户)。admin 代撤走审批中心
+  // 「拒绝」职责,不在此暴露。SSE 帧 userId 由 useChatPage 补 user.sub。
+  const canCancel = approval.status === 'pending' && !!userSub && approval.userId === userSub;
+  // 终态护栏转手动:rejected/cancelled 终态 + blocked → 提供「让 Agent 继续」入口。
+  const terminalManual = terminal && blocked && !!blockedLabel && !approved;
 
   return (
     <Alert
@@ -246,7 +291,30 @@ const ApprovalGate = ({ approval, isMobile, streaming, blocked, onResume }: Appr
                   {streaming ? '自动续跑中…' : '继续执行'}
                 </Button>
               )}
+              {canCancel && (
+                <Button
+                  danger
+                  disabled={streaming}
+                  onClick={() =>
+                    Modal.confirm({
+                      title: '取消工具审批',
+                      content: 'Agent 将不会执行该工具，并继续处理你的任务。',
+                      okText: '确认取消',
+                      okButtonProps: { danger: true },
+                      cancelText: '再想想',
+                      onOk: onCancel,
+                    })
+                  }
+                >
+                  取消审批
+                </Button>
+              )}
             </Space>
+          )}
+          {terminalManual && (
+            <Button type="primary" disabled={streaming} onClick={onResumeTerminal}>
+              {streaming ? '续跑中…' : '让 Agent 继续'}
+            </Button>
           )}
         </Space>
       )}

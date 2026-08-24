@@ -135,7 +135,7 @@ func resumePayload(execID, agentID, userID string) ToolApprovalPayload {
 func TestResolveApprovalResume_InitiatorAllowed(t *testing.T) {
 	svc, _, cp := approvalResumeFixture(t, resumePayload("e1", "a1", "user-1"), "member")
 
-	payload, approvalID, gotCp, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
+	payload, approvalID, gotCp, _, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
 
 	require.NoError(t, err)
 	require.Equal(t, "approval-1", approvalID)
@@ -149,7 +149,7 @@ func TestResolveApprovalResume_InitiatorButCheckpointMismatchDenied(t *testing.T
 	svc, _, cp := approvalResumeFixture(t, resumePayload("e1", "a1", "user-1"), "member")
 	cp.cp.UserID = "attacker" // checkpoint 归属与审批发起人不一致
 
-	_, _, _, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
+	_, _, _, _, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
 
 	require.ErrorIs(t, err, domain.ErrApprovalRoleDenied)
 }
@@ -159,7 +159,7 @@ func TestResolveApprovalResume_InitiatorButCheckpointMismatchDenied(t *testing.T
 func TestResolveApprovalResume_MemberCrossOwnerDenied(t *testing.T) {
 	svc, _, _ := approvalResumeFixture(t, resumePayload("e1", "a1", "user-owner"), "member")
 
-	_, _, _, err := svc.resolveApprovalResume(context.Background(), "t1", "user-member", "e1", "a1")
+	_, _, _, _, err := svc.resolveApprovalResume(context.Background(), "t1", "user-member", "e1", "a1")
 
 	require.ErrorIs(t, err, domain.ErrApprovalRoleDenied)
 }
@@ -168,7 +168,7 @@ func TestResolveApprovalResume_MemberCrossOwnerDenied(t *testing.T) {
 func TestResolveApprovalResume_AdminCrossOwnerAllowed(t *testing.T) {
 	svc, _, _ := approvalResumeFixture(t, resumePayload("e1", "a1", "user-owner"), "admin")
 
-	payload, approvalID, gotCp, err := svc.resolveApprovalResume(context.Background(), "t1", "admin-1", "e1", "a1")
+	payload, approvalID, gotCp, _, err := svc.resolveApprovalResume(context.Background(), "t1", "admin-1", "e1", "a1")
 
 	require.NoError(t, err)
 	require.Equal(t, "approval-1", approvalID)
@@ -181,7 +181,7 @@ func TestResolveApprovalResume_AdminCrossOwnerAllowed(t *testing.T) {
 func TestResolveApprovalResume_AgentBindingMismatch(t *testing.T) {
 	svc, _, _ := approvalResumeFixture(t, resumePayload("e1", "a1", "user-1"), "member")
 
-	_, _, _, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a2")
+	_, _, _, _, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a2")
 
 	require.ErrorIs(t, err, ErrApprovalBindingMismatch)
 }
@@ -207,7 +207,7 @@ func TestResolveApprovalResume_NonResumableStatusIsEmpty(t *testing.T) {
 	svc, _, cp := approvalResumeFixture(t, resumePayload("e1", "a1", "user-1"), "member")
 	cp.cp.Status = "paused"
 
-	payload, approvalID, gotCp, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
+	payload, approvalID, gotCp, _, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
 
 	require.NoError(t, err)
 	require.Empty(t, payload.UserID)
@@ -221,7 +221,7 @@ func TestResolveApprovalResume_NotApprovedPropagates(t *testing.T) {
 	svc, repo, _ := approvalResumeFixture(t, resumePayload("e1", "a1", "user-1"), "member")
 	repo.row.Status = string(domain.ToolApprovalPending) // 仍 pending：续跑竞态
 
-	_, approvalID, gotCp, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
+	_, approvalID, gotCp, _, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
 
 	require.ErrorIs(t, err, ErrApprovalNotApproved)
 	require.Equal(t, "approval-1", approvalID)
@@ -235,7 +235,7 @@ func TestResolveApprovalResume_RunningCheckpointSoftResolves(t *testing.T) {
 	svc, _, cp := approvalResumeFixture(t, resumePayload("e1", "a1", "user-1"), "member")
 	cp.cp.Status = "running"
 
-	payload, approvalID, gotCp, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
+	payload, approvalID, gotCp, _, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
 
 	require.NoError(t, err)
 	require.Equal(t, "approval-1", approvalID)
@@ -249,7 +249,7 @@ func TestResolveApprovalResume_RunningWithoutApprovalIDIsEmpty(t *testing.T) {
 	cp.cp.Status = "running"
 	cp.cp.RuntimeStateJSON = []byte(`{}`)
 
-	payload, approvalID, gotCp, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
+	payload, approvalID, gotCp, _, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
 
 	require.NoError(t, err)
 	require.Empty(t, payload.UserID)
@@ -265,7 +265,7 @@ func TestResolveApprovalResume_RunningApprovalConsumedFastFails(t *testing.T) {
 	cp.cp.Status = "running"
 	repo.row.Status = string(domain.ToolApprovalExecuting)
 
-	_, _, gotCp, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
+	_, _, gotCp, _, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
 
 	require.ErrorIs(t, err, ErrApprovalNotApproved)
 	require.NotNil(t, gotCp)
@@ -277,7 +277,7 @@ func TestResolveApprovalResume_ExpiredInvalidates(t *testing.T) {
 	svc, repo, _ := approvalResumeFixture(t, resumePayload("e1", "a1", "user-1"), "member")
 	repo.row.ExpiresAt = time.Now().Add(-time.Minute)
 
-	_, _, _, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
+	_, _, _, _, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
 
 	require.ErrorIs(t, err, ErrApprovalExpired)
 	require.Equal(t, []string{"expired"}, repo.invalidateReasons)
@@ -301,7 +301,7 @@ func TestMaybeResumeApproval_RunningCheckpointSkipsClaim(t *testing.T) {
 	svc, _, cp := approvalResumeFixture(t, resumePayload("e1", "a1", "user-1"), "member")
 	cp.cp.Status = "running"
 
-	_, _, resuming, outReq, _, err := svc.maybeResumeApproval(
+	_, _, resuming, _, outReq, _, err := svc.maybeResumeApproval(
 		context.Background(), "a1", ExecRequest{Query: "x", UserID: "user-1"}, ExecMeta{TenantID: "t1"}, "e1")
 
 	require.NoError(t, err)
@@ -315,7 +315,7 @@ func TestMaybeResumeApproval_RunningCheckpointSkipsClaim(t *testing.T) {
 func TestMaybeResumeApproval_WaitingCheckpointClaims(t *testing.T) {
 	svc, _, cp := approvalResumeFixture(t, resumePayload("e1", "a1", "user-1"), "member")
 
-	_, _, resuming, _, _, err := svc.maybeResumeApproval(
+	_, _, resuming, _, _, _, err := svc.maybeResumeApproval(
 		context.Background(), "a1", ExecRequest{Query: "x", UserID: "user-1"}, ExecMeta{TenantID: "t1"}, "e1")
 
 	require.NoError(t, err)
@@ -345,7 +345,7 @@ func TestMaybeResumeApproval_RewritesRequestToApprovalSnapshot(t *testing.T) {
 	req := ExecRequest{Query: "stale", UserID: "user-member", ConversationID: "conv-other"}
 	meta := ExecMeta{TenantID: "t1", ExecutionID: "e1"}
 
-	payload, approvalID, resuming, outReq, outMeta, err := svc.maybeResumeApproval(
+	payload, approvalID, resuming, _, outReq, outMeta, err := svc.maybeResumeApproval(
 		context.Background(), "a1", req, meta, "e1")
 
 	require.NoError(t, err)
@@ -403,7 +403,7 @@ func TestBuildApprovalResumeOptions_GuardHitsExecuteApproved(t *testing.T) {
 	svc, repo := resumeOptionService(t, payload)
 	agent := resumeOptionAgent{config: &domain.AgentConfig{MCPToolIDs: []string{"mcp:srv:delete"}}}
 
-	options, consumed, err := svc.buildApprovalResumeOptions(context.Background(), "t1", agent, payload, "approval-1")
+	options, consumed, err := svc.buildApprovalResumeOptions(context.Background(), "t1", agent, payload, "approval-1", false)
 	require.NoError(t, err)
 	cfg, fn := applyToolOptions(t, options)
 
@@ -424,7 +424,7 @@ func TestBuildApprovalResumeOptions_GuardFallsBackToNormalPath(t *testing.T) {
 	svc, repo := resumeOptionService(t, payload)
 	agent := resumeOptionAgent{config: &domain.AgentConfig{MCPToolIDs: []string{"mcp:srv:get"}}}
 
-	options, consumed, err := svc.buildApprovalResumeOptions(context.Background(), "t1", agent, payload, "approval-1")
+	options, consumed, err := svc.buildApprovalResumeOptions(context.Background(), "t1", agent, payload, "approval-1", false)
 	require.NoError(t, err)
 	_, fn := applyToolOptions(t, options)
 
@@ -450,7 +450,7 @@ func TestBuildApprovalResumeOptions_GuardFallsBackToApprovalRequest(t *testing.T
 	svc, repo := resumeOptionService(t, payload)
 	agent := resumeOptionAgent{config: &domain.AgentConfig{MCPToolIDs: []string{"mcp:srv:delete2"}}}
 
-	options, consumed, err := svc.buildApprovalResumeOptions(context.Background(), "t1", agent, payload, "approval-1")
+	options, consumed, err := svc.buildApprovalResumeOptions(context.Background(), "t1", agent, payload, "approval-1", false)
 	require.NoError(t, err)
 	_, fn := applyToolOptions(t, options)
 
@@ -482,7 +482,7 @@ func TestFinishApprovalResume_SuccessCompletes(t *testing.T) {
 	cp := &approvalResumeCheckpointStub{}
 	svc := resumeFinishService(t, cp)
 
-	err := svc.finishApprovalResume(context.Background(), "t1", "e1", func() bool { return true }, nil)
+	err := svc.finishApprovalResume(context.Background(), "t1", "e1", func() bool { return true }, false, nil)
 
 	require.NoError(t, err)
 	require.Equal(t, 1, cp.completed)
@@ -497,7 +497,7 @@ func TestFinishApprovalResume_UnconsumedFailureRollsBack(t *testing.T) {
 	svc := resumeFinishService(t, cp)
 
 	runErr := errors.New("llm downstream failure")
-	err := svc.finishApprovalResume(context.Background(), "t1", "e1", func() bool { return false }, runErr)
+	err := svc.finishApprovalResume(context.Background(), "t1", "e1", func() bool { return false }, false, runErr)
 
 	require.ErrorIs(t, err, runErr)
 	require.Equal(t, 1, cp.statusCalls)
@@ -514,7 +514,7 @@ func TestFinishApprovalResume_ConsumedFailureTerminates(t *testing.T) {
 	svc := resumeFinishService(t, cp)
 
 	runErr := errors.New("llm downstream failure")
-	err := svc.finishApprovalResume(context.Background(), "t1", "e1", func() bool { return true }, runErr)
+	err := svc.finishApprovalResume(context.Background(), "t1", "e1", func() bool { return true }, false, runErr)
 
 	require.ErrorIs(t, err, runErr)
 	require.Equal(t, "failed", cp.terminated)
@@ -528,7 +528,7 @@ func TestFinishApprovalResume_ClientCancelPreservesState(t *testing.T) {
 	cp := &approvalResumeCheckpointStub{}
 	svc := resumeFinishService(t, cp)
 
-	err := svc.finishApprovalResume(context.Background(), "t1", "e1", func() bool { return true }, context.Canceled)
+	err := svc.finishApprovalResume(context.Background(), "t1", "e1", func() bool { return true }, false, context.Canceled)
 
 	require.ErrorIs(t, err, context.Canceled)
 	require.Zero(t, cp.statusCalls)
@@ -543,7 +543,7 @@ func TestFinishApprovalResume_ApprovalPendingPreservesState(t *testing.T) {
 	svc := resumeFinishService(t, cp)
 
 	runErr := &port.ToolApprovalRequiredError{ApprovalID: "approval-1"}
-	err := svc.finishApprovalResume(context.Background(), "t1", "e1", func() bool { return false }, runErr)
+	err := svc.finishApprovalResume(context.Background(), "t1", "e1", func() bool { return false }, false, runErr)
 
 	require.ErrorIs(t, err, runErr)
 	require.Zero(t, cp.statusCalls)
@@ -558,7 +558,7 @@ func TestFinishApprovalResume_AlreadyExecutedRetains(t *testing.T) {
 	svc := resumeFinishService(t, cp)
 
 	err := svc.finishApprovalResume(
-		context.Background(), "t1", "e1", func() bool { return false }, domain.ErrApprovalAlreadyExecuted)
+		context.Background(), "t1", "e1", func() bool { return false }, false, domain.ErrApprovalAlreadyExecuted)
 
 	require.ErrorIs(t, err, domain.ErrApprovalAlreadyExecuted)
 	require.Zero(t, cp.statusCalls, "已消费不得回滚 waiting_approval")
@@ -572,7 +572,7 @@ func TestFinishApprovalResume_RollbackFailureJoins(t *testing.T) {
 	svc := resumeFinishService(t, cp)
 
 	runErr := errors.New("llm downstream failure")
-	err := svc.finishApprovalResume(context.Background(), "t1", "e1", func() bool { return false }, runErr)
+	err := svc.finishApprovalResume(context.Background(), "t1", "e1", func() bool { return false }, false, runErr)
 
 	require.ErrorIs(t, err, runErr)
 	require.ErrorIs(t, err, cp.statusErr)
@@ -587,7 +587,7 @@ func TestBuildApprovalResumeOptions_SnapshotRewrite(t *testing.T) {
 	svc, repo := resumeOptionService(t, payload)
 	agent := resumeOptionAgent{config: &domain.AgentConfig{MCPToolIDs: []string{"mcp:srv:delete"}}}
 
-	options, consumed, err := svc.buildApprovalResumeOptions(context.Background(), "t1", agent, payload, "approval-1")
+	options, consumed, err := svc.buildApprovalResumeOptions(context.Background(), "t1", agent, payload, "approval-1", false)
 	require.NoError(t, err)
 	_, fn := applyToolOptions(t, options)
 
@@ -602,4 +602,172 @@ func TestBuildApprovalResumeOptions_SnapshotRewrite(t *testing.T) {
 	require.NoError(t, err, "空身份调用必须被重写为批准载荷快照，不允许被 Authorize 拒绝")
 	require.True(t, consumed(), "重写后 guard 命中批准执行（否则走审批/执行路径不消费）")
 	require.Equal(t, 1, repo.claimed, "ExecuteApproved 收到的是批准时身份")
+}
+
+// ── 终态续跑全链（已拒绝/已取消 → 工具执行失败 → LLM 收尾） ──
+// terminalApprovalFixture 构造终态审批（cancelled/rejected/…）的续跑解析环境：
+// waiting_approval checkpoint（含 approval_id）+ 会话存在 + 角色 member。
+// 复用 approvedToolApproval 加密链路后改写 row.Status（终态行不做过期门控 H1）。
+func terminalApprovalFixture(t *testing.T, payload ToolApprovalPayload, status domain.ToolApprovalStatus, role string) (*AgentService, *approvalRepoFake, *approvalResumeCheckpointStub) {
+	t.Helper()
+	approvalSvc, repo := approvedToolApproval(t, payload)
+	repo.row.Status = string(status)
+	cp := &approvalResumeCheckpointStub{
+		cp: &domain.AgentExecutionCheckpoint{
+			ExecutionID:      payload.ExecutionID,
+			AgentID:          payload.AgentID,
+			UserID:           payload.UserID,
+			Status:           domain.ExecStatusWaitingApproval,
+			RunGeneration:    1,
+			RuntimeStateJSON: []byte(`{"approval_id":"approval-1"}`),
+		},
+	}
+	svc := NewAgentService(AgentServiceDeps{
+		ApprovalService:    approvalSvc,
+		CheckpointStore:    cp,
+		ChatStore:          resumeChatRepo{conv: &domain.ChatConversation{ID: payload.ConversationID}},
+		MCPToolExecutor:    resumeExecutorStub{},
+		TenantRoleResolver: stubTenantRole{role: role},
+		Logger:             zap.NewNop(),
+	})
+	return svc, repo, cp
+}
+
+// 核心回归：cancelled 审批 + waiting_approval checkpoint → resolveApprovalResume 放行，
+// 返回 terminal=true（把"审批未通过"交给 LLM 收尾，主链路不再卡死）。
+func TestResolveApprovalResume_TerminalCancelledResumes(t *testing.T) {
+	payload := resumePayload("e1", "a1", "user-1")
+	svc, _, cp := terminalApprovalFixture(t, payload, domain.ToolApprovalCancelled, "member")
+
+	gotPayload, approvalID, gotCP, terminal, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
+
+	require.NoError(t, err)
+	require.True(t, terminal, "cancelled 审批必须标记终态续跑")
+	require.Equal(t, "approval-1", approvalID)
+	require.Equal(t, "user-1", gotPayload.UserID, "终态续跑同样复用解密载荷身份")
+	require.Same(t, cp.cp, gotCP)
+}
+
+func TestResolveApprovalResume_TerminalRejectedResumes(t *testing.T) {
+	payload := resumePayload("e1", "a1", "user-1")
+	svc, _, _ := terminalApprovalFixture(t, payload, domain.ToolApprovalRejected, "member")
+
+	_, _, _, terminal, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
+
+	require.NoError(t, err)
+	require.True(t, terminal, "rejected 审批同样触发终态续跑")
+}
+
+// H1 在 agent_service 层的回归：终态行已过 expires_at 仍放行——堵住"轮询到 rejected
+// 恰逢过期"的续跑断链竞态（ApprovedPayload 先报 Expired，终态判定不被其短路）。
+func TestResolveApprovalResume_TerminalExpiredStillResumes(t *testing.T) {
+	payload := resumePayload("e1", "a1", "user-1")
+	svc, repo, _ := terminalApprovalFixture(t, payload, domain.ToolApprovalCancelled, "member")
+	repo.row.ExpiresAt = time.Now().Add(-time.Hour) // 终态行已过期
+
+	_, _, _, terminal, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
+
+	require.NoError(t, err)
+	require.True(t, terminal, "已过期终态行仍放行（无过期门控）")
+}
+
+// 安全 review 回归：pending 审批绝不放行——ApprovedPayload 报 ErrApprovalNotApproved
+// 且 TerminalResumePayload 对 pending 拒绝 → terminal=false，approvalID 仍返回供
+// transport 保持 202 等待卡片。误放行 pending 会绕过"审批未通过前必须等待"门控。
+func TestResolveApprovalResume_PendingStillBlocks(t *testing.T) {
+	payload := resumePayload("e1", "a1", "user-1")
+	svc, _, _ := terminalApprovalFixture(t, payload, domain.ToolApprovalPending, "member")
+
+	_, approvalID, _, terminal, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
+
+	require.ErrorIs(t, err, ErrApprovalNotApproved, "pending 必须保持 202 等待语义")
+	require.False(t, terminal, "pending 绝不放行（错误类型兜底会误吞 pending）")
+	require.Equal(t, "approval-1", approvalID, "approvalID 仍返回，transport 据此幂等恢复等待卡片")
+}
+
+// 终态续跑 options：不设 WithApprovalResume（避免 resumeFromCheckpoint 走"恢复 running"
+// 路径重复注入 P1）；guard 命中后 ExecuteApproved 必然报未批准错误，包装为友好文案
+// （%w 保留哨兵 + 行为约束），工具不会执行。
+func TestBuildApprovalResumeOptions_TerminalRejectsWithoutResumeKey(t *testing.T) {
+	payload := resumePayload("e1", "a1", "user-1")
+	svc, _ := terminalResumeOptionService(t, payload, domain.ToolApprovalCancelled)
+	agent := resumeOptionAgent{config: &domain.AgentConfig{MCPToolIDs: []string{"mcp:srv:delete"}}}
+
+	options, _, err := svc.buildApprovalResumeOptions(context.Background(), "t1", agent, payload, "approval-1", true)
+	require.NoError(t, err)
+	cfg := &ExecutionConfig{}
+	cfg.ApplyOptions(options)
+	require.NotNil(t, cfg.ToolExecutionFn, "终态续跑同样注入覆盖式 guard")
+	require.Equal(t, "e1", cfg.ExecutionID)
+	require.Empty(t, cfg.ApprovalResumeID, "终态模式不得设 WithApprovalResume（否则重复 P1 注入）")
+
+	_, err = cfg.ToolExecutionFn(context.Background(), matchingToolRequest(payload))
+
+	require.ErrorIs(t, err, ErrApprovalNotApproved, "%w 必须保留哨兵")
+	require.Contains(t, err.Error(), "工具审批未通过")
+	require.Contains(t, err.Error(), "请勿重试该工具")
+}
+
+// 友好文案回归：approved 模式（terminal=false）的错误不包装——C2 幂等/恢复卡片
+// 语义不受影响，transport 对过期/未批准仍走既有映射。
+func TestBuildApprovalResumeOptions_ApprovedModeDoesNotWrap(t *testing.T) {
+	payload := resumePayload("e1", "a1", "user-1")
+	svc, repo := terminalResumeOptionService(t, payload, domain.ToolApprovalApproved)
+	repo.row.ExpiresAt = time.Now().Add(-time.Minute) // approved 但已过期 → ExecuteApproved 报错
+	agent := resumeOptionAgent{config: &domain.AgentConfig{MCPToolIDs: []string{"mcp:srv:delete"}}}
+
+	options, _, err := svc.buildApprovalResumeOptions(context.Background(), "t1", agent, payload, "approval-1", false)
+	require.NoError(t, err)
+	cfg := &ExecutionConfig{}
+	cfg.ApplyOptions(options)
+
+	_, err = cfg.ToolExecutionFn(context.Background(), matchingToolRequest(payload))
+
+	require.ErrorIs(t, err, ErrApprovalExpired, "approved 模式原样透传错误")
+	require.NotContains(t, err.Error(), "工具审批未通过", "approved 模式不得包装终态文案")
+}
+
+// terminalResumeOptionService 构造终态/任意状态审批的 buildApprovalResumeOptions 环境。
+func terminalResumeOptionService(t *testing.T, payload ToolApprovalPayload, status domain.ToolApprovalStatus) (*AgentService, *approvalRepoFake) {
+	t.Helper()
+	approvalSvc, repo := approvedToolApproval(t, payload)
+	repo.row.Status = string(status)
+	svc := NewAgentService(AgentServiceDeps{
+		ApprovalService: approvalSvc,
+		MCPToolExecutor: resumeExecutorStub{},
+		ToolAuthorizer: NewToolAuthorizer(stubToolUserScopeResolver{
+			scope: port.ToolUserScope{UserActive: true, AllowsTool: true},
+		}),
+		Logger: zap.NewNop(),
+	})
+	return svc, repo
+}
+
+// 终态收尾：runErr==nil → MarkCompleted 幂等收尾（不触碰 waiting_approval 回滚）。
+func TestFinishApprovalResume_TerminalSuccessCompletes(t *testing.T) {
+	cp := &approvalResumeCheckpointStub{}
+	svc := resumeFinishService(t, cp)
+
+	err := svc.finishApprovalResume(context.Background(), "t1", "e1", func() bool { return false }, true, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, cp.completed)
+	require.Zero(t, cp.statusCalls)
+	require.Empty(t, cp.terminated)
+}
+
+// H2 回归：终态失败直接 return——绝不再回滚 waiting_approval（否则前端轮询 cancelled
+// →再续跑→再回滚死循环），也绝不二次 Terminate（finalizeReActCheckpoint 已写终态，
+// 双写产生 "no active checkpoint" joined 错误）。
+func TestFinishApprovalResume_TerminalFailureNoRollback(t *testing.T) {
+	cp := &approvalResumeCheckpointStub{}
+	svc := resumeFinishService(t, cp)
+
+	runErr := errors.New("llm downstream failure")
+	err := svc.finishApprovalResume(context.Background(), "t1", "e1", func() bool { return false }, true, runErr)
+
+	require.ErrorIs(t, err, runErr)
+	require.Zero(t, cp.statusCalls, "终态失败不得回滚 waiting_approval")
+	require.Empty(t, cp.terminated, "终态失败不得二次 Terminate（双写消除）")
+	require.Zero(t, cp.completed)
 }

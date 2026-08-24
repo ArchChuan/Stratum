@@ -2,6 +2,7 @@ package persistence_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -342,5 +343,96 @@ func TestToolApprovalListHistoryPaged(t *testing.T) {
 		if r.UserID != "user-1" {
 			t.Fatalf("member list must only contain own rows, got user %q", r.UserID)
 		}
+	}
+}
+
+// 主动取消审批的 store.Cancel CAS：pending→cancelled 单次成功（decided_by/reason 落库）；
+// 非 pending/已过期/ExpireStale 先行 → 0 行 CAS 统一 ErrApprovalAlreadyDecided
+// （后端 review L2：与 Decide 同构，不产生误导性的状态分化）。
+func TestToolApprovalCancelCAS(t *testing.T) {
+	url := os.Getenv("STRATUM_TEST_POSTGRES_URL")
+	if url == "" {
+		t.Skip("STRATUM_TEST_POSTGRES_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := postgres.ProvisionPublicSchema(ctx, pool, zap.NewNop()); err != nil {
+		t.Fatal(err)
+	}
+	tenantID := fmt.Sprintf("tmp_approval_cancel_%d", time.Now().UnixNano())
+	schema := "tenant_" + tenantID
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "`+schema+`" CASCADE`) })
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID, UserID: "user-1", Role: postgres.RoleTenantAdmin})
+	approvals := persistence.NewPgToolApprovalStore(pool)
+	svc := agentapp.NewToolApprovalService(approvals, nil, pkgcrypto.DeriveAESKey("integration-key"))
+	svc.SetTenantRoleResolver(integrationRoleStub{role: "member"})
+	newPayload := func(execID string) agentapp.ToolApprovalPayload {
+		return agentapp.ToolApprovalPayload{TenantID: tenantID, ExecutionID: execID, TraceID: "trace-" + execID,
+			AgentID: "agent-1", UserID: "user-1", ConversationID: uuid.NewString(), ToolCallID: "call-" + execID,
+			ServerID: "orders", ToolName: "delete", RiskLevel: port.ToolRiskDestructive, Query: "delete",
+			Arguments: map[string]any{"id": "1"}}
+	}
+	// 1) pending → cancelled：decided_by/decision_reason 参数化落库，二次取消 0 行 → 已决定。
+	id, err := svc.Request(ctx, newPayload("exec-cancel"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := approvals.Cancel(ctx, tenantID, id, "user-1", "cancelled_by_initiator", time.Now()); err != nil {
+		t.Fatalf("cancel pending: %v", err)
+	}
+	var status, decidedBy, reason string
+	if err := pool.QueryRow(ctx,
+		`SELECT status,decided_by,decision_reason FROM "`+schema+`".agent_tool_approvals WHERE id=$1`,
+		id).Scan(&status, &decidedBy, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if status != "cancelled" || decidedBy != "user-1" || reason != "cancelled_by_initiator" {
+		t.Fatalf("cancel not persisted: status=%q decided_by=%q reason=%q", status, decidedBy, reason)
+	}
+	if err := approvals.Cancel(ctx, tenantID, id, "user-1", "cancelled_by_initiator", time.Now()); !errors.Is(err, domain.ErrApprovalAlreadyDecided) {
+		t.Fatalf("second cancel want ErrApprovalAlreadyDecided, got %v", err)
+	}
+	// 2) 已过期行：CAS WHERE expires_at>now 不命中 → 已决定。
+	id2, err := svc.Request(ctx, newPayload("exec-expired"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE "`+schema+`".agent_tool_approvals SET expires_at=NOW()-interval '1 minute' WHERE id=$1`, id2); err != nil {
+		t.Fatal(err)
+	}
+	if err := approvals.Cancel(ctx, tenantID, id2, "user-1", "cancelled_by_initiator", time.Now()); !errors.Is(err, domain.ErrApprovalAlreadyDecided) {
+		t.Fatalf("expired cancel want ErrApprovalAlreadyDecided, got %v", err)
+	}
+	// 3) ExpireStale 先行把 pending 置 expired → Cancel 同样 0 行，返回一致错误（L2）。
+	id3, err := svc.Request(ctx, newPayload("exec-stale"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE "`+schema+`".agent_tool_approvals SET expires_at=NOW()-interval '1 minute' WHERE id=$1`, id3); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := approvals.ExpireStale(ctx, tenantID); err != nil {
+		t.Fatalf("expire stale: %v", err)
+	}
+	if err := approvals.Cancel(ctx, tenantID, id3, "user-1", "cancelled_by_initiator", time.Now()); !errors.Is(err, domain.ErrApprovalAlreadyDecided) {
+		t.Fatalf("cancel after expire stale want ErrApprovalAlreadyDecided, got %v", err)
+	}
+	// 4) service 层发起人取消自己 → 放行（reason=initiator 参数化）。
+	id4, err := svc.Request(ctx, newPayload("exec-svc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.CancelApproval(ctx, tenantID, id4, "user-1"); err != nil {
+		t.Fatalf("service cancel own: %v", err)
 	}
 }

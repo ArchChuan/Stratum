@@ -439,6 +439,9 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		agents.GET("/tool-approvals/history", requireActive, agentHandler.ListApprovalHistory)
 		agents.GET("/tool-approvals/:approvalID", requireActive, agentHandler.GetApprovalDetail)
 		agents.POST("/tool-approvals/:approvalID/execute", requireAdmin, requireActive, agentHandler.ExecuteApproval)
+		// 取消待批审批：requireActive 而非 requireAdmin——发起人（member）要能取消自己的
+		// 审批；越权由 service 层 row.UserID 归属校验兜底（ErrApprovalNotFound 关闭 oracle）。
+		agents.POST("/tool-approvals/:approvalID/cancel", requireActive, agentHandler.CancelToolApproval)
 		agents.PUT("/tool-approvals/:approvalID/assignee", requireAdmin, requireActive, agentHandler.SetApprovalAssignee)
 		agents.GET("/system/settings", agentHandler.GetSettings)
 		agents.PUT("/system/settings", requireAdmin, requireActive, agentHandler.UpdateModel)
