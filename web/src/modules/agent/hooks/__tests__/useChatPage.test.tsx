@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
     serverId: string;
     riskLevel: string;
     status: string;
+    conversationId?: string;
+    userId?: string;
   },
   listAgents: vi.fn(),
 	getAgent: vi.fn(),
