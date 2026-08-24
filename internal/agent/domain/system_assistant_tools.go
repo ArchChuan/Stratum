@@ -22,7 +22,7 @@ const (
 	SystemAssistantToolProposeResourceChange = "stratum_propose_resource_change"
 	SystemAssistantToolApplyResourceChange   = "stratum_apply_resource_change"
 	SystemAssistantToolListModels            = "stratum_list_models"
-	SystemAssistantToolUpdateSystemModel     = "stratum_update_system_model"
+	SystemAssistantToolUpdateSystemModel     = "stratum_update_model"
 	SystemAssistantToolListAgents            = "stratum_list_agents"
 	SystemAssistantToolListMCPServers        = "stratum_list_mcp_servers"
 )

@@ -106,7 +106,7 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 // 活动技能指令注入、上下文预算裁剪与循环内压缩，并更新 LastEstimatedTokens
 // 作为用量反馈循环的基线。返回 (tools, messages, toolTokens)。
 func prepareLLMRequest(ctx context.Context, s *ReActState) ([]port.ToolDefinition, []port.LLMMessage, int) {
-	tools := effectiveTools(s.AvailableTools, s.GovernedAssistant)
+	tools := effectiveTools(s.AvailableTools)
 	if s.PlanToolsDisabled {
 		tools = withoutPlanTools(tools)
 	}
@@ -135,22 +135,19 @@ func prepareLLMRequest(ctx context.Context, s *ReActState) ([]port.ToolDefinitio
 	// 预算账本：工具定义走 ToolsCap 独立配额，history 压缩走 HistoryCap；
 	// 二者互不挤占（Spec 第 2 节根因修复）。Budget 零值 = 未初始化，
 	// 工具裁剪与压缩自动禁用（与旧 0 预算语义一致）。
-	// Governed assistant（系统助手）不参与裁剪：其工具集是平台角色能力契约
-	// （角色权限建模的固定组成，schema 大、数量少），裁剪会造成角色能力
-	// 静默缺失（TestSystemAssistantDeterministicAgentLoopPersistsTypedArtifacts）。
-	if !s.GovernedAssistant {
-		// 两阶段截断（Spec D1）：阶段一先用当前 messages 估算工具 allowance，
-		// 阶段二按 allowance 构建 stratum_skill 描述并置于工具面首位——描述恒
-		// fit 门槛，该工具在 fitToolList 贪心打包中永不被整工具丢弃（杜绝"零
-		// skill 可激活"的静默失败）。最终步 tools==nil（禁止调用工具）时跳过。
-		allowance := toolAllowanceFor(messages, s.Budget.ToolsCap, protectedUsers, correction, safetyRatio)
-		if tools != nil {
-			if skillTool := buildSkillTool(s.SkillCatalog, s.Actives, allowance); skillTool != nil {
-				tools = append([]port.ToolDefinition{*skillTool}, tools...)
-			}
+	// 两阶段截断（Spec D1）：阶段一先用当前 messages 估算工具 allowance，
+	// 阶段二按 allowance 构建 stratum_skill 描述并置于工具面首位——描述恒
+	// fit 门槛，该工具在 fitToolList 贪心打包中永不被整工具丢弃（杜绝"零
+	// skill 可激活"的静默失败）。最终步 tools==nil（禁止调用工具）时跳过。
+	// 所有 agent 一视同仁参与裁剪；8 个内置运维工具为 protected 语义（见
+	// fitToolList），预算受限时优先保底保留，不因裁剪静默缺失角色能力。
+	allowance := toolAllowanceFor(messages, s.Budget.ToolsCap, protectedUsers, correction, safetyRatio)
+	if tools != nil {
+		if skillTool := buildSkillTool(s.SkillCatalog, s.Actives, allowance); skillTool != nil {
+			tools = append([]port.ToolDefinition{*skillTool}, tools...)
 		}
-		tools = fitToolsToContextBudget(tools, messages, s.Budget.ToolsCap, protectedUsers, correction, safetyRatio)
 	}
+	tools = fitToolsToContextBudget(tools, messages, s.Budget.ToolsCap, protectedUsers, correction, safetyRatio)
 	toolTokens := 0
 	if encodedTools, err := json.Marshal(tools); err == nil {
 		toolTokens = tokenutil.EstimateText(string(encodedTools))
@@ -555,6 +552,25 @@ func protectedUserMessages(groups []msgGroup, protectedUsers int) []port.LLMMess
 	return out
 }
 
+// isProtectedTool 判定 8 个内置运维工具（等化后对所有 agent 通用）。这些
+// 工具是角色权限建模的固定组成，裁剪会导致能力静默缺失，故在 fitToolList
+// 贪心打包中保底优先保留。
+func isProtectedTool(name string) bool {
+	switch name {
+	case domain.SystemAssistantToolSearchOfficialDocs,
+		domain.SystemAssistantToolDiagnoseTenant,
+		domain.SystemAssistantToolProposeResourceChange,
+		domain.SystemAssistantToolApplyResourceChange,
+		domain.SystemAssistantToolListModels,
+		domain.SystemAssistantToolUpdateSystemModel,
+		domain.SystemAssistantToolListAgents,
+		domain.SystemAssistantToolListMCPServers:
+		return true
+	default:
+		return false
+	}
+}
+
 // fitToolList packs tool schemas within the token allowance. 预算充足时保持
 // 声明顺序全量返回；不足时按优先级贪心：激活技能与授权能力工具（skill、
 // MCP、知识、记忆）优先打包，plan 工作流工具最后裁——技能激活是用户显式
@@ -567,6 +583,14 @@ func fitToolList(tools []port.ToolDefinition, allowance int) []port.ToolDefiniti
 	}
 	ordered := append([]port.ToolDefinition(nil), tools...)
 	slices.SortStableFunc(ordered, func(a, b port.ToolDefinition) int {
+		// 8 个内置运维工具 protected 保底最前：先于 skill/MCP/知识/记忆贪心，
+		// 预算受限时优先保留（D17），静默缺失即角色能力缺失。
+		if ap, bp := isProtectedTool(a.Name), isProtectedTool(b.Name); ap != bp {
+			if ap {
+				return -1
+			}
+			return 1
+		}
 		switch {
 		case isReservedPlanTool(a.Name) == isReservedPlanTool(b.Name):
 			return 0

@@ -8,8 +8,8 @@ export const skillSchema = z.object({
   id: z.string(), name: z.string(), description: z.string().optional().default(''),
   status: z.string().optional().default('draft'), activeRevisionId: z.string().optional(),
   draftRevisionId: z.string().optional(), created_at: z.string().optional(), updated_at: z.string().optional(),
-  // isSystem: 系统内置 skill（ID 前缀 builtin:）。普通 agent 挂载选择列须过滤，
-  // 仅系统助手可挂载（后端 A2 写校验 + C 运行时净化强制）。
+  // isSystem: 系统内置 skill（ID 前缀 builtin:）的资源属性。挂载已对普通 agent
+  // 开放，资源写保护仍由后端 version_service 强制。
   isSystem: z.boolean().optional().default(false),
 }).passthrough();
 export type Skill = z.infer<typeof skillSchema>;

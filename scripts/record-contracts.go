@@ -712,9 +712,6 @@ func (contractAgentRepo) Register(context.Context, *agentdomain.AgentConfig, *au
 func (contractAgentRepo) Get(context.Context, string) (*agentdomain.AgentConfig, bool, error) {
 	return nil, false, nil
 }
-func (contractAgentRepo) GetSystemAssistant(context.Context) (*agentdomain.AgentConfig, bool, error) {
-	return nil, false, nil
-}
 func (contractAgentRepo) GetAll(context.Context) ([]*agentdomain.AgentConfig, error) {
 	return nil, nil
 }
@@ -723,16 +720,6 @@ func (contractAgentRepo) Remove(context.Context, string, *auditdomain.ResourceCh
 }
 func (contractAgentRepo) Update(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string, bool) error {
 	return nil
-}
-func (contractAgentRepo) UpdateSystemAssistantModel(
-	context.Context, string, string, int, int, *auditdomain.ResourceChangeAuditEvent,
-) (*agentdomain.AgentConfig, error) {
-	return nil, nil
-}
-func (contractAgentRepo) UpdateSystemAssistantAll(
-	context.Context, string, string, int, int, int, map[string]any, *auditdomain.ResourceChangeAuditEvent,
-) (*agentdomain.AgentConfig, error) {
-	return nil, nil
 }
 
 // Operation gate stubs: self-modify always lands as a pending proposal, so

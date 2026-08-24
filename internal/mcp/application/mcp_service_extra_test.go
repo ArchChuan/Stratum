@@ -22,9 +22,6 @@ type queryManagerFake struct {
 }
 
 func (f *queryManagerFake) GetAllServerInfo(context.Context) []*domain.ServerInfo { return f.infos }
-func (f *queryManagerFake) ListPlatformManagedServerIDs(context.Context) ([]string, error) {
-	return nil, nil
-}
 func (f *queryManagerFake) GetServerInfo(_ context.Context, id string) *domain.ServerInfo {
 	if f.infoErr != nil {
 		return nil

@@ -3,14 +3,12 @@ package wiring
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
-	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
 	workflowapp "github.com/byteBuilderX/stratum/internal/workflow/application"
 	workflowport "github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	workflowexec "github.com/byteBuilderX/stratum/internal/workflow/infrastructure/executor"
@@ -91,14 +89,6 @@ func truncateRunes(value string, limit int) string {
 	return string(runes[:limit])
 }
 
-// builtinSkillRefClassifier 判定 skill 引用是否指向系统内置 skill(ID 前缀
-// builtin:)。注入 DefinitionService 供保存时拒绝内置 skill 节点。
-type builtinSkillRefClassifier struct{}
-
-func (builtinSkillRefClassifier) IsBuiltinSkill(skillID string) bool {
-	return strings.HasPrefix(skillID, "builtin:")
-}
-
 type workflowSkillVersions interface {
 	ResolveActivation(context.Context, string, string) (skillapp.SkillActivationView, bool, error)
 }
@@ -109,11 +99,6 @@ type workflowSkillExecutor struct {
 }
 
 func (e workflowSkillExecutor) ExecuteSkill(ctx context.Context, tenantID, agentID, skillID, revisionID, input string) (string, string, error) {
-	// 内置 skill 仅系统助手可执行;workflow 执行链路用 WithActiveSkills 覆盖
-	// agent 侧运行时净化,入口 fail-closed 复用已有 sentinel → 409。
-	if strings.HasPrefix(skillID, "builtin:") {
-		return "", "", skilldomain.ErrPlatformManagedSkill
-	}
 	view, found, err := e.versions.ResolveActivation(ctx, skillID, revisionID)
 	if err != nil {
 		return "", "", err
@@ -192,7 +177,6 @@ func (c *Container) buildWorkflow(_ context.Context) error {
 	registry := workflowexec.NewRegistry(agentExecutor, workflowSkillExecutor{agents: c.Agent.Service, versions: c.Skill.VersionService}, workflowMCPExecutor{policies: c.MCP.Service, manager: c.MCP.Manager})
 	runs := workflowapp.NewRunServiceWithRegistry(store, store, registry, newID, c.Logger)
 	defService := workflowapp.NewDefinitionService(store, store, newID)
-	defService.SetSkillRefClassifier(builtinSkillRefClassifier{})
 	defService.SetFailureAuditRecorder(failureRecorderOf(c))
 	defService.SetLogger(c.Logger)
 	c.Workflow = &Workflow{DefinitionService: defService, RunService: runs, ControlService: workflowapp.NewControlService(store, newID)}

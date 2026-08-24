@@ -276,15 +276,15 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
         }
         const list = await agentApi.list();
         if (cancelled) return;
-        const ordered = [...list].sort((left, right) => Number(right.isSystem) - Number(left.isSystem));
-        setAgents(ordered);
+        // 等化后 agent 无平台/普通之分，按 API 列表顺序展示，默认选中首个。
+        setAgents(list);
         // 失败不清 selectedAgent：保留上次 agent 时，会话列表照常按 selectedAgent 加载，
         // 不因 agents 列表失败而整个侧栏空白。
         setSelectedAgent((prev) => {
-          if (prev && ordered.some((a) => a.id === prev)) return prev;
-          // 无 isSystem agent 时回退到第一个 agent：selectedAgent 为 null 会让
-          // conversations effect 直接 return，会话列表永不加载、侧栏空白。
-          const defaultAgent = ordered.find((agent) => agent.isSystem)?.id ?? ordered[0]?.id ?? null;
+          if (prev && list.some((a) => a.id === prev)) return prev;
+          // selectedAgent 为 null 会让 conversations effect 直接 return，会话列表
+          // 永不加载、侧栏空白，因此回退选择列表首个 agent。
+          const defaultAgent = list[0]?.id ?? null;
           if (defaultAgent) sessionStorage.setItem(SS_AGENT, defaultAgent);
           else sessionStorage.removeItem(SS_AGENT);
           return defaultAgent;

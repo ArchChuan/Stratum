@@ -23,9 +23,10 @@ const baseHook = {
   onFinish: vi.fn(),
 };
 
-const renderPage = (agentValues: Pick<Agent, 'isSystem' | 'name'>, id: string) => {
+const renderPage = (name: string, id: string) => {
   const agent: Agent = {
     id,
+    name,
     description: '',
     type: 'react',
     systemPrompt: '',
@@ -34,7 +35,6 @@ const renderPage = (agentValues: Pick<Agent, 'isSystem' | 'name'>, id: string) =
     mcpToolIds: [],
     knowledgeWorkspaceIds: [],
     memoryScope: 'user',
-    ...agentValues,
   };
   const Harness = () => {
     const [form] = Form.useForm();
@@ -52,16 +52,10 @@ const renderPage = (agentValues: Pick<Agent, 'isSystem' | 'name'>, id: string) =
 describe('EditAgentPage', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('renders the unified form for the platform assistant', () => {
-    renderPage({ isSystem: true, name: 'Stratum 平台助手' }, 'stratum-platform-assistant');
+  it('shows the edit title and form for any agent', () => {
+    renderPage('Stratum 平台助手', 'stratum-platform-assistant');
 
-    expect(screen.getByText('平台助手设置')).toBeInTheDocument();
-    expect(screen.getByText('普通 Agent 完整表单')).toBeInTheDocument();
-  });
-
-  it('shows edit title and form for an ordinary Agent', () => {
-    renderPage({ isSystem: false, name: '普通 Agent' }, 'agent-1');
-
+    // 等化后标题恒为「编辑 Agent」，不再区分平台助手与普通 Agent。
     expect(screen.getByText('编辑 Agent')).toBeInTheDocument();
     expect(screen.getByText('普通 Agent 完整表单')).toBeInTheDocument();
   });

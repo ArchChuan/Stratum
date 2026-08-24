@@ -23,7 +23,7 @@ type CreateAgentRequest struct {
 	AllowedSkills         []string `json:"allowedSkills"`
 	MCPToolIDs            []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
-	MemoryScope           string   `json:"memoryScope"`
+	MemoryScope           string   `json:"memoryScope" binding:"required"`
 	// Parameters carries registry resource-scope values as a flat object; only
 	// the memory.* dotted keys persist on the agent (sampling keys stay on the
 	// explicit fields). Same merge semantics as UpdateAgentRequest.Parameters.
@@ -46,7 +46,7 @@ type UpdateAgentRequest struct {
 	AllowedSkills         []string `json:"allowedSkills"`
 	MCPToolIDs            []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
-	MemoryScope           string   `json:"memoryScope"`
+	MemoryScope           string   `json:"memoryScope" binding:"required"`
 	// Parameters carries the registry sampling parameters as a flat object
 	// (temperature/max_tokens/reasoning_effort；压缩配置已迁平台参数)。
 	// 压缩三值（提示词/温度/模型）为平台级参数，不在 agent 上暴露/保存。
@@ -72,8 +72,6 @@ type AgentResponse struct {
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
 	CreatedAt             string   `json:"createdAt"`
 	MemoryScope           string   `json:"memoryScope"`
-	IsSystem              bool     `json:"isSystem"`
-	ManagementMode        string   `json:"managementMode"`
 	// Parameters echoes the persisted sampling parameters (0=unset keys
 	// omitted), symmetric with UpdateAgentRequest.parameters.
 	Parameters map[string]any `json:"parameters"`
@@ -123,8 +121,6 @@ func dtoToResponse(d agent.AgentDTO) AgentResponse {
 		KnowledgeWorkspaceIDs: d.KnowledgeWorkspaceIDs,
 		CreatedAt:             d.CreatedAt,
 		MemoryScope:           d.MemoryScope,
-		IsSystem:              d.IsSystem,
-		ManagementMode:        d.ManagementMode,
 		Parameters:            d.Parameters,
 		Editors:               d.Editors,
 	}

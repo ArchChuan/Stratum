@@ -51,14 +51,14 @@ describe('executeAgentStream', () => {
     });
 
     callbacksOf(0).onEvent({
-      error: '租户尚未配置平台助手模型',
-      code: 'SYSTEM_ASSISTANT_MODEL_UNAVAILABLE',
+      error: '该 Agent 尚未配置可用模型',
+      code: 'ASSISTANT_MODEL_UNAVAILABLE',
     });
 
     expect(onError).toHaveBeenCalledOnce();
     const error = onError.mock.calls[0][0] as Error & { code?: string };
-    expect(error.message).toBe('租户尚未配置平台助手模型');
-    expect(error.code).toBe('SYSTEM_ASSISTANT_MODEL_UNAVAILABLE');
+    expect(error.message).toBe('该 Agent 尚未配置可用模型');
+    expect(error.code).toBe('ASSISTANT_MODEL_UNAVAILABLE');
   });
 
   describe('断点续接自愈连接器', () => {

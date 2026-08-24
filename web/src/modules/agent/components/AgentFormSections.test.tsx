@@ -127,10 +127,10 @@ describe('AgentFormSections', () => {
     expect(screen.getByText('retired-chat（当前不可用）')).toBeInTheDocument();
   });
 
-  it('shows an editable max_tokens field for the system assistant', () => {
+  it('shows an editable max_tokens field', () => {
     render(
       <Form initialValues={{ max_tokens: 2048 }}>
-        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} isSystem />
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
       </Form>,
     );
 
@@ -144,7 +144,7 @@ describe('AgentFormSections', () => {
     expect(screen.queryByText(/请输入最大生成 Token/)).not.toBeInTheDocument();
   });
 
-  it('keeps max_tokens visible for ordinary agents', () => {
+  it('keeps max_tokens visible', () => {
     render(
       <Form initialValues={{ max_tokens: 2048 }}>
         <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
@@ -217,16 +217,8 @@ describe('AgentFormSections', () => {
     expect(screen.queryByText(/推理模型该值含思考长度/)).not.toBeInTheDocument();
   });
 
-  it('hides temperature field for the system assistant only', () => {
-    const { rerender } = render(
-      <Form>
-        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} isSystem />
-      </Form>,
-    );
-
-    expect(screen.queryByRole('slider', { name: 'temperature' })).not.toBeInTheDocument();
-
-    rerender(
+  it('shows temperature field for all agents', () => {
+    render(
       <Form>
         <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
       </Form>,
@@ -258,9 +250,8 @@ describe('AgentFormSections', () => {
     expect(screen.getByText('思考强度（reasoning_effort）')).toBeInTheDocument();
   });
 
-  it('hides reasoning effort selector for non-reasoning models and for the system assistant', () => {
-    // 非推理模型 → 隐藏
-    const { rerender } = render(
+  it('hides reasoning effort selector for non-reasoning models', () => {
+    render(
       <Form initialValues={{ llmModel: 'qwen-turbo' }}>
         <AgentFormSections
           skills={[]}
@@ -279,31 +270,12 @@ describe('AgentFormSections', () => {
       </Form>,
     );
     expect(screen.queryByText('思考强度（reasoning_effort）')).not.toBeInTheDocument();
-
-    // 推理模型但系统助手 → 隐藏（system 走统一模型管理，不带采样参数）
-    rerender(
-      <Form initialValues={{ llmModel: 'o3-mini' }}>
-        <AgentFormSections
-          skills={[]}
-          mcpTools={[]}
-          workspaces={[]}
-          groupedModels={[
-            {
-              provider: '托管厂商',
-              models: [{ value: 'o3-mini', label: 'o3-mini', reasoning: true }],
-            },
-          ]}
-          isSystem
-        />
-      </Form>,
-    );
-    expect(screen.queryByText('思考强度（reasoning_effort）')).not.toBeInTheDocument();
   });
 
   it('applies constant bounds to the token inputs', () => {
     render(
       <Form>
-        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} isSystem />
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
       </Form>,
     );
 
@@ -404,6 +376,39 @@ describe('AgentFormSections', () => {
       </Form>,
     );
     expect(screen.queryByText('默认：0.7')).not.toBeInTheDocument();
+  });
+
+  it('renders a required memory scope select with user and agent options', () => {
+    render(
+      <Form>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
+      </Form>,
+    );
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: '记忆范围' }));
+    expect(screen.getByRole('option', { name: '用户级' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Agent 级' })).toBeInTheDocument();
+  });
+
+  it('keeps the memory scope select visible alongside temperature for all agents', () => {
+    render(
+      <Form>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
+      </Form>,
+    );
+    // 等化后记忆范围 Select 与温度块对所有 agent 可见。
+    expect(screen.getByRole('combobox', { name: '记忆范围' })).toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: 'temperature' })).toBeInTheDocument();
+  });
+
+  it('blocks submission when memory scope is missing', async () => {
+    render(
+      <Form>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
+        <button type="submit">提交</button>
+      </Form>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '提交' }));
+    expect(await screen.findByText('请选择记忆范围')).toBeInTheDocument();
   });
 
 });

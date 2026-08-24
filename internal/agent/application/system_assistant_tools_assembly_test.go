@@ -18,6 +18,7 @@ import (
 type assistantDiagnosticStub struct {
 	authorizeCalls int
 	role           string
+	authorizeErr   error
 }
 
 func (s *assistantDiagnosticStub) Authorize(
@@ -25,6 +26,9 @@ func (s *assistantDiagnosticStub) Authorize(
 	req domain.DiagnosticRequest,
 ) (domain.DiagnosticAuthorization, error) {
 	s.authorizeCalls++
+	if s.authorizeErr != nil {
+		return domain.DiagnosticAuthorization{}, s.authorizeErr
+	}
 	req.Scope = domain.DiagnosticScopeSelf
 	role := s.role
 	if role == "" {
@@ -65,7 +69,7 @@ func (genericMCPTools) ToolsForServer(_ context.Context, _ string, serverID stri
 func TestSystemAssistantResolvesPlatformToolsInProcess(t *testing.T) {
 	diagnostics := &assistantDiagnosticStub{}
 	svc := NewAgentService(AgentServiceDeps{
-		Registry:           NewRegistry(nil, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry:           NewRegistry(nil, zap.NewNop()),
 		DiagnosticProvider: diagnostics,
 		OfficialDocsSearch: func(_ context.Context, query string) ([]domain.Citation, error) {
 			return []domain.Citation{{Title: query}}, nil
@@ -89,8 +93,7 @@ func TestSystemAssistantResolvesPlatformToolsInProcess(t *testing.T) {
 		require.Equal(t, tool.Name, tool.CapabilityID)
 		require.Empty(t, tool.ServerID)
 	}
-	require.Equal(t, "member", cfg.SystemAssistantRoleClass)
-	require.True(t, cfg.SystemAssistantMode)
+	require.Equal(t, "member", cfg.AssistantRoleClass)
 	require.NotNil(t, cfg.OfficialDocsSearchFn)
 	require.NotNil(t, cfg.DiagnosticFn)
 	require.Nil(t, cfg.ProposalCreateFn)
@@ -105,7 +108,7 @@ func TestSystemAssistantResolvesPlatformToolsInProcess(t *testing.T) {
 func TestSystemAssistantProposalToolVisibleInProcessWithoutService(t *testing.T) {
 	diagnostics := &assistantDiagnosticStub{role: "admin"}
 	svc := NewAgentService(AgentServiceDeps{
-		Registry:           NewRegistry(nil, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry:           NewRegistry(nil, zap.NewNop()),
 		DiagnosticProvider: diagnostics,
 		OfficialDocsSearch: func(_ context.Context, query string) ([]domain.Citation, error) {
 			return []domain.Citation{{Title: query}}, nil
@@ -121,7 +124,7 @@ func TestSystemAssistantProposalToolVisibleInProcessWithoutService(t *testing.T)
 	require.NoError(t, err)
 	cfg := &ExecutionConfig{}
 	cfg.ApplyOptions(options)
-	require.Equal(t, "admin", cfg.SystemAssistantRoleClass)
+	require.Equal(t, "admin", cfg.AssistantRoleClass)
 	// D6：工具可见性全角色一致（8 个），无需按角色注入；ProposalCreateFn
 	// 仅在装配 ProposalService 时注入（见 TestAdminProposeAutoConfirmsAndApplies）。
 	require.Len(t, cfg.ExtraTools, 8)
@@ -171,7 +174,7 @@ func TestSystemAssistantModelToolsAssemblyAndRoleGate(t *testing.T) {
 	repo := new(mockAgentRepo)
 	validator := &stubTenantModelValidator{}
 	svc := NewAgentService(AgentServiceDeps{
-		Registry:             NewRegistry(repo, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry:             NewRegistry(repo, zap.NewNop()),
 		DiagnosticProvider:   &assistantDiagnosticStub{role: "member"},
 		OfficialDocsSearch:   func(_ context.Context, query string) ([]domain.Citation, error) { return nil, nil },
 		TenantModelValidator: validator,
@@ -197,33 +200,28 @@ func TestSystemAssistantModelToolsAssemblyAndRoleGate(t *testing.T) {
 
 	// update_system_model 写路径 member 明确拒绝（fail closed），不触达 Registry。
 	require.NotNil(t, cfg.UpdateSystemModelFn)
-	_, updateErr := cfg.UpdateSystemModelFn(context.Background(), "qwen-plus")
+	_, updateErr := cfg.UpdateSystemModelFn(context.Background(), "qwen-plus", "")
 	require.ErrorContains(t, updateErr, "管理员权限")
-	repo.AssertNotCalled(t, "UpdateSystemAssistantModel", mock.Anything, mock.Anything)
 }
 
 func TestSystemAssistantAdminUpdateSystemModelExecutes(t *testing.T) {
 	repo := new(mockAgentRepo)
 	validator := &stubTenantModelValidator{}
-	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	// SystemActor 注入：等同化后 update 走普通 ownership 链路，系统上下文放行。
+	ctx := reqctx.WithSystemActor(reqctx.WithTenantID(context.Background(), "tenant-1"), "system")
 	svc := NewAgentService(AgentServiceDeps{
-		Registry:             NewRegistry(repo, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry:             NewRegistry(repo, zap.NewNop()),
 		DiagnosticProvider:   &assistantDiagnosticStub{role: "admin"},
 		OfficialDocsSearch:   func(_ context.Context, query string) ([]domain.Citation, error) { return nil, nil },
 		TenantModelValidator: validator,
 		TenantModelCatalog:   validator,
 		Logger:               zap.NewNop(),
 	})
-	repo.On("GetSystemAssistant", ctx).Return(&domain.AgentConfig{
+	existing := &domain.AgentConfig{
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "existing-model",
-	}, true, nil)
-	repo.On("UpdateSystemAssistantModel", ctx, "qwen-plus", "", 0, 0,
-		mock.MatchedBy(func(a *auditdomain.ResourceChangeAuditEvent) bool {
-			return a != nil && a.ActorID == "user-1" && a.Operation == auditdomain.ChangeOpUpdate &&
-				a.ResourceKind == auditdomain.ResourceKindAgent
-		})).Return(&domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "qwen-plus",
-	}, nil).Once()
+	}
+	repo.On("Get", mock.Anything, domain.SystemAssistantID).Return(existing, true, nil)
+	repo.On("Update", mock.Anything).Return(nil)
 	system := &optionCaptureAgent{config: &domain.AgentConfig{
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
 		LLMModel: "tenant-model", MaxIterations: 3,
@@ -234,7 +232,7 @@ func TestSystemAssistantAdminUpdateSystemModelExecutes(t *testing.T) {
 	cfg := &ExecutionConfig{}
 	cfg.ApplyOptions(options)
 
-	result, updateErr := cfg.UpdateSystemModelFn(ctx, "qwen-plus")
+	result, updateErr := cfg.UpdateSystemModelFn(ctx, "qwen-plus", "")
 	require.NoError(t, updateErr)
 	require.Equal(t, "qwen-plus", result["model"])
 	require.Equal(t, true, result["ready"])
@@ -244,7 +242,7 @@ func TestSystemAssistantAdminUpdateSystemModelExecutes(t *testing.T) {
 
 func TestSystemAssistantWithoutModelFailsBeforeCapabilityResolution(t *testing.T) {
 	svc := NewAgentService(AgentServiceDeps{
-		Registry: NewRegistry(nil, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry: NewRegistry(nil, zap.NewNop()),
 	})
 	system := &optionCaptureAgent{config: &domain.AgentConfig{
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, MaxIterations: 3,
@@ -255,24 +253,29 @@ func TestSystemAssistantWithoutModelFailsBeforeCapabilityResolution(t *testing.T
 }
 
 func TestOrdinaryAgentResolvesMCPToolsFromProvider(t *testing.T) {
-	svc := NewAgentService(AgentServiceDeps{MCPTools: genericMCPTools{}, SystemResourceGuard: stubSystemResourceGuard{}})
+	svc := NewAgentService(AgentServiceDeps{MCPTools: genericMCPTools{},
+		TenantModelValidator: &stubTenantModelValidator{}})
 	agent := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: "ordinary", MaxIterations: 3, MCPToolIDs: []string{"mcp:orders:get"},
+		LLMModel: "test-model", ID: "ordinary", MaxIterations: 3, MCPToolIDs: []string{"mcp:orders:get"},
 	}}
 	_, options, err := svc.assembleOptions(t.Context(), agent, ExecRequest{},
 		ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1")
 	require.NoError(t, err)
 	cfg := &ExecutionConfig{}
 	cfg.ApplyOptions(options)
-	require.Len(t, cfg.ExtraTools, 1)
+	// D17/D19 等化后普通 agent 也注入 8 个内置运维工具：MCP 工具 + 8 = 9。
+	require.Len(t, cfg.ExtraTools, 9)
 	require.Equal(t, "mcp:orders:get", cfg.ExtraTools[0].Name)
 	require.Equal(t, domain.ProviderTypeMCP, cfg.ExtraTools[0].ProviderType)
+	for _, def := range cfg.ExtraTools[1:] {
+		require.Equal(t, domain.ProviderTypeInternal, def.ProviderType)
+	}
 }
 
 func TestSystemAssistantTreatsStaleModelAsUnavailable(t *testing.T) {
-	validator := &strictModelValidatorStub{err: domain.ErrInvalidSystemAssistantModel}
+	validator := &strictModelValidatorStub{err: domain.ErrInvalidAgentModel}
 	svc := NewAgentService(AgentServiceDeps{
-		Registry:             NewRegistry(nil, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry:             NewRegistry(nil, zap.NewNop()),
 		TenantModelValidator: validator,
 	})
 	system := &optionCaptureAgent{config: &domain.AgentConfig{
@@ -282,7 +285,7 @@ func TestSystemAssistantTreatsStaleModelAsUnavailable(t *testing.T) {
 	_, _, err := svc.assembleOptions(t.Context(), system, ExecRequest{},
 		ExecMeta{TenantID: "tenant-1"}, "execution-1")
 	require.ErrorIs(t, err, domain.ErrAssistantModelUnavailable)
-	require.False(t, errors.Is(err, domain.ErrInvalidSystemAssistantModel))
+	require.False(t, errors.Is(err, domain.ErrInvalidAgentModel))
 }
 
 func TestBuildExecutionArtifactsPreservesAssistantFailureAsEvidenceGap(t *testing.T) {
@@ -307,11 +310,6 @@ func (m *mockAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig
 	return args.Get(0).(*domain.AgentConfig), args.Bool(1), args.Error(2)
 }
 
-func (m *mockAgentRepo) GetSystemAssistant(ctx context.Context) (*domain.AgentConfig, bool, error) {
-	args := m.Called(ctx)
-	return args.Get(0).(*domain.AgentConfig), args.Bool(1), args.Error(2)
-}
-
 func (m *mockAgentRepo) GetAll(_ context.Context) ([]*domain.AgentConfig, error) {
 	args := m.Called()
 	return args.Get(0).([]*domain.AgentConfig), args.Error(1)
@@ -323,25 +321,6 @@ func (m *mockAgentRepo) Remove(_ context.Context, id string, _ *auditdomain.Reso
 
 func (m *mockAgentRepo) Update(_ context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool) error {
 	return m.Called(cfg).Error(0)
-}
-
-func (m *mockAgentRepo) UpdateSystemAssistantModel(
-	ctx context.Context, model, memoryScope string, maxIterations, maxContextTokens int,
-	audit *auditdomain.ResourceChangeAuditEvent,
-) (*domain.AgentConfig, error) {
-	args := m.Called(ctx, model, memoryScope, maxIterations, maxContextTokens, audit)
-	cfg, _ := args.Get(0).(*domain.AgentConfig)
-	return cfg, args.Error(1)
-}
-
-func (m *mockAgentRepo) UpdateSystemAssistantAll(
-	ctx context.Context, model, memoryScope string, maxIterations, maxContextTokens, maxTokens int,
-	_ map[string]any,
-	_ *auditdomain.ResourceChangeAuditEvent,
-) (*domain.AgentConfig, error) {
-	args := m.Called(ctx, model, memoryScope, maxIterations, maxContextTokens, maxTokens)
-	cfg, _ := args.Get(0).(*domain.AgentConfig)
-	return cfg, args.Error(1)
 }
 
 // stubTenantModelValidator 同时实现 port.TenantChatModelValidator 与
@@ -400,7 +379,7 @@ func TestAdminProposeAutoConfirmsAndApplies(t *testing.T) {
 	proposalService := newProposalServiceForTest(repo, &proposalAuthorizerFake{}, &baselineFake{},
 		map[domain.ResourceKind]port.ResourceChangeApplier{domain.ResourceAgent: applier})
 	svc := NewAgentService(AgentServiceDeps{
-		Registry:             NewRegistry(new(mockAgentRepo), BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry:             NewRegistry(new(mockAgentRepo), zap.NewNop()),
 		DiagnosticProvider:   &assistantDiagnosticStub{role: "admin"},
 		ProposalService:      proposalService,
 		TenantModelValidator: &stubTenantModelValidator{},
@@ -432,7 +411,7 @@ func TestMemberProposeStaysInReviewFlow(t *testing.T) {
 	proposalService := newProposalServiceForTest(repo, &proposalAuthorizerFake{}, &baselineFake{},
 		map[domain.ResourceKind]port.ResourceChangeApplier{domain.ResourceAgent: applier})
 	svc := NewAgentService(AgentServiceDeps{
-		Registry:             NewRegistry(new(mockAgentRepo), BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry:             NewRegistry(new(mockAgentRepo), zap.NewNop()),
 		DiagnosticProvider:   &assistantDiagnosticStub{role: "member"},
 		ProposalService:      proposalService,
 		TenantModelValidator: &stubTenantModelValidator{},
@@ -465,7 +444,7 @@ func TestAdminProposeAutoApplyFailureKeepsCreatedProposal(t *testing.T) {
 	proposalService := newProposalServiceForTest(repo, &proposalAuthorizerFake{failAt: 2}, &baselineFake{},
 		map[domain.ResourceKind]port.ResourceChangeApplier{domain.ResourceAgent: applier})
 	svc := NewAgentService(AgentServiceDeps{
-		Registry:             NewRegistry(new(mockAgentRepo), BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry:             NewRegistry(new(mockAgentRepo), zap.NewNop()),
 		DiagnosticProvider:   &assistantDiagnosticStub{role: "admin"},
 		ProposalService:      proposalService,
 		TenantModelValidator: &stubTenantModelValidator{},
@@ -494,7 +473,7 @@ func TestAdminProposeAutoApplyFailureKeepsCreatedProposal(t *testing.T) {
 func TestMemberApplyRejectedBeforeApplier(t *testing.T) {
 	called := false
 	svc := NewAgentService(AgentServiceDeps{
-		Registry:           NewRegistry(new(mockAgentRepo), BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry:           NewRegistry(new(mockAgentRepo), zap.NewNop()),
 		DiagnosticProvider: &assistantDiagnosticStub{role: "member"},
 		ResourceChangeApplier: func(_ context.Context, _ string, _ map[string]any) (domain.ApplyResult, error) {
 			called = true
@@ -531,7 +510,7 @@ func TestSystemAssistantListAgentsProjectionOmitsSensitiveFields(t *testing.T) {
 		SystemPrompt: "secret-prompt", SystemKey: "secret-key",
 	}}, nil)
 	svc := NewAgentService(AgentServiceDeps{
-		Registry:             NewRegistry(repo, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry:             NewRegistry(repo, zap.NewNop()),
 		DiagnosticProvider:   &assistantDiagnosticStub{role: "member"},
 		OfficialDocsSearch:   func(_ context.Context, query string) ([]domain.Citation, error) { return nil, nil },
 		TenantModelValidator: &stubTenantModelValidator{},
@@ -560,4 +539,46 @@ func TestSystemAssistantListAgentsProjectionOmitsSensitiveFields(t *testing.T) {
 	require.NotContains(t, s, "secret-key")
 	require.NotContains(t, s, "systemPrompt")
 	require.NotContains(t, s, "systemKey")
+}
+
+// D18：无 HTTP actor 的内部执行（revision/评估/工作流）没有用户上下文，
+// Authorize 失败回退 member（self 范围），不阻断合法内部流程。
+func TestResolveTooling_NoActor_AuthorizeFailure_FallsBackToMember(t *testing.T) {
+	diagnostics := &assistantDiagnosticStub{authorizeErr: errors.New("authorize unavailable")}
+	svc := NewAgentService(AgentServiceDeps{
+		Registry:             NewRegistry(nil, zap.NewNop()),
+		DiagnosticProvider:   diagnostics,
+		TenantModelValidator: &strictModelValidatorStub{},
+	})
+	agent := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model",
+	}}
+	authorization := &domain.DiagnosticAuthorization{}
+	_, _, roleClass, err := svc.resolveTooling(t.Context(),
+		ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"},
+		ExecRequest{UserID: ""},
+		agent, "subject-1", authorization)
+	require.NoError(t, err)
+	require.Equal(t, "member", roleClass)
+	require.Equal(t, "member", authorization.RoleClass)
+}
+
+// D18：HTTP 执行带 UserID，Authorize 失败维持 fail-closed。
+func TestResolveTooling_HTTPActor_AuthorizeFailure_FailsClosed(t *testing.T) {
+	diagnostics := &assistantDiagnosticStub{authorizeErr: errors.New("authorize unavailable")}
+	svc := NewAgentService(AgentServiceDeps{
+		Registry:             NewRegistry(nil, zap.NewNop()),
+		DiagnosticProvider:   diagnostics,
+		TenantModelValidator: &strictModelValidatorStub{},
+	})
+	agent := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model",
+	}}
+	authorization := &domain.DiagnosticAuthorization{}
+	_, _, _, err := svc.resolveTooling(t.Context(),
+		ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"},
+		ExecRequest{UserID: "user-1"},
+		agent, "subject-1", authorization)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "authorize unavailable")
 }

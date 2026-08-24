@@ -10,7 +10,6 @@ import (
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
-	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
 	workflowport "github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/stretchr/testify/require"
@@ -116,14 +115,16 @@ func TestWorkflowSkillExecutorUsesPinnedRevision(t *testing.T) {
 	require.Equal(t, "query", agents.req.Query)
 }
 
-// TestWorkflowSkillExecutorRejectsBuiltinSkill:内置 skill 仅系统助手可执行,
-// ExecuteSkill 入口 fail-closed 拒 builtin skillID,ExecuteSkillScenario 不被调用。
-func TestWorkflowSkillExecutorRejectsBuiltinSkill(t *testing.T) {
+// TestWorkflowSkillExecutorExecutesBuiltinSkill:等化后 builtin skill 可被
+// workflow 执行,入口不再拒绝,ExecuteSkillScenario 正常被调用。
+func TestWorkflowSkillExecutorExecutesBuiltinSkill(t *testing.T) {
 	agents := &workflowAgentServiceFake{}
 	executor := workflowSkillExecutor{agents: agents, versions: workflowSkillVersionsFake{}}
-	_, _, err := executor.ExecuteSkill(context.Background(), "tenant-1", "agent-1", "builtin:platform-guide", "revision-9", "query")
-	require.ErrorIs(t, err, skilldomain.ErrPlatformManagedSkill)
-	require.Zero(t, agents.scenarioCalls, "builtin skill must not reach ExecuteSkillScenario")
+	output, _, err := executor.ExecuteSkill(context.Background(), "tenant-1", "agent-1", "builtin:platform-guide", "revision-9", "query")
+	require.NoError(t, err)
+	require.Equal(t, "revision-9", output)
+	require.Equal(t, "query", agents.req.Query)
+	require.Equal(t, 1, agents.scenarioCalls, "builtin skill must reach ExecuteSkillScenario")
 }
 
 type workflowMCPPolicyFake struct{ risk mcpdomain.ToolRiskLevel }

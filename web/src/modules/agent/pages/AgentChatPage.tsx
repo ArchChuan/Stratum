@@ -58,9 +58,9 @@ export const AgentChatPage = ({
 
   const agentObj = agents.find((a) => a.id === selectedAgent);
   const pendingApproval = waitingApproval;
+	// 等化后模型不可用告警对所有 agent 生效（普通 agent 同样要求模型在租户列表）。
 	const assistantModelUnavailable = !!(
-		agentObj?.isSystem &&
-		streamFailure?.code === 'SYSTEM_ASSISTANT_MODEL_UNAVAILABLE'
+		streamFailure?.code === 'ASSISTANT_MODEL_UNAVAILABLE'
 	);
   const sidebar = (
     <ChatConversationSidebar
@@ -120,7 +120,6 @@ export const AgentChatPage = ({
           agent={agentObj}
           isMobile={isMobile}
           onOpenConversations={() => setConversationDrawerOpen(true)}
-          isAdmin={isAdmin}
         />
         <ChatMessageList
           messages={messages}
@@ -149,8 +148,8 @@ export const AgentChatPage = ({
 						type="error"
 						showIcon
 						message={isAdmin
-							? '租户尚未配置平台助手模型'
-							: '租户尚未配置平台助手模型，请联系租户管理员配置'}
+							? '该 Agent 尚未配置可用模型'
+							: '该 Agent 尚未配置可用模型，请联系租户管理员配置'}
 						action={undefined}
 					/>
 				)}

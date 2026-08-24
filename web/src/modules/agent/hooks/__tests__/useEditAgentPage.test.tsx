@@ -18,7 +18,7 @@ vi.mock('@/modules/mcp', () => ({ mcpApi: { toolOptions: vi.fn() } }));
 vi.mock('@/modules/knowledge', () => ({ knowledgeApi: { list: vi.fn() } }));
 vi.mock('@/modules/llm', () => ({ llmApi: { getCatalogue: vi.fn().mockResolvedValue({ chatModels: [], embeddingModels: [] }) } }));
 
-const agent = (id: string, isSystem: boolean): Agent => ({
+const agent = (id: string): Agent => ({
   id,
   name: id,
   description: '',
@@ -29,7 +29,6 @@ const agent = (id: string, isSystem: boolean): Agent => ({
   mcpToolIds: [],
   knowledgeWorkspaceIds: [],
   memoryScope: 'user',
-  isSystem,
 });
 
 describe('useEditAgentPage', () => {
@@ -42,11 +41,11 @@ describe('useEditAgentPage', () => {
     let resolveOrdinary!: (value: Agent) => void;
     const ordinary = new Promise<Agent>((resolve) => { resolveOrdinary = resolve; });
     vi.mocked(agentApi.get)
-      .mockResolvedValueOnce(agent('system', true))
+      .mockResolvedValueOnce(agent('system'))
       .mockReturnValueOnce(ordinary);
 
     const { result, rerender } = renderHook(() => useEditAgentPage());
-    await waitFor(() => expect(result.current.agent?.isSystem).toBe(true));
+    await waitFor(() => expect(result.current.agent?.id).toBe('system'));
 
     mocks.id = 'ordinary';
     rerender();
@@ -54,17 +53,14 @@ describe('useEditAgentPage', () => {
     expect(result.current.pageLoading).toBe(true);
     expect(result.current.agent).toBeUndefined();
 
-    await act(async () => resolveOrdinary(agent('ordinary', false)));
+    await act(async () => resolveOrdinary(agent('ordinary')));
   });
 
-  it.each([
-		{ isSystem: true, wantPath: '/agents' },
-		{ isSystem: false, wantPath: '/agents' },
-	])('returns to the correct management tab after saving', async ({ isSystem, wantPath }) => {
-		vi.mocked(agentApi.get).mockResolvedValue(agent(mocks.id, isSystem));
+  it('returns to the agent management tab after saving', async () => {
+		vi.mocked(agentApi.get).mockResolvedValue(agent(mocks.id));
 		vi.mocked(agentApi.update).mockResolvedValue({} as never);
 		const { result } = renderHook(() => useEditAgentPage());
-		await waitFor(() => expect(result.current.agent?.isSystem).toBe(isSystem));
+		await waitFor(() => expect(result.current.agent?.id).toBe(mocks.id));
 
 		await act(async () => result.current.onFinish({
 			name: mocks.id,
@@ -79,7 +75,7 @@ describe('useEditAgentPage', () => {
 			memoryScope: 'user',
 		}));
 
-		expect(mocks.navigate).toHaveBeenCalledWith(wantPath);
+		expect(mocks.navigate).toHaveBeenCalledWith('/agents');
 	});
 
 });

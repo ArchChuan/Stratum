@@ -204,8 +204,7 @@ func productToResponse(value skillapp.SkillProduct) gen.SkillProductResponse {
 	return gen.SkillProductResponse{
 		ID: value.ID, Name: value.Name, Description: value.Description, Status: value.Status,
 		ActiveRevisionID: value.ActiveRevisionID, DraftRevisionID: value.DraftRevisionID,
-		// builtin: 前缀即系统内置 skill;前端据此对普通 agent 的选择列过滤,
-		// 系统助手(updateSystemAssistant 不经此列表)仍保持全量展示。
+		// builtin: 前缀即系统内置 skill;前端据此对普通 agent 的选择列过滤。
 		IsSystem: strings.HasPrefix(value.ID, "builtin:"),
 	}
 }

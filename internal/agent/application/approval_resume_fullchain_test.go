@@ -6,6 +6,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -17,20 +18,6 @@ type fullChainMCPTools struct {
 
 func (m fullChainMCPTools) ToolsForServer(context.Context, string, string) []port.ToolDefinition {
 	return m.tools
-}
-
-// fullChainResourceGuard 是 SystemResourceGuard 桩：所有绑定视为用户自有（不触发
-// 平台托管净化），MCPToolIDs 非空时 sanitizeRuntimeBindings 仍需非 nil guard。
-type fullChainResourceGuard struct{}
-
-func (fullChainResourceGuard) IsPlatformManagedMCPServer(context.Context, string, string) (bool, error) {
-	return false, nil
-}
-func (fullChainResourceGuard) PlatformManagedMCPServerIDs(context.Context, string) ([]string, error) {
-	return nil, nil
-}
-func (fullChainResourceGuard) PlatformManagedWorkspaceIDs(context.Context, string) ([]string, error) {
-	return nil, nil
 }
 
 // recordingMCPExecutor 记录工具执行参数，断言已批准参数被原样执行。
@@ -69,21 +56,21 @@ func TestApprovalResume_EmptySnapshotCheckpoint_ExecutesApprovedPayload(t *testi
 	llm := &toolPermissionLLM{responses: []port.CapabilityResponse{{Content: "approved tool executed"}}}
 	executor := &recordingMCPExecutor{}
 	svc := NewAgentService(AgentServiceDeps{
-		Registry:       NewRegistry(agentRepo, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry:       NewRegistry(agentRepo, zap.NewNop()),
 		TenantResolver: tenantResolverFake{gateway: llm},
 		MCPTools: fullChainMCPTools{tools: []port.ToolDefinition{{
 			Name: "mcp:srv:delete", ProviderType: domain.ProviderTypeMCP,
 			ServerID: "srv", CapabilityID: "delete",
 			InputSchema: map[string]any{"type": "object"},
 		}}},
-		MCPToolExecutor:     executor,
-		ToolAuthorizer:      NewToolAuthorizer(stubToolUserScopeResolver{scope: port.ToolUserScope{UserActive: true, AllowsTool: true}}),
-		ApprovalService:     approvalSvc,
-		ChatStore:           resumeChatRepo{conv: &domain.ChatConversation{ID: "conv-alive"}},
-		CheckpointStore:     cp,
-		TenantRoleResolver:  stubTenantRole{role: "member"},
-		SystemResourceGuard: fullChainResourceGuard{},
-		Logger:              zap.NewNop(),
+		MCPToolExecutor:      executor,
+		ToolAuthorizer:       NewToolAuthorizer(stubToolUserScopeResolver{scope: port.ToolUserScope{UserActive: true, AllowsTool: true}}),
+		ApprovalService:      approvalSvc,
+		ChatStore:            resumeChatRepo{conv: &domain.ChatConversation{ID: "conv-alive"}},
+		CheckpointStore:      cp,
+		TenantRoleResolver:   stubTenantRole{role: "member"},
+		TenantModelValidator: &stubTenantModelValidator{},
+		Logger:               zap.NewNop(),
 	})
 
 	result, _, err := svc.Execute(context.Background(), "a1",
@@ -101,3 +88,34 @@ func TestApprovalResume_EmptySnapshotCheckpoint_ExecutesApprovedPayload(t *testi
 	require.Equal(t, payload.Arguments, executor.args, "执行参数必须是已批准载荷的参数")
 	require.Len(t, llm.requests, 1, "SkipNextLLM 跳过首轮 LLM 生成，capGW 仅收到末轮")
 }
+
+// systemAssistantProfileRepo 精简 port.AgentRepo 桩：续跑全链测试复用（原定义于
+// 已删除的 system_assistant_profile_test.go，保留 port 必需 5 方法）。
+type systemAssistantProfileRepo struct {
+	cfgs []*domain.AgentConfig
+	err  error
+}
+
+func (r systemAssistantProfileRepo) Register(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ []string) error {
+	return nil
+}
+func (r systemAssistantProfileRepo) Get(context.Context, string) (*domain.AgentConfig, bool, error) {
+	if r.err != nil {
+		return nil, false, r.err
+	}
+	if len(r.cfgs) == 0 {
+		return nil, false, nil
+	}
+	return r.cfgs[0], true, nil
+}
+func (r systemAssistantProfileRepo) GetAll(context.Context) ([]*domain.AgentConfig, error) {
+	return r.cfgs, r.err
+}
+func (r systemAssistantProfileRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool) error {
+	return nil
+}
+func (r systemAssistantProfileRepo) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
+
+var _ port.AgentRepo = systemAssistantProfileRepo{}

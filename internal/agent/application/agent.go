@@ -110,24 +110,25 @@ type ExecutionConfig struct {
 	SystemPromptVersion string
 	// GlobalSystemSuffix 是本次执行解析后的全局系统提示词（平台参数
 	// agent.system_prompt，执行时解析，未配置 fail-closed）。
-	GlobalSystemSuffix        string
-	ExtraTools                []port.ToolDefinition
-	SkillCatalog              map[string]port.SkillActivation
-	ToolExecutionFn           port.ToolExecutionFn
-	Actives                   []port.SkillActivation
-	TracePayloadStore         port.TracePayloadStore
-	ConversationID            string
-	UserID                    string
-	HistoryWindow             int
-	EvolutionTrace            EvolutionTraceMetadata
-	SystemAssistantMode       bool
-	SystemAssistantRoleClass  string
+	GlobalSystemSuffix string
+	ExtraTools         []port.ToolDefinition
+	SkillCatalog       map[string]port.SkillActivation
+	ToolExecutionFn    port.ToolExecutionFn
+	Actives            []port.SkillActivation
+	TracePayloadStore  port.TracePayloadStore
+	ConversationID     string
+	UserID             string
+	HistoryWindow      int
+	EvolutionTrace     EvolutionTraceMetadata
+	// AssistantRoleClass 是本次执行解析的成员角色（admin/owner/member），供
+	// 8 个通用内置运维工具在装配闭包与执行 metrics 中 fail-closed 门禁使用。
+	AssistantRoleClass        string
 	OfficialDocsSearchFn      func(context.Context, string) ([]domain.Citation, error)
 	DiagnosticFn              func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)
 	ProposalCreateFn          func(context.Context, map[string]any) (domain.ResourceChangeProposalArtifact, error)
 	ResourceChangeApplyFn     func(context.Context, map[string]any) (domain.ApplyResult, error)
 	ListModelsFn              func(context.Context) (map[string]any, error)
-	UpdateSystemModelFn       func(context.Context, string) (map[string]any, error)
+	UpdateSystemModelFn       func(_ context.Context, model, agentID string) (map[string]any, error)
 	ListAgentsFn              func(context.Context) (map[string]any, error)
 	ListMCPServersFn          func(context.Context) (map[string]any, error)
 	InternalToolResultGuardFn func(any) (port.GuardedToolResult, error)
@@ -705,7 +706,7 @@ func tunableSnapshot(cfg *ExecutionConfig, maxContextTokens int) map[string]any 
 // execution contract: a failure aborts the execution (fail closed) instead of
 // silently running without memory context and producing a different answer.
 func (a *BaseAgent) injectMemoryContext(ctx context.Context, tracer oteltrace.Tracer, cfg *ExecutionConfig, agentID, memoryScope, input string) (string, error) {
-	if cfg.SystemAssistantMode || a.MemoryInjector == nil || cfg.ConversationID == "" {
+	if a.MemoryInjector == nil || cfg.ConversationID == "" {
 		return "", nil
 	}
 	ic := port.InjectionContext{
@@ -797,7 +798,7 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 		initState.Actives = restoredActives
 	}
 	initState.PlanNodeExecutor = a.buildPlanNodeExecutor(ec, ec.capGW)
-	if !ec.cfg.SystemAssistantMode && a.RecallMemoryFn != nil {
+	if a.RecallMemoryFn != nil {
 		fn := a.RecallMemoryFn
 		initState.RecallMemoryFn = func(ctx context.Context, input map[string]any) (string, error) {
 			return fn(ctx, ec.cfg.TenantID, ec.cfg.UserID, ec.agentID, ec.memoryScope, input)
@@ -1123,9 +1124,6 @@ func resolveMaxOutputTokens(explicit, reserve int) int {
 func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port.LLMMessage, maxTokens int) agentgraph.ReActState {
 	availableTools := buildBuiltinTools(ec.workspaceNames, ec.workspaceDescs,
 		len(ec.workspaceNames) > 0 && ec.cfg.RAGSearchFn != nil, a.MemoryInjector != nil)
-	if ec.cfg.SystemAssistantMode {
-		availableTools = nil
-	}
 	// 压缩冷却默认启用（Spec 第 4 节）：平台参数 agent.compaction_cooldown_sec
 	// 已在 Execute 解析进 cfg；0 = constants.DefaultCompactionCooldown，option
 	// 仍可覆盖。
@@ -1153,7 +1151,6 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		Actives:                    ec.cfg.Actives,
 		TracePayloadStore:          ec.cfg.TracePayloadStore,
 		ToolExecutionFn:            ec.cfg.ToolExecutionFn,
-		GovernedAssistant:          ec.cfg.SystemAssistantMode,
 		ExecutionID:                ec.cfg.ExecutionID,
 		AgentKnowledgeWorkspaceIDs: ec.workspaceNames,
 		AgentMemoryScope:           ec.memoryScope,
@@ -1814,12 +1811,10 @@ func WithEvolutionTraceMetadata(metadata EvolutionTraceMetadata) ExecutionOption
 	}
 }
 
-func WithSystemAssistantMode() ExecutionOption {
-	return func(cfg *ExecutionConfig) { cfg.SystemAssistantMode = true }
-}
-
-func withSystemAssistantRoleClass(roleClass string) ExecutionOption {
-	return func(cfg *ExecutionConfig) { cfg.SystemAssistantRoleClass = roleClass }
+// withAssistantRoleClass 记录本次执行解析的成员角色，供运维工具写路径
+// 与执行 metrics 使用（8 工具对所有 agent 通用后的统一角色门禁来源）。
+func withAssistantRoleClass(roleClass string) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.AssistantRoleClass = roleClass }
 }
 
 // WithOfficialDocsSearchFn attaches the in-process official docs search
@@ -1850,10 +1845,10 @@ func WithListModelsFn(fn func(context.Context) (map[string]any, error)) Executio
 	return func(cfg *ExecutionConfig) { cfg.ListModelsFn = fn }
 }
 
-// WithUpdateSystemModelFn attaches the in-process system assistant model
-// update capability (stratum_update_system_model) used by the system
-// assistant tool. The role gate lives inside the attached closure.
-func WithUpdateSystemModelFn(fn func(context.Context, string) (map[string]any, error)) ExecutionOption {
+// WithUpdateSystemModelFn attaches the in-process agent model update
+// capability (stratum_update_model) shared by all agents. The role gate
+// lives inside the attached closure.
+func WithUpdateSystemModelFn(fn func(_ context.Context, model, agentID string) (map[string]any, error)) ExecutionOption {
 	return func(cfg *ExecutionConfig) { cfg.UpdateSystemModelFn = fn }
 }
 

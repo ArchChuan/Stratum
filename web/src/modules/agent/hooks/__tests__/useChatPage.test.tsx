@@ -83,7 +83,7 @@ describe('useChatPage tool approvals', () => {
     sessionStorage.clear();
     vi.clearAllMocks();
     mocks.listAgents.mockResolvedValue([]);
-		mocks.getAgent.mockResolvedValue({ id: 'system', name: '平台助手', isSystem: true });
+		mocks.getAgent.mockResolvedValue({ id: 'system', name: '平台助手' });
     mocks.listConversations.mockResolvedValue([]);
 		mocks.createConversation.mockResolvedValue({ id: 'conversation-new', name: '新会话' });
     mocks.listApprovals.mockResolvedValue(mocks.approval ? [mocks.approval] : []);
@@ -125,24 +125,25 @@ describe('useChatPage tool approvals', () => {
     });
   });
 
-  it('orders a stale API response system-first and selects it by default', async () => {
+  it('keeps API order and selects the first agent by default', async () => {
     mocks.listAgents.mockResolvedValue([
-      { id: 'regular', name: '普通 Agent', isSystem: false },
-      { id: 'system', name: '平台使用小助手', isSystem: true },
+      { id: 'first', name: 'Agent A' },
+      { id: 'second', name: 'Agent B' },
     ]);
 
     const { result } = renderHook(() => useChatPage());
 
+    // 等化后无平台/普通之分：保持 API 列表顺序，默认选中首个。
     await waitFor(() => expect(result.current.agents.map((agent) => agent.id)).toEqual([
-      'system', 'regular',
+      'first', 'second',
     ]));
-    expect(result.current.selectedAgent).toBe('system');
+    expect(result.current.selectedAgent).toBe('first');
   });
 
-  it('agents 存在但无 isSystem 时回退选择第一个 agent，会话列表照常加载', async () => {
+  it('agents 存在时回退选择第一个 agent，会话列表照常加载', async () => {
     mocks.listAgents.mockResolvedValue([
-      { id: 'regular-1', name: '普通 Agent A', isSystem: false },
-      { id: 'regular-2', name: '普通 Agent B', isSystem: false },
+      { id: 'regular-1', name: '普通 Agent A' },
+      { id: 'regular-2', name: '普通 Agent B' },
     ]);
     mocks.listConversations.mockResolvedValue([{ id: 'conv-1', name: '会话' }]);
 
@@ -154,7 +155,7 @@ describe('useChatPage tool approvals', () => {
     expect(result.current.conversations).toHaveLength(1);
   });
 
-  it('agents 为空且无 isSystem 时 selectedAgent 为 null 但加载态结束', async () => {
+  it('agents 为空时 selectedAgent 为 null 但加载态结束', async () => {
     mocks.listAgents.mockResolvedValue([]);
 
     const { result } = renderHook(() => useChatPage());
@@ -165,7 +166,7 @@ describe('useChatPage tool approvals', () => {
   });
 
   it('hydrates streamed structured artifacts into the completed assistant message', async () => {
-    mocks.listAgents.mockResolvedValue([{ id: 'system', name: '平台使用小助手', isSystem: true }]);
+    mocks.listAgents.mockResolvedValue([{ id: 'system', name: '平台使用小助手' }]);
     mocks.listConversations.mockResolvedValue([{ id: 'conversation-1', name: 'Conversation' }]);
     const { result, rerender } = renderHook(() => useChatPage());
     await waitFor(() => expect(result.current.selectedConv).toBe('conversation-1'));
@@ -189,9 +190,9 @@ describe('useChatPage tool approvals', () => {
     ).toEqual([]);
   });
 
-	it('loads and creates conversations only for a fixed platform assistant', async () => {
+	it('loads and creates conversations only for a fixed agent', async () => {
 		const fixedID = 'stratum-platform-assistant';
-		mocks.getAgent.mockResolvedValue({ id: fixedID, name: 'Stratum 平台助手', isSystem: true });
+		mocks.getAgent.mockResolvedValue({ id: fixedID, name: 'Stratum 平台助手' });
 		const { result } = renderHook(() => useChatPage({ fixedAgentId: fixedID }));
 
 		await waitFor(() => expect(result.current.selectedAgent).toBe(fixedID));
@@ -202,7 +203,7 @@ describe('useChatPage tool approvals', () => {
 	});
 
 	it('copies noAnswer from the SSE done payload into the assistant message', async () => {
-		mocks.listAgents.mockResolvedValue([{ id: 'system', name: '平台使用小助手', isSystem: true }]);
+		mocks.listAgents.mockResolvedValue([{ id: 'system', name: '平台使用小助手' }]);
 		mocks.listConversations.mockResolvedValue([{ id: 'conversation-1', name: 'Conversation' }]);
 		const { result, rerender } = renderHook(() => useChatPage());
 		await waitFor(() => expect(result.current.selectedConv).toBe('conversation-1'));
@@ -226,7 +227,7 @@ describe('useChatPage tool approvals', () => {
 	});
 
 	it('copies noAnswer from the restored stream result during conversation restore', async () => {
-		mocks.listAgents.mockResolvedValue([{ id: 'system', name: '平台使用小助手', isSystem: true }]);
+		mocks.listAgents.mockResolvedValue([{ id: 'system', name: '平台使用小助手' }]);
 		mocks.listConversations.mockResolvedValue([{ id: 'conversation-1', name: 'Conversation' }]);
 		mocks.stream.getStreamState.mockReturnValue({
 			streaming: false,

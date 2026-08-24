@@ -25,9 +25,6 @@ func (f *gateAgentRepoFake) Get(_ context.Context, id string) (*domain.AgentConf
 	cfg, ok := f.agents[id]
 	return cfg, ok, nil
 }
-func (f *gateAgentRepoFake) GetSystemAssistant(context.Context) (*domain.AgentConfig, bool, error) {
-	return nil, false, nil
-}
 func (f *gateAgentRepoFake) GetAll(context.Context) ([]*domain.AgentConfig, error) { return nil, nil }
 func (f *gateAgentRepoFake) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
@@ -35,15 +32,6 @@ func (f *gateAgentRepoFake) Remove(_ context.Context, _ string, _ *auditdomain.R
 func (f *gateAgentRepoFake) Update(_ context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool) error {
 	f.agents[cfg.ID] = cfg
 	return nil
-}
-func (f *gateAgentRepoFake) UpdateSystemAssistantModel(_ context.Context, _ string, _ string, _ int, _ int, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
-	return nil, nil
-}
-func (f *gateAgentRepoFake) UpdateSystemAssistantAll(_ context.Context, _ string, _ string, _ int, _ int, _ int, _ map[string]any, _ *auditdomain.ResourceChangeAuditEvent) (*domain.AgentConfig, error) {
-	return nil, nil
-}
-func (f *gateAgentRepoFake) UpdateSystemAssistantBindings(context.Context, []string, []string, []string) (*domain.AgentConfig, error) {
-	return nil, nil
 }
 
 func newGatedServiceForTest(t *testing.T, repo *operationProposalRepoFake, usage *operationUsageRepoFake, seedAgent *domain.AgentConfig) (*AgentService, *gateAgentRepoFake, *operationProposalRepoFake, *operationUsageRepoFake, *gateMetricsFake) {
@@ -54,7 +42,7 @@ func newGatedServiceForTest(t *testing.T, repo *operationProposalRepoFake, usage
 	}
 	agentRepo := &gateAgentRepoFake{agents: agents}
 	svc := NewAgentService(AgentServiceDeps{
-		Registry:           NewRegistry(agentRepo, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry:           NewRegistry(agentRepo, zap.NewNop()),
 		TenantRoleResolver: stubTenantRole{role: "owner"},
 		Logger:             zap.NewNop(),
 	})
@@ -141,7 +129,7 @@ func TestGatedSelfModifyReplayLandsForMemberWithoutOwnership(t *testing.T) {
 	seed := &domain.AgentConfig{ID: "agent-1", Name: "old", CreatedBy: "admin-1"}
 	agents := map[string]*domain.AgentConfig{"agent-1": seed}
 	svc := NewAgentService(AgentServiceDeps{
-		Registry:           NewRegistry(&gateAgentRepoFake{agents: agents}, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		Registry:           NewRegistry(&gateAgentRepoFake{agents: agents}, zap.NewNop()),
 		TenantRoleResolver: stubTenantRole{role: "member"},
 		Logger:             zap.NewNop(),
 	})

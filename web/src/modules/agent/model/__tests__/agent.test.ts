@@ -61,11 +61,6 @@ describe('agentSchema', () => {
     expect((parsed as { embedModel?: string }).embedModel).toBe('text-embedding-3');
   });
 
-  it('为历史 Agent 响应补齐系统管理字段', () => {
-    const parsed = agentSchema.parse(baseAgent);
-    expect(parsed.isSystem).toBe(false);
-    expect(parsed.managementMode).toBe('');
-  });
 
   it('将 artifact 及诊断报告内的 nullish 数组统一解析为空数组', () => {
     const parsed = chatMessageSchema.parse({

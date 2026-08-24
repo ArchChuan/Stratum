@@ -3,9 +3,6 @@ package application
 import (
 	"context"
 	"fmt"
-
-	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
-	"github.com/byteBuilderX/stratum/pkg/platformknowledge"
 )
 
 // ValidateWorkspaceBindings fails closed when any workspace ID does not
@@ -33,12 +30,6 @@ func (s *WorkspaceService) ValidateWorkspaceBindings(ctx context.Context, tenant
 		}
 		if ws == nil {
 			return fmt.Errorf("knowledge: workspace %q not found", id)
-		}
-		// 系统内置 workspace(如 stratum_docs)只能由系统助手挂载,普通 agent
-		// 不得绑定。GetByID 已 COALESCE 填充 SystemKey/ManagementMode,双条件
-		// 与 workspace_service.isPlatformManaged 判定一致。
-		if ws.SystemKey == platformknowledge.SystemWorkspaceKey || ws.ManagementMode == platformknowledge.ManagementPlatform {
-			return fmt.Errorf("knowledge: workspace %q is platform-managed and cannot be bound: %w", id, domain.ErrPlatformManagedWorkspace)
 		}
 	}
 	return nil

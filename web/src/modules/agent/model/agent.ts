@@ -22,8 +22,6 @@ export const agentSchema = z
     mcpToolIds: z.array(z.string()).nullish().transform((v) => v ?? []),
     knowledgeWorkspaceIds: z.array(z.string()).nullish().transform((v) => v ?? []),
     memoryScope: z.string().optional().default('user'),
-    isSystem: z.boolean().optional().default(false),
-    managementMode: z.string().optional().default(''),
     created_at: z.string().optional(),
     updated_at: z.string().optional(),
   })
@@ -44,8 +42,6 @@ export interface Agent {
   mcpToolIds: string[];
   knowledgeWorkspaceIds: string[];
   memoryScope: string;
-  isSystem?: boolean;
-  managementMode?: string;
   created_at?: string;
   updated_at?: string;
   [key: string]: unknown;
@@ -309,13 +305,6 @@ export interface AgentExecutionFailure {
   status?: number;
 }
 
-export const systemAssistantSettingsSchema = z.object({
-  agentId: z.string(),
-  llmModel: z.string(),
-  ready: z.boolean(),
-  availableModels: z.array(z.string()),
-});
-export type SystemAssistantSettings = z.infer<typeof systemAssistantSettingsSchema>;
 
 export interface StreamCallbacks {
   onToken: (token: string) => void;

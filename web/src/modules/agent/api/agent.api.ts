@@ -4,7 +4,6 @@ import {
   agentSchema,
   chatMessageSchema,
   conversationSchema,
-  systemAssistantSettingsSchema,
   type ActiveExecution,
   type Agent,
   type AgentFormValues,
@@ -14,7 +13,6 @@ import {
 	type StreamCallbacks,
 	type ToolApproval,
 	type ToolApprovalResumeResult,
-  type SystemAssistantSettings,
 } from '../model/agent';
 
 import {
@@ -43,14 +41,6 @@ export const agentApi = {
     api.post(`/agents/${id}/execute`, payload, { timeout: 0 }),
 	executions: (page = 1, pageSize = DEFAULT_PAGE_SIZE) =>
     api.get('/agents/executions', { params: { page, page_size: pageSize } }),
-  getSystemSettings: async (): Promise<SystemAssistantSettings> => {
-    const res = await api.get('/agents/system/settings');
-    return systemAssistantSettingsSchema.parse(res.data);
-  },
-  updateSystemSettings: async (data: { llmModel: string }): Promise<SystemAssistantSettings> => {
-    const res = await api.put('/agents/system/settings', data);
-    return systemAssistantSettingsSchema.parse(res.data);
-  },
 	listToolApprovals: async (): Promise<ToolApproval[]> => {
 		const res = await api.get('/agents/tool-approvals');
 		return (res.data?.approvals ?? []).map((row: Record<string, unknown>) => ({

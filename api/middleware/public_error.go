@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	CodeSystemAssistantModelUnavailable = "SYSTEM_ASSISTANT_MODEL_UNAVAILABLE"
+	CodeAssistantModelUnavailable = "ASSISTANT_MODEL_UNAVAILABLE"
 	// CodeSystemPromptNotConfigured 平台全局系统提示词 fail-closed 未配置。
 	CodeSystemPromptNotConfigured = "SYSTEM_PROMPT_NOT_CONFIGURED"
 	// CodeCompactionPromptNotConfigured 平台压缩提示词 fail-closed 未配置。
@@ -25,8 +25,8 @@ type PublicErrorDescriptor struct {
 func DescribePublicError(err error, status int) PublicErrorDescriptor {
 	if errors.Is(err, agentdomain.ErrAssistantModelUnavailable) {
 		return PublicErrorDescriptor{
-			Message: "租户尚未配置平台助手模型",
-			Code:    CodeSystemAssistantModelUnavailable,
+			Message: "该 Agent 尚未配置可用模型",
+			Code:    CodeAssistantModelUnavailable,
 		}
 	}
 	// 平台 fail-closed 参数未配置：全局系统提示词/压缩提示词缺失是部署/配置回归

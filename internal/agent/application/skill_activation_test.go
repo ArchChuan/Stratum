@@ -151,9 +151,10 @@ func TestAgentService_ExecuteSkillScenarioActivatesMultipleSkills(t *testing.T) 
 	repo.On("Get", mock.Anything, "agent-scenario").Return(cfg, true, nil)
 	gw := &mockCapGW{responses: []port.CapabilityResponse{{Content: "scenario done"}}}
 	svc := agent.NewAgentService(agent.AgentServiceDeps{
-		Registry:       agent.NewRegistry(repo, agent.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
-		TenantResolver: countingRevisionTenantResolver{gateway: gw},
-		Logger:         zap.NewNop(),
+		Registry:             agent.NewRegistry(repo, zap.NewNop()),
+		TenantResolver:       countingRevisionTenantResolver{gateway: gw},
+		TenantModelValidator: lenientModelValidator{},
+		Logger:               zap.NewNop(),
 	})
 
 	result, _, err := svc.ExecuteSkillScenario(context.Background(), "agent-scenario",

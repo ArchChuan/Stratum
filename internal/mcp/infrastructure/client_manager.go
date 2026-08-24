@@ -1431,37 +1431,6 @@ func (m *ClientManager) GetServerConfig(ctx context.Context, serverID string) (*
 	return &out, nil
 }
 
-// ListPlatformManagedServerIDs 返回平台托管(platform_managed)server ID 全集。
-// 谓词对齐 isPlatformManaged(system_key != ” OR management_mode='platform_managed');
-// 空结果返回空 slice。pool 未装配或查询失败向上传播 —— 由 wiring 的
-// SystemResourceGuard 决定兜底缓存或 fail closed,本层不做静默降级。
-func (m *ClientManager) ListPlatformManagedServerIDs(ctx context.Context) ([]string, error) {
-	if m.pool == nil {
-		return nil, fmt.Errorf("list platform managed mcp servers: pool not wired")
-	}
-	out := []string{}
-	err := tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id FROM mcp_configs
-			WHERE system_key IS NOT NULL OR management_mode = 'platform_managed'`)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				return err
-			}
-			out = append(out, id)
-		}
-		return rows.Err()
-	})
-	if err != nil {
-		return nil, fmt.Errorf("list platform managed mcp servers: %w", err)
-	}
-	return out, nil
-}
-
 // serverConfigRow carries the raw JSONB string columns of a mcp_configs row,
 // before JSON decode and secrets decryption.
 type serverConfigRow struct {

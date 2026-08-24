@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/gin-gonic/gin"
@@ -85,8 +87,8 @@ func TestAgentExecutionErrorPayloadUsesPublicContract(t *testing.T) {
 			name: "assistant model unavailable",
 			err:  fmt.Errorf("assemble options: %w", domain.ErrAssistantModelUnavailable),
 			want: map[string]string{
-				"error": "租户尚未配置平台助手模型",
-				"code":  middleware.CodeSystemAssistantModelUnavailable,
+				"error": "该 Agent 尚未配置可用模型",
+				"code":  middleware.CodeAssistantModelUnavailable,
 			},
 			forbidden: "assemble options",
 		},
@@ -120,7 +122,7 @@ func TestExecuteAgentStreamReturnsJSONContractBeforeStreamStarts(t *testing.T) {
 	repo := &settingsAgentRepo{cfg: &domain.AgentConfig{
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
 	}}
-	registry := agentapp.NewRegistry(repo, agentapp.BuiltinSystemAssistantProfileSource(), zap.NewNop())
+	registry := agentapp.NewRegistry(repo, zap.NewNop())
 	svc := agentapp.NewAgentService(agentapp.AgentServiceDeps{Registry: registry, Logger: zap.NewNop()})
 	handler := NewAgentHandler(svc, zap.NewNop())
 	router := gin.New()
@@ -147,7 +149,7 @@ func TestExecuteAgentStreamReturnsJSONContractBeforeStreamStarts(t *testing.T) {
 	if got := response.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
 		t.Fatalf("content type = %q, want application/json", got)
 	}
-	wantBody := "{\"code\":\"SYSTEM_ASSISTANT_MODEL_UNAVAILABLE\",\"error\":\"租户尚未配置平台助手模型\"}"
+	wantBody := "{\"code\":\"ASSISTANT_MODEL_UNAVAILABLE\",\"error\":\"该 Agent 尚未配置可用模型\"}"
 	if response.Body.String() != wantBody {
 		t.Fatalf("body = %q, want %q", response.Body.String(), wantBody)
 	}
@@ -291,3 +293,25 @@ func TestAgentExecutionDonePayloadWhitelistsTaskSnapshot(t *testing.T) {
 		t.Fatalf("metadata must contain only whitelisted keys, got %d: %s", len(metadata), done)
 	}
 }
+
+// settingsAgentRepo 精简 port.AgentRepo 桩：执行契约测试复用（原定义于
+// 已删除的 system_assistant_handler_test.go，保留 port 必需 5 方法）。
+type settingsAgentRepo struct {
+	cfg *domain.AgentConfig
+}
+
+func (r *settingsAgentRepo) Register(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ []string) error {
+	return nil
+}
+func (r *settingsAgentRepo) Get(context.Context, string) (*domain.AgentConfig, bool, error) {
+	return r.cfg, r.cfg != nil, nil
+}
+func (r *settingsAgentRepo) GetAll(context.Context) ([]*domain.AgentConfig, error) { return nil, nil }
+func (r *settingsAgentRepo) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
+func (r *settingsAgentRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool) error {
+	return nil
+}
+
+var _ port.AgentRepo = (*settingsAgentRepo)(nil)

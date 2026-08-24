@@ -20,15 +20,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestProposalAgentRejectsManagedAssistantAndReturnsSafeReadback(t *testing.T) {
+func TestProposalAgentResolveBaselineAcceptsSystemAssistantAndCreateSafeReadback(t *testing.T) {
 	agents := &proposalAgentFake{values: map[string]agentapp.AgentDTO{
-		agentdomain.SystemAssistantID: {ID: agentdomain.SystemAssistantID, SystemKey: agentdomain.SystemAssistantKey},
+		agentdomain.SystemAssistantID: {ID: agentdomain.SystemAssistantID, SystemKey: agentdomain.SystemAssistantKey, Name: "平台助手", LLMModel: "qwen-plus"},
 	}}
 	adapter := NewResourceChangeProposalAdapters(agents, nil, nil, nil)
-	_, err := adapter.ResolveBaseline(context.Background(), agentdomain.ResourceChangeProposal{
+	baseline, err := adapter.ResolveBaseline(context.Background(), agentdomain.ResourceChangeProposal{
 		ResourceKind: agentdomain.ResourceAgent, ResourceID: agentdomain.SystemAssistantID,
 	})
-	require.ErrorIs(t, err, agentdomain.ErrSystemAssistantManaged)
+	require.NoError(t, err)
+	require.NotEmpty(t, baseline.Projection)
 
 	result, err := adapter.ApplyResourceChange(context.Background(), agentdomain.ProposalEnvelope{
 		Proposal: agentdomain.ResourceChangeProposal{TenantID: "tenant-1", ResourceKind: agentdomain.ResourceAgent, Operation: agentdomain.OperationCreate},
@@ -291,15 +292,17 @@ func TestApplyDirectAgentCreateAndUpdate(t *testing.T) {
 	require.Equal(t, "m2", agents.values["agent-created"].LLMModel)
 }
 
-func TestApplyDirectAgentRejectsSystemAssistantManaged(t *testing.T) {
+func TestApplyDirectAgentUpdateSystemAssistantSucceeds(t *testing.T) {
 	agents := &proposalAgentFake{values: map[string]agentapp.AgentDTO{
-		agentdomain.SystemAssistantID: {ID: agentdomain.SystemAssistantID, SystemKey: agentdomain.SystemAssistantKey},
+		agentdomain.SystemAssistantID: {ID: agentdomain.SystemAssistantID, SystemKey: agentdomain.SystemAssistantKey, Name: "平台助手", LLMModel: "m"},
 	}}
 	adapter := NewResourceChangeProposalAdapters(agents, nil, nil, nil)
-	_, err := adapter.ApplyDirect(context.Background(), "tenant-1", "user-1", agentdomain.ResourceAgent,
+	updated, err := adapter.ApplyDirect(context.Background(), "tenant-1", "user-1", agentdomain.ResourceAgent,
 		agentdomain.OperationUpdate, agentdomain.SystemAssistantID,
-		[]byte(`{"name":"a","description":"d","model":"m","maxIterations":3,"maxContextTokens":100}`))
-	require.ErrorIs(t, err, agentdomain.ErrSystemAssistantManaged)
+		[]byte(`{"name":"平台助手2","description":"d","model":"m2","maxIterations":3,"maxContextTokens":100}`))
+	require.NoError(t, err)
+	require.Equal(t, agentdomain.SystemAssistantID, updated.ResourceID)
+	require.Equal(t, "m2", agents.values[agentdomain.SystemAssistantID].LLMModel)
 }
 
 func TestApplyDirectMCPCreateHasNoCredentialsAndUpdatePreservesStored(t *testing.T) {

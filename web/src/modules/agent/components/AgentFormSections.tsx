@@ -20,6 +20,7 @@ import {
   AGENT_TEMPERATURE_MAX,
   AGENT_TEMPERATURE_MIN,
   AGENT_TEMPERATURE_STEP,
+  MEMORY_SCOPE_OPTIONS,
   REASONING_EFFORT_OPTIONS,
 } from '@/constants';
 import type { Member } from '@/modules/iam';
@@ -39,7 +40,6 @@ interface AgentFormSectionsProps {
   workspaces: Workspace[];
   groupedModels: GroupedModelOption[];
   currentModel?: string;
-  isSystem?: boolean;
   // 创建路径才展示可编辑人多选：普通资源更新请求体不带 editors。
   showEditors?: boolean;
   editorCandidates?: Member[];
@@ -52,7 +52,6 @@ export const AgentFormSections = ({
   workspaces,
   groupedModels,
   currentModel,
-  isSystem = false,
   showEditors = false,
   editorCandidates = [],
   editorCandidatesLoading = false,
@@ -201,9 +200,9 @@ export const AgentFormSections = ({
         label="技能"
         name="allowedSkills"
         style={{ marginBottom: 16 }}
-        extra={isSystem ? '系统助手的技能由平台统一管理，不可修改' : '激活后向 Agent 注入版本化指令，并按要求收窄 MCP、知识和记忆权限'}
+        extra="激活后向 Agent 注入版本化指令，并按要求收窄 MCP、知识和记忆权限"
       >
-        <Select mode="multiple" placeholder="选择 Agent 可调用的技能" disabled={isSystem}>
+        <Select mode="multiple" placeholder="选择 Agent 可调用的技能">
           {skills.map((s) => (
             <Option key={s.id} value={s.id}>
               <Tag style={{ margin: '0 6px 0 0', border: 'none', fontSize: 11 }} color={s.status === 'published' ? 'green' : 'default'}>
@@ -218,9 +217,9 @@ export const AgentFormSections = ({
         label="MCP 工具"
         name="mcpToolIds"
         style={{ marginBottom: 16 }}
-        extra={isSystem ? '系统助手的 MCP 工具由平台统一管理，不可修改' : '符合 Model Context Protocol 协议的结构化工具'}
+        extra="符合 Model Context Protocol 协议的结构化工具"
       >
-        <Select mode="multiple" placeholder="选择允许调用的 MCP 工具" disabled={isSystem}>
+        <Select mode="multiple" placeholder="选择允许调用的 MCP 工具">
           {mcpTools.map((tool) => (
             <Option key={tool.id} value={tool.id}>
               {tool.label}
@@ -228,8 +227,8 @@ export const AgentFormSections = ({
           ))}
         </Select>
       </Form.Item>
-      <Form.Item label="知识库" name="knowledgeWorkspaceIds" extra={isSystem ? '系统助手的知识库由平台统一管理，不可修改' : '执行时自动检索相关文档'}>
-        <Select mode="multiple" placeholder="选择知识库" disabled={isSystem}>
+      <Form.Item label="知识库" name="knowledgeWorkspaceIds" extra="执行时自动检索相关文档">
+        <Select mode="multiple" placeholder="选择知识库">
           {workspaces.map((w) => (
             <Option key={w.id || w.name} value={w.id || w.name}>
               {w.name}
@@ -241,10 +240,10 @@ export const AgentFormSections = ({
         <Form.Item
           label="可编辑人"
           name="editors"
-          extra={isSystem ? '系统助手的可编辑人由平台统一管理，不可修改' : '可编辑人（租户管理员）可以修改此 Agent；删除仍仅限创建者或超级管理员'}
+          extra="可编辑人（租户管理员）可以修改此 Agent；删除仍仅限创建者或超级管理员"
           style={{ marginBottom: 0 }}
         >
-          <Select mode="multiple" placeholder="选择可编辑的管理员" allowClear disabled={isSystem} loading={editorCandidatesLoading}>
+          <Select mode="multiple" placeholder="选择可编辑的管理员" allowClear loading={editorCandidatesLoading}>
             {editorCandidates.map((member) => (
               <Option key={member.user_id} value={member.user_id}>
                 {member.github_login || member.user_id}
@@ -304,8 +303,20 @@ export const AgentFormSections = ({
                 >
                   <InputNumber min={AGENT_MAX_TOKENS_MIN} max={AGENT_MAX_TOKENS_MAX} step={AGENT_MAX_TOKENS_STEP} style={{ width: '100%' }} />
                 </Form.Item>
-                {!isSystem && (
-                  <>
+                <Form.Item
+                  label="记忆范围"
+                  name="memoryScope"
+                  rules={[{ required: true, message: '请选择记忆范围' }]}
+                  extra="用户级：记忆与当前用户绑定；Agent 级：该 Agent 的所有用户共享同一份记忆"
+                >
+                  <Select placeholder="选择记忆范围">
+                    {MEMORY_SCOPE_OPTIONS.map((o) => (
+                      <Option key={o.value} value={o.value}>
+                        {o.label}
+                      </Option>
+                    ))}
+                  </Select>
+                </Form.Item>
                     <Form.Item
                       label="温度（temperature）"
                       name="temperature"
@@ -345,8 +356,6 @@ export const AgentFormSections = ({
                         </Select>
                       </Form.Item>
                     )}
-                  </>
-                )}
               </>
             ),
           },
