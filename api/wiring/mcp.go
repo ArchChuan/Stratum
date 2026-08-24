@@ -32,6 +32,10 @@ type MCP struct {
 
 type mcpClientResolver interface {
 	GetClient(ctx context.Context, serverID string) mcp.MCPClient
+	// GetOrRestoreClient returns the live client, lazily reconnecting when the
+	// connection was evicted or dropped — agent tool calls must recover rather
+	// than fail on a long-idle MCP server.
+	GetOrRestoreClient(ctx context.Context, serverID string) (mcp.MCPClient, error)
 }
 
 type mcpRuntimeRevision struct {
@@ -62,8 +66,10 @@ func (e agentMCPExecutor) ExecuteMCPTool(
 			Err:     fmt.Errorf("MCP client resolver unavailable"),
 		}
 	}
-	client := e.clients.GetClient(ctx, serverID)
-	if client == nil {
+	// 走懒恢复路径而非 GetClient 查表：空闲驱逐/瞬断后的 server 在下次工具
+	// 调用自动重建连接，避免 agent 拿不到工具结果。
+	client, err := e.clients.GetOrRestoreClient(ctx, serverID)
+	if err != nil {
 		return agentport.MCPToolResult{}, &agentport.MCPToolExecutionError{
 			Outcome: agentport.ToolExecutionOutcomeNotSent,
 			Err:     fmt.Errorf("MCP client not found: %s", serverID),
@@ -179,12 +185,35 @@ func (l agentMCPServerLister) ListMCPServers(ctx context.Context) ([]agentport.M
 	return out, nil
 }
 
-type mcpAgentToolAdapter struct{ registry *mcp.MCPToolRegistry }
+// mcpCatalogBuildTimeout bounds the defensive live-discovery fallback in
+// ToolsForServer so a slow or unreachable MCP server cannot stall agent tool
+// assembly.
+const mcpCatalogBuildTimeout = 15 * time.Second
 
-func (a mcpAgentToolAdapter) ToolsForServer(_ context.Context, tenantID, serverID string) []agentport.ToolDefinition {
+type mcpAgentToolAdapter struct {
+	registry *mcp.MCPToolRegistry
+	logger   *zap.Logger
+}
+
+func (a mcpAgentToolAdapter) ToolsForServer(ctx context.Context, tenantID, serverID string) []agentport.ToolDefinition {
 	catalog := a.registry.GetCatalogForServer(tenantID, serverID)
 	if catalog == nil {
-		return nil
+		// 防御兜底：catalog 缺失（backend 重启后未重建，或该 server 从未经
+		// admin 写入触发注册）时实时发现，避免 agent 绑定工具被静默丢弃。
+		// 实时发现走 manager 的懒恢复连接；失败显式 warn，不再静默 drop。
+		discoverCtx, cancel := context.WithTimeout(ctx, mcpCatalogBuildTimeout)
+		defer cancel()
+		rebuilt, err := a.registry.EnsureCatalog(discoverCtx, tenantID, serverID)
+		if err != nil {
+			if a.logger != nil {
+				a.logger.Warn("MCP tool catalog missing; live discovery failed",
+					zap.String("tenant_id", tenantID),
+					zap.String("server_id", serverID),
+					zap.Error(err))
+			}
+			return nil
+		}
+		catalog = rebuilt
 	}
 	handles := catalog.GetAllTools()
 	tools := make([]agentport.ToolDefinition, 0, len(handles))
@@ -234,6 +263,12 @@ func (c *Container) buildMCP(ctx context.Context) error {
 	}
 	manager.SetMetrics(c.platformMetrics())
 	registry := mcp.NewMCPToolRegistry(manager, c.Logger)
+	// 重启后重建 registry catalog：restoreServer 连接成功即触发 EnsureCatalog。
+	// 必须在 RestoreFromDB 之前注入，否则启动恢复阶段调不到该钩子。
+	manager.SetOnServerRestored(func(ctx context.Context, tenantID, serverID string) error {
+		_, err := registry.EnsureCatalog(ctx, tenantID, serverID)
+		return err
+	})
 	svc := mcpapp.NewMCPService(
 		mcp.ToolRegistryAsPort(registry),
 		mcp.ServerManagerAsPort(manager),
@@ -260,7 +295,7 @@ func (c *Container) buildMCP(ctx context.Context) error {
 		Manager:           manager,
 		Registry:          registry,
 		Service:           svc,
-		AgentToolProvider: mcpAgentToolAdapter{registry: registry},
+		AgentToolProvider: mcpAgentToolAdapter{registry: registry, logger: c.Logger},
 	}
 	return nil
 }

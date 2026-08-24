@@ -640,3 +640,51 @@ func TestHealthCheckDoesNotBlockConcurrentReads(t *testing.T) {
 		t.Fatalf("Disconnect failed: %v", err)
 	}
 }
+
+// TestBaseClientHealthCheckRefreshesLastActivity 验证保活 B：协议 ping 成功后
+// 刷新 lastActivity。仅被 health check ping 而无工具调用的连接，若 ping 不刷新
+// lastActivity，会在 MCPIdleTimeout 后被 idle eviction 按 LastActivity 误驱逐，
+// 导致 agent 下次工具调用需重建连接。
+func TestBaseClientHealthCheckRefreshesLastActivity(t *testing.T) {
+	srv := mcp.NewServer(&mcp.Implementation{Name: "stratum-hc-refresh", Version: "1.0"}, nil)
+	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	client := NewBaseClient(&MCPServerConfig{
+		ID: "test-hc-refresh", Transport: "streamable-http", URL: server.URL, Timeout: 5 * time.Second,
+	}, zap.NewNop())
+	client.urlPolicy = URLPolicyAllowPrivate
+	ctx := context.Background()
+	if err := client.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+
+	// 模拟长时间仅被 ping 保活、即将被 idle eviction 命中的状态。
+	stale := time.Now().Add(-10 * time.Minute)
+	client.mu.Lock()
+	client.lastActivity = stale
+	client.mu.Unlock()
+
+	if err := client.HealthCheck(ctx); err != nil {
+		t.Fatalf("HealthCheck failed: %v", err)
+	}
+	if after := client.LastActivity(); !after.After(stale) {
+		t.Fatalf("HealthCheck must refresh lastActivity: before=%v after=%v", stale, after)
+	}
+
+	// 失败分支：连接关闭后 HealthCheck 报错，lastActivity 不得被刷新，
+	// 否则失败的 ping 会掩盖真实空闲时间、推迟 idle eviction。
+	if err := client.Disconnect(context.Background()); err != nil {
+		t.Fatalf("Disconnect failed: %v", err)
+	}
+	client.mu.Lock()
+	client.lastActivity = stale
+	client.mu.Unlock()
+	if err := client.HealthCheck(context.Background()); err == nil {
+		t.Fatalf("HealthCheck on disconnected client must fail")
+	}
+	if got := client.LastActivity(); !got.Equal(stale) {
+		t.Fatalf("failed HealthCheck must not refresh lastActivity: got=%v want=%v", got, stale)
+	}
+}
