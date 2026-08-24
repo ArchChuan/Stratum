@@ -42,6 +42,55 @@ func TestSafeTracePayloadHashIsStable(t *testing.T) {
 	}
 }
 
+func TestSafeTracePayloadExemptsLLMUsageCounters(t *testing.T) {
+	// LLM 用量计数（tokens_used 等）是 token 消耗而非认证凭据，不得被打码——
+	// stratum_delegate 结构化外壳即依赖这些字段展示子 agent 的 token 用量。
+	payload := SafeTracePayload(map[string]any{
+		"tokens_used":       42,
+		"prompt_tokens":     10,
+		"completion_tokens": 32,
+		"total_tokens":      42,
+	}, 512)
+	if strings.Contains(payload.Preview, "[REDACTED]") {
+		t.Fatalf("LLM usage counter must not be redacted: %q", payload.Preview)
+	}
+	if !strings.Contains(payload.Preview, `"tokens_used":42`) {
+		t.Fatalf("tokens_used value lost: %q", payload.Preview)
+	}
+
+	// 真实凭据仍被打码——豁免只影响 usage 白名单，不削弱保护。
+	payload = SafeTracePayload(map[string]any{
+		"tokens_used": 42,
+		"auth_token":  "secret-bearer",
+	}, 512)
+	if strings.Contains(payload.Preview, "secret-bearer") {
+		t.Fatalf("real credential leaked after usage exemption: %q", payload.Preview)
+	}
+	if !strings.Contains(payload.Preview, "[REDACTED]") {
+		t.Fatalf("real credential redaction marker missing: %q", payload.Preview)
+	}
+}
+
+func TestSafeTracePayloadRedactsStringInsideUsageKey(t *testing.T) {
+	// 豁免只对「数值标量」生效：把凭据字符串塞进 total_tokens 等白名单 key
+	// 仍必须打码，堵住经 usage 字段夹带绕过脱敏的通道（security 中-1）。
+	payload := SafeTracePayload(map[string]any{
+		"total_tokens": "secret-bearer-token",
+	}, 512)
+	if strings.Contains(payload.Preview, "secret-bearer-token") {
+		t.Fatalf("credential smuggled via usage key leaked: %q", payload.Preview)
+	}
+	if !strings.Contains(payload.Preview, "[REDACTED]") {
+		t.Fatalf("smuggled credential redaction marker missing: %q", payload.Preview)
+	}
+
+	// 数值型 usage 计数仍豁免（正常路径不受影响）。
+	payload = SafeTracePayload(map[string]any{"total_tokens": 42}, 512)
+	if strings.Contains(payload.Preview, "[REDACTED]") {
+		t.Fatalf("numeric usage counter must stay visible: %q", payload.Preview)
+	}
+}
+
 func TestTraceContentCaptureRequiresExplicitOptIn(t *testing.T) {
 	t.Setenv("OTEL_CAPTURE_CONTENT", "")
 	if TraceContentCaptureEnabled() {

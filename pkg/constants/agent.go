@@ -41,6 +41,28 @@ const (
 	// DefaultStepMaxLLMSteps is the LLM budget for each sub-step ReAct execution.
 	DefaultStepMaxLLMSteps = 3
 
+	// ---- stratum_delegate sub-agent dispatch ----
+	// MaxDelegateDepth is the global hard cap on delegation depth (clamped at
+	// runtime); per-agent DelegateMaxDepth defaults to 1 and may be raised to 2.
+	MaxDelegateDepth = 2
+	// DefaultDelegateMaxDepth is the runtime fallback for a per-agent
+	// delegate_max_depth of 0 (unset): a single main→child hop.
+	DefaultDelegateMaxDepth = 1
+	// DefaultDelegateMaxLLMSteps is the runtime fallback for a per-agent
+	// delegate_default_max_steps of 0 (unset). Slightly more headroom than the
+	// plan-node default (DefaultStepMaxLLMSteps) since a sub-agent owns the whole
+	// task, not a single node.
+	DefaultDelegateMaxLLMSteps = 5
+	// MaxDelegateMaxLLMSteps is the hard ceiling for the delegate max_steps
+	// argument and the per-agent default (schema maximum + clamp).
+	MaxDelegateMaxLLMSteps = 10
+	// DelegateMaxGoalRunes bounds the delegate goal length; an oversized goal
+	// would blow up the child context window.
+	DelegateMaxGoalRunes = 2000
+	// DelegateSummaryMaxRunes truncates the child final output summary before it
+	// is returned, then ResultGuard's 32KB cap applies as a backstop.
+	DelegateSummaryMaxRunes = 4000
+
 	// AgentToolStopLossThreshold 是同一工具连续（同错指纹）失败触发止损的
 	// 阈值：达阈值后该工具不再执行，模型收到观察后换路。
 	AgentToolStopLossThreshold = 3

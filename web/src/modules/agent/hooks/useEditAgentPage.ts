@@ -86,6 +86,11 @@ export const useEditAgentPage = () => {
           mcpToolIds: a.mcpToolIds || [],
           knowledgeWorkspaceIds: a.knowledgeWorkspaceIds || [],
           memoryScope: a.memoryScope || 'user',
+          // 委托配置：delegateEnabled 缺失按 false（存量默认关闭，后端 NOT NULL 恒有值，
+          // ?? false 仅兜底旧响应/缺字段）；深度/步数 0=unset 直接回显。
+          delegateEnabled: a.delegateEnabled ?? false,
+          delegateMaxDepth: a.delegateMaxDepth,
+          delegateDefaultMaxSteps: a.delegateDefaultMaxSteps,
         });
       } catch (err) {
         if (!cancelled) {

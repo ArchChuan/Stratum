@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -179,6 +180,12 @@ type CreateAgentInput struct {
 	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
 	MemoryScope           string
+	// DelegateEnabled/MaxDepth/DefaultMaxSteps 控制 stratum_delegate 子 agent
+	// 派发：开启后主循环可将子任务委托给复用本配置的隔离子 agent。深度/步数
+	// 0=unset → 运行时回落全局默认。
+	DelegateEnabled         bool
+	DelegateMaxDepth        int
+	DelegateDefaultMaxSteps int
 	// Parameters carries registry resource-scope values as a flat object;
 	// only the memory.* dotted keys persist on the agent (bare sampling keys
 	// remain expressed through the explicit fields above). Same merge
@@ -212,32 +219,40 @@ type UpdateAgentInput struct {
 	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
 	MemoryScope           string
+	// 委托配置同 CreateAgentInput；DelegateEnabled 为 *bool:缺省(nil)保留已存值,
+	// 显式 false 才关闭(存量默认关闭,Update 全量列写不能把缺省当显式 false 覆盖)。
+	DelegateEnabled         *bool
+	DelegateMaxDepth        int
+	DelegateDefaultMaxSteps int
 }
 
 // AgentDTO is the wire shape returned by AgentService for transport
 // rendering. Strings only — handler reuses field-for-field.
 type AgentDTO struct {
-	ID                    string
-	Name                  string
-	Type                  string
-	Description           string
-	SystemPrompt          string
-	LLMModel              string
-	MaxIterations         int
-	MaxContextTokens      int
-	Temperature           float32
-	ReasoningEffort       string
-	MaxTokens             int
-	AllowedSkills         []string
-	MCPToolIDs            []string
-	KnowledgeWorkspaceIDs []string
-	CreatedAt             string
-	MemoryScope           string
-	SystemKey             string
-	IsSystem              bool
-	ManagementMode        string
-	Parameters            map[string]any
-	Editors               []string
+	ID                      string
+	Name                    string
+	Type                    string
+	Description             string
+	SystemPrompt            string
+	LLMModel                string
+	MaxIterations           int
+	MaxContextTokens        int
+	Temperature             float32
+	ReasoningEffort         string
+	MaxTokens               int
+	AllowedSkills           []string
+	MCPToolIDs              []string
+	KnowledgeWorkspaceIDs   []string
+	CreatedAt               string
+	MemoryScope             string
+	DelegateEnabled         bool
+	DelegateMaxDepth        int
+	DelegateDefaultMaxSteps int
+	SystemKey               string
+	IsSystem                bool
+	ManagementMode          string
+	Parameters              map[string]any
+	Editors                 []string
 }
 
 type SystemAssistantSettings struct {
@@ -315,24 +330,27 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		return AgentDTO{}, err
 	}
 	cfg := &domain.AgentConfig{
-		ID:                    id,
-		Name:                  in.Name,
-		Type:                  parseAgentTypeWire(in.Type),
-		Description:           in.Description,
-		SystemPrompt:          in.SystemPrompt,
-		LLMModel:              in.LLMModel,
-		MaxIterations:         in.MaxIterations,
-		MaxContextTokens:      in.MaxContextTokens, // 0 = 未配置，执行时两阶段解析
-		Temperature:           in.Temperature,
-		ReasoningEffort:       in.ReasoningEffort,
-		MaxTokens:             in.MaxTokens,
-		AllowedSkills:         in.AllowedSkills,
-		MCPToolIDs:            in.MCPToolIDs,
-		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
-		MemoryScope:           in.MemoryScope,
-		MemoryParameters:      memoryParams,
-		Capabilities:          []domain.AgentCapability{},
-		CreatedBy:             in.ActorID,
+		ID:                      id,
+		Name:                    in.Name,
+		Type:                    parseAgentTypeWire(in.Type),
+		Description:             in.Description,
+		SystemPrompt:            in.SystemPrompt,
+		LLMModel:                in.LLMModel,
+		MaxIterations:           in.MaxIterations,
+		MaxContextTokens:        in.MaxContextTokens, // 0 = 未配置，执行时两阶段解析
+		Temperature:             in.Temperature,
+		ReasoningEffort:         in.ReasoningEffort,
+		MaxTokens:               in.MaxTokens,
+		AllowedSkills:           in.AllowedSkills,
+		MCPToolIDs:              in.MCPToolIDs,
+		KnowledgeWorkspaceIDs:   in.KnowledgeWorkspaceIDs,
+		MemoryScope:             in.MemoryScope,
+		DelegateEnabled:         in.DelegateEnabled,
+		DelegateMaxDepth:        in.DelegateMaxDepth,
+		DelegateDefaultMaxSteps: in.DelegateDefaultMaxSteps,
+		MemoryParameters:        memoryParams,
+		Capabilities:            []domain.AgentCapability{},
+		CreatedBy:               in.ActorID,
 	}
 
 	if err := s.validateWorkspaceBindings(ctx, in.TenantID, in.KnowledgeWorkspaceIDs); err != nil {
@@ -658,6 +676,13 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	if existing.GetConfig().SystemKey != "" {
 		return s.updateSystemAssistant(ctx, existing.GetConfig(), in)
 	}
+	// 委托开关 *bool 语义:缺省(nil)继承已存值,显式 false 才关闭。Update 是
+	// 全量列 UPDATE,不在此合并会把缺省字段误写成 false,覆盖管理员的显式开启。
+	in.DelegateEnabled = resolveDelegateEnabled(existing.GetConfig().DelegateEnabled, in.DelegateEnabled)
+	// 委托深度/默认步数 0=unset：缺省继承已存值，防止无关编辑（如只改
+	// system prompt）把管理员配置的深度/步数静默打回运行时默认。
+	in.DelegateMaxDepth = resolveDelegateInt(existing.GetConfig().DelegateMaxDepth, in.DelegateMaxDepth)
+	in.DelegateDefaultMaxSteps = resolveDelegateInt(existing.GetConfig().DelegateDefaultMaxSteps, in.DelegateDefaultMaxSteps)
 	editorActor, err := s.resolveUpdateEditorActor(ctx, in.ActorID, id, existing.GetConfig().CreatedBy)
 	if err != nil {
 		return AgentDTO{}, err
@@ -690,6 +715,26 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 		return AgentDTO{}, ErrNotFound
 	}
 	return cfgToDTO(fresh.GetConfig()), nil
+}
+
+// resolveDelegateEnabled 归一化 Update 委托开关的 *bool 缺省语义：nil（请求缺省
+// 字段）继承已存值，非 nil（含显式 false）直接采用。Update 走全量列 UPDATE，缺省
+// 必须落到已存值，否则会把管理员显式开启的委托误写回 false。
+func resolveDelegateEnabled(existing bool, in *bool) *bool {
+	if in != nil {
+		return in
+	}
+	return &existing
+}
+
+// resolveDelegateInt 归一化 Update 委托数值参数的 0=unset 缺省语义：0（请求缺省
+// 字段）继承已存值，非 0 直接采用。与 resolveDelegateEnabled 的 *bool 语义一致，
+// 防止无关编辑把管理员配置的委托深度/默认步数静默重置为运行时默认。
+func resolveDelegateInt(existing, in int) int {
+	if in != 0 {
+		return in
+	}
+	return existing
 }
 
 // recordFailure 旁路记录一次失败的 agent 创建/更新（best-effort）。
@@ -732,22 +777,25 @@ func (s *AgentService) buildUpdateConfig(ctx context.Context, id string, in Upda
 		skills = []string{}
 	}
 	cfg := &domain.AgentConfig{
-		ID:                    id,
-		Name:                  in.Name,
-		Type:                  parseAgentTypeWire(in.Type),
-		Description:           in.Description,
-		SystemPrompt:          in.SystemPrompt,
-		LLMModel:              in.LLMModel,
-		MaxIterations:         in.MaxIterations,
-		MaxContextTokens:      in.MaxContextTokens, // 0 = 未配置，执行时两阶段解析
-		Temperature:           temperature,
-		ReasoningEffort:       reasoningEffort,
-		MaxTokens:             maxTokens,
-		AllowedSkills:         skills,
-		MCPToolIDs:            in.MCPToolIDs,
-		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
-		MemoryScope:           in.MemoryScope,
-		MemoryParameters:      memoryParams,
+		ID:                      id,
+		Name:                    in.Name,
+		Type:                    parseAgentTypeWire(in.Type),
+		Description:             in.Description,
+		SystemPrompt:            in.SystemPrompt,
+		LLMModel:                in.LLMModel,
+		MaxIterations:           in.MaxIterations,
+		MaxContextTokens:        in.MaxContextTokens, // 0 = 未配置，执行时两阶段解析
+		Temperature:             temperature,
+		ReasoningEffort:         reasoningEffort,
+		MaxTokens:               maxTokens,
+		AllowedSkills:           skills,
+		MCPToolIDs:              in.MCPToolIDs,
+		KnowledgeWorkspaceIDs:   in.KnowledgeWorkspaceIDs,
+		MemoryScope:             in.MemoryScope,
+		DelegateEnabled:         *in.DelegateEnabled, // Update 已把 nil 解析为已存值
+		DelegateMaxDepth:        in.DelegateMaxDepth,
+		DelegateDefaultMaxSteps: in.DelegateDefaultMaxSteps,
+		MemoryParameters:        memoryParams,
 	}
 	if err := s.validateWorkspaceBindings(ctx, reqctx.TenantIDFromContext(ctx), in.KnowledgeWorkspaceIDs); err != nil {
 		return nil, err
@@ -1289,26 +1337,29 @@ func parseAgentTypeWire(t string) domain.AgentType {
 
 func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 	return AgentDTO{
-		ID:                    cfg.ID,
-		Name:                  cfg.Name,
-		Type:                  string(domain.ReActAgent),
-		Description:           cfg.Description,
-		SystemPrompt:          cfg.SystemPrompt,
-		LLMModel:              cfg.LLMModel,
-		MaxIterations:         cfg.MaxIterations,
-		MaxContextTokens:      cfg.MaxContextTokens,
-		Temperature:           cfg.Temperature,
-		ReasoningEffort:       cfg.ReasoningEffort,
-		MaxTokens:             cfg.MaxTokens,
-		AllowedSkills:         cfg.AllowedSkills,
-		MCPToolIDs:            cfg.MCPToolIDs,
-		KnowledgeWorkspaceIDs: cfg.KnowledgeWorkspaceIDs,
-		CreatedAt:             time.Now().Format(time.RFC3339),
-		MemoryScope:           cfg.MemoryScope,
-		SystemKey:             cfg.SystemKey,
-		IsSystem:              cfg.IsSystem,
-		ManagementMode:        cfg.ManagementMode,
-		Parameters:            samplingParameterMap(cfg),
+		ID:                      cfg.ID,
+		Name:                    cfg.Name,
+		Type:                    string(domain.ReActAgent),
+		Description:             cfg.Description,
+		SystemPrompt:            cfg.SystemPrompt,
+		LLMModel:                cfg.LLMModel,
+		MaxIterations:           cfg.MaxIterations,
+		MaxContextTokens:        cfg.MaxContextTokens,
+		Temperature:             cfg.Temperature,
+		ReasoningEffort:         cfg.ReasoningEffort,
+		MaxTokens:               cfg.MaxTokens,
+		AllowedSkills:           cfg.AllowedSkills,
+		MCPToolIDs:              cfg.MCPToolIDs,
+		KnowledgeWorkspaceIDs:   cfg.KnowledgeWorkspaceIDs,
+		CreatedAt:               time.Now().Format(time.RFC3339),
+		MemoryScope:             cfg.MemoryScope,
+		DelegateEnabled:         cfg.DelegateEnabled,
+		DelegateMaxDepth:        cfg.DelegateMaxDepth,
+		DelegateDefaultMaxSteps: cfg.DelegateDefaultMaxSteps,
+		SystemKey:               cfg.SystemKey,
+		IsSystem:                cfg.IsSystem,
+		ManagementMode:          cfg.ManagementMode,
+		Parameters:              samplingParameterMap(cfg),
 	}
 }
 
@@ -1353,6 +1404,9 @@ type ExecMeta struct {
 	EvolutionTrace             EvolutionTraceMetadata
 	KnowledgeAssignmentsPinned bool
 	PinnedKnowledgeRevisions   map[string]port.KnowledgeRevisionPin
+	// DelegateEventCb 在委托子 agent 进入/结束时回调（SSE delegate_status 帧
+	// 出口）。仅流式路径由 handler 注入；nil = 不推送委托进度。
+	DelegateEventCb func(agentgraph.DelegateEvent)
 }
 
 // ExecutionRowDTO is the wire shape emitted by ListExecutions.
@@ -1544,7 +1598,7 @@ func (s *AgentService) ExecuteStream(
 		}
 	}
 	// 总是追加 token callback：run 闭包延迟执行，回调捕获 cfg 在调用期已确定。
-	options = append(options, WithTokenCallback(wrappedTokenCb), WithExecutionID(executionID))
+	options = append(options, WithTokenCallback(wrappedTokenCb), WithDelegateEventCallback(meta.DelegateEventCb), WithExecutionID(executionID))
 
 	execCtx, cancel = context.WithCancel(context.WithoutCancel(streamCtx))
 	run = func() (*AgentResult, int, error) {
@@ -2410,7 +2464,8 @@ func (s *AgentService) buildApprovalResumeOptions(
 			request.AgentID = payload.AgentID
 			request.TraceID = payload.TraceID
 			request.ExecutionID = payload.ExecutionID
-			request.AgentToolIDs = a.GetConfig().MCPToolIDs
+			request.AgentToolIDs = slices.Clone(a.GetConfig().MCPToolIDs)
+			request.AgentToolIDs = append(request.AgentToolIDs, agentgraph.StratumDelegateToolName)
 			if !consumed && request.Tool.ServerID == payload.ServerID &&
 				request.Tool.CapabilityID == payload.ToolName {
 				// C2d 加固：canonical digest 比较（与 ApprovedPayload binding 校验同源），
@@ -2778,7 +2833,8 @@ func (s *AgentService) assembleOptions(
 			request.AgentID = agentID
 			request.TraceID = meta.TraceID
 			request.ExecutionID = executionID
-			request.AgentToolIDs = a.GetConfig().MCPToolIDs
+			request.AgentToolIDs = slices.Clone(a.GetConfig().MCPToolIDs)
+			request.AgentToolIDs = append(request.AgentToolIDs, agentgraph.StratumDelegateToolName)
 			request.MCPRevisionID = mcpAssignments[request.Tool.ServerID].RevisionID
 			return guard.Execute(callCtx, request)
 		}))

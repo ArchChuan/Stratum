@@ -51,6 +51,7 @@ export const AgentChatPage = ({
     waitingApproval,
     resumeBlocked,
     streaming,
+    delegateStatus,
     manualResumeWaiting,
 		streamFailure,
 		contentSwitching,
@@ -134,6 +135,7 @@ export const AgentChatPage = ({
           pinnedToBottomRef={pinnedToBottomRef}
           isMobile={isMobile}
           contentSwitching={contentSwitching}
+          delegateStatus={delegateStatus}
         />
         {pendingApproval && (
           <ApprovalGate
