@@ -73,7 +73,9 @@ func (r *Resolver) resolveOne(ctx context.Context, declared map[string]any, key 
 		{name: "declared", raw: declaredValue, ok: declaredOK},
 	}
 	if def.Scope == domain.ScopePlatform {
-		platformTiers, err := r.platformTiers(ctx, key, def)
+		// 每次解析调用一个组快照缓存：同一调用内同组键共用一次读取，
+		// 保证同组键来自同一 version_seq（不跨 publish 混合）。
+		platformTiers, err := r.platformTiers(ctx, key, def, make(map[string]map[string]json.RawMessage))
 		if err != nil {
 			return nil, false, err
 		}
@@ -94,24 +96,39 @@ func (r *Resolver) resolveOne(ctx context.Context, declared map[string]any, key 
 	return nil, false, nil
 }
 
-// platformTiers loads the stored platform value and definition default tiers
-// for a platform-scope key (the 全局参数 contract). Resource-scope keys never
-// reach this helper: resources own their required configuration and have no
-// platform/default fallback.
+// platformTiers loads the stored platform group snapshot and definition
+// default tiers for a platform-scope key (the 全局参数 contract). Resource-scope
+// keys never reach this helper: resources own their required configuration and
+// have no platform/default fallback.
+//
+// The group snapshot is read via GetSnapshot (one JOIN read returns the whole
+// group atomically) and cached in snapshots so repeated keys of the same group
+// inside one resolution call share a single read and the same version_seq. A
+// missing production label (group never published) means every key is unset:
+// definition defaults apply. DB failures propagate — never swallow a store
+// error into the default tier (fail-closed).
 func (r *Resolver) platformTiers(
 	ctx context.Context,
 	key string,
 	def *domain.ParameterDefinition,
+	snapshots map[string]map[string]json.RawMessage,
 ) ([]tierCandidate, error) {
-	platformRaw, platformOK, err := r.store.GetValue(ctx, key)
-	if err != nil {
-		return nil, fmt.Errorf("parameter resolver: platform %s: %w", key, err)
+	snapshot, ok := snapshots[def.GroupKey]
+	if !ok {
+		var err error
+		snapshot, err = r.store.GetSnapshot(ctx, def.GroupKey)
+		if err != nil {
+			return nil, fmt.Errorf("parameter resolver: platform %s: %w", key, err)
+		}
+		snapshots[def.GroupKey] = snapshot
 	}
 	var platformValue any
-	if platformOK {
-		if err := json.Unmarshal(platformRaw, &platformValue); err != nil {
+	platformOK := false
+	if raw, present := snapshot[key]; present {
+		if err := json.Unmarshal(raw, &platformValue); err != nil {
 			return nil, fmt.Errorf("parameter resolver: platform %s decode: %w", key, err)
 		}
+		platformOK = true
 	}
 	return []tierCandidate{
 		{name: "platform", raw: platformValue, ok: platformOK},

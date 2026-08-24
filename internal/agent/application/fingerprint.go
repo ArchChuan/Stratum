@@ -12,6 +12,7 @@ func CaptureFingerprint(
 	routedVia []string,
 	promptVersion string,
 	skillRevisions map[string]string,
+	configVersion string,
 	tunables map[string]any,
 	abBucket int,
 ) *domain.ExecutionFingerprint {
@@ -19,6 +20,7 @@ func CaptureFingerprint(
 		ModelResolved:   resolvedModel,
 		ModelRoutedVia:  routedVia,
 		PromptVersion:   promptVersion,
+		ConfigVersion:   configVersion,
 		SkillRevisions:  skillRevisions,
 		TunableSnapshot: tunables,
 		ABBucket:        abBucket,

@@ -2,6 +2,8 @@ package domain
 
 import (
 	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -294,6 +296,90 @@ func TestRegistryMemoryEmbeddingModel(t *testing.T) {
 	}
 	if def.Default != "" {
 		t.Errorf("default = %v, want empty (fail-closed)", def.Default)
+	}
+}
+
+// TestRegistryPlatformParamsHaveGroupKey pins the single-attribution
+// invariant: every ScopePlatform parameter must carry a non-empty GroupKey
+// belonging to the four declared groups, and the declared group must match
+// the hard-coded GroupForKey mapping (no drift between explicit and derived).
+func TestRegistryPlatformParamsHaveGroupKey(t *testing.T) {
+	r := NewParametersRegistry()
+	seenGroups := make(map[string]int)
+	for _, def := range r.Schema() {
+		if def.Scope != ScopePlatform {
+			continue
+		}
+		if def.GroupKey == "" {
+			t.Fatalf("%s: platform param missing GroupKey", def.Key)
+		}
+		switch def.GroupKey {
+		case GroupAgent, GroupMemory, GroupEvaluation, GroupTrace:
+			seenGroups[def.GroupKey]++
+		default:
+			t.Fatalf("%s: unexpected group %q", def.Key, def.GroupKey)
+		}
+		if want := GroupForKey(def.Key); want != def.GroupKey {
+			t.Fatalf("%s: GroupKey %q != GroupForKey %q", def.Key, def.GroupKey, want)
+		}
+	}
+	// 四组都必须有实际成员（迁移 seed 无死组）。
+	for _, g := range []string{GroupAgent, GroupMemory, GroupEvaluation, GroupTrace} {
+		if seenGroups[g] == 0 {
+			t.Fatalf("group %q has no platform params", g)
+		}
+	}
+}
+
+// TestGroupForKey is the pure-function mapping test for the group derivation:
+// known platform keys resolve to their group, unknown/legacy/empty resolve to "".
+func TestGroupForKey(t *testing.T) {
+	cases := []struct {
+		key  string
+		want string
+	}{
+		{"agent.compaction_prompt", GroupAgent},
+		{"agent.system_prompt", GroupAgent},
+		{"agent.factcheck.judge.model", GroupAgent},
+		{"memory.summary_token_threshold", GroupMemory},
+		{"memory.supersede_model", GroupMemory},
+		{"evaluation.optimizer.model", GroupEvaluation},
+		{"evaluation.judge.enabled", GroupEvaluation},
+		{"trace.capture_parameters", GroupTrace},
+		{"rag.top_k", ""},
+		{"mcp.enabled_tools", ""},
+		{"prompt.system_prompt", ""},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := GroupForKey(tc.key); got != tc.want {
+			t.Errorf("GroupForKey(%q) = %q, want %q", tc.key, got, tc.want)
+		}
+	}
+}
+
+// TestPlatformConfigGroupsMatchMigrationSeed guards consistency between the
+// registry group constants and the 043 migration seed: every group declared in
+// Go must appear in the platform_config_groups seed, and the seed must not
+// declare extra groups. Renumbering the migration updates this path.
+func TestPlatformConfigGroupsMatchMigrationSeed(t *testing.T) {
+	content, err := os.ReadFile("../../../pkg/migration/sql/043_platform_config_versions.up.sql")
+	if err != nil {
+		t.Fatalf("read 043 migration: %v", err)
+	}
+	text := string(content)
+	seed := `    ('agent',      'Agent'),
+    ('memory',     'Memory'),
+    ('evaluation', 'Evaluation'),
+    ('trace',      'Trace')`
+	if !strings.Contains(text, seed) {
+		t.Fatalf("043 seed missing group VALUES block:\n%q", seed)
+	}
+	// 迁移 seed 不得引入 registry 未声明的组（以 GroupForKey 全集为准）。
+	for _, g := range []string{GroupAgent, GroupMemory, GroupEvaluation, GroupTrace} {
+		if !strings.Contains(text, "'"+g+"'") {
+			t.Fatalf("migration seed missing group %q", g)
+		}
 	}
 }
 

@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 
 import { parametersApi } from '../api/parameters.api';
 import { ParameterControl } from '../components/ParameterControl';
+import VersionHistory from '../components/VersionHistory';
 import type {
   ParameterDefinition,
   PlatformSettingsFormValues,
@@ -32,6 +33,10 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 const categoryLabel = (category: string): string => CATEGORY_LABELS[category] ?? category;
+
+// 版本历史只挂有分组映射的领域（与后端 GroupForKey 四分组一一对应）。
+// mcp/rag 等 category 无 platform_config_groups 行，挂了会 404。
+const VERSION_GROUPS = new Set(['agent', 'memory', 'evaluation', 'trace']);
 
 // PlatformFieldItem 逐字段 watch 派生 unset（只重渲染本字段）。unset = 表单无值
 // 或 0/''（List 语义：非 0 默认后端已回填，缺失键即 0/''/nil 默认）。hint 只
@@ -83,10 +88,16 @@ const PlatformTabPanel = ({
   category,
   defs,
   initialValues,
+  groupKey,
+  refreshTick,
+  onEffectiveChange,
 }: {
   category: string;
   defs: ParameterDefinition[];
   initialValues: PlatformValues;
+  groupKey: string | null;
+  refreshTick: number;
+  onEffectiveChange: (values: PlatformValues) => void;
 }) => {
   const [form] = Form.useForm<PlatformSettingsFormValues>();
   const [saving, setSaving] = useState(false);
@@ -121,7 +132,12 @@ const PlatformTabPanel = ({
         patch[def.key] = v;
       }
       try {
-        await parametersApi.update(patch);
+        const effective = await parametersApi.update(patch);
+        // update 返回发布后生效快照（0/unset 已裁剪），回填表单与版本历史，
+        // 让"表单所见 = 版本历史最新 = 运行生效"三处一致。
+        if (effective && typeof effective === 'object') {
+          onEffectiveChange(effective);
+        }
         message.success({ content: `${categoryLabel(category)}参数已保存`, duration: 2 });
       } catch (err) {
         if (!isForbidden(err)) {
@@ -131,24 +147,41 @@ const PlatformTabPanel = ({
         setSaving(false);
       }
     },
-    [category, defs],
+    [category, defs, onEffectiveChange],
   );
 
+  // key→display_name 映射，版本 diff 展开行用中文名而非裸 key。
+  const labelMap = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const def of defs) m[def.key] = def.display_name || def.key;
+    return m;
+  }, [defs]);
+
   return (
-    <Form form={form} layout="vertical" onFinish={onFinish}>
-      <Row gutter={[24, 8]}>
-        {defs.map((def) => (
-          <Col key={def.key} xs={24} md={12}>
-            <PlatformFieldItem def={def} />
-          </Col>
-        ))}
-      </Row>
-      <Form.Item style={{ marginBottom: 0, marginTop: 16 }}>
-        <Button type="primary" htmlType="submit" loading={saving}>
-          保存{categoryLabel(category)}参数
-        </Button>
-      </Form.Item>
-    </Form>
+    <div>
+      <Form form={form} layout="vertical" onFinish={onFinish}>
+        <Row gutter={[24, 8]}>
+          {defs.map((def) => (
+            <Col key={def.key} xs={24} md={12}>
+              <PlatformFieldItem def={def} />
+            </Col>
+          ))}
+        </Row>
+        <Form.Item style={{ marginBottom: 0, marginTop: 16 }}>
+          <Button type="primary" htmlType="submit" loading={saving}>
+            保存{categoryLabel(category)}参数
+          </Button>
+        </Form.Item>
+      </Form>
+      {groupKey ? (
+        <VersionHistory
+          groupKey={groupKey}
+          labelMap={labelMap}
+          refreshTick={refreshTick}
+          onEffectiveChange={onEffectiveChange}
+        />
+      ) : null}
+    </div>
   );
 };
 
@@ -156,6 +189,15 @@ export const PlatformSettingsPage = () => {
   const [defs, setDefs] = useState<ParameterDefinition[]>([]);
   const [values, setValues] = useState<PlatformValues>({});
   const [loading, setLoading] = useState(true);
+  // versionTick 在保存/发布/回滚后递增，驱动各 tab 版本历史重拉；
+  // groupEffective 保存发布/回滚返回的生效快照，仅刷新对应分组表单。
+  const [versionTick, setVersionTick] = useState(0);
+  const [groupEffective, setGroupEffective] = useState<Record<string, PlatformValues>>({});
+
+  const handleEffectiveChange = useCallback((category: string, vals: PlatformValues) => {
+    setGroupEffective((prev) => ({ ...prev, [category]: vals }));
+    setVersionTick((t) => t + 1);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -192,14 +234,27 @@ export const PlatformSettingsPage = () => {
       group.push(def);
       byCategory.set(category, group);
     }
-    return Array.from(byCategory.entries()).map(([category, group]) => ({
-      key: category,
-      label: categoryLabel(category),
-      children: (
-        <PlatformTabPanel category={category} defs={group} initialValues={values} />
-      ),
-    }));
-  }, [defs, values]);
+    return Array.from(byCategory.entries()).map(([category, group]) => {
+      // 本组当前生效快照：发布/回滚后以返回值覆盖初始值（仅本组），
+      // 未变更的分组继续用初始值，避免切走未保存编辑被冲掉。
+      const effective = groupEffective[category] ?? values;
+      const groupKey = VERSION_GROUPS.has(category) ? category : null;
+      return {
+        key: category,
+        label: categoryLabel(category),
+        children: (
+          <PlatformTabPanel
+            category={category}
+            defs={group}
+            initialValues={effective}
+            groupKey={groupKey}
+            refreshTick={versionTick}
+            onEffectiveChange={(vals) => handleEffectiveChange(category, vals)}
+          />
+        ),
+      };
+    });
+  }, [defs, values, groupEffective, versionTick, handleEffectiveChange]);
 
   // 加载期间只渲染明确加载态，避免"标题+卡片骨架+保存按钮"的半成品展示页
   // （数据就绪后一次性渲染可编辑配置页）。置于全部 hooks 之后，保持 hook 顺序稳定。

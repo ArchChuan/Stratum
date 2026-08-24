@@ -535,6 +535,16 @@ func contentVersion(text string) string {
 	return hex.EncodeToString(sum[:])[:16]
 }
 
+// tunableConfigVersion fingerprints the effective tunable parameter snapshot
+// with the same contentVersion used for stratum.params.sha256, so the ReAct
+// promptVersions["config"] and the execution-span params hash always agree.
+// One source of truth for the config fingerprint — no third hash scheme
+// (P1 trace-fingerprint upgrade, follows contentVersion contract).
+func tunableConfigVersion(cfg *ExecutionConfig, maxContextTokens int) string {
+	paramsJSON, _ := json.Marshal(tunableSnapshot(cfg, maxContextTokens))
+	return contentVersion(string(paramsJSON))
+}
+
 func (a *BaseAgent) Execute(ctx context.Context, input string, options ...ExecutionOption) (*AgentResult, error) {
 	startTime := time.Now()
 
@@ -562,10 +572,10 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	tracer := otel.Tracer("stratum/agent")
 	executionAttrs := agentExecutionAttributes(snap.agentID, snap.agentName, snap.agentType, *cfg, snap.maxContextTokens)
 	requestSpan := oteltrace.SpanFromContext(ctx)
+	// requestSpan 属性注入保留，供被保留的 HTTP trace 关联 agent 元数据。
 	requestSpan.SetAttributes(executionAttrs...)
-	ctx, execSpan := tracer.Start(ctx, "agent.execute",
-		oteltrace.WithAttributes(executionAttrs...),
-	)
+	// agent.execute 恒为独立根 span（WithNewRoot），理由见 startAgentExecuteSpan。
+	ctx, execSpan := startAgentExecuteSpan(ctx, tracer, executionAttrs)
 	defer execSpan.End()
 
 	memCtx, memErr := a.injectMemoryContext(ctx, tracer, cfg, snap.agentID, snap.memoryScope, input)
@@ -652,6 +662,26 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	return result, execErr
 }
 
+// startAgentExecuteSpan 创建 agent.execute 独立根 span（WithNewRoot）：SDK
+// 采样器只对无父 root span 调用 ShouldSample（见 pkg/observability
+// agentSampler），带专用属性即 100% 采样，collector tail_sampling 也按此 keep。
+// HTTP/工作流等上游根 span 不加此属性、保持各自采样率，但 agent 执行本体从
+// 任何入口触发都独立成根而恒采样——否则 HTTP 入口的 agent.execute 是 otelgin
+// 根的子 span，ParentBased 会按父采样位短路，OTEL_SAMPLING_RATIO=0.1 下 90%
+// 被 SDK 丢弃，collector 规则救不回。独立根不破坏业务关联：trace_id 来自请求
+// payload（cfg.TraceID），非 OTEL span 链路。
+func startAgentExecuteSpan(
+	ctx context.Context,
+	tracer oteltrace.Tracer,
+	executionAttrs []attribute.KeyValue,
+) (context.Context, oteltrace.Span) {
+	execAttrs := append(executionAttrs, attribute.Bool(observability.AgentExecuteAttrKey, true))
+	return tracer.Start(ctx, "agent.execute",
+		oteltrace.WithNewRoot(),
+		oteltrace.WithAttributes(execAttrs...),
+	)
+}
+
 func recordFingerprintAndKPI(
 	metrics observability.MetricsProvider,
 	execSpan, requestSpan oteltrace.Span,
@@ -672,7 +702,7 @@ func recordFingerprintAndKPI(
 		resolved = result.ModelResolved
 	}
 	fp := CaptureFingerprint(resolved, result.ModelRoutedVia, systemPrompt, skillRevisionHashes(cfg.SkillCatalog),
-		tunableSnapshot(cfg, maxContextTokens), 0)
+		tunableConfigVersion(cfg, maxContextTokens), tunableSnapshot(cfg, maxContextTokens), 0)
 	fpAttrs := fingerprintAttributes(fp)
 	execSpan.SetAttributes(fpAttrs...)
 	requestSpan.SetAttributes(fpAttrs...)
@@ -1038,13 +1068,17 @@ func taskTokensOf(msgs []port.LLMMessage) int {
 }
 
 // promptVersionMap builds the prompt key → version fingerprint map carried
-// into the ReAct loop. Only the system prompt is fingerprinted today;
-// registry-driven prompts (if re-introduced) add their own keys here.
-func promptVersionMap(systemPromptVersion string) map[string]string {
-	if systemPromptVersion == "" {
-		return nil
+// into the ReAct loop. system_prompt is recorded only when a prompt revision
+// is applied; config (the effective tunable snapshot fingerprint) is always
+// present so the run stays attributable even with an empty system prompt.
+// Never returns nil — the config key must survive the empty-prompt boundary
+// (previously a nil map dropped the whole map).
+func promptVersionMap(systemPromptVersion, configVersion string) map[string]string {
+	m := map[string]string{"config": configVersion}
+	if systemPromptVersion != "" {
+		m["system_prompt"] = systemPromptVersion
 	}
-	return map[string]string{"system_prompt": systemPromptVersion}
+	return m
 }
 
 // resolveMaxOutputTokens 解析单次 LLM 请求的输出上限：显式 MaxTokens >
@@ -1099,7 +1133,7 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		ViewerID:                   ec.cfg.UserID,
 		RAGSearchFn:                ec.cfg.RAGSearchFn,
 		RAGSearchFnWithEvidence:    ec.cfg.RAGSearchFnWithEvidence,
-		PromptVersions:             promptVersionMap(ec.cfg.SystemPromptVersion),
+		PromptVersions:             promptVersionMap(ec.cfg.SystemPromptVersion, tunableConfigVersion(ec.cfg, maxTokens)),
 		OfficialDocsSearchFn:       ec.cfg.OfficialDocsSearchFn,
 		DiagnosticFn:               ec.cfg.DiagnosticFn,
 		ProposalCreateFn:           ec.cfg.ProposalCreateFn,
@@ -1815,7 +1849,6 @@ func agentExecutionAttributes(agentID, agentName string, agentType AgentType, cf
 	}
 	manifest, _ := json.Marshal(resourceManifest)
 	assignments, _ := json.Marshal(experimentAssignments)
-	paramsJSON, _ := json.Marshal(tunableSnapshot(&cfg, maxContextTokens))
 	attrs := []attribute.KeyValue{
 		attribute.String("agent.id", agentID),
 		attribute.String("agent.type", string(agentType)),
@@ -1844,7 +1877,7 @@ func agentExecutionAttributes(agentID, agentName string, agentType AgentType, cf
 		attribute.String("opik.metadata.stratum.experiment_variant", cfg.EvolutionTrace.Variant),
 		attribute.String("opik.metadata.stratum.experiment_assignments", string(assignments)),
 		attribute.String("opik.metadata.stratum.resource_manifest", string(manifest)),
-		attribute.String("stratum.params.sha256", contentVersion(string(paramsJSON))),
+		attribute.String("stratum.params.sha256", tunableConfigVersion(&cfg, maxContextTokens)),
 	}
 	// 窗口来源与解析值必须始终可观测（Spec 第 1 节），不随
 	// CaptureParameters 门控；WindowSource 为空（preparation span）时不记录。
@@ -2141,6 +2174,9 @@ func fingerprintAttributes(fp *domain.ExecutionFingerprint) []attribute.KeyValue
 		attribute.String("stratum.fingerprint.prompt_version", fp.PromptVersion),
 		attribute.String("stratum.fingerprint.content_hash", fp.ContentHash()),
 		attribute.Int("stratum.fingerprint.ab_bucket", fp.ABBucket),
+	}
+	if fp.ConfigVersion != "" {
+		attrs = append(attrs, attribute.String("stratum.fingerprint.config", fp.ConfigVersion))
 	}
 	if len(fp.ModelRoutedVia) > 0 {
 		b, _ := json.Marshal(fp.ModelRoutedVia)

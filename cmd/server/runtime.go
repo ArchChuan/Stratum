@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -63,6 +65,17 @@ func InitTracingFromEnv(logger *zap.Logger) func(context.Context) error {
 	if sn := os.Getenv("OTEL_SERVICE_NAME"); sn != "" {
 		traceCfg.ServiceName = sn
 	}
+	// OTEL_SAMPLING_RATIO 此前从不被读取（helm 注入 0.1 却从未生效）。
+	// 修复后非 agent 根 span 按此值头采样；agent.execute 由 agentSampler
+	// 恒保 100%（见 pkg/observability）。非法/越界值 warn 并回退 1.0，
+	// 防止误配置导致全量丢弃。此为已确认的生产行为变更（默认降至 helm 0.1）。
+	if r := os.Getenv("OTEL_SAMPLING_RATIO"); r != "" {
+		if f, ok := parseSamplingRatio(r); ok {
+			traceCfg.SamplingRatio = f
+		} else {
+			logger.Warn("invalid OTEL_SAMPLING_RATIO, falling back to 1.0", zap.String("value", r))
+		}
+	}
 	initCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	shutdown, err := observability.InitOTelProvider(initCtx, traceCfg)
@@ -72,6 +85,22 @@ func InitTracingFromEnv(logger *zap.Logger) func(context.Context) error {
 	}
 	logger.Info("OTel tracing enabled")
 	return shutdown
+}
+
+// parseSamplingRatio parses the OTEL_SAMPLING_RATIO value. Empty or invalid
+// values return (1.0, false) so callers fall back to full sampling rather than
+// risk a misconfigured value silently dropping all non-agent traces.
+func parseSamplingRatio(raw string) (float64, bool) {
+	if raw == "" {
+		return 1.0, false
+	}
+	f, err := strconv.ParseFloat(raw, 64)
+	// math.IsNaN 单独拦截：NaN 对 <=0/>1 两个比较都恒 false，直接通过会
+	// 让 TraceIDRatioBased(NaN) 静默变成全量采样（防误配置的 fail-safe 被绕过）。
+	if err != nil || math.IsNaN(f) || f <= 0 || f > 1 {
+		return 1.0, false
+	}
+	return f, true
 }
 
 func BootstrapTenants(ctx context.Context, c *wiring.Container, logger *zap.Logger) error {

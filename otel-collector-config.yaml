@@ -71,6 +71,13 @@ processors:
 
   tail_sampling:
     policies:
+      - name: agent-always
+        type: string_attribute
+        string_attribute:
+          # agent.execute 根 span 由 SDK 打 stratum.agent.execute=true，全链路保
+          key: stratum.agent.execute
+          values: ["true"]
+
       - name: evaluation-always
         type: string_attribute
         string_attribute:

@@ -18,8 +18,57 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
+
+// AgentExecuteAttrKey marks an agent execution root span that must always be
+// sampled, overriding both head-sampling ratio and the collector tail_sampling
+// default policy (which would otherwise drop agent executions at 10%).
+const AgentExecuteAttrKey = "stratum.agent.execute"
+
+// agentSampler always RecordAndSample's a root span carrying the agent
+// execution attribute, so every agent.execute root span reaches the collector
+// regardless of entry path (HTTP, workflow, scheduler, NATS, MCP). All other
+// root spans delegate to a ratio-based sampler; children are decided by
+// sdktrace.ParentBased (follow the parent's decision).
+//
+// ParentBased only consults this sampler for parent-less root spans, so the
+// caller must create agent.execute with WithNewRoot(): otherwise an HTTP entry
+// would make it a child of the otelgin root span and ParentBased would short-
+// circuit on the parent's sampling bit without ever calling ShouldSample here.
+type agentSampler struct {
+	ratio sdktrace.Sampler
+}
+
+// NewAgentSampler returns the agent-preserving head sampler: a root span
+// carrying AgentExecuteAttrKey is always RecordAndSample'd; everything else
+// delegates to a TraceIDRatioBased sampler at the given ratio. Wire it as
+// sdktrace.ParentBased(NewAgentSampler(ratio)) so children follow the root's
+// decision. Exported so tests can reproduce the HTTP-entry scenario where
+// agent.execute must survive a dropped parent root.
+func NewAgentSampler(ratio float64) sdktrace.Sampler {
+	return &agentSampler{ratio: sdktrace.TraceIDRatioBased(ratio)}
+}
+
+// Description implements sdktrace.Sampler.
+func (s *agentSampler) Description() string {
+	return "agentSampler"
+}
+
+// ShouldSample implements sdktrace.Sampler. ParentBased only consults this
+// sampler for root spans; the parent check is defensive.
+func (s *agentSampler) ShouldSample(p sdktrace.SamplingParameters) sdktrace.SamplingResult {
+	if trace.SpanContextFromContext(p.ParentContext).IsValid() {
+		return s.ratio.ShouldSample(p)
+	}
+	for _, kv := range p.Attributes {
+		if kv.Key == attribute.Key(AgentExecuteAttrKey) && kv.Value.AsBool() {
+			return sdktrace.SamplingResult{Decision: sdktrace.RecordAndSample}
+		}
+	}
+	return s.ratio.ShouldSample(p)
+}
 
 // SpanContext carries trace/span IDs through context.
 type SpanContext struct {
@@ -287,7 +336,8 @@ func InitOTelProvider(ctx context.Context, cfg *TraceConfig) (func(context.Conte
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.TraceIDRatioBased(cfg.SamplingRatio)),
+		// agent.execute 根 span 恒采样（见 NewAgentSampler），其余按 ratio；子 span 跟随父。
+		sdktrace.WithSampler(sdktrace.ParentBased(NewAgentSampler(cfg.SamplingRatio))),
 	)
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(

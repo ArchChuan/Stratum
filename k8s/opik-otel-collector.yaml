@@ -34,6 +34,13 @@ data:
       tail_sampling:
         decision_wait: 10s
         policies:
+          # agent.execute 根 span（SDK 打 stratum.agent.execute=true）全链路保，
+          # 覆盖非 HTTP 触发路径，补 chat-always 的 http.route 盲区。
+          - name: agent-always
+            type: string_attribute
+            string_attribute:
+              key: stratum.agent.execute
+              values: ["true"]
           - name: evaluation-always
             type: string_attribute
             string_attribute:
