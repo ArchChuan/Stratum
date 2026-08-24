@@ -77,6 +77,19 @@ func (s *PgToolApprovalStore) Decide(ctx context.Context, tenantID, id, decision
 	})
 }
 
+// Cancel CAS：仅 pending 且未过期 → cancelled。0 行（非 pending 或已过期）→ ErrApprovalAlreadyDecided（与 Decide 同语义，保证取消/批准并发单胜者）。
+func (s *PgToolApprovalStore) Cancel(ctx context.Context, tenantID, id, actor, reason string, now time.Time) error {
+	return execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE agent_tool_approvals SET status='cancelled',decided_by=$2,decision_reason=$3,decided_at=$4 WHERE id=$1 AND status='pending' AND expires_at>$4`, id, actor, reason, now)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return domain.ErrApprovalAlreadyDecided
+		}
+		return nil
+	})
+}
 func (s *PgToolApprovalStore) MarkExecuted(ctx context.Context, tenantID, id string) error {
 	return execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE agent_tool_approvals SET status='executed',executed_at=NOW() WHERE id=$1 AND status='executing'`, id)

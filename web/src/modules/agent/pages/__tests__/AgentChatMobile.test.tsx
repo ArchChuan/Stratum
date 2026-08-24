@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { Modal } from 'antd';
 import { createRef } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -19,6 +20,11 @@ const mocks = vi.hoisted(() => ({
 	navigate: vi.fn(),
 	streamFailure: null as null | { message: string; code?: string; status?: number },
 	clearStreamFailure: vi.fn(),
+	cancelWaitingApproval: vi.fn(),
+	resumeTerminal: vi.fn(),
+	resumeBlocked: false,
+	resumeBlockedLabel: '',
+	terminalApproval: null as null | Record<string, string>,
   agents: [
     { id: 'agent-1', name: '移动 Agent', description: '测试', llmModel: 'gpt-test' },
     { id: 'agent-2', name: '备用 Agent' },
@@ -38,6 +44,7 @@ vi.mock('react-router-dom', async () => ({
 
 vi.mock('@/modules/iam', () => ({
   useTenantRole: () => ({ isAdmin: mocks.isAdmin }),
+  useAuth: () => ({ user: { sub: 'test-user', tenant_id: 't1', role: 'member' } }),
   // SourceCardList 经 knowledge barrel 间接引入 llmRoutes → PrivateRoute，
   // mock 边界需提供该导出（与 evaluation/routes.test.tsx 同款）
   PrivateRoute: ({ children }: { children: React.ReactNode }) => children,
@@ -72,6 +79,11 @@ vi.mock('../../hooks/useChatPage', () => ({
 		manualResumeWaiting: mocks.manualResumeWaiting,
 		streamFailure: mocks.streamFailure,
 		clearStreamFailure: mocks.clearStreamFailure,
+		terminalApproval: mocks.terminalApproval,
+		resumeBlocked: mocks.resumeBlocked,
+		resumeBlockedLabel: mocks.resumeBlockedLabel,
+		cancelWaitingApproval: mocks.cancelWaitingApproval,
+		resumeTerminal: mocks.resumeTerminal,
   }),
 }));
 
@@ -83,6 +95,11 @@ describe('AgentChatPage mobile layout', () => {
 		mocks.waitingApproval = null;
 		mocks.streaming = false;
 		mocks.streamFailure = null;
+		mocks.cancelWaitingApproval.mockClear();
+		mocks.resumeTerminal.mockClear();
+		mocks.resumeBlocked = false;
+		mocks.resumeBlockedLabel = '';
+		mocks.terminalApproval = null;
 		mocks.agents = [
       { id: 'agent-1', name: '移动 Agent', description: '测试', llmModel: 'gpt-test' },
       { id: 'agent-2', name: '备用 Agent' },
@@ -194,7 +211,7 @@ describe('AgentChatPage mobile layout', () => {
 		expect(screen.queryByRole('button', { name: '批准并继续' })).not.toBeInTheDocument();
 	});
 
-	it.each(['cancelled', 'voided', 'invalidated'])(
+	it.each(['voided', 'invalidated'])(
 		'renders %s as invalidated without approve controls',
 		(status) => {
 			mocks.waitingApproval = {
@@ -206,6 +223,16 @@ describe('AgentChatPage mobile layout', () => {
 			expect(screen.queryByRole('button', { name: '批准并继续' })).not.toBeInTheDocument();
 		},
 	);
+
+	it('renders cancelled with its own terminal label without approve controls', () => {
+		mocks.waitingApproval = {
+			approvalId: 'approval-cancelled', agentId: 'agent-1', toolName: 'delete',
+			serverId: 'orders', riskLevel: 'destructive', status: 'cancelled',
+		};
+		render(<AgentChatPage />);
+		expect(screen.getByText('工具审批已取消')).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: '批准并继续' })).not.toBeInTheDocument();
+	});
 
 	it('shows the mapped reason for conversation-delete invalidation', () => {
 		mocks.waitingApproval = {
@@ -322,4 +349,63 @@ describe('AgentChatPage mobile layout', () => {
 
     expect(screen.queryByText('租户尚未配置平台助手模型')).not.toBeInTheDocument();
   });
+
+
+  // ── 取消审批入口（Task 71）：仅发起人本人 pending 可见，确认弹窗后调用 onCancel ──
+
+  it('shows the cancel button to the initiating user and confirms before cancelling', () => {
+    const confirmSpy = vi.spyOn(Modal, 'confirm').mockImplementation(() => ({ destroy: () => {} }) as never);
+    mocks.waitingApproval = {
+      approvalId: 'approval-1', agentId: 'agent-1', toolName: 'delete', serverId: 'orders',
+      riskLevel: 'destructive', status: 'pending', userId: 'test-user',
+    };
+    render(<AgentChatPage />);
+
+    const cancelBtn = screen.getByRole('button', { name: '取消审批' });
+    fireEvent.click(cancelBtn);
+    // 确认弹窗：标题/内容/确认按钮文案（产品 review ③），确认后回调 onCancel。
+    expect(confirmSpy).toHaveBeenCalledWith(expect.objectContaining({
+      title: '取消工具审批',
+      content: 'Agent 将不会执行该工具，并继续处理你的任务。',
+      okText: '确认取消',
+    }));
+    confirmSpy.mock.calls[0]?.[0]?.onOk?.();
+    expect(mocks.cancelWaitingApproval).toHaveBeenCalled();
+  });
+
+  it('hides the cancel button from non-initiating members', () => {
+    mocks.waitingApproval = {
+      approvalId: 'approval-1', agentId: 'agent-1', toolName: 'delete', serverId: 'orders',
+      riskLevel: 'destructive', status: 'pending', userId: 'other-user',
+    };
+    render(<AgentChatPage />);
+    expect(screen.queryByRole('button', { name: '取消审批' })).not.toBeInTheDocument();
+  });
+
+  it('hides the cancel button once the approval is no longer pending', () => {
+    mocks.waitingApproval = {
+      approvalId: 'approval-1', agentId: 'agent-1', toolName: 'delete', serverId: 'orders',
+      riskLevel: 'destructive', status: 'approved', userId: 'test-user',
+    };
+    render(<AgentChatPage />);
+    // approved 态保留「继续执行」手动入口，但不提供取消（canCancel 需 pending）。
+    expect(screen.getByRole('button', { name: '继续执行' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '取消审批' })).not.toBeInTheDocument();
+  });
+
+  it('offers the manual continue entry once terminal resume is blocked', () => {
+    mocks.terminalApproval = {
+      approvalId: 'approval-1', agentId: 'agent-1', toolName: 'delete', serverId: 'orders',
+      riskLevel: 'destructive', status: 'rejected', userId: 'test-user',
+    };
+    mocks.resumeBlocked = true;
+    mocks.resumeBlockedLabel = '已多次审批未通过，是否让 Agent 继续？';
+    render(<AgentChatPage />);
+
+    expect(screen.getByRole('button', { name: '让 Agent 继续' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '让 Agent 继续' }));
+    expect(mocks.resumeTerminal).toHaveBeenCalled();
+  });
+
+
 });

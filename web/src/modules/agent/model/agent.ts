@@ -287,6 +287,8 @@ export interface ChatMessage {
   steps?: ChatStep[];
   artifacts?: ExecutionArtifact[];
   interrupted?: boolean;
+  /** 审批终态续跑(取消/被拒)成功收尾的持久痕迹：该工具未执行 */
+  approvalRejected?: boolean;
   sources?: ChatCitationSource[];
   /** 无答案结构化信号（nil/缺失=有答案或旧后端）；用于渲染拒答提示 */
   noAnswer?: NoAnswerInfo;
@@ -381,6 +383,9 @@ export interface ToolApproval {
 	// 审批归属会话：ListPending 透出（member 已按自己过滤）、SSE 等待审批帧由发起
 	// 会话页补附；对话页卡片按此过滤当前会话，审批工作台复用。
 	conversationId?: string;
+	// 审批发起人：ListPending 透出（user_id），SSE 等待审批帧由发起会话页补附
+	// user.sub；对话页"取消"按钮据此仅对发起人本人展示。
+	userId?: string;
 }
 
 // 会话"进行中执行"视图（后端 GET /conversations/:convID/active-execution）。

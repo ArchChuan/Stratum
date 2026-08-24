@@ -30,6 +30,9 @@ type approvalRepoFake struct {
 	// 供"作废旧 pending 先于创建"与"配额仅计 pending"两个回归断言使用。
 	invalidateStaleCalls, listPendingCalls, listActionableCalls int
 	invalidateStaleErr                                          error
+	cancelErr                                                   error // Cancel 硬失败注入
+	cancelled                                                   int
+	lastCancelReason                                            string // 最近一次 Cancel 的 decision_reason（发起人自撤 vs admin 代撤）
 }
 
 func (f *approvalRepoFake) Create(_ context.Context, _ string, row domain.ToolApproval) (string, error) {
@@ -113,6 +116,11 @@ func (f *approvalRepoFake) InvalidateStaleForTool(_ context.Context, _, _, _, _ 
 }
 func (f *approvalRepoFake) ExpireStale(_ context.Context, _ string) (int64, error) {
 	return 0, nil
+}
+func (f *approvalRepoFake) Cancel(_ context.Context, _, _, _, reason string, _ time.Time) error {
+	f.cancelled++
+	f.lastCancelReason = reason
+	return f.cancelErr
 }
 
 func TestToolApprovalServiceRequestDeniesWhenPendingQuotaExhausted(t *testing.T) {
@@ -887,4 +895,183 @@ func TestExecuteApprovedActionMarksUnknownOnMarkExecutedFailure(t *testing.T) {
 	require.Equal(t, 1, repo.outcomeUnknown)
 	require.Zero(t, repo.released)
 	require.NotNil(t, executor.got) // 副作用确实已执行
+}
+
+// ── 主动取消审批（pending→cancelled）：CancelApproval 授权与 oracle ──
+// 校验顺序（与 ApprovalDetail 同构，关闭存在性 oracle）：角色(fail closed)→Get→归属校验
+// →pendingPayload(状态/过期/解密)→CAS。非发起人 member 对「存在 pending/已决定/不存在」的
+// ID 一律 ErrApprovalNotFound（无 404/409/410 状态分化）；admin/owner 可代撤（reason 区分）。
+
+// newApprovalServiceWithRow 构造带一行 pending 审批（UserID=user-1）的 service+repo。
+// 调用方可改 repo.row.Status/ExpiresAt 模拟各种状态。
+func newApprovalServiceWithRow(t *testing.T, resolver *fakeRoleResolver) (*ToolApprovalService, *approvalRepoFake) {
+	t.Helper()
+	repo := &approvalRepoFake{}
+	svc := NewToolApprovalService(repo, nil, crypto.DeriveAESKey("test-key"))
+	if resolver != nil {
+		svc.SetTenantRoleResolver(resolver)
+	}
+	_, err := svc.Request(context.Background(), ToolApprovalPayload{
+		TenantID: "tenant-1", ExecutionID: "exec-1", TraceID: "trace-1", AgentID: "agent-1", UserID: "user-1",
+		ToolCallID: "call-1", ServerID: "orders", ToolName: "delete", RiskLevel: port.ToolRiskDestructive,
+		Arguments: map[string]any{"order_id": "order-1"},
+	})
+	require.NoError(t, err)
+	return svc, repo
+}
+
+func TestCancelApprovalInitiatorCanCancelOwn(t *testing.T) {
+	svc, repo := newApprovalServiceWithRow(t, &fakeRoleResolver{roles: map[string]string{
+		"user-1": "member", "user-other": "member",
+	}})
+	// 发起人本人（user-1=row.UserID）取消 → 放行，reason 标记 initiator。
+	require.NoError(t, svc.CancelApproval(context.Background(), "tenant-1", "approval-1", "user-1"))
+	require.Equal(t, 1, repo.cancelled)
+	require.Equal(t, "cancelled_by_initiator", repo.lastCancelReason)
+}
+
+func TestCancelApprovalNonInitiatorMemberAlwaysNotFound(t *testing.T) {
+	// 非发起人 member：存在且 pending / 已决定 / 不存在 → 一律 ErrApprovalNotFound
+	// （无状态分化，关闭存在性 oracle）。
+	svc, repo := newApprovalServiceWithRow(t, &fakeRoleResolver{roles: map[string]string{
+		"user-1": "member", "user-other": "member",
+	}})
+	actor := "user-other"
+
+	t.Run("pending existing", func(t *testing.T) {
+		err := svc.CancelApproval(context.Background(), "tenant-1", "approval-1", actor)
+		require.ErrorIs(t, err, domain.ErrApprovalNotFound)
+		require.Equal(t, 0, repo.cancelled, "非发起人 member 先被归属校验拒绝，不触达 CAS")
+	})
+
+	t.Run("already decided", func(t *testing.T) {
+		repo.row.Status = string(domain.ToolApprovalApproved)
+		err := svc.CancelApproval(context.Background(), "tenant-1", "approval-1", actor)
+		require.ErrorIs(t, err, domain.ErrApprovalNotFound, "归属校验先于状态检查，不得泄漏 AlreadyDecided")
+		require.Equal(t, 0, repo.cancelled)
+	})
+
+	t.Run("missing", func(t *testing.T) {
+		missing := &approvalRepoFake{getErr: domain.ErrApprovalNotFound, getFailFirst: true}
+		msvc := NewToolApprovalService(missing, nil, crypto.DeriveAESKey("test-key"))
+		msvc.SetTenantRoleResolver(&fakeRoleResolver{role: "member"})
+		err := msvc.CancelApproval(context.Background(), "tenant-1", "missing", actor)
+		require.ErrorIs(t, err, domain.ErrApprovalNotFound)
+		require.Equal(t, 0, missing.cancelled)
+	})
+}
+
+func TestCancelApprovalAdminOwnerCanCancelAny(t *testing.T) {
+	for _, role := range []string{"admin", "owner"} {
+		t.Run(role, func(t *testing.T) {
+			svc, repo := newApprovalServiceWithRow(t, &fakeRoleResolver{role: role})
+			require.NoError(t, svc.CancelApproval(context.Background(), "tenant-1", "approval-1", "user-admin"))
+			require.Equal(t, 1, repo.cancelled)
+			require.Equal(t, "cancelled_by_approver", repo.lastCancelReason, "admin 代撤须与发起人自撤可区分")
+		})
+	}
+}
+
+func TestCancelApprovalNonPendingAlreadyDecided(t *testing.T) {
+	// 发起人取消已决定（approved）→ pendingPayload 报 ErrApprovalAlreadyDecided，不落 CAS。
+	svc, repo := newApprovalServiceWithRow(t, &fakeRoleResolver{role: "member"})
+	repo.row.Status = string(domain.ToolApprovalApproved)
+	err := svc.CancelApproval(context.Background(), "tenant-1", "approval-1", "user-1")
+	require.ErrorIs(t, err, domain.ErrApprovalAlreadyDecided)
+	require.Equal(t, 0, repo.cancelled)
+}
+
+func TestCancelApprovalExpiredPending(t *testing.T) {
+	svc, repo := newApprovalServiceWithRow(t, &fakeRoleResolver{role: "member"})
+	repo.row.ExpiresAt = time.Now().Add(-time.Minute)
+	err := svc.CancelApproval(context.Background(), "tenant-1", "approval-1", "user-1")
+	require.ErrorIs(t, err, ErrApprovalExpired)
+	require.Equal(t, 0, repo.cancelled)
+}
+
+func TestCancelApprovalRoleResolverFailClosed(t *testing.T) {
+	svc, repo := newApprovalServiceWithRow(t, &fakeRoleResolver{err: errors.New("db down")})
+	err := svc.CancelApproval(context.Background(), "tenant-1", "approval-1", "user-1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "db down")
+	require.Equal(t, 0, repo.cancelled, "resolver 失败必须 fail closed，不得继续校验或 CAS")
+}
+
+func TestCancelApprovalRepoHardFailPropagates(t *testing.T) {
+	svc, repo := newApprovalServiceWithRow(t, &fakeRoleResolver{role: "member"})
+	repo.cancelErr = errors.New("db down")
+	err := svc.CancelApproval(context.Background(), "tenant-1", "approval-1", "user-1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "db down")
+	require.Equal(t, 1, repo.cancelled, "CAS 硬失败须透传（已调 Cancel）")
+}
+
+// ── 终态续跑载荷读取：TerminalResumePayload 按 row.Status 显式枚举 ──
+// 只对 cancelled/rejected 放行（已过期也放行，无过期门控 H1）；pending 绝不放行（保持 202）。
+
+func TestTerminalResumePayloadTerminalStates(t *testing.T) {
+	tests := []struct {
+		name     string
+		status   domain.ToolApprovalStatus
+		expires  time.Time
+		wantStat string
+	}{
+		{name: "cancelled unexpired", status: domain.ToolApprovalCancelled, expires: time.Now().Add(time.Minute), wantStat: string(domain.ToolApprovalCancelled)},
+		{name: "cancelled expired still allowed", status: domain.ToolApprovalCancelled, expires: time.Now().Add(-time.Hour), wantStat: string(domain.ToolApprovalCancelled)},
+		{name: "rejected expired still allowed", status: domain.ToolApprovalRejected, expires: time.Now().Add(-time.Hour), wantStat: string(domain.ToolApprovalRejected)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, repo := newApprovalServiceWithRow(t, &fakeRoleResolver{role: "member"})
+			repo.row.Status = string(tc.status)
+			repo.row.ExpiresAt = tc.expires
+			payload, status, err := svc.TerminalResumePayload(context.Background(), "tenant-1", "approval-1")
+			require.NoError(t, err, "终态行必须放行（H1：不过期门控），工具反正被 ApprovedPayload 拒绝")
+			require.Equal(t, tc.wantStat, status)
+			require.Equal(t, "user-1", payload.UserID, "解密 payload 须与 row.UserID 一致")
+		})
+	}
+}
+
+func TestTerminalResumePayloadNonTerminalStates(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  domain.ToolApprovalStatus
+		expires time.Time
+		wantErr error
+	}{
+		{name: "pending unexpired keeps waiting", status: domain.ToolApprovalPending, expires: time.Now().Add(time.Minute), wantErr: ErrApprovalNotApproved},
+		{name: "pending expired", status: domain.ToolApprovalPending, expires: time.Now().Add(-time.Minute), wantErr: ErrApprovalExpired},
+		{name: "invalidated", status: domain.ToolApprovalInvalidated, expires: time.Now().Add(time.Minute), wantErr: domain.ErrApprovalInvalidated},
+		{name: "voided unexpired", status: domain.ToolApprovalVoided, expires: time.Now().Add(time.Minute), wantErr: ErrApprovalNotApproved},
+		{name: "executing never released", status: domain.ToolApprovalExecuting, expires: time.Now().Add(time.Minute), wantErr: ErrApprovalNotApproved},
+		{name: "executed never released", status: domain.ToolApprovalExecuted, expires: time.Now().Add(time.Minute), wantErr: ErrApprovalNotApproved},
+		{name: "approved not terminal", status: domain.ToolApprovalApproved, expires: time.Now().Add(time.Minute), wantErr: ErrApprovalNotApproved},
+		{name: "outcome unknown", status: domain.ToolApprovalOutcomeUnknown, expires: time.Now().Add(-time.Hour), wantErr: ErrApprovalOutcomeUnknown},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, repo := newApprovalServiceWithRow(t, &fakeRoleResolver{role: "member"})
+			repo.row.Status = string(tc.status)
+			repo.row.ExpiresAt = tc.expires
+			_, _, err := svc.TerminalResumePayload(context.Background(), "tenant-1", "approval-1")
+			require.ErrorIs(t, err, tc.wantErr, "非终态状态必须报对应错误，绝不放行")
+		})
+	}
+}
+
+func TestTerminalResumePayloadBindingMismatch(t *testing.T) {
+	svc, repo := newApprovalServiceWithRow(t, &fakeRoleResolver{role: "member"})
+	repo.row.Status = string(domain.ToolApprovalCancelled)
+	repo.row.ToolName = "other-tool" // 篡改绑定字段 → mismatch
+	_, _, err := svc.TerminalResumePayload(context.Background(), "tenant-1", "approval-1")
+	require.ErrorIs(t, err, ErrApprovalBindingMismatch)
+	require.Contains(t, err.Error(), "tool_name")
+}
+
+func TestTerminalResumePayloadNotFound(t *testing.T) {
+	repo := &approvalRepoFake{getErr: domain.ErrApprovalNotFound, getFailFirst: true}
+	svc := NewToolApprovalService(repo, nil, crypto.DeriveAESKey("test-key"))
+	_, _, err := svc.TerminalResumePayload(context.Background(), "tenant-1", "missing")
+	require.ErrorIs(t, err, domain.ErrApprovalNotFound)
 }

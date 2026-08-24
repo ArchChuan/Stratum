@@ -48,6 +48,23 @@ func (h *AgentHandler) DecideToolApproval(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": req.Decision})
 }
 
+// CancelToolApproval 取消待批审批：仅发起人本人（或 admin/owner 代撤）可取消，
+// pending→cancelled。越权/不存在统一 404（service 层 ErrApprovalNotFound，关闭
+// 存在性 oracle）；已决定/已过期由 error mapper 映射（409/410）。
+func (h *AgentHandler) CancelToolApproval(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	actor, _ := userIDFromCtx(c)
+	if err := h.svc.CancelToolApproval(c.Request.Context(), tenantID, actor, c.Param("approvalID")); err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
+}
+
 func (h *AgentHandler) ResumeToolApproval(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {

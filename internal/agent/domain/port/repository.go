@@ -107,6 +107,9 @@ type ToolApprovalRepo interface {
 	Create(ctx context.Context, tenantID string, approval domain.ToolApproval) (string, error)
 	Get(ctx context.Context, tenantID, approvalID string) (domain.ToolApproval, error)
 	Decide(ctx context.Context, tenantID, approvalID, decision, decidedBy, reason string, now time.Time) error
+	// Cancel CAS：仅 pending 且未过期 → cancelled（发起人主动撤回 / 管理员代撤）。
+	// 0 行（非 pending 或已过期）→ ErrApprovalAlreadyDecided，与 Decide 同语义。
+	Cancel(ctx context.Context, tenantID, approvalID, actor, reason string, now time.Time) error
 	ClaimExecution(ctx context.Context, tenantID, approvalID string) error
 	ReleaseExecution(ctx context.Context, tenantID, approvalID string) error
 	MarkOutcomeUnknown(ctx context.Context, tenantID, approvalID string) error

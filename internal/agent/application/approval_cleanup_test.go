@@ -51,6 +51,9 @@ func (*mockApprovalCleanupRepo) ListActionable(context.Context, string, string) 
 func (*mockApprovalCleanupRepo) ListHistory(context.Context, string, string, int, int) ([]domain.ToolApproval, int, error) {
 	return nil, 0, nil
 }
+func (*mockApprovalCleanupRepo) Cancel(context.Context, string, string, string, string, time.Time) error {
+	return nil
+}
 func (*mockApprovalCleanupRepo) Invalidate(context.Context, string, string, string) error {
 	return nil
 }

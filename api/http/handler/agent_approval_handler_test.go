@@ -40,6 +40,9 @@ func (f *toolApprovalRepoFake) Get(_ context.Context, _, _ string) (agentdomain.
 func (*toolApprovalRepoFake) Decide(context.Context, string, string, string, string, string, time.Time) error {
 	return nil
 }
+func (*toolApprovalRepoFake) Cancel(context.Context, string, string, string, string, time.Time) error {
+	return nil
+}
 func (f *toolApprovalRepoFake) ClaimExecution(_ context.Context, _, _ string) error {
 	f.claimExecuted++
 	return nil
@@ -116,6 +119,7 @@ func approvalRoutes(h *AgentHandler, auth ...gin.HandlerFunc) *gin.Engine {
 	g.GET("/history", h.ListApprovalHistory)
 	g.GET("/:approvalID", h.GetApprovalDetail)
 	g.POST("/:approvalID/execute", h.ExecuteApproval)
+	g.POST("/:approvalID/cancel", h.CancelToolApproval)
 	g.PUT("/:approvalID/assignee", h.SetApprovalAssignee)
 	return r
 }
@@ -161,6 +165,59 @@ func makeApprovalRow(t *testing.T, repo *toolApprovalRepoFake) {
 	repo.row.ID = "approval-1"
 	repo.row.Status = "approved"
 	repo.row.ExpiresAt = time.Now().Add(time.Minute)
+}
+
+// makePendingApprovalRow 生成 pending 未过期的审批行（Request 创建即 pending），
+// 供 CancelToolApproval 测试构造「可取消」前置状态。
+func makePendingApprovalRow(t *testing.T, repo *toolApprovalRepoFake, owner string) {
+	t.Helper()
+	svc := agentapp.NewToolApprovalService(repo, nil, crypto.DeriveAESKey("handler-test-key"))
+	if _, err := svc.Request(context.Background(), agentapp.ToolApprovalPayload{
+		TenantID: "t1", ExecutionID: "exec-1", TraceID: "trace-1", AgentID: "agent-1", UserID: owner,
+		ToolCallID: "call-1", ServerID: "evaluation", ToolName: "evaluation_action",
+		RiskLevel: port.ToolRiskUnclassified, SubjectKind: agentdomain.SubjectKindEvaluationAction,
+		PolicyVersion: "action-v1", Arguments: map[string]any{"operation": "pause_experiment", "experimentID": "exp-1"},
+	}); err != nil {
+		t.Fatalf("request approval: %v", err)
+	}
+	repo.row.ID = "approval-1"
+	repo.row.ExpiresAt = time.Now().Add(time.Minute)
+}
+
+func TestAgentHandlerCancelToolApproval(t *testing.T) {
+	t.Run("admin cancels pending approval", func(t *testing.T) {
+		h, repo := newApprovalTestHandler(t, "admin", nil)
+		makePendingApprovalRow(t, repo, "u1")
+		w := doApprovalReq(t, approvalRoutes(h, withApprovalContext("admin")),
+			http.MethodPost, "/tool-approvals/approval-1/cancel", "")
+		require.Equal(t, http.StatusOK, w.Code)
+		require.Contains(t, w.Body.String(), `"status":"cancelled"`)
+	})
+
+	t.Run("member cancels own pending approval", func(t *testing.T) {
+		h, repo := newApprovalTestHandler(t, "member", nil)
+		makePendingApprovalRow(t, repo, "u1")
+		w := doApprovalReq(t, approvalRoutes(h, withApprovalContext("member")),
+			http.MethodPost, "/tool-approvals/approval-1/cancel", "")
+		require.Equal(t, http.StatusOK, w.Code)
+		require.Contains(t, w.Body.String(), `"status":"cancelled"`)
+	})
+
+	// 非归属 member 取消：统一 404，关闭存在性 oracle（与 Detail 同构）。
+	t.Run("member cancel non-owned is not found", func(t *testing.T) {
+		h, repo := newApprovalTestHandler(t, "member", nil)
+		makePendingApprovalRow(t, repo, "other-user")
+		w := doApprovalReq(t, approvalRoutes(h, withApprovalContext("member")),
+			http.MethodPost, "/tool-approvals/approval-1/cancel", "")
+		require.Equal(t, http.StatusNotFound, w.Code)
+	})
+
+	t.Run("missing tenant unauthorized", func(t *testing.T) {
+		h, _ := newApprovalTestHandler(t, "admin", nil)
+		w := doApprovalReq(t, approvalRoutes(h),
+			http.MethodPost, "/tool-approvals/approval-1/cancel", "")
+		require.Equal(t, http.StatusUnauthorized, w.Code)
+	})
 }
 
 func TestAgentHandlerListApprovalHistory(t *testing.T) {

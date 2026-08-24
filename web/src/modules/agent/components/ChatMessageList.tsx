@@ -137,6 +137,11 @@ const MessageItem = memo(function MessageItem({
             <Tag color="orange">已中断</Tag>
           </div>
         )}
+        {m.approvalRejected && (
+          <div style={{ marginTop: 6 }}>
+            <Tag color="volcano">工具审批未通过，该工具未执行</Tag>
+          </div>
+        )}
         {m.role === 'assistant' && !streaming && (
           <ChatStepList steps={m.steps} />
         )}

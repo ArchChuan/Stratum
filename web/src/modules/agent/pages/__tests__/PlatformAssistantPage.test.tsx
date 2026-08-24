@@ -7,7 +7,10 @@ import { PlatformAssistantPage } from '../PlatformAssistantPage';
 vi.mock('../AgentChatPage', () => ({
   AgentChatPage: ({ fixedAgentId }: { fixedAgentId?: string }) => <div data-testid="chat">{fixedAgentId}</div>,
 }));
-vi.mock('@/modules/iam', () => ({ useTenantRole: () => ({ isAdmin: true }) }));
+vi.mock('@/modules/iam', () => ({
+  useTenantRole: () => ({ isAdmin: true }),
+  useAuth: () => ({ user: { sub: 'test-user', tenant_id: 't1', role: 'member' } }),
+}));
 
 describe('PlatformAssistantPage', () => {
   it('uses the fixed assistant without an agent selector and exposes settings to admins', () => {
