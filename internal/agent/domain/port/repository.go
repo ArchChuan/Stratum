@@ -113,6 +113,10 @@ type ToolApprovalRepo interface {
 	MarkExecuted(ctx context.Context, tenantID, approvalID string) error
 	// ListPending 返回未过期 pending 审批；userID 非空时仅返回该用户发起的（member 语义）。
 	ListPending(ctx context.Context, tenantID, userID string) ([]domain.ToolApproval, error)
+	// ListActionable 返回未过期 pending + approved 审批（F2：审批列表展示 approved
+	// 待执行态）。身份过滤语义与 ListPending 一致；配额 enforcePendingQuota 仍用
+	// ListPending（pending-only），防止把待执行行计入 MaxPendingApprovalsPerActor。
+	ListActionable(ctx context.Context, tenantID, userID string) ([]domain.ToolApproval, error)
 	// ListHistory 返回非 pending 状态（decided/executed/expired/invalidated/voided/cancelled）分页列表，
 	// 第二返回值为总数（admin/owner 工作台用）。userID 非空时仅返回该用户发起的
 	// （member 语义），COUNT 与 SELECT 同步按 user_id 过滤保证 total 与列表一致。
@@ -121,6 +125,13 @@ type ToolApprovalRepo interface {
 	Invalidate(ctx context.Context, tenantID, id, reason string) error
 	// Void CAS：仅 approved → voided，写入 invalidation_reason（执行上下文销毁）。
 	Void(ctx context.Context, tenantID, id, reason string) error
+	// InvalidateStaleForTool 作废同 execution 同 server+tool 的旧 pending 审批（方案 C，
+	// mcp_tool 门控 + 未过期）。返回作废行数。只作废 pending，approved/executed 由消费
+	// 路径（CAS）或过期处理，严禁作废。
+	InvalidateStaleForTool(ctx context.Context, tenantID, executionID, serverID, toolName string) (int64, error)
+	// ExpireStale 将 expires_at 已过的 pending/approved 审批标记为 expired（H4 过期清扫，
+	// decided_by=system:expiry 保证审计可对账）。返回过期行数；executed 等终态不受影响。
+	ExpireStale(ctx context.Context, tenantID string) (int64, error)
 	// UpdateAssignee CAS：仅 pending 可改指定审批人（软绑定）。
 	UpdateAssignee(ctx context.Context, tenantID, id, assignee string) error
 	// CascadeByConversation 事务内将关联审批 pending→cancelled、approved→voided（原因 conversation_deleted）。

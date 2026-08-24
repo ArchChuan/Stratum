@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"time"
 
@@ -157,6 +156,17 @@ func computePayloadDigests(payload ToolApprovalPayload) (ToolApprovalPayload, er
 	return payload, nil
 }
 
+// invalidateStaleForTool 方案 C：同一 execution 同一 server+tool 的旧 pending
+// 审批作废（参数漂移防堆积）。best-effort——作废失败不阻断新审批（旧 pending
+// 由过期清理兜底）。只作废 pending（mcp_tool 门控），approved 严禁作废。抽离自
+// Request，保持其复杂度在棘轮基线内。
+func (s *ToolApprovalService) invalidateStaleForTool(ctx context.Context, payload ToolApprovalPayload) {
+	if payload.SubjectKind != domain.SubjectKindMCPTool || payload.ExecutionID == "" {
+		return
+	}
+	_, _ = s.repo.InvalidateStaleForTool(ctx, payload.TenantID, payload.ExecutionID, payload.ServerID, payload.ToolName)
+}
+
 func (s *ToolApprovalService) Request(ctx context.Context, payload ToolApprovalPayload) (string, error) {
 	// D3：subject 泛化——空值视为 mcp_tool（兼容存量调用）。
 	if payload.SubjectKind == "" {
@@ -168,6 +178,11 @@ func (s *ToolApprovalService) Request(ctx context.Context, payload ToolApprovalP
 	if err := s.enforcePendingQuota(ctx, payload); err != nil {
 		return "", err
 	}
+	// 方案 C：同一 execution 同一 server+tool 的旧 pending 审批作废（参数漂移
+	// 防堆积、防前端误触发旧审批 resume）。best-effort——作废失败不阻断新审批
+	// （旧 pending 由过期清理兜底）；只作废 pending（mcp_tool 门控），approved
+	// 由消费路径（CAS）或过期处理，严禁作废。
+	s.invalidateStaleForTool(ctx, payload)
 	// D8：指定审批人必须是 admin/owner（软绑定，落地为工作台 PUT assignee）。
 	if err := s.validateAssignee(ctx, payload.TenantID, payload.AssignedApprover); err != nil {
 		return "", err
@@ -446,13 +461,25 @@ func (s *ToolApprovalService) Invalidate(ctx context.Context, tenantID, id, reas
 	return s.repo.Invalidate(ctx, tenantID, id, reason)
 }
 
+// matchApprovedCallDigest 校验已批准载荷与本次执行的 server/tool/参数一致
+// （CanonicalToolArgumentsDigest 与 ApprovedPayload binding 同源）。抽离自
+// ExecuteApproved，保持其复杂度在棘轮基线内。
+func matchApprovedCallDigest(payload ToolApprovalPayload, serverID, toolName string, args map[string]any) error {
+	argsDigest, digestErr := CanonicalToolArgumentsDigest(args)
+	if payload.ServerID != serverID || payload.ToolName != toolName ||
+		digestErr != nil || payload.ArgumentsDigest != argsDigest {
+		return errors.New("approved tool call does not match pinned request")
+	}
+	return nil
+}
+
 func (s *ToolApprovalService) ExecuteApproved(ctx context.Context, tenantID, id, serverID, toolName string, args map[string]any, executor port.MCPToolExecutor) (port.MCPToolResult, error) {
 	payload, err := s.ApprovedPayload(ctx, tenantID, id)
 	if err != nil {
 		return port.MCPToolResult{}, err
 	}
-	if payload.ServerID != serverID || payload.ToolName != toolName || !reflect.DeepEqual(payload.Arguments, args) {
-		return port.MCPToolResult{}, errors.New("approved tool call does not match pinned request")
+	if err := matchApprovedCallDigest(payload, serverID, toolName, args); err != nil {
+		return port.MCPToolResult{}, err
 	}
 	if err := s.repo.ClaimExecution(ctx, tenantID, id); err != nil {
 		return port.MCPToolResult{}, fmt.Errorf("claim tool approval execution: %w", err)
@@ -507,6 +534,27 @@ func (s *ToolApprovalService) ListPending(ctx context.Context, tenantID, actor s
 		userID = ""
 	}
 	rows, err := s.repo.ListPending(ctx, tenantID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.resolveRowNames(ctx, rows); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// ListActionable 按调用者身份过滤（F2：pending + approved 待执行态）。member
+// 仅本人发起，admin/owner 全量。配额计数仍走 ListPending（pending-only）。
+func (s *ToolApprovalService) ListActionable(ctx context.Context, tenantID, actor string) ([]domain.ToolApproval, error) {
+	role, err := s.resolveRole(ctx, tenantID, actor)
+	if err != nil {
+		return nil, err
+	}
+	userID := actor
+	if role == "admin" || role == "owner" {
+		userID = ""
+	}
+	rows, err := s.repo.ListActionable(ctx, tenantID, userID)
 	if err != nil {
 		return nil, err
 	}

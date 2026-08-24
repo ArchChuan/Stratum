@@ -80,6 +80,11 @@ type ReActState struct {
 	// MaxLLMSteps caps LLM-node invocations; on the last allowed call tools are
 	// stripped and the model is asked to produce a final answer from collected context.
 	MaxLLMSteps int
+	// SkipNextLLM 标记下一轮 LLM 节点直接跳过生成（工具审批续跑 C2b）：仅执行
+	// 内存态，不入 checkpoint（恢复只重建 Messages、buildReActInitState 每轮
+	// 新建 state，字段天然每轮重置）。makeLLMNode 消费后立即清零；跳过轮不
+	// Steps++、不记账，MaxLLMSteps 强制收敛不受影响。
+	SkipNextLLM bool
 	// MaxContextTokens bounds each ReAct LLM request. When the
 	// accumulated Messages exceed it, older tool-call/tool-result groups are compacted
 	// (summarized or dropped) before dispatch. Zero disables in-loop compaction.

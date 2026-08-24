@@ -72,6 +72,7 @@ type Agent struct {
 	CompactionStore   agentport.CompactionStore
 	CheckpointCleanup *agent.CheckpointCleanupWorker
 	TaskCleanup       *agent.TaskCleanupWorker
+	ApprovalCleanup   *agent.ApprovalCleanupWorker
 	ApprovalStore     agentport.ToolApprovalRepo
 	TaskStore         agentport.TaskRepo
 	ApprovalService   *agent.ToolApprovalService
@@ -327,7 +328,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 			c.platformMetrics(),
 		)
 		a.CheckpointCleanup.Start(ctx)
-		wireTaskCleanup(c, a, ctx)
+		wireCleanupWorkers(c, a, ctx)
 		a.SkillLookup = persistence.NewPgSkillLookup(db)
 		var registry *llmgateway.ModelRegistry
 		var gw *llmgateway.Gateway
@@ -457,6 +458,35 @@ func wireTaskCleanup(c *Container, a *Agent, ctx context.Context) {
 		a.TaskCleanup.Stop()
 		return nil
 	})
+}
+
+// wireApprovalCleanup assembles the ApprovalCleanupWorker for the DB-backed path
+// and registers its shutdown. Mirrors wireTaskCleanup.
+func wireApprovalCleanup(c *Container, a *Agent, ctx context.Context) {
+	db := c.dbOrNil()
+	if db == nil {
+		return
+	}
+	a.ApprovalCleanup = agent.NewApprovalCleanupWorker(
+		agentCheckpointTenantLister{pool: db}.list,
+		a.ApprovalStore,
+		constants.ApprovalCleanupInterval,
+		c.Logger,
+		c.platformMetrics(),
+	)
+	a.ApprovalCleanup.Start(ctx)
+	c.shutdown = append(c.shutdown, func(context.Context) error {
+		a.ApprovalCleanup.Stop()
+		return nil
+	})
+}
+
+// wireCleanupWorkers assembles the DB-backed cleanup workers (task + approval)
+// in a single buildAgent call site. Mirrors the CheckpointCleanup inline
+// construction.
+func wireCleanupWorkers(c *Container, a *Agent, ctx context.Context) {
+	wireTaskCleanup(c, a, ctx)
+	wireApprovalCleanup(c, a, ctx)
 }
 
 // wireOperationGate wires the T8 operation approval chain: the gate service

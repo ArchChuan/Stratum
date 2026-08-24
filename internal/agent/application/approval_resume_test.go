@@ -116,11 +116,19 @@ func approvalResumeFixture(t *testing.T, payload ToolApprovalPayload, role strin
 }
 
 func resumePayload(execID, agentID, userID string) ToolApprovalPayload {
-	return ToolApprovalPayload{
+	p := ToolApprovalPayload{
 		TenantID: "t1", ExecutionID: execID, AgentID: agentID, UserID: userID,
 		ToolCallID: "tc1", ServerID: "srv", ToolName: "delete", RiskLevel: port.ToolRiskDestructive,
 		ConversationID: "conv-alive", Query: "resume", Arguments: map[string]any{"id": "1"},
 	}
+	// C2d：guard 命中比较用 canonical digest（与 Request 加密链路同源），手工构造
+	// 的载荷必须补齐 ArgumentsDigest，否则 digest 比较不命中。
+	d, err := CanonicalToolArgumentsDigest(p.Arguments)
+	if err != nil {
+		panic(err)
+	}
+	p.ArgumentsDigest = d
+	return p
 }
 
 // 发起人续跑自己的执行 → 放行（payload.UserID == actor && checkpoint.UserID 一致）。
@@ -178,11 +186,26 @@ func TestResolveApprovalResume_AgentBindingMismatch(t *testing.T) {
 	require.ErrorIs(t, err, ErrApprovalBindingMismatch)
 }
 
-// 非 waiting_approval checkpoint（running/paused/completed）→ 非审批续跑，
-// 返回空 payload（不触碰审批、不越权探测）。
-func TestResolveApprovalResume_NonWaitingStatusIsEmpty(t *testing.T) {
+// SECURITY-HIGH（收紧）：载荷缺 agent_id（老数据/异常载荷）时，URL 指定
+// agentID 视为不匹配 fail-closed——防缺省字段静默放行跨 agent 复用已批准授权。
+func TestValidateApprovalBinding_MissingPayloadAgentIDFailsClosed(t *testing.T) {
+	svc := NewAgentService(AgentServiceDeps{Logger: zap.NewNop()})
+	// 载荷缺 AgentID + URL 指定 agentID → 不匹配（旧逻辑双侧空才放行，收紧为缺省即拒）。
+	err := svc.validateApprovalBinding("a1", ToolApprovalPayload{TenantID: "t1", AgentID: ""})
+	require.ErrorIs(t, err, ErrApprovalBindingMismatch)
+	// URL 未指定 agentID → 不校验（无绑定意图，保持原路径）。
+	err = svc.validateApprovalBinding("", ToolApprovalPayload{TenantID: "t1", AgentID: "a1"})
+	require.NoError(t, err)
+	// 一致 → 放行。
+	err = svc.validateApprovalBinding("a1", ToolApprovalPayload{TenantID: "t1", AgentID: "a1"})
+	require.NoError(t, err)
+}
+
+// 非续跑状态（paused/completed）→ 非审批续跑，返回空 payload（不触碰审批、不越权
+// 探测）。running 是 H2① 软续跑候选（见 TestResolveApprovalResume_RunningCheckpointSoftResolves）。
+func TestResolveApprovalResume_NonResumableStatusIsEmpty(t *testing.T) {
 	svc, _, cp := approvalResumeFixture(t, resumePayload("e1", "a1", "user-1"), "member")
-	cp.cp.Status = "running"
+	cp.cp.Status = "paused"
 
 	payload, approvalID, gotCp, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
 
@@ -202,6 +225,49 @@ func TestResolveApprovalResume_NotApprovedPropagates(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrApprovalNotApproved)
 	require.Equal(t, "approval-1", approvalID)
+	require.NotNil(t, gotCp)
+}
+
+// H2① 软续跑：checkpoint 为 running（首个续跑抢占后、批准消费前刷新）且审批仍
+// approved → 命中解析，返回批准载荷（注入 ApprovalResumePayload 合成 P1 直接
+// 执行，不再经 LLM 重新生成 → 不再创建新审批循环）。
+func TestResolveApprovalResume_RunningCheckpointSoftResolves(t *testing.T) {
+	svc, _, cp := approvalResumeFixture(t, resumePayload("e1", "a1", "user-1"), "member")
+	cp.cp.Status = "running"
+
+	payload, approvalID, gotCp, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
+
+	require.NoError(t, err)
+	require.Equal(t, "approval-1", approvalID)
+	require.Equal(t, "user-1", payload.UserID)
+	require.Same(t, cp.cp, gotCp)
+}
+
+// H2① running checkpoint 无 approval_id（正常执行中途刷新）→ 非审批续跑，空 payload。
+func TestResolveApprovalResume_RunningWithoutApprovalIDIsEmpty(t *testing.T) {
+	svc, _, cp := approvalResumeFixture(t, resumePayload("e1", "a1", "user-1"), "member")
+	cp.cp.Status = "running"
+	cp.cp.RuntimeStateJSON = []byte(`{}`)
+
+	payload, approvalID, gotCp, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
+
+	require.NoError(t, err)
+	require.Empty(t, payload.UserID)
+	require.Empty(t, approvalID)
+	require.Nil(t, gotCp)
+}
+
+// H2① running checkpoint + 审批已被并发消费（首个续跑 ClaimExecution 后正在执行）
+// → ApprovedPayload fail-closed（ErrApprovalNotApproved），软续跑快速失败，不启动
+// 图、不重复执行（单次消费由 ExecuteApproved 的 ClaimExecution CAS 保证）。
+func TestResolveApprovalResume_RunningApprovalConsumedFastFails(t *testing.T) {
+	svc, repo, cp := approvalResumeFixture(t, resumePayload("e1", "a1", "user-1"), "member")
+	cp.cp.Status = "running"
+	repo.row.Status = string(domain.ToolApprovalExecuting)
+
+	_, _, gotCp, err := svc.resolveApprovalResume(context.Background(), "t1", "user-1", "e1", "a1")
+
+	require.ErrorIs(t, err, ErrApprovalNotApproved)
 	require.NotNil(t, gotCp)
 }
 
@@ -227,6 +293,35 @@ func TestClaimApprovalResume_GenerationCASFailureBlocks(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "another window already resumed")
 	require.Zero(t, cp.statusCalls, "分代 CAS 失败不得再写状态 CAS")
+}
+
+// H2① maybeResumeApproval 对 running checkpoint 走软续跑：不 AdvanceRunGeneration、
+// 不写状态 CAS（首个续跑已抢占），resuming=true 且 req 按批准载荷快照重写。
+func TestMaybeResumeApproval_RunningCheckpointSkipsClaim(t *testing.T) {
+	svc, _, cp := approvalResumeFixture(t, resumePayload("e1", "a1", "user-1"), "member")
+	cp.cp.Status = "running"
+
+	_, _, resuming, outReq, _, err := svc.maybeResumeApproval(
+		context.Background(), "a1", ExecRequest{Query: "x", UserID: "user-1"}, ExecMeta{TenantID: "t1"}, "e1")
+
+	require.NoError(t, err)
+	require.True(t, resuming)
+	require.Zero(t, cp.advanceCalls, "running checkpoint 不重复抢占分代")
+	require.Zero(t, cp.statusCalls, "running checkpoint 不重复写状态 CAS")
+	require.Equal(t, "resume", outReq.Query, "req 按批准载荷快照重写")
+}
+
+// waiting_approval checkpoint 仍走完整抢占（既有行为回归，避免误放软续跑）。
+func TestMaybeResumeApproval_WaitingCheckpointClaims(t *testing.T) {
+	svc, _, cp := approvalResumeFixture(t, resumePayload("e1", "a1", "user-1"), "member")
+
+	_, _, resuming, _, _, err := svc.maybeResumeApproval(
+		context.Background(), "a1", ExecRequest{Query: "x", UserID: "user-1"}, ExecMeta{TenantID: "t1"}, "e1")
+
+	require.NoError(t, err)
+	require.True(t, resuming)
+	require.Equal(t, 1, cp.advanceCalls, "waiting_approval 抢占分代")
+	require.Equal(t, 1, cp.statusCalls, "waiting_approval 抢占状态")
 }
 
 // claimApprovalResume：分代成功但状态 CAS 失败 → 错误上抛（不静默）。
@@ -453,6 +548,21 @@ func TestFinishApprovalResume_ApprovalPendingPreservesState(t *testing.T) {
 	require.ErrorIs(t, err, runErr)
 	require.Zero(t, cp.statusCalls)
 	require.Empty(t, cp.terminated)
+	require.Zero(t, cp.completed)
+}
+
+// H2① ErrApprovalAlreadyExecuted（并发窗口已有胜者接管）→ 保留 running：不回滚
+// waiting_approval、不写终态，交胜者 MarkCompleted（避免回滚破坏胜者收尾）。
+func TestFinishApprovalResume_AlreadyExecutedRetains(t *testing.T) {
+	cp := &approvalResumeCheckpointStub{}
+	svc := resumeFinishService(t, cp)
+
+	err := svc.finishApprovalResume(
+		context.Background(), "t1", "e1", func() bool { return false }, domain.ErrApprovalAlreadyExecuted)
+
+	require.ErrorIs(t, err, domain.ErrApprovalAlreadyExecuted)
+	require.Zero(t, cp.statusCalls, "已消费不得回滚 waiting_approval")
+	require.Empty(t, cp.terminated, "已消费不得写终态 failed")
 	require.Zero(t, cp.completed)
 }
 

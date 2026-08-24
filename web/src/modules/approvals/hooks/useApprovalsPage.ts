@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { approvalApi } from '../api';
 import type { ApprovalDetail, ApprovalRow, ApprovalDecision } from '../api';
 
+import { APPROVAL_POLL_MS } from '@/constants';
 import { tenantApi, type Member } from '@/modules/iam';
 import { usePagination } from '@/shared/hooks';
 
@@ -41,6 +42,9 @@ export const useApprovalsPage = () => {
   const pendingSeqRef = useRef(0);
   const historySeqRef = useRef(0);
   const detailSeqRef = useRef(0);
+  // 轮询独立 seq：与手动 loadPending 的 pendingSeqRef 隔离，轮询不碰 loading
+  // （避免表格每轮闪 spinner），且慢轮询响应不会覆盖新轮询数据。
+  const pollSeqRef = useRef(0);
 
   const loadPending = useCallback(async () => {
     const seq = ++pendingSeqRef.current;
@@ -54,6 +58,19 @@ export const useApprovalsPage = () => {
       message.error({ content: errorMessage(err, '加载待审批列表失败'), duration: 3 });
     } finally {
       if (seq === pendingSeqRef.current) setPendingLoading(false);
+    }
+  }, []);
+
+  // 轮询静默刷新（F1）：复用 listPending（后端该端点 pending-only，与铃铛同源），
+  // 窗口聚焦/定时自动同步审批结果。失败静默忽略（顶栏铃铛同款语义），不设 loading，
+  // 独立 pollSeq 防轮询竞态。
+  const pollPending = useCallback(async () => {
+    const seq = ++pollSeqRef.current;
+    try {
+      const rows = await approvalApi.listPending();
+      if (seq === pollSeqRef.current) setPendingRows(rows);
+    } catch {
+      // 静默：下次轮询/聚焦自动重试。
     }
   }, []);
 
@@ -89,7 +106,16 @@ export const useApprovalsPage = () => {
 
   useEffect(() => {
     void loadPending();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅首次加载
+    // 审批结果自动同步（F1）：approval approved → 后端续跑消费 → 列表自动刷新，
+    // 免手动刷新。轮询静默失败不打扰；窗口聚焦时立即刷新避免切回后状态陈旧。
+    const timer = window.setInterval(() => void pollPending(), APPROVAL_POLL_MS);
+    const onFocus = () => void pollPending();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅首挂载；loadPending/pollPending 引用稳定
   }, []);
 
   const switchTab = useCallback((next: ApprovalsTab) => {
