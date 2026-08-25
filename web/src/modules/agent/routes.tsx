@@ -40,7 +40,8 @@ export const agentRoutes = [
     key="agents-edit"
     path="/agents/:id/edit"
     element={
-      <PrivateRoute requiredTenantRole="admin">
+      // P1：编辑入口对成员开放；页面内按白名单 readOnly 门控，后端 PUT 仍有 ownership 校验。
+      <PrivateRoute>
         <EditAgentPage />
       </PrivateRoute>
     }

@@ -45,15 +45,16 @@ func NewPgAgentRepo(pool *pgxpool.Pool) *PgAgentRepo {
 const resourceEditorKind = "agent"
 
 // editorEligible checks, inside the write transaction, that userID currently
-// holds role admin or owner in the tenant. Fail closed on any lookup error.
-// public.tenant_members is schema-qualified: the transaction search_path
-// points at the tenant schema.
+// is an active tenant member (any role: admin/owner/member). Whitelisted
+// editors may be any member, so eligibility is no longer restricted to
+// privileged roles. Fail closed on any lookup error. public.tenant_members
+// is schema-qualified: the transaction search_path points at the tenant schema.
 func editorEligible(ctx context.Context, tx pgx.Tx, tenantID, userID string) (bool, error) {
 	var ok bool
 	if err := tx.QueryRow(ctx,
 		`SELECT EXISTS(
 			SELECT 1 FROM public.tenant_members
-			WHERE tenant_id=$1 AND user_id=$2 AND role IN ('admin','owner'))`,
+			WHERE tenant_id=$1 AND user_id=$2 AND role IN ('admin','owner','member'))`,
 		tenantID, userID,
 	).Scan(&ok); err != nil {
 		return false, fmt.Errorf("editor role check: %w", err)

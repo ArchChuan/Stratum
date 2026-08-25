@@ -29,6 +29,7 @@ const documentRow = {
   total_chunks: 10,
   allowed_user_ids: [],
   allowed_role_ids: [],
+  restricted: false,
   created_at: '2026-07-13T01:02:00Z',
   ingest_started_at: '2026-07-14T02:03:00Z',
 };

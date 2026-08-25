@@ -222,6 +222,27 @@ func (r *DocRepo) SetDocAccess(ctx context.Context, tenantID, docID string, user
 	})
 }
 
+// AddAllowedUser appends userID to the document's view whitelist
+// (allowed_user_ids) idempotently. Backs the grant_editor knowledge_doc
+// approval: once granted the member becomes visible to the existing
+// VisibleDocIDs gate (list / preview / retrieval).
+func (r *DocRepo) AddAllowedUser(ctx context.Context, tenantID, docID, userID string) error {
+	return execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE knowledge_docs
+			SET allowed_user_ids = CASE
+				WHEN $2 = ANY(allowed_user_ids) THEN allowed_user_ids
+				ELSE array_append(allowed_user_ids, $2) END
+			WHERE id=$1`, docID, userID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return domain.ErrDocumentNotFound
+		}
+		return nil
+	})
+}
+
 func (r *DocRepo) RecoverStuckIngests(ctx context.Context, tenantID string, threshold time.Duration) (int, error) {
 	var count int
 	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {

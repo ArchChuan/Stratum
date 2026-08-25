@@ -12,6 +12,11 @@ const (
 	OpCrossAgentDelegate OperationType = "cross_agent_delegate"
 	OpScheduleCreate     OperationType = "schedule_create"
 	OpSelfModify         OperationType = "self_modify"
+	// OpGrantEditor 标记「成员白名单自助申请」提案（agent/skill 编辑权、
+	// knowledge_doc 查看权）。批准即授予：与 self_modify 不同，不走
+	// approved→proposer-replay 两段式，由 OperationProposalService.Approve
+	// 特判分发到 grantEditor 闭包直接落库。
+	OpGrantEditor OperationType = "grant_editor"
 )
 
 // DelegationPolicy controls cross-agent data sharing.

@@ -22,7 +22,6 @@ var (
 	ErrApprovalRequired     = errors.New("workflow approval required")
 	ErrNotFound             = errors.New("workflow not found")
 	ErrForbidden            = errors.New("workflow action forbidden")
-	ErrPlatformManagedSkill = errors.New("platform-managed skill cannot be referenced in workflow")
 )
 
 type NodeType string

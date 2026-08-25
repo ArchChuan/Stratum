@@ -1,4 +1,4 @@
-import { DeleteOutlined, EyeOutlined, SettingOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EyeOutlined, LockOutlined, SettingOutlined } from '@ant-design/icons';
 import { Badge, Button, Card, Flex, Popconfirm, Progress, Tag, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 
@@ -19,6 +19,9 @@ interface WorkspaceDocumentsTableProps {
   onDelete?: (documentID: string) => void;
   onPreview?: (document: KnowledgeDocument) => void;
   onSetAccess?: (document: KnowledgeDocument) => void;
+  // 成员自助「申请查看权限」：受限文档（restricted=true）显示申请入口。
+  onRequestAccess?: (document: KnowledgeDocument) => void;
+  requestingDocumentID?: string;
 }
 
 const STATUS_META: Record<string, { color: string; label: string }> = {
@@ -62,14 +65,19 @@ const renderProgress = (doc: KnowledgeDocument) => {
   );
 };
 
-// 白名单任一维度非空 = 受限；两者全空 = 继承 workspace 可见性
+// 白名单任一维度非空 = 受限（admin/creator 视角）；两者全空 = 继承 workspace 可见性
 const isRestricted = (doc: KnowledgeDocument) =>
   (doc.allowed_user_ids?.length ?? 0) > 0 || (doc.allowed_role_ids?.length ?? 0) > 0;
 
+// 当前 viewer 被锁定：后端按 viewer 计算，admin/owner/creator 与平台库恒 false。
+// member 受限文档元数据可发现但内容不可读，需申请查看权限。
+const isLocked = (doc: KnowledgeDocument) => doc.restricted === true;
+
 const renderName = (doc: KnowledgeDocument) => (
   <Flex align="center" gap={6} style={{ minWidth: 0 }}>
+    {isLocked(doc) && <LockOutlined style={{ color: '#faad14' }} />}
     <Text ellipsis>{doc.source || '-'}</Text>
-    {isRestricted(doc) && <Tag color="orange" style={{ margin: 0 }}>受限</Tag>}
+    {isRestricted(doc) && <Tag color="orange" style={{ margin: 0 }}>查看白名单受限</Tag>}
   </Flex>
 );
 
@@ -134,6 +142,27 @@ const deleteAction = (
   );
 };
 
+// 预览按钮：受限文档（当前 viewer 被锁定）禁用，申请查看权限后解锁。
+const previewButton = (
+  document: KnowledgeDocument,
+  onPreview: (document: KnowledgeDocument) => void,
+) => (
+  isLocked(document) ? (
+    <Tooltip title="已加锁，申请查看权限后解锁">
+      <Button type="text" icon={<EyeOutlined />} disabled aria-label="预览文档" />
+    </Tooltip>
+  ) : (
+    <Tooltip title="预览原文">
+      <Button
+        type="text"
+        icon={<EyeOutlined />}
+        aria-label="预览文档"
+        onClick={() => onPreview(document)}
+      />
+    </Tooltip>
+  )
+);
+
 export const WorkspaceDocumentsTable = ({
   documents,
   loading,
@@ -143,7 +172,11 @@ export const WorkspaceDocumentsTable = ({
   onDelete = () => undefined,
   onPreview,
   onSetAccess,
+  onRequestAccess,
+  requestingDocumentID = '',
 }: WorkspaceDocumentsTableProps) => {
+  // 申请查看权限：member 且非平台库且当前 viewer 被锁定才显示。
+  const canRequestAccess = !isAdmin && !platformManaged && Boolean(onRequestAccess);
   const actions: ColumnsType<KnowledgeDocument>[number] = {
     title: '操作',
     key: 'actions',
@@ -151,14 +184,17 @@ export const WorkspaceDocumentsTable = ({
     align: 'center' as const,
     render: (_: unknown, document: KnowledgeDocument) => (
       <Flex align="center" justify="center" gap={0}>
-        {onPreview && (
-          <Tooltip title="预览原文">
+        {onPreview && previewButton(document, onPreview)}
+        {canRequestAccess && isLocked(document) && (
+          <Tooltip title="申请查看权限">
             <Button
-              type="text"
-              icon={<EyeOutlined />}
-              aria-label="预览文档"
-              onClick={() => onPreview(document)}
-            />
+              type="link"
+              size="small"
+              loading={requestingDocumentID === document.id}
+              onClick={() => onRequestAccess?.(document)}
+            >
+              申请查看
+            </Button>
           </Tooltip>
         )}
         {isAdmin && !platformManaged && onSetAccess && (
@@ -175,7 +211,7 @@ export const WorkspaceDocumentsTable = ({
       </Flex>
     ),
   };
-  const columns = isAdmin || onPreview ? [...baseColumns, actions] : baseColumns;
+  const columns = isAdmin || onPreview || canRequestAccess ? [...baseColumns, actions] : baseColumns;
 
   return (
   <Card
@@ -205,14 +241,16 @@ export const WorkspaceDocumentsTable = ({
                   ? new Date(document.created_at).toLocaleString('zh-CN')
                   : '-'}
               </Text>
-              {onPreview && (
+              {onPreview && previewButton(document, onPreview)}
+              {canRequestAccess && isLocked(document) && (
                 <Button
-                  type="text"
+                  type="link"
                   size="small"
-                  icon={<EyeOutlined />}
-                  aria-label="预览文档"
-                  onClick={() => onPreview(document)}
-                />
+                  loading={requestingDocumentID === document.id}
+                  onClick={() => onRequestAccess?.(document)}
+                >
+                  申请查看
+                </Button>
               )}
               {isAdmin && !platformManaged && onSetAccess && (
                 <Button

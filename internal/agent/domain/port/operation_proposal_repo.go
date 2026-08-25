@@ -20,4 +20,8 @@ type OperationProposalRepo interface {
 	// matching unexpired approval owned by proposerID existed — single-use,
 	// actor-bound, TTL-enforced replay.
 	ConsumeApproved(ctx context.Context, tenantID, fingerprint, proposerID string) (bool, error)
+	// ListByProposer returns every proposal (any status) raised by a proposer,
+	// newest first. Backs the member-side "my requests" view in the permission
+	// approvals tab; carries no reviewer gate.
+	ListByProposer(ctx context.Context, tenantID, proposerID string) ([]domain.OperationProposal, error)
 }

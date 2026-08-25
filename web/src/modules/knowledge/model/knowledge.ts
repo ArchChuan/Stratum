@@ -63,6 +63,9 @@ export const documentSchema = z
     // 文档级访问白名单（仅 admin/owner 回显，member 恒为空数组）
     allowed_user_ids: z.array(z.string()).optional().default([]),
     allowed_role_ids: z.array(z.string()).optional().default([]),
+    // 当前 viewer 是否不在该文档白名单内（后端按 viewer 计算：admin/owner/creator
+    // 与平台库恒 false）。true 时前端渲染锁定态 + 申请查看入口；内容仍由后端拒绝。
+    restricted: z.boolean().optional().default(false),
   })
   .passthrough();
 export type KnowledgeDocument = z.infer<typeof documentSchema>;
