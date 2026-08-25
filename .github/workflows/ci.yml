@@ -330,12 +330,16 @@ jobs:
         run: make proto-gen
 
       # 确定性框架验证：工具自身测试 + self-check 数据集校验（无真实 LLM/基础设施）。
+      # CI 确定性硬门槛 = mcp（fixture 端到端）；knowledge 运行时评测归 dev/test 态，
+      # CI 对 knowledge 以 --self-check 做数据集/point 结构守护。
       - name: Framework tests and self-check
         run: make eval-ci
 
-      # mcp 确定性评测：用 e2e-mcp-server fixture（纯 Go，无真实 LLM 依赖）作为被测
-      # MCP server，验证 mcp executor 全链路。fixture 监听 127.0.0.1:18081，
-      # 与 weather-mcp point 的 snapshot server URL 对齐（validateServerConfig 强制 loopback）。
+      # mcp 确定性评测（CI 对 mcp 的确定性硬门槛）：用 e2e-mcp-server fixture
+      # （纯 Go，无真实 LLM 依赖）作为被测 MCP server，验证 mcp executor 全链路。
+      # fixture 监听 127.0.0.1:18081，与 weather-mcp point 的 snapshot server URL 对齐
+      # （validateServerConfig 强制 loopback）。knowledge 运行时需完整 server + Milvus +
+      # embedding 栈，归 dev/test 态评测，CI 不做全栈运行。
       - name: mcp deterministic eval
         run: |
           go build -o bin/e2e-mcp-server ./cmd/e2e-mcp-server

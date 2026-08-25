@@ -22,7 +22,7 @@ Stratum 有 4 类可评测资源：**skill / agent / mcp / knowledge**。它们�
 - 不复用 `internal/evaluation` 运行时（运行态优化 vs 开发态回归，解决的问题不同）。
 - 不做「全资源无差别评测」——只评测**变更触及的配置快照点**（单点评测的本质）。
 - 不把评测逻辑塞进产品代码（`internal/`）——CLI 走真实 HTTP，指标用纯函数，产品代码不加评测特判（防过拟合红线）。
-- CI 不跑依赖真实 LLM 的评测（skill/agent 真实执行），只跑确定性 kind。
+- CI 不跑依赖真实 LLM 的评测（skill/agent 真实执行），只跑确定性 kind；knowledge 运行时评测归 dev/test 态，CI 以 `--self-check` 守护结构。
 
 ## 2. 核心概念
 
@@ -154,7 +154,7 @@ load dataset → provision（临时资源/workspace，probe 外部依赖）→ e
 |---|---|---|---|---|
 | ① 开发态 | **人主动**（`make eval-dev`） | 单个资源即时打点 | 真实 LLM（全 kind） | 非流程、非 gate，随点随跑 |
 | ② 测试态（PR 前，主承载） | **测试 agent 驱动的验收流程**自动注入（`test-verify-before-pr.sh`） | 变更相关资源的全部单点评测 | 真实 LLM（全 kind） | 拦截 + 三选一，失败阻断 PR 前验证 |
-| ③ CI | CI job 自动 | 确定性 kind（mcp + knowledge） | 确定性断言 | 硬门槛，`--fail-on-warn` 开启；skill/agent 显式 `not_run` |
+| ③ CI | CI job 自动 | 确定性 kind（mcp；knowledge 运行时归 dev/test 态，CI 以 self-check 守护） | 确定性断言 | 硬门槛（mcp fixture 端到端），`--fail-on-warn` 开启；skill/agent 显式 `not_run` |
 
 ### 5.1 ① 开发态：可选手动打点
 
@@ -172,7 +172,8 @@ load dataset → provision（临时资源/workspace，probe 外部依赖）→ e
 ### 5.3 ③ CI：确定性子集硬门槛
 
 - 新增 `eval` job（或并入现有 `test` job），与静态检查并行、独立 fail。
-- 只跑 mcp + knowledge（确定性断言，无真实 LLM 依赖）；skill/agent 标记 `not_run`（`--skip` 带固定 reason），禁止伪装成绿。
+- CI 确定性硬门槛 = **mcp**（`e2e-mcp-server` fixture 端到端，无真实 LLM 依赖）。knowledge 运行时需完整 server + Milvus + embedding 栈，CI 起全套代价远超收益，故 knowledge 运行时评测归 dev/test 态；CI 对 knowledge 以 `--self-check` 做数据集/point 结构守护。
+- skill/agent 需真实 LLM 评测，CI 显式 `not_run`（`--skip` 带固定 reason），禁止伪装成绿。
 - `--fail-on-warn` 开启，WARN 也阻断合并。
 
 ### 5.4 拦截与用户介入（② 的主交互）
@@ -245,7 +246,7 @@ PR 前验收由测试 agent 驱动，其提示词需加入评测执行与治理�
 4. `test/e2e/mcp/`、`test/e2e/skill/`、`test/e2e/agent/` 的首期 golden 评测集（按本设计第 4 节格式）。
 5. `scripts/quality/test-verify-before-pr.sh`：在 run-planned-checks 后注入评测 step。
 6. `.test/verification.yaml`：新增 `eval-touched` risk rule。
-7. `.github/workflows/ci.yml`：新增 `eval` job（mcp + knowledge 确定性，skill/agent `not_run`）。
+7. `.github/workflows/ci.yml`：新增 `eval` job（mcp fixture 确定性端到端；knowledge 以 `--self-check` 结构守护；skill/agent `not_run`）。
 8. `Makefile`：`eval-dev` / `eval-pr` / `eval-ci` 目标。
 9. 评测工具自身的测试（第 8 节）+ 文档（各 kind 的 `golden/README.md`）。
 
@@ -257,6 +258,6 @@ PR 前验收由测试 agent 驱动，其提示词需加入评测执行与治理�
 
 - 开发态：改某个资源后 `make eval-dev --kind <kind> --point <point>` 能即时反映该单点效果。
 - 测试态：PR 前验收自动评测变更相关资源的全部单点；回归时阻断并提供三选一；接受回归需显式 reason。
-- CI：mcp + knowledge 确定性评测成为硬门槛，`not_run` 显式可查；skill/agent 不因真实 LLM 依赖造成 CI flaky。
+- CI：mcp 确定性评测成为硬门槛（fixture 端到端），`not_run` 显式可查；knowledge 运行时评测归 dev/test 态、CI 以 `--self-check` 守护数据集/point 结构；skill/agent 不因真实 LLM 依赖造成 CI flaky。
 - 评测集：资源配置或产品行为变更时，`non_comparable` 或拦截显式触发，无静默过时；基线重录全部走 `--record-baseline --confirm-record`。
 - 迁移：原独立 CLI 逻辑完整迁入 `e2e-eval-check --kind knowledge` 后，旧 CLI 删除，存量数据集原位接管，无行为回归。

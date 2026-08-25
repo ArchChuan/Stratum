@@ -59,6 +59,12 @@ func (e *llmExecutor) resolveAgentID(ctx context.Context, p point) (string, erro
 }
 
 // runCases executes every case and rolls up pass_rate/judge_mean/latency.
+// Infrastructure failures (agent endpoint/auth/decode, judge network/HTTP/
+// parse) abort the whole run instead of being flattened into a case error:
+// swallowing them would let a first-run-without-baseline silently pass green
+// (exit 0) when the whole judge or agent stack is down. Case-level behavior
+// failures (an agent that did not reach "completed", a failed assertion, a
+// judge "no" verdict) stay case errors and never abort the run.
 func (e *llmExecutor) runCases(ctx context.Context, dataset goldenSet) (execResult, error) {
 	res := execResult{Cases: []caseOutcome{}}
 	var pass, judgeSum float64
@@ -71,11 +77,18 @@ func (e *llmExecutor) runCases(ctx context.Context, dataset goldenSet) (execResu
 		outcome.LatencyMS = time.Since(start).Milliseconds()
 		latSum += outcome.LatencyMS
 		if err != nil {
+			if isInfra(err) {
+				return res, err
+			}
 			outcome.Error = err.Error()
 			res.Cases = append(res.Cases, outcome)
 			continue
 		}
-		if score, judged := e.applyCase(ctx, tc, out, &outcome); judged {
+		score, judged, err := e.applyCase(ctx, tc, out, &outcome)
+		if err != nil {
+			return res, err
+		}
+		if judged {
 			judgeSum += score
 			judgeCount++
 		}
@@ -96,9 +109,11 @@ func (e *llmExecutor) runCases(ctx context.Context, dataset goldenSet) (execResu
 }
 
 // applyCase fills the outcome for one produced output under the case's mode.
-// It returns the judge score and whether the case was actually judged, so the
-// caller can aggregate judge_mean only over successful judge verdicts.
-func (e *llmExecutor) applyCase(ctx context.Context, tc goldenCase, out string, outcome *caseOutcome) (float64, bool) {
+// It returns the judge score, whether the case was actually judged, and an
+// error. The error is non-nil only for infrastructure failures (judge
+// network/HTTP/parse) that must abort the run; a judge "no" verdict or a judge
+// that is not configured is a case-level outcome, not an error.
+func (e *llmExecutor) applyCase(ctx context.Context, tc goldenCase, out string, outcome *caseOutcome) (float64, bool, error) {
 	switch tc.Mode {
 	case AssertExact, AssertContains, AssertRegex:
 		if expectedOf(tc) == "" {
@@ -111,21 +126,24 @@ func (e *llmExecutor) applyCase(ctx context.Context, tc goldenCase, out string, 
 	case "judge":
 		if e.judge == nil {
 			outcome.Error = "judge case requires point.judge config"
-			return 0, false
+			return 0, false, nil
 		}
 		verdict, err := e.judge.Judge(ctx, tc.JudgeSpec, out)
 		if err != nil {
+			if isInfra(err) {
+				return 0, false, err
+			}
 			outcome.Error = err.Error()
-			return 0, false
+			return 0, false, nil
 		}
 		outcome.Passed = verdict.Passed
 		outcome.JudgeScore = verdict.Score
 		outcome.JudgeReason = verdict.Reason
-		return verdict.Score, true
+		return verdict.Score, true, nil
 	default:
 		outcome.Error = fmt.Sprintf("unsupported assertion mode %q for llm kind", tc.Mode)
 	}
-	return 0, false
+	return 0, false, nil
 }
 
 func avgInt64(sum int64, n int) int64 {

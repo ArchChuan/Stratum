@@ -123,8 +123,10 @@ cases:
 }
 
 func TestLLMExecutorAgentErrorFailsClosed(t *testing.T) {
+	// A 4xx execute failure is a defect the dataset should never produce, not an
+	// infrastructure break: it stays a case error and the run continues.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "agent boom", http.StatusBadGateway)
+		http.Error(w, "agent boom", http.StatusBadRequest)
 	}))
 	defer server.Close()
 	ex := &llmExecutor{
@@ -148,6 +150,74 @@ cases:
 	}
 	if res.Cases[0].Passed || res.Cases[0].Error == "" {
 		t.Fatalf("agent execute failure must fail the case: %+v", res.Cases[0])
+	}
+}
+
+// TestLLMExecutorAgentInfraPropagates pins C1: an agent endpoint infrastructure
+// failure (5xx / auth / network / decode) must abort the whole run with an
+// infraError, never be flattened into a case error that would let a first-run
+// without baseline silently pass green.
+func TestLLMExecutorAgentInfraPropagates(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "agent boom", http.StatusBadGateway)
+	}))
+	defer server.Close()
+	ex := &llmExecutor{
+		agents:  &agentClient{client: newHTTPClient(server.URL, "test-token")},
+		agentID: "a1",
+	}
+	p := point{Kind: "agent", Dir: t.TempDir()}
+	goldenPath := p.Dir + "/cases.yaml"
+	writeTestFile(t, goldenPath, `
+version: 1
+cases:
+  - id: c1
+    query: "q"
+    mode: contains
+    expected_output: "x"
+`)
+	p.Golden = "cases.yaml"
+	_, err := ex.runCases(context.Background(), mustLoadLLMSet(t, p))
+	if err == nil || !isInfra(err) {
+		t.Fatalf("agent 5xx must propagate as infraError, got %v", err)
+	}
+}
+
+// TestLLMExecutorJudgeInfraPropagates pins C1 for the judge path: a judge
+// service outage (HTTP 500) aborts the run with an infraError. A judge "no"
+// verdict is still a case outcome (covered by TestLLMExecutorJudgePath-style
+// tests) — only infra failures abort.
+func TestLLMExecutorJudgeInfraPropagates(t *testing.T) {
+	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"result":"output","status":"completed"}`))
+	}))
+	defer agentServer.Close()
+	judgeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "judge down", http.StatusInternalServerError)
+	}))
+	defer judgeServer.Close()
+
+	ex := &llmExecutor{
+		agents:  &agentClient{client: newHTTPClient(agentServer.URL, "test-token")},
+		agentID: "a1",
+		judge:   newJudgeClient(&judgeConfig{BaseURL: judgeServer.URL, Model: "m"}, ""),
+	}
+	p := point{Kind: "agent", Dir: t.TempDir()}
+	goldenPath := p.Dir + "/cases.yaml"
+	writeTestFile(t, goldenPath, `
+version: 1
+cases:
+  - id: j1
+    query: "q"
+    mode: judge
+    judge_spec:
+      criteria: "c"
+`)
+	p.Golden = "cases.yaml"
+	_, err := ex.runCases(context.Background(), mustLoadLLMSet(t, p))
+	if err == nil || !isInfra(err) {
+		t.Fatalf("judge 5xx must propagate as infraError, got %v", err)
 	}
 }
 
@@ -211,6 +281,60 @@ func TestLLMFingerprintDeterministic(t *testing.T) {
 	}
 	if first.Hash == "" {
 		t.Fatal("fingerprint hash must not be empty")
+	}
+}
+
+// TestLLMFingerprintSkillContentSensitive pins I3: the skill fingerprint must
+// cover the skill's declared name/content plus the carrier agent model and
+// system prompt, so changing any of them forces a re-decision instead of
+// staying fingerprint-invisible.
+func TestLLMFingerprintSkillContentSensitive(t *testing.T) {
+	base := map[string]any{
+		"skill": map[string]any{"name": "s", "content": "do A"},
+		"agent": map[string]any{"model": "m", "system_prompt": "p"},
+	}
+	baseHash := llmFingerprint(base).Hash
+
+	changedContent := map[string]any{
+		"skill": map[string]any{"name": "s", "content": "do B"},
+		"agent": map[string]any{"model": "m", "system_prompt": "p"},
+	}
+	if llmFingerprint(changedContent).Hash == baseHash {
+		t.Fatal("changing skill content must change the fingerprint")
+	}
+
+	changedName := map[string]any{
+		"skill": map[string]any{"name": "other", "content": "do A"},
+		"agent": map[string]any{"model": "m", "system_prompt": "p"},
+	}
+	if llmFingerprint(changedName).Hash == baseHash {
+		t.Fatal("changing skill name must change the fingerprint")
+	}
+
+	changedPrompt := map[string]any{
+		"skill": map[string]any{"name": "s", "content": "do A"},
+		"agent": map[string]any{"model": "m", "system_prompt": "p2"},
+	}
+	if llmFingerprint(changedPrompt).Hash == baseHash {
+		t.Fatal("changing the carrier agent system_prompt must change the fingerprint")
+	}
+
+	changedModel := map[string]any{
+		"skill": map[string]any{"name": "s", "content": "do A"},
+		"agent": map[string]any{"model": "m2", "system_prompt": "p"},
+	}
+	if llmFingerprint(changedModel).Hash == baseHash {
+		t.Fatal("changing the carrier agent model must change the fingerprint")
+	}
+}
+
+// TestLLMFingerprintAgentSystemPromptSensitive pins I3 for agent points: the
+// system prompt (instructions) participates in the fingerprint.
+func TestLLMFingerprintAgentSystemPromptSensitive(t *testing.T) {
+	base := map[string]any{"id": "a1", "model": "qwen-max", "system_prompt": "p1", "tools": []any{"x"}}
+	changed := map[string]any{"id": "a1", "model": "qwen-max", "system_prompt": "p2", "tools": []any{"x"}}
+	if llmFingerprint(base).Hash == llmFingerprint(changed).Hash {
+		t.Fatal("changing agent system_prompt must change the fingerprint")
 	}
 }
 

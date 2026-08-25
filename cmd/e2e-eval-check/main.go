@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
+
+const gitCommitTimeout = 2 * time.Second
 
 // run is the top-level pipeline shared by every kind.
 func run(ctx context.Context, o options, stdout, stderr io.Writer) (int, error) {
@@ -28,8 +32,27 @@ func run(ctx context.Context, o options, stdout, stderr io.Writer) (int, error) 
 	}
 	result, err := ex.Execute(ctx, o, p)
 	if err != nil {
-		// Executor errors are classified as infra vs defect; a failed run
-		// still surfaces residuals and a report via the caller.
+		// Executor errors are classified as infra vs defect. The normal
+		// finalizeRun pipeline (baseline compare/record, summary) is skipped on
+		// this path, so we still surface a minimal infra report with whatever
+		// residuals, evidence, snapshot and partial cases the executor already
+		// collected — a failed run must never silently drop its report.
+		r := report{
+			Version:          reportSchemaVersion,
+			Kind:             p.Kind,
+			Point:            p.Key,
+			Status:           statusOf(classifyError(err)),
+			GeneratedAt:      nowUTC(),
+			Snapshot:         p.Snapshot,
+			Cases:            result.Cases,
+			Aggregate:        result.Aggregate,
+			Warnings:         result.Warnings,
+			ResidualEntities: result.Residuals,
+			Evidence:         result.Evidence,
+		}
+		if werr := writeReportIfRequested(o.output, r); werr != nil {
+			return classifyError(err), fmt.Errorf("%w (report write: %v)", err, werr)
+		}
 		return classifyError(err), err
 	}
 	return finalizeRun(o, p, result, stdout)
@@ -237,5 +260,19 @@ func baseAcceptedRegressions(base *baseline) []acceptedRegression {
 func acceptedRegressionsFrom(base *baseline) []acceptedRegression {
 	return baseAcceptedRegressions(base)
 }
-func gitCommit() string { return "unknown" }
-func nowUTC() string    { return time.Now().UTC().Format(time.RFC3339) }
+
+// gitCommit returns the short HEAD SHA of the repository the CLI runs from.
+// Baselines and accepted_regressions record it so a one-time acceptance is
+// scoped to one commit instead of silently forgiving every future run. When the
+// command fails (not a git checkout, or git unavailable) it degrades to
+// "unknown" — a known limitation recorded in the baseline, not a silent pass.
+func gitCommit() string {
+	ctx, cancel := context.WithTimeout(context.Background(), gitCommitTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(out))
+}
+func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }
