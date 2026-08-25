@@ -87,17 +87,17 @@ func TestListDocuments_ACLMatrix(t *testing.T) {
 			CreatedBy: "creator-1"},
 	}
 	cases := []struct {
-		name        string
-		ws          *domain.Workspace
-		role        string
-		useRoles    bool
-		resolveFail bool
-		viewerID    string
-		visible       []string
-		wantErr       error
-		wantCount     int
-		wantEcho      bool
-		wantQuery     bool
+		name           string
+		ws             *domain.Workspace
+		role           string
+		useRoles       bool
+		resolveFail    bool
+		viewerID       string
+		visible        []string
+		wantErr        error
+		wantCount      int
+		wantEcho       bool
+		wantQuery      bool
 		wantRestricted []bool
 	}{
 		{
@@ -118,22 +118,22 @@ func TestListDocuments_ACLMatrix(t *testing.T) {
 			name: "member sees all doc metadata with the invisible one flagged restricted",
 			ws:   &domain.Workspace{ID: "ws-1", Name: "docs"},
 			role: "member", useRoles: true, viewerID: "viewer-1",
-			visible:        []string{"d1"},
-			wantCount:      2, wantEcho: false, wantQuery: true,
+			visible:   []string{"d1"},
+			wantCount: 2, wantEcho: false, wantQuery: true,
 			wantRestricted: []bool{false, true},
 		},
 		{
 			name: "empty visible set flags every doc restricted without error",
 			ws:   &domain.Workspace{ID: "ws-1", Name: "docs"},
 			role: "member", useRoles: true, viewerID: "viewer-1",
-			wantCount:      2, wantEcho: false, wantQuery: true,
+			wantCount: 2, wantEcho: false, wantQuery: true,
 			wantRestricted: []bool{true, true},
 		},
 		{
 			name: "system workspace is unrestricted and never echoes",
 			ws:   &domain.Workspace{ID: "ws-sys", Name: "official", ManagementMode: platformknowledge.ManagementPlatform},
 			role: "member", useRoles: true, viewerID: "viewer-1",
-			wantCount:      2, wantEcho: false,
+			wantCount: 2, wantEcho: false,
 			wantRestricted: []bool{false, false},
 		},
 		{
