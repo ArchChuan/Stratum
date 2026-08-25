@@ -15,6 +15,8 @@ export const useWorkflowResources = () => {
   const [skills, setSkills] = useState<Option[]>([]);
   const [skillRevisions, setSkillRevisions] = useState<Option[]>([]);
   const [mcpServers, setMCPServers] = useState<Option[]>([]);
+  // agent id → allowedSkills 映射，供 inspector 的 skill-agent 双向联动过滤（空 = 无技能）。
+  const [agentAllowedSkills, setAgentAllowedSkills] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -25,6 +27,7 @@ export const useWorkflowResources = () => {
       const [agentResult, skillResult, mcpResult] = results;
       if (agentResult.status === 'fulfilled') {
         setAgents(agentResult.value.map((agent) => ({ value: agent.id, label: agent.name })));
+        setAgentAllowedSkills(Object.fromEntries(agentResult.value.map((agent) => [agent.id, agent.allowedSkills])));
       } else {
         message.error({ content: errorText(agentResult.reason), duration: 3 });
       }
@@ -50,7 +53,7 @@ export const useWorkflowResources = () => {
   }, []);
 
   return useMemo(
-    () => ({ agents, skills, skillRevisions, mcpServers }),
-    [agents, mcpServers, skillRevisions, skills],
+    () => ({ agents, skills, skillRevisions, mcpServers, agentAllowedSkills }),
+    [agentAllowedSkills, agents, mcpServers, skillRevisions, skills],
   );
 };

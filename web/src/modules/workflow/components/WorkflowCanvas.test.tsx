@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import { message } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createInitialEditorState, workflowEditorReducer } from '../model/editor';
@@ -25,6 +26,7 @@ vi.mock('@xyflow/react', () => ({
   MiniMap: () => null,
   Handle: () => null,
   Position: { Left: 'left', Right: 'right' },
+  MarkerType: { ArrowClosed: 'arrowclosed' },
 }));
 
 describe('WorkflowCanvas', () => {
@@ -103,5 +105,35 @@ describe('WorkflowCanvas', () => {
     expect(dispatch).toHaveBeenNthCalledWith(2, { type: 'edge.connect', edgeId: 'edge-yes', from: 'node-condition', to: 'node-2', conditionValue: false });
     expect(dispatch).toHaveBeenNthCalledWith(3, { type: 'edge.connect', edgeId: 'edge-yes', from: 'node-condition', to: 'node-3', isDefault: true });
     expect(dispatch).toHaveBeenNthCalledWith(4, { type: 'edge.connect', edgeId: 'edge-yes', from: 'node-agent', to: 'node-4' });
+  });
+
+  it('blocks a connection that would form a cycle and shows an error', () => {
+    let state = workflowEditorReducer(createInitialEditorState(), {
+      type: 'node.insert', nodeId: 'node-a', nodeType: 'agent', position: { x: 80, y: 80 },
+    });
+    state = workflowEditorReducer(state, {
+      type: 'node.insert', nodeId: 'node-b', nodeType: 'skill', position: { x: 320, y: 80 },
+    });
+    state = workflowEditorReducer(state, {
+      type: 'edge.connect', edgeId: 'edge-1', from: 'node-a', to: 'node-b',
+    });
+    const messageError = vi.spyOn(message, 'error').mockImplementation((() => undefined) as unknown as typeof message.error);
+    const dispatch = vi.fn();
+    render(<WorkflowCanvas state={state} dispatch={dispatch} createNodeId={() => 'n'} createEdgeId={() => 'edge-2'} />);
+    // 反向连边 b→a 会成环：前端连线守卫提示并阻止，不 dispatch。
+    connectHandler.current?.({ source: 'node-b', target: 'node-a' });
+    expect(messageError).toHaveBeenCalledWith({ content: '连线会形成环，请选择其他节点', duration: 3 });
+    expect(dispatch).not.toHaveBeenCalled();
+    messageError.mockRestore();
+  });
+
+  it('deletes a node from the card delete button', () => {
+    const state = workflowEditorReducer(createInitialEditorState(), {
+      type: 'node.insert', nodeId: 'node-mcp', nodeType: 'mcp_tool', position: { x: 80, y: 80 },
+    });
+    const dispatch = vi.fn();
+    render(<WorkflowCanvas state={state} dispatch={dispatch} createNodeId={() => 'n'} createEdgeId={() => 'e'} />);
+    fireEvent.click(screen.getByRole('button', { name: '删除节点' }));
+    expect(dispatch).toHaveBeenCalledWith({ type: 'node.delete', nodeId: 'node-mcp' });
   });
 });

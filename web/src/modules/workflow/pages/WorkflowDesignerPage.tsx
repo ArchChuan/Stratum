@@ -10,6 +10,7 @@ import { WorkflowNodeInspector } from '../components/WorkflowNodeInspector';
 import { WorkflowValidationPanel } from '../components/WorkflowValidationPanel';
 import { useWorkflowDesigner } from '../hooks/useWorkflowDesigner';
 import { useWorkflowResources } from '../hooks/useWorkflowResources';
+import { upstreamNodes } from '../model/graph';
 import type { WorkflowInputSchema } from '../model/workflow';
 
 import { useResponsive } from '@/shared/hooks';
@@ -36,6 +37,8 @@ const WorkflowDesignerDesktop = () => {
   const selectedNode = designer.editor.selected?.kind === 'node'
     ? designer.editor.spec.nodes.find((node) => node.id === designer.editor.selected?.id)
     : undefined;
+  // 参数传递编辑器需要上游可达节点做「引用上游输出」选择器（DAG 祖先）。
+  const upstreams = selectedNode ? upstreamNodes(designer.editor.spec, selectedNode.id) : [];
   const validated = Boolean(designer.definition && designer.validatedRevision === designer.definition.revision);
   const save = async () => {
     try {
@@ -73,35 +76,40 @@ const WorkflowDesignerDesktop = () => {
       onPublish={publish}
     />
     <WorkflowValidationPanel validated={validated} />
+    <Form
+      form={form}
+      layout="vertical"
+      onValuesChange={(_, values) => {
+        designer.setName(values.name || '');
+        designer.setDescription(values.description || '');
+        designer.setInputSchema({
+          task_label: values.task_label || '',
+          task_description: values.task_description || '',
+          fields: values.fields || [],
+        } as WorkflowInputSchema);
+      }}
+    >
+      <div className="workflow-definition-panel"><WorkflowMetadataForm /><WorkflowInputSchemaEditor /></div>
+    </Form>
+    {/* 画布与编辑面板同一行：画布在左，inspector 整列在右。 */}
     <div className="workflow-designer-grid">
-      <div className="workflow-designer-main">
-        <Form
-          form={form}
-          layout="vertical"
-          onValuesChange={(_, values) => {
-            designer.setName(values.name || '');
-            designer.setDescription(values.description || '');
-            designer.setInputSchema({
-              task_label: values.task_label || '',
-              task_description: values.task_description || '',
-              fields: values.fields || [],
-            } as WorkflowInputSchema);
-          }}
-        >
-          <div className="workflow-definition-panel"><WorkflowMetadataForm /><WorkflowInputSchemaEditor /></div>
-        </Form>
-        <WorkflowCanvas
-          state={designer.editor}
-          dispatch={designer.dispatch}
-          createNodeId={() => crypto.randomUUID()}
-          createEdgeId={() => crypto.randomUUID()}
-        />
-      </div>
+      <WorkflowCanvas
+        state={designer.editor}
+        dispatch={designer.dispatch}
+        createNodeId={() => crypto.randomUUID()}
+        createEdgeId={() => crypto.randomUUID()}
+      />
       {selectedNode
         ? <WorkflowNodeInspector
           node={selectedNode}
           onChange={(node) => designer.dispatch({ type: 'node.update', node })}
-          {...resources}
+          onDelete={(nodeId) => designer.dispatch({ type: 'node.delete', nodeId })}
+          agents={resources.agents}
+          skills={resources.skills}
+          skillRevisions={resources.skillRevisions}
+          mcpServers={resources.mcpServers}
+          upstreams={upstreams}
+          agentAllowedSkills={resources.agentAllowedSkills}
         />
         : <aside className="workflow-node-inspector workflow-inspector-empty">选择一个节点后在这里配置。</aside>}
     </div>

@@ -537,3 +537,41 @@ func TestValidateNodeRejectsNonFiniteOrHugePosition(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateSpecGraphAllowsEmptyAndIncompleteDrafts(t *testing.T) {
+	// 草稿校验容忍空图（画一半先保存）与字段未填全的半成品节点。
+	require.NoError(t, domain.ValidateSpecGraph(domain.Spec{}))
+
+	// condition 节点要求恰好一条 default 边（图完整性规则），单 condition 节点会被拒，
+	// 这里只验证不违反图完整性的半成品：mcp_tool 缺 server/tool、agent 缺 agent_id。
+	for _, incomplete := range []domain.Spec{
+		{Nodes: []domain.Node{{ID: "mcp", Type: domain.NodeTypeMCPTool}}},
+		{Nodes: []domain.Node{{ID: "agent", Type: domain.NodeTypeAgent, AgentID: ""}}},
+	} {
+		require.NoError(t, domain.ValidateSpecGraph(incomplete))
+	}
+}
+
+func TestValidateSpecGraphRejectsCycleAndDisconnected(t *testing.T) {
+	cycle := domain.Spec{Nodes: []domain.Node{
+		{ID: "a", Type: domain.NodeTypeAgent, AgentID: "a"},
+		{ID: "b", Type: domain.NodeTypeAgent, AgentID: "b"},
+	}, Edges: []domain.Edge{{From: "a", To: "b"}, {From: "b", To: "a"}}}
+	require.ErrorIs(t, domain.ValidateSpecGraph(cycle), domain.ErrInvalidSpec)
+
+	disconnected := domain.Spec{Nodes: []domain.Node{
+		{ID: "a", Type: domain.NodeTypeAgent, AgentID: "a"},
+		{ID: "b", Type: domain.NodeTypeAgent, AgentID: "b"},
+	}}
+	require.ErrorIs(t, domain.ValidateSpecGraph(disconnected), domain.ErrInvalidSpec)
+}
+
+func TestValidateSkillBinding(t *testing.T) {
+	// 空 allowedSkills 表示 agent 未启用任何技能，引用任何 skill 都被拒绝。
+	require.ErrorIs(t, domain.ValidateSkillBinding(nil, "skill-1"), domain.ErrInvalidSpec)
+	require.ErrorIs(t, domain.ValidateSkillBinding([]string{}, "skill-1"), domain.ErrInvalidSpec)
+	// 不在允许列表内拒绝。
+	require.ErrorIs(t, domain.ValidateSkillBinding([]string{"skill-2"}, "skill-1"), domain.ErrInvalidSpec)
+	// 命中允许列表通过。
+	require.NoError(t, domain.ValidateSkillBinding([]string{"skill-1", "skill-2"}, "skill-2"))
+}

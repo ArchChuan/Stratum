@@ -37,20 +37,23 @@ describe('workflow configuration', () => {
     }
   });
 
-  it('shows type-specific node fields and keeps advanced settings collapsed', async () => {
+  it('shows type-specific node fields and parameter mapping editors', async () => {
     const onChange = vi.fn();
     render(<WorkflowNodeInspector
       node={{ id: 'skill-1', type: 'skill', name: '分析', agent_id: '', skill_id: '', skill_revision_id: '', input_mapping: {}, output_mapping: {}, retry: { max_attempts: 0, backoff_ms: 0 }, timeout_ms: 0 }}
       onChange={onChange}
+      onDelete={vi.fn()}
       agents={[{ value: 'agent-1', label: '研究 Agent' }]}
       skills={[{ value: 'skill-1', label: '研究 Skill' }]}
       skillRevisions={[{ value: 'revision-3', label: '修订 3' }]}
       mcpServers={[]}
+      upstreams={[]}
+      agentAllowedSkills={{}}
     />);
     expect(screen.getByLabelText('固定 Skill 修订')).toBeInTheDocument();
+    // 高级设置已被参数传递编辑器替代：不再暴露与内置参数重合的重试/超时字段。
     expect(screen.queryByLabelText('最大重试次数')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByText('高级设置'));
-    expect(await screen.findByLabelText('最大重试次数')).toBeInTheDocument();
+    expect(screen.getByText('输入映射')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('节点名称'), { target: { value: '深度分析' } });
     await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ name: '深度分析' })));
   });

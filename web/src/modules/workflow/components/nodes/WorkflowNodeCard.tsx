@@ -1,4 +1,4 @@
-import { AuditOutlined, BranchesOutlined, RobotOutlined, SafetyCertificateOutlined, ToolOutlined } from '@ant-design/icons';
+import { AuditOutlined, BranchesOutlined, CloseOutlined, RobotOutlined, SafetyCertificateOutlined, ToolOutlined } from '@ant-design/icons';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 
 import type { WorkflowFlowNode } from '../../model/editor';
@@ -25,6 +25,13 @@ export const WorkflowNodeCard = ({ data, selected }: NodeProps<WorkflowFlowNode>
     className={`workflow-node-card${selected || data.selected ? ' is-selected' : ''}`}
   >
     <Handle type="target" position={Position.Left} />
+    {data.onDelete && <button
+      aria-label="删除节点"
+      className="workflow-node-delete"
+      // 双重阻断：pointerdown 阻止 React Flow 拖拽拾取，click 阻止选中冒泡。
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => { event.stopPropagation(); data.onDelete?.(data.node.id); }}
+    ><CloseOutlined /></button>}
     <span className={`workflow-node-icon type-${data.node.type}`}>{presentation.icon}</span>
     <span><strong>{data.node.name || presentation.label}</strong><small>{data.statusLabel || presentation.label}</small></span>
     {data.node.type === 'condition'

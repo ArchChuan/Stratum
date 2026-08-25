@@ -40,9 +40,11 @@
 .workflow-node-palette-list .ant-btn { justify-content: flex-start; width: 100%; }
 .workflow-canvas { background: #f7f8fc; border: 1px solid #e7e9f2; border-left: 0; border-radius: 0 12px 12px 0; height: 640px; position: relative; }
 .workflow-fit-view { position: absolute; right: 16px; top: 16px; z-index: 5; }
-.workflow-node-card { align-items: center; background: #fff; border: 1px solid #dfe3ee; border-radius: 12px; box-shadow: 0 8px 24px rgb(30 42 70 / 8%); display: flex; gap: 12px; height: 88px; padding: 14px 18px; width: 224px; }
+.workflow-node-card { align-items: center; background: #fff; border: 1px solid #dfe3ee; border-radius: 12px; box-shadow: 0 8px 24px rgb(30 42 70 / 8%); display: flex; gap: 12px; height: 88px; padding: 14px 18px; position: relative; width: 224px; }
 .workflow-node-card.is-selected { border-color: var(--workflow-track); box-shadow: 0 0 0 3px rgb(91 91 214 / 14%); }
 .workflow-node-card small { color: var(--workflow-muted); display: block; margin-top: 3px; }
+.workflow-node-delete { align-items: center; background: #fff; border: 1px solid #e7e9f2; border-radius: 50%; color: var(--workflow-muted); cursor: pointer; display: inline-flex; height: 22px; justify-content: center; line-height: 1; padding: 0; position: absolute; right: 6px; top: 6px; width: 22px; z-index: 2; }
+.workflow-node-delete:hover { border-color: #c0394b; color: #c0394b; }
 .workflow-node-icon { align-items: center; background: #ececff; border-radius: 10px; color: var(--workflow-track); display: inline-flex; flex: 0 0 auto; height: 38px; justify-content: center; width: 38px; }
 .workflow-node-icon.type-condition { background: #fff5db; color: #a86500; }
 .workflow-node-icon.type-approval { background: #fff0f0; color: #c0394b; }
@@ -54,12 +56,19 @@
 .workflow-input-editor { border-top: 1px solid #eceef5; margin-top: 20px; padding-top: 20px; }
 .workflow-input-editor > .ant-typography { display: block; margin-bottom: 16px; }
 .workflow-input-field { background: #f8f9fc; border: 1px solid #eceef5; border-radius: 10px; margin-bottom: 12px; padding: 12px; }
-.workflow-node-inspector { background: #fff; border-left: 1px solid #e7e9f2; padding: 18px; }
+.workflow-node-inspector { align-self: stretch; background: #fff; border-left: 1px solid #e7e9f2; max-height: 640px; overflow: auto; padding: 18px; }
 .workflow-designer-header { align-items: center; display: flex; justify-content: space-between; margin-bottom: 18px; }
 .workflow-designer-header h3 { margin: 0; }
 .workflow-designer-page > .ant-alert { margin-bottom: 16px; }
-.workflow-designer-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; }
-.workflow-designer-main { min-width: 0; }
+/* 画布与编辑面板同一行：左列画布，右列 inspector 撑满同高并可独立滚动。 */
+.workflow-designer-grid { align-items: start; display: grid; grid-template-columns: minmax(0, 1fr) 320px; }
+.workflow-param-panels { display: grid; gap: 18px; margin: 20px 0; }
+.workflow-param-editor { border-top: 1px solid #eceef5; padding-top: 18px; }
+.workflow-param-editor > .ant-typography { display: block; margin-bottom: 12px; }
+.workflow-param-empty { display: block; font-size: 12px; margin-bottom: 12px; }
+.workflow-param-row { background: #f8f9fc; border: 1px solid #eceef5; border-radius: 10px; display: grid; gap: 10px; margin-bottom: 12px; padding: 12px; }
+.workflow-param-main { display: grid; gap: 8px; }
+.workflow-param-ref { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto; align-items: center; }
 .workflow-definition-panel { background: #fff; border: 1px solid #e7e9f2; border-radius: 12px; margin-bottom: 16px; padding: 20px; }
 .workflow-inspector-empty { color: var(--workflow-muted); }
 .workflow-version-header { align-items: flex-start; display: grid; gap: 12px; grid-template-columns: auto 1fr auto; margin-bottom: 20px; }

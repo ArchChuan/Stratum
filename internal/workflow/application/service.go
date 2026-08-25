@@ -42,6 +42,7 @@ type DefinitionService struct {
 	versions     port.VersionRepository
 	newID        func() string
 	failureAudit auditport.FailureAuditRecorder
+	bindings     port.SkillBindingResolver
 	logger       *zap.Logger
 }
 
@@ -54,6 +55,39 @@ func (s *DefinitionService) SetFailureAuditRecorder(r auditport.FailureAuditReco
 	s.failureAudit = r
 }
 
+// SetSkillBindingResolver 注入 agent 技能绑定解析器，用于校验 skill 节点的
+// agent-skill 引用关系。未注入时跳过绑定校验（测试/降级）。
+func (s *DefinitionService) SetSkillBindingResolver(r port.SkillBindingResolver) {
+	s.bindings = r
+}
+
+// validateSkillBindings 校验 spec 中所有 skill 节点引用的 agent 确实启用了该技能。
+// resolver 存在但查询失败则传播错误（fail-closed），不允许静默放行。
+func (s *DefinitionService) validateSkillBindings(ctx context.Context, tenantID string, spec domain.Spec) error {
+	if s.bindings == nil {
+		return nil
+	}
+	cache := make(map[string][]string, len(spec.Nodes))
+	for _, node := range spec.Nodes {
+		if node.Type != domain.NodeTypeSkill || node.AgentID == "" || node.SkillID == "" {
+			continue
+		}
+		allowed, ok := cache[node.AgentID]
+		if !ok {
+			var err error
+			allowed, err = s.bindings.AgentAllowedSkills(ctx, tenantID, node.AgentID)
+			if err != nil {
+				return err
+			}
+			cache[node.AgentID] = allowed
+		}
+		if err := domain.ValidateSkillBinding(allowed, node.SkillID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // SetLogger 注入日志器（默认 Nop，测试与生产均可覆盖）。
 func (s *DefinitionService) SetLogger(l *zap.Logger) {
 	if l != nil {
@@ -63,6 +97,14 @@ func (s *DefinitionService) SetLogger(l *zap.Logger) {
 func (s *DefinitionService) Create(ctx context.Context, tenantID string, cmd CreateDefinitionCommand, actorID string) (*domain.Definition, error) {
 	definition, err := domain.NewDefinition(s.newID(), cmd.Name, cmd.Description, cmd.Spec, normalizeInputSchema(cmd.InputSchema))
 	if err != nil {
+		return nil, err
+	}
+	// 草稿保存也强制图完整性（含环检测）：用户拖拽新边时前端已阻止成环，
+	// 这里作为 fail-closed 兜底，避免非法拓扑流入存储。允许空图（画一半先保存）。
+	if err := domain.ValidateSpecGraph(definition.Spec); err != nil {
+		return nil, err
+	}
+	if err := s.validateSkillBindings(ctx, tenantID, definition.Spec); err != nil {
 		return nil, err
 	}
 	ev, err := newWorkflowChangeAudit(definition.ID, auditdomain.ChangeOpCreate, actorID, nil, workflowSafeProjection(definition))
@@ -83,6 +125,13 @@ func (s *DefinitionService) Update(ctx context.Context, tenantID, id string, cmd
 	}
 	before := workflowSafeProjection(definition)
 	if err := definition.UpdateDraft(cmd.Name, cmd.Description, cmd.Spec, cmd.ExpectedRevision, normalizeInputSchema(cmd.InputSchema)); err != nil {
+		return nil, err
+	}
+	// 与 Create 一致：草稿更新强制图完整性（含环检测），fail-closed。
+	if err := domain.ValidateSpecGraph(definition.Spec); err != nil {
+		return nil, err
+	}
+	if err := s.validateSkillBindings(ctx, tenantID, definition.Spec); err != nil {
 		return nil, err
 	}
 	ev, err := newWorkflowChangeAudit(id, auditdomain.ChangeOpUpdate, actorID, before, workflowSafeProjection(definition))
@@ -134,6 +183,10 @@ func (s *DefinitionService) GetVersion(ctx context.Context, tenantID, id string)
 func (s *DefinitionService) Publish(ctx context.Context, tenantID, id string, actorID string) (*domain.Version, error) {
 	definition, err := s.definitions.GetDefinition(ctx, tenantID, id)
 	if err != nil {
+		return nil, err
+	}
+	// 发布前同样校验 skill 节点绑定关系：发布即对外生效，非法绑定必须 fail-closed。
+	if err := s.validateSkillBindings(ctx, tenantID, definition.Spec); err != nil {
 		return nil, err
 	}
 	projection := workflowSafeProjection(definition)
@@ -625,72 +678,127 @@ func (s *RunService) executeReadyBatch(ctx context.Context, tenantID string, run
 	if limit > len(ready) {
 		limit = len(ready)
 	}
-	sem := make(chan struct{}, limit)
-	outcomes := make([]executionOutcome, len(ready))
-	// 批基准 generation:同批并行 approval 共享同一期望 generation,
-	// 避免第一个 approval 提交后内存 run.Generation 漂移导致后续 approval 乐观锁失败
-	batchGeneration := run.Generation
+	batch := &nodeBatch{
+		ctx:        ctx,
+		tenantID:   tenantID,
+		run:        run,
+		attempts:   attempts,
+		states:     states,
+		refs:       referencedOutputKeys(run.Snapshot),
+		sem:        make(chan struct{}, limit),
+		generation: run.Generation,
+		outcomes:   make([]executionOutcome, len(ready)),
+		blocked:    make([]bool, len(ready)),
+	}
 	var wg sync.WaitGroup
+	batch.wg = &wg
 	for index, node := range ready {
-		attemptNo := nextAttemptNo(attempts, node.ID)
-		input, err := nodeInput(run, node, states)
-		if err != nil {
+		if err := s.dispatchReadyNode(batch, index, node); err != nil {
 			return err
 		}
-		attempt := domain.NodeAttempt{ID: s.newID(), RunID: run.ID, NodeID: node.ID, AttemptNo: attemptNo, Status: domain.AttemptStatusRunning, Input: input, EffectClass: node.EffectClass, FenceToken: run.Generation, RunGeneration: run.Generation}
-		if err := s.checkpointAttempt(ctx, tenantID, attempt, "workflow.node_started", "node started"); err != nil {
-			return err
-		}
-		if node.Type == domain.NodeTypeApproval {
-			outcomes[index] = executionOutcome{node: node, attempt: attempt, result: port.NodeExecutionResult{Paused: true, ErrorCode: "approval_required"}, approvalGeneration: batchGeneration}
-			continue
-		}
-		wg.Add(1)
-		go func(index int, node domain.Node, attempt domain.NodeAttempt, effect *domain.EffectIntent) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			execCtx := ctx
-			cancelTimeout := func() {}
-			if node.TimeoutMS > 0 {
-				execCtx, cancelTimeout = context.WithTimeout(ctx, time.Duration(node.TimeoutMS)*time.Millisecond)
-			}
-			defer cancelTimeout()
-			execCtx, cancelExecution := context.WithCancel(execCtx)
-			defer cancelExecution()
-			approved, approvalID := s.approvedForNode(ctx, tenantID, run.ID, node.ID)
-			var fencedEffect *domain.EffectIntent
-			beforeEffect := func() error {
-				if node.Type != domain.NodeTypeMCPTool {
-					return nil
-				}
-				effects, ok := s.store.(port.EffectFenceRepository)
-				if !ok {
-					return fmt.Errorf("workflow effect fence repository unavailable")
-				}
-				fencedEffect = domain.NewEffectIntent(s.newID(), run.ID, node.ID, attempt.ID, run.Generation, node.EffectClass, fmt.Sprintf("%s:%s", run.ID, node.ID))
-				return effects.StartExternalEffect(execCtx, tenantID, fencedEffect, run.SchedulerOwner, run.Generation)
-			}
-			outputBuffer := newNodeOutputBuffer(func(text string) error {
-				return s.appendNodeOutputDelta(execCtx, tenantID, attempt, text)
-			}, cancelExecution)
-			result, execErr := s.executors.Execute(execCtx, port.NodeExecutionRequest{TenantID: tenantID, RunID: run.ID, Node: node, AttemptNo: attempt.AttemptNo, Input: attempt.Input, RunInput: cloneInput(run.Input), NodeOutputs: outputMap(states), IdempotencyKey: fmt.Sprintf("%s:%s:%d", run.ID, node.ID, attempt.AttemptNo), Approved: approved, ApprovalID: approvalID, BeforeEffect: beforeEffect, OnOutputDelta: outputBuffer.Append})
-			if flushErr := outputBuffer.Close(); execErr == nil && flushErr != nil {
-				execErr = fmt.Errorf("flush node output: %w", flushErr)
-			}
-			if execErr == nil {
-				execErr = s.appendNodeToolSteps(execCtx, tenantID, attempt, result.ToolSteps)
-			}
-			outcomes[index] = executionOutcome{node: node, attempt: attempt, result: result, err: execErr, effect: fencedEffect}
-		}(index, node, attempt, nil)
 	}
 	wg.Wait()
-	for _, outcome := range outcomes {
+	for index, outcome := range batch.outcomes {
+		if batch.blocked[index] {
+			continue
+		}
 		if err := s.commitOutcome(ctx, tenantID, run, outcome); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// nodeBatch 承载 executeReadyBatch 内单批共享的执行状态：sem 限制并发、outcomes
+// 收集结果、blocked 标记因上游输出契约违例而跳过提交的节点，供 dispatchReadyNode
+// 与 runNodeExecution 引用。generation 冻结批起始 run.Generation，同批并行节点
+// 共享同一期望 generation，避免第一个 approval 提交后内存 generation 漂移导致
+// 后续 approval 乐观锁失败。
+type nodeBatch struct {
+	ctx        context.Context
+	tenantID   string
+	run        *domain.Run
+	attempts   []domain.NodeAttempt
+	states     map[string]domain.NodeAttempt
+	refs       map[string][]string
+	sem        chan struct{}
+	generation int64
+	outcomes   []executionOutcome
+	blocked    []bool
+	wg         *sync.WaitGroup
+}
+
+// dispatchReadyNode 准备单个 ready 节点：构造输入（含输出契约注入）、处理字段
+// 引用解析失败的上游重试并阻塞本节点，approval 节点本批暂停待人工，其余提交到
+// 并发池执行。
+func (s *RunService) dispatchReadyNode(batch *nodeBatch, index int, node domain.Node) error {
+	attemptNo := nextAttemptNo(batch.attempts, node.ID)
+	input, missing, err := nodeInput(batch.run, node, batch.states)
+	if err != nil {
+		return err
+	}
+	if len(missing) > 0 {
+		// 上游输出契约违例：本批跳过下游提交，触发上游重试，下批再调度。
+		batch.blocked[index] = true
+		for upstreamID, reason := range missing {
+			if err := s.retryUpstreamOutput(batch.ctx, batch.tenantID, batch.run, batch.states, upstreamID, reason); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	input = injectOutputContract(batch.refs, node, input)
+	attempt := domain.NodeAttempt{ID: s.newID(), RunID: batch.run.ID, NodeID: node.ID, AttemptNo: attemptNo, Status: domain.AttemptStatusRunning, Input: input, EffectClass: node.EffectClass, FenceToken: batch.generation, RunGeneration: batch.generation}
+	if err := s.checkpointAttempt(batch.ctx, batch.tenantID, attempt, "workflow.node_started", "node started"); err != nil {
+		return err
+	}
+	if node.Type == domain.NodeTypeApproval {
+		batch.outcomes[index] = executionOutcome{node: node, attempt: attempt, result: port.NodeExecutionResult{Paused: true, ErrorCode: "approval_required"}, approvalGeneration: batch.generation}
+		return nil
+	}
+	batch.wg.Add(1)
+	go s.runNodeExecution(batch, index, node, attempt)
+	return nil
+}
+
+// runNodeExecution 在并发池中执行单个非 approval 节点：按节点超时构造执行上下文、
+// 建立 effect fence、串流输出并写回 outcomes[index]。
+func (s *RunService) runNodeExecution(batch *nodeBatch, index int, node domain.Node, attempt domain.NodeAttempt) {
+	defer batch.wg.Done()
+	batch.sem <- struct{}{}
+	defer func() { <-batch.sem }()
+	execCtx := batch.ctx
+	cancelTimeout := func() {}
+	if node.TimeoutMS > 0 {
+		execCtx, cancelTimeout = context.WithTimeout(batch.ctx, time.Duration(node.TimeoutMS)*time.Millisecond)
+	}
+	defer cancelTimeout()
+	execCtx, cancelExecution := context.WithCancel(execCtx)
+	defer cancelExecution()
+	approved, approvalID := s.approvedForNode(batch.ctx, batch.tenantID, batch.run.ID, node.ID)
+	var fencedEffect *domain.EffectIntent
+	beforeEffect := func() error {
+		if node.Type != domain.NodeTypeMCPTool {
+			return nil
+		}
+		effects, ok := s.store.(port.EffectFenceRepository)
+		if !ok {
+			return fmt.Errorf("workflow effect fence repository unavailable")
+		}
+		fencedEffect = domain.NewEffectIntent(s.newID(), batch.run.ID, node.ID, attempt.ID, batch.generation, node.EffectClass, fmt.Sprintf("%s:%s", batch.run.ID, node.ID))
+		return effects.StartExternalEffect(execCtx, batch.tenantID, fencedEffect, batch.run.SchedulerOwner, batch.generation)
+	}
+	outputBuffer := newNodeOutputBuffer(func(text string) error {
+		return s.appendNodeOutputDelta(execCtx, batch.tenantID, attempt, text)
+	}, cancelExecution)
+	result, execErr := s.executors.Execute(execCtx, port.NodeExecutionRequest{TenantID: batch.tenantID, RunID: batch.run.ID, Node: node, AttemptNo: attempt.AttemptNo, Input: attempt.Input, RunInput: cloneInput(batch.run.Input), NodeOutputs: outputMap(batch.states), IdempotencyKey: fmt.Sprintf("%s:%s:%d", batch.run.ID, node.ID, attempt.AttemptNo), Approved: approved, ApprovalID: approvalID, BeforeEffect: beforeEffect, OnOutputDelta: outputBuffer.Append})
+	if flushErr := outputBuffer.Close(); execErr == nil && flushErr != nil {
+		execErr = fmt.Errorf("flush node output: %w", flushErr)
+	}
+	if execErr == nil {
+		execErr = s.appendNodeToolSteps(execCtx, batch.tenantID, attempt, result.ToolSteps)
+	}
+	batch.outcomes[index] = executionOutcome{node: node, attempt: attempt, result: result, err: execErr, effect: fencedEffect}
 }
 
 func (s *RunService) appendNodeOutputDelta(
@@ -1268,7 +1376,7 @@ func conditionEdgeSelected(spec domain.Spec, sourceID string, edge domain.Edge, 
 	return true
 }
 
-func nodeInput(run *domain.Run, node domain.Node, states map[string]domain.NodeAttempt) (string, error) {
+func nodeInput(run *domain.Run, node domain.Node, states map[string]domain.NodeAttempt) (string, map[string]string, error) {
 	incoming := make([]string, 0)
 	for _, edge := range run.Snapshot.Edges {
 		if edge.To == node.ID {
@@ -1279,28 +1387,85 @@ func nodeInput(run *domain.Run, node domain.Node, states map[string]domain.NodeA
 	}
 	if len(incoming) == 0 {
 		data, err := json.Marshal(run.Input)
-		return string(data), err
+		return string(data), nil, err
 	}
 	if len(incoming) == 1 && len(node.InputMapping) == 0 {
-		return states[incoming[0]].OutputSummary, nil
+		return states[incoming[0]].OutputSummary, nil, nil
 	}
 	inputs := map[string]any{"run_input": run.Input, "nodes": outputMap(states)}
+	// missing 记录字段级引用解析失败的上游节点与原因：不阻断整个节点输入构造，
+	// 而是返回给调用方触发上游重试（见 retryUpstreamOutput）。
+	missing := make(map[string]string)
 	if len(node.InputMapping) > 0 {
 		mapped := make(map[string]any, len(node.InputMapping))
 		for key, reference := range node.InputMapping {
-			if reference == "input" {
-				mapped[key] = run.Input
+			value, ok, missingUp, missingReason := resolveMappingReference(reference, run, states)
+			if missingUp != "" {
+				missing[missingUp] = missingReason
 				continue
 			}
-			parts := strings.Split(reference, ".")
-			if len(parts) >= 3 && parts[0] == "nodes" && parts[2] == "output" {
-				mapped[key] = states[parts[1]].OutputSummary
+			if ok {
+				mapped[key] = value
 			}
 		}
 		inputs = mapped
 	}
 	data, err := json.Marshal(inputs)
-	return string(data), err
+	return string(data), missing, err
+}
+
+// resolveMappingReference 解析单条 InputMapping 引用："input" 直传运行输入、
+// nodes.<up>.output 透传上游整段输出、nodes.<up>.output.<key> 精确提取字段
+// （提取失败返回 missingUp 由调用方触发上游重试），其余未知格式忽略不落映射。
+func resolveMappingReference(reference string, run *domain.Run, states map[string]domain.NodeAttempt) (value any, ok bool, missingUp, missingReason string) {
+	if reference == "input" {
+		return run.Input, true, "", ""
+	}
+	parts := strings.Split(reference, ".")
+	if len(parts) >= 3 && parts[0] == "nodes" && parts[2] == "output" {
+		if len(parts) >= 4 {
+			// 精确字段引用 nodes.<up>.output.<key>：解析上游 JSON 提取字段。
+			value, err := extractOutputField(states[parts[1]].OutputSummary, parts[3])
+			if err != nil {
+				return nil, false, parts[1], err.Error()
+			}
+			return value, true, "", ""
+		}
+		// 整段引用 nodes.<up>.output 保持历史行为：透传上游整段 OutputSummary。
+		return states[parts[1]].OutputSummary, true, "", ""
+	}
+	return nil, false, "", ""
+}
+
+// retryUpstreamOutput 把上游输出契约违例（字段引用解析失败）落成对 agent/skill
+// 节点的重试：构造 retryable 的 executionOutcome 并复用 commitRetryOrFail 的既有
+// 重试通道（下一轮调度器会对过期 retry_wait 重新 ready）。上游不是可契约化的
+// agent/skill 节点（作者引用了错误的节点输出）时直接返回错误使 run fail，
+// 避免静默拼出错误数据。
+func (s *RunService) retryUpstreamOutput(ctx context.Context, tenantID string, run *domain.Run, states map[string]domain.NodeAttempt, upstreamID, reason string) error {
+	upstream, ok := nodeByID(run.Snapshot, upstreamID)
+	if !ok {
+		return fmt.Errorf("workflow contract retry: upstream node %q not found", upstreamID)
+	}
+	if upstream.Type != domain.NodeTypeAgent && upstream.Type != domain.NodeTypeSkill {
+		return fmt.Errorf("workflow contract retry: node %q is not agent or skill, cannot be retried to satisfy output contract: %s", upstreamID, reason)
+	}
+	state, ok := states[upstreamID]
+	if !ok {
+		return fmt.Errorf("workflow contract retry: upstream node %q has no completed attempt", upstreamID)
+	}
+	retryNode := upstream
+	if retryNode.Retry.MaxAttempts < contractRetryDefaultAttempts {
+		// 内置重试预算仅在作者显式配置低于预算时生效（作者更高配置被尊重）。
+		retryNode.Retry.MaxAttempts = contractRetryDefaultAttempts
+	}
+	outcome := executionOutcome{
+		node:    retryNode,
+		attempt: state,
+		result:  port.NodeExecutionResult{Retryable: true, ErrorCode: "upstream_output_contract"},
+		err:     fmt.Errorf("workflow upstream %q output violates contract: %s", upstreamID, reason),
+	}
+	return s.commitRetryOrFail(ctx, tenantID, outcome)
 }
 
 func edgeSelectedByState(spec domain.Spec, edge domain.Edge, state domain.NodeAttempt) bool {

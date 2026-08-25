@@ -1,5 +1,6 @@
-import type { Edge, Node, XYPosition } from '@xyflow/react';
+import { MarkerType, type Edge, type Node, type XYPosition } from '@xyflow/react';
 
+import { hasCycle } from './graph';
 import type { WorkflowEdge, WorkflowNode, WorkflowNodeType, WorkflowSpec } from './workflow';
 
 export type EditorSelection = { kind: 'node' | 'edge'; id: string } | null;
@@ -25,6 +26,8 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   node: WorkflowNode;
   selected: boolean;
   statusLabel?: string;
+  /** 可编辑画布注入删除回调（只读/运行画布不传 → 不渲染删除按钮）。 */
+  onDelete?: (nodeId: string) => void;
 }
 
 export type WorkflowFlowNode = Node<WorkflowNodeData, 'workflowNode'>;
@@ -145,9 +148,13 @@ export const workflowEditorReducer = (
         condition_value: action.conditionValue,
         default: action.isDefault || false,
       };
+      // 纯守卫：构造候选 spec 后 Kahn 检测，成环则整体拒绝（reducer 不弹 toast，
+      // UI 提示由画布 connect 回调负责，保持 reducer 无副作用）。
+      const candidate: WorkflowSpec = { ...state.spec, edges: [...state.spec.edges, edge] };
+      if (hasCycle(candidate)) return state;
       return {
         ...state,
-        spec: { ...state.spec, edges: [...state.spec.edges, edge] },
+        spec: candidate,
         selected: { kind: 'edge', id: action.edgeId },
         dirty: true,
       };
@@ -164,11 +171,15 @@ export const workflowEditorReducer = (
   }
 };
 
-export const toFlowNodes = (state: WorkflowEditorState): WorkflowFlowNode[] => state.spec.nodes.map((node) => ({
+export const toFlowNodes = (state: WorkflowEditorState, onDelete?: (nodeId: string) => void): WorkflowFlowNode[] => state.spec.nodes.map((node) => ({
   id: node.id,
   type: 'workflowNode',
   position: node.position || { x: 0, y: 0 },
-  data: { node, selected: state.selected?.kind === 'node' && state.selected.id === node.id },
+  data: {
+    node,
+    selected: state.selected?.kind === 'node' && state.selected.id === node.id,
+    onDelete,
+  },
 }));
 
 const conditionSourceHandle = (edge: WorkflowEdge): string | undefined => {
@@ -191,6 +202,9 @@ export const toFlowEdges = (state: WorkflowEditorState): Edge[] => state.spec.ed
     source: edge.from,
     target: edge.to,
     sourceHandle: isConditionEdge ? conditionSourceHandle(edge) : undefined,
+    // 方向箭头：从源指向目标，直观展示先后依赖关系。三处画布（设计/只读/运行）
+    // 共用本派生源，一处生效。只读/运行画布 spread 保留 markerEnd。
+    markerEnd: { type: MarkerType.ArrowClosed },
     label: isBareConditionEdge
       ? '未指定分支'
       : edge.default ? '默认' : edge.condition_value === true ? '是' : edge.condition_value === false ? '否' : undefined,

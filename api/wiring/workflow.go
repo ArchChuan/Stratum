@@ -24,6 +24,7 @@ type workflowAgentService interface {
 		context.Context, context.CancelFunc, func() (*agentapp.AgentResult, int, error), string, error,
 	)
 	ExecuteSkillScenario(context.Context, string, agentapp.ExecRequest, agentapp.ExecMeta, []agentport.SkillActivation) (*agentapp.AgentResult, int, error)
+	Get(context.Context, string) (agentapp.AgentDTO, error)
 }
 
 type workflowAgentExecutor struct{ agents workflowAgentService }
@@ -115,6 +116,22 @@ func (e workflowSkillExecutor) ExecuteSkill(ctx context.Context, tenantID, agent
 	return result.Output, traceID, nil
 }
 
+// workflowSkillBindingResolver 把 agent 能力适配到 workflow 的 SkillBindingResolver
+// port：agent 的 allowedSkills 需在 tenant 上下文中解析（AgentService.Get 依赖 ctx）。
+type workflowSkillBindingResolver struct{ agents workflowAgentService }
+
+func (r workflowSkillBindingResolver) AgentAllowedSkills(ctx context.Context, tenantID, agentID string) ([]string, error) {
+	ctx, err := workflowMCPTenantContext(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	dto, err := r.agents.Get(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+	return dto.AllowedSkills, nil
+}
+
 type workflowMCPPolicy interface {
 	GetToolRisk(context.Context, string, string) (mcpdomain.ToolRiskLevel, error)
 }
@@ -179,6 +196,7 @@ func (c *Container) buildWorkflow(_ context.Context) error {
 	defService := workflowapp.NewDefinitionService(store, store, newID)
 	defService.SetFailureAuditRecorder(failureRecorderOf(c))
 	defService.SetLogger(c.Logger)
+	defService.SetSkillBindingResolver(workflowSkillBindingResolver{agents: c.Agent.Service})
 	c.Workflow = &Workflow{DefinitionService: defService, RunService: runs, ControlService: workflowapp.NewControlService(store, newID)}
 	c.Workflow.Worker = workflowapp.NewWorker("workflow-"+newID(), store, workflowRunAdvancer{runs: runs}, 30*time.Second, c.platformMetrics())
 	return nil

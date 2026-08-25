@@ -309,76 +309,124 @@ func ValidateSpec(spec Spec) error {
 	return &GraphValidationError{Issues: []GraphIssue{{Path: "graph", Code: "invalid", Message: message}}}
 }
 
-func validateSpec(spec Spec) error {
-	if len(spec.Nodes) == 0 {
-		return fmt.Errorf("%w: at least one node is required", ErrInvalidSpec)
+// ValidateSpecGraph 校验工作流的图完整性（节点/边结构、无环、弱连通、输入引用
+// 可达），用于草稿保存——允许空图（画一半先保存）与字段未填全的半成品节点。
+func ValidateSpecGraph(spec Spec) error {
+	err := validateGraph(spec)
+	if err == nil {
+		return nil
 	}
+	message := strings.TrimSpace(strings.TrimPrefix(err.Error(), ErrInvalidSpec.Error()+":"))
+	return &GraphValidationError{Issues: []GraphIssue{{Path: "graph", Code: "invalid", Message: message}}}
+}
+
+func validateGraph(spec Spec) error {
+	if len(spec.Nodes) == 0 {
+		return nil
+	}
+	if err := validateGraphLimits(spec); err != nil {
+		return err
+	}
+	nodes, err := indexNodes(spec)
+	if err != nil {
+		return err
+	}
+	adj, in, conditionDefaults, err := validateEdges(spec, nodes)
+	if err != nil {
+		return err
+	}
+	if err := validateConditionDefaults(nodes, conditionDefaults); err != nil {
+		return err
+	}
+	if err := validateAcyclic(nodes, adj, in); err != nil {
+		return err
+	}
+	if err := validateConnectivity(spec, nodes, in); err != nil {
+		return err
+	}
+	for _, node := range spec.Nodes {
+		if err := validateNodeConnections(node, nodes, adj); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateGraphLimits(spec Spec) error {
 	if len(spec.Nodes) > MaxWorkflowNodes || len(spec.Edges) > MaxWorkflowEdges {
 		return fmt.Errorf("%w: graph exceeds node or edge limit", ErrInvalidSpec)
 	}
 	if spec.MaxConcurrency < 0 || spec.MaxConcurrency > MaxWorkflowConcurrency {
 		return fmt.Errorf("%w: graph concurrency exceeds limit", ErrInvalidSpec)
 	}
+	return nil
+}
+
+func indexNodes(spec Spec) (map[string]Node, error) {
 	nodes := make(map[string]Node, len(spec.Nodes))
-	in, out := make(map[string]int, len(spec.Nodes)), make(map[string]int, len(spec.Nodes))
 	for _, node := range spec.Nodes {
 		if node.ID == "" {
-			return fmt.Errorf("%w: every node must have an id", ErrInvalidSpec)
+			return nil, fmt.Errorf("%w: every node must have an id", ErrInvalidSpec)
 		}
 		if _, exists := nodes[node.ID]; exists {
-			return fmt.Errorf("%w: duplicate node %q", ErrInvalidSpec, node.ID)
+			return nil, fmt.Errorf("%w: duplicate node %q", ErrInvalidSpec, node.ID)
 		}
 		nodes[node.ID] = node
-		if err := validateNode(node); err != nil {
-			return err
-		}
 	}
-	adj := make(map[string][]string, len(nodes))
+	return nodes, nil
+}
+
+func validateEdges(spec Spec, nodes map[string]Node) (adj map[string][]string, in map[string]int, conditionDefaults map[string]int, err error) {
+	adj = make(map[string][]string, len(nodes))
+	in = make(map[string]int, len(nodes))
+	conditionDefaults = map[string]int{}
 	edgeIDs := make(map[string]struct{}, len(spec.Edges))
-	conditionDefaults := map[string]int{}
 	for _, edge := range spec.Edges {
 		if edge.From == edge.To {
-			return fmt.Errorf("%w: self edge %q", ErrInvalidSpec, edge.From)
+			return nil, nil, nil, fmt.Errorf("%w: self edge %q", ErrInvalidSpec, edge.From)
 		}
 		if _, ok := nodes[edge.From]; !ok {
-			return fmt.Errorf("%w: unknown source %q", ErrInvalidSpec, edge.From)
+			return nil, nil, nil, fmt.Errorf("%w: unknown source %q", ErrInvalidSpec, edge.From)
 		}
 		if _, ok := nodes[edge.To]; !ok {
-			return fmt.Errorf("%w: unknown target %q", ErrInvalidSpec, edge.To)
+			return nil, nil, nil, fmt.Errorf("%w: unknown target %q", ErrInvalidSpec, edge.To)
 		}
 		if edge.ID != "" {
 			if _, exists := edgeIDs[edge.ID]; exists {
-				return fmt.Errorf("%w: duplicate edge %q", ErrInvalidSpec, edge.ID)
+				return nil, nil, nil, fmt.Errorf("%w: duplicate edge %q", ErrInvalidSpec, edge.ID)
 			}
 			edgeIDs[edge.ID] = struct{}{}
 		}
-		out[edge.From]++
 		in[edge.To]++
 		if edge.Default {
 			conditionDefaults[edge.From]++
 		}
 		adj[edge.From] = append(adj[edge.From], edge.To)
 	}
-	for _, node := range spec.Nodes {
+	return adj, in, conditionDefaults, nil
+}
+
+func validateConditionDefaults(nodes map[string]Node, conditionDefaults map[string]int) error {
+	for _, node := range nodes {
 		if node.Type == NodeTypeCondition && conditionDefaults[node.ID] != 1 {
 			return fmt.Errorf("%w: condition %q requires exactly one default edge", ErrInvalidSpec, node.ID)
 		}
 	}
-	roots := make([]string, 0, len(nodes))
-	for id := range nodes {
-		if in[id] == 0 {
-			roots = append(roots, id)
-		}
-	}
-	if len(roots) == 0 {
-		return fmt.Errorf("%w: graph has no entry", ErrInvalidSpec)
-	}
-	queue := append([]string(nil), roots...)
-	visited := 0
-	indegree := make(map[string]int, len(in))
+	return nil
+}
+
+// validateAcyclic 用 Kahn 拓扑排序检测环；队列耗尽前未访问全部节点即存在环或断连。
+// 零入度种子必须遍历全部节点（无入边节点不在 in map 中），否则起点会被漏掉误报。
+func validateAcyclic(nodes map[string]Node, adj map[string][]string, in map[string]int) error {
+	indegree := make(map[string]int, len(nodes))
+	queue := make([]string, 0, len(nodes))
 	for id := range nodes {
 		indegree[id] = in[id]
+		if in[id] == 0 {
+			queue = append(queue, id)
+		}
 	}
+	visited := 0
 	for len(queue) > 0 {
 		current := queue[0]
 		queue = queue[1:]
@@ -393,13 +441,39 @@ func validateSpec(spec Spec) error {
 	if visited != len(nodes) {
 		return fmt.Errorf("%w: disconnected or cyclic graph", ErrInvalidSpec)
 	}
-	if !weaklyConnected(spec, roots[0]) {
+	return nil
+}
+
+func validateConnectivity(spec Spec, nodes map[string]Node, in map[string]int) error {
+	root := ""
+	for id := range nodes {
+		if in[id] == 0 {
+			root = id
+			break
+		}
+	}
+	if root == "" {
+		return fmt.Errorf("%w: graph has no entry", ErrInvalidSpec)
+	}
+	if !weaklyConnected(spec, root) {
 		return fmt.Errorf("%w: disconnected graph", ErrInvalidSpec)
 	}
+	return nil
+}
+
+func validateSpec(spec Spec) error {
+	if len(spec.Nodes) == 0 {
+		return fmt.Errorf("%w: at least one node is required", ErrInvalidSpec)
+	}
+	// 先逐节点字段校验再图校验：与历史一致，节点字段错误（如缺 condition 表达式）
+	// 优先于图结构错误（如缺 default 边）返回。
 	for _, node := range spec.Nodes {
-		if err := validateNodeConnections(node, nodes, adj); err != nil {
+		if err := validateNode(node); err != nil {
 			return err
 		}
+	}
+	if err := validateGraph(spec); err != nil {
+		return err
 	}
 	return nil
 }
@@ -533,6 +607,20 @@ func validateSkillNode(node Node) error {
 		return fmt.Errorf("%w: skill node %q requires agent and pinned revision", ErrInvalidSpec, node.ID)
 	}
 	return nil
+}
+
+// ValidateSkillBinding 校验 skill 节点绑定关系：skillID 必须出现在 agent 的
+// allowedSkills 中。空列表表示该 agent 未挂载任何技能，任何引用都被拒绝。
+func ValidateSkillBinding(allowed []string, skillID string) error {
+	if len(allowed) == 0 {
+		return fmt.Errorf("%w: agent enables no skills, cannot reference skill %q", ErrInvalidSpec, skillID)
+	}
+	for _, id := range allowed {
+		if id == skillID {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: agent does not enable skill %q", ErrInvalidSpec, skillID)
 }
 
 func validateMCPToolNode(node Node) error {
