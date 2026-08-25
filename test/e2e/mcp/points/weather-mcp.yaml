@@ -1,0 +1,8 @@
+kind: mcp
+point: weather-mcp
+snapshot:
+  servers:
+    - name: fixture
+      url: http://localhost:18081
+golden: ../golden/cases.yaml
+baseline: ../baselines/weather-mcp.json

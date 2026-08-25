@@ -1,6 +1,6 @@
 # Golden 评测集：开发期 RAG 检索质量抽查
 
-本目录是 `cmd/e2e-rag-check` 的首期 golden 数据集，用于开发期对知识库检索质量做抽查与回归。数据集内容按被评测工具逐字段校验，标注质量直接决定检索指标（MRR / NDCG / recall@k / no-answer 判定）的可信度。
+本目录是 knowledge 单点评测（`cmd/e2e-eval-check --kind knowledge`）的首期 golden 数据集，用于开发期对知识库检索质量做抽查与回归。数据集内容按被评测工具逐字段校验，标注质量直接决定检索指标（MRR / NDCG / recall@k / no-answer 判定）的可信度。
 
 ## 数据集用途
 

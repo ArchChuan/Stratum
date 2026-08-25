@@ -1,0 +1,14 @@
+version: 1
+cases:
+  - id: planner_schedule
+    query: 帮我规划明天北京一日游，含交通和午餐
+    mode: judge
+    judge_spec:
+      criteria: 输出应包含具体的时间段安排和至少一个交通方式、一个午餐地点
+    note: 真实 LLM judge；开发/测试态运行，CI 标记 not_run。
+  - id: planner_weather_consistency
+    query: 查北京天气，并根据天气给出穿衣建议
+    mode: judge
+    judge_spec:
+      criteria: 输出应引用实际天气数据，穿衣建议与天气相符
+    note: 验证 agent 工具调用链路（knowledge/weather）真实生效。

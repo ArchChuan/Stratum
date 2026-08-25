@@ -21,18 +21,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// infraError marks failures that are the environment's fault (server down,
-// auth misconfigured, provider unavailable). run maps these to exit code 2.
-type infraError struct{ err error }
-
-func (e *infraError) Error() string { return e.err.Error() }
-func (e *infraError) Unwrap() error { return e.err }
-
-func isInfra(err error) bool {
-	var infra *infraError
-	return errors.As(err, &infra)
-}
-
 // httpClient talks to the live Stratum server. It always authenticates as the
 // configured tenant owner so the /knowledge/query path resolves the D2 gate
 // with an admin-owner exemption (no whitelist shadow over the golden set).
@@ -55,7 +43,7 @@ func newHTTPClient(baseURL, ownerToken string) *httpClient {
 func mintOwnerToken(tenantID, userID string) (string, error) {
 	raw := strings.TrimSpace(os.Getenv("JWT_PRIVATE_KEY_PEM"))
 	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(userID) == "" || raw == "" {
-		return "", errors.New("RAG check requires tenant-id, user-id, and JWT_PRIVATE_KEY_PEM")
+		return "", errors.New("eval check requires tenant-id, user-id, and JWT_PRIVATE_KEY_PEM")
 	}
 	block, _ := pem.Decode([]byte(strings.ReplaceAll(raw, `\n`, "\n")))
 	if block == nil {
@@ -68,7 +56,7 @@ func mintOwnerToken(tenantID, userID string) (string, error) {
 	now := time.Now()
 	token, err := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
 		"sub": userID, "tid": tenantID, "role": "owner", "global_role": "user",
-		"system_role": "user", "jti": fmt.Sprintf("rag-check-%d", now.UnixNano()),
+		"system_role": "user", "jti": fmt.Sprintf("eval-check-%d", now.UnixNano()),
 		"iat": now.Unix(), "exp": now.Add(DefaultJWTExpiry).Unix(),
 	}).SignedString(key)
 	if err != nil {
@@ -144,7 +132,7 @@ type workspaceConfig struct {
 func (c *httpClient) createWorkspace(ctx context.Context, name string, s goldenSnapshot) (*workspaceConfig, error) {
 	payload, err := json.Marshal(map[string]any{
 		"name":        name,
-		"description": "transient e2e-rag-check workspace (cleaned up after run)",
+		"description": "transient e2e-eval-check workspace (cleaned up after run)",
 		"config": map[string]any{
 			"embedding_model":   s.EmbeddingModel,
 			"chunking_strategy": knowledgedomain.DefaultChunkingStrategy,

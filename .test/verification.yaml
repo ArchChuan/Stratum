@@ -31,6 +31,17 @@ risk:
     - id: agent-tool-chain
       level: R3
       paths: [internal/agent/**, internal/mcp/**, test/e2e/**]
+    - id: eval-touched
+      level: R3
+      paths:
+        - internal/agent/**
+        - internal/skill/**
+        - internal/mcp/**
+        - internal/knowledge/**
+        - test/e2e/**
+        - cmd/e2e-eval-check/**
+        - scripts/quality/run-eval-checks.sh
+        - .test/verification.yaml
     - id: auth
       level: R3
       paths: [api/http/handler/auth*.go, internal/iam/**]

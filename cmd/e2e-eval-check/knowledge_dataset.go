@@ -29,7 +29,9 @@ type goldenSnapshot struct {
 
 // goldenCase is one retrieval query with its expected documents. Mode is a
 // per-case query mode (vector/keyword/hybrid — all within the HTTP binding);
-// keyword is never a workspace config value.
+// keyword is never a workspace config value. The ExpectedOutput/JudgeSpec
+// fields are shared by mcp/skill/agent golden datasets; knowledge kinds ignore
+// them and use the retrieval annotation fields instead.
 type goldenCase struct {
 	ID                string   `yaml:"id" json:"id"`
 	Query             string   `yaml:"query" json:"query"`
@@ -41,6 +43,12 @@ type goldenCase struct {
 	CitationDocuments []string `yaml:"citation_documents,omitempty" json:"citation_documents,omitempty"`
 	ExpectNoAnswer    bool     `yaml:"expect_no_answer" json:"expect_no_answer"`
 	Note              string   `yaml:"note,omitempty" json:"note,omitempty"`
+
+	// ExpectedOutput is the expected value for exact/contains/regex assertion
+	// modes used by mcp/skill/agent kinds; knowledge kinds use the retrieval
+	// annotation fields instead.
+	ExpectedOutput string    `yaml:"expected_output,omitempty" json:"expected_output,omitempty"`
+	JudgeSpec      judgeSpec `yaml:"judge_spec,omitempty" json:"judge_spec,omitempty"`
 }
 
 type goldenSet struct {

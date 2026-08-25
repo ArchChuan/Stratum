@@ -20,6 +20,7 @@
 .PHONY: e2e-evaluation-evolution e2e-system-short e2e-system-soak e2e-system-release-soak
 .PHONY: monitoring-config-test
 .PHONY: verification-manifest-test verification-schemas-test verification-ci-contract-test test-verification-entrypoints-test
+.PHONY: eval-dev eval-pr eval-ci
 
 # ─── 全局变量（CI/CD 可自动覆盖）────────────────────────────────────────────
 BE_IMAGE    ?= clawhermes-ai-go
@@ -294,6 +295,7 @@ check-e2e-report:
 test-verification-entrypoints-test:
 	bash scripts/quality/test-verification-entrypoints-test.sh
 	bash scripts/quality/run-planned-checks-test.sh
+	bash scripts/quality/run-eval-checks-test.sh
 	bash scripts/quality/test-verify-before-pr-test.sh
 
 test-verify-plan: verification-manifest-test verification-schemas-test
@@ -304,6 +306,25 @@ test-verify-fast: test-verify-plan
 
 test-verify-before-pr:
 	bash scripts/quality/test-verify-before-pr.sh
+
+# ─── 确定性评测（eval）────────────────────────────────────────────────────
+# eval-dev：单点评测（本地 infra）；eval-pr：按 plan 跑全部命中 point；
+# eval-ci：框架自检 + 数据集校验，无真实 LLM/基础设施依赖，可确定性跑通。
+EVAL_KIND       ?= knowledge
+EVAL_POINT      ?= retrieval
+EVAL_BASE_URL   ?= http://localhost:8080
+EVAL_TENANT_ID  ?= stratum
+EVAL_USER_ID    ?= dev-user
+eval-dev:
+	go run ./cmd/e2e-eval-check --kind $(EVAL_KIND) --point $(EVAL_POINT) \
+		--base-url $(EVAL_BASE_URL) --tenant-id $(EVAL_TENANT_ID) --user-id $(EVAL_USER_ID)
+
+eval-pr:
+	bash scripts/quality/run-eval-checks.sh
+
+eval-ci:
+	go test ./cmd/e2e-eval-check/... -count=1
+	go run ./cmd/e2e-eval-check --self-check
 
 test-verify-local: test-verify-plan
 	bash scripts/quality/system-e2e-instructions-test.sh

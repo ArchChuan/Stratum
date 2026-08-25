@@ -1,0 +1,13 @@
+kind: agent
+point: planner-agent
+snapshot:
+  id: planner-1
+  model: qwen-plus
+  system_prompt: "你是一个行程规划助手"
+  tools: [knowledge, weather]
+judge:
+  base_url: ${LLM_BASE_URL}
+  model: qwen-plus
+  api_key_env: LLM_API_KEY
+golden: ../golden/cases.yaml
+baseline: ../baselines/planner-agent.json

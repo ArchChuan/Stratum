@@ -1,0 +1,181 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"time"
+)
+
+// llmExecutor evaluates agent cases with deterministic assertions or real-LLM
+// judging. The skill executor (Task 5) reuses this type and overrides
+// resolveAgentID to create a temporary carrier agent.
+type llmExecutor struct {
+	agents  *agentClient
+	judge   *judgeClient
+	agentID string // resolved from point snapshot
+}
+
+func init() {
+	registerExecutor("agent", func() executor { return &llmExecutor{} })
+}
+
+func (e *llmExecutor) Execute(ctx context.Context, o options, p point) (execResult, error) {
+	token, err := ownerTokenFor(o)
+	if err != nil {
+		// A broken auth setup (missing tenant/user/JWT key) is an environment
+		// failure, not a defect: surface it as infra (exit 2).
+		return execResult{}, &infraError{err}
+	}
+	e.agents = &agentClient{client: newHTTPClient(o.baseURL, token)}
+	if p.Judge != nil {
+		e.judge = newJudgeClient(p.Judge, apiKeyFromEnv(p.Judge.APIKeyEnv))
+	}
+	agentID, err := e.resolveAgentID(ctx, p)
+	if err != nil {
+		return execResult{}, err
+	}
+	e.agentID = agentID
+	dataset, err := loadLLMSet(p)
+	if err != nil {
+		return execResult{}, err
+	}
+	out, err := e.runCases(ctx, dataset)
+	if err != nil {
+		// Preserve partial cases and evidence accumulated before the failure so
+		// the error report carries them, matching skill/knowledge executors.
+		return out, err
+	}
+	out.Evidence = append(out.Evidence, evidence{Kind: "agent", Ref: agentID})
+	return out, nil
+}
+
+// resolveAgentID uses the point's declared agent id for agent kind; the skill
+// executor overrides this to create a temporary carrier agent (Task 5).
+func (e *llmExecutor) resolveAgentID(ctx context.Context, p point) (string, error) {
+	id, ok := p.Snapshot["id"].(string)
+	if !ok || id == "" {
+		return "", fmt.Errorf("agent point snapshot.id required")
+	}
+	return id, nil
+}
+
+// runCases executes every case and rolls up pass_rate/judge_mean/latency.
+// Infrastructure failures (agent endpoint/auth/decode, judge network/HTTP/
+// parse) and a broken point referencing a missing agent abort the whole run
+// instead of being flattened into a case error: swallowing them would let a
+// first-run-without-baseline silently pass green (exit 0) when the whole
+// judge or agent stack is down, or when the point's agent was never
+// provisioned. Case-level behavior failures (an agent that did not reach
+// "completed", a failed assertion, a judge "no" verdict) stay case errors and
+// never abort the run.
+func (e *llmExecutor) runCases(ctx context.Context, dataset goldenSet) (execResult, error) {
+	res := execResult{Cases: []caseOutcome{}}
+	var pass, judgeSum float64
+	judgeCount := 0
+	var latSum int64
+	for _, tc := range dataset.Cases {
+		outcome := caseOutcome{CaseID: tc.ID, AssertionMode: tc.Mode}
+		start := time.Now()
+		out, err := e.agents.executeAgent(ctx, e.agentID, tc.Query)
+		outcome.LatencyMS = time.Since(start).Milliseconds()
+		latSum += outcome.LatencyMS
+		if err != nil {
+			if abort, reason := runAbort(err); abort {
+				return res, reason
+			}
+			outcome.Error = err.Error()
+			res.Cases = append(res.Cases, outcome)
+			continue
+		}
+		score, judged, err := e.applyCase(ctx, tc, out, &outcome)
+		if err != nil {
+			return res, err
+		}
+		if judged {
+			judgeSum += score
+			judgeCount++
+		}
+		if outcome.Passed {
+			pass++
+		}
+		res.Cases = append(res.Cases, outcome)
+	}
+	agg := aggregate{CaseCount: len(res.Cases), AvgLatencyMS: avgInt64(latSum, len(res.Cases))}
+	if len(res.Cases) > 0 {
+		agg.PassRate = pass / float64(len(res.Cases))
+	}
+	if judgeCount > 0 {
+		agg.JudgeMean = judgeSum / float64(judgeCount)
+	}
+	res.Aggregate = agg
+	return res, nil
+}
+
+// runAbort reports whether an execute error must abort the whole run and
+// returns the error to propagate. Infrastructure failures (endpoint down,
+// auth, decode) and a broken point referencing a missing agent both abort:
+// the latter would otherwise record 0%-pass case errors and silently pass
+// green on a first run with no baseline. Case-level behavior failures (an
+// agent that did not reach "completed", a failed assertion) return false and
+// stay case errors.
+func runAbort(err error) (bool, error) {
+	if isInfra(err) || isResourceNotFound(err) {
+		return true, err
+	}
+	return false, nil
+}
+
+// applyCase fills the outcome for one produced output under the case's mode.
+// It returns the judge score, whether the case was actually judged, and an
+// error. The error is non-nil only for infrastructure failures (judge
+// network/HTTP/parse) that must abort the run; a judge "no" verdict or a judge
+// that is not configured is a case-level outcome, not an error.
+func (e *llmExecutor) applyCase(ctx context.Context, tc goldenCase, out string, outcome *caseOutcome) (float64, bool, error) {
+	switch tc.Mode {
+	case AssertExact, AssertContains, AssertRegex:
+		if expectedOf(tc) == "" {
+			outcome.Error = "assertion case requires expected value"
+		} else if err := assertOutput(tc.Mode, out, expectedOf(tc)); err != nil {
+			outcome.Error = err.Error()
+		} else {
+			outcome.Passed = true
+		}
+	case "judge":
+		if e.judge == nil {
+			outcome.Error = "judge case requires point.judge config"
+			return 0, false, nil
+		}
+		verdict, err := e.judge.Judge(ctx, tc.JudgeSpec, out)
+		if err != nil {
+			if isInfra(err) {
+				return 0, false, err
+			}
+			outcome.Error = err.Error()
+			return 0, false, nil
+		}
+		outcome.Passed = verdict.Passed
+		outcome.JudgeScore = verdict.Score
+		outcome.JudgeReason = verdict.Reason
+		return verdict.Score, true, nil
+	default:
+		outcome.Error = fmt.Sprintf("unsupported assertion mode %q for llm kind", tc.Mode)
+	}
+	return 0, false, nil
+}
+
+func avgInt64(sum int64, n int) int64 {
+	if n == 0 {
+		return 0
+	}
+	return sum / int64(n)
+}
+
+// apiKeyFromEnv resolves the judge API key from the named environment
+// variable. Empty env name yields an empty key (unauthenticated judge).
+func apiKeyFromEnv(envName string) string {
+	if envName == "" {
+		return ""
+	}
+	return os.Getenv(envName)
+}

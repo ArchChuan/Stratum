@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://stratum.local/schemas/rag-check.schema.json",
   "title": "RAG retrieval check report",
-  "description": "Report emitted by cmd/e2e-rag-check. status mirrors the local-verification enum so the skill routes it uniformly; warnings are non-blocking by default (--fail-on-warn turns strong ones into failed).",
+  "description": "Report emitted by cmd/e2e-eval-check. status mirrors the local-verification enum so the skill routes it uniformly; warnings are non-blocking by default (--fail-on-warn turns strong ones into failed).",
   "type": "object",
   "additionalProperties": false,
   "required": [
