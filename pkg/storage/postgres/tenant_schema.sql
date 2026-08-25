@@ -911,7 +911,8 @@ CREATE TABLE IF NOT EXISTS agent_tool_approvals (
     policy_version    TEXT        NOT NULL DEFAULT '',
     encrypted_payload TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'executing', 'executed', 'unknown_outcome')),
+        CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'executing', 'executed',
+                          'unknown_outcome', 'cancelled', 'voided', 'invalidated')),
     decided_by        TEXT        NOT NULL DEFAULT '',
     decision_reason   TEXT        NOT NULL DEFAULT '',
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -928,7 +929,8 @@ ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS knowledge_revisions_di
 ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS policy_version TEXT NOT NULL DEFAULT '';
 ALTER TABLE agent_tool_approvals DROP CONSTRAINT IF EXISTS agent_tool_approvals_status_check;
 ALTER TABLE agent_tool_approvals ADD CONSTRAINT agent_tool_approvals_status_check
-    CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'executing', 'executed', 'unknown_outcome'));
+    CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'executing', 'executed',
+                      'unknown_outcome', 'cancelled', 'voided', 'invalidated'));
 CREATE INDEX IF NOT EXISTS idx_agent_tool_approvals_pending
 ON agent_tool_approvals (status, expires_at, created_at);
 -- D3/D8/D9: subject 泛化、指定审批人、失效终态、会话级联（历史租户升级走 IF NOT EXISTS）
