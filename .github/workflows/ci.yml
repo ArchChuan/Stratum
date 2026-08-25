@@ -315,6 +315,50 @@ jobs:
       - name: Run contract golden tests
         run: make contract-enforce
 
+  eval:
+    name: Deterministic Eval Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Generate proto contracts
+        run: make proto-gen
+
+      # 确定性框架验证：工具自身测试 + self-check 数据集校验（无真实 LLM/基础设施）。
+      - name: Framework tests and self-check
+        run: make eval-ci
+
+      # mcp 确定性评测：用 e2e-mcp-server fixture（纯 Go，无真实 LLM 依赖）作为被测
+      # MCP server，验证 mcp executor 全链路。fixture 监听 127.0.0.1:18081，
+      # 与 weather-mcp point 的 snapshot server URL 对齐（validateServerConfig 强制 loopback）。
+      - name: mcp deterministic eval
+        run: |
+          go build -o bin/e2e-mcp-server ./cmd/e2e-mcp-server
+          E2E_MCP_LISTEN_ADDRESS=127.0.0.1:18081 E2E_RUN_INSTANCE_ID=ci \
+            ./bin/e2e-mcp-server >/tmp/e2e-mcp.log 2>&1 &
+          MCP_PID=$!
+          trap 'kill $MCP_PID 2>/dev/null || true' EXIT
+          sleep 2
+          STRATUM_EVAL_BASE_URL=http://localhost:18081 \
+            go run ./cmd/e2e-eval-check --kind mcp --point weather-mcp --fail-on-warn || { cat /tmp/e2e-mcp.log; exit 1; }
+          kill $MCP_PID 2>/dev/null || true
+
+      # skill/agent 需真实 LLM 评测，CI 显式标 not_run（防伪装成绿），reason 明确。
+      - name: skill/agent explicitly not run in CI
+        run: |
+          for kind in skill agent; do
+            for pf in test/e2e/$kind/points/*.yaml; do
+              [ -e "$pf" ] || continue
+              key=$(basename "$pf" .yaml)
+              go run ./cmd/e2e-eval-check --kind "$kind" --point "$key" --skip "real-LLM evaluation is dev/test-stage only" >/dev/null
+            done
+          done
+
   workflow-e2e:
     name: Workflow E2E
     runs-on: ubuntu-latest

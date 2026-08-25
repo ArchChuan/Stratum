@@ -1,11 +1,45 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 )
+
+// collectPointPaths walks a kind root recursively and returns every
+// points/*.yaml, sorted. The recursive walk supports nested layouts such as
+// test/e2e/knowledge/retrieval/points/retrieval.yaml where the `points`
+// segment is not directly under the kind root. A missing root yields an empty
+// list so callers keep their "no points" messaging.
+func collectPointPaths(kindRoot string) ([]string, error) {
+	var paths []string
+	err := filepath.WalkDir(kindRoot, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".yaml") {
+			return nil
+		}
+		if filepath.Base(filepath.Dir(path)) != "points" {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	slices.Sort(paths)
+	return paths, nil
+}
 
 // selfCheck validates every point and its referenced golden wiring without
 // touching the network. With --kind it scans that kind's points directory;
@@ -20,10 +54,9 @@ func selfCheck(o options, stdout io.Writer) (int, error) {
 	}
 	failed := 0
 	for _, kind := range kinds {
-		pointsDir := filepath.Join("test", "e2e", kind, "points")
-		entries, err := filepath.Glob(filepath.Join(pointsDir, "*.yaml"))
+		entries, err := collectPointPaths(filepath.Join("test", "e2e", kind))
 		if err != nil {
-			return exitInfraFailed, fmt.Errorf("glob points %s: %w", kind, err)
+			return exitInfraFailed, fmt.Errorf("scan points %s: %w", kind, err)
 		}
 		if len(entries) == 0 {
 			_, _ = fmt.Fprintf(stdout, "kind=%s no points (nothing to self-check)\n", kind)

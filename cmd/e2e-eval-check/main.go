@@ -177,8 +177,30 @@ func main() {
 }
 
 // helper stubs (implemented or replaced by later tasks):
+// resolvePointPath locates a point file by key across the kind's recursive
+// points/ layout. It supports both flat layouts (test/e2e/<kind>/points) and
+// nested layouts (test/e2e/knowledge/retrieval/points/retrieval.yaml), failing
+// closed on missing or ambiguous matches instead of guessing a path.
 func resolvePointPath(kind, key string) (string, error) {
-	return filepath.Join("test", "e2e", kind, "points", key+".yaml"), nil
+	target := key + ".yaml"
+	entries, err := collectPointPaths(filepath.Join("test", "e2e", kind))
+	if err != nil {
+		return "", fmt.Errorf("scan points %s: %w", kind, err)
+	}
+	var matches []string
+	for _, path := range entries {
+		if filepath.Base(path) == target {
+			matches = append(matches, path)
+		}
+	}
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return "", fmt.Errorf("point %q not found under test/e2e/%s (expected a *.yaml under a points/ directory)", key, kind)
+	default:
+		return "", fmt.Errorf("point %q is ambiguous under test/e2e/%s: %v", key, kind, matches)
+	}
 }
 func classifyError(err error) int {
 	if isInfra(err) {

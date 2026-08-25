@@ -7,6 +7,86 @@ import (
 	"testing"
 )
 
+func TestCollectPointPathsNestedLayout(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeTestFile(t, filepath.Join("test", "e2e", "knowledge", "retrieval", "points", "retrieval.yaml"), "kind: knowledge\n")
+	writeTestFile(t, filepath.Join("test", "e2e", "knowledge", "retrieval", "golden", "cases.yaml"), "cases:\n")
+	writeTestFile(t, filepath.Join("test", "e2e", "mcp", "points", "weather-mcp.yaml"), "kind: mcp\n")
+
+	got, err := collectPointPaths(filepath.Join("test", "e2e", "knowledge"))
+	if err != nil {
+		t.Fatalf("collectPointPaths: %v", err)
+	}
+	want := []string{filepath.Join("test", "e2e", "knowledge", "retrieval", "points", "retrieval.yaml")}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("collectPointPaths = %v, want %v", got, want)
+	}
+}
+
+func TestCollectPointPathsMissingRootYieldsEmpty(t *testing.T) {
+	got, err := collectPointPaths(filepath.Join(t.TempDir(), "no-such-kind"))
+	if err != nil {
+		t.Fatalf("collectPointPaths: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("collectPointPaths = %v, want empty", got)
+	}
+}
+
+func TestResolvePointPathNested(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeTestFile(t, filepath.Join("test", "e2e", "knowledge", "retrieval", "points", "retrieval.yaml"), "kind: knowledge\n")
+	got, err := resolvePointPath("knowledge", "retrieval")
+	if err != nil {
+		t.Fatalf("resolvePointPath: %v", err)
+	}
+	want := filepath.Join("test", "e2e", "knowledge", "retrieval", "points", "retrieval.yaml")
+	if got != want {
+		t.Fatalf("resolvePointPath = %q, want %q", got, want)
+	}
+}
+
+func TestResolvePointPathNotFound(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if _, err := resolvePointPath("skill", "does-not-exist"); err == nil {
+		t.Fatal("resolvePointPath must fail for a missing point")
+	}
+}
+
+func TestResolvePointPathAmbiguous(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeTestFile(t, filepath.Join("test", "e2e", "knowledge", "a", "points", "p.yaml"), "kind: knowledge\n")
+	writeTestFile(t, filepath.Join("test", "e2e", "knowledge", "b", "points", "p.yaml"), "kind: knowledge\n")
+	if _, err := resolvePointPath("knowledge", "p"); err == nil {
+		t.Fatal("resolvePointPath must fail when the key matches multiple nested points")
+	}
+}
+
+func TestSelfCheckNestedKnowledge(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeTestFile(t, filepath.Join("test", "e2e", "knowledge", "retrieval", "points", "retrieval.yaml"),
+		"kind: knowledge\npoint: retrieval\ngolden: ../golden\nbaseline: ../baselines/retrieval.json\n")
+	writeTestFile(t, filepath.Join("test", "e2e", "knowledge", "retrieval", "golden", "cases.yaml"), "cases:\n")
+	writeTestFile(t, filepath.Join("test", "e2e", "knowledge", "retrieval", "baselines", "retrieval.json"), "{}")
+
+	var out bytes.Buffer
+	code, err := selfCheck(options{kind: "knowledge"}, &out)
+	if err != nil {
+		t.Fatalf("selfCheck: %v", err)
+	}
+	if code != exitPassed {
+		t.Fatalf("selfCheck code = %d, want %d\nout:\n%s", code, exitPassed, out.String())
+	}
+	if !strings.Contains(out.String(), "POINT OK") {
+		t.Fatalf("output missing POINT OK:\n%s", out.String())
+	}
+}
+
 func TestSelfCheck(t *testing.T) {
 	cases := []struct {
 		name        string

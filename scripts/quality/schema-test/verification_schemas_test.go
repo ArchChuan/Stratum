@@ -19,6 +19,9 @@ func TestVerificationPlanSchema(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "accepts separate local and CI checks", value: valid},
+		{name: "accepts eval_points", value: changed(valid, "eval_points", []any{"knowledge/retrieval", "mcp/weather-mcp"})},
+		{name: "rejects non-array eval_points", value: changed(valid, "eval_points", "knowledge/retrieval"), wantErr: true},
+		{name: "rejects empty eval point key", value: changed(valid, "eval_points", []any{""}), wantErr: true},
 		{name: "rejects missing manifest digest", value: removed(valid, "manifest_digest"), wantErr: true},
 		{name: "rejects legacy shared checks", value: changed(valid, "checks", []any{"unit"}), wantErr: true},
 	}

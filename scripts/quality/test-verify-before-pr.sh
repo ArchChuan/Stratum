@@ -5,6 +5,7 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 plan=${TEST_VERIFY_PLAN_PATH:-$root/tmp/test-verification/plan.json}
 plan_command=${TEST_VERIFY_PLAN_COMMAND:-$root/scripts/quality/test-verification-plan.sh}
 checks_command=${TEST_VERIFY_CHECKS_COMMAND:-$root/scripts/quality/run-planned-checks.sh}
+eval_command=${TEST_VERIFY_EVAL_COMMAND:-$root/scripts/quality/run-eval-checks.sh}
 make_command=${TEST_VERIFY_MAKE_COMMAND:-make}
 writer=${LOCAL_VERIFY_WRITER:-$root/scripts/quality/write-local-verification-report.sh}
 checker=${LOCAL_VERIFY_CHECKER:-$root/scripts/quality/check-local-verification-report.sh}
@@ -60,6 +61,9 @@ manifest_digest=$(jq -er .manifest_digest "$plan")
 
 first_failure=0
 bash "$checks_command" || first_failure=$?
+if ((first_failure == 0)); then
+  bash "$eval_command" || first_failure=$?
+fi
 if ((first_failure == 0)); then
   run_browser_mode "$mode" || first_failure=$?
 fi
