@@ -1,0 +1,17 @@
+version: 1
+cases:
+  - id: stateful_echo_ping
+    query: fixture/stateful_echo {"text":"ping"}
+    mode: contains
+    expected_output: "stateful MCP call completed"
+    note: 确定性断言：本地 fixture server（cmd/e2e-mcp-server，E2E_MCP_LISTEN_ADDRESS=http://localhost:18081）的 stateful_echo 固定返回该文本，任意输入结果不变。
+  - id: stateful_echo_approval
+    query: fixture/stateful_echo {"text":"approval request"}
+    mode: contains
+    expected_output: "MCP call completed"
+    note: 不同输入参数同样命中固定返回文本，验证参数透传不会破坏工具调用结果。
+  - id: stateful_echo_regex_full
+    query: fixture/stateful_echo {"text":"regex probe"}
+    mode: regex
+    expected_output: "^stateful MCP call completed$"
+    note: 对固定返回文本做整串正则断言，覆盖 regex 断言模式。
