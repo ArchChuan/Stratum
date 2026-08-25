@@ -60,7 +60,6 @@ pkg/
   dag/                     - 领域中立依赖校验与调度（DAG 拓扑）
   jsonschema/              - JSON Schema 的类型安全构造
   messaging/               - NATS 消息封装（`messaging/nats`：Connect · JetStreamPublisher）
-  platformknowledge/       - 平台知识库契约（platform_managed 常量）
   safetext/                - 信任边界文本的确定性脱敏
   timeutil/                - 时区/时间工具
   tokenutil/               - token 估算与计价

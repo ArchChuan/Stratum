@@ -111,8 +111,9 @@ registerLLMAdmin(r, c, requireActive)
 | POST | `/skills` | CreateSkill | admin + requireActive |
 | GET | `/skills/:id` | GetSkill | — |
 | GET | `/skills/:id/workspace` | GetSkillWorkspace（版本草稿工作区） | — |
-| PATCH | `/skills/:id/draft` | UpdateDraft（草稿编辑，能力/激活/指令合并为单端点） | requireActive（service 层白名单校验） |
-| POST | `/skills/:id/publish` | PublishSkill（草稿→已发布版本） | requireActive（service 层白名单校验） |
+| PATCH | `/skills/:id` | UpdateSkill（编辑，能力/激活/指令合并为单端点） | requireActive（service 层白名单校验） |
+| POST | `/skills/:id/rollback` | RollbackSkill（回滚到历史版本） | requireActive（service 层白名单校验） |
+| GET | `/skills/:id/revisions` | ListSkillRevisions（版本历史） | — |
 | DELETE | `/skills/:id` | DeleteSkill | admin + requireActive |
 | PUT | `/skills/:id/editors` | SetSkillEditors | admin + requireActive |
 

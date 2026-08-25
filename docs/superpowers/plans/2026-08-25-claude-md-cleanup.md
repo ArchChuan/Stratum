@@ -115,7 +115,7 @@ agent、audit、collab、evaluation、iam、knowledge、llmgateway、mcp、memor
 
 - [ ] **Step 3: 更新 pkg/ 结构描述**
 
-按实际 `ls pkg/`：补 `dag`、`jsonschema`、`messaging`、`platformknowledge`、`safetext`、`timeutil`、`tokenutil`、`postgres`；`storage/` 下注明含 `{milvus,postgres,redis,filestore,objectstore,tenantnaming}`；保留 `pkg/vector` 仅兼容旧 import 的说明。
+按实际 `ls pkg/`：补 `dag`、`jsonschema`、`messaging`、`safetext`、`timeutil`、`tokenutil`、`postgres`；`storage/` 下注明含 `{milvus,postgres,redis,filestore,objectstore,tenantnaming}`；保留 `pkg/vector` 仅兼容旧 import 的说明。
 
 - [ ] **Step 4: 处理 config/prod.yaml 幽灵引用**
 
@@ -164,7 +164,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 - [ ] **Step 2: 修正 architecture.md**
 
-- "目录骨架"：`internal/<ctx>` 从 11 个 context 更新为 14 个；`pkg/storage/{postgres,redis,milvus,tenantnaming}` 补 `filestore,objectstore`；`pkg/` 列表补 `dag,jsonschema,messaging,platformknowledge,safetext,timeutil,tokenutil,postgres`
+- "目录骨架"：`internal/<ctx>` 从 11 个 context 更新为 14 个；`pkg/storage/{postgres,redis,milvus,tenantnaming}` 补 `filestore,objectstore`；`pkg/` 列表补 `dag,jsonschema,messaging,safetext,timeutil,tokenutil,postgres`
 - "11 个 bounded context" → "14 个 bounded context"，列表补 `audit · collab · parameters`
 
 - [ ] **Step 3: 修正 project.md**

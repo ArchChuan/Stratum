@@ -8,7 +8,7 @@
 api/{http/{handler,dto,middleware},wiring}
 internal/<ctx>/{domain/{,port/},application,infrastructure}
 pkg/storage/{milvus,postgres,redis,filestore,objectstore,tenantnaming}
-pkg/{constants,crypto,dag,httpclient,jsonschema,messaging,migration,observability,platformknowledge,postgres,redis,reqctx,safetext,tenantdb,textchunk,timeutil,tokenutil,vector}
+pkg/{constants,crypto,dag,httpclient,jsonschema,messaging,migration,observability,postgres,redis,reqctx,safetext,tenantdb,textchunk,timeutil,tokenutil,vector}
 ```
 
 - 14 个 bounded context：`agent · audit · collab · evaluation · iam · knowledge · llmgateway · mcp · memory · parameters · platform · scheduler · skill · workflow`

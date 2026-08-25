@@ -16,7 +16,7 @@
 | bounded context | 11 个 | **14 个**（缺 `audit`、`collab`、`parameters`） |
 | OTEL | v1.40.0 | **v1.42.0**（go.mod） |
 | React Router | 6.26 | **7.18.2**（web/package.json） |
-| pkg/ 包清单 | 缺多个 | 多出 `dag`、`jsonschema`、`messaging`、`platformknowledge`、`safetext`、`timeutil`、`tokenutil`、`postgres`、`storage/{filestore,objectstore}` |
+| pkg/ 包清单 | 缺多个 | 多出 `dag`、`jsonschema`、`messaging`、`safetext`、`timeutil`、`tokenutil`、`postgres`、`storage/{filestore,objectstore}` |
 | `config/prod.yaml` | 被引用（"禁止修改"） | **不存在**（config/ 只有 config.go、nacos.go、pgbouncer.ini、userlist.txt） |
 | middleware | 文档列 9 个 | 多出 `body_limit`、`rate_limit`、`public_error`、`require_default_tenant`、`system_role_check` |
 | web modules | 部分 | 多出 `approvals`、`audit`、`collab`、`operation-gate`、`parameters`、`scheduled-task` |
