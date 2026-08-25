@@ -1,76 +1,88 @@
 # Stratum Demo 部署架构说明
 
-本文用教学方式解释一次浏览器请求如何穿过公网、Ingress、前端 Nginx、Go 后端和集群内依赖服务。
-其中域名入口和监控栈内容是 2026-07-07 的历史运维快照，不应视为当前仍在线或配置未变；
-当前可复现的部署契约以 `helm/`、`.github/workflows/deploy.yml` 和 `docs/deployment/k3s-demo.md` 为准。
+本文用教学方式解释一次浏览器请求如何穿过公网、Traefik Ingress、前端 Nginx、Go 后端和集群内依赖服务。
+内容按仓库现状核对（`helm/`、`.github/workflows/deploy.yml`、`monitoring/remote/`、`k8s/`），
+反映 2026-08 的远程 HTTPS demo 部署形态；可复现的部署契约以 `helm/` values 与
+`.github/workflows/deploy.yml` 为准。
 
-当前远程 HTTP profile 的公网入口是 <http://101.200.181.141:6879>，健康检查是
-<http://101.200.181.141:6879/api/health>。它不使用域名或 HTTPS。公网 `6879` 由 K3s
-ServiceLB 暴露给 Traefik `web2`，随后请求进入 frontend Service `:80`；内部 `:80`
-不能当作当前公网 URL。
+当前远程 HTTPS profile 的公网入口是 <https://101.200.181.141:8443>，健康检查是
+<https://101.200.181.141:8443/api/health>。该地址不是硬编码，而是来自 GitHub Actions
+Production 环境变量 `PUBLIC_BASE_URL`；`scripts/quality/validate-remote-http-base-url.sh`
+强制其形如 `https://<public-ip>:8443`，禁止域名、其他端口、路径或尾随 `/`。
+TLS 由 cert-manager 签发的内部 CA 证书 `stratum-ingress-tls` 提供（根 CA 不公开受信），
+因此 curl 访问需要 `--insecure`，浏览器会提示证书不受信任。
 
-最后人工确认时间：2026-07-07。远端确认方式为 SSH 到 `demo.stratum.example` 后执行只读
-`kubectl` 查询。
+最后核对时间：2026-08-25（doc-cleanup，按 `helm/` 与 `.github/workflows/deploy.yml` 逐项核对）。
 
-历史快照中的访问入口：
-
-```text
-http://demo.stratum.example/
-```
-
-快照中的 GitHub OAuth 回调地址：
-
-```text
-http://demo.stratum.example/api/auth/github/callback
-```
+历史上（2026-07-07 起）该 profile 曾以明文 HTTP 运行：公网入口为 `http://101.200.181.141:6879`，
+由 K3s ServiceLB 暴露给 Traefik `web2` entrypoint。2026-08-01（commit `99e12605`）已切换到
+HTTPS:8443，`web2`/`6879` 不再作为公网入口。
 
 ## 一句话架构
 
-Stratum demo 部署在一台阿里云 ECS 上，ECS 里运行单节点 K3s。公网 HTTP 流量先进 K3s
-内置 Traefik，再进入前端 Nginx。前端 Nginx 同时负责两件事：返回 React 静态页面，
-以及把 `/api/*` 请求反向代理到 Go 后端。
+Stratum demo 部署在一台阿里云 ECS 上，ECS 里运行单节点 K3s。公网 HTTPS 流量先进 K3s 内置
+Traefik（`websecure` entrypoint，端口 8443），TLS 终止使用 cert-manager 内部 CA 签发的默认
+证书；再进入前端 Nginx。前端 Nginx 同时负责两件事：返回 React 静态页面，以及把 `/api/*` 请求
+反向代理到 Go 后端。
 
-业务应用由 `stratum` Helm release 管理，位于 `stratum` namespace。监控栈由独立的
-`kps` release 管理，位于 `monitoring` namespace；它不是本仓库 `grafana/` 目录的
-docker-compose 配置。
+业务应用由 `stratum` Helm release 管理，位于 `stratum` namespace。监控栈由独立的 `kps` release
+管理，位于 `monitoring` namespace；它不是本仓库 `grafana/` 目录的 docker-compose 配置。
+另有三个 chart/manifest 之外的组件：cert-manager（`cert-manager` namespace）、Opik 官方 chart
+（`opik` namespace）、以及由 deploy.yml 直接应用的原生 manifest（Loki/Promtail/Jaeger、OTLP
+collector、ServiceMonitor/PrometheusRule）。
 
 ```mermaid
 flowchart TB
-    browser["用户浏览器<br/>http://demo.stratum.example/"]
+    browser["用户浏览器<br/>https://101.200.181.141:8443"]
 
-    subgraph ecs["阿里云 ECS<br/>公网 IP: demo.stratum.example"]
+    subgraph ecs["阿里云 ECS<br/>公网 IP 101.200.181.141"]
         subgraph k3s["K3s 单节点集群"]
-            traefik["Traefik Ingress<br/>entrypoints: web :80 / web2 :6879<br/>Host: *"]
+            traefik["Traefik Ingress<br/>entrypoints: websecure :8443<br/>router.tls=true<br/>TLSStore 默认证书"]
+
+            subgraph cmns["namespace: cert-manager"]
+                ca["ClusterIssuer stratum-internal-ca"]
+                cert["Certificate stratum-ingress-tls<br/>IP 101.200.181.141"]
+            end
 
             subgraph ns["namespace: stratum"]
                 frontend["stratum-frontend<br/>Nginx + React 静态资源<br/>Service: ClusterIP :80"]
                 backend["stratum<br/>Go API / Gin<br/>Service: ClusterIP :80<br/>Container: :8080"]
-
-                postgres["stratum-postgresql<br/>PostgreSQL 16"]
+                postgres["stratum-postgresql<br/>PostgreSQL 16 + zhparser"]
                 redis["stratum-redis<br/>Redis 7"]
                 nats["stratum-nats<br/>NATS JetStream"]
                 milvus["stratum-milvus<br/>Milvus standalone"]
                 minio["stratum-minio<br/>MinIO"]
                 etcd["stratum-etcd<br/>Milvus metadata"]
-                secrets["stratum-secrets<br/>DB/JWT/GitHub OAuth"]
+                nacos["stratum-nacos<br/>Nacos 配置中心"]
+                nacosmysql["stratum-nacos-mysql<br/>MySQL 8.4"]
+                collector["stratum-otel-collector Service<br/>opik-otel-collector Deployment"]
+                secrets["stratum-secrets<br/>DB/JWT/GitHub OAuth/Nacos"]
                 config["stratum-config<br/>URL/CORS/Service config"]
             end
 
+            subgraph opikns["namespace: opik"]
+                opik["Opik 2.1.32<br/>backend + python-backend + frontend<br/>MySQL/Redis/ZooKeeper/ClickHouse"]
+            end
+
             subgraph mon["namespace: monitoring"]
-                grafana["kps-grafana<br/>Grafana<br/>Ingress path: /grafana"]
-                prometheus["kps-kube-prometheus-stack-prometheus<br/>Prometheus"]
-                alertmanager["kps-kube-prometheus-stack-alertmanager<br/>Alertmanager datasource"]
-                jaeger["jaeger<br/>UI :16686<br/>OTLP :4317/:4318"]
-                kpscm["kps-* ConfigMaps<br/>datasources + dashboards"]
+                grafana["kps-grafana<br/>Grafana"]
+                prometheus["kps-...-prometheus<br/>Prometheus"]
+                alertmanager["kps-...-alertmanager<br/>Alertmanager"]
+                blackbox["stratum-blackbox<br/>Blackbox exporter"]
+                jaeger["jaeger<br/>UI :16686<br/>OTLP :4317"]
+                loki["loki + promtail"]
+                feishu["stratum-feishu-alert-adapter"]
             end
         end
     end
 
-    browser -->|"HTTP :6879"| traefik
-    traefik -->|"Ingress path /"| frontend
-    traefik -->|"Ingress path /grafana"| grafana
+    browser -->|"HTTPS :8443"| traefik
+    traefik -->|"Ingress path / (hostless)"| frontend
     frontend -->|"React 静态资源"| browser
     frontend -->|"/api/* 反代并去掉 /api 前缀"| backend
+
+    cert --> traefik
+    ca --> cert
 
     config --> backend
     secrets --> backend
@@ -78,11 +90,22 @@ flowchart TB
     backend --> redis
     backend --> nats
     backend --> milvus
+    backend --> nacos
+    nacos --> nacosmysql
     milvus --> minio
     milvus --> etcd
-    kpscm --> grafana
+
+    backend -->|"OTLP :4317"| collector
+    collector -->|"otlphttp/opik"| opik
+    collector -->|"otlp/jaeger"| jaeger
+
+    prometheus -->|"scrape /metrics"| backend
+    prometheus -->|"scrape"| collector
+    prometheus --> alertmanager
+    alertmanager -->|"webhook"| feishu
     grafana --> prometheus
-    grafana --> alertmanager
+    grafana --> loki
+    loki --> promtail
 
     classDef edge fill:#fff7ed,stroke:#c05621,stroke-width:1px,color:#1c1917;
     classDef app fill:#f4f8f1,stroke:#758467,stroke-width:1px,color:#1c1917;
@@ -91,20 +114,20 @@ flowchart TB
     classDef obs fill:#f1f5f9,stroke:#475569,stroke-width:1px,color:#1c1917;
     class browser,traefik edge;
     class frontend,backend app;
-    class postgres,redis,nats,milvus,minio,etcd data;
-    class secrets,config cfg;
-    class grafana,prometheus,alertmanager,jaeger,kpscm obs;
+    class postgres,redis,nats,milvus,minio,etcd,nacos,nacosmysql,opik data;
+    class secrets,config,collector cfg;
+    class grafana,prometheus,alertmanager,blackbox,jaeger,loki,promtail,feishu obs;
 ```
 
-## HTTP 请求链路
+## HTTPS 请求链路
 
 访问首页时，请求链路是：
 
 ```text
 浏览器
-  -> http://demo.stratum.example/
-  -> Traefik :80
-  -> Ingress hostless rule
+  -> https://101.200.181.141:8443/
+  -> Traefik websecure :8443（TLS 终止，TLSStore 默认证书 stratum-ingress-tls）
+  -> Ingress hostless rule（entrypoint websecure, router.tls=true）
   -> stratum-frontend Service :80
   -> Nginx 返回 React 静态资源
 ```
@@ -113,8 +136,8 @@ flowchart TB
 
 ```text
 浏览器
-  -> http://demo.stratum.example/api/health
-  -> Traefik :80
+  -> https://101.200.181.141:8443/api/health
+  -> Traefik websecure :8443
   -> stratum-frontend Nginx
   -> proxy_pass http://stratum:80/
   -> Go 后端 /health
@@ -140,13 +163,24 @@ location /api/ {
 
 ## 当前 Helm Demo 配置
 
-业务应用当前由 `.github/workflows/deploy.yml` 执行以下命令部署：
+业务应用由 `.github/workflows/deploy.yml` 叠加两层 values 执行部署：
 
 ```bash
-helm upgrade --install stratum ./helm -f helm/values-demo.yaml ... -n stratum
+helm upgrade --install stratum ./helm \
+  -f helm/values-demo.yaml \
+  -f helm/values-demo-remote-http.yaml \
+  --set app.image.repository="$IMAGE_REPO/stratum-backend" \
+  --set-string app.image.digest="$BACKEND_DIGEST" \
+  --set-string config.frontendUrl="$PUBLIC_BASE_URL" \
+  --set-string config.githubCallbackUrl="$PUBLIC_BASE_URL/api/auth/github/callback" \
+  --set-string config.secureCookies="false" \
+  ... （其余依赖镜像均按 digest 固定）\
+  -n stratum
 ```
 
-核心配置如下：
+`helm/values-demo.yaml` 是 HTTPS demo 基线（域名占位 `demo.example.com`、TLS secret
+`stratum-demo-tls`），`helm/values-demo-remote-http.yaml` 是无域名远程覆盖层（host 置空、
+TLS secret 换成 `stratum-ingress-tls`）。合并后的核心配置如下：
 
 ```yaml
 frontend:
@@ -155,44 +189,50 @@ frontend:
   backendServicePort: 80
 
 config:
-  frontendUrl: "http://demo.stratum.example"
-  githubCallbackUrl: "http://demo.stratum.example/api/auth/github/callback"
-  secureCookies: "false"
+  frontendUrl: "https://<public-ip>:8443"          # 来自 PUBLIC_BASE_URL
+  githubCallbackUrl: "https://<public-ip>:8443/api/auth/github/callback"
+  secureCookies: "true"                            # values 文件是 true，但 CD --set 覆盖为 "false"
   natsUrl: "nats://stratum-nats:4222"
   milvusHost: "stratum-milvus"
   milvusPort: "19530"
   otelCollectorEndpoint: "http://stratum-otel-collector:4317"
+  opikUrl: "http://opik-backend.opik.svc.cluster.local:8080"
+  nacosUrl: "http://stratum-nacos:8848"
+  nacosNamespace: "stratum-prod"
+
+nacos:
+  enabled: true
 
 ingress:
   enabled: true
   className: "traefik"
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: "web,web2"
+    traefik.ingress.kubernetes.io/router.entrypoints: "websecure"
+    traefik.ingress.kubernetes.io/router.tls: "true"
   hosts:
     - host: ""
       paths:
         - path: /
           pathType: Prefix
           service: frontend
-  tls: []
+  tls:
+    - secretName: stratum-ingress-tls
 ```
 
 这些值的含义：
 
 - `frontend.enabled=true` 表示公网入口先落到前端 Nginx，而不是直接落到 Go 后端。
-- `backendServiceName=stratum` 和 `backendServicePort=80` 是前端 Nginx `/api/` 反向代理的
-  目标。
-- `frontendUrl` 是后端登录成功后跳回前端的地址。
+- `backendServiceName=stratum` 和 `backendServicePort=80` 是前端 Nginx `/api/` 反向代理的目标。
+- `frontendUrl` 是后端登录成功后跳回前端的地址，由 CI 注入 `PUBLIC_BASE_URL`。
 - `githubCallbackUrl` 是后端传给 GitHub 的 OAuth callback 地址。当前必须带 `/api`，因为公网只有 `/api/*` 会被前端 Nginx 代理到后端。
-- `secureCookies: "false"` 是因为当前还是 HTTP 直连 IP。等接入 HTTPS 后要改回 `true`。
-- `host: ""` 表示 Ingress 不限制 Host，浏览器直接用 IP 访问也能命中规则。
-- `tls: []` 表示当前没有在 Ingress 层启用 HTTPS。
-- `observability.enabled=false`，所以 `stratum` release 当前不会创建 `stratum-otel-collector`。
-  配置中仍保留 `otelCollectorEndpoint`，但它指向的 Service 当前不存在。
+- `secureCookies`：`values` 文件都写成 `"true"`，但 deploy.yml 的 `--set-string config.secureCookies="false"` 会把它覆盖为 `"false"`（详见"当前已知限制"）。
+- `host: ""` 表示 Ingress 不限制 Host，浏览器直接用 IP 访问也能命中规则；`tls.secretName: stratum-ingress-tls` 是 cert-manager 内部 CA 签发的证书。
+- entrypoint 只保留 `websecure` 且 `router.tls=true`，即公网只接受 HTTPS。
+- `nacos.enabled=true`，`stratum` release 会在集群内创建 `stratum-nacos`（Nacos v2.5.1）和 `stratum-nacos-mysql`（MySQL 8.4）。
+- `observability.enabled=true`（`helm/values.yaml` 默认值）。`stratum-otel-collector` 由 deploy.yml
+  从 `k8s/opik-otel-collector.yaml` 应用，不再由 chart 开关控制；它把 trace 转发到 Opik 和 Jaeger。
 
-## 远端实际资源快照
-
-2026-07-07 在远端确认的核心资源如下。
+## 当前远端部署的实际资源
 
 业务 namespace：
 
@@ -200,7 +240,8 @@ ingress:
 namespace: stratum
 release:   stratum
 chart:     ./helm
-values:    helm/values-demo.yaml + CI --set image.repository/image.tag
+values:    helm/values-demo.yaml + helm/values-demo-remote-http.yaml
+           + CI --set image.repository/image.digest/frontendUrl/githubCallbackUrl/secureCookies
 ```
 
 业务组件由 chart 直接创建：
@@ -208,22 +249,40 @@ values:    helm/values-demo.yaml + CI --set image.repository/image.tag
 ```text
 stratum-frontend       React 静态资源 + Nginx /api 反代
 stratum                Go API 后端
-stratum-postgresql     PostgreSQL 16
+stratum-postgresql     PostgreSQL 16 + zhparser（中文全文检索）
 stratum-redis          Redis 7
 stratum-nats           NATS JetStream
 stratum-milvus         Milvus standalone
 stratum-minio          Milvus object storage
 stratum-etcd           Milvus metadata
-stratum-secrets        POSTGRES_PASSWORD / JWT_PRIVATE_KEY_PEM / GitHub OAuth
+stratum-nacos          Nacos 配置中心（standalone + MySQL 8.4）
+stratum-nacos-mysql    Nacos 的 MySQL 8.4 存储
+stratum-secrets        POSTGRES_PASSWORD / JWT_PRIVATE_KEY_PEM / GitHub OAuth / Nacos 凭据
 aliyun-registry        镜像仓库 pull secret
 ```
+
+chart 之外、由 deploy.yml（或基础设施 bootstrap）创建的资源：
+
+```text
+cert-manager           namespace cert-manager, chart v1.21.1（crds.enabled=true）
+stratum-internal-ca    ClusterIssuer（内部 CA，签名自 self-signed 根）
+stratum-ingress-tls    Certificate + Traefik TLSStore（k8s/stratum-tls.yaml，IP 101.200.181.141）
+opik                   namespace opik, 官方 Opik chart 2.1.32（digest 固定）
+stratum-otel-collector Service + opik-otel-collector Deployment（k8s/opik-otel-collector.yaml）
+loki + promtail        k8s/logging.yaml（Loki 7 天保留，promtail 采集节点 /var/log/pods）
+jaeger                 k8s/tracing.yaml（all-in-one, badger 持久化）
+```
+
+注意：`k8s/stratum-tls.yaml` 里的 Certificate 由 `stratum-internal-ca` ClusterIssuer 签发，
+IP 固定为 `101.200.181.141`；它同时定义 Traefik TLSStore 的默认证书。Helm chart 的
+pre-upgrade hook（`requiredSecrets`）会校验该 Secret 存在，首次部署前需先完成证书 bootstrap。
 
 监控 namespace：
 
 ```text
 namespace: monitoring
-release:   kps
-chart:     kube-prometheus-stack 87.10.1
+release:   kps              kube-prometheus-stack 87.10.1
+release:   stratum-blackbox prometheus-blackbox-exporter 11.15.1
 ```
 
 远端实际运行的监控组件：
@@ -234,28 +293,24 @@ kps-kube-prometheus-stack-operator
 kps-kube-prometheus-stack-prometheus
 kps-kube-state-metrics
 kps-prometheus-node-exporter
+stratum-blackbox
 jaeger
+loki
+promtail
+stratum-feishu-alert-adapter
 ```
 
 注意：`kps` 监控栈不是 `.github/workflows/deploy.yml` 里的 `stratum` Helm 部署创建的。远端监控的唯一
 GitOps 权威是 `monitoring/remote/`，固定版本在 `monitoring/remote/versions.env`，由
-`scripts/deploy-remote-monitoring.sh` 对这个独立 Helm release 执行安全升级并应用自定义资源。
+`scripts/deploy-remote-monitoring.sh` 对独立 Helm release 执行安全升级并应用自定义资源。
 
-## 远端 Grafana 配置来源
+## 远端 Grafana 与监控栈
 
-远端 Grafana 访问入口：
-
-```text
-http://demo.stratum.example/grafana
-```
-
-远端 Grafana 的真实配置来自 `monitoring` namespace 的 `kps` release，不来自仓库根目录
-`grafana/`：
+远端 Grafana 的配置来自 `monitoring` namespace 的 `kps` release，不来自仓库根目录 `grafana/`：
 
 ```text
 Deployment: kps-grafana
 Service:    kps-grafana
-Ingress:    kps-grafana, path /grafana
 Secret:     kps-grafana
 ConfigMap:  kps-grafana
 ConfigMap:  kps-grafana-config-dashboards
@@ -301,6 +356,10 @@ providers:
       path: /tmp/dashboards
 ```
 
+当前 `monitoring/remote/kube-prometheus-stack-values.yaml` 没有给 Grafana 配置公网 Ingress，
+远端 Grafana 需通过 kubectl port-forward 或节点端口访问；此前的
+`http://demo.stratum.example/grafana` 入口已不存在。
+
 当前仓库根目录的 `grafana/` 只被本地 `docker-compose.yml` 挂载使用：
 
 ```yaml
@@ -311,7 +370,7 @@ providers:
 所以：
 
 - 本地 `make obs-up` / `docker-compose up grafana` 使用仓库 `grafana/`。
-- 远端 `http://demo.stratum.example/grafana` 使用 `monitoring/kps-*` ConfigMap。
+- 远端 Grafana 使用 `monitoring/kps-*` ConfigMap。
 - 修改仓库 `grafana/datasources/*.yaml` 不会影响远端 Grafana。
 - 要改远端 Grafana，应改 `kps` Helm values 或带 `grafana_datasource=1` /
   `grafana_dashboard=1` 标签的 Kubernetes ConfigMap。
@@ -322,11 +381,11 @@ providers:
 
 ```text
 浏览器
-  -> GET http://demo.stratum.example/api/auth/github
+  -> GET https://101.200.181.141:8443/api/auth/github
   -> 前端 Nginx 转发到后端 /auth/github
   -> 后端生成 state cookie
   -> 302 跳转到 GitHub authorize URL
-  -> GitHub 回调 http://demo.stratum.example/api/auth/github/callback
+  -> GitHub 回调 https://101.200.181.141:8443/api/auth/github/callback
   -> 前端 Nginx 转发到后端 /auth/github/callback
   -> 后端换取 GitHub access token
   -> 后端签发 Stratum 登录 token
@@ -337,10 +396,10 @@ GitHub OAuth App 必须配置：
 
 ```text
 Homepage URL:
-http://demo.stratum.example/
+https://101.200.181.141:8443/
 
 Authorization callback URL:
-http://demo.stratum.example/api/auth/github/callback
+https://101.200.181.141:8443/api/auth/github/callback
 ```
 
 如果 GitHub 页面提示：
@@ -361,25 +420,50 @@ OAUTH_GITHUB_CLIENT_SECRET
 JWT_PRIVATE_KEY
 POSTGRES_PASSWORD
 MINIO_ROOT_PASSWORD
+NACOS_PASSWORD
+NACOS_MYSQL_PASSWORD
+NACOS_AUTH_IDENTITY_KEY
+NACOS_AUTH_IDENTITY_VALUE
+NACOS_AUTH_TOKEN
+FEISHU_WEBHOOK_URL
 DOCKER_REGISTRY_URL
 DOCKER_USERNAME
 DOCKER_PASSWORD
 SSH_DEPLOY_KEY
+SSH_KNOWN_HOSTS
+SSH_DEPLOY_HOST
 KUBE_CONFIG
 ```
 
+`PUBLIC_BASE_URL` 是 GitHub Actions Production **环境变量**（vars，不是 secret），由
+`validate-remote-http-base-url.sh` 校验为 `https://<public-ip>:8443`。
+
 注意：GitHub Actions 不允许 repository secret 名以 `GITHUB_` 开头。所以仓库 secret 叫 `OAUTH_GITHUB_CLIENT_ID`，但部署到 Kubernetes 后仍写成后端需要的环境变量名 `GITHUB_CLIENT_ID`。
 
-CI 中的转换关系：
+deploy.yml 用这些 secret 生成两个 k8s Secret：
 
 ```yaml
 env:
   GITHUB_CLIENT_ID: ${{ secrets.OAUTH_GITHUB_CLIENT_ID }}
   GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_CLIENT_SECRET }}
+  MINIO_ROOT_PASSWORD: ${{ secrets.MINIO_ROOT_PASSWORD || secrets.POSTGRES_PASSWORD }}
 
+# namespace stratum
 kubectl create secret generic stratum-secrets \
-  --from-literal=GITHUB_CLIENT_ID="$GITHUB_CLIENT_ID" \
-  --from-literal=GITHUB_CLIENT_SECRET="$GITHUB_CLIENT_SECRET"
+  --from-literal=POSTGRES_PASSWORD=... \
+  --from-literal=MINIO_ROOT_PASSWORD=... \
+  --from-literal=JWT_PRIVATE_KEY_PEM=... \
+  --from-literal=GITHUB_CLIENT_ID=... \
+  --from-literal=GITHUB_CLIENT_SECRET=... \
+  --from-literal=NACOS_PASSWORD=... \
+  --from-literal=NACOS_MYSQL_PASSWORD=... \
+  --from-literal=NACOS_AUTH_IDENTITY_KEY=... \
+  --from-literal=NACOS_AUTH_IDENTITY_VALUE=... \
+  --from-literal=NACOS_AUTH_TOKEN=...
+
+# namespace monitoring
+kubectl create secret generic stratum-monitoring-secrets \
+  --from-literal=FEISHU_WEBHOOK_URL=...
 ```
 
 后端 Pod 里最终看到的是：
@@ -388,39 +472,75 @@ kubectl create secret generic stratum-secrets \
 GITHUB_CLIENT_ID=SET
 GITHUB_CLIENT_SECRET=SET
 JWT_PRIVATE_KEY_PEM=SET
-GITHUB_CALLBACK_URL=http://demo.stratum.example/api/auth/github/callback
+GITHUB_CALLBACK_URL=https://<public-ip>:8443/api/auth/github/callback
+SECURE_COOKIES=false
+NACOS_URL=http://stratum-nacos:8848
+OPIK_URL=http://opik-backend.opik.svc.cluster.local:8080
+OTEL_EXPORTER_OTLP_ENDPOINT=http://stratum-otel-collector:4317
 ```
 
 ## CI/CD 部署链路
 
-当前部署由 `.github/workflows/deploy.yml` 完成：
+`.github/workflows/deploy.yml`（"Build and Deploy"）的触发方式：
+
+- 主路径是 `workflow_run`：CI 在 `main` 分支跑成功后自动触发；
+- 另外支持 `push` tag `v*` 和 `workflow_dispatch` 手动触发。
+
+deploy 第一步会解析并校验**不可变 commit SHA**：`workflow_run` 事件要求触发它的 CI 成功、分支是
+`main`，且 candidate SHA 必须等于 GitHub 当前 `main` 的 commit SHA，否则拒绝部署（防止 base 落后
+导致的"合并结果变了却还按旧 SHA 部署"）。
 
 ```mermaid
 flowchart LR
-    push["workflow_dispatch<br/>或 main/tag push"] --> test["go test -short ./...<br/>go vet ./..."]
-    test --> build["Docker buildx<br/>backend + frontend"]
-    build --> registry["推送到阿里云 CR<br/>stratum-demo/*"]
-    registry --> deps["镜像依赖同步<br/>postgres/redis/nats/etcd/minio/milvus"]
-    deps --> tunnel["GitHub Actions<br/>SSH tunnel 到 K3s API"]
-    tunnel --> secret["kubectl apply<br/>namespace + secrets"]
-    secret --> helm["helm upgrade --install<br/>-f helm/values-demo.yaml"]
-    helm --> verify["kubectl rollout status<br/>kubectl get pods"]
+    push["push main / PR"] --> ci["CI<br/>go vet/test、lint、dto-residue-guard"]
+    ci -->|"workflow_run completed success"| deploy["Build and Deploy"]
+    tag["push tag v*"] --> deploy
+    manual["workflow_dispatch"] --> deploy
+    deploy --> candidate["解析并校验不可变 commit SHA"]
+    candidate --> build["buildx 构建<br/>backend + frontend + feishu-alert-adapter<br/>推阿里云 CR"]
+    build --> deps["发布依赖镜像并解析 digest<br/>postgres/redis/nats/etcd/minio/milvus/nacos/mysql"]
+    deps --> tunnel["SSH tunnel 到 K3s API :6443"]
+    tunnel --> cm["cert-manager v1.21.1 + 内部 CA bootstrap"]
+    cm --> opik["安装 pinned Opik 2.1.32<br/>namespace: opik"]
+    opik --> helm["helm upgrade --install<br/>values-demo + values-demo-remote-http<br/>--set digest/frontendUrl/secureCookies"]
+    helm --> obs["Loki/Promtail/Jaeger/collector<br/>+ ServiceMonitor/PrometheusRule"]
+    obs --> verify["rollout status + 公网 /api/health 验证"]
+    verify --> conntrack["清理 otel collector 过期 conntrack"]
+    conntrack --> evidence["记录部署 receipt + attestation"]
 ```
 
-远端监控 reconcile 不在 deploy 内联执行：`.github/workflows/reconcile-monitoring.yml` 通过
-`workflow_run` 在 "Build and Deploy" 完成后触发（另加每日 schedule 与手动触发），与 deploy 共享
-`stratum-production` concurrency group，避免两个工作流同时访问集群。reconcile 消费的 Feishu
-adapter 镜像优先读集群内已部署的 digest 形式，缺失时按 head SHA 从镜像仓库解析并校验
-`sha256:` digest，保证永不回退到可变 tag。
-
-现在后端和前端部署使用完整 commit SHA 作为镜像 tag：
+部署使用**镜像 digest 固定**：backend/frontend 推送到阿里云 CR 时带 commit SHA tag，deploy 阶段对
+所有镜像（backend/frontend/postgres/redis/nats/etcd/minio/milvus/nacos/mysql）解析并注入 registry
+digest：
 
 ```yaml
-outputs:
-  image-tag: ${{ github.sha }}
+--set app.image.repository="$IMAGE_REPO/stratum-backend" \
+--set-string app.image.digest="${{ steps.images.outputs.backend }}"
 ```
 
-这样做是为了解决一个常见坑：如果一直部署同一个 branch tag，例如 `ci-github-actions-deploy`，而 K3s 的 `imagePullPolicy` 是 `IfNotPresent`，节点可能复用本地旧镜像，导致“CI 成功、配置也更新了，但代码还是旧的”。使用 commit SHA tag 后，每次部署都是一个新 tag，K3s 会拉取新镜像。
+这样 K3s 每次都拉取与本次 commit 唯一对应的镜像，彻底避免"CI 成功但节点复用本地旧镜像"的问题
+（旧的 `IfNotPresent` + 固定 branch tag 组合的坑）。PostgreSQL 用的是自建
+`postgres:16-zhparser` 镜像（`docker/postgres-zhparser.Dockerfile`，发布为
+`<CR>/postgres:16-zhparser-v1`），带 zhparser 中文全文检索扩展。
+
+deploy 完成后还会：
+
+- 通过 `scripts/deploy-observability-logging.sh` 应用并滚动 Loki/Promtail/Jaeger，校验 promtail
+  日志流真实到达 Loki（fail closed）；
+- 应用 `monitoring/remote/resources/observability-monitors.yaml` 与
+  `monitoring/remote/generated/stratum-prometheus-rules.yaml`；
+- 清理到 otel collector Service VIP 的过期 conntrack 条目，防止 OTLP 连接被钉到被替换的 collector；
+- 记录部署 receipt（backend/frontend/adapter digest、rollback basis）并做 attestation。
+
+远端监控 reconcile 不在 deploy 内联执行：`.github/workflows/reconcile-monitoring.yml` 通过
+`workflow_run` 在 "Build and Deploy" 完成后触发（另加每日 schedule `17 3 * * *` 与手动触发），
+与 deploy 共享 `stratum-production` concurrency group，避免两个工作流同时访问集群。reconcile 消费
+的 Feishu adapter 镜像优先读集群内已部署的 digest 形式，缺失时按 head SHA 从镜像仓库解析并校验
+`sha256:` digest，保证永不回退到可变 tag。
+
+另有 `.github/workflows/rollback.yml`（手动 Helm rollback）和
+`.github/workflows/remote-health-monitor.yml`（每 5 分钟探测 `PUBLIC_BASE_URL/api/health` 并对账
+告警状态）。
 
 ## 后端 auth route 的启动条件
 
@@ -450,48 +570,48 @@ JWT private key parse failed, auth routes disabled
 
 ## 当前验证命令
 
-从本机验证公网入口：
+从本机验证公网入口（证书是内部 CA，需 `--insecure`）：
 
 ```bash
-curl --noproxy '*' -I http://demo.stratum.example/
+curl --noproxy '*' -kI https://101.200.181.141:8443/
 ```
 
 验证 API 代理链路：
 
 ```bash
-curl --noproxy '*' -i http://demo.stratum.example/api/health
+curl --noproxy '*' -ki https://101.200.181.141:8443/api/health
 ```
 
 验证 GitHub OAuth 登录入口：
 
 ```bash
-curl --noproxy '*' -i http://demo.stratum.example/api/auth/github
+curl --noproxy '*' -ki https://101.200.181.141:8443/api/auth/github
 ```
 
 期望结果是 `302 Found`，并且 `Location` 指向 GitHub：
 
 ```text
-Location: https://github.com/login/oauth/authorize?...redirect_uri=http://demo.stratum.example/api/auth/github/callback...
+Location: https://github.com/login/oauth/authorize?...redirect_uri=https://101.200.181.141:8443/api/auth/github/callback...
 ```
 
 查看集群状态：
 
 ```bash
-ssh root@demo.stratum.example 'kubectl get pods -n stratum -o wide'
+ssh root@101.200.181.141 'kubectl get pods -n stratum -o wide'
 ```
 
 查看远端监控栈：
 
 ```bash
-ssh root@demo.stratum.example 'kubectl get all -n monitoring'
-ssh root@demo.stratum.example 'kubectl get ingress,svc,cm -n monitoring | grep -i grafana'
-ssh root@demo.stratum.example 'kubectl get secret -n monitoring -l owner=helm'
+ssh root@101.200.181.141 'kubectl get all -n monitoring'
+ssh root@101.200.181.141 'kubectl get ingress,svc,cm -n monitoring | grep -i grafana'
+ssh root@101.200.181.141 'kubectl get secret -n monitoring -l owner=helm'
 ```
 
 确认后端 Pod 里的关键配置：
 
 ```bash
-ssh root@demo.stratum.example \
+ssh root@101.200.181.141 \
   'kubectl exec -n stratum deploy/stratum -- sh -c '"'"'
     echo GITHUB_CALLBACK_URL=$GITHUB_CALLBACK_URL
     for k in GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET JWT_PRIVATE_KEY_PEM; do
@@ -503,7 +623,7 @@ ssh root@demo.stratum.example \
 确认后端 auth route 已注册：
 
 ```bash
-ssh root@demo.stratum.example \
+ssh root@101.200.181.141 \
   'kubectl logs -n stratum deploy/stratum --tail=160 | grep -E "GET[[:space:]]+/auth|/auth/github"'
 ```
 
@@ -517,35 +637,38 @@ GET /auth/me
 
 ## 当前已知限制
 
-- 当前是 HTTP 直连 IP，没有 HTTPS。
-- `secureCookies=false` 只适合当前 demo。接入 HTTPS 后应改为 `true`。
-- Ingress 当前不限制 Host，适合 IP demo；生产环境应配置正式域名。
-- `stratum` release 的 `observability.enabled=false`，不会创建 `stratum-otel-collector`。
-  远端虽然有独立 `monitoring` namespace 和 `kps`/`jaeger`，但业务后端当前配置的
-  `OTEL_EXPORTER_OTLP_ENDPOINT=http://stratum-otel-collector:4317` 指向不存在的 Service。
-  如果要让后端 trace 真正进入远端 Jaeger，应改为可达的 collector/Jaeger OTLP 地址，例如
-  `jaeger.monitoring.svc.cluster.local:4317` 或新增 collector 后指向 collector。
-- 远端 Grafana 是独立 `kps` 监控栈，不使用仓库根目录 `grafana/`。
+- 公网是 HTTPS，但证书来自 cert-manager **内部 CA**（根 CA 不公开受信），浏览器首次访问有安全
+  警告；脚本/curl 验证需 `--insecure`。
+- `secureCookies`：`helm/values-demo.yaml` 和 `helm/values-demo-remote-http.yaml` 都写
+  `"true"`，但 deploy.yml 的 `--set-string config.secureCookies="false"` 会把它覆盖为 `"false"`
+  （该覆盖自 2026-07 引入 remote HTTP profile 时保留至今）。接入正式可信 HTTPS 后应移除该覆盖。
+- Ingress 当前不限制 Host（`host: ""`），适合 IP demo；生产环境应配置正式域名。
+- `observability.enabled` 默认 `true`；`stratum-otel-collector` 由 deploy.yml 从
+  `k8s/opik-otel-collector.yaml` 应用，不再受 chart 开关控制。它把 trace 转发到
+  `opik-backend.opik`（OTLP/HTTP）和 `jaeger.monitoring`（OTLP/gRPC）。
+- 远端 Grafana 是独立 `kps` 监控栈，不使用仓库根目录 `grafana/`；当前 values 未给 Grafana 配公网
+  Ingress，需 port-forward 访问。
 - 远端监控配置只认 `monitoring/remote/`；运行与告警处置见
   `docs/operations/remote-monitoring-runbook.md` 和 `docs/operations/alerts/`。
 - 监控升级/回滚不得 uninstall release，也不得删除 Prometheus/Grafana PVC、monitoring CRD 或 Helm history。
 - 单节点 K3s 适合 demo，不是高可用生产架构。
 
-## 后续接入域名和 HTTPS
+## 后续接入正式域名和公共证书
 
-有正式域名后，建议按这个顺序升级：
+当前已是 HTTPS（IP + 内部 CA）。有正式域名后，建议按这个顺序升级：
 
-1. DNS A 记录指向 `demo.stratum.example`。
-2. `ingress.hosts[0].host` 改成正式域名。
-3. 恢复 cert-manager issuer 注解。
-4. Ingress entrypoint 从 `web` 改为 `websecure`。
-5. 配置 TLS secret。
-6. `frontendUrl` 改成 `https://<正式域名>`。
-7. `githubCallbackUrl` 改成 `https://<正式域名>/api/auth/github/callback`。
-8. GitHub OAuth App 的 callback URL 同步改成 HTTPS 地址。
-9. `secureCookies` 改成 `"true"`。
+1. DNS A 记录指向公网 IP（`101.200.181.141`）。
+2. `ingress.hosts[0].host` 从空字符串改成正式域名。
+3. 把 TLS 换成公共可信证书：用 Let's Encrypt 之类的外部 CA（例如 `k8s/ingress.yaml` 里出现的
+   `cert-manager.io/cluster-issuer: letsencrypt-prod` 注解），或为域名申请商业证书，替换
+   `stratum-ingress-tls` 的内部 CA 证书。
+4. `frontendUrl` / `githubCallbackUrl` 改成 `https://<正式域名>`（同时更新 `PUBLIC_BASE_URL`）。
+5. GitHub OAuth App 的 callback URL 同步改成 HTTPS 域名地址。
+6. 移除 deploy.yml 里 `--set-string config.secureCookies="false"` 覆盖，让 `secureCookies` 保持
+   `"true"`。
+7. 删除 `k8s/stratum-tls.yaml` 中 IP 固定的 Certificate 相关逻辑（或改按域名签发）。
 
-域名和 HTTPS 接入后，请重新验证：
+域名和正式证书接入后，请重新验证：
 
 ```bash
 curl -I https://<正式域名>/
@@ -557,10 +680,13 @@ curl -i https://<正式域名>/api/auth/github
 
 遇到访问问题时，按层排查，不要直接猜代码问题：
 
-1. 首页打不开：先查 ECS 安全组、Traefik Ingress、frontend Pod。
+1. 首页打不开：先查 ECS 安全组（放行 8443）、Traefik Ingress、frontend Pod、`stratum-ingress-tls`
+   证书 Secret。
 2. `/api/health` 失败：查前端 Nginx `/api/` 代理和 backend Service。
 3. `/api/auth/github` 404：查后端是否注册 `/auth/github`，再查 `GITHUB_CLIENT_ID` 和 `JWT_PRIVATE_KEY_PEM`。
-4. GitHub 提示 redirect_uri 不匹配：查 GitHub OAuth App callback URL。
-5. CI 成功但代码没变：查 Pod 镜像 tag 是否是当前 commit SHA，而不是旧 branch tag。
-6. Grafana 看不到新配置：先确认你改的是远端 `monitoring/kps-*` ConfigMap，而不是本地
+4. GitHub 提示 redirect_uri 不匹配：查 GitHub OAuth App callback URL（必须是
+   `https://<public-ip>:8443/api/auth/github/callback`）。
+5. CI 成功但代码没变：确认 Pod 镜像 digest 是否与本次 commit 对应，而不是旧镜像缓存。
+6. 证书不受信任：预期行为（内部 CA）。接入正式域名后应替换为公共证书。
+7. Grafana 看不到新配置：先确认你改的是远端 `monitoring/kps-*` ConfigMap，而不是本地
    docker-compose 使用的仓库 `grafana/` 目录。
