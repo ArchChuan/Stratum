@@ -39,8 +39,19 @@ func (a *agentClient) executeAgent(ctx context.Context, agentID, query string) (
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return "", &infraError{fmt.Errorf("decode execute agent response: %w", err)}
 	}
-	if resp.Status == "error" || resp.Error != "" {
-		return "", fmt.Errorf("agent execution failed: %s", resp.Error)
+	// A run that did not reach "completed" (e.g. "waiting_approval") never
+	// produced a real result. That is an agent-behavior outcome — a dataset or
+	// product defect — not an infrastructure break, so keep it a case error.
+	if resp.Status != "completed" {
+		if resp.Error != "" {
+			return "", fmt.Errorf("agent execution failed: %s", resp.Error)
+		}
+		return "", fmt.Errorf("agent execution did not complete: status %q", resp.Status)
+	}
+	// A completed run must carry a real result; a nil result would marshal to
+	// "null" and let a loose judge grade nothing against the criteria.
+	if resp.Result == nil {
+		return "", fmt.Errorf("agent execution completed without a result")
 	}
 	switch v := resp.Result.(type) {
 	case string:

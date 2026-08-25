@@ -238,6 +238,84 @@ func TestAgentClientExecuteAgent(t *testing.T) {
 	}
 }
 
+// TestAgentClientExecuteAgentFailsClosedOnNonCompleted pins that an agent run
+// that did not reach a real "completed" result (e.g. "waiting_approval", a 202
+// with a pending approval, an explicit error, or a completed run with a null
+// result) fails the case as a case error — never an infraError, and never a
+// silent pass that a loose judge could grade against "null".
+func TestAgentClientExecuteAgentFailsClosedOnNonCompleted(t *testing.T) {
+	scenarios := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{
+			name:   "waiting approval status",
+			status: http.StatusOK,
+			body:   `{"status":"waiting_approval"}`,
+		},
+		{
+			name:   "202 accepted with pending approval",
+			status: http.StatusAccepted,
+			body:   `{"status":"waiting_approval"}`,
+		},
+		{
+			name:   "error status",
+			status: http.StatusOK,
+			body:   `{"status":"error","error":"boom"}`,
+		},
+		{
+			name:   "completed without result",
+			status: http.StatusOK,
+			body:   `{"status":"completed"}`,
+		},
+	}
+	for _, tc := range scenarios {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+
+			a := &agentClient{client: newHTTPClient(server.URL, "test-token")}
+			_, err := a.executeAgent(context.Background(), "a1", "do it")
+			if err == nil {
+				t.Fatal("executeAgent must fail when the agent did not complete")
+			}
+			if isInfra(err) {
+				t.Fatalf("non-completed agent run is a case error, not infra: %v", err)
+			}
+
+			// The same failure must surface as a failed case with an error, so a
+			// judge never sees a "null" output to grade.
+			ex := &llmExecutor{
+				agents:  &agentClient{client: newHTTPClient(server.URL, "test-token")},
+				agentID: "a1",
+			}
+			p := point{Kind: "agent", Dir: t.TempDir()}
+			goldenPath := p.Dir + "/cases.yaml"
+			writeTestFile(t, goldenPath, `
+version: 1
+cases:
+  - id: c1
+    query: "q"
+    mode: contains
+    expected_output: "x"
+`)
+			p.Golden = "cases.yaml"
+			res, err := ex.runCases(context.Background(), mustLoadLLMSet(t, p))
+			if err != nil {
+				t.Fatalf("runCases: %v", err)
+			}
+			if res.Cases[0].Passed || res.Cases[0].Error == "" {
+				t.Fatalf("non-completed agent run must fail the case: %+v", res.Cases[0])
+			}
+		})
+	}
+}
+
 func mustLoadLLMSet(t *testing.T, p point) goldenSet {
 	t.Helper()
 	set, err := loadLLMSet(p)
