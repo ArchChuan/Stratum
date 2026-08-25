@@ -64,7 +64,58 @@ describe('ParameterMappingEditor', () => {
     expect(onChange).toHaveBeenLastCalledWith({ result: 'nodes.node-1.output.summary' });
   });
 
-  it('disables the insert button until both upstream and field are chosen', () => {
+  it('replaces a non-empty value with the reference instead of mixing text', async () => {
+    const onChange = vi.fn();
+    render(<ParameterMappingEditor
+      direction="input"
+      mapping={{ result: '已手写的值' }}
+      upstreams={[upstream('node-1')]}
+      onChange={onChange}
+    />);
+    openSelect('输入映射引用上游节点');
+    await waitFor(() => {
+      expect(document.querySelectorAll('.ant-select-item-option').length).toBeGreaterThan(0);
+    });
+    fireEvent.click(document.querySelectorAll('.ant-select-item-option')[0]);
+    fireEvent.change(screen.getByLabelText('输入映射引用输出字段'), { target: { value: 'summary' } });
+    fireEvent.click(screen.getByRole('button', { name: '插入引用' }));
+    // 后端 resolveMappingReference 只识别以 nodes. 开头的纯引用，混排文本会被
+    // 整条静默丢弃，故值非空时整体替换，不允许 "hello nodes.A.output.x" 混排。
+    expect(onChange).toHaveBeenLastCalledWith({ result: 'nodes.node-1.output.summary' });
+  });
+
+  it('only lists agent/skill nodes as referenceable upstreams', async () => {
+    const onChange = vi.fn();
+    const conditionNode: WorkflowNode = {
+      id: 'cond-1',
+      name: 'cond-1',
+      type: 'condition',
+      condition: '$.ok == true',
+      agent_id: '',
+      input_mapping: {},
+      output_mapping: {},
+      retry: { max_attempts: 0, backoff_ms: 0 },
+      timeout_ms: 0,
+    };
+    render(<ParameterMappingEditor
+      direction="input"
+      mapping={{}}
+      upstreams={[upstream('agent-1'), conditionNode]}
+      onChange={onChange}
+    />);
+    fireEvent.click(screen.getByRole('button', { name: /添加参数/ }));
+    openSelect('输入映射引用上游节点');
+    await waitFor(() => {
+      expect(document.querySelectorAll('.ant-select-item-option').length).toBeGreaterThan(0);
+    });
+    const labels = Array.from(document.querySelectorAll('.ant-select-item-option'))
+      .map((el) => el.textContent);
+    // condition/mcp_tool 输出不是契约 JSON，引用其字段必然 run 失败，故不列出。
+    expect(labels).toContain('agent-1');
+    expect(labels).not.toContain('cond-1');
+  });
+
+  it('omits the upstream-reference UI on output mapping', () => {
     const onChange = vi.fn();
     render(<ParameterMappingEditor
       direction="output"
@@ -73,8 +124,10 @@ describe('ParameterMappingEditor', () => {
       onChange={onChange}
     />);
     fireEvent.click(screen.getByRole('button', { name: /添加参数/ }));
-    expect(screen.getByRole('button', { name: '插入引用' })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('输出映射引用输出字段'), { target: { value: 'title' } });
-    expect(screen.getByRole('button', { name: '插入引用' })).toBeDisabled();
+    // 输出映射契约是 $ / $.path JSONPath selector，插入 nodes.<id>.output.<field>
+    // 发布时必报 invalid output selector，故 output 方向不渲染引用插入 UI。
+    expect(screen.queryByRole('button', { name: '插入引用' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('输出映射引用上游节点')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('输出映射引用输出字段')).not.toBeInTheDocument();
   });
 });

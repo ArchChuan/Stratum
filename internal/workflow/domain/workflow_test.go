@@ -539,31 +539,30 @@ func TestValidateNodeRejectsNonFiniteOrHugePosition(t *testing.T) {
 }
 
 func TestValidateSpecGraphAllowsEmptyAndIncompleteDrafts(t *testing.T) {
-	// 草稿校验容忍空图（画一半先保存）与字段未填全的半成品节点。
-	require.NoError(t, domain.ValidateSpecGraph(domain.Spec{}))
-
-	// condition 节点要求恰好一条 default 边（图完整性规则），单 condition 节点会被拒，
-	// 这里只验证不违反图完整性的半成品：mcp_tool 缺 server/tool、agent 缺 agent_id。
-	for _, incomplete := range []domain.Spec{
+	// 草稿校验容忍空图（画一半先保存）、字段未填全的半成品节点、孤立节点与
+	// condition 未连 default 边；弱连通与 condition default 是发布级约束。
+	for _, draft := range []domain.Spec{
+		{},
 		{Nodes: []domain.Node{{ID: "mcp", Type: domain.NodeTypeMCPTool}}},
 		{Nodes: []domain.Node{{ID: "agent", Type: domain.NodeTypeAgent, AgentID: ""}}},
+		// 两个未连线的节点：断连图，草稿放行（画一半先保存）。
+		{Nodes: []domain.Node{
+			{ID: "a", Type: domain.NodeTypeAgent, AgentID: "a"},
+			{ID: "b", Type: domain.NodeTypeAgent, AgentID: "b"},
+		}},
+		// condition 节点未连 default 边：草稿放行。
+		{Nodes: []domain.Node{{ID: "condition", Type: domain.NodeTypeCondition, Condition: `$.ok == true`}}},
 	} {
-		require.NoError(t, domain.ValidateSpecGraph(incomplete))
+		require.NoError(t, domain.ValidateSpecGraph(draft))
 	}
 }
 
-func TestValidateSpecGraphRejectsCycleAndDisconnected(t *testing.T) {
+func TestValidateSpecGraphRejectsCycle(t *testing.T) {
 	cycle := domain.Spec{Nodes: []domain.Node{
 		{ID: "a", Type: domain.NodeTypeAgent, AgentID: "a"},
 		{ID: "b", Type: domain.NodeTypeAgent, AgentID: "b"},
 	}, Edges: []domain.Edge{{From: "a", To: "b"}, {From: "b", To: "a"}}}
 	require.ErrorIs(t, domain.ValidateSpecGraph(cycle), domain.ErrInvalidSpec)
-
-	disconnected := domain.Spec{Nodes: []domain.Node{
-		{ID: "a", Type: domain.NodeTypeAgent, AgentID: "a"},
-		{ID: "b", Type: domain.NodeTypeAgent, AgentID: "b"},
-	}}
-	require.ErrorIs(t, domain.ValidateSpecGraph(disconnected), domain.ErrInvalidSpec)
 }
 
 func TestValidateSkillBinding(t *testing.T) {

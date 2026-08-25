@@ -48,7 +48,12 @@ export const ParameterMappingEditor = ({
   onChange: (next: Record<string, string>) => void;
 }) => {
   const [rows, setRows] = useState<ParamRow[]>(() => toRows(mapping));
-  const upstreamOptions = upstreams.map((node) => ({ value: node.id, label: node.name || node.id }));
+  // 后端只支持 agent/skill 节点做输出契约注入与失败重试（retryUpstreamOutput），
+  // condition/mcp_tool/approval 的输出不是契约 JSON，引用其字段必然 run 失败，
+  // 选择器只列可契约化的 agent/skill。
+  const upstreamOptions = upstreams
+    .filter((node) => node.type === 'agent' || node.type === 'skill')
+    .map((node) => ({ value: node.id, label: node.name || node.id }));
   const update = (next: ParamRow[]) => {
     setRows(next);
     onChange(toMapping(next));
@@ -57,9 +62,9 @@ export const ParameterMappingEditor = ({
     const row = rows[index];
     if (!row.upstream || !row.outputField.trim()) return;
     const ref = upstreamReference(row.upstream, row.outputField.trim());
-    update(rows.map((r, i) => i === index
-      ? { ...r, value: r.value.trim() ? `${r.value} ${ref}` : ref }
-      : r));
+    // 后端 resolveMappingReference 只识别以 nodes. 开头的纯引用，混排文本
+    // （如 "hello nodes.A.output.x"）会被整条静默丢弃，故值非空时整体替换。
+    update(rows.map((r, i) => i === index ? { ...r, value: ref } : r));
   };
   const label = direction === 'input' ? '输入映射' : '输出映射';
   const valuePlaceholder = direction === 'input'
@@ -87,25 +92,32 @@ export const ParameterMappingEditor = ({
           />
         </div>
         <div className="workflow-param-ref">
-          <Select
-            aria-label={`${label}引用上游节点`}
-            options={upstreamOptions}
-            placeholder="上游节点"
-            value={row.upstream}
-            disabled={upstreamOptions.length === 0}
-            onChange={(upstream) => update(rows.map((r, i) => i === index ? { ...r, upstream } : r))}
-          />
-          <Input
-            aria-label={`${label}引用输出字段`}
-            placeholder="输出字段"
-            value={row.outputField}
-            onChange={(event) => update(rows.map((r, i) => i === index ? { ...r, outputField: event.target.value } : r))}
-          />
-          <Button
-            size="small"
-            disabled={!row.upstream || !row.outputField.trim()}
-            onClick={() => insertReference(index)}
-          >插入引用</Button>
+          {/* 上游输出引用是输入映射专属：输出映射契约是 $ / $.path JSONPath
+              selector（validateOutputMappings），插入 nodes.<id>.output.<field>
+              不合法，发布时会被拒，故 output 方向不渲染引用 UI。 */}
+          {direction === 'input' && (
+            <>
+              <Select
+                aria-label={`${label}引用上游节点`}
+                options={upstreamOptions}
+                placeholder="上游节点"
+                value={row.upstream}
+                disabled={upstreamOptions.length === 0}
+                onChange={(upstream) => update(rows.map((r, i) => i === index ? { ...r, upstream } : r))}
+              />
+              <Input
+                aria-label={`${label}引用输出字段`}
+                placeholder="输出字段"
+                value={row.outputField}
+                onChange={(event) => update(rows.map((r, i) => i === index ? { ...r, outputField: event.target.value } : r))}
+              />
+              <Button
+                size="small"
+                disabled={!row.upstream || !row.outputField.trim()}
+                onClick={() => insertReference(index)}
+              >插入引用</Button>
+            </>
+          )}
           <Button
             aria-label={`${label}删除参数行`}
             danger

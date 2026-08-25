@@ -308,15 +308,42 @@ func ValidateSpec(spec Spec) error {
 	return &GraphValidationError{Issues: []GraphIssue{{Path: "graph", Code: "invalid", Message: message}}}
 }
 
-// ValidateSpecGraph 校验工作流的图完整性（节点/边结构、无环、弱连通、输入引用
-// 可达），用于草稿保存——允许空图（画一半先保存）与字段未填全的半成品节点。
+// ValidateSpecGraph 校验工作流的图结构（节点/边结构、无环），用于草稿保存。
+// 允许空图、字段未填全的半成品节点、孤立节点与 condition 未连 default 边
+// （画一半先保存，与前端连线守卫只挡环对齐）。弱连通、condition default、
+// 输入引用可达等发布级完整性约束由 ValidateSpec 在校验/发布时强制。
 func ValidateSpecGraph(spec Spec) error {
-	err := validateGraph(spec)
+	err := validateGraphDraft(spec)
 	if err == nil {
 		return nil
 	}
 	message := strings.TrimSpace(strings.TrimPrefix(err.Error(), ErrInvalidSpec.Error()+":"))
 	return &GraphValidationError{Issues: []GraphIssue{{Path: "graph", Code: "invalid", Message: message}}}
+}
+
+// validateGraphDraft 是草稿保存的图校验：只强制图结构与无环，与前端 hasCycle
+// 对齐。Kahn 环检测对断连但各分量无环的图能访问全部节点（每个无环分量都有
+// 零入度根），不会误报；弱连通与 condition default 边是发布级约束，画一半时
+// 不应阻塞保存。
+func validateGraphDraft(spec Spec) error {
+	if len(spec.Nodes) == 0 {
+		return nil
+	}
+	if err := validateGraphLimits(spec); err != nil {
+		return err
+	}
+	nodes, err := indexNodes(spec)
+	if err != nil {
+		return err
+	}
+	adj, in, _, err := validateEdges(spec, nodes)
+	if err != nil {
+		return err
+	}
+	if err := validateAcyclic(nodes, adj, in); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateGraph(spec Spec) error {
