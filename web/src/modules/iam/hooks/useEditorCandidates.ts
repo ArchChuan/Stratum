@@ -3,8 +3,8 @@ import { useEffect, useState } from 'react';
 import { tenantApi } from '../api/tenant.api';
 import type { Member } from '../model/auth';
 
-// 可编辑人候选：租户内全部成员（含 member），白名单语义——管理员可把任意成员加入可编辑人。
-// 后端 editorEligible 已放宽到所有租户成员，此处不再按 role 过滤。
+// 可编辑人候选：租户全量成员（P2 白名单语义：可编辑人从管理员扩展为任意成员）。
+// 后端按页返回；当前租户规模下一页拉齐即可。
 export const useEditorCandidates = (): { candidates: Member[]; loading: boolean } => {
   const [candidates, setCandidates] = useState<Member[]>([]);
   const [loading, setLoading] = useState(false);

@@ -510,6 +510,18 @@ func (f *operationProposalRepoFake) ConsumeApproved(_ context.Context, _, finger
 	return false, nil
 }
 
+func (f *operationProposalRepoFake) ListByProposer(_ context.Context, _, proposerID string) ([]domain.OperationProposal, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]domain.OperationProposal, 0, len(f.proposals))
+	for _, p := range f.proposals {
+		if p.ProposerID == proposerID {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
 func usageKey(tenantID, agentID string, opType port.OperationType, day time.Time) string {
 	return tenantID + "|" + agentID + "|" + string(opType) + "|" + day.Format("2006-01-02")
 }

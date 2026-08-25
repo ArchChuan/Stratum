@@ -901,6 +901,30 @@ func (s *AgentService) SetEditors(ctx context.Context, id, actorID string, edito
 	return nil
 }
 
+// GrantEditorOnApproval grants editor whitelist access to editorID after an
+// approved grant_editor proposal. The approval executes as the operation gate
+// system actor: ownership was adjudicated by the human approver, and the
+// audit row records the system actor with the proposal carrying
+// proposer/reviewer provenance (same pattern as gated_self_modify's approved
+// replay). Already-whitelisted ids are a no-op (idempotent grant).
+func (s *AgentService) GrantEditorOnApproval(ctx context.Context, tenantID, agentID, editorID string) error {
+	if s.deps.ResourceEditorRepo == nil {
+		return fmt.Errorf("agent grant editor: editor repo not wired")
+	}
+	if editorID == "" {
+		return fmt.Errorf("agent grant editor: empty editor id")
+	}
+	// Atomic single-row grant (INSERT ... ON CONFLICT DO NOTHING, eligibility
+	// re-checked inside the repository transaction). This replaces the previous
+	// list-then-replace read-modify-write, which could drop a concurrent grant
+	// on the same resource (two approvals racing would clobber each other).
+	ctx = reqctx.WithSystemActor(ctx, operationGateActor)
+	if err := s.deps.ResourceEditorRepo.AddEditorForKind(ctx, tenantID, "agent", agentID, editorID, operationGateActor); err != nil {
+		return fmt.Errorf("agent grant editor: %w", err)
+	}
+	return nil
+}
+
 // deleteSideEffects removes per-agent side data before the row deletion.
 // Both stores are optional; their failures abort the delete.
 func (s *AgentService) deleteSideEffects(ctx context.Context, tenantID, id string) error {

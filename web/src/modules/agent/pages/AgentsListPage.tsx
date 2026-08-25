@@ -1,15 +1,12 @@
 import { Typography } from 'antd';
-import { useState } from 'react';
 
 import { AgentResultModal } from '../components/AgentResultModal';
-import { AgentSelfModifyModal } from '../components/AgentSelfModifyModal';
 import { AgentTaskModal } from '../components/AgentTaskModal';
 import { AgentsListFilters } from '../components/AgentsListFilters';
 import { AgentsListGrid } from '../components/AgentsListGrid';
 import { useAgentsListPage } from '../hooks/useAgentsListPage';
 
-import type { Agent } from '@/modules/agent/model/agent';
-import { useTenantRole } from '@/modules/iam';
+import { useAuth, useTenantRole } from '@/modules/iam';
 
 const { Title } = Typography;
 
@@ -37,7 +34,7 @@ export const AgentsListPage = () => {
     handleDeleteAgent,
   } = useAgentsListPage();
   const { isAdmin } = useTenantRole();
-  const [selfModifyAgent, setSelfModifyAgent] = useState<Agent | null>(null);
+  const { user } = useAuth();
 
   const closeResult = () => {
     setShowResultModal(false);
@@ -78,16 +75,11 @@ export const AgentsListPage = () => {
           setTaskModalVisible(true);
         }}
         onEdit={(a) => navigate(`/agents/${a.id}/edit`)}
-        onSelfModify={setSelfModifyAgent}
+        onView={(a) => navigate(`/agents/${a.id}/edit`)}
         onDelete={handleDeleteAgent}
         onCreate={() => navigate('/agents/create')}
         canManage={isAdmin}
-      />
-
-      <AgentSelfModifyModal
-        agent={selfModifyAgent}
-        open={selfModifyAgent !== null}
-        onClose={() => setSelfModifyAgent(null)}
+        userSub={user?.sub}
       />
 
       <AgentTaskModal

@@ -205,19 +205,16 @@ func (s *MCPService) recordConnectFailure(ctx context.Context, cfg *domain.Serve
 	}
 }
 
-// resolveConnectOp decides the upsert semantics of ConnectServer:
-// platform-managed rows are refused, existing rows take update semantics
-// (owner, or a granted editor — editors never grant delete rights) keeping
-// the original creator, and new rows make the creator the owner after an
-// ownership check. It returns the audit op, the update-path editor, and the
-// before-projection for the audit trail (untyped nil for create, so the
-// audit layer records no before-state).
+// resolveConnectOp decides the upsert semantics of ConnectServer: existing
+// rows take update semantics (owner, or a granted editor — editors never grant
+// delete rights) keeping the original creator, and new rows make the creator
+// the owner after an ownership check. It returns the audit op, the
+// update-path editor, and the before-projection for the audit trail (untyped
+// nil for create, so the audit layer records no before-state).
 func (s *MCPService) resolveConnectOp(ctx context.Context, cfg, stored *domain.ServerConfig, getErr error, actorID string) (string, string, any, error) {
 	op := auditdomain.ChangeOpCreate
-	switch {
-	case getErr == nil && isPlatformManaged(stored):
-		return op, "", nil, domain.ErrPlatformManagedServer
-	case getErr == nil:
+	switch getErr {
+	case nil:
 		ea, err := s.resolveUpdateActor(ctx, actorID, stored)
 		if err != nil {
 			return op, "", nil, err
@@ -307,9 +304,6 @@ func (s *MCPService) UpdateServer(ctx context.Context, cfg *domain.ServerConfig,
 	if err != nil {
 		return err
 	}
-	if isPlatformManaged(stored) {
-		return domain.ErrPlatformManagedServer
-	}
 	editorActor, err := s.resolveUpdateActor(ctx, actorID, stored)
 	if err != nil {
 		return err
@@ -382,21 +376,13 @@ func (s *MCPService) resolveUpdateActor(ctx context.Context, actorID string, cur
 	return actorID, nil
 }
 
-// loadManagedServer fetches a server config and rejects platform-managed rows.
+// loadManagedServer fetches a server config (platform-managed 无特判, P4).
 func (s *MCPService) loadManagedServer(ctx context.Context, serverID string) (*domain.ServerConfig, error) {
 	stored, err := s.manager.GetServerConfig(ctx, serverID)
 	if err != nil {
 		return nil, err
 	}
-	if isPlatformManaged(stored) {
-		return nil, domain.ErrPlatformManagedServer
-	}
 	return stored, nil
-}
-
-func isPlatformManaged(cfg *domain.ServerConfig) bool {
-	return cfg != nil && (cfg.SystemKey != "" ||
-		cfg.ManagementMode == "platform_managed")
 }
 
 func mergeProtectedConfig(stored, incoming *domain.ServerConfig) *domain.ServerConfig {

@@ -197,3 +197,40 @@ func (r *PgOperationProposalRepo) ConsumeApproved(
 	}
 	return consumed, nil
 }
+
+// ListByProposer returns every proposal raised by proposerID (any status),
+// newest first. It is the member-facing "my requests" view backing the
+// permission approvals tab; unlike ListPending it carries no reviewer gate.
+func (r *PgOperationProposalRepo) ListByProposer(ctx context.Context, tenantID, proposerID string) ([]domain.OperationProposal, error) {
+	var proposals []domain.OperationProposal
+	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT id, agent_id, target_agent_id, op_type, delegation,
+            max_daily_cost_usd, max_daily_executions, fingerprint, payload_summary, status,
+            proposer_id, reviewed_by, review_note, created_at, updated_at, resolved_at, expires_at
+            FROM operation_proposals
+            WHERE proposer_id = $1
+            ORDER BY created_at DESC`, proposerID)
+		if err != nil {
+			return fmt.Errorf("list proposals by proposer: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var p domain.OperationProposal
+			var summary []byte
+			if err := rows.Scan(
+				&p.ID, &p.AgentID, &p.TargetAgentID, &p.OpType, &p.Delegation,
+				&p.MaxDailyCostUSD, &p.MaxDailyExecutions, &p.Fingerprint, &summary,
+				&p.Status, &p.ProposerID, &p.ReviewedBy, &p.ReviewNote,
+				&p.CreatedAt, &p.UpdatedAt, &p.ResolvedAt, &p.ExpiresAt); err != nil {
+				return fmt.Errorf("scan proposal by proposer: %w", err)
+			}
+			p.PayloadSummary = append(json.RawMessage(nil), summary...)
+			proposals = append(proposals, p)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return proposals, nil
+}

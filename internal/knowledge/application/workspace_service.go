@@ -619,6 +619,11 @@ func (s *WorkspaceService) IngestUpload(
 // status badges + poll for terminal state. AllowedUserIDs/AllowedRoleIDs/
 // CreatedBy are only echoed to tenant admins/owners and the workspace creator
 // (access-matrix leak guard); members always receive empty values.
+// Restricted reports whether the current viewer is outside the document's
+// access whitelist: restricted documents stay metadata-discoverable (locked
+// rows members may apply for view access on) while content/preview/retrieval
+// remain denied by the VisibleDocIDs matrix. Platform workspaces and
+// admin/owner/creator viewers are never restricted.
 type DocumentView struct {
 	ID               string
 	Source           string
@@ -633,6 +638,7 @@ type DocumentView struct {
 	AllowedUserIDs   []string
 	AllowedRoleIDs   []string
 	CreatedBy        string
+	Restricted       bool
 }
 
 // canEchoACL reports whether viewerID may see the document access whitelist
@@ -655,11 +661,14 @@ func (s *WorkspaceService) canEchoACL(
 	return role == "owner" || role == "admin" || ws.CreatedBy == viewerID, nil
 }
 
-// ListDocuments returns the documents of a workspace visible to viewerID with
-// their ingest status. Whitelisted documents are filtered out for plain
-// members (VisibleDocIDs matrix); admins, tenant owners and the workspace
-// creator see everything. Used by GET /knowledge/workspaces/:name/documents
-// and polled by the UI.
+// ListDocuments returns the documents of a workspace with their ingest status.
+// Restricted documents (whitelist excludes the current viewer) stay
+// discoverable: their metadata is listed with Restricted=true so members can
+// tell the doc exists and apply for view access, while content/preview/
+// retrieval stay denied by the VisibleDocIDs matrix. Admins, tenant owners and
+// the workspace creator are unrestricted and never see Restricted=true.
+// Platform-managed workspaces are unrestricted for every viewer. Used by
+// GET /knowledge/workspaces/:name/documents and polled by the UI.
 func (s *WorkspaceService) ListDocuments(
 	ctx context.Context, tenantID, workspace, viewerID string,
 ) ([]DocumentView, error) {
@@ -678,34 +687,21 @@ func (s *WorkspaceService) ListDocuments(
 	if err != nil {
 		return nil, err
 	}
-	if !unrestricted {
-		docs = filterVisibleDocs(docs, visible)
-	}
 	echoACL, err := s.canEchoACL(ctx, tenantID, viewerID, ws)
 	if err != nil {
 		return nil, err
 	}
-	return buildDocumentViews(docs, echoACL), nil
+	return buildDocumentViews(docs, echoACL, unrestricted, visible), nil
 }
 
-// filterVisibleDocs keeps only documents whose ID appears in the visible set.
-func filterVisibleDocs(docs []*domain.Document, visible []string) []*domain.Document {
+// buildDocumentViews projects documents to the API view, echoing the access
+// whitelist only for management-scope viewers (D8) and flagging Restricted when
+// the current viewer is outside the whitelist (locked-but-discoverable row).
+func buildDocumentViews(docs []*domain.Document, echoACL, unrestricted bool, visible []string) []DocumentView {
 	allowed := make(map[string]struct{}, len(visible))
 	for _, id := range visible {
 		allowed[id] = struct{}{}
 	}
-	filtered := make([]*domain.Document, 0, len(docs))
-	for _, d := range docs {
-		if _, ok := allowed[d.ID]; ok {
-			filtered = append(filtered, d)
-		}
-	}
-	return filtered
-}
-
-// buildDocumentViews projects documents to the API view, echoing the access
-// whitelist only for management-scope viewers (D8).
-func buildDocumentViews(docs []*domain.Document, echoACL bool) []DocumentView {
 	views := make([]DocumentView, len(docs))
 	for i, d := range docs {
 		v := DocumentView{
@@ -724,6 +720,11 @@ func buildDocumentViews(docs []*domain.Document, echoACL bool) []DocumentView {
 			v.AllowedUserIDs = d.AllowedUserIDs
 			v.AllowedRoleIDs = d.AllowedRoleIDs
 			v.CreatedBy = d.CreatedBy
+		}
+		if !unrestricted {
+			if _, ok := allowed[d.ID]; !ok {
+				v.Restricted = true
+			}
 		}
 		views[i] = v
 	}

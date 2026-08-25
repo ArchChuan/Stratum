@@ -20,4 +20,10 @@ type ResourceEditorRepo interface {
 	// audit, when non-nil, is written in the SAME transaction (audit failure
 	// rolls the editor change back).
 	ReplaceEditors(ctx context.Context, tenantID, resourceID string, editorIDs []string, createdBy string, audit *auditdomain.ResourceChangeAuditEvent) error
+	// AddEditorForKind appends a single editor for an arbitrary resource kind
+	// in the shared resource_editors table (idempotent on duplicates via the
+	// composite primary key). It powers the grant_editor approval: agent and
+	// skill whitelist grants both land here (kind "agent" / "skill"), with
+	// eligibility re-validated inside the transaction (member+, fail closed).
+	AddEditorForKind(ctx context.Context, tenantID, kind, resourceID, editorID, createdBy string) error
 }
