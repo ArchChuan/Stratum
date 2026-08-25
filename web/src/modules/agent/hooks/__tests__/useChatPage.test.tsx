@@ -1,7 +1,10 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { message } from 'antd';
+import type { MutableRefObject } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { conversationApi } from '../../api/agent.api';
+import type { ChatMessage } from '../../model/agent';
 import type { StreamSnapshot } from '../ChatStreamContext';
 import { useChatPage } from '../useChatPage';
 
@@ -439,6 +442,48 @@ describe('useChatPage tool approvals', () => {
     await waitFor(() => expect(result.current.resumeBlocked).toBe(true), { timeout: 5000 });
     expect(result.current.resumeBlockedLabel).toBe('已多次审批未通过，是否让 Agent 继续？');
     expect(mocks.stream.startStream).toHaveBeenCalledTimes(1);
+  });
+
+  // 刷新恢复路径:setMessages 与 setLoadingMsgs(false) 被 await getActiveExecution 分隔成
+  // 两批,第一批(loadingMsgs 仍 true)消息未挂载导致滚动无效——滚动 effect 需靠
+  // loadingMsgs true→false 边沿补触发锚定。jsdom 的 rAF 由 Vitest pretendToBeVisual
+  // 提供,waitFor 轮询可 flush 双 rAF。
+  it('anchors only after loadingMsgs flips to false (refresh-style load)', async () => {
+    mocks.listAgents.mockResolvedValue([{ id: 'system', name: '平台使用小助手' }]);
+    mocks.listConversations.mockResolvedValue([{ id: 'conversation-1', name: 'Conversation' }]);
+    mocks.getActiveExecution.mockResolvedValue(null);
+    // clearAllMocks 保留实现：上一测试的 getStreamState.mockReturnValue 会泄漏到此，
+    // 其 conversationId 命中当前会话会触发 stream-restore 分支多 append 一条消息。
+    // 显式复位为无流态（conversationId null）走纯加载分支。
+    mocks.stream.getStreamState.mockReturnValue({
+      streaming: false, conversationId: null, userQuery: null, content: '',
+      done: false, result: null, error: null, approval: null, delegateStatus: null, executionId: null, conflict: false,
+    });
+    const msgs = [{ id: 'm1', role: 'assistant', content: 'hello' }] as unknown as ChatMessage[];
+    vi.mocked(conversationApi.messages).mockResolvedValueOnce(msgs);
+
+    const { result } = renderHook(() => useChatPage());
+    // 记录每次滚动调用时 loadingMsgs 的状态：修复的核心是「loadingMsgs 仍 true 的
+    // 消息批次不锚定」（消息未挂载、滚动无效），true→false 边沿才补触发。若锚定发生
+    // 在 true 批次（旧实现行为），即是无效滚动——测试通过该断言区分修复是否生效。
+    const loadingAtScroll: (boolean | undefined)[] = [];
+    const scrollIntoView = vi.fn(() => {
+      loadingAtScroll.push(result.current.loadingMsgs);
+    });
+    // 在加载 effect 触发前注入 fake bottomRef(滚动 effect 需 bottomRef 存在才锚定)。
+    (result.current.bottomRef as MutableRefObject<HTMLDivElement>).current = {
+      scrollIntoView,
+    } as unknown as HTMLDivElement;
+
+    await waitFor(() => expect(result.current.selectedConv).toBe('conversation-1'));
+    await waitFor(() => expect(result.current.messages).toHaveLength(1));
+    await waitFor(() => expect(result.current.loadingMsgs).toBe(false));
+    // 消息加载完成 + getActiveExecution(null) + setLoadingMsgs(false) 后,滚动 effect 以
+    // true→false 边沿补触发锚定(双 rAF 由真实定时器触发)。
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+    // 所有锚定必须发生在 loadingMsgs=false 之后;在 true 批次滚动(旧行为)即失败。
+    expect(loadingAtScroll).not.toHaveLength(0);
+    expect(loadingAtScroll.every((l) => l === false)).toBe(true);
   });
 
 
