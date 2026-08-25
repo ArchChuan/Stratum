@@ -7,7 +7,7 @@ import (
 )
 
 // knowledgeExecutor runs the RAG single-point evaluation over the real HTTP
-// server, mirroring e2e-rag-check's pipeline but returning the unified result.
+// server, reusing the migrated knowledge pipeline and returning the unified result.
 type knowledgeExecutor struct{}
 
 func init() {
@@ -36,7 +36,7 @@ func (e *knowledgeExecutor) Execute(ctx context.Context, o options, p point) (re
 	client := newHTTPClient(o.baseURL, token)
 	if err := client.health(ctx); err != nil {
 		// Server-down or auth failures surface here before any provisioning,
-		// mirroring rag-check's preflight gate (exit 2).
+		// mirroring the legacy preflight gate (exit 2).
 		return res, &infraError{fmt.Errorf("preflight: %w", err)}
 	}
 	// The workspace name is the resource key across the knowledge HTTP routes

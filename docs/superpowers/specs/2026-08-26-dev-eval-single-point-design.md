@@ -9,7 +9,7 @@
 
 Stratum 有 4 类可评测资源：**skill / agent / mcp / knowledge**。它们的参数（模型、工具集、指令、分块策略、embedding）是**可变的**，任何一处的改动都可能引入回归——但当前没有一套贯穿「开发 → 测试 → CI」的统一单点评测手段：
 
-- 已有 `cmd/e2e-rag-check`：RAG 检索的独立 golden 评测 CLI（golden 数据集 + 基线对比 + 显式录制，退出码 0/1/2），但只覆盖 knowledge 检索一个维度。
+- 原有独立的 RAG 检索 golden 评测 CLI（已并入本统一 CLI）：golden 数据集 + 基线对比 + 显式录制，退出码 0/1/2，但只覆盖 knowledge 检索一个维度。
 - 已有 `internal/evaluation`：**运行态**针对可变配置做优化的评测运行时（suite/baseline/run/worker/experiment/promotion）——解决「线上配置该不该换」的决策问题，与「开发期防止单点回归」目标不同，**不复用**。
 - 测试/验收流程（`stratum-e2e-development` → 现为**测试 agent 驱动的 PR 前验收**）对 RAG 检索有 R3 风险触发的非阻塞抽查，但不是全部资源的正式 gate。
 
@@ -41,7 +41,7 @@ Stratum 有 4 类可评测资源：**skill / agent / mcp / knowledge**。它们�
 
 ### 3.1 统一 CLI：`cmd/e2e-eval-check`
 
-推广 `cmd/e2e-rag-check` 的独立 golden 模式到全部资源，统一入口 + `--kind` 分派：
+推广既有独立 golden 评测模式到全部资源，统一入口 + `--kind` 分派：
 
 ```bash
 cmd/e2e-eval-check --kind <skill|agent|mcp|knowledge> \
@@ -88,17 +88,17 @@ baseline: baselines/<point-key>.json
 
 | kind | executor 执行路径 | 断言模式 | 指标 |
 |---|---|---|---|
-| knowledge | 复用 `e2e-rag-check` 逻辑：provision 临时 workspace → 灌入源文档 → 走 HTTP `/knowledge/query` → 检索评估 | 标注相关/引用/无答案 | recall@k、precision@k、mrr、ndcg、relevant_rate、citation_pass_rate、no_answer_pass_rate |
+| knowledge | provision 临时 workspace → 灌入源文档 → 走 HTTP `/knowledge/query` → 检索评估 | 标注相关/引用/无答案 | recall@k、precision@k、mrr、ndcg、relevant_rate、citation_pass_rate、no_answer_pass_rate |
 | mcp | 走 HTTP 调用 MCP 工具，对工具返回做字符串断言 | exact / contains / regex | pass_rate、avg_latency、avg_cost |
 | skill / agent | 走 HTTP 执行（`/skills`、`/agents/:id/execute`），对输出做断言或 judge | exact / contains / regex / judge | pass_rate、judge_mean、avg_latency、avg_cost |
 
 ### 3.4 knowledge executor 迁移策略
 
-`e2e-rag-check` 的 knowledge 逻辑**先并存、后删除**迁移进 `e2e-eval-check --kind knowledge`：
+原独立 CLI 的 knowledge 逻辑**先并存、后删除**迁移进 `e2e-eval-check --kind knowledge`：
 
-1. 新 CLI 的 knowledge executor 复用 rag-check 的 HTTP client、指标纯函数、报告结构（不重写）。
+1. 新 CLI 的 knowledge executor 复用已迁移的 HTTP client、指标纯函数、报告结构（不重写）。
 2. 迁移期间两个入口并存；skill / 测试 agent 的引用点切到新 CLI。
-3. 迁移完成后删除 `cmd/e2e-rag-check`，存量 `test/e2e/knowledge/retrieval/` 数据集原位接管，不搬移。
+3. 迁移完成后删除旧 CLI，存量 `test/e2e/knowledge/retrieval/` 数据集原位接管，不搬移。
 
 ## 4. 评估方法与指标
 
@@ -197,17 +197,17 @@ load dataset → provision（临时资源/workspace，probe 外部依赖）→ e
 
 ## 7. 报告格式
 
-统一 JSON Report（从 `e2e-rag-check` 的 Report 推广到全 kind）：
+统一 JSON Report（从知识评测的 Report 推广到全 kind）：
 
 - 继承现有字段：`status / snapshot / config / provider / cases / aggregate / baseline / baseline_delta / warnings / non_comparable / skip_reason / residual_entities / evidence`。
 - **新增字段**：`kind`、`point`、`accepted_regressions[]`（从基线文件镜像当前已知接受的回归，权威落点是基线文件——见 5.4 第 2 条）。
 - 路径：`tmp/eval-reports/<point>-<commit>.json`。
 - 定位：local report 是 developer audit assertion，不是 GitHub trusted status（与 `.test/verification.yaml` 的 authority 模型一致）。
-- 序列化约束：数组字段 normalize 为空数组，不 emit `null`（沿用 rag-check 的 schema 约束）。
+- 序列化约束：数组字段 normalize 为空数组，不 emit `null`（沿用既有评测报告的 schema 约束）。
 
 ## 8. 测试策略（评测工具自身的测试）
 
-复用 `e2e-rag-check` 已验证的测试模式，不另起炉灶：
+复用知识评测已验证的测试模式，不另起炉灶：
 
 - **复用**：fake retriever mock HTTP、纯指标函数表驱动手算、fail-closed gate 测试、golden dataset 加载校验。
 - **新增**：`--kind` 分派与 flag 解析、各 kind executor 的 mock、`accepted_regressions` 写入校验、统一 Report 序列化。
@@ -240,7 +240,7 @@ PR 前验收由测试 agent 驱动，其提示词需加入评测执行与治理�
 ### git 交付项（随 PR 合入）
 
 1. `cmd/e2e-eval-check/`：统一 CLI（flag 解析、`--kind` 分派、统一 Report、基线对比、fail-closed gate、`accepted_regressions`）。
-2. knowledge executor 复用并迁移 `e2e-rag-check` 逻辑；迁移完成后删除 `cmd/e2e-rag-check`。
+2. knowledge executor 复用并迁移原独立 CLI 逻辑；迁移完成后删除旧 CLI。
 3. `test/e2e/<kind>/points/`、`test/e2e/<kind>/baselines/` 目录与首个 point 示例。
 4. `test/e2e/mcp/`、`test/e2e/skill/`、`test/e2e/agent/` 的首期 golden 评测集（按本设计第 4 节格式）。
 5. `scripts/quality/test-verify-before-pr.sh`：在 run-planned-checks 后注入评测 step。
@@ -259,4 +259,4 @@ PR 前验收由测试 agent 驱动，其提示词需加入评测执行与治理�
 - 测试态：PR 前验收自动评测变更相关资源的全部单点；回归时阻断并提供三选一；接受回归需显式 reason。
 - CI：mcp + knowledge 确定性评测成为硬门槛，`not_run` 显式可查；skill/agent 不因真实 LLM 依赖造成 CI flaky。
 - 评测集：资源配置或产品行为变更时，`non_comparable` 或拦截显式触发，无静默过时；基线重录全部走 `--record-baseline --confirm-record`。
-- 迁移：`cmd/e2e-rag-check` 逻辑完整迁入 `e2e-eval-check --kind knowledge` 后，旧 CLI 删除，存量数据集原位接管，无行为回归。
+- 迁移：原独立 CLI 逻辑完整迁入 `e2e-eval-check --kind knowledge` 后，旧 CLI 删除，存量数据集原位接管，无行为回归。

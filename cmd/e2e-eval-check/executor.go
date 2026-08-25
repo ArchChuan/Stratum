@@ -8,7 +8,7 @@ import (
 // infraError marks failures that are the environment's fault (server down,
 // auth misconfigured, provider unavailable). Executors construct it; the
 // pipeline maps it to exit code 2 via classifyError. (Task 2's client
-// migration reuses this definition and removes rag-check's duplicate.)
+// migration consolidated this definition and removed the legacy duplicate.)
 type infraError struct{ err error }
 
 func (e *infraError) Error() string { return e.err.Error() }
