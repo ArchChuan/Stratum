@@ -323,3 +323,76 @@ func TestDefinitionService_Create_WritesChangeAudit(t *testing.T) {
 	require.Equal(t, "u-1", ev.ActorID)
 	require.JSONEq(t, `{"id":"def-1","name":"n","description":"d"}`, string(ev.After))
 }
+
+// skillBindingStub 是 SkillBindingResolver 的测试桩：按 agentID 返回允许列表，
+// err 非空时查询失败（用于 fail-closed 验证）。
+type skillBindingStub struct {
+	allowed map[string][]string
+	err     error
+}
+
+func (s *skillBindingStub) AgentAllowedSkills(_ context.Context, _, agentID string) ([]string, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.allowed[agentID], nil
+}
+
+func skillSpec(skillID string) domain.Spec {
+	return domain.Spec{Nodes: []domain.Node{{ID: "s", Type: domain.NodeTypeSkill, AgentID: "agent-1", SkillID: skillID}}}
+}
+
+func TestDefinitionService_Create_RejectsCyclicSpec(t *testing.T) {
+	store := newMemoryStore()
+	svc := application.NewDefinitionService(store, store, func() string { return "def-1" })
+	cyclic := workflowSpec()
+	cyclic.Edges = append(cyclic.Edges, domain.Edge{From: "two", To: "one"})
+	_, err := svc.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "n", Spec: cyclic}, "u-1")
+	require.ErrorIs(t, err, domain.ErrInvalidSpec)
+}
+
+func TestDefinitionService_Update_RejectsCyclicSpec(t *testing.T) {
+	store := newMemoryStore()
+	svc := application.NewDefinitionService(store, store, func() string { return "def-1" })
+	created, err := svc.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "n", Spec: workflowSpec()}, "u-1")
+	require.NoError(t, err)
+	cyclic := workflowSpec()
+	cyclic.Edges = append(cyclic.Edges, domain.Edge{From: "two", To: "one"})
+	_, err = svc.Update(context.Background(), "tenant-1", created.ID, application.UpdateDefinitionCommand{Name: "n", Spec: cyclic, ExpectedRevision: created.Revision}, "u-1")
+	require.ErrorIs(t, err, domain.ErrInvalidSpec)
+}
+
+func TestDefinitionService_SkipsBindingCheckWithoutResolver(t *testing.T) {
+	store := newMemoryStore()
+	svc := application.NewDefinitionService(store, store, func() string { return "def-1" })
+	// resolver 未注入（nil）时绑定校验跳过，skill 草稿可保存。
+	_, err := svc.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "n", Spec: skillSpec("skill-1")}, "u-1")
+	require.NoError(t, err)
+}
+
+func TestDefinitionService_ValidateSkillBindings(t *testing.T) {
+	tests := []struct {
+		name        string
+		allowed     map[string][]string
+		resolverErr error
+		wantErr     bool
+	}{
+		{name: "enabled skill passes", allowed: map[string][]string{"agent-1": {"skill-1"}}},
+		{name: "empty allowed skills rejects", allowed: map[string][]string{"agent-1": {}}, wantErr: true},
+		{name: "skill not enabled rejects", allowed: map[string][]string{"agent-1": {"skill-2"}}, wantErr: true},
+		{name: "resolver failure propagates", allowed: map[string][]string{}, resolverErr: errors.New("agent query failed"), wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newMemoryStore()
+			svc := application.NewDefinitionService(store, store, func() string { return "def-1" })
+			svc.SetSkillBindingResolver(&skillBindingStub{allowed: tc.allowed, err: tc.resolverErr})
+			_, err := svc.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "n", Spec: skillSpec("skill-1")}, "u-1")
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}

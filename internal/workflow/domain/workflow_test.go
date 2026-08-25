@@ -537,3 +537,40 @@ func TestValidateNodeRejectsNonFiniteOrHugePosition(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateSpecGraphAllowsEmptyAndIncompleteDrafts(t *testing.T) {
+	// 草稿校验容忍空图（画一半先保存）、字段未填全的半成品节点、孤立节点与
+	// condition 未连 default 边；弱连通与 condition default 是发布级约束。
+	for _, draft := range []domain.Spec{
+		{},
+		{Nodes: []domain.Node{{ID: "mcp", Type: domain.NodeTypeMCPTool}}},
+		{Nodes: []domain.Node{{ID: "agent", Type: domain.NodeTypeAgent, AgentID: ""}}},
+		// 两个未连线的节点：断连图，草稿放行（画一半先保存）。
+		{Nodes: []domain.Node{
+			{ID: "a", Type: domain.NodeTypeAgent, AgentID: "a"},
+			{ID: "b", Type: domain.NodeTypeAgent, AgentID: "b"},
+		}},
+		// condition 节点未连 default 边：草稿放行。
+		{Nodes: []domain.Node{{ID: "condition", Type: domain.NodeTypeCondition, Condition: `$.ok == true`}}},
+	} {
+		require.NoError(t, domain.ValidateSpecGraph(draft))
+	}
+}
+
+func TestValidateSpecGraphRejectsCycle(t *testing.T) {
+	cycle := domain.Spec{Nodes: []domain.Node{
+		{ID: "a", Type: domain.NodeTypeAgent, AgentID: "a"},
+		{ID: "b", Type: domain.NodeTypeAgent, AgentID: "b"},
+	}, Edges: []domain.Edge{{From: "a", To: "b"}, {From: "b", To: "a"}}}
+	require.ErrorIs(t, domain.ValidateSpecGraph(cycle), domain.ErrInvalidSpec)
+}
+
+func TestValidateSkillBinding(t *testing.T) {
+	// 空 allowedSkills 表示 agent 未启用任何技能，引用任何 skill 都被拒绝。
+	require.ErrorIs(t, domain.ValidateSkillBinding(nil, "skill-1"), domain.ErrInvalidSpec)
+	require.ErrorIs(t, domain.ValidateSkillBinding([]string{}, "skill-1"), domain.ErrInvalidSpec)
+	// 不在允许列表内拒绝。
+	require.ErrorIs(t, domain.ValidateSkillBinding([]string{"skill-2"}, "skill-1"), domain.ErrInvalidSpec)
+	// 命中允许列表通过。
+	require.NoError(t, domain.ValidateSkillBinding([]string{"skill-1", "skill-2"}, "skill-2"))
+}

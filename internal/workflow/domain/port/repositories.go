@@ -154,3 +154,9 @@ type ControlRepository interface {
 type AgentExecutor interface {
 	ExecuteAgent(context.Context, string, string, string) (output, traceID string, err error)
 }
+
+// SkillBindingResolver 提供 agent 已挂载的技能（allowedSkills），用于校验 workflow
+// 的 skill 节点绑定：只有选定 agent 实际启用的技能才能被 workflow 引用。
+type SkillBindingResolver interface {
+	AgentAllowedSkills(context.Context, string, string) ([]string, error)
+}

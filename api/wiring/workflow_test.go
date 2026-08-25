@@ -22,6 +22,11 @@ type workflowAgentServiceFake struct {
 	tokens        []string
 	result        *agentapp.AgentResult
 	scenarioCalls int
+	allowedSkills []string
+}
+
+func (f *workflowAgentServiceFake) Get(_ context.Context, _ string) (agentapp.AgentDTO, error) {
+	return agentapp.AgentDTO{AllowedSkills: f.allowedSkills}, nil
 }
 
 func (f *workflowAgentServiceFake) Execute(_ context.Context, agentID string, req agentapp.ExecRequest, meta agentapp.ExecMeta) (*agentapp.AgentResult, int, error) {
@@ -125,6 +130,14 @@ func TestWorkflowSkillExecutorExecutesBuiltinSkill(t *testing.T) {
 	require.Equal(t, "revision-9", output)
 	require.Equal(t, "query", agents.req.Query)
 	require.Equal(t, 1, agents.scenarioCalls, "builtin skill must reach ExecuteSkillScenario")
+}
+
+func TestWorkflowSkillBindingResolverReturnsAgentAllowedSkills(t *testing.T) {
+	agents := &workflowAgentServiceFake{allowedSkills: []string{"skill-1", "skill-2"}}
+	resolver := workflowSkillBindingResolver{agents: agents}
+	allowed, err := resolver.AgentAllowedSkills(context.Background(), "tenant-1", "agent-1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"skill-1", "skill-2"}, allowed)
 }
 
 type workflowMCPPolicyFake struct{ risk mcpdomain.ToolRiskLevel }

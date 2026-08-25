@@ -108,6 +108,36 @@ describe('workflow editor reducer', () => {
     ]);
   });
 
+  it('renders direction arrow markers on every derived edge', () => {
+    let state = workflowEditorReducer(createInitialEditorState(), insertAgent);
+    state = workflowEditorReducer(state, {
+      type: 'node.insert', nodeId: 'node-skill', nodeType: 'skill', position: { x: 360, y: 120 },
+    });
+    state = workflowEditorReducer(state, {
+      type: 'edge.connect', edgeId: 'edge-1', from: 'node-agent', to: 'node-skill',
+    });
+    expect(toFlowEdges(state)).toEqual([
+      expect.objectContaining({ id: 'edge-1', markerEnd: { type: 'arrowclosed' } }),
+    ]);
+  });
+
+  it('rejects edge.connect actions that would create a cycle', () => {
+    let state = workflowEditorReducer(createInitialEditorState(), insertAgent);
+    state = workflowEditorReducer(state, {
+      type: 'node.insert', nodeId: 'node-skill', nodeType: 'skill', position: { x: 360, y: 120 },
+    });
+    state = workflowEditorReducer(state, {
+      type: 'edge.connect', edgeId: 'edge-1', from: 'node-agent', to: 'node-skill',
+    });
+    const before = state;
+    // 反向连边会成环：纯守卫直接返回原 state，不落边不标脏。
+    const rejected = workflowEditorReducer(state, {
+      type: 'edge.connect', edgeId: 'edge-2', from: 'node-skill', to: 'node-agent',
+    });
+    expect(rejected).toBe(before);
+    expect(rejected.spec.edges).toHaveLength(1);
+  });
+
   it('does not mutate the spec when deriving flow edges', () => {
     let state = workflowEditorReducer(createInitialEditorState(), insertAgent);
     state = workflowEditorReducer(state, {
