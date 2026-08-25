@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -23,9 +22,7 @@ type skillRevisionService interface {
 	GetWorkspace(context.Context, string, string) (skillapp.SkillWorkspaceView, error)
 	ListSkills(context.Context) ([]skillapp.SkillProduct, error)
 	DeleteSkill(context.Context, string, string) error
-	UpdateCapability(context.Context, string, skillapp.UpdateCapabilityInput) (skillapp.SkillRevision, error)
-	UpdateActivation(context.Context, string, skillapp.UpdateActivationInput) (skillapp.SkillRevision, error)
-	UpdateInstructionBundle(context.Context, string, skillapp.UpdateInstructionBundleInput) (skillapp.SkillRevision, error)
+	UpdateDraftBundle(context.Context, string, string, skillapp.UpdateDraftBundleInput) (skillapp.SkillWorkspaceView, error)
 	PublishDraft(context.Context, string, string) (skillapp.SkillRevision, error)
 	SetEditors(context.Context, string, string, []string) error
 }
@@ -47,10 +44,8 @@ func (h *SkillHandler) CreateSkill(c *gin.Context) {
 		return
 	}
 	view, err := h.service.CreateSkillDraft(c.Request.Context(), skillapp.CreateSkillDraftInput{
-		Name: req.Name, Goal: req.Goal, WhenToUse: req.WhenToUse,
-		SampleInput: req.SampleInput, ExpectedOutput: req.ExpectedOutput,
-		Instructions: req.Instructions,
-		ActorID:      actorID, Editors: req.Editors,
+		Name: req.Name, Description: req.Description, Instructions: req.Instructions,
+		ActorID: actorID, Editors: req.Editors,
 	})
 	if err != nil {
 		_ = c.Error(err)
@@ -75,8 +70,6 @@ func (h *SkillHandler) GetAllSkills(c *gin.Context) {
 func (h *SkillHandler) GetSkill(c *gin.Context) { h.GetSkillWorkspace(c) }
 
 func (h *SkillHandler) GetSkillWorkspace(c *gin.Context) {
-	// GetWorkspace 按 actor 判定内置 skill 的 Instructions 可见性;未登录时用
-	// 空 actor(内置 skill 剥离,非内置不受影响)。
 	actorID, _ := userIDFromCtx(c)
 	view, err := h.service.GetWorkspace(c.Request.Context(), c.Param("id"), actorID)
 	if err != nil {
@@ -86,8 +79,11 @@ func (h *SkillHandler) GetSkillWorkspace(c *gin.Context) {
 	c.JSON(http.StatusOK, workspaceToResponse(view))
 }
 
-func (h *SkillHandler) UpdateDraftCapability(c *gin.Context) {
-	var req gen.UpdateSkillCapabilityRequest
+// UpdateDraft saves the draft's name/description/instructions bundle. The
+// editor actor's qualification is re-validated inside the write transaction.
+// Direct edits carry no baseline content hash (empty expectedContentHash).
+func (h *SkillHandler) UpdateDraft(c *gin.Context) {
+	var req gen.UpdateSkillDraftRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -97,58 +93,16 @@ func (h *SkillHandler) UpdateDraftCapability(c *gin.Context) {
 		respondMissingUser(c)
 		return
 	}
-	revision, err := h.service.UpdateCapability(c.Request.Context(), c.Param("id"), skillapp.UpdateCapabilityInput{
-		Goal: req.Goal, WhenToUse: req.WhenToUse, InputSpec: req.InputSpec, OutputSpec: req.OutputSpec,
-		ActorID: actorID,
-	})
+	view, err := h.service.UpdateDraftBundle(c.Request.Context(), c.Param("id"), "",
+		skillapp.UpdateDraftBundleInput{
+			Name: req.Name, Description: req.Description, Instructions: req.Instructions,
+			ActorID: actorID,
+		})
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, revisionToResponse(revision))
-}
-
-func (h *SkillHandler) UpdateDraftActivation(c *gin.Context) {
-	var req gen.UpdateSkillActivationRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
-		return
-	}
-	actorID, ok := userIDFromCtx(c)
-	if !ok {
-		respondMissingUser(c)
-		return
-	}
-	revision, err := h.service.UpdateActivation(c.Request.Context(), c.Param("id"), skillapp.UpdateActivationInput{
-		Name: req.Name, Description: req.Description, InputSchema: req.InputSchema,
-		OutputSchema: req.OutputSchema, Confirmed: req.Confirmed, ActorID: actorID,
-	})
-	if err != nil {
-		_ = c.Error(err)
-		return
-	}
-	c.JSON(http.StatusOK, revisionToResponse(revision))
-}
-
-func (h *SkillHandler) UpdateDraftInstructionBundle(c *gin.Context) {
-	var req gen.UpdateSkillInstructionBundleRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
-		return
-	}
-	actorID, ok := userIDFromCtx(c)
-	if !ok {
-		respondMissingUser(c)
-		return
-	}
-	revision, err := h.service.UpdateInstructionBundle(c.Request.Context(), c.Param("id"), skillapp.UpdateInstructionBundleInput{
-		Instructions: req.Instructions, ActorID: actorID,
-	})
-	if err != nil {
-		_ = c.Error(err)
-		return
-	}
-	c.JSON(http.StatusOK, revisionToResponse(revision))
+	c.JSON(http.StatusOK, revisionToResponse(view.Draft))
 }
 
 func (h *SkillHandler) PublishSkill(c *gin.Context) {
@@ -179,7 +133,7 @@ func (h *SkillHandler) DeleteSkill(c *gin.Context) {
 }
 
 // SetSkillEditors replaces the granted editor set of a skill resource
-// (creator/owner only, editor ids must hold role admin/owner).
+// (creator/owner only; any tenant member may be granted editor, whitelist).
 func (h *SkillHandler) SetSkillEditors(c *gin.Context) {
 	var req struct {
 		EditorIDs []string `json:"editorIds" binding:"required"`
@@ -217,19 +171,7 @@ func revisionToResponse(value skillapp.SkillRevision) gen.SkillRevisionResponse 
 	//nolint:gosec // 版本号不可能溢出 int32(proto 契约)
 	return gen.SkillRevisionResponse{
 		ID: value.ID, SkillID: value.SkillID, RevisionNo: int32(value.RevisionNo), Status: string(value.Status),
-		Capability: structToMap(value.Capability), ActivationContract: structToMap(value.ActivationContract),
+		Name: value.Name, Description: value.Description,
 		Instructions: value.Instructions, PublishChecks: value.PublishChecks,
 	}
-}
-
-func structToMap(value any) map[string]any {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return map[string]any{}
-	}
-	var out map[string]any
-	if err := json.Unmarshal(data, &out); err != nil {
-		return map[string]any{}
-	}
-	return out
 }

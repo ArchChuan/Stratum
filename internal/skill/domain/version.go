@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 )
 
@@ -18,30 +17,10 @@ const (
 	VersionStatusDeprecated VersionStatus = "deprecated"
 )
 
-type Capability struct {
-	Goal       string              `json:"goal"`
-	WhenToUse  string              `json:"whenToUse"`
-	InputSpec  string              `json:"inputSpec,omitempty"`
-	OutputSpec string              `json:"outputSpec,omitempty"`
-	Examples   []CapabilityExample `json:"examples,omitempty"`
-}
-
-type CapabilityExample struct {
-	Input          any `json:"input"`
-	ExpectedOutput any `json:"expectedOutput"`
-}
-
-// ActivationContract 对齐外部 skill 范式:name+description 是唯一必填;
-// InputSchema/OutputSchema 为可选(外部只需 name+description,平台不强制),
-// Confirmed 保留为作者确认契约就绪的发布门禁。
-type ActivationContract struct {
-	Name         string         `json:"name"`
-	Description  string         `json:"description"`
-	InputSchema  map[string]any `json:"inputSchema,omitempty"`
-	OutputSchema map[string]any `json:"outputSchema,omitempty"`
-	Confirmed    bool           `json:"confirmed"`
-}
-
+// SkillRevision is a versioned snapshot of a skill's editable surface. The
+// revision carries its own name/description/instructions so each version is
+// self-contained; the skills product row only mirrors the active values for
+// list display.
 type SkillRevision struct {
 	ID                 string
 	SkillID            string
@@ -50,10 +29,10 @@ type SkillRevision struct {
 	Status             VersionStatus
 	Source             string
 	ContentHash        string
-	GenerationMetadata map[string]any
-	Capability         Capability
-	ActivationContract ActivationContract
+	Name               string
+	Description        string
 	Instructions       string
+	GenerationMetadata map[string]any
 	PublishChecks      map[string]any
 	// CreatedBy traces who authored this revision (draft author, not ownership).
 	CreatedBy string
@@ -61,13 +40,13 @@ type SkillRevision struct {
 
 func (v SkillRevision) ComputeContentHash() (string, error) {
 	payload := struct {
-		Capability         Capability         `json:"capability"`
-		ActivationContract ActivationContract `json:"activation_contract"`
-		Instructions       string             `json:"instructions"`
+		Name         string `json:"name"`
+		Description  string `json:"description"`
+		Instructions string `json:"instructions"`
 	}{
-		Capability:         v.Capability,
-		ActivationContract: v.ActivationContract,
-		Instructions:       v.Instructions,
+		Name:         v.Name,
+		Description:  v.Description,
+		Instructions: v.Instructions,
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
@@ -77,35 +56,12 @@ func (v SkillRevision) ComputeContentHash() (string, error) {
 	return hex.EncodeToString(hash[:]), nil
 }
 
-var activationNamePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]{0,63}$`)
-
-func (c ActivationContract) Validate() error {
-	if !activationNamePattern.MatchString(c.Name) {
-		return fmt.Errorf("invalid activation name: %s: %w", c.Name, ErrSkillNotPublishable)
+func (v SkillRevision) ValidatePublishable() error {
+	if strings.TrimSpace(v.Name) == "" {
+		return fmt.Errorf("skill name required: %w", ErrSkillNotPublishable)
 	}
-	if strings.TrimSpace(c.Description) == "" {
-		return fmt.Errorf("activation description required: %w", ErrSkillNotPublishable)
-	}
-	// InputSchema/OutputSchema 不再强制为 {"type":"object"}——外部 skill 范式
-	// 只需 name+description,契约负担向外部看齐。
-	if !c.Confirmed {
-		return fmt.Errorf("activation contract not confirmed: %w", ErrSkillNotPublishable)
-	}
-	return nil
-}
-
-func (v SkillRevision) ValidatePublishable(enabledTestCount int) error {
-	if strings.TrimSpace(v.Capability.Goal) == "" {
-		return fmt.Errorf("capability goal required: %w", ErrSkillNotPublishable)
-	}
-	if strings.TrimSpace(v.Capability.WhenToUse) == "" {
-		return fmt.Errorf("capability whenToUse required: %w", ErrSkillNotPublishable)
-	}
-	if len(v.Capability.Examples) == 0 && enabledTestCount == 0 {
-		return fmt.Errorf("at least one example or enabled test case required: %w", ErrSkillNotPublishable)
-	}
-	if err := v.ActivationContract.Validate(); err != nil {
-		return err
+	if strings.TrimSpace(v.Description) == "" {
+		return fmt.Errorf("skill description required: %w", ErrSkillNotPublishable)
 	}
 	if strings.TrimSpace(v.Instructions) == "" {
 		return fmt.Errorf("instructions required: %w", ErrSkillNotPublishable)

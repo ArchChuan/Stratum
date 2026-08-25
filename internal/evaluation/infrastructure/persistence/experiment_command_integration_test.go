@@ -356,10 +356,10 @@ func seedCommandExperimentRevisions(
 		t.Fatal(err)
 	}
 	_, err = pool.Exec(ctx, `INSERT INTO `+schema+`.skill_revisions
-		(id,skill_id,status,source,content_hash,generation_metadata,capability,activation_contract,
-		 instructions,requirements,publish_checks)
-		VALUES ($2,$1,'published','manual','stable-hash','{}','{}','{}','stable','{}','{}'),
-		       ($3,$1,'candidate','optimization','canary-hash','{}','{}','{}','canary','{}','{}')`,
+		(id,skill_id,status,source,content_hash,generation_metadata,
+		 name,description,instructions,publish_checks)
+		VALUES ($2,$1,'published','manual','stable-hash','{}','skill','test','stable','{}'),
+		       ($3,$1,'candidate','optimization','canary-hash','{}','skill','test','canary','{}')`,
 		experiment.ResourceID, experiment.StableRevisionID, experiment.CanaryRevisionID)
 	if err != nil {
 		t.Fatal(err)

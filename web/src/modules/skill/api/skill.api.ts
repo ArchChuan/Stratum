@@ -6,6 +6,7 @@ import {
 } from '../model/skill';
 
 import api from '@/services/client';
+import type { UpdateSkillDraftRequest } from '@/services/gen/skill';
 
 export const skillApi = {
   list: async (): Promise<Skill[]> => z.array(skillSchema).parse((await api.get('/skills')).data?.skills ?? []),
@@ -14,12 +15,9 @@ export const skillApi = {
     skillWorkspaceSchema.parse((await api.post('/skills', data)).data),
   getWorkspace: async (id: string): Promise<SkillWorkspace> =>
     skillWorkspaceSchema.parse((await api.get(`/skills/${id}/workspace`)).data),
-  updateCapability: async (id: string, data: { goal: string; whenToUse: string; inputSpec?: string; outputSpec?: string }): Promise<SkillRevision> =>
-    skillRevisionSchema.parse((await api.patch(`/skills/${id}/draft/capability`, data)).data),
-  updateActivation: async (id: string, data: { name: string; description: string; inputSchema: Record<string, unknown>; outputSchema: Record<string, unknown>; confirmed: boolean }): Promise<SkillRevision> =>
-    skillRevisionSchema.parse((await api.patch(`/skills/${id}/draft/activation`, data)).data),
-  updateInstructions: async (id: string, data: { instructions: string }): Promise<SkillRevision> =>
-    skillRevisionSchema.parse((await api.patch(`/skills/${id}/draft/instructions`, data)).data),
+  // updateDraft: 简化后的唯一草稿更新端点，收敛为 name/description/instructions 三字段。
+  updateDraft: async (id: string, data: UpdateSkillDraftRequest): Promise<SkillRevision> =>
+    skillRevisionSchema.parse((await api.patch(`/skills/${id}/draft`, data)).data),
   setEditors: (id: string, editorIds: string[]) =>
     api.put(`/skills/${id}/editors`, { editorIds }),
   delete: (id: string) => api.delete(`/skills/${id}`),

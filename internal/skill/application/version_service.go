@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
@@ -20,16 +19,13 @@ type SkillProduct = port.SkillProductRow
 type SkillRevision = domain.SkillRevision
 
 type CreateSkillDraftInput struct {
-	Name           string
-	Goal           string
-	WhenToUse      string
-	SampleInput    any
-	ExpectedOutput any
-	Instructions   string
+	Name         string
+	Description  string
+	Instructions string
 	// ActorID is the caller; becomes the skill's created_by (owner/admin only).
 	ActorID string
-	// Editors are additional admins granted update rights, persisted in the
-	// same transaction as the skill. Each must hold role admin/owner.
+	// Editors are additional members granted update rights (whitelist), persisted
+	// in the same transaction as the skill. Each must be an active tenant member.
 	Editors []string
 }
 
@@ -37,31 +33,6 @@ type SkillWorkspaceView struct {
 	Skill   SkillProduct
 	Draft   domain.SkillRevision
 	Editors []string
-}
-
-type UpdateCapabilityInput struct {
-	Goal       string
-	WhenToUse  string
-	InputSpec  string
-	OutputSpec string
-	// ActorID is the caller; ownership is checked against the skill's created_by.
-	ActorID string
-}
-
-type UpdateActivationInput struct {
-	Name         string
-	Description  string
-	InputSchema  map[string]any
-	OutputSchema map[string]any
-	Confirmed    bool
-	// ActorID is the caller; ownership is checked against the skill's created_by.
-	ActorID string
-}
-
-type UpdateInstructionBundleInput struct {
-	Instructions string
-	// ActorID is the caller; ownership is checked against the skill's created_by.
-	ActorID string
 }
 
 type UpdateDraftBundleInput struct {
@@ -111,29 +82,15 @@ func (s *VersionService) CreateSkillDraft(ctx context.Context, in CreateSkillDra
 	}
 	skillID := uuid.Must(uuid.NewV7()).String()
 	draftID := uuid.Must(uuid.NewV7()).String()
-	instructions := strings.TrimSpace(in.Instructions)
-	if instructions == "" {
-		instructions = strings.TrimSpace(in.Goal)
-	}
 	draft := domain.SkillRevision{
 		ID:                 draftID,
 		SkillID:            skillID,
 		Status:             domain.VersionStatusDraft,
 		Source:             "manual",
 		GenerationMetadata: map[string]any{},
-		Capability: domain.Capability{
-			Goal:      in.Goal,
-			WhenToUse: in.WhenToUse,
-			Examples:  []domain.CapabilityExample{{Input: in.SampleInput, ExpectedOutput: in.ExpectedOutput}},
-		},
-		ActivationContract: domain.ActivationContract{
-			Name:         generatedActivationName(in.Name),
-			Description:  strings.TrimSpace(in.WhenToUse + "，" + in.Goal),
-			InputSchema:  map[string]any{"type": "object"},
-			OutputSchema: map[string]any{"type": "object"},
-			Confirmed:    false,
-		},
-		Instructions: instructions,
+		Name:               strings.TrimSpace(in.Name),
+		Description:        strings.TrimSpace(in.Description),
+		Instructions:       strings.TrimSpace(in.Instructions),
 	}
 	contentHash, err := draft.ComputeContentHash()
 	if err != nil {
@@ -142,8 +99,8 @@ func (s *VersionService) CreateSkillDraft(ctx context.Context, in CreateSkillDra
 	draft.ContentHash = contentHash
 	skill := port.SkillProductRow{
 		ID:              skillID,
-		Name:            in.Name,
-		Description:     in.Goal,
+		Name:            strings.TrimSpace(in.Name),
+		Description:     strings.TrimSpace(in.Description),
 		Status:          "draft",
 		DraftRevisionID: draftID,
 		CreatedBy:       in.ActorID,
@@ -179,7 +136,7 @@ func (s *VersionService) PublishDraft(ctx context.Context, skillID, actorID stri
 	if err != nil {
 		return domain.SkillRevision{}, err
 	}
-	checks := map[string]any{"capability_examples": len(draft.Capability.Examples)}
+	checks := map[string]any{"instructions_set": strings.TrimSpace(draft.Instructions) != ""}
 	afterDraft := draft
 	afterDraft.Status = domain.VersionStatusPublished
 	afterDraft.RevisionNo = next
@@ -215,13 +172,9 @@ func (s *VersionService) recordFailure(ctx context.Context, skillID, op string, 
 	}
 }
 
-// loadPublishDraft loads the skill and its draft revision, enforcing the
-// builtin-skill guard, existence and publishability. Unknown workspace
-// bindings fail here so a broken activation contract never ships.
+// loadPublishDraft loads the skill and its draft revision, enforcing
+// existence and publishability.
 func (s *VersionService) loadPublishDraft(ctx context.Context, skillID string) (port.SkillProductRow, domain.SkillRevision, error) {
-	if isBuiltinSkill(skillID) {
-		return port.SkillProductRow{}, domain.SkillRevision{}, domain.ErrPlatformManagedSkill
-	}
 	skill, ok, err := s.repo.GetSkill(ctx, skillID)
 	if err != nil {
 		return port.SkillProductRow{}, domain.SkillRevision{}, err
@@ -236,7 +189,7 @@ func (s *VersionService) loadPublishDraft(ctx context.Context, skillID string) (
 	if !ok {
 		return port.SkillProductRow{}, domain.SkillRevision{}, domain.ErrSkillDraftNotFound
 	}
-	if err := draft.ValidatePublishable(0); err != nil {
+	if err := draft.ValidatePublishable(); err != nil {
 		return port.SkillProductRow{}, domain.SkillRevision{}, err
 	}
 	return skill, draft, nil
@@ -257,11 +210,7 @@ func (s *VersionService) GetWorkspace(ctx context.Context, skillID, actorID stri
 			return SkillWorkspaceView{}, fmt.Errorf("skill service get workspace: list editors: %w", err)
 		}
 	}
-	// 内置 skill 的 Instructions 是系统助手执行逻辑核心;仅 owner/admin(或系统
-	// actor,评测 worker)可见完整内容,其余角色剥离 Instructions 但保留列表与
-	// 契约。非内置 skill 不受影响(自定义 skill 无跨租户保密需求)。
-	stripInstructions := isBuiltinSkill(skillID) && s.checkOwnership(ctx, actorID, skill.CreatedBy, editors) != nil
-	view, err := s.loadWorkspaceRevision(ctx, skillID, stripInstructions)
+	view, err := s.loadWorkspaceRevision(ctx, skillID)
 	if err != nil {
 		return SkillWorkspaceView{}, err
 	}
@@ -270,17 +219,13 @@ func (s *VersionService) GetWorkspace(ctx context.Context, skillID, actorID stri
 	return view, nil
 }
 
-// loadWorkspaceRevision loads the active-or-draft revision for a skill,
-// stripping instructions when strip is true (builtin skills, non-owner actor).
-func (s *VersionService) loadWorkspaceRevision(ctx context.Context, skillID string, strip bool) (SkillWorkspaceView, error) {
+// loadWorkspaceRevision loads the active-or-draft revision for a skill.
+func (s *VersionService) loadWorkspaceRevision(ctx context.Context, skillID string) (SkillWorkspaceView, error) {
 	draft, ok, err := s.repo.GetDraftRevision(ctx, skillID)
 	if err != nil {
 		return SkillWorkspaceView{}, err
 	}
 	if ok {
-		if strip {
-			draft.Instructions = ""
-		}
 		return SkillWorkspaceView{Draft: draft}, nil
 	}
 	active, ok, err := s.repo.GetActiveRevision(ctx, skillID)
@@ -290,9 +235,6 @@ func (s *VersionService) loadWorkspaceRevision(ctx context.Context, skillID stri
 	if !ok {
 		return SkillWorkspaceView{}, domain.ErrSkillNotFound
 	}
-	if strip {
-		active.Instructions = ""
-	}
 	return SkillWorkspaceView{Draft: active}, nil
 }
 
@@ -301,9 +243,6 @@ func (s *VersionService) ListSkills(ctx context.Context) ([]SkillProduct, error)
 }
 
 func (s *VersionService) DeleteSkill(ctx context.Context, skillID, actorID string) error {
-	if isBuiltinSkill(skillID) {
-		return domain.ErrPlatformManagedSkill
-	}
 	skill, ok, err := s.repo.GetSkill(ctx, skillID)
 	if err != nil {
 		return err
@@ -339,9 +278,6 @@ func (s *VersionService) DeleteSkill(ctx context.Context, skillID, actorID strin
 func (s *VersionService) SetEditors(ctx context.Context, skillID, actorID string, editorIDs []string) error {
 	if s.editorRepo == nil {
 		return fmt.Errorf("skill service set editors: editor repo not wired")
-	}
-	if isBuiltinSkill(skillID) {
-		return domain.ErrPlatformManagedSkill
 	}
 	skill, ok, err := s.repo.GetSkill(ctx, skillID)
 	if err != nil {
@@ -528,90 +464,12 @@ func cloneMap(input map[string]any) map[string]any {
 	return output
 }
 
-func (s *VersionService) UpdateCapability(ctx context.Context, skillID string, in UpdateCapabilityInput) (domain.SkillRevision, error) {
-	skill, draft, editorActor, err := s.loadOwnedDraft(ctx, skillID, in.ActorID)
-	if err != nil {
-		return domain.SkillRevision{}, err
-	}
-	before := skillSafeProjection(skill, draft)
-	draft.Capability.Goal = in.Goal
-	draft.Capability.WhenToUse = in.WhenToUse
-	draft.Capability.InputSpec = in.InputSpec
-	draft.Capability.OutputSpec = in.OutputSpec
-	contentHash, err := draft.ComputeContentHash()
-	if err != nil {
-		return domain.SkillRevision{}, err
-	}
-	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindSkill, skillID, auditdomain.ChangeOpUpdate, in.ActorID,
-		before, skillSafeProjection(skill, draft))
-	if err != nil {
-		return domain.SkillRevision{}, err
-	}
-	return s.repo.UpdateDraftCapability(ctx, skillID, draft.Capability, contentHash, audit, editorActor)
-}
-
-func (s *VersionService) UpdateActivation(ctx context.Context, skillID string, in UpdateActivationInput) (domain.SkillRevision, error) {
-	skill, draft, editorActor, err := s.loadOwnedDraft(ctx, skillID, in.ActorID)
-	if err != nil {
-		return domain.SkillRevision{}, err
-	}
-	before := skillSafeProjection(skill, draft)
-	contract := domain.ActivationContract{
-		Name: in.Name, Description: in.Description, InputSchema: in.InputSchema,
-		OutputSchema: in.OutputSchema, Confirmed: in.Confirmed,
-	}
-	// InputSchema/OutputSchema 是声明性元数据(契约负担已放宽,Validate 只强制
-	// Name+Description)。nil 默认成空 object 仅保持存量数据形状兼容,不影响运行时
-	// 工具契约——skill 激活不再依赖 schema 校验。
-	if contract.InputSchema == nil {
-		contract.InputSchema = map[string]any{"type": "object"}
-	}
-	if contract.OutputSchema == nil {
-		contract.OutputSchema = map[string]any{"type": "object"}
-	}
-	draft.ActivationContract = contract
-	contentHash, err := draft.ComputeContentHash()
-	if err != nil {
-		return domain.SkillRevision{}, err
-	}
-	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindSkill, skillID, auditdomain.ChangeOpUpdate, in.ActorID,
-		before, skillSafeProjection(skill, draft))
-	if err != nil {
-		return domain.SkillRevision{}, err
-	}
-	return s.repo.UpdateDraftActivation(ctx, skillID, contract, contentHash, audit, editorActor)
-}
-
-func (s *VersionService) UpdateInstructionBundle(
-	ctx context.Context, skillID string, in UpdateInstructionBundleInput,
-) (domain.SkillRevision, error) {
-	skill, draft, editorActor, err := s.loadOwnedDraft(ctx, skillID, in.ActorID)
-	if err != nil {
-		return domain.SkillRevision{}, err
-	}
-	before := skillSafeProjection(skill, draft)
-	draft.Instructions = in.Instructions
-	contentHash, err := draft.ComputeContentHash()
-	if err != nil {
-		return domain.SkillRevision{}, err
-	}
-	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindSkill, skillID, auditdomain.ChangeOpUpdate, in.ActorID,
-		before, skillSafeProjection(skill, draft))
-	if err != nil {
-		return domain.SkillRevision{}, err
-	}
-	return s.repo.UpdateDraftInstructions(ctx, skillID, in.Instructions, contentHash, audit, editorActor)
-}
-
-// loadOwnedDraft loads the skill row and its draft, enforcing the builtin
-// guard and ownership before any mutation. The draft always exists for the
-// update methods using this helper. The returned editorActor is non-empty
-// only when the actor writes via the admin-editor row of the matrix and must
-// be re-validated inside the repository write transaction.
+// loadOwnedDraft loads the skill row and its draft, enforcing ownership before
+// any mutation. The draft always exists for the update methods using this
+// helper. The returned editorActor is non-empty only when the actor writes via
+// the editor whitelist row of the matrix and must be re-validated inside the
+// repository write transaction.
 func (s *VersionService) loadOwnedDraft(ctx context.Context, skillID, actorID string) (port.SkillProductRow, *domain.SkillRevision, string, error) {
-	if isBuiltinSkill(skillID) {
-		return port.SkillProductRow{}, nil, "", domain.ErrPlatformManagedSkill
-	}
 	skill, ok, err := s.repo.GetSkill(ctx, skillID)
 	if err != nil {
 		return port.SkillProductRow{}, nil, "", err
@@ -690,10 +548,8 @@ func (s *VersionService) UpdateDraftBundle(
 // applyDraftBundle mutates skill+draft from the bundle input and recomputes
 // the content hash; the hash failure aborts the write.
 func applyDraftBundle(skill *port.SkillProductRow, draft *domain.SkillRevision, in UpdateDraftBundleInput) error {
-	draft.Capability.Goal = strings.TrimSpace(in.Description)
-	draft.Capability.WhenToUse = strings.TrimSpace(in.Description)
-	draft.ActivationContract.Name = generatedActivationName(in.Name)
-	draft.ActivationContract.Description = strings.TrimSpace(in.Description)
+	draft.Name = strings.TrimSpace(in.Name)
+	draft.Description = strings.TrimSpace(in.Description)
 	draft.Instructions = strings.TrimSpace(in.Instructions)
 	contentHash, err := draft.ComputeContentHash()
 	if err != nil {
@@ -703,18 +559,4 @@ func applyDraftBundle(skill *port.SkillProductRow, draft *domain.SkillRevision, 
 	skill.Name = strings.TrimSpace(in.Name)
 	skill.Description = strings.TrimSpace(in.Description)
 	return nil
-}
-
-var nonActivationName = regexp.MustCompile(`[^a-zA-Z0-9_]+`)
-
-func generatedActivationName(name string) string {
-	out := strings.ToLower(nonActivationName.ReplaceAllString(name, "_"))
-	out = strings.Trim(out, "_")
-	if out == "" || (out[0] >= '0' && out[0] <= '9') {
-		out = "skill_" + out
-	}
-	if len(out) > 64 {
-		out = out[:64]
-	}
-	return out
 }

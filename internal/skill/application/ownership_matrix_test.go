@@ -43,9 +43,7 @@ func seedOwnedSkill(t *testing.T, repo *fakeVersionRepo, skillID, createdBy stri
 	t.Helper()
 	draft := domain.SkillRevision{
 		ID: "rev-" + skillID, SkillID: skillID, Status: domain.VersionStatusDraft,
-		Source: "manual", Instructions: "original instructions",
-		Capability:         domain.Capability{Goal: "goal", WhenToUse: "when"},
-		ActivationContract: domain.ActivationContract{Name: "act"},
+		Source: "manual", Name: "skill-" + skillID, Description: "desc", Instructions: "original instructions",
 	}
 	hash, err := draft.ComputeContentHash()
 	require.NoError(t, err)
@@ -122,8 +120,7 @@ func TestSkillCreateDraftRecordsAuditEvent(t *testing.T) {
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	view, err := svc.CreateSkillDraft(context.Background(), CreateSkillDraftInput{
-		Name: "matrix-skill", Goal: "goal", WhenToUse: "when",
-		Instructions: "instructions", ActorID: "user-1",
+		Name: "matrix-skill", Description: "desc", Instructions: "instructions", ActorID: "user-1",
 	})
 	require.NoError(t, err)
 	require.Len(t, repo.audits, 1)
@@ -268,8 +265,8 @@ func TestVersionServiceEditorGrantedUpdate(t *testing.T) {
 	svc.SetEditorRepo(editors)
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
 
-	_, err := svc.UpdateCapability(ctx, "skill-1", UpdateCapabilityInput{
-		ActorID: "user-1", Goal: "new goal", WhenToUse: "when", InputSpec: "", OutputSpec: "",
+	_, err := svc.UpdateDraftBundle(ctx, "skill-1", draft.ContentHash, UpdateDraftBundleInput{
+		ActorID: "user-1", Name: "updated", Description: "desc", Instructions: "new instructions",
 	})
 	require.NoError(t, err)
 	require.Len(t, repo.audits, 1)
@@ -393,10 +390,10 @@ func TestSkillUpdateDraftBundleEmptyFingerprintBypassesStaleness(t *testing.T) {
 	require.Equal(t, auditdomain.ChangeOpUpdate, repo.audits[0].Operation)
 }
 
-// TestGetWorkspaceStripsBuiltinSkillInstructionsForNonOwner(M2):内置 skill 的
-// Instructions 是系统助手执行逻辑核心,member 读取时剥离、其余字段(能力契约/
-// 激活契约/名称描述)保留;owner 看到完整内容。
-func TestGetWorkspaceStripsBuiltinSkillInstructionsForNonOwner(t *testing.T) {
+// TestGetWorkspaceKeepsBuiltinSkillInstructionsForMember:内置 skill 的
+// Instructions 不再对 member 剥离,普通租户 skill 与平台 skill 一视同仁
+// (Phase 3 移除 platform-managed/builtin 特殊限制)。
+func TestGetWorkspaceKeepsBuiltinSkillInstructionsForMember(t *testing.T) {
 	repo := newFakeVersionRepo()
 	seedOwnedSkill(t, repo, "builtin:platform-guide", "seed-system")
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
@@ -405,9 +402,7 @@ func TestGetWorkspaceStripsBuiltinSkillInstructionsForNonOwner(t *testing.T) {
 	svcMember.SetTenantRoleResolver(stubTenantRole{role: "member"})
 	view, err := svcMember.GetWorkspace(ctx, "builtin:platform-guide", "member-1")
 	require.NoError(t, err)
-	require.Empty(t, view.Draft.Instructions, "member must not read builtin instructions")
-	require.Equal(t, "goal", view.Draft.Capability.Goal)
-	require.Equal(t, "act", view.Draft.ActivationContract.Name)
+	require.Equal(t, "original instructions", view.Draft.Instructions, "member reads builtin instructions")
 	require.Equal(t, "desc", view.Skill.Description)
 
 	svcOwner := NewVersionService(repo, zap.NewNop())
@@ -429,4 +424,64 @@ func TestGetWorkspaceKeepsCustomSkillInstructionsForMember(t *testing.T) {
 	view, err := svc.GetWorkspace(ctx, "skill-1", "member-1")
 	require.NoError(t, err)
 	require.Equal(t, "original instructions", view.Draft.Instructions)
+}
+
+// TestVersionServiceMemberEditorGrantedUpdate pins the whitelist grant
+// (Phase 3 白名单放宽): a member in the editor set may update the draft — the
+// matrix's member row now honors editors. Outside the set the member is still
+// denied, and the editor set never grants delete rights (delete passes nil
+// editors and falls back to creator/owner only).
+func TestVersionServiceMemberEditorGrantedUpdate(t *testing.T) {
+	t.Run("member in editor set updates draft", func(t *testing.T) {
+		repo := newFakeVersionRepo()
+		_, draft := seedOwnedSkill(t, repo, "skill-1", "owner-user")
+		require.NoError(t, repo.InsertCandidate(context.Background(), draft, nil))
+		editors := newStubSkillEditorRepo()
+		editors.editors["skill-1"] = []string{"member-1"}
+
+		svc := NewVersionService(repo, zap.NewNop())
+		svc.SetTenantRoleResolver(stubTenantRole{role: "member"})
+		svc.SetEditorRepo(editors)
+		ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+
+		_, err := svc.UpdateDraftBundle(ctx, "skill-1", draft.ContentHash, UpdateDraftBundleInput{
+			ActorID: "member-1", Name: "updated", Description: "desc", Instructions: "new instructions",
+		})
+		require.NoError(t, err)
+		require.Len(t, repo.audits, 1)
+	})
+
+	t.Run("member outside editor set denied", func(t *testing.T) {
+		repo := newFakeVersionRepo()
+		_, draft := seedOwnedSkill(t, repo, "skill-1", "owner-user")
+		require.NoError(t, repo.InsertCandidate(context.Background(), draft, nil))
+		editors := newStubSkillEditorRepo()
+		editors.editors["skill-1"] = []string{"someone-else"}
+
+		svc := NewVersionService(repo, zap.NewNop())
+		svc.SetTenantRoleResolver(stubTenantRole{role: "member"})
+		svc.SetEditorRepo(editors)
+		ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+
+		_, err := svc.UpdateDraftBundle(ctx, "skill-1", draft.ContentHash, UpdateDraftBundleInput{
+			ActorID: "member-1", Name: "updated", Description: "desc", Instructions: "new instructions",
+		})
+		require.ErrorIs(t, err, domain.ErrForbidden)
+		require.Empty(t, repo.audits, "denied write must not produce an audit event")
+	})
+
+	t.Run("granted member cannot delete", func(t *testing.T) {
+		repo := newFakeVersionRepo()
+		seedOwnedSkill(t, repo, "skill-1", "owner-user")
+		editors := newStubSkillEditorRepo()
+		editors.editors["skill-1"] = []string{"member-1"}
+
+		svc := NewVersionService(repo, zap.NewNop())
+		svc.SetTenantRoleResolver(stubTenantRole{role: "member"})
+		svc.SetEditorRepo(editors)
+		ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+
+		err := svc.DeleteSkill(ctx, "skill-1", "member-1")
+		require.ErrorIs(t, err, domain.ErrForbidden)
+	})
 }
