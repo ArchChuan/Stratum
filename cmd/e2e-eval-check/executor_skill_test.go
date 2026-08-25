@@ -142,12 +142,142 @@ cases:
 }
 
 // TestCreateCarrierAgentRequiresSkillSnapshot pins the fail-closed guard: a
-// skill point without a snapshot.skill map is a dataset defect, not a request
-// to a server.
+// skill point without a snapshot.skill map, or whose skill carries no usable
+// name, is a dataset defect, not a request to a server. An empty name would
+// send allowedSkills:[""], which the real server accepts — creating a carrier
+// agent without the skill and false-passing the eval.
 func TestCreateCarrierAgentRequiresSkillSnapshot(t *testing.T) {
-	_, err := createCarrierAgent(context.Background(), newHTTPClient("http://unused", "t"), point{Key: "sk"})
-	if err == nil || !strings.Contains(err.Error(), "snapshot.skill") {
-		t.Fatalf("expected snapshot.skill error, got %v", err)
+	tests := []struct {
+		name     string
+		snapshot map[string]any
+		wantErr  string
+	}{
+		{name: "missing skill snapshot", snapshot: nil, wantErr: "snapshot.skill"},
+		{
+			name:     "skill without name",
+			snapshot: map[string]any{"skill": map[string]any{"description": "d"}},
+			wantErr:  "snapshot.skill.name",
+		},
+		{
+			name:     "skill name not a string",
+			snapshot: map[string]any{"skill": map[string]any{"name": 42}},
+			wantErr:  "snapshot.skill.name",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := createCarrierAgent(
+				context.Background(), newHTTPClient("http://unused", "t"), point{Key: "sk", Snapshot: tc.snapshot})
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// TestCreateCarrierAgentRequiresAgentConfig pins the fail-closed guard for the
+// carrier agent config: a missing agent snapshot or model would marshal
+// llmModel:null and be rejected by the server with a generic binding 400, so
+// surface it as a dataset defect with a clear message.
+func TestCreateCarrierAgentRequiresAgentConfig(t *testing.T) {
+	tests := []struct {
+		name     string
+		snapshot map[string]any
+		wantErr  string
+	}{
+		{
+			name:     "missing agent snapshot",
+			snapshot: map[string]any{"skill": map[string]any{"name": "s"}},
+			wantErr:  "snapshot.agent",
+		},
+		{
+			name:     "agent without model",
+			snapshot: map[string]any{"skill": map[string]any{"name": "s"}, "agent": map[string]any{"system_prompt": "p"}},
+			wantErr:  "snapshot.agent.model",
+		},
+		{
+			name:     "agent model not a string",
+			snapshot: map[string]any{"skill": map[string]any{"name": "s"}, "agent": map[string]any{"model": 7}},
+			wantErr:  "snapshot.agent.model",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := createCarrierAgent(
+				context.Background(), newHTTPClient("http://unused", "t"), point{Key: "sk", Snapshot: tc.snapshot})
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// TestSkillExecutorRunErrorStillDeletesCarrierAgent pins that the transient
+// carrier agent is cleaned up even when execution aborts after creation (here,
+// an invalid empty dataset). The deferred delete must not be skipped on the
+// error path, and a failed DELETE on that path still records a residual so
+// orphans stay visible to the report.
+func TestSkillExecutorRunErrorStillDeletesCarrierAgent(t *testing.T) {
+	tests := []struct {
+		name          string
+		deleteStatus  int
+		wantResiduals []string
+	}{
+		{name: "delete succeeds on run error", deleteStatus: http.StatusOK, wantResiduals: nil},
+		{
+			name:          "delete failure on run error records residual",
+			deleteStatus:  http.StatusInternalServerError,
+			wantResiduals: []string{"carrier-1"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var deletes int
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/agents":
+					_, _ = w.Write([]byte(`{"id":"carrier-1"}`))
+				case r.Method == http.MethodDelete && r.URL.Path == "/agents/carrier-1":
+					deletes++
+					if tc.deleteStatus != http.StatusOK {
+						http.Error(w, "delete failed", tc.deleteStatus)
+						return
+					}
+					_, _ = w.Write([]byte(`{}`))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			dir := t.TempDir()
+			writeTestFile(t, dir+"/cases.yaml", "version: 1\ncases: []\n")
+			p := point{Kind: "skill", Key: "sk", Dir: dir, Golden: "cases.yaml", Baseline: "b.json",
+				Snapshot: map[string]any{
+					"skill": map[string]any{"name": "my-skill", "description": "d", "content": "c"},
+					"agent": map[string]any{"model": "m", "system_prompt": "p"},
+				}}
+			o := options{kind: "skill", point: "sk", baseURL: server.URL}
+			res, err := (&skillExecutor{client: newHTTPClient(server.URL, "test-token")}).Execute(context.Background(), o, p)
+			if err == nil {
+				t.Fatal("expected run to fail on empty dataset")
+			}
+			if deletes != 1 {
+				t.Fatalf("carrier agent must be deleted once on the error path, deletes = %d", deletes)
+			}
+			if len(res.Evidence) != 1 || res.Evidence[0].Kind != "carrier_agent" || res.Evidence[0].Ref != "carrier-1" {
+				t.Fatalf("expected carrier_agent evidence on the error path: %+v", res.Evidence)
+			}
+			if len(res.Residuals) != len(tc.wantResiduals) {
+				t.Fatalf("residuals = %v, want %v", res.Residuals, tc.wantResiduals)
+			}
+			for i := range tc.wantResiduals {
+				if res.Residuals[i] != tc.wantResiduals[i] {
+					t.Fatalf("residuals = %v, want %v", res.Residuals, tc.wantResiduals)
+				}
+			}
+		})
 	}
 }
 

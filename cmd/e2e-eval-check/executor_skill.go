@@ -18,7 +18,7 @@ func init() {
 	registerExecutor("skill", func() executor { return &skillExecutor{} })
 }
 
-func (e *skillExecutor) Execute(ctx context.Context, o options, p point) (execResult, error) {
+func (e *skillExecutor) Execute(ctx context.Context, o options, p point) (res execResult, err error) {
 	client := e.client
 	if client == nil {
 		token, err := ownerTokenFor(o)
@@ -31,24 +31,25 @@ func (e *skillExecutor) Execute(ctx context.Context, o options, p point) (execRe
 	if err != nil {
 		return execResult{}, err
 	}
+	// Best-effort cleanup of the transient carrier agent must run on every exit
+	// path (dataset load error, run error, success), not just success — an early
+	// return would leak orphan agents invisibly across soak runs. A failed
+	// DELETE surfaces the agent id as a residual for the report.
+	defer func() {
+		if delErr := client.deleteAgent(ctx, agentID); delErr != nil {
+			res.Residuals = append(res.Residuals, agentID)
+		}
+		res.Evidence = append(res.Evidence, evidence{Kind: "carrier_agent", Ref: agentID})
+	}()
 	inner := &llmExecutor{agents: &agentClient{client: client}, agentID: agentID}
 	if p.Judge != nil {
 		inner.judge = newJudgeClient(p.Judge, apiKeyFromEnv(p.Judge.APIKeyEnv))
 	}
 	dataset, err := loadLLMSet(p)
 	if err != nil {
-		return execResult{}, err
-	}
-	res, err := inner.runCases(ctx, dataset)
-	if err != nil {
 		return res, err
 	}
-	// best-effort cleanup of the transient carrier agent; failure surfaces as residual.
-	if delErr := client.deleteAgent(ctx, agentID); delErr != nil {
-		res.Residuals = append(res.Residuals, agentID)
-	}
-	res.Evidence = append(res.Evidence, evidence{Kind: "carrier_agent", Ref: agentID})
-	return res, nil
+	return inner.runCases(ctx, dataset)
 }
 
 // createCarrierAgent provisions a temporary agent from the point's snapshot.
@@ -65,21 +66,64 @@ func (e *skillExecutor) Execute(ctx context.Context, o options, p point) (execRe
 //	  agent:
 //	    model: qwen-plus
 //	    system_prompt: "..."
-func createCarrierAgent(ctx context.Context, client *httpClient, p point) (string, error) {
+//
+// carrierAgentSpec carries the validated snapshot fields needed to provision a
+// carrier agent. Parsing lives in parseCarrierAgentSpec so createCarrierAgent
+// stays a thin payload builder and the fail-closed guards stay testable.
+type carrierAgentSpec struct {
+	skillName    string
+	description  string
+	model        string
+	systemPrompt any
+}
+
+// parseCarrierAgentSpec fails closed on dataset defects that would otherwise
+// produce a carrier agent without the skill (empty allowedSkills entry) or a
+// payload the server rejects with a generic binding 400 (null llmModel).
+func parseCarrierAgentSpec(p point) (carrierAgentSpec, error) {
 	skill, ok := p.Snapshot["skill"].(map[string]any)
 	if !ok {
-		return "", fmt.Errorf("skill point snapshot.skill required")
+		return carrierAgentSpec{}, fmt.Errorf("skill point snapshot.skill required")
 	}
-	agentCfg, _ := p.Snapshot["agent"].(map[string]any)
-	skillName, _ := skill["name"].(string)
+	skillName, ok := skill["name"].(string)
+	if !ok || skillName == "" {
+		// An empty skill name would send allowedSkills:[""], which the real
+		// server accepts — creating a carrier agent WITHOUT the skill and letting
+		// the eval false-pass against an agent that never had the tool. Fail
+		// closed on the dataset instead.
+		return carrierAgentSpec{}, fmt.Errorf("skill point snapshot.skill.name required")
+	}
+	agentCfg, ok := p.Snapshot["agent"].(map[string]any)
+	if !ok {
+		return carrierAgentSpec{}, fmt.Errorf("skill point snapshot.agent required")
+	}
+	model, _ := agentCfg["model"].(string)
+	if model == "" {
+		// A missing model would marshal llmModel:null and be rejected by the
+		// server with a generic binding 400; surface it as a dataset defect.
+		return carrierAgentSpec{}, fmt.Errorf("skill point snapshot.agent.model required")
+	}
 	description, _ := skill["description"].(string)
+	return carrierAgentSpec{
+		skillName:    skillName,
+		description:  description,
+		model:        model,
+		systemPrompt: agentCfg["system_prompt"],
+	}, nil
+}
+
+func createCarrierAgent(ctx context.Context, client *httpClient, p point) (string, error) {
+	spec, err := parseCarrierAgentSpec(p)
+	if err != nil {
+		return "", err
+	}
 	payload := map[string]any{
 		"name":          "eval-carrier-" + p.Key,
-		"description":   description,
-		"systemPrompt":  agentCfg["system_prompt"],
-		"llmModel":      agentCfg["model"],
+		"description":   spec.description,
+		"systemPrompt":  spec.systemPrompt,
+		"llmModel":      spec.model,
 		"maxIterations": DefaultCarrierAgentMaxIterations,
-		"allowedSkills": []string{skillName},
+		"allowedSkills": []string{spec.skillName},
 		"memoryScope":   DefaultCarrierAgentMemoryScope,
 	}
 	body, err := json.Marshal(payload)
