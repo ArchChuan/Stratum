@@ -7,7 +7,7 @@
 | 层 | 路径 | 说明 |
 |----|------|------|
 | Handler | `api/http/handler/rag_handler.go` | 绑定请求、鉴权解析 tenantID、编排响应；≤15 行/方法 |
-| DTO | `api/http/dto/rag.go` | `CreateWorkspaceRequest` / `UpdateWorkspaceRequest` / `QueryRequest` / `UploadDocumentRequest` |
+| DTO | `api/http/dto/gen/rag.go`（proto 生成，`proto/knowledge/rag.proto` 是参数契约唯一事实源） | `CreateWorkspaceRequest` / `UpdateWorkspaceRequest` / `QueryRequest` / `IngestDocumentRequest` / `DocumentAccessRequest` / `PreviewDocumentResponse` / `WorkspaceListItem`；multipart 上传 DTO 在 `api/http/dto/gen/rag_manual.go`（`UploadDocumentRequest`） |
 | Router | `api/http/router.go` (`registerKnowledge`) | `/knowledge/*` 分组，member 读 / admin 写 / `BodyLimit(MaxUploadBytes)` 挡入口 |
 | Application | `internal/knowledge/application/` | `WorkspaceService` · `KnowledgeIngest` · `RAGService` |
 | Domain | `internal/knowledge/domain/` | `Workspace` 聚合、`WorkspaceConfig` 值对象、Sentinel errors |
@@ -28,13 +28,18 @@ Base：`/knowledge`（挂在 JWT + tenant 中间件下，member 角色可读）
 | GET | `/knowledge/workspaces` | member | 列出当前 tenant 全部 workspace |
 | GET | `/knowledge/workspaces/:name/stats` | member | 元数据 + Milvus 统计（`vector_count`, `collection`） |
 | GET | `/knowledge/workspaces/:name/documents` | member | 列出该 workspace 文档及摄取状态（前端轮询） |
+| GET | `/knowledge/workspaces/:name/documents/:documentID/preview` | member + active | 按 chunk 重组预览文档内容（原始文本不落库） |
 | POST | `/knowledge/query` | member + active | RAG 查询：vector/keyword/hybrid |
 | POST | `/knowledge/workspaces` | admin + active | 创建 workspace |
 | PATCH | `/knowledge/workspaces/:name` | admin + active | 部分更新（rename / description / 可变 config） |
 | DELETE | `/knowledge/workspaces/:name` | admin + active | 删除 workspace，级联清 Milvus + PG chunks + DB 记录 |
-| POST | `/knowledge/ingest` | admin + active + `BodyLimit` | multipart 上传文档并异步摄取 |
+| PUT | `/knowledge/workspaces/:name/editors` | admin + active | 设置 workspace 编辑器集合（`editors`） |
+| DELETE | `/knowledge/workspaces/:name/documents/:documentID` | admin + active | 删除文档（级联清向量 + chunks） |
+| PUT | `/knowledge/workspaces/:name/documents/:documentID/access` | admin + active | 整体替换文档级访问白名单（`allowed_user_ids` / `allowed_role_ids`） |
+| POST | `/knowledge/workspaces/:name/documents/:documentID/request-access` | member + active | 申请文档查看权（operation-proposal grant 通道） |
+| POST | `/knowledge/ingest` | admin + active + `BodyLimit` | multipart 上传文档并异步摄取（202 Accepted） |
 
-请求/响应形状：见 `api/http/dto/rag.go`。响应错误体固定 `{"error":"..."}`（由 `middleware.ErrorHandler` 映射）。
+请求/响应形状：见 `api/http/dto/gen/`（`rag.go` + `rag_manual.go`）。响应错误体固定 `{"error":"..."}`（由 `middleware.ErrorHandler` 映射）。
 
 ---
 
@@ -57,12 +62,13 @@ sequenceDiagram
     H->>H: ShouldBindJSON(CreateWorkspaceRequest)
     H->>WS: CreateWorkspace(ctx, tenantID, in)
     WS->>DOM: NewWorkspace(name, desc, cfg, DefaultChunkSize, DefaultTopK)
-    DOM->>DOM: applyDefaults + Validate<br/>(EmbeddingModel / QueryMode / ChunkingStrategy 白名单)
-    DOM-->>WS: *Workspace 或 ErrInvalidEmbeddingModel / ErrInvalidQueryMode / ErrInvalidChunkingStrategy
+    DOM->>DOM: applyDefaults + Validate<br/>(QueryMode / ChunkingStrategy / rerank 白名单，范围校验)
+    DOM-->>WS: *Workspace 或 ErrInvalidQueryMode / ErrInvalidChunkingStrategy / ErrEmbeddingModelRequired 等
+    WS->>WS: validateModelsInCatalogue<br/>(port.ModelExists 目录校验 EmbeddingModel)
     WS->>WR: Create(ctx, tenantID, ws)
     WR->>WR: INSERT INTO "tenant_<id>".rag_workspaces RETURNING id
     WR-->>WS: ws.ID = uuid（或 ErrWorkspaceConflict）
-    WS->>VS: CreateCollectionWithDim(col, vectorDim(embedModel))
+    WS->>VS: CreateCollectionWithDim(col, constants.DimensionForModel(embedModel))
     alt Milvus 失败
         WS->>WR: Delete(tenantID, ws.Name)  \  Rollback
         WS-->>H: fmt.Errorf("failed to create vector collection: %w", err)
@@ -83,51 +89,71 @@ sequenceDiagram
 ```sql
 CREATE TABLE rag_workspaces (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name        VARCHAR(255) NOT NULL UNIQUE,
-    description TEXT NOT NULL DEFAULT '',
+    name        TEXT NOT NULL UNIQUE,
+    description TEXT,
     config      JSONB NOT NULL DEFAULT '{}',
+    created_by  TEXT NOT NULL DEFAULT '',
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- platform-managed workspace markers（存量租户幂等回填）
+ALTER TABLE rag_workspaces ADD COLUMN IF NOT EXISTS system_key TEXT;
+ALTER TABLE rag_workspaces ADD COLUMN IF NOT EXISTS management_mode TEXT NOT NULL DEFAULT 'tenant_managed';
+ALTER TABLE rag_workspaces ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rag_workspaces_system_key
+    ON rag_workspaces(system_key) WHERE system_key IS NOT NULL;
 ```
 
-`config` 列存储的 JSONB 结构为 `{embedding_model, chunk_size, chunk_overlap, query_mode, top_k, chunking_strategy}`；`workspace_repo.go` 的 `toJSONB` / `fromJSONB` 必须保持双向一致。
+`config` 列存储的 JSONB 结构为 `{embedding_model, chunk_size, chunk_overlap, query_mode, top_k, chunking_strategy, reranking, score_threshold, rerank_top_k, rerank_model, judge_model}`；`workspace_repo.go` 的 `toJSONB` / `fromJSONB` 必须保持双向一致。`system_key` 标记平台托管 workspace，`management_mode` 取值 `tenant_managed` / `platform_managed`，`created_by` 记录创建者 user id。
 
 ### 4.2 `knowledge_docs`
 
 ```sql
 CREATE TABLE knowledge_docs (
-    id                  VARCHAR(255) PRIMARY KEY,
-    workspace_id        UUID NOT NULL REFERENCES rag_workspaces(id) ON DELETE CASCADE,
-    title               TEXT NOT NULL DEFAULT '',
-    content_hash        VARCHAR(64),
-    ingest_status       VARCHAR(32) NOT NULL DEFAULT 'processing',
-    ingest_error        TEXT NOT NULL DEFAULT '',
-    processed_chunks    INT NOT NULL DEFAULT 0,
-    total_chunks        INT NOT NULL DEFAULT 0,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    ingest_started_at   TIMESTAMPTZ,
-    ingest_finished_at  TIMESTAMPTZ
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID,
+    title        TEXT NOT NULL,
+    source       TEXT,
+    metadata     JSONB NOT NULL DEFAULT '{}',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE UNIQUE INDEX ON knowledge_docs(workspace_id, content_hash);
+-- 增量列（幂等回填，覆盖历史租户）
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS content_hash TEXT;
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS ingest_status TEXT NOT NULL DEFAULT 'completed'
+    CHECK (ingest_status IN ('processing', 'completed', 'failed'));
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS ingest_error TEXT NOT NULL DEFAULT '';
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS processed_chunks INT NOT NULL DEFAULT 0;
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS total_chunks INT NOT NULL DEFAULT 0;
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS ingest_started_at TIMESTAMPTZ;
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS ingest_finished_at TIMESTAMPTZ;
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS allowed_user_ids TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS allowed_role_ids TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS created_by TEXT;
+CREATE INDEX IF NOT EXISTS idx_knowledge_docs_ws_hash ON knowledge_docs (workspace_id, content_hash);
+CREATE INDEX IF NOT EXISTS idx_knowledge_docs_ws_status ON knowledge_docs (workspace_id, ingest_status);
+CREATE INDEX IF NOT EXISTS idx_knowledge_docs_allowed_users ON knowledge_docs USING GIN (allowed_user_ids);
+CREATE INDEX IF NOT EXISTS idx_knowledge_docs_allowed_roles ON knowledge_docs USING GIN (allowed_role_ids);
 ```
 
-`ingest_status` 三态：`processing` → `completed` | `failed`
+`id` 为 UUID（`gen_random_uuid()`）；`source` 是原始文件名；`metadata` 为扩展 JSONB；`allowed_user_ids` / `allowed_role_ids` 构成文档级访问白名单（双空 = 无限制，继承 workspace 可见性，规则见 5.1 `VisibleDocIDs`）。`content_hash` 去重索引非 UNIQUE——重复检测在应用层 `ExistsByHash` 完成。`ingest_status` 三态：`processing` → `completed` | `failed`。
 
 ### 4.3 `knowledge_chunks`
 
 ```sql
-CREATE TABLE knowledge_chunks (
-    id            VARCHAR(255) PRIMARY KEY,
-    workspace_id  UUID NOT NULL,
-    doc_id        VARCHAR(255) NOT NULL REFERENCES knowledge_docs(id) ON DELETE CASCADE,
-    chunk_index   BIGINT NOT NULL,
-    content       TEXT NOT NULL,
-    parent_id     VARCHAR(255),      -- 指向 knowledge_parent_chunks.id（Parent-Child 策略才有值）
-    tsv           TSVECTOR GENERATED ALWAYS AS (to_tsvector('public.chinese_zh', content)) STORED
+CREATE TABLE IF NOT EXISTS knowledge_chunks (
+    id             TEXT PRIMARY KEY,
+    workspace_id   UUID NOT NULL REFERENCES rag_workspaces(id) ON DELETE CASCADE,
+    doc_id         TEXT NOT NULL,
+    chunk_index    BIGINT NOT NULL,
+    content        TEXT NOT NULL,
+    tsv            tsvector GENERATED ALWAYS AS (to_tsvector('public.chinese_zh', content)) STORED,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX ON knowledge_chunks USING GIN(tsv);
-CREATE INDEX ON knowledge_chunks(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_kc_tsv       ON knowledge_chunks USING GIN(tsv);
+CREATE INDEX IF NOT EXISTS idx_kc_workspace ON knowledge_chunks(workspace_id);
+-- 叶块关联父块（Parent-Child 策略才有值；NULL 走 SET NULL）
+ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS parent_id TEXT
+    REFERENCES knowledge_parent_chunks(id) ON DELETE SET NULL;
 ```
 
 `parent_id` 格式：`<documentID>_parent_<i>`（`structure_recursive` 策略才填充）。
@@ -135,21 +161,39 @@ CREATE INDEX ON knowledge_chunks(workspace_id);
 ### 4.4 `knowledge_parent_chunks`
 
 ```sql
-CREATE TABLE knowledge_parent_chunks (
-    id            VARCHAR(255) PRIMARY KEY,
-    workspace_id  UUID NOT NULL,
-    doc_id        VARCHAR(255) NOT NULL,
-    chunk_index   BIGINT NOT NULL,
-    content       TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS knowledge_parent_chunks (
+    id           TEXT PRIMARY KEY,
+    workspace_id UUID NOT NULL REFERENCES rag_workspaces(id) ON DELETE CASCADE,
+    doc_id       TEXT NOT NULL,
+    chunk_index  BIGINT NOT NULL,
+    content      TEXT NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX ON knowledge_parent_chunks(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_kpc_workspace ON knowledge_parent_chunks(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_kpc_doc       ON knowledge_parent_chunks(workspace_id, doc_id);
 ```
 
 存储 `structure_recursive` 策略生成的父块（大上下文单元），仅用于 RAG 检索后的上下文扩展，不进 Milvus。
 
-### 4.5 Milvus Collection Schema
+### 4.5 `knowledge_chunks_quarantine`
 
-Collection 名称：`CollectionName(tenantID, workspaceID)` → `kb_<workspaceID>`。`workspaceID` 是全局唯一 UUID，因此当前实现忽略 `tenantID`；非法字符会替换为下划线。
+```sql
+CREATE TABLE IF NOT EXISTS knowledge_chunks_quarantine (
+    id              TEXT PRIMARY KEY,
+    workspace_name  TEXT,
+    doc_id          TEXT NOT NULL,
+    chunk_index     BIGINT NOT NULL,
+    content         TEXT NOT NULL,
+    reason          TEXT NOT NULL,
+    quarantined_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+存量迁移无法映射到 workspace 的孤儿 chunk 会被移入隔离表（`reason='workspace_unmapped'`），保留审计痕迹而不阻断升级。
+
+### 4.6 Milvus Collection Schema
+
+Collection 名称：`CollectionName(tenantID, workspaceID, embedModel)` → `kb_<workspaceID>_<embedModel>`（embedModel 清洗后作后缀，切换模型即隔离向量数据）。存量无模型后缀集合用 `CollectionLegacyName(tenantID, workspaceID)` → `kb_<workspaceID>` 回退读取/清理。`workspaceID` 是全局唯一 UUID，因此当前实现忽略 `tenantID`；非法字符会替换为下划线。
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -160,7 +204,7 @@ Collection 名称：`CollectionName(tenantID, workspaceID)` → `kb_<workspaceID
 | `content` | VarChar | chunk 文本 |
 | `source_document` | VarChar | documentID |
 | `chunk_index` | Int64 | chunk 序号 |
-| `vector` | FloatVector(dim) | 嵌入向量（dim 由 `vectorDim(embedModel)` 决定） |
+| `vector` | FloatVector(dim) | 嵌入向量（dim 由 `constants.DimensionForModel(embedModel)` 决定） |
 
 索引：IVF_FLAT L2，nlist=128；标量字段 `user_id`/`agent_id`/`scope` 建 Trie 索引。
 
@@ -181,6 +225,15 @@ type DocRepo interface {
     MarkIngestCompleted(ctx, tenantID, docID string, processedChunks int) error
     MarkIngestFailed(ctx, tenantID, docID, errMsg string) error
     RecoverStuckIngests(ctx, tenantID string, threshold time.Duration) (int, error)
+
+    // 文档级访问控制
+    // VisibleDocIDs: 匹配规则 viewerID ∈ allowed_user_ids OR role ∈ allowed_role_ids
+    // OR viewerID = created_by；双白名单为空的行始终可见（继承 workspace 可见性）。
+    VisibleDocIDs(ctx, tenantID, workspaceID, viewerID, role string) ([]string, error)
+    // GetByID: workspace_id + id 双重约束防止跨 workspace 访问（doc_id 本身无 FK）。
+    GetByID(ctx, tenantID, workspaceID, docID string) (*Document, error)
+    // SetDocAccess: 整体替换文档级白名单（allowed_user_ids / allowed_role_ids）。
+    SetDocAccess(ctx, tenantID, docID string, userIDs, roleIDs []string) error
 }
 ```
 
@@ -209,19 +262,19 @@ GET  /workspaces/:name/documents → 每次返回最新 ingest_status
 
 ---
 
-## 6. 错误映射（`middleware/error_mapping.go`）
+## 6. 错误映射（`api/middleware/error_mapping.go`）
 
 | Domain Sentinel | HTTP | 触发场景 |
 |----------------|------|---------|
 | `ErrWorkspaceConflict` | 409 | POST workspace name 已存在 |
 | `ErrWorkspaceNotFound` | 404 | GET/PATCH/DELETE workspace 不存在 |
-| `ErrInvalidEmbeddingModel` | 400 | 创建 workspace 时模型不在白名单 |
+| `ErrInvalidEmbeddingModel` | 400 | 创建/更新 workspace 时模型不在全局模型目录（`port.ModelExists`，`CapEmbedding`） |
 | `ErrInvalidQueryMode` | 400 | 创建/更新 workspace 时 query_mode 非法 |
 | `ErrInvalidChunkingStrategy` | 400 | 创建 workspace 时策略不在白名单 |
-| `ErrEmbeddingModelImmutable` | 422 | PATCH 尝试修改 embedding_model |
-| `ErrChunkSizeImmutable` | 422 | PATCH 尝试修改 chunk_size |
-| `ErrChunkOverlapImmutable` | 422 | PATCH 尝试修改 chunk_overlap |
-| `ErrChunkingStrategyImmutable` | 422 | PATCH 尝试修改 chunking_strategy |
+| `ErrEmbeddingModelImmutable` | 400 | PATCH 尝试修改 embedding_model |
+| `ErrChunkSizeImmutable` | 400 | PATCH 尝试修改 chunk_size |
+| `ErrChunkOverlapImmutable` | 400 | PATCH 尝试修改 chunk_overlap |
+| `ErrChunkingStrategyImmutable` | 500 | PATCH 尝试修改 chunking_strategy（未在映射表显式注册，走默认） |
 | `ErrDuplicateDocument` | 409 | 摄取内容 hash 与已入库文档冲突 |
 | `ErrIngestQueueFull` | 429 | 准入队列满（queueSem 已满） |
 | `ErrChunkLimitExceeded` | 400 | 单文档 chunk 数超 `MaxChunksPerDocument` |
@@ -294,12 +347,17 @@ type Workspace struct {
     CreatedAt, UpdatedAt time.Time
 }
 type WorkspaceConfig struct {
-    EmbeddingModel   string // "text-embedding-v3" | "embedding-3"
-    ChunkingStrategy string // "recursive" | "structure_recursive" | "semantic"
+    EmbeddingModel   string  // 必填；存在性经全局模型目录校验（port.ModelExists, CapEmbedding），无静态默认
+    ChunkingStrategy string  // "recursive" | "structure_recursive" | "semantic"
     ChunkSize        int
     ChunkOverlap     int
-    QueryMode        string // "vector" | "graph" | "hybrid"
+    QueryMode        string  // "vector" | "graph" | "hybrid"
     TopK             int
+    Reranking        string  // ""（关闭） | "builtin-score-v1" | "provider:model"
+    ScoreThreshold   float32 // 相似度过滤阈值，0 = 关闭
+    RerankTopK       int     // 重排后最终条数，0 = 跟随 TopK
+    RerankModel      string  // builtin-score-v1 的 LLM 语义重排模型（workspace 显式配置）
+    JudgeModel       string  // 证据充分性 judge 模型；空 = judge 门关闭（fail-closed 放行）
 }
 ```
 
@@ -307,12 +365,17 @@ type WorkspaceConfig struct {
 
 | 字段 | Default | Allowed |
 |------|---------|---------|
-| EmbeddingModel | `text-embedding-v3` | `{text-embedding-v3, embedding-3}` |
+| EmbeddingModel | 无（必填，缺失报 `ErrEmbeddingModelRequired`） | 存在性经全局模型目录校验（`port.ModelExists`，`CapEmbedding`），非静态白名单 |
 | ChunkingStrategy | `structure_recursive` | `{recursive, structure_recursive, semantic}` |
 | QueryMode | `hybrid` | `{vector, graph, hybrid}` |
 | ChunkSize | `512` | 任意正整数 |
 | ChunkOverlap | `64` | 任意正整数 |
-| TopK | `5` | 任意正整数 |
+| TopK | `5` | `[1, 20]`（`constants.MaxRAGTopK`） |
+| Reranking | `""`（关闭） | `""` / `builtin-score-v1` / `provider:model`（外部 provider 须在 rerank 目录存在） |
+| ScoreThreshold | `0`（关闭过滤） | `[0, 1]` |
+| RerankTopK | `0`（跟随 TopK） | `[0, 20]`（`constants.MaxRerankTopK`） |
+| RerankModel | `""`（builtin 未装配） | `builtin-score-v1` 时必须显式配置 |
+| JudgeModel | `""`（judge 门关闭） | chat 目录模型 |
 
 ### 9.3 不变性规则（`MergeUpdate`）
 
@@ -323,23 +386,29 @@ type WorkspaceConfig struct {
 | ChunkOverlap | ❌ | `ErrChunkOverlapImmutable` |
 | ChunkingStrategy | ❌ | `ErrChunkingStrategyImmutable` |
 | QueryMode | ✅（须在白名单） | `ErrInvalidQueryMode` |
-| TopK | ✅ | — |
+| TopK | ✅ | `ErrInvalidTopK` |
+| Reranking / RerankModel / JudgeModel | ✅ | `ErrInvalidRerankIdentity` / `ErrInvalidRerankModel` / `ErrInvalidJudgeModel` |
+| ScoreThreshold | ✅ | `ErrInvalidScoreThreshold` |
+| RerankTopK | ✅ | `ErrInvalidRerankTopK` |
 
 **为什么 `ChunkingStrategy` 不可变**：不同策略生成的 chunk 边界与 parent-child 关系完全不同，混合摄取会导致关键词索引结构与向量索引结构不一致，检索时 parent 回溯断链。
 
 **为什么 `EmbeddingModel` / `ChunkSize` / `ChunkOverlap` 不可变**：`EmbeddingModel` 决定 Milvus collection 维度（1024/2048/1536），改后已入库向量与新查询向量维度不匹配。`ChunkSize/ChunkOverlap` 改变后新旧 chunk 边界不一致，检索命中率崩塌。
 
-### 9.4 向量维度决议（`vectorDim`，`workspace_service.go`）
+### 9.4 向量维度决议（`constants.DimensionForModel`，`pkg/constants/embedding.go`）
 
 ```go
-func vectorDim(model string) int {
-    switch model {
+// 全系统嵌入维度单一事实源（跨包行为数字入 pkg/constants）
+func DimensionForModel(name string) int {
+    switch name {
+    case "text-embedding-v1":
+        return 1536 // DashScope v1
     case "text-embedding-v2", "text-embedding-v3", "text-embedding-v4":
-        return 1024
+        return 1024 // DashScope v2/v3/v4 default
     case "embedding-3":
-        return 2048
+        return 2048 // Zhipu
     default:
-        return 1536
+        return 1536 // OpenAI text-embedding-3-small / ada-002
     }
 }
 ```
@@ -404,7 +473,7 @@ flowchart TD
 - **DocumentID**：uuid v7（含时间序），Milvus chunk ID = `<documentID>_chunk_<i>`，parent ID = `<documentID>_parent_<i>`。
 - **TextCleaner**（`pkg/textchunk/cleaner.go`）：`Clean` 规范化空白/控制字符，`FilterChunks` 剔除过短片段，在 chunking 前后各执行一次。
 - **PG chunks 落库容错**：`InsertBatch` / `InsertParentBatch` 失败仅 `logger.Warn`，不回滚——向量已入 Milvus，PG 关键词索引可后台补偿。
-- **EmbedResolver**：逐租户通过 `ModelRegistry` 解析已启用 provider/model；Workspace-level `EmbeddingModel` 优先，未指定时使用可用 embedding 目录的第一项。
+- **EmbedResolver**：逐租户按 workspace 显式配置的 `EmbeddingModel` 经 `ModelRegistry` 精确解析（无 fallback：空模型或不在 managed 目录即 fail-closed 返回 nil，绝不默认替换）。
 
 ### 10.4 三种 Chunking Strategy（`pkg/textchunk/`）
 
@@ -466,4 +535,4 @@ rrfScores[r.ID] += 1.0 / (rrfK + float64(rank+1))
 
 ### 11.3 Handler → Service 编排
 
-`RAGHandler.Query` 先 `WorkspaceService.GetWorkspace` 拿 `ws.ID + ws.Config.EmbeddingModel`，再喂给 `RAGService.Query`；`collectionName = CollectionName(tenantID, ws.ID)` 决定查哪个 Milvus 集合。
+`RAGHandler.Query` 先 `WorkspaceService.GetWorkspace` 拿 `ws.ID + ws.Config.EmbeddingModel`，再喂给 `RAGService.Query`；`collectionName = CollectionName(tenantID, ws.ID, ws.Config.EmbeddingModel)` 决定查哪个 Milvus 集合（存量无后缀集合经 `CollectionLegacyName` 回退）。
