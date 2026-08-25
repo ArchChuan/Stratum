@@ -34,6 +34,8 @@ type judgeConfig struct {
 // golden cases. Defined here (next to judgeConfig) so the shared goldenCase
 // can carry it from its first definition in Task 2; judge.go (Task 4)
 // consumes it. Only one judgeSpec type exists — no judgeSpecYAML variant.
+//
+//nolint:unused // consumed by judge.go (Task 4)
 type judgeSpec struct {
 	Criteria string `yaml:"criteria" json:"criteria"`
 }

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -153,7 +152,7 @@ func runSkipped(o options, stdout io.Writer) (int, error) {
 			return exitFailed, err
 		}
 	}
-	fmt.Fprintf(stdout, "kind=%s point=%s status=%s reason=%s\n", o.kind, o.point, statusNotRun, o.skip)
+	_, _ = fmt.Fprintf(stdout, "kind=%s point=%s status=%s reason=%s\n", o.kind, o.point, statusNotRun, o.skip)
 	return exitPassed, nil
 }
 
@@ -182,8 +181,7 @@ func resolvePointPath(kind, key string) (string, error) {
 	return filepath.Join("test", "e2e", kind, "points", key+".yaml"), nil
 }
 func classifyError(err error) int {
-	var infra *infraError
-	if errors.As(err, &infra) {
+	if isInfra(err) {
 		return exitInfraFailed
 	}
 	return exitFailed

@@ -62,7 +62,7 @@ func loadBaseline(path string) (*baseline, error) {
 
 // writeBaseline persists a baseline atomically (write temp + rename).
 func writeBaseline(path string, b baseline) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("mkdir baseline dir: %w", err)
 	}
 	data, err := json.MarshalIndent(b, "", "  ")
@@ -70,7 +70,7 @@ func writeBaseline(path string, b baseline) error {
 		return fmt.Errorf("encode baseline: %w", err)
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("write baseline temp: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {

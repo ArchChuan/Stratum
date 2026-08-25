@@ -25,29 +25,29 @@ func selfCheck(o options, stdout io.Writer) (int, error) {
 			return exitInfraFailed, fmt.Errorf("glob points %s: %w", kind, err)
 		}
 		if len(entries) == 0 {
-			fmt.Fprintf(stdout, "kind=%s no points (nothing to self-check)\n", kind)
+			_, _ = fmt.Fprintf(stdout, "kind=%s no points (nothing to self-check)\n", kind)
 			continue
 		}
 		for _, path := range entries {
 			p, err := loadPoint(path)
 			if err != nil {
-				fmt.Fprintf(stdout, "POINT FAIL %s: %v\n", path, err)
+				_, _ = fmt.Fprintf(stdout, "POINT FAIL %s: %v\n", path, err)
 				failed++
 				continue
 			}
 			goldenPath, err := resolveRelative(p.Dir, p.Golden)
 			if err != nil {
-				fmt.Fprintf(stdout, "GOLDEN FAIL %s: %v\n", path, err)
+				_, _ = fmt.Fprintf(stdout, "GOLDEN FAIL %s: %v\n", path, err)
 				failed++
 				continue
 			}
-			fmt.Fprintf(stdout, "POINT OK %s -> golden %s\n", path, goldenPath)
+			_, _ = fmt.Fprintf(stdout, "POINT OK %s -> golden %s\n", path, goldenPath)
 		}
 	}
 	if failed > 0 {
-		fmt.Fprintf(stdout, "self-check failed for %d point(s)\n", failed)
+		_, _ = fmt.Fprintf(stdout, "self-check failed for %d point(s)\n", failed)
 		return exitFailed, nil
 	}
-	fmt.Fprintln(stdout, "self-check passed")
+	_, _ = fmt.Fprintln(stdout, "self-check passed")
 	return exitPassed, nil
 }

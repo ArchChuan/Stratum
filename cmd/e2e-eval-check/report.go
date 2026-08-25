@@ -117,7 +117,7 @@ func writeReport(path string, r report) error {
 	if err != nil {
 		return fmt.Errorf("encode report: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("write report %s: %w", path, err)
 	}
 	return nil
@@ -125,13 +125,13 @@ func writeReport(path string, r report) error {
 
 // printSummary renders a compact human summary to stdout.
 func printSummary(w io.Writer, r report) {
-	fmt.Fprintf(w, "kind=%s point=%s status=%s\n", r.Kind, r.Point, r.Status)
-	fmt.Fprintf(w, "cases=%d pass_rate=%.4f\n", r.Aggregate.CaseCount, r.Aggregate.PassRate)
+	_, _ = fmt.Fprintf(w, "kind=%s point=%s status=%s\n", r.Kind, r.Point, r.Status)
+	_, _ = fmt.Fprintf(w, "cases=%d pass_rate=%.4f\n", r.Aggregate.CaseCount, r.Aggregate.PassRate)
 	if r.NonComparable {
-		fmt.Fprintf(w, "non_comparable=true (config/fingerprint drift)\n")
+		_, _ = fmt.Fprintf(w, "non_comparable=true (config/fingerprint drift)\n")
 	}
 	for _, warn := range r.Warnings {
-		fmt.Fprintf(w, "warn[%s] %s: %s\n", warn.Level, warn.ID, warn.Message)
+		_, _ = fmt.Fprintf(w, "warn[%s] %s: %s\n", warn.Level, warn.ID, warn.Message)
 	}
 	if len(r.AcceptedRegressions) > 0 {
 		sort.Slice(r.AcceptedRegressions, func(i, j int) bool {
@@ -139,6 +139,6 @@ func printSummary(w io.Writer, r report) {
 		})
 	}
 	for _, acc := range r.AcceptedRegressions {
-		fmt.Fprintf(w, "accepted_regression %s baseline=%.4f run=%.4f reason=%s\n", acc.Metric, acc.Baseline, acc.Run, acc.Reason)
+		_, _ = fmt.Fprintf(w, "accepted_regression %s baseline=%.4f run=%.4f reason=%s\n", acc.Metric, acc.Baseline, acc.Run, acc.Reason)
 	}
 }
