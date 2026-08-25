@@ -598,8 +598,22 @@ func TestTenantSchemaUpgradesToolApprovalStatusForUnknownOutcome(t *testing.T) {
 			}
 		}
 	}
-	if strings.Index(sql, "ADD CONSTRAINT agent_tool_approvals_status_check") < strings.Index(sql, drop) {
-		t.Fatalf("approval status constraint must be dropped before it is rebuilt")
+	// 每个重建点必须 DROP 在前、ADD 在后，且全表顺序严格交替（DROP, ADD, DROP, ADD）。
+	// 仅比较第一对会漏掉 DROP-DROP-ADD-ADD 排版下第二处 ADD 因约束已存在而失败的情况。
+	dropRe := regexp.MustCompile(`ALTER TABLE agent_tool_approvals DROP CONSTRAINT IF EXISTS agent_tool_approvals_status_check`)
+	addIdxRe := regexp.MustCompile(`ADD CONSTRAINT agent_tool_approvals_status_check`)
+	drops := dropRe.FindAllStringIndex(sql, -1)
+	addIdx := addIdxRe.FindAllStringIndex(sql, -1)
+	if len(drops) != len(addIdx) {
+		t.Fatalf("approval status rebuilds must be balanced DROP/ADD pairs, got %d drop(s) %d add(s)", len(drops), len(addIdx))
+	}
+	for i := range addIdx {
+		if drops[i][0] > addIdx[i][0] {
+			t.Fatalf("constraint rebuild #%d: ADD must follow its DROP", i)
+		}
+		if i > 0 && addIdx[i-1][0] > drops[i][0] {
+			t.Fatalf("constraint rebuild #%d: DROP must follow the previous ADD (order must alternate)", i)
+		}
 	}
 }
 
