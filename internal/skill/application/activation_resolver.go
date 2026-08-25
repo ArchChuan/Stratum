@@ -21,15 +21,21 @@ type SkillActivationView struct {
 	OutputSchema map[string]any
 }
 
+// defaultObjectSchema is the fallback activation schema: the simplified skill
+// model carries no explicit input/output contract, so activations accept a free
+// object payload by default.
+func defaultObjectSchema() map[string]any {
+	return map[string]any{"type": "object"}
+}
+
 // ResolveActivation returns the activatable projection of a skill revision.
 //
 // An empty revisionID resolves the skill's active revision; a non-empty one
 // resolves that exact revision. Only published/candidate revisions are
 // activatable — draft, deprecated, or missing revisions yield found=false with
 // no error, matching the raw-SQL semantics this method replaces
-// (status IN ('published','candidate')). The activation contract's
-// name/description take precedence, falling back to the skill product's own
-// name/description when blank.
+// (status IN ('published','candidate')). The revision's name/description take
+// precedence, falling back to the skill product's own values when blank.
 func (s *VersionService) ResolveActivation(
 	ctx context.Context, skillID, revisionID string,
 ) (SkillActivationView, bool, error) {
@@ -58,11 +64,11 @@ func (s *VersionService) ResolveActivation(
 		return SkillActivationView{}, false, nil
 	}
 
-	name := revision.ActivationContract.Name
+	name := revision.Name
 	if name == "" {
 		name = skill.Name
 	}
-	description := revision.ActivationContract.Description
+	description := revision.Description
 	if description == "" {
 		description = skill.Description
 	}
@@ -72,7 +78,7 @@ func (s *VersionService) ResolveActivation(
 		Name:         name,
 		Description:  description,
 		Instructions: revision.Instructions,
-		InputSchema:  revision.ActivationContract.InputSchema,
-		OutputSchema: revision.ActivationContract.OutputSchema,
+		InputSchema:  defaultObjectSchema(),
+		OutputSchema: defaultObjectSchema(),
 	}, true, nil
 }

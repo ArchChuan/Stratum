@@ -142,7 +142,7 @@ func seedOptimizationDependencies(t *testing.T, ctx context.Context, pool *pgxpo
 	schema := "tenant_" + tenantID
 	statements := []string{
 		`INSERT INTO ` + schema + `.skills(id,name,description,status,active_revision_id) VALUES('skill-1','skill','skill','published','published-1')`,
-		`INSERT INTO ` + schema + `.skill_revisions(id,skill_id,status,source,content_hash,generation_metadata,capability,activation_contract,instructions,requirements,publish_checks) VALUES('published-1','skill-1','published','manual','hash','{}','{}','{}','baseline','{}','{}')`,
+		`INSERT INTO ` + schema + `.skill_revisions(id,skill_id,status,source,content_hash,generation_metadata,name,description,instructions,publish_checks) VALUES('published-1','skill-1','published','manual','hash','{}','skill','skill','baseline','{}')`,
 		`INSERT INTO ` + schema + `.eval_suites(id,name) VALUES('suite-1','suite')`,
 		`INSERT INTO ` + schema + `.eval_suite_revisions(id,suite_id,version_no,status,resource_kind) VALUES('suite-revision-1','suite-1',1,'published','skill')`,
 	}
