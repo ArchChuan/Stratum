@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -575,17 +576,29 @@ func TestTenantSchemaContainsMCPToolPolicyAndEncryptedApprovals(t *testing.T) {
 
 func TestTenantSchemaUpgradesToolApprovalStatusForUnknownOutcome(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	sql := string(data)
+
+	// 每个重建点必须先 DROP 再 ADD；ADD 白名单必须覆盖 unknown_outcome 与全部失效终态
+	// （曾因第一处重建点漏 cancelled/voided/invalidated，导致对存量审批行 ADD 校验失败、
+	// provisioning 事务回滚、启动 fail-closed 阻塞 CD 部署）。
 	drop := "ALTER TABLE agent_tool_approvals DROP CONSTRAINT IF EXISTS agent_tool_approvals_status_check"
-	add := "CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'executing', 'executed', 'unknown_outcome'))"
-	dropAt, addAt := strings.Index(sql, drop), strings.LastIndex(sql, add)
-	if dropAt == -1 || addAt == -1 {
-		t.Fatalf("tenant schema must rebuild approval status constraint for unknown outcomes")
+	if strings.Count(sql, drop) < 2 {
+		t.Fatalf("tenant schema must rebuild approval status constraint at every checkpoint")
 	}
-	if dropAt > addAt {
+	re := regexp.MustCompile(`ADD CONSTRAINT agent_tool_approvals_status_check\s+CHECK \(status IN \(([^)]*)\)\)`)
+	adds := re.FindAllStringSubmatch(sql, -1)
+	if len(adds) < 2 {
+		t.Fatalf("tenant schema must rebuild approval status constraint after every drop")
+	}
+	for i, m := range adds {
+		for _, v := range []string{"'unknown_outcome'", "'cancelled'", "'voided'", "'invalidated'"} {
+			if !strings.Contains(m[1], v) {
+				t.Fatalf("approval status rebuild #%d must include %s, got: %s", i, v, m[1])
+			}
+		}
+	}
+	if strings.Index(sql, "ADD CONSTRAINT agent_tool_approvals_status_check") < strings.Index(sql, drop) {
 		t.Fatalf("approval status constraint must be dropped before it is rebuilt")
 	}
 }

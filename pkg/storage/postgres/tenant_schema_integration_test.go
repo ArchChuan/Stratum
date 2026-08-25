@@ -52,6 +52,33 @@ func TestProvisionTenantSchemaSystemAssistantIsIdempotent(t *testing.T) {
 	assertOneSystemAssistant(t, pool, tenantID)
 }
 
+// TestProvisionTenantSchemaToleratesTerminalApprovalStatuses 回归 CD 部署崩溃：存量租户存在
+// cancelled/voided/invalidated 失效终态审批行时，重启 provisioning 的 DROP+ADD 约束重建必须幂等
+// 通过。曾因重建点白名单漏这三个失效终态而 SQLSTATE 23514 → 事务回滚 → 启动 fail-closed →
+// CrashLoopBackOff → helm --atomic 超时回滚。
+func TestProvisionTenantSchemaToleratesTerminalApprovalStatuses(t *testing.T) {
+	pool, ctx, tenantID := systemAssistantTestPool(t, "terminal_statuses")
+	require.NoError(t, postgres.ProvisionTenantSchema(ctx, pool, tenantID))
+	schema := `"tenant_` + tenantID + `"`
+
+	// 存量数据：失效终态在 10 值约束（第二处重建点）下合法写入。
+	for i, status := range []string{"cancelled", "voided", "invalidated"} {
+		_, err := pool.Exec(ctx,
+			`INSERT INTO `+schema+`.agent_tool_approvals
+				(execution_id, tool_call_id, server_id, tool_name, risk_level, encrypted_payload, status)
+			 VALUES ($1, $2, 'server', 'tool', 'destructive', 'enc', $3)`,
+			fmt.Sprintf("e2e-terminal-%d", i), fmt.Sprintf("tc-%d", i), status)
+		require.NoError(t, err)
+	}
+
+	// 模拟重启：再次 provisioning 必须通过，不得因存量失效终态行触发约束校验失败。
+	require.NoError(t, postgres.ProvisionTenantSchema(ctx, pool, tenantID))
+
+	var n int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM `+schema+`.agent_tool_approvals`).Scan(&n))
+	require.Equal(t, 3, n)
+}
+
 func TestProvisionTenantSchemaSystemAssistantModelBackfillPreservesTenantChoice(t *testing.T) {
 	for _, tt := range []struct {
 		name, model, wantModel string
