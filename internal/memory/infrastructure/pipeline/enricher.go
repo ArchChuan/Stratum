@@ -464,6 +464,19 @@ func (w *EnricherWorker) persistEnrichment(ctx context.Context, ev *MemoryEnrich
 		keywords = []string{}
 	}
 
+	// scope 归一化：在途遗留消息（旧版本 agents.memory_scope 无 CHECK 时可存 ''）
+	// 可能携带空 scope。memory_entries/memory_entities 均有 scope 白名单 CHECK，
+	// 空值会把整条 enrichment 打成 SQLSTATE 23514；按 agent 归属回落默认，与
+	// tenant_schema 的 backfill 语义一致。
+	scope := ev.Scope
+	if scope == "" {
+		if ev.AgentID != "" {
+			scope = "agent"
+		} else {
+			scope = "user"
+		}
+	}
+
 	_, err = tx.Exec(ctx, `
 		INSERT INTO memory_entries (id, user_id, agent_id, scope, role, content, type, importance, keywords, token_estimate, enriched_at, conversation_id, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, 'long_term', $7, $8, $9, NOW(), $10, $11)
@@ -472,7 +485,7 @@ func (w *EnricherWorker) persistEnrichment(ctx context.Context, ev *MemoryEnrich
 			keywords = EXCLUDED.keywords,
 			token_estimate = EXCLUDED.token_estimate,
 			enriched_at = NOW()`,
-		ev.MessageID, ev.UserID, ev.AgentID, ev.Scope, ev.Role, ev.Content,
+		ev.MessageID, ev.UserID, ev.AgentID, scope, ev.Role, ev.Content,
 		enrichment.Importance, keywords, enrichment.TokenEstimate,
 		ev.ConversationID, ev.CreatedAt)
 	if err != nil {
@@ -485,7 +498,7 @@ func (w *EnricherWorker) persistEnrichment(ctx context.Context, ev *MemoryEnrich
 			VALUES ($1, $2, $3, $4, $5, NOW())
 			ON CONFLICT (name, entity_type, user_id, COALESCE(agent_id, '')) DO UPDATE SET
 				last_seen_at = NOW()`,
-			entity.Name, entity.Type, ev.UserID, ev.AgentID, ev.Scope)
+			entity.Name, entity.Type, ev.UserID, ev.AgentID, scope)
 		if err != nil {
 			return fmt.Errorf("upsert entity %s: %w", entity.Name, err)
 		}

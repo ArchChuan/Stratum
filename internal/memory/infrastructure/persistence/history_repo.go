@@ -17,6 +17,7 @@ const historyBatchQuery = `
 		SELECT e.conversation_id, e.user_id, COALESCE(e.agent_id, '') AS agent_id, e.scope
 		FROM memory_entries e
 		WHERE e.enriched_at IS NOT NULL AND e.conversation_id IS NOT NULL
+		  AND e.scope IN ('user', 'agent')
 		  AND NOT EXISTS (SELECT 1 FROM memory_summaries s
 			WHERE s.user_id=e.user_id AND s.agent_id=COALESCE(e.agent_id, '') AND s.scope=e.scope
 			  AND s.conversation_id=e.conversation_id AND s.status='active'
@@ -30,7 +31,8 @@ const historyBatchQuery = `
 	       e.id::text, e.content, e.created_at
 	FROM memory_entries e JOIN eligible x ON x.conversation_id=e.conversation_id
 	 AND x.user_id=e.user_id AND x.agent_id=COALESCE(e.agent_id, '') AND x.scope=e.scope
-	WHERE e.enriched_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM memory_summaries s
+	WHERE e.enriched_at IS NOT NULL AND e.scope IN ('user', 'agent')
+	  AND NOT EXISTS (SELECT 1 FROM memory_summaries s
 		WHERE s.user_id=e.user_id AND s.agent_id=COALESCE(e.agent_id, '') AND s.scope=e.scope
 			  AND s.conversation_id=e.conversation_id AND s.status='active'
 			  AND ((s.source_ids IS NULL AND e.created_at >= s.period_start AND e.created_at <= s.period_end)

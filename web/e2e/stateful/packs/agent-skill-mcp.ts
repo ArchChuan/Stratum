@@ -67,29 +67,16 @@ export const executeAgentSkillMCPPack = async ({
 
     await page.goto(`${webURL}/skills/create`);
     await page.getByLabel('名称').fill(skillName);
-    await page.getByLabel('能力目标').fill('通过 MCP 回显 stateful 输入');
-    await page.getByLabel('调用时机').fill('用户要求执行 stateful MCP 时');
-    await page.getByLabel('样例输入').fill('执行 stateful MCP');
-    await page.getByLabel('期望输出').fill('stateful MCP call completed');
+    await page.getByLabel('描述').fill('通过 MCP 回显 stateful 输入');
     await page.getByLabel('执行指令').fill('必须调用绑定的 MCP 工具并返回结果。');
     // skill 不再直接绑定 MCP 工具（d65933db 移除 skill requirements）；工具绑定
     // 在下方 agent 创建步骤通过「MCP 工具」Select 完成，并由 agent_mcp_tool_links 断言。
+    // 三字段模型（3d037c86 简化）：保存即生效，无激活契约/发布步骤。
     const skillResponse = waitForMutation(page, '/skills', 'POST');
-    await page.getByRole('button', { name: '创建草稿' }).click();
+    await page.getByRole('button', { name: /创\s*建/ }).click();
     const skillCreated = await skillResponse;
     expect(skillCreated.status()).toBe(201);
     skillID = (await skillCreated.json() as { skill: { id: string } }).skill.id;
-    await page.getByRole('tab', { name: '激活契约' }).click();
-    await page.getByLabel('激活名称').fill('stateful_mcp_echo');
-    await page.getByLabel('用途说明').fill('调用 stateful MCP 回显工具');
-    await page.getByLabel('确认契约').click();
-    const activationResponse = waitForMutation(page, `/skills/${skillID}/draft/activation`, 'PATCH');
-    await page.getByRole('button', { name: '保存激活契约' }).click();
-    expect((await activationResponse).status()).toBe(200);
-    await page.getByRole('tab', { name: 'Revision' }).click();
-    const publishResponse = waitForMutation(page, `/skills/${skillID}/publish`, 'POST');
-    await page.getByRole('button', { name: '发布当前 Revision' }).click();
-    expect((await publishResponse).status()).toBe(200);
 
     const skillsListResponse = page.waitForResponse((response) => (
       new URL(response.url()).pathname === '/skills' && response.request().method() === 'GET'
@@ -143,7 +130,9 @@ export const executeAgentSkillMCPPack = async ({
     // 审批人从工作台批准;发起人 page 保持打开,轮询 active-execution 检测到
     // approved 后自动流式续跑(execute/stream),输出回流发起人原会话。
     await approverPage.goto(`${webURL}/approvals`);
-    await expect(approverPage.getByText('工具审批', { exact: true })).toBeVisible({ timeout: 120_000 });
+    // M3/M4 审批中心重构后顶层为 Tabs（工具审批/权限审批）+ 独立标题；
+    // getByText('工具审批') 会命中 tab 与标题两个元素（strict mode 冲突），用 heading 精确定位。
+    await expect(approverPage.getByRole('heading', { name: '工具审批' })).toBeVisible({ timeout: 120_000 });
     const approvalRow = approverPage.locator('tr').filter({ hasText: 'stateful_echo' }).first();
     await expect(approvalRow).toBeVisible({ timeout: 120_000 });
     const decisionResponse = approverPage.waitForResponse((response) => (

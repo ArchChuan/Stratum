@@ -32,6 +32,15 @@ func TestHistoryQueriesEnforceThresholdIdempotencyAndTenantScope(t *testing.T) {
 	}
 }
 
+func TestHistoryBatchQueryFiltersInvalidScopeValues(t *testing.T) {
+	// memory_entries.scope 曾无 CHECK 约束，历史遗留可能写入空串，导致
+	// memory.history.upsert_failed invalid history segment。查询层兜底过滤：
+	// eligible CTE 与主 SELECT 两个分支都必须排除 scope ∉ (user, agent) 的行。
+	if got := strings.Count(historyBatchQuery, "e.scope IN ('user', 'agent')"); got != 2 {
+		t.Fatalf("batch query must filter scope in eligibility and selection branches, got %d", got)
+	}
+}
+
 func TestHistoryBatchQueryExcludesLegacyPeriodsAndExactModernSources(t *testing.T) {
 	for _, want := range []string{
 		"s.source_ids IS NULL",

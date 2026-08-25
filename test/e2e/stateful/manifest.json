@@ -1035,9 +1035,9 @@
       "coverage": "short"
     },
     {
-      "id": "skill.mutation.patch.skills.id.draft.capability",
+      "id": "skill.mutation.patch.skills.id",
       "domain": "skill",
-      "user_goal": "Complete PATCH /skills/:id/draft/capability",
+      "user_goal": "Complete PATCH /skills/:id",
       "route": "/skills/:id/workspace",
       "roles": {
         "allowed": [
@@ -1048,50 +1048,10 @@
           "unauthenticated"
         ]
       },
-      "mutation": "PATCH /skills/:id/draft/capability",
-      "browser_action_id": "skill.mutation.patch.skills.id.draft.capability",
-      "http_evidence": "The browser observes the expected successful response for PATCH /skills/:id/draft/capability",
-      "db_evidence": "Persisted state is reconciled after PATCH /skills/:id/draft/capability",
-      "coverage": "short"
-    },
-    {
-      "id": "skill.mutation.patch.skills.id.draft.activation",
-      "domain": "skill",
-      "user_goal": "Complete PATCH /skills/:id/draft/activation",
-      "route": "/skills/:id/workspace",
-      "roles": {
-        "allowed": [
-          "tenant_admin",
-          "member"
-        ],
-        "denied": [
-          "unauthenticated"
-        ]
-      },
-      "mutation": "PATCH /skills/:id/draft/activation",
-      "browser_action_id": "skill.mutation.patch.skills.id.draft.activation",
-      "http_evidence": "The browser observes the expected successful response for PATCH /skills/:id/draft/activation",
-      "db_evidence": "Persisted state is reconciled after PATCH /skills/:id/draft/activation",
-      "coverage": "short"
-    },
-    {
-      "id": "skill.mutation.patch.skills.id.draft.instructions",
-      "domain": "skill",
-      "user_goal": "Complete PATCH /skills/:id/draft/instructions",
-      "route": "/skills/:id/workspace",
-      "roles": {
-        "allowed": [
-          "tenant_admin",
-          "member"
-        ],
-        "denied": [
-          "unauthenticated"
-        ]
-      },
-      "mutation": "PATCH /skills/:id/draft/instructions",
-      "browser_action_id": "skill.mutation.patch.skills.id.draft.instructions",
-      "http_evidence": "The browser observes the expected successful response for PATCH /skills/:id/draft/instructions",
-      "db_evidence": "Persisted state is reconciled after PATCH /skills/:id/draft/instructions",
+      "mutation": "PATCH /skills/:id",
+      "browser_action_id": "skill.mutation.patch.skills.id",
+      "http_evidence": "The browser observes the expected successful response for PATCH /skills/:id",
+      "db_evidence": "Persisted state is reconciled after PATCH /skills/:id",
       "coverage": "short"
     },
     {
@@ -1112,26 +1072,6 @@
       "browser_action_id": "skill.mutation.delete.skills.id",
       "http_evidence": "The browser observes the expected successful response for DELETE /skills/:id",
       "db_evidence": "Persisted state is reconciled after DELETE /skills/:id",
-      "coverage": "short"
-    },
-    {
-      "id": "skill.mutation.post.skills.id.publish",
-      "domain": "skill",
-      "user_goal": "Complete POST /skills/:id/publish",
-      "route": "/skills/:id/workspace",
-      "roles": {
-        "allowed": [
-          "tenant_admin",
-          "member"
-        ],
-        "denied": [
-          "unauthenticated"
-        ]
-      },
-      "mutation": "POST /skills/:id/publish",
-      "browser_action_id": "skill.mutation.post.skills.id.publish",
-      "http_evidence": "The browser observes the expected successful response for POST /skills/:id/publish",
-      "db_evidence": "Persisted state is reconciled after POST /skills/:id/publish",
       "coverage": "short"
     },
     {
@@ -1967,10 +1907,30 @@
       "coverage": "short"
     },
     {
+      "id": "agent.mutation.post.agents.id.request.editor",
+      "domain": "agent",
+      "user_goal": "Complete POST /agents/:id/request-editor with a proposal approval gate",
+      "route": "/agents/:id/edit",
+      "roles": {
+        "allowed": [
+          "member",
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /agents/:id/request-editor",
+      "browser_action_id": "agent.mutation.post.agents.id.request.editor",
+      "http_evidence": "The browser observes the pending_approval 202 response for POST /agents/:id/request-editor",
+      "db_evidence": "An operation_proposals row with op_type grant_editor is created for the requested agent",
+      "coverage": "short"
+    },
+    {
       "id": "agent.mutation.post.agents.id.self.modify",
       "domain": "agent",
       "user_goal": "Complete POST /agents/:id/self-modify with a proposal approval gate",
-      "route": "/agents",
+      "route": "/agents/:id/edit",
       "roles": {
         "allowed": [
           "member",
@@ -1982,8 +1942,8 @@
       },
       "mutation": "POST /agents/:id/self-modify",
       "browser_action_id": "agent.mutation.post.agents.id.self.modify",
-      "http_evidence": "The browser observes the pending_approval 202 or the approved replay 200 response for POST /agents/:id/self-modify",
-      "db_evidence": "An operation_proposals row is created or the proposal is consumed as executed",
+      "http_evidence": "The browser observes the pending_approval 202 and single-consumption 200 replay responses for POST /agents/:id/self-modify",
+      "db_evidence": "An operation_proposals row transitions proposed → reviewing → approved → executed and the agent description is updated",
       "coverage": "short"
     },
     {

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
@@ -67,6 +68,20 @@ func TestContentHash_deterministicAndDistinct(t *testing.T) {
 	require.NotEqual(t, h1, contentHash("different content"))
 	// Empty content still hashes deterministically.
 	require.Equal(t, contentHash(""), contentHash(""))
+}
+
+func TestBuiltinDocID_deterministicUUIDv5(t *testing.T) {
+	entry := knowledgeport.OfficialDocEntry{DocumentID: "getting-started", Section: "Install & Setup"}
+	id := builtinDocID(entry)
+	parsed, err := uuid.Parse(id)
+	require.NoError(t, err, "docID %q must be a valid UUID (knowledge_docs.id is a UUID column)", id)
+	// google/uuid v1.6.0 未导出命名版本常量；NewSHA1 按构造固定生成版本 5。
+	require.Equal(t, uuid.Version(5), parsed.Version())
+	// 幂等去重依赖确定性：同一条目必须始终映射到同一 doc。
+	require.Equal(t, id, builtinDocID(entry))
+	// 不同 section 派生不同 doc，避免跨文档内容串写。
+	require.NotEqual(t, id, builtinDocID(knowledgeport.OfficialDocEntry{DocumentID: "getting-started", Section: "Other"}))
+	require.NotEqual(t, id, builtinDocID(knowledgeport.OfficialDocEntry{DocumentID: "faq", Section: "Install & Setup"}))
 }
 
 // --- SeedBuiltinDocs branch coverage ---
