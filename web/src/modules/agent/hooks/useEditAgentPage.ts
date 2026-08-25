@@ -11,6 +11,7 @@ import {
 } from '../model/agent';
 
 import { AGENT_DEFAULT_MAX_CONTEXT_TOKENS, AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
+import { useAuth, useEditorCandidates, useTenantRole } from '@/modules/iam';
 import { knowledgeApi } from '@/modules/knowledge';
 import type { Workspace } from '@/modules/knowledge';
 import { llmApi } from '@/modules/llm';
@@ -32,6 +33,9 @@ export const useEditAgentPage = () => {
   const [groupedModels, setGroupedModels] = useState<GroupedModelOption[]>([]);
   const navigate = useNavigate();
   const managementPath = '/agents';
+  const { user } = useAuth();
+  const { isAdmin } = useTenantRole();
+  const { candidates: editorCandidates, loading: editorCandidatesLoading } = useEditorCandidates();
 
   useEffect(() => {
     let cancelled = false;
@@ -89,6 +93,8 @@ export const useEditAgentPage = () => {
           delegateEnabled: a.delegateEnabled ?? false,
           delegateMaxDepth: a.delegateMaxDepth,
           delegateDefaultMaxSteps: a.delegateDefaultMaxSteps,
+          // P2：可编辑人白名单回显；保存时经 setEditors 单独持久化。
+          editors: a.editors as string[] | undefined,
         });
       } catch (err) {
         if (!cancelled) {
@@ -108,14 +114,16 @@ export const useEditAgentPage = () => {
     async (values: AgentFormValues) => {
       setLoading(true);
       try {
-        const {
-          ...rest
-        } = values;
+        const { editors: nextEditors, ...rest } = values;
         await agentApi.update(id, {
           ...rest,
           mcpToolIds: values.mcpToolIds || [],
           knowledgeWorkspaceIds: values.knowledgeWorkspaceIds || [],
         });
+        // P2：可编辑人白名单单独持久化（普通更新请求体不带 editors）。
+        if (nextEditors) {
+          await agentApi.setEditors(id, nextEditors);
+        }
         message.success({ content: `Agent "${values.name}" 保存成功`, duration: 2 });
         navigate('/agents');
       } catch (err) {
@@ -129,8 +137,14 @@ export const useEditAgentPage = () => {
     [id, navigate],
   );
 
+  // P1/P2：白名单成员可编辑——admin/owner 恒可编辑；普通成员仅当命中 agent.editors
+  // 白名单才可编辑，否则编辑页进入只读「查看配置」+「申请编辑权限」。
+  const editorIds = (agent?.editors as string[] | undefined) ?? [];
+  const readOnly = !isAdmin && !editorIds.includes(user?.sub ?? '');
+
   return {
     id, agent, form, loading, pageLoading, skills, mcpTools, workspaces, groupedModels,
-    navigate, managementPath, onFinish,
+    navigate, managementPath, onFinish, readOnly,
+    editorCandidates, editorCandidatesLoading,
   };
 };

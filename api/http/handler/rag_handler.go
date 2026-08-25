@@ -475,6 +475,7 @@ func (h *RAGHandler) ListDocuments(c *gin.Context) {
 			"allowed_user_ids":   strSliceOrEmpty(d.AllowedUserIDs),
 			"allowed_role_ids":   strSliceOrEmpty(d.AllowedRoleIDs),
 			"created_by":         d.CreatedBy,
+			"restricted":         d.Restricted,
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"workspace": name, "documents": items})

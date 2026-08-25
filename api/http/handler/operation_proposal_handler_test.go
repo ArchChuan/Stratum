@@ -49,6 +49,23 @@ func (f *opProposalReviewFake) Reject(_ context.Context, tenantID, userID, _, _ 
 	f.tenantID, f.actorID = tenantID, userID
 	return f.err
 }
+func (f *opProposalReviewFake) ListMine(_ context.Context, tenantID, userID string) ([]domain.OperationProposal, error) {
+	f.tenantID, f.actorID = tenantID, userID
+	if f.err != nil {
+		return nil, f.err
+	}
+	var mine []domain.OperationProposal
+	for _, p := range f.proposals {
+		if p.ProposerID == userID {
+			mine = append(mine, p)
+		}
+	}
+	return mine, nil
+}
+func (f *opProposalReviewFake) ProposeGrantEditor(_ context.Context, tenantID, actorID, _, _, _ string) error {
+	f.tenantID, f.actorID = tenantID, actorID
+	return f.err
+}
 
 type opSelfModifyFake struct {
 	result application.GatedSelfModifyResult

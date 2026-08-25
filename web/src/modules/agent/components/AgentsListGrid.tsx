@@ -12,10 +12,12 @@ interface AgentsListGridProps {
   onExecute: (a: Agent) => void;
   onEdit: (a: Agent) => void;
   onDelete: (id: string, name: string) => void;
-  onSelfModify?: (a: Agent) => void;
+  onView?: (a: Agent) => void;
   onCreate: () => void;
-  /** 仅管理员可见创建/编辑/删除入口。 */
+  /** 仅管理员可见创建/删除入口。 */
   canManage?: boolean;
+  /** 当前登录用户 sub，用于计算白名单可编辑。 */
+  userSub?: string;
 }
 
 export const AgentsListGrid = ({
@@ -25,9 +27,10 @@ export const AgentsListGrid = ({
   onExecute,
   onEdit,
   onDelete,
-  onSelfModify,
+  onView,
   onCreate,
   canManage = false,
+  userSub,
 }: AgentsListGridProps) => {
   if (loading) {
     return (
@@ -77,8 +80,9 @@ export const AgentsListGrid = ({
             onExecute={onExecute}
             onDelete={onDelete}
             onEdit={onEdit}
-            onSelfModify={onSelfModify}
+            onView={onView}
             canManage={canManage}
+            canEdit={userSub != null && (agent as { editors?: string[] }).editors?.includes(userSub)}
           />
         </Col>
       ))}

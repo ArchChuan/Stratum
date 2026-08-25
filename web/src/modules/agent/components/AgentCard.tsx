@@ -1,9 +1,9 @@
 import {
   DeleteOutlined,
   EditOutlined,
+  EyeOutlined,
   PlayCircleOutlined,
   RobotOutlined,
-  SettingOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { Button, Card, Popconfirm, Space, Tag, Tooltip, Typography } from 'antd';
@@ -28,10 +28,12 @@ interface AgentCardProps {
   onExecute: (a: Agent) => void;
   onEdit: (a: Agent) => void;
   onDelete: (id: string, name: string) => void;
-  /** 成员发起自修改（需审批）；管理员走编辑快速路径，不显示该入口。 */
-  onSelfModify?: (a: Agent) => void;
-  /** 仅管理员可见编辑/删除，普通成员只能执行。 */
+  /** 只读「查看配置」入口（普通成员且非白名单编辑人）。 */
+  onView?: (a: Agent) => void;
+  /** 仅管理员可见删除。 */
   canManage?: boolean;
+  /** 白名单成员可直接编辑（无需审批）。 */
+  canEdit?: boolean;
 }
 
 export const AgentCard = ({
@@ -39,8 +41,9 @@ export const AgentCard = ({
   onExecute,
   onEdit,
   onDelete,
-  onSelfModify,
+  onView,
   canManage = false,
+  canEdit = false,
 }: AgentCardProps) => (
   <Card
     style={{
@@ -128,19 +131,32 @@ export const AgentCard = ({
             style={{ color: '#2563eb' }}
           />
         </Tooltip>
-        {!canManage && onSelfModify && (
-          <Tooltip title="发起自修改（需审批）">
-            <Button
-              aria-label="发起自修改"
-              className="responsive-touch-target"
-              type="text"
-              size="small"
-              icon={<SettingOutlined />}
-              onClick={() => onSelfModify(agent)}
-              style={{ color: '#722ed1' }}
-            />
-          </Tooltip>
-        )}
+        {!canManage &&
+          (canEdit ? (
+            <Tooltip title="编辑">
+              <Button
+                aria-label="编辑 Agent"
+                className="responsive-touch-target"
+                type="text"
+                size="small"
+                icon={<EditOutlined />}
+                onClick={() => onEdit(agent)}
+              />
+            </Tooltip>
+          ) : (
+            onView && (
+              <Tooltip title="查看配置">
+                <Button
+                  aria-label="查看 Agent 配置"
+                  className="responsive-touch-target"
+                  type="text"
+                  size="small"
+                  icon={<EyeOutlined />}
+                  onClick={() => onView(agent)}
+                />
+              </Tooltip>
+            )
+          ))}
         {canManage && (
           <>
             <Tooltip title="编辑">

@@ -96,6 +96,18 @@ func registerOperationProposals(r *gin.Engine, c *wiring.Container, requireActiv
 	agents := r.Group("/agents/:id/self-modify", member...)
 	agents.Use(requireActive)
 	agents.POST("", h.SelfModify)
+	// member 自助查看自己的提案（权限审批 tab「我的申请」）。GET /mine 是静态
+	// 段，gin 路由树静态优先于 /:id 参数段，两者可共存。
+	memberOps := r.Group("/operation-proposals", member...)
+	memberOps.Use(requireActive)
+	memberOps.GET("/mine", h.ListMine)
+	// member 自助申请白名单（grant_editor）：agent / skill 编辑权申请、
+	// knowledge 文档查看权申请，批准即授予。同一 handler 按 resourceType 落库。
+	grant := r.Group("", member...)
+	grant.Use(requireActive)
+	grant.POST("/agents/:id/request-editor", h.RequestEditorAccess)
+	grant.POST("/skills/:id/request-editor", h.RequestEditorAccess)
+	grant.POST("/knowledge/workspaces/:name/documents/:documentID/request-access", h.RequestEditorAccess)
 }
 
 func registerResourceChangeProposals(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
@@ -459,8 +471,11 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		agents.POST("/:id/execute/stream", requireActive, execRateLimit, agentHandler.ExecuteAgentStream)
 		agents.POST("/:id/executions/:executionID/pause", requireActive, agentHandler.PauseExecution)
 		agents.POST("/:id/executions/:executionID/resume", requireActive, agentHandler.ResumeExecution)
-		agents.PUT("/:id", requireAdmin, requireActive, agentHandler.UpdateAgent)
-		agents.PUT("/:id/editors", requireAdmin, requireActive, agentHandler.SetAgentEditors)
+		// P1/P2：白名单成员可编辑——update 门控放宽到 member+，真实鉴权由 service
+		// ownership 矩阵完成（owner/admin/creator/白名单 editor 放行，其余 ErrForbidden）；
+		// editors 管理同样放宽，SetEditors 内部仍限 creator/owner（editors=nil 拒编辑人委托）。
+		agents.PUT("/:id", requireActive, agentHandler.UpdateAgent)
+		agents.PUT("/:id/editors", requireActive, agentHandler.SetAgentEditors)
 		agents.DELETE("/:id", requireAdmin, requireActive, agentHandler.DeleteAgent)
 		agents.POST("/:id/conversations", chatHandler.CreateConversation)
 		agents.GET("/:id/conversations", chatHandler.ListConversations)

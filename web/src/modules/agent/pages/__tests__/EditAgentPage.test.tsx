@@ -11,6 +11,11 @@ vi.mock('../../components/AgentFormSections', () => ({
   AgentFormSections: () => <div>普通 Agent 完整表单</div>,
 }));
 
+// F2：页面直接使用 useTenantRole（isAdmin 门控编辑/只读），测试 mock 返回值。
+vi.mock('@/modules/iam', () => ({
+  useTenantRole: () => ({ role: 'member', isAdmin: false, isOwner: false, isMember: true, hasTenantRole: () => false }),
+}));
+
 const baseHook = {
   loading: false,
   pageLoading: false,
@@ -21,6 +26,9 @@ const baseHook = {
   managementPath: '/agents',
   navigate: vi.fn(),
   onFinish: vi.fn(),
+  readOnly: false,
+  editorCandidates: [],
+  editorCandidatesLoading: false,
 };
 
 const renderPage = (name: string, id: string) => {

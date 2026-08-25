@@ -1,5 +1,6 @@
 import { Modal, Pagination, Table, Tabs, Typography } from 'antd';
 import { useCallback, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 import type { ApprovalDecision, ApprovalRow } from '../api';
 import { ApprovalDetailDrawer } from '../components/ApprovalDetailDrawer';
@@ -10,10 +11,19 @@ import {
 } from '../hooks/useApprovalsPage';
 
 import { useTenantRole } from '@/modules/iam';
+import { OperationProposalsPanel } from '@/modules/operation-gate/components/OperationProposalsPanel';
 import { EmptyHint } from '@/shared/ui';
+
+// 审批中心顶层栏：工具审批（工具调用待办/历史）与权限审批（操作提案 + 白名单申请）。
+type TopTab = 'tools' | 'permission';
 
 export const ApprovalsPage = () => {
   const { isAdmin } = useTenantRole();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [topTab, setTopTab] = useState<TopTab>(
+    searchParams.get('tab') === 'permission' ? 'permission' : 'tools',
+  );
+
   const {
     activeTab,
     pendingRows,
@@ -69,6 +79,13 @@ export const ApprovalsPage = () => {
     });
   }, [execute, closeDetail]);
 
+  // 顶层栏切换：同步 URL 使 ?tab=permission 可分享/刷新保持。
+  const switchTopTab = useCallback((key: string) => {
+    const next = key as TopTab;
+    setTopTab(next);
+    setSearchParams(next === 'permission' ? { tab: 'permission' } : {}, { replace: true });
+  }, [setSearchParams]);
+
   const pendingColumns = buildPendingColumns({
     approvers,
     approversLoading,
@@ -85,59 +102,74 @@ export const ApprovalsPage = () => {
 
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          工具审批
-        </Typography.Title>
-        <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-          {isAdmin
-            ? '管理员审批 Agent 请求的高风险工具调用'
-            : '查看我发起的审批请求与状态'}
-        </Typography.Text>
-      </div>
-
       <Tabs
-        activeKey={activeTab}
-        onChange={(key) => switchTab(key as ApprovalsTab)}
+        activeKey={topTab}
+        onChange={switchTopTab}
         items={[
-          { key: 'pending', label: '待审批' },
-          { key: 'history', label: '历史' },
+          { key: 'tools', label: '工具审批' },
+          { key: 'permission', label: '权限审批' },
         ]}
       />
 
-      {activeTab === 'pending' ? (
-        <Table<ApprovalRow>
-          rowKey="id"
-          dataSource={pendingRows}
-          columns={pendingColumns}
-          loading={pendingLoading}
-          size="small"
-          pagination={false}
-          locale={{ emptyText: <EmptyHint title="暂无待审批" description="没有等待审批的工具调用" /> }}
-        />
-      ) : (
+      {topTab === 'tools' ? (
         <>
-          <Table<ApprovalRow>
-            rowKey="id"
-            dataSource={historyRows}
-            columns={historyColumns}
-            loading={historyLoading}
-            size="small"
-            pagination={false}
-            locale={{ emptyText: <EmptyHint title="没有审批历史" description="完成过审批后在此查看" /> }}
-          />
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
-            <Pagination
-              current={page}
-              pageSize={pageSize}
-              total={total}
-              pageSizeOptions={pageSizeOptions}
-              showSizeChanger
-              showTotal={(t) => `共 ${t} 条记录`}
-              onChange={handleHistoryPageChange}
-            />
+          <div style={{ marginBottom: 16 }}>
+            <Typography.Title level={4} style={{ margin: 0 }}>
+              工具审批
+            </Typography.Title>
+            <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+              {isAdmin
+                ? '管理员审批 Agent 请求的高风险工具调用'
+                : '查看我发起的审批请求与状态'}
+            </Typography.Text>
           </div>
+
+          <Tabs
+            activeKey={activeTab}
+            onChange={(key) => switchTab(key as ApprovalsTab)}
+            items={[
+              { key: 'pending', label: '待审批' },
+              { key: 'history', label: '历史' },
+            ]}
+          />
+
+          {activeTab === 'pending' ? (
+            <Table<ApprovalRow>
+              rowKey="id"
+              dataSource={pendingRows}
+              columns={pendingColumns}
+              loading={pendingLoading}
+              size="small"
+              pagination={false}
+              locale={{ emptyText: <EmptyHint title="暂无待审批" description="没有等待审批的工具调用" /> }}
+            />
+          ) : (
+            <>
+              <Table<ApprovalRow>
+                rowKey="id"
+                dataSource={historyRows}
+                columns={historyColumns}
+                loading={historyLoading}
+                size="small"
+                pagination={false}
+                locale={{ emptyText: <EmptyHint title="没有审批历史" description="完成过审批后在此查看" /> }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+                <Pagination
+                  current={page}
+                  pageSize={pageSize}
+                  total={total}
+                  pageSizeOptions={pageSizeOptions}
+                  showSizeChanger
+                  showTotal={(t) => `共 ${t} 条记录`}
+                  onChange={handleHistoryPageChange}
+                />
+              </div>
+            </>
+          )}
         </>
+      ) : (
+        <OperationProposalsPanel readonly={!isAdmin} />
       )}
 
       <DecideApprovalModal

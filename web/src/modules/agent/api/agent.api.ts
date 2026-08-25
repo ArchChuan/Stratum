@@ -34,6 +34,9 @@ export const agentApi = {
   },
   create: (data: AgentFormValues) => api.post('/agents', data),
   update: (id: string, data: AgentFormValues) => api.put(`/agents/${id}`, data),
+  // P2：白名单（可编辑人）独立于普通更新体管理——PUT /agents/:id 不接受 editors，
+  // 单独 PUT /agents/:id/editors 持久化（handler SetAgentEditors，owner/creator 可调）。
+  setEditors: (id: string, editorIds: string[]) => api.put(`/agents/${id}/editors`, { editorIds }),
   delete: (id: string) => api.delete(`/agents/${id}`),
   // M6：同步执行（列表页"运行"按钮）后端无全局 deadline（逐步骤超时 + maxSteps
   // 上限兜底），HTTP 层不设超时，避免长执行被误杀；只保留接口级 + 迭代限制。

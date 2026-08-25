@@ -168,3 +168,161 @@ func TestOperationProposalReviewFromReviewingState(t *testing.T) {
 	require.NoError(t, service.Approve(context.Background(), "tenant-1", "admin-1", "p1", "ok"))
 	require.Equal(t, domain.OpApproved, repo.proposals["p1"].Status)
 }
+
+func TestProposeGrantEditor(t *testing.T) {
+	ctx := context.Background()
+	repo := newOperationProposalRepoFake()
+	service := newOperationProposalServiceForTest(repo, roleResolverFake{role: "member"}, nil)
+
+	t.Run("member proposes editor access for an agent", func(t *testing.T) {
+		err := service.ProposeGrantEditor(ctx, "tenant-1", "member-1", "agent", "agent-1", "My Agent")
+		require.NoError(t, err)
+		require.Len(t, repo.proposals, 1)
+		var p domain.OperationProposal
+		for _, v := range repo.proposals {
+			p = v
+		}
+		require.Equal(t, string(port.OpGrantEditor), p.OpType)
+		require.Equal(t, "grant_editor|agent|agent-1|member-1", p.Fingerprint)
+		require.Equal(t, domain.OpProposed, p.Status)
+		require.Equal(t, "member-1", p.ProposerID)
+		require.JSONEq(t, `{"resourceType":"agent","resourceId":"agent-1","resourceName":"My Agent","applicant":"member-1","action":"grant_editor_access"}`,
+			string(p.PayloadSummary))
+	})
+
+	t.Run("duplicate pending request is rejected", func(t *testing.T) {
+		err := service.ProposeGrantEditor(ctx, "tenant-1", "member-1", "agent", "agent-1", "My Agent")
+		require.ErrorIs(t, err, domain.ErrOperationProposalPending)
+	})
+
+	t.Run("invalid inputs fail closed", func(t *testing.T) {
+		err := service.ProposeGrantEditor(ctx, "tenant-1", "member-1", "agent", "", "")
+		require.ErrorIs(t, err, domain.ErrProposalInvalid)
+	})
+}
+
+func TestOperationProposalListMine(t *testing.T) {
+	repo := newOperationProposalRepoFake()
+	repo.proposals["p1"] = domain.OperationProposal{ID: "p1", TenantID: "tenant-1", AgentID: "a", OpType: "self_modify", Status: domain.OpProposed, ProposerID: "member-1"}
+	repo.proposals["p2"] = domain.OperationProposal{ID: "p2", TenantID: "tenant-1", AgentID: "a", OpType: string(port.OpGrantEditor), Status: domain.OpExecuted, ProposerID: "member-1"}
+	repo.proposals["p3"] = domain.OperationProposal{ID: "p3", TenantID: "tenant-1", AgentID: "a", OpType: "self_modify", Status: domain.OpProposed, ProposerID: "member-2"}
+	service := newOperationProposalServiceForTest(repo, roleResolverFake{role: "member"}, nil)
+
+	mine, err := service.ListMine(context.Background(), "tenant-1", "member-1")
+	require.NoError(t, err)
+	require.Len(t, mine, 2)
+	for _, p := range mine {
+		require.Equal(t, "member-1", p.ProposerID)
+	}
+
+	t.Run("empty identity fails closed", func(t *testing.T) {
+		_, err := service.ListMine(context.Background(), "tenant-1", "")
+		require.ErrorIs(t, err, domain.ErrProposalForbidden)
+	})
+}
+
+func TestApproveGrantEditorGrantsAndExecutes(t *testing.T) {
+	ctx := context.Background()
+	repo := newOperationProposalRepoFake()
+	metrics := &gateMetricsFake{}
+	service := newOperationProposalServiceForTest(repo, roleResolverFake{role: "admin"}, metrics)
+
+	var gotTenant, gotKind, gotResource, gotEditor string
+	service.WithGrantEditor(func(_ context.Context, tenantID, resourceType, resourceID, editorID string) error {
+		gotTenant, gotKind, gotResource, gotEditor = tenantID, resourceType, resourceID, editorID
+		return nil
+	})
+
+	require.NoError(t, service.ProposeGrantEditor(ctx, "tenant-1", "member-1", "skill", "skill-1", "My Skill"))
+	var pid string
+	for id := range repo.proposals {
+		pid = id
+	}
+	require.NoError(t, service.Approve(ctx, "tenant-1", "admin-1", pid, "granted"))
+	require.Equal(t, "tenant-1", gotTenant)
+	require.Equal(t, "skill", gotKind)
+	require.Equal(t, "skill-1", gotResource)
+	require.Equal(t, "member-1", gotEditor)
+	p := repo.proposals[pid]
+	require.Equal(t, domain.OpExecuted, p.Status)
+	require.Equal(t, "admin-1", p.ReviewedBy)
+	require.Equal(t, "granted", p.ReviewNote)
+	require.Nil(t, p.ExpiresAt)
+	require.Equal(t, []string{"grant_editor|approved"}, metrics.calls)
+
+	t.Run("knowledge_doc grant dispatches to the doc whitelist", func(t *testing.T) {
+		repo2 := newOperationProposalRepoFake()
+		svc := newOperationProposalServiceForTest(repo2, roleResolverFake{role: "admin"}, nil)
+		var dispatched string
+		svc.WithGrantEditor(func(_ context.Context, _, resourceType, _, _ string) error {
+			dispatched = resourceType
+			return nil
+		})
+		require.NoError(t, svc.ProposeGrantEditor(ctx, "tenant-1", "member-9", "knowledge_doc", "doc-1", "docs/annual.pdf"))
+		var id2 string
+		for id := range repo2.proposals {
+			id2 = id
+		}
+		require.NoError(t, svc.Approve(ctx, "tenant-1", "admin-1", id2, "ok"))
+		require.Equal(t, "knowledge_doc", dispatched)
+		require.Equal(t, domain.OpExecuted, repo2.proposals[id2].Status)
+	})
+}
+
+func TestApproveGrantEditorWithoutGateFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	repo := newOperationProposalRepoFake()
+	service := newOperationProposalServiceForTest(repo, roleResolverFake{role: "admin"}, nil)
+	// No WithGrantEditor — approval must fail without granting anything.
+	require.NoError(t, service.ProposeGrantEditor(ctx, "tenant-1", "member-1", "agent", "agent-1", ""))
+	var pid string
+	for id := range repo.proposals {
+		pid = id
+	}
+	err := service.Approve(ctx, "tenant-1", "admin-1", pid, "")
+	require.Error(t, err)
+	require.Equal(t, domain.OpProposed, repo.proposals[pid].Status)
+}
+
+func TestApproveGrantEditorGrantFailureLeavesProposalPending(t *testing.T) {
+	ctx := context.Background()
+	repo := newOperationProposalRepoFake()
+	service := newOperationProposalServiceForTest(repo, roleResolverFake{role: "admin"}, nil)
+	service.WithGrantEditor(func(_ context.Context, _, _, _, _ string) error {
+		return domain.ErrForbidden
+	})
+	require.NoError(t, service.ProposeGrantEditor(ctx, "tenant-1", "member-1", "knowledge_doc", "doc-9", ""))
+	var pid string
+	for id := range repo.proposals {
+		pid = id
+	}
+	err := service.Approve(ctx, "tenant-1", "admin-1", pid, "")
+	require.Error(t, err)
+	require.Equal(t, domain.OpProposed, repo.proposals[pid].Status)
+}
+
+// TestApproveGrantEditorResolvedProposalFailsClosed pins the state-precondition
+// on grant_editor approval: once a proposal has been rejected (a terminal
+// state) a later Approve must fail WITHOUT running the grant — the whitelist
+// grant must never ride on a stale approval.
+func TestApproveGrantEditorResolvedProposalFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	repo := newOperationProposalRepoFake()
+	service := newOperationProposalServiceForTest(repo, roleResolverFake{role: "admin"}, nil)
+	granted := false
+	service.WithGrantEditor(func(_ context.Context, _, _, _, _ string) error {
+		granted = true
+		return nil
+	})
+	require.NoError(t, service.ProposeGrantEditor(ctx, "tenant-1", "member-1", "agent", "agent-1", ""))
+	var pid string
+	for id := range repo.proposals {
+		pid = id
+	}
+	require.NoError(t, service.Reject(ctx, "tenant-1", "admin-1", pid, "denied"))
+
+	err := service.Approve(ctx, "tenant-1", "admin-1", pid, "granted anyway")
+	require.ErrorIs(t, err, domain.ErrOperationProposalResolved)
+	require.False(t, granted, "grant must not run on a rejected proposal")
+	require.Equal(t, domain.OpRejected, repo.proposals[pid].Status)
+}

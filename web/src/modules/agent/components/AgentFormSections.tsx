@@ -44,7 +44,8 @@ interface AgentFormSectionsProps {
   workspaces: Workspace[];
   groupedModels: GroupedModelOption[];
   currentModel?: string;
-  // 创建路径才展示可编辑人多选：普通资源更新请求体不带 editors。
+  // 可编辑人（白名单）多选：创建路径恒展示；编辑路径由调用方按 isAdmin 控制。
+  // 可编辑人经单独 PUT /agents/:id/editors 持久化，不进普通更新请求体。
   showEditors?: boolean;
   editorCandidates?: Member[];
   editorCandidatesLoading?: boolean;
@@ -246,10 +247,10 @@ export const AgentFormSections = ({
         <Form.Item
           label="可编辑人"
           name="editors"
-          extra="可编辑人（租户管理员）可以修改此 Agent；删除仍仅限创建者或超级管理员"
+          extra="白名单成员可以直接修改此 Agent（无需审批）；删除仍仅限创建者或管理员"
           style={{ marginBottom: 0 }}
         >
-          <Select mode="multiple" placeholder="选择可编辑的管理员" allowClear loading={editorCandidatesLoading}>
+          <Select mode="multiple" placeholder="选择可编辑的成员" allowClear loading={editorCandidatesLoading}>
             {editorCandidates.map((member) => (
               <Option key={member.user_id} value={member.user_id}>
                 {member.github_login || member.user_id}

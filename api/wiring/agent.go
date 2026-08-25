@@ -509,6 +509,27 @@ func wireOperationGate(c *Container, a *Agent, metrics observability.MetricsProv
 		roles,
 		metrics,
 	)
+	// grant_editor 批准即授予：按 resourceType 分发到各模块的授予实现。skill
+	// 走共享 resource_editors 表（agent 模块仓库以 kind='skill' 写入，skill
+	// 模块自身读该表判断白名单，不触碰 internal/skill/**）；knowledge_doc 走
+	// 文档查看白名单幂等追加。createdBy 记系统 gate actor，与
+	// gated_self_modify 的 operationGateActor 对齐。
+	resourceEditors := persistence.NewPgResourceEditorRepo(db)
+	a.OperationProposalSvc.WithGrantEditor(func(ctx context.Context, tenantID, resourceType, resourceID, editorID string) error {
+		switch resourceType {
+		case "agent":
+			return a.Service.GrantEditorOnApproval(ctx, tenantID, resourceID, editorID)
+		case "skill":
+			return resourceEditors.AddEditorForKind(ctx, tenantID, "skill", resourceID, editorID, "operation-gate")
+		case "knowledge_doc":
+			if c.Knowledge == nil || c.Knowledge.DocRepo == nil {
+				return fmt.Errorf("grant editor: knowledge doc repo not wired")
+			}
+			return c.Knowledge.DocRepo.AddAllowedUser(ctx, tenantID, resourceID, editorID)
+		default:
+			return fmt.Errorf("grant editor: unsupported resource type %q", resourceType)
+		}
+	})
 	a.Service.SetOperationGate(a.OperationGateService)
 }
 

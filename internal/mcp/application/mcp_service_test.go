@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
@@ -62,27 +61,26 @@ func (f *lifecycleManagerFake) GetServerConfig(context.Context, string) (*domain
 	return f.stored, nil
 }
 
-func TestPlatformManagedServerMutationsAreRejectedBeforeLifecycleChange(t *testing.T) {
+func TestPlatformManagedServerMutationsSucceedAsOwner(t *testing.T) {
 	t.Parallel()
 
 	for _, tt := range []struct {
-		name string
-		act  func(*MCPService) error
+		name  string
+		act   func(*MCPService) error
+		check func(*lifecycleManagerFake) bool
 	}{
 		{name: "connect overwrite", act: func(s *MCPService) error {
 			return s.ConnectServer(t.Context(), &domain.ServerConfig{ID: "stratum-platform-mcp"}, nil, "user-1")
-		}},
+		}, check: func(m *lifecycleManagerFake) bool { return len(m.audits) > 0 }},
 		{name: "update", act: func(s *MCPService) error {
 			return s.UpdateServer(t.Context(), &domain.ServerConfig{ID: "stratum-platform-mcp"}, "user-1")
-		}},
+		}, check: func(m *lifecycleManagerFake) bool { return m.updated }},
 		{name: "delete", act: func(s *MCPService) error {
 			return s.DeleteServer(t.Context(), "stratum-platform-mcp", "user-1")
-		}},
+		}, check: func(m *lifecycleManagerFake) bool { return m.deleted == "stratum-platform-mcp" }},
 		{name: "disconnect", act: func(s *MCPService) error {
 			return s.DisconnectServer(t.Context(), "stratum-platform-mcp", "user-1")
-		}},
-		// Reconnect is intentionally allowed for platform-managed servers;
-		// it restores connectivity after idle eviction without modifying config.
+		}, check: func(m *lifecycleManagerFake) bool { return m.disconnected == "stratum-platform-mcp" }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			manager := &lifecycleManagerFake{stored: &domain.ServerConfig{
@@ -93,17 +91,17 @@ func TestPlatformManagedServerMutationsAreRejectedBeforeLifecycleChange(t *testi
 
 			err := tt.act(service)
 
-			if !errors.Is(err, domain.ErrPlatformManagedServer) {
-				t.Fatalf("error = %v, want ErrPlatformManagedServer", err)
+			if err != nil {
+				t.Fatalf("platform-managed server must be operable by owner (P4), got %v", err)
 			}
-			if manager.updated || manager.deleted != "" || manager.disconnected != "" {
-				t.Fatalf("managed lifecycle mutated: %+v", manager)
+			if !tt.check(manager) {
+				t.Fatalf("expected lifecycle mutation, got %+v", manager)
 			}
 		})
 	}
 }
 
-func TestPlatformManagedServerSystemKeyFailsClosedWithoutManagementMode(t *testing.T) {
+func TestPlatformManagedServerSystemKeyDeletableByOwner(t *testing.T) {
 	manager := &lifecycleManagerFake{stored: &domain.ServerConfig{
 		ID: "stratum-platform-mcp", SystemKey: "stratum.platform_mcp",
 	}}
@@ -112,11 +110,11 @@ func TestPlatformManagedServerSystemKeyFailsClosedWithoutManagementMode(t *testi
 
 	err := service.DeleteServer(t.Context(), "stratum-platform-mcp", "user-1")
 
-	if !errors.Is(err, domain.ErrPlatformManagedServer) {
-		t.Fatalf("error = %v, want ErrPlatformManagedServer", err)
+	if err != nil {
+		t.Fatalf("system-key server must be deletable by owner (P4), got %v", err)
 	}
-	if manager.deleted != "" {
-		t.Fatalf("managed server deleted: %q", manager.deleted)
+	if manager.deleted != "stratum-platform-mcp" {
+		t.Fatalf("server not deleted: %q", manager.deleted)
 	}
 }
 func (f *lifecycleManagerFake) ListTools(context.Context, string) ([]*domain.Tool, error) {

@@ -87,17 +87,18 @@ func TestListDocuments_ACLMatrix(t *testing.T) {
 			CreatedBy: "creator-1"},
 	}
 	cases := []struct {
-		name        string
-		ws          *domain.Workspace
-		role        string
-		useRoles    bool
-		resolveFail bool
-		viewerID    string
-		visible     []string
-		wantErr     error
-		wantCount   int
-		wantEcho    bool
-		wantQuery   bool
+		name           string
+		ws             *domain.Workspace
+		role           string
+		useRoles       bool
+		resolveFail    bool
+		viewerID       string
+		visible        []string
+		wantErr        error
+		wantCount      int
+		wantEcho       bool
+		wantQuery      bool
+		wantRestricted []bool
 	}{
 		{
 			name: "tenant admin sees all docs and ACL is echoed",
@@ -114,23 +115,26 @@ func TestListDocuments_ACLMatrix(t *testing.T) {
 			wantCount: 2, wantEcho: true,
 		},
 		{
-			name: "member sees only the visible set without ACL echo",
+			name: "member sees all doc metadata with the invisible one flagged restricted",
 			ws:   &domain.Workspace{ID: "ws-1", Name: "docs"},
 			role: "member", useRoles: true, viewerID: "viewer-1",
 			visible:   []string{"d1"},
-			wantCount: 1, wantEcho: false, wantQuery: true,
+			wantCount: 2, wantEcho: false, wantQuery: true,
+			wantRestricted: []bool{false, true},
 		},
 		{
-			name: "empty visible set yields an empty list without error",
+			name: "empty visible set flags every doc restricted without error",
 			ws:   &domain.Workspace{ID: "ws-1", Name: "docs"},
 			role: "member", useRoles: true, viewerID: "viewer-1",
-			wantCount: 0, wantEcho: false, wantQuery: true,
+			wantCount: 2, wantEcho: false, wantQuery: true,
+			wantRestricted: []bool{true, true},
 		},
 		{
 			name: "system workspace is unrestricted and never echoes",
 			ws:   &domain.Workspace{ID: "ws-sys", Name: "official", ManagementMode: platformknowledge.ManagementPlatform},
 			role: "member", useRoles: true, viewerID: "viewer-1",
 			wantCount: 2, wantEcho: false,
+			wantRestricted: []bool{false, false},
 		},
 		{
 			name:     "missing role resolver fails closed",
@@ -178,6 +182,13 @@ func TestListDocuments_ACLMatrix(t *testing.T) {
 				require.Empty(t, views[0].AllowedUserIDs)
 				require.Empty(t, views[0].AllowedRoleIDs)
 				require.Empty(t, views[0].CreatedBy)
+			}
+			if tc.wantRestricted != nil {
+				got := make([]bool, len(views))
+				for i, v := range views {
+					got[i] = v.Restricted
+				}
+				require.Equal(t, tc.wantRestricted, got)
 			}
 		})
 	}

@@ -1,6 +1,7 @@
 import {
   operationProposalListSchema,
   operationProposalSchema,
+  pendingApprovalSchema,
   selfModifyResultSchema,
   type OperationProposal,
 } from '../model/operationProposal';
@@ -28,5 +29,27 @@ export const operationProposalApi = {
   selfModify: async (agentId: string, payload: Record<string, unknown>) => {
     const response = await api.post(`/agents/${agentId}/self-modify`, payload);
     return selfModifyResultSchema.parse(response.data);
+  },
+  // 我发起的全部提案（任意状态，最新在前）：权限审批 tab 的成员视图。
+  listMine: async (): Promise<OperationProposal[]> => {
+    const response = await api.get('/operation-proposals/mine');
+    return operationProposalListSchema.parse(response.data).proposals;
+  },
+  // 白名单自助申请：agent/skill → POST /:kind/:id/request-editor；
+  // knowledge_doc → POST /knowledge/workspaces/:name/documents/:id/request-access。
+  // resourceName 仅用于审批中心展示；knowledge_doc 需带 workspaceName 定位路由。
+  requestEditorAccess: async (
+    resourceType: 'agent' | 'skill' | 'knowledge_doc',
+    resourceId: string,
+    opts?: { workspaceName?: string; resourceName?: string },
+  ) => {
+    const url = resourceType === 'knowledge_doc'
+      ? `/knowledge/workspaces/${opts?.workspaceName ?? ''}/documents/${resourceId}/request-access`
+      : `/${resourceType}s/${resourceId}/request-editor`;
+    const response = await api.post(url, {
+      resourceType,
+      resourceName: opts?.resourceName,
+    });
+    return pendingApprovalSchema.parse(response.data);
   },
 };
