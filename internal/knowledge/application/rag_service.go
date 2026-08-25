@@ -292,6 +292,11 @@ type RAGQueryRequest struct {
 	// of the admin-owner exemption in the D1 matrix. Business callers must
 	// never set it.
 	SkipAccessCheck bool
+	// SkipTopKClamp 豁免 TopK/RerankTopK 的 20 硬上限钳制，仅供评估等特权检索路径
+	// 置位：RetrievalSnapshot 的既有契约允许 TopK ∈ [1, MaximumEvaluationTopK=100]，
+	// 评估 recall@k（k>20）依赖不截断的候选池，Query 入口的防御性 clamp 会静默压回 20
+	// 导致指标失真。普通业务调用方必须走 clamp（proto binding 已限 max=20，此为纵深防御）。
+	SkipTopKClamp bool
 	// RerankModel 是 builtin-score-v1 的 LLM 语义重排模型（workspace 显式配置）；
 	// 仅 Reranking=builtin-score-v1 时消费，空模型由重排器 fail-open 拒绝。
 	RerankModel string
@@ -360,6 +365,11 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 
 	if req.TopK <= 0 {
 		req.TopK = constants.DefaultRAGTopK
+	}
+	// 防御性 clamp：查询入口不信任调用方已通过 proto binding 的 max=20。
+	// SkipTopKClamp 豁免仅限评估等特权路径（RetrievalSnapshot 契约允许到 100）。
+	if !req.SkipTopKClamp && req.TopK > constants.MaxRAGTopK {
+		req.TopK = constants.MaxRAGTopK
 	}
 
 	if req.WorkspaceID == "" && req.Workspace != "" && rs.wsRepo != nil {
@@ -1006,9 +1016,13 @@ func (rs *RAGService) handleMissingCollection(ctx context.Context, req RAGQueryR
 }
 
 // rerankTopK is the final result count after narrowing: RerankTopK when set,
-// otherwise TopK.
+// otherwise TopK. Clamp 到 MaxRerankTopK 防御 workspace 配置越界（DB 存量脏值），
+// SkipTopKClamp（评估路径）豁免以保留 MaximumEvaluationTopK=100 契约。
 func rerankTopK(req RAGQueryRequest) int {
 	if req.RerankTopK > 0 {
+		if !req.SkipTopKClamp && req.RerankTopK > constants.MaxRerankTopK {
+			return constants.MaxRerankTopK
+		}
 		return req.RerankTopK
 	}
 	return req.TopK

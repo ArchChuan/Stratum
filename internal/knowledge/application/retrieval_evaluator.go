@@ -177,6 +177,10 @@ func (e *RetrievalEvaluator) retrieveSources(
 		Reranking:      snapshot.Reranking,
 		ScoreThreshold: float32(snapshot.ScoreThreshold),
 		RerankTopK:     snapshot.TopK,
+		// 评估快照 TopK ∈ [1, MaximumEvaluationTopK=100] 是既有契约；Query 入口的
+		// TopK/RerankTopK 防御性 20 上限 clamp 会静默截断候选池，使 recall@k(k>20)
+		// 与引文指标失真。此路径豁免 clamp（SkipTopKClamp 仅限特权检索路径置位）。
+		SkipTopKClamp: true,
 		// The internal worker path (EvaluateRetrieval) has no end-user viewer
 		// identity and explicitly bypasses the D2 gate — the D1 admin-owner
 		// equivalent. System-actor contexts bypass too (privileged wiring).

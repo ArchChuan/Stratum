@@ -529,3 +529,70 @@ func TestRAGQueryBuiltinSemanticRerankEmptyLLMResultsFillsTail(t *testing.T) {
 		t.Fatalf("tail-filled candidates keep recall scores, got %+v", got.Sources)
 	}
 }
+
+// TestRerankTopKClampsToMax 守护 rerankTopK 的最终条数硬上限：请求 RerankTopK
+// 超过 MaxRerankTopK 时 clamp 到上限，0 = 跟随 TopK。
+func TestRerankTopKClampsToMax(t *testing.T) {
+	cases := []struct {
+		name      string
+		rerankTop int
+		topK      int
+		skipClamp bool
+		want      int
+	}{
+		{"follows topk when unset", 0, 3, false, 3},
+		{"uses explicit rerank topk", 3, 5, false, 3},
+		{"clamps above max", 25, 5, false, constants.MaxRerankTopK},
+		{"clamps exactly at max is allowed", constants.MaxRerankTopK, 5, false, constants.MaxRerankTopK},
+		// 评估路径豁免：SkipTopKClamp 保留 MaximumEvaluationTopK=100 契约，不截断候选池。
+		{"skip clamp preserves evaluation topk", 25, 5, true, 25},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := rerankTopK(RAGQueryRequest{TopK: tc.topK, RerankTopK: tc.rerankTop, SkipTopKClamp: tc.skipClamp}); got != tc.want {
+				t.Errorf("rerankTopK(RerankTopK=%d, TopK=%d, SkipTopKClamp=%v) = %d, want %d",
+					tc.rerankTop, tc.topK, tc.skipClamp, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRAGQueryClampsTopKToMax 守护 Query 入口的防御性 topK 上限 clamp：
+// 即使调用方绕过 proto binding 提交越界 topK，检索也 clamp 到 MaxRAGTopK；
+// 评估路径 SkipTopKClamp 豁免，保留 MaximumEvaluationTopK=100 契约不被截断。
+func TestRAGQueryClampsTopKToMax(t *testing.T) {
+	vectors := NewMockVectorStore()
+	results := make([]knowledgeport.VectorSearchResult, 0, 30)
+	for i := 0; i < 30; i++ {
+		results = append(results, knowledgeport.VectorSearchResult{
+			ID: fmt.Sprintf("chunk-%d", i), SourceDocument: "doc", Content: "content", Score: float32(i + 1),
+		})
+	}
+	vectors.SetSearchResults(results)
+	service := vectorRAGService(vectors)
+
+	cases := []struct {
+		name      string
+		topK      int
+		skipClamp bool
+		want      int
+	}{
+		{"clamps above max", constants.MaxRAGTopK + 5, false, constants.MaxRAGTopK},
+		// 评估快照 TopK 允许到 100：豁免 clamp 后返回候选池全量，不做 20 截断。
+		{"skip clamp preserves evaluation candidate pool", 100, true, 30},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := service.Query(context.Background(), RAGQueryRequest{
+				TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: "vector",
+				ViewerID: "test-user", TopK: tc.topK, EmbeddingModel: "embedding-3", SkipTopKClamp: tc.skipClamp,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Sources) != tc.want {
+				t.Fatalf("sources = %d, want %d (skipClamp=%v)", len(got.Sources), tc.want, tc.skipClamp)
+			}
+		})
+	}
+}

@@ -77,7 +77,7 @@ func TestNewWorkspaceRejectsInvalidConfig(t *testing.T) {
 }
 
 func TestWorkspaceConfigValidate(t *testing.T) {
-	valid := WorkspaceConfig{EmbeddingModel: "embedding-3", QueryMode: "graph", ChunkingStrategy: ChunkingStrategyStructureRecursive}
+	valid := WorkspaceConfig{EmbeddingModel: "embedding-3", QueryMode: "graph", TopK: 5, ChunkingStrategy: ChunkingStrategyStructureRecursive}
 	if err := valid.Validate(); err != nil {
 		t.Errorf("expected valid config to pass, got %v", err)
 	}
@@ -94,6 +94,10 @@ func TestWorkspaceConfigValidate(t *testing.T) {
 		{"external provider with model passes", func(c *WorkspaceConfig) { c.Reranking = "unknown:model" }, nil},
 		{"threshold above range", func(c *WorkspaceConfig) { c.ScoreThreshold = 1.5 }, ErrInvalidScoreThreshold},
 		{"threshold below range", func(c *WorkspaceConfig) { c.ScoreThreshold = -0.1 }, ErrInvalidScoreThreshold},
+		{"topk above range", func(c *WorkspaceConfig) { c.TopK = 21 }, ErrInvalidTopK},
+		{"topk zero rejected", func(c *WorkspaceConfig) { c.TopK = 0 }, ErrInvalidTopK},
+		{"rerank topk above range", func(c *WorkspaceConfig) { c.RerankTopK = 21 }, ErrInvalidRerankTopK},
+		{"rerank topk negative", func(c *WorkspaceConfig) { c.RerankTopK = -1 }, ErrInvalidRerankTopK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := valid
@@ -151,6 +155,8 @@ func TestMergeUpdate(t *testing.T) {
 		{"score threshold applied", WorkspaceConfig{ScoreThreshold: 0.5}, nil, func() WorkspaceConfig { c := base; c.ScoreThreshold = 0.5; return c }()},
 		{"score threshold above range", WorkspaceConfig{ScoreThreshold: 1.5}, ErrInvalidScoreThreshold, base},
 		{"rerank topk applied", WorkspaceConfig{RerankTopK: 3}, nil, func() WorkspaceConfig { c := base; c.RerankTopK = 3; return c }()},
+		{"topk above range", WorkspaceConfig{TopK: 21}, ErrInvalidTopK, base},
+		{"rerank topk above range", WorkspaceConfig{RerankTopK: 21}, ErrInvalidRerankTopK, base},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -218,6 +224,7 @@ func TestWorkspaceConfigValidateRerankModel(t *testing.T) {
 	base := WorkspaceConfig{
 		EmbeddingModel:   "text-embedding-v3",
 		QueryMode:        "hybrid",
+		TopK:             5,
 		ChunkingStrategy: "recursive",
 	}
 	cases := []struct {
