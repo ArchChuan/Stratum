@@ -117,6 +117,73 @@ describe('useChatPage tool approvals', () => {
 		mocks.stream.streamFailure = null;
   });
 
+  it('SSE 帧 status=waiting_approval 归一化为 pending（取消按钮判定依赖 pending）', async () => {
+    mocks.approval = null;
+    mocks.listAgents.mockResolvedValue([{ id: 'agent-1', name: 'Agent' }]);
+    mocks.listConversations.mockResolvedValue([{ id: 'conversation-1', name: 'Conversation' }]);
+
+    const { result, rerender } = renderHook(() => useChatPage());
+    await waitFor(() => expect(result.current.agents).toHaveLength(1));
+    act(() => result.current.setSelectedAgent('agent-1'));
+    await waitFor(() => expect(result.current.selectedConv).toBe('conversation-1'));
+
+    mocks.stream.streamConversationId = 'conversation-1';
+    mocks.stream.streamApproval = {
+      approvalId: 'approval-3',
+      agentId: 'agent-1',
+      toolName: 'delete',
+      serverId: 'orders',
+      riskLevel: 'destructive',
+      status: 'waiting_approval', // SSE 帧实际下发的状态
+    };
+    rerender();
+
+    await waitFor(() => {
+      const row = result.current.pendingApprovals.find((r) => r.approvalId === 'approval-3');
+      expect(row?.status).toBe('pending');
+      expect(row?.userId).toBe('test-user');
+      expect(row?.riskLevel).toBe('destructive');
+    });
+  });
+
+  it('SSE 帧与恢复行合并：已有字段优先、状态归一生效', async () => {
+    // listToolApprovals 先返回完整行（含真实 riskLevel），SSE 帧后到不覆盖。
+    mocks.approval = {
+      approvalId: 'approval-4',
+      agentId: 'agent-1',
+      toolName: 'delete',
+      serverId: 'orders',
+      riskLevel: 'destructive',
+      status: 'pending',
+      conversationId: 'conversation-1',
+    };
+    mocks.listAgents.mockResolvedValue([{ id: 'agent-1', name: 'Agent' }]);
+    mocks.listConversations.mockResolvedValue([{ id: 'conversation-1', name: 'Conversation' }]);
+
+    const { result, rerender } = renderHook(() => useChatPage());
+    await waitFor(() => expect(result.current.agents).toHaveLength(1));
+    act(() => result.current.setSelectedAgent('agent-1'));
+    await waitFor(() => expect(result.current.selectedConv).toBe('conversation-1'));
+
+    mocks.stream.streamConversationId = 'conversation-1';
+    mocks.stream.streamApproval = {
+      approvalId: 'approval-4',
+      agentId: 'agent-1',
+      toolName: 'delete',
+      serverId: 'orders',
+      riskLevel: 'unclassified', // SSE 帧占位值，不得覆盖已有 riskLevel
+      status: 'waiting_approval',
+    };
+    rerender();
+
+    await waitFor(() => {
+      const row = result.current.pendingApprovals.find((r) => r.approvalId === 'approval-4');
+      expect(row?.status).toBe('pending');
+      expect(row?.riskLevel).toBe('destructive');
+      expect(row?.userId).toBe('test-user');
+    });
+  });
+
   it('replaces an empty streamed assistant message with an approval waiting state', async () => {
     mocks.approval = null;
     mocks.listAgents.mockResolvedValue([{ id: 'agent-1', name: 'Agent' }]);
