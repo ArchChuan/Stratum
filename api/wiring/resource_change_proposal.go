@@ -309,7 +309,7 @@ func (a *ResourceChangeProposalAdapters) applySkillChange(
 	var err error
 	if operation == agentdomain.OperationCreate {
 		value, err = a.skills.CreateSkillDraft(ctx, skillapp.CreateSkillDraftInput{
-			Name: change.Name, Goal: change.Description, WhenToUse: change.Description,
+			Name: change.Name, Description: change.Description,
 			Instructions: change.Instructions, ActorID: actorID,
 		})
 	} else {

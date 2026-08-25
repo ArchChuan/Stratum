@@ -3,8 +3,8 @@ import { useEffect, useState } from 'react';
 import { tenantApi } from '../api/tenant.api';
 import type { Member } from '../model/auth';
 
-// 可编辑人候选：租户内 admin/owner 成员全量列表。
-// 后端 role 过滤路径忽略分页、全量返回，一页拉齐即可。
+// 可编辑人候选：租户内全部成员（含 member），白名单语义——管理员可把任意成员加入可编辑人。
+// 后端 editorEligible 已放宽到所有租户成员，此处不再按 role 过滤。
 export const useEditorCandidates = (): { candidates: Member[]; loading: boolean } => {
   const [candidates, setCandidates] = useState<Member[]>([]);
   const [loading, setLoading] = useState(false);
@@ -12,7 +12,7 @@ export const useEditorCandidates = (): { candidates: Member[]; loading: boolean 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    tenantApi.members(1, 1000, 'admin,owner')
+    tenantApi.members(1, 1000)
       .then((page) => {
         if (!cancelled) setCandidates(page.members);
       })

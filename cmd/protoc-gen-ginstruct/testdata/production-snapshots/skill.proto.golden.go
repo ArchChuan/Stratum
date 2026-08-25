@@ -4,31 +4,15 @@
 package gen
 
 type CreateSkillRequest struct {
-	Name           string   `json:"name" binding:"required"`
-	Goal           string   `json:"goal" binding:"required"`
-	WhenToUse      string   `json:"whenToUse" binding:"required"`
-	SampleInput    any      `json:"sampleInput"`
-	ExpectedOutput any      `json:"expectedOutput"`
-	Instructions   string   `json:"instructions" binding:"required"`
-	Editors        []string `json:"editors"`
+	Name         string   `json:"name" binding:"required"`
+	Description  string   `json:"description" binding:"required"`
+	Instructions string   `json:"instructions" binding:"required"`
+	Editors      []string `json:"editors"`
 }
 
-type UpdateSkillCapabilityRequest struct {
-	Goal       string `json:"goal"`
-	WhenToUse  string `json:"whenToUse"`
-	InputSpec  string `json:"inputSpec"`
-	OutputSpec string `json:"outputSpec"`
-}
-
-type UpdateSkillActivationRequest struct {
-	Name         string         `json:"name"`
-	Description  string         `json:"description"`
-	InputSchema  map[string]any `json:"inputSchema"`
-	OutputSchema map[string]any `json:"outputSchema"`
-	Confirmed    bool           `json:"confirmed"`
-}
-
-type UpdateSkillInstructionBundleRequest struct {
+type UpdateSkillDraftRequest struct {
+	Name         string `json:"name"`
+	Description  string `json:"description"`
 	Instructions string `json:"instructions"`
 }
 
@@ -49,14 +33,14 @@ type SkillProductResponse struct {
 }
 
 type SkillRevisionResponse struct {
-	ID                 string         `json:"id"`
-	SkillID            string         `json:"skillId"`
-	RevisionNo         int32          `json:"revisionNo,omitempty"`
-	Status             string         `json:"status"`
-	Capability         map[string]any `json:"capability"`
-	ActivationContract map[string]any `json:"activationContract"`
-	Instructions       string         `json:"instructions"`
-	PublishChecks      map[string]any `json:"publishChecks,omitempty"`
+	ID            string         `json:"id"`
+	SkillID       string         `json:"skillId"`
+	RevisionNo    int32          `json:"revisionNo,omitempty"`
+	Status        string         `json:"status"`
+	Name          string         `json:"name"`
+	Description   string         `json:"description"`
+	Instructions  string         `json:"instructions"`
+	PublishChecks map[string]any `json:"publishChecks,omitempty"`
 }
 
 type ErrorResponse struct {

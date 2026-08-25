@@ -182,15 +182,6 @@ func (r *evaluationSkillVersionRepo) GetActiveRevision(ctx context.Context, skil
 	}
 	return r.revision, r.revision.SkillID == skillID && r.revision.Status == skilldomain.VersionStatusPublished, nil
 }
-func (r *evaluationSkillVersionRepo) UpdateDraftCapability(context.Context, string, skilldomain.Capability, string, *auditdomain.ResourceChangeAuditEvent, string) (skilldomain.SkillRevision, error) {
-	return skilldomain.SkillRevision{}, nil
-}
-func (r *evaluationSkillVersionRepo) UpdateDraftActivation(context.Context, string, skilldomain.ActivationContract, string, *auditdomain.ResourceChangeAuditEvent, string) (skilldomain.SkillRevision, error) {
-	return skilldomain.SkillRevision{}, nil
-}
-func (r *evaluationSkillVersionRepo) UpdateDraftInstructions(context.Context, string, string, string, *auditdomain.ResourceChangeAuditEvent, string) (skilldomain.SkillRevision, error) {
-	return skilldomain.SkillRevision{}, nil
-}
 func (r *evaluationSkillVersionRepo) UpdateDraftBundle(context.Context, string, string, skillport.SkillProductRow, skilldomain.SkillRevision, *auditdomain.ResourceChangeAuditEvent, string) (skilldomain.SkillRevision, error) {
 	return skilldomain.SkillRevision{}, nil
 }

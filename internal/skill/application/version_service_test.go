@@ -24,21 +24,21 @@ func TestVersionServicePublishDistinguishesMissingDraft(t *testing.T) {
 	}
 }
 
-func TestVersionServiceCreatesInstructionBundleDraft(t *testing.T) {
+func TestVersionServiceCreatesDraftBundle(t *testing.T) {
 	repo := newFakeVersionRepo()
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	view, err := svc.CreateSkillDraft(context.Background(), CreateSkillDraftInput{
-		Name: "投诉分类", Goal: "判断客户投诉类型", WhenToUse: "用户表达投诉时",
-		SampleInput: "快递没更新", ExpectedOutput: "物流问题",
+		Name:         "投诉分类",
+		Description:  "判断客户投诉类型",
 		Instructions: "先判断投诉类别，需要订单信息时查询订单。",
 		ActorID:      "user-1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view.Draft.ActivationContract.Name == "" || view.Draft.Instructions == "" {
-		t.Fatalf("expected activation and instructions, got %#v", view.Draft)
+	if view.Draft.Name != "投诉分类" || view.Draft.Description != "判断客户投诉类型" || view.Draft.Instructions == "" {
+		t.Fatalf("expected name/description/instructions draft, got %#v", view.Draft)
 	}
 	if view.Draft.ContentHash == "" {
 		t.Fatalf("expected content hash, got %#v", view.Draft)
@@ -48,22 +48,11 @@ func TestVersionServiceCreatesInstructionBundleDraft(t *testing.T) {
 	}
 }
 
-func TestVersionServicePublishRequiresConfirmedActivation(t *testing.T) {
+func TestVersionServicePublishSucceedsWithoutActivationConfirmation(t *testing.T) {
 	repo := newFakeVersionRepo()
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	view := mustCreateDraft(t, svc)
-	if _, err := svc.PublishDraft(context.Background(), view.Skill.ID, "user-1"); err == nil {
-		t.Fatal("expected unconfirmed activation contract to block publish")
-	}
-	_, err := svc.UpdateActivation(context.Background(), view.Skill.ID, UpdateActivationInput{
-		Name: "classify_complaint", Description: "判断投诉类型",
-		InputSchema: map[string]any{"type": "object"}, OutputSchema: map[string]any{"type": "object"}, Confirmed: true,
-		ActorID: "user-1",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	published, err := svc.PublishDraft(context.Background(), view.Skill.ID, "user-1")
 	if err != nil {
 		t.Fatal(err)
@@ -73,20 +62,22 @@ func TestVersionServicePublishRequiresConfirmedActivation(t *testing.T) {
 	}
 }
 
-func TestVersionServiceUpdateInstructionBundleRefreshesHash(t *testing.T) {
+func TestVersionServiceUpdateDraftRefreshesHash(t *testing.T) {
 	repo := newFakeVersionRepo()
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	view := mustCreateDraft(t, svc)
-	updated, err := svc.UpdateInstructionBundle(context.Background(), view.Skill.ID, UpdateInstructionBundleInput{
+	updated, err := svc.UpdateDraftBundle(context.Background(), view.Skill.ID, "", UpdateDraftBundleInput{
+		Name:         "投诉分类",
+		Description:  "判断客户投诉类型",
 		Instructions: "使用新的分类方法",
 		ActorID:      "user-1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Instructions != "使用新的分类方法" || updated.ContentHash == view.Draft.ContentHash {
-		t.Fatalf("instruction update did not refresh revision: %#v", updated)
+	if updated.Draft.Instructions != "使用新的分类方法" || updated.Draft.ContentHash == view.Draft.ContentHash {
+		t.Fatalf("draft update did not refresh revision: %#v", updated)
 	}
 }
 
@@ -143,14 +134,6 @@ func TestVersionServiceResolvePublishedRevisionRejectsUnpublished(t *testing.T) 
 	if _, err := svc.ResolvePublishedRevision(context.Background(), view.Skill.ID, view.Draft.ID); err == nil {
 		t.Fatal("draft revision must not resolve for evaluation")
 	}
-	_, err := svc.UpdateActivation(context.Background(), view.Skill.ID, UpdateActivationInput{
-		Name: "classify_complaint", Description: "判断投诉类型",
-		InputSchema: map[string]any{"type": "object"}, OutputSchema: map[string]any{"type": "object"}, Confirmed: true,
-		ActorID: "user-1",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	published, err := svc.PublishDraft(context.Background(), view.Skill.ID, "user-1")
 	if err != nil {
 		t.Fatal(err)
@@ -169,14 +152,6 @@ func TestVersionServicePublishedRevisionSafeSummaryHasNoSensitiveFields(t *testi
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	view := mustCreateDraft(t, svc)
-	_, err := svc.UpdateActivation(context.Background(), view.Skill.ID, UpdateActivationInput{
-		Name: "classify_complaint", Description: "判断投诉类型",
-		InputSchema: map[string]any{"type": "object"}, OutputSchema: map[string]any{"type": "object"}, Confirmed: true,
-		ActorID: "user-1",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	published, err := svc.PublishDraft(context.Background(), view.Skill.ID, "user-1")
 	if err != nil {
 		t.Fatal(err)
@@ -198,8 +173,7 @@ func TestVersionServicePublishedRevisionSafeSummaryHasNoSensitiveFields(t *testi
 func mustCreateDraft(t *testing.T, svc *VersionService) SkillWorkspaceView {
 	t.Helper()
 	view, err := svc.CreateSkillDraft(context.Background(), CreateSkillDraftInput{
-		Name: "complaint", Goal: "分类", WhenToUse: "收到投诉时",
-		SampleInput: "物流", ExpectedOutput: "物流", Instructions: "分类用户投诉",
+		Name: "complaint", Description: "分类", Instructions: "分类用户投诉",
 		ActorID: "user-1",
 	})
 	if err != nil {
@@ -275,31 +249,6 @@ func (r *fakeVersionRepo) InsertCandidate(_ context.Context, candidate domain.Sk
 	r.revisions[candidate.ID] = candidate
 	return nil
 }
-func (r *fakeVersionRepo) updateDraft(skillID string, fn func(*domain.SkillRevision)) (domain.SkillRevision, error) {
-	for id, revision := range r.revisions {
-		if revision.SkillID == skillID && revision.Status == domain.VersionStatusDraft {
-			fn(&revision)
-			r.revisions[id] = revision
-			return revision, nil
-		}
-	}
-	return domain.SkillRevision{}, domain.ErrSkillNotFound
-}
-func (r *fakeVersionRepo) UpdateDraftCapability(_ context.Context, skillID string, value domain.Capability, hash string, audit *auditdomain.ResourceChangeAuditEvent, _ string) (domain.SkillRevision, error) {
-	r.recordAudit(audit)
-	return r.updateDraft(skillID, func(v *domain.SkillRevision) { v.Capability, v.ContentHash = value, hash })
-}
-func (r *fakeVersionRepo) UpdateDraftActivation(_ context.Context, skillID string, value domain.ActivationContract, hash string, audit *auditdomain.ResourceChangeAuditEvent, _ string) (domain.SkillRevision, error) {
-	r.recordAudit(audit)
-	return r.updateDraft(skillID, func(v *domain.SkillRevision) { v.ActivationContract, v.ContentHash = value, hash })
-}
-func (r *fakeVersionRepo) UpdateDraftInstructions(_ context.Context, skillID, instructions string, hash string, audit *auditdomain.ResourceChangeAuditEvent, _ string) (domain.SkillRevision, error) {
-	r.recordAudit(audit)
-	return r.updateDraft(skillID, func(v *domain.SkillRevision) {
-		v.Instructions, v.ContentHash = instructions, hash
-	})
-}
-
 func (r *fakeVersionRepo) UpdateDraftBundle(_ context.Context, skillID, expected string, skill port.SkillProductRow, draft domain.SkillRevision, audit *auditdomain.ResourceChangeAuditEvent, _ string) (domain.SkillRevision, error) {
 	r.recordAudit(audit)
 	for id, current := range r.revisions {
