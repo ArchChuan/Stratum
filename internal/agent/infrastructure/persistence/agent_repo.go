@@ -222,8 +222,8 @@ func insertEditors(ctx context.Context, tx pgx.Tx, tenantID, kind, resourceID st
 }
 
 // revalidateEditorAccess re-checks, inside the write transaction, that the
-// actor still qualifies as an editor of this resource: role admin/owner AND
-// present in resource_editors. Both checks share the transaction with the
+// actor still qualifies as an editor of this resource: tenant membership AND
+// presence in resource_editors. Both checks share the transaction with the
 // business UPDATE, closing the check-then-write TOCTOU window.
 func revalidateEditorAccess(ctx context.Context, tx pgx.Tx, tenantID, kind, resourceID, actorID string) error {
 	eligible, err := editorEligible(ctx, tx, tenantID, actorID)

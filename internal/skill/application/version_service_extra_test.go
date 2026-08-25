@@ -2,8 +2,6 @@ package application
 
 import (
 	"context"
-	"errors"
-	"strings"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/skill/domain"
@@ -26,10 +24,9 @@ func seedSkillDraft(t *testing.T, repo *fakeVersionRepo, status domain.VersionSt
 		Status:       status,
 		RevisionNo:   revisionNo,
 		Source:       "manual",
+		Name:         "Skill " + skillID,
+		Description:  "desc",
 		Instructions: "do the thing",
-		Capability: domain.Capability{Goal: "g", WhenToUse: "w",
-			Examples: []domain.CapabilityExample{{Input: "in", ExpectedOutput: "out"}}},
-		ActivationContract: domain.ActivationContract{Name: "act", Confirmed: true},
 	}
 	hash, err := draft.ComputeContentHash()
 	require.NoError(t, err)
@@ -200,49 +197,6 @@ func TestVersionServiceSafeSummariesRejectDraft(t *testing.T) {
 	}
 }
 
-func TestVersionServiceUpdateCapability(t *testing.T) {
-	// 成功路径：draft capability 被替换并刷新 hash。
-	repo := newFakeVersionRepo()
-	seedSkillDraft(t, repo, domain.VersionStatusDraft, "s1", "rev-s1")
-	svc := NewVersionService(repo, zap.NewNop())
-	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-
-	rev, err := svc.UpdateCapability(context.Background(), "s1", UpdateCapabilityInput{
-		Goal: "new goal", WhenToUse: "new when", InputSpec: "in", OutputSpec: "out",
-		ActorID: "user-1",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "new goal", rev.Capability.Goal)
-	assert.Equal(t, "in", rev.Capability.InputSpec)
-
-	// 无 draft → ErrSkillNotFound。
-	_, err = svc.UpdateCapability(context.Background(), "ghost", UpdateCapabilityInput{ActorID: "user-1"})
-	assert.ErrorIs(t, err, domain.ErrSkillNotFound)
-}
-
-func TestVersionServiceUpdateActivationDefaultsSchemas(t *testing.T) {
-	// 极端情况：nil schema 回退为 {"type":"object"}。
-	repo := newFakeVersionRepo()
-	seedSkillDraft(t, repo, domain.VersionStatusDraft, "s1", "rev-s1")
-	svc := NewVersionService(repo, zap.NewNop())
-	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-
-	rev, err := svc.UpdateActivation(context.Background(), "s1", UpdateActivationInput{Name: "act", ActorID: "user-1"})
-	require.NoError(t, err)
-	assert.Equal(t, map[string]any{"type": "object"}, rev.ActivationContract.InputSchema)
-	assert.Equal(t, map[string]any{"type": "object"}, rev.ActivationContract.OutputSchema)
-	assert.False(t, rev.ActivationContract.Confirmed)
-
-	// 显式 schema 保留。
-	rev, err = svc.UpdateActivation(context.Background(), "s1", UpdateActivationInput{
-		Name: "act", InputSchema: map[string]any{"type": "string"}, Confirmed: true,
-		ActorID: "user-1",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, map[string]any{"type": "string"}, rev.ActivationContract.InputSchema)
-	assert.True(t, rev.ActivationContract.Confirmed)
-}
-
 func TestVersionServiceCreateCandidateSuccess(t *testing.T) {
 	repo := newFakeVersionRepo()
 	seedSkillDraft(t, repo, domain.VersionStatusPublished, "s1", "rev-s1")
@@ -313,41 +267,3 @@ func TestVersionServiceUpdateDraftBundleMissingSkill(t *testing.T) {
 	_, err := svc.UpdateDraftBundle(context.Background(), "ghost", "", UpdateDraftBundleInput{ActorID: "user-1"})
 	assert.ErrorIs(t, err, domain.ErrSkillNotFound)
 }
-
-func TestGeneratedActivationNameBoundaries(t *testing.T) {
-	// 极端情况：空名、数字开头、特殊字符、超长截断。
-	cases := []struct {
-		in   string
-		want string
-	}{
-		{"", "skill_"},
-		{"123name", "skill_123name"},
-		{"My Skill!", "my_skill"},
-		{"__", "skill_"},
-		{strings.Repeat("a", 80), strings.Repeat("a", 64)},
-		{"camelCase_Name", "camelcase_name"},
-	}
-	for _, tc := range cases {
-		got := generatedActivationName(tc.in)
-		assert.Equal(t, tc.want, got, "generatedActivationName(%q)", tc.in)
-	}
-}
-
-func TestVersionServiceUpdateInstructionBundle(t *testing.T) {
-	repo := newFakeVersionRepo()
-	seedSkillDraft(t, repo, domain.VersionStatusDraft, "s1", "rev-s1")
-	svc := NewVersionService(repo, zap.NewNop())
-	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-
-	rev, err := svc.UpdateInstructionBundle(context.Background(), "s1", UpdateInstructionBundleInput{
-		Instructions: "new instructions",
-		ActorID:      "user-1",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "new instructions", rev.Instructions)
-
-	_, err = svc.UpdateInstructionBundle(context.Background(), "ghost", UpdateInstructionBundleInput{ActorID: "user-1"})
-	assert.ErrorIs(t, err, domain.ErrSkillNotFound)
-}
-
-var _ = errors.Is

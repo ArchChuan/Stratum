@@ -8,34 +8,17 @@ message CreateSkillRequest {
   // @binding: required
   string name = 1;
   // @binding: required
-  string goal = 2;
+  string description = 2;
   // @binding: required
-  string whenToUse = 3;
-  google.protobuf.Value sampleInput = 4;
-  google.protobuf.Value expectedOutput = 5;
-  // @binding: required
-  string instructions = 6;
-  // Editors grants additional admins update rights, persisted with the skill.
+  string instructions = 3;
+  // Editors grants additional members update rights, persisted with the skill.
   repeated string editors = 8;
 }
 
-message UpdateSkillCapabilityRequest {
-  string goal = 1;
-  string whenToUse = 2;
-  string inputSpec = 3;
-  string outputSpec = 4;
-}
-
-message UpdateSkillActivationRequest {
+message UpdateSkillDraftRequest {
   string name = 1;
   string description = 2;
-  google.protobuf.Struct inputSchema = 3;
-  google.protobuf.Struct outputSchema = 4;
-  bool confirmed = 5;
-}
-
-message UpdateSkillInstructionBundleRequest {
-  string instructions = 1;
+  string instructions = 3;
 }
 
 message SkillWorkspaceResponse {
@@ -63,8 +46,8 @@ message SkillRevisionResponse {
   // @omitempty
   int32 revisionNo = 3;
   string status = 4;
-  google.protobuf.Struct capability = 5;
-  google.protobuf.Struct activationContract = 6;
+  string name = 5;
+  string description = 6;
   string instructions = 7;
   // @omitempty
   google.protobuf.Struct publishChecks = 9;
