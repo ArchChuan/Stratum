@@ -14,7 +14,7 @@
 ## 实测基准（主 agent 已核实）
 
 - `internal/` 有 **14 个 context**：agent audit collab evaluation iam knowledge llmgateway mcp memory parameters platform scheduler skill workflow
-- `pkg/` 有 20 个顶层目录：constants crypto dag httpclient jsonschema messaging migration observability platformknowledge postgres redis reqctx safetext storage tenantdb textchunk timeutil tokenutil vector；`storage/` 下 6 个子目录：filestore milvus objectstore postgres redis tenantnaming
+- `pkg/` 有 18 个顶层目录：constants crypto dag httpclient jsonschema messaging migration observability postgres redis reqctx safetext storage tenantdb textchunk timeutil tokenutil vector；`storage/` 下 6 个子目录：filestore milvus objectstore postgres redis tenantnaming
 - `api/middleware/` 有 14 个文件：body_limit error_mapping inject_tenant jwt metrics prometheus public_error rate_limit require_active_tenant require_default_tenant require_role system_role_check trace（**middleware 在 `api/middleware/`，不在 `api/http/` 下**）
 - `web/src/modules/` 有 15 个：agent approvals audit collab dashboard evaluation iam knowledge llm mcp memory operation-gate parameters scheduled-task skill workflow
 - OTEL v1.42.0、React Router v7.18.2、Go 1.25.12
@@ -36,7 +36,7 @@
 | 1 | context 列 11 个（缺 audit/collab/parameters） | 14 个 |
 | 2 | OTEL v1.40.0 | v1.42.0（go.mod） |
 | 3 | React Router 6.26 | ^7.18.2（web/package.json） |
-| 4 | pkg 结构缺 8 项 | 缺 dag/jsonschema/messaging/platformknowledge/safetext/timeutil/tokenutil/postgres |
+| 4 | pkg 结构缺 7 项 | 缺 dag/jsonschema/messaging/safetext/timeutil/tokenutil/postgres |
 | 5 | "禁止修改 config/prod.yaml" | config/prod.yaml 不存在（config/ 只有 config.go/nacos.go/pgbouncer.ini/userlist.txt） |
 | 6 | "middleware 位于 api/http/" | middleware 在 `api/middleware/`，api/http/ 下无 middleware 目录 |
 
@@ -96,7 +96,7 @@
 ### 组 1 — 结构类
 
 - **architecture.md**：核心分层规则（依赖方向、go-arch-lint/depguard、错误分层、契约测试）全部吻合。过时：①"11 个 bounded context" → 14，缺 audit/collab/parameters；②`pkg/storage/{postgres,redis,milvus,tenantnaming}` 缺 filestore/objectstore；③pkg 骨架只列 8 个，实际 20 个。
-- **project.md**：主体目录树与依赖大多准确。过时：①context 11→14；②`platform/{domain,harness,runtime}` 中 runtime 目录不存在，实际为 alerting/application/domain/e2eattestation/e2erunscope/harness/infrastructure/verificationplan；③middleware 漏 BodyLimit/PrometheusMiddleware/RateLimit/RequireDefaultTenant/RequireSystemRole/SecurityHeaders/NamespaceMiddleware/TenantMiddleware/TrustedProxies；④pkg 缺 dag/jsonschema/messaging/platformknowledge/safetext/timeutil/tokenutil/postgres/redis；⑤OTEL v1.40→v1.42。
+- **project.md**：主体目录树与依赖大多准确。过时：①context 11→14；②`platform/{domain,harness,runtime}` 中 runtime 目录不存在，实际为 alerting/application/domain/e2eattestation/e2erunscope/harness/infrastructure/verificationplan；③middleware 漏 BodyLimit/PrometheusMiddleware/RateLimit/RequireDefaultTenant/RequireSystemRole/SecurityHeaders/NamespaceMiddleware/TenantMiddleware/TrustedProxies；④pkg 缺 dag/jsonschema/messaging/safetext/timeutil/tokenutil/postgres/redis；⑤OTEL v1.40→v1.42。
 - **backend-go.md**：规范+踩坑红线，绝大多数符号存在。过时：流式超时组合里的 `AgentExecTimeout`(90s) 已不存在，实际执行预算常量是 `DelegateExecutionTimeout = 3 * time.Minute`（pkg/constants/timeouts.go:87）。
 
 ### 组 2 — 模块类

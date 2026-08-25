@@ -18,15 +18,13 @@
 
 | 层级 | 触发条件 | 时长 | Packs | 执行位置 |
 |------|----------|------|-------|---------|
-| **short** | R2+ 创建 PR 前 | ~10min | 关键 packs | 本地 `make test-verify-before-pr` |
+| **short** | R2+ 创建 PR 前 | 600s | 全部 17 packs | 本地 `make test-verify-before-pr` |
 | **soak** | R3 auth/tenant/迁移/msg/vector/外部依赖 | 600s | all eligible | 本地 canonical entrypoint |
 | **release-soak** | R4 显式发布意图 | 3600s | all | 本地显式执行 |
 
 ### Short mode packs（本地默认）
 
-```
-dashboard,iam,workflow,agent,skill,mcp,agent-skill-mcp,knowledge,memory,llm-admin
-```
+Short 模式不做 packs 过滤，运行全部 17 个 packs（见下方 `all_packs`），时长预算 600s。
 
 ### Soak mode packs（全部）
 
