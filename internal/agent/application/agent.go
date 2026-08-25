@@ -85,6 +85,10 @@ type ExecutionConfig struct {
 	TenantID              string
 	TraceID               string
 	ExecutionID           string
+	// SkipUserMessageSave 为真时跳过用户消息的即时持久化(首次发送在 Execute
+	// 开始时已落库;续跑/断线重连复用同一 query 不再重复入库)。由 AgentService
+	// prepareAgentExecution 依据 meta.ExecutionID 是否非空统一注入。
+	SkipUserMessageSave bool
 	// ApprovalResumeID 是审批续跑注入的已批准审批 ID。非空时
 	// resumeFromCheckpoint 把 waiting_approval checkpoint 视为可恢复
 	// （checkpoint 无工具快照，从 chat 历史 + 本轮 query 全量重跑，语义与
@@ -619,6 +623,10 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 
 	history, histErr := a.loadConversationHistory(ctx, tracer, snap.chatStore, cfg)
 
+	// 用户消息即时持久化:不等执行结束(审批等待/执行失败时 persistChatMessages
+	// 不执行),保证用户发送的消息立即可见、刷新后不丢失。
+	a.persistUserMessage(ctx, tracer, snap.chatStore, cfg, input, snap.agentID, snap.memoryScope)
+
 	ec := agentExecContext{
 		cfg: cfg, tracer: tracer, agentID: snap.agentID, agentName: snap.agentName,
 		systemPrompt: snap.systemPrompt, globalSuffix: snap.globalSystemSuffix, llmModel: snap.llmModel, capGW: snap.capGW,
@@ -659,7 +667,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	}
 	result.Artifacts = buildExecutionArtifacts(result.AssistantToolArtifacts, cfg.EvolutionTrace.ResourceManifest["system-assistant-profile"])
 
-	a.persistChatMessages(ctx, tracer, snap.chatStore, cfg, result, input, snap.agentID, snap.memoryScope, execErr)
+	a.persistChatMessages(ctx, tracer, snap.chatStore, cfg, result, snap.agentID, snap.memoryScope, execErr)
 
 	result.Duration = time.Since(startTime)
 	a.mu.Lock()
@@ -1637,8 +1645,11 @@ func (a *BaseAgent) appendFinalAnswerEvent(result *AgentResult, finalState agent
 	})
 }
 
-func (a *BaseAgent) persistChatMessages(ctx context.Context, tracer oteltrace.Tracer, chatStore ChatStore, cfg *ExecutionConfig, result *AgentResult, input, agentID, memoryScope string, execErr error) {
-	if chatStore == nil || cfg.ConversationID == "" || execErr != nil {
+// persistUserMessage 在 agent-loop 开始前立即持久化用户消息,不等执行结束:
+// 等待审批/长时间执行期间用户消息已落库,刷新/断线后聊天记录不丢失。
+// 续跑/重连(cfg.SkipUserMessageSave)跳过,避免同一 query 重复入库。
+func (a *BaseAgent) persistUserMessage(ctx context.Context, tracer oteltrace.Tracer, chatStore ChatStore, cfg *ExecutionConfig, input, agentID, memoryScope string) {
+	if chatStore == nil || cfg.ConversationID == "" || cfg.SkipUserMessageSave {
 		return
 	}
 	userMsg := &ChatMessage{
@@ -1648,12 +1659,18 @@ func (a *BaseAgent) persistChatMessages(ctx context.Context, tracer oteltrace.Tr
 		TraceID: cfg.TraceID,
 	}
 	_, saveUserSpan := tracer.Start(ctx, "agent.chat_store.save_user")
-	saveCtx1, saveCancel1 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
-	addUserErr := chatStore.AddMessage(saveCtx1, cfg.TenantID, userMsg)
-	saveCancel1()
+	saveCtx, saveCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
+	addUserErr := chatStore.AddMessage(saveCtx, cfg.TenantID, userMsg)
+	saveCancel()
 	saveUserSpan.End()
 	if addUserErr != nil {
 		a.Logger.Warn("agent: failed to save user message", zap.String("conversation_id", cfg.ConversationID), zap.Error(addUserErr))
+	}
+}
+
+func (a *BaseAgent) persistChatMessages(ctx context.Context, tracer oteltrace.Tracer, chatStore ChatStore, cfg *ExecutionConfig, result *AgentResult, agentID, memoryScope string, execErr error) {
+	if chatStore == nil || cfg.ConversationID == "" || execErr != nil {
+		return
 	}
 	agentMsg := &ChatMessage{
 		ConversationID: cfg.ConversationID, Role: "assistant", Content: result.Output,
@@ -1913,6 +1930,14 @@ func WithTraceID(id string) ExecutionOption {
 func WithExecutionID(id string) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.ExecutionID = id
+	}
+}
+
+// WithSkipUserMessageSave 续跑/重连时跳过用户消息再次持久化(首次发送已在
+// Execute 开头即时落库),避免同一 query 在恢复执行时重复入库。
+func WithSkipUserMessageSave(skip bool) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.SkipUserMessageSave = skip
 	}
 }
 

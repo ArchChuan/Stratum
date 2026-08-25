@@ -1285,7 +1285,10 @@ func (s *AgentService) prepareAgentExecution(
 		}
 		options = append(options, resumeOpts...)
 	}
-	options = append(options, WithExecutionID(executionID))
+	// 用户消息即时持久化:首跑(meta.ExecutionID 为空)在 Execute 开头落库;
+	// 续跑/重连(meta.ExecutionID 非空,如审批批准自动续跑、断线恢复)跳过,
+	// 避免同一 query 在恢复执行时重复入库。
+	options = append(options, WithExecutionID(executionID), WithSkipUserMessageSave(meta.ExecutionID != ""))
 	cfg = &ExecutionConfig{}
 	cfg.ApplyOptions(options)
 	return a, req, meta, streamCtx, options, cfg, resuming, terminal, consumed, nil
