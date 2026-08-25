@@ -31,6 +31,11 @@ func referencedOutputKeys(spec domain.Spec) map[string][]string {
 			refs[upstream] = append(refs[upstream], key)
 		}
 	}
+	// InputMapping 是 Go map，迭代顺序随机：契约注入与测试都要求 key 顺序稳定，
+	// 返回前统一排序（injectOutputContract 的排序是第二道保证）。
+	for upstream := range refs {
+		sort.Strings(refs[upstream])
+	}
 	return refs
 }
 
