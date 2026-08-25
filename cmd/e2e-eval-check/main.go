@@ -203,8 +203,7 @@ func fingerprintOfPoint(o options, p point) fingerprint {
 	case "mcp":
 		return mcpFingerprint(p.Snapshot)
 	default: // skill / agent
-		// llmFingerprint is implemented in Tasks 4/5.
-		return fingerprint{Hash: "todo"}
+		return llmFingerprint(p.Snapshot)
 	}
 }
 func baseAcceptedRegressions(base *baseline) []acceptedRegression {
