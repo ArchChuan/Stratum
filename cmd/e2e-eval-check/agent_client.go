@@ -64,3 +64,12 @@ func (a *agentClient) executeAgent(ctx context.Context, agentID, query string) (
 		return string(b), nil
 	}
 }
+
+// deleteAgent removes a transient carrier agent.
+func (c *httpClient) deleteAgent(ctx context.Context, agentID string) error {
+	status, body, err := c.roundtrip(ctx, http.MethodDelete, "/agents/"+agentID, "", nil)
+	if err != nil {
+		return err
+	}
+	return classifyHTTP("/agents/"+agentID, status, string(body))
+}

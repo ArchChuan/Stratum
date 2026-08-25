@@ -22,6 +22,12 @@ const (
 	DefaultIngestPollEvery = 2 * time.Second
 	// DefaultWorkspacePrefix names transient eval workspaces.
 	DefaultWorkspacePrefix = "eval-check-"
+	// DefaultCarrierAgentMaxIterations bounds the transient carrier agent used
+	// by skill eval; must stay within the agent create contract's [1,90] range.
+	DefaultCarrierAgentMaxIterations = 10
+	// DefaultCarrierAgentMemoryScope is the required memory_scope of the carrier
+	// agent; "user" matches the frontend create-agent default.
+	DefaultCarrierAgentMemoryScope = "user"
 )
 
 // metricTopK mirrors knowledgeapp.RetrievalK (constants.DefaultRAGTopK). The
