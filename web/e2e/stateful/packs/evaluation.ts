@@ -122,29 +122,16 @@ export const executeEvaluationPack = async ({
   try {
     await page.goto(`${webURL}/skills/create`);
     await page.getByLabel('名称').fill(skillName);
-    await page.getByLabel('能力目标').fill('返回可核验的 stateful 评测结果');
-    await page.getByLabel('调用时机').fill('执行 stateful 评测时');
-    await page.getByLabel('样例输入').fill('执行 stateful evaluation');
-    await page.getByLabel('期望输出').fill('stateful sync completed');
+    await page.getByLabel('描述').fill('返回可核验的 stateful 评测结果');
     await page.getByLabel('执行指令').fill('返回 stateful sync completed。');
+    // 三字段模型（3d037c86 简化）：保存即生效，create 响应 active.id 即 stable revision。
     const skillResponse = waitFor(page, '/skills', 'POST');
-    await page.getByRole('button', { name: '创建草稿' }).click();
+    await page.getByRole('button', { name: /创\s*建/ }).click();
     const createdSkill = await skillResponse;
     expect(createdSkill.status()).toBe(201);
-    skillID = (await createdSkill.json() as { skill: { id: string } }).skill.id;
-    await page.getByRole('tab', { name: '激活契约' }).click();
-    await page.getByLabel('激活名称').fill('evaluate_stateful_input');
-    await page.getByLabel('用途说明').fill('执行本地 stateful 评测');
-    await page.getByLabel('确认契约').click();
-    const activationResponse = waitFor(page, `/skills/${skillID}/draft/activation`, 'PATCH');
-    await page.getByRole('button', { name: '保存激活契约' }).click();
-    expect((await activationResponse).status()).toBe(200);
-    await page.getByRole('tab', { name: 'Revision' }).click();
-    const publishResponse = waitFor(page, `/skills/${skillID}/publish`, 'POST');
-    await page.getByRole('button', { name: '发布当前 Revision' }).click();
-    const published = await publishResponse;
-    expect(published.status()).toBe(200);
-    const stableRevisionID = (await published.json() as { id: string }).id;
+    const skillBody = await createdSkill.json() as { skill: { id: string }; active: { id: string } };
+    skillID = skillBody.skill.id;
+    const stableRevisionID = skillBody.active.id;
 
     const agentSkillsResponse = waitFor(page, '/skills', 'GET');
     await page.goto(`${webURL}/agents/create`);

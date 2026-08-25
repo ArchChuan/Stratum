@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -73,6 +74,21 @@ func containsScheme(raw string) bool {
 	return strings.Contains(raw, "://")
 }
 
+// nacosClientConfig 构造 SDK 客户端配置。LogDir 显式指向系统临时目录：
+// nacos-sdk 默认 LogDir = 当前工作目录 + /log，容器内 WORKDIR 是 /app，
+// appuser 无权限 mkdir /app/log → 启动期报 permission denied。
+func nacosClientConfig(s NacosSettings) constant.ClientConfig {
+	return constant.ClientConfig{
+		NamespaceId:         s.Namespace,
+		Username:            s.Username,
+		Password:            s.Password,
+		TimeoutMs:           uint64(constants.NacosTimeoutMs),
+		LogLevel:            "warn",
+		LogDir:              os.TempDir(),
+		NotLoadCacheAtStart: true,
+	}
+}
+
 type sdkNacosClient struct {
 	cc config_client.IConfigClient
 }
@@ -85,15 +101,9 @@ func newNacosClientImpl(s NacosSettings) (nacosClient, error) {
 	if err != nil {
 		return nil, err
 	}
+	cfg := nacosClientConfig(s)
 	cc, err := clients.NewConfigClient(vo.NacosClientParam{
-		ClientConfig: &constant.ClientConfig{
-			NamespaceId:         s.Namespace,
-			Username:            s.Username,
-			Password:            s.Password,
-			TimeoutMs:           uint64(constants.NacosTimeoutMs),
-			LogLevel:            "warn",
-			NotLoadCacheAtStart: true,
-		},
+		ClientConfig: &cfg,
 		ServerConfigs: []constant.ServerConfig{
 			{IpAddr: host, Port: port, Scheme: scheme},
 		},

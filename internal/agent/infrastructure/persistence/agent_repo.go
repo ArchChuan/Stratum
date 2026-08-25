@@ -29,6 +29,26 @@ type poolIface interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
+// memoryScopeOr returns the memory scope to persist, falling back to the
+// column default "agent" when the config leaves it unset (Go zero value).
+// agents.memory_scope is NOT NULL with a strict CHECK (user|agent), so the
+// zero value of a partial AgentConfig passed to Register/Update must be
+// resolved here, never stored. Normalizing keeps downstream memory reads
+// (buffer / trajectory reflection) non-empty, so memory_entries.scope cannot
+// regress to an empty value and trip HistorySegment.Validate() →
+// memory.history.upsert_failed.
+//
+// Intent: only the zero value is interpreted as "not provided / partial
+// config" and normalized to the agent default. An explicitly provided scope
+// (including "user") is preserved verbatim — this never flips a deliberate
+// user-scoped agent to agent scope.
+func memoryScopeOr(scope string) string {
+	if scope == "" {
+		return "agent"
+	}
+	return scope
+}
+
 var _ poolIface = (*pgxpool.Pool)(nil)
 
 // PgAgentRepo persists Agent configs in PostgreSQL under per-tenant schemas.
@@ -419,7 +439,7 @@ func (r *PgAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig, aud
 			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope, system_key, created_by, parameters, delegate_enabled, delegate_max_depth, delegate_default_max_steps)
 			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10,$11,$12,$13,$14)`,
 			cfg.ID, cfg.Name, string(cfg.Type), cfg.Description,
-			cfg.SystemPrompt, cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, cfg.CreatedBy, params,
+			cfg.SystemPrompt, cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, memoryScopeOr(cfg.MemoryScope), cfg.CreatedBy, params,
 			cfg.DelegateEnabled, cfg.DelegateMaxDepth, cfg.DelegateDefaultMaxSteps,
 		)
 		if err != nil {
@@ -717,7 +737,7 @@ func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, audit
 			     updated_at=NOW()
 			 WHERE id=$12`,
 			cfg.Name, cfg.Description, cfg.SystemPrompt,
-			cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, params,
+			cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, memoryScopeOr(cfg.MemoryScope), params,
 			cfg.DelegateEnabled, cfg.DelegateMaxDepth, cfg.DelegateDefaultMaxSteps, cfg.ID,
 		)
 		if err != nil {
