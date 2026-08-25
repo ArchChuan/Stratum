@@ -23,8 +23,8 @@ export const workspaceSchema = z
     name: z.string(),
     description: z.string().optional().default(''),
     config: workspaceConfigSchema.optional(),
-    // management_mode: 'platform_managed' 即系统内置知识库（如 stratum_docs）。
-    // 挂载已对普通 agent 开放，写保护仍由后端 workspace_service 强制。
+    // management_mode: 历史兼容透传字段（后端 Domain Workspace 保留列），
+    // 前端不做任何平台特判，读写原样透传。
     management_mode: z.string().optional(),
   })
   .passthrough();
@@ -41,9 +41,6 @@ export const workspaceStatsSchema = z
       })
       .passthrough()
       .optional(),
-    // is_platform_managed: 系统内置知识库完全豁免白名单机制（所有租户成员可见），
-    // 前端据此隐藏权限设置区与受限 Tag。
-    is_platform_managed: z.boolean().optional().default(false),
   })
   .passthrough();
 export type WorkspaceStats = z.infer<typeof workspaceStatsSchema>;

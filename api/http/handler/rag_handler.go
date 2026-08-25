@@ -366,11 +366,10 @@ func (h *RAGHandler) GetWorkspaceStats(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"name":                res.Name,
-		"description":         res.Description,
-		"config":              toDTOConfig(res.Config),
-		"stats":               res.Stats,
-		"is_platform_managed": res.IsPlatformManaged,
+		"name":        res.Name,
+		"description": res.Description,
+		"config":      toDTOConfig(res.Config),
+		"stats":       res.Stats,
 	})
 }
 

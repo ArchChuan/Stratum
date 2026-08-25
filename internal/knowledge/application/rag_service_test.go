@@ -12,7 +12,6 @@ import (
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
-	"github.com/byteBuilderX/stratum/pkg/platformknowledge"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -955,27 +954,5 @@ func TestPreviewDocumentReassemblesChunksWithParents(t *testing.T) {
 		if seg.Index != int64(i) || seg.Content != "leaf-"+string(rune('0'+i)) {
 			t.Fatalf("segment %d out of order: %+v", i, seg)
 		}
-	}
-}
-
-func TestPreviewDocumentPlatformManagedSkipsWhitelist(t *testing.T) {
-	chunks := &recordingChunkRepo{listByDoc: []domain.Chunk{{ID: "c1", DocID: "doc-a", Index: 0, Text: "hit"}}}
-	service := NewRAGService(nil, nil, zap.NewNop())
-	// Built-in knowledge: SystemKey set, member viewer, whitelist would NOT
-	// include doc-a — exemption must still serve the preview.
-	service.SetWorkspaceRepo(&recordingWorkspaceRepo{workspace: &domain.Workspace{
-		ID: "workspace-1", Name: "support", CreatedBy: "other-user",
-		SystemKey: platformknowledge.SystemWorkspaceKey,
-	}})
-	service.SetTenantRoleResolver(stubRoleResolver{role: "member"})
-	service.SetDocRepo(stubDocRepo{visible: []string{}, doc: &domain.Document{ID: "doc-a", Source: "builtin.md"}})
-	service.SetChunkRepo(chunks)
-
-	preview, err := service.PreviewDocument(context.Background(), "tenant-1", "support", "doc-a", "viewer-1")
-	if err != nil {
-		t.Fatalf("platform-managed workspace must exempt whitelist, got %v", err)
-	}
-	if preview.DocumentTitle != "builtin.md" || len(preview.Segments) != 1 {
-		t.Fatalf("unexpected preview: %+v", preview)
 	}
 }

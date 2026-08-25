@@ -2,7 +2,7 @@ package application
 
 // Document-level ACL tests (P0.5 读路径 + P0.6 access 管理):
 //   - ListDocuments 可见集过滤 + ACL echo 门
-//   - IngestUpload 白名单/创建者落库,system workspace 忽略白名单
+//   - IngestUpload 白名单/创建者落库
 //   - DeleteDocument 鉴权矩阵(fail closed)
 //   - SetDocAccess 拒绝路径 + roleIDs 归一化
 //   - GetWorkspaceStats doc_count 可见集统计 + vector_count member 隐藏
@@ -18,7 +18,6 @@ import (
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
-	"github.com/byteBuilderX/stratum/pkg/platformknowledge"
 )
 
 // aclDocRepo 是 SetDocAccess 用例的 doc stub:GetByID 按 docs 查找,SetDocAccess
@@ -130,13 +129,6 @@ func TestListDocuments_ACLMatrix(t *testing.T) {
 			wantRestricted: []bool{true, true},
 		},
 		{
-			name: "system workspace is unrestricted and never echoes",
-			ws:   &domain.Workspace{ID: "ws-sys", Name: "official", ManagementMode: platformknowledge.ManagementPlatform},
-			role: "member", useRoles: true, viewerID: "viewer-1",
-			wantCount: 2, wantEcho: false,
-			wantRestricted: []bool{false, false},
-		},
-		{
 			name:     "missing role resolver fails closed",
 			ws:       &domain.Workspace{ID: "ws-1", Name: "docs"},
 			viewerID: "viewer-1",
@@ -198,7 +190,7 @@ func TestIngestUpload_AccessWhitelistPersisted(t *testing.T) {
 	t.Run("whitelist and creator are persisted on the document row", func(t *testing.T) {
 		repo := newFakeWorkspaceRepo()
 		svc, ki := buildWorkspaceService(repo)
-		seedWorkspace(repo, "ws1", false)
+		seedWorkspace(repo, "ws1")
 		docRepo := newMockDocRepo()
 		ki.SetDocRepo(docRepo)
 		svc.SetDocRepo(docRepo)
@@ -214,22 +206,6 @@ func TestIngestUpload_AccessWhitelistPersisted(t *testing.T) {
 		require.Equal(t, []string{"u1", "u2"}, doc.AllowedUserIDs)
 		require.Equal(t, []string{"admin", "member"}, doc.AllowedRoleIDs)
 		require.Equal(t, "actor-1", doc.CreatedBy)
-	})
-
-	t.Run("system workspace rejects the upload so whitelist never reaches storage", func(t *testing.T) {
-		repo := newFakeWorkspaceRepo()
-		svc, ki := buildWorkspaceService(repo)
-		seedWorkspace(repo, "managed", true)
-		docRepo := newMockDocRepo()
-		ki.SetDocRepo(docRepo)
-		svc.SetDocRepo(docRepo)
-
-		fh := newUploadFileHeader(t, "x.txt", "x")
-		_, err := svc.IngestUpload(context.Background(), "t1", "managed", fh, "actor-1",
-			[]string{"u1"}, []string{"admin"})
-		require.ErrorIs(t, err, domain.ErrPlatformManagedWorkspace)
-		require.NoError(t, ki.Shutdown(context.Background()))
-		require.Zero(t, docRepo.savedCount())
 	})
 }
 
@@ -294,16 +270,6 @@ func TestSetDocAccess(t *testing.T) {
 		require.Equal(t, []string{"admin", "member"}, docs.gotRoles)
 	})
 
-	t.Run("platform-managed workspace is rejected", func(t *testing.T) {
-		managed := &domain.Workspace{ID: "ws-sys", Name: "official",
-			ManagementMode: platformknowledge.ManagementPlatform}
-		s := newService(managed, &aclDocRepo{})
-		s.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-
-		err := s.SetDocAccess(context.Background(), "t1", "official", "d1", "u1", nil, nil)
-		require.ErrorIs(t, err, domain.ErrPlatformManagedWorkspace)
-	})
-
 	t.Run("non-owner is denied before any repo write", func(t *testing.T) {
 		docs := &aclDocRepo{deleteDocRepo: deleteDocRepo{docs: []*domain.Document{{ID: "d1"}}}}
 		s := newService(ws, docs)
@@ -345,7 +311,7 @@ func TestGetWorkspaceStats_VisibilityGates(t *testing.T) {
 	newStatsService := func(role string, visible []string) (*WorkspaceService, *KnowledgeIngest) {
 		repo := newFakeWorkspaceRepo()
 		svc, ki := buildWorkspaceService(repo)
-		seedWorkspace(repo, "ws1", false)
+		seedWorkspace(repo, "ws1")
 		rec := &recordingDocRepo{ids: visible}
 		rec.docs = docs
 		svc.SetDocRepo(rec)

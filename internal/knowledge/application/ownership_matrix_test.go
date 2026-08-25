@@ -38,8 +38,8 @@ func TestWorkspaceUpdateOwnershipMatrix(t *testing.T) {
 		{name: "owner updates others resource", createdBy: "other-user", role: "owner"},
 		{name: "owner updates unowned resource", createdBy: "", role: "owner"},
 		{name: "admin updates own resource", createdBy: actor, role: "admin"},
-		{name: "admin updates others resource", createdBy: "other-user", role: "admin", wantErr: true},
-		{name: "admin updates unowned resource", createdBy: "", role: "admin", wantErr: true},
+		{name: "admin updates others resource", createdBy: "other-user", role: "admin"},
+		{name: "admin updates unowned resource", createdBy: "", role: "admin"},
 		{name: "member updates own resource", createdBy: actor, role: "member", wantErr: true},
 		{name: "role resolution failure fails closed", createdBy: actor, resolver: failRoleResolver{err: errors.New("upstream down")}, wantErr: true},
 		{name: "nil resolver fails closed", createdBy: actor, wantErr: true},
@@ -50,7 +50,7 @@ func TestWorkspaceUpdateOwnershipMatrix(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			repo := newFakeWorkspaceRepo()
-			ws := seedWorkspace(repo, "ws1", false)
+			ws := seedWorkspace(repo, "ws1")
 			ws.CreatedBy = tc.createdBy
 			svc, _ := buildWorkspaceService(repo)
 			switch {
@@ -85,7 +85,7 @@ func TestWorkspaceUpdateOwnershipMatrix(t *testing.T) {
 func TestWorkspaceUpdateAuditEvent(t *testing.T) {
 	t.Parallel()
 	repo := newFakeWorkspaceRepo()
-	ws := seedWorkspace(repo, "ws1", false)
+	ws := seedWorkspace(repo, "ws1")
 	ws.CreatedBy = "user-1"
 	svc, _ := buildWorkspaceService(repo)
 
@@ -136,7 +136,7 @@ func TestWorkspaceCreateAuditsCreate(t *testing.T) {
 func TestWorkspaceUpdatePropagatesRepoError(t *testing.T) {
 	t.Parallel()
 	repo := newFakeWorkspaceRepo()
-	seedWorkspace(repo, "ws1", false)
+	seedWorkspace(repo, "ws1")
 	repo.updateErr = errors.New("db down")
 	svc, _ := buildWorkspaceService(repo)
 
@@ -151,7 +151,7 @@ func TestWorkspaceUpdatePropagatesRepoError(t *testing.T) {
 func TestWorkspaceUpdateSystemActorBypassesOwnership(t *testing.T) {
 	t.Parallel()
 	repo := newFakeWorkspaceRepo()
-	ws := seedWorkspace(repo, "ws1", false)
+	ws := seedWorkspace(repo, "ws1")
 	ws.CreatedBy = "other-user"
 	svc, _ := buildWorkspaceService(repo)
 	// member 本应被拒绝；system actor 跳过归属校验但仍落审计。
@@ -210,7 +210,7 @@ func TestWorkspaceUpdateEditorGranted(t *testing.T) {
 	t.Parallel()
 
 	repo := newFakeWorkspaceRepo()
-	ws := seedWorkspace(repo, "ws1", false)
+	ws := seedWorkspace(repo, "ws1")
 	ws.CreatedBy = "owner-user"
 	editors := newStubKnowledgeEditorRepo()
 	editors.editors[ws.ID] = []string{"user-1"}
@@ -231,7 +231,7 @@ func TestWorkspaceDeleteEditorDenied(t *testing.T) {
 	t.Parallel()
 
 	repo := newFakeWorkspaceRepo()
-	ws := seedWorkspace(repo, "ws1", false)
+	ws := seedWorkspace(repo, "ws1")
 	ws.CreatedBy = "user-1"
 	editors := newStubKnowledgeEditorRepo()
 	editors.editors[ws.ID] = []string{"editor-1"}
@@ -259,7 +259,7 @@ func TestWorkspaceSetEditorsPinsManagementEndpoint(t *testing.T) {
 	t.Run("owner replaces editor set", func(t *testing.T) {
 		t.Parallel()
 		repo := newFakeWorkspaceRepo()
-		ws := seedWorkspace(repo, "ws1", false)
+		ws := seedWorkspace(repo, "ws1")
 		ws.CreatedBy = "creator-1"
 		editors := newStubKnowledgeEditorRepo()
 		editors.editors[ws.ID] = []string{"old-editor"}
@@ -283,12 +283,12 @@ func TestWorkspaceSetEditorsPinsManagementEndpoint(t *testing.T) {
 	t.Run("granted editor cannot delegate", func(t *testing.T) {
 		t.Parallel()
 		repo := newFakeWorkspaceRepo()
-		ws := seedWorkspace(repo, "ws1", false)
+		ws := seedWorkspace(repo, "ws1")
 		ws.CreatedBy = "creator-1"
 		editors := newStubKnowledgeEditorRepo()
 		editors.editors[ws.ID] = []string{"editor-1"}
 		svc, _ := buildWorkspaceService(repo)
-		svc.SetTenantRoleResolver(stubTenantRole{role: "admin"})
+		svc.SetTenantRoleResolver(stubTenantRole{role: "member"})
 		svc.SetEditorRepo(editors)
 		ctx := reqctx.WithTenantID(context.Background(), "t1")
 
@@ -304,7 +304,7 @@ func TestWorkspaceListEditorsWrapper(t *testing.T) {
 	t.Parallel()
 
 	repo := newFakeWorkspaceRepo()
-	ws := seedWorkspace(repo, "ws1", false)
+	ws := seedWorkspace(repo, "ws1")
 	editors := newStubKnowledgeEditorRepo()
 	editors.editors[ws.ID] = []string{"editor-a"}
 	svc, _ := buildWorkspaceService(repo)

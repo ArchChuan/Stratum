@@ -57,8 +57,6 @@ export const useKnowledgeDetailPage = () => {
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [documentsLoading, setDocumentsLoading] = useState(false);
   const [deletingDocumentID, setDeletingDocumentID] = useState('');
-  // 系统内置知识库（platform-managed）完全豁免白名单机制：前端不暴露权限 UI
-  const [platformManaged, setPlatformManaged] = useState(false);
   // 权限候选：全量租户成员 + 成员角色去重
   const [userCandidates, setUserCandidates] = useState<Member[]>([]);
   const [userCandidatesLoading, setUserCandidatesLoading] = useState(false);
@@ -130,7 +128,6 @@ export const useKnowledgeDetailPage = () => {
     try {
       const data = await knowledgeApi.stats(name);
       setStats(data);
-      setPlatformManaged(Boolean(data.is_platform_managed));
       const values: ConfigValues = {
         chunk_size: data.config?.chunk_size,
         chunk_overlap: data.config?.chunk_overlap,
@@ -396,7 +393,6 @@ export const useKnowledgeDetailPage = () => {
     deletingDocumentID,
     handleDeleteDocument,
     fetchDocuments,
-    platformManaged,
     userCandidates,
     userCandidatesLoading,
     roleCandidates,

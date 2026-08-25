@@ -586,9 +586,8 @@ func (rs *RAGService) visibleDocIDs(ctx context.Context, req RAGQueryRequest) ([
 	if err != nil {
 		return nil, false, fmt.Errorf("knowledge: resolve workspace visibility: %w", err)
 	}
-	if ws == nil || isPlatformManaged(ws) {
-		// Unknown workspace keeps collection-level scoping; platform-managed
-		// workspaces (built-in knowledge) are fully visible per the D1 matrix.
+	if ws == nil {
+		// Unknown workspace keeps collection-level scoping.
 		return nil, true, nil
 	}
 	role, unrestricted, err := rs.viewerScope(ctx, req, ws)

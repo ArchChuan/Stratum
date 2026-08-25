@@ -17,7 +17,6 @@ import (
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
 	"github.com/byteBuilderX/stratum/pkg/constants"
-	"github.com/byteBuilderX/stratum/pkg/platformknowledge"
 )
 
 // fakeWorkspaceRepo 实现 port.WorkspaceRepo；按 name 保存，脚本化错误。
@@ -213,16 +212,13 @@ func buildWorkspaceService(repo *fakeWorkspaceRepo) (*WorkspaceService, *Knowled
 	return svc, ki
 }
 
-func seedWorkspace(repo *fakeWorkspaceRepo, name string, managed bool) *domain.Workspace {
+func seedWorkspace(repo *fakeWorkspaceRepo, name string) *domain.Workspace {
 	// 嵌入模型必须显式配置（无静态兜底），seed 构造补显式模型。
 	ws, err := domain.NewWorkspace(name, "desc", domain.WorkspaceConfig{EmbeddingModel: "text-embedding-v3"}, domain.DefaultChunkSize, domain.DefaultTopK)
 	if err != nil {
 		panic(err)
 	}
 	ws.ID = "wsid-" + name
-	if managed {
-		ws.ManagementMode = platformknowledge.ManagementPlatform
-	}
 	repo.workspaces[name] = ws
 	return ws
 }
@@ -371,8 +367,8 @@ func TestWorkspaceList(t *testing.T) {
 		t.Fatalf("empty list = %+v, %v", list, err)
 	}
 
-	seedWorkspace(repo, "a", false)
-	seedWorkspace(repo, "b", false)
+	seedWorkspace(repo, "a")
+	seedWorkspace(repo, "b")
 	list, err = svc.ListWorkspaces(context.Background(), "t1")
 	if err != nil || len(list) != 2 {
 		t.Fatalf("list = %d, %v", len(list), err)
@@ -386,7 +382,7 @@ func TestWorkspaceList(t *testing.T) {
 func TestWorkspaceUpdate(t *testing.T) {
 	repo := newFakeWorkspaceRepo()
 	svc, _ := buildWorkspaceService(repo)
-	seedWorkspace(repo, "ws1", false)
+	seedWorkspace(repo, "ws1")
 
 	newName := "ws-renamed"
 	desc := "new desc"
@@ -414,7 +410,7 @@ func TestWorkspaceUpdate(t *testing.T) {
 func TestWorkspaceUpdateRejections(t *testing.T) {
 	repo := newFakeWorkspaceRepo()
 	svc, _ := buildWorkspaceService(repo)
-	seedWorkspace(repo, "ws1", false)
+	seedWorkspace(repo, "ws1")
 
 	// 极端情况：不存在。
 	if _, err := svc.UpdateWorkspace(context.Background(), "t1", "ghost", UpdateWorkspaceInput{}, "user-1"); !errors.Is(err, domain.ErrWorkspaceNotFound) {
@@ -432,17 +428,12 @@ func TestWorkspaceUpdateRejections(t *testing.T) {
 	}, "user-1"); !errors.Is(err, domain.ErrInvalidQueryMode) {
 		t.Fatalf("invalid mode err = %v", err)
 	}
-	// 极端情况：platform-managed 拒绝。
-	seedWorkspace(repo, "managed", true)
-	if _, err := svc.UpdateWorkspace(context.Background(), "t1", "managed", UpdateWorkspaceInput{}, "user-1"); !errors.Is(err, domain.ErrPlatformManagedWorkspace) {
-		t.Fatalf("platform err = %v", err)
-	}
 }
 
 func TestWorkspaceGetStats(t *testing.T) {
 	repo := newFakeWorkspaceRepo()
 	svc, ki := buildWorkspaceService(repo)
-	seedWorkspace(repo, "ws1", false)
+	seedWorkspace(repo, "ws1")
 	docRepo := newMockDocRepo()
 	ki.SetDocRepo(docRepo)
 	svc.SetDocRepo(docRepo)
@@ -518,7 +509,7 @@ func (d *docCountErrRepo) CountByWorkspace(context.Context, string, string) (int
 func TestWorkspaceDelete(t *testing.T) {
 	repo := newFakeWorkspaceRepo()
 	svc, _ := buildWorkspaceService(repo)
-	seedWorkspace(repo, "ws1", false)
+	seedWorkspace(repo, "ws1")
 
 	if err := svc.DeleteWorkspace(context.Background(), "t1", "ws1", "user-1"); err != nil {
 		t.Fatalf("delete = %v", err)
@@ -530,18 +521,13 @@ func TestWorkspaceDelete(t *testing.T) {
 	if err := svc.DeleteWorkspace(context.Background(), "t1", "ghost", "user-1"); !errors.Is(err, domain.ErrWorkspaceNotFound) {
 		t.Fatalf("ghost err = %v", err)
 	}
-	// 极端情况：platform-managed 拒绝。
-	seedWorkspace(repo, "managed", true)
-	if err := svc.DeleteWorkspace(context.Background(), "t1", "managed", "user-1"); !errors.Is(err, domain.ErrPlatformManagedWorkspace) {
-		t.Fatalf("platform err = %v", err)
-	}
 }
 
 func TestWorkspaceDeleteStorageFailureBlocksDB(t *testing.T) {
 	// 极端情况：清理 storage 失败 → 不删除 DB 行。
 	repo := newFakeWorkspaceRepo()
 	svc, ki := buildWorkspaceService(repo)
-	seedWorkspace(repo, "ws1", false)
+	seedWorkspace(repo, "ws1")
 	failing := &vectorStoreFailing{}
 	ki.vectorStore = failing
 	svc.SetVectorStore(failing)
@@ -557,7 +543,7 @@ func TestWorkspaceDeleteStorageFailureBlocksDB(t *testing.T) {
 func TestWorkspaceGetConfigAndWorkspaceQueries(t *testing.T) {
 	repo := newFakeWorkspaceRepo()
 	svc, _ := buildWorkspaceService(repo)
-	seedWorkspace(repo, "ws1", false)
+	seedWorkspace(repo, "ws1")
 
 	cfg, err := svc.GetConfig(context.Background(), "t1", "ws1")
 	if err != nil || cfg.EmbeddingModel != "text-embedding-v3" {
@@ -581,7 +567,7 @@ func TestWorkspaceGetConfigAndWorkspaceQueries(t *testing.T) {
 func TestWorkspaceListSnapshotDocuments(t *testing.T) {
 	repo := newFakeWorkspaceRepo()
 	svc, ki := buildWorkspaceService(repo)
-	seedWorkspace(repo, "ws1", false)
+	seedWorkspace(repo, "ws1")
 
 	// 极端情况：无 docRepo → 明确错误。
 	if _, err := svc.ListSnapshotDocuments(context.Background(), "t1", "wsid-1"); err == nil {
@@ -601,7 +587,7 @@ func TestWorkspaceListSnapshotDocuments(t *testing.T) {
 func TestWorkspaceListDocuments(t *testing.T) {
 	repo := newFakeWorkspaceRepo()
 	svc, ki := buildWorkspaceService(repo)
-	seedWorkspace(repo, "ws1", false)
+	seedWorkspace(repo, "ws1")
 
 	// 极端情况：无 docRepo → 空 slice 非 nil。
 	views, err := svc.ListDocuments(context.Background(), "t1", "ws1", "user-1")
@@ -636,7 +622,7 @@ func TestWorkspaceListDocuments(t *testing.T) {
 func TestWorkspaceIngestUpload(t *testing.T) {
 	repo := newFakeWorkspaceRepo()
 	svc, ki := buildWorkspaceService(repo)
-	seedWorkspace(repo, "ws1", false)
+	seedWorkspace(repo, "ws1")
 	docRepo := newMockDocRepo()
 	ki.SetDocRepo(docRepo)
 	svc.SetDocRepo(docRepo)
@@ -661,17 +647,12 @@ func TestWorkspaceIngestUpload(t *testing.T) {
 func TestWorkspaceIngestUploadRejections(t *testing.T) {
 	repo := newFakeWorkspaceRepo()
 	svc, _ := buildWorkspaceService(repo)
-	seedWorkspace(repo, "ws1", false)
+	seedWorkspace(repo, "ws1")
 
 	// 极端情况：workspace 不存在。
 	fh := newUploadFileHeader(t, "x.txt", "hello")
 	if _, err := svc.IngestUpload(context.Background(), "t1", "ghost", fh, "user-1", nil, nil); !errors.Is(err, domain.ErrWorkspaceNotFound) {
 		t.Fatalf("ghost err = %v", err)
-	}
-	// 极端情况：platform-managed 拒绝。
-	seedWorkspace(repo, "managed", true)
-	if _, err := svc.IngestUpload(context.Background(), "t1", "managed", fh, "user-1", nil, nil); !errors.Is(err, domain.ErrPlatformManagedWorkspace) {
-		t.Fatalf("platform err = %v", err)
 	}
 	// 极端情况：重复内容 hash → ErrDuplicateDocument。
 	docRepo := newMockDocRepo()
@@ -685,7 +666,7 @@ func TestWorkspaceIngestUploadRejections(t *testing.T) {
 func TestWorkspaceDeleteDocument(t *testing.T) {
 	repo := newFakeWorkspaceRepo()
 	svc, ki := buildWorkspaceService(repo)
-	seedWorkspace(repo, "ws1", false)
+	seedWorkspace(repo, "ws1")
 	docRepo := newMockDocRepo()
 	ki.SetDocRepo(docRepo)
 	svc.SetDocRepo(docRepo)
@@ -721,7 +702,7 @@ func TestWorkspaceDeleteDocument(t *testing.T) {
 func TestWorkspaceDeleteDocumentNotFound(t *testing.T) {
 	repo := newFakeWorkspaceRepo()
 	svc, ki := buildWorkspaceService(repo)
-	seedWorkspace(repo, "ws1", false)
+	seedWorkspace(repo, "ws1")
 	docRepo := newMockDocRepo()
 	ki.SetDocRepo(docRepo)
 	svc.SetDocRepo(docRepo)
@@ -734,11 +715,6 @@ func TestWorkspaceDeleteDocumentNotFound(t *testing.T) {
 	// 极端情况：workspace 不存在。
 	if err := svc.DeleteDocument(context.Background(), "t1", "ghost", "d1", "user-1"); !errors.Is(err, domain.ErrWorkspaceNotFound) {
 		t.Fatalf("ghost ws err = %v", err)
-	}
-	// 极端情况：platform-managed 拒绝。
-	seedWorkspace(repo, "managed", true)
-	if err := svc.DeleteDocument(context.Background(), "t1", "managed", "d1", "user-1"); !errors.Is(err, domain.ErrPlatformManagedWorkspace) {
-		t.Fatalf("platform err = %v", err)
 	}
 }
 

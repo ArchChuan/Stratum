@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/byteBuilderX/stratum/internal/skill/domain/port"
@@ -36,20 +37,45 @@ func newSkillRepo(mock pgxmock.PgxPoolIface) *PgSkillRevisionRepo {
 	return &PgSkillRevisionRepo{pool: mock}
 }
 
+// skillRevisionRow returns a 15-column revision row (revisionColumns): id,
+// skill_id, parent_revision_id, revision_no, status, source, content_hash,
+// generation_metadata, name, description, instructions, publish_checks,
+// created_by, created_at, published_at.
 func skillRevisionRow() []any {
+	createdAt := time.Unix(100, 0)
 	return []any{
 		"r-1", "s-1", "p-1", 2, "draft", "evolution", "h-1",
 		[]byte(`{"gen":1}`),
 		"skill name", "skill description", "do it", []byte(`{"ok":true}`),
+		"", createdAt, nil,
 	}
 }
 
 var revisionCols = []string{
 	"id", "skill_id", "parent_revision_id", "revision_no", "status", "source", "content_hash",
 	"generation_metadata", "name", "description", "instructions", "publish_checks",
+	"created_by", "created_at", "published_at",
 }
 
-func TestPgSkillRevisionRepo_InsertSkillWithDraft_success(t *testing.T) {
+// listRevisionRow returns a 16-column row: skillRevisionRow() plus is_current
+// (ListRevisions' skills.active_revision_id join projection).
+func listRevisionRow(current bool) []any {
+	return append(skillRevisionRow(), current)
+}
+
+var listRevisionCols = append(append([]string{}, revisionCols...), "is_current")
+
+// expectInsertSkillRevision pins the 13-argument skill_revisions INSERT used by
+// both InsertSkill and InsertCandidate.
+func expectInsertSkillRevision(mock pgxmock.PgxPoolIface, id, status, source string) {
+	mock.ExpectExec("INSERT INTO skill_revisions").
+		WithArgs(id, "s-1", "p-1", 2, status, source, "h-1",
+			pgxmock.AnyArg(), "skill name", "skill description",
+			"do it", pgxmock.AnyArg(), "").
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+}
+
+func TestPgSkillRevisionRepo_InsertSkill_success(t *testing.T) {
 	mock := newSkillMock(t)
 	repo := newSkillRepo(mock)
 	beginTenantTx(t, mock)
@@ -57,20 +83,18 @@ func TestPgSkillRevisionRepo_InsertSkillWithDraft_success(t *testing.T) {
 	mock.ExpectExec("INSERT INTO skills").
 		WithArgs("s-1", "name", "desc", "r-1", "").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
-	mock.ExpectExec("INSERT INTO skill_revisions").
-		WithArgs("r-1", "s-1", "p-1", 2, "draft", "evolution", "h-1",
-			pgxmock.AnyArg(), "skill name", "skill description",
-			"do it", pgxmock.AnyArg(), "").
-		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	expectInsertSkillRevision(mock, "r-1", "published", "evolution")
 	mock.ExpectCommit()
 
-	err := repo.InsertSkillWithDraft(skillTenantCtx(), port.SkillProductRow{ID: "s-1", Name: "name", Description: "desc"},
-		testSkillRevision("r-1"), nil, nil)
+	rev := testSkillRevision("r-1")
+	rev.Status = domain.VersionStatusPublished
+	err := repo.InsertSkill(skillTenantCtx(), port.SkillProductRow{ID: "s-1", Name: "name", Description: "desc"},
+		rev, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestPgSkillRevisionRepo_InsertSkillWithDraft_manualSourceFallback(t *testing.T) {
+func TestPgSkillRevisionRepo_InsertSkill_manualSourceFallback(t *testing.T) {
 	mock := newSkillMock(t)
 	repo := newSkillRepo(mock)
 	beginTenantTx(t, mock)
@@ -80,22 +104,23 @@ func TestPgSkillRevisionRepo_InsertSkillWithDraft_manualSourceFallback(t *testin
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	// Empty Source and empty ParentRevisionID map to 'manual' and NULL semantics.
 	mock.ExpectExec("INSERT INTO skill_revisions").
-		WithArgs("r-1", "s-1", "", 0, "draft", "manual", "h-1",
+		WithArgs("r-1", "s-1", "", 0, "published", "manual", "h-1",
 			pgxmock.AnyArg(), "skill name", "skill description",
 			"do it", pgxmock.AnyArg(), "").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
 	rev := testSkillRevision("r-1")
+	rev.Status = domain.VersionStatusPublished
 	rev.Source = ""
 	rev.ParentRevisionID = ""
 	rev.RevisionNo = 0
-	err := repo.InsertSkillWithDraft(skillTenantCtx(), port.SkillProductRow{ID: "s-1", Name: "n", Description: "d"}, rev, nil, nil)
+	err := repo.InsertSkill(skillTenantCtx(), port.SkillProductRow{ID: "s-1", Name: "n", Description: "d"}, rev, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestPgSkillRevisionRepo_InsertSkillWithDraft_skillInsertFails(t *testing.T) {
+func TestPgSkillRevisionRepo_InsertSkill_skillInsertFails(t *testing.T) {
 	mock := newSkillMock(t)
 	repo := newSkillRepo(mock)
 	beginTenantTx(t, mock)
@@ -105,11 +130,13 @@ func TestPgSkillRevisionRepo_InsertSkillWithDraft_skillInsertFails(t *testing.T)
 		WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
-	err := repo.InsertSkillWithDraft(skillTenantCtx(), port.SkillProductRow{ID: "s-1"}, testSkillRevision("r-1"), nil, nil)
+	rev := testSkillRevision("r-1")
+	rev.Status = domain.VersionStatusPublished
+	err := repo.InsertSkill(skillTenantCtx(), port.SkillProductRow{ID: "s-1"}, rev, nil, nil)
 	require.ErrorIs(t, err, pgx.ErrTxClosed)
 }
 
-func TestPgSkillRevisionRepo_InsertSkillWithDraft_revisionInsertFails(t *testing.T) {
+func TestPgSkillRevisionRepo_InsertSkill_revisionInsertFails(t *testing.T) {
 	mock := newSkillMock(t)
 	repo := newSkillRepo(mock)
 	beginTenantTx(t, mock)
@@ -118,13 +145,15 @@ func TestPgSkillRevisionRepo_InsertSkillWithDraft_revisionInsertFails(t *testing
 		WithArgs("s-1", "", "", "r-1", "").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO skill_revisions").
-		WithArgs("r-1", "s-1", "p-1", 2, "draft", "evolution", "h-1",
+		WithArgs("r-1", "s-1", "p-1", 2, "published", "evolution", "h-1",
 			pgxmock.AnyArg(), "skill name", "skill description",
 			"do it", pgxmock.AnyArg(), "").
 		WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
-	err := repo.InsertSkillWithDraft(skillTenantCtx(), port.SkillProductRow{ID: "s-1"}, testSkillRevision("r-1"), nil, nil)
+	rev := testSkillRevision("r-1")
+	rev.Status = domain.VersionStatusPublished
+	err := repo.InsertSkill(skillTenantCtx(), port.SkillProductRow{ID: "s-1"}, rev, nil, nil)
 	require.ErrorIs(t, err, pgx.ErrTxClosed)
 }
 
@@ -182,14 +211,14 @@ func TestPgSkillRevisionRepo_ListSkills_multi(t *testing.T) {
 
 	mock.ExpectQuery("FROM skills ORDER BY name").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "description", "status", "active_revision_id", "draft_revision_id", "created_by"}).
-			AddRow("s-1", "a", "d1", "draft", "", "dr-1", "").
+			AddRow("s-1", "a", "d1", "published", "ar-1", "", "").
 			AddRow("s-2", "b", "d2", "published", "ar-2", "", ""))
 	mock.ExpectCommit()
 
 	rows, err := repo.ListSkills(skillTenantCtx())
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
-	require.Equal(t, "dr-1", rows[0].DraftRevisionID)
+	require.Equal(t, "ar-1", rows[0].ActiveRevisionID)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -200,7 +229,7 @@ func TestPgSkillRevisionRepo_ListSkills_scanFails(t *testing.T) {
 
 	mock.ExpectQuery("FROM skills ORDER BY name").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "description", "status", "active_revision_id", "draft_revision_id", "created_by"}).
-			AddRow("s-1", 42, "d1", "draft", "", "", ""))
+			AddRow("s-1", 42, "d1", "published", "", "", ""))
 	mock.ExpectRollback()
 
 	_, err := repo.ListSkills(skillTenantCtx())
@@ -237,40 +266,6 @@ func TestPgSkillRevisionRepo_DeleteSkill_notFound(t *testing.T) {
 	require.ErrorIs(t, repo.DeleteSkill(skillTenantCtx(), "s-1", nil), domain.ErrSkillNotFound)
 }
 
-func TestPgSkillRevisionRepo_GetDraftRevision_found(t *testing.T) {
-	mock := newSkillMock(t)
-	repo := newSkillRepo(mock)
-	beginTenantTx(t, mock)
-
-	mock.ExpectQuery("FROM skill_revisions WHERE skill_id=\\$1 AND status='draft'").
-		WithArgs("s-1").
-		WillReturnRows(pgxmock.NewRows(revisionCols).AddRow(skillRevisionRow()...))
-	mock.ExpectCommit()
-
-	rev, found, err := repo.GetDraftRevision(skillTenantCtx(), "s-1")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Equal(t, "r-1", rev.ID)
-	require.Equal(t, domain.VersionStatusDraft, rev.Status)
-	require.Equal(t, "skill name", rev.Name)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestPgSkillRevisionRepo_GetDraftRevision_notFound(t *testing.T) {
-	mock := newSkillMock(t)
-	repo := newSkillRepo(mock)
-	beginTenantTx(t, mock)
-
-	mock.ExpectQuery("FROM skill_revisions WHERE skill_id=\\$1 AND status='draft'").
-		WithArgs("s-1").
-		WillReturnError(pgx.ErrNoRows)
-	mock.ExpectCommit()
-
-	_, found, err := repo.GetDraftRevision(skillTenantCtx(), "s-1")
-	require.NoError(t, err)
-	require.False(t, found)
-}
-
 func TestPgSkillRevisionRepo_GetActiveRevision_queryFails(t *testing.T) {
 	mock := newSkillMock(t)
 	repo := newSkillRepo(mock)
@@ -283,6 +278,23 @@ func TestPgSkillRevisionRepo_GetActiveRevision_queryFails(t *testing.T) {
 
 	_, _, err := repo.GetActiveRevision(skillTenantCtx(), "s-1")
 	require.ErrorIs(t, err, pgx.ErrTxClosed)
+}
+
+func TestPgSkillRevisionRepo_GetActiveRevision_found(t *testing.T) {
+	mock := newSkillMock(t)
+	repo := newSkillRepo(mock)
+	beginTenantTx(t, mock)
+
+	mock.ExpectQuery("JOIN skills s ON s.active_revision_id").
+		WithArgs("s-1").
+		WillReturnRows(pgxmock.NewRows(revisionCols).AddRow(skillRevisionRow()...))
+	mock.ExpectCommit()
+
+	rev, found, err := repo.GetActiveRevision(skillTenantCtx(), "s-1")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "r-1", rev.ID)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestPgSkillRevisionRepo_GetRevision_found(t *testing.T) {
@@ -307,11 +319,7 @@ func TestPgSkillRevisionRepo_InsertCandidate_success(t *testing.T) {
 	repo := newSkillRepo(mock)
 	beginTenantTx(t, mock)
 
-	mock.ExpectExec("INSERT INTO skill_revisions").
-		WithArgs("c-1", "s-1", "p-1", 2, "candidate", "evolution", "h-1",
-			pgxmock.AnyArg(), "skill name", "skill description",
-			"do it", pgxmock.AnyArg(), "").
-		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	expectInsertSkillRevision(mock, "c-1", "candidate", "evolution")
 	mock.ExpectCommit()
 
 	cand := testSkillRevision("c-1")
@@ -320,62 +328,105 @@ func TestPgSkillRevisionRepo_InsertCandidate_success(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestPgSkillRevisionRepo_UpdateDraftBundle_success(t *testing.T) {
-	mock := newSkillMock(t)
-	repo := newSkillRepo(mock)
-	beginTenantTx(t, mock)
-
-	mock.ExpectQuery("UPDATE skill_revisions SET name=\\$2").
-		WithArgs("s-1", "skill name", "skill description", "do it", "h-1", "h-1").
-		WillReturnRows(pgxmock.NewRows(revisionCols).AddRow(skillRevisionRow()...))
-	mock.ExpectExec("UPDATE skills SET name=\\$2, description=\\$3").
-		WithArgs("s-1", "new-name", "new-desc").
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	mock.ExpectCommit()
-
-	draft := testSkillRevision("r-1")
-	rev, err := repo.UpdateDraftBundle(skillTenantCtx(), "s-1", "h-1",
-		port.SkillProductRow{ID: "s-1", Name: "new-name", Description: "new-desc"}, draft, nil, "")
-	require.NoError(t, err)
-	require.Equal(t, "r-1", rev.ID)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestPgSkillRevisionRepo_UpdateDraftBundle_stale(t *testing.T) {
-	mock := newSkillMock(t)
-	repo := newSkillRepo(mock)
-	beginTenantTx(t, mock)
-
-	mock.ExpectQuery("UPDATE skill_revisions SET name=\\$2").
-		WithArgs("s-1", pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), "stale-hash").
-		WillReturnError(pgx.ErrNoRows)
-	// Draft still exists but hash changed → ErrSkillDraftStale.
+// expectSaveRevisionBody pins the shared SaveRevision write sequence: EXISTS
+// guard → (optional) content-hash concurrency check → deprecate current →
+// insert new revision → flip the skills row to the new active revision.
+func expectSaveRevisionBody(mock pgxmock.PgxPoolIface, withBaseline bool, activeHash string) {
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs("s-1").
 		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(true))
-	mock.ExpectRollback()
-
-	_, err := repo.UpdateDraftBundle(skillTenantCtx(), "s-1", "stale-hash",
-		port.SkillProductRow{ID: "s-1"}, testSkillRevision("r-1"), nil, "")
-	require.ErrorIs(t, err, domain.ErrSkillDraftStale)
+	if withBaseline {
+		mock.ExpectQuery("COALESCE\\(r.content_hash").
+			WithArgs("s-1").
+			WillReturnRows(pgxmock.NewRows([]string{"hash"}).AddRow(activeHash))
+	}
+	mock.ExpectExec("UPDATE skill_revisions SET status='deprecated'").
+		WithArgs("s-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	expectInsertSkillRevision(mock, "r-1", "published", "evolution")
+	mock.ExpectExec("UPDATE skills SET name=\\$2, description=\\$3").
+		WithArgs("s-1", "new-name", "new-desc", "r-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 }
 
-func TestPgSkillRevisionRepo_UpdateDraftBundle_noDraft(t *testing.T) {
+func TestPgSkillRevisionRepo_SaveRevision_success(t *testing.T) {
 	mock := newSkillMock(t)
 	repo := newSkillRepo(mock)
 	beginTenantTx(t, mock)
 
-	mock.ExpectQuery("UPDATE skill_revisions SET name=\\$2").
-		WithArgs("s-1", pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), "h-1").
-		WillReturnError(pgx.ErrNoRows)
+	expectSaveRevisionBody(mock, true, "h-1")
+	mock.ExpectCommit()
+
+	rev := testSkillRevision("r-1")
+	rev.Status = domain.VersionStatusPublished
+	saved, err := repo.SaveRevision(skillTenantCtx(), "s-1", "h-1",
+		port.SkillProductRow{ID: "s-1", Name: "new-name", Description: "new-desc"}, rev, nil, "")
+	require.NoError(t, err)
+	require.Equal(t, "r-1", saved.ID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgSkillRevisionRepo_SaveRevision_noBaseline(t *testing.T) {
+	// 空 expectedContentHash(系统直写/存量未发布首版保存)跳过乐观并发校验。
+	mock := newSkillMock(t)
+	repo := newSkillRepo(mock)
+	beginTenantTx(t, mock)
+
+	expectSaveRevisionBody(mock, false, "")
+	mock.ExpectCommit()
+
+	rev := testSkillRevision("r-1")
+	rev.Status = domain.VersionStatusPublished
+	_, err := repo.SaveRevision(skillTenantCtx(), "s-1", "",
+		port.SkillProductRow{ID: "s-1", Name: "new-name", Description: "new-desc"}, rev, nil, "")
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgSkillRevisionRepo_SaveRevision_stale(t *testing.T) {
+	// 期望 hash 与当前生效版本不一致 → ErrSkillDraftStale(409)。
+	mock := newSkillMock(t)
+	repo := newSkillRepo(mock)
+	beginTenantTx(t, mock)
+
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs("s-1").
+		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery("COALESCE\\(r.content_hash").
+		WithArgs("s-1").
+		WillReturnRows(pgxmock.NewRows([]string{"hash"}).AddRow("other-hash"))
+	mock.ExpectRollback()
+
+	_, err := repo.SaveRevision(skillTenantCtx(), "s-1", "h-1",
+		port.SkillProductRow{ID: "s-1"}, testSkillRevision("r-1"), nil, "")
+	require.ErrorIs(t, err, domain.ErrSkillDraftStale)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgSkillRevisionRepo_SaveRevision_skillMissing(t *testing.T) {
+	mock := newSkillMock(t)
+	repo := newSkillRepo(mock)
+	beginTenantTx(t, mock)
+
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs("ghost").
 		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectRollback()
 
-	_, err := repo.UpdateDraftBundle(skillTenantCtx(), "s-1", "h-1",
-		port.SkillProductRow{ID: "s-1"}, testSkillRevision("r-1"), nil, "")
+	_, err := repo.SaveRevision(skillTenantCtx(), "ghost", "",
+		port.SkillProductRow{ID: "ghost"}, testSkillRevision("r-1"), nil, "")
 	require.ErrorIs(t, err, domain.ErrSkillNotFound)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgSkillRevisionRepo_SaveRevision_missingTenantFailsClosed(t *testing.T) {
+	mock := newSkillMock(t)
+	repo := newSkillRepo(mock)
+
+	// No TenantContext → fail closed before any SQL.
+	_, err := repo.SaveRevision(context.Background(), "s-1", "",
+		port.SkillProductRow{ID: "s-1"}, testSkillRevision("r-1"), nil, "")
+	require.ErrorContains(t, err, "missing tenant context")
 }
 
 func TestPgSkillRevisionRepo_NextRevisionNo(t *testing.T) {
@@ -394,42 +445,99 @@ func TestPgSkillRevisionRepo_NextRevisionNo(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestPgSkillRevisionRepo_PublishDraft_success(t *testing.T) {
+func TestPgSkillRevisionRepo_RollbackRevision_success(t *testing.T) {
 	mock := newSkillMock(t)
 	repo := newSkillRepo(mock)
 	beginTenantTx(t, mock)
 
-	mock.ExpectExec("SET status='deprecated'").
+	mock.ExpectExec("UPDATE skill_revisions SET status='deprecated'").
 		WithArgs("s-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	mock.ExpectQuery("SET status='published', revision_no=\\$3, publish_checks=\\$4").
-		WithArgs("r-1", "s-1", 3, `{"ok":true}`).
-		WillReturnRows(pgxmock.NewRows(revisionCols).AddRow(skillRevisionRow()...))
-	mock.ExpectExec("SET status='published', active_revision_id=\\$2").
+	mock.ExpectExec("UPDATE skill_revisions SET status='published', published_at=NOW").
+		WithArgs("r-1", "s-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec("UPDATE skills SET active_revision_id=\\$2").
 		WithArgs("s-1", "r-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
-	rev, err := repo.PublishDraft(skillTenantCtx(), "s-1", "r-1", 3, map[string]any{"ok": true}, nil, "")
-	require.NoError(t, err)
-	require.Equal(t, "r-1", rev.ID)
+	require.NoError(t, repo.RollbackRevision(skillTenantCtx(), "s-1", "r-1", "", nil))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestPgSkillRevisionRepo_PublishDraft_updateFails(t *testing.T) {
+func TestPgSkillRevisionRepo_RollbackRevision_targetNotDeprecated(t *testing.T) {
+	// 目标不是该 skill 的 deprecated 历史版本 → ErrSkillNotFound。
 	mock := newSkillMock(t)
 	repo := newSkillRepo(mock)
 	beginTenantTx(t, mock)
 
-	mock.ExpectExec("SET status='deprecated'").
+	mock.ExpectExec("UPDATE skill_revisions SET status='deprecated'").
 		WithArgs("s-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	mock.ExpectQuery("SET status='published', revision_no=\\$3, publish_checks=\\$4").
-		WithArgs("r-1", "s-1", 3, `{"ok":true}`).
+	mock.ExpectExec("UPDATE skill_revisions SET status='published', published_at=NOW").
+		WithArgs("r-1", "s-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectRollback()
+
+	require.ErrorIs(t, repo.RollbackRevision(skillTenantCtx(), "s-1", "r-1", "", nil), domain.ErrSkillNotFound)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgSkillRevisionRepo_ListRevisions_success(t *testing.T) {
+	mock := newSkillMock(t)
+	repo := newSkillRepo(mock)
+	beginTenantTx(t, mock)
+
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs("s-1").
+		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery("AS is_current").
+		WithArgs("s-1").
+		WillReturnRows(pgxmock.NewRows(listRevisionCols).
+			AddRow(listRevisionRow(true)...).
+			AddRow(listRevisionRow(false)...))
+	mock.ExpectCommit()
+
+	rows, found, err := repo.ListRevisions(skillTenantCtx(), "s-1")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, rows, 2)
+	require.True(t, rows[0].IsCurrent)
+	require.False(t, rows[1].IsCurrent)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgSkillRevisionRepo_ListRevisions_missingSkill(t *testing.T) {
+	mock := newSkillMock(t)
+	repo := newSkillRepo(mock)
+	beginTenantTx(t, mock)
+
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs("ghost").
+		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectCommit()
+
+	rows, found, err := repo.ListRevisions(skillTenantCtx(), "ghost")
+	require.NoError(t, err)
+	require.False(t, found)
+	require.Empty(t, rows)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgSkillRevisionRepo_ListRevisions_queryFails(t *testing.T) {
+	mock := newSkillMock(t)
+	repo := newSkillRepo(mock)
+	beginTenantTx(t, mock)
+
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs("s-1").
+		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery("AS is_current").
+		WithArgs("s-1").
 		WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
-	_, err := repo.PublishDraft(skillTenantCtx(), "s-1", "r-1", 3, map[string]any{"ok": true}, nil, "")
+	_, _, err := repo.ListRevisions(skillTenantCtx(), "s-1")
 	require.ErrorIs(t, err, pgx.ErrTxClosed)
 }
 
@@ -467,28 +575,4 @@ func testSkillRevision(id string) domain.SkillRevision {
 		Instructions:       "do it",
 		PublishChecks:      map[string]any{"ok": true},
 	}
-}
-
-// TestPgSkillRevisionRepo_UpdateDraftBundle_noBaseline pins the direct-write
-// contract: an empty expected hash drops the content_hash WHERE condition so
-// the update targets the draft row without optimistic concurrency.
-func TestPgSkillRevisionRepo_UpdateDraftBundle_noBaseline(t *testing.T) {
-	mock := newSkillMock(t)
-	repo := newSkillRepo(mock)
-	beginTenantTx(t, mock)
-
-	mock.ExpectQuery("UPDATE skill_revisions SET name=\\$2").
-		WithArgs("s-1", "skill name", "skill description", "do it", "h-1").
-		WillReturnRows(pgxmock.NewRows(revisionCols).AddRow(skillRevisionRow()...))
-	mock.ExpectExec("UPDATE skills SET name=\\$2, description=\\$3").
-		WithArgs("s-1", "new-name", "new-desc").
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	mock.ExpectCommit()
-
-	draft := testSkillRevision("r-1")
-	rev, err := repo.UpdateDraftBundle(skillTenantCtx(), "s-1", "",
-		port.SkillProductRow{ID: "s-1", Name: "new-name", Description: "new-desc"}, draft, nil, "")
-	require.NoError(t, err)
-	require.Equal(t, "r-1", rev.ID)
-	require.NoError(t, mock.ExpectationsWereMet())
 }

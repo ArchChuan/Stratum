@@ -63,7 +63,7 @@ export const CreateSkillPage = () => {
         <Form.Item
           label="可编辑人"
           name="editors"
-          extra="白名单中的成员可编辑此技能草稿；删除仍仅限创建者或超级管理员"
+          extra="白名单中的成员可编辑此技能；删除仍仅限创建者或超级管理员"
           style={{ marginBottom: 0 }}
         >
           <Select mode="multiple" placeholder="选择可编辑的租户成员" allowClear loading={editorCandidatesLoading}>
@@ -82,7 +82,7 @@ export const CreateSkillPage = () => {
             htmlType="submit"
             loading={loading}
           >
-            创建草稿
+            创建
           </Button>
         </div>
       </Form>

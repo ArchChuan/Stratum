@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	gen "github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
@@ -18,12 +19,13 @@ type SkillHandler struct {
 }
 
 type skillRevisionService interface {
-	CreateSkillDraft(context.Context, skillapp.CreateSkillDraftInput) (skillapp.SkillWorkspaceView, error)
+	CreateSkill(context.Context, skillapp.CreateSkillInput) (skillapp.SkillWorkspaceView, error)
 	GetWorkspace(context.Context, string, string) (skillapp.SkillWorkspaceView, error)
 	ListSkills(context.Context) ([]skillapp.SkillProduct, error)
 	DeleteSkill(context.Context, string, string) error
-	UpdateDraftBundle(context.Context, string, string, skillapp.UpdateDraftBundleInput) (skillapp.SkillWorkspaceView, error)
-	PublishDraft(context.Context, string, string) (skillapp.SkillRevision, error)
+	SaveRevision(context.Context, string, string, skillapp.SaveRevisionInput) (skillapp.SkillWorkspaceView, error)
+	ListRevisions(context.Context, string) ([]skillapp.SkillRevision, error)
+	RollbackRevision(context.Context, string, string, string) error
 	SetEditors(context.Context, string, string, []string) error
 }
 
@@ -43,7 +45,7 @@ func (h *SkillHandler) CreateSkill(c *gin.Context) {
 		respondMissingUser(c)
 		return
 	}
-	view, err := h.service.CreateSkillDraft(c.Request.Context(), skillapp.CreateSkillDraftInput{
+	view, err := h.service.CreateSkill(c.Request.Context(), skillapp.CreateSkillInput{
 		Name: req.Name, Description: req.Description, Instructions: req.Instructions,
 		ActorID: actorID, Editors: req.Editors,
 	})
@@ -79,11 +81,12 @@ func (h *SkillHandler) GetSkillWorkspace(c *gin.Context) {
 	c.JSON(http.StatusOK, workspaceToResponse(view))
 }
 
-// UpdateDraft saves the draft's name/description/instructions bundle. The
-// editor actor's qualification is re-validated inside the write transaction.
-// Direct edits carry no baseline content hash (empty expectedContentHash).
-func (h *SkillHandler) UpdateDraft(c *gin.Context) {
-	var req gen.UpdateSkillDraftRequest
+// UpdateSkill persists a new immediately-effective revision derived from the
+// current active version (保存即生效, no publish step). expectedContentHash is
+// the frontend's optimistic-concurrency baseline; the editor actor's
+// qualification is re-validated inside the write transaction.
+func (h *SkillHandler) UpdateSkill(c *gin.Context) {
+	var req gen.UpdateSkillRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
@@ -93,8 +96,8 @@ func (h *SkillHandler) UpdateDraft(c *gin.Context) {
 		respondMissingUser(c)
 		return
 	}
-	view, err := h.service.UpdateDraftBundle(c.Request.Context(), c.Param("id"), "",
-		skillapp.UpdateDraftBundleInput{
+	view, err := h.service.SaveRevision(c.Request.Context(), c.Param("id"), req.ExpectedContentHash,
+		skillapp.SaveRevisionInput{
 			Name: req.Name, Description: req.Description, Instructions: req.Instructions,
 			ActorID: actorID,
 		})
@@ -102,21 +105,42 @@ func (h *SkillHandler) UpdateDraft(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, revisionToResponse(view.Draft))
+	c.JSON(http.StatusOK, workspaceToResponse(view))
 }
 
-func (h *SkillHandler) PublishSkill(c *gin.Context) {
+// ListSkillRevisions returns the skill's version history, newest first, with
+// the currently effective version marked.
+func (h *SkillHandler) ListSkillRevisions(c *gin.Context) {
+	revisions, err := h.service.ListRevisions(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	out := make([]gen.SkillRevisionResponse, 0, len(revisions))
+	for _, revision := range revisions {
+		out = append(out, revisionToResponse(revision))
+	}
+	c.JSON(http.StatusOK, gen.SkillRevisionsResponse{Revisions: out})
+}
+
+// RollbackSkill repoints the skill's active_revision_id to a historical
+// published revision — immediately effective without creating a new version.
+func (h *SkillHandler) RollbackSkill(c *gin.Context) {
+	var req gen.RollbackSkillRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
 	actorID, ok := userIDFromCtx(c)
 	if !ok {
 		respondMissingUser(c)
 		return
 	}
-	revision, err := h.service.PublishDraft(c.Request.Context(), c.Param("id"), actorID)
-	if err != nil {
+	if err := h.service.RollbackRevision(c.Request.Context(), c.Param("id"), req.RevisionID, actorID); err != nil {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, revisionToResponse(revision))
+	c.JSON(http.StatusOK, gin.H{"message": "skill rolled back"})
 }
 
 func (h *SkillHandler) DeleteSkill(c *gin.Context) {
@@ -157,21 +181,27 @@ func (h *SkillHandler) SetSkillEditors(c *gin.Context) {
 func productToResponse(value skillapp.SkillProduct) gen.SkillProductResponse {
 	return gen.SkillProductResponse{
 		ID: value.ID, Name: value.Name, Description: value.Description, Status: value.Status,
-		ActiveRevisionID: value.ActiveRevisionID, DraftRevisionID: value.DraftRevisionID,
+		ActiveRevisionID: value.ActiveRevisionID,
 		// builtin: 前缀即系统内置 skill;前端据此对普通 agent 的选择列过滤。
 		IsSystem: strings.HasPrefix(value.ID, "builtin:"),
 	}
 }
 
 func workspaceToResponse(value skillapp.SkillWorkspaceView) gen.SkillWorkspaceResponse {
-	return gen.SkillWorkspaceResponse{Skill: productToResponse(value.Skill), Draft: revisionToResponse(value.Draft), Editors: value.Editors}
+	return gen.SkillWorkspaceResponse{Skill: productToResponse(value.Skill), Active: revisionToResponse(value.Active), Editors: value.Editors}
 }
 
 func revisionToResponse(value skillapp.SkillRevision) gen.SkillRevisionResponse {
+	var createdAt string
+	if !value.CreatedAt.IsZero() {
+		createdAt = value.CreatedAt.UTC().Format(time.RFC3339)
+	}
 	//nolint:gosec // 版本号不可能溢出 int32(proto 契约)
 	return gen.SkillRevisionResponse{
 		ID: value.ID, SkillID: value.SkillID, RevisionNo: int32(value.RevisionNo), Status: string(value.Status),
 		Name: value.Name, Description: value.Description,
 		Instructions: value.Instructions, PublishChecks: value.PublishChecks,
+		IsCurrent: value.IsCurrent, CreatedBy: value.CreatedBy, CreatedAt: createdAt,
+		ContentHash: value.ContentHash,
 	}
 }

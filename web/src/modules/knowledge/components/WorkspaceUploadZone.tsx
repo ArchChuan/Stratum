@@ -14,8 +14,6 @@ export interface UploadAccessValues {
 
 interface WorkspaceUploadZoneProps {
   loading: boolean;
-  // platform-managed 知识库豁免白名单机制：隐藏权限设置区，上传不携带白名单
-  platformManaged?: boolean;
   userCandidates: Member[];
   userCandidatesLoading?: boolean;
   roleCandidates: string[];
@@ -24,7 +22,6 @@ interface WorkspaceUploadZoneProps {
 
 export const WorkspaceUploadZone = ({
   loading,
-  platformManaged = false,
   userCandidates,
   userCandidatesLoading = false,
   roleCandidates,
@@ -68,8 +65,7 @@ export const WorkspaceUploadZone = ({
           支持 .txt .pdf .md .docx，单文件最大 10MB
         </p>
       </Upload.Dragger>
-      {!platformManaged && (
-        <div style={{ marginTop: 12 }}>
+      <div style={{ marginTop: 12 }}>
           <div style={{ fontSize: 12, color: '#595959', marginBottom: 6 }}>
             上传文档的访问权限（可选）：不设置 = 所有租户成员可查看
           </div>
@@ -104,8 +100,7 @@ export const WorkspaceUploadZone = ({
               ))}
             </Select>
           </div>
-        </div>
-      )}
+      </div>
     </Card>
   );
 };
