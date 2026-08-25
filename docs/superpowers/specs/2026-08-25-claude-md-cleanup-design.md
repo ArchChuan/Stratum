@@ -13,7 +13,7 @@
 
 | 项 | 文档声称 | 系统实际 |
 |----|---------|---------|
-| bounded context | 11 个 | **15 个**（缺 `audit`、`collab`、`parameters`） |
+| bounded context | 11 个 | **14 个**（缺 `audit`、`collab`、`parameters`） |
 | OTEL | v1.40.0 | **v1.42.0**（go.mod） |
 | React Router | 6.26 | **7.18.2**（web/package.json） |
 | pkg/ 包清单 | 缺多个 | 多出 `dag`、`jsonschema`、`messaging`、`platformknowledge`、`safetext`、`timeutil`、`tokenutil`、`postgres`、`storage/{filestore,objectstore}` |
@@ -103,7 +103,7 @@
 
 - `make agent-instructions-check` —— 生成物与源一致
 - `npx markdownlint docs/agent/ CLAUDE.md AGENTS.md` —— 文档格式
-- 手动核对关键过时点已修复：OTEL 1.42、React Router 7、15 contexts、pkg 清单、`config/prod.yaml` 引用
+- 手动核对关键过时点已修复：OTEL 1.42、React Router 7、14 contexts、pkg 清单、`config/prod.yaml` 引用
 - R3 验证闭环：`make test-verify-before-pr`（含 e2e-short），按需 e2e-soak
 - 文档改动不触碰代码，`go test` 不受影响
 
@@ -117,7 +117,7 @@
 ## 成功标准
 
 1. `docs/agent/instructions.md` 及所有被引用的 doc 与系统现状一致（无过时事实、无幽灵引用）
-2. 15 个 context、新 pkg/中间件/handler、依赖版本全部正确反映
+2. 14 个 context、新 pkg/中间件/handler、依赖版本全部正确反映
 3. 未引用文档有明确处理（保留/归档/删除/合并）
 4. CLAUDE.md 明确测试门槛与测试 agent 机制
 5. `.claude/agents/stratum-e2e-tester.md` 可被主 agent 派发执行验证
