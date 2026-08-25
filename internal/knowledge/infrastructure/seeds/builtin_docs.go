@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
@@ -78,7 +79,10 @@ func seedCatalogEntries(
 	for _, entry := range entries {
 		content := formatDocContent(entry)
 		hash := contentHash(content)
-		docID := fmt.Sprintf("%s:%s", entry.DocumentID, sectionSlug(entry.Section))
+		// knowledge_docs.id is a UUID column; builtinDocID derives a deterministic
+		// UUIDv5 so the ingest INSERT doesn't hit SQLSTATE 22P02 (invalid uuid
+		// syntax). The readable ID is preserved in FileName → title below.
+		docID := builtinDocID(entry)
 
 		exists, err := docRepo.ExistsByHash(ctx, tenantID, BuiltinWorkspaceID, hash)
 		if err != nil {
@@ -139,4 +143,12 @@ func sectionSlug(section string) string {
 		}
 	}
 	return b.String()
+}
+
+// builtinDocID 从目录条目派生确定性的 UUIDv5。knowledge_docs.id 是 UUID 列，
+// 不能直接写入人可读 documentID；以 documentID:section 对为输入，同一目录条目
+// 稳定映射到同一 doc（幂等去重依赖此性质），且无需查询现有 ID。
+func builtinDocID(entry knowledgeport.OfficialDocEntry) string {
+	readableID := fmt.Sprintf("%s:%s", entry.DocumentID, sectionSlug(entry.Section))
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(readableID)).String()
 }

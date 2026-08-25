@@ -1280,6 +1280,15 @@ ALTER TABLE memory_entries DROP COLUMN IF EXISTS scope_layer;
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS enriched_at TIMESTAMPTZ;
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'user';
 UPDATE memory_entries SET scope = 'agent' WHERE agent_id IS NOT NULL AND scope = 'user';
+-- 空串归一化：历史遗留 agent 可能经旧路径写入 ''（当时无 CHECK 约束）。
+-- history worker 的 HistorySegment.Validate() 要求 scope ∈ {user,agent}，
+-- 空值导致 memory.history.upsert_failed。agent 相关条目回落 'agent'，其余 'user'。
+UPDATE memory_entries SET scope = CASE WHEN agent_id IS NULL THEN 'user' ELSE 'agent' END
+WHERE octet_length(scope) = 0;
+-- 白名单约束与 memory_facts/memory_entities 对齐，防止后续再写入非法 scope。
+ALTER TABLE memory_entries DROP CONSTRAINT IF EXISTS memory_entries_scope_check;
+ALTER TABLE memory_entries ADD CONSTRAINT memory_entries_scope_check
+    CHECK (scope IN ('user', 'agent'));
 
 CREATE INDEX IF NOT EXISTS idx_memory_entries_user_id ON memory_entries (user_id);
 -- episodic TTL GC 扫描：created_at 覆盖无 expires_at 的 90 天截止，expires_at
@@ -1292,6 +1301,13 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL 
 ALTER TABLE agents DROP COLUMN IF EXISTS embed_model;
 ALTER TABLE agents DROP COLUMN IF EXISTS persona;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS parameters JSONB NOT NULL DEFAULT '{}'::jsonb;
+-- memory_scope 空串归一化：遗留 agent 可能写入 ''（DTO binding required 本应
+-- 阻止，但缺 CHECK 的历史路径可绕过）。空值回落 DEFAULT 'agent'，防止 history
+-- worker 的 scope 校验拒绝导致 memory.history.upsert_failed。
+UPDATE agents SET memory_scope = 'agent' WHERE octet_length(memory_scope) = 0;
+ALTER TABLE agents DROP CONSTRAINT IF EXISTS agents_memory_scope_check;
+ALTER TABLE agents ADD CONSTRAINT agents_memory_scope_check
+    CHECK (memory_scope IN ('user', 'agent'));
 
 -- chat_conversations soft-delete backfill
 ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
