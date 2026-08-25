@@ -42,7 +42,9 @@ func (e *llmExecutor) Execute(ctx context.Context, o options, p point) (execResu
 	}
 	out, err := e.runCases(ctx, dataset)
 	if err != nil {
-		return execResult{}, err
+		// Preserve partial cases and evidence accumulated before the failure so
+		// the error report carries them, matching skill/knowledge executors.
+		return out, err
 	}
 	out.Evidence = append(out.Evidence, evidence{Kind: "agent", Ref: agentID})
 	return out, nil
