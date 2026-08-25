@@ -179,12 +179,32 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
     // 「取消」按钮据此仅对发起人本人展示(admin 兜底走审批中心「拒绝」职责)。
     const withConv = {
       ...streamApproval,
+      // SSE 帧原始 status 为 waiting_approval,而审批卡片/「取消」按钮按 pending
+      // 语义判定(AgentChatPage canCancel 要求 status === 'pending'),这里归一化,
+      // 使取消按钮在刷新前即可展示(否则需等 listToolApprovals 轮询刷新)。
+      status: 'pending',
       conversationId: streamConversationId || undefined,
       userId: user?.sub || streamApproval.userId,
     };
-    setPendingApprovals((rows) =>
-      rows.some((r) => r.approvalId === withConv.approvalId) ? rows : [...rows, withConv],
-    );
+    setPendingApprovals((rows) => {
+      const idx = rows.findIndex((r) => r.approvalId === withConv.approvalId);
+      if (idx === -1) return [...rows, withConv];
+      // 已有行(如恢复分支 listToolApprovals 先入):合并补全而非丢弃,保证
+      // 身份(user.sub 异步加载就绪后)与状态归一生效;已有字段优先,避免用
+      // SSE 帧的占位值(riskLevel='unclassified')覆盖更完整的恢复数据。
+      const existing = rows[idx];
+      const next = rows.slice();
+      next[idx] = {
+        ...existing,
+        status: isTerminalApproval(String(existing.status)) ? existing.status : 'pending',
+        conversationId: existing.conversationId || withConv.conversationId,
+        userId: existing.userId || withConv.userId,
+        toolName: existing.toolName || withConv.toolName,
+        serverId: existing.serverId || withConv.serverId,
+        riskLevel: existing.riskLevel || withConv.riskLevel,
+      };
+      return next;
+    });
   }, [streamApproval, streamConversationId, user?.sub]);
 
   // 自动续跑(审批已批准 / 刷新恢复 running|paused 共用):复用现有 SSE 链路,
