@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 // Sentinel errors raised by Workspace domain methods. Application-level
@@ -22,6 +24,8 @@ var (
 	ErrRerankModelRequired       = errors.New("rerank model is required")
 	ErrInvalidRerankModel        = errors.New("unsupported rerank model")
 	ErrInvalidJudgeModel         = errors.New("unsupported judge model")
+	ErrInvalidTopK               = errors.New("top_k must be within [1, max]")
+	ErrInvalidRerankTopK         = errors.New("rerank_top_k must be within [0, max]")
 )
 
 const (
@@ -146,26 +150,38 @@ func NewWorkspace(name, description string, cfg WorkspaceConfig, defaultChunkSiz
 // truth (no static or dynamic default), so an empty value is rejected.
 // The check is deliberately last — structural errors (query mode, chunking,
 // rerank, threshold) keep priority over the missing-field error.
+//
+// 表驱动按序校验，命中即返回（顺序即优先级）。范围校验（ScoreThreshold/TopK/
+// RerankTopK）无条件执行（即使重排关闭）：TopK 必须落在 [1, MaxRAGTopK]
+// （0 是未初始化，经 applyDefaults 填补后到达这里必然 ≥1）；RerankTopK 落在
+// [0, MaxRerankTopK]（0 = 跟随 TopK，合法）。上限与 proto QueryRequest.topK /
+// workspace 契约同步。每行谓词收敛为单个判定点以控制圈复杂度。
 func (c WorkspaceConfig) Validate() error {
-	if !AllowedQueryModes[c.QueryMode] {
-		return ErrInvalidQueryMode
-	}
-	if !AllowedChunkingStrategies[c.ChunkingStrategy] {
-		return ErrInvalidChunkingStrategy
-	}
-	if !ValidRerankIdentity(c.Reranking) {
-		return ErrInvalidRerankIdentity
-	}
-	if c.ScoreThreshold < 0 || c.ScoreThreshold > 1 {
-		return ErrInvalidScoreThreshold
-	}
-	if c.EmbeddingModel == "" {
-		return ErrEmbeddingModelRequired
-	}
-	if c.Reranking == "builtin-score-v1" && c.RerankModel == "" {
-		return ErrRerankModelRequired
+	missingRerankModel := c.Reranking == "builtin-score-v1" && c.RerankModel == ""
+	for _, check := range []struct {
+		ok  bool
+		err error
+	}{
+		{AllowedQueryModes[c.QueryMode], ErrInvalidQueryMode},
+		{AllowedChunkingStrategies[c.ChunkingStrategy], ErrInvalidChunkingStrategy},
+		{ValidRerankIdentity(c.Reranking), ErrInvalidRerankIdentity},
+		{inRange(c.ScoreThreshold, 0, 1), ErrInvalidScoreThreshold},
+		{inRange(c.TopK, 1, constants.MaxRAGTopK), ErrInvalidTopK},
+		{inRange(c.RerankTopK, 0, constants.MaxRerankTopK), ErrInvalidRerankTopK},
+		{c.EmbeddingModel != "", ErrEmbeddingModelRequired},
+		{!missingRerankModel, ErrRerankModelRequired},
+	} {
+		if !check.ok {
+			return check.err
+		}
 	}
 	return nil
+}
+
+// inRange 判断数值落在闭区间 [lo, hi]。泛型约束覆盖 Validate 用到的 int/float32，
+// 把 "v<lo || v>hi" 两个判定点收敛为单一谓词，避免散落 if 抬高圈复杂度。
+func inRange[T int | float32](v, lo, hi T) bool {
+	return v >= lo && v <= hi
 }
 
 // ValidRerankIdentity 校验 rerank identity 结构：内部策略（""/builtin）直接
@@ -213,6 +229,9 @@ func (c WorkspaceConfig) MergeUpdate(partial WorkspaceConfig) (WorkspaceConfig, 
 		out.QueryMode = partial.QueryMode
 	}
 	if partial.TopK > 0 {
+		if partial.TopK > constants.MaxRAGTopK {
+			return c, ErrInvalidTopK
+		}
 		out.TopK = partial.TopK
 	}
 	merged, err := out.applyRerankSettings(partial)
@@ -261,6 +280,9 @@ func (c WorkspaceConfig) applyRerankSettings(partial WorkspaceConfig) (Workspace
 		out.ScoreThreshold = 0
 	}
 	if partial.RerankTopK > 0 {
+		if partial.RerankTopK > constants.MaxRerankTopK {
+			return c, ErrInvalidRerankTopK
+		}
 		out.RerankTopK = partial.RerankTopK
 	}
 	if rerankModel, ok := mergeResetField(out.RerankModel, partial.RerankModel, RerankModelResetSentinel); ok {

@@ -13,10 +13,10 @@ type WorkspaceConfig struct {
 	ChunkSize        int32   `json:"chunk_size"`
 	ChunkOverlap     int32   `json:"chunk_overlap"`
 	QueryMode        string  `json:"query_mode"`
-	TopK             int32   `json:"top_k"`
+	TopK             int32   `json:"top_k" binding:"omitempty,min=1,max=20"`
 	Reranking        string  `json:"reranking"`
-	ScoreThreshold   float32 `json:"score_threshold"`
-	RerankTopK       int32   `json:"rerank_top_k"`
+	ScoreThreshold   float32 `json:"score_threshold" binding:"omitempty,min=0,max=1"`
+	RerankTopK       int32   `json:"rerank_top_k" binding:"omitempty,min=0,max=20"`
 	RerankModel      string  `json:"rerank_model"`
 	JudgeModel       string  `json:"judge_model"`
 }

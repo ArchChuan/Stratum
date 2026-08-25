@@ -810,22 +810,30 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
   }, [selectedConv, terminalApproval, doApprovalResume]);
 
   const lastMsgCountRef = useRef(0);
+  const lastLoadingMsgsRef = useRef(loadingMsgs); // 与初始态(false)对齐
   useEffect(() => {
     const el = bottomRef.current;
     if (!el) return;
+    const loadingJustFinished = lastLoadingMsgsRef.current && !loadingMsgs;
+    lastLoadingMsgsRef.current = loadingMsgs;
     const newMessages = messages.length > lastMsgCountRef.current;
     lastMsgCountRef.current = messages.length;
-    // On initial load or new conversation: always scroll instantly.
-    if (newMessages && !sending) {
+    // 初始加载/新会话/刷新恢复:消息真正挂载后再锚定。刷新恢复路径 setMessages 与
+    // setLoadingMsgs(false) 被 await getActiveExecution 分隔成两批——第一批
+    // (loadingMsgs 仍 true)消息未挂载(Skeleton 展示),滚动无效且 newMessages 被预消费,
+    // 第二批需靠 true→false 边沿补触发;双 rAF 保证 DOM 挂载完成后滚动。
+    if (!loadingMsgs && (newMessages || loadingJustFinished) && !sending) {
       pinnedToBottomRef.current = true;
-      el.scrollIntoView({ behavior: 'instant' });
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        bottomRef.current?.scrollIntoView({ behavior: 'instant' });
+      }));
       return;
     }
     // During streaming: only scroll if user is pinned to bottom.
-    if (sending && pinnedToBottomRef.current) {
+    if (sending && pinnedToBottomRef.current && !loadingMsgs) {
       el.scrollIntoView({ behavior: 'instant' });
     }
-  }, [messages, sending]);
+  }, [messages, sending, loadingMsgs]);
 
   const handleSend = useCallback(() => {
     const text = input.trim();

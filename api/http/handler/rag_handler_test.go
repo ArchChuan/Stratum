@@ -154,6 +154,38 @@ func TestCreateWorkspace_InvalidQueryMode(t *testing.T) {
 	}
 }
 
+// TestCreateWorkspace_RejectsOutOfRangeRerankParams 守护 proto binding 对
+// top_k / rerank_top_k / score_threshold 的契约层拒绝。handler 用 nil repo
+// 的 service——binding 若能穿过并到达 service 会 panic，400 即证明
+// validator.v10 在绑定层短路（service 未被调用）。
+func TestCreateWorkspace_RejectsOutOfRangeRerankParams(t *testing.T) {
+	r := newRouterWithErrorHandler()
+	h := newValidationRAGHandler()
+	r.POST("/knowledge/workspaces", injectRAGTenant("test-tenant-id"), h.CreateWorkspace)
+
+	for _, tc := range []struct {
+		name string
+		cfg  map[string]any
+	}{
+		{"top_k above max", map[string]any{"top_k": 21}},
+		{"rerank_top_k above max", map[string]any{"rerank_top_k": 21}},
+		{"rerank_top_k negative", map[string]any{"rerank_top_k": -1}},
+		{"score_threshold above max", map[string]any{"score_threshold": 1.5}},
+		{"score_threshold below min", map[string]any{"score_threshold": -0.1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, _ := json.Marshal(map[string]any{"name": "test", "config": tc.cfg})
+			w := httptest.NewRecorder()
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/knowledge/workspaces", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			r.ServeHTTP(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("want 400 (binding reject), got %d: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestQuery_MissingTenant(t *testing.T) {
 	r := newRouterWithErrorHandler()
 	h := newMinimalRAGHandler()
