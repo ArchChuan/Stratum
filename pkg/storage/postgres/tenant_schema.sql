@@ -206,7 +206,7 @@ CREATE TABLE IF NOT EXISTS operation_proposals (
     id                   TEXT PRIMARY KEY,
     agent_id             TEXT NOT NULL,
     target_agent_id      TEXT NOT NULL DEFAULT '',
-    op_type              TEXT NOT NULL CHECK (op_type IN ('revision_apply','cross_agent_delegate','schedule_create','self_modify')),
+    op_type              TEXT NOT NULL CHECK (op_type IN ('revision_apply','cross_agent_delegate','schedule_create','self_modify','grant_editor')),
     delegation           TEXT NOT NULL DEFAULT 'no_delegate' CHECK (delegation IN ('no_delegate','read_only','full')),
     max_daily_cost_usd   NUMERIC(14,4) NOT NULL DEFAULT 0,
     max_daily_executions INT  NOT NULL DEFAULT 0,
@@ -221,6 +221,13 @@ CREATE TABLE IF NOT EXISTS operation_proposals (
     resolved_at          TIMESTAMPTZ,
     expires_at           TIMESTAMPTZ
 );
+-- 升级存量租户：grant_editor（成员白名单自助申请）加入 op_type 枚举后，历史租户
+-- 的旧 check 约束仍拒绝该值（ProposeGrantEditor 插入即 500）。CREATE TABLE IF
+-- NOT EXISTS 不会重建已有表，故以 DROP IF EXISTS + ADD CONSTRAINT 幂等替换——
+-- 每次 provision 先删后加，新旧租户最终都含 grant_editor。
+ALTER TABLE operation_proposals DROP CONSTRAINT IF EXISTS operation_proposals_op_type_check;
+ALTER TABLE operation_proposals ADD CONSTRAINT operation_proposals_op_type_check
+    CHECK (op_type IN ('revision_apply','cross_agent_delegate','schedule_create','self_modify','grant_editor'));
 CREATE INDEX IF NOT EXISTS idx_operation_proposals_pending ON operation_proposals(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_operation_proposals_agent    ON operation_proposals(agent_id, op_type);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_operation_proposals_open_fingerprint
