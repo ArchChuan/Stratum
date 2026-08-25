@@ -2,64 +2,53 @@ package domain
 
 import "testing"
 
-func TestActivationContractValidateRequiresConfirmedValidContract(t *testing.T) {
-	contract := ActivationContract{
+func TestSkillRevisionValidatePublishableAcceptsCompleteRevision(t *testing.T) {
+	revision := SkillRevision{
 		Name:         "classify_complaint",
 		Description:  "判断客户投诉类型并给出处理建议",
-		InputSchema:  map[string]any{"type": "object", "properties": map[string]any{}},
-		OutputSchema: map[string]any{"type": "object"},
-		Confirmed:    true,
-	}
-
-	if err := contract.Validate(); err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-}
-
-func TestActivationContractValidateRejectsUnsafeName(t *testing.T) {
-	contract := ActivationContract{
-		Name:         "投诉 分类",
-		Description:  "判断客户投诉类型",
-		InputSchema:  map[string]any{"type": "object"},
-		OutputSchema: map[string]any{"type": "object"},
-		Confirmed:    true,
-	}
-
-	if err := contract.Validate(); err == nil {
-		t.Fatal("expected invalid tool name error")
-	}
-}
-
-func TestSkillRevisionPublishableRequiresInstructions(t *testing.T) {
-	revision := SkillRevision{
-		Status: VersionStatusDraft,
-		Capability: Capability{
-			Goal:      "判断客户投诉类型",
-			WhenToUse: "用户表达投诉时",
-			Examples:  []CapabilityExample{{Input: "快递没更新", ExpectedOutput: "物流问题"}},
-		},
-		ActivationContract: ActivationContract{
-			Name:         "classify_complaint",
-			Description:  "判断客户投诉类型",
-			InputSchema:  map[string]any{"type": "object"},
-			OutputSchema: map[string]any{"type": "object"},
-			Confirmed:    true,
-		},
 		Instructions: "根据投诉内容分类；需要订单数据时调用允许的 MCP 工具。",
 	}
 
-	if err := revision.ValidatePublishable(1); err != nil {
+	if err := revision.ValidatePublishable(); err != nil {
 		t.Fatalf("ValidatePublishable() error = %v", err)
 	}
 }
 
-func TestSkillRevisionContentHashTracksInstructions(t *testing.T) {
+func TestSkillRevisionValidatePublishableRejectsMissingField(t *testing.T) {
+	cases := []struct {
+		name  string
+		field string
+	}{
+		{name: "missing name", field: "Name"},
+		{name: "missing description", field: "Description"},
+		{name: "missing instructions", field: "Instructions"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			revision := SkillRevision{
+				Name:         "classify_complaint",
+				Description:  "判断客户投诉类型",
+				Instructions: "根据投诉内容分类。",
+			}
+			switch tc.field {
+			case "Name":
+				revision.Name = "   "
+			case "Description":
+				revision.Description = ""
+			case "Instructions":
+				revision.Instructions = "\t"
+			}
+			if err := revision.ValidatePublishable(); err == nil {
+				t.Fatalf("expected not publishable error for %s", tc.field)
+			}
+		})
+	}
+}
+
+func TestSkillRevisionContentHashTracksEditableSurface(t *testing.T) {
 	revision := SkillRevision{
-		Capability: Capability{Goal: "分类", WhenToUse: "收到投诉时"},
-		ActivationContract: ActivationContract{
-			Name: "classify", Description: "分类", InputSchema: map[string]any{"type": "object"},
-			OutputSchema: map[string]any{"type": "object"}, Confirmed: true,
-		},
+		Name:         "classify",
+		Description:  "分类",
 		Instructions: "分类用户输入",
 	}
 	first, err := revision.ComputeContentHash()

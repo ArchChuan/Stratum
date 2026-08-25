@@ -39,15 +39,14 @@ func newSkillRepo(mock pgxmock.PgxPoolIface) *PgSkillRevisionRepo {
 func skillRevisionRow() []any {
 	return []any{
 		"r-1", "s-1", "p-1", 2, "draft", "evolution", "h-1",
-		[]byte(`{"gen":1}`), []byte(`{"goal":"g","whenToUse":""}`),
-		[]byte(`{"name":"ac","description":"","confirmed":false}`),
-		"do it", []byte(`{"mcpToolIds":["t1"]}`), []byte(`{"ok":true}`),
+		[]byte(`{"gen":1}`),
+		"skill name", "skill description", "do it", []byte(`{"ok":true}`),
 	}
 }
 
 var revisionCols = []string{
 	"id", "skill_id", "parent_revision_id", "revision_no", "status", "source", "content_hash",
-	"generation_metadata", "capability", "activation_contract", "instructions", "requirements", "publish_checks",
+	"generation_metadata", "name", "description", "instructions", "publish_checks",
 }
 
 func TestPgSkillRevisionRepo_InsertSkillWithDraft_success(t *testing.T) {
@@ -60,7 +59,7 @@ func TestPgSkillRevisionRepo_InsertSkillWithDraft_success(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO skill_revisions").
 		WithArgs("r-1", "s-1", "p-1", 2, "draft", "evolution", "h-1",
-			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), "skill name", "skill description",
 			"do it", pgxmock.AnyArg(), "").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
@@ -82,7 +81,7 @@ func TestPgSkillRevisionRepo_InsertSkillWithDraft_manualSourceFallback(t *testin
 	// Empty Source and empty ParentRevisionID map to 'manual' and NULL semantics.
 	mock.ExpectExec("INSERT INTO skill_revisions").
 		WithArgs("r-1", "s-1", "", 0, "draft", "manual", "h-1",
-			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), "skill name", "skill description",
 			"do it", pgxmock.AnyArg(), "").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
@@ -120,7 +119,7 @@ func TestPgSkillRevisionRepo_InsertSkillWithDraft_revisionInsertFails(t *testing
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO skill_revisions").
 		WithArgs("r-1", "s-1", "p-1", 2, "draft", "evolution", "h-1",
-			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), "skill name", "skill description",
 			"do it", pgxmock.AnyArg(), "").
 		WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
@@ -253,7 +252,7 @@ func TestPgSkillRevisionRepo_GetDraftRevision_found(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, "r-1", rev.ID)
 	require.Equal(t, domain.VersionStatusDraft, rev.Status)
-	require.Equal(t, "g", rev.Capability.Goal, "JSON columns must unmarshal")
+	require.Equal(t, "skill name", rev.Name)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -310,7 +309,7 @@ func TestPgSkillRevisionRepo_InsertCandidate_success(t *testing.T) {
 
 	mock.ExpectExec("INSERT INTO skill_revisions").
 		WithArgs("c-1", "s-1", "p-1", 2, "candidate", "evolution", "h-1",
-			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), "skill name", "skill description",
 			"do it", pgxmock.AnyArg(), "").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
@@ -321,83 +320,13 @@ func TestPgSkillRevisionRepo_InsertCandidate_success(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestPgSkillRevisionRepo_UpdateDraftCapability_success(t *testing.T) {
-	mock := newSkillMock(t)
-	repo := newSkillRepo(mock)
-	beginTenantTx(t, mock)
-
-	mock.ExpectQuery("UPDATE skill_revisions SET capability=\\$2, content_hash=\\$3").
-		WithArgs("s-1", `{"goal":"g","whenToUse":""}`, "h-2").
-		WillReturnRows(pgxmock.NewRows(revisionCols).AddRow(skillRevisionRow()...))
-	mock.ExpectCommit()
-
-	// Second transaction: refresh skill description.
-	beginTenantTx(t, mock)
-	mock.ExpectExec("UPDATE skills SET description=\\$2").
-		WithArgs("s-1", "g").
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	mock.ExpectCommit()
-
-	rev, err := repo.UpdateDraftCapability(skillTenantCtx(), "s-1", domain.Capability{Goal: "g"}, "h-2", nil, "")
-	require.NoError(t, err)
-	require.Equal(t, "r-1", rev.ID)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestPgSkillRevisionRepo_UpdateDraftCapability_queryFails(t *testing.T) {
-	mock := newSkillMock(t)
-	repo := newSkillRepo(mock)
-	beginTenantTx(t, mock)
-
-	mock.ExpectQuery("UPDATE skill_revisions SET capability=\\$2, content_hash=\\$3").
-		WithArgs("s-1", `{"goal":"g","whenToUse":""}`, "h-2").
-		WillReturnError(pgx.ErrTxClosed)
-	mock.ExpectRollback()
-
-	_, err := repo.UpdateDraftCapability(skillTenantCtx(), "s-1", domain.Capability{Goal: "g"}, "h-2", nil, "")
-	require.ErrorIs(t, err, pgx.ErrTxClosed)
-}
-
-func TestPgSkillRevisionRepo_UpdateDraftActivation_success(t *testing.T) {
-	mock := newSkillMock(t)
-	repo := newSkillRepo(mock)
-	beginTenantTx(t, mock)
-
-	mock.ExpectQuery("UPDATE skill_revisions SET activation_contract=\\$2, content_hash=\\$3").
-		WithArgs("s-1", `{"name":"ac","description":"","confirmed":false}`, "h-3").
-		WillReturnRows(pgxmock.NewRows(revisionCols).AddRow(skillRevisionRow()...))
-	mock.ExpectCommit()
-
-	rev, err := repo.UpdateDraftActivation(skillTenantCtx(), "s-1", domain.ActivationContract{Name: "ac"}, "h-3", nil, "")
-	require.NoError(t, err)
-	require.Equal(t, "r-1", rev.ID)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestPgSkillRevisionRepo_UpdateDraftInstructions_success(t *testing.T) {
-	mock := newSkillMock(t)
-	repo := newSkillRepo(mock)
-	beginTenantTx(t, mock)
-
-	mock.ExpectQuery("UPDATE skill_revisions SET instructions=\\$2, content_hash=\\$3").
-		WithArgs("s-1", "do it", "h-4").
-		WillReturnRows(pgxmock.NewRows(revisionCols).AddRow(skillRevisionRow()...))
-	mock.ExpectCommit()
-
-	rev, err := repo.UpdateDraftInstructions(skillTenantCtx(), "s-1", "do it", "h-4", nil, "")
-	require.NoError(t, err)
-	require.Equal(t, "r-1", rev.ID)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
 func TestPgSkillRevisionRepo_UpdateDraftBundle_success(t *testing.T) {
 	mock := newSkillMock(t)
 	repo := newSkillRepo(mock)
 	beginTenantTx(t, mock)
 
-	mock.ExpectQuery("UPDATE skill_revisions SET capability=\\$3::jsonb").
-		WithArgs("s-1", "h-1", `{"goal":"g","whenToUse":""}`, `{"name":"ac","description":"","confirmed":false}`,
-			"do it", "h-1").
+	mock.ExpectQuery("UPDATE skill_revisions SET name=\\$2").
+		WithArgs("s-1", "skill name", "skill description", "do it", "h-1", "h-1").
 		WillReturnRows(pgxmock.NewRows(revisionCols).AddRow(skillRevisionRow()...))
 	mock.ExpectExec("UPDATE skills SET name=\\$2, description=\\$3").
 		WithArgs("s-1", "new-name", "new-desc").
@@ -417,8 +346,8 @@ func TestPgSkillRevisionRepo_UpdateDraftBundle_stale(t *testing.T) {
 	repo := newSkillRepo(mock)
 	beginTenantTx(t, mock)
 
-	mock.ExpectQuery("UPDATE skill_revisions SET capability=\\$3::jsonb").
-		WithArgs("s-1", "stale-hash", pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+	mock.ExpectQuery("UPDATE skill_revisions SET name=\\$2").
+		WithArgs("s-1", pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), "stale-hash").
 		WillReturnError(pgx.ErrNoRows)
 	// Draft still exists but hash changed → ErrSkillDraftStale.
 	mock.ExpectQuery("SELECT EXISTS").
@@ -436,8 +365,8 @@ func TestPgSkillRevisionRepo_UpdateDraftBundle_noDraft(t *testing.T) {
 	repo := newSkillRepo(mock)
 	beginTenantTx(t, mock)
 
-	mock.ExpectQuery("UPDATE skill_revisions SET capability=\\$3::jsonb").
-		WithArgs("s-1", "h-1", pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+	mock.ExpectQuery("UPDATE skill_revisions SET name=\\$2").
+		WithArgs("s-1", pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), "h-1").
 		WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs("s-1").
@@ -533,8 +462,8 @@ func testSkillRevision(id string) domain.SkillRevision {
 		Source:             "evolution",
 		ContentHash:        "h-1",
 		GenerationMetadata: map[string]any{"gen": 1},
-		Capability:         domain.Capability{Goal: "g"},
-		ActivationContract: domain.ActivationContract{Name: "ac"},
+		Name:               "skill name",
+		Description:        "skill description",
 		Instructions:       "do it",
 		PublishChecks:      map[string]any{"ok": true},
 	}
@@ -548,9 +477,8 @@ func TestPgSkillRevisionRepo_UpdateDraftBundle_noBaseline(t *testing.T) {
 	repo := newSkillRepo(mock)
 	beginTenantTx(t, mock)
 
-	mock.ExpectQuery("UPDATE skill_revisions SET capability=\\$3::jsonb").
-		WithArgs("s-1", `{"goal":"g","whenToUse":""}`, `{"name":"ac","description":"","confirmed":false}`,
-			"do it", "h-1").
+	mock.ExpectQuery("UPDATE skill_revisions SET name=\\$2").
+		WithArgs("s-1", "skill name", "skill description", "do it", "h-1").
 		WillReturnRows(pgxmock.NewRows(revisionCols).AddRow(skillRevisionRow()...))
 	mock.ExpectExec("UPDATE skills SET name=\\$2, description=\\$3").
 		WithArgs("s-1", "new-name", "new-desc").

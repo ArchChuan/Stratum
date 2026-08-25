@@ -49,39 +49,12 @@ export const CreateSkillPage = () => {
         </Form.Item>
 
         <Form.Item
-          label="能力目标"
-          name="goal"
-          rules={[{ required: true, message: '请输入能力目标' }]}
-          extra="说明这个 Skill 要完成什么业务动作"
+          label="描述"
+          name="description"
+          rules={[{ required: true, message: '请输入技能描述' }]}
+          extra="一句话说明这个 Skill 的用途"
         >
-          <TextArea rows={3} placeholder="例如：判断客户投诉类型并给出处理建议" />
-        </Form.Item>
-
-        <Form.Item
-          label="调用时机"
-          name="whenToUse"
-          rules={[{ required: true, message: '请输入调用时机' }]}
-          extra="说明 Agent 在什么情况下应该调用这个 Skill"
-        >
-          <TextArea rows={3} placeholder="例如：用户表达投诉、退款、物流延迟、商品质量问题时" />
-        </Form.Item>
-
-        <Form.Item
-          label="样例输入"
-          name="sampleInput"
-          rules={[{ required: true, message: '请输入样例输入' }]}
-          extra="系统会根据样例推断输入结构，并生成第一条测试样例"
-        >
-          <TextArea rows={3} placeholder="例如：我的快递三天没有更新" />
-        </Form.Item>
-
-        <Form.Item
-          label="期望输出"
-          name="expectedOutput"
-          rules={[{ required: true, message: '请输入期望输出' }]}
-          extra="描述这个样例下的正确结果"
-        >
-          <TextArea rows={3} placeholder="例如：物流问题，建议查询物流并安抚用户" />
+          <TextArea rows={2} placeholder="例如：判断客户投诉类型并给出处理建议" />
         </Form.Item>
 
         <Form.Item label="执行指令" name="instructions" rules={[{ required: true, message: '请输入执行指令' }]}>
@@ -90,10 +63,10 @@ export const CreateSkillPage = () => {
         <Form.Item
           label="可编辑人"
           name="editors"
-          extra="可编辑人（租户管理员）可以修改此技能；删除仍仅限创建者或超级管理员"
+          extra="白名单中的成员可编辑此技能草稿；删除仍仅限创建者或超级管理员"
           style={{ marginBottom: 0 }}
         >
-          <Select mode="multiple" placeholder="选择可编辑的管理员" allowClear loading={editorCandidatesLoading}>
+          <Select mode="multiple" placeholder="选择可编辑的租户成员" allowClear loading={editorCandidatesLoading}>
             {candidates.map((member) => (
               <Option key={member.user_id} value={member.user_id}>
                 {member.github_login || member.user_id}

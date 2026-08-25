@@ -17,43 +17,36 @@ import (
 )
 
 type fakeSkillRevisionService struct {
-	created    skillapp.CreateSkillDraftInput
-	activation skillapp.UpdateActivationInput
-	bundle     skillapp.UpdateInstructionBundleInput
+	created skillapp.CreateSkillDraftInput
+	draft   skillapp.UpdateDraftBundleInput
 }
 
 func (f *fakeSkillRevisionService) CreateSkillDraft(_ context.Context, input skillapp.CreateSkillDraftInput) (skillapp.SkillWorkspaceView, error) {
 	f.created = input
 	return skillapp.SkillWorkspaceView{
-		Skill: skillapp.SkillProduct{ID: "skill-1", Name: input.Name, Description: input.Goal, Status: "draft", DraftRevisionID: "revision-1"},
+		Skill: skillapp.SkillProduct{ID: "skill-1", Name: input.Name, Description: input.Description, Status: "draft", DraftRevisionID: "revision-1"},
 		Draft: domain.SkillRevision{
 			ID: "revision-1", SkillID: "skill-1", Status: domain.VersionStatusDraft,
-			Capability:         domain.Capability{Goal: input.Goal, WhenToUse: input.WhenToUse},
-			ActivationContract: domain.ActivationContract{Name: "complaint", Description: input.Goal},
-			Instructions:       input.Instructions,
+			Name: input.Name, Description: input.Description, Instructions: input.Instructions,
 		},
 	}, nil
 }
 func (f *fakeSkillRevisionService) GetWorkspace(ctx context.Context, _, _ string) (skillapp.SkillWorkspaceView, error) {
-	return f.CreateSkillDraft(ctx, skillapp.CreateSkillDraftInput{Name: "complaint", Goal: "分类", WhenToUse: "投诉时", Instructions: "分类投诉"})
+	return f.CreateSkillDraft(ctx, skillapp.CreateSkillDraftInput{Name: "complaint", Description: "分类", Instructions: "分类投诉"})
 }
 func (f *fakeSkillRevisionService) ListSkills(context.Context) ([]skillapp.SkillProduct, error) {
 	return []skillapp.SkillProduct{{ID: "skill-1", Name: "complaint", Status: "draft"}}, nil
 }
 func (f *fakeSkillRevisionService) DeleteSkill(context.Context, string, string) error { return nil }
-func (f *fakeSkillRevisionService) UpdateCapability(_ context.Context, _ string, input skillapp.UpdateCapabilityInput) (skillapp.SkillRevision, error) {
-	return skillapp.SkillRevision{ID: "revision-1", Capability: domain.Capability{Goal: input.Goal}}, nil
-}
-func (f *fakeSkillRevisionService) UpdateActivation(_ context.Context, _ string, input skillapp.UpdateActivationInput) (skillapp.SkillRevision, error) {
-	f.activation = input
-	return skillapp.SkillRevision{ID: "revision-1", ActivationContract: domain.ActivationContract{
-		Name: input.Name, Description: input.Description, InputSchema: input.InputSchema,
-		OutputSchema: input.OutputSchema, Confirmed: input.Confirmed,
-	}}, nil
-}
-func (f *fakeSkillRevisionService) UpdateInstructionBundle(_ context.Context, _ string, input skillapp.UpdateInstructionBundleInput) (skillapp.SkillRevision, error) {
-	f.bundle = input
-	return skillapp.SkillRevision{ID: "revision-1", Instructions: input.Instructions}, nil
+func (f *fakeSkillRevisionService) UpdateDraftBundle(_ context.Context, _ string, _ string, input skillapp.UpdateDraftBundleInput) (skillapp.SkillWorkspaceView, error) {
+	f.draft = input
+	return skillapp.SkillWorkspaceView{
+		Skill: skillapp.SkillProduct{ID: "skill-1", Name: input.Name, Description: input.Description, Status: "draft", DraftRevisionID: "revision-1"},
+		Draft: domain.SkillRevision{
+			ID: "revision-1", SkillID: "skill-1", Status: domain.VersionStatusDraft,
+			Name: input.Name, Description: input.Description, Instructions: input.Instructions,
+		},
+	}, nil
 }
 func (f *fakeSkillRevisionService) PublishDraft(context.Context, string, string) (skillapp.SkillRevision, error) {
 	return skillapp.SkillRevision{ID: "revision-1", RevisionNo: 1, Status: domain.VersionStatusPublished}, nil
@@ -83,12 +76,12 @@ func newSkillTestRouter(method, path string, handler gin.HandlerFunc) *gin.Engin
 	return router
 }
 
-func TestSkillHandlerCreateInstructionBundle(t *testing.T) {
+func TestSkillHandlerCreateSkill(t *testing.T) {
 	service := &fakeSkillRevisionService{}
 	handler := NewSkillHandler(service, zap.NewNop())
 	router := newSkillTestRouter(http.MethodPost, "/skills", handler.CreateSkill)
 	body, _ := json.Marshal(gen.CreateSkillRequest{
-		Name: "投诉分类", Goal: "分类", WhenToUse: "用户投诉时", Instructions: "根据规则分类",
+		Name: "投诉分类", Description: "分类用户投诉", Instructions: "根据规则分类",
 	})
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/skills", bytes.NewReader(body))
@@ -97,21 +90,21 @@ func TestSkillHandlerCreateInstructionBundle(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d body=%s", w.Code, w.Body.String())
 	}
-	if service.created.Instructions != "根据规则分类" {
-		t.Fatalf("instruction bundle not forwarded: %#v", service.created)
+	if service.created.Instructions != "根据规则分类" || service.created.Description != "分类用户投诉" {
+		t.Fatalf("create input not forwarded: %#v", service.created)
 	}
 }
 
-func TestSkillHandlerRejectsLegacyExecutablePayload(t *testing.T) {
+func TestSkillHandlerRejectsIncompleteCreate(t *testing.T) {
 	service := &fakeSkillRevisionService{}
 	handler := NewSkillHandler(service, zap.NewNop())
 	router := newSkillTestRouter(http.MethodPost, "/skills", handler.CreateSkill)
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/skills", bytes.NewBufferString(`{"name":"legacy","type":"http","url":"https://example.com"}`))
+	req := httptest.NewRequest(http.MethodPost, "/skills", bytes.NewBufferString(`{"name":"legacy"}`))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected missing instruction contract to return 400, got %d", w.Code)
+		t.Fatalf("expected missing required fields to return 400, got %d", w.Code)
 	}
 }
 
@@ -129,32 +122,21 @@ func TestSkillHandlerSetEditors(t *testing.T) {
 	}
 }
 
-func TestSkillHandlerUpdatesActivationAndInstructions(t *testing.T) {
+func TestSkillHandlerUpdateDraft(t *testing.T) {
 	service := &fakeSkillRevisionService{}
 	handler := NewSkillHandler(service, zap.NewNop())
-
-	activationRouter := newSkillTestRouter(http.MethodPatch, "/skills/:id/draft/activation", handler.UpdateDraftActivation)
-	body, _ := json.Marshal(gen.UpdateSkillActivationRequest{
-		Name: "classify_complaint", Description: "分类", InputSchema: map[string]any{"type": "object"},
-		OutputSchema: map[string]any{"type": "object"}, Confirmed: true,
+	router := newSkillTestRouter(http.MethodPatch, "/skills/:id/draft", handler.UpdateDraft)
+	body, _ := json.Marshal(gen.UpdateSkillDraftRequest{
+		Name: "投诉分类", Description: "分类用户投诉", Instructions: "新方法",
 	})
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPatch, "/skills/skill-1/draft/activation", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPatch, "/skills/skill-1/draft", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	activationRouter.ServeHTTP(w, req)
-	if w.Code != http.StatusOK || !service.activation.Confirmed {
-		t.Fatalf("activation update failed: status=%d input=%#v", w.Code, service.activation)
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
 	}
-
-	bundleRouter := newSkillTestRouter(http.MethodPatch, "/skills/:id/draft/instructions", handler.UpdateDraftInstructionBundle)
-	body, _ = json.Marshal(gen.UpdateSkillInstructionBundleRequest{
-		Instructions: "新方法",
-	})
-	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPatch, "/skills/skill-1/draft/instructions", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	bundleRouter.ServeHTTP(w, req)
-	if w.Code != http.StatusOK || service.bundle.Instructions != "新方法" {
-		t.Fatalf("instruction update failed: status=%d input=%#v", w.Code, service.bundle)
+	if service.draft.Instructions != "新方法" || service.draft.Description != "分类用户投诉" {
+		t.Fatalf("draft bundle not forwarded: %#v", service.draft)
 	}
 }

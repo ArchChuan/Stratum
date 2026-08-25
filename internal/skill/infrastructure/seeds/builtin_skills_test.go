@@ -31,12 +31,16 @@ func TestBuiltinSkillsContentHash(t *testing.T) {
 	}
 }
 
-// TestBuiltinSkillsContractNames verifies activation contract names are valid.
-func TestBuiltinSkillsContractNames(t *testing.T) {
+// TestBuiltinSkillsRevisionMeta verifies each seed revision carries a usable
+// name/description mirroring the product row.
+func TestBuiltinSkillsRevisionMeta(t *testing.T) {
 	for _, sk := range BuiltinSkills() {
 		t.Run(sk.ID, func(t *testing.T) {
-			if err := sk.Revision.ActivationContract.Validate(); err != nil {
-				t.Fatalf("activation contract validation: %v", err)
+			if sk.Revision.Name != sk.Name {
+				t.Fatalf("revision name %q does not match skill name %q", sk.Revision.Name, sk.Name)
+			}
+			if sk.Revision.Description == "" {
+				t.Fatal("revision description is empty")
 			}
 		})
 	}
@@ -47,7 +51,7 @@ func TestBuiltinSkillsContractNames(t *testing.T) {
 func TestBuiltinSkillsPublishable(t *testing.T) {
 	for _, sk := range BuiltinSkills() {
 		t.Run(sk.ID, func(t *testing.T) {
-			if err := sk.Revision.ValidatePublishable(0); err != nil {
+			if err := sk.Revision.ValidatePublishable(); err != nil {
 				t.Fatalf("publishable: %v", err)
 			}
 		})

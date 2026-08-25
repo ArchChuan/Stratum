@@ -19,9 +19,11 @@ export type SkillType = never;
 export const skillProductSchema = skillSchema;
 export type SkillProduct = Skill;
 
+// skillRevisionSchema: 简化后的编辑面只保留 name/description/instructions 三字段
+//（skill 模型收敛，删除了 capability/activation_contract）。
 export const skillRevisionSchema = z.object({
   id: z.string(), skillId: z.string(), revisionNo: z.number().optional(), status: z.string(),
-  capability: jsonObjectSchema.default({}), activationContract: jsonObjectSchema.default({}),
+  name: z.string().default(''), description: z.string().default(''),
   instructions: z.string().default(''), publishChecks: jsonObjectSchema.optional(),
 }).passthrough();
 export type SkillRevision = z.infer<typeof skillRevisionSchema>;
@@ -36,10 +38,7 @@ export type SkillWorkspace = z.infer<typeof skillWorkspaceSchema>;
 
 export interface SkillFormValues {
   name: string;
-  goal: string;
-  whenToUse: string;
-  sampleInput: string;
-  expectedOutput: string;
+  description: string;
   instructions: string;
   editors?: string[];
 }
@@ -47,7 +46,6 @@ export interface SkillFormValues {
 export type { CreateSkillDraftPayload };
 
 export const buildCreateSkillDraftPayload = (values: SkillFormValues): CreateSkillDraftPayload => ({
-  name: values.name, goal: values.goal, whenToUse: values.whenToUse,
-  sampleInput: values.sampleInput, expectedOutput: values.expectedOutput, instructions: values.instructions,
+  name: values.name, description: values.description, instructions: values.instructions,
   editors: values.editors || [],
 });

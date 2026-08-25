@@ -44,16 +44,16 @@ func NewPgAgentRepo(pool *pgxpool.Pool) *PgAgentRepo {
 // resourceEditorKind identifies agent rows in the shared resource_editors table.
 const resourceEditorKind = "agent"
 
-// editorEligible checks, inside the write transaction, that userID currently
-// holds role admin or owner in the tenant. Fail closed on any lookup error.
-// public.tenant_members is schema-qualified: the transaction search_path
-// points at the tenant schema.
+// editorEligible checks, inside the write transaction, that userID is an
+// active tenant member (whitelist semantics: any role may be granted editor).
+// Fail closed on any lookup error. public.tenant_members is schema-qualified:
+// the transaction search_path points at the tenant schema.
 func editorEligible(ctx context.Context, tx pgx.Tx, tenantID, userID string) (bool, error) {
 	var ok bool
 	if err := tx.QueryRow(ctx,
 		`SELECT EXISTS(
 			SELECT 1 FROM public.tenant_members
-			WHERE tenant_id=$1 AND user_id=$2 AND role IN ('admin','owner'))`,
+			WHERE tenant_id=$1 AND user_id=$2)`,
 		tenantID, userID,
 	).Scan(&ok); err != nil {
 		return false, fmt.Errorf("editor role check: %w", err)
@@ -221,8 +221,8 @@ func insertEditors(ctx context.Context, tx pgx.Tx, tenantID, kind, resourceID st
 }
 
 // revalidateEditorAccess re-checks, inside the write transaction, that the
-// actor still qualifies as an editor of this resource: role admin/owner AND
-// present in resource_editors. Both checks share the transaction with the
+// actor still qualifies as an editor of this resource: tenant membership AND
+// presence in resource_editors. Both checks share the transaction with the
 // business UPDATE, closing the check-then-write TOCTOU window.
 func revalidateEditorAccess(ctx context.Context, tx pgx.Tx, tenantID, kind, resourceID, actorID string) error {
 	eligible, err := editorEligible(ctx, tx, tenantID, actorID)
