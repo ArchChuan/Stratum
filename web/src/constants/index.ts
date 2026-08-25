@@ -96,6 +96,12 @@ export const KNOWLEDGE_MIN_CHUNK_OVERLAP = 0;
 export const KNOWLEDGE_MAX_CHUNK_OVERLAP = 512;
 export const KNOWLEDGE_MIN_TOP_K = 1;
 export const KNOWLEDGE_MAX_TOP_K = 20;
+// rerank_top_k 合法上下限（0 = 跟随 Top-K；与 pkg/constants MaxRerankTopK、proto
+// WorkspaceConfig.rerank_top_k binding min=0,max=20 同步，修改须三处一致）。
+export const KNOWLEDGE_MIN_RERANK_TOP_K = 0;
+export const KNOWLEDGE_MAX_RERANK_TOP_K = 20;
+export const KNOWLEDGE_MIN_SCORE_THRESHOLD = 0;
+export const KNOWLEDGE_MAX_SCORE_THRESHOLD = 1;
 export const KNOWLEDGE_MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024; // 10MB，与 UI 提示一致（后端上限 100MB）
 export const AVATAR_MAX_UPLOAD_SIZE_BYTES = 2 * 1024 * 1024; // 2MB，与 UI 提示一致
 

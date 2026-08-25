@@ -68,6 +68,11 @@ const (
 	// DefaultRAGTopK is the retrieval result count used when a query does
 	// not specify TopK.
 	DefaultRAGTopK = 5
+	// MaxRerankTopK 是重排后最终条数硬上限（workspace rerank_top_k，0=跟随
+	// TopK 合法）。外部 reranker 候选上限 RerankMaxCandidates(50) 不受此限。
+	// 检索条数硬上限复用 agent.go 的 MaxRAGTopK（与 proto QueryRequest.topK
+	// binding max=20 保持同步，修改须三处一致）。
+	MaxRerankTopK = 20
 	// MaxConcurrentWorkspaceSearch caps the number of workspaces searched
 	// concurrently by the RAG fan-out, bounding embed/DB load per query.
 	MaxConcurrentWorkspaceSearch = 3

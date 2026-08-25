@@ -189,6 +189,8 @@ var errorStatusTable = map[error]int{
 	knowledgedomain.ErrInvalidScoreThreshold:       http.StatusBadRequest,
 	knowledgedomain.ErrRerankModelRequired:         http.StatusBadRequest,
 	knowledgedomain.ErrInvalidRerankModel:          http.StatusBadRequest,
+	knowledgedomain.ErrInvalidTopK:                 http.StatusBadRequest,
+	knowledgedomain.ErrInvalidRerankTopK:           http.StatusBadRequest,
 	knowledgedomain.ErrInvalidJudgeModel:           http.StatusBadRequest,
 	knowledgedomain.ErrEmbeddingModelImmutable:     http.StatusBadRequest,
 	knowledgedomain.ErrChunkSizeImmutable:          http.StatusBadRequest,
