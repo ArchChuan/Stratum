@@ -4,10 +4,12 @@ import { vi } from 'vitest';
 
 import { SkillWorkspacePage } from './SkillWorkspacePage';
 
-const { skillApiMock } = vi.hoisted(() => ({
+const { skillApiMock, operationProposalApiMock, roleState } = vi.hoisted(() => ({
   skillApiMock: {
     getWorkspace: vi.fn(), updateSkill: vi.fn(), listRevisions: vi.fn(), rollback: vi.fn(),
   },
+  operationProposalApiMock: { requestEditorAccess: vi.fn() },
+  roleState: { isAdmin: true },
 }));
 
 const workspace = {
@@ -22,10 +24,11 @@ const workspace = {
 
 vi.mock('../api/skill.api', () => ({ skillApi: skillApiMock }));
 vi.mock('@/modules/iam', () => ({
-  useTenantRole: () => ({ isAdmin: true }),
+  useTenantRole: () => ({ isAdmin: roleState.isAdmin }),
   useAuth: () => ({ user: { sub: 'user-1' } }),
   useEditorCandidates: () => ({ candidates: [], loading: false }),
 }));
+vi.mock('@/modules/operation-gate', () => ({ operationProposalApi: operationProposalApiMock }));
 Object.defineProperty(window, 'matchMedia', { writable: true, value: vi.fn(() => ({
   matches: false, addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(),
 })) });
@@ -36,6 +39,7 @@ const renderWorkspace = () => render(<MemoryRouter initialEntries={['/skills/ski
 
 beforeEach(() => {
   vi.clearAllMocks();
+  roleState.isAdmin = true;
   skillApiMock.getWorkspace.mockResolvedValue(workspace);
 });
 
@@ -88,4 +92,18 @@ it('版本历史列出当前生效与历史版本，回滚历史版本需确认'
   const confirmButtons = screen.getAllByRole('button', { name: /回\s*滚/ });
   fireEvent.click(confirmButtons[confirmButtons.length - 1]);
   await waitFor(() => expect(skillApiMock.rollback).toHaveBeenCalledWith('skill-1', 'revision-0'));
+});
+
+it('member 非白名单只读，可见「申请编辑权限」并提交 grant_editor 提案', async () => {
+  roleState.isAdmin = false;
+  renderWorkspace();
+  const requestBtn = await screen.findByRole('button', { name: /申请编辑权限/ });
+  expect(requestBtn).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /保存并立即生效/ })).not.toBeInTheDocument();
+
+  fireEvent.click(requestBtn);
+  await waitFor(() => expect(operationProposalApiMock.requestEditorAccess).toHaveBeenCalledWith(
+    'skill', 'skill-1', { resourceName: '测试 Skill' },
+  ));
+  expect(await screen.findByText('已提交，等待管理员审批')).toBeInTheDocument();
 });

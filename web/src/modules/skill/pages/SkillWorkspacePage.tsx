@@ -1,4 +1,4 @@
-import { ArrowLeftOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, LockOutlined } from '@ant-design/icons';
 import { Alert, Button, Form, Input, Modal, Select, Skeleton, Table, Tabs, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { ReactNode } from 'react';
@@ -9,6 +9,7 @@ import { skillApi } from '../api/skill.api';
 import type { SkillRevision, SkillWorkspace } from '../model/skill';
 
 import { useAuth, useEditorCandidates, useTenantRole } from '@/modules/iam';
+import { operationProposalApi } from '@/modules/operation-gate';
 import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 const { Title, Text, Paragraph } = Typography;
@@ -33,6 +34,7 @@ export const SkillWorkspacePage = () => {
   const [activeTab, setActiveTab] = useState('instructions');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState('');
+  const [requesting, setRequesting] = useState(false);
   const [error, setError] = useState('');
   const [editorIDs, setEditorIDs] = useState<string[]>([]);
   const [refreshTick, setRefreshTick] = useState(0);
@@ -89,21 +91,38 @@ export const SkillWorkspacePage = () => {
       message.error({ content: extractErrorMessage(err) || '刷新工作台失败', duration: 3 });
     }
   };
+  // 普通成员（非白名单）申请编辑权限 → grant_editor 提案，管理员审批后即授予。
+  const handleRequestEditor = async () => {
+    setRequesting(true);
+    try {
+      await operationProposalApi.requestEditorAccess('skill', skill.id, { resourceName: skill.name });
+      message.success({ content: '已提交，等待管理员审批', duration: 3 });
+    } catch (err) {
+      message.error({ content: extractErrorMessage(err, '提交申请失败'), duration: 3 });
+    } finally {
+      setRequesting(false);
+    }
+  };
 
   return <div>
     <div className="responsive-detail-header" style={{ marginBottom: 20 }}>
       <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/skills')} type="text">返回</Button>
       <div className="long-text"><Title level={4} style={{ margin: 0 }}>{skill.name}</Title>
-        <Text type="secondary">状态：{skill.status} · 当前版本：v{active.revisionNo ?? '—'} · Revision：{skill.activeRevisionId || '未发布'}</Text>
+        <Text type="secondary">状态：{skill.status} · 当前版本：v{active.revisionNo ?? '—'} · Revision：{skill.activeRevisionId || '未发布'}{!canEdit && ' · 只读，可申请编辑权限'}</Text>
       </div>
     </div>
     <Tabs activeKey={activeTab} onChange={setActiveTab} items={[
-      { key: 'instructions', label: '指令', children: <Form disabled={!canEdit} form={draftForm} layout="vertical" onFinish={saveRevision}>
-        <Form.Item label="名称" name="name" rules={[{ required: true, message: '请输入技能名称' }]}><Input /></Form.Item>
-        <Form.Item label="描述" name="description"><TextArea rows={3} /></Form.Item>
-        <Form.Item label="执行指令" name="instructions" rules={[{ required: true, message: '请输入执行指令' }]}><TextArea rows={10} /></Form.Item>
-        {canEdit && <ActionRow><Button type="primary" htmlType="submit" loading={saving === 'draft'}>保存并立即生效</Button></ActionRow>}
-      </Form> },
+      // 申请编辑权限按钮放在 Form 外：<Form disabled={!canEdit}> 会通过 DisabledContext
+      // 禁用表单内所有 antd 组件（含 Button），member 只读时必须可点申请。
+      { key: 'instructions', label: '指令', children: <div>
+        <Form disabled={!canEdit} form={draftForm} layout="vertical" onFinish={saveRevision}>
+          <Form.Item label="名称" name="name" rules={[{ required: true, message: '请输入技能名称' }]}><Input /></Form.Item>
+          <Form.Item label="描述" name="description"><TextArea rows={3} /></Form.Item>
+          <Form.Item label="执行指令" name="instructions" rules={[{ required: true, message: '请输入执行指令' }]}><TextArea rows={10} /></Form.Item>
+          {canEdit && <ActionRow><Button type="primary" htmlType="submit" loading={saving === 'draft'}>保存并立即生效</Button></ActionRow>}
+        </Form>
+        {!canEdit && <ActionRow><Button type="primary" icon={<LockOutlined />} loading={requesting} onClick={() => void handleRequestEditor()}>申请编辑权限</Button></ActionRow>}
+      </div> },
       { key: 'editors', label: '可编辑人', children: (
         <div style={{ maxWidth: 520 }}>
           <Alert type="info" showIcon style={{ marginBottom: 16 }}
