@@ -646,6 +646,14 @@ GET /auth/me
 - `observability.enabled` 默认 `true`；`stratum-otel-collector` 由 deploy.yml 从
   `k8s/opik-otel-collector.yaml` 应用，不再受 chart 开关控制。它把 trace 转发到
   `opik-backend.opik`（OTLP/HTTP）和 `jaeger.monitoring`（OTLP/gRPC）。
+- **同名 Service 冲突（repo 现状，运行期需确认）**：`k8s/tracing.yaml` 还定义了一套
+  `otel-collector` Deployment（image `otel/opentelemetry-collector-contrib:0.102.0`，
+  selector `app: otel-collector`）和同名 Service `stratum-otel-collector`
+  （selector `app: otel-collector`），与 `k8s/opik-otel-collector.yaml` 的 Service 同名。
+  两份 manifest 均被 deploy.yml 应用（L557 应用 opik-otel-collector.yaml，L628 经
+  `deploy-observability-logging.sh` 应用 tracing.yaml），同名 Service 的最终归属取决于
+  kubectl apply 顺序；运行期实际由哪个 collector 承接后端 OTLP 流量，需
+  `kubectl get deploy,svc -n stratum` 确认。
 - 远端 Grafana 是独立 `kps` 监控栈，不使用仓库根目录 `grafana/`；当前 values 未给 Grafana 配公网
   Ingress，需 port-forward 访问。
 - 远端监控配置只认 `monitoring/remote/`；运行与告警处置见
