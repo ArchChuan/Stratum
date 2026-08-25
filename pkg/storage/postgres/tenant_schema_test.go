@@ -31,6 +31,21 @@ func TestTenantSchemaCleansUpPlatformMCPRows(t *testing.T) {
 	require.NotContains(t, sql, "INSERT INTO agent_mcp_tool_links")
 }
 
+func TestTenantSchemaAllowsGrantEditorOpType(t *testing.T) {
+	// grant_editor（成员白名单自助申请）必须进入 operation_proposals 的 op_type
+	// check 约束，否则 ProposeGrantEditor 插入即违反约束 500（历史回归：agent/skill
+	// 前端「申请编辑权限」按钮点击失败）。CREATE TABLE 与幂等升级语句缺一不可——
+	// 新租户走建表枚举，存量租户靠 DROP IF EXISTS + ADD CONSTRAINT 替换旧约束。
+	data, err := os.ReadFile("tenant_schema.sql")
+	require.NoError(t, err)
+	sql := string(data)
+
+	require.Contains(t, sql,
+		`op_type              TEXT NOT NULL CHECK (op_type IN ('revision_apply','cross_agent_delegate','schedule_create','self_modify','grant_editor'))`)
+	require.Contains(t, sql, "ALTER TABLE operation_proposals DROP CONSTRAINT IF EXISTS operation_proposals_op_type_check")
+	require.Contains(t, sql, "ADD CONSTRAINT operation_proposals_op_type_check")
+}
+
 func TestTenantSchemaPlatformMCPDomainIdentityFieldsAreProtected(t *testing.T) {
 	for _, target := range []struct {
 		name string
