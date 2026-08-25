@@ -80,12 +80,12 @@ Trace 存储落点：
 
 ### Initialization
 
-`cmd/server/main.go` 调用 `internal/platform/runtime.InitTracingFromEnv`。
+`cmd/server/main.go` 调用同包 `cmd/server/runtime.go` 的 `InitTracingFromEnv`。
 仅当 `OTEL_EXPORTER_OTLP_ENDPOINT` 非空时初始化 OTLP TracerProvider；
 `OTEL_SERVICE_NAME` 可覆盖默认 service name。初始化失败只记录 Warn，并关闭 tracing。
 
 ```go
-shutdown := platformruntime.InitTracingFromEnv(logger)
+shutdown := InitTracingFromEnv(logger)
 if shutdown != nil {
     defer shutdown(ctx)
 }

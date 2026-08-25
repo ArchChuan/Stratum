@@ -7,11 +7,11 @@
 ```
 api/{http/{handler,dto,middleware},wiring}
 internal/<ctx>/{domain/{,port/},application,infrastructure}
-pkg/storage/{postgres,redis,milvus,tenantnaming}
-pkg/{httpclient,observability,crypto,constants,migration,textchunk,tenantdb,vector}
+pkg/storage/{milvus,postgres,redis,filestore,objectstore,tenantnaming}
+pkg/{constants,crypto,dag,httpclient,jsonschema,messaging,migration,observability,platformknowledge,postgres,redis,reqctx,safetext,tenantdb,textchunk,timeutil,tokenutil,vector}
 ```
 
-- 11 个 bounded context：`agent · memory · knowledge · skill · mcp · iam · llmgateway · evaluation · workflow · scheduler · platform`
+- 14 个 bounded context：`agent · audit · collab · evaluation · iam · knowledge · llmgateway · mcp · memory · parameters · platform · scheduler · skill · workflow`
 - 跨域 capability adapter 作为 ACL，必要时下沉进消费上下文
 
 ## 依赖方向

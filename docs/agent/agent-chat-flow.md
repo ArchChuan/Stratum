@@ -21,7 +21,7 @@ sequenceDiagram
     UI->>API: execute/stream system assistant
     API->>Service: tenant/user from authenticated context
     Service->>DB: load managed row
-    Service->>Service: compose Profile 2026-07-23.v1
+    Service->>Service: compose Profile 2026-08-08.v3
     Service->>Service: authorize member self or admin tenant scope
     Service->>LLM: role-filtered official-search + diagnose + proposal tool
     LLM->>Tools: bounded typed call(s)
@@ -30,10 +30,11 @@ sequenceDiagram
     Service->>DB: persist citations + diagnostic_report artifacts
 ```
 
-相关路由：`GET /agents/system/settings`（member）、`PUT /agents/system/settings`（admin/owner 且 active tenant）、
-`GET /agents`、`POST /agents/:id/execute`、`POST /agents/:id/execute/stream`、会话与消息路由。错误正文继续使用
+相关路由：系统助手设置读取/更新走通用 Agent 路由 `GET /agents/:id` / `PUT /agents/:id`
+（`id=stratum-platform-assistant`，等同化后与普通 Agent 一致）、`GET /agents`、
+`POST /agents/:id/execute`、`POST /agents/:id/execute/stream`、会话与消息路由。错误正文继续使用
 冻结的 `{"error":"..."}`：未配置/不可用模型为 `system assistant model unavailable`，非法模型为
-`invalid system assistant model`，通用修改为 `system assistant is platform managed`。官方无匹配和 area 失败进入
+`invalid system assistant model`。官方无匹配和 area 失败进入
 typed artifact，不泄露上游原始错误。
 
 ## Governed Resource Proposal

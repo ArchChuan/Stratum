@@ -34,7 +34,7 @@ agent 子操作使用 `pkg/constants/timeouts.go` 分级常量：
 | RAG · Recall | 15s |
 | LLM 非流式 | 60s（flat cap） |
 
-**LLM 流式禁止 flat timeout**：改用 `ResponseHeaderTimeout`(30s) + `LLMStreamIdleTimeout`(30s/token) + `AgentExecTimeout`(90s) 组合，避免长响应被整体 timeout 掐断。
+**LLM 流式禁止 flat timeout**：改用 `ResponseHeaderTimeout`(30s) + `LLMStreamIdleTimeout`(30s/token) + `DelegateExecutionTimeout`(3min，子 Agent 整体执行预算) 组合，避免长响应被整体 timeout 掐断。
 
 ## 删除策略
 

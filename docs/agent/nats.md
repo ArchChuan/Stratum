@@ -2,9 +2,7 @@
 
 ## 架构定位
 
-NATS JetStream 在 stratum 中**专用于 memory pipeline**，是记忆持久化三阶段异步处理的消息总线。其他业务域**不直接使用 NATS**——它们依赖各自 infrastructure 层封装的同步接口。
-
-> 旧版 `internal/hermes/client.go` 通用事件总线已不存在，勿引用。
+NATS 在 stratum 中分两条线：**JetStream 专用于 memory pipeline**，是记忆持久化异步处理的消息总线（raw / enriched / extraction / reflection / DLQ 五条 stream，见下）。IAM 的 hermes 事件总线消费**平台共享 NATS core 连接**做领域事件分发（`internal/iam/infrastructure/hermes/client.go`；core 订阅无 durable 语义，所有实例离线期间发布的消息会丢失，需要不丢消息时必须迁移到 JetStream durable consumer）。
 
 ## Memory Pipeline 三阶段
 
@@ -35,7 +33,10 @@ NATS JetStream 在 stratum 中**专用于 memory pipeline**，是记忆持久化
 
 DLQ 事件只保存 message ID、tenant ID、stage、原 Stream/Subject、序列号、投递次数、错误分类和失败时间，
 不保存用户正文或原始错误文本。DLQ publish 成功后才 `TermWithReason` 原消息；publish 失败则 `Nak`，避免
-错误地确认并丢失原消息。DLQ 当前用于告警和人工定位，不提供独立 payload 重放；受控重放需另行设计。
+错误地确认并丢失原消息。DLQ 提供按错误码定向重放：`ReplayService.ReplayByErrorCode`
+（`internal/memory/infrastructure/pipeline/replay.go`）+ `POST /admin/memory/dlq/replay`
+（`api/http/router.go`，`api/http/handler/memory_dlq_replay_handler.go`），从 DLQ 拉取事件、error_code
+匹配后重放回原始 raw subject。
 
 ## JetStream Stream 配置
 
@@ -43,7 +44,12 @@ DLQ 事件只保存 message ID、tenant ID、stage、原 Stream/Subject、序列
 |--------|---------------|-----------|--------|---------|
 | `MEMORY_RAW` | `memory.raw.>` | WorkQueue | 72h | File |
 | `MEMORY_ENRICHED` | `memory.enriched.>` | WorkQueue | 72h | File |
+| `MEMORY_EXTRACTION` | `memory.extraction.>` | WorkQueue | 72h | File |
+| `MEMORY_REFLECTION` | `memory.reflection.>` | WorkQueue | 72h | File |
 | `MEMORY_DLQ` | `memory.dlq.>` | Limits | 168h | File |
+
+`MEMORY_EXTRACTION` 承载对话事实提取任务（Redis buffer flush 后发布，`memory.extraction.{tenant}`）；
+`MEMORY_REFLECTION` 承载任务结束后的工具轨迹反思任务（`memory.reflection.{tenant}`）。
 
 Stream 由 `JetStreamManager.EnsureStreams(ctx)` 幂等创建（启动时调用）。
 
@@ -53,12 +59,16 @@ Stream 由 `JetStreamManager.EnsureStreams(ctx)` 幂等创建（启动时调用�
 
 ```go
 // pkg/constants/memory.go
-MemoryRawStream       = "MEMORY_RAW"
-MemoryEnrichedStream  = "MEMORY_ENRICHED"
-MemoryDLQStream       = "MEMORY_DLQ"
-MemoryRawSubject      = "memory.raw"
-MemoryEnrichedSubject = "memory.enriched"
-MemoryDLQSubject      = "memory.dlq"
+MemoryRawStream        = "MEMORY_RAW"
+MemoryEnrichedStream   = "MEMORY_ENRICHED"
+MemoryExtractionStream = "MEMORY_EXTRACTION"
+MemoryReflectionStream = "MEMORY_REFLECTION"
+MemoryDLQStream        = "MEMORY_DLQ"
+MemoryRawSubject       = "memory.raw"
+MemoryEnrichedSubject  = "memory.enriched"
+MemoryExtractionSubject = "memory.extraction"
+MemoryReflectionSubject = "memory.reflection"
+MemoryDLQSubject       = "memory.dlq"
 ```
 
 Subject 拼接方式：`fmt.Sprintf("%s.%s", constants.MemoryRawSubject, tenantID)`

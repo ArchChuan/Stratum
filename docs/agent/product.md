@@ -23,9 +23,9 @@
 
 ## 实体约束
 
-- **知识库**：`description` 必填（直接影响 AI 检索判断）；`name` 创建后不可改（向量 collection 绑定）
+- **知识库**：`description` 必填（直接影响 AI 检索判断）；`name` 可改（`UpdateWorkspace` 支持 `renameTo`，向量 collection 绑定 workspace ID 而非 name）
 - **Agent**：`max_iterations` 为 1–90 slider；绑定知识库时展示各知识库 description
-- **技能**：temperature 用带标签 Slider；支持不经过 Agent 的独立测试运行
+- **技能**：temperature 用带标签 Slider
 - **记忆**：用户侧只读 content、时间、importance；管理侧额外展示 scope、agent_id
 
 ## 交互三态
