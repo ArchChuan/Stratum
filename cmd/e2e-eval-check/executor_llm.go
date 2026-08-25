@@ -62,11 +62,13 @@ func (e *llmExecutor) resolveAgentID(ctx context.Context, p point) (string, erro
 
 // runCases executes every case and rolls up pass_rate/judge_mean/latency.
 // Infrastructure failures (agent endpoint/auth/decode, judge network/HTTP/
-// parse) abort the whole run instead of being flattened into a case error:
-// swallowing them would let a first-run-without-baseline silently pass green
-// (exit 0) when the whole judge or agent stack is down. Case-level behavior
-// failures (an agent that did not reach "completed", a failed assertion, a
-// judge "no" verdict) stay case errors and never abort the run.
+// parse) and a broken point referencing a missing agent abort the whole run
+// instead of being flattened into a case error: swallowing them would let a
+// first-run-without-baseline silently pass green (exit 0) when the whole
+// judge or agent stack is down, or when the point's agent was never
+// provisioned. Case-level behavior failures (an agent that did not reach
+// "completed", a failed assertion, a judge "no" verdict) stay case errors and
+// never abort the run.
 func (e *llmExecutor) runCases(ctx context.Context, dataset goldenSet) (execResult, error) {
 	res := execResult{Cases: []caseOutcome{}}
 	var pass, judgeSum float64
@@ -79,8 +81,8 @@ func (e *llmExecutor) runCases(ctx context.Context, dataset goldenSet) (execResu
 		outcome.LatencyMS = time.Since(start).Milliseconds()
 		latSum += outcome.LatencyMS
 		if err != nil {
-			if isInfra(err) {
-				return res, err
+			if abort, reason := runAbort(err); abort {
+				return res, reason
 			}
 			outcome.Error = err.Error()
 			res.Cases = append(res.Cases, outcome)
@@ -108,6 +110,20 @@ func (e *llmExecutor) runCases(ctx context.Context, dataset goldenSet) (execResu
 	}
 	res.Aggregate = agg
 	return res, nil
+}
+
+// runAbort reports whether an execute error must abort the whole run and
+// returns the error to propagate. Infrastructure failures (endpoint down,
+// auth, decode) and a broken point referencing a missing agent both abort:
+// the latter would otherwise record 0%-pass case errors and silently pass
+// green on a first run with no baseline. Case-level behavior failures (an
+// agent that did not reach "completed", a failed assertion) return false and
+// stay case errors.
+func runAbort(err error) (bool, error) {
+	if isInfra(err) || isResourceNotFound(err) {
+		return true, err
+	}
+	return false, nil
 }
 
 // applyCase fills the outcome for one produced output under the case's mode.

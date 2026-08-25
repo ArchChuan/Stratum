@@ -28,7 +28,7 @@ func (a *agentClient) executeAgent(ctx context.Context, agentID, query string) (
 	if err != nil {
 		return "", err
 	}
-	if err := classifyHTTP(path, status, string(body)); err != nil {
+	if err := classifyExecuteAgent(path, status, string(body)); err != nil {
 		return "", err
 	}
 	var resp struct {
@@ -63,6 +63,18 @@ func (a *agentClient) executeAgent(ctx context.Context, agentID, query string) (
 		}
 		return string(b), nil
 	}
+}
+
+// classifyExecuteAgent labels the agent execute response. A 404 means the
+// point references an agent that does not exist — a dataset defect that must
+// abort the run (fatal, exit 1) rather than let every case 404 into a silent
+// 0%-pass green, matching skill's fail-closed provisioning. Everything else
+// defers to classifyHTTP (401/403/5xx → infra, other 4xx → case error).
+func classifyExecuteAgent(path string, status int, body string) error {
+	if status == http.StatusNotFound {
+		return &resourceNotFoundError{fmt.Errorf("%s: HTTP %d: %s", path, status, body)}
+	}
+	return classifyHTTP(path, status, body)
 }
 
 // deleteAgent removes a transient carrier agent.

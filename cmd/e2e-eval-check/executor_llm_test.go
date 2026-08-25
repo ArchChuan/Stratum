@@ -183,6 +183,62 @@ cases:
 	}
 }
 
+// TestLLMExecutorAgentResourceNotFoundAborts pins the system-acceptance gap:
+// when a point references an agent that does not exist, the execute endpoint
+// 404s. That is a broken setup — no case can pass — so the run aborts (fatal,
+// exit 1), matching skill's fail-closed provisioning, instead of recording
+// case errors that produce a silent 0%-pass green (exit 0) on a first run with
+// no baseline. Partial cases before the abort are preserved for the report.
+func TestLLMExecutorAgentResourceNotFoundAborts(t *testing.T) {
+	var n int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		if n == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"result":"ok","status":"completed"}`))
+			return
+		}
+		http.Error(w, "agent not found", http.StatusNotFound)
+	}))
+	defer server.Close()
+	ex := &llmExecutor{
+		agents:  &agentClient{client: newHTTPClient(server.URL, "test-token")},
+		agentID: "missing-agent",
+	}
+	p := point{Kind: "agent", Dir: t.TempDir()}
+	goldenPath := p.Dir + "/cases.yaml"
+	writeTestFile(t, goldenPath, `
+version: 1
+cases:
+  - id: c1
+    query: "q1"
+    mode: contains
+    expected_output: "ok"
+  - id: c2
+    query: "q2"
+    mode: contains
+    expected_output: "x"
+`)
+	p.Golden = "cases.yaml"
+	res, err := ex.runCases(context.Background(), mustLoadLLMSet(t, p))
+	if err == nil {
+		t.Fatal("runCases must abort when the point's agent does not exist")
+	}
+	if !isResourceNotFound(err) {
+		t.Fatalf("missing agent is a resource-not-found defect, got %v", err)
+	}
+	if isInfra(err) {
+		t.Fatalf("missing agent is a dataset defect, not infrastructure: %v", err)
+	}
+	if got := classifyError(err); got != exitFailed {
+		t.Fatalf("classifyError = %d, want exitFailed (%d)", got, exitFailed)
+	}
+	// The passing case before the 404 is preserved in the error report.
+	if len(res.Cases) != 1 || !res.Cases[0].Passed {
+		t.Fatalf("expected the passing case preserved, got %+v", res.Cases)
+	}
+}
+
 // TestLLMExecutorJudgeInfraPropagates pins C1 for the judge path: a judge
 // service outage (HTTP 500) aborts the run with an infraError. A judge "no"
 // verdict is still a case outcome (covered by TestLLMExecutorJudgePath-style

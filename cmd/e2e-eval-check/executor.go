@@ -20,6 +20,24 @@ func isInfra(err error) bool {
 	return errors.As(err, &infra)
 }
 
+// resourceNotFoundError marks a 404: the point references a resource (agent,
+// dataset, workspace) that does not exist on the server. That is a
+// dataset/provisioning defect — a broken point no case can pass — not an
+// infrastructure break. The llm executor aborts the run on it (fatal, exit 1)
+// instead of recording 0%-pass case errors, matching the skill executor's
+// fail-closed provisioning. It is deliberately NOT an infraError (exit 2): the
+// server is up, the setup is wrong.
+type resourceNotFoundError struct{ err error }
+
+func (e *resourceNotFoundError) Error() string { return e.err.Error() }
+func (e *resourceNotFoundError) Unwrap() error { return e.err }
+
+// isResourceNotFound reports whether err is a 404 resource-not-found defect.
+func isResourceNotFound(err error) bool {
+	var rnf *resourceNotFoundError
+	return errors.As(err, &rnf)
+}
+
 // execResult is the kind-agnostic outcome an executor returns to the pipeline.
 type execResult struct {
 	Cases     []caseOutcome
