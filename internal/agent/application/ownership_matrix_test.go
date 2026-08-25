@@ -284,6 +284,21 @@ func (s *stubEditorRepo) ReplaceEditors(_ context.Context, _, resourceID string,
 	return nil
 }
 
+// AddEditorForKind appends a single editor idempotently, mirroring the
+// repository's ON CONFLICT DO NOTHING semantics for the grant_editor path.
+func (s *stubEditorRepo) AddEditorForKind(_ context.Context, _, _, resourceID, editorID, _ string) error {
+	if s.replaceErr != nil {
+		return s.replaceErr
+	}
+	for _, id := range s.editors[resourceID] {
+		if id == editorID {
+			return nil
+		}
+	}
+	s.editors[resourceID] = append(s.editors[resourceID], editorID)
+	return nil
+}
+
 var _ port.ResourceEditorRepo = (*stubEditorRepo)(nil)
 
 // TestAgentUpdateEditorGranted pins the granted-editor row of the matrix: a

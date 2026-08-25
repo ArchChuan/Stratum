@@ -1,18 +1,38 @@
-import { ArrowLeftOutlined } from '@ant-design/icons';
-import { Button, Form, Skeleton, Typography } from 'antd';
+import { ArrowLeftOutlined, LockOutlined } from '@ant-design/icons';
+import { Button, Form, Skeleton, Typography, message } from 'antd';
+import { useState } from 'react';
 
 import { AgentFormSections } from '../components/AgentFormSections';
 import { useEditAgentPage } from '../hooks/useEditAgentPage';
 
 import { AGENT_DEFAULT_MAX_CONTEXT_TOKENS, AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
+import { useTenantRole } from '@/modules/iam';
+import { operationProposalApi } from '@/modules/operation-gate';
+import { extractErrorMessage } from '@/shared/lib';
 
 const { Title, Text } = Typography;
 
 export const EditAgentPage = () => {
   const {
     agent, form, loading, pageLoading, skills, mcpTools, workspaces, groupedModels,
-    navigate, managementPath, onFinish,
+    navigate, managementPath, onFinish, readOnly, editorCandidates, editorCandidatesLoading,
   } = useEditAgentPage();
+  const { isAdmin } = useTenantRole();
+  const [requesting, setRequesting] = useState(false);
+
+  // P3：普通成员（非白名单）申请编辑权限 → grant_editor 提案，管理员审批后即授予。
+  const handleRequestEditor = async () => {
+    if (!agent) return;
+    setRequesting(true);
+    try {
+      await operationProposalApi.requestEditorAccess('agent', agent.id, { resourceName: agent.name });
+      message.success({ content: '已提交，等待管理员审批', duration: 3 });
+    } catch (err) {
+      message.error({ content: extractErrorMessage(err, '提交申请失败'), duration: 3 });
+    } finally {
+      setRequesting(false);
+    }
+  };
 
   if (pageLoading) {
     return (
@@ -51,10 +71,10 @@ export const EditAgentPage = () => {
         </Button>
         <div>
           <Title level={4} style={{ margin: 0 }}>
-            {'编辑 Agent'}
+            {readOnly ? '查看 Agent 配置' : '编辑 Agent'}
           </Title>
           <Text type="secondary" style={{ fontSize: 13 }}>
-            修改 Agent 配置
+            {readOnly ? '只读查看，如需修改请申请编辑权限' : '修改 Agent 配置'}
           </Text>
         </div>
       </div>
@@ -63,6 +83,7 @@ export const EditAgentPage = () => {
         form={form}
         layout="vertical"
         onFinish={onFinish}
+        disabled={readOnly}
         initialValues={{
           maxIterations: AGENT_DEFAULT_MAX_ITERATIONS,
           maxContextTokens: AGENT_DEFAULT_MAX_CONTEXT_TOKENS,
@@ -76,13 +97,25 @@ export const EditAgentPage = () => {
           workspaces={workspaces}
           groupedModels={groupedModels}
           currentModel={agent?.llmModel}
+          // P2：可编辑人（白名单）管理仅 admin/owner 可见；readOnly 时表单 disabled。
+          showEditors={isAdmin}
+          editorCandidates={editorCandidates}
+          editorCandidatesLoading={editorCandidatesLoading}
         />
 
         <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <Button onClick={() => navigate(managementPath)}>取消</Button>
-          <Button type="primary" htmlType="submit" loading={loading}>
-            保存修改
-          </Button>
+          {readOnly ? (
+            <Button type="primary" icon={<LockOutlined />} loading={requesting} onClick={() => void handleRequestEditor()}>
+              申请编辑权限
+            </Button>
+          ) : (
+            <>
+              <Button onClick={() => navigate(managementPath)}>取消</Button>
+              <Button type="primary" htmlType="submit" loading={loading}>
+                保存修改
+              </Button>
+            </>
+          )}
         </div>
       </Form>
     </div>

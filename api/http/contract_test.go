@@ -497,6 +497,9 @@ func (contractOpPropRepo) HasPending(context.Context, string, string) (bool, err
 func (contractOpPropRepo) ConsumeApproved(context.Context, string, string, string) (bool, error) {
 	return false, nil
 }
+func (contractOpPropRepo) ListByProposer(context.Context, string, string) ([]agentdomain.OperationProposal, error) {
+	return nil, nil
+}
 
 type contractOpUsageRepo struct{}
 

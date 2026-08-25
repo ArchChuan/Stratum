@@ -18,6 +18,13 @@ vi.mock('@/modules/mcp', () => ({ mcpApi: { toolOptions: vi.fn() } }));
 vi.mock('@/modules/knowledge', () => ({ knowledgeApi: { list: vi.fn() } }));
 vi.mock('@/modules/llm', () => ({ llmApi: { getCatalogue: vi.fn().mockResolvedValue({ chatModels: [], embeddingModels: [] }) } }));
 
+// F2：hook 内 useAuth/useTenantRole/useEditorCandidates 由 iam 提供，测试直接 mock 返回值。
+vi.mock('@/modules/iam', () => ({
+  useAuth: () => ({ user: { sub: 'system' } }),
+  useTenantRole: () => ({ role: 'member', isAdmin: false, isOwner: false, isMember: true, hasTenantRole: () => false }),
+  useEditorCandidates: () => ({ candidates: [], loading: false }),
+}));
+
 const agent = (id: string): Agent => ({
   id,
   name: id,

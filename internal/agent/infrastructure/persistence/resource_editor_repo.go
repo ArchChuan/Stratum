@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	pgstore "github.com/byteBuilderX/stratum/pkg/storage/postgres"
@@ -84,6 +85,36 @@ func (r *PgResourceEditorRepo) ReplaceEditors(ctx context.Context, tenantID, res
 		}
 		if err := insertChangeAudit(ctx, tx, audit); err != nil {
 			return err
+		}
+		return nil
+	})
+}
+
+// AddEditorForKind inserts a single editor for an arbitrary resource kind in
+// the shared resource_editors table. It powers the grant_editor approval:
+// skill whitelist grants are written here by the agent module's repo (kind
+// "skill") reusing the same table the skill module reads, and knowledge
+// workspace editors reuse kind "knowledge". Eligibility is re-validated
+// inside the transaction (member+, see editorEligible); insert is idempotent
+// on duplicates via the composite primary key.
+func (r *PgResourceEditorRepo) AddEditorForKind(ctx context.Context, tenantID, kind, resourceID, editorID, createdBy string) error {
+	if editorID == "" {
+		return fmt.Errorf("add editor: empty editor id")
+	}
+	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		eligible, err := editorEligible(ctx, tx, tenantID, editorID)
+		if err != nil {
+			return err
+		}
+		if !eligible {
+			return fmt.Errorf("%w: user %s", domain.ErrEditorNotEligible, editorID)
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO resource_editors (resource_kind, resource_id, editor_id, created_by)
+			 VALUES ($1,$2,$3,$4)
+			 ON CONFLICT (resource_kind, resource_id, editor_id) DO NOTHING`,
+			kind, resourceID, editorID, createdBy); err != nil {
+			return fmt.Errorf("add editor %s: %w", editorID, err)
 		}
 		return nil
 	})

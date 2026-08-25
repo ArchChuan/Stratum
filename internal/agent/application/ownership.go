@@ -9,10 +9,11 @@ import (
 
 // enforceOwnership applies the ownership matrix. owner may manage the whole
 // tenant (including historical resources with empty created_by); admin may
-// only touch resources they created, or — for updates only — resources they
-// were granted as editor (editors is only honored on the update path; delete
-// still requires creator/owner). Every other role, resolution failure and
-// empty actor is denied. Fail closed.
+// manage resources they created, or — for updates only — resources they were
+// granted as editor; whitelisted members (editors) likewise pass updates but
+// nothing else (editors is only honored on the update path; delete still
+// requires creator/owner). Every other role, resolution failure and empty
+// actor is denied. Fail closed.
 func enforceOwnership(role, actorID, createdBy string, editors []string) error {
 	if actorID == "" {
 		return domain.ErrForbidden
@@ -24,15 +25,16 @@ func enforceOwnership(role, actorID, createdBy string, editors []string) error {
 		if createdBy == actorID {
 			return nil
 		}
-		for _, id := range editors {
-			if id == actorID {
-				return nil
-			}
-		}
-		return domain.ErrForbidden
-	default:
-		return domain.ErrForbidden
 	}
+	// 非 owner/admin 创建者的角色（admin 非创建者 / member 白名单成员）
+	// 命中 editors 即放行（仅更新路径，删除仍由 owner/creator 独享——
+	// 调用方 delete 路径传 nil editors）。
+	for _, id := range editors {
+		if id == actorID {
+			return nil
+		}
+	}
+	return domain.ErrForbidden
 }
 
 // checkOwnership resolves the actor's tenant role and applies the matrix.
