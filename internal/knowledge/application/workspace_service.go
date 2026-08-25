@@ -17,7 +17,6 @@ import (
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
-	"github.com/byteBuilderX/stratum/pkg/platformknowledge"
 )
 
 // Application-level sentinel errors. They alias domain errors so existing
@@ -59,11 +58,10 @@ type UpdateWorkspaceInput struct {
 
 // WorkspaceStatsResult bundles the workspace metadata and milvus stats.
 type WorkspaceStatsResult struct {
-	Name              string
-	Description       string
-	Config            domain.WorkspaceConfig
-	Stats             map[string]any
-	IsPlatformManaged bool
+	Name        string
+	Description string
+	Config      domain.WorkspaceConfig
+	Stats       map[string]any
 }
 
 // IngestUploadResult mirrors the JSON shape returned by POST /knowledge/ingest.
@@ -186,17 +184,10 @@ func (s *WorkspaceService) validateModelsInCatalogue(ctx context.Context, cfg do
 	return nil
 }
 
-// isPlatformManaged reports whether a workspace is owned by the platform and
-// must not be mutated through user-facing APIs.
-func isPlatformManaged(ws *domain.Workspace) bool {
-	return ws != nil && (ws.SystemKey == platformknowledge.SystemWorkspaceKey ||
-		ws.ManagementMode == platformknowledge.ManagementPlatform)
-}
-
 // CreateWorkspace builds the aggregate via the domain factory then persists it.
 func (s *WorkspaceService) CreateWorkspace(ctx context.Context, tenantID string, in CreateWorkspaceInput, actorID string) (*domain.Workspace, error) {
 	// create encodes "the creator owns the resource": only owner/admin may create.
-	if err := s.checkOwnership(ctx, tenantID, actorID, actorID, nil); err != nil {
+	if err := s.checkOwnership(ctx, tenantID, actorID, actorID, nil, OpEdit); err != nil {
 		return nil, err
 	}
 	ws, err := domain.NewWorkspace(in.Name, in.Description, in.Config, domain.DefaultChunkSize, domain.DefaultTopK)
@@ -247,12 +238,9 @@ func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, tenantID, name s
 	if err != nil {
 		return nil, err
 	}
-	if isPlatformManaged(current) {
-		return nil, domain.ErrPlatformManagedWorkspace
-	}
-	// Base matrix: owner passes, creator-admin passes, everyone else needs the
-	// editor grant. editorActor is carried into the write transaction so the
-	// repo re-validates role + editor membership (TOCTOU closure).
+	// Base matrix: owner passes, admin passes, everyone else needs the editor
+	// grant. editorActor is carried into the write transaction so the repo
+	// re-validates role + editor membership (TOCTOU closure).
 	editorActor, err := s.resolveUpdateActor(ctx, tenantID, actorID, current)
 	if err != nil {
 		return nil, err
@@ -309,7 +297,7 @@ func (s *WorkspaceService) recordFailure(ctx context.Context, id, op string, err
 // rights passes with editorActor set, which the repo re-validates inside the
 // write transaction. Fail closed on missing repo, list failure or denial.
 func (s *WorkspaceService) resolveUpdateActor(ctx context.Context, tenantID, actorID string, current *domain.Workspace) (string, error) {
-	if err := s.checkOwnership(ctx, tenantID, actorID, current.CreatedBy, nil); err == nil {
+	if err := s.checkOwnership(ctx, tenantID, actorID, current.CreatedBy, nil, OpEdit); err == nil {
 		return "", nil
 	}
 	if s.editorRepo == nil {
@@ -319,7 +307,7 @@ func (s *WorkspaceService) resolveUpdateActor(ctx context.Context, tenantID, act
 	if err != nil {
 		return "", err
 	}
-	if err := s.checkOwnership(ctx, tenantID, actorID, current.CreatedBy, editors); err != nil {
+	if err := s.checkOwnership(ctx, tenantID, actorID, current.CreatedBy, editors, OpEdit); err != nil {
 		return "", err
 	}
 	return actorID, nil
@@ -333,10 +321,10 @@ func (s *WorkspaceService) ListEditors(ctx context.Context, tenantID, workspaceI
 	return s.editorRepo.ListEditors(ctx, tenantID, workspaceID)
 }
 
-// SetEditors replaces the editor set of a workspace. Only creator/owner may
-// grant editors (an editor can never grant delete rights on a resource they
-// merely edit). The swap happens in one transaction with the audit row; each
-// editor id must hold role admin or owner at write time.
+// SetEditors replaces the editor set of a workspace. Tenant owner/admin manage
+// the whitelist by default (the申请通道审批入口); members can never grant
+// editors. The swap happens in one transaction with the audit row; each editor
+// id must hold role admin or owner at write time.
 func (s *WorkspaceService) SetEditors(ctx context.Context, tenantID, name string, editorIDs []string, actorID string) error {
 	if s.editorRepo == nil {
 		return fmt.Errorf("workspace service set editors: editor repo not wired")
@@ -345,12 +333,9 @@ func (s *WorkspaceService) SetEditors(ctx context.Context, tenantID, name string
 	if err != nil {
 		return err
 	}
-	if isPlatformManaged(current) {
-		return domain.ErrPlatformManagedWorkspace
-	}
-	// Editors can never grant delete rights, so SetEditors reuses the
-	// creator/owner-only base matrix.
-	if err := s.checkOwnership(ctx, tenantID, actorID, current.CreatedBy, nil); err != nil {
+	// OpAccess: admin/owner manage the editor whitelist by default; members
+	// never grant editors (the whitelist is the申请通道审批入口).
+	if err := s.checkOwnership(ctx, tenantID, actorID, current.CreatedBy, nil, OpAccess); err != nil {
 		return err
 	}
 	before, err := s.editorRepo.ListEditors(ctx, tenantID, current.ID)
@@ -435,11 +420,10 @@ func (s *WorkspaceService) GetWorkspaceStats(
 		}
 	}
 	return &WorkspaceStatsResult{
-		Name:              name,
-		Description:       ws.Description,
-		Config:            ws.Config,
-		Stats:             stats,
-		IsPlatformManaged: isPlatformManaged(ws),
+		Name:        name,
+		Description: ws.Description,
+		Config:      ws.Config,
+		Stats:       stats,
 	}, nil
 }
 
@@ -449,10 +433,7 @@ func (s *WorkspaceService) DeleteWorkspace(ctx context.Context, tenantID, name, 
 	if err != nil {
 		return err
 	}
-	if isPlatformManaged(ws) {
-		return domain.ErrPlatformManagedWorkspace
-	}
-	if err := s.checkOwnership(ctx, tenantID, actorID, ws.CreatedBy, nil); err != nil {
+	if err := s.checkOwnership(ctx, tenantID, actorID, ws.CreatedBy, nil, OpDelete); err != nil {
 		return err
 	}
 	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindKnowledge, ws.ID, auditdomain.ChangeOpDelete,
@@ -485,9 +466,6 @@ func (s *WorkspaceService) GetWorkspaceByID(ctx context.Context, tenantID, id st
 // re-implement the matrix.
 //
 // Unrestricted cases:
-//   - platform-managed workspaces: the system built-in KB is visible to every
-//     tenant member by product rule; the whitelist mechanism does not apply
-//     to it at all.
 //   - tenant owner/admin: management exemption — admins can audit every
 //     document and must never lock themselves out of managing access.
 //   - workspace owner (CreatedBy): same management rationale.
@@ -498,9 +476,6 @@ func (s *WorkspaceService) VisibleDocIDs(ctx context.Context, tenantID, workspac
 	ws, err := s.repo.GetByID(ctx, tenantID, workspaceID)
 	if err != nil {
 		return nil, false, err
-	}
-	if isPlatformManaged(ws) {
-		return nil, true, nil
 	}
 	role, unrestricted, err := s.viewerScope(ctx, tenantID, workspaceID, viewerID, ws)
 	if err != nil {
@@ -548,8 +523,7 @@ func (s *WorkspaceService) ListSnapshotDocuments(
 // IngestUpload reads the uploaded file and dispatches ingestion using the
 // workspace's configured embedding model. The optional access whitelist
 // (allowedUserIDs/allowedRoleIDs) is persisted on the document row with
-// CreatedBy=actorID. Platform-managed workspaces reject the whole upload
-// (内置知识库不支持文档级权限), so whitelist params never reach storage for them.
+// CreatedBy=actorID.
 func (s *WorkspaceService) IngestUpload(
 	ctx context.Context, tenantID, workspace string, fileHeader *multipart.FileHeader,
 	actorID string, allowedUserIDs, allowedRoleIDs []string,
@@ -558,10 +532,7 @@ func (s *WorkspaceService) IngestUpload(
 	if err != nil {
 		return nil, err
 	}
-	if isPlatformManaged(ws) {
-		return nil, domain.ErrPlatformManagedWorkspace
-	}
-	if err := s.checkOwnership(ctx, tenantID, actorID, ws.CreatedBy, nil); err != nil {
+	if err := s.checkOwnership(ctx, tenantID, actorID, ws.CreatedBy, nil, OpEdit); err != nil {
 		return nil, err
 	}
 
@@ -622,8 +593,8 @@ func (s *WorkspaceService) IngestUpload(
 // Restricted reports whether the current viewer is outside the document's
 // access whitelist: restricted documents stay metadata-discoverable (locked
 // rows members may apply for view access on) while content/preview/retrieval
-// remain denied by the VisibleDocIDs matrix. Platform workspaces and
-// admin/owner/creator viewers are never restricted.
+// remain denied by the VisibleDocIDs matrix. Admin/owner/creator viewers are
+// never restricted.
 type DocumentView struct {
 	ID               string
 	Source           string
@@ -643,14 +614,10 @@ type DocumentView struct {
 
 // canEchoACL reports whether viewerID may see the document access whitelist
 // and real vector counts of a workspace: tenant owner/admin or the workspace
-// creator. Platform-managed workspaces never echo (the whitelist does not
-// apply there at all). Missing resolver and resolution failure fail closed.
+// creator. Missing resolver and resolution failure fail closed.
 func (s *WorkspaceService) canEchoACL(
 	ctx context.Context, tenantID, viewerID string, ws *domain.Workspace,
 ) (bool, error) {
-	if isPlatformManaged(ws) {
-		return false, nil
-	}
 	if s.roles == nil {
 		return false, domain.ErrForbidden
 	}
@@ -666,8 +633,7 @@ func (s *WorkspaceService) canEchoACL(
 // discoverable: their metadata is listed with Restricted=true so members can
 // tell the doc exists and apply for view access, while content/preview/
 // retrieval stay denied by the VisibleDocIDs matrix. Admins, tenant owners and
-// the workspace creator are unrestricted and never see Restricted=true.
-// Platform-managed workspaces are unrestricted for every viewer. Used by
+// the workspace creator are unrestricted and never see Restricted=true. Used by
 // GET /knowledge/workspaces/:name/documents and polled by the UI.
 func (s *WorkspaceService) ListDocuments(
 	ctx context.Context, tenantID, workspace, viewerID string,
@@ -748,7 +714,7 @@ func (s *WorkspaceService) findDocument(ctx context.Context, tenantID, workspace
 
 // DeleteDocument removes a terminal document from vector and relational storage.
 // Processing documents are rejected because their background ingest job may still write data.
-// Only tenant owner/admin or the workspace creator may delete (checkOwnership).
+// Only the tenant owner or the workspace creator may delete (OpDelete, checkOwnership).
 func (s *WorkspaceService) DeleteDocument(ctx context.Context, tenantID, workspace, documentID, actorID string) error {
 	if s.docRepo == nil || s.vectorStore == nil {
 		return errors.New("knowledge document storage is not configured")
@@ -757,10 +723,7 @@ func (s *WorkspaceService) DeleteDocument(ctx context.Context, tenantID, workspa
 	if err != nil {
 		return err
 	}
-	if isPlatformManaged(ws) {
-		return domain.ErrPlatformManagedWorkspace
-	}
-	if err := s.checkOwnership(ctx, tenantID, actorID, ws.CreatedBy, nil); err != nil {
+	if err := s.checkOwnership(ctx, tenantID, actorID, ws.CreatedBy, nil, OpDelete); err != nil {
 		return err
 	}
 	target, err := s.findDocument(ctx, tenantID, ws.ID, documentID)
@@ -781,13 +744,10 @@ func (s *WorkspaceService) DeleteDocument(ctx context.Context, tenantID, workspa
 }
 
 // SetDocAccess replaces the document-level access whitelist of a document.
-// Only tenant owner, or admin acting on their own document (checkOwnership
-// matrix), may manage it — every other role fails closed; platform-managed
-// workspaces reject the call — 内置知识库不支持文档级权限 (ErrPlatformManagedWorkspace,
-// HTTP 409, consistent with the other platform-managed rejections). roleIDs
-// are normalized: trimmed, lowercased, empty entries dropped — whitelist
-// matching is single-role semantics (viewer visible if any listed tenant role
-// matches).
+// Tenant owner/admin manage it by default (OpAccess — the申请通道审批入口);
+// members can never change a whitelist. roleIDs are normalized: trimmed,
+// lowercased, empty entries dropped — whitelist matching is single-role
+// semantics (viewer visible if any listed tenant role matches).
 func (s *WorkspaceService) SetDocAccess(
 	ctx context.Context, tenantID, workspace, documentID, actorID string,
 	userIDs, roleIDs []string,
@@ -799,10 +759,7 @@ func (s *WorkspaceService) SetDocAccess(
 	if err != nil {
 		return err
 	}
-	if isPlatformManaged(ws) {
-		return domain.ErrPlatformManagedWorkspace
-	}
-	if err := s.checkOwnership(ctx, tenantID, actorID, ws.CreatedBy, nil); err != nil {
+	if err := s.checkOwnership(ctx, tenantID, actorID, ws.CreatedBy, nil, OpAccess); err != nil {
 		return err
 	}
 	// Ownership validation: the document must belong to the workspace (double

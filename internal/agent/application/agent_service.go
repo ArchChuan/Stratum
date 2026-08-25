@@ -2543,10 +2543,7 @@ func applyFactCheckOption(options []ExecutionOption, settings *factcheck.Setting
 // appendRAGSearchOptions wires the plain and (when supported) evidence-capable
 // knowledge search variants. Both share the revision/mutable split: revision
 // snapshots contribute content only, mutable workspaces fan out through the
-// live search provider. platformWorkspaces (runtime-sanitized platform-managed
-// workspace names) are intersected out of mutable as a last-resort guard so a
-// platform workspace can never reach the live search provider even if some
-// path bypassed the assembly-time sanitize.
+// live search provider.
 func appendRAGSearchOptions(
 	options []ExecutionOption,
 	tenantID string,
