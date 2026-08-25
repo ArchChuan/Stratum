@@ -197,8 +197,16 @@ func baselinePathFromPoint(p point) (string, error) {
 	return resolveRelative(p.Dir, p.Baseline)
 }
 func fingerprintOfPoint(o options, p point) fingerprint {
-	// kind-specific fingerprint builders are implemented in executor tasks.
-	return fingerprint{Hash: "todo"}
+	switch p.Kind {
+	case "knowledge":
+		return knowledgeFingerprint(p.Snapshot, o.provider)
+	case "mcp":
+		// mcpFingerprint is implemented in Task 3.
+		return fingerprint{Hash: "todo"}
+	default: // skill / agent
+		// llmFingerprint is implemented in Tasks 4/5.
+		return fingerprint{Hash: "todo"}
+	}
 }
 func baseAcceptedRegressions(base *baseline) []acceptedRegression {
 	if base == nil {
