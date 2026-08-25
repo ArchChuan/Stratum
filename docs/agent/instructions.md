@@ -16,11 +16,11 @@
 
 ## Technology and directory map
 
-- 后端使用 Go 1.25.12（以 `go.mod` 为准）。入口 `cmd/server/main.go` 通过 `api/wiring.BuildContainer` 构图；HTTP 路由、handler、DTO 和 middleware 位于 `api/http/`，组合根位于 `api/wiring/`。
-- 业务上下文位于 `internal/<ctx>/{domain,application,infrastructure}`。当前上下文为 `agent`、`evaluation`、`iam`、`knowledge`、`llmgateway`、`mcp`、`memory`、`platform`、`scheduler`、`skill`、`workflow`。
-- 通用基础设施位于 `pkg/`：`constants`、`observability`、`reqctx`、`storage/{milvus,postgres,redis}`、`tenantdb`、`migration`、`httpclient`、`textchunk`、`crypto`。`pkg/vector` 仅兼容旧 import，新代码使用 `pkg/storage/milvus`。
-- 关键后端依赖：Gin v1.9.1、NATS v1.51.0（JetStream）、Milvus SDK v2.4.2、pgx v5.9.2、go-redis v9.7.3、golang-jwt v5.3.1、OTEL v1.40.0、Zap v1.27.1。
-- 前端位于 `web/`，使用 React 18.3、Vite 6.4、Ant Design 5.20、React Router 6.26、Axios 1.18、TypeScript。代码按 `web/src/modules/` 业务域组织，共享 API 客户端是 `web/src/services/client.ts`。
+- 后端使用 Go 1.25.12（以 `go.mod` 为准）。入口 `cmd/server/main.go` 通过 `api/wiring.BuildContainer` 构图；HTTP 路由、handler、DTO 位于 `api/http/`，middleware 位于 `api/middleware/`（`body_limit`、`rate_limit`、`public_error`、`require_default_tenant`、`system_role_check` 等），组合根位于 `api/wiring/`。
+- 业务上下文位于 `internal/<ctx>/{domain,application,infrastructure}`。当前上下文为 `agent`、`audit`、`collab`、`evaluation`、`iam`、`knowledge`、`llmgateway`、`mcp`、`memory`、`parameters`、`platform`、`scheduler`、`skill`、`workflow`。
+- 通用基础设施位于 `pkg/`：`constants`、`crypto`、`dag`、`httpclient`、`jsonschema`、`messaging`、`migration`、`observability`、`platformknowledge`、`postgres`、`reqctx`、`safetext`、`storage/{milvus,postgres,redis,filestore,objectstore,tenantnaming}`、`tenantdb`、`textchunk`、`timeutil`、`tokenutil`。`pkg/vector` 仅兼容旧 import，新代码使用 `pkg/storage/milvus`。
+- 关键后端依赖：Gin v1.9.1、NATS v1.51.0（JetStream）、Milvus SDK v2.4.2、pgx v5.9.2、go-redis v9.7.3、golang-jwt v5.3.1、OTEL v1.42.0、Zap v1.27.1、minio-go v7、unidoc/unioffice、modelcontextprotocol/go-sdk、robfig/cron、bufbuild/protocompile。
+- 前端位于 `web/`，使用 React 18.3、Vite 6.4、Ant Design 5.20、React Router 7.18.2、Axios 1.18、TypeScript。代码按 `web/src/modules/` 业务域组织（`agent`、`approvals`、`audit`、`collab`、`dashboard`、`evaluation`、`iam`、`knowledge`、`llm`、`mcp`、`memory`、`operation-gate`、`parameters`、`scheduled-task`、`skill`、`workflow`），共享 API 客户端是 `web/src/services/client.ts`。
 - 部署资源位于 `k8s/`、`helm/`、`grafana/`；模块的细节以本文件末尾索引为准。
 
 ## Remote environment
@@ -164,7 +164,7 @@ push 触发 CI 后的等待期间，必须先检查 PR base 是否落后于最�
 
 - 使用 `observability.NewLogger(env)`；production 输出 JSON，其他环境输出 console。事件命名 `layer.operation`；请求链路记录 request/trace/tenant/user，LLM 与 ReAct 只记录 model、provider、token 数、step、tool 和 latency 等必要元数据。
 - DEBUG 只用于开发；正常路径 INFO；可预期 4xx/重试 WARN；5xx 和外部调用失败 ERROR。禁止记录 password、token、API key、PII 或原始上游响应体。
-- 密钥通过 Vault/AWS Secrets Manager 管理，禁止入 Git；禁止修改 `config/prod.yaml`；传输使用 TLS 1.2+，静态敏感数据使用 AES-256；前端 `.env` 禁止提交密钥。
+- 密钥通过 Vault/AWS Secrets Manager 管理，禁止入 Git；禁止修改 `config/config.go` 的默认值；生产覆盖走 `helm/values-prod.yaml`；传输使用 TLS 1.2+，静态敏感数据使用 AES-256；前端 `.env` 禁止提交密钥。
 - bearer credential 不得进入 URL、Web Storage、通用请求日志或下游错误正文。认证 token 必须单次消费，状态转换必须原子。
 
 ## Risk regression harness
