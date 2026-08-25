@@ -201,8 +201,7 @@ func fingerprintOfPoint(o options, p point) fingerprint {
 	case "knowledge":
 		return knowledgeFingerprint(p.Snapshot, o.provider)
 	case "mcp":
-		// mcpFingerprint is implemented in Task 3.
-		return fingerprint{Hash: "todo"}
+		return mcpFingerprint(p.Snapshot)
 	default: // skill / agent
 		// llmFingerprint is implemented in Tasks 4/5.
 		return fingerprint{Hash: "todo"}
