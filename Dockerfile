@@ -52,8 +52,10 @@ COPY pkg/migration/sql ./pkg/migration/sql/
 # Change ownership to appuser
 RUN chown appuser:appuser server fix-provider-keys migrate-public
 RUN chown -R appuser:appuser pkg
-# Writable runtime dirs (default paths): nacos SDK logger /app/log, avatar store
-# /data/avatars. Created + owned by appuser so startup doesn't hit permission errors.
+# Writable runtime dirs: /data/avatars is the avatar store default (AVATAR_DIR);
+# /app/log is a defensive fallback for the nacos SDK's default log path (WORKDIR
+# is /app) in case LogDir ever falls back from os.TempDir(). Both created + owned
+# by appuser so startup doesn't hit permission errors.
 RUN mkdir -p /app/log /data/avatars && chown -R appuser:appuser /app/log /data/avatars
 
 # Switch to non-root user

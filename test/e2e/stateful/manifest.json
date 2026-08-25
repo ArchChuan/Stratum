@@ -1907,10 +1907,30 @@
       "coverage": "short"
     },
     {
+      "id": "agent.mutation.post.agents.id.request.editor",
+      "domain": "agent",
+      "user_goal": "Complete POST /agents/:id/request-editor with a proposal approval gate",
+      "route": "/agents/:id/edit",
+      "roles": {
+        "allowed": [
+          "member",
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /agents/:id/request-editor",
+      "browser_action_id": "agent.mutation.post.agents.id.request.editor",
+      "http_evidence": "The browser observes the pending_approval 202 response for POST /agents/:id/request-editor",
+      "db_evidence": "An operation_proposals row with op_type grant_editor is created for the requested agent",
+      "coverage": "short"
+    },
+    {
       "id": "agent.mutation.post.agents.id.self.modify",
       "domain": "agent",
       "user_goal": "Complete POST /agents/:id/self-modify with a proposal approval gate",
-      "route": "/agents",
+      "route": "/agents/:id/edit",
       "roles": {
         "allowed": [
           "member",
@@ -1922,8 +1942,8 @@
       },
       "mutation": "POST /agents/:id/self-modify",
       "browser_action_id": "agent.mutation.post.agents.id.self.modify",
-      "http_evidence": "The browser observes the pending_approval 202 or the approved replay 200 response for POST /agents/:id/self-modify",
-      "db_evidence": "An operation_proposals row is created or the proposal is consumed as executed",
+      "http_evidence": "The browser observes the pending_approval 202 and single-consumption 200 replay responses for POST /agents/:id/self-modify",
+      "db_evidence": "An operation_proposals row transitions proposed → reviewing → approved → executed and the agent description is updated",
       "coverage": "short"
     },
     {

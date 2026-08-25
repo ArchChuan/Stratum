@@ -130,7 +130,9 @@ export const executeAgentSkillMCPPack = async ({
     // 审批人从工作台批准;发起人 page 保持打开,轮询 active-execution 检测到
     // approved 后自动流式续跑(execute/stream),输出回流发起人原会话。
     await approverPage.goto(`${webURL}/approvals`);
-    await expect(approverPage.getByText('工具审批', { exact: true })).toBeVisible({ timeout: 120_000 });
+    // M3/M4 审批中心重构后顶层为 Tabs（工具审批/权限审批）+ 独立标题；
+    // getByText('工具审批') 会命中 tab 与标题两个元素（strict mode 冲突），用 heading 精确定位。
+    await expect(approverPage.getByRole('heading', { name: '工具审批' })).toBeVisible({ timeout: 120_000 });
     const approvalRow = approverPage.locator('tr').filter({ hasText: 'stateful_echo' }).first();
     await expect(approvalRow).toBeVisible({ timeout: 120_000 });
     const decisionResponse = approverPage.waitForResponse((response) => (

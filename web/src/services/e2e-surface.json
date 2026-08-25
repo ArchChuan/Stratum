@@ -56,6 +56,7 @@
     "POST /agents/:id/execute",
     "POST /agents/:id/execute/stream",
     "POST /agents/tool-approvals/:id/decision",
+    "POST /agents/:id/request-editor",
     "POST /agents/:id/self-modify",
     "POST /operation-proposals/:id/review",
     "POST /operation-proposals/:id/approve",

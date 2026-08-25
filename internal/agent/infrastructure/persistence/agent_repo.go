@@ -37,6 +37,11 @@ type poolIface interface {
 // (buffer / trajectory reflection) non-empty, so memory_entries.scope cannot
 // regress to an empty value and trip HistorySegment.Validate() →
 // memory.history.upsert_failed.
+//
+// Intent: only the zero value is interpreted as "not provided / partial
+// config" and normalized to the agent default. An explicitly provided scope
+// (including "user") is preserved verbatim — this never flips a deliberate
+// user-scoped agent to agent scope.
 func memoryScopeOr(scope string) string {
 	if scope == "" {
 		return "agent"
