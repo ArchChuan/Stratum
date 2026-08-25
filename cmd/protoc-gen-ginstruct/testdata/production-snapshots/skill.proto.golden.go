@@ -44,6 +44,7 @@ type SkillRevisionResponse struct {
 	IsCurrent     bool           `json:"isCurrent"`
 	CreatedBy     string         `json:"createdBy"`
 	CreatedAt     string         `json:"createdAt,omitempty"`
+	ContentHash   string         `json:"contentHash,omitempty"`
 }
 
 type SkillRevisionsResponse struct {

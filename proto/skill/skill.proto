@@ -63,6 +63,11 @@ message SkillRevisionResponse {
   string createdBy = 11;
   // @omitempty
   string createdAt = 12;
+  // contentHash is the optimistic-concurrency baseline: clients echo it back
+  // as UpdateSkillRequest.expectedContentHash so a concurrent save is rejected
+  // with 409 instead of silently overwriting.
+  // @omitempty
+  string contentHash = 13;
 }
 
 message SkillRevisionsResponse {
