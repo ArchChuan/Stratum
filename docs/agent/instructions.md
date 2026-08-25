@@ -93,7 +93,9 @@ push 触发 CI 后的等待期间，必须先检查 PR base 是否落后于最�
 ### 测试门槛原则
 
 - 只改字段 / 只改单个小 bug / 常量值调整 → 最小验证：unit + contract（`go test -short ./...` + contract tests）。
-- 其余所有改动——功能、Bug 修复、前后端联调、数据库链路、Agent/Skill/MCP/Memory/Knowledge/IAM 能力改动、文档体系本身——必须完整测试（`make test-verify-before-pr`），按 `.test/verification.yaml` 风险级升级：R2→e2e-short，R3→+e2e-soak，R4→+release-soak。
+- 其余所有改动——功能、Bug 修复、前后端联调、数据库链路、Agent/Skill/MCP/Memory/Knowledge/IAM 能力改动——必须完整测试（`make test-verify-before-pr`），按 `.test/verification.yaml` 风险级升级：R2→e2e-short，R3→+e2e-soak，R4→+release-soak。
+- 纯文案/措辞文档改动（不改文档结构、不改参数契约、不改变生成物）→ 最小验证：`markdownlint` + `make agent-instructions-check`（验证生成一致）。
+- 文档结构性改动（新增/重排章节、改变 instructions.md 与 CLAUDE.md/AGENTS.md 的生成关系、修改 .proto 契约）→ 完整测试（`make test-verify-before-pr`），按 `.test/verification.yaml` 风险级升级。
 
 ### 验证执行方
 
