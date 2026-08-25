@@ -2,185 +2,226 @@ package application
 
 import (
 	"context"
-	"errors"
+	"sort"
 	"testing"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/byteBuilderX/stratum/internal/skill/domain/port"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
-func TestVersionServicePublishDistinguishesMissingDraft(t *testing.T) {
+func TestVersionServiceCreateSkill(t *testing.T) {
 	repo := newFakeVersionRepo()
-	repo.skills["published-skill"] = port.SkillProductRow{ID: "published-skill", Status: "published"}
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-	if _, err := svc.PublishDraft(context.Background(), "published-skill", "user-1"); !errors.Is(err, domain.ErrSkillDraftNotFound) {
-		t.Fatalf("expected missing draft conflict, got %v", err)
-	}
-	if _, err := svc.PublishDraft(context.Background(), "missing-skill", "user-1"); !errors.Is(err, domain.ErrSkillNotFound) {
-		t.Fatalf("expected missing skill error, got %v", err)
-	}
-}
 
-func TestVersionServiceCreatesDraftBundle(t *testing.T) {
-	repo := newFakeVersionRepo()
-	svc := NewVersionService(repo, zap.NewNop())
-	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-	view, err := svc.CreateSkillDraft(context.Background(), CreateSkillDraftInput{
+	view, err := svc.CreateSkill(context.Background(), CreateSkillInput{
 		Name:         "投诉分类",
 		Description:  "判断客户投诉类型",
-		Instructions: "先判断投诉类别，需要订单信息时查询订单。",
+		Instructions: "先判断投诉类别",
 		ActorID:      "user-1",
+		Editors:      []string{"editor-1"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if view.Draft.Name != "投诉分类" || view.Draft.Description != "判断客户投诉类型" || view.Draft.Instructions == "" {
-		t.Fatalf("expected name/description/instructions draft, got %#v", view.Draft)
-	}
-	if view.Draft.ContentHash == "" {
-		t.Fatalf("expected content hash, got %#v", view.Draft)
-	}
-	if view.Skill.DraftRevisionID != view.Draft.ID {
-		t.Fatalf("draft revision link mismatch: %#v", view.Skill)
-	}
+	require.NoError(t, err)
+	require.Equal(t, domain.VersionStatusPublished, view.Active.Status)
+	require.Equal(t, 1, view.Active.RevisionNo)
+	require.NotEmpty(t, view.Active.ContentHash)
+	require.Equal(t, view.Skill.ActiveRevisionID, view.Active.ID)
+	require.NotNil(t, view.Editors)
+	require.Empty(t, view.Editors) // CreateSkill 视图不返回编辑器集
 }
 
-func TestVersionServicePublishSucceedsWithoutActivationConfirmation(t *testing.T) {
+func TestVersionServiceSaveRevisionDerivesNewVersion(t *testing.T) {
 	repo := newFakeVersionRepo()
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-	view := mustCreateDraft(t, svc)
-	published, err := svc.PublishDraft(context.Background(), view.Skill.ID, "user-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if published.Status != domain.VersionStatusPublished || published.RevisionNo != 1 {
-		t.Fatalf("unexpected published revision: %#v", published)
-	}
+	view := mustCreateSkill(t, svc)
+
+	updated, err := svc.SaveRevision(context.Background(), view.Skill.ID, "", SaveRevisionInput{
+		Name: "投诉分类", Description: "判断客户投诉类型", Instructions: "使用新的分类方法", ActorID: "user-1",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "使用新的分类方法", updated.Active.Instructions)
+	require.Equal(t, 2, updated.Active.RevisionNo)
+	require.Equal(t, view.Active.ID, updated.Active.ParentRevisionID)
+	require.NotEqual(t, view.Active.ContentHash, updated.Active.ContentHash)
+	require.Equal(t, updated.Active.ID, updated.Skill.ActiveRevisionID)
 }
 
-func TestVersionServiceUpdateDraftRefreshesHash(t *testing.T) {
+func TestProposalSkillSaveRevisionUsesExpectedHash(t *testing.T) {
 	repo := newFakeVersionRepo()
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-	view := mustCreateDraft(t, svc)
-	updated, err := svc.UpdateDraftBundle(context.Background(), view.Skill.ID, "", UpdateDraftBundleInput{
-		Name:         "投诉分类",
-		Description:  "判断客户投诉类型",
-		Instructions: "使用新的分类方法",
-		ActorID:      "user-1",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updated.Draft.Instructions != "使用新的分类方法" || updated.Draft.ContentHash == view.Draft.ContentHash {
-		t.Fatalf("draft update did not refresh revision: %#v", updated)
-	}
-}
+	view := mustCreateSkill(t, svc)
 
-func TestProposalSkillUpdateDraftBundleUsesExpectedHash(t *testing.T) {
-	repo := newFakeVersionRepo()
-	svc := NewVersionService(repo, zap.NewNop())
-	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-	view := mustCreateDraft(t, svc)
-	updated, err := svc.UpdateDraftBundle(context.Background(), view.Skill.ID, view.Draft.ContentHash, UpdateDraftBundleInput{
-		Name: "updated_skill", Description: "updated description", Instructions: "updated instructions",
-		ActorID: "user-1",
+	updated, err := svc.SaveRevision(context.Background(), view.Skill.ID, view.Active.ContentHash, SaveRevisionInput{
+		Name: "updated_skill", Description: "updated description", Instructions: "updated instructions", ActorID: "user-1",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updated.Skill.Name != "updated_skill" || updated.Draft.ContentHash == view.Draft.ContentHash {
-		t.Fatalf("unexpected bundle update: %#v", updated)
-	}
-	if _, err := svc.UpdateDraftBundle(context.Background(), view.Skill.ID, view.Draft.ContentHash, UpdateDraftBundleInput{
-		Name: "stale", Description: "stale", Instructions: "stale",
-		ActorID: "user-1",
-	}); err != domain.ErrSkillDraftStale {
-		t.Fatalf("expected stale hash rejection, got %v", err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "updated_skill", updated.Skill.Name)
+
+	// 使用陈旧的 expected hash → 409(ErrSkillDraftStale)。
+	_, err = svc.SaveRevision(context.Background(), view.Skill.ID, view.Active.ContentHash, SaveRevisionInput{
+		Name: "stale", Description: "stale", Instructions: "stale", ActorID: "user-1",
+	})
+	require.ErrorIs(t, err, domain.ErrSkillDraftStale)
 }
 
 func TestVersionServiceCandidateCanOnlyRewriteInstructions(t *testing.T) {
 	repo := newFakeVersionRepo()
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-	view := mustCreateDraft(t, svc)
-	candidate, err := svc.CreateCandidate(context.Background(), view.Skill.ID, view.Draft.ID, CandidateInput{
+	view := mustCreateSkill(t, svc)
+
+	candidate, err := svc.CreateCandidate(context.Background(), view.Skill.ID, view.Active.ID, CandidateInput{
 		Source: "llm_rewrite", PromptPatch: map[string]any{"instructions": "优化后的方法"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if candidate.ParentRevisionID != view.Draft.ID || candidate.Instructions != "优化后的方法" {
-		t.Fatalf("unexpected candidate: %#v", candidate)
-	}
-	if _, err := svc.CreateCandidate(context.Background(), view.Skill.ID, view.Draft.ID, CandidateInput{
+	require.NoError(t, err)
+	require.Equal(t, domain.VersionStatusCandidate, candidate.Status)
+	require.Equal(t, view.Active.ID, candidate.ParentRevisionID)
+	require.Equal(t, "优化后的方法", candidate.Instructions)
+
+	// 运行时参数优化必须拒绝。
+	_, err = svc.CreateCandidate(context.Background(), view.Skill.ID, view.Active.ID, CandidateInput{
 		Source: "llm_rewrite", PromptPatch: map[string]any{"temperature": 0.2},
-	}); err == nil {
-		t.Fatal("runtime parameter optimization must be rejected")
-	}
+	})
+	require.Error(t, err)
 }
 
-func TestVersionServiceResolvePublishedRevisionRejectsUnpublished(t *testing.T) {
+func TestVersionServiceResolvePublishedRevisionRejectsCandidate(t *testing.T) {
 	repo := newFakeVersionRepo()
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-	view := mustCreateDraft(t, svc)
+	view := mustCreateSkill(t, svc)
 
-	if _, err := svc.ResolvePublishedRevision(context.Background(), view.Skill.ID, view.Draft.ID); err == nil {
-		t.Fatal("draft revision must not resolve for evaluation")
-	}
-	published, err := svc.PublishDraft(context.Background(), view.Skill.ID, "user-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	resolved, err := svc.ResolvePublishedRevision(context.Background(), view.Skill.ID, published.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resolved.ID != published.ID || resolved.SkillID != view.Skill.ID {
-		t.Fatalf("unexpected published revision: %#v", resolved)
-	}
+	// CreateSkill 第一版即 published,可直接解析。
+	resolved, err := svc.ResolvePublishedRevision(context.Background(), view.Skill.ID, view.Active.ID)
+	require.NoError(t, err)
+	require.Equal(t, view.Active.ID, resolved.ID)
+
+	// candidate 不是 published,评测解析必须拒绝。
+	candidate, err := svc.CreateCandidate(context.Background(), view.Skill.ID, view.Active.ID, CandidateInput{
+		Source: "llm_rewrite", PromptPatch: map[string]any{"instructions": "x"},
+	})
+	require.NoError(t, err)
+	_, err = svc.ResolvePublishedRevision(context.Background(), view.Skill.ID, candidate.ID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not published")
 }
 
 func TestVersionServicePublishedRevisionSafeSummaryHasNoSensitiveFields(t *testing.T) {
 	repo := newFakeVersionRepo()
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-	view := mustCreateDraft(t, svc)
-	published, err := svc.PublishDraft(context.Background(), view.Skill.ID, "user-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	summary, err := svc.PublishedRevisionSafeSummary(context.Background(), view.Skill.ID, published.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if summary["name"] != view.Skill.Name || summary["description"] != view.Skill.Description {
-		t.Fatalf("safe resource identity missing: %#v", summary)
-	}
+	view := mustCreateSkill(t, svc)
+
+	summary, err := svc.PublishedRevisionSafeSummary(context.Background(), view.Skill.ID, view.Active.ID)
+	require.NoError(t, err)
+	require.Equal(t, view.Skill.Name, summary["name"])
+	require.Equal(t, view.Skill.Description, summary["description"])
 	for _, key := range []string{"secret", "token", "api_key", "destination", "instructions"} {
-		if _, ok := summary[key]; ok {
-			t.Fatalf("safe summary contains %q: %#v", key, summary)
-		}
+		_, ok := summary[key]
+		require.False(t, ok, "safe summary must not contain %q", key)
 	}
 }
 
-func mustCreateDraft(t *testing.T, svc *VersionService) SkillWorkspaceView {
-	t.Helper()
-	view, err := svc.CreateSkillDraft(context.Background(), CreateSkillDraftInput{
-		Name: "complaint", Description: "分类", Instructions: "分类用户投诉",
-		ActorID: "user-1",
+func TestVersionServiceSaveRevisionFromLegacyUnpublishedSkill(t *testing.T) {
+	// 存量未发布 skill(active_revision_id 空)首次保存生成第一版。
+	repo := newFakeVersionRepo()
+	repo.skills["legacy"] = port.SkillProductRow{ID: "legacy", Name: "legacy", CreatedBy: "user-1"}
+	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+
+	view, err := svc.SaveRevision(context.Background(), "legacy", "", SaveRevisionInput{
+		Name: "legacy", Description: "desc", Instructions: "first content", ActorID: "user-1",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.Equal(t, 1, view.Active.RevisionNo)
+	require.Equal(t, view.Active.ID, view.Skill.ActiveRevisionID)
+}
+
+func TestVersionServiceListRevisionsAndRollback(t *testing.T) {
+	repo := newFakeVersionRepo()
+	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	view := mustCreateSkill(t, svc) // v1 published + active
+	// 保存一版新的 → v2 active、v1 deprecated。
+	next, err := svc.SaveRevision(context.Background(), view.Skill.ID, "", SaveRevisionInput{
+		Name: "complaint", Description: "分类", Instructions: "v2 content", ActorID: "user-1",
+	})
+	require.NoError(t, err)
+
+	revisions, err := svc.ListRevisions(context.Background(), view.Skill.ID)
+	require.NoError(t, err)
+	require.Len(t, revisions, 2)
+	require.Equal(t, next.Active.ID, revisions[0].ID)
+	require.True(t, revisions[0].IsCurrent)
+	require.Equal(t, view.Active.ID, revisions[1].ID)
+	require.False(t, revisions[1].IsCurrent)
+	require.Equal(t, domain.VersionStatusDeprecated, revisions[1].Status)
+
+	// 回滚到 v1 → v1 生效、v2 降级,不产生新版本。
+	require.NoError(t, svc.RollbackRevision(context.Background(), view.Skill.ID, view.Active.ID, "user-1"))
+	revisions, err = svc.ListRevisions(context.Background(), view.Skill.ID)
+	require.NoError(t, err)
+	require.Len(t, revisions, 2, "rollback must not create a new version")
+	require.True(t, revisions[1].IsCurrent)
+	require.Equal(t, domain.VersionStatusPublished, revisions[1].Status)
+	require.Equal(t, domain.VersionStatusDeprecated, revisions[0].Status)
+}
+
+func TestVersionServiceRollbackRejectsNonDeprecated(t *testing.T) {
+	repo := newFakeVersionRepo()
+	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	view := mustCreateSkill(t, svc)
+	candidate, err := svc.CreateCandidate(context.Background(), view.Skill.ID, view.Active.ID, CandidateInput{
+		Source: "llm_rewrite", PromptPatch: map[string]any{"instructions": "x"},
+	})
+	require.NoError(t, err)
+
+	// 当前生效版本(非 deprecated)不可回滚。
+	require.ErrorIs(t, svc.RollbackRevision(context.Background(), view.Skill.ID, view.Active.ID, "user-1"), domain.ErrSkillNotFound)
+	// candidate 不是历史版本,不可回滚。
+	require.ErrorIs(t, svc.RollbackRevision(context.Background(), view.Skill.ID, candidate.ID, "user-1"), domain.ErrSkillNotFound)
+}
+
+func TestVersionServiceListRevisionsMissingSkill(t *testing.T) {
+	svc := NewVersionService(newFakeVersionRepo(), zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	_, err := svc.ListRevisions(context.Background(), "ghost")
+	require.ErrorIs(t, err, domain.ErrSkillNotFound)
+}
+
+func TestVersionServiceListAndDeleteSkills(t *testing.T) {
+	repo := newFakeVersionRepo()
+	seedRevision(t, repo, "s1", "rev-s1", domain.VersionStatusPublished, "user-1")
+	seedRevision(t, repo, "s2", "rev-s2", domain.VersionStatusPublished, "user-1")
+	svc := NewVersionService(repo, zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+
+	skills, err := svc.ListSkills(context.Background())
+	require.NoError(t, err)
+	require.Len(t, skills, 2)
+
+	require.NoError(t, svc.DeleteSkill(context.Background(), "s1", "user-1"))
+	skills, err = svc.ListSkills(context.Background())
+	require.NoError(t, err)
+	require.Len(t, skills, 1)
+}
+
+func mustCreateSkill(t *testing.T, svc *VersionService) SkillWorkspaceView {
+	t.Helper()
+	view, err := svc.CreateSkill(context.Background(), CreateSkillInput{
+		Name: "complaint", Description: "分类", Instructions: "分类用户投诉", ActorID: "user-1",
+	})
+	require.NoError(t, err)
 	return view
 }
+
+// ---------- fakeVersionRepo ----------
 
 type fakeVersionRepo struct {
 	skills    map[string]port.SkillProductRow
@@ -201,9 +242,10 @@ func newFakeVersionRepo() *fakeVersionRepo {
 	return &fakeVersionRepo{skills: map[string]port.SkillProductRow{}, revisions: map[string]domain.SkillRevision{}}
 }
 
-func (r *fakeVersionRepo) InsertSkillWithDraft(_ context.Context, skill port.SkillProductRow, draft domain.SkillRevision, audit *auditdomain.ResourceChangeAuditEvent, _ []string) error {
+func (r *fakeVersionRepo) InsertSkill(_ context.Context, skill port.SkillProductRow, revision domain.SkillRevision, audit *auditdomain.ResourceChangeAuditEvent, _ []string) error {
 	r.recordAudit(audit)
-	r.skills[skill.ID], r.revisions[draft.ID] = skill, draft
+	r.skills[skill.ID] = skill
+	r.revisions[revision.ID] = revision
 	return nil
 }
 func (r *fakeVersionRepo) GetSkill(_ context.Context, id string) (port.SkillProductRow, bool, error) {
@@ -227,14 +269,6 @@ func (r *fakeVersionRepo) DeleteSkill(_ context.Context, id string, audit *audit
 	}
 	return nil
 }
-func (r *fakeVersionRepo) GetDraftRevision(_ context.Context, skillID string) (domain.SkillRevision, bool, error) {
-	for _, revision := range r.revisions {
-		if revision.SkillID == skillID && revision.Status == domain.VersionStatusDraft {
-			return revision, true, nil
-		}
-	}
-	return domain.SkillRevision{}, false, nil
-}
 func (r *fakeVersionRepo) GetActiveRevision(_ context.Context, skillID string) (domain.SkillRevision, bool, error) {
 	skill := r.skills[skillID]
 	v, ok := r.revisions[skill.ActiveRevisionID]
@@ -249,21 +283,63 @@ func (r *fakeVersionRepo) InsertCandidate(_ context.Context, candidate domain.Sk
 	r.revisions[candidate.ID] = candidate
 	return nil
 }
-func (r *fakeVersionRepo) UpdateDraftBundle(_ context.Context, skillID, expected string, skill port.SkillProductRow, draft domain.SkillRevision, audit *auditdomain.ResourceChangeAuditEvent, _ string) (domain.SkillRevision, error) {
+func (r *fakeVersionRepo) SaveRevision(_ context.Context, skillID, expected string, skill port.SkillProductRow, revision domain.SkillRevision, audit *auditdomain.ResourceChangeAuditEvent, _ string) (domain.SkillRevision, error) {
 	r.recordAudit(audit)
-	for id, current := range r.revisions {
-		if current.SkillID != skillID || current.Status != domain.VersionStatusDraft {
-			continue
-		}
-		// 与真实 repo 语义一致:空 expected(直写)跳过乐观并发校验。
-		if expected != "" && current.ContentHash != expected {
+	current, ok := r.skills[skillID]
+	if !ok {
+		return domain.SkillRevision{}, domain.ErrSkillNotFound
+	}
+	// 与真实 repo 一致:非空 expected 必须匹配当前生效版本 hash。
+	if expected != "" {
+		active, ok := r.revisions[current.ActiveRevisionID]
+		if !ok || active.ContentHash != expected {
 			return domain.SkillRevision{}, domain.ErrSkillDraftStale
 		}
-		r.skills[skillID] = skill
-		r.revisions[id] = draft
-		return draft, nil
 	}
-	return domain.SkillRevision{}, domain.ErrSkillNotFound
+	// 旧生效版本降级为历史。
+	if old, ok := r.revisions[current.ActiveRevisionID]; ok && old.ID != revision.ID {
+		old.Status = domain.VersionStatusDeprecated
+		r.revisions[old.ID] = old
+	}
+	skill.ActiveRevisionID = revision.ID
+	r.skills[skillID] = skill
+	r.revisions[revision.ID] = revision
+	return revision, nil
+}
+func (r *fakeVersionRepo) ListRevisions(_ context.Context, skillID string) ([]domain.SkillRevision, bool, error) {
+	skill, ok := r.skills[skillID]
+	if !ok {
+		return nil, false, nil
+	}
+	var result []domain.SkillRevision
+	for _, rev := range r.revisions {
+		if rev.SkillID == skillID {
+			rev.IsCurrent = rev.ID == skill.ActiveRevisionID
+			result = append(result, rev)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].RevisionNo > result[j].RevisionNo })
+	return result, true, nil
+}
+func (r *fakeVersionRepo) RollbackRevision(_ context.Context, skillID, targetRevisionID, _ string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	r.recordAudit(audit)
+	skill, ok := r.skills[skillID]
+	if !ok {
+		return domain.ErrSkillNotFound
+	}
+	if cur, ok := r.revisions[skill.ActiveRevisionID]; ok {
+		cur.Status = domain.VersionStatusDeprecated
+		r.revisions[cur.ID] = cur
+	}
+	target, ok := r.revisions[targetRevisionID]
+	if !ok || target.SkillID != skillID || target.Status != domain.VersionStatusDeprecated {
+		return domain.ErrSkillNotFound
+	}
+	target.Status = domain.VersionStatusPublished
+	r.revisions[targetRevisionID] = target
+	skill.ActiveRevisionID = targetRevisionID
+	r.skills[skillID] = skill
+	return nil
 }
 func (r *fakeVersionRepo) NextRevisionNo(_ context.Context, skillID string) (int, error) {
 	next := 1
@@ -274,13 +350,31 @@ func (r *fakeVersionRepo) NextRevisionNo(_ context.Context, skillID string) (int
 	}
 	return next, nil
 }
-func (r *fakeVersionRepo) PublishDraft(_ context.Context, skillID, draftID string, next int, checks map[string]any, audit *auditdomain.ResourceChangeAuditEvent, _ string) (domain.SkillRevision, error) {
-	r.recordAudit(audit)
-	revision := r.revisions[draftID]
-	revision.Status, revision.RevisionNo, revision.PublishChecks = domain.VersionStatusPublished, next, checks
-	r.revisions[draftID] = revision
-	skill := r.skills[skillID]
-	skill.Status, skill.ActiveRevisionID, skill.DraftRevisionID = "published", draftID, ""
-	r.skills[skillID] = skill
-	return revision, nil
+
+// seedSkill 直接注入 skill + revision 到 fake repo(绕过写路径,便于构造存量场景)。
+func seedSkill(repo *fakeVersionRepo, skill port.SkillProductRow, revision domain.SkillRevision) {
+	repo.skills[skill.ID] = skill
+	repo.revisions[revision.ID] = revision
+}
+
+// seedRevision 构造一个带 content hash 的版本化 skill;published 状态时设为生效版本。
+func seedRevision(t *testing.T, repo *fakeVersionRepo, skillID, revisionID string, status domain.VersionStatus, createdBy string) (port.SkillProductRow, domain.SkillRevision) {
+	t.Helper()
+	revision := domain.SkillRevision{
+		ID: revisionID, SkillID: skillID, Status: status, Source: "manual",
+		Name: "skill-" + skillID, Description: "desc", Instructions: "original instructions", CreatedBy: createdBy,
+	}
+	if status == domain.VersionStatusPublished {
+		revision.RevisionNo = 1
+	}
+	hash, err := revision.ComputeContentHash()
+	require.NoError(t, err)
+	revision.ContentHash = hash
+	skill := port.SkillProductRow{ID: skillID, Name: "skill-" + skillID, Description: "desc", CreatedBy: createdBy}
+	if status == domain.VersionStatusPublished {
+		skill.Status = "published"
+		skill.ActiveRevisionID = revisionID
+	}
+	seedSkill(repo, skill, revision)
+	return skill, revision
 }

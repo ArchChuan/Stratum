@@ -23,45 +23,33 @@ func (f failingTenantRoleResolver) ResolveTenantRole(context.Context, string, st
 }
 
 // failingVersionRepo embeds the audit-capturing fakeVersionRepo and makes the
-// UpdateDraftBundle write fail, so tests can assert the repository error is
+// SaveRevision write fail, so tests can assert the repository error is
 // propagated (fail closed) instead of being swallowed.
 type failingVersionRepo struct {
 	*fakeVersionRepo
 	failErr error
 }
 
-func (f *failingVersionRepo) UpdateDraftBundle(
-	ctx context.Context, skillID, expected string, skill port.SkillProductRow, draft domain.SkillRevision, audit *auditdomain.ResourceChangeAuditEvent, _ string,
+func (f *failingVersionRepo) SaveRevision(
+	ctx context.Context, skillID, expected string, skill port.SkillProductRow, revision domain.SkillRevision, audit *auditdomain.ResourceChangeAuditEvent, editorActor string,
 ) (domain.SkillRevision, error) {
 	return domain.SkillRevision{}, f.failErr
 }
 
-// seedOwnedSkill inserts a draft skill whose product row carries the given
-// created_by, plus a draft revision whose hash is returned for
-// UpdateDraftBundle's expected-content-hash argument.
+// seedOwnedSkill inserts a versioned skill whose product row carries the given
+// created_by and an active published revision whose hash is returned for
+// SaveRevision's expected-content-hash argument.
 func seedOwnedSkill(t *testing.T, repo *fakeVersionRepo, skillID, createdBy string) (port.SkillProductRow, domain.SkillRevision) {
 	t.Helper()
-	draft := domain.SkillRevision{
-		ID: "rev-" + skillID, SkillID: skillID, Status: domain.VersionStatusDraft,
-		Source: "manual", Name: "skill-" + skillID, Description: "desc", Instructions: "original instructions",
-	}
-	hash, err := draft.ComputeContentHash()
-	require.NoError(t, err)
-	draft.ContentHash = hash
-	skill := port.SkillProductRow{
-		ID: skillID, Name: "skill-" + skillID, Description: "desc",
-		Status: "draft", DraftRevisionID: draft.ID, CreatedBy: createdBy,
-	}
-	require.NoError(t, repo.InsertSkillWithDraft(context.Background(), skill, draft, nil, nil))
-	return skill, draft
+	return seedRevision(t, repo, skillID, "rev-"+skillID, domain.VersionStatusPublished, createdBy)
 }
 
-// TestOwnershipMatrixSkillUpdateDraftBundle pins the ownership matrix for
-// UpdateDraftBundle: owner may manage the whole tenant (including historical
-// resources with empty created_by), admin only their own, everyone else —
-// and every resolution failure, missing resolver and empty actor — is denied.
-// Fail closed.
-func TestOwnershipMatrixSkillUpdateDraftBundle(t *testing.T) {
+// TestOwnershipMatrixSkillSaveRevision pins the ownership matrix for
+// SaveRevision: owner may manage the whole tenant (including historical
+// resources with empty created_by), admin is entitled to edit content by
+// default (op != delete), everyone else — and every resolution failure,
+// missing resolver and empty actor — is denied. Fail closed.
+func TestOwnershipMatrixSkillSaveRevision(t *testing.T) {
 	const (
 		actor = "user-1"
 		other = "other-user"
@@ -78,8 +66,8 @@ func TestOwnershipMatrixSkillUpdateDraftBundle(t *testing.T) {
 		{"owner edits another user's resource", "owner", false, nil, actor, other, true},
 		{"owner edits empty-owner resource", "owner", false, nil, actor, "", true},
 		{"admin edits own resource", "admin", false, nil, actor, actor, true},
-		{"admin edits another user's resource", "admin", false, nil, actor, other, false},
-		{"admin edits empty-owner resource", "admin", false, nil, actor, "", false},
+		{"admin edits another user's resource", "admin", false, nil, actor, other, true},
+		{"admin edits empty-owner resource", "admin", false, nil, actor, "", true},
 		{"member edits own resource", "member", false, nil, actor, actor, false},
 		{"resolver failure fails closed", "", false, errors.New("iam unavailable"), actor, actor, false},
 		{"missing resolver fails closed", "", true, nil, actor, actor, false},
@@ -88,7 +76,7 @@ func TestOwnershipMatrixSkillUpdateDraftBundle(t *testing.T) {
 	for _, tc := range rows {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := newFakeVersionRepo()
-			skill, draft := seedOwnedSkill(t, repo, "skill-1", tc.createdBy)
+			skill, active := seedOwnedSkill(t, repo, "skill-1", tc.createdBy)
 			svc := NewVersionService(repo, zap.NewNop())
 			if !tc.noResolver {
 				svc.SetTenantRoleResolver(stubTenantRole{role: tc.role})
@@ -96,7 +84,7 @@ func TestOwnershipMatrixSkillUpdateDraftBundle(t *testing.T) {
 			if tc.resolveErr != nil {
 				svc.SetTenantRoleResolver(failingTenantRoleResolver{err: tc.resolveErr})
 			}
-			_, err := svc.UpdateDraftBundle(context.Background(), skill.ID, draft.ContentHash, UpdateDraftBundleInput{
+			_, err := svc.SaveRevision(context.Background(), skill.ID, active.ContentHash, SaveRevisionInput{
 				Name: "updated-name", Description: "updated-desc", Instructions: "updated instructions",
 				ActorID: tc.actorID,
 			})
@@ -111,15 +99,15 @@ func TestOwnershipMatrixSkillUpdateDraftBundle(t *testing.T) {
 	}
 }
 
-// TestSkillCreateDraftRecordsAuditEvent pins the create 打点: the creator
-// becomes the skill's owner and the write carries a user/api create audit
-// with an empty before projection and a non-empty after projection.
-func TestSkillCreateDraftRecordsAuditEvent(t *testing.T) {
+// TestSkillCreateRecordsAuditEvent pins the create 打点: the creator becomes
+// the skill's owner and the write carries a user/api create audit with an
+// empty before projection and a non-empty after projection.
+func TestSkillCreateRecordsAuditEvent(t *testing.T) {
 	repo := newFakeVersionRepo()
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
-	view, err := svc.CreateSkillDraft(context.Background(), CreateSkillDraftInput{
+	view, err := svc.CreateSkill(context.Background(), CreateSkillInput{
 		Name: "matrix-skill", Description: "desc", Instructions: "instructions", ActorID: "user-1",
 	})
 	require.NoError(t, err)
@@ -139,15 +127,15 @@ func TestSkillCreateDraftRecordsAuditEvent(t *testing.T) {
 	require.Equal(t, "matrix-skill", after["name"])
 }
 
-// TestSkillUpdateDraftBundleAuditFields pins the update audit payload: exact
+// TestSkillSaveRevisionAuditFields pins the update audit payload: exact
 // resource identity, operation, actor, source and actor type.
-func TestSkillUpdateDraftBundleAuditFields(t *testing.T) {
+func TestSkillSaveRevisionAuditFields(t *testing.T) {
 	repo := newFakeVersionRepo()
-	skill, draft := seedOwnedSkill(t, repo, "skill-1", "user-1")
+	skill, active := seedOwnedSkill(t, repo, "skill-1", "user-1")
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
-	_, err := svc.UpdateDraftBundle(context.Background(), skill.ID, draft.ContentHash, UpdateDraftBundleInput{
+	_, err := svc.SaveRevision(context.Background(), skill.ID, active.ContentHash, SaveRevisionInput{
 		Name: "renamed", Description: "new desc", Instructions: "new instructions",
 		ActorID: "user-1",
 	})
@@ -174,34 +162,34 @@ func TestSkillUpdateDraftBundleAuditFields(t *testing.T) {
 // Audit-construction failure: newChangeAudit only fails when json.Marshal
 // fails on the projections. skillSafeProjection emits plain strings and
 // structs derived from domain types, so the failure path is unreachable
-// through UpdateDraftBundle inputs — skipped by design. The fail-closed
-// contract is instead pinned below by making the repository write itself
-// fail: the error must propagate, never be swallowed.
-func TestSkillUpdateDraftBundlePropagatesRepositoryFailure(t *testing.T) {
+// through SaveRevision inputs — skipped by design. The fail-closed contract is
+// instead pinned below by making the repository write itself fail: the error
+// must propagate, never be swallowed.
+func TestSkillSaveRevisionPropagatesRepositoryFailure(t *testing.T) {
 	repo := &failingVersionRepo{fakeVersionRepo: newFakeVersionRepo(), failErr: errors.New("audit insert failed")}
-	skill, draft := seedOwnedSkill(t, repo.fakeVersionRepo, "skill-1", "user-1")
+	skill, active := seedOwnedSkill(t, repo.fakeVersionRepo, "skill-1", "user-1")
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
-	_, err := svc.UpdateDraftBundle(context.Background(), skill.ID, draft.ContentHash, UpdateDraftBundleInput{
+	_, err := svc.SaveRevision(context.Background(), skill.ID, active.ContentHash, SaveRevisionInput{
 		Name: "renamed", Description: "desc", Instructions: "instructions",
 		ActorID: "user-1",
 	})
 	require.ErrorIs(t, err, repo.failErr)
 }
 
-// TestSkillUpdateDraftBundleSystemActorBypassesOwnership pins the evaluation
-// worker path: a system actor in ctx skips the ownership matrix (member may
-// rewrite another user's skill) but the write is still audited with
-// actor_type=system and source=optimization.
-func TestSkillUpdateDraftBundleSystemActorBypassesOwnership(t *testing.T) {
+// TestSkillSaveRevisionSystemActorBypassesOwnership pins the evaluation worker
+// path: a system actor in ctx skips the ownership matrix (member may rewrite
+// another user's skill) but the write is still audited with actor_type=system
+// and source=optimization.
+func TestSkillSaveRevisionSystemActorBypassesOwnership(t *testing.T) {
 	repo := newFakeVersionRepo()
-	skill, draft := seedOwnedSkill(t, repo, "skill-1", "other-user")
+	seedOwnedSkill(t, repo, "skill-1", "other-user")
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "member"})
 
 	ctx := reqctx.WithSystemActor(context.Background(), "evaluation-worker")
-	_, err := svc.UpdateDraftBundle(ctx, skill.ID, draft.ContentHash, UpdateDraftBundleInput{
+	_, err := svc.SaveRevision(ctx, "skill-1", "", SaveRevisionInput{
 		Name: "optimized", Description: "desc", Instructions: "optimized instructions",
 		ActorID: "member-1",
 	})
@@ -213,7 +201,7 @@ func TestSkillUpdateDraftBundleSystemActorBypassesOwnership(t *testing.T) {
 	require.Equal(t, auditdomain.ChangeActorSystem, audit.ActorType)
 	require.Equal(t, auditdomain.ChangeSourceOptimization, audit.Source)
 	require.Equal(t, auditdomain.ChangeOpUpdate, audit.Operation)
-	require.Equal(t, skill.ID, audit.ResourceID)
+	require.Equal(t, "skill-1", audit.ResourceID)
 }
 
 // stubSkillEditorRepo is an in-memory SkillResourceEditorRepo for
@@ -249,28 +237,6 @@ func (s *stubSkillEditorRepo) ReplaceEditors(_ context.Context, _, resourceID st
 }
 
 var _ port.SkillResourceEditorRepo = (*stubSkillEditorRepo)(nil)
-
-// TestVersionServiceEditorGrantedUpdate pins the granted-editor row of the
-// matrix: a foreign admin in the editor set may update the skill draft
-// (update-only, via loadOwnedDraft).
-func TestVersionServiceEditorGrantedUpdate(t *testing.T) {
-	repo := newFakeVersionRepo()
-	_, draft := seedOwnedSkill(t, repo, "skill-1", "owner-user")
-	require.NoError(t, repo.InsertCandidate(context.Background(), draft, nil))
-	editors := newStubSkillEditorRepo()
-	editors.editors["skill-1"] = []string{"user-1"}
-
-	svc := NewVersionService(repo, zap.NewNop())
-	svc.SetTenantRoleResolver(stubTenantRole{role: "admin"})
-	svc.SetEditorRepo(editors)
-	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
-
-	_, err := svc.UpdateDraftBundle(ctx, "skill-1", draft.ContentHash, UpdateDraftBundleInput{
-		ActorID: "user-1", Name: "updated", Description: "desc", Instructions: "new instructions",
-	})
-	require.NoError(t, err)
-	require.Len(t, repo.audits, 1)
-}
 
 // TestVersionServiceDeleteSkillEditorDenied pins the delete column: editors
 // never grant delete rights — the creator passes, a granted editor is denied.
@@ -328,7 +294,7 @@ func TestVersionServiceSetEditorsPinsManagementEndpoint(t *testing.T) {
 		editors := newStubSkillEditorRepo()
 		editors.editors["skill-1"] = []string{"editor-1"}
 		svc := NewVersionService(repo, zap.NewNop())
-		svc.SetTenantRoleResolver(stubTenantRole{role: "admin"})
+		svc.SetTenantRoleResolver(stubTenantRole{role: "member"})
 		svc.SetEditorRepo(editors)
 		ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
 
@@ -371,17 +337,17 @@ func TestVersionServiceGetWorkspaceInjectsEditors(t *testing.T) {
 	require.Empty(t, view.Editors)
 }
 
-// TestSkillUpdateDraftBundleEmptyFingerprintBypassesStaleness pins the direct
-// write contract: an empty baseline (system assistant direct write) skips
-// optimistic concurrency entirely — it must not read as stale — while the
-// write is still owned and audited.
-func TestSkillUpdateDraftBundleEmptyFingerprintBypassesStaleness(t *testing.T) {
+// TestSkillSaveRevisionEmptyFingerprintBypassesStaleness pins the direct write
+// contract: an empty baseline (system assistant direct write) skips optimistic
+// concurrency entirely — it must not read as stale — while the write is still
+// owned and audited.
+func TestSkillSaveRevisionEmptyFingerprintBypassesStaleness(t *testing.T) {
 	repo := newFakeVersionRepo()
 	seedOwnedSkill(t, repo, "skill-1", "user-1")
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
-	_, err := svc.UpdateDraftBundle(context.Background(), "skill-1", "", UpdateDraftBundleInput{
+	_, err := svc.SaveRevision(context.Background(), "skill-1", "", SaveRevisionInput{
 		Name: "direct-update", Description: "desc", Instructions: "new instructions",
 		ActorID: "user-1",
 	})
@@ -402,14 +368,14 @@ func TestGetWorkspaceKeepsBuiltinSkillInstructionsForMember(t *testing.T) {
 	svcMember.SetTenantRoleResolver(stubTenantRole{role: "member"})
 	view, err := svcMember.GetWorkspace(ctx, "builtin:platform-guide", "member-1")
 	require.NoError(t, err)
-	require.Equal(t, "original instructions", view.Draft.Instructions, "member reads builtin instructions")
+	require.Equal(t, "original instructions", view.Active.Instructions, "member reads builtin instructions")
 	require.Equal(t, "desc", view.Skill.Description)
 
 	svcOwner := NewVersionService(repo, zap.NewNop())
 	svcOwner.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	view, err = svcOwner.GetWorkspace(ctx, "builtin:platform-guide", "owner-1")
 	require.NoError(t, err)
-	require.Equal(t, "original instructions", view.Draft.Instructions)
+	require.Equal(t, "original instructions", view.Active.Instructions)
 }
 
 // TestGetWorkspaceKeepsCustomSkillInstructionsForMember:自定义 skill 无跨租户
@@ -423,19 +389,18 @@ func TestGetWorkspaceKeepsCustomSkillInstructionsForMember(t *testing.T) {
 
 	view, err := svc.GetWorkspace(ctx, "skill-1", "member-1")
 	require.NoError(t, err)
-	require.Equal(t, "original instructions", view.Draft.Instructions)
+	require.Equal(t, "original instructions", view.Active.Instructions)
 }
 
-// TestVersionServiceMemberEditorGrantedUpdate pins the whitelist grant
-// (Phase 3 白名单放宽): a member in the editor set may update the draft — the
+// TestVersionServiceMemberEditorGrantedSave pins the whitelist grant
+// (Phase 3 白名单放宽): a member in the editor set may save a new revision — the
 // matrix's member row now honors editors. Outside the set the member is still
 // denied, and the editor set never grants delete rights (delete passes nil
 // editors and falls back to creator/owner only).
-func TestVersionServiceMemberEditorGrantedUpdate(t *testing.T) {
-	t.Run("member in editor set updates draft", func(t *testing.T) {
+func TestVersionServiceMemberEditorGrantedSave(t *testing.T) {
+	t.Run("member in editor set saves revision", func(t *testing.T) {
 		repo := newFakeVersionRepo()
-		_, draft := seedOwnedSkill(t, repo, "skill-1", "owner-user")
-		require.NoError(t, repo.InsertCandidate(context.Background(), draft, nil))
+		_, active := seedOwnedSkill(t, repo, "skill-1", "owner-user")
 		editors := newStubSkillEditorRepo()
 		editors.editors["skill-1"] = []string{"member-1"}
 
@@ -444,7 +409,7 @@ func TestVersionServiceMemberEditorGrantedUpdate(t *testing.T) {
 		svc.SetEditorRepo(editors)
 		ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
 
-		_, err := svc.UpdateDraftBundle(ctx, "skill-1", draft.ContentHash, UpdateDraftBundleInput{
+		_, err := svc.SaveRevision(ctx, "skill-1", active.ContentHash, SaveRevisionInput{
 			ActorID: "member-1", Name: "updated", Description: "desc", Instructions: "new instructions",
 		})
 		require.NoError(t, err)
@@ -453,8 +418,7 @@ func TestVersionServiceMemberEditorGrantedUpdate(t *testing.T) {
 
 	t.Run("member outside editor set denied", func(t *testing.T) {
 		repo := newFakeVersionRepo()
-		_, draft := seedOwnedSkill(t, repo, "skill-1", "owner-user")
-		require.NoError(t, repo.InsertCandidate(context.Background(), draft, nil))
+		seedOwnedSkill(t, repo, "skill-1", "owner-user")
 		editors := newStubSkillEditorRepo()
 		editors.editors["skill-1"] = []string{"someone-else"}
 
@@ -463,7 +427,7 @@ func TestVersionServiceMemberEditorGrantedUpdate(t *testing.T) {
 		svc.SetEditorRepo(editors)
 		ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
 
-		_, err := svc.UpdateDraftBundle(ctx, "skill-1", draft.ContentHash, UpdateDraftBundleInput{
+		_, err := svc.SaveRevision(ctx, "skill-1", "stale", SaveRevisionInput{
 			ActorID: "member-1", Name: "updated", Description: "desc", Instructions: "new instructions",
 		})
 		require.ErrorIs(t, err, domain.ErrForbidden)

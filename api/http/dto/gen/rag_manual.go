@@ -8,7 +8,7 @@ type UploadDocumentRequest struct {
 	File      *multipart.FileHeader `form:"file" binding:"required"`
 	// AllowedUserIDs/AllowedRoleIDs form the document-level access whitelist;
 	// sent as repeated multipart form fields (allowed_user_ids=a&allowed_user_ids=b).
-	// Empty => unrestricted. Ignored for platform-managed workspaces.
+	// Empty => unrestricted (inherits workspace visibility).
 	AllowedUserIDs []string `form:"allowed_user_ids"`
 	AllowedRoleIDs []string `form:"allowed_role_ids"`
 }

@@ -10,16 +10,17 @@ type CreateSkillRequest struct {
 	Editors      []string `json:"editors"`
 }
 
-type UpdateSkillDraftRequest struct {
-	Name         string `json:"name"`
-	Description  string `json:"description"`
-	Instructions string `json:"instructions"`
+type UpdateSkillRequest struct {
+	Name                string `json:"name"`
+	Description         string `json:"description"`
+	Instructions        string `json:"instructions"`
+	ExpectedContentHash string `json:"expectedContentHash,omitempty"`
 }
 
 type SkillWorkspaceResponse struct {
 	Editors []string              `json:"editors"`
 	Skill   SkillProductResponse  `json:"skill"`
-	Draft   SkillRevisionResponse `json:"draft"`
+	Active  SkillRevisionResponse `json:"active"`
 }
 
 type SkillProductResponse struct {
@@ -28,7 +29,6 @@ type SkillProductResponse struct {
 	Description      string `json:"description"`
 	Status           string `json:"status"`
 	ActiveRevisionID string `json:"activeRevisionId,omitempty"`
-	DraftRevisionID  string `json:"draftRevisionId,omitempty"`
 	IsSystem         bool   `json:"isSystem"`
 }
 
@@ -41,6 +41,18 @@ type SkillRevisionResponse struct {
 	Description   string         `json:"description"`
 	Instructions  string         `json:"instructions"`
 	PublishChecks map[string]any `json:"publishChecks,omitempty"`
+	IsCurrent     bool           `json:"isCurrent"`
+	CreatedBy     string         `json:"createdBy"`
+	CreatedAt     string         `json:"createdAt,omitempty"`
+	ContentHash   string         `json:"contentHash,omitempty"`
+}
+
+type SkillRevisionsResponse struct {
+	Revisions []SkillRevisionResponse `json:"revisions"`
+}
+
+type RollbackSkillRequest struct {
+	RevisionID string `json:"revisionId" binding:"required"`
 }
 
 type ErrorResponse struct {

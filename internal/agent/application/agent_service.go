@@ -1285,7 +1285,10 @@ func (s *AgentService) prepareAgentExecution(
 		}
 		options = append(options, resumeOpts...)
 	}
-	options = append(options, WithExecutionID(executionID))
+	// 用户消息即时持久化:首跑(meta.ExecutionID 为空)在 Execute 开头落库;
+	// 续跑/重连(meta.ExecutionID 非空,如审批批准自动续跑、断线恢复)跳过,
+	// 避免同一 query 在恢复执行时重复入库。
+	options = append(options, WithExecutionID(executionID), WithSkipUserMessageSave(meta.ExecutionID != ""))
 	cfg = &ExecutionConfig{}
 	cfg.ApplyOptions(options)
 	return a, req, meta, streamCtx, options, cfg, resuming, terminal, consumed, nil
@@ -2543,10 +2546,7 @@ func applyFactCheckOption(options []ExecutionOption, settings *factcheck.Setting
 // appendRAGSearchOptions wires the plain and (when supported) evidence-capable
 // knowledge search variants. Both share the revision/mutable split: revision
 // snapshots contribute content only, mutable workspaces fan out through the
-// live search provider. platformWorkspaces (runtime-sanitized platform-managed
-// workspace names) are intersected out of mutable as a last-resort guard so a
-// platform workspace can never reach the live search provider even if some
-// path bypassed the assembly-time sanitize.
+// live search provider.
 func appendRAGSearchOptions(
 	options []ExecutionOption,
 	tenantID string,

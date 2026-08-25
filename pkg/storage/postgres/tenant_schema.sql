@@ -911,7 +911,8 @@ CREATE TABLE IF NOT EXISTS agent_tool_approvals (
     policy_version    TEXT        NOT NULL DEFAULT '',
     encrypted_payload TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'executing', 'executed', 'unknown_outcome')),
+        CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'executing', 'executed',
+                          'unknown_outcome', 'cancelled', 'voided', 'invalidated')),
     decided_by        TEXT        NOT NULL DEFAULT '',
     decision_reason   TEXT        NOT NULL DEFAULT '',
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -928,7 +929,8 @@ ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS knowledge_revisions_di
 ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS policy_version TEXT NOT NULL DEFAULT '';
 ALTER TABLE agent_tool_approvals DROP CONSTRAINT IF EXISTS agent_tool_approvals_status_check;
 ALTER TABLE agent_tool_approvals ADD CONSTRAINT agent_tool_approvals_status_check
-    CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'executing', 'executed', 'unknown_outcome'));
+    CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'executing', 'executed',
+                      'unknown_outcome', 'cancelled', 'voided', 'invalidated'));
 CREATE INDEX IF NOT EXISTS idx_agent_tool_approvals_pending
 ON agent_tool_approvals (status, expires_at, created_at);
 -- D3/D8/D9: subject 泛化、指定审批人、失效终态、会话级联（历史租户升级走 IF NOT EXISTS）
@@ -1735,19 +1737,15 @@ WHERE NOT EXISTS (
     WHERE agent_id = 'stratum-platform-assistant' AND skill_id = 'builtin:tool-execution'
 );
 
--- Built-in knowledge workspace: platform documentation.
--- ON CONFLICT … DO UPDATE backfills system_key / management_mode for legacy tenants
--- whose rag_workspaces row already exists but lacks the platform markers.
-INSERT INTO rag_workspaces (id, name, description, config, system_key, management_mode, created_at, updated_at)
+-- Built-in knowledge workspace: platform documentation. 内置知识库不再带
+-- platform-managed 标记(system_key/management_mode 列保留但 seed 不再写入),
+-- 与普通 workspace 走同一权限/控制体系。
+INSERT INTO rag_workspaces (id, name, description, config, created_at, updated_at)
 VALUES ('a0a0a0a0-0000-0000-0000-000000000001', 'stratum_docs',
         'Stratum 平台官方文档知识库',
         '{"embedding_model":"text-embedding-v3","chunk_size":512,"chunk_overlap":64,"query_mode":"hybrid","top_k":5,"chunking_strategy":"structure_recursive"}'::jsonb,
-        'stratum.knowledge_docs', 'platform_managed',
         NOW(), NOW())
-ON CONFLICT (id) DO UPDATE SET
-    system_key = EXCLUDED.system_key,
-    management_mode = EXCLUDED.management_mode
-WHERE rag_workspaces.system_key IS NULL;
+ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO agent_workspaces (agent_id, workspace_id)
 VALUES ('stratum-platform-assistant', 'a0a0a0a0-0000-0000-0000-000000000001')

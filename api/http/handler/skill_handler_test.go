@@ -16,40 +16,54 @@ import (
 	"go.uber.org/zap"
 )
 
+// fakeSkillRevisionService 记录 create/save/rollback 入参；create 与 save 都返回
+// 已发布的 active 版本（保存即生效，无 draft）。
 type fakeSkillRevisionService struct {
-	created skillapp.CreateSkillDraftInput
-	draft   skillapp.UpdateDraftBundleInput
+	created    skillapp.CreateSkillInput
+	saved      skillapp.SaveRevisionInput
+	gotHash    string
+	rolledBack []string
 }
 
-func (f *fakeSkillRevisionService) CreateSkillDraft(_ context.Context, input skillapp.CreateSkillDraftInput) (skillapp.SkillWorkspaceView, error) {
+func (f *fakeSkillRevisionService) CreateSkill(_ context.Context, input skillapp.CreateSkillInput) (skillapp.SkillWorkspaceView, error) {
 	f.created = input
 	return skillapp.SkillWorkspaceView{
-		Skill: skillapp.SkillProduct{ID: "skill-1", Name: input.Name, Description: input.Description, Status: "draft", DraftRevisionID: "revision-1"},
-		Draft: domain.SkillRevision{
-			ID: "revision-1", SkillID: "skill-1", Status: domain.VersionStatusDraft,
+		Skill: skillapp.SkillProduct{ID: "skill-1", Name: input.Name, Description: input.Description,
+			Status: "published", ActiveRevisionID: "revision-1"},
+		Active: domain.SkillRevision{
+			ID: "revision-1", SkillID: "skill-1", RevisionNo: 1, Status: domain.VersionStatusPublished,
 			Name: input.Name, Description: input.Description, Instructions: input.Instructions,
 		},
 	}, nil
 }
 func (f *fakeSkillRevisionService) GetWorkspace(ctx context.Context, _, _ string) (skillapp.SkillWorkspaceView, error) {
-	return f.CreateSkillDraft(ctx, skillapp.CreateSkillDraftInput{Name: "complaint", Description: "分类", Instructions: "分类投诉"})
+	return f.CreateSkill(ctx, skillapp.CreateSkillInput{Name: "complaint", Description: "分类", Instructions: "分类投诉"})
 }
 func (f *fakeSkillRevisionService) ListSkills(context.Context) ([]skillapp.SkillProduct, error) {
-	return []skillapp.SkillProduct{{ID: "skill-1", Name: "complaint", Status: "draft"}}, nil
+	return []skillapp.SkillProduct{{ID: "skill-1", Name: "complaint", Status: "published"}}, nil
 }
 func (f *fakeSkillRevisionService) DeleteSkill(context.Context, string, string) error { return nil }
-func (f *fakeSkillRevisionService) UpdateDraftBundle(_ context.Context, _ string, _ string, input skillapp.UpdateDraftBundleInput) (skillapp.SkillWorkspaceView, error) {
-	f.draft = input
+func (f *fakeSkillRevisionService) SaveRevision(_ context.Context, _, hash string, input skillapp.SaveRevisionInput) (skillapp.SkillWorkspaceView, error) {
+	f.saved = input
+	f.gotHash = hash
 	return skillapp.SkillWorkspaceView{
-		Skill: skillapp.SkillProduct{ID: "skill-1", Name: input.Name, Description: input.Description, Status: "draft", DraftRevisionID: "revision-1"},
-		Draft: domain.SkillRevision{
-			ID: "revision-1", SkillID: "skill-1", Status: domain.VersionStatusDraft,
+		Skill: skillapp.SkillProduct{ID: "skill-1", Name: input.Name, Description: input.Description,
+			Status: "published", ActiveRevisionID: "revision-2"},
+		Active: domain.SkillRevision{
+			ID: "revision-2", SkillID: "skill-1", RevisionNo: 2, Status: domain.VersionStatusPublished,
 			Name: input.Name, Description: input.Description, Instructions: input.Instructions,
 		},
 	}, nil
 }
-func (f *fakeSkillRevisionService) PublishDraft(context.Context, string, string) (skillapp.SkillRevision, error) {
-	return skillapp.SkillRevision{ID: "revision-1", RevisionNo: 1, Status: domain.VersionStatusPublished}, nil
+func (f *fakeSkillRevisionService) ListRevisions(context.Context, string) ([]skillapp.SkillRevision, error) {
+	return []skillapp.SkillRevision{
+		{ID: "revision-2", SkillID: "skill-1", RevisionNo: 2, Status: domain.VersionStatusPublished, IsCurrent: true},
+		{ID: "revision-1", SkillID: "skill-1", RevisionNo: 1, Status: domain.VersionStatusDeprecated},
+	}, nil
+}
+func (f *fakeSkillRevisionService) RollbackRevision(_ context.Context, _, revisionID, _ string) error {
+	f.rolledBack = append(f.rolledBack, revisionID)
+	return nil
 }
 func (f *fakeSkillRevisionService) SetEditors(context.Context, string, string, []string) error {
 	return nil
@@ -66,6 +80,8 @@ func newSkillTestRouter(method, path string, handler gin.HandlerFunc) *gin.Engin
 		c.Next()
 	})
 	switch method {
+	case http.MethodGet:
+		router.GET(path, handler)
 	case http.MethodPost:
 		router.POST(path, handler)
 	case http.MethodPut:
@@ -122,21 +138,61 @@ func TestSkillHandlerSetEditors(t *testing.T) {
 	}
 }
 
-func TestSkillHandlerUpdateDraft(t *testing.T) {
+func TestSkillHandlerUpdateSkill(t *testing.T) {
 	service := &fakeSkillRevisionService{}
 	handler := NewSkillHandler(service, zap.NewNop())
-	router := newSkillTestRouter(http.MethodPatch, "/skills/:id/draft", handler.UpdateDraft)
-	body, _ := json.Marshal(gen.UpdateSkillDraftRequest{
+	router := newSkillTestRouter(http.MethodPatch, "/skills/:id", handler.UpdateSkill)
+	body, _ := json.Marshal(gen.UpdateSkillRequest{
 		Name: "投诉分类", Description: "分类用户投诉", Instructions: "新方法",
+		ExpectedContentHash: "h-1",
 	})
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPatch, "/skills/skill-1/draft", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPatch, "/skills/skill-1", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
 	}
-	if service.draft.Instructions != "新方法" || service.draft.Description != "分类用户投诉" {
-		t.Fatalf("draft bundle not forwarded: %#v", service.draft)
+	if service.saved.Instructions != "新方法" || service.saved.Description != "分类用户投诉" {
+		t.Fatalf("save input not forwarded: %#v", service.saved)
+	}
+	if service.gotHash != "h-1" {
+		t.Fatalf("expectedContentHash not forwarded: %q", service.gotHash)
+	}
+}
+
+func TestSkillHandlerListRevisions(t *testing.T) {
+	service := &fakeSkillRevisionService{}
+	handler := NewSkillHandler(service, zap.NewNop())
+	router := newSkillTestRouter(http.MethodGet, "/skills/:id/revisions", handler.ListSkillRevisions)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/skills/skill-1/revisions", nil)
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp gen.SkillRevisionsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode revisions: %v", err)
+	}
+	if len(resp.Revisions) != 2 || resp.Revisions[0].ID != "revision-2" || !resp.Revisions[0].IsCurrent {
+		t.Fatalf("unexpected revisions: %+v", resp.Revisions)
+	}
+}
+
+func TestSkillHandlerRollbackSkill(t *testing.T) {
+	service := &fakeSkillRevisionService{}
+	handler := NewSkillHandler(service, zap.NewNop())
+	router := newSkillTestRouter(http.MethodPost, "/skills/:id/rollback", handler.RollbackSkill)
+	body := bytes.NewBufferString(`{"revisionId":"revision-1"}`)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/skills/skill-1/rollback", body)
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if len(service.rolledBack) != 1 || service.rolledBack[0] != "revision-1" {
+		t.Fatalf("rollback target not forwarded: %v", service.rolledBack)
 	}
 }

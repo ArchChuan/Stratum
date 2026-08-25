@@ -1,7 +1,7 @@
 package handler
 
 // SetDocumentAccess handler tests (P0.6 access 接口):missing tenant/user fail
-// closed,bind 错误 400,workspace 错误 404,权限拒绝 403,平台托管 409,成功回显白名单。
+// closed,bind 错误 400,workspace 错误 404,权限拒绝 403,成功回显白名单。
 
 import (
 	"bytes"
@@ -18,7 +18,6 @@ import (
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	knowledgedomain "github.com/byteBuilderX/stratum/internal/knowledge/domain"
-	"github.com/byteBuilderX/stratum/pkg/platformknowledge"
 )
 
 // accessHandlerWorkspaceRepo 返回固定 workspace;err 非空时 GetByName/GetByID
@@ -190,14 +189,6 @@ func TestSetDocumentAccess_ErrorMapping(t *testing.T) {
 			ws:       nil,
 			wsErr:    knowledgedomain.ErrWorkspaceNotFound,
 			wantCode: http.StatusNotFound,
-		},
-		{
-			name: "platform-managed workspace maps to 409",
-			ws: &knowledgedomain.Workspace{
-				ID: "ws-sys", Name: "docs",
-				ManagementMode: platformknowledge.ManagementPlatform,
-			},
-			wantCode: http.StatusConflict,
 		},
 		{
 			name:     "non-owner member maps to 403",

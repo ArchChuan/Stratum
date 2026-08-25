@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type VersionStatus string
@@ -36,6 +37,13 @@ type SkillRevision struct {
 	PublishChecks      map[string]any
 	// CreatedBy traces who authored this revision (draft author, not ownership).
 	CreatedBy string
+	// CreatedAt is when the revision row was created (version history display).
+	CreatedAt time.Time
+	// PublishedAt is set for published revisions (nil for candidate/deprecated).
+	PublishedAt *time.Time
+	// IsCurrent marks the revision the skill's active_revision_id points to.
+	// Only populated by ListRevisions; single-revision loads leave it false.
+	IsCurrent bool
 }
 
 func (v SkillRevision) ComputeContentHash() (string, error) {

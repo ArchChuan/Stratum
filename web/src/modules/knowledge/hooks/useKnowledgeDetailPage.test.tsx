@@ -36,7 +36,6 @@ const deferred = <T,>() => {
 };
 const stats = {
   description: '知识库',
-  is_platform_managed: false,
   config: { embedding_model: 'text-embedding-v1', chunking_strategy: 'fixed', top_k: 5 },
 };
 const wrapper = ({ children }: PropsWithChildren) => <StrictMode>{children}</StrictMode>;

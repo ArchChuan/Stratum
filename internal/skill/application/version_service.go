@@ -18,7 +18,7 @@ import (
 type SkillProduct = port.SkillProductRow
 type SkillRevision = domain.SkillRevision
 
-type CreateSkillDraftInput struct {
+type CreateSkillInput struct {
 	Name         string
 	Description  string
 	Instructions string
@@ -30,12 +30,14 @@ type CreateSkillDraftInput struct {
 }
 
 type SkillWorkspaceView struct {
-	Skill   SkillProduct
-	Draft   domain.SkillRevision
+	Skill SkillProduct
+	// Active is the currently effective revision; empty when a legacy
+	// unpublished skill (no active_revision_id) is still to produce its first version.
+	Active  domain.SkillRevision
 	Editors []string
 }
 
-type UpdateDraftBundleInput struct {
+type SaveRevisionInput struct {
 	Name         string
 	Description  string
 	Instructions string
@@ -75,85 +77,54 @@ func (s *VersionService) SetFailureAuditRecorder(r auditport.FailureAuditRecorde
 	s.failureAudit = r
 }
 
-func (s *VersionService) CreateSkillDraft(ctx context.Context, in CreateSkillDraftInput) (SkillWorkspaceView, error) {
+func (s *VersionService) CreateSkill(ctx context.Context, in CreateSkillInput) (SkillWorkspaceView, error) {
 	// create encodes "the creator owns the resource": only owner/admin may create.
-	if err := s.checkOwnership(ctx, in.ActorID, in.ActorID, nil); err != nil {
+	if err := s.checkOwnership(ctx, in.ActorID, in.ActorID, nil, OpEdit); err != nil {
 		return SkillWorkspaceView{}, err
 	}
 	skillID := uuid.Must(uuid.NewV7()).String()
-	draftID := uuid.Must(uuid.NewV7()).String()
-	draft := domain.SkillRevision{
-		ID:                 draftID,
+	revisionID := uuid.Must(uuid.NewV7()).String()
+	revision := domain.SkillRevision{
+		ID:                 revisionID,
 		SkillID:            skillID,
-		Status:             domain.VersionStatusDraft,
+		RevisionNo:         1,
+		Status:             domain.VersionStatusPublished,
 		Source:             "manual",
 		GenerationMetadata: map[string]any{},
 		Name:               strings.TrimSpace(in.Name),
 		Description:        strings.TrimSpace(in.Description),
 		Instructions:       strings.TrimSpace(in.Instructions),
+		CreatedBy:          in.ActorID,
 	}
-	contentHash, err := draft.ComputeContentHash()
+	contentHash, err := revision.ComputeContentHash()
 	if err != nil {
 		return SkillWorkspaceView{}, err
 	}
-	draft.ContentHash = contentHash
+	revision.ContentHash = contentHash
 	skill := port.SkillProductRow{
-		ID:              skillID,
-		Name:            strings.TrimSpace(in.Name),
-		Description:     strings.TrimSpace(in.Description),
-		Status:          "draft",
-		DraftRevisionID: draftID,
-		CreatedBy:       in.ActorID,
+		ID:               skillID,
+		Name:             strings.TrimSpace(in.Name),
+		Description:      strings.TrimSpace(in.Description),
+		Status:           string(domain.VersionStatusPublished),
+		ActiveRevisionID: revisionID,
+		CreatedBy:        in.ActorID,
 	}
 	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindSkill, skillID, auditdomain.ChangeOpCreate,
-		in.ActorID, nil, skillSafeProjection(skill, &draft))
+		in.ActorID, nil, skillSafeProjection(skill, &revision))
 	if err != nil {
 		return SkillWorkspaceView{}, err
 	}
-	if err := s.repo.InsertSkillWithDraft(ctx, skill, draft, audit, in.Editors); err != nil {
+	if err := s.repo.InsertSkill(ctx, skill, revision, audit, in.Editors); err != nil {
 		s.recordFailure(ctx, skillID, "create", err)
 		return SkillWorkspaceView{}, err
 	}
-	s.logger.Info("skill draft created", zap.String("skill_id", skillID), zap.String("draft_revision_id", draftID))
+	s.logger.Info("skill created", zap.String("skill_id", skillID), zap.String("revision_id", revisionID))
 	// Editors must be non-nil: JSON renders a nil slice as null, and the
 	// frontend schema default only covers a missing field, not null.
-	return SkillWorkspaceView{Skill: skill, Draft: draft, Editors: []string{}}, nil
+	return SkillWorkspaceView{Skill: skill, Active: revision, Editors: []string{}}, nil
 }
 
-func (s *VersionService) PublishDraft(ctx context.Context, skillID, actorID string) (domain.SkillRevision, error) {
-	skill, draft, err := s.loadPublishDraft(ctx, skillID)
-	if err != nil {
-		return domain.SkillRevision{}, err
-	}
-	// Publish is an update-style mutation: creator/owner pass the base
-	// matrix, a foreign admin may publish when granted as editor (re-checked
-	// inside the write transaction via editorActor).
-	editorActor, err := s.resolveUpdateActor(ctx, skillID, actorID, skill.CreatedBy)
-	if err != nil {
-		return domain.SkillRevision{}, err
-	}
-	next, err := s.repo.NextRevisionNo(ctx, skillID)
-	if err != nil {
-		return domain.SkillRevision{}, err
-	}
-	checks := map[string]any{"instructions_set": strings.TrimSpace(draft.Instructions) != ""}
-	afterDraft := draft
-	afterDraft.Status = domain.VersionStatusPublished
-	afterDraft.RevisionNo = next
-	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindSkill, skillID, auditdomain.ChangeOpUpdate, actorID,
-		skillSafeProjection(skill, &draft), skillSafeProjection(skill, &afterDraft))
-	if err != nil {
-		return domain.SkillRevision{}, err
-	}
-	published, err := s.repo.PublishDraft(ctx, skillID, draft.ID, next, checks, audit, editorActor)
-	if err != nil {
-		s.recordFailure(ctx, skillID, "publish", err)
-		return domain.SkillRevision{}, err
-	}
-	return published, nil
-}
-
-// recordFailure 旁路记录一次失败的 skill 创建/发布（best-effort）。
+// recordFailure 旁路记录一次失败的 skill 创建/保存/回滚（best-effort）。
 // 记录失败仅 WARN，不改变主流程错误。
 func (s *VersionService) recordFailure(ctx context.Context, skillID, op string, err error) {
 	if s.failureAudit == nil {
@@ -172,29 +143,6 @@ func (s *VersionService) recordFailure(ctx context.Context, skillID, op string, 
 	}
 }
 
-// loadPublishDraft loads the skill and its draft revision, enforcing
-// existence and publishability.
-func (s *VersionService) loadPublishDraft(ctx context.Context, skillID string) (port.SkillProductRow, domain.SkillRevision, error) {
-	skill, ok, err := s.repo.GetSkill(ctx, skillID)
-	if err != nil {
-		return port.SkillProductRow{}, domain.SkillRevision{}, err
-	}
-	if !ok {
-		return port.SkillProductRow{}, domain.SkillRevision{}, domain.ErrSkillNotFound
-	}
-	draft, ok, err := s.repo.GetDraftRevision(ctx, skillID)
-	if err != nil {
-		return port.SkillProductRow{}, domain.SkillRevision{}, err
-	}
-	if !ok {
-		return port.SkillProductRow{}, domain.SkillRevision{}, domain.ErrSkillDraftNotFound
-	}
-	if err := draft.ValidatePublishable(); err != nil {
-		return port.SkillProductRow{}, domain.SkillRevision{}, err
-	}
-	return skill, draft, nil
-}
-
 func (s *VersionService) GetWorkspace(ctx context.Context, skillID, actorID string) (SkillWorkspaceView, error) {
 	skill, ok, err := s.repo.GetSkill(ctx, skillID)
 	if err != nil {
@@ -210,32 +158,17 @@ func (s *VersionService) GetWorkspace(ctx context.Context, skillID, actorID stri
 			return SkillWorkspaceView{}, fmt.Errorf("skill service get workspace: list editors: %w", err)
 		}
 	}
-	view, err := s.loadWorkspaceRevision(ctx, skillID)
-	if err != nil {
-		return SkillWorkspaceView{}, err
-	}
-	view.Skill = skill
-	view.Editors = editors
-	return view, nil
-}
-
-// loadWorkspaceRevision loads the active-or-draft revision for a skill.
-func (s *VersionService) loadWorkspaceRevision(ctx context.Context, skillID string) (SkillWorkspaceView, error) {
-	draft, ok, err := s.repo.GetDraftRevision(ctx, skillID)
-	if err != nil {
-		return SkillWorkspaceView{}, err
-	}
-	if ok {
-		return SkillWorkspaceView{Draft: draft}, nil
-	}
+	view := SkillWorkspaceView{Skill: skill, Editors: editors}
+	// 存量未发布 skill(无 active_revision_id)兜底返回空 Active,前端可编辑,
+	// 首次保存生成第一版。
 	active, ok, err := s.repo.GetActiveRevision(ctx, skillID)
 	if err != nil {
 		return SkillWorkspaceView{}, err
 	}
-	if !ok {
-		return SkillWorkspaceView{}, domain.ErrSkillNotFound
+	if ok {
+		view.Active = active
 	}
-	return SkillWorkspaceView{Draft: active}, nil
+	return view, nil
 }
 
 func (s *VersionService) ListSkills(ctx context.Context) ([]SkillProduct, error) {
@@ -251,30 +184,30 @@ func (s *VersionService) DeleteSkill(ctx context.Context, skillID, actorID strin
 		return domain.ErrSkillNotFound
 	}
 	// Delete stays creator/owner-only: editors do not grant delete rights.
-	if err := s.checkOwnership(ctx, actorID, skill.CreatedBy, nil); err != nil {
+	if err := s.checkOwnership(ctx, actorID, skill.CreatedBy, nil, OpDelete); err != nil {
 		return err
 	}
-	// The draft may already be gone (published skills have no draft); the
-	// before projection then carries the product row only.
-	var draft *domain.SkillRevision
-	if d, found, getErr := s.repo.GetDraftRevision(ctx, skillID); getErr != nil {
-		return getErr
-	} else if found {
-		draft = &d
+	active, ok, err := s.repo.GetActiveRevision(ctx, skillID)
+	if err != nil {
+		return err
+	}
+	var activePtr *domain.SkillRevision
+	if ok {
+		activePtr = &active
 	}
 	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindSkill, skillID, auditdomain.ChangeOpDelete, actorID,
-		skillSafeProjection(skill, draft), nil)
+		skillSafeProjection(skill, activePtr), nil)
 	if err != nil {
 		return err
 	}
 	return s.repo.DeleteSkill(ctx, skillID, audit)
 }
 
-// SetEditors replaces the granted editor set of a skill resource. Only the
-// creator or an owner may manage editors (an editor cannot delegate their own
-// right); each editor must hold role admin/owner at write time, enforced
-// inside the repository transaction (fail closed). The change is audited in
-// the same transaction with before/after projections.
+// SetEditors replaces the granted editor set of a skill resource. Tenant
+// owner/admin manage the whitelist by default (OpAccess — 申请通道审批入口);
+// members can never grant editors. Each editor must hold role admin/owner at
+// write time, enforced inside the repository transaction (fail closed). The
+// change is audited in the same transaction with before/after projections.
 func (s *VersionService) SetEditors(ctx context.Context, skillID, actorID string, editorIDs []string) error {
 	if s.editorRepo == nil {
 		return fmt.Errorf("skill service set editors: editor repo not wired")
@@ -286,9 +219,7 @@ func (s *VersionService) SetEditors(ctx context.Context, skillID, actorID string
 	if !ok {
 		return domain.ErrSkillNotFound
 	}
-	// Editors can never grant delete rights, so SetEditors reuses the
-	// creator/owner-only base matrix.
-	if err := s.checkOwnership(ctx, actorID, skill.CreatedBy, nil); err != nil {
+	if err := s.checkOwnership(ctx, actorID, skill.CreatedBy, nil, OpAccess); err != nil {
 		return err
 	}
 	tenantID := reqctx.TenantIDFromContext(ctx)
@@ -308,17 +239,19 @@ func (s *VersionService) SetEditors(ctx context.Context, skillID, actorID string
 }
 
 // buildSkillEditorAudit renders before/after projections for the editors
-// management endpoint. The draft may be gone for published skills; the
-// projection then carries the product row only.
+// management endpoint. The projection carries the active revision (or the
+// product row only when none exists).
 func buildSkillEditorAudit(ctx context.Context, repo port.VersionRepo, skill port.SkillProductRow, skillID, actorID string, before, after []string) (*auditdomain.ResourceChangeAuditEvent, error) {
-	var draft *domain.SkillRevision
-	if d, found, err := repo.GetDraftRevision(ctx, skillID); err != nil {
+	active, ok, err := repo.GetActiveRevision(ctx, skillID)
+	if err != nil {
 		return nil, err
-	} else if found {
-		draft = &d
+	}
+	var activePtr *domain.SkillRevision
+	if ok {
+		activePtr = &active
 	}
 	return newChangeAudit(ctx, auditdomain.ResourceKindSkill, skillID, auditdomain.ChangeOpUpdate, actorID,
-		skillSafeProjectionWithEditors(skill, draft, before), skillSafeProjectionWithEditors(skill, draft, after))
+		skillSafeProjectionWithEditors(skill, activePtr, before), skillSafeProjectionWithEditors(skill, activePtr, after))
 }
 
 func (s *VersionService) GetVersion(ctx context.Context, skillID, revisionID string) (domain.SkillRevision, error) {
@@ -464,12 +397,13 @@ func cloneMap(input map[string]any) map[string]any {
 	return output
 }
 
-// loadOwnedDraft loads the skill row and its draft, enforcing ownership before
-// any mutation. The draft always exists for the update methods using this
-// helper. The returned editorActor is non-empty only when the actor writes via
-// the editor whitelist row of the matrix and must be re-validated inside the
+// loadOwnedActive loads the skill row and its active revision, enforcing
+// ownership before any mutation. A skill without an active revision (legacy
+// unpublished row) yields a nil active: the first save then produces version 1.
+// The returned editorActor is non-empty only when the actor writes via the
+// editor whitelist row of the matrix and must be re-validated inside the
 // repository write transaction.
-func (s *VersionService) loadOwnedDraft(ctx context.Context, skillID, actorID string) (port.SkillProductRow, *domain.SkillRevision, string, error) {
+func (s *VersionService) loadOwnedActive(ctx context.Context, skillID, actorID string) (port.SkillProductRow, *domain.SkillRevision, string, error) {
 	skill, ok, err := s.repo.GetSkill(ctx, skillID)
 	if err != nil {
 		return port.SkillProductRow{}, nil, "", err
@@ -481,24 +415,24 @@ func (s *VersionService) loadOwnedDraft(ctx context.Context, skillID, actorID st
 	if err != nil {
 		return port.SkillProductRow{}, nil, "", err
 	}
-	draft, ok, err := s.repo.GetDraftRevision(ctx, skillID)
+	active, ok, err := s.repo.GetActiveRevision(ctx, skillID)
 	if err != nil {
 		return port.SkillProductRow{}, nil, "", err
 	}
 	if !ok {
-		return port.SkillProductRow{}, nil, "", domain.ErrSkillNotFound
+		return skill, nil, editorActor, nil
 	}
-	return skill, &draft, editorActor, nil
+	return skill, &active, editorActor, nil
 }
 
 // resolveUpdateActor applies the ownership matrix for update-style writes.
-// creator/owner pass the base matrix (empty editorActor); a foreign admin may
-// write when granted as editor — the set is resolved and re-checked, and the
+// owner and admin pass the base matrix (empty editorActor); a member writes
+// only when granted as editor — the set is resolved and re-checked, and the
 // returned editorActor is re-validated inside the write transaction to close
 // the check-then-write TOCTOU window. A nil editor repo denies the
 // editor-granted row entirely (fail closed).
 func (s *VersionService) resolveUpdateActor(ctx context.Context, skillID, actorID, createdBy string) (string, error) {
-	if err := s.checkOwnership(ctx, actorID, createdBy, nil); err == nil {
+	if err := s.checkOwnership(ctx, actorID, createdBy, nil, OpEdit); err == nil {
 		return "", nil
 	}
 	if s.editorRepo == nil {
@@ -509,54 +443,168 @@ func (s *VersionService) resolveUpdateActor(ctx context.Context, skillID, actorI
 	if err != nil {
 		return "", fmt.Errorf("skill service list editors: %w", err)
 	}
-	if err := s.checkOwnership(ctx, actorID, createdBy, editors); err != nil {
+	if err := s.checkOwnership(ctx, actorID, createdBy, editors, OpEdit); err != nil {
 		return "", err
 	}
 	return actorID, nil
 }
 
-func (s *VersionService) UpdateDraftBundle(
+// SaveRevision persists a new published revision derived from the current
+// active revision and repoints the skill's active_revision_id — the saved
+// content is immediately effective (保存即生效, no publish step). The edit
+// surface is name/description/instructions. expectedContentHash guards
+// concurrent edits (stale → ErrSkillDraftStale). A legacy unpublished skill
+// (nil active) produces its first revision on save.
+func (s *VersionService) SaveRevision(
 	ctx context.Context,
 	skillID, expectedContentHash string,
-	in UpdateDraftBundleInput,
+	in SaveRevisionInput,
 ) (SkillWorkspaceView, error) {
-	skill, draft, editorActor, err := s.loadOwnedDraft(ctx, skillID, in.ActorID)
+	skill, active, editorActor, err := s.loadOwnedActive(ctx, skillID, in.ActorID)
 	if err != nil {
 		return SkillWorkspaceView{}, err
 	}
-	// 空 baseline(直写)跳过乐观并发校验,与 API 直连一致;proposal 路径始终携带 draft hash。
-	if expectedContentHash != "" && draft.ContentHash != expectedContentHash {
+	if !contentHashMatches(expectedContentHash, active) {
 		return SkillWorkspaceView{}, domain.ErrSkillDraftStale
 	}
-	before := skillSafeProjection(skill, draft)
-	if err := applyDraftBundle(&skill, draft, in); err != nil {
+	// before 投影在派生新版本前定格当前生效内容。
+	var beforeRev *domain.SkillRevision
+	if active != nil {
+		rev := *active
+		beforeRev = &rev
+	}
+	// before 投影读取 skill 行 + 旧 active,必须在 mutate skill 前定格,否则会投影到新值。
+	before := skillSafeProjection(skill, beforeRev)
+	name := strings.TrimSpace(in.Name)
+	description := strings.TrimSpace(in.Description)
+	next, err := s.repo.NextRevisionNo(ctx, skillID)
+	if err != nil {
 		return SkillWorkspaceView{}, err
 	}
+	newRevision, err := buildNextRevision(skillID, next, active, in)
+	if err != nil {
+		return SkillWorkspaceView{}, err
+	}
+	skill.Name = name
+	skill.Description = description
 	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindSkill, skillID, auditdomain.ChangeOpUpdate, in.ActorID,
-		before, skillSafeProjection(skill, draft))
+		before, skillSafeProjection(skill, &newRevision))
 	if err != nil {
 		return SkillWorkspaceView{}, err
 	}
-	updated, err := s.repo.UpdateDraftBundle(ctx, skillID, expectedContentHash, skill, *draft, audit, editorActor)
+	saved, err := s.repo.SaveRevision(ctx, skillID, expectedContentHash, skill, newRevision, audit, editorActor)
 	if err != nil {
+		s.recordFailure(ctx, skillID, "update", err)
 		return SkillWorkspaceView{}, err
 	}
-	skill.DraftRevisionID = updated.ID
-	return SkillWorkspaceView{Skill: skill, Draft: updated}, nil
+	skill.ActiveRevisionID = saved.ID
+	return SkillWorkspaceView{Skill: skill, Active: saved, Editors: []string{}}, nil
 }
 
-// applyDraftBundle mutates skill+draft from the bundle input and recomputes
-// the content hash; the hash failure aborts the write.
-func applyDraftBundle(skill *port.SkillProductRow, draft *domain.SkillRevision, in UpdateDraftBundleInput) error {
-	draft.Name = strings.TrimSpace(in.Name)
-	draft.Description = strings.TrimSpace(in.Description)
-	draft.Instructions = strings.TrimSpace(in.Instructions)
-	contentHash, err := draft.ComputeContentHash()
+// contentHashMatches reports whether the caller's expectedContentHash still
+// matches the current active revision. An empty baseline accepts any state
+// (legacy callers); a non-empty baseline must equal the active content hash,
+// else the edit is stale.
+func contentHashMatches(expected string, active *domain.SkillRevision) bool {
+	return expected == "" || (active != nil && active.ContentHash == expected)
+}
+
+// buildNextRevision derives a new published revision from the current active
+// one: revision_no is assigned by the caller, parent points at the old active
+// when present, and the content hash is recomputed from the trimmed fields.
+func buildNextRevision(skillID string, next int, active *domain.SkillRevision, in SaveRevisionInput) (domain.SkillRevision, error) {
+	rev := domain.SkillRevision{
+		ID:                 uuid.Must(uuid.NewV7()).String(),
+		SkillID:            skillID,
+		Status:             domain.VersionStatusPublished,
+		Source:             "manual",
+		RevisionNo:         next,
+		GenerationMetadata: map[string]any{},
+		Name:               strings.TrimSpace(in.Name),
+		Description:        strings.TrimSpace(in.Description),
+		Instructions:       strings.TrimSpace(in.Instructions),
+		CreatedBy:          in.ActorID,
+	}
+	if active != nil {
+		rev.ParentRevisionID = active.ID
+		rev.GenerationMetadata = cloneMap(active.GenerationMetadata)
+	}
+	hash, err := rev.ComputeContentHash()
+	if err != nil {
+		return domain.SkillRevision{}, err
+	}
+	rev.ContentHash = hash
+	return rev, nil
+}
+
+// ListRevisions returns the skill's version history, newest first, marking
+// the currently effective version.
+func (s *VersionService) ListRevisions(ctx context.Context, skillID string) ([]domain.SkillRevision, error) {
+	revisions, ok, err := s.repo.ListRevisions(ctx, skillID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, domain.ErrSkillNotFound
+	}
+	return revisions, nil
+}
+
+// RollbackRevision repoints the skill's active_revision_id to a historical
+// published revision (deprecated → published), immediately effective without
+// creating a new version. Owner/admin pass the base matrix; a member rolls
+// back only when granted as editor (re-validated inside the write transaction).
+func (s *VersionService) RollbackRevision(ctx context.Context, skillID, targetRevisionID, actorID string) error {
+	skill, active, target, err := s.loadRollbackTargets(ctx, skillID, targetRevisionID)
 	if err != nil {
 		return err
 	}
-	draft.ContentHash = contentHash
-	skill.Name = strings.TrimSpace(in.Name)
-	skill.Description = strings.TrimSpace(in.Description)
+	editorActor, err := s.resolveUpdateActor(ctx, skillID, actorID, skill.CreatedBy)
+	if err != nil {
+		return err
+	}
+	after := target
+	after.Status = domain.VersionStatusPublished
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindSkill, skillID, auditdomain.ChangeOpRollback, actorID,
+		skillSafeProjection(skill, &active), skillSafeProjection(skill, &after))
+	if err != nil {
+		return err
+	}
+	if err := s.repo.RollbackRevision(ctx, skillID, targetRevisionID, editorActor, audit); err != nil {
+		s.recordFailure(ctx, skillID, "rollback", err)
+		return err
+	}
+	s.logger.Info("skill rolled back", zap.String("skill_id", skillID), zap.String("revision_id", targetRevisionID))
 	return nil
+}
+
+// loadRollbackTargets loads the skill, its active revision and the requested
+// target revision, and verifies the target is a historical published version
+// (deprecated, not the current effective version nor an evaluation candidate).
+func (s *VersionService) loadRollbackTargets(ctx context.Context, skillID, targetRevisionID string) (port.SkillProductRow, domain.SkillRevision, domain.SkillRevision, error) {
+	skill, ok, err := s.repo.GetSkill(ctx, skillID)
+	if err != nil {
+		return port.SkillProductRow{}, domain.SkillRevision{}, domain.SkillRevision{}, err
+	}
+	if !ok {
+		return port.SkillProductRow{}, domain.SkillRevision{}, domain.SkillRevision{}, domain.ErrSkillNotFound
+	}
+	active, ok, err := s.repo.GetActiveRevision(ctx, skillID)
+	if err != nil {
+		return port.SkillProductRow{}, domain.SkillRevision{}, domain.SkillRevision{}, err
+	}
+	if !ok {
+		return port.SkillProductRow{}, domain.SkillRevision{}, domain.SkillRevision{}, domain.ErrSkillNotFound
+	}
+	target, ok, err := s.repo.GetRevision(ctx, skillID, targetRevisionID)
+	if err != nil {
+		return port.SkillProductRow{}, domain.SkillRevision{}, domain.SkillRevision{}, err
+	}
+	if !ok {
+		return port.SkillProductRow{}, domain.SkillRevision{}, domain.SkillRevision{}, domain.ErrSkillNotFound
+	}
+	if target.Status != domain.VersionStatusDeprecated {
+		return port.SkillProductRow{}, domain.SkillRevision{}, domain.SkillRevision{}, domain.ErrSkillNotFound
+	}
+	return skill, active, target, nil
 }

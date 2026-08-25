@@ -10,7 +10,6 @@ import (
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
-	"github.com/byteBuilderX/stratum/pkg/platformknowledge"
 )
 
 // errWorkspaceRepo fails every workspace lookup.
@@ -74,28 +73,6 @@ func TestVisibleDocIDs_matrix(t *testing.T) {
 	ws := &domain.Workspace{ID: "ws-1", Name: "docs", CreatedBy: "owner-1"}
 	docs := &recordingDocRepo{ids: []string{"d1", "d2"}}
 	ctx := context.Background()
-
-	t.Run("platform managed workspace is unrestricted without role/doc resolution", func(t *testing.T) {
-		s := NewWorkspaceService(&deleteWorkspaceRepo{workspace: &domain.Workspace{
-			ID: "ws-sys", ManagementMode: platformknowledge.ManagementPlatform,
-		}}, nil, zap.NewNop())
-		// No role resolver, no doc repo — exemption must not touch them.
-		ids, unrestricted, err := s.VisibleDocIDs(ctx, "t1", "ws-sys", "any-user")
-		require.NoError(t, err)
-		require.Nil(t, ids)
-		require.True(t, unrestricted)
-	})
-
-	t.Run("system workspace key exempts the whitelist", func(t *testing.T) {
-		s := NewWorkspaceService(&deleteWorkspaceRepo{workspace: &domain.Workspace{
-			ID: "ws-sys", SystemKey: platformknowledge.SystemWorkspaceKey,
-		}}, nil, zap.NewNop())
-		ids, unrestricted, err := s.VisibleDocIDs(ctx, "t1", "ws-sys", "any-user")
-		require.NoError(t, err)
-		require.True(t, unrestricted)
-		require.Nil(t, ids)
-	})
-
 	t.Run("empty viewerID fails closed", func(t *testing.T) {
 		s := newVisibleDocIDsTestService(ws, "member", docs)
 		_, _, err := s.VisibleDocIDs(ctx, "t1", "ws-1", "")
