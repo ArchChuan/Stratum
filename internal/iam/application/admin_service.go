@@ -21,6 +21,11 @@ type AdminService struct {
 	objectCleaner    port.TenantObjectCleaner
 	cacheInvalidator port.TenantCacheInvalidator
 	logger           *zap.Logger
+	// tenantProvisionedHook runs after ProvisionSchema succeeds on CreateTenant
+	// (e.g. wiring seeds the built-in knowledge workspace for admin-created
+	// tenants). The callback runs synchronously; the wiring implementation
+	// spawns the async work itself.
+	tenantProvisionedHook func(ctx context.Context, tenantID string)
 }
 
 // AdminServiceOption is a functional option for AdminService.
@@ -49,6 +54,15 @@ func WithCacheInvalidator(c port.TenantCacheInvalidator) AdminServiceOption {
 // WithAdminLogger sets the logger.
 func WithAdminLogger(l *zap.Logger) AdminServiceOption {
 	return func(s *AdminService) { s.logger = l }
+}
+
+// WithTenantProvisionedHook sets a callback invoked after ProvisionSchema
+// succeeds on CreateTenant. Used by wiring to seed the built-in knowledge
+// workspace for admin-created tenants (the auth path is decorated in wiring via
+// Platform.SchemaProvisioner). The callback runs synchronously; the wiring
+// implementation spawns the async work so admin responses are not blocked.
+func WithTenantProvisionedHook(fn func(ctx context.Context, tenantID string)) AdminServiceOption {
+	return func(s *AdminService) { s.tenantProvisionedHook = fn }
 }
 
 // NewAdminService wires the repository and optional cleaners.
@@ -107,6 +121,9 @@ func (s *AdminService) CreateTenant(ctx context.Context, name, slug, plan, statu
 	}
 	if err := s.repo.ProvisionSchema(ctx, t.ID); err != nil {
 		return nil, err
+	}
+	if s.tenantProvisionedHook != nil {
+		s.tenantProvisionedHook(ctx, t.ID)
 	}
 	return &t, nil
 }

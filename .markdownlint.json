@@ -9,5 +9,8 @@
   "MD041": false,
   "MD055": false,
   "MD056": false,
-  "MD060": false
+  "MD060": false,
+  "MD025": {
+    "front_matter_title": ""
+  }
 }

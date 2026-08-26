@@ -98,6 +98,12 @@ func (m *MockVectorStore) DeleteCollection(ctx context.Context, collection strin
 	return nil
 }
 
+// DeleteByDocumentIDs is a no-op (the shared mock has no per-doc purge
+// bookkeeping); the builtin-sync tests assert purge order with a dedicated fake.
+func (m *MockVectorStore) DeleteByDocumentIDs(context.Context, string, []string) error {
+	return nil
+}
+
 func (m *MockVectorStore) CountVectors(ctx context.Context, collection string) (int64, error) {
 	return 0, nil
 }

@@ -441,7 +441,7 @@ func (s *WorkspaceService) DeleteWorkspace(ctx context.Context, tenantID, name, 
 	if err != nil {
 		return err
 	}
-	if err := s.ingestSvc.DeleteWorkspaceData(ctx, tenantID, ws.ID); err != nil {
+	if err := s.ingestSvc.DeleteWorkspaceData(ctx, tenantID, ws.ID, ws.Config.EmbeddingModel); err != nil {
 		s.logger.Error("failed to clean workspace storage resources", zap.String("name", name), zap.Error(err))
 		return fmt.Errorf("failed to clean storage: %w", err)
 	}

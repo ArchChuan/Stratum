@@ -21,6 +21,7 @@ type storeIface interface {
 	Flush(ctx context.Context, collectionName string) error
 	DeleteCollection(ctx context.Context, collectionName string) error
 	CountVectors(ctx context.Context, collectionName, partition string) (int64, error)
+	DeleteByDocumentIDs(ctx context.Context, collectionName string, docIDs []string) error
 }
 
 var _ storeIface = (*storagemilvus.VectorStore)(nil)
@@ -119,6 +120,20 @@ func (a *Adapter) CountVectors(ctx context.Context, collectionName string) (int6
 		return 0, nil
 	}
 	return n, err
+}
+
+func (a *Adapter) DeleteByDocumentIDs(ctx context.Context, collectionName string, docIDs []string) error {
+	if len(docIDs) == 0 {
+		return nil
+	}
+	if err := a.store.DeleteByDocumentIDs(ctx, collectionName, docIDs); err != nil {
+		// A collection that never existed has nothing to purge — idempotent.
+		if errors.Is(err, storagemilvus.ErrCollectionNotFound) {
+			return nil
+		}
+		return translateStoreError(err)
+	}
+	return nil
 }
 
 var _ knowledgeport.VectorStore = (*Adapter)(nil)

@@ -563,6 +563,15 @@ func (s stubDocRepo) GetByID(context.Context, string, string, string) (*domain.D
 func (s stubDocRepo) SetDocAccess(context.Context, string, string, []string, []string) error {
 	return nil
 }
+func (s stubDocRepo) CASReplace(context.Context, string, string, string, string, string, string, map[string]any, int) (bool, error) {
+	return true, nil
+}
+func (s stubDocRepo) CASBeginDelete(context.Context, string, string, string) (bool, error) {
+	return true, nil
+}
+func (s stubDocRepo) MarkBuiltinLegacy(context.Context, string, string, []string) error {
+	return nil
+}
 
 // countingEmbedder wraps mockEmbedder and counts EmbedVector calls so the
 // empty-whitelist test can assert the embed path is never entered.
