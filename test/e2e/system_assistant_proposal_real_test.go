@@ -483,7 +483,7 @@ func TestSystemAssistantProposalInProcessToolUsesRealMemberPermissions(t *testin
 	require.NoError(t, err)
 	require.True(t, found)
 	existing.LLMModel = "deterministic-e2e-model"
-	err = agentRepo.Update(ctx, existing, nil, "", false)
+	err = agentRepo.Update(ctx, existing, nil, "", false, nil)
 	require.NoError(t, err)
 
 	chat := agentpersist.NewPgChatStore(pool, zap.NewNop())

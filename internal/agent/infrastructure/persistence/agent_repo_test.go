@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	versioningdomain "github.com/byteBuilderX/stratum/internal/versioning/domain"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v2"
@@ -215,6 +216,9 @@ func TestAgentRepo_Remove(t *testing.T) {
 	pool.ExpectExec("DELETE FROM resource_editors").
 		WithArgs("agent", "a1").
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	pool.ExpectExec("DELETE FROM resource_versions").
+		WithArgs(versioningdomain.ResourceKindAgent, "a1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	pool.ExpectCommit()
 
 	repo := &PgAgentRepo{pool: pool}
@@ -251,7 +255,7 @@ func TestAgentRepo_Update_Success(t *testing.T) {
 
 	repo := &PgAgentRepo{pool: pool}
 	cfg := &domain.AgentConfig{ID: "a1", Name: "Beta", LLMModel: "gpt-4o", MaxIterations: 5}
-	if err := repo.Update(tenantCtx("t1"), cfg, nil, "", false); err != nil {
+	if err := repo.Update(tenantCtx("t1"), cfg, nil, "", false, nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
@@ -292,7 +296,7 @@ func TestAgentRepo_SamplingParametersRoundTrip(t *testing.T) {
 		Temperature: 0.9, MaxTokens: 2048,
 		MemoryParameters: map[string]any{"memory.fact_injection_top_n": 8},
 	}
-	if err := repo.Update(tenantCtx("t1"), cfg, nil, "", true); err != nil {
+	if err := repo.Update(tenantCtx("t1"), cfg, nil, "", true, nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
@@ -443,7 +447,7 @@ func TestAgentRepo_Update_MergeSQLShape(t *testing.T) {
 		Temperature: 0.3,
 	}
 	// replaceParams=false = 表单/API merge 路径。
-	if err := repo.Update(tenantCtx("t1"), cfg, nil, "", false); err != nil {
+	if err := repo.Update(tenantCtx("t1"), cfg, nil, "", false, nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
@@ -481,7 +485,7 @@ func TestAgentRepo_SamplingParametersReplace(t *testing.T) {
 		ID: "a1", Name: "Beta", LLMModel: "gpt-4o", MaxIterations: 5,
 		// promote 重置:全部采样字段归零。
 	}
-	if err := repo.Update(tenantCtx("t1"), cfg, nil, "", true); err != nil {
+	if err := repo.Update(tenantCtx("t1"), cfg, nil, "", true, nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
@@ -546,7 +550,7 @@ func TestAgentRepo_DelegateFieldsRoundTrip(t *testing.T) {
 		ID: "a1", Name: "Beta", LLMModel: "gpt-4o", MaxIterations: 5,
 		DelegateEnabled: true, DelegateMaxDepth: 2, DelegateDefaultMaxSteps: 7,
 	}
-	if err := repo.Update(tenantCtx("t1"), cfg, nil, "", false); err != nil {
+	if err := repo.Update(tenantCtx("t1"), cfg, nil, "", false, nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
@@ -598,7 +602,7 @@ func TestAgentRepo_Update_NotFound(t *testing.T) {
 
 	repo := &PgAgentRepo{pool: pool}
 	cfg := &domain.AgentConfig{ID: "missing", Name: "Beta", LLMModel: "gpt-4o", MaxIterations: 5}
-	err = repo.Update(tenantCtx("t1"), cfg, nil, "", false)
+	err = repo.Update(tenantCtx("t1"), cfg, nil, "", false, nil)
 	if err == nil {
 		t.Fatal("expected error for missing agent")
 	}
@@ -784,7 +788,7 @@ func TestAgentRepo_Update_EditorActorRevalidates(t *testing.T) {
 
 	repo := &PgAgentRepo{pool: pool}
 	cfg := &domain.AgentConfig{ID: "a1", Name: "Beta", LLMModel: "gpt-4o", MaxIterations: 5}
-	if err := repo.Update(tenantCtx("t1"), cfg, nil, "editor-1", false); err != nil {
+	if err := repo.Update(tenantCtx("t1"), cfg, nil, "editor-1", false, nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
@@ -815,7 +819,7 @@ func TestAgentRepo_Update_EditorActorDeniedRollsBack(t *testing.T) {
 
 	repo := &PgAgentRepo{pool: pool}
 	cfg := &domain.AgentConfig{ID: "a1", Name: "Beta", LLMModel: "gpt-4o", MaxIterations: 5}
-	err = repo.Update(tenantCtx("t1"), cfg, nil, "editor-1", false)
+	err = repo.Update(tenantCtx("t1"), cfg, nil, "editor-1", false, nil)
 	if !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("Update error = %v, want ErrForbidden", err)
 	}

@@ -201,7 +201,7 @@ func revisionToResponse(value skillapp.SkillRevision) gen.SkillRevisionResponse 
 		ID: value.ID, SkillID: value.SkillID, RevisionNo: int32(value.RevisionNo), Status: string(value.Status),
 		Name: value.Name, Description: value.Description,
 		Instructions: value.Instructions, PublishChecks: value.PublishChecks,
-		IsCurrent: value.IsCurrent, CreatedBy: value.CreatedBy, CreatedAt: createdAt,
-		ContentHash: value.ContentHash,
+		IsCurrent: value.IsCurrent, CreatedBy: value.CreatedBy, CreatedByName: value.CreatedByName,
+		CreatedAt: createdAt, ContentHash: value.ContentHash,
 	}
 }

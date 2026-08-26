@@ -31,11 +31,41 @@ export const useEditAgentPage = () => {
   const [mcpTools, setMcpTools] = useState<MCPToolOption[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [groupedModels, setGroupedModels] = useState<GroupedModelOption[]>([]);
+  // refreshTick: 保存/回滚后前进，驱动版本历史等依赖重拉（原地刷新，不离开页面）。
+  const [refreshTick, setRefreshTick] = useState(0);
   const navigate = useNavigate();
   const managementPath = '/agents';
   const { user } = useAuth();
   const { isAdmin } = useTenantRole();
   const { candidates: editorCandidates, loading: editorCandidatesLoading } = useEditorCandidates();
+
+  // applyAgent 将服务器返回的 agent 回填状态与表单（初始加载与保存后原地刷新共用）。
+  const applyAgent = useCallback((a: Agent) => {
+    setAgent(a);
+    form.setFieldsValue({
+      name: a.name,
+      description: a.description,
+      systemPrompt: a.systemPrompt,
+      llmModel: a.llmModel,
+      maxIterations: a.maxIterations ?? AGENT_DEFAULT_MAX_ITERATIONS,
+      maxContextTokens: a.maxContextTokens ?? AGENT_DEFAULT_MAX_CONTEXT_TOKENS,
+      temperature: a.temperature,
+      max_tokens: a.max_tokens,
+      // 压缩五值（提示词/温度/模型/最近轮数/冷却）为平台级参数，
+      // 不在 agent 表单/存储。
+      allowedSkills: a.allowedSkills || [],
+      mcpToolIds: a.mcpToolIds || [],
+      knowledgeWorkspaceIds: a.knowledgeWorkspaceIds || [],
+      memoryScope: a.memoryScope || 'user',
+      // 委托配置：delegateEnabled 缺失按 false（存量默认关闭，后端 NOT NULL 恒有值，
+      // ?? false 仅兜底旧响应/缺字段）；深度/步数 0=unset 直接回显。
+      delegateEnabled: a.delegateEnabled ?? false,
+      delegateMaxDepth: a.delegateMaxDepth,
+      delegateDefaultMaxSteps: a.delegateDefaultMaxSteps,
+      // P2：可编辑人白名单回显；保存时经 setEditors 单独持久化。
+      editors: a.editors as string[] | undefined,
+    });
+  }, [form]);
 
   useEffect(() => {
     let cancelled = false;
@@ -49,7 +79,7 @@ export const useEditAgentPage = () => {
       try {
         const a = await agentApi.get(id);
         if (cancelled) return;
-        setAgent(a);
+        applyAgent(a);
 
         const [skillsRes, mcpRes, workspacesRes, modelsRes, providersRes] = await Promise.allSettled([
           skillApi.list(), mcpApi.toolOptions(), knowledgeApi.list(),
@@ -73,29 +103,6 @@ export const useEditAgentPage = () => {
             message.error({ content: extractErrorMessage(failed.reason, '加载模型目录失败'), duration: 3 });
           }
         }
-        form.setFieldsValue({
-          name: a.name,
-          description: a.description,
-          systemPrompt: a.systemPrompt,
-          llmModel: a.llmModel,
-          maxIterations: a.maxIterations ?? AGENT_DEFAULT_MAX_ITERATIONS,
-          maxContextTokens: a.maxContextTokens ?? AGENT_DEFAULT_MAX_CONTEXT_TOKENS,
-          temperature: a.temperature,
-          max_tokens: a.max_tokens,
-          // 压缩五值（提示词/温度/模型/最近轮数/冷却）为平台级参数，
-          // 不在 agent 表单/存储。
-          allowedSkills: a.allowedSkills || [],
-          mcpToolIds: a.mcpToolIds || [],
-          knowledgeWorkspaceIds: a.knowledgeWorkspaceIds || [],
-          memoryScope: a.memoryScope || 'user',
-          // 委托配置：delegateEnabled 缺失按 false（存量默认关闭，后端 NOT NULL 恒有值，
-          // ?? false 仅兜底旧响应/缺字段）；深度/步数 0=unset 直接回显。
-          delegateEnabled: a.delegateEnabled ?? false,
-          delegateMaxDepth: a.delegateMaxDepth,
-          delegateDefaultMaxSteps: a.delegateDefaultMaxSteps,
-          // P2：可编辑人白名单回显；保存时经 setEditors 单独持久化。
-          editors: a.editors as string[] | undefined,
-        });
       } catch (err) {
         if (!cancelled) {
           message.error({ content: extractErrorMessage(err, '加载 Agent 信息失败'), duration: 3 });
@@ -108,7 +115,17 @@ export const useEditAgentPage = () => {
     return () => {
       cancelled = true;
     };
-  }, [id, form, navigate]);
+  }, [id, form, navigate, applyAgent]);
+
+  // reloadAgent 保存/回滚成功后原地刷新：重拉 agent 回填表单并重载版本历史。
+  const reloadAgent = useCallback(async () => {
+    try {
+      applyAgent(await agentApi.get(id));
+      setRefreshTick((t) => t + 1);
+    } catch (err) {
+      message.error({ content: extractErrorMessage(err, '刷新 Agent 信息失败'), duration: 3 });
+    }
+  }, [id, applyAgent]);
 
   const onFinish = useCallback(
     async (values: AgentFormValues) => {
@@ -125,7 +142,8 @@ export const useEditAgentPage = () => {
           await agentApi.setEditors(id, nextEditors);
         }
         message.success({ content: `Agent "${values.name}" 保存成功`, duration: 2 });
-        navigate('/agents');
+        // 原地刷新：不离开编辑页，重拉 agent + 版本历史 tab 更新。
+        await reloadAgent();
       } catch (err) {
         if (!isForbidden(err)) {
           message.error({ content: extractErrorMessage(err, '保存失败'), duration: 3 });
@@ -134,7 +152,7 @@ export const useEditAgentPage = () => {
         setLoading(false);
       }
     },
-    [id, navigate],
+    [id, reloadAgent],
   );
 
   // P1/P2：白名单成员可编辑——admin/owner 恒可编辑；普通成员仅当命中 agent.editors
@@ -144,7 +162,7 @@ export const useEditAgentPage = () => {
 
   return {
     id, agent, form, loading, pageLoading, skills, mcpTools, workspaces, groupedModels,
-    navigate, managementPath, onFinish, readOnly,
+    navigate, managementPath, onFinish, readOnly, refreshTick, reloadAgent,
     editorCandidates, editorCandidatesLoading,
   };
 };

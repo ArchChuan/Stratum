@@ -31,6 +31,8 @@ const baseHook = {
   navigate: vi.fn(),
   onFinish: vi.fn(),
   readOnly: false,
+  refreshTick: 0,
+  reloadAgent: vi.fn(),
   editorCandidates: [],
   editorCandidatesLoading: false,
 };

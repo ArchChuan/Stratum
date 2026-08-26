@@ -56,6 +56,25 @@ export interface Agent {
   [key: string]: unknown;
 }
 
+// agentVersionSchema: 通用产品版本历史（resource_versions）单行。createdByName
+// 由后端解析昵称（display_name > github_login > actor_id），前端回退 createdBy。
+export const agentVersionSchema = z
+  .object({
+    id: z.string(),
+    versionNo: z.number().optional(),
+    status: z.string(),
+    source: z.string().optional().default('manual'),
+    contentHash: z.string().optional().default(''),
+    createdBy: z.string().optional().default(''),
+    createdByName: z.string().optional().default(''),
+    createdAt: z.string().optional().default(''),
+    publishedAt: z.string().optional().default(''),
+    isCurrent: z.boolean().optional().default(false),
+    safeSummary: z.record(z.unknown()).optional(),
+  })
+  .passthrough();
+export type AgentVersion = z.infer<typeof agentVersionSchema>;
+
 export interface AgentFormValues {
   name: string;
   description?: string;

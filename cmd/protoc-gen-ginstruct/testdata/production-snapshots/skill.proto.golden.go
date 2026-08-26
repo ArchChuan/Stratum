@@ -45,6 +45,7 @@ type SkillRevisionResponse struct {
 	CreatedBy     string         `json:"createdBy"`
 	CreatedAt     string         `json:"createdAt,omitempty"`
 	ContentHash   string         `json:"contentHash,omitempty"`
+	CreatedByName string         `json:"createdByName"`
 }
 
 type SkillRevisionsResponse struct {

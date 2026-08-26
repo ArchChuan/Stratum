@@ -56,6 +56,7 @@ type VersionService struct {
 	logger       *zap.Logger
 	roles        port.TenantRoleResolver
 	editorRepo   port.SkillResourceEditorRepo
+	nameResolver port.ActorNameResolver
 	failureAudit auditport.FailureAuditRecorder
 }
 
@@ -75,6 +76,35 @@ func (s *VersionService) SetEditorRepo(r port.SkillResourceEditorRepo) { s.edito
 // SetFailureAuditRecorder 注入失败资源操作审计。未注入时跳过记录。
 func (s *VersionService) SetFailureAuditRecorder(r auditport.FailureAuditRecorder) {
 	s.failureAudit = r
+}
+
+// SetActorNameResolver 注入变更人昵称解析器（iam 基础设施实现），由 wiring 装配。
+// 未注入时版本历史「操作者」保留 raw id 展示（降级）；注入后查询失败必须传播
+// 错误（fail-closed：禁止默认名掩盖查询故障）。
+func (s *VersionService) SetActorNameResolver(r port.ActorNameResolver) { s.nameResolver = r }
+
+// resolveNames 批量填充版本变更人昵称（display-only）。未注入解析器时跳过
+// （raw id 展示）；注入后查询失败传播错误；查不到的 actor 不在映射中，回退原文。
+func (s *VersionService) resolveNames(ctx context.Context, revisions ...*domain.SkillRevision) error {
+	if s.nameResolver == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(revisions))
+	for _, rev := range revisions {
+		if rev != nil && rev.CreatedBy != "" {
+			ids = append(ids, rev.CreatedBy)
+		}
+	}
+	names, err := s.nameResolver.ResolveActorNames(ctx, ids)
+	if err != nil {
+		return fmt.Errorf("skill service resolve actor names: %w", err)
+	}
+	for _, rev := range revisions {
+		if rev != nil {
+			rev.CreatedByName = names[rev.CreatedBy]
+		}
+	}
+	return nil
 }
 
 func (s *VersionService) CreateSkill(ctx context.Context, in CreateSkillInput) (SkillWorkspaceView, error) {
@@ -121,6 +151,9 @@ func (s *VersionService) CreateSkill(ctx context.Context, in CreateSkillInput) (
 	s.logger.Info("skill created", zap.String("skill_id", skillID), zap.String("revision_id", revisionID))
 	// Editors must be non-nil: JSON renders a nil slice as null, and the
 	// frontend schema default only covers a missing field, not null.
+	if err := s.resolveNames(ctx, &revision); err != nil {
+		return SkillWorkspaceView{}, err
+	}
 	return SkillWorkspaceView{Skill: skill, Active: revision, Editors: []string{}}, nil
 }
 
@@ -167,6 +200,9 @@ func (s *VersionService) GetWorkspace(ctx context.Context, skillID, actorID stri
 	}
 	if ok {
 		view.Active = active
+	}
+	if err := s.resolveNames(ctx, &view.Active); err != nil {
+		return SkillWorkspaceView{}, err
 	}
 	return view, nil
 }
@@ -498,6 +534,9 @@ func (s *VersionService) SaveRevision(
 		return SkillWorkspaceView{}, err
 	}
 	skill.ActiveRevisionID = saved.ID
+	if err := s.resolveNames(ctx, &saved); err != nil {
+		return SkillWorkspaceView{}, err
+	}
 	return SkillWorkspaceView{Skill: skill, Active: saved, Editors: []string{}}, nil
 }
 
@@ -546,6 +585,13 @@ func (s *VersionService) ListRevisions(ctx context.Context, skillID string) ([]d
 	}
 	if !ok {
 		return nil, domain.ErrSkillNotFound
+	}
+	ptrs := make([]*domain.SkillRevision, len(revisions))
+	for i := range revisions {
+		ptrs[i] = &revisions[i]
+	}
+	if err := s.resolveNames(ctx, ptrs...); err != nil {
+		return nil, err
 	}
 	return revisions, nil
 }

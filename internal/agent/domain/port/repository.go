@@ -12,6 +12,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	versioningdomain "github.com/byteBuilderX/stratum/internal/versioning/domain"
 )
 
 // AgentRepo persists agent configurations in the tenant schema.
@@ -38,7 +39,21 @@ type AgentRepo interface {
 	// true = overall replace (promote; zero fields become explicit nulls that
 	// clear previously persisted values), false = merge (zero fields are
 	// omitted so an old client PUT cannot erase stored sampling parameters).
-	Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string, replaceParams bool) error
+	// version, when non-nil, is written into resource_versions (通用产品版本基座)
+	// in the SAME transaction: current published version demoted, new row inserted
+	// with revision_no=MAX+1, agents.active_version_id pointed at it. nil skips
+	// version writes entirely (internal reentrant paths with no product change).
+	Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string, replaceParams bool, version *versioningdomain.Version) error
+	// Rollback restores a deprecated product version, all in one transaction:
+	// the target version's payload is applied back to the agent row (full
+	// parameters replace), bindings replaced, the target version promoted back
+	// to published, and agents.active_version_id repointed at it. editorActor,
+	// when non-empty, re-validates editor eligibility inside the write
+	// transaction (same TOCTOU closure as Update). The write fails closed with
+	// domain.ErrNotFound if the agent no longer exists and with
+	// versioningdomain.ErrVersionNotFound if the target is not a deprecated
+	// historical version of this agent.
+	Rollback(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor, targetVersionID string) error
 }
 
 // AgentSkillBinding resolves which agent is wired to a given skill through the

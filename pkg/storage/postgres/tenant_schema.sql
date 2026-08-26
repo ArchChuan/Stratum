@@ -52,6 +52,9 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS parameters JSONB NOT NULL DEFAULT '{
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS delegate_enabled BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS delegate_max_depth INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS delegate_default_max_steps INTEGER NOT NULL DEFAULT 0;
+-- 通用产品版本基座:active_version_id 指向 resource_versions 当前生效版本
+-- (NULL = 无版本记录,存量 agent 不基线回填,首次保存产生 v1)。
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS active_version_id TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_system_key
     ON agents(system_key) WHERE system_key IS NOT NULL;
 
@@ -413,6 +416,38 @@ CREATE INDEX IF NOT EXISTS idx_resource_revisions_resource
     ON resource_revisions(resource_kind, resource_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_revisions_idempotency
     ON resource_revisions(idempotency_key) WHERE idempotency_key <> '';
+
+-- 通用产品版本历史基座(agent/skill/knowledge/mcp 共享)。与 resource_revisions 语义
+-- 独立:本表是用户可见的产品版本历史(编辑保存即产生新版本、回滚),resource_revisions
+-- 是评测优化控制面(manual|optimization|rollback,payload 存对象存储)。
+-- 产品表通过 active_version_id 指向当前生效版本;status 仅 published/deprecated
+-- (无 draft:保存即生效),source 仅 manual|rollback(评测优化不写本表)。
+CREATE TABLE IF NOT EXISTS resource_versions (
+    id                TEXT PRIMARY KEY,
+    resource_kind     TEXT NOT NULL
+        CHECK (resource_kind IN ('agent', 'skill', 'knowledge', 'mcp')),
+    resource_id       TEXT NOT NULL,
+    parent_version_id TEXT REFERENCES resource_versions(id) ON DELETE SET NULL,
+    revision_no       INT,
+    status            TEXT NOT NULL DEFAULT 'published'
+        CHECK (status IN ('published', 'deprecated')),
+    source            TEXT NOT NULL DEFAULT 'manual'
+        CHECK (source IN ('manual', 'rollback')),
+    content_hash      TEXT NOT NULL DEFAULT '',
+    payload           JSONB NOT NULL DEFAULT '{}',
+    safe_summary      JSONB NOT NULL DEFAULT '{}',
+    created_by        TEXT NOT NULL DEFAULT '',
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    published_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_resource_versions_resource
+    ON resource_versions(resource_kind, resource_id, created_at DESC);
+-- 并发防重:写事务内按 (kind, resource_id) 计算 MAX(revision_no)+1 插入,唯一索引
+-- 冲突(唯一违反)映射 409,避免并发保存产生重复版本号。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_versions_revision_no
+    ON resource_versions(resource_kind, resource_id, revision_no)
+    WHERE revision_no IS NOT NULL;
 
 -- Generic evaluation and optimization control plane. Resource payloads remain
 -- owned by their bounded context; these tables store immutable references and evidence.

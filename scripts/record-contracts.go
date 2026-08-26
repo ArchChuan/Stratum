@@ -47,6 +47,7 @@ import (
 	schedapp "github.com/byteBuilderX/stratum/internal/scheduler/application"
 	scheddomain "github.com/byteBuilderX/stratum/internal/scheduler/domain"
 	schedport "github.com/byteBuilderX/stratum/internal/scheduler/domain/port"
+	versioningdomain "github.com/byteBuilderX/stratum/internal/versioning/domain"
 	workflowapp "github.com/byteBuilderX/stratum/internal/workflow/application"
 	workflowdomain "github.com/byteBuilderX/stratum/internal/workflow/domain"
 	workflowport "github.com/byteBuilderX/stratum/internal/workflow/domain/port"
@@ -718,7 +719,10 @@ func (contractAgentRepo) GetAll(context.Context) ([]*agentdomain.AgentConfig, er
 func (contractAgentRepo) Remove(context.Context, string, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (contractAgentRepo) Update(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string, bool) error {
+func (contractAgentRepo) Update(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string, bool, *versioningdomain.Version) error {
+	return nil
+}
+func (contractAgentRepo) Rollback(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string, string) error {
 	return nil
 }
 

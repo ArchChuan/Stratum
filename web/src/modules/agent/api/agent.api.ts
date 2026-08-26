@@ -2,11 +2,13 @@ import { z } from 'zod';
 
 import {
   agentSchema,
+  agentVersionSchema,
   chatMessageSchema,
   conversationSchema,
   type ActiveExecution,
   type Agent,
   type AgentFormValues,
+  type AgentVersion,
   type ChatMessage,
   type Conversation,
   type ExecuteAgentPayload,
@@ -38,6 +40,16 @@ export const agentApi = {
   // 单独 PUT /agents/:id/editors 持久化（handler SetAgentEditors，owner/creator 可调）。
   setEditors: (id: string, editorIds: string[]) => api.put(`/agents/${id}/editors`, { editorIds }),
   delete: (id: string) => api.delete(`/agents/${id}`),
+  // 通用产品版本历史（resource_versions）：当前生效版本标记 isCurrent。
+  listVersions: async (id: string): Promise<AgentVersion[]> => {
+    const res = await api.get(`/agents/${id}/versions`);
+    return z.array(agentVersionSchema).parse(res.data?.versions ?? []);
+  },
+  // rollback: 将生效指针指回历史已发布版本，立即生效、不产生新版本；返回重建后的 agent。
+  rollback: async (id: string, versionId: string): Promise<Agent> => {
+    const res = await api.post(`/agents/${id}/rollback`, { versionId });
+    return agentSchema.parse(res.data);
+  },
   // M6：同步执行（列表页"运行"按钮）后端无全局 deadline（逐步骤超时 + maxSteps
   // 上限兜底），HTTP 层不设超时，避免长执行被误杀；只保留接口级 + 迭代限制。
   execute: (id: string, payload: ExecuteAgentPayload) =>

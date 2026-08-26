@@ -37,6 +37,11 @@ type SkillRevision struct {
 	PublishChecks      map[string]any
 	// CreatedBy traces who authored this revision (draft author, not ownership).
 	CreatedBy string
+	// CreatedByName is the display name of CreatedBy (display_name > github_login
+	// > actor_id), resolved at the response boundary for version-history display.
+	// It is display-only and deliberately excluded from ComputeContentHash so the
+	// content hash stays a pure function of the editable fields.
+	CreatedByName string
 	// CreatedAt is when the revision row was created (version history display).
 	CreatedAt time.Time
 	// PublishedAt is set for published revisions (nil for candidate/deprecated).

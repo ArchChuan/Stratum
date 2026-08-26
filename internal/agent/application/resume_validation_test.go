@@ -9,6 +9,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	versioningdomain "github.com/byteBuilderX/stratum/internal/versioning/domain"
 	"github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -77,7 +78,11 @@ func (resumeAgentRepo) GetAll(context.Context) ([]*domain.AgentConfig, error) {
 func (resumeAgentRepo) Remove(context.Context, string, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (resumeAgentRepo) Update(context.Context, *domain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string, bool) error {
+func (resumeAgentRepo) Update(context.Context, *domain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string, bool, *versioningdomain.Version) error {
+	return nil
+}
+
+func (resumeAgentRepo) Rollback(context.Context, *domain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string, string) error {
 	return nil
 }
 

@@ -22,6 +22,7 @@ import (
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	memapp "github.com/byteBuilderX/stratum/internal/memory/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
+	versioningpersistence "github.com/byteBuilderX/stratum/internal/versioning/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
@@ -334,9 +335,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		if c.LLMGateway != nil {
 			registry, gw = c.LLMGateway.Registry, c.LLMGateway.Gateway
 		}
-		a.TenantResolver = newTenantCapabilityResolver(
-			registry, gw, c.Logger,
-		)
+		a.TenantResolver = newTenantCapabilityResolver(registry, gw, c.Logger)
 	}
 
 	deps := agent.AgentServiceDeps{
@@ -366,6 +365,9 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	}
 	if db != nil {
 		deps.ResourceEditorRepo = persistence.NewPgResourceEditorRepo(db)
+		// 通用产品版本历史（read-only）+ created_by 昵称解析，未装配 fail-closed。
+		deps.VersionRepo = versioningpersistence.NewPgVersionRepo(db)
+		deps.ActorNameResolver = iampersistence.NewPgActorNameResolver(db)
 	}
 	if c.Memory != nil {
 		deps.MemoryInjector = c.Memory.Injector

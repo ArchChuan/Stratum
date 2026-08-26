@@ -68,6 +68,10 @@ message SkillRevisionResponse {
   // with 409 instead of silently overwriting.
   // @omitempty
   string contentHash = 13;
+  // createdByName is the display name of createdBy (display_name > github_login
+  // > actor_id), resolved at the response boundary. Display-only: the frontend
+  // version-history 操作者 column prefers it over the raw id.
+  string createdByName = 14;
 }
 
 message SkillRevisionsResponse {

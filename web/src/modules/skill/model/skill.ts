@@ -29,6 +29,7 @@ export const skillRevisionSchema = z.object({
   contentHash: z.string().optional().default(''),
   isCurrent: z.boolean().optional().default(false),
   createdBy: z.string().optional().default(''),
+  createdByName: z.string().optional().default(''),
   createdAt: z.string().optional().default(''),
 }).passthrough();
 export type SkillRevision = z.infer<typeof skillRevisionSchema>;

@@ -9,6 +9,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	versioningdomain "github.com/byteBuilderX/stratum/internal/versioning/domain"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/mock"
@@ -320,7 +321,11 @@ func (m *mockAgentRepo) Remove(_ context.Context, id string, _ *auditdomain.Reso
 	return m.Called(id).Error(0)
 }
 
-func (m *mockAgentRepo) Update(_ context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool) error {
+func (m *mockAgentRepo) Update(_ context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool, _ *versioningdomain.Version) error {
+	return m.Called(cfg).Error(0)
+}
+
+func (m *mockAgentRepo) Rollback(_ context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _, _ string) error {
 	return m.Called(cfg).Error(0)
 }
 

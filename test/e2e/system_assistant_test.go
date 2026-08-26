@@ -221,7 +221,7 @@ func TestSystemAssistantTenantIsolationAndRoleScope(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	existing.LLMModel = "deterministic-e2e-model"
-	err = repo.Update(ctxA, existing, nil, "", false)
+	err = repo.Update(ctxA, existing, nil, "", false, nil)
 	require.NoError(t, err)
 	updated, found, err := repo.Get(ctxA, domain.SystemAssistantID)
 	require.NoError(t, err)
@@ -257,7 +257,7 @@ func TestSystemAssistantTenantIsolationAndRoleScope(t *testing.T) {
 
 	_, _, err = repo.Get(assistantTenantContext("bad tenant!", users[tenants[0]][0], tenantdb.RoleTenantAdmin), domain.SystemAssistantID)
 	require.Error(t, err)
-	require.NoError(t, repo.Update(ctxA, &domain.AgentConfig{ID: domain.SystemAssistantID}, nil, "", false))
+	require.NoError(t, repo.Update(ctxA, &domain.AgentConfig{ID: domain.SystemAssistantID}, nil, "", false, nil))
 	require.NoError(t, repo.Remove(ctxA, domain.SystemAssistantID, nil))
 }
 
@@ -337,7 +337,7 @@ func TestSystemAssistantDeterministicAgentLoopPersistsTypedArtifacts(t *testing.
 	require.NoError(t, err)
 	require.True(t, found)
 	existing.LLMModel = "deterministic-e2e-model"
-	err = repo.Update(ctx, existing, nil, "", false)
+	err = repo.Update(ctx, existing, nil, "", false, nil)
 	require.NoError(t, err)
 
 	gateway := &deterministicAssistantGateway{}
