@@ -193,8 +193,9 @@ func embeddingsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := make([]any, len(request.Input))
+	dim := dimensionForModel(request.Model)
 	for index := range request.Input {
-		embedding := make([]float64, 1024)
+		embedding := make([]float64, dim)
 		embedding[0] = 1
 		data[index] = map[string]any{"object": "embedding", "index": index, "embedding": embedding}
 	}
@@ -202,6 +203,23 @@ func embeddingsHandler(w http.ResponseWriter, r *http.Request) {
 		"object": "list", "model": request.Model, "data": data,
 		"usage": map[string]any{"prompt_tokens": len(request.Input), "total_tokens": len(request.Input)},
 	})
+}
+
+// dimensionForModel mirrors pkg/constants.DimensionForModel for the models
+// this fixture serves. The knowledge retrieval eval declares embedding-3
+// (Zhipu, 2048-dim); text-embedding-v3 is 1024. Any other model keeps the
+// historical 1024 default so existing MCP/soak consumers are unaffected.
+func dimensionForModel(model string) int {
+	switch model {
+	case "embedding-3":
+		return 2048
+	case "text-embedding-v1":
+		return 1536
+	case "text-embedding-v2", "text-embedding-v3", "text-embedding-v4":
+		return 1024
+	default:
+		return 1024
+	}
 }
 
 // modelsHandler returns a static model list compatible with the OpenAI /v1/models response

@@ -3,6 +3,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -12,6 +13,16 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"go.uber.org/zap"
+)
+
+// Ingest flush retry bounds. Milvus's proxy rate-limits Flush at rate=0.1
+// (one token per 10s); a rejected flush is transient ("please retry later"),
+// so the exponential backoff must grow past the limiter period to actually
+// win a token — hence the larger base/cap than the generic 100ms/10s default.
+const (
+	ingestFlushRetryMaxAttempts = 6
+	ingestFlushRetryBaseDelay   = 1 * time.Second
+	ingestFlushRetryMaxDelay    = 30 * time.Second
 )
 
 // EmbedClient is an alias to the consumer-side embedder port. Kept exported so
@@ -136,6 +147,10 @@ type IngestResult struct {
 	TotalVectors int
 	Duration     time.Duration
 	Errors       []string
+	// AlreadyExists is true when a concurrent instance already owns the
+	// deterministic docID (Save conflict). No pipeline was spawned; callers
+	// (seed) treat it as a skip rather than a new ingest.
+	AlreadyExists bool
 }
 
 // IngestDocument accepts an ingest job and returns immediately once the
@@ -208,23 +223,17 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 		return nil, domain.ErrIngestQueueFull
 	}
 
-	// Persist doc row with processing status BEFORE spawning. If DB write
-	// fails we release the queue slot and abort — client sees the error.
+	// Persist doc row with processing status BEFORE spawning. The helper also
+	// applies the cross-instance admission gate: when a sibling pod already
+	// owns the deterministic docID (Save conflict), no pipeline is spawned
+	// here — the seed treats an AlreadyExists result as a skip. Both the error
+	// and duplicate paths share one exit (release the queue slot, return the
+	// gate's outcome), keeping IngestDocument's own branching flat.
 	if ki.docRepo != nil {
-		doc := &domain.Document{
-			ID:             req.DocumentID,
-			KBID:           req.WorkspaceID,
-			Source:         req.FileName,
-			ContentHash:    req.ContentHash,
-			IngestStatus:   constants.IngestStatusProcessing,
-			TotalChunks:    len(chunkResult.Leaves),
-			AllowedUserIDs: req.AllowedUserIDs,
-			AllowedRoleIDs: req.AllowedRoleIDs,
-			CreatedBy:      req.CreatedBy,
-		}
-		if err := ki.docRepo.Save(ctx, req.TenantID, req.WorkspaceID, doc); err != nil {
+		existing, spawn, err := ki.persistDocumentMetadata(ctx, req, chunkResult.Leaves)
+		if !spawn {
 			<-ki.queueSem
-			return nil, fmt.Errorf("failed to persist document metadata: %w", err)
+			return existing, err
 		}
 	}
 
@@ -238,6 +247,49 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 		TotalChunks: len(chunkResult.Leaves),
 		Errors:      []string{},
 	}, nil
+}
+
+// persistDocumentMetadata writes the doc row with status='processing' and
+// applies the cross-instance admission gate. Two pods can pass the
+// ExistsByHash pre-check simultaneously, so only the instance that actually
+// inserted the row (Save RowsAffected=1) may spawn the ingest pipeline;
+// spawning a second pipeline would re-run embed/insert on the same
+// deterministic vector primary keys, which Milvus (unlike PG) has no
+// ON CONFLICT guard for.
+//
+// Contract: on success returns (nil, true, nil) — proceed to spawn. When a
+// sibling pod already owns the deterministic docID, returns (AlreadyExists
+// result, false, nil) — caller skips. On persist error returns (nil, false,
+// err). The caller releases the queue slot whenever spawn is false.
+func (ki *KnowledgeIngest) persistDocumentMetadata(
+	ctx context.Context, req IngestDocumentRequest, leaves []knowledgeport.TextChunk,
+) (*IngestResult, bool, error) {
+	doc := &domain.Document{
+		ID:             req.DocumentID,
+		KBID:           req.WorkspaceID,
+		Source:         req.FileName,
+		ContentHash:    req.ContentHash,
+		IngestStatus:   constants.IngestStatusProcessing,
+		TotalChunks:    len(leaves),
+		AllowedUserIDs: req.AllowedUserIDs,
+		AllowedRoleIDs: req.AllowedRoleIDs,
+		CreatedBy:      req.CreatedBy,
+	}
+	inserted, err := ki.docRepo.Save(ctx, req.TenantID, req.WorkspaceID, doc)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to persist document metadata: %w", err)
+	}
+	if !inserted {
+		return &IngestResult{
+			DocumentID:    req.DocumentID,
+			Workspace:     req.Workspace,
+			Status:        constants.IngestStatusProcessing,
+			TotalChunks:   len(leaves),
+			AlreadyExists: true,
+			Errors:        []string{},
+		}, false, nil
+	}
+	return nil, true, nil
 }
 
 // runIngestJob executes the heavy path (embed + vector + PG chunks +
@@ -361,7 +413,7 @@ func (ki *KnowledgeIngest) doEmbedAndPersist(ctx context.Context, req IngestDocu
 	if err := ki.vectorStore.Insert(ctx, collectionName, docChunks); err != nil {
 		return fmt.Errorf("failed to insert vectors: %w", err)
 	}
-	if err := ki.vectorStore.Flush(ctx, collectionName); err != nil {
+	if err := ki.flushWithRetry(ctx, collectionName); err != nil {
 		return fmt.Errorf("failed to flush collection: %w", err)
 	}
 	ki.logger.Info("knowledge.ingest.vectors_persisted",
@@ -370,6 +422,60 @@ func (ki *KnowledgeIngest) doEmbedAndPersist(ctx context.Context, req IngestDocu
 		zap.Int("count", len(docChunks)))
 
 	return ki.persistChunks(ctx, req, result, docChunks)
+}
+
+// flushWithRetry calls vectorStore.Flush, retrying transient failures
+// (Milvus unavailable or server-side rate-limit) with bounded exponential
+// backoff. Non-transient errors and budget exhaustion return as-is so the
+// caller marks the document failed. A rate-limited flush is the server's
+// "please retry later" — failing the document outright (the pre-fix behavior)
+// would drop a fully-embedded doc on a limiter that clears in ~10s.
+func (ki *KnowledgeIngest) flushWithRetry(ctx context.Context, collectionName string) error {
+	backoff := ingestFlushRetryBaseDelay
+	var lastErr error
+	for attempt := 0; attempt < ingestFlushRetryMaxAttempts; attempt++ {
+		if attempt > 0 {
+			if err := waitFlushBackoff(ctx, &backoff); err != nil {
+				return err
+			}
+		}
+		lastErr = ki.vectorStore.Flush(ctx, collectionName)
+		if lastErr == nil {
+			return nil
+		}
+		if !isTransientStoreError(lastErr) {
+			return lastErr
+		}
+		sc, _ := observability.SpanFromContext(ctx)
+		ki.logger.Warn("knowledge.ingest.flush_retrying",
+			zap.String("trace_id", sc.TraceID),
+			zap.String("collection", collectionName),
+			zap.Int("attempt", attempt+1),
+			zap.Error(lastErr))
+	}
+	return lastErr
+}
+
+// waitFlushBackoff sleeps the current backoff (doubling it up to the max)
+// before the next flush attempt, interrupting on ctx cancel/deadline.
+func waitFlushBackoff(ctx context.Context, backoff *time.Duration) error {
+	select {
+	case <-time.After(*backoff):
+	case <-ctx.Done():
+		return fmt.Errorf("flush retry interrupted: %w", ctx.Err())
+	}
+	*backoff *= 2
+	if *backoff > ingestFlushRetryMaxDelay {
+		*backoff = ingestFlushRetryMaxDelay
+	}
+	return nil
+}
+
+// isTransientStoreError reports whether err is a retryable vector-store
+// failure (Milvus unavailable or server-side rate-limited).
+func isTransientStoreError(err error) bool {
+	var unavailable *knowledgeport.VectorStoreUnavailableError
+	return errors.As(err, &unavailable)
 }
 
 func (ki *KnowledgeIngest) persistChunks(

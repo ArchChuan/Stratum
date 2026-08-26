@@ -3,6 +3,7 @@ package wiring
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -389,14 +390,20 @@ func (c *Container) SeedBuiltinKnowledgeDocs(ctx context.Context) {
 		return
 	}
 
+	// The queue-retry budget is global: one pointer shared across every tenant
+	// so the seed's total startup delay is bounded regardless of how many
+	// tenants surge the 20-slot ingest queue.
+	budget := constants.SeedIngestQueueRetryBudget
 	for _, tid := range tenantIDs {
-		c.seedBuiltinDocsForTenant(ctx, tid)
+		c.seedBuiltinDocsForTenant(ctx, tid, &budget)
 	}
 }
 
 // seedBuiltinDocsForTenant 为单个 tenant 种子内置文档；租户未显式配置记忆
 // 嵌入模型时 WARN 并跳过，不阻断启动（fail-closed：不擅自回退全局默认模型）。
-func (c *Container) seedBuiltinDocsForTenant(ctx context.Context, tid string) {
+// queueRetryBudget 是所有 tenant 共享的队列满重试预算，由 SeedBuiltinKnowledgeDocs
+// 创建一次并逐 tenant 传递。
+func (c *Container) seedBuiltinDocsForTenant(ctx context.Context, tid string, queueRetryBudget *time.Duration) {
 	if c.LLMGateway == nil || c.LLMGateway.TenantEmbeddingResolver == nil {
 		return
 	}
@@ -408,7 +415,7 @@ func (c *Container) seedBuiltinDocsForTenant(ctx context.Context, tid string) {
 		return
 	}
 	seeds.SeedBuiltinDocs(ctx, tid, model,
-		c.Knowledge.Ingest, c.Knowledge.DocRepo, officialDocsCatalogAdapter{}, c.Logger)
+		c.Knowledge.Ingest, c.Knowledge.DocRepo, officialDocsCatalogAdapter{}, queueRetryBudget, c.Logger)
 }
 
 // officialDocsCatalogAdapter adapts the agent context's embedded official

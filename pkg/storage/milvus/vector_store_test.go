@@ -23,6 +23,8 @@ func TestClassifyAvailabilityError(t *testing.T) {
 	}{
 		{name: "grpc unavailable", err: status.Error(codes.Unavailable, "down"), availability: true},
 		{name: "grpc deadline", err: status.Error(codes.DeadlineExceeded, "slow"), availability: true},
+		{name: "grpc resource exhausted", err: status.Error(codes.ResourceExhausted, "quota exceeded"), availability: true},
+		{name: "rate limiter message", err: errors.New("request is rejected by grpc RateLimiter middleware, please retry later: rate limit exceeded[rate=0.1]"), availability: true},
 		{name: "proxy startup", err: status.Error(codes.Unknown, "service unavailable: internal: Milvus Proxy is not ready yet"), availability: true},
 		{name: "resource group startup", err: status.Error(codes.Unknown, "failed to spawn replica for collection: resource group node not enough[currentNodeNum=0][expectedNodeNum=1]"), availability: true},
 		{name: "query node startup", err: status.Error(codes.Unknown, "no available query node"), availability: true},

@@ -67,7 +67,9 @@ func TestDocRepo_Save_defaultStatus(t *testing.T) {
 
 	// Empty IngestStatus exercises the default-to-"processing" branch.
 	doc := &domain.Document{ID: "d1", KBID: "ws", Source: "src.txt", ContentHash: "hash1", TotalChunks: 4}
-	require.NoError(t, repo.Save(context.Background(), "t1", "ws", doc))
+	inserted, err := repo.Save(context.Background(), "t1", "ws", doc)
+	require.NoError(t, err)
+	require.True(t, inserted, "INSERT affected 1 row → caller owns the pipeline")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -85,7 +87,29 @@ func TestDocRepo_Save_explicitStatus(t *testing.T) {
 	doc := &domain.Document{ID: "d1", KBID: "ws", Source: "src.txt", ContentHash: "hash1",
 		IngestStatus: "completed", TotalChunks: 4,
 		AllowedUserIDs: []string{"u1", "u2"}, AllowedRoleIDs: []string{"member"}, CreatedBy: "creator-1"}
-	require.NoError(t, repo.Save(context.Background(), "t1", "ws", doc))
+	inserted, err := repo.Save(context.Background(), "t1", "ws", doc)
+	require.NoError(t, err)
+	require.True(t, inserted)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestDocRepo_Save_conflictNotInserted covers the cross-instance admission gate:
+// ON CONFLICT (id) DO NOTHING with RowsAffected=0 means a sibling pod owns the
+// row → Save must report inserted=false so no second pipeline is spawned.
+func TestDocRepo_Save_conflictNotInserted(t *testing.T) {
+	mock := newRepoMock(t)
+	repo := NewDocRepo(mock)
+
+	repoBeginTenant(mock)
+	mock.ExpectExec("INSERT INTO knowledge_docs").
+		WithArgs("d1", "ws", "src.txt", "hash1", "processing", 4, []string{}, []string{}, nil).
+		WillReturnResult(pgxmock.NewResult("INSERT", 0))
+	mock.ExpectCommit()
+
+	doc := &domain.Document{ID: "d1", KBID: "ws", Source: "src.txt", ContentHash: "hash1", TotalChunks: 4}
+	inserted, err := repo.Save(context.Background(), "t1", "ws", doc)
+	require.NoError(t, err)
+	require.False(t, inserted, "conflict row → caller must not spawn the pipeline")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -99,7 +123,7 @@ func TestDocRepo_Save_execFails(t *testing.T) {
 		WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
-	err := repo.Save(context.Background(), "t1", "ws",
+	_, err := repo.Save(context.Background(), "t1", "ws",
 		&domain.Document{ID: "d1", KBID: "ws", Source: "src.txt", ContentHash: "hash1", TotalChunks: 4})
 	require.ErrorIs(t, err, pgx.ErrTxClosed)
 	require.NoError(t, mock.ExpectationsWereMet())

@@ -48,7 +48,9 @@ type deleteDocRepo struct {
 	deletedIDs []string
 }
 
-func (r *deleteDocRepo) Save(context.Context, string, string, *domain.Document) error { return nil }
+func (r *deleteDocRepo) Save(context.Context, string, string, *domain.Document) (bool, error) {
+	return true, nil
+}
 func (r *deleteDocRepo) List(context.Context, string, string) ([]*domain.Document, error) {
 	return r.docs, nil
 }
