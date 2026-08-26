@@ -56,9 +56,10 @@ func (m *mockEmbedder) Model() string { return "text-embedding-v3" }
 type mockDocRepo struct {
 	mu sync.Mutex
 
-	saved       []*domain.Document
-	saveErr     error
-	markStarted []struct {
+	saved        []*domain.Document
+	saveErr      error
+	saveInserted bool // false simulates the cross-instance admission race (INSERT conflict)
+	markStarted  []struct {
 		ID    string
 		Total int
 	}
@@ -82,16 +83,21 @@ type mockDocRepo struct {
 
 var _ knowledgeport.DocRepo = (*mockDocRepo)(nil)
 
-func newMockDocRepo() *mockDocRepo { return &mockDocRepo{existsHash: map[string]bool{}} }
+func newMockDocRepo() *mockDocRepo {
+	return &mockDocRepo{existsHash: map[string]bool{}, saveInserted: true}
+}
 
-func (m *mockDocRepo) Save(_ context.Context, _, _ string, doc *domain.Document) error {
+func (m *mockDocRepo) Save(_ context.Context, _, _ string, doc *domain.Document) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.saveErr != nil {
-		return m.saveErr
+		return false, m.saveErr
+	}
+	if !m.saveInserted {
+		return false, nil
 	}
 	m.saved = append(m.saved, doc)
-	return nil
+	return true, nil
 }
 
 func (m *mockDocRepo) List(_ context.Context, _, _ string) ([]*domain.Document, error) {
@@ -183,6 +189,18 @@ func (m *mockDocRepo) savedCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.saved)
+}
+
+func (m *mockDocRepo) markStartedCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.markStarted)
+}
+
+func (m *mockDocRepo) markCompletedCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.markCompleted)
 }
 
 func (m *mockDocRepo) markFailedCount() int {

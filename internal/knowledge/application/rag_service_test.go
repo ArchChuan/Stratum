@@ -535,7 +535,9 @@ type stubDocRepo struct {
 	doc *domain.Document
 }
 
-func (s stubDocRepo) Save(context.Context, string, string, *domain.Document) error { return nil }
+func (s stubDocRepo) Save(context.Context, string, string, *domain.Document) (bool, error) {
+	return true, nil
+}
 func (s stubDocRepo) List(context.Context, string, string) ([]*domain.Document, error) {
 	return s.docs, s.listErr
 }

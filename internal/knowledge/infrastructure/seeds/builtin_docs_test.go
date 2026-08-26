@@ -12,6 +12,7 @@ import (
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/stretchr/testify/require"
 )
 
@@ -87,34 +88,50 @@ func TestBuiltinDocID_deterministicUUIDv5(t *testing.T) {
 // --- SeedBuiltinDocs branch coverage ---
 
 func TestSeedBuiltinDocs_nilIngest(t *testing.T) {
-	n := SeedBuiltinDocs(context.Background(), "t1", "", nil, nil, nil, zap.NewNop())
+	n := SeedBuiltinDocs(context.Background(), "t1", "", nil, nil, nil, nil, zap.NewNop())
 	require.Zero(t, n)
 }
 
 func TestSeedBuiltinDocs_nilDocRepo(t *testing.T) {
 	ingest := knowledge.NewKnowledgeIngest(nil, nil, nil, nil, zap.NewNop())
-	n := SeedBuiltinDocs(context.Background(), "t1", "", ingest, nil, testCatalog(), zap.NewNop())
+	n := SeedBuiltinDocs(context.Background(), "t1", "", ingest, nil, testCatalog(), nil, zap.NewNop())
 	require.Zero(t, n)
 }
 
 func TestSeedBuiltinDocs_catalogFails(t *testing.T) {
 	ingest := knowledge.NewKnowledgeIngest(nil, nil, nil, nil, zap.NewNop())
-	docRepo := &stubDocRepo{}
+	docRepo := newStubDocRepo()
 	n := SeedBuiltinDocs(context.Background(), "t1", "", ingest, docRepo,
-		stubCatalog{err: errors.New("catalog decode failed")}, zap.NewNop())
+		stubCatalog{err: errors.New("catalog decode failed")}, nil, zap.NewNop())
 	require.Zero(t, n)
 }
 
-// stubDocRepo implements knowledgeport.DocRepo; only ExistsByHash is exercised.
+// stubDocRepo implements knowledgeport.DocRepo; only ExistsByHash and Save are
+// exercised by the seed tests. saveInserted=false simulates the cross-instance
+// admission race (INSERT conflict) so the seed sees IngestResult.AlreadyExists.
 type stubDocRepo struct {
-	exists    bool
-	existsErr error
+	exists       bool
+	existsErr    error
+	saveInserted bool
+	saveErr      error
+	savedDocIDs  []string
 }
+
+func newStubDocRepo() *stubDocRepo { return &stubDocRepo{saveInserted: true} }
 
 func (s *stubDocRepo) ExistsByHash(context.Context, string, string, string) (bool, error) {
 	return s.exists, s.existsErr
 }
-func (s *stubDocRepo) Save(context.Context, string, string, *domain.Document) error { return nil }
+func (s *stubDocRepo) Save(_ context.Context, _, _ string, doc *domain.Document) (bool, error) {
+	if s.saveErr != nil {
+		return false, s.saveErr
+	}
+	if !s.saveInserted {
+		return false, nil
+	}
+	s.savedDocIDs = append(s.savedDocIDs, doc.ID)
+	return true, nil
+}
 func (s *stubDocRepo) List(context.Context, string, string) ([]*domain.Document, error) {
 	return nil, nil
 }
@@ -145,20 +162,117 @@ func (errParser) ParseBytes([]byte, string) (string, error) { return "", errors.
 func TestSeedBuiltinDocs_existsCheckFails(t *testing.T) {
 	ingest := knowledge.NewKnowledgeIngest(errParser{}, nil, nil, nil, zap.NewNop())
 	docRepo := &stubDocRepo{existsErr: errors.New("db down")}
-	n := SeedBuiltinDocs(context.Background(), "t1", "", ingest, docRepo, testCatalog(), zap.NewNop())
+	n := SeedBuiltinDocs(context.Background(), "t1", "", ingest, docRepo, testCatalog(), nil, zap.NewNop())
 	require.Zero(t, n)
 }
 
 func TestSeedBuiltinDocs_allSkipped(t *testing.T) {
 	ingest := knowledge.NewKnowledgeIngest(errParser{}, nil, nil, nil, zap.NewNop())
 	docRepo := &stubDocRepo{exists: true}
-	n := SeedBuiltinDocs(context.Background(), "t1", "", ingest, docRepo, testCatalog(), zap.NewNop())
+	n := SeedBuiltinDocs(context.Background(), "t1", "", ingest, docRepo, testCatalog(), nil, zap.NewNop())
 	require.Zero(t, n)
 }
 
 func TestSeedBuiltinDocs_ingestFails(t *testing.T) {
 	ingest := knowledge.NewKnowledgeIngest(errParser{}, nil, nil, nil, zap.NewNop())
 	docRepo := &stubDocRepo{exists: false}
-	n := SeedBuiltinDocs(context.Background(), "t1", "", ingest, docRepo, testCatalog(), zap.NewNop())
+	n := SeedBuiltinDocs(context.Background(), "t1", "", ingest, docRepo, testCatalog(), nil, zap.NewNop())
 	require.Zero(t, n)
+}
+
+// okParser succeeds on every document so the sync ingest path reaches Save.
+type okParser struct{}
+
+func (okParser) ParseBytes([]byte, string) (string, error) { return "install it", nil }
+
+// stubChunker is a minimal ChunkingService: Clean/Filter are identity and
+// Chunk returns a single leaf, so a seed doc reaches docRepo.Save.
+type stubChunker struct{}
+
+func (stubChunker) Clean(text string) string { return text }
+func (stubChunker) Filter(chunks []knowledgeport.TextChunk) []knowledgeport.TextChunk {
+	return chunks
+}
+func (stubChunker) Chunk(context.Context, string, string, int, int, knowledgeport.Embedder) (knowledgeport.ChunkResult, error) {
+	return knowledgeport.ChunkResult{
+		Leaves: []knowledgeport.TextChunk{{Content: "install it"}},
+	}, nil
+}
+
+// TestSeedBuiltinDocs_alreadyExistsSkipped covers the cross-instance admission
+// race: a sibling pod inserted the deterministic docID first, so our Save
+// returns (false, nil) and IngestDocument reports AlreadyExists. The seed must
+// count it as skipped and must NOT have spawned a pipeline (no Save insertion).
+func TestSeedBuiltinDocs_alreadyExistsSkipped(t *testing.T) {
+	ingest := knowledge.NewKnowledgeIngest(okParser{}, stubChunker{}, nil, nil, zap.NewNop())
+	docRepo := newStubDocRepo()
+	docRepo.saveInserted = false // sibling pod won the race
+	ingest.SetDocRepo(docRepo)   // IngestDocument's Save gate needs the repo wired
+	n := SeedBuiltinDocs(context.Background(), "t1", "", ingest, docRepo, testCatalog(), nil, zap.NewNop())
+	require.Zero(t, n, "all entries lost the admission race → nothing seeded")
+	require.Len(t, docRepo.savedDocIDs, 0, "conflicted docs must not spawn a pipeline")
+}
+
+// --- ingestWithQueueRetry ---
+
+func TestIngestWithQueueRetry_retriesOnQueueFull(t *testing.T) {
+	calls := 0
+	ingest := func(context.Context, knowledge.IngestDocumentRequest) (*knowledge.IngestResult, error) {
+		calls++
+		if calls <= 2 {
+			return nil, domain.ErrIngestQueueFull
+		}
+		return &knowledge.IngestResult{DocumentID: "doc-1", Status: constants.IngestStatusProcessing}, nil
+	}
+	budget := 30 * time.Second
+	res, err := ingestWithQueueRetry(context.Background(), ingest, knowledge.IngestDocumentRequest{}, &budget, zap.NewNop())
+	require.NoError(t, err)
+	require.Equal(t, "doc-1", res.DocumentID)
+	require.Equal(t, 3, calls, "two queue-full failures must be retried before success")
+	// Budget spent: two waits of 500ms and 1s.
+	require.Equal(t, 30*time.Second-1500*time.Millisecond, budget)
+}
+
+func TestIngestWithQueueRetry_budgetExhausted(t *testing.T) {
+	ingest := func(context.Context, knowledge.IngestDocumentRequest) (*knowledge.IngestResult, error) {
+		return nil, domain.ErrIngestQueueFull
+	}
+	// Budget smaller than the base backoff: the first wait eats the whole
+	// budget, then the next attempt fails immediately without waiting.
+	budget := 600 * time.Millisecond
+	_, err := ingestWithQueueRetry(context.Background(), ingest, knowledge.IngestDocumentRequest{}, &budget, zap.NewNop())
+	require.ErrorIs(t, err, domain.ErrIngestQueueFull)
+	require.Zero(t, budget, "budget must be fully consumed by the waits")
+}
+
+func TestIngestWithQueueRetry_budgetExhaustedStopsWithoutWait(t *testing.T) {
+	ingest := func(context.Context, knowledge.IngestDocumentRequest) (*knowledge.IngestResult, error) {
+		return nil, domain.ErrIngestQueueFull
+	}
+	budget := time.Duration(0) // pre-exhausted by an earlier tenant
+	start := time.Now()
+	_, err := ingestWithQueueRetry(context.Background(), ingest, knowledge.IngestDocumentRequest{}, &budget, zap.NewNop())
+	require.ErrorIs(t, err, domain.ErrIngestQueueFull)
+	require.Less(t, time.Since(start), 100*time.Millisecond, "zero budget must fail fast, not wait")
+}
+
+func TestIngestWithQueueRetry_nonQueueErrorImmediate(t *testing.T) {
+	sentinel := errors.New("db down")
+	ingest := func(context.Context, knowledge.IngestDocumentRequest) (*knowledge.IngestResult, error) {
+		return nil, sentinel
+	}
+	budget := 30 * time.Second
+	_, err := ingestWithQueueRetry(context.Background(), ingest, knowledge.IngestDocumentRequest{}, &budget, zap.NewNop())
+	require.ErrorIs(t, err, sentinel)
+	require.Equal(t, 30*time.Second, budget, "non-queue errors must not consume the budget")
+}
+
+func TestIngestWithQueueRetry_contextCanceled(t *testing.T) {
+	ingest := func(context.Context, knowledge.IngestDocumentRequest) (*knowledge.IngestResult, error) {
+		return nil, domain.ErrIngestQueueFull
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := ingestWithQueueRetry(ctx, ingest, knowledge.IngestDocumentRequest{}, func() *time.Duration { b := 30 * time.Second; return &b }(), zap.NewNop())
+	require.ErrorIs(t, err, context.Canceled)
 }

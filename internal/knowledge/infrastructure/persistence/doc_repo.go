@@ -30,7 +30,7 @@ func (r *DocRepo) ExistsByHash(ctx context.Context, tenantID, workspaceID, hash 
 	return exists, err
 }
 
-func (r *DocRepo) Save(ctx context.Context, tenantID, kbID string, doc *domain.Document) error {
+func (r *DocRepo) Save(ctx context.Context, tenantID, kbID string, doc *domain.Document) (bool, error) {
 	status := doc.IngestStatus
 	if status == "" {
 		status = "processing"
@@ -44,16 +44,25 @@ func (r *DocRepo) Save(ctx context.Context, tenantID, kbID string, doc *domain.D
 	if allowedRoles == nil {
 		allowedRoles = []string{}
 	}
-	return execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO knowledge_docs
+	// inserted reports whether this call won the row (RowsAffected=1). On a
+	// concurrent duplicate-ID insert the conflict row is left untouched and
+	// RowsAffected=0 → inserted=false → caller must not spawn the pipeline.
+	var inserted bool
+	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `INSERT INTO knowledge_docs
 			(id, workspace_id, title, content_hash, ingest_status, total_chunks,
 			 allowed_user_ids, allowed_role_ids, created_by, ingest_started_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 			ON CONFLICT (id) DO NOTHING`,
 			doc.ID, kbID, doc.Source, doc.ContentHash, status, doc.TotalChunks,
 			allowedUsers, allowedRoles, strOrNil(doc.CreatedBy))
-		return err
+		if err != nil {
+			return err
+		}
+		inserted = tag.RowsAffected() == 1
+		return nil
 	})
+	return inserted, err
 }
 
 // strOrNil maps an empty string to NULL so optional TEXT columns stay NULL
