@@ -75,14 +75,19 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL, fixtureU
 
     await page.getByLabel('描述').fill('全系统 stateful Agent 验收，已更新');
     const updateResponse = waitForMutation(page, `/agents/${agentID}`, 'PUT');
-    const updatedListResponse = waitForMutation(page, '/agents', 'GET');
+    // versioning: 保存后编辑页原地刷新（reloadAgent 重拉详情），不再跳转列表页。
+    const detailReloadResponse = waitForMutation(page, `/agents/${agentID}`, 'GET');
     await page.getByRole('button', { name: '保存修改' }).click();
     expect((await updateResponse).status()).toBe(200);
-    expect((await updatedListResponse).status()).toBe(200);
+    expect((await detailReloadResponse).status()).toBe(200);
     expect(await rows<{ description: string; max_iterations: number }>(pool, tenantID,
       'SELECT description,max_iterations FROM agents WHERE id=$1', [agentID]))
       .toEqual([{ description: '全系统 stateful Agent 验收，已更新', max_iterations: 10 }]);
     completed.push('agent.mutation.put.agents.id');
+
+    // versioning: 保存后停在编辑页，显式返回列表页继续后续执行/删除流程。
+    await page.goto(`${webURL}/agents`);
+    await expect(page).toHaveURL(`${webURL}/agents`);
 
     const updatedCard = page.locator('.ant-card').filter({ hasText: agentName });
     await updatedCard.getByRole('button', { name: '执行 Agent' }).click();

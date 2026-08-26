@@ -16,9 +16,12 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	versioningdomain "github.com/byteBuilderX/stratum/internal/versioning/domain"
 	"github.com/byteBuilderX/stratum/pkg/resourceaccess"
 	pgstore "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
+	pkgversioning "github.com/byteBuilderX/stratum/pkg/versioning"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -664,6 +667,14 @@ func (r *PgAgentRepo) Remove(ctx context.Context, id string, audit *auditdomain.
 		); err != nil {
 			return fmt.Errorf("remove agent %s editors: %w", id, err)
 		}
+		// 产品版本历史随 agent 一起清理，防止孤儿行；parent_version_id 自引用
+		// ON DELETE SET NULL，删除顺序无关。
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM resource_versions WHERE resource_kind=$1 AND resource_id=$2`,
+			versioningdomain.ResourceKindAgent, id,
+		); err != nil {
+			return fmt.Errorf("remove agent %s versions: %w", id, err)
+		}
 		if err := insertChangeAudit(ctx, tx, audit); err != nil {
 			return err
 		}
@@ -676,31 +687,19 @@ func (r *PgAgentRepo) Remove(ctx context.Context, id string, audit *auditdomain.
 // SET list — ownership never changes after creation. replaceParams selects
 // the parameters JSONB semantics: true = overall replace (promote, zero
 // fields become explicit nulls), false = merge (zero fields omitted).
-func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string, replaceParams bool) error {
+// version, when non-nil, is written to resource_versions in the same
+// transaction (demote current → insert revision_no=MAX+1 → repoint
+// active_version_id), so product updates and version history stay atomic.
+func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string, replaceParams bool, version *versioningdomain.Version) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := revalidateEditorIfActor(ctx, tx, resourceEditorKind, cfg.ID, editorActor); err != nil {
 			return fmt.Errorf("update agent %s: %w", cfg.ID, err)
 		}
-		parametersSet, params, err := samplingParameterSet(cfg, replaceParams)
+		found, err := updateAgentTx(ctx, tx, cfg, replaceParams, "update")
 		if err != nil {
 			return err
 		}
-		tag, err := tx.Exec(ctx,
-			`UPDATE agents
-			 SET name=$1, description=$2, system_prompt=$3,
-			     llm_model=$4, max_iterations=$5, max_context_tokens=$6,
-			     memory_scope=$7, `+parametersSet+`,
-			     delegate_enabled=$9, delegate_max_depth=$10, delegate_default_max_steps=$11,
-			     updated_at=NOW()
-			 WHERE id=$12`,
-			cfg.Name, cfg.Description, cfg.SystemPrompt,
-			cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, memoryScopeOr(cfg.MemoryScope), params,
-			cfg.DelegateEnabled, cfg.DelegateMaxDepth, cfg.DelegateDefaultMaxSteps, cfg.ID,
-		)
-		if err != nil {
-			return fmt.Errorf("update agent %s: %w", cfg.ID, err)
-		}
-		if tag.RowsAffected() == 0 {
+		if !found {
 			return fmt.Errorf("update agent %s: %w", cfg.ID, domain.ErrNotFound)
 		}
 		if err := r.replaceSkills(ctx, tx, cfg.ID, cfg.AllowedSkills); err != nil {
@@ -712,11 +711,80 @@ func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, audit
 		if err := r.replaceKnowledgeWorkspaces(ctx, tx, cfg.ID, cfg.KnowledgeWorkspaceIDs); err != nil {
 			return err
 		}
+		if err := writeAgentVersionTx(ctx, tx, cfg.ID, version); err != nil {
+			return err
+		}
 		if err := insertChangeAudit(ctx, tx, audit); err != nil {
 			return err
 		}
 		return nil
 	})
+}
+
+// updateAgentTx writes cfg's mutable columns back to the agents row, returning
+// false when no row matched (agent missing). replaceParams selects the
+// agents.parameters JSONB semantics (see port.AgentRepo.Update). op names the
+// calling operation for error wrapping (update | rollback).
+func updateAgentTx(ctx context.Context, tx pgx.Tx, cfg *domain.AgentConfig, replaceParams bool, op string) (bool, error) {
+	parametersSet, params, err := samplingParameterSet(cfg, replaceParams)
+	if err != nil {
+		return false, err
+	}
+	tag, err := tx.Exec(ctx,
+		`UPDATE agents
+		 SET name=$1, description=$2, system_prompt=$3,
+		     llm_model=$4, max_iterations=$5, max_context_tokens=$6,
+		     memory_scope=$7, `+parametersSet+`,
+		     delegate_enabled=$9, delegate_max_depth=$10, delegate_default_max_steps=$11,
+		     updated_at=NOW()
+		 WHERE id=$12`,
+		cfg.Name, cfg.Description, cfg.SystemPrompt,
+		cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, memoryScopeOr(cfg.MemoryScope), params,
+		cfg.DelegateEnabled, cfg.DelegateMaxDepth, cfg.DelegateDefaultMaxSteps, cfg.ID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("%s agent %s: %w", op, cfg.ID, err)
+	}
+	return tag.RowsAffected() != 0, nil
+}
+
+// writeAgentVersionTx writes a product version into resource_versions inside
+// the caller's write transaction (通用产品版本基座). version == nil skips
+// version writes entirely (internal reentrant paths). The version row's ID is
+// generated by the caller; an empty ID here is a defensive fallback so an
+// unset application field can never collide on PRIMARY KEY.
+func writeAgentVersionTx(ctx context.Context, tx pgx.Tx, agentID string, version *versioningdomain.Version) error {
+	if version == nil {
+		return nil
+	}
+	id := version.ID
+	if id == "" {
+		id = uuid.Must(uuid.NewV7()).String()
+	}
+	kind := string(version.ResourceKind)
+	if kind == "" {
+		kind = "agent"
+	}
+	row := pkgversioning.VersionRow{
+		ID:           id,
+		ResourceKind: kind,
+		ResourceID:   agentID,
+		Status:       string(version.Status),
+		Source:       string(version.Source),
+		Payload:      version.Payload,
+		SafeSummary:  version.SafeSummary,
+		CreatedBy:    version.CreatedBy,
+	}
+	if err := pkgversioning.DemoteCurrentTx(ctx, tx, kind, agentID); err != nil {
+		return fmt.Errorf("update agent %s demote current version: %w", agentID, err)
+	}
+	if _, err := pkgversioning.InsertVersionTx(ctx, tx, row); err != nil {
+		return fmt.Errorf("update agent %s insert version: %w", agentID, err)
+	}
+	if err := pkgversioning.SetActiveTx(ctx, tx, kind, agentID, id); err != nil {
+		return fmt.Errorf("update agent %s set active version: %w", agentID, err)
+	}
+	return nil
 }
 
 // samplingParameterSet renders the parameters UPDATE fragment and packed JSON
@@ -755,4 +823,46 @@ func (r *PgAgentRepo) FindAgentBySkill(ctx context.Context, skillID string) (str
 		return "", false, err
 	}
 	return agentID, true, nil
+}
+
+// Rollback restores a deprecated product version, all in one transaction:
+// cfg's payload (rebuilt from the version snapshot) is applied back to the
+// agents row with full parameters replace, bindings replaced, the target
+// version promoted to published, and active_version_id repointed at it.
+// editorActor, when non-empty, re-validates editor eligibility inside the
+// transaction (same TOCTOU closure as Update). A missing agent fails closed
+// with ErrNotFound; a target that is not a deprecated historical version
+// fails with ErrVersionNotFound (from the shared RollbackVersionTx helper).
+func (r *PgAgentRepo) Rollback(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor, targetVersionID string) error {
+	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if err := revalidateEditorIfActor(ctx, tx, resourceEditorKind, cfg.ID, editorActor); err != nil {
+			return fmt.Errorf("rollback agent %s: %w", cfg.ID, err)
+		}
+		found, err := updateAgentTx(ctx, tx, cfg, true, "rollback")
+		if err != nil {
+			return err
+		}
+		if !found {
+			return fmt.Errorf("rollback agent %s: %w", cfg.ID, domain.ErrNotFound)
+		}
+		if err := r.replaceSkills(ctx, tx, cfg.ID, cfg.AllowedSkills); err != nil {
+			return err
+		}
+		if err := r.replaceMCPTools(ctx, tx, cfg.ID, cfg.MCPToolIDs); err != nil {
+			return err
+		}
+		if err := r.replaceKnowledgeWorkspaces(ctx, tx, cfg.ID, cfg.KnowledgeWorkspaceIDs); err != nil {
+			return err
+		}
+		if err := pkgversioning.RollbackVersionTx(ctx, tx, "agent", cfg.ID, targetVersionID); err != nil {
+			return err
+		}
+		if err := pkgversioning.SetActiveTx(ctx, tx, "agent", cfg.ID, targetVersionID); err != nil {
+			return err
+		}
+		if err := insertChangeAudit(ctx, tx, audit); err != nil {
+			return err
+		}
+		return nil
+	})
 }

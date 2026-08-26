@@ -11,6 +11,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
+	versioningdomain "github.com/byteBuilderX/stratum/internal/versioning/domain"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -221,7 +222,21 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	if err != nil {
 		return AgentDTO{}, err
 	}
-	if err := s.deps.Registry.Update(ctx, cfg, audit, editorActor, in.ReplaceParameters); err != nil {
+	// 通用产品版本基座快照：Update 是所有产品写路径（编辑/提案/eval promote）
+	// 的唯一漏斗，保存即产生新版本（无 draft）。CreatedBy 取审计解析后的有效
+	// actor（system 覆盖时记录系统 actor），与审计一致。
+	snapshot := domain.SnapshotFromConfig(cfg)
+	version := &versioningdomain.Version{
+		ID:           uuid.Must(uuid.NewV7()).String(),
+		ResourceKind: versioningdomain.ResourceKindAgent,
+		ResourceID:   id,
+		Status:       versioningdomain.VersionStatusPublished,
+		Source:       versioningdomain.VersionSourceManual,
+		Payload:      snapshot.Map(),
+		SafeSummary:  AgentSafeProjection(cfg),
+		CreatedBy:    audit.ActorID,
+	}
+	if err := s.deps.Registry.Update(ctx, cfg, audit, editorActor, in.ReplaceParameters, version); err != nil {
 		s.recordFailure(ctx, id, "update", err)
 		return AgentDTO{}, err
 	}

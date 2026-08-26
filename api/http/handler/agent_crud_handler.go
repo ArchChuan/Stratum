@@ -178,6 +178,54 @@ func (h *AgentHandler) DeleteAgent(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "agent deleted successfully"})
 }
 
+// ListAgentVersions returns the agent's product version history (newest
+// first) with created_by display names resolved.
+func (h *AgentHandler) ListAgentVersions(c *gin.Context) {
+	if _, ok := tenantIDFromCtx(c); !ok {
+		respondMissingTenant(c)
+		return
+	}
+	versions, err := h.svc.ListVersions(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	out := make([]AgentVersionResponse, 0, len(versions))
+	for _, v := range versions {
+		out = append(out, agentVersionToResponse(v))
+	}
+	c.JSON(http.StatusOK, AgentVersionsResponse{Versions: out})
+}
+
+// RollbackAgent restores a deprecated historical version, repointing the
+// agent to it immediately without creating a new version. Returns the fresh
+// agent config so the client can re-render in place.
+func (h *AgentHandler) RollbackAgent(c *gin.Context) {
+	if _, ok := tenantIDFromCtx(c); !ok {
+		respondMissingTenant(c)
+		return
+	}
+	var req RollbackAgentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	dto, err := h.svc.Rollback(c.Request.Context(), c.Param("id"), agent.RollbackAgentInput{
+		ActorID:   actorID,
+		VersionID: req.VersionID,
+	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, dtoToResponse(dto))
+}
+
 // PauseExecution marks a running execution as paused so it can be resumed later.
 func (h *AgentHandler) PauseExecution(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)

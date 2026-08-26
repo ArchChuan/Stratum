@@ -16,6 +16,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
+	versioningport "github.com/byteBuilderX/stratum/internal/versioning/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"go.uber.org/zap"
@@ -85,6 +86,12 @@ type AgentServiceDeps struct {
 	Logger    *zap.Logger
 	// FailureAudit 旁路记录失败的资源操作（best-effort，nil 时跳过）。
 	FailureAudit auditport.FailureAuditRecorder
+	// VersionRepo 读取通用产品版本历史基座 resource_versions。nil 时
+	// ListVersions/Rollback fail-closed（未装配不得静默返回空历史）。
+	VersionRepo versioningport.VersionRepo
+	// ActorNameResolver 解析版本 created_by 的展示名（display_name > github_login
+	// > actor_id），与审批/提案列表共用同一 IAM 解析器；nil 时回退 actor_id 原文。
+	ActorNameResolver port.ActorNameResolver
 }
 
 // AgentService aggregates agent CRUD + Execute/ExecuteStream and shields

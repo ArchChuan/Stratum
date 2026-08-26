@@ -17,6 +17,7 @@ import (
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	parametersapp "github.com/byteBuilderX/stratum/internal/parameters/application"
 	parametersdomain "github.com/byteBuilderX/stratum/internal/parameters/domain"
+	versioningdomain "github.com/byteBuilderX/stratum/internal/versioning/domain"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -52,12 +53,27 @@ func (m *mockAgentRepo) GetAll(context.Context) ([]*domain.AgentConfig, error) {
 func (m *mockAgentRepo) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return m.removeErr
 }
-func (m *mockAgentRepo) Update(_ context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool) error {
+func (m *mockAgentRepo) Update(_ context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool, _ *versioningdomain.Version) error {
 	if m.updateErr != nil {
 		return m.updateErr
 	}
 	// 真实写回:service 在 Update 成功后经 repo 回读,若 mock 是 no-op,
 	// 回读结果与内存 DTO 不一致,API 断言会假绿。
+	for i, a := range m.agents {
+		if a.ID == cfg.ID {
+			cfg.IsSystem = a.IsSystem
+			cfg.SystemKey = a.SystemKey
+			m.agents[i] = cfg
+			return nil
+		}
+	}
+	return nil
+}
+
+func (m *mockAgentRepo) Rollback(_ context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _, _ string) error {
+	if m.updateErr != nil {
+		return m.updateErr
+	}
 	for i, a := range m.agents {
 		if a.ID == cfg.ID {
 			cfg.IsSystem = a.IsSystem
@@ -153,6 +169,8 @@ func agentRoutes(h *AgentHandler, auth ...gin.HandlerFunc) *gin.Engine {
 	g.POST("", h.CreateAgent)
 	g.PUT("/:id", h.UpdateAgent)
 	g.DELETE("/:id", h.DeleteAgent)
+	g.GET("/:id/versions", h.ListAgentVersions)
+	g.POST("/:id/rollback", h.RollbackAgent)
 	g.GET("/:id/executions", h.ListExecutions)
 	g.GET("/:id/executions/:traceID/tool-traces", h.ListExecutionToolTraces)
 	g.GET("/:id/executions/:traceID/trace-events", h.ListExecutionTraceEvents)
@@ -541,4 +559,145 @@ func TestAgentHandlerMemoryParametersEcho(t *testing.T) {
 	body = `{"name":"N","llmModel":"qwen-max","maxIterations":5,"parameters":{"memory.max_facts_per_extraction":999}}`
 	w = doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents", body)
 	require.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// mockHandlerVersionRepo 是通用版本基座只读 port（resource_versions）的
+// 脚本化实现，按 versionID 区分 GetVersion 返回值，供 handler 级
+// ListAgentVersions/RollbackAgent 测试覆盖成功与错误路径。
+type mockHandlerVersionRepo struct {
+	versions []versioningdomain.Version
+	getByID  map[string]versioningdomain.Version
+	listErr  error
+	getErr   error
+}
+
+func (m *mockHandlerVersionRepo) ListVersions(_ context.Context, _ string, _ versioningdomain.ResourceKind, _ string) ([]versioningdomain.Version, error) {
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+	return m.versions, nil
+}
+
+func (m *mockHandlerVersionRepo) GetVersion(_ context.Context, _ string, _ versioningdomain.ResourceKind, _, versionID string) (versioningdomain.Version, bool, error) {
+	if m.getErr != nil {
+		return versioningdomain.Version{}, false, m.getErr
+	}
+	v, ok := m.getByID[versionID]
+	return v, ok, nil
+}
+
+// fakeHandlerActorNames 固定返回预置昵称映射，实现 agent port.ActorNameResolver。
+type fakeHandlerActorNames struct {
+	names map[string]string
+}
+
+func (f *fakeHandlerActorNames) ResolveActorNames(_ context.Context, ids []string) (map[string]string, error) {
+	out := make(map[string]string, len(ids))
+	for _, id := range ids {
+		if n, ok := f.names[id]; ok {
+			out[id] = n
+		}
+	}
+	return out, nil
+}
+
+func TestAgentHandlerListAgentVersions(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	vrepo := &mockHandlerVersionRepo{versions: []versioningdomain.Version{
+		{ID: "v2", RevisionNo: 2, Status: versioningdomain.VersionStatusPublished, Source: versioningdomain.VersionSourceManual,
+			ContentHash: "h2", CreatedBy: "u1", CreatedAt: now, IsCurrent: true},
+		{ID: "v1", RevisionNo: 1, Status: versioningdomain.VersionStatusDeprecated, Source: versioningdomain.VersionSourceRollback,
+			ContentHash: "h1", CreatedBy: "u2", CreatedAt: now.Add(-time.Hour)},
+	}}
+	h := newTestAgentHandler(t, &mockAgentRepo{agents: []*domain.AgentConfig{{ID: "a1", Name: "Alpha"}}}, nil, func(deps *agent.AgentServiceDeps) {
+		deps.VersionRepo = vrepo
+		deps.ActorNameResolver = &fakeHandlerActorNames{names: map[string]string{"u1": "Alice", "u2": "Bob"}}
+	})
+
+	// 成功 → 200，版本数组含昵称与生效标记。
+	w := doAgentReq(t, authedRoutes(h), http.MethodGet, "/agents/a1/versions", "")
+	require.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	require.Contains(t, body, `"versions"`)
+	require.Contains(t, body, `"versionNo":2`)
+	require.Contains(t, body, `"isCurrent":true`)
+	require.Contains(t, body, `"createdByName":"Alice"`)
+	require.Contains(t, body, `"createdByName":"Bob"`)
+	require.Contains(t, body, `"source":"rollback"`)
+
+	// 极端情况：缺 tenant → 401。
+	w = doAgentReq(t, agentRoutes(h), http.MethodGet, "/agents/a1/versions", "")
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+
+	// 极端情况：版本基座未装配（nil）→ fail-closed 500。
+	h = newTestAgentHandler(t, &mockAgentRepo{agents: []*domain.AgentConfig{{ID: "a1", Name: "Alpha"}}}, nil, nil)
+	w = doAgentReq(t, authedRoutes(h), http.MethodGet, "/agents/a1/versions", "")
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+
+	// 极端情况：版本基座查询失败 → 500。
+	h = newTestAgentHandler(t, &mockAgentRepo{agents: []*domain.AgentConfig{{ID: "a1", Name: "Alpha"}}}, nil, func(deps *agent.AgentServiceDeps) {
+		deps.VersionRepo = &mockHandlerVersionRepo{listErr: errors.New("db down")}
+	})
+	w = doAgentReq(t, authedRoutes(h), http.MethodGet, "/agents/a1/versions", "")
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestAgentHandlerRollbackAgent(t *testing.T) {
+	historical := &domain.AgentConfig{ID: "a1", Name: "historical", Description: "desc", Type: domain.ReActAgent,
+		SystemPrompt: "old prompt", LLMModel: "qwen-plus", MaxIterations: 5, CreatedBy: "u1"}
+	deprecatedTarget := versioningdomain.Version{
+		ID: "v1", RevisionNo: 1, Status: versioningdomain.VersionStatusDeprecated,
+		Source: versioningdomain.VersionSourceManual, Payload: domain.SnapshotFromConfig(historical).Map(),
+	}
+	repo := &mockAgentRepo{agents: []*domain.AgentConfig{{ID: "a1", Name: "current", Type: domain.ReActAgent, CreatedBy: "u1"}}}
+	h := newTestAgentHandler(t, repo, nil, func(deps *agent.AgentServiceDeps) {
+		deps.VersionRepo = &mockHandlerVersionRepo{getByID: map[string]versioningdomain.Version{"v1": deprecatedTarget}}
+	})
+
+	// 成功 → 200，返回重建后的 agent（name 回滚到历史值）。
+	w := doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents/a1/rollback", `{"versionId":"v1"}`)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), "historical")
+	require.Contains(t, w.Body.String(), `"systemPrompt":"old prompt"`)
+
+	// 极端情况：缺 tenant → 401。
+	w = doAgentReq(t, agentRoutes(h), http.MethodPost, "/agents/a1/rollback", `{"versionId":"v1"}`)
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+
+	// 极端情况：非法 JSON / 缺 versionId → 400。
+	w = doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents/a1/rollback", `{`)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	w = doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents/a1/rollback", `{}`)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+
+	// 极端情况：目标是 published（非可回滚历史版本）→ 404。
+	h = newTestAgentHandler(t, repo, nil, func(deps *agent.AgentServiceDeps) {
+		deps.VersionRepo = &mockHandlerVersionRepo{getByID: map[string]versioningdomain.Version{"v1": {
+			ID: "v1", Status: versioningdomain.VersionStatusPublished,
+		}}}
+	})
+	w = doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents/a1/rollback", `{"versionId":"v1"}`)
+	require.Equal(t, http.StatusNotFound, w.Code)
+
+	// 极端情况：目标不存在 → 404。
+	h = newTestAgentHandler(t, repo, nil, func(deps *agent.AgentServiceDeps) {
+		deps.VersionRepo = &mockHandlerVersionRepo{getByID: map[string]versioningdomain.Version{}}
+	})
+	w = doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents/a1/rollback", `{"versionId":"nope"}`)
+	require.Equal(t, http.StatusNotFound, w.Code)
+
+	// 极端情况：agent 不存在 → 404。
+	h = newTestAgentHandler(t, &mockAgentRepo{}, nil, func(deps *agent.AgentServiceDeps) {
+		deps.VersionRepo = &mockHandlerVersionRepo{getByID: map[string]versioningdomain.Version{"v1": deprecatedTarget}}
+	})
+	w = doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents/missing/rollback", `{"versionId":"v1"}`)
+	require.Equal(t, http.StatusNotFound, w.Code)
+
+	// 极端情况：持久化失败 → 500。
+	repo.updateErr = errors.New("write failed")
+	h = newTestAgentHandler(t, repo, nil, func(deps *agent.AgentServiceDeps) {
+		deps.VersionRepo = &mockHandlerVersionRepo{getByID: map[string]versioningdomain.Version{"v1": deprecatedTarget}}
+	})
+	w = doAgentReq(t, authedRoutes(h), http.MethodPost, "/agents/a1/rollback", `{"versionId":"v1"}`)
+	require.Equal(t, http.StatusInternalServerError, w.Code)
 }

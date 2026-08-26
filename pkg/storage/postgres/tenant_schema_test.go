@@ -970,6 +970,41 @@ func TestProvisionTenantSchemaCleansLegacyTablesKeepsPublic(t *testing.T) {
 	require.True(t, publicExists, "provision must not drop public platform catalog")
 }
 
+func TestTenantSchemaContainsResourceVersionsProductHistory(t *testing.T) {
+	// 通用产品版本历史基座:agent/skill/knowledge/mcp 共享,与 resource_revisions
+	// (评测优化控制面)语义独立。tenant-only DDL 的唯一基线是 tenant_schema.sql,
+	// 历史租户升级必须有 active_version_id 幂等回填;表/索引必须 IF NOT EXISTS。
+	data, err := os.ReadFile("tenant_schema.sql")
+	require.NoError(t, err)
+	sql := string(data)
+
+	require.Contains(t, sql, "CREATE TABLE IF NOT EXISTS resource_versions")
+	require.Contains(t, sql, "parent_version_id TEXT REFERENCES resource_versions(id) ON DELETE SET NULL")
+	require.Contains(t, sql, "CHECK (resource_kind IN ('agent', 'skill', 'knowledge', 'mcp'))")
+	require.Contains(t, sql, "CHECK (status IN ('published', 'deprecated'))")
+	require.Contains(t, sql, "CHECK (source IN ('manual', 'rollback'))")
+	require.Contains(t, sql, "content_hash      TEXT NOT NULL DEFAULT ''")
+	require.Contains(t, sql, "safe_summary      JSONB NOT NULL DEFAULT '{}'")
+	require.Contains(t, sql, "CREATE INDEX IF NOT EXISTS idx_resource_versions_resource")
+	require.Contains(t, sql, "ON resource_versions(resource_kind, resource_id, created_at DESC)")
+	require.Contains(t, sql, "CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_versions_revision_no")
+	require.Contains(t, sql, "ON resource_versions(resource_kind, resource_id, revision_no)")
+	require.Contains(t, sql, "WHERE revision_no IS NOT NULL")
+
+	// 产品表生效版本指针:历史租户升级路径,IF NOT EXISTS 幂等。NULL=无版本记录。
+	agentsAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS agents")
+	activeVersionAt := strings.Index(sql, "ALTER TABLE agents ADD COLUMN IF NOT EXISTS active_version_id TEXT")
+	require.NotEqual(t, -1, agentsAt, "agents table DDL must exist")
+	require.NotEqual(t, -1, activeVersionAt, "tenant_schema.sql missing agents.active_version_id backfill")
+	if activeVersionAt < agentsAt {
+		t.Fatal("agents.active_version_id backfill must follow table creation")
+	}
+
+	// 产品版本历史禁止被租户重放清理删除(与 resource_revisions 同语义)。
+	require.NotContains(t, sql, "DELETE FROM resource_versions")
+	require.NotContains(t, sql, "DROP TABLE IF EXISTS resource_versions")
+}
+
 func TestPlatformModelCatalogCarriesDefaultEmbeddingUniqueMark(t *testing.T) {
 	// default_embedding 全局唯一标记由 public 035 迁移承担（原 tenant 表 idx 已移除）。
 	// 常量表达式索引 (true)：满足 WHERE 的行取同一常量，唯一约束强制全表最多一个默认标记。

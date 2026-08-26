@@ -3,6 +3,7 @@ package wiring
 import (
 	"context"
 
+	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	skillpersist "github.com/byteBuilderX/stratum/internal/skill/infrastructure/persistence"
 )
@@ -21,6 +22,7 @@ func (c *Container) buildSkill(_ context.Context) error {
 	}
 	svc := skillapp.NewVersionService(skillpersist.NewPgSkillRevisionRepo(db), c.Logger)
 	svc.SetEditorRepo(skillpersist.NewPgSkillResourceEditorRepo(db))
+	svc.SetActorNameResolver(iampersistence.NewPgActorNameResolver(db))
 	c.Skill = &Skill{VersionService: svc}
 	return nil
 }

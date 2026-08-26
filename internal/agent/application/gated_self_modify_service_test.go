@@ -8,6 +8,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	versioningdomain "github.com/byteBuilderX/stratum/internal/versioning/domain"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -29,7 +30,12 @@ func (f *gateAgentRepoFake) GetAll(context.Context) ([]*domain.AgentConfig, erro
 func (f *gateAgentRepoFake) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (f *gateAgentRepoFake) Update(_ context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool) error {
+func (f *gateAgentRepoFake) Update(_ context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool, _ *versioningdomain.Version) error {
+	f.agents[cfg.ID] = cfg
+	return nil
+}
+
+func (f *gateAgentRepoFake) Rollback(_ context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _, _ string) error {
 	f.agents[cfg.ID] = cfg
 	return nil
 }

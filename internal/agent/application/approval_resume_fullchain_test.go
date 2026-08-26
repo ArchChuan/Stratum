@@ -7,6 +7,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	versioningdomain "github.com/byteBuilderX/stratum/internal/versioning/domain"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -111,7 +112,11 @@ func (r systemAssistantProfileRepo) Get(context.Context, string) (*domain.AgentC
 func (r systemAssistantProfileRepo) GetAll(context.Context) ([]*domain.AgentConfig, error) {
 	return r.cfgs, r.err
 }
-func (r systemAssistantProfileRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool) error {
+func (r systemAssistantProfileRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool, _ *versioningdomain.Version) error {
+	return nil
+}
+
+func (r systemAssistantProfileRepo) Rollback(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _, _ string) error {
 	return nil
 }
 func (r systemAssistantProfileRepo) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
