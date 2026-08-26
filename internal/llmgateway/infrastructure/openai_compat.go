@@ -40,6 +40,12 @@ const (
 	// 每页 20 个、翻页每页 100 个，20 页可覆盖 2000+ 模型；同时防止
 	// has_more 恒为 true 的异常上游导致死循环。
 	maxModelDiscoveryPages = 20
+	// defaultEmbedBatchSize 是 OpenAI-compat 平台统一的 embedding 单请求
+	// 文本数安全上限。智谱 embedding-3 官方文档限定单次请求 input 数组
+	// ≤ 64 条（超过返回 400），OpenAI-compat 客户端一律按该上限分批，
+	// 显式配置也不会超过它——保证任意文档在代码层面必被正确拆分，
+	// 不依赖默认值恰好小于上游限制。
+	defaultEmbedBatchSize = 64
 )
 
 // providerBreaker is a per-provider three-state circuit breaker.
@@ -202,7 +208,7 @@ type ProviderConfig struct {
 	HealthModel    string
 	Models         []string
 	ModelCatalog   []string          // 发现兜底目录：ListModels 时与 GET /models 结果取并集；空 = 行为不变
-	EmbedBatchSize int               // max texts per embedding request; 0 = use default (100)
+	EmbedBatchSize int               // max texts per embedding request; 0 = use default (64); values > 64 are clamped
 	ExtraHeaders   map[string]string // deprecated; not applied until separately reviewed
 }
 
@@ -670,10 +676,13 @@ func convertToolCalls(tcAcc map[int]*streamToolCallDelta) []ToolCall {
 }
 
 func (c *OpenAICompatClient) BatchSize() int {
-	if c.cfg.EmbedBatchSize > 0 {
-		return c.cfg.EmbedBatchSize
+	size := c.cfg.EmbedBatchSize
+	if size <= 0 {
+		size = defaultEmbedBatchSize
 	}
-	return 100
+	// clamp 到平台统一上限：显式配置过大（如 >64）也会被强制拆批，
+	// 确保单请求永不超过上游文档限定的文本数。
+	return min(size, defaultEmbedBatchSize)
 }
 
 func (c *OpenAICompatClient) CreateEmbeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error) {
