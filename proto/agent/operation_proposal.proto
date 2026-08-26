@@ -37,3 +37,10 @@ message OperationProposalResponse {
   // @omitempty
   optional google.protobuf.Timestamp expiresAt = 15;
 }
+
+message OperationProposalPageResponse {
+  repeated OperationProposalResponse proposals = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 pageSize = 4;
+}

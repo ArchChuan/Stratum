@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"strconv"
 
 	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
@@ -16,10 +17,12 @@ import (
 type operationProposalReviewService interface {
 	ListPending(ctx context.Context, tenantID, userID string) ([]domain.OperationProposal, error)
 	ListMine(ctx context.Context, tenantID, userID string) ([]domain.OperationProposal, error)
+	ListHistory(ctx context.Context, tenantID, actor string, page, pageSize int) ([]domain.OperationProposal, int, error)
 	Get(ctx context.Context, tenantID, userID, id string) (*domain.OperationProposal, error)
 	StartReview(ctx context.Context, tenantID, userID, id string) error
 	Approve(ctx context.Context, tenantID, userID, id, note string) error
 	Reject(ctx context.Context, tenantID, userID, id, note string) error
+	Cancel(ctx context.Context, tenantID, actor, id string) error
 	ProposeGrantEditor(ctx context.Context, tenantID, actorID, resourceType, resourceID, resourceName string) error
 }
 
@@ -166,6 +169,49 @@ func (h *OperationProposalHandler) ListMine(c *gin.Context) {
 		out = append(out, gen.ToOperationProposalResponse(p))
 	}
 	c.JSON(http.StatusOK, gin.H{"proposals": out})
+}
+
+// ListHistory returns the paginated approval history. The service filters by
+// the caller's role fresh per request: admin/owner sees the whole tenant,
+// member sees only their own proposals (approved/rejected/executed/cancelled).
+func (h *OperationProposalHandler) ListHistory(c *gin.Context) {
+	tenantID, actorID, ok := proposalIdentity(c)
+	if !ok {
+		return
+	}
+	page, _ := strconv.ParseInt(c.DefaultQuery("page", "1"), 10, 32)
+	pageSize, _ := strconv.ParseInt(c.DefaultQuery("page_size", "20"), 10, 32)
+	proposals, total, err := h.service.ListHistory(c.Request.Context(), tenantID, actorID, int(page), int(pageSize))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	out := make([]gen.OperationProposalResponse, 0, len(proposals))
+	for _, p := range proposals {
+		out = append(out, gen.ToOperationProposalResponse(p))
+	}
+	c.JSON(http.StatusOK, gen.OperationProposalPageResponse{
+		Proposals: out,
+		//nolint:gosec // total 是 COUNT(*) 结果,提案数不可能溢出 int32(proto 契约)
+		Total:    int32(total),
+		Page:     int32(page),
+		PageSize: int32(pageSize),
+	})
+}
+
+// Cancel withdraws a pending proposal: the proposer cancels their own, or an
+// admin/owner cancels on their behalf. Already-resolved proposals are rejected
+// by the service's atomic guard (ErrOperationProposalResolved → 409).
+func (h *OperationProposalHandler) Cancel(c *gin.Context) {
+	tenantID, actorID, ok := proposalIdentity(c)
+	if !ok {
+		return
+	}
+	if err := h.service.Cancel(c.Request.Context(), tenantID, actorID, c.Param("id")); err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": domain.OpCancelled})
 }
 
 // requestEditorAccessBody carries the resource discriminator for the

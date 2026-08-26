@@ -101,6 +101,10 @@ func registerOperationProposals(r *gin.Engine, c *wiring.Container, requireActiv
 	memberOps := r.Group("/operation-proposals", member...)
 	memberOps.Use(requireActive)
 	memberOps.GET("/mine", h.ListMine)
+	// member 组同时服务 admin 与 member（admin ⊃ member）：history 静态段优先于
+	// /:id；ListHistory 按角色现查过滤全租户/本人，Cancel 按归属校验自撤/代撤。
+	memberOps.GET("/history", h.ListHistory)
+	memberOps.POST("/:id/cancel", h.Cancel)
 	// member 自助申请白名单（grant_editor）：agent / skill 编辑权申请、
 	// knowledge 文档查看权申请，批准即授予。同一 handler 按 resourceType 落库。
 	grant := r.Group("", member...)

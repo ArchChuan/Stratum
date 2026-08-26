@@ -21,6 +21,9 @@ vi.mock('@/modules/iam', () => ({
   // ApprovalNotificationBell 经 approvals barrel 间接引入 llmRoutes → PrivateRoute，
   // mock 边界需提供该导出（与 evaluation/routes.test.tsx 同款）。
   PrivateRoute: ({ children }: { children: React.ReactNode }) => children,
+  // ApprovalNotificationBell 的 useApprovalNotifications 用 useTenantRole().isAdmin
+  // 决定拉取数据源；AppShell 布局测试不关注铃铛内容，member 分支即可。
+  useTenantRole: () => ({ isAdmin: false }),
 }));
 
 vi.mock('../UserMenu', () => ({ UserMenu: () => <div>用户菜单</div> }));

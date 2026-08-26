@@ -1023,3 +1023,42 @@ func TestPlatformModelCatalogCarriesDefaultEmbeddingUniqueMark(t *testing.T) {
 		}
 	}
 }
+
+// TestTenantSchemaAddsOperationProposalCancelledState 守护 cancelled 终态的两处落点：
+// CREATE TABLE 的 status CHECK 必须包含 cancelled；历史租户必须经幂等 DROP/ADD 升级，
+// 且 ADD 白名单与 CREATE 一致（漏升级会导致存量租户写入 cancelled 时约束拒绝）。
+func TestTenantSchemaAddsOperationProposalCancelledState(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	require.NoError(t, err)
+	sql := string(data)
+
+	createRe := regexp.MustCompile(`CREATE TABLE IF NOT EXISTS operation_proposals\s*\([^;]*status\s+TEXT NOT NULL CHECK \(status IN \(([^)]*)\)\)`)
+	m := createRe.FindStringSubmatch(sql)
+	if m == nil {
+		t.Fatalf("tenant schema must declare operation_proposals status CHECK")
+	}
+	for _, v := range []string{"'proposed'", "'reviewing'", "'approved'", "'rejected'", "'executed'", "'cancelled'"} {
+		if !strings.Contains(m[1], v) {
+			t.Fatalf("operation_proposals CREATE status CHECK must include %s, got: %s", v, m[1])
+		}
+	}
+
+	drop := "ALTER TABLE operation_proposals DROP CONSTRAINT IF EXISTS operation_proposals_status_check"
+	add := "ALTER TABLE operation_proposals ADD CONSTRAINT operation_proposals_status_check"
+	if strings.Count(sql, drop) < 1 {
+		t.Fatalf("tenant schema must rebuild operation_proposals status constraint for historical tenants")
+	}
+	addRe := regexp.MustCompile(`ADD CONSTRAINT operation_proposals_status_check\s+CHECK \(status IN \(([^)]*)\)\)`)
+	adds := addRe.FindAllStringSubmatch(sql, -1)
+	if len(adds) < 1 {
+		t.Fatalf("tenant schema must add operation_proposals status constraint after the drop")
+	}
+	for i, a := range adds {
+		if !strings.Contains(a[1], "'cancelled'") {
+			t.Fatalf("operation_proposals status rebuild #%d must include 'cancelled', got: %s", i, a[1])
+		}
+	}
+	if strings.Index(sql, add) < strings.Index(sql, drop) {
+		t.Fatalf("operation_proposals status constraint must be dropped before it is rebuilt")
+	}
+}

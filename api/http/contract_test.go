@@ -504,6 +504,9 @@ func (contractOpPropRepo) ConsumeApproved(context.Context, string, string, strin
 func (contractOpPropRepo) ListByProposer(context.Context, string, string) ([]agentdomain.OperationProposal, error) {
 	return nil, nil
 }
+func (contractOpPropRepo) ListHistory(context.Context, string, string, int, int) ([]agentdomain.OperationProposal, int, error) {
+	return nil, 0, nil
+}
 
 type contractOpUsageRepo struct{}
 

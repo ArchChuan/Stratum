@@ -326,3 +326,98 @@ func TestApproveGrantEditorResolvedProposalFailsClosed(t *testing.T) {
 	require.False(t, granted, "grant must not run on a rejected proposal")
 	require.Equal(t, domain.OpRejected, repo.proposals[pid].Status)
 }
+
+// TestOperationProposalListHistory covers role-scoped history: admin/owner sees
+// the whole tenant, member sees only their own. History is the complement of
+// pending (proposed/reviewing excluded), newest first.
+func TestOperationProposalListHistory(t *testing.T) {
+	ctx := context.Background()
+	repo := newOperationProposalRepoFake()
+	repo.proposals["p1"] = domain.OperationProposal{ID: "p1", TenantID: "tenant-1", AgentID: "a", OpType: "self_modify", Status: domain.OpProposed, ProposerID: "member-1", CreatedAt: gateFixedNow}
+	repo.proposals["p2"] = domain.OperationProposal{ID: "p2", TenantID: "tenant-1", AgentID: "a", OpType: "self_modify", Status: domain.OpRejected, ProposerID: "member-1", CreatedAt: gateFixedNow.Add(-time.Hour)}
+	repo.proposals["p3"] = domain.OperationProposal{ID: "p3", TenantID: "tenant-1", AgentID: "a", OpType: "self_modify", Status: domain.OpExecuted, ProposerID: "member-2", CreatedAt: gateFixedNow.Add(-2 * time.Hour)}
+
+	t.Run("admin sees the whole tenant history", func(t *testing.T) {
+		service := newOperationProposalServiceForTest(repo, roleResolverFake{role: "admin"}, nil)
+		rows, total, err := service.ListHistory(ctx, "tenant-1", "admin-1", 1, 20)
+		require.NoError(t, err)
+		require.Equal(t, 2, total) // p1 proposed 不属于历史
+		require.Len(t, rows, 2)
+		require.Equal(t, []string{"p2", "p3"}, []string{rows[0].ID, rows[1].ID})
+	})
+
+	t.Run("member sees only their own history", func(t *testing.T) {
+		service := newOperationProposalServiceForTest(repo, roleResolverFake{role: "member"}, nil)
+		rows, total, err := service.ListHistory(ctx, "tenant-1", "member-1", 1, 20)
+		require.NoError(t, err)
+		require.Equal(t, 1, total)
+		require.Len(t, rows, 1)
+		require.Equal(t, "p2", rows[0].ID)
+	})
+
+	t.Run("nil resolver fails closed", func(t *testing.T) {
+		service := newOperationProposalServiceForTest(repo, nil, nil)
+		_, _, err := service.ListHistory(ctx, "tenant-1", "admin-1", 1, 20)
+		require.ErrorIs(t, err, domain.ErrProposalForbidden)
+	})
+}
+
+// TestOperationProposalCancel covers the withdraw path: proposer self-cancel and
+// admin/owner proxy-cancel, with reason recorded on the audit trail.
+func TestOperationProposalCancel(t *testing.T) {
+	ctx := context.Background()
+	repo := newOperationProposalRepoFake()
+	seededProposal(t, repo) // p1 proposed, proposer member-1
+	metrics := &gateMetricsFake{}
+	service := newOperationProposalServiceForTest(repo, roleResolverFake{role: "member"}, metrics)
+
+	require.NoError(t, service.Cancel(ctx, "tenant-1", "member-1", "p1"))
+	p := repo.proposals["p1"]
+	require.Equal(t, domain.OpCancelled, p.Status)
+	require.Equal(t, "member-1", p.ReviewedBy)
+	require.Equal(t, "cancelled_by_initiator", p.ReviewNote)
+	require.NotNil(t, p.ResolvedAt)
+	require.Equal(t, gateFixedNow, *p.ResolvedAt)
+	require.Equal(t, []string{"self_modify|cancelled"}, metrics.calls)
+}
+
+func TestOperationProposalCancelAuthorization(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("member cannot cancel another member's proposal", func(t *testing.T) {
+		repo := newOperationProposalRepoFake()
+		seededProposal(t, repo) // proposer member-1
+		service := newOperationProposalServiceForTest(repo, roleResolverFake{role: "member"}, nil)
+		err := service.Cancel(ctx, "tenant-1", "member-2", "p1")
+		require.ErrorIs(t, err, domain.ErrProposalForbidden)
+		require.Equal(t, domain.OpProposed, repo.proposals["p1"].Status)
+	})
+
+	t.Run("admin cancels on behalf of a member", func(t *testing.T) {
+		repo := newOperationProposalRepoFake()
+		seededProposal(t, repo)
+		service := newOperationProposalServiceForTest(repo, roleResolverFake{role: "admin"}, nil)
+		require.NoError(t, service.Cancel(ctx, "tenant-1", "admin-1", "p1"))
+		p := repo.proposals["p1"]
+		require.Equal(t, domain.OpCancelled, p.Status)
+		require.Equal(t, "cancelled_by_approver", p.ReviewNote)
+	})
+
+	t.Run("resolved proposal cannot be cancelled", func(t *testing.T) {
+		repo := newOperationProposalRepoFake()
+		p := seededProposal(t, repo)
+		p.Status = domain.OpApproved
+		repo.proposals[p.ID] = p
+		service := newOperationProposalServiceForTest(repo, roleResolverFake{role: "admin"}, nil)
+		err := service.Cancel(ctx, "tenant-1", "admin-1", "p1")
+		require.ErrorIs(t, err, domain.ErrOperationProposalResolved)
+	})
+
+	t.Run("nil resolver fails closed", func(t *testing.T) {
+		repo := newOperationProposalRepoFake()
+		seededProposal(t, repo)
+		service := newOperationProposalServiceForTest(repo, nil, nil)
+		err := service.Cancel(ctx, "tenant-1", "member-1", "p1")
+		require.ErrorIs(t, err, domain.ErrProposalForbidden)
+	})
+}

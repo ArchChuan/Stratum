@@ -1,10 +1,11 @@
-import { Button, Descriptions, Drawer, Input, Modal, Space, Table, Tag, Typography, message } from 'antd';
+import { Button, Descriptions, Drawer, Input, Modal, Pagination, Space, Table, Tabs, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useCallback } from 'react';
 
-import { useOperationProposals } from '../hooks/useOperationProposals';
+import { useOperationProposals, type OperationProposalTab } from '../hooks/useOperationProposals';
 import {
   OP_TYPE_LABELS, STATUS_COLORS, STATUS_LABELS,
+  proposalResourceLabel,
   type OperationProposal,
 } from '../model/operationProposal';
 
@@ -13,24 +14,24 @@ interface OperationProposalsPanelProps {
   readonly?: boolean;
 }
 
-// 资源展示：grant_editor 提案复用 agent_id 列承载任意资源 id（skill/knowledge_doc），
-// 优先展示 payloadSummary.resourceName（「workspace/文档标题」等），回退 agentId / 提案 id。
-const resourceLabel = (p: OperationProposal): string => {
-  const ps = (p.payloadSummary ?? {}) as { resourceName?: string };
-  return ps.resourceName || p.agentId || p.id;
-};
-
 const typeLabel = (opType: string): string => OP_TYPE_LABELS[opType] || opType;
 const statusLabel = (status: string): string => STATUS_LABELS[status] || status;
 const statusColor = (status: string): string => STATUS_COLORS[status] || 'default';
 
 const isGrantEditor = (p: OperationProposal | null): boolean => p?.opType === 'grant_editor';
 
+// 可取消 = 仍在审批流中（proposed/reviewing）；终态（含 cancelled）不可再操作。
+const isCancellable = (p: OperationProposal | null): boolean =>
+  p?.status === 'proposed' || p?.status === 'reviewing';
+
 export const OperationProposalsPanel = ({ readonly = false }: OperationProposalsPanelProps) => {
   const {
-    proposals, loading, detail, detailOpen, note,
-    reviewing, approving, rejecting,
-    setNote, openDetail, closeDetail, handleReview, handleApprove, handleReject,
+    activeTab, pending, pendingLoading, history, historyLoading,
+    total, page, pageSize, pageSizeOptions,
+    detail, detailOpen, note,
+    reviewing, approving, rejecting, cancelling,
+    setNote, switchTab, handleHistoryPageChange,
+    openDetail, closeDetail, handleReview, handleApprove, handleReject, handleCancel,
   } = useOperationProposals(readonly);
 
   const confirmApprove = useCallback(() => {
@@ -61,9 +62,23 @@ export const OperationProposalsPanel = ({ readonly = false }: OperationProposals
     });
   }, [detail, note, handleReject]);
 
+  // member 自撤 / admin 代撤都走同一终态 cancelled，语义略有差异，文案区分。
+  const confirmCancel = useCallback(() => {
+    if (!detail) return;
+    Modal.confirm({
+      title: readonly ? '取消该申请？' : '撤销该提案？',
+      content: readonly
+        ? '取消后该申请立即失效，可在历史中查看记录。'
+        : '撤销后该提案立即进入终态，可在历史中查看记录。',
+      okText: readonly ? '取消申请' : '撤销',
+      cancelText: '返回',
+      onOk: () => void handleCancel(),
+    });
+  }, [detail, readonly, handleCancel]);
+
   const columns: ColumnsType<OperationProposal> = [
     { title: '类型', dataIndex: 'opType', render: typeLabel },
-    { title: '资源', key: 'resource', render: (_, p) => resourceLabel(p) },
+    { title: '资源', key: 'resource', render: (_, p) => proposalResourceLabel(p) },
     { title: '状态', dataIndex: 'status', render: (s: string) => <Tag color={statusColor(s)}>{statusLabel(s)}</Tag> },
     { title: '提案人/申请人', dataIndex: 'proposerId' },
     { title: '创建时间', dataIndex: 'createdAt', render: (v: string) => new Date(v).toLocaleString() },
@@ -81,19 +96,55 @@ export const OperationProposalsPanel = ({ readonly = false }: OperationProposals
       </Typography.Title>
       <Typography.Text type="secondary" style={{ fontSize: 13 }}>
         {readonly
-          ? '查看我发起的编辑/查看权限申请与状态'
+          ? '查看我发起的编辑/查看权限申请与状态，可取消待审批的申请'
           : '审批成员申请的 Agent / Skill 编辑权限与文档查看权限（批准即授予白名单），以及工具操作提案'}
       </Typography.Text>
-      <Table<OperationProposal>
-        rowKey="id"
-        columns={columns}
-        dataSource={proposals}
-        loading={loading}
-        pagination={false}
-        locale={{ emptyText: readonly ? '还没有发起过权限申请' : '暂无待审批的权限申请或操作提案' }}
+
+      <Tabs
+        activeKey={activeTab}
+        onChange={(key) => switchTab(key as OperationProposalTab)}
+        items={[
+          { key: 'pending', label: '待审批' },
+          { key: 'history', label: '历史' },
+        ]}
+        style={{ marginBottom: 8 }}
       />
+
+      {activeTab === 'pending' ? (
+        <Table<OperationProposal>
+          rowKey="id"
+          columns={columns}
+          dataSource={pending}
+          loading={pendingLoading}
+          pagination={false}
+          locale={{ emptyText: readonly ? '暂无待审批的申请' : '暂无待审批的权限申请或操作提案' }}
+        />
+      ) : (
+        <>
+          <Table<OperationProposal>
+            rowKey="id"
+            columns={columns}
+            dataSource={history}
+            loading={historyLoading}
+            pagination={false}
+            locale={{ emptyText: '暂无审批历史' }}
+          />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+            <Pagination
+              current={page}
+              pageSize={pageSize}
+              total={total}
+              pageSizeOptions={pageSizeOptions}
+              showSizeChanger
+              showTotal={(t) => `共 ${t} 条记录`}
+              onChange={handleHistoryPageChange}
+            />
+          </div>
+        </>
+      )}
+
       <Drawer
-        title={detail ? `${typeLabel(detail.opType)} · ${resourceLabel(detail)}` : '申请/操作详情'}
+        title={detail ? `${typeLabel(detail.opType)} · ${proposalResourceLabel(detail)}` : '申请/操作详情'}
         open={detailOpen}
         width={560}
         onClose={closeDetail}
@@ -102,7 +153,7 @@ export const OperationProposalsPanel = ({ readonly = false }: OperationProposals
           <Space direction="vertical" style={{ width: '100%' }} size="large">
             <Descriptions column={1} size="small">
               <Descriptions.Item label="类型">{typeLabel(detail.opType)}</Descriptions.Item>
-              <Descriptions.Item label="资源">{resourceLabel(detail)}</Descriptions.Item>
+              <Descriptions.Item label="资源">{proposalResourceLabel(detail)}</Descriptions.Item>
               <Descriptions.Item label="提案人/申请人">{detail.proposerId}</Descriptions.Item>
               <Descriptions.Item label="状态">
                 <Tag color={statusColor(detail.status)}>{statusLabel(detail.status)}</Tag>
@@ -130,16 +181,26 @@ export const OperationProposalsPanel = ({ readonly = false }: OperationProposals
                   onChange={(e) => setNote(e.target.value)}
                 />
                 <Space style={{ marginTop: 12, width: '100%', justifyContent: 'flex-end' }}>
+                  <Button loading={cancelling} onClick={() => void confirmCancel()}>撤销</Button>
                   <Button danger loading={rejecting} onClick={() => void confirmReject()}>拒绝</Button>
                   <Button type="primary" loading={approving} onClick={() => void confirmApprove()}>批准</Button>
                 </Space>
               </div>
             )}
-            {!readonly && detail.status !== 'proposed' && detail.status !== 'reviewing' && (
+            {!readonly && !isCancellable(detail) && (
               <Typography.Text type="secondary">该提案已进入终态，不可再审批。</Typography.Text>
             )}
             {readonly && (
-              <Typography.Text type="secondary">等待管理员审批，审批结果可在本列表中查看。</Typography.Text>
+              <>
+                {isCancellable(detail) && (
+                  <Button block danger loading={cancelling} onClick={() => void confirmCancel()}>取消申请</Button>
+                )}
+                <Typography.Text type="secondary">
+                  {isCancellable(detail)
+                    ? '等待管理员审批，可在历史中查看审批结果。'
+                    : '该提案已进入终态，可在历史中查看记录。'}
+                </Typography.Text>
+              </>
             )}
           </Space>
         )}

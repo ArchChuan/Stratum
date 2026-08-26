@@ -1,0 +1,11 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "POST",
+    "path": "/operation-proposals/contract-id/cancel",
+    "want_status": 404,
+    "want_body": {
+      "error": "operation proposal not found"
+    }
+  }
+]
