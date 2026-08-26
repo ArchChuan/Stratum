@@ -5,6 +5,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApprovalsPage } from '../ApprovalsPage';
 
 vi.mock('@/modules/iam', () => ({ useTenantRole: () => ({ isAdmin: true }) }));
+// 组件树中 antd Tabs 默认挂载全部 pane，OperationProposalsPanel/approvalColumns
+// 等 import 会解析到真实 api 模块；mock client 拦截任何 XHR，避免 jsdom 下向
+// localhost:3000 发请求（ECONNREFUSED 回调在 teardown 后 setState 报 window is not defined）。
+vi.mock('@/services/client', () => ({
+  default: { get: vi.fn(() => new Promise(() => {})) },
+}));
 vi.mock('../hooks/useApprovalsPage', () => ({
   useApprovalsPage: () => ({
     activeTab: 'pending', pendingRows: [], pendingLoading: false, historyRows: [],
