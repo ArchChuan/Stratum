@@ -13,7 +13,7 @@ func TestLLMExecutorJudgePath(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/agents/a1/execute" {
-			_, _ = w.Write([]byte(`{"result":"planning output","status":"completed"}`))
+			_, _ = w.Write([]byte(`{"output":"planning output"}`))
 			return
 		}
 		http.NotFound(w, r)
@@ -60,7 +60,7 @@ cases:
 func TestLLMExecutorAssertionPath(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"result":"hello world","status":"completed"}`))
+		_, _ = w.Write([]byte(`{"output":"hello world"}`))
 	}))
 	defer server.Close()
 	ex := &llmExecutor{
@@ -93,7 +93,7 @@ cases:
 func TestLLMExecutorMissingJudgeConfigFailsClosed(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"result":"output","status":"completed"}`))
+		_, _ = w.Write([]byte(`{"output":"output"}`))
 	}))
 	defer server.Close()
 	// no judge configured: a judge case must fail closed, not silently pass.
@@ -195,7 +195,7 @@ func TestLLMExecutorAgentResourceNotFoundAborts(t *testing.T) {
 		n++
 		if n == 1 {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"result":"ok","status":"completed"}`))
+			_, _ = w.Write([]byte(`{"output":"ok"}`))
 			return
 		}
 		http.Error(w, "agent not found", http.StatusNotFound)
@@ -246,7 +246,7 @@ cases:
 func TestLLMExecutorJudgeInfraPropagates(t *testing.T) {
 	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"result":"output","status":"completed"}`))
+		_, _ = w.Write([]byte(`{"output":"output"}`))
 	}))
 	defer agentServer.Close()
 	judgeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -405,7 +405,7 @@ func TestAgentClientExecuteAgent(t *testing.T) {
 			http.Error(w, "want POST", http.StatusMethodNotAllowed)
 			return
 		}
-		_, _ = w.Write([]byte(`{"result":{"text":"nested object"},"status":"completed"}`))
+		_, _ = w.Write([]byte(`{"output":"planning output"}`))
 	}))
 	defer server.Close()
 	a := &agentClient{client: newHTTPClient(server.URL, "test-token")}
@@ -413,8 +413,8 @@ func TestAgentClientExecuteAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("executeAgent: %v", err)
 	}
-	if out != `{"text":"nested object"}` {
-		t.Fatalf("executeAgent result = %q, want serialized nested object", out)
+	if out != "planning output" {
+		t.Fatalf("executeAgent result = %q, want server output field", out)
 	}
 }
 
@@ -432,22 +432,22 @@ func TestAgentClientExecuteAgentFailsClosedOnNonCompleted(t *testing.T) {
 		{
 			name:   "waiting approval status",
 			status: http.StatusOK,
-			body:   `{"status":"waiting_approval"}`,
+			body:   `{"output":""}`,
 		},
 		{
 			name:   "202 accepted with pending approval",
 			status: http.StatusAccepted,
-			body:   `{"status":"waiting_approval"}`,
+			body:   `{"output":""}`,
 		},
 		{
 			name:   "error status",
 			status: http.StatusOK,
-			body:   `{"status":"error","error":"boom"}`,
+			body:   `{"error":"boom"}`,
 		},
 		{
 			name:   "completed without result",
 			status: http.StatusOK,
-			body:   `{"status":"completed"}`,
+			body:   `{"output":""}`,
 		},
 	}
 	for _, tc := range scenarios {

@@ -64,7 +64,7 @@ func (e *skillExecutor) Execute(ctx context.Context, o options, p point) (res ex
 //	    description: "..."
 //	    content: "..."
 //	  agent:
-//	    model: qwen-plus
+//	    model: glm-4-flash
 //	    system_prompt: "..."
 //
 // carrierAgentSpec carries the validated snapshot fields needed to provision a

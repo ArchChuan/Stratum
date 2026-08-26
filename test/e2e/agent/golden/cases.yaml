@@ -11,4 +11,7 @@ cases:
     mode: judge
     judge_spec:
       criteria: 输出应引用实际天气数据，穿衣建议与天气相符
-    note: 验证 agent 工具调用链路（knowledge/weather）真实生效。
+    note: >-
+      Canary：当前平台尚未提供 weather 能力（工具集只有 knowledge + 平台系统工具），
+      该 case 在 weather 工具接入前预期不通过，用于守护将来新增天气能力时不静默回退。
+      knowledge 工具链的真实生效由 planner_schedule 覆盖。
