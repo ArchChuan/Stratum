@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -458,7 +459,7 @@ func (f *operationProposalRepoFake) UpdateStatus(_ context.Context, _, id string
 	case domain.OpApproved:
 		expires := now.Add(constants.OperationApprovalTTL)
 		p.ExpiresAt = &expires
-	case domain.OpRejected:
+	case domain.OpRejected, domain.OpCancelled:
 		p.ResolvedAt = &now
 	}
 	f.proposals[id] = p
@@ -520,6 +521,40 @@ func (f *operationProposalRepoFake) ListByProposer(_ context.Context, _, propose
 		}
 	}
 	return out, nil
+}
+
+// ListHistory mirrors the repo contract: non-pending proposals only, filtered
+// by proposer when non-empty, newest first, paginated. Returns (rows, total).
+func (f *operationProposalRepoFake) ListHistory(_ context.Context, _, proposerID string, page, pageSize int) ([]domain.OperationProposal, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var all []domain.OperationProposal
+	for _, p := range f.proposals {
+		if p.Status == domain.OpProposed || p.Status == domain.OpReviewing {
+			continue
+		}
+		if proposerID != "" && p.ProposerID != proposerID {
+			continue
+		}
+		all = append(all, p)
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if !all[i].CreatedAt.Equal(all[j].CreatedAt) {
+			return all[i].CreatedAt.After(all[j].CreatedAt)
+		}
+		return all[i].ID < all[j].ID
+	})
+	total := len(all)
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	start := (page - 1) * pageSize
+	start = min(start, total)
+	end := min(start+pageSize, total)
+	return all[start:end], total, nil
 }
 
 func usageKey(tenantID, agentID string, opType port.OperationType, day time.Time) string {

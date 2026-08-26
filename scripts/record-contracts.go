@@ -87,7 +87,7 @@ func buildDDDContainer(cfg *config.Config, key *rsa.PrivateKey, logger *zap.Logg
 				contractOpPropRepo{}, contractOpUsageRepo{}, metrics,
 			)
 			svc := agentapp.NewAgentService(agentapp.AgentServiceDeps{
-				Registry: agentapp.NewRegistry(contractAgentRepo{}, nil, logger),
+				Registry: agentapp.NewRegistry(contractAgentRepo{}, logger),
 				Logger:   logger,
 				Metrics:  metrics,
 			})
@@ -428,8 +428,10 @@ func (contractProvRepo) GetMeta(_ context.Context, _ string) (*llmdomain.Provide
 		UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}, nil
 }
-func (contractProvRepo) Update(_ context.Context, _ *llmdomain.Provider) error { return nil }
-func (contractProvRepo) Delete(_ context.Context, _ string) error              { return nil }
+func (contractProvRepo) Update(_ context.Context, _ *llmdomain.Provider, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
+func (contractProvRepo) Delete(_ context.Context, _ string) error { return nil }
 
 type contractModRepo struct{}
 
@@ -440,7 +442,9 @@ func (contractModRepo) Get(_ context.Context, _ string) (*llmdomain.Model, error
 func (contractModRepo) List(_ context.Context, _ llmport.ModelFilter) ([]llmdomain.Model, error) {
 	return nil, nil
 }
-func (contractModRepo) Update(_ context.Context, _ *llmdomain.Model) error { return nil }
+func (contractModRepo) Update(_ context.Context, _ *llmdomain.Model, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (contractModRepo) UpsertDiscovered(_ context.Context, _ string, _ []llmdomain.Model) ([]llmdomain.Model, error) {
 	return nil, nil
 }
@@ -743,6 +747,12 @@ func (contractOpPropRepo) HasPending(context.Context, string, string) (bool, err
 }
 func (contractOpPropRepo) ConsumeApproved(context.Context, string, string, string) (bool, error) {
 	return false, nil
+}
+func (contractOpPropRepo) ListByProposer(context.Context, string, string) ([]agentdomain.OperationProposal, error) {
+	return nil, nil
+}
+func (contractOpPropRepo) ListHistory(context.Context, string, string, int, int) ([]agentdomain.OperationProposal, int, error) {
+	return nil, 0, nil
 }
 
 type contractOpUsageRepo struct{}

@@ -24,6 +24,8 @@ type opProposalReviewFake struct {
 	err       error
 	tenantID  string
 	actorID   string
+	page      int
+	pageSize  int
 }
 
 func (f *opProposalReviewFake) ListPending(_ context.Context, tenantID, userID string) ([]domain.OperationProposal, error) {
@@ -66,6 +68,25 @@ func (f *opProposalReviewFake) ProposeGrantEditor(_ context.Context, tenantID, a
 	f.tenantID, f.actorID = tenantID, actorID
 	return f.err
 }
+func (f *opProposalReviewFake) ListHistory(_ context.Context, tenantID, actor string, page, pageSize int) ([]domain.OperationProposal, int, error) {
+	f.tenantID, f.actorID = tenantID, actor
+	f.page, f.pageSize = page, pageSize
+	if f.err != nil {
+		return nil, 0, f.err
+	}
+	var hist []domain.OperationProposal
+	for _, p := range f.proposals {
+		if p.Status == domain.OpProposed || p.Status == domain.OpReviewing {
+			continue
+		}
+		hist = append(hist, p)
+	}
+	return hist, len(hist), nil
+}
+func (f *opProposalReviewFake) Cancel(_ context.Context, tenantID, actor, _ string) error {
+	f.tenantID, f.actorID = tenantID, actor
+	return f.err
+}
 
 type opSelfModifyFake struct {
 	result application.GatedSelfModifyResult
@@ -96,9 +117,11 @@ func opProposalRouter(review operationProposalReviewService, selfModify agentSel
 	h := NewOperationProposalHandler(review, selfModify)
 	router.GET("/operation-proposals", h.List)
 	router.GET("/operation-proposals/:id", h.Get)
+	router.GET("/operation-proposals/history", h.ListHistory)
 	router.POST("/operation-proposals/:id/review", h.Review)
 	router.POST("/operation-proposals/:id/approve", h.Approve)
 	router.POST("/operation-proposals/:id/reject", h.Reject)
+	router.POST("/operation-proposals/:id/cancel", h.Cancel)
 	router.POST("/agents/:id/self-modify", h.SelfModify)
 	return router
 }
@@ -169,6 +192,35 @@ func TestOperationProposalHandlerNotFound(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/operation-proposals/missing", nil)
 	opProposalRouter(review, &opSelfModifyFake{}).ServeHTTP(recorder, request)
 	require.Equal(t, http.StatusNotFound, recorder.Code)
+}
+
+func TestOperationProposalHandlerListHistory(t *testing.T) {
+	pending := opProposalFixture() // proposed
+	resolved := opProposalFixture()
+	resolved.ID, resolved.Status = "op-resolved", domain.OpRejected
+	review := &opProposalReviewFake{proposals: []domain.OperationProposal{pending, resolved}}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/operation-proposals/history?page=2&page_size=5", nil)
+	opProposalRouter(review, &opSelfModifyFake{}).ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	// 历史只含非 pending（resolved），pending 提案不出现。
+	require.Contains(t, recorder.Body.String(), `"op-resolved"`)
+	require.NotContains(t, recorder.Body.String(), `"op-1"`)
+	require.Contains(t, recorder.Body.String(), `"total":1,"page":2,"pageSize":5`)
+	require.Equal(t, 2, review.page)
+	require.Equal(t, 5, review.pageSize)
+}
+
+func TestOperationProposalHandlerCancel(t *testing.T) {
+	review := &opProposalReviewFake{}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/operation-proposals/op-1/cancel", nil)
+	opProposalRouter(review, &opSelfModifyFake{}).ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"status":"cancelled"`)
+	require.Equal(t, "admin-1", review.actorID)
 }
 
 func TestOperationProposalHandlerSelfModifyAlwaysProposes(t *testing.T) {
