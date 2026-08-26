@@ -18,9 +18,10 @@ type BuiltinSkill struct {
 }
 
 // BuiltinSkills returns the current set of built-in skills.
-// Each skill targets the system assistant agent and ships with a single
-// published revision carrying the simplified editable surface:
-// name/description/instructions.
+// Each skill targets the system assistant agent and ships with a published
+// revision that is immediately effective; edits save a new version through
+// the ordinary version mechanism — no platform special casing. The editable
+// surface is name/description/instructions.
 func BuiltinSkills() []BuiltinSkill {
 	return []BuiltinSkill{
 		platformGuide(),
@@ -152,7 +153,7 @@ func toolExecution() BuiltinSkill {
 // may lack a PK in legacy schemas).
 func SkillSQL() string {
 	var b strings.Builder
-	b.WriteString("-- Builtin skills: platform guide + tenant diagnostic\n")
+	b.WriteString("-- Builtin skills: platform guide, tenant diagnostic, resource change, tool execution\n")
 
 	for _, sk := range BuiltinSkills() {
 		rev := sk.Revision
@@ -164,7 +165,6 @@ func SkillSQL() string {
 		if genMeta == "" {
 			genMeta = "{}"
 		}
-
 		fmt.Fprintf(&b, `
 INSERT INTO skills (id, name, description, status, active_revision_id, created_at, updated_at)
 VALUES ('%s', '%s', '%s', 'published', '%s', NOW(), NOW())

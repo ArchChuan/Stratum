@@ -31,9 +31,9 @@ type proposalAgentService interface {
 }
 
 type proposalSkillService interface {
-	CreateSkillDraft(context.Context, skillapp.CreateSkillDraftInput) (skillapp.SkillWorkspaceView, error)
+	CreateSkill(context.Context, skillapp.CreateSkillInput) (skillapp.SkillWorkspaceView, error)
 	GetWorkspace(context.Context, string, string) (skillapp.SkillWorkspaceView, error)
-	UpdateDraftBundle(context.Context, string, string, skillapp.UpdateDraftBundleInput) (skillapp.SkillWorkspaceView, error)
+	SaveRevision(context.Context, string, string, skillapp.SaveRevisionInput) (skillapp.SkillWorkspaceView, error)
 }
 
 type proposalMCPService interface {
@@ -113,12 +113,13 @@ func (a *ResourceChangeProposalAdapters) ResolveBaseline(
 		if err != nil {
 			return agentport.ResourceBaseline{}, err
 		}
-		if value.Draft.Status != skilldomain.VersionStatusDraft {
+		// baseline 定格当前生效版本;存量未发布 skill(无 active)不可提案编辑。
+		if value.Active.ID == "" {
 			return agentport.ResourceBaseline{}, skilldomain.ErrSkillNotFound
 		}
 		projection = map[string]any{"name": value.Skill.Name, "description": value.Skill.Description,
-			"instructions": value.Draft.Instructions}
-		fingerprintValue = value.Draft.ContentHash
+			"instructions": value.Active.Instructions}
+		fingerprintValue = value.Active.ContentHash
 	case agentdomain.ResourceMCPConfig:
 		value, err := a.mcp.GetServerConfig(ctx, proposal.ResourceID)
 		if err != nil {
@@ -308,13 +309,13 @@ func (a *ResourceChangeProposalAdapters) applySkillChange(
 	var value skillapp.SkillWorkspaceView
 	var err error
 	if operation == agentdomain.OperationCreate {
-		value, err = a.skills.CreateSkillDraft(ctx, skillapp.CreateSkillDraftInput{
+		value, err = a.skills.CreateSkill(ctx, skillapp.CreateSkillInput{
 			Name: change.Name, Description: change.Description,
 			Instructions: change.Instructions, ActorID: actorID,
 		})
 	} else {
-		value, err = a.skills.UpdateDraftBundle(ctx, resourceID, fingerprint,
-			skillapp.UpdateDraftBundleInput{
+		value, err = a.skills.SaveRevision(ctx, resourceID, fingerprint,
+			skillapp.SaveRevisionInput{
 				Name: change.Name, Description: change.Description, Instructions: change.Instructions, ActorID: actorID,
 			})
 	}
@@ -323,7 +324,7 @@ func (a *ResourceChangeProposalAdapters) applySkillChange(
 	}
 	projection := map[string]any{
 		"id": value.Skill.ID, "name": value.Skill.Name, "description": value.Skill.Description,
-		"status": value.Draft.Status, "contentHash": value.Draft.ContentHash,
+		"status": value.Active.Status, "contentHash": value.Active.ContentHash,
 	}
 	return safeApplyResult(value.Skill.ID, projection)
 }

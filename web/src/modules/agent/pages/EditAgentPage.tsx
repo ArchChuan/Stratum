@@ -103,21 +103,24 @@ export const EditAgentPage = () => {
           editorCandidatesLoading={editorCandidatesLoading}
         />
 
-        <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          {readOnly ? (
-            <Button type="primary" icon={<LockOutlined />} loading={requesting} onClick={() => void handleRequestEditor()}>
-              申请编辑权限
+        {!readOnly && (
+          <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <Button onClick={() => navigate(managementPath)}>取消</Button>
+            <Button type="primary" htmlType="submit" loading={loading}>
+              保存修改
             </Button>
-          ) : (
-            <>
-              <Button onClick={() => navigate(managementPath)}>取消</Button>
-              <Button type="primary" htmlType="submit" loading={loading}>
-                保存修改
-              </Button>
-            </>
-          )}
-        </div>
+          </div>
+        )}
       </Form>
+      {/* 申请编辑权限按钮必须放在 Form 外：<Form disabled={readOnly}> 通过 DisabledContext
+          禁用表单内所有 antd 组件（含 Button），member 只读时须可点申请。 */}
+      {readOnly && (
+        <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <Button type="primary" icon={<LockOutlined />} loading={requesting} onClick={() => void handleRequestEditor()}>
+            申请编辑权限
+          </Button>
+        </div>
+      )}
     </div>
   );
 };

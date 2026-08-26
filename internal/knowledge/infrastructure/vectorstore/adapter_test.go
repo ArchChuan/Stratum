@@ -25,6 +25,9 @@ type stubStore struct {
 	// lastExpression records the filter expression of the most recent
 	// SearchWithFilterStrict call for whitelist-propagation assertions.
 	lastExpression string
+	// deletedByDocIDs records the docIDs of the most recent DeleteByDocumentIDs
+	// call so tests can assert what the adapter requested.
+	deletedByDocIDs []string
 }
 
 func (s *stubStore) CreateCollectionWithDim(context.Context, string, int) error { return s.createErr }
@@ -42,6 +45,10 @@ func (s *stubStore) SearchWithFilterStrict(_ context.Context, _ string, _ []floa
 }
 func (s *stubStore) Flush(context.Context, string) error            { return s.flushErr }
 func (s *stubStore) DeleteCollection(context.Context, string) error { return s.delErr }
+func (s *stubStore) DeleteByDocumentIDs(_ context.Context, _ string, docIDs []string) error {
+	s.deletedByDocIDs = docIDs
+	return s.delErr
+}
 func (s *stubStore) CountVectors(context.Context, string, string) (int64, error) {
 	return s.count, s.countErr
 }
@@ -139,6 +146,28 @@ func TestAdapter_Flush(t *testing.T) {
 	s := &stubStore{flushErr: errors.New("flush boom")}
 	a := &Adapter{store: s}
 	require.ErrorContains(t, a.Flush(context.Background(), "col"), "flush boom")
+}
+
+// TestAdapter_Flush_unavailableTranslatesToPortType asserts a transient Milvus
+// flush failure surfaces as the port-level VectorStoreUnavailableError so the
+// application retry loop can match it without importing pkg/storage/milvus.
+func TestAdapter_Flush_unavailableTranslatesToPortType(t *testing.T) {
+	s := &stubStore{flushErr: &storagemilvus.UnavailableError{Op: "flush", Err: errors.New("rate limit exceeded")}}
+	a := &Adapter{store: s}
+	err := a.Flush(context.Background(), "col")
+	var unavail *knowledgeport.VectorStoreUnavailableError
+	require.ErrorAs(t, err, &unavail, "transient flush error must surface as port VectorStoreUnavailableError")
+}
+
+// TestAdapter_Flush_nonTransientPassesThrough asserts permanent failures are
+// not wrapped — retrying them would just delay marking the document failed.
+func TestAdapter_Flush_nonTransientPassesThrough(t *testing.T) {
+	s := &stubStore{flushErr: errors.New("collection schema mismatch")}
+	a := &Adapter{store: s}
+	err := a.Flush(context.Background(), "col")
+	require.ErrorContains(t, err, "schema mismatch")
+	var unavail *knowledgeport.VectorStoreUnavailableError
+	require.False(t, errors.As(err, &unavail), "non-transient flush error must not be wrapped")
 }
 
 func TestAdapter_DeleteCollection(t *testing.T) {

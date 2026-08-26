@@ -11,58 +11,17 @@ import (
 	"go.uber.org/zap"
 )
 
-// seedSkillDraft 在 fake repo 中插入 skill + 指定状态的 revision。
-func seedSkillDraft(t *testing.T, repo *fakeVersionRepo, status domain.VersionStatus, skillID, revisionID string) {
-	t.Helper()
-	revisionNo := 1
-	if status != domain.VersionStatusPublished {
-		revisionNo = 0
-	}
-	draft := domain.SkillRevision{
-		ID:           revisionID,
-		SkillID:      skillID,
-		Status:       status,
-		RevisionNo:   revisionNo,
-		Source:       "manual",
-		Name:         "Skill " + skillID,
-		Description:  "desc",
-		Instructions: "do the thing",
-	}
-	hash, err := draft.ComputeContentHash()
-	require.NoError(t, err)
-	draft.ContentHash = hash
-	skill := port.SkillProductRow{ID: skillID, Name: "Skill " + skillID, Description: "desc", Status: "draft"}
-	if status == domain.VersionStatusPublished {
-		skill.Status = "published"
-		skill.ActiveRevisionID = draft.ID
-	}
-	require.NoError(t, repo.InsertSkillWithDraft(context.Background(), skill, draft, nil, nil))
-}
-
-func TestVersionServiceGetWorkspacePrefersDraft(t *testing.T) {
-	// 同时存在 draft 与 active 时返回 draft。
+func TestVersionServiceGetWorkspaceReturnsActive(t *testing.T) {
 	repo := newFakeVersionRepo()
-	seedSkillDraft(t, repo, domain.VersionStatusDraft, "s1", "rev-s1-draft")
-	seedSkillDraft(t, repo, domain.VersionStatusPublished, "s1", "rev-s1")
+	seedRevision(t, repo, "s1", "rev-s1", domain.VersionStatusPublished, "user-1")
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	view, err := svc.GetWorkspace(context.Background(), "s1", "owner-1")
 	require.NoError(t, err)
-	assert.Equal(t, "s1", view.Skill.ID)
-	assert.Equal(t, domain.VersionStatusDraft, view.Draft.Status)
-}
-
-func TestVersionServiceGetWorkspaceFallsBackToActive(t *testing.T) {
-	// 极端情况：无 draft 时回退 active revision。
-	repo := newFakeVersionRepo()
-	seedSkillDraft(t, repo, domain.VersionStatusPublished, "s1", "rev-s1")
-	svc := NewVersionService(repo, zap.NewNop())
-	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-
-	view, err := svc.GetWorkspace(context.Background(), "s1", "owner-1")
-	require.NoError(t, err)
-	assert.Equal(t, domain.VersionStatusPublished, view.Draft.Status)
+	require.Equal(t, "s1", view.Skill.ID)
+	require.Equal(t, domain.VersionStatusPublished, view.Active.Status)
+	require.Equal(t, "rev-s1", view.Active.ID)
 }
 
 func TestVersionServiceGetWorkspaceMissingSkill(t *testing.T) {
@@ -73,31 +32,17 @@ func TestVersionServiceGetWorkspaceMissingSkill(t *testing.T) {
 	assert.ErrorIs(t, err, domain.ErrSkillNotFound)
 }
 
-func TestVersionServiceGetWorkspaceNoActiveEither(t *testing.T) {
-	// 极端情况：skill 存在但 draft 与 active 都缺失 → ErrSkillNotFound。
+func TestVersionServiceGetWorkspaceLegacyUnpublished(t *testing.T) {
+	// 存量未发布 skill(无 active revision)返回空 Active,不报错——前端可编辑,
+	// 首次保存生成第一版。
 	repo := newFakeVersionRepo()
 	repo.skills["s1"] = port.SkillProductRow{ID: "s1"}
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-	_, err := svc.GetWorkspace(context.Background(), "s1", "owner-1")
-	assert.ErrorIs(t, err, domain.ErrSkillNotFound)
-}
 
-func TestVersionServiceListAndDeleteSkills(t *testing.T) {
-	repo := newFakeVersionRepo()
-	seedSkillDraft(t, repo, domain.VersionStatusDraft, "s1", "rev-s1")
-	seedSkillDraft(t, repo, domain.VersionStatusDraft, "s2", "rev-s2")
-	svc := NewVersionService(repo, zap.NewNop())
-	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-
-	skills, err := svc.ListSkills(context.Background())
+	view, err := svc.GetWorkspace(context.Background(), "s1", "owner-1")
 	require.NoError(t, err)
-	assert.Len(t, skills, 2)
-
-	require.NoError(t, svc.DeleteSkill(context.Background(), "s1", "user-1"))
-	skills, err = svc.ListSkills(context.Background())
-	require.NoError(t, err)
-	assert.Len(t, skills, 1)
+	require.Empty(t, view.Active.ID)
 }
 
 func TestVersionServiceResolveEvaluableRevision(t *testing.T) {
@@ -109,12 +54,12 @@ func TestVersionServiceResolveEvaluableRevision(t *testing.T) {
 		{"published is evaluable", domain.VersionStatusPublished, true},
 		{"candidate is evaluable", domain.VersionStatusCandidate, true},
 		{"draft is not evaluable", domain.VersionStatusDraft, false},
-		{"archived is not evaluable", domain.VersionStatusDeprecated, false},
+		{"deprecated is not evaluable", domain.VersionStatusDeprecated, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := newFakeVersionRepo()
-			seedSkillDraft(t, repo, tc.status, "s1", "rev-s1")
+			seedRevision(t, repo, "s1", "rev-s1", tc.status, "user-1")
 			svc := NewVersionService(repo, zap.NewNop())
 			svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 			rev, err := svc.ResolveEvaluableRevision(context.Background(), "s1", "rev-s1")
@@ -138,9 +83,9 @@ func TestVersionServiceResolveEvaluableRevisionMissing(t *testing.T) {
 }
 
 func TestVersionServiceResolveActivePublishedRevision(t *testing.T) {
-	// 成功路径 + 非 published + 缺失。
+	// 成功路径。
 	repo := newFakeVersionRepo()
-	seedSkillDraft(t, repo, domain.VersionStatusPublished, "s1", "rev-s1")
+	seedRevision(t, repo, "s1", "rev-s1", domain.VersionStatusPublished, "user-1")
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
@@ -148,17 +93,17 @@ func TestVersionServiceResolveActivePublishedRevision(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, domain.VersionStatusPublished, rev.Status)
 
-	// draft revision 未激活（ActiveRevisionID 空）。
+	// 无 active revision(存量未发布)→ ErrSkillNotFound。
 	repo2 := newFakeVersionRepo()
-	seedSkillDraft(t, repo2, domain.VersionStatusDraft, "s2", "rev-s2")
+	seedRevision(t, repo2, "s2", "rev-s2", domain.VersionStatusDraft, "user-1")
 	svc2 := NewVersionService(repo2, zap.NewNop())
 	svc2.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	_, err = svc2.ResolveActivePublishedRevision(context.Background(), "s2")
 	assert.ErrorIs(t, err, domain.ErrSkillNotFound)
 
-	// 极端情况：active 指向未 published revision。
+	// 极端情况:active 指向未 published revision。
 	repo3 := newFakeVersionRepo()
-	seedSkillDraft(t, repo3, domain.VersionStatusDraft, "s3", "rev-s3")
+	seedRevision(t, repo3, "s3", "rev-s3", domain.VersionStatusDraft, "user-1")
 	repo3.skills["s3"] = port.SkillProductRow{ID: "s3", ActiveRevisionID: "rev-s3"}
 	svc3 := NewVersionService(repo3, zap.NewNop())
 	svc3.SetTenantRoleResolver(stubTenantRole{role: "owner"})
@@ -169,13 +114,13 @@ func TestVersionServiceResolveActivePublishedRevision(t *testing.T) {
 
 func TestVersionServiceSafeSummaries(t *testing.T) {
 	repo := newFakeVersionRepo()
-	seedSkillDraft(t, repo, domain.VersionStatusPublished, "s1", "rev-s1")
+	seedRevision(t, repo, "s1", "rev-s1", domain.VersionStatusPublished, "user-1")
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	pub, err := svc.PublishedRevisionSafeSummary(context.Background(), "s1", "rev-s1")
 	require.NoError(t, err)
-	assert.Equal(t, "Skill s1", pub["name"])
+	assert.Equal(t, "skill-s1", pub["name"])
 	assert.Equal(t, "revision-1", pub["version_label"])
 
 	eval, err := svc.EvaluableRevisionSafeSummary(context.Background(), "s1", "rev-s1")
@@ -185,7 +130,7 @@ func TestVersionServiceSafeSummaries(t *testing.T) {
 
 func TestVersionServiceSafeSummariesRejectDraft(t *testing.T) {
 	repo := newFakeVersionRepo()
-	seedSkillDraft(t, repo, domain.VersionStatusDraft, "s1", "rev-s1")
+	seedRevision(t, repo, "s1", "rev-s1", domain.VersionStatusDraft, "user-1")
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
@@ -199,46 +144,46 @@ func TestVersionServiceSafeSummariesRejectDraft(t *testing.T) {
 
 func TestVersionServiceCreateCandidateSuccess(t *testing.T) {
 	repo := newFakeVersionRepo()
-	seedSkillDraft(t, repo, domain.VersionStatusPublished, "s1", "rev-s1")
+	_, baseline := seedRevision(t, repo, "s1", "rev-s1", domain.VersionStatusPublished, "user-1")
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
-	candidate, err := svc.CreateCandidate(context.Background(), "s1", "rev-s1", CandidateInput{
+	candidate, err := svc.CreateCandidate(context.Background(), "s1", baseline.ID, CandidateInput{
 		Source:             "llm_rewrite",
 		PromptPatch:        map[string]any{"instructions": "  rewritten  "},
 		GenerationMetadata: map[string]any{"model": "m"},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, domain.VersionStatusCandidate, candidate.Status)
-	assert.Equal(t, "  rewritten  ", candidate.Instructions) // 实现原样保留，不 trim
-	assert.Equal(t, "rev-s1", candidate.ParentRevisionID)
+	assert.Equal(t, "  rewritten  ", candidate.Instructions) // 实现原样保留,不 trim
+	assert.Equal(t, baseline.ID, candidate.ParentRevisionID)
 	assert.Equal(t, "m", candidate.GenerationMetadata["model"])
 }
 
 func TestVersionServiceCreateCandidateRejections(t *testing.T) {
 	repo := newFakeVersionRepo()
-	seedSkillDraft(t, repo, domain.VersionStatusPublished, "s1", "rev-s1")
+	_, baseline := seedRevision(t, repo, "s1", "rev-s1", domain.VersionStatusPublished, "user-1")
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
 	// 不支持的 source。
-	_, err := svc.CreateCandidate(context.Background(), "s1", "rev-s1", CandidateInput{Source: "hand"})
+	_, err := svc.CreateCandidate(context.Background(), "s1", baseline.ID, CandidateInput{Source: "hand"})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported candidate source")
 
-	// 极端情况：修改非 instructions 字段被拒。
-	_, err = svc.CreateCandidate(context.Background(), "s1", "rev-s1", CandidateInput{
+	// 修改非 instructions 字段被拒。
+	_, err = svc.CreateCandidate(context.Background(), "s1", baseline.ID, CandidateInput{
 		Source: "llm_rewrite", PromptPatch: map[string]any{"goal": "x"},
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not optimizable")
 
-	// 极端情况：instructions 非字符串或空白。
+	// instructions 非字符串或空白。
 	for _, patch := range []map[string]any{
 		{"instructions": 42},
 		{"instructions": "   "},
 	} {
-		_, err = svc.CreateCandidate(context.Background(), "s1", "rev-s1", CandidateInput{
+		_, err = svc.CreateCandidate(context.Background(), "s1", baseline.ID, CandidateInput{
 			Source: "llm_rewrite", PromptPatch: patch,
 		})
 		assert.Error(t, err)
@@ -249,21 +194,25 @@ func TestVersionServiceCreateCandidateRejections(t *testing.T) {
 	assert.ErrorIs(t, err, domain.ErrSkillNotFound)
 }
 
-func TestVersionServiceUpdateDraftBundleStaleHash(t *testing.T) {
-	// 极端情况：期望 hash 与当前不一致 → ErrSkillDraftStale。
+func TestVersionServiceSaveRevisionStaleHash(t *testing.T) {
+	// 期望 hash 与当前生效版本不一致 → ErrSkillDraftStale(409)。
 	repo := newFakeVersionRepo()
-	seedSkillDraft(t, repo, domain.VersionStatusDraft, "s1", "rev-s1")
+	seedRevision(t, repo, "s1", "rev-s1", domain.VersionStatusPublished, "user-1")
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 
-	_, err := svc.UpdateDraftBundle(context.Background(), "s1", "stale-hash", UpdateDraftBundleInput{Name: "x", ActorID: "user-1"})
+	_, err := svc.SaveRevision(context.Background(), "s1", "stale-hash", SaveRevisionInput{
+		Name: "x", Description: "d", Instructions: "i", ActorID: "user-1",
+	})
 	assert.ErrorIs(t, err, domain.ErrSkillDraftStale)
 }
 
-func TestVersionServiceUpdateDraftBundleMissingSkill(t *testing.T) {
+func TestVersionServiceSaveRevisionMissingSkill(t *testing.T) {
 	repo := newFakeVersionRepo()
 	svc := NewVersionService(repo, zap.NewNop())
 	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
-	_, err := svc.UpdateDraftBundle(context.Background(), "ghost", "", UpdateDraftBundleInput{ActorID: "user-1"})
+	_, err := svc.SaveRevision(context.Background(), "ghost", "", SaveRevisionInput{
+		Name: "x", Description: "d", Instructions: "i", ActorID: "user-1",
+	})
 	assert.ErrorIs(t, err, domain.ErrSkillNotFound)
 }

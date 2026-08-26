@@ -1,0 +1,8 @@
+version: 1
+cases:
+  - id: walkthrough_register
+    query: 新用户注册后第一步做什么
+    mode: judge
+    judge_spec:
+      criteria: 输出应遵循 onboarding-walkthrough 的步骤结构，给出注册后的明确下一步
+    note: 验证 skill 内容在 agent 执行中真实生效。

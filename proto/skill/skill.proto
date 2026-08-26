@@ -15,16 +15,23 @@ message CreateSkillRequest {
   repeated string editors = 8;
 }
 
-message UpdateSkillDraftRequest {
+message UpdateSkillRequest {
   string name = 1;
   string description = 2;
   string instructions = 3;
+  // expectedContentHash is the optimistic-concurrency baseline taken from the
+  // current active revision. A save whose baseline mismatches the current
+  // active content hash is rejected (409), guarding concurrent edits.
+  // @omitempty
+  string expectedContentHash = 4;
 }
 
 message SkillWorkspaceResponse {
   repeated string editors = 1;
   SkillProductResponse skill = 2;
-  SkillRevisionResponse draft = 3;
+  // active is the currently effective revision (empty when a legacy
+  // unpublished skill has not yet produced its first version).
+  SkillRevisionResponse active = 3;
 }
 
 message SkillProductResponse {
@@ -34,9 +41,8 @@ message SkillProductResponse {
   string status = 4;
   // @omitempty
   string activeRevisionId = 5;
-  // @omitempty
-  string draftRevisionId = 6;
-  // isSystem 标记系统内置 skill(builtin: 前缀),供前端按普通 agent / 系统助手条件过滤。
+  // isSystem 标记系统内置 skill(builtin: 前缀)的资源属性，不参与权限/控制特判：
+  // 编辑、白名单、删除与普通 skill 走同一套权限体系。
   bool isSystem = 7;
 }
 
@@ -51,6 +57,26 @@ message SkillRevisionResponse {
   string instructions = 7;
   // @omitempty
   google.protobuf.Struct publishChecks = 9;
+  // isCurrent marks the version the skill's active_revision_id points to
+  // (only populated by the version-history listing).
+  bool isCurrent = 10;
+  string createdBy = 11;
+  // @omitempty
+  string createdAt = 12;
+  // contentHash is the optimistic-concurrency baseline: clients echo it back
+  // as UpdateSkillRequest.expectedContentHash so a concurrent save is rejected
+  // with 409 instead of silently overwriting.
+  // @omitempty
+  string contentHash = 13;
+}
+
+message SkillRevisionsResponse {
+  repeated SkillRevisionResponse revisions = 1;
+}
+
+message RollbackSkillRequest {
+  // @binding: required
+  string revisionId = 1;
 }
 
 message ErrorResponse {

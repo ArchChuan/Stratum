@@ -13,8 +13,6 @@ interface WorkspaceDocumentsTableProps {
   documents: KnowledgeDocument[];
   loading: boolean;
   isAdmin?: boolean;
-  // platform-managed 知识库豁免白名单：不渲染受限 Tag 与权限动作
-  platformManaged?: boolean;
   deletingDocumentID?: string;
   onDelete?: (documentID: string) => void;
   onPreview?: (document: KnowledgeDocument) => void;
@@ -167,7 +165,6 @@ export const WorkspaceDocumentsTable = ({
   documents,
   loading,
   isAdmin = false,
-  platformManaged = false,
   deletingDocumentID = '',
   onDelete = () => undefined,
   onPreview,
@@ -175,12 +172,12 @@ export const WorkspaceDocumentsTable = ({
   onRequestAccess,
   requestingDocumentID = '',
 }: WorkspaceDocumentsTableProps) => {
-  // 申请查看权限：member 且非平台库且当前 viewer 被锁定才显示。
-  const canRequestAccess = !isAdmin && !platformManaged && Boolean(onRequestAccess);
+  // 申请查看权限：member 且当前 viewer 被锁定才显示。
+  const canRequestAccess = !isAdmin && Boolean(onRequestAccess);
   const actions: ColumnsType<KnowledgeDocument>[number] = {
     title: '操作',
     key: 'actions',
-    width: platformManaged ? 72 : 144,
+    width: 144,
     align: 'center' as const,
     render: (_: unknown, document: KnowledgeDocument) => (
       <Flex align="center" justify="center" gap={0}>
@@ -197,7 +194,7 @@ export const WorkspaceDocumentsTable = ({
             </Button>
           </Tooltip>
         )}
-        {isAdmin && !platformManaged && onSetAccess && (
+        {isAdmin && onSetAccess && (
           <Tooltip title="设置访问权限">
             <Button
               type="text"
@@ -252,7 +249,7 @@ export const WorkspaceDocumentsTable = ({
                   申请查看
                 </Button>
               )}
-              {isAdmin && !platformManaged && onSetAccess && (
+              {isAdmin && onSetAccess && (
                 <Button
                   type="text"
                   size="small"

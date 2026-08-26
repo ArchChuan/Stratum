@@ -55,7 +55,7 @@ if [[ "${CI_OWNED:-0}" == "1" ]]; then
       unit | integration) ci_skip_tests=true ;;
       build) ci_skip_build=true ;;
       contract) ci_skip_contract=true ;;
-      security | e2e-short | e2e-soak | release-soak) ;;
+      security | e2e-short | e2e-soak | release-soak | eval) ;;
       *) printf 'unsupported CI-owned check: %s\n' "$check" >&2; exit 1 ;;
     esac
   done < <(jq -er '.ci_checks[]' "$plan")

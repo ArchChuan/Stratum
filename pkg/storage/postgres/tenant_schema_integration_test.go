@@ -79,6 +79,43 @@ func TestProvisionTenantSchemaToleratesTerminalApprovalStatuses(t *testing.T) {
 	require.Equal(t, 3, n)
 }
 
+// TestProvisionTenantSchemaAllowsGrantEditorProposal 回归 grant_editor 申请 500：
+// 存量租户的 operation_proposals op_type check 约束缺 grant_editor 枚举时，
+// ProposeGrantEditor 插入即 23514。验证历史旧约束确实拒绝、provision 幂等升级后放行。
+func TestProvisionTenantSchemaAllowsGrantEditorProposal(t *testing.T) {
+	pool, ctx, tenantID := systemAssistantTestPool(t, "grant_editor")
+	require.NoError(t, postgres.ProvisionTenantSchema(ctx, pool, tenantID))
+	schema := `"tenant_` + tenantID + `"`
+	insertGrantEditor := `INSERT INTO ` + schema + `.operation_proposals
+		(id, agent_id, op_type, fingerprint, status)
+		VALUES ($1, 'agent-1', 'grant_editor', $2, 'proposed')`
+
+	// 1. 模拟历史租户：约束被替换成不含 grant_editor 的旧版，grant_editor 插入被拒。
+	_, err := pool.Exec(ctx, `ALTER TABLE `+schema+`.operation_proposals
+		DROP CONSTRAINT IF EXISTS operation_proposals_op_type_check`)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `ALTER TABLE `+schema+`.operation_proposals
+		ADD CONSTRAINT operation_proposals_op_type_check
+		CHECK (op_type IN ('revision_apply','cross_agent_delegate','schedule_create','self_modify'))`)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, insertGrantEditor, "e2e-historical", "fp-historical")
+	require.Error(t, err, "历史旧约束必须拒绝 grant_editor，否则 500 回归无意义")
+
+	// 2. 重启 provisioning：DROP IF EXISTS + ADD CONSTRAINT 把约束升级为含 grant_editor。
+	require.NoError(t, postgres.ProvisionTenantSchema(ctx, pool, tenantID))
+
+	// 3. grant_editor 提案可落库（前端「申请编辑权限」链路的核心写路径）。
+	_, err = pool.Exec(ctx, insertGrantEditor, "e2e-grant-editor", "fp-e2e-grant-editor")
+	require.NoError(t, err)
+
+	// 4. 幂等：再次 provisioning 不因同名约束重建失败。
+	require.NoError(t, postgres.ProvisionTenantSchema(ctx, pool, tenantID))
+	var count int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM `+schema+`.operation_proposals WHERE op_type='grant_editor'`).Scan(&count))
+	require.Equal(t, 1, count)
+}
+
 func TestProvisionTenantSchemaSystemAssistantModelBackfillPreservesTenantChoice(t *testing.T) {
 	for _, tt := range []struct {
 		name, model, wantModel string

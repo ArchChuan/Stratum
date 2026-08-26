@@ -55,8 +55,8 @@ type previewDocRepo struct {
 	visible []string
 }
 
-func (r *previewDocRepo) Save(context.Context, string, string, *knowledgedomain.Document) error {
-	return nil
+func (r *previewDocRepo) Save(context.Context, string, string, *knowledgedomain.Document) (bool, error) {
+	return true, nil
 }
 func (r *previewDocRepo) List(context.Context, string, string) ([]*knowledgedomain.Document, error) {
 	return nil, nil
@@ -83,6 +83,15 @@ func (r *previewDocRepo) GetByID(context.Context, string, string, string) (*know
 	return r.doc, nil
 }
 func (r *previewDocRepo) SetDocAccess(context.Context, string, string, []string, []string) error {
+	return nil
+}
+func (r *previewDocRepo) CASReplace(context.Context, string, string, string, string, string, string, map[string]any, int) (bool, error) {
+	return false, nil
+}
+func (r *previewDocRepo) CASBeginDelete(context.Context, string, string, string) (bool, error) {
+	return false, nil
+}
+func (r *previewDocRepo) MarkBuiltinLegacy(context.Context, string, string, []string) error {
 	return nil
 }
 

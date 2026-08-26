@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 
+	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
@@ -17,6 +18,7 @@ import (
 type Registry struct {
 	repo           port.AgentRepo
 	logger         *zap.Logger
+	ledger         agentgraph.TokenRecorder
 	memInjector    port.MemoryInjector
 	recallFn       port.RecallMemoryFn
 	platformPrompt port.PlatformPromptResolver
@@ -46,8 +48,15 @@ func (r *Registry) SetPlatformPromptResolver(resolver port.PlatformPromptResolve
 // and the resume path both require it).
 func (r *Registry) SetTaskStore(store port.TaskRepo) { r.taskStore = store }
 
+// SetLedger injects the token/cost recorder so agents hydrated via Get/GetAll
+// record LLM usage (production wires TokenLedger). nil leaves the Noop default.
+func (r *Registry) SetLedger(l agentgraph.TokenRecorder) { r.ledger = l }
+
 func (r *Registry) hydrate(cfg *domain.AgentConfig) (Agent, error) {
 	a := NewBaseAgent(cfg, r.logger)
+	if r.ledger != nil {
+		a = a.WithLedger(r.ledger)
+	}
 	if r.memInjector != nil {
 		a.MemoryInjector = r.memInjector
 	}

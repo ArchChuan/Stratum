@@ -16,6 +16,7 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
+	"github.com/byteBuilderX/stratum/pkg/textutil"
 	"go.uber.org/zap"
 )
 
@@ -586,9 +587,8 @@ func (rs *RAGService) visibleDocIDs(ctx context.Context, req RAGQueryRequest) ([
 	if err != nil {
 		return nil, false, fmt.Errorf("knowledge: resolve workspace visibility: %w", err)
 	}
-	if ws == nil || isPlatformManaged(ws) {
-		// Unknown workspace keeps collection-level scoping; platform-managed
-		// workspaces (built-in knowledge) are fully visible per the D1 matrix.
+	if ws == nil {
+		// Unknown workspace keeps collection-level scoping.
 		return nil, true, nil
 	}
 	role, unrestricted, err := rs.viewerScope(ctx, req, ws)
@@ -1371,7 +1371,7 @@ func searchWorkspaceWithEvidence(ctx context.Context, rs *RAGService, tenantID, 
 			ChunkID:       src.ChunkID,
 			DocumentID:    src.DocumentID,
 			DocumentTitle: titles[src.DocumentID],
-			Snippet:       truncateRunes(src.Content, constants.MaxSourceSnippetRunes),
+			Snippet:       textutil.TruncateRunes(src.Content, constants.MaxSourceSnippetRunes),
 			Score:         float64(src.Score),
 			HasScore:      src.Score != 0,
 		})
@@ -1400,19 +1400,6 @@ func (rs *RAGService) documentTitles(ctx context.Context, tenantID, workspaceID 
 		}
 	}
 	return titles
-}
-
-// truncateRunes cuts s to at most n runes, preserving rune boundaries so a
-// multi-byte character is never split in the middle.
-func truncateRunes(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	runes := []rune(s)
-	if len(runes) <= n {
-		return s
-	}
-	return string(runes[:n])
 }
 
 // mergeEvidenceResults keeps the same at-least-one semantics as mergeResults:

@@ -9,13 +9,20 @@ type KB struct {
 
 type Document struct {
 	ID, KBID, Source, ContentHash string
-	IngestStatus                  string
-	IngestError                   string
-	ProcessedChunks               int
-	TotalChunks                   int
-	CreatedAt                     time.Time
-	IngestStartedAt               *time.Time
-	IngestFinishedAt              *time.Time
+	// Title is the display title. Falls back to Source for legacy rows where
+	// the title column was populated with the filename.
+	Title string
+	// Metadata carries structured document attributes (e.g.
+	// {"builtin_source":"docs/knowledge/guides/agent.md"} for built-in docs).
+	// Empty map => unrestricted/no attributes. Never nil after a repo read.
+	Metadata         map[string]any
+	IngestStatus     string
+	IngestError      string
+	ProcessedChunks  int
+	TotalChunks      int
+	CreatedAt        time.Time
+	IngestStartedAt  *time.Time
+	IngestFinishedAt *time.Time
 
 	// AllowedUserIDs/AllowedRoleIDs form the document-level access whitelist.
 	// Both empty => unrestricted (inherits workspace visibility); either

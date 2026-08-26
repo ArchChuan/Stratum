@@ -21,6 +21,7 @@ type storeIface interface {
 	Flush(ctx context.Context, collectionName string) error
 	DeleteCollection(ctx context.Context, collectionName string) error
 	CountVectors(ctx context.Context, collectionName, partition string) (int64, error)
+	DeleteByDocumentIDs(ctx context.Context, collectionName string, docIDs []string) error
 }
 
 var _ storeIface = (*storagemilvus.VectorStore)(nil)
@@ -89,7 +90,22 @@ func (a *Adapter) DescribeCollection(ctx context.Context, collectionName string)
 }
 
 func (a *Adapter) Flush(ctx context.Context, collectionName string) error {
-	return a.store.Flush(ctx, collectionName)
+	if err := a.store.Flush(ctx, collectionName); err != nil {
+		return translateStoreError(err)
+	}
+	return nil
+}
+
+// translateStoreError maps transient store failures (Milvus unavailable or
+// server-side rate-limited) onto the port-level VectorStoreUnavailableError so
+// application code can retry without depending on pkg/storage/milvus. Non-
+// transient errors pass through unchanged.
+func translateStoreError(err error) error {
+	var unavailable *storagemilvus.UnavailableError
+	if errors.As(err, &unavailable) {
+		return &knowledgeport.VectorStoreUnavailableError{Err: err}
+	}
+	return err
 }
 
 func (a *Adapter) DeleteCollection(ctx context.Context, collectionName string) error {
@@ -104,6 +120,20 @@ func (a *Adapter) CountVectors(ctx context.Context, collectionName string) (int6
 		return 0, nil
 	}
 	return n, err
+}
+
+func (a *Adapter) DeleteByDocumentIDs(ctx context.Context, collectionName string, docIDs []string) error {
+	if len(docIDs) == 0 {
+		return nil
+	}
+	if err := a.store.DeleteByDocumentIDs(ctx, collectionName, docIDs); err != nil {
+		// A collection that never existed has nothing to purge — idempotent.
+		if errors.Is(err, storagemilvus.ErrCollectionNotFound) {
+			return nil
+		}
+		return translateStoreError(err)
+	}
+	return nil
 }
 
 var _ knowledgeport.VectorStore = (*Adapter)(nil)

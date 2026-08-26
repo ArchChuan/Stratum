@@ -1,0 +1,19 @@
+kind: skill
+point: onboarding-walkthrough
+snapshot:
+  skill:
+    name: onboarding-walkthrough
+    description: 引导新用户完成注册与首次配置的步骤化技能
+    content: |
+      1. 询问用户当前所在步骤
+      2. 按 onboarding 文档给出对应操作指引
+      3. 结束时总结已完成事项
+  agent:
+    model: glm-4-flash
+    system_prompt: "你是一个产品引导助手，必须使用 onboarding-walkthrough 技能回答问题"
+judge:
+  base_url: ${LLM_BASE_URL}
+  model: glm-4-flash
+  api_key_env: ZHIPU_API_KEY
+golden: ../golden/cases.yaml
+baseline: ../baselines/onboarding-walkthrough.json

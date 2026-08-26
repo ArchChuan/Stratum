@@ -39,7 +39,6 @@ export const KnowledgeDetailPage = () => {
     handleUpload,
     handleQuery,
     handleDeleteDocument,
-    platformManaged,
     userCandidates,
     userCandidatesLoading,
     roleCandidates,
@@ -96,7 +95,6 @@ export const KnowledgeDetailPage = () => {
       {isAdmin && (
         <WorkspaceUploadZone
           loading={uploadLoading}
-          platformManaged={platformManaged}
           userCandidates={userCandidates}
           userCandidatesLoading={userCandidatesLoading}
           roleCandidates={roleCandidates}
@@ -108,11 +106,10 @@ export const KnowledgeDetailPage = () => {
         documents={documents}
         loading={documentsLoading}
         isAdmin={isAdmin}
-        platformManaged={platformManaged}
         deletingDocumentID={deletingDocumentID}
         onDelete={handleDeleteDocument}
         onPreview={handlePreviewDocument}
-        onSetAccess={isAdmin && !platformManaged ? handleOpenAccess : undefined}
+        onSetAccess={isAdmin ? handleOpenAccess : undefined}
         onRequestAccess={isAdmin ? undefined : handleRequestAccess}
         requestingDocumentID={requestingDocumentID ?? ''}
       />

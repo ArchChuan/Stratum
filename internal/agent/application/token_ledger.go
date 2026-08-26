@@ -13,14 +13,15 @@ import (
 )
 
 // TokenLedger 聚合 agent 侧的 token 估算、记录、成本计算。
+// Record 用 trace.SpanFromContext 标注当前 span，不自行创建 span，因此不持有
+// tracer（此前未使用的 tracer 字段是死代码，接线时一并移除）。
 type TokenLedger struct {
 	metrics observability.MetricsProvider
-	tracer  trace.Tracer
 	logger  *zap.Logger
 }
 
-func NewTokenLedger(metrics observability.MetricsProvider, tracer trace.Tracer, logger *zap.Logger) *TokenLedger {
-	return &TokenLedger{metrics: metrics, tracer: tracer, logger: logger}
+func NewTokenLedger(metrics observability.MetricsProvider, logger *zap.Logger) *TokenLedger {
+	return &TokenLedger{metrics: metrics, logger: logger}
 }
 
 // UsageSummary 封装单次 LLM 调用的 token + 成本。

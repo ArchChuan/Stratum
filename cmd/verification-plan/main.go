@@ -8,8 +8,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -28,6 +30,7 @@ type plan struct {
 	LocalChecks    []string `json:"local_checks"`
 	CIChecks       []string `json:"ci_checks"`
 	MatchedRules   []string `json:"matched_rules"`
+	EvalPoints     []string `json:"eval_points,omitempty"`
 }
 
 func main() {
@@ -73,10 +76,67 @@ func run(args []string) error {
 		return err
 	}
 	policy := manifest.Levels[risk]
+	matched := verificationplan.MatchingRules(manifest, paths)
 	result := plan{Version: 1, Commit: commit, ManifestDigest: "sha256:" + digest, RiskLevel: risk,
-		Mode: policy.Mode, LocalChecks: policy.LocalChecks, CIChecks: policy.CIChecks,
-		MatchedRules: verificationplan.MatchingRules(manifest, paths)}
+		Mode: policy.Mode, LocalChecks: policy.LocalChecks, CIChecks: slices.Clone(policy.CIChecks),
+		MatchedRules: matched}
+	if slices.Contains(matched, "eval-touched") {
+		// The eval check is CI-owned when the deterministic eval job covers it;
+		// declare it in ci_checks so CI_OWNED local runs skip rather than fail.
+		result.CIChecks = appendIfMissing(result.CIChecks, "eval")
+		evalPoints, err := collectEvalPoints(filepath.Join(*root, "test", "e2e"))
+		if err != nil {
+			return fmt.Errorf("collect eval points: %w", err)
+		}
+		result.EvalPoints = evalPoints
+	}
 	return writePlan(*output, result)
+}
+
+// collectEvalPoints walks test/e2e recursively and returns every
+// points/*.yaml as <kind>/<key>. The recursive walk covers nested layouts such
+// as test/e2e/knowledge/retrieval/points/retrieval.yaml; the `points` segment
+// must be a middle path segment so unrelated yaml files are never picked up.
+func collectEvalPoints(root string) ([]string, error) {
+	var points []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".yaml") {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		segs := strings.Split(filepath.ToSlash(rel), "/")
+		for i := 1; i < len(segs)-1; i++ {
+			if segs[i] == "points" {
+				points = append(points, segs[0]+"/"+strings.TrimSuffix(segs[len(segs)-1], ".yaml"))
+				break
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	slices.Sort(points)
+	return points, nil
+}
+
+// appendIfMissing appends value to list unless it is already present.
+func appendIfMissing(list []string, value string) []string {
+	for _, item := range list {
+		if item == value {
+			return list
+		}
+	}
+	return append(list, value)
 }
 
 func changedPaths(root, baseRef string) ([]string, error) {

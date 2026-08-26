@@ -114,12 +114,13 @@ func buildCatalog(root, manifestPath string) ([]catalogEntry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read document %q: %w", document.ID, err)
 		}
-		sections, err := splitMarkdownSections(string(markdown))
+		content := stripFrontmatter(string(markdown))
+		sections, err := splitMarkdownSections(content)
 		if err != nil {
 			return nil, fmt.Errorf("document %q: %w", document.ID, err)
 		}
 		strategy := textchunk.NewStructureRecursiveStrategy()
-		chunks := strategy.Chunk(context.Background(), string(markdown), maxChunkRunes, overlapRunes, nil)
+		chunks := strategy.Chunk(context.Background(), content, maxChunkRunes, overlapRunes, nil)
 		if len(chunks.Leaves) == 0 {
 			return nil, fmt.Errorf("document %q generated no chunks", document.ID)
 		}
@@ -206,6 +207,25 @@ func resolveSourcePath(root, source string) (string, error) {
 	return candidate, nil
 }
 
+// stripFrontmatter removes a leading `---` fenced metadata block (the
+// docs/knowledge document format) so section splitting and chunking see only
+// the markdown body. Leading newlines after the fence are trimmed so the body
+// starts directly at its first heading — otherwise textchunk's
+// StructureRecursiveStrategy would treat the stray newline as a preamble
+// section, shifting every chunk's parent ordinal off by one. Malformed or
+// absent fences leave the content untouched.
+func stripFrontmatter(s string) string {
+	if !strings.HasPrefix(s, "---\n") {
+		return s
+	}
+	rest := s[len("---\n"):]
+	end := strings.Index(rest, "\n---")
+	if end < 0 {
+		return s
+	}
+	return strings.TrimLeft(rest[end+len("\n---"):], "\r\n")
+}
+
 func splitMarkdownSections(markdown string) ([]markdownSection, error) {
 	matches := markdownHeading.FindAllStringSubmatchIndex(markdown, -1)
 	if len(matches) == 0 {
@@ -242,12 +262,16 @@ func splitMarkdownSections(markdown string) ([]markdownSection, error) {
 	return sections, nil
 }
 
+// parentOrdinal maps a chunk's ParentID to its section ordinal. textchunk's
+// StructureRecursiveStrategy writes the parent's plain ordinal (strconv.Itoa),
+// not makeID's "parent_<n>" form — the persistence layer derives the parent
+// chunk id as "<doc>_parent_<ordinal>", so the numeric form is the contract.
 func parentOrdinal(parentID string) (int, error) {
 	if parentID == "" {
 		return 0, nil
 	}
 	var ordinal int
-	if _, err := fmt.Sscanf(parentID, "parent_%d", &ordinal); err != nil {
+	if _, err := fmt.Sscanf(parentID, "%d", &ordinal); err != nil {
 		return 0, err
 	}
 	return ordinal, nil

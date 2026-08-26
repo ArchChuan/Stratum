@@ -8,7 +8,13 @@ import (
 )
 
 type DocRepo interface {
-	Save(ctx context.Context, tenantID, kbID string, doc *domain.Document) error
+	// Save persists the document row. It returns true when the row was
+	// inserted and false when an existing row with the same ID conflicted
+	// (INSERT ... ON CONFLICT (id) DO NOTHING). The boolean is the
+	// cross-instance admission gate: a deterministic docID (seed) inserted by
+	// two pods concurrently must run the async pipeline exactly once — only
+	// the instance that actually inserted the row spawns the job.
+	Save(ctx context.Context, tenantID, kbID string, doc *domain.Document) (bool, error)
 	List(ctx context.Context, tenantID, kbID string) ([]*domain.Document, error)
 	Delete(ctx context.Context, tenantID, kbID, docID string) error
 	ExistsByHash(ctx context.Context, tenantID, workspaceID, hash string) (bool, error)
@@ -24,6 +30,31 @@ type DocRepo interface {
 	// RecoverStuckIngests marks docs stuck in 'processing' for longer than
 	// threshold as 'failed'. Returns number of rows affected. Called on startup.
 	RecoverStuckIngests(ctx context.Context, tenantID string, threshold time.Duration) (int, error)
+
+	// CASReplace atomically claims a document for re-ingestion. It succeeds
+	// only when the row currently has expectedHash and is in a terminal state
+	// (completed/failed/deleting). On success it flips the row to 'processing',
+	// records newHash/title/metadata/totalChunks, and deletes the old PG leaf +
+	// parent chunks in the same transaction. Returns true when this caller won
+	// the compare-and-swap and must run the ingest pipeline (and delete the old
+	// vectors before inserting new ones); false when a sibling pod already
+	// claimed the doc (hash changed since our snapshot, or it is currently
+	// 'processing'). The 'processing' state is the mutual exclusion: two pods
+	// diffing the same snapshot cannot both replace.
+	CASReplace(ctx context.Context, tenantID, workspaceID, docID, expectedHash, newHash, title string, metadata map[string]any, totalChunks int) (bool, error)
+	// CASBeginDelete marks a document 'deleting' as a one-way claim. Succeeds
+	// only when the row is in a terminal state (completed/failed/deleting).
+	// Returns true when this caller won and must delete vectors + the row;
+	// false when the row is 'processing' (a sibling pod is re-ingesting it) or
+	// already gone. 'deleting' also blocks a concurrent CASReplace, so delete
+	// and replace cannot race on the same doc.
+	CASBeginDelete(ctx context.Context, tenantID, workspaceID, docID string) (bool, error)
+	// MarkBuiltinLegacy backfills the metadata marker {builtin_source: legacy}
+	// onto documents whose ID is in legacyIDs and carry no builtin_source yet.
+	// This lets the sync engine recognize pre-migration catalog seed documents
+	// as built-in (so they are cleaned up once the new per-file documents take
+	// over) without touching user-uploaded docs. Idempotent; safe to re-run.
+	MarkBuiltinLegacy(ctx context.Context, tenantID, workspaceID string, legacyIDs []string) error
 
 	// VisibleDocIDs returns the doc IDs of a workspace visible to viewerID.
 	// role is the viewer's tenant role (resolved by the caller) — whitelist

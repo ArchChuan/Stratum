@@ -211,7 +211,7 @@ func TestSentinelErrorsNonNil(t *testing.T) {
 	for _, err := range []error{
 		ErrWorkspaceNotFound, ErrWorkspaceConflict, ErrWorkspaceLinked,
 		ErrDuplicateDocument, ErrDocumentNotFound, ErrDocumentProcessing,
-		ErrChunkLimitExceeded, ErrIngestQueueFull, ErrPlatformManagedWorkspace,
+		ErrChunkLimitExceeded, ErrIngestQueueFull,
 		ErrInvalidEmbeddingModel, ErrEmbeddingModelRequired,
 	} {
 		if err == nil {

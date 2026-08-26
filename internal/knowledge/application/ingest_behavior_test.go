@@ -174,6 +174,114 @@ func TestIngestDocument_SaveErrorReleasesQueueSlot(t *testing.T) {
 	}
 }
 
+// TestIngestDocument_saveConflictDoesNotSpawn covers the cross-instance
+// admission gate: a sibling pod already owns the deterministic docID, so
+// Save returns (false, nil) and IngestDocument must report AlreadyExists and
+// spawn nothing. Spawning a second pipeline would re-run embed/insert on the
+// same Milvus primary keys (no ON CONFLICT there) and flip terminal status
+// between pods.
+func TestIngestDocument_saveConflictDoesNotSpawn(t *testing.T) {
+	parser := &mockParser{out: paragraphInput(4)}
+	repo := newMockDocRepo()
+	repo.saveInserted = false // sibling pod won the row
+	ki := buildIngest(t, parser, &mockEmbedder{dim: 4}, repo)
+
+	res, err := ki.IngestDocument(context.Background(), req("d1"))
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !res.AlreadyExists {
+		t.Fatal("expected AlreadyExists=true on save conflict")
+	}
+	if res.Status != constants.IngestStatusProcessing {
+		t.Fatalf("expected status=processing, got %q", res.Status)
+	}
+	if repo.savedCount() != 0 {
+		t.Fatalf("expected no Save on conflict, got %d", repo.savedCount())
+	}
+	// Drain: if a job had been spawned it would markFailed (embed error path).
+	sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := ki.Shutdown(sctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if repo.markFailedCount() != 0 {
+		t.Fatalf("expected no pipeline spawn on conflict, but a job marked the doc failed")
+	}
+	if repo.markStartedCount() != 0 {
+		t.Fatalf("expected no pipeline spawn on conflict, but a job marked the doc started")
+	}
+}
+
+// TestFlushWithRetry_transientThenSucceeds drives the flush retry loop directly:
+// a transient (unavailable) flush error must be retried, and a successful
+// retry must clear the error.
+func TestFlushWithRetry_transientThenSucceeds(t *testing.T) {
+	parser := &mockParser{out: paragraphInput(3)}
+	repo := newMockDocRepo()
+	vs := NewMockVectorStore()
+	vs.SetFlushError(&knowledgeport.VectorStoreUnavailableError{Err: errors.New("milvus unavailable")}, 1)
+	ki := NewKnowledgeIngest(parser, document.NewChunkingService(), &mockEmbedder{dim: 4}, vs, zap.NewNop())
+	ki.SetDocRepo(repo)
+
+	if err := ki.flushWithRetry(context.Background(), "kb_ws"); err != nil {
+		t.Fatalf("expected retry to clear transient flush error, got %v", err)
+	}
+	if vs.flushCalls != 2 {
+		t.Fatalf("expected 2 flush calls (1 failure + 1 success), got %d", vs.flushCalls)
+	}
+}
+
+// TestFlushWithRetry_nonTransientFailsImmediately asserts non-transient flush
+// errors are not retried — retrying a permanent failure just delays marking
+// the document failed.
+func TestFlushWithRetry_nonTransientFailsImmediately(t *testing.T) {
+	parser := &mockParser{out: paragraphInput(3)}
+	repo := newMockDocRepo()
+	vs := NewMockVectorStore()
+	vs.SetFlushError(errors.New("collection schema mismatch"), 100) // never succeeds
+	ki := NewKnowledgeIngest(parser, document.NewChunkingService(), &mockEmbedder{dim: 4}, vs, zap.NewNop())
+	ki.SetDocRepo(repo)
+
+	err := ki.flushWithRetry(context.Background(), "kb_ws")
+	if err == nil || !strings.Contains(err.Error(), "schema mismatch") {
+		t.Fatalf("expected non-transient flush error to surface, got %v", err)
+	}
+	if vs.flushCalls != 1 {
+		t.Fatalf("non-transient error must not retry; got %d flush calls", vs.flushCalls)
+	}
+}
+
+// TestIngestDocument_flushRetriedThenCompleted is the integration check: a
+// rate-limited flush inside the async job must be retried, and the doc must
+// reach 'completed' instead of being failed on the transient error.
+func TestIngestDocument_flushRetriedThenCompleted(t *testing.T) {
+	parser := &mockParser{out: paragraphInput(4)}
+	repo := newMockDocRepo()
+	vs := NewMockVectorStore()
+	vs.SetFlushError(&knowledgeport.VectorStoreUnavailableError{Err: errors.New("rate limit exceeded")}, 1)
+	ki := NewKnowledgeIngest(parser, document.NewChunkingService(), &mockEmbedder{dim: 4}, vs, zap.NewNop())
+	ki.SetDocRepo(repo)
+
+	if _, err := ki.IngestDocument(context.Background(), req("d1")); err != nil {
+		t.Fatalf("unexpected admission err: %v", err)
+	}
+	sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := ki.Shutdown(sctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if vs.flushCalls != 2 {
+		t.Fatalf("expected 2 flush calls (1 transient failure + 1 success), got %d", vs.flushCalls)
+	}
+	if repo.markFailedCount() != 0 {
+		t.Fatalf("transient flush error must not fail the doc; got %d MarkIngestFailed", repo.markFailedCount())
+	}
+	if repo.markCompletedCount() != 1 {
+		t.Fatalf("expected 1 MarkIngestCompleted after flush retry, got %d", repo.markCompletedCount())
+	}
+}
+
 func TestRecoverStuckIngests_DelegatesToRepo(t *testing.T) {
 	parser := &mockParser{out: "unused"}
 	repo := newMockDocRepo()

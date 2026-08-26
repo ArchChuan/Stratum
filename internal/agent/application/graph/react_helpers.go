@@ -13,6 +13,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/textutil"
 	"github.com/byteBuilderX/stratum/pkg/tokenutil"
 )
 
@@ -344,9 +345,9 @@ func delegateStatusLabel(status string) string {
 }
 
 func truncateRunes(s string, maxRunes int) string {
-	runes := []rune(s)
-	if len(runes) <= maxRunes {
+	if runes := []rune(s); len(runes) <= maxRunes {
 		return s
 	}
-	return string(runes[:maxRunes]) + "...[truncated]"
+	// 截断核心复用 pkg/textutil，这里追加截断提示后缀供 LLM 摘要消费。
+	return textutil.TruncateRunes(s, maxRunes) + "...[truncated]"
 }

@@ -9,13 +9,16 @@ api/
     router.go               - 路由注册（Gin），按域拆分为 registerXxx 私有函数
     handler/                - 每域一个文件，只做请求解析 + 响应组装
     dto/                    - Request/Response 结构体，无业务逻辑
-  middleware/               - ErrorHandler · CORSMiddleware · TraceMiddleware ·
-                              MetricsMiddleware · JWTMiddleware · InjectTenantContext ·
-                              RequireTenantRole · RequireGlobalAdmin · RequireActiveTenant
+  middleware/               - ErrorHandler · CORSMiddleware · TraceMiddleware · MetricsMiddleware ·
+                              JWTMiddleware · InjectTenantContext · RequireTenantRole · RequireGlobalAdmin ·
+                              RequireActiveTenant · RequireDefaultTenant · RequireSystemRole · BodyLimit ·
+                              RateLimit · PrometheusMiddleware · TrustedProxies · SecurityHeaders
   wiring/                   - 组合根：构造 application + infrastructure，装配 Container
 internal/
   agent/{domain,application,infrastructure}
                             - Agent 框架：ReAct 循环、Registry、ChatStore、A2A 协议
+  audit/{domain,infrastructure}
+                            - 资源变更审计事件（ResourceChangeAudit）
   iam/{domain,application,infrastructure}
                             - 多租户 IAM：Tenant / Admin / JWT / OAuth / OnBoard
   knowledge/{domain,application,infrastructure}
@@ -32,22 +35,34 @@ internal/
                             - MCP 服务器管理、ToolRegistry、工具级风险策略与审批执行
   memory/{domain,application,infrastructure}
                             - 记忆持久化 + JetStream 三阶段 pipeline
-  platform/{domain,harness,runtime}
-                            - 平台生命周期辅助与 HTTP/租户启动期编排
+  platform/{domain,application,infrastructure,harness,alerting,e2eattestation,e2erunscope,verificationplan}
+                            - 平台生命周期（harness）、告警、E2E attestation/run scope 与 verification plan
+  collab/{domain,application,infrastructure}
+                            - 协作编辑：白名单、多人共同编辑
+  parameters/{domain,application,infrastructure}
+                            - 平台级参数注册、解析与校验
   skill/{domain,application,infrastructure}
                             - Skill instruction bundle CRUD、revision 发布与候选优化
 pkg/
   constants/               - 跨包共享业务/配置常量（agent · auth · memory · pagination · timeouts）
   observability/           - Logger(Zap) · Tracer(OTEL) · PrometheusMetrics
   reqctx/                  - 请求级 context 键（user_id / tenant_id / trace_id）
-  storage/{milvus,postgres,redis}
-                           - 各存储驱动封装（pgxpool · go-redis · Milvus SDK）
+  storage/{milvus,postgres,redis,filestore,objectstore,tenantnaming}
+                           - 各存储驱动封装（pgxpool · go-redis · Milvus SDK · 本地文件存储 · 加密对象存储）
   tenantdb/                - 租户 context、schema 路由、ExecTenant 辅助函数
   vector/                  - `pkg/storage/milvus` 的兼容 re-export；新代码禁止继续引用
+  postgres/                - `pkg/storage/postgres` 的兼容 re-export；新代码使用 `pkg/storage/postgres`
+  redis/                   - `pkg/storage/redis` 的兼容 re-export；新代码使用 `pkg/storage/redis`
   migration/               - PostgreSQL public schema 迁移（golang-migrate）
   httpclient/              - 带重试/超时的 HTTP 客户端封装
   textchunk/               - 文本分块（Chunker）
   crypto/                  - AES 加密工具
+  dag/                     - 领域中立依赖校验与调度（DAG 拓扑）
+  jsonschema/              - JSON Schema 的类型安全构造
+  messaging/               - NATS 消息封装（`messaging/nats`：Connect · JetStreamPublisher）
+  safetext/                - 信任边界文本的确定性脱敏
+  timeutil/                - 时区/时间工具
+  tokenutil/               - token 估算与计价
 web/                        - React 18 + Vite 6 前端控制台（src/modules 按域组织）
 k8s/                        - Kubernetes manifests（含 monitoring · network-policy · ingress）
 helm/                       - Helm Chart（templates: deployment · service · frontend）
@@ -65,7 +80,8 @@ grafana/                    - Grafana 数据源 + 仪表板配置
 | pgx | v5.9.2 | pgxpool，事务内用 `SET LOCAL search_path` 切换租户 |
 | go-redis | v9.x | `redis.NewClient`，context-aware API |
 | Zap | v1.26+ | 生产用 `NewProduction()`，开发用 `NewDevelopment()` |
-| OTEL | v1.40 | TracerProvider 由 platform runtime 初始化，通过 context 传播 |
+| OTEL | v1.42 | TracerProvider 由 `cmd/server/runtime.go` 的 `InitTracingFromEnv` 初始化，通过 context 传播 |
+| MinIO SDK | v7.0.95 | 加密对象存储封装位于 `pkg/storage/objectstore` |
 | 前端 | React 18.3 · Vite 6.4 · AntD 5.20 | 版本以 `web/package.json` 与 lockfile 为准 |
 | JWT | golang-jwt/jwt v5 | RS256 签名，Claims 含 tenant_id / role / global_role |
 

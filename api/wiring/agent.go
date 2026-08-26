@@ -384,6 +384,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	if c.Platform != nil {
 		deps.Metrics = c.Platform.Metrics
 	}
+	wireTokenLedger(registry, &deps, c.platformMetrics(), c.Logger)
 	deps.ParametersProvider = agentParametersProvider(c)
 	if c.Memory != nil && c.Memory.Service != nil {
 		deps.MemoryCleaner = c.Memory.Service
@@ -485,6 +486,15 @@ func wireApprovalCleanup(c *Container, a *Agent, ctx context.Context) {
 func wireCleanupWorkers(c *Container, a *Agent, ctx context.Context) {
 	wireTaskCleanup(c, a, ctx)
 	wireApprovalCleanup(c, a, ctx)
+}
+
+// wireTokenLedger 注入 TokenLedger 到 Registry 与 AgentService deps：span cost
+// 此前恒 0（Noop 返回 0），接线后为真实 USD + Prometheus 指标。Registry.Get
+// hydrate 的 agent 同样走执行链路，两个构建点必须同源。
+func wireTokenLedger(registry *agent.Registry, deps *agent.AgentServiceDeps, metrics observability.MetricsProvider, logger *zap.Logger) {
+	ledger := agent.NewTokenLedger(metrics, logger)
+	registry.SetLedger(ledger)
+	deps.Ledger = ledger
 }
 
 // wireOperationGate wires the T8 operation approval chain: the gate service

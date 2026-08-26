@@ -135,6 +135,11 @@ bin/
 # does not see it appear between the source_before/source_after snapshots.
 test/e2e/stateful/uncovered-report.json
 
+# E2E eval baselines: recorded via `--record-baseline` per point; gitignored so
+# per-run regressions aren't committed as golden truth. Tracked README.md and
+# knowledge latest.json (Task 2 contract) are unaffected by this pattern.
+test/e2e/**/baselines/*.json
+
 # Pre-commit framework
 .pre-commit-framework/
 

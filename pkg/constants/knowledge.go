@@ -31,6 +31,13 @@ const (
 	IngestStatusCompleted  = "completed"
 	IngestStatusFailed     = "failed"
 
+	// BuiltinWorkspaceID is the stable UUID for the built-in stratum_docs RAG
+	// workspace. Must match the corresponding seed INSERT in tenant_schema.sql.
+	BuiltinWorkspaceID = "a0a0a0a0-0000-0000-0000-000000000001"
+
+	// BuiltinWorkspaceName is the display name for the built-in workspace.
+	BuiltinWorkspaceName = "stratum_docs"
+
 	// RerankHTTPTimeout bounds a single external reranker call (10s).
 	RerankHTTPTimeout = 10 * time.Second
 

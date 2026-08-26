@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -37,6 +38,21 @@ func TestNacosSettingsServerAddressesInvalid(t *testing.T) {
 	s := NacosSettings{URL: "http://host:notaport"}
 	if _, _, _, err := s.ServerAddresses(); err == nil {
 		t.Fatal("expected error for invalid port")
+	}
+}
+
+func TestNacosClientConfigLogDirWritableTemp(t *testing.T) {
+	cfg := nacosClientConfig(NacosSettings{Namespace: "ns", Username: "u", Password: "p"})
+	// nacos-sdk 默认 LogDir = <cwd>/log，容器内 appuser 无权限创建 /app/log；
+	// 必须显式指向系统临时目录，否则启动期报 permission denied。
+	if cfg.LogDir != os.TempDir() {
+		t.Fatalf("LogDir = %q, want %q", cfg.LogDir, os.TempDir())
+	}
+	if cfg.NamespaceId != "ns" || cfg.Username != "u" || cfg.Password != "p" {
+		t.Fatalf("settings not forwarded to client config: %+v", cfg)
+	}
+	if !cfg.NotLoadCacheAtStart {
+		t.Fatal("NotLoadCacheAtStart must stay true")
 	}
 }
 

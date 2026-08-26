@@ -16,9 +16,9 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	"github.com/byteBuilderX/stratum/pkg/resourceaccess"
 	pgstore "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -27,6 +27,26 @@ import (
 // poolIface allows pgxmock injection in tests.
 type poolIface interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
+// memoryScopeOr returns the memory scope to persist, falling back to the
+// column default "agent" when the config leaves it unset (Go zero value).
+// agents.memory_scope is NOT NULL with a strict CHECK (user|agent), so the
+// zero value of a partial AgentConfig passed to Register/Update must be
+// resolved here, never stored. Normalizing keeps downstream memory reads
+// (buffer / trajectory reflection) non-empty, so memory_entries.scope cannot
+// regress to an empty value and trip HistorySegment.Validate() →
+// memory.history.upsert_failed.
+//
+// Intent: only the zero value is interpreted as "not provided / partial
+// config" and normalized to the agent default. An explicitly provided scope
+// (including "user") is preserved verbatim — this never flips a deliberate
+// user-scoped agent to agent scope.
+func memoryScopeOr(scope string) string {
+	if scope == "" {
+		return "agent"
+	}
+	return scope
 }
 
 var _ poolIface = (*pgxpool.Pool)(nil)
@@ -44,22 +64,12 @@ func NewPgAgentRepo(pool *pgxpool.Pool) *PgAgentRepo {
 // resourceEditorKind identifies agent rows in the shared resource_editors table.
 const resourceEditorKind = "agent"
 
-// editorEligible checks, inside the write transaction, that userID currently
-// is an active tenant member (any role: admin/owner/member). Whitelisted
-// editors may be any member, so eligibility is no longer restricted to
-// privileged roles. Fail closed on any lookup error. public.tenant_members
-// is schema-qualified: the transaction search_path points at the tenant schema.
+// editorEligible checks, inside the write transaction, that userID is an
+// active tenant member holding a whitelisted role (admin/owner/member).
+// Thin wrapper over the shared implementation in pkg/resourceaccess — the
+// single semantic baseline shared by agent/knowledge/skill/mcp (#475).
 func editorEligible(ctx context.Context, tx pgx.Tx, tenantID, userID string) (bool, error) {
-	var ok bool
-	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS(
-			SELECT 1 FROM public.tenant_members
-			WHERE tenant_id=$1 AND user_id=$2 AND role IN ('admin','owner','member'))`,
-		tenantID, userID,
-	).Scan(&ok); err != nil {
-		return false, fmt.Errorf("editor role check: %w", err)
-	}
-	return ok, nil
+	return resourceaccess.EditorEligible(ctx, tx, tenantID, userID)
 }
 
 // agents.parameters JSONB carries the sampling parameters as flat scalar
@@ -200,51 +210,20 @@ func numericValue(v any) (float64, bool) {
 
 // insertEditors validates and persists the editor set inside the write
 // transaction. A non-eligible id fails the whole transaction (fail closed),
-// so a forged editor can never be created alongside the resource.
+// so a forged editor can never be created alongside the resource. Thin
+// wrapper over pkg/resourceaccess; domain.ErrEditorNotEligible propagates.
 func insertEditors(ctx context.Context, tx pgx.Tx, tenantID, kind, resourceID string, editorIDs []string, createdBy string) error {
-	for _, id := range editorIDs {
-		eligible, err := editorEligible(ctx, tx, tenantID, id)
-		if err != nil {
-			return err
-		}
-		if !eligible {
-			return fmt.Errorf("%w: user %s", domain.ErrEditorNotEligible, id)
-		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO resource_editors (resource_kind, resource_id, editor_id, created_by)
-			 VALUES ($1,$2,$3,$4)`,
-			kind, resourceID, id, createdBy,
-		); err != nil {
-			return fmt.Errorf("insert editor %s: %w", id, err)
-		}
-	}
-	return nil
+	return resourceaccess.InsertEditors(ctx, tx, tenantID, kind, resourceID, editorIDs, createdBy, domain.ErrEditorNotEligible)
 }
 
 // revalidateEditorAccess re-checks, inside the write transaction, that the
-// actor still qualifies as an editor of this resource: tenant membership AND
-// presence in resource_editors. Both checks share the transaction with the
-// business UPDATE, closing the check-then-write TOCTOU window.
+// actor still qualifies as an editor of this resource: whitelisted tenant
+// membership AND presence in resource_editors. Both checks share the
+// transaction with the business UPDATE, closing the check-then-write TOCTOU
+// window. Thin wrapper over pkg/resourceaccess; domain.ErrForbidden
+// propagates.
 func revalidateEditorAccess(ctx context.Context, tx pgx.Tx, tenantID, kind, resourceID, actorID string) error {
-	eligible, err := editorEligible(ctx, tx, tenantID, actorID)
-	if err != nil {
-		return err
-	}
-	if !eligible {
-		return domain.ErrForbidden
-	}
-	var present bool
-	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM resource_editors
-		 WHERE resource_kind=$1 AND resource_id=$2 AND editor_id=$3)`,
-		kind, resourceID, actorID,
-	).Scan(&present); err != nil {
-		return fmt.Errorf("editor presence check: %w", err)
-	}
-	if !present {
-		return domain.ErrForbidden
-	}
-	return nil
+	return resourceaccess.RevalidateEditorAccess(ctx, tx, tenantID, kind, resourceID, actorID, domain.ErrForbidden)
 }
 
 // execTenant runs fn in a transaction with search_path set to the tenant schema from ctx.
@@ -257,30 +236,28 @@ func (r *PgAgentRepo) execTenant(ctx context.Context, fn func(ctx context.Contex
 }
 
 // insertChangeAudit persists one audit row inside the business transaction.
-// ev == nil skips the write (internal reentrant paths only); a non-nil event
-// must be complete — an empty resource id or operation is a caller bug and
-// fails the transaction closed.
+// ev == nil skips the write (internal reentrant paths only). Thin wrapper
+// over the shared implementation in pkg/resourceaccess.
 func insertChangeAudit(ctx context.Context, tx pgx.Tx, ev *auditdomain.ResourceChangeAuditEvent) error {
 	ev = ev.Normalized()
 	if ev == nil {
 		return nil
 	}
-	if ev.ResourceID == "" || ev.Operation == "" || ev.ResourceKind == "" {
-		return fmt.Errorf("change audit: incomplete event (kind=%s id=%q op=%q)",
-			ev.ResourceKind, ev.ResourceID, ev.Operation)
-	}
 	tc, ok := tenantdb.FromContext(ctx)
 	if !ok || tc.TenantID == "" {
 		return fmt.Errorf("change audit: missing tenant context")
 	}
-	_, err := tx.Exec(ctx, auditdomain.ChangeAuditInsertSQL,
-		uuid.Must(uuid.NewV7()).String(), tc.TenantID,
-		ev.ResourceKind, ev.ResourceID, ev.Operation, ev.ActorID, ev.ActorType, ev.Source,
-		ev.ProposalID, ev.Before, ev.After)
-	if err != nil {
-		return fmt.Errorf("insert change audit %s %s: %w", ev.ResourceKind, ev.ResourceID, err)
-	}
-	return nil
+	return resourceaccess.InsertChangeAudit(ctx, tx, tc.TenantID, auditdomain.ChangeAuditInsertSQL, resourceaccess.ChangeAudit{
+		ResourceKind: ev.ResourceKind,
+		ResourceID:   ev.ResourceID,
+		Operation:    ev.Operation,
+		ActorID:      ev.ActorID,
+		ActorType:    ev.ActorType,
+		Source:       ev.Source,
+		ProposalID:   ev.ProposalID,
+		Before:       ev.Before,
+		After:        ev.After,
+	})
 }
 
 func (r *PgAgentRepo) replaceSkills(ctx context.Context, tx pgx.Tx, agentID string, skillIDs []string) error {
@@ -419,7 +396,7 @@ func (r *PgAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig, aud
 			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope, system_key, created_by, parameters, delegate_enabled, delegate_max_depth, delegate_default_max_steps)
 			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10,$11,$12,$13,$14)`,
 			cfg.ID, cfg.Name, string(cfg.Type), cfg.Description,
-			cfg.SystemPrompt, cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, cfg.CreatedBy, params,
+			cfg.SystemPrompt, cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, memoryScopeOr(cfg.MemoryScope), cfg.CreatedBy, params,
 			cfg.DelegateEnabled, cfg.DelegateMaxDepth, cfg.DelegateDefaultMaxSteps,
 		)
 		if err != nil {
@@ -717,7 +694,7 @@ func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, audit
 			     updated_at=NOW()
 			 WHERE id=$12`,
 			cfg.Name, cfg.Description, cfg.SystemPrompt,
-			cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, params,
+			cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, memoryScopeOr(cfg.MemoryScope), params,
 			cfg.DelegateEnabled, cfg.DelegateMaxDepth, cfg.DelegateDefaultMaxSteps, cfg.ID,
 		)
 		if err != nil {

@@ -256,20 +256,20 @@ type proposalSkillFake struct {
 	fingerprints []string
 }
 
-func (*proposalSkillFake) CreateSkillDraft(context.Context, skillapp.CreateSkillDraftInput) (skillapp.SkillWorkspaceView, error) {
+func (*proposalSkillFake) CreateSkill(context.Context, skillapp.CreateSkillInput) (skillapp.SkillWorkspaceView, error) {
 	return skillapp.SkillWorkspaceView{
-		Skill: skillapp.SkillProduct{ID: "skill-created", Name: "s"},
-		Draft: skilldomain.SkillRevision{Status: skilldomain.VersionStatusDraft, ContentHash: "hash"},
+		Skill:  skillapp.SkillProduct{ID: "skill-created", Name: "s"},
+		Active: skilldomain.SkillRevision{Status: skilldomain.VersionStatusPublished, ContentHash: "hash"},
 	}, nil
 }
 func (*proposalSkillFake) GetWorkspace(context.Context, string, string) (skillapp.SkillWorkspaceView, error) {
 	return skillapp.SkillWorkspaceView{}, nil
 }
-func (f *proposalSkillFake) UpdateDraftBundle(_ context.Context, _, fingerprint string, in skillapp.UpdateDraftBundleInput) (skillapp.SkillWorkspaceView, error) {
+func (f *proposalSkillFake) SaveRevision(_ context.Context, _, fingerprint string, in skillapp.SaveRevisionInput) (skillapp.SkillWorkspaceView, error) {
 	f.fingerprints = append(f.fingerprints, fingerprint)
 	return skillapp.SkillWorkspaceView{
-		Skill: skillapp.SkillProduct{ID: "skill-1", Name: in.Name},
-		Draft: skilldomain.SkillRevision{Status: skilldomain.VersionStatusDraft, ContentHash: "hash"},
+		Skill:  skillapp.SkillProduct{ID: "skill-1", Name: in.Name},
+		Active: skilldomain.SkillRevision{Status: skilldomain.VersionStatusPublished, ContentHash: "hash"},
 	}, nil
 }
 

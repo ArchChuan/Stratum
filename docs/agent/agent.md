@@ -3,14 +3,14 @@
 ## Built-in Platform Assistant
 
 每个 tenant schema 由 `pkg/storage/postgres/tenant_schema.sql` 幂等 provision 恰好一条托管 Agent：
-`id=stratum-platform-assistant`、`system_key=stratum.platform_assistant`。读取时返回
-`isSystem=true`、`managementMode=platform`；通用 Agent update/delete/revision 路径必须返回
-`system assistant is platform managed`。租户管理员唯一可改字段是 `llmModel`，普通成员可读取设置但不能写。
+`id=stratum-platform-assistant`、`system_key=stratum.platform_assistant`。识别与展示按 `id`/`system_key`
+判断；等同化后与普通 Agent 行为一致（读取/更新走通用 Agent 路由 `GET/PUT /agents/:id`）。
 
-运行时不信任数据库中的托管字段。`BuiltinSystemAssistantProfileSource` 按
-`CurrentSystemAssistantProfileVersion=2026-07-23.v1` 选择保留在代码中的不可变 Profile，并覆盖名称、描述、
-system prompt、迭代和上下文预算，同时清空 Skill、MCP、Knowledge、Memory 等租户扩展。执行 trace 和 artifact
-记录 `system-assistant-profile` 版本，历史版本继续可解析。
+运行时不信任数据库中的托管字段。`SystemAssistantProfile` 按
+`CurrentSystemAssistantProfileVersion=2026-08-08.v3` 选择保留在代码中的不可变 Profile，并覆盖名称、描述、
+迭代和上下文预算（system prompt 由 `agents.system_prompt` DB 字段承载，不再随 Profile 走代码常量），同时
+清空 Skill、MCP、Knowledge、Memory 等租户扩展。执行 trace 和 artifact 记录 `system-assistant-profile`
+版本，历史版本继续可解析。
 
 官方知识来自构建期生成并 embed 的只读 catalog：manifest 是 `docs/assistant/catalog.yaml`，生成器位于
 `internal/agent/infrastructure/officialdocs/generate`。检索结果必须包含 document ID、标题、产品版本、章节、

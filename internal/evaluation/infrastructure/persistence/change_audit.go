@@ -7,34 +7,34 @@ import (
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
+	"github.com/byteBuilderX/stratum/pkg/resourceaccess"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
 // insertChangeAudit 在业务事务内写一条变更审计；nil 事件跳过。与
-// agent/skill/workflow 的 insertChangeAudit 同构（tenant 取自 tenant 上下文）。
+// agent/skill/workflow 的 insertChangeAudit 同构（tenant 取自 tenant 上下文），
+// 均薄包装 pkg/resourceaccess 共享实现。
 func insertChangeAudit(ctx context.Context, tx pgx.Tx, ev *auditdomain.ResourceChangeAuditEvent) error {
 	ev = ev.Normalized()
 	if ev == nil {
 		return nil
 	}
-	if ev.ResourceID == "" || ev.Operation == "" || ev.ResourceKind == "" {
-		return fmt.Errorf("change audit: incomplete event (kind=%s id=%q op=%q)",
-			ev.ResourceKind, ev.ResourceID, ev.Operation)
-	}
 	tc, ok := tenantdb.FromContext(ctx)
 	if !ok || tc.TenantID == "" {
 		return fmt.Errorf("change audit: missing tenant context")
 	}
-	_, err := tx.Exec(ctx, auditdomain.ChangeAuditInsertSQL,
-		uuid.Must(uuid.NewV7()).String(), tc.TenantID,
-		ev.ResourceKind, ev.ResourceID, ev.Operation, ev.ActorID, ev.ActorType, ev.Source,
-		ev.ProposalID, ev.Before, ev.After)
-	if err != nil {
-		return fmt.Errorf("insert change audit %s %s: %w", ev.ResourceKind, ev.ResourceID, err)
-	}
-	return nil
+	return resourceaccess.InsertChangeAudit(ctx, tx, tc.TenantID, auditdomain.ChangeAuditInsertSQL, resourceaccess.ChangeAudit{
+		ResourceKind: ev.ResourceKind,
+		ResourceID:   ev.ResourceID,
+		Operation:    ev.Operation,
+		ActorID:      ev.ActorID,
+		ActorType:    ev.ActorType,
+		Source:       ev.Source,
+		ProposalID:   ev.ProposalID,
+		Before:       ev.Before,
+		After:        ev.After,
+	})
 }
 
 // commandChangeAuditTx 在 applyCommand 事务内写命令类变更审计（activate/reject/

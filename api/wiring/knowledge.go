@@ -3,16 +3,16 @@ package wiring
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 
-	"github.com/byteBuilderX/stratum/internal/agent/infrastructure/officialdocs"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
+	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/builtindocs"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/rerank"
-	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/seeds"
 	knowledgevector "github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/vectorstore"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
@@ -39,6 +39,9 @@ type Knowledge struct {
 	DocRepo           *persistence.DocRepo
 	EmbedResolver     pipeline.EmbedServiceResolver
 	KnowledgeResolver knowledge.EmbedResolver
+	// BuiltinSync reconciles the built-in stratum_docs workspace with the
+	// embedded docs/knowledge tree (startup + per-tenant provision hooks).
+	BuiltinSync *knowledge.BuiltinDocsSync
 }
 
 func (c *Container) buildKnowledge(ctx context.Context) error {
@@ -61,9 +64,26 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 	var knowledgeResolver knowledge.EmbedResolver
 	var docRepo *persistence.DocRepo
 	db := c.dbOrNil()
+	var builtinSync *knowledge.BuiltinDocsSync
 	if db != nil {
 		chunkRepo := persistence.NewChunkRepo(db)
 		docRepo = persistence.NewDocRepo(db)
+		legacyIDs, err := builtindocs.LegacyDocIDs()
+		if err != nil {
+			c.Logger.Warn("knowledge.builtin_sync.legacy_ids_failed", zap.Error(err))
+			legacyIDs = nil
+		}
+		// builtinSync is wired onto c.Knowledge after the struct literal below;
+		// dereferencing c.Knowledge here would nil-panic (c.Knowledge is only
+		// assigned later in this function).
+		builtinSync = knowledge.NewBuiltinDocsSync(
+			ingest.IngestDocument,
+			docRepo,
+			vectorAdapter,
+			builtindocs.New(),
+			legacyIDs,
+			c.Logger,
+		)
 		if c.LLMGateway != nil && c.LLMGateway.TenantEmbeddingResolver != nil {
 			pipelineResolver = buildEmbedResolver(c.LLMGateway.TenantEmbeddingResolver, c.Logger)
 			knowledgeResolver = buildKnowledgeEmbedResolver(c.LLMGateway.Registry, c.Logger)
@@ -122,6 +142,7 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 		c.Knowledge.WorkspaceService.SetVectorStore(vs)
 		c.Knowledge.WorkspaceService.SetEditorRepo(persistence.NewPgResourceEditorRepo(db))
 		c.Knowledge.WorkspaceService.SetFailureAuditRecorder(failureRecorderOf(c))
+		c.Knowledge.BuiltinSync = builtinSync
 	}
 	c.wireKnowledgeModelExists()
 	return nil
@@ -361,72 +382,67 @@ func registryHasEmbeddingModel(ctx context.Context, registry *llmgateway.ModelRe
 	return false, nil
 }
 
-// SeedBuiltinKnowledgeDocs ingests official documentation catalog entries into
-// the built-in stratum_docs workspace for every active tenant. Idempotent —
-// existing docs (matched by content hash) are skipped. Errors are logged as
-// warnings and do not prevent startup. Call after BootstrapTenants and
-// RecoverStuckKnowledgeIngests.
-func (c *Container) SeedBuiltinKnowledgeDocs(ctx context.Context) {
-	if c.Knowledge == nil || c.Knowledge.Ingest == nil || c.Knowledge.DocRepo == nil {
-		c.Logger.Debug("knowledge.seed_builtin_docs.skipped",
-			zap.String("reason", "knowledge ingest or docRepo not wired"))
+// SyncBuiltinKnowledgeDocs reconciles the built-in stratum_docs workspace with
+// the embedded docs/knowledge tree for every active tenant. Idempotent — a
+// three-state diff (create/update/delete/keep) keyed on content hash, so an
+// unchanged doc is skipped and a changed one is replaced. Errors are logged and
+// do not prevent startup. Call after BootstrapTenants and
+// RecoverStuckKnowledgeIngests. The queue-retry budget is global: one pointer
+// shared across every tenant so total startup delay is bounded regardless of
+// how many tenants surge the ingest queue.
+func (c *Container) SyncBuiltinKnowledgeDocs(ctx context.Context) {
+	if c.Knowledge == nil || c.Knowledge.BuiltinSync == nil {
+		c.Logger.Debug("knowledge.sync_builtin_docs.skipped",
+			zap.String("reason", "builtin sync not wired"))
 		return
 	}
 	if c.IAM == nil || c.IAM.TenantRepo == nil {
-		c.Logger.Debug("knowledge.seed_builtin_docs.skipped",
+		c.Logger.Debug("knowledge.sync_builtin_docs.skipped",
 			zap.String("reason", "tenant repo not wired"))
-		return
-	}
-	if c.LLMGateway == nil || c.LLMGateway.Registry == nil {
-		c.Logger.Debug("knowledge.seed_builtin_docs.skipped",
-			zap.String("reason", "llm gateway registry not wired"))
 		return
 	}
 
 	tenantIDs, err := c.IAM.TenantRepo.ListActiveTenantIDs(ctx)
 	if err != nil {
-		c.Logger.Warn("knowledge.seed_builtin_docs.list_tenants_failed", zap.Error(err))
+		c.Logger.Warn("knowledge.sync_builtin_docs.list_tenants_failed", zap.Error(err))
 		return
 	}
 
+	budget := constants.SeedIngestQueueRetryBudget
 	for _, tid := range tenantIDs {
-		c.seedBuiltinDocsForTenant(ctx, tid)
+		c.syncBuiltinDocsForTenant(ctx, tid, &budget)
 	}
 }
 
-// seedBuiltinDocsForTenant 为单个 tenant 种子内置文档；租户未显式配置记忆
-// 嵌入模型时 WARN 并跳过，不阻断启动（fail-closed：不擅自回退全局默认模型）。
-func (c *Container) seedBuiltinDocsForTenant(ctx context.Context, tid string) {
-	if c.LLMGateway == nil || c.LLMGateway.TenantEmbeddingResolver == nil {
+// syncBuiltinDocsForTenant 解析租户嵌入模型并同步其内置知识库。queueRetryBudget
+// 非 nil 时同步执行（启动路径，共享预算）；nil 时异步执行（新租户 provision hook，
+// 不阻塞注册/admin 响应，队列满快速失败，剩余由下次启动补齐）。
+func (c *Container) syncBuiltinDocsForTenant(ctx context.Context, tid string, queueRetryBudget *time.Duration) {
+	if c.Knowledge == nil || c.Knowledge.BuiltinSync == nil {
 		return
 	}
-	model, err := c.LLMGateway.TenantEmbeddingResolver.ResolveMemoryEmbeddingModel(ctx, tid)
+	model, err := c.resolveTenantEmbeddingModel(ctx, tid)
 	if err != nil || model == "" {
-		c.Logger.Warn("knowledge.seed_builtin_docs.skip: tenant has no embedding model",
+		c.Logger.Warn("knowledge.builtin_sync.skip: tenant has no embedding model",
 			zap.String("tenant_id", tid),
 			zap.Error(err))
 		return
 	}
-	seeds.SeedBuiltinDocs(ctx, tid, model,
-		c.Knowledge.Ingest, c.Knowledge.DocRepo, officialDocsCatalogAdapter{}, c.Logger)
+	if queueRetryBudget == nil {
+		// 新租户 provision 后异步拉齐：context 与注册请求解耦，失败由日志暴露，
+		// 下次启动同步补齐。
+		bgCtx := context.WithoutCancel(ctx)
+		go c.Knowledge.BuiltinSync.SyncForTenant(bgCtx, tid, model, nil)
+		return
+	}
+	c.Knowledge.BuiltinSync.SyncForTenant(ctx, tid, model, queueRetryBudget)
 }
 
-// officialDocsCatalogAdapter adapts the agent context's embedded official
-// documentation catalog to knowledgeport.OfficialDocsCatalog. Lives in
-// wiring so knowledge infrastructure never imports a sibling context.
-type officialDocsCatalogAdapter struct{}
-
-func (officialDocsCatalogAdapter) AllCatalogEntries() ([]knowledgeport.OfficialDocEntry, error) {
-	entries, err := officialdocs.AllCatalogEntries()
-	if err != nil {
-		return nil, err
+// resolveTenantEmbeddingModel 返回租户显式配置的记忆嵌入模型；未配置或解析失败
+// 返回空与 error（fail-closed：内置文档嵌入不擅自回退全局默认模型）。
+func (c *Container) resolveTenantEmbeddingModel(ctx context.Context, tid string) (string, error) {
+	if c.LLMGateway == nil || c.LLMGateway.TenantEmbeddingResolver == nil {
+		return "", fmt.Errorf("tenant embedding resolver not wired")
 	}
-	out := make([]knowledgeport.OfficialDocEntry, 0, len(entries))
-	for _, e := range entries {
-		out = append(out, knowledgeport.OfficialDocEntry{
-			DocumentID: e.DocumentID, Title: e.Title, ProductVersion: e.ProductVersion,
-			Section: e.Section, URL: e.URL, Ordinal: e.Ordinal, Body: e.Body,
-		})
-	}
-	return out, nil
+	return c.LLMGateway.TenantEmbeddingResolver.ResolveMemoryEmbeddingModel(ctx, tid)
 }

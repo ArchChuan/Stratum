@@ -48,7 +48,9 @@ type deleteDocRepo struct {
 	deletedIDs []string
 }
 
-func (r *deleteDocRepo) Save(context.Context, string, string, *domain.Document) error { return nil }
+func (r *deleteDocRepo) Save(context.Context, string, string, *domain.Document) (bool, error) {
+	return true, nil
+}
 func (r *deleteDocRepo) List(context.Context, string, string) ([]*domain.Document, error) {
 	return r.docs, nil
 }
@@ -79,6 +81,15 @@ func (r *deleteDocRepo) GetByID(context.Context, string, string, string) (*domai
 	return nil, domain.ErrDocumentNotFound
 }
 func (r *deleteDocRepo) SetDocAccess(context.Context, string, string, []string, []string) error {
+	return nil
+}
+func (r *deleteDocRepo) CASReplace(context.Context, string, string, string, string, string, string, map[string]any, int) (bool, error) {
+	return true, nil
+}
+func (r *deleteDocRepo) CASBeginDelete(context.Context, string, string, string) (bool, error) {
+	return true, nil
+}
+func (r *deleteDocRepo) MarkBuiltinLegacy(context.Context, string, string, []string) error {
 	return nil
 }
 

@@ -45,18 +45,17 @@ func (p *Parser) ParseBytes(data []byte, hint string) (string, error) {
 
 	lower := strings.ToLower(hint)
 
-	// Detect by MIME type when hint contains "/"
-	if strings.Contains(lower, "/") {
-		switch lower {
-		case "application/pdf":
-			return p.parsePDFBytes(data)
-		case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-			return p.parseDOCXBytes(data)
-		case "text/plain", "text/markdown":
-			return string(data), nil
-		default:
-			return "", fmt.Errorf("unsupported content type: %s", hint)
-		}
+	// Detect by MIME type first (exact match). A hint that merely contains "/"
+	// is not necessarily a MIME type — e.g. a path hint like "guides/agent.md"
+	// passed by the built-in docs sync — so unknown "/"-hints fall through to
+	// extension detection below instead of failing here.
+	switch lower {
+	case "application/pdf":
+		return p.parsePDFBytes(data)
+	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+		return p.parseDOCXBytes(data)
+	case "text/plain", "text/markdown":
+		return string(data), nil
 	}
 
 	// Detect by file extension

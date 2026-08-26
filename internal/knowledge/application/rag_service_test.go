@@ -12,7 +12,6 @@ import (
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
-	"github.com/byteBuilderX/stratum/pkg/platformknowledge"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -536,7 +535,9 @@ type stubDocRepo struct {
 	doc *domain.Document
 }
 
-func (s stubDocRepo) Save(context.Context, string, string, *domain.Document) error { return nil }
+func (s stubDocRepo) Save(context.Context, string, string, *domain.Document) (bool, error) {
+	return true, nil
+}
 func (s stubDocRepo) List(context.Context, string, string) ([]*domain.Document, error) {
 	return s.docs, s.listErr
 }
@@ -560,6 +561,15 @@ func (s stubDocRepo) GetByID(context.Context, string, string, string) (*domain.D
 	return s.doc, nil
 }
 func (s stubDocRepo) SetDocAccess(context.Context, string, string, []string, []string) error {
+	return nil
+}
+func (s stubDocRepo) CASReplace(context.Context, string, string, string, string, string, string, map[string]any, int) (bool, error) {
+	return true, nil
+}
+func (s stubDocRepo) CASBeginDelete(context.Context, string, string, string) (bool, error) {
+	return true, nil
+}
+func (s stubDocRepo) MarkBuiltinLegacy(context.Context, string, string, []string) error {
 	return nil
 }
 
@@ -843,28 +853,6 @@ func TestRAGSearchEvidenceTitlesDegradeOnRepoFailure(t *testing.T) {
 	}
 }
 
-func TestTruncateRunes(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		n    int
-		want string
-	}{
-		{name: "empty", in: "", n: 10, want: ""},
-		{name: "nonpositive limit", in: "abc", n: 0, want: ""},
-		{name: "shorter than limit", in: "abc", n: 10, want: "abc"},
-		{name: "exact length", in: "abc", n: 3, want: "abc"},
-		{name: "cut at rune boundary", in: "很长的内容", n: 3, want: "很长的"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := truncateRunes(tc.in, tc.n); got != tc.want {
-				t.Fatalf("truncateRunes(%q, %d) = %q, want %q", tc.in, tc.n, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestPreviewDocumentInvisibleAndNonexistentUniformlyNotFound(t *testing.T) {
 	service := NewRAGService(nil, nil, zap.NewNop())
 	service.SetWorkspaceRepo(&recordingWorkspaceRepo{workspace: memberWorkspace()})
@@ -955,27 +943,5 @@ func TestPreviewDocumentReassemblesChunksWithParents(t *testing.T) {
 		if seg.Index != int64(i) || seg.Content != "leaf-"+string(rune('0'+i)) {
 			t.Fatalf("segment %d out of order: %+v", i, seg)
 		}
-	}
-}
-
-func TestPreviewDocumentPlatformManagedSkipsWhitelist(t *testing.T) {
-	chunks := &recordingChunkRepo{listByDoc: []domain.Chunk{{ID: "c1", DocID: "doc-a", Index: 0, Text: "hit"}}}
-	service := NewRAGService(nil, nil, zap.NewNop())
-	// Built-in knowledge: SystemKey set, member viewer, whitelist would NOT
-	// include doc-a — exemption must still serve the preview.
-	service.SetWorkspaceRepo(&recordingWorkspaceRepo{workspace: &domain.Workspace{
-		ID: "workspace-1", Name: "support", CreatedBy: "other-user",
-		SystemKey: platformknowledge.SystemWorkspaceKey,
-	}})
-	service.SetTenantRoleResolver(stubRoleResolver{role: "member"})
-	service.SetDocRepo(stubDocRepo{visible: []string{}, doc: &domain.Document{ID: "doc-a", Source: "builtin.md"}})
-	service.SetChunkRepo(chunks)
-
-	preview, err := service.PreviewDocument(context.Background(), "tenant-1", "support", "doc-a", "viewer-1")
-	if err != nil {
-		t.Fatalf("platform-managed workspace must exempt whitelist, got %v", err)
-	}
-	if preview.DocumentTitle != "builtin.md" || len(preview.Segments) != 1 {
-		t.Fatalf("unexpected preview: %+v", preview)
 	}
 }

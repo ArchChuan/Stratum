@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -30,7 +31,7 @@ func (r *DocRepo) ExistsByHash(ctx context.Context, tenantID, workspaceID, hash 
 	return exists, err
 }
 
-func (r *DocRepo) Save(ctx context.Context, tenantID, kbID string, doc *domain.Document) error {
+func (r *DocRepo) Save(ctx context.Context, tenantID, kbID string, doc *domain.Document) (bool, error) {
 	status := doc.IngestStatus
 	if status == "" {
 		status = "processing"
@@ -44,16 +45,33 @@ func (r *DocRepo) Save(ctx context.Context, tenantID, kbID string, doc *domain.D
 	if allowedRoles == nil {
 		allowedRoles = []string{}
 	}
-	return execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO knowledge_docs
-			(id, workspace_id, title, content_hash, ingest_status, total_chunks,
-			 allowed_user_ids, allowed_role_ids, created_by, ingest_started_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+	// inserted reports whether this call won the row (RowsAffected=1). On a
+	// concurrent duplicate-ID insert the conflict row is left untouched and
+	// RowsAffected=0 → inserted=false → caller must not spawn the pipeline.
+	metadataJSON, err := json.Marshal(doc.Metadata)
+	if err != nil {
+		return false, fmt.Errorf("encode document metadata: %w", err)
+	}
+	title := doc.Title
+	if title == "" {
+		title = doc.Source
+	}
+	var inserted bool
+	err = execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `INSERT INTO knowledge_docs
+			(id, workspace_id, title, source, content_hash, metadata, ingest_status,
+			 total_chunks, allowed_user_ids, allowed_role_ids, created_by, ingest_started_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
 			ON CONFLICT (id) DO NOTHING`,
-			doc.ID, kbID, doc.Source, doc.ContentHash, status, doc.TotalChunks,
-			allowedUsers, allowedRoles, strOrNil(doc.CreatedBy))
-		return err
+			doc.ID, kbID, title, strOrNil(doc.Source), doc.ContentHash, string(metadataJSON), status,
+			doc.TotalChunks, allowedUsers, allowedRoles, strOrNil(doc.CreatedBy))
+		if err != nil {
+			return err
+		}
+		inserted = tag.RowsAffected() == 1
+		return nil
 	})
+	return inserted, err
 }
 
 // strOrNil maps an empty string to NULL so optional TEXT columns stay NULL
@@ -68,7 +86,8 @@ func strOrNil(s string) any {
 func (r *DocRepo) List(ctx context.Context, tenantID, kbID string) ([]*domain.Document, error) {
 	var docs []*domain.Document
 	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id, workspace_id, title, COALESCE(content_hash, ''),
+		rows, err := tx.Query(ctx, `SELECT id, workspace_id, title, COALESCE(source, ''),
+			COALESCE(content_hash, ''), COALESCE(metadata, '{}'),
 			ingest_status, ingest_error, processed_chunks, total_chunks,
 			COALESCE(allowed_user_ids, '{}'), COALESCE(allowed_role_ids, '{}'), COALESCE(created_by, ''),
 			created_at, ingest_started_at, ingest_finished_at
@@ -82,7 +101,7 @@ func (r *DocRepo) List(ctx context.Context, tenantID, kbID string) ([]*domain.Do
 		for rows.Next() {
 			d := &domain.Document{}
 			if err := rows.Scan(
-				&d.ID, &d.KBID, &d.Source, &d.ContentHash,
+				&d.ID, &d.KBID, &d.Title, &d.Source, &d.ContentHash, &d.Metadata,
 				&d.IngestStatus, &d.IngestError, &d.ProcessedChunks, &d.TotalChunks,
 				&d.AllowedUserIDs, &d.AllowedRoleIDs, &d.CreatedBy,
 				&d.CreatedAt, &d.IngestStartedAt, &d.IngestFinishedAt,
@@ -185,12 +204,13 @@ func (r *DocRepo) VisibleDocIDs(ctx context.Context, tenantID, workspaceID, view
 func (r *DocRepo) GetByID(ctx context.Context, tenantID, workspaceID, docID string) (*domain.Document, error) {
 	d := &domain.Document{}
 	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		err := tx.QueryRow(ctx, `SELECT id, workspace_id, title, COALESCE(content_hash, ''),
+		err := tx.QueryRow(ctx, `SELECT id, workspace_id, title, COALESCE(source, ''),
+			COALESCE(content_hash, ''), COALESCE(metadata, '{}'),
 			ingest_status, ingest_error, processed_chunks, total_chunks,
 			COALESCE(allowed_user_ids, '{}'), COALESCE(allowed_role_ids, '{}'), COALESCE(created_by, ''),
 			created_at, ingest_started_at, ingest_finished_at
 			FROM knowledge_docs WHERE workspace_id=$1 AND id=$2`, workspaceID, docID).Scan(
-			&d.ID, &d.KBID, &d.Source, &d.ContentHash,
+			&d.ID, &d.KBID, &d.Title, &d.Source, &d.ContentHash, &d.Metadata,
 			&d.IngestStatus, &d.IngestError, &d.ProcessedChunks, &d.TotalChunks,
 			&d.AllowedUserIDs, &d.AllowedRoleIDs, &d.CreatedBy,
 			&d.CreatedAt, &d.IngestStartedAt, &d.IngestFinishedAt,
@@ -240,6 +260,81 @@ func (r *DocRepo) AddAllowedUser(ctx context.Context, tenantID, docID, userID st
 			return domain.ErrDocumentNotFound
 		}
 		return nil
+	})
+}
+
+// CASReplace atomically claims a document for re-ingestion (see the port
+// contract for the exact state matrix). The winning caller owns the old-chunk
+// deletion and must delete the old vectors before re-embedding; the loser
+// (hash changed or currently processing) must treat the doc as a skip.
+func (r *DocRepo) CASReplace(
+	ctx context.Context, tenantID, workspaceID, docID, expectedHash, newHash, title string,
+	metadata map[string]any, totalChunks int,
+) (bool, error) {
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return false, fmt.Errorf("encode document metadata: %w", err)
+	}
+	var won bool
+	err = execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE knowledge_docs
+			SET ingest_status='processing', content_hash=$4, title=$5, metadata=$6,
+			    total_chunks=$7, processed_chunks=0, ingest_error='', ingest_started_at=NOW()
+			WHERE workspace_id=$1 AND id=$2
+			  AND content_hash=$3
+			  AND ingest_status IN ('completed','failed','deleting')`,
+			workspaceID, docID, expectedHash, newHash, title, string(metadataJSON), totalChunks)
+		if err != nil {
+			return err
+		}
+		won = tag.RowsAffected() == 1
+		if !won {
+			return nil
+		}
+		for _, table := range []string{"knowledge_chunks", "knowledge_parent_chunks"} {
+			if _, err := tx.Exec(ctx, `DELETE FROM `+table+` WHERE workspace_id=$1 AND doc_id=$2`, workspaceID, docID); err != nil {
+				return fmt.Errorf("delete %s: %w", table, err)
+			}
+		}
+		return nil
+	})
+	return won, err
+}
+
+// CASBeginDelete marks a document 'deleting' as a one-way claim (see the port
+// contract). The winning caller deletes vectors + the row; a loser that sees
+// the doc already 'deleting' must not touch it (another pod owns the cleanup).
+func (r *DocRepo) CASBeginDelete(ctx context.Context, tenantID, workspaceID, docID string) (bool, error) {
+	var won bool
+	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE knowledge_docs
+			SET ingest_status='deleting'
+			WHERE workspace_id=$1 AND id=$2
+			  AND ingest_status IN ('completed','failed','deleting')`,
+			workspaceID, docID)
+		if err != nil {
+			return err
+		}
+		won = tag.RowsAffected() == 1
+		return nil
+	})
+	return won, err
+}
+
+// MarkBuiltinLegacy backfills the {builtin_source: legacy} marker onto legacy
+// catalog seed documents that do not carry any builtin_source yet. Only the
+// exact legacy docIDs are touched, so user-uploaded docs are never affected.
+func (r *DocRepo) MarkBuiltinLegacy(ctx context.Context, tenantID, workspaceID string, legacyIDs []string) error {
+	if len(legacyIDs) == 0 {
+		return nil
+	}
+	return execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE knowledge_docs
+			SET metadata = COALESCE(metadata, '{}') || '{"builtin_source":"legacy"}'::jsonb
+			WHERE workspace_id=$1 AND id = ANY($2::uuid[])
+			  AND NOT COALESCE(metadata, '{}') ? 'builtin_source'`,
+			workspaceID, legacyIDs)
+		return err
 	})
 }
 

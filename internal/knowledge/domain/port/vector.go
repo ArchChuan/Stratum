@@ -1,6 +1,22 @@
 package port
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
+
+// VectorStoreUnavailableError identifies a transient vector-store failure
+// (Milvus unavailable or server-side rate-limited). Ingest retries on it
+// instead of failing the document outright. Infrastructure adapters translate
+// the concrete store error into this port type so application code never
+// depends on a specific storage implementation.
+type VectorStoreUnavailableError struct{ Err error }
+
+func (e *VectorStoreUnavailableError) Error() string {
+	return fmt.Sprintf("vector store unavailable: %v", e.Err)
+}
+
+func (e *VectorStoreUnavailableError) Unwrap() error { return e.Err }
 
 type VectorDocument struct {
 	ID             string
@@ -39,4 +55,9 @@ type VectorStore interface {
 	Flush(ctx context.Context, collectionName string) error
 	DeleteCollection(ctx context.Context, collectionName string) error
 	CountVectors(ctx context.Context, collectionName string) (int64, error)
+	// DeleteByDocumentIDs removes all vectors whose source_document is in docIDs
+	// from the given collection. Used to purge a document's old vectors before
+	// re-embedding an updated version. A missing collection is treated as
+	// success (idempotent). An empty docIDs list is a no-op.
+	DeleteByDocumentIDs(ctx context.Context, collectionName string, docIDs []string) error
 }

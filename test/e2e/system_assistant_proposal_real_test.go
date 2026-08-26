@@ -249,14 +249,14 @@ func TestSystemAssistantProposalRealServices(t *testing.T) {
 				got, err := skillSvc.GetWorkspace(ctx, id, actorID)
 				require.NoError(t, err)
 				require.Equal(t, "E2E Skill", got.Skill.Name)
-				require.Equal(t, "draft", string(got.Draft.Status))
+				require.Equal(t, "published", string(got.Active.Status))
 			},
 			assertUpdated: func(id string) {
 				got, err := skillSvc.GetWorkspace(ctx, id, actorID)
 				require.NoError(t, err)
 				require.Equal(t, "updated verified docs", got.Skill.Description)
-				require.Equal(t, "Use only verified sources.", got.Draft.Instructions)
-				require.Equal(t, "draft", string(got.Draft.Status))
+				require.Equal(t, "Use only verified sources.", got.Active.Instructions)
+				require.Equal(t, "published", string(got.Active.Status))
 			},
 			assertIsolated: func(id string) {
 				_, err := skillSvc.GetWorkspace(otherTenantCtx, id, actorID)

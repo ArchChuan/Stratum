@@ -60,22 +60,45 @@ func TestTenantSchemaApprovalStatusWhitelistCoversAllDomainStatuses(t *testing.T
 	if createAt < 0 {
 		t.Fatalf("CREATE TABLE IF NOT EXISTS agent_tool_approvals not found in %s", tenantSchemaSQLPath)
 	}
-	inline := statusInRe.FindStringSubmatch(sql[createAt:])
+	// 内联锚定到审批 status 列，避免建表块内其他列（如 risk_level）的 CHECK 被静默误匹配。
+	statusColAt := strings.Index(sql[createAt:], "status TEXT NOT NULL DEFAULT 'pending'")
+	if statusColAt < 0 {
+		t.Fatal("inline approval status column not found")
+	}
+	inline := statusInRe.FindStringSubmatch(sql[createAt+statusColAt:])
 	if inline == nil {
-		t.Fatal("inline status CHECK whitelist not found after CREATE TABLE agent_tool_approvals")
+		t.Fatal("inline status CHECK whitelist not found after approval status column")
 	}
 
+	// 精确集合相等：白名单必须与 domain 枚举完全一致（不多不少），
+	// 防止 SQL 误写额外值，或测试清单与 SQL 同步漏改时守卫误通过。
 	whitelists := [][]string{parseWhitelist(inline[1])}
 	for _, m := range adds {
 		whitelists = append(whitelists, parseWhitelist(m[1]))
 	}
 	for i, got := range whitelists {
-		for _, s := range want {
-			if !containsStr(got, s) {
-				t.Fatalf("whitelist #%d %v missing domain status %q", i, got, s)
-			}
+		if !equalStrings(got, want) {
+			t.Fatalf("whitelist #%d = %v, want exactly %v", i, got, want)
 		}
 	}
+}
+
+// equalStrings 判断两个字符串切片是否顺序无关地完全相同（元素计数一致）。
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	remain := make(map[string]int, len(a))
+	for _, s := range a {
+		remain[s]++
+	}
+	for _, s := range b {
+		if remain[s] == 0 {
+			return false
+		}
+		remain[s]--
+	}
+	return true
 }
 
 // parseWhitelist 把 status IN 捕获组拆成引号值列表。
@@ -85,13 +108,4 @@ func parseWhitelist(body string) []string {
 		out = append(out, m[1])
 	}
 	return out
-}
-
-func containsStr(hay []string, needle string) bool {
-	for _, s := range hay {
-		if s == needle {
-			return true
-		}
-	}
-	return false
 }

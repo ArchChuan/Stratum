@@ -514,16 +514,6 @@ func (a *Accumulator) Report() Report {
 	return result
 }
 
-func percentile[T ~int | ~int64](values []T, percent int) T {
-	if len(values) == 0 {
-		return 0
-	}
-	sorted := append([]T(nil), values...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
-	index := (percent*len(sorted)+99)/100 - 1
-	return sorted[index]
-}
-
 func percentileCounts[T ~int | ~int64](counts map[T]int, percent int) T {
 	if len(counts) == 0 {
 		return 0

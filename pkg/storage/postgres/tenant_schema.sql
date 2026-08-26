@@ -206,7 +206,7 @@ CREATE TABLE IF NOT EXISTS operation_proposals (
     id                   TEXT PRIMARY KEY,
     agent_id             TEXT NOT NULL,
     target_agent_id      TEXT NOT NULL DEFAULT '',
-    op_type              TEXT NOT NULL CHECK (op_type IN ('revision_apply','cross_agent_delegate','schedule_create','self_modify')),
+    op_type              TEXT NOT NULL CHECK (op_type IN ('revision_apply','cross_agent_delegate','schedule_create','self_modify','grant_editor')),
     delegation           TEXT NOT NULL DEFAULT 'no_delegate' CHECK (delegation IN ('no_delegate','read_only','full')),
     max_daily_cost_usd   NUMERIC(14,4) NOT NULL DEFAULT 0,
     max_daily_executions INT  NOT NULL DEFAULT 0,
@@ -221,6 +221,13 @@ CREATE TABLE IF NOT EXISTS operation_proposals (
     resolved_at          TIMESTAMPTZ,
     expires_at           TIMESTAMPTZ
 );
+-- 升级存量租户：grant_editor（成员白名单自助申请）加入 op_type 枚举后，历史租户
+-- 的旧 check 约束仍拒绝该值（ProposeGrantEditor 插入即 500）。CREATE TABLE IF
+-- NOT EXISTS 不会重建已有表，故以 DROP IF EXISTS + ADD CONSTRAINT 幂等替换——
+-- 每次 provision 先删后加，新旧租户最终都含 grant_editor。
+ALTER TABLE operation_proposals DROP CONSTRAINT IF EXISTS operation_proposals_op_type_check;
+ALTER TABLE operation_proposals ADD CONSTRAINT operation_proposals_op_type_check
+    CHECK (op_type IN ('revision_apply','cross_agent_delegate','schedule_create','self_modify','grant_editor'));
 CREATE INDEX IF NOT EXISTS idx_operation_proposals_pending ON operation_proposals(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_operation_proposals_agent    ON operation_proposals(agent_id, op_type);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_operation_proposals_open_fingerprint
@@ -1284,6 +1291,17 @@ ALTER TABLE memory_entries DROP COLUMN IF EXISTS scope_layer;
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS enriched_at TIMESTAMPTZ;
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'user';
 UPDATE memory_entries SET scope = 'agent' WHERE agent_id IS NOT NULL AND scope = 'user';
+-- 非法 scope 归一化：历史遗留数据可能写入空串或空白等非白名单值（当时无
+-- CHECK 约束）。history worker 的 HistorySegment.Validate() 要求 scope ∈
+-- {user,agent}，非法值导致 memory.history.upsert_failed。agent 相关条目回落
+-- 'agent'，其余 'user'。谓词必须覆盖全部非白名单值（含 ' '），否则下方
+-- ADD CONSTRAINT 全量校验失败会中止租户 provision。
+UPDATE memory_entries SET scope = CASE WHEN agent_id IS NULL THEN 'user' ELSE 'agent' END
+WHERE scope NOT IN ('user', 'agent');
+-- 白名单约束与 memory_facts/memory_entities 对齐，防止后续再写入非法 scope。
+ALTER TABLE memory_entries DROP CONSTRAINT IF EXISTS memory_entries_scope_check;
+ALTER TABLE memory_entries ADD CONSTRAINT memory_entries_scope_check
+    CHECK (scope IN ('user', 'agent'));
 
 CREATE INDEX IF NOT EXISTS idx_memory_entries_user_id ON memory_entries (user_id);
 -- episodic TTL GC 扫描：created_at 覆盖无 expires_at 的 90 天截止，expires_at
@@ -1296,6 +1314,14 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL 
 ALTER TABLE agents DROP COLUMN IF EXISTS embed_model;
 ALTER TABLE agents DROP COLUMN IF EXISTS persona;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS parameters JSONB NOT NULL DEFAULT '{}'::jsonb;
+-- memory_scope 非法值归一化：遗留 agent 可能写入空串或空白（DTO binding
+-- required 本应阻止，但缺 CHECK 的历史路径可绕过）。非白名单值回落 'agent'，
+-- 防止 history worker 的 scope 校验拒绝导致 memory.history.upsert_failed。
+-- 谓词覆盖全部非白名单值，确保下方 ADD CONSTRAINT 对存量数据全量通过。
+UPDATE agents SET memory_scope = 'agent' WHERE memory_scope NOT IN ('user', 'agent');
+ALTER TABLE agents DROP CONSTRAINT IF EXISTS agents_memory_scope_check;
+ALTER TABLE agents ADD CONSTRAINT agents_memory_scope_check
+    CHECK (memory_scope IN ('user', 'agent'));
 
 -- chat_conversations soft-delete backfill
 ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
@@ -1558,9 +1584,17 @@ CREATE INDEX IF NOT EXISTS idx_kc_workspace ON knowledge_chunks(workspace_id);
 ALTER TABLE knowledge_docs DROP COLUMN IF EXISTS content;
 
 -- async ingest lifecycle: track status/progress of embedding jobs that run
--- in a detached background goroutine after the API returns 202
+-- in a detached background goroutine after the API returns 202. 'deleting' is
+-- the one-way CAS claim written by the built-in docs delete path before the
+-- row + vectors are purged; it must be a legal state for the CAS UPDATE.
 ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS ingest_status TEXT NOT NULL DEFAULT 'completed'
-    CHECK (ingest_status IN ('processing', 'completed', 'failed'));
+    CHECK (ingest_status IN ('processing', 'completed', 'failed', 'deleting'));
+-- Upgrade historical tenants whose column already exists: the inline CHECK
+-- above is skipped by ADD COLUMN IF NOT EXISTS, so re-apply the constraint
+-- with 'deleting' allowed. Safe for existing rows (all prior values are kept).
+ALTER TABLE knowledge_docs DROP CONSTRAINT IF EXISTS knowledge_docs_ingest_status_check;
+ALTER TABLE knowledge_docs ADD CONSTRAINT knowledge_docs_ingest_status_check
+    CHECK (ingest_status IN ('processing', 'completed', 'failed', 'deleting'));
 ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS ingest_error TEXT NOT NULL DEFAULT '';
 ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS processed_chunks INT NOT NULL DEFAULT 0;
 ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS total_chunks INT NOT NULL DEFAULT 0;
@@ -1741,19 +1775,15 @@ WHERE NOT EXISTS (
     WHERE agent_id = 'stratum-platform-assistant' AND skill_id = 'builtin:tool-execution'
 );
 
--- Built-in knowledge workspace: platform documentation.
--- ON CONFLICT … DO UPDATE backfills system_key / management_mode for legacy tenants
--- whose rag_workspaces row already exists but lacks the platform markers.
-INSERT INTO rag_workspaces (id, name, description, config, system_key, management_mode, created_at, updated_at)
+-- Built-in knowledge workspace: platform documentation. 内置知识库不再带
+-- platform-managed 标记(system_key/management_mode 列保留但 seed 不再写入),
+-- 与普通 workspace 走同一权限/控制体系。
+INSERT INTO rag_workspaces (id, name, description, config, created_at, updated_at)
 VALUES ('a0a0a0a0-0000-0000-0000-000000000001', 'stratum_docs',
         'Stratum 平台官方文档知识库',
         '{"embedding_model":"text-embedding-v3","chunk_size":512,"chunk_overlap":64,"query_mode":"hybrid","top_k":5,"chunking_strategy":"structure_recursive"}'::jsonb,
-        'stratum.knowledge_docs', 'platform_managed',
         NOW(), NOW())
-ON CONFLICT (id) DO UPDATE SET
-    system_key = EXCLUDED.system_key,
-    management_mode = EXCLUDED.management_mode
-WHERE rag_workspaces.system_key IS NULL;
+ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO agent_workspaces (agent_id, workspace_id)
 VALUES ('stratum-platform-assistant', 'a0a0a0a0-0000-0000-0000-000000000001')

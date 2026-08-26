@@ -18,21 +18,21 @@
 
 | 层级 | 触发条件 | 时长 | Packs | 执行位置 |
 |------|----------|------|-------|---------|
-| **short** | R2+ 创建 PR 前 | ~10min | 关键 packs | 本地 `make test-verify-before-pr` |
+| **short** | R2+ 创建 PR 前 | 600s | 全部 17 packs | 本地 `make test-verify-before-pr` |
 | **soak** | R3 auth/tenant/迁移/msg/vector/外部依赖 | 600s | all eligible | 本地 canonical entrypoint |
 | **release-soak** | R4 显式发布意图 | 3600s | all | 本地显式执行 |
 
 ### Short mode packs（本地默认）
 
-```
-dashboard,iam,workflow,agent,skill,mcp,agent-skill-mcp,knowledge,memory,llm-admin
-```
+Short 模式不做 packs 过滤，运行全部 17 个 packs（见下方 `all_packs`），时长预算 600s。
 
 ### Soak mode packs（全部）
 
 ```
-dashboard,iam,workflow,agent,skill,mcp,agent-skill-mcp,knowledge,memory,evaluation,agent-context,evaluation-promotion,llm-admin
+dashboard,iam,workflow,agent,skill,mcp,agent-skill-mcp,knowledge,memory,audit,evaluation,agent-context,evaluation-promotion,llm-admin,operation-gate,collab,scheduled-task
 ```
+
+Packs 定义以 `scripts/e2e/system-stateful.sh` 的 `all_packs` 为唯一事实源（共 17 个）；`iam-oauth` 是 `iam` pack 的辅助模块，不作为独立 pack 入列。
 
 ## 四条验收标准
 
@@ -56,7 +56,7 @@ Go struct 缺少 `json:"camelCase"` tag 时序列化为 PascalCase，前端取�
 
 **双重防御**：
 
-- **Build time**：`make contract-enforce` → 141 golden files + camelCase 扫描（CI `contract` job）
+- **Build time**：`make contract-enforce` → 165 golden files + camelCase 扫描（CI `contract` job）
 - **Runtime**：E2E pack 使用 `assertCamelCaseKeys` / `assertNoPascalCase` 守卫每个 API 响应
 
 ### 添加新 camelCase 守卫
@@ -79,6 +79,8 @@ Go struct 缺少 `json:"camelCase"` tag 时序列化为 PascalCase，前端取�
 
 ## 三种验证权威
 
+Stratum 用三种独立权威取代单一 overloaded `accepted` 状态：本地浏览器权威、CI 合并权威、发布流水线权威。GitHub 不下载、不签名、不把本地报告当作 required status check。
+
 ```
 Local before PR
   └── focused -> headless short -> R3 600s soak -> local report
@@ -87,6 +89,24 @@ PR CI
 Release pipeline
   └── exact CI head SHA + immutable digests + migration + rollout + health + rollback
 ```
+
+### 本地浏览器权威（Local before PR）
+
+`make test-verify-before-pr` 在 clean commit 上运行风险选择的 headless 浏览器验证。本地报告绑定被测 commit、verification manifest 摘要、attestation v2 能力结果与清理结果。它是开发者审计断言——GitHub 不下载、不签名、不视为 required status check。
+
+### CI 合并权威（PR CI）
+
+GitHub Actions 通过真实并行 job（static / unit / integration / contract golden / security / build，无浏览器）决定 PR 能否合并。`.test/verification.yaml` 的每个 `ci_checks` 标识都映射到 workflow job，兼容性聚合除非每个必需依赖结果都是 `success` 否则失败。
+
+### CI 兜底的本地跳过（CI-owned skip）
+
+`run-planned-checks.sh` 支持 `CI_OWNED=1`：当所选风险级别对应的本地检查也出现在 manifest 的 `ci_checks`（由上述真实 job 兜底）时，本地跳过而不是重跑。只有 CI 不覆盖的检查（如 `docs-lint`、E2E）留在本地。每个跳过的单元都打印 `skipped (CI-owned): <check>`——显式，绝不静默。若 plan 缺少 `ci_checks` 声明则 fail closed（宁可全跑也不误跳过）。分支 CI 已绿、只需本地 E2E 加定向测试时用 `CI_OWNED=1 make test-verify-before-pr`。默认关闭，无该变量时行为不变。
+
+### 发布流水线权威（Release pipeline）
+
+对 `workflow_run` 部署，候选是 `github.event.workflow_run.head_sha`。它必须是 `main` 上成功的 CI 运行，且构建任何镜像前仍须等于当前 `main` tip。所有 checkout 与镜像 tag 都使用该候选。部署固定 registry digests，并记录集群实际观测到的 backend/frontend/adapter 镜像摘要以及迁移、健康、回滚结果。
+
+发布记录可以由 GitHub attest，因其产生于发布控制面内；该 attestation 不会追溯性地让本地浏览器证据变成 GitHub 信任边界。
 
 ## 常用命令
 

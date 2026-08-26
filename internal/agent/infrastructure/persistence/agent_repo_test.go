@@ -18,6 +18,28 @@ func tenantCtx(tenantID string) context.Context {
 	return tenantdb.WithTenant(context.Background(), tc)
 }
 
+func TestMemoryScopeOrNormalizesEmptyToAgentDefault(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "empty zero value falls back to column default", in: "", want: "agent"},
+		{name: "user scope preserved", in: "user", want: "user"},
+		{name: "agent scope preserved", in: "agent", want: "agent"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Register/Update 直写 memory_scope 列；空值会被
+			// agents_memory_scope_check 拒绝，故必须归一化为默认 'agent'，
+			// 否则系统路径（AgentConfig 不设 MemoryScope）UPDATE 抛 SQLSTATE 23514。
+			if got := memoryScopeOr(tc.in); got != tc.want {
+				t.Fatalf("memoryScopeOr(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAgentRepoRejectsInvalidTenantBeforeBeginningTransaction(t *testing.T) {
 	pool, err := pgxmock.NewPool()
 	if err != nil {
@@ -45,7 +67,7 @@ func TestAgentRepo_Register(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("INSERT INTO agents").
-		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "", "", "{}", false, 0, 0).
+		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "agent", "", "{}", false, 0, 0).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").
@@ -78,7 +100,7 @@ func TestAgentRepo_Register_WithMCP(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("INSERT INTO agents").
-		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "", "", "{}", false, 0, 0).
+		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "agent", "", "{}", false, 0, 0).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").
@@ -214,7 +236,7 @@ func TestAgentRepo_Update_Success(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("UPDATE agents").
-		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", "{}", false, 0, 0, "a1").
+		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "agent", "{}", false, 0, 0, "a1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").
@@ -254,7 +276,7 @@ func TestAgentRepo_SamplingParametersRoundTrip(t *testing.T) {
 	// parameters 参数用 AnyArg:JSON map marshal 顺序不稳定,pack 内容
 	// 由 TestPackSamplingParameters 单独断言(顺序无关)。
 	pool.ExpectExec("UPDATE agents").
-		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", pgxmock.AnyArg(), false, 0, 0, "a1").
+		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "agent", pgxmock.AnyArg(), false, 0, 0, "a1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").WillReturnResult(pgxmock.NewResult("DELETE", 0))
@@ -405,7 +427,7 @@ func TestAgentRepo_Update_MergeSQLShape(t *testing.T) {
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	// 完整 SQL 正则:merge 路径必须含 JSONB 拼接和 null 清理,禁止回落为整体覆盖。
 	pool.ExpectExec(`UPDATE agents[\s\S]*parameters\s*=\s*jsonb_strip_nulls\(parameters\s*\|\|\s*\$8::jsonb\)[\s\S]*WHERE id=\$12`).
-		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", pgxmock.AnyArg(), false, 0, 0, "a1").
+		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "agent", pgxmock.AnyArg(), false, 0, 0, "a1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").WillReturnResult(pgxmock.NewResult("DELETE", 0))
@@ -444,7 +466,7 @@ func TestAgentRepo_SamplingParametersReplace(t *testing.T) {
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	// packAll 内容(含 null)由 TestPackAllSamplingParameters 断言。
 	pool.ExpectExec("UPDATE agents").
-		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", pgxmock.AnyArg(), false, 0, 0, "a1").
+		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "agent", pgxmock.AnyArg(), false, 0, 0, "a1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").WillReturnResult(pgxmock.NewResult("DELETE", 0))
@@ -509,7 +531,7 @@ func TestAgentRepo_DelegateFieldsRoundTrip(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("UPDATE agents").
-		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", "{}", true, 2, 7, "a1").
+		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "agent", "{}", true, 2, 7, "a1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").WillReturnResult(pgxmock.NewResult("DELETE", 0))
@@ -570,7 +592,7 @@ func TestAgentRepo_Update_NotFound(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("UPDATE agents").
-		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", "{}", false, 0, 0, "missing").
+		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "agent", "{}", false, 0, 0, "missing").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	pool.ExpectRollback()
 
@@ -652,7 +674,7 @@ func TestAgentRepo_Register_WithEditors(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("INSERT INTO agents").
-		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "", "creator-1", "{}", false, 0, 0).
+		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "agent", "creator-1", "{}", false, 0, 0).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").
@@ -665,7 +687,7 @@ func TestAgentRepo_Register_WithEditors(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	// Editor eligibility is validated inside the same transaction (fail closed).
 	pool.ExpectQuery("SELECT EXISTS").
-		WithArgs("t1", "user-1").
+		WithArgs("t1", "user-1", []string{"admin", "owner", "member"}).
 		WillReturnRows(pgxmock.NewRows([]string{"bool"}).AddRow(true))
 	pool.ExpectExec("INSERT INTO resource_editors").
 		WithArgs("agent", "a1", "user-1", "creator-1").
@@ -698,7 +720,7 @@ func TestAgentRepo_Register_ForgedEditorRollsBack(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("INSERT INTO agents").
-		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "", "creator-1", "{}", false, 0, 0).
+		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 0, "agent", "creator-1", "{}", false, 0, 0).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").
@@ -710,7 +732,7 @@ func TestAgentRepo_Register_ForgedEditorRollsBack(t *testing.T) {
 		WithArgs("a1").
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	pool.ExpectQuery("SELECT EXISTS").
-		WithArgs("t1", "member-1").
+		WithArgs("t1", "member-1", []string{"admin", "owner", "member"}).
 		WillReturnRows(pgxmock.NewRows([]string{"bool"}).AddRow(false))
 	pool.ExpectRollback()
 
@@ -741,13 +763,13 @@ func TestAgentRepo_Update_EditorActorRevalidates(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("SELECT EXISTS").
-		WithArgs("t1", "editor-1").
+		WithArgs("t1", "editor-1", []string{"admin", "owner", "member"}).
 		WillReturnRows(pgxmock.NewRows([]string{"bool"}).AddRow(true))
 	pool.ExpectQuery("SELECT EXISTS").
 		WithArgs("agent", "a1", "editor-1").
 		WillReturnRows(pgxmock.NewRows([]string{"bool"}).AddRow(true))
 	pool.ExpectExec("UPDATE agents").
-		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", "{}", false, 0, 0, "a1").
+		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "agent", "{}", false, 0, 0, "a1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").
@@ -783,7 +805,7 @@ func TestAgentRepo_Update_EditorActorDeniedRollsBack(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("SELECT EXISTS").
-		WithArgs("t1", "editor-1").
+		WithArgs("t1", "editor-1", []string{"admin", "owner", "member"}).
 		WillReturnRows(pgxmock.NewRows([]string{"bool"}).AddRow(true))
 	// Grant was removed -> presence check fails closed.
 	pool.ExpectQuery("SELECT EXISTS").

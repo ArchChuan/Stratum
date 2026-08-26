@@ -16,11 +16,11 @@
 
 ## Technology and directory map
 
-- 后端使用 Go 1.25.12（以 `go.mod` 为准）。入口 `cmd/server/main.go` 通过 `api/wiring.BuildContainer` 构图；HTTP 路由、handler、DTO 和 middleware 位于 `api/http/`，组合根位于 `api/wiring/`。
-- 业务上下文位于 `internal/<ctx>/{domain,application,infrastructure}`。当前上下文为 `agent`、`evaluation`、`iam`、`knowledge`、`llmgateway`、`mcp`、`memory`、`platform`、`scheduler`、`skill`、`workflow`。
-- 通用基础设施位于 `pkg/`：`constants`、`observability`、`reqctx`、`storage/{milvus,postgres,redis}`、`tenantdb`、`migration`、`httpclient`、`textchunk`、`crypto`。`pkg/vector` 仅兼容旧 import，新代码使用 `pkg/storage/milvus`。
-- 关键后端依赖：Gin v1.9.1、NATS v1.51.0（JetStream）、Milvus SDK v2.4.2、pgx v5.9.2、go-redis v9.7.3、golang-jwt v5.3.1、OTEL v1.40.0、Zap v1.27.1。
-- 前端位于 `web/`，使用 React 18.3、Vite 6.4、Ant Design 5.20、React Router 6.26、Axios 1.18、TypeScript。代码按 `web/src/modules/` 业务域组织，共享 API 客户端是 `web/src/services/client.ts`。
+- 后端使用 Go 1.25.12（以 `go.mod` 为准）。入口 `cmd/server/main.go` 通过 `api/wiring.BuildContainer` 构图；HTTP 路由、handler、DTO 位于 `api/http/`，middleware 位于 `api/middleware/`（`body_limit`、`rate_limit`、`public_error`、`require_default_tenant`、`system_role_check` 等），组合根位于 `api/wiring/`。
+- 业务上下文位于 `internal/<ctx>/{domain,application,infrastructure}`。当前上下文为 `agent`、`audit`、`collab`、`evaluation`、`iam`、`knowledge`、`llmgateway`、`mcp`、`memory`、`parameters`、`platform`、`scheduler`、`skill`、`workflow`。
+- 通用基础设施位于 `pkg/`：`constants`、`crypto`、`dag`、`httpclient`、`jsonschema`、`messaging`、`migration`、`observability`、`postgres`、`reqctx`、`safetext`、`storage/{milvus,postgres,redis,filestore,objectstore,tenantnaming}`、`tenantdb`、`textchunk`、`timeutil`、`tokenutil`。`pkg/vector` 仅兼容旧 import，新代码使用 `pkg/storage/milvus`。
+- 关键后端依赖：Gin v1.9.1、NATS v1.51.0（JetStream）、Milvus SDK v2.4.2、pgx v5.9.2、go-redis v9.7.3、golang-jwt v5.3.1、OTEL v1.42.0、Zap v1.27.1、minio-go v7、unidoc/unioffice、modelcontextprotocol/go-sdk、robfig/cron、bufbuild/protocompile。
+- 前端位于 `web/`，使用 React 18.3、Vite 6.4、Ant Design 5.20、React Router 7.18.2、Axios 1.18、TypeScript。代码按 `web/src/modules/` 业务域组织（`agent`、`approvals`、`audit`、`collab`、`dashboard`、`evaluation`、`iam`、`knowledge`、`llm`、`mcp`、`memory`、`operation-gate`、`parameters`、`scheduled-task`、`skill`、`workflow`），共享 API 客户端是 `web/src/services/client.ts`。
 - 部署资源位于 `k8s/`、`helm/`、`grafana/`；模块的细节以本文件末尾索引为准。
 
 ## Remote environment
@@ -84,12 +84,31 @@ push 触发 CI 后的等待期间，必须先检查 PR base 是否落后于最�
 
 - 编码前运行 `bash scripts/quality/risk-regression-guard.sh --explain`。后端快速验证：`go vet && go test -short ./...`；PR 前：`go test -v -race -timeout 30s ./...`。前端 PR 前：`make fe-lint && make fe-build`。依赖服务可用 `make infra-up`。
 - Go 代码质量采用增量棘轮：新函数必须满足圈复杂度 ≤10、认知复杂度 ≤15、函数长度 ≤120 行、最大嵌套 ≤4；存量超限函数不得恶化。参数数 >6、文件长度 >800 和重复代码候选当前仅告警。运行 `make code-quality` 检查；基线只能通过 `make code-quality-baseline` 显式刷新，并与代码改动一同审查，禁止为通过门禁隐式更新。
-- 功能开发、Bug 修复、前后端联调、数据库链路，或 Agent/Skill/MCP/Memory/Knowledge/IAM 能力改动必须使用 `stratum-e2e-development` skill，由 skill 主导整个验收流程。创建 PR 前在 clean commit 上通过该 skill 完成系统验收；skill 内部按 `.test/verification.yaml` 自动选择本地无头 Chromium short 并运行 `make test-verify-before-pr`，R3 自动执行 `STATEFUL_E2E_PROFILE=test STATEFUL_E2E_DURATION_SEC=600 STATEFUL_E2E_PACKS=all` soak，R4 显式发布意图追加 `make e2e-system-release-soak` 的 3600 秒 release profile。`make test-verify-before-pr` 只是 skill 的落点之一，禁止绕过 skill 直接跑 make 或手工拼装 E2E 替代系统验收。浏览器操作以 HTTP 和测试数据库凭据证据对账，但禁止输出 token、cookie、密钥、密码或原始 API key。failed/skipped/unreconciled capability、清理失败、残留实体或 stale report 都必须阻断；临时 Playwright、纯 API 或手工场景不能替代系统验收。
-- `stratum-e2e-development` 是 Claude Code 与 Codex 共用的唯一测试和验收 Skill。`browser_e2e_authority: local`、`merge_authority: ci`、`deployment_authority: release_pipeline` 分别管理本地浏览器、非浏览器 PR CI 和发布验证；local report 只是 developer audit assertion，不是 GitHub trusted status。
-- 所有登录测试和验证流程必须使用无头浏览器（Playwright headless）；禁止为测试或验证启动有头浏览器。纯 API/单元测试不属于登录测试，但涉及登录态恢复时必须通过无头浏览器完成。
 - AI 生成测试前必须先读同域优质测试模板，复用 mock 和断言风格。代码是主、测试是行为契约；冲突时依据产品意图判断改实现或改测试，禁止为过测扭曲实现。
 - API 兼容性由 `api/http/contract_test.go` 和 `api/http/testdata/contracts/*.golden.json` 守护。业务逻辑目标覆盖率 ≥80%，外部依赖须 mock，完整套件使用 `-race`。
 - HTTP JSON 参数契约的唯一事实源是 `proto/` 下的 .proto 文件；前后端类型由 `protoc-gen-ginstruct` 生成（`api/http/dto/gen/`、`web/src/services/gen/`，不入 git）。改参数契约 = 改 proto 后 `make proto-gen`；绕过 make 直敲 `go test` 且未生成时 import 编译失败，属预期约束（与"生成物不入 git"配套）。仓库级残留由 `scripts/quality/dto-residue-guard.sh` 守卫（挂在 `make check`）。
+
+## End-to-end testing and acceptance
+
+### 测试门槛原则
+
+- 只改字段 / 只改单个小 bug / 常量值调整 → 最小验证：unit + contract（`go test -short ./...` + contract tests）。
+- 其余所有改动——功能、Bug 修复、前后端联调、数据库链路、Agent/Skill/MCP/Memory/Knowledge/IAM 能力改动——必须完整测试（`make test-verify-before-pr`），按 `.test/verification.yaml` 风险级升级：R2→e2e-short，R3→+e2e-soak，R4→+release-soak。
+- 纯文案/措辞文档改动（不改文档结构、不改参数契约、不改变生成物）→ 最小验证：`markdownlint` + `make agent-instructions-check`（验证生成一致）。
+- 文档结构性改动（新增/重排章节、改变 instructions.md 与 CLAUDE.md/AGENTS.md 的生成关系、修改 .proto 契约）→ 完整测试（`make test-verify-before-pr`），按 `.test/verification.yaml` 风险级升级。
+
+### 验证执行方
+
+- 系统验收由专用测试 agent `stratum-e2e-tester` 执行——它封装 `stratum-e2e-development` skill，定义见 `.claude/agents/stratum-e2e-tester.md`（本地 agent 定义，不入库，仅本仓库开发机可用）。
+- 测试编写/设计/覆盖分析用 `agent-skills:test-engineer`。
+- `stratum-e2e-development` 仍是 Claude Code 与 Codex 共用的唯一测试和验收 Skill。`browser_e2e_authority: local`、`merge_authority: ci`、`deployment_authority: release_pipeline` 分别管理本地浏览器、非浏览器 PR CI 和发布验证；local report 只是 developer audit assertion，不是 GitHub trusted status。
+
+### 验收红线
+
+- 创建 PR 前必须在 clean commit 上通过 `stratum-e2e-development` skill 完成系统验收；skill 内部按 `.test/verification.yaml` 自动选择本地无头 Chromium short 并运行 `make test-verify-before-pr`，R3 自动执行 `STATEFUL_E2E_PROFILE=test STATEFUL_E2E_DURATION_SEC=600 STATEFUL_E2E_PACKS=all` soak，R4 显式发布意图追加 `make e2e-system-release-soak` 的 3600 秒 release profile。`make test-verify-before-pr` 只是 skill 的落点之一，禁止绕过 skill 直接跑 make 或手工拼装 E2E 替代系统验收。
+- 所有登录测试和验证流程必须使用无头浏览器（Playwright headless）；禁止为测试或验证启动有头浏览器。纯 API/单元测试不属于登录测试，但涉及登录态恢复时必须通过无头浏览器完成。
+- 浏览器操作以 HTTP 和测试数据库凭据证据对账，但禁止输出 token、cookie、密钥、密码或原始 API key。
+- failed/skipped/unreconciled capability、清理失败、残留实体或 stale report 都必须阻断；临时 Playwright、纯 API 或手工场景不能替代系统验收。
 
 ## Backend conventions
 
@@ -164,7 +183,7 @@ push 触发 CI 后的等待期间，必须先检查 PR base 是否落后于最�
 
 - 使用 `observability.NewLogger(env)`；production 输出 JSON，其他环境输出 console。事件命名 `layer.operation`；请求链路记录 request/trace/tenant/user，LLM 与 ReAct 只记录 model、provider、token 数、step、tool 和 latency 等必要元数据。
 - DEBUG 只用于开发；正常路径 INFO；可预期 4xx/重试 WARN；5xx 和外部调用失败 ERROR。禁止记录 password、token、API key、PII 或原始上游响应体。
-- 密钥通过 Vault/AWS Secrets Manager 管理，禁止入 Git；禁止修改 `config/prod.yaml`；传输使用 TLS 1.2+，静态敏感数据使用 AES-256；前端 `.env` 禁止提交密钥。
+- 密钥通过 Vault/AWS Secrets Manager 管理，禁止入 Git；禁止修改 `config/config.go` 的默认值；生产覆盖走 `helm/values-prod.yaml`；传输使用 TLS 1.2+，静态敏感数据使用 AES-256；前端 `.env` 禁止提交密钥。
 - bearer credential 不得进入 URL、Web Storage、通用请求日志或下游错误正文。认证 token 必须单次消费，状态转换必须原子。
 
 ## Risk regression harness

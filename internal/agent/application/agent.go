@@ -27,6 +27,7 @@ import (
 	jschema "github.com/byteBuilderX/stratum/pkg/jsonschema"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
+	"github.com/byteBuilderX/stratum/pkg/textutil"
 	"github.com/byteBuilderX/stratum/pkg/tokenutil"
 )
 
@@ -228,6 +229,15 @@ func (a *BaseAgent) WithMetrics(m observability.MetricsProvider) *BaseAgent {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.metrics = m
+	return a
+}
+
+// WithLedger injects a TokenRecorder for LLM token/cost accounting. Must be
+// called before the agent is shared across goroutines.
+func (a *BaseAgent) WithLedger(l agentgraph.TokenRecorder) *BaseAgent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.Ledger = l
 	return a
 }
 
@@ -1633,7 +1643,7 @@ func (a *BaseAgent) appendFinalAnswerEvent(result *AgentResult, finalState agent
 		StepIndex:       finalState.Steps,
 		Status:          domain.ToolTraceStatusSuccess,
 		Output:          map[string]any{"content": finalState.Output},
-		Summary:         truncateRunes(finalState.Output, 500),
+		Summary:         textutil.TruncateRunes(finalState.Output, 500),
 		Model:           ec.llmModel,
 		TotalTokens:     finalState.TotalTokens,
 		CostUSD:         finalState.TotalCostUSD,
@@ -1793,7 +1803,7 @@ func buildToolObservationSummary(observations []domain.ToolObservation) string {
 	if b.Len() == len("本轮工具观察摘要：") {
 		return ""
 	}
-	return truncateRunes(b.String(), 3000)
+	return textutil.TruncateRunes(b.String(), 3000)
 }
 
 // ExecutionOption configures agent execution behavior

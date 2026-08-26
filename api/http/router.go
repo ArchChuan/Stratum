@@ -422,10 +422,11 @@ func registerSkills(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 
 		adminMW := []gin.HandlerFunc{middleware.RequireTenantRole("admin")}
 		skills.POST("", append(adminMW, requireActive, skillHandler.CreateSkill)...)
-		// draft 编辑与发布向白名单成员开放：组级别 RequireTenantRole("member") +
+		// 编辑与回滚向白名单成员开放：组级别 RequireTenantRole("member") +
 		// service 层 resolveUpdateActor 白名单校验，不在此再叠加 admin 门槛。
-		skills.PATCH("/:id/draft", requireActive, skillHandler.UpdateDraft)
-		skills.POST("/:id/publish", requireActive, skillHandler.PublishSkill)
+		skills.PATCH("/:id", requireActive, skillHandler.UpdateSkill)
+		skills.POST("/:id/rollback", requireActive, skillHandler.RollbackSkill)
+		skills.GET("/:id/revisions", skillHandler.ListSkillRevisions)
 		skills.DELETE("/:id", append(adminMW, requireActive, skillHandler.DeleteSkill)...)
 		skills.PUT("/:id/editors", append(adminMW, requireActive, skillHandler.SetSkillEditors)...)
 	}

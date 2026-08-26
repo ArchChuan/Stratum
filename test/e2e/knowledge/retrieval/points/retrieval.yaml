@@ -1,0 +1,13 @@
+kind: knowledge
+point: retrieval
+snapshot:
+  embedding_model: embedding-3
+  query_mode: hybrid
+  top_k: 5
+  chunk_size: 512
+  chunk_overlap: 64
+  score_threshold: 0
+  reranking: ""
+  query_rewrite: none
+golden: ../golden
+baseline: ../baselines/retrieval.json
