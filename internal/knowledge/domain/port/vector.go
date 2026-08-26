@@ -55,4 +55,9 @@ type VectorStore interface {
 	Flush(ctx context.Context, collectionName string) error
 	DeleteCollection(ctx context.Context, collectionName string) error
 	CountVectors(ctx context.Context, collectionName string) (int64, error)
+	// DeleteByDocumentIDs removes all vectors whose source_document is in docIDs
+	// from the given collection. Used to purge a document's old vectors before
+	// re-embedding an updated version. A missing collection is treated as
+	// success (idempotent). An empty docIDs list is a no-op.
+	DeleteByDocumentIDs(ctx context.Context, collectionName string, docIDs []string) error
 }

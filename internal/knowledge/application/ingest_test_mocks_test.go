@@ -184,6 +184,20 @@ func (m *mockDocRepo) RecoverStuckIngests(_ context.Context, _ string, threshold
 	return m.recovered, nil
 }
 
+// CASReplace / CASBeginDelete / MarkBuiltinLegacy are not exercised by the
+// ingest tests (they only cover the insert path); return winning defaults so
+// the mock keeps satisfying the expanded port. The builtin-sync tests use a
+// dedicated fake with controllable results instead.
+func (m *mockDocRepo) CASReplace(_ context.Context, _, _, _, _, _, _ string, _ map[string]any, _ int) (bool, error) {
+	return true, nil
+}
+func (m *mockDocRepo) CASBeginDelete(_ context.Context, _, _, _ string) (bool, error) {
+	return true, nil
+}
+func (m *mockDocRepo) MarkBuiltinLegacy(_ context.Context, _, _ string, _ []string) error {
+	return nil
+}
+
 // snapshot helpers copy state under the mutex to avoid races.
 func (m *mockDocRepo) savedCount() int {
 	m.mu.Lock()

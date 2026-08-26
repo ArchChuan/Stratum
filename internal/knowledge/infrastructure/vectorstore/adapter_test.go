@@ -25,6 +25,9 @@ type stubStore struct {
 	// lastExpression records the filter expression of the most recent
 	// SearchWithFilterStrict call for whitelist-propagation assertions.
 	lastExpression string
+	// deletedByDocIDs records the docIDs of the most recent DeleteByDocumentIDs
+	// call so tests can assert what the adapter requested.
+	deletedByDocIDs []string
 }
 
 func (s *stubStore) CreateCollectionWithDim(context.Context, string, int) error { return s.createErr }
@@ -42,6 +45,10 @@ func (s *stubStore) SearchWithFilterStrict(_ context.Context, _ string, _ []floa
 }
 func (s *stubStore) Flush(context.Context, string) error            { return s.flushErr }
 func (s *stubStore) DeleteCollection(context.Context, string) error { return s.delErr }
+func (s *stubStore) DeleteByDocumentIDs(_ context.Context, _ string, docIDs []string) error {
+	s.deletedByDocIDs = docIDs
+	return s.delErr
+}
 func (s *stubStore) CountVectors(context.Context, string, string) (int64, error) {
 	return s.count, s.countErr
 }

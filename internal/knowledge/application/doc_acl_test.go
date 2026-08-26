@@ -74,6 +74,9 @@ func (v *fixedCountVectorStore) Flush(context.Context, string) error { return ni
 func (v *fixedCountVectorStore) DeleteCollection(context.Context, string) error {
 	return nil
 }
+func (v *fixedCountVectorStore) DeleteByDocumentIDs(context.Context, string, []string) error {
+	return nil
+}
 func (v *fixedCountVectorStore) CountVectors(context.Context, string) (int64, error) {
 	return v.count, nil
 }

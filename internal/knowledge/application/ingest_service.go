@@ -131,6 +131,16 @@ type IngestDocumentRequest struct {
 	FileName         string
 	DocumentID       string
 	ContentHash      string
+	// Title is the display title; empty falls back to FileName at persist time.
+	Title string
+	// Metadata carries structured document attributes (e.g.
+	// {"builtin_source":"docs/knowledge/guides/agent.md"} for built-in docs).
+	// Persisted into the metadata JSONB column; nil encodes as '{}'.
+	Metadata map[string]any
+	// ExpectedContentHash, when non-empty, turns this call into a CAS replace of
+	// an existing document: the row must currently carry this hash and be in a
+	// terminal state for this caller to win the ingest pipeline. Empty = insert.
+	ExpectedContentHash string
 	// AllowedUserIDs/AllowedRoleIDs form the document-level access whitelist;
 	// both empty => unrestricted (inherits workspace visibility). CreatedBy is
 	// the uploading actor, implicitly allowed to see the document.
@@ -230,7 +240,7 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 	// and duplicate paths share one exit (release the queue slot, return the
 	// gate's outcome), keeping IngestDocument's own branching flat.
 	if ki.docRepo != nil {
-		existing, spawn, err := ki.persistDocumentMetadata(ctx, req, chunkResult.Leaves)
+		existing, spawn, err := ki.persistDocumentGate(ctx, req, chunkResult.Leaves)
 		if !spawn {
 			<-ki.queueSem
 			return existing, err
@@ -247,6 +257,61 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 		TotalChunks: len(chunkResult.Leaves),
 		Errors:      []string{},
 	}, nil
+}
+
+// persistDocumentGate applies the cross-instance admission gate for this
+// request, dispatching on whether it is an insert (new doc) or a CAS replace
+// (ExpectedContentHash set — updated built-in doc). Both paths share the same
+// (existing, spawn, err) contract.
+func (ki *KnowledgeIngest) persistDocumentGate(
+	ctx context.Context, req IngestDocumentRequest, leaves []knowledgeport.TextChunk,
+) (*IngestResult, bool, error) {
+	if req.ExpectedContentHash != "" {
+		return ki.persistDocumentReplace(ctx, req, leaves)
+	}
+	return ki.persistDocumentMetadata(ctx, req, leaves)
+}
+
+// persistDocumentReplace claims a document for re-ingestion via CASReplace.
+// Returns (nil, true, nil) when this caller won and must spawn the pipeline —
+// old vectors are purged here, before the new embed/insert runs. When a sibling
+// pod already owns the replace (hash changed since our snapshot, or the doc is
+// currently 'processing'), returns an AlreadyExists result, false, nil — the
+// caller skips and must never delete old vectors. On claim or purge failure
+// returns (nil, false, err); the doc stays 'processing' until the next
+// RecoverStuckIngests marks it failed and the following sync pass retries the
+// replace (fail-closed: a doc stuck 'processing' beats a half-replaced document
+// with duplicated vectors).
+func (ki *KnowledgeIngest) persistDocumentReplace(
+	ctx context.Context, req IngestDocumentRequest, leaves []knowledgeport.TextChunk,
+) (*IngestResult, bool, error) {
+	title := req.Title
+	if title == "" {
+		title = req.FileName
+	}
+	won, err := ki.docRepo.CASReplace(ctx, req.TenantID, req.WorkspaceID, req.DocumentID,
+		req.ExpectedContentHash, req.ContentHash, title, req.Metadata, len(leaves))
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to claim document replace: %w", err)
+	}
+	if !won {
+		return &IngestResult{
+			DocumentID:    req.DocumentID,
+			Workspace:     req.Workspace,
+			Status:        constants.IngestStatusProcessing,
+			TotalChunks:   len(leaves),
+			AlreadyExists: true,
+			Errors:        []string{},
+		}, false, nil
+	}
+	// Winning the CAS committed the row to 'processing' and deleted the old PG
+	// chunks in the same transaction. Purge the old vectors before the new
+	// embed/insert so a reader never sees a half-replaced document.
+	collection := constants.CollectionName(req.TenantID, req.WorkspaceID, req.EmbeddingModel)
+	if err := ki.vectorStore.DeleteByDocumentIDs(ctx, collection, []string{req.DocumentID}); err != nil {
+		return nil, false, fmt.Errorf("failed to purge replaced document vectors: %w", err)
+	}
+	return nil, true, nil
 }
 
 // persistDocumentMetadata writes the doc row with status='processing' and
@@ -268,12 +333,14 @@ func (ki *KnowledgeIngest) persistDocumentMetadata(
 		ID:             req.DocumentID,
 		KBID:           req.WorkspaceID,
 		Source:         req.FileName,
+		Title:          req.Title,
 		ContentHash:    req.ContentHash,
 		IngestStatus:   constants.IngestStatusProcessing,
 		TotalChunks:    len(leaves),
 		AllowedUserIDs: req.AllowedUserIDs,
 		AllowedRoleIDs: req.AllowedRoleIDs,
 		CreatedBy:      req.CreatedBy,
+		Metadata:       req.Metadata,
 	}
 	inserted, err := ki.docRepo.Save(ctx, req.TenantID, req.WorkspaceID, doc)
 	if err != nil {
