@@ -2,9 +2,8 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { message } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { useOperationProposals } from '../useOperationProposals';
-
 import type { OperationProposal } from '../../model/operationProposal';
+import { useOperationProposals } from '../useOperationProposals';
 
 const listPending = vi.hoisted(() => vi.fn());
 const listMine = vi.hoisted(() => vi.fn());
