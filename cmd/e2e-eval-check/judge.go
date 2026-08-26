@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -28,12 +29,13 @@ type judgeClient struct {
 	http    *http.Client
 }
 
-// newJudgeClient normalizes the base URL so both https://api.openai.com and
-// https://api.openai.com/v1 work: a trailing /v1 is stripped so the request
-// path never double-appends.
+// newJudgeClient builds the judge client. baseURL is the full OpenAI-compatible
+// prefix INCLUDING its API version segment — https://api.openai.com/v1 for
+// OpenAI, https://open.bigmodel.cn/api/paas/v4 for Zhipu — so the request path
+// never guesses a version. ${ENV} references in baseURL are expanded (e.g.
+// ${LLM_BASE_URL}) so the endpoint can be injected per environment.
 func newJudgeClient(cfg *judgeConfig, apiKey string) *judgeClient {
-	baseURL := strings.TrimRight(cfg.BaseURL, "/")
-	baseURL = strings.TrimSuffix(baseURL, "/v1")
+	baseURL := strings.TrimRight(os.ExpandEnv(cfg.BaseURL), "/")
 	return &judgeClient{
 		baseURL: baseURL,
 		model:   cfg.Model,
@@ -56,7 +58,7 @@ func (j *judgeClient) Judge(ctx context.Context, spec judgeSpec, output string) 
 	if err != nil {
 		return judgeResult{}, fmt.Errorf("encode judge request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, j.baseURL+"/v1/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, j.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return judgeResult{}, fmt.Errorf("build judge request: %w", err)
 	}

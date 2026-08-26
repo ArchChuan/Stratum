@@ -207,7 +207,7 @@ func TestRunPipelineJudgeInfraExit2FirstRun(t *testing.T) {
 	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/agents/a1/execute" {
-			_, _ = w.Write([]byte(`{"result":"planning output","status":"completed"}`))
+			_, _ = w.Write([]byte(`{"output":"planning output"}`))
 			return
 		}
 		http.NotFound(w, r)
