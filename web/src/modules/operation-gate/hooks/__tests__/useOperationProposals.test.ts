@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useOperationProposals } from '../useOperationProposals';
 
+import type { OperationProposal } from '../../model/operationProposal';
+
 const listPending = vi.hoisted(() => vi.fn());
 const listMine = vi.hoisted(() => vi.fn());
 const listHistory = vi.hoisted(() => vi.fn());
@@ -19,7 +21,7 @@ vi.mock('../../api/operationProposal.api', () => ({
 vi.spyOn(message, 'error').mockImplementation(() => undefined as never);
 vi.spyOn(message, 'success').mockImplementation(() => undefined as never);
 
-const pendingProposal = {
+const pendingProposal: OperationProposal = {
   id: 'op-1',
   agentId: 'agent-1',
   opType: 'self_modify',
@@ -28,9 +30,9 @@ const pendingProposal = {
   proposerId: 'user-1',
   createdAt: '2026-08-26T09:00:00Z',
 };
-const reviewingProposal = { ...pendingProposal, id: 'op-2', status: 'reviewing' };
-const approvedProposal = { ...pendingProposal, id: 'op-3', status: 'approved' };
-const executedProposal = { ...pendingProposal, id: 'op-4', status: 'executed' };
+const reviewingProposal: OperationProposal = { ...pendingProposal, id: 'op-2', status: 'reviewing' };
+const approvedProposal: OperationProposal = { ...pendingProposal, id: 'op-3', status: 'approved' };
+const executedProposal: OperationProposal = { ...pendingProposal, id: 'op-4', status: 'executed' };
 
 describe('useOperationProposals', () => {
   beforeEach(() => {
