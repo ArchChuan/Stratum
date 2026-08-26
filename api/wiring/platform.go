@@ -39,7 +39,7 @@ type Platform struct {
 	TokenStore         *iampersistence.TokenStore
 	OAuthExchangeStore *iampersistence.OAuthExchangeStore
 	OnboardSvc         *application.OnboardService
-	SchemaProvisioner  *iampersistence.AdminTenantRepo
+	SchemaProvisioner  iamport.TenantSchemaProvisioner
 	ModelRegistry      *llmgateway.ModelRegistry
 	AvatarStore        *filestore.AvatarStore
 	AESKey             [32]byte
@@ -113,7 +113,16 @@ func (c *Container) buildPlatformAuth(p *Platform) error {
 		}
 		p.OnboardSvc = application.NewOnboardService(iampersistence.NewOnboardRepo(db))
 		p.OAuthExchangeStore = iampersistence.NewOAuthExchangeStore(db, p.AESKey)
-		p.SchemaProvisioner = iampersistence.NewAdminTenantRepo(db)
+		// Decorating the provisioner seeds the built-in knowledge workspace for
+		// every auth-path tenant (register/guest/tenant). The seed runs
+		// asynchronously (nil queue-retry budget) so registration is never
+		// blocked by document embedding.
+		p.SchemaProvisioner = seedAfterProvision{
+			base: iampersistence.NewAdminTenantRepo(db),
+			seedFn: func(ctx context.Context, tenantID string) {
+				c.syncBuiltinDocsForTenant(ctx, tenantID, nil)
+			},
+		}
 	}
 	return nil
 }

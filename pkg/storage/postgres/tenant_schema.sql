@@ -1580,9 +1580,17 @@ CREATE INDEX IF NOT EXISTS idx_kc_workspace ON knowledge_chunks(workspace_id);
 ALTER TABLE knowledge_docs DROP COLUMN IF EXISTS content;
 
 -- async ingest lifecycle: track status/progress of embedding jobs that run
--- in a detached background goroutine after the API returns 202
+-- in a detached background goroutine after the API returns 202. 'deleting' is
+-- the one-way CAS claim written by the built-in docs delete path before the
+-- row + vectors are purged; it must be a legal state for the CAS UPDATE.
 ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS ingest_status TEXT NOT NULL DEFAULT 'completed'
-    CHECK (ingest_status IN ('processing', 'completed', 'failed'));
+    CHECK (ingest_status IN ('processing', 'completed', 'failed', 'deleting'));
+-- Upgrade historical tenants whose column already exists: the inline CHECK
+-- above is skipped by ADD COLUMN IF NOT EXISTS, so re-apply the constraint
+-- with 'deleting' allowed. Safe for existing rows (all prior values are kept).
+ALTER TABLE knowledge_docs DROP CONSTRAINT IF EXISTS knowledge_docs_ingest_status_check;
+ALTER TABLE knowledge_docs ADD CONSTRAINT knowledge_docs_ingest_status_check
+    CHECK (ingest_status IN ('processing', 'completed', 'failed', 'deleting'));
 ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS ingest_error TEXT NOT NULL DEFAULT '';
 ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS processed_chunks INT NOT NULL DEFAULT 0;
 ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS total_chunks INT NOT NULL DEFAULT 0;

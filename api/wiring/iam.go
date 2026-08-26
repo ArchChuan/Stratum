@@ -91,6 +91,12 @@ func (c *Container) buildIAM(_ context.Context) error {
 			application.WithSchemaCleaner(iampersistence.NewTenantSchemaCleaner(db)),
 			application.WithAdminLogger(c.Logger),
 			application.WithCacheInvalidator(tenantModelCacheInvalidator{c.Platform.ModelRegistry}),
+			// Admin-created tenants seed the built-in knowledge workspace
+			// asynchronously (nil queue-retry budget) so CreateTenant responses
+			// are never blocked by document embedding.
+			application.WithTenantProvisionedHook(func(ctx context.Context, tenantID string) {
+				c.syncBuiltinDocsForTenant(ctx, tenantID, nil)
+			}),
 		}
 		if c.Storage != nil && c.Storage.Milvus != nil {
 			opts = append(opts, application.WithVectorCleaner(

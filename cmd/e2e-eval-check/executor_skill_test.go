@@ -51,7 +51,7 @@ func TestSkillExecutorCreatesAndRunsCarrierAgent(t *testing.T) {
 			createdAgent = "carrier-1"
 			_, _ = w.Write([]byte(`{"id":"carrier-1"}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/agents/carrier-1/execute":
-			_, _ = w.Write([]byte(`{"result":"skill applied","status":"completed"}`))
+			_, _ = w.Write([]byte(`{"output":"skill applied"}`))
 		case r.Method == http.MethodDelete && r.URL.Path == "/agents/carrier-1":
 			_, _ = w.Write([]byte(`{}`))
 		default:
@@ -105,7 +105,7 @@ func TestSkillExecutorCleanupFailureSurfacesAsResidual(t *testing.T) {
 		case r.Method == http.MethodPost && r.URL.Path == "/agents":
 			_, _ = w.Write([]byte(`{"id":"carrier-1"}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/agents/carrier-1/execute":
-			_, _ = w.Write([]byte(`{"result":"skill applied","status":"completed"}`))
+			_, _ = w.Write([]byte(`{"output":"skill applied"}`))
 		case r.Method == http.MethodDelete && r.URL.Path == "/agents/carrier-1":
 			http.Error(w, "delete failed", http.StatusInternalServerError)
 		default:

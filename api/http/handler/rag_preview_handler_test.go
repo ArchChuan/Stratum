@@ -85,6 +85,15 @@ func (r *previewDocRepo) GetByID(context.Context, string, string, string) (*know
 func (r *previewDocRepo) SetDocAccess(context.Context, string, string, []string, []string) error {
 	return nil
 }
+func (r *previewDocRepo) CASReplace(context.Context, string, string, string, string, string, string, map[string]any, int) (bool, error) {
+	return false, nil
+}
+func (r *previewDocRepo) CASBeginDelete(context.Context, string, string, string) (bool, error) {
+	return false, nil
+}
+func (r *previewDocRepo) MarkBuiltinLegacy(context.Context, string, string, []string) error {
+	return nil
+}
 
 // previewWorkspaceRepo returns a fixed workspace (member-created) for GetByName.
 type previewWorkspaceRepo struct {

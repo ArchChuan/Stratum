@@ -83,6 +83,15 @@ func (r *deleteDocRepo) GetByID(context.Context, string, string, string) (*domai
 func (r *deleteDocRepo) SetDocAccess(context.Context, string, string, []string, []string) error {
 	return nil
 }
+func (r *deleteDocRepo) CASReplace(context.Context, string, string, string, string, string, string, map[string]any, int) (bool, error) {
+	return true, nil
+}
+func (r *deleteDocRepo) CASBeginDelete(context.Context, string, string, string) (bool, error) {
+	return true, nil
+}
+func (r *deleteDocRepo) MarkBuiltinLegacy(context.Context, string, string, []string) error {
+	return nil
+}
 
 type deleteVectorStore struct {
 	deletedCollection string

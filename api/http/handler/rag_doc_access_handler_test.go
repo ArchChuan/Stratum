@@ -113,6 +113,15 @@ func (r *accessHandlerDocRepo) SetDocAccess(_ context.Context, _, _ string, user
 	r.gotRoles = append([]string(nil), roles...)
 	return nil
 }
+func (r *accessHandlerDocRepo) CASReplace(context.Context, string, string, string, string, string, string, map[string]any, int) (bool, error) {
+	return false, nil
+}
+func (r *accessHandlerDocRepo) CASBeginDelete(context.Context, string, string, string) (bool, error) {
+	return false, nil
+}
+func (r *accessHandlerDocRepo) MarkBuiltinLegacy(context.Context, string, string, []string) error {
+	return nil
+}
 
 // newAccessRAGHandler 装配访问接口用例的 handler:固定 workspace + 固定角色,
 // 只有 member 时视为非授权身份。
