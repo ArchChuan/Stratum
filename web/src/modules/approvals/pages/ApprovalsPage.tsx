@@ -1,5 +1,5 @@
 import { Modal, Pagination, Table, Tabs, Typography } from 'antd';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 import type { ApprovalDecision, ApprovalRow } from '../api';
@@ -23,6 +23,14 @@ export const ApprovalsPage = () => {
   const [topTab, setTopTab] = useState<TopTab>(
     searchParams.get('tab') === 'permission' ? 'permission' : 'tools',
   );
+
+  // 铃铛点击权限提案会外部 navigate('/approvals?tab=permission')（不改本组件 state），
+  // 必须监听 searchParams 同步顶层 tab，否则通知跳转后仍停留在「工具审批」，用户看不到
+  // 待审批提案（bugfix：URL 驱动与点击驱动保持一致）。
+  const urlTab = searchParams.get('tab');
+  useEffect(() => {
+    setTopTab(urlTab === 'permission' ? 'permission' : 'tools');
+  }, [urlTab]);
 
   const {
     activeTab,

@@ -1,0 +1,14 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "GET",
+    "path": "/operation-proposals/history",
+    "want_status": 200,
+    "want_body": {
+      "proposals": [],
+      "total": 0,
+      "page": 1,
+      "pageSize": 20
+    }
+  }
+]
