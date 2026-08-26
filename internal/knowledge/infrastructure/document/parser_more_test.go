@@ -75,6 +75,29 @@ func TestParseBytes_DOCXCorrupt(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestParseBytes_PathHintDetectsExtension guards against the built-in docs
+// sync regression where FileName carries a path (e.g. "guides/agent.md"). The
+// old MIME detection treated any "/"-containing hint as a MIME type and failed
+// with "unsupported content type" before extension detection could run.
+func TestParseBytes_PathHintDetectsExtension(t *testing.T) {
+	logger := zap.NewNop()
+	parser := NewParser(logger)
+
+	for _, hint := range []string{"guides/agent.md", "reference/mcp-integration.md", "docs/guides/knowledge-workspace.md"} {
+		text, err := parser.ParseBytes([]byte("# Heading\nbody"), hint)
+		require.NoError(t, err, "path hint %q must parse as markdown", hint)
+		require.Equal(t, "# Heading\nbody", text)
+	}
+
+	// MIME hints still work after the reorder.
+	text, err := parser.ParseBytes([]byte("plain"), "text/markdown")
+	require.NoError(t, err)
+	require.Equal(t, "plain", text)
+
+	_, err = parser.ParseBytes([]byte("x"), "application/pdf")
+	require.Error(t, err, "a real MIME hint that is corrupt must still fail")
+}
+
 func TestChunkingService_Chunk(t *testing.T) {
 	svc := NewChunkingService()
 

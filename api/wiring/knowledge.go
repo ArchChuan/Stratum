@@ -64,6 +64,7 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 	var knowledgeResolver knowledge.EmbedResolver
 	var docRepo *persistence.DocRepo
 	db := c.dbOrNil()
+	var builtinSync *knowledge.BuiltinDocsSync
 	if db != nil {
 		chunkRepo := persistence.NewChunkRepo(db)
 		docRepo = persistence.NewDocRepo(db)
@@ -72,7 +73,10 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 			c.Logger.Warn("knowledge.builtin_sync.legacy_ids_failed", zap.Error(err))
 			legacyIDs = nil
 		}
-		c.Knowledge.BuiltinSync = knowledge.NewBuiltinDocsSync(
+		// builtinSync is wired onto c.Knowledge after the struct literal below;
+		// dereferencing c.Knowledge here would nil-panic (c.Knowledge is only
+		// assigned later in this function).
+		builtinSync = knowledge.NewBuiltinDocsSync(
 			ingest.IngestDocument,
 			docRepo,
 			vectorAdapter,
@@ -138,6 +142,7 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 		c.Knowledge.WorkspaceService.SetVectorStore(vs)
 		c.Knowledge.WorkspaceService.SetEditorRepo(persistence.NewPgResourceEditorRepo(db))
 		c.Knowledge.WorkspaceService.SetFailureAuditRecorder(failureRecorderOf(c))
+		c.Knowledge.BuiltinSync = builtinSync
 	}
 	c.wireKnowledgeModelExists()
 	return nil

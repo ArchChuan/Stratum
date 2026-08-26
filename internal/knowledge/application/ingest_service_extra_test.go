@@ -151,13 +151,55 @@ func TestDeleteWorkspaceData(t *testing.T) {
 	ki.vectorStore = store
 	ki.SetChunkRepo(chunks)
 
-	if err := ki.DeleteWorkspaceData(context.Background(), "t1", "wsid-1"); err != nil {
+	if err := ki.DeleteWorkspaceData(context.Background(), "t1", "wsid-1", "text-embedding-v3"); err != nil {
 		t.Fatalf("delete = %v", err)
 	}
 	if len(chunks.deleted) != 1 || chunks.deleted[0].workspaceID != "wsid-1" {
 		t.Fatalf("chunk deletes = %+v", chunks.deleted)
 	}
-	// 双删：legacy 名 + 当前注入 embedder（mockEmbedder.Model=text-embedding-v3）的模型新名。
+	// 双删：legacy 名 + workspace 自身模型（与 mockEmbedder.Model 一致时等价于旧行为）。
+	want := []string{
+		constants.CollectionLegacyName("t1", "wsid-1"),
+		constants.CollectionName("t1", "wsid-1", "text-embedding-v3"),
+	}
+	if got := store.deleted; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("collection deletes = %v, want %v", got, want)
+	}
+}
+
+// TestDeleteWorkspaceDataUsesWorkspaceModel guards against the delete path
+// leaking the Milvus collection when the workspace's embedding model differs
+// from the global default embedder model. Regression: the eval retrieval
+// workspace is created with embedding-3 while the global embedder is
+// text-embedding-v3 — the old code computed the model-suffixed collection
+// name from the global embedder and left kb_<ws>_embedding_3 orphaned.
+func TestDeleteWorkspaceDataUsesWorkspaceModel(t *testing.T) {
+	store := &deleteRecordingStore{MockVectorStore: NewMockVectorStore()}
+	ki := buildIngest(t, &mockParser{out: paragraphInput(2)}, &mockEmbedder{dim: 4}, newMockDocRepo())
+	// mockEmbedder.Model() = text-embedding-v3 (global), workspace model = embedding-3.
+	ki.vectorStore = store
+
+	if err := ki.DeleteWorkspaceData(context.Background(), "t1", "wsid-1", "embedding-3"); err != nil {
+		t.Fatalf("delete = %v", err)
+	}
+	want := []string{
+		constants.CollectionLegacyName("t1", "wsid-1"),
+		constants.CollectionName("t1", "wsid-1", "embedding-3"),
+	}
+	if got := store.deleted; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("collection deletes = %v, want %v", got, want)
+	}
+}
+
+func TestDeleteWorkspaceDataEmptyModelFallsBackToEmbedder(t *testing.T) {
+	// embedModel 为空 → 回退当前注入 embedder 的模型（兼容无配置 legacy workspace）。
+	store := &deleteRecordingStore{MockVectorStore: NewMockVectorStore()}
+	ki := buildIngest(t, &mockParser{out: paragraphInput(2)}, &mockEmbedder{dim: 4}, newMockDocRepo())
+	ki.vectorStore = store
+
+	if err := ki.DeleteWorkspaceData(context.Background(), "t1", "wsid-1", ""); err != nil {
+		t.Fatalf("delete = %v", err)
+	}
 	want := []string{
 		constants.CollectionLegacyName("t1", "wsid-1"),
 		constants.CollectionName("t1", "wsid-1", "text-embedding-v3"),
@@ -168,13 +210,13 @@ func TestDeleteWorkspaceData(t *testing.T) {
 }
 
 func TestDeleteWorkspaceDataNilEmbedderDeletesLegacyOnly(t *testing.T) {
-	// embeddingSvc 为 nil → 只删 legacy 名，不拼模型新名。
+	// embeddingSvc 为 nil 且 embedModel 为空 → 只删 legacy 名，不拼模型新名。
 	store := &deleteRecordingStore{MockVectorStore: NewMockVectorStore()}
 	ki := buildIngest(t, &mockParser{out: paragraphInput(2)}, &mockEmbedder{dim: 4}, newMockDocRepo())
 	ki.embeddingSvc = nil
 	ki.vectorStore = store
 
-	if err := ki.DeleteWorkspaceData(context.Background(), "t1", "wsid-1"); err != nil {
+	if err := ki.DeleteWorkspaceData(context.Background(), "t1", "wsid-1", ""); err != nil {
 		t.Fatalf("delete = %v", err)
 	}
 	if got := store.deleted; len(got) != 1 || got[0] != constants.CollectionLegacyName("t1", "wsid-1") {
@@ -186,19 +228,19 @@ func TestDeleteWorkspaceDataVariants(t *testing.T) {
 	// 极端情况：无 chunkRepo → 跳过 PG 清理仍成功。
 	ki := buildIngest(t, &mockParser{out: paragraphInput(2)}, &mockEmbedder{dim: 4}, newMockDocRepo())
 	ki.vectorStore = NewMockVectorStore()
-	if err := ki.DeleteWorkspaceData(context.Background(), "t1", "wsid-1"); err != nil {
+	if err := ki.DeleteWorkspaceData(context.Background(), "t1", "wsid-1", "text-embedding-v3"); err != nil {
 		t.Fatalf("no chunk repo delete = %v", err)
 	}
 
 	// 极端情况：chunkRepo 失败仅告警，不阻断。
 	ki.SetChunkRepo(&mockChunkRepo{deleteErr: errors.New("pg down")})
-	if err := ki.DeleteWorkspaceData(context.Background(), "t1", "wsid-1"); err != nil {
+	if err := ki.DeleteWorkspaceData(context.Background(), "t1", "wsid-1", "text-embedding-v3"); err != nil {
 		t.Fatalf("chunk repo failure must warn only, got %v", err)
 	}
 
 	// 极端情况：collection 删除失败 → 错误传播。
 	ki.vectorStore = &vectorStoreFailing{}
-	if err := ki.DeleteWorkspaceData(context.Background(), "t1", "wsid-1"); err == nil {
+	if err := ki.DeleteWorkspaceData(context.Background(), "t1", "wsid-1", "text-embedding-v3"); err == nil {
 		t.Fatal("collection failure must error")
 	}
 }

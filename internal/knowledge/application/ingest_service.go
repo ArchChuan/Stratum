@@ -610,14 +610,16 @@ func (ki *KnowledgeIngest) markFailed(ctx context.Context, req IngestDocumentReq
 	}
 }
 
-// DeleteWorkspaceData 删除 workspace 的向量数据。删除路径无模型上下文
-// （spec §11：删除策略不在本设计内）：删 legacy 名 + 当前注入 embedder
-// 的模型新名（embeddingSvc 为 nil 时只删 legacy 名）。换过多次模型的
-// 旧 collection 不在删除范围，属可接受残差，由 tenant_vector_cleaner
-// 全量清理兜底。
-func (ki *KnowledgeIngest) DeleteWorkspaceData(ctx context.Context, tenantID, workspaceID string) error {
-	model := ""
-	if ki.embeddingSvc != nil {
+// DeleteWorkspaceData 删除 workspace 的向量数据。embedModel 是 workspace 自身
+// 配置的嵌入模型（创建时写入 Config.EmbeddingModel），用于拼模型后缀 collection
+// 名；为空时回退当前注入 embedder 的模型（兼容无配置的 legacy workspace）。
+// 只用全局 embedder 模型会在「workspace 模型 ≠ 全局默认模型」时漏删 collection
+// （例如按 embedding-3 创建的 workspace，全局默认是 text-embedding-v3，删除会
+// 留下 kb_<ws>_embedding_3 孤儿）。换过多次模型的旧 collection 不在删除范围，
+// 属可接受残差，由 tenant_vector_cleaner 全量清理兜底。
+func (ki *KnowledgeIngest) DeleteWorkspaceData(ctx context.Context, tenantID, workspaceID, embedModel string) error {
+	model := embedModel
+	if model == "" && ki.embeddingSvc != nil {
 		model = ki.embeddingSvc.Model()
 	}
 	cols := []string{constants.CollectionLegacyName(tenantID, workspaceID)}
