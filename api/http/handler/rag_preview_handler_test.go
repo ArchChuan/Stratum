@@ -55,8 +55,8 @@ type previewDocRepo struct {
 	visible []string
 }
 
-func (r *previewDocRepo) Save(context.Context, string, string, *knowledgedomain.Document) error {
-	return nil
+func (r *previewDocRepo) Save(context.Context, string, string, *knowledgedomain.Document) (bool, error) {
+	return true, nil
 }
 func (r *previewDocRepo) List(context.Context, string, string) ([]*knowledgedomain.Document, error) {
 	return nil, nil

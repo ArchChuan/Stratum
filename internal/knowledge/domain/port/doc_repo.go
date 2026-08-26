@@ -8,7 +8,13 @@ import (
 )
 
 type DocRepo interface {
-	Save(ctx context.Context, tenantID, kbID string, doc *domain.Document) error
+	// Save persists the document row. It returns true when the row was
+	// inserted and false when an existing row with the same ID conflicted
+	// (INSERT ... ON CONFLICT (id) DO NOTHING). The boolean is the
+	// cross-instance admission gate: a deterministic docID (seed) inserted by
+	// two pods concurrently must run the async pipeline exactly once — only
+	// the instance that actually inserted the row spawns the job.
+	Save(ctx context.Context, tenantID, kbID string, doc *domain.Document) (bool, error)
 	List(ctx context.Context, tenantID, kbID string) ([]*domain.Document, error)
 	Delete(ctx context.Context, tenantID, kbID, docID string) error
 	ExistsByHash(ctx context.Context, tenantID, workspaceID, hash string) (bool, error)

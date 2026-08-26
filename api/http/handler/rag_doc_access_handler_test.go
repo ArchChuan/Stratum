@@ -72,8 +72,8 @@ type accessHandlerDocRepo struct {
 	gotRoles []string
 }
 
-func (r *accessHandlerDocRepo) Save(context.Context, string, string, *knowledgedomain.Document) error {
-	return nil
+func (r *accessHandlerDocRepo) Save(context.Context, string, string, *knowledgedomain.Document) (bool, error) {
+	return true, nil
 }
 func (r *accessHandlerDocRepo) List(context.Context, string, string) ([]*knowledgedomain.Document, error) {
 	return r.docs, nil

@@ -86,15 +86,29 @@ func classifyAvailabilityError(op string, err error) error {
 		return newUnavailableError(op, err)
 	}
 	switch status.Code(err) {
-	case codes.Unavailable, codes.DeadlineExceeded:
+	case codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted:
 		return newUnavailableError(op, err)
 	case codes.Unknown:
-		if isMilvusStartupTransient(err) {
+		if isMilvusStartupTransient(err) || isRateLimit(err) {
 			return newUnavailableError(op, err)
 		}
 	default:
 	}
 	return err
+}
+
+// isRateLimit reports whether err is a server-side rate-limiter rejection.
+// Milvus's proxy exposes it as a bare message error ("request is rejected by
+// grpc RateLimiter middleware, please retry later: rate limit exceeded[...]")
+// without a gRPC status code, so it must be classified by message marker. The
+// rate limiter is inherently transient — "please retry later" is the server's
+// own instruction — so callers may back off and retry.
+func isRateLimit(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "rate limit") || strings.Contains(message, "please retry later")
 }
 
 func isMilvusStartupTransient(err error) bool {

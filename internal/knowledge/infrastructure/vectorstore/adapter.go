@@ -89,7 +89,22 @@ func (a *Adapter) DescribeCollection(ctx context.Context, collectionName string)
 }
 
 func (a *Adapter) Flush(ctx context.Context, collectionName string) error {
-	return a.store.Flush(ctx, collectionName)
+	if err := a.store.Flush(ctx, collectionName); err != nil {
+		return translateStoreError(err)
+	}
+	return nil
+}
+
+// translateStoreError maps transient store failures (Milvus unavailable or
+// server-side rate-limited) onto the port-level VectorStoreUnavailableError so
+// application code can retry without depending on pkg/storage/milvus. Non-
+// transient errors pass through unchanged.
+func translateStoreError(err error) error {
+	var unavailable *storagemilvus.UnavailableError
+	if errors.As(err, &unavailable) {
+		return &knowledgeport.VectorStoreUnavailableError{Err: err}
+	}
+	return err
 }
 
 func (a *Adapter) DeleteCollection(ctx context.Context, collectionName string) error {

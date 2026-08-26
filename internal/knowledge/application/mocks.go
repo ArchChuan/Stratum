@@ -12,6 +12,12 @@ type MockVectorStore struct {
 	searchErr      error
 	collectionInfo knowledgeport.CollectionInfo
 	collectionErr  error
+	// flushFailures is the number of consecutive Flush calls that return
+	// flushErr before succeeding. flushCalls counts every Flush invocation so
+	// tests can assert the retry loop ran.
+	flushErr      error
+	flushFailures int
+	flushCalls    int
 	// lastExpression records the filter expression of the most recent
 	// SearchWithFilter call for whitelist-filter assertions.
 	lastExpression string
@@ -73,7 +79,19 @@ func (m *MockVectorStore) SetCollectionInfo(info knowledgeport.CollectionInfo) {
 func (m *MockVectorStore) SetCollectionErr(err error) { m.collectionErr = err }
 
 func (m *MockVectorStore) Flush(ctx context.Context, collection string) error {
+	m.flushCalls++
+	if m.flushFailures > 0 {
+		m.flushFailures--
+		return m.flushErr
+	}
 	return nil
+}
+
+// SetFlushError makes the next failures Flush calls return err before
+// succeeding, so tests can drive the flush retry loop deterministically.
+func (m *MockVectorStore) SetFlushError(err error, failures int) {
+	m.flushErr = err
+	m.flushFailures = failures
 }
 
 func (m *MockVectorStore) DeleteCollection(ctx context.Context, collection string) error {
