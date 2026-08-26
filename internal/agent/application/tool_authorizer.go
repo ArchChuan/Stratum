@@ -53,12 +53,9 @@ func (a *ToolAuthorizer) Authorize(ctx context.Context, input ToolAuthorizationI
 		PolicyResolved:  input.PolicyResolved,
 		RiskLevel:       input.RiskLevel,
 	}
-	if input.AgentID == domain.SystemAssistantID {
-		// Platform assistant applies the strict L3b risk model (spec
-		// 2026-08-04 §4.4): write_reversible needs approval, destructive and
-		// unclassified tools are refused, policy lookup failure fails closed.
-		return domain.AuthorizeSystemAssistantTool(req)
-	}
+	// 所有 agent 一视同仁：不再按 AgentID 区分平台助手，统一走宽松授权
+	// 模型。未配置 policy（policy_resolved=false）的工具默认 require_approval
+	// （含 read）；管理员经 SetToolPolicy 配置 risk_level 后放行。
 	return domain.AuthorizeTool(req)
 }
 
