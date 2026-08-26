@@ -58,6 +58,11 @@ func (e *EmbeddingService) EmbedVector(ctx context.Context, text string) ([]floa
 	return resp.Embeddings[0], nil
 }
 
+// defaultBatchSize 是 client 未声明批次上限时的安全兜底，与 OpenAI-compat
+// 平台统一上限（64，智谱 embedding-3 官方限定单请求 ≤64 条）保持一致，
+// 防止未知 provider 一次提交过多文本触发上游 400。
+const defaultBatchSize = 64
+
 // EmbedBatch splits texts into provider-safe batches and calls the embedding
 // API sequentially. Each batch is given its own context (derived from ctx) with
 // LLMRequestTimeout so a slow response only aborts that batch, not the whole
@@ -65,7 +70,7 @@ func (e *EmbeddingService) EmbedVector(ctx context.Context, text string) ([]floa
 func (e *EmbeddingService) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
 	batchSize := e.client.BatchSize()
 	if batchSize <= 0 {
-		batchSize = 100
+		batchSize = defaultBatchSize
 	}
 	allVectors := make([][]float32, 0, len(texts))
 
