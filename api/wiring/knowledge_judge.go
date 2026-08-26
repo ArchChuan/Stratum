@@ -10,6 +10,7 @@ import (
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/textutil"
 )
 
 type knowledgeJudge struct {
@@ -40,7 +41,7 @@ func (j knowledgeJudge) JudgeSufficiency(ctx context.Context, query, evidence st
 			{Role: "system", Content: "你是严谨的证据充分性法官。只输出 JSON，不输出其他内容。"},
 			{Role: "user", Content: fmt.Sprintf(
 				"判断给定证据是否足以支撑回答该问题。证据不足时宁可判不足，禁止猜测。\n\nQuestion:\n%s\n\nEvidence:\n%s\n\n输出 JSON：{\"sufficient\": true|false}。",
-				query, truncateRunes(evidence, constants.KnowledgeJudgeMaxEvidenceRunes),
+				query, textutil.TruncateRunes(evidence, constants.KnowledgeJudgeMaxEvidenceRunes),
 			)},
 		},
 	})
@@ -79,7 +80,7 @@ func (j knowledgeJudge) JudgeFaithfulness(ctx context.Context, answer, evidence 
 			{Role: "system", Content: "你是严谨的事实支撑法官。只输出 JSON，不输出其他内容。"},
 			{Role: "user", Content: fmt.Sprintf(
 				"对答案中的每个事实性陈述（claim），依据给定证据判定是否被支撑。证据不能支撑的判 UNSUPPORTED。\n\nAnswer:\n%s\n\nEvidence:\n%s\n\n输出 JSON：{\"claims\":[{\"text\":\"<claim>\",\"verdict\":\"SUPPORTED|UNSUPPORTED\"}]}。",
-				answer, truncateRunes(evidence, constants.KnowledgeJudgeMaxEvidenceRunes),
+				answer, textutil.TruncateRunes(evidence, constants.KnowledgeJudgeMaxEvidenceRunes),
 			)},
 		},
 	})
@@ -122,7 +123,7 @@ func (j knowledgeJudge) JudgeContradiction(ctx context.Context, query, evidence 
 			{Role: "system", Content: "你是严谨的矛盾检测法官。只输出 JSON，不输出其他内容。"},
 			{Role: "user", Content: fmt.Sprintf(
 				"判断给定证据片段之间是否存在实质性矛盾（同一事实有互斥说法）。只输出结论，不解释。\n\nQuestion:\n%s\n\nEvidence:\n%s\n\n输出 JSON：{\"contradiction\": true|false}。",
-				query, truncateRunes(evidence, constants.KnowledgeJudgeMaxEvidenceRunes),
+				query, textutil.TruncateRunes(evidence, constants.KnowledgeJudgeMaxEvidenceRunes),
 			)},
 		},
 	})

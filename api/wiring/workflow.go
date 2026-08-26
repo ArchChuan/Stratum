@@ -15,6 +15,7 @@ import (
 	workflowpersist "github.com/byteBuilderX/stratum/internal/workflow/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
+	"github.com/byteBuilderX/stratum/pkg/textutil"
 	"github.com/google/uuid"
 )
 
@@ -74,20 +75,12 @@ func safeWorkflowToolSteps(toolCalls []agentapp.ToolCall) []workflowport.NodeToo
 			summary = "工具执行失败"
 		}
 		steps = append(steps, workflowport.NodeToolStep{
-			ToolName:   truncateRunes(call.ToolName, constants.WorkflowToolNameMaxRunes),
+			ToolName:   textutil.TruncateRunes(call.ToolName, constants.WorkflowToolNameMaxRunes),
 			DurationMS: max(call.Duration.Milliseconds(), 0),
-			Summary:    truncateRunes(summary, constants.WorkflowToolSummaryMaxRunes),
+			Summary:    textutil.TruncateRunes(summary, constants.WorkflowToolSummaryMaxRunes),
 		})
 	}
 	return steps
-}
-
-func truncateRunes(value string, limit int) string {
-	runes := []rune(value)
-	if len(runes) <= limit {
-		return value
-	}
-	return string(runes[:limit])
 }
 
 type workflowSkillVersions interface {

@@ -10,6 +10,7 @@ import (
 	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/textutil"
 )
 
 // BuildExtraToolsForTest exposes buildExtraTools to external test packages.
@@ -44,7 +45,7 @@ func StricterToolRiskForTest(left, right port.ToolRiskLevel) port.ToolRiskLevel 
 
 func ToolRiskRankForTest(risk port.ToolRiskLevel) int { return toolRiskRank(risk) }
 
-func TruncateRunesForTest(s string, maxRunes int) string { return truncateRunes(s, maxRunes) }
+func TruncateRunesForTest(s string, maxRunes int) string { return textutil.TruncateRunes(s, maxRunes) }
 
 func ExecutionIDOrNewForTest(id string) string { return executionIDOrNew(id) }
 

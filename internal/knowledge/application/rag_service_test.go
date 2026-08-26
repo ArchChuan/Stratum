@@ -844,28 +844,6 @@ func TestRAGSearchEvidenceTitlesDegradeOnRepoFailure(t *testing.T) {
 	}
 }
 
-func TestTruncateRunes(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		n    int
-		want string
-	}{
-		{name: "empty", in: "", n: 10, want: ""},
-		{name: "nonpositive limit", in: "abc", n: 0, want: ""},
-		{name: "shorter than limit", in: "abc", n: 10, want: "abc"},
-		{name: "exact length", in: "abc", n: 3, want: "abc"},
-		{name: "cut at rune boundary", in: "很长的内容", n: 3, want: "很长的"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := truncateRunes(tc.in, tc.n); got != tc.want {
-				t.Fatalf("truncateRunes(%q, %d) = %q, want %q", tc.in, tc.n, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestPreviewDocumentInvisibleAndNonexistentUniformlyNotFound(t *testing.T) {
 	service := NewRAGService(nil, nil, zap.NewNop())
 	service.SetWorkspaceRepo(&recordingWorkspaceRepo{workspace: memberWorkspace()})

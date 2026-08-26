@@ -687,7 +687,7 @@ func TestAgentRepo_Register_WithEditors(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	// Editor eligibility is validated inside the same transaction (fail closed).
 	pool.ExpectQuery("SELECT EXISTS").
-		WithArgs("t1", "user-1").
+		WithArgs("t1", "user-1", []string{"admin", "owner", "member"}).
 		WillReturnRows(pgxmock.NewRows([]string{"bool"}).AddRow(true))
 	pool.ExpectExec("INSERT INTO resource_editors").
 		WithArgs("agent", "a1", "user-1", "creator-1").
@@ -732,7 +732,7 @@ func TestAgentRepo_Register_ForgedEditorRollsBack(t *testing.T) {
 		WithArgs("a1").
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	pool.ExpectQuery("SELECT EXISTS").
-		WithArgs("t1", "member-1").
+		WithArgs("t1", "member-1", []string{"admin", "owner", "member"}).
 		WillReturnRows(pgxmock.NewRows([]string{"bool"}).AddRow(false))
 	pool.ExpectRollback()
 
@@ -763,7 +763,7 @@ func TestAgentRepo_Update_EditorActorRevalidates(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("SELECT EXISTS").
-		WithArgs("t1", "editor-1").
+		WithArgs("t1", "editor-1", []string{"admin", "owner", "member"}).
 		WillReturnRows(pgxmock.NewRows([]string{"bool"}).AddRow(true))
 	pool.ExpectQuery("SELECT EXISTS").
 		WithArgs("agent", "a1", "editor-1").
@@ -805,7 +805,7 @@ func TestAgentRepo_Update_EditorActorDeniedRollsBack(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("SELECT EXISTS").
-		WithArgs("t1", "editor-1").
+		WithArgs("t1", "editor-1", []string{"admin", "owner", "member"}).
 		WillReturnRows(pgxmock.NewRows([]string{"bool"}).AddRow(true))
 	// Grant was removed -> presence check fails closed.
 	pool.ExpectQuery("SELECT EXISTS").

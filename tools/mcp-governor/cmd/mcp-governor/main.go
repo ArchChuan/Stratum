@@ -390,10 +390,6 @@ func validateSessionIdentity(value string) error {
 	return nil
 }
 
-func runProxy(opts proxyOptions, stdout, stderr io.Writer) (resultErr error) {
-	return runProxyContext(context.Background(), opts, stdout, stderr)
-}
-
 func runProxyContext(ctx context.Context, opts proxyOptions, stdout, stderr io.Writer) (resultErr error) {
 	resolvePath := newPathResolver()
 	configPath, err := resolvePath(opts.configPath)
