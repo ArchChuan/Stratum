@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	"github.com/byteBuilderX/stratum/pkg/resourceaccess"
 )
 
 // pgxBeginner 抽象 pool 与 tx 的 Begin（测试可 mock）。
@@ -30,15 +31,26 @@ func beginTenantTx(ctx context.Context, pool pgxBeginner, tenantID string) (pgx.
 }
 
 // insertAuditTx 在业务事务内写资源变更审计（表在租户 schema，依赖当前事务
-// search_path）；nil 事件跳过。
+// search_path）；nil 事件跳过。薄包装 pkg/resourceaccess 共享实现；审计行
+// id 由此前确定的 `resourceID-op-tenantID` 收敛为 uuid v7，与其他资源上下文
+// 一致（无外部消费者依赖旧格式）。
 func insertAuditTx(ctx context.Context, tx pgx.Tx, tenantID string, ev *auditdomain.ResourceChangeAuditEvent) error {
 	if ev == nil {
 		return nil
 	}
 	ev = ev.Normalized()
-	_, err := tx.Exec(ctx, auditdomain.ChangeAuditInsertSQL,
-		ev.ResourceID+"-"+ev.Operation+"-"+tenantID, tenantID, ev.ResourceKind, ev.ResourceID,
-		ev.Operation, ev.ActorID, ev.ActorType, ev.Source, ev.ProposalID,
-		ev.Before, ev.After)
-	return err
+	if ev == nil {
+		return nil
+	}
+	return resourceaccess.InsertChangeAudit(ctx, tx, tenantID, auditdomain.ChangeAuditInsertSQL, resourceaccess.ChangeAudit{
+		ResourceKind: ev.ResourceKind,
+		ResourceID:   ev.ResourceID,
+		Operation:    ev.Operation,
+		ActorID:      ev.ActorID,
+		ActorType:    ev.ActorType,
+		Source:       ev.Source,
+		ProposalID:   ev.ProposalID,
+		Before:       ev.Before,
+		After:        ev.After,
+	})
 }

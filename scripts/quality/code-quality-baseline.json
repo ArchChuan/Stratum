@@ -1322,50 +1322,6 @@
       "body_hash": "0a14b2c0ddbd44a464c0d6c857a15770ea70806c14c025f010ee21b9fbe89d8f"
     },
     {
-      "id": "internal/workflow/application/service.go:countIncomingEdgeResolutions",
-      "file": "internal/workflow/application/service.go",
-      "name": "countIncomingEdgeResolutions",
-      "cyclomatic": 9,
-      "cognitive": 19,
-      "lines": 29,
-      "max_nesting": 4,
-      "params": 4,
-      "body_hash": "f58dfed41683871ca5df1634c094572b5eb59308d75ef78af709572ae0cb5e65"
-    },
-    {
-      "id": "internal/workflow/application/service.go:nodeInput",
-      "file": "internal/workflow/application/service.go",
-      "name": "nodeInput",
-      "cyclomatic": 15,
-      "cognitive": 22,
-      "lines": 34,
-      "max_nesting": 3,
-      "params": 3,
-      "body_hash": "ba7e3012f07cbdc7b4a9376b115476c8dfc2bda6cc7c377b7feafb4b7effa715"
-    },
-    {
-      "id": "internal/workflow/application/service.go:readySet",
-      "file": "internal/workflow/application/service.go",
-      "name": "readySet",
-      "cyclomatic": 16,
-      "cognitive": 32,
-      "lines": 52,
-      "max_nesting": 4,
-      "params": 2,
-      "body_hash": "c723350d9c15d26cd8c5427c0dde90fb9a9fd441e497e405aa5d242b11fd9c2b"
-    },
-    {
-      "id": "internal/workflow/application/service.go:readySetFromKernel",
-      "file": "internal/workflow/application/service.go",
-      "name": "readySetFromKernel",
-      "cyclomatic": 11,
-      "cognitive": 16,
-      "lines": 42,
-      "max_nesting": 3,
-      "params": 3,
-      "body_hash": "c2dcc89126304137eee1bd69c23c6c8a5fa133fa46ae9f4347ab6ce9d2fbf01e"
-    },
-    {
       "id": "internal/workflow/domain/workflow.go:ValidateInputSchema",
       "file": "internal/workflow/domain/workflow.go",
       "name": "ValidateInputSchema",

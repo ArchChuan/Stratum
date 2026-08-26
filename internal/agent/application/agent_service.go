@@ -76,13 +76,16 @@ type AgentServiceDeps struct {
 	CheckpointStore   CheckpointStore
 	// CompactionStore 跨轮复用压缩摘要存储。nil 时组装侧保持无复用行为
 	// （与旧 BuildContextMessagesWithCompaction 逐字节一致）。
-	CompactionStore           port.CompactionStore
-	MemoryCleaner             port.AgentMemoryCleaner
-	MemoryBuffer              port.BufferMemoryFn
-	TrajectoryReflection      port.EnqueueTrajectoryReflectionFn
-	MemoryInjector            port.MemoryInjector
-	RecallMemory              port.RecallMemoryFn
-	Metrics                   observability.MetricsProvider
+	CompactionStore      port.CompactionStore
+	MemoryCleaner        port.AgentMemoryCleaner
+	MemoryBuffer         port.BufferMemoryFn
+	TrajectoryReflection port.EnqueueTrajectoryReflectionFn
+	MemoryInjector       port.MemoryInjector
+	RecallMemory         port.RecallMemoryFn
+	Metrics              observability.MetricsProvider
+	// Ledger 记录 LLM token/成本（span cost + Prometheus 指标）。nil 时保持
+	// NoopTokenRecorder（成本恒 0），生产由 wiring 注入 TokenLedger。
+	Ledger                    agentgraph.TokenRecorder
 	OfficialDocsSearch        func(context.Context, string) ([]domain.Citation, error)
 	DiagnosticProvider        port.DiagnosticEvidenceProvider
 	ProposalService           *ResourceChangeProposalService
@@ -355,6 +358,9 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 	if s.deps.Metrics != nil {
 		a = a.WithMetrics(s.deps.Metrics)
 	}
+	if s.deps.Ledger != nil {
+		a = a.WithLedger(s.deps.Ledger)
+	}
 	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindAgent, id, auditdomain.ChangeOpCreate, in.ActorID, nil, AgentSafeProjection(cfg))
 	if err != nil {
 		return AgentDTO{}, err
@@ -462,6 +468,9 @@ func (s *AgentService) ExecuteRevision(
 	}
 	if s.deps.Metrics != nil {
 		a = a.WithMetrics(s.deps.Metrics)
+	}
+	if s.deps.Ledger != nil {
+		a = a.WithLedger(s.deps.Ledger)
 	}
 	executionID := uuid.Must(uuid.NewV7()).String()
 	_, options, err := s.assembleOptions(ctx, a, req, meta, executionID)
@@ -1087,6 +1096,9 @@ func (s *AgentService) resolveExecutionAgent(
 	}
 	if s.deps.Metrics != nil {
 		resolved = resolved.WithMetrics(s.deps.Metrics)
+	}
+	if s.deps.Ledger != nil {
+		resolved = resolved.WithLedger(s.deps.Ledger)
 	}
 	resolved.Name = current.GetConfig().Name
 	return resolved, assignment, nil
@@ -3320,15 +3332,6 @@ func (s *AgentService) authorizeTraceOwner(ctx context.Context, tenantID, userID
 		return domain.ErrEvidenceNotFound
 	}
 	return nil
-}
-
-// truncateRunes returns s truncated to maxRunes runes (not bytes).
-func truncateRunes(s string, maxRunes int) string {
-	runes := []rune(s)
-	if len(runes) <= maxRunes {
-		return s
-	}
-	return string(runes[:maxRunes])
 }
 
 // executionIDOrNew returns id if non-empty, otherwise generates a new v7 UUID.

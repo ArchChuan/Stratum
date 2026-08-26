@@ -241,52 +241,18 @@ func (s *observationSink) close(ctx context.Context) error {
 }
 
 func Run(ctx context.Context, options Options) error {
-	if strings.TrimSpace(options.Command) == "" {
-		return errors.New("stdio proxy: command is required")
-	}
-	if options.Stdin == nil {
-		options.Stdin = strings.NewReader("")
-	}
-	if !interruptibleStdin(options) {
-		return fmt.Errorf("stdio proxy: %w", ErrUninterruptibleStdin)
-	}
-	if options.Stdout == nil {
-		options.Stdout = io.Discard
-	}
-	if options.Stderr == nil {
-		options.Stderr = io.Discard
-	}
-	maxBytes := options.maxMessageBytes
-	if maxBytes <= 0 {
-		maxBytes = defaultMaxMessageBytes
+	options, maxBytes, err := normalizeRunOptions(options)
+	if err != nil {
+		return err
 	}
 	childCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	cmd := exec.Command(options.Command, options.Args...) // nosemgrep: dangerous-exec-command
-	if err := configureOwnedProcess(cmd); err != nil {
-		return fmt.Errorf("stdio proxy: configure owned process: %w", err)
-	}
-	cmd.Env, cmd.Dir = options.Env, options.Dir
-	childIn, err := cmd.StdinPipe()
+	child, err := spawnChild(options)
 	if err != nil {
-		return fmt.Errorf("stdio proxy: create stdin: %w", err)
+		return err
 	}
-	childOut, err := cmd.StdoutPipe()
-	if err != nil {
-		return errors.Join(fmt.Errorf("stdio proxy: create stdout: %w", err), closeError("child stdin", childIn))
-	}
-	if options.wrapChildStdin != nil {
-		childIn = options.wrapChildStdin(childIn)
-	}
-	if options.wrapChildStdout != nil {
-		childOut = options.wrapChildStdout(childOut)
-	}
-	stdinCleanup := newCleanupCloser("child stdin", childIn)
-	stdoutCleanup := newCleanupCloser("child stdout", childOut)
-	cmd.Stderr = options.Stderr
-	if err := cmd.Start(); err != nil {
-		return errors.Join(fmt.Errorf("stdio proxy: start child: %w", err), stdinCleanup.Close(), stdoutCleanup.Close())
-	}
+	cmd, childIn, childOut := child.cmd, child.stdin, child.stdout
+	stdinCleanup, stdoutCleanup := child.stdinCleanup, child.stdoutCleanup
 
 	gate := newObservationGate()
 	var sink *observationSink
@@ -307,13 +273,9 @@ func Run(ctx context.Context, options Options) error {
 			cancel()
 		}
 	}()
-	type result struct {
-		side string
-		err  error
-	}
-	results := make(chan result, 2)
+	results := make(chan forwardResult, 2)
 	go func() {
-		results <- result{"client", forwardLines(childCtx, "client", options.Stdin, maxBytes, func(line []byte) error {
+		results <- forwardResult{"client", forwardLines(childCtx, "client", options.Stdin, maxBytes, func(line []byte) error {
 			if options.Tracker != nil {
 				gate.beginClient()
 				defer gate.finishClient()
@@ -328,7 +290,7 @@ func Run(ctx context.Context, options Options) error {
 		})}
 	}()
 	go func() {
-		results <- result{"child", forwardLines(childCtx, "server", childOut, maxBytes, func(line []byte) error {
+		results <- forwardResult{"child", forwardLines(childCtx, "server", childOut, maxBytes, func(line []byte) error {
 			if err := writeFull(options.Stdout, line); err != nil {
 				return err
 			}
@@ -345,7 +307,7 @@ func Run(ctx context.Context, options Options) error {
 	waitResult := make(chan error, 1)
 	go func() { waitResult <- waitChild(options, cmd) }()
 
-	forwarded := make([]result, 0, 2)
+	forwarded := make([]forwardResult, 0, 2)
 	var waitErr error
 	waitComplete := false
 	shutdownInitiated := false
@@ -442,6 +404,83 @@ func Run(ctx context.Context, options Options) error {
 	}
 	cancel()
 
+	runErr := collectRunErrors(forwarded, waitErr, ctx, shutdownInitiated, exitCancellationExpected)
+	runErr = errors.Join(runErr, flushTrackerAndCloseSink(options, sink, writeEvents, ctx))
+	return errors.Join(runErr, shutdownErr, clientStdinCloseErr, stdinCleanup.Err(), stdoutCleanup.Err())
+}
+
+// forwardResult 记录一条单向转发 goroutine 的结束状态。
+type forwardResult struct {
+	side string
+	err  error
+}
+
+// normalizeRunOptions 校验命令配置并填充 stdin/stdout/stderr/maxBytes 默认值。
+// 返回规范化后的 options 与生效的最大消息字节数。
+func normalizeRunOptions(options Options) (Options, int, error) {
+	if strings.TrimSpace(options.Command) == "" {
+		return options, 0, errors.New("stdio proxy: command is required")
+	}
+	if options.Stdin == nil {
+		options.Stdin = strings.NewReader("")
+	}
+	if !interruptibleStdin(options) {
+		return options, 0, fmt.Errorf("stdio proxy: %w", ErrUninterruptibleStdin)
+	}
+	if options.Stdout == nil {
+		options.Stdout = io.Discard
+	}
+	if options.Stderr == nil {
+		options.Stderr = io.Discard
+	}
+	maxBytes := options.maxMessageBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxMessageBytes
+	}
+	return options, maxBytes, nil
+}
+
+// childProcess 封装已启动的子进程及其管道，统一持有关闭句柄。
+type childProcess struct {
+	cmd           *exec.Cmd
+	stdin         io.WriteCloser
+	stdout        io.ReadCloser
+	stdinCleanup  *cleanupCloser
+	stdoutCleanup *cleanupCloser
+}
+
+// spawnChild 配置、连接并启动子进程；任何失败都会关闭已打开的管道。
+func spawnChild(options Options) (childProcess, error) {
+	cmd := exec.Command(options.Command, options.Args...) // nosemgrep: dangerous-exec-command
+	if err := configureOwnedProcess(cmd); err != nil {
+		return childProcess{}, fmt.Errorf("stdio proxy: configure owned process: %w", err)
+	}
+	cmd.Env, cmd.Dir = options.Env, options.Dir
+	childIn, err := cmd.StdinPipe()
+	if err != nil {
+		return childProcess{}, fmt.Errorf("stdio proxy: create stdin: %w", err)
+	}
+	childOut, err := cmd.StdoutPipe()
+	if err != nil {
+		return childProcess{}, errors.Join(fmt.Errorf("stdio proxy: create stdout: %w", err), closeError("child stdin", childIn))
+	}
+	if options.wrapChildStdin != nil {
+		childIn = options.wrapChildStdin(childIn)
+	}
+	if options.wrapChildStdout != nil {
+		childOut = options.wrapChildStdout(childOut)
+	}
+	stdinCleanup := newCleanupCloser("child stdin", childIn)
+	stdoutCleanup := newCleanupCloser("child stdout", childOut)
+	cmd.Stderr = options.Stderr
+	if err := cmd.Start(); err != nil {
+		return childProcess{}, errors.Join(fmt.Errorf("stdio proxy: start child: %w", err), stdinCleanup.Close(), stdoutCleanup.Close())
+	}
+	return childProcess{cmd: cmd, stdin: childIn, stdout: childOut, stdinCleanup: stdinCleanup, stdoutCleanup: stdoutCleanup}, nil
+}
+
+// collectRunErrors 聚合转发错误、child wait 错误与取消错误为单个错误。
+func collectRunErrors(forwarded []forwardResult, waitErr error, ctx context.Context, shutdownInitiated, exitCancellationExpected bool) error {
 	var runErr error
 	for _, item := range forwarded {
 		if err := forwardingError(item.err, shutdownInitiated || ctx.Err() != nil); err != nil {
@@ -454,6 +493,13 @@ func Run(ctx context.Context, options Options) error {
 	if err := childWaitError(waitErr, exitCancellationExpected || ctx.Err() != nil); err != nil {
 		runErr = errors.Join(runErr, err)
 	}
+	return runErr
+}
+
+// flushTrackerAndCloseSink 冲刷观察 tracker 并关闭观察 sink，聚合其错误。
+// 两者都是 best-effort：记录失败不阻断协议主路径的错误返回。
+func flushTrackerAndCloseSink(options Options, sink *observationSink, writeEvents func([]observe.Event) error, ctx context.Context) error {
+	var runErr error
 	if options.Tracker != nil {
 		outcome := observe.OutcomeDisconnected
 		if ctx.Err() != nil {
@@ -468,9 +514,8 @@ func Run(ctx context.Context, options Options) error {
 		if sinkErr != nil {
 			runErr = errors.Join(runErr, sinkErr)
 		}
-		sink = nil
 	}
-	return errors.Join(runErr, shutdownErr, clientStdinCloseErr, stdinCleanup.Err(), stdoutCleanup.Err())
+	return runErr
 }
 
 type cleanupCloser struct {

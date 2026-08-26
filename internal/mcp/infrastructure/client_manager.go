@@ -14,8 +14,8 @@ import (
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/resourceaccess"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -204,98 +204,49 @@ func (m *ClientManager) checkConnectionLimits(tenantID string) error {
 // resourceEditorKind identifies mcp rows in the shared resource_editors table.
 const resourceEditorKind = "mcp"
 
-// editorEligible checks, inside the write transaction, that userID is an
-// active tenant member (whitelist semantics: any role may be granted editor).
-// Fail closed on any lookup error. public.tenant_members is schema-qualified:
-// the transaction search_path points at the tenant schema.
-func editorEligible(ctx context.Context, tx pgx.Tx, tenantID, userID string) (bool, error) {
-	var ok bool
-	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS(
-			SELECT 1 FROM public.tenant_members
-			WHERE tenant_id=$1 AND user_id=$2)`,
-		tenantID, userID,
-	).Scan(&ok); err != nil {
-		return false, fmt.Errorf("editor role check: %w", err)
-	}
-	return ok, nil
-}
-
 // insertEditors validates and persists the editor set inside the write
 // transaction. A non-eligible id fails the whole transaction (fail closed),
-// so a forged editor can never be created alongside the resource.
+// so a forged editor can never be created alongside the resource. Thin
+// wrapper over pkg/resourceaccess; mcpdomain.ErrEditorNotEligible
+// propagates.
 func insertEditors(ctx context.Context, tx pgx.Tx, tenantID, kind, resourceID string, editorIDs []string, createdBy string) error {
-	for _, id := range editorIDs {
-		eligible, err := editorEligible(ctx, tx, tenantID, id)
-		if err != nil {
-			return err
-		}
-		if !eligible {
-			return fmt.Errorf("%w: user %s", mcpdomain.ErrEditorNotEligible, id)
-		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO resource_editors (resource_kind, resource_id, editor_id, created_by)
-			 VALUES ($1,$2,$3,$4)`,
-			kind, resourceID, id, createdBy,
-		); err != nil {
-			return fmt.Errorf("insert editor %s: %w", id, err)
-		}
-	}
-	return nil
+	return resourceaccess.InsertEditors(ctx, tx, tenantID, kind, resourceID, editorIDs, createdBy, mcpdomain.ErrEditorNotEligible)
 }
 
 // revalidateEditorAccess re-checks, inside the write transaction, that the
-// actor still qualifies as an editor of this resource: role admin/owner AND
-// present in resource_editors. Both checks share the transaction with the
-// business UPDATE, closing the check-then-write TOCTOU window.
+// actor still qualifies as an editor of this resource: whitelisted tenant
+// membership AND presence in resource_editors. Both checks share the
+// transaction with the business UPDATE, closing the check-then-write TOCTOU
+// window. Thin wrapper over pkg/resourceaccess; mcpdomain.ErrForbidden
+// propagates.
 func revalidateEditorAccess(ctx context.Context, tx pgx.Tx, tenantID, kind, resourceID, actorID string) error {
-	eligible, err := editorEligible(ctx, tx, tenantID, actorID)
-	if err != nil {
-		return err
-	}
-	if !eligible {
-		return mcpdomain.ErrForbidden
-	}
-	var present bool
-	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM resource_editors
-			WHERE resource_kind=$1 AND resource_id=$2 AND editor_id=$3)`,
-		kind, resourceID, actorID,
-	).Scan(&present); err != nil {
-		return fmt.Errorf("editor membership check: %w", err)
-	}
-	if !present {
-		return mcpdomain.ErrForbidden
-	}
-	return nil
+	return resourceaccess.RevalidateEditorAccess(ctx, tx, tenantID, kind, resourceID, actorID, mcpdomain.ErrForbidden)
 }
 
-// insertChangeAudit inserts the audit row in the SAME transaction as the
-// business write; an audit failure rolls the business change back (fail
-// closed). A nil event skips auditing — reserved for internal reentrant
-// paths (restore/reconnect). Incomplete events are a caller bug and fail
-// the transaction.
+// insertChangeAudit persists one audit row inside the business transaction.
+// ev == nil skips the write (internal reentrant paths, e.g. restore/
+// reconnect). Thin wrapper over the shared implementation in
+// pkg/resourceaccess.
 func insertChangeAudit(ctx context.Context, tx pgx.Tx, ev *auditdomain.ResourceChangeAuditEvent) error {
 	ev = ev.Normalized()
 	if ev == nil {
 		return nil
 	}
-	if ev.ResourceID == "" || ev.Operation == "" || ev.ResourceKind == "" {
-		return fmt.Errorf("change audit: incomplete event (kind=%s id=%q op=%q)",
-			ev.ResourceKind, ev.ResourceID, ev.Operation)
-	}
 	tc, ok := tenantdb.FromContext(ctx)
 	if !ok || tc.TenantID == "" {
 		return fmt.Errorf("change audit: missing tenant context")
 	}
-	_, err := tx.Exec(ctx, auditdomain.ChangeAuditInsertSQL,
-		uuid.Must(uuid.NewV7()).String(), tc.TenantID,
-		ev.ResourceKind, ev.ResourceID, ev.Operation, ev.ActorID, ev.ActorType, ev.Source,
-		ev.ProposalID, ev.Before, ev.After)
-	if err != nil {
-		return fmt.Errorf("insert change audit %s %s: %w", ev.ResourceKind, ev.ResourceID, err)
-	}
-	return nil
+	return resourceaccess.InsertChangeAudit(ctx, tx, tc.TenantID, auditdomain.ChangeAuditInsertSQL, resourceaccess.ChangeAudit{
+		ResourceKind: ev.ResourceKind,
+		ResourceID:   ev.ResourceID,
+		Operation:    ev.Operation,
+		ActorID:      ev.ActorID,
+		ActorType:    ev.ActorType,
+		Source:       ev.Source,
+		ProposalID:   ev.ProposalID,
+		Before:       ev.Before,
+		After:        ev.After,
+	})
 }
 
 func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig, editors []string, editorActor string, audit *auditdomain.ResourceChangeAuditEvent) error {

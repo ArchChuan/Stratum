@@ -13,6 +13,7 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
+	"github.com/byteBuilderX/stratum/pkg/textutil"
 	"go.uber.org/zap"
 )
 
@@ -64,7 +65,7 @@ func (r *llmReranker) Rerank(ctx context.Context, req knowledgeport.RerankReques
 	prompt.WriteString(req.Query)
 	prompt.WriteString("\n\nCandidates:\n")
 	for i, doc := range req.Documents {
-		fmt.Fprintf(&prompt, "%d. %s\n", i, truncateRunes(doc, constants.RerankLLMMaxDocRunes))
+		fmt.Fprintf(&prompt, "%d. %s\n", i, textutil.TruncateRunes(doc, constants.RerankLLMMaxDocRunes))
 	}
 	prompt.WriteString("\n输出 JSON：{\"scores\":[{\"index\":<候选编号>,\"score\":<0..1>},...]}，为每个候选恰好输出一个条目。")
 
