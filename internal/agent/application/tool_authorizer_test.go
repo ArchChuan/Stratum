@@ -104,17 +104,23 @@ func TestToolAuthorizerUserScopeCannotExpandAgentAllowlist(t *testing.T) {
 	require.Equal(t, domain.ToolReasonToolNotAllowlisted, decision.Reason)
 }
 
-func TestToolAuthorizerSystemAssistantStrictRiskModel(t *testing.T) {
+func TestToolAuthorizerSharedRiskModelAppliesToAllAgents(t *testing.T) {
+	// 系统助手等同化后：所有 agent（含平台助手 seed 行）共享同一授权模型。
+	// 未配置 policy（policy_resolved=false）一律 require_approval（含 read）；
+	// 管理员经 SetToolPolicy 配置 risk_level 后 read/write_reversible/destructive
+	// 均直接放行（配置即授权）。
 	tests := []struct {
-		name   string
-		risk   domain.ToolRiskLevel
-		effect domain.ToolAuthorizationEffect
-		reason domain.ToolAuthorizationReason
+		name           string
+		risk           domain.ToolRiskLevel
+		policyResolved bool
+		effect         domain.ToolAuthorizationEffect
+		reason         domain.ToolAuthorizationReason
 	}{
-		{name: "read runs automatically", risk: domain.ToolRiskRead, effect: domain.ToolAuthorizationAllow, reason: domain.ToolReasonRiskAllowed},
-		{name: "write reversible requires approval", risk: domain.ToolRiskWriteReversible, effect: domain.ToolAuthorizationRequireApproval, reason: domain.ToolReasonApprovalRequired},
-		{name: "destructive refused", risk: domain.ToolRiskDestructive, effect: domain.ToolAuthorizationDeny, reason: domain.ToolReasonDestructiveForbidden},
-		{name: "unclassified refused", risk: domain.ToolRiskUnclassified, effect: domain.ToolAuthorizationDeny, reason: domain.ToolReasonToolUnclassified},
+		{name: "read configured runs automatically", risk: domain.ToolRiskRead, policyResolved: true, effect: domain.ToolAuthorizationAllow, reason: domain.ToolReasonRiskAllowed},
+		{name: "write reversible configured runs automatically", risk: domain.ToolRiskWriteReversible, policyResolved: true, effect: domain.ToolAuthorizationAllow, reason: domain.ToolReasonRiskAllowed},
+		{name: "destructive configured runs automatically", risk: domain.ToolRiskDestructive, policyResolved: true, effect: domain.ToolAuthorizationAllow, reason: domain.ToolReasonRiskAllowed},
+		{name: "unconfigured read requires approval", risk: domain.ToolRiskRead, policyResolved: false, effect: domain.ToolAuthorizationRequireApproval, reason: domain.ToolReasonPolicyLookupFailed},
+		{name: "unclassified requires approval", risk: domain.ToolRiskUnclassified, policyResolved: true, effect: domain.ToolAuthorizationRequireApproval, reason: domain.ToolReasonToolUnclassified},
 	}
 
 	for _, tt := range tests {
@@ -124,8 +130,8 @@ func TestToolAuthorizerSystemAssistantStrictRiskModel(t *testing.T) {
 			})
 
 			decision := authorizer.Authorize(context.Background(), ToolAuthorizationInput{
-				TenantID: "tenant-1", UserID: "user-1", AgentID: domain.SystemAssistantID, ToolID: "mcp:orders:get",
-				AgentAllowsTool: true, PolicyResolved: true, RiskLevel: tt.risk,
+				TenantID: "tenant-1", UserID: "user-1", AgentID: "agent-1", ToolID: "mcp:orders:get",
+				AgentAllowsTool: true, PolicyResolved: tt.policyResolved, RiskLevel: tt.risk,
 			})
 
 			require.Equal(t, tt.effect, decision.Effect)
@@ -134,13 +140,13 @@ func TestToolAuthorizerSystemAssistantStrictRiskModel(t *testing.T) {
 	}
 }
 
-func TestToolAuthorizerSystemAssistantFailsClosedOnPolicyLookupFailure(t *testing.T) {
+func TestToolAuthorizerFailsClosedOnPolicyLookupFailure(t *testing.T) {
 	authorizer := NewToolAuthorizer(stubToolUserScopeResolver{
 		err: errors.New("iam unavailable"),
 	})
 
 	decision := authorizer.Authorize(context.Background(), ToolAuthorizationInput{
-		TenantID: "tenant-1", UserID: "user-1", AgentID: domain.SystemAssistantID, ToolID: "mcp:orders:get",
+		TenantID: "tenant-1", UserID: "user-1", AgentID: "agent-1", ToolID: "mcp:orders:get",
 		AgentAllowsTool: true, PolicyResolved: true, RiskLevel: domain.ToolRiskRead,
 	})
 

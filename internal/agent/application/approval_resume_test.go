@@ -443,8 +443,9 @@ func TestBuildApprovalResumeOptions_GuardFallsBackToNormalPath(t *testing.T) {
 	require.NotNil(t, out, "read 工具走正常允许执行路径")
 }
 
-// guard 回退到审批：重跑中出现的其他 destructive 工具仍需要审批（复用正常
-// RequestApproval 语义，即使审批续跑上下文内也未装配 requester → 返回需要审批）。
+// guard 回退到审批：重跑中出现的其他未配置 policy（policy_resolved=false）的
+// destructive 工具仍需要审批（复用正常 RequestApproval 语义，即使审批续跑上下文
+// 内也未装配 requester → 返回需要审批）。
 func TestBuildApprovalResumeOptions_GuardFallsBackToApprovalRequest(t *testing.T) {
 	payload := resumePayload("e1", "a1", "user-1")
 	svc, repo := resumeOptionService(t, payload)
@@ -459,6 +460,7 @@ func TestBuildApprovalResumeOptions_GuardFallsBackToApprovalRequest(t *testing.T
 	req.Tool.CapabilityID = "delete2"
 	req.AgentToolIDs = []string{"mcp:srv:delete2"}
 	req.Tool.Metadata["risk_level"] = "destructive"
+	req.Tool.Metadata["policy_resolved"] = false // 未配置 → 仍需审批
 
 	_, err = fn(context.Background(), req)
 

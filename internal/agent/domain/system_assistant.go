@@ -7,9 +7,9 @@ import (
 )
 
 const (
-	SystemAssistantKey                   = "stratum.platform_assistant"
-	SystemAssistantID                    = "stratum-platform-assistant"
-	CurrentSystemAssistantProfileVersion = "2026-08-08.v3"
+	SystemAssistantKey                     = "stratum.platform_assistant"
+	SystemAssistantID                      = "stratum-platform-assistant"
+	CurrentExecutionArtifactProfileVersion = "2026-08-08.v3"
 )
 
 // TenantModelDetail is the platform-assistant view of one tenant catalog
