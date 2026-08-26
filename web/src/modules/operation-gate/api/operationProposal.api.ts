@@ -1,11 +1,14 @@
 import {
   operationProposalListSchema,
+  operationProposalPageSchema,
   operationProposalSchema,
   pendingApprovalSchema,
   selfModifyResultSchema,
   type OperationProposal,
+  type OperationProposalPage,
 } from '../model/operationProposal';
 
+import { DEFAULT_PAGE_SIZE } from '@/constants';
 import api from '@/services/client';
 
 export const operationProposalApi = {
@@ -51,5 +54,14 @@ export const operationProposalApi = {
       resourceName: opts?.resourceName,
     });
     return pendingApprovalSchema.parse(response.data);
+  },
+  // 分页历史（非 pending 终态，后端按角色过滤：admin/owner 全租户，member 仅本人）。
+  listHistory: async (page: number, pageSize = DEFAULT_PAGE_SIZE): Promise<OperationProposalPage> => {
+    const response = await api.get('/operation-proposals/history', { params: { page, page_size: pageSize } });
+    return operationProposalPageSchema.parse(response.data);
+  },
+  // 取消待审批提案：发起人自撤（member）或管理员代撤（admin），落 cancelled 终态。
+  cancel: async (id: string) => {
+    await api.post(`/operation-proposals/${id}/cancel`);
   },
 };

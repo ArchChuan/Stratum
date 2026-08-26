@@ -15,6 +15,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// operationProposalHistoryPage clamps mirror the tool-approval history
+// pagination constants: page sizes outside [min, max] fall back to the default.
+const (
+	operationProposalHistoryPageMin         = 1
+	operationProposalHistoryPageSizeDefault = 20
+	operationProposalHistoryPageSizeMax     = 100
+)
+
 type PgOperationProposalRepo struct {
 	pool poolIface
 }
@@ -132,7 +140,7 @@ func (r *PgOperationProposalRepo) UpdateStatus(
             reviewed_by = $3,
             review_note = $4,
             updated_at = NOW(),
-            resolved_at = CASE WHEN $2 = 'rejected' THEN NOW() ELSE resolved_at END,
+            resolved_at = CASE WHEN $2 IN ('rejected','cancelled') THEN NOW() ELSE resolved_at END,
             expires_at = CASE WHEN $2 = 'approved' THEN NOW() + $5::interval ELSE expires_at END
             WHERE id = $1 AND status IN ('proposed','reviewing')`,
 			id, status, reviewerID, note, constants.OperationApprovalTTL.String())
@@ -196,6 +204,68 @@ func (r *PgOperationProposalRepo) ConsumeApproved(
 		return false, err
 	}
 	return consumed, nil
+}
+
+// ListHistory returns a paginated slice of proposals (newest first) plus the
+// total count matching the filter. proposerID == "" covers the whole tenant
+// (admin/owner view); otherwise only that proposer's proposals are returned
+// (member view). History is the complement of the pending list: proposed and
+// reviewing live in the pending tab, everything else shows here.
+func (r *PgOperationProposalRepo) ListHistory(
+	ctx context.Context,
+	tenantID, proposerID string,
+	page, pageSize int,
+) ([]domain.OperationProposal, int, error) {
+	out := []domain.OperationProposal{}
+	total := 0
+	// COUNT 与 SELECT 共用同一 WHERE 与占位符，保证 total 与列表一致。
+	where := ` WHERE status NOT IN ('proposed','reviewing')`
+	args := []any{}
+	limitIdx, offsetIdx := "$1", "$2"
+	if proposerID != "" {
+		where += ` AND proposer_id = $1`
+		args = append(args, proposerID)
+		limitIdx, offsetIdx = "$2", "$3"
+	}
+	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM operation_proposals`+where, args...).Scan(&total); err != nil {
+			return fmt.Errorf("count operation proposal history: %w", err)
+		}
+		if page < operationProposalHistoryPageMin {
+			page = operationProposalHistoryPageMin
+		}
+		if pageSize < operationProposalHistoryPageMin || pageSize > operationProposalHistoryPageSizeMax {
+			pageSize = operationProposalHistoryPageSizeDefault
+		}
+		rows, err := tx.Query(ctx, `SELECT id, agent_id, target_agent_id, op_type, delegation,
+            max_daily_cost_usd, max_daily_executions, fingerprint, payload_summary, status,
+            proposer_id, reviewed_by, review_note, created_at, updated_at, resolved_at, expires_at
+            FROM operation_proposals`+where+`
+            ORDER BY created_at DESC LIMIT `+limitIdx+` OFFSET `+offsetIdx,
+			append(args, pageSize, (page-1)*pageSize)...)
+		if err != nil {
+			return fmt.Errorf("list operation proposal history: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var p domain.OperationProposal
+			var summary []byte
+			if err := rows.Scan(
+				&p.ID, &p.AgentID, &p.TargetAgentID, &p.OpType, &p.Delegation,
+				&p.MaxDailyCostUSD, &p.MaxDailyExecutions, &p.Fingerprint, &summary,
+				&p.Status, &p.ProposerID, &p.ReviewedBy, &p.ReviewNote,
+				&p.CreatedAt, &p.UpdatedAt, &p.ResolvedAt, &p.ExpiresAt); err != nil {
+				return fmt.Errorf("scan operation proposal history: %w", err)
+			}
+			p.PayloadSummary = append(json.RawMessage(nil), summary...)
+			out = append(out, p)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
 }
 
 // ListByProposer returns every proposal raised by proposerID (any status),

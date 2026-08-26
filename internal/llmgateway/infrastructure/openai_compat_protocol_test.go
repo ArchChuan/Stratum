@@ -192,10 +192,15 @@ func TestOpenAICompatProtocol_CreateEmbeddings(t *testing.T) {
 func TestOpenAICompatProtocol_BatchSize(t *testing.T) {
 	proto, _, _ := openAICompatProtocolFixture(t)
 
-	require.Equal(t, 100, proto.BatchSize())
+	// 默认批次与智谱 embedding-3 单请求 ≤64 条上限对齐。
+	require.Equal(t, defaultEmbedBatchSize, proto.BatchSize())
 
 	client := NewOpenAICompatClient(ProviderConfig{Name: "x", EmbedBatchSize: 7}, zap.NewNop())
 	require.Equal(t, 7, NewOpenAICompatProtocol(client).BatchSize())
+
+	// 显式配置超过平台上限也必须被 clamp，保证单请求不超上游限制。
+	big := NewOpenAICompatClient(ProviderConfig{Name: "x", EmbedBatchSize: 100}, zap.NewNop())
+	require.Equal(t, defaultEmbedBatchSize, NewOpenAICompatProtocol(big).BatchSize())
 }
 
 func TestOpenAICompatProtocol_clientFor_isolatesBreakers(t *testing.T) {
@@ -251,8 +256,11 @@ func TestOpenAICompatClient_ChatDelegates(t *testing.T) {
 	})
 
 	t.Run("EmbedBatchSize delegates", func(t *testing.T) {
-		require.Equal(t, 100, client.EmbedBatchSize())
+		require.Equal(t, defaultEmbedBatchSize, client.EmbedBatchSize())
 		client.cfg.EmbedBatchSize = 3
 		require.Equal(t, 3, client.EmbedBatchSize())
+		// 超过平台上限的配置被 clamp，代码层面保证分批安全。
+		client.cfg.EmbedBatchSize = 200
+		require.Equal(t, defaultEmbedBatchSize, client.EmbedBatchSize())
 	})
 }

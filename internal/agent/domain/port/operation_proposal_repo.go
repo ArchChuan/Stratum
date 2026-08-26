@@ -24,4 +24,10 @@ type OperationProposalRepo interface {
 	// newest first. Backs the member-side "my requests" view in the permission
 	// approvals tab; carries no reviewer gate.
 	ListByProposer(ctx context.Context, tenantID, proposerID string) ([]domain.OperationProposal, error)
+	// ListHistory returns a paginated slice of proposals (any status, newest
+	// first) plus the total count matching the filter. proposerID == "" returns
+	// the whole tenant (admin/owner view); otherwise only that proposer's
+	// proposals are returned (member view). Backs the permission-approvals
+	// history tab.
+	ListHistory(ctx context.Context, tenantID, proposerID string, page, pageSize int) ([]domain.OperationProposal, int, error)
 }

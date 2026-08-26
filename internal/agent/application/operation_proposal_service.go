@@ -121,6 +121,23 @@ func (s *OperationProposalService) ListPending(ctx context.Context, tenantID, us
 	return s.repo.ListPending(ctx, tenantID)
 }
 
+// ListHistory returns the paginated approval history filtered by the actor's
+// role: admin/owner sees the whole tenant, member sees only their own
+// proposals. History is the complement of the pending list — terminal states
+// (approved/rejected/executed/cancelled). Role is resolved fresh per call so
+// the filter never trusts a stale client claim.
+func (s *OperationProposalService) ListHistory(ctx context.Context, tenantID, actor string, page, pageSize int) ([]domain.OperationProposal, int, error) {
+	role, err := s.resolveRole(ctx, tenantID, actor)
+	if err != nil {
+		return nil, 0, err
+	}
+	proposerID := actor
+	if role == "admin" || role == "owner" {
+		proposerID = ""
+	}
+	return s.repo.ListHistory(ctx, tenantID, proposerID, page, pageSize)
+}
+
 // Get returns a single proposal including its de-sensitised payload summary
 // for the approval screen.
 func (s *OperationProposalService) Get(ctx context.Context, tenantID, userID, id string) (*domain.OperationProposal, error) {
@@ -190,6 +207,37 @@ func (s *OperationProposalService) Reject(ctx context.Context, tenantID, userID,
 	return nil
 }
 
+// Cancel withdraws a pending proposal: the proposer cancels their own, or an
+// admin/owner cancels on their behalf. reason distinguishes the two paths
+// (cancelled_by_initiator / cancelled_by_approver) so the audit trail stays
+// legible. Only proposed/reviewing proposals are cancellable — the repo's
+// conditional UPDATE is the atomic guard, so an already resolved proposal
+// yields ErrOperationProposalResolved.
+func (s *OperationProposalService) Cancel(ctx context.Context, tenantID, actor, id string) error {
+	role, err := s.resolveRole(ctx, tenantID, actor)
+	if err != nil {
+		return err
+	}
+	proposal, err := s.repo.GetByID(ctx, tenantID, id)
+	if err != nil {
+		return err
+	}
+	// 归属校验（用 proposal.ProposerID 而非信任调用方身份，防旁路）：非 admin/owner
+	// 且非发起人时 fail-closed。
+	if role != "admin" && role != "owner" && proposal.ProposerID != actor {
+		return domain.ErrProposalForbidden
+	}
+	reason := "cancelled_by_initiator"
+	if proposal.ProposerID != actor {
+		reason = "cancelled_by_approver"
+	}
+	if err := s.repo.UpdateStatus(ctx, tenantID, id, domain.OpCancelled, actor, reason); err != nil {
+		return err
+	}
+	s.metrics.IncOperationProposal(proposal.OpType, "cancelled")
+	return nil
+}
+
 // approveGrantEditor executes a grant_editor approval: the whitelist grant is
 // applied immediately (approval IS the grant — no proposer replay, unlike
 // self_modify), then the proposal is moved straight to the terminal executed
@@ -225,14 +273,27 @@ func (s *OperationProposalService) approveGrantEditor(ctx context.Context, tenan
 	return nil
 }
 
+// resolveRole resolves the actor's tenant role; nil resolver, empty identity
+// or a lookup failure fail closed (单事实源：角色现查，不信任客户端声明)。
+func (s *OperationProposalService) resolveRole(ctx context.Context, tenantID, userID string) (string, error) {
+	if s.roles == nil || tenantID == "" || userID == "" {
+		return "", domain.ErrProposalForbidden
+	}
+	role, err := s.roles.ResolveTenantRole(ctx, tenantID, userID)
+	if err != nil {
+		return "", domain.ErrProposalForbidden
+	}
+	return role, nil
+}
+
 // authorizeReviewer fails closed: nil resolver, empty identity, role lookup
 // failure, or a non-admin/owner role all deny the action.
 func (s *OperationProposalService) authorizeReviewer(ctx context.Context, tenantID, userID string) error {
-	if s.roles == nil || tenantID == "" || userID == "" {
-		return domain.ErrProposalForbidden
+	role, err := s.resolveRole(ctx, tenantID, userID)
+	if err != nil {
+		return err
 	}
-	role, err := s.roles.ResolveTenantRole(ctx, tenantID, userID)
-	if err != nil || (role != "admin" && role != "owner") {
+	if role != "admin" && role != "owner" {
 		return domain.ErrProposalForbidden
 	}
 	return nil

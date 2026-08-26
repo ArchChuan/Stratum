@@ -16,6 +16,10 @@ const (
 	// OpExecuted is the terminal state after an approved proposal is
 	// consumed by a single replay (single-use approval).
 	OpExecuted OpProposalStatus = "executed"
+	// OpCancelled is the terminal state after the proposer withdraws a
+	// pending proposal (or an admin/owner cancels it on their behalf). It is
+	// not pending and does not block a fresh proposal for the same content.
+	OpCancelled OpProposalStatus = "cancelled"
 )
 
 // OperationProposal is a pending agent mutation that requires approval.

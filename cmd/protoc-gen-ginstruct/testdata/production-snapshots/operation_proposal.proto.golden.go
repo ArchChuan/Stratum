@@ -30,3 +30,10 @@ type OperationProposalResponse struct {
 	ResolvedAt         *time.Time              `json:"resolvedAt,omitempty"`
 	ExpiresAt          *time.Time              `json:"expiresAt,omitempty"`
 }
+
+type OperationProposalPageResponse struct {
+	Proposals []OperationProposalResponse `json:"proposals"`
+	Total     int32                       `json:"total"`
+	Page      int32                       `json:"page"`
+	PageSize  int32                       `json:"pageSize"`
+}

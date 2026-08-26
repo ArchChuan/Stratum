@@ -240,8 +240,39 @@ func TestEmbedBatchUsesDefaultBatchSizeWhenProviderReturnsNonPositive(t *testing
 	if len(mock.requests) != 2 {
 		t.Fatalf("expected default batch size to split 101 texts into 2 calls, got %d", len(mock.requests))
 	}
-	if len(mock.requests[0].Input) != 100 || len(mock.requests[1].Input) != 1 {
-		t.Fatalf("expected batch sizes 100 and 1, got %d and %d", len(mock.requests[0].Input), len(mock.requests[1].Input))
+	if len(mock.requests[0].Input) != defaultBatchSize || len(mock.requests[1].Input) != 101-defaultBatchSize {
+		t.Fatalf("expected batch sizes %d and %d, got %d and %d",
+			defaultBatchSize, 101-defaultBatchSize, len(mock.requests[0].Input), len(mock.requests[1].Input))
+	}
+}
+
+// TestEmbedBatchSplitsOver64Chunks guards the production incident where a
+// 72-chunk built-in document exceeded Zhipu embedding-3's 64-per-request cap
+// (HTTP 400) because the default batch size was 100. A batch of 72 must be
+// split into 64 + 8 so no single request exceeds the provider limit.
+func TestEmbedBatchSplitsOver64Chunks(t *testing.T) {
+	logger := zap.NewNop()
+	mock := &mockEmbeddingClient{batchSize: defaultBatchSize}
+	service := NewEmbeddingServiceWithModel(mock, "embedding-3", logger)
+
+	texts := make([]string, 72)
+	for i := range texts {
+		texts[i] = fmt.Sprintf("chunk-%d", i)
+	}
+
+	got, err := service.EmbedBatch(context.Background(), texts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != len(texts) {
+		t.Fatalf("expected %d vectors, got %d", len(texts), len(got))
+	}
+	if len(mock.requests) != 2 {
+		t.Fatalf("expected 72 texts to split into 2 calls, got %d", len(mock.requests))
+	}
+	if len(mock.requests[0].Input) != 64 || len(mock.requests[1].Input) != 8 {
+		t.Fatalf("expected batches of 64 and 8, got %d and %d",
+			len(mock.requests[0].Input), len(mock.requests[1].Input))
 	}
 }
 
