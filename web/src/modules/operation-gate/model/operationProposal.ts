@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const opProposalStatusSchema = z.enum(['proposed', 'reviewing', 'approved', 'rejected', 'executed']);
+export const opProposalStatusSchema = z.enum(['proposed', 'reviewing', 'approved', 'rejected', 'executed', 'cancelled']);
 export type OpProposalStatus = z.infer<typeof opProposalStatusSchema>;
 
 export const opTypeSchema = z.enum(['revision_apply', 'cross_agent_delegate', 'schedule_create', 'self_modify', 'grant_editor']);
@@ -29,6 +29,16 @@ export const operationProposalListSchema = z.object({
   proposals: z.array(operationProposalSchema),
 });
 export type OperationProposalList = z.infer<typeof operationProposalListSchema>;
+
+// 分页历史响应（后端 GET /operation-proposals/history）：非 pending 终态按角色过滤，
+// admin/owner 全租户、member 仅本人。
+export const operationProposalPageSchema = z.object({
+  proposals: z.array(operationProposalSchema),
+  total: z.number(),
+  page: z.number(),
+  pageSize: z.number(),
+});
+export type OperationProposalPage = z.infer<typeof operationProposalPageSchema>;
 
 export const selfModifyResultSchema = z.object({
   status: z.enum(['pending_approval', 'approved']),
@@ -60,6 +70,7 @@ export const STATUS_LABELS: Record<string, string> = {
   approved: '已批准',
   rejected: '已拒绝',
   executed: '已执行',
+  cancelled: '已取消',
 };
 export const STATUS_COLORS: Record<string, string> = {
   proposed: 'orange',
@@ -67,4 +78,12 @@ export const STATUS_COLORS: Record<string, string> = {
   approved: 'green',
   rejected: 'red',
   executed: 'default',
+  cancelled: 'default',
+};
+
+// 审批中心/铃铛展示用：grant_editor 提案复用 agentId 承载任意资源 id（skill/knowledge_doc），
+// 优先展示 payloadSummary.resourceName（「workspace/文档标题」等），回退 agentId / 提案 id。
+export const proposalResourceLabel = (p: Pick<OperationProposal, 'payloadSummary' | 'agentId' | 'id'>): string => {
+  const ps = (p.payloadSummary ?? {}) as { resourceName?: string };
+  return ps.resourceName || p.agentId || p.id;
 };

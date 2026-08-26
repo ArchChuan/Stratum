@@ -212,7 +212,7 @@ CREATE TABLE IF NOT EXISTS operation_proposals (
     max_daily_executions INT  NOT NULL DEFAULT 0,
     fingerprint          TEXT NOT NULL CHECK (fingerprint <> ''),
     payload_summary      JSONB NOT NULL DEFAULT '{}',
-    status               TEXT NOT NULL CHECK (status IN ('proposed','reviewing','approved','rejected','executed')),
+    status               TEXT NOT NULL CHECK (status IN ('proposed','reviewing','approved','rejected','executed','cancelled')),
     proposer_id          TEXT NOT NULL DEFAULT '',
     reviewed_by          TEXT NOT NULL DEFAULT '',
     review_note          TEXT NOT NULL DEFAULT '',
@@ -232,6 +232,10 @@ CREATE INDEX IF NOT EXISTS idx_operation_proposals_pending ON operation_proposal
 CREATE INDEX IF NOT EXISTS idx_operation_proposals_agent    ON operation_proposals(agent_id, op_type);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_operation_proposals_open_fingerprint
     ON operation_proposals(fingerprint) WHERE status IN ('proposed','reviewing','approved');
+-- cancelled 终态（发起人自撤/admin 代撤）：历史租户升级走幂等 DROP/ADD
+ALTER TABLE operation_proposals DROP CONSTRAINT IF EXISTS operation_proposals_status_check;
+ALTER TABLE operation_proposals ADD CONSTRAINT operation_proposals_status_check
+    CHECK (status IN ('proposed','reviewing','approved','rejected','executed','cancelled'));
 
 CREATE TABLE IF NOT EXISTS operation_usage (
     agent_id   TEXT NOT NULL,
