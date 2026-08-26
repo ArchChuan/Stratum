@@ -292,7 +292,7 @@ func TestSystemAssistantTreatsStaleModelAsUnavailable(t *testing.T) {
 func TestBuildExecutionArtifactsPreservesAssistantFailureAsEvidenceGap(t *testing.T) {
 	artifacts := buildExecutionArtifacts([]domain.SystemAssistantToolArtifact{{
 		Tool: domain.SystemAssistantToolSearchOfficialDocs, Outcome: "error", ErrorCode: "not_found",
-	}}, domain.CurrentSystemAssistantProfileVersion)
+	}}, domain.CurrentExecutionArtifactProfileVersion)
 	require.Len(t, artifacts, 1)
 	require.NotNil(t, artifacts[0].DiagnosticReport)
 	require.Equal(t, "not_found", artifacts[0].DiagnosticReport.EvidenceGaps[0].Code)

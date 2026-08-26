@@ -31,7 +31,7 @@ func TestAuthorizeTool(t *testing.T) {
 		{name: "unclassified", mutate: func(r *ToolAuthorizationRequest) { r.RiskLevel = ToolRiskUnclassified }, effect: ToolAuthorizationRequireApproval, reason: ToolReasonToolUnclassified},
 		{name: "read", mutate: func(r *ToolAuthorizationRequest) { r.RiskLevel = ToolRiskRead }, effect: ToolAuthorizationAllow, reason: ToolReasonRiskAllowed},
 		{name: "reversible write", mutate: func(r *ToolAuthorizationRequest) { r.RiskLevel = ToolRiskWriteReversible }, effect: ToolAuthorizationAllow, reason: ToolReasonRiskAllowed},
-		{name: "destructive", mutate: func(r *ToolAuthorizationRequest) { r.RiskLevel = ToolRiskDestructive }, effect: ToolAuthorizationRequireApproval, reason: ToolReasonApprovalRequired},
+		{name: "destructive", mutate: func(r *ToolAuthorizationRequest) { r.RiskLevel = ToolRiskDestructive }, effect: ToolAuthorizationAllow, reason: ToolReasonRiskAllowed},
 	}
 
 	for _, tt := range tests {
@@ -40,49 +40,6 @@ func TestAuthorizeTool(t *testing.T) {
 			tt.mutate(&req)
 
 			decision := AuthorizeTool(req)
-
-			if decision.Effect != tt.effect || decision.Reason != tt.reason {
-				t.Fatalf("decision=(%q,%q), want (%q,%q)", decision.Effect, decision.Reason, tt.effect, tt.reason)
-			}
-		})
-	}
-}
-
-func TestAuthorizeSystemAssistantTool(t *testing.T) {
-	base := ToolAuthorizationRequest{
-		TenantID:        "tenant-1",
-		UserID:          "user-1",
-		ToolID:          "mcp:orders:get_order",
-		UserActive:      true,
-		UserAllowsTool:  true,
-		AgentAllowsTool: true,
-		PolicyResolved:  true,
-		RiskLevel:       ToolRiskRead,
-	}
-
-	tests := []struct {
-		name   string
-		mutate func(*ToolAuthorizationRequest)
-		effect ToolAuthorizationEffect
-		reason ToolAuthorizationReason
-	}{
-		{name: "missing tenant", mutate: func(r *ToolAuthorizationRequest) { r.TenantID = "" }, effect: ToolAuthorizationDeny, reason: ToolReasonTenantContextMissing},
-		{name: "inactive user", mutate: func(r *ToolAuthorizationRequest) { r.UserActive = false }, effect: ToolAuthorizationDeny, reason: ToolReasonUserInactive},
-		{name: "user denied", mutate: func(r *ToolAuthorizationRequest) { r.UserAllowsTool = false }, effect: ToolAuthorizationDeny, reason: ToolReasonUserPermissionDenied},
-		{name: "agent denied", mutate: func(r *ToolAuthorizationRequest) { r.AgentAllowsTool = false }, effect: ToolAuthorizationDeny, reason: ToolReasonToolNotAllowlisted},
-		{name: "policy lookup failed", mutate: func(r *ToolAuthorizationRequest) { r.PolicyResolved = false }, effect: ToolAuthorizationDeny, reason: ToolReasonPolicyLookupFailed},
-		{name: "unclassified", mutate: func(r *ToolAuthorizationRequest) { r.RiskLevel = ToolRiskUnclassified }, effect: ToolAuthorizationDeny, reason: ToolReasonToolUnclassified},
-		{name: "read", mutate: func(r *ToolAuthorizationRequest) { r.RiskLevel = ToolRiskRead }, effect: ToolAuthorizationAllow, reason: ToolReasonRiskAllowed},
-		{name: "reversible write", mutate: func(r *ToolAuthorizationRequest) { r.RiskLevel = ToolRiskWriteReversible }, effect: ToolAuthorizationRequireApproval, reason: ToolReasonApprovalRequired},
-		{name: "destructive", mutate: func(r *ToolAuthorizationRequest) { r.RiskLevel = ToolRiskDestructive }, effect: ToolAuthorizationDeny, reason: ToolReasonDestructiveForbidden},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := base
-			tt.mutate(&req)
-
-			decision := AuthorizeSystemAssistantTool(req)
 
 			if decision.Effect != tt.effect || decision.Reason != tt.reason {
 				t.Fatalf("decision=(%q,%q), want (%q,%q)", decision.Effect, decision.Reason, tt.effect, tt.reason)

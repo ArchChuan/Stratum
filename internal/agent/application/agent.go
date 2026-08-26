@@ -675,7 +675,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			execErr = fmt.Errorf("unknown agent type: %s", snap.agentType)
 		}
 	}
-	result.Artifacts = buildExecutionArtifacts(result.AssistantToolArtifacts, cfg.EvolutionTrace.ResourceManifest["system-assistant-profile"])
+	result.Artifacts = buildExecutionArtifacts(result.AssistantToolArtifacts, domain.CurrentExecutionArtifactProfileVersion)
 
 	a.persistChatMessages(ctx, tracer, snap.chatStore, cfg, result, snap.agentID, snap.memoryScope, execErr)
 

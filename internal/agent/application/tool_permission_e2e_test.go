@@ -53,7 +53,10 @@ func TestToolPermissionE2EForgedCallNeverReachesMCP(t *testing.T) {
 	require.Equal(t, domain.ToolTraceStatusError, out.ToolObservations[0].Status)
 }
 
-func TestToolPermissionE2EDestructiveCallPausesBeforeMCP(t *testing.T) {
+// 统一授权模型下：未配置 policy（policy_resolved=false）的 destructive 工具
+// 调用 → require_approval 暂停（不进 MCP executor）；管理员配置后（resolved=true）
+// 则直接放行（见 TestToolExecutionGuardSharedRiskModelForAllAgents）。
+func TestToolPermissionE2EUnconfiguredDestructiveCallPausesBeforeMCP(t *testing.T) {
 	llm := &toolPermissionLLM{responses: []port.CapabilityResponse{{ToolCalls: []port.ToolCall{{
 		ID: "delete-1", Name: "mcp:orders:delete", Arguments: map[string]any{"id": "order-1"},
 	}}}}}
@@ -120,7 +123,8 @@ func runToolPermissionLoop(
 		AvailableTools: []port.ToolDefinition{{
 			Name: "mcp:orders:delete", ProviderType: domain.ProviderTypeMCP,
 			ServerID: "orders", CapabilityID: "delete", InputSchema: map[string]any{"type": "object"},
-			Metadata: map[string]any{"risk_level": "destructive", "policy_resolved": true},
+			// 未配置 policy：destructive 需审批（见 TestToolPermissionE2EUnconfiguredDestructiveCallPausesBeforeMCP）。
+			Metadata: map[string]any{"risk_level": "destructive", "policy_resolved": false},
 		}},
 		ToolExecutionFn: execute,
 	}, graph.RunConfig[graph.ReActState]{MaxSteps: 5})
