@@ -420,61 +420,6 @@
       "body_hash": "fdaadd7ba135f74f2bf450fad7d73dbf252eb5c70514b3e63921dd9ce8218678"
     },
     {
-      "id": "internal/agent/application/agent_service.go:AgentService.Execute",
-      "file": "internal/agent/application/agent_service.go",
-      "name": "AgentService.Execute",
-      "cyclomatic": 14,
-      "cognitive": 15,
-      "lines": 83,
-      "max_nesting": 2,
-      "params": 4,
-      "body_hash": "c14a90fc533927331acd3537485acc8eea21075164d9172804dc015156750872"
-    },
-    {
-      "id": "internal/agent/application/agent_service.go:AgentService.ResumeToolApproval",
-      "file": "internal/agent/application/agent_service.go",
-      "name": "AgentService.ResumeToolApproval",
-      "cyclomatic": 14,
-      "cognitive": 15,
-      "lines": 67,
-      "max_nesting": 2,
-      "params": 3,
-      "body_hash": "b01a7795d3c31d4651c57c6ddd6a04d649340246b5c1bc9ee777f6601a438b80"
-    },
-    {
-      "id": "internal/agent/application/agent_service.go:AgentService.SnapshotRevision",
-      "file": "internal/agent/application/agent_service.go",
-      "name": "AgentService.SnapshotRevision",
-      "cyclomatic": 12,
-      "cognitive": 13,
-      "lines": 60,
-      "max_nesting": 2,
-      "params": 3,
-      "body_hash": "020c5644522b4a5bfc37facf0723f61e2e68d8be900edfcb181e36c0d3942b80"
-    },
-    {
-      "id": "internal/agent/application/agent_service.go:AgentService.assembleOptions",
-      "file": "internal/agent/application/agent_service.go",
-      "name": "AgentService.assembleOptions",
-      "cyclomatic": 58,
-      "cognitive": 113,
-      "lines": 286,
-      "max_nesting": 5,
-      "params": 5,
-      "body_hash": "83e7872671587e11bda52c3a6c6b31847779abc9b99d796b81d44bbfed93d48b"
-    },
-    {
-      "id": "internal/agent/application/agent_service.go:AgentService.updateSystemAssistant",
-      "file": "internal/agent/application/agent_service.go",
-      "name": "AgentService.updateSystemAssistant",
-      "cyclomatic": 12,
-      "cognitive": 17,
-      "lines": 41,
-      "max_nesting": 4,
-      "params": 3,
-      "body_hash": "41bab63df35b0ff6af17d11b9baba2fa1b36d726d3ad79d3a548cbbe760c4460"
-    },
-    {
       "id": "internal/agent/application/context_budget.go:BuildContextMessagesWithCompaction",
       "file": "internal/agent/application/context_budget.go",
       "name": "BuildContextMessagesWithCompaction",
@@ -2013,6 +1958,39 @@
       "max_nesting": 2,
       "params": 1,
       "body_hash": "22037e5abb58b1ecfc90f30b3974745061e36f1482a715ff3a8fca125e3bc3e3"
+    },
+    {
+      "id": "internal/agent/application/agent_approval.go:AgentService.ResumeToolApproval",
+      "file": "internal/agent/application/agent_approval.go",
+      "name": "AgentService.ResumeToolApproval",
+      "cyclomatic": 11,
+      "cognitive": 12,
+      "lines": 52,
+      "max_nesting": 2,
+      "params": 4,
+      "body_hash": "e9279b81d58f4e084ecf453d44f458ef2dac441296a5c8ee36e23319249baacc"
+    },
+    {
+      "id": "internal/agent/application/agent_crud.go:AgentService.SnapshotRevision",
+      "file": "internal/agent/application/agent_crud.go",
+      "name": "AgentService.SnapshotRevision",
+      "cyclomatic": 11,
+      "cognitive": 12,
+      "lines": 54,
+      "max_nesting": 2,
+      "params": 3,
+      "body_hash": "68f6df73ea041c1eed2e459cb6363fa797a588831ac6d25c146b1a80c587eef9"
+    },
+    {
+      "id": "internal/agent/application/agent_options.go:AgentService.assembleOptions",
+      "file": "internal/agent/application/agent_options.go",
+      "name": "AgentService.assembleOptions",
+      "cyclomatic": 53,
+      "cognitive": 102,
+      "lines": 265,
+      "max_nesting": 5,
+      "params": 5,
+      "body_hash": "205a53d7de041112337d57390d91ba1ccf0b0c76b12a1b98510f16f741ccd24f"
     }
   ]
 }
