@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // agentClient executes agents over the real Stratum HTTP endpoint. It
@@ -16,8 +17,9 @@ type agentClient struct {
 }
 
 // executeAgent runs one agent with a query and returns its result text.
-// ExecuteAgentRequest: {"query": "..."}. ExecuteAgentResponse:
-// {"result": <value>, "steps": [...], "status": "...", "error": "..."}.
+// ExecuteAgentRequest: {"query": "..."}. The server's 200 response is an
+// AgentExecutionResult carrying the final answer in output; every non-200 is
+// gated by classifyExecuteAgent (404 fatal, other 4xx case error, 5xx infra).
 func (a *agentClient) executeAgent(ctx context.Context, agentID, query string) (string, error) {
 	payload, err := json.Marshal(map[string]any{"query": query})
 	if err != nil {
@@ -32,37 +34,23 @@ func (a *agentClient) executeAgent(ctx context.Context, agentID, query string) (
 		return "", err
 	}
 	var resp struct {
-		Result any    `json:"result"`
-		Status string `json:"status"`
+		Output string `json:"output"`
 		Error  string `json:"error"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return "", &infraError{fmt.Errorf("decode execute agent response: %w", err)}
 	}
-	// A run that did not reach "completed" (e.g. "waiting_approval") never
-	// produced a real result. That is an agent-behavior outcome — a dataset or
-	// product defect — not an infrastructure break, so keep it a case error.
-	if resp.Status != "completed" {
+	// A 200 is a completed execution; a blank output means the run ended
+	// without a usable answer (e.g. an approval never resolved). That is an
+	// agent-behavior outcome — a dataset or product defect — not an
+	// infrastructure break, so keep it a case error.
+	if strings.TrimSpace(resp.Output) == "" {
 		if resp.Error != "" {
 			return "", fmt.Errorf("agent execution failed: %s", resp.Error)
 		}
-		return "", fmt.Errorf("agent execution did not complete: status %q", resp.Status)
-	}
-	// A completed run must carry a real result; a nil result would marshal to
-	// "null" and let a loose judge grade nothing against the criteria.
-	if resp.Result == nil {
 		return "", fmt.Errorf("agent execution completed without a result")
 	}
-	switch v := resp.Result.(type) {
-	case string:
-		return v, nil
-	default:
-		b, err := json.Marshal(v)
-		if err != nil {
-			return "", fmt.Errorf("encode agent result: %w", err)
-		}
-		return string(b), nil
-	}
+	return resp.Output, nil
 }
 
 // classifyExecuteAgent labels the agent execute response. A 404 means the
