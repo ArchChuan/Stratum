@@ -22,7 +22,7 @@ import (
 
 func TestProposalAgentResolveBaselineAcceptsSystemAssistantAndCreateSafeReadback(t *testing.T) {
 	agents := &proposalAgentFake{values: map[string]agentapp.AgentDTO{
-		agentdomain.SystemAssistantID: {ID: agentdomain.SystemAssistantID, SystemKey: agentdomain.SystemAssistantKey, Name: "平台助手", LLMModel: "qwen-plus"},
+		agentdomain.SystemAssistantID: {ID: agentdomain.SystemAssistantID, Name: "平台助手", LLMModel: "qwen-plus"},
 	}}
 	adapter := NewResourceChangeProposalAdapters(agents, nil, nil, nil)
 	baseline, err := adapter.ResolveBaseline(context.Background(), agentdomain.ResourceChangeProposal{
@@ -294,7 +294,7 @@ func TestApplyDirectAgentCreateAndUpdate(t *testing.T) {
 
 func TestApplyDirectAgentUpdateSystemAssistantSucceeds(t *testing.T) {
 	agents := &proposalAgentFake{values: map[string]agentapp.AgentDTO{
-		agentdomain.SystemAssistantID: {ID: agentdomain.SystemAssistantID, SystemKey: agentdomain.SystemAssistantKey, Name: "平台助手", LLMModel: "m"},
+		agentdomain.SystemAssistantID: {ID: agentdomain.SystemAssistantID, Name: "平台助手", LLMModel: "m"},
 	}}
 	adapter := NewResourceChangeProposalAdapters(agents, nil, nil, nil)
 	updated, err := adapter.ApplyDirect(context.Background(), "tenant-1", "user-1", agentdomain.ResourceAgent,

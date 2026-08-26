@@ -157,7 +157,7 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL, fixtureU
     await page.getByRole('button', { name: '保存修改' }).click();
     expect((await settingsResponse).status()).toBe(200);
     const savedSystemModel = await rows<{ llm_model: string }>(pool, tenantID,
-      "SELECT llm_model FROM agents WHERE system_key='stratum.platform_assistant'", []);
+      "SELECT llm_model FROM agents WHERE id='stratum-platform-assistant'", []);
     expect(savedSystemModel[0]?.llm_model).toBeTruthy();
     completed.push('agent.mutation.put.agents.platformSeed');
     recordEvidence(evidence, 'system assistant model settings');

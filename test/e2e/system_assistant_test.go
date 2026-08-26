@@ -205,11 +205,12 @@ func TestSystemAssistantTenantIsolationAndRoleScope(t *testing.T) {
 		ctx := assistantTenantContext(tenantID, users[tenantID][0], tenantdb.RoleTenantAdmin)
 		agents, err := repo.GetAll(ctx)
 		require.NoError(t, err)
+		// 等同化后（Q2）：seed「平台使用助手」行保留但不再带 system_key 标记，
+		// 按 id 识别，每租户恰好一个。
 		managed := 0
 		for _, item := range agents {
-			if item.SystemKey == domain.SystemAssistantKey {
+			if item.ID == domain.SystemAssistantID {
 				managed++
-				require.Equal(t, domain.SystemAssistantID, item.ID)
 			}
 		}
 		require.Equal(t, 1, managed, "each tenant must contain exactly one managed assistant")
@@ -297,8 +298,8 @@ func TestSystemAssistantOfficialDocsArtifactsAndAreaGap(t *testing.T) {
 	require.NoError(t, err)
 	message := &domain.ChatMessage{ConversationID: conversation.ID, Role: "assistant", Content: "诊断完成",
 		Artifacts: []domain.ExecutionArtifact{
-			{Type: "citations", ProfileVersion: domain.CurrentSystemAssistantProfileVersion, Citations: citations},
-			{Type: "diagnostic_report", ProfileVersion: domain.CurrentSystemAssistantProfileVersion, DiagnosticReport: report},
+			{Type: "citations", ProfileVersion: domain.CurrentExecutionArtifactProfileVersion, Citations: citations},
+			{Type: "diagnostic_report", ProfileVersion: domain.CurrentExecutionArtifactProfileVersion, DiagnosticReport: report},
 		},
 		SkipOutbox: true,
 	}
@@ -370,7 +371,7 @@ func TestSystemAssistantDeterministicAgentLoopPersistsTypedArtifacts(t *testing.
 	require.Equal(t, "citations", result.Artifacts[0].Type)
 	require.Equal(t, "diagnostic_report", result.Artifacts[1].Type)
 	for _, artifact := range result.Artifacts {
-		require.Equal(t, domain.CurrentSystemAssistantProfileVersion, artifact.ProfileVersion)
+		require.Equal(t, domain.CurrentExecutionArtifactProfileVersion, artifact.ProfileVersion)
 	}
 	require.Len(t, gateway.requests, 2)
 	// D6：工具全量暴露（不再按角色裁剪），确定性模型只选用 search/diagnose。
@@ -455,7 +456,7 @@ func TestSystemAssistantHTTPContractsUseRealHandlerServiceAndPostgres(t *testing
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, domain.SystemAssistantID, persisted.ID)
-	require.Equal(t, domain.SystemAssistantKey, persisted.SystemKey)
+	require.Empty(t, persisted.SystemKey, "等同化后 seed 行不再带 system_key 标记")
 	require.Equal(t, "tampered", persisted.Name, "普通字段经普通 Update 路径落库")
 	// 等同化后无专属保留：传入空数组按普通 replace 语义清空 seed 资源。
 	require.Empty(t, persisted.AllowedSkills)

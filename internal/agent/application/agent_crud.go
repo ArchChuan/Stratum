@@ -622,7 +622,6 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		DelegateEnabled:         cfg.DelegateEnabled,
 		DelegateMaxDepth:        cfg.DelegateMaxDepth,
 		DelegateDefaultMaxSteps: cfg.DelegateDefaultMaxSteps,
-		SystemKey:               cfg.SystemKey,
 		Parameters:              samplingParameterMap(cfg),
 	}
 }

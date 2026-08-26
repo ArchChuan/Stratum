@@ -238,7 +238,6 @@ type AgentDTO struct {
 	DelegateEnabled         bool
 	DelegateMaxDepth        int
 	DelegateDefaultMaxSteps int
-	SystemKey               string
 	Parameters              map[string]any
 	Editors                 []string
 }

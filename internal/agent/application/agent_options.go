@@ -118,9 +118,6 @@ func (s *AgentService) assembleOptions(
 	if evolutionTrace.ResourceManifest == nil {
 		evolutionTrace.ResourceManifest = make(map[string]string)
 	}
-	if a.GetConfig().SystemKey == domain.SystemAssistantKey {
-		evolutionTrace.ResourceManifest["system-assistant-profile"] = domain.CurrentSystemAssistantProfileVersion
-	}
 	if evolutionTrace.ExperimentAssignments == nil {
 		evolutionTrace.ExperimentAssignments = make(map[string]ExperimentAssignment)
 	}
@@ -283,7 +280,7 @@ func (s *AgentService) assembleOptions(
 	// 8 个内置运维工具的 in-process 能力闭包对所有 agent 注入（等化后通用；
 	// 写路径角色门禁在闭包内按 roleClass fail-closed）。
 	options = append(options, s.assistantExecutionOptions(ctx, meta, req, roleClass, authorization,
-		evolutionTrace.ResourceManifest["system-assistant-profile"], a.GetConfig().ID)...)
+		domain.CurrentExecutionArtifactProfileVersion, a.GetConfig().ID)...)
 	return ctx, s.resolveEffectiveParameters(ctx, a, options), nil
 }
 
