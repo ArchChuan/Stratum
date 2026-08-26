@@ -94,19 +94,35 @@ func TestJudgeBearerInHeaderOnly(t *testing.T) {
 	if authHeader != "Bearer secret-key" {
 		t.Fatalf("Authorization = %q, want Bearer secret-key", authHeader)
 	}
-	if reqPath != "/v1/chat/completions" {
-		t.Fatalf("judge path = %q, want /v1/chat/completions", reqPath)
+	if reqPath != "/chat/completions" {
+		t.Fatalf("judge path = %q, want /chat/completions", reqPath)
 	}
 }
 
-// TestJudgeBaseURLNormalizesV1 pins the guidance that both
-// https://api.openai.com and https://api.openai.com/v1 work (no double /v1).
-func TestJudgeBaseURLNormalizesV1(t *testing.T) {
-	if got := newJudgeClient(&judgeConfig{BaseURL: "https://api.openai.com/v1/", Model: "m"}, "").baseURL; got != "https://api.openai.com" {
-		t.Fatalf("baseURL = %q, want trailing /v1 stripped", got)
+// TestJudgeBaseURLKeepsVersionSegment pins that baseURL carries the full
+// OpenAI-compatible prefix including its API version segment — OpenAI /v1,
+// Zhipu /api/paas/v4 — so the request path never guesses or strips a version.
+func TestJudgeBaseURLKeepsVersionSegment(t *testing.T) {
+	cases := map[string]string{
+		"https://open.bigmodel.cn/api/paas/v4":  "https://open.bigmodel.cn/api/paas/v4",
+		"https://open.bigmodel.cn/api/paas/v4/": "https://open.bigmodel.cn/api/paas/v4",
+		"https://api.openai.com/v1":             "https://api.openai.com/v1",
+		"https://api.openai.com/v1/":            "https://api.openai.com/v1",
 	}
-	if got := newJudgeClient(&judgeConfig{BaseURL: "https://api.openai.com", Model: "m"}, "").baseURL; got != "https://api.openai.com" {
-		t.Fatalf("baseURL = %q, want unchanged", got)
+	for in, want := range cases {
+		if got := newJudgeClient(&judgeConfig{BaseURL: in, Model: "m"}, "").baseURL; got != want {
+			t.Fatalf("baseURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestJudgeBaseURLExpandsEnv pins that ${ENV} references in baseURL are
+// expanded at client construction, so the endpoint can be injected per
+// environment (e.g. LLM_BASE_URL pointing at Zhipu in dev).
+func TestJudgeBaseURLExpandsEnv(t *testing.T) {
+	t.Setenv("LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+	if got := newJudgeClient(&judgeConfig{BaseURL: "${LLM_BASE_URL}", Model: "m"}, "").baseURL; got != "https://open.bigmodel.cn/api/paas/v4" {
+		t.Fatalf("baseURL = %q, want env-expanded endpoint", got)
 	}
 }
 
