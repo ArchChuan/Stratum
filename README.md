@@ -5,8 +5,7 @@
 **企业级 AI 原生应用编排平台 · DDD 分层架构 · 多租户隔离**
 
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-101.200.181.141%3A8443-2ea44f?style=flat&logo=vercel&logoColor=white)](https://101.200.181.141:8443)
-[![CI](https://github.com/byteBuilderX/stratum/actions/workflows/ci.yml/badge.svg)](https://github.com/byteBuilderX/stratum/actions/workflows/ci.yml)
-[![Stateful E2E](https://github.com/byteBuilderX/stratum/actions/workflows/stateful-e2e.yml/badge.svg)](https://github.com/byteBuilderX/stratum/actions/workflows/stateful-e2e.yml)
+[![CI](https://github.com/ArchChuan/Stratum/actions/workflows/ci.yml/badge.svg)](https://github.com/ArchChuan/Stratum/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](go.mod)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)](web/package.json)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
@@ -142,8 +141,8 @@ Stratum 是一套面向私有化部署的 AI 应用底座。后端用 Go 实现�
 
 ```bash
 # 1. 克隆并装依赖
-git clone https://github.com/byteBuilderX/stratum.git
-cd stratum
+git clone https://github.com/ArchChuan/Stratum.git
+cd Stratum
 cp .env.example .env          # 填入 GitHub OAuth、LLM API Key 等
 
 # 2. 拉起本地基础设施（Postgres · Redis · NATS · Milvus）
