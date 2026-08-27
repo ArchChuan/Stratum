@@ -1,4 +1,4 @@
-import { DeleteOutlined, EditOutlined, PlayCircleOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, EyeOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import { Button, Card, Space, Tag, Typography } from 'antd';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
 
@@ -18,6 +18,7 @@ export const WorkflowCatalogTable = ({
   pagination,
   emptyText,
   canManage,
+  onView,
   onRun,
   onEdit,
   onDelete,
@@ -28,6 +29,7 @@ export const WorkflowCatalogTable = ({
   pagination: TablePaginationConfig;
   emptyText: string;
   canManage: boolean;
+  onView: (workflow: WorkflowSummary) => void;
   onRun: (workflow: WorkflowSummary) => void;
   onEdit: (workflow: WorkflowSummary) => void;
   onDelete: (workflow: WorkflowSummary) => void;
@@ -41,8 +43,9 @@ export const WorkflowCatalogTable = ({
     { title: '草稿', dataIndex: 'revision', key: 'revision', width: 110, render: (revision) => <Tag>修订 {revision}</Tag> },
     { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', width: 150, render: formatTime },
     {
-      title: '操作', key: 'actions', width: canManage ? 320 : 120,
+      title: '操作', key: 'actions', width: canManage ? 420 : 200,
       render: (_, workflow) => <Space>
+        <Button aria-label="查看详情" type="link" icon={<EyeOutlined />} onClick={() => onView(workflow)}>详情</Button>
         <Button aria-label="运行工作流" type="link" icon={<PlayCircleOutlined />} onClick={() => onRun(workflow)}>运行工作流</Button>
         {canManage && <Button aria-label="编辑草稿" type="link" icon={<EditOutlined />} onClick={() => onEdit(workflow)}>编辑草稿</Button>}
         {canManage && <DangerPopconfirm
@@ -72,6 +75,7 @@ export const WorkflowCatalogTable = ({
       <Paragraph>{workflow.description || '暂无说明'}</Paragraph>
       <Space><Tag>修订 {workflow.revision}</Tag><Text type="secondary">{formatTime(workflow.updated_at)}</Text></Space>
       <div className="workflow-card-actions">
+        <Button aria-label="查看详情" icon={<EyeOutlined />} onClick={() => onView(workflow)}>详情</Button>
         <Button aria-label="运行工作流" type="primary" ghost icon={<PlayCircleOutlined />} onClick={() => onRun(workflow)}>运行工作流</Button>
         {canManage && <Button aria-label="编辑草稿" icon={<EditOutlined />} onClick={() => onEdit(workflow)}>编辑草稿</Button>}
         {canManage && <DangerPopconfirm

@@ -21,6 +21,7 @@ type workflowDefinitionService interface {
 	Delete(context.Context, string, string, string) error
 	Validate(context.Context, string, string) error
 	Publish(context.Context, string, string, string) (*workflowdomain.Version, error)
+	Rollback(context.Context, string, string, string, string) (*workflowdomain.Definition, error)
 	Get(context.Context, string, string) (*workflowdomain.Definition, error)
 	GetVersion(context.Context, string, string) (*workflowdomain.Version, error)
 	ListDefinitions(context.Context, string, workflowapp.ListDefinitionsQuery) (workflowapp.DefinitionPage, error)
@@ -229,6 +230,36 @@ func (h *WorkflowHandler) PublishDefinition(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, version)
+}
+
+// rollbackDefinitionRequest 回退请求体：仅指定目标历史版本，actor 来自认证上下文。
+type rollbackDefinitionRequest struct {
+	VersionID string `json:"versionId" binding:"required"`
+}
+
+// RollbackDefinition 把工作流生效指针回退到指定历史版本（不产生新版本）。
+func (h *WorkflowHandler) RollbackDefinition(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	actor, ok := workflowActor(c)
+	if !ok {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, fmt.Errorf("authenticated actor required")))
+		return
+	}
+	var req rollbackDefinitionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	definition, err := h.definitions.Rollback(c.Request.Context(), tenantID, c.Param("id"), req.VersionID, actor.UserID)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, definition)
 }
 
 func (h *WorkflowHandler) StartRun(c *gin.Context) {

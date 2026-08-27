@@ -29,6 +29,9 @@ type VersionRepository interface {
 	CreateVersion(context.Context, string, *domain.Version, *auditdomain.ResourceChangeAuditEvent) error
 	GetVersion(context.Context, string, string) (*domain.Version, error)
 	NextVersionNumber(context.Context, string, string) (int64, error)
+	// SetActiveVersion 把生效指针指回历史已发布版本（回退，不产生新版本）；
+	// 事务内更新 active_version_id 并写入审计。目标版本归属由调用方校验。
+	SetActiveVersion(context.Context, string, string, string, *auditdomain.ResourceChangeAuditEvent) error
 }
 
 type VersionListQuery struct {
