@@ -42,45 +42,31 @@ func TestNewMCPServerConfigResponseOmitsCredentials(t *testing.T) {
 	}
 }
 
-func TestMCPServerConfigRequestTracksSystemKeyPresence(t *testing.T) {
+func TestMCPServerConfigRequestIgnoresSystemKey(t *testing.T) {
 	t.Parallel()
 
-	for _, tt := range []struct {
-		name    string
-		body    string
-		wantErr bool
-	}{
-		{name: "absent", body: `{}`},
-		{name: "null", body: `{"system_key":null}`, wantErr: true},
-		{name: "string", body: `{"system_key":"stratum.platform_mcp"}`, wantErr: true},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			var req MCPServerConfigRequest
-			if err := json.Unmarshal([]byte(tt.body), &req); err != nil {
-				t.Fatal(err)
-			}
-			_, err := req.ServerConfig()
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("ServerConfig error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
+	for _, body := range []string{`{}`, `{"system_key":null}`, `{"system_key":"stratum.platform_mcp"}`} {
+		var req MCPServerConfigRequest
+		if err := json.Unmarshal([]byte(body), &req); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := req.ServerConfig(); err != nil {
+			t.Fatalf("ServerConfig err for %s = %v, want nil: system_key 已随契约删除,外部提交由 json.Unmarshal 静默忽略", body, err)
+		}
 	}
 }
 
-func TestMCPServerConfigResponseExposesModeWithoutSystemKey(t *testing.T) {
+func TestMCPServerConfigResponseOmitsDeadFields(t *testing.T) {
 	t.Parallel()
-	body, err := json.Marshal(NewMCPServerConfigResponse(&domain.ServerConfig{
-		ID: "managed", SystemKey: "secret-identity", ManagementMode: "platform_managed",
-	}))
+	body, err := json.Marshal(NewMCPServerConfigResponse(&domain.ServerConfig{ID: "managed"}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	serialized := string(body)
-	if !strings.Contains(serialized, `"management_mode":"platform_managed"`) {
-		t.Fatalf("response omitted management mode: %s", serialized)
-	}
-	if strings.Contains(serialized, "secret-identity") || strings.Contains(serialized, "system_key") {
-		t.Fatalf("response exposed system identity: %s", serialized)
+	for _, forbidden := range []string{"system_key", "management_mode", "platform_managed", "secret-identity"} {
+		if strings.Contains(serialized, forbidden) {
+			t.Fatalf("response exposed dead field %q: %s", forbidden, serialized)
+		}
 	}
 }
 

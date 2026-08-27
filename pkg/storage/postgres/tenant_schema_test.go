@@ -2,15 +2,12 @@ package postgres_test
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
-	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 
-	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres/postgrestest"
 	"github.com/stretchr/testify/require"
@@ -21,8 +18,9 @@ func TestTenantSchemaCleansUpPlatformMCPRows(t *testing.T) {
 	require.NoError(t, err)
 	sql := string(data)
 
-	require.Contains(t, sql, "system_key TEXT")
-	require.Contains(t, sql, "management_mode TEXT NOT NULL DEFAULT 'tenant_managed'")
+	require.Contains(t, sql, "ALTER TABLE agents DROP COLUMN IF EXISTS system_key")
+	require.Contains(t, sql, "ALTER TABLE mcp_configs DROP COLUMN IF EXISTS system_key")
+	require.Contains(t, sql, "ALTER TABLE mcp_configs DROP COLUMN IF EXISTS management_mode")
 	require.Contains(t, sql, "stratum-platform-assistant")
 	require.Contains(t, sql, "DELETE FROM agent_mcp_tool_links WHERE server_id = 'stratum-platform-mcp'")
 	require.Contains(t, sql, "DELETE FROM mcp_configs WHERE id = 'stratum-platform-mcp'")
@@ -44,35 +42,6 @@ func TestTenantSchemaAllowsGrantEditorOpType(t *testing.T) {
 		`op_type              TEXT NOT NULL CHECK (op_type IN ('revision_apply','cross_agent_delegate','schedule_create','self_modify','grant_editor'))`)
 	require.Contains(t, sql, "ALTER TABLE operation_proposals DROP CONSTRAINT IF EXISTS operation_proposals_op_type_check")
 	require.Contains(t, sql, "ADD CONSTRAINT operation_proposals_op_type_check")
-}
-
-func TestTenantSchemaPlatformMCPDomainIdentityFieldsAreProtected(t *testing.T) {
-	for _, target := range []struct {
-		name string
-		typ  reflect.Type
-	}{
-		{name: "ServerConfig", typ: reflect.TypeOf(mcpdomain.ServerConfig{})},
-		{name: "Server", typ: reflect.TypeOf(mcpdomain.Server{})},
-	} {
-		systemKey, ok := target.typ.FieldByName("SystemKey")
-		require.True(t, ok, "%s.SystemKey must exist", target.name)
-		require.Equal(t, "-", systemKey.Tag.Get("json"))
-		require.Equal(t, "-", systemKey.Tag.Get("yaml"))
-
-		managementMode, ok := target.typ.FieldByName("ManagementMode")
-		require.True(t, ok, "%s.ManagementMode must exist", target.name)
-		require.Equal(t, "management_mode", managementMode.Tag.Get("json"))
-		require.Equal(t, "management_mode", managementMode.Tag.Get("yaml"))
-	}
-
-	var cfg mcpdomain.ServerConfig
-	require.NoError(t, json.Unmarshal([]byte(`{
-		"system_key":"stratum.platform_mcp",
-		"management_mode":"platform_managed"
-	}`), &cfg))
-	value := reflect.ValueOf(cfg)
-	require.Empty(t, value.FieldByName("SystemKey").String(), "public JSON binding must ignore system_key")
-	require.Equal(t, "platform_managed", value.FieldByName("ManagementMode").String())
 }
 
 func TestTenantSchemaDefaultsSystemAssistantModelWithoutOverwritingTenantChoice(t *testing.T) {
@@ -103,19 +72,17 @@ func TestTenantSchemaContainsSystemAssistantIdentityAndSeed(t *testing.T) {
 	}
 	sql := string(data)
 	createAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS agents")
-	columnAt := strings.Index(sql, "ALTER TABLE agents ADD COLUMN IF NOT EXISTS system_key TEXT")
-	indexAt := strings.Index(sql, "CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_system_key")
+	dropColumnAt := strings.Index(sql, "ALTER TABLE agents DROP COLUMN IF EXISTS system_key")
 	seedAt := strings.Index(sql, "'stratum-platform-assistant'")
-	if createAt == -1 || columnAt == -1 || indexAt == -1 || seedAt == -1 {
-		t.Fatalf("tenant schema missing managed assistant DDL: create=%d column=%d index=%d seed=%d",
-			createAt, columnAt, indexAt, seedAt)
+	if createAt == -1 || dropColumnAt == -1 || seedAt == -1 {
+		t.Fatalf("tenant schema missing managed assistant DDL: create=%d dropColumn=%d seed=%d",
+			createAt, dropColumnAt, seedAt)
 	}
-	if createAt >= columnAt || columnAt >= indexAt || indexAt >= seedAt {
-		t.Fatalf("managed assistant DDL must follow create/alter/index/seed order: create=%d column=%d index=%d seed=%d",
-			createAt, columnAt, indexAt, seedAt)
+	if createAt >= dropColumnAt || dropColumnAt >= seedAt {
+		t.Fatalf("managed assistant DDL must follow create/drop-column/seed order: create=%d dropColumn=%d seed=%d",
+			createAt, dropColumnAt, seedAt)
 	}
 	for _, want := range []string{
-		"ON agents(system_key) WHERE system_key IS NOT NULL",
 		"'stratum-platform-assistant'",
 		"'平台使用助手'",
 		"WHILE EXISTS",

@@ -935,7 +935,6 @@ type mcpConfigRow struct {
 	id, name, transport, command, url, version, createdBy string
 	args, env, caps, headers, authCfg, retryCfg           []byte
 	timeoutSec                                            int
-	systemKey, managementMode                             string
 }
 
 func (m *ClientManager) restoreTenantServers(ctx context.Context, tenantID string) error {
@@ -972,7 +971,7 @@ func (m *ClientManager) loadMCPConfigRows(ctx context.Context, _ string) ([]mcpC
 		pgRows, qErr := tx.Query(qctx, `
 			SELECT id, name, transport, command, url, version,
 			       args, env, capabilities, headers, auth_config, retry_config, timeout_sec,
-			       COALESCE(system_key, ''), management_mode, COALESCE(created_by, '')
+			       COALESCE(created_by, '')
 			FROM mcp_configs WHERE enabled = true`)
 		if qErr != nil {
 			return fmt.Errorf("restore mcp_configs query: %w", qErr)
@@ -982,7 +981,7 @@ func (m *ClientManager) loadMCPConfigRows(ctx context.Context, _ string) ([]mcpC
 			var r mcpConfigRow
 			if sErr := pgRows.Scan(&r.id, &r.name, &r.transport, &r.command, &r.url, &r.version,
 				&r.args, &r.env, &r.caps, &r.headers, &r.authCfg, &r.retryCfg, &r.timeoutSec,
-				&r.systemKey, &r.managementMode, &r.createdBy); sErr != nil {
+				&r.createdBy); sErr != nil {
 				return fmt.Errorf("restore mcp_configs scan: %w", sErr)
 			}
 			rows = append(rows, r)
@@ -1025,10 +1024,8 @@ func (m *ClientManager) configFromDBRow(r mcpConfigRow) (*MCPServerConfig, error
 		Command: r.command, URL: r.url, Version: r.version,
 		Args: args, Env: env, Capabilities: caps, Headers: headers,
 		Auth: auth, Retry: retry,
-		Timeout:        time.Duration(r.timeoutSec) * time.Second,
-		SystemKey:      r.systemKey,
-		ManagementMode: r.managementMode,
-		CreatedBy:      r.createdBy,
+		Timeout:   time.Duration(r.timeoutSec) * time.Second,
+		CreatedBy: r.createdBy,
 	}, nil
 }
 
@@ -1364,11 +1361,11 @@ func (m *ClientManager) GetServerConfig(ctx context.Context, serverID string) (*
 		return tx.QueryRow(ctx, `
 			SELECT id, name, transport, command, url, args, env, capabilities,
 			       timeout_sec, version, headers, auth_config, retry_config,
-			       COALESCE(system_key, ''), management_mode, enabled, COALESCE(created_by, '')
+			       enabled, COALESCE(created_by, '')
 			FROM mcp_configs WHERE id=$1`, serverID).
 			Scan(&out.ID, &out.Name, &out.Transport, &out.Command, &out.URL,
 				&row.args, &row.env, &row.caps, &row.timeoutSec,
-				&out.Version, &row.headers, &row.authCfg, &row.retryCfg, &out.SystemKey, &out.ManagementMode, &out.Enabled, &out.CreatedBy)
+				&out.Version, &row.headers, &row.authCfg, &row.retryCfg, &out.Enabled, &out.CreatedBy)
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

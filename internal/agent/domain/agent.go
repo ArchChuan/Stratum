@@ -66,9 +66,6 @@ type AgentConfig struct {
 	// pipeline per agent. Absent key = unset (definition default applies).
 	MemoryParameters map[string]any
 	MemoryScope      string
-	SystemKey        string
-	IsSystem         bool
-	ManagementMode   string
 	// StuckThreshold > 0 enables lazy planning: after this many LLM rounds with
 	// no final answer the agent transitions to Reflect→Plan→Execute.
 	// 0 disables the feature (pure ReAct).

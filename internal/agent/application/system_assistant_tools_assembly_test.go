@@ -79,7 +79,7 @@ func TestSystemAssistantResolvesPlatformToolsInProcess(t *testing.T) {
 		TenantModelValidator: &strictModelValidatorStub{},
 	})
 	system := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		ID:       domain.SystemAssistantID,
 		LLMModel: "tenant-model", MaxIterations: 3,
 	}}
 
@@ -118,7 +118,7 @@ func TestSystemAssistantProposalToolVisibleInProcessWithoutService(t *testing.T)
 		TenantModelValidator: &strictModelValidatorStub{},
 	})
 	system := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		ID:       domain.SystemAssistantID,
 		LLMModel: "tenant-model", MaxIterations: 3,
 	}}
 	_, options, err := svc.assembleOptions(t.Context(), system, ExecRequest{UserID: "user-1"},
@@ -185,7 +185,7 @@ func TestSystemAssistantModelToolsAssemblyAndRoleGate(t *testing.T) {
 		Logger:               zap.NewNop(),
 	})
 	system := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		ID:       domain.SystemAssistantID,
 		LLMModel: "tenant-model", MaxIterations: 3,
 	}}
 	_, options, err := svc.assembleOptions(t.Context(), system, ExecRequest{UserID: "user-1"},
@@ -220,12 +220,12 @@ func TestSystemAssistantAdminUpdateSystemModelExecutes(t *testing.T) {
 		Logger:               zap.NewNop(),
 	})
 	existing := &domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "existing-model",
+		ID: domain.SystemAssistantID, LLMModel: "existing-model",
 	}
 	repo.On("Get", mock.Anything, domain.SystemAssistantID).Return(existing, true, nil)
 	repo.On("Update", mock.Anything).Return(nil)
 	system := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		ID:       domain.SystemAssistantID,
 		LLMModel: "tenant-model", MaxIterations: 3,
 	}}
 	_, options, err := svc.assembleOptions(t.Context(), system, ExecRequest{UserID: "user-1"},
@@ -247,7 +247,7 @@ func TestSystemAssistantWithoutModelFailsBeforeCapabilityResolution(t *testing.T
 		Registry: NewRegistry(nil, zap.NewNop()),
 	})
 	system := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, MaxIterations: 3,
+		ID: domain.SystemAssistantID, MaxIterations: 3,
 	}}
 	_, _, err := svc.assembleOptions(t.Context(), system, ExecRequest{},
 		ExecMeta{TenantID: "tenant-1"}, "execution-1")
@@ -281,7 +281,7 @@ func TestSystemAssistantTreatsStaleModelAsUnavailable(t *testing.T) {
 		TenantModelValidator: validator,
 	})
 	system := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		ID:       domain.SystemAssistantID,
 		LLMModel: "retired-model", MaxIterations: 3,
 	}}
 	_, _, err := svc.assembleOptions(t.Context(), system, ExecRequest{},
@@ -392,7 +392,7 @@ func TestAdminProposeAutoConfirmsAndApplies(t *testing.T) {
 		Logger:               zap.NewNop(),
 	})
 	system := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		ID:       domain.SystemAssistantID,
 		LLMModel: "tenant-model", MaxIterations: 3,
 	}}
 	_, options, err := svc.assembleOptions(t.Context(), system, ExecRequest{UserID: "admin-1"},
@@ -424,7 +424,7 @@ func TestMemberProposeStaysInReviewFlow(t *testing.T) {
 		Logger:               zap.NewNop(),
 	})
 	system := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		ID:       domain.SystemAssistantID,
 		LLMModel: "tenant-model", MaxIterations: 3,
 	}}
 	_, options, err := svc.assembleOptions(t.Context(), system, ExecRequest{UserID: "member-1"},
@@ -457,7 +457,7 @@ func TestAdminProposeAutoApplyFailureKeepsCreatedProposal(t *testing.T) {
 		Logger:               zap.NewNop(),
 	})
 	system := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		ID:       domain.SystemAssistantID,
 		LLMModel: "tenant-model", MaxIterations: 3,
 	}}
 	_, options, err := svc.assembleOptions(t.Context(), system, ExecRequest{UserID: "admin-1"},
@@ -489,7 +489,7 @@ func TestMemberApplyRejectedBeforeApplier(t *testing.T) {
 		Logger:               zap.NewNop(),
 	})
 	system := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		ID:       domain.SystemAssistantID,
 		LLMModel: "tenant-model", MaxIterations: 3,
 	}}
 	_, options, err := svc.assembleOptions(t.Context(), system, ExecRequest{UserID: "member-1"},
@@ -513,7 +513,7 @@ func TestSystemAssistantListAgentsProjectionOmitsSensitiveFields(t *testing.T) {
 	repo.On("GetAll").Return([]*domain.AgentConfig{{
 		ID: "agent-1", Name: "sales", Type: domain.ReActAgent, Description: "d",
 		LLMModel: "m", MaxIterations: 3, MaxContextTokens: 100,
-		SystemPrompt: "secret-prompt", SystemKey: "secret-key",
+		SystemPrompt: "secret-prompt",
 	}}, nil)
 	svc := NewAgentService(AgentServiceDeps{
 		Registry:             NewRegistry(repo, zap.NewNop()),
@@ -523,7 +523,7 @@ func TestSystemAssistantListAgentsProjectionOmitsSensitiveFields(t *testing.T) {
 		Logger:               zap.NewNop(),
 	})
 	system := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		ID:       domain.SystemAssistantID,
 		LLMModel: "tenant-model", MaxIterations: 3,
 	}}
 	_, options, err := svc.assembleOptions(t.Context(), system, ExecRequest{UserID: "user-1"},
@@ -538,13 +538,13 @@ func TestSystemAssistantListAgentsProjectionOmitsSensitiveFields(t *testing.T) {
 	blob, marshalErr := json.Marshal(raw)
 	require.NoError(t, marshalErr)
 	s := string(blob)
-	// 安全投影：保留 id/name 等元数据，绝不携带 systemPrompt/systemKey。
+	// 安全投影：保留 id/name 等元数据，绝不携带 systemPrompt（system_key 字段已随
+	// 「所有 agent 一视同仁」删除，投影天然不含）。
 	require.Contains(t, s, "agent-1")
 	require.Contains(t, s, "sales")
 	require.NotContains(t, s, "secret-prompt")
 	require.NotContains(t, s, "secret-key")
 	require.NotContains(t, s, "systemPrompt")
-	require.NotContains(t, s, "systemKey")
 }
 
 // D18：无 HTTP actor 的内部执行（revision/评估/工作流）没有用户上下文，
@@ -557,7 +557,7 @@ func TestResolveTooling_NoActor_AuthorizeFailure_FallsBackToMember(t *testing.T)
 		TenantModelValidator: &strictModelValidatorStub{},
 	})
 	agent := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model",
+		ID: domain.SystemAssistantID, LLMModel: "tenant-model",
 	}}
 	authorization := &domain.DiagnosticAuthorization{}
 	_, _, roleClass, err := svc.resolveTooling(t.Context(),
@@ -578,7 +578,7 @@ func TestResolveTooling_HTTPActor_AuthorizeFailure_FailsClosed(t *testing.T) {
 		TenantModelValidator: &strictModelValidatorStub{},
 	})
 	agent := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model",
+		ID: domain.SystemAssistantID, LLMModel: "tenant-model",
 	}}
 	authorization := &domain.DiagnosticAuthorization{}
 	_, _, _, err := svc.resolveTooling(t.Context(),
@@ -599,7 +599,7 @@ func TestResolveTooling_SyntheticUser_AuthorizeFailure_FallsBackToMember(t *test
 		TenantModelValidator: &strictModelValidatorStub{},
 	})
 	agent := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model",
+		ID: domain.SystemAssistantID, LLMModel: "tenant-model",
 	}}
 	for _, userID := range []string{"collab:plan-01h0", "workflow"} {
 		authorization := &domain.DiagnosticAuthorization{}

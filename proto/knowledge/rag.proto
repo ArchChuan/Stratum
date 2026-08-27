@@ -112,6 +112,6 @@ message WorkspaceListItem {
   google.protobuf.Timestamp updated_at = 6;
   // Editors is the current granted editor set, for form prefill.
   repeated string editors = 7;
-  // management_mode 历史兼容透传字段；平台托管 workspace 已普通化，前端不做平台特判。
-  string management_mode = 8;
+  // management_mode 历史兼容透传字段已删除（平台托管 workspace 已普通化）。
+  reserved 8;
 }

@@ -218,36 +218,30 @@ func TestApprovalActionExecutorMCPDispatch(t *testing.T) {
 	})
 }
 
-// D5 评审 BLOCKING 回归：handler bind 的 DTO 中 SystemKey 无 omitempty，成员未提供
-// system_key 时经 AES round-trip 空值落成字面 null；decodeServerConfig 必须归一化为
-// nil，否则 ServerConfig() 误判为系统托管 key → connect/update 审批永远 notExecuted
-// 释放回 approved 死循环。真实非空 system_key 仍须拒绝（归一化不得放宽）。
-func TestDecodeServerConfigNormalizesNullSystemKey(t *testing.T) {
+// system_key 已随「所有 MCP server 一视同仁」从契约删除：外部提交的 system_key 由
+// json.Unmarshal 静默忽略（列同时删除、无处落库），decodeServerConfig 不再归一化、
+// 不再拒绝。测试锚定「忽略」语义，防止回退到旧的拒绝行为。
+func TestDecodeServerConfigIgnoresSystemKey(t *testing.T) {
 	cases := []struct {
-		name    string
-		args    map[string]any
-		wantErr bool
+		name string
+		args map[string]any
 	}{
-		{name: "round-tripped literal null", args: map[string]any{"config": map[string]any{
+		{name: "literal null", args: map[string]any{"config": map[string]any{
 			"name": "svr", "transport": "streamable-http", "url": "http://localhost:9000",
 			"system_key": nil,
 		}}},
 		{name: "no system_key key", args: map[string]any{"config": map[string]any{
 			"name": "svr", "transport": "streamable-http", "url": "http://localhost:9000",
 		}}},
-		{name: "real system_key still rejected", wantErr: true, args: map[string]any{"config": map[string]any{
-			"name": "svr", "transport": "streamable-http", "system_key": "stratum.platform_mcp",
+		{name: "foreign system_key value ignored", args: map[string]any{"config": map[string]any{
+			"name": "svr", "transport": "streamable-http", "url": "http://localhost:9000", "system_key": "stratum.platform_mcp",
 		}}},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := decodeServerConfig(tc.args)
-			if tc.wantErr {
-				require.Error(t, err, "managed system_key must be rejected by ServerConfig")
-				return
-			}
-			require.NoError(t, err, "config with no real system_key must decode")
+			require.NoError(t, err, "config with system_key must decode and ignore it")
 			require.Equal(t, "svr", cfg.Name)
 			require.Equal(t, "http://localhost:9000", cfg.URL)
 		})

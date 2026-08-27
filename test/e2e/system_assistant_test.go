@@ -456,7 +456,6 @@ func TestSystemAssistantHTTPContractsUseRealHandlerServiceAndPostgres(t *testing
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, domain.SystemAssistantID, persisted.ID)
-	require.Empty(t, persisted.SystemKey, "等同化后 seed 行不再带 system_key 标记")
 	require.Equal(t, "tampered", persisted.Name, "普通字段经普通 Update 路径落库")
 	// 等同化后无专属保留：传入空数组按普通 replace 语义清空 seed 资源。
 	require.Empty(t, persisted.AllowedSkills)

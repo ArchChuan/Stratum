@@ -27,11 +27,11 @@ message MCPServerConfigRequest {
   // @gotype: *github.com/byteBuilderX/stratum/internal/mcp/domain.RetryConfig
   // @omitempty
   google.protobuf.Struct retry = 13;
-  // @gotype: encoding/json.RawMessage
-  google.protobuf.Value system_key = 14;
   // Editors is the initial granted editor set (create path); each id must
   // hold role admin or owner at write time.
   repeated string editors = 15;
+  // system_key 已随"所有 MCP server 一视同仁"删除（特殊字段无通用作用）。
+  reserved 14;
 }
 
 message MCPAuthConfigResponse {
@@ -68,6 +68,7 @@ message MCPServerConfigResponse {
   // @gotype: *github.com/byteBuilderX/stratum/internal/mcp/domain.RetryConfig
   // @omitempty
   google.protobuf.Struct retry = 13;
-  string management_mode = 14;
   repeated string editors = 15;
+  // management_mode 历史兼容透传字段已删除（平台托管 MCP 已普通化）。
+  reserved 14;
 }

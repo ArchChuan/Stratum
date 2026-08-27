@@ -20,7 +20,6 @@ const redactedConfig: MCPServerConfigResponse = {
     api_key_header: 'X-API-Key',
     credential_configured: true,
   },
-  management_mode: '',
   editors: [],
 };
 

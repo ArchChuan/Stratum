@@ -142,8 +142,8 @@ func TestAgentRepo_Get(t *testing.T) {
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("SELECT id, name").
 		WithArgs(pgxmock.AnyArg()).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "max_iterations", "max_context_tokens", "memory_scope", "system_key", "created_by", "parameters", "delegate_enabled", "delegate_max_depth", "delegate_default_max_steps"}).
-			AddRow("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 8000, "", "", "", "{}", false, 0, 0))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "max_iterations", "max_context_tokens", "memory_scope", "created_by", "parameters", "delegate_enabled", "delegate_max_depth", "delegate_default_max_steps"}).
+			AddRow("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", 5, 8000, "", "", "", false, 0, 0))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs("a1").
 		WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
@@ -188,7 +188,7 @@ func TestAgentRepo_GetNotFound(t *testing.T) {
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("SELECT id, name").
 		WithArgs("missing").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "max_iterations", "max_context_tokens", "memory_scope", "system_key", "created_by", "parameters", "delegate_enabled", "delegate_max_depth", "delegate_default_max_steps"}))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "max_iterations", "max_context_tokens", "memory_scope", "created_by", "parameters", "delegate_enabled", "delegate_max_depth", "delegate_default_max_steps"}))
 	pool.ExpectRollback()
 
 	repo := &PgAgentRepo{pool: pool}
@@ -312,10 +312,10 @@ func TestAgentRepo_SamplingParametersRoundTrip(t *testing.T) {
 		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "name", "type", "description", "system_prompt", "llm_model",
-			"max_iterations", "max_context_tokens", "memory_scope", "system_key",
+			"max_iterations", "max_context_tokens", "memory_scope",
 			"created_by", "parameters", "delegate_enabled", "delegate_max_depth",
 			"delegate_default_max_steps",
-		}).AddRow("a1", "Beta", "react", "", "", "gpt-4o", 5, 0, "", "", "", `{"temperature":0.9,"memory.fact_injection_top_n":8}`, false, 0, 0))
+		}).AddRow("a1", "Beta", "react", "", "", "gpt-4o", 5, 0, "", "", `{"temperature":0.9,"memory.fact_injection_top_n":8}`, false, 0, 0))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs("a1").WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
 	pool.ExpectQuery("SELECT server_id, tool_name FROM agent_mcp_tool_links").
@@ -500,10 +500,10 @@ func TestAgentRepo_SamplingParametersReplace(t *testing.T) {
 		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "name", "type", "description", "system_prompt", "llm_model",
-			"max_iterations", "max_context_tokens", "memory_scope", "system_key",
+			"max_iterations", "max_context_tokens", "memory_scope",
 			"created_by", "parameters", "delegate_enabled", "delegate_max_depth",
 			"delegate_default_max_steps",
-		}).AddRow("a1", "Beta", "react", "", "", "gpt-4o", 5, 0, "", "", "", `{"temperature":null,"max_tokens":null}`, false, 0, 0))
+		}).AddRow("a1", "Beta", "react", "", "", "gpt-4o", 5, 0, "", "", `{"temperature":null,"max_tokens":null}`, false, 0, 0))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs("a1").WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
 	pool.ExpectQuery("SELECT server_id, tool_name FROM agent_mcp_tool_links").
@@ -561,10 +561,10 @@ func TestAgentRepo_DelegateFieldsRoundTrip(t *testing.T) {
 		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "name", "type", "description", "system_prompt", "llm_model",
-			"max_iterations", "max_context_tokens", "memory_scope", "system_key",
+			"max_iterations", "max_context_tokens", "memory_scope",
 			"created_by", "parameters", "delegate_enabled", "delegate_max_depth",
 			"delegate_default_max_steps",
-		}).AddRow("a1", "Beta", "react", "", "", "gpt-4o", 5, 0, "", "", "", "{}", true, 2, 7))
+		}).AddRow("a1", "Beta", "react", "", "", "gpt-4o", 5, 0, "", "", "{}", true, 2, 7))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs("a1").WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
 	pool.ExpectQuery("SELECT server_id, tool_name FROM agent_mcp_tool_links").
