@@ -11,6 +11,11 @@ message MemoryFactResponse {
   double importance = 4;
   google.protobuf.Timestamp created_at = 5;
   google.protobuf.Timestamp updated_at = 6;
+  // 用户侧管理页详情展示字段（spec §1 DTO 变更）。
+  double confidence = 7;
+  string category = 8;
+  string source = 9;
+  string status = 10;
 }
 
 message MemorySessionsResponse {
@@ -69,4 +74,73 @@ message MemoryMigrationCostResponse {
 // StartMemoryMigrationRequest 确认制启动 A→B 迁移；from 取租户当前生效模型。
 message StartMemoryMigrationRequest {
   string to_model = 1;
+}
+
+// UpdateMemoryFactRequest 事实编辑请求；至少提供一项（proto3 optional 生成
+// Go 指针，handler 据此判断「未提供」与「零值」）。
+message UpdateMemoryFactRequest {
+  optional string content = 1;
+  optional double importance = 2;
+  optional string category = 3;
+}
+
+// ListMemoryFactsResponse 事实分页列表（GET /memory/facts）。
+message ListMemoryFactsResponse {
+  repeated MemoryFactResponse facts = 1;
+  int64 total = 2;
+}
+
+// MemorySummaryItemResponse 历史摘要条目（用户侧只读 + 删除）。
+message MemorySummaryItemResponse {
+  string id = 1;
+  string summary = 2;
+  string tier = 3;
+  double importance = 4;
+  string conversation_id = 5;
+  google.protobuf.Timestamp period_end = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message ListMemorySummariesResponse {
+  repeated MemorySummaryItemResponse summaries = 1;
+  int64 total = 2;
+}
+
+// MemorySnapshotResponse 活跃快照（每 (user_id, agent_id) 一条）。
+message MemorySnapshotResponse {
+  string agent_id = 1;
+  repeated string work_context = 2;
+  repeated string personal_context = 3;
+  repeated string top_of_mind = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  string status = 7;
+}
+
+message ListMemorySnapshotsResponse {
+  repeated MemorySnapshotResponse snapshots = 1;
+}
+
+// UpdateMemorySnapshotRequest 快照编辑（三段数组整体替换）。
+message UpdateMemorySnapshotRequest {
+  repeated string work_context = 1;
+  repeated string personal_context = 2;
+  repeated string top_of_mind = 3;
+}
+
+// MemoryEntryItemResponse 原始条目（用户侧只读 + 删除）。
+message MemoryEntryItemResponse {
+  string id = 1;
+  string role = 2;
+  string content = 3;
+  string type = 4;
+  string scope = 5;
+  double importance = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp expires_at = 8;
+}
+
+message ListMemoryEntriesResponse {
+  repeated MemoryEntryItemResponse entries = 1;
+  int64 total = 2;
 }
