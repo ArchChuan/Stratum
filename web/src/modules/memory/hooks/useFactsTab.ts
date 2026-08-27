@@ -85,5 +85,5 @@ export const useFactsTab = () => {
     }
   }, [load]);
 
-  return { facts, loading, deleteLoading, filters, applyFilters, updateFact, deleteFact, pagination: { current: page, pageSize, total, pageSizeOptions, onChange } };
+  return { facts, loading, deleteLoading, filters, applyFilters, updateFact, deleteFact, pagination: { current: page, pageSize, total, pageSizeOptions, onChange }, reload: load };
 };

@@ -49,5 +49,5 @@ export const useEntriesTab = () => {
     }
   }, [load]);
 
-  return { entries, loading, deleteLoading, query, setQuery, deleteEntry, pagination: { current: page, pageSize, total, pageSizeOptions, onChange } };
+  return { entries, loading, deleteLoading, query, setQuery, deleteEntry, pagination: { current: page, pageSize, total, pageSizeOptions, onChange }, reload: load };
 };

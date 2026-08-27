@@ -48,5 +48,5 @@ export const useEntitiesTab = () => {
     }
   }, [load]);
 
-  return { entities, loading, deleteLoading, deleteEntity, pagination: { current: page, pageSize, total, pageSizeOptions, onChange } };
+  return { entities, loading, deleteLoading, deleteEntity, pagination: { current: page, pageSize, total, pageSizeOptions, onChange }, reload: load };
 };

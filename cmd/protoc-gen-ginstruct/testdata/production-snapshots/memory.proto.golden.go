@@ -14,6 +14,10 @@ type MemoryFactResponse struct {
 	Importance float64   `json:"importance"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
+	Confidence float64   `json:"confidence"`
+	Category   string    `json:"category"`
+	Source     string    `json:"source"`
+	Status     string    `json:"status"`
 }
 
 type MemorySessionsResponse struct {
@@ -61,4 +65,66 @@ type MemoryMigrationCostResponse struct {
 
 type StartMemoryMigrationRequest struct {
 	ToModel string `json:"to_model"`
+}
+
+type UpdateMemoryFactRequest struct {
+	Content    *string  `json:"content"`
+	Importance *float64 `json:"importance"`
+	Category   *string  `json:"category"`
+}
+
+type ListMemoryFactsResponse struct {
+	Facts []MemoryFactResponse `json:"facts"`
+	Total int64                `json:"total"`
+}
+
+type MemorySummaryItemResponse struct {
+	ID             string    `json:"id"`
+	Summary        string    `json:"summary"`
+	Tier           string    `json:"tier"`
+	Importance     float64   `json:"importance"`
+	ConversationID string    `json:"conversation_id"`
+	PeriodEnd      time.Time `json:"period_end"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+type ListMemorySummariesResponse struct {
+	Summaries []MemorySummaryItemResponse `json:"summaries"`
+	Total     int64                       `json:"total"`
+}
+
+type MemorySnapshotResponse struct {
+	AgentID         string    `json:"agent_id"`
+	WorkContext     []string  `json:"work_context"`
+	PersonalContext []string  `json:"personal_context"`
+	TopOfMind       []string  `json:"top_of_mind"`
+	ExpiresAt       time.Time `json:"expires_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	Status          string    `json:"status"`
+}
+
+type ListMemorySnapshotsResponse struct {
+	Snapshots []MemorySnapshotResponse `json:"snapshots"`
+}
+
+type UpdateMemorySnapshotRequest struct {
+	WorkContext     []string `json:"work_context"`
+	PersonalContext []string `json:"personal_context"`
+	TopOfMind       []string `json:"top_of_mind"`
+}
+
+type MemoryEntryItemResponse struct {
+	ID         string    `json:"id"`
+	Role       string    `json:"role"`
+	Content    string    `json:"content"`
+	Type       string    `json:"type"`
+	Scope      string    `json:"scope"`
+	Importance float64   `json:"importance"`
+	CreatedAt  time.Time `json:"created_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
+}
+
+type ListMemoryEntriesResponse struct {
+	Entries []MemoryEntryItemResponse `json:"entries"`
+	Total   int64                     `json:"total"`
 }

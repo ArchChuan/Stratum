@@ -48,5 +48,5 @@ export const useSummariesTab = () => {
     }
   }, [load]);
 
-  return { summaries, loading, deleteLoading, deleteSummary, pagination: { current: page, pageSize, total, pageSizeOptions, onChange } };
+  return { summaries, loading, deleteLoading, deleteSummary, pagination: { current: page, pageSize, total, pageSizeOptions, onChange }, reload: load };
 };
