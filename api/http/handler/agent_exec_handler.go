@@ -51,9 +51,14 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 	})
 
 	if err != nil {
+		var batchErr *agentport.BatchToolApprovalRequiredError
+		if errors.As(err, &batchErr) {
+			c.JSON(http.StatusAccepted, approvalAcceptedResponse(batchErr.Errors))
+			return
+		}
 		var approvalErr *agentport.ToolApprovalRequiredError
 		if errors.As(err, &approvalErr) {
-			c.JSON(http.StatusAccepted, gin.H{"status": "waiting_approval", "approvalId": approvalErr.ApprovalID, "toolCallId": approvalErr.ToolCallID, "serverId": approvalErr.ServerID, "toolName": approvalErr.ToolName, "riskLevel": approvalErr.RiskLevel})
+			c.JSON(http.StatusAccepted, approvalAcceptedResponse([]agentport.ToolApprovalRequiredError{*approvalErr}))
 			return
 		}
 		// 续跑竞态：带 execution_id 续跑但审批其实还在等待中（未批准）。
@@ -197,9 +202,14 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 			if errors.Is(runErr, context.Canceled) && clientCtx.Err() != nil {
 				return
 			}
+			var batchErr *agentport.BatchToolApprovalRequiredError
+			if errors.As(runErr, &batchErr) {
+				writer.EnqueueEvent("approval_required", string(approvalRequiredSSEPayload(batchErr.Errors)))
+				return
+			}
 			var approvalErr *agentport.ToolApprovalRequiredError
 			if errors.As(runErr, &approvalErr) {
-				writer.EnqueueEvent("approval_required", string(approvalRequiredSSEPayload(approvalErr)))
+				writer.EnqueueEvent("approval_required", string(approvalRequiredSSEPayload([]agentport.ToolApprovalRequiredError{*approvalErr})))
 				return
 			}
 			h.logger.Error("agent stream execution failed", zap.String("agentId", id), zap.Error(runErr))
@@ -271,13 +281,46 @@ func agentExecutionDonePayload(result *agent.AgentResult) []byte {
 	return payload
 }
 
-func approvalRequiredSSEPayload(approval *agentport.ToolApprovalRequiredError) []byte {
-	payload, _ := json.Marshal(map[string]any{
-		"status": "waiting_approval", "approvalId": approval.ApprovalID,
-		"toolCallId": approval.ToolCallID, "serverId": approval.ServerID,
-		"toolName": approval.ToolName, "riskLevel": approval.RiskLevel,
-	})
-	return payload
+// approvalAcceptedResponse 非流式 /execute 的 202 审批等待体：approvals 数组携带
+// 本轮全部待审批工具（单条=长度 1），顶层 approvalId/toolCallId/... 镜像首条兼容
+// 旧前端；approvalIds 便于前端按恢复键轮询 active-execution。
+func approvalAcceptedResponse(approvals []agentport.ToolApprovalRequiredError) gin.H {
+	items := make([]map[string]any, 0, len(approvals))
+	for _, a := range approvals {
+		items = append(items, map[string]any{
+			"approvalId": a.ApprovalID, "toolCallId": a.ToolCallID,
+			"serverId": a.ServerID, "toolName": a.ToolName, "riskLevel": a.RiskLevel,
+		})
+	}
+	body := gin.H{"status": "waiting_approval", "approvals": items}
+	if len(approvals) > 0 {
+		first := items[0]
+		for _, k := range []string{"approvalId", "toolCallId", "serverId", "toolName", "riskLevel"} {
+			body[k] = first[k]
+		}
+	}
+	return body
+}
+
+// approvalRequiredSSEPayload SSE approval_required 帧：与 202 体同构（approvals
+// 数组 + 首条镜像），单/批共一帧，前端据此批量渲染审批卡并等待全部终态后续跑。
+func approvalRequiredSSEPayload(approvals []agentport.ToolApprovalRequiredError) []byte {
+	items := make([]map[string]any, 0, len(approvals))
+	for _, a := range approvals {
+		items = append(items, map[string]any{
+			"approvalId": a.ApprovalID, "toolCallId": a.ToolCallID,
+			"serverId": a.ServerID, "toolName": a.ToolName, "riskLevel": a.RiskLevel,
+		})
+	}
+	payload := map[string]any{"status": "waiting_approval", "approvals": items}
+	if len(approvals) > 0 {
+		first := items[0]
+		for _, k := range []string{"approvalId", "toolCallId", "serverId", "toolName", "riskLevel"} {
+			payload[k] = first[k]
+		}
+	}
+	encoded, _ := json.Marshal(payload)
+	return encoded
 }
 
 // intOption pulls a numeric option from req.Options. Returns 0 when

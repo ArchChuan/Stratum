@@ -84,6 +84,7 @@ export const agentApi = {
 			const res = await api.get<{
 				status?: string; execution_id?: string; agent_id?: string;
 				approval_id?: string; approval_status?: string; user_query?: string; updated_at?: string;
+				approvals?: { approval_id?: string; approval_status?: string }[];
 			}>(`/conversations/${convId}/active-execution`);
 			if (!res.data || res.data.status === 'none') return null;
 			return {
@@ -92,6 +93,12 @@ export const agentApi = {
 				status: res.data.status || '',
 				approvalId: res.data.approval_id || undefined,
 				approvalStatus: res.data.approval_status || undefined,
+				approvals: Array.isArray(res.data.approvals)
+					? res.data.approvals.map((a) => ({
+							approvalId: String(a.approval_id || ''),
+							approvalStatus: a.approval_status ? String(a.approval_status) : undefined,
+						}))
+					: undefined,
 				userQuery: res.data.user_query || undefined,
 				updatedAt: res.data.updated_at || undefined,
 			};
@@ -153,7 +160,7 @@ const clearSessionExec = (conversationId: string): void => {
 export const executeAgentStream = (
   id: string,
   payload: ExecuteAgentPayload,
-	{ onToken, onDone, onError, onApprovalRequired, onExecutionId, onDelegateEvent }: StreamCallbacks,
+	{ onToken, onDone, onError, onApprovalsRequired, onExecutionId, onDelegateEvent }: StreamCallbacks,
 ): AbortController => {
   // 自愈连接器:断点续接协议的服务端协作端。SSE 首帧(无条件、先于任何 token
   // 帧)下发 execution_id 作为恢复键,断线(网络/5xx)以指数退避携带同一
@@ -207,7 +214,7 @@ export const executeAgentStream = (
       executionId || storedExecId ? { ...payload, execution_id: executionId || storedExecId } : payload,
       {
         onEvent: (evt) => {
-          const event = evt as { execution_id?: string; error?: string; code?: string; done?: boolean; token?: unknown; status?: string; approvalId?: string; toolName?: string; serverId?: string; riskLevel?: string; delegate_status?: string; result_status?: string; delegate_id?: string; goal?: string; summary?: string; tokens_used?: number };
+          const event = evt as { execution_id?: string; error?: string; code?: string; done?: boolean; token?: unknown; status?: string; approvalId?: string; toolName?: string; serverId?: string; riskLevel?: string; approvals?: { approvalId?: string; toolName?: string; serverId?: string; riskLevel?: string }[]; delegate_status?: string; result_status?: string; delegate_id?: string; goal?: string; summary?: string; tokens_used?: number };
           if (event.execution_id) {
             executionId = event.execution_id;
             onExecutionId?.(event.execution_id);
@@ -226,9 +233,23 @@ export const executeAgentStream = (
             });
             return true;
           }
-          if (event.status === 'waiting_approval' && event.approvalId) {
+          if (event.status === 'waiting_approval') {
+            // 批量审批统一一帧：approvals 数组含全部待审批工具；旧后端无数组时
+            // 回退顶层镜像单条。仍然 completed=true; return false 一帧终止。
             completed = true;
-            onApprovalRequired({ approvalId: event.approvalId, toolName: event.toolName || '', serverId: event.serverId || '', riskLevel: event.riskLevel || 'unclassified', status: event.status });
+            const raw = Array.isArray(event.approvals) && event.approvals.length > 0
+              ? event.approvals
+              : event.approvalId
+                ? [{ approvalId: event.approvalId, toolName: event.toolName, serverId: event.serverId, riskLevel: event.riskLevel }]
+                : [];
+            const approvals = raw.map((it) => ({
+              approvalId: String(it.approvalId || ''),
+              toolName: String(it.toolName || ''),
+              serverId: String(it.serverId || ''),
+              riskLevel: String(it.riskLevel || 'unclassified'),
+              status: 'pending' as const,
+            }));
+            if (approvals.length > 0) onApprovalsRequired(approvals);
             return false;
           }
           if (event.error) {

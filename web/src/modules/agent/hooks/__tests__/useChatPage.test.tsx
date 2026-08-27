@@ -40,7 +40,7 @@ const mocks = vi.hoisted(() => ({
     streamError: null,
 		streamFailure: null as null | { message: string; code?: string; status?: number },
     streamDone: false,
-    streamApproval: null as null | Record<string, string>,
+    streamApprovals: [] as Record<string, string>[],
     startStream: vi.fn(),
     cancelStream: vi.fn(),
 		clearStreamFailure: vi.fn(),
@@ -52,7 +52,7 @@ const mocks = vi.hoisted(() => ({
       done: false,
       result: null,
       error: null,
-      approval: null,
+      approvals: [],
       delegateStatus: null,
       executionId: null,
       conflict: false,
@@ -105,7 +105,7 @@ describe('useChatPage tool approvals', () => {
 		mocks.createConversation.mockResolvedValue({ id: 'conversation-new', name: '新会话' });
     // 动态读取当前 mocks.approval：mockResolvedValue 在 beforeEach 求值会把测试体内
     // 的设置锁死为 null → listToolApprovals 恒返回 []，恢复路径 fallback 补终态卡
-    // （status=active.approvalStatus）→ waitingApproval 不命中，轮询终态续跑不触发。
+    // （status=active.approvalStatus）→ waitingApprovals 不命中，轮询终态续跑不触发。
     mocks.listApprovals.mockImplementation(async () => (mocks.approval ? [mocks.approval] : []));
     mocks.decide.mockResolvedValue({});
     mocks.cancelToolApproval.mockResolvedValue({});
@@ -113,7 +113,7 @@ describe('useChatPage tool approvals', () => {
     mocks.stream.streamConversationId = null;
     mocks.stream.accumulatedContent = '';
     mocks.stream.streamDone = false;
-    mocks.stream.streamApproval = null;
+    mocks.stream.streamApprovals = [];
 		mocks.stream.streamFailure = null;
   });
 
@@ -128,14 +128,14 @@ describe('useChatPage tool approvals', () => {
     await waitFor(() => expect(result.current.selectedConv).toBe('conversation-1'));
 
     mocks.stream.streamConversationId = 'conversation-1';
-    mocks.stream.streamApproval = {
+    mocks.stream.streamApprovals = [{
       approvalId: 'approval-3',
       agentId: 'agent-1',
       toolName: 'delete',
       serverId: 'orders',
       riskLevel: 'destructive',
       status: 'waiting_approval', // SSE 帧实际下发的状态
-    };
+    }];
     rerender();
 
     await waitFor(() => {
@@ -166,14 +166,14 @@ describe('useChatPage tool approvals', () => {
     await waitFor(() => expect(result.current.selectedConv).toBe('conversation-1'));
 
     mocks.stream.streamConversationId = 'conversation-1';
-    mocks.stream.streamApproval = {
+    mocks.stream.streamApprovals = [{
       approvalId: 'approval-4',
       agentId: 'agent-1',
       toolName: 'delete',
       serverId: 'orders',
       riskLevel: 'unclassified', // SSE 帧占位值，不得覆盖已有 riskLevel
       status: 'waiting_approval',
-    };
+    }];
     rerender();
 
     await waitFor(() => {
@@ -199,14 +199,14 @@ describe('useChatPage tool approvals', () => {
 
     mocks.stream.streamConversationId = 'conversation-1';
     mocks.stream.streamDone = true;
-    mocks.stream.streamApproval = {
+    mocks.stream.streamApprovals = [{
       approvalId: 'approval-2',
       agentId: 'agent-1',
       toolName: 'delete',
       serverId: 'orders',
       riskLevel: 'destructive',
       status: 'pending',
-    };
+    }];
     rerender();
 
     await waitFor(() => {
@@ -330,7 +330,7 @@ describe('useChatPage tool approvals', () => {
 				noAnswer: { Reason: 'threshold_filtered', RetrievedCount: 5 },
 			},
 			error: null,
-			approval: null,
+			approvals: [],
 			delegateStatus: null,
 			executionId: null,
 			conflict: false,
@@ -398,7 +398,7 @@ describe('useChatPage tool approvals', () => {
     });
   });
 
-  it('marks an expired approval terminal without auto-resuming', async () => {
+  it('auto-resumes after an expired approval (过期纳入终态续跑)', async () => {
     mocks.approval = {
       approvalId: 'approval-1', agentId: 'system', toolName: 'delete', serverId: 'orders',
       riskLevel: 'destructive', status: 'pending', conversationId: 'conversation-1',
@@ -415,8 +415,13 @@ describe('useChatPage tool approvals', () => {
     await waitFor(() => {
       expect(result.current.pendingApprovals.find((r) => r.approvalId === 'approval-1')?.status).toBe('expired');
     });
-    // expired 不是 rejected/cancelled：只置终态卡片，不触发自动续跑（后端终态范围对齐 M3）。
-    expect(mocks.stream.startStream).not.toHaveBeenCalled();
+    // 阶段一:expired 纳入终态续跑(修复过期卡死回归),LLM 感知工具未执行后自行收尾。
+    await waitFor(() => {
+      expect(mocks.stream.startStream).toHaveBeenCalledWith(
+        'system',
+        expect.objectContaining({ execution_id: 'e1' }),
+      );
+    });
   });
 
   it('cancels the pending approval then resumes with the active execution', async () => {
@@ -426,16 +431,20 @@ describe('useChatPage tool approvals', () => {
     };
     mocks.listAgents.mockResolvedValue([{ id: 'system', name: '平台使用小助手', isSystem: true }]);
     mocks.listConversations.mockResolvedValue([{ id: 'conversation-1', name: 'Conversation' }]);
-    mocks.getActiveExecution.mockResolvedValue({
+    // cancel 成功后 active-execution 反映 cancelled(后端置终态),整批全部已决 → 续跑;
+    // 其余仍待决时不续跑、保留等待文案,轮询在全部终态后自动续跑。
+    let approvalStatus = 'pending';
+    mocks.cancelToolApproval.mockImplementation(async () => { approvalStatus = 'cancelled'; return {}; });
+    mocks.getActiveExecution.mockImplementation(async () => ({
       executionId: 'e1', agentId: 'system', userQuery: '执行删除', approvalId: 'approval-1',
-      status: 'waiting_approval', approvalStatus: 'pending',
-    });
+      status: 'waiting_approval', approvalStatus,
+    }));
 
     const { result } = renderHook(() => useChatPage());
     await waitFor(() => expect(result.current.selectedConv).toBe('conversation-1'));
-    await waitFor(() => expect(result.current.waitingApproval).toBeDefined());
+    await waitFor(() => expect(result.current.waitingApprovals).toHaveLength(1));
     await act(async () => {
-      await result.current.cancelWaitingApproval();
+      await result.current.cancelWaitingApproval(mocks.approval!);
     });
 
     expect(mocks.cancelToolApproval).toHaveBeenCalledWith('approval-1');
@@ -462,9 +471,9 @@ describe('useChatPage tool approvals', () => {
 
     const { result } = renderHook(() => useChatPage());
     await waitFor(() => expect(result.current.selectedConv).toBe('conversation-1'));
-    await waitFor(() => expect(result.current.waitingApproval).toBeDefined());
+    await waitFor(() => expect(result.current.waitingApprovals).toHaveLength(1));
     await act(async () => {
-      await result.current.cancelWaitingApproval();
+      await result.current.cancelWaitingApproval(mocks.approval!);
     });
 
     expect(mocks.cancelToolApproval).toHaveBeenCalledWith('approval-1');
@@ -487,10 +496,10 @@ describe('useChatPage tool approvals', () => {
     // getActiveExecution；该 mock 只被轮询消费，调用序即轮询序。
     mocks.stream.getStreamState.mockReturnValue({
       streaming: false, conversationId: 'conversation-1', userQuery: '执行删除', content: '',
-      done: false, result: null, error: null, approval: null, delegateStatus: null, executionId: null, conflict: false,
+      done: false, result: null, error: null, approvals: [], delegateStatus: null, executionId: null, conflict: false,
     });
     // 卡片 approvalId 与 active approvalId 错配：poll 置终态分支按 active.approvalId
-    // 匹配更新卡片 → 卡片保持 pending → waitingApproval 存活 → 第二次轮询发生，
+    // 匹配更新卡片 → 卡片保持 pending → waitingApprovals 存活 → 第二次轮询发生，
     // 连续 rejected 计数护栏（terminalResumeCountRef>=2）据此命中。
     let pollCalls = 0;
     mocks.getActiveExecution.mockImplementation(async () => {
@@ -524,7 +533,7 @@ describe('useChatPage tool approvals', () => {
     // 显式复位为无流态（conversationId null）走纯加载分支。
     mocks.stream.getStreamState.mockReturnValue({
       streaming: false, conversationId: null, userQuery: null, content: '',
-      done: false, result: null, error: null, approval: null, delegateStatus: null, executionId: null, conflict: false,
+      done: false, result: null, error: null, approvals: [], delegateStatus: null, executionId: null, conflict: false,
     });
     const msgs = [{ id: 'm1', role: 'assistant', content: 'hello' }] as unknown as ChatMessage[];
     vi.mocked(conversationApi.messages).mockResolvedValueOnce(msgs);

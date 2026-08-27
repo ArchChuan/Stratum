@@ -108,6 +108,7 @@ export const workflowDefinitionSchema = z.object({
   name: z.string().min(1),
   description: z.string(),
   revision: z.number().int().positive(),
+  active_version_id: z.string().optional(),
   spec: workflowSpecSchema,
   input_schema: workflowInputSchemaSchema,
   created_at: z.string(),
@@ -144,6 +145,7 @@ export const workflowVersionSummarySchema = z.object({
   description: z.string(),
   created_at: z.string(),
 });
+export type WorkflowVersionSummary = z.infer<typeof workflowVersionSummarySchema>;
 
 export const workflowPageSchema = z.object({
   workflows: goSlice(workflowSummarySchema),

@@ -145,6 +145,7 @@ func registerWorkflows(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 	definitions.DELETE("/:id", admin, requireActive, h.DeleteDefinition)
 	definitions.POST("/:id/validate", admin, requireActive, h.ValidateDefinition)
 	definitions.POST("/:id/publish", admin, requireActive, h.PublishDefinition)
+	definitions.POST("/:id/rollback", admin, requireActive, h.RollbackDefinition)
 	startRuns := r.Group("/workflow-runs", member...)
 	startRuns.POST("", requireActive, h.StartRun)
 	runs := r.Group("/workflow-runs", member...)
