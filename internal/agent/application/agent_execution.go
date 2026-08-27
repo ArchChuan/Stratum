@@ -382,9 +382,10 @@ func (s *AgentService) prepareAgentExecution(
 	}
 	applyAgentAssignment(&meta, agentID, assignment)
 	recordExecutionPreparation(ctx, a, req, meta, executionID)
-	// 审批续跑：命中 waiting_approval checkpoint 则抢占并把 req/meta 重写为
-	// 批准载荷快照；buildApprovalResumeOptions 追加在 assembleOptions 之后。
-	approvalPayload, approvalID, resuming, terminal, req, meta, err := s.maybeResumeApproval(ctx, agentID, req, meta, executionID)
+	// 审批续跑：命中 waiting_approval checkpoint 则抢占并把 req/meta 重写为整批
+	// 批准载荷快照（首条为准，同 executionID 共享发起人/会话）；任一审批仍 pending
+	// 整批 202 等待。buildApprovalResumeOptions 追加在 assembleOptions 之后。
+	entries, resuming, req, meta, err := s.maybeResumeApproval(ctx, agentID, req, meta, executionID)
 	if err != nil {
 		recordExecutionPreparationFailure(ctx, preparationStart, "assemble_options")
 		return nil, req, meta, nil, nil, nil, false, false, nil, fmt.Errorf("resume approval: %w", err)
@@ -397,11 +398,14 @@ func (s *AgentService) prepareAgentExecution(
 	}
 	if resuming {
 		var resumeOpts []ExecutionOption
-		resumeOpts, consumed, err = s.buildApprovalResumeOptions(ctx, meta.TenantID, a, approvalPayload, approvalID, terminal)
+		resumeOpts, consumed, err = s.buildApprovalResumeOptions(ctx, meta.TenantID, a, entries)
 		if err != nil {
 			recordExecutionPreparationFailure(ctx, preparationStart, "assemble_options")
 			return nil, req, meta, nil, nil, nil, false, false, nil, fmt.Errorf("resume approval options: %w", err)
 		}
+		// 纯终态批次：finalizeReActCheckpoint 按普通执行收尾写终态，finishApprovalResume
+		// 走 finishTerminalApprovalResume（不回滚不二次 Terminate）。
+		terminal = allTerminal(entries)
 		options = append(options, resumeOpts...)
 	}
 	// 用户消息即时持久化:首跑(meta.ExecutionID 为空)在 Execute 开头落库;

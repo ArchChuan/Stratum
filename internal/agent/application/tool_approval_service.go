@@ -168,28 +168,78 @@ func (s *ToolApprovalService) invalidateStaleForTool(ctx context.Context, payloa
 }
 
 func (s *ToolApprovalService) Request(ctx context.Context, payload ToolApprovalPayload) (string, error) {
-	// D3：subject 泛化——空值视为 mcp_tool（兼容存量调用）。
-	if payload.SubjectKind == "" {
-		payload.SubjectKind = domain.SubjectKindMCPTool
-	}
-	if err := domain.ValidateSubjectKind(payload.SubjectKind); err != nil {
+	ids, err := s.RequestBatch(ctx, []ToolApprovalPayload{payload})
+	if err != nil {
 		return "", err
 	}
-	if err := s.enforcePendingQuota(ctx, payload); err != nil {
-		return "", err
+	return ids[0], nil
+}
+
+// RequestBatch 一次性创建多条审批（同一轮 LLM 消息的多个需审批工具调用）：quota
+// 按批总条数一次抵扣，最后只写一次 checkpoint（记录全部 approval_ids），避免逐条
+// Request 的 checkpoint 互相覆盖。返回每条创建的审批 ID，顺序与入参一致。
+func (s *ToolApprovalService) RequestBatch(ctx context.Context, payloads []ToolApprovalPayload) ([]string, error) {
+	if len(payloads) == 0 {
+		return nil, nil
+	}
+	prepared, err := s.prepareRequestBatch(ctx, payloads)
+	if err != nil {
+		return nil, err
+	}
+	expires := s.now().Add(30 * time.Minute)
+	ids := make([]string, 0, len(prepared))
+	for _, payload := range prepared {
+		id, err := s.createApprovalRow(ctx, payload, expires)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := s.createApprovalCheckpoint(ctx, prepared, ids, expires); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+// prepareRequestBatch 批量审批的公共前置（同一执行内各 payload 共享 tenant/user）：
+// SubjectKind 归一化与校验、指定审批人校验、DecisionID 默认值、配额一次性抵扣、
+// 旧 pending 作废（方案 C）。
+func (s *ToolApprovalService) prepareRequestBatch(ctx context.Context, payloads []ToolApprovalPayload) ([]ToolApprovalPayload, error) {
+	out := make([]ToolApprovalPayload, len(payloads))
+	for i, payload := range payloads {
+		// D3：subject 泛化——空值视为 mcp_tool（兼容存量调用）。
+		if payload.SubjectKind == "" {
+			payload.SubjectKind = domain.SubjectKindMCPTool
+		}
+		if err := domain.ValidateSubjectKind(payload.SubjectKind); err != nil {
+			return nil, err
+		}
+		// D8：指定审批人必须是 admin/owner（软绑定，落地为工作台 PUT assignee）。
+		if err := s.validateAssignee(ctx, payload.TenantID, payload.AssignedApprover); err != nil {
+			return nil, err
+		}
+		if payload.DecisionID == "" {
+			payload.DecisionID = uuid.NewString()
+		}
+		out[i] = payload
+	}
+	// 配额一次性抵扣（防单用户无限创建，D4 放宽后引入）：现有 pending + 本批
+	// 条数不得超过上限，否则第 2 条起会误报配额。
+	if err := s.enforcePendingQuotaBatch(ctx, out[0].TenantID, out[0].UserID, len(out)); err != nil {
+		return nil, err
 	}
 	// 方案 C：同一 execution 同一 server+tool 的旧 pending 审批作废（参数漂移
 	// 防堆积、防前端误触发旧审批 resume）。best-effort——作废失败不阻断新审批
 	// （旧 pending 由过期清理兜底）；只作废 pending（mcp_tool 门控），approved
 	// 由消费路径（CAS）或过期处理，严禁作废。
-	s.invalidateStaleForTool(ctx, payload)
-	// D8：指定审批人必须是 admin/owner（软绑定，落地为工作台 PUT assignee）。
-	if err := s.validateAssignee(ctx, payload.TenantID, payload.AssignedApprover); err != nil {
-		return "", err
+	for _, payload := range out {
+		s.invalidateStaleForTool(ctx, payload)
 	}
-	if payload.DecisionID == "" {
-		payload.DecisionID = uuid.NewString()
-	}
+	return out, nil
+}
+
+// createApprovalRow 单条审批落库：摘要计算、加密、INSERT，返回审批 ID。
+func (s *ToolApprovalService) createApprovalRow(ctx context.Context, payload ToolApprovalPayload, expires time.Time) (string, error) {
 	payload, err := computePayloadDigests(payload)
 	if err != nil {
 		return "", err
@@ -202,9 +252,8 @@ func (s *ToolApprovalService) Request(ctx context.Context, payload ToolApprovalP
 	if err != nil {
 		return "", err
 	}
-	// B1 修复延续：Create 显式落库 subject_kind/assigned_approver/conversation_id（INSERT 显式列时
-	// DDL DEFAULT 不生效），SubjectKind 已在上方 ValidateSubjectKind 校验。
-	expires := s.now().Add(30 * time.Minute)
+	// B1 修复延续：Create 显式落库 subject_kind/assigned_approver/conversation_id
+	// （INSERT 显式列时 DDL DEFAULT 不生效），SubjectKind 已在 prepare 阶段校验。
 	id, err := s.repo.Create(ctx, payload.TenantID, domain.ToolApproval{
 		DecisionID:  payload.DecisionID,
 		ExecutionID: payload.ExecutionID, TraceID: payload.TraceID, AgentID: payload.AgentID, UserID: payload.UserID,
@@ -221,35 +270,50 @@ func (s *ToolApprovalService) Request(ctx context.Context, payload ToolApprovalP
 	if err != nil {
 		return "", fmt.Errorf("create tool approval: %w", err)
 	}
-	if err := s.createApprovalCheckpoint(ctx, payload, id, expires); err != nil {
-		return "", err
-	}
 	return id, nil
 }
 
-// enforcePendingQuota 防单用户无限创建未过期 pending 审批（存储 DoS 防护，D4 放宽后引入）。
-func (s *ToolApprovalService) enforcePendingQuota(ctx context.Context, payload ToolApprovalPayload) error {
-	pending, err := s.repo.ListPending(ctx, payload.TenantID, payload.UserID)
+// enforcePendingQuotaBatch 防单用户无限创建未过期 pending 审批（存储 DoS 防护，
+// D4 放宽后引入）：现有 pending 数 + 本批条数不得超过上限。
+func (s *ToolApprovalService) enforcePendingQuotaBatch(ctx context.Context, tenantID, userID string, batch int) error {
+	pending, err := s.repo.ListPending(ctx, tenantID, userID)
 	if err != nil {
 		return fmt.Errorf("count pending tool approvals: %w", err)
 	}
-	if len(pending) >= constants.MaxPendingApprovalsPerActor {
+	if len(pending)+batch > constants.MaxPendingApprovalsPerActor {
 		return domain.ErrTooManyPendingApprovals
 	}
 	return nil
 }
 
-// createApprovalCheckpoint 断点恢复仅 MCP 工具审批需要（D3：评测/策略/服务器配置审批无 agent 恢复语义）。
-func (s *ToolApprovalService) createApprovalCheckpoint(ctx context.Context, payload ToolApprovalPayload, id string, expires time.Time) error {
-	if s.checkpoints == nil || payload.SubjectKind != domain.SubjectKindMCPTool {
+// createApprovalCheckpoint 断点恢复仅 MCP 工具审批需要（D3：评测/策略/服务器配置审批无
+// agent 恢复语义）。批量审批一次写一个 checkpoint：RuntimeStateJSON 记录全部
+// approval_ids（同时保留首条 approval_id 兼容旧读），PendingToolCallsJSON 记录每条的
+// 审批 ID 与调用定位信息（tool_call_id/server_id/tool_name/risk_level），供恢复时按
+// 调用匹配注入对应审批。
+func (s *ToolApprovalService) createApprovalCheckpoint(ctx context.Context, payloads []ToolApprovalPayload, ids []string, expires time.Time) error {
+	if s.checkpoints == nil || len(payloads) == 0 || payloads[0].SubjectKind != domain.SubjectKindMCPTool {
 		return nil
 	}
-	runtime, _ := json.Marshal(map[string]string{"approval_id": id})
-	pending, _ := json.Marshal([]map[string]string{{"approval_id": id}})
-	if err := s.checkpoints.Upsert(ctx, payload.TenantID, domain.AgentExecutionCheckpoint{
-		ExecutionID: payload.ExecutionID, TraceID: payload.TraceID, AgentID: payload.AgentID, UserID: payload.UserID,
-		ConversationID: payload.ConversationID,
-		CurrentNode:    "tool_approval", PendingToolCallsJSON: pending, RuntimeStateJSON: runtime,
+	primary := payloads[0]
+	runtime := map[string]any{"approval_ids": ids}
+	// 保留首条 approval_id 兼容旧版单值读取（approvalIDsFromRuntimeState 回退单值）。
+	if len(ids) > 0 {
+		runtime["approval_id"] = ids[0]
+	}
+	pending := make([]map[string]any, 0, len(payloads))
+	for i, payload := range payloads {
+		pending = append(pending, map[string]any{
+			"approval_id": ids[i], "tool_call_id": payload.ToolCallID, "server_id": payload.ServerID,
+			"tool_name": payload.ToolName, "risk_level": payload.RiskLevel,
+		})
+	}
+	runtimeJSON, _ := json.Marshal(runtime)
+	pendingJSON, _ := json.Marshal(pending)
+	if err := s.checkpoints.Upsert(ctx, primary.TenantID, domain.AgentExecutionCheckpoint{
+		ExecutionID: primary.ExecutionID, TraceID: primary.TraceID, AgentID: primary.AgentID, UserID: primary.UserID,
+		ConversationID: primary.ConversationID,
+		CurrentNode:    "tool_approval", PendingToolCallsJSON: pendingJSON, RuntimeStateJSON: runtimeJSON,
 		Status: "waiting_approval", ResumeReason: "destructive_tool_approval", ExpiresAt: expires,
 	}); err != nil {
 		return fmt.Errorf("persist tool approval checkpoint: %w", err)
@@ -488,23 +552,25 @@ func (s *ToolApprovalService) CancelApproval(ctx context.Context, tenantID, id, 
 	return s.repo.Cancel(ctx, tenantID, id, actor, reason, s.now())
 }
 
-// TerminalResumePayload 读取终态审批（cancelled/rejected）的已解密载荷，供终态续跑
-// synthesizeApprovalResume 使用。按 row.Status 显式枚举——绝不放行 pending（保持 202 等待
-// 语义），杜绝"错误类型兜底"误吞 pending/executing/executed（安全 review 高优）。终态行不做
-// 过期门控：rejected/cancelled 即使已过 expires_at 也应放行（堵住"轮询到 rejected 恰逢过期"
-// 的续跑断链竞态，后端 review H1）。
+// TerminalResumePayload 读取终态审批（cancelled/rejected/expired）的已解密载荷，供终态
+// 续跑 synthesizeApprovalResume 使用。按 row.Status 显式枚举——绝不放行未过期的 pending
+// （保持 202 等待语义），杜绝"错误类型兜底"误吞 pending/executing/executed（安全 review
+// 高优）。终态行不做过期门控：rejected/cancelled 即使已过 expires_at 也应放行（堵住
+// "轮询到 rejected 恰逢过期"的续跑断链竞态，后端 review H1）。expired 由 410 改终态
+// 续跑：修复"审批过期后会话卡死"回归——过期视作"未通过"，LLM 感知后自行收尾。
 func (s *ToolApprovalService) TerminalResumePayload(ctx context.Context, tenantID, approvalID string) (ToolApprovalPayload, string, error) {
 	row, err := s.repo.Get(ctx, tenantID, approvalID)
 	if err != nil {
 		return ToolApprovalPayload{}, "", err
 	}
 	switch row.Status {
-	case string(domain.ToolApprovalCancelled), string(domain.ToolApprovalRejected):
+	case string(domain.ToolApprovalCancelled), string(domain.ToolApprovalRejected), string(domain.ToolApprovalExpired):
 		// 终态放行，不过期门控：工具反正被 ApprovedPayload 拒绝、不会执行。
+		return s.terminalResumePayload(tenantID, row, row.Status)
 	default:
-		// 非终态：pending（未过期）→ ErrApprovalNotApproved 保持 202；pending（已过期）→
-		// ErrApprovalExpired；invalidated → ErrApprovalInvalidated；voided/executing/executed/approved
-		// → ErrApprovalNotApproved；unknown_outcome → ErrApprovalOutcomeUnknown。
+		// 非终态：invalidated → ErrApprovalInvalidated；unknown_outcome → ErrApprovalOutcomeUnknown；
+		// pending/approved 时钟已过 → 终态续跑（见时钟分支）；其余（未过期 pending/voided/
+		// executing/executed/approved）→ ErrApprovalNotApproved 保持 202。
 		if row.Status == string(domain.ToolApprovalOutcomeUnknown) {
 			return ToolApprovalPayload{}, "", ErrApprovalOutcomeUnknown
 		}
@@ -512,10 +578,21 @@ func (s *ToolApprovalService) TerminalResumePayload(ctx context.Context, tenantI
 			return ToolApprovalPayload{}, "", domain.ErrApprovalInvalidated
 		}
 		if !row.ExpiresAt.After(s.now()) {
+			// 过期：pending（未决定）或 approved（已批准但超时）→ 视作终态放行，工具不执行、
+			// 会话不再卡死（回归修复）。voided/executing/executed 等已流转状态不在此列——保留
+			// ErrApprovalExpired，避免对"工具已执行/已作废"行输出误导性"审批已过期"终态。
+			if row.Status == string(domain.ToolApprovalPending) || row.Status == string(domain.ToolApprovalApproved) {
+				return s.terminalResumePayload(tenantID, row, string(domain.ToolApprovalExpired))
+			}
 			return ToolApprovalPayload{}, "", ErrApprovalExpired
 		}
 		return ToolApprovalPayload{}, "", ErrApprovalNotApproved
 	}
+}
+
+// terminalResumePayload 解密并校验终态审批载荷的 binding，供 TerminalResumePayload 的
+// 显式终态 case 与时钟过期分支复用（避免重复解密/binding 代码）。
+func (s *ToolApprovalService) terminalResumePayload(tenantID string, row domain.ToolApproval, status string) (ToolApprovalPayload, string, error) {
 	payload, err := decryptPayload(s.key, row.EncryptedPayload)
 	if err != nil {
 		return ToolApprovalPayload{}, "", err
@@ -523,7 +600,7 @@ func (s *ToolApprovalService) TerminalResumePayload(ctx context.Context, tenantI
 	if mismatches := toolApprovalBindingMismatches(tenantID, row, payload); len(mismatches) > 0 {
 		return ToolApprovalPayload{}, "", fmt.Errorf("%w: %s", ErrApprovalBindingMismatch, strings.Join(mismatches, ","))
 	}
-	return payload, row.Status, nil
+	return payload, status, nil
 }
 
 // matchApprovedCallDigest 校验已批准载荷与本次执行的 server/tool/参数一致

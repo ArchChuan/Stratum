@@ -26,7 +26,7 @@ func TestBuildApprovalResumeOptions_GuardDigestToleratesIntFloat(t *testing.T) {
 	svc, repo := resumeOptionService(t, payload)
 	agent := resumeOptionAgent{config: &domain.AgentConfig{MCPToolIDs: []string{"mcp:srv:delete"}}}
 
-	options, consumed, err := svc.buildApprovalResumeOptions(context.Background(), "t1", agent, payload, "approval-1", false)
+	options, consumed, err := svc.buildApprovalResumeOptions(context.Background(), "t1", agent, singleApprovalEntry(payload, false))
 	require.NoError(t, err)
 	_, fn := applyToolOptions(t, options)
 
@@ -51,7 +51,7 @@ func TestBuildApprovalResumeOptions_GuardNoReinjectAfterConsumed(t *testing.T) {
 	svc, repo := resumeOptionService(t, payload)
 	agent := resumeOptionAgent{config: &domain.AgentConfig{MCPToolIDs: []string{"mcp:srv:delete"}}}
 
-	options, consumed, err := svc.buildApprovalResumeOptions(context.Background(), "t1", agent, payload, "approval-1", false)
+	options, consumed, err := svc.buildApprovalResumeOptions(context.Background(), "t1", agent, singleApprovalEntry(payload, false))
 	require.NoError(t, err)
 	_, fn := applyToolOptions(t, options)
 

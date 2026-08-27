@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 type approvalRepoFake struct {
 	row                                                 domain.ToolApproval
 	createErr, decideErr, claimErr, markErr, releaseErr error
+	createCount                                         int // Create 调用计数，生成递增 approval-N（批量测试断言多条 ID）
 	unknownErr                                          error
 	getErr                                              error
 	getCalls                                            int
@@ -32,7 +34,8 @@ type approvalRepoFake struct {
 	invalidateStaleErr                                          error
 	cancelErr                                                   error // Cancel 硬失败注入
 	cancelled                                                   int
-	lastCancelReason                                            string // 最近一次 Cancel 的 decision_reason（发起人自撤 vs admin 代撤）
+	lastCancelReason                                            string                         // 最近一次 Cancel 的 decision_reason（发起人自撤 vs admin 代撤）
+	rowByID                                                     map[string]domain.ToolApproval // 批量测试：Get 按 approvalID 分发（混合状态批次）
 }
 
 func (f *approvalRepoFake) Create(_ context.Context, _ string, row domain.ToolApproval) (string, error) {
@@ -40,10 +43,17 @@ func (f *approvalRepoFake) Create(_ context.Context, _ string, row domain.ToolAp
 	if f.createErr != nil {
 		return "", f.createErr
 	}
-	return "approval-1", nil
+	f.createCount++
+	return fmt.Sprintf("approval-%d", f.createCount), nil
 }
-func (f *approvalRepoFake) Get(_ context.Context, _, _ string) (domain.ToolApproval, error) {
+func (f *approvalRepoFake) Get(_ context.Context, _, approvalID string) (domain.ToolApproval, error) {
 	f.getCalls++
+	// 批量测试：rowByID 命中按 approvalID 分发；未命中回退单行桩（存量测试不受影响）。
+	if f.rowByID != nil {
+		if row, ok := f.rowByID[approvalID]; ok {
+			return row, nil
+		}
+	}
 	// getErr 默认从第二次 Get 起生效（claim 前读取成功、claim 后行消失）；
 	// getFailFirst 强制首次即失败（单次 Get 路径）。
 	if f.getErr != nil && (f.getFailFirst || f.getCalls > 1) {
@@ -160,13 +170,58 @@ func TestToolApprovalServiceEncryptsPayloadAndCreatesSafeCheckpoint(t *testing.T
 	require.Equal(t, "approval-1", id)
 	require.NotContains(t, repo.row.EncryptedPayload, "do-not-store-plain")
 	require.Equal(t, "waiting_approval", checkpoints.row.Status)
-	require.JSONEq(t, `{"approval_id":"approval-1"}`, string(checkpoints.row.RuntimeStateJSON))
+	require.JSONEq(t, `{"approval_ids":["approval-1"],"approval_id":"approval-1"}`, string(checkpoints.row.RuntimeStateJSON))
 	require.NotContains(t, string(checkpoints.row.PendingToolCallsJSON), "do-not-store-plain")
+	require.JSONEq(t, `[{"approval_id":"approval-1","tool_call_id":"call-1","server_id":"orders","tool_name":"delete","risk_level":"destructive"}]`, string(checkpoints.row.PendingToolCallsJSON))
 	require.NotEmpty(t, repo.row.DecisionID)
 	require.Contains(t, repo.row.ArgumentsDigest, "tool-arguments:v1:sha256:")
 	require.Contains(t, repo.row.SkillRevisionsDigest, "skill-revisions:v1:sha256:")
 	require.Contains(t, repo.row.MCPRevisionsDigest, "mcp-revisions:v1:sha256:")
 	require.Contains(t, repo.row.KnowledgeRevisionsDigest, "knowledge-revisions:v1:sha256:")
+}
+
+func TestToolApprovalServiceRequestBatchCreatesAllAndSingleCheckpoint(t *testing.T) {
+	repo := &approvalRepoFake{}
+	checkpoints := &checkpointFake{}
+	svc := NewToolApprovalService(repo, checkpoints, crypto.DeriveAESKey("test-key"))
+	ids, err := svc.RequestBatch(context.Background(), []ToolApprovalPayload{
+		{
+			TenantID: "tenant-1", ExecutionID: "exec-1", TraceID: "trace-1", AgentID: "agent-1", UserID: "user-1",
+			ToolCallID: "call-1", ServerID: "orders", ToolName: "delete", RiskLevel: port.ToolRiskDestructive,
+			Arguments: map[string]any{"order_id": "order-1"},
+		},
+		{
+			TenantID: "tenant-1", ExecutionID: "exec-1", TraceID: "trace-1", AgentID: "agent-1", UserID: "user-1",
+			ToolCallID: "call-2", ServerID: "customers", ToolName: "purge", RiskLevel: port.ToolRiskDestructive,
+			Arguments: map[string]any{"customer_id": "customer-1"},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"approval-1", "approval-2"}, ids)
+	require.Equal(t, 2, repo.createCount, "批内每条都落库")
+	require.Equal(t, 1, checkpoints.upsertCount, "批量审批只写一次 checkpoint，防止互相覆盖")
+	require.JSONEq(t, `{"approval_ids":["approval-1","approval-2"],"approval_id":"approval-1"}`, string(checkpoints.row.RuntimeStateJSON))
+	require.JSONEq(t, `[
+		{"approval_id":"approval-1","tool_call_id":"call-1","server_id":"orders","tool_name":"delete","risk_level":"destructive"},
+		{"approval_id":"approval-2","tool_call_id":"call-2","server_id":"customers","tool_name":"purge","risk_level":"destructive"}
+	]`, string(checkpoints.row.PendingToolCallsJSON))
+}
+
+func TestToolApprovalServiceRequestBatchQuotaCountsWholeBatch(t *testing.T) {
+	repo := &approvalRepoFake{pendingN: constants.MaxPendingApprovalsPerActor - 1}
+	svc := NewToolApprovalService(repo, &checkpointFake{}, crypto.DeriveAESKey("test-key"))
+	// 现有 pending 距上限只差 1，批量 2 条：quota 按 len(batch) 一次抵扣，不得逐条
+	// 创建（第 2 条起误报配额）。
+	_, err := svc.RequestBatch(context.Background(), []ToolApprovalPayload{
+		{TenantID: "tenant-1", ExecutionID: "exec-1", AgentID: "agent-1", UserID: "user-member",
+			ToolCallID: "call-1", ServerID: "orders", ToolName: "delete", RiskLevel: port.ToolRiskDestructive,
+			Arguments: map[string]any{}},
+		{TenantID: "tenant-1", ExecutionID: "exec-1", AgentID: "agent-1", UserID: "user-member",
+			ToolCallID: "call-2", ServerID: "customers", ToolName: "purge", RiskLevel: port.ToolRiskDestructive,
+			Arguments: map[string]any{}},
+	})
+	require.ErrorIs(t, err, domain.ErrTooManyPendingApprovals)
+	require.Zero(t, repo.createCount, "配额不满足时整批不得创建任何审批行")
 }
 
 func TestToolApprovalServiceRejectsTamperedBinding(t *testing.T) {
@@ -492,12 +547,14 @@ func TestApprovedToolResumeErrorRequiresPinnedCallToBeConsumed(t *testing.T) {
 }
 
 type checkpointFake struct {
-	row domain.AgentExecutionCheckpoint
-	err error
+	row         domain.AgentExecutionCheckpoint
+	err         error
+	upsertCount int // Upsert 调用次数（批量审批只写一次 checkpoint 断言用）
 }
 
 func (f *checkpointFake) Upsert(_ context.Context, _ string, row domain.AgentExecutionCheckpoint) error {
 	f.row = row
+	f.upsertCount++
 	return f.err
 }
 func (f *checkpointFake) GetLatest(context.Context, string, string) (*domain.AgentExecutionCheckpoint, error) {
@@ -1007,7 +1064,9 @@ func TestCancelApprovalRepoHardFailPropagates(t *testing.T) {
 }
 
 // ── 终态续跑载荷读取：TerminalResumePayload 按 row.Status 显式枚举 ──
-// 只对 cancelled/rejected 放行（已过期也放行，无过期门控 H1）；pending 绝不放行（保持 202）。
+// 显式终态 cancelled/rejected 放行（已过期也放行，无过期门控 H1）；时钟过期分支对
+// pending/approved 视作终态放行（回归修复：过期不再 410 卡死会话）；未过期 pending/
+// approved 保持 202。
 
 func TestTerminalResumePayloadTerminalStates(t *testing.T) {
 	tests := []struct {
@@ -1019,6 +1078,8 @@ func TestTerminalResumePayloadTerminalStates(t *testing.T) {
 		{name: "cancelled unexpired", status: domain.ToolApprovalCancelled, expires: time.Now().Add(time.Minute), wantStat: string(domain.ToolApprovalCancelled)},
 		{name: "cancelled expired still allowed", status: domain.ToolApprovalCancelled, expires: time.Now().Add(-time.Hour), wantStat: string(domain.ToolApprovalCancelled)},
 		{name: "rejected expired still allowed", status: domain.ToolApprovalRejected, expires: time.Now().Add(-time.Hour), wantStat: string(domain.ToolApprovalRejected)},
+		{name: "pending expired terminal", status: domain.ToolApprovalPending, expires: time.Now().Add(-time.Minute), wantStat: string(domain.ToolApprovalExpired)},
+		{name: "approved expired terminal", status: domain.ToolApprovalApproved, expires: time.Now().Add(-time.Minute), wantStat: string(domain.ToolApprovalExpired)},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1041,7 +1102,6 @@ func TestTerminalResumePayloadNonTerminalStates(t *testing.T) {
 		wantErr error
 	}{
 		{name: "pending unexpired keeps waiting", status: domain.ToolApprovalPending, expires: time.Now().Add(time.Minute), wantErr: ErrApprovalNotApproved},
-		{name: "pending expired", status: domain.ToolApprovalPending, expires: time.Now().Add(-time.Minute), wantErr: ErrApprovalExpired},
 		{name: "invalidated", status: domain.ToolApprovalInvalidated, expires: time.Now().Add(time.Minute), wantErr: domain.ErrApprovalInvalidated},
 		{name: "voided unexpired", status: domain.ToolApprovalVoided, expires: time.Now().Add(time.Minute), wantErr: ErrApprovalNotApproved},
 		{name: "executing never released", status: domain.ToolApprovalExecuting, expires: time.Now().Add(time.Minute), wantErr: ErrApprovalNotApproved},
