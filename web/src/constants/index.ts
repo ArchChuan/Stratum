@@ -42,6 +42,9 @@ export const DEFAULT_PAGE_SIZE = 20;
 export const COMPACT_PAGE_SIZE = 10;
 export const PAGE_SIZE_OPTIONS = ['10', '20', '50'];
 
+// 平台管理员候选用户搜索条数（GET /admin/users）。
+export const ADMIN_USER_SEARCH_LIMIT = 10;
+
 export const WORKFLOW_DEFAULT_PAGE_SIZE = 20;
 export const SCHEDULED_TASK_DEFAULT_PAGE_SIZE = 20;
 export const SCHEDULED_TASK_MAX_NAME_LENGTH = 64;

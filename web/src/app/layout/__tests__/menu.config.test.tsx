@@ -102,6 +102,22 @@ describe('buildMenuItems', () => {
     expect(screen.queryByText('审计日志')).not.toBeInTheDocument();
     expect(screen.getByText('全局租户')).toBeInTheDocument();
     expect(screen.getByText('平台参数')).toBeInTheDocument();
+    expect(screen.getByText('平台管理员')).toBeInTheDocument();
+  });
+
+  it('shows tenant/settings to system_admin but hides super-admin-only items', () => {
+    const labels = collectLabels(buildMenuItems({
+      sub: 'sa-1', tenant_id: 'tenant-1', role: 'member', global_role: 'system_admin',
+      avatar_url: '', github_login: 'sa', username: '',
+      current_tenant: { id: 'tenant-1', name: 'Test', role: 'member' },
+    }));
+    render(<div>{labels.map((label, index) => <div key={index}>{label}</div>)}</div>);
+    expect(screen.getByText('平台管理')).toBeInTheDocument();
+    expect(screen.getByText('全局租户')).toBeInTheDocument();
+    expect(screen.getByText('平台参数')).toBeInTheDocument();
+    // 模型管理与平台管理员管理仅 global_admin 可见
+    expect(screen.queryByText('模型管理')).not.toBeInTheDocument();
+    expect(screen.queryByText('平台管理员')).not.toBeInTheDocument();
   });
 
   it('shows 审批中心 to tenant admins even when not global admin', () => {

@@ -1,0 +1,14 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "POST",
+    "path": "/admin/admins",
+    "body": {
+      "user_id": "contract-user"
+    },
+    "want_status": 200,
+    "want_body": {
+      "message": "admin role set"
+    }
+  }
+]

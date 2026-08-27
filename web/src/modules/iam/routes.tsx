@@ -2,6 +2,7 @@ import { Route } from 'react-router-dom';
 
 import { PrivateRoute } from './components/PrivateRoute';
 import { ProfilePage } from './pages/ProfilePage';
+import { AdminsPage } from './pages/admin/AdminsPage';
 import { TenantsListPage } from './pages/admin/TenantsListPage';
 import { CallbackPage } from './pages/auth/CallbackPage';
 import { LoginPage } from './pages/auth/LoginPage';
@@ -49,8 +50,17 @@ export const iamPrivateRoutes = [
     key="admin-tenants"
     path="/admin/tenants"
     element={
-      <PrivateRoute requiredRole="global_admin">
+      <PrivateRoute requiredRole="system_admin">
         <TenantsListPage />
+      </PrivateRoute>
+    }
+  />,
+  <Route
+    key="admin-admins"
+    path="/admin/admins"
+    element={
+      <PrivateRoute requiredRole="global_admin">
+        <AdminsPage />
       </PrivateRoute>
     }
   />,

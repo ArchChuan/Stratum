@@ -10,6 +10,8 @@ import (
 	"github.com/byteBuilderX/stratum/api/middleware"
 	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
 	iamdomain "github.com/byteBuilderX/stratum/internal/iam/domain"
+	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -99,6 +101,73 @@ func (h *AdminHandler) DeleteTenant(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "tenant deleted"})
+}
+
+// SearchUsers GET /admin/users?query=&limit= — 平台管理员候选用户搜索。
+func (h *AdminHandler) SearchUsers(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	if limit < 1 || limit > constants.MaxPageSize {
+		limit = constants.DefaultPageSize
+	}
+	users, err := h.svc.SearchUsers(c.Request.Context(), c.Query("query"), limit)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	resp := make([]gen.AdminUserResponse, 0, len(users))
+	for _, u := range users {
+		resp = append(resp, adminUserToDTO(u))
+	}
+	c.JSON(http.StatusOK, gen.SearchUsersResponse{Users: resp})
+}
+
+// ListAdmins GET /admin/admins — 全部平台管理员列表。
+func (h *AdminHandler) ListAdmins(c *gin.Context) {
+	admins, err := h.svc.ListAdmins(c.Request.Context())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	resp := make([]gen.AdminUserResponse, 0, len(admins))
+	for _, u := range admins {
+		resp = append(resp, adminUserToDTO(u))
+	}
+	c.JSON(http.StatusOK, gen.ListAdminsResponse{Admins: resp})
+}
+
+// SetAdminRole POST /admin/admins {user_id} — 提升为普通平台管理员。
+func (h *AdminHandler) SetAdminRole(c *gin.Context) {
+	var req gen.SetAdminRoleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	actorID := c.GetString(middleware.ContextKeySub)
+	if err := h.svc.SetAdminRole(c.Request.Context(), actorID, req.UserID); err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "admin role set"})
+}
+
+// RemoveAdminRole DELETE /admin/admins/:user_id — 移除普通平台管理员。
+func (h *AdminHandler) RemoveAdminRole(c *gin.Context) {
+	actorID := c.GetString(middleware.ContextKeySub)
+	if err := h.svc.RemoveAdminRole(c.Request.Context(), actorID, c.Param("user_id")); err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "admin role removed"})
+}
+
+func adminUserToDTO(u iamport.AdminUser) gen.AdminUserResponse {
+	return gen.AdminUserResponse{
+		UserID:      u.UserID,
+		Username:    u.Username,
+		GitHubLogin: u.GitHubLogin,
+		AvatarURL:   &u.AvatarURL,
+		GlobalRole:  string(u.GlobalRole),
+	}
 }
 
 func tenantToDTO(t iamdomain.Tenant) gen.TenantResponse {

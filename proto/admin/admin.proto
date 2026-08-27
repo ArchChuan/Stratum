@@ -97,3 +97,30 @@ message TenantListItem {
 message TenantListResponse {
   repeated TenantListItem tenants = 1;
 }
+
+message SearchUsersRequest {
+  string query = 1;
+  int32 limit = 2;
+}
+
+message AdminUserResponse {
+  string user_id = 1;
+  string username = 2;
+  string github_login = 3;
+  // @omitempty
+  optional string avatar_url = 4;
+  string global_role = 5;
+}
+
+message SearchUsersResponse {
+  repeated AdminUserResponse users = 1;
+}
+
+message ListAdminsResponse {
+  repeated AdminUserResponse admins = 1;
+}
+
+message SetAdminRoleRequest {
+  // @binding: required
+  string user_id = 1;
+}

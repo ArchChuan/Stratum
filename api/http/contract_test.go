@@ -146,7 +146,10 @@ func TestContracts(t *testing.T) {
 			CandidateService:  evalapp.NewCandidateCommandService(contractCandidateRepo{}),
 		},
 		IAM: &wiring.IAM{
-			AdminService:      iamapp.NewAdminService(contractAdminTR),
+			AdminService: iamapp.NewAdminService(
+				contractAdminTR,
+				iamapp.WithUserRepo(contractAdminUserRepo{}),
+			),
 			TenantService:     iamapp.NewTenantService(contractTenantR, logger),
 			InvitationService: iamapp.NewInvitationService(contractInvR),
 		},
@@ -162,6 +165,7 @@ func TestContracts(t *testing.T) {
 	dddPrefixes := []string{
 		"/evaluations/", "/dashboard/", "/resource-change-proposals/",
 		"/admin/providers", "/admin/models", "/admin/tenants",
+		"/admin/admins", "/admin/users",
 		"/tenant/", "/workflows", "/workflow-runs", "/workflow-approvals",
 		"/operation-proposals", "/scheduled-tasks", "/audit",
 	}
@@ -199,7 +203,9 @@ func TestContracts(t *testing.T) {
 					switch {
 					case strings.HasPrefix(c.Path, "/admin/tenants"),
 						strings.HasPrefix(c.Path, "/admin/providers"),
-						strings.HasPrefix(c.Path, "/admin/models"):
+						strings.HasPrefix(c.Path, "/admin/models"),
+						strings.HasPrefix(c.Path, "/admin/admins"),
+						strings.HasPrefix(c.Path, "/admin/users"):
 						claims = iamport.TokenClaims{
 							Sub: "contract-admin", TenantID: "contract-tenant",
 							Role: "admin", GlobalRole: "global_admin",
@@ -393,6 +399,23 @@ func (contractAgentExecutor) ExecuteAgent(_ context.Context, _ string, _ string,
 }
 
 // ── IAM stubs ──────────────────────────────────────────────────────────────
+
+type contractAdminUserRepo struct{}
+
+func (contractAdminUserRepo) SearchUsers(_ context.Context, _ string, _ int) ([]iamport.AdminUser, error) {
+	return nil, nil
+}
+func (contractAdminUserRepo) ListAdmins(_ context.Context) ([]iamport.AdminUser, error) {
+	return nil, nil
+}
+func (contractAdminUserRepo) SetAdminRole(_ context.Context, _ string) error    { return nil }
+func (contractAdminUserRepo) RemoveAdminRole(_ context.Context, _ string) error { return nil }
+func (contractAdminUserRepo) GetGlobalRole(_ context.Context, userID string) (iamdomain.GlobalRole, error) {
+	if userID == "contract-user" {
+		return iamdomain.GlobalRoleUser, nil
+	}
+	return iamdomain.GlobalRoleGlobalAdmin, nil
+}
 
 type contractAdminTenantRepo struct{}
 

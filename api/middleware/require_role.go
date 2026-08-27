@@ -6,6 +6,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	iamdomain "github.com/byteBuilderX/stratum/internal/iam/domain"
 )
 
 // Context key constants matching internal/iam/application/middleware.go
@@ -14,19 +16,32 @@ const (
 	ctxRole       = "auth.role"
 )
 
-// RequireGlobalAdmin aborts with 403 unless the request context has global_role == "global_admin".
-func RequireGlobalAdmin() gin.HandlerFunc {
+// RequirePlatformAdmin aborts with 403 unless the request context's
+// global_role is at or above minRole. Fail-closed: missing or invalid role → 403.
+func RequirePlatformAdmin(minRole iamdomain.GlobalRole) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		role, _ := c.Get(ctxGlobalRole)
-		if role != "global_admin" {
+		roleVal, _ := c.Get(ctxGlobalRole)
+		role, _ := roleVal.(string)
+		if !iamdomain.GlobalRole(role).AtLeast(minRole) {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"code":    http.StatusForbidden,
-				"message": "global admin role required",
+				"message": "insufficient platform role",
 			})
 			return
 		}
 		c.Next()
 	}
+}
+
+// RequireSystemAdmin requires at least system_admin platform role.
+func RequireSystemAdmin() gin.HandlerFunc {
+	return RequirePlatformAdmin(iamdomain.GlobalRoleSystemAdmin)
+}
+
+// RequireGlobalAdmin aborts with 403 unless the request context has
+// global_role == "global_admin".
+func RequireGlobalAdmin() gin.HandlerFunc {
+	return RequirePlatformAdmin(iamdomain.GlobalRoleGlobalAdmin)
 }
 
 // RequireTenantRole aborts with 403 unless the tenant role is at or above minRole.
