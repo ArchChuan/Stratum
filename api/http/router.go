@@ -275,15 +275,28 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 	adminHandler := handler.NewAdminHandler(c.IAM.AdminService, c.Logger)
 	tenantHandler := handler.NewTenantHandler(c.IAM.TenantService, c.IAM.InvitationService, c.IAM.AdminService, c.Logger)
 
-	adminGroup := r.Group("/admin", jwtMW, middleware.RequireGlobalAdmin())
+	// /admin 常规后台：system_admin 及以上（租户管理、参数、memory DLQ）。
+	adminGroup := r.Group("/admin", jwtMW, middleware.RequireSystemAdmin())
 	{
 		adminGroup.GET("/tenants", adminHandler.ListTenants)
 		adminGroup.POST("/tenants", adminHandler.CreateTenant)
 		adminGroup.GET("/tenants/:id", adminHandler.GetTenant)
 		adminGroup.PATCH("/tenants/:id", adminHandler.UpdateTenant)
-		adminGroup.DELETE("/tenants/:id", adminHandler.DeleteTenant)
+		// 高敏感：删除租户仅 global_admin。
+		adminGroup.DELETE("/tenants/:id", middleware.RequireGlobalAdmin(), adminHandler.DeleteTenant)
 		registerParameterAdminRoutes(adminGroup, c)
 		registerMemoryDLQAdminRoutes(adminGroup, c)
+
+		// 平台管理员管理：仅 global_admin（system_admin 不可自我管理或管理同级）。
+		adminAdmins := adminGroup.Group("/admins", middleware.RequireGlobalAdmin())
+		{
+			adminAdmins.GET("", adminHandler.ListAdmins)
+			adminAdmins.POST("", adminHandler.SetAdminRole)
+			adminAdmins.DELETE("/:user_id", adminHandler.RemoveAdminRole)
+		}
+
+		// 用户搜索：供提升选择候选，system_admin 可见（候选不含管理员）。
+		adminGroup.GET("/users", adminHandler.SearchUsers)
 	}
 
 	tenantGroup := r.Group("/tenant", jwtMW, middleware.InjectTenantContext(), middleware.RequireTenantRole("member"))
@@ -641,7 +654,7 @@ func registerAudit(r *gin.Engine, c *wiring.Container, requireActive gin.Handler
 		}
 		platformAudit := r.Group("/admin/audit/platform",
 			middleware.JWTMiddleware(c.Platform.JWTService, c.Platform.Metrics),
-			middleware.RequireGlobalAdmin())
+			middleware.RequireSystemAdmin())
 		platformAudit.GET("/events", platformHandler.List)
 		platformAudit.GET("/events/:id", platformHandler.Get)
 	}

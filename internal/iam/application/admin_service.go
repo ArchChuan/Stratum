@@ -3,6 +3,7 @@ package application
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,6 +17,7 @@ import (
 // AdminService orchestrates platform-admin tenant operations.
 type AdminService struct {
 	repo             port.AdminTenantRepo
+	userRepo         port.AdminUserRepo
 	schemaCleaner    port.TenantSchemaCleaner
 	vectorCleaner    port.TenantVectorCleaner
 	objectCleaner    port.TenantObjectCleaner
@@ -54,6 +56,11 @@ func WithCacheInvalidator(c port.TenantCacheInvalidator) AdminServiceOption {
 // WithAdminLogger sets the logger.
 func WithAdminLogger(l *zap.Logger) AdminServiceOption {
 	return func(s *AdminService) { s.logger = l }
+}
+
+// WithUserRepo sets the platform-admin user repository.
+func WithUserRepo(r port.AdminUserRepo) AdminServiceOption {
+	return func(s *AdminService) { s.userRepo = r }
 }
 
 // WithTenantProvisionedHook sets a callback invoked after ProvisionSchema
@@ -170,4 +177,66 @@ func normaliseFilter(f domain.TenantFilter) domain.TenantFilter {
 		f.PageSize = constants.DefaultPageSize
 	}
 	return f
+}
+
+// SearchUsers returns non-guest, non-admin users as promotion candidates.
+func (s *AdminService) SearchUsers(ctx context.Context, query string, limit int) ([]port.AdminUser, error) {
+	if s.userRepo == nil {
+		return nil, domain.ErrUserRepoUnavailable
+	}
+	return s.userRepo.SearchUsers(ctx, query, limit)
+}
+
+// ListAdmins returns all platform admins with their role.
+func (s *AdminService) ListAdmins(ctx context.Context) ([]port.AdminUser, error) {
+	if s.userRepo == nil {
+		return nil, domain.ErrUserRepoUnavailable
+	}
+	return s.userRepo.ListAdmins(ctx)
+}
+
+// SetAdminRole promotes a user to system_admin. Only a global_admin actor may
+// promote, and only non-guest, non-global-admin targets.
+func (s *AdminService) SetAdminRole(ctx context.Context, actorID, userID string) error {
+	if s.userRepo == nil {
+		return domain.ErrUserRepoUnavailable
+	}
+	actorRole, err := s.userRepo.GetGlobalRole(ctx, actorID)
+	if err != nil {
+		return fmt.Errorf("set admin role: actor check: %w", err)
+	}
+	if actorRole != domain.GlobalRoleGlobalAdmin {
+		return domain.ErrForbidden
+	}
+	targetRole, err := s.userRepo.GetGlobalRole(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if targetRole == domain.GlobalRoleGlobalAdmin {
+		return domain.ErrForbidden // never touch a super admin
+	}
+	return s.userRepo.SetAdminRole(ctx, userID)
+}
+
+// RemoveAdminRole demotes a system_admin back to user. The actor must be a
+// global_admin; the target must not be one (including the actor themself).
+func (s *AdminService) RemoveAdminRole(ctx context.Context, actorID, userID string) error {
+	if s.userRepo == nil {
+		return domain.ErrUserRepoUnavailable
+	}
+	actorRole, err := s.userRepo.GetGlobalRole(ctx, actorID)
+	if err != nil {
+		return fmt.Errorf("remove admin role: actor check: %w", err)
+	}
+	if actorRole != domain.GlobalRoleGlobalAdmin {
+		return domain.ErrForbidden
+	}
+	targetRole, err := s.userRepo.GetGlobalRole(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if targetRole == domain.GlobalRoleGlobalAdmin {
+		return domain.ErrForbidden // never touch a super admin (incl. self)
+	}
+	return s.userRepo.RemoveAdminRole(ctx, userID)
 }

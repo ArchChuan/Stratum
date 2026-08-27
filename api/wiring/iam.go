@@ -90,6 +90,7 @@ func (c *Container) buildIAM(_ context.Context) error {
 		opts := []application.AdminServiceOption{
 			application.WithSchemaCleaner(iampersistence.NewTenantSchemaCleaner(db)),
 			application.WithAdminLogger(c.Logger),
+			application.WithUserRepo(iampersistence.NewAdminUserRepo(db)),
 			application.WithCacheInvalidator(tenantModelCacheInvalidator{c.Platform.ModelRegistry}),
 			// Admin-created tenants seed the built-in knowledge workspace
 			// asynchronously (nil queue-retry budget) so CreateTenant responses

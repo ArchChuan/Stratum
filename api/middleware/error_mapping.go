@@ -65,6 +65,7 @@ var errorStatusTable = map[error]int{
 	agentdomain.ErrEvidenceNotFound:               http.StatusNotFound,
 	knowledgedomain.ErrWorkspaceNotFound:          http.StatusNotFound,
 	knowledgedomain.ErrDocumentNotFound:           http.StatusNotFound,
+	iamdomain.ErrForbidden:                        http.StatusForbidden,
 	iamdomain.ErrMemberNotFound:                   http.StatusNotFound,
 	iamdomain.ErrTenantNotFound:                   http.StatusNotFound,
 	llmgatewaydomain.ErrModelNotFound:             http.StatusNotFound,
