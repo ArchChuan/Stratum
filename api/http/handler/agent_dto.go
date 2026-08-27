@@ -116,6 +116,50 @@ type AgentExecutionResult struct {
 	Artifacts  []domain.ExecutionArtifact `json:"artifacts"`
 }
 
+// AgentVersionResponse mirrors agent.VersionDTO for the wire. Field shapes
+// are frozen by contract tests; do not rename.
+type AgentVersionResponse struct {
+	ID            string         `json:"id"`
+	VersionNo     int            `json:"versionNo"`
+	Status        string         `json:"status"`
+	Source        string         `json:"source"`
+	ContentHash   string         `json:"contentHash"`
+	CreatedBy     string         `json:"createdBy"`
+	CreatedByName string         `json:"createdByName"`
+	CreatedAt     string         `json:"createdAt"`
+	PublishedAt   string         `json:"publishedAt"`
+	IsCurrent     bool           `json:"isCurrent"`
+	SafeSummary   map[string]any `json:"safeSummary"`
+}
+
+// AgentVersionsResponse wraps the version history list (newest first),
+// matching the skill revisions response shape for frontend symmetry.
+type AgentVersionsResponse struct {
+	Versions []AgentVersionResponse `json:"versions"`
+}
+
+// RollbackAgentRequest carries the target historical version to restore.
+type RollbackAgentRequest struct {
+	VersionID string `json:"versionId" binding:"required"`
+}
+
+// agentVersionToResponse maps the service-side VersionDTO to the wire shape.
+func agentVersionToResponse(v agent.VersionDTO) AgentVersionResponse {
+	return AgentVersionResponse{
+		ID:            v.ID,
+		VersionNo:     v.VersionNo,
+		Status:        v.Status,
+		Source:        v.Source,
+		ContentHash:   v.ContentHash,
+		CreatedBy:     v.CreatedBy,
+		CreatedByName: v.CreatedByName,
+		CreatedAt:     v.CreatedAt,
+		PublishedAt:   v.PublishedAt,
+		IsCurrent:     v.IsCurrent,
+		SafeSummary:   v.SafeSummary,
+	}
+}
+
 // dtoToResponse maps the service-side AgentDTO to the wire AgentResponse.
 func dtoToResponse(d agent.AgentDTO) AgentResponse {
 	return AgentResponse{

@@ -343,7 +343,7 @@ func TestBaseAgent_ReActExecute_ToolArtifactsUseProfileVersionConstant(t *testin
 	require.Equal(t, "diagnostic complete", result.Output)
 	require.NotEmpty(t, result.Artifacts, "工具产生 evidence 应产出 diagnostic_report artifact")
 	for _, artifact := range result.Artifacts {
-		require.Equal(t, domain.CurrentSystemAssistantProfileVersion, artifact.ProfileVersion,
+		require.Equal(t, domain.CurrentExecutionArtifactProfileVersion, artifact.ProfileVersion,
 			"artifact %q 的 ProfileVersion 必须为常量", artifact.Type)
 	}
 }

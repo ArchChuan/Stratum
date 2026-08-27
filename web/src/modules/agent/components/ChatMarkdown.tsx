@@ -2,6 +2,12 @@ import { memo, type CSSProperties, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+// toolRefRe 剥离"声称带引用"标记（与后端 factcheck/reconcile.go 的 toolRefRe
+// 字符集一致：<tool_ref:ID> 与兼容形式 [tool:ID]，ID 为 tool_call_id 合法字符）。
+// 该标记是给模型/对账器的机器指令，非用户可见内容，渲染前剥离（纯显示层，
+// 不改消息源；对账结果由 FactCheckNotice 透出）。
+const TOOL_REF_RE = /<tool_ref:[A-Za-z0-9_-]+>|\[tool:[A-Za-z0-9_-]+\]/g;
+
 export const BUBBLE: Record<string, CSSProperties> = {
   user: {
     maxWidth: '72%',
@@ -155,10 +161,12 @@ const mdComponents = {
 
 // memo：流式期间历史消息 content 不变时不重跑 ReactMarkdown 解析
 export const ChatMarkdown = memo(function ChatMarkdown({ content }: { content: string }) {
+  // 剥离工具引用标记（纯显示层；全局正则 replace 自重置 lastIndex，无状态残留）
+  const display = content.replace(TOOL_REF_RE, '');
   return (
     <div className="chat-markdown" style={{ overflowWrap: 'anywhere', minWidth: 0 }}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-        {content}
+        {display}
       </ReactMarkdown>
     </div>
   );

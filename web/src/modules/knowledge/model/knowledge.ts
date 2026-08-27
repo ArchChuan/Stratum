@@ -23,9 +23,6 @@ export const workspaceSchema = z
     name: z.string(),
     description: z.string().optional().default(''),
     config: workspaceConfigSchema.optional(),
-    // management_mode: 历史兼容透传字段（后端 Domain Workspace 保留列），
-    // 前端不做任何平台特判，读写原样透传。
-    management_mode: z.string().optional(),
   })
   .passthrough();
 export type Workspace = z.infer<typeof workspaceSchema>;

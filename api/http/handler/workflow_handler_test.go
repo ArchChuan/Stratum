@@ -72,6 +72,9 @@ func (*workflowDefinitionFake) Publish(context.Context, string, string, string) 
 func (f *workflowDefinitionFake) Get(context.Context, string, string) (*workflowdomain.Definition, error) {
 	return f.created, nil
 }
+func (f *workflowDefinitionFake) Rollback(_ context.Context, _ string, _ string, versionID string, _ string) (*workflowdomain.Definition, error) {
+	return &workflowdomain.Definition{ID: f.created.ID, Name: f.created.Name, Revision: f.created.Revision, ActiveVersionID: versionID}, nil
+}
 func (*workflowDefinitionFake) GetVersion(context.Context, string, string) (*workflowdomain.Version, error) {
 	return &workflowdomain.Version{ID: "version-1", DefinitionID: "wf-1", Number: 1}, nil
 }
@@ -200,6 +203,47 @@ func TestWorkflowHandlerDeletesDraft(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Equal(t, "wf-1", definitions.deletedID)
+}
+
+func TestWorkflowHandlerRollbackMovesActiveVersion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	definitions := &workflowDefinitionFake{created: &workflowdomain.Definition{ID: "wf-1", Name: "Research", Revision: 2}}
+	h := handler.NewWorkflowHandler(definitions, &workflowRunFake{})
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), "tenant-1"))
+		c.Set(middleware.ContextKeySub, "user-1")
+		c.Set(middleware.ContextKeyRole, "admin")
+		c.Next()
+	})
+	router.POST("/workflows/:id/rollback", h.RollbackDefinition)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/workflows/wf-1/rollback", strings.NewReader(`{"versionId":"version-1"}`)))
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	require.Equal(t, "version-1", body["active_version_id"])
+}
+
+func TestWorkflowHandlerRollbackRejectsMissingVersionID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := handler.NewWorkflowHandler(&workflowDefinitionFake{}, &workflowRunFake{})
+	router := gin.New()
+	router.Use(middleware.ErrorHandler(zap.NewNop()))
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), "tenant-1"))
+		c.Set(middleware.ContextKeySub, "user-1")
+		c.Set(middleware.ContextKeyRole, "admin")
+		c.Next()
+	})
+	router.POST("/workflows/:id/rollback", h.RollbackDefinition)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/workflows/wf-1/rollback", strings.NewReader(`{}`)))
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
 }
 
 func TestWorkflowHandlerListsProductCollections(t *testing.T) {

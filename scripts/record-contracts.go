@@ -47,10 +47,12 @@ import (
 	schedapp "github.com/byteBuilderX/stratum/internal/scheduler/application"
 	scheddomain "github.com/byteBuilderX/stratum/internal/scheduler/domain"
 	schedport "github.com/byteBuilderX/stratum/internal/scheduler/domain/port"
+	versioningdomain "github.com/byteBuilderX/stratum/internal/versioning/domain"
 	workflowapp "github.com/byteBuilderX/stratum/internal/workflow/application"
 	workflowdomain "github.com/byteBuilderX/stratum/internal/workflow/domain"
 	workflowport "github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
@@ -116,7 +118,10 @@ func buildDDDContainer(cfg *config.Config, key *rsa.PrivateKey, logger *zap.Logg
 			CandidateService:  evalapp.NewCandidateCommandService(contractCandRepo{}),
 		},
 		IAM: &wiring.IAM{
-			AdminService:      iamapp.NewAdminService(contractAdminTR{}),
+			AdminService: iamapp.NewAdminService(
+				contractAdminTR{},
+				iamapp.WithUserRepo(contractAdminUR{}),
+			),
 			TenantService:     iamapp.NewTenantService(contractTenantR{}, logger),
 			InvitationService: iamapp.NewInvitationService(contractInvR{}),
 		},
@@ -188,7 +193,9 @@ func isDDDAuthOverride(routePath string) (bool, iamport.TokenClaims) {
 	adminClaims := iamport.TokenClaims{Sub: "contract-admin", TenantID: "contract-tenant", Role: "admin"}
 	globalAdmin := iamport.TokenClaims{Sub: "contract-admin", GlobalRole: "global_admin"}
 	switch {
-	case strings.HasPrefix(routePath, "/admin/tenants"):
+	case strings.HasPrefix(routePath, "/admin/tenants"),
+		strings.HasPrefix(routePath, "/admin/admins"),
+		strings.HasPrefix(routePath, "/admin/users"):
 		return true, globalAdmin
 	case strings.HasPrefix(routePath, "/admin/providers"), strings.HasPrefix(routePath, "/admin/models"):
 		return true, adminClaims
@@ -233,12 +240,22 @@ func main() {
 	jwtSvc := iamtoken.NewJWTService(key)
 
 	// Phase 1: legacy router records ALL routes (unauth baseline).
+	recordLegacyRoutes(router, outDir)
+
+	// Phase 2: DDD router overwrites selected routes with auth responses.
+	recordDDDRoutes(ddRouter, jwtSvc, outDir)
+
+	fmt.Printf("done recording\n")
+}
+
+func recordLegacyRoutes(router *gin.Engine, outDir string) {
 	for _, route := range router.Routes() {
 		filename := goldenName(route.Method, route.Path)
 		recordRoute(router, route.Method, route.Path, filepath.Join(outDir, filename))
 	}
+}
 
-	// Phase 2: DDD router overwrites selected routes with auth responses.
+func recordDDDRoutes(ddRouter *gin.Engine, jwtSvc iamport.TokenService, outDir string) {
 	evalWhitelist := map[string]bool{
 		"GET /evaluations/overview": true, "GET /evaluations/resources": true,
 		"GET /evaluations/suites": true, "GET /evaluations/runs": true,
@@ -251,22 +268,34 @@ func main() {
 	}
 	for _, route := range ddRouter.Routes() {
 		filename := filepath.Join(outDir, goldenName(route.Method, route.Path))
-		routeKey := route.Method + " " + route.Path
-		switch {
-		case evalWhitelist[routeKey]:
-			recordEvalRoute(ddRouter, jwtSvc, route.Method, route.Path, filename)
-		case routeKey == "POST /agents/:id/self-modify":
-			// Proposal ID is a random UUID: record a regex assertion instead
-			// of a byte-exact body so replay is deterministic.
-			recordSelfModifyRoute(ddRouter, jwtSvc, route.Path, filename)
-		default:
-			if ok, claims := isDDDAuthOverride(route.Path); ok {
-				recordAuthRoute(ddRouter, jwtSvc, claims, route.Method, route.Path, nil, filename)
-			}
-		}
+		recordDDDRoute(ddRouter, jwtSvc, route.Method, route.Path, filename, evalWhitelist)
 	}
+}
 
-	fmt.Printf("done recording\n")
+func recordDDDRoute(router *gin.Engine, jwtSvc iamport.TokenService, method, routePath, filename string, evalWhitelist map[string]bool) {
+	routeKey := method + " " + routePath
+	switch {
+	case evalWhitelist[routeKey]:
+		recordEvalRoute(router, jwtSvc, method, routePath, filename)
+	case routeKey == "POST /agents/:id/self-modify":
+		// Proposal ID is a random UUID: record a regex assertion instead
+		// of a byte-exact body so replay is deterministic.
+		recordSelfModifyRoute(router, jwtSvc, routePath, filename)
+	default:
+		recordAuthOverride(router, jwtSvc, method, routePath, routeKey, filename)
+	}
+}
+
+func recordAuthOverride(router *gin.Engine, jwtSvc iamport.TokenService, method, routePath, routeKey, filename string) {
+	ok, claims := isDDDAuthOverride(routePath)
+	if !ok {
+		return
+	}
+	var body json.RawMessage
+	if routeKey == "POST /admin/admins" {
+		body = json.RawMessage(`{"user_id":"contract-user"}`)
+	}
+	recordAuthRoute(router, jwtSvc, claims, method, routePath, body, filename)
 }
 
 func goldenName(method, path string) string {
@@ -371,6 +400,7 @@ func resolvePath(routePath, method string, body json.RawMessage) string {
 	p = strings.ReplaceAll(p, ":provider_id", "contract-provider")
 	p = strings.ReplaceAll(p, ":model_id", "contract-model")
 	p = strings.ReplaceAll(p, ":tenant_id", "contract-tenant-id")
+	p = strings.ReplaceAll(p, ":user_id", "contract-user")
 	p = strings.ReplaceAll(p, ":member_id", "contract-member")
 	p = strings.ReplaceAll(p, ":workflowId", "contract-workflow")
 	p = strings.ReplaceAll(p, ":runId", "contract-run")
@@ -552,6 +582,23 @@ func (contractAgtExec) ExecuteAgent(_ context.Context, _ string, _ string, _ str
 
 // ── IAM stubs ───────────────────────────────────────────────────────────
 
+type contractAdminUR struct{}
+
+func (contractAdminUR) SearchUsers(_ context.Context, _ string, _ int) ([]iamport.AdminUser, error) {
+	return nil, nil
+}
+func (contractAdminUR) ListAdmins(_ context.Context) ([]iamport.AdminUser, error) {
+	return nil, nil
+}
+func (contractAdminUR) SetAdminRole(_ context.Context, _ string) error    { return nil }
+func (contractAdminUR) RemoveAdminRole(_ context.Context, _ string) error { return nil }
+func (contractAdminUR) GetGlobalRole(_ context.Context, userID string) (iamdomain.GlobalRole, error) {
+	if userID == "contract-user" {
+		return iamdomain.GlobalRoleUser, nil
+	}
+	return iamdomain.GlobalRoleGlobalAdmin, nil
+}
+
 type contractAdminTR struct{}
 
 func (contractAdminTR) Count(_ context.Context, _ iamdomain.TenantFilter) (int, error) { return 0, nil }
@@ -722,7 +769,10 @@ func (contractAgentRepo) GetAll(context.Context) ([]*agentdomain.AgentConfig, er
 func (contractAgentRepo) Remove(context.Context, string, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (contractAgentRepo) Update(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string, bool) error {
+func (contractAgentRepo) Update(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string, bool, *versioningdomain.Version) error {
+	return nil
+}
+func (contractAgentRepo) Rollback(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string, string) error {
 	return nil
 }
 

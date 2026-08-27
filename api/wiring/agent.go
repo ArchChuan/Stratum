@@ -22,6 +22,7 @@ import (
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	memapp "github.com/byteBuilderX/stratum/internal/memory/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
+	versioningpersistence "github.com/byteBuilderX/stratum/internal/versioning/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
@@ -334,9 +335,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		if c.LLMGateway != nil {
 			registry, gw = c.LLMGateway.Registry, c.LLMGateway.Gateway
 		}
-		a.TenantResolver = newTenantCapabilityResolver(
-			registry, gw, c.Logger,
-		)
+		a.TenantResolver = newTenantCapabilityResolver(registry, gw, c.Logger)
 	}
 
 	deps := agent.AgentServiceDeps{
@@ -366,6 +365,9 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	}
 	if db != nil {
 		deps.ResourceEditorRepo = persistence.NewPgResourceEditorRepo(db)
+		// 通用产品版本历史（read-only）+ created_by 昵称解析，未装配 fail-closed。
+		deps.VersionRepo = versioningpersistence.NewPgVersionRepo(db)
+		deps.ActorNameResolver = iampersistence.NewPgActorNameResolver(db)
 	}
 	if c.Memory != nil {
 		deps.MemoryInjector = c.Memory.Injector
@@ -606,34 +608,55 @@ func resolveFactCheckPlatformSettings(c *Container) (*factcheck.Settings, error)
 	if c.Parameters == nil || c.Parameters.Service == nil || c.Parameters.Registry == nil {
 		return nil, nil
 	}
+	return resolveFactCheckSettings(c.LLMGateway.Gateway, c.Parameters.Service.Resolver(), c.Logger)
+}
+
+// resolveFactCheckSettings 从参数解析器装配 factcheck 配置（纯逻辑，便于单测）。
+// 对账轨（citation_verify）与 judge 轨（enabled）可独立开启：仅开对账时返回无
+// Judge 的 settings（对账是代码级核验，不依赖 LLM）；仅开 judge 时维持既有语义。
+// 两轨全关返回 nil（fail-closed）。enabled 但 gateway 缺失或 judge model/prompt
+// 空 = 整体禁用（不兜底，沿既有 fail-closed）。
+func resolveFactCheckSettings(gateway llmgatewaydomain.LLMCompleter, r fcResolver, logger *zap.Logger) (*factcheck.Settings, error) {
 	ctx := context.Background()
-	r := c.Parameters.Service.Resolver()
-
 	enabled, _ := resolveFCParam[bool](r, ctx, "agent.factcheck.enabled")
-	if !enabled {
+	citationVerify, _ := resolveFCParam[bool](r, ctx, "agent.factcheck.citation_verify")
+	if !enabled && !citationVerify {
 		return nil, nil
 	}
-
-	model, _ := resolveFCParam[string](r, ctx, "agent.factcheck.judge.model")
-	if model == "" {
+	if enabled && gateway == nil {
 		return nil, nil
 	}
-
-	prompt, _ := resolveFCParam[string](r, ctx, "agent.factcheck.judge.prompt")
-	if prompt == "" {
-		return nil, nil
+	settings := &factcheck.Settings{
+		Enabled:        enabled,
+		CitationVerify: citationVerify,
+		Logger:         logger,
 	}
-
-	topK, _ := resolveFCInt(r, ctx, "agent.factcheck.top_k")
-	maxClaims, _ := resolveFCInt(r, ctx, "agent.factcheck.max_claims")
-
-	return &factcheck.Settings{
-		Enabled:   true,
-		Judge:     factCheckJudge{completer: c.LLMGateway.Gateway, model: model, prompt: prompt},
-		TopK:      topK,
-		MaxClaims: maxClaims,
-		Logger:    c.Logger,
-	}, nil
+	// judge 相关字段仅在 enabled 时解析（citation-only 允许 Judge==nil）。
+	if enabled {
+		model, _ := resolveFCParam[string](r, ctx, "agent.factcheck.judge.model")
+		if model == "" {
+			return nil, nil
+		}
+		prompt, _ := resolveFCParam[string](r, ctx, "agent.factcheck.judge.prompt")
+		if prompt == "" {
+			return nil, nil
+		}
+		topK, _ := resolveFCInt(r, ctx, "agent.factcheck.top_k")
+		maxClaims, _ := resolveFCInt(r, ctx, "agent.factcheck.max_claims")
+		var temperature *float64
+		if t, ok := resolveFCFloat(r, ctx, "agent.factcheck.judge.temperature"); ok && t > 0 {
+			temperature = &t
+		}
+		settings.TopK = topK
+		settings.MaxClaims = maxClaims
+		settings.Judge = factCheckJudge{
+			completer:   gateway,
+			model:       model,
+			prompt:      prompt,
+			temperature: temperature,
+		}
+	}
+	return settings, nil
 }
 
 // fcResolver is the minimal interface for the parameter registry resolver.
@@ -672,6 +695,22 @@ func resolveFCInt(r fcResolver, ctx context.Context, key string) (int, bool) {
 	}
 }
 
+// resolveFCFloat resolves a float64 parameter via parsed float64 or int64.
+func resolveFCFloat(r fcResolver, ctx context.Context, key string) (float64, bool) {
+	val, present, err := r.Resolve(ctx, key, nil)
+	if err != nil || !present {
+		return 0, false
+	}
+	switch v := val.(type) {
+	case float64:
+		return v, true
+	case int64:
+		return float64(v), true
+	default:
+		return 0, false
+	}
+}
+
 // factCheckJudge 实现 factcheck.Judge（LLM-as-Judge 幻觉判定），走 llmgateway
 // completer + json_object 结构化输出。prompt 是纯规则系统提示词（无占位符），
 // 程序构造的 user message 包含 claims 和 evidence 的填充。只消费 claim 聚合证据，
@@ -680,6 +719,8 @@ type factCheckJudge struct {
 	completer llmgatewaydomain.LLMCompleter
 	model     string
 	prompt    string
+	// temperature 是 judge 采样温度；nil = 平台 unset（0）用模型/Provider 默认。
+	temperature *float64
 }
 
 func (j factCheckJudge) JudgeClaims(ctx context.Context, claims []string, evidence string) ([]domain.ClaimVerdict, error) {
@@ -688,8 +729,9 @@ func (j factCheckJudge) JudgeClaims(ctx context.Context, claims []string, eviden
 		return nil, fmt.Errorf("factcheck judge: marshal claims: %w", err)
 	}
 	resp, err := j.completer.Complete(ctx, &llmgatewaydomain.CompletionRequest{
-		Model:     j.model,
-		MaxTokens: constants.AgentFactCheckJudgeMaxTokens,
+		Model:       j.model,
+		Temperature: j.temperature,
+		MaxTokens:   constants.AgentFactCheckJudgeMaxTokens,
 		ResponseFormat: &llmgatewaydomain.ResponseFormat{
 			Type: "json_object",
 		},

@@ -12,6 +12,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	versioningdomain "github.com/byteBuilderX/stratum/internal/versioning/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -211,7 +212,10 @@ func (m *mockAgentRepo) GetAll(ctx context.Context) ([]*domain.AgentConfig, erro
 func (m *mockAgentRepo) Remove(ctx context.Context, id string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return m.Called(ctx, id).Error(0)
 }
-func (m *mockAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool) error {
+func (m *mockAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool, _ *versioningdomain.Version) error {
+	return m.Called(ctx, cfg).Error(0)
+}
+func (m *mockAgentRepo) Rollback(ctx context.Context, cfg *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _, _ string) error {
 	return m.Called(ctx, cfg).Error(0)
 }
 
@@ -480,7 +484,7 @@ func TestAgentService_SnapshotRevisionPreservesExecutionParity(t *testing.T) {
 func TestAgentServiceManagedAssistantRevisionEntrypointsProceed(t *testing.T) {
 	svc, repo := newTestService(t)
 	repo.On("Get", mock.Anything, domain.SystemAssistantID).Return(&domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model",
+		ID: domain.SystemAssistantID, LLMModel: "tenant-model",
 		Name: "平台使用助手", Type: domain.ReActAgent, SystemPrompt: "你是平台助手",
 		MaxIterations: 3,
 	}, true, nil)
@@ -656,7 +660,7 @@ func TestAgentService_DeleteSystemAssistantGoesThroughOwnership(t *testing.T) {
 	ctx := context.Background()
 	const id = "stratum-platform-assistant"
 	repo.On("Get", ctx, id).Return(&domain.AgentConfig{
-		ID: id, SystemKey: "stratum.platform_assistant",
+		ID: id,
 	}, true, nil)
 	repo.On("Remove", ctx, id).Return(nil).Maybe()
 

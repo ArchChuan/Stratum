@@ -2,15 +2,12 @@ package postgres_test
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
-	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 
-	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres/postgrestest"
 	"github.com/stretchr/testify/require"
@@ -21,8 +18,9 @@ func TestTenantSchemaCleansUpPlatformMCPRows(t *testing.T) {
 	require.NoError(t, err)
 	sql := string(data)
 
-	require.Contains(t, sql, "system_key TEXT")
-	require.Contains(t, sql, "management_mode TEXT NOT NULL DEFAULT 'tenant_managed'")
+	require.Contains(t, sql, "ALTER TABLE agents DROP COLUMN IF EXISTS system_key")
+	require.Contains(t, sql, "ALTER TABLE mcp_configs DROP COLUMN IF EXISTS system_key")
+	require.Contains(t, sql, "ALTER TABLE mcp_configs DROP COLUMN IF EXISTS management_mode")
 	require.Contains(t, sql, "stratum-platform-assistant")
 	require.Contains(t, sql, "DELETE FROM agent_mcp_tool_links WHERE server_id = 'stratum-platform-mcp'")
 	require.Contains(t, sql, "DELETE FROM mcp_configs WHERE id = 'stratum-platform-mcp'")
@@ -46,35 +44,6 @@ func TestTenantSchemaAllowsGrantEditorOpType(t *testing.T) {
 	require.Contains(t, sql, "ADD CONSTRAINT operation_proposals_op_type_check")
 }
 
-func TestTenantSchemaPlatformMCPDomainIdentityFieldsAreProtected(t *testing.T) {
-	for _, target := range []struct {
-		name string
-		typ  reflect.Type
-	}{
-		{name: "ServerConfig", typ: reflect.TypeOf(mcpdomain.ServerConfig{})},
-		{name: "Server", typ: reflect.TypeOf(mcpdomain.Server{})},
-	} {
-		systemKey, ok := target.typ.FieldByName("SystemKey")
-		require.True(t, ok, "%s.SystemKey must exist", target.name)
-		require.Equal(t, "-", systemKey.Tag.Get("json"))
-		require.Equal(t, "-", systemKey.Tag.Get("yaml"))
-
-		managementMode, ok := target.typ.FieldByName("ManagementMode")
-		require.True(t, ok, "%s.ManagementMode must exist", target.name)
-		require.Equal(t, "management_mode", managementMode.Tag.Get("json"))
-		require.Equal(t, "management_mode", managementMode.Tag.Get("yaml"))
-	}
-
-	var cfg mcpdomain.ServerConfig
-	require.NoError(t, json.Unmarshal([]byte(`{
-		"system_key":"stratum.platform_mcp",
-		"management_mode":"platform_managed"
-	}`), &cfg))
-	value := reflect.ValueOf(cfg)
-	require.Empty(t, value.FieldByName("SystemKey").String(), "public JSON binding must ignore system_key")
-	require.Equal(t, "platform_managed", value.FieldByName("ManagementMode").String())
-}
-
 func TestTenantSchemaDefaultsSystemAssistantModelWithoutOverwritingTenantChoice(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {
@@ -82,11 +51,11 @@ func TestTenantSchemaDefaultsSystemAssistantModelWithoutOverwritingTenantChoice(
 	}
 	sql := string(data)
 	for _, want := range []string{
-		"'glm-5.2', 10, 0, 'user', 'stratum.platform_assistant'",
+		"'glm-5.2', 10, 0, 'user'",
 		"UPDATE agents",
 		"SET llm_model = 'glm-5.2',",
 		"updated_at = NOW()",
-		"WHERE system_key = 'stratum.platform_assistant'",
+		"WHERE id = 'stratum-platform-assistant'",
 		"AND BTRIM(llm_model) = ''",
 		"BTRIM(COALESCE(system_prompt, '')) = ''",
 	} {
@@ -103,28 +72,25 @@ func TestTenantSchemaContainsSystemAssistantIdentityAndSeed(t *testing.T) {
 	}
 	sql := string(data)
 	createAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS agents")
-	columnAt := strings.Index(sql, "ALTER TABLE agents ADD COLUMN IF NOT EXISTS system_key TEXT")
-	indexAt := strings.Index(sql, "CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_system_key")
-	seedAt := strings.Index(sql, "'stratum.platform_assistant'")
-	if createAt == -1 || columnAt == -1 || indexAt == -1 || seedAt == -1 {
-		t.Fatalf("tenant schema missing managed assistant DDL: create=%d column=%d index=%d seed=%d",
-			createAt, columnAt, indexAt, seedAt)
+	dropColumnAt := strings.Index(sql, "ALTER TABLE agents DROP COLUMN IF EXISTS system_key")
+	seedAt := strings.Index(sql, "'stratum-platform-assistant'")
+	if createAt == -1 || dropColumnAt == -1 || seedAt == -1 {
+		t.Fatalf("tenant schema missing managed assistant DDL: create=%d dropColumn=%d seed=%d",
+			createAt, dropColumnAt, seedAt)
 	}
-	if createAt >= columnAt || columnAt >= indexAt || indexAt >= seedAt {
-		t.Fatalf("managed assistant DDL must follow create/alter/index/seed order: create=%d column=%d index=%d seed=%d",
-			createAt, columnAt, indexAt, seedAt)
+	if createAt >= dropColumnAt || dropColumnAt >= seedAt {
+		t.Fatalf("managed assistant DDL must follow create/drop-column/seed order: create=%d dropColumn=%d seed=%d",
+			createAt, dropColumnAt, seedAt)
 	}
 	for _, want := range []string{
-		"ON agents(system_key) WHERE system_key IS NOT NULL",
 		"'stratum-platform-assistant'",
 		"'平台使用助手'",
 		"WHILE EXISTS",
 		"'基于官方资料指导平台使用并诊断当前租户应用状态'",
-		"'glm-5.2', 10, 0, 'user', 'stratum.platform_assistant'",
+		"'glm-5.2', 10, 0, 'user'",
 		"stratum_apply_resource_change",
 		"Deletion, credential changes, IAM operations, and publishing remain forbidden",
 		"ON CONFLICT (id) DO NOTHING",
-		"stratum platform assistant identity conflict requires operator action",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("tenant schema missing managed assistant contract %q", want)
@@ -969,6 +935,41 @@ func TestProvisionTenantSchemaCleansLegacyTablesKeepsPublic(t *testing.T) {
 		`SELECT EXISTS (SELECT 1 FROM information_schema.tables
 		 WHERE table_schema='public' AND table_name='providers')`).Scan(&publicExists))
 	require.True(t, publicExists, "provision must not drop public platform catalog")
+}
+
+func TestTenantSchemaContainsResourceVersionsProductHistory(t *testing.T) {
+	// 通用产品版本历史基座:agent/skill/knowledge/mcp 共享,与 resource_revisions
+	// (评测优化控制面)语义独立。tenant-only DDL 的唯一基线是 tenant_schema.sql,
+	// 历史租户升级必须有 active_version_id 幂等回填;表/索引必须 IF NOT EXISTS。
+	data, err := os.ReadFile("tenant_schema.sql")
+	require.NoError(t, err)
+	sql := string(data)
+
+	require.Contains(t, sql, "CREATE TABLE IF NOT EXISTS resource_versions")
+	require.Contains(t, sql, "parent_version_id TEXT REFERENCES resource_versions(id) ON DELETE SET NULL")
+	require.Contains(t, sql, "CHECK (resource_kind IN ('agent', 'skill', 'knowledge', 'mcp'))")
+	require.Contains(t, sql, "CHECK (status IN ('published', 'deprecated'))")
+	require.Contains(t, sql, "CHECK (source IN ('manual', 'rollback'))")
+	require.Contains(t, sql, "content_hash      TEXT NOT NULL DEFAULT ''")
+	require.Contains(t, sql, "safe_summary      JSONB NOT NULL DEFAULT '{}'")
+	require.Contains(t, sql, "CREATE INDEX IF NOT EXISTS idx_resource_versions_resource")
+	require.Contains(t, sql, "ON resource_versions(resource_kind, resource_id, created_at DESC)")
+	require.Contains(t, sql, "CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_versions_revision_no")
+	require.Contains(t, sql, "ON resource_versions(resource_kind, resource_id, revision_no)")
+	require.Contains(t, sql, "WHERE revision_no IS NOT NULL")
+
+	// 产品表生效版本指针:历史租户升级路径,IF NOT EXISTS 幂等。NULL=无版本记录。
+	agentsAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS agents")
+	activeVersionAt := strings.Index(sql, "ALTER TABLE agents ADD COLUMN IF NOT EXISTS active_version_id TEXT")
+	require.NotEqual(t, -1, agentsAt, "agents table DDL must exist")
+	require.NotEqual(t, -1, activeVersionAt, "tenant_schema.sql missing agents.active_version_id backfill")
+	if activeVersionAt < agentsAt {
+		t.Fatal("agents.active_version_id backfill must follow table creation")
+	}
+
+	// 产品版本历史禁止被租户重放清理删除(与 resource_revisions 同语义)。
+	require.NotContains(t, sql, "DELETE FROM resource_versions")
+	require.NotContains(t, sql, "DROP TABLE IF EXISTS resource_versions")
 }
 
 func TestPlatformModelCatalogCarriesDefaultEmbeddingUniqueMark(t *testing.T) {

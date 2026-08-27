@@ -9,6 +9,7 @@ import (
 	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	versioningdomain "github.com/byteBuilderX/stratum/internal/versioning/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
@@ -198,6 +199,10 @@ func (r *registryAgentRepoFake) Remove(ctx context.Context, id string, audit *au
 	return nil
 }
 
-func (r *registryAgentRepoFake) Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string, replaceParams bool) error {
+func (r *registryAgentRepoFake) Update(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string, replaceParams bool, version *versioningdomain.Version) error {
+	return nil
+}
+
+func (r *registryAgentRepoFake) Rollback(ctx context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor, targetVersionID string) error {
 	return nil
 }

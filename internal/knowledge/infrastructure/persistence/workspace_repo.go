@@ -158,11 +158,9 @@ func (r *WorkspaceRepo) GetByName(ctx context.Context, tenantID, name string) (*
 	)
 	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT id, name, COALESCE(description,''), config,
-		                     COALESCE(system_key,''), COALESCE(management_mode,'tenant_managed'),
 		                     COALESCE(created_by,''), created_at, updated_at
 	                     FROM rag_workspaces WHERE name = $1`, name,
 		).Scan(&ws.ID, &ws.Name, &ws.Description, &jc,
-			&ws.SystemKey, &ws.ManagementMode,
 			&ws.CreatedBy, &ws.CreatedAt, &ws.UpdatedAt)
 	})
 	if err != nil {
@@ -183,11 +181,9 @@ func (r *WorkspaceRepo) GetByID(ctx context.Context, tenantID, id string) (*doma
 	)
 	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT id, name, COALESCE(description,''), config,
-		                     COALESCE(system_key,''), COALESCE(management_mode,'tenant_managed'),
 		                     COALESCE(created_by,''), created_at, updated_at
 	                     FROM rag_workspaces WHERE id = $1::uuid`, id,
 		).Scan(&ws.ID, &ws.Name, &ws.Description, &jc,
-			&ws.SystemKey, &ws.ManagementMode,
 			&ws.CreatedBy, &ws.CreatedAt, &ws.UpdatedAt)
 	})
 	if err != nil {
@@ -205,7 +201,6 @@ func (r *WorkspaceRepo) List(ctx context.Context, tenantID string) ([]*domain.Wo
 	var out []*domain.Workspace
 	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id, name, COALESCE(description,''), config,
-		                     COALESCE(system_key,''), COALESCE(management_mode,'tenant_managed'),
 		                     COALESCE(created_by,''), created_at, updated_at
 	                     FROM rag_workspaces ORDER BY created_at DESC`)
 		if err != nil {
@@ -216,7 +211,6 @@ func (r *WorkspaceRepo) List(ctx context.Context, tenantID string) ([]*domain.Wo
 			var ws domain.Workspace
 			var jc jsonbConfig
 			if err := rows.Scan(&ws.ID, &ws.Name, &ws.Description, &jc,
-				&ws.SystemKey, &ws.ManagementMode,
 				&ws.CreatedBy, &ws.CreatedAt, &ws.UpdatedAt); err != nil {
 				return fmt.Errorf("workspace_repo: scan list row: %w", err)
 			}

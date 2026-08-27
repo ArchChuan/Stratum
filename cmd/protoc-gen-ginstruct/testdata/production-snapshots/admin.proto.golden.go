@@ -89,3 +89,28 @@ type TenantListItem struct {
 type TenantListResponse struct {
 	Tenants []TenantListItem `json:"tenants"`
 }
+
+type SearchUsersRequest struct {
+	Query string `json:"query"`
+	Limit int32  `json:"limit"`
+}
+
+type AdminUserResponse struct {
+	UserID      string  `json:"user_id"`
+	Username    string  `json:"username"`
+	GitHubLogin string  `json:"github_login"`
+	AvatarURL   *string `json:"avatar_url,omitempty"`
+	GlobalRole  string  `json:"global_role"`
+}
+
+type SearchUsersResponse struct {
+	Users []AdminUserResponse `json:"users"`
+}
+
+type ListAdminsResponse struct {
+	Admins []AdminUserResponse `json:"admins"`
+}
+
+type SetAdminRoleRequest struct {
+	UserID string `json:"user_id" binding:"required"`
+}

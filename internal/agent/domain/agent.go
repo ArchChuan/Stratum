@@ -66,9 +66,6 @@ type AgentConfig struct {
 	// pipeline per agent. Absent key = unset (definition default applies).
 	MemoryParameters map[string]any
 	MemoryScope      string
-	SystemKey        string
-	IsSystem         bool
-	ManagementMode   string
 	// StuckThreshold > 0 enables lazy planning: after this many LLM rounds with
 	// no final answer the agent transitions to Reflect→Plan→Execute.
 	// 0 disables the feature (pure ReAct).
@@ -297,13 +294,17 @@ type ToolObservation struct {
 	RawText        string         `json:"raw_text"`
 	Summary        string         `json:"summary"`
 	Status         string         `json:"status"`
-	ErrorMessage   string         `json:"error_message"`
-	LatencyMs      int64          `json:"latency_ms"`
-	RawTruncated   bool           `json:"raw_truncated"`
-	Metadata       map[string]any `json:"metadata"`
-	StartedAt      time.Time      `json:"started_at"`
-	EndedAt        time.Time      `json:"ended_at"`
-	CreatedAt      time.Time      `json:"created_at"`
+	// Outcome 携带 MCP 执行结果分类（"" / not_sent / definite_failure /
+	// outcome_unknown），供幻觉防护对账区分"确凿失败"与"传输结果未知"；
+	// trace 回放路径不填充，omitempty 保证旧序列化零差异。
+	Outcome      string         `json:"outcome,omitempty"`
+	ErrorMessage string         `json:"error_message"`
+	LatencyMs    int64          `json:"latency_ms"`
+	RawTruncated bool           `json:"raw_truncated"`
+	Metadata     map[string]any `json:"metadata"`
+	StartedAt    time.Time      `json:"started_at"`
+	EndedAt      time.Time      `json:"ended_at"`
+	CreatedAt    time.Time      `json:"created_at"`
 }
 
 // AgentTraceEvent is an append-only execution trajectory event. Large tool raw
@@ -451,6 +452,9 @@ type FactCheckInput struct {
 	Output     string
 	Workspaces []string
 	ViewerID   string
+	// ToolObservations 是本次执行的内存工具调用记录（by ToolCallID），对账器
+	// 据其核验最终输出中的 <tool_ref:ID> 声称；trace 回放路径不填充。
+	ToolObservations []ToolObservation
 }
 
 // FactCheckReport 是幻觉校验结果（advisory，只展示）。Checked 表示本次确实
@@ -461,6 +465,26 @@ type FactCheckReport struct {
 	Claims     []ClaimVerdict `json:"claims"`
 	IsValid    bool           `json:"isValid"`
 	RiskPoints int            `json:"riskPoints"`
+	// ToolReferences 是对账结果：最终输出中的每个 <tool_ref:ID> 引用 vs
+	// ToolObservation 记录的核验判定。Unverified 字段标记含副作用声称但未带
+	// 引用的句子（advisory 软标记，不硬判假话）。omitempty 保持旧序列化零差异。
+	ToolReferences   []ToolReferenceVerdict `json:"toolReferences,omitempty"`
+	UnverifiedCount  int                    `json:"unverifiedCount,omitempty"`
+	UnverifiedClaims []string               `json:"unverifiedClaims,omitempty"`
+}
+
+// ToolReferenceVerdict 是单个工具引用声称的对账判定。Classification 为五态枚举
+// verified / verification_failed / outcome_unknown / invalid_reference / unverified；
+// Risk ∈ [0,5]，verification_failed 与 invalid_reference 会使整体 IsValid=false。
+type ToolReferenceVerdict struct {
+	ClaimText      string `json:"claimText,omitempty"`
+	ToolName       string `json:"toolName,omitempty"`
+	ToolCallID     string `json:"toolCallId,omitempty"`
+	Reference      string `json:"reference,omitempty"`
+	Status         string `json:"status,omitempty"`
+	Outcome        string `json:"outcome,omitempty"`
+	Classification string `json:"classification"`
+	Risk           int    `json:"risk"`
 }
 
 // ClaimVerdict 是单个 claim 的 LLM-as-Judge 判定。Verdict 为固定枚举

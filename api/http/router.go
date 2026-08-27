@@ -145,6 +145,7 @@ func registerWorkflows(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 	definitions.DELETE("/:id", admin, requireActive, h.DeleteDefinition)
 	definitions.POST("/:id/validate", admin, requireActive, h.ValidateDefinition)
 	definitions.POST("/:id/publish", admin, requireActive, h.PublishDefinition)
+	definitions.POST("/:id/rollback", admin, requireActive, h.RollbackDefinition)
 	startRuns := r.Group("/workflow-runs", member...)
 	startRuns.POST("", requireActive, h.StartRun)
 	runs := r.Group("/workflow-runs", member...)
@@ -275,15 +276,28 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 	adminHandler := handler.NewAdminHandler(c.IAM.AdminService, c.Logger)
 	tenantHandler := handler.NewTenantHandler(c.IAM.TenantService, c.IAM.InvitationService, c.IAM.AdminService, c.Logger)
 
-	adminGroup := r.Group("/admin", jwtMW, middleware.RequireGlobalAdmin())
+	// /admin 常规后台：system_admin 及以上（租户管理、参数、memory DLQ）。
+	adminGroup := r.Group("/admin", jwtMW, middleware.RequireSystemAdmin())
 	{
 		adminGroup.GET("/tenants", adminHandler.ListTenants)
 		adminGroup.POST("/tenants", adminHandler.CreateTenant)
 		adminGroup.GET("/tenants/:id", adminHandler.GetTenant)
 		adminGroup.PATCH("/tenants/:id", adminHandler.UpdateTenant)
-		adminGroup.DELETE("/tenants/:id", adminHandler.DeleteTenant)
+		// 高敏感：删除租户仅 global_admin。
+		adminGroup.DELETE("/tenants/:id", middleware.RequireGlobalAdmin(), adminHandler.DeleteTenant)
 		registerParameterAdminRoutes(adminGroup, c)
 		registerMemoryDLQAdminRoutes(adminGroup, c)
+
+		// 平台管理员管理：仅 global_admin（system_admin 不可自我管理或管理同级）。
+		adminAdmins := adminGroup.Group("/admins", middleware.RequireGlobalAdmin())
+		{
+			adminAdmins.GET("", adminHandler.ListAdmins)
+			adminAdmins.POST("", adminHandler.SetAdminRole)
+			adminAdmins.DELETE("/:user_id", adminHandler.RemoveAdminRole)
+		}
+
+		// 用户搜索：供提升选择候选，system_admin 可见（候选不含管理员）。
+		adminGroup.GET("/users", adminHandler.SearchUsers)
 	}
 
 	tenantGroup := r.Group("/tenant", jwtMW, middleware.InjectTenantContext(), middleware.RequireTenantRole("member"))
@@ -481,6 +495,10 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		// editors 管理同样放宽，SetEditors 内部仍限 creator/owner（editors=nil 拒编辑人委托）。
 		agents.PUT("/:id", requireActive, agentHandler.UpdateAgent)
 		agents.PUT("/:id/editors", requireActive, agentHandler.SetAgentEditors)
+		// 版本历史/回滚：与 skill 语义一致——member 级，归属/白名单鉴权在 service
+		// ownership 矩阵内完成（owner/admin/creator/白名单 editor 放行，其余 ErrForbidden）。
+		agents.GET("/:id/versions", requireActive, agentHandler.ListAgentVersions)
+		agents.POST("/:id/rollback", requireActive, agentHandler.RollbackAgent)
 		agents.DELETE("/:id", requireAdmin, requireActive, agentHandler.DeleteAgent)
 		agents.POST("/:id/conversations", chatHandler.CreateConversation)
 		agents.GET("/:id/conversations", chatHandler.ListConversations)
@@ -649,7 +667,7 @@ func registerAudit(r *gin.Engine, c *wiring.Container, requireActive gin.Handler
 		}
 		platformAudit := r.Group("/admin/audit/platform",
 			middleware.JWTMiddleware(c.Platform.JWTService, c.Platform.Metrics),
-			middleware.RequireGlobalAdmin())
+			middleware.RequireSystemAdmin())
 		platformAudit.GET("/events", platformHandler.List)
 		platformAudit.GET("/events/:id", platformHandler.Get)
 	}

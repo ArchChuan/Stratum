@@ -11,8 +11,6 @@ const systemAgent = {
   allowedSkills: [],
   mcpToolIds: [],
   knowledgeWorkspaceIds: [],
-  isSystem: true,
-  managementMode: 'platform',
 };
 
 const ordinaryAgent = {

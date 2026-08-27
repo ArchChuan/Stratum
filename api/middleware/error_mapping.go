@@ -19,6 +19,7 @@ import (
 	memorydomain "github.com/byteBuilderX/stratum/internal/memory/domain"
 	scheddomain "github.com/byteBuilderX/stratum/internal/scheduler/domain"
 	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
+	versioningdomain "github.com/byteBuilderX/stratum/internal/versioning/domain"
 	workflowdomain "github.com/byteBuilderX/stratum/internal/workflow/domain"
 	"github.com/jackc/pgx/v5"
 )
@@ -64,8 +65,10 @@ var errorStatusTable = map[error]int{
 	agentdomain.ErrEvidenceNotFound:               http.StatusNotFound,
 	knowledgedomain.ErrWorkspaceNotFound:          http.StatusNotFound,
 	knowledgedomain.ErrDocumentNotFound:           http.StatusNotFound,
+	iamdomain.ErrForbidden:                        http.StatusForbidden,
 	iamdomain.ErrMemberNotFound:                   http.StatusNotFound,
 	iamdomain.ErrTenantNotFound:                   http.StatusNotFound,
+	iamdomain.ErrUserNotFound:                     http.StatusNotFound,
 	llmgatewaydomain.ErrModelNotFound:             http.StatusNotFound,
 	agentapp.ErrNotFound:                          http.StatusNotFound,
 	agentdomain.ErrApprovalNotFound:               http.StatusNotFound,
@@ -227,6 +230,7 @@ var errorStatusTable = map[error]int{
 	mcpdomain.ErrUnsupportedAuth:                  http.StatusBadRequest,
 	mcpdomain.ErrSessionMissing:                   http.StatusNotFound,
 	mcpdomain.ErrTransportFailed:                  http.StatusBadGateway,
+	versioningdomain.ErrVersionNotFound:           http.StatusNotFound,
 }
 
 // MapErrorToStatus walks the wrap chain and returns the HTTP status that

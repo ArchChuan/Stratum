@@ -9,7 +9,7 @@ export const parametersRoutes = [
     key="admin-settings"
     path="/admin/settings"
     element={
-      <PrivateRoute requiredRole="global_admin">
+      <PrivateRoute requiredRole="system_admin">
         <PlatformSettingsPage />
       </PrivateRoute>
     }

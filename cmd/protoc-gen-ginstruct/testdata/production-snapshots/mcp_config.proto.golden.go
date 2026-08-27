@@ -4,7 +4,6 @@
 package gen
 
 import (
-	"encoding/json"
 	"github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"time"
 )
@@ -23,7 +22,6 @@ type MCPServerConfigRequest struct {
 	Timeout      time.Duration       `json:"timeout"`
 	Auth         *domain.AuthConfig  `json:"auth,omitempty"`
 	Retry        *domain.RetryConfig `json:"retry,omitempty"`
-	SystemKey    json.RawMessage     `json:"system_key"`
 	Editors      []string            `json:"editors"`
 }
 
@@ -37,19 +35,18 @@ type MCPAuthConfigResponse struct {
 }
 
 type MCPServerConfigResponse struct {
-	ID             string                 `json:"id"`
-	Name           string                 `json:"name"`
-	Version        string                 `json:"version"`
-	Transport      string                 `json:"transport"`
-	Command        string                 `json:"command"`
-	Args           []string               `json:"args"`
-	URL            string                 `json:"url"`
-	Env            map[string]string      `json:"env"`
-	Headers        map[string]string      `json:"headers,omitempty"`
-	Capabilities   []string               `json:"capabilities"`
-	Timeout        time.Duration          `json:"timeout"`
-	Auth           *MCPAuthConfigResponse `json:"auth,omitempty"`
-	Retry          *domain.RetryConfig    `json:"retry,omitempty"`
-	ManagementMode string                 `json:"management_mode"`
-	Editors        []string               `json:"editors"`
+	ID           string                 `json:"id"`
+	Name         string                 `json:"name"`
+	Version      string                 `json:"version"`
+	Transport    string                 `json:"transport"`
+	Command      string                 `json:"command"`
+	Args         []string               `json:"args"`
+	URL          string                 `json:"url"`
+	Env          map[string]string      `json:"env"`
+	Headers      map[string]string      `json:"headers,omitempty"`
+	Capabilities []string               `json:"capabilities"`
+	Timeout      time.Duration          `json:"timeout"`
+	Auth         *MCPAuthConfigResponse `json:"auth,omitempty"`
+	Retry        *domain.RetryConfig    `json:"retry,omitempty"`
+	Editors      []string               `json:"editors"`
 }

@@ -6,12 +6,15 @@ import { useAuth } from './AuthContext';
 
 interface PrivateRouteProps {
   children: ReactNode;
+  /** 平台角色最低要求：'system_admin' | 'global_admin'。与租户角色完全脱钩。 */
   requiredRole?: string;
   /** 租户内最低角色要求：'member' | 'admin' | 'owner'。用于拦截普通成员访问新建/编辑页。 */
   requiredTenantRole?: string;
 }
 
-// 租户角色层级，与后端 middleware.RequireTenantRole 保持一致。
+// 平台角色层级，与后端 middleware.RequirePlatformAdmin 保持一致。
+const PLATFORM_ROLE_RANK: Record<string, number> = { user: 1, system_admin: 2, global_admin: 3 };
+// 租户角色层级，与后端 middleware.RequireTenantRole 保持一致（member < admin < owner）。
 const TENANT_ROLE_RANK: Record<string, number> = { member: 1, admin: 2, owner: 3 };
 
 export const PrivateRoute = ({
@@ -48,16 +51,9 @@ export const PrivateRoute = ({
   }
 
   if (requiredRole) {
-    const isGlobalAdmin = user.global_role === 'global_admin';
-    const isSystemAdmin = user.system_role === 'system_admin' || isGlobalAdmin;
-    const ok =
-      requiredRole === 'global_admin'
-        ? isGlobalAdmin
-        : requiredRole === 'system_admin'
-          ? isSystemAdmin
-          : user.global_role === requiredRole || user.system_role === requiredRole;
-
-    if (!ok) {
+    const actual = PLATFORM_ROLE_RANK[user.global_role || 'user'] ?? 0;
+    const required = PLATFORM_ROLE_RANK[requiredRole] ?? 0;
+    if (actual < required) {
       return (
         <Result
           status="403"

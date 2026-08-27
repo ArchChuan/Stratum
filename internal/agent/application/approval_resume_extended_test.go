@@ -26,7 +26,7 @@ func TestBuildApprovalResumeOptions_GuardDigestToleratesIntFloat(t *testing.T) {
 	svc, repo := resumeOptionService(t, payload)
 	agent := resumeOptionAgent{config: &domain.AgentConfig{MCPToolIDs: []string{"mcp:srv:delete"}}}
 
-	options, consumed, err := svc.buildApprovalResumeOptions(context.Background(), "t1", agent, payload, "approval-1", false)
+	options, consumed, err := svc.buildApprovalResumeOptions(context.Background(), "t1", agent, singleApprovalEntry(payload, false))
 	require.NoError(t, err)
 	_, fn := applyToolOptions(t, options)
 
@@ -43,14 +43,15 @@ func TestBuildApprovalResumeOptions_GuardDigestToleratesIntFloat(t *testing.T) {
 
 // C2d 精确化：consumed 置位后（决定已被 ExecuteApproved 内部 ClaimExecution CAS
 // 原子消费），同参再次调用不得再次注入 ApprovalID——否则同轮内同一工具第二次
-// 调用会重复消费/重复执行。第二次走正常授权路径：destructive 未批准 →
+// 调用会重复消费/重复执行。第二次走正常授权路径：该工具未配置 policy
+// （policy_resolved=false）→ destructive 仍 require_approval →
 // ToolApprovalRequiredError，repo.claimed 保持 1（决定只消费一次）。
 func TestBuildApprovalResumeOptions_GuardNoReinjectAfterConsumed(t *testing.T) {
 	payload := resumePayload("e1", "a1", "user-1")
 	svc, repo := resumeOptionService(t, payload)
 	agent := resumeOptionAgent{config: &domain.AgentConfig{MCPToolIDs: []string{"mcp:srv:delete"}}}
 
-	options, consumed, err := svc.buildApprovalResumeOptions(context.Background(), "t1", agent, payload, "approval-1", false)
+	options, consumed, err := svc.buildApprovalResumeOptions(context.Background(), "t1", agent, singleApprovalEntry(payload, false))
 	require.NoError(t, err)
 	_, fn := applyToolOptions(t, options)
 
@@ -62,7 +63,10 @@ func TestBuildApprovalResumeOptions_GuardNoReinjectAfterConsumed(t *testing.T) {
 	require.True(t, consumed())
 	require.Equal(t, 1, repo.claimed)
 
-	_, err = fn(context.Background(), req) // 同参第二次
+	// 第二次同参：consumed 后不注入 ApprovalID → 走正常授权路径。工具未配置
+	// policy（未放行）→ 仍需审批。
+	req.Tool.Metadata["policy_resolved"] = false
+	_, err = fn(context.Background(), req)
 
 	var approvalErr *port.ToolApprovalRequiredError
 	require.ErrorAs(t, err, &approvalErr, "consumed 后同参调用不得复用已消费批准")

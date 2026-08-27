@@ -86,8 +86,8 @@ func TestPgStore_CreateDefinition_fails(t *testing.T) {
 }
 
 var definitionColumns = []string{
-	"id", "name", "description", "draft_revision", "draft_spec_json",
-	"draft_input_schema_json", "created_at", "updated_at",
+	"id", "name", "description", "draft_revision", "active_version_id",
+	"draft_spec_json", "draft_input_schema_json", "created_at", "updated_at",
 }
 
 func TestPgStore_GetDefinition_found(t *testing.T) {
@@ -98,7 +98,7 @@ func TestPgStore_GetDefinition_found(t *testing.T) {
 	mock.ExpectQuery("FROM workflow_definitions WHERE id=\\$1").
 		WithArgs("d1").
 		WillReturnRows(pgxmock.NewRows(definitionColumns).AddRow(
-			"d1", "n", "desc", int64(3), []byte(`{"nodes":[]}`), []byte(`{}`),
+			"d1", "n", "desc", int64(3), "v9", []byte(`{"nodes":[]}`), []byte(`{}`),
 			time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 			time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		))
@@ -109,6 +109,7 @@ func TestPgStore_GetDefinition_found(t *testing.T) {
 	require.NotNil(t, d)
 	require.Equal(t, "d1", d.ID)
 	require.Equal(t, int64(3), d.Revision)
+	require.Equal(t, "v9", d.ActiveVersionID)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -136,7 +137,7 @@ func TestPgStore_GetDefinition_unmarshalFails(t *testing.T) {
 	mock.ExpectQuery("FROM workflow_definitions WHERE id=\\$1").
 		WithArgs("d1").
 		WillReturnRows(pgxmock.NewRows(definitionColumns).AddRow(
-			"d1", "n", "desc", int64(3), []byte(`{invalid`), []byte(`{}`),
+			"d1", "n", "desc", int64(3), "v9", []byte(`{invalid`), []byte(`{}`),
 			time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 			time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		))
@@ -157,9 +158,9 @@ func TestPgStore_ListDefinitions_success(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
 	mock.ExpectQuery("FROM workflow_definitions WHERE").WithArgs("q", 10, 0).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "name", "description", "draft_revision", "created_at", "updated_at",
+			"id", "name", "description", "draft_revision", "active_version_id", "created_at", "updated_at",
 		}).AddRow(
-			"d1", "n", "desc", int64(2),
+			"d1", "n", "desc", int64(2), "v2",
 			time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 			time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		))
@@ -367,6 +368,9 @@ func TestPgStore_CreateNextVersion_success(t *testing.T) {
 	mock.ExpectExec("INSERT INTO workflow_versions").
 		WithArgs("v-new", "d1", int64(2), "n", "", `{"nodes":[{"id":"n1","type":"approval","agent_id":"","retry":{}}],"edges":null}`, `{"task_label":"task"}`).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec("UPDATE workflow_definitions SET active_version_id").
+		WithArgs("v-new", "d1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
 	created, err := store.CreateNextVersion(context.Background(), "t1", definition, "v-new", nil)
@@ -401,6 +405,35 @@ func TestPgStore_CreateNextVersion_definitionMissing(t *testing.T) {
 		Spec:        domain.Spec{Nodes: []domain.Node{{ID: "n1", Type: domain.NodeTypeApproval}}},
 		InputSchema: domain.InputSchema{TaskLabel: "task"},
 	}, "v-new", nil)
+	require.ErrorIs(t, err, domain.ErrNotFound)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgStore_SetActiveVersion_success(t *testing.T) {
+	mock := newStoreMock(t)
+	store := &PgStore{pool: mock}
+
+	beginTenantTx(mock)
+	mock.ExpectExec("UPDATE workflow_definitions SET active_version_id").
+		WithArgs("v-old", "d1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
+
+	require.NoError(t, store.SetActiveVersion(context.Background(), "t1", "d1", "v-old", nil))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgStore_SetActiveVersion_definitionMissing(t *testing.T) {
+	mock := newStoreMock(t)
+	store := &PgStore{pool: mock}
+
+	beginTenantTx(mock)
+	mock.ExpectExec("UPDATE workflow_definitions SET active_version_id").
+		WithArgs("v-old", "nope").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectRollback()
+
+	err := store.SetActiveVersion(context.Background(), "t1", "nope", "v-old", nil)
 	require.ErrorIs(t, err, domain.ErrNotFound)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

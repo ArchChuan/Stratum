@@ -15,14 +15,14 @@ import (
 	"go.uber.org/zap"
 )
 
-const systemAssistantKey = "stratum.platform_assistant"
-
 func TestProvisionTenantSchemaRemovesPlatformMCPIdempotently(t *testing.T) {
 	pool, ctx, tenantID := systemAssistantTestPool(t, "platform_mcp")
 	require.NoError(t, postgres.ProvisionTenantSchema(ctx, pool, tenantID))
 	schema := `"tenant_` + tenantID + `"`
-	_, err := pool.Exec(ctx, `INSERT INTO `+schema+`.mcp_configs (id, name, transport, system_key, management_mode)
-		VALUES ('stratum-platform-mcp', 'legacy-platform-mcp', 'streamable-http', 'stratum.platform_mcp', 'platform_managed')`)
+	// 表由上方 ProvisionTenantSchema 按新 DDL 创建：system_key/management_mode 列已删除，
+	// 遗留行只带业务列（其余列 NOT NULL DEFAULT 兜底）。
+	_, err := pool.Exec(ctx, `INSERT INTO `+schema+`.mcp_configs (id, name, transport)
+		VALUES ('stratum-platform-mcp', 'legacy-platform-mcp', 'streamable-http')`)
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `INSERT INTO `+schema+`.agent_mcp_tool_links (agent_id, server_id, tool_name)
 		VALUES ('stratum-platform-assistant', 'stratum-platform-mcp', 'stratum_diagnose_tenant')`)
@@ -135,15 +135,15 @@ func TestProvisionTenantSchemaSystemAssistantModelBackfillPreservesTenantChoice(
 				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := pool.Exec(ctx, `INSERT INTO "`+schema+`".agents (id, name, llm_model, system_key)
-				VALUES ('stratum-platform-assistant', '平台使用助手', $1, $2)`, tt.model, systemAssistantKey); err != nil {
+			if _, err := pool.Exec(ctx, `INSERT INTO "`+schema+`".agents (id, name, llm_model)
+				VALUES ('stratum-platform-assistant', '平台使用助手', $1)`, tt.model); err != nil {
 				t.Fatal(err)
 			}
 			if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
 				t.Fatal(err)
 			}
 			var model string
-			if err := pool.QueryRow(ctx, `SELECT llm_model FROM "`+schema+`".agents WHERE system_key=$1`, systemAssistantKey).Scan(&model); err != nil {
+			if err := pool.QueryRow(ctx, `SELECT llm_model FROM "`+schema+`".agents WHERE id='stratum-platform-assistant'`).Scan(&model); err != nil {
 				t.Fatal(err)
 			}
 			if model != tt.wantModel {
@@ -186,7 +186,7 @@ func TestProvisionTenantSchemaSystemAssistantNameCollisionPreservesOrdinaryAgent
 		max_iterations INT NOT NULL DEFAULT 10, max_context_tokens INTEGER NOT NULL DEFAULT 8000,
 		memory_scope TEXT NOT NULL DEFAULT 'agent', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
-		INSERT INTO "`+schema+`".agents (id, name, description) VALUES ('ordinary', 'Stratum 系统助手', 'keep me')`); err != nil {
+		INSERT INTO "`+schema+`".agents (id, name, description) VALUES ('ordinary', '平台使用助手', 'keep me')`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -196,7 +196,7 @@ func TestProvisionTenantSchemaSystemAssistantNameCollisionPreservesOrdinaryAgent
 	var count int
 	var description string
 	if err := pool.QueryRow(ctx, `SELECT count(*), max(description) FROM "`+schema+
-		`".agents WHERE id='ordinary' AND name='Stratum 系统助手'`).Scan(&count, &description); err != nil {
+		`".agents WHERE id='ordinary' AND name='平台使用助手'`).Scan(&count, &description); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 || description != "keep me" {
@@ -205,7 +205,7 @@ func TestProvisionTenantSchemaSystemAssistantNameCollisionPreservesOrdinaryAgent
 	assertOneSystemAssistant(t, pool, tenantID)
 }
 
-func TestProvisionTenantSchemaSystemAssistantIDCollisionFailsWithoutChangingOrdinaryAgent(t *testing.T) {
+func TestProvisionTenantSchemaSystemAssistantIDCollisionPreservesOrdinaryAgent(t *testing.T) {
 	pool, ctx, tenantID := systemAssistantTestPool(t, "id_collision")
 	schema := `tenant_` + tenantID
 	if _, err := pool.Exec(ctx, `CREATE TABLE "`+schema+`".agents (
@@ -220,8 +220,10 @@ func TestProvisionTenantSchemaSystemAssistantIDCollisionFailsWithoutChangingOrdi
 		t.Fatal(err)
 	}
 
-	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err == nil {
-		t.Fatal("expected ordinary-agent fixed ID collision to fail provisioning")
+	// 等化后 seed 行按 id 幂等插入（ON CONFLICT (id) DO NOTHING）：
+	// 固定 ID 被普通 agent 占用时静默跳过，不失败、不改动普通 agent。
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		t.Fatalf("fixed ID collision should not fail provisioning: %v", err)
 	}
 	var count int
 	var description string
@@ -252,8 +254,8 @@ func TestProvisionTenantSchemaSystemAssistantRollsBackOnLaterFailure(t *testing.
 		t.Fatal("expected later tenant DDL failure")
 	}
 	var count int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM "`+schema+`".agents WHERE system_key=$1`,
-		systemAssistantKey).Scan(&count); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM "`+schema+
+		`".agents WHERE id='stratum-platform-assistant'`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 {
@@ -291,7 +293,7 @@ func assertOneSystemAssistant(t *testing.T, pool *pgxpool.Pool, tenantID string)
 	var count int
 	ctx := tenantdb.WithTenant(context.Background(), &tenantdb.TenantContext{TenantID: tenantID})
 	err := tenantdb.ExecTenant(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT count(*) FROM agents WHERE system_key=$1`, systemAssistantKey).Scan(&count)
+		return tx.QueryRow(ctx, `SELECT count(*) FROM agents WHERE id='stratum-platform-assistant'`).Scan(&count)
 	})
 	if err != nil {
 		t.Fatal(err)

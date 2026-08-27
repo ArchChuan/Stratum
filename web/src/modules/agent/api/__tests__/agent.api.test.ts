@@ -47,7 +47,7 @@ describe('executeAgentStream', () => {
       onToken: vi.fn(),
       onDone: vi.fn(),
       onError,
-      onApprovalRequired: vi.fn(),
+      onApprovalsRequired: vi.fn(),
     });
 
     callbacksOf(0).onEvent({
@@ -73,7 +73,7 @@ describe('executeAgentStream', () => {
         onToken,
         onDone: vi.fn(),
         onError: vi.fn(),
-        onApprovalRequired: vi.fn(),
+        onApprovalsRequired: vi.fn(),
         onExecutionId,
       });
 
@@ -91,7 +91,7 @@ describe('executeAgentStream', () => {
         onToken,
         onDone: vi.fn(),
         onError: vi.fn(),
-        onApprovalRequired: vi.fn(),
+        onApprovalsRequired: vi.fn(),
       });
 
       callbacksOf(0).onEvent({ execution_id: 'exec-1' });
@@ -114,7 +114,7 @@ describe('executeAgentStream', () => {
         onToken: vi.fn(),
         onDone,
         onError: vi.fn(),
-        onApprovalRequired: vi.fn(),
+        onApprovalsRequired: vi.fn(),
       });
 
       callbacksOf(0).onEvent({ done: true, output: 'ok' });
@@ -131,7 +131,7 @@ describe('executeAgentStream', () => {
         onToken: vi.fn(),
         onDone: vi.fn(),
         onError,
-        onApprovalRequired: vi.fn(),
+        onApprovalsRequired: vi.fn(),
       });
 
       callbacksOf(0).onEvent({ error: 'boom', code: 'X' });
@@ -148,11 +148,42 @@ describe('executeAgentStream', () => {
         onToken: vi.fn(),
         onDone: vi.fn(),
         onError: vi.fn(),
-        onApprovalRequired: onApproval,
+        onApprovalsRequired: onApproval,
       });
 
       callbacksOf(0).onEvent({ status: 'waiting_approval', approvalId: 'a-1', toolName: 't', riskLevel: 'high' });
       expect(onApproval).toHaveBeenCalledOnce();
+      // 无 approvals 数组时回退顶层镜像单条;回调参数恒为数组。
+      expect(onApproval.mock.calls[0][0]).toEqual([
+        { approvalId: 'a-1', toolName: 't', serverId: '', riskLevel: 'high', status: 'pending' },
+      ]);
+
+      callbacksOf(0).onClose();
+      vi.advanceTimersByTime(AGENT_STREAM_RECONNECT_MAX_MS * 2);
+      expect(mocks.streamApiEvents).toHaveBeenCalledTimes(1);
+    });
+
+    it('批量审批帧:approvals 数组一次回调全部', () => {
+      const onApproval = vi.fn();
+      executeAgentStream('agent-1', { query: 'hi', context: {}, variables: {} }, {
+        onToken: vi.fn(),
+        onDone: vi.fn(),
+        onError: vi.fn(),
+        onApprovalsRequired: onApproval,
+      });
+
+      callbacksOf(0).onEvent({
+        status: 'waiting_approval',
+        approvals: [
+          { approvalId: 'a-1', toolName: 'delete', serverId: 'orders', riskLevel: 'destructive' },
+          { approvalId: 'a-2', toolName: 'archive', serverId: 'orders', riskLevel: 'destructive' },
+        ],
+      });
+      expect(onApproval).toHaveBeenCalledOnce();
+      expect(onApproval.mock.calls[0][0]).toEqual([
+        { approvalId: 'a-1', toolName: 'delete', serverId: 'orders', riskLevel: 'destructive', status: 'pending' },
+        { approvalId: 'a-2', toolName: 'archive', serverId: 'orders', riskLevel: 'destructive', status: 'pending' },
+      ]);
 
       callbacksOf(0).onClose();
       vi.advanceTimersByTime(AGENT_STREAM_RECONNECT_MAX_MS * 2);
@@ -165,7 +196,7 @@ describe('executeAgentStream', () => {
         onToken: vi.fn(),
         onDone: vi.fn(),
         onError,
-        onApprovalRequired: vi.fn(),
+        onApprovalsRequired: vi.fn(),
       });
 
       callbacksOf(0).onError(new StreamRequestError('HTTP 400', 400));
@@ -180,7 +211,7 @@ describe('executeAgentStream', () => {
         onToken: vi.fn(),
         onDone: vi.fn(),
         onError: vi.fn(),
-        onApprovalRequired: vi.fn(),
+        onApprovalsRequired: vi.fn(),
       });
 
       callbacksOf(0).onError(new StreamRequestError('HTTP 500', 500));
@@ -193,7 +224,7 @@ describe('executeAgentStream', () => {
         onToken: vi.fn(),
         onDone: vi.fn(),
         onError: vi.fn(),
-        onApprovalRequired: vi.fn(),
+        onApprovalsRequired: vi.fn(),
       });
 
       ctrl.abort();
@@ -208,7 +239,7 @@ describe('executeAgentStream', () => {
         onToken: vi.fn(),
         onDone: vi.fn(),
         onError,
-        onApprovalRequired: vi.fn(),
+        onApprovalsRequired: vi.fn(),
       });
 
       // 连续断线:每次 onClose 计划一次重连,advance 后 connect 立即发生

@@ -47,6 +47,7 @@ import (
 	schedapp "github.com/byteBuilderX/stratum/internal/scheduler/application"
 	scheddomain "github.com/byteBuilderX/stratum/internal/scheduler/domain"
 	schedport "github.com/byteBuilderX/stratum/internal/scheduler/domain/port"
+	versioningdomain "github.com/byteBuilderX/stratum/internal/versioning/domain"
 	workflowapp "github.com/byteBuilderX/stratum/internal/workflow/application"
 	workflowdomain "github.com/byteBuilderX/stratum/internal/workflow/domain"
 	workflowport "github.com/byteBuilderX/stratum/internal/workflow/domain/port"
@@ -145,7 +146,10 @@ func TestContracts(t *testing.T) {
 			CandidateService:  evalapp.NewCandidateCommandService(contractCandidateRepo{}),
 		},
 		IAM: &wiring.IAM{
-			AdminService:      iamapp.NewAdminService(contractAdminTR),
+			AdminService: iamapp.NewAdminService(
+				contractAdminTR,
+				iamapp.WithUserRepo(contractAdminUserRepo{}),
+			),
 			TenantService:     iamapp.NewTenantService(contractTenantR, logger),
 			InvitationService: iamapp.NewInvitationService(contractInvR),
 		},
@@ -161,6 +165,7 @@ func TestContracts(t *testing.T) {
 	dddPrefixes := []string{
 		"/evaluations/", "/dashboard/", "/resource-change-proposals/",
 		"/admin/providers", "/admin/models", "/admin/tenants",
+		"/admin/admins", "/admin/users",
 		"/tenant/", "/workflows", "/workflow-runs", "/workflow-approvals",
 		"/operation-proposals", "/scheduled-tasks", "/audit",
 	}
@@ -198,7 +203,9 @@ func TestContracts(t *testing.T) {
 					switch {
 					case strings.HasPrefix(c.Path, "/admin/tenants"),
 						strings.HasPrefix(c.Path, "/admin/providers"),
-						strings.HasPrefix(c.Path, "/admin/models"):
+						strings.HasPrefix(c.Path, "/admin/models"),
+						strings.HasPrefix(c.Path, "/admin/admins"),
+						strings.HasPrefix(c.Path, "/admin/users"):
 						claims = iamport.TokenClaims{
 							Sub: "contract-admin", TenantID: "contract-tenant",
 							Role: "admin", GlobalRole: "global_admin",
@@ -333,6 +340,9 @@ func (contractVersionRepo) GetVersion(_ context.Context, _ string, _ string) (*w
 func (contractVersionRepo) NextVersionNumber(_ context.Context, _ string, _ string) (int64, error) {
 	return 1, nil
 }
+func (contractVersionRepo) SetActiveVersion(_ context.Context, _ string, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (contractVersionRepo) ListVersions(_ context.Context, _ string, _ string, _ workflowport.VersionListQuery) ([]workflowdomain.Version, int, error) {
 	return nil, 0, nil
 }
@@ -389,6 +399,23 @@ func (contractAgentExecutor) ExecuteAgent(_ context.Context, _ string, _ string,
 }
 
 // ── IAM stubs ──────────────────────────────────────────────────────────────
+
+type contractAdminUserRepo struct{}
+
+func (contractAdminUserRepo) SearchUsers(_ context.Context, _ string, _ int) ([]iamport.AdminUser, error) {
+	return nil, nil
+}
+func (contractAdminUserRepo) ListAdmins(_ context.Context) ([]iamport.AdminUser, error) {
+	return nil, nil
+}
+func (contractAdminUserRepo) SetAdminRole(_ context.Context, _ string) error    { return nil }
+func (contractAdminUserRepo) RemoveAdminRole(_ context.Context, _ string) error { return nil }
+func (contractAdminUserRepo) GetGlobalRole(_ context.Context, userID string) (iamdomain.GlobalRole, error) {
+	if userID == "contract-user" {
+		return iamdomain.GlobalRoleUser, nil
+	}
+	return iamdomain.GlobalRoleGlobalAdmin, nil
+}
 
 type contractAdminTenantRepo struct{}
 
@@ -471,7 +498,10 @@ func (contractAgentRepo) GetAll(context.Context) ([]*agentdomain.AgentConfig, er
 func (contractAgentRepo) Remove(context.Context, string, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (contractAgentRepo) Update(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string, bool) error {
+func (contractAgentRepo) Update(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string, bool, *versioningdomain.Version) error {
+	return nil
+}
+func (contractAgentRepo) Rollback(context.Context, *agentdomain.AgentConfig, *auditdomain.ResourceChangeAuditEvent, string, string) error {
 	return nil
 }
 

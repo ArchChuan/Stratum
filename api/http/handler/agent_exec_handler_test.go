@@ -18,9 +18,11 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	versioningdomain "github.com/byteBuilderX/stratum/internal/versioning/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -58,22 +60,47 @@ func TestAgentExecutionErrorUsesHTTPErrorPipeline(t *testing.T) {
 }
 
 func TestExecuteStreamApprovalEventContainsOnlySafeBindingMetadata(t *testing.T) {
-	payload := approvalRequiredSSEPayload(&port.ToolApprovalRequiredError{
+	payload := approvalRequiredSSEPayload([]port.ToolApprovalRequiredError{{
 		ApprovalID: "approval-1", ToolCallID: "call-1", ServerID: "orders",
 		ToolName: "delete", RiskLevel: port.ToolRiskDestructive,
+	}})
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	// 首条镜像字段（兼容旧前端）+ approvals 数组（多审批）。
+	for _, key := range []string{"status", "approvalId", "toolCallId", "serverId", "toolName", "riskLevel", "approvals"} {
+		if _, ok := decoded[key]; !ok {
+			t.Fatalf("approval SSE payload missing %q: %s", key, payload)
+		}
+	}
+	if len(decoded) != 7 {
+		t.Fatalf("approval SSE payload contains unexpected fields: %s", payload)
+	}
+	items, ok := decoded["approvals"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("approval SSE payload approvals must be a 1-item array: %s", payload)
+	}
+}
+
+// 批量审批统一一帧：approvals 数组含全部待审批工具，顶层镜像首条。
+func TestExecuteStreamApprovalEventBatchFrame(t *testing.T) {
+	payload := approvalRequiredSSEPayload([]port.ToolApprovalRequiredError{
+		{ApprovalID: "approval-1", ToolCallID: "call-1", ServerID: "orders", ToolName: "delete", RiskLevel: port.ToolRiskDestructive},
+		{ApprovalID: "approval-2", ToolCallID: "call-2", ServerID: "orders", ToolName: "archive", RiskLevel: port.ToolRiskDestructive},
 	})
 	var decoded map[string]any
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"status", "approvalId", "toolCallId", "serverId", "toolName", "riskLevel"} {
-		if _, ok := decoded[key]; !ok {
-			t.Fatalf("approval SSE payload missing %q: %s", key, payload)
-		}
+	items, ok := decoded["approvals"].([]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("batch frame approvals must be a 2-item array: %s", payload)
 	}
-	if len(decoded) != 6 {
-		t.Fatalf("approval SSE payload contains unexpected fields: %s", payload)
-	}
+	require.Equal(t, "approval-1", decoded["approvalId"], "顶层 approvalId 镜像首条")
+	second := items[1].(map[string]any)
+	require.Equal(t, "approval-2", second["approvalId"])
+	require.Equal(t, "archive", second["toolName"])
 }
 
 func TestAgentExecutionErrorPayloadUsesPublicContract(t *testing.T) {
@@ -120,7 +147,7 @@ func TestAgentExecutionErrorPayloadUsesPublicContract(t *testing.T) {
 func TestExecuteAgentStreamReturnsJSONContractBeforeStreamStarts(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := &settingsAgentRepo{cfg: &domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		ID: domain.SystemAssistantID,
 	}}
 	registry := agentapp.NewRegistry(repo, zap.NewNop())
 	svc := agentapp.NewAgentService(agentapp.AgentServiceDeps{Registry: registry, Logger: zap.NewNop()})
@@ -230,6 +257,78 @@ func TestAgentExecutionDonePayloadFactCheckAndDegraded(t *testing.T) {
 		}
 	})
 
+	t.Run("tool references and unverified serialized when present", func(t *testing.T) {
+		result := &domain.AgentResult{AgentID: "a1", Output: "ok",
+			FactCheck: &domain.FactCheckReport{
+				Checked: true, IsValid: false, RiskPoints: 5,
+				Claims: []domain.ClaimVerdict{},
+				ToolReferences: []domain.ToolReferenceVerdict{
+					{ClaimText: "订单已删除", ToolName: "delete_order", ToolCallID: "call_1",
+						Reference: "<tool_ref:call_1>", Status: "error",
+						Outcome: "definite_failure", Classification: "verification_failed", Risk: 5},
+					{ClaimText: "已创建订单", ToolName: "create_order", ToolCallID: "call_2",
+						Reference: "<tool_ref:call_2>", Status: "success",
+						Classification: "verified", Risk: 0},
+				},
+				UnverifiedCount:  1,
+				UnverifiedClaims: []string{"已发送通知"},
+			},
+		}
+		done := agentExecutionDonePayload(result)
+		var decoded map[string]any
+		if err := json.Unmarshal(done, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		fc, ok := decoded["factCheck"].(map[string]any)
+		if !ok {
+			t.Fatalf("done payload missing factCheck object: %s", done)
+		}
+		refs, ok := fc["toolReferences"].([]any)
+		if !ok || len(refs) != 2 {
+			t.Fatalf("factCheck toolReferences = %#v, want 2 items", fc["toolReferences"])
+		}
+		first := refs[0].(map[string]any)
+		if first["claimText"] != "订单已删除" || first["toolName"] != "delete_order" ||
+			first["toolCallId"] != "call_1" || first["reference"] != "<tool_ref:call_1>" ||
+			first["status"] != "error" || first["outcome"] != "definite_failure" ||
+			first["classification"] != "verification_failed" || first["risk"] != float64(5) {
+			t.Fatalf("toolReference[0] drifted: %#v", first)
+		}
+		if fc["unverifiedCount"] != float64(1) {
+			t.Fatalf("unverifiedCount = %#v, want 1", fc["unverifiedCount"])
+		}
+		unverified, ok := fc["unverifiedClaims"].([]any)
+		if !ok || len(unverified) != 1 || unverified[0] != "已发送通知" {
+			t.Fatalf("unverifiedClaims = %#v, want [已发送通知]", fc["unverifiedClaims"])
+		}
+	})
+
+	t.Run("tool references and unverified omitted when empty", func(t *testing.T) {
+		result := &domain.AgentResult{AgentID: "a1", Output: "ok",
+			FactCheck: &domain.FactCheckReport{
+				Checked: true, IsValid: true, Claims: []domain.ClaimVerdict{},
+			},
+		}
+		done := agentExecutionDonePayload(result)
+		var decoded map[string]any
+		if err := json.Unmarshal(done, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		fc, ok := decoded["factCheck"].(map[string]any)
+		if !ok {
+			t.Fatalf("done payload missing factCheck object: %s", done)
+		}
+		if _, ok := fc["toolReferences"]; ok {
+			t.Fatalf("toolReferences must be omitted when empty: %#v", fc)
+		}
+		if _, ok := fc["unverifiedCount"]; ok {
+			t.Fatalf("unverifiedCount must be omitted when zero: %#v", fc)
+		}
+		if _, ok := fc["unverifiedClaims"]; ok {
+			t.Fatalf("unverifiedClaims must be omitted when empty: %#v", fc)
+		}
+	})
+
 	t.Run("fact_check absent when not checked", func(t *testing.T) {
 		result := &domain.AgentResult{AgentID: "a1", Output: "ok"}
 		done := agentExecutionDonePayload(result)
@@ -310,7 +409,11 @@ func (r *settingsAgentRepo) GetAll(context.Context) ([]*domain.AgentConfig, erro
 func (r *settingsAgentRepo) Remove(_ context.Context, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (r *settingsAgentRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool) error {
+func (r *settingsAgentRepo) Update(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _ string, _ bool, _ *versioningdomain.Version) error {
+	return nil
+}
+
+func (r *settingsAgentRepo) Rollback(_ context.Context, _ *domain.AgentConfig, _ *auditdomain.ResourceChangeAuditEvent, _, _ string) error {
 	return nil
 }
 

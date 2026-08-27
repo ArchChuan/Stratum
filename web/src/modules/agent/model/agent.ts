@@ -56,6 +56,25 @@ export interface Agent {
   [key: string]: unknown;
 }
 
+// agentVersionSchema: 通用产品版本历史（resource_versions）单行。createdByName
+// 由后端解析昵称（display_name > github_login > actor_id），前端回退 createdBy。
+export const agentVersionSchema = z
+  .object({
+    id: z.string(),
+    versionNo: z.number().optional(),
+    status: z.string(),
+    source: z.string().optional().default('manual'),
+    contentHash: z.string().optional().default(''),
+    createdBy: z.string().optional().default(''),
+    createdByName: z.string().optional().default(''),
+    createdAt: z.string().optional().default(''),
+    publishedAt: z.string().optional().default(''),
+    isCurrent: z.boolean().optional().default(false),
+    safeSummary: z.record(z.unknown()).optional(),
+  })
+  .passthrough();
+export type AgentVersion = z.infer<typeof agentVersionSchema>;
+
 export interface AgentFormValues {
   name: string;
   description?: string;
@@ -255,6 +274,52 @@ export interface NoAnswerInfo {
   Detail?: string;
 }
 
+// ToolReferenceClassification 是工具引用声称的五态对账枚举（与后端
+// factcheck/reconcile.go 分类常量逐值对齐）。verified=核验通过（折叠不展示）；
+// verification_failed=引用真实但工具确凿失败/从未发出；outcome_unknown=结果
+// 不确定（advisory）；invalid_reference=引用无法对应任何工具调用；
+// unverified=含操作声称但未带引用的软标记（单独走 unverifiedClaims）。
+export type ToolReferenceClassification =
+  | 'verified'
+  | 'verification_failed'
+  | 'outcome_unknown'
+  | 'invalid_reference'
+  | 'unverified';
+
+// ToolReferenceVerdict 是单个 <tool_ref:ID> 声称的对账判定（SSE done 帧
+// factCheck.toolReferences 项，camelCase 与 Go json tag 对齐）。
+export interface ToolReferenceVerdict {
+  claimText?: string;
+  toolName?: string;
+  toolCallId?: string;
+  reference?: string;
+  status?: string;
+  outcome?: string;
+  classification: ToolReferenceClassification;
+  risk: number;
+}
+
+// ClaimVerdict 是单个 claim 的 LLM-as-Judge 判定（factCheck.claims 项）。
+export interface ClaimVerdict {
+  text: string;
+  verdict: string;
+  risk: number;
+}
+
+// FactCheckReport 是幻觉防护的展示型报告（advisory，只展示）。checked 标记本次
+// 确实校验；isValid=false 表示存在核验失败/无效引用；toolReferences 是对账条目
+// （verified 折叠）；unverifiedClaims 含操作声称但未带引用的句子。SSE done 帧
+// factCheck 键透出，校验关/旧后端时缺省。
+export interface FactCheckReport {
+  checked: boolean;
+  claims: ClaimVerdict[];
+  isValid: boolean;
+  riskPoints: number;
+  toolReferences?: ToolReferenceVerdict[];
+  unverifiedCount?: number;
+  unverifiedClaims?: string[];
+}
+
 export const chatMessageSchema = z
   .object({
     id: z.string().optional(),
@@ -290,6 +355,8 @@ export interface ChatMessage {
   noAnswer?: NoAnswerInfo;
   /** 跨会话目标进度摘要（stratum_task_snapshot 透出）；无则 undefined */
   taskSnapshot?: TaskSnapshot;
+  /** 幻觉防护对账报告（advisory，只展示；校验关/旧后端缺省） */
+  factCheck?: FactCheckReport;
   [key: string]: unknown;
 }
 
@@ -309,6 +376,8 @@ export interface AgentExecutionResult {
   sources?: ChatCitationSource[];
   /** 无答案结构化信号：nil/缺失=有答案（omitempty），渲染拒答提示用 */
   noAnswer?: NoAnswerInfo;
+  /** 幻觉防护对账报告（advisory，校验关/旧后端缺省） */
+  factCheck?: FactCheckReport;
   error?: string;
   metadata?: Record<string, unknown>;  // SSE done 白名单透出（thoughtsJSON/toolCallsJSON/stratum_task_snapshot）
   [key: string]: unknown;
@@ -325,7 +394,9 @@ export interface StreamCallbacks {
   onToken: (token: string) => void;
   onDone: (data: AgentExecutionResult) => void;
 	onError: (err: Error) => void;
-	onApprovalRequired: (approval: ToolApproval) => void;
+	// 同一轮 LLM 消息可能含多个需审批工具：SSE approval_required 帧一帧携带
+	// approvals 数组，批量渲染审批卡并等待全部终态统一续跑。
+	onApprovalsRequired: (approvals: ToolApproval[]) => void;
 	// 首帧恢复键(断线续接协议):SSE 首帧下发 execution_id,捕获后断线重发时
 	// 原样带回;仅存内存供消费方读取,不持久化。
 	onExecutionId?: (executionId: string) => void;
@@ -378,15 +449,18 @@ export interface ToolApproval {
 }
 
 // 会话"进行中执行"视图（后端 GET /conversations/:convID/active-execution）。
-// status: running | paused | waiting_approval；waiting_approval 时附 approval_id 与
-// approval_status（区分"已批准待续跑"与"仍待审批"）。无活跃执行时后端返回 404，
-// API 层统一折叠为 null（非 404 错误向上抛，禁止当作无执行）。
+// status: running | paused | waiting_approval；waiting_approval 时附审批数组
+// approvals（每项 approval_status 区分"已批准待续跑"与"仍待审批"）；顶层
+// approval_id/approval_status 镜像首条，兼容旧前端单审批读取。无活跃执行时后端
+// 返回 404，API 层统一折叠为 null（非 404 错误向上抛，禁止当作无执行）。
 export interface ActiveExecution {
 	executionId: string;
 	agentId: string;
 	status: string;
 	approvalId?: string;
 	approvalStatus?: string;
+	// 多审批：整轮全部审批的状态快照（approval_id + approval_status）。
+	approvals?: { approvalId: string; approvalStatus?: string }[];
 	userQuery?: string;
 	updatedAt?: string;
 }

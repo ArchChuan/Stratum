@@ -10,6 +10,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	versioningdomain "github.com/byteBuilderX/stratum/internal/versioning/domain"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -52,7 +53,17 @@ func (f *ownershipAgentRepoFake) Remove(_ context.Context, id string, audit *aud
 	delete(f.agents, id)
 	return nil
 }
-func (f *ownershipAgentRepoFake) Update(_ context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string, _ bool) error {
+func (f *ownershipAgentRepoFake) Update(_ context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string, _ bool, _ *versioningdomain.Version) error {
+	f.recordAudit(audit)
+	if f.updateErr != nil {
+		return f.updateErr
+	}
+	f.agents[cfg.ID] = cfg
+	f.lastEditorActor = editorActor
+	return nil
+}
+
+func (f *ownershipAgentRepoFake) Rollback(_ context.Context, cfg *domain.AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor, _ string) error {
 	f.recordAudit(audit)
 	if f.updateErr != nil {
 		return f.updateErr

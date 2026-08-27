@@ -74,12 +74,10 @@ func SplitRerankIdentity(identity string) (provider, model string) {
 
 // Workspace is a knowledge RAG workspace owned by a tenant.
 type Workspace struct {
-	ID             string
-	Name           string
-	Description    string
-	Config         WorkspaceConfig
-	SystemKey      string `json:"-"`
-	ManagementMode string `json:"management_mode"`
+	ID          string
+	Name        string
+	Description string
+	Config      WorkspaceConfig
 	// CreatedBy is the user who created the workspace ("" for historical/platform rows).
 	CreatedBy string
 	CreatedAt time.Time

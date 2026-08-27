@@ -49,8 +49,8 @@ export const AgentChatPage = ({
     handleCreateConv,
     handleRenameConv,
     handleDeleteConv,
-    waitingApproval,
-    terminalApproval,
+    waitingApprovals,
+    terminalApprovals,
     resumeBlocked,
     resumeBlockedLabel,
     streaming,
@@ -63,10 +63,11 @@ export const AgentChatPage = ({
   } = useChatPage({ fixedAgentId });
 
   const agentObj = agents.find((a) => a.id === selectedAgent);
-  // 正常等待态(waitingApproval)与终态护栏转手动(terminalApproval)共用审批卡片:
+  // 正常等待态(waitingApprovals)与终态护栏转手动(terminalApprovals)共用审批卡片:
+  // 多审批一轮多卡:非终态卡(等待/已批准)与终态卡(被拒/取消/过期)合并渲染,逐卡展示。
   // 终态卡片展示终态文案,护栏触发时提供「让 Agent 继续」手动入口。
   // 等化后模型不可用告警对所有 agent 生效（普通 agent 同样要求模型在租户列表）。
-  const pendingApproval = waitingApproval ?? terminalApproval;
+  const gateItems = [...waitingApprovals, ...terminalApprovals];
 	const assistantModelUnavailable = !!(
 		streamFailure?.code === 'ASSISTANT_MODEL_UNAVAILABLE'
 	);
@@ -143,19 +144,20 @@ export const AgentChatPage = ({
           contentSwitching={contentSwitching}
           delegateStatus={delegateStatus}
         />
-        {pendingApproval && (
+        {gateItems.map((approval) => (
           <ApprovalGate
-            approval={pendingApproval}
+            key={approval.approvalId}
+            approval={approval}
             isMobile={isMobile}
             streaming={streaming}
             blocked={resumeBlocked}
             blockedLabel={resumeBlockedLabel}
             onResume={manualResumeWaiting}
             onResumeTerminal={resumeTerminal}
-            onCancel={cancelWaitingApproval}
+            onCancel={() => cancelWaitingApproval(approval)}
             userSub={user?.sub}
           />
-        )}
+        ))}
 				{assistantModelUnavailable && (
 					<Alert
 						type="error"

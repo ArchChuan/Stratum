@@ -28,13 +28,19 @@ type ReActState struct {
 	MaxTokens       int // 0 = unset
 	// ModelResolved 是本次执行最后一次 LLM 调用实际成功的模型名（fallback
 	// 降级后与 Model 不同）；ModelRoutedVia 是实际尝试过的模型链。
-	ModelResolved              string
-	ModelRoutedVia             []string
-	AvailableTools             []port.ToolDefinition
-	SkillCatalog               map[string]port.SkillActivation
-	Actives                    []port.SkillActivation
-	TracePayloadStore          port.TracePayloadStore
-	ToolExecutionFn            port.ToolExecutionFn
+	ModelResolved     string
+	ModelRoutedVia    []string
+	AvailableTools    []port.ToolDefinition
+	SkillCatalog      map[string]port.SkillActivation
+	Actives           []port.SkillActivation
+	TracePayloadStore port.TracePayloadStore
+	ToolExecutionFn   port.ToolExecutionFn
+	// PrecheckApprovals 在同一轮 LLM 工具调用执行前批量预检审批需求：任一调用需要
+	// 审批时一次性创建全部审批并整轮暂停（工具一个都不执行）。nil = 不预检，退回
+	// 逐个 guard 路径。返回的 []ToolApprovalRequiredError 由 makeToolNode 封装为
+	// BatchToolApprovalRequiredError 终止本轮。续跑合成消息前必须清空，防止对已
+	// 审批的工具重复发起审批。
+	PrecheckApprovals          func(ctx context.Context, tools []port.ToolDefinition, calls []port.ToolCall) ([]port.ToolApprovalRequiredError, error)
 	AssistantToolArtifacts     []domain.SystemAssistantToolArtifact
 	ExecutionID                string
 	AgentKnowledgeWorkspaceIDs []string
@@ -158,6 +164,10 @@ type ReActState struct {
 	// DegradeReason 是降级原因的固定枚举（如 "tool_stop_loss:<tool>"）。
 	// 禁止赋 err.Error()——错误正文含 plan_id/revision 等内部标识。
 	DegradeReason string
+	// EnforceClaimCitations 标记本次执行开启"声称带引用"约束：强制收尾指令
+	// 追加引用规则，要求模型声称副作用时带 <tool_ref:ID>。由
+	// buildReActInitState 按 factcheck.CitationVerify 设置；子状态值拷贝继承。
+	EnforceClaimCitations bool
 	// TaskCompleteRequested 标记 LLM 调用了 stratum_complete_task（目标达成）。
 	// 执行结束时由挂点读入，task 状态转 completed。完成信号独立于 plan 状态。
 	TaskCompleteRequested bool

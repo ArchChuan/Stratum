@@ -5,6 +5,11 @@
 #   基线只能缩小不能扩大。新增违规条目必须被拒绝——
 #   无论是否有 .go 代码变更，新违规不应进入基线。
 #   已有条目因代码修复而消失是合法的，自动放行。
+#   同函数跨文件迁移（函数签名名未变，仅 id/file 变化）视为合法，
+#   例如把存量超限函数移动到新拆分的同包文件；函数身份的判定以
+#   「签名名（如 AgentService.Method）」为主、body_hash 为辅：
+#   候选条目与 head 存在同名签名，或函数体字节相同，即视为同一函数迁移；
+#   只有签名名与函数体均为全新才判定为新增违规拦截。
 #
 # 两种模式：
 #   默认（pre-commit 钩子，无参）：比较 staged 与 HEAD，基线必须出现在 staged 变更中。
@@ -19,15 +24,43 @@ set -euo pipefail
 
 BASELINE="scripts/quality/code-quality-baseline.json"
 
-# baseline_ids 从 stdin 读基线 JSON，输出每条违规的 id。
+# baseline_diff 比较两份基线 JSON（head、candidate，均经文件路径传入），输出：
+#   stdout: 真新增违规条目 id（candidate 有而 head 没有，且 body_hash 在 head 中不存在）
+#   stderr: 迁移/修复计数（MIGRATED=.. FIXED=..），供人读，不参与判断
 # 解析失败即非零退出（fail-closed），不允许"JSON 损坏 → 空集放行"。
-baseline_ids() {
-  python3 -c '
-import json, sys
-data = json.load(sys.stdin)
-for f in data.get("functions", []):
-    print(f["id"])
-'
+baseline_diff() {
+  python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+
+def load(path):
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    return {f["id"]: f.get("body_hash", "") for f in data.get("functions", [])}
+
+
+head = load(sys.argv[1])
+candidate = load(sys.argv[2])
+head_names = {fid.split(":", 1)[1] for fid in head}
+head_hashes = set(head.values())
+
+new_ids, migrated = [], []
+for fid, h in candidate.items():
+    if fid in head:
+        continue
+    name = fid.split(":", 1)[1]
+    # 同名签名（跨文件拆分/移动）或同函数体字节 → 视为同一函数迁移；否则视为新增违规。
+    if name in head_names or (h and h in head_hashes):
+        migrated.append(fid)
+    else:
+        new_ids.append(fid)
+fixed = [fid for fid in head if fid not in candidate]
+
+for fid in new_ids:
+    print(fid)
+print(f"MIGRATED={len(migrated)} FIXED={len(fixed)}", file=sys.stderr)
+PY
 }
 
 if [[ "${1:-}" == "--ci" ]]; then
@@ -63,42 +96,37 @@ EOF
     exit 0
   fi
 
-  head_ids=$(git show "${base_commit}:${BASELINE}" | baseline_ids | LC_ALL=C sort)
-  candidate_ids=$(< "${BASELINE}" baseline_ids | LC_ALL=C sort)
+  head_src=$(git show "${base_commit}:${BASELINE}")
+  candidate_src=$(cat "${BASELINE}")
 else
   # ── 本地/pre-commit 模式（staged 语义）──
   if ! git diff --cached --name-only | grep -qFx "${BASELINE}"; then
     exit 0
   fi
 
-  head_ids=$(git show "HEAD:${BASELINE}" | baseline_ids | LC_ALL=C sort)
-  candidate_ids=$(git show ":${BASELINE}" | baseline_ids | LC_ALL=C sort)
+  head_src=$(git show "HEAD:${BASELINE}")
+  candidate_src=$(git show ":${BASELINE}")
 fi
 
-# 新增条目：candidate 有但 head 没有 → 拦截
-new_ids=$(comm -13 <(printf '%s\n' "$head_ids") <(printf '%s\n' "$candidate_ids") | grep -c . || true)
-# 修复条目：head 有但 candidate 没有 → 允许
-fixed_ids=$(comm -23 <(printf '%s\n' "$head_ids") <(printf '%s\n' "$candidate_ids") | grep -c . || true)
+new_ids=$(baseline_diff <(printf '%s' "${head_src}") <(printf '%s' "${candidate_src}"))
 
-if [[ "${new_ids}" -gt 0 ]]; then
-  comm -13 <(printf '%s\n' "$head_ids") <(printf '%s\n' "$candidate_ids") >&2
+if [[ -n "${new_ids}" ]]; then
+  printf '%s\n' "${new_ids}" >&2
+  new_count=$(printf '%s\n' "${new_ids}" | grep -c . || true)
   cat >&2 <<EOF
 ============================================================
   ❌ 基线扩容拦截
 
-  基线新增了 ${new_ids} 个违规条目（见上）。
+  基线新增了 ${new_count} 个违规条目（见上）。
 
-  基线只允许缩小（修复函数后条目自动消失），不允许扩大。
+  基线只允许缩小（修复函数后条目自动消失）或同函数迁移
+  （函数体未变、仅换文件），不允许扩大。
   新出现的超标函数必须修复代码降低复杂度，不能刷基线掩埋。
 
   正确做法：修改代码使函数达标，而非 make code-quality-baseline。
 ============================================================
 EOF
   exit 1
-fi
-
-if [[ "${fixed_ids}" -gt 0 ]]; then
-  echo "基线缩小：${fixed_ids} 个违规条目已修复，通过。"
 fi
 
 exit 0

@@ -10,6 +10,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	versioningdomain "github.com/byteBuilderX/stratum/internal/versioning/domain"
 	"go.uber.org/zap"
 )
 
@@ -133,13 +134,30 @@ func (r *Registry) Remove(ctx context.Context, id string, audit *auditdomain.Res
 // the same transaction. editorActor, when non-empty, re-validates editor
 // eligibility inside the write transaction (see port.AgentRepo.Update).
 // replaceParams selects sampling-parameter JSONB semantics: true = overall
-// replace (promote), false = merge (old-client-safe).
-func (r *Registry) Update(ctx context.Context, cfg *AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string, replaceParams bool) error {
-	if err := r.repo.Update(ctx, cfg, audit, editorActor, replaceParams); err != nil {
+// replace (promote), false = merge (old-client-safe). version, when non-nil,
+// is written to resource_versions in the same transaction (通用产品版本基座).
+func (r *Registry) Update(ctx context.Context, cfg *AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor string, replaceParams bool, version *versioningdomain.Version) error {
+	if err := r.repo.Update(ctx, cfg, audit, editorActor, replaceParams, version); err != nil {
 		return err
 	}
 	if r.logger != nil {
 		r.logger.Info("agent updated", zap.String("agent_id", cfg.ID))
+	}
+	return nil
+}
+
+// Rollback restores a deprecated product version, auditing the change in the
+// same transaction. cfg must be rebuilt from the target version's snapshot
+// payload (see AgentService.Rollback); the repo applies it to the agent row,
+// promotes the target, and repoints active_version_id. editorActor re-validates
+// editor eligibility inside the write transaction (same closure as Update).
+func (r *Registry) Rollback(ctx context.Context, cfg *AgentConfig, audit *auditdomain.ResourceChangeAuditEvent, editorActor, targetVersionID string) error {
+	if err := r.repo.Rollback(ctx, cfg, audit, editorActor, targetVersionID); err != nil {
+		return err
+	}
+	if r.logger != nil {
+		r.logger.Info("agent rolled back",
+			zap.String("agent_id", cfg.ID), zap.String("version_id", targetVersionID))
 	}
 	return nil
 }

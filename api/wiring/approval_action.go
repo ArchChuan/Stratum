@@ -1,7 +1,6 @@
 package wiring
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -337,7 +336,8 @@ func executeMCPDeleteServer(ctx context.Context, e *approvalActionExecutor, req 
 }
 
 // decodeServerConfig 从审批 args 反序列化 MCP 服务器配置（存储后形态 map[string]any，
-// 经 gen 请求结构还原为 domain.ServerConfig；system_key 由 ServerConfig 校验拒绝）。
+// 经 gen 请求结构还原为 domain.ServerConfig；system_key 已随契约删除，外部提交的
+// system_key 由 json.Unmarshal 静默忽略——列同时删除、无处落库，安全等价）。
 func decodeServerConfig(args map[string]any) (*mcpdomain.ServerConfig, error) {
 	raw, err := json.Marshal(args["config"])
 	if err != nil {
@@ -346,13 +346,6 @@ func decodeServerConfig(args map[string]any) (*mcpdomain.ServerConfig, error) {
 	var req gen.MCPServerConfigRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, fmt.Errorf("decode mcp config arg: %w", err)
-	}
-	// handler bind 的 DTO 里 SystemKey 无 omitempty：成员未提供 system_key 时，经 AES
-	// round-trip 后空值落成字面 "null"，ServerConfig() 会误判为系统托管 key 而拒绝——
-	// connect/update 审批永远 notExecuted 释放回 approved 死循环（评审 BLOCKING）。
-	// 非空 system_key 已在 handler bind 层双路径（member/admin）拒绝，此处归一化安全。
-	if len(req.SystemKey) == 0 || string(bytes.TrimSpace(req.SystemKey)) == "null" {
-		req.SystemKey = nil
 	}
 	return req.ServerConfig()
 }

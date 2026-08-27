@@ -8,9 +8,7 @@ import (
 
 // Server is a lightweight projection of an MCP server (read-side).
 type Server struct {
-	ID, Name, URL  string
-	SystemKey      string `json:"-" yaml:"-"`
-	ManagementMode string `json:"management_mode" yaml:"management_mode"`
+	ID, Name, URL string
 }
 
 // Tool describes an MCP tool descriptor.
@@ -60,22 +58,20 @@ type RetryConfig struct {
 // handlers and infrastructure adapters share this type so the request payload
 // shape is owned by the domain rather than infrastructure.
 type ServerConfig struct {
-	ID             string            `json:"id"                 yaml:"id"`
-	Name           string            `json:"name"               yaml:"name"`
-	Version        string            `json:"version"            yaml:"version"`
-	Transport      string            `json:"transport"          yaml:"transport"`
-	Command        string            `json:"command"            yaml:"command"`
-	Args           []string          `json:"args"               yaml:"args"`
-	URL            string            `json:"url"                yaml:"url"`
-	Env            map[string]string `json:"env"                yaml:"env"`
-	Headers        map[string]string `json:"headers,omitempty"  yaml:"headers,omitempty"`
-	Capabilities   []string          `json:"capabilities"       yaml:"capabilities"`
-	Timeout        time.Duration     `json:"timeout"            yaml:"timeout"`
-	Auth           *AuthConfig       `json:"auth,omitempty"     yaml:"auth,omitempty"`
-	Retry          *RetryConfig      `json:"retry,omitempty"    yaml:"retry,omitempty"`
-	SystemKey      string            `json:"-"                  yaml:"-"`
-	ManagementMode string            `json:"management_mode"    yaml:"management_mode"`
-	Enabled        bool              `json:"-"                  yaml:"-"`
+	ID           string            `json:"id"                 yaml:"id"`
+	Name         string            `json:"name"               yaml:"name"`
+	Version      string            `json:"version"            yaml:"version"`
+	Transport    string            `json:"transport"          yaml:"transport"`
+	Command      string            `json:"command"            yaml:"command"`
+	Args         []string          `json:"args"               yaml:"args"`
+	URL          string            `json:"url"                yaml:"url"`
+	Env          map[string]string `json:"env"                yaml:"env"`
+	Headers      map[string]string `json:"headers,omitempty"  yaml:"headers,omitempty"`
+	Capabilities []string          `json:"capabilities"       yaml:"capabilities"`
+	Timeout      time.Duration     `json:"timeout"            yaml:"timeout"`
+	Auth         *AuthConfig       `json:"auth,omitempty"     yaml:"auth,omitempty"`
+	Retry        *RetryConfig      `json:"retry,omitempty"    yaml:"retry,omitempty"`
+	Enabled      bool              `json:"-"                  yaml:"-"`
 	// CreatedBy is the user who created the server ("" for historical/platform rows).
 	CreatedBy string `json:"-" yaml:"-"`
 }
