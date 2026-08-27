@@ -82,6 +82,11 @@ export const EVALUATION_JOB_POLL_INTERVAL_MS = 1000;
 export const EVALUATION_JOB_MAX_WAIT_MS = 120000;
 
 export const MEMORY_SEARCH_LIMIT = 20;
+// 记忆事实分类白名单（与后端 internal/memory/domain/fact.go factCategoryAllowSet 一致）。
+export const FACT_CATEGORIES = ['preference', 'skill', 'event', 'state', 'relationship', 'other'] as const;
+// Memory 快照编辑限制（与后端 pkg/constants/memory.go ActiveSnapshot* 一致）。
+export const MEMORY_SNAPSHOT_SECTION_MAX_ITEMS = 8;
+export const MEMORY_SNAPSHOT_ITEM_MAX_RUNES = 240;
 
 export const PROMPT_TEXTAREA_MAX_LENGTH = 16000; // 机制模板 TextArea 上限，与后端全局 10MB body 双保险
 

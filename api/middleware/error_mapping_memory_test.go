@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 
+	memoryapp "github.com/byteBuilderX/stratum/internal/memory/application"
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
 )
 
@@ -31,6 +32,15 @@ func TestMapErrorToStatus_MemorySentinels(t *testing.T) {
 		{name: "migration not active", err: domain.ErrMigrationNotActive, status: http.StatusConflict},
 		{name: "migration progress regressed", err: domain.ErrMigrationProgressRegressed, status: http.StatusConflict},
 		{name: "migration not retryable", err: domain.ErrMigrationNotRetryable, status: http.StatusConflict},
+		{name: "invalid category", err: domain.ErrInvalidCategory, status: http.StatusBadRequest},
+		{name: "confidence out of range", err: domain.ErrConfidenceOutOfRange, status: http.StatusBadRequest},
+		{name: "importance out of range", err: domain.ErrImportanceOutOfRange, status: http.StatusBadRequest},
+		{name: "empty fact patch", err: domain.ErrEmptyFactPatch, status: http.StatusBadRequest},
+		{name: "fact not editable", err: domain.ErrFactNotEditable, status: http.StatusConflict},
+		{name: "summary not found", err: domain.ErrSummaryNotFound, status: http.StatusNotFound},
+		{name: "snapshot not found", err: domain.ErrSnapshotNotFound, status: http.StatusNotFound},
+		{name: "snapshot invalid", err: domain.ErrSnapshotInvalid, status: http.StatusBadRequest},
+		{name: "embedding unavailable", err: memoryapp.ErrMemoryEmbeddingUnavailable, status: http.StatusBadGateway},
 	}
 
 	for _, tt := range tests {

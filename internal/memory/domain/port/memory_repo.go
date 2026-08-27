@@ -32,4 +32,9 @@ type MemoryRepo interface {
 	DeleteByIDs(ctx context.Context, tenantID string, ids []string) error
 	Stats(ctx context.Context, tenantID string) (*domain.MemoryStats, error)
 	GetSummary(ctx context.Context, tenantID, sessionID string) (string, error)
+	// ListUserEntries lists the user's user-scope raw entries with optional content
+	// match (query) and pagination.
+	ListUserEntries(ctx context.Context, tenantID, userID string, limit, offset int, query string) ([]*domain.MemoryEntryListItem, error)
+	// CountUserEntries counts rows matching the same filter (pagination total).
+	CountUserEntries(ctx context.Context, tenantID, userID, query string) (int, error)
 }

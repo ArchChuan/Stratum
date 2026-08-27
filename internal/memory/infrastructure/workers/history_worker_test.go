@@ -56,6 +56,13 @@ func (f *fakeHistoryRepo) ArchiveColdFacts(context.Context, string) ([]string, e
 	f.archives++
 	return f.archivedIDs, nil
 }
+func (f *fakeHistoryRepo) ListUserSummaries(context.Context, string, string, int, int) ([]*domain.HistorySegment, error) {
+	return nil, nil
+}
+func (f *fakeHistoryRepo) CountUserSummaries(context.Context, string, string) (int, error) {
+	return 0, nil
+}
+func (f *fakeHistoryRepo) Delete(context.Context, string, string, string) error { return nil }
 
 type fakeHistorySummarizer struct {
 	summary string

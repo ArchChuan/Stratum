@@ -10,6 +10,7 @@ import (
 
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
@@ -310,6 +311,41 @@ func TestBaseAgent_ReActExecute_WithToolCall(t *testing.T) {
 	require.Equal(t, 2, result.Steps)
 	require.Len(t, result.ToolCalls, 1)
 	require.Equal(t, "calc", result.ToolCalls[0].ToolName)
+}
+
+// TestBaseAgent_ReActExecute_ToolArtifactsUseProfileVersionConstant 回归：
+// 非 system-assistant agent（EvolutionTrace.ResourceManifest 无
+// system-assistant-profile key）执行时产生 tool artifacts，result.Artifacts 的
+// ProfileVersion 必须非空且等于常量。此前 Execute 从 map 读版本，普通 agent
+// 读到空串 → chat_store.decodeExecutionArtifacts 报 invalid profile version，
+// 导致 chat message 保存失败。
+func TestBaseAgent_ReActExecute_ToolArtifactsUseProfileVersionConstant(t *testing.T) {
+	a := newReActAgent()
+	gw := &mockCapGW{
+		responses: []port.CapabilityResponse{
+			{ToolCalls: []port.ToolCall{{ID: "c1", Name: domain.SystemAssistantToolDiagnoseTenant, Arguments: map[string]any{"areas": []string{"agent"}}}}},
+			{Content: "diagnostic complete"},
+		},
+	}
+	a.SetCapGateway(gw)
+
+	result, err := a.Execute(context.Background(), "diagnose tenant",
+		agent.WithTenantID("t1"),
+		agent.WithMaxSteps(10),
+		agent.WithDiagnosticFn(func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error) {
+			return domain.DiagnosticEvidence{
+				Scope: domain.DiagnosticScopeTenant,
+				Facts: []domain.DiagnosticFact{{Area: domain.DiagnosticAreaAgent, Statement: "ok", Source: "unit-test"}},
+			}, nil
+		}),
+	)
+	require.NoError(t, err)
+	require.Equal(t, "diagnostic complete", result.Output)
+	require.NotEmpty(t, result.Artifacts, "工具产生 evidence 应产出 diagnostic_report artifact")
+	for _, artifact := range result.Artifacts {
+		require.Equal(t, domain.CurrentExecutionArtifactProfileVersion, artifact.ProfileVersion,
+			"artifact %q 的 ProfileVersion 必须为常量", artifact.Type)
+	}
 }
 
 func TestBaseAgentPayloadStoreFailureDoesNotFailExecution(t *testing.T) {

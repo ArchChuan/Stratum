@@ -31,6 +31,18 @@ var factCategoryAllowSet = map[string]bool{
 	"other":        true,
 }
 
+// FactListFilter 事实列表筛选条件（管理页 GET /memory/facts，spec §1 Facts）。
+type FactListFilter struct {
+	Query         string // 内容匹配（复用 SearchByContent 的 ILIKE 机制）
+	ImportanceMin *float64
+	ImportanceMax *float64
+	Category      string // 精确分类
+}
+
+// IsValidFactCategory 报告 category 是否在合法白名单内（供 PATCH 校验复用，
+// factCategoryAllowSet 保持 unexported）。
+func IsValidFactCategory(category string) bool { return factCategoryAllowSet[category] }
+
 var factSourceAllowSet = map[string]bool{
 	FactSourceLLMExtraction:        true,
 	FactSourceExplicitUser:         true,

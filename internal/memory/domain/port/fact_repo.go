@@ -35,6 +35,11 @@ type FactRepo interface {
 	// ListUserFacts 返回某用户的 active 记忆事实，newest first，分页。
 	// 与 CountByUser（同样只统计 active）配套构成分页 total。
 	ListUserFacts(ctx context.Context, tenantID, userID string, limit, offset int) ([]*domain.MemoryFact, error)
+	// ListUserFactsFiltered lists the authenticated user's active user-scope facts
+	// with content/category/importance filter and pagination.
+	ListUserFactsFiltered(ctx context.Context, tenantID, userID string, filter domain.FactListFilter, limit, offset int) ([]*domain.MemoryFact, error)
+	// CountUserFactsFiltered counts rows matching the same filter (pagination total).
+	CountUserFactsFiltered(ctx context.Context, tenantID, userID string, filter domain.FactListFilter) (int, error)
 	SearchByContent(ctx context.Context, tenantID string, filter domain.ScopeFilter, query string, limit int) ([]*domain.MemoryFact, error)
 	FindSupersedeCandidates(ctx context.Context, tenantID string, filter domain.ScopeFilter, content string, minSimilarity, maxCount float64) ([]*SupersedeCandidate, error)
 	CountByUser(ctx context.Context, tenantID, userID string) (int, error)

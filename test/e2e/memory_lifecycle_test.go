@@ -80,10 +80,28 @@ func TestMemoryLifecycle(t *testing.T) {
 	}
 	require.True(t, foundDarkMode, "should recall dark mode preference")
 
-	// Step 4: Forget specific fact — 用户侧单条删除已移除（服务层不再暴露），
-	// E2E 直接经 repo 层验证删除与召回联动。
+	// Step 3.5: 编辑事实 → 向量同步 → 召回命中新内容（spec §5 e2e 链路）
 	factID := recallResp.Facts[0].ID
-	err = env.FactRepo.Delete(ctx, env.TenantID, factID)
+	lightMode := "I prefer light mode for coding"
+	updated, vectorSyncFailed, err := env.MemoryService.UpdateUserFact(ctx, env.TenantID, env.UserID, factID,
+		&application.UpdateUserFactPatch{Content: &lightMode})
+	require.NoError(t, err, "edit fact")
+	require.False(t, vectorSyncFailed, "vector sync should succeed in e2e env")
+	require.Equal(t, lightMode, updated.Content)
+
+	recallResp1b, err := env.MemoryService.RecallMemory(ctx, recallReq)
+	require.NoError(t, err, "recall after edit")
+	foundLightMode := false
+	for _, fact := range recallResp1b.Facts {
+		if contains(fact.Content, "light mode") {
+			foundLightMode = true
+			break
+		}
+	}
+	require.True(t, foundLightMode, "should recall updated preference after edit")
+
+	// Step 4: Delete specific fact via service（归属校验 + 向量清理 best-effort）
+	err = env.MemoryService.DeleteUserFact(ctx, env.TenantID, env.UserID, factID)
 	require.NoError(t, err, "forget memory")
 
 	// Step 5: Verify fact no longer recalled

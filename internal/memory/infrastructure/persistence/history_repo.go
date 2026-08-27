@@ -237,3 +237,64 @@ func (r *HistoryRepo) SearchRelevant(ctx context.Context, tenantID, userID, agen
 	})
 	return out, err
 }
+
+const historyListUserQuery = `
+ SELECT id, conversation_id, user_id, agent_id, scope, summary, tier,
+  COALESCE(period_start, created_at) AS period_start,
+  COALESCE(period_end, created_at) AS period_end,
+  source_start, source_end, COALESCE(source_ids, '{}'::uuid[]) AS source_ids,
+  importance, confidence, COALESCE(aggregation_key, '') AS aggregation_key,
+  status, created_at, updated_at
+ FROM memory_summaries
+ WHERE user_id = $1 AND scope = 'user' AND status = 'active'
+ ORDER BY created_at DESC LIMIT $2 OFFSET $3`
+
+const historyCountUserQuery = `
+ SELECT count(*) FROM memory_summaries
+ WHERE user_id = $1 AND scope = 'user' AND status = 'active'`
+
+func (r *HistoryRepo) ListUserSummaries(ctx context.Context, tenantID, userID string, limit, offset int) ([]*domain.HistorySegment, error) {
+	var out []*domain.HistorySegment
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, historyListUserQuery, userID, limit, offset)
+		if err != nil {
+			return fmt.Errorf("list user summaries: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var h domain.HistorySegment
+			var scope string
+			if err := rows.Scan(&h.ID, &h.ConversationID, &h.UserID, &h.AgentID, &scope, &h.Summary, &h.Tier,
+				&h.PeriodStart, &h.PeriodEnd, &h.SourceStart, &h.SourceEnd, &h.SourceIDs,
+				&h.Importance, &h.Confidence, &h.AggregationKey, &h.Status, &h.CreatedAt, &h.UpdatedAt); err != nil {
+				return err
+			}
+			h.Scope = domain.Scope(scope)
+			h.TenantID = tenantID
+			out = append(out, &h)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+func (r *HistoryRepo) CountUserSummaries(ctx context.Context, tenantID, userID string) (int, error) {
+	var total int
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, historyCountUserQuery, userID).Scan(&total)
+	})
+	return total, err
+}
+
+func (r *HistoryRepo) Delete(ctx context.Context, tenantID, userID, id string) error {
+	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `DELETE FROM memory_summaries WHERE id = $1 AND user_id = $2`, id, userID)
+		if err != nil {
+			return translatePgError(err, "delete summary")
+		}
+		if tag.RowsAffected() == 0 {
+			return domain.ErrSummaryNotFound
+		}
+		return nil
+	})
+}

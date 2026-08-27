@@ -1,102 +1,19 @@
-import {
-  ClearOutlined,
-  DatabaseOutlined,
-  TagsOutlined,
-} from '@ant-design/icons';
-import { Alert, Button, Card, Pagination, Space, Table, Tag, Tabs, Typography } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { useCallback } from 'react';
+import { ClearOutlined, DatabaseOutlined, TagsOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Space, Tabs } from 'antd';
 import { Link } from 'react-router-dom';
 
+import { EntityTable } from '../components/EntityTable';
+import { EntryTable } from '../components/EntryTable';
+import { FactTable } from '../components/FactTable';
+import { SnapshotPanel } from '../components/SnapshotPanel';
+import { SummaryTable } from '../components/SummaryTable';
 import { useMyMemoriesPage } from '../hooks/useMyMemoriesPage';
-import type { MemoryEntity, MemoryFact } from '../model/memory';
 
 import { StatCard } from '@/modules/dashboard';
-import { DangerPopconfirm, EmptyHint } from '@/shared/ui';
-
-const IMPORTANCE_COLORS: Record<string, string> = { high: 'red', medium: 'orange', low: 'green' };
-
-const importanceTag = (importance: number): { color: string; label: string } => {
-  if (importance >= 0.7) return { color: IMPORTANCE_COLORS.high, label: '重要' };
-  if (importance >= 0.4) return { color: IMPORTANCE_COLORS.medium, label: '一般' };
-  return { color: IMPORTANCE_COLORS.low, label: '次要' };
-};
+import { DangerPopconfirm } from '@/shared/ui';
 
 export const MyMemoriesPage = () => {
-  const {
-    memories,
-    loading,
-    stats,
-    statsLoading,
-    clearLoading,
-    total,
-    page,
-    pageSize,
-    pageSizeOptions,
-    entities,
-    entitiesLoading,
-    entityTotal,
-    entityPage,
-    entityPageSize,
-    entityPageSizeOptions,
-    handlePageChange,
-    handleEntityPageChange,
-    handleClearAll,
-  } = useMyMemoriesPage();
-
-  const factColumns: ColumnsType<MemoryFact> = [
-    {
-      title: '内容',
-      dataIndex: 'content',
-      ellipsis: true,
-      render: (v: string) => <Typography.Text style={{ wordBreak: 'break-all' }}>{v}</Typography.Text>,
-    },
-    {
-      title: '重要度',
-      dataIndex: 'importance',
-      width: 90,
-      render: (v: number) => {
-        const tag = importanceTag(v);
-        return <Tag color={tag.color}>{tag.label}</Tag>;
-      },
-    },
-    {
-      title: '创建时间',
-      dataIndex: 'created_at',
-      width: 160,
-      render: (v: string) => new Date(v).toLocaleString(),
-    },
-  ];
-
-  const entityColumns: ColumnsType<MemoryEntity> = [
-    {
-      title: '名称',
-      dataIndex: 'name',
-      ellipsis: true,
-      render: (v: string) => <Typography.Text strong>{v}</Typography.Text>,
-    },
-    {
-      title: '类型',
-      dataIndex: 'entity_type',
-      width: 120,
-      render: (v: string) => <Tag color="blue">{v}</Tag>,
-    },
-    {
-      title: '提及次数',
-      dataIndex: 'fact_count',
-      width: 100,
-    },
-    {
-      title: '最近出现',
-      dataIndex: 'last_seen_at',
-      width: 160,
-      render: (v: string) => new Date(v).toLocaleString(),
-    },
-  ];
-
-  const handleClear = useCallback(() => {
-    void handleClearAll();
-  }, [handleClearAll]);
+  const { stats, statsLoading, clearLoading, handleClearAll, reloadKey, reloadStats } = useMyMemoriesPage();
 
   return (
     <div>
@@ -105,9 +22,9 @@ export const MyMemoriesPage = () => {
         styles={{ body: { padding: 0 } }}
         extra={
           <DangerPopconfirm
-            title="清空全部记忆？"
-            description="将删除当前用户的所有记忆与实体，删除后不可恢复。"
-            onConfirm={handleClear}
+            title="清空全部记忆"
+            description="将删除该用户的全部事实、实体、摘要、快照与原始条目，并同步清理向量，无法恢复"
+            onConfirm={() => void handleClearAll()}
             loading={clearLoading}
           >
             <Button danger icon={<ClearOutlined />} loading={clearLoading}>
@@ -125,8 +42,7 @@ export const MyMemoriesPage = () => {
               message="未配置嵌入模型"
               description={
                 <span>
-                  记忆可能无法写入，请到{' '}
-                  <Link to="/tenant/settings">租户配置页</Link> 配置嵌入模型。
+                  记忆可能无法写入，请到 <Link to="/tenant/settings">租户配置页</Link> 配置嵌入模型。
                 </span>
               }
             />
@@ -134,7 +50,7 @@ export const MyMemoriesPage = () => {
           <Space size={16} wrap style={{ marginBottom: 16, width: '100%' }}>
             <StatCard
               loading={statsLoading}
-              title="记忆条目"
+              title="事实记忆"
               value={stats?.memory_count ?? 0}
               icon={<DatabaseOutlined />}
               color="#2563eb"
@@ -142,7 +58,7 @@ export const MyMemoriesPage = () => {
             />
             <StatCard
               loading={statsLoading}
-              title="记忆实体"
+              title="话题实体"
               value={stats?.entity_count ?? 0}
               icon={<TagsOutlined />}
               color="#eb2f96"
@@ -151,75 +67,13 @@ export const MyMemoriesPage = () => {
           </Space>
 
           <Tabs
+            defaultActiveKey="facts"
             items={[
-              {
-                key: 'facts',
-                label: '记忆条目',
-                children: (
-                  <>
-                    <Table<MemoryFact>
-                      rowKey="id"
-                      columns={factColumns}
-                      dataSource={memories}
-                      loading={loading}
-                      pagination={false}
-                      locale={{
-                        emptyText: (
-                          <EmptyHint
-                            title="记忆还是空的"
-                            description="与 AI 助手的对话内容会被提取为记忆，展示在这里。"
-                          />
-                        ),
-                      }}
-                    />
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
-                      <Pagination
-                        current={page}
-                        pageSize={pageSize}
-                        total={total}
-                        showSizeChanger
-                        pageSizeOptions={pageSizeOptions}
-                        showTotal={(t) => `共 ${t} 条记录`}
-                        onChange={handlePageChange}
-                      />
-                    </div>
-                  </>
-                ),
-              },
-              {
-                key: 'entities',
-                label: '记忆实体',
-                children: (
-                  <>
-                    <Table<MemoryEntity>
-                      rowKey="id"
-                      columns={entityColumns}
-                      dataSource={entities}
-                      loading={entitiesLoading}
-                      pagination={false}
-                      locale={{
-                        emptyText: (
-                          <EmptyHint
-                            title="还没有记忆实体"
-                            description="对话中反复出现的话题会被识别为实体，展示在这里。"
-                          />
-                        ),
-                      }}
-                    />
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
-                      <Pagination
-                        current={entityPage}
-                        pageSize={entityPageSize}
-                        total={entityTotal}
-                        showSizeChanger
-                        pageSizeOptions={entityPageSizeOptions}
-                        showTotal={(t) => `共 ${t} 条记录`}
-                        onChange={handleEntityPageChange}
-                      />
-                    </div>
-                  </>
-                ),
-              },
+              { key: 'facts', label: '事实', children: <FactTable onChanged={reloadStats} reloadKey={reloadKey} /> },
+              { key: 'entities', label: '实体', children: <EntityTable onChanged={reloadStats} reloadKey={reloadKey} /> },
+              { key: 'summaries', label: '摘要', children: <SummaryTable onChanged={reloadStats} reloadKey={reloadKey} /> },
+              { key: 'snapshots', label: '快照', children: <SnapshotPanel onChanged={reloadStats} reloadKey={reloadKey} /> },
+              { key: 'entries', label: '条目', children: <EntryTable onChanged={reloadStats} reloadKey={reloadKey} /> },
             ]}
           />
         </div>

@@ -14,7 +14,10 @@ const testTenantID = "test_entities"
 
 func setupEntityRepoTest(t *testing.T) (*pgxpool.Pool, *persistence.EntityRepo) {
 	t.Helper()
-	pool := NewTestTenantPool(t, "tenant_test_entities")
+	// NewTestTenantPool 会 provision "tenant_"+tenantID，必须与 repo 方法里的
+	// tenantID（testTenantID="test_entities" → search_path "tenant_test_entities"）一致；
+	// 不能重复加前缀，否则 provision 到 tenant_tenant_test_entities 而查询落到空 schema。
+	pool := NewTestTenantPool(t, testTenantID)
 	repo := persistence.NewEntityRepo(pool)
 	return pool, repo
 }

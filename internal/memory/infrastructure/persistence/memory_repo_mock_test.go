@@ -452,3 +452,106 @@ func TestMemoryRepo_DeleteByIDs_execFails(t *testing.T) {
 	require.ErrorContains(t, err, "delete memory entries by ids")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// --- ListUserEntries / CountUserEntries (management page raw list) ---
+
+var entryListItemColumns = []string{"id", "role", "content", "type", "scope", "importance", "created_at", "expires_at"}
+
+func TestMemoryRepo_ListUserEntries_withQuery(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockMemoryRepo(mock)
+	now := ts()
+
+	rows := pgxmock.NewRows(entryListItemColumns).
+		AddRow("entry-1", "user", "hello world", "message", "user", 0.6, now, &now)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("SELECT id, role, content").
+		WithArgs("user-1", "%hello%", 10, 0).
+		WillReturnRows(rows)
+	mock.ExpectCommit()
+
+	got, err := repo.ListUserEntries(context.Background(), "tenant-1", "user-1", 10, 0, "hello")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, "entry-1", got[0].ID)
+	require.Equal(t, "user", got[0].Role)
+	require.Equal(t, "hello world", got[0].Content)
+	require.Equal(t, "message", got[0].Type)
+	require.Equal(t, "user", got[0].Scope)
+	require.InDelta(t, 0.6, got[0].Importance, 0.001)
+	require.NotNil(t, got[0].ExpiresAt)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMemoryRepo_ListUserEntries_noQuery(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockMemoryRepo(mock)
+	now := ts()
+
+	rows := pgxmock.NewRows(entryListItemColumns).
+		AddRow("entry-1", "user", "hello", "message", "user", 0.6, now, nil)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("SELECT id, role, content").
+		WithArgs("user-1", 10, 0).
+		WillReturnRows(rows)
+	mock.ExpectCommit()
+
+	got, err := repo.ListUserEntries(context.Background(), "tenant-1", "user-1", 10, 0, "")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Nil(t, got[0].ExpiresAt)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMemoryRepo_ListUserEntries_queryFails(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockMemoryRepo(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("SELECT id, role, content").
+		WithArgs("user-1", "%hello%", 10, 0).WillReturnError(pgx.ErrTxClosed)
+	mock.ExpectRollback()
+
+	_, err := repo.ListUserEntries(context.Background(), "tenant-1", "user-1", 10, 0, "hello")
+	require.ErrorContains(t, err, "list user entries")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMemoryRepo_CountUserEntries_withQuery(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockMemoryRepo(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("count\\(\\*\\) FROM memory_entries").
+		WithArgs("user-1", "%hello%").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(3))
+	mock.ExpectCommit()
+
+	total, err := repo.CountUserEntries(context.Background(), "tenant-1", "user-1", "hello")
+	require.NoError(t, err)
+	require.Equal(t, 3, total)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMemoryRepo_CountUserEntries_noQuery(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockMemoryRepo(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("count\\(\\*\\) FROM memory_entries").
+		WithArgs("user-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(2))
+	mock.ExpectCommit()
+
+	total, err := repo.CountUserEntries(context.Background(), "tenant-1", "user-1", "")
+	require.NoError(t, err)
+	require.Equal(t, 2, total)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

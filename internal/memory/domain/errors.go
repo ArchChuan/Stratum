@@ -47,6 +47,14 @@ var (
 	// ErrInvalidSource is returned when fact provenance is not recognized.
 	ErrInvalidSource = errors.New("memory fact source not in allowlist")
 
+	// ErrImportanceOutOfRange is returned when a fact importance is outside [0, 1].
+	ErrImportanceOutOfRange = errors.New("memory fact importance must be in [0, 1]")
+	// ErrFactNotEditable is returned when editing a fact whose status is not active
+	// (superseded/archived facts are owned by the extraction pipeline).
+	ErrFactNotEditable = errors.New("memory fact not editable")
+	// ErrEmptyFactPatch is returned when an update request carries no field to change.
+	ErrEmptyFactPatch = errors.New("memory fact update requires at least one field")
+
 	// ErrInvalidFactSourceIdentity is returned when replay-safe extraction provenance is incomplete.
 	ErrInvalidFactSourceIdentity = errors.New("invalid memory fact source identity")
 
@@ -72,4 +80,12 @@ var (
 	// ErrMigrationUnknownModel 目标模型不是目录中可解析的嵌入模型，拒绝启动迁移
 	// （fail-closed：避免生效模型被切到无效模型，产生不可回填的僵尸迁移）。
 	ErrMigrationUnknownModel = errors.New("memory migration target model not resolvable")
+
+	// ErrSummaryNotFound is returned when a history summary lookup misses.
+	ErrSummaryNotFound = errors.New("memory summary not found")
+	// ErrSnapshotNotFound is returned when an active snapshot lookup misses.
+	ErrSnapshotNotFound = errors.New("memory snapshot not found")
+	// ErrSnapshotInvalid 快照数据不合法（source 缺失、超限、非法状态等），是用户
+	// 输入/数据问题而非服务端错误，应映射 400 而非 500。
+	ErrSnapshotInvalid = errors.New("invalid active snapshot")
 )

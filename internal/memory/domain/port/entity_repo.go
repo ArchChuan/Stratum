@@ -31,4 +31,7 @@ type EntityRepo interface {
 
 	// DeleteAllByAgent hard-deletes all entities owned by agentID within the tenant schema.
 	DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error
+
+	// Delete removes a single entity by id.
+	Delete(ctx context.Context, tenantID, id string) error
 }

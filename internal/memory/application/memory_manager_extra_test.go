@@ -85,6 +85,13 @@ func (m *mockMemoryRepo) GetSummary(ctx context.Context, tenantID, sessionID str
 	return args.String(0), args.Error(1)
 }
 
+func (m *mockMemoryRepo) ListUserEntries(context.Context, string, string, int, int, string) ([]*memdomain.MemoryEntryListItem, error) {
+	return nil, nil
+}
+func (m *mockMemoryRepo) CountUserEntries(context.Context, string, string, string) (int, error) {
+	return 0, nil
+}
+
 func entry(id string, importance float64) *memdomain.MemoryEntry {
 	return &memdomain.MemoryEntry{ID: id, Importance: importance}
 }

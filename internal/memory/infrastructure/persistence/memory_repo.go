@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -62,7 +63,12 @@ func (r *MemoryRepo) Get(ctx context.Context, tenantID, id string) (*domain.Memo
 	var entry *domain.MemoryEntry
 	if err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		row := tx.QueryRow(ctx,
-			`SELECT id, type, role, content, session_id, user_id, agent_id, importance, tags, metadata, expires_at
+			`SELECT id, type, role, content,
+			        COALESCE(session_id, '') AS session_id,
+			        COALESCE(user_id, '') AS user_id,
+			        COALESCE(agent_id, '') AS agent_id,
+			        importance, tags, metadata,
+			        COALESCE(expires_at, 'epoch') AS expires_at
 			 FROM memory_entries WHERE id = $1`, id)
 		e := &domain.MemoryEntry{}
 		if err := row.Scan(&e.ID, &e.Type, &e.Role, &e.Content, &e.SessionID, &e.UserID, &e.AgentID,
@@ -88,7 +94,11 @@ func (r *MemoryRepo) Search(ctx context.Context, tenantID, userID, query string,
 	var out []*domain.MemoryEntry
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT id, type, role, content, session_id, user_id, agent_id, importance
+			`SELECT id, type, role, content,
+			        COALESCE(session_id, '') AS session_id,
+			        COALESCE(user_id, '') AS user_id,
+			        COALESCE(agent_id, '') AS agent_id,
+			        importance
 			 FROM memory_entries
 			 WHERE ($1::text = '' OR user_id = $1::text)
 			   AND ($2::text = '' OR content ILIKE '%' || $2 || '%')
@@ -266,4 +276,51 @@ func (r *MemoryRepo) GetSummary(ctx context.Context, tenantID, sessionID string)
 		return "", err
 	}
 	return summary, nil
+}
+
+// entryListWhere 构造 ListUserEntries/CountUserEntries 的 WHERE 与参数（$N 绑定）。
+func entryListWhere(userID, query string) (string, []any) {
+	clauses := []string{"user_id = $1", "scope = 'user'"}
+	args := []any{userID}
+	if query != "" {
+		clauses = append(clauses, fmt.Sprintf("content ILIKE $%d", len(args)+1))
+		args = append(args, "%"+query+"%")
+	}
+	return strings.Join(clauses, " AND "), args
+}
+
+func (r *MemoryRepo) ListUserEntries(ctx context.Context, tenantID, userID string, limit, offset int, query string) ([]*domain.MemoryEntryListItem, error) {
+	where, args := entryListWhere(userID, query)
+	sql := `SELECT id, role, content, type, scope, importance, created_at, expires_at
+	 FROM memory_entries WHERE ` + where +
+		` ORDER BY created_at DESC LIMIT $` + fmt.Sprintf("%d", len(args)+1) +
+		` OFFSET $` + fmt.Sprintf("%d", len(args)+2)
+	args = append(args, limit, offset)
+
+	var out []*domain.MemoryEntryListItem
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, sql, args...)
+		if err != nil {
+			return fmt.Errorf("list user entries: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var e domain.MemoryEntryListItem
+			if err := rows.Scan(&e.ID, &e.Role, &e.Content, &e.Type, &e.Scope, &e.Importance, &e.CreatedAt, &e.ExpiresAt); err != nil {
+				return err
+			}
+			out = append(out, &e)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+func (r *MemoryRepo) CountUserEntries(ctx context.Context, tenantID, userID, query string) (int, error) {
+	where, args := entryListWhere(userID, query)
+	var total int
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT count(*) FROM memory_entries WHERE `+where, args...).Scan(&total)
+	})
+	return total, err
 }

@@ -398,3 +398,40 @@ func TestEntityRepo_DeleteAllByAgent_execFails(t *testing.T) {
 	require.ErrorContains(t, err, "delete entities by agent")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestEntityRepo_Delete removes a single entity by id; a zero-row delete maps
+// to domain.ErrEntityNotFound (the tenant schema never loses the tx on miss).
+func TestEntityRepo_Delete(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockEntityRepo(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectExec("DELETE FROM memory_entities WHERE id").
+		WithArgs("entity-1").WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectCommit()
+	require.NoError(t, repo.Delete(context.Background(), "tenant-1", "entity-1"))
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectExec("DELETE FROM memory_entities WHERE id").
+		WithArgs("entity-2").WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectRollback()
+	require.ErrorIs(t, repo.Delete(context.Background(), "tenant-1", "entity-2"), domain.ErrEntityNotFound)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestEntityRepo_Delete_execFails(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockEntityRepo(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectExec("DELETE FROM memory_entities WHERE id").
+		WithArgs("entity-1").WillReturnError(pgx.ErrTxClosed)
+	mock.ExpectRollback()
+
+	err := repo.Delete(context.Background(), "tenant-1", "entity-1")
+	require.ErrorContains(t, err, "delete entity")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
