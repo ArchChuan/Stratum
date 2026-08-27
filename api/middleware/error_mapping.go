@@ -68,6 +68,7 @@ var errorStatusTable = map[error]int{
 	iamdomain.ErrForbidden:                        http.StatusForbidden,
 	iamdomain.ErrMemberNotFound:                   http.StatusNotFound,
 	iamdomain.ErrTenantNotFound:                   http.StatusNotFound,
+	iamdomain.ErrUserNotFound:                     http.StatusNotFound,
 	llmgatewaydomain.ErrModelNotFound:             http.StatusNotFound,
 	agentapp.ErrNotFound:                          http.StatusNotFound,
 	agentdomain.ErrApprovalNotFound:               http.StatusNotFound,
