@@ -3,6 +3,7 @@ import { Avatar, Button, Card, Flex, Tag, Typography, message } from 'antd';
 import { useEffect, useState } from 'react';
 
 import { tenantApi } from '../../api/tenant.api';
+
 import { AdminAddModal, type AdminCandidate } from './AdminAddModal';
 
 import { extractErrorMessage, isForbidden } from '@/shared/lib';

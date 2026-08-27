@@ -1,4 +1,4 @@
-import { useAuth } from '../components/AuthContext';
+import { useAuth } from '@/modules/iam';
 
 // 平台角色层级，与后端 middleware.RequirePlatformAdmin 一致：global_admin > system_admin > user。
 const PLATFORM_ROLE_RANK: Record<string, number> = { user: 1, system_admin: 2, global_admin: 3 };

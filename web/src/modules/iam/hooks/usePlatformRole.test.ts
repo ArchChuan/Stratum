@@ -7,9 +7,8 @@ const { mockUserRef } = vi.hoisted(() => ({
   mockUserRef: { value: { global_role: 'user' } as { global_role: string } | null },
 }));
 
-// 精确 mock AuthContext 而非整个 @/modules/iam barrel，避免 mock 泄漏污染同 worker
-// 其他测试文件的 tenantApi 等模块解析。
-vi.mock('@/modules/iam/components/AuthContext', () => ({
+// mock barrel（vitest 默认 isolate，mock 不跨文件泄漏；usePlatformRole 仅消费 useAuth）
+vi.mock('@/modules/iam', () => ({
   useAuth: () => ({ user: mockUserRef.value }),
 }));
 
