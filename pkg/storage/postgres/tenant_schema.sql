@@ -92,15 +92,6 @@ Unavailable diagnostic evidence is an evidence gap; it must never be reported as
     ON CONFLICT (id) DO NOTHING;
 END $$;
 
--- 存量租户回填：旧版平台助手行在 ALTER ADD COLUMN system_key 后为 NULL，
--- 下方身份检查（id + system_key）会 fail-closed 拒绝启动。仅回填空值；
--- 非空冲突值保留并触发 operator action（身份冲突必须人工处置）。
-UPDATE agents
-SET system_key = 'stratum.platform_assistant',
-    updated_at = NOW()
-WHERE id = 'stratum-platform-assistant'
-  AND (system_key IS NULL OR system_key = '');
-
 -- D11: 存量租户 seed 展示名友好化回填：旧 `__stratum_platform_assistant__` → 中文名。
 -- 等化后平台助手与普通 Agent 一致，命名仅是展示名；后端/前端均按 id 判断。
 UPDATE agents
