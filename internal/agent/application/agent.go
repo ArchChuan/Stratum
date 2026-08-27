@@ -287,7 +287,25 @@ func (a *BaseAgent) assembleContextMessagesReuse(ctx context.Context, ec agentEx
 			zap.Error(err),
 		)
 	}
+	// 对账轨开启时，把"声称带引用"规则锚入首条 system 消息之后（头部 anchor
+	// 区压缩永不逐出）：所有步骤可见，无工具调用直接出答案也受约束。
+	if ec.cfg.FactCheck != nil && ec.cfg.FactCheck.CitationVerify {
+		initMessages = injectSystemInstruction(initMessages, constants.AgentCitationReferenceInstruction)
+	}
 	return initMessages
+}
+
+// injectSystemInstruction 将一条 system 指令作为块锚入首条 system 消息之后
+// （头部 anchor 区压缩不逐出）；无 system 消息时置于最前。语义与 graph 包
+// insertSystemBlockAfterFirstSystem 一致（不同包不可引用其未导出函数）。
+func injectSystemInstruction(messages []port.LLMMessage, content string) []port.LLMMessage {
+	instruction := port.LLMMessage{Role: "system", Content: content}
+	if len(messages) > 0 && messages[0].Role == "system" {
+		out := make([]port.LLMMessage, 0, len(messages)+1)
+		out = append(out, messages[0], instruction)
+		return append(out, messages[1:]...)
+	}
+	return append([]port.LLMMessage{instruction}, messages...)
 }
 
 // SetChatStore sets the chat store for conversation history persistence (void, for interface assertion).
@@ -1255,7 +1273,9 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		ListMCPServersFn:           ec.cfg.ListMCPServersFn,
 		InternalToolResultGuardFn:  ec.cfg.InternalToolResultGuardFn,
 		MaxLLMSteps:                ec.cfg.MaxSteps,
-		MaxContextTokens:           maxTokens,
+		// 声称带引用约束：对账轨开启时注入引用规则（主注入 + 收尾强化）。
+		EnforceClaimCitations: ec.cfg.FactCheck != nil && ec.cfg.FactCheck.CitationVerify,
+		MaxContextTokens:      maxTokens,
 		// 成本预算：registry 参数 agent.max_tokens_per_execution 经
 		// WithMaxTokensPerExecution 覆盖，0 = 不设限（Spec 第 3 节）。
 		MaxTokensPerExecution: ec.cfg.MaxTokensPerExecution,
@@ -1486,9 +1506,11 @@ func (a *BaseAgent) collectGraphResult(ctx context.Context, result *AgentResult,
 	result.AssistantToolArtifacts = append([]domain.SystemAssistantToolArtifact(nil), finalState.AssistantToolArtifacts...)
 	result.Sources = append([]port.RAGSearchSource(nil), finalState.CitationSources...)
 	result.NoAnswer = finalState.NoAnswer
-	// 幻觉校验（advisory）：开关开 + 有证据 fn 才执行；checker 内部失败/超时
-	// 返回 nil，不阻塞执行。ViewerID（UserID）空时 checker fail-closed 跳过。
-	if ec.cfg.FactCheck != nil && ec.cfg.FactCheck.Enabled && ec.cfg.RAGSearchFnWithEvidence != nil {
+	// 幻觉校验（advisory）：judge 轨（Enabled）或对账轨（CitationVerify）任一
+	// 开启即尝试；checker 内部按依赖 fail-closed——judge 轨缺证据 fn / 空 viewerID
+	// 跳过，对账轨只依赖内存 ToolObservations 不依赖 RAG。失败/超时返回 nil，
+	// 不阻塞执行。
+	if ec.cfg.FactCheck != nil && (ec.cfg.FactCheck.Enabled || ec.cfg.FactCheck.CitationVerify) {
 		settings := *ec.cfg.FactCheck
 		settings.EvidenceFn = ec.cfg.RAGSearchFnWithEvidence
 		result.FactCheck = factcheck.New(settings).Check(ctx, domain.FactCheckInput{
@@ -1499,6 +1521,8 @@ func (a *BaseAgent) collectGraphResult(ctx context.Context, result *AgentResult,
 			// 构造工具参数枚举）。此前误传 ID 导致 GetByName 查不到 → ErrRAGDependency。
 			Workspaces: a.KnowledgeWorkspaceNames,
 			ViewerID:   ec.cfg.UserID,
+			// 对账轨输入：内存态工具调用记录（enrich 前），by ToolCallID 对账。
+			ToolObservations: finalState.ToolObservations,
 		})
 	}
 	// 子节点降级向父图传播：StopLossTools 是跨子状态共享的 map（结构体拷贝

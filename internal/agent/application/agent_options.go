@@ -288,7 +288,7 @@ func (s *AgentService) assembleOptions(
 // judge 与 TopK 等由 wiring 装配；EvidenceFn 在 collectGraphResult 填充。
 
 func applyFactCheckOption(options []ExecutionOption, settings *factcheck.Settings) []ExecutionOption {
-	if settings == nil || !settings.Enabled {
+	if settings == nil || (!settings.Enabled && !settings.CitationVerify) {
 		return options
 	}
 	return append(options, WithFactCheck(settings))

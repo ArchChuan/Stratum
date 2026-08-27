@@ -499,6 +499,20 @@ func (r *ParametersRegistry) registerFactCheckParams() {
 		VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(20), Step: f(1)},
 		Optimizable: true,
 	})
+	_ = r.Register(ParameterDefinition{
+		Key: "agent.factcheck.citation_verify", Scope: ScopePlatform, Category: "agent",
+		DisplayName: "启用声称引用对账", Description: "代码级核验最终输出中的 <tool_ref:ID> 声称 vs 工具执行记录;与 judge 可独立开启",
+		ValueType: TypeBool, Default: false,
+		VisualHint:  VisualHint{Control: ControlToggle},
+		Optimizable: true,
+	})
+	_ = r.Register(ParameterDefinition{
+		Key: "agent.factcheck.judge.temperature", Scope: ScopePlatform, Category: "agent",
+		DisplayName: "幻觉校验 Judge 温度", Description: "Judge 采样温度;0 = 使用模型/Provider 默认",
+		ValueType: TypeFloat, Default: float64(0),
+		VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(1.5), Step: f(0.1)},
+		Optimizable: true,
+	})
 }
 
 // registerTraceParams is the Phase 2 trace capture switch.

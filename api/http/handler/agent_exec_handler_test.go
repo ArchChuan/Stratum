@@ -231,6 +231,78 @@ func TestAgentExecutionDonePayloadFactCheckAndDegraded(t *testing.T) {
 		}
 	})
 
+	t.Run("tool references and unverified serialized when present", func(t *testing.T) {
+		result := &domain.AgentResult{AgentID: "a1", Output: "ok",
+			FactCheck: &domain.FactCheckReport{
+				Checked: true, IsValid: false, RiskPoints: 5,
+				Claims: []domain.ClaimVerdict{},
+				ToolReferences: []domain.ToolReferenceVerdict{
+					{ClaimText: "订单已删除", ToolName: "delete_order", ToolCallID: "call_1",
+						Reference: "<tool_ref:call_1>", Status: "error",
+						Outcome: "definite_failure", Classification: "verification_failed", Risk: 5},
+					{ClaimText: "已创建订单", ToolName: "create_order", ToolCallID: "call_2",
+						Reference: "<tool_ref:call_2>", Status: "success",
+						Classification: "verified", Risk: 0},
+				},
+				UnverifiedCount:  1,
+				UnverifiedClaims: []string{"已发送通知"},
+			},
+		}
+		done := agentExecutionDonePayload(result)
+		var decoded map[string]any
+		if err := json.Unmarshal(done, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		fc, ok := decoded["factCheck"].(map[string]any)
+		if !ok {
+			t.Fatalf("done payload missing factCheck object: %s", done)
+		}
+		refs, ok := fc["toolReferences"].([]any)
+		if !ok || len(refs) != 2 {
+			t.Fatalf("factCheck toolReferences = %#v, want 2 items", fc["toolReferences"])
+		}
+		first := refs[0].(map[string]any)
+		if first["claimText"] != "订单已删除" || first["toolName"] != "delete_order" ||
+			first["toolCallId"] != "call_1" || first["reference"] != "<tool_ref:call_1>" ||
+			first["status"] != "error" || first["outcome"] != "definite_failure" ||
+			first["classification"] != "verification_failed" || first["risk"] != float64(5) {
+			t.Fatalf("toolReference[0] drifted: %#v", first)
+		}
+		if fc["unverifiedCount"] != float64(1) {
+			t.Fatalf("unverifiedCount = %#v, want 1", fc["unverifiedCount"])
+		}
+		unverified, ok := fc["unverifiedClaims"].([]any)
+		if !ok || len(unverified) != 1 || unverified[0] != "已发送通知" {
+			t.Fatalf("unverifiedClaims = %#v, want [已发送通知]", fc["unverifiedClaims"])
+		}
+	})
+
+	t.Run("tool references and unverified omitted when empty", func(t *testing.T) {
+		result := &domain.AgentResult{AgentID: "a1", Output: "ok",
+			FactCheck: &domain.FactCheckReport{
+				Checked: true, IsValid: true, Claims: []domain.ClaimVerdict{},
+			},
+		}
+		done := agentExecutionDonePayload(result)
+		var decoded map[string]any
+		if err := json.Unmarshal(done, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		fc, ok := decoded["factCheck"].(map[string]any)
+		if !ok {
+			t.Fatalf("done payload missing factCheck object: %s", done)
+		}
+		if _, ok := fc["toolReferences"]; ok {
+			t.Fatalf("toolReferences must be omitted when empty: %#v", fc)
+		}
+		if _, ok := fc["unverifiedCount"]; ok {
+			t.Fatalf("unverifiedCount must be omitted when zero: %#v", fc)
+		}
+		if _, ok := fc["unverifiedClaims"]; ok {
+			t.Fatalf("unverifiedClaims must be omitted when empty: %#v", fc)
+		}
+	})
+
 	t.Run("fact_check absent when not checked", func(t *testing.T) {
 		result := &domain.AgentResult{AgentID: "a1", Output: "ok"}
 		done := agentExecutionDonePayload(result)

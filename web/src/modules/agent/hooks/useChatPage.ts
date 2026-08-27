@@ -74,6 +74,7 @@ const makeMessage = (msg: {
   sources?: ChatMessage['sources'];
   noAnswer?: ChatMessage['noAnswer'];
   taskSnapshot?: ChatMessage['taskSnapshot'];
+  factCheck?: ChatMessage['factCheck'];
 }): ChatMessage => ({
   id: msg.id,
   role: msg.role,
@@ -85,6 +86,7 @@ const makeMessage = (msg: {
   sources: msg.sources,
   noAnswer: msg.noAnswer,
   taskSnapshot: msg.taskSnapshot,
+  factCheck: msg.factCheck,
 });
 
 type UseChatPageOptions = { fixedAgentId?: string };
@@ -451,6 +453,8 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
                   sources: st.result?.sources ?? [],
                   noAnswer: st.result?.noAnswer,
                   taskSnapshot: parseTaskSnapshot(st.result?.metadata),
+                  // 幻觉防护对账报告（校验关/旧后端缺省）
+                  factCheck: st.result?.factCheck,
                 }),
               ]);
             } else if (!hasUserMsg && st.userQuery) {
@@ -567,6 +571,8 @@ export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
                 sources: streamResult.sources ?? [],
                 noAnswer: streamResult.noAnswer,
                 taskSnapshot: parseTaskSnapshot(streamResult.metadata),
+                // 幻觉防护对账报告（校验关/旧后端缺省）
+                factCheck: streamResult.factCheck,
               }
             : m,
         ),
