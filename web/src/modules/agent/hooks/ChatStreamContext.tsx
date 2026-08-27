@@ -27,7 +27,8 @@ interface StreamInternalState {
   result: AgentExecutionResult | null;
 	error: string | null;
 	failure: AgentExecutionFailure | null;
-	approval: ToolApproval | null;
+	// 多审批：同一轮 LLM 消息含多个需审批工具时，SSE 一帧带全部审批（批量渲染卡）。
+	approvals: ToolApproval[];
 	// 断线续接恢复键:SSE 首帧下发,存内存仅暴露,断线重发由 executeAgentStream
 	// 内部携带,这里只做可读快照(刷新降级为重新执行,不持久化)。
 	executionId: string | null;
@@ -46,7 +47,7 @@ export interface StreamSnapshot {
   done: boolean;
   result: AgentExecutionResult | null;
 	error: string | null;
-	approval: ToolApproval | null;
+	approvals: ToolApproval[];
 	executionId: string | null;
 	delegateStatus: DelegateStatusView;
 	conflict: boolean;
@@ -59,7 +60,7 @@ interface ChatStreamContextValue {
   streamResult: AgentExecutionResult | null;
   streamError: string | null;
 	streamDone: boolean;
-	streamApproval: ToolApproval | null;
+	streamApprovals: ToolApproval[];
 	streamConflict: boolean;
 	streamFailure: AgentExecutionFailure | null;
 	streamDelegateStatus: DelegateStatusView;
@@ -88,7 +89,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
     result: null,
 		error: null,
 		failure: null,
-		approval: null,
+		approvals: [],
 		executionId: null,
 		delegateStatus: null,
 		conflict: false,
@@ -125,7 +126,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
     s.result = null;
 		s.error = null;
 		s.failure = null;
-		s.approval = null;
+		s.approvals = [];
 		s.executionId = null;
 		s.delegateStatus = null;
 		s.conflict = false;
@@ -174,9 +175,9 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
         stateRef.current.ctrl = null;
         notify();
 		},
-		onApprovalRequired: (approval) => {
+		onApprovalsRequired: (approvals) => {
 			if (stateRef.current.ctrl !== ctrl) return;
-			stateRef.current.done = true; stateRef.current.delegateStatus = null; stateRef.current.approval = approval; stateRef.current.ctrl = null; notify();
+			stateRef.current.done = true; stateRef.current.delegateStatus = null; stateRef.current.approvals = approvals; stateRef.current.ctrl = null; notify();
 		},
 			onDelegateEvent: (evt) => {
 				if (stateRef.current.ctrl !== ctrl) return;
@@ -222,7 +223,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
       done: stateRef.current.done,
       result: stateRef.current.result,
 		error: stateRef.current.error,
-		approval: stateRef.current.approval,
+		approvals: stateRef.current.approvals,
 		executionId: stateRef.current.executionId,
 		delegateStatus: stateRef.current.delegateStatus,
 		conflict: stateRef.current.conflict,
@@ -240,7 +241,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
       streamResult: stateRef.current.result,
       streamError: stateRef.current.error,
       streamDone: stateRef.current.done,
-      streamApproval: stateRef.current.approval,
+      streamApprovals: stateRef.current.approvals,
       streamConflict: stateRef.current.conflict,
       streamFailure: stateRef.current.failure,
       streamDelegateStatus: stateRef.current.delegateStatus,
