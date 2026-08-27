@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
@@ -611,4 +612,139 @@ func TestMemoryService_ListUserEntities_propagatesRepoErrors(t *testing.T) {
 	})
 	assert.ErrorContains(t, err, "count user entities")
 	entities.AssertExpectations(t)
+}
+
+func newFactSvc() (*MemoryService, *MockFactRepo, *MockVectorStore, *MockEntityRepo, *MockEmbedClient) {
+	facts, vectors, entities := new(MockFactRepo), new(MockVectorStore), new(MockEntityRepo)
+	svc := NewMemoryService(facts, entities, nil, vectors, nil, nil, nil, nil)
+	embed := new(MockEmbedClient)
+	svc.SetEmbedClientResolver(func(context.Context, string) port.EmbedClient { return embed })
+	return svc, facts, vectors, entities, embed
+}
+
+func TestMemoryService_UpdateUserFact(t *testing.T) {
+	t.Run("success re-embeds and syncs vectors", func(t *testing.T) {
+		ctx := context.Background()
+		svc, facts, vectors, _, embed := newFactSvc()
+		fact := &domain.MemoryFact{ID: "fact-1", UserID: "user-1", Content: "I prefer dark mode",
+			Importance: 0.8, Category: "preference", Status: domain.FactStatusActive}
+		newContent := "I prefer light mode"
+		facts.On("GetByID", ctx, "tenant-1", "fact-1").Return(fact, nil).Once()
+		embed.On("Embed", ctx, newContent).Return([]float32{0.1, 0.2}, nil).Once()
+		embed.On("Model").Return("text-embedding-v3").Once()
+		vectors.On("DeleteFactVectors", ctx, "tenant-1", []string{"fact-1"}).Return(nil).Once()
+		facts.On("Update", ctx, mock.Anything, mock.Anything).Return(nil).Once()
+		vectors.On("Upsert", ctx, "memory_facts_tenant_1_text_embedding_v3", mock.Anything).Return(nil).Once()
+
+		got, vectorSyncFailed, err := svc.UpdateUserFact(ctx, "tenant-1", "user-1", "fact-1",
+			&UpdateUserFactPatch{Content: &newContent})
+		require.NoError(t, err)
+		require.False(t, vectorSyncFailed)
+		require.Equal(t, newContent, got.Content)
+		// 只 patch Content 时，未触及字段（Category 等）必须原样保留。
+		require.Equal(t, "preference", got.Category)
+	})
+
+	t.Run("rejects empty patch", func(t *testing.T) {
+		svc, _, _, _, _ := newFactSvc()
+		_, _, err := svc.UpdateUserFact(context.Background(), "tenant-1", "user-1", "fact-1", &UpdateUserFactPatch{})
+		require.ErrorIs(t, err, domain.ErrEmptyFactPatch)
+	})
+
+	t.Run("rejects other users fact as 404", func(t *testing.T) {
+		ctx := context.Background()
+		svc, facts, _, _, _ := newFactSvc()
+		facts.On("GetByID", ctx, "tenant-1", "fact-1").
+			Return(&domain.MemoryFact{ID: "fact-1", UserID: "other-user"}, nil).Once()
+		content := "x"
+		_, _, err := svc.UpdateUserFact(ctx, "tenant-1", "user-1", "fact-1", &UpdateUserFactPatch{Content: &content})
+		require.ErrorIs(t, err, domain.ErrFactNotFound)
+	})
+
+	t.Run("rejects non-active fact as 409", func(t *testing.T) {
+		ctx := context.Background()
+		svc, facts, _, _, _ := newFactSvc()
+		facts.On("GetByID", ctx, "tenant-1", "fact-1").
+			Return(&domain.MemoryFact{ID: "fact-1", UserID: "user-1", Status: domain.FactStatusSuperseded}, nil).Once()
+		content := "x"
+		_, _, err := svc.UpdateUserFact(ctx, "tenant-1", "user-1", "fact-1", &UpdateUserFactPatch{Content: &content})
+		require.ErrorIs(t, err, domain.ErrFactNotEditable)
+	})
+
+	t.Run("fails closed when embedder unavailable", func(t *testing.T) {
+		ctx := context.Background()
+		facts := new(MockFactRepo)
+		svc := NewMemoryService(facts, new(MockEntityRepo), nil, new(MockVectorStore), nil, nil, nil, nil)
+		facts.On("GetByID", ctx, "tenant-1", "fact-1").
+			Return(&domain.MemoryFact{ID: "fact-1", UserID: "user-1", Status: domain.FactStatusActive}, nil).Once()
+		content := "x"
+		_, _, err := svc.UpdateUserFact(ctx, "tenant-1", "user-1", "fact-1", &UpdateUserFactPatch{Content: &content})
+		require.ErrorIs(t, err, ErrMemoryEmbeddingUnavailable)
+	})
+
+	t.Run("reports vector sync failure but keeps pg change", func(t *testing.T) {
+		ctx := context.Background()
+		svc, facts, vectors, _, embed := newFactSvc()
+		facts.On("GetByID", ctx, "tenant-1", "fact-1").
+			Return(&domain.MemoryFact{ID: "fact-1", UserID: "user-1", Content: "old", Status: domain.FactStatusActive}, nil).Once()
+		embed.On("Embed", ctx, "new").Return([]float32{0.1}, nil).Once()
+		embed.On("Model").Return("text-embedding-v3").Once()
+		vectors.On("DeleteFactVectors", ctx, "tenant-1", []string{"fact-1"}).Return(nil).Once()
+		facts.On("Update", ctx, mock.Anything, mock.Anything).Return(nil).Once()
+		vectors.On("Upsert", ctx, "memory_facts_tenant_1_text_embedding_v3", mock.Anything).Return(errors.New("milvus down")).Once()
+
+		content := "new"
+		got, vectorSyncFailed, err := svc.UpdateUserFact(ctx, "tenant-1", "user-1", "fact-1", &UpdateUserFactPatch{Content: &content})
+		require.NoError(t, err)
+		require.True(t, vectorSyncFailed)
+		require.Equal(t, "new", got.Content)
+	})
+}
+
+func TestMemoryService_DeleteUserFact(t *testing.T) {
+	t.Run("deletes fact and best-effort clears vectors", func(t *testing.T) {
+		ctx := context.Background()
+		svc, facts, vectors, _, _ := newFactSvc()
+		facts.On("GetByID", ctx, "tenant-1", "fact-1").
+			Return(&domain.MemoryFact{ID: "fact-1", UserID: "user-1"}, nil).Once()
+		facts.On("Delete", ctx, "tenant-1", "fact-1").Return(nil).Once()
+		// 向量清理失败不阻塞主操作。
+		vectors.On("DeleteFactVectors", ctx, "tenant-1", []string{"fact-1"}).Return(errors.New("milvus down")).Once()
+		require.NoError(t, svc.DeleteUserFact(ctx, "tenant-1", "user-1", "fact-1"))
+	})
+}
+
+func TestMemoryService_ListUserFactsFiltered(t *testing.T) {
+	ctx := context.Background()
+	svc, facts, _, _, _ := newFactSvc()
+	filter := domain.FactListFilter{Query: "dark"}
+	facts.On("ListUserFactsFiltered", ctx, "tenant-1", "user-1", filter, 20, 0).
+		Return([]*domain.MemoryFact{{ID: "fact-1", UserID: "user-1", Category: "preference", Status: "active"}}, nil).Once()
+	facts.On("CountUserFactsFiltered", ctx, "tenant-1", "user-1", filter).Return(1, nil).Once()
+
+	got, total, err := svc.ListUserFactsFiltered(ctx, &ListUserFactsFilteredRequest{TenantID: "tenant-1", UserID: "user-1", Query: "dark", Limit: 20})
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, got, 1)
+	require.Equal(t, "fact-1", got[0].ID)
+}
+
+func TestMemoryService_DeleteUserEntity(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("deletes own entity", func(t *testing.T) {
+		svc, _, _, entities, _ := newFactSvc()
+		entities.On("GetByID", ctx, "tenant-1", "ent-1").
+			Return(&domain.MemoryEntity{ID: "ent-1", UserID: "user-1"}, nil).Once()
+		entities.On("Delete", ctx, "tenant-1", "ent-1").Return(nil).Once()
+		require.NoError(t, svc.DeleteUserEntity(ctx, "tenant-1", "user-1", "ent-1"))
+	})
+
+	t.Run("rejects other users entity as 404", func(t *testing.T) {
+		svc, _, _, entities, _ := newFactSvc()
+		entities.On("GetByID", ctx, "tenant-1", "ent-1").
+			Return(&domain.MemoryEntity{ID: "ent-1", UserID: "other-user"}, nil).Once()
+		err := svc.DeleteUserEntity(ctx, "tenant-1", "user-1", "ent-1")
+		require.ErrorIs(t, err, domain.ErrEntityNotFound)
+	})
 }

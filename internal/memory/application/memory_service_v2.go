@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
 
@@ -112,6 +114,35 @@ func (s *MemoryService) currentEmbedModel(ctx context.Context, tenantID string) 
 		}
 	}
 	return ""
+}
+
+// resolveEmbedClient 返回 tenant 的嵌入客户端；未配置返回 ErrMemoryEmbeddingUnavailable
+// （fail-closed：编辑前必须先能嵌入，否则拒绝写数据，spec §3 第 2 步）。
+func (s *MemoryService) resolveEmbedClient(ctx context.Context, tenantID string) (port.EmbedClient, error) {
+	embedder := s.embedClient
+	if embedder == nil && s.embedClientResolver != nil {
+		embedder = s.embedClientResolver(ctx, tenantID)
+	}
+	if embedder == nil {
+		return nil, ErrMemoryEmbeddingUnavailable
+	}
+	return embedder, nil
+}
+
+// factVectorMetadata 构造事实向量元数据，与提取路径 embedAndStoreFactVector 的
+// key 集合保持一致（召回 filter 依赖这些 key）。
+func factVectorMetadata(fact *domain.MemoryFact) map[string]interface{} {
+	return map[string]interface{}{
+		"user_id":         fact.UserID,
+		"agent_id":        fact.AgentID,
+		"conversation_id": fact.ConversationID,
+		"scope":           string(fact.Scope),
+		"content":         fact.Content,
+		"importance":      fact.Importance,
+		"category":        fact.Category,
+		"confidence":      fact.Confidence,
+		"source":          fact.Source,
+	}
 }
 
 // BufferMessage accumulates messages in Redis; flushes at K=5 or T=2min.
@@ -250,12 +281,18 @@ type UserMemory struct {
 	Importance float64
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+	Category   string
+	Confidence float64
+	Source     string
+	Status     string
 }
 
 func userMemoryFromFact(fact *domain.MemoryFact) *UserMemory {
 	return &UserMemory{
 		ID: fact.ID, Scope: string(fact.Scope), Content: fact.Content,
 		Importance: fact.Importance, CreatedAt: fact.CreatedAt, UpdatedAt: fact.UpdatedAt,
+		Category: fact.Category, Confidence: fact.Confidence, Source: fact.Source,
+		Status: fact.Status,
 	}
 }
 
@@ -293,6 +330,48 @@ type UserMemoryEntity struct {
 	EntityType string
 	FactCount  int
 	LastSeenAt time.Time
+}
+
+// UserFactDetail 事实详情（管理页展示 / 编辑返回，字段与 gen.MemoryFactResponse 对齐）。
+type UserFactDetail struct {
+	ID         string
+	Scope      string
+	Content    string
+	Category   string
+	Source     string
+	Status     string
+	Importance float64
+	Confidence float64
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+func userFactDetailFromFact(fact *domain.MemoryFact) *UserFactDetail {
+	return &UserFactDetail{
+		ID: fact.ID, Scope: string(fact.Scope), Content: fact.Content,
+		Category: fact.Category, Source: fact.Source, Status: fact.Status,
+		Importance: fact.Importance, Confidence: fact.Confidence,
+		CreatedAt: fact.CreatedAt, UpdatedAt: fact.UpdatedAt,
+	}
+}
+
+// ListUserFactsFilteredRequest 事实列表查询（GET /memory/facts）。
+type ListUserFactsFilteredRequest struct {
+	TenantID      string
+	UserID        string
+	Query         string
+	ImportanceMin *float64
+	ImportanceMax *float64
+	Category      string
+	Limit         int
+	Offset        int
+}
+
+// UpdateUserFactPatch 事实编辑补丁，至少一项（PATCH /memory/facts/:id）。
+type UpdateUserFactPatch struct {
+	Content    *string
+	Importance *float64
+	Category   *string
 }
 
 // ListUserEntitiesRequest lists the authenticated user's active user-scope entities.
@@ -347,4 +426,168 @@ func (s *MemoryService) ListUserMemories(ctx context.Context, req *ListUserMemor
 		memories = append(memories, userMemoryFromFact(fact))
 	}
 	return memories, total, nil
+}
+
+func (s *MemoryService) ListUserFactsFiltered(ctx context.Context, req *ListUserFactsFilteredRequest) ([]*UserFactDetail, int, error) {
+	limit := req.Limit
+	if limit <= 0 {
+		limit = constants.DefaultPageSize
+	}
+	filter := domain.FactListFilter{
+		Query: req.Query, ImportanceMin: req.ImportanceMin,
+		ImportanceMax: req.ImportanceMax, Category: req.Category,
+	}
+	facts, err := s.factRepo.ListUserFactsFiltered(ctx, req.TenantID, req.UserID, filter, limit, req.Offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list user facts: %w", err)
+	}
+	total, err := s.factRepo.CountUserFactsFiltered(ctx, req.TenantID, req.UserID, filter)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count user facts: %w", err)
+	}
+	out := make([]*UserFactDetail, 0, len(facts))
+	for _, f := range facts {
+		out = append(out, userFactDetailFromFact(f))
+	}
+	return out, total, nil
+}
+
+func (s *MemoryService) GetUserFact(ctx context.Context, tenantID, userID, factID string) (*UserFactDetail, error) {
+	fact, err := s.factRepo.GetByID(ctx, tenantID, factID)
+	if err != nil {
+		return nil, err
+	}
+	if fact.UserID != userID {
+		return nil, domain.ErrFactNotFound // 归属不匹配一律 404，不泄露存在性
+	}
+	return userFactDetailFromFact(fact), nil
+}
+
+// UpdateUserFact 编辑事实并同步向量。顺序（spec §3）：校验 + GetByID + 归属 →
+// 新内容嵌入（失败 502 不写数据）→ 删旧向量（best-effort）→ PG update →
+// upsert 新向量（失败返回 vectorSyncFailed=true，PG 已提交）。
+func (s *MemoryService) UpdateUserFact(ctx context.Context, tenantID, userID, factID string, patch *UpdateUserFactPatch) (*UserFactDetail, bool, error) {
+	if factPatchEmpty(patch) {
+		return nil, false, domain.ErrEmptyFactPatch
+	}
+	fact, err := s.factRepo.GetByID(ctx, tenantID, factID)
+	if err != nil {
+		return nil, false, err
+	}
+	if fact.UserID != userID {
+		return nil, false, domain.ErrFactNotFound
+	}
+	if fact.Status != domain.FactStatusActive {
+		// 仅 active 可编辑：superseded/archived 归提取管线管辖，避免冲突（spec §5）。
+		return nil, false, domain.ErrFactNotEditable
+	}
+	next, err := applyFactPatch(fact, patch)
+	if err != nil {
+		return nil, false, err
+	}
+	embedder, err := s.resolveEmbedClient(ctx, tenantID)
+	if err != nil {
+		return nil, false, err
+	}
+	vector, err := embedder.Embed(ctx, next.Content)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: %v", ErrMemoryEmbeddingUnavailable, err)
+	}
+	// 先删旧向量：陈旧内容立即停止被召回（best-effort，失败不阻塞主操作）。
+	s.deleteFactVectorsBestEffort(ctx, tenantID, next.ID)
+	if err := s.factRepo.Update(ctx, tenantID, next); err != nil {
+		return nil, false, err
+	}
+	// 后写新向量：同 ID（fact.ID 是 Milvus 主键）不会与旧向量互相覆盖。
+	if s.syncFactVector(ctx, tenantID, next, embedder, vector) {
+		return userFactDetailFromFact(next), true, nil // 内容已保存，向量待后台补偿
+	}
+	return userFactDetailFromFact(next), false, nil
+}
+
+// factPatchEmpty 报告补丁是否为空（无任何可更新字段）。
+func factPatchEmpty(patch *UpdateUserFactPatch) bool {
+	return patch == nil || (patch.Content == nil && patch.Importance == nil && patch.Category == nil)
+}
+
+// applyFactPatch 在浅拷贝上应用补丁并校验；未触及字段原样保留。
+func applyFactPatch(fact *domain.MemoryFact, patch *UpdateUserFactPatch) (*domain.MemoryFact, error) {
+	next := *fact
+	if patch.Content != nil {
+		content := strings.TrimSpace(*patch.Content)
+		if content == "" {
+			return nil, domain.ErrEmptyContent
+		}
+		next.Content = content
+	}
+	if patch.Importance != nil {
+		if *patch.Importance < 0 || *patch.Importance > 1 {
+			return nil, domain.ErrImportanceOutOfRange
+		}
+		next.Importance = *patch.Importance
+	}
+	if patch.Category != nil {
+		if !domain.IsValidFactCategory(*patch.Category) {
+			return nil, domain.ErrInvalidCategory
+		}
+		next.Category = *patch.Category
+	}
+	next.UpdatedAt = time.Now().UTC()
+	return &next, nil
+}
+
+// deleteFactVectorsBestEffort 删除事实旧向量；失败仅记录日志（GC reconcile 兜底）。
+func (s *MemoryService) deleteFactVectorsBestEffort(ctx context.Context, tenantID, factID string) {
+	if s.vectorStore == nil {
+		return
+	}
+	if err := s.vectorStore.DeleteFactVectors(ctx, tenantID, []string{factID}); err != nil {
+		s.logger.Error("memory: delete old fact vectors failed", zap.String("fact_id", factID), zap.Error(err))
+	}
+}
+
+// syncFactVector 在 PG 提交后 upsert 新向量；失败仅记录日志并返回 true
+// （内容已保存，向量待后台补偿，spec §3）。
+func (s *MemoryService) syncFactVector(ctx context.Context, tenantID string, next *domain.MemoryFact, embedder port.EmbedClient, vector []float32) bool {
+	if s.vectorStore == nil {
+		return false
+	}
+	collection := factsCollectionName(tenantID, embedder.Model())
+	doc := &port.VectorDoc{ID: next.ID, Embedding: vector, Metadata: factVectorMetadata(next)}
+	if err := s.vectorStore.Upsert(ctx, collection, []*port.VectorDoc{doc}); err != nil {
+		s.logger.Error("memory: upsert fact vector failed", zap.String("fact_id", next.ID), zap.Error(err))
+		return true
+	}
+	return false
+}
+
+func (s *MemoryService) DeleteUserFact(ctx context.Context, tenantID, userID, factID string) error {
+	fact, err := s.factRepo.GetByID(ctx, tenantID, factID)
+	if err != nil {
+		return err
+	}
+	if fact.UserID != userID {
+		return domain.ErrFactNotFound
+	}
+	if err := s.factRepo.Delete(ctx, tenantID, factID); err != nil {
+		return err
+	}
+	// PG 删除成功即操作成功；向量清理 best-effort，GC reconcile 兜底（spec §3）。
+	if s.vectorStore != nil {
+		if err := s.vectorStore.DeleteFactVectors(ctx, tenantID, []string{factID}); err != nil {
+			s.logger.Error("memory: delete fact vectors failed", zap.String("fact_id", factID), zap.Error(err))
+		}
+	}
+	return nil
+}
+
+func (s *MemoryService) DeleteUserEntity(ctx context.Context, tenantID, userID, entityID string) error {
+	entity, err := s.entityRepo.GetByID(ctx, tenantID, entityID)
+	if err != nil {
+		return err
+	}
+	if entity.UserID != userID {
+		return domain.ErrEntityNotFound
+	}
+	return s.entityRepo.Delete(ctx, tenantID, entityID)
 }

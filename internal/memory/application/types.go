@@ -3,6 +3,7 @@ package application
 
 import (
 	"context"
+	"errors"
 
 	memdomain "github.com/byteBuilderX/stratum/internal/memory/domain"
 )
@@ -10,6 +11,10 @@ import (
 // ErrNotFound aliases domain.ErrEntryNotFound to keep middleware/error_mapping
 // route source-compatible during refactor.
 var ErrNotFound = memdomain.ErrEntryNotFound
+
+// ErrMemoryEmbeddingUnavailable 表示嵌入模型未配置或调用失败（spec §5：嵌入
+// 失败 fail-closed 返回 502，不写任何数据）。errors.Is 可用于 handle 路径。
+var ErrMemoryEmbeddingUnavailable = errors.New("memory embedding unavailable")
 
 // tenantIDKey is the context key for tenant ID.
 type tenantIDKey struct{}
