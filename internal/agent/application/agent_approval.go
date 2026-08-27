@@ -529,18 +529,6 @@ func approvalIDsFromRuntimeState(raw json.RawMessage) []string {
 	return nil
 }
 
-// approvalIDFromRuntimeState extracts the first approval_id stored by
-// createApprovalCheckpoint (batch arrays fall back to their first element),
-// kept for the single-approval views (ActiveExecution).
-
-func approvalIDFromRuntimeState(raw json.RawMessage) string {
-	ids := approvalIDsFromRuntimeState(raw)
-	if len(ids) == 0 {
-		return ""
-	}
-	return ids[0]
-}
-
 // resolveApprovalResume 解析 executionID 对应的 waiting_approval 或 running
 // checkpoint 并校验整批审批的续跑资格。返回续跑条目数组 + checkpoint；cp 为 nil
 // 表示非审批续跑（无恢复键 / 无 checkpoint / 非 waiting_approval/running / 无

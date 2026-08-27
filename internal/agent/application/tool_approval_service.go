@@ -297,7 +297,7 @@ func (s *ToolApprovalService) createApprovalCheckpoint(ctx context.Context, payl
 	}
 	primary := payloads[0]
 	runtime := map[string]any{"approval_ids": ids}
-	// 保留首条 approval_id 兼容旧版读取（approvalIDFromRuntimeState 回退单值）。
+	// 保留首条 approval_id 兼容旧版单值读取（approvalIDsFromRuntimeState 回退单值）。
 	if len(ids) > 0 {
 		runtime["approval_id"] = ids[0]
 	}
