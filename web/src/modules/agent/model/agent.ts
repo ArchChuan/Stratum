@@ -394,7 +394,9 @@ export interface StreamCallbacks {
   onToken: (token: string) => void;
   onDone: (data: AgentExecutionResult) => void;
 	onError: (err: Error) => void;
-	onApprovalRequired: (approval: ToolApproval) => void;
+	// 同一轮 LLM 消息可能含多个需审批工具：SSE approval_required 帧一帧携带
+	// approvals 数组，批量渲染审批卡并等待全部终态统一续跑。
+	onApprovalsRequired: (approvals: ToolApproval[]) => void;
 	// 首帧恢复键(断线续接协议):SSE 首帧下发 execution_id,捕获后断线重发时
 	// 原样带回;仅存内存供消费方读取,不持久化。
 	onExecutionId?: (executionId: string) => void;
@@ -447,15 +449,18 @@ export interface ToolApproval {
 }
 
 // 会话"进行中执行"视图（后端 GET /conversations/:convID/active-execution）。
-// status: running | paused | waiting_approval；waiting_approval 时附 approval_id 与
-// approval_status（区分"已批准待续跑"与"仍待审批"）。无活跃执行时后端返回 404，
-// API 层统一折叠为 null（非 404 错误向上抛，禁止当作无执行）。
+// status: running | paused | waiting_approval；waiting_approval 时附审批数组
+// approvals（每项 approval_status 区分"已批准待续跑"与"仍待审批"）；顶层
+// approval_id/approval_status 镜像首条，兼容旧前端单审批读取。无活跃执行时后端
+// 返回 404，API 层统一折叠为 null（非 404 错误向上抛，禁止当作无执行）。
 export interface ActiveExecution {
 	executionId: string;
 	agentId: string;
 	status: string;
 	approvalId?: string;
 	approvalStatus?: string;
+	// 多审批：整轮全部审批的状态快照（approval_id + approval_status）。
+	approvals?: { approvalId: string; approvalStatus?: string }[];
 	userQuery?: string;
 	updatedAt?: string;
 }

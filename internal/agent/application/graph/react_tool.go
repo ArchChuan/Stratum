@@ -42,6 +42,18 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 			return s, nil
 		}
 		last := s.Messages[len(s.Messages)-1]
+		// 批量审批预检：本轮任一调用需审批 → 整轮暂停、一个工具都不执行。
+		// PrecheckApprovals 内部一次性创建全部审批（RequestBatch 单次 checkpoint），
+		// 返回 BatchToolApprovalRequiredError 终止本轮等待人工处理。
+		if s.PrecheckApprovals != nil && len(last.ToolCalls) > 0 {
+			required, precheckErr := s.PrecheckApprovals(ctx, s.AvailableTools, last.ToolCalls)
+			if precheckErr != nil {
+				return s, precheckErr
+			}
+			if len(required) > 0 {
+				return s, &port.BatchToolApprovalRequiredError{Errors: required}
+			}
+		}
 		for _, tc := range last.ToolCalls {
 			var err error
 			s, err = executeToolCall(ctx, s, tc, capGW, logger)

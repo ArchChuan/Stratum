@@ -28,13 +28,19 @@ type ReActState struct {
 	MaxTokens       int // 0 = unset
 	// ModelResolved 是本次执行最后一次 LLM 调用实际成功的模型名（fallback
 	// 降级后与 Model 不同）；ModelRoutedVia 是实际尝试过的模型链。
-	ModelResolved              string
-	ModelRoutedVia             []string
-	AvailableTools             []port.ToolDefinition
-	SkillCatalog               map[string]port.SkillActivation
-	Actives                    []port.SkillActivation
-	TracePayloadStore          port.TracePayloadStore
-	ToolExecutionFn            port.ToolExecutionFn
+	ModelResolved     string
+	ModelRoutedVia    []string
+	AvailableTools    []port.ToolDefinition
+	SkillCatalog      map[string]port.SkillActivation
+	Actives           []port.SkillActivation
+	TracePayloadStore port.TracePayloadStore
+	ToolExecutionFn   port.ToolExecutionFn
+	// PrecheckApprovals 在同一轮 LLM 工具调用执行前批量预检审批需求：任一调用需要
+	// 审批时一次性创建全部审批并整轮暂停（工具一个都不执行）。nil = 不预检，退回
+	// 逐个 guard 路径。返回的 []ToolApprovalRequiredError 由 makeToolNode 封装为
+	// BatchToolApprovalRequiredError 终止本轮。续跑合成消息前必须清空，防止对已
+	// 审批的工具重复发起审批。
+	PrecheckApprovals          func(ctx context.Context, tools []port.ToolDefinition, calls []port.ToolCall) ([]port.ToolApprovalRequiredError, error)
 	AssistantToolArtifacts     []domain.SystemAssistantToolArtifact
 	ExecutionID                string
 	AgentKnowledgeWorkspaceIDs []string

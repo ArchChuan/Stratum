@@ -77,7 +77,7 @@ func (s *PgStore) GetDefinition(ctx context.Context, tenantID, id string) (*doma
 	var d domain.Definition
 	var raw, rawInputSchema []byte
 	err := s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT id,name,description,draft_revision,draft_spec_json,draft_input_schema_json,created_at,updated_at FROM workflow_definitions WHERE id=$1`, id).Scan(&d.ID, &d.Name, &d.Description, &d.Revision, &raw, &rawInputSchema, &d.CreatedAt, &d.UpdatedAt)
+		return tx.QueryRow(ctx, `SELECT id,name,description,draft_revision,COALESCE(active_version_id,''),draft_spec_json,draft_input_schema_json,created_at,updated_at FROM workflow_definitions WHERE id=$1`, id).Scan(&d.ID, &d.Name, &d.Description, &d.Revision, &d.ActiveVersionID, &raw, &rawInputSchema, &d.CreatedAt, &d.UpdatedAt)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
@@ -106,7 +106,7 @@ func (s *PgStore) ListDefinitions(
 			WHERE ($1='' OR name ILIKE '%' || $1 || '%')`, query.Query).Scan(&total); err != nil {
 			return err
 		}
-		result, err := tx.Query(ctx, `SELECT id,name,description,draft_revision,created_at,updated_at
+		result, err := tx.Query(ctx, `SELECT id,name,description,draft_revision,COALESCE(active_version_id,''),created_at,updated_at
 			FROM workflow_definitions WHERE ($1='' OR name ILIKE '%' || $1 || '%')
 			ORDER BY updated_at DESC,id DESC LIMIT $2 OFFSET $3`, query.Query, query.Limit, query.Offset)
 		if err != nil {
@@ -117,7 +117,7 @@ func (s *PgStore) ListDefinitions(
 			var definition domain.Definition
 			if err := result.Scan(
 				&definition.ID, &definition.Name, &definition.Description, &definition.Revision,
-				&definition.CreatedAt, &definition.UpdatedAt,
+				&definition.ActiveVersionID, &definition.CreatedAt, &definition.UpdatedAt,
 			); err != nil {
 				return err
 			}
@@ -272,6 +272,10 @@ func (s *PgStore) CreateNextVersion(ctx context.Context, tenantID string, defini
 		if _, err := tx.Exec(ctx, `INSERT INTO workflow_versions (id,definition_id,version_no,name,description,spec_json,input_schema_json) VALUES ($1,$2,$3,$4,$5,$6,$7)`, version.ID, version.DefinitionID, version.Number, version.Name, version.Description, string(raw), string(inputSchema)); err != nil {
 			return err
 		}
+		// 新发布即成为生效版本：事务内一并写入生效指针，避免发布成功但指针缺失。
+		if _, err := tx.Exec(ctx, `UPDATE workflow_definitions SET active_version_id=$1,updated_at=NOW() WHERE id=$2`, version.ID, version.DefinitionID); err != nil {
+			return err
+		}
 		if err := insertChangeAudit(ctx, tx, ev); err != nil {
 			return err
 		}
@@ -279,6 +283,21 @@ func (s *PgStore) CreateNextVersion(ctx context.Context, tenantID string, defini
 		return nil
 	})
 	return created, err
+}
+
+// SetActiveVersion 把生效指针指回历史已发布版本（回退，不产生新版本）；
+// 事务内更新 active_version_id 并写入审计。目标版本归属由调用方（application）校验。
+func (s *PgStore) SetActiveVersion(ctx context.Context, tenantID, definitionID, versionID string, ev *auditdomain.ResourceChangeAuditEvent) error {
+	return s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE workflow_definitions SET active_version_id=$1,updated_at=NOW() WHERE id=$2`, versionID, definitionID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return domain.ErrNotFound
+		}
+		return insertChangeAudit(ctx, tx, ev)
+	})
 }
 
 func (s *PgStore) CreateRun(ctx context.Context, tenantID string, r *domain.Run) error {

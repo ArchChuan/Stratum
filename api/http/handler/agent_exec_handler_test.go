@@ -22,6 +22,7 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -59,22 +60,47 @@ func TestAgentExecutionErrorUsesHTTPErrorPipeline(t *testing.T) {
 }
 
 func TestExecuteStreamApprovalEventContainsOnlySafeBindingMetadata(t *testing.T) {
-	payload := approvalRequiredSSEPayload(&port.ToolApprovalRequiredError{
+	payload := approvalRequiredSSEPayload([]port.ToolApprovalRequiredError{{
 		ApprovalID: "approval-1", ToolCallID: "call-1", ServerID: "orders",
 		ToolName: "delete", RiskLevel: port.ToolRiskDestructive,
+	}})
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	// 首条镜像字段（兼容旧前端）+ approvals 数组（多审批）。
+	for _, key := range []string{"status", "approvalId", "toolCallId", "serverId", "toolName", "riskLevel", "approvals"} {
+		if _, ok := decoded[key]; !ok {
+			t.Fatalf("approval SSE payload missing %q: %s", key, payload)
+		}
+	}
+	if len(decoded) != 7 {
+		t.Fatalf("approval SSE payload contains unexpected fields: %s", payload)
+	}
+	items, ok := decoded["approvals"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("approval SSE payload approvals must be a 1-item array: %s", payload)
+	}
+}
+
+// 批量审批统一一帧：approvals 数组含全部待审批工具，顶层镜像首条。
+func TestExecuteStreamApprovalEventBatchFrame(t *testing.T) {
+	payload := approvalRequiredSSEPayload([]port.ToolApprovalRequiredError{
+		{ApprovalID: "approval-1", ToolCallID: "call-1", ServerID: "orders", ToolName: "delete", RiskLevel: port.ToolRiskDestructive},
+		{ApprovalID: "approval-2", ToolCallID: "call-2", ServerID: "orders", ToolName: "archive", RiskLevel: port.ToolRiskDestructive},
 	})
 	var decoded map[string]any
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"status", "approvalId", "toolCallId", "serverId", "toolName", "riskLevel"} {
-		if _, ok := decoded[key]; !ok {
-			t.Fatalf("approval SSE payload missing %q: %s", key, payload)
-		}
+	items, ok := decoded["approvals"].([]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("batch frame approvals must be a 2-item array: %s", payload)
 	}
-	if len(decoded) != 6 {
-		t.Fatalf("approval SSE payload contains unexpected fields: %s", payload)
-	}
+	require.Equal(t, "approval-1", decoded["approvalId"], "顶层 approvalId 镜像首条")
+	second := items[1].(map[string]any)
+	require.Equal(t, "approval-2", second["approvalId"])
+	require.Equal(t, "archive", second["toolName"])
 }
 
 func TestAgentExecutionErrorPayloadUsesPublicContract(t *testing.T) {

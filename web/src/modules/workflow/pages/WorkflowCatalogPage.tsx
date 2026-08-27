@@ -23,6 +23,7 @@ export const WorkflowCatalogPage = () => {
       canManage={isAdmin}
       pagination={{ current: page, pageSize, total, showSizeChanger: true }}
       onPageChange={(nextPage, nextPageSize) => { setPage(nextPage); setPageSize(nextPageSize); }}
+      onView={(workflow) => navigate(`/workflows/${workflow.id}`)}
       onRun={(workflow) => navigate(`/workflows/${workflow.id}/run`)}
       onEdit={(workflow) => navigate(`/workflows/${workflow.id}/edit`)}
       onDelete={(workflow) => deleteWorkflow(workflow.id)}

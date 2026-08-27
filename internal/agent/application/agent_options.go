@@ -236,24 +236,15 @@ func (s *AgentService) assembleOptions(
 				Variant:      assignment.Variant,
 			}
 		}
-		var requestApproval port.ToolApprovalRequester
-		if s.deps.ApprovalService != nil {
-			approvalService := s.deps.ApprovalService
-			requestApproval = func(actx context.Context, request port.ToolApprovalRequest) (string, error) {
-				return approvalService.Request(actx, ToolApprovalPayload{
-					TenantID: meta.TenantID, ExecutionID: executionID, TraceID: meta.TraceID,
-					AgentID: agentID, UserID: userID, ConversationID: conversationID,
-					ToolCallID: request.ToolCallID, ServerID: request.ServerID,
-					ToolName: request.ToolName, RiskLevel: request.RiskLevel,
-					Query: query, Arguments: request.Arguments, PinnedSkillRevisions: pinned,
-					PinnedMCPRevisions:       map[string]string{request.ServerID: mcpAssignments[request.ServerID].RevisionID},
-					PinnedKnowledgeRevisions: pinnedKnowledge,
-				})
-			}
-		}
-		guard := NewToolExecutionGuard(ToolExecutionGuardDeps{
-			Authorizer: s.deps.ToolAuthorizer, Executor: s.deps.MCPToolExecutor, RequestApproval: requestApproval,
-		})
+		// 审批上下文 + guard + 批量预检由 approvalGuardOptions 统一装配：单条
+		// （guard requestApproval）与批量预检共用同一绑定摘要，nil ApprovalService
+		// 时均退化为无审批路径。批量预检（WithPrecheckApprovals）在同一轮 LLM 消息
+		// 含多个需审批 MCP 工具调用时一次性创建全部审批并整轮暂停（工具一个都不
+		// 执行）；Deny/Allow 不创建（Deny 由续跑后 guard 报错）。
+		guardOpts, guard := s.approvalGuardOptions(
+			meta, executionID, agentID, userID, conversationID, query, pinned, pinnedKnowledge, mcpAssignments, a,
+		)
+		options = append(options, guardOpts...)
 		options = append(options, WithToolExecutionFn(func(
 			callCtx context.Context, request port.ToolExecutionRequest,
 		) (any, error) {
@@ -611,6 +602,153 @@ func (s *AgentService) attachCompactionStore(a Agent) {
 	if setter, ok := a.(compactionStoreSetter); ok {
 		setter.SetCompactionStore(s.deps.CompactionStore)
 	}
+}
+
+// toolApprovalContext 是创建 MCP 工具审批所需的执行上下文：请求链路的租户/执行/身份
+// 定位 + 各资源 pinned revision。供单条（guard requestApproval）与批量预检
+// （WithPrecheckApprovals）共用，保证两条路径携带完全一致的绑定摘要。
+type toolApprovalContext struct {
+	tenantID, executionID, traceID  string
+	agentID, userID, conversationID string
+	query                           string
+	pinnedSkillRevisions            map[string]string
+	pinnedKnowledgeRevisions        map[string]port.KnowledgeRevisionPin
+	mcpAssignments                  map[string]port.MCPRevisionAssignment
+}
+
+// buildToolApprovalPayload 由工具审批请求构造 ToolApprovalPayload（含 pinned
+// revisions）。纯函数，单条与批量审批路径共用。
+func buildToolApprovalPayload(c toolApprovalContext, request port.ToolApprovalRequest) ToolApprovalPayload {
+	return ToolApprovalPayload{
+		TenantID: c.tenantID, ExecutionID: c.executionID, TraceID: c.traceID,
+		AgentID: c.agentID, UserID: c.userID, ConversationID: c.conversationID,
+		ToolCallID: request.ToolCallID, ServerID: request.ServerID,
+		ToolName: request.ToolName, RiskLevel: request.RiskLevel,
+		Query: c.query, Arguments: request.Arguments, PinnedSkillRevisions: c.pinnedSkillRevisions,
+		PinnedMCPRevisions:       map[string]string{request.ServerID: c.mcpAssignments[request.ServerID].RevisionID},
+		PinnedKnowledgeRevisions: c.pinnedKnowledgeRevisions,
+	}
+}
+
+// findToolDefinitionByName 在工具定义列表中按工具名查找（与 graph 层 findTool 同
+// 语义；graph 包符号对 application 不可见，此处独立实现）。
+func findToolDefinitionByName(tools []port.ToolDefinition, name string) (port.ToolDefinition, bool) {
+	for _, tool := range tools {
+		if tool.Name == name {
+			return tool, true
+		}
+	}
+	return port.ToolDefinition{}, false
+}
+
+// approvalGuardOptions 装配审批 guard 相关 options：构建 guard（含 requestApproval
+// 单条审批）与批量预检 option。guard 供调用方 WithToolExecutionFn 闭包使用；返回
+// 的 opts 为空时 append 无操作，nil ApprovalService/ToolAuthorizer 退回逐条 guard
+// 路径。
+func (s *AgentService) approvalGuardOptions(
+	meta ExecMeta, executionID string, agentID, userID, conversationID, query string,
+	pinned map[string]string, pinnedKnowledge map[string]port.KnowledgeRevisionPin,
+	mcpAssignments map[string]port.MCPRevisionAssignment, a Agent,
+) ([]ExecutionOption, *ToolExecutionGuard) {
+	guard, approvalService, approvalCtx := s.buildToolApprovalGuard(
+		meta, executionID, agentID, userID, conversationID, query, pinned, pinnedKnowledge, mcpAssignments,
+	)
+	var opts []ExecutionOption
+	if opt := s.approvalPrecheckOption(approvalCtx, a, approvalService); opt != nil {
+		opts = append(opts, opt)
+	}
+	return opts, guard
+}
+
+// buildToolApprovalGuard 装配工具执行 guard 及其审批上下文：approvalCtx 携带链路
+// 定位 + pinned revisions，供单条（requestApproval）与批量预检共用，保证两条路径
+// 携带一致的绑定摘要。ApprovalService 为 nil 时 requestApproval 为空（guard 退化
+// 为无审批路径）。
+func (s *AgentService) buildToolApprovalGuard(
+	meta ExecMeta, executionID string, agentID, userID, conversationID, query string,
+	pinned map[string]string, pinnedKnowledge map[string]port.KnowledgeRevisionPin,
+	mcpAssignments map[string]port.MCPRevisionAssignment,
+) (*ToolExecutionGuard, *ToolApprovalService, toolApprovalContext) {
+	approvalService := s.deps.ApprovalService
+	approvalCtx := toolApprovalContext{
+		tenantID: meta.TenantID, executionID: executionID, traceID: meta.TraceID,
+		agentID: agentID, userID: userID, conversationID: conversationID, query: query,
+		pinnedSkillRevisions: pinned, pinnedKnowledgeRevisions: pinnedKnowledge,
+		mcpAssignments: mcpAssignments,
+	}
+	var requestApproval port.ToolApprovalRequester
+	if approvalService != nil {
+		requestApproval = func(actx context.Context, request port.ToolApprovalRequest) (string, error) {
+			return approvalService.Request(actx, buildToolApprovalPayload(approvalCtx, request))
+		}
+	}
+	return NewToolExecutionGuard(ToolExecutionGuardDeps{
+		Authorizer: s.deps.ToolAuthorizer, Executor: s.deps.MCPToolExecutor, RequestApproval: requestApproval,
+	}), approvalService, approvalCtx
+}
+
+// approvalPrecheckOption 构建批量审批预检 option（WithPrecheckApprovals）：同一轮
+// LLM 消息含多个需审批 MCP 工具调用时，一次性创建全部审批并整轮暂停（工具一个都
+// 不执行）。判定与 guard.Execute 完全一致（同 Authorize 输入）；Deny/Allow 不创建
+// 审批（Deny 由续跑后 guard 报错）。仅对会进入 ToolExecutionFn → guard 的 MCP 工具
+// 生效。未配置 ApprovalService/ToolAuthorizer 时返回 nil（退回逐条 guard 路径）。
+func (s *AgentService) approvalPrecheckOption(
+	approvalCtx toolApprovalContext, a Agent, approvalService *ToolApprovalService,
+) ExecutionOption {
+	if approvalService == nil || s.deps.ToolAuthorizer == nil {
+		return nil
+	}
+	agentToolIDs := append(slices.Clone(a.GetConfig().MCPToolIDs), agentgraph.StratumDelegateToolName)
+	return WithPrecheckApprovals(func(actx context.Context, tools []port.ToolDefinition, calls []port.ToolCall) ([]port.ToolApprovalRequiredError, error) {
+		return s.collectRequiredApprovals(actx, approvalCtx, agentToolIDs, approvalService, tools, calls)
+	})
+}
+
+// collectRequiredApprovals 为需审批的 MCP 工具调用一次性创建全部审批：先收集本批
+// 需审批载荷，后单次 RequestBatch 创建（quota 按批抵扣、单次 checkpoint 记录全部
+// approval_ids）。非 guard 路径工具（内置/plan/skill 等）不经审批跳过；Deny/Allow
+// 不创建。返回空切片表示无需审批。
+func (s *AgentService) collectRequiredApprovals(
+	actx context.Context, c toolApprovalContext, agentToolIDs []string, approvalService *ToolApprovalService,
+	tools []port.ToolDefinition, calls []port.ToolCall,
+) ([]port.ToolApprovalRequiredError, error) {
+	payloads := make([]ToolApprovalPayload, 0, len(calls))
+	for _, call := range calls {
+		tool, ok := findToolDefinitionByName(tools, call.Name)
+		if !ok || tool.ProviderType != domain.ProviderTypeMCP {
+			continue // 非 guard 路径（内置/plan/skill 等）不经审批，跳过
+		}
+		policyResolved, _ := tool.Metadata["policy_resolved"].(bool)
+		decision := s.deps.ToolAuthorizer.Authorize(actx, ToolAuthorizationInput{
+			TenantID: c.tenantID, UserID: c.userID, AgentID: c.agentID, ToolID: tool.Name,
+			AgentAllowsTool: slices.Contains(agentToolIDs, tool.Name),
+			PolicyResolved:  policyResolved,
+			RiskLevel:       port.ParseToolRiskLevel(tool.Metadata["risk_level"]),
+		})
+		if decision.Effect != domain.ToolAuthorizationRequireApproval {
+			continue
+		}
+		payloads = append(payloads, buildToolApprovalPayload(c, port.ToolApprovalRequest{
+			TenantID: c.tenantID, TraceID: c.traceID, ExecutionID: c.executionID,
+			ToolCallID: call.ID, ServerID: tool.ServerID,
+			ToolName: tool.CapabilityID, RiskLevel: decision.RiskLevel, Arguments: call.Arguments,
+		}))
+	}
+	if len(payloads) == 0 {
+		return nil, nil
+	}
+	ids, err := approvalService.RequestBatch(actx, payloads)
+	if err != nil {
+		return nil, err
+	}
+	required := make([]port.ToolApprovalRequiredError, 0, len(payloads))
+	for i, payload := range payloads {
+		required = append(required, port.ToolApprovalRequiredError{
+			ApprovalID: ids[i], ToolCallID: payload.ToolCallID, ServerID: payload.ServerID,
+			ToolName: payload.ToolName, RiskLevel: payload.RiskLevel,
+		})
+	}
+	return required, nil
 }
 
 // assistantExecutionOptions attaches the in-process capability callbacks

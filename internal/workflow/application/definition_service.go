@@ -205,6 +205,38 @@ func (s *DefinitionService) Publish(ctx context.Context, tenantID, id string, ac
 	return version, nil
 }
 
+// Rollback 把生效指针指回历史已发布版本，不产生新版本。
+// 目标版本必须存在且归属于同一工作流，否则 fail-closed 返回 ErrNotFound。
+func (s *DefinitionService) Rollback(ctx context.Context, tenantID, id, versionID string, actorID string) (*domain.Definition, error) {
+	definition, err := s.definitions.GetDefinition(ctx, tenantID, id)
+	if err != nil {
+		return nil, err
+	}
+	version, err := s.versions.GetVersion(ctx, tenantID, versionID)
+	if err != nil {
+		return nil, err
+	}
+	if version.DefinitionID != definition.ID {
+		return nil, domain.ErrNotFound
+	}
+	before := workflowSafeProjection(definition)
+	after := workflowSafeProjection(definition)
+	after["active_version_id"] = versionID
+	ev, err := newWorkflowChangeAudit(id, auditdomain.ChangeOpRollback, actorID, before, after)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.versions.SetActiveVersion(ctx, tenantID, id, versionID, ev); err != nil {
+		s.recordFailure(ctx, id, "rollback", err)
+		return nil, err
+	}
+	updated, err := s.definitions.GetDefinition(ctx, tenantID, id)
+	if err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
 // recordFailure 旁路记录一次失败的工作流创建/更新/发布（best-effort）。
 // 记录失败仅 WARN，不改变主流程错误。
 func (s *DefinitionService) recordFailure(ctx context.Context, id, op string, err error) {

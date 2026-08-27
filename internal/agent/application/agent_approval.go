@@ -84,85 +84,144 @@ func (s *AgentService) ResumeToolApproval(ctx context.Context, tenantID, actor, 
 	if s.deps.ApprovalService == nil || s.deps.MCPToolExecutor == nil {
 		return nil, 0, errors.New("tool approval runtime not configured")
 	}
-	// 三段前置步骤（ApprovedPayload → 恢复层校验 → Registry.Get）提成 resumeContext，
-	// 控制 ResumeToolApproval 复杂度并固化"D9 校验先于 Registry.Get"的顺序不变量。
-	payload, a, err := s.resumeContext(ctx, tenantID, approvalID)
+	// 三段前置步骤（ApprovedPayload/TerminalResumePayload → 恢复层校验 → Registry.Get）
+	// 提成 resumeContext，控制 ResumeToolApproval 复杂度并固化"D9 校验先于
+	// Registry.Get"的顺序不变量。返回同一 executionID 的整批续跑条目（多审批），
+	// terminal 语义逐条挂在 approvalResumeEntry.Terminal。
+	entries, a, err := s.resumeContext(ctx, tenantID, actor, approvalID)
 	if err != nil {
 		return nil, 0, err
 	}
-	// 归属 + 抢占（SECURITY-HIGH + B3）：与 executionID 流式续跑共用同一栅栏——
-	// 非发起人须 admin/owner 现查角色；AdvanceRunGeneration 分代 CAS + 状态 CAS
-	// 只放一个窗口胜出，杜绝按 approvalID 与 executionID 两路并发双 run 覆写
-	// checkpoint。checkpoint 已清（cp==nil）时不抢占、跳过归属双保险，仍按批准
-	// 载荷重跑（ResumeToolApproval 不依赖 checkpoint 存在）。
+	primary := entries[0].Payload
+	// 抢占（B3）：AdvanceRunGeneration 分代 CAS + 状态 CAS 只放一个窗口胜出，杜绝
+	// 按 approvalID 与 executionID 两路并发双 run 覆写 checkpoint。批量条目的归属
+	// 校验已在 resolveApprovalResume/单条退路内完成（SECURITY-HIGH，含 cp 归属双
+	// 保险），此处不再重复。checkpoint 已清（cp==nil）时不抢占，仍按批准载荷重跑。
 	var cp *domain.AgentExecutionCheckpoint
 	if s.deps.CheckpointStore != nil {
-		cp, err = s.deps.CheckpointStore.GetLatest(ctx, tenantID, payload.ExecutionID)
+		cp, err = s.deps.CheckpointStore.GetLatest(ctx, tenantID, primary.ExecutionID)
 		if err != nil {
 			return nil, 0, fmt.Errorf("resume tool approval: get checkpoint: %w", err)
 		}
 	}
-	if err := s.authorizeApprovalActor(ctx, tenantID, actor, payload, cp); err != nil {
-		return nil, 0, err
-	}
 	if cp != nil {
-		if err := s.claimApprovalResume(ctx, tenantID, payload.ExecutionID, cp); err != nil {
+		if err := s.claimApprovalResume(ctx, tenantID, primary.ExecutionID, cp); err != nil {
 			return nil, 0, err
 		}
 	}
-	req := ExecRequest{Query: payload.Query, ConversationID: payload.ConversationID, UserID: payload.UserID}
-	meta := ExecMeta{TenantID: tenantID, TraceID: payload.TraceID,
-		KnowledgeAssignmentsPinned: true, PinnedKnowledgeRevisions: payload.PinnedKnowledgeRevisions}
-	_, options, err := s.assembleOptions(ctx, a, req, meta, payload.ExecutionID)
+	req := ExecRequest{Query: primary.Query, ConversationID: primary.ConversationID, UserID: primary.UserID}
+	meta := ExecMeta{TenantID: tenantID, TraceID: primary.TraceID,
+		KnowledgeAssignmentsPinned: true, PinnedKnowledgeRevisions: primary.PinnedKnowledgeRevisions}
+	_, options, err := s.assembleOptions(ctx, a, req, meta, primary.ExecutionID)
 	if err != nil {
 		return nil, 0, fmt.Errorf("resume tool approval: assemble options: %w", err)
 	}
-	// 复用 buildApprovalResumeOptions：恢复键（WithExecutionID + WithApprovalResume）
-	// + PinnedSkillRevisions 目录 + 覆盖式 guard（首个与批准一致的调用走 ExecuteApproved
-	// CAS 单次消费）。与流式续跑共用，消除重复。
-	resumeOpts, consumed, err := s.buildApprovalResumeOptions(ctx, tenantID, a, payload, approvalID, false)
+	// 复用 buildApprovalResumeOptions：恢复键（WithExecutionID + WithApprovalResume[s]）
+	// + PinnedSkillRevisions 目录 + 覆盖式 guard（与批准一致的调用按调用键注入对应
+	// ApprovalID 走 ExecuteApproved CAS 单次消费）。与流式续跑共用，消除重复；纯终态
+	// 批次不追加 WithApprovalResume，guard 命中后 ExecuteApproved 返回友好错误让 LLM
+	// 收尾。
+	resumeOpts, consumed, err := s.buildApprovalResumeOptions(ctx, tenantID, a, entries)
 	if err != nil {
 		return nil, 0, err
 	}
 	options = append(options, resumeOpts...)
 	start := time.Now()
-	result, runErr := a.Execute(context.WithoutCancel(ctx), payload.Query, options...)
-	runErr = approvedToolResumeError(consumed(), runErr)
+	result, runErr := a.Execute(context.WithoutCancel(ctx), primary.Query, options...)
+	// 纯终态批次跳过 approvedToolResumeError：终态不消费批准（consumed() 恒 false），
+	// 套用会误报 ErrApprovedToolNotReplayed。收尾与 approved 一致——runErr==nil →
+	// MarkCompleted、runErr!=nil → 原样返回（completeApprovalResume 对终态不做回滚，
+	// 已决定行不可复活）。
+	if !allTerminal(entries) {
+		runErr = approvedToolResumeError(consumed(), runErr)
+	}
 	duration := int(time.Since(start).Milliseconds())
-	runErr = completeApprovalResume(ctx, s.deps.CheckpointStore, tenantID, payload.ExecutionID, runErr)
+	runErr = completeApprovalResume(ctx, s.deps.CheckpointStore, tenantID, primary.ExecutionID, runErr)
 	return result, duration, runErr
 }
 
-// resumeContext 组合 ResumeToolApproval 的三段前置步骤：ApprovedPayload →
-// 恢复层校验（D9，先于 Registry.Get）→ Registry.Get。not-found 折叠为
-// ErrNotFound（与调用方原语义一致）。
+// resumeContext 组合 ResumeToolApproval 的三段前置步骤：ApprovedPayload/
+// TerminalResumePayload → URL 审批恢复层校验（D9，先于 Registry.Get）→
+// Registry.Get → 整批审批解析。返回同一 executionID 的续跑条目数组；任一审批仍
+// pending 时 resolveApprovalResume 整体 202 上抛。not-found 折叠为 ErrNotFound。
+// checkpoint 已清（entries==nil）时退化为 URL 单条续跑，D9 与归属校验在此补齐。
 
-func (s *AgentService) resumeContext(ctx context.Context, tenantID, approvalID string) (ToolApprovalPayload, Agent, error) {
-	payload, err := s.resumeApprovalPayload(ctx, tenantID, approvalID)
+func (s *AgentService) resumeContext(ctx context.Context, tenantID, actor, approvalID string) ([]approvalResumeEntry, Agent, error) {
+	payload, terminal, err := s.resumeApprovalPayload(ctx, tenantID, approvalID)
 	if err != nil {
-		return ToolApprovalPayload{}, nil, err
+		return nil, nil, err
 	}
-	if err := s.validateApprovalResume(ctx, tenantID, approvalID, payload); err != nil {
-		return ToolApprovalPayload{}, nil, err
+	// D9 恢复层校验。终态审批跳过策略重查：工具不会执行（guard 终态拒绝），重查可能
+	// 因 risk 差异 Invalidate 终态行——终态无转出，transition 校验失败反而阻断续跑；
+	// 保留会话校验，避免向已删除会话写入。镜像流式 resolveTerminalApprovalResume。
+	// 批量路径中每条（含 URL 审批）还会在 resolveApprovalResumeEntry 再次校验——
+	// 校验只读 + Invalidate 幂等，重复执行无害，顺序不变量保持"D9 先于 Registry.Get"。
+	if err := s.validateResumeApproval(ctx, tenantID, approvalID, payload, terminal); err != nil {
+		return nil, nil, err
 	}
 	a, ok, err := s.deps.Registry.Get(ctx, payload.AgentID)
 	if err != nil {
-		return ToolApprovalPayload{}, nil, fmt.Errorf("resume tool approval: get agent: %w", err)
+		return nil, nil, fmt.Errorf("resume tool approval: get agent: %w", err)
 	}
 	if !ok {
-		return ToolApprovalPayload{}, nil, ErrNotFound
+		return nil, nil, ErrNotFound
 	}
-	return payload, a, nil
+	// 批量解析：从 checkpoint 取整批审批（含 URL approvalID），任一仍 pending → 202
+	// 整体等待。批量条目已各自完成 authorize/binding/conversation/policy 校验。
+	entries, _, err := s.resolveApprovalResume(ctx, tenantID, actor, payload.ExecutionID, payload.AgentID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(entries) == 0 {
+		// checkpoint 已清：按 URL 单条续跑。归属校验（SECURITY-HIGH）+ 恢复层校验
+		// 在此补齐（镜像 resolveApprovalResumeEntry 的 approved 分支）。
+		entries, err = s.fallbackURLResumeEntry(ctx, tenantID, actor, approvalID, payload, terminal)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return entries, a, nil
+}
+
+// validateResumeApproval 审批续跑恢复层校验分发：终态审批跳过策略重查（工具不会
+// 执行——guard 终态拒绝，重查可能因 risk 差异 Invalidate 终态行，终态无转出反而
+// 阻断续跑），保留会话校验避免向已删除会话写入；非终态走完整 D9（会话+策略）。
+func (s *AgentService) validateResumeApproval(ctx context.Context, tenantID, approvalID string, payload ToolApprovalPayload, terminal bool) error {
+	if terminal {
+		return s.validateApprovalConversation(ctx, tenantID, approvalID, payload)
+	}
+	return s.validateApprovalResume(ctx, tenantID, approvalID, payload)
+}
+
+// fallbackURLResumeEntry checkpoint 已清（批量解析返回空）时按 URL 单条续跑：
+// 补齐归属校验（SECURITY-HIGH）与恢复层校验，镜像 resolveApprovalResumeEntry 的
+// approved 分支。返回单元素 entries。
+func (s *AgentService) fallbackURLResumeEntry(
+	ctx context.Context, tenantID, actor, approvalID string, payload ToolApprovalPayload, terminal bool,
+) ([]approvalResumeEntry, error) {
+	if err := s.authorizeApprovalActor(ctx, tenantID, actor, payload, nil); err != nil {
+		return nil, err
+	}
+	if err := s.validateResumeApproval(ctx, tenantID, approvalID, payload, terminal); err != nil {
+		return nil, err
+	}
+	return []approvalResumeEntry{{Payload: payload, ApprovalID: approvalID, Terminal: terminal}}, nil
 }
 
 // resumeApprovalPayload 解出可恢复审批载荷并统一失败处理（见 handleApprovedPayloadError）。
+// approved 走原路径；终态审批（rejected/cancelled/expired）由 TerminalResumePayload 放行，
+// 返回 terminal=true——非流式 ResumeToolApproval 与流式续跑语义一致。
 
-func (s *AgentService) resumeApprovalPayload(ctx context.Context, tenantID, approvalID string) (ToolApprovalPayload, error) {
+func (s *AgentService) resumeApprovalPayload(ctx context.Context, tenantID, approvalID string) (ToolApprovalPayload, bool, error) {
 	payload, err := s.deps.ApprovalService.ApprovedPayload(ctx, tenantID, approvalID)
-	if err != nil {
-		return ToolApprovalPayload{}, s.handleApprovedPayloadError(ctx, tenantID, approvalID, err)
+	if err == nil {
+		return payload, false, nil
 	}
-	return payload, nil
+	terminalPayload, status, terr := s.deps.ApprovalService.TerminalResumePayload(ctx, tenantID, approvalID)
+	if terr == nil && status != "" {
+		return terminalPayload, true, nil
+	}
+	return ToolApprovalPayload{}, false, s.handleApprovedPayloadError(ctx, tenantID, approvalID, err)
 }
 
 // validateApprovalResume 是断点恢复的恢复层校验（D9）：复用自己的旧授权前，重新
@@ -277,10 +336,19 @@ type ActiveExecution struct {
 	// ApprovalStatus 仅 waiting_approval 时填充审批行当前状态
 	// （pending/approved/rejected/expired/...）：批准后 checkpoint 仍停在
 	// waiting_approval，发起人前端需区分"已批准待续跑"与"仍等待"才能自动续跑；
-	// 只透出状态字符串，不含任何敏感字段。
-	ApprovalStatus string    `json:"approval_status,omitempty"`
-	UserQuery      string    `json:"user_query,omitempty"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	// 只透出状态字符串，不含任何敏感字段。顶层单值镜像首条审批，兼容旧前端；
+	// Approvals 数组携带同一轮全部审批，供多卡渲染与统一终态续跑判定。
+	ApprovalStatus string                    `json:"approval_status,omitempty"`
+	Approvals      []ActiveExecutionApproval `json:"approvals,omitempty"`
+	UserQuery      string                    `json:"user_query,omitempty"`
+	UpdatedAt      time.Time                 `json:"updated_at"`
+}
+
+// ActiveExecutionApproval 是 waiting_approval checkpoint 中单条审批的刷新视图，
+// 与顶层单值镜像同源（approval_ids 数组逐条解析），只透出恢复键与状态字符串。
+type ActiveExecutionApproval struct {
+	ApprovalID     string `json:"approval_id"`
+	ApprovalStatus string `json:"approval_status,omitempty"`
 }
 
 // GetActiveExecution returns the conversation's fresh in-flight execution for
@@ -317,7 +385,7 @@ func (s *AgentService) GetActiveExecution(ctx context.Context, tenantID, convers
 		UpdatedAt:   checkpoint.UpdatedAt,
 	}
 	if checkpoint.Status == domain.ExecStatusWaitingApproval {
-		s.populateApprovalStatus(ctx, tenantID, approvalIDFromRuntimeState(checkpoint.RuntimeStateJSON), out)
+		s.populateApprovalStatus(ctx, tenantID, approvalIDsFromRuntimeState(checkpoint.RuntimeStateJSON), out)
 	}
 	return out, nil
 }
@@ -345,26 +413,38 @@ func (s *AgentService) resolveActiveExecutionAccess(ctx context.Context, tenantI
 	return role == "admin" || role == "owner", nil
 }
 
-// populateApprovalStatus 读取 waiting_approval 审批行状态字符串供前端轮询，只透出
-// 状态字符串、不泄露任何敏感字段。读取失败仅记录（fail-open）：前端保持等待态下轮
-// 重试，不影响 active-execution 本身（会话归属校验在调用方已完成）。
+// populateApprovalStatus 读取 waiting_approval 全部审批行状态字符串供前端轮询，
+// 只透出状态字符串、不泄露任何敏感字段。顶层单值镜像首条（兼容旧前端），
+// Approvals 数组逐条填充同一轮全部审批（多卡渲染与统一终态判定）。读取失败仅
+// 记录（fail-open）：前端保持等待态下轮重试，不影响 active-execution 本身
+// （会话归属校验在调用方已完成）。
 
-func (s *AgentService) populateApprovalStatus(ctx context.Context, tenantID, approvalID string, out *ActiveExecution) {
-	if approvalID == "" {
+func (s *AgentService) populateApprovalStatus(ctx context.Context, tenantID string, approvalIDs []string, out *ActiveExecution) {
+	if len(approvalIDs) == 0 {
 		return
 	}
 	// ApprovalID 是恢复键的关联标识，ApprovalService 缺位时也照常透出；
 	// 状态查询失败仅记录（fail-open）：前端保持等待态下轮重试。
-	out.ApprovalID = approvalID
+	out.ApprovalID = approvalIDs[0]
 	if s.deps.ApprovalService == nil {
 		return
 	}
-	if st, err := s.deps.ApprovalService.ApprovalStatus(ctx, tenantID, approvalID); err == nil {
-		out.ApprovalStatus = st
-	} else {
-		s.deps.Logger.Warn("agent: read approval status for active execution failed",
-			zap.String("approval_id", approvalID),
-			zap.Error(err))
+	// 逐条查询：同一轮审批数量有限（均摊失败不影响整体）；单条失败仅记录，
+	// 该条以空状态透出（前端保持等待态下轮重试），不因单条抖动拖垮整批。
+	out.Approvals = make([]ActiveExecutionApproval, 0, len(approvalIDs))
+	for _, approvalID := range approvalIDs {
+		item := ActiveExecutionApproval{ApprovalID: approvalID}
+		if st, err := s.deps.ApprovalService.ApprovalStatus(ctx, tenantID, approvalID); err == nil {
+			item.ApprovalStatus = st
+			if item.ApprovalID == out.ApprovalID {
+				out.ApprovalStatus = st
+			}
+		} else {
+			s.deps.Logger.Warn("agent: read approval status for active execution failed",
+				zap.String("approval_id", approvalID),
+				zap.Error(err))
+		}
+		out.Approvals = append(out.Approvals, item)
 	}
 }
 
@@ -402,77 +482,127 @@ func (s *AgentService) ensureInitialCheckpoint(ctx context.Context, meta ExecMet
 	}
 }
 
-// approvalIDFromRuntimeState extracts the approval_id stored by
-// createApprovalCheckpoint into a waiting_approval checkpoint's runtime state.
+// approvalResumeEntry 是审批续跑的一条恢复条目：已批准（Terminal=false，工具可
+// 执行）或终态（Terminal=true，rejected/cancelled/expired，工具不执行、LLM 收尾）。
+// 一次整轮暂停产生的同一 executionID 的全部审批构成一个 batch，统一续跑。
 
-func approvalIDFromRuntimeState(raw json.RawMessage) string {
+type approvalResumeEntry struct {
+	Payload    ToolApprovalPayload
+	ApprovalID string
+	Terminal   bool
+}
+
+// allTerminal 报告 batch 是否全部为终态条目（工具均不执行，LLM 直接收尾）。
+// 供 ResumeToolApproval 决定是否跳过 approvedToolResumeError、buildApprovalResumeOptions
+// 决定是否追加 WithApprovalResumes 恢复键、finishApprovalResume 决定终态收尾。
+
+func allTerminal(entries []approvalResumeEntry) bool {
+	for _, entry := range entries {
+		if !entry.Terminal {
+			return false
+		}
+	}
+	return len(entries) > 0
+}
+
+// approvalIDsFromRuntimeState 提取 createApprovalCheckpoint 写入 waiting_approval
+// checkpoint runtime state 的全部审批 ID：优先解析 approval_ids 数组（多审批），
+// 回退旧格式单值 approval_id（兼容存量 checkpoint）。
+
+func approvalIDsFromRuntimeState(raw json.RawMessage) []string {
 	if len(raw) == 0 {
-		return ""
+		return nil
 	}
 	var state struct {
-		ApprovalID string `json:"approval_id"`
+		ApprovalIDs []string `json:"approval_ids"`
+		ApprovalID  string   `json:"approval_id"`
 	}
 	if err := json.Unmarshal(raw, &state); err != nil {
-		return ""
+		return nil
 	}
-	return state.ApprovalID
+	if len(state.ApprovalIDs) > 0 {
+		return state.ApprovalIDs
+	}
+	if state.ApprovalID != "" {
+		return []string{state.ApprovalID}
+	}
+	return nil
 }
 
 // resolveApprovalResume 解析 executionID 对应的 waiting_approval 或 running
-// checkpoint 并校验审批续跑资格。返回 (payload, approvalID, checkpoint)；
-// checkpoint 为 nil 表示非审批续跑（无恢复键 / 无 checkpoint / 非
-// waiting_approval/running / 无审批 ID）。
-// SECURITY-HIGH：非发起人（payload.UserID != actor）须为 admin/owner 现查角色，
-// 否则 fail-closed 拒绝；审批过期 Invalidate、会话删除 Void、策略变更 Invalidate
-// 复用 validateApprovalResume 的恢复层校验；未批准/已作废错误原样上抛（transport
-// 据此幂等恢复"等待审批"卡片，不销毁审批）。
+// checkpoint 并校验整批审批的续跑资格。返回续跑条目数组 + checkpoint；cp 为 nil
+// 表示非审批续跑（无恢复键 / 无 checkpoint / 非 waiting_approval/running / 无
+// 审批 ID）。任一审批仍 pending（ErrApprovalNotApproved）→ 整批 202 等待，不销毁
+// 任何审批（transport 据此幂等恢复"等待审批"卡片）——满足"所有审批进入终态后才
+// 触发继续执行会话"的统一续跑语义。
+// SECURITY-HIGH：逐条非发起人（payload.UserID != actor）须为 admin/owner 现查
+// 角色，否则 fail-closed 拒绝；审批过期 Invalidate、会话删除 Void、策略变更
+// Invalidate 复用 validateApprovalResume 的恢复层校验；invalidated 错误原样上抛
+// （409 授权撤销，非等待）。
 
 func (s *AgentService) resolveApprovalResume(
 	ctx context.Context, tenantID, actor, executionID, agentID string,
-) (ToolApprovalPayload, string, *domain.AgentExecutionCheckpoint, bool, error) {
-	cp, approvalID, err := s.approvalResumeCheckpoint(ctx, tenantID, executionID)
+) ([]approvalResumeEntry, *domain.AgentExecutionCheckpoint, error) {
+	cp, approvalIDs, err := s.approvalResumeCheckpoint(ctx, tenantID, executionID)
 	if err != nil {
-		return ToolApprovalPayload{}, "", nil, false, err
+		return nil, nil, err
 	}
 	if cp == nil {
-		return ToolApprovalPayload{}, "", nil, false, nil
+		return nil, nil, nil
 	}
-	payload, err := s.deps.ApprovalService.ApprovedPayload(ctx, tenantID, approvalID)
-	if err != nil {
-		// 终态审批（已拒绝/已取消）：放行续跑，把"审批未通过"当作一次工具执行失败
-		// 交给 LLM 收尾——工具不会执行（guard 对终态返回拒绝错误），主链路继续而非卡死。
-		return s.resolveApprovalResumeApprovedError(ctx, tenantID, actor, approvalID, agentID, cp, err)
+	entries := make([]approvalResumeEntry, 0, len(approvalIDs))
+	for _, approvalID := range approvalIDs {
+		entry, wait, err := s.resolveApprovalResumeEntry(ctx, tenantID, actor, approvalID, agentID, cp)
+		if err != nil {
+			return nil, nil, err
+		}
+		if wait {
+			return nil, nil, ErrApprovalNotApproved
+		}
+		entries = append(entries, entry)
 	}
-	if err := s.authorizeApprovalActor(ctx, tenantID, actor, payload, cp); err != nil {
-		return ToolApprovalPayload{}, "", nil, false, err
-	}
-	if err := s.validateApprovalBinding(agentID, payload); err != nil {
-		return ToolApprovalPayload{}, "", nil, false, err
-	}
-	if err := s.validateApprovalResume(ctx, tenantID, approvalID, payload); err != nil {
-		return ToolApprovalPayload{}, "", nil, false, err
-	}
-	return payload, approvalID, cp, false, nil
+	return entries, cp, nil
 }
 
-// resolveApprovalResumeApprovedError ApprovedPayload 失败分支：先试终态放行
-// （cancelled/rejected → terminal=true，主链路继续），再按哨兵映射非终态错误
-// （ErrApprovalNotApproved→202 等待、ErrApprovalExpired→410、invalidated→409）。
-// 抽离使 resolveApprovalResume 主流程仅保留 checkpoint 定位与 approved 校验，
-// 复杂度回到棘轮目标内。
+// resolveApprovalResumeEntry 解析单条审批的续跑资格：已批准 → 非终态条目（工具可
+// 执行）；ApprovedPayload 失败 → 试终态放行（cancelled/rejected/expired → 终态
+// 条目，主链路继续让 LLM 收尾）；仍 pending（ErrApprovalNotApproved）→ 返回
+// wait=true 由整批 202 等待；invalidated → 原样上抛（409，授权撤销）；过期 →
+// handleApprovedPayloadError（Invalidate(expired) 规范化后仍 410）。越权/会话
+// 删除/binding mismatch 等校验错误原样上抛。
 
-func (s *AgentService) resolveApprovalResumeApprovedError(
-	ctx context.Context, tenantID, actor, approvalID, agentID string, cp *domain.AgentExecutionCheckpoint, err error,
-) (ToolApprovalPayload, string, *domain.AgentExecutionCheckpoint, bool, error) {
+func (s *AgentService) resolveApprovalResumeEntry(
+	ctx context.Context, tenantID, actor, approvalID, agentID string, cp *domain.AgentExecutionCheckpoint,
+) (approvalResumeEntry, bool, error) {
+	payload, err := s.deps.ApprovalService.ApprovedPayload(ctx, tenantID, approvalID)
+	if err == nil {
+		if err := s.authorizeApprovalActor(ctx, tenantID, actor, payload, cp); err != nil {
+			return approvalResumeEntry{}, false, err
+		}
+		if err := s.validateApprovalBinding(agentID, payload); err != nil {
+			return approvalResumeEntry{}, false, err
+		}
+		if err := s.validateApprovalResume(ctx, tenantID, approvalID, payload); err != nil {
+			return approvalResumeEntry{}, false, err
+		}
+		return approvalResumeEntry{Payload: payload, ApprovalID: approvalID, Terminal: false}, false, nil
+	}
+	// 终态审批（已拒绝/已取消/已过期）：放行续跑，把"审批未通过"当作一次工具执行
+	// 失败交给 LLM 收尾——工具不会执行（guard 对终态返回拒绝错误），主链路继续而非
+	// 卡死。
 	if terminalPayload, terminal, terr := s.resolveTerminalApprovalResume(ctx, tenantID, actor, approvalID, agentID, cp); terr != nil {
-		return ToolApprovalPayload{}, "", nil, false, terr
+		return approvalResumeEntry{}, false, terr
 	} else if terminal {
-		return terminalPayload, approvalID, cp, true, nil
+		return approvalResumeEntry{Payload: terminalPayload, ApprovalID: approvalID, Terminal: true}, false, nil
 	}
-	if errors.Is(err, ErrApprovalNotApproved) || errors.Is(err, domain.ErrApprovalInvalidated) {
-		return ToolApprovalPayload{}, approvalID, cp, false, err
+	if errors.Is(err, ErrApprovalNotApproved) {
+		// 仍 pending：整批 202 等待（统一续跑——所有审批进入终态才放行）。
+		return approvalResumeEntry{}, true, nil
 	}
-	return ToolApprovalPayload{}, "", nil, false, s.handleApprovedPayloadError(ctx, tenantID, approvalID, err)
+	if errors.Is(err, domain.ErrApprovalInvalidated) {
+		return approvalResumeEntry{}, false, err
+	}
+	return approvalResumeEntry{}, false, s.handleApprovedPayloadError(ctx, tenantID, approvalID, err)
 }
 
 // resolveTerminalApprovalResume 终态审批（已拒绝/已取消）续跑判定。TerminalResumePayload
@@ -504,31 +634,32 @@ func (s *AgentService) resolveTerminalApprovalResume(
 }
 
 // approvalResumeCheckpoint 定位 executionID 对应的 waiting_approval 或 running
-// checkpoint 并提取 approval_id。H2①：首个续跑抢占后 checkpoint 转 running、但
-// 批准尚未消费时刷新，软续跑仍需命中注入批准载荷——running 亦视为审批续跑候选；
-// 正常 running 执行无 approval_id（approvalIDFromRuntimeState 为空）不受影响。
-// 非审批续跑（无恢复键 / 无 checkpoint / 非 waiting_approval/running / 无审批
-// ID）返回 (nil, "", nil)；DB 读取失败原样上抛。
+// checkpoint 并提取全部 approval_ids（数组解析，回退旧单值）。H2①：首个续跑抢占后
+// checkpoint 转 running、但批准尚未消费时刷新，软续跑仍需命中注入批准载荷——
+// running 亦视为审批续跑候选；正常 running 执行无 approval_ids
+// （approvalIDsFromRuntimeState 为空）不受影响。非审批续跑（无恢复键 / 无
+// checkpoint / 非 waiting_approval/running / 无审批 ID）返回 (nil, nil, nil)；
+// DB 读取失败原样上抛。
 
 func (s *AgentService) approvalResumeCheckpoint(
 	ctx context.Context, tenantID, executionID string,
-) (*domain.AgentExecutionCheckpoint, string, error) {
+) (*domain.AgentExecutionCheckpoint, []string, error) {
 	if executionID == "" || s.deps.CheckpointStore == nil ||
 		s.deps.ApprovalService == nil || s.deps.MCPToolExecutor == nil {
-		return nil, "", nil
+		return nil, nil, nil
 	}
 	cp, err := s.deps.CheckpointStore.GetLatest(ctx, tenantID, executionID)
 	if err != nil {
-		return nil, "", fmt.Errorf("resolve approval resume: get checkpoint: %w", err)
+		return nil, nil, fmt.Errorf("resolve approval resume: get checkpoint: %w", err)
 	}
 	if cp == nil || (cp.Status != domain.ExecStatusWaitingApproval && cp.Status != "running") {
-		return nil, "", nil
+		return nil, nil, nil
 	}
-	approvalID := approvalIDFromRuntimeState(cp.RuntimeStateJSON)
-	if approvalID == "" {
-		return nil, "", nil
+	approvalIDs := approvalIDsFromRuntimeState(cp.RuntimeStateJSON)
+	if len(approvalIDs) == 0 {
+		return nil, nil, nil
 	}
-	return cp, approvalID, nil
+	return cp, approvalIDs, nil
 }
 
 // validateApprovalBinding URL 上的 agentID 必须与审批载荷 AgentID 一致，防止拿
@@ -584,10 +715,12 @@ func (s *AgentService) claimApprovalResume(ctx context.Context, tenantID, execut
 }
 
 // maybeResumeApproval 是 Execute/ExecuteStream 的统一审批续跑入口：命中
-// waiting_approval checkpoint 时抢占并把 req/meta 重写为批准载荷快照（query/
-// 发起人/会话/知识 pin），供 assembleOptions 使用。调用方须在 assembleOptions
-// 后追加 buildApprovalResumeOptions，并在收尾调用 finishApprovalResume。错误
-// 原样上抛（越权/过期/策略变/并发抢占失败）。
+// waiting_approval checkpoint 时抢占并把 req/meta 重写为首条批准载荷快照（query/
+// 发起人/会话/知识 pin，同 executionID 的整批载荷共享同一发起人/会话），供
+// assembleOptions 使用。调用方须在 assembleOptions 后追加
+// buildApprovalResumeOptions，并在收尾调用 finishApprovalResume。任一审批仍
+// pending 时整批 202 等待（resolveApprovalResume 上抛 ErrApprovalNotApproved）。
+// 错误原样上抛（越权/过期/策略变/并发抢占失败）。
 //
 // H2① 软续跑：checkpoint 已为 running（首个续跑抢占后、批准消费前刷新）时不再
 // 抢占（分代/状态 CAS 已由首个续跑完成，重复抢占会误报 409），仅注入批准载荷合成
@@ -595,123 +728,224 @@ func (s *AgentService) claimApprovalResume(ctx context.Context, tenantID, execut
 
 func (s *AgentService) maybeResumeApproval(
 	ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, executionID string,
-) (payload ToolApprovalPayload, approvalID string, resuming bool, terminal bool, outReq ExecRequest, outMeta ExecMeta, err error) {
-	payload, approvalID, cp, terminal, err := s.resolveApprovalResume(ctx, meta.TenantID, req.UserID, executionID, agentID)
+) (entries []approvalResumeEntry, resuming bool, outReq ExecRequest, outMeta ExecMeta, err error) {
+	entries, cp, err := s.resolveApprovalResume(ctx, meta.TenantID, req.UserID, executionID, agentID)
 	if err != nil {
-		return payload, approvalID, false, false, req, meta, err
+		return nil, false, req, meta, err
 	}
 	if cp == nil {
-		return ToolApprovalPayload{}, "", false, false, req, meta, nil
+		return nil, false, req, meta, nil
 	}
 	if cp.Status == domain.ExecStatusWaitingApproval {
 		if err := s.claimApprovalResume(ctx, meta.TenantID, executionID, cp); err != nil {
-			return ToolApprovalPayload{}, "", false, false, req, meta, err
+			return nil, false, req, meta, err
 		}
 	}
 	// 重跑以批准载荷为准：发起人/会话/query 必须是审批时快照，否则续跑会写到
-	// 别的会话或以错误身份执行。
-	req.Query = payload.Query
-	req.UserID = payload.UserID
-	req.ConversationID = payload.ConversationID
+	// 别的会话或以错误身份执行。整批条目同 executionID，共享同一发起人/会话/query。
+	primary := entries[0].Payload
+	req.Query = primary.Query
+	req.UserID = primary.UserID
+	req.ConversationID = primary.ConversationID
 	meta.KnowledgeAssignmentsPinned = true
-	meta.PinnedKnowledgeRevisions = payload.PinnedKnowledgeRevisions
-	return payload, approvalID, true, terminal, req, meta, nil
+	meta.PinnedKnowledgeRevisions = primary.PinnedKnowledgeRevisions
+	return entries, true, req, meta, nil
 }
 
 // buildApprovalResumeOptions 构造审批续跑的执行选项：恢复键（WithExecutionID +
-// WithApprovalResume）与覆盖式 guard。guard 对首个与批准一致的调用
-// （server/capability/arguments 匹配）注入 approvalID 走 ExecuteApproved 的
-// CAS 单次消费；后续不一致调用回退正常授权/审批路径。返回 consumed 判定函数
-// （本轮重跑是否真的消费了批准），供收尾判定回滚条件。ResumeToolApproval 与
-// 流式续跑共用，消除重复。
+// WithApprovalResumes[s]）与覆盖式 guard。guard 对与批准一致的调用
+// （server/capability/canonical-digest 匹配）按调用键注入对应 approvalID 走
+// ExecuteApproved 的 CAS 单次消费；后续不一致调用回退正常授权/审批路径。返回
+// consumed 判定函数（"任一非终态条目被本轮 CAS 消费"），供收尾判定回滚条件——
+// 部分消费后失败必须写 failed（回滚让 re-resume 撞上已执行条目 202 卡死），全部
+// 未消费才允许回滚 waiting_approval。ResumeToolApproval 与流式续跑共用，消除重复。
 
 func (s *AgentService) buildApprovalResumeOptions(
-	ctx context.Context, tenantID string, a Agent, payload ToolApprovalPayload, approvalID string, terminal bool,
+	ctx context.Context, tenantID string, a Agent, entries []approvalResumeEntry,
 ) ([]ExecutionOption, func() bool, error) {
-	options := make([]ExecutionOption, 0, 3)
-	if len(payload.PinnedSkillRevisions) > 0 && s.deps.SkillActivationResolver != nil {
-		refs := make([]port.SkillRevisionRef, 0, len(payload.PinnedSkillRevisions))
-		for skillID, revisionID := range payload.PinnedSkillRevisions {
-			refs = append(refs, port.SkillRevisionRef{SkillID: skillID, RevisionID: revisionID})
-		}
-		catalog, err := s.deps.SkillActivationResolver.ResolveSkills(ctx, tenantID, refs)
-		if err != nil {
-			return nil, nil, err
-		}
-		options = append(options, WithSkillCatalog(catalog))
+	options, err := s.resolvePinnedSkillCatalog(ctx, tenantID, entries, make([]ExecutionOption, 0, 3))
+	if err != nil {
+		return nil, nil, err
 	}
-	consumed := false
+	// consumed[approvalID] 逐条记账：仅非终态条目可被 CAS 消费；终态条目
+	// ExecuteApproved 必然失败不消费。byCallKey 按 server|capability|digest 命中
+	// 注入对应 approvalID（同键多条取首个未消费，防 LLM 并行重复调用同工具），
+	// byApprovalID 供 guard 闭包查终态标记。
+	idx := indexApprovalEntries(entries)
+	consumed := make(map[string]bool)
+	primary := entries[0].Payload
 	guard := NewToolExecutionGuard(ToolExecutionGuardDeps{
 		Authorizer: s.deps.ToolAuthorizer,
 		Executor:   s.deps.MCPToolExecutor,
 		ExecuteApproved: func(callCtx context.Context, request ToolExecutionRequest) (port.MCPToolResult, error) {
-			return s.executeApprovedForResume(callCtx, tenantID, approvalID, request, terminal, &consumed)
+			entry, ok := idx.byApprovalID[request.ApprovalID]
+			return s.executeApprovedForResume(callCtx, tenantID, request.ApprovalID, request, ok && entry.Terminal, consumed)
 		},
 	})
-	resumeKeyOpts := []ExecutionOption{WithExecutionID(payload.ExecutionID)}
-	// 终态模式（已拒绝/已取消）不追加 WithApprovalResume：finalizeReActCheckpoint 按
-	// 普通执行收尾写终态，否则 resumeFromCheckpoint 走"恢复 running"路径导致重复
-	// P1 注入。approved 模式保留恢复键。
-	if !terminal {
-		resumeKeyOpts = append(resumeKeyOpts, WithApprovalResume(approvalID))
+	options = append(options, buildApprovalResumeKeyOptions(tenantID, a, entries, primary, guard, idx, consumed)...)
+	return options, func() bool { return anyConsumed(entries, consumed) }, nil
+}
+
+// approvalResumeIndex 是审批续跑条目的调用键索引：byCallKey 按 server|capability|
+// digest 命中注入对应 approvalID，byApprovalID 供 guard 闭包查终态标记。
+type approvalResumeIndex struct {
+	byCallKey    map[string][]approvalResumeEntry
+	byApprovalID map[string]approvalResumeEntry
+}
+
+// indexApprovalEntries 构建审批续跑条目索引：canonical digest 比较（与
+// ApprovedPayload binding 校验同源），容忍 int/float 表示差异；digest 解析失败
+// 的条目不进入 byCallKey（无法命中注入，回退正常授权/审批路径）。
+func indexApprovalEntries(entries []approvalResumeEntry) approvalResumeIndex {
+	idx := approvalResumeIndex{
+		byCallKey:    make(map[string][]approvalResumeEntry, len(entries)),
+		byApprovalID: make(map[string]approvalResumeEntry, len(entries)),
 	}
-	resumeKeyOpts = append(resumeKeyOpts,
-		// C2a：注入已批准载荷，executeReAct 据此合成 P1 直接执行，不再经 LLM
-		// 重新生成参数（修复审批续跑无限循环）。
-		WithApprovalResumePayload(payload),
-		WithToolExecutionFn(func(callCtx context.Context, request port.ToolExecutionRequest) (any, error) {
-			request.TenantID = tenantID
-			request.UserID = payload.UserID
-			request.AgentID = payload.AgentID
-			request.TraceID = payload.TraceID
-			request.ExecutionID = payload.ExecutionID
-			request.AgentToolIDs = slices.Clone(a.GetConfig().MCPToolIDs)
-			request.AgentToolIDs = append(request.AgentToolIDs, agentgraph.StratumDelegateToolName)
-			if !consumed && request.Tool.ServerID == payload.ServerID &&
-				request.Tool.CapabilityID == payload.ToolName {
-				// C2d 加固：canonical digest 比较（与 ApprovedPayload binding 校验同源），
-				// 容忍 int/float 表示差异；C2c 合成路径参数同引用平凡命中。
-				if d, dErr := CanonicalToolArgumentsDigest(request.Arguments); dErr == nil && d == payload.ArgumentsDigest {
-					request.ApprovalID = approvalID
+	for _, entry := range entries {
+		idx.byApprovalID[entry.ApprovalID] = entry
+		if d, dErr := CanonicalToolArgumentsDigest(entry.Payload.Arguments); dErr == nil {
+			key := entry.Payload.ServerID + "|" + entry.Payload.ToolName + "|" + d
+			idx.byCallKey[key] = append(idx.byCallKey[key], entry)
+		}
+	}
+	return idx
+}
+
+// resolvePinnedSkillCatalog 合并同批审批共享的 pinned skill revisions（各载荷同
+// 源）并解析目录：去重防脏数据导致重复目录解析，追加 WithSkillCatalog option。
+// resolver 未配置或无 pinned 时原样返回 options。
+func (s *AgentService) resolvePinnedSkillCatalog(
+	ctx context.Context, tenantID string, entries []approvalResumeEntry, options []ExecutionOption,
+) ([]ExecutionOption, error) {
+	pinned := map[string]string{}
+	for _, entry := range entries {
+		for skillID, revisionID := range entry.Payload.PinnedSkillRevisions {
+			pinned[skillID] = revisionID
+		}
+	}
+	if len(pinned) == 0 || s.deps.SkillActivationResolver == nil {
+		return options, nil
+	}
+	refs := make([]port.SkillRevisionRef, 0, len(pinned))
+	for skillID, revisionID := range pinned {
+		refs = append(refs, port.SkillRevisionRef{SkillID: skillID, RevisionID: revisionID})
+	}
+	catalog, err := s.deps.SkillActivationResolver.ResolveSkills(ctx, tenantID, refs)
+	if err != nil {
+		return nil, err
+	}
+	return append(options, WithSkillCatalog(catalog)), nil
+}
+
+// buildApprovalResumeKeyOptions 组装审批续跑恢复键 options：executionID 固定注入；
+// 有非终态条目才追加 WithApprovalResumes + WithApprovalResumePayloads
+// （finalizeReActCheckpoint 按普通执行收尾写终态，否则 resumeFromCheckpoint 走
+// "恢复 running"路径导致重复 P1 注入）。纯终态批次只注入 executionID + 工具闭包。
+func buildApprovalResumeKeyOptions(
+	tenantID string, a Agent, entries []approvalResumeEntry, primary ToolApprovalPayload,
+	guard *ToolExecutionGuard, idx approvalResumeIndex, consumed map[string]bool,
+) []ExecutionOption {
+	opts := []ExecutionOption{WithExecutionID(primary.ExecutionID)}
+	if !allTerminal(entries) {
+		ids := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			if !entry.Terminal {
+				ids = append(ids, entry.ApprovalID)
+			}
+		}
+		opts = append(opts, WithApprovalResumes(ids))
+	}
+	payloads := make([]ToolApprovalPayload, 0, len(entries))
+	for _, entry := range entries {
+		payloads = append(payloads, entry.Payload)
+	}
+	return append(opts,
+		// C2a：注入已批准/已终态载荷集合，executeReAct 据此合成一条 assistant 消息
+		// 含 N 条 tool_call 直接进入工具节点，不再经 LLM 重新生成参数（修复审批续跑
+		// 无限循环）。
+		WithApprovalResumePayloads(payloads),
+		WithToolExecutionFn(approvalResumeToolFn(tenantID, a, primary, guard, idx, consumed)),
+	)
+}
+
+// approvalResumeToolFn 返回审批续跑的 WithToolExecutionFn 闭包：注入链路定位，按
+// canonical digest 命中注入对应 approvalID（C2d，与 ApprovedPayload binding 校验
+// 同源，容忍 int/float 表示差异；C2c 合成路径参数同引用平凡命中），已消费的批准
+// 不再注入（LLM 后续同参数重调走正常审批路径），然后走 guard.Execute。payload.
+// ToolName 是 capability id（与 request.Tool.CapabilityID 对应）。
+func approvalResumeToolFn(
+	tenantID string, a Agent, primary ToolApprovalPayload,
+	guard *ToolExecutionGuard, idx approvalResumeIndex, consumed map[string]bool,
+) func(callCtx context.Context, request port.ToolExecutionRequest) (any, error) {
+	return func(callCtx context.Context, request port.ToolExecutionRequest) (any, error) {
+		request.TenantID = tenantID
+		request.UserID = primary.UserID
+		request.AgentID = primary.AgentID
+		request.TraceID = primary.TraceID
+		request.ExecutionID = primary.ExecutionID
+		request.AgentToolIDs = slices.Clone(a.GetConfig().MCPToolIDs)
+		request.AgentToolIDs = append(request.AgentToolIDs, agentgraph.StratumDelegateToolName)
+		if d, dErr := CanonicalToolArgumentsDigest(request.Arguments); dErr == nil {
+			key := request.Tool.ServerID + "|" + request.Tool.CapabilityID + "|" + d
+			for _, entry := range idx.byCallKey[key] {
+				if !consumed[entry.ApprovalID] {
+					request.ApprovalID = entry.ApprovalID
+					break
 				}
 			}
-			return guard.Execute(callCtx, request)
-		}))
-	options = append(options, resumeKeyOpts...)
-	return options, func() bool { return consumed }, nil
+		}
+		return guard.Execute(callCtx, request)
+	}
+}
+
+// anyConsumed 判定"任一非终态条目被本轮 CAS 消费"，供收尾判定回滚条件——部分消费
+// 后失败必须写 failed（回滚让 re-resume 撞上已执行条目 202 卡死），全部未消费才
+// 允许回滚 waiting_approval。
+func anyConsumed(entries []approvalResumeEntry, consumed map[string]bool) bool {
+	for _, entry := range entries {
+		if !entry.Terminal && consumed[entry.ApprovalID] {
+			return true
+		}
+	}
+	return false
 }
 
 // executeApprovedForResume 审批续跑的 ExecuteApproved 封装：C2d 原子消费判定 +
-// 终态模式友好文案。consumed 仅在决定被原子消费（ExecuteApproved 内部 ClaimExecution
-// CAS 成功）后置位；claim 失败（并发已消费/过期）与工具未发送/必然失败（行已
-// ReleaseExecution 回滚 approved）都不算消费——收尾回滚 waiting_approval，批准仍可
-// 再次消费。终态模式（已拒绝/已取消）ExecuteApproved 必然返回 ErrApprovalNotApproved，
-// 包装为友好文案（%w 保留哨兵 + 行为约束），LLM 感知后自行收尾。approved 模式保持
-// 原样，不影响 C2 幂等/恢复卡片。
+// 终态模式友好文案。consumed[approvalID] 仅在决定被原子消费（ExecuteApproved 内部
+// ClaimExecution CAS 成功）后置位；claim 失败（并发已消费/过期）与工具未发送/
+// 必然失败（行已 ReleaseExecution 回滚 approved）都不算消费——收尾回滚
+// waiting_approval，批准仍可再次消费。终态条目（已拒绝/已取消/已过期）
+// ExecuteApproved 必然失败且不消费批准（显式清零防御，避免污染批量收尾判定），
+// 错误包装为友好文案（%w 保留哨兵 + 行为约束），LLM 感知未执行后自行收尾。
+// 非终态模式保持原样，不影响 C2 幂等/恢复卡片。
 
 func (s *AgentService) executeApprovedForResume(
-	callCtx context.Context, tenantID, approvalID string, request ToolExecutionRequest, terminal bool, consumed *bool,
+	callCtx context.Context, tenantID, approvalID string, request ToolExecutionRequest, terminal bool, consumed map[string]bool,
 ) (port.MCPToolResult, error) {
 	result, err := s.deps.ApprovalService.ExecuteApproved(
 		callCtx, tenantID, approvalID, request.Tool.ServerID,
 		request.Tool.CapabilityID, request.Arguments, s.deps.MCPToolExecutor,
 	)
+	if terminal {
+		consumed[approvalID] = false
+		if err != nil {
+			err = fmt.Errorf("%w：工具审批未通过（已被拒绝或取消），工具未执行，请勿重试该工具", err)
+		}
+		return result, err
+	}
 	switch {
 	case err == nil:
-		*consumed = true
+		consumed[approvalID] = true
 	case errors.Is(err, domain.ErrApprovalAlreadyExecuted):
-		*consumed = false
+		consumed[approvalID] = false
 	default:
 		var execErr *port.MCPToolExecutionError
 		if errors.As(err, &execErr) &&
 			(execErr.Outcome == port.ToolExecutionOutcomeNotSent || execErr.Outcome == port.ToolExecutionOutcomeDefiniteFailure) {
-			*consumed = false
+			consumed[approvalID] = false
 		} else {
-			*consumed = true
+			consumed[approvalID] = true
 		}
-	}
-	if terminal && err != nil {
-		err = fmt.Errorf("%w：工具审批未通过（已被拒绝或取消），工具未执行，请勿重试该工具", err)
 	}
 	return result, err
 }
@@ -719,9 +953,11 @@ func (s *AgentService) executeApprovedForResume(
 // finishApprovalResume 审批续跑收尾（SECURITY-MEDIUM-2）：成功 → MarkCompleted；
 // 审批等待/断线/并发已消费类错误保留 checkpoint 现状（断线可刷新恢复、新审批已把
 // 状态写回 waiting_approval、ErrApprovalAlreadyExecuted 表示并发窗口已有胜者接管，
-// 保留 running 交给胜者 MarkCompleted，不回滚不销毁）；真实失败且批准未被本轮消费
-// → 回滚 waiting_approval，发起人可重试同一批准；已消费（ExecuteApproved CAS 已把
-// approved→executed）→ 写终态 failed 保留对账历史。
+// 保留 running 交给胜者 MarkCompleted，不回滚不销毁）；真实失败且整批批准都未被
+// 本轮消费（consumed() 为 false——任一非终态条目被 CAS 消费即为 true）→ 回滚
+// waiting_approval，发起人可重试同一批批准；已消费（ExecuteApproved CAS 已把某
+// 条 approved→executed）→ 写终态 failed 保留对账历史（部分消费后回滚会让
+// re-resume 撞上已执行条目 202 卡死）。
 
 func (s *AgentService) finishApprovalResume(ctx context.Context, tenantID, executionID string, consumed func() bool, terminal bool, runErr error) error {
 	if s.deps.CheckpointStore == nil {

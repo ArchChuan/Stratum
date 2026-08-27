@@ -166,20 +166,23 @@ func TestResumeToolApprovalPolicyResolveErrorFailClosed(t *testing.T) {
 	require.Empty(t, repo.voidReasons)
 }
 
-// 过期兜底：ApprovedPayload 返回 ErrApprovalExpired → Invalidate(expired) 规范化
-// reason 标记，主错误仍返回（CAS 失败按终态忽略）。
-func TestResumeToolApprovalExpiredInvalidates(t *testing.T) {
+// 过期兜底（非流式与流式一致化）：approved+已过 expires_at → 终态续跑
+// （terminal=true），不再 Invalidate(expired)、不再上抛 ErrApprovalExpired——
+// 恢复链跳过策略重查（终态工具不会执行），继续走 Registry.Get（agent 不存在
+// → ErrNotFound 终止，不触达 executor）。
+func TestResumeToolApprovalExpiredTerminalResume(t *testing.T) {
 	approvalSvc, repo := approvedToolApproval(t, ToolApprovalPayload{
 		TenantID: "t1", ExecutionID: "e1", AgentID: "a1", UserID: "u1",
 		ToolCallID: "tc1", ServerID: "srv", ToolName: "delete", RiskLevel: port.ToolRiskDestructive,
 		ConversationID: "conv-alive", Query: "resume", Arguments: map[string]any{"id": "1"},
 	})
 	repo.row.ExpiresAt = time.Now().Add(-time.Minute) // 已过期
-	svc := resumeValidationService(approvalSvc, resumeChatRepo{}, resumePolicyStub{}, nil)
+	registry := NewRegistry(resumeAgentRepo{}, zap.NewNop())
+	svc := resumeValidationService(approvalSvc, resumeChatRepo{}, resumePolicyStub{}, registry)
 
 	_, _, err := svc.ResumeToolApproval(context.Background(), "t1", "u1", "approval-1")
-	require.ErrorIs(t, err, ErrApprovalExpired)
-	require.Equal(t, []string{"expired"}, repo.invalidateReasons)
+	require.ErrorIs(t, err, ErrNotFound, "终态续跑跳过策略重查，应走到 Registry.Get（agent 不存在）")
+	require.Empty(t, repo.invalidateReasons, "终态续跑不再 Invalidate(expired)")
 	require.Empty(t, repo.voidReasons)
 }
 

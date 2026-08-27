@@ -334,6 +334,9 @@ func (contractVersionRepo) GetVersion(_ context.Context, _ string, _ string) (*w
 func (contractVersionRepo) NextVersionNumber(_ context.Context, _ string, _ string) (int64, error) {
 	return 1, nil
 }
+func (contractVersionRepo) SetActiveVersion(_ context.Context, _ string, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (contractVersionRepo) ListVersions(_ context.Context, _ string, _ string, _ workflowport.VersionListQuery) ([]workflowdomain.Version, int, error) {
 	return nil, 0, nil
 }

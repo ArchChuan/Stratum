@@ -90,18 +90,19 @@ type ExecutionConfig struct {
 	// 开始时已落库;续跑/断线重连复用同一 query 不再重复入库)。由 AgentService
 	// prepareAgentExecution 依据 meta.ExecutionID 是否非空统一注入。
 	SkipUserMessageSave bool
-	// ApprovalResumeID 是审批续跑注入的已批准审批 ID。非空时
-	// resumeFromCheckpoint 把 waiting_approval checkpoint 视为可恢复
-	// （checkpoint 无工具快照，从 chat 历史 + 本轮 query 全量重跑，语义与
-	// ResumeToolApproval 一致）；空串保持旧语义——waiting_approval 不恢复，
-	// 重跑路径由 guard 对匹配工具重新发起审批。
-	ApprovalResumeID string
-	// ApprovalResumePayload 是审批续跑注入的已批准载荷（C2a）：非空时
-	// executeReAct 在 buildReActInitState 后据此从批准参数合成 assistant
-	// 工具调用消息（P1）并置 SkipNextLLM，使已批准的工具调用直接执行，不再
-	// 经 LLM 重新生成参数（修复审批续跑无限循环）。
-	ApprovalResumePayload *ToolApprovalPayload
-	RAGSearchFn           func(ctx context.Context, workspaces []string, query string, topK int, viewerID string) (string, error)
+	// ApprovalResumeIDs 是审批续跑注入的已批准审批 ID 集合（同一 executionID 的一
+	// 批多审批）。非空时 resumeFromCheckpoint 把 waiting_approval checkpoint 视为
+	// 可恢复（checkpoint 无工具快照，从 chat 历史 + 本轮 query 全量重跑，语义与
+	// ResumeToolApproval 一致）；空保持旧语义——waiting_approval 不恢复，重跑路径
+	// 由 guard 对匹配工具重新发起审批。
+	ApprovalResumeIDs []string
+	// ApprovalResumePayloads 是审批续跑注入的已批准载荷集合（C2a）：非空时
+	// executeReAct 在 buildReActInitState 后据此从批准参数合成一条 assistant 工具
+	// 调用消息（P1，含 N 条 tool_call，覆盖非终态与终态条目）并置 SkipNextLLM，使
+	// 已批准/已终态的工具调用直接进入工具节点，不再经 LLM 重新生成参数（修复审批
+	// 续跑无限循环）。
+	ApprovalResumePayloads []ToolApprovalPayload
+	RAGSearchFn            func(ctx context.Context, workspaces []string, query string, topK int, viewerID string) (string, error)
 	// RAGSearchFnWithEvidence is the evidence-capable knowledge search hook
 	// (port.RAGSearchEvidenceProvider). When set, the knowledge tool prefers
 	// it over RAGSearchFn so tool observations carry retrieval provenance;
@@ -122,12 +123,15 @@ type ExecutionConfig struct {
 	ExtraTools         []port.ToolDefinition
 	SkillCatalog       map[string]port.SkillActivation
 	ToolExecutionFn    port.ToolExecutionFn
-	Actives            []port.SkillActivation
-	TracePayloadStore  port.TracePayloadStore
-	ConversationID     string
-	UserID             string
-	HistoryWindow      int
-	EvolutionTrace     EvolutionTraceMetadata
+	// PrecheckApprovals 是同一轮 LLM 工具调用执行前的批量审批预检钩子：任一调用
+	// 需审批时一次性创建全部审批并整轮暂停。nil = 不预检（退回逐个 guard 路径）。
+	PrecheckApprovals func(ctx context.Context, tools []port.ToolDefinition, calls []port.ToolCall) ([]port.ToolApprovalRequiredError, error)
+	Actives           []port.SkillActivation
+	TracePayloadStore port.TracePayloadStore
+	ConversationID    string
+	UserID            string
+	HistoryWindow     int
+	EvolutionTrace    EvolutionTraceMetadata
 	// AssistantRoleClass 是本次执行解析的成员角色（admin/owner/member），供
 	// 8 个通用内置运维工具在装配闭包与执行 metrics 中 fail-closed 门禁使用。
 	AssistantRoleClass        string
@@ -868,17 +872,18 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	}
 
 	initState := a.buildReActInitState(ec, initMessages, maxTokens)
-	// 审批续跑 C2c：从已批准载荷合成 assistant 工具调用消息（P1）并置
-	// SkipNextLLM，使已批准的工具调用直接执行，不再经 LLM 重新生成参数。
-	// 查不到工具（被删/改名）时回退 LLM 原路径（不构成死循环）。
-	if ec.cfg.ApprovalResumePayload != nil {
+	// 审批续跑 C2c：从整批已批准/已终态载荷合成一条 assistant 工具调用消息（P1，
+	// 含 N 条 tool_call）并置 SkipNextLLM，使工具调用直接进入工具节点，不再经 LLM
+	// 重新生成参数。全部条目工具查不到（被删/改名）时回退 LLM 原路径（不构成死循环）。
+	if len(ec.cfg.ApprovalResumePayloads) > 0 {
 		var ok bool
-		initState, ok = synthesizeApprovalResume(initState, *ec.cfg.ApprovalResumePayload)
+		initState, ok = synthesizeApprovalResume(initState, ec.cfg.ApprovalResumePayloads)
 		if !ok {
+			first := ec.cfg.ApprovalResumePayloads[0]
 			a.Logger.Info("agent: approval resume tool not found, falling back to llm",
 				zap.String("execution_id", ec.cfg.ExecutionID),
-				zap.String("server_id", ec.cfg.ApprovalResumePayload.ServerID),
-				zap.String("tool", ec.cfg.ApprovalResumePayload.ToolName),
+				zap.String("server_id", first.ServerID),
+				zap.String("tool", first.ToolName),
 			)
 		}
 	}
@@ -939,45 +944,64 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 }
 
 // synthesizeApprovalResume 从已批准载荷合成 assistant 工具调用消息（P1）追加到
-// 恢复 Messages 并置 SkipNextLLM（C2c）：审批续跑时使已批准的工具调用直接执行，
-// 不再经 LLM 重新生成参数。AvailableTools 中按 ServerID+CapabilityID 查表取
-// Name（payload.ToolName 是 capability id，非显示名）；查不到（工具被删/改名）
-// 回退不合成不跳过，走 LLM 原路径（工具被删时 LLM 也调不到，不构成死循环）。
-// 返回 (state, true) 表示已合成。
-func synthesizeApprovalResume(state agentgraph.ReActState, payload ToolApprovalPayload) (agentgraph.ReActState, bool) {
-	var toolName string
-	for _, td := range state.AvailableTools {
-		if td.ServerID == payload.ServerID && td.CapabilityID == payload.ToolName {
-			toolName = td.Name
-			break
+// 恢复 Messages 并置 SkipNextLLM（C2c）：审批续跑时使整批已批准/已终态的工具调用
+// 直接执行，不再经 LLM 重新生成参数。逐条在 AvailableTools 中按 ServerID+
+// CapabilityID 查表取 Name（payload.ToolName 是 capability id，非显示名）；查不到
+// （工具被删/改名）跳过该条（LLM 原路径也调不到，不构成死循环），其余照常合成。
+// 合成一条 assistant 消息含 N 条 tool_call，终态条目也合成——guard digest 命中后
+// 走 executeApprovedForResume(terminal=true) 返回友好错误，LLM 感知未执行后收尾。
+// 全部条目查不到时返回 (state, false)，调用方回退 LLM 原路径。返回 (state, true)
+// 表示已合成至少一条。
+func synthesizeApprovalResume(state agentgraph.ReActState, payloads []ToolApprovalPayload) (agentgraph.ReActState, bool) {
+	// 合成路径禁止预检：恢复消息的工具调用已审批/已终态，precheck 会对同一批调用
+	// 重复发起审批，导致续跑再暂停死循环。
+	state.PrecheckApprovals = nil
+	existingIDs := make(map[string]bool)
+	for _, m := range state.Messages {
+		for _, tc := range m.ToolCalls {
+			existingIDs[tc.ID] = true
 		}
 	}
-	if toolName == "" {
+	toolCalls := make([]port.ToolCall, 0, len(payloads))
+	synthesized := false
+	for _, payload := range payloads {
+		toolName := approvalToolName(state.AvailableTools, payload)
+		if toolName == "" {
+			continue // 工具被删/改名：跳过该条，其余条目照常合成。
+		}
+		callID := uniqueApprovalCallID(payload.ToolCallID, existingIDs)
+		existingIDs[callID] = true
+		toolCalls = append(toolCalls, port.ToolCall{ID: callID, Name: toolName, Arguments: payload.Arguments})
+		synthesized = true
+	}
+	if !synthesized {
 		return state, false
 	}
-	callID := payload.ToolCallID
-	if callID == "" {
-		callID = uuid.NewString()
-	} else {
-		// 恢复消息已存在同 ID 时生成新唯一 ID，避免 LLM 上下文孤立重复 tool_call。
-		for _, m := range state.Messages {
-			for _, tc := range m.ToolCalls {
-				if tc.ID == callID {
-					callID = uuid.NewString()
-				}
-			}
-		}
-	}
-	state.Messages = append(state.Messages, port.LLMMessage{
-		Role: "assistant",
-		ToolCalls: []port.ToolCall{{
-			ID:        callID,
-			Name:      toolName,
-			Arguments: payload.Arguments,
-		}},
-	})
+	state.Messages = append(state.Messages, port.LLMMessage{Role: "assistant", ToolCalls: toolCalls})
 	state.SkipNextLLM = true
 	return state, true
+}
+
+// approvalToolName 在 AvailableTools 中按 ServerID+CapabilityID 查表取显示名：
+// payload.ToolName 是 capability id，非显示名。查不到返回空串（工具被删/改名），
+// 由调用方跳过该条。
+func approvalToolName(tools []port.ToolDefinition, payload ToolApprovalPayload) string {
+	for _, td := range tools {
+		if td.ServerID == payload.ServerID && td.CapabilityID == payload.ToolName {
+			return td.Name
+		}
+	}
+	return ""
+}
+
+// uniqueApprovalCallID 校验并生成唯一 tool_call ID：原 ID 为空或已被占用（恢复
+// 消息已存在同 ID——含审批触发的原始 tool_call 仍留在历史；同批两载荷撞 ID）时
+// 生成新唯一 ID，避免 LLM 上下文孤立重复 tool_call。
+func uniqueApprovalCallID(callID string, existing map[string]bool) string {
+	if callID == "" || existing[callID] {
+		return uuid.NewString()
+	}
+	return callID
 }
 
 // newReActExecContext 构建 ReAct 执行上下文：有超时预算时用 WithTimeout，否则
@@ -1010,7 +1034,7 @@ func (a *BaseAgent) finalizeReActCheckpoint(ctx context.Context, ec agentExecCon
 		_ = a.CheckpointStore.MarkCompleted(markCtx, ec.cfg.TenantID, ec.cfg.ExecutionID)
 		return
 	}
-	if !retainRunningError(runErr) && ec.cfg.ApprovalResumeID == "" {
+	if !retainRunningError(runErr) && len(ec.cfg.ApprovalResumeIDs) == 0 {
 		_ = a.CheckpointStore.Terminate(markCtx, ec.cfg.TenantID, ec.cfg.ExecutionID, "failed")
 	}
 }
@@ -1256,6 +1280,7 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		Actives:                    ec.cfg.Actives,
 		TracePayloadStore:          ec.cfg.TracePayloadStore,
 		ToolExecutionFn:            ec.cfg.ToolExecutionFn,
+		PrecheckApprovals:          ec.cfg.PrecheckApprovals,
 		ExecutionID:                ec.cfg.ExecutionID,
 		AgentKnowledgeWorkspaceIDs: ec.workspaceNames,
 		AgentMemoryScope:           ec.memoryScope,
@@ -1981,7 +2006,15 @@ func WithSkipUserMessageSave(skip bool) ExecutionOption {
 // built by buildApprovalResumeOptions that inject the approved tool call.
 func WithApprovalResume(id string) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
-		cfg.ApprovalResumeID = id
+		cfg.ApprovalResumeIDs = []string{id}
+	}
+}
+
+// WithApprovalResumes 批量版 WithApprovalResume：注入同一 executionID 的一批多审批
+// ID，任一非空即把 waiting_approval checkpoint 视为可恢复（统一续跑）。
+func WithApprovalResumes(ids []string) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.ApprovalResumeIDs = ids
 	}
 }
 
@@ -1991,7 +2024,26 @@ func WithApprovalResume(id string) ExecutionOption {
 // WithApprovalResume 成对使用，由 buildApprovalResumeOptions 追加。
 func WithApprovalResumePayload(payload ToolApprovalPayload) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
-		cfg.ApprovalResumePayload = &payload
+		cfg.ApprovalResumePayloads = []ToolApprovalPayload{payload}
+	}
+}
+
+// WithApprovalResumePayloads 批量版 WithApprovalResumePayload：注入整批已批准/已
+// 终态载荷（含终态条目），synthesizeApprovalResume 据此合成一条 assistant 消息含
+// N 条 tool_call 直接进入工具节点。
+func WithApprovalResumePayloads(payloads []ToolApprovalPayload) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.ApprovalResumePayloads = payloads
+	}
+}
+
+// WithPrecheckApprovals 装配批量审批预检钩子：makeToolNode 在每轮 MCP 工具调用
+// 执行前调用，任一调用需审批时一次性创建全部审批并整轮暂停
+// （BatchToolApprovalRequiredError，工具一个都不执行）。续跑合成消息前
+// （synthesizeApprovalResume）会清空该钩子，防止对已审批工具重复发起审批。
+func WithPrecheckApprovals(fn func(ctx context.Context, tools []port.ToolDefinition, calls []port.ToolCall) ([]port.ToolApprovalRequiredError, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.PrecheckApprovals = fn
 	}
 }
 
@@ -2447,7 +2499,12 @@ func retainRunningError(err error) bool {
 		return true
 	}
 	var approvalErr *port.ToolApprovalRequiredError
-	return errors.As(err, &approvalErr)
+	if errors.As(err, &approvalErr) {
+		return true
+	}
+	// 批量审批：整轮暂停等待人工处理，checkpoint 保留 waiting_approval。
+	var batchErr *port.BatchToolApprovalRequiredError
+	return errors.As(err, &batchErr)
 }
 
 // isResumableCheckpoint reports whether a checkpoint with status s can be
@@ -2472,7 +2529,7 @@ func (a *BaseAgent) resumeFromCheckpoint(
 		return nil, nil, msgs
 	}
 	if !isResumableCheckpoint(resumeCp.Status) &&
-		(resumeCp.Status != domain.ExecStatusWaitingApproval || ec.cfg.ApprovalResumeID == "") {
+		(resumeCp.Status != domain.ExecStatusWaitingApproval || len(ec.cfg.ApprovalResumeIDs) == 0) {
 		return nil, nil, msgs
 	}
 	a.Logger.Info("agent: resuming from checkpoint",

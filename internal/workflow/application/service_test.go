@@ -73,6 +73,15 @@ func (s *memoryStore) GetVersion(_ context.Context, _, id string) (*domain.Versi
 func (s *memoryStore) NextVersionNumber(context.Context, string, string) (int64, error) {
 	return int64(len(s.versions) + 1), nil
 }
+func (s *memoryStore) SetActiveVersion(_ context.Context, _, definitionID, versionID string, ev *auditdomain.ResourceChangeAuditEvent) error {
+	row := s.definitions[definitionID]
+	if row == nil {
+		return domain.ErrNotFound
+	}
+	row.ActiveVersionID = versionID
+	s.auditEvents = append(s.auditEvents, ev)
+	return nil
+}
 func (s *memoryStore) FindRunByIdempotency(_ context.Context, _, key string) (*domain.Run, error) {
 	for _, run := range s.runs {
 		if run.IdempotencyKey == key {
@@ -160,6 +169,59 @@ func TestDefinitionServicePublishesVersion(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, def.ID, version.DefinitionID)
 	require.Equal(t, int64(1), version.Number)
+}
+
+func TestDefinitionService_Rollback_MovesActivePointer(t *testing.T) {
+	store, idgen := newMemoryStore(), &ids{}
+	svc := application.NewDefinitionService(store, store, idgen.NewID)
+	ctx := context.Background()
+	def, err := svc.Create(ctx, "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
+	require.NoError(t, err)
+	v1, err := svc.Publish(ctx, "tenant-1", def.ID, "u-1")
+	require.NoError(t, err)
+	v2, err := svc.Publish(ctx, "tenant-1", def.ID, "u-1")
+	require.NoError(t, err)
+	// 模拟发布后 active 指向最新版 v2（真实库 CreateNextVersion 事务内写入）。
+	store.definitions[def.ID].ActiveVersionID = v2.ID
+
+	rolled, err := svc.Rollback(ctx, "tenant-1", def.ID, v1.ID, "u-1")
+	require.NoError(t, err)
+	require.Equal(t, v1.ID, rolled.ActiveVersionID)
+	// 回退不产生新版本。
+	require.Len(t, store.versions, 2)
+	last := store.auditEvents[len(store.auditEvents)-1]
+	require.Equal(t, auditdomain.ChangeOpRollback, last.Operation)
+	require.Equal(t, "u-1", last.ActorID)
+	require.JSONEq(t, `{"id":"`+def.ID+`","name":"Research","description":"","active_version_id":"`+v1.ID+`"}`, string(last.After))
+}
+
+func TestDefinitionService_Rollback_RejectsForeignVersion(t *testing.T) {
+	store, idgen := newMemoryStore(), &ids{}
+	svc := application.NewDefinitionService(store, store, idgen.NewID)
+	ctx := context.Background()
+	def, err := svc.Create(ctx, "tenant-1", application.CreateDefinitionCommand{Name: "A", Spec: workflowSpec()}, "u-1")
+	require.NoError(t, err)
+	other, err := svc.Create(ctx, "tenant-1", application.CreateDefinitionCommand{Name: "B", Spec: workflowSpec()}, "u-1")
+	require.NoError(t, err)
+	otherVersion, err := svc.Publish(ctx, "tenant-1", other.ID, "u-1")
+	require.NoError(t, err)
+
+	_, err = svc.Rollback(ctx, "tenant-1", def.ID, otherVersion.ID, "u-1")
+	require.ErrorIs(t, err, domain.ErrNotFound)
+	// 归属不符时生效指针不得被移动（fail-closed）。
+	require.Empty(t, store.definitions[def.ID].ActiveVersionID)
+}
+
+func TestDefinitionService_Rollback_MissingVersion(t *testing.T) {
+	store, idgen := newMemoryStore(), &ids{}
+	svc := application.NewDefinitionService(store, store, idgen.NewID)
+	ctx := context.Background()
+	def, err := svc.Create(ctx, "tenant-1", application.CreateDefinitionCommand{Name: "A", Spec: workflowSpec()}, "u-1")
+	require.NoError(t, err)
+
+	_, err = svc.Rollback(ctx, "tenant-1", def.ID, "no-such-version", "u-1")
+	require.ErrorIs(t, err, domain.ErrNotFound)
+	require.Empty(t, store.definitions[def.ID].ActiveVersionID)
 }
 
 func TestDefinitionServiceDeletesDraft(t *testing.T) {
