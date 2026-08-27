@@ -240,8 +240,11 @@ func (r *HistoryRepo) SearchRelevant(ctx context.Context, tenantID, userID, agen
 
 const historyListUserQuery = `
  SELECT id, conversation_id, user_id, agent_id, scope, summary, tier,
-  period_start, period_end, source_start, source_end, source_ids,
-  importance, confidence, aggregation_key, status, created_at, updated_at
+  COALESCE(period_start, created_at) AS period_start,
+  COALESCE(period_end, created_at) AS period_end,
+  source_start, source_end, COALESCE(source_ids, '{}'::uuid[]) AS source_ids,
+  importance, confidence, COALESCE(aggregation_key, '') AS aggregation_key,
+  status, created_at, updated_at
  FROM memory_summaries
  WHERE user_id = $1 AND scope = 'user' AND status = 'active'
  ORDER BY created_at DESC LIMIT $2 OFFSET $3`

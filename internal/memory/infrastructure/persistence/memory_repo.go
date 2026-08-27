@@ -63,7 +63,12 @@ func (r *MemoryRepo) Get(ctx context.Context, tenantID, id string) (*domain.Memo
 	var entry *domain.MemoryEntry
 	if err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		row := tx.QueryRow(ctx,
-			`SELECT id, type, role, content, session_id, user_id, agent_id, importance, tags, metadata, expires_at
+			`SELECT id, type, role, content,
+			        COALESCE(session_id, '') AS session_id,
+			        COALESCE(user_id, '') AS user_id,
+			        COALESCE(agent_id, '') AS agent_id,
+			        importance, tags, metadata,
+			        COALESCE(expires_at, 'epoch') AS expires_at
 			 FROM memory_entries WHERE id = $1`, id)
 		e := &domain.MemoryEntry{}
 		if err := row.Scan(&e.ID, &e.Type, &e.Role, &e.Content, &e.SessionID, &e.UserID, &e.AgentID,
@@ -89,7 +94,11 @@ func (r *MemoryRepo) Search(ctx context.Context, tenantID, userID, query string,
 	var out []*domain.MemoryEntry
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT id, type, role, content, session_id, user_id, agent_id, importance
+			`SELECT id, type, role, content,
+			        COALESCE(session_id, '') AS session_id,
+			        COALESCE(user_id, '') AS user_id,
+			        COALESCE(agent_id, '') AS agent_id,
+			        importance
 			 FROM memory_entries
 			 WHERE ($1::text = '' OR user_id = $1::text)
 			   AND ($2::text = '' OR content ILIKE '%' || $2 || '%')

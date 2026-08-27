@@ -479,3 +479,37 @@ func TestHistoryRepo_Delete_execFails(t *testing.T) {
 	require.ErrorContains(t, err, "delete summary")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestHistoryRepo_ListUserSummaries_nullPeriodEnd 回归：memory_summaries.period_end
+// 无 NOT NULL，历史摘要可能 period_start/period_end 为 NULL（如自动聚合无明确
+// 结束时间）。scan 到非指针 time.Time 曾导致 pgx "cannot scan NULL" 使
+// GET /memory/summaries 整体 500（skill 可空列对齐反例）。修复方案：SQL 层
+// COALESCE(period_start, created_at) / COALESCE(period_end, created_at) 兜底，
+// repo 收到的永远是回退值。pgxmock 不模拟真实 NULL scan（nil → 零值不报错），
+// 因此本测试模拟 COALESCE 后的值，真实 NULL 路径由
+// TestHistoryRepo_ListUserSummaries_nullablePeriod_Integration 覆盖。
+func TestHistoryRepo_ListUserSummaries_nullPeriodEnd(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockHistoryRepo(mock)
+
+	now := ts()
+	row := []any{"s-null", "c1", "user-1", "ag1", "user", "summary-with-null", "recent_months",
+		now, now, "2026-01-01", "2026-01-31", []string{"e1"},
+		0.8, 0.9, "", "active", now, now}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("FROM memory_summaries").
+		WithArgs("user-1", 10, 0).
+		WillReturnRows(pgxmock.NewRows(summaryListColumns).AddRow(row...))
+	mock.ExpectCommit()
+
+	got, err := repo.ListUserSummaries(context.Background(), "tenant-1", "user-1", 10, 0)
+	require.NoError(t, err, "period 回退值不应导致 scan 崩溃")
+	require.Len(t, got, 1)
+	require.Equal(t, "s-null", got[0].ID)
+	require.True(t, got[0].PeriodEnd.Equal(now), "COALESCE 后 period_end 应等于 created_at")
+	require.True(t, got[0].PeriodStart.Equal(now), "COALESCE 后 period_start 应等于 created_at")
+	require.Equal(t, "", got[0].AggregationKey, "NULL aggregation_key 应回退为空串")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
