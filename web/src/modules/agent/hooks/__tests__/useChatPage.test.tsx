@@ -402,7 +402,7 @@ describe('useChatPage tool approvals', () => {
 				},
 			},
 			error: null,
-			approval: null,
+			approvals: [],
 			delegateStatus: null,
 			executionId: null,
 			conflict: false,
