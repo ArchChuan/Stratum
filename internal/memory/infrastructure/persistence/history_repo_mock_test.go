@@ -377,3 +377,105 @@ func TestHistoryRepo_SearchRelevant_queryFails(t *testing.T) {
 	require.ErrorIs(t, err, pgx.ErrTxClosed)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// --- ListUserSummaries / CountUserSummaries / Delete (management page) ---
+
+var summaryListColumns = []string{"id", "conversation_id", "user_id", "agent_id", "scope", "summary", "tier",
+	"period_start", "period_end", "source_start", "source_end", "source_ids",
+	"importance", "confidence", "aggregation_key", "status", "created_at", "updated_at"}
+
+func summaryListRow() []any {
+	now := ts()
+	return []any{"s1", "c1", "user-1", "ag1", "user", "summary", "recent_months",
+		now, now.Add(time.Hour), "2026-01-01", "2026-01-31", []string{"e1"},
+		0.8, 0.9, "k1", "active", now, now}
+}
+
+func TestHistoryRepo_ListUserSummaries_success(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockHistoryRepo(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("FROM memory_summaries").
+		WithArgs("user-1", 10, 0).
+		WillReturnRows(pgxmock.NewRows(summaryListColumns).AddRow(summaryListRow()...))
+	mock.ExpectCommit()
+
+	got, err := repo.ListUserSummaries(context.Background(), "tenant-1", "user-1", 10, 0)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, "s1", got[0].ID)
+	require.Equal(t, "c1", got[0].ConversationID)
+	require.Equal(t, "tenant-1", got[0].TenantID)
+	require.Equal(t, domain.ScopeUser, got[0].Scope)
+	require.Equal(t, []string{"e1"}, got[0].SourceIDs)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHistoryRepo_ListUserSummaries_queryFails(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockHistoryRepo(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("FROM memory_summaries").
+		WithArgs("user-1", 10, 0).WillReturnError(pgx.ErrTxClosed)
+	mock.ExpectRollback()
+
+	_, err := repo.ListUserSummaries(context.Background(), "tenant-1", "user-1", 10, 0)
+	require.ErrorContains(t, err, "list user summaries")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHistoryRepo_CountUserSummaries(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockHistoryRepo(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("count\\(\\*\\) FROM memory_summaries").
+		WithArgs("user-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(3))
+	mock.ExpectCommit()
+
+	total, err := repo.CountUserSummaries(context.Background(), "tenant-1", "user-1")
+	require.NoError(t, err)
+	require.Equal(t, 3, total)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHistoryRepo_Delete(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockHistoryRepo(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectExec("DELETE FROM memory_summaries WHERE id").
+		WithArgs("s1", "user-1").WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectCommit()
+	require.NoError(t, repo.Delete(context.Background(), "tenant-1", "user-1", "s1"))
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectExec("DELETE FROM memory_summaries WHERE id").
+		WithArgs("s2", "user-1").WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectRollback()
+	require.ErrorIs(t, repo.Delete(context.Background(), "tenant-1", "user-1", "s2"), domain.ErrSummaryNotFound)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHistoryRepo_Delete_execFails(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockHistoryRepo(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectExec("DELETE FROM memory_summaries WHERE id").
+		WithArgs("s1", "user-1").WillReturnError(pgx.ErrTxClosed)
+	mock.ExpectRollback()
+
+	err := repo.Delete(context.Background(), "tenant-1", "user-1", "s1")
+	require.ErrorContains(t, err, "delete summary")
+	require.NoError(t, mock.ExpectationsWereMet())
+}

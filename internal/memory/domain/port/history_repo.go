@@ -16,4 +16,11 @@ type HistoryRepo interface {
 	// archived ids so the caller can delete their vectors (status change must
 	// be reflected in the vector store).
 	ArchiveColdFacts(ctx context.Context, tenantID string) ([]string, error)
+
+	// ListUserSummaries lists the user's active user-scope summaries, newest first.
+	ListUserSummaries(ctx context.Context, tenantID, userID string, limit, offset int) ([]*domain.HistorySegment, error)
+	// CountUserSummaries counts the user's active user-scope summaries.
+	CountUserSummaries(ctx context.Context, tenantID, userID string) (int, error)
+	// Delete removes a summary owned by userID; ErrSummaryNotFound when no row matches.
+	Delete(ctx context.Context, tenantID, userID, id string) error
 }

@@ -28,6 +28,9 @@ func (r *stubActiveSnapshotRepo) Get(context.Context, string, string, string) (*
 	return r.snapshot, r.err
 }
 func (r *stubActiveSnapshotRepo) Delete(context.Context, string, string, string) error { return r.err }
+func (r *stubActiveSnapshotRepo) ListUser(context.Context, string, string) ([]*domain.ActiveSnapshot, error) {
+	return nil, nil
+}
 
 func TestEnricherRefreshesBoundedActiveSnapshotFromExistingAsyncEvent(t *testing.T) {
 	repo := &stubActiveSnapshotRepo{}

@@ -80,4 +80,9 @@ var (
 	// ErrMigrationUnknownModel 目标模型不是目录中可解析的嵌入模型，拒绝启动迁移
 	// （fail-closed：避免生效模型被切到无效模型，产生不可回填的僵尸迁移）。
 	ErrMigrationUnknownModel = errors.New("memory migration target model not resolvable")
+
+	// ErrSummaryNotFound is returned when a history summary lookup misses.
+	ErrSummaryNotFound = errors.New("memory summary not found")
+	// ErrSnapshotNotFound is returned when an active snapshot lookup misses.
+	ErrSnapshotNotFound = errors.New("memory snapshot not found")
 )

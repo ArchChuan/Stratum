@@ -121,6 +121,12 @@ func (m *cleanupMemoryRepo) Stats(context.Context, string) (*domain.MemoryStats,
 func (m *cleanupMemoryRepo) GetSummary(context.Context, string, string) (string, error) {
 	return "", nil
 }
+func (m *cleanupMemoryRepo) ListUserEntries(context.Context, string, string, int, int, string) ([]*domain.MemoryEntryListItem, error) {
+	return nil, nil
+}
+func (m *cleanupMemoryRepo) CountUserEntries(context.Context, string, string, string) (int, error) {
+	return 0, nil
+}
 
 // Mock implementations for testing
 type MockFactRepo struct {
@@ -295,6 +301,11 @@ func (m *MockEntityRepo) DeleteAllByUser(ctx context.Context, tenantID, userID s
 
 func (m *MockEntityRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error {
 	args := m.Called(ctx, tenantID, agentID)
+	return args.Error(0)
+}
+
+func (m *MockEntityRepo) Delete(ctx context.Context, tenantID, id string) error {
+	args := m.Called(ctx, tenantID, id)
 	return args.Error(0)
 }
 

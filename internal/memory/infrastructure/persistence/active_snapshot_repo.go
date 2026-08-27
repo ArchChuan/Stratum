@@ -85,3 +85,34 @@ func (r *ActiveSnapshotRepo) Delete(ctx context.Context, tenantID, userID, agent
 		return err
 	})
 }
+
+// ListUser returns every snapshot row for a user across agents, including
+// expired/inactive rows — the management page needs to display and clear them,
+// which is deliberately broader than Get's active-only filter.
+func (r *ActiveSnapshotRepo) ListUser(ctx context.Context, tenantID, userID string) ([]*domain.ActiveSnapshot, error) {
+	var out []*domain.ActiveSnapshot
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT user_id, agent_id, work_context, personal_context, top_of_mind,
+		   source, expires_at, updated_at, version, status
+		   FROM memory_active_snapshots WHERE user_id = $1 ORDER BY updated_at DESC`, userID)
+		if err != nil {
+			return fmt.Errorf("list user snapshots: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var s domain.ActiveSnapshot
+			var source []byte
+			if err := rows.Scan(&s.UserID, &s.AgentID, &s.WorkContext, &s.PersonalContext, &s.TopOfMind,
+				&source, &s.ExpiresAt, &s.UpdatedAt, &s.Version, &s.Status); err != nil {
+				return err
+			}
+			if err := json.Unmarshal(source, &s.Source); err != nil {
+				return fmt.Errorf("memory: decode active snapshot source: %w", err)
+			}
+			s.TenantID = tenantID
+			out = append(out, &s)
+		}
+		return rows.Err()
+	})
+	return out, err
+}

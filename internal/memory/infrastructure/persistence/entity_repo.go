@@ -229,3 +229,18 @@ func (r *EntityRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID str
 		return nil
 	})
 }
+
+// Delete removes a single entity by id. A zero-row delete maps to
+// domain.ErrEntityNotFound so callers can distinguish a miss from a no-op.
+func (r *EntityRepo) Delete(ctx context.Context, tenantID, id string) error {
+	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `DELETE FROM memory_entities WHERE id = $1`, id)
+		if err != nil {
+			return translatePgError(err, "delete entity")
+		}
+		if tag.RowsAffected() == 0 {
+			return domain.ErrEntityNotFound
+		}
+		return nil
+	})
+}

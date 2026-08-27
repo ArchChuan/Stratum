@@ -170,6 +170,12 @@ func (s *stubMemoryRepo) Stats(context.Context, string) (*domain.MemoryStats, er
 func (s *stubMemoryRepo) GetSummary(context.Context, string, string) (string, error) {
 	return "", nil
 }
+func (s *stubMemoryRepo) ListUserEntries(context.Context, string, string, int, int, string) ([]*domain.MemoryEntryListItem, error) {
+	return nil, nil
+}
+func (s *stubMemoryRepo) CountUserEntries(context.Context, string, string, string) (int, error) {
+	return 0, nil
+}
 
 func TestGCWorker_PurgeExpiredEntries_DeletesVectorsThenRows(t *testing.T) {
 	memoryRepo := &stubMemoryRepo{expiredBatches: [][]string{{"e1", "e2"}, nil}}
