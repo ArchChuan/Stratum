@@ -40,6 +40,8 @@ export const useSnapshotsTab = () => {
       await load();
     } catch (err) {
       message.error({ content: (err as RequestError).response?.data?.error || '更新快照失败', duration: 3 });
+      // 向上传播失败：调用方（SnapshotPanel.handleSave）据此保持编辑 Modal 打开、草稿不丢。
+      throw err;
     } finally {
       setSaveLoading(false);
     }

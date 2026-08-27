@@ -88,13 +88,17 @@ export const SnapshotPanel = ({ onChanged, reloadKey }: { onChanged?: () => void
 
   const handleSave = async () => {
     if (!editing) return;
-    await updateSnapshot(editing.agent_id, {
-      work_context: workContext,
-      personal_context: personalContext,
-      top_of_mind: topOfMind,
-    });
-    setEditOpen(false);
-    onChanged?.();
+    try {
+      await updateSnapshot(editing.agent_id, {
+        work_context: workContext,
+        personal_context: personalContext,
+        top_of_mind: topOfMind,
+      });
+      setEditOpen(false);
+      onChanged?.();
+    } catch {
+      // updateSnapshot 已弹错误 toast；保持 Modal 打开，编辑草稿保留（避免 unhandled rejection）。
+    }
   };
 
   const handleDelete = async (agentId: string) => {
