@@ -16,7 +16,10 @@ import { DangerPopconfirm, ResponsiveDataView } from '@/shared/ui';
 const { Title, Text } = Typography;
 
 export const TenantsListPage = () => {
-  useAuth();
+  const { user } = useAuth();
+  // 租户删除是全局管理动作，仅超级管理员可执行（后端 DELETE /admin/tenants/:id 用
+  // RequireGlobalAdmin 守卫）；system_admin 可查看/创建/启停，但删除按钮禁用。
+  const isGlobalAdmin = user?.global_role === 'global_admin';
   const [tenants, setTenants] = useState<AdminTenant[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleteLoadingId, setDeleteLoadingId] = useState<string | null>(null);
@@ -141,14 +144,20 @@ export const TenantsListPage = () => {
               title={`确认删除租户「${record.name}」？此操作不可恢复，所有数据将被永久清除。`}
               okText="确认删除"
               onConfirm={() => handleDelete(id)}
-              disabled={record.is_default}
+              disabled={record.is_default || !isGlobalAdmin}
             >
               <Button
                 size="small"
                 danger
                 loading={deleteLoadingId === id}
-                disabled={record.is_default}
-                title={record.is_default ? '默认租户不可删除' : undefined}
+                disabled={record.is_default || !isGlobalAdmin}
+                title={
+                  record.is_default
+                    ? '默认租户不可删除'
+                    : isGlobalAdmin
+                      ? undefined
+                      : '仅超级管理员可删除'
+                }
               >
                 删除
               </Button>
@@ -226,13 +235,13 @@ export const TenantsListPage = () => {
                       title={`确认删除租户「${tenant.name}」？此操作不可恢复，所有数据将被永久清除。`}
                       okText="确认删除"
                       onConfirm={() => handleDelete(id)}
-                      disabled={tenant.is_default}
+                      disabled={tenant.is_default || !isGlobalAdmin}
                     >
                       <Button
                         size="small"
                         danger
                         loading={deleteLoadingId === id}
-                        disabled={tenant.is_default}
+                        disabled={tenant.is_default || !isGlobalAdmin}
                         aria-label="删除租户"
                       >
                         删除

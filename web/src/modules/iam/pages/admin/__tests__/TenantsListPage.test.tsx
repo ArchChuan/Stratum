@@ -10,8 +10,11 @@ const api = vi.hoisted(() => ({
   adminDeleteTenant: vi.fn(),
 }));
 
+// 租户删除是全局管理动作，仅 global_admin 可执行（DELETE /admin/tenants/:id
+// RequireGlobalAdmin 守卫）；删除用例以 global_admin 身份运行。
+const authState = vi.hoisted(() => ({ user: { global_role: 'global_admin' } }));
 vi.mock('@/shared/hooks', () => ({ useResponsive: () => ({ isMobile: true }) }));
-vi.mock('@/modules/iam/components/AuthContext', () => ({ useAuth: () => ({}) }));
+vi.mock('@/modules/iam/components/AuthContext', () => ({ useAuth: () => authState }));
 vi.mock('@/modules/iam/api/tenant.api', () => ({ tenantApi: api }));
 
 beforeAll(() => {
@@ -20,6 +23,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  authState.user = { global_role: 'global_admin' };
 });
 
 it('renders admin tenant details and confirms destructive mobile action', async () => {
@@ -53,6 +57,30 @@ it('renders admin tenant details and confirms destructive mobile action', async 
 
   await waitFor(() => expect(api.adminDeleteTenant).toHaveBeenCalledWith('tenant-2'));
   expect(document.querySelector('.ant-table')).not.toBeInTheDocument();
+});
+
+it('disables tenant deletion for system_admin', async () => {
+  authState.user = { global_role: 'system_admin' };
+  api.listAllTenants.mockResolvedValue({
+    tenants: [{
+      id: 'tenant-2',
+      name: '产品团队',
+      slug: 'product',
+      status: 'active',
+      member_count: 8,
+      created_at: '2026-07-10T00:00:00Z',
+      is_default: false,
+    }],
+    total: 1,
+    page: 1,
+    page_size: 20,
+  });
+  render(<TenantsListPage />);
+
+  expect(await screen.findByText('产品团队')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '删除租户' })).toBeDisabled();
+  // 启停是 system_admin 可用能力，按钮应保持可用（双 CJK 自动插空格「禁 用」）
+  expect(screen.getByRole('button', { name: /禁\s*用/ })).not.toBeDisabled();
 });
 
 it('creates a tenant from the administrator modal and refreshes the current page', async () => {

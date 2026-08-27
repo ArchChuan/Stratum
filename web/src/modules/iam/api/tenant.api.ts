@@ -9,6 +9,8 @@ import {
   type TenantSummary,
 } from '../model/auth';
 
+import { ADMIN_USER_SEARCH_LIMIT } from '@/constants';
+
 import api from '@/services/client';
 
 const withBearer = (token?: string) =>
@@ -35,6 +37,20 @@ const invitationSchema = z.object({
 });
 
 export type MemberPage = z.infer<typeof memberPageSchema>;
+
+// 平台管理员（users.global_role）行，平台管理页使用。avatar_url 后端为 *string，
+// 无头像时输出 null，这里归一化为空字符串。
+export const adminUserSchema = z
+  .object({
+    user_id: z.string(),
+    username: z.string().optional().default(''),
+    github_login: z.string().optional().default(''),
+    avatar_url: z.string().nullish().transform((v) => v ?? ''),
+    global_role: z.string().optional().default(''),
+  })
+  .passthrough();
+export type AdminUser = z.infer<typeof adminUserSchema>;
+
 export type CreateAdminTenantInput = {
   name: string;
   slug: string;
@@ -91,4 +107,16 @@ export const tenantApi = {
   createTenant: (data: CreateAdminTenantInput) => api.post('/admin/tenants', data),
   adminDeleteTenant: (tenantId: string) => api.delete(`/admin/tenants/${tenantId}`),
   deleteSelf: () => api.delete('/tenant'),
+  // 平台管理员管理（users.global_role）。写操作由后端 RequireGlobalAdmin 守卫，
+  // 前端仅 global_admin 可进入 AdminsPage，双重拦截。
+  searchAdminCandidates: async (query: string, limit = ADMIN_USER_SEARCH_LIMIT): Promise<AdminUser[]> => {
+    const res = await api.get('/admin/users', { params: { query, limit } });
+    return z.object({ users: z.array(adminUserSchema) }).parse(res.data).users;
+  },
+  listAdmins: async (): Promise<AdminUser[]> => {
+    const res = await api.get('/admin/admins');
+    return z.object({ admins: z.array(adminUserSchema) }).parse(res.data).admins;
+  },
+  setAdminRole: (userId: string) => api.post('/admin/admins', { user_id: userId }),
+  removeAdminRole: (userId: string) => api.delete(`/admin/admins/${userId}`),
 };
