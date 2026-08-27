@@ -85,4 +85,7 @@ var (
 	ErrSummaryNotFound = errors.New("memory summary not found")
 	// ErrSnapshotNotFound is returned when an active snapshot lookup misses.
 	ErrSnapshotNotFound = errors.New("memory snapshot not found")
+	// ErrSnapshotInvalid 快照数据不合法（source 缺失、超限、非法状态等），是用户
+	// 输入/数据问题而非服务端错误，应映射 400 而非 500。
+	ErrSnapshotInvalid = errors.New("invalid active snapshot")
 )

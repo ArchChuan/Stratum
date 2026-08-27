@@ -85,6 +85,7 @@ var errorStatusTable = map[error]int{
 	memorydomain.ErrFactNotEditable:               http.StatusConflict,
 	memorydomain.ErrSummaryNotFound:               http.StatusNotFound,
 	memorydomain.ErrSnapshotNotFound:              http.StatusNotFound,
+	memorydomain.ErrSnapshotInvalid:               http.StatusBadRequest,
 	memoryapp.ErrMemoryEmbeddingUnavailable:       http.StatusBadGateway,
 	skilldomain.ErrSkillNotFound:                  http.StatusNotFound,
 	skilldomain.ErrSkillDraftStale:                http.StatusConflict,

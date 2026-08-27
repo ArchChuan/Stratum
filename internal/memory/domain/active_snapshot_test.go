@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -52,6 +53,27 @@ func TestActiveSnapshotValidateRequiresScopeTTLAndMinimalSource(t *testing.T) {
 			mutate(&s)
 			if err := s.Validate(); err == nil {
 				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+// TestActiveSnapshotValidateWrapsErrSnapshotInvalid 回归：Validate 的校验错误必须
+// 以 %w 包装 ErrSnapshotInvalid，否则 error_mapping 无法映射为 400，用户编辑
+// source 为空（DB 默认值 '{}'）的异常快照会得到 500 而非 400。
+func TestActiveSnapshotValidateWrapsErrSnapshotInvalid(t *testing.T) {
+	now := time.Now().UTC()
+	cases := map[string]*ActiveSnapshot{
+		"nil":                  nil,
+		"missing scope":        {TenantID: "tenant", UserID: "user", Status: SnapshotStatusActive, ExpiresAt: now.Add(time.Hour), UpdatedAt: now, Source: SnapshotSource{Type: "message", Reference: "msg-1"}},
+		"missing source":       {TenantID: "tenant", UserID: "user", AgentID: "agent", Status: SnapshotStatusActive, ExpiresAt: now.Add(time.Hour), UpdatedAt: now},
+		"bad status":           {TenantID: "tenant", UserID: "user", AgentID: "agent", Status: "bogus", ExpiresAt: now.Add(time.Hour), UpdatedAt: now, Source: SnapshotSource{Type: "message", Reference: "msg-1"}},
+		"expiry before update": {TenantID: "tenant", UserID: "user", AgentID: "agent", Status: SnapshotStatusActive, ExpiresAt: now, UpdatedAt: now, Source: SnapshotSource{Type: "message", Reference: "msg-1"}},
+	}
+	for name, s := range cases {
+		t.Run(name, func(t *testing.T) {
+			if !errors.Is(s.Validate(), ErrSnapshotInvalid) {
+				t.Fatalf("expected error to wrap ErrSnapshotInvalid, got %v", s.Validate())
 			}
 		})
 	}

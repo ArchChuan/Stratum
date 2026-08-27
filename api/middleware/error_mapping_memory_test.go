@@ -39,6 +39,7 @@ func TestMapErrorToStatus_MemorySentinels(t *testing.T) {
 		{name: "fact not editable", err: domain.ErrFactNotEditable, status: http.StatusConflict},
 		{name: "summary not found", err: domain.ErrSummaryNotFound, status: http.StatusNotFound},
 		{name: "snapshot not found", err: domain.ErrSnapshotNotFound, status: http.StatusNotFound},
+		{name: "snapshot invalid", err: domain.ErrSnapshotInvalid, status: http.StatusBadRequest},
 		{name: "embedding unavailable", err: memoryapp.ErrMemoryEmbeddingUnavailable, status: http.StatusBadGateway},
 	}
 
