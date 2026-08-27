@@ -53,7 +53,9 @@ export const useFactsTab = () => {
 
   const applyFilters = useCallback((next: FactFilters) => {
     setFilters(next);
-  }, []);
+    // 筛选变化后回到第 1 页，避免用越界页码请求导致列表空态被误判为无结果。
+    onChange(1, pageSize);
+  }, [onChange, pageSize]);
 
   const deleteFact = useCallback(async (id: string) => {
     setDeleteLoading(true);

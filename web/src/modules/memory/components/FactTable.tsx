@@ -58,6 +58,12 @@ export const FactTable = ({ onChanged, reloadKey }: { onChanged?: () => void; re
   const [editing, setEditing] = useState<MemoryFact | null>(null);
   const [form] = Form.useForm();
   const [saveLoading, setSaveLoading] = useState(false);
+  // 搜索框本地草稿：Enter/blur 才提交，避免逐键请求；外部筛选状态（清空/重载）变化时同步。
+  const [qDraft, setQDraft] = useState(filters.q);
+
+  useEffect(() => {
+    setQDraft(filters.q);
+  }, [filters.q]);
 
   useEffect(() => {
     if (reloadKey && reloadKey > 0) void reload();
@@ -96,9 +102,10 @@ export const FactTable = ({ onChanged, reloadKey }: { onChanged?: () => void; re
           placeholder="搜索事实内容"
           prefix={<SearchOutlined />}
           allowClear
-          defaultValue={filters.q}
-          onPressEnter={(e) => applyFilters({ ...filters, q: (e.target as HTMLInputElement).value })}
-          onBlur={(e) => applyFilters({ ...filters, q: e.target.value })}
+          value={qDraft}
+          onChange={(e) => setQDraft(e.target.value)}
+          onPressEnter={() => applyFilters({ ...filters, q: qDraft })}
+          onBlur={() => applyFilters({ ...filters, q: qDraft })}
           style={{ width: 220 }}
         />
         <Select

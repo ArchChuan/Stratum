@@ -59,4 +59,24 @@ describe('useFactsTab', () => {
     expect(message.success).toHaveBeenCalled();
     expect(listFactsMock).toHaveBeenCalledTimes(2);
   });
+
+  it('resets to page 1 when filters change', async () => {
+    const { result } = renderHook(() => useFactsTab());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(listFactsMock.mock.calls[0][0].page).toBe(1);
+
+    // 翻到第 3 页
+    await act(async () => {
+      result.current.pagination.onChange(3, result.current.pagination.pageSize);
+    });
+    await waitFor(() => expect(listFactsMock).toHaveBeenCalledTimes(2));
+    expect(listFactsMock.mock.calls[1][0].page).toBe(3);
+
+    // 筛选变化 → 页码重置回第 1 页
+    await act(async () => {
+      result.current.applyFilters({ q: 'dark' });
+    });
+    await waitFor(() => expect(listFactsMock).toHaveBeenCalledTimes(3));
+    expect(listFactsMock.mock.calls[2][0]).toMatchObject({ page: 1, q: 'dark' });
+  });
 });
