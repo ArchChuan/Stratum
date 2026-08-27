@@ -70,10 +70,13 @@ func newWorkflowE2ERouter(tenantID string, definitions *workflowapp.DefinitionSe
 		c.Next()
 	})
 	h := handler.NewWorkflowHandlerWithControl(definitions, runs, controls)
+	r.GET("/workflows", h.ListDefinitions)
+	r.GET("/workflows/:id", h.GetDefinition)
 	r.POST("/workflows", h.CreateDefinition)
 	r.PUT("/workflows/:id/draft", h.UpdateDefinition)
 	r.POST("/workflows/:id/validate", h.ValidateDefinition)
 	r.POST("/workflows/:id/publish", h.PublishDefinition)
+	r.POST("/workflows/:id/rollback", middleware.RequireTenantRole("admin"), h.RollbackDefinition)
 	r.GET("/workflows/:id/versions/:versionID", h.GetVersion)
 	r.POST("/workflow-runs", h.StartRun)
 	r.GET("/workflow-runs", h.ListRuns)
@@ -336,4 +339,153 @@ func TestWorkflowHTTPPostgresWorkerApprovalRestartAndSSEE2E(t *testing.T) {
 		"version_id": version.ID, "task": "different", "fields": map[string]any{"region": "cn"},
 		"idempotency_key": "workflow-http-e2e-admin-control",
 	}, http.StatusConflict, "member-a", "member")
+}
+
+// TestWorkflowDraftReadAndRollbackE2E 覆盖 PR-A 的详情只读 + 版本回滚能力：
+//  1. 草稿定义（从未发布，active_version_id 为 NULL）可被读取，列表接口不 500（NULL-scan 回归）。
+//  2. 每次发布后 active_version_id 指向最新版本；回滚后指针回到历史版本且不产生新版本。
+//  3. 回滚必须 admin 授权；目标版本属于其他工作流时 fail-closed 返回 404。
+//  4. 回滚写入 resource_change_audits，operation='rollback'。
+func TestWorkflowDraftReadAndRollbackE2E(t *testing.T) {
+	url := strings.TrimSpace(os.Getenv("STRATUM_TEST_POSTGRES_URL"))
+	if url == "" {
+		t.Fatal("STRATUM_TEST_POSTGRES_URL is required; workflow E2E must not skip")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, url)
+	require.NoError(t, err)
+	defer pool.Close()
+	require.NoError(t, postgres.ProvisionPublicSchema(ctx, pool, zap.NewNop()))
+
+	tenantID := uuid.NewString()
+	_, err = pool.Exec(ctx, `INSERT INTO tenants (id,name,slug,status) VALUES ($1,$2,$3,'active')`, tenantID, "Rollback E2E", "rollback-e2e-"+tenantID[:8])
+	require.NoError(t, err)
+	require.NoError(t, postgres.ProvisionTenantSchema(ctx, pool, tenantID))
+	defer func() { _, _ = pool.Exec(ctx, `DELETE FROM tenants WHERE id=$1`, tenantID) }()
+
+	store := workflowpersist.NewPgStore(pool)
+	newID := uuid.NewString
+	definitions := workflowapp.NewDefinitionService(store, store, newID)
+	runs := workflowapp.NewRunServiceWithRegistry(store, store, &workflowE2EExecutor{}, newID, zap.NewNop())
+	controls := workflowapp.NewControlService(store, newID)
+	router := newWorkflowE2ERouter(tenantID, definitions, runs, controls)
+
+	spec := map[string]any{
+		"nodes": []map[string]any{
+			{"id": "agent-a", "type": "agent", "agent_id": "agent-a"},
+		},
+		"edges":           []map[string]any{},
+		"max_concurrency": 1,
+	}
+	inputSchema := map[string]any{
+		"task_label": "任务",
+		"fields":     []map[string]any{{"key": "region", "label": "区域", "type": "short_text", "required": true}},
+	}
+
+	// 1. 创建草稿，验证 NULL active_version_id 可读（列表 + 详情均 200，不 500）。
+	createdBody := workflowRequest(t, router, http.MethodPost, "/workflows", map[string]any{
+		"name": "Rollback demo", "description": "draft", "spec": spec, "input_schema": inputSchema,
+	}, http.StatusCreated)
+	var draft workflowdomain.Definition
+	require.NoError(t, json.Unmarshal(createdBody, &draft))
+	require.Equal(t, int64(1), draft.Revision)
+
+	listBody := workflowRequest(t, router, http.MethodGet, "/workflows", nil, http.StatusOK)
+	var page struct {
+		Workflows []workflowdomain.Definition `json:"workflows"`
+		Total     int                         `json:"total"`
+	}
+	require.NoError(t, json.Unmarshal(listBody, &page))
+	require.Equal(t, 1, page.Total)
+	require.Equal(t, draft.ID, page.Workflows[0].ID)
+
+	detailBody := workflowRequest(t, router, http.MethodGet, "/workflows/"+draft.ID, nil, http.StatusOK)
+	var detail workflowdomain.Definition
+	require.NoError(t, json.Unmarshal(detailBody, &detail))
+	require.Equal(t, draft.ID, detail.ID)
+	require.Empty(t, detail.ActiveVersionID, "draft never published must read back empty (NULL -> COALESCE '')")
+
+	// 2. 发布 v1 → active_version_id 指向 v1。
+	publishedV1 := workflowRequest(t, router, http.MethodPost, "/workflows/"+draft.ID+"/publish", nil, http.StatusCreated)
+	var v1 workflowdomain.Version
+	require.NoError(t, json.Unmarshal(publishedV1, &v1))
+	require.Equal(t, int64(1), v1.Number)
+	require.Equal(t, draft.ID, v1.DefinitionID)
+	require.NotEmpty(t, v1.ID)
+
+	detailBody = workflowRequest(t, router, http.MethodGet, "/workflows/"+draft.ID, nil, http.StatusOK)
+	require.NoError(t, json.Unmarshal(detailBody, &detail))
+	require.Equal(t, v1.ID, detail.ActiveVersionID)
+
+	// 3. 更新草稿并发布 v2 → active_version_id 指向 v2。
+	updatedBody := workflowRequest(t, router, http.MethodPut, "/workflows/"+draft.ID+"/draft", map[string]any{
+		"name": "Rollback demo", "description": "second cut", "spec": spec,
+		"input_schema": inputSchema, "expected_revision": 1,
+	}, http.StatusOK)
+	require.NoError(t, json.Unmarshal(updatedBody, &draft))
+	require.Equal(t, int64(2), draft.Revision)
+	publishedV2 := workflowRequest(t, router, http.MethodPost, "/workflows/"+draft.ID+"/publish", nil, http.StatusCreated)
+	var v2 workflowdomain.Version
+	require.NoError(t, json.Unmarshal(publishedV2, &v2))
+	require.Equal(t, int64(2), v2.Number)
+	require.NotEqual(t, v1.ID, v2.ID)
+
+	detailBody = workflowRequest(t, router, http.MethodGet, "/workflows/"+draft.ID, nil, http.StatusOK)
+	require.NoError(t, json.Unmarshal(detailBody, &detail))
+	require.Equal(t, v2.ID, detail.ActiveVersionID)
+
+	// 4. 另一个工作流（用于验证跨工作流回滚 fail-closed）。
+	otherBody := workflowRequest(t, router, http.MethodPost, "/workflows", map[string]any{
+		"name": "Other workflow", "description": "other", "spec": spec, "input_schema": inputSchema,
+	}, http.StatusCreated)
+	var other workflowdomain.Definition
+	require.NoError(t, json.Unmarshal(otherBody, &other))
+
+	// 5. member 无回滚权限 → 403；admin 回滚到 v1 → 200 且指针回到 v1。
+	workflowRequestAs(t, router, http.MethodPost, "/workflows/"+draft.ID+"/rollback", map[string]any{
+		"versionId": v1.ID,
+	}, http.StatusForbidden, "member-a", "member")
+
+	rollbackBody := workflowRequest(t, router, http.MethodPost, "/workflows/"+draft.ID+"/rollback", map[string]any{
+		"versionId": v1.ID,
+	}, http.StatusOK)
+	var rolledBack workflowdomain.Definition
+	require.NoError(t, json.Unmarshal(rollbackBody, &rolledBack))
+	require.Equal(t, v1.ID, rolledBack.ActiveVersionID)
+
+	// 6. 回滚不产生新版本：workflow_versions 仍为 2 条。
+	var versionCount int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM "tenant_`+tenantID+`".workflow_versions WHERE definition_id=$1`, draft.ID).Scan(&versionCount))
+	require.Equal(t, 2, versionCount, "rollback must not create a new version")
+
+	// 7. 回滚写入审计：operation='rollback'。
+	var auditCount int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM "tenant_`+tenantID+`".resource_change_audits WHERE resource_id=$1 AND operation='rollback'`, draft.ID).Scan(&auditCount))
+	require.Equal(t, 1, auditCount, "rollback must be audited")
+
+	// 8. 跨工作流回滚 → fail-closed 404。
+	workflowRequest(t, router, http.MethodPost, "/workflows/"+other.ID+"/rollback", map[string]any{
+		"versionId": v1.ID,
+	}, http.StatusNotFound)
+
+	// 9. 回滚后从该工作流启动 run，版本快照应是回滚后的 v1。
+	startedBody := workflowRequestAs(t, router, http.MethodPost, "/workflow-runs", map[string]any{
+		"version_id": v1.ID, "task": "hello", "fields": map[string]any{"region": "cn"},
+		"idempotency_key": "rollback-e2e-run",
+	}, http.StatusAccepted, "member-a", "member")
+	var started struct {
+		RunID  string                   `json:"run_id"`
+		Status workflowdomain.RunStatus `json:"status"`
+	}
+	require.NoError(t, json.Unmarshal(startedBody, &started))
+	require.Equal(t, workflowdomain.RunStatusQueued, started.Status)
+	require.NotEmpty(t, started.RunID)
+
+	// 持久化证据：run 引用 v1 作为其版本快照。
+	var runVersionID string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT version_id FROM "tenant_`+tenantID+`".workflow_runs WHERE id=$1`, started.RunID).Scan(&runVersionID))
+	require.Equal(t, v1.ID, runVersionID, "post-rollback run must use the rolled-back version snapshot")
 }

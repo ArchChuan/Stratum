@@ -164,14 +164,15 @@ type Spec struct {
 }
 
 type Definition struct {
-	ID          string      `json:"id"`
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	Revision    int64       `json:"revision"`
-	Spec        Spec        `json:"spec"`
-	InputSchema InputSchema `json:"input_schema"`
-	CreatedAt   time.Time   `json:"created_at"`
-	UpdatedAt   time.Time   `json:"updated_at"`
+	ID              string      `json:"id"`
+	Name            string      `json:"name"`
+	Description     string      `json:"description"`
+	Revision        int64       `json:"revision"`
+	ActiveVersionID string      `json:"active_version_id,omitempty"`
+	Spec            Spec        `json:"spec"`
+	InputSchema     InputSchema `json:"input_schema"`
+	CreatedAt       time.Time   `json:"created_at"`
+	UpdatedAt       time.Time   `json:"updated_at"`
 }
 
 func NewDefinition(id, name, description string, spec Spec, schemas ...InputSchema) (*Definition, error) {

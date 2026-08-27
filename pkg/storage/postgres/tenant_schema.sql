@@ -990,6 +990,8 @@ CREATE TABLE IF NOT EXISTS workflow_definitions (
     id              UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),
     name            TEXT        NOT NULL,
     description     TEXT        NOT NULL DEFAULT '',
+    -- 生效指针：指向 workflow_versions 当前生效版本（无 FK，与 agents.active_version_id 一致）
+    active_version_id TEXT,
     draft_revision  BIGINT      NOT NULL DEFAULT 1,
     draft_spec_json JSONB       NOT NULL DEFAULT '{}',
     draft_input_schema_json JSONB NOT NULL DEFAULT '{"task_label":"任务","fields":[]}',
@@ -998,6 +1000,7 @@ CREATE TABLE IF NOT EXISTS workflow_definitions (
     UNIQUE (name)
 );
 ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS active_version_id TEXT;
 ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS draft_revision BIGINT NOT NULL DEFAULT 1;
 ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS draft_spec_json JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS draft_input_schema_json JSONB NOT NULL DEFAULT '{"task_label":"任务","fields":[]}';

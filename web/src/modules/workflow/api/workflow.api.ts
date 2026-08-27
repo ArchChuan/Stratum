@@ -43,6 +43,10 @@ export const workflowApi = {
     const response = await api.post(`/workflows/${workflowId}/publish`);
     return workflowVersionSchema.parse(response.data);
   },
+  rollbackWorkflow: async (workflowId: string, versionId: string) => {
+    const response = await api.post(`/workflows/${workflowId}/rollback`, { versionId });
+    return workflowDefinitionSchema.parse(response.data);
+  },
   listWorkflowVersions: async (workflowId: string, { page, pageSize }: { page: number; pageSize: number }) => {
     const response = await api.get(`/workflows/${workflowId}/versions`, { params: { page, page_size: pageSize } });
     return workflowVersionPageSchema.parse(response.data);
