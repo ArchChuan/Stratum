@@ -71,7 +71,7 @@ WITH grouped AS (
         ps.value
     FROM platform_settings ps
     JOIN (VALUES
-        -- agent (11)
+        -- agent (13)
         ('agent.compaction_prompt'),
         ('agent.compaction_temperature'),
         ('agent.compaction_model'),
@@ -83,6 +83,8 @@ WITH grouped AS (
         ('agent.factcheck.judge.prompt'),
         ('agent.factcheck.top_k'),
         ('agent.factcheck.max_claims'),
+        ('agent.factcheck.citation_verify'),
+        ('agent.factcheck.judge.temperature'),
         -- evaluation (6)
         ('evaluation.optimizer.model'),
         ('evaluation.optimizer.temperature'),

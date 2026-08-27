@@ -10,6 +10,7 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/textchunk"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 // Verdict 固定枚举，judge 输出与 Report 推导共用。
@@ -35,6 +36,10 @@ type Settings struct {
 	EvidenceFn func(ctx context.Context, workspaces []string, query string, topK int, viewerID string) (port.RAGSearchEvidence, error)
 	TopK       int
 	MaxClaims  int
+	// CitationVerify 开启对账轨（代码级核验最终输出中的 <tool_ref:ID> 声称 vs
+	// ToolObservation 记录），可与 Enabled 独立：Enabled=false 时单开也能跑对账，
+	// 此时 Judge/EvidenceFn 可缺失（对账轨不依赖 judge）。
+	CitationVerify bool
 	// Logger 记录降级原因（不记原始输出/PII）；nil 时静默。
 	Logger *zap.Logger
 }
@@ -63,40 +68,90 @@ func New(s Settings) Checker {
 func (c *checker) Check(ctx context.Context, input domain.FactCheckInput) *domain.FactCheckReport {
 	// fail-closed：开关关 / 依赖缺失 / 空 viewerID 均不校验。viewerID 空时
 	// RAGService 的 SkipAccessCheck 会整体旁路 D2 门控，必须在此显式守卫，
-	// 不依赖检索 fn 内部的条件。
-	if !c.settings.Enabled || c.settings.Judge == nil || c.settings.EvidenceFn == nil || input.ViewerID == "" {
+	// 不依赖检索 fn 内部的条件。对账轨（CitationVerify + 有观察记录）不依赖
+	// judge/viewerID，可与 judge 轨独立开启。
+	judgeOn := c.settings.Enabled && c.settings.Judge != nil && c.settings.EvidenceFn != nil && input.ViewerID != ""
+	citationOn := c.settings.CitationVerify && len(input.ToolObservations) > 0
+	if !judgeOn && !citationOn {
 		c.warn("factcheck skip: fail-closed",
 			zap.Bool("enabled", c.settings.Enabled),
+			zap.Bool("citation_verify", c.settings.CitationVerify),
 			zap.Bool("judge_nil", c.settings.Judge == nil),
 			zap.Bool("evidence_nil", c.settings.EvidenceFn == nil),
-			zap.Bool("viewer_empty", input.ViewerID == ""))
+			zap.Bool("viewer_empty", input.ViewerID == ""),
+			zap.Int("observations", len(input.ToolObservations)))
 		return nil
 	}
+	report := &domain.FactCheckReport{Checked: true, IsValid: true}
+	if citationOn {
+		c.reconcileReport(input, report)
+	}
+	if !judgeOn {
+		return report
+	}
+	return c.judgeReport(ctx, input, report, citationOn)
+}
+
+// reconcileReport 跑对账轨：最终输出中的引用 vs 内存 ToolObservation 记录，
+// 叠加 ToolReferences/Unverified 并推导 IsValid 与 RiskPoints。对账是代码级
+// 核验，judge 轨不可用时仍是独立事实核验。
+func (c *checker) reconcileReport(input domain.FactCheckInput, report *domain.FactCheckReport) {
+	refs, unverified := reconcileCitations(input.Output, input.ToolObservations)
+	report.ToolReferences = refs
+	report.UnverifiedClaims = unverified
+	report.UnverifiedCount = len(unverified)
+	for _, ref := range refs {
+		if ref.Classification == ClassVerificationFailed || ref.Classification == ClassInvalidReference {
+			report.IsValid = false
+			report.RiskPoints++
+		}
+	}
+}
+
+// judgeReport 跑 LLM-as-Judge 轨：拆 claim → 检索证据 → 判定 → 叠加到 report。
+// judge 依赖失败时：有对账结果则保留（对账不被 judge 失败吞掉），否则沿既有
+// fail-open 返回 nil（不阻塞 agent 执行）。
+func (c *checker) judgeReport(ctx context.Context, input domain.FactCheckInput, report *domain.FactCheckReport, citationOn bool) *domain.FactCheckReport {
 	claims := extractClaims(input.Output, c.settings.MaxClaims)
 	if len(claims) == 0 {
-		return &domain.FactCheckReport{Checked: true, IsValid: true}
+		return report
 	}
-	// 独立超时预算：检索/judge 慢或超时不阻塞 agent 执行，直接降级为不校验。
+	// 独立超时预算：检索/judge 慢或超时不阻塞 agent 执行，直接降级。
 	ctx, cancel := context.WithTimeout(ctx, constants.AgentFactCheckTimeout)
 	defer cancel()
 
 	evidence, err := c.gatherEvidence(ctx, input, claims)
 	if err != nil {
 		c.warn("factcheck skip: evidence search failed", zap.Int("claims", len(claims)), zap.Error(err))
-		return nil
+		return degradeReport(report, citationOn)
 	}
 	if evidence == "" {
 		c.warn("factcheck skip: no evidence", zap.Int("claims", len(claims)))
-		return nil
+		return degradeReport(report, citationOn)
 	}
 	c.warn("factcheck evidence ok", zap.Int("claims", len(claims)), zap.Int("evidence_bytes", len(evidence)))
 	verdicts, err := c.settings.Judge.JudgeClaims(ctx, claims, evidence)
 	if err != nil {
 		c.warn("factcheck skip: judge failed", zap.Int("claims", len(claims)), zap.Error(err))
-		return nil
+		return degradeReport(report, citationOn)
 	}
 	c.warn("factcheck verdicts ok", zap.Int("verdicts", len(verdicts)))
-	return summarize(verdicts)
+	judgeResult := summarize(verdicts)
+	report.Claims = judgeResult.Claims
+	if !judgeResult.IsValid {
+		report.IsValid = false
+	}
+	report.RiskPoints += judgeResult.RiskPoints
+	return report
+}
+
+// degradeReport 对 judge 轨降级：无对账结果时返回 nil（沿既有 fail-open），
+// 有对账结果时保留 report（对账是独立事实核验，不应被 judge 失败吞掉）。
+func degradeReport(report *domain.FactCheckReport, citationOn bool) *domain.FactCheckReport {
+	if !citationOn {
+		return nil
+	}
+	return report
 }
 
 func (c *checker) warn(msg string, fields ...zap.Field) {
@@ -106,20 +161,42 @@ func (c *checker) warn(msg string, fields ...zap.Field) {
 }
 
 // gatherEvidence 逐 claim 独立 RAG 检索并拼接证据（每 claim 一行 + 其命中内容），
-// 使 judge 能区分各 claim 的证据支撑。
+// 使 judge 能区分各 claim 的证据支撑。检索并行执行（有界并发，信号量限流）但
+// 结果按 claim 索引保序写入，保证证据拼接顺序与 claims 输入一致。任一检索失败
+// 即传播首个错误（errgroup 取消其余），沿既有降级路径返回。
 func (c *checker) gatherEvidence(ctx context.Context, input domain.FactCheckInput, claims []string) (string, error) {
-	var parts []string
+	parts := make([]string, len(claims))
+	g, gctx := errgroup.WithContext(ctx)
+	sem := make(chan struct{}, constants.AgentFactCheckEvidenceConcurrency)
 	for i, claim := range claims {
-		ev, err := c.settings.EvidenceFn(ctx, input.Workspaces, claim, c.settings.TopK, input.ViewerID)
-		if err != nil {
-			return "", err
-		}
-		if strings.TrimSpace(ev.Content) == "" {
-			continue
-		}
-		parts = append(parts, fmt.Sprintf("[claim %d] %s\n%s", i, claim, ev.Content))
+		g.Go(func() error {
+			select {
+			case sem <- struct{}{}:
+			case <-gctx.Done():
+				return gctx.Err()
+			}
+			defer func() { <-sem }()
+			ev, err := c.settings.EvidenceFn(gctx, input.Workspaces, claim, c.settings.TopK, input.ViewerID)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(ev.Content) == "" {
+				return nil
+			}
+			parts[i] = fmt.Sprintf("[claim %d] %s\n%s", i, claim, ev.Content)
+			return nil
+		})
 	}
-	return strings.Join(parts, "\n\n"), nil
+	if err := g.Wait(); err != nil {
+		return "", err
+	}
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, "\n\n"), nil
 }
 
 // extractClaims 从最终输出提取待校验的候选断言：先整体剥掉 markdown code

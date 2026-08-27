@@ -41,4 +41,28 @@ func TestParseClaimVerdicts(t *testing.T) {
 		_, err := ParseClaimVerdicts(`{"claims": not-json}`)
 		require.Error(t, err)
 	})
+
+	t.Run("unknown verdict normalized to unsupported", func(t *testing.T) {
+		verdicts, err := ParseClaimVerdicts(`{"claims":[
+			{"text":"A","verdict":"MAYBE","risk":3},
+			{"text":"B","verdict":"","risk":1},
+			{"text":"C","verdict":"SUPPORTED","risk":0}
+		]}`)
+		require.NoError(t, err)
+		require.Len(t, verdicts, 3)
+		// 未知/空枚举保守回退 UNSUPPORTED，合法枚举原样保留。
+		require.Equal(t, VerdictUnsupported, verdicts[0].Verdict)
+		require.Equal(t, VerdictUnsupported, verdicts[1].Verdict)
+		require.Equal(t, VerdictSupported, verdicts[2].Verdict)
+	})
+
+	t.Run("risk clamped to 0..5", func(t *testing.T) {
+		verdicts, err := ParseClaimVerdicts(`{"claims":[
+			{"text":"A","verdict":"CONTRADICTED","risk":-3},
+			{"text":"B","verdict":"SUPPORTED","risk":99}
+		]}`)
+		require.NoError(t, err)
+		require.Equal(t, 0, verdicts[0].Risk)
+		require.Equal(t, 5, verdicts[1].Risk)
+	})
 }

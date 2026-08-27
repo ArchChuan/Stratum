@@ -274,6 +274,52 @@ export interface NoAnswerInfo {
   Detail?: string;
 }
 
+// ToolReferenceClassification 是工具引用声称的五态对账枚举（与后端
+// factcheck/reconcile.go 分类常量逐值对齐）。verified=核验通过（折叠不展示）；
+// verification_failed=引用真实但工具确凿失败/从未发出；outcome_unknown=结果
+// 不确定（advisory）；invalid_reference=引用无法对应任何工具调用；
+// unverified=含操作声称但未带引用的软标记（单独走 unverifiedClaims）。
+export type ToolReferenceClassification =
+  | 'verified'
+  | 'verification_failed'
+  | 'outcome_unknown'
+  | 'invalid_reference'
+  | 'unverified';
+
+// ToolReferenceVerdict 是单个 <tool_ref:ID> 声称的对账判定（SSE done 帧
+// factCheck.toolReferences 项，camelCase 与 Go json tag 对齐）。
+export interface ToolReferenceVerdict {
+  claimText?: string;
+  toolName?: string;
+  toolCallId?: string;
+  reference?: string;
+  status?: string;
+  outcome?: string;
+  classification: ToolReferenceClassification;
+  risk: number;
+}
+
+// ClaimVerdict 是单个 claim 的 LLM-as-Judge 判定（factCheck.claims 项）。
+export interface ClaimVerdict {
+  text: string;
+  verdict: string;
+  risk: number;
+}
+
+// FactCheckReport 是幻觉防护的展示型报告（advisory，只展示）。checked 标记本次
+// 确实校验；isValid=false 表示存在核验失败/无效引用；toolReferences 是对账条目
+// （verified 折叠）；unverifiedClaims 含操作声称但未带引用的句子。SSE done 帧
+// factCheck 键透出，校验关/旧后端时缺省。
+export interface FactCheckReport {
+  checked: boolean;
+  claims: ClaimVerdict[];
+  isValid: boolean;
+  riskPoints: number;
+  toolReferences?: ToolReferenceVerdict[];
+  unverifiedCount?: number;
+  unverifiedClaims?: string[];
+}
+
 export const chatMessageSchema = z
   .object({
     id: z.string().optional(),
@@ -309,6 +355,8 @@ export interface ChatMessage {
   noAnswer?: NoAnswerInfo;
   /** 跨会话目标进度摘要（stratum_task_snapshot 透出）；无则 undefined */
   taskSnapshot?: TaskSnapshot;
+  /** 幻觉防护对账报告（advisory，只展示；校验关/旧后端缺省） */
+  factCheck?: FactCheckReport;
   [key: string]: unknown;
 }
 
@@ -328,6 +376,8 @@ export interface AgentExecutionResult {
   sources?: ChatCitationSource[];
   /** 无答案结构化信号：nil/缺失=有答案（omitempty），渲染拒答提示用 */
   noAnswer?: NoAnswerInfo;
+  /** 幻觉防护对账报告（advisory，校验关/旧后端缺省） */
+  factCheck?: FactCheckReport;
   error?: string;
   metadata?: Record<string, unknown>;  // SSE done 白名单透出（thoughtsJSON/toolCallsJSON/stratum_task_snapshot）
   [key: string]: unknown;

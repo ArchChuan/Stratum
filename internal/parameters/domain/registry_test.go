@@ -403,3 +403,31 @@ func TestFactCheckJudgePromptIsPlatformEditable(t *testing.T) {
 		t.Errorf("control = %q, want textarea", def.VisualHint.Control)
 	}
 }
+
+// TestFactCheckCitationAndTemperatureRegistered pins the platform-page contract
+// for the claim-citation feature params: 对账轨开关与 judge 温度必须保持 platform
+// 域、非 sensitive、默认值语义（citation_verify 默认关 = fail-closed；temperature
+// 0 = unset 用模型默认）。
+func TestFactCheckCitationAndTemperatureRegistered(t *testing.T) {
+	r := NewParametersRegistry()
+	cases := []struct {
+		key       string
+		platform  bool
+		sensitive bool
+	}{
+		{"agent.factcheck.citation_verify", true, false},
+		{"agent.factcheck.judge.temperature", true, false},
+	}
+	for _, tc := range cases {
+		def, ok := r.Get(tc.key)
+		if !ok {
+			t.Fatalf("%s not registered", tc.key)
+		}
+		if tc.platform && def.Scope != ScopePlatform {
+			t.Errorf("%s scope = %q, want platform", tc.key, def.Scope)
+		}
+		if def.Sensitive {
+			t.Errorf("%s must not be Sensitive", tc.key)
+		}
+	}
+}

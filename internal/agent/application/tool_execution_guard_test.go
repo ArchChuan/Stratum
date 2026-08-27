@@ -280,6 +280,52 @@ func TestSystemAssistantToolInputSchemasCompileForSharedExecutionGuard(t *testin
 	}
 }
 
+// errorResultMCPExecutor 返回 IsError=true 的结果，模拟远端工具真实执行但明确报错。
+type errorResultMCPExecutor struct{}
+
+func (errorResultMCPExecutor) ExecuteMCPTool(
+	context.Context, string, string, map[string]any,
+) (port.MCPToolResult, error) {
+	return port.MCPToolResult{IsError: true}, nil
+}
+
+func TestToolExecutionGuardWrapsDefiniteFailureOutcome(t *testing.T) {
+	guard := NewToolExecutionGuard(ToolExecutionGuardDeps{
+		Authorizer: NewToolAuthorizer(stubToolUserScopeResolver{
+			scope: port.ToolUserScope{UserActive: true, AllowsTool: true},
+		}),
+		Executor: errorResultMCPExecutor{},
+	})
+
+	_, err := guard.Execute(context.Background(), authorizedToolExecutionRequest())
+
+	var execErr *port.MCPToolExecutionError
+	require.ErrorAs(t, err, &execErr)
+	require.Equal(t, port.ToolExecutionOutcomeDefiniteFailure, execErr.Outcome)
+	require.ErrorIs(t, err, ErrMCPToolResult)
+}
+
+func TestToolExecutionGuardWrapsSchemaMismatchAsUnknownOutcome(t *testing.T) {
+	guard := NewToolExecutionGuard(ToolExecutionGuardDeps{
+		Authorizer: NewToolAuthorizer(stubToolUserScopeResolver{
+			scope: port.ToolUserScope{UserActive: true, AllowsTool: true},
+		}),
+		Executor: &countingMCPExecutor{},
+	})
+	req := authorizedToolExecutionRequest()
+	// 输出 schema 要求 number，executor 返回 text → schema 校验失败，归类 outcome_unknown。
+	req.Tool.OutputSchema = map[string]any{
+		"type": "number",
+	}
+
+	_, err := guard.Execute(context.Background(), req)
+
+	var execErr *port.MCPToolExecutionError
+	require.ErrorAs(t, err, &execErr)
+	require.Equal(t, port.ToolExecutionOutcomeUnknown, execErr.Outcome)
+	require.ErrorIs(t, err, ErrMCPToolResultSchema)
+}
+
 func authorizedToolExecutionRequest() ToolExecutionRequest {
 	return ToolExecutionRequest{
 		TenantID: "tenant-1", UserID: "user-1", AgentID: "agent-1", ToolCallID: "call-1",
