@@ -20,8 +20,15 @@ func setupFactRepoTest(t *testing.T) (*pgxpool.Pool, *persistence.FactRepo) {
 }
 
 func TestFactRepo_Insert(t *testing.T) {
-	_, repo := setupFactRepoTest(t)
+	pool, repo := setupFactRepoTest(t)
 	ctx := context.Background()
+
+	// memory_facts.conversation_id FK 指向 chat_conversations（tenant schema
+	// ALTER TABLE 引入），fixture 必须预置 agent + conversation。
+	insertIntoTenantSchema(t, pool, "tenant_"+testFactTenant,
+		`INSERT INTO agents (id, name) VALUES ('e2e-fact-agent', 'e2e')`)
+	insertIntoTenantSchema(t, pool, "tenant_"+testFactTenant,
+		`INSERT INTO chat_conversations (id, agent_id, user_id) VALUES ('11111111-1111-1111-1111-111111111111', 'e2e-fact-agent', 'user123')`)
 
 	fact, err := domain.NewFactWithMeta(testFactTenant, "user123", "", "11111111-1111-1111-1111-111111111111", "user", "User prefers dark mode", 0.8, 0.9, "preference", domain.FactSourceExplicitUser, []string{"UI", "preference"})
 	require.NoError(t, err)
@@ -97,7 +104,9 @@ func TestFactRepo_CountByUser(t *testing.T) {
 	userActive2, _ := domain.NewFact(testFactTenant, "user123", "", "", "user", "Fact 2", 0.7, []string{})
 	agentScoped, _ := domain.NewFact(testFactTenant, "user123", "agent1", "", "agent", "Fact 3", 0.6, []string{})
 	userSuperseded, _ := domain.NewFact(testFactTenant, "user123", "", "", "user", "Fact 4", 0.5, []string{})
-	require.NoError(t, userSuperseded.MarkSuperseded("fact-new"))
+	// superseded_by 是 UUID 列且 FK 指向 memory_facts(id)：必须指向真实 fact id，
+	// 不能传非 uuid 字面量。userActive 在循环中先于 userSuperseded 插入，FK 满足。
+	require.NoError(t, userSuperseded.MarkSuperseded(userActive.ID))
 	userArchived, _ := domain.NewFact(testFactTenant, "user123", "", "", "user", "Fact 5", 0.4, []string{})
 	require.NoError(t, userArchived.MarkArchived())
 	otherUser, _ := domain.NewFact(testFactTenant, "other", "", "", "user", "Fact 6", 0.3, []string{})
