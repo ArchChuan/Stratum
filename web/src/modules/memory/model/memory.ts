@@ -29,6 +29,10 @@ export const memoryFactSchema = z.object({
   importance: z.number(),
   created_at: z.string(),
   updated_at: z.string(),
+  confidence: z.number(),
+  category: z.string(),
+  source: z.string(),
+  status: z.string(),
 });
 export type MemoryFact = z.infer<typeof memoryFactSchema>;
 
@@ -65,3 +69,69 @@ export const memoryEntityListPageSchema = z.object({
   total: z.number(),
 });
 export type MemoryEntityListPage = z.infer<typeof memoryEntityListPageSchema>;
+
+// 用户记忆事实管理列表页（对齐 dto.MemoryFactListResponse）。
+export const memoryFactListPageSchema = z.object({
+  facts: z.array(memoryFactSchema),
+  total: z.number(),
+});
+export type MemoryFactListPage = z.infer<typeof memoryFactListPageSchema>;
+
+// 更新事实响应：vector_sync_failed 为 true 表示内容已保存但向量同步失败待后台补偿。
+export const updateMemoryFactResponseSchema = z.object({
+  fact: memoryFactSchema,
+  vector_sync_failed: z.boolean(),
+});
+export type UpdateMemoryFactResponse = z.infer<typeof updateMemoryFactResponseSchema>;
+
+// 用户记忆摘要（对齐 dto.MemorySummaryResponse）。
+export const memorySummarySchema = z.object({
+  id: z.string(),
+  summary: z.string(),
+  tier: z.string(),
+  importance: z.number(),
+  conversation_id: z.string(),
+  period_end: z.string(),
+  created_at: z.string(),
+});
+export type MemorySummary = z.infer<typeof memorySummarySchema>;
+export const memorySummaryListPageSchema = z.object({
+  summaries: z.array(memorySummarySchema),
+  total: z.number(),
+});
+export type MemorySummaryListPage = z.infer<typeof memorySummaryListPageSchema>;
+
+// 用户记忆快照（对齐 dto.MemorySnapshotResponse）。
+export const memorySnapshotSchema = z.object({
+  agent_id: z.string(),
+  work_context: z.array(z.string()),
+  personal_context: z.array(z.string()),
+  top_of_mind: z.array(z.string()),
+  expires_at: z.string(),
+  updated_at: z.string(),
+  status: z.string(),
+});
+export type MemorySnapshot = z.infer<typeof memorySnapshotSchema>;
+export const memorySnapshotListSchema = z.object({
+  snapshots: z.array(memorySnapshotSchema),
+});
+export type MemorySnapshotList = z.infer<typeof memorySnapshotListSchema>;
+
+// 记忆条目管理列表项（管理侧对齐 dto.MemoryEntryResponse；与 v1 memoryEntrySchema
+// 的搜索/Embedding 形状不同，不复用旧 schema）。
+export const memoryEntryItemSchema = z.object({
+  id: z.string(),
+  role: z.string(),
+  content: z.string(),
+  type: z.string(),
+  scope: z.string(),
+  importance: z.number(),
+  created_at: z.string(),
+  expires_at: z.string().nullable(),
+});
+export type MemoryEntryItem = z.infer<typeof memoryEntryItemSchema>;
+export const memoryEntryListPageSchema = z.object({
+  entries: z.array(memoryEntryItemSchema),
+  total: z.number(),
+});
+export type MemoryEntryListPage = z.infer<typeof memoryEntryListPageSchema>;
