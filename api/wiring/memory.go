@@ -136,6 +136,8 @@ func (c *Container) buildMemoryService(mem *Memory, db *pgxpool.Pool, memRepo me
 	// SetExtractionQueue 注入；此处传 nil，flush 路径显式降级。
 	mem.Service = memory.NewMemoryService(factRepo, entityRepo, nil, nil, nil, nil, messageBufferStore, c.Logger)
 	mem.Service.SetMemoryRepo(memRepo)
+	mem.Service.SetHistoryRepo(persistence.NewHistoryRepo(db))
+	mem.Service.SetActiveSnapshotRepo(persistence.NewActiveSnapshotRepo(db))
 
 	if c.LLMGateway != nil && c.LLMGateway.Registry != nil {
 		llmRes := newTenantCapabilityResolver(

@@ -615,6 +615,18 @@ func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 	g.GET("/entities", userHandler.GetEntities)
 	g.GET("/summary/:session_id", userHandler.GetSummary)
 	g.DELETE("/session/:session_id", userHandler.ClearSession)
+	g.GET("/facts", userHandler.ListFacts)
+	g.GET("/facts/:id", userHandler.GetFact)
+	g.PATCH("/facts/:id", userHandler.UpdateFact)
+	g.DELETE("/facts/:id", userHandler.DeleteFact)
+	g.DELETE("/entities/:id", userHandler.DeleteEntity)
+	g.GET("/summaries", userHandler.ListSummaries)
+	g.DELETE("/summaries/:id", userHandler.DeleteSummary)
+	g.GET("/snapshots", userHandler.ListSnapshots)
+	g.PATCH("/snapshots/:agent_id", userHandler.UpdateSnapshot)
+	g.DELETE("/snapshots/:agent_id", userHandler.DeleteSnapshot)
+	g.GET("/entries", userHandler.ListEntries)
+	g.DELETE("/entries/:id", userHandler.DeleteEntry)
 }
 
 // registerLLMAdmin wires /admin/providers and /admin/models under JWT + tenant

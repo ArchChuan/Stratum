@@ -6,12 +6,15 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/memory/application"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -29,6 +32,21 @@ type fakeUserMemorySvc struct {
 	entities      []*application.UserMemoryEntity
 	entitiesTotal int
 	entitiesErr   error
+
+	factsReq          *application.ListUserFactsFilteredRequest
+	factDetails       []*application.UserFactDetail
+	factTotal         int
+	factsErr          error
+	factDetail        *application.UserFactDetail
+	factErr           error
+	vectorSyncFailed  bool
+	summaries         []*application.UserSummary
+	summaryTotal      int
+	snapshots         []*application.UserSnapshot
+	snapshot          *application.UserSnapshot
+	lastSnapshotPatch *application.UpdateUserSnapshotPatch
+	entries           []*application.UserEntry
+	entryTotal        int
 }
 
 func (f *fakeUserMemorySvc) ClearUserMemories(_ context.Context, _ *application.ClearUserMemoriesRequest) error {
@@ -47,6 +65,54 @@ func (f *fakeUserMemorySvc) UserStats(_ context.Context, _, _ string) (int, int,
 func (f *fakeUserMemorySvc) ListUserEntities(_ context.Context, req *application.ListUserEntitiesRequest) ([]*application.UserMemoryEntity, int, error) {
 	f.entitiesReq = req
 	return f.entities, f.entitiesTotal, f.entitiesErr
+}
+
+func (f *fakeUserMemorySvc) ListUserFactsFiltered(_ context.Context, req *application.ListUserFactsFilteredRequest) ([]*application.UserFactDetail, int, error) {
+	f.factsReq = req
+	return f.factDetails, f.factTotal, f.factsErr
+}
+
+func (f *fakeUserMemorySvc) GetUserFact(_ context.Context, _, _, _ string) (*application.UserFactDetail, error) {
+	return f.factDetail, f.factErr
+}
+
+func (f *fakeUserMemorySvc) UpdateUserFact(_ context.Context, _, _, _ string, _ *application.UpdateUserFactPatch) (*application.UserFactDetail, bool, error) {
+	return f.factDetail, f.vectorSyncFailed, f.factErr
+}
+
+func (f *fakeUserMemorySvc) DeleteUserFact(_ context.Context, _, _, _ string) error { return f.factErr }
+
+func (f *fakeUserMemorySvc) DeleteUserEntity(_ context.Context, _, _, _ string) error {
+	return f.factErr
+}
+
+func (f *fakeUserMemorySvc) ListUserSummaries(_ context.Context, _, _ string, _, _ int) ([]*application.UserSummary, int, error) {
+	return f.summaries, f.summaryTotal, f.factErr
+}
+
+func (f *fakeUserMemorySvc) DeleteUserSummary(_ context.Context, _, _, _ string) error {
+	return f.factErr
+}
+
+func (f *fakeUserMemorySvc) ListUserSnapshots(_ context.Context, _, _ string) ([]*application.UserSnapshot, error) {
+	return f.snapshots, f.factErr
+}
+
+func (f *fakeUserMemorySvc) UpdateUserSnapshot(_ context.Context, _, _, _ string, patch *application.UpdateUserSnapshotPatch) (*application.UserSnapshot, error) {
+	f.lastSnapshotPatch = patch
+	return f.snapshot, f.factErr
+}
+
+func (f *fakeUserMemorySvc) DeleteUserSnapshot(_ context.Context, _, _, _ string) error {
+	return f.factErr
+}
+
+func (f *fakeUserMemorySvc) ListUserEntries(_ context.Context, _, _ string, _, _ int, _ string) ([]*application.UserEntry, int, error) {
+	return f.entries, f.entryTotal, f.factErr
+}
+
+func (f *fakeUserMemorySvc) DeleteUserEntry(_ context.Context, _, _, _ string) error {
+	return f.factErr
 }
 
 type fakeMemoryMgr struct{}
@@ -82,6 +148,27 @@ func setupUserMemoryRouter(svc *fakeUserMemorySvc, tenantID, userID string) *gin
 	}
 
 	h := NewUserMemoryHandler(svc, nil, nil)
+	g := r.Group("/memory", injectClaims)
+	g.DELETE("/clear", h.ClearMemories)
+	g.GET("", h.ListMemories)
+	g.POST("/sessions", h.ListSessions)
+	g.GET("/stats", h.GetStats)
+	g.GET("/entities", h.GetEntities)
+	g.GET("/summary/:session_id", h.GetSummary)
+	g.DELETE("/session/:session_id", h.ClearSession)
+	g.GET("/facts", h.ListFacts)
+	g.GET("/facts/:id", h.GetFact)
+	g.PATCH("/facts/:id", h.UpdateFact)
+	g.DELETE("/facts/:id", h.DeleteFact)
+	g.DELETE("/entities/:id", h.DeleteEntity)
+	g.GET("/summaries", h.ListSummaries)
+	g.DELETE("/summaries/:id", h.DeleteSummary)
+	g.GET("/snapshots", h.ListSnapshots)
+	g.PATCH("/snapshots/:agent_id", h.UpdateSnapshot)
+	g.DELETE("/snapshots/:agent_id", h.DeleteSnapshot)
+	g.GET("/entries", h.ListEntries)
+	g.DELETE("/entries/:id", h.DeleteEntry)
+
 	r.DELETE("/api/memory/clear", injectClaims, h.ClearMemories)
 	return r
 }
@@ -420,4 +507,95 @@ func TestGetEntities_serviceError(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
 	}
+}
+
+func TestUserMemoryHandler_ListFacts(t *testing.T) {
+	svc := &fakeUserMemorySvc{factDetails: []*application.UserFactDetail{
+		{ID: "fact-1", Content: "dark mode", Category: "preference", Confidence: 0.9},
+	}, factTotal: 1}
+	r := setupUserMemoryRouter(svc, "tenant-1", "user-1")
+	req := httptest.NewRequest(http.MethodGet, "/memory/facts?q=dark&category=preference&page=1&page_size=10", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), `"category":"preference"`)
+}
+
+func TestUserMemoryHandler_UpdateFact(t *testing.T) {
+	svc := &fakeUserMemorySvc{factDetail: &application.UserFactDetail{ID: "fact-1", Content: "new content"}}
+	r := setupUserMemoryRouter(svc, "tenant-1", "user-1")
+	body := `{"content":"new content"}`
+	req := httptest.NewRequest(http.MethodPatch, "/memory/facts/fact-1", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Contains(t, w.Body.String(), `"content":"new content"`)
+	require.Contains(t, w.Body.String(), `"vector_sync_failed":false`)
+}
+
+func TestUserMemoryHandler_UpdateFactEmptyPatch(t *testing.T) {
+	svc := &fakeUserMemorySvc{}
+	r := setupUserMemoryRouter(svc, "tenant-1", "user-1")
+	req := httptest.NewRequest(http.MethodPatch, "/memory/facts/fact-1", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestUserMemoryHandler_DeleteFact(t *testing.T) {
+	svc := &fakeUserMemorySvc{}
+	r := setupUserMemoryRouter(svc, "tenant-1", "user-1")
+	req := httptest.NewRequest(http.MethodDelete, "/memory/facts/fact-1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusNoContent, w.Code)
+}
+
+// ListEntries 的 gen.MemoryEntryItemResponse.ExpiresAt 是非指针 time.Time：
+// nil 过期时间落零值，非 nil 原样透传（防 panic / 防泄漏内部指针）。
+func TestUserMemoryHandler_ListEntries_ExpiresAtConversion(t *testing.T) {
+	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	expires := now.Add(24 * time.Hour)
+	svc := &fakeUserMemorySvc{
+		entries: []*application.UserEntry{
+			{ID: "entry-1", Role: "user", Content: "hello", Type: "text", Scope: "user", Importance: 0.5, CreatedAt: now, ExpiresAt: &expires},
+			{ID: "entry-2", Role: "assistant", Content: "hi", Type: "text", Scope: "user", Importance: 0.4, CreatedAt: now},
+		},
+		entryTotal: 2,
+	}
+	r := setupUserMemoryRouter(svc, "tenant-1", "user-1")
+	req := httptest.NewRequest(http.MethodGet, "/memory/entries?page=1&page_size=20", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	var got struct {
+		Entries []map[string]any `json:"entries"`
+		Total   int64            `json:"total"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.Equal(t, int64(2), got.Total)
+	require.Equal(t, expires.Format(time.RFC3339Nano), got.Entries[0]["expires_at"])
+	require.Equal(t, time.Time{}.Format(time.RFC3339Nano), got.Entries[1]["expires_at"])
+}
+
+// UpdateSnapshot 是整段替换语义：三段数组必须原样透传给 service，
+// 不允许 handler 做「仅当存在才更新」的合并（proto3 无法区分空数组与缺省）。
+func TestUserMemoryHandler_UpdateSnapshot_WholeReplace(t *testing.T) {
+	svc := &fakeUserMemorySvc{snapshot: &application.UserSnapshot{
+		AgentID: "agent-1", WorkContext: []string{"w1"}, PersonalContext: []string{"p1"},
+		TopOfMind: []string{"t1"}, Status: "active",
+	}}
+	r := setupUserMemoryRouter(svc, "tenant-1", "user-1")
+	body := `{"work_context":["ctx-a","ctx-b"],"personal_context":["personal-x"],"top_of_mind":["mind-1"]}`
+	req := httptest.NewRequest(http.MethodPatch, "/memory/snapshots/agent-1", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.NotNil(t, svc.lastSnapshotPatch)
+	require.Equal(t, []string{"ctx-a", "ctx-b"}, svc.lastSnapshotPatch.WorkContext)
+	require.Equal(t, []string{"personal-x"}, svc.lastSnapshotPatch.PersonalContext)
+	require.Equal(t, []string{"mind-1"}, svc.lastSnapshotPatch.TopOfMind)
 }
