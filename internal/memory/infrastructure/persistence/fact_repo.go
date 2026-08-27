@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
@@ -294,7 +295,7 @@ func (r *FactRepo) Update(ctx context.Context, tenantID string, fact *domain.Mem
 		UPDATE memory_facts SET
 			content = $2, importance = $3, status = $4, superseded_by = $5,
 			access_count = $6, last_accessed_at = $7, updated_at = $8,
-			frecency_score = $9
+			frecency_score = $9, category = $10, confidence = $11
 		WHERE id = $1`
 
 	var supersededBy *string
@@ -306,6 +307,7 @@ func (r *FactRepo) Update(ctx context.Context, tenantID string, fact *domain.Mem
 		tag, err := tx.Exec(ctx, query,
 			fact.ID, fact.Content, fact.Importance, fact.Status, supersededBy,
 			fact.AccessCount, fact.LastAccessAt, fact.UpdatedAt, fact.FrecencyScore,
+			fact.Category, fact.Confidence,
 		)
 		if err != nil {
 			return translatePgError(err, "update fact")
@@ -369,6 +371,65 @@ func (r *FactRepo) ListUserFacts(ctx context.Context, tenantID, userID string, l
 	return facts, err
 }
 
+// factFilterClause 构造 ListUserFactsFiltered/CountUserFactsFiltered 的 WHERE 子句
+// 与参数；$N 占位符与 args 顺序绑定，禁止把用户输入拼进 SQL 文本。
+func factFilterClause(userID string, filter domain.FactListFilter) (string, []any) {
+	clauses := []string{"user_id = $1", "status = 'active'", "scope = 'user'"}
+	args := []any{userID}
+	if filter.Query != "" {
+		clauses = append(clauses, fmt.Sprintf("content ILIKE $%d", len(args)+1))
+		args = append(args, "%"+filter.Query+"%")
+	}
+	if filter.Category != "" {
+		clauses = append(clauses, fmt.Sprintf("category = $%d", len(args)+1))
+		args = append(args, filter.Category)
+	}
+	if filter.ImportanceMin != nil {
+		clauses = append(clauses, fmt.Sprintf("importance >= $%d", len(args)+1))
+		args = append(args, *filter.ImportanceMin)
+	}
+	if filter.ImportanceMax != nil {
+		clauses = append(clauses, fmt.Sprintf("importance <= $%d", len(args)+1))
+		args = append(args, *filter.ImportanceMax)
+	}
+	return strings.Join(clauses, " AND "), args
+}
+
+func (r *FactRepo) ListUserFactsFiltered(ctx context.Context, tenantID, userID string, filter domain.FactListFilter, limit, offset int) ([]*domain.MemoryFact, error) {
+	where, args := factFilterClause(userID, filter)
+	query := `SELECT id, user_id, agent_id, scope, conversation_id, content, importance,
+		status, superseded_by, access_count, last_accessed_at,
+		created_at, updated_at, frecency_score,
+		category, confidence, source
+	FROM memory_facts WHERE ` + where +
+		` ORDER BY created_at DESC LIMIT $` + fmt.Sprintf("%d", len(args)+1) +
+		` OFFSET $` + fmt.Sprintf("%d", len(args)+2)
+	args = append(args, limit, offset)
+
+	var facts []*domain.MemoryFact
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, query, args...)
+		if err != nil {
+			return fmt.Errorf("list user facts filtered: %w", err)
+		}
+		defer rows.Close()
+		facts, err = scanFacts(rows)
+		return err
+	})
+	return facts, err
+}
+
+func (r *FactRepo) CountUserFactsFiltered(ctx context.Context, tenantID, userID string, filter domain.FactListFilter) (int, error) {
+	where, args := factFilterClause(userID, filter)
+	query := `SELECT count(*) FROM memory_facts WHERE ` + where
+
+	var total int
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, query, args...).Scan(&total)
+	})
+	return total, err
+}
+
 func (r *FactRepo) SearchByContent(ctx context.Context, tenantID string, filter domain.ScopeFilter, query string, limit int) ([]*domain.MemoryFact, error) {
 	const sql = `
 		SELECT id, user_id, agent_id, scope, conversation_id, content, importance,
@@ -415,7 +476,7 @@ func supersedeQuery(filter domain.ScopeFilter, content string, minSimilarity, ma
 	query := `
 		SELECT id, user_id, agent_id, scope, content, importance,
 			status, superseded_by, access_count, last_accessed_at,
-			created_at, updated_at,
+			created_at, updated_at, category, confidence,
 			similarity(content, $2) as sim
 		FROM memory_facts
 		WHERE user_id = $1 AND status = 'active' AND similarity(content, $2) > ` + thresholdParam + `
@@ -444,7 +505,7 @@ func (r *FactRepo) FindSupersedeCandidates(ctx context.Context, tenantID string,
 			if err := rows.Scan(
 				&f.ID, &f.UserID, &aid, &scope, &f.Content, &f.Importance,
 				&f.Status, &supersededBy, &f.AccessCount, &f.LastAccessAt,
-				&f.CreatedAt, &f.UpdatedAt, &sim,
+				&f.CreatedAt, &f.UpdatedAt, &f.Category, &f.Confidence, &sim,
 			); err != nil {
 				return fmt.Errorf("scan supersede candidate: %w", err)
 			}

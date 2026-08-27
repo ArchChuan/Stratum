@@ -283,7 +283,7 @@ func TestFactRepo_Update_success(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectExec("UPDATE memory_facts SET").
-		WithArgs("f1", "new", 0.9, "active", (*string)(nil), 2, pgxmock.AnyArg(), pgxmock.AnyArg(), 0.95).
+		WithArgs("f1", "new", 0.9, "active", (*string)(nil), 2, pgxmock.AnyArg(), pgxmock.AnyArg(), 0.95, "", 0.0).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
@@ -299,7 +299,7 @@ func TestFactRepo_Update_notFound(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectExec("UPDATE memory_facts SET").
-		WithArgs("nope", "new", 0.9, "active", (*string)(nil), 0, pgxmock.AnyArg(), pgxmock.AnyArg(), 0.0).
+		WithArgs("nope", "new", 0.9, "active", (*string)(nil), 0, pgxmock.AnyArg(), pgxmock.AnyArg(), 0.0, "", 0.0).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectRollback()
 
@@ -315,7 +315,7 @@ func TestFactRepo_Update_execFails(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectExec("UPDATE memory_facts SET").
-		WithArgs(anyArgs(9)...).
+		WithArgs(anyArgs(11)...).
 		WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
@@ -405,7 +405,8 @@ func TestFactRepo_SearchByContent_queryFails(t *testing.T) {
 // --- FindSupersedeCandidates ---
 
 var candidateColumns = []string{"id", "user_id", "agent_id", "scope", "content", "importance",
-	"status", "superseded_by", "access_count", "last_accessed_at", "created_at", "updated_at", "sim"}
+	"status", "superseded_by", "access_count", "last_accessed_at", "created_at", "updated_at",
+	"category", "confidence", "sim"}
 
 func TestFactRepo_FindSupersedeCandidates_success(t *testing.T) {
 	mock := newFactMock(t)
@@ -418,8 +419,8 @@ func TestFactRepo_FindSupersedeCandidates_success(t *testing.T) {
 	mock.ExpectQuery("similarity\\(content").
 		WithArgs("u1", "text", "ag1", 0.6, 5).
 		WillReturnRows(pgxmock.NewRows(candidateColumns).
-			AddRow("f1", "u1", &ag, "agent", "text", 0.9, "active", &sup, 1, t0, t0, t0, 0.87).
-			AddRow("f2", "u1", nil, "agent", "text2", 0.7, "active", nil, 0, t0, t0, t0, 0.81))
+			AddRow("f1", "u1", &ag, "agent", "text", 0.9, "active", &sup, 1, t0, t0, t0, "preference", 0.8, 0.87).
+			AddRow("f2", "u1", nil, "agent", "text2", 0.7, "active", nil, 0, t0, t0, t0, "other", 0.7, 0.81))
 	mock.ExpectCommit()
 
 	filter := domain.ScopeFilter{UserID: "u1", AgentID: "ag1", IncludeAgentScope: true}
@@ -429,6 +430,8 @@ func TestFactRepo_FindSupersedeCandidates_success(t *testing.T) {
 	require.Equal(t, "ag1", cands[0].Fact.AgentID)
 	require.InDelta(t, 0.87, cands[0].Similarity, 0.001)
 	require.Equal(t, "s1", cands[0].Fact.SupersededBy)
+	require.Equal(t, "preference", cands[0].Fact.Category)
+	require.InDelta(t, 0.8, cands[0].Fact.Confidence, 0.001)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -441,7 +444,7 @@ func TestFactRepo_FindSupersedeCandidates_userScope(t *testing.T) {
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectQuery("similarity\\(content").
 		WithArgs("u1", "text", 0.6, 5).
-		WillReturnRows(pgxmock.NewRows(candidateColumns).AddRow("f1", "u1", nil, "user", "text", 0.9, "active", nil, 1, t0, t0, t0, 0.5))
+		WillReturnRows(pgxmock.NewRows(candidateColumns).AddRow("f1", "u1", nil, "user", "text", 0.9, "active", nil, 1, t0, t0, t0, "other", 0.8, 0.5))
 	mock.ExpectCommit()
 
 	filter := domain.ScopeFilter{UserID: "u1", IncludeUserScope: true}
@@ -477,7 +480,7 @@ func TestFactRepo_FindSupersedeCandidates_scanFails(t *testing.T) {
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectQuery("similarity\\(content").
 		WithArgs(anyArgs(4)...).
-		WillReturnRows(pgxmock.NewRows(candidateColumns).AddRow("f1", 42, nil, "user", "text", 0.9, "active", nil, 1, ts(), ts(), ts(), 0.5))
+		WillReturnRows(pgxmock.NewRows(candidateColumns).AddRow("f1", 42, nil, "user", "text", 0.9, "active", nil, 1, ts(), ts(), ts(), "other", 0.8, 0.5))
 	mock.ExpectRollback()
 
 	filter := domain.ScopeFilter{UserID: "u1", IncludeUserScope: true}
@@ -977,5 +980,90 @@ func TestFactRepo_CreateExtracted_userScopeValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, created)
 	require.Equal(t, []string{"e1"}, fact.EntityIDs)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// --- ListUserFactsFiltered / CountUserFactsFiltered (management page list) ---
+
+func TestFactRepo_ListUserFactsFiltered(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockFactRepo(mock)
+	ts := ts()
+	rows := pgxmock.NewRows([]string{"id", "user_id", "agent_id", "scope", "conversation_id", "content", "importance",
+		"status", "superseded_by", "access_count", "last_accessed_at",
+		"created_at", "updated_at", "frecency_score", "category", "confidence", "source"}).
+		AddRow("fact-1", "user-1", nil, "user", nil, "I prefer dark mode", 0.8,
+			"active", nil, 1, ts, ts, ts, 0.5, "preference", 0.9, "explicit_user")
+
+	importanceMin, importanceMax := 0.5, 0.9
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("SELECT id, user_id, agent_id").
+		WithArgs("user-1", "%dark%", "preference", importanceMin, importanceMax, 10, 0).
+		WillReturnRows(rows)
+	mock.ExpectCommit()
+
+	got, err := repo.ListUserFactsFiltered(context.Background(), "tenant-1", "user-1",
+		domain.FactListFilter{Query: "dark", ImportanceMin: &importanceMin, ImportanceMax: &importanceMax, Category: "preference"},
+		10, 0)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, "fact-1", got[0].ID)
+	require.Equal(t, "preference", got[0].Category)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFactRepo_CountUserFactsFiltered(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockFactRepo(mock)
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("SELECT count").
+		WithArgs("user-1", "%dark%").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(3))
+	mock.ExpectCommit()
+
+	total, err := repo.CountUserFactsFiltered(context.Background(), "tenant-1", "user-1",
+		domain.FactListFilter{Query: "dark"})
+	require.NoError(t, err)
+	require.Equal(t, 3, total)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestFactRepo_Update_SupersedePreservesCategory guards the regression where
+// superseding a fact silently wiped its category/confidence: supersedeQuery
+// originally SELECTed only 12 columns, so the candidate's Fact carried zero
+// values, and Update wrote those zeros back. The chain below mirrors
+// supersedeCandidate (extraction.go): find candidates -> MarkSuperseded -> Update.
+func TestFactRepo_Update_SupersedePreservesCategory(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockFactRepo(mock)
+	t0 := ts()
+	ag, sup := "ag1", "f-new"
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectQuery("similarity\\(content").
+		WithArgs("u1", "text", "ag1", 0.6, 5).
+		WillReturnRows(pgxmock.NewRows(candidateColumns).
+			AddRow("f1", "u1", &ag, "agent", "text", 0.9, "active", nil, 1, t0, t0, t0, "preference", 0.8, 0.87))
+	mock.ExpectCommit()
+
+	filter := domain.ScopeFilter{UserID: "u1", AgentID: "ag1", IncludeAgentScope: true}
+	cands, err := repo.FindSupersedeCandidates(context.Background(), "t1", filter, "text", 0.6, 5)
+	require.NoError(t, err)
+	require.Len(t, cands, 1)
+	require.Equal(t, "preference", cands[0].Fact.Category)
+	require.InDelta(t, 0.8, cands[0].Fact.Confidence, 0.001)
+
+	require.NoError(t, cands[0].Fact.MarkSuperseded(sup))
+	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	mock.ExpectExec("UPDATE memory_facts SET").
+		WithArgs("f1", "text", 0.9, "superseded", &sup, 1, pgxmock.AnyArg(), pgxmock.AnyArg(), 0.0, "preference", 0.8).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
+
+	require.NoError(t, repo.Update(context.Background(), "t1", cands[0].Fact))
 	require.NoError(t, mock.ExpectationsWereMet())
 }

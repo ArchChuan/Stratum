@@ -47,6 +47,14 @@ var (
 	// ErrInvalidSource is returned when fact provenance is not recognized.
 	ErrInvalidSource = errors.New("memory fact source not in allowlist")
 
+	// ErrImportanceOutOfRange is returned when a fact importance is outside [0, 1].
+	ErrImportanceOutOfRange = errors.New("memory fact importance must be in [0, 1]")
+	// ErrFactNotEditable is returned when editing a fact whose status is not active
+	// (superseded/archived facts are owned by the extraction pipeline).
+	ErrFactNotEditable = errors.New("memory fact not editable")
+	// ErrEmptyFactPatch is returned when an update request carries no field to change.
+	ErrEmptyFactPatch = errors.New("memory fact update requires at least one field")
+
 	// ErrInvalidFactSourceIdentity is returned when replay-safe extraction provenance is incomplete.
 	ErrInvalidFactSourceIdentity = errors.New("invalid memory fact source identity")
 

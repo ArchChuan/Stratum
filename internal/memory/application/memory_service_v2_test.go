@@ -185,6 +185,19 @@ func (m *MockFactRepo) ListUserFacts(ctx context.Context, tenantID, userID strin
 	return args.Get(0).([]*domain.MemoryFact), args.Error(1)
 }
 
+func (m *MockFactRepo) ListUserFactsFiltered(ctx context.Context, tenantID, userID string, filter domain.FactListFilter, limit, offset int) ([]*domain.MemoryFact, error) {
+	args := m.Called(ctx, tenantID, userID, filter, limit, offset)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.MemoryFact), args.Error(1)
+}
+
+func (m *MockFactRepo) CountUserFactsFiltered(ctx context.Context, tenantID, userID string, filter domain.FactListFilter) (int, error) {
+	args := m.Called(ctx, tenantID, userID, filter)
+	return args.Int(0), args.Error(1)
+}
+
 func (m *MockFactRepo) CountByUser(ctx context.Context, tenantID, userID string) (int, error) {
 	args := m.Called(ctx, tenantID, userID)
 	return args.Int(0), args.Error(1)

@@ -59,6 +59,14 @@ func (r *stubFactRepo) ListUserFacts(ctx context.Context, tenantID, userID strin
 	return nil, nil
 }
 
+func (r *stubFactRepo) ListUserFactsFiltered(ctx context.Context, tenantID, userID string, filter domain.FactListFilter, limit, offset int) ([]*domain.MemoryFact, error) {
+	return nil, nil
+}
+
+func (r *stubFactRepo) CountUserFactsFiltered(ctx context.Context, tenantID, userID string, filter domain.FactListFilter) (int, error) {
+	return 0, nil
+}
+
 func (r *stubFactRepo) CountByUser(ctx context.Context, tenantID, userID string) (int, error) {
 	return 0, nil
 }
