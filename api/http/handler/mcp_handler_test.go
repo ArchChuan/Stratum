@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,7 +15,6 @@ import (
 	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
-	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -30,33 +28,6 @@ type scriptedRoleResolver struct {
 
 func (r scriptedRoleResolver) ResolveTenantRole(context.Context, string, string) (string, error) {
 	return r.role, r.err
-}
-
-func TestMCPHandlerRejectsTenantSystemKey(t *testing.T) {
-	h := newTestMCPHandler(t)
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.Use(middleware.ErrorHandler(zap.NewNop()))
-	router.Use(func(c *gin.Context) {
-		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), "tenant-1"))
-		c.Next()
-	})
-	router.POST("/servers", h.ConnectServer)
-
-	for _, value := range []string{`"stratum.platform_mcp"`, `null`} {
-		recorder := httptest.NewRecorder()
-		body := `{"id":"copy","name":"copy","transport":"streamable-http","system_key":` + value + `}`
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "/servers", bytes.NewBufferString(body))
-		if err != nil {
-			t.Fatal(err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		router.ServeHTTP(recorder, req)
-
-		if recorder.Code != http.StatusBadRequest {
-			t.Fatalf("system_key=%s: status=%d, want 400; body=%s", value, recorder.Code, recorder.Body.String())
-		}
-	}
 }
 
 func newTestMCPHandler(t *testing.T) *MCPHandler {

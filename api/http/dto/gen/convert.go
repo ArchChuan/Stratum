@@ -1,7 +1,6 @@
 package gen
 
 import (
-	"errors"
 	"fmt"
 
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
@@ -41,10 +40,8 @@ func ToTaskStepResponse(s collabdomain.TaskStep) TaskStepResponse {
 }
 
 // ServerConfig 与手写 dto.(MCPServerConfigRequest).ServerConfig 逐行一致(迁移保留)。
+// system_key 已随契约删除：外部提交被 json.Unmarshal 静默忽略（列同时删除，无处落库）。
 func (r MCPServerConfigRequest) ServerConfig() (*domain.ServerConfig, error) {
-	if len(r.SystemKey) != 0 {
-		return nil, errors.New("system_key is managed by Stratum")
-	}
 	return &domain.ServerConfig{
 		ID: r.ID, Name: r.Name, Version: r.Version, Transport: r.Transport, Command: r.Command,
 		Args: r.Args, URL: r.URL, Env: r.Env, Headers: r.Headers, Capabilities: r.Capabilities,
@@ -56,19 +53,18 @@ func (r MCPServerConfigRequest) ServerConfig() (*domain.ServerConfig, error) {
 // (迁移保留,含 filterMCPConfigValues/authCredentialConfigured)。
 func NewMCPServerConfigResponse(cfg *domain.ServerConfig) MCPServerConfigResponse {
 	response := MCPServerConfigResponse{
-		ID:             cfg.ID,
-		Name:           cfg.Name,
-		Version:        cfg.Version,
-		Transport:      cfg.Transport,
-		Command:        cfg.Command,
-		Args:           append([]string(nil), cfg.Args...),
-		URL:            cfg.URL,
-		Env:            filterMCPConfigValues(cfg.Env),
-		Headers:        filterMCPConfigValues(cfg.Headers),
-		Capabilities:   append([]string(nil), cfg.Capabilities...),
-		Timeout:        cfg.Timeout,
-		Retry:          cfg.Retry,
-		ManagementMode: cfg.ManagementMode,
+		ID:           cfg.ID,
+		Name:         cfg.Name,
+		Version:      cfg.Version,
+		Transport:    cfg.Transport,
+		Command:      cfg.Command,
+		Args:         append([]string(nil), cfg.Args...),
+		URL:          cfg.URL,
+		Env:          filterMCPConfigValues(cfg.Env),
+		Headers:      filterMCPConfigValues(cfg.Headers),
+		Capabilities: append([]string(nil), cfg.Capabilities...),
+		Timeout:      cfg.Timeout,
+		Retry:        cfg.Retry,
 	}
 	if cfg.Auth != nil {
 		response.Auth = &MCPAuthConfigResponse{

@@ -484,7 +484,7 @@ func TestAgentService_SnapshotRevisionPreservesExecutionParity(t *testing.T) {
 func TestAgentServiceManagedAssistantRevisionEntrypointsProceed(t *testing.T) {
 	svc, repo := newTestService(t)
 	repo.On("Get", mock.Anything, domain.SystemAssistantID).Return(&domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model",
+		ID: domain.SystemAssistantID, LLMModel: "tenant-model",
 		Name: "平台使用助手", Type: domain.ReActAgent, SystemPrompt: "你是平台助手",
 		MaxIterations: 3,
 	}, true, nil)
@@ -660,7 +660,7 @@ func TestAgentService_DeleteSystemAssistantGoesThroughOwnership(t *testing.T) {
 	ctx := context.Background()
 	const id = "stratum-platform-assistant"
 	repo.On("Get", ctx, id).Return(&domain.AgentConfig{
-		ID: id, SystemKey: "stratum.platform_assistant",
+		ID: id,
 	}, true, nil)
 	repo.On("Remove", ctx, id).Return(nil).Maybe()
 

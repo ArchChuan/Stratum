@@ -61,7 +61,7 @@ func (f *lifecycleManagerFake) GetServerConfig(context.Context, string) (*domain
 	return f.stored, nil
 }
 
-func TestPlatformManagedServerMutationsSucceedAsOwner(t *testing.T) {
+func TestServerMutationsSucceedAsOwner(t *testing.T) {
 	t.Parallel()
 
 	for _, tt := range []struct {
@@ -84,7 +84,7 @@ func TestPlatformManagedServerMutationsSucceedAsOwner(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			manager := &lifecycleManagerFake{stored: &domain.ServerConfig{
-				ID: "stratum-platform-mcp", ManagementMode: "platform_managed",
+				ID: "stratum-platform-mcp",
 			}}
 			service := NewMCPService(&lifecycleRegistryFake{}, manager, zap.NewNop())
 			service.SetTenantRoleResolver(stubTenantRole{role: "owner"})
@@ -92,7 +92,7 @@ func TestPlatformManagedServerMutationsSucceedAsOwner(t *testing.T) {
 			err := tt.act(service)
 
 			if err != nil {
-				t.Fatalf("platform-managed server must be operable by owner (P4), got %v", err)
+				t.Fatalf("server must be operable by owner (P4), got %v", err)
 			}
 			if !tt.check(manager) {
 				t.Fatalf("expected lifecycle mutation, got %+v", manager)
@@ -101,9 +101,9 @@ func TestPlatformManagedServerMutationsSucceedAsOwner(t *testing.T) {
 	}
 }
 
-func TestPlatformManagedServerSystemKeyDeletableByOwner(t *testing.T) {
+func TestServerDeletableByOwner(t *testing.T) {
 	manager := &lifecycleManagerFake{stored: &domain.ServerConfig{
-		ID: "stratum-platform-mcp", SystemKey: "stratum.platform_mcp",
+		ID: "stratum-platform-mcp",
 	}}
 	service := NewMCPService(&lifecycleRegistryFake{}, manager, zap.NewNop())
 	service.SetTenantRoleResolver(stubTenantRole{role: "owner"})
@@ -111,7 +111,7 @@ func TestPlatformManagedServerSystemKeyDeletableByOwner(t *testing.T) {
 	err := service.DeleteServer(t.Context(), "stratum-platform-mcp", "user-1")
 
 	if err != nil {
-		t.Fatalf("system-key server must be deletable by owner (P4), got %v", err)
+		t.Fatalf("server must be deletable by owner (P4), got %v", err)
 	}
 	if manager.deleted != "stratum-platform-mcp" {
 		t.Fatalf("server not deleted: %q", manager.deleted)

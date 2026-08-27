@@ -61,8 +61,6 @@ func (m *mockAgentRepo) Update(_ context.Context, cfg *domain.AgentConfig, _ *au
 	// 回读结果与内存 DTO 不一致,API 断言会假绿。
 	for i, a := range m.agents {
 		if a.ID == cfg.ID {
-			cfg.IsSystem = a.IsSystem
-			cfg.SystemKey = a.SystemKey
 			m.agents[i] = cfg
 			return nil
 		}
@@ -76,8 +74,6 @@ func (m *mockAgentRepo) Rollback(_ context.Context, cfg *domain.AgentConfig, _ *
 	}
 	for i, a := range m.agents {
 		if a.ID == cfg.ID {
-			cfg.IsSystem = a.IsSystem
-			cfg.SystemKey = a.SystemKey
 			m.agents[i] = cfg
 			return nil
 		}
@@ -387,7 +383,7 @@ func TestAgentHandlerDeleteAgent(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, w.Code)
 
 	// 等同化后 system assistant 与普通 agent 一致可删除 → 200。
-	sys := &mockAgentRepo{agents: []*domain.AgentConfig{{ID: "sys-1", SystemKey: "system_assistant"}}}
+	sys := &mockAgentRepo{agents: []*domain.AgentConfig{{ID: "sys-1"}}}
 	h = newTestAgentHandler(t, sys, nil, nil)
 	w = doAgentReq(t, authedRoutes(h), http.MethodDelete, "/agents/sys-1", "")
 	require.Equal(t, http.StatusOK, w.Code)

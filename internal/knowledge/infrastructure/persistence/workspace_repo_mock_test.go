@@ -35,14 +35,14 @@ func testConfig() domain.WorkspaceConfig {
 	}
 }
 
-var wsColumns = []string{"id", "name", "description", "config", "system_key", "management_mode", "created_by", "created_at", "updated_at"}
+var wsColumns = []string{"id", "name", "description", "config", "created_by", "created_at", "updated_at"}
 
 func wsRow(id, name string) []any {
 	return []any{
 		id, name, "desc", jsonbConfig{
 			EmbeddingModel: "text-embedding-3-small", ChunkSize: 512, ChunkOverlap: 64,
 			QueryMode: "hybrid", TopK: 8, ChunkingStrategy: "parent_child",
-		}, "sys", "tenant_managed", "",
+		}, "",
 		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 }
@@ -108,7 +108,6 @@ func TestWorkspaceRepo_GetByName_success(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "ws-1", ws.ID)
 	require.Equal(t, testConfig(), ws.Config)
-	require.Equal(t, "tenant_managed", ws.ManagementMode)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

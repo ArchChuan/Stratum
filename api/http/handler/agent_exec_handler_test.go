@@ -121,7 +121,7 @@ func TestAgentExecutionErrorPayloadUsesPublicContract(t *testing.T) {
 func TestExecuteAgentStreamReturnsJSONContractBeforeStreamStarts(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := &settingsAgentRepo{cfg: &domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		ID: domain.SystemAssistantID,
 	}}
 	registry := agentapp.NewRegistry(repo, zap.NewNop())
 	svc := agentapp.NewAgentService(agentapp.AgentServiceDeps{Registry: registry, Logger: zap.NewNop()})

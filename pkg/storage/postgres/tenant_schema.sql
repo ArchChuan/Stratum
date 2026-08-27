@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS agents (
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE agents DROP COLUMN IF EXISTS embed_model;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_scope TEXT NOT NULL DEFAULT 'agent';
-ALTER TABLE agents ADD COLUMN IF NOT EXISTS system_key TEXT;
+-- system_key 已随"所有 agent 一视同仁"删除：阶段1 停读+seed 去值，阶段2 DROP 列。
+ALTER TABLE agents DROP COLUMN IF EXISTS system_key;
 -- 断点续接默认全开:新列默认 true,存量租户幂等回填。列保留不 DROP(滚动升级期
 -- 旧二进制仍读写),新代码已不读写该列。
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS checkpoint_enabled BOOLEAN NOT NULL DEFAULT true;
@@ -55,8 +56,6 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS delegate_default_max_steps INTEGER N
 -- 通用产品版本基座:active_version_id 指向 resource_versions 当前生效版本
 -- (NULL = 无版本记录,存量 agent 不基线回填,首次保存产生 v1)。
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS active_version_id TEXT;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_system_key
-    ON agents(system_key) WHERE system_key IS NOT NULL;
 
 DO $$
 DECLARE
@@ -696,17 +695,14 @@ CREATE TABLE IF NOT EXISTS mcp_configs (
     capabilities    JSONB NOT NULL DEFAULT '[]',
     timeout_sec     INT  NOT NULL DEFAULT 30,
     enabled         BOOL NOT NULL DEFAULT true,
-    system_key      TEXT,
-    management_mode TEXT NOT NULL DEFAULT 'tenant_managed',
     created_by      TEXT NOT NULL DEFAULT '',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS system_key TEXT;
-ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS management_mode TEXT NOT NULL DEFAULT 'tenant_managed';
+-- system_key/management_mode 已随"所有 MCP server 一视同仁"删除(列保留无通用作用)。
+ALTER TABLE mcp_configs DROP COLUMN IF EXISTS system_key;
+ALTER TABLE mcp_configs DROP COLUMN IF EXISTS management_mode;
 ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_configs_system_key
-    ON mcp_configs(system_key) WHERE system_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS agent_mcp_tool_links (
     agent_id  TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -773,12 +769,10 @@ CREATE TABLE IF NOT EXISTS rag_workspaces (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Platform-managed workspace markers (self-healing backfill for legacy tenants).
-ALTER TABLE rag_workspaces ADD COLUMN IF NOT EXISTS system_key TEXT;
-ALTER TABLE rag_workspaces ADD COLUMN IF NOT EXISTS management_mode TEXT NOT NULL DEFAULT 'tenant_managed';
+-- system_key/management_mode 已随"所有知识库一视同仁"删除(列保留无通用作用)。
+ALTER TABLE rag_workspaces DROP COLUMN IF EXISTS system_key;
+ALTER TABLE rag_workspaces DROP COLUMN IF EXISTS management_mode;
 ALTER TABLE rag_workspaces ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
-CREATE UNIQUE INDEX IF NOT EXISTS idx_rag_workspaces_system_key
-    ON rag_workspaces(system_key) WHERE system_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS chat_conversations (
     id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1800,7 +1794,7 @@ WHERE NOT EXISTS (
 );
 
 -- Built-in knowledge workspace: platform documentation. 内置知识库不再带
--- platform-managed 标记(system_key/management_mode 列保留但 seed 不再写入),
+-- platform-managed 标记(system_key/management_mode 列已删除),
 -- 与普通 workspace 走同一权限/控制体系。
 INSERT INTO rag_workspaces (id, name, description, config, created_at, updated_at)
 VALUES ('a0a0a0a0-0000-0000-0000-000000000001', 'stratum_docs',

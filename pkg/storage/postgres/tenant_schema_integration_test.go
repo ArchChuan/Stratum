@@ -19,8 +19,10 @@ func TestProvisionTenantSchemaRemovesPlatformMCPIdempotently(t *testing.T) {
 	pool, ctx, tenantID := systemAssistantTestPool(t, "platform_mcp")
 	require.NoError(t, postgres.ProvisionTenantSchema(ctx, pool, tenantID))
 	schema := `"tenant_` + tenantID + `"`
-	_, err := pool.Exec(ctx, `INSERT INTO `+schema+`.mcp_configs (id, name, transport, system_key, management_mode)
-		VALUES ('stratum-platform-mcp', 'legacy-platform-mcp', 'streamable-http', 'stratum.platform_mcp', 'platform_managed')`)
+	// 表由上方 ProvisionTenantSchema 按新 DDL 创建：system_key/management_mode 列已删除，
+	// 遗留行只带业务列（其余列 NOT NULL DEFAULT 兜底）。
+	_, err := pool.Exec(ctx, `INSERT INTO `+schema+`.mcp_configs (id, name, transport)
+		VALUES ('stratum-platform-mcp', 'legacy-platform-mcp', 'streamable-http')`)
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `INSERT INTO `+schema+`.agent_mcp_tool_links (agent_id, server_id, tool_name)
 		VALUES ('stratum-platform-assistant', 'stratum-platform-mcp', 'stratum_diagnose_tenant')`)
