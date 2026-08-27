@@ -97,13 +97,19 @@ func TestMemoryServiceClearAgentMemoriesAttemptsEveryStageAndJoinsErrors(t *test
 type cleanupMemoryRepo struct{ mock.Mock }
 
 func (m *cleanupMemoryRepo) Add(context.Context, *domain.MemoryEntry) error { return nil }
-func (m *cleanupMemoryRepo) Get(context.Context, string, string) (*domain.MemoryEntry, error) {
-	return nil, nil
+func (m *cleanupMemoryRepo) Get(ctx context.Context, tenantID, id string) (*domain.MemoryEntry, error) {
+	args := m.Called(ctx, tenantID, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.MemoryEntry), args.Error(1)
 }
 func (m *cleanupMemoryRepo) Search(context.Context, string, string, string, int) ([]*domain.MemoryEntry, error) {
 	return nil, nil
 }
-func (m *cleanupMemoryRepo) Delete(context.Context, string, string) error       { return nil }
+func (m *cleanupMemoryRepo) Delete(ctx context.Context, tenantID, id string) error {
+	return m.Called(ctx, tenantID, id).Error(0)
+}
 func (m *cleanupMemoryRepo) ClearSession(context.Context, string, string) error { return nil }
 func (m *cleanupMemoryRepo) DeleteAllByUser(ctx context.Context, tenantID, userID string) error {
 	return m.Called(ctx, tenantID, userID).Error(0)
@@ -123,11 +129,16 @@ func (m *cleanupMemoryRepo) Stats(context.Context, string) (*domain.MemoryStats,
 func (m *cleanupMemoryRepo) GetSummary(context.Context, string, string) (string, error) {
 	return "", nil
 }
-func (m *cleanupMemoryRepo) ListUserEntries(context.Context, string, string, int, int, string) ([]*domain.MemoryEntryListItem, error) {
-	return nil, nil
+func (m *cleanupMemoryRepo) ListUserEntries(ctx context.Context, tenantID, userID string, limit, offset int, query string) ([]*domain.MemoryEntryListItem, error) {
+	args := m.Called(ctx, tenantID, userID, limit, offset, query)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.MemoryEntryListItem), args.Error(1)
 }
-func (m *cleanupMemoryRepo) CountUserEntries(context.Context, string, string, string) (int, error) {
-	return 0, nil
+func (m *cleanupMemoryRepo) CountUserEntries(ctx context.Context, tenantID, userID, query string) (int, error) {
+	args := m.Called(ctx, tenantID, userID, query)
+	return args.Int(0), args.Error(1)
 }
 
 // Mock implementations for testing
@@ -824,5 +835,293 @@ func TestMemoryService_DeleteUserEntity(t *testing.T) {
 		err := svc.DeleteUserEntity(ctx, "tenant-1", "user-1", "ent-1")
 		require.ErrorIs(t, err, domain.ErrEntityNotFound)
 		entities.AssertExpectations(t)
+	})
+}
+
+type MockHistoryRepo struct{ mock.Mock }
+
+func (m *MockHistoryRepo) NextBatch(context.Context, string, int, int) (*domain.HistoryBatch, error) {
+	args := m.Called()
+	return args.Get(0).(*domain.HistoryBatch), args.Error(1)
+}
+func (m *MockHistoryRepo) Upsert(context.Context, string, *domain.HistorySegment) error {
+	return m.Called().Error(0)
+}
+func (m *MockHistoryRepo) NextOverflow(context.Context, string, int, int, int) (*domain.HistoryOverflowGroup, error) {
+	args := m.Called()
+	return args.Get(0).(*domain.HistoryOverflowGroup), args.Error(1)
+}
+func (m *MockHistoryRepo) ReplaceOverflow(context.Context, string, *domain.HistorySegment, []string) error {
+	return m.Called().Error(0)
+}
+func (m *MockHistoryRepo) Maintain(context.Context, string) error {
+	return m.Called().Error(0)
+}
+func (m *MockHistoryRepo) ArchiveColdFacts(context.Context, string) ([]string, error) {
+	args := m.Called()
+	return args.Get(0).([]string), args.Error(1)
+}
+func (m *MockHistoryRepo) SearchRelevant(context.Context, string, string, string, string, int) ([]domain.HistorySegment, error) {
+	args := m.Called()
+	return args.Get(0).([]domain.HistorySegment), args.Error(1)
+}
+func (m *MockHistoryRepo) ListUserSummaries(ctx context.Context, tenantID, userID string, limit, offset int) ([]*domain.HistorySegment, error) {
+	args := m.Called(ctx, tenantID, userID, limit, offset)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.HistorySegment), args.Error(1)
+}
+func (m *MockHistoryRepo) CountUserSummaries(ctx context.Context, tenantID, userID string) (int, error) {
+	args := m.Called(ctx, tenantID, userID)
+	return args.Int(0), args.Error(1)
+}
+func (m *MockHistoryRepo) Delete(ctx context.Context, tenantID, userID, id string) error {
+	args := m.Called(ctx, tenantID, userID, id)
+	return args.Error(0)
+}
+
+type MockActiveSnapshotRepo struct{ mock.Mock }
+
+func (m *MockActiveSnapshotRepo) Upsert(ctx context.Context, snapshot *domain.ActiveSnapshot) error {
+	args := m.Called(ctx, snapshot)
+	return args.Error(0)
+}
+func (m *MockActiveSnapshotRepo) Get(ctx context.Context, tenantID, userID, agentID string) (*domain.ActiveSnapshot, error) {
+	args := m.Called(ctx, tenantID, userID, agentID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.ActiveSnapshot), args.Error(1)
+}
+func (m *MockActiveSnapshotRepo) Delete(ctx context.Context, tenantID, userID, agentID string) error {
+	args := m.Called(ctx, tenantID, userID, agentID)
+	return args.Error(0)
+}
+func (m *MockActiveSnapshotRepo) ListUser(ctx context.Context, tenantID, userID string) ([]*domain.ActiveSnapshot, error) {
+	args := m.Called(ctx, tenantID, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.ActiveSnapshot), args.Error(1)
+}
+
+func TestMemoryService_ListUserSummaries(t *testing.T) {
+	t.Run("returns mapped summaries with total", func(t *testing.T) {
+		ctx := context.Background()
+		facts, vectors, entities := new(MockFactRepo), new(MockVectorStore), new(MockEntityRepo)
+		svc := NewMemoryService(facts, entities, nil, vectors, nil, nil, nil, nil)
+		histories := new(MockHistoryRepo)
+		svc.SetHistoryRepo(histories)
+		histories.On("ListUserSummaries", ctx, "tenant-1", "user-1", 20, 0).
+			Return([]*domain.HistorySegment{{ID: "s-1", Summary: "user likes dark mode", Tier: "recent_months"}}, nil).Once()
+		histories.On("CountUserSummaries", ctx, "tenant-1", "user-1").Return(1, nil).Once()
+
+		got, total, err := svc.ListUserSummaries(ctx, "tenant-1", "user-1", 20, 0)
+		require.NoError(t, err)
+		require.Equal(t, 1, total)
+		require.Len(t, got, 1)
+		require.Equal(t, "s-1", got[0].ID)
+		require.Equal(t, "recent_months", got[0].Tier)
+		histories.AssertExpectations(t)
+	})
+
+	t.Run("returns empty non-nil slice on empty repo result", func(t *testing.T) {
+		ctx := context.Background()
+		svc := NewMemoryService(new(MockFactRepo), new(MockEntityRepo), nil, new(MockVectorStore), nil, nil, nil, nil)
+		histories := new(MockHistoryRepo)
+		svc.SetHistoryRepo(histories)
+		histories.On("ListUserSummaries", ctx, "tenant-1", "user-1", 20, 0).Return(nil, nil).Once()
+		histories.On("CountUserSummaries", ctx, "tenant-1", "user-1").Return(0, nil).Once()
+
+		got, total, err := svc.ListUserSummaries(ctx, "tenant-1", "user-1", 20, 0)
+		require.NoError(t, err)
+		require.Equal(t, 0, total)
+		require.NotNil(t, got)
+		require.Empty(t, got)
+		histories.AssertExpectations(t)
+	})
+
+	t.Run("errors when history repo not wired", func(t *testing.T) {
+		svc := NewMemoryService(new(MockFactRepo), new(MockEntityRepo), nil, nil, nil, nil, nil, nil)
+		_, _, err := svc.ListUserSummaries(context.Background(), "tenant-1", "user-1", 20, 0)
+		require.ErrorContains(t, err, "history repo not wired")
+	})
+}
+
+func TestMemoryService_DeleteUserSummary(t *testing.T) {
+	ctx := context.Background()
+	facts, vectors, entities := new(MockFactRepo), new(MockVectorStore), new(MockEntityRepo)
+	svc := NewMemoryService(facts, entities, nil, vectors, nil, nil, nil, nil)
+	histories := new(MockHistoryRepo)
+	svc.SetHistoryRepo(histories)
+	histories.On("Delete", ctx, "tenant-1", "user-1", "s-1").Return(nil).Once()
+	require.NoError(t, svc.DeleteUserSummary(ctx, "tenant-1", "user-1", "s-1"))
+	histories.AssertExpectations(t)
+}
+
+func TestMemoryService_UpdateUserSnapshot(t *testing.T) {
+	ctx := context.Background()
+	facts, vectors, entities := new(MockFactRepo), new(MockVectorStore), new(MockEntityRepo)
+	svc := NewMemoryService(facts, entities, nil, vectors, nil, nil, nil, nil)
+	snapshots := new(MockActiveSnapshotRepo)
+	svc.SetActiveSnapshotRepo(snapshots)
+	snapshots.On("ListUser", ctx, "tenant-1", "user-1").
+		Return([]*domain.ActiveSnapshot{{AgentID: "agent-1",
+			Source: domain.SnapshotSource{Type: "reflection", Reference: "conv-1"}}}, nil).Once()
+	snapshots.On("Upsert", ctx, mock.Anything).Return(nil).Once()
+
+	got, err := svc.UpdateUserSnapshot(ctx, "tenant-1", "user-1", "agent-1",
+		&UpdateUserSnapshotPatch{WorkContext: []string{"building feature x"}})
+	require.NoError(t, err)
+	require.Equal(t, "agent-1", got.AgentID)
+	require.Equal(t, "active", got.Status)
+	// 整段替换契约：未提供的段被清空（PATCH 语义 = 全量替换；proto repeated 无法区分缺省与空数组）。
+	require.Nil(t, got.PersonalContext)
+	require.Nil(t, got.TopOfMind)
+	snapshots.AssertExpectations(t)
+}
+
+func TestMemoryService_ListUserSnapshots(t *testing.T) {
+	t.Run("maps snapshots via userSnapshotFromDomain", func(t *testing.T) {
+		ctx := context.Background()
+		svc := NewMemoryService(new(MockFactRepo), new(MockEntityRepo), nil, new(MockVectorStore), nil, nil, nil, nil)
+		snapshots := new(MockActiveSnapshotRepo)
+		svc.SetActiveSnapshotRepo(snapshots)
+		snapshots.On("ListUser", ctx, "tenant-1", "user-1").Return([]*domain.ActiveSnapshot{
+			{AgentID: "agent-1", Status: domain.SnapshotStatusActive, ExpiresAt: time.Now().Add(time.Hour)},
+		}, nil).Once()
+
+		got, err := svc.ListUserSnapshots(ctx, "tenant-1", "user-1")
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		require.Equal(t, "agent-1", got[0].AgentID)
+		require.Equal(t, "active", got[0].Status)
+		snapshots.AssertExpectations(t)
+	})
+
+	t.Run("returns empty non-nil slice on empty repo result", func(t *testing.T) {
+		ctx := context.Background()
+		svc := NewMemoryService(new(MockFactRepo), new(MockEntityRepo), nil, nil, nil, nil, nil, nil)
+		snapshots := new(MockActiveSnapshotRepo)
+		svc.SetActiveSnapshotRepo(snapshots)
+		snapshots.On("ListUser", ctx, "tenant-1", "user-1").Return(nil, nil).Once()
+
+		got, err := svc.ListUserSnapshots(ctx, "tenant-1", "user-1")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Empty(t, got)
+		snapshots.AssertExpectations(t)
+	})
+
+	t.Run("errors when active snapshot repo not wired", func(t *testing.T) {
+		svc := NewMemoryService(new(MockFactRepo), new(MockEntityRepo), nil, nil, nil, nil, nil, nil)
+		_, err := svc.ListUserSnapshots(context.Background(), "tenant-1", "user-1")
+		require.ErrorContains(t, err, "active snapshot repo not wired")
+	})
+}
+
+func TestMemoryService_DeleteUserSnapshot(t *testing.T) {
+	t.Run("deletes snapshot owned by the agent", func(t *testing.T) {
+		ctx := context.Background()
+		svc := NewMemoryService(new(MockFactRepo), new(MockEntityRepo), nil, nil, nil, nil, nil, nil)
+		snapshots := new(MockActiveSnapshotRepo)
+		svc.SetActiveSnapshotRepo(snapshots)
+		snapshots.On("ListUser", ctx, "tenant-1", "user-1").
+			Return([]*domain.ActiveSnapshot{{AgentID: "agent-1"}}, nil).Once()
+		snapshots.On("Delete", ctx, "tenant-1", "user-1", "agent-1").Return(nil).Once()
+
+		require.NoError(t, svc.DeleteUserSnapshot(ctx, "tenant-1", "user-1", "agent-1"))
+		snapshots.AssertExpectations(t)
+	})
+
+	t.Run("returns ErrSnapshotNotFound when agent absent", func(t *testing.T) {
+		ctx := context.Background()
+		svc := NewMemoryService(new(MockFactRepo), new(MockEntityRepo), nil, nil, nil, nil, nil, nil)
+		snapshots := new(MockActiveSnapshotRepo)
+		svc.SetActiveSnapshotRepo(snapshots)
+		snapshots.On("ListUser", ctx, "tenant-1", "user-1").
+			Return([]*domain.ActiveSnapshot{{AgentID: "other-agent"}}, nil).Once()
+
+		err := svc.DeleteUserSnapshot(ctx, "tenant-1", "user-1", "agent-1")
+		require.ErrorIs(t, err, domain.ErrSnapshotNotFound)
+		snapshots.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		snapshots.AssertExpectations(t)
+	})
+}
+
+func TestMemoryService_ListUserEntries(t *testing.T) {
+	t.Run("returns mapped entries with pagination total", func(t *testing.T) {
+		ctx := context.Background()
+		svc := NewMemoryService(new(MockFactRepo), new(MockEntityRepo), nil, new(MockVectorStore), nil, nil, nil, nil)
+		memories := new(cleanupMemoryRepo)
+		svc.SetMemoryRepo(memories)
+		now := time.Now()
+		memories.On("ListUserEntries", ctx, "tenant-1", "user-1", 20, 0, "dark").
+			Return([]*domain.MemoryEntryListItem{{ID: "e-1", Role: "user", Content: "likes dark mode", Type: "short_term", Scope: "user", Importance: 0.8, CreatedAt: now, ExpiresAt: nil}}, nil).Once()
+		memories.On("CountUserEntries", ctx, "tenant-1", "user-1", "dark").Return(7, nil).Once()
+
+		got, total, err := svc.ListUserEntries(ctx, "tenant-1", "user-1", 20, 0, "dark")
+		require.NoError(t, err)
+		require.Equal(t, 7, total)
+		require.Len(t, got, 1)
+		require.Equal(t, "e-1", got[0].ID)
+		require.Equal(t, "user", got[0].Scope)
+		memories.AssertExpectations(t)
+	})
+
+	t.Run("returns empty non-nil slice on empty repo result", func(t *testing.T) {
+		ctx := context.Background()
+		svc := NewMemoryService(new(MockFactRepo), new(MockEntityRepo), nil, nil, nil, nil, nil, nil)
+		memories := new(cleanupMemoryRepo)
+		svc.SetMemoryRepo(memories)
+		memories.On("ListUserEntries", ctx, "tenant-1", "user-1", 20, 0, "").Return(nil, nil).Once()
+		memories.On("CountUserEntries", ctx, "tenant-1", "user-1", "").Return(0, nil).Once()
+
+		got, total, err := svc.ListUserEntries(ctx, "tenant-1", "user-1", 20, 0, "")
+		require.NoError(t, err)
+		require.Equal(t, 0, total)
+		require.NotNil(t, got)
+		require.Empty(t, got)
+		memories.AssertExpectations(t)
+	})
+
+	t.Run("errors when memory repo not wired", func(t *testing.T) {
+		svc := NewMemoryService(new(MockFactRepo), new(MockEntityRepo), nil, nil, nil, nil, nil, nil)
+		_, _, err := svc.ListUserEntries(context.Background(), "tenant-1", "user-1", 20, 0, "")
+		require.ErrorContains(t, err, "memory repo not wired")
+	})
+}
+
+func TestMemoryService_DeleteUserEntry(t *testing.T) {
+	t.Run("deletes own entry and best-effort clears vectors", func(t *testing.T) {
+		ctx := context.Background()
+		vectors := new(MockVectorStore)
+		svc := NewMemoryService(new(MockFactRepo), new(MockEntityRepo), nil, vectors, nil, nil, nil, nil)
+		memories := new(cleanupMemoryRepo)
+		svc.SetMemoryRepo(memories)
+		memories.On("Get", ctx, "tenant-1", "entry-1").
+			Return(&domain.MemoryEntry{ID: "entry-1", UserID: "user-1"}, nil).Once()
+		memories.On("Delete", ctx, "tenant-1", "entry-1").Return(nil).Once()
+		// 向量清理 best-effort：失败不阻塞主操作。
+		vectors.On("DeleteEntryVectors", ctx, "tenant-1", []string{"entry-1"}).Return(errors.New("milvus down")).Once()
+
+		require.NoError(t, svc.DeleteUserEntry(ctx, "tenant-1", "user-1", "entry-1"))
+		memories.AssertExpectations(t)
+		vectors.AssertExpectations(t)
+	})
+
+	t.Run("rejects other users entry as 404", func(t *testing.T) {
+		ctx := context.Background()
+		svc := NewMemoryService(new(MockFactRepo), new(MockEntityRepo), nil, new(MockVectorStore), nil, nil, nil, nil)
+		memories := new(cleanupMemoryRepo)
+		svc.SetMemoryRepo(memories)
+		memories.On("Get", ctx, "tenant-1", "entry-1").
+			Return(&domain.MemoryEntry{ID: "entry-1", UserID: "other-user"}, nil).Once()
+
+		err := svc.DeleteUserEntry(ctx, "tenant-1", "user-1", "entry-1")
+		require.ErrorIs(t, err, domain.ErrEntryNotFound)
+		memories.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything, mock.Anything)
+		memories.AssertExpectations(t)
 	})
 }

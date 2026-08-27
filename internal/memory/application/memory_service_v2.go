@@ -43,6 +43,9 @@ type MemoryService struct {
 	reflectorResolver   TrajectoryReflectorResolver
 	judge               port.LLMSuperseder
 	judgeResolver       LLMSupersederResolver
+
+	historyRepo        port.HistoryRepo
+	activeSnapshotRepo port.ActiveSnapshotRepo
 }
 
 // NewMemoryService constructs a new MemoryService with all dependencies.
@@ -102,6 +105,14 @@ func (s *MemoryService) SetTrajectoryReflector(r port.TrajectoryReflector) { s.r
 func (s *MemoryService) SetTrajectoryReflectorResolver(r TrajectoryReflectorResolver) {
 	s.reflectorResolver = r
 }
+
+// SetHistoryRepo wires the history repo for user-facing summary management
+// (called during wiring; summaries are otherwise only touched by workers).
+func (s *MemoryService) SetHistoryRepo(r port.HistoryRepo) { s.historyRepo = r }
+
+// SetActiveSnapshotRepo wires the active snapshot repo for user-facing
+// snapshot management.
+func (s *MemoryService) SetActiveSnapshotRepo(r port.ActiveSnapshotRepo) { s.activeSnapshotRepo = r }
 
 // currentEmbedModel 返回当前默认嵌入模型名；无可用模型时返回 ""（legacy 名兜底）。
 func (s *MemoryService) currentEmbedModel(ctx context.Context, tenantID string) string {
@@ -374,6 +385,47 @@ type UpdateUserFactPatch struct {
 	Category   *string
 }
 
+// UserSummary 历史摘要条目（管理页只读 + 删除）。
+type UserSummary struct {
+	ID             string
+	Summary        string
+	Tier           string
+	ConversationID string
+	Importance     float64
+	PeriodEnd      time.Time
+	CreatedAt      time.Time
+}
+
+// UserSnapshot 活跃快照（每 (user_id, agent_id) 一条，管理页展示/编辑/清空）。
+type UserSnapshot struct {
+	AgentID         string
+	WorkContext     []string
+	PersonalContext []string
+	TopOfMind       []string
+	ExpiresAt       time.Time
+	UpdatedAt       time.Time
+	Status          string
+}
+
+// UpdateUserSnapshotPatch 快照编辑（三段数组整体替换）。
+type UpdateUserSnapshotPatch struct {
+	WorkContext     []string
+	PersonalContext []string
+	TopOfMind       []string
+}
+
+// UserEntry 原始条目（管理页只读 + 删除）。
+type UserEntry struct {
+	ID         string
+	Role       string
+	Content    string
+	Type       string
+	Scope      string
+	Importance float64
+	CreatedAt  time.Time
+	ExpiresAt  *time.Time
+}
+
 // ListUserEntitiesRequest lists the authenticated user's active user-scope entities.
 type ListUserEntitiesRequest struct {
 	TenantID string
@@ -590,4 +642,169 @@ func (s *MemoryService) DeleteUserEntity(ctx context.Context, tenantID, userID, 
 		return domain.ErrEntityNotFound
 	}
 	return s.entityRepo.Delete(ctx, tenantID, entityID)
+}
+
+// ListUserSummaries 返回用户历史摘要分页与总数（管理页只读；删除走 DeleteUserSummary）。
+func (s *MemoryService) ListUserSummaries(ctx context.Context, tenantID, userID string, limit, offset int) ([]*UserSummary, int, error) {
+	if s.historyRepo == nil {
+		return nil, 0, fmt.Errorf("memory: history repo not wired")
+	}
+	segments, err := s.historyRepo.ListUserSummaries(ctx, tenantID, userID, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list user summaries: %w", err)
+	}
+	total, err := s.historyRepo.CountUserSummaries(ctx, tenantID, userID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count user summaries: %w", err)
+	}
+	out := make([]*UserSummary, 0, len(segments))
+	for _, h := range segments {
+		out = append(out, &UserSummary{
+			ID: h.ID, Summary: h.Summary, Tier: h.Tier,
+			ConversationID: h.ConversationID, Importance: h.Importance,
+			PeriodEnd: h.PeriodEnd, CreatedAt: h.CreatedAt,
+		})
+	}
+	return out, total, nil
+}
+
+// DeleteUserSummary 删除用户摘要；summary 不存在由 repo 返回 ErrSummaryNotFound。
+func (s *MemoryService) DeleteUserSummary(ctx context.Context, tenantID, userID, summaryID string) error {
+	if s.historyRepo == nil {
+		return fmt.Errorf("memory: history repo not wired")
+	}
+	return s.historyRepo.Delete(ctx, tenantID, userID, summaryID)
+}
+
+// ListUserSnapshots 返回用户全部活跃快照（含过期/inactive，管理页需展示并允许清空）。
+func (s *MemoryService) ListUserSnapshots(ctx context.Context, tenantID, userID string) ([]*UserSnapshot, error) {
+	if s.activeSnapshotRepo == nil {
+		return nil, fmt.Errorf("memory: active snapshot repo not wired")
+	}
+	snapshots, err := s.activeSnapshotRepo.ListUser(ctx, tenantID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list user snapshots: %w", err)
+	}
+	out := make([]*UserSnapshot, 0, len(snapshots))
+	for _, sn := range snapshots {
+		out = append(out, userSnapshotFromDomain(sn))
+	}
+	return out, nil
+}
+
+// UpdateUserSnapshot 编辑快照三段内容。保留既有 Source（注入/反思来源），
+// 重置 expires_at 为 now+TTL 并以 UpdatedAt=now 绕过 Upsert 的覆盖守卫（用户显式
+// 操作优先，spec §2 归属校验 + §5 边界）。快照不存在时 404。
+func (s *MemoryService) UpdateUserSnapshot(ctx context.Context, tenantID, userID, agentID string, patch *UpdateUserSnapshotPatch) (*UserSnapshot, error) {
+	if s.activeSnapshotRepo == nil {
+		return nil, fmt.Errorf("memory: active snapshot repo not wired")
+	}
+	if patch == nil {
+		return nil, domain.ErrSnapshotNotFound // 防御：无 body 视为不存在
+	}
+	snapshots, err := s.activeSnapshotRepo.ListUser(ctx, tenantID, userID)
+	if err != nil {
+		return nil, err
+	}
+	var existing *domain.ActiveSnapshot
+	for _, sn := range snapshots {
+		if sn.AgentID == agentID {
+			existing = sn
+			break
+		}
+	}
+	if existing == nil {
+		return nil, domain.ErrSnapshotNotFound
+	}
+	now := time.Now().UTC()
+	next := domain.ActiveSnapshot{
+		TenantID: tenantID, UserID: userID, AgentID: agentID,
+		WorkContext: patch.WorkContext, PersonalContext: patch.PersonalContext, TopOfMind: patch.TopOfMind,
+		Source: existing.Source, ExpiresAt: now.Add(constants.ActiveSnapshotTTL),
+		UpdatedAt: now, Status: domain.SnapshotStatusActive,
+	}
+	if err := next.Validate(); err != nil {
+		return nil, err
+	}
+	if err := s.activeSnapshotRepo.Upsert(ctx, &next); err != nil {
+		return nil, err
+	}
+	return userSnapshotFromDomain(&next), nil
+}
+
+// DeleteUserSnapshot 清空指定 agent 的快照；agent 不存在时 404（不泄露存在性）。
+func (s *MemoryService) DeleteUserSnapshot(ctx context.Context, tenantID, userID, agentID string) error {
+	if s.activeSnapshotRepo == nil {
+		return fmt.Errorf("memory: active snapshot repo not wired")
+	}
+	snapshots, err := s.activeSnapshotRepo.ListUser(ctx, tenantID, userID)
+	if err != nil {
+		return err
+	}
+	found := false
+	for _, sn := range snapshots {
+		if sn.AgentID == agentID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return domain.ErrSnapshotNotFound
+	}
+	return s.activeSnapshotRepo.Delete(ctx, tenantID, userID, agentID)
+}
+
+// ListUserEntries 返回用户原始条目分页与总数（query 为内容模糊匹配，管理页只读 + 删除）。
+func (s *MemoryService) ListUserEntries(ctx context.Context, tenantID, userID string, limit, offset int, query string) ([]*UserEntry, int, error) {
+	if s.memoryRepo == nil {
+		return nil, 0, fmt.Errorf("memory: memory repo not wired")
+	}
+	entries, err := s.memoryRepo.ListUserEntries(ctx, tenantID, userID, limit, offset, query)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list user entries: %w", err)
+	}
+	total, err := s.memoryRepo.CountUserEntries(ctx, tenantID, userID, query)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count user entries: %w", err)
+	}
+	out := make([]*UserEntry, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, &UserEntry{
+			ID: e.ID, Role: e.Role, Content: e.Content, Type: e.Type, Scope: e.Scope,
+			Importance: e.Importance, CreatedAt: e.CreatedAt, ExpiresAt: e.ExpiresAt,
+		})
+	}
+	return out, total, nil
+}
+
+// DeleteUserEntry 删除归属当前用户的原始条目并 best-effort 清理向量：
+// PG 删除成功即操作成功，向量清理失败仅记日志（GC reconcile 兜底）。
+func (s *MemoryService) DeleteUserEntry(ctx context.Context, tenantID, userID, entryID string) error {
+	if s.memoryRepo == nil {
+		return fmt.Errorf("memory: memory repo not wired")
+	}
+	entry, err := s.memoryRepo.Get(ctx, tenantID, entryID)
+	if err != nil {
+		return err
+	}
+	if entry.UserID != userID {
+		return domain.ErrEntryNotFound // 归属不匹配一律 404，不泄露存在性
+	}
+	if err := s.memoryRepo.Delete(ctx, tenantID, entryID); err != nil {
+		return err
+	}
+	if s.vectorStore != nil {
+		if err := s.vectorStore.DeleteEntryVectors(ctx, tenantID, []string{entryID}); err != nil {
+			s.logger.Error("memory: delete entry vectors failed", zap.String("entry_id", entryID), zap.Error(err))
+		}
+	}
+	return nil
+}
+
+// userSnapshotFromDomain 将领域快照映射为管理页 DTO（Status 转换为字符串）。
+func userSnapshotFromDomain(sn *domain.ActiveSnapshot) *UserSnapshot {
+	return &UserSnapshot{
+		AgentID: sn.AgentID, WorkContext: sn.WorkContext, PersonalContext: sn.PersonalContext,
+		TopOfMind: sn.TopOfMind, ExpiresAt: sn.ExpiresAt, UpdatedAt: sn.UpdatedAt, Status: string(sn.Status),
+	}
 }
