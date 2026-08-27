@@ -3,6 +3,15 @@ import { memo } from 'react';
 
 import type { FactCheckReport, ToolReferenceClassification } from '../model/agent';
 
+// toolRefRe 与 ChatMarkdown/后端 factcheck/reconcile.go 的字符集一致：
+// <tool_ref:ID> 与兼容形式 [tool:ID]，ID 为 tool_call_id 合法字符。该标记是给
+// 模型/对账器的机器指令，非用户可见内容；对账报告逐条透出 claimText 时同样
+// 必须先剥离（纯显示层，不改消息源）。
+const TOOL_REF_RE = /<tool_ref:[A-Za-z0-9_-]+>|\[tool:[A-Za-z0-9_-]+\]/g;
+
+const stripToolRef = (text?: string | null): string =>
+  (text ?? '').replace(TOOL_REF_RE, '');
+
 // 对账判定文案（与后端五态枚举对齐；verified 折叠不展示，避免噪音）。
 const CLASSIFICATION_TEXT: Record<string, string> = {
   verification_failed: '工具调用核验失败',
@@ -61,8 +70,8 @@ const FactCheckNotice = memo(function FactCheckNotice({
                     {CLASSIFICATION_TEXT[r.classification] || r.classification}
                   </Tag>
                   <span>
-                    {r.toolName ? `${r.toolName}：` : ''}
-                    {r.claimText || '该操作声称未通过核验'}
+                    {r.toolName ? `${stripToolRef(r.toolName)}：` : ''}
+                    {stripToolRef(r.claimText) || '该操作声称未通过核验'}
                   </span>
                   {r.risk > 0 ? (
                     <span style={{ color: '#8c8c8c' }}>（风险 {r.risk}）</span>

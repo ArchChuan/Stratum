@@ -27,6 +27,33 @@ describe('FactCheckNotice risk rendering', () => {
     expect(screen.getByText(/工具调用结果未知/)).toBeInTheDocument();
   });
 
+  // 机器引用标记 <tool_ref:ID> / [tool:ID] 是对账器的内部协议，非用户可见内容；
+  // 对账报告逐条透出 claimText 时也必须剥离（与 ChatMarkdown 显示层策略一致）。
+  it('strips tool_ref markers from claimText before display', () => {
+    const factCheck: FactCheckReport = {
+      checked: true,
+      claims: [],
+      isValid: false,
+      riskPoints: 4,
+      toolReferences: [
+        {
+          claimText: '《Agent 使用指南》<tool_ref:stratum_search_official_docs>',
+          classification: 'invalid_reference',
+          risk: 4,
+        },
+        { toolName: 'list_orders', claimText: '已列出订单 [tool:toolu_abc123]', classification: 'verification_failed', risk: 5 },
+      ],
+      unverifiedCount: 0,
+      unverifiedClaims: [],
+    };
+    render(<FactCheckNotice factCheck={factCheck} />);
+    expect(screen.getByText(/《Agent 使用指南》/)).toBeInTheDocument();
+    expect(screen.getByText(/已列出订单/)).toBeInTheDocument();
+    expect(screen.queryByText(/<tool_ref:/)).toBeNull();
+    expect(screen.queryByText(/\[tool:/)).toBeNull();
+    expect(screen.queryByText(/tool_ref:stratum_search_official_docs/)).toBeNull();
+  });
+
   it('renders unverified count as info alert', () => {
     const factCheck: FactCheckReport = {
       checked: true,
