@@ -2223,9 +2223,9 @@
       "coverage": "short"
     },
     {
-      "id": "memory.readonly.memory",
+      "id": "memory.mutation.delete.memory.fact",
       "domain": "memory",
-      "user_goal": "Review a specific memory fact on the memory page",
+      "user_goal": "Delete a specific memory fact on the memory page",
       "route": "/memory",
       "roles": {
         "allowed": [
@@ -2236,10 +2236,10 @@
           "unauthenticated"
         ]
       },
-      "mutation": "INSERT memory_facts (user-scope)",
-      "browser_action_id": "memory.readonly.memory",
-      "http_evidence": "The inserted memory fact renders on /memory without a delete affordance (user-side read-only)",
-      "db_evidence": "Inserted memory fact is visible and cleaned up after assertion",
+      "mutation": "DELETE /memory/facts/:id",
+      "browser_action_id": "memory.mutation.delete.memory.fact",
+      "http_evidence": "The inserted memory fact renders on /memory with a delete affordance and is deleted via DELETE /memory/facts/:id",
+      "db_evidence": "Inserted memory fact is removed after user deletion",
       "coverage": "short"
     },
     {
