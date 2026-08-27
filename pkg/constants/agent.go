@@ -92,6 +92,22 @@ const (
 	// claim 判定截断（finish_reason=length → JSON 半截 → 解析失败降级）；
 	// 2048 覆盖 4 claims 的完整 verdict JSON 输出。
 	AgentFactCheckJudgeMaxTokens = 2048
+	// AgentFactCheckEvidenceConcurrency 是幻觉校验证据检索的并发上限（有界并发，
+	// 控制检索突发对下游 RAG 的压力；索引写入按 claim 顺序保序）。
+	AgentFactCheckEvidenceConcurrency = 3
+	// AgentFactCheckMaxUnverified 是未验证副作用声称的上限：无引用但命中
+	// accomplishment 白名单的句子记入 UnverifiedClaims，超出截断（控报告噪音）。
+	AgentFactCheckMaxUnverified = 5
+	// AgentCitationReferenceInstruction 是"声称带引用"约束：模型声称操作/工具
+	// 调用/副作用已完成时必须紧接该陈述输出引用标记 <tool_ref:ID>（ID = 本次
+	// 执行真实的 tool_call_id），由收尾对账代码级核验；未真实调用或结果不确定
+	// 时禁止声称成功。主注入常驻 base context（锚头压缩不逐出），收尾再强化。
+	AgentCitationReferenceInstruction = "When you state that an operation, tool call, or side effect has been completed " +
+		"(such as created, deleted, updated, sent, enabled, or disabled), you MUST immediately follow that statement " +
+		"with a citation marker <tool_ref:ID>, where ID is the tool_call_id of the tool call you actually executed. " +
+		"Never claim an operation succeeded unless you actually invoked the tool and received a successful result. " +
+		"If you are unsure whether the call succeeded, say so explicitly and do not attach a citation. " +
+		"If you did not make the relevant tool call, do not make the claim."
 	// AgentKnowledgeNoResultText 是知识检索空结果的拒答观察模板（%s = NoAnswer
 	// reason，固定枚举无注入风险）。空内容不能当成功结果喂给模型——模型看到
 	// "没找到"而非空串，避免靠训练记忆编造答案。

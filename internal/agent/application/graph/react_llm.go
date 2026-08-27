@@ -127,6 +127,14 @@ func prepareLLMRequest(ctx context.Context, s *ReActState) ([]port.ToolDefinitio
 			Role:    "system",
 			Content: instruction,
 		}})
+		// 引用约束收尾强化：主注入常驻 base context，最终步骤再追加同规则，
+		// 自然结束（无工具调用直接出答案）也受约束。
+		if s.EnforceClaimCitations {
+			messages = insertSystemBlockAfterFirstSystem(messages, []port.LLMMessage{{
+				Role:    "system",
+				Content: constants.AgentCitationReferenceInstruction,
+			}})
+		}
 	}
 	// In-loop compaction: bound the complete request, including any final-step
 	// instruction, without mutating s.Messages (trace/history stay complete).

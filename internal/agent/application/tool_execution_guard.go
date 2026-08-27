@@ -81,7 +81,11 @@ func (g *ToolExecutionGuard) executeApproved(ctx context.Context, req ToolExecut
 	if err != nil {
 		return nil, err
 	}
-	return g.deps.ResultGuard.Validate(result, req.Tool.OutputSchema)
+	guarded, err := g.deps.ResultGuard.Validate(result, req.Tool.OutputSchema)
+	if err != nil {
+		return nil, wrapGuardError(err)
+	}
+	return guarded, nil
 }
 
 // requestApproval creates a pending approval and returns
@@ -114,7 +118,11 @@ func (g *ToolExecutionGuard) executeDelegate(ctx context.Context, req ToolExecut
 	if err != nil {
 		return nil, err
 	}
-	return g.deps.ResultGuard.Validate(result, req.Tool.OutputSchema)
+	guarded, err := g.deps.ResultGuard.Validate(result, req.Tool.OutputSchema)
+	if err != nil {
+		return nil, wrapGuardError(err)
+	}
+	return guarded, nil
 }
 
 // executeMCP runs the regular MCP tool path (optionally a specific revision),
@@ -139,7 +147,32 @@ func (g *ToolExecutionGuard) executeMCP(ctx context.Context, req ToolExecutionRe
 	if err != nil {
 		return nil, err
 	}
-	return g.deps.ResultGuard.Validate(result, req.Tool.OutputSchema)
+	guarded, err := g.deps.ResultGuard.Validate(result, req.Tool.OutputSchema)
+	if err != nil {
+		return nil, wrapGuardError(err)
+	}
+	return guarded, nil
+}
+
+// wrapGuardError 把 ResultGuard 的校验错误翻译成带 Outcome 的执行错误，使 graph
+// 层可通过 errors.As 解包到 definite_failure / outcome_unknown，供幻觉防护对账
+// 使用。IsError=true 的结果是工具真实执行且明确报错 → definite_failure；schema
+// 校验失败仅说明结果结构不达标，不等于成功执行 → outcome_unknown。
+func wrapGuardError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, ErrMCPToolResult) {
+		return &port.MCPToolExecutionError{
+			Outcome: port.ToolExecutionOutcomeDefiniteFailure, Err: err,
+		}
+	}
+	if errors.Is(err, ErrMCPToolResultSchema) {
+		return &port.MCPToolExecutionError{
+			Outcome: port.ToolExecutionOutcomeUnknown, Err: err,
+		}
+	}
+	return err
 }
 
 func validateToolArguments(schema, arguments map[string]any) error {

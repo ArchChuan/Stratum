@@ -7,6 +7,7 @@ import type { ChatMessage, DelegateStatusView } from '../model/agent';
 import { BUBBLE, ChatMarkdown } from './ChatMarkdown';
 import { ChatStepList } from './ChatStepList';
 import { DiagnosticReport } from './DiagnosticReport';
+import FactCheckNotice from './FactCheckNotice';
 import NoAnswerNotice from './NoAnswerNotice';
 import { ResourceChangeProposalCard } from './ResourceChangeProposalCard';
 import { SourceCardList } from './SourceCardList';
@@ -130,6 +131,10 @@ const MessageItem = memo(function MessageItem({
             <SourceCardList sources={m.sources} />
             {/* P1: 无答案结构化信号 → 拒答提示（nil=有答案不渲染） */}
             {m.role === 'assistant' && m.noAnswer ? <NoAnswerNotice noAnswer={m.noAnswer} /> : null}
+            {/* 幻觉防护对账报告（advisory；校验关/全 verified 不渲染） */}
+            {m.role === 'assistant' && m.factCheck ? (
+              <FactCheckNotice factCheck={m.factCheck} />
+            ) : null}
           </>
         )}
         {m.interrupted && (

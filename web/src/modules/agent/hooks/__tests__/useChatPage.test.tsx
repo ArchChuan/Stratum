@@ -4,7 +4,7 @@ import type { MutableRefObject } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { conversationApi } from '../../api/agent.api';
-import type { ChatMessage } from '../../model/agent';
+import type { ChatMessage, FactCheckReport } from '../../model/agent';
 import type { StreamSnapshot } from '../ChatStreamContext';
 import { useChatPage } from '../useChatPage';
 
@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
       output?: string;
       sources?: unknown[];
       noAnswer?: { Reason?: string; RetrievedCount?: number };
+      factCheck?: FactCheckReport;
       artifacts?: Array<{ type: string; diagnosticReport?: { facts?: unknown[] } }>;
     },
     streamError: null,
@@ -346,6 +347,80 @@ describe('useChatPage tool approvals', () => {
 		});
 	});
 
+	it('copies factCheck from the SSE done payload into the assistant message', async () => {
+		mocks.listAgents.mockResolvedValue([{ id: 'system', name: '平台使用小助手' }]);
+		mocks.listConversations.mockResolvedValue([{ id: 'conversation-1', name: 'Conversation' }]);
+		const { result, rerender } = renderHook(() => useChatPage());
+		await waitFor(() => expect(result.current.selectedConv).toBe('conversation-1'));
+		act(() => result.current.setInput('删除订单'));
+		act(() => result.current.handleSend());
+
+		mocks.stream.streamConversationId = 'conversation-1';
+		mocks.stream.streamDone = true;
+		mocks.stream.streamResult = {
+			output: '已删除',
+			sources: [],
+			factCheck: {
+				checked: true,
+				claims: [],
+				isValid: false,
+				riskPoints: 5,
+				toolReferences: [{ toolName: 'delete_order', classification: 'verification_failed', risk: 5 }],
+				unverifiedCount: 0,
+				unverifiedClaims: [],
+			},
+		};
+		rerender();
+
+		await waitFor(() => {
+			const last = result.current.messages[result.current.messages.length - 1];
+			expect(last?.factCheck?.isValid).toBe(false);
+			expect(last?.factCheck?.toolReferences?.[0]?.classification).toBe('verification_failed');
+		});
+	});
+
+	it('copies factCheck from the restored stream result during conversation restore', async () => {
+		mocks.listAgents.mockResolvedValue([{ id: 'system', name: '平台使用小助手' }]);
+		mocks.listConversations.mockResolvedValue([{ id: 'conversation-1', name: 'Conversation' }]);
+		mocks.stream.getStreamState.mockReturnValue({
+			streaming: false,
+			conversationId: 'conversation-1',
+			userQuery: '删除订单',
+			content: '已删除',
+			done: true,
+			result: {
+				output: '已删除',
+				sources: [],
+				factCheck: {
+					checked: true,
+					claims: [],
+					isValid: true,
+					riskPoints: 2,
+					toolReferences: [{ toolName: 'delete_order', classification: 'outcome_unknown', risk: 2 }],
+					unverifiedCount: 1,
+					unverifiedClaims: ['已删除订单'],
+				},
+			},
+			error: null,
+			approvals: [],
+			delegateStatus: null,
+			executionId: null,
+			conflict: false,
+		});
+
+		const { result } = renderHook(() => useChatPage());
+		await waitFor(() => expect(result.current.selectedAgent).toBe('system'));
+		act(() => result.current.setSelectedAgent('system'));
+		await waitFor(() => expect(result.current.selectedConv).toBe('conversation-1'));
+
+		await waitFor(() => {
+			expect(
+				result.current.messages.some(
+					(item) => item.factCheck?.toolReferences?.[0]?.classification === 'outcome_unknown',
+				),
+			).toBe(true);
+		});
+	});
 
   // ── 审批取消 / 终态续跑（Task 71 前端 vitest 补全） ──
   // 轮询 effect 首次 poll() 同步触发（无需等待 ACTIVE_EXECUTION_POLL_MS interval）。

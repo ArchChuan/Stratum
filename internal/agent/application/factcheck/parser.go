@@ -32,5 +32,29 @@ func ParseClaimVerdicts(content string) ([]domain.ClaimVerdict, error) {
 	if resp.Claims == nil {
 		return []domain.ClaimVerdict{}, nil
 	}
-	return resp.Claims, nil
+	return normalizeVerdicts(resp.Claims), nil
+}
+
+// normalizeVerdicts 归一条目判定：未知 verdict 回退 UNSUPPORTED（judge 输出
+// 可能含模型幻觉的枚举值，保守按不可靠处理，使 summarize 据此推导 IsValid=false），
+// risk 钳制到 [0,5]（越界值会扭曲报告风险推导）。合法枚举原样保留。
+func normalizeVerdicts(verdicts []domain.ClaimVerdict) []domain.ClaimVerdict {
+	out := make([]domain.ClaimVerdict, len(verdicts))
+	for i, v := range verdicts {
+		norm := v
+		switch v.Verdict {
+		case VerdictSupported, VerdictContradicted, VerdictUnsupported:
+			// 合法枚举保持。
+		default:
+			norm.Verdict = VerdictUnsupported
+		}
+		if norm.Risk < 0 {
+			norm.Risk = 0
+		}
+		if norm.Risk > 5 {
+			norm.Risk = 5
+		}
+		out[i] = norm
+	}
+	return out
 }

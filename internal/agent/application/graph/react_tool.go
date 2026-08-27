@@ -31,6 +31,9 @@ type toolExecResult struct {
 	// evidence is retrieval provenance (e.g. RAG sources) merged into the
 	// tool observation metadata so traces record where tool content came from.
 	evidence map[string]any
+	// outcome 携带 MCP 执行结果分类（not_sent / definite_failure / outcome_unknown），
+	// 错误链可解包时回填；幻觉防护对账据此区分"确凿失败"与"传输结果未知"。
+	outcome string
 }
 
 func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReActState] {
@@ -700,7 +703,15 @@ func execMCPTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolS
 		logger.Error("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
 			zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
 			zap.Int64("latency_ms", toolLatencyMs), zap.Error(callErr))
-		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: callErr.Error(), content: fmt.Sprintf("error: %v", callErr)}
+		// 解包 MCPToolExecutionError 透传 Outcome（definite_failure / outcome_unknown
+		// / not_sent），供 ToolObservation 落盘与幻觉防护对账使用。
+		var mcpErr *port.MCPToolExecutionError
+		outcome := ""
+		if errors.As(callErr, &mcpErr) {
+			outcome = string(mcpErr.Outcome)
+		}
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: callErr.Error(),
+			content: fmt.Sprintf("error: %v", callErr), outcome: outcome}
 	case toolOutput != nil:
 		logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
 			zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
@@ -875,6 +886,7 @@ func appendToolObservation(s *ReActState, tc port.ToolCall, provider toolProvide
 		RawText:        result.content,
 		Summary:        summary,
 		Status:         result.status,
+		Outcome:        result.outcome,
 		ErrorMessage:   result.errMsg,
 		LatencyMs:      toolLatencyMs,
 		Metadata:       metadata,
