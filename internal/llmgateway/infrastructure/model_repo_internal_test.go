@@ -286,8 +286,8 @@ func TestModelRepo_UpsertDiscovered_newAndExisting(t *testing.T) {
 	}
 	mock.ExpectBegin()
 	// disable phase
-	mock.ExpectExec(`UPDATE public.models SET enabled=false, updated_at=now\(\),\s+default_embedding = default_embedding AND 'embedding' = ANY\(capabilities\)\s+WHERE provider_id=\$1 AND provider_managed=true`).
-		WithArgs("p1").WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+	mock.ExpectExec(`UPDATE public.models SET enabled=false, updated_at=now\(\),\s+default_embedding = default_embedding AND 'embedding' = ANY\(capabilities\)\s+WHERE provider_id=\$1 AND provider_managed=true AND name != ALL\(\$2\)`).
+		WithArgs("p1", []string{"new-model", "existing-model"}).WillReturnResult(pgxmock.NewResult("UPDATE", 2))
 	// new model -> no existing row -> insert
 	mock.ExpectQuery("SELECT id FROM public.models WHERE provider_id=\\$1 AND name=\\$2").
 		WithArgs("p1", "new-model").WillReturnError(pgx.ErrNoRows)
@@ -299,7 +299,7 @@ func TestModelRepo_UpsertDiscovered_newAndExisting(t *testing.T) {
 	mock.ExpectQuery("SELECT id FROM public.models WHERE provider_id=\\$1 AND name=\\$2").
 		WithArgs("p1", "existing-model").
 		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("m-exist"))
-	mock.ExpectExec("UPDATE public.models SET enabled=true").
+	mock.ExpectExec(`UPDATE public.models SET context_window=\$1, max_tokens=\$2`).
 		WithArgs(128000, 8192, domain.CapabilitySourceProviderAPI, domain.CapabilitySourceProviderAPI, "m-exist").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	// read back
@@ -327,8 +327,8 @@ func TestModelRepo_UpsertDiscovered_disableFails(t *testing.T) {
 	repo := newMockModelRepo(mock)
 
 	mock.ExpectBegin()
-	mock.ExpectExec(`UPDATE public.models SET enabled=false, updated_at=now\(\),\s+default_embedding = default_embedding AND 'embedding' = ANY\(capabilities\)\s+WHERE provider_id=\$1 AND provider_managed=true`).
-		WithArgs("p1").WillReturnError(pgx.ErrTxClosed)
+	mock.ExpectExec(`UPDATE public.models SET enabled=false, updated_at=now\(\),\s+default_embedding = default_embedding AND 'embedding' = ANY\(capabilities\)\s+WHERE provider_id=\$1 AND provider_managed=true AND name != ALL\(\$2\)`).
+		WithArgs("p1", []string{}).WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
 	_, err := repo.UpsertDiscovered(context.Background(), "p1", nil)
@@ -341,8 +341,8 @@ func TestModelRepo_UpsertDiscovered_insertFails(t *testing.T) {
 	repo := newMockModelRepo(mock)
 
 	mock.ExpectBegin()
-	mock.ExpectExec(`UPDATE public.models SET enabled=false, updated_at=now\(\),\s+default_embedding = default_embedding AND 'embedding' = ANY\(capabilities\)\s+WHERE provider_id=\$1 AND provider_managed=true`).
-		WithArgs("p1").WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectExec(`UPDATE public.models SET enabled=false, updated_at=now\(\),\s+default_embedding = default_embedding AND 'embedding' = ANY\(capabilities\)\s+WHERE provider_id=\$1 AND provider_managed=true AND name != ALL\(\$2\)`).
+		WithArgs("p1", []string{"new-model"}).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectQuery("SELECT id FROM public.models WHERE provider_id=\\$1 AND name=\\$2").
 		WithArgs("p1", "new-model").WillReturnError(pgx.ErrNoRows)
 	mock.ExpectExec("INSERT INTO public.models").
@@ -363,12 +363,12 @@ func TestModelRepo_UpsertDiscovered_updateFails(t *testing.T) {
 	repo := newMockModelRepo(mock)
 
 	mock.ExpectBegin()
-	mock.ExpectExec(`UPDATE public.models SET enabled=false, updated_at=now\(\),\s+default_embedding = default_embedding AND 'embedding' = ANY\(capabilities\)\s+WHERE provider_id=\$1 AND provider_managed=true`).
-		WithArgs("p1").WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec(`UPDATE public.models SET enabled=false, updated_at=now\(\),\s+default_embedding = default_embedding AND 'embedding' = ANY\(capabilities\)\s+WHERE provider_id=\$1 AND provider_managed=true AND name != ALL\(\$2\)`).
+		WithArgs("p1", []string{"existing"}).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectQuery("SELECT id FROM public.models WHERE provider_id=\\$1 AND name=\\$2").
 		WithArgs("p1", "existing").
 		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("m-exist"))
-	mock.ExpectExec("UPDATE public.models SET enabled=true").
+	mock.ExpectExec(`UPDATE public.models SET context_window=\$1, max_tokens=\$2`).
 		WithArgs(1, 2, pgxmock.AnyArg(), pgxmock.AnyArg(), "m-exist").WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
