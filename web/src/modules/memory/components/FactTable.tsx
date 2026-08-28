@@ -19,11 +19,14 @@ import { useEffect, useState } from 'react';
 import { useFactsTab } from '../hooks/useFactsTab';
 import type { MemoryFact } from '../model/memory';
 
+import { MemoryScopeTag } from './MemoryScopeTag';
+
 import { FACT_CATEGORIES } from '@/constants';
 import { DangerPopconfirm, EmptyHint } from '@/shared/ui';
 
 const columns = (onEdit: (f: MemoryFact) => void, onDelete: (id: string) => void, deleteLoading: boolean): ColumnsType<MemoryFact> => [
   { title: '内容', dataIndex: 'content', ellipsis: true },
+  { title: '归属', dataIndex: 'scope', width: 100, render: (v: string) => <MemoryScopeTag scope={v} /> },
   { title: '分类', dataIndex: 'category', width: 100, render: (v: string) => <Tag>{v}</Tag> },
   { title: '重要度', dataIndex: 'importance', width: 90, render: (v: number) => v.toFixed(2) },
   { title: '来源', dataIndex: 'source', width: 130, ellipsis: true },
@@ -139,6 +142,9 @@ export const FactTable = ({ onChanged, reloadKey }: { onChanged?: () => void; re
         {detail && (
           <Descriptions column={1} bordered size="small">
             <Descriptions.Item label="内容">{detail.content}</Descriptions.Item>
+            <Descriptions.Item label="归属">
+              <MemoryScopeTag scope={detail.scope} />
+            </Descriptions.Item>
             <Descriptions.Item label="分类">{detail.category}</Descriptions.Item>
             <Descriptions.Item label="重要度">{detail.importance}</Descriptions.Item>
             <Descriptions.Item label="置信度">{detail.confidence}</Descriptions.Item>

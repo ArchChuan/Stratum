@@ -279,8 +279,9 @@ func (r *MemoryRepo) GetSummary(ctx context.Context, tenantID, sessionID string)
 }
 
 // entryListWhere 构造 ListUserEntries/CountUserEntries 的 WHERE 与参数（$N 绑定）。
+// #29：去掉 scope='user' 过滤，管理页全量展示 user + agent 双 scope。
 func entryListWhere(userID, query string) (string, []any) {
-	clauses := []string{"user_id = $1", "scope = 'user'"}
+	clauses := []string{"user_id = $1"}
 	args := []any{userID}
 	if query != "" {
 		clauses = append(clauses, fmt.Sprintf("content ILIKE $%d", len(args)+1))

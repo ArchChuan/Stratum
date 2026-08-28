@@ -251,7 +251,9 @@ func TestEntityRepo_FindByNameAndType_notFound(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestEntityRepo_ListUserEntities_filtersActiveUserScope(t *testing.T) {
+// TestEntityRepo_ListUserEntities_listsActiveAllScopes 覆盖 #29：管理页全量展示
+// user + agent 双 scope 实体，scope 随行返回供前端标注来源。
+func TestEntityRepo_ListUserEntities_listsActiveAllScopes(t *testing.T) {
 	mock := newFactMock(t)
 	repo := newMockEntityRepo(mock)
 
@@ -259,9 +261,9 @@ func TestEntityRepo_ListUserEntities_filtersActiveUserScope(t *testing.T) {
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectQuery("FROM memory_entities").
 		WithArgs("u1", 10, 0).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "entity_type", "fact_count", "last_seen_at"}).
-			AddRow("e1", "alice", "person", 5, ts()).
-			AddRow("e2", "python", "tech", 2, ts()))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "entity_type", "fact_count", "last_seen_at", "scope"}).
+			AddRow("e1", "alice", "person", 5, ts(), "user").
+			AddRow("e2", "python", "tech", 2, ts(), "agent"))
 	mock.ExpectCommit()
 
 	entities, err := repo.ListUserEntities(context.Background(), "t1", "u1", 10, 0)
@@ -269,7 +271,9 @@ func TestEntityRepo_ListUserEntities_filtersActiveUserScope(t *testing.T) {
 	require.Len(t, entities, 2)
 	require.Equal(t, "alice", entities[0].Name)
 	require.Equal(t, 5, entities[0].FactCount)
+	require.Equal(t, domain.ScopeUser, entities[0].Scope)
 	require.Equal(t, "python", entities[1].Name)
+	require.Equal(t, domain.ScopeAgent, entities[1].Scope)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -296,8 +300,8 @@ func TestEntityRepo_ListUserEntities_scanFails(t *testing.T) {
 	mock.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectQuery("FROM memory_entities").
 		WithArgs(anyArgs(3)...).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "entity_type", "fact_count", "last_seen_at"}).
-			AddRow("e1", 42, "person", 5, ts()))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "entity_type", "fact_count", "last_seen_at", "scope"}).
+			AddRow("e1", 42, "person", 5, ts(), "user"))
 	mock.ExpectRollback()
 
 	_, err := repo.ListUserEntities(context.Background(), "t1", "u1", 10, 0)

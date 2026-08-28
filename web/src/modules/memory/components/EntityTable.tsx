@@ -5,10 +5,13 @@ import { useEffect } from 'react';
 import { useEntitiesTab } from '../hooks/useEntitiesTab';
 import type { MemoryEntity } from '../model/memory';
 
+import { MemoryScopeTag } from './MemoryScopeTag';
+
 import { DangerPopconfirm, EmptyHint } from '@/shared/ui';
 
 const columns = (onDelete: (id: string) => void, deleteLoading: boolean): ColumnsType<MemoryEntity> => [
   { title: '名称', dataIndex: 'name' },
+  { title: '归属', dataIndex: 'scope', width: 100, render: (v: string) => <MemoryScopeTag scope={v} /> },
   { title: '类型', dataIndex: 'entity_type', width: 120 },
   { title: '关联事实数', dataIndex: 'fact_count', width: 110 },
   { title: '最近出现', dataIndex: 'last_seen_at', width: 170, render: (v: string) => new Date(v).toLocaleString() },

@@ -246,12 +246,13 @@ const historyListUserQuery = `
   importance, confidence, COALESCE(aggregation_key, '') AS aggregation_key,
   status, created_at, updated_at
  FROM memory_summaries
- WHERE user_id = $1 AND scope = 'user' AND status = 'active'
+ -- #29：管理页全量展示（user + agent 双 scope），scope 随行返回供前端标注来源。
+ WHERE user_id = $1 AND status = 'active'
  ORDER BY created_at DESC LIMIT $2 OFFSET $3`
 
 const historyCountUserQuery = `
  SELECT count(*) FROM memory_summaries
- WHERE user_id = $1 AND scope = 'user' AND status = 'active'`
+ WHERE user_id = $1 AND status = 'active'`
 
 func (r *HistoryRepo) ListUserSummaries(ctx context.Context, tenantID, userID string, limit, offset int) ([]*domain.HistorySegment, error) {
 	var out []*domain.HistorySegment

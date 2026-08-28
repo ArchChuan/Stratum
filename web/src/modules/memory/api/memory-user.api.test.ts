@@ -90,6 +90,7 @@ describe('memoryUserApi', () => {
             entity_type: 'tech',
             fact_count: 4,
             last_seen_at: '2026-08-01T10:00:00Z',
+            scope: 'user',
           },
         ],
         total: 1,

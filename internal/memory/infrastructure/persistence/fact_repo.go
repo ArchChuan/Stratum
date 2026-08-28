@@ -354,7 +354,8 @@ func (r *FactRepo) ListUserFacts(ctx context.Context, tenantID, userID string, l
 			created_at, updated_at, frecency_score,
 			category, confidence, source
 		FROM memory_facts
-		WHERE user_id = $1 AND status = 'active' AND scope = 'user'
+		-- #29：管理页全量展示（user + agent 双 scope），scope 已在 SELECT 中返回。
+		WHERE user_id = $1 AND status = 'active'
 		ORDER BY created_at DESC
 		LIMIT $2 OFFSET $3`
 
@@ -373,8 +374,9 @@ func (r *FactRepo) ListUserFacts(ctx context.Context, tenantID, userID string, l
 
 // factFilterClause 构造 ListUserFactsFiltered/CountUserFactsFiltered 的 WHERE 子句
 // 与参数；$N 占位符与 args 顺序绑定，禁止把用户输入拼进 SQL 文本。
+// #29：去掉 scope='user' 过滤，管理页全量展示 user + agent 双 scope。
 func factFilterClause(userID string, filter domain.FactListFilter) (string, []any) {
-	clauses := []string{"user_id = $1", "status = 'active'", "scope = 'user'"}
+	clauses := []string{"user_id = $1", "status = 'active'"}
 	args := []any{userID}
 	if filter.Query != "" {
 		clauses = append(clauses, fmt.Sprintf("content ILIKE $%d", len(args)+1))
@@ -526,8 +528,9 @@ func (r *FactRepo) FindSupersedeCandidates(ctx context.Context, tenantID string,
 func (r *FactRepo) CountByUser(ctx context.Context, tenantID, userID string) (int, error) {
 	var count int
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// #29：全量口径（user + agent 双 scope active），与 ListUserFacts 同源。
 		return tx.QueryRow(ctx,
-			"SELECT COUNT(*) FROM memory_facts WHERE user_id = $1 AND status = 'active' AND scope = 'user'",
+			"SELECT COUNT(*) FROM memory_facts WHERE user_id = $1 AND status = 'active'",
 			userID).Scan(&count)
 	})
 	if err != nil {

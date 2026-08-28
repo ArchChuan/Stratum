@@ -160,13 +160,14 @@ func (r *EntityRepo) FindByNameAndType(ctx context.Context, tenantID string, fil
 	return out, err
 }
 
-// ListUserEntities lists the user's active user-scope entities as lightweight
-// topic tags, newest-seen first. 与 ListUserFacts 同口径（scope='user' AND active）。
+// ListUserEntities lists the user's active entities as lightweight topic tags,
+// newest-seen first. #29：管理页全量展示（user + agent 双 scope），scope 随行返回
+// 供前端标注来源；与 ListUserFacts 同口径（status='active'）。
 func (r *EntityRepo) ListUserEntities(ctx context.Context, tenantID, userID string, limit, offset int) ([]*domain.MemoryEntity, error) {
 	const query = `
-		SELECT id, name, entity_type, fact_count, last_seen_at
+		SELECT id, name, entity_type, fact_count, last_seen_at, scope
 		FROM memory_entities
-		WHERE user_id = $1 AND scope = 'user' AND status = 'active'
+		WHERE user_id = $1 AND status = 'active'
 		ORDER BY last_seen_at DESC
 		LIMIT $2 OFFSET $3`
 
@@ -179,9 +180,11 @@ func (r *EntityRepo) ListUserEntities(ctx context.Context, tenantID, userID stri
 		defer rows.Close()
 		for rows.Next() {
 			var e domain.MemoryEntity
-			if err := rows.Scan(&e.ID, &e.Name, &e.EntityType, &e.FactCount, &e.LastSeenAt); err != nil {
+			var scope string
+			if err := rows.Scan(&e.ID, &e.Name, &e.EntityType, &e.FactCount, &e.LastSeenAt, &scope); err != nil {
 				return fmt.Errorf("scan user entity: %w", err)
 			}
+			e.Scope = domain.Scope(scope)
 			out = append(out, &e)
 		}
 		return rows.Err()
@@ -189,13 +192,13 @@ func (r *EntityRepo) ListUserEntities(ctx context.Context, tenantID, userID stri
 	return out, err
 }
 
-// CountUserEntities returns the user's active user-scope entity count,
+// CountUserEntities returns the user's active entity count（含 user/agent 双 scope），
 // 与 ListUserEntities 同口径。
 func (r *EntityRepo) CountUserEntities(ctx context.Context, tenantID, userID string) (int, error) {
 	var count int
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			"SELECT COUNT(*) FROM memory_entities WHERE user_id = $1 AND scope = 'user' AND status = 'active'",
+			"SELECT COUNT(*) FROM memory_entities WHERE user_id = $1 AND status = 'active'",
 			userID).Scan(&count)
 	})
 	if err != nil {
