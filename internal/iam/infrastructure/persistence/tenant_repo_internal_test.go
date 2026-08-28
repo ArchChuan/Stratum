@@ -294,7 +294,7 @@ func pgxErrNoRows() error { return pgx.ErrNoRows }
 
 func TestTenantRepo_ListAllTenants(t *testing.T) {
 	repo, mock := newTenantRepo(t)
-	mock.ExpectQuery(`SELECT id, name, is_default FROM public.tenants`).
+	mock.ExpectQuery(`SELECT id, name, is_default FROM public.tenants\s*WHERE deleted_at IS NULL AND status = 'active'`).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "is_default"}).
 			AddRow("t1", "Alpha", true).
 			AddRow("t2", "Beta", false))
@@ -308,7 +308,7 @@ func TestTenantRepo_ListAllTenants(t *testing.T) {
 
 func TestTenantRepo_ListAllTenants_Error(t *testing.T) {
 	repo, mock := newTenantRepo(t)
-	mock.ExpectQuery(`SELECT id, name, is_default FROM public.tenants`).
+	mock.ExpectQuery(`SELECT id, name, is_default FROM public.tenants\s*WHERE deleted_at IS NULL AND status = 'active'`).
 		WillReturnError(errAny)
 	_, err := repo.ListAllTenants(context.Background())
 	require.ErrorContains(t, err, "list all tenants")
