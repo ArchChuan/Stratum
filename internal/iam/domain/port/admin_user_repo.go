@@ -3,6 +3,8 @@ package port
 import (
 	"context"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
 )
 
@@ -26,9 +28,9 @@ type AdminUserRepo interface {
 	// ListAdmins returns all platform admins (system_admin + global_admin).
 	ListAdmins(ctx context.Context) ([]AdminUser, error)
 	// SetAdminRole promotes userID to system_admin. ErrUserNotFound if absent.
-	SetAdminRole(ctx context.Context, userID string) error
+	SetAdminRole(ctx context.Context, userID string, actorTenantID string, audit *auditdomain.ResourceChangeAuditEvent) error
 	// RemoveAdminRole demotes userID back to user. ErrUserNotFound if absent.
-	RemoveAdminRole(ctx context.Context, userID string) error
+	RemoveAdminRole(ctx context.Context, userID string, actorTenantID string, audit *auditdomain.ResourceChangeAuditEvent) error
 	// GetGlobalRole returns userID's current global_role.
 	GetGlobalRole(ctx context.Context, userID string) (domain.GlobalRole, error)
 }

@@ -9,6 +9,7 @@ import {
   Button,
   Card,
   Empty,
+  message,
   Modal,
   Table,
   Tag,
@@ -18,6 +19,8 @@ import {
 import { useCallback, useState } from 'react';
 
 import { llmApi } from '../api/llm.api';
+import { AddModelModal } from '../components/AddModelModal';
+import type { AddModelFormValues } from '../components/AddModelModal';
 import { DiscoverResultModal } from '../components/DiscoverResultModal';
 import { ProviderForm } from '../components/ProviderForm';
 import type { ProviderFormValues } from '../components/ProviderForm';
@@ -40,7 +43,12 @@ const KIND_COLORS: Record<ProviderKind, string> = {
   ollama: 'orange',
 };
 
-export function ProviderListPage() {
+interface Props {
+  /** 手动添加模型成功后回调，用于触发模型目录刷新。 */
+  onModelCreated?: () => void;
+}
+
+export function ProviderListPage({ onModelCreated }: Props) {
   const { providers, loading, createLoading, updateLoading, refresh, createProvider, updateProvider, deleteProvider } = useProviders();
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -49,6 +57,9 @@ export function ProviderListPage() {
   const [discoverResults, setDiscoverResults] = useState<Model[]>([]);
   const [discoverProviderName, setDiscoverProviderName] = useState('');
   const [discoverOpen, setDiscoverOpen] = useState(false);
+  const [addModelOpen, setAddModelOpen] = useState(false);
+  const [addModelProvider, setAddModelProvider] = useState<Provider | null>(null);
+  const [addModelLoading, setAddModelLoading] = useState(false);
 
   const handleCreate = useCallback(
     async (values: CreateProviderInput) => {
@@ -117,6 +128,32 @@ export function ProviderListPage() {
     }
   }, []);
 
+  const handleAddModel = useCallback(
+    async (values: AddModelFormValues) => {
+      if (!addModelProvider) return;
+      setAddModelLoading(true);
+      try {
+        await llmApi.createModel({
+          providerId: addModelProvider.id,
+          name: values.name.trim(),
+          capabilities: values.capabilities,
+          // 0 = 未设置，后端回退到厂商默认。
+          contextWindow: values.contextWindow ?? 0,
+          maxTokens: values.maxTokens ?? 0,
+        });
+        message.success({ content: '模型已添加', duration: 2 });
+        setAddModelOpen(false);
+        setAddModelProvider(null);
+        onModelCreated?.();
+      } catch (err) {
+        message.error({ content: extractErrorMessage(err, '添加模型失败'), duration: 3 });
+      } finally {
+        setAddModelLoading(false);
+      }
+    },
+    [addModelProvider, onModelCreated],
+  );
+
   const handleHealthCheck = useCallback(async (record: Provider) => {
     try {
       const res = await llmApi.healthCheck(record.id);
@@ -180,9 +217,18 @@ export function ProviderListPage() {
     {
       title: '操作',
       key: 'actions',
-      width: 300,
+      width: 360,
       render: (_: unknown, record: Provider) => (
         <span style={{ display: 'flex', gap: 8 }}>
+          <Button
+            size="small"
+            onClick={() => {
+              setAddModelProvider(record);
+              setAddModelOpen(true);
+            }}
+          >
+            添加模型
+          </Button>
           <Button
             size="small"
             onClick={() => handleDiscover(record)}
@@ -274,6 +320,17 @@ export function ProviderListPage() {
         onClose={() => setDiscoverOpen(false)}
         results={discoverResults}
         providerName={discoverProviderName}
+      />
+
+      <AddModelModal
+        open={addModelOpen}
+        provider={addModelProvider}
+        loading={addModelLoading}
+        onCancel={() => {
+          setAddModelOpen(false);
+          setAddModelProvider(null);
+        }}
+        onSubmit={handleAddModel}
       />
     </Card>
   );

@@ -24,9 +24,6 @@ import type { User } from '@/modules/iam';
 
 type MenuItem = NonNullable<MenuProps['items']>[number];
 
-// 平台角色层级，与后端 middleware.RequirePlatformAdmin / PrivateRoute 保持一致。
-const PLATFORM_ROLE_RANK: Record<string, number> = { user: 1, system_admin: 2, global_admin: 3 };
-
 /**
  * label 一律用字符串,不用 <Link> ReactNode。
  * 根因(实测):antd Menu 每次路由切换对 26 个 <Link> 全量 reconcile,
@@ -36,9 +33,6 @@ const PLATFORM_ROLE_RANK: Record<string, number> = { user: 1, system_admin: 2, g
 export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
   const tenantRole = user?.role ?? user?.current_tenant?.role ?? 'member';
   const canManageTenant = tenantRole === 'admin' || tenantRole === 'owner';
-  const platformRoleRank = PLATFORM_ROLE_RANK[user?.global_role || 'user'] ?? 0;
-  const isPlatformAdmin = platformRoleRank >= PLATFORM_ROLE_RANK.system_admin;
-  const isGlobalAdmin = platformRoleRank >= PLATFORM_ROLE_RANK.global_admin;
   const base: MenuItem[] = [
     { key: '/', icon: <DashboardOutlined />, label: '概览' },
     { key: '/chat', icon: <CommentOutlined />, label: 'Agent 对话' },
@@ -151,41 +145,22 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
     });
   }
 
-  // 平台管理面合并自原「平台管理（租户 admin）」+「系统管理（global/system admin）」。
-  // 普通平台管理员（system_admin）可见租户管理/平台参数；模型管理与平台管理员管理
-  // 仅 global_admin（URL 直达被路由守卫与后端 RequireGlobalAdmin 双拦截）。
-  if (isPlatformAdmin) {
-    base.push({
-      key: 'platform-admin-group',
-      icon: <SettingOutlined />,
-      label: '平台管理',
-      children: [
-        isGlobalAdmin ? {
-          key: '/models',
-          icon: <ApiOutlined />,
-          label: '模型管理',
-        } : null,
-        {
-          // 平台级 /audit 已废弃：平台 HTTP 审计 public.audit_events 删除后，
-          // 审计日志仅以租户级顶层入口存在（见上），global admin 平台管理组不再包含。
-          // /prompts、/mechanism 随 main 移除提示词管理（#374）与机制基线存储化一并删除。
-          key: '/admin/tenants',
-          icon: <GlobalOutlined />,
-          label: '全局租户',
-        },
-        {
-          key: '/admin/settings',
-          icon: <SettingOutlined />,
-          label: '平台参数',
-        },
-        isGlobalAdmin ? {
-          key: '/admin/admins',
-          icon: <SafetyCertificateOutlined />,
-          label: '平台管理员',
-        } : null,
-      ].filter(Boolean),
-    });
-  }
+  // 平台管理菜单对普通用户常显（需求：侧边栏可见，点击由 PrivateRoute 渲染 403）。
+  // 各项操作权限仍由路由守卫 + 后端中间件双拦截：租户管理/平台参数/审计日志要求
+  // system_admin，模型管理与平台管理员要求 global_admin（URL 直达同样被拦）。
+  // /prompts、/mechanism 随 main 移除提示词管理（#374）与机制基线存储化一并删除。
+  base.push({
+    key: 'platform-admin-group',
+    icon: <SettingOutlined />,
+    label: '平台管理',
+    children: [
+      { key: '/models', icon: <ApiOutlined />, label: '模型管理' },
+      { key: '/admin/tenants', icon: <GlobalOutlined />, label: '全局租户' },
+      { key: '/admin/settings', icon: <SettingOutlined />, label: '平台参数' },
+      { key: '/admin/admins', icon: <SafetyCertificateOutlined />, label: '平台管理员' },
+      { key: '/admin/audit', icon: <AuditOutlined />, label: '审计日志' },
+    ],
+  });
 
   return base;
 };

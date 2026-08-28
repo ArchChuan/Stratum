@@ -28,5 +28,6 @@ type ProviderRepository interface {
 // PlatformProviderRepository is the public-catalog mutation port. Production
 // implementations write the public resource and platform audit atomically.
 type PlatformProviderRepository interface {
+	CreatePlatform(ctx context.Context, p *domain.Provider, actorTenantID string, audit *auditdomain.ResourceChangeAuditEvent) error
 	UpdatePlatform(ctx context.Context, p *domain.Provider, actorTenantID string, audit *auditdomain.ResourceChangeAuditEvent) error
 }

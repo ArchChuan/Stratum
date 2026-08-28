@@ -150,7 +150,6 @@ func (r *PgResourceChangeAuditRepo) ListPlatform(
 		f.Offset = 0
 	}
 	where, args := buildPlatformAuditWhere(f)
-	result := make([]port.ResourceChangeAuditRow, 0)
 	var total int
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -170,21 +169,54 @@ func (r *PgResourceChangeAuditRepo) ListPlatform(
 		return nil, 0, fmt.Errorf("audit: query platform resource change audits: %w", err)
 	}
 	defer dbRows.Close()
+	result, actorIDs, err := scanPlatformRows(dbRows)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(actorIDs) > 0 {
+		if err := enrichPlatformActorNames(ctx, tx, result, actorIDs); err != nil {
+			return nil, 0, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, 0, fmt.Errorf("audit: commit platform query: %w", err)
+	}
+	return result, total, nil
+}
+
+// enrichPlatformActorNames 批量查询 actor 显示名并回填到每行。
+// 收敛 loadActorNames 错误分支与回填循环，控制 ListPlatform 圈复杂度。
+func enrichPlatformActorNames(ctx context.Context, tx pgx.Tx, result []port.ResourceChangeAuditRow, actorIDs []string) error {
+	names, err := loadActorNames(ctx, tx, actorIDs)
+	if err != nil {
+		return err
+	}
+	for i := range result {
+		result[i].ActorName = actorDisplayName(result[i].ActorID, names)
+	}
+	return nil
+}
+
+// scanPlatformRows 扫描平台审计查询结果，返回行与 actor_id 列表。
+// 单独成函数收敛迭代/扫描/遍历错误分支，控制 ListPlatform 圈复杂度。
+func scanPlatformRows(dbRows pgx.Rows) ([]port.ResourceChangeAuditRow, []string, error) {
+	result := make([]port.ResourceChangeAuditRow, 0, 8)
+	actorIDs := make([]string, 0, 8)
 	for dbRows.Next() {
 		var row port.ResourceChangeAuditRow
 		var before, after []byte
 		if err := dbRows.Scan(&row.ID, &row.ResourceKind, &row.ResourceID, &row.Operation,
 			&row.ActorID, &row.CreatedAt, &before, &after); err != nil {
-			return nil, 0, fmt.Errorf("audit: scan platform resource change audit: %w", err)
+			return nil, nil, fmt.Errorf("audit: scan platform resource change audit: %w", err)
 		}
 		row.Before, row.After = json.RawMessage(before), json.RawMessage(after)
-		row.ActorName = row.ActorID
+		actorIDs = append(actorIDs, row.ActorID)
 		result = append(result, row)
 	}
 	if err := dbRows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("audit: iterate platform resource change audits: %w", err)
+		return nil, nil, fmt.Errorf("audit: iterate platform resource change audits: %w", err)
 	}
-	return result, total, nil
+	return result, actorIDs, nil
 }
 
 func (r *PgResourceChangeAuditRepo) GetPlatformByID(
@@ -209,7 +241,15 @@ func (r *PgResourceChangeAuditRepo) GetPlatformByID(
 	if err != nil {
 		return nil, fmt.Errorf("audit: get platform resource change audit: %w", err)
 	}
-	row.Before, row.After, row.ActorName = json.RawMessage(before), json.RawMessage(after), row.ActorID
+	row.Before, row.After = json.RawMessage(before), json.RawMessage(after)
+	names, err := loadActorNames(ctx, tx, []string{row.ActorID})
+	if err != nil {
+		return nil, err
+	}
+	row.ActorName = actorDisplayName(row.ActorID, names)
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("audit: commit platform get: %w", err)
+	}
 	return &row, nil
 }
 
@@ -254,7 +294,9 @@ func buildPlatformAuditWhere(f port.ResourceChangeAuditFilter) (string, []any) {
 	}
 	if f.ActorName != "" {
 		args = append(args, "%"+f.ActorName+"%")
-		conds = append(conds, fmt.Sprintf("actor_id ILIKE $%d", len(args)))
+		idx := len(args)
+		conds = append(conds, fmt.Sprintf(
+			`(EXISTS (SELECT 1 FROM public.users u WHERE u.id::text = r.actor_id AND (u.display_name ILIKE $%[1]d OR u.github_login ILIKE $%[1]d)) OR r.actor_id ILIKE $%[1]d)`, idx))
 	}
 	if f.From != nil {
 		args = append(args, *f.From)

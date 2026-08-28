@@ -14,7 +14,7 @@ import {
   Table,
   Typography,
 } from 'antd';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { ModelCapabilityTags } from '../components/ModelCapabilityTags';
 import { ModelEditDrawer } from '../components/ModelEditDrawer';
@@ -35,7 +35,12 @@ const CAP_FILTER_OPTIONS: { label: string; value: ModelCapability }[] = [
   { label: '推理', value: 'reasoning' },
 ];
 
-export function ModelListPage() {
+interface Props {
+  /** 厂商管理手动添加模型后递增，用于触发目录刷新；首次 0 不触发。 */
+  refreshTick?: number;
+}
+
+export function ModelListPage({ refreshTick = 0 }: Props) {
   const { models, loading, refresh, toggleModel, updateModel, updateModelPolicy, deleteModel } = useModels();
   const [capFilter, setCapFilter] = useState<ModelCapability | undefined>();
   const [editModel, setEditModel] = useState<Model | null>(null);
@@ -47,6 +52,13 @@ export function ModelListPage() {
       capFilter ? models.filter((m) => m.capabilities.includes(capFilter)) : models,
     [models, capFilter],
   );
+
+  // 厂商管理手动添加模型后（refreshTick>0 首次挂载除外）重新拉取目录。
+  useEffect(() => {
+    if (refreshTick > 0) {
+      void refresh();
+    }
+  }, [refreshTick, refresh]);
 
   const handleEdit = useCallback((record: Model) => {
     setEditModel(record);

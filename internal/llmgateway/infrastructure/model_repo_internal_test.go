@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 	"github.com/jackc/pgx/v5"
@@ -58,6 +59,46 @@ func TestModelRepo_Create_success(t *testing.T) {
 
 	require.NoError(t, repo.Create(context.Background(), m))
 	require.Equal(t, now, m.CreatedAt)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestModelRepo_CreatePlatform_success 回归：手动添加模型走 CreatePlatform，
+// sampling_params 列 NOT NULL DEFAULT '{}'，INSERT 必须传 '{}'（nil 会触发
+// 23502 not-null violation）。同事务平台审计行也必须写入。
+func TestModelRepo_CreatePlatform_success(t *testing.T) {
+	mock := newFactMock(t)
+	repo := newMockModelRepo(mock)
+
+	m := &domain.Model{
+		ID: "m-manual", ProviderID: "p1", Name: "gpt-manual", DisplayName: "GPT Manual",
+		Capabilities:        []domain.ModelCapability{domain.CapChat},
+		ContextWindow:       128000,
+		MaxTokens:           8192,
+		Enabled:             true,
+		ContextWindowSource: domain.CapabilitySourceManualUnknown,
+		MaxTokensSource:     domain.CapabilitySourceManualUnknown,
+	}
+	ev := &auditdomain.ResourceChangeAuditEvent{
+		ResourceKind: auditdomain.ResourceKindModel,
+		ResourceID:   "m-manual",
+		Operation:    auditdomain.ChangeOpCreate,
+		ActorID:      "admin-1",
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO public.models").
+		WithArgs(m.ID, m.ProviderID, m.Name, m.DisplayName, []string{"chat"},
+			m.ContextWindow, m.MaxTokens, m.ContextWindowSource, m.MaxTokensSource,
+			0.0, 0.0, false, true, false, "{}", (*float64)(nil)).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec(`INSERT INTO public.platform_resource_change_audits`).
+		WithArgs(pgxmock.AnyArg(), ev.ResourceKind, ev.ResourceID, ev.Operation, ev.ActorID,
+			"tenant-9", pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	require.NoError(t, repo.CreatePlatform(context.Background(), m, "tenant-9", ev))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
