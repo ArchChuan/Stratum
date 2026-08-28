@@ -100,14 +100,17 @@ func (s *PgChatStore) GetConversation(ctx context.Context, tenantID, convID stri
 	return &conv, nil
 }
 
-func (s *PgChatStore) CreateConversation(ctx context.Context, tenantID, agentID, userID, name string) (*domain.ChatConversation, error) {
+func (s *PgChatStore) CreateConversation(ctx context.Context, tenantID, agentID, userID, name, source string) (*domain.ChatConversation, error) {
+	if source == "" {
+		source = "manual"
+	}
 	var conv domain.ChatConversation
 	err := pgstore.ExecTenantWith(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			`INSERT INTO chat_conversations (agent_id, user_id, name)
-			 VALUES ($1, $2, $3)
+			`INSERT INTO chat_conversations (agent_id, user_id, name, source)
+			 VALUES ($1, $2, $3, $4)
 			 RETURNING id, agent_id, user_id, name, created_at, updated_at, expires_at`,
-			agentID, userID, name,
+			agentID, userID, name, source,
 		).Scan(&conv.ID, &conv.AgentID, &conv.UserID, &conv.Name,
 			&conv.CreatedAt, &conv.UpdatedAt, &conv.ExpiresAt)
 	})
@@ -124,6 +127,7 @@ func (s *PgChatStore) ListConversations(ctx context.Context, tenantID, agentID, 
 			`SELECT id, agent_id, user_id, name, created_at, updated_at, expires_at
 			 FROM chat_conversations
 			 WHERE agent_id = $1 AND user_id = $2 AND expires_at > NOW() AND deleted_at IS NULL
+			   AND source <> 'workflow'
 			 ORDER BY updated_at DESC`,
 			agentID, userID,
 		)

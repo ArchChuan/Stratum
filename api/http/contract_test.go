@@ -394,7 +394,7 @@ func (contractControlRepo) ResolveEffect(_ context.Context, _ string, _ string, 
 
 type contractAgentExecutor struct{}
 
-func (contractAgentExecutor) ExecuteAgent(_ context.Context, _ string, _ string, _ string) (string, string, error) {
+func (contractAgentExecutor) ExecuteAgent(_ context.Context, _ string, _ string, _ string, _ string, _ string) (string, string, error) {
 	return "", "", errors.New("stub: agent execution unavailable")
 }
 

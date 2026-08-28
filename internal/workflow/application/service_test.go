@@ -148,7 +148,7 @@ type agentStub struct {
 	fail  string
 }
 
-func (s *agentStub) ExecuteAgent(_ context.Context, _, agentID, input string) (string, string, error) {
+func (s *agentStub) ExecuteAgent(_ context.Context, _, agentID, _, _, input string) (string, string, error) {
 	s.calls = append(s.calls, agentID+":"+input)
 	if agentID == s.fail {
 		return "", "trace-fail", errors.New("agent failed")

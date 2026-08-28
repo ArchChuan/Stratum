@@ -154,8 +154,10 @@ func registerWorkflows(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 	runs.GET("/:id/events", h.GetEvents)
 	runs.GET("/:id/events/stream", h.StreamEvents)
 	runs.POST("/:id/cancel", requireActive, h.CancelRun)
-	runs.POST("/:id/pause", admin, requireActive, h.PauseRun)
-	runs.POST("/:id/resume", admin, requireActive, h.ResumeRun)
+	// pause/resume 放开给执行人（发起人）：鉴权在 application 层 authorizeRun 完成，
+	// 执行人可暂停/继续自己发起的运行，非发起人 member 被拒绝。
+	runs.POST("/:id/pause", requireActive, h.PauseRun)
+	runs.POST("/:id/resume", requireActive, h.ResumeRun)
 	runs.POST("/:id/manual-interventions/:effectID/resolve", admin, requireActive, h.ResolveManual)
 	approvals := r.Group("/workflow-approvals", member...)
 	approvals.GET("", admin, h.ListApprovals)

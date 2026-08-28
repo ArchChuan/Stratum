@@ -21,7 +21,7 @@ import (
 
 // mockChatStore is a test double for agent.ChatStore.
 type mockChatStore struct {
-	createFn    func(ctx context.Context, tenantID, agentID, userID, name string) (*agent.ChatConversation, error)
+	createFn    func(ctx context.Context, tenantID, agentID, userID, name, source string) (*agent.ChatConversation, error)
 	getConvFn   func(ctx context.Context, tenantID, convID string) (*agent.ChatConversation, error)
 	listConvsFn func(ctx context.Context, tenantID, agentID, userID string) ([]*agent.ChatConversation, error)
 	renameFn    func(ctx context.Context, tenantID, convID, userID, name string) error
@@ -37,8 +37,8 @@ func (m *mockChatStore) GetConversation(ctx context.Context, tenantID, convID st
 	}
 	return nil, errors.New("not found")
 }
-func (m *mockChatStore) CreateConversation(ctx context.Context, tenantID, agentID, userID, name string) (*agent.ChatConversation, error) {
-	return m.createFn(ctx, tenantID, agentID, userID, name)
+func (m *mockChatStore) CreateConversation(ctx context.Context, tenantID, agentID, userID, name, source string) (*agent.ChatConversation, error) {
+	return m.createFn(ctx, tenantID, agentID, userID, name, source)
 }
 func (m *mockChatStore) ListConversations(ctx context.Context, tenantID, agentID, userID string) ([]*agent.ChatConversation, error) {
 	return m.listConvsFn(ctx, tenantID, agentID, userID)
@@ -95,7 +95,7 @@ func nowMsg(id, role, content string) *agent.ChatMessage {
 
 func TestChatHandler_CreateConversation_success(t *testing.T) {
 	store := &mockChatStore{
-		createFn: func(_ context.Context, tenantID, agentID, userID, name string) (*agent.ChatConversation, error) {
+		createFn: func(_ context.Context, tenantID, agentID, userID, name, source string) (*agent.ChatConversation, error) {
 			if tenantID != "t1" || agentID != "a1" || userID != "u1" {
 				t.Errorf("unexpected args: %s %s %s", tenantID, agentID, userID)
 			}
@@ -123,7 +123,7 @@ func TestChatHandler_CreateConversation_success(t *testing.T) {
 
 func TestChatHandler_CreateConversation_defaultName(t *testing.T) {
 	store := &mockChatStore{
-		createFn: func(_ context.Context, _, _, _, name string) (*agent.ChatConversation, error) {
+		createFn: func(_ context.Context, _, _, _, name, _ string) (*agent.ChatConversation, error) {
 			if name != "新会话" {
 				t.Errorf("want default name 新会话, got %s", name)
 			}

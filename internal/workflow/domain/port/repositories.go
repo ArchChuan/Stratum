@@ -2,11 +2,17 @@ package port
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
 )
+
+// ErrAgentApprovalPending 表示 workflow 执行 agent 节点时触发了 agent 原生工具审批
+// （tool_approvals），节点应暂停等待审批，不进入失败重试路径。由 executor/adapter
+// 翻译 agent 审批错误后返回，reconcile 据此把节点切到 agent 审批恢复通道。
+var ErrAgentApprovalPending = errors.New("agent approval pending")
 
 type DefinitionRepository interface {
 	CreateDefinition(context.Context, string, *domain.Definition, *auditdomain.ResourceChangeAuditEvent) error
@@ -98,6 +104,12 @@ type NodeExecutionRequest struct {
 	ApprovalID     string
 	BeforeEffect   func() error
 	OnOutputDelta  func(string) error
+	// UserID 是发起运行的执行人真实 user_id（run.CreatedBy），透传给 agent/skill
+	// 执行链路，使审批请求人、会话、记忆与轨迹归属执行人而非合成标识。
+	UserID string
+	// ExecutionID 是该 agent 节点在该 run 内确定性的执行 ID（"wf:runID:nodeID"），
+	// 首次执行与审批后/暂停后重跑一致，供 agent checkpoint 续跑命中同一恢复键。
+	ExecutionID string
 }
 
 type ApprovalRepository interface {
@@ -155,7 +167,14 @@ type ControlRepository interface {
 }
 
 type AgentExecutor interface {
-	ExecuteAgent(context.Context, string, string, string) (output, traceID string, err error)
+	ExecuteAgent(context.Context, string, string, string, string, string) (output, traceID string, err error)
+}
+
+// AgentApprovalResolver 判断指定 executionID 对应的 agent 原生工具审批是否已全部
+// 终态（可续跑）。workflow 执行 agent 节点遇审批暂停后，reconcile 用它判定恢复
+// 时机；pending 审批存在时继续等待，全部终态后切回正常重跑续跑。
+type AgentApprovalResolver interface {
+	ResolveAgentApproval(ctx context.Context, tenantID, executionID string) (done bool, err error)
 }
 
 // SkillBindingResolver 提供 agent 已挂载的技能（allowedSkills），用于校验 workflow

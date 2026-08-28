@@ -107,6 +107,32 @@ func TestCheckpointStore_GetLatest(t *testing.T) {
 	}
 }
 
+func TestCheckpointStore_GetLatest_None(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	store := NewPgCheckpointStore(pool)
+	expectTenantTx(pool)
+	// 无 checkpoint 行 → (nil, nil)：workflow 首跑（executionID 非空但尚未有
+	// checkpoint）走 maybeResumeApproval 时据此判定"无审批续跑"，而非把首次执行
+	// 误判为失败。
+	pool.ExpectQuery("SELECT id, execution_id").WithArgs("wf:run-1:node-1").
+		WillReturnError(pgx.ErrNoRows)
+	pool.ExpectRollback()
+	cp, err := store.GetLatest(context.Background(), "t1", "wf:run-1:node-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cp != nil {
+		t.Fatalf("expected nil, got %+v", cp)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestCheckpointStore_MarkCompleted(t *testing.T) {
 	pool, err := pgxmock.NewPool()
 	if err != nil {

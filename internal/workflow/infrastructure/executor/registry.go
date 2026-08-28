@@ -26,11 +26,11 @@ func (r ToolRisk) requiresApproval() bool {
 }
 
 type AgentRuntime interface {
-	ExecuteAgent(context.Context, string, string, string, func(string) error) (string, string, []port.NodeToolStep, error)
+	ExecuteAgent(context.Context, string, string, string, string, string, func(string) error) (string, string, []port.NodeToolStep, error)
 }
 
 type SkillRuntime interface {
-	ExecuteSkill(context.Context, string, string, string, string, string) (string, string, error)
+	ExecuteSkill(context.Context, string, string, string, string, string, string) (string, string, error)
 }
 
 type MCPRuntime interface {
@@ -55,14 +55,18 @@ func (r *Registry) Execute(ctx context.Context, request port.NodeExecutionReques
 			return port.NodeExecutionResult{}, fmt.Errorf("agent executor unavailable")
 		}
 		output, traceID, toolSteps, err := r.agent.ExecuteAgent(
-			ctx, request.TenantID, request.Node.AgentID, request.Input, request.OnOutputDelta,
+			ctx, request.TenantID, request.Node.AgentID, request.UserID, request.ExecutionID, request.Input, request.OnOutputDelta,
 		)
+		if err != nil && errors.Is(err, port.ErrAgentApprovalPending) {
+			// agent 原生工具审批待决：节点暂停等待审批，不进入失败重试。
+			return port.NodeExecutionResult{Paused: true, ErrorCode: "agent_approval_required"}, nil
+		}
 		return port.NodeExecutionResult{Output: output, TraceID: traceID, ToolSteps: toolSteps}, err
 	case domain.NodeTypeSkill:
 		if r.skill == nil {
 			return port.NodeExecutionResult{}, fmt.Errorf("skill executor unavailable")
 		}
-		output, traceID, err := r.skill.ExecuteSkill(ctx, request.TenantID, request.Node.AgentID, request.Node.SkillID, request.Node.SkillRevisionID, request.Input)
+		output, traceID, err := r.skill.ExecuteSkill(ctx, request.TenantID, request.Node.AgentID, request.UserID, request.Node.SkillID, request.Node.SkillRevisionID, request.Input)
 		return port.NodeExecutionResult{Output: output, TraceID: traceID}, err
 	case domain.NodeTypeMCPTool:
 		return r.executeMCP(ctx, request)

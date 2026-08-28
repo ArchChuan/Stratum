@@ -294,7 +294,7 @@ func TestSystemAssistantOfficialDocsArtifactsAndAreaGap(t *testing.T) {
 	require.Empty(t, report.Inferences)
 
 	chat := agentpersist.NewPgChatStore(pool, zap.NewNop())
-	conversation, err := chat.CreateConversation(context.Background(), tenantA, domain.SystemAssistantID, userA, "系统助手 E2E")
+	conversation, err := chat.CreateConversation(context.Background(), tenantA, domain.SystemAssistantID, userA, "系统助手 E2E", "manual")
 	require.NoError(t, err)
 	message := &domain.ChatMessage{ConversationID: conversation.ID, Role: "assistant", Content: "诊断完成",
 		Artifacts: []domain.ExecutionArtifact{
@@ -350,7 +350,7 @@ func TestSystemAssistantDeterministicAgentLoopPersistsTypedArtifacts(t *testing.
 		OfficialDocsSearch: officialdocs.Search,
 		DiagnosticProvider: deterministicDiagnostics{}, Logger: zap.NewNop(),
 	})
-	conversation, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, userID, "确定性 Agent Loop")
+	conversation, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, userID, "确定性 Agent Loop", "manual")
 	require.NoError(t, err)
 	result, _, err := service.Execute(ctx, domain.SystemAssistantID, agentapp.ExecRequest{
 		Query: "请检索官方 Agent 使用说明并诊断 Agent 与 MCP 状态", ConversationID: conversation.ID,

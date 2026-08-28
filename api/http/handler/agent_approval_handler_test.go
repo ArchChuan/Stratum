@@ -73,6 +73,9 @@ func (*toolApprovalRepoFake) CascadeByConversation(context.Context, string, stri
 func (*toolApprovalRepoFake) ListActionable(context.Context, string, string) ([]agentdomain.ToolApproval, error) {
 	return nil, nil
 }
+func (*toolApprovalRepoFake) ListByExecution(context.Context, string, string) ([]agentdomain.ToolApproval, error) {
+	return nil, nil
+}
 func (*toolApprovalRepoFake) InvalidateStaleForTool(context.Context, string, string, string, string) (int64, error) {
 	return 0, nil
 }

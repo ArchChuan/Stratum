@@ -25,8 +25,12 @@ func (s *RunService) commitOutcome(ctx context.Context, tenantID string, run *do
 	return s.commitSucceededOutcome(ctx, tenantID, run, outcome)
 }
 
-// commitPausedOutcome 持久化审批节点暂停：checkpoint 暂停状态并创建审批。
+// commitPausedOutcome 持久化暂停结果：agent 原生审批暂停走 agent 通道（不建
+// workflow_approvals，复用 tool_approvals 审批流），其余 approval 节点走创建审批。
 func (s *RunService) commitPausedOutcome(ctx context.Context, tenantID string, run *domain.Run, outcome executionOutcome) error {
+	if outcome.result.ErrorCode == "agent_approval_required" {
+		return s.commitAgentApprovalPausedOutcome(ctx, tenantID, run, outcome)
+	}
 	attempt := outcome.attempt
 	attempt.Status = domain.AttemptStatusPaused
 	attempt.OutputSummary = outcome.result.Output
@@ -44,6 +48,22 @@ func (s *RunService) commitPausedOutcome(ctx context.Context, tenantID string, r
 	}
 	run.Status, run.PauseReason, run.Generation = domain.RunStatusPaused, reason, approval.RunGeneration
 	return nil
+}
+
+// commitAgentApprovalPausedOutcome 持久化 agent 原生审批暂停：attempt 落 paused +
+// ErrorCode 标记（reconcile 靠它识别恢复时机），run 经 controller 收敛到 paused。
+// 不创建 workflow_approvals —— 审批实体是 agent 侧 tool_approvals，用户在 agent
+// 审批中心处理，批准后重跑经 deterministicExecutionID 续跑。
+func (s *RunService) commitAgentApprovalPausedOutcome(ctx context.Context, tenantID string, run *domain.Run, outcome executionOutcome) error {
+	attempt := outcome.attempt
+	attempt.Status = domain.AttemptStatusPaused
+	attempt.ErrorCode = "agent_approval_required"
+	attempt.OutputSummary = outcome.result.Output
+	if err := s.checkpointAttempt(ctx, tenantID, attempt, "workflow.node_paused", "agent approval required"); err != nil {
+		return err
+	}
+	event := domain.Event{ID: s.newID(), RunID: run.ID, Type: "workflow.paused", Status: string(domain.RunStatusPaused), NodeID: attempt.NodeID, AttemptNo: attempt.AttemptNo, Summary: "agent approval required", OccurredAt: time.Now().UTC()}
+	return s.commitBoundaryStatus(ctx, tenantID, run, event, domain.RunStatusPaused, "agent approval required", run.Generation)
 }
 
 // effectStarted 报告执行是否已启动 effect（失败路径的 effect 状态决策）。

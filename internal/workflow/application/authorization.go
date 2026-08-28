@@ -30,7 +30,7 @@ func authorizeRun(run *domain.Run, actor Actor, action RunAction) error {
 		return domain.ErrNotFound
 	}
 	switch action {
-	case RunActionRead, RunActionEvents, RunActionCancel:
+	case RunActionRead, RunActionEvents, RunActionCancel, RunActionPause, RunActionResume:
 		return nil
 	default:
 		return domain.ErrForbidden

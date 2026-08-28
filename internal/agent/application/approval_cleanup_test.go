@@ -48,6 +48,9 @@ func (*mockApprovalCleanupRepo) ListPending(context.Context, string, string) ([]
 func (*mockApprovalCleanupRepo) ListActionable(context.Context, string, string) ([]domain.ToolApproval, error) {
 	return nil, nil
 }
+func (*mockApprovalCleanupRepo) ListByExecution(context.Context, string, string) ([]domain.ToolApproval, error) {
+	return nil, nil
+}
 func (*mockApprovalCleanupRepo) ListHistory(context.Context, string, string, int, int) ([]domain.ToolApproval, int, error) {
 	return nil, 0, nil
 }
