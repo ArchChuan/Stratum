@@ -86,15 +86,32 @@ func (r *ActiveSnapshotRepo) Delete(ctx context.Context, tenantID, userID, agent
 	})
 }
 
+// listUserSnapshotsQuery 返回用户全部快照（含过期/inactive——管理页需要展示并
+// 允许清空，比 Get 的 active-only 过滤更宽）。#24：LEFT JOIN agents 取 agent_name；
+// LATERAL 取该 (user, agent) 最近一条未删除会话名（snapshot 本身无会话归属，
+// 管理页标题展示最近会话最贴切，缺失回落空串）。
+const listUserSnapshotsQuery = `
+	SELECT s.user_id, s.agent_id, s.work_context, s.personal_context, s.top_of_mind,
+		s.source, s.expires_at, s.updated_at, s.version, s.status,
+		COALESCE(a.name, '') AS agent_name,
+		COALESCE(c.name, '') AS conversation_name
+	FROM memory_active_snapshots s
+	LEFT JOIN agents a ON a.id = s.agent_id
+	LEFT JOIN LATERAL (
+		SELECT name FROM chat_conversations
+		WHERE agent_id = s.agent_id AND user_id = s.user_id AND deleted_at IS NULL
+		ORDER BY updated_at DESC LIMIT 1
+	) c ON true
+	WHERE s.user_id = $1
+	ORDER BY s.updated_at DESC`
+
 // ListUser returns every snapshot row for a user across agents, including
 // expired/inactive rows — the management page needs to display and clear them,
 // which is deliberately broader than Get's active-only filter.
 func (r *ActiveSnapshotRepo) ListUser(ctx context.Context, tenantID, userID string) ([]*domain.ActiveSnapshot, error) {
 	var out []*domain.ActiveSnapshot
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT user_id, agent_id, work_context, personal_context, top_of_mind,
-		   source, expires_at, updated_at, version, status
-		   FROM memory_active_snapshots WHERE user_id = $1 ORDER BY updated_at DESC`, userID)
+		rows, err := tx.Query(ctx, listUserSnapshotsQuery, userID)
 		if err != nil {
 			return fmt.Errorf("list user snapshots: %w", err)
 		}
@@ -103,7 +120,8 @@ func (r *ActiveSnapshotRepo) ListUser(ctx context.Context, tenantID, userID stri
 			var s domain.ActiveSnapshot
 			var source []byte
 			if err := rows.Scan(&s.UserID, &s.AgentID, &s.WorkContext, &s.PersonalContext, &s.TopOfMind,
-				&source, &s.ExpiresAt, &s.UpdatedAt, &s.Version, &s.Status); err != nil {
+				&source, &s.ExpiresAt, &s.UpdatedAt, &s.Version, &s.Status,
+				&s.AgentName, &s.ConversationName); err != nil {
 				return err
 			}
 			if err := json.Unmarshal(source, &s.Source); err != nil {

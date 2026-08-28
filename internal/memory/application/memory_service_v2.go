@@ -341,6 +341,8 @@ type UserMemoryEntity struct {
 	EntityType string
 	FactCount  int
 	LastSeenAt time.Time
+	// Scope 标注来源（user/agent，#29：管理页展示区分）。
+	Scope string
 }
 
 // UserFactDetail 事实详情（管理页展示 / 编辑返回，字段与 gen.MemoryFactResponse 对齐）。
@@ -394,11 +396,15 @@ type UserSummary struct {
 	Importance     float64
 	PeriodEnd      time.Time
 	CreatedAt      time.Time
+	// Scope 标注来源（user/agent，#29：管理页展示区分）。
+	Scope string
 }
 
 // UserSnapshot 活跃快照（每 (user_id, agent_id) 一条，管理页展示/编辑/清空）。
 type UserSnapshot struct {
 	AgentID         string
+	AgentName       string
+	ConversationName string
 	WorkContext     []string
 	PersonalContext []string
 	TopOfMind       []string
@@ -448,7 +454,7 @@ func (s *MemoryService) ListUserEntities(ctx context.Context, req *ListUserEntit
 	for _, e := range entities {
 		result = append(result, &UserMemoryEntity{
 			ID: e.ID, Name: e.Name, EntityType: e.EntityType,
-			FactCount: e.FactCount, LastSeenAt: e.LastSeenAt,
+			FactCount: e.FactCount, LastSeenAt: e.LastSeenAt, Scope: string(e.Scope),
 		})
 	}
 	return result, total, nil
@@ -662,7 +668,7 @@ func (s *MemoryService) ListUserSummaries(ctx context.Context, tenantID, userID 
 		out = append(out, &UserSummary{
 			ID: h.ID, Summary: h.Summary, Tier: h.Tier,
 			ConversationID: h.ConversationID, Importance: h.Importance,
-			PeriodEnd: h.PeriodEnd, CreatedAt: h.CreatedAt,
+			PeriodEnd: h.PeriodEnd, CreatedAt: h.CreatedAt, Scope: string(h.Scope),
 		})
 	}
 	return out, total, nil
@@ -804,7 +810,8 @@ func (s *MemoryService) DeleteUserEntry(ctx context.Context, tenantID, userID, e
 // userSnapshotFromDomain 将领域快照映射为管理页 DTO（Status 转换为字符串）。
 func userSnapshotFromDomain(sn *domain.ActiveSnapshot) *UserSnapshot {
 	return &UserSnapshot{
-		AgentID: sn.AgentID, WorkContext: sn.WorkContext, PersonalContext: sn.PersonalContext,
+		AgentID: sn.AgentID, AgentName: sn.AgentName, ConversationName: sn.ConversationName,
+		WorkContext: sn.WorkContext, PersonalContext: sn.PersonalContext,
 		TopOfMind: sn.TopOfMind, ExpiresAt: sn.ExpiresAt, UpdatedAt: sn.UpdatedAt, Status: string(sn.Status),
 	}
 }

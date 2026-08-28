@@ -5,10 +5,13 @@ import { useEffect } from 'react';
 import { useSummariesTab } from '../hooks/useSummariesTab';
 import type { MemorySummary } from '../model/memory';
 
+import { MemoryScopeTag } from './MemoryScopeTag';
+
 import { DangerPopconfirm, EmptyHint } from '@/shared/ui';
 
 const columns = (onDelete: (id: string) => void, deleteLoading: boolean): ColumnsType<MemorySummary> => [
   { title: '摘要', dataIndex: 'summary', ellipsis: true },
+  { title: '归属', dataIndex: 'scope', width: 100, render: (v: string) => <MemoryScopeTag scope={v} /> },
   { title: '层级', dataIndex: 'tier', width: 130, render: (v: string) => <Tag>{v}</Tag> },
   { title: '重要度', dataIndex: 'importance', width: 90, render: (v: number) => v.toFixed(2) },
   { title: '覆盖至', dataIndex: 'period_end', width: 170, render: (v: string) => new Date(v).toLocaleString() },

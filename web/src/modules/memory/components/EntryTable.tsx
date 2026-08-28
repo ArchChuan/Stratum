@@ -6,10 +6,13 @@ import { useEffect } from 'react';
 import { useEntriesTab } from '../hooks/useEntriesTab';
 import type { MemoryEntryItem } from '../model/memory';
 
+import { MemoryScopeTag } from './MemoryScopeTag';
+
 import { DangerPopconfirm, EmptyHint } from '@/shared/ui';
 
 const columns = (onDelete: (id: string) => void, deleteLoading: boolean): ColumnsType<MemoryEntryItem> => [
   { title: '内容', dataIndex: 'content', ellipsis: true },
+  { title: '归属', dataIndex: 'scope', width: 100, render: (v: string) => <MemoryScopeTag scope={v} /> },
   { title: '角色', dataIndex: 'role', width: 80 },
   { title: '类型', dataIndex: 'type', width: 100 },
   { title: '重要度', dataIndex: 'importance', width: 90, render: (v: number) => v.toFixed(2) },

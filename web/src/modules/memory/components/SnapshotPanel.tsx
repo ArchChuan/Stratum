@@ -1,4 +1,4 @@
-import { Button, Card, Col, Empty, Input, List, message, Modal, Row, Space, Spin } from 'antd';
+import { Button, Descriptions, Drawer, Empty, Input, List, message, Modal, Space, Spin, Tag } from 'antd';
 import { useEffect, useState } from 'react';
 
 import { useSnapshotsTab } from '../hooks/useSnapshotsTab';
@@ -65,8 +65,27 @@ const EditableList = ({ header, items, onChange }: EditableListProps) => {
   );
 };
 
+// 只读三段落展示（Drawer 详情用），空段显示占位。
+const ReadonlySections = ({ snapshot }: { snapshot: MemorySnapshot }) => (
+  <Space direction="vertical" style={{ width: '100%' }}>
+    <List size="small" header="工作上下文" dataSource={snapshot.work_context} locale={{ emptyText: <Empty /> }} renderItem={(item) => <List.Item>{item}</List.Item>} />
+    <List size="small" header="个人上下文" dataSource={snapshot.personal_context} locale={{ emptyText: <Empty /> }} renderItem={(item) => <List.Item>{item}</List.Item>} />
+    <List size="small" header="当前关注" dataSource={snapshot.top_of_mind} locale={{ emptyText: <Empty /> }} renderItem={(item) => <List.Item>{item}</List.Item>} />
+  </Space>
+);
+
+// 标题：agent_name · conversation_name；conversation 缺失回落 agent_name，
+// 再缺失回落 agent_id（#24 后端 COALESCE 保证空串，前端兜底 agent_id）。
+const snapshotTitle = (s: MemorySnapshot): string => {
+  const name = s.agent_name || s.agent_id;
+  return s.conversation_name ? `${name} · ${s.conversation_name}` : name;
+};
+
+const isExpired = (s: MemorySnapshot): boolean => new Date(s.expires_at).getTime() < Date.now();
+
 export const SnapshotPanel = ({ onChanged, reloadKey }: { onChanged?: () => void; reloadKey?: number }) => {
   const { snapshots, loading, saveLoading, deleteLoading, updateSnapshot, deleteSnapshot, reload } = useSnapshotsTab();
+  const [detail, setDetail] = useState<MemorySnapshot | null>(null);
   const [editing, setEditing] = useState<MemorySnapshot | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [workContext, setWorkContext] = useState<string[]>([]);
@@ -103,6 +122,7 @@ export const SnapshotPanel = ({ onChanged, reloadKey }: { onChanged?: () => void
 
   const handleDelete = async (agentId: string) => {
     await deleteSnapshot(agentId);
+    setDetail(null);
     onChanged?.();
   };
 
@@ -111,36 +131,60 @@ export const SnapshotPanel = ({ onChanged, reloadKey }: { onChanged?: () => void
       {snapshots.length === 0 ? (
         <Empty description="活跃快照还是空的" />
       ) : (
-        <Row gutter={[16, 16]}>
-          {snapshots.map((s) => (
-            <Col key={s.agent_id} xs={24} md={12} xl={8}>
-              <Card
-                title={`Agent ${s.agent_id}`}
-                extra={
-                  <Space>
-                    <Button size="small" onClick={() => openEdit(s)}>
-                      编辑
+        <List
+          dataSource={snapshots}
+          renderItem={(s) => {
+            const expired = isExpired(s);
+            return (
+              <List.Item
+                style={{ opacity: expired ? 0.55 : 1 }}
+                actions={[
+                  <Button key="detail" type="link" size="small" onClick={() => setDetail(s)}>
+                    查看详情
+                  </Button>,
+                  <Button key="edit" type="link" size="small" onClick={() => openEdit(s)}>
+                    编辑
+                  </Button>,
+                  <DangerPopconfirm
+                    key="clear"
+                    title="清空快照"
+                    description="清空后该 Agent 的活跃上下文将重置，且无法恢复"
+                    onConfirm={() => void handleDelete(s.agent_id)}
+                  >
+                    <Button type="link" size="small" danger loading={deleteLoading}>
+                      清空
                     </Button>
-                    <DangerPopconfirm
-                      title="清空快照"
-                      description="清空后该 Agent 的活跃上下文将重置，且无法恢复"
-                      onConfirm={() => void handleDelete(s.agent_id)}
-                    >
-                      <Button size="small" danger loading={deleteLoading}>
-                        清空
-                      </Button>
-                    </DangerPopconfirm>
-                  </Space>
-                }
+                  </DangerPopconfirm>,
+                ]}
               >
-                <List size="small" header="工作上下文" dataSource={s.work_context} renderItem={(item) => <List.Item>{item}</List.Item>} locale={{ emptyText: <Empty /> }} />
-                <List size="small" header="个人上下文" dataSource={s.personal_context} renderItem={(item) => <List.Item>{item}</List.Item>} locale={{ emptyText: <Empty /> }} />
-                <List size="small" header="当前关注" dataSource={s.top_of_mind} renderItem={(item) => <List.Item>{item}</List.Item>} locale={{ emptyText: <Empty /> }} />
-              </Card>
-            </Col>
-          ))}
-        </Row>
+                <List.Item.Meta
+                  title={
+                    <Space>
+                      {snapshotTitle(s)}
+                      {expired && <Tag color="default">已过期</Tag>}
+                    </Space>
+                  }
+                  description={`更新时间：${new Date(s.updated_at).toLocaleString()} · Agent ${s.agent_id}`}
+                />
+              </List.Item>
+            );
+          }}
+        />
       )}
+
+      <Drawer open={detail !== null} onClose={() => setDetail(null)} title={detail ? snapshotTitle(detail) : ''} width={480} destroyOnHidden>
+        {detail && (
+          <Space direction="vertical" style={{ width: '100%' }} size="large">
+            <ReadonlySections snapshot={detail} />
+            <Descriptions column={1} bordered size="small">
+              <Descriptions.Item label="Agent">{detail.agent_id}</Descriptions.Item>
+              <Descriptions.Item label="状态">{detail.status}</Descriptions.Item>
+              <Descriptions.Item label="过期时间">{new Date(detail.expires_at).toLocaleString()}</Descriptions.Item>
+              <Descriptions.Item label="更新时间">{new Date(detail.updated_at).toLocaleString()}</Descriptions.Item>
+            </Descriptions>
+          </Space>
+        )}
+      </Drawer>
 
       <Modal
         title="编辑快照"

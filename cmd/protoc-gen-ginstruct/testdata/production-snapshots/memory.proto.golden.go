@@ -40,6 +40,7 @@ type MemoryEntityResponse struct {
 	EntityType string    `json:"entity_type"`
 	FactCount  int64     `json:"fact_count"`
 	LastSeenAt time.Time `json:"last_seen_at"`
+	Scope      string    `json:"scope"`
 }
 
 type ListMemoryEntitiesResponse struct {
@@ -86,6 +87,7 @@ type MemorySummaryItemResponse struct {
 	ConversationID string    `json:"conversation_id"`
 	PeriodEnd      time.Time `json:"period_end"`
 	CreatedAt      time.Time `json:"created_at"`
+	Scope          string    `json:"scope"`
 }
 
 type ListMemorySummariesResponse struct {
@@ -94,13 +96,15 @@ type ListMemorySummariesResponse struct {
 }
 
 type MemorySnapshotResponse struct {
-	AgentID         string    `json:"agent_id"`
-	WorkContext     []string  `json:"work_context"`
-	PersonalContext []string  `json:"personal_context"`
-	TopOfMind       []string  `json:"top_of_mind"`
-	ExpiresAt       time.Time `json:"expires_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
-	Status          string    `json:"status"`
+	AgentID          string    `json:"agent_id"`
+	WorkContext      []string  `json:"work_context"`
+	PersonalContext  []string  `json:"personal_context"`
+	TopOfMind        []string  `json:"top_of_mind"`
+	ExpiresAt        time.Time `json:"expires_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	Status           string    `json:"status"`
+	AgentName        string    `json:"agent_name"`
+	ConversationName string    `json:"conversation_name"`
 }
 
 type ListMemorySnapshotsResponse struct {

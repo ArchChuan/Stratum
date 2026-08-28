@@ -26,8 +26,8 @@ message MemorySummaryResponse {
   string summary = 1;
 }
 
-// MemoryStatsResponse 统计当前用户的记忆（scope='user' AND status='active'，
-// 与 ListUserFacts/ListUserEntities 同口径）。
+// MemoryStatsResponse 统计当前用户的记忆（status='active'，含 user/agent 双 scope，
+// 与 ListUserFacts/ListUserEntities 同口径，#29 管理页全量展示）。
 message MemoryStatsResponse {
   int64 memory_count = 1;
   int64 entity_count = 2;
@@ -42,6 +42,8 @@ message MemoryEntityResponse {
   string entity_type = 3;
   int64 fact_count = 4;
   google.protobuf.Timestamp last_seen_at = 5;
+  // #29：管理页区分 user 级与 Agent 私有实体来源。
+  string scope = 6;
 }
 
 message ListMemoryEntitiesResponse {
@@ -99,6 +101,8 @@ message MemorySummaryItemResponse {
   string conversation_id = 5;
   google.protobuf.Timestamp period_end = 6;
   google.protobuf.Timestamp created_at = 7;
+  // #29：管理页区分 user 级与 Agent 私有摘要来源。
+  string scope = 8;
 }
 
 message ListMemorySummariesResponse {
@@ -115,6 +119,9 @@ message MemorySnapshotResponse {
   google.protobuf.Timestamp expires_at = 5;
   google.protobuf.Timestamp updated_at = 6;
   string status = 7;
+  // #24：管理页标题展示（agents/最近会话 JOIN 取回；不存在时为空串）。
+  string agent_name = 8;
+  string conversation_name = 9;
 }
 
 message ListMemorySnapshotsResponse {

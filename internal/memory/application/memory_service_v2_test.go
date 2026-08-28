@@ -587,8 +587,8 @@ func TestMemoryService_ListUserEntities_mapsToTopicTags(t *testing.T) {
 	now := time.Now()
 
 	entities.On("ListUserEntities", ctx, "tenant-1", "user-1", 10, 20).Return([]*domain.MemoryEntity{
-		{ID: "ent-2", Name: "Go", EntityType: "tech", FactCount: 4, LastSeenAt: now.Add(time.Hour)},
-		{ID: "ent-1", Name: "Alice", EntityType: "person", FactCount: 2, LastSeenAt: now},
+		{ID: "ent-2", Name: "Go", EntityType: "tech", FactCount: 4, LastSeenAt: now.Add(time.Hour), Scope: domain.ScopeUser},
+		{ID: "ent-1", Name: "Alice", EntityType: "person", FactCount: 2, LastSeenAt: now, Scope: domain.ScopeAgent},
 	}, nil).Once()
 	entities.On("CountUserEntities", ctx, "tenant-1", "user-1").Return(42, nil).Once()
 
@@ -601,8 +601,10 @@ func TestMemoryService_ListUserEntities_mapsToTopicTags(t *testing.T) {
 		t.Fatalf("len=%d, want 2", len(got))
 	}
 	assert.Equal(t, "Go", got[0].Name)
+	assert.Equal(t, "user", got[0].Scope)
 	assert.Equal(t, "person", got[1].EntityType)
 	assert.Equal(t, 2, got[1].FactCount)
+	assert.Equal(t, "agent", got[1].Scope)
 	entities.AssertExpectations(t)
 }
 
@@ -914,7 +916,7 @@ func TestMemoryService_ListUserSummaries(t *testing.T) {
 		histories := new(MockHistoryRepo)
 		svc.SetHistoryRepo(histories)
 		histories.On("ListUserSummaries", ctx, "tenant-1", "user-1", 20, 0).
-			Return([]*domain.HistorySegment{{ID: "s-1", Summary: "user likes dark mode", Tier: "recent_months"}}, nil).Once()
+			Return([]*domain.HistorySegment{{ID: "s-1", Summary: "user likes dark mode", Tier: "recent_months", Scope: domain.ScopeUser}}, nil).Once()
 		histories.On("CountUserSummaries", ctx, "tenant-1", "user-1").Return(1, nil).Once()
 
 		got, total, err := svc.ListUserSummaries(ctx, "tenant-1", "user-1", 20, 0)
@@ -923,6 +925,7 @@ func TestMemoryService_ListUserSummaries(t *testing.T) {
 		require.Len(t, got, 1)
 		require.Equal(t, "s-1", got[0].ID)
 		require.Equal(t, "recent_months", got[0].Tier)
+		require.Equal(t, "user", got[0].Scope)
 		histories.AssertExpectations(t)
 	})
 
@@ -989,13 +992,15 @@ func TestMemoryService_ListUserSnapshots(t *testing.T) {
 		snapshots := new(MockActiveSnapshotRepo)
 		svc.SetActiveSnapshotRepo(snapshots)
 		snapshots.On("ListUser", ctx, "tenant-1", "user-1").Return([]*domain.ActiveSnapshot{
-			{AgentID: "agent-1", Status: domain.SnapshotStatusActive, ExpiresAt: time.Now().Add(time.Hour)},
+			{AgentID: "agent-1", AgentName: "客服助手", ConversationName: "会话A", Status: domain.SnapshotStatusActive, ExpiresAt: time.Now().Add(time.Hour)},
 		}, nil).Once()
 
 		got, err := svc.ListUserSnapshots(ctx, "tenant-1", "user-1")
 		require.NoError(t, err)
 		require.Len(t, got, 1)
 		require.Equal(t, "agent-1", got[0].AgentID)
+		require.Equal(t, "客服助手", got[0].AgentName)
+		require.Equal(t, "会话A", got[0].ConversationName)
 		require.Equal(t, "active", got[0].Status)
 		snapshots.AssertExpectations(t)
 	})
