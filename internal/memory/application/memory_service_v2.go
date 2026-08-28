@@ -402,15 +402,15 @@ type UserSummary struct {
 
 // UserSnapshot 活跃快照（每 (user_id, agent_id) 一条，管理页展示/编辑/清空）。
 type UserSnapshot struct {
-	AgentID         string
-	AgentName       string
+	AgentID          string
+	AgentName        string
 	ConversationName string
-	WorkContext     []string
-	PersonalContext []string
-	TopOfMind       []string
-	ExpiresAt       time.Time
-	UpdatedAt       time.Time
-	Status          string
+	WorkContext      []string
+	PersonalContext  []string
+	TopOfMind        []string
+	ExpiresAt        time.Time
+	UpdatedAt        time.Time
+	Status           string
 }
 
 // UpdateUserSnapshotPatch 快照编辑（三段数组整体替换）。
