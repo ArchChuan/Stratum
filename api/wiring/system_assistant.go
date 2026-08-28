@@ -14,6 +14,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
+	iamdomain "github.com/byteBuilderX/stratum/internal/iam/domain"
 	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
@@ -40,7 +41,7 @@ type systemAssistantDiagnosticAdapter struct {
 // newDiagnosticProvider 装配平台助手诊断适配器（含失败资源操作审计查询）。
 func newDiagnosticProvider(c *Container, a *Agent) *systemAssistantDiagnosticAdapter {
 	adapter := newSystemAssistantDiagnosticAdapter(
-		tenantRoleAdapter{service: tenantMemberService(c)}, systemAssistantDiagnosticCollectors(c, a),
+		newTenantRoleAdapter(c), systemAssistantDiagnosticCollectors(c, a),
 	)
 	adapter.SetFailureAuditQuery(auditQueryOf(c))
 	return adapter
@@ -246,13 +247,54 @@ func filterDiagnosticFacts(req domain.DiagnosticRequest, facts []domain.Diagnost
 	return out
 }
 
-type tenantRoleAdapter struct{ service tenantMemberRoleService }
+// tenantGlobalRoleReader reads users.global_role. OnboardService satisfies it.
+type tenantGlobalRoleReader interface {
+	GetGlobalRole(ctx context.Context, userID string) (string, error)
+}
 
+type tenantRoleAdapter struct {
+	service tenantMemberRoleService
+	global  tenantGlobalRoleReader
+}
+
+// ResolveTenantRole resolves the user's effective tenant role. Real owner/admin
+// short-circuit (no extra query); members and non-members fall through to the
+// platform role so platform admins are treated as tenant admins. Fails closed:
+// a global-role lookup error propagates instead of defaulting to a role.
 func (a tenantRoleAdapter) ResolveTenantRole(ctx context.Context, tenantID, userID string) (string, error) {
 	if a.service == nil {
 		return "", domain.ErrDiagnosticForbidden
 	}
-	return a.service.GetMemberRole(ctx, tenantID, userID)
+	realRole, err := a.service.GetMemberRole(ctx, tenantID, userID)
+	if err != nil && !errors.Is(err, iamdomain.ErrMemberNotFound) {
+		return "", err
+	}
+	if errors.Is(err, iamdomain.ErrMemberNotFound) {
+		realRole = ""
+	}
+	if realRole == iamdomain.RoleOwner || realRole == iamdomain.RoleAdmin {
+		return realRole, nil
+	}
+	if a.global == nil {
+		return realRole, nil
+	}
+	gr, gErr := a.global.GetGlobalRole(ctx, userID)
+	if gErr != nil {
+		return "", gErr
+	}
+	return iamdomain.EffectiveTenantRole(realRole, gr), nil
+}
+
+// newTenantRoleAdapter assembles the DB-backed tenant role resolver with the
+// platform-role reader needed to elevate platform admins.
+func newTenantRoleAdapter(c *Container) tenantRoleAdapter {
+	adapter := tenantRoleAdapter{service: tenantMemberService(c)}
+	// OnboardSvc 满足 tenantGlobalRoleReader（GetGlobalRole）。wiring 构建顺序 platform → iam → agent，
+	// buildAgent 运行时 c.Platform 已就绪（`c.Platform` 是 `*Platform` 指针，platform.go:36）；guard 使 nil 时行为与现状一致（无提升）。
+	if c.Platform != nil && c.Platform.OnboardSvc != nil {
+		adapter.global = c.Platform.OnboardSvc
+	}
+	return adapter
 }
 
 func systemAssistantDiagnosticCollectors(c *Container, a *Agent) map[domain.DiagnosticArea]diagnosticAreaCollector {

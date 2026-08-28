@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -39,24 +40,20 @@ func (h *AuthHandler) SwitchTenant(c *gin.Context) {
 		return
 	}
 
-	isMember, err := h.deps.OnboardSvc.IsMember(ctx, claims.Sub, req.TenantID)
-	if err != nil {
-		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("membership check failed")))
-		return
-	}
-	if !isMember {
-		_ = c.Error(middleware.NewHTTPError(http.StatusForbidden, errors.New("not a member of this tenant")))
-		return
-	}
-
 	globalRole, err := h.deps.OnboardSvc.GetGlobalRole(ctx, claims.Sub)
 	if err != nil {
 		globalRole = claims.GlobalRole
 	}
+	if err := h.verifySwitchTenantAccess(ctx, claims.Sub, req.TenantID, globalRole); err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	tenantRole, err := h.deps.OnboardSvc.GetTenantRole(ctx, claims.Sub, req.TenantID)
 	if err != nil {
-		tenantRole = "member"
+		tenantRole = ""
 	}
+	tenantRole = domain.EffectiveTenantRole(tenantRole, globalRole)
 
 	// Derive SystemRole from all user memberships
 	// For now, use a simple derivation based on current tenant role
@@ -74,6 +71,33 @@ func (h *AuthHandler) SwitchTenant(c *gin.Context) {
 	}
 	h.setRefreshCookie(c, rawRT)
 	c.JSON(http.StatusOK, gin.H{"access_token": accessJWT, "tenant_id": req.TenantID})
+}
+
+// verifySwitchTenantAccess gates tenant switching. Platform admins
+// (system_admin/global_admin) may enter any active tenant even without a
+// membership row; ordinary users must still be members of the target tenant.
+// Returns an *middleware.HTTPError suitable for c.Error.
+func (h *AuthHandler) verifySwitchTenantAccess(ctx context.Context, sub, tenantID, globalRole string) error {
+	if domain.GlobalRole(globalRole).IsPlatformAdmin() {
+		// 平台管理员无成员资格：改为校验租户本身是否 active，防止进入
+		// 不存在/停用/已删除租户。
+		active, aErr := h.deps.OnboardSvc.TenantIsActive(ctx, tenantID)
+		if aErr != nil {
+			return middleware.NewHTTPError(http.StatusInternalServerError, errors.New("tenant check failed"))
+		}
+		if !active {
+			return middleware.NewHTTPError(http.StatusForbidden, errors.New("tenant is not active"))
+		}
+		return nil
+	}
+	isMember, mErr := h.deps.OnboardSvc.IsMember(ctx, sub, tenantID)
+	if mErr != nil {
+		return middleware.NewHTTPError(http.StatusInternalServerError, errors.New("membership check failed"))
+	}
+	if !isMember {
+		return middleware.NewHTTPError(http.StatusForbidden, errors.New("not a member of this tenant"))
+	}
+	return nil
 }
 
 // CreateUserTenant creates a new tenant for an already-authenticated user and switches

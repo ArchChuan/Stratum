@@ -476,6 +476,10 @@ func (contractTenantRepo) ListUserTenants(_ context.Context, _ string) ([]iamdom
 	return nil, nil
 }
 
+func (contractTenantRepo) ListAllTenants(context.Context) ([]iamdomain.UserTenantInfo, error) {
+	return nil, nil
+}
+
 type contractInvitationRepo struct{}
 
 func (contractInvitationRepo) Create(_ context.Context, _ iamdomain.TenantInvitation) error {

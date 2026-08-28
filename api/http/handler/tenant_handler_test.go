@@ -32,6 +32,8 @@ type fakeTenantRepo struct {
 	tenantName     string
 	tenantSettings []byte
 	roleFilter     []string
+	allTenants     []domain.UserTenantInfo
+	userTenants    []domain.UserTenantInfo
 }
 
 type fakeInvitationRepo struct {
@@ -111,7 +113,11 @@ func (f *fakeTenantRepo) UpdateTenantSettings(_ context.Context, _ string, b []b
 }
 
 func (f *fakeTenantRepo) ListUserTenants(_ context.Context, _ string) ([]domain.UserTenantInfo, error) {
-	return nil, nil
+	return f.userTenants, nil
+}
+
+func (f *fakeTenantRepo) ListAllTenants(_ context.Context) ([]domain.UserTenantInfo, error) {
+	return f.allTenants, nil
 }
 
 func injectTenant(tenantID string) gin.HandlerFunc {
@@ -372,5 +378,59 @@ func TestDeleteSelfReadsJWTContextRole(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/tenant", nil)) //nolint:noctx
 	if w.Code == http.StatusForbidden {
 		t.Fatalf("owner role from JWT context was ignored: %s", w.Body.String())
+	}
+}
+
+func TestTenantHandler_ListUserTenants_PlatformAdminSeesAll(t *testing.T) {
+	repo := &fakeTenantRepo{allTenants: []domain.UserTenantInfo{
+		{TenantID: "t-foreign", Name: "Foreign", IsDefault: false},
+		{TenantID: "t-mine", Name: "Mine", IsDefault: true},
+	}}
+	h := newTenantHandler(repo)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/tenant/list", func(c *gin.Context) {
+		c.Set("auth.sub", "u1")
+		c.Set("auth.global_role", "system_admin")
+	}, h.ListUserTenants)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/tenant/list", nil) //nolint:noctx
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp gen.TenantListResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.Tenants) != 2 {
+		t.Fatalf("tenants = %+v, want 2 (all tenants)", resp.Tenants)
+	}
+}
+
+func TestTenantHandler_ListUserTenants_OrdinaryUserSeesOnlyOwn(t *testing.T) {
+	repo := &fakeTenantRepo{allTenants: []domain.UserTenantInfo{
+		{TenantID: "t-foreign", Name: "Foreign"},
+	}, members: []domain.Member{}}
+	// fakeTenantRepo.ListUserTenants 返回空——断言普通用户走 ListUserTenants 而非 ListAllTenants：
+	// 通过 allTenants 与 ListUserTenants 返回差异区分。这里让 ListUserTenants 有数据。
+	repo.userTenants = []domain.UserTenantInfo{{TenantID: "t-mine", Name: "Mine", IsDefault: true}}
+	h := newTenantHandler(repo)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/tenant/list", func(c *gin.Context) {
+		c.Set("auth.sub", "u1")
+		c.Set("auth.global_role", "user")
+	}, h.ListUserTenants)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/tenant/list", nil) //nolint:noctx
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp gen.TenantListResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if len(resp.Tenants) != 1 || resp.Tenants[0].TenantID != "t-mine" {
+		t.Fatalf("tenants = %+v, want [t-mine]", resp.Tenants)
 	}
 }

@@ -227,6 +227,12 @@ func (s *TenantService) ListUserTenants(ctx context.Context, userID string) ([]d
 	return s.repo.ListUserTenants(ctx, userID)
 }
 
+// ListAllTenants returns every active tenant (platform admins only — the
+// handler gates by auth.global_role).
+func (s *TenantService) ListAllTenants(ctx context.Context) ([]domain.UserTenantInfo, error) {
+	return s.repo.ListAllTenants(ctx)
+}
+
 // GetMemberRole returns the role of a tenant member; ErrMemberNotFound if absent.
 func (s *TenantService) GetMemberRole(ctx context.Context, tenantID, userID string) (string, error) {
 	return s.repo.GetMemberRole(ctx, tenantID, userID)

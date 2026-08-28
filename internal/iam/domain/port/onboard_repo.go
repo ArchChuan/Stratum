@@ -28,6 +28,10 @@ type OnboardRepo interface {
 	GetTenantRole(ctx context.Context, userID, tenantID string) (string, error)
 	// IsMember reports whether userID is an active member of tenantID.
 	IsMember(ctx context.Context, userID, tenantID string) (bool, error)
+	// TenantIsActive reports whether tenantID exists, is not deleted, and has
+	// status 'active'. Gates platform-admin cross-tenant switch-ins, where
+	// membership does not apply.
+	TenantIsActive(ctx context.Context, tenantID string) (bool, error)
 
 	// CreateGuestSandboxTenant inserts a synthetic guest user with the given
 	// github_id/login/expiry and creates a dedicated per-guest sandbox tenant

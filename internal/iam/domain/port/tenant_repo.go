@@ -20,4 +20,7 @@ type TenantRepo interface {
 	UpdateTenantName(ctx context.Context, tenantID, name string) error
 	UpdateTenantSettings(ctx context.Context, tenantID string, settingsJSON []byte) error
 	ListUserTenants(ctx context.Context, userID string) ([]domain.UserTenantInfo, error)
+	// ListAllTenants returns every active tenant (id/name/is_default), used by
+	// platform admins to enumerate all tenants for cross-tenant access.
+	ListAllTenants(ctx context.Context) ([]domain.UserTenantInfo, error)
 }
