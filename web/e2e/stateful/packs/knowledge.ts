@@ -31,8 +31,10 @@ export const executeKnowledgePack = async ({ actor, pool, evidence, webURL, fixt
     await dialog.getByLabel('名称').fill(workspace);
     await dialog.getByLabel('描述').fill('Stateful E2E 产品文档与验收知识');
     await dialog.getByLabel('嵌入模型').click();
+    // 统一 ModelSelect 的 option 文本为「模型名 + 能力标签 + 健康徽章」，不再等于纯模型名，
+    // 精确锚定 /^text-embedding-v3$/ 无法命中；改前缀匹配模型名。
     await page.locator('.ant-select-dropdown:visible .ant-select-item-option')
-      .filter({ hasText: /^text-embedding-v3$/ }).first().click();
+      .filter({ hasText: /^text-embedding-v3/ }).first().click();
     const createResponse = waitFor(page, '/knowledge/workspaces', 'POST');
     await dialog.getByRole('button', { name: /创\s*建/ }).click();
     expect((await createResponse).status()).toBe(201);

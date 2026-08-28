@@ -16,6 +16,7 @@ import {
   KNOWLEDGE_MIN_SCORE_THRESHOLD,
   KNOWLEDGE_MIN_TOP_K,
 } from '@/constants';
+import { ModelSelect } from '@/modules/llm/components/ModelSelect';
 
 const { Option } = Select;
 
@@ -41,7 +42,6 @@ interface ConfigValues {
 interface WorkspaceConfigFormProps {
   form: FormInstance<ConfigValues>;
   loading: boolean;
-  chatModels: string[];
   onSubmit: (values: ConfigValues) => void;
 }
 
@@ -53,7 +53,7 @@ const defaultPlaceholder = (unset: boolean, text: string): string | undefined =>
 
 const cardStyle = { borderRadius: 12, border: '1px solid #f0f0f0', marginBottom: 16 };
 
-export const WorkspaceConfigForm = ({ form, loading, chatModels, onSubmit }: WorkspaceConfigFormProps) => {
+export const WorkspaceConfigForm = ({ form, loading, onSubmit }: WorkspaceConfigFormProps) => {
   const queryMode = Form.useWatch('query_mode', form);
   const chunkSize = Form.useWatch('chunk_size', form);
   const chunkOverlap = Form.useWatch('chunk_overlap', form);
@@ -195,7 +195,7 @@ export const WorkspaceConfigForm = ({ form, loading, chatModels, onSubmit }: Wor
                 rules={[{ required: true, message: '内置重排必须选择重排模型' }]}
                 tooltip="内置重排的 LLM 语义精排模型（chat 目录）；切换重排策略即关闭"
               >
-                <Select placeholder="选择重排模型" allowClear options={chatModels.map((m) => ({ label: m, value: m }))} />
+                <ModelSelect placeholder="选择重排模型" allowClear />
               </Form.Item>
             </Col>
           )}
@@ -203,7 +203,7 @@ export const WorkspaceConfigForm = ({ form, loading, chatModels, onSubmit }: Wor
         <Row gutter={16}>
           <Col xs={24} sm={8}>
             <Form.Item label="判断模型" name="judge_model" tooltip="证据充分性判断模型（chat 目录）；清空即关闭判断门">
-              <Select placeholder="选择判断模型" allowClear options={chatModels.map((m) => ({ label: m, value: m }))} />
+              <ModelSelect placeholder="选择判断模型" allowClear />
             </Form.Item>
           </Col>
         </Row>

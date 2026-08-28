@@ -11,7 +11,6 @@ import {
   KNOWLEDGE_DEFAULT_TOP_K,
 } from '@/constants';
 import { useAuth } from '@/modules/iam';
-import { llmApi } from '@/modules/llm';
 import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 interface CreateValues {
@@ -32,7 +31,6 @@ export const useKnowledgePage = () => {
   const [createOpen, setCreateOpen] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
-  const [embeddingModels, setEmbeddingModels] = useState<string[]>([]);
   const [form] = Form.useForm<CreateValues>();
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -43,10 +41,9 @@ export const useKnowledgePage = () => {
     (async () => {
       setLoading(true);
       try {
-        const [list, catalogue] = await Promise.all([knowledgeApi.list(), llmApi.getCatalogue()]);
+        const list = await knowledgeApi.list();
         if (!cancelled) {
           setWorkspaces(list);
-          setEmbeddingModels(catalogue.embeddingModels);
         }
       } catch (err) {
         if (!cancelled && !isForbidden(err)) {
@@ -120,7 +117,6 @@ export const useKnowledgePage = () => {
     setCreateOpen,
     createLoading,
     searchText,
-    embeddingModels,
     setSearchText,
     form,
     navigate,
