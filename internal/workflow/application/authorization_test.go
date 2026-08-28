@@ -7,10 +7,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAuthorizeRunMemberCanReadEventsAndCancelOwnRun(t *testing.T) {
+func TestAuthorizeRunMemberCanControlOwnRun(t *testing.T) {
 	run := &domain.Run{CreatedBy: "user-a"}
 	actor := Actor{UserID: "user-a", Role: "member"}
-	for _, action := range []RunAction{RunActionRead, RunActionEvents, RunActionCancel} {
+	// 发起人可读、查事件、取消、以及运行中心放开后的暂停/继续。
+	for _, action := range []RunAction{RunActionRead, RunActionEvents, RunActionCancel, RunActionPause, RunActionResume} {
 		require.NoError(t, authorizeRun(run, actor, action))
 	}
 }
@@ -26,7 +27,8 @@ func TestAuthorizeRunMemberCannotReadAnotherUsersRun(t *testing.T) {
 func TestAuthorizeRunMemberCannotAdministerOwnRun(t *testing.T) {
 	run := &domain.Run{CreatedBy: "user-a"}
 	actor := Actor{UserID: "user-a", Role: "member"}
-	for _, action := range []RunAction{RunActionPause, RunActionResume, RunActionApprove, RunActionResolveManual} {
+	// 审批与人工干预仍是 admin/owner 专属，发起人也不得操作。
+	for _, action := range []RunAction{RunActionApprove, RunActionResolveManual} {
 		require.ErrorIs(t, authorizeRun(run, actor, action), domain.ErrForbidden)
 	}
 }

@@ -18,7 +18,7 @@ type activeExecChatStub struct {
 	err  error
 }
 
-func (s activeExecChatStub) CreateConversation(context.Context, string, string, string, string) (*domain.ChatConversation, error) {
+func (s activeExecChatStub) CreateConversation(context.Context, string, string, string, string, string) (*domain.ChatConversation, error) {
 	return nil, nil
 }
 func (s activeExecChatStub) GetConversation(context.Context, string, string) (*domain.ChatConversation, error) {

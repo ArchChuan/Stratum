@@ -70,12 +70,16 @@ func (f *workflowAgentServiceFake) ExecuteStream(
 func TestWorkflowAgentExecutorDelegatesToAgentService(t *testing.T) {
 	fake := &workflowAgentServiceFake{}
 	executor := workflowAgentExecutor{agents: fake}
-	output, traceID, _, err := executor.ExecuteAgent(context.Background(), "tenant-1", "agent-1", "analyse", nil)
+	output, traceID, _, err := executor.ExecuteAgent(context.Background(), "tenant-1", "agent-1", "user-1", "exec-1", "analyse", nil)
 	require.NoError(t, err)
 	require.Equal(t, "done", output)
 	require.NotEmpty(t, traceID)
 	require.Equal(t, "agent-1", fake.agentID)
 	require.Equal(t, "analyse", fake.req.Query)
+	// 身份全量透传：审批/会话/记忆/轨迹归执行人；自动会话带 source 标记。
+	require.Equal(t, "user-1", fake.req.UserID)
+	require.Equal(t, "workflow", fake.req.ConversationSource)
+	require.Equal(t, "exec-1", fake.meta.ExecutionID)
 	require.Equal(t, "tenant-1", fake.meta.TenantID)
 }
 
@@ -90,7 +94,7 @@ func TestWorkflowAgentExecutorStreamsOutputDeltaAndReturnsSafeToolSteps(t *testi
 	executor := workflowAgentExecutor{agents: fake}
 	var streamed string
 	output, _, steps, err := executor.ExecuteAgent(
-		context.Background(), "tenant-1", "agent-1", "analyse",
+		context.Background(), "tenant-1", "agent-1", "user-1", "exec-1", "analyse",
 		func(delta string) error { streamed += delta; return nil },
 	)
 	require.NoError(t, err)
@@ -114,10 +118,12 @@ func (workflowSkillVersionsFake) ResolveActivation(_ context.Context, skillID, r
 func TestWorkflowSkillExecutorUsesPinnedRevision(t *testing.T) {
 	agents := &workflowAgentServiceFake{}
 	executor := workflowSkillExecutor{agents: agents, versions: workflowSkillVersionsFake{}}
-	output, _, err := executor.ExecuteSkill(context.Background(), "tenant-1", "agent-1", "skill-1", "revision-9", "query")
+	output, _, err := executor.ExecuteSkill(context.Background(), "tenant-1", "agent-1", "user-1", "skill-1", "revision-9", "query")
 	require.NoError(t, err)
 	require.Equal(t, "revision-9", output)
 	require.Equal(t, "query", agents.req.Query)
+	require.Equal(t, "user-1", agents.req.UserID)
+	require.Equal(t, "workflow", agents.req.ConversationSource)
 }
 
 // TestWorkflowSkillExecutorExecutesBuiltinSkill:等化后 builtin skill 可被
@@ -125,7 +131,7 @@ func TestWorkflowSkillExecutorUsesPinnedRevision(t *testing.T) {
 func TestWorkflowSkillExecutorExecutesBuiltinSkill(t *testing.T) {
 	agents := &workflowAgentServiceFake{}
 	executor := workflowSkillExecutor{agents: agents, versions: workflowSkillVersionsFake{}}
-	output, _, err := executor.ExecuteSkill(context.Background(), "tenant-1", "agent-1", "builtin:platform-guide", "revision-9", "query")
+	output, _, err := executor.ExecuteSkill(context.Background(), "tenant-1", "agent-1", "user-1", "builtin:platform-guide", "revision-9", "query")
 	require.NoError(t, err)
 	require.Equal(t, "revision-9", output)
 	require.Equal(t, "query", agents.req.Query)

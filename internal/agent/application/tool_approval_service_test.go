@@ -112,6 +112,9 @@ func (f *approvalRepoFake) UpdateAssignee(_ context.Context, _, _, assignee stri
 func (f *approvalRepoFake) CascadeByConversation(_ context.Context, _, _ string) error {
 	return nil
 }
+func (f *approvalRepoFake) ListByExecution(context.Context, string, string) ([]domain.ToolApproval, error) {
+	return nil, nil
+}
 func (f *approvalRepoFake) ListActionable(_ context.Context, _, userID string) ([]domain.ToolApproval, error) {
 	f.listActionableCalls++
 	f.lastListUserID = userID

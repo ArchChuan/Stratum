@@ -237,7 +237,7 @@ func TestTaskDetachOnConversationDelete(t *testing.T) {
 	repo := NewPgTaskRepo(pool)
 	chat.SetTaskDetach(repo)
 	// 建真实会话行（user 与 task owner 一致），返回的 UUID 即 task claim 的会话
-	created, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, "user-2", "detach-test")
+	created, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, "user-2", "detach-test", "manual")
 	if err != nil {
 		t.Fatal(err)
 	}

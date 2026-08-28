@@ -16,6 +16,13 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/dag"
 )
 
+// deterministicExecutionID 生成 agent 节点在该 run 内确定性的执行 ID。首次执行与
+// 审批后/暂停后重跑一致，保证 agent checkpoint 的 execution_id 命中同一恢复键
+// （maybeResumeApproval / resumeFromCheckpoint 依赖）。
+func deterministicExecutionID(runID, nodeID string) string {
+	return "wf:" + runID + ":" + nodeID
+}
+
 func commandHash(versionID string, input map[string]any) (string, error) {
 	payload, err := json.Marshal(struct {
 		VersionID string         `json:"version_id"`
