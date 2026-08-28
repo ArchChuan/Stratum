@@ -123,6 +123,15 @@ type MetricsProvider interface {
 	// Evaluation
 	IncEvaluationJob(status string)
 
+	// Evaluation observation（§11 运行时评估观测）
+	IncEvalObservation(resource, verdict string)
+	RecordEvalJudgeScore(resource, dimension string, score float64)
+	SetEvalSampleCoverage(resource string, pct float64)
+	RecordEvalJudgeLatency(seconds float64)
+	RecordEvalJudgeCost(costUSD float64)
+	IncEvalJudgeFailure(reason string)
+	SetEvalQueueBacklog(queue string, count int64)
+
 	// Auth
 	IncAuthFailure(reason string)
 
@@ -210,6 +219,13 @@ func (NoopMetrics) RecordWorkflowRunDuration(_ string, _ float64)               
 func (NoopMetrics) IncMCPClientRequest(_, _, _ string)                            {}
 func (NoopMetrics) IncMCPClientReconnect(_ string)                                {}
 func (NoopMetrics) IncEvaluationJob(_ string)                                     {}
+func (NoopMetrics) IncEvalObservation(_, _ string)                                {}
+func (NoopMetrics) RecordEvalJudgeScore(_, _ string, _ float64)                   {}
+func (NoopMetrics) SetEvalSampleCoverage(_ string, _ float64)                     {}
+func (NoopMetrics) RecordEvalJudgeLatency(_ float64)                              {}
+func (NoopMetrics) RecordEvalJudgeCost(_ float64)                                 {}
+func (NoopMetrics) IncEvalJudgeFailure(_ string)                                  {}
+func (NoopMetrics) SetEvalQueueBacklog(_ string, _ int64)                         {}
 func (NoopMetrics) IncAuthFailure(_ string)                                       {}
 func (NoopMetrics) RecordModelHealthTransition(_, _, _ string)                    {}
 func (NoopMetrics) SetMemoryMigrationProgress(_ string, _, _, _ string, _ int)    {}

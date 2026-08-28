@@ -136,6 +136,15 @@ type PrometheusMetrics struct {
 	// Evaluation
 	evaluationJobsTotal *prometheus.CounterVec
 
+	// Evaluation observation（§11 运行时评估观测）
+	evalObservationTotal  *prometheus.CounterVec
+	evalJudgeScore        *prometheus.HistogramVec
+	evalSampleCoverage    *prometheus.GaugeVec
+	evalJudgeLatency      prometheus.Histogram
+	evalJudgeCostTotal    prometheus.Counter
+	evalJudgeFailureTotal *prometheus.CounterVec
+	evalQueueBacklog      *prometheus.GaugeVec
+
 	// Auth
 	authFailuresTotal *prometheus.CounterVec
 
@@ -316,6 +325,37 @@ func (m *PrometheusMetrics) registerKnowledgeEmbedUnavailable(factory promauto.F
 			Help: "Knowledge ingest/RAG events where the embedding model is unavailable",
 		},
 		[]string{"tenant"},
+	)
+}
+
+// registerEvalObservationMetrics registers the eval-observation metrics
+// backing the runtime-evaluation signals (§11.1/§11.2).
+func (m *PrometheusMetrics) registerEvalObservationMetrics(factory promauto.Factory) {
+	m.evalObservationTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "eval_observation_total", Help: "运行态观测落库计数（§11.1）"},
+		[]string{"resource", "stratum"},
+	)
+	m.evalJudgeScore = factory.NewHistogramVec(
+		prometheus.HistogramOpts{Name: "eval_judge_score", Help: "judge 单维度得分（§11.1）", Buckets: prometheus.LinearBuckets(0, 0.1, 11)},
+		[]string{"resource", "dimension"},
+	)
+	m.evalSampleCoverage = factory.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "eval_sample_coverage", Help: "主动采样覆盖率（§11.1）"},
+		[]string{"resource"},
+	)
+	m.evalJudgeLatency = factory.NewHistogram(
+		prometheus.HistogramOpts{Name: "eval_judge_latency_seconds", Help: "judge 调用耗时（§11.2）", Buckets: prometheus.ExponentialBuckets(0.1, 2, 8)},
+	)
+	m.evalJudgeCostTotal = factory.NewCounter(
+		prometheus.CounterOpts{Name: "eval_judge_cost_total", Help: "judge 累计成本美元（§11.2）"},
+	)
+	m.evalJudgeFailureTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "eval_judge_failure_total", Help: "judge 调用失败计数（§11.2）"},
+		[]string{"reason"},
+	)
+	m.evalQueueBacklog = factory.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "eval_queue_backlog", Help: "消息队列积压（§11.2）"},
+		[]string{"queue"},
 	)
 }
 
@@ -508,6 +548,7 @@ func (m *PrometheusMetrics) registerExtendedMetrics(factory promauto.Factory) {
 		prometheus.CounterOpts{Name: "auth_failures_total", Help: "Auth failures by reason"},
 		[]string{"reason"},
 	)
+	m.registerEvalObservationMetrics(factory)
 }
 
 // Registerer returns the private prometheus.Registerer so callers (e.g. pipeline)
@@ -859,6 +900,36 @@ func (m *PrometheusMetrics) IncMCPClientReconnect(serverName string) {
 
 func (m *PrometheusMetrics) IncEvaluationJob(status string) {
 	m.evaluationJobsTotal.WithLabelValues(status).Inc()
+}
+
+// --- Evaluation observation（§11） ---
+
+func (m *PrometheusMetrics) IncEvalObservation(resource, verdict string) {
+	m.evalObservationTotal.WithLabelValues(resource, "").Inc() // stratum 标签 P1b 接入 tenant-tier
+}
+
+func (m *PrometheusMetrics) RecordEvalJudgeScore(resource, dimension string, score float64) {
+	m.evalJudgeScore.WithLabelValues(resource, dimension).Observe(score)
+}
+
+func (m *PrometheusMetrics) SetEvalSampleCoverage(resource string, pct float64) {
+	m.evalSampleCoverage.WithLabelValues(resource).Set(pct)
+}
+
+func (m *PrometheusMetrics) RecordEvalJudgeLatency(seconds float64) {
+	m.evalJudgeLatency.Observe(seconds)
+}
+
+func (m *PrometheusMetrics) RecordEvalJudgeCost(costUSD float64) {
+	m.evalJudgeCostTotal.Add(costUSD)
+}
+
+func (m *PrometheusMetrics) IncEvalJudgeFailure(reason string) {
+	m.evalJudgeFailureTotal.WithLabelValues(reason).Inc()
+}
+
+func (m *PrometheusMetrics) SetEvalQueueBacklog(queue string, count int64) {
+	m.evalQueueBacklog.WithLabelValues(queue).Set(float64(count))
 }
 
 // --- Auth ---
