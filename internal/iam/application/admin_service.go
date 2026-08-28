@@ -178,6 +178,14 @@ func (s *AdminService) DeleteTenant(ctx context.Context, actorID, id string) err
 		return err
 	}
 	// Vector cleaner must run before schema drop — it queries tenant schema for RAG workspace names.
+	s.cleanupTenantAssets(ctx, id)
+	return nil
+}
+
+// cleanupTenantAssets 删除租户主记录后清理向量/对象/schema 并失效缓存。
+// 清理失败仅告警不阻断（主删除已持久化，可人工补清理）。收敛多个
+// nil 守卫与告警分支，控制 DeleteTenant 圈复杂度。
+func (s *AdminService) cleanupTenantAssets(ctx context.Context, id string) {
 	if s.vectorCleaner != nil {
 		if err := s.vectorCleaner.DropTenantCollections(ctx, id); err != nil {
 			s.logger.Warn("failed to drop tenant vector collections", zap.String("tenant_id", id), zap.Error(err))
@@ -196,7 +204,6 @@ func (s *AdminService) DeleteTenant(ctx context.Context, actorID, id string) err
 	if s.cacheInvalidator != nil {
 		s.cacheInvalidator.Invalidate(id)
 	}
-	return nil
 }
 
 // tenantProjection 是租户的脱敏投影（仅公开字段，无凭据）。
