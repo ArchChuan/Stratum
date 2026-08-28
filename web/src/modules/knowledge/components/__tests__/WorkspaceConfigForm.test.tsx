@@ -4,16 +4,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { WorkspaceConfigForm } from '../WorkspaceConfigForm';
 
-import { llmApi } from '@/modules/llm';
+import { llmApi, type Model, type Provider } from '@/modules/llm';
 
 // ModelSelect 自取 chat 模型目录（/admin/models + /admin/providers）：走 barrel
 // mock，否则真实 fetch 网络挂测试。option 恒带健康徽章 → accessible name 为
 // 「qwen-turbo 未探活」，断言用正则匹配模型名。
 const CHAT_MODELS = [
-  { providerId: 'p1', name: 'qwen-turbo', capabilities: ['chat'], enabled: true },
-  { providerId: 'p1', name: 'qwen-plus', capabilities: ['chat'], enabled: true },
+  { providerId: 'p1', name: 'qwen-turbo', capabilities: ['chat'], enabled: true } as Model,
+  { providerId: 'p1', name: 'qwen-plus', capabilities: ['chat'], enabled: true } as Model,
 ];
-const PROVIDERS = [{ id: 'p1', name: '托管厂商' }];
+const PROVIDERS = [{ id: 'p1', name: '托管厂商' } as Provider];
 
 vi.mock('@/modules/llm', () => ({
   llmApi: {

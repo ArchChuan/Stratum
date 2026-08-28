@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { WorkspaceCreateModal } from './WorkspaceCreateModal';
 
-import { llmApi } from '@/modules/llm';
+import { llmApi, type Model, type Provider } from '@/modules/llm';
 
 // ModelSelect 自取 embedding 模型目录（/admin/models + /admin/providers）：走
 // barrel mock，否则真实 fetch 网络挂测试。option 恒带健康徽章 → accessible name
@@ -33,9 +33,9 @@ const Harness = () => {
 describe('WorkspaceCreateModal', () => {
   beforeEach(() => {
     vi.mocked(llmApi.listModels).mockReset().mockResolvedValue([
-      { providerId: 'p1', name: 'managed-embedding', capabilities: ['embedding'], enabled: true },
+      { providerId: 'p1', name: 'managed-embedding', capabilities: ['embedding'], enabled: true } as Model,
     ]);
-    vi.mocked(llmApi.listProviders).mockReset().mockResolvedValue([{ id: 'p1', name: '托管厂商' }]);
+    vi.mocked(llmApi.listProviders).mockReset().mockResolvedValue([{ id: 'p1', name: '托管厂商' } as Provider]);
   });
 
   it('renders only managed embedding models', async () => {
