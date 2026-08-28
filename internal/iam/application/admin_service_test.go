@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
 	"github.com/byteBuilderX/stratum/internal/iam/domain/port"
 )
@@ -26,14 +27,14 @@ func (s *stubAdminUserRepo) GetGlobalRole(_ context.Context, id string) (domain.
 	}
 	return role, nil
 }
-func (s *stubAdminUserRepo) SetAdminRole(_ context.Context, id string) error {
+func (s *stubAdminUserRepo) SetAdminRole(_ context.Context, id string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	if s.roles[id] == domain.GlobalRoleGlobalAdmin {
 		return domain.ErrForbidden
 	}
 	s.roles[id] = domain.GlobalRoleSystemAdmin
 	return nil
 }
-func (s *stubAdminUserRepo) RemoveAdminRole(_ context.Context, id string) error {
+func (s *stubAdminUserRepo) RemoveAdminRole(_ context.Context, id string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	s.roles[id] = domain.GlobalRoleUser
 	return nil
 }

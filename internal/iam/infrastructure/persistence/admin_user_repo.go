@@ -3,9 +3,12 @@ package persistence
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	auditpersistence "github.com/byteBuilderX/stratum/internal/audit/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
 	"github.com/byteBuilderX/stratum/internal/iam/domain/port"
 )
@@ -71,8 +74,13 @@ func (r *AdminUserRepo) ListAdmins(ctx context.Context) ([]port.AdminUser, error
 	return out, rows.Err()
 }
 
-func (r *AdminUserRepo) SetAdminRole(ctx context.Context, userID string) error {
-	tag, err := r.pool.Exec(ctx,
+func (r *AdminUserRepo) SetAdminRole(ctx context.Context, userID string, actorTenantID string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("set admin role: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx,
 		"UPDATE public.users SET global_role = 'system_admin', updated_at = NOW() WHERE id = $1 AND is_guest = false",
 		userID)
 	if err != nil {
@@ -81,11 +89,22 @@ func (r *AdminUserRepo) SetAdminRole(ctx context.Context, userID string) error {
 	if tag.RowsAffected() == 0 {
 		return domain.ErrUserNotFound
 	}
+	if err := auditpersistence.InsertPlatformAuditTx(ctx, tx, actorTenantID, audit); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("set admin role: commit: %w", err)
+	}
 	return nil
 }
 
-func (r *AdminUserRepo) RemoveAdminRole(ctx context.Context, userID string) error {
-	tag, err := r.pool.Exec(ctx,
+func (r *AdminUserRepo) RemoveAdminRole(ctx context.Context, userID string, actorTenantID string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("remove admin role: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx,
 		"UPDATE public.users SET global_role = 'user', updated_at = NOW() WHERE id = $1",
 		userID)
 	if err != nil {
@@ -93,6 +112,12 @@ func (r *AdminUserRepo) RemoveAdminRole(ctx context.Context, userID string) erro
 	}
 	if tag.RowsAffected() == 0 {
 		return domain.ErrUserNotFound
+	}
+	if err := auditpersistence.InsertPlatformAuditTx(ctx, tx, actorTenantID, audit); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("remove admin role: commit: %w", err)
 	}
 	return nil
 }

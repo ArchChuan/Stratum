@@ -24,6 +24,7 @@ import (
 	harnesspkg "github.com/byteBuilderX/stratum/internal/platform/harness"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	postgresstorage "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 )
@@ -424,7 +425,10 @@ func reapGuest(ctx context.Context, userID string, onboard *iamapp.OnboardServic
 		return
 	}
 	for _, tenantID := range tenantIDs {
-		if err := admin.DeleteTenant(ctx, tenantID); err != nil {
+		// guest-reaper 是系统 actor：审计以 system/optimization 落库，不经用户鉴权。
+		// 每次迭代内派生新 ctx，避免把 system actor 标记泄漏到后续 DeleteUser。
+		sysCtx := reqctx.WithSystemActor(ctx, "guest-reaper")
+		if err := admin.DeleteTenant(sysCtx, "guest-reaper", tenantID); err != nil {
 			logger.Warn("guest-reaper: delete tenant", zap.String("tenant_id", tenantID), zap.Error(err))
 			metrics.IncReaperDeleteError("delete_tenant")
 		}

@@ -68,7 +68,8 @@ func (h *AdminHandler) CreateTenant(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	t, err := h.svc.CreateTenant(c.Request.Context(), req.Name, req.Slug, req.Plan, req.Status)
+	actorID := c.GetString(middleware.ContextKeySub)
+	t, err := h.svc.CreateTenant(c.Request.Context(), actorID, req.Name, req.Slug, req.Plan, req.Status)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -84,7 +85,8 @@ func (h *AdminHandler) UpdateTenant(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	if err := h.svc.UpdateTenant(c.Request.Context(), id, iamdomain.TenantPatch{
+	actorID := c.GetString(middleware.ContextKeySub)
+	if err := h.svc.UpdateTenant(c.Request.Context(), actorID, id, iamdomain.TenantPatch{
 		Plan:   req.Plan,
 		Status: req.Status,
 	}); err != nil {
@@ -96,7 +98,8 @@ func (h *AdminHandler) UpdateTenant(c *gin.Context) {
 
 // DeleteTenant DELETE /admin/tenants/:id — soft delete
 func (h *AdminHandler) DeleteTenant(c *gin.Context) {
-	if err := h.svc.DeleteTenant(c.Request.Context(), c.Param("id")); err != nil {
+	actorID := c.GetString(middleware.ContextKeySub)
+	if err := h.svc.DeleteTenant(c.Request.Context(), actorID, c.Param("id")); err != nil {
 		_ = c.Error(err)
 		return
 	}

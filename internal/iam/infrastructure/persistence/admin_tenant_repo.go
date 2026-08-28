@@ -3,10 +3,13 @@ package persistence
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	auditpersistence "github.com/byteBuilderX/stratum/internal/audit/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 )
@@ -94,31 +97,61 @@ func (r *AdminTenantRepo) Get(ctx context.Context, id string) (*domain.Tenant, e
 	return &t, nil
 }
 
-func (r *AdminTenantRepo) Create(ctx context.Context, t domain.Tenant) error {
-	_, err := r.pool.Exec(ctx,
+func (r *AdminTenantRepo) Create(ctx context.Context, t domain.Tenant, actorTenantID string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("admin create tenant: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	_, err = tx.Exec(ctx,
 		"INSERT INTO public.tenants(id, name, slug, plan, status, created_at) VALUES($1,$2,$3,$4,$5,$6)",
 		t.ID, t.Name, t.Slug, t.Plan, t.Status, t.CreatedAt,
 	)
-	return err
-}
-
-func (r *AdminTenantRepo) UpdatePatch(ctx context.Context, id string, patch domain.TenantPatch) error {
-	tag, err := r.pool.Exec(ctx,
-		"UPDATE public.tenants SET plan=COALESCE(NULLIF($1,''), plan), status=COALESCE(NULLIF($2,''), status) WHERE id=$3 AND deleted_at IS NULL",
-		patch.Plan, patch.Status, id,
-	)
 	if err != nil {
+		return fmt.Errorf("admin create tenant: %w", err)
+	}
+	if err := auditpersistence.InsertPlatformAuditTx(ctx, tx, actorTenantID, audit); err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return domain.ErrTenantNotFound
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("admin create tenant: commit: %w", err)
 	}
 	return nil
 }
 
-func (r *AdminTenantRepo) HardDelete(ctx context.Context, id string) error {
+func (r *AdminTenantRepo) UpdatePatch(ctx context.Context, id string, patch domain.TenantPatch, actorTenantID string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("admin update tenant: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx,
+		"UPDATE public.tenants SET plan=COALESCE(NULLIF($1,''), plan), status=COALESCE(NULLIF($2,''), status) WHERE id=$3 AND deleted_at IS NULL",
+		patch.Plan, patch.Status, id,
+	)
+	if err != nil {
+		return fmt.Errorf("admin update tenant: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrTenantNotFound
+	}
+	if err := auditpersistence.InsertPlatformAuditTx(ctx, tx, actorTenantID, audit); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("admin update tenant: commit: %w", err)
+	}
+	return nil
+}
+
+func (r *AdminTenantRepo) HardDelete(ctx context.Context, id string, actorTenantID string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("admin delete tenant: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 	var isDefault bool
-	err := r.pool.QueryRow(ctx,
+	err = tx.QueryRow(ctx,
 		"SELECT is_default FROM public.tenants WHERE id=$1", id,
 	).Scan(&isDefault)
 	if err != nil {
@@ -130,12 +163,18 @@ func (r *AdminTenantRepo) HardDelete(ctx context.Context, id string) error {
 	if isDefault {
 		return domain.ErrDefaultTenantDelete
 	}
-	tag, err := r.pool.Exec(ctx, "DELETE FROM public.tenants WHERE id=$1", id)
+	tag, err := tx.Exec(ctx, "DELETE FROM public.tenants WHERE id=$1", id)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return domain.ErrTenantNotFound
+	}
+	if err := auditpersistence.InsertPlatformAuditTx(ctx, tx, actorTenantID, audit); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("admin delete tenant: commit: %w", err)
 	}
 	return nil
 }
