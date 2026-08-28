@@ -1,0 +1,49 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "GET",
+    "path": "/evaluations/observations",
+    "want_status": 200,
+    "want_body": {
+      "items": [
+        {
+          "id": "obs-1",
+          "trace_id": "trace-1",
+          "resource": {
+            "kind": "agent",
+            "resource_id": "agent-1"
+          },
+          "param_version": {
+            "platform": {
+              "group_key": "",
+              "version_seq": 0
+            },
+            "resource": {
+              "ref": "",
+              "version": ""
+            },
+            "source": ""
+          },
+          "signals": {
+            "rule": null,
+            "judge": null,
+            "behavior": {
+              "retry": false,
+              "escalation": false,
+              "abandonment": false
+            }
+          },
+          "cost_perf": {
+            "latency_ms": 0,
+            "tokens": 0,
+            "cost_usd": 0
+          },
+          "stratum": "",
+          "verdict": "pass",
+          "created_at": "2026-01-01T00:00:00Z"
+        }
+      ],
+      "total": 1
+    }
+  }
+]

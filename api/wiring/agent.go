@@ -21,6 +21,7 @@ import (
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	memapp "github.com/byteBuilderX/stratum/internal/memory/application"
+	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	versioningpersistence "github.com/byteBuilderX/stratum/internal/versioning/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -416,7 +417,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		a.Service.SetResourceChangeProposalService(a.ProposalService)
 		a.Service.SetResourceChangeApplier(adapters.ApplyDirectFromTool)
 	}
-	wireOperationGate(c, a, deps.Metrics)
+	wireAgentObservability(c, a, deps.Metrics)
 	c.Agent = a
 	return nil
 }
@@ -543,6 +544,22 @@ func wireOperationGate(c *Container, a *Agent, metrics observability.MetricsProv
 		}
 	})
 	a.Service.SetOperationGate(a.OperationGateService)
+}
+
+// wireAgentObservability 装配 agent 侧门控与观测能力：操作审批门 + 运行态观测
+// 引用事件发布器（P1a）。观测发布 best-effort：NATS 不可用仅 Warn，不阻断
+// agent 执行；操作审批门仍按原语义装配。
+func wireAgentObservability(c *Container, a *Agent, metrics observability.MetricsProvider) {
+	wireOperationGate(c, a, metrics)
+	if c.Storage == nil || c.Storage.NATS == nil {
+		return
+	}
+	jsm, err := pipeline.NewJetStreamManager(c.Storage.NATS, c.Logger)
+	if err != nil {
+		c.Logger.Warn("agent observation emitter: jetstream manager unavailable", zap.Error(err))
+		return
+	}
+	a.Service.SetObservationEmitter(&observationEmitterAdapter{js: jsm.JS(), logger: c.Logger})
 }
 
 func tenantModelValidator(resolver agentport.TenantCapabilityResolver) agentport.TenantChatModelValidator {

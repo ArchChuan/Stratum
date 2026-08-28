@@ -144,6 +144,9 @@ func TestContracts(t *testing.T) {
 			QueryService:      evalapp.NewQueryService(contractQueryRepo{}),
 			ExperimentService: evalapp.NewExperimentService(contractExperimentRepo{}),
 			CandidateService:  evalapp.NewCandidateCommandService(contractCandidateRepo{}),
+			ObservationService: evalapp.NewObservationService(evalapp.ObservationServiceDeps{
+				Repo: contractObservationRepo{}, Logger: logger,
+			}),
 		},
 		IAM: &wiring.IAM{
 			AdminService: iamapp.NewAdminService(
@@ -664,6 +667,34 @@ type contractCandidateRepo struct{}
 
 func (contractCandidateRepo) Reject(context.Context, string, string, domain.CandidateCommand) (domain.CandidateSummary, error) {
 	return domain.CandidateSummary{}, domain.ErrCandidateCommandConflict
+}
+
+// contractObservationRepo 为运行态观测查询 API 提供确定性单条/分页响应
+// （P1a；golden 文件与此 stub 的返回一一对应）。
+type contractObservationRepo struct{}
+
+func (contractObservationRepo) Save(_ context.Context, _ string, _ *domain.EvalObservation) error {
+	return nil
+}
+
+func (contractObservationRepo) Get(_ context.Context, _, _ string) (*domain.EvalObservation, error) {
+	return &domain.EvalObservation{
+		ID: "obs-1", TraceID: "trace-1",
+		Resource:  domain.ObservationResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1"},
+		Verdict:   domain.VerdictPass,
+		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}, nil
+}
+
+func (contractObservationRepo) QueryByResource(_ context.Context, _, _, _ string,
+	_, _ *time.Time, _, _ int,
+) ([]domain.EvalObservation, error) {
+	return []domain.EvalObservation{{
+		ID: "obs-1", TraceID: "trace-1",
+		Resource:  domain.ObservationResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1"},
+		Verdict:   domain.VerdictPass,
+		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}}, nil
 }
 
 // ── Audit stub ─────────────────────────────────────────────────────────────

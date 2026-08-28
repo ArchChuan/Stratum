@@ -15,10 +15,12 @@ import (
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	"github.com/byteBuilderX/stratum/internal/evaluation/infrastructure/observation"
 	evalpersist "github.com/byteBuilderX/stratum/internal/evaluation/infrastructure/persistence"
 	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
+	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	parametersapp "github.com/byteBuilderX/stratum/internal/parameters/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
@@ -44,6 +46,7 @@ type Evaluation struct {
 	BaselineService      *evalapp.BaselineService
 	AgentRevisionApplier evalport.AgentRevisionApplier
 	TestCaseGenerator    *evalapp.TestCaseGenerator
+	ObservationService   *evalapp.ObservationService
 }
 
 type evaluationResourceRouter struct {
@@ -1051,15 +1054,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	feedbackService := evalapp.NewFeedbackService(
 		feedbackRepo, experimentService, evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider},
 	)
-	experimentRunner := evalapp.NewExperimentRunner(experimentService, experimentRepo, feedbackRepo)
-	worker := evalapp.NewWorker(
-		evaluationTenantLister{pool: db},
-		evalapp.NewMultiRunner(jobService, experimentRunner),
-		constants.EvaluationIdleInterval,
-		c.platformMetrics(),
-	)
-	worker.Start(ctx)
-	c.shutdown = append(c.shutdown, func(context.Context) error { worker.Stop(); return nil })
+	worker := c.newEvaluationWorker(ctx, db, jobService, experimentService, experimentRepo, feedbackRepo)
 	baselineService, agentRevisionApplier := buildEvaluationRuntime(manager, agentProvider, mcpProvider, knowledgeProvider, runtimeAgentAdapter)
 	c.Evaluation = &Evaluation{
 		Service:              service,
@@ -1077,6 +1072,9 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		BaselineService:      baselineService,
 		AgentRevisionApplier: agentRevisionApplier,
 		TestCaseGenerator:    buildTestCaseGenerator(c, suiteRepo, db),
+	}
+	if err := c.wireObservationPipeline(ctx, db, traceReader, buildEvaluationJudge(c)); err != nil {
+		return err
 	}
 	c.applyAgentRevisionResolvers(experimentService, runtimeAgentAdapter, runtimeMCPAdapter, runtimeKnowledgeAdapter)
 	c.applySkillEvaluationReader(experimentRepo)
@@ -1132,4 +1130,98 @@ func (c *Container) applySkillEvaluationReader(experimentRepo evalport.Experimen
 			traceAgentBindingResolver{evidence: c.Agent.EvidenceProvider, registry: c.Agent.Registry},
 		)
 	}
+}
+
+// observationEnabled 读取平台参数 evaluation.observe.enabled。默认关闭
+// （fail closed：参数服务不可用时禁用观测链路）。
+func observationEnabled(ctx context.Context, params *parametersapp.Service) bool {
+	if params == nil {
+		return false
+	}
+	values, err := params.PlatformValues(ctx)
+	if err != nil {
+		return false
+	}
+	enabled, _ := values["evaluation.observe.enabled"].(bool)
+	return enabled
+}
+
+// observationSampleRate 读取平台参数 evaluation.observe.sample_rate，
+// 未配置或非法时回退常量默认采样率。
+func observationSampleRate(ctx context.Context, params *parametersapp.Service) float64 {
+	if params == nil {
+		return constants.ObservationSampleRateDefault
+	}
+	values, err := params.PlatformValues(ctx)
+	if err != nil {
+		return constants.ObservationSampleRateDefault
+	}
+	if rate, ok := values["evaluation.observe.sample_rate"].(float64); ok && rate >= 0 && rate <= 1 {
+		return rate
+	}
+	return constants.ObservationSampleRateDefault
+}
+
+// newEvaluationWorker 构建评测周期 worker 并启动 + 注册关闭。独立成函数
+// 保持 buildEvaluation 复杂度在质量门禁基线内。
+func (c *Container) newEvaluationWorker(ctx context.Context, db *pgxpool.Pool, jobService *evalapp.JobService,
+	experimentService *evalapp.ExperimentService, experimentRepo evalport.ExperimentRepository, feedbackRepo evalport.FeedbackRepository,
+) *evalapp.Worker {
+	experimentRunner := evalapp.NewExperimentRunner(experimentService, experimentRepo, feedbackRepo)
+	worker := evalapp.NewWorker(
+		evaluationTenantLister{pool: db},
+		evalapp.NewMultiRunner(jobService, experimentRunner),
+		constants.EvaluationIdleInterval,
+		c.platformMetrics(),
+	)
+	worker.Start(ctx)
+	c.shutdown = append(c.shutdown, func(context.Context) error { worker.Stop(); return nil })
+	return worker
+}
+
+// wireObservationPipeline 装配运行态观测链路（P1a）：ObservationService 落库
+// 服务 + JetStream 消费 worker。观测服务先于 NATS 装配（查询 API 数据源）；
+// NATS 消费设置失败使 evaluation 构建失败（fail closed，防止观测链路静默降级）。
+// NATS 缺失时仅装配服务、不启动消费（观测查询 API 仍可用）。
+func (c *Container) wireObservationPipeline(ctx context.Context, db *pgxpool.Pool,
+	traceReader evalport.TraceEvidenceReader, judge evalport.LLMJudge,
+) error {
+	observationRepo := evalpersist.NewPgObservationRepository(db)
+	observationSvc := evalapp.NewObservationService(evalapp.ObservationServiceDeps{
+		Enabled:    func(ctx context.Context) bool { return observationEnabled(ctx, c.Parameters.Service) },
+		SampleRate: func(ctx context.Context) float64 { return observationSampleRate(ctx, c.Parameters.Service) },
+		Evidence:   traceReader,
+		Judge:      judge,
+		Repo:       observationRepo,
+		Metrics:    c.platformMetrics(),
+		Logger:     c.Logger,
+	})
+	c.Evaluation.ObservationService = observationSvc
+	if c.Storage == nil || c.Storage.NATS == nil {
+		return nil
+	}
+	jsm, err := pipeline.NewJetStreamManager(c.Storage.NATS, c.Logger)
+	if err != nil {
+		return fmt.Errorf("observation jetstream manager: %w", err)
+	}
+	if err := observation.EnsureStreams(ctx, jsm.JS()); err != nil {
+		return fmt.Errorf("observation ensure streams: %w", err)
+	}
+	consumer, err := jsm.CreateConsumer(ctx, constants.ObservationStream,
+		constants.ObservationConsumerName, constants.ObservationSubjectPrefix+".>",
+		constants.ObservationAckWait, constants.ObservationMaxDeliver)
+	if err != nil {
+		return fmt.Errorf("observation ensure consumer: %w", err)
+	}
+	observationWorker := observation.NewObservationConsumerWorker(consumer, jsm.JS(),
+		observationSvc, c.platformMetrics(), c.Logger,
+		constants.ObservationAckWait, constants.ObservationMaxDeliver)
+	if err := observationWorker.Start(ctx); err != nil {
+		return fmt.Errorf("observation consumer start: %w", err)
+	}
+	c.shutdown = append(c.shutdown, func(context.Context) error {
+		observationWorker.Stop()
+		return nil
+	})
+	return nil
 }

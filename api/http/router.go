@@ -174,7 +174,7 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 		c.Evaluation.FeedbackService, c.Evaluation.QueryService, c.Evaluation.CandidateService,
 		c.Logger,
 	).WithBaselineService(c.Evaluation.BaselineService).WithAgentRevisionApplier(c.Evaluation.AgentRevisionApplier).
-		WithTestCaseGenerator(c.Evaluation.TestCaseGenerator)
+		WithTestCaseGenerator(c.Evaluation.TestCaseGenerator).WithObservationService(c.Evaluation.ObservationService)
 	if c.Agent != nil && c.Agent.ApprovalService != nil {
 		// D4：member 写操作创建审批（缺装配时 handler 内部 fail closed 503）。
 		h = h.WithApprovalService(c.Agent.ApprovalService)
