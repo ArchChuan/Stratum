@@ -1314,10 +1314,12 @@ func TestSampleDecisionBoundaries(t *testing.T) {
 }
 
 func TestSampleDecisionDeterministic(t *testing.T) {
- if !sampleDecision(0.5, "agent", "trace-abc") {
-  t.Fatal("expected sample for trace-abc")
+ // trace-sample 的 sha256("agent/trace-sample") 前 8 字节映射到 [0,1) 得
+ // ~0.3326，在 0.5 采样率下必须被采样（实现前已用脚本验证，非魔数侥幸）。
+ if !sampleDecision(0.5, "agent", "trace-sample") {
+  t.Fatal("expected sample for trace-sample")
  }
- if sampleDecision(0.5, "agent", "trace-abc") != sampleDecision(0.5, "agent", "trace-abc") {
+ if sampleDecision(0.5, "agent", "trace-sample") != sampleDecision(0.5, "agent", "trace-sample") {
   t.Fatal("same trace must be idempotent")
  }
 }
@@ -1426,12 +1428,12 @@ import (
  "time"
 
  "github.com/byteBuilderX/stratum/internal/evaluation/domain"
- "github.com/pashagolub/pgxmock/v4"
+ "github.com/pashagolub/pgxmock/v2"
 )
 
 func TestObservationRepositorySave(t *testing.T) {
- mock, pool := newPgxMockPool(t) // 沿用 run_repository_test.go 的 pool mock 基建
- repo := NewPgObservationRepository(pool)
+ mock := newMockRepo(t) // 沿用 mock_test.go 的 mock 池基建（execTenantTx 内部处理 BEGIN + SET LOCAL search_path）
+ repo := NewPgObservationRepository(mock)
 
  obs := &domain.EvalObservation{
   ID: "obs-1", TraceID: "trace-1",
@@ -1444,7 +1446,7 @@ func TestObservationRepositorySave(t *testing.T) {
   CreatedAt: time.Now().UTC(),
  }
 
- mock.ExpectBegin()
+ expectTenantTx(mock) // BEGIN + SET LOCAL search_path（execTenantTx 内部执行）
  mock.ExpectExec(`INSERT INTO eval_observations`).
   WithArgs("obs-1", "trace-1", "agent", "agent-1", pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), "", "pass", obs.CreatedAt).
   WillReturnResult(pgxmock.NewResult("INSERT", 1))
@@ -1459,8 +1461,9 @@ func TestObservationRepositorySave(t *testing.T) {
 }
 
 func TestObservationRepositoryGet(t *testing.T) {
- mock, pool := newPgxMockPool(t)
- repo := NewPgObservationRepository(pool)
+ mock := newMockRepo(t)
+ repo := NewPgObservationRepository(mock)
+ expectTenantTx(mock) // BEGIN + SET LOCAL search_path（execTenantTx 内部执行）
 
  rows := pgxmock.NewRows([]string{"id", "trace_id", "resource_kind", "resource_id",
   "param_version", "signals", "cost_perf", "stratum", "verdict", "created_at"}).
@@ -1473,6 +1476,7 @@ func TestObservationRepositoryGet(t *testing.T) {
  mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, trace_id, resource_kind, resource_id, param_version, signals, cost_perf, stratum, verdict, created_at FROM eval_observations WHERE id = $1`)).
   WithArgs("obs-1").
   WillReturnRows(rows)
+ mock.ExpectCommit()
 
  got, err := repo.Get(context.Background(), "t1", "obs-1")
  if err != nil {
@@ -1484,16 +1488,18 @@ func TestObservationRepositoryGet(t *testing.T) {
 }
 
 func TestObservationRepositoryQueryByResource(t *testing.T) {
- mock, pool := newPgxMockPool(t)
- repo := NewPgObservationRepository(pool)
+ mock := newMockRepo(t)
+ repo := NewPgObservationRepository(mock)
+ expectTenantTx(mock) // BEGIN + SET LOCAL search_path（execTenantTx 内部执行）
 
  rows := pgxmock.NewRows([]string{"id", "trace_id", "resource_kind", "resource_id",
   "param_version", "signals", "cost_perf", "stratum", "verdict", "created_at"}).
   AddRow("obs-1", "trace-1", "agent", "agent-1", `{}`, `{}`, `{}`, "", "pass", time.Now().UTC())
 
  mock.ExpectQuery(`FROM eval_observations WHERE resource_kind = \$1 AND resource_id = \$2`).
-  WithArgs("agent", "agent-1").
+  WithArgs("agent", "agent-1", 20, 0).
   WillReturnRows(rows)
+ mock.ExpectCommit()
 
  list, err := repo.QueryByResource(context.Background(), "t1", "agent", "agent-1", nil, nil, 20, 0)
  if err != nil {
@@ -1505,7 +1511,7 @@ func TestObservationRepositoryQueryByResource(t *testing.T) {
 }
 ```
 
-> 注：`newPgxMockPool` 若 run_repository_test.go 无同名基建，则以该文件实际 mock 池构造方式为准（摘要确认 run_repository 测试用 pgxmock，且经 `execTenantTx` 的 SQL 会被 mock 捕获）。`pool_iface.go` 里**只有 `execTenantTx`**（不存在 `execTenant`/`execTenantQuery`）——Save/Get/Query 全部经 `execTenantTx(ctx, r.pool, tenantID, fn)`，读操作在 tx 内 `tx.QueryRow`/`tx.Query`。
+> 注：mock 基建用 `mock_test.go` 的 `newMockRepo(t)`（返回 `pgxmock.PgxPoolIface`，t.Cleanup 关闭）与 `expectTenantTx(mock)`（BEGIN + `SET LOCAL search_path`）；**COMMIT 由测试显式 `mock.ExpectCommit()`**（`execTenantTx` 内部在 fn 成功后 Commit）。`pool_iface.go` 里**只有 `execTenantTx`**（不存在 `execTenant`/`execTenantQuery`）——Save/Get/Query 全部经 `execTenantTx(ctx, r.pool, tenantID, fn)`，读操作在 tx 内 `tx.QueryRow`/`tx.Query`。pgxmock 版本 v2.12.0（go.mod:19），import `pgxmock/v2`。
 
 - [ ] **Step 2: 运行测试确认失败**
 
@@ -1748,7 +1754,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 **Interfaces:**
 
 - Consumes: `domain.ObservationReferenceEvent`（Task 2）、`domain.EvalObservation`（Task 1）、`sampleDecision`（Task 7）、`evalport.ObservationRepository`（Task 8）、`evalport.TraceEvidenceReader`（现状）、`evalport.LLMJudge`（现状）、`observability.MetricsProvider`（Task 4 新方法）。观测开关/采样率经构造注入的闭包读取（wiring 提供读 PlatformValues 的 closure，application 不 import parameters）。
-- Produces: `ObservationService` + `NewObservationService(...)`，方法 `Process(ctx, tenantID string, evt domain.ObservationReferenceEvent) error`、`ListObservations(ctx, tenantID string, q ObservationQuery) ([]domain.EvalObservation, error)`、`GetObservation(ctx, tenantID, id string) (*domain.EvalObservation, error)`。Task 10/11/12 消费。
+- Produces: `ObservationService` + `NewObservationService(...)`，方法 `Process(ctx context.Context, evt domain.ObservationReferenceEvent) error`、`ListObservations(ctx context.Context, tenantID, resourceKind, resourceID string, from, to *time.Time, limit, offset int) ([]domain.EvalObservation, error)`、`GetObservation(ctx context.Context, tenantID, id string) (*domain.EvalObservation, error)`。Task 10/11/12 消费。
 
 judge rubric：`ObservationService` 对运行态观测使用内置 rubric（faithfulness/relevance/completeness 三维度，对齐规格 §3.1）；每个维度独立调用 `LLMJudge.Judge`，汇总为 `JudgeSignal`。`LLMJudge` 现状 `Judge(ctx, JudgeRequest) (AssertionResult, error)` 返回单条结果——为支撑三维度，P1a 用三次独立 Judge 调用（每次一个维度），每次返回单维度得分。
 
