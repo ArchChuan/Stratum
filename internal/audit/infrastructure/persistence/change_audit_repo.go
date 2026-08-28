@@ -150,7 +150,6 @@ func (r *PgResourceChangeAuditRepo) ListPlatform(
 		f.Offset = 0
 	}
 	where, args := buildPlatformAuditWhere(f)
-	result := make([]port.ResourceChangeAuditRow, 0)
 	var total int
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {

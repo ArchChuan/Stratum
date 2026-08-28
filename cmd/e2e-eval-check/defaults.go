@@ -9,8 +9,13 @@ import (
 const (
 	// DefaultWarnDelta is the regression threshold: a run metric below
 	// baseline - delta is a regression.
-	DefaultWarnDelta    = 0.1
-	DefaultHTTPTimeout  = 30 * time.Second
+	DefaultWarnDelta = 0.1
+	// DefaultHTTPTimeout bounds the eval CLI's per-request HTTP timeout. Agent
+	// execute with a real LLM legitimately exceeds 30s under provider latency
+	// (observed 34s on glm-4-flash); 30s caused flaky infra aborts in
+	// acceptance E2E. Bumped to 120s so a slow-but-successful run is not a
+	// false infra failure. Judge calls stay within the same bound.
+	DefaultHTTPTimeout  = 120 * time.Second
 	DefaultJWTExpiry    = 30 * time.Minute
 	exitPassed          = 0
 	exitFailed          = 1

@@ -108,7 +108,9 @@ func TestListTenants_noFilter(t *testing.T) {
 
 func TestCreateTenant_success(t *testing.T) {
 	repo := &fakeAdminRepo{
-		createFn: func(_ context.Context, _ iamdomain.Tenant, _ string, _ *auditdomain.ResourceChangeAuditEvent) error { return nil },
+		createFn: func(_ context.Context, _ iamdomain.Tenant, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+			return nil
+		},
 	}
 	r := setupAdminRouter(newTestAdminHandler(repo))
 
@@ -129,8 +131,11 @@ func TestCreateTenant_success(t *testing.T) {
 func TestDeleteTenant_softDelete(t *testing.T) {
 	called := ""
 	repo := &fakeAdminRepo{
-		getFn:    func(_ context.Context, id string) (*iamdomain.Tenant, error) { return &iamdomain.Tenant{ID: id}, nil },
-		deleteFn: func(_ context.Context, id, _ string, _ *auditdomain.ResourceChangeAuditEvent) error { called = id; return nil },
+		getFn: func(_ context.Context, id string) (*iamdomain.Tenant, error) { return &iamdomain.Tenant{ID: id}, nil },
+		deleteFn: func(_ context.Context, id, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+			called = id
+			return nil
+		},
 	}
 	r := setupAdminRouter(newTestAdminHandler(repo))
 

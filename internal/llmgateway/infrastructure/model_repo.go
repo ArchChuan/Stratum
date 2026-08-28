@@ -261,6 +261,10 @@ func (r *PgModelRepo) CreatePlatform(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	caps := modelCapsToStrings(m.Capabilities)
+	sampling, err := encodeSamplingParams(m.SamplingParams)
+	if err != nil {
+		return fmt.Errorf("create platform model: %w", err)
+	}
 	_, err = tx.Exec(ctx,
 		`INSERT INTO public.models (id, provider_id, name, display_name, capabilities,
 		 context_window, max_tokens, context_window_source, max_tokens_source,
@@ -270,7 +274,7 @@ func (r *PgModelRepo) CreatePlatform(
 		m.ID, m.ProviderID, m.Name, m.DisplayName, caps,
 		m.ContextWindow, m.MaxTokens, m.ContextWindowSource, m.MaxTokensSource,
 		m.InputPrice, m.OutputPrice, m.Recommended, m.Enabled, m.ProviderManaged,
-		nil, m.MaxTemperature)
+		sampling, m.MaxTemperature)
 	if err != nil {
 		return fmt.Errorf("create platform model: %w", err)
 	}
