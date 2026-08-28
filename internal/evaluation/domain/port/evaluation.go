@@ -239,6 +239,9 @@ type ObservedTrace struct {
 	UserID            string
 	CostUSD           float64
 	LatencyMs         int64
+	Input             string
+	Output            string
+	TotalTokens       int64
 	Success           bool
 	SecurityViolation bool
 	Assignments       map[string]ObservedResourceAssignment
