@@ -311,6 +311,23 @@ func TestTenantSchemaPreservesMemoryEntrySessionRouting(t *testing.T) {
 	}
 }
 
+func TestTenantSchemaDoesNotRewriteUserScopeEntries(t *testing.T) {
+	// 回归 #28：user-scope agent（agents.memory_scope='user'）的正确 'user' 条目
+	// 不得被 tenant schema 重放改写成 'agent'。本文件在每次启动时对所有租户幂等
+	// 重放，这类「agent_id 非空 → scope='agent'」的无条件回填会随每次重启破坏
+	// 用户级记忆的 scope。scope 归属由运行时 enricher 决定，schema 只做新列默认值
+	// 与非法值归一化。
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+
+	if strings.Contains(sql, "UPDATE memory_entries SET scope = 'agent' WHERE agent_id IS NOT NULL AND scope = 'user'") {
+		t.Fatal("tenant_schema.sql must not unconditionally rewrite user-scope entries to agent on reprovision (see #28)")
+	}
+}
+
 func TestTenantSchemaSupportsOwnedMemoryLifecycleCleanup(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {
