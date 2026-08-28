@@ -6,6 +6,9 @@ import { workflowApi } from '../api/workflow.api';
 
 import { WorkflowVersionPage } from './WorkflowVersionPage';
 
+vi.mock('../hooks/useWorkflowResources', () => ({
+  useWorkflowResources: () => ({ agents: [], skills: [], skillRevisions: [], mcpServers: [], agentAllowedSkills: {} }),
+}));
 vi.mock('../api/workflow.api', () => ({ workflowApi: { getWorkflowVersion: vi.fn() } }));
 vi.mock('../components/WorkflowReadonlyCanvas', () => ({ WorkflowReadonlyCanvas: () => <section aria-label="工作流版本图">只读图</section> }));
 

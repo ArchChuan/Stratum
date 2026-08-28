@@ -37,7 +37,7 @@ describe('WorkflowNodeInspector', () => {
       agents={[]} skills={[]} skillRevisions={[]} mcpServers={[]}
       upstreams={[]} agentAllowedSkills={{}}
     />);
-    expect(screen.getByLabelText('固定 Skill 修订')).toBeInTheDocument();
+    expect(screen.getByLabelText('Skill 版本')).toBeInTheDocument();
     expect(screen.getByText('输入映射')).toBeInTheDocument();
     expect(screen.getByText('输出映射')).toBeInTheDocument();
   });

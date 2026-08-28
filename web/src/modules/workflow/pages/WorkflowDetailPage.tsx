@@ -5,6 +5,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 
 import { workflowApi } from '../api/workflow.api';
 import { WorkflowReadonlyCanvas } from '../components/WorkflowReadonlyCanvas';
+import { useWorkflowResources } from '../hooks/useWorkflowResources';
 import type { WorkflowDefinition, WorkflowVersion, WorkflowVersionSummary } from '../model/workflow';
 
 import { useTenantRole } from '@/modules/iam';
@@ -19,6 +20,9 @@ export const WorkflowDetailPage = () => {
   const { id = '' } = useParams();
   const navigate = useNavigate();
   const { isAdmin } = useTenantRole();
+  const { skillRevisions } = useWorkflowResources();
+  // revision ID → 可读版本名（如「检索（已发布）」），供只读节点详情展示 Skill 版本。
+  const skillRevisionLabels = Object.fromEntries(skillRevisions.map((revision) => [revision.value, revision.label]));
   const [definition, setDefinition] = useState<WorkflowDefinition | null>(null);
   const [versions, setVersions] = useState<WorkflowVersionSummary[]>([]);
   const [activeVersion, setActiveVersion] = useState<WorkflowVersion | null>(null);
@@ -74,7 +78,7 @@ export const WorkflowDetailPage = () => {
       </Space>
     </header>
     {activeVersion
-      ? <WorkflowReadonlyCanvas spec={activeVersion.spec} />
+      ? <WorkflowReadonlyCanvas spec={activeVersion.spec} skillRevisionLabels={skillRevisionLabels} />
       : <Empty description="这个工作流还没有已发布版本" />}
     <Card title="版本历史" className="workflow-version-inputs">
       <VersionHistory

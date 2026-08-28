@@ -9,6 +9,9 @@ import { WorkflowDetailPage } from './WorkflowDetailPage';
 const role = vi.hoisted(() => ({ isAdmin: false }));
 
 vi.mock('@/modules/iam', () => ({ useTenantRole: () => role }));
+vi.mock('../hooks/useWorkflowResources', () => ({
+  useWorkflowResources: () => ({ agents: [], skills: [], skillRevisions: [], mcpServers: [], agentAllowedSkills: {} }),
+}));
 vi.mock('../api/workflow.api', () => ({
   workflowApi: {
     getWorkflow: vi.fn(),

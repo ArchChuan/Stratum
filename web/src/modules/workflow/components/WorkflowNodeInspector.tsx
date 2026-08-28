@@ -70,7 +70,7 @@ export const WorkflowNodeInspector = ({
       {(node.type === 'agent' || node.type === 'skill') && <Form.Item label="执行 Agent" name="agent_id"><Select options={agentOptions} /></Form.Item>}
       {node.type === 'skill' && <>
         <Form.Item label="Skill" name="skill_id"><Select options={skillOptions} /></Form.Item>
-        <Form.Item label="固定 Skill 修订" name="skill_revision_id"><Select options={skillRevisions} /></Form.Item>
+        <Form.Item label="Skill 版本" name="skill_revision_id"><Select options={skillRevisions} /></Form.Item>
       </>}
       {node.type === 'mcp_tool' && <>
         <Form.Item label="MCP 服务" name="mcp_server_id"><Select options={mcpServers} /></Form.Item>
