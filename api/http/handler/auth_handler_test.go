@@ -45,7 +45,8 @@ func (f *refreshTokenStoreFake) GetActiveClaims(context.Context, string) (*domai
 }
 
 type membershipReaderFake struct {
-	roleErr error
+	roleErr    error
+	globalRole string
 }
 
 type oauthExchangeStoreFake struct {
@@ -115,7 +116,9 @@ func (f *oauthExchangeStoreFake) Consume(context.Context, string) (*iamport.OAut
 func (f membershipReaderFake) GetTenantRole(context.Context, string, string) (string, error) {
 	return "", f.roleErr
 }
-func (membershipReaderFake) GetGlobalRole(context.Context, string) (string, error) { return "", nil }
+func (f membershipReaderFake) GetGlobalRole(context.Context, string) (string, error) {
+	return f.globalRole, nil
+}
 
 func setupAuthRouter(h *handler.AuthHandler) *gin.Engine {
 	gin.SetMode(gin.TestMode)
