@@ -75,7 +75,7 @@ func TestObservationRepositoryGetNoRows(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, trace_id, resource_kind, resource_id, param_version, signals, cost_perf, stratum, verdict, created_at FROM eval_observations WHERE id = $1`)).
 		WithArgs("missing-1").
 		WillReturnError(pgx.ErrNoRows)
-	mock.ExpectCommit()
+	mock.ExpectRollback() // fn 返回错误时 execTenantTx 走 Rollback 而非 Commit
 
 	got, err := repo.Get(context.Background(), "t1", "missing-1")
 	if err != nil {
