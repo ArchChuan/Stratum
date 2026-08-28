@@ -36,12 +36,13 @@ func (s *executeStore) ListEvents(_ context.Context, _, _ string, _ int64, _ int
 	return append([]domain.Event(nil), s.events...), nil
 }
 
-func (s *executeStore) ControlRun(_ context.Context, _, runID string, expected int64, status domain.RunStatus, reason string, _ domain.Event) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	run := s.runs[runID]
-	if run == nil {
-		return domain.ErrNotFound
+func (s *executeStore) ControlRun(ctx context.Context, tenantID, runID string, expected int64, status domain.RunStatus, reason string, _ domain.Event) error {
+	// 走 memoryStore.GetRun/UpdateRun（自带锁 + 值拷贝）完成 CAS 转换：不直接修改
+	// map 内共享的 *domain.Run，避免与 watchBatchControl 轮询的 GetRun 并发读写
+	// 同一对象触发 -race 数据竞争（GetRun 拷贝与原地写无共同锁）。
+	run, err := s.memoryStore.GetRun(ctx, tenantID, runID)
+	if err != nil {
+		return err
 	}
 	if run.Generation != expected {
 		return domain.ErrGenerationConflict
@@ -54,7 +55,7 @@ func (s *executeStore) ControlRun(_ context.Context, _, runID string, expected i
 		run.PauseReason = reason
 	}
 	run.Generation++
-	return nil
+	return s.memoryStore.UpdateRun(ctx, tenantID, run)
 }
 
 // controlTransitionAllowed 复刻 PgStore.ControlRun 的状态机门禁，防止 fake 与真实
