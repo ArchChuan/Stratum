@@ -206,7 +206,7 @@ func (a tenantRoleAdapter) ResolveTenantRole(ctx, tenantID, userID string) (stri
 func newTenantRoleAdapter(c *Container) tenantRoleAdapter {
     return tenantRoleAdapter{
         service: tenantMemberService(c),
-        global:  c.IAM.OnboardService, // 满足 tenantGlobalRoleReader 接口，无需额外 adapter
+        global:  c.Platform.OnboardSvc, // OnboardSvc 满足 tenantGlobalRoleReader 接口（GetGlobalRole），无需额外 adapter
     }
 }
 ```
