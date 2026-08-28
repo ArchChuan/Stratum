@@ -27,6 +27,8 @@ type TraceEvidence struct {
 	TotalTokens         int
 	CostUSD             float64
 	LatencyMs           int64
+	Input               string
+	Output              string
 	SecurityViolation   bool
 	ResourceAssignments map[string]ResourceAssignment
 	Tools               []ToolObservation

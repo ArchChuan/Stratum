@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/byteBuilderX/stratum/api/http/dto/gen"
 	"github.com/byteBuilderX/stratum/api/middleware"
@@ -103,6 +104,13 @@ type evaluationRoleResolver interface {
 	ResolveTenantRole(ctx context.Context, tenantID, userID string) (string, error)
 }
 
+// evaluationObservationQueryService 运行态观测查询服务（P1a 查询 API）。
+type evaluationObservationQueryService interface {
+	ListObservations(ctx context.Context, tenantID, resourceKind, resourceID string,
+		from, to *time.Time, limit, offset int) ([]domain.EvalObservation, error)
+	GetObservation(ctx context.Context, tenantID, id string) (*domain.EvalObservation, error)
+}
+
 // policyVersionEvaluationAction 标记评测动作审批的策略版本（审批协议演进时的
 // 兼容性锚点；Digest 校验使其与创建时版本强绑定）。
 const policyVersionEvaluationAction = "action-v1"
@@ -121,6 +129,7 @@ type EvaluationHandler struct {
 	casegen      evaluationCaseGenerator
 	approvals    evaluationApprovalService
 	roles        evaluationRoleResolver
+	observations evaluationObservationQueryService
 	logger       *zap.Logger
 }
 
@@ -165,6 +174,12 @@ func (h *EvaluationHandler) WithApprovalService(service evaluationApprovalServic
 // resolver 未注入时 currentRole 回退 JWT role claim（仅测试路径）。
 func (h *EvaluationHandler) WithRoleResolver(roles evaluationRoleResolver) *EvaluationHandler {
 	h.roles = roles
+	return h
+}
+
+// WithObservationService 注入运行态观测查询服务（P1a 查询 API）。
+func (h *EvaluationHandler) WithObservationService(service evaluationObservationQueryService) *EvaluationHandler {
+	h.observations = service
 	return h
 }
 
@@ -765,4 +780,72 @@ func (h *EvaluationHandler) requireApprovalOrExecute(c *gin.Context, toolName st
 		return
 	}
 	c.JSON(successStatus, result)
+}
+
+// ListObservationsQuery 观测分页查询参数（from/to 可选，RFC3339）。
+type ListObservationsQuery struct {
+	ResourceKind string     `form:"resource_kind"`
+	ResourceID   string     `form:"resource_id"`
+	From         *time.Time `form:"from" time_format:"2006-01-02T15:04:05Z07:00"`
+	To           *time.Time `form:"to" time_format:"2006-01-02T15:04:05Z07:00"`
+	Page         int        `form:"page"`
+	PageSize     int        `form:"page_size"`
+}
+
+// ListObservations 返回运行态观测明细分页（规格 §10.1 数据源）。
+func (h *EvaluationHandler) ListObservations(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	if h.observations == nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusServiceUnavailable, errors.New("evaluation observation unavailable")))
+		return
+	}
+	var req ListObservationsQuery
+	if err := c.ShouldBindQuery(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	if req.Page < 1 {
+		req.Page = 1
+	}
+	if req.PageSize <= 0 || req.PageSize > constants.MaxPageSize {
+		req.PageSize = constants.DefaultPageSize
+	}
+	limit, offset := req.PageSize, (req.Page-1)*req.PageSize
+	items, err := h.observations.ListObservations(c.Request.Context(), tenantID,
+		req.ResourceKind, req.ResourceID, req.From, req.To, limit, offset)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	if items == nil {
+		items = []domain.EvalObservation{}
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items, "total": len(items)})
+}
+
+// GetObservation 返回单条运行态观测明细。
+func (h *EvaluationHandler) GetObservation(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	if h.observations == nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusServiceUnavailable, errors.New("evaluation observation unavailable")))
+		return
+	}
+	obs, err := h.observations.GetObservation(c.Request.Context(), tenantID, c.Param("id"))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	if obs == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "observation not found"})
+		return
+	}
+	c.JSON(http.StatusOK, obs)
 }

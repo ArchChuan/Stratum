@@ -292,6 +292,7 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 		scope := a.GetConfig().MemoryScope
 		s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "user", req.Query)
 		s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "assistant", result.Output)
+		s.emitObservation(ctx, meta, agentID, executionID, result)
 	}
 	// 任务结束轨迹反思：与 fact 提取并列的链路，fail-open 显式降级。
 	s.enqueueTrajectoryReflection(ctx, meta, req, agentID, a.GetConfig().MemoryScope, executionID, result)
@@ -349,6 +350,7 @@ func (s *AgentService) ExecuteStream(
 			scope := a.GetConfig().MemoryScope
 			s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "user", req.Query)
 			s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "assistant", res.Output)
+			s.emitObservation(ctx, meta, agentID, executionID, res)
 		}
 		s.enqueueTrajectoryReflection(ctx, meta, req, agentID, a.GetConfig().MemoryScope, executionID, res)
 		if resuming {
