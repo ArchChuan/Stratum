@@ -41,6 +41,7 @@ func TestEvalObservationValidate(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			obs := base
+			obs.Signals.Judge = append([]JudgeSignal(nil), base.Signals.Judge...)
 			tc.mutate(&obs)
 			err := obs.Validate()
 			if err == nil {

@@ -123,18 +123,16 @@ func (o *EvalObservation) Validate() error {
 	return nil
 }
 
-// validate 校验单条 judge 信号。数值范围检查先于 dimension 必填检查：
-// TestEvalObservationValidate 对每个 judge 字段单独断言错误子串，
-// score/confidence 越界时须优先暴露数值错误。
+// validate 校验单条 judge 信号，按 brief 顺序：dimension → score → confidence。
 func (j JudgeSignal) validate() error {
-	if j.Confidence < 0 || j.Confidence > 1 {
-		return fmt.Errorf("evaluation observation: judge confidence %v out of [0,1]", j.Confidence)
+	if j.Dimension == "" {
+		return fmt.Errorf("evaluation observation: judge dimension required")
 	}
 	if j.Score < 0 || j.Score > 1 {
 		return fmt.Errorf("evaluation observation: judge score %v out of [0,1]", j.Score)
 	}
-	if j.Dimension == "" {
-		return fmt.Errorf("evaluation observation: judge dimension required")
+	if j.Confidence < 0 || j.Confidence > 1 {
+		return fmt.Errorf("evaluation observation: judge confidence %v out of [0,1]", j.Confidence)
 	}
 	return nil
 }
