@@ -11,6 +11,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
+	iamdomain "github.com/byteBuilderX/stratum/internal/iam/domain"
 	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
@@ -406,4 +407,88 @@ func TestSystemAssistantDiagnosticDispatchesDuplicateAreaOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(1), calls.Load())
 	require.Len(t, got.Facts, 1)
+}
+
+type fakeMemberRoleService struct {
+	role string
+	err  error
+}
+
+func (f fakeMemberRoleService) GetMemberRole(context.Context, string, string) (string, error) {
+	return f.role, f.err
+}
+
+type fakeGlobalRoleReader struct {
+	role string
+	err  error
+}
+
+func (f fakeGlobalRoleReader) GetGlobalRole(context.Context, string) (string, error) {
+	return f.role, f.err
+}
+
+func TestTenantRoleAdapter_PlatformAdminNonMemberElevated(t *testing.T) {
+	a := tenantRoleAdapter{
+		service: fakeMemberRoleService{err: iamdomain.ErrMemberNotFound},
+		global:  fakeGlobalRoleReader{role: string(iamdomain.GlobalRoleSystemAdmin)},
+	}
+	got, err := a.ResolveTenantRole(context.Background(), "t1", "u1")
+	if err != nil {
+		t.Fatalf("ResolveTenantRole: %v", err)
+	}
+	if got != "admin" {
+		t.Fatalf("ResolveTenantRole = %q, want admin", got)
+	}
+}
+
+func TestTenantRoleAdapter_MemberPlatformAdminElevated(t *testing.T) {
+	a := tenantRoleAdapter{
+		service: fakeMemberRoleService{role: "member"},
+		global:  fakeGlobalRoleReader{role: string(iamdomain.GlobalRoleSystemAdmin)},
+	}
+	got, err := a.ResolveTenantRole(context.Background(), "t1", "u1")
+	if err != nil {
+		t.Fatalf("ResolveTenantRole: %v", err)
+	}
+	if got != "admin" {
+		t.Fatalf("ResolveTenantRole = %q, want admin", got)
+	}
+}
+
+func TestTenantRoleAdapter_OwnerPlatformAdminKept(t *testing.T) {
+	a := tenantRoleAdapter{
+		service: fakeMemberRoleService{role: "owner"},
+		global:  fakeGlobalRoleReader{role: string(iamdomain.GlobalRoleSystemAdmin)},
+	}
+	got, err := a.ResolveTenantRole(context.Background(), "t1", "u1")
+	if err != nil {
+		t.Fatalf("ResolveTenantRole: %v", err)
+	}
+	if got != "owner" {
+		t.Fatalf("ResolveTenantRole = %q, want owner", got)
+	}
+}
+
+func TestTenantRoleAdapter_OrdinaryMemberUnchanged(t *testing.T) {
+	a := tenantRoleAdapter{
+		service: fakeMemberRoleService{role: "member"},
+		global:  fakeGlobalRoleReader{role: string(iamdomain.GlobalRoleUser)},
+	}
+	got, err := a.ResolveTenantRole(context.Background(), "t1", "u1")
+	if err != nil {
+		t.Fatalf("ResolveTenantRole: %v", err)
+	}
+	if got != "member" {
+		t.Fatalf("ResolveTenantRole = %q, want member", got)
+	}
+}
+
+func TestTenantRoleAdapter_GlobalRoleLookupFailureFailsClosed(t *testing.T) {
+	a := tenantRoleAdapter{
+		service: fakeMemberRoleService{role: "member"},
+		global:  fakeGlobalRoleReader{err: errors.New("db down")},
+	}
+	if _, err := a.ResolveTenantRole(context.Background(), "t1", "u1"); err == nil {
+		t.Fatal("expected error (fail closed) when global role lookup fails")
+	}
 }

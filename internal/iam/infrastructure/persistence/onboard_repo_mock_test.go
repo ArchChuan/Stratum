@@ -983,3 +983,34 @@ func TestUpdateProfile_execFails(t *testing.T) {
 	require.ErrorContains(t, err, "update profile")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// --- TenantIsActive ---
+
+func TestOnboardRepo_TenantIsActive(t *testing.T) {
+	mock := newIAMMock(t)
+	repo := NewOnboardRepo(mock)
+	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM public.tenants`).
+		WithArgs("t1").WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(true))
+	active, err := repo.TenantIsActive(context.Background(), "t1")
+	require.NoError(t, err)
+	require.True(t, active)
+}
+
+func TestOnboardRepo_TenantIsActive_NotActive(t *testing.T) {
+	mock := newIAMMock(t)
+	repo := NewOnboardRepo(mock)
+	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM public.tenants`).
+		WithArgs("t1").WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(false))
+	active, err := repo.TenantIsActive(context.Background(), "t1")
+	require.NoError(t, err)
+	require.False(t, active)
+}
+
+func TestOnboardRepo_TenantIsActive_Error(t *testing.T) {
+	mock := newIAMMock(t)
+	repo := NewOnboardRepo(mock)
+	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM public.tenants`).
+		WithArgs("t1").WillReturnError(pgx.ErrTxClosed)
+	_, err := repo.TenantIsActive(context.Background(), "t1")
+	require.Error(t, err)
+}

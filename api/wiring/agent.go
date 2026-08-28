@@ -405,7 +405,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		)
 		a.ProposalService = agent.NewResourceChangeProposalService(
 			persistence.NewPgResourceChangeProposalRepo(db),
-			proposalAuthorizer{roles: tenantRoleAdapter{service: tenantMemberService(c)}},
+			proposalAuthorizer{roles: newTenantRoleAdapter(c)},
 			adapters,
 			map[domain.ResourceKind]agentport.ResourceChangeApplier{
 				domain.ResourceAgent: adapters, domain.ResourceSkillDraft: adapters,
@@ -425,7 +425,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 // whose ownership checks need it. Called only when the full resource stack is
 // wired; otherwise each service fails closed (nil resolver).
 func (c *Container) injectTenantRoleResolvers(a *Agent) {
-	roles := tenantRoleAdapter{service: tenantMemberService(c)}
+	roles := newTenantRoleAdapter(c)
 	a.RoleResolver = roles
 	a.Service.SetTenantRoleResolver(roles)
 	a.ApprovalService.SetTenantRoleResolver(roles)
@@ -510,7 +510,7 @@ func wireOperationGate(c *Container, a *Agent, metrics observability.MetricsProv
 	if metrics == nil {
 		metrics = observability.NoopMetrics{}
 	}
-	roles := tenantRoleAdapter{service: tenantMemberService(c)}
+	roles := newTenantRoleAdapter(c)
 	a.OperationGateService = agent.NewOperationGateService(
 		persistence.NewPgOperationProposalRepo(db),
 		persistence.NewPgOperationUsageRepo(db),

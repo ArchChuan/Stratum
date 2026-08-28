@@ -56,6 +56,15 @@ func RequireTenantRole(minRole string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		roleVal, _ := c.Get(ctxRole)
 		roleStr, _ := roleVal.(string)
+		// Platform admins are treated as at least "admin" in every tenant
+		// (defense in depth: switch-tenant/refresh already sign an elevated
+		// role, but a stale or downgraded token must not lock out a platform
+		// admin). owner is never granted implicitly.
+		if grVal, ok := c.Get(ctxGlobalRole); ok {
+			if grStr, _ := grVal.(string); iamdomain.GlobalRole(grStr).IsPlatformAdmin() && rank[roleStr] < rank["admin"] {
+				roleStr = "admin"
+			}
+		}
 		if rank[roleStr] < required {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"code":    http.StatusForbidden,

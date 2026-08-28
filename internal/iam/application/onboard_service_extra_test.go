@@ -54,6 +54,9 @@ func (r *forwardingOnboardRepo) GetTenantRole(_ context.Context, userID, tenantI
 func (r *forwardingOnboardRepo) IsMember(_ context.Context, userID, tenantID string) (bool, error) {
 	return r.found, nil
 }
+func (r *forwardingOnboardRepo) TenantIsActive(_ context.Context, tenantID string) (bool, error) {
+	return r.found, nil
+}
 func (r *forwardingOnboardRepo) CreateGuestSandboxTenant(_ context.Context, githubID, githubLogin, avatarURL string, expiresAt time.Time) (string, string, error) {
 	r.guestID, r.guestLogin, r.guestExpiresAt = githubID, githubLogin, expiresAt
 	return "guest-uuid", "tenant-1", r.guestErr
@@ -232,5 +235,17 @@ func TestOnboardServiceGetUserTenantByUserID(t *testing.T) {
 	tid, role, err := svc.GetUserTenantByUserID(context.Background(), "u1")
 	if err != nil || tid != "t1" || role != "member" {
 		t.Fatalf("GetUserTenantByUserID = %q %q %v", tid, role, err)
+	}
+}
+
+func TestOnboardService_TenantIsActive(t *testing.T) {
+	repo := &forwardingOnboardRepo{found: true}
+	svc := NewOnboardService(repo)
+	ok, err := svc.TenantIsActive(context.Background(), "t1")
+	if err != nil {
+		t.Fatalf("TenantIsActive: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected TenantIsActive=true")
 	}
 }
