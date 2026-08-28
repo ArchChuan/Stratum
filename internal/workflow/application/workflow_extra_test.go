@@ -174,8 +174,8 @@ func TestControlServiceAvailableActions(t *testing.T) {
 		{name: "manual intervention", run: &domain.Run{ID: "run-1", Status: domain.RunStatusManualIntervention, CreatedBy: "operator"}, effects: []domain.EffectIntent{{ID: "e1", EffectClass: domain.EffectClassNonIdempotent, Status: domain.EffectIntentStatusUnknown}}, actor: adminActor(), expected: []string{"mark_succeeded", "retry", "terminate"}},
 		{name: "manual intervention no effect", run: &domain.Run{ID: "run-1", Status: domain.RunStatusManualIntervention, CreatedBy: "operator"}, actor: adminActor(), expected: nil},
 		{name: "terminal", run: &domain.Run{ID: "run-1", Status: domain.RunStatusCompleted, CreatedBy: "operator"}, actor: adminActor(), expected: nil},
-		// 极端情况：非 admin 只见 cancel；无 cancel 可选则返回 nil。
-		{name: "member sees cancel only", run: &domain.Run{ID: "run-1", Status: domain.RunStatusRunning, CreatedBy: "operator"}, actor: application.Actor{UserID: "operator", Role: "member"}, expected: []string{"cancel"}},
+		// 极端情况：发起人成员只见运行控制（暂停/继续/取消）；无控制动作可选则返回 nil。
+		{name: "member sees cancel only", run: &domain.Run{ID: "run-1", Status: domain.RunStatusRunning, CreatedBy: "operator"}, actor: application.Actor{UserID: "operator", Role: "member"}, expected: []string{"pause", "cancel"}},
 		{name: "member manual no cancel", run: &domain.Run{ID: "run-1", Status: domain.RunStatusManualIntervention, CreatedBy: "operator"}, effects: []domain.EffectIntent{{ID: "e1", EffectClass: domain.EffectClassNonIdempotent, Status: domain.EffectIntentStatusUnknown}}, actor: application.Actor{UserID: "operator", Role: "member"}, expected: nil},
 	}
 	for _, tc := range cases {

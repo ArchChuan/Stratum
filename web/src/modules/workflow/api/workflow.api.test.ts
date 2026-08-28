@@ -78,7 +78,7 @@ describe('workflowApi', () => {
   });
 
   it('starts, lists, reads, and controls workflow runs through the shared client', async () => {
-    const run = { id: 'run-1', definition_id: 'workflow-1', version_id: 'version-1', version: 1, status: 'running', snapshot: { nodes: [], edges: [] }, input: { task: '研究' }, output: '', generation: 1, created_by: 'user-1', created_at: '2026-07-23T00:00:00Z', updated_at: '2026-07-23T00:00:00Z' };
+    const run = { id: 'run-1', definition_id: 'workflow-1', name: 'workflow-1', version_id: 'version-1', version: 1, status: 'running', snapshot: { nodes: [], edges: [] }, input: { task: '研究' }, output: '', generation: 1, created_by: 'user-1', created_at: '2026-07-23T00:00:00Z', updated_at: '2026-07-23T00:00:00Z' };
     vi.mocked(api.post)
       .mockResolvedValueOnce({ data: { run_id: 'run-1', status: 'queued' } })
       .mockResolvedValueOnce({ data: run });

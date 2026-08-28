@@ -181,7 +181,7 @@ export const workflowRunStatusSchema = z.enum([
 export type WorkflowRunStatus = z.infer<typeof workflowRunStatusSchema>;
 
 export const workflowRunSummarySchema = z.object({
-  id: z.string(), definition_id: z.string(), version_id: z.string(), version: z.number().int(),
+  id: z.string(), definition_id: z.string(), name: z.string(), version_id: z.string(), version: z.number().int(),
   status: workflowRunStatusSchema, created_by: z.string(), created_at: z.string(), updated_at: z.string(),
   started_at: z.string().nullish(), finished_at: z.string().nullish(),
 });

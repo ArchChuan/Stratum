@@ -5,7 +5,7 @@ import type { WorkflowRunDetail, WorkflowRunEvent } from './workflow';
 
 const detail: WorkflowRunDetail = {
   run: {
-    id: 'run-1', definition_id: 'workflow-1', version_id: 'version-1', version: 1, status: 'running',
+    id: 'run-1', definition_id: 'workflow-1', name: 'workflow-1', version_id: 'version-1', version: 1, status: 'running',
     snapshot: { nodes: [{ id: 'node-1', type: 'approval', name: '确认', agent_id: '', input_mapping: {}, output_mapping: {}, retry: { max_attempts: 0, backoff_ms: 0 }, timeout_ms: 0 }], edges: [], max_concurrency: 0 },
     input: { task: '测试' }, output: '', generation: 1, created_by: 'user-1', created_at: '', updated_at: '',
   },

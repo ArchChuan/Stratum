@@ -903,6 +903,7 @@ const (
 type Run struct {
 	ID             string         `json:"id"`
 	DefinitionID   string         `json:"definition_id"`
+	Name           string         `json:"name"`
 	VersionID      string         `json:"version_id"`
 	VersionNumber  int64          `json:"version"`
 	Status         RunStatus      `json:"status"`

@@ -131,6 +131,14 @@ func (s *PgCheckpointStore) GetLatest(
 		)
 	})
 	if err != nil {
+		// 无 checkpoint 行（首次执行 / 已被清理）不是错误：调用方按 nil 判定
+		// "无恢复 / 无审批续跑"。与 GetLatestActiveByConversation 及
+		// resumeFromCheckpoint 的 fail-open 约定一致；workflow 首跑（executionID
+		// 非空但无 checkpoint 行）走 maybeResumeApproval 时必须命中此分支，否则
+		// GetLatest 抛 no rows 会把首次执行误判为失败。
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("checkpoint_store: get latest: %w", err)
 	}
 	return &checkpoint, nil
