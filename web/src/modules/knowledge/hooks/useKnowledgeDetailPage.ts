@@ -12,7 +12,6 @@ import type {
 
 import { KNOWLEDGE_DEFAULT_TOP_K } from '@/constants';
 import { tenantApi, useAuth, type Member } from '@/modules/iam';
-import { llmApi } from '@/modules/llm';
 import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 const DOC_POLL_INTERVAL_MS = 5000;
@@ -48,8 +47,6 @@ export const useKnowledgeDetailPage = () => {
   const [configForm] = Form.useForm<ConfigValues>();
   const lastLoadedConfig = useRef<ConfigValues>({});
   const [configLoading, setConfigLoading] = useState(false);
-  // 模型下拉数据源：chat 目录（复用模型管理 API getCatalogue）。
-  const [chatModels, setChatModels] = useState<string[]>([]);
   const [uploadLoading, setUploadLoading] = useState(false);
   const [queryForm] = Form.useForm<QueryValues>();
   const [queryLoading, setQueryLoading] = useState(false);
@@ -86,23 +83,6 @@ export const useKnowledgeDetailPage = () => {
       })
       .finally(() => {
         if (!cancelled) setUserCandidatesLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // 加载 chat 目录模型列表；失败降级为空数组（下拉为空，不阻断页面）
-  useEffect(() => {
-    let cancelled = false;
-    llmApi
-      .getCatalogue()
-      .then((catalogue) => {
-        if (cancelled) return;
-        setChatModels(catalogue.chatModels ?? []);
-      })
-      .catch(() => {
-        if (!cancelled) setChatModels([]);
       });
     return () => {
       cancelled = true;
@@ -378,7 +358,6 @@ export const useKnowledgeDetailPage = () => {
     statsLoading,
     configForm,
     configLoading,
-    chatModels,
     uploadLoading,
     queryForm,
     queryLoading,

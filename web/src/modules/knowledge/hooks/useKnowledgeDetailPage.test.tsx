@@ -14,12 +14,6 @@ vi.mock('../api/knowledge.api', () => ({
     update: vi.fn(),
   },
 }));
-// hook 通过 @/modules/llm（index.ts）引用 llmApi —— 走 barrel mock，否则真实 getCatalogue fetch 网络挂测试
-vi.mock('@/modules/llm', () => ({
-  llmApi: {
-    getCatalogue: vi.fn().mockResolvedValue({ chatModels: ['qwen-turbo'], embeddingModels: ['text-embedding-v3'] }),
-  },
-}));
 vi.mock('@/modules/iam', () => ({
   useAuth: () => ({ user: { role: 'admin' } }),
   tenantApi: { members: vi.fn().mockResolvedValue({ members: [], total: 0, page: 1, page_size: 1000 }) },
