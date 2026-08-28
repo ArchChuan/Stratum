@@ -207,6 +207,24 @@ func TestMapEvidenceAcceptsStructuredOpikMetadata(t *testing.T) {
 	}
 }
 
+func TestMapEvidenceCarriesInputOutput(t *testing.T) {
+	trace := opikTrace{
+		ID:     "opik-trace-1",
+		Input:  map[string]any{"query": "帮我总结上周会议"},
+		Output: map[string]any{"text": "上周会议主要结论是……"},
+	}
+	evidence, err := mapEvidence(trace, nil)
+	if err != nil {
+		t.Fatalf("mapEvidence: %v", err)
+	}
+	if !strings.Contains(evidence.Input, "帮我总结上周会议") {
+		t.Fatalf("Input missing user query: %q", evidence.Input)
+	}
+	if !strings.Contains(evidence.Output, "上周会议主要结论") {
+		t.Fatalf("Output missing assistant text: %q", evidence.Output)
+	}
+}
+
 func TestErrorMessageMapsRealOpikErrorInfoToSafeSummary(t *testing.T) {
 	info := &errorInfo{Type: "ProviderError", Traceback: "secret upstream body and URL"}
 	if got := errorMessage(info); got != "上游执行失败" {

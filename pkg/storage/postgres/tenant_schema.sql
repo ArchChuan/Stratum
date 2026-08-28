@@ -520,6 +520,25 @@ CREATE TABLE IF NOT EXISTS eval_case_results (
 );
 CREATE INDEX IF NOT EXISTS idx_eval_case_results_run ON eval_case_results(run_id);
 
+-- 运行态观测明细（规格 §4.3 EvalObservation）。param_version/signals/cost_perf
+-- 为 JSONB 结构化字段，由 Go json.Marshal 后写入。
+CREATE TABLE IF NOT EXISTS eval_observations (
+    id            TEXT PRIMARY KEY,
+    trace_id      TEXT NOT NULL,
+    resource_kind TEXT NOT NULL,
+    resource_id   TEXT NOT NULL,
+    param_version JSONB NOT NULL DEFAULT '{}'::jsonb,
+    signals       JSONB NOT NULL DEFAULT '{}'::jsonb,
+    cost_perf     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    stratum       TEXT NOT NULL DEFAULT '',
+    verdict       TEXT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_eval_observations_resource_time
+    ON eval_observations (resource_kind, resource_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_eval_observations_trace
+    ON eval_observations (trace_id);
+
 CREATE TABLE IF NOT EXISTS optimization_jobs (
     id                    TEXT PRIMARY KEY,
     resource_kind         TEXT NOT NULL,

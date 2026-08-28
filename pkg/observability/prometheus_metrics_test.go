@@ -1,8 +1,10 @@
 package observability
 
 import (
+	"math"
 	"testing"
 
+	dto "github.com/prometheus/client_model/go"
 	"go.uber.org/zap"
 )
 
@@ -94,6 +96,13 @@ func exerciseAllMetrics(m MetricsProvider) {
 	m.IncMCPClientRequest("mcp-server", "call", "ok")
 	m.IncMCPClientReconnect("mcp-server")
 	m.IncEvaluationJob("ok")
+	// Evaluation observation（§11）
+	m.IncEvalObservation("agent", "pass")
+	m.RecordEvalJudgeScore("agent", "faithfulness", 0.9)
+	m.RecordEvalJudgeLatency(0.3)
+	m.RecordEvalJudgeCost(0.001)
+	m.IncEvalJudgeFailure("evidence_missing")
+	m.SetEvalQueueBacklog("observation", 0)
 	m.IncAuthFailure("invalid_token")
 }
 
@@ -134,4 +143,116 @@ func TestReaperMetricsServerOnly(t *testing.T) {
 	if !found {
 		t.Fatal("reaper metric missing after RegisterReaperMetrics")
 	}
+}
+
+func TestEvalObservationMetrics(t *testing.T) {
+	m := NewPrometheusMetrics(zap.NewNop())
+	m.IncEvalObservation("agent", "pass")
+	m.IncEvalObservation("agent", "pass")
+	m.RecordEvalJudgeScore("agent", "faithfulness", 0.9)
+	m.RecordEvalJudgeLatency(1.5)
+	m.RecordEvalJudgeCost(0.012)
+	m.IncEvalJudgeFailure("evidence_missing")
+	m.SetEvalQueueBacklog("observation", 7)
+
+	families, err := m.reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	// 断言各指标名、label 维度与值对齐规格 §11（helper 见 Step 3 末尾）。
+	assertCounterVecSum(t, families, "eval_observation_total", "resource", "agent", 2)
+	assertCounterVecSum(t, families, "eval_judge_failure_total", "reason", "evidence_missing", 1)
+	assertHistogramVecSum(t, families, "eval_judge_score", "dimension", "faithfulness", 0.9)
+	assertHistogramSum(t, families, "eval_judge_latency_seconds", 1.5)
+	assertCounterSum(t, families, "eval_judge_cost_total", 0.012)
+	assertGaugeVecSum(t, families, "eval_queue_backlog", "queue", "observation", 7)
+}
+
+func findFamily(families []*dto.MetricFamily, name string) *dto.MetricFamily {
+	for _, f := range families {
+		if f.GetName() == name {
+			return f
+		}
+	}
+	return nil
+}
+
+func labelValueFor(m *dto.Metric, key string) string {
+	for _, lp := range m.GetLabel() {
+		if lp.GetName() == key {
+			return lp.GetValue()
+		}
+	}
+	return ""
+}
+
+// assertFloatClose 比较浮点指标值，1e-9 容差（0.012 等浮点累加不精确）。
+func assertFloatClose(t *testing.T, name string, got, want float64) {
+	t.Helper()
+	if math.Abs(got-want) > 1e-9 {
+		t.Fatalf("%s = %v, want %v", name, got, want)
+	}
+}
+
+func assertCounterVecSum(t *testing.T, families []*dto.MetricFamily, name, labelKey, labelValue string, want float64) {
+	t.Helper()
+	fam := findFamily(families, name)
+	if fam == nil {
+		t.Fatalf("metric family %q not found", name)
+	}
+	var got float64
+	for _, m := range fam.GetMetric() {
+		if labelValueFor(m, labelKey) == labelValue {
+			got += m.GetCounter().GetValue()
+		}
+	}
+	assertFloatClose(t, name, got, want)
+}
+
+func assertCounterSum(t *testing.T, families []*dto.MetricFamily, name string, want float64) {
+	t.Helper()
+	fam := findFamily(families, name)
+	if fam == nil {
+		t.Fatalf("metric family %q not found", name)
+	}
+	assertFloatClose(t, name, fam.GetMetric()[0].GetCounter().GetValue(), want)
+}
+
+func assertHistogramVecSum(t *testing.T, families []*dto.MetricFamily, name, labelKey, labelValue string, want float64) {
+	t.Helper()
+	fam := findFamily(families, name)
+	if fam == nil {
+		t.Fatalf("metric family %q not found", name)
+	}
+	for _, m := range fam.GetMetric() {
+		if labelValueFor(m, labelKey) == labelValue {
+			assertFloatClose(t, name, m.GetHistogram().GetSampleSum(), want)
+			return
+		}
+	}
+	t.Fatalf("%s label %s=%s not found", name, labelKey, labelValue)
+}
+
+func assertHistogramSum(t *testing.T, families []*dto.MetricFamily, name string, want float64) {
+	t.Helper()
+	fam := findFamily(families, name)
+	if fam == nil {
+		t.Fatalf("metric family %q not found", name)
+	}
+	assertFloatClose(t, name, fam.GetMetric()[0].GetHistogram().GetSampleSum(), want)
+}
+
+func assertGaugeVecSum(t *testing.T, families []*dto.MetricFamily, name, labelKey, labelValue string, want float64) {
+	t.Helper()
+	fam := findFamily(families, name)
+	if fam == nil {
+		t.Fatalf("metric family %q not found", name)
+	}
+	for _, m := range fam.GetMetric() {
+		if labelValueFor(m, labelKey) == labelValue {
+			assertFloatClose(t, name, m.GetGauge().GetValue(), want)
+			return
+		}
+	}
+	t.Fatalf("%s label %s=%s not found", name, labelKey, labelValue)
 }
