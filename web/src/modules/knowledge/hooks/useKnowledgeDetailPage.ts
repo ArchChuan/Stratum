@@ -75,8 +75,11 @@ export const useKnowledgeDetailPage = () => {
       .then((page) => {
         if (cancelled) return;
         setUserCandidates(page.members);
-        const roles = Array.from(new Set(page.members.map((m) => m.role).filter(Boolean)));
-        setRoleCandidates(roles.length > 0 ? roles : FALLBACK_ROLES);
+        // 角色候选始终并集完整角色集，避免小型租户因成员角色单一导致白名单下拉缺少选项。
+        const roles = Array.from(
+          new Set([...FALLBACK_ROLES, ...page.members.map((m) => m.role).filter(Boolean)]),
+        );
+        setRoleCandidates(roles);
       })
       .catch(() => {
         if (!cancelled) setUserCandidates([]);
