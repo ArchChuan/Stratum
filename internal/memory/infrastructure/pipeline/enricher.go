@@ -467,15 +467,8 @@ func (w *EnricherWorker) persistEnrichment(ctx context.Context, ev *MemoryEnrich
 	// scope 归一化：在途遗留消息（旧版本 agents.memory_scope 无 CHECK 时可存 ''）
 	// 可能携带空 scope。memory_entries/memory_entities 均有 scope 白名单 CHECK，
 	// 空值会把整条 enrichment 打成 SQLSTATE 23514；按 agent 归属回落默认，与
-	// tenant_schema 的 backfill 语义一致。
-	scope := ev.Scope
-	if scope == "" {
-		if ev.AgentID != "" {
-			scope = "agent"
-		} else {
-			scope = "user"
-		}
-	}
+	// tenant_schema 的 backfill 语义一致（详见 normalizeScope）。
+	scope := normalizeScope(ev)
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO memory_entries (id, user_id, agent_id, scope, role, content, type, importance, keywords, token_estimate, enriched_at, conversation_id, created_at)
@@ -645,6 +638,21 @@ func (w *EnricherWorker) fetchSummaryInputs(ctx context.Context, schema, convID 
 	return accumulated, prevSummary, &sb, nil
 }
 
+// normalizeScope 对在途遗留消息（旧版本 agents.memory_scope 无 CHECK 时可存 ”）
+// 的 scope 做归一化：空值按 agent 归属回落默认，保证同一事件写
+// memory_entries/memory_entities/memory_summaries 三表 scope 同源。空 scope 直接
+// 透传给 memory_summaries（无 CHECK 约束）会被 history worker 的
+// HistorySegment.Validate() 拒绝（仅接受 user|agent），导致 summary 写入失败。
+func normalizeScope(ev *MemoryEnrichedEvent) string {
+	if ev.Scope != "" {
+		return ev.Scope
+	}
+	if ev.AgentID != "" {
+		return "agent"
+	}
+	return "user"
+}
+
 func (w *EnricherWorker) writeSummary(ctx context.Context, schema string, ev *MemoryEnrichedEvent, summary string, tokens int) error {
 	tx, err := w.pool.Begin(ctx)
 	if err != nil {
@@ -657,7 +665,7 @@ func (w *EnricherWorker) writeSummary(ctx context.Context, schema string, ev *Me
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO memory_summaries (conversation_id, user_id, agent_id, scope, summary, covered_until, token_count)
 		VALUES ($1, $2, $3, $4, $5, NOW(), $6)`,
-		ev.ConversationID, ev.UserID, ev.AgentID, ev.Scope, summary, tokens); err != nil {
+		ev.ConversationID, ev.UserID, ev.AgentID, normalizeScope(ev), summary, tokens); err != nil {
 		return fmt.Errorf("insert summary: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

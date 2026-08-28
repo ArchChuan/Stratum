@@ -373,13 +373,17 @@ func (s *PgStore) ListRuns(
 	var total int
 	err := s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		args := []any{query.CreatedBy, query.DefinitionID, query.Status, query.Limit, query.Offset}
-		where := ` WHERE ($1='' OR created_by=$1) AND ($2='' OR definition_id::text=$2) AND ($3='' OR status=$3)`
+		// 列显式限定 workflow_runs.，COUNT（无 JOIN）与主查询（LEFT JOIN versions）共用安全。
+		where := ` WHERE ($1='' OR workflow_runs.created_by=$1) AND ($2='' OR workflow_runs.definition_id::text=$2) AND ($3='' OR workflow_runs.status=$3)`
 		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM workflow_runs`+where, args[:3]...).Scan(&total); err != nil {
 			return err
 		}
-		result, err := tx.Query(ctx, `SELECT id,definition_id,version_id,version_no,status,created_by,
-			created_at,updated_at,started_at,finished_at FROM workflow_runs`+where+
-			` ORDER BY created_at DESC,id DESC LIMIT $4 OFFSET $5`, args...)
+		// 关联 workflow_versions 取 name（工作流名），供执行中心列表展示。
+		result, err := tx.Query(ctx, `SELECT workflow_runs.id,workflow_runs.definition_id,COALESCE(v.name,'') AS name,
+			workflow_runs.version_id,workflow_runs.version_no,workflow_runs.status,workflow_runs.created_by,
+			workflow_runs.created_at,workflow_runs.updated_at,workflow_runs.started_at,workflow_runs.finished_at
+			FROM workflow_runs LEFT JOIN workflow_versions v ON v.id = workflow_runs.version_id`+where+
+			` ORDER BY workflow_runs.created_at DESC,workflow_runs.id DESC LIMIT $4 OFFSET $5`, args...)
 		if err != nil {
 			return err
 		}
@@ -387,7 +391,7 @@ func (s *PgStore) ListRuns(
 		for result.Next() {
 			var run domain.Run
 			if err := result.Scan(
-				&run.ID, &run.DefinitionID, &run.VersionID, &run.VersionNumber, &run.Status, &run.CreatedBy,
+				&run.ID, &run.DefinitionID, &run.Name, &run.VersionID, &run.VersionNumber, &run.Status, &run.CreatedBy,
 				&run.CreatedAt, &run.UpdatedAt, &run.StartedAt, &run.FinishedAt,
 			); err != nil {
 				return err
@@ -533,7 +537,7 @@ func appendEventTx(ctx context.Context, tx pgx.Tx, event *domain.Event) error {
 func (s *PgStore) ControlRun(ctx context.Context, tenantID, runID string, expectedGeneration int64, status domain.RunStatus, reason string, event domain.Event) error {
 	event.RunID, event.Status = runID, string(status)
 	return s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE workflow_runs SET status=$1,generation=generation+1,pause_reason=CASE WHEN $1 IN ('pause_requested','paused') THEN $2 ELSE pause_reason END,cancel_reason=CASE WHEN $1='cancel_requested' THEN $2 ELSE cancel_reason END,manual_reason=CASE WHEN $1='manual_intervention' THEN $2 ELSE manual_reason END,scheduler_owner='',lease_expires_at=NULL,updated_at=NOW() WHERE id=$3 AND generation=$4 AND CASE $1 WHEN 'pause_requested' THEN status IN ('queued','running') WHEN 'cancel_requested' THEN status IN ('queued','running','pause_requested','paused','manual_intervention') WHEN 'queued' THEN status IN ('paused','manual_intervention') WHEN 'paused' THEN status='pause_requested' WHEN 'canceled' THEN status='cancel_requested' WHEN 'manual_intervention' THEN status='running' ELSE FALSE END`, status, reason, runID, expectedGeneration)
+		tag, err := tx.Exec(ctx, `UPDATE workflow_runs SET status=$1,generation=generation+1,pause_reason=CASE WHEN $1 IN ('pause_requested','paused') THEN $2 ELSE pause_reason END,cancel_reason=CASE WHEN $1='cancel_requested' THEN $2 ELSE cancel_reason END,manual_reason=CASE WHEN $1='manual_intervention' THEN $2 ELSE manual_reason END,scheduler_owner='',lease_expires_at=NULL,updated_at=NOW() WHERE id=$3 AND generation=$4 AND CASE $1 WHEN 'pause_requested' THEN status IN ('queued','running') WHEN 'cancel_requested' THEN status IN ('queued','running','pause_requested','paused','manual_intervention') WHEN 'queued' THEN status IN ('paused','manual_intervention') WHEN 'paused' THEN status IN ('pause_requested','running') WHEN 'canceled' THEN status='cancel_requested' WHEN 'manual_intervention' THEN status='running' ELSE FALSE END`, status, reason, runID, expectedGeneration)
 		if err != nil {
 			return err
 		}

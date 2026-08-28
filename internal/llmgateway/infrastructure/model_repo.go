@@ -326,8 +326,10 @@ func (r *PgModelRepo) UpdatePolicy(
 	return nil
 }
 
-// UpsertDiscovered syncs provider-managed models: disables stale entries,
-// inserts new ones, and re-enables existing ones while preserving user edits.
+// UpsertDiscovered syncs provider-managed models: disables stale entries that
+// are no longer reported, and inserts new ones (enabled by default). Existing
+// models keep their current enabled state — including user manual toggles —
+// so a re-discovery never silently re-opens a switch the user turned off.
 // 全部在单事务内执行，保证 disable 阶段与写入/读回原子。
 func (r *PgModelRepo) UpsertDiscovered(ctx context.Context, providerID string, models []domain.Model) ([]domain.Model, error) {
 	tx, err := r.pool.Begin(ctx)
@@ -336,7 +338,11 @@ func (r *PgModelRepo) UpsertDiscovered(ctx context.Context, providerID string, m
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if err := r.upsertDisablePhase(ctx, tx, providerID); err != nil {
+	names := make([]string, 0, len(models))
+	for _, m := range models {
+		names = append(names, m.Name)
+	}
+	if err := r.upsertDisablePhase(ctx, tx, providerID, names); err != nil {
 		return nil, err
 	}
 	for _, m := range models {
@@ -354,24 +360,26 @@ func (r *PgModelRepo) UpsertDiscovered(ctx context.Context, providerID string, m
 	return result, nil
 }
 
-// upsertDisablePhase 将 provider 的全部 provider-managed 模型标记 disabled。
-// default_embedding 标记刻意不在此清空：re-enable 无 restore 通道，清掉会丢
-// 用户对仍在列表内模型的标记；只清理 capabilities 已不含 embedding 的失效标记
-// （disabled 的标记无害，解析按 enabled 过滤）。
-func (r *PgModelRepo) upsertDisablePhase(ctx context.Context, tx pgx.Tx, providerID string) error {
+// upsertDisablePhase 只关闭"不在本次上报名集合内"的 stale provider-managed 模型；
+// 集合内的存量模型完全不碰 enabled（含用户手动关闭的状态），避免发现流程
+// 静默重置用户开关。default_embedding 标记刻意不在此清空：re-enable 无 restore
+// 通道，清掉会丢用户对仍在列表内模型的标记；只清理 capabilities 已不含
+// embedding 的失效标记（disabled 的标记无害，解析按 enabled 过滤）。
+func (r *PgModelRepo) upsertDisablePhase(ctx context.Context, tx pgx.Tx, providerID string, names []string) error {
 	if _, err := tx.Exec(ctx,
 		`UPDATE public.models SET enabled=false, updated_at=now(),
 		 default_embedding = default_embedding AND 'embedding' = ANY(capabilities)
-		 WHERE provider_id=$1 AND provider_managed=true`,
-		providerID); err != nil {
+		 WHERE provider_id=$1 AND provider_managed=true AND name != ALL($2)`,
+		providerID, names); err != nil {
 		return fmt.Errorf("upsert models: disable phase: %w", err)
 	}
 	return nil
 }
 
-// upsertSyncModel 同步单个 provider 发现模型：不存在则插入（provider_managed），
-// 已存在则 re-enable 并同步 provider 上报的上下文元数据，保留用户可编辑字段
-// （display_name、capabilities、定价、recommended）。
+// upsertSyncModel 同步单个 provider 发现模型：不存在则插入（provider_managed，
+// enabled 默认开启），已存在则只同步 provider 上报的上下文元数据——enabled 保留
+// 现状（含用户手动关闭），不静默重新打开；用户可编辑字段（display_name、
+// capabilities、定价、recommended）也不覆盖。
 func (r *PgModelRepo) upsertSyncModel(ctx context.Context, tx pgx.Tx, providerID string, m domain.Model) error {
 	caps := modelCapsToStrings(m.Capabilities)
 	var existingID string
@@ -381,7 +389,7 @@ func (r *PgModelRepo) upsertSyncModel(ctx context.Context, tx pgx.Tx, providerID
 	).Scan(&existingID)
 	if err == nil {
 		_, err = tx.Exec(ctx,
-			`UPDATE public.models SET enabled=true, context_window=$1, max_tokens=$2,
+			`UPDATE public.models SET context_window=$1, max_tokens=$2,
 			 context_window_source=$3, max_tokens_source=$4,
 			 context_window_observed_at=now(), max_tokens_observed_at=now(), updated_at=now()
 			 WHERE id=$5`,

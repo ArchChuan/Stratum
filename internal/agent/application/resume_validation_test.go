@@ -22,7 +22,7 @@ type resumeChatRepo struct {
 	convErr error
 }
 
-func (r resumeChatRepo) CreateConversation(context.Context, string, string, string, string) (*domain.ChatConversation, error) {
+func (r resumeChatRepo) CreateConversation(context.Context, string, string, string, string, string) (*domain.ChatConversation, error) {
 	return nil, nil
 }
 func (r resumeChatRepo) GetConversation(context.Context, string, string) (*domain.ChatConversation, error) {

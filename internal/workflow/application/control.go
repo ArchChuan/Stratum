@@ -10,12 +10,19 @@ import (
 )
 
 type ControlService struct {
-	store port.ControlRepository
-	newID func() string
+	store          port.ControlRepository
+	agentApprovals port.AgentApprovalResolver
+	newID          func() string
 }
 
 func NewControlService(store port.ControlRepository, newID func() string) *ControlService {
 	return &ControlService{store: store, newID: newID}
+}
+
+// SetAgentApprovalResolver 注入 agent 原生审批判定器，Resume 时挡住 agent 审批
+// 仍未决的 run（避免审批前放行重跑）。由 wiring 装配时调用。
+func (s *ControlService) SetAgentApprovalResolver(resolver port.AgentApprovalResolver) {
+	s.agentApprovals = resolver
 }
 
 func (s *ControlService) event(runID, eventType string, actor Actor) domain.Event {
@@ -76,12 +83,8 @@ func (s *ControlService) Resume(ctx context.Context, tenantID, runID string, exp
 	if run.Generation != expected {
 		return nil, domain.ErrGenerationConflict
 	}
-	approvals, err := s.store.ListApprovals(ctx, tenantID, runID, true)
-	if err != nil {
+	if err := s.ensureResumable(ctx, tenantID, runID); err != nil {
 		return nil, err
-	}
-	if len(approvals) > 0 {
-		return nil, domain.ErrApprovalRequired
 	}
 	intents, err := s.store.ListEffectIntents(ctx, tenantID, runID)
 	if err != nil {
@@ -174,14 +177,73 @@ func (s *ControlService) AvailableActions(ctx context.Context, tenantID, runID s
 	}
 	actions := run.AvailableActions(len(approvals) > 0, manual)
 	if actor.Role != "admin" && actor.Role != "owner" {
-		for _, action := range actions {
-			if action == "cancel" {
-				return []string{"cancel"}, nil
-			}
-		}
-		return nil, nil
+		return creatorVisibleActions(run, actor.UserID, actions), nil
 	}
 	return actions, nil
+}
+
+// agentApprovalPending 判断 run 是否存在 agent 原生审批仍 pending 的暂停节点。
+// Resume 前的双保险：agent 审批未决时拒绝恢复，等 reconcile 下 tick 再判。
+func (s *ControlService) agentApprovalPending(ctx context.Context, tenantID, runID string) (bool, error) {
+	attempts, ok := s.store.(port.AttemptRepository)
+	if !ok {
+		return false, fmt.Errorf("workflow attempt repository unavailable")
+	}
+	rows, err := attempts.ListAttempts(ctx, tenantID, runID)
+	if err != nil {
+		return false, err
+	}
+	for _, attempt := range rows {
+		if attempt.Status != domain.AttemptStatusPaused || attempt.ErrorCode != "agent_approval_required" {
+			continue
+		}
+		done, err := s.agentApprovals.ResolveAgentApproval(ctx, tenantID, deterministicExecutionID(runID, attempt.NodeID))
+		if err != nil {
+			return false, err
+		}
+		if !done {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ensureResumable 校验 run 可被恢复：无待决人工审批，且 agent 原生审批（若注入
+// resolver）无 pending 节点。任一未决即返回 ErrApprovalRequired。
+func (s *ControlService) ensureResumable(ctx context.Context, tenantID, runID string) error {
+	approvals, err := s.store.ListApprovals(ctx, tenantID, runID, true)
+	if err != nil {
+		return err
+	}
+	if len(approvals) > 0 {
+		return domain.ErrApprovalRequired
+	}
+	if s.agentApprovals == nil {
+		return nil
+	}
+	blocked, err := s.agentApprovalPending(ctx, tenantID, runID)
+	if err != nil {
+		return err
+	}
+	if blocked {
+		return domain.ErrApprovalRequired
+	}
+	return nil
+}
+
+// creatorVisibleActions 发起人只保留运行控制动作（暂停/继续/取消）；审批与人工
+// 干预动作仍由 admin/owner 专属。非发起人无可保留动作时返回 nil。
+func creatorVisibleActions(run *domain.Run, userID string, actions []string) []string {
+	if run.CreatedBy != userID {
+		return nil
+	}
+	var kept []string
+	for _, action := range actions {
+		if action == "pause" || action == "resume" || action == "cancel" {
+			kept = append(kept, action)
+		}
+	}
+	return kept
 }
 
 func (s *ControlService) ListApprovals(ctx context.Context, tenantID, runID string, actor Actor, pending bool) ([]domain.Approval, error) {

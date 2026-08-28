@@ -46,7 +46,7 @@ func (h *ChatHandler) CreateConversation(c *gin.Context) {
 		name = "新会话"
 	}
 
-	conv, err := h.store.CreateConversation(c.Request.Context(), tenantID, agentID, userID, name)
+	conv, err := h.store.CreateConversation(c.Request.Context(), tenantID, agentID, userID, name, "manual")
 	if err != nil {
 		_ = c.Error(err)
 		return

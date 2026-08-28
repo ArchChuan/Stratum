@@ -42,7 +42,8 @@ describe('AgentFormSections', () => {
     );
 
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'LLM 模型' }));
-    expect(screen.getByRole('option', { name: 'managed-chat' })).toBeInTheDocument();
+    // 健康徽章恒开：无 health 时 accessible name 为「managed-chat 未探活」，用正则匹配
+    expect(screen.getByRole('option', { name: /managed-chat/ })).toBeInTheDocument();
     expect(screen.queryByText(/qwen-plus/)).not.toBeInTheDocument();
   });
 
@@ -110,21 +111,25 @@ describe('AgentFormSections', () => {
     expect(option.textContent).toContain('视觉');
   });
 
-  it('labels an unavailable current model without adding it to new forms', () => {
+  it('labels a retired selected model as unavailable and disabled', () => {
     render(
-      <Form>
+      <Form initialValues={{ llmModel: 'retired-chat' }}>
         <AgentFormSections
           skills={[]}
           mcpTools={[]}
           workspaces={[]}
           groupedModels={[{ provider: '托管厂商', models: [{ value: 'managed-chat', label: 'managed-chat', reasoning: false }] }]}
-          currentModel="retired-chat"
         />
       </Form>,
     );
 
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'LLM 模型' }));
+    // 已选值不在目录 → 下拉以 disabled 兜底项显示「当前不可用」（fail-closed 保留提交值）
     expect(screen.getByText('retired-chat（当前不可用）')).toBeInTheDocument();
+    const unavailableOption = Array.from(document.querySelectorAll('.ant-select-item-option')).find((el) =>
+      el.textContent?.includes('retired-chat'),
+    );
+    expect(unavailableOption?.className).toContain('ant-select-item-option-disabled');
   });
 
   it('shows an editable max_tokens field', () => {
@@ -178,7 +183,6 @@ describe('AgentFormSections', () => {
           mcpTools={[]}
           workspaces={[]}
           groupedModels={[{ provider: '托管厂商', models: [{ value: 'managed-chat', label: 'managed-chat', reasoning: false, maxTokens: 8192 }] }]}
-          currentModel="retired-chat"
         />
       </Form>,
     );

@@ -67,7 +67,7 @@ describe('responsive page contracts', () => {
             description="https://example.test/a/very/long/path"
             onBack={vi.fn()}
           />
-          <WorkspaceConfigForm form={form} loading={false} chatModels={[]} onSubmit={vi.fn()} />
+          <WorkspaceConfigForm form={form} loading={false} onSubmit={vi.fn()} />
         </>
       );
     };
@@ -161,7 +161,6 @@ describe('responsive page contracts', () => {
           open
           loading={false}
           form={form}
-          embeddingModels={[]}
           editorCandidates={[]}
           onClose={vi.fn()}
           onSubmit={vi.fn()}

@@ -27,10 +27,17 @@ type RunService struct {
 		port.AttemptRepository
 		port.EventRepository
 	}
-	executors port.NodeExecutorRegistry
-	newID     func() string
-	eventIDMu sync.Mutex
-	logger    *zap.Logger
+	executors      port.NodeExecutorRegistry
+	agentApprovals port.AgentApprovalResolver
+	newID          func() string
+	eventIDMu      sync.Mutex
+	logger         *zap.Logger
+}
+
+// SetAgentApprovalResolver 注入 agent 原生工具审批判定器，供 agent 节点暂停后的
+// reconcile 判断审批是否已全部终态（可续跑）。由 wiring 装配时调用。
+func (s *RunService) SetAgentApprovalResolver(resolver port.AgentApprovalResolver) {
+	s.agentApprovals = resolver
 }
 
 func NewRunService(versions port.VersionRepository, store interface {
@@ -58,7 +65,11 @@ func (r agentRegistry) Execute(ctx context.Context, request port.NodeExecutionRe
 	if request.Node.Type != domain.NodeTypeAgent {
 		return port.NodeExecutionResult{}, fmt.Errorf("no executor for node type %s", request.Node.Type)
 	}
-	output, traceID, err := r.agents.ExecuteAgent(ctx, request.TenantID, request.Node.AgentID, request.Input)
+	output, traceID, err := r.agents.ExecuteAgent(ctx, request.TenantID, request.Node.AgentID, request.UserID, request.ExecutionID, request.Input)
+	if err != nil && errors.Is(err, port.ErrAgentApprovalPending) {
+		// agent 原生工具审批待决：节点暂停等待审批，不进入失败重试。
+		return port.NodeExecutionResult{Paused: true, ErrorCode: "agent_approval_required"}, nil
+	}
 	return port.NodeExecutionResult{Output: output, TraceID: traceID}, err
 }
 
@@ -285,6 +296,9 @@ func (s *RunService) handleBoundaryControl(ctx context.Context, tenantID string,
 }
 
 func (s *RunService) reconcileApprovalCheckpoints(ctx context.Context, tenantID string, run *domain.Run) error {
+	if err := s.reconcileAgentApprovalCheckpoints(ctx, tenantID, run); err != nil {
+		return err
+	}
 	repository, ok := s.store.(port.ApprovalRepository)
 	if !ok {
 		return nil
@@ -319,19 +333,67 @@ func (s *RunService) reconcileApprovalCheckpoints(ctx context.Context, tenantID 
 		if !exists || attempt.Status != domain.AttemptStatusPaused {
 			continue
 		}
-		if nodes[approval.NodeID].Type == domain.NodeTypeApproval {
-			attempt.Status = domain.AttemptStatusSucceeded
-			attempt.OutputSummary = `{"approved":true}`
-		} else {
-			attempt.Status = domain.AttemptStatusRetryWait
-			attempt.RetryAt = nil
+		if err := s.transitionApprovedAttempt(ctx, tenantID, run, approval, attempt, nodes); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+// reconcileAgentApprovals 处理 agent 原生审批暂停（ErrorCode=="agent_approval_required"）
+// 的 attempt：审批全部终态 → attempt 转 RetryWait（RetryAt=nil）立即重跑续跑；
+// 仍 pending → RetryWait + RetryAt=未来轮询，主循环 seeing waitingForRetry 把 run
+// 置 queued，下 tick 再判。run 状态收敛由主循环完成，这里只落 attempt 状态。
+func (s *RunService) reconcileAgentApprovals(ctx context.Context, tenantID string, run *domain.Run) error {
+	attempts, err := s.store.ListAttempts(ctx, tenantID, run.ID)
+	if err != nil {
+		return err
+	}
+	for _, attempt := range attempts {
+		if attempt.Status != domain.AttemptStatusPaused || attempt.ErrorCode != "agent_approval_required" {
+			continue
+		}
+		executionID := deterministicExecutionID(run.ID, attempt.NodeID)
+		done, err := s.agentApprovals.ResolveAgentApproval(ctx, tenantID, executionID)
+		if err != nil {
+			return err
+		}
+		attempt.Status = domain.AttemptStatusRetryWait
 		attempt.FenceToken, attempt.RunGeneration = run.Generation, run.Generation
+		if done {
+			attempt.RetryAt = nil
+		} else {
+			retryAt := time.Now().Add(constants.WorkflowPausePollInterval)
+			attempt.RetryAt = &retryAt
+		}
 		if err := s.checkpointAttempt(ctx, tenantID, attempt, "workflow.node_started", "node started"); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// reconcileAgentApprovalCheckpoints 注入 agent 审批 resolver 时推进 agent 原生
+// 审批暂停 attempt 的状态；未注入时直接放行。
+func (s *RunService) reconcileAgentApprovalCheckpoints(ctx context.Context, tenantID string, run *domain.Run) error {
+	if s.agentApprovals == nil {
+		return nil
+	}
+	return s.reconcileAgentApprovals(ctx, tenantID, run)
+}
+
+// transitionApprovedAttempt 将已批准审批对应的 attempt 置为续跑（非审批节点）
+// 或完成（审批节点），并落一次 node_started checkpoint 事件。
+func (s *RunService) transitionApprovedAttempt(ctx context.Context, tenantID string, run *domain.Run, approval domain.Approval, attempt domain.NodeAttempt, nodes map[string]domain.Node) error {
+	if nodes[approval.NodeID].Type == domain.NodeTypeApproval {
+		attempt.Status = domain.AttemptStatusSucceeded
+		attempt.OutputSummary = `{"approved":true}`
+	} else {
+		attempt.Status = domain.AttemptStatusRetryWait
+		attempt.RetryAt = nil
+	}
+	attempt.FenceToken, attempt.RunGeneration = run.Generation, run.Generation
+	return s.checkpointAttempt(ctx, tenantID, attempt, "workflow.node_started", "node started")
 }
 
 func (s *RunService) approvedForNode(ctx context.Context, tenantID, runID, nodeID string) (bool, string) {
@@ -455,8 +517,9 @@ func (s *RunService) executeReadyBatch(ctx context.Context, tenantID string, run
 	if limit > len(ready) {
 		limit = len(ready)
 	}
+	batchCtx, cancelBatch := context.WithCancel(ctx)
 	batch := &nodeBatch{
-		ctx:        ctx,
+		ctx:        batchCtx,
 		tenantID:   tenantID,
 		run:        run,
 		attempts:   attempts,
@@ -469,12 +532,19 @@ func (s *RunService) executeReadyBatch(ctx context.Context, tenantID string, run
 	}
 	var wg sync.WaitGroup
 	batch.wg = &wg
+	var controlWg sync.WaitGroup
+	controlWg.Add(1)
+	go s.watchBatchControl(ctx, batchCtx, cancelBatch, tenantID, run.ID, &controlWg)
 	for index, node := range ready {
 		if err := s.dispatchReadyNode(batch, index, node); err != nil {
+			cancelBatch()
+			controlWg.Wait()
 			return err
 		}
 	}
 	wg.Wait()
+	cancelBatch()
+	controlWg.Wait()
 	for index, outcome := range batch.outcomes {
 		if batch.blocked[index] {
 			continue
@@ -484,6 +554,32 @@ func (s *RunService) executeReadyBatch(ctx context.Context, tenantID string, run
 		}
 	}
 	return nil
+}
+
+// watchBatchControl 轮询批所属 run 的边界控制状态：批内出现 pause_requested 或
+// cancel_requested 时取消 batchCtx，中断运行中节点（agent 经 checkpoint 可恢复，
+// 见 commitCanceledOutcome→commitPauseBoundary），使暂停/取消不必等节点自然结束。
+// 轮询用 parent ctx（WithoutCancel）独立传播，避免 batch 取消后无法继续读库。
+func (s *RunService) watchBatchControl(ctx context.Context, batchCtx context.Context, cancel context.CancelFunc, tenantID, runID string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	ticker := time.NewTicker(constants.WorkflowPausePollInterval)
+	defer ticker.Stop()
+	pollCtx := context.WithoutCancel(ctx)
+	for {
+		select {
+		case <-batchCtx.Done():
+			return
+		case <-ticker.C:
+			fresh, err := s.store.GetRun(pollCtx, tenantID, runID)
+			if err != nil {
+				continue
+			}
+			if fresh.Status == domain.RunStatusPauseRequested || fresh.Status == domain.RunStatusCancelRequested {
+				cancel()
+				return
+			}
+		}
+	}
 }
 
 // nodeBatch 承载 executeReadyBatch 内单批共享的执行状态：sem 限制并发、outcomes
@@ -568,7 +664,7 @@ func (s *RunService) runNodeExecution(batch *nodeBatch, index int, node domain.N
 	outputBuffer := newNodeOutputBuffer(func(text string) error {
 		return s.appendNodeOutputDelta(execCtx, batch.tenantID, attempt, text)
 	}, cancelExecution)
-	result, execErr := s.executors.Execute(execCtx, port.NodeExecutionRequest{TenantID: batch.tenantID, RunID: batch.run.ID, Node: node, AttemptNo: attempt.AttemptNo, Input: attempt.Input, RunInput: cloneInput(batch.run.Input), NodeOutputs: outputMap(batch.states), IdempotencyKey: fmt.Sprintf("%s:%s:%d", batch.run.ID, node.ID, attempt.AttemptNo), Approved: approved, ApprovalID: approvalID, BeforeEffect: beforeEffect, OnOutputDelta: outputBuffer.Append})
+	result, execErr := s.executors.Execute(execCtx, port.NodeExecutionRequest{TenantID: batch.tenantID, RunID: batch.run.ID, Node: node, AttemptNo: attempt.AttemptNo, Input: attempt.Input, RunInput: cloneInput(batch.run.Input), NodeOutputs: outputMap(batch.states), IdempotencyKey: fmt.Sprintf("%s:%s:%d", batch.run.ID, node.ID, attempt.AttemptNo), Approved: approved, ApprovalID: approvalID, BeforeEffect: beforeEffect, OnOutputDelta: outputBuffer.Append, UserID: batch.run.CreatedBy, ExecutionID: deterministicExecutionID(batch.run.ID, node.ID)})
 	if flushErr := outputBuffer.Close(); execErr == nil && flushErr != nil {
 		execErr = fmt.Errorf("flush node output: %w", flushErr)
 	}

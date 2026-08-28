@@ -12,7 +12,7 @@ vi.mock('../api/workflow.api', () => ({ workflowApi: { getWorkflowRun: vi.fn() }
 vi.mock('@/services/client', () => ({ streamApiGet: vi.fn() }));
 
 const detail = {
-  run: { id: 'run-1', definition_id: 'workflow-1', version_id: 'version-1', version: 1, status: 'running' as const, snapshot: { nodes: [], edges: [], max_concurrency: 0 }, input: {}, output: '', generation: 1, created_by: 'user-1', created_at: '', updated_at: '' },
+  run: { id: 'run-1', definition_id: 'workflow-1', name: 'workflow-1', version_id: 'version-1', version: 1, status: 'running' as const, snapshot: { nodes: [], edges: [], max_concurrency: 0 }, input: {}, output: '', generation: 1, created_by: 'user-1', created_at: '', updated_at: '' },
   node_attempts: [], approvals: [], effect_intents: [], progress: { completed: 0, total: 0 }, available_actions: ['cancel' as const],
 };
 
