@@ -10,6 +10,7 @@ package application
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/application/factcheck"
 	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
@@ -65,9 +66,12 @@ type AgentServiceDeps struct {
 	MemoryCleaner        port.AgentMemoryCleaner
 	MemoryBuffer         port.BufferMemoryFn
 	TrajectoryReflection port.EnqueueTrajectoryReflectionFn
-	MemoryInjector       port.MemoryInjector
-	RecallMemory         port.RecallMemoryFn
-	Metrics              observability.MetricsProvider
+	// ObservationEmitter 发布观测引用事件（best-effort，nil 安全）。执行完成
+	// 后调用，评估器不阻断执行铁律：失败仅记日志。
+	ObservationEmitter port.ObservationEmitter
+	MemoryInjector     port.MemoryInjector
+	RecallMemory       port.RecallMemoryFn
+	Metrics            observability.MetricsProvider
 	// Ledger 记录 LLM token/成本（span cost + Prometheus 指标）。nil 时保持
 	// NoopTokenRecorder（成本恒 0），生产由 wiring 注入 TokenLedger。
 	Ledger                    agentgraph.TokenRecorder
@@ -111,8 +115,35 @@ func NewAgentService(deps AgentServiceDeps) *AgentService {
 	return &AgentService{deps: deps}
 }
 
+// emitObservation 发布观测引用事件。best-effort：emitter 为 nil、result 为 nil
+// 或发布失败都不阻断执行，失败只记 warn 日志（评估器不阻断执行铁律）。
+// 事件只带 trace 标识与资源锚点，证据由评测服务从 Opik 拉取。
+func (s *AgentService) emitObservation(ctx context.Context, meta ExecMeta, agentID, executionID string, result *AgentResult) {
+	if s.deps.ObservationEmitter == nil || result == nil {
+		return
+	}
+	evt := port.ObservationEvent{
+		TenantID:     meta.TenantID,
+		TraceID:      meta.TraceID,
+		ExecutionID:  executionID,
+		AgentID:      agentID,
+		ResourceKind: "agent",
+		ResourceID:   agentID,
+		CompletedAt:  time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if err := s.deps.ObservationEmitter.Emit(context.WithoutCancel(ctx), evt); err != nil {
+		s.deps.Logger.Warn("agent observation emit failed",
+			zap.Error(err), zap.String("trace_id", meta.TraceID))
+	}
+}
+
 func (s *AgentService) SetSkillRevisionResolver(resolver port.SkillRevisionResolver) {
 	s.deps.SkillRevisionResolver = resolver
+}
+
+// SetObservationEmitter 注入观测事件发布器（best-effort，可 nil）。
+func (s *AgentService) SetObservationEmitter(emitter port.ObservationEmitter) {
+	s.deps.ObservationEmitter = emitter
 }
 
 func (s *AgentService) SetResourceChangeProposalService(service *ResourceChangeProposalService) {
