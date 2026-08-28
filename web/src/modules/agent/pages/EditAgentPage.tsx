@@ -126,7 +126,6 @@ export const EditAgentPage = () => {
                 mcpTools={mcpTools}
                 workspaces={workspaces}
                 groupedModels={groupedModels}
-                currentModel={agent?.llmModel}
                 // P2：可编辑人（白名单）管理仅 admin/owner 可见；readOnly 时表单 disabled。
                 showEditors={isAdmin}
                 editorCandidates={editorCandidates}

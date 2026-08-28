@@ -293,3 +293,76 @@ func TestPgModelRepo_DeleteProviderManagedAllowed(t *testing.T) {
 		t.Fatal("expected not found after delete")
 	}
 }
+
+// TestPgModelRepo_UpsertDiscovered_PreservesUserToggleOff 守护核心语义：重新发现时
+// 存量模型开关保持现状（含用户手动关闭），只有新发现的模型默认开启。
+func TestPgModelRepo_UpsertDiscovered_PreservesUserToggleOff(t *testing.T) {
+	_, providerRepo, modelRepo, cleanup := newModelTestRepos(t)
+	ctx := context.Background()
+
+	prov := newSeedProvider("upsert-toggle-prov")
+	if err := providerRepo.Create(ctx, prov); err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	cleanup(prov.ID)
+
+	newModel := func(name string) domain.Model {
+		return domain.Model{
+			Name:          name,
+			DisplayName:   name,
+			Capabilities:  []domain.ModelCapability{domain.CapChat},
+			ContextWindow: 8192,
+			MaxTokens:     4096,
+			InputPrice:    10.0,
+			OutputPrice:   30.0,
+			Recommended:   true,
+		}
+	}
+	enabledByName := func(models []domain.Model) map[string]bool {
+		m := make(map[string]bool, len(models))
+		for _, mm := range models {
+			m[mm.Name] = mm.Enabled
+		}
+		return m
+	}
+
+	// First discovery: two models, both enabled by default.
+	first, err := modelRepo.UpsertDiscovered(ctx, prov.ID,
+		[]domain.Model{newModel("gpt-4"), newModel("gpt-4-vision")})
+	if err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+	var gpt4ID string
+	for _, mm := range first {
+		if mm.Name == "gpt-4" {
+			gpt4ID = mm.ID
+		}
+	}
+	if gpt4ID == "" {
+		t.Fatal("first upsert result missing gpt-4 id")
+	}
+
+	// User manually disables gpt-4; gpt-4-vision stays untouched.
+	if err := modelRepo.Toggle(ctx, gpt4ID, false); err != nil {
+		t.Fatalf("toggle off gpt-4: %v", err)
+	}
+
+	// Re-discovery reports all three models: gpt-4 and gpt-4-vision are existing
+	// (gpt-4 must stay off — user intent preserved), gpt-4-turbo is newly added.
+	second, err := modelRepo.UpsertDiscovered(ctx, prov.ID,
+		[]domain.Model{newModel("gpt-4"), newModel("gpt-4-vision"), newModel("gpt-4-turbo")})
+	if err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	enabled := enabledByName(second)
+
+	if enabled["gpt-4"] {
+		t.Error("expected gpt-4 to stay disabled after re-discovery (user toggle preserved)")
+	}
+	if !enabled["gpt-4-vision"] {
+		t.Error("expected gpt-4-vision to remain enabled")
+	}
+	if !enabled["gpt-4-turbo"] {
+		t.Error("expected newly discovered gpt-4-turbo to be enabled by default")
+	}
+}

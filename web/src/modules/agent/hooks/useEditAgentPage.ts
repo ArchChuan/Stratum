@@ -3,18 +3,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { agentApi } from '../api/agent.api';
-import {
-  buildGroupedModels,
-  type Agent,
-  type AgentFormValues,
-  type GroupedModelOption,
-} from '../model/agent';
+import { type Agent, type AgentFormValues } from '../model/agent';
 
 import { AGENT_DEFAULT_MAX_CONTEXT_TOKENS, AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
 import { useAuth, useEditorCandidates, useTenantRole } from '@/modules/iam';
 import { knowledgeApi } from '@/modules/knowledge';
 import type { Workspace } from '@/modules/knowledge';
 import { llmApi } from '@/modules/llm';
+import { buildGroupedModels, type GroupedModelOption } from '@/modules/llm/model/grouped';
 import { mcpApi } from '@/modules/mcp';
 import type { MCPToolOption } from '@/modules/mcp';
 import { skillApi } from '@/modules/skill';

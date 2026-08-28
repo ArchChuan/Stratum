@@ -24,8 +24,8 @@ interface ModelOptionLabelProps {
   // 运行时健康状态；仅在 showHealth 时渲染（缺失 = 未探活，
   // ModelHealthBadge 内部降级为"未探活"Tag）。
   health?: string;
-  // 是否显示健康徽章：ProviderModelSelect 等原有健康展示的选择器开启；
-  // Agent 表单等仅新增能力标签的调用方关闭，避免"未探活"噪音。
+  // 是否显示健康徽章。统一 ModelSelect（agent/知识库/平台参数共用）恒开启；
+  // 保留开关供其他调用方按需关闭，避免"未探活"噪音。
   showHealth?: boolean;
 }
 

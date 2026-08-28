@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 import type { ParameterDefinition, VisualHint } from '../model/parameters';
 
-import { ProviderModelSelect } from './ProviderModelSelect';
+import { ModelSelect } from '@/modules/llm/components/ModelSelect';
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -79,11 +79,11 @@ export const ParameterControl = ({
       );
     case 'model':
       // 模型目录选择器（provider 分组）；存储值 = 模型名。
-      return <ProviderModelSelect value={value as string} onChange={onChange} />;
+      return <ModelSelect value={value as string} onChange={onChange} />;
     case 'embedding_model':
       // 嵌入模型目录选择器（provider 分组）；存储值 = 模型名。
       return (
-        <ProviderModelSelect
+        <ModelSelect
           value={value as string}
           onChange={onChange}
           capability="embedding"
