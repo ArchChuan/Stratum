@@ -1311,7 +1311,12 @@ ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS token_estimate INT NOT NULL 
 ALTER TABLE memory_entries DROP COLUMN IF EXISTS scope_layer;
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS enriched_at TIMESTAMPTZ;
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'user';
-UPDATE memory_entries SET scope = 'agent' WHERE agent_id IS NOT NULL AND scope = 'user';
+-- 修复 #28：严禁在此处做「agent_id 非空 → scope='agent'」的无条件回填。本文件由
+-- ProvisionAllTenantSchemas 在每次启动时对所有租户幂等重放，这类 UPDATE 会随每次
+-- 重启把 user-scope agent（agents.memory_scope='user'）经 enricher 正确写入的
+-- 'user' 条目翻回 'agent'，造成用户级记忆被错误标注/过滤。scope 的写入归属由
+-- 运行时 enricher 按 agent 配置决定（enricher.go normalizeScope），schema 只负责
+-- 新列默认值与非法值归一化，不得反向改写合法值。
 -- 非法 scope 归一化：历史遗留数据可能写入空串或空白等非白名单值（当时无
 -- CHECK 约束）。history worker 的 HistorySegment.Validate() 要求 scope ∈
 -- {user,agent}，非法值导致 memory.history.upsert_failed。agent 相关条目回落
