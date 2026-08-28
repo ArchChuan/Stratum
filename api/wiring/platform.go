@@ -113,16 +113,7 @@ func (c *Container) buildPlatformAuth(p *Platform) error {
 		}
 		p.OnboardSvc = application.NewOnboardService(iampersistence.NewOnboardRepo(db))
 		p.OAuthExchangeStore = iampersistence.NewOAuthExchangeStore(db, p.AESKey)
-		// Decorating the provisioner seeds the built-in knowledge workspace for
-		// every auth-path tenant (register/guest/tenant). The seed runs
-		// asynchronously (nil queue-retry budget) so registration is never
-		// blocked by document embedding.
-		p.SchemaProvisioner = seedAfterProvision{
-			base: iampersistence.NewAdminTenantRepo(db),
-			seedFn: func(ctx context.Context, tenantID string) {
-				c.syncBuiltinDocsForTenant(ctx, tenantID, nil)
-			},
-		}
+		p.SchemaProvisioner = iampersistence.NewAdminTenantRepo(db)
 	}
 	return nil
 }
