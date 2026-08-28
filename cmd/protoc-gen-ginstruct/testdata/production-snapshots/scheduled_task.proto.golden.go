@@ -42,6 +42,9 @@ type ScheduledTaskResponse struct {
 	CreatedBy        string         `json:"createdBy"`
 	CreatedAt        time.Time      `json:"createdAt"`
 	UpdatedAt        time.Time      `json:"updatedAt"`
+	WorkflowName     string         `json:"workflowName,omitempty"`
+	VersionNo        int64          `json:"versionNo,omitempty"`
+	VersionName      string         `json:"versionName,omitempty"`
 }
 
 type ScheduledTaskPageResponse struct {
