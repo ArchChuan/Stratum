@@ -63,7 +63,6 @@ func main() {
 		logger.Fatal("tenant bootstrap failed", zap.Error(err))
 	}
 	container.RecoverStuckKnowledgeIngests(ctx)
-	container.SyncBuiltinKnowledgeDocs(ctx)
 	if err := Run(ctx, cfg, container, logger); err != nil {
 		logger.Fatal("Application runtime failed", zap.Error(err))
 	}

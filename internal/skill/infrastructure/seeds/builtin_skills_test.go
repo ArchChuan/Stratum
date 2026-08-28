@@ -84,7 +84,44 @@ func TestBuiltinSkillsSQLGolden(t *testing.T) {
 			t.Errorf("expected SQL to contain %q", want)
 		}
 	}
+	// Thickened instructions must actually flow into the generated SQL: the
+	// full instruction body and the derived content hash must appear verbatim,
+	// so a drift between seed constructor and tenant_schema.sql is caught here.
+	for _, sk := range BuiltinSkills() {
+		t.Run(sk.ID, func(t *testing.T) {
+			if !contains(sql, sk.Revision.Instructions) {
+				t.Errorf("expected SQL to contain the full instructions body")
+			}
+			if !contains(sql, sk.Revision.ContentHash) {
+				t.Errorf("expected SQL to contain content hash %s", sk.Revision.ContentHash)
+			}
+			if !contains(sql, escapeSQL(sk.Revision.Instructions)) {
+				t.Errorf("expected SQL to contain the escaped instructions body")
+			}
+		})
+	}
 	t.Logf("\n%s", sql)
+}
+
+// TestEscapeSQL verifies SQL literal escaping: a single quote becomes a
+// doubled quote so embedded instructions never break the INSERT literal.
+func TestEscapeSQL(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"no quote", "plain text", "plain text"},
+		{"single quote", "it's", "it''s"},
+		{"already escaped", "a''b", "a''''b"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := escapeSQL(tc.in); got != tc.want {
+				t.Fatalf("escapeSQL(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
 }
 
 func contains(s, substr string) bool {
