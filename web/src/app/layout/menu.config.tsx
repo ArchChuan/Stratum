@@ -146,8 +146,8 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
   }
 
   // 平台管理菜单对普通用户常显（需求：侧边栏可见，点击由 PrivateRoute 渲染 403）。
-  // 各项操作权限仍由路由守卫 + 后端中间件双拦截：租户管理/平台参数/审计日志要求
-  // system_admin，模型管理与平台管理员要求 global_admin（URL 直达同样被拦）。
+  // 各项操作权限仍由路由守卫 + 后端中间件双拦截：租户管理/平台参数/审计日志/模型管理要求
+  // system_admin，平台管理员要求 global_admin（URL 直达同样被拦）。
   // /prompts、/mechanism 随 main 移除提示词管理（#374）与机制基线存储化一并删除。
   base.push({
     key: 'platform-admin-group',

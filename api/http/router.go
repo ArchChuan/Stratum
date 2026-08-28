@@ -682,8 +682,8 @@ func registerLLMAdmin(r *gin.Engine, c *wiring.Container, requireActive gin.Hand
 	providerH := handler.NewProviderHandler(c.LLMGateway.ProviderService)
 	modelMgmtH := handler.NewModelMgmtHandler(c.LLMGateway.ModelMgmtService)
 	// The catalog is public/platform-scoped. Tenant administrators may read it,
-	// but every mutation must be authorized by the global-admin claim.
-	adminMW := middleware.RequireGlobalAdmin()
+	// but every mutation must be authorized by the system-admin claim (or above).
+	adminMW := middleware.RequireSystemAdmin()
 
 	// Providers: list is readable by any tenant member; write ops require admin.
 	providers := r.Group("/admin/providers", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
