@@ -666,7 +666,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 **Interfaces:**
 
-- Consumes: `observability.MetricsProvider`（现状仅 `IncEvaluationJob`）。
+- Consumes: `observability.MetricsProvider` 接口（`pkg/observability/provider.go`，现有 29+ 方法、24 个调用方；本任务追加 7 个评测观测方法，并同步 `NoopMetrics`、`PrometheusMetrics` 两个生产实现及测试 mock）。
 - Produces: 7 个新方法（Task 9/10 消费，指标名对齐规格 §11）：
   - `IncEvalObservation(resource, verdict string)` → `eval_observation_total{resource,stratum}`（stratum 标签 P1b 补，当前空串）
   - `RecordEvalJudgeScore(resource, dimension string, score float64)` → `eval_judge_score{resource,dimension}` Histogram
@@ -678,11 +678,11 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 - [ ] **Step 1: 写失败测试（Prometheus 指标）**
 
-先读 `pkg/observability/prometheus_metrics_test.go` 与 `prometheus_test.go` 了解现有断言工具（gather + family 查找），追加：
+测试文件 import 现状为 `testing` + `go.uber.org/zap`；追加 helper 后需合并 import（`math`、`testing`、`github.com/prometheus/client_model/go`、`go.uber.org/zap`），helper 定义见 Step 3 末尾。构造入口为 `NewPrometheusMetrics(zap.NewNop())`（带 logger 参数），断言沿用现有 `m.reg.Gather()` + family 遍历风格（`TestReaperMetricsServerOnly` 同款）。向 `prometheus_metrics_test.go` 追加：
 
 ```go
 func TestEvalObservationMetrics(t *testing.T) {
- m := NewPrometheusMetrics()
+ m := NewPrometheusMetrics(zap.NewNop())
  m.IncEvalObservation("agent", "pass")
  m.IncEvalObservation("agent", "pass")
  m.RecordEvalJudgeScore("agent", "faithfulness", 0.9)
@@ -692,19 +692,20 @@ func TestEvalObservationMetrics(t *testing.T) {
  m.IncEvalJudgeFailure("evidence_missing")
  m.SetEvalQueueBacklog("observation", 7)
 
- families := gather(t, m)
- // 断言方法与指标名、label 维度对齐规格 §11。
- assertCounterVec(t, families, "eval_observation_total", []string{"resource"}, 2)
- assertCounterVec(t, families, "eval_judge_failure_total", []string{"reason"}, 1)
- assertHistogramVecSum(t, families, "eval_judge_score", 0.9)
+ families, err := m.reg.Gather()
+ if err != nil {
+  t.Fatalf("Gather() error = %v", err)
+ }
+ // 断言各指标名、label 维度与值对齐规格 §11（helper 见 Step 3 末尾）。
+ assertCounterVecSum(t, families, "eval_observation_total", "resource", "agent", 2)
+ assertCounterVecSum(t, families, "eval_judge_failure_total", "reason", "evidence_missing", 1)
+ assertHistogramVecSum(t, families, "eval_judge_score", "dimension", "faithfulness", 0.9)
  assertHistogramSum(t, families, "eval_judge_latency_seconds", 1.5)
  assertCounterSum(t, families, "eval_judge_cost_total", 0.012)
- assertGaugeVec(t, families, "eval_sample_coverage", "agent", 0.5)
- assertGaugeVec(t, families, "eval_queue_backlog", "observation", 7)
+ assertGaugeVecSum(t, families, "eval_sample_coverage", "resource", "agent", 0.5)
+ assertGaugeVecSum(t, families, "eval_queue_backlog", "queue", "observation", 7)
 }
 ```
-
-> 注：`NewPrometheusMetrics` 构造名与现有 gather/assert helper 以 `prometheus_metrics_test.go` 实际为准；断言 helper 若不存在则仿照 `prometheus_test.go` 现有 family 遍历写最小版（见 Step 3 末尾提示）。若现有测试文件已提供等价 helper，直接复用，禁止重复定义。
 
 - [ ] **Step 2: 运行测试确认失败**
 
@@ -769,7 +770,7 @@ func (m *PrometheusMetrics) SetEvalQueueBacklog(queue string, count int64) {
 }
 ```
 
-并在 `PrometheusMetrics` struct 内追加字段、`NewPrometheusMetrics` 构造里注册这些 vec/histogram/counter。字段注册块（按 prometheus 库惯例，放 struct 字段区）：
+并在 `PrometheusMetrics` struct 内追加字段（放 struct 字段区）：
 
 ```go
  evalObservationTotal  *prometheus.CounterVec
@@ -781,57 +782,163 @@ func (m *PrometheusMetrics) SetEvalQueueBacklog(queue string, count int64) {
  evalQueueBacklog      *prometheus.GaugeVec
 ```
 
-构造注册（`NewPrometheusMetrics` 内的 `CounterOpts`/`HistogramOpts`，命名与 §11 对齐，`Namespace`/`Subsystem` 沿用文件现有前缀约定）：
+新增 `registerEvalObservationMetrics` 方法，与 `registerKnowledgeEmbedUnavailable`/`registerExtendedMetrics` 同款 `factory promauto.Factory` 参数模式（勿把注册内联进 `NewPrometheusMetrics` 构造字面量——文件依赖 `register*` 方法拆分维持函数长度门禁）。命名与 §11 对齐：
 
 ```go
-  m.evalObservationTotal = promauto.With(m.reg).NewCounterVec(prometheus.CounterOpts{
-   Name: "eval_observation_total", Help: "运行态观测落库计数（§11.1）",
-  }, []string{"resource", "stratum"})
-  m.evalJudgeScore = promauto.With(m.reg).NewHistogramVec(prometheus.HistogramOpts{
-   Name: "eval_judge_score", Help: "judge 单维度得分（§11.1）",
-   Buckets: prometheus.LinearBuckets(0, 0.1, 11),
-  }, []string{"resource", "dimension"})
-  m.evalSampleCoverage = promauto.With(m.reg).NewGaugeVec(prometheus.GaugeOpts{
-   Name: "eval_sample_coverage", Help: "主动采样覆盖率（§11.1）",
-  }, []string{"resource"})
-  m.evalJudgeLatency = promauto.With(m.reg).NewHistogram(prometheus.HistogramOpts{
-   Name: "eval_judge_latency_seconds", Help: "judge 调用耗时（§11.2）",
-   Buckets: prometheus.ExponentialBuckets(0.1, 2, 8),
-  })
-  m.evalJudgeCostTotal = promauto.With(m.reg).NewCounter(prometheus.CounterOpts{
-   Name: "eval_judge_cost_total", Help: "judge 累计成本美元（§11.2）",
-  })
-  m.evalJudgeFailureTotal = promauto.With(m.reg).NewCounterVec(prometheus.CounterOpts{
-   Name: "eval_judge_failure_total", Help: "judge 调用失败计数（§11.2）",
-  }, []string{"reason"})
-  m.evalQueueBacklog = promauto.With(m.reg).NewGaugeVec(prometheus.GaugeOpts{
-   Name: "eval_queue_backlog", Help: "消息队列积压（§11.2）",
-  }, []string{"queue"})
-```
-
-> 若 `prometheus_metrics_test.go` 没有现成的 `gather`/`assertCounterVec` 等 helper，最小实现版（追加在测试文件内）：
-
-```go
-func gather(t *testing.T, m *PrometheusMetrics) []*dto.MetricFamily {
- t.Helper()
- reg := m.reg
- // 若 reg 为 nil 测试无法 gather，改用注册表字段：以现有测试文件的 gather 用法为准。
- _ = reg
- t.Fatal("prometheus_metrics_test.go 已有 gather helper，禁止重复实现")
- return nil
+// registerEvalObservationMetrics registers the eval-observation metrics
+// backing the runtime-evaluation signals (§11.1/§11.2).
+func (m *PrometheusMetrics) registerEvalObservationMetrics(factory promauto.Factory) {
+ m.evalObservationTotal = factory.NewCounterVec(
+  prometheus.CounterOpts{Name: "eval_observation_total", Help: "运行态观测落库计数（§11.1）"},
+  []string{"resource", "stratum"},
+ )
+ m.evalJudgeScore = factory.NewHistogramVec(
+  prometheus.HistogramOpts{Name: "eval_judge_score", Help: "judge 单维度得分（§11.1）", Buckets: prometheus.LinearBuckets(0, 0.1, 11)},
+  []string{"resource", "dimension"},
+ )
+ m.evalSampleCoverage = factory.NewGaugeVec(
+  prometheus.GaugeOpts{Name: "eval_sample_coverage", Help: "主动采样覆盖率（§11.1）"},
+  []string{"resource"},
+ )
+ m.evalJudgeLatency = factory.NewHistogram(
+  prometheus.HistogramOpts{Name: "eval_judge_latency_seconds", Help: "judge 调用耗时（§11.2）", Buckets: prometheus.ExponentialBuckets(0.1, 2, 8)},
+ )
+ m.evalJudgeCostTotal = factory.NewCounter(
+  prometheus.CounterOpts{Name: "eval_judge_cost_total", Help: "judge 累计成本美元（§11.2）"},
+ )
+ m.evalJudgeFailureTotal = factory.NewCounterVec(
+  prometheus.CounterOpts{Name: "eval_judge_failure_total", Help: "judge 调用失败计数（§11.2）"},
+  []string{"reason"},
+ )
+ m.evalQueueBacklog = factory.NewGaugeVec(
+  prometheus.GaugeOpts{Name: "eval_queue_backlog", Help: "消息队列积压（§11.2）"},
+  []string{"queue"},
+ )
 }
 ```
 
-（实施时以现有测试文件实际 helper 为准，上面仅作为兜底提示，若 helper 已存在则删除本段。）
+并在 `NewPrometheusMetrics` 末尾（`m.registerKnowledgeEmbedUnavailable(factory)` 之后）追加一行：
 
-- [ ] **Step 4: 同步全部 MetricsProvider 实现与测试 mock**
+```go
+ m.registerEvalObservationMetrics(factory)
+```
 
-修改接口后编译全仓，找出断点并逐个补齐：
+> helper 定义追加在 `prometheus_metrics_test.go` 内（经确认该文件当前无任何 gather/assert helper，需新增；若实施时发现已有同名 helper 则复用并删除本段）。注意把文件顶部 import 块合并为：`math`、`testing`、`github.com/prometheus/client_model/go`、`go.uber.org/zap`。
+
+```go
+func findFamily(families []*dto.MetricFamily, name string) *dto.MetricFamily {
+ for _, f := range families {
+  if f.GetName() == name {
+   return f
+  }
+ }
+ return nil
+}
+
+func labelValueFor(m *dto.Metric, key string) string {
+ for _, lp := range m.GetLabel() {
+  if lp.GetName() == key {
+   return lp.GetValue()
+  }
+ }
+ return ""
+}
+
+// assertFloatClose 比较浮点指标值，1e-9 容差（0.012 等浮点累加不精确）。
+func assertFloatClose(t *testing.T, name string, got, want float64) {
+ t.Helper()
+ if math.Abs(got-want) > 1e-9 {
+  t.Fatalf("%s = %v, want %v", name, got, want)
+ }
+}
+
+func assertCounterVecSum(t *testing.T, families []*dto.MetricFamily, name, labelKey, labelValue string, want float64) {
+ t.Helper()
+ fam := findFamily(families, name)
+ if fam == nil {
+  t.Fatalf("metric family %q not found", name)
+ }
+ var got float64
+ for _, m := range fam.GetMetric() {
+  if labelValueFor(m, labelKey) == labelValue {
+   got += m.GetCounter().GetValue()
+  }
+ }
+ assertFloatClose(t, name, got, want)
+}
+
+func assertCounterSum(t *testing.T, families []*dto.MetricFamily, name string, want float64) {
+ t.Helper()
+ fam := findFamily(families, name)
+ if fam == nil {
+  t.Fatalf("metric family %q not found", name)
+ }
+ assertFloatClose(t, name, fam.GetMetric()[0].GetCounter().GetValue(), want)
+}
+
+func assertHistogramVecSum(t *testing.T, families []*dto.MetricFamily, name, labelKey, labelValue string, want float64) {
+ t.Helper()
+ fam := findFamily(families, name)
+ if fam == nil {
+  t.Fatalf("metric family %q not found", name)
+ }
+ for _, m := range fam.GetMetric() {
+  if labelValueFor(m, labelKey) == labelValue {
+   assertFloatClose(t, name, m.GetHistogram().GetSampleSum(), want)
+   return
+  }
+ }
+ t.Fatalf("%s label %s=%s not found", name, labelKey, labelValue)
+}
+
+func assertHistogramSum(t *testing.T, families []*dto.MetricFamily, name string, want float64) {
+ t.Helper()
+ fam := findFamily(families, name)
+ if fam == nil {
+  t.Fatalf("metric family %q not found", name)
+ }
+ assertFloatClose(t, name, fam.GetMetric()[0].GetHistogram().GetSampleSum(), want)
+}
+
+func assertGaugeVecSum(t *testing.T, families []*dto.MetricFamily, name, labelKey, labelValue string, want float64) {
+ t.Helper()
+ fam := findFamily(families, name)
+ if fam == nil {
+  t.Fatalf("metric family %q not found", name)
+ }
+ for _, m := range fam.GetMetric() {
+  if labelValueFor(m, labelKey) == labelValue {
+   assertFloatClose(t, name, m.GetGauge().GetValue(), want)
+   return
+  }
+ }
+ t.Fatalf("%s label %s=%s not found", name, labelKey, labelValue)
+}
+```
+
+- [ ] **Step 4: 同步全部 MetricsProvider 实现、`exerciseAllMetrics` 与测试 mock**
+
+1. 修改接口后编译全仓，找出断点并逐个补齐：
 
 Run: `go build ./... 2>&1 | head -40`
 Expected: 列出所有未实现新方法的类型（`NoopMetrics` 已补、`PrometheusMetrics` 已补；其余是测试文件中的 mock）。
 
-对每个报错的测试文件 mock：若 mock 用 `type mockMetrics struct { observability.MetricsProvider }` 嵌入方式则无需改；若是显式全方法实现（含 `IncEvaluationJob`），在 mock 里补同名空方法（或改用嵌入接口）。逐文件处理，直到：
+对每个报错的测试文件 mock：若 mock 用 `type mockMetrics struct { observability.MetricsProvider }` 嵌入方式则无需改；若是显式全方法实现（含 `IncEvaluationJob`），在 mock 里补同名空方法（或改用嵌入接口）。逐文件处理。
+
+1. 在 `prometheus_metrics_test.go` 的 `exerciseAllMetrics` 末尾（`m.IncEvaluationJob("ok")` 之后）追加对新方法的调用，保持「所有 MetricsProvider 方法在注册后不 nil panic」的测试意图：
+
+```go
+ // Evaluation observation（§11）
+ m.IncEvalObservation("agent", "pass")
+ m.RecordEvalJudgeScore("agent", "faithfulness", 0.9)
+ m.SetEvalSampleCoverage("agent", 0.5)
+ m.RecordEvalJudgeLatency(0.3)
+ m.RecordEvalJudgeCost(0.001)
+ m.IncEvalJudgeFailure("evidence_missing")
+ m.SetEvalQueueBacklog("observation", 0)
+```
+
+1. 验证：
 
 Run: `go test ./pkg/observability/ -short`
 Expected: PASS。
