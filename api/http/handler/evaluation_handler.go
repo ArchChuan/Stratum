@@ -821,6 +821,9 @@ func (h *EvaluationHandler) ListObservations(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+	if items == nil {
+		items = []domain.EvalObservation{}
+	}
 	c.JSON(http.StatusOK, gin.H{"items": items, "total": len(items)})
 }
 

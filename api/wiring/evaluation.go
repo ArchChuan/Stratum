@@ -28,6 +28,7 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 )
 
 type Evaluation struct {
@@ -1180,9 +1181,9 @@ func (c *Container) newEvaluationWorker(ctx context.Context, db *pgxpool.Pool, j
 }
 
 // wireObservationPipeline 装配运行态观测链路（P1a）：ObservationService 落库
-// 服务 + JetStream 消费 worker。观测服务先于 NATS 装配（查询 API 数据源）；
-// NATS 消费设置失败使 evaluation 构建失败（fail closed，防止观测链路静默降级）。
-// NATS 缺失时仅装配服务、不启动消费（观测查询 API 仍可用）。
+// 服务 + JetStream 消费 worker。观测服务先于 NATS 装配（查询 API 数据源）。
+// 观测消费为 best-effort：NATS 缺失或 JetStream 装配失败仅降级跳过 worker，
+// 查询 API 与 agent 执行不受影响（§14 评估器不阻断执行）。
 func (c *Container) wireObservationPipeline(ctx context.Context, db *pgxpool.Pool,
 	traceReader evalport.TraceEvidenceReader, judge evalport.LLMJudge,
 ) error {
@@ -1202,22 +1203,26 @@ func (c *Container) wireObservationPipeline(ctx context.Context, db *pgxpool.Poo
 	}
 	jsm, err := pipeline.NewJetStreamManager(c.Storage.NATS, c.Logger)
 	if err != nil {
-		return fmt.Errorf("observation jetstream manager: %w", err)
+		c.Logger.Warn("observation pipeline degraded: jetstream manager unavailable", zap.Error(err))
+		return nil
 	}
 	if err := observation.EnsureStreams(ctx, jsm.JS()); err != nil {
-		return fmt.Errorf("observation ensure streams: %w", err)
+		c.Logger.Warn("observation pipeline degraded: ensure streams failed", zap.Error(err))
+		return nil
 	}
 	consumer, err := jsm.CreateConsumer(ctx, constants.ObservationStream,
 		constants.ObservationConsumerName, constants.ObservationSubjectPrefix+".>",
 		constants.ObservationAckWait, constants.ObservationMaxDeliver)
 	if err != nil {
-		return fmt.Errorf("observation ensure consumer: %w", err)
+		c.Logger.Warn("observation pipeline degraded: ensure consumer failed", zap.Error(err))
+		return nil
 	}
 	observationWorker := observation.NewObservationConsumerWorker(consumer, jsm.JS(),
 		observationSvc, c.platformMetrics(), c.Logger,
 		constants.ObservationAckWait, constants.ObservationMaxDeliver)
 	if err := observationWorker.Start(ctx); err != nil {
-		return fmt.Errorf("observation consumer start: %w", err)
+		c.Logger.Warn("observation pipeline degraded: consumer start failed", zap.Error(err))
+		return nil
 	}
 	c.shutdown = append(c.shutdown, func(context.Context) error {
 		observationWorker.Stop()

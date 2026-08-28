@@ -139,7 +139,6 @@ type PrometheusMetrics struct {
 	// Evaluation observation（§11 运行时评估观测）
 	evalObservationTotal  *prometheus.CounterVec
 	evalJudgeScore        *prometheus.HistogramVec
-	evalSampleCoverage    *prometheus.GaugeVec
 	evalJudgeLatency      prometheus.Histogram
 	evalJudgeCostTotal    prometheus.Counter
 	evalJudgeFailureTotal *prometheus.CounterVec
@@ -339,10 +338,7 @@ func (m *PrometheusMetrics) registerEvalObservationMetrics(factory promauto.Fact
 		prometheus.HistogramOpts{Name: "eval_judge_score", Help: "judge 单维度得分（§11.1）", Buckets: prometheus.LinearBuckets(0, 0.1, 11)},
 		[]string{"resource", "dimension"},
 	)
-	m.evalSampleCoverage = factory.NewGaugeVec(
-		prometheus.GaugeOpts{Name: "eval_sample_coverage", Help: "主动采样覆盖率（§11.1）"},
-		[]string{"resource"},
-	)
+	// TODO(P1b)：evaluation.observe 采样覆盖率指标待真实计数基础设施接入后恢复。
 	m.evalJudgeLatency = factory.NewHistogram(
 		prometheus.HistogramOpts{Name: "eval_judge_latency_seconds", Help: "judge 调用耗时（§11.2）", Buckets: prometheus.ExponentialBuckets(0.1, 2, 8)},
 	)
@@ -910,10 +906,6 @@ func (m *PrometheusMetrics) IncEvalObservation(resource, verdict string) {
 
 func (m *PrometheusMetrics) RecordEvalJudgeScore(resource, dimension string, score float64) {
 	m.evalJudgeScore.WithLabelValues(resource, dimension).Observe(score)
-}
-
-func (m *PrometheusMetrics) SetEvalSampleCoverage(resource string, pct float64) {
-	m.evalSampleCoverage.WithLabelValues(resource).Set(pct)
 }
 
 func (m *PrometheusMetrics) RecordEvalJudgeLatency(seconds float64) {

@@ -85,14 +85,14 @@ func (r *PgObservationRepository) Get(ctx context.Context, tenantID, observation
 	})
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return nil, fmt.Errorf("get eval observation %s: %w", observationID, err)
+			return nil, nil // 未找到：handler 依 obs==nil 返回 404
 		}
 		return nil, fmt.Errorf("get eval observation %s: %w", observationID, err)
 	}
 	obs.Resource.Kind = domain.ResourceKind(kind)
 	obs.Verdict = domain.ObservationVerdict(verdict)
 	if err := unmarshalObservationJSON(&obs, paramJSON, signalsJSON, costJSON); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get eval observation %s: unmarshal: %w", observationID, err)
 	}
 	return &obs, nil
 }

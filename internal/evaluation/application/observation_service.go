@@ -160,9 +160,12 @@ func (s *ObservationService) applyJudge(ctx context.Context, trace port.Observed
 }
 
 // judgeRubric 构造单维度 judge 提示词（与 judgeAdapter 的 Complete 输出契约
-// {"passed","reason"} 对齐：这里的 rubric 指示 LLM 按指定维度判定 pass/不通过）。
+// {"passed","reason"} 对齐：这里的 rubric 指示 LLM 按指定维度判定 pass/不通过，
+// 并钉死输出 JSON 形状，与评测系统主 rubric 逐字对齐，避免解析失败被当
+// judge_unavailable 系统性丢弃）。
 func judgeRubric(dimension string) string {
-	return fmt.Sprintf("请按维度「%s」对助手回答判定通过/不通过，并给出理由。忠实于给定上下文、切题、覆盖全部关键点。", dimension)
+	return fmt.Sprintf("请按维度「%s」对助手回答判定通过/不通过，并给出理由。忠实于给定上下文、切题、覆盖全部关键点。"+
+		"只输出 JSON：{\"passed\": true 或 false, \"reason\": \"一句话理由\"}", dimension)
 }
 
 func anyJudgeBelow(signals []domain.JudgeSignal, threshold float64) bool {

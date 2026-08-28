@@ -99,7 +99,6 @@ func exerciseAllMetrics(m MetricsProvider) {
 	// Evaluation observation（§11）
 	m.IncEvalObservation("agent", "pass")
 	m.RecordEvalJudgeScore("agent", "faithfulness", 0.9)
-	m.SetEvalSampleCoverage("agent", 0.5)
 	m.RecordEvalJudgeLatency(0.3)
 	m.RecordEvalJudgeCost(0.001)
 	m.IncEvalJudgeFailure("evidence_missing")
@@ -151,7 +150,6 @@ func TestEvalObservationMetrics(t *testing.T) {
 	m.IncEvalObservation("agent", "pass")
 	m.IncEvalObservation("agent", "pass")
 	m.RecordEvalJudgeScore("agent", "faithfulness", 0.9)
-	m.SetEvalSampleCoverage("agent", 0.5)
 	m.RecordEvalJudgeLatency(1.5)
 	m.RecordEvalJudgeCost(0.012)
 	m.IncEvalJudgeFailure("evidence_missing")
@@ -167,7 +165,6 @@ func TestEvalObservationMetrics(t *testing.T) {
 	assertHistogramVecSum(t, families, "eval_judge_score", "dimension", "faithfulness", 0.9)
 	assertHistogramSum(t, families, "eval_judge_latency_seconds", 1.5)
 	assertCounterSum(t, families, "eval_judge_cost_total", 0.012)
-	assertGaugeVecSum(t, families, "eval_sample_coverage", "resource", "agent", 0.5)
 	assertGaugeVecSum(t, families, "eval_queue_backlog", "queue", "observation", 7)
 }
 

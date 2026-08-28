@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
+	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v2"
 )
 
@@ -63,6 +64,25 @@ func TestObservationRepositoryGet(t *testing.T) {
 	}
 	if got.TraceID != "trace-1" || got.Signals.Judge[0].Score != 0.9 {
 		t.Fatalf("Get mismatch: %+v", got)
+	}
+}
+
+func TestObservationRepositoryGetNoRows(t *testing.T) {
+	mock := newMockRepo(t)
+	repo := NewPgObservationRepository(mock)
+	expectTenantTx(mock) // BEGIN + SET LOCAL search_path（execTenantTx 内部执行）
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, trace_id, resource_kind, resource_id, param_version, signals, cost_perf, stratum, verdict, created_at FROM eval_observations WHERE id = $1`)).
+		WithArgs("missing-1").
+		WillReturnError(pgx.ErrNoRows)
+	mock.ExpectCommit()
+
+	got, err := repo.Get(context.Background(), "t1", "missing-1")
+	if err != nil {
+		t.Fatalf("Get no-rows: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("Get no-rows: want nil, got %+v", got)
 	}
 }
 

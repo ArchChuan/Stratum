@@ -126,7 +126,7 @@ type MetricsProvider interface {
 	// Evaluation observation（§11 运行时评估观测）
 	IncEvalObservation(resource, verdict string)
 	RecordEvalJudgeScore(resource, dimension string, score float64)
-	SetEvalSampleCoverage(resource string, pct float64)
+	// TODO(P1b)：evaluation.observe 采样覆盖率指标待真实计数基础设施接入后恢复。
 	RecordEvalJudgeLatency(seconds float64)
 	RecordEvalJudgeCost(costUSD float64)
 	IncEvalJudgeFailure(reason string)
@@ -221,7 +221,6 @@ func (NoopMetrics) IncMCPClientReconnect(_ string)                              
 func (NoopMetrics) IncEvaluationJob(_ string)                                     {}
 func (NoopMetrics) IncEvalObservation(_, _ string)                                {}
 func (NoopMetrics) RecordEvalJudgeScore(_, _ string, _ float64)                   {}
-func (NoopMetrics) SetEvalSampleCoverage(_ string, _ float64)                     {}
 func (NoopMetrics) RecordEvalJudgeLatency(_ float64)                              {}
 func (NoopMetrics) RecordEvalJudgeCost(_ float64)                                 {}
 func (NoopMetrics) IncEvalJudgeFailure(_ string)                                  {}
