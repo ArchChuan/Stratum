@@ -146,6 +146,8 @@ func (w *ObservationConsumerWorker) processMessage(ctx context.Context, msg jets
 		_ = deadLetterWithHeartbeat(ctx, w.js, msg, stopHeartbeat, details)
 		return
 	}
+	// Process 契约：仅证据查询失败返回 error（= 重投）；judge 关闭 / judge 故障 /
+	// 校验非法 / 落库失败均在服务内丢弃并返回 nil，不会走到这里。
 	if err := w.processor.Process(ctx, evt); err != nil {
 		w.logger.Warn("observation process failed",
 			zap.Error(err), zap.String("subject", msg.Subject()))

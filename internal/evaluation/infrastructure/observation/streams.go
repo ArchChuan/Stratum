@@ -24,7 +24,7 @@ func EnsureStreams(ctx context.Context, js jetstream.JetStream) error {
 	}
 	if _, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
 		Name:      constants.ObservationDLQStream,
-		Subjects:  []string{constants.ObservationSubjectPrefix + ".dlq"},
+		Subjects:  []string{constants.ObservationDLQSubject},
 		Storage:   jetstream.FileStorage,
 		Retention: jetstream.LimitsPolicy,
 		MaxAge:    constants.ObservationDLQMaxAge,

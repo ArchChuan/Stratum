@@ -56,8 +56,8 @@ func TestConsumerProcessMessageMalformedDeadLetters(t *testing.T) {
 	if msg.dlqCount != 1 || msg.termReason == "" {
 		t.Fatalf("expected DLQ+Term on malformed, got dlq=%d reason=%q", msg.dlqCount, msg.termReason)
 	}
-	if len(pub.subjects) == 0 || pub.subjects[0] != constants.ObservationSubjectPrefix+".dlq" {
-		t.Fatalf("expected DLQ publish to %s, got %v", constants.ObservationSubjectPrefix+".dlq", pub.subjects)
+	if len(pub.subjects) == 0 || pub.subjects[0] != constants.ObservationDLQSubject {
+		t.Fatalf("expected DLQ publish to %s, got %v", constants.ObservationDLQSubject, pub.subjects)
 	}
 }
 

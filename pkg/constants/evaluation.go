@@ -17,6 +17,11 @@ const (
 	// ObservationSubjectPrefix 引用事件 subject 前缀；完整 subject 为
 	// "evaluation.observe.{tenant}"，与 memory 的 domain.action 命名同族。
 	ObservationSubjectPrefix = "evaluation.observe"
+	// ObservationDLQSubject 观测死信流独立 subject。独立前缀避免与观察流通配
+	// "evaluation.observe.>" 重叠（否则死信消息按 subject 同时落入两流，观察
+	// consumer 重消费死信导致重投死循环，仿 memory.dlq 的不相交前缀模式）。
+	// DLQ 流按精确 subject 匹配，租户写入事件字段。
+	ObservationDLQSubject = "evaluation.dlq"
 	// ObservationConsumerName 观测 judge 消费组名。
 	ObservationConsumerName = "observation-judge"
 	// ObservationAckWait 消费确认窗口；ObservationMaxDeliver 重投上限，超限进 DLQ。

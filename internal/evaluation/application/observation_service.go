@@ -38,14 +38,20 @@ func NewObservationService(deps ObservationServiceDeps) *ObservationService {
 	return &ObservationService{deps: deps}
 }
 
-// Process 处理一条观测引用事件：开启 → 采样 → 拉证据 → judge 多维打分 → 落库。
-// 返回 error 表示需要 NATS 重投（仅证据查询失败）；judge 故障按 §14 采样降级
-// 跳过（不落库、不重投、指标计数），绝不伪成功。
+// Process 处理一条观测引用事件：开启 → 采样 → judge 可用性 → 拉证据 → judge 多维打分 → 落库。
+// 返回 error 表示需要 NATS 重投（仅证据查询失败）；judge 关闭 / judge 故障 / 校验非法 /
+// 落库失败均在本服务内丢弃并返回 nil（§14 精神：不落零信号 pass 观测、不制造 poison
+// message 重投循环），绝不伪成功。
 func (s *ObservationService) Process(ctx context.Context, evt domain.ObservationReferenceEvent) error {
 	if !s.deps.Enabled(ctx) {
 		return nil
 	}
 	if !sampleDecision(s.deps.SampleRate(ctx), evt.ResourceKind, evt.TraceID) {
+		return nil
+	}
+	// judge 关闭（nil 或 !Enabled）时跳过本次观测：观测的产出是 judge 信号，
+	// 无 judge 不落零信号 pass 观测（§14 精神）。配置态跳过，非故障降级、不计数。
+	if s.deps.Judge == nil || !s.deps.Judge.Enabled(ctx) {
 		return nil
 	}
 	trace, err := s.deps.Evidence.Resolve(ctx, evt.TenantID, evt.TraceID)
@@ -63,11 +69,18 @@ func (s *ObservationService) Process(ctx context.Context, evt domain.Observation
 		return nil
 	}
 	if err := obs.Validate(); err != nil {
+		// 数据非法：重投必再失败（poison message 循环），丢弃而非重投。
+		s.deps.Logger.Warn("observation invalid, drop", zap.Error(err),
+			zap.String("trace_id", evt.TraceID))
 		s.deps.Metrics.IncEvalJudgeFailure("invalid_observation")
-		return fmt.Errorf("observation validate: %w", err)
+		return nil
 	}
 	if err := s.deps.Repo.Save(ctx, evt.TenantID, &obs); err != nil {
-		return fmt.Errorf("observation save: %w", err)
+		// 重投会因每次 buildObservation 新 uuid 重复落库，丢弃而非重投。
+		s.deps.Logger.Warn("observation save failed, drop", zap.Error(err),
+			zap.String("trace_id", evt.TraceID))
+		s.deps.Metrics.IncEvalJudgeFailure("save_failed")
+		return nil
 	}
 	s.deps.Metrics.IncEvalObservation(evt.ResourceKind, string(obs.Verdict))
 	return nil

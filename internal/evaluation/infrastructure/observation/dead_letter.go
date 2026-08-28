@@ -84,7 +84,7 @@ func deadLetterWithHeartbeat(ctx context.Context, pub dlqPublisher, msg jetstrea
 		stopHeartbeat()
 		return fmt.Errorf("marshal dead letter: %w", err)
 	}
-	subject := constants.ObservationSubjectPrefix + ".dlq"
+	subject := constants.ObservationDLQSubject
 	if _, err := pub.Publish(ctx, subject, data, jetstream.WithMsgID(fmt.Sprintf("%s-%s", details.Stage, details.MessageID))); err != nil {
 		stopHeartbeat()
 		return fmt.Errorf("publish dead letter: %w", err)

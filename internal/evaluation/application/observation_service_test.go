@@ -149,3 +149,51 @@ func TestObservationServiceProcessJudgeFailureDegrades(t *testing.T) {
 		t.Fatalf("judge failure must skip observation, got %d saved", len(repo.saved))
 	}
 }
+
+func TestObservationServiceProcessJudgeDisabledSkips(t *testing.T) {
+	repo := &stubObservationRepo{}
+	reader := &stubEvidenceReader{trace: port.ObservedTrace{TraceID: "trace-1", Input: "q", Output: "a"}}
+	judge := &stubJudge{enabled: false} // judge 关闭（配置态）
+	svc := newTestObservationService(repo, reader, judge)
+	if err := svc.Process(context.Background(), domain.ObservationReferenceEvent{
+		TraceID: "trace-1", ResourceKind: "agent", ResourceID: "a1",
+	}); err != nil {
+		t.Fatalf("Process with judge disabled should skip without error: %v", err)
+	}
+	// judge 关闭时跳过本次观测：不落零信号 pass 观测（§14 精神），非故障降级。
+	if len(repo.saved) != 0 {
+		t.Fatalf("judge disabled must not save zero-signal observation, got %d", len(repo.saved))
+	}
+}
+
+func TestObservationServiceProcessInvalidObservationDrops(t *testing.T) {
+	repo := &stubObservationRepo{}
+	reader := &stubEvidenceReader{trace: port.ObservedTrace{TraceID: "trace-1", Input: "q", Output: "a"}}
+	judge := &stubJudge{enabled: true, result: domain.AssertionResult{Passed: true}}
+	svc := newTestObservationService(repo, reader, judge)
+	// ResourceID 为空 → buildObservation 后 obs.Validate 触发「resource id required」。
+	evt := domain.ObservationReferenceEvent{
+		TraceID: "trace-1", ResourceKind: "agent", ResourceID: "",
+	}
+	if err := svc.Process(context.Background(), evt); err != nil {
+		t.Fatalf("invalid observation must drop without error (no redelivery): %v", err)
+	}
+	if len(repo.saved) != 0 {
+		t.Fatalf("invalid observation must not save, got %d", len(repo.saved))
+	}
+}
+
+func TestObservationServiceProcessSaveFailureDrops(t *testing.T) {
+	repo := &stubObservationRepo{err: errors.New("repo down")} // Save 失败
+	reader := &stubEvidenceReader{trace: port.ObservedTrace{TraceID: "trace-1", Input: "q", Output: "a"}}
+	judge := &stubJudge{enabled: true, result: domain.AssertionResult{Passed: true}}
+	svc := newTestObservationService(repo, reader, judge)
+	if err := svc.Process(context.Background(), domain.ObservationReferenceEvent{
+		TraceID: "trace-1", ResourceKind: "agent", ResourceID: "a1",
+	}); err != nil {
+		t.Fatalf("save failure must drop without error (no redelivery): %v", err)
+	}
+	if len(repo.saved) != 0 {
+		t.Fatalf("save failure must not save, got %d", len(repo.saved))
+	}
+}
