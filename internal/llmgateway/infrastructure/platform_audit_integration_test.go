@@ -214,13 +214,13 @@ func TestPgModelCreatePlatformAuditRow(t *testing.T) {
 	repo := NewPgModelRepo(pool)
 	if err := repo.CreatePlatform(ctx, &domain.Model{
 		ID: "m-manual", ProviderID: "p-c", Name: "gpt-x",
-		Capabilities:          []domain.ModelCapability{domain.CapChat},
-		ContextWindow:         128000,
-		MaxTokens:             4096,
-		Enabled:               true,
-		ProviderManaged:       false,
-		ContextWindowSource:   domain.CapabilitySourceManualUnknown,
-		MaxTokensSource:       domain.CapabilitySourceManualUnknown,
+		Capabilities:        []domain.ModelCapability{domain.CapChat},
+		ContextWindow:       128000,
+		MaxTokens:           4096,
+		Enabled:             true,
+		ProviderManaged:     false,
+		ContextWindowSource: domain.CapabilitySourceManualUnknown,
+		MaxTokensSource:     domain.CapabilitySourceManualUnknown,
 	}, "tenant-9", &auditdomain.ResourceChangeAuditEvent{
 		ResourceKind: auditdomain.ResourceKindModel,
 		ResourceID:   "m-manual",

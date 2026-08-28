@@ -1,4 +1,5 @@
 import type {
+  CreateModelInput,
   CreateProviderInput,
   Model,
   Provider,
@@ -83,6 +84,11 @@ export const llmApi = {
 
   getModel: async (id: string): Promise<Model> => {
     const res = await api.get<Model>(`/admin/models/${id}`);
+    return res.data;
+  },
+
+  createModel: async (data: CreateModelInput): Promise<Model> => {
+    const res = await api.post<Model>('/admin/models', data);
     return res.data;
   },
 
