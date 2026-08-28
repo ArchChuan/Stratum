@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	auditpersistence "github.com/byteBuilderX/stratum/internal/audit/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 )
@@ -235,7 +236,7 @@ func (r *PgModelRepo) UpdatePlatform(
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("model not found: %s", m.ID)
 	}
-	if err := insertPlatformAuditTx(ctx, tx, actorTenantID, audit); err != nil {
+	if err := auditpersistence.InsertPlatformAuditTx(ctx, tx, actorTenantID, audit); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {

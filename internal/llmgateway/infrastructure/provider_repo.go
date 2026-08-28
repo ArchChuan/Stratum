@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	auditpersistence "github.com/byteBuilderX/stratum/internal/audit/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/byteBuilderX/stratum/pkg/observability"
@@ -286,7 +287,7 @@ func (r *PgProviderRepo) UpdatePlatform(
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("provider not found: %s", p.ID)
 	}
-	if err := insertPlatformAuditTx(ctx, tx, actorTenantID, audit); err != nil {
+	if err := auditpersistence.InsertPlatformAuditTx(ctx, tx, actorTenantID, audit); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {

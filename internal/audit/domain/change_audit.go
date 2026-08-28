@@ -17,6 +17,8 @@ const (
 	ResourceKindEvaluation = "evaluation" // 新增：评测实验生命周期
 	ResourceKindModel      = "model"      // 新增：LLM 模型目录可编辑参数
 	ResourceKindProvider   = "provider"   // 新增：LLM provider 配置
+	ResourceKindTenant     = "tenant"     // 新增：租户生命周期（创建/更新/删除）
+	ResourceKindAdmin      = "admin"      // 新增：平台管理员角色变更
 	// ResourceKindPlatformConfig = "platform_config"：平台配置分组（agent/
 	// memory/evaluation/trace）的版本发布/回滚审计，ResourceID 为 group_key。
 	ResourceKindPlatformConfig = "platform_config"
