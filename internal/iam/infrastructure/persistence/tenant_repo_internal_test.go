@@ -291,3 +291,25 @@ func TestTenantRepo_ListActiveTenantIDs_ScanFails(t *testing.T) {
 
 // pgxErrNoRows 返回 pgx.ErrNoRows 本体，保证 errors.Is 分支被真实命中。
 func pgxErrNoRows() error { return pgx.ErrNoRows }
+
+func TestTenantRepo_ListAllTenants(t *testing.T) {
+	repo, mock := newTenantRepo(t)
+	mock.ExpectQuery(`SELECT id, name, is_default FROM public.tenants`).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "is_default"}).
+			AddRow("t1", "Alpha", true).
+			AddRow("t2", "Beta", false))
+	tenants, err := repo.ListAllTenants(context.Background())
+	require.NoError(t, err)
+	require.Len(t, tenants, 2)
+	require.Equal(t, "t1", tenants[0].TenantID)
+	require.True(t, tenants[0].IsDefault)
+	require.Equal(t, "Beta", tenants[1].Name)
+}
+
+func TestTenantRepo_ListAllTenants_Error(t *testing.T) {
+	repo, mock := newTenantRepo(t)
+	mock.ExpectQuery(`SELECT id, name, is_default FROM public.tenants`).
+		WillReturnError(errAny)
+	_, err := repo.ListAllTenants(context.Background())
+	require.ErrorContains(t, err, "list all tenants")
+}

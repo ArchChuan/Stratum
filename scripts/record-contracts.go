@@ -590,8 +590,12 @@ func (contractAdminUR) SearchUsers(_ context.Context, _ string, _ int) ([]iampor
 func (contractAdminUR) ListAdmins(_ context.Context) ([]iamport.AdminUser, error) {
 	return nil, nil
 }
-func (contractAdminUR) SetAdminRole(_ context.Context, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error    { return nil }
-func (contractAdminUR) RemoveAdminRole(_ context.Context, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error { return nil }
+func (contractAdminUR) SetAdminRole(_ context.Context, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
+func (contractAdminUR) RemoveAdminRole(_ context.Context, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (contractAdminUR) GetGlobalRole(_ context.Context, userID string) (iamdomain.GlobalRole, error) {
 	if userID == "contract-user" {
 		return iamdomain.GlobalRoleUser, nil
@@ -609,11 +613,15 @@ func (contractAdminTR) Get(_ context.Context, _ string) (*iamdomain.Tenant, erro
 	// 返回有效租户：GetTenant 详情与 DeleteTenant 审计投影都依赖 Get 成功。
 	return &iamdomain.Tenant{ID: "contract-id", Name: "contract-tenant", Slug: "contract-tenant", Plan: "free", Status: "active"}, nil
 }
-func (contractAdminTR) Create(_ context.Context, _ iamdomain.Tenant, _ string, _ *auditdomain.ResourceChangeAuditEvent) error { return nil }
+func (contractAdminTR) Create(_ context.Context, _ iamdomain.Tenant, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (contractAdminTR) UpdatePatch(_ context.Context, _ string, _ iamdomain.TenantPatch, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (contractAdminTR) HardDelete(_ context.Context, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error { return nil }
+func (contractAdminTR) HardDelete(_ context.Context, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (contractAdminTR) ProvisionSchema(_ context.Context, _ string) error { return nil }
 
 type contractTenantR struct{}
@@ -640,6 +648,10 @@ func (contractTenantR) UpdateTenantSettings(_ context.Context, _ string, _ []byt
 	return nil
 }
 func (contractTenantR) ListUserTenants(_ context.Context, _ string) ([]iamdomain.UserTenantInfo, error) {
+	return nil, nil
+}
+
+func (contractTenantR) ListAllTenants(context.Context) ([]iamdomain.UserTenantInfo, error) {
 	return nil, nil
 }
 

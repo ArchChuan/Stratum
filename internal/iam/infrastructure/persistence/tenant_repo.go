@@ -223,3 +223,29 @@ func (r *TenantRepo) ListUserTenants(ctx context.Context, userID string) ([]doma
 	}
 	return tenants, nil
 }
+
+// ListAllTenants returns every non-deleted tenant ordered default-first, for
+// platform-admin tenant enumeration. Operates on the public schema only.
+func (r *TenantRepo) ListAllTenants(ctx context.Context) ([]domain.UserTenantInfo, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT id, name, is_default FROM public.tenants
+		 WHERE deleted_at IS NULL
+		 ORDER BY is_default DESC, created_at ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("tenant_repo: list all tenants: %w", err)
+	}
+	defer rows.Close()
+
+	var tenants []domain.UserTenantInfo
+	for rows.Next() {
+		var t domain.UserTenantInfo
+		if err := rows.Scan(&t.TenantID, &t.Name, &t.IsDefault); err != nil {
+			return nil, fmt.Errorf("tenant_repo: scan all tenant: %w", err)
+		}
+		tenants = append(tenants, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tenant_repo: iterate all tenants: %w", err)
+	}
+	return tenants, nil
+}

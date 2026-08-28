@@ -32,6 +32,7 @@ type fakeTenantRepo struct {
 	tenantName     string
 	tenantSettings []byte
 	roleFilter     []string
+	allTenants     []domain.UserTenantInfo
 }
 
 type fakeInvitationRepo struct {
@@ -112,6 +113,10 @@ func (f *fakeTenantRepo) UpdateTenantSettings(_ context.Context, _ string, b []b
 
 func (f *fakeTenantRepo) ListUserTenants(_ context.Context, _ string) ([]domain.UserTenantInfo, error) {
 	return nil, nil
+}
+
+func (f *fakeTenantRepo) ListAllTenants(_ context.Context) ([]domain.UserTenantInfo, error) {
+	return f.allTenants, nil
 }
 
 func injectTenant(tenantID string) gin.HandlerFunc {
