@@ -20,6 +20,11 @@ export const scheduledTaskSchema = z.object({
   createdBy: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  // 展示用引用实体名称（默认展示 name，原始 id 可 hover 悬浮）：引用实体
+  // 已删除或未解析时后端缺省，前端回退展示原始 id。
+  workflowName: z.string().optional(),
+  versionNo: z.number().int().nonnegative().optional(),
+  versionName: z.string().optional(),
 }).strict();
 export type ScheduledTask = z.infer<typeof scheduledTaskSchema>;
 

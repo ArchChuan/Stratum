@@ -1,5 +1,5 @@
 import { Form, Select, message } from 'antd';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { z } from 'zod';
 
 import { SCHEDULED_TASK_WORKFLOW_SELECT_SIZE } from '@/constants';
@@ -54,13 +54,20 @@ export function WorkflowVersionSelect() {
     }
   }, []);
 
-  const handleWorkflowChange = useCallback((nextWorkflowId: string) => {
+  const handleWorkflowChange = useCallback(() => {
     form.setFieldValue('versionId', undefined);
-    setVersions([]);
-    if (nextWorkflowId) {
-      void loadVersions(nextWorkflowId);
+  }, [form]);
+
+  // 版本列表由 workflowId 驱动加载：既覆盖用户切换工作流，也覆盖编辑模式
+  // setFieldsValue 预填 workflowId（不触发 Select onChange，否则版本下拉无选项）。
+  useEffect(() => {
+    if (workflowId) {
+      setVersions([]);
+      void loadVersions(workflowId);
+    } else {
+      setVersions([]);
     }
-  }, [form, loadVersions]);
+  }, [workflowId, loadVersions]);
 
   return (
     <>

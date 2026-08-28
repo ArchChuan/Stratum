@@ -50,6 +50,13 @@ message ScheduledTaskResponse {
   string createdBy = 12;
   google.protobuf.Timestamp createdAt = 13;
   google.protobuf.Timestamp updatedAt = 14;
+  // 展示用引用实体名称（默认展示 name，原始 id 可 hover 悬浮）：
+  // @omitempty
+  string workflowName = 15;
+  // @omitempty
+  int64 versionNo = 16;
+  // @omitempty
+  string versionName = 17;
 }
 
 message ScheduledTaskPageResponse {

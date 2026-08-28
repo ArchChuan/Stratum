@@ -140,6 +140,9 @@ func ToScheduledTaskResponse(t scheddomain.ScheduledTask) ScheduledTaskResponse 
 		CreatedBy:        t.CreatedBy,
 		CreatedAt:        t.CreatedAt,
 		UpdatedAt:        t.UpdatedAt,
+		WorkflowName:     t.WorkflowName,
+		VersionNo:        t.VersionNo,
+		VersionName:      t.VersionName,
 	}
 }
 
