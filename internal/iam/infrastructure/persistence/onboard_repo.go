@@ -323,6 +323,21 @@ func (r *OnboardRepo) IsMember(ctx context.Context, userID, tenantID string) (bo
 	return count > 0, nil
 }
 
+// TenantIsActive reports whether the tenant is live (exists, not deleted,
+// status 'active'). Used to gate platform-admin cross-tenant switch-ins,
+// where membership does not apply.
+func (r *OnboardRepo) TenantIsActive(ctx context.Context, tenantID string) (bool, error) {
+	var active bool
+	if err := r.db.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM public.tenants
+		 WHERE id = $1 AND deleted_at IS NULL AND status = 'active')`,
+		tenantID,
+	).Scan(&active); err != nil {
+		return false, fmt.Errorf("onboard_repo: tenant is active: %w", err)
+	}
+	return active, nil
+}
+
 // CreateGuestSandboxTenant inserts a synthetic guest user and provisions a
 // dedicated per-guest sandbox tenant (guest as owner, status 'provisioning') in
 // one tx. The guest is deliberately never a member of the default tenant: all
