@@ -197,3 +197,67 @@ func TestPgModelUpdatePlatformAuditFailureNoRow(t *testing.T) {
 		t.Fatalf("audit rows for missing model = %d, want 0 (failed tx must leave no evidence)", n)
 	}
 }
+
+// TestPgModelCreatePlatformAuditRow 断言手动添加模型的完整落库：public.models
+// 新行（provider_managed=false、manual_unknown 来源、默认值）+ 同事务平台审计
+// create 行 + actor_tenant_id 投影。
+func TestPgModelCreatePlatformAuditRow(t *testing.T) {
+	pool := platformAuditTestSetup(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO public.providers (id, name, kind, base_url, api_key) VALUES ('p-c','acme','openai','https://api.example.com','sk-test')`); err != nil {
+		t.Fatalf("seed provider: %v", err)
+	}
+
+	repo := NewPgModelRepo(pool)
+	if err := repo.CreatePlatform(ctx, &domain.Model{
+		ID: "m-manual", ProviderID: "p-c", Name: "gpt-x",
+		Capabilities:          []domain.ModelCapability{domain.CapChat},
+		ContextWindow:         128000,
+		MaxTokens:             4096,
+		Enabled:               true,
+		ProviderManaged:       false,
+		ContextWindowSource:   domain.CapabilitySourceManualUnknown,
+		MaxTokensSource:       domain.CapabilitySourceManualUnknown,
+	}, "tenant-9", &auditdomain.ResourceChangeAuditEvent{
+		ResourceKind: auditdomain.ResourceKindModel,
+		ResourceID:   "m-manual",
+		Operation:    auditdomain.ChangeOpCreate,
+		ActorID:      "admin-1",
+	}); err != nil {
+		t.Fatalf("CreatePlatform: %v", err)
+	}
+
+	var (
+		providerID, name, ctxSource, tokSource string
+		enabled, managed                       bool
+	)
+	err := pool.QueryRow(ctx,
+		`SELECT provider_id, name, enabled, provider_managed, context_window_source, max_tokens_source
+		 FROM public.models WHERE id='m-manual'`,
+	).Scan(&providerID, &name, &enabled, &managed, &ctxSource, &tokSource)
+	if err != nil {
+		t.Fatalf("read model row: %v", err)
+	}
+	if providerID != "p-c" || name != "gpt-x" || !enabled || managed {
+		t.Fatalf("model row = (%s,%s,enabled=%v,managed=%v), want (p-c,gpt-x,true,false)", providerID, name, enabled, managed)
+	}
+	if ctxSource != string(domain.CapabilitySourceManualUnknown) || tokSource != string(domain.CapabilitySourceManualUnknown) {
+		t.Fatalf("sources = (%s,%s), want manual_unknown/manual_unknown", ctxSource, tokSource)
+	}
+
+	var operation, actorTenant string
+	err = pool.QueryRow(ctx,
+		`SELECT operation, COALESCE(actor_tenant_id,'') FROM public.platform_resource_change_audits
+		 WHERE resource_kind=$1 AND resource_id=$2`,
+		auditdomain.ResourceKindModel, "m-manual",
+	).Scan(&operation, &actorTenant)
+	if err != nil {
+		t.Fatalf("read audit row: %v", err)
+	}
+	if operation != auditdomain.ChangeOpCreate || actorTenant != "tenant-9" {
+		t.Fatalf("audit row = (%s,tenant=%s), want (create,tenant-9)", operation, actorTenant)
+	}
+}

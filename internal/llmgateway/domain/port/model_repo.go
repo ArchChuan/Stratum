@@ -34,4 +34,5 @@ type ModelRepository interface {
 // must use it for public model mutations and platform audit.
 type PlatformModelRepository interface {
 	UpdatePlatform(ctx context.Context, m *domain.Model, actorTenantID string, audit *auditdomain.ResourceChangeAuditEvent) error
+	CreatePlatform(ctx context.Context, m *domain.Model, actorTenantID string, audit *auditdomain.ResourceChangeAuditEvent) error
 }

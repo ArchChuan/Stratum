@@ -34,6 +34,11 @@ var ErrModelNotFound = errors.New("model not found")
 // must map to 4xx, never 5xx.
 var ErrInvalidFallbackCandidates = errors.New("invalid fallback candidates")
 
+// ErrInvalidModelInput indicates the manual model create input is invalid
+// (empty name or no capabilities). It is a client-input mistake and must map
+// to 4xx, never 5xx.
+var ErrInvalidModelInput = errors.New("invalid model input")
+
 // SamplingParams 是模型级默认采样参数；nil 表示未配置（回退 provider 层）。
 // 0=unset 语义与 agent 侧一致：请求未显式设置时注入。
 type SamplingParams struct {

@@ -188,6 +188,7 @@ var errorStatusTable = map[error]int{
 	knowledgedomain.ErrEmbeddingModelRequired:     http.StatusBadRequest,
 	llmgatewaydomain.ErrModelNotEmbeddingEnabled:  http.StatusBadRequest,
 	llmgatewaydomain.ErrInvalidFallbackCandidates: http.StatusBadRequest,
+	llmgatewaydomain.ErrInvalidModelInput:         http.StatusBadRequest,
 	llmgatewaydomain.ErrSamplingOutOfRange:        http.StatusBadRequest,
 	llmgatewaydomain.ErrCapabilityUnsupported:     http.StatusBadRequest,
 	knowledgedomain.ErrInvalidQueryMode:           http.StatusBadRequest,

@@ -698,6 +698,7 @@ func registerLLMAdmin(r *gin.Engine, c *wiring.Container, requireActive gin.Hand
 	models := r.Group("/admin/models", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	{
 		models.GET("", modelMgmtH.List)
+		models.POST("", adminMW, modelMgmtH.Create)
 		models.GET("/:id", modelMgmtH.Get)
 		models.PUT("/:id", adminMW, modelMgmtH.Update)
 		models.PATCH("/:id/policy", adminMW, requireActive, modelMgmtH.UpdatePolicy)
