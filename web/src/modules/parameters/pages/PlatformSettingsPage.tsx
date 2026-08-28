@@ -22,6 +22,23 @@ const EXCLUDED_KEYS = new Set(['memory.long_term_top_k', 'agent.bindings']);
 const renderable = (def: ParameterDefinition): boolean =>
   !def.sensitive && !EXCLUDED_KEYS.has(def.key);
 
+// buildPatch 从表单值构造平台参数 patch：跳过未设置(null/undefined)、embedding_model
+// 显式清空提交空串、模型 key 等于定义默认时跳过（由 llmgateway 从目录解析默认）。
+const buildPatch = (defs: ParameterDefinition[], formValues: PlatformSettingsFormValues): PlatformValues => {
+  const patch: PlatformValues = {};
+  for (const def of defs) {
+    const v = formValues[def.key];
+    if (v === undefined || v === null) continue;
+    if (def.visual_hint.control === 'embedding_model') {
+      patch[def.key] = v === undefined || v === null ? '' : v;
+      continue;
+    }
+    if (def.visual_hint.control === 'model' && v === def.default) continue;
+    patch[def.key] = v;
+  }
+  return patch;
+};
+
 // 平台参数按领域分 tab 配置:标签映射中文,未知领域回退原始 category。
 const CATEGORY_LABELS: Record<string, string> = {
   agent: 'Agent',
@@ -91,6 +108,7 @@ const PlatformTabPanel = ({
   groupKey,
   refreshTick,
   onEffectiveChange,
+  onDraftSaved,
 }: {
   category: string;
   defs: ParameterDefinition[];
@@ -98,6 +116,8 @@ const PlatformTabPanel = ({
   groupKey: string | null;
   refreshTick: number;
   onEffectiveChange: (values: PlatformValues) => void;
+  // 有版本分组保存草稿后回调：父级递增 versionTick 触发版本历史重拉。
+  onDraftSaved?: () => void;
 }) => {
   const [form] = Form.useForm<PlatformSettingsFormValues>();
   const [saving, setSaving] = useState(false);
@@ -116,22 +136,16 @@ const PlatformTabPanel = ({
   const onFinish = useCallback(
     async (formValues: PlatformSettingsFormValues) => {
       setSaving(true);
-      const patch: PlatformValues = {};
-      for (const def of defs) {
-        const v = formValues[def.key];
-        if (v === undefined || v === null) continue;
-        // embedding_model 允许显式清空（undefined/空串 → 提交空串）：
-        // 回退"未配置"即 fail-closed + 告警；缺失时写空串与未设置语义一致。
-        if (def.visual_hint.control === 'embedding_model') {
-          patch[def.key] = v === undefined || v === null ? '' : v;
-          continue;
-        }
-        // 模型 key 等于定义默认时跳过提交：空模型由 llmgateway 从模型目录
-        // 解析默认（DB 留空），避免把未修改的默认模型名重复写库。
-        if (def.visual_hint.control === 'model' && v === def.default) continue;
-        patch[def.key] = v;
-      }
+      const patch = buildPatch(defs, formValues);
       try {
+        if (groupKey) {
+          // 有版本分组 → 保存草稿（未生效），发布在版本历史中操作。
+          await parametersApi.createDraft(groupKey, patch, '草稿保存');
+          message.success({ content: '草稿已保存（未生效）', duration: 2 });
+          onDraftSaved?.();
+          return;
+        }
+        // 无版本分组（mcp/rag）→ 立即生效。
         const effective = await parametersApi.update(patch);
         // update 返回发布后生效快照（0/unset 已裁剪），回填表单与版本历史，
         // 让"表单所见 = 版本历史最新 = 运行生效"三处一致。
@@ -147,7 +161,7 @@ const PlatformTabPanel = ({
         setSaving(false);
       }
     },
-    [category, defs, onEffectiveChange],
+    [category, defs, groupKey, onEffectiveChange, onDraftSaved],
   );
 
   // key→display_name 映射，版本 diff 展开行用中文名而非裸 key。
@@ -169,7 +183,7 @@ const PlatformTabPanel = ({
         </Row>
         <Form.Item style={{ marginBottom: 0, marginTop: 16 }}>
           <Button type="primary" htmlType="submit" loading={saving}>
-            保存{categoryLabel(category)}参数
+            {groupKey ? '保存草稿' : `保存${categoryLabel(category)}参数`}
           </Button>
         </Form.Item>
       </Form>
@@ -196,6 +210,12 @@ export const PlatformSettingsPage = () => {
 
   const handleEffectiveChange = useCallback((category: string, vals: PlatformValues) => {
     setGroupEffective((prev) => ({ ...prev, [category]: vals }));
+    setVersionTick((t) => t + 1);
+  }, []);
+
+  // 草稿保存只影响版本历史（draft 行出现「发布」），不改变生效值：仅递增
+  // versionTick 触发各分组版本历史重拉。
+  const handleDraftSaved = useCallback(() => {
     setVersionTick((t) => t + 1);
   }, []);
 
@@ -250,11 +270,12 @@ export const PlatformSettingsPage = () => {
             groupKey={groupKey}
             refreshTick={versionTick}
             onEffectiveChange={(vals) => handleEffectiveChange(category, vals)}
+            onDraftSaved={handleDraftSaved}
           />
         ),
       };
     });
-  }, [defs, values, groupEffective, versionTick, handleEffectiveChange]);
+  }, [defs, values, groupEffective, versionTick, handleEffectiveChange, handleDraftSaved]);
 
   // 加载期间只渲染明确加载态，避免"标题+卡片骨架+保存按钮"的半成品展示页
   // （数据就绪后一次性渲染可编辑配置页）。置于全部 hooks 之后，保持 hook 顺序稳定。
