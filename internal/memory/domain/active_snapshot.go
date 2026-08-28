@@ -21,17 +21,21 @@ type SnapshotSource struct {
 }
 
 type ActiveSnapshot struct {
-	TenantID        string
-	UserID          string
-	AgentID         string
-	WorkContext     []string
-	PersonalContext []string
-	TopOfMind       []string
-	Source          SnapshotSource
-	ExpiresAt       time.Time
-	UpdatedAt       time.Time
-	Version         int64
-	Status          SnapshotStatus
+	TenantID string
+	UserID   string
+	AgentID  string
+	// AgentName / ConversationName 仅管理页展示用（#24：ListUser JOIN
+	// agents + 最近会话取名），不属于持久化状态，Upsert/Validate 不涉及。
+	AgentName        string
+	ConversationName string
+	WorkContext      []string
+	PersonalContext  []string
+	TopOfMind        []string
+	Source           SnapshotSource
+	ExpiresAt        time.Time
+	UpdatedAt        time.Time
+	Version          int64
+	Status           SnapshotStatus
 }
 
 func (s *ActiveSnapshot) Validate() error {

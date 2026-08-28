@@ -55,12 +55,14 @@ export const memoryStatsSchema = z
 export type MemoryStats = z.infer<typeof memoryStatsSchema>;
 
 // 用户记忆实体（轻量话题标签，对齐 dto.MemoryEntityResponse）。
+// #29：scope 标注 user 级与 Agent 私有实体来源。
 export const memoryEntitySchema = z.object({
   id: z.string(),
   name: z.string(),
   entity_type: z.string(),
   fact_count: z.number(),
   last_seen_at: z.string(),
+  scope: z.string(),
 });
 export type MemoryEntity = z.infer<typeof memoryEntitySchema>;
 
@@ -85,6 +87,7 @@ export const updateMemoryFactResponseSchema = z.object({
 export type UpdateMemoryFactResponse = z.infer<typeof updateMemoryFactResponseSchema>;
 
 // 用户记忆摘要（对齐 dto.MemorySummaryResponse）。
+// #29：scope 标注 user 级与 Agent 私有摘要来源。
 export const memorySummarySchema = z.object({
   id: z.string(),
   summary: z.string(),
@@ -93,6 +96,7 @@ export const memorySummarySchema = z.object({
   conversation_id: z.string(),
   period_end: z.string(),
   created_at: z.string(),
+  scope: z.string(),
 });
 export type MemorySummary = z.infer<typeof memorySummarySchema>;
 export const memorySummaryListPageSchema = z.object({
@@ -102,8 +106,12 @@ export const memorySummaryListPageSchema = z.object({
 export type MemorySummaryListPage = z.infer<typeof memorySummaryListPageSchema>;
 
 // 用户记忆快照（对齐 dto.MemorySnapshotResponse）。
+// #24：agent_name/conversation_name 由后端 JOIN 取回，供管理页标题展示；
+// 缺失时为空串，前端回落 agent_id。
 export const memorySnapshotSchema = z.object({
   agent_id: z.string(),
+  agent_name: z.string(),
+  conversation_name: z.string(),
   work_context: z.array(z.string()),
   personal_context: z.array(z.string()),
   top_of_mind: z.array(z.string()),
