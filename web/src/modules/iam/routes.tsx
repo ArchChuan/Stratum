@@ -1,5 +1,7 @@
 import { Route } from 'react-router-dom';
 
+import { PlatformAuditPage } from '../audit/pages/PlatformAuditPage';
+
 import { PrivateRoute } from './components/PrivateRoute';
 import { ProfilePage } from './pages/ProfilePage';
 import { AdminsPage } from './pages/admin/AdminsPage';
@@ -61,6 +63,15 @@ export const iamPrivateRoutes = [
     element={
       <PrivateRoute requiredRole="global_admin">
         <AdminsPage />
+      </PrivateRoute>
+    }
+  />,
+  <Route
+    key="admin-audit"
+    path="/admin/audit"
+    element={
+      <PrivateRoute requiredRole="system_admin">
+        <PlatformAuditPage />
       </PrivateRoute>
     }
   />,
