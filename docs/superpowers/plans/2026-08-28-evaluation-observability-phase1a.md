@@ -537,7 +537,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 - Modify: `internal/agent/infrastructure/opik/mapper.go`（`mapEvidence` 填充）
 - Modify: `internal/evaluation/domain/port/evaluation.go`（`ObservedTrace` 加 `Input`/`Output` 字段）
 - Modify: `api/wiring/evaluation.go`（`mapEvaluationEvidence` 映射）
-- Test: `internal/agent/infrastructure/opik/mapper_test.go`（追加用例）
+- Test: `internal/agent/infrastructure/opik/client_test.go`（追加用例；mapper 无独立测试文件，现有 mapEvidence 测试在 client_test.go:184）
 
 **Interfaces:**
 
@@ -548,7 +548,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 - [ ] **Step 1: 写失败测试（mapper 填充 Input/Output）**
 
-在 `internal/agent/infrastructure/opik/mapper_test.go` 追加（先读该文件了解现有 `opikTrace` 构造方式，沿用其构造）：
+在 `internal/agent/infrastructure/opik/client_test.go` 追加（现有 `TestMapEvidenceAcceptsStructuredOpikMetadata` 在 :184，构造方式 `mapEvidence(opikTrace{...}, nil)`；本用例直接构造 `opikTrace{ID, Input, Output}`，`Input/Output any` 字段已存在于 dto.go，无需改动 dto）：
 
 ```go
 func TestMapEvidenceCarriesInputOutput(t *testing.T) {
@@ -628,7 +628,7 @@ func textOf(v any) string {
 ```go
  return evalport.ObservedTrace{
   TraceID: evidence.TraceID, UserID: evidence.UserID, CostUSD: evidence.CostUSD, LatencyMs: evidence.LatencyMs,
-  Input: evidence.Input, Output: evidence.Output, TotalTokens: evidence.TotalTokens,
+  Input: evidence.Input, Output: evidence.Output, TotalTokens: int64(evidence.TotalTokens), // TraceEvidence.TotalTokens(int) → ObservedTrace.TotalTokens(int64)
   Success: evidence.Status == agentdomain.ExecStatusSuccess, SecurityViolation: evidence.SecurityViolation,
   Assignments: assignments,
  }
@@ -647,7 +647,7 @@ Expected: 编译成功。
 
 ```bash
 git add internal/agent/domain/evidence.go internal/agent/infrastructure/opik/mapper.go \
-        internal/agent/infrastructure/opik/mapper_test.go \
+        internal/agent/infrastructure/opik/client_test.go \
         internal/evaluation/domain/port/evaluation.go api/wiring/evaluation.go
 git commit -m "feat(evaluation): 证据链携带 input/output 供 judge 打分
 
