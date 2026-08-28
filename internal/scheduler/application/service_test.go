@@ -137,6 +137,8 @@ type fakeResolver struct {
 	versionErr   error
 	validateErr  error
 	definitionID string
+	names        map[string]port.VersionName
+	namesErr     error
 }
 
 func (f *fakeResolver) GetVersion(_ context.Context, _, _ string) (*port.VersionInfo, error) {
@@ -147,6 +149,18 @@ func (f *fakeResolver) GetVersion(_ context.Context, _, _ string) (*port.Version
 }
 func (f *fakeResolver) ValidateInput(_ context.Context, _, _ string, _ map[string]any) error {
 	return f.validateErr
+}
+func (f *fakeResolver) ResolveVersionNames(_ context.Context, _ string, versionIDs []string) (map[string]port.VersionName, error) {
+	if f.namesErr != nil {
+		return nil, f.namesErr
+	}
+	out := make(map[string]port.VersionName, len(versionIDs))
+	for _, id := range versionIDs {
+		if name, ok := f.names[id]; ok {
+			out[id] = name
+		}
+	}
+	return out, nil
 }
 
 func newTestService(repo *fakeRepo, runner *fakeRunner, resolver *fakeResolver, nowFn func() time.Time) *Service {
@@ -380,6 +394,44 @@ func TestServiceListClampsPagination(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, constants.DefaultPageSize, repo.listLimit)
 	require.Equal(t, 0, repo.listOffset)
+}
+
+func TestServiceListFillsReferenceNames(t *testing.T) {
+	t.Run("fills workflow and version display names from the resolver", func(t *testing.T) {
+		repo := &fakeRepo{tasks: map[string]*domain.ScheduledTask{"task-1": dueTask("task-1", fixedNow)}, listTotal: 1}
+		resolver := &fakeResolver{names: map[string]port.VersionName{
+			"ver-1": {WorkflowName: "日报生成", VersionNo: 2, VersionName: "稳定版"},
+		}}
+		svc := newTestService(repo, &fakeRunner{}, resolver, func() time.Time { return fixedNow })
+
+		got, total, err := svc.List(context.Background(), testTenant, 1, 20)
+		require.NoError(t, err)
+		require.Equal(t, 1, total)
+		require.Len(t, got, 1)
+		require.Equal(t, "日报生成", got[0].WorkflowName)
+		require.Equal(t, int64(2), got[0].VersionNo)
+		require.Equal(t, "稳定版", got[0].VersionName)
+	})
+
+	t.Run("keeps raw ids for deleted versions without failing the list", func(t *testing.T) {
+		repo := &fakeRepo{tasks: map[string]*domain.ScheduledTask{"task-1": dueTask("task-1", fixedNow)}, listTotal: 1}
+		svc := newTestService(repo, &fakeRunner{}, &fakeResolver{names: map[string]port.VersionName{}}, func() time.Time { return fixedNow })
+
+		got, _, err := svc.List(context.Background(), testTenant, 1, 20)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		require.Empty(t, got[0].WorkflowName)
+		require.Empty(t, got[0].VersionName)
+	})
+
+	t.Run("propagates resolver errors", func(t *testing.T) {
+		repo := &fakeRepo{tasks: map[string]*domain.ScheduledTask{"task-1": dueTask("task-1", fixedNow)}, listTotal: 1}
+		resolver := &fakeResolver{namesErr: errors.New("version lookup failed")}
+		svc := newTestService(repo, &fakeRunner{}, resolver, func() time.Time { return fixedNow })
+
+		_, _, err := svc.List(context.Background(), testTenant, 1, 20)
+		require.ErrorContains(t, err, "version lookup failed")
+	})
 }
 
 func TestServicePollTenantFailureClassification(t *testing.T) {

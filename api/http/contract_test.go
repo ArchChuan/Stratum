@@ -728,6 +728,9 @@ func (contractSchedResolver) GetVersion(context.Context, string, string) (*sched
 func (contractSchedResolver) ValidateInput(context.Context, string, string, map[string]any) error {
 	return nil
 }
+func (contractSchedResolver) ResolveVersionNames(context.Context, string, []string) (map[string]schedport.VersionName, error) {
+	return nil, nil
+}
 
 func mustGeneratePEM(t *testing.T) string {
 	t.Helper()

@@ -33,6 +33,12 @@ type ScheduledTask struct {
 	CreatedBy        string         `json:"created_by"`
 	CreatedAt        time.Time      `json:"created_at"`
 	UpdatedAt        time.Time      `json:"updated_at"`
+	// 展示用引用实体名称（默认展示 name，原始 id 可 hover 悬浮）：
+	// WorkflowName/VersionNo/VersionName 由 application 层在列表/详情时解析填充，
+	// 不在 NewScheduledTask 中校验；版本被删除时保持零值，调用方回退展示原始 ID。
+	WorkflowName string `json:"workflow_name,omitempty"`
+	VersionNo    int64  `json:"version_no,omitempty"`
+	VersionName  string `json:"version_name,omitempty"`
 }
 
 // NewScheduledTask validates the business invariants and constructs a task.
