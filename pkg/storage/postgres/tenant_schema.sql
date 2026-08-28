@@ -779,11 +779,15 @@ CREATE TABLE IF NOT EXISTS chat_conversations (
     agent_id   TEXT        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     user_id    TEXT        NOT NULL,
     name       TEXT        NOT NULL DEFAULT '新会话',
+    -- source 标记会话来源（manual/workflow 等）：workflow 自动会话在列表隐藏，
+    -- 避免污染执行人会话列表；存量行默认 manual 归属正常会话。
+    source     TEXT        NOT NULL DEFAULT 'manual',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '30 days',
     deleted_at TIMESTAMPTZ
 );
+ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';
 CREATE INDEX IF NOT EXISTS idx_chat_conv_agent_user
     ON chat_conversations (agent_id, user_id, expires_at DESC);
 

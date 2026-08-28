@@ -114,6 +114,9 @@ type ExecRequest struct {
 	UserID         string
 	MaxSteps       int
 	Timeout        time.Duration
+	// ConversationSource 标记自动会话的来源（manual/workflow 等）。空值按 manual
+	// 处理；workflow 自动会话带 source 标记，会话列表过滤隐藏，避免污染执行人列表。
+	ConversationSource string
 }
 
 // ExecMeta carries per-call routing metadata sourced from middleware
@@ -154,12 +157,15 @@ type ExecutionRowDTO struct {
 // nil here. Callers receive (*AgentResult, durationMs, error) so the
 // transport can render Duration uniformly.
 
-func (s *AgentService) ensureConversation(ctx context.Context, tenantID, agentID, userID string, req *ExecRequest) {
+func (s *AgentService) ensureConversation(ctx context.Context, tenantID, agentID, userID, source string, req *ExecRequest) {
 	if req.ConversationID != "" || s.deps.ChatStore == nil {
 		return
 	}
+	if source == "" {
+		source = "manual"
+	}
 	createCtx, createCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
-	conv, err := s.deps.ChatStore.CreateConversation(createCtx, tenantID, agentID, userID, "新会话")
+	conv, err := s.deps.ChatStore.CreateConversation(createCtx, tenantID, agentID, userID, "新会话", source)
 	createCancel()
 	if err != nil {
 		s.deps.Logger.Warn("agent: auto-create conversation failed", zap.Error(err))
@@ -371,7 +377,7 @@ func (s *AgentService) prepareAgentExecution(
 	if !ok {
 		return nil, req, meta, nil, nil, nil, false, false, nil, ErrNotFound
 	}
-	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
+	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, req.ConversationSource, &req)
 	s.ensureInitialCheckpoint(ctx, meta, req, agentID, executionID)
 	preparationStart := time.Now()
 	recordExecutionPreparation(ctx, a, req, meta, executionID)

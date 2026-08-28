@@ -280,7 +280,7 @@ type stubChatRepo struct {
 	calls *int
 }
 
-func (s stubChatRepo) CreateConversation(context.Context, string, string, string, string) (*domain.ChatConversation, error) {
+func (s stubChatRepo) CreateConversation(context.Context, string, string, string, string, string) (*domain.ChatConversation, error) {
 	return nil, nil
 }
 func (s stubChatRepo) GetConversation(context.Context, string, string) (*domain.ChatConversation, error) {

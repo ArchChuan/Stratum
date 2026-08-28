@@ -151,11 +151,16 @@ type ToolApprovalRepo interface {
 	UpdateAssignee(ctx context.Context, tenantID, id, assignee string) error
 	// CascadeByConversation 事务内将关联审批 pending→cancelled、approved→voided（原因 conversation_deleted）。
 	CascadeByConversation(ctx context.Context, tenantID, conversationID string) error
+	// ListByExecution 返回指定 execution_id 的全部审批行（含终态）。workflow 恢复
+	// 判定用：存在未过期 pending 即视为仍未决，全部终态/过期才可续跑。
+	ListByExecution(ctx context.Context, tenantID, executionID string) ([]domain.ToolApproval, error)
 }
 
 // ChatRepo persists chat conversations and messages in the tenant schema.
 type ChatRepo interface {
-	CreateConversation(ctx context.Context, tenantID, agentID, userID, name string) (*domain.ChatConversation, error)
+	// CreateConversation 创建会话；source 标记会话来源（manual/workflow 等），
+	// 空值按 manual 处理。workflow 自动会话带 source 标记供列表过滤隐藏。
+	CreateConversation(ctx context.Context, tenantID, agentID, userID, name, source string) (*domain.ChatConversation, error)
 	GetConversation(ctx context.Context, tenantID, convID string) (*domain.ChatConversation, error)
 	ListConversations(ctx context.Context, tenantID, agentID, userID string) ([]*domain.ChatConversation, error)
 	RenameConversation(ctx context.Context, tenantID, convID, userID, name string) error

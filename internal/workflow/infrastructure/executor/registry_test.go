@@ -10,20 +10,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type agentFake struct{ agentID, input string }
+type agentFake struct {
+	agentID, userID, executionID, input string
+	err                                 error
+}
 
 func (f *agentFake) ExecuteAgent(
 	_ context.Context,
-	_, agentID, input string,
+	_, agentID, userID, executionID, input string,
 	_ func(string) error,
 ) (string, string, []port.NodeToolStep, error) {
-	f.agentID, f.input = agentID, input
+	f.agentID, f.userID, f.executionID, f.input = agentID, userID, executionID, input
+	if f.err != nil {
+		return "", "trace-agent", nil, f.err
+	}
 	return "agent-output", "trace-agent", nil, nil
 }
 
 type skillFake struct{ agentID, skillID, revisionID string }
 
-func (f *skillFake) ExecuteSkill(_ context.Context, _, agentID, skillID, revisionID, _ string) (string, string, error) {
+func (f *skillFake) ExecuteSkill(_ context.Context, _, agentID, _, skillID, revisionID, _ string) (string, string, error) {
 	f.agentID, f.skillID, f.revisionID = agentID, skillID, revisionID
 	return "skill-output", "trace-skill", nil
 }
@@ -40,6 +46,39 @@ func (f *mcpFake) ToolRisk(context.Context, string, string, string) (ToolRisk, e
 func (f *mcpFake) CallTool(context.Context, string, string, string, map[string]any) (any, error) {
 	f.called = true
 	return map[string]any{"ok": true}, f.err
+}
+
+func TestRegistryAgentApprovalPendingPausesNode(t *testing.T) {
+	registry := NewRegistry(&agentFake{err: port.ErrAgentApprovalPending}, &skillFake{}, &mcpFake{})
+	result, err := registry.Execute(context.Background(), port.NodeExecutionRequest{
+		Node:        domain.Node{ID: "a1", Type: domain.NodeTypeAgent, AgentID: "agent-1"},
+		TenantID:    "t1",
+		UserID:      "user-42",
+		ExecutionID: "wf:r1:a1",
+		Input:       "query",
+	})
+	require.NoError(t, err)
+	require.True(t, result.Paused, "agent 审批待决应暂停节点而非失败")
+	require.Equal(t, "agent_approval_required", result.ErrorCode)
+}
+
+func TestRegistryAgentForwardsUserAndExecutionID(t *testing.T) {
+	agent := &agentFake{}
+	registry := NewRegistry(agent, &skillFake{}, &mcpFake{})
+	result, err := registry.Execute(context.Background(), port.NodeExecutionRequest{
+		Node:        domain.Node{ID: "a1", Type: domain.NodeTypeAgent, AgentID: "agent-1"},
+		TenantID:    "t1",
+		UserID:      "user-42",
+		ExecutionID: "wf:r1:a1",
+		Input:       "query",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "agent-output", result.Output)
+	require.Equal(t, "agent-1", agent.agentID)
+	// 执行人身份与确定性 executionID 透传到 agent 运行时。
+	require.Equal(t, "user-42", agent.userID)
+	require.Equal(t, "wf:r1:a1", agent.executionID)
+	require.Equal(t, "query", agent.input)
 }
 
 func TestRegistryClassifiesMCPRetryByEffectClass(t *testing.T) {

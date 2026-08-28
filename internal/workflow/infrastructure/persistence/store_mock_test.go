@@ -592,13 +592,13 @@ func TestPgStore_ListRuns_success(t *testing.T) {
 	mock.ExpectQuery("COUNT\\(\\*\\) FROM workflow_runs").
 		WithArgs("", "", domain.RunStatus("")).
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
-	mock.ExpectQuery("FROM workflow_runs WHERE").
+	mock.ExpectQuery("FROM workflow_runs LEFT JOIN workflow_versions").
 		WithArgs("", "", domain.RunStatus(""), 10, 0).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "definition_id", "version_id", "version_no", "status", "created_by",
+			"id", "definition_id", "name", "version_id", "version_no", "status", "created_by",
 			"created_at", "updated_at", "started_at", "finished_at",
 		}).AddRow(
-			"r1", "d1", "v1", int64(2), domain.RunStatus("queued"), "user:1",
+			"r1", "d1", "my-workflow", "v1", int64(2), domain.RunStatus("queued"), "user:1",
 			time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 			time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), nil, nil,
 		))
@@ -609,6 +609,7 @@ func TestPgStore_ListRuns_success(t *testing.T) {
 	require.Equal(t, 1, total)
 	require.Len(t, runs, 1)
 	require.Equal(t, "r1", runs[0].ID)
+	require.Equal(t, "my-workflow", runs[0].Name)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -621,10 +622,10 @@ func TestPgStore_ListRuns_filterArgs(t *testing.T) {
 	mock.ExpectQuery("COUNT\\(\\*\\) FROM workflow_runs").
 		WithArgs("u1", "d1", domain.RunStatus("running")).
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(0))
-	mock.ExpectQuery("FROM workflow_runs WHERE").
+	mock.ExpectQuery("FROM workflow_runs LEFT JOIN workflow_versions").
 		WithArgs("u1", "d1", domain.RunStatus("running"), 5, 2).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "definition_id", "version_id", "version_no", "status", "created_by",
+			"id", "definition_id", "name", "version_id", "version_no", "status", "created_by",
 			"created_at", "updated_at", "started_at", "finished_at",
 		}))
 	mock.ExpectCommit()

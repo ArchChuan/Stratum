@@ -500,7 +500,7 @@ func TestSystemAssistantProposalInProcessToolUsesRealMemberPermissions(t *testin
 		Logger:               zap.NewNop(),
 	})
 
-	conversation, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, adminID, "真实权限提案")
+	conversation, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, adminID, "真实权限提案", "manual")
 	require.NoError(t, err)
 	result, _, err := service.Execute(ctx, domain.SystemAssistantID, agentapp.ExecRequest{
 		Query: "创建受治理的 Agent 提案", ConversationID: conversation.ID, UserID: adminID, MaxSteps: 5,
@@ -544,7 +544,7 @@ func TestSystemAssistantProposalInProcessToolUsesRealMemberPermissions(t *testin
 		ProposalService:      proposalService,
 		Logger:               zap.NewNop(),
 	})
-	memberConversation, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, memberID, "member 提案")
+	memberConversation, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, memberID, "member 提案", "manual")
 	require.NoError(t, err)
 	memberResult, _, err := memberService.Execute(ctx, domain.SystemAssistantID, agentapp.ExecRequest{
 		Query: "创建提案", ConversationID: memberConversation.ID, UserID: memberID, MaxSteps: 5,

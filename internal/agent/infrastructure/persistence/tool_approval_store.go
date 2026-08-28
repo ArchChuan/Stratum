@@ -205,6 +205,34 @@ func (s *PgToolApprovalStore) ListActionable(ctx context.Context, tenantID, user
 	return out, err
 }
 
+// ListByExecution 返回指定 execution_id 的全部审批行（含终态，不依赖过期）。
+// workflow 恢复判定用：workflow 不关心审批内容，只判断该 execution 是否存在
+// 未过期 pending（存在即仍未决，等待下一轮 reconcile）。
+func (s *PgToolApprovalStore) ListByExecution(ctx context.Context, tenantID, executionID string) ([]domain.ToolApproval, error) {
+	out := []domain.ToolApproval{}
+	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT id,execution_id,trace_id,agent_id,user_id,tool_call_id,server_id,tool_name,risk_level,
+			 subject_kind,assigned_approver,conversation_id,status,created_at,expires_at FROM agent_tool_approvals
+			 WHERE execution_id=$1 ORDER BY created_at`, executionID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var a domain.ToolApproval
+			if err := rows.Scan(&a.ID, &a.ExecutionID, &a.TraceID, &a.AgentID, &a.UserID, &a.ToolCallID,
+				&a.ServerID, &a.ToolName, &a.RiskLevel, &a.SubjectKind, &a.AssignedApprover,
+				&a.ConversationID, &a.Status, &a.CreatedAt, &a.ExpiresAt); err != nil {
+				return err
+			}
+			out = append(out, a)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
 func (s *PgToolApprovalStore) InvalidateStaleForTool(ctx context.Context, tenantID, executionID, serverID, toolName string) (int64, error) {
 	var n int64
 	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
