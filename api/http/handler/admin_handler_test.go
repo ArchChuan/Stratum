@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
+	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
 	iamdomain "github.com/byteBuilderX/stratum/internal/iam/domain"
 )
@@ -23,9 +24,9 @@ type fakeAdminRepo struct {
 	countFn       func(context.Context, iamdomain.TenantFilter) (int, error)
 	listFn        func(context.Context, iamdomain.TenantFilter) ([]iamdomain.Tenant, error)
 	getFn         func(context.Context, string) (*iamdomain.Tenant, error)
-	createFn      func(context.Context, iamdomain.Tenant) error
-	updateFn      func(context.Context, string, iamdomain.TenantPatch) error
-	deleteFn      func(context.Context, string) error
+	createFn      func(context.Context, iamdomain.Tenant, string, *auditdomain.ResourceChangeAuditEvent) error
+	updateFn      func(context.Context, string, iamdomain.TenantPatch, string, *auditdomain.ResourceChangeAuditEvent) error
+	deleteFn      func(context.Context, string, string, *auditdomain.ResourceChangeAuditEvent) error
 	provisionFn   func(context.Context, string) error
 	provisionCall int
 }
@@ -42,16 +43,16 @@ func (f *fakeAdminRepo) Get(ctx context.Context, id string) (*iamdomain.Tenant, 
 	return f.getFn(ctx, id)
 }
 
-func (f *fakeAdminRepo) Create(ctx context.Context, t iamdomain.Tenant) error {
-	return f.createFn(ctx, t)
+func (f *fakeAdminRepo) Create(ctx context.Context, t iamdomain.Tenant, at string, a *auditdomain.ResourceChangeAuditEvent) error {
+	return f.createFn(ctx, t, at, a)
 }
 
-func (f *fakeAdminRepo) UpdatePatch(ctx context.Context, id string, patch iamdomain.TenantPatch) error {
-	return f.updateFn(ctx, id, patch)
+func (f *fakeAdminRepo) UpdatePatch(ctx context.Context, id string, patch iamdomain.TenantPatch, at string, a *auditdomain.ResourceChangeAuditEvent) error {
+	return f.updateFn(ctx, id, patch, at, a)
 }
 
-func (f *fakeAdminRepo) HardDelete(ctx context.Context, id string) error {
-	return f.deleteFn(ctx, id)
+func (f *fakeAdminRepo) HardDelete(ctx context.Context, id, at string, a *auditdomain.ResourceChangeAuditEvent) error {
+	return f.deleteFn(ctx, id, at, a)
 }
 
 func (f *fakeAdminRepo) ProvisionSchema(ctx context.Context, tenantID string) error {
@@ -107,7 +108,9 @@ func TestListTenants_noFilter(t *testing.T) {
 
 func TestCreateTenant_success(t *testing.T) {
 	repo := &fakeAdminRepo{
-		createFn: func(_ context.Context, _ iamdomain.Tenant) error { return nil },
+		createFn: func(_ context.Context, _ iamdomain.Tenant, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+			return nil
+		},
 	}
 	r := setupAdminRouter(newTestAdminHandler(repo))
 
@@ -128,7 +131,11 @@ func TestCreateTenant_success(t *testing.T) {
 func TestDeleteTenant_softDelete(t *testing.T) {
 	called := ""
 	repo := &fakeAdminRepo{
-		deleteFn: func(_ context.Context, id string) error { called = id; return nil },
+		getFn: func(_ context.Context, id string) (*iamdomain.Tenant, error) { return &iamdomain.Tenant{ID: id}, nil },
+		deleteFn: func(_ context.Context, id, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+			called = id
+			return nil
+		},
 	}
 	r := setupAdminRouter(newTestAdminHandler(repo))
 
@@ -146,7 +153,7 @@ func TestDeleteTenant_softDelete(t *testing.T) {
 
 func TestDeleteTenant_notFound(t *testing.T) {
 	repo := &fakeAdminRepo{
-		deleteFn: func(_ context.Context, _ string) error { return iamdomain.ErrTenantNotFound },
+		getFn: func(_ context.Context, _ string) (*iamdomain.Tenant, error) { return nil, iamdomain.ErrTenantNotFound },
 	}
 	r := setupAdminRouter(newTestAdminHandler(repo))
 

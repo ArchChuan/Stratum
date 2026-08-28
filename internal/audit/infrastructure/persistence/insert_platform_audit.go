@@ -1,4 +1,4 @@
-package infrastructure
+package persistence
 
 import (
 	"context"
@@ -10,9 +10,12 @@ import (
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 )
 
-// insertPlatformAuditTx writes a public-catalog audit row in the same
-// transaction as the public provider/model mutation.
-func insertPlatformAuditTx(
+// InsertPlatformAuditTx writes a public-catalog audit row in the same
+// transaction as the public provider/model/tenant mutation. It is the shared
+// execution scaffold for platform_resource_change_audits: llmgateway and iam
+// both call it so the INSERT column contract stays in lockstep with
+// PlatformChangeAuditInsertSQL (asserted by change_audit_insert_test.go).
+func InsertPlatformAuditTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	actorTenantID string,

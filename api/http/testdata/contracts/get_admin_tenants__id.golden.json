@@ -3,9 +3,16 @@
     "name": "authenticated-success",
     "method": "GET",
     "path": "/admin/tenants/contract-id",
-    "want_status": 500,
+    "want_status": 200,
     "want_body": {
-      "error": "internal server error"
+      "id": "contract-id",
+      "name": "contract-tenant",
+      "slug": "contract-tenant",
+      "plan": "free",
+      "status": "active",
+      "member_count": 0,
+      "created_at": "0001-01-01T00:00:00Z",
+      "is_default": false
     }
   }
 ]

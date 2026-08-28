@@ -95,50 +95,62 @@ func TestAdminUserRepo_ListAdmins_Fails(t *testing.T) {
 
 func TestAdminUserRepo_SetAdminRole(t *testing.T) {
 	repo, mock := newAdminUserRepo(t)
+	mock.ExpectBegin()
 	mock.ExpectExec(`SET global_role = 'system_admin'`).
 		WithArgs("u1").WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
 
-	require.NoError(t, repo.SetAdminRole(context.Background(), "u1"))
+	require.NoError(t, repo.SetAdminRole(context.Background(), "u1", "", nil))
 }
 
 func TestAdminUserRepo_SetAdminRole_NotFound(t *testing.T) {
 	repo, mock := newAdminUserRepo(t)
+	mock.ExpectBegin()
 	mock.ExpectExec(`SET global_role = 'system_admin'`).
 		WithArgs("u1").WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectRollback()
 
-	require.ErrorIs(t, repo.SetAdminRole(context.Background(), "u1"), domain.ErrUserNotFound)
+	require.ErrorIs(t, repo.SetAdminRole(context.Background(), "u1", "", nil), domain.ErrUserNotFound)
 }
 
 func TestAdminUserRepo_SetAdminRole_Fails(t *testing.T) {
 	repo, mock := newAdminUserRepo(t)
+	mock.ExpectBegin()
 	mock.ExpectExec(`SET global_role = 'system_admin'`).
 		WithArgs("u1").WillReturnError(errAny)
+	mock.ExpectRollback()
 
-	require.ErrorIs(t, repo.SetAdminRole(context.Background(), "u1"), errAny)
+	require.ErrorIs(t, repo.SetAdminRole(context.Background(), "u1", "", nil), errAny)
 }
 
 func TestAdminUserRepo_RemoveAdminRole(t *testing.T) {
 	repo, mock := newAdminUserRepo(t)
+	mock.ExpectBegin()
 	mock.ExpectExec(`SET global_role = 'user'`).
 		WithArgs("u1").WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
 
-	require.NoError(t, repo.RemoveAdminRole(context.Background(), "u1"))
+	require.NoError(t, repo.RemoveAdminRole(context.Background(), "u1", "", nil))
 }
 
 func TestAdminUserRepo_RemoveAdminRole_NotFound(t *testing.T) {
 	repo, mock := newAdminUserRepo(t)
+	mock.ExpectBegin()
 	mock.ExpectExec(`SET global_role = 'user'`).
 		WithArgs("u1").WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectRollback()
 
-	require.ErrorIs(t, repo.RemoveAdminRole(context.Background(), "u1"), domain.ErrUserNotFound)
+	require.ErrorIs(t, repo.RemoveAdminRole(context.Background(), "u1", "", nil), domain.ErrUserNotFound)
 }
 
 func TestAdminUserRepo_RemoveAdminRole_Fails(t *testing.T) {
 	repo, mock := newAdminUserRepo(t)
+	mock.ExpectBegin()
 	mock.ExpectExec(`SET global_role = 'user'`).
 		WithArgs("u1").WillReturnError(errAny)
+	mock.ExpectRollback()
 
-	require.ErrorIs(t, repo.RemoveAdminRole(context.Background(), "u1"), errAny)
+	require.ErrorIs(t, repo.RemoveAdminRole(context.Background(), "u1", "", nil), errAny)
 }
 
 func TestAdminUserRepo_GetGlobalRole(t *testing.T) {

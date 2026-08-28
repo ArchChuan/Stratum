@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	auditpersistence "github.com/byteBuilderX/stratum/internal/audit/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/byteBuilderX/stratum/pkg/observability"
@@ -286,11 +287,55 @@ func (r *PgProviderRepo) UpdatePlatform(
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("provider not found: %s", p.ID)
 	}
-	if err := insertPlatformAuditTx(ctx, tx, actorTenantID, audit); err != nil {
+	if err := auditpersistence.InsertPlatformAuditTx(ctx, tx, actorTenantID, audit); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("update platform provider commit: %w", err)
+	}
+	return nil
+}
+
+// CreatePlatform inserts a public provider and writes its platform audit in
+// the same public transaction. actorTenantID is audit attribution only.
+func (r *PgProviderRepo) CreatePlatform(
+	ctx context.Context,
+	p *domain.Provider,
+	actorTenantID string,
+	audit *auditdomain.ResourceChangeAuditEvent,
+) error {
+	apiKey, err := crypto.EncryptSecret(r.key, p.APIKey)
+	if err != nil {
+		return fmt.Errorf("create platform provider: encrypt api key: %w", err)
+	}
+	extra, err := encodeStringMap(p.ExtraHeaders)
+	if err != nil {
+		return fmt.Errorf("create platform provider: %w", err)
+	}
+	sampling, err := encodeJSONMap(p.DefaultSampling)
+	if err != nil {
+		return fmt.Errorf("create platform provider: %w", err)
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("create platform provider begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO public.providers (id, name, kind, base_url, api_key, default_model, enabled,
+		 extra_headers, default_sampling)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		 RETURNING created_at, updated_at`,
+		p.ID, p.Name, string(p.Kind), p.BaseURL, apiKey, p.DefaultModel, p.Enabled,
+		extra, sampling,
+	).Scan(&p.CreatedAt, &p.UpdatedAt); err != nil {
+		return fmt.Errorf("create platform provider: %w", err)
+	}
+	if err := auditpersistence.InsertPlatformAuditTx(ctx, tx, actorTenantID, audit); err != nil {
+		return fmt.Errorf("create platform provider audit: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("create platform provider commit: %w", err)
 	}
 	return nil
 }

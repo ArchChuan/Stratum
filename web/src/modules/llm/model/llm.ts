@@ -59,6 +59,16 @@ export interface UpdateProviderInput {
   defaultModel: string;
 }
 
+export interface CreateModelInput {
+  providerId: string;
+  name: string;
+  capabilities: ModelCapability[];
+  /** 0 表示未设置，回退到厂商默认值。 */
+  contextWindow: number;
+  /** 0 表示未设置，回退到厂商默认值。 */
+  maxTokens: number;
+}
+
 export interface UpdateModelInput {
   displayName: string;
   capabilities: ModelCapability[];

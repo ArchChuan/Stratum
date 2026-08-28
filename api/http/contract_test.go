@@ -408,8 +408,12 @@ func (contractAdminUserRepo) SearchUsers(_ context.Context, _ string, _ int) ([]
 func (contractAdminUserRepo) ListAdmins(_ context.Context) ([]iamport.AdminUser, error) {
 	return nil, nil
 }
-func (contractAdminUserRepo) SetAdminRole(_ context.Context, _ string) error    { return nil }
-func (contractAdminUserRepo) RemoveAdminRole(_ context.Context, _ string) error { return nil }
+func (contractAdminUserRepo) SetAdminRole(_ context.Context, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
+func (contractAdminUserRepo) RemoveAdminRole(_ context.Context, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (contractAdminUserRepo) GetGlobalRole(_ context.Context, userID string) (iamdomain.GlobalRole, error) {
 	if userID == "contract-user" {
 		return iamdomain.GlobalRoleUser, nil
@@ -426,13 +430,18 @@ func (contractAdminTenantRepo) List(_ context.Context, _ iamdomain.TenantFilter)
 	return nil, nil
 }
 func (contractAdminTenantRepo) Get(_ context.Context, _ string) (*iamdomain.Tenant, error) {
-	return nil, errStubNotFound
+	// 返回有效租户：GetTenant 详情与 DeleteTenant 审计投影都依赖 Get 成功。
+	return &iamdomain.Tenant{ID: "contract-id", Name: "contract-tenant", Slug: "contract-tenant", Plan: "free", Status: "active"}, nil
 }
-func (contractAdminTenantRepo) Create(_ context.Context, _ iamdomain.Tenant) error { return nil }
-func (contractAdminTenantRepo) UpdatePatch(_ context.Context, _ string, _ iamdomain.TenantPatch) error {
+func (contractAdminTenantRepo) Create(_ context.Context, _ iamdomain.Tenant, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (contractAdminTenantRepo) HardDelete(_ context.Context, _ string) error { return nil }
+func (contractAdminTenantRepo) UpdatePatch(_ context.Context, _ string, _ iamdomain.TenantPatch, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
+func (contractAdminTenantRepo) HardDelete(_ context.Context, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (contractAdminTenantRepo) ProvisionSchema(_ context.Context, _ string) error {
 	return nil
 }

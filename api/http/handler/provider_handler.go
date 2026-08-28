@@ -41,12 +41,13 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
+	actorID, _ := userIDFromCtx(c)
 	var input llmapp.CreateProviderInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	provider, err := h.svc.Create(c.Request.Context(), tenantID, input)
+	provider, err := h.svc.Create(c.Request.Context(), tenantID, actorID, input)
 	if err != nil {
 		_ = c.Error(err)
 		return

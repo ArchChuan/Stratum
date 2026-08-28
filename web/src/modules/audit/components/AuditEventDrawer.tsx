@@ -10,6 +10,8 @@ interface AuditEventDrawerProps {
   loading: boolean;
   open: boolean;
   onClose: () => void;
+  // 平台审计页传入平台资源类型选项；默认租户级选项保持原行为。
+  resourceKindOptions?: Array<{ value: string; label: string }>;
 }
 
 const formatJSON = (value: unknown): string => JSON.stringify(value, null, 2);
@@ -38,7 +40,13 @@ const DiffBlock = ({ title, value }: { title: string; value?: unknown }) => {
   );
 };
 
-export const AuditEventDrawer = ({ event, loading, open, onClose }: AuditEventDrawerProps) => {
+export const AuditEventDrawer = ({
+  event,
+  loading,
+  open,
+  onClose,
+  resourceKindOptions = RESOURCE_KIND_OPTIONS,
+}: AuditEventDrawerProps) => {
   return (
     <Drawer title="审计详情" open={open} width={640} onClose={onClose}>
       <Spin spinning={loading}>
@@ -53,7 +61,7 @@ export const AuditEventDrawer = ({ event, loading, open, onClose }: AuditEventDr
                 </Typography.Text>
               </Descriptions.Item>
               <Descriptions.Item label="资源类型">
-                {RESOURCE_KIND_OPTIONS.find((o) => o.value === event.resource_kind)?.label || event.resource_kind}
+                {resourceKindOptions.find((o) => o.value === event.resource_kind)?.label || event.resource_kind}
               </Descriptions.Item>
               <Descriptions.Item label="资源 ID">{event.resource_id}</Descriptions.Item>
               <Descriptions.Item label="操作">

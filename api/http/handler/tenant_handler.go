@@ -295,7 +295,7 @@ func (h *TenantHandler) DeleteSelf(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("admin service unavailable")))
 		return
 	}
-	if err := h.adminSvc.DeleteTenant(c.Request.Context(), tenantID); err != nil {
+	if err := h.adminSvc.DeleteTenant(c.Request.Context(), c.GetString(middleware.ContextKeySub), tenantID); err != nil {
 		_ = c.Error(err)
 		return
 	}

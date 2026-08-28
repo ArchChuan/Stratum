@@ -80,6 +80,27 @@ func (h *ModelMgmtHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, m)
 }
 
+// Create POST /admin/models — manually adds a model to a provider's catalog.
+func (h *ModelMgmtHandler) Create(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	actorID, _ := userIDFromCtx(c)
+	var input llmapp.CreateModelInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	m, err := h.svc.Create(c.Request.Context(), actorID, tenantID, input)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusCreated, m)
+}
+
 // UpdatePolicy PATCH /admin/models/:id/policy updates runtime policy fields.
 func (h *ModelMgmtHandler) UpdatePolicy(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)

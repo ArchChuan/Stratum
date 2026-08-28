@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
@@ -51,6 +53,7 @@ type modelMgmtRepo struct {
 	err     error
 	listErr error
 	updated *domain.Model
+	created *domain.Model
 }
 
 func (r *modelMgmtRepo) Create(context.Context, *domain.Model) error { return r.err }
@@ -82,6 +85,14 @@ func (r *modelMgmtRepo) Delete(context.Context, string) error       { return r.e
 func (r *modelMgmtRepo) Toggle(context.Context, string, bool) error { return r.err }
 func (r *modelMgmtRepo) UpdatePolicy(_ context.Context, m *domain.Model, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	r.updated = m
+	return r.err
+}
+func (r *modelMgmtRepo) UpdatePlatform(_ context.Context, m *domain.Model, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	r.updated = m
+	return r.err
+}
+func (r *modelMgmtRepo) CreatePlatform(_ context.Context, m *domain.Model, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	r.created = m
 	return r.err
 }
 
@@ -234,6 +245,91 @@ func TestModelMgmtServiceUpdatePolicyFallbackCandidates(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "list chat models") {
 			t.Fatalf("error %q does not mention catalog query", err.Error())
+		}
+	})
+}
+
+// providerRepoStub 实现 port.ProviderRepository 的只读面（Create 校验只用 Get）。
+type providerRepoStub struct {
+	provider *domain.Provider
+	err      error
+}
+
+func (p *providerRepoStub) Create(context.Context, *domain.Provider) error { return nil }
+func (p *providerRepoStub) Get(_ context.Context, _ string) (*domain.Provider, error) {
+	if p.err != nil {
+		return nil, p.err
+	}
+	if p.provider == nil {
+		return nil, nil
+	}
+	return p.provider, nil
+}
+func (p *providerRepoStub) GetMeta(context.Context, string) (*domain.Provider, error) {
+	return nil, nil
+}
+func (p *providerRepoStub) List(context.Context) ([]domain.Provider, error) {
+	return nil, nil
+}
+func (p *providerRepoStub) Update(context.Context, *domain.Provider, string, *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
+func (p *providerRepoStub) Delete(context.Context, string) error { return nil }
+
+func TestModelMgmtService_Create(t *testing.T) {
+	t.Run("rejects empty name", func(t *testing.T) {
+		svc := NewModelMgmtService(&modelMgmtRepo{}).WithProviderRepo(&providerRepoStub{})
+		_, err := svc.Create(context.Background(), "actor", "t1", CreateModelInput{
+			ProviderID: "p-1", Capabilities: []domain.ModelCapability{domain.CapChat},
+		})
+		require.ErrorIs(t, err, domain.ErrInvalidModelInput)
+	})
+
+	t.Run("rejects no capabilities", func(t *testing.T) {
+		svc := NewModelMgmtService(&modelMgmtRepo{}).WithProviderRepo(&providerRepoStub{})
+		_, err := svc.Create(context.Background(), "actor", "t1", CreateModelInput{
+			ProviderID: "p-1", Name: "gpt-x",
+		})
+		require.ErrorIs(t, err, domain.ErrInvalidModelInput)
+	})
+
+	t.Run("rejects missing providerId", func(t *testing.T) {
+		svc := NewModelMgmtService(&modelMgmtRepo{}).WithProviderRepo(&providerRepoStub{})
+		_, err := svc.Create(context.Background(), "actor", "t1", CreateModelInput{
+			Name: "gpt-x", Capabilities: []domain.ModelCapability{domain.CapChat},
+		})
+		require.ErrorIs(t, err, domain.ErrInvalidModelInput)
+	})
+
+	t.Run("propagates provider lookup failure", func(t *testing.T) {
+		svc := NewModelMgmtService(&modelMgmtRepo{}).WithProviderRepo(&providerRepoStub{
+			err: errors.New("get provider: failed"),
+		})
+		_, err := svc.Create(context.Background(), "actor", "t1", CreateModelInput{
+			ProviderID: "ghost", Name: "gpt-x", Capabilities: []domain.ModelCapability{domain.CapChat},
+		})
+		if !strings.Contains(err.Error(), "provider") {
+			t.Fatalf("error %q does not mention provider", err.Error())
+		}
+	})
+
+	t.Run("inserts manual model with defaults and audit", func(t *testing.T) {
+		repo := &modelMgmtRepo{}
+		invalidated := false
+		svc := NewModelMgmtService(repo, invalidatorFunc(func() { invalidated = true })).
+			WithProviderRepo(&providerRepoStub{provider: &domain.Provider{ID: "p-1"}})
+		m, err := svc.Create(context.Background(), "actor", "t1", CreateModelInput{
+			ProviderID: "p-1", Name: "gpt-x", Capabilities: []domain.ModelCapability{domain.CapChat, domain.CapReasoning},
+			ContextWindow: 128000, MaxTokens: 4096,
+		})
+		require.NoError(t, err)
+		require.Equal(t, "gpt-x", m.Name)
+		require.False(t, m.ProviderManaged)
+		require.True(t, m.Enabled)
+		require.Equal(t, domain.CapabilitySourceManualUnknown, m.ContextWindowSource)
+		require.Equal(t, 128000, m.ContextWindow)
+		if !invalidated {
+			t.Fatal("expected registry invalidation")
 		}
 	})
 }
