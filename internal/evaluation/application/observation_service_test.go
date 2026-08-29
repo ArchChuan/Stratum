@@ -97,6 +97,41 @@ func (s *stubTierReader) GetTenantTier(ctx context.Context, tenantID string) (st
 	return s.tier, nil
 }
 
+// coverageCall 记录一次 eval_sample_coverage 写入。
+type coverageCall struct {
+	resource string
+	ratio    float64
+}
+
+// stubMetrics 记录 P1b 判异/覆盖率指标调用（嵌入 NoopMetrics 满足 MetricsProvider 全接口）。
+type stubMetrics struct {
+	observability.NoopMetrics
+	sampleCoverages []coverageCall // RecordEvalSampleCoverage 调用序列
+	behaviorSignals []string       // IncEvalBehaviorAnomaly 调用（"resource/signal"）
+	gateActions     []string       // IncEvalGateAction 调用（"layer/action"）
+}
+
+func (m *stubMetrics) RecordEvalSampleCoverage(resource string, ratio float64) {
+	m.sampleCoverages = append(m.sampleCoverages, coverageCall{resource: resource, ratio: ratio})
+}
+
+func (m *stubMetrics) IncEvalBehaviorAnomaly(resource, signal string) {
+	m.behaviorSignals = append(m.behaviorSignals, resource+"/"+signal)
+}
+
+func (m *stubMetrics) IncEvalGateAction(layer, action string) {
+	m.gateActions = append(m.gateActions, layer+"/"+action)
+}
+
+func contains(xs []string, want string) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
+}
+
 func newTestObservationService(repo *stubObservationRepo, reader *stubEvidenceReader, judge *stubJudge) *ObservationService {
 	return NewObservationService(ObservationServiceDeps{
 		Enabled:    func(context.Context) bool { return true },
@@ -345,5 +380,137 @@ func TestObservationServiceApplyBehaviorSignalsNilRepoNoop(t *testing.T) {
 	if err := svc.ApplyBehaviorSignals(context.Background(), "t1", "trace-1",
 		domain.BehaviorSignals{Abandonment: true}); err != nil {
 		t.Fatalf("nil repo must noop: %v", err)
+	}
+}
+
+func TestObservationServiceAnomalyVerdict(t *testing.T) {
+	t.Run("rule hit verdict block", func(t *testing.T) {
+		repo := &stubObservationRepo{}
+		reader := &stubEvidenceReader{trace: port.ObservedTrace{
+			TraceID: "trace-rule", Input: "q", Output: "a",
+		}}
+		judge := &stubJudge{enabled: true, result: domain.AssertionResult{Passed: true}}
+		metrics := &stubMetrics{}
+		svc := NewObservationService(ObservationServiceDeps{
+			Enabled:    func(context.Context) bool { return true },
+			SampleRate: func(context.Context) float64 { return 1.0 },
+			Evidence:   reader, Judge: judge, Repo: repo,
+			Metrics: metrics, Logger: zap.NewNop(),
+		})
+		evt := domain.ObservationReferenceEvent{
+			TenantID: "t1", TraceID: "trace-rule", ResourceKind: "agent", ResourceID: "agent-1",
+			RuleSignals: []domain.RuleSignalPayload{{
+				Rule: "tool_denylist", Message: `tool "x" blocked by platform rule`,
+			}},
+		}
+		if err := svc.Process(context.Background(), evt); err != nil {
+			t.Fatalf("Process: %v", err)
+		}
+		if len(repo.saved) != 1 {
+			t.Fatalf("saved %d, want 1", len(repo.saved))
+		}
+		saved := repo.saved[0]
+		if saved.Verdict != domain.VerdictBlock {
+			t.Fatalf("verdict = %s, want block", saved.Verdict)
+		}
+		if len(saved.Signals.Rule) != 1 || saved.Signals.Rule[0].Rule != "tool_denylist" {
+			t.Fatalf("rule signals = %+v, want [tool_denylist]", saved.Signals.Rule)
+		}
+		if !contains(metrics.behaviorSignals, "agent/rule_block") {
+			t.Fatalf("behavior anomaly metrics = %v, want agent/rule_block", metrics.behaviorSignals)
+		}
+		if !contains(metrics.gateActions, "detect/block") {
+			t.Fatalf("gate action metrics = %v, want detect/block", metrics.gateActions)
+		}
+	})
+
+	t.Run("behavior abandonment verdict flag", func(t *testing.T) {
+		repo := &stubObservationRepo{}
+		reader := &stubEvidenceReader{trace: port.ObservedTrace{
+			TraceID: "trace-abandon", Input: "q", Output: "a",
+		}}
+		judge := &stubJudge{enabled: true, result: domain.AssertionResult{Passed: true}}
+		metrics := &stubMetrics{}
+		svc := NewObservationService(ObservationServiceDeps{
+			Enabled:    func(context.Context) bool { return true },
+			SampleRate: func(context.Context) float64 { return 1.0 },
+			Evidence:   reader, Judge: judge, Repo: repo,
+			Metrics: metrics, Logger: zap.NewNop(),
+		})
+		evt := domain.ObservationReferenceEvent{
+			TenantID: "t1", TraceID: "trace-abandon", ResourceKind: "agent", ResourceID: "agent-1",
+			Behavior: &domain.BehaviorSignalPayload{Abandonment: true},
+		}
+		if err := svc.Process(context.Background(), evt); err != nil {
+			t.Fatalf("Process: %v", err)
+		}
+		if len(repo.saved) != 1 {
+			t.Fatalf("saved %d, want 1", len(repo.saved))
+		}
+		saved := repo.saved[0]
+		if saved.Verdict != domain.VerdictFlag {
+			t.Fatalf("verdict = %s, want flag", saved.Verdict)
+		}
+		if !saved.Signals.Behavior.Abandonment {
+			t.Fatal("behavior abandonment not persisted in observation")
+		}
+		if !contains(metrics.behaviorSignals, "agent/behavior_abandonment") {
+			t.Fatalf("behavior anomaly metrics = %v, want agent/behavior_abandonment", metrics.behaviorSignals)
+		}
+		if !contains(metrics.gateActions, "detect/flag") {
+			t.Fatalf("gate action metrics = %v, want detect/flag", metrics.gateActions)
+		}
+	})
+
+	t.Run("nil behavior event does not panic and passes", func(t *testing.T) {
+		// Behavior==nil（全 false 事件，agent 侧 Go omitempty 语义下不发送行为段）：
+		// behaviorFromEvent 必须安全返回全 false，不得 panic（§14 不阻断执行）。
+		repo := &stubObservationRepo{}
+		reader := &stubEvidenceReader{trace: port.ObservedTrace{
+			TraceID: "trace-nil-behavior", Input: "q", Output: "a",
+		}}
+		judge := &stubJudge{enabled: true, result: domain.AssertionResult{Passed: true}}
+		svc := newTestObservationService(repo, reader, judge)
+		evt := domain.ObservationReferenceEvent{
+			TenantID: "t1", TraceID: "trace-nil-behavior", ResourceKind: "agent", ResourceID: "agent-1",
+		}
+		if err := svc.Process(context.Background(), evt); err != nil {
+			t.Fatalf("Process with nil behavior: %v", err)
+		}
+		if len(repo.saved) != 1 {
+			t.Fatalf("saved %d, want 1", len(repo.saved))
+		}
+		if got := repo.saved[0].Verdict; got != domain.VerdictPass {
+			t.Fatalf("verdict = %s, want pass", got)
+		}
+	})
+}
+
+func TestObservationServiceSampleCoverageRecorded(t *testing.T) {
+	repo := &stubObservationRepo{}
+	reader := &stubEvidenceReader{trace: port.ObservedTrace{
+		TraceID: "trace-cov", Input: "q", Output: "a",
+	}}
+	judge := &stubJudge{enabled: true, result: domain.AssertionResult{Passed: true}}
+	metrics := &stubMetrics{}
+	svc := NewObservationService(ObservationServiceDeps{
+		Enabled:    func(context.Context) bool { return true },
+		SampleRate: func(context.Context) float64 { return 1.0 },
+		Evidence:   reader, Judge: judge, Repo: repo,
+		Metrics: metrics, Logger: zap.NewNop(),
+	})
+	evt := domain.ObservationReferenceEvent{
+		TenantID: "t1", TraceID: "trace-cov", ResourceKind: "agent", ResourceID: "agent-1",
+	}
+	if err := svc.Process(context.Background(), evt); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	// 到达刷新 ratio=0/1=0.0；落库后刷新 ratio=1/1=1.0。最终 Gauge 值应为 1.0。
+	if len(metrics.sampleCoverages) == 0 {
+		t.Fatal("RecordEvalSampleCoverage not called")
+	}
+	last := metrics.sampleCoverages[len(metrics.sampleCoverages)-1]
+	if last.resource != "agent" || last.ratio != 1.0 {
+		t.Fatalf("last sample coverage = %+v, want agent/1.0", last)
 	}
 }

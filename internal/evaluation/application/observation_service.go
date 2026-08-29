@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
@@ -31,13 +32,21 @@ type ObservationServiceDeps struct {
 
 type ObservationService struct {
 	deps ObservationServiceDeps
+
+	mu      sync.Mutex
+	arrival map[string]int64 // resource -> 观测事件到达数
+	sampled map[string]int64 // resource -> 采样通过数
 }
 
 func NewObservationService(deps ObservationServiceDeps) *ObservationService {
 	if deps.Logger == nil {
 		deps.Logger = zap.NewNop()
 	}
-	return &ObservationService{deps: deps}
+	return &ObservationService{
+		deps:    deps,
+		arrival: make(map[string]int64),
+		sampled: make(map[string]int64),
+	}
 }
 
 // 编译期断言：ObservationService 满足 port.BehaviorSignalWriter。
@@ -51,6 +60,7 @@ func (s *ObservationService) Process(ctx context.Context, evt domain.Observation
 	if !s.deps.Enabled(ctx) {
 		return nil
 	}
+	s.recordArrival(evt.ResourceKind)
 	if !sampleDecision(s.deps.SampleRate(ctx), evt.ResourceKind, evt.TraceID) {
 		return nil
 	}
@@ -65,6 +75,7 @@ func (s *ObservationService) Process(ctx context.Context, evt domain.Observation
 		return fmt.Errorf("observation resolve evidence: %w", err)
 	}
 	obs := s.buildObservation(ctx, evt, trace)
+	s.applyAnomalyVerdict(string(obs.Resource.Kind), &obs)
 	if err := s.applyJudge(ctx, trace, &obs); err != nil {
 		// judge 不可用：§14 采样降级跳过——不落零信号的伪 pass 观察、不重投
 		// （避免 judge 持续不可用时的重投空转），仅指标计数 + warn 日志。
@@ -87,8 +98,36 @@ func (s *ObservationService) Process(ctx context.Context, evt domain.Observation
 		s.deps.Metrics.IncEvalJudgeFailure("save_failed")
 		return nil
 	}
+	s.recordSampled(evt.ResourceKind)
 	s.deps.Metrics.IncEvalObservation(evt.ResourceKind, string(obs.Verdict))
 	return nil
+}
+
+// recordArrival 累计某资源的观测事件到达并刷新采样覆盖率（分母）。
+// 锁内只做读改写和 flush，锁外不做 map 访问（并发安全）。
+func (s *ObservationService) recordArrival(resource string) {
+	s.mu.Lock()
+	s.arrival[resource]++
+	s.flushCoverageLocked(resource)
+	s.mu.Unlock()
+}
+
+// recordSampled 累计某资源的采样通过数并刷新覆盖率（分子）。
+func (s *ObservationService) recordSampled(resource string) {
+	s.mu.Lock()
+	s.sampled[resource]++
+	s.flushCoverageLocked(resource)
+	s.mu.Unlock()
+}
+
+// flushCoverageLocked 按当前累计值写 eval_sample_coverage Gauge（ratio = 采样/到达）。
+func (s *ObservationService) flushCoverageLocked(resource string) {
+	arrival := s.arrival[resource]
+	if arrival == 0 {
+		return
+	}
+	ratio := float64(s.sampled[resource]) / float64(arrival)
+	s.deps.Metrics.RecordEvalSampleCoverage(resource, ratio)
 }
 
 // buildObservation 组装 EvalObservation（不含 judge 信号，由 applyJudge 填充）。
@@ -104,7 +143,7 @@ func (s *ObservationService) buildObservation(ctx context.Context, evt domain.Ob
 		}
 	}
 	// TODO(P2)：平台层版本锚点随配置版本机制绑定后回填；当前未知。
-	return domain.EvalObservation{
+	obs := domain.EvalObservation{
 		ID:       uuid.NewString(),
 		TraceID:  evt.TraceID,
 		Resource: evt.ResourceRef(),
@@ -121,6 +160,33 @@ func (s *ObservationService) buildObservation(ctx context.Context, evt domain.Ob
 		Stratum:   s.resolveStratum(ctx, evt.TenantID),
 		Verdict:   domain.VerdictPass,
 		CreatedAt: time.Now().UTC(),
+	}
+	// P1b：事件携带的规则命中 / 行为信号写入观测（§4.2 判异触发信号来源）。
+	obs.Signals.Rule = ruleSignalsFromEvent(evt)
+	obs.Signals.Behavior = behaviorFromEvent(evt)
+	return obs
+}
+
+// ruleSignalsFromEvent 事件携带的规则命中信号转观测信号。
+func ruleSignalsFromEvent(evt domain.ObservationReferenceEvent) []domain.RuleSignal {
+	out := make([]domain.RuleSignal, 0, len(evt.RuleSignals))
+	for _, r := range evt.RuleSignals {
+		// RuleSignal 与 RuleSignalPayload 字段与 tag 完全同构，直接转换（staticcheck S1016）。
+		out = append(out, domain.RuleSignal(r))
+	}
+	return out
+}
+
+// behaviorFromEvent 事件携带的行为信号转观测信号；事件未携带行为段（nil）时
+// 返回全 false，绝不 panic（§14 不阻断执行）。
+func behaviorFromEvent(evt domain.ObservationReferenceEvent) domain.BehaviorSignals {
+	if evt.Behavior == nil {
+		return domain.BehaviorSignals{}
+	}
+	return domain.BehaviorSignals{
+		Retry:       evt.Behavior.Retry,
+		Escalation:  evt.Behavior.Escalation,
+		Abandonment: evt.Behavior.Abandonment,
 	}
 }
 
@@ -179,6 +245,34 @@ func (s *ObservationService) applyJudge(ctx context.Context, trace port.Observed
 		obs.Verdict = domain.VerdictFlag
 	}
 	return nil
+}
+
+// applyAnomalyVerdict 判异识别（§4.2 判异触发）：规则命中 → block；行为异常或
+// judge 跌阈 → flag；否则 pass。仅信号级结论，非权威判定（§4.3）。
+// 不返回 error、不 panic——判异失败不得阻断 Process（§14 精神）。
+func (s *ObservationService) applyAnomalyVerdict(resource string, obs *domain.EvalObservation) {
+	if len(obs.Signals.Rule) > 0 {
+		obs.Verdict = domain.VerdictBlock
+		s.deps.Metrics.IncEvalBehaviorAnomaly(resource, "rule_block")
+		s.deps.Metrics.IncEvalGateAction("detect", string(domain.VerdictBlock))
+	}
+	// block 优先级最高（T4 红线）：规则命中后，行为/judge 判异只独立计数、不降级 verdict。
+	// 各 signal 维度独立计数（§11.1 eval_behavior_anomaly_total{resource, signal}）。
+	if obs.Verdict != domain.VerdictBlock && obs.Signals.Behavior.Abandonment {
+		obs.Verdict = domain.VerdictFlag
+		s.deps.Metrics.IncEvalBehaviorAnomaly(resource, "behavior_abandonment")
+		s.deps.Metrics.IncEvalGateAction("detect", string(domain.VerdictFlag))
+	}
+	if obs.Verdict != domain.VerdictBlock && obs.Signals.Behavior.Escalation {
+		obs.Verdict = domain.VerdictFlag
+		s.deps.Metrics.IncEvalBehaviorAnomaly(resource, "behavior_escalation")
+		s.deps.Metrics.IncEvalGateAction("detect", string(domain.VerdictFlag))
+	}
+	if obs.Verdict != domain.VerdictBlock && anyJudgeBelow(obs.Signals.Judge, constants.JudgeBelowThreshold) {
+		obs.Verdict = domain.VerdictFlag
+		s.deps.Metrics.IncEvalBehaviorAnomaly(resource, "judge_below_threshold")
+		s.deps.Metrics.IncEvalGateAction("detect", string(domain.VerdictFlag))
+	}
 }
 
 // judgeRubric 构造单维度 judge 提示词（与 judgeAdapter 的 Complete 输出契约
