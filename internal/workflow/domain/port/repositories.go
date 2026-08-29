@@ -17,7 +17,7 @@ var ErrAgentApprovalPending = errors.New("agent approval pending")
 type DefinitionRepository interface {
 	CreateDefinition(context.Context, string, *domain.Definition, *auditdomain.ResourceChangeAuditEvent) error
 	GetDefinition(context.Context, string, string) (*domain.Definition, error)
-	UpdateDefinition(context.Context, string, *domain.Definition, int64, *auditdomain.ResourceChangeAuditEvent) error
+	UpdateDefinition(context.Context, string, *domain.Definition, int64, string, *auditdomain.ResourceChangeAuditEvent) error
 	DeleteDefinition(context.Context, string, string, *auditdomain.ResourceChangeAuditEvent) error
 }
 
@@ -50,7 +50,7 @@ type VersionQueryRepository interface {
 }
 
 type AtomicVersionPublisher interface {
-	CreateNextVersion(context.Context, string, *domain.Definition, string, *auditdomain.ResourceChangeAuditEvent) (*domain.Version, error)
+	CreateNextVersion(context.Context, string, *domain.Definition, string, string, *auditdomain.ResourceChangeAuditEvent) (*domain.Version, error)
 }
 
 type RunRepository interface {

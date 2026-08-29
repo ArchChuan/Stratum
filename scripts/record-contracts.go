@@ -504,7 +504,7 @@ func (contractDefRepo) GetDefinition(_ context.Context, _ string, _ string) (*wo
 		UpdatedAt:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}, nil
 }
-func (contractDefRepo) UpdateDefinition(_ context.Context, _ string, _ *workflowdomain.Definition, _ int64, _ *auditdomain.ResourceChangeAuditEvent) error {
+func (contractDefRepo) UpdateDefinition(_ context.Context, _ string, _ *workflowdomain.Definition, _ int64, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (contractDefRepo) DeleteDefinition(_ context.Context, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {

@@ -49,7 +49,7 @@ func (s *memoryStore) GetDefinition(_ context.Context, _, id string) (*domain.De
 	copy := *row
 	return &copy, nil
 }
-func (s *memoryStore) UpdateDefinition(_ context.Context, _ string, definition *domain.Definition, expected int64, ev *auditdomain.ResourceChangeAuditEvent) error {
+func (s *memoryStore) UpdateDefinition(_ context.Context, _ string, definition *domain.Definition, expected int64, _ string, ev *auditdomain.ResourceChangeAuditEvent) error {
 	if s.definitions[definition.ID].Revision != expected {
 		return domain.ErrRevisionConflict
 	}

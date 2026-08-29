@@ -126,7 +126,7 @@ func (s *DefinitionService) Update(ctx context.Context, tenantID, id string, cmd
 	if err != nil {
 		return nil, err
 	}
-	if err := s.definitions.UpdateDefinition(ctx, tenantID, definition, cmd.ExpectedRevision, ev); err != nil {
+	if err := s.definitions.UpdateDefinition(ctx, tenantID, definition, cmd.ExpectedRevision, "", ev); err != nil {
 		s.recordFailure(ctx, id, "update", err)
 		return nil, err
 	}
@@ -183,7 +183,7 @@ func (s *DefinitionService) Publish(ctx context.Context, tenantID, id string, ac
 		return nil, err
 	}
 	if publisher, ok := s.versions.(port.AtomicVersionPublisher); ok {
-		version, err := publisher.CreateNextVersion(ctx, tenantID, definition, s.newID(), ev)
+		version, err := publisher.CreateNextVersion(ctx, tenantID, definition, s.newID(), "", ev)
 		if err != nil {
 			s.recordFailure(ctx, id, "publish", err)
 			return nil, err
