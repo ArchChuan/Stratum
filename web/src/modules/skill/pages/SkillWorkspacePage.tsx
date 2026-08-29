@@ -80,6 +80,9 @@ export const SkillWorkspacePage = () => {
         expectedContentHash: active.contentHash,
       });
       applyWorkspace(next);
+      // applyWorkspace 会用生效版本回填表单，这里恢复用户刚提交的草稿内容，
+      // 使草稿保存后仍可继续编辑。
+      draftForm.setFieldsValue({ name: values.name, description: values.description, instructions: values.instructions });
       setRefreshTick((t) => t + 1);
       message.success({ content: '已保存草稿，发布后生效', duration: 2 });
     } catch (err) {
@@ -109,6 +112,7 @@ export const SkillWorkspacePage = () => {
       content: '草稿将被删除，表单回填为当前生效版本。',
       okText: '撤销', okButtonProps: { danger: true }, cancelText: '取消',
       onOk: async () => {
+        setSaving('discard');
         try {
           const next = await skillApi.discardDraft(skill.id);
           applyWorkspace(next);
@@ -116,6 +120,8 @@ export const SkillWorkspacePage = () => {
           message.success({ content: '草稿已撤销', duration: 2 });
         } catch (err) {
           message.error({ content: extractErrorMessage(err) || '撤销失败', duration: 3 });
+        } finally {
+          setSaving('');
         }
       },
     });
@@ -220,7 +226,7 @@ export const SkillWorkspacePage = () => {
           }))}
           loading={revisionsLoading}
           rollback={handleRollback}
-          infoMessage="保存即产生新版本并立即生效；历史版本可回滚，回滚不产生新版本。"
+          infoMessage="保存为草稿，发布后生效；历史版本可回滚，回滚不产生新版本。"
         />
       ) },
     ]} />
