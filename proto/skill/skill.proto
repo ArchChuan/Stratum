@@ -32,6 +32,9 @@ message SkillWorkspaceResponse {
   // active is the currently effective revision (empty when a legacy
   // unpublished skill has not yet produced its first version).
   SkillRevisionResponse active = 3;
+  // hasDraft 标记存在未发布草稿(skills.draft_revision_id 非空)。前端据此
+  // 展示草稿提示条并开启发布入口。
+  bool hasDraft = 4;
 }
 
 message SkillProductResponse {
@@ -86,4 +89,20 @@ message RollbackSkillRequest {
 message ErrorResponse {
   int32 code = 1;
   string message = 2;
+}
+
+// SaveSkillDraftRequest 保存或覆盖 skill 的草稿,不立即生效。
+// expectedContentHash 为乐观并发基线,取当前生效版本 content_hash,失配返回 409。
+message SaveSkillDraftRequest {
+  string name = 1;
+  string description = 2;
+  string instructions = 3;
+  // @omitempty
+  string expectedContentHash = 4;
+}
+
+// PublishSkillDraftRequest 将草稿提升为新的生效版本(版本号分配、旧版降级、指针重指)。
+message PublishSkillDraftRequest {
+  // @omitempty
+  string expectedContentHash = 1;
 }
