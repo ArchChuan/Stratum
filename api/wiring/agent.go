@@ -22,6 +22,7 @@ import (
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	memapp "github.com/byteBuilderX/stratum/internal/memory/application"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
+	parametersapp "github.com/byteBuilderX/stratum/internal/parameters/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	versioningpersistence "github.com/byteBuilderX/stratum/internal/versioning/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -298,9 +299,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	})
 	a := &Agent{Registry: registry, EvidenceProvider: evidenceProvider, AgentRepo: repo}
 	if c.Config.TracePayload.Enabled {
-		store := agentobjects.NewStore(
-			c.revisionObjectClient, c.Config.TracePayload.Bucket, c.Platform.AESKey,
-		)
+		store := agentobjects.NewStore(c.revisionObjectClient, c.Config.TracePayload.Bucket, c.Platform.AESKey)
 		a.TracePayloadStore = store
 		a.RevisionObjectStore = c.RevisionObjectStore
 	}
@@ -389,6 +388,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	}
 	wireTokenLedger(registry, &deps, c.platformMetrics(), c.Logger)
 	deps.ParametersProvider = agentParametersProvider(c)
+	deps.RuleGuard = agentRuleGuard(c, deps.Metrics)
 	if c.Memory != nil && c.Memory.Service != nil {
 		deps.MemoryCleaner = c.Memory.Service
 		deps.MemoryBuffer = memoryBufferClosure(c.Memory.Service)
@@ -598,6 +598,45 @@ func memoryBufferClosure(svc *memapp.MemoryService) func(ctx context.Context, te
 			CreatedAt:      time.Now(),
 		})
 	}
+}
+
+// ruleGuardEnabled 读取平台参数 evaluation.ruleguard.enabled。默认关闭（fail open
+// 于规则层：参数服务不可用或未显式开启时护栏静默放行，开启后才是 fail closed）。
+func ruleGuardEnabled(ctx context.Context, params *parametersapp.Service) bool {
+	if params == nil {
+		return false
+	}
+	values, err := params.PlatformValues(ctx)
+	if err != nil {
+		return false
+	}
+	enabled, _ := values["evaluation.ruleguard.enabled"].(bool)
+	return enabled
+}
+
+// ruleGuardDenylist 读取平台参数 evaluation.ruleguard.denylist（逗号分隔工具名）。
+// 读取失败或空值返回空切片：denylist 为空 = 无拦截项，规则层放行。
+func ruleGuardDenylist(ctx context.Context, params *parametersapp.Service) []string {
+	if params == nil {
+		return nil
+	}
+	values, err := params.PlatformValues(ctx)
+	if err != nil {
+		return nil
+	}
+	raw, _ := values["evaluation.ruleguard.denylist"].(string)
+	return strings.Split(raw, ",")
+}
+
+// agentRuleGuard 装配内联规则护栏（§4.1）。Enabled/Denylist 读取平台参数
+// evaluation.ruleguard.*（默认关闭）；Metrics 可 nil（NewRuleGuard 归一为 NoopMetrics）。
+func agentRuleGuard(c *Container, metrics observability.MetricsProvider) *agent.RuleGuard {
+	return agent.NewRuleGuard(agent.RuleGuardDeps{
+		Enabled:  func(ctx context.Context) bool { return ruleGuardEnabled(ctx, c.Parameters.Service) },
+		Denylist: func(ctx context.Context) []string { return ruleGuardDenylist(ctx, c.Parameters.Service) },
+		Metrics:  metrics,
+		Logger:   c.Logger,
+	})
 }
 
 // agentFactCheckSettings 按参数注册表 + gateway 可用性装配幻觉校验依赖（fail-closed：

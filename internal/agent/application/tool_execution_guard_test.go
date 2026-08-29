@@ -10,6 +10,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 
 type countingMCPExecutor struct {
@@ -338,4 +339,53 @@ func authorizedToolExecutionRequest() ToolExecutionRequest {
 		AgentToolIDs:  []string{"mcp:orders:get"},
 		PolicyVersion: "policy-v1",
 	}
+}
+
+// TestToolExecutionGuardRuleGuardBlocksBeforeAuthorize 验证内联规则护栏在授权前拦截：
+// denylist 命中返回 RuleBlockedError，executor 与 Authorize 均不被触碰（fail closed）。
+func TestToolExecutionGuardRuleGuardBlocksBeforeAuthorize(t *testing.T) {
+	executor := &countingMCPExecutor{}
+	guard := NewToolExecutionGuard(ToolExecutionGuardDeps{
+		Authorizer: NewToolAuthorizer(stubToolUserScopeResolver{
+			scope: port.ToolUserScope{UserActive: true, AllowsTool: true},
+		}),
+		Executor: executor,
+		RuleGuard: NewRuleGuard(RuleGuardDeps{
+			Enabled:  func(context.Context) bool { return true },
+			Denylist: func(context.Context) []string { return []string{"mcp:orders:get"} },
+			Metrics:  observability.NoopMetrics{},
+		}),
+	})
+
+	_, err := guard.Execute(context.Background(), authorizedToolExecutionRequest())
+
+	var block *RuleBlockedError
+	require.ErrorAs(t, err, &block)
+	require.Equal(t, "mcp:orders:get", block.Tool)
+	require.Zero(t, executor.calls, "denylist 命中不得触碰 executor")
+}
+
+// TestToolExecutionGuardRuleGuardAllowsNonDenylisted 验证未命中 denylist 时照常执行
+// executor（规则护栏只做即时拦截，不放行也不改变授权语义）。
+func TestToolExecutionGuardRuleGuardAllowsNonDenylisted(t *testing.T) {
+	executor := &countingMCPExecutor{}
+	guard := NewToolExecutionGuard(ToolExecutionGuardDeps{
+		Authorizer: NewToolAuthorizer(stubToolUserScopeResolver{
+			scope: port.ToolUserScope{UserActive: true, AllowsTool: true},
+		}),
+		Executor: executor,
+		RuleGuard: NewRuleGuard(RuleGuardDeps{
+			Enabled:  func(context.Context) bool { return true },
+			Denylist: func(context.Context) []string { return []string{"other_tool"} },
+			Metrics:  observability.NoopMetrics{},
+		}),
+	})
+
+	output, err := guard.Execute(context.Background(), authorizedToolExecutionRequest())
+
+	require.NoError(t, err)
+	guarded, ok := output.(port.GuardedToolResult)
+	require.True(t, ok)
+	require.Contains(t, guarded.ModelContent, "executed")
+	require.Equal(t, 1, executor.calls)
 }

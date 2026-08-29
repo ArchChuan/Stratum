@@ -87,6 +87,9 @@ type AgentServiceDeps struct {
 	// FactCheck 是幻觉校验配置（nil/Enabled=false = 关闭，fail-closed）。
 	// EvidenceFn 留空，执行时由 RAGSearchFnWithEvidence 填充。
 	FactCheck *factcheck.Settings
+	// RuleGuard 是内联规则护栏（§4.1），wiring 注入；nil 时 guard 不装配规则检查
+	// （审批续跑路径与未装配环境默认放行）。
+	RuleGuard *RuleGuard
 	Logger    *zap.Logger
 	// FailureAudit 旁路记录失败的资源操作（best-effort，nil 时跳过）。
 	FailureAudit auditport.FailureAuditRecorder

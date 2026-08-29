@@ -383,6 +383,14 @@ type AgentExecutionCheckpoint struct {
 	ExpiresAt     time.Time `json:"expires_at"`
 }
 
+// RuleBlock 记录一次规则护栏即时拦截（§4.1）。仅信号级：进观测事件供评测侧
+// 归集，不改变执行错误语义（拦截走 RuleBlockedError 返回）。
+type RuleBlock struct {
+	Rule    string `json:"rule"`
+	Tool    string `json:"tool"`
+	Message string `json:"message"`
+}
+
 // AgentResult holds the output of a completed agent execution.
 type AgentResult struct {
 	AgentID                string
