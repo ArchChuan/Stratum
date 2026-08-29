@@ -22,6 +22,7 @@ var (
 	ErrApprovalRequired    = errors.New("workflow approval required")
 	ErrNotFound            = errors.New("workflow not found")
 	ErrForbidden           = errors.New("workflow action forbidden")
+	ErrEditorNotEligible   = errors.New("workflow editor not eligible")
 )
 
 type NodeType string
@@ -167,6 +168,8 @@ type Definition struct {
 	ID              string      `json:"id"`
 	Name            string      `json:"name"`
 	Description     string      `json:"description"`
+	CreatedBy       string      `json:"created_by,omitempty"`
+	Editors         []string    `json:"editors,omitempty"`
 	Revision        int64       `json:"revision"`
 	ActiveVersionID string      `json:"active_version_id,omitempty"`
 	Spec            Spec        `json:"spec"`
