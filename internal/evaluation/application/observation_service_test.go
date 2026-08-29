@@ -65,6 +65,18 @@ func (s *stubObservationRepo) QueryByResource(ctx context.Context, tenantID, res
 	return nil, errors.New("not used")
 }
 
+type stubTierReader struct {
+	tier string
+	err  error
+}
+
+func (s *stubTierReader) GetTenantTier(ctx context.Context, tenantID string) (string, error) {
+	if s.err != nil {
+		return "", s.err
+	}
+	return s.tier, nil
+}
+
 func newTestObservationService(repo *stubObservationRepo, reader *stubEvidenceReader, judge *stubJudge) *ObservationService {
 	return NewObservationService(ObservationServiceDeps{
 		Enabled:    func(context.Context) bool { return true },
@@ -195,5 +207,59 @@ func TestObservationServiceProcessSaveFailureDrops(t *testing.T) {
 	}
 	if len(repo.saved) != 0 {
 		t.Fatalf("save failure must not save, got %d", len(repo.saved))
+	}
+}
+
+func TestObservationServiceProcessStratumFilledFromTenantTier(t *testing.T) {
+	repo := &stubObservationRepo{}
+	reader := &stubEvidenceReader{trace: port.ObservedTrace{
+		TraceID: "trace-1", Input: "用户问题", Output: "助手回答",
+		CostUSD: 0.01, LatencyMs: 800, Success: true,
+	}}
+	judge := &stubJudge{enabled: true, result: domain.AssertionResult{Passed: true}}
+	svc := NewObservationService(ObservationServiceDeps{
+		Enabled:    func(context.Context) bool { return true },
+		SampleRate: func(context.Context) float64 { return 1.0 },
+		Evidence:   reader, Judge: judge, Repo: repo,
+		Metrics: observability.NoopMetrics{}, Logger: zap.NewNop(),
+		TenantTier: &stubTierReader{tier: "pro"},
+	})
+	evt := domain.ObservationReferenceEvent{
+		TenantID: "t1", TraceID: "trace-1", ExecutionID: "exec-1",
+		AgentID: "agent-1", ResourceKind: "agent", ResourceID: "agent-1",
+	}
+	if err := svc.Process(context.Background(), evt); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if len(repo.saved) != 1 {
+		t.Fatalf("saved %d observations, want 1", len(repo.saved))
+	}
+	if got := repo.saved[0].Stratum; got != "pro" {
+		t.Fatalf("stratum = %q, want %q", got, "pro")
+	}
+}
+
+func TestObservationServiceProcessStratumEmptyOnTierResolveFailure(t *testing.T) {
+	repo := &stubObservationRepo{}
+	reader := &stubEvidenceReader{trace: port.ObservedTrace{TraceID: "trace-1", Input: "q", Output: "a"}}
+	judge := &stubJudge{enabled: true, result: domain.AssertionResult{Passed: true}}
+	svc := NewObservationService(ObservationServiceDeps{
+		Enabled:    func(context.Context) bool { return true },
+		SampleRate: func(context.Context) float64 { return 1.0 },
+		Evidence:   reader, Judge: judge, Repo: repo,
+		Metrics: observability.NoopMetrics{}, Logger: zap.NewNop(),
+		TenantTier: &stubTierReader{err: errors.New("tier repo down")},
+	})
+	evt := domain.ObservationReferenceEvent{
+		TenantID: "t1", TraceID: "trace-1", ResourceKind: "agent", ResourceID: "agent-1",
+	}
+	if err := svc.Process(context.Background(), evt); err != nil {
+		t.Fatalf("tier resolve failure must not block observation: %v", err)
+	}
+	if len(repo.saved) != 1 {
+		t.Fatalf("saved %d observations, want 1", len(repo.saved))
+	}
+	if got := repo.saved[0].Stratum; got != "" {
+		t.Fatalf("stratum = %q, want empty on tier resolve failure", got)
 	}
 }

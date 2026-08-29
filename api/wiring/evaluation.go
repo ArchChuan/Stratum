@@ -17,6 +17,7 @@ import (
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	"github.com/byteBuilderX/stratum/internal/evaluation/infrastructure/observation"
 	evalpersist "github.com/byteBuilderX/stratum/internal/evaluation/infrastructure/persistence"
+	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
 	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
@@ -1196,6 +1197,7 @@ func (c *Container) wireObservationPipeline(ctx context.Context, db *pgxpool.Poo
 		Repo:       observationRepo,
 		Metrics:    c.platformMetrics(),
 		Logger:     c.Logger,
+		TenantTier: tenantTierAdapter{repo: iampersistence.NewAdminTenantRepo(db)},
 	})
 	c.Evaluation.ObservationService = observationSvc
 	if c.Storage == nil || c.Storage.NATS == nil {

@@ -25,6 +25,7 @@ type ObservationServiceDeps struct {
 	Repo       port.ObservationRepository
 	Metrics    observability.MetricsProvider
 	Logger     *zap.Logger
+	TenantTier port.TenantTierReader // P1b：租户 tier → stratum（nil 时 stratum 留空）
 }
 
 type ObservationService struct {
@@ -59,7 +60,7 @@ func (s *ObservationService) Process(ctx context.Context, evt domain.Observation
 		s.deps.Metrics.IncEvalJudgeFailure("evidence_resolve")
 		return fmt.Errorf("observation resolve evidence: %w", err)
 	}
-	obs := s.buildObservation(evt, trace)
+	obs := s.buildObservation(ctx, evt, trace)
 	if err := s.applyJudge(ctx, trace, &obs); err != nil {
 		// judge 不可用：§14 采样降级跳过——不落零信号的伪 pass 观察、不重投
 		// （避免 judge 持续不可用时的重投空转），仅指标计数 + warn 日志。
@@ -87,7 +88,9 @@ func (s *ObservationService) Process(ctx context.Context, evt domain.Observation
 }
 
 // buildObservation 组装 EvalObservation（不含 judge 信号，由 applyJudge 填充）。
-func (s *ObservationService) buildObservation(evt domain.ObservationReferenceEvent, trace port.ObservedTrace) domain.EvalObservation {
+func (s *ObservationService) buildObservation(ctx context.Context, evt domain.ObservationReferenceEvent,
+	trace port.ObservedTrace,
+) domain.EvalObservation {
 	resourceVersion := domain.ResourceParamVersion{Ref: "", Version: ""}
 	source := domain.ParamSourceUnknown
 	for _, a := range trace.Assignments {
@@ -111,10 +114,25 @@ func (s *ObservationService) buildObservation(evt domain.ObservationReferenceEve
 			Tokens:    trace.TotalTokens,
 			CostUSD:   trace.CostUSD,
 		},
-		Stratum:   "", // TODO(P1b)：租户 tier 接入后填充
+		Stratum:   s.resolveStratum(ctx, evt.TenantID),
 		Verdict:   domain.VerdictPass,
 		CreatedAt: time.Now().UTC(),
 	}
+}
+
+// resolveStratum 解析租户 tier 为 stratum（§4.3）。tier 解析失败不阻断落库：
+// stratum 留空 + warn（§14 参数版本锚点缺失标记 unknown 的等价语义）。
+func (s *ObservationService) resolveStratum(ctx context.Context, tenantID string) string {
+	if s.deps.TenantTier == nil {
+		return ""
+	}
+	tier, err := s.deps.TenantTier.GetTenantTier(ctx, tenantID)
+	if err != nil {
+		s.deps.Logger.Warn("observation tier resolve failed", zap.Error(err),
+			zap.String("tenant_id", tenantID))
+		return ""
+	}
+	return tier
 }
 
 // applyJudge 按三维度 rubric 调用 judge 并填充 signals；任一次失败返回错误
