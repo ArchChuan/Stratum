@@ -9,6 +9,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 type RecordFeedbackInput = domain.FeedbackRequest
@@ -23,12 +24,14 @@ type FeedbackService struct {
 	repo        port.FeedbackRepository
 	experiments *ExperimentService
 	evidence    port.TraceEvidenceReader
+	writer      port.BehaviorSignalWriter
 }
 
 func NewFeedbackService(
 	repo port.FeedbackRepository, experiments *ExperimentService, evidence port.TraceEvidenceReader,
+	writer port.BehaviorSignalWriter,
 ) *FeedbackService {
-	return &FeedbackService{repo: repo, experiments: experiments, evidence: evidence}
+	return &FeedbackService{repo: repo, experiments: experiments, evidence: evidence, writer: writer}
 }
 
 func (s *FeedbackService) Record(
@@ -63,6 +66,7 @@ func (s *FeedbackService) Record(
 	if err != nil {
 		return FeedbackResult{}, err
 	}
+	s.emitBehaviorSignals(ctx, tenantID, input)
 	result := FeedbackResult{Feedback: feedback, Decision: domain.DecisionHold}
 	experiment, ok, err := s.repo.ActiveExperiment(ctx, tenantID, string(input.ResourceKind), input.ResourceID)
 	if err != nil || !ok {
@@ -130,6 +134,27 @@ func (s *FeedbackService) Record(
 	result.Experiment = &next
 	result.Decision = decision
 	return result, nil
+}
+
+// emitBehaviorSignals 从 feedback 推导行为信号并合并到观测（§4.2 路 A）：
+// score 低于阈值视为放弃倾向，security_violation 视为升级。best-effort：
+// writer 为 nil 或合并失败均不阻断反馈链路；失败错误被静默丢弃（不重试、不计数、不告警），
+// 观测合并缺失仅影响下钻信号的完整性。
+func (s *FeedbackService) emitBehaviorSignals(ctx context.Context, tenantID string, input RecordFeedbackInput) {
+	if s.writer == nil {
+		return
+	}
+	signals := domain.BehaviorSignals{}
+	if input.Score < constants.FeedbackNegativeThreshold {
+		signals.Abandonment = true
+	}
+	if input.SecurityViolation {
+		signals.Escalation = true
+	}
+	if !signals.Abandonment && !signals.Escalation {
+		return
+	}
+	_ = s.writer.ApplyBehaviorSignals(ctx, tenantID, input.TraceID, signals)
 }
 
 func evaluationIdempotencyKey(feedbackKey, experimentID string) string {
