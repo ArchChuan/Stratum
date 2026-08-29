@@ -131,6 +131,14 @@ type MetricsProvider interface {
 	RecordEvalJudgeCost(costUSD float64)
 	IncEvalJudgeFailure(reason string)
 	SetEvalQueueBacklog(queue string, count int64)
+	// P1b：规则护栏命中计数（§11.1 eval_rule_hit_total）。
+	IncEvalRuleHit(rule, resource, verdict string)
+	// P1b：行为异常判异计数（§11.1 eval_behavior_anomaly_total）。
+	IncEvalBehaviorAnomaly(resource, signal string)
+	// P1b：分层门禁动作计数（§11.2 eval_gate_action_total）。
+	IncEvalGateAction(layer, action string)
+	// P1b：主动采样覆盖率（§11.1 eval_sample_coverage，Gauge [0,1]）。
+	RecordEvalSampleCoverage(resource string, ratio float64)
 
 	// Auth
 	IncAuthFailure(reason string)
@@ -225,6 +233,10 @@ func (NoopMetrics) RecordEvalJudgeLatency(_ float64)                            
 func (NoopMetrics) RecordEvalJudgeCost(_ float64)                                 {}
 func (NoopMetrics) IncEvalJudgeFailure(_ string)                                  {}
 func (NoopMetrics) SetEvalQueueBacklog(_ string, _ int64)                         {}
+func (NoopMetrics) IncEvalRuleHit(_, _, _ string)                                 {}
+func (NoopMetrics) IncEvalBehaviorAnomaly(_, _ string)                            {}
+func (NoopMetrics) IncEvalGateAction(_, _ string)                                 {}
+func (NoopMetrics) RecordEvalSampleCoverage(_ string, _ float64)                  {}
 func (NoopMetrics) IncAuthFailure(_ string)                                       {}
 func (NoopMetrics) RecordModelHealthTransition(_, _, _ string)                    {}
 func (NoopMetrics) SetMemoryMigrationProgress(_ string, _, _, _ string, _ int)    {}

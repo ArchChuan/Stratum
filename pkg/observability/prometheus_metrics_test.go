@@ -103,6 +103,11 @@ func exerciseAllMetrics(m MetricsProvider) {
 	m.RecordEvalJudgeCost(0.001)
 	m.IncEvalJudgeFailure("evidence_missing")
 	m.SetEvalQueueBacklog("observation", 0)
+	// Evaluation observation（P1b §11）
+	m.IncEvalRuleHit("tool_denylist", "agent", "block")
+	m.IncEvalBehaviorAnomaly("agent", "judge_below_threshold")
+	m.IncEvalGateAction("rule_guard", "block")
+	m.RecordEvalSampleCoverage("agent", 0.5)
 	m.IncAuthFailure("invalid_token")
 }
 

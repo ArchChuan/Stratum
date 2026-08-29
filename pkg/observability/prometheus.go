@@ -137,12 +137,16 @@ type PrometheusMetrics struct {
 	evaluationJobsTotal *prometheus.CounterVec
 
 	// Evaluation observation（§11 运行时评估观测）
-	evalObservationTotal  *prometheus.CounterVec
-	evalJudgeScore        *prometheus.HistogramVec
-	evalJudgeLatency      prometheus.Histogram
-	evalJudgeCostTotal    prometheus.Counter
-	evalJudgeFailureTotal *prometheus.CounterVec
-	evalQueueBacklog      *prometheus.GaugeVec
+	evalObservationTotal     *prometheus.CounterVec
+	evalJudgeScore           *prometheus.HistogramVec
+	evalJudgeLatency         prometheus.Histogram
+	evalJudgeCostTotal       prometheus.Counter
+	evalJudgeFailureTotal    *prometheus.CounterVec
+	evalQueueBacklog         *prometheus.GaugeVec
+	evalRuleHitTotal         *prometheus.CounterVec
+	evalBehaviorAnomalyTotal *prometheus.CounterVec
+	evalGateActionTotal      *prometheus.CounterVec
+	evalSampleCoverage       *prometheus.GaugeVec
 
 	// Auth
 	authFailuresTotal *prometheus.CounterVec
@@ -352,6 +356,22 @@ func (m *PrometheusMetrics) registerEvalObservationMetrics(factory promauto.Fact
 	m.evalQueueBacklog = factory.NewGaugeVec(
 		prometheus.GaugeOpts{Name: "eval_queue_backlog", Help: "消息队列积压（§11.2）"},
 		[]string{"queue"},
+	)
+	m.evalRuleHitTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "eval_rule_hit_total", Help: "规则护栏命中计数（§11.1）"},
+		[]string{"rule", "resource", "verdict"},
+	)
+	m.evalBehaviorAnomalyTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "eval_behavior_anomaly_total", Help: "行为异常判异计数（§11.1）"},
+		[]string{"resource", "signal"},
+	)
+	m.evalGateActionTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "eval_gate_action_total", Help: "分层门禁动作计数（§11.2）"},
+		[]string{"layer", "action"},
+	)
+	m.evalSampleCoverage = factory.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "eval_sample_coverage", Help: "主动采样覆盖率（§11.1）"},
+		[]string{"resource"},
 	)
 }
 
@@ -922,6 +942,30 @@ func (m *PrometheusMetrics) IncEvalJudgeFailure(reason string) {
 
 func (m *PrometheusMetrics) SetEvalQueueBacklog(queue string, count int64) {
 	m.evalQueueBacklog.WithLabelValues(queue).Set(float64(count))
+}
+
+func (m *PrometheusMetrics) IncEvalRuleHit(rule, resource, verdict string) {
+	if m.evalRuleHitTotal != nil {
+		m.evalRuleHitTotal.WithLabelValues(rule, resource, verdict).Inc()
+	}
+}
+
+func (m *PrometheusMetrics) IncEvalBehaviorAnomaly(resource, signal string) {
+	if m.evalBehaviorAnomalyTotal != nil {
+		m.evalBehaviorAnomalyTotal.WithLabelValues(resource, signal).Inc()
+	}
+}
+
+func (m *PrometheusMetrics) IncEvalGateAction(layer, action string) {
+	if m.evalGateActionTotal != nil {
+		m.evalGateActionTotal.WithLabelValues(layer, action).Inc()
+	}
+}
+
+func (m *PrometheusMetrics) RecordEvalSampleCoverage(resource string, ratio float64) {
+	if m.evalSampleCoverage != nil {
+		m.evalSampleCoverage.WithLabelValues(resource).Set(ratio)
+	}
 }
 
 // --- Auth ---

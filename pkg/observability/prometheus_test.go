@@ -265,3 +265,22 @@ func TestPrometheusLabelsRegistered(t *testing.T) {
 		}
 	}
 }
+
+func TestPrometheusMetricsEvalObservationP1b(t *testing.T) {
+	// P1b 评测指标冒烟：注册后不 panic + 值递增/写入符合 §11。
+	m := newTestMetrics(t)
+	m.IncEvalRuleHit("tool_denylist", "agent", "block")
+	m.IncEvalRuleHit("tool_denylist", "agent", "block")
+	m.IncEvalBehaviorAnomaly("agent", "judge_below_threshold")
+	m.IncEvalGateAction("rule_guard", "block")
+	m.RecordEvalSampleCoverage("agent", 0.5)
+
+	families, err := m.reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	assertCounterVecSum(t, families, "eval_rule_hit_total", "rule", "tool_denylist", 2)
+	assertCounterVecSum(t, families, "eval_behavior_anomaly_total", "signal", "judge_below_threshold", 1)
+	assertCounterVecSum(t, families, "eval_gate_action_total", "action", "block", 1)
+	assertGaugeVecSum(t, families, "eval_sample_coverage", "resource", "agent", 0.5)
+}
