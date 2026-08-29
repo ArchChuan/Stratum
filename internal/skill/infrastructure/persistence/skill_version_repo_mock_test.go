@@ -348,7 +348,7 @@ func expectSaveRevisionBody(mock pgxmock.PgxPoolIface, withBaseline bool, active
 		WithArgs("s-1").
 		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(true))
 	if withBaseline {
-		mock.ExpectQuery("COALESCE\\(r.content_hash").
+		mock.ExpectQuery("COALESCE\\(r\\.content_hash[\\s\\S]*FOR UPDATE OF s").
 			WithArgs("s-1").
 			WillReturnRows(pgxmock.NewRows([]string{"hash"}).AddRow(activeHash))
 	}
@@ -404,7 +404,7 @@ func TestPgSkillRevisionRepo_SaveRevision_stale(t *testing.T) {
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs("s-1").
 		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(true))
-	mock.ExpectQuery("COALESCE\\(r.content_hash").
+	mock.ExpectQuery("COALESCE\\(r\\.content_hash[\\s\\S]*FOR UPDATE OF s").
 		WithArgs("s-1").
 		WillReturnRows(pgxmock.NewRows([]string{"hash"}).AddRow("other-hash"))
 	mock.ExpectRollback()
@@ -641,7 +641,7 @@ func TestPgSkillRevisionRepo_SaveDraft_stale(t *testing.T) {
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs("s-1").
 		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(true))
-	mock.ExpectQuery("COALESCE\\(r.content_hash").
+	mock.ExpectQuery("COALESCE\\(r\\.content_hash[\\s\\S]*FOR UPDATE OF s").
 		WithArgs("s-1").
 		WillReturnRows(pgxmock.NewRows([]string{"hash"}).AddRow("other-hash"))
 	mock.ExpectRollback()
@@ -692,6 +692,25 @@ func TestPgSkillRevisionRepo_PublishDraft_noDraft(t *testing.T) {
 	mock.ExpectRollback()
 
 	require.ErrorIs(t, repo.PublishDraft(skillTenantCtx(), "s-1", "dr-1", "r-1", 2, "", "", nil), domain.ErrSkillDraftNotFound)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgSkillRevisionRepo_PublishDraft_stale(t *testing.T) {
+	// FOR-UPDATE 守卫读到与 expected 不一致的 active content_hash →
+	// ErrSkillDraftStale(409),且不执行任何 demote/promote/repoint 语句。
+	mock := newSkillMock(t)
+	repo := newSkillRepo(mock)
+	beginTenantTx(t, mock)
+
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs("s-1").
+		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery("COALESCE\\(r\\.content_hash[\\s\\S]*FOR UPDATE OF s").
+		WithArgs("s-1").
+		WillReturnRows(pgxmock.NewRows([]string{"hash"}).AddRow("other-hash"))
+	mock.ExpectRollback()
+
+	require.ErrorIs(t, repo.PublishDraft(skillTenantCtx(), "s-1", "dr-1", "r-1", 2, "h-1", "", nil), domain.ErrSkillDraftStale)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

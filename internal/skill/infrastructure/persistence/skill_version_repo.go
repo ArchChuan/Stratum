@@ -285,9 +285,13 @@ func (r *PgSkillRevisionRepo) NextRevisionNo(ctx context.Context, skillID string
 
 // validateActiveContentHash guards concurrent edits: when expected is
 // non-empty, it must match the current active revision's content_hash,
-// otherwise the write fails with ErrSkillDraftStale (409). Shared by
-// SaveDraft/PublishDraft to keep the write closures within the complexity
-// budget.
+// otherwise the write fails with ErrSkillDraftStale (409). The SELECT locks
+// the skills row (FOR UPDATE OF s, leaving the LEFT JOIN side unlocked) so
+// concurrent SaveDraft/PublishDraft calls serialize here under READ COMMITTED:
+// the later caller blocks until the first commits, then re-reads the new
+// active_revision_id's hash and returns 409 instead of demoting the freshly
+// promoted version. Shared by SaveDraft/PublishDraft to keep the write
+// closures within the complexity budget.
 func validateActiveContentHash(ctx context.Context, tx pgx.Tx, skillID, expected string) error {
 	if expected == "" {
 		return nil
@@ -295,7 +299,7 @@ func validateActiveContentHash(ctx context.Context, tx pgx.Tx, skillID, expected
 	var activeHash string
 	if err := tx.QueryRow(ctx,
 		`SELECT COALESCE(r.content_hash, '') FROM skills s
-		 LEFT JOIN skill_revisions r ON r.id=s.active_revision_id WHERE s.id=$1`, skillID,
+		 LEFT JOIN skill_revisions r ON r.id=s.active_revision_id WHERE s.id=$1 FOR UPDATE OF s`, skillID,
 	).Scan(&activeHash); err != nil {
 		return err
 	}
