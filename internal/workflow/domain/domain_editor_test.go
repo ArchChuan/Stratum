@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -23,5 +24,5 @@ func TestDefinitionCarriesEditorMetadata(t *testing.T) {
 
 func TestErrEditorNotEligibleExists(t *testing.T) {
 	// 非白名单成员写白名单时，store 用该哨兵 wrap，errors.Is 可判定。
-	require.True(t, errors.Is(ErrEditorNotEligible, ErrEditorNotEligible))
+	require.True(t, errors.Is(fmt.Errorf("store: %w", ErrEditorNotEligible), ErrEditorNotEligible))
 }
