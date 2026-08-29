@@ -9,6 +9,7 @@ import (
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 func TestFeedbackServiceAutomaticallyEvaluatesReadyExperiment(t *testing.T) {
@@ -320,6 +321,44 @@ func TestFeedbackServiceEmitsEscalationForSecurityViolation(t *testing.T) {
 	signals := writer.calls[0].signals
 	if !signals.Escalation || signals.Abandonment || signals.Retry {
 		t.Fatalf("signals = %+v, want escalation only", signals)
+	}
+}
+
+func TestFeedbackServiceScoreAtThresholdDoesNotEmitAbandonment(t *testing.T) {
+	// FeedbackNegativeThreshold 是严格 <：score == 阈值恰好不推导负反馈。
+	repo := &fakeFeedbackRepo{}
+	writer := &stubBehaviorWriter{}
+	svc := NewFeedbackService(repo, NewExperimentService(&feedbackExperimentRepo{}),
+		feedbackEvidenceWriter("trace-boundary", "skill-1", "revision-1"), writer)
+	if _, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
+		TraceID: "trace-boundary", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		Score: constants.FeedbackNegativeThreshold, IdempotencyKey: "feedback-boundary",
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if len(writer.calls) != 0 {
+		t.Fatalf("writer calls = %d, want 0 (score == threshold is not negative)", len(writer.calls))
+	}
+}
+
+func TestFeedbackServiceEmitsCombinedAbandonmentAndEscalation(t *testing.T) {
+	// 组合推导：低分放弃 + 安全违规升级同时成立时，两个信号都写入。
+	repo := &fakeFeedbackRepo{}
+	writer := &stubBehaviorWriter{}
+	svc := NewFeedbackService(repo, NewExperimentService(&feedbackExperimentRepo{}),
+		feedbackEvidenceWriter("trace-combined", "skill-1", "revision-1"), writer)
+	if _, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
+		TraceID: "trace-combined", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		Score: 0.3, SecurityViolation: true, IdempotencyKey: "feedback-combined",
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if len(writer.calls) != 1 {
+		t.Fatalf("writer calls = %d, want 1", len(writer.calls))
+	}
+	signals := writer.calls[0].signals
+	if !signals.Abandonment || !signals.Escalation || signals.Retry {
+		t.Fatalf("signals = %+v, want abandonment + escalation", signals)
 	}
 }
 

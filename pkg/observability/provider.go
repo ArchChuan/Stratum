@@ -123,8 +123,8 @@ type MetricsProvider interface {
 	// Evaluation
 	IncEvaluationJob(status string)
 
-	// Evaluation observation（§11 运行时评估观测）
-	IncEvalObservation(resource, verdict string)
+	// Evaluation observation（§11 运行时评估观测；stratum 为租户 tier 映射层）
+	IncEvalObservation(resource, stratum string)
 	RecordEvalJudgeScore(resource, dimension string, score float64)
 	// TODO(P1b)：evaluation.observe 采样覆盖率指标待真实计数基础设施接入后恢复。
 	RecordEvalJudgeLatency(seconds float64)

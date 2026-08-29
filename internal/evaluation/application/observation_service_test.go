@@ -586,12 +586,63 @@ func TestObservationServiceSampleCoverageRecorded(t *testing.T) {
 	if err := svc.Process(context.Background(), evt); err != nil {
 		t.Fatalf("Process: %v", err)
 	}
-	// 到达刷新 ratio=0/1=0.0；落库后刷新 ratio=1/1=1.0。最终 Gauge 值应为 1.0。
+	// I-1 新语义：分母 = 采样候选（采样通过且 judge 开启），分子 = 落库。
+	// 到达刷新 ratio=0/1=0.0；落库后刷新 ratio=1/1=1.0。健康稳态最终 Gauge 应为 1.0。
 	if len(metrics.sampleCoverages) == 0 {
 		t.Fatal("RecordEvalSampleCoverage not called")
 	}
 	last := metrics.sampleCoverages[len(metrics.sampleCoverages)-1]
 	if last.resource != "agent" || last.ratio != 1.0 {
 		t.Fatalf("last sample coverage = %+v, want agent/1.0", last)
+	}
+}
+
+func TestObservationServiceSampleCoverageJudgeDisabledNotCounted(t *testing.T) {
+	// I-1 回归：judge 配置关闭（主动停观测）不计入分母——不写覆盖率、不因此告警。
+	repo := &stubObservationRepo{}
+	reader := &stubEvidenceReader{trace: port.ObservedTrace{TraceID: "trace-cov-off", Input: "q", Output: "a"}}
+	judge := &stubJudge{enabled: false}
+	metrics := &stubMetrics{}
+	svc := NewObservationService(ObservationServiceDeps{
+		Enabled:    func(context.Context) bool { return true },
+		SampleRate: func(context.Context) float64 { return 1.0 },
+		Evidence:   reader, Judge: judge, Repo: repo,
+		Metrics: metrics, Logger: zap.NewNop(),
+	})
+	evt := domain.ObservationReferenceEvent{
+		TenantID: "t1", TraceID: "trace-cov-off", ResourceKind: "agent", ResourceID: "agent-1",
+	}
+	if err := svc.Process(context.Background(), evt); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if len(metrics.sampleCoverages) != 0 {
+		t.Fatalf("sample coverages = %+v, want none (judge disabled must not count arrival)", metrics.sampleCoverages)
+	}
+}
+
+func TestObservationServiceSampleCoverageJudgeFailureDropsRatio(t *testing.T) {
+	// I-1 回归：judge 故障降级（真正的静默跳过）计入分母但不计入分子 → 覆盖率掉低。
+	repo := &stubObservationRepo{}
+	reader := &stubEvidenceReader{trace: port.ObservedTrace{TraceID: "trace-cov-degrade", Input: "q", Output: "a"}}
+	judge := &stubJudge{enabled: true, err: errors.New("judge down")}
+	metrics := &stubMetrics{}
+	svc := NewObservationService(ObservationServiceDeps{
+		Enabled:    func(context.Context) bool { return true },
+		SampleRate: func(context.Context) float64 { return 1.0 },
+		Evidence:   reader, Judge: judge, Repo: repo,
+		Metrics: metrics, Logger: zap.NewNop(),
+	})
+	evt := domain.ObservationReferenceEvent{
+		TenantID: "t1", TraceID: "trace-cov-degrade", ResourceKind: "agent", ResourceID: "agent-1",
+	}
+	if err := svc.Process(context.Background(), evt); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if len(metrics.sampleCoverages) == 0 {
+		t.Fatal("RecordEvalSampleCoverage not called")
+	}
+	last := metrics.sampleCoverages[len(metrics.sampleCoverages)-1]
+	if last.resource != "agent" || last.ratio != 0.0 {
+		t.Fatalf("last sample coverage = %+v, want agent/0.0 (arrival counted, nothing saved)", last)
 	}
 }

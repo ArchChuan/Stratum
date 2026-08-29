@@ -920,8 +920,8 @@ func (m *PrometheusMetrics) IncEvaluationJob(status string) {
 
 // --- Evaluation observation（§11） ---
 
-func (m *PrometheusMetrics) IncEvalObservation(resource, verdict string) {
-	m.evalObservationTotal.WithLabelValues(resource, "").Inc() // stratum 标签 P1b 接入 tenant-tier
+func (m *PrometheusMetrics) IncEvalObservation(resource, stratum string) {
+	m.evalObservationTotal.WithLabelValues(resource, stratum).Inc()
 }
 
 func (m *PrometheusMetrics) RecordEvalJudgeScore(resource, dimension string, score float64) {

@@ -22,10 +22,13 @@
 
 ## StratumEvalSampleCoverageLow
 
-主动采样覆盖率低于阈值，可能整层静默跳过。
+主动采样覆盖率低于阈值，观测落库可能被静默跳过。
 
-- 定位：核对 `evaluation.observe.sample_rate` 与 `evaluation.observe.enabled`、judge 可用性。
-- 处置：调高采样率或恢复 judge；覆盖率长期低说明观测失去代表性（§14 禁止静默跳过某层）。
+- 语义：`eval_sample_coverage` = 落库观测 / 采样候选（采样通过且 judge 开启）。健康稳态 ≈1.0；
+  judge 配置关闭（主动停观测）不计入分母、不触发本告警。
+- 定位：先区分「主动停观测」与「故障降级」——核对 `evaluation.observe.enabled` / `evaluation.observe.sample_rate` 与 judge 可用性；
+  覆盖率掉低但 judge 正常时，查落库链路（Validate 失败 / Save 失败）与 `eval_judge_failure_total` 的 `reason` 维度。
+- 处置：恢复 judge 或修复落库链路；覆盖率长期低说明观测失去代表性（§14 禁止静默跳过某层）。
 
 <a id="stratum-eval-rule-blocked"></a>
 

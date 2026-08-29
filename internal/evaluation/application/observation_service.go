@@ -17,8 +17,9 @@ import (
 // 运行态观测 judge rubric 维度（规格 §3.1）：三个语义质量维度各一次 Judge 调用。
 var observationJudgeDimensions = []string{"faithfulness", "relevance", "completeness"}
 
-// ObservationServiceDeps 是落地服务的依赖（全部必填，缺失字段由 wiring 保证；
-// 任何依赖 nil 时 Process 按 fail closed 处理）。
+// ObservationServiceDeps 是落地服务的依赖（缺失字段由 wiring 保证；任何依赖 nil 时
+// Process 按 fail closed 处理——唯 TenantTier 明确 nil-tolerant：未装配或 tier 解析
+// 失败时 stratum 留空，不阻断落库）。
 type ObservationServiceDeps struct {
 	Enabled    func(ctx context.Context) bool    // 平台参数 evaluation.observe.enabled
 	SampleRate func(ctx context.Context) float64 // 平台参数 evaluation.observe.sample_rate
@@ -34,8 +35,8 @@ type ObservationService struct {
 	deps ObservationServiceDeps
 
 	mu      sync.Mutex
-	arrival map[string]int64 // resource -> 观测事件到达数
-	sampled map[string]int64 // resource -> 采样通过数
+	arrival map[string]int64 // resource -> 采样候选到达数（采样通过且 judge 开启）
+	sampled map[string]int64 // resource -> 采样通过且落库数
 }
 
 func NewObservationService(deps ObservationServiceDeps) *ObservationService {
@@ -56,11 +57,12 @@ var _ port.BehaviorSignalWriter = (*ObservationService)(nil)
 // 返回 error 表示需要 NATS 重投（仅证据查询失败）；judge 关闭 / judge 故障 / 校验非法 /
 // 落库失败均在本服务内丢弃并返回 nil（§14 精神：不落零信号 pass 观测、不制造 poison
 // message 重投循环），绝不伪成功。
+// 采样覆盖率（eval_sample_coverage）= 落库观测 / 采样候选（采样通过且 judge 开启）。
+// 分母在 judge 关闭检查之后计数：健康稳态 ratio≈1.0，judge 配置关闭（主动停观测）不计入。
 func (s *ObservationService) Process(ctx context.Context, evt domain.ObservationReferenceEvent) error {
 	if !s.deps.Enabled(ctx) {
 		return nil
 	}
-	s.recordArrival(evt.ResourceKind)
 	if !sampleDecision(s.deps.SampleRate(ctx), evt.ResourceKind, evt.TraceID) {
 		return nil
 	}
@@ -69,6 +71,10 @@ func (s *ObservationService) Process(ctx context.Context, evt domain.Observation
 	if s.deps.Judge == nil || !s.deps.Judge.Enabled(ctx) {
 		return nil
 	}
+	// 到达计数在 judge 关闭检查之后：分母 = 采样候选。judge 配置关闭不计入分母、
+	// 不因此告警（主动停观测）；judge 故障降级 / 校验失败 / 落库失败计入分母但
+	// 不计入分子 → 覆盖率掉低 → 触发 StratumEvalSampleCoverageLow。
+	s.recordArrival(evt.ResourceKind)
 	trace, err := s.deps.Evidence.Resolve(ctx, evt.TenantID, evt.TraceID)
 	if err != nil {
 		s.deps.Metrics.IncEvalJudgeFailure("evidence_resolve")
@@ -102,11 +108,12 @@ func (s *ObservationService) Process(ctx context.Context, evt domain.Observation
 		return nil
 	}
 	s.recordSampled(evt.ResourceKind)
-	s.deps.Metrics.IncEvalObservation(evt.ResourceKind, string(obs.Verdict))
+	s.deps.Metrics.IncEvalObservation(evt.ResourceKind, obs.Stratum)
 	return nil
 }
 
-// recordArrival 累计某资源的观测事件到达并刷新采样覆盖率（分母）。
+// recordArrival 累计某资源的采样候选到达并刷新采样覆盖率（分母）。
+// 采样候选 = 采样通过且 judge 开启；judge 配置关闭不计入（主动停观测，非降级）。
 // 锁内只做读改写和 flush，锁外不做 map 访问（并发安全）。
 func (s *ObservationService) recordArrival(resource string) {
 	s.mu.Lock()
@@ -123,7 +130,7 @@ func (s *ObservationService) recordSampled(resource string) {
 	s.mu.Unlock()
 }
 
-// flushCoverageLocked 按当前累计值写 eval_sample_coverage Gauge（ratio = 采样/到达）。
+// flushCoverageLocked 按当前累计值写 eval_sample_coverage Gauge（ratio = 落库/采样候选）。
 func (s *ObservationService) flushCoverageLocked(resource string) {
 	arrival := s.arrival[resource]
 	if arrival == 0 {

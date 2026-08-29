@@ -138,7 +138,8 @@ func (s *FeedbackService) Record(
 
 // emitBehaviorSignals 从 feedback 推导行为信号并合并到观测（§4.2 路 A）：
 // score 低于阈值视为放弃倾向，security_violation 视为升级。best-effort：
-// writer 为 nil 或合并失败均不阻断反馈链路，失败只记不报。
+// writer 为 nil 或合并失败均不阻断反馈链路；失败错误被静默丢弃（不重试、不计数、不告警），
+// 观测合并缺失仅影响下钻信号的完整性。
 func (s *FeedbackService) emitBehaviorSignals(ctx context.Context, tenantID string, input RecordFeedbackInput) {
 	if s.writer == nil {
 		return

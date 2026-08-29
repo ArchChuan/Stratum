@@ -1253,8 +1253,9 @@ tests:
             exp_annotations:
               summary: 评测主动采样覆盖率不足
               description: >-
-                eval_sample_coverage（采样通过/事件到达）低于 0.5 持续 10 分钟，
-                可能整层被静默跳过。核对采样率参数与 judge 可用性，禁止静默跳过某层（§14）。
+                eval_sample_coverage（落库/采样候选）低于 0.5 持续 10 分钟，可能 judge
+                整层故障降级、校验非法或落库失败导致观测静默丢失。核对 judge 可用性与
+                落库链路，禁止静默跳过某层（§14）。judge 配置关闭属主动停观测，不计入分母。
               dashboard_url: https://stratum.grafana/d/evaluation
               runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-sample-coverage-low
       - eval_time: 2m

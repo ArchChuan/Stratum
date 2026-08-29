@@ -602,12 +602,14 @@ func memoryBufferClosure(svc *memapp.MemoryService) func(ctx context.Context, te
 
 // ruleGuardEnabled 读取平台参数 evaluation.ruleguard.enabled。默认关闭（fail open
 // 于规则层：参数服务不可用或未显式开启时护栏静默放行，开启后才是 fail closed）。
-func ruleGuardEnabled(ctx context.Context, params *parametersapp.Service) bool {
+// 参数读取失败属安全控件失效路径，Warn 留痕（与 observationEnabled 先例一致但补日志）。
+func ruleGuardEnabled(ctx context.Context, logger *zap.Logger, params *parametersapp.Service) bool {
 	if params == nil {
 		return false
 	}
 	values, err := params.PlatformValues(ctx)
 	if err != nil {
+		logger.Warn("ruleguard enabled read failed, guard open", zap.Error(err))
 		return false
 	}
 	enabled, _ := values["evaluation.ruleguard.enabled"].(bool)
@@ -615,13 +617,15 @@ func ruleGuardEnabled(ctx context.Context, params *parametersapp.Service) bool {
 }
 
 // ruleGuardDenylist 读取平台参数 evaluation.ruleguard.denylist（逗号分隔工具名）。
-// 读取失败或空值返回空切片：denylist 为空 = 无拦截项，规则层放行。
-func ruleGuardDenylist(ctx context.Context, params *parametersapp.Service) []string {
+// 读取失败或空值返回空切片：denylist 为空 = 无拦截项，规则层放行。参数读取失败
+// 属安全控件失效路径，Warn 留痕（同 ruleGuardEnabled）。
+func ruleGuardDenylist(ctx context.Context, logger *zap.Logger, params *parametersapp.Service) []string {
 	if params == nil {
 		return nil
 	}
 	values, err := params.PlatformValues(ctx)
 	if err != nil {
+		logger.Warn("ruleguard denylist read failed, guard open", zap.Error(err))
 		return nil
 	}
 	raw, _ := values["evaluation.ruleguard.denylist"].(string)
@@ -632,8 +636,8 @@ func ruleGuardDenylist(ctx context.Context, params *parametersapp.Service) []str
 // evaluation.ruleguard.*（默认关闭）；Metrics 可 nil（NewRuleGuard 归一为 NoopMetrics）。
 func agentRuleGuard(c *Container, metrics observability.MetricsProvider) *agent.RuleGuard {
 	return agent.NewRuleGuard(agent.RuleGuardDeps{
-		Enabled:  func(ctx context.Context) bool { return ruleGuardEnabled(ctx, c.Parameters.Service) },
-		Denylist: func(ctx context.Context) []string { return ruleGuardDenylist(ctx, c.Parameters.Service) },
+		Enabled:  func(ctx context.Context) bool { return ruleGuardEnabled(ctx, c.Logger, c.Parameters.Service) },
+		Denylist: func(ctx context.Context) []string { return ruleGuardDenylist(ctx, c.Logger, c.Parameters.Service) },
 		Metrics:  metrics,
 		Logger:   c.Logger,
 	})

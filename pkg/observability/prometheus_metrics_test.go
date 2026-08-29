@@ -96,8 +96,8 @@ func exerciseAllMetrics(m MetricsProvider) {
 	m.IncMCPClientRequest("mcp-server", "call", "ok")
 	m.IncMCPClientReconnect("mcp-server")
 	m.IncEvaluationJob("ok")
-	// Evaluation observation（§11）
-	m.IncEvalObservation("agent", "pass")
+	// Evaluation observation（§11；第二参为 stratum，非 verdict）
+	m.IncEvalObservation("agent", "pro")
 	m.RecordEvalJudgeScore("agent", "faithfulness", 0.9)
 	m.RecordEvalJudgeLatency(0.3)
 	m.RecordEvalJudgeCost(0.001)
@@ -152,8 +152,8 @@ func TestReaperMetricsServerOnly(t *testing.T) {
 
 func TestEvalObservationMetrics(t *testing.T) {
 	m := NewPrometheusMetrics(zap.NewNop())
-	m.IncEvalObservation("agent", "pass")
-	m.IncEvalObservation("agent", "pass")
+	m.IncEvalObservation("agent", "pro")
+	m.IncEvalObservation("agent", "pro")
 	m.RecordEvalJudgeScore("agent", "faithfulness", 0.9)
 	m.RecordEvalJudgeLatency(1.5)
 	m.RecordEvalJudgeCost(0.012)
@@ -165,7 +165,10 @@ func TestEvalObservationMetrics(t *testing.T) {
 		t.Fatalf("Gather() error = %v", err)
 	}
 	// 断言各指标名、label 维度与值对齐规格 §11（helper 见 Step 3 末尾）。
+	// eval_observation_total 标签为 {resource, stratum}（§11.1）：按 stratum 过滤必须命中
+	// 2 条 —— 旧实现把 verdict 丢弃写空 stratum，会在此处失败。
 	assertCounterVecSum(t, families, "eval_observation_total", "resource", "agent", 2)
+	assertCounterVecSum(t, families, "eval_observation_total", "stratum", "pro", 2)
 	assertCounterVecSum(t, families, "eval_judge_failure_total", "reason", "evidence_missing", 1)
 	assertHistogramVecSum(t, families, "eval_judge_score", "dimension", "faithfulness", 0.9)
 	assertHistogramSum(t, families, "eval_judge_latency_seconds", 1.5)
