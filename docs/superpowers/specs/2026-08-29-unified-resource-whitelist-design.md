@@ -61,8 +61,12 @@
 ```go
 case "mcp":                 // 新增
     return resourceEditors.AddEditorForKind(ctx, tenantID, "mcp", resourceID, editorID, "operation-gate")
-case "knowledge_workspace": // 新增
-    return resourceEditors.AddEditorForKind(ctx, tenantID, "knowledge", resourceID, editorID, "operation-gate")
+case "knowledge_workspace": // 新增：workspace editors 以 workspace UUID 存储，:name 必须先解析为 UUID
+    workspace, err := c.Knowledge.WorkspaceService.GetByName(ctx, tenantID, resourceID)
+    if err != nil {
+        return err
+    }
+    return resourceEditors.AddEditorForKind(ctx, tenantID, "knowledge", workspace.ID, editorID, "operation-gate")
 case "workflow":            // 新增
     return resourceEditors.AddEditorForKind(ctx, tenantID, "workflow", resourceID, editorID, "operation-gate")
 ```
@@ -94,7 +98,7 @@ case "workflow":            // 新增
 
 ### 其余资源申请入口
 
-- workspace：`POST /knowledge/workspaces/:name/request-editor`。该路由下 resourceId 即 `:name`（workspace name），`grantRouteResourceType` 从路由派生类型，body 的 `resourceId` 承载 name。
+- workspace：`POST /knowledge/workspaces/:name/request-editor`。该路由下 resourceId 即 `:name`（workspace name），申请体 `resourceId` 承载 name；批准授予时由 grant 闭包经 `WorkspaceService.GetByName` 解析为 workspace UUID 再落库（workspace editors 以 UUID 存储，与 `resolveUpdateActor` 用 `current.ID` 一致）。
 - mcp：`POST /mcp/servers/:id/request-editor`。
 - 两者后端白名单强制已存在（workspace/mcp 各自 `resolveUpdateActor`），无需新增校验。
 
