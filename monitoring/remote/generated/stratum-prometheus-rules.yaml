@@ -657,6 +657,57 @@ spec:
             description: Prometheus has been unable to scrape the dependency metrics endpoint for ten minutes (current value {{ $value }}).
             dashboard_url: /d/stratum-dependencies
             runbook_url: /docs/operations/alerts/dependencies.md#dependency-target-missing
+    - name: stratum-evaluation-observability
+      rules:
+        - alert: StratumEvalBehaviorAnomaly
+          expr: |
+            rate(eval_behavior_anomaly_total[5m]) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+            service: evaluation
+            component: runtime-observation
+            environment: remote-test
+          annotations:
+            summary: 评测行为异常判异升高
+            description: >-
+              运行态观测行为异常判异速率 {{ $value | printf "%.2f" }}/s（signal 维度见
+              labels），持续 5 分钟。检查判异来源（judge 跌阈 / 行为放弃 / 规则命中）并
+              到评测中心下钻对应 trace。
+            dashboard_url: https://stratum.grafana/d/evaluation
+            runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-behavior-anomaly
+        - alert: StratumEvalSampleCoverageLow
+          expr: |
+            eval_sample_coverage < 0.5
+          for: 10m
+          labels:
+            severity: warning
+            service: evaluation
+            component: runtime-observation
+            environment: remote-test
+          annotations:
+            summary: 评测主动采样覆盖率不足
+            description: >-
+              eval_sample_coverage（采样通过/事件到达）低于 0.5 持续 10 分钟，
+              可能整层被静默跳过。核对采样率参数与 judge 可用性，禁止静默跳过某层（§14）。
+            dashboard_url: https://stratum.grafana/d/evaluation
+            runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-sample-coverage-low
+        - alert: StratumEvalRuleBlocked
+          expr: |
+            rate(eval_rule_hit_total{verdict="block"}[5m]) > 0
+          for: 5m
+          labels:
+            severity: critical
+            service: evaluation
+            component: runtime-observation
+            environment: remote-test
+          annotations:
+            summary: 规则护栏命中拦截
+            description: >-
+              规则护栏即时拦截速率 > 0（rule={{ $labels.rule }}），持续 5 分钟。
+              T4 红线级：按 runbook 立即人工确认并处置。
+            dashboard_url: https://stratum.grafana/d/evaluation
+            runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-rule-blocked
     - name: stratum-http-recording
       interval: 1m
       rules:
