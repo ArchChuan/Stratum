@@ -249,17 +249,8 @@ func (r *PgSkillRevisionRepo) SaveRevision(
 		}
 		// 乐观并发：期望内容哈希必须匹配当前生效版本。空 baseline 表示直写
 		// (或存量未发布 skill 的首版保存),跳过校验。
-		if expectedContentHash != "" {
-			var activeHash string
-			if err := tx.QueryRow(ctx,
-				`SELECT COALESCE(r.content_hash, '') FROM skills s
-				 LEFT JOIN skill_revisions r ON r.id=s.active_revision_id WHERE s.id=$1`, skillID,
-			).Scan(&activeHash); err != nil {
-				return err
-			}
-			if activeHash != expectedContentHash {
-				return domain.ErrSkillDraftStale
-			}
+		if err := validateActiveContentHash(ctx, tx, skillID, expectedContentHash); err != nil {
+			return err
 		}
 		// 旧生效版本降级,新版本立即生效(保存即生效,无发布步骤)。
 		if _, err := tx.Exec(ctx,
@@ -290,6 +281,162 @@ func (r *PgSkillRevisionRepo) NextRevisionNo(ctx context.Context, skillID string
 		).Scan(&next)
 	})
 	return next, err
+}
+
+// validateActiveContentHash guards concurrent edits: when expected is
+// non-empty, it must match the current active revision's content_hash,
+// otherwise the write fails with ErrSkillDraftStale (409). Shared by
+// SaveDraft/PublishDraft to keep the write closures within the complexity
+// budget.
+func validateActiveContentHash(ctx context.Context, tx pgx.Tx, skillID, expected string) error {
+	if expected == "" {
+		return nil
+	}
+	var activeHash string
+	if err := tx.QueryRow(ctx,
+		`SELECT COALESCE(r.content_hash, '') FROM skills s
+		 LEFT JOIN skill_revisions r ON r.id=s.active_revision_id WHERE s.id=$1`, skillID,
+	).Scan(&activeHash); err != nil {
+		return err
+	}
+	if activeHash != expected {
+		return domain.ErrSkillDraftStale
+	}
+	return nil
+}
+
+// SaveDraft persists the skill's single draft revision, overwriting an
+// existing draft row (id kept) or inserting a fresh one, and repoints
+// skills.draft_revision_id. The active revision and published/deprecated
+// history are untouched. expectedContentHash guards concurrent edits (409 on
+// mismatch). editorActor, when non-empty, re-validates editor qualification
+// inside the transaction (TOCTOU closure).
+func (r *PgSkillRevisionRepo) SaveDraft(
+	ctx context.Context,
+	skillID, expectedContentHash string,
+	draft domain.SkillRevision,
+	editorActor string,
+	audit *auditdomain.ResourceChangeAuditEvent,
+) error {
+	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if err := revalidateEditorIfActor(ctx, tx, resourceEditorKind, skillID, editorActor); err != nil {
+			return err
+		}
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM skills WHERE id=$1)`, skillID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return domain.ErrSkillNotFound
+		}
+		if err := validateActiveContentHash(ctx, tx, skillID, expectedContentHash); err != nil {
+			return err
+		}
+		// 覆盖既有草稿(部分唯一索引保证至多一个);未命中则首次插入并指向。
+		tag, err := tx.Exec(ctx,
+			`UPDATE skill_revisions SET name=$2, description=$3, instructions=$4, source='manual',
+			        content_hash=$5, updated_at=NOW(), created_by=$6
+			 WHERE skill_id=$1 AND status='draft'`,
+			skillID, draft.Name, draft.Description, draft.Instructions, draft.ContentHash, draft.CreatedBy,
+		)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			if err := insertSkillRevision(ctx, tx, draft); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx,
+				`UPDATE skills SET draft_revision_id=$2, updated_at=NOW() WHERE id=$1`,
+				skillID, draft.ID,
+			); err != nil {
+				return err
+			}
+		}
+		return insertChangeAudit(ctx, tx, audit)
+	})
+}
+
+// PublishDraft promotes the skill's draft to the new active published version
+// in one transaction: the old active is demoted to deprecated first (a draft
+// still holds status='draft', so the demote WHERE clause cannot touch it),
+// then the draft is promoted with revision_no/published_at/parent assigned,
+// active_revision_id repoints and draft_revision_id clears. nextRevisionNo is
+// taken by the caller; parentRevisionID is the old active's id ("" when none).
+// expectedContentHash guards concurrent edits (409); no draft → ErrSkillDraftNotFound.
+func (r *PgSkillRevisionRepo) PublishDraft(
+	ctx context.Context,
+	skillID, draftID, parentRevisionID string,
+	nextRevisionNo int,
+	expectedContentHash, editorActor string,
+	audit *auditdomain.ResourceChangeAuditEvent,
+) error {
+	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if err := revalidateEditorIfActor(ctx, tx, resourceEditorKind, skillID, editorActor); err != nil {
+			return err
+		}
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM skills WHERE id=$1)`, skillID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return domain.ErrSkillNotFound
+		}
+		if err := validateActiveContentHash(ctx, tx, skillID, expectedContentHash); err != nil {
+			return err
+		}
+		// 顺序必须 demote→promote:先转正草稿再按 status='published' 降级会把
+		// 刚转正的草稿自己降级。此时草稿仍是 'draft',demote 的 WHERE 不会命中它。
+		if _, err := tx.Exec(ctx,
+			`UPDATE skill_revisions SET status='deprecated', updated_at=NOW() WHERE skill_id=$1 AND status='published'`, skillID,
+		); err != nil {
+			return err
+		}
+		tag, err := tx.Exec(ctx,
+			`UPDATE skill_revisions SET status='published', revision_no=$3, published_at=NOW(),
+			        parent_revision_id=COALESCE($4, ''), updated_at=NOW()
+			 WHERE id=$2 AND skill_id=$1 AND status='draft'`,
+			skillID, draftID, nextRevisionNo, parentRevisionID,
+		)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return domain.ErrSkillDraftNotFound
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE skills SET active_revision_id=$2, draft_revision_id=NULL, status='published', updated_at=NOW() WHERE id=$1`,
+			skillID, draftID,
+		); err != nil {
+			return err
+		}
+		return insertChangeAudit(ctx, tx, audit)
+	})
+}
+
+// DiscardDraft deletes the skill's draft row and clears skills.draft_revision_id.
+// Idempotent: a skill without a draft returns success (the service layer has
+// already loaded and owned the skill). editorActor, when non-empty,
+// re-validates editor qualification inside the transaction.
+func (r *PgSkillRevisionRepo) DiscardDraft(
+	ctx context.Context,
+	skillID, editorActor string,
+	audit *auditdomain.ResourceChangeAuditEvent,
+) error {
+	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if err := revalidateEditorIfActor(ctx, tx, resourceEditorKind, skillID, editorActor); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM skill_revisions WHERE skill_id=$1 AND status='draft'`, skillID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE skills SET draft_revision_id=NULL, updated_at=NOW() WHERE id=$1`, skillID,
+		); err != nil {
+			return err
+		}
+		return insertChangeAudit(ctx, tx, audit)
+	})
 }
 
 func (r *PgSkillRevisionRepo) RollbackRevision(

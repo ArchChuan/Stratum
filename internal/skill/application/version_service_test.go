@@ -350,6 +350,73 @@ func (r *fakeVersionRepo) NextRevisionNo(_ context.Context, skillID string) (int
 	}
 	return next, nil
 }
+func (r *fakeVersionRepo) SaveDraft(_ context.Context, skillID, expected string, draft domain.SkillRevision, _ string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	r.recordAudit(audit)
+	skill, ok := r.skills[skillID]
+	if !ok {
+		return domain.ErrSkillNotFound
+	}
+	if expected != "" {
+		active, ok := r.revisions[skill.ActiveRevisionID]
+		if !ok || active.ContentHash != expected {
+			return domain.ErrSkillDraftStale
+		}
+	}
+	// 覆盖既有草稿(保持 id 不变)或首次插入。
+	if old, ok := r.revisions[skill.DraftRevisionID]; ok && old.SkillID == skillID && old.Status == domain.VersionStatusDraft {
+		old.Name, old.Description, old.Instructions = draft.Name, draft.Description, draft.Instructions
+		old.ContentHash = draft.ContentHash
+		r.revisions[old.ID] = old
+	} else {
+		r.revisions[draft.ID] = draft
+		skill.DraftRevisionID = draft.ID
+		r.skills[skillID] = skill
+	}
+	return nil
+}
+func (r *fakeVersionRepo) PublishDraft(_ context.Context, skillID, draftID, parentRevisionID string, next int, expected, _ string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	r.recordAudit(audit)
+	skill, ok := r.skills[skillID]
+	if !ok {
+		return domain.ErrSkillNotFound
+	}
+	if expected != "" {
+		active, ok := r.revisions[skill.ActiveRevisionID]
+		if !ok || active.ContentHash != expected {
+			return domain.ErrSkillDraftStale
+		}
+	}
+	draft, ok := r.revisions[draftID]
+	if !ok || draft.SkillID != skillID || draft.Status != domain.VersionStatusDraft {
+		return domain.ErrSkillDraftNotFound
+	}
+	// 顺序必须 demote→promote:旧生效版本先降级,再转正草稿。
+	if cur, ok := r.revisions[skill.ActiveRevisionID]; ok && cur.ID != draftID {
+		cur.Status = domain.VersionStatusDeprecated
+		r.revisions[cur.ID] = cur
+	}
+	draft.Status = domain.VersionStatusPublished
+	draft.RevisionNo = next
+	draft.ParentRevisionID = parentRevisionID
+	r.revisions[draftID] = draft
+	skill.ActiveRevisionID = draftID
+	skill.DraftRevisionID = ""
+	r.skills[skillID] = skill
+	return nil
+}
+func (r *fakeVersionRepo) DiscardDraft(_ context.Context, skillID, _ string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	r.recordAudit(audit)
+	skill, ok := r.skills[skillID]
+	if !ok {
+		return domain.ErrSkillNotFound
+	}
+	if draft, ok := r.revisions[skill.DraftRevisionID]; ok && draft.SkillID == skillID && draft.Status == domain.VersionStatusDraft {
+		delete(r.revisions, draft.ID)
+	}
+	skill.DraftRevisionID = ""
+	r.skills[skillID] = skill
+	return nil
+}
 
 // seedSkill 直接注入 skill + revision 到 fake repo(绕过写路径,便于构造存量场景)。
 func seedSkill(repo *fakeVersionRepo, skill port.SkillProductRow, revision domain.SkillRevision) {
