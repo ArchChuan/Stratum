@@ -279,6 +279,10 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 	s.logAgentExecutionDebug("agent.execute", agentID, meta, req)
 	execCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
+	// P1b：执行上下文注入规则拦截累积器，RuleGuard 命中时追加，emitObservation
+	// 读取转观测事件 rule_signals（§4.1）。
+	blocks := &[]domain.RuleBlock{}
+	execCtx = context.WithValue(execCtx, ruleBlockCollectorKey{}, blocks)
 
 	start := time.Now()
 	result, err := a.Execute(execCtx, req.Query, options...)
@@ -292,7 +296,7 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 		scope := a.GetConfig().MemoryScope
 		s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "user", req.Query)
 		s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "assistant", result.Output)
-		s.emitObservation(ctx, meta, agentID, executionID, result)
+		s.emitObservation(execCtx, meta, agentID, executionID, result)
 	}
 	// 任务结束轨迹反思：与 fact 提取并列的链路，fail-open 显式降级。
 	s.enqueueTrajectoryReflection(ctx, meta, req, agentID, a.GetConfig().MemoryScope, executionID, result)
@@ -337,6 +341,9 @@ func (s *AgentService) ExecuteStream(
 	options = append(options, WithTokenCallback(wrappedTokenCb), WithDelegateEventCallback(meta.DelegateEventCb), WithExecutionID(executionID))
 
 	execCtx, cancel = context.WithCancel(context.WithoutCancel(streamCtx))
+	// P1b：与 Execute 路径一致的规则拦截累积器注入（§4.1）。
+	blocks := &[]domain.RuleBlock{}
+	execCtx = context.WithValue(execCtx, ruleBlockCollectorKey{}, blocks)
 	run = func() (*AgentResult, int, error) {
 		s.logAgentExecutionDebug("agent.execute_stream", agentID, meta, req)
 		start := time.Now()
@@ -350,7 +357,7 @@ func (s *AgentService) ExecuteStream(
 			scope := a.GetConfig().MemoryScope
 			s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "user", req.Query)
 			s.bufferMemoryTurn(ctx, meta, req, agentID, scope, "assistant", res.Output)
-			s.emitObservation(ctx, meta, agentID, executionID, res)
+			s.emitObservation(execCtx, meta, agentID, executionID, res)
 		}
 		s.enqueueTrajectoryReflection(ctx, meta, req, agentID, a.GetConfig().MemoryScope, executionID, res)
 		if resuming {
