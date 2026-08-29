@@ -792,6 +792,7 @@ CREATE TABLE IF NOT EXISTS rag_workspaces (
 ALTER TABLE rag_workspaces DROP COLUMN IF EXISTS system_key;
 ALTER TABLE rag_workspaces DROP COLUMN IF EXISTS management_mode;
 ALTER TABLE rag_workspaces ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
+ALTER TABLE rag_workspaces ADD COLUMN IF NOT EXISTS active_version_id TEXT;
 
 CREATE TABLE IF NOT EXISTS chat_conversations (
     id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),

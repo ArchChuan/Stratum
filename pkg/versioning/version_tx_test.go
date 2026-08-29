@@ -46,13 +46,17 @@ func TestProductTableRef(t *testing.T) {
 	require.Equal(t, "agents", ref.Table)
 	require.Equal(t, "active_version_id", ref.ActiveColumn)
 
+	// knowledge 已接入：productTables 注册 rag_workspaces.active_version_id。
+	ref, ok = ProductTableRef("knowledge")
+	require.True(t, ok)
+	require.Equal(t, "rag_workspaces", ref.Table)
+	require.Equal(t, "active_version_id", ref.ActiveColumn)
+
 	// 未接入的 kind 必须 fail-closed（读侧 is_current / 写侧 SetActiveTx 报错）。
-	_, ok = ProductTableRef("skill")
-	require.False(t, ok)
-	_, ok = ProductTableRef("knowledge")
-	require.False(t, ok)
-	_, ok = ProductTableRef("mcp")
-	require.False(t, ok)
+	for _, kind := range []string{"skill", "mcp"} {
+		_, ok := ProductTableRef(kind)
+		require.False(t, ok)
+	}
 }
 
 func TestInsertVersionTx(t *testing.T) {
