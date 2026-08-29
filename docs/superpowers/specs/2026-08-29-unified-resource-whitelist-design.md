@@ -82,17 +82,19 @@ case "workflow":            // 新增
 
 **DefinitionService 所有权矩阵**（复用 skill `enforceOwnership` 模式，fail-closed）：
 
-| 操作 | owner | admin | 白名单成员 | 其他成员 |
-|---|---|---|---|---|
-| Update / Publish | ✅ | ✅ | ✅ | ❌ 403 |
-| Delete | ✅ | ✅ | ❌ | ❌ |
+| 操作 | owner | admin（本人为 creator） | admin（非 creator） | 白名单成员 | 其他成员 |
+|---|---|---|---|---|---|
+| Update / Publish | ✅ | ✅ | ✅ | ✅ | ❌ 403 |
+| Delete | ✅ | ✅ | ❌ | ❌ | ❌ |
+
+> Delete 复用 skill 的 creator 语义：admin 需为 creator（或 owner）才可删，防止新 admin 删除他人资源。Delete 路由本身仍挂 admin 中间件，非成员进不到应用层；应用层矩阵作为纵深防御。
 
 - `Create` 写入 `created_by = actorID`。
 - 白名单校验用共享 `resource_editors` kind='workflow'，写入事务内复查（TOCTOU 关闭，对齐 skill/workspace 的 `editorActor` 模式）。
 
 ### 其余资源申请入口
 
-- workspace：`POST /knowledge/workspaces/:name/request-editor`（复用现有 handler，确认 `:name` 路由参数取参）。
+- workspace：`POST /knowledge/workspaces/:name/request-editor`。该路由下 resourceId 即 `:name`（workspace name），`grantRouteResourceType` 从路由派生类型，body 的 `resourceId` 承载 name。
 - mcp：`POST /mcp/servers/:id/request-editor`。
 - 两者后端白名单强制已存在（workspace/mcp 各自 `resolveUpdateActor`），无需新增校验。
 
@@ -102,7 +104,7 @@ case "workflow":            // 新增
 
 新增共享单元（`web/src/shared/`）：
 
-- `useRequestEditorAccess(resourceType, resourceId, resourceName)`：封装发起申请，成功提示已进入审批中心，重复申请/错误统一文案。
+- `useRequestEditorAccess(resourceType, resourceId, resourceName)`：封装发起申请，成功提示已进入审批中心，重复申请/错误统一文案。resourceId 语义与对应路由一致（agent/skill/mcp/workflow/doc 为实体 id；knowledge_workspace 为 workspace name）。
 - `<RequestEditorButton />`：按资源类型渲染按钮文案与形态，`loading` 防连点。
 
 ### 各资源接入
@@ -114,7 +116,7 @@ case "workflow":            // 新增
 | knowledge_doc | WorkspaceDocumentsTable/DetailPage 手写 | 迁移复用共享 hook/组件（文案保持「申请查看」） |
 | mcp | MCPServersPage 成员视图无入口 | 非白名单成员只读配置 + 申请编辑权限 |
 | workspace | 无入口 | 文档页/工作区页非白名单成员申请编辑权限 |
-| workflow | 前端 `isAdmin` 控制编辑 | 非白名单成员只读画布 + 申请编辑权限；canEdit = `isAdmin \|\| editors.includes(user.sub)` |
+| workflow | 前端 `isAdmin` 控制编辑 | 非白名单成员只读画布 + 申请编辑权限；canEdit = `isAdmin \|\| isOwner \|\| editors.includes(user.sub)`（与后端矩阵一致，owner/admin/白名单成员可编辑） |
 
 ### workflow 白名单管理
 
