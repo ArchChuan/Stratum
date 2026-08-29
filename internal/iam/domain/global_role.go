@@ -33,3 +33,10 @@ func (r GlobalRole) Valid() bool {
 func (r GlobalRole) AtLeast(min GlobalRole) bool {
 	return globalRoleRank[r] >= globalRoleRank[min]
 }
+
+// IsPlatformAdmin reports whether r is a platform administrator
+// (system_admin or above). Guards that elevate platform admins to tenant
+// admins key off this predicate.
+func (r GlobalRole) IsPlatformAdmin() bool {
+	return r.AtLeast(GlobalRoleSystemAdmin)
+}

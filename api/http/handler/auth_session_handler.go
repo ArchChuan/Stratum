@@ -44,12 +44,21 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusServiceUnavailable, errors.New("membership service unavailable")))
 		return
 	}
-	tenantRole, err := h.deps.MembershipReader.GetTenantRole(ctx, storedClaims.UserID, storedClaims.TenantID)
-	if errors.Is(err, domain.ErrMemberNotFound) {
-		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errors.New("tenant membership no longer active")))
-		return
+	globalRole := ""
+	if dbRole, rErr := h.deps.MembershipReader.GetGlobalRole(ctx, storedClaims.UserID); rErr == nil {
+		globalRole = dbRole
 	}
-	if err != nil || tenantRole == "" {
+	tenantRole, err := h.deps.MembershipReader.GetTenantRole(ctx, storedClaims.UserID, storedClaims.TenantID)
+	switch {
+	case err == nil && tenantRole != "":
+		tenantRole = domain.EffectiveTenantRole(tenantRole, globalRole)
+	case errors.Is(err, domain.ErrMemberNotFound):
+		if !domain.GlobalRole(globalRole).IsPlatformAdmin() {
+			_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errors.New("tenant membership no longer active")))
+			return
+		}
+		tenantRole = domain.EffectiveTenantRole("", globalRole)
+	default:
 		_ = c.Error(middleware.NewHTTPError(http.StatusServiceUnavailable, errors.New("membership verification failed")))
 		return
 	}
@@ -62,13 +71,6 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 	if err := h.deps.TokenStore.Rotate(ctx, rawRT, newRawRT, constants.RefreshTokenTTL); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errors.New("invalid refresh token")))
 		return
-	}
-
-	globalRole := ""
-	if h.deps.MembershipReader != nil {
-		if dbRole, rErr := h.deps.MembershipReader.GetGlobalRole(ctx, storedClaims.UserID); rErr == nil {
-			globalRole = dbRole
-		}
 	}
 
 	claims := iamport.TokenClaims{

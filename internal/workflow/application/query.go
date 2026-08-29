@@ -64,6 +64,7 @@ type ListRunsQuery struct {
 type RunSummary struct {
 	ID            string           `json:"id"`
 	DefinitionID  string           `json:"definition_id"`
+	Name          string           `json:"name"`
 	VersionID     string           `json:"version_id"`
 	VersionNumber int64            `json:"version"`
 	Status        domain.RunStatus `json:"status"`
@@ -161,7 +162,7 @@ func (s *RunService) ListRuns(ctx context.Context, tenantID string, query ListRu
 
 func NewRunSummary(run domain.Run) RunSummary {
 	return RunSummary{
-		ID: run.ID, DefinitionID: run.DefinitionID, VersionID: run.VersionID, VersionNumber: run.VersionNumber,
+		ID: run.ID, DefinitionID: run.DefinitionID, Name: run.Name, VersionID: run.VersionID, VersionNumber: run.VersionNumber,
 		Status: run.Status, CreatedBy: run.CreatedBy, CreatedAt: run.CreatedAt, UpdatedAt: run.UpdatedAt,
 		StartedAt: run.StartedAt, FinishedAt: run.FinishedAt,
 	}

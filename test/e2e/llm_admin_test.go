@@ -666,12 +666,13 @@ func (h *providerHandlerProxy) Create(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "tenant context required"})
 		return
 	}
+	actorID, _ := userIDFromGin(c)
 	var input llmapp.CreateProviderInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	provider, err := h.svc.Create(c.Request.Context(), tid, input)
+	provider, err := h.svc.Create(c.Request.Context(), tid, actorID, input)
 	if err != nil {
 		_ = c.Error(err)
 		return

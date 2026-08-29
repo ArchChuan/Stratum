@@ -66,7 +66,10 @@ func NewProviderService(
 }
 
 // Create persists a new provider and kicks off best-effort model discovery.
-func (s *ProviderService) Create(ctx context.Context, tenantID string, input CreateProviderInput) (*domain.Provider, error) {
+// provider 创建也属于平台目录变更，需求 2 要求 provider catalog 变更统一写入
+// 平台审计：优先走 PlatformProviderRepository.CreatePlatform（事务内创建+审计
+// 原子提交），仅对未实现平台端口的 repo 回退到裸 Create（不写审计）。
+func (s *ProviderService) Create(ctx context.Context, tenantID, actorID string, input CreateProviderInput) (*domain.Provider, error) {
 	p := &domain.Provider{
 		ID:      genULID(),
 		Name:    input.Name,
@@ -75,7 +78,18 @@ func (s *ProviderService) Create(ctx context.Context, tenantID string, input Cre
 		APIKey:  input.APIKey,
 		Enabled: true,
 	}
-	if err := s.repo.Create(ctx, p); err != nil {
+	audit, err := newChangeAudit(ctx, changeAuditInput{
+		Kind: auditdomain.ResourceKindProvider, ResourceID: p.ID, Operation: auditdomain.ChangeOpCreate,
+		ActorID: actorID, After: providerSafeProjection(p),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if platformRepo, ok := s.repo.(port.PlatformProviderRepository); ok {
+		if err := platformRepo.CreatePlatform(ctx, p, tenantID, audit); err != nil {
+			return nil, fmt.Errorf("provider service: create: %w", err)
+		}
+	} else if err := s.repo.Create(ctx, p); err != nil {
 		return nil, fmt.Errorf("provider service: create: %w", err)
 	}
 	s.invalidate()

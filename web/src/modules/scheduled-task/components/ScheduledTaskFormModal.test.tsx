@@ -6,6 +6,12 @@ import type { ScheduledTask } from '../model/scheduledTask';
 
 import { ScheduledTaskFormModal, type ScheduledTaskFormValues } from './ScheduledTaskFormModal';
 
+import { workflowApi } from '@/modules/workflow/api/workflow.api';
+
+vi.mock('@/modules/workflow/api/workflow.api', () => ({
+  workflowApi: { listWorkflowVersions: vi.fn(), listWorkflows: vi.fn() },
+}));
+
 
 const editingTask: ScheduledTask = {
   id: 'task-1',
@@ -43,6 +49,14 @@ function renderModal({ editing, onSubmit }: { editing?: ScheduledTask | null; on
 }
 
 describe('ScheduledTaskFormModal', () => {
+  beforeEach(() => {
+    vi.mocked(workflowApi.listWorkflows).mockResolvedValue({ workflows: [], total: 0, page: 1, page_size: 50 });
+    vi.mocked(workflowApi.listWorkflowVersions).mockResolvedValue({
+      versions: [{ id: 'ver-1', definition_id: 'wf-1', version: 2, name: '稳定版', description: '', created_at: '2026-07-24T00:00:00Z' }],
+      total: 1, page: 1, page_size: 50,
+    });
+  });
+
   it('prefills the form with formatted JSON when editing', async () => {
     const getForm = renderModal({ editing: editingTask });
     await waitFor(() => {
@@ -53,6 +67,13 @@ describe('ScheduledTaskFormModal', () => {
     });
     const form = getForm.mock.calls[0][0] as FormInstance;
     expect(form.getFieldValue('inputTemplate')).toBe(JSON.stringify(editingTask.inputTemplate, null, 2));
+  });
+
+  it('loads versions for the prefilled workflow and shows them in the dropdown when editing', async () => {
+    renderModal({ editing: editingTask });
+    // 编辑模式 setFieldsValue 预填 workflowId，不触发 Select onChange——版本列表应主动加载。
+    await waitFor(() => expect(workflowApi.listWorkflowVersions).toHaveBeenCalledWith('wf-1', expect.anything()));
+    await waitFor(() => expect(screen.getByText('v2 稳定版')).toBeInTheDocument());
   });
 
   it('defaults the input template to the task placeholder when creating', async () => {

@@ -58,6 +58,8 @@ func NewParametersRegistry() *ParametersRegistry {
 	r.registerRAGParams()
 	r.registerMCPParams()
 	r.registerOptimizerParams()
+	r.registerObservationParams()
+	r.registerRuleGuardParams()
 	r.registerJudgeParams()
 	r.registerFactCheckParams()
 	r.registerTraceParams()
@@ -457,6 +459,47 @@ func (r *ParametersRegistry) registerJudgeParams() {
 	} {
 		_ = r.Register(def)
 	}
+}
+
+// registerObservationParams 是 Phase 1 运行态观测（§4.2）的平台级参数。
+// enabled 默认 false：平台未显式开启时禁止采样（fail closed）。
+// 仅注册不播种：PlatformValues 对快照缺失 key 回退 registry default。
+func (r *ParametersRegistry) registerObservationParams() {
+	f := func(v float64) *float64 { return &v }
+	_ = r.Register(ParameterDefinition{
+		Key: "evaluation.observe.enabled", Scope: ScopePlatform, Category: "evaluation",
+		DisplayName: "启用运行态观测", Description: "是否对生产执行采样并异步 judge 打分(默认关)",
+		ValueType: TypeBool, Default: false,
+		VisualHint:  VisualHint{Control: ControlToggle},
+		Optimizable: true,
+	})
+	_ = r.Register(ParameterDefinition{
+		Key: "evaluation.observe.sample_rate", Scope: ScopePlatform, Category: "evaluation",
+		DisplayName: "运行态观测采样率", Description: "生产 trace 采样比例 0-1(按资源分层确定性采样)",
+		ValueType: TypeFloat, Default: 0.1,
+		VisualHint:  VisualHint{Control: ControlSlider, Min: f(0), Max: f(1), Step: f(0.05)},
+		Optimizable: true,
+	})
+}
+
+// registerRuleGuardParams 是 Phase 1 规则护栏（§4.1）的平台级参数。enabled 默认
+// false：平台未显式开启时护栏静默放行（fail open 于规则层，开启后才是 fail closed）。
+// denylist 逗号分隔工具名；仅注册不播种。
+func (r *ParametersRegistry) registerRuleGuardParams() {
+	_ = r.Register(ParameterDefinition{
+		Key: "evaluation.ruleguard.enabled", Scope: ScopePlatform, Category: "evaluation",
+		DisplayName: "启用规则护栏", Description: "内联工具 denylist 即时拦截(默认关)",
+		ValueType: TypeBool, Default: false,
+		VisualHint:  VisualHint{Control: ControlToggle},
+		Optimizable: true,
+	})
+	_ = r.Register(ParameterDefinition{
+		Key: "evaluation.ruleguard.denylist", Scope: ScopePlatform, Category: "evaluation",
+		DisplayName: "规则护栏 Denylist", Description: "逗号分隔的禁止工具名列表(命中即拦截)",
+		ValueType: TypeString, Default: "",
+		VisualHint:  VisualHint{Control: ControlTextarea},
+		Optimizable: true,
+	})
 }
 
 // registerFactCheckParams 是 agent 输出幻觉校验的平台级参数（factcheck /

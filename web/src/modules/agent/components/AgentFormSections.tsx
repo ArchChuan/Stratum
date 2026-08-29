@@ -2,9 +2,6 @@ import { BranchesOutlined, RobotOutlined, SettingOutlined, ThunderboltOutlined }
 import { Collapse, Form, Input, InputNumber, Select, Slider, Switch, Tag, Typography } from 'antd';
 import { useMemo } from 'react';
 
-import type { GroupedModelOption } from '../model/agent';
-
-
 import {
   AGENT_CONTEXT_WINDOW_RATIO,
   AGENT_DELEGATE_DEFAULT_MAX_DEPTH,
@@ -29,21 +26,21 @@ import {
 } from '@/constants';
 import type { Member } from '@/modules/iam';
 import type { Workspace } from '@/modules/knowledge';
-import { filterModelOption, ModelOptionLabel } from '@/modules/llm/components/ModelOptionLabel';
+import { ModelSelect } from '@/modules/llm/components/ModelSelect';
+import type { GroupedModelOption } from '@/modules/llm/model/grouped';
 import type { MCPToolOption } from '@/modules/mcp';
 import type { Skill } from '@/modules/skill';
 import { DefaultHint, SectionHeader } from '@/shared/ui';
 
 const { Text } = Typography;
 const { TextArea } = Input;
-const { Option, OptGroup } = Select;
+const { Option } = Select;
 
 interface AgentFormSectionsProps {
   skills: Skill[];
   mcpTools: MCPToolOption[];
   workspaces: Workspace[];
   groupedModels: GroupedModelOption[];
-  currentModel?: string;
   // 可编辑人（白名单）多选：创建路径恒展示；编辑路径由调用方按 isAdmin 控制。
   // 可编辑人经单独 PUT /agents/:id/editors 持久化，不进普通更新请求体。
   showEditors?: boolean;
@@ -56,7 +53,6 @@ export const AgentFormSections = ({
   mcpTools,
   workspaces,
   groupedModels,
-  currentModel,
   showEditors = false,
   editorCandidates = [],
   editorCandidatesLoading = false,
@@ -179,29 +175,13 @@ export const AgentFormSections = ({
         subtitle="选择模型并挂载工具和知识"
       />
       <Form.Item label="LLM 模型" name="llmModel" rules={[{ required: true, message: '请选择模型' }]}>
-        <Select
+        <ModelSelect
+          groupedModels={groupedModels}
+          onChange={handleModelChange}
           placeholder="选择推理模型"
           notFoundContent="模型管理中没有可用的推理模型"
-          showSearch
-          filterOption={filterModelOption}
-          onChange={handleModelChange}
-        >
-          {currentModel &&
-            !groupedModels.some((g) => g.models.some((m) => m.value === currentModel)) && (
-              <Option value={currentModel} disabled>
-                {currentModel}（当前不可用）
-              </Option>
-            )}
-          {groupedModels.map((group) => (
-            <OptGroup key={group.provider} label={group.provider}>
-              {group.models.map((m) => (
-                <Option key={m.value} value={m.value} label={m.label}>
-                  <ModelOptionLabel label={m.label} capabilities={m.capabilities} />
-                </Option>
-              ))}
-            </OptGroup>
-          ))}
-        </Select>
+          allowClear={false}
+        />
       </Form.Item>
       <Form.Item
         label="技能"

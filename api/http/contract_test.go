@@ -144,6 +144,9 @@ func TestContracts(t *testing.T) {
 			QueryService:      evalapp.NewQueryService(contractQueryRepo{}),
 			ExperimentService: evalapp.NewExperimentService(contractExperimentRepo{}),
 			CandidateService:  evalapp.NewCandidateCommandService(contractCandidateRepo{}),
+			ObservationService: evalapp.NewObservationService(evalapp.ObservationServiceDeps{
+				Repo: contractObservationRepo{}, Logger: logger,
+			}),
 		},
 		IAM: &wiring.IAM{
 			AdminService: iamapp.NewAdminService(
@@ -394,7 +397,7 @@ func (contractControlRepo) ResolveEffect(_ context.Context, _ string, _ string, 
 
 type contractAgentExecutor struct{}
 
-func (contractAgentExecutor) ExecuteAgent(_ context.Context, _ string, _ string, _ string) (string, string, error) {
+func (contractAgentExecutor) ExecuteAgent(_ context.Context, _ string, _ string, _ string, _ string, _ string) (string, string, error) {
 	return "", "", errors.New("stub: agent execution unavailable")
 }
 
@@ -408,8 +411,12 @@ func (contractAdminUserRepo) SearchUsers(_ context.Context, _ string, _ int) ([]
 func (contractAdminUserRepo) ListAdmins(_ context.Context) ([]iamport.AdminUser, error) {
 	return nil, nil
 }
-func (contractAdminUserRepo) SetAdminRole(_ context.Context, _ string) error    { return nil }
-func (contractAdminUserRepo) RemoveAdminRole(_ context.Context, _ string) error { return nil }
+func (contractAdminUserRepo) SetAdminRole(_ context.Context, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
+func (contractAdminUserRepo) RemoveAdminRole(_ context.Context, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (contractAdminUserRepo) GetGlobalRole(_ context.Context, userID string) (iamdomain.GlobalRole, error) {
 	if userID == "contract-user" {
 		return iamdomain.GlobalRoleUser, nil
@@ -426,13 +433,18 @@ func (contractAdminTenantRepo) List(_ context.Context, _ iamdomain.TenantFilter)
 	return nil, nil
 }
 func (contractAdminTenantRepo) Get(_ context.Context, _ string) (*iamdomain.Tenant, error) {
-	return nil, errStubNotFound
+	// 返回有效租户：GetTenant 详情与 DeleteTenant 审计投影都依赖 Get 成功。
+	return &iamdomain.Tenant{ID: "contract-id", Name: "contract-tenant", Slug: "contract-tenant", Plan: "free", Status: "active"}, nil
 }
-func (contractAdminTenantRepo) Create(_ context.Context, _ iamdomain.Tenant) error { return nil }
-func (contractAdminTenantRepo) UpdatePatch(_ context.Context, _ string, _ iamdomain.TenantPatch) error {
+func (contractAdminTenantRepo) Create(_ context.Context, _ iamdomain.Tenant, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
-func (contractAdminTenantRepo) HardDelete(_ context.Context, _ string) error { return nil }
+func (contractAdminTenantRepo) UpdatePatch(_ context.Context, _ string, _ iamdomain.TenantPatch, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
+func (contractAdminTenantRepo) HardDelete(_ context.Context, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (contractAdminTenantRepo) ProvisionSchema(_ context.Context, _ string) error {
 	return nil
 }
@@ -461,6 +473,10 @@ func (contractTenantRepo) UpdateTenantSettings(_ context.Context, _ string, _ []
 	return nil
 }
 func (contractTenantRepo) ListUserTenants(_ context.Context, _ string) ([]iamdomain.UserTenantInfo, error) {
+	return nil, nil
+}
+
+func (contractTenantRepo) ListAllTenants(context.Context) ([]iamdomain.UserTenantInfo, error) {
 	return nil, nil
 }
 
@@ -657,6 +673,42 @@ func (contractCandidateRepo) Reject(context.Context, string, string, domain.Cand
 	return domain.CandidateSummary{}, domain.ErrCandidateCommandConflict
 }
 
+// contractObservationRepo 为运行态观测查询 API 提供确定性单条/分页响应
+// （P1a；golden 文件与此 stub 的返回一一对应）。
+type contractObservationRepo struct{}
+
+func (contractObservationRepo) Save(_ context.Context, _ string, _ *domain.EvalObservation) error {
+	return nil
+}
+
+func (contractObservationRepo) Get(_ context.Context, _, _ string) (*domain.EvalObservation, error) {
+	return &domain.EvalObservation{
+		ID: "obs-1", TraceID: "trace-1",
+		Resource:  domain.ObservationResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1"},
+		Verdict:   domain.VerdictPass,
+		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}, nil
+}
+
+func (contractObservationRepo) QueryByResource(_ context.Context, _, _, _ string,
+	_, _ *time.Time, _, _ int,
+) ([]domain.EvalObservation, error) {
+	return []domain.EvalObservation{{
+		ID: "obs-1", TraceID: "trace-1",
+		Resource:  domain.ObservationResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1"},
+		Verdict:   domain.VerdictPass,
+		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}}, nil
+}
+
+func (contractObservationRepo) FindLatestByTrace(_ context.Context, _, _ string) (*domain.EvalObservation, error) {
+	return nil, nil
+}
+
+func (contractObservationRepo) UpdateBehaviorSignals(_ context.Context, _, _ string, _ domain.BehaviorSignals) error {
+	return nil
+}
+
 // ── Audit stub ─────────────────────────────────────────────────────────────
 
 type contractAuditRepo struct{}
@@ -714,6 +766,9 @@ func (contractSchedResolver) GetVersion(context.Context, string, string) (*sched
 }
 func (contractSchedResolver) ValidateInput(context.Context, string, string, map[string]any) error {
 	return nil
+}
+func (contractSchedResolver) ResolveVersionNames(context.Context, string, []string) (map[string]schedport.VersionName, error) {
+	return nil, nil
 }
 
 func mustGeneratePEM(t *testing.T) string {

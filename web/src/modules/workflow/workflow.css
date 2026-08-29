@@ -74,6 +74,9 @@
 .workflow-version-header { align-items: flex-start; display: grid; gap: 12px; grid-template-columns: auto 1fr auto; margin-bottom: 20px; }
 .workflow-version-header h3, .workflow-version-header p { margin: 0; }
 .workflow-readonly-canvas { background: #f7f8fc; border: 1px solid #e7e9f2; border-radius: 12px; height: 480px; }
+/* 只读画布 + 右侧节点配置详情：左列画布，右列详情面板撑满同高并可独立滚动。 */
+.workflow-readonly-layout { align-items: start; display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr) 320px; }
+.workflow-node-readonly-detail { background: #fff; border: 1px solid #e7e9f2; border-radius: 12px; max-height: 480px; overflow: auto; padding: 18px; }
 .workflow-version-inputs { margin-top: 16px; }
 .workflow-execution-page { margin: 0 auto; max-width: 760px; }
 .workflow-execution-header { align-items: flex-start; display: grid; gap: 12px; grid-template-columns: auto auto 1fr; margin-bottom: 20px; }

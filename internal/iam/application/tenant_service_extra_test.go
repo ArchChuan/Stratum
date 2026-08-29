@@ -364,3 +364,25 @@ func TestListUserTenantsAndGetMemberRoleForward(t *testing.T) {
 		t.Fatalf("GetMemberRole = %q, %v", role, err)
 	}
 }
+
+func TestTenantService_ListAllTenants(t *testing.T) {
+	repo := &listAllTenantRepo{}
+	svc := NewTenantService(repo, zap.NewNop())
+	got, err := svc.ListAllTenants(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllTenants: %v", err)
+	}
+	if len(got) != 1 || got[0].TenantID != "t-all" {
+		t.Fatalf("ListAllTenants = %+v, want [t-all]", got)
+	}
+}
+
+// listAllTenantRepo embeds the port interface so only ListAllTenants needs a
+// concrete implementation for this test.
+type listAllTenantRepo struct {
+	port.TenantRepo
+}
+
+func (r *listAllTenantRepo) ListAllTenants(_ context.Context) ([]domain.UserTenantInfo, error) {
+	return []domain.UserTenantInfo{{TenantID: "t-all", Name: "All"}}, nil
+}

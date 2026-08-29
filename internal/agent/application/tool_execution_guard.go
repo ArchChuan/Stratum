@@ -27,6 +27,7 @@ type ToolExecutionGuardDeps struct {
 	RequestApproval port.ToolApprovalRequester
 	ExecuteApproved ApprovedToolExecutor
 	ResultGuard     *ToolResultGuard
+	RuleGuard       *RuleGuard // P1b：内联规则护栏，nil 时跳过（默认放行）
 }
 
 type ToolExecutionGuard struct {
@@ -43,6 +44,11 @@ func NewToolExecutionGuard(deps ToolExecutionGuardDeps) *ToolExecutionGuard {
 func (g *ToolExecutionGuard) Execute(ctx context.Context, req ToolExecutionRequest) (any, error) {
 	if g == nil || g.deps.Authorizer == nil {
 		return nil, fmt.Errorf("%w: %s", ErrToolAuthorizationDenied, domain.ToolReasonPolicyLookupFailed)
+	}
+	if g.deps.RuleGuard != nil {
+		if block, blocked := g.deps.RuleGuard.Check(ctx, req.Tool.Name); blocked {
+			return nil, block
+		}
 	}
 	toolID := req.Tool.Name
 	agentAllows := slices.Contains(req.AgentToolIDs, toolID)

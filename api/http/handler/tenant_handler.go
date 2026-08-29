@@ -259,7 +259,8 @@ func (h *TenantHandler) UpdateSettings(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "settings updated"})
 }
 
-// ListUserTenants GET /tenant/list — all tenants the current user belongs to.
+// ListUserTenants GET /tenant/list — tenants the user can enter. Platform
+// admins see every active tenant; ordinary users see only their memberships.
 func (h *TenantHandler) ListUserTenants(c *gin.Context) {
 	userID, ok := c.Get("auth.sub")
 	userIDStr, _ := userID.(string)
@@ -267,11 +268,27 @@ func (h *TenantHandler) ListUserTenants(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errUnauthorized))
 		return
 	}
-	tenants, err := h.svc.ListUserTenants(c.Request.Context(), userIDStr)
-	if err != nil {
-		_ = c.Error(err)
-		return
+
+	var tenants []domain.UserTenantInfo
+	if grVal, ok := c.Get("auth.global_role"); ok {
+		if grStr, _ := grVal.(string); domain.GlobalRole(grStr).IsPlatformAdmin() {
+			all, err := h.svc.ListAllTenants(c.Request.Context())
+			if err != nil {
+				_ = c.Error(err)
+				return
+			}
+			tenants = all
+		}
 	}
+	if tenants == nil {
+		own, err := h.svc.ListUserTenants(c.Request.Context(), userIDStr)
+		if err != nil {
+			_ = c.Error(err)
+			return
+		}
+		tenants = own
+	}
+
 	items := make([]gen.TenantListItem, 0, len(tenants))
 	for _, t := range tenants {
 		items = append(items, gen.TenantListItem{TenantID: t.TenantID, Name: t.Name, IsDefault: t.IsDefault})
@@ -295,7 +312,7 @@ func (h *TenantHandler) DeleteSelf(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("admin service unavailable")))
 		return
 	}
-	if err := h.adminSvc.DeleteTenant(c.Request.Context(), tenantID); err != nil {
+	if err := h.adminSvc.DeleteTenant(c.Request.Context(), c.GetString(middleware.ContextKeySub), tenantID); err != nil {
 		_ = c.Error(err)
 		return
 	}

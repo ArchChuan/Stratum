@@ -151,7 +151,14 @@ func (s *Service) SetEnabled(ctx context.Context, tenantID, id string, enabled b
 
 // Get returns one task; ErrScheduledTaskNotFound when absent.
 func (s *Service) Get(ctx context.Context, tenantID, id string) (*domain.ScheduledTask, error) {
-	return s.repo.GetByID(ctx, tenantID, id)
+	task, err := s.repo.GetByID(ctx, tenantID, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.fillNames(ctx, tenantID, []*domain.ScheduledTask{task}); err != nil {
+		return nil, err
+	}
+	return task, nil
 }
 
 // List returns a page of tasks newest-first with the total count.
@@ -164,7 +171,56 @@ func (s *Service) List(ctx context.Context, tenantID string, page, pageSize int)
 	if page > 0 {
 		offset = (page - 1) * limit
 	}
-	return s.repo.List(ctx, tenantID, limit, offset)
+	tasks, total, err := s.repo.List(ctx, tenantID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	pointers := make([]*domain.ScheduledTask, len(tasks))
+	for i := range tasks {
+		pointers[i] = &tasks[i]
+	}
+	if err := s.fillNames(ctx, tenantID, pointers); err != nil {
+		return nil, 0, err
+	}
+	return tasks, total, nil
+}
+
+// fillNames resolves the display names (workflow name + version number/name)
+// onto each task. Deleted versions simply keep their raw IDs: a removed
+// workflow version must not make the scheduled-task list/detail fail.
+func (s *Service) fillNames(ctx context.Context, tenantID string, tasks []*domain.ScheduledTask) error {
+	versionIDs := make([]string, 0, len(tasks))
+	seen := make(map[string]struct{}, len(tasks))
+	for _, t := range tasks {
+		if t == nil || t.VersionID == "" {
+			continue
+		}
+		if _, ok := seen[t.VersionID]; ok {
+			continue
+		}
+		seen[t.VersionID] = struct{}{}
+		versionIDs = append(versionIDs, t.VersionID)
+	}
+	if len(versionIDs) == 0 {
+		return nil
+	}
+	names, err := s.version.ResolveVersionNames(ctx, tenantID, versionIDs)
+	if err != nil {
+		return err
+	}
+	for _, t := range tasks {
+		if t == nil {
+			continue
+		}
+		info, ok := names[t.VersionID]
+		if !ok {
+			continue
+		}
+		t.WorkflowName = info.WorkflowName
+		t.VersionNo = info.VersionNo
+		t.VersionName = info.VersionName
+	}
+	return nil
 }
 
 // PollTenant fires every due task of one tenant, oldest due first. Failures

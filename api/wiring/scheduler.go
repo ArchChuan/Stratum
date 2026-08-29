@@ -77,6 +77,35 @@ func (r schedulerVersionResolver) ValidateInput(ctx context.Context, tenantID, v
 	return workflowdomain.ValidateRunInput(version.InputSchema, input)
 }
 
+// ResolveVersionNames resolves the display names for a batch of version IDs.
+// Workflow definitions are cached across versions sharing the same definition.
+// Unresolvable versions (deleted) are skipped: a removed workflow version must
+// not fail the whole scheduled-task list, the caller keeps the raw ID instead.
+func (r schedulerVersionResolver) ResolveVersionNames(ctx context.Context, tenantID string, versionIDs []string) (map[string]schedport.VersionName, error) {
+	result := make(map[string]schedport.VersionName, len(versionIDs))
+	defs := make(map[string]*workflowdomain.Definition, 4)
+	for _, versionID := range versionIDs {
+		version, err := r.definitions.GetVersion(ctx, tenantID, versionID)
+		if err != nil {
+			continue
+		}
+		def, ok := defs[version.DefinitionID]
+		if !ok {
+			def, err = r.definitions.Get(ctx, tenantID, version.DefinitionID)
+			if err != nil {
+				continue
+			}
+			defs[version.DefinitionID] = def
+		}
+		result[versionID] = schedport.VersionName{
+			WorkflowName: def.Name,
+			VersionNo:    version.Number,
+			VersionName:  version.Name,
+		}
+	}
+	return result, nil
+}
+
 // schedulerTenantLister yields only active tenants: firing scheduled runs
 // consumes user workflows, so a disabled/suspended tenant must never trigger.
 type schedulerTenantLister struct{ pool *pgxpool.Pool }

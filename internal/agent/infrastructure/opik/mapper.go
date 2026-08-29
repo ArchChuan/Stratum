@@ -39,7 +39,7 @@ func mapEvidence(trace opikTrace, spans []opikSpan) (domain.TraceEvidence, error
 		CostUSD:           metadataFloat(trace.Metadata, "cost_usd", trace.TotalEstimatedCost),
 		LatencyMs:         metadataInt64(trace.Metadata, "duration_ms", int64(trace.Duration)),
 		SecurityViolation: metadataBool(trace.Metadata, "security_violation"), ResourceAssignments: assignments,
-		StartedAt: trace.StartTime,
+		StartedAt: trace.StartTime, Input: textOf(trace.Input), Output: textOf(trace.Output),
 	}
 	for index, span := range spans {
 		evidence.Events = append(evidence.Events, mapEvent(evidence, span, index+1))
@@ -167,6 +167,25 @@ func endTime(span opikSpan) time.Time {
 		return *span.EndTime
 	}
 	return span.StartTime
+}
+
+// textOf 把 Opik span/trace 的 input/output（any：string、map、slice）转成
+// judge 可读的纯文本。string 原样返回；复合类型 JSON 序列化（保持结构信息）；
+// 其他类型 fmt.Sprintf。nil 返回空串。
+func textOf(v any) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	switch v.(type) {
+	case map[string]any, []any:
+		if raw, err := json.Marshal(v); err == nil {
+			return string(raw)
+		}
+	}
+	return fmt.Sprintf("%v", v)
 }
 
 // errorMessage 透传 span 的错误信息到 OPIK error_info.message。Message 来自

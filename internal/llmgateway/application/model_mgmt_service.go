@@ -4,12 +4,25 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+
+	"github.com/google/uuid"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
+
+// CreateModelInput carries the fields for manually adding a model to a
+// provider. ContextWindow/MaxTokens of 0 mean "unset, use provider default".
+type CreateModelInput struct {
+	ProviderID    string                   `json:"providerId"`
+	Name          string                   `json:"name"`
+	Capabilities  []domain.ModelCapability `json:"capabilities"`
+	ContextWindow int                      `json:"contextWindow"`
+	MaxTokens     int                      `json:"maxTokens"`
+}
 
 // UpdateModelInput carries the fields that can be updated on a model.
 type UpdateModelInput struct {
@@ -69,9 +82,10 @@ func (v *OptionalInt) UnmarshalJSON(data []byte) error {
 // ModelMgmtService wraps model CRUD operations that are initiated by
 // tenant administrators (as opposed to auto-discovery or runtime resolution).
 type ModelMgmtService struct {
-	repo        port.ModelRepository
-	invalidator ModelCacheInvalidator
-	health      port.ModelHealthProvider
+	repo         port.ModelRepository
+	invalidator  ModelCacheInvalidator
+	health       port.ModelHealthProvider
+	providerRepo port.ProviderRepository
 }
 
 // ModelCacheInvalidator evicts the global runtime model resolution cache
@@ -94,6 +108,12 @@ func NewModelMgmtService(repo port.ModelRepository, invalidators ...ModelCacheIn
 // 响应（List/Get/Update/UpdatePolicy）为每个模型附加运行时健康状态。
 func (s *ModelMgmtService) WithHealth(h port.ModelHealthProvider) *ModelMgmtService {
 	s.health = h
+	return s
+}
+
+// WithProviderRepo 注入厂商仓库，供手动添加模型时校验厂商存在。
+func (s *ModelMgmtService) WithProviderRepo(p port.ProviderRepository) *ModelMgmtService {
+	s.providerRepo = p
 	return s
 }
 
@@ -173,6 +193,51 @@ func (s *ModelMgmtService) Update(ctx context.Context, tenantID, actorID string,
 		}
 	} else if err := s.repo.Update(ctx, m, tenantID, audit); err != nil {
 		return nil, fmt.Errorf("model mgmt: update: %w", err)
+	}
+	s.invalidate()
+	return s.withHealth(m), nil
+}
+
+// Create manually adds a model to a provider's catalog. Unlike discovery the
+// model is provider_managed=false, so re-discovery never disables it.
+func (s *ModelMgmtService) Create(ctx context.Context, actorID, tenantID string, in CreateModelInput) (*domain.Model, error) {
+	if strings.TrimSpace(in.Name) == "" || len(in.Capabilities) == 0 {
+		return nil, fmt.Errorf("%w: name and at least one capability are required", domain.ErrInvalidModelInput)
+	}
+	if in.ProviderID == "" {
+		return nil, fmt.Errorf("%w: providerId is required", domain.ErrInvalidModelInput)
+	}
+	if s.providerRepo == nil {
+		return nil, fmt.Errorf("model mgmt: provider repository unavailable")
+	}
+	if _, err := s.providerRepo.Get(ctx, in.ProviderID); err != nil {
+		return nil, fmt.Errorf("model mgmt: provider check: %w", err)
+	}
+	m := &domain.Model{
+		ID:                  uuid.Must(uuid.NewV7()).String(),
+		ProviderID:          in.ProviderID,
+		Name:                in.Name,
+		Capabilities:        in.Capabilities,
+		ContextWindow:       in.ContextWindow,
+		MaxTokens:           in.MaxTokens,
+		Enabled:             true,
+		ProviderManaged:     false,
+		ContextWindowSource: domain.CapabilitySourceManualUnknown,
+		MaxTokensSource:     domain.CapabilitySourceManualUnknown,
+	}
+	audit, err := newChangeAudit(ctx, changeAuditInput{
+		Kind: auditdomain.ResourceKindModel, ResourceID: m.ID, Operation: auditdomain.ChangeOpCreate,
+		ActorID: actorID, After: modelSafeProjection(m),
+	})
+	if err != nil {
+		return nil, err
+	}
+	platformRepo, ok := s.repo.(port.PlatformModelRepository)
+	if !ok {
+		return nil, fmt.Errorf("model mgmt: platform repository unavailable")
+	}
+	if err := platformRepo.CreatePlatform(ctx, m, tenantID, audit); err != nil {
+		return nil, fmt.Errorf("model mgmt: create: %w", err)
 	}
 	s.invalidate()
 	return s.withHealth(m), nil

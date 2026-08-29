@@ -29,6 +29,14 @@ type VersionInfo struct {
 	DefinitionID string
 }
 
+// VersionName is the display projection of a workflow version for list views:
+// the owning workflow's name plus the version number and name.
+type VersionName struct {
+	WorkflowName string
+	VersionNo    int64
+	VersionName  string
+}
+
 // WorkflowVersionResolver validates workflow-version references at
 // create/update time so admins get a 400 instead of a silently doomed
 // schedule.
@@ -37,6 +45,11 @@ type WorkflowVersionResolver interface {
 	GetVersion(ctx context.Context, tenantID, versionID string) (*VersionInfo, error)
 	// ValidateInput checks input against the version's declared input schema.
 	ValidateInput(ctx context.Context, tenantID, versionID string, input map[string]any) error
+	// ResolveVersionNames resolves display names (workflow name + version
+	// number/name) for a batch of version IDs. Version IDs that cannot be
+	// resolved (deleted) are absent from the map; callers keep the raw ID for
+	// display rather than failing the whole list.
+	ResolveVersionNames(ctx context.Context, tenantID string, versionIDs []string) (map[string]VersionName, error)
 }
 
 // Repository persists scheduled tasks. All methods are tenant-scoped and

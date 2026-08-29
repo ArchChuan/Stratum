@@ -45,7 +45,8 @@ func (f *refreshTokenStoreFake) GetActiveClaims(context.Context, string) (*domai
 }
 
 type membershipReaderFake struct {
-	roleErr error
+	roleErr    error
+	globalRole string
 }
 
 type oauthExchangeStoreFake struct {
@@ -76,9 +77,13 @@ func (githubOAuthFake) GetUser(context.Context, string) (*iamport.GitHubProfile,
 
 type onboardRepoFake struct {
 	iamport.OnboardRepo
-	tenants     []domain.TenantInfo
-	exists      bool
-	autoJoinErr error
+	tenants      []domain.TenantInfo
+	exists       bool
+	autoJoinErr  error
+	globalRole   string
+	tenantRole   string
+	tenantActive bool
+	isMember     bool
 }
 
 func (f onboardRepoFake) GetUserTenants(context.Context, string) (string, string, []domain.TenantInfo, bool, error) {
@@ -86,6 +91,18 @@ func (f onboardRepoFake) GetUserTenants(context.Context, string) (string, string
 }
 func (f onboardRepoFake) AutoJoinDefaultTenant(context.Context, domain.AutoJoinInput) (string, string, string, error) {
 	return "", "", "", f.autoJoinErr
+}
+func (f onboardRepoFake) GetGlobalRole(context.Context, string) (string, error) {
+	return f.globalRole, nil
+}
+func (f onboardRepoFake) GetTenantRole(context.Context, string, string) (string, error) {
+	return f.tenantRole, nil
+}
+func (f onboardRepoFake) TenantIsActive(context.Context, string) (bool, error) {
+	return f.tenantActive, nil
+}
+func (f onboardRepoFake) IsMember(context.Context, string, string) (bool, error) {
+	return f.isMember, nil
 }
 
 func (f *oauthExchangeStoreFake) Consume(context.Context, string) (*iamport.OAuthExchange, error) {
@@ -99,7 +116,9 @@ func (f *oauthExchangeStoreFake) Consume(context.Context, string) (*iamport.OAut
 func (f membershipReaderFake) GetTenantRole(context.Context, string, string) (string, error) {
 	return "", f.roleErr
 }
-func (membershipReaderFake) GetGlobalRole(context.Context, string) (string, error) { return "", nil }
+func (f membershipReaderFake) GetGlobalRole(context.Context, string) (string, error) {
+	return f.globalRole, nil
+}
 
 func setupAuthRouter(h *handler.AuthHandler) *gin.Engine {
 	gin.SetMode(gin.TestMode)

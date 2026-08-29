@@ -19,6 +19,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { useCallback, useState } from 'react';
 
+import { ReferenceName } from '../components/ReferenceName';
 import { ScheduledTaskFormModal, type ScheduledTaskFormValues } from '../components/ScheduledTaskFormModal';
 import { useScheduledTasks } from '../hooks/useScheduledTasks';
 import type { ScheduledTask } from '../model/scheduledTask';
@@ -117,8 +118,28 @@ export function ScheduledTaskListPage() {
 
   const columns: ColumnsType<ScheduledTask> = [
     { title: '名称', dataIndex: 'name', key: 'name', ellipsis: true },
-    { title: '工作流', dataIndex: 'workflowId', key: 'workflowId', ellipsis: true },
-    { title: '版本', dataIndex: 'versionId', key: 'versionId', ellipsis: true, width: 140 },
+    {
+      title: '工作流',
+      dataIndex: 'workflowId',
+      key: 'workflowId',
+      ellipsis: true,
+      render: (_: unknown, record: ScheduledTask) => (
+        <ReferenceName name={record.workflowName} id={record.workflowId} />
+      ),
+    },
+    {
+      title: '版本',
+      dataIndex: 'versionId',
+      key: 'versionId',
+      ellipsis: true,
+      width: 160,
+      render: (_: unknown, record: ScheduledTask) => (
+        <ReferenceName
+          name={record.versionNo ? `v${record.versionNo} ${record.versionName}`.trim() : undefined}
+          id={record.versionId}
+        />
+      ),
+    },
     { title: 'Cron', dataIndex: 'cronExpr', key: 'cronExpr', width: 140, render: (v: string) => <Text code>{v}</Text> },
     {
       title: '下次触发',

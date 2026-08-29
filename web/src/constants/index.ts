@@ -154,3 +154,13 @@ export const RESOURCE_KIND_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'workflow', label: '工作流' },
   { value: 'evaluation', label: '评测' },
 ];
+
+// 平台级审计的资源类型（与 internal/audit/domain/change_audit.go 对齐）。
+// 平台管理面覆盖租户/管理员/模型/厂商/平台参数等 public 目录变更。
+export const PLATFORM_RESOURCE_KIND_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'tenant', label: '租户' },
+  { value: 'admin', label: '平台管理员' },
+  { value: 'model', label: '模型' },
+  { value: 'provider', label: '厂商' },
+  { value: 'platform_config', label: '平台配置' },
+];

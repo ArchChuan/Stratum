@@ -157,3 +157,68 @@ func TestPgResourceChangeAuditRepo_GetByID_Found(t *testing.T) {
 	require.Equal(t, "lilei", got.ActorName) // display_name 空 → github_login
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// 平台版无 SET LOCAL（public 表不走 execTenant）。count → list → users 映射。
+func TestPgResourceChangeAuditRepo_ListPlatform(t *testing.T) {
+	mock := newChangeAuditMock(t)
+	created := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM public\.platform_resource_change_audits`).
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery(`SELECT id, resource_kind, resource_id`).
+		WithArgs(20, 0).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "resource_kind", "resource_id", "operation", "actor_id", "created_at",
+			"before_projection", "after_projection",
+		}).
+			AddRow("p1", "tenant", "tid-1", "create", "u-1", created, []byte(`{}`), []byte(`{"id":"tid-1"}`)))
+	mock.ExpectQuery(`SELECT id, COALESCE\(display_name,''\), COALESCE\(github_login,''\)\s+FROM public\.users WHERE id::text = ANY\(\$1\)`).
+		WithArgs([]string{"u-1"}).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "display_name", "github_login"}).
+			AddRow("u-1", "李雷", "lilei"))
+	mock.ExpectCommit()
+
+	repo := &PgResourceChangeAuditRepo{pool: mock}
+	rows, total, err := repo.ListPlatform(context.Background(), port.ResourceChangeAuditFilter{Limit: 20})
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, rows, 1)
+	require.Equal(t, "李雷", rows[0].ActorName)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgResourceChangeAuditRepo_GetPlatformByID(t *testing.T) {
+	mock := newChangeAuditMock(t)
+	created := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT id, resource_kind, resource_id`).
+		WithArgs("p1").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "resource_kind", "resource_id", "operation", "actor_id", "created_at",
+			"before_projection", "after_projection",
+		}).
+			AddRow("p1", "admin", "u-9", "create", "super", created, []byte(`{}`), []byte(`{"userID":"u-9"}`)))
+	mock.ExpectQuery(`SELECT id, COALESCE\(display_name,''\)`).
+		WithArgs([]string{"super"}).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "display_name", "github_login"}))
+	mock.ExpectCommit()
+
+	repo := &PgResourceChangeAuditRepo{pool: mock}
+	got, err := repo.GetPlatformByID(context.Background(), "p1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "super", got.ActorName) // 无 users 行 → actor_id 兜底
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestBuildPlatformAuditWhere_ActorNameUsesExists(t *testing.T) {
+	where, args := buildPlatformAuditWhere(port.ResourceChangeAuditFilter{ActorName: "li"})
+	require.Contains(t, where, `public.users`)
+	require.Contains(t, where, `u.display_name ILIKE`)
+	require.Contains(t, where, `r.actor_id ILIKE`)
+	require.Len(t, args, 1)
+
+	whereOnly, argsOnly := buildPlatformAuditWhere(port.ResourceChangeAuditFilter{})
+	require.Equal(t, `WHERE scope = 'platform'`, whereOnly)
+	require.Empty(t, argsOnly)
+}

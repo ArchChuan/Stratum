@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
+	auditpersistence "github.com/byteBuilderX/stratum/internal/audit/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 )
@@ -235,11 +236,53 @@ func (r *PgModelRepo) UpdatePlatform(
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("model not found: %s", m.ID)
 	}
-	if err := insertPlatformAuditTx(ctx, tx, actorTenantID, audit); err != nil {
+	if err := auditpersistence.InsertPlatformAuditTx(ctx, tx, actorTenantID, audit); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("update platform model commit: %w", err)
+	}
+	return nil
+}
+
+// CreatePlatform inserts a manually-added model into the public catalog and
+// writes its audit in the same public transaction. Column list is locked to
+// the 035/039/040 migrations (16 columns incl. context_window_source and
+// max_tokens_source).
+func (r *PgModelRepo) CreatePlatform(
+	ctx context.Context,
+	m *domain.Model,
+	actorTenantID string,
+	audit *auditdomain.ResourceChangeAuditEvent,
+) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("create platform model: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	caps := modelCapsToStrings(m.Capabilities)
+	sampling, err := encodeSamplingParams(m.SamplingParams)
+	if err != nil {
+		return fmt.Errorf("create platform model: %w", err)
+	}
+	_, err = tx.Exec(ctx,
+		`INSERT INTO public.models (id, provider_id, name, display_name, capabilities,
+		 context_window, max_tokens, context_window_source, max_tokens_source,
+		 input_price, output_price, recommended, enabled, provider_managed,
+		 sampling_params, max_temperature)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+		m.ID, m.ProviderID, m.Name, m.DisplayName, caps,
+		m.ContextWindow, m.MaxTokens, m.ContextWindowSource, m.MaxTokensSource,
+		m.InputPrice, m.OutputPrice, m.Recommended, m.Enabled, m.ProviderManaged,
+		sampling, m.MaxTemperature)
+	if err != nil {
+		return fmt.Errorf("create platform model: %w", err)
+	}
+	if err := auditpersistence.InsertPlatformAuditTx(ctx, tx, actorTenantID, audit); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("create platform model commit: %w", err)
 	}
 	return nil
 }

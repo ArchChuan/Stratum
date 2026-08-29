@@ -1,6 +1,7 @@
 package application_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -94,6 +95,37 @@ func (m *mockProviderRepo) Delete(_ context.Context, id string) error {
 	return nil
 }
 
+// mockPlatformProviderRepo 同时实现 ProviderRepository 与
+// PlatformProviderRepository：CreatePlatform 记录收到的 audit 事件，供
+// create 路径的平台审计写入测试断言。
+type mockPlatformProviderRepo struct {
+	mockProviderRepo
+	createdAudits []*auditdomain.ResourceChangeAuditEvent
+}
+
+func (m *mockPlatformProviderRepo) CreatePlatform(
+	_ context.Context,
+	p *domain.Provider,
+	_ string,
+	audit *auditdomain.ResourceChangeAuditEvent,
+) error {
+	m.createdAudits = append(m.createdAudits, audit)
+	if m.providers == nil {
+		m.providers = make(map[string]*domain.Provider)
+	}
+	m.providers[p.ID] = p
+	return nil
+}
+
+func (m *mockPlatformProviderRepo) UpdatePlatform(
+	_ context.Context,
+	_ *domain.Provider,
+	_ string,
+	_ *auditdomain.ResourceChangeAuditEvent,
+) error {
+	return nil
+}
+
 type mockModelRepo struct {
 	models []domain.Model
 	err    error
@@ -181,7 +213,7 @@ func TestProviderService_Create_HappyPath(t *testing.T) {
 		BaseURL: "https://api.openai.com",
 		APIKey:  "sk-test",
 	}
-	provider, err := svc.Create(context.Background(), "tenant-1", input)
+	provider, err := svc.Create(context.Background(), "tenant-1", "actor-1", input)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -229,11 +261,53 @@ func TestProviderService_Create_RepoError(t *testing.T) {
 	mr := &mockModelRepo{}
 	svc := newTestProviderService(pr, mr, nil)
 
-	_, err := svc.Create(context.Background(), "t1", application.CreateProviderInput{
+	_, err := svc.Create(context.Background(), "t1", "actor-1", application.CreateProviderInput{
 		Name: "fail", Kind: domain.ProviderOpenAICompat,
 	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestProviderService_Create_WritesPlatformAudit(t *testing.T) {
+	pr := &mockPlatformProviderRepo{}
+	mr := &mockModelRepo{}
+	// 必须传完整的 pr（*mockPlatformProviderRepo）而非 &pr.mockProviderRepo：
+	// 只有完整类型实现 PlatformProviderRepository，Create 才会走 CreatePlatform
+	// 平台审计路径。
+	svc := application.NewProviderService(pr, mr, &mockProviderRuntime{})
+
+	provider, err := svc.Create(context.Background(), "tenant-1", "actor-1", application.CreateProviderInput{
+		Name:    "audit-me",
+		Kind:    domain.ProviderOpenAICompat,
+		BaseURL: "https://api.openai.com",
+		APIKey:  "sk-secret",
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if len(pr.createdAudits) != 1 {
+		t.Fatalf("createdAudits = %d, want 1", len(pr.createdAudits))
+	}
+	audit := pr.createdAudits[0]
+	if audit.ResourceKind != auditdomain.ResourceKindProvider {
+		t.Errorf("ResourceKind = %q, want %q", audit.ResourceKind, auditdomain.ResourceKindProvider)
+	}
+	if audit.Operation != auditdomain.ChangeOpCreate {
+		t.Errorf("Operation = %q, want %q", audit.Operation, auditdomain.ChangeOpCreate)
+	}
+	if audit.ResourceID != provider.ID {
+		t.Errorf("ResourceID = %q, want %q", audit.ResourceID, provider.ID)
+	}
+	if audit.ActorID != "actor-1" {
+		t.Errorf("ActorID = %q, want actor-1", audit.ActorID)
+	}
+	// 投影不得包含 apiKey（凭据红线）。
+	if audit.After != nil && bytes.Contains(audit.After, []byte("sk-secret")) {
+		t.Error("audit After projection must not contain the API key")
+	}
+	if audit.After == nil || !bytes.Contains(audit.After, []byte(`"name":"audit-me"`)) {
+		t.Error("audit After projection should include provider name")
 	}
 }
 

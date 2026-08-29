@@ -35,13 +35,13 @@ func TestChatStore_CreateConversation(t *testing.T) {
 	now := time.Now()
 	expectTenantTx(mock)
 	mock.ExpectQuery("INSERT INTO chat_conversations").
-		WithArgs("agent-1", "user-1", "新会话").
+		WithArgs("agent-1", "user-1", "新会话", "manual").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "agent_id", "user_id", "name", "created_at", "updated_at", "expires_at",
 		}).AddRow("conv-uuid", "agent-1", "user-1", "新会话", now, now, now.AddDate(0, 0, 30)))
 	mock.ExpectCommit()
 
-	conv, err := store.CreateConversation(context.Background(), "t1", "agent-1", "user-1", "新会话")
+	conv, err := store.CreateConversation(context.Background(), "t1", "agent-1", "user-1", "新会话", "manual")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -450,7 +450,7 @@ func TestChatStore_InvalidTenantID(t *testing.T) {
 	store, mock := newChatStoreWithMock(t)
 	defer mock.Close()
 
-	_, err := store.CreateConversation(context.Background(), "t1; DROP TABLE", "a", "u", "n")
+	_, err := store.CreateConversation(context.Background(), "t1; DROP TABLE", "a", "u", "n", "manual")
 	if err == nil {
 		t.Fatal("expected error for invalid tenant_id")
 	}

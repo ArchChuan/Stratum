@@ -128,7 +128,7 @@ func (c *Container) buildLLMGateway(ctx context.Context) error {
 	)
 	// 模型管理目录响应附加运行时健康状态（平台级 HealthRegistry 投影）；
 	// health 为 nil（db 不可用的测试装配）时目录不带 health 字段。
-	mgmtSvc := llmapp.NewModelMgmtService(modelRepo, registry).WithHealth(health)
+	mgmtSvc := llmapp.NewModelMgmtService(modelRepo, registry).WithHealth(health).WithProviderRepo(providerRepo)
 
 	c.LLMGateway = &LLMGateway{
 		Gateway:          gw,

@@ -42,7 +42,7 @@ func TestPgChatStoreArtifactsRealPostgresRoundTripAndHistoricalUpgrade(t *testin
 	}
 
 	store := NewPgChatStore(pool, zap.NewNop())
-	conv, err := store.CreateConversation(ctx, tenantID, domain.SystemAssistantID, "user-1", "artifacts")
+	conv, err := store.CreateConversation(ctx, tenantID, domain.SystemAssistantID, "user-1", "artifacts", "manual")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestDeleteConversationCascadesApprovals(t *testing.T) {
 
 	chat := NewPgChatStore(pool, zap.NewNop())
 	chat.SetApprovalCascade(NewPgToolApprovalStore(pool))
-	conv, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, "user-1", "cascade")
+	conv, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, "user-1", "cascade", "manual")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestDeleteConversationCascadeRollsBackOnFailure(t *testing.T) {
 
 	chat := NewPgChatStore(pool, zap.NewNop())
 	chat.SetApprovalCascade(NewPgToolApprovalStore(pool))
-	conv, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, "user-1", "rollback")
+	conv, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, "user-1", "rollback", "manual")
 	if err != nil {
 		t.Fatal(err)
 	}

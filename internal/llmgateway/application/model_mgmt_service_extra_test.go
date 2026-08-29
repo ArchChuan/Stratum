@@ -119,7 +119,9 @@ func TestModelMgmtDelete(t *testing.T) {
 	}
 }
 
-// failUpdateRepo 让 Update 可独立失败。
+// failUpdateRepo 让 platform 更新路径（UpdatePlatform）可独立失败。嵌入的
+// modelMgmtRepo 已实现 PlatformModelRepository，service.Update 优先走 platform
+// 分支，故覆盖 UpdatePlatform 而非 Update。
 type failUpdateRepo struct {
 	modelMgmtRepo
 }
@@ -128,7 +130,7 @@ func (r *failUpdateRepo) Get(context.Context, string) (*domain.Model, error) {
 	return &r.model, nil
 }
 
-func (r *failUpdateRepo) Update(context.Context, *domain.Model, string, *auditdomain.ResourceChangeAuditEvent) error {
+func (r *failUpdateRepo) UpdatePlatform(context.Context, *domain.Model, string, *auditdomain.ResourceChangeAuditEvent) error {
 	return errors.New("update boom")
 }
 

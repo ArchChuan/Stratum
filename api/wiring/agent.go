@@ -21,6 +21,8 @@ import (
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	memapp "github.com/byteBuilderX/stratum/internal/memory/application"
+	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
+	parametersapp "github.com/byteBuilderX/stratum/internal/parameters/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	versioningpersistence "github.com/byteBuilderX/stratum/internal/versioning/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -297,9 +299,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	})
 	a := &Agent{Registry: registry, EvidenceProvider: evidenceProvider, AgentRepo: repo}
 	if c.Config.TracePayload.Enabled {
-		store := agentobjects.NewStore(
-			c.revisionObjectClient, c.Config.TracePayload.Bucket, c.Platform.AESKey,
-		)
+		store := agentobjects.NewStore(c.revisionObjectClient, c.Config.TracePayload.Bucket, c.Platform.AESKey)
 		a.TracePayloadStore = store
 		a.RevisionObjectStore = c.RevisionObjectStore
 	}
@@ -388,6 +388,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	}
 	wireTokenLedger(registry, &deps, c.platformMetrics(), c.Logger)
 	deps.ParametersProvider = agentParametersProvider(c)
+	deps.RuleGuard = agentRuleGuard(c, deps.Metrics)
 	if c.Memory != nil && c.Memory.Service != nil {
 		deps.MemoryCleaner = c.Memory.Service
 		deps.MemoryBuffer = memoryBufferClosure(c.Memory.Service)
@@ -405,7 +406,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		)
 		a.ProposalService = agent.NewResourceChangeProposalService(
 			persistence.NewPgResourceChangeProposalRepo(db),
-			proposalAuthorizer{roles: tenantRoleAdapter{service: tenantMemberService(c)}},
+			proposalAuthorizer{roles: newTenantRoleAdapter(c)},
 			adapters,
 			map[domain.ResourceKind]agentport.ResourceChangeApplier{
 				domain.ResourceAgent: adapters, domain.ResourceSkillDraft: adapters,
@@ -416,7 +417,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		a.Service.SetResourceChangeProposalService(a.ProposalService)
 		a.Service.SetResourceChangeApplier(adapters.ApplyDirectFromTool)
 	}
-	wireOperationGate(c, a, deps.Metrics)
+	wireAgentObservability(c, a, deps.Metrics)
 	c.Agent = a
 	return nil
 }
@@ -425,7 +426,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 // whose ownership checks need it. Called only when the full resource stack is
 // wired; otherwise each service fails closed (nil resolver).
 func (c *Container) injectTenantRoleResolvers(a *Agent) {
-	roles := tenantRoleAdapter{service: tenantMemberService(c)}
+	roles := newTenantRoleAdapter(c)
 	a.RoleResolver = roles
 	a.Service.SetTenantRoleResolver(roles)
 	a.ApprovalService.SetTenantRoleResolver(roles)
@@ -510,7 +511,7 @@ func wireOperationGate(c *Container, a *Agent, metrics observability.MetricsProv
 	if metrics == nil {
 		metrics = observability.NoopMetrics{}
 	}
-	roles := tenantRoleAdapter{service: tenantMemberService(c)}
+	roles := newTenantRoleAdapter(c)
 	a.OperationGateService = agent.NewOperationGateService(
 		persistence.NewPgOperationProposalRepo(db),
 		persistence.NewPgOperationUsageRepo(db),
@@ -543,6 +544,22 @@ func wireOperationGate(c *Container, a *Agent, metrics observability.MetricsProv
 		}
 	})
 	a.Service.SetOperationGate(a.OperationGateService)
+}
+
+// wireAgentObservability 装配 agent 侧门控与观测能力：操作审批门 + 运行态观测
+// 引用事件发布器（P1a）。观测发布 best-effort：NATS 不可用仅 Warn，不阻断
+// agent 执行；操作审批门仍按原语义装配。
+func wireAgentObservability(c *Container, a *Agent, metrics observability.MetricsProvider) {
+	wireOperationGate(c, a, metrics)
+	if c.Storage == nil || c.Storage.NATS == nil {
+		return
+	}
+	jsm, err := pipeline.NewJetStreamManager(c.Storage.NATS, c.Logger)
+	if err != nil {
+		c.Logger.Warn("agent observation emitter: jetstream manager unavailable", zap.Error(err))
+		return
+	}
+	a.Service.SetObservationEmitter(&observationEmitterAdapter{js: jsm.JS(), logger: c.Logger})
 }
 
 func tenantModelValidator(resolver agentport.TenantCapabilityResolver) agentport.TenantChatModelValidator {
@@ -581,6 +598,49 @@ func memoryBufferClosure(svc *memapp.MemoryService) func(ctx context.Context, te
 			CreatedAt:      time.Now(),
 		})
 	}
+}
+
+// ruleGuardEnabled 读取平台参数 evaluation.ruleguard.enabled。默认关闭（fail open
+// 于规则层：参数服务不可用或未显式开启时护栏静默放行，开启后才是 fail closed）。
+// 参数读取失败属安全控件失效路径，Warn 留痕（与 observationEnabled 先例一致但补日志）。
+func ruleGuardEnabled(ctx context.Context, logger *zap.Logger, params *parametersapp.Service) bool {
+	if params == nil {
+		return false
+	}
+	values, err := params.PlatformValues(ctx)
+	if err != nil {
+		logger.Warn("ruleguard enabled read failed, guard open", zap.Error(err))
+		return false
+	}
+	enabled, _ := values["evaluation.ruleguard.enabled"].(bool)
+	return enabled
+}
+
+// ruleGuardDenylist 读取平台参数 evaluation.ruleguard.denylist（逗号分隔工具名）。
+// 读取失败或空值返回空切片：denylist 为空 = 无拦截项，规则层放行。参数读取失败
+// 属安全控件失效路径，Warn 留痕（同 ruleGuardEnabled）。
+func ruleGuardDenylist(ctx context.Context, logger *zap.Logger, params *parametersapp.Service) []string {
+	if params == nil {
+		return nil
+	}
+	values, err := params.PlatformValues(ctx)
+	if err != nil {
+		logger.Warn("ruleguard denylist read failed, guard open", zap.Error(err))
+		return nil
+	}
+	raw, _ := values["evaluation.ruleguard.denylist"].(string)
+	return strings.Split(raw, ",")
+}
+
+// agentRuleGuard 装配内联规则护栏（§4.1）。Enabled/Denylist 读取平台参数
+// evaluation.ruleguard.*（默认关闭）；Metrics 可 nil（NewRuleGuard 归一为 NoopMetrics）。
+func agentRuleGuard(c *Container, metrics observability.MetricsProvider) *agent.RuleGuard {
+	return agent.NewRuleGuard(agent.RuleGuardDeps{
+		Enabled:  func(ctx context.Context) bool { return ruleGuardEnabled(ctx, c.Logger, c.Parameters.Service) },
+		Denylist: func(ctx context.Context) []string { return ruleGuardDenylist(ctx, c.Logger, c.Parameters.Service) },
+		Metrics:  metrics,
+		Logger:   c.Logger,
+	})
 }
 
 // agentFactCheckSettings 按参数注册表 + gateway 可用性装配幻觉校验依赖（fail-closed：

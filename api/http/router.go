@@ -154,8 +154,10 @@ func registerWorkflows(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 	runs.GET("/:id/events", h.GetEvents)
 	runs.GET("/:id/events/stream", h.StreamEvents)
 	runs.POST("/:id/cancel", requireActive, h.CancelRun)
-	runs.POST("/:id/pause", admin, requireActive, h.PauseRun)
-	runs.POST("/:id/resume", admin, requireActive, h.ResumeRun)
+	// pause/resume 放开给执行人（发起人）：鉴权在 application 层 authorizeRun 完成，
+	// 执行人可暂停/继续自己发起的运行，非发起人 member 被拒绝。
+	runs.POST("/:id/pause", requireActive, h.PauseRun)
+	runs.POST("/:id/resume", requireActive, h.ResumeRun)
 	runs.POST("/:id/manual-interventions/:effectID/resolve", admin, requireActive, h.ResolveManual)
 	approvals := r.Group("/workflow-approvals", member...)
 	approvals.GET("", admin, h.ListApprovals)
@@ -172,7 +174,7 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 		c.Evaluation.FeedbackService, c.Evaluation.QueryService, c.Evaluation.CandidateService,
 		c.Logger,
 	).WithBaselineService(c.Evaluation.BaselineService).WithAgentRevisionApplier(c.Evaluation.AgentRevisionApplier).
-		WithTestCaseGenerator(c.Evaluation.TestCaseGenerator)
+		WithTestCaseGenerator(c.Evaluation.TestCaseGenerator).WithObservationService(c.Evaluation.ObservationService)
 	if c.Agent != nil && c.Agent.ApprovalService != nil {
 		// D4：member 写操作创建审批（缺装配时 handler 内部 fail closed 503）。
 		h = h.WithApprovalService(c.Agent.ApprovalService)
@@ -194,6 +196,10 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 		evaluations.GET("/candidates", requireAdmin, h.ListCandidates)
 		evaluations.GET("/experiments", h.ListExperiments)
 		evaluations.GET("/resources/:kind/:id/timeline", h.Timeline)
+		// P1a 运行态观测查询：租户自有运行数据，member 可读（无需 requireAdmin）。
+		// handler 内部在观测服务未装配时 fail closed 503（Task 12 wiring 注入）。
+		evaluations.GET("/observations", h.ListObservations)
+		evaluations.GET("/observations/:id", h.GetObservation)
 		// D4：11 个评测写端点放宽为 requireActive，handler 内按角色分流——
 		// member 创建 evaluation_action 审批返回 202，admin/owner 直接执行。
 		evaluations.POST("/resources/:kind/:id/baseline", requireActive, h.CreateBaseline)
@@ -680,8 +686,8 @@ func registerLLMAdmin(r *gin.Engine, c *wiring.Container, requireActive gin.Hand
 	providerH := handler.NewProviderHandler(c.LLMGateway.ProviderService)
 	modelMgmtH := handler.NewModelMgmtHandler(c.LLMGateway.ModelMgmtService)
 	// The catalog is public/platform-scoped. Tenant administrators may read it,
-	// but every mutation must be authorized by the global-admin claim.
-	adminMW := middleware.RequireGlobalAdmin()
+	// but every mutation must be authorized by the system-admin claim (or above).
+	adminMW := middleware.RequireSystemAdmin()
 
 	// Providers: list is readable by any tenant member; write ops require admin.
 	providers := r.Group("/admin/providers", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
@@ -698,6 +704,7 @@ func registerLLMAdmin(r *gin.Engine, c *wiring.Container, requireActive gin.Hand
 	models := r.Group("/admin/models", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	{
 		models.GET("", modelMgmtH.List)
+		models.POST("", adminMW, modelMgmtH.Create)
 		models.GET("/:id", modelMgmtH.Get)
 		models.PUT("/:id", adminMW, modelMgmtH.Update)
 		models.PATCH("/:id/policy", adminMW, requireActive, modelMgmtH.UpdatePolicy)

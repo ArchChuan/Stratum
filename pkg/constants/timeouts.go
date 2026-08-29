@@ -49,15 +49,6 @@ const (
 	// ingest_status='processing' before startup recovery marks it failed.
 	KnowledgeIngestStuckThreshold = 15 * time.Minute
 
-	// SeedIngestQueueRetryBudget bounds the total wall time the built-in docs
-	// seed may spend retrying a full ingest queue across ALL tenants on
-	// startup. The seed can burst 6 tenants × 43 docs into the 20-slot queue;
-	// without a shared budget the retries would either silently drop the surge
-	// or block startup for the duration of every queue-full backoff. Once the
-	// budget is spent, remaining docs are deferred to the next restart
-	// (idempotent by content hash).
-	SeedIngestQueueRetryBudget = 30 * time.Second
-
 	// OAuthTokenExchangeTimeout caps GitHub OAuth code→token exchange.
 	// Industry standard 10s; GitHub API normally responds <1s, fast-fail
 	// on network issues so user sees error quickly and can retry.

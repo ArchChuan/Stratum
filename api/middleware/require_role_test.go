@@ -166,3 +166,51 @@ func TestRequireGlobalAdmin_delegatesToPlatform(t *testing.T) {
 		t.Fatalf("expected 403, got %d", w.Code)
 	}
 }
+
+func TestRequireTenantRole_platformAdminMemberElevated(t *testing.T) {
+	// system_admin + stale member role must pass the admin guard.
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/", func(c *gin.Context) {
+		c.Set("auth.global_role", "system_admin")
+		c.Set("auth.role", "member")
+	}, middleware.RequireTenantRole("admin"), func(c *gin.Context) { c.Status(http.StatusOK) })
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/", nil) //nolint:noctx
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestRequireTenantRole_platformAdminMemberDeniedOwner(t *testing.T) {
+	// Platform admin must NOT be elevated to owner: owner guard still rejects.
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/", func(c *gin.Context) {
+		c.Set("auth.global_role", "global_admin")
+		c.Set("auth.role", "member")
+	}, middleware.RequireTenantRole("owner"), func(c *gin.Context) { c.Status(http.StatusOK) })
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/", nil) //nolint:noctx
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+}
+
+func TestRequireTenantRole_nonAdminMemberStillDenied(t *testing.T) {
+	// Regression: ordinary member unaffected by platform-admin elevation.
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/", func(c *gin.Context) {
+		c.Set("auth.global_role", "user")
+		c.Set("auth.role", "member")
+	}, middleware.RequireTenantRole("admin"), func(c *gin.Context) { c.Status(http.StatusOK) })
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/", nil) //nolint:noctx
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+}

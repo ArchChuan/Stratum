@@ -5,6 +5,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 
 import { workflowApi } from '../api/workflow.api';
 import { WorkflowReadonlyCanvas } from '../components/WorkflowReadonlyCanvas';
+import { useWorkflowResources } from '../hooks/useWorkflowResources';
 import type { WorkflowVersion } from '../model/workflow';
 
 const { Paragraph, Title } = Typography;
@@ -13,6 +14,9 @@ interface RequestError { response?: { data?: { error?: string } } }
 export const WorkflowVersionPage = () => {
   const { id = '', versionId = '' } = useParams();
   const navigate = useNavigate();
+  const { skillRevisions } = useWorkflowResources();
+  // revision ID → 可读版本名（如「检索（已发布）」），供只读节点详情展示 Skill 版本。
+  const skillRevisionLabels = Object.fromEntries(skillRevisions.map((revision) => [revision.value, revision.label]));
   const [version, setVersion] = useState<WorkflowVersion | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -35,7 +39,7 @@ export const WorkflowVersionPage = () => {
       <div><Title level={3}>{version.name}</Title><Paragraph>{version.description || '暂无说明'}</Paragraph></div>
       <Tag color="geekblue">版本 {version.version}</Tag>
     </header>
-    <WorkflowReadonlyCanvas spec={version.spec} />
+    <WorkflowReadonlyCanvas spec={version.spec} skillRevisionLabels={skillRevisionLabels} />
     <Card title="运行输入" className="workflow-version-inputs">
       <Descriptions column={1} size="small">
         <Descriptions.Item label="任务名称">{version.input_schema.task_label}</Descriptions.Item>

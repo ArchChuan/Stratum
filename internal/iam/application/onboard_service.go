@@ -94,6 +94,11 @@ func (s *OnboardService) IsMember(ctx context.Context, userID, tenantID string) 
 	return s.repo.IsMember(ctx, userID, tenantID)
 }
 
+// TenantIsActive reports whether tenantID is live (exists, active, not deleted).
+func (s *OnboardService) TenantIsActive(ctx context.Context, tenantID string) (bool, error) {
+	return s.repo.TenantIsActive(ctx, tenantID)
+}
+
 // CreateGuest provisions a temporary guest identity: a synthetic namespaced
 // github_id, a dedicated per-guest sandbox tenant (owner seat), and an expiry
 // GuestAccountTTL from now. The guest never joins the default tenant; its

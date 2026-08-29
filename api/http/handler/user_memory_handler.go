@@ -174,7 +174,7 @@ func (h *UserMemoryHandler) GetEntities(c *gin.Context) {
 	for _, e := range entities {
 		resp = append(resp, gen.MemoryEntityResponse{
 			ID: e.ID, Name: e.Name, EntityType: e.EntityType,
-			FactCount: int64(e.FactCount), LastSeenAt: e.LastSeenAt,
+			FactCount: int64(e.FactCount), LastSeenAt: e.LastSeenAt, Scope: e.Scope,
 		})
 	}
 	c.JSON(http.StatusOK, gen.ListMemoryEntitiesResponse{Entities: resp, Total: int64(total)})
@@ -426,7 +426,7 @@ func (h *UserMemoryHandler) ListSummaries(c *gin.Context) {
 	for _, s := range summaries {
 		resp = append(resp, gen.MemorySummaryItemResponse{
 			ID: s.ID, Summary: s.Summary, Tier: s.Tier, Importance: s.Importance,
-			ConversationID: s.ConversationID, PeriodEnd: s.PeriodEnd, CreatedAt: s.CreatedAt,
+			ConversationID: s.ConversationID, PeriodEnd: s.PeriodEnd, CreatedAt: s.CreatedAt, Scope: s.Scope,
 		})
 	}
 	c.JSON(http.StatusOK, gen.ListMemorySummariesResponse{Summaries: resp, Total: int64(total)})
@@ -473,7 +473,8 @@ func (h *UserMemoryHandler) ListSnapshots(c *gin.Context) {
 	resp := make([]gen.MemorySnapshotResponse, 0, len(snapshots))
 	for _, s := range snapshots {
 		resp = append(resp, gen.MemorySnapshotResponse{
-			AgentID: s.AgentID, WorkContext: s.WorkContext, PersonalContext: s.PersonalContext,
+			AgentID: s.AgentID, AgentName: s.AgentName, ConversationName: s.ConversationName,
+			WorkContext: s.WorkContext, PersonalContext: s.PersonalContext,
 			TopOfMind: s.TopOfMind, ExpiresAt: s.ExpiresAt, UpdatedAt: s.UpdatedAt, Status: s.Status,
 		})
 	}
@@ -507,7 +508,8 @@ func (h *UserMemoryHandler) UpdateSnapshot(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gen.MemorySnapshotResponse{
-		AgentID: snapshot.AgentID, WorkContext: snapshot.WorkContext, PersonalContext: snapshot.PersonalContext,
+		AgentID: snapshot.AgentID, AgentName: snapshot.AgentName, ConversationName: snapshot.ConversationName,
+		WorkContext: snapshot.WorkContext, PersonalContext: snapshot.PersonalContext,
 		TopOfMind: snapshot.TopOfMind, ExpiresAt: snapshot.ExpiresAt, UpdatedAt: snapshot.UpdatedAt,
 		Status: snapshot.Status,
 	})

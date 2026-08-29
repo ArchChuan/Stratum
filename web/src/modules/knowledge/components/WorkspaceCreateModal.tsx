@@ -13,6 +13,7 @@ import {
   KNOWLEDGE_MIN_TOP_K,
 } from '@/constants';
 import type { Member } from '@/modules/iam';
+import { ModelSelect } from '@/modules/llm/components/ModelSelect';
 
 export interface WorkspaceCreateValues {
   name: string;
@@ -32,7 +33,6 @@ interface WorkspaceCreateModalProps {
   form: FormInstance<WorkspaceCreateValues>;
   onClose: () => void;
   onSubmit: (values: WorkspaceCreateValues) => void;
-  embeddingModels: string[];
   editorCandidates: Member[];
   editorCandidatesLoading?: boolean;
 }
@@ -43,7 +43,6 @@ export function WorkspaceCreateModal({
   form,
   onClose,
   onSubmit,
-  embeddingModels,
   editorCandidates,
   editorCandidatesLoading = false,
 }: WorkspaceCreateModalProps) {
@@ -85,10 +84,10 @@ export function WorkspaceCreateModal({
           name="embedding_model"
           rules={[{ required: true }]}
         >
-          <Select
-            options={embeddingModels.map((model) => ({ value: model, label: model }))}
+          <ModelSelect
+            capability="embedding"
+            allowClear={false}
             notFoundContent="模型管理中没有可用的嵌入模型"
-            style={{ width: '100%' }}
           />
         </Form.Item>
         <Form.Item

@@ -50,7 +50,7 @@ describe('workflow configuration', () => {
       upstreams={[]}
       agentAllowedSkills={{}}
     />);
-    expect(screen.getByLabelText('固定 Skill 修订')).toBeInTheDocument();
+    expect(screen.getByLabelText('Skill 版本')).toBeInTheDocument();
     // 高级设置已被参数传递编辑器替代：不再暴露与内置参数重合的重试/超时字段。
     expect(screen.queryByLabelText('最大重试次数')).not.toBeInTheDocument();
     expect(screen.getByText('输入映射')).toBeInTheDocument();

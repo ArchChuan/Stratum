@@ -15,10 +15,13 @@ import (
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	"github.com/byteBuilderX/stratum/internal/evaluation/infrastructure/observation"
 	evalpersist "github.com/byteBuilderX/stratum/internal/evaluation/infrastructure/persistence"
+	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
 	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
+	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	parametersapp "github.com/byteBuilderX/stratum/internal/parameters/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
@@ -26,6 +29,7 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 )
 
 type Evaluation struct {
@@ -44,6 +48,7 @@ type Evaluation struct {
 	BaselineService      *evalapp.BaselineService
 	AgentRevisionApplier evalport.AgentRevisionApplier
 	TestCaseGenerator    *evalapp.TestCaseGenerator
+	ObservationService   *evalapp.ObservationService
 }
 
 type evaluationResourceRouter struct {
@@ -550,6 +555,24 @@ func buildEvaluationJudge(c *Container) evalport.LLMJudge {
 	}
 }
 
+// buildObservationService 装配运行态观测服务（P1b §4.2 路 A）：FeedbackService 依赖它
+// 作为行为信号 writer，NATS 消费 worker 复用同一实例（wireObservationPipeline），故
+// 必须在 FeedbackService 之前装配。
+func buildObservationService(
+	c *Container, db *pgxpool.Pool, traceReader evalport.TraceEvidenceReader, judge evalport.LLMJudge,
+) *evalapp.ObservationService {
+	return evalapp.NewObservationService(evalapp.ObservationServiceDeps{
+		Enabled:    func(ctx context.Context) bool { return observationEnabled(ctx, c.Parameters.Service) },
+		SampleRate: func(ctx context.Context) float64 { return observationSampleRate(ctx, c.Parameters.Service) },
+		Evidence:   traceReader,
+		Judge:      judge,
+		Repo:       evalpersist.NewPgObservationRepository(db),
+		Metrics:    c.platformMetrics(),
+		Logger:     c.Logger,
+		TenantTier: tenantTierAdapter{repo: iampersistence.NewAdminTenantRepo(db)},
+	})
+}
+
 // judgeAdapter implements evalport.LLMJudge over llmgateway's LLMCompleter.
 // The runtime switch and model/temperature come from platform parameters;
 // the rubric is the built-in default unless the case declares one
@@ -954,6 +977,7 @@ func mapEvaluationEvidence(evidence agentdomain.TraceEvidence) evalport.Observed
 	}
 	return evalport.ObservedTrace{
 		TraceID: evidence.TraceID, UserID: evidence.UserID, CostUSD: evidence.CostUSD, LatencyMs: evidence.LatencyMs,
+		Input: evidence.Input, Output: evidence.Output, TotalTokens: int64(evidence.TotalTokens), // TraceEvidence.TotalTokens(int) → ObservedTrace.TotalTokens(int64)
 		Success: evidence.Status == agentdomain.ExecStatusSuccess, SecurityViolation: evidence.SecurityViolation,
 		Assignments: assignments,
 	}
@@ -1037,7 +1061,10 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	if c.Agent != nil {
 		traceReader = evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider}
 	}
-	service := evalapp.NewService(evaluationResourceRouter{adapters: resourceAdapters}, runRepo, traceReader, buildEvaluationJudge(c), suiteRepo)
+	judge := buildEvaluationJudge(c)
+	service := evalapp.NewService(
+		evaluationResourceRouter{adapters: resourceAdapters}, runRepo, traceReader, judge, suiteRepo,
+	)
 	jobService := evalapp.NewJobService(jobRepo, service)
 	var rewriter evalapp.PromptRewriter
 	if c.Agent != nil && c.Agent.TenantResolver != nil {
@@ -1047,18 +1074,12 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		evaluationCandidateRouter{creators: candidateCreators}, rewriter, optimizationRepo,
 	)
 	experimentService := evalapp.NewExperimentService(experimentRepo)
+	observationSvc := buildObservationService(c, db, traceReader, judge)
 	feedbackService := evalapp.NewFeedbackService(
 		feedbackRepo, experimentService, evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider},
+		observationSvc,
 	)
-	experimentRunner := evalapp.NewExperimentRunner(experimentService, experimentRepo, feedbackRepo)
-	worker := evalapp.NewWorker(
-		evaluationTenantLister{pool: db},
-		evalapp.NewMultiRunner(jobService, experimentRunner),
-		constants.EvaluationIdleInterval,
-		c.platformMetrics(),
-	)
-	worker.Start(ctx)
-	c.shutdown = append(c.shutdown, func(context.Context) error { worker.Stop(); return nil })
+	worker := c.newEvaluationWorker(ctx, db, jobService, experimentService, experimentRepo, feedbackRepo)
 	baselineService, agentRevisionApplier := buildEvaluationRuntime(manager, agentProvider, mcpProvider, knowledgeProvider, runtimeAgentAdapter)
 	c.Evaluation = &Evaluation{
 		Service:              service,
@@ -1076,6 +1097,10 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		BaselineService:      baselineService,
 		AgentRevisionApplier: agentRevisionApplier,
 		TestCaseGenerator:    buildTestCaseGenerator(c, suiteRepo, db),
+		ObservationService:   observationSvc,
+	}
+	if err := c.wireObservationPipeline(ctx, observationSvc); err != nil {
+		return err
 	}
 	c.applyAgentRevisionResolvers(experimentService, runtimeAgentAdapter, runtimeMCPAdapter, runtimeKnowledgeAdapter)
 	c.applySkillEvaluationReader(experimentRepo)
@@ -1131,4 +1156,89 @@ func (c *Container) applySkillEvaluationReader(experimentRepo evalport.Experimen
 			traceAgentBindingResolver{evidence: c.Agent.EvidenceProvider, registry: c.Agent.Registry},
 		)
 	}
+}
+
+// observationEnabled 读取平台参数 evaluation.observe.enabled。默认关闭
+// （fail closed：参数服务不可用时禁用观测链路）。
+func observationEnabled(ctx context.Context, params *parametersapp.Service) bool {
+	if params == nil {
+		return false
+	}
+	values, err := params.PlatformValues(ctx)
+	if err != nil {
+		return false
+	}
+	enabled, _ := values["evaluation.observe.enabled"].(bool)
+	return enabled
+}
+
+// observationSampleRate 读取平台参数 evaluation.observe.sample_rate，
+// 未配置或非法时回退常量默认采样率。
+func observationSampleRate(ctx context.Context, params *parametersapp.Service) float64 {
+	if params == nil {
+		return constants.ObservationSampleRateDefault
+	}
+	values, err := params.PlatformValues(ctx)
+	if err != nil {
+		return constants.ObservationSampleRateDefault
+	}
+	if rate, ok := values["evaluation.observe.sample_rate"].(float64); ok && rate >= 0 && rate <= 1 {
+		return rate
+	}
+	return constants.ObservationSampleRateDefault
+}
+
+// newEvaluationWorker 构建评测周期 worker 并启动 + 注册关闭。独立成函数
+// 保持 buildEvaluation 复杂度在质量门禁基线内。
+func (c *Container) newEvaluationWorker(ctx context.Context, db *pgxpool.Pool, jobService *evalapp.JobService,
+	experimentService *evalapp.ExperimentService, experimentRepo evalport.ExperimentRepository, feedbackRepo evalport.FeedbackRepository,
+) *evalapp.Worker {
+	experimentRunner := evalapp.NewExperimentRunner(experimentService, experimentRepo, feedbackRepo)
+	worker := evalapp.NewWorker(
+		evaluationTenantLister{pool: db},
+		evalapp.NewMultiRunner(jobService, experimentRunner),
+		constants.EvaluationIdleInterval,
+		c.platformMetrics(),
+	)
+	worker.Start(ctx)
+	c.shutdown = append(c.shutdown, func(context.Context) error { worker.Stop(); return nil })
+	return worker
+}
+
+// wireObservationPipeline 装配运行态观测链路（P1a）：ObservationService 已由
+// buildEvaluation 先行装配（FeedbackService 复用为行为信号 writer），此处仅挂接
+// JetStream 消费 worker。观测消费为 best-effort：NATS 缺失或 JetStream 装配失败
+// 仅降级跳过 worker，查询 API 与 agent 执行不受影响（§14 评估器不阻断执行）。
+func (c *Container) wireObservationPipeline(ctx context.Context, observationSvc *evalapp.ObservationService) error {
+	if c.Storage == nil || c.Storage.NATS == nil {
+		return nil
+	}
+	jsm, err := pipeline.NewJetStreamManager(c.Storage.NATS, c.Logger)
+	if err != nil {
+		c.Logger.Warn("observation pipeline degraded: jetstream manager unavailable", zap.Error(err))
+		return nil
+	}
+	if err := observation.EnsureStreams(ctx, jsm.JS()); err != nil {
+		c.Logger.Warn("observation pipeline degraded: ensure streams failed", zap.Error(err))
+		return nil
+	}
+	consumer, err := jsm.CreateConsumer(ctx, constants.ObservationStream,
+		constants.ObservationConsumerName, constants.ObservationSubjectPrefix+".>",
+		constants.ObservationAckWait, constants.ObservationMaxDeliver)
+	if err != nil {
+		c.Logger.Warn("observation pipeline degraded: ensure consumer failed", zap.Error(err))
+		return nil
+	}
+	observationWorker := observation.NewObservationConsumerWorker(consumer, jsm.JS(),
+		observationSvc, c.platformMetrics(), c.Logger,
+		constants.ObservationAckWait, constants.ObservationMaxDeliver)
+	if err := observationWorker.Start(ctx); err != nil {
+		c.Logger.Warn("observation pipeline degraded: consumer start failed", zap.Error(err))
+		return nil
+	}
+	c.shutdown = append(c.shutdown, func(context.Context) error {
+		observationWorker.Stop()
+		return nil
+	})
+	return nil
 }

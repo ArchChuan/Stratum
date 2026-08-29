@@ -48,6 +48,10 @@ func (r *settingsTenantRepo) ListUserTenants(context.Context, string) ([]domain.
 	return nil, nil
 }
 
+func (r *settingsTenantRepo) ListAllTenants(context.Context) ([]domain.UserTenantInfo, error) {
+	return nil, nil
+}
+
 func TestGetSettingsRemovesLegacyLLMAPIKeys(t *testing.T) {
 	repo := &settingsTenantRepo{
 		name:     "tenant",
