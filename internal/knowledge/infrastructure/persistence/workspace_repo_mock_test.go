@@ -283,6 +283,31 @@ func TestWorkspaceRepo_UpdateWorkspaceAll_conflict(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestWorkspaceRepo_UpdateWorkspaceAll_updateZeroRowsFailsClosed locks the
+// fail-closed path where the workspace row disappears between the SELECT id and
+// the UPDATE (rename/delete by a concurrent tx, visible under READ COMMITTED):
+// the UPDATE matches 0 rows, so the closure returns ErrWorkspaceNotFound BEFORE
+// writeKnowledgeVersionTx/insertChangeAudit run, and execTenant rolls back the
+// whole transaction. No version-write or audit expectations are registered —
+// their absence plus the pinned rollback proves they were skipped.
+func TestWorkspaceRepo_UpdateWorkspaceAll_updateZeroRowsFailsClosed(t *testing.T) {
+	mock := newRepoMock(t)
+	repo := NewWorkspaceRepo(mock)
+
+	repoBeginTenant(mock)
+	mock.ExpectQuery("SELECT id FROM rag_workspaces WHERE name=\\$1").
+		WithArgs("ws").
+		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("ws-1"))
+	mock.ExpectExec("UPDATE rag_workspaces").
+		WithArgs((*string)(nil), (*string)(nil), toJSONB(testConfig()), "ws").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectRollback()
+
+	err := repo.UpdateWorkspaceAll(context.Background(), "t1", "ws", nil, nil, testSnapshot(), "", "", nil)
+	require.ErrorIs(t, err, domain.ErrWorkspaceNotFound)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestWorkspaceRepo_Delete_success(t *testing.T) {
 	mock := newRepoMock(t)
 	repo := NewWorkspaceRepo(mock)

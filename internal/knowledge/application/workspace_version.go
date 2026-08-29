@@ -135,7 +135,7 @@ func (s *WorkspaceService) RollbackWorkspace(ctx context.Context, tenantID, name
 		return nil, fmt.Errorf("knowledge service rollback workspace: parse version payload: %w", err)
 	}
 	after := snap.ToWorkspace(current.ID)
-	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindKnowledge, current.ID, auditdomain.ChangeOpUpdate,
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindKnowledge, current.ID, auditdomain.ChangeOpRollback,
 		in.ActorID, KnowledgeSafeProjection(current), KnowledgeSafeProjection(after))
 	if err != nil {
 		return nil, err

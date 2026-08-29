@@ -243,7 +243,6 @@ func (r *WorkspaceRepo) UpdateWorkspaceAll(
 	editorActor, actorID string,
 	audit *auditdomain.ResourceChangeAuditEvent,
 ) error {
-	var tag pgconn.CommandTag
 	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		// 事务内解析 workspace ID（resource_versions.resource_id 用 UUID；与
 		// UPDATE 同事务，无 TOCTOU）。缺失行 fail-closed。
@@ -256,8 +255,7 @@ func (r *WorkspaceRepo) UpdateWorkspaceAll(
 				return err
 			}
 		}
-		var err error
-		tag, err = tx.Exec(ctx, `UPDATE rag_workspaces
+		tag, err := tx.Exec(ctx, `UPDATE rag_workspaces
 	                     SET name = COALESCE($1, name),
 	                         description = COALESCE($2, description),
 	                         config = $3,
@@ -265,6 +263,9 @@ func (r *WorkspaceRepo) UpdateWorkspaceAll(
 			WHERE name = $4`, renameTo, description, toJSONB(snap.Config), name)
 		if err != nil {
 			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return domain.ErrWorkspaceNotFound
 		}
 		if err := writeKnowledgeVersionTx(ctx, tx, wsID, snap, actorID); err != nil {
 			return err
@@ -280,9 +281,6 @@ func (r *WorkspaceRepo) UpdateWorkspaceAll(
 			return domain.ErrWorkspaceConflict
 		}
 		return fmt.Errorf("workspace_repo: update: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return domain.ErrWorkspaceNotFound
 	}
 	return nil
 }
