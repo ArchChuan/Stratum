@@ -108,3 +108,104 @@ func TestObservationRepositoryQueryByResource(t *testing.T) {
 		t.Fatalf("QueryByResource mismatch: %+v", list)
 	}
 }
+
+func TestObservationRepositoryFindLatestByTrace(t *testing.T) {
+	mock := newMockRepo(t)
+	repo := NewPgObservationRepository(mock)
+	expectTenantTx(mock) // BEGIN + SET LOCAL search_path（execTenantTx 内部执行）
+
+	rows := pgxmock.NewRows([]string{"id", "trace_id", "resource_kind", "resource_id",
+		"param_version", "signals", "cost_perf", "stratum", "verdict", "created_at"}).
+		AddRow("obs-2", "trace-1", "agent", "agent-1",
+			`{"platform":{"group_key":"","version_seq":0},"resource":{"ref":"r1","version":"v3"},"source":"resource"}`,
+			`{"rule":null,"judge":null,"behavior":{"retry":true,"escalation":false,"abandonment":false}}`,
+			`{"latency_ms":1200,"tokens":3200,"cost_usd":0.012}`,
+			"", "pass", time.Now().UTC())
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, trace_id, resource_kind, resource_id, param_version, signals, cost_perf, stratum, verdict, created_at FROM eval_observations WHERE trace_id = $1 ORDER BY created_at DESC LIMIT 1`)).
+		WithArgs("trace-1").
+		WillReturnRows(rows)
+	mock.ExpectCommit()
+
+	got, err := repo.FindLatestByTrace(context.Background(), "t1", "trace-1")
+	if err != nil {
+		t.Fatalf("FindLatestByTrace: %v", err)
+	}
+	if got == nil || got.TraceID != "trace-1" || got.Signals.Behavior.Retry != true {
+		t.Fatalf("FindLatestByTrace mismatch: %+v", got)
+	}
+}
+
+func TestObservationRepositoryFindLatestByTraceNoRows(t *testing.T) {
+	mock := newMockRepo(t)
+	repo := NewPgObservationRepository(mock)
+	expectTenantTx(mock)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, trace_id, resource_kind, resource_id, param_version, signals, cost_perf, stratum, verdict, created_at FROM eval_observations WHERE trace_id = $1 ORDER BY created_at DESC LIMIT 1`)).
+		WithArgs("missing-trace").
+		WillReturnError(pgx.ErrNoRows)
+	mock.ExpectRollback() // fn 返回 pgx.ErrNoRows 时 execTenantTx 走 Rollback
+
+	got, err := repo.FindLatestByTrace(context.Background(), "t1", "missing-trace")
+	if err != nil {
+		t.Fatalf("FindLatestByTrace no-rows: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("FindLatestByTrace no-rows: want nil, got %+v", got)
+	}
+}
+
+func TestObservationRepositoryUpdateBehaviorSignals(t *testing.T) {
+	mock := newMockRepo(t)
+	repo := NewPgObservationRepository(mock)
+	expectTenantTx(mock)
+
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE eval_observations SET signals = jsonb_set(signals, '{behavior}', $2) WHERE id = $1`)).
+		WithArgs("obs-1", `{"retry":false,"escalation":true,"abandonment":false}`).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
+
+	if err := repo.UpdateBehaviorSignals(context.Background(), "t1", "obs-1",
+		domain.BehaviorSignals{Escalation: true}); err != nil {
+		t.Fatalf("UpdateBehaviorSignals: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations not met: %v", err)
+	}
+}
+
+func TestObservationRepositoryUpdateBehaviorSignalsReflectedInGet(t *testing.T) {
+	mock := newMockRepo(t)
+	repo := NewPgObservationRepository(mock)
+
+	// 更新后 Get 同一行，signals.behavior 应反映合并值（整对象覆盖）。
+	mergedSignals := `{"rule":null,"judge":null,"behavior":{"retry":false,"escalation":true,"abandonment":false}}`
+
+	expectTenantTx(mock)
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE eval_observations SET signals = jsonb_set(signals, '{behavior}', $2) WHERE id = $1`)).
+		WithArgs("obs-1", `{"retry":false,"escalation":true,"abandonment":false}`).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
+
+	if err := repo.UpdateBehaviorSignals(context.Background(), "t1", "obs-1",
+		domain.BehaviorSignals{Escalation: true}); err != nil {
+		t.Fatalf("UpdateBehaviorSignals: %v", err)
+	}
+
+	expectTenantTx(mock)
+	rows := pgxmock.NewRows([]string{"id", "trace_id", "resource_kind", "resource_id",
+		"param_version", "signals", "cost_perf", "stratum", "verdict", "created_at"}).
+		AddRow("obs-1", "trace-1", "agent", "agent-1", `{}`, mergedSignals, `{}`, "", "pass", time.Now().UTC())
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, trace_id, resource_kind, resource_id, param_version, signals, cost_perf, stratum, verdict, created_at FROM eval_observations WHERE id = $1`)).
+		WithArgs("obs-1").
+		WillReturnRows(rows)
+	mock.ExpectCommit()
+
+	got, err := repo.Get(context.Background(), "t1", "obs-1")
+	if err != nil {
+		t.Fatalf("Get after update: %v", err)
+	}
+	if !got.Signals.Behavior.Escalation || got.Signals.Behavior.Retry || got.Signals.Behavior.Abandonment {
+		t.Fatalf("behavior after update mismatch: %+v", got.Signals.Behavior)
+	}
+}

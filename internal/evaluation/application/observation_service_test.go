@@ -45,8 +45,11 @@ func (j *stubJudge) Judge(ctx context.Context, req port.JudgeRequest) (domain.As
 }
 
 type stubObservationRepo struct {
-	saved []domain.EvalObservation
-	err   error
+	saved     []domain.EvalObservation
+	err       error
+	latest    *domain.EvalObservation
+	latestErr error
+	updates   []domain.BehaviorSignals
 }
 
 func (s *stubObservationRepo) Save(ctx context.Context, tenantID string, obs *domain.EvalObservation) error {
@@ -63,6 +66,23 @@ func (s *stubObservationRepo) QueryByResource(ctx context.Context, tenantID, res
 	from, to *time.Time, limit, offset int,
 ) ([]domain.EvalObservation, error) {
 	return nil, errors.New("not used")
+}
+func (s *stubObservationRepo) FindLatestByTrace(
+	ctx context.Context, tenantID, traceID string,
+) (*domain.EvalObservation, error) {
+	if s.latestErr != nil {
+		return nil, s.latestErr
+	}
+	return s.latest, nil
+}
+func (s *stubObservationRepo) UpdateBehaviorSignals(
+	ctx context.Context, tenantID, observationID string, signals domain.BehaviorSignals,
+) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.updates = append(s.updates, signals)
+	return nil
 }
 
 type stubTierReader struct {
@@ -261,5 +281,69 @@ func TestObservationServiceProcessStratumEmptyOnTierResolveFailure(t *testing.T)
 	}
 	if got := repo.saved[0].Stratum; got != "" {
 		t.Fatalf("stratum = %q, want empty on tier resolve failure", got)
+	}
+}
+
+func TestObservationServiceApplyBehaviorSignalsNoObservation(t *testing.T) {
+	repo := &stubObservationRepo{} // latest 为 nil：采样未覆盖该 trace
+	svc := newTestObservationService(repo, &stubEvidenceReader{}, &stubJudge{})
+	if err := svc.ApplyBehaviorSignals(context.Background(), "t1", "trace-missing",
+		domain.BehaviorSignals{Abandonment: true}); err != nil {
+		t.Fatalf("ApplyBehaviorSignals: %v", err)
+	}
+	if len(repo.updates) != 0 {
+		t.Fatalf("UpdateBehaviorSignals called %d times, want 0", len(repo.updates))
+	}
+}
+
+func TestObservationServiceApplyBehaviorSignalsMergesIntoLatest(t *testing.T) {
+	repo := &stubObservationRepo{latest: &domain.EvalObservation{
+		ID: "obs-1", TraceID: "trace-1",
+		Signals: domain.ObservationSignals{Behavior: domain.BehaviorSignals{Retry: true}},
+	}}
+	svc := newTestObservationService(repo, &stubEvidenceReader{}, &stubJudge{})
+	if err := svc.ApplyBehaviorSignals(context.Background(), "t1", "trace-1",
+		domain.BehaviorSignals{Abandonment: true, Escalation: true}); err != nil {
+		t.Fatalf("ApplyBehaviorSignals: %v", err)
+	}
+	if len(repo.updates) != 1 {
+		t.Fatalf("UpdateBehaviorSignals called %d times, want 1", len(repo.updates))
+	}
+	got := repo.updates[0]
+	if !got.Retry || !got.Abandonment || !got.Escalation {
+		t.Fatalf("merged behavior = %+v, want all true", got)
+	}
+}
+
+func TestObservationServiceApplyBehaviorSignalsNoChangeShortCircuits(t *testing.T) {
+	repo := &stubObservationRepo{latest: &domain.EvalObservation{
+		ID: "obs-1", TraceID: "trace-1",
+		Signals: domain.ObservationSignals{Behavior: domain.BehaviorSignals{Retry: true, Abandonment: true}},
+	}}
+	svc := newTestObservationService(repo, &stubEvidenceReader{}, &stubJudge{})
+	// 输入信号已包含于现有行为：合并无变化 → 幂等短路，不写库。
+	if err := svc.ApplyBehaviorSignals(context.Background(), "t1", "trace-1",
+		domain.BehaviorSignals{Retry: true, Abandonment: true}); err != nil {
+		t.Fatalf("ApplyBehaviorSignals: %v", err)
+	}
+	if len(repo.updates) != 0 {
+		t.Fatalf("UpdateBehaviorSignals called %d times, want 0 (no change)", len(repo.updates))
+	}
+}
+
+func TestObservationServiceApplyBehaviorSignalsRepoErrorPropagates(t *testing.T) {
+	repo := &stubObservationRepo{latestErr: errors.New("repo down")}
+	svc := newTestObservationService(repo, &stubEvidenceReader{}, &stubJudge{})
+	if err := svc.ApplyBehaviorSignals(context.Background(), "t1", "trace-1",
+		domain.BehaviorSignals{Abandonment: true}); err == nil {
+		t.Fatal("repo error must propagate to caller (best-effort 调用方忽略)")
+	}
+}
+
+func TestObservationServiceApplyBehaviorSignalsNilRepoNoop(t *testing.T) {
+	svc := NewObservationService(ObservationServiceDeps{Logger: zap.NewNop()})
+	if err := svc.ApplyBehaviorSignals(context.Background(), "t1", "trace-1",
+		domain.BehaviorSignals{Abandonment: true}); err != nil {
+		t.Fatalf("nil repo must noop: %v", err)
 	}
 }

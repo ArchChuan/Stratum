@@ -7,6 +7,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -38,6 +39,9 @@ func NewObservationService(deps ObservationServiceDeps) *ObservationService {
 	}
 	return &ObservationService{deps: deps}
 }
+
+// 编译期断言：ObservationService 满足 port.BehaviorSignalWriter。
+var _ port.BehaviorSignalWriter = (*ObservationService)(nil)
 
 // Process 处理一条观测引用事件：开启 → 采样 → judge 可用性 → 拉证据 → judge 多维打分 → 落库。
 // 返回 error 表示需要 NATS 重投（仅证据查询失败）；judge 关闭 / judge 故障 / 校验非法 /
@@ -171,7 +175,7 @@ func (s *ObservationService) applyJudge(ctx context.Context, trace port.Observed
 	s.deps.Metrics.RecordEvalJudgeLatency(seconds)
 	s.deps.Metrics.RecordEvalJudgeCost(trace.CostUSD)
 	// 任一维度低于阈值视为 flag（仅信号级，非门禁判定）。
-	if anyJudgeBelow(obs.Signals.Judge, 0.5) {
+	if anyJudgeBelow(obs.Signals.Judge, constants.JudgeBelowThreshold) {
 		obs.Verdict = domain.VerdictFlag
 	}
 	return nil
@@ -211,6 +215,32 @@ func (s *ObservationService) GetObservation(ctx context.Context, tenantID, id st
 		return nil, fmt.Errorf("observation service: repository unavailable")
 	}
 	return s.deps.Repo.Get(ctx, tenantID, id)
+}
+
+// ApplyBehaviorSignals 把行为信号合并到该 trace 最近一条观测（§4.2）。找不到观测
+// 时静默返回 nil（采样未覆盖该 trace，反馈不补造观测）；更新失败返回错误（调用方
+// 忽略，best-effort）。
+func (s *ObservationService) ApplyBehaviorSignals(
+	ctx context.Context, tenantID, traceID string, signals domain.BehaviorSignals,
+) error {
+	if s.deps.Repo == nil {
+		return nil
+	}
+	obs, err := s.deps.Repo.FindLatestByTrace(ctx, tenantID, traceID)
+	if err != nil {
+		return err
+	}
+	if obs == nil {
+		return nil
+	}
+	merged := obs.Signals.Behavior
+	merged.Retry = merged.Retry || signals.Retry
+	merged.Escalation = merged.Escalation || signals.Escalation
+	merged.Abandonment = merged.Abandonment || signals.Abandonment
+	if merged == obs.Signals.Behavior {
+		return nil
+	}
+	return s.deps.Repo.UpdateBehaviorSignals(ctx, tenantID, obs.ID, merged)
 }
 
 // JudgeRequest 的预期输出当前留空：运行态观测无 golden（评测集才有 ExpectedOutput）。

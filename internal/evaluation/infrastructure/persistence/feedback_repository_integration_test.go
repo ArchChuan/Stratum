@@ -405,7 +405,7 @@ func TestFeedbackAlternatingVariantsAccumulateAndAdvanceStage(t *testing.T) {
 	feedbackRepo := NewPgFeedbackRepository(pool)
 	service := application.NewFeedbackService(
 		feedbackRepo, application.NewExperimentService(NewPgExperimentRepository(pool)),
-		feedbackEvidenceFake{traces: traces},
+		feedbackEvidenceFake{traces: traces}, nil,
 	)
 	var final application.FeedbackResult
 	for index, item := range variants {

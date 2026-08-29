@@ -555,6 +555,24 @@ func buildEvaluationJudge(c *Container) evalport.LLMJudge {
 	}
 }
 
+// buildObservationService 装配运行态观测服务（P1b §4.2 路 A）：FeedbackService 依赖它
+// 作为行为信号 writer，NATS 消费 worker 复用同一实例（wireObservationPipeline），故
+// 必须在 FeedbackService 之前装配。
+func buildObservationService(
+	c *Container, db *pgxpool.Pool, traceReader evalport.TraceEvidenceReader, judge evalport.LLMJudge,
+) *evalapp.ObservationService {
+	return evalapp.NewObservationService(evalapp.ObservationServiceDeps{
+		Enabled:    func(ctx context.Context) bool { return observationEnabled(ctx, c.Parameters.Service) },
+		SampleRate: func(ctx context.Context) float64 { return observationSampleRate(ctx, c.Parameters.Service) },
+		Evidence:   traceReader,
+		Judge:      judge,
+		Repo:       evalpersist.NewPgObservationRepository(db),
+		Metrics:    c.platformMetrics(),
+		Logger:     c.Logger,
+		TenantTier: tenantTierAdapter{repo: iampersistence.NewAdminTenantRepo(db)},
+	})
+}
+
 // judgeAdapter implements evalport.LLMJudge over llmgateway's LLMCompleter.
 // The runtime switch and model/temperature come from platform parameters;
 // the rubric is the built-in default unless the case declares one
@@ -1043,7 +1061,10 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	if c.Agent != nil {
 		traceReader = evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider}
 	}
-	service := evalapp.NewService(evaluationResourceRouter{adapters: resourceAdapters}, runRepo, traceReader, buildEvaluationJudge(c), suiteRepo)
+	judge := buildEvaluationJudge(c)
+	service := evalapp.NewService(
+		evaluationResourceRouter{adapters: resourceAdapters}, runRepo, traceReader, judge, suiteRepo,
+	)
 	jobService := evalapp.NewJobService(jobRepo, service)
 	var rewriter evalapp.PromptRewriter
 	if c.Agent != nil && c.Agent.TenantResolver != nil {
@@ -1053,8 +1074,10 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		evaluationCandidateRouter{creators: candidateCreators}, rewriter, optimizationRepo,
 	)
 	experimentService := evalapp.NewExperimentService(experimentRepo)
+	observationSvc := buildObservationService(c, db, traceReader, judge)
 	feedbackService := evalapp.NewFeedbackService(
 		feedbackRepo, experimentService, evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider},
+		observationSvc,
 	)
 	worker := c.newEvaluationWorker(ctx, db, jobService, experimentService, experimentRepo, feedbackRepo)
 	baselineService, agentRevisionApplier := buildEvaluationRuntime(manager, agentProvider, mcpProvider, knowledgeProvider, runtimeAgentAdapter)
@@ -1074,8 +1097,9 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		BaselineService:      baselineService,
 		AgentRevisionApplier: agentRevisionApplier,
 		TestCaseGenerator:    buildTestCaseGenerator(c, suiteRepo, db),
+		ObservationService:   observationSvc,
 	}
-	if err := c.wireObservationPipeline(ctx, db, traceReader, buildEvaluationJudge(c)); err != nil {
+	if err := c.wireObservationPipeline(ctx, observationSvc); err != nil {
 		return err
 	}
 	c.applyAgentRevisionResolvers(experimentService, runtimeAgentAdapter, runtimeMCPAdapter, runtimeKnowledgeAdapter)
@@ -1181,25 +1205,11 @@ func (c *Container) newEvaluationWorker(ctx context.Context, db *pgxpool.Pool, j
 	return worker
 }
 
-// wireObservationPipeline 装配运行态观测链路（P1a）：ObservationService 落库
-// 服务 + JetStream 消费 worker。观测服务先于 NATS 装配（查询 API 数据源）。
-// 观测消费为 best-effort：NATS 缺失或 JetStream 装配失败仅降级跳过 worker，
-// 查询 API 与 agent 执行不受影响（§14 评估器不阻断执行）。
-func (c *Container) wireObservationPipeline(ctx context.Context, db *pgxpool.Pool,
-	traceReader evalport.TraceEvidenceReader, judge evalport.LLMJudge,
-) error {
-	observationRepo := evalpersist.NewPgObservationRepository(db)
-	observationSvc := evalapp.NewObservationService(evalapp.ObservationServiceDeps{
-		Enabled:    func(ctx context.Context) bool { return observationEnabled(ctx, c.Parameters.Service) },
-		SampleRate: func(ctx context.Context) float64 { return observationSampleRate(ctx, c.Parameters.Service) },
-		Evidence:   traceReader,
-		Judge:      judge,
-		Repo:       observationRepo,
-		Metrics:    c.platformMetrics(),
-		Logger:     c.Logger,
-		TenantTier: tenantTierAdapter{repo: iampersistence.NewAdminTenantRepo(db)},
-	})
-	c.Evaluation.ObservationService = observationSvc
+// wireObservationPipeline 装配运行态观测链路（P1a）：ObservationService 已由
+// buildEvaluation 先行装配（FeedbackService 复用为行为信号 writer），此处仅挂接
+// JetStream 消费 worker。观测消费为 best-effort：NATS 缺失或 JetStream 装配失败
+// 仅降级跳过 worker，查询 API 与 agent 执行不受影响（§14 评估器不阻断执行）。
+func (c *Container) wireObservationPipeline(ctx context.Context, observationSvc *evalapp.ObservationService) error {
 	if c.Storage == nil || c.Storage.NATS == nil {
 		return nil
 	}
