@@ -590,6 +590,10 @@ func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 		adminMW := []gin.HandlerFunc{middleware.RequireTenantRole("admin")}
 		knowledgeGroup.POST("/workspaces", append(adminMW, requireActive, ragHandler.CreateWorkspace)...)
 		knowledgeGroup.PATCH("/workspaces/:name", append(adminMW, requireActive, ragHandler.UpdateWorkspace)...)
+		// 版本历史/回滚：历史 GET member 级（对齐 agent/skill），回滚写 admin
+		// （spec：入口仅 isAdmin 可见）。
+		knowledgeGroup.GET("/workspaces/:name/versions", requireActive, ragHandler.ListWorkspaceVersions)
+		knowledgeGroup.POST("/workspaces/:name/rollback", append(adminMW, requireActive, ragHandler.RollbackWorkspace)...)
 		knowledgeGroup.DELETE("/workspaces/:name", append(adminMW, requireActive, ragHandler.DeleteWorkspace)...)
 		knowledgeGroup.PUT("/workspaces/:name/editors", append(adminMW, requireActive, ragHandler.SetWorkspaceEditors)...)
 		knowledgeGroup.DELETE("/workspaces/:name/documents/:documentID", append(adminMW, requireActive, ragHandler.DeleteDocument)...)
