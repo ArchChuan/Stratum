@@ -367,6 +367,10 @@ func (r *recordingWorkspaceRepo) UpdateWorkspaceAll(ctx context.Context, tenantI
 	return nil
 }
 
+func (r *recordingWorkspaceRepo) RollbackWorkspace(ctx context.Context, tenantID, name string, snap domain.KnowledgeWorkspaceSnapshot, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
+
 func (r *recordingWorkspaceRepo) Delete(ctx context.Context, tenantID, name string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }

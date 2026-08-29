@@ -33,6 +33,9 @@ func (r *deleteWorkspaceRepo) GetByID(_ context.Context, _, id string) (*domain.
 func (r *deleteWorkspaceRepo) UpdateWorkspaceAll(context.Context, string, string, *string, *string, domain.KnowledgeWorkspaceSnapshot, string, string, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
+func (r *deleteWorkspaceRepo) RollbackWorkspace(context.Context, string, string, domain.KnowledgeWorkspaceSnapshot, string, string, *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (r *deleteWorkspaceRepo) Delete(context.Context, string, string, *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }

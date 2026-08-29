@@ -115,6 +115,20 @@ func (f *fakeWorkspaceRepo) UpdateWorkspaceAll(_ context.Context, _, name string
 	return nil
 }
 
+func (f *fakeWorkspaceRepo) RollbackWorkspace(_ context.Context, _ string, name string, snap domain.KnowledgeWorkspaceSnapshot, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	if f.updateErr != nil {
+		return f.updateErr
+	}
+	ws, ok := f.workspaces[name]
+	if !ok {
+		return domain.ErrWorkspaceNotFound
+	}
+	ws.Name = snap.Name
+	ws.Description = snap.Description
+	ws.Config = snap.Config
+	return nil
+}
+
 func (f *fakeWorkspaceRepo) Delete(_ context.Context, _, name string, audit *auditdomain.ResourceChangeAuditEvent) error {
 	if audit != nil {
 		f.audits = append(f.audits, audit)

@@ -29,6 +29,13 @@ type WorkspaceRepo interface {
 	// is present in resource_editors (closes the check-then-write TOCTOU
 	// window).
 	UpdateWorkspaceAll(ctx context.Context, tenantID, name string, renameTo, description *string, snap domain.KnowledgeWorkspaceSnapshot, editorActor, actorID string, audit *auditdomain.ResourceChangeAuditEvent) error
+	// RollbackWorkspace restores a deprecated historical version in one
+	// transaction: the snapshot payload is written back to the workspace row, the
+	// target promoted to published, and active_version_id repointed at it. No new
+	// version is created. targetVersionID must reference a deprecated version
+	// (versioningdomain.ErrVersionNotFound otherwise). editorActor, when
+	// non-empty, re-validates inside the transaction.
+	RollbackWorkspace(ctx context.Context, tenantID, name string, snap domain.KnowledgeWorkspaceSnapshot, editorActor, targetVersionID string, audit *auditdomain.ResourceChangeAuditEvent) error
 	// Delete removes the workspace and its editor rows in the same
 	// transaction.
 	Delete(ctx context.Context, tenantID, name string, audit *auditdomain.ResourceChangeAuditEvent) error

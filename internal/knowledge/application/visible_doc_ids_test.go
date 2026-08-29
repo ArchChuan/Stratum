@@ -30,6 +30,9 @@ func (r *errWorkspaceRepo) GetByID(context.Context, string, string) (*domain.Wor
 func (r *errWorkspaceRepo) UpdateWorkspaceAll(context.Context, string, string, *string, *string, domain.KnowledgeWorkspaceSnapshot, string, string, *auditdomain.ResourceChangeAuditEvent) error {
 	return r.err
 }
+func (r *errWorkspaceRepo) RollbackWorkspace(context.Context, string, string, domain.KnowledgeWorkspaceSnapshot, string, string, *auditdomain.ResourceChangeAuditEvent) error {
+	return r.err
+}
 func (r *errWorkspaceRepo) Delete(context.Context, string, string, *auditdomain.ResourceChangeAuditEvent) error {
 	return r.err
 }

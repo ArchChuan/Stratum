@@ -121,6 +121,12 @@ func (r *previewWorkspaceRepo) UpdateWorkspaceAll(
 ) error {
 	return nil
 }
+func (r *previewWorkspaceRepo) RollbackWorkspace(
+	context.Context, string, string, knowledgedomain.KnowledgeWorkspaceSnapshot,
+	string, string, *auditdomain.ResourceChangeAuditEvent,
+) error {
+	return nil
+}
 func (r *previewWorkspaceRepo) Delete(
 	context.Context, string, string, *auditdomain.ResourceChangeAuditEvent,
 ) error {
