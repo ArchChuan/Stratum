@@ -75,7 +75,9 @@ func (s *ObservationService) Process(ctx context.Context, evt domain.Observation
 		return fmt.Errorf("observation resolve evidence: %w", err)
 	}
 	obs := s.buildObservation(ctx, evt, trace)
-	s.applyAnomalyVerdict(string(obs.Resource.Kind), &obs)
+	// 判异识别必须在 applyJudge 之后运行：judge 信号由 applyJudge 填充，
+	// 先判异会导致 judge 分支永远空判（judge_below_threshold 指标死代码），
+	// 且 rule-block 会被 applyJudge 无条件降级为 flag。此顺序保证 block > flag > pass。
 	if err := s.applyJudge(ctx, trace, &obs); err != nil {
 		// judge 不可用：§14 采样降级跳过——不落零信号的伪 pass 观察、不重投
 		// （避免 judge 持续不可用时的重投空转），仅指标计数 + warn 日志。
@@ -84,6 +86,7 @@ func (s *ObservationService) Process(ctx context.Context, evt domain.Observation
 		s.deps.Metrics.IncEvalJudgeFailure("judge_unavailable")
 		return nil
 	}
+	s.applyAnomalyVerdict(string(obs.Resource.Kind), &obs)
 	if err := obs.Validate(); err != nil {
 		// 数据非法：重投必再失败（poison message 循环），丢弃而非重投。
 		s.deps.Logger.Warn("observation invalid, drop", zap.Error(err),
@@ -256,8 +259,10 @@ func (s *ObservationService) applyAnomalyVerdict(resource string, obs *domain.Ev
 		s.deps.Metrics.IncEvalBehaviorAnomaly(resource, "rule_block")
 		s.deps.Metrics.IncEvalGateAction("detect", string(domain.VerdictBlock))
 	}
-	// block 优先级最高（T4 红线）：规则命中后，行为/judge 判异只独立计数、不降级 verdict。
-	// 各 signal 维度独立计数（§11.1 eval_behavior_anomaly_total{resource, signal}）。
+	// block 优先级最高（T4 红线）：规则命中置 block 后，`verdict != block` 守卫
+	// 抑制行为/judge 判异分支——不降级 verdict、不计入对应信号维度。
+	// 非 block 结论（pass/flag）下，各 signal 维度独立计数
+	// （§11.1 eval_behavior_anomaly_total{resource, signal}）。
 	if obs.Verdict != domain.VerdictBlock && obs.Signals.Behavior.Abandonment {
 		obs.Verdict = domain.VerdictFlag
 		s.deps.Metrics.IncEvalBehaviorAnomaly(resource, "behavior_abandonment")

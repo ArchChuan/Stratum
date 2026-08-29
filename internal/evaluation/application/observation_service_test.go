@@ -484,6 +484,87 @@ func TestObservationServiceAnomalyVerdict(t *testing.T) {
 			t.Fatalf("verdict = %s, want pass", got)
 		}
 	})
+
+	t.Run("rule hit + judge below threshold → final verdict block", func(t *testing.T) {
+		// 回归（review fix）：applyJudge 先置 flag，applyAnomalyVerdict 后置 block——
+		// block > flag 优先级必须保持，且 `verdict != block` 守卫抑制
+		// judge_below_threshold 计数（不把 rule-block 降级为 flag）。
+		repo := &stubObservationRepo{}
+		reader := &stubEvidenceReader{trace: port.ObservedTrace{
+			TraceID: "trace-rule-judge", Input: "q", Output: "a",
+		}}
+		judge := &stubJudge{enabled: true, result: domain.AssertionResult{Passed: false}}
+		metrics := &stubMetrics{}
+		svc := NewObservationService(ObservationServiceDeps{
+			Enabled:    func(context.Context) bool { return true },
+			SampleRate: func(context.Context) float64 { return 1.0 },
+			Evidence:   reader, Judge: judge, Repo: repo,
+			Metrics: metrics, Logger: zap.NewNop(),
+		})
+		evt := domain.ObservationReferenceEvent{
+			TenantID: "t1", TraceID: "trace-rule-judge", ResourceKind: "agent", ResourceID: "agent-1",
+			RuleSignals: []domain.RuleSignalPayload{{
+				Rule: "tool_denylist", Message: `tool "x" blocked by platform rule`,
+			}},
+		}
+		if err := svc.Process(context.Background(), evt); err != nil {
+			t.Fatalf("Process: %v", err)
+		}
+		if len(repo.saved) != 1 {
+			t.Fatalf("saved %d, want 1", len(repo.saved))
+		}
+		saved := repo.saved[0]
+		if saved.Verdict != domain.VerdictBlock {
+			t.Fatalf("verdict = %s, want block (block > flag)", saved.Verdict)
+		}
+		if len(saved.Signals.Judge) != 3 {
+			t.Fatalf("judge signals = %d, want 3 (judge must run before anomaly verdict)", len(saved.Signals.Judge))
+		}
+		if !contains(metrics.behaviorSignals, "agent/rule_block") {
+			t.Fatalf("behavior anomaly metrics = %v, want agent/rule_block", metrics.behaviorSignals)
+		}
+		if !contains(metrics.gateActions, "detect/block") {
+			t.Fatalf("gate action metrics = %v, want detect/block", metrics.gateActions)
+		}
+		if contains(metrics.behaviorSignals, "agent/judge_below_threshold") {
+			t.Fatalf("block verdict must suppress judge_below_threshold, got %v", metrics.behaviorSignals)
+		}
+	})
+
+	t.Run("judge below threshold verdict flag and metric", func(t *testing.T) {
+		// 回归（review fix）：applyAnomalyVerdict 在 applyJudge 之后运行，judge 信号
+		// 已填充——纯 judge 跌阈事件必须触发 judge_below_threshold 判异指标 + detect/flag。
+		repo := &stubObservationRepo{}
+		reader := &stubEvidenceReader{trace: port.ObservedTrace{
+			TraceID: "trace-judge-low", Input: "q", Output: "a",
+		}}
+		judge := &stubJudge{enabled: true, result: domain.AssertionResult{Passed: false}}
+		metrics := &stubMetrics{}
+		svc := NewObservationService(ObservationServiceDeps{
+			Enabled:    func(context.Context) bool { return true },
+			SampleRate: func(context.Context) float64 { return 1.0 },
+			Evidence:   reader, Judge: judge, Repo: repo,
+			Metrics: metrics, Logger: zap.NewNop(),
+		})
+		evt := domain.ObservationReferenceEvent{
+			TenantID: "t1", TraceID: "trace-judge-low", ResourceKind: "agent", ResourceID: "agent-1",
+		}
+		if err := svc.Process(context.Background(), evt); err != nil {
+			t.Fatalf("Process: %v", err)
+		}
+		if len(repo.saved) != 1 {
+			t.Fatalf("saved %d, want 1", len(repo.saved))
+		}
+		if saved := repo.saved[0]; saved.Verdict != domain.VerdictFlag {
+			t.Fatalf("verdict = %s, want flag", saved.Verdict)
+		}
+		if !contains(metrics.behaviorSignals, "agent/judge_below_threshold") {
+			t.Fatalf("behavior anomaly metrics = %v, want agent/judge_below_threshold", metrics.behaviorSignals)
+		}
+		if !contains(metrics.gateActions, "detect/flag") {
+			t.Fatalf("gate action metrics = %v, want detect/flag", metrics.gateActions)
+		}
+	})
 }
 
 func TestObservationServiceSampleCoverageRecorded(t *testing.T) {
