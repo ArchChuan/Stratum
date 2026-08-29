@@ -35,6 +35,10 @@ func testConfig() domain.WorkspaceConfig {
 	}
 }
 
+func testSnapshot() domain.KnowledgeWorkspaceSnapshot {
+	return domain.KnowledgeWorkspaceSnapshot{Config: testConfig()}
+}
+
 var wsColumns = []string{"id", "name", "description", "config", "created_by", "created_at", "updated_at"}
 
 func wsRow(id, name string) []any {
@@ -201,7 +205,7 @@ func TestWorkspaceRepo_UpdateWorkspaceAll_nilRenameAndDescription(t *testing.T) 
 	mock.ExpectCommit()
 
 	// nil rename/description exercise the COALESCE($1/$2, column) branches.
-	require.NoError(t, repo.UpdateWorkspaceAll(context.Background(), "t1", "ws", nil, nil, testConfig(), "", nil))
+	require.NoError(t, repo.UpdateWorkspaceAll(context.Background(), "t1", "ws", nil, nil, testSnapshot(), "", "", nil))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -216,7 +220,7 @@ func TestWorkspaceRepo_UpdateWorkspaceAll_rename(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
-	require.NoError(t, repo.UpdateWorkspaceAll(context.Background(), "t1", "old", &newName, nil, testConfig(), "", nil))
+	require.NoError(t, repo.UpdateWorkspaceAll(context.Background(), "t1", "old", &newName, nil, testSnapshot(), "", "", nil))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -230,7 +234,7 @@ func TestWorkspaceRepo_UpdateWorkspaceAll_notFound(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectCommit()
 
-	err := repo.UpdateWorkspaceAll(context.Background(), "t1", "nope", nil, nil, testConfig(), "", nil)
+	err := repo.UpdateWorkspaceAll(context.Background(), "t1", "nope", nil, nil, testSnapshot(), "", "", nil)
 	require.ErrorIs(t, err, domain.ErrWorkspaceNotFound)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -245,7 +249,7 @@ func TestWorkspaceRepo_UpdateWorkspaceAll_conflict(t *testing.T) {
 		WillReturnError(&pgconn.PgError{Code: "23505"})
 	mock.ExpectRollback()
 
-	err := repo.UpdateWorkspaceAll(context.Background(), "t1", "old", nil, nil, testConfig(), "", nil)
+	err := repo.UpdateWorkspaceAll(context.Background(), "t1", "old", nil, nil, testSnapshot(), "", "", nil)
 	require.ErrorIs(t, err, domain.ErrWorkspaceConflict)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

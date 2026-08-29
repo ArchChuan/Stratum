@@ -20,11 +20,15 @@ type WorkspaceRepo interface {
 	GetByID(ctx context.Context, tenantID, id string) (*domain.Workspace, error)
 	List(ctx context.Context, tenantID string) ([]*domain.Workspace, error)
 	// UpdateWorkspaceAll applies rename, description and config atomically in
-	// one transaction with the audit row. renameTo/description may be nil.
-	// editorActor, when non-empty, re-validates inside the transaction that
-	// the actor still holds role admin/owner and is present in
-	// resource_editors (closes the check-then-write TOCTOU window).
-	UpdateWorkspaceAll(ctx context.Context, tenantID, name string, renameTo, description *string, cfg domain.WorkspaceConfig, editorActor string, audit *auditdomain.ResourceChangeAuditEvent) error
+	// one transaction with the audit row and a product version write (new
+	// version becomes active immediately — "保存即生效"). snap is the
+	// post-update editable surface snapshot stored as the version payload;
+	// actorID is the version's CreatedBy (actual operator). renameTo/
+	// description may be nil. editorActor, when non-empty, re-validates
+	// inside the transaction that the actor still holds role admin/owner and
+	// is present in resource_editors (closes the check-then-write TOCTOU
+	// window).
+	UpdateWorkspaceAll(ctx context.Context, tenantID, name string, renameTo, description *string, snap domain.KnowledgeWorkspaceSnapshot, editorActor, actorID string, audit *auditdomain.ResourceChangeAuditEvent) error
 	// Delete removes the workspace and its editor rows in the same
 	// transaction.
 	Delete(ctx context.Context, tenantID, name string, audit *auditdomain.ResourceChangeAuditEvent) error

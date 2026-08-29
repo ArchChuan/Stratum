@@ -264,7 +264,8 @@ func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, tenantID, name s
 	if err != nil {
 		return nil, err
 	}
-	if err := s.repo.UpdateWorkspaceAll(ctx, tenantID, name, renameTo, in.Description, newCfg, editorActor, audit); err != nil {
+	snap := domain.SnapshotFromWorkspace(after)
+	if err := s.repo.UpdateWorkspaceAll(ctx, tenantID, name, renameTo, in.Description, snap, editorActor, actorID, audit); err != nil {
 		s.recordFailure(ctx, current.ID, "update", err)
 		return nil, err
 	}

@@ -228,15 +228,17 @@ func (r *WorkspaceRepo) List(ctx context.Context, tenantID string) ([]*domain.Wo
 // UpdateWorkspaceAll applies rename, description and config atomically in one
 // transaction, then writes the change audit in the same transaction. renameTo
 // and description may be nil to leave the column untouched; the config is
-// always written (callers pass the merged value). ErrWorkspaceNotFound on 0
-// rows, ErrWorkspaceConflict on duplicate rename. editorActor, when
-// non-empty, is re-validated inside the transaction (role + editor
-// membership) before the UPDATE, closing the check-then-write TOCTOU window.
+// always written (callers pass the merged value via snap.Config).
+// ErrWorkspaceNotFound on 0 rows, ErrWorkspaceConflict on duplicate rename.
+// editorActor, when non-empty, is re-validated inside the transaction (role +
+// editor membership) before the UPDATE, closing the check-then-write TOCTOU
+// window. actorID is the version's CreatedBy (actual operator) and is only
+// consumed by the version write (Task 4); the column write here is unchanged.
 func (r *WorkspaceRepo) UpdateWorkspaceAll(
 	ctx context.Context, tenantID, name string,
 	renameTo, description *string,
-	cfg domain.WorkspaceConfig,
-	editorActor string,
+	snap domain.KnowledgeWorkspaceSnapshot,
+	editorActor, actorID string,
 	audit *auditdomain.ResourceChangeAuditEvent,
 ) error {
 	var tag pgconn.CommandTag
@@ -256,7 +258,7 @@ func (r *WorkspaceRepo) UpdateWorkspaceAll(
 	                         description = COALESCE($2, description),
 	                         config = $3,
 	                         updated_at = NOW()
-			WHERE name = $4`, renameTo, description, toJSONB(cfg), name)
+			WHERE name = $4`, renameTo, description, toJSONB(snap.Config), name)
 		if err != nil {
 			return err
 		}

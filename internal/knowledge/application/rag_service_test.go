@@ -363,7 +363,7 @@ func (r *recordingWorkspaceRepo) List(ctx context.Context, tenantID string) ([]*
 	return nil, nil
 }
 
-func (r *recordingWorkspaceRepo) UpdateWorkspaceAll(ctx context.Context, tenantID, name string, renameTo, description *string, cfg domain.WorkspaceConfig, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+func (r *recordingWorkspaceRepo) UpdateWorkspaceAll(ctx context.Context, tenantID, name string, renameTo, description *string, snap domain.KnowledgeWorkspaceSnapshot, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 
