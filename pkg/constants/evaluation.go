@@ -85,3 +85,11 @@ const (
 	// request cannot fan out unbounded LLM calls.
 	MaxCaseSampleLimit = 50
 )
+
+// Evaluation 运行态观测行为阈值（P1b §4.2）。
+const (
+	// JudgeBelowThreshold 是 judge 单维度跌阈判异的阈值（§4.2 判异触发）。
+	JudgeBelowThreshold = 0.5
+	// FeedbackNegativeThreshold 是 feedback 负反馈判异阈值：score 低于该值视为放弃倾向。
+	FeedbackNegativeThreshold = 0.5
+)
