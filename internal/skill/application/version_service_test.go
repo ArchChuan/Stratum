@@ -445,3 +445,99 @@ func seedRevision(t *testing.T, repo *fakeVersionRepo, skillID, revisionID strin
 	seedSkill(repo, skill, revision)
 	return skill, revision
 }
+
+func TestVersionServiceSaveDraft(t *testing.T) {
+	svc := NewVersionService(newFakeVersionRepo(), zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	view := mustCreateSkill(t, svc)
+
+	out, err := svc.SaveDraft(context.Background(), view.Skill.ID, view.Active.ContentHash,
+		SaveDraftInput{Name: "draft-name", Description: "draft-desc", Instructions: "draft-ins", ActorID: "user-1"})
+	require.NoError(t, err)
+	require.True(t, out.HasDraft)
+	// 保存草稿不改变当前生效版本。
+	require.Equal(t, view.Active.ID, out.Active.ID)
+	require.Equal(t, view.Active.ContentHash, out.Active.ContentHash)
+
+	// 再次保存 = 覆盖更新,草稿 id 复用(service 复用 skill.DraftRevisionID)。
+	out2, err := svc.SaveDraft(context.Background(), view.Skill.ID, view.Active.ContentHash,
+		SaveDraftInput{Name: "draft-2", Description: "draft-desc", Instructions: "draft-ins", ActorID: "user-1"})
+	require.NoError(t, err)
+	require.True(t, out2.HasDraft)
+	require.Equal(t, out.Skill.DraftRevisionID, out2.Skill.DraftRevisionID)
+}
+
+func TestVersionServiceSaveDraftStale(t *testing.T) {
+	svc := NewVersionService(newFakeVersionRepo(), zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	view := mustCreateSkill(t, svc)
+
+	_, err := svc.SaveDraft(context.Background(), view.Skill.ID, "stale-hash",
+		SaveDraftInput{Name: "n", Description: "d", Instructions: "i", ActorID: "user-1"})
+	require.ErrorIs(t, err, domain.ErrSkillDraftStale)
+}
+
+func TestVersionServicePublishDraft(t *testing.T) {
+	svc := NewVersionService(newFakeVersionRepo(), zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	view := mustCreateSkill(t, svc)
+	_, err := svc.SaveDraft(context.Background(), view.Skill.ID, view.Active.ContentHash,
+		SaveDraftInput{Name: "draft-name", Description: "draft-desc", Instructions: "draft-ins", ActorID: "user-1"})
+	require.NoError(t, err)
+
+	out, err := svc.PublishDraft(context.Background(), view.Skill.ID, view.Active.ContentHash, "user-1")
+	require.NoError(t, err)
+	require.False(t, out.HasDraft)
+	require.Equal(t, "draft-name", out.Active.Name)
+	require.Equal(t, view.Active.RevisionNo+1, out.Active.RevisionNo)
+	// 旧生效版本降级。
+	revisions, err := svc.ListRevisions(context.Background(), view.Skill.ID)
+	require.NoError(t, err)
+	require.Len(t, revisions, 2)
+	require.Equal(t, domain.VersionStatusDeprecated, revisions[1].Status)
+}
+
+func TestVersionServicePublishDraftNoDraft(t *testing.T) {
+	svc := NewVersionService(newFakeVersionRepo(), zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	view := mustCreateSkill(t, svc)
+
+	_, err := svc.PublishDraft(context.Background(), view.Skill.ID, view.Active.ContentHash, "user-1")
+	require.ErrorIs(t, err, domain.ErrSkillDraftNotFound)
+}
+
+func TestVersionServicePublishDraftNotPublishable(t *testing.T) {
+	svc := NewVersionService(newFakeVersionRepo(), zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	view := mustCreateSkill(t, svc)
+	// SaveDraft 允许空指令(草稿可半成品),发布时 ValidatePublishable 拒绝。
+	_, err := svc.SaveDraft(context.Background(), view.Skill.ID, view.Active.ContentHash,
+		SaveDraftInput{Name: "draft-name", Description: "draft-desc", Instructions: "", ActorID: "user-1"})
+	require.NoError(t, err)
+
+	_, err = svc.PublishDraft(context.Background(), view.Skill.ID, view.Active.ContentHash, "user-1")
+	require.ErrorIs(t, err, domain.ErrSkillNotPublishable)
+	// 校验失败不破坏既有草稿:再次发布仍报 NotPublishable 而非 NotFound。
+	_, err = svc.PublishDraft(context.Background(), view.Skill.ID, view.Active.ContentHash, "user-1")
+	require.ErrorIs(t, err, domain.ErrSkillNotPublishable)
+}
+
+func TestVersionServiceDiscardDraft(t *testing.T) {
+	svc := NewVersionService(newFakeVersionRepo(), zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	view := mustCreateSkill(t, svc)
+	_, err := svc.SaveDraft(context.Background(), view.Skill.ID, view.Active.ContentHash,
+		SaveDraftInput{Name: "draft-name", Description: "draft-desc", Instructions: "draft-ins", ActorID: "user-1"})
+	require.NoError(t, err)
+
+	out, err := svc.DiscardDraft(context.Background(), view.Skill.ID, "user-1")
+	require.NoError(t, err)
+	require.False(t, out.HasDraft)
+	// 表单回填当前生效版本。
+	require.Equal(t, view.Active.Name, out.Active.Name)
+	require.Equal(t, view.Active.ContentHash, out.Active.ContentHash)
+
+	// 幂等:无草稿再次撤销成功。
+	_, err = svc.DiscardDraft(context.Background(), view.Skill.ID, "user-1")
+	require.NoError(t, err)
+}

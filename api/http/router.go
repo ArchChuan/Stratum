@@ -445,6 +445,11 @@ func registerSkills(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		// 编辑与回滚向白名单成员开放：组级别 RequireTenantRole("member") +
 		// service 层 resolveUpdateActor 白名单校验，不在此再叠加 admin 门槛。
 		skills.PATCH("/:id", requireActive, skillHandler.UpdateSkill)
+		// 草稿流转：保存/发布/撤销草稿与编辑同级(member 级 requireActive)，
+		// 编辑人经 service 白名单校验；发布/保存共用乐观并发基线。
+		skills.POST("/:id/draft", requireActive, skillHandler.SaveSkillDraft)
+		skills.POST("/:id/publish", requireActive, skillHandler.PublishSkillDraft)
+		skills.DELETE("/:id/draft", requireActive, skillHandler.DiscardSkillDraft)
 		skills.POST("/:id/rollback", requireActive, skillHandler.RollbackSkill)
 		skills.GET("/:id/revisions", skillHandler.ListSkillRevisions)
 		skills.DELETE("/:id", append(adminMW, requireActive, skillHandler.DeleteSkill)...)
