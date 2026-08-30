@@ -1,3 +1,7 @@
+import { HistoryOutlined } from '@ant-design/icons';
+import { Button, message, Modal } from 'antd';
+import { useCallback, useState } from 'react';
+
 import { DocAccessModal } from '../components/DocAccessModal';
 import { DocPreviewDrawer } from '../components/DocPreviewDrawer';
 import { WorkspaceConfigForm } from '../components/WorkspaceConfigForm';
@@ -8,6 +12,11 @@ import { WorkspaceQueryPanel } from '../components/WorkspaceQueryPanel';
 import { WorkspaceStatsCard } from '../components/WorkspaceStatsCard';
 import { WorkspaceUploadZone } from '../components/WorkspaceUploadZone';
 import { useKnowledgeDetailPage } from '../hooks/useKnowledgeDetailPage';
+import type { KnowledgeDocument } from '../model/knowledge';
+
+import { operationProposalApi } from '@/modules/operation-gate';
+import { extractErrorMessage } from '@/shared/lib';
+import { VersionHistory } from '@/shared/ui';
 
 export const KnowledgeDetailPage = () => {
   const {
@@ -46,6 +55,13 @@ export const KnowledgeDetailPage = () => {
     previewDoc,
     setPreviewDoc,
     handlePreviewDocument,
+    versions,
+    versionsOpen,
+    setVersionsOpen,
+    versionsLoading,
+    openVersions,
+    rollbackVersion,
+    undoEdits,
   } = useKnowledgeDetailPage();
 
   if (statsLoading && !stats) {
@@ -66,7 +82,20 @@ export const KnowledgeDetailPage = () => {
       <WorkspaceStatsCard stats={stats ?? undefined} docCount={documents.length || undefined} />
 
       {isAdmin && (
-        <WorkspaceConfigForm form={configForm} loading={configLoading} onSubmit={handleConfigSave} />
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+          <Button icon={<HistoryOutlined />} onClick={openVersions}>
+            版本历史
+          </Button>
+        </div>
+      )}
+
+      {isAdmin && (
+        <WorkspaceConfigForm
+          form={configForm}
+          loading={configLoading}
+          onSubmit={handleConfigSave}
+          onUndo={undoEdits}
+        />
       )}
 
       {isAdmin && (
@@ -118,6 +147,32 @@ export const KnowledgeDetailPage = () => {
         documentTitle={previewDoc?.source}
         onClose={() => setPreviewDoc(null)}
       />
+
+      {isAdmin && (
+        <Modal
+          title="版本历史"
+          open={versionsOpen}
+          onCancel={() => setVersionsOpen(false)}
+          footer={null}
+          width={760}
+        >
+          <VersionHistory
+            rows={versions.map((v) => ({
+              id: v.id,
+              versionNo: v.versionNo,
+              status: v.status,
+              isCurrent: v.isCurrent,
+              createdByName: v.createdByName,
+              createdBy: v.createdBy,
+              createdAt: v.createdAt,
+              canRollback: v.status === 'deprecated' && isAdmin,
+              summary: v.safeSummary,
+            }))}
+            loading={versionsLoading}
+            rollback={rollbackVersion}
+          />
+        </Modal>
+      )}
     </div>
   );
 };

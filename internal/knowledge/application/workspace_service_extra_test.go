@@ -91,7 +91,7 @@ func (f *fakeWorkspaceRepo) List(_ context.Context, _ string) ([]*domain.Workspa
 	return out, nil
 }
 
-func (f *fakeWorkspaceRepo) UpdateWorkspaceAll(_ context.Context, _, name string, renameTo, description *string, cfg domain.WorkspaceConfig, _ string, audit *auditdomain.ResourceChangeAuditEvent) error {
+func (f *fakeWorkspaceRepo) UpdateWorkspaceAll(_ context.Context, _, name string, renameTo, description *string, snap domain.KnowledgeWorkspaceSnapshot, _ string, _ string, audit *auditdomain.ResourceChangeAuditEvent) error {
 	if audit != nil {
 		f.audits = append(f.audits, audit)
 	}
@@ -111,7 +111,21 @@ func (f *fakeWorkspaceRepo) UpdateWorkspaceAll(_ context.Context, _, name string
 	if description != nil {
 		ws.Description = *description
 	}
-	ws.Config = cfg
+	ws.Config = snap.Config
+	return nil
+}
+
+func (f *fakeWorkspaceRepo) RollbackWorkspace(_ context.Context, _ string, name string, snap domain.KnowledgeWorkspaceSnapshot, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	if f.updateErr != nil {
+		return f.updateErr
+	}
+	ws, ok := f.workspaces[name]
+	if !ok {
+		return domain.ErrWorkspaceNotFound
+	}
+	ws.Name = snap.Name
+	ws.Description = snap.Description
+	ws.Config = snap.Config
 	return nil
 }
 

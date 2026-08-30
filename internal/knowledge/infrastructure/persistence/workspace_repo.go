@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/pkg/resourceaccess"
+	pkgversioning "github.com/byteBuilderX/stratum/pkg/versioning"
 )
 
 // WorkspaceRepo persists knowledge workspaces in per-tenant schemas.
@@ -228,49 +230,132 @@ func (r *WorkspaceRepo) List(ctx context.Context, tenantID string) ([]*domain.Wo
 // UpdateWorkspaceAll applies rename, description and config atomically in one
 // transaction, then writes the change audit in the same transaction. renameTo
 // and description may be nil to leave the column untouched; the config is
-// always written (callers pass the merged value). ErrWorkspaceNotFound on 0
-// rows, ErrWorkspaceConflict on duplicate rename. editorActor, when
-// non-empty, is re-validated inside the transaction (role + editor
-// membership) before the UPDATE, closing the check-then-write TOCTOU window.
+// always written (callers pass the merged value via snap.Config).
+// ErrWorkspaceNotFound on 0 rows, ErrWorkspaceConflict on duplicate rename.
+// editorActor, when non-empty, is re-validated inside the transaction (role +
+// editor membership) before the UPDATE, closing the check-then-write TOCTOU
+// window. actorID is the version's CreatedBy (actual operator). A new product
+// version is written and made active in the same transaction (保存即生效).
 func (r *WorkspaceRepo) UpdateWorkspaceAll(
 	ctx context.Context, tenantID, name string,
 	renameTo, description *string,
-	cfg domain.WorkspaceConfig,
-	editorActor string,
+	snap domain.KnowledgeWorkspaceSnapshot,
+	editorActor, actorID string,
 	audit *auditdomain.ResourceChangeAuditEvent,
 ) error {
-	var tag pgconn.CommandTag
 	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// 事务内解析 workspace ID（resource_versions.resource_id 用 UUID；与
+		// UPDATE 同事务，无 TOCTOU）。缺失行 fail-closed。
+		var wsID string
+		if err := tx.QueryRow(ctx, `SELECT id FROM rag_workspaces WHERE name=$1`, name).Scan(&wsID); err != nil {
+			return err
+		}
 		if editorActor != "" {
-			var id string
-			if err := tx.QueryRow(ctx, `SELECT id FROM rag_workspaces WHERE name=$1`, name).Scan(&id); err != nil {
-				return err
-			}
-			if err := revalidateEditorAccess(ctx, tx, tenantID, resourceEditorKind, id, editorActor); err != nil {
+			if err := revalidateEditorAccess(ctx, tx, tenantID, resourceEditorKind, wsID, editorActor); err != nil {
 				return err
 			}
 		}
-		var err error
-		tag, err = tx.Exec(ctx, `UPDATE rag_workspaces
+		tag, err := tx.Exec(ctx, `UPDATE rag_workspaces
 	                     SET name = COALESCE($1, name),
 	                         description = COALESCE($2, description),
 	                         config = $3,
 	                         updated_at = NOW()
-			WHERE name = $4`, renameTo, description, toJSONB(cfg), name)
+			WHERE name = $4`, renameTo, description, toJSONB(snap.Config), name)
 		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return domain.ErrWorkspaceNotFound
+		}
+		if err := writeKnowledgeVersionTx(ctx, tx, wsID, snap, actorID); err != nil {
 			return err
 		}
 		return insertChangeAudit(ctx, tx, tenantID, audit)
 	})
 	if err != nil {
 		var pgErr *pgconn.PgError
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrWorkspaceNotFound
+		}
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return domain.ErrWorkspaceConflict
 		}
 		return fmt.Errorf("workspace_repo: update: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return domain.ErrWorkspaceNotFound
+	return nil
+}
+
+// writeKnowledgeVersionTx 在调用方的写事务内把工作区可编辑面快照写入通用产品
+// 版本基座 resource_versions，并把 rag_workspaces.active_version_id 指向新版本。
+// 顺序必须是 Demote→Insert→SetActive（镜像 agent 的 writeAgentVersionTx）：
+// DemoteCurrentTx 会降级所有 status='published' 行，包括刚插入的新行。
+func writeKnowledgeVersionTx(ctx context.Context, tx pgx.Tx, wsID string, snap domain.KnowledgeWorkspaceSnapshot, actorID string) error {
+	id := uuid.Must(uuid.NewV7()).String()
+	row := pkgversioning.VersionRow{
+		ID:           id,
+		ResourceKind: "knowledge",
+		ResourceID:   wsID,
+		Status:       "published",
+		Source:       "manual",
+		Payload:      snap.Map(),
+		SafeSummary:  map[string]any{"name": snap.Name},
+		CreatedBy:    actorID,
+	}
+	if err := pkgversioning.DemoteCurrentTx(ctx, tx, "knowledge", wsID); err != nil {
+		return fmt.Errorf("workspace_repo: update %s demote current version: %w", wsID, err)
+	}
+	if _, err := pkgversioning.InsertVersionTx(ctx, tx, row); err != nil {
+		return fmt.Errorf("workspace_repo: update %s insert version: %w", wsID, err)
+	}
+	if err := pkgversioning.SetActiveTx(ctx, tx, "knowledge", wsID, id); err != nil {
+		return fmt.Errorf("workspace_repo: update %s set active version: %w", wsID, err)
+	}
+	return nil
+}
+
+// RollbackWorkspace restores a deprecated historical version in one
+// transaction: the snapshot payload is written back to the workspace row, the
+// target promoted to published, and active_version_id repointed at it. No new
+// version is created. A non-deprecated / missing target fails closed with
+// versioning.ErrVersionNotFound (from the shared RollbackVersionTx helper).
+func (r *WorkspaceRepo) RollbackWorkspace(
+	ctx context.Context, tenantID, name string,
+	snap domain.KnowledgeWorkspaceSnapshot,
+	editorActor, targetVersionID string,
+	audit *auditdomain.ResourceChangeAuditEvent,
+) error {
+	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var wsID string
+		if err := tx.QueryRow(ctx, `SELECT id FROM rag_workspaces WHERE name=$1`, name).Scan(&wsID); err != nil {
+			return err
+		}
+		if editorActor != "" {
+			if err := revalidateEditorAccess(ctx, tx, tenantID, resourceEditorKind, wsID, editorActor); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(ctx, `UPDATE rag_workspaces
+		                     SET name = $1, description = $2, config = $3, updated_at = NOW()
+			WHERE id = $4::uuid`, snap.Name, snap.Description, toJSONB(snap.Config), wsID); err != nil {
+			return err
+		}
+		if err := pkgversioning.RollbackVersionTx(ctx, tx, "knowledge", wsID, targetVersionID); err != nil {
+			return err
+		}
+		if err := pkgversioning.SetActiveTx(ctx, tx, "knowledge", wsID, targetVersionID); err != nil {
+			return err
+		}
+		return insertChangeAudit(ctx, tx, tenantID, audit)
+	})
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrWorkspaceNotFound
+		}
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return domain.ErrWorkspaceConflict
+		}
+		return fmt.Errorf("workspace_repo: rollback: %w", err)
 	}
 	return nil
 }

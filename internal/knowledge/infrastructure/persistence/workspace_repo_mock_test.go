@@ -35,6 +35,28 @@ func testConfig() domain.WorkspaceConfig {
 	}
 }
 
+func testSnapshot() domain.KnowledgeWorkspaceSnapshot {
+	return domain.KnowledgeWorkspaceSnapshot{Config: testConfig()}
+}
+
+// expectKnowledgeVersionWrite sets the pgxmock expectations for the
+// Demote→Insert→SetActive sequence emitted by writeKnowledgeVersionTx inside a
+// write transaction (mirror of pkg/versioning/version_tx.go SQL text).
+func expectKnowledgeVersionWrite(mock pgxmock.PgxPoolIface, wsID, actorID string) {
+	mock.ExpectExec("UPDATE resource_versions SET status='deprecated'").
+		WithArgs("knowledge", wsID).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(revision_no\\), 0\\) \\+ 1").
+		WithArgs("knowledge", wsID).WillReturnRows(pgxmock.NewRows([]string{"next"}).AddRow(1))
+	mock.ExpectQuery("SELECT COALESCE\\(\\(SELECT id FROM resource_versions").
+		WithArgs("knowledge", wsID, pgxmock.AnyArg()).WillReturnRows(pgxmock.NewRows([]string{"parent"}).AddRow(""))
+	mock.ExpectExec("INSERT INTO resource_versions").
+		WithArgs(pgxmock.AnyArg(), "knowledge", wsID, "", 1, "published", "manual",
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), actorID).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec("UPDATE rag_workspaces SET active_version_id").
+		WithArgs(wsID, pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+}
+
 var wsColumns = []string{"id", "name", "description", "config", "created_by", "created_at", "updated_at"}
 
 func wsRow(id, name string) []any {
@@ -195,13 +217,17 @@ func TestWorkspaceRepo_UpdateWorkspaceAll_nilRenameAndDescription(t *testing.T) 
 	repo := NewWorkspaceRepo(mock)
 
 	repoBeginTenant(mock)
+	mock.ExpectQuery("SELECT id FROM rag_workspaces WHERE name=\\$1").
+		WithArgs("ws").
+		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("ws-1"))
 	mock.ExpectExec("UPDATE rag_workspaces").
 		WithArgs((*string)(nil), (*string)(nil), toJSONB(testConfig()), "ws").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	expectKnowledgeVersionWrite(mock, "ws-1", "")
 	mock.ExpectCommit()
 
 	// nil rename/description exercise the COALESCE($1/$2, column) branches.
-	require.NoError(t, repo.UpdateWorkspaceAll(context.Background(), "t1", "ws", nil, nil, testConfig(), "", nil))
+	require.NoError(t, repo.UpdateWorkspaceAll(context.Background(), "t1", "ws", nil, nil, testSnapshot(), "", "", nil))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -211,12 +237,16 @@ func TestWorkspaceRepo_UpdateWorkspaceAll_rename(t *testing.T) {
 
 	newName := "new"
 	repoBeginTenant(mock)
+	mock.ExpectQuery("SELECT id FROM rag_workspaces WHERE name=\\$1").
+		WithArgs("old").
+		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("ws-1"))
 	mock.ExpectExec("UPDATE rag_workspaces").
 		WithArgs(&newName, (*string)(nil), toJSONB(testConfig()), "old").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	expectKnowledgeVersionWrite(mock, "ws-1", "")
 	mock.ExpectCommit()
 
-	require.NoError(t, repo.UpdateWorkspaceAll(context.Background(), "t1", "old", &newName, nil, testConfig(), "", nil))
+	require.NoError(t, repo.UpdateWorkspaceAll(context.Background(), "t1", "old", &newName, nil, testSnapshot(), "", "", nil))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -225,12 +255,12 @@ func TestWorkspaceRepo_UpdateWorkspaceAll_notFound(t *testing.T) {
 	repo := NewWorkspaceRepo(mock)
 
 	repoBeginTenant(mock)
-	mock.ExpectExec("UPDATE rag_workspaces").
-		WithArgs((*string)(nil), (*string)(nil), toJSONB(testConfig()), "nope").
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
-	mock.ExpectCommit()
+	mock.ExpectQuery("SELECT id FROM rag_workspaces WHERE name=\\$1").
+		WithArgs("nope").
+		WillReturnError(pgx.ErrNoRows)
+	mock.ExpectRollback()
 
-	err := repo.UpdateWorkspaceAll(context.Background(), "t1", "nope", nil, nil, testConfig(), "", nil)
+	err := repo.UpdateWorkspaceAll(context.Background(), "t1", "nope", nil, nil, testSnapshot(), "", "", nil)
 	require.ErrorIs(t, err, domain.ErrWorkspaceNotFound)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -240,13 +270,41 @@ func TestWorkspaceRepo_UpdateWorkspaceAll_conflict(t *testing.T) {
 	repo := NewWorkspaceRepo(mock)
 
 	repoBeginTenant(mock)
+	mock.ExpectQuery("SELECT id FROM rag_workspaces WHERE name=\\$1").
+		WithArgs("old").
+		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("ws-1"))
 	mock.ExpectExec("UPDATE rag_workspaces").
 		WithArgs((*string)(nil), (*string)(nil), toJSONB(testConfig()), "old").
 		WillReturnError(&pgconn.PgError{Code: "23505"})
 	mock.ExpectRollback()
 
-	err := repo.UpdateWorkspaceAll(context.Background(), "t1", "old", nil, nil, testConfig(), "", nil)
+	err := repo.UpdateWorkspaceAll(context.Background(), "t1", "old", nil, nil, testSnapshot(), "", "", nil)
 	require.ErrorIs(t, err, domain.ErrWorkspaceConflict)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestWorkspaceRepo_UpdateWorkspaceAll_updateZeroRowsFailsClosed locks the
+// fail-closed path where the workspace row disappears between the SELECT id and
+// the UPDATE (rename/delete by a concurrent tx, visible under READ COMMITTED):
+// the UPDATE matches 0 rows, so the closure returns ErrWorkspaceNotFound BEFORE
+// writeKnowledgeVersionTx/insertChangeAudit run, and execTenant rolls back the
+// whole transaction. No version-write or audit expectations are registered —
+// their absence plus the pinned rollback proves they were skipped.
+func TestWorkspaceRepo_UpdateWorkspaceAll_updateZeroRowsFailsClosed(t *testing.T) {
+	mock := newRepoMock(t)
+	repo := NewWorkspaceRepo(mock)
+
+	repoBeginTenant(mock)
+	mock.ExpectQuery("SELECT id FROM rag_workspaces WHERE name=\\$1").
+		WithArgs("ws").
+		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("ws-1"))
+	mock.ExpectExec("UPDATE rag_workspaces").
+		WithArgs((*string)(nil), (*string)(nil), toJSONB(testConfig()), "ws").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectRollback()
+
+	err := repo.UpdateWorkspaceAll(context.Background(), "t1", "ws", nil, nil, testSnapshot(), "", "", nil)
+	require.ErrorIs(t, err, domain.ErrWorkspaceNotFound)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

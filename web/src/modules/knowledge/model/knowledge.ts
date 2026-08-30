@@ -17,6 +17,26 @@ export const workspaceConfigSchema = z
   .passthrough();
 export type WorkspaceConfig = z.infer<typeof workspaceConfigSchema>;
 
+// 通用产品版本历史（resource_versions）单行：字段与后端 WorkspaceVersionResponse
+// 对齐（前端共用 VersionHistory 组件）。createdByName 由后端解析昵称，前端回退
+// createdBy。safeSummary 是版本摘要快照（snake_case 键，canonical JSON 可哈希）。
+export const workspaceVersionSchema = z
+  .object({
+    id: z.string(),
+    versionNo: z.number().optional(),
+    status: z.string(),
+    source: z.string().optional().default(''),
+    contentHash: z.string().optional().default(''),
+    createdBy: z.string().optional().default(''),
+    createdByName: z.string().optional().default(''),
+    createdAt: z.string().optional().default(''),
+    publishedAt: z.string().optional().default(''),
+    isCurrent: z.boolean().optional().default(false),
+    safeSummary: z.record(z.unknown()).optional().default({}),
+  })
+  .passthrough();
+export type WorkspaceVersion = z.infer<typeof workspaceVersionSchema>;
+
 export const workspaceSchema = z
   .object({
     id: z.string().optional(),

@@ -16,6 +16,7 @@ import (
 	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
+	versioningport "github.com/byteBuilderX/stratum/internal/versioning/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
@@ -86,6 +87,8 @@ type WorkspaceService struct {
 	vectorStore  collectionProvisioner
 	roles        port.TenantRoleResolver
 	editorRepo   port.ResourceEditorRepo
+	versionRepo  versioningport.VersionRepo
+	nameResolver port.ActorNameResolver
 	modelExists  port.ModelExists
 	failureAudit auditport.FailureAuditRecorder
 	logger       *zap.Logger
@@ -110,6 +113,14 @@ func (s *WorkspaceService) SetTenantRoleResolver(r port.TenantRoleResolver) { s.
 // editor path and the SetEditors management endpoint. A nil repo denies
 // editor grants entirely (fail closed).
 func (s *WorkspaceService) SetEditorRepo(r port.ResourceEditorRepo) { s.editorRepo = r }
+
+// SetVersionRepo injects the product version repository used for version
+// history and rollback. A nil repo fails list/rollback closed.
+func (s *WorkspaceService) SetVersionRepo(r versioningport.VersionRepo) { s.versionRepo = r }
+
+// SetActorNameResolver injects actor display-name resolution for version
+// history. A nil resolver skips name resolution (display falls back to id).
+func (s *WorkspaceService) SetActorNameResolver(r port.ActorNameResolver) { s.nameResolver = r }
 
 // SetModelExists injects the global catalogue existence check used to
 // validate embedding/rerank model selection on create/update. Nil skips the
@@ -270,7 +281,8 @@ func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, tenantID, name s
 	if err != nil {
 		return nil, err
 	}
-	if err := s.repo.UpdateWorkspaceAll(ctx, tenantID, name, renameTo, in.Description, newCfg, editorActor, audit); err != nil {
+	snap := domain.SnapshotFromWorkspace(after)
+	if err := s.repo.UpdateWorkspaceAll(ctx, tenantID, name, renameTo, in.Description, snap, editorActor, actorID, audit); err != nil {
 		s.recordFailure(ctx, current.ID, "update", err)
 		return nil, err
 	}

@@ -1035,9 +1035,9 @@
       "coverage": "short"
     },
     {
-      "id": "skill.mutation.patch.skills.id",
+      "id": "skill.mutation.post.skills.id.draft",
       "domain": "skill",
-      "user_goal": "Complete PATCH /skills/:id",
+      "user_goal": "Save a skill draft that does not take effect until published",
       "route": "/skills/:id/workspace",
       "roles": {
         "allowed": [
@@ -1048,10 +1048,30 @@
           "unauthenticated"
         ]
       },
-      "mutation": "PATCH /skills/:id",
-      "browser_action_id": "skill.mutation.patch.skills.id",
-      "http_evidence": "The browser observes the expected successful response for PATCH /skills/:id",
-      "db_evidence": "Persisted state is reconciled after PATCH /skills/:id",
+      "mutation": "POST /skills/:id/draft",
+      "browser_action_id": "skill.mutation.post.skills.id.draft",
+      "http_evidence": "The browser observes the expected successful response for POST /skills/:id/draft",
+      "db_evidence": "draft_revision_id points to a draft revision while active_revision_id is unchanged",
+      "coverage": "short"
+    },
+    {
+      "id": "skill.mutation.post.skills.id.publish",
+      "domain": "skill",
+      "user_goal": "Publish a skill draft so it becomes the current effective version",
+      "route": "/skills/:id/workspace",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /skills/:id/publish",
+      "browser_action_id": "skill.mutation.post.skills.id.publish",
+      "http_evidence": "The browser observes the expected successful response for POST /skills/:id/publish",
+      "db_evidence": "active_revision_id flips to the new revision and the previous version is deprecated",
       "coverage": "short"
     },
     {
@@ -1312,6 +1332,66 @@
       "browser_action_id": "knowledge.mutation.post.knowledge.query",
       "http_evidence": "The browser observes the expected successful response for POST /knowledge/query",
       "db_evidence": "Persisted state is reconciled after POST /knowledge/query",
+      "coverage": "short"
+    },
+    {
+      "id": "knowledge.mutation.get.knowledge.workspaces.name.versions",
+      "domain": "knowledge",
+      "user_goal": "Read the version history of a knowledge workspace",
+      "route": "/knowledge/:name",
+      "roles": {
+        "allowed": [
+          "member",
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "GET /knowledge/workspaces/:name/versions",
+      "browser_action_id": "knowledge.mutation.get.knowledge.workspaces.name.versions",
+      "http_evidence": "The browser observes the expected successful response for GET /knowledge/workspaces/:name/versions",
+      "db_evidence": "Version list aligns with resource_versions for the workspace",
+      "coverage": "short"
+    },
+    {
+      "id": "knowledge.mutation.post.knowledge.workspaces.name.rollback",
+      "domain": "knowledge",
+      "user_goal": "Roll back a knowledge workspace to a historical version without creating a new version",
+      "route": "/knowledge/:name",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "member",
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /knowledge/workspaces/:name/rollback",
+      "browser_action_id": "knowledge.mutation.post.knowledge.workspaces.name.rollback",
+      "http_evidence": "The browser observes the expected successful response for POST /knowledge/workspaces/:name/rollback",
+      "db_evidence": "active_version_id flips to the historical version and resource_versions row count is unchanged",
+      "coverage": "short"
+    },
+    {
+      "id": "knowledge.mutation.undo.knowledge.workspaces.name",
+      "domain": "knowledge",
+      "user_goal": "Undo unsaved edits so the config form refills the last effective configuration",
+      "route": "/knowledge/:name",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "member",
+          "unauthenticated"
+        ]
+      },
+      "mutation": "REFILL /knowledge/workspaces/:name",
+      "browser_action_id": "knowledge.mutation.undo.knowledge.workspaces.name",
+      "http_evidence": "The browser undoes unsaved edits and the form refills from the last effective config (no mutation)",
+      "db_evidence": "Form config agrees with the persisted rag_workspaces config",
       "coverage": "short"
     },
     {

@@ -684,6 +684,7 @@ func (s *AgentService) buildToolApprovalGuard(
 	}
 	return NewToolExecutionGuard(ToolExecutionGuardDeps{
 		Authorizer: s.deps.ToolAuthorizer, Executor: s.deps.MCPToolExecutor, RequestApproval: requestApproval,
+		RuleGuard: s.deps.RuleGuard,
 	}), approvalService, approvalCtx
 }
 

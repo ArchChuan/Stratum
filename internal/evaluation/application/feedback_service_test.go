@@ -9,6 +9,7 @@ import (
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 func TestFeedbackServiceAutomaticallyEvaluatesReadyExperiment(t *testing.T) {
@@ -28,7 +29,7 @@ func TestFeedbackServiceAutomaticallyEvaluatesReadyExperiment(t *testing.T) {
 		stable: stable, canary: canary, observedMinutes: policy.MinObservationMinutes,
 	}
 	experiments := NewExperimentService(&feedbackExperimentRepo{experiment: repo.experiment})
-	svc := NewFeedbackService(repo, experiments, feedbackEvidence("trace-1", repo, "version-1", "stable"))
+	svc := NewFeedbackService(repo, experiments, feedbackEvidence("trace-1", repo, "version-1", "stable"), nil)
 
 	result, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
 		TraceID: "trace-1", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
@@ -51,7 +52,7 @@ func TestFeedbackServicePersistsInsufficientSampleEvidence(t *testing.T) {
 	}, stable: []domain.OnlineObservation{{Score: .5}}, canary: []domain.OnlineObservation{{Score: .6}}}
 	experimentRepo := &feedbackExperimentRepo{experiment: repo.experiment}
 	svc := NewFeedbackService(repo, NewExperimentService(experimentRepo),
-		feedbackEvidence("trace-low", repo, "canary-1", "canary"))
+		feedbackEvidence("trace-low", repo, "canary-1", "canary"), nil)
 	result, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
 		TraceID: "trace-low", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
 		Score: .6, IdempotencyKey: "feedback-low",
@@ -80,7 +81,7 @@ func TestFeedbackServiceRollsBackForEarlierStageSecurityViolation(t *testing.T) 
 		stable: stable, canary: canary, observedMinutes: policy.MinObservationMinutes,
 	}
 	experiments := NewExperimentService(&feedbackExperimentRepo{experiment: repo.experiment})
-	svc := NewFeedbackService(repo, experiments, feedbackEvidence("trace-last", repo, "candidate-1", "canary"))
+	svc := NewFeedbackService(repo, experiments, feedbackEvidence("trace-last", repo, "candidate-1", "canary"), nil)
 
 	result, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
 		TraceID: "trace-last", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
@@ -105,7 +106,7 @@ func TestFeedbackServiceSafetyStopsOnFirstSecurityViolation(t *testing.T) {
 	evidence := feedbackEvidence("trace-security", repo, "canary-1", "canary")
 	evidence.traces["trace-security"] = observedTrace("trace-security", repo.experiment, "canary-1", "canary",
 		domain.OnlineObservation{SecurityViolation: true})
-	svc := NewFeedbackService(repo, NewExperimentService(experimentRepo), evidence)
+	svc := NewFeedbackService(repo, NewExperimentService(experimentRepo), evidence, nil)
 
 	result, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
 		TraceID: "trace-security", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
@@ -143,7 +144,7 @@ func TestFeedbackServiceDoesNotSafetyStopActiveExperimentFromStaleTrace(t *testi
 		RevisionID: "stable-1", ExperimentID: "experiment-old", Variant: "stable",
 	}
 	evidence.traces["trace-old-security"] = trace
-	svc := NewFeedbackService(repo, NewExperimentService(experimentRepo), evidence)
+	svc := NewFeedbackService(repo, NewExperimentService(experimentRepo), evidence, nil)
 
 	result, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
 		TraceID: "trace-old-security", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
@@ -176,7 +177,7 @@ func TestFeedbackServiceDoesNotTrustClientSecurityClaimsForHardStop(t *testing.T
 			}}
 			experimentRepo := &feedbackExperimentRepo{experiment: repo.experiment}
 			svc := NewFeedbackService(repo, NewExperimentService(experimentRepo),
-				feedbackEvidence("trace-client-claim", repo, "canary-1", "canary"))
+				feedbackEvidence("trace-client-claim", repo, "canary-1", "canary"), nil)
 			test.input.TraceID = "trace-client-claim"
 			test.input.ResourceKind = domain.ResourceKindSkill
 			test.input.ResourceID = "skill-1"
@@ -217,7 +218,8 @@ func TestFeedbackRetryReplaysStageAdvanceOnce(t *testing.T) {
 		Stage: 5, Policy: policy, StateVersion: 1,
 	}, stable: stable, canary: canary, observedMinutes: policy.MinObservationMinutes}
 	experimentRepo := &feedbackExperimentRepo{experiment: repo.experiment}
-	svc := NewFeedbackService(repo, NewExperimentService(experimentRepo), feedbackEvidence("trace-1", repo, "canary-1", "canary"))
+	svc := NewFeedbackService(repo, NewExperimentService(experimentRepo),
+		feedbackEvidence("trace-1", repo, "canary-1", "canary"), nil)
 	input := RecordFeedbackInput{TraceID: "trace-1", ResourceKind: domain.ResourceKindSkill,
 		ResourceID: "skill-1", Score: 0.9, IdempotencyKey: "feedback-1"}
 	first, err := svc.Record(context.Background(), "tenant-1", input)
@@ -242,7 +244,7 @@ func TestFeedbackServiceValidatesAndPersistsObservedRevision(t *testing.T) {
 			},
 		},
 	}}
-	svc := NewFeedbackService(repo, NewExperimentService(&feedbackExperimentRepo{}), evidence)
+	svc := NewFeedbackService(repo, NewExperimentService(&feedbackExperimentRepo{}), evidence, nil)
 
 	_, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
 		TraceID: "trace-1", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
@@ -266,7 +268,7 @@ func TestFeedbackServiceRejectsFeedbackFromAnotherTraceOwner(t *testing.T) {
 			},
 		},
 	}}
-	svc := NewFeedbackService(repo, NewExperimentService(&feedbackExperimentRepo{}), evidence)
+	svc := NewFeedbackService(repo, NewExperimentService(&feedbackExperimentRepo{}), evidence, nil)
 	_, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
 		ActorID: "user-b", TraceID: "trace-1", ResourceKind: domain.ResourceKindSkill,
 		ResourceID: "skill-1", Score: 1, IdempotencyKey: "feedback-1",
@@ -277,6 +279,145 @@ func TestFeedbackServiceRejectsFeedbackFromAnotherTraceOwner(t *testing.T) {
 	if repo.recorded.TraceID != "" {
 		t.Fatal("cross-user feedback reached persistence")
 	}
+}
+
+func TestFeedbackServiceEmitsAbandonmentForLowScore(t *testing.T) {
+	repo := &fakeFeedbackRepo{}
+	writer := &stubBehaviorWriter{}
+	svc := NewFeedbackService(repo, NewExperimentService(&feedbackExperimentRepo{}),
+		feedbackEvidenceWriter("trace-low", "skill-1", "revision-1"), writer)
+	if _, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
+		TraceID: "trace-low", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		Score: 0.3, IdempotencyKey: "feedback-low-score",
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if len(writer.calls) != 1 {
+		t.Fatalf("writer calls = %d, want 1", len(writer.calls))
+	}
+	signals := writer.calls[0].signals
+	if !signals.Abandonment || signals.Escalation || signals.Retry {
+		t.Fatalf("signals = %+v, want abandonment only", signals)
+	}
+	if writer.calls[0].traceID != "trace-low" || writer.calls[0].tenantID != "tenant-1" {
+		t.Fatalf("writer call routed to %+v", writer.calls[0])
+	}
+}
+
+func TestFeedbackServiceEmitsEscalationForSecurityViolation(t *testing.T) {
+	repo := &fakeFeedbackRepo{}
+	writer := &stubBehaviorWriter{}
+	svc := NewFeedbackService(repo, NewExperimentService(&feedbackExperimentRepo{}),
+		feedbackEvidenceWriter("trace-sec", "skill-1", "revision-1"), writer)
+	if _, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
+		TraceID: "trace-sec", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		Score: 0.9, SecurityViolation: true, IdempotencyKey: "feedback-sec",
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if len(writer.calls) != 1 {
+		t.Fatalf("writer calls = %d, want 1", len(writer.calls))
+	}
+	signals := writer.calls[0].signals
+	if !signals.Escalation || signals.Abandonment || signals.Retry {
+		t.Fatalf("signals = %+v, want escalation only", signals)
+	}
+}
+
+func TestFeedbackServiceScoreAtThresholdDoesNotEmitAbandonment(t *testing.T) {
+	// FeedbackNegativeThreshold 是严格 <：score == 阈值恰好不推导负反馈。
+	repo := &fakeFeedbackRepo{}
+	writer := &stubBehaviorWriter{}
+	svc := NewFeedbackService(repo, NewExperimentService(&feedbackExperimentRepo{}),
+		feedbackEvidenceWriter("trace-boundary", "skill-1", "revision-1"), writer)
+	if _, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
+		TraceID: "trace-boundary", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		Score: constants.FeedbackNegativeThreshold, IdempotencyKey: "feedback-boundary",
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if len(writer.calls) != 0 {
+		t.Fatalf("writer calls = %d, want 0 (score == threshold is not negative)", len(writer.calls))
+	}
+}
+
+func TestFeedbackServiceEmitsCombinedAbandonmentAndEscalation(t *testing.T) {
+	// 组合推导：低分放弃 + 安全违规升级同时成立时，两个信号都写入。
+	repo := &fakeFeedbackRepo{}
+	writer := &stubBehaviorWriter{}
+	svc := NewFeedbackService(repo, NewExperimentService(&feedbackExperimentRepo{}),
+		feedbackEvidenceWriter("trace-combined", "skill-1", "revision-1"), writer)
+	if _, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
+		TraceID: "trace-combined", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		Score: 0.3, SecurityViolation: true, IdempotencyKey: "feedback-combined",
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if len(writer.calls) != 1 {
+		t.Fatalf("writer calls = %d, want 1", len(writer.calls))
+	}
+	signals := writer.calls[0].signals
+	if !signals.Abandonment || !signals.Escalation || signals.Retry {
+		t.Fatalf("signals = %+v, want abandonment + escalation", signals)
+	}
+}
+
+func TestFeedbackServiceSkipsWriterForNeutralFeedback(t *testing.T) {
+	repo := &fakeFeedbackRepo{}
+	writer := &stubBehaviorWriter{}
+	svc := NewFeedbackService(repo, NewExperimentService(&feedbackExperimentRepo{}),
+		feedbackEvidenceWriter("trace-neutral", "skill-1", "revision-1"), writer)
+	if _, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
+		TraceID: "trace-neutral", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		Score: 0.9, IdempotencyKey: "feedback-neutral",
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if len(writer.calls) != 0 {
+		t.Fatalf("writer calls = %d, want 0 (no negative signal)", len(writer.calls))
+	}
+}
+
+func TestFeedbackServiceNilWriterDoesNotPanic(t *testing.T) {
+	repo := &fakeFeedbackRepo{}
+	svc := NewFeedbackService(repo, NewExperimentService(&feedbackExperimentRepo{}),
+		feedbackEvidenceWriter("trace-nil", "skill-1", "revision-1"), nil)
+	if _, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
+		TraceID: "trace-nil", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		Score: 0.3, IdempotencyKey: "feedback-nil-writer",
+	}); err != nil {
+		t.Fatalf("Record with nil writer: %v", err)
+	}
+}
+
+// feedbackEvidenceWriter 构造只含单条 trace 的证据，key 为 "skill:skill-1"，
+// 供 writer 推导测试使用（不依赖 experiment 流程）。
+func feedbackEvidenceWriter(traceID, resourceID, revisionID string) *fakeTraceEvidenceReader {
+	return &fakeTraceEvidenceReader{traces: map[string]port.ObservedTrace{
+		traceID: {
+			TraceID: traceID,
+			Assignments: map[string]port.ObservedResourceAssignment{
+				"skill:" + resourceID: {RevisionID: revisionID},
+			},
+		},
+	}}
+}
+
+type stubBehaviorWriter struct {
+	calls []behaviorWriterCall
+	err   error
+}
+
+type behaviorWriterCall struct {
+	tenantID, traceID string
+	signals           domain.BehaviorSignals
+}
+
+func (w *stubBehaviorWriter) ApplyBehaviorSignals(
+	_ context.Context, tenantID, traceID string, signals domain.BehaviorSignals,
+) error {
+	w.calls = append(w.calls, behaviorWriterCall{tenantID: tenantID, traceID: traceID, signals: signals})
+	return w.err
 }
 
 type fakeFeedbackRepo struct {

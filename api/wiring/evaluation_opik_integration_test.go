@@ -53,7 +53,7 @@ func TestRealOpikEvidenceDrivesFeedbackRollback(t *testing.T) {
 	experimentRepo := &realEvidenceExperimentRepo{experiment: experiment}
 	service := evalapp.NewFeedbackService(
 		feedbackRepo, evalapp.NewExperimentService(experimentRepo),
-		evaluationTraceEvidenceAdapter{provider: provider},
+		evaluationTraceEvidenceAdapter{provider: provider}, nil,
 	)
 	result, err := service.Record(ctx, "tenant-e2e", evalapp.RecordFeedbackInput{
 		TraceID: canaryTraceID, ResourceKind: evaldomain.ResourceKindSkill, ResourceID: "skill-e2e",

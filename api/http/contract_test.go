@@ -708,6 +708,14 @@ func (contractObservationRepo) QueryByResource(_ context.Context, _, _, _ string
 	}}, nil
 }
 
+func (contractObservationRepo) FindLatestByTrace(_ context.Context, _, _ string) (*domain.EvalObservation, error) {
+	return nil, nil
+}
+
+func (contractObservationRepo) UpdateBehaviorSignals(_ context.Context, _, _ string, _ domain.BehaviorSignals) error {
+	return nil
+}
+
 // ── Audit stub ─────────────────────────────────────────────────────────────
 
 type contractAuditRepo struct{}

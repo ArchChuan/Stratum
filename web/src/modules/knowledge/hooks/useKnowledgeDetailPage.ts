@@ -8,11 +8,13 @@ import type {
   KnowledgeDocument,
   QueryResult,
   WorkspaceStats,
+  WorkspaceVersion,
 } from '../model/knowledge';
 
 import { KNOWLEDGE_DEFAULT_TOP_K } from '@/constants';
 import { tenantApi, useAuth, type Member } from '@/modules/iam';
 import { extractErrorMessage, isForbidden } from '@/shared/lib';
+import type { VersionRow } from '@/shared/ui';
 
 const DOC_POLL_INTERVAL_MS = 5000;
 // 租户角色候选：成员列表去重 + 兜底常见角色（白名单按 tenant_role 文本匹配）
@@ -70,6 +72,10 @@ export const useKnowledgeDetailPage = () => {
   const [accessForm] = Form.useForm<DocAccessValues>();
   // 文档原文预览（P1.4）
   const [previewDoc, setPreviewDoc] = useState<KnowledgeDocument | null>(null);
+  // 版本历史（仅 isAdmin 渲染入口；member 仅 GET，不可回滚）
+  const [versions, setVersions] = useState<WorkspaceVersion[]>([]);
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  const [versionsLoading, setVersionsLoading] = useState(false);
 
   // 加载权限候选（成员 + 角色），失败不阻塞页面
   useEffect(() => {
@@ -358,6 +364,34 @@ export const useKnowledgeDetailPage = () => {
     setPreviewDoc(document);
   }, []);
 
+  // 版本历史弹窗：打开即拉取最新列表；加载失败关闭弹窗并提示。
+  const openVersions = useCallback(async () => {
+    setVersionsOpen(true);
+    setVersionsLoading(true);
+    try {
+      setVersions(await knowledgeApi.listVersions(name));
+    } catch (err) {
+      message.error({ content: extractErrorMessage(err, '加载版本历史失败'), duration: 3 });
+      setVersionsOpen(false);
+    } finally {
+      setVersionsLoading(false);
+    }
+  }, [name]);
+
+  // 回滚由 VersionHistory 内置信确认 Modal 触发：此处只调 API + 刷新数据
+  // （配置与版本列表），成功/失败提示在组件内兜底。
+  const rollbackVersion = useCallback(async (row: VersionRow) => {
+    await knowledgeApi.rollback(name, row.id);
+    await Promise.all([fetchStats(), openVersions()]);
+  }, [name, fetchStats, openVersions]);
+
+  // 撤销未保存编辑（纯前端）：重拉最新 workspace 配置到 lastLoadedConfig，
+  // 再整体回填表单，强制丢弃用户的未保存修改。
+  const undoEdits = useCallback(async () => {
+    await fetchStats();
+    configForm.setFieldsValue({ ...lastLoadedConfig.current });
+  }, [fetchStats, configForm, lastLoadedConfig]);
+
   return {
     name,
     navigate,
@@ -395,5 +429,12 @@ export const useKnowledgeDetailPage = () => {
     previewDoc,
     setPreviewDoc,
     handlePreviewDocument,
+    versions,
+    versionsOpen,
+    setVersionsOpen,
+    versionsLoading,
+    openVersions,
+    rollbackVersion,
+    undoEdits,
   };
 };

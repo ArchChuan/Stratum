@@ -340,6 +340,56 @@ func (h *RAGHandler) UpdateWorkspace(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"name": ws.Name, "config": toDTOConfig(ws.Config)})
 }
 
+// ListWorkspaceVersions returns the workspace's product version history
+// (newest first) with created_by display names resolved.
+func (h *RAGHandler) ListWorkspaceVersions(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	versions, err := h.wsService.ListWorkspaceVersions(c.Request.Context(), tenantID, c.Param("name"))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	out := make([]WorkspaceVersionResponse, 0, len(versions))
+	for _, v := range versions {
+		out = append(out, workspaceVersionToResponse(v))
+	}
+	c.JSON(http.StatusOK, WorkspaceVersionsResponse{Versions: out})
+}
+
+// RollbackWorkspace restores a deprecated historical version, repointing the
+// workspace to it immediately without creating a new version. Returns the
+// fresh workspace so the client can re-render in place.
+func (h *RAGHandler) RollbackWorkspace(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	var req RollbackWorkspaceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	ws, err := h.wsService.RollbackWorkspace(c.Request.Context(), tenantID, c.Param("name"), knowledge.RollbackWorkspaceInput{
+		ActorID:   actorID,
+		VersionID: req.VersionID,
+	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"name": ws.Name, "description": ws.Description, "config": toDTOConfig(ws.Config)})
+}
+
 func (h *RAGHandler) GetWorkspaceStats(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {

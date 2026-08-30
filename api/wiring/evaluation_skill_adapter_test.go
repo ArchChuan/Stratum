@@ -192,6 +192,15 @@ func (r *evaluationSkillVersionRepo) RollbackRevision(context.Context, string, s
 func (r *evaluationSkillVersionRepo) NextRevisionNo(context.Context, string) (int, error) {
 	return 1, nil
 }
+func (r *evaluationSkillVersionRepo) SaveDraft(context.Context, string, string, skilldomain.SkillRevision, string, *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
+func (r *evaluationSkillVersionRepo) PublishDraft(context.Context, string, string, string, int, string, string, *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
+func (r *evaluationSkillVersionRepo) DiscardDraft(context.Context, string, string, *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 
 func evaluationPublishedSkillRevision() skilldomain.SkillRevision {
 	return skilldomain.SkillRevision{ID: "revision-1", SkillID: "skill-1", Status: skilldomain.VersionStatusPublished, Source: "manual", ContentHash: "hash", Instructions: "baseline"}

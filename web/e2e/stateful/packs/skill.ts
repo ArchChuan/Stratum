@@ -57,26 +57,73 @@ export const executeSkillPack = async ({ actor, pool, evidence, webURL }: SkillP
     completed.push('skill.mutation.post.skills', 'skill.route.skills.id.workspace');
     recordEvidence(evidence, 'skill creation');
 
-    // 保存即生效：指令 tab 直接 PATCH /skills/:id，无发布步骤。
+    // 草稿-发布双阶段（feat/knowledge-versioning-skill-draft）：保存草稿不生效，
+    // 发布后 active_revision_id 才指向新版本，旧版降级 deprecated。
     await expect(page.getByLabel('执行指令')).toBeVisible();
-    await page.getByLabel('执行指令').fill('严格分类输入并返回 category 字段，输出可核验。');
-    const saveResponse = waitForMutation(page, `/skills/${skillID}`, 'PATCH');
-    await page.getByRole('button', { name: '保存并立即生效' }).click();
-    expect((await saveResponse).status()).toBe(200);
-    completed.push('skill.mutation.patch.skills.id');
-    recordEvidence(evidence, 'skill revision save');
+    const activeBeforeDraft = await rows<{ active_revision_id: string }>(
+      pool, tenantID, 'SELECT active_revision_id FROM skills WHERE id=$1', [skillID],
+    );
+    const activeBefore = activeBeforeDraft[0].active_revision_id;
+    expect(activeBefore).toBeTruthy();
 
-    // 持久化：active_revision 已指向最新 revision（三字段模型无 capability 列）。
-    const persisted = await rows<{ status: string; active_revision_id: string | null; name: string }>(
+    // 保存草稿：POST /skills/:id/draft → 200，active 指针不变。
+    await page.getByLabel('执行指令').fill('严格分类输入并返回 category 字段，输出可核验。');
+    const draftResponse = waitForMutation(page, `/skills/${skillID}/draft`, 'POST');
+    await page.getByRole('button', { name: '保存草稿' }).click();
+    expect((await draftResponse).status()).toBe(200);
+    await expect(page.getByText('有未发布的草稿')).toBeVisible({ timeout: 10000 });
+    completed.push('skill.mutation.post.skills.id.draft');
+    recordEvidence(evidence, 'skill draft save');
+
+    // 持久化（草稿态）：draft_revision_id 指向 status=draft 且 revision_no 为 NULL 的行，
+    // active_revision_id 保持原样（草稿未生效）。
+    const draftState = await rows<{ active_revision_id: string | null; draft_revision_id: string | null }>(
       pool, tenantID,
-      `SELECT s.status,s.active_revision_id,r.name
-       FROM skills s JOIN skill_revisions r ON r.id=s.active_revision_id WHERE s.id=$1`,
+      `SELECT active_revision_id, draft_revision_id FROM skills WHERE id=$1`,
       [skillID],
     );
-    expect(persisted).toHaveLength(1);
-    expect(persisted[0].active_revision_id).toBeTruthy();
-    completed.push('skill.db.revision.persisted');
-    recordEvidence(evidence, 'skill revision persisted');
+    expect(draftState).toHaveLength(1);
+    expect(draftState[0].active_revision_id).toBe(activeBefore);
+    expect(draftState[0].draft_revision_id).toBeTruthy();
+    const draftRev = await rows<{ status: string; revision_no: number | null }>(
+      pool, tenantID,
+      `SELECT status, revision_no FROM skill_revisions WHERE id=$1`,
+      [draftState[0].draft_revision_id],
+    );
+    expect(draftRev).toHaveLength(1);
+    expect(draftRev[0].status).toBe('draft');
+    expect(draftRev[0].revision_no).toBeNull();
+    completed.push('skill.db.draft.persisted');
+    recordEvidence(evidence, 'skill draft persisted');
+
+    // 发布：POST /skills/:id/publish → 200，active_revision_id 指向新 revision(revision_no=2)，
+    // draft_revision_id 清空，旧版降级 deprecated。
+    const publishResponse = waitForMutation(page, `/skills/${skillID}/publish`, 'POST');
+    await page.getByRole('button', { name: /^发\s*布$/ }).click();
+    expect((await publishResponse).status()).toBe(200);
+    await expect(page.getByText('有未发布的草稿')).toHaveCount(0, { timeout: 10000 });
+    completed.push('skill.mutation.post.skills.id.publish');
+    recordEvidence(evidence, 'skill publish');
+
+    const published = await rows<{ active_revision_id: string | null; draft_revision_id: string | null; status: string }>(
+      pool, tenantID,
+      `SELECT s.active_revision_id, s.draft_revision_id, s.status
+       FROM skills s WHERE s.id=$1`,
+      [skillID],
+    );
+    expect(published[0].active_revision_id).not.toBe(activeBefore);
+    expect(published[0].draft_revision_id).toBeNull();
+    const revs = await rows<{ revision_no: number | null; status: string }>(
+      pool, tenantID,
+      `SELECT revision_no, status FROM skill_revisions WHERE skill_id=$1 ORDER BY revision_no NULLS LAST`,
+      [skillID],
+    );
+    expect(revs).toEqual([
+      { revision_no: 1, status: 'deprecated' },
+      { revision_no: 2, status: 'published' },
+    ]);
+    completed.push('skill.db.revision.rotated');
+    recordEvidence(evidence, 'skill revision rotated');
 
     const refreshedListResponse = waitForMutation(page, '/skills', 'GET');
     await page.goto(`${webURL}/skills`);

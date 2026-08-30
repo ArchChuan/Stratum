@@ -20,6 +20,12 @@ export const executeKnowledgePack = async ({ actor, pool, evidence, webURL, fixt
   const page = await actor.context.newPage();
   const workspace = `e2e-kb-${Date.now()}`;
   let documentID = '';
+  const completed: string[] = [];
+  const recordEvidence = (label: string) => {
+    evidence.ui.push(`${label} completed through Chromium controls`);
+    evidence.http.push(`${label} returned the expected HTTP response`);
+    evidence.database.push(`${label} persisted state reconciled`);
+  };
   try {
     const listResponse = waitFor(page, '/knowledge/workspaces', 'GET');
     await page.goto(`${webURL}/knowledge`);
@@ -48,14 +54,80 @@ export const executeKnowledgePack = async ({ actor, pool, evidence, webURL, fixt
 
     const topKInput = page.getByLabel('Top-K', { exact: true });
     await expect(topKInput).toHaveValue('5');
+    // 首次保存：CreateWorkspace 不写版本，首个版本由首次保存生成（v1, top_k=6, current）。
     await topKInput.fill('6');
     await expect(topKInput).toHaveValue('6');
-    const updateResponse = waitFor(page, `/knowledge/workspaces/${workspace}`, 'PATCH');
+    const firstSave = waitFor(page, `/knowledge/workspaces/${workspace}`, 'PATCH');
     await page.getByRole('button', { name: /保\s*存/ }).click();
-    expect((await updateResponse).status()).toBe(200);
+    expect((await firstSave).status()).toBe(200);
     expect(await rows<{ top_k: number }>(pool, tenantID,
       "SELECT (config->>'top_k')::int AS top_k FROM rag_workspaces WHERE name=$1", [workspace]))
       .toEqual([{ top_k: 6 }]);
+
+    // 第二次保存：产生 v2(top_k=7, current)，v1 降级 deprecated（出现回滚入口）。
+    await topKInput.fill('7');
+    await expect(topKInput).toHaveValue('7');
+    const secondSave = waitFor(page, `/knowledge/workspaces/${workspace}`, 'PATCH');
+    await page.getByRole('button', { name: /保\s*存/ }).click();
+    expect((await secondSave).status()).toBe(200);
+    expect(await rows<{ top_k: number }>(pool, tenantID,
+      "SELECT (config->>'top_k')::int AS top_k FROM rag_workspaces WHERE name=$1", [workspace]))
+      .toEqual([{ top_k: 7 }]);
+
+    // ── Feature A：版本历史 + 回滚 + 撤销 ─────────────────────────────────
+    // v1(top_k=6) deprecated 可回滚、v2(top_k=7) 当前生效。
+    const versionsResponse = waitFor(page, `/knowledge/workspaces/${workspace}/versions`, 'GET');
+    await page.getByRole('button', { name: '版本历史' }).click();
+    expect((await versionsResponse).status()).toBe(200);
+    const versionRow = page.locator('.ant-modal .ant-table-row').filter({ hasText: 'v1' });
+    await expect(versionRow).toBeVisible({ timeout: 15_000 });
+    await expect(versionRow.getByRole('button', { name: '回滚' })).toBeVisible();
+    completed.push('knowledge.mutation.get.knowledge.workspaces.name.versions');
+    recordEvidence('knowledge version history');
+
+    // 回滚到 v1：POST rollback → 200；active_version_id 翻转、行数不变、v1 恢复 published。
+    const rollbackResponse = waitFor(page, `/knowledge/workspaces/${workspace}/rollback`, 'POST');
+    await versionRow.getByRole('button', { name: '回滚' }).click();
+    // AntD 2 字按钮渲染为「回 滚」，用 /回\s*滚/ 兼容空格插入。
+    await page.locator('.ant-modal-confirm').getByRole('button', { name: /回\s*滚/ }).click();
+    expect((await rollbackResponse).status()).toBe(200);
+    const wsID = (await rows<{ id: string }>(pool, tenantID,
+      'SELECT id::text AS id FROM rag_workspaces WHERE name=$1', [workspace]))[0].id;
+    const versionCount = await rows<{ count: string }>(pool, tenantID,
+      `SELECT count(*)::text AS count FROM resource_versions WHERE resource_kind='knowledge' AND resource_id=$1`, [wsID]);
+    expect(versionCount).toEqual([{ count: '2' }]);
+    const flipped = await rows<{ active_version_id: string | null; top_k: number }>(pool, tenantID,
+      `SELECT active_version_id, (config->>'top_k')::int AS top_k
+       FROM rag_workspaces WHERE name=$1`, [workspace]);
+    expect(flipped).toHaveLength(1);
+    const v1Version = await rows<{ id: string }>(pool, tenantID,
+      `SELECT id FROM resource_versions WHERE resource_kind='knowledge' AND resource_id=$1 AND revision_no=1`, [wsID]);
+    expect(flipped[0].active_version_id).toBe(v1Version[0].id);
+    expect(flipped[0].top_k).toBe(6);
+    const versionStatuses = await rows<{ status: string }>(pool, tenantID,
+      `SELECT status FROM resource_versions WHERE resource_kind='knowledge' AND resource_id=$1 ORDER BY revision_no`, [wsID]);
+    expect(versionStatuses).toEqual([{ status: 'published' }, { status: 'deprecated' }]);
+    // 表单回填 v1 配置：Top-K 回到 6；点击 X 关闭版本历史弹窗（回滚后弹窗保持打开，
+    // 且 confirm 已关闭焦点不在弹窗内，Escape 不可靠，改用 close 按钮）。
+    await expect(page.getByLabel('Top-K', { exact: true })).toHaveValue('6', { timeout: 10_000 });
+    await page.locator('.ant-modal-close').click();
+    // AntD 关闭的 Modal 仍在 DOM（display:none），断言可见 wrap 数为 0 而非元素数 0。
+    await expect(page.locator('.ant-modal-wrap:visible')).toHaveCount(0);
+    completed.push('knowledge.mutation.post.knowledge.workspaces.name.rollback');
+    recordEvidence('knowledge rollback');
+
+    // 撤销未保存编辑：改 Top-K 为 8 后撤销，表单回填最近一次生效配置(6)。
+    const topKAfterRollback = page.getByLabel('Top-K', { exact: true });
+    await topKAfterRollback.fill('8');
+    await expect(topKAfterRollback).toHaveValue('8');
+    await page.locator('.responsive-inline-form').getByRole('button', { name: /撤\s*销/ }).click();
+    await page.locator('.ant-modal-confirm').getByRole('button', { name: /撤\s*销/ }).click();
+    await expect(topKAfterRollback).toHaveValue('6', { timeout: 10_000 });
+    expect(await rows<{ top_k: number }>(pool, tenantID,
+      "SELECT (config->>'top_k')::int AS top_k FROM rag_workspaces WHERE name=$1", [workspace]))
+      .toEqual([{ top_k: 6 }]);
+    completed.push('knowledge.mutation.undo.knowledge.workspaces.name');
+    recordEvidence('knowledge undo edits');
 
     // ── P1 拒答场景 1：空库查询 → no_sources + best_score=0 ──────────────
     // 上传文档前 query：响应带 no_answer.reason=no_sources（retrieved_count
@@ -176,11 +248,12 @@ export const executeKnowledgePack = async ({ actor, pool, evidence, webURL, fixt
       async () => page.close(),
     ]);
   }
-  return [
+  completed.push(
     'knowledge.route.knowledge', 'knowledge.route.knowledge.name',
     'knowledge.mutation.post.knowledge.workspaces', 'knowledge.mutation.patch.knowledge.workspaces.name',
     'knowledge.mutation.post.knowledge.ingest', 'knowledge.mutation.post.knowledge.query',
     'knowledge.mutation.delete.knowledge.workspaces.name.documents.documentid',
     'knowledge.mutation.delete.knowledge.workspaces.name',
-  ];
+  );
+  return completed;
 };

@@ -28,7 +28,8 @@ type TableRef struct {
 // SetActiveTx / 读侧 is_current 一律报错，禁止静默跳过版本写入。
 // 后续阶段接入 knowledge/mcp/skill 时在此登记对应表与指针列。
 var productTables = map[string]TableRef{
-	"agent": {Table: "agents", ActiveColumn: "active_version_id"},
+	"agent":     {Table: "agents", ActiveColumn: "active_version_id"},
+	"knowledge": {Table: "rag_workspaces", ActiveColumn: "active_version_id"},
 }
 
 // ProductTableRef 返回 kind 对应的产品表引用；未注册返回 false。

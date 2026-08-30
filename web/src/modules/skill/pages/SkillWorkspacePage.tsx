@@ -1,5 +1,5 @@
 import { ArrowLeftOutlined, LockOutlined } from '@ant-design/icons';
-import { Alert, Button, Form, Input, Select, Skeleton, Tabs, Typography, message } from 'antd';
+import { Alert, Button, Form, Input, Modal, Select, Skeleton, Tabs, Typography, message } from 'antd';
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -61,7 +61,7 @@ export const SkillWorkspacePage = () => {
   if (loading) return <Skeleton active paragraph={{ rows: 8 }} />;
   if (error) return <Alert type="error" message={error} showIcon />;
   if (!workspace) return <Alert type="warning" message="技能工作台不存在" showIcon />;
-  const { skill, active } = workspace;
+  const { skill, active, hasDraft } = workspace;
   const currentUserId = user?.sub || '';
   // 白名单放宽：创建者必是 admin/owner（创建路由 requireAdmin），isAdmin 已覆盖创建者；
   // member 编辑者被加入可编辑人白名单后同样可编辑。
@@ -70,23 +70,60 @@ export const SkillWorkspacePage = () => {
     setWorkspace(next);
     fillForms(next.active, next.skill.name, next.skill.description, draftForm);
   };
-  // saveRevision: 保存即生效——派生新版本并立即生效，无发布步骤。乐观并发基线
-  // expectedContentHash 取当前生效版本内容 hash，并发编辑时后端返回 409。
-  const saveRevision = async (values: DraftValues) => {
+  // saveDraft: 保存草稿不生效;expectedContentHash 取当前生效版本,并发编辑 409。
+  const saveDraft = async (values: DraftValues) => {
     setSaving('draft');
     try {
-      const next = await skillApi.updateSkill(skill.id, {
+      const next = await skillApi.saveDraft(skill.id, {
         name: values.name, description: values.description, instructions: values.instructions,
         expectedContentHash: active.contentHash,
       });
       applyWorkspace(next);
+      // applyWorkspace 会用生效版本回填表单，这里恢复用户刚提交的草稿内容，
+      // 使草稿保存后仍可继续编辑。
+      draftForm.setFieldsValue({ name: values.name, description: values.description, instructions: values.instructions });
       setRefreshTick((t) => t + 1);
-      message.success({ content: '已保存并立即生效', duration: 2 });
+      message.success({ content: '已保存草稿，发布后生效', duration: 2 });
     } catch (err) {
-      message.error({ content: extractErrorMessage(err) || '保存失败', duration: 3 });
+      message.error({ content: extractErrorMessage(err) || '保存草稿失败', duration: 3 });
     } finally {
       setSaving('');
     }
+  };
+  // publishDraft: 将草稿转正为新生效版本,立即生效。
+  const publishDraft = async () => {
+    setSaving('publish');
+    try {
+      const next = await skillApi.publishDraft(skill.id, { expectedContentHash: active.contentHash });
+      applyWorkspace(next);
+      setRefreshTick((t) => t + 1);
+      message.success({ content: '已发布，立即生效', duration: 2 });
+    } catch (err) {
+      message.error({ content: extractErrorMessage(err) || '发布失败', duration: 3 });
+    } finally {
+      setSaving('');
+    }
+  };
+  // discardDraft: 撤销草稿,删除后用当前生效版本回填表单;幂等。
+  const discardDraft = () => {
+    Modal.confirm({
+      title: '撤销草稿？',
+      content: '草稿将被删除，表单回填为当前生效版本。',
+      okText: '撤销', okButtonProps: { danger: true }, cancelText: '取消',
+      onOk: async () => {
+        setSaving('discard');
+        try {
+          const next = await skillApi.discardDraft(skill.id);
+          applyWorkspace(next);
+          setRefreshTick((t) => t + 1);
+          message.success({ content: '草稿已撤销', duration: 2 });
+        } catch (err) {
+          message.error({ content: extractErrorMessage(err) || '撤销失败', duration: 3 });
+        } finally {
+          setSaving('');
+        }
+      },
+    });
   };
   const reloadWorkspace = async () => {
     try {
@@ -112,11 +149,17 @@ export const SkillWorkspacePage = () => {
       // 申请编辑权限按钮放在 Form 外：<Form disabled={!canEdit}> 会通过 DisabledContext
       // 禁用表单内所有 antd 组件（含 Button），member 只读时必须可点申请。
       { key: 'instructions', label: '指令', children: <div>
-        <Form disabled={!canEdit} form={draftForm} layout="vertical" onFinish={saveRevision}>
+        {hasDraft && <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+          message="有未发布的草稿：保存的内容尚未生效，点击「发布」后成为当前生效版本。" />}
+        <Form disabled={!canEdit} form={draftForm} layout="vertical" onFinish={saveDraft}>
           <Form.Item label="名称" name="name" rules={[{ required: true, message: '请输入技能名称' }]}><Input /></Form.Item>
           <Form.Item label="描述" name="description"><TextArea rows={3} /></Form.Item>
           <Form.Item label="执行指令" name="instructions" rules={[{ required: true, message: '请输入执行指令' }]}><TextArea rows={10} /></Form.Item>
-          {canEdit && <ActionRow><Button type="primary" htmlType="submit" loading={saving === 'draft'}>保存并立即生效</Button></ActionRow>}
+          {canEdit && <ActionRow>
+            <Button danger disabled={!hasDraft} loading={saving === 'discard'} onClick={discardDraft} style={{ marginInlineEnd: 8 }}>撤销草稿</Button>
+            <Button htmlType="submit" loading={saving === 'draft'}>保存草稿</Button>
+            <Button type="primary" disabled={!hasDraft} loading={saving === 'publish'} onClick={() => void publishDraft()} style={{ marginInlineStart: 8 }}>发布</Button>
+          </ActionRow>}
         </Form>
         {!canEdit && <ActionRow><RequestEditorButton resourceType="skill" resourceId={skill.id} options={{ resourceName: skill.name }} buttonProps={{ type: 'primary', icon: <LockOutlined /> }} /></ActionRow>}
       </div> },
@@ -162,14 +205,14 @@ export const SkillWorkspacePage = () => {
       ) },
       { key: 'revision', label: '版本历史', children: (
         <VersionHistory
-          rows={(revisions ?? []).map((r) => ({
+          rows={(revisions ?? []).filter((r) => r.status !== 'draft').map((r) => ({
             id: r.id, versionNo: r.revisionNo, status: r.status, isCurrent: r.isCurrent,
             createdByName: r.createdByName, createdBy: r.createdBy, createdAt: r.createdAt,
             canRollback: r.status === 'deprecated' && canEdit,
           }))}
           loading={revisionsLoading}
           rollback={handleRollback}
-          infoMessage="保存即产生新版本并立即生效；历史版本可回滚，回滚不产生新版本。"
+          infoMessage="保存为草稿，发布后生效；历史版本可回滚，回滚不产生新版本。"
         />
       ) },
     ]} />

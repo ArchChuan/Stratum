@@ -43,8 +43,14 @@ func (r *accessHandlerWorkspaceRepo) List(context.Context, string) ([]*knowledge
 	return []*knowledgedomain.Workspace{r.ws}, nil
 }
 func (r *accessHandlerWorkspaceRepo) UpdateWorkspaceAll(
-	context.Context, string, string, *string, *string, knowledgedomain.WorkspaceConfig,
-	string, *auditdomain.ResourceChangeAuditEvent,
+	context.Context, string, string, *string, *string, knowledgedomain.KnowledgeWorkspaceSnapshot,
+	string, string, *auditdomain.ResourceChangeAuditEvent,
+) error {
+	return nil
+}
+func (r *accessHandlerWorkspaceRepo) RollbackWorkspace(
+	context.Context, string, string, knowledgedomain.KnowledgeWorkspaceSnapshot,
+	string, string, *auditdomain.ResourceChangeAuditEvent,
 ) error {
 	return nil
 }

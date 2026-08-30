@@ -146,6 +146,60 @@ func (r *PgObservationRepository) QueryByResource(ctx context.Context, tenantID,
 	return out, nil
 }
 
+func (r *PgObservationRepository) FindLatestByTrace(
+	ctx context.Context, tenantID, traceID string,
+) (*domain.EvalObservation, error) {
+	var (
+		obs                              domain.EvalObservation
+		kind, verdict                    string
+		paramJSON, signalsJSON, costJSON string
+	)
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
+	err := execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT `+observationColumns+` FROM eval_observations WHERE trace_id = $1 ORDER BY created_at DESC LIMIT 1`,
+			traceID,
+		).Scan(&obs.ID, &obs.TraceID, &kind, &obs.Resource.ResourceID,
+			&paramJSON, &signalsJSON, &costJSON, &obs.Stratum, &verdict, &obs.CreatedAt)
+	})
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("find latest observation by trace: %w", err)
+	}
+	obs.Resource.Kind = domain.ResourceKind(kind)
+	obs.Verdict = domain.ObservationVerdict(verdict)
+	if err := unmarshalObservationJSON(&obs, paramJSON, signalsJSON, costJSON); err != nil {
+		return nil, fmt.Errorf("find latest observation by trace: unmarshal: %w", err)
+	}
+	return &obs, nil
+}
+
+func (r *PgObservationRepository) UpdateBehaviorSignals(
+	ctx context.Context, tenantID, observationID string, signals domain.BehaviorSignals,
+) error {
+	signalsJSON, err := json.Marshal(signals)
+	if err != nil {
+		return fmt.Errorf("marshal behavior signals: %w", err)
+	}
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
+	err = execTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		_, execErr := tx.Exec(ctx,
+			`UPDATE eval_observations SET signals = jsonb_set(signals, '{behavior}', $2) WHERE id = $1`,
+			observationID, string(signalsJSON),
+		)
+		if execErr != nil {
+			return fmt.Errorf("update behavior signals: %w", execErr)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("update behavior signals: %w", err)
+	}
+	return nil
+}
+
 func unmarshalObservationJSON(obs *domain.EvalObservation, paramJSON, signalsJSON, costJSON string) error {
 	if err := json.Unmarshal([]byte(paramJSON), &obs.Param); err != nil {
 		return fmt.Errorf("decode param_version: %w", err)

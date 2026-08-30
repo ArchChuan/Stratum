@@ -83,6 +83,16 @@ func TestPgVersionRepo_ListVersions_success(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestPgVersionRepo_listVersionsSQL_knowledgeIsCurrentTypeSafe(t *testing.T) {
+	// 回归 #knowledge-uuid: rag_workspaces.id 是 UUID,而 resource_versions.resource_id
+	// 是 TEXT。is_current 子查询必须把产品表 id 显式 cast 成 text,否则真实 Postgres
+	// 解析报 "operator does not exist: uuid = text" (SQLSTATE 42883) → GET versions 500。
+	// agent 的 agents.id 恰好是 TEXT 所以 mock 单测与旧链路都测不出该差异。
+	sql, err := listVersionsSQL(domain.ResourceKindKnowledge)
+	require.NoError(t, err)
+	require.Contains(t, sql, "p.id::text = r.resource_id")
+}
+
 func TestPgVersionRepo_ListVersions_queryFails(t *testing.T) {
 	mock := newVersionMock(t)
 	repo := newVersionRepo(mock)
