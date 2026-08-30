@@ -67,6 +67,8 @@ export const operationProposalApi = {
     return operationProposalListSchema.parse(response.data).proposals;
   },
   // 白名单自助申请：六类资源统一入口，URL 按资源类型 switch（见 requestAccessUrl）。
+  // body 只发 resourceType + resourceName：resourceId 走路由 param，resourceType 由后端
+  // 从路由推导并交叉校验；body 冗余字段（如 resourceId）会被 DisallowUnknownFields 拒掉。
   // resourceName 仅用于审批中心展示；knowledge_doc 需带 workspaceName 定位路由。
   requestEditorAccess: async (
     resourceType: GrantableResourceType,
@@ -75,7 +77,6 @@ export const operationProposalApi = {
   ) => {
     const response = await api.post(requestAccessUrl(resourceType, resourceId, opts?.workspaceName), {
       resourceType,
-      resourceId,
       resourceName: opts?.resourceName,
     });
     return pendingApprovalSchema.parse(response.data);

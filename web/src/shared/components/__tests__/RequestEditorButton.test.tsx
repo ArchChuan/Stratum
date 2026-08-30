@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { RequestEditorButton } from '../RequestEditorButton';
 
+import { operationProposalApi } from '@/modules/operation-gate';
+
 vi.mock('antd', async (importOriginal) => {
   const mod = await importOriginal<typeof import('antd')>();
   return { ...mod, message: { success: vi.fn(), error: vi.fn() } };
@@ -24,5 +26,6 @@ describe('RequestEditorButton', () => {
     render(<RequestEditorButton resourceType="workflow" resourceId="w1" />);
     fireEvent.click(screen.getByRole('button', { name: '申请编辑权限' }));
     expect(await screen.findByRole('button', { name: '申请编辑权限' })).toBeTruthy();
+    expect(operationProposalApi.requestEditorAccess).toHaveBeenCalled();
   });
 });
