@@ -8,13 +8,16 @@ import { MCPRetrySection } from '../components/MCPRetrySection';
 import { MCPTransportSection } from '../components/MCPTransportSection';
 import { useEditMCPPage } from '../hooks/useEditMCPPage';
 
+import { RequestEditorButton } from '@/shared/components';
+
 const { Title, Text } = Typography;
 
 export const EditMCPPage = () => {
   const { id } = useParams<{ id: string }>();
   const [form] = Form.useForm();
-  const { loading, submitting, initialValues, handleFinish } = useEditMCPPage(id!);
+  const { loading, submitting, initialValues, handleFinish, canEdit } = useEditMCPPage(id!);
   const navigate = useNavigate();
+  const readOnly = !canEdit;
 
   const transport = Form.useWatch('transport', form);
   const authType = Form.useWatch('auth_type', form);
@@ -31,10 +34,10 @@ export const EditMCPPage = () => {
         </Button>
         <div>
           <Title level={4} style={{ margin: 0 }}>
-            编辑 MCP 服务器
+            {readOnly ? '查看 MCP 服务器配置' : '编辑 MCP 服务器'}
           </Title>
           <Text type="secondary" style={{ fontSize: 13 }}>
-            修改配置后将自动断开并重新连接
+            {readOnly ? '只读查看，如需修改请申请编辑权限' : '修改配置后将自动断开并重新连接'}
           </Text>
         </div>
       </div>
@@ -43,6 +46,7 @@ export const EditMCPPage = () => {
         form={form}
         layout="vertical"
         onFinish={handleFinish}
+        disabled={readOnly}
         initialValues={initialValues ?? undefined}
       >
         {transport === 'stdio' && (
@@ -64,13 +68,22 @@ export const EditMCPPage = () => {
         )}
         <MCPRetrySection retryEnabled={retryEnabled} />
 
-        <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <Button onClick={() => navigate('/mcp')}>取消</Button>
-          <Button type="primary" htmlType="submit" loading={submitting}>
-            保存并重连
-          </Button>
-        </div>
+        {!readOnly && (
+          <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <Button onClick={() => navigate('/mcp')}>取消</Button>
+            <Button type="primary" htmlType="submit" loading={submitting}>
+              保存并重连
+            </Button>
+          </div>
+        )}
       </Form>
+      {/* 申请编辑权限按钮必须放在 Form 外：<Form disabled={readOnly}> 通过 DisabledContext
+          禁用表单内所有 antd 组件（含 Button），member 只读时须可点申请。 */}
+      {readOnly && (
+        <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <RequestEditorButton resourceType="mcp" resourceId={id ?? ''} />
+        </div>
+      )}
     </div>
   );
 };
