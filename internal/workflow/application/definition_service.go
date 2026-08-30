@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"fmt"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
 	auditport "github.com/byteBuilderX/stratum/internal/audit/domain/port"
@@ -31,6 +32,8 @@ type DefinitionService struct {
 	newID        func() string
 	failureAudit auditport.FailureAuditRecorder
 	bindings     port.SkillBindingResolver
+	roles        port.TenantRoleResolver
+	editors      port.ResourceEditorRepo
 	logger       *zap.Logger
 }
 
@@ -82,11 +85,25 @@ func (s *DefinitionService) SetLogger(l *zap.Logger) {
 		s.logger = l
 	}
 }
+
+// SetTenantRoleResolver 注入租户角色解析器（单事实源），所有权矩阵据此判定。
+// 未注入时 fail closed（禁止一切 Update/Delete/Publish）。
+func (s *DefinitionService) SetTenantRoleResolver(r port.TenantRoleResolver) {
+	s.roles = r
+}
+
+// SetEditorRepo 注入可编辑人白名单仓库。未注入时白名单成员路径 fail closed。
+func (s *DefinitionService) SetEditorRepo(r port.ResourceEditorRepo) {
+	s.editors = r
+}
 func (s *DefinitionService) Create(ctx context.Context, tenantID string, cmd CreateDefinitionCommand, actorID string) (*domain.Definition, error) {
 	definition, err := domain.NewDefinition(s.newID(), cmd.Name, cmd.Description, cmd.Spec, normalizeInputSchema(cmd.InputSchema))
 	if err != nil {
 		return nil, err
 	}
+	// 落库即写回 creator：历史租户的空 created_by 行由 owner/admin 空 actor 路径
+	// 维护；新行一律带创建者，供所有权矩阵 admin 判定。
+	definition.CreatedBy = actorID
 	// 草稿保存也强制图完整性（含环检测）：用户拖拽新边时前端已阻止成环，
 	// 这里作为 fail-closed 兜底，避免非法拓扑流入存储。允许空图（画一半先保存）。
 	if err := domain.ValidateSpecGraph(definition.Spec); err != nil {
@@ -111,6 +128,12 @@ func (s *DefinitionService) Update(ctx context.Context, tenantID, id string, cmd
 	if err != nil {
 		return nil, err
 	}
+	// 所有权判定：owner/admin 放行（空 editorActor），白名单 member 放行并带
+	// 非空 editorActor，store 在写事务内复查关闭 TOCTOU。
+	editorActor, err := s.resolveUpdateActor(ctx, tenantID, actorID, definition)
+	if err != nil {
+		return nil, err
+	}
 	before := workflowSafeProjection(definition)
 	if err := definition.UpdateDraft(cmd.Name, cmd.Description, cmd.Spec, cmd.ExpectedRevision, normalizeInputSchema(cmd.InputSchema)); err != nil {
 		return nil, err
@@ -126,7 +149,7 @@ func (s *DefinitionService) Update(ctx context.Context, tenantID, id string, cmd
 	if err != nil {
 		return nil, err
 	}
-	if err := s.definitions.UpdateDefinition(ctx, tenantID, definition, cmd.ExpectedRevision, "", ev); err != nil {
+	if err := s.definitions.UpdateDefinition(ctx, tenantID, definition, cmd.ExpectedRevision, editorActor, ev); err != nil {
 		s.recordFailure(ctx, id, "update", err)
 		return nil, err
 	}
@@ -136,6 +159,10 @@ func (s *DefinitionService) Update(ctx context.Context, tenantID, id string, cmd
 func (s *DefinitionService) Delete(ctx context.Context, tenantID, id string, actorID string) error {
 	definition, err := s.definitions.GetDefinition(ctx, tenantID, id)
 	if err != nil {
+		return err
+	}
+	// 破坏性删除仅 owner 与 creator-admin 可执行（member 一律拒绝）。
+	if err := s.checkOwnership(ctx, tenantID, actorID, definition.CreatedBy, nil, OpDelete); err != nil {
 		return err
 	}
 	ev, err := newWorkflowChangeAudit(id, auditdomain.ChangeOpDelete, actorID, workflowSafeProjection(definition), nil)
@@ -161,7 +188,58 @@ func (s *DefinitionService) Validate(ctx context.Context, tenantID, id string) e
 }
 
 func (s *DefinitionService) Get(ctx context.Context, tenantID, id string) (*domain.Definition, error) {
-	return s.definitions.GetDefinition(ctx, tenantID, id)
+	definition, err := s.definitions.GetDefinition(ctx, tenantID, id)
+	if err != nil {
+		return nil, err
+	}
+	// 详情附带白名单 editors；editorRepo 未装配时保持现状（只读路径不 fail-closed）。
+	if s.editors != nil {
+		editors, listErr := s.editors.ListEditors(ctx, tenantID, definition.ID)
+		if listErr != nil {
+			return nil, listErr
+		}
+		definition.Editors = editors
+	}
+	return definition, nil
+}
+
+// ListEditors returns the granted editor ids for a workflow. editorRepo 未装配
+// 时返回空列表（只读路径不 fail-closed）。
+func (s *DefinitionService) ListEditors(ctx context.Context, tenantID, workflowID string) ([]string, error) {
+	if s.editors == nil {
+		return []string{}, nil
+	}
+	return s.editors.ListEditors(ctx, tenantID, workflowID)
+}
+
+// SetEditors replaces the whitelist. 仅 owner/admin（OpAccess）可管理；
+// member 一律拒绝。变更写入同事务并记录审计。
+func (s *DefinitionService) SetEditors(ctx context.Context, tenantID, workflowID string, editorIDs []string, actorID string) error {
+	if s.editors == nil {
+		return fmt.Errorf("workflow set editors: editor repo not wired")
+	}
+	current, err := s.definitions.GetDefinition(ctx, tenantID, workflowID)
+	if err != nil {
+		return err
+	}
+	if err := s.checkOwnership(ctx, tenantID, actorID, current.CreatedBy, nil, OpAccess); err != nil {
+		return err
+	}
+	before, err := s.editors.ListEditors(ctx, tenantID, current.ID)
+	if err != nil {
+		return fmt.Errorf("workflow set editors: list: %w", err)
+	}
+	audit, err := newWorkflowChangeAudit(current.ID, auditdomain.ChangeOpUpdate, actorID,
+		workflowSafeProjectionWithEditors(current, before), workflowSafeProjectionWithEditors(current, editorIDs))
+	if err != nil {
+		return err
+	}
+	if err := s.editors.ReplaceEditors(ctx, tenantID, current.ID, editorIDs, actorID, audit); err != nil {
+		return err
+	}
+	s.logger.Info("workflow editors updated",
+		zap.String("workflow", workflowID), zap.Int("editors", len(editorIDs)))
+	return nil
 }
 
 func (s *DefinitionService) GetVersion(ctx context.Context, tenantID, id string) (*domain.Version, error) {
@@ -170,6 +248,12 @@ func (s *DefinitionService) GetVersion(ctx context.Context, tenantID, id string)
 
 func (s *DefinitionService) Publish(ctx context.Context, tenantID, id string, actorID string) (*domain.Version, error) {
 	definition, err := s.definitions.GetDefinition(ctx, tenantID, id)
+	if err != nil {
+		return nil, err
+	}
+	// 所有权判定与 Update 一致：白名单 member 经 editorActor 传参由原子发布器
+	// 在写事务内复查白名单，owner/admin 走空 actor 路径。
+	editorActor, err := s.resolveUpdateActor(ctx, tenantID, actorID, definition)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +267,7 @@ func (s *DefinitionService) Publish(ctx context.Context, tenantID, id string, ac
 		return nil, err
 	}
 	if publisher, ok := s.versions.(port.AtomicVersionPublisher); ok {
-		version, err := publisher.CreateNextVersion(ctx, tenantID, definition, s.newID(), "", ev)
+		version, err := publisher.CreateNextVersion(ctx, tenantID, definition, s.newID(), editorActor, ev)
 		if err != nil {
 			s.recordFailure(ctx, id, "publish", err)
 			return nil, err

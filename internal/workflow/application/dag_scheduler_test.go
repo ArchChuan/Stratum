@@ -242,7 +242,7 @@ func (r *scriptedRegistry) Execute(ctx context.Context, request port.NodeExecuti
 func createPublishedRun(t *testing.T, store *dagStore, registry port.NodeExecutorRegistry, spec domain.Spec) (*application.RunService, *domain.Run) {
 	t.Helper()
 	ids := &ids{}
-	definitions := application.NewDefinitionService(store, store, ids.NewID)
+	definitions := newOwnerDefinitionService(store, ids.NewID)
 	definition, err := definitions.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{
 		Name: "DAG",
 		Spec: spec,
@@ -624,7 +624,7 @@ func TestRunStartAndRecoveryUseDistinctAtomicEvents(t *testing.T) {
 	base := newDAGStore()
 	store := &startCheckpointStore{dagStore: base}
 	ids := &ids{}
-	definitions := application.NewDefinitionService(store, store, ids.NewID)
+	definitions := newOwnerDefinitionService(store, ids.NewID)
 	definition, err := definitions.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Events", Spec: domain.Spec{Nodes: []domain.Node{{ID: "one", Type: domain.NodeTypeAgent, AgentID: "a"}}}}, "u-1")
 	require.NoError(t, err)
 	version, err := definitions.Publish(context.Background(), "tenant-1", definition.ID, "u-1")
