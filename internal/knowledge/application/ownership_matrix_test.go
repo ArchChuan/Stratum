@@ -225,6 +225,36 @@ func TestWorkspaceUpdateEditorGranted(t *testing.T) {
 	require.Len(t, repo.audits, 1)
 }
 
+// TestWorkspaceUpdateMemberConfigDenied pins the I-1 config boundary: a
+// whitelisted member may edit name/description, but config stays admin-only —
+// a member PATCH carrying config fails closed with ErrForbidden (the frontend
+// isAdmin gate is UI only; the service is the security boundary).
+func TestWorkspaceUpdateMemberConfigDenied(t *testing.T) {
+	t.Parallel()
+
+	repo := newFakeWorkspaceRepo()
+	ws := seedWorkspace(repo, "ws1")
+	ws.CreatedBy = "owner-user"
+	editors := newStubKnowledgeEditorRepo()
+	editors.editors[ws.ID] = []string{"editor-1"}
+	svc, _ := buildWorkspaceService(repo)
+	svc.SetTenantRoleResolver(stubTenantRole{role: "member"})
+	svc.SetEditorRepo(editors)
+
+	cfg := domain.WorkspaceConfig{TopK: 5}
+	_, err := svc.UpdateWorkspace(context.Background(), "t1", "ws1",
+		UpdateWorkspaceInput{Config: &cfg}, "editor-1")
+	require.ErrorIs(t, err, domain.ErrForbidden)
+	require.Empty(t, repo.audits, "denied config update must not persist or audit")
+
+	// 同一 member 仅改 description 仍可编辑（I-1 承诺的编辑面）。
+	desc := "new desc"
+	_, err = svc.UpdateWorkspace(context.Background(), "t1", "ws1",
+		UpdateWorkspaceInput{Description: &desc}, "editor-1")
+	require.NoError(t, err)
+	require.Len(t, repo.audits, 1)
+}
+
 // TestWorkspaceDeleteEditorDenied pins the delete column: editors never grant
 // delete rights — the creator passes, a granted editor is denied.
 func TestWorkspaceDeleteEditorDenied(t *testing.T) {

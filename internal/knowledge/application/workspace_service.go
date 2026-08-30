@@ -248,6 +248,9 @@ func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, tenantID, name s
 	if err != nil {
 		return nil, err
 	}
+	if err := s.rejectMemberConfigUpdate(editorActor, in); err != nil {
+		return nil, err
+	}
 	before := KnowledgeSafeProjection(current)
 
 	var renameTo *string
@@ -273,6 +276,17 @@ func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, tenantID, name s
 	}
 	// after is the merged copy; no further in-memory sync needed.
 	return after, nil
+}
+
+// rejectMemberConfigUpdate 拒绝白名单 member 携带 config 的更新：I-1 方案 a 下
+// member 编辑面仅限 name/description，config 属管理操作仅 owner/admin 可改。
+// 前端 isAdmin 门禁只是 UI，这里按 editorActor 判别 fail-closed——直连 API
+// 携带 config 的 member 请求整体 403（owner/admin 的 editorActor 为空，不受影响）。
+func (s *WorkspaceService) rejectMemberConfigUpdate(editorActor string, in UpdateWorkspaceInput) error {
+	if editorActor != "" && in.Config != nil {
+		return domain.ErrForbidden
+	}
+	return nil
 }
 
 // recordFailure 旁路记录一次失败的知识库工作区创建/更新（best-effort）。
