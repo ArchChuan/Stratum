@@ -272,7 +272,7 @@ func (h *WorkflowHandler) SetWorkflowEditors(c *gin.Context) {
 		return
 	}
 	var req struct {
-		EditorIDs []string `json:"editorIds" binding:"required"`
+		EditorIDs []string `json:"editorIds"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))

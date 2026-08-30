@@ -462,24 +462,43 @@ func TestWorkflowHandlerSetEditors(t *testing.T) {
 	require.Equal(t, "admin-1", definitions.setEditors.actorID)
 }
 
-func TestWorkflowHandlerSetEditorsRejectsMissingEditorIDs(t *testing.T) {
+// TestWorkflowHandlerSetEditorsAcceptsEmptyList pins the cleared-whitelist
+// semantics: `binding:"required"` removed, so both a missing editorIds field
+// and an explicit empty array are accepted (清空 = 仅 creator 可编辑，由 service
+// 所有权矩阵 + ReplaceEditors 空集处理收敛)。
+func TestWorkflowHandlerSetEditorsAcceptsEmptyList(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	definitions := &workflowDefinitionFake{}
-	h := handler.NewWorkflowHandler(definitions, &workflowRunFake{})
-	r := gin.New()
-	r.Use(middleware.ErrorHandler(zap.NewNop()))
-	r.Use(func(c *gin.Context) {
-		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), "tenant-1"))
-		c.Set(middleware.ContextKeySub, "admin-1")
-		c.Set(middleware.ContextKeyRole, "admin")
-		c.Next()
-	})
-	r.PUT("/workflows/:id/editors", h.SetWorkflowEditors)
+	cases := []struct {
+		name  string
+		body  string
+		want  []string
+	}{
+		{name: "missing field defaults to empty", body: `{}`, want: nil},
+		{name: "explicit empty array", body: `{"editorIds":[]}`, want: []string{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			definitions := &workflowDefinitionFake{}
+			h := handler.NewWorkflowHandler(definitions, &workflowRunFake{})
+			r := gin.New()
+			r.Use(middleware.ErrorHandler(zap.NewNop()))
+			r.Use(func(c *gin.Context) {
+				c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), "tenant-1"))
+				c.Set(middleware.ContextKeySub, "admin-1")
+				c.Set(middleware.ContextKeyRole, "admin")
+				c.Next()
+			})
+			r.PUT("/workflows/:id/editors", h.SetWorkflowEditors)
 
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPut, "/workflows/wf-1/editors", strings.NewReader(`{}`))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusBadRequest, w.Code)
-	require.Zero(t, definitions.setEditors.calls)
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPut, "/workflows/wf-1/editors", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			r.ServeHTTP(w, req)
+			require.Equal(t, http.StatusOK, w.Code)
+			require.Equal(t, 1, definitions.setEditors.calls)
+			require.Equal(t, "wf-1", definitions.setEditors.workflowID)
+			require.Equal(t, "admin-1", definitions.setEditors.actorID)
+			require.Equal(t, tc.want, definitions.setEditors.editorIDs)
+		})
+	}
 }

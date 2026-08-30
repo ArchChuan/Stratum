@@ -50,7 +50,7 @@ func enforceOwnership(role, actorID, createdBy string, editors []string, op Owne
 		// admin 中仅破坏性删除要求 creator 本人；Rollback 属运维操作，不要求。
 		return enforceAdmin(createdBy, actorID, op)
 	case "member":
-		return enforceMember(actorID, editors, op)
+		return enforceMember(actorID, createdBy, editors, op)
 	default:
 		return domain.ErrForbidden
 	}
@@ -65,10 +65,15 @@ func enforceAdmin(createdBy, actorID string, op OwnershipOp) error {
 }
 
 // enforceMember applies the member row of the ownership matrix：高破坏性写
-// 操作与管理白名单 member 也无权执行/回退/管理，仅白名单成员可编辑。
-func enforceMember(actorID string, editors []string, op OwnershipOp) error {
+// 操作与管理白名单 member 也无权执行/回退/管理，仅白名单成员可编辑。creator
+// 对自己创建的工作流始终可编辑（不依赖 editor 行）——清空白名单后「仅 creator
+// 可编辑」仍可达；createdBy 为服务端字段，客户端不可伪造。
+func enforceMember(actorID, createdBy string, editors []string, op OwnershipOp) error {
 	if op == OpDelete || op == OpRollback || op == OpAccess {
 		return domain.ErrForbidden
+	}
+	if actorID == createdBy {
+		return nil
 	}
 	if isGrantedEditor(actorID, editors) {
 		return nil
