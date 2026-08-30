@@ -469,9 +469,9 @@ func TestWorkflowHandlerSetEditors(t *testing.T) {
 func TestWorkflowHandlerSetEditorsAcceptsEmptyList(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cases := []struct {
-		name  string
-		body  string
-		want  []string
+		name string
+		body string
+		want []string
 	}{
 		{name: "missing field defaults to empty", body: `{}`, want: nil},
 		{name: "explicit empty array", body: `{"editorIds":[]}`, want: []string{}},
