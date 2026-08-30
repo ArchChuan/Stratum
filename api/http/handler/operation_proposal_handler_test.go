@@ -19,13 +19,16 @@ import (
 )
 
 type opProposalReviewFake struct {
-	proposals []domain.OperationProposal
-	proposal  domain.OperationProposal
-	err       error
-	tenantID  string
-	actorID   string
-	page      int
-	pageSize  int
+	proposals    []domain.OperationProposal
+	proposal     domain.OperationProposal
+	err          error
+	tenantID     string
+	actorID      string
+	resourceType string
+	resourceID   string
+	resourceName string
+	page         int
+	pageSize     int
 }
 
 func (f *opProposalReviewFake) ListPending(_ context.Context, tenantID, userID string) ([]domain.OperationProposal, error) {
@@ -64,8 +67,9 @@ func (f *opProposalReviewFake) ListMine(_ context.Context, tenantID, userID stri
 	}
 	return mine, nil
 }
-func (f *opProposalReviewFake) ProposeGrantEditor(_ context.Context, tenantID, actorID, _, _, _ string) error {
+func (f *opProposalReviewFake) ProposeGrantEditor(_ context.Context, tenantID, actorID, resourceType, resourceID, resourceName string) error {
 	f.tenantID, f.actorID = tenantID, actorID
+	f.resourceType, f.resourceID, f.resourceName = resourceType, resourceID, resourceName
 	return f.err
 }
 func (f *opProposalReviewFake) ListHistory(_ context.Context, tenantID, actor string, page, pageSize int) ([]domain.OperationProposal, int, error) {
@@ -123,6 +127,28 @@ func opProposalRouter(review operationProposalReviewService, selfModify agentSel
 	router.POST("/operation-proposals/:id/reject", h.Reject)
 	router.POST("/operation-proposals/:id/cancel", h.Cancel)
 	router.POST("/agents/:id/self-modify", h.SelfModify)
+	return router
+}
+
+// opProposalGrantRouter registers the six member-facing grant_editor routes —
+// mirroring api/http/router.go — so handler tests exercise real FullPath
+// resolution of grantRouteResourceType.
+func opProposalGrantRouter(review operationProposalReviewService) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(middleware.ErrorHandler(zap.NewNop()))
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), "tenant-1"))
+		c.Set(middleware.ContextKeySub, "admin-1")
+		c.Next()
+	})
+	h := NewOperationProposalHandler(review, &opSelfModifyFake{})
+	router.POST("/agents/:id/request-editor", h.RequestEditorAccess)
+	router.POST("/skills/:id/request-editor", h.RequestEditorAccess)
+	router.POST("/knowledge/workspaces/:name/documents/:documentID/request-access", h.RequestEditorAccess)
+	router.POST("/mcp/servers/:id/request-editor", h.RequestEditorAccess)
+	router.POST("/knowledge/workspaces/:name/request-editor", h.RequestEditorAccess)
+	router.POST("/workflows/:id/request-editor", h.RequestEditorAccess)
 	return router
 }
 
@@ -268,4 +294,93 @@ func TestOperationProposalHandlerSelfModifySurfacesUsageWarning(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Contains(t, recorder.Body.String(), `"usageWarning"`)
+}
+
+// TestGrantRouteResourceTypeCoversAllGrantRoutes pins grantRouteResourceType to
+// the six request-editor routes registered in api/http/router.go. Adding a
+// route without mapping (or an orphan mapping) fails this test.
+func TestGrantRouteResourceTypeCoversAllGrantRoutes(t *testing.T) {
+	want := map[string]string{
+		"/agents/:id/request-editor":                                       "agent",
+		"/skills/:id/request-editor":                                       "skill",
+		"/knowledge/workspaces/:name/documents/:documentID/request-access": "knowledge_doc",
+		"/mcp/servers/:id/request-editor":                                  "mcp",
+		"/knowledge/workspaces/:name/request-editor":                       "knowledge_workspace",
+		"/workflows/:id/request-editor":                                    "workflow",
+	}
+	require.Len(t, grantRouteResourceType, len(want), "grantRouteResourceType must match the six registered grant routes exactly")
+	for path, resourceType := range want {
+		got, ok := grantRouteResourceType[path]
+		require.True(t, ok, "missing grant route mapping: %s", path)
+		require.Equal(t, resourceType, got, "wrong resource type for route %s", path)
+	}
+}
+
+func TestOperationProposalHandlerRequestEditorAccessAllRoutes(t *testing.T) {
+	cases := []struct {
+		name     string
+		path     string
+		body     string
+		wantType string
+		wantID   string
+		wantName string
+	}{
+		{
+			name: "agent", path: "/agents/agent-1/request-editor",
+			body: `{"resourceType":"agent","resourceName":"My Agent"}`, wantType: "agent", wantID: "agent-1", wantName: "My Agent",
+		},
+		{
+			name: "skill", path: "/skills/skill-1/request-editor",
+			body: `{"resourceType":"skill","resourceName":"My Skill"}`, wantType: "skill", wantID: "skill-1", wantName: "My Skill",
+		},
+		{
+			name: "mcp", path: "/mcp/servers/mcp-1/request-editor",
+			body: `{"resourceType":"mcp","resourceName":"My MCP"}`, wantType: "mcp", wantID: "mcp-1", wantName: "My MCP",
+		},
+		{
+			name: "workflow", path: "/workflows/wf-1/request-editor",
+			body: `{"resourceType":"workflow","resourceName":"My WF"}`, wantType: "workflow", wantID: "wf-1", wantName: "My WF",
+		},
+		{
+			name: "knowledge_doc", path: "/knowledge/workspaces/ws-1/documents/doc-1/request-access",
+			body: `{"resourceType":"knowledge_doc","resourceName":"docs/annual.pdf"}`, wantType: "knowledge_doc", wantID: "doc-1", wantName: "docs/annual.pdf",
+		},
+		{
+			name: "knowledge_workspace", path: "/knowledge/workspaces/kw-1/request-editor",
+			body: `{"resourceType":"knowledge_workspace","resourceName":"My KB"}`, wantType: "knowledge_workspace", wantID: "kw-1", wantName: "My KB",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			review := &opProposalReviewFake{}
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			request.Header.Set("Content-Type", "application/json")
+			opProposalGrantRouter(review).ServeHTTP(recorder, request)
+
+			require.Equal(t, http.StatusAccepted, recorder.Code)
+			require.Equal(t, tc.wantType, review.resourceType)
+			require.Equal(t, tc.wantID, review.resourceID)
+			require.Equal(t, tc.wantName, review.resourceName)
+			require.Equal(t, "admin-1", review.actorID)
+		})
+	}
+}
+
+// TestOperationProposalHandlerRequestEditorAccessRejectsResourceIDInBody pins
+// the closed-body contract: requestEditorAccessBody has no resourceId json
+// tag, so a client body carrying it is rejected by DisallowUnknownFields and
+// never reaches ProposeGrantEditor. (MapErrorToStatus has no sentinel for the
+// decode error, so today the status is 500 — still a rejection; the frontend
+// must send only resourceType + resourceName either way.)
+func TestOperationProposalHandlerRequestEditorAccessRejectsResourceIDInBody(t *testing.T) {
+	review := &opProposalReviewFake{}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/agents/agent-1/request-editor",
+		strings.NewReader(`{"resourceType":"agent","resourceId":"agent-1","resourceName":"My Agent"}`))
+	request.Header.Set("Content-Type", "application/json")
+	opProposalGrantRouter(review).ServeHTTP(recorder, request)
+
+	require.NotEqual(t, http.StatusAccepted, recorder.Code)
+	require.Empty(t, review.resourceType, "malformed body must not reach the service")
 }
