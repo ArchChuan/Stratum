@@ -275,23 +275,8 @@ func (s *PgStore) CreateNextVersion(ctx context.Context, tenantID string, defini
 		if err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(version_no),0)+1 FROM workflow_versions WHERE definition_id=$1`, definition.ID).Scan(&number); err != nil {
 			return err
 		}
-		version, err := definition.Publish(versionID, number)
+		version, err := insertPublishedVersionTx(ctx, tx, definition, versionID, number)
 		if err != nil {
-			return err
-		}
-		raw, err := json.Marshal(version.Spec)
-		if err != nil {
-			return err
-		}
-		inputSchema, err := json.Marshal(version.InputSchema)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO workflow_versions (id,definition_id,version_no,name,description,spec_json,input_schema_json) VALUES ($1,$2,$3,$4,$5,$6,$7)`, version.ID, version.DefinitionID, version.Number, version.Name, version.Description, string(raw), string(inputSchema)); err != nil {
-			return err
-		}
-		// 新发布即成为生效版本：事务内一并写入生效指针，避免发布成功但指针缺失。
-		if _, err := tx.Exec(ctx, `UPDATE workflow_definitions SET active_version_id=$1,updated_at=NOW() WHERE id=$2`, version.ID, version.DefinitionID); err != nil {
 			return err
 		}
 		if err := insertChangeAudit(ctx, tx, ev); err != nil {
@@ -301,6 +286,31 @@ func (s *PgStore) CreateNextVersion(ctx context.Context, tenantID string, defini
 		return nil
 	})
 	return created, err
+}
+
+// insertPublishedVersionTx publishes the next version row and sets the active
+// pointer inside the caller's write transaction：新发布即成为生效版本，事务内
+// 一并写入生效指针，避免发布成功但指针缺失。
+func insertPublishedVersionTx(ctx context.Context, tx pgx.Tx, definition *domain.Definition, versionID string, number int64) (*domain.Version, error) {
+	version, err := definition.Publish(versionID, number)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(version.Spec)
+	if err != nil {
+		return nil, err
+	}
+	inputSchema, err := json.Marshal(version.InputSchema)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO workflow_versions (id,definition_id,version_no,name,description,spec_json,input_schema_json) VALUES ($1,$2,$3,$4,$5,$6,$7)`, version.ID, version.DefinitionID, version.Number, version.Name, version.Description, string(raw), string(inputSchema)); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE workflow_definitions SET active_version_id=$1,updated_at=NOW() WHERE id=$2`, version.ID, version.DefinitionID); err != nil {
+		return nil, err
+	}
+	return version, nil
 }
 
 // SetActiveVersion 把生效指针指回历史已发布版本（回退，不产生新版本）；

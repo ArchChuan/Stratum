@@ -48,22 +48,32 @@ func enforceOwnership(role, actorID, createdBy string, editors []string, op Owne
 		return nil
 	case "admin":
 		// admin 中仅破坏性删除要求 creator 本人；Rollback 属运维操作，不要求。
-		if op == OpDelete && createdBy != actorID {
-			return domain.ErrForbidden
-		}
-		return nil
+		return enforceAdmin(createdBy, actorID, op)
 	case "member":
-		// 高破坏性写操作与管理白名单：白名单 member 也无权执行/回退/管理。
-		if op == OpDelete || op == OpRollback || op == OpAccess {
-			return domain.ErrForbidden
-		}
-		if isGrantedEditor(actorID, editors) {
-			return nil
-		}
-		return domain.ErrForbidden
+		return enforceMember(actorID, editors, op)
 	default:
 		return domain.ErrForbidden
 	}
+}
+
+// enforceAdmin applies the admin row of the ownership matrix.
+func enforceAdmin(createdBy, actorID string, op OwnershipOp) error {
+	if op == OpDelete && createdBy != actorID {
+		return domain.ErrForbidden
+	}
+	return nil
+}
+
+// enforceMember applies the member row of the ownership matrix：高破坏性写
+// 操作与管理白名单 member 也无权执行/回退/管理，仅白名单成员可编辑。
+func enforceMember(actorID string, editors []string, op OwnershipOp) error {
+	if op == OpDelete || op == OpRollback || op == OpAccess {
+		return domain.ErrForbidden
+	}
+	if isGrantedEditor(actorID, editors) {
+		return nil
+	}
+	return domain.ErrForbidden
 }
 
 // checkOwnership resolves the actor's tenant role and applies the matrix.
