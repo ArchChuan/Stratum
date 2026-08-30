@@ -467,7 +467,7 @@ func TestApproveGrantEditorForNewKinds(t *testing.T) {
 	for _, rt := range []string{"mcp", "knowledge_workspace", "workflow"} {
 		require.NoError(t, service.ProposeGrantEditor(ctx, "tenant-1", "member-1", rt, "res-"+rt, "Res"))
 	}
-	// 按序审批 3 个提案，断言 grantEditor 收到正确分发参数。
+	// 逐一审批 3 个提案，断言 grantEditor 收到正确分发参数。
 	var pids []string
 	for id := range repo.proposals {
 		pids = append(pids, id)
@@ -476,5 +476,9 @@ func TestApproveGrantEditorForNewKinds(t *testing.T) {
 	for _, pid := range pids {
 		require.NoError(t, service.Approve(ctx, "tenant-1", "admin-1", pid, "granted"))
 	}
-	require.Len(t, got, 3)
+	require.ElementsMatch(t, got, []struct{ rt, rid, eid string }{
+		{"mcp", "res-mcp", "member-1"},
+		{"knowledge_workspace", "res-knowledge_workspace", "member-1"},
+		{"workflow", "res-workflow", "member-1"},
+	})
 }
