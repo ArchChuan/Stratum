@@ -38,6 +38,8 @@ export const workspaceStatsSchema = z
       })
       .passthrough()
       .optional(),
+    // 白名单 member 集合（详情页据此回显「申请编辑权限」按钮状态；nil→[] 兜底）
+    editors: z.array(z.string()).optional().default([]),
   })
   .passthrough();
 export type WorkspaceStats = z.infer<typeof workspaceStatsSchema>;

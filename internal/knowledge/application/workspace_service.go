@@ -57,11 +57,14 @@ type UpdateWorkspaceInput struct {
 }
 
 // WorkspaceStatsResult bundles the workspace metadata and milvus stats.
+// Editors 是当前白名单 member 集合（详情页据此回显「申请编辑权限」按钮状态；
+// ListEditors nil-safe，未装配 editorRepo 时为 nil）。
 type WorkspaceStatsResult struct {
 	Name        string
 	Description string
 	Config      domain.WorkspaceConfig
 	Stats       map[string]any
+	Editors     []string
 }
 
 // IngestUploadResult mirrors the JSON shape returned by POST /knowledge/ingest.
@@ -419,11 +422,23 @@ func (s *WorkspaceService) GetWorkspaceStats(
 			stats["vector_count"] = 0
 		}
 	}
+	return s.buildStatsResult(ctx, tenantID, name, ws, stats)
+}
+
+// buildStatsResult loads the granted editor set (ListEditors nil-safe，未装配
+// editorRepo 时为 nil) 并组装 stats 响应。拆分出来以控制 GetWorkspaceStats 的
+// 圈复杂度（Ratchet：行为保持不变，仅等价重构）。
+func (s *WorkspaceService) buildStatsResult(ctx context.Context, tenantID, name string, ws *domain.Workspace, stats map[string]any) (*WorkspaceStatsResult, error) {
+	editors, err := s.ListEditors(ctx, tenantID, ws.ID)
+	if err != nil {
+		return nil, err
+	}
 	return &WorkspaceStatsResult{
 		Name:        name,
 		Description: ws.Description,
 		Config:      ws.Config,
 		Stats:       stats,
+		Editors:     editors,
 	}, nil
 }
 

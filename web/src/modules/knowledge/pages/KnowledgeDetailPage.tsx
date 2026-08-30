@@ -14,6 +14,8 @@ export const KnowledgeDetailPage = () => {
     name,
     navigate,
     isAdmin,
+    canEdit,
+    canRequestEditor,
     stats,
     statsLoading,
     configForm,
@@ -56,9 +58,9 @@ export const KnowledgeDetailPage = () => {
         name={name}
         description={stats?.description}
         onBack={() => navigate('/knowledge')}
-        onDescriptionSave={isAdmin ? handleDescriptionSave : undefined}
-        onNameSave={isAdmin ? handleNameSave : undefined}
-        canRequestEditor={!isAdmin}
+        onDescriptionSave={canEdit ? handleDescriptionSave : undefined}
+        onNameSave={canEdit ? handleNameSave : undefined}
+        canRequestEditor={canRequestEditor}
       />
 
       <WorkspaceStatsCard stats={stats ?? undefined} docCount={documents.length || undefined} />

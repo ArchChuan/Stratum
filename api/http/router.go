@@ -589,7 +589,10 @@ func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 
 		adminMW := []gin.HandlerFunc{middleware.RequireTenantRole("admin")}
 		knowledgeGroup.POST("/workspaces", append(adminMW, requireActive, ragHandler.CreateWorkspace)...)
-		knowledgeGroup.PATCH("/workspaces/:name", append(adminMW, requireActive, ragHandler.UpdateWorkspace)...)
+		// PATCH name/description 对白名单 member 开放（service UpdateWorkspace
+		// 所有权矩阵 fail-closed：owner/admin 放行，白名单 member 放行，其余 403）。
+		// config/upload/doc/access/delete 保持 admin 门禁。
+		knowledgeGroup.PATCH("/workspaces/:name", requireActive, ragHandler.UpdateWorkspace)
 		knowledgeGroup.DELETE("/workspaces/:name", append(adminMW, requireActive, ragHandler.DeleteWorkspace)...)
 		knowledgeGroup.PUT("/workspaces/:name/editors", append(adminMW, requireActive, ragHandler.SetWorkspaceEditors)...)
 		knowledgeGroup.DELETE("/workspaces/:name/documents/:documentID", append(adminMW, requireActive, ragHandler.DeleteDocument)...)

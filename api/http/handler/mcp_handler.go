@@ -187,7 +187,8 @@ func (h *MCPHandler) GetServerStatus(c *gin.Context) {
 //
 //	挂载后 suspended tenant 的 admin/owner 不能直接改配置、member 不能创建审批。
 //
-// adminMW  — 运行时管理操作（断开/重连/读取完整配置）再追加，仅 admin+ 可用。
+// adminMW  — 运行时管理操作（断开/重连）再追加，仅 admin+ 可用；完整配置读取/删除
+// 已移入 write 组（member+requireActive，见下 D5 分流）。
 //
 // D5：连接/更新/删除配置/设置编辑者/设置工具策略 5 个写操作从 adminMW 移出，改 handler 内
 // 角色分流（admin/owner 直接执行；member 创建 mcp_policy/mcp_server 审批返回 202 pending）。
