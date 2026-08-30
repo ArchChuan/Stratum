@@ -38,10 +38,13 @@ describe('WorkflowCatalogPage', () => {
     });
   });
 
-  it('shows the catalog to members without exposing authoring actions', async () => {
+  it('shows the catalog to members with create/edit but no delete', async () => {
     render(<MemoryRouter><WorkflowCatalogPage /></MemoryRouter>);
     expect(await screen.findByText('客户研究')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '新建工作流' })).not.toBeInTheDocument();
+    // P2 白名单：新建/编辑放开给 member（白名单判定在 designer 页），删除保持 admin。
+    expect(screen.getByRole('button', { name: '新建工作流' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '编辑草稿' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '删除草稿' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '运行工作流' }));
     expect(navigate).toHaveBeenCalledWith('/workflows/workflow-1/run');
   });

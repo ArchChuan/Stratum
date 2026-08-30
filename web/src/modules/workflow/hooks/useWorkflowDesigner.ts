@@ -6,6 +6,8 @@ import { createInitialEditorState, workflowEditorReducer, type WorkflowEditorAct
 import { applyAutoLayout } from '../model/layout';
 import type { WorkflowDefinition, WorkflowInputSchema } from '../model/workflow';
 
+import { useAuth, useTenantRole } from '@/modules/iam';
+import { useRequestEditorAccess } from '@/shared/hooks';
 import { extractErrorMessage } from '@/shared/lib';
 
 const emptyInputSchema: WorkflowInputSchema = { task_label: '', task_description: '', fields: [] };
@@ -113,8 +115,21 @@ export const useWorkflowDesigner = (workflowId?: string) => {
     }
   };
 
+  // P2 白名单：canEdit = admin/owner/白名单成员；新建页（无 id）恒可编辑（创建即 creator）。
+  const { user } = useAuth();
+  const { isAdmin, isOwner } = useTenantRole();
+  const editors = definition?.editors ?? [];
+  const canEdit = !workflowId || isAdmin || isOwner || editors.includes(user?.sub ?? '');
+  const { requesting, request: requestEditor } = useRequestEditorAccess('workflow', workflowId ?? '', { resourceName: name });
+  const saveEditors = async (editorIds: string[]): Promise<void> => {
+    if (!workflowId) return;
+    await workflowApi.setWorkflowEditors(workflowId, editorIds);
+    message.success({ content: '可编辑人已更新', duration: 2 });
+  };
+
   return {
     editor, dispatch, definition, name, description, inputSchema, setName, setDescription, setInputSchema,
     loading, saving, validating, publishing, dirty: editor.dirty || detailsDirty, validatedRevision, save, validate, publish,
+    canEdit, editors, createdBy: definition?.created_by ?? '', isAdmin, isOwner, requesting, requestEditor, saveEditors,
   };
 };

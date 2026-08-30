@@ -12,8 +12,8 @@ import { PrivateRoute } from '@/modules/iam';
 
 export const workflowRoutes = [
   <Route key="workflows" path="/workflows" element={<PrivateRoute><WorkflowCatalogPage /></PrivateRoute>} />,
-  <Route key="workflow-new" path="/workflows/new" element={<PrivateRoute requiredTenantRole="admin"><WorkflowDesignerPage /></PrivateRoute>} />,
-  <Route key="workflow-edit" path="/workflows/:id/edit" element={<PrivateRoute requiredTenantRole="admin"><WorkflowDesignerPage /></PrivateRoute>} />,
+  <Route key="workflow-new" path="/workflows/new" element={<PrivateRoute><WorkflowDesignerPage /></PrivateRoute>} />,
+  <Route key="workflow-edit" path="/workflows/:id/edit" element={<PrivateRoute><WorkflowDesignerPage /></PrivateRoute>} />,
   <Route key="workflow-detail" path="/workflows/:id" element={<PrivateRoute><WorkflowDetailPage /></PrivateRoute>} />,
   <Route key="workflow-version" path="/workflows/:id/versions/:versionId" element={<PrivateRoute><WorkflowVersionPage /></PrivateRoute>} />,
   <Route key="workflow-run" path="/workflows/:id/run" element={<PrivateRoute><WorkflowExecutionPage /></PrivateRoute>} />,

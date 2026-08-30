@@ -4,6 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 
 import { WorkflowCanvas } from '../components/WorkflowCanvas';
 import { WorkflowDesignerHeader } from '../components/WorkflowDesignerHeader';
+import { WorkflowEditorsPanel } from '../components/WorkflowEditorsPanel';
 import { WorkflowInputSchemaEditor } from '../components/WorkflowInputSchemaEditor';
 import { WorkflowMetadataForm } from '../components/WorkflowMetadataForm';
 import { WorkflowNodeInspector } from '../components/WorkflowNodeInspector';
@@ -13,6 +14,7 @@ import { useWorkflowResources } from '../hooks/useWorkflowResources';
 import { upstreamNodes } from '../model/graph';
 import type { WorkflowInputSchema } from '../model/workflow';
 
+import { RequestEditorButton } from '@/shared/components';
 import { useResponsive } from '@/shared/hooks';
 
 const WorkflowDesignerDesktop = () => {
@@ -33,6 +35,17 @@ const WorkflowDesignerDesktop = () => {
   }, [designer.description, designer.inputSchema, designer.name, form]);
 
   if (designer.loading) return <Skeleton active />;
+  // 非白名单普通成员只读：新建页（无 id）恒可编辑（创建即 creator），不进入只读分支。
+  if (!designer.canEdit && id) {
+    return (
+      <Result
+        status="info"
+        title="无编辑权限"
+        subTitle="工作流只读。如需编辑，请提交权限申请。"
+        extra={<RequestEditorButton resourceType="workflow" resourceId={id ?? ''} options={{ resourceName: designer.name }} />}
+      />
+    );
+  }
 
   const selectedNode = designer.editor.selected?.kind === 'node'
     ? designer.editor.spec.nodes.find((node) => node.id === designer.editor.selected?.id)
@@ -75,6 +88,9 @@ const WorkflowDesignerDesktop = () => {
       onValidate={designer.validate}
       onPublish={publish}
     />
+    {(designer.isAdmin || designer.isOwner) && (
+      <WorkflowEditorsPanel editors={designer.editors} onSave={(ids) => designer.saveEditors(ids)} />
+    )}
     <WorkflowValidationPanel validated={validated} />
     <Form
       form={form}

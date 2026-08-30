@@ -13,11 +13,21 @@ vi.mock('../api/workflow.api', () => ({ workflowApi: {
   validateWorkflow: vi.fn(),
   publishWorkflow: vi.fn(),
 } }));
+// P2 白名单：hook 依赖 useAuth/useTenantRole 与共享申请 hook，mock 掉 iam 与 operation-gate，
+// 避免 antd 全量 mock 因 iam barrel 组件（Typography 等）缺导出而炸。
+vi.mock('@/modules/iam', () => ({
+  useAuth: () => ({ user: { sub: 'u-1' } }),
+  useTenantRole: () => ({ role: 'admin', isAdmin: true, isOwner: false, isMember: false, hasTenantRole: () => true }),
+}));
+vi.mock('@/modules/operation-gate', () => ({
+  operationProposalApi: { requestEditorAccess: vi.fn().mockResolvedValue({}) },
+}));
 
 const definition = {
   id: 'workflow-1', name: '研究流程', description: '', revision: 3,
   spec: { nodes: [{ id: 'node-1', type: 'approval' as const, name: '确认', agent_id: '', input_mapping: {}, output_mapping: {}, retry: { max_attempts: 0, backoff_ms: 0 }, timeout_ms: 0 }], edges: [], max_concurrency: 0 },
   input_schema: { task_label: '主题', task_description: '', fields: [] },
+  created_by: 'u-2', editors: ['u-1'],
   created_at: '2026-07-23T00:00:00Z', updated_at: '2026-07-23T00:00:00Z',
 };
 

@@ -5,12 +5,10 @@ const { Paragraph, Title } = Typography;
 
 export const WorkflowCatalogHeader = ({
   query,
-  canManage,
   onSearch,
   onCreate,
 }: {
   query: string;
-  canManage: boolean;
   onSearch: (value: string) => void;
   onCreate: () => void;
 }) => (
@@ -30,7 +28,7 @@ export const WorkflowCatalogHeader = ({
         value={query}
         onChange={(event) => onSearch(event.target.value)}
       />
-      {canManage && <Button aria-label="新建工作流" type="primary" icon={<PlusOutlined />} onClick={onCreate}>新建工作流</Button>}
+      <Button aria-label="新建工作流" type="primary" icon={<PlusOutlined />} onClick={onCreate}>新建工作流</Button>
     </Space>
   </header>
 );

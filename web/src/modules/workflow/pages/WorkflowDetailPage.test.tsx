@@ -36,6 +36,7 @@ const definition = {
   id: 'workflow-1', name: '客户研究', description: '形成研究摘要', revision: 3,
   active_version_id: 'v2', spec: { nodes: [], edges: [], max_concurrency: 0 },
   input_schema: { task_label: '研究主题', task_description: '', fields: [] },
+  created_by: 'u-2', editors: ['u-1'],
   created_at: '2026-07-23T00:00:00Z', updated_at: '2026-07-24T00:00:00Z',
 };
 const versionsPage = {
