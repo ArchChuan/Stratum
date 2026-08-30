@@ -215,7 +215,7 @@ func (h *MCPHandler) RegisterRoutes(router *gin.Engine, mw []gin.HandlerFunc, wr
 	v1.POST("/servers", write(h.ConnectServer)...)
 	v1.PUT("/servers/:id", write(h.UpdateServer)...)
 	v1.PUT("/servers/:id/editors", write(h.SetMCPServerEditors)...)
-	v1.GET("/servers/:id/config", admin(h.GetServerConfig)...)
+	v1.GET("/servers/:id/config", write(h.GetServerConfig)...)
 	v1.DELETE("/servers/:id", admin(h.DisconnectServer)...)
 	v1.DELETE("/servers/:id/config", write(h.DeleteServerConfig)...)
 	v1.POST("/servers/:id/reconnect", admin(h.ReconnectServer)...)
