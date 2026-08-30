@@ -421,3 +421,60 @@ func TestOperationProposalCancelAuthorization(t *testing.T) {
 		require.ErrorIs(t, err, domain.ErrProposalForbidden)
 	})
 }
+
+// TestProposeGrantEditorAllResourceTypes pins the six-kind resourceType
+// whitelist on ProposeGrantEditor (agent / skill / knowledge_doc / mcp /
+// knowledge_workspace / workflow); unknown kinds must fail closed.
+func TestProposeGrantEditorAllResourceTypes(t *testing.T) {
+	ctx := context.Background()
+	repo := newOperationProposalRepoFake()
+	service := newOperationProposalServiceForTest(repo, roleResolverFake{role: "member"}, nil)
+
+	for _, rt := range []string{"agent", "skill", "knowledge_doc", "mcp", "knowledge_workspace", "workflow"} {
+		t.Run(rt, func(t *testing.T) {
+			err := service.ProposeGrantEditor(ctx, "tenant-1", "member-1", rt, "res-1", "Res Name")
+			require.NoError(t, err)
+			found := false
+			for _, p := range repo.proposals {
+				if p.OpType == string(port.OpGrantEditor) && p.ProposerID == "member-1" && p.Fingerprint == "grant_editor|"+rt+"|res-1|member-1" {
+					found = true
+				}
+			}
+			require.True(t, found, "expected grant_editor proposal for %s", rt)
+		})
+	}
+
+	// 非法类型 fail-closed。
+	err := service.ProposeGrantEditor(ctx, "tenant-1", "member-1", "bogus", "res-1", "Res")
+	require.ErrorIs(t, err, domain.ErrProposalInvalid)
+}
+
+// TestApproveGrantEditorForNewKinds locks the grantEditor dispatch contract for
+// the three kinds added by the unified-resource-whitelist work: approval of an
+// mcp / knowledge_workspace / workflow proposal must dispatch the grant with
+// (resourceType, resourceID, editorID) intact.
+func TestApproveGrantEditorForNewKinds(t *testing.T) {
+	ctx := context.Background()
+	repo := newOperationProposalRepoFake()
+	service := newOperationProposalServiceForTest(repo, roleResolverFake{role: "admin"}, nil)
+
+	var got []struct{ rt, rid, eid string }
+	service.WithGrantEditor(func(_ context.Context, _, rt, rid, eid string) error {
+		got = append(got, struct{ rt, rid, eid string }{rt, rid, eid})
+		return nil
+	})
+
+	for _, rt := range []string{"mcp", "knowledge_workspace", "workflow"} {
+		require.NoError(t, service.ProposeGrantEditor(ctx, "tenant-1", "member-1", rt, "res-"+rt, "Res"))
+	}
+	// 按序审批 3 个提案，断言 grantEditor 收到正确分发参数。
+	var pids []string
+	for id := range repo.proposals {
+		pids = append(pids, id)
+	}
+	require.Len(t, pids, 3)
+	for _, pid := range pids {
+		require.NoError(t, service.Approve(ctx, "tenant-1", "admin-1", pid, "granted"))
+	}
+	require.Len(t, got, 3)
+}
