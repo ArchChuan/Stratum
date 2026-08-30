@@ -135,7 +135,7 @@ func (r approvalResolverFake) ResolveAgentApproval(_ context.Context, _, _ strin
 func newExecuteService(t *testing.T, executors port.NodeExecutorRegistry) (*executeStore, *application.RunService) {
 	t.Helper()
 	store := &executeStore{memoryStore: newMemoryStore()}
-	definitions := application.NewDefinitionService(store, store, (&ids{}).NewID)
+	definitions := newOwnerDefinitionService(store, (&ids{}).NewID)
 	def, err := definitions.Create(context.Background(), "t1", application.CreateDefinitionCommand{
 		Name: "Pause", Spec: domain.Spec{Nodes: []domain.Node{{ID: "one", Type: domain.NodeTypeAgent, AgentID: "agent-1"}}},
 	}, "u-1")

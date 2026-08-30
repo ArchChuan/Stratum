@@ -87,7 +87,7 @@ export const MCPServersPage = () => {
     },
     {
       title: '操作',
-      width: isAdmin ? 260 : 80,
+      width: isAdmin ? 260 : 140,
       render: (_: unknown, r: MCPServer) => (
         <Space size={4}>
           <Button
@@ -98,16 +98,18 @@ export const MCPServersPage = () => {
           >
             详情
           </Button>
+          {/* P2：编辑入口放开给成员——是否真正可编辑由编辑页 config.editors 白名单判定，
+              非白名单成员进入后为只读 + 申请按钮。断开/连接/删除仍仅 admin。 */}
+          <Button
+            size="small"
+            type="link"
+            onClick={() => navigate(`/mcp/${r.id}/edit`)}
+            style={{ padding: '0 4px' }}
+          >
+            编辑
+          </Button>
           {isAdmin && (
             <>
-              <Button
-                size="small"
-                type="link"
-                onClick={() => navigate(`/mcp/${r.id}/edit`)}
-                style={{ padding: '0 4px' }}
-              >
-                编辑
-              </Button>
               {r.status === 'connected' ? (
                 <DangerPopconfirm
                   title="确认断开此服务器连接？"
@@ -229,14 +231,16 @@ export const MCPServersPage = () => {
                       aria-label="查看详情"
                       onClick={() => setDetailServer(server)}
                     />
+                    {/* P2：编辑入口放开给成员（编辑页 config.editors 白名单判定只读/可编辑）。
+                         断开/连接/删除仍仅 admin。 */}
+                    <Button
+                      size="small"
+                      icon={<EditOutlined />}
+                      aria-label="编辑服务器"
+                      onClick={() => navigate(`/mcp/${server.id}/edit`)}
+                    />
                     {isAdmin && (
                       <>
-                        <Button
-                          size="small"
-                          icon={<EditOutlined />}
-                          aria-label="编辑服务器"
-                          onClick={() => navigate(`/mcp/${server.id}/edit`)}
-                        />
                         {server.status === 'connected' ? (
                           <DangerPopconfirm
                             title="确认断开此服务器连接？"

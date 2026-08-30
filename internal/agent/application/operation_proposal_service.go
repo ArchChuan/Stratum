@@ -75,7 +75,7 @@ func (s *OperationProposalService) ProposeGrantEditor(ctx context.Context, tenan
 	// whitelist is a second gate so a stale or hand-written client cannot
 	// raise an unknown-kind proposal (deep defence behind the route check).
 	switch resourceType {
-	case "agent", "skill", "knowledge_doc":
+	case "agent", "skill", "knowledge_doc", "mcp", "knowledge_workspace", "workflow":
 	default:
 		return domain.ErrProposalInvalid
 	}

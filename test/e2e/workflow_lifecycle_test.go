@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,8 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/http/handler"
 	"github.com/byteBuilderX/stratum/api/middleware"
+	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
+	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
 	workflowapp "github.com/byteBuilderX/stratum/internal/workflow/application"
 	workflowdomain "github.com/byteBuilderX/stratum/internal/workflow/domain"
 	workflowport "github.com/byteBuilderX/stratum/internal/workflow/domain/port"
@@ -30,6 +33,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+// workflowE2EAdminID is the deterministic actor behind the default admin
+// requests. CreateDefinition auto-grants the creator into the editor
+// whitelist, and that grant fails closed unless the creator is a real tenant
+// member (tenant_members.user_id is a UUID FK to users.id), so the admin
+// actor must be a seeded member, not a bare label.
+const workflowE2EAdminID = "00000000-0000-0000-0000-0000000000a1"
 
 type workflowE2EExecutor struct {
 	mu    sync.Mutex
@@ -56,7 +66,7 @@ func newWorkflowE2ERouter(tenantID string, definitions *workflowapp.DefinitionSe
 	r.Use(func(c *gin.Context) {
 		userID := c.GetHeader("X-E2E-User")
 		if userID == "" {
-			userID = "workflow-e2e-admin"
+			userID = workflowE2EAdminID
 		}
 		role := c.GetHeader("X-E2E-Role")
 		if role == "" {
@@ -90,7 +100,7 @@ func newWorkflowE2ERouter(tenantID string, definitions *workflowapp.DefinitionSe
 }
 
 func workflowRequest(t *testing.T, r http.Handler, method, path string, body any, want int) []byte {
-	return workflowRequestAs(t, r, method, path, body, want, "workflow-e2e-admin", "admin")
+	return workflowRequestAs(t, r, method, path, body, want, workflowE2EAdminID, "admin")
 }
 
 func workflowRequestAs(t *testing.T, r http.Handler, method, path string, body any, want int, userID, role string) []byte {
@@ -123,6 +133,39 @@ func workflowSSERequestAs(t *testing.T, r http.Handler, path, userID, role strin
 	return w
 }
 
+// seedWorkflowMember makes userID a real member of tenantID so the editor
+// eligibility check inside CreateDefinition (creator auto-grant) passes.
+// Mirrors the member seeding in system_assistant_proposal_real_test.go.
+func seedWorkflowMember(t *testing.T, ctx context.Context, pool *pgxpool.Pool, tenantID, userID, role string) {
+	t.Helper()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO public.users (id, github_id, github_login) VALUES ($1, $2, $2)
+		 ON CONFLICT (id) DO NOTHING`,
+		userID, "e2e-github-"+strings.ReplaceAll(tenantID, "-", "")[:12])
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx,
+		`INSERT INTO public.tenant_members (tenant_id, user_id, role) VALUES ($1, $2, $3)`,
+		tenantID, userID, role)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM public.tenant_members WHERE tenant_id=$1 AND user_id=$2`, tenantID, userID)
+		_, _ = pool.Exec(ctx, `DELETE FROM public.users WHERE id=$1`, userID)
+	})
+}
+
+// workflowE2ERoleResolver resolves the actor's real tenant role from
+// public.tenant_members — the same chain production wiring uses
+// (tenantRoleAdapter → iam.TenantService). The DefinitionService ownership
+// matrix fails closed when the resolver is missing, so the E2E must wire it.
+type workflowE2ERoleResolver struct{ members *iamapp.TenantService }
+
+func (r workflowE2ERoleResolver) ResolveTenantRole(ctx context.Context, tenantID, userID string) (string, error) {
+	if r.members == nil {
+		return "", errors.New("members service not wired")
+	}
+	return r.members.GetMemberRole(ctx, tenantID, userID)
+}
+
 func TestWorkflowHTTPPostgresWorkerApprovalRestartAndSSEE2E(t *testing.T) {
 	url := strings.TrimSpace(os.Getenv("STRATUM_TEST_POSTGRES_URL"))
 	if url == "" {
@@ -139,10 +182,13 @@ func TestWorkflowHTTPPostgresWorkerApprovalRestartAndSSEE2E(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, postgres.ProvisionTenantSchema(ctx, pool, tenantID))
 	defer func() { _, _ = pool.Exec(ctx, `DELETE FROM tenants WHERE id=$1`, tenantID) }()
+	seedWorkflowMember(t, ctx, pool, tenantID, workflowE2EAdminID, "admin")
 
 	store := workflowpersist.NewPgStore(pool)
 	newID := uuid.NewString
 	definitions := workflowapp.NewDefinitionService(store, store, newID)
+	members := iamapp.NewTenantService(iampersistence.NewTenantRepo(pool), zap.NewNop())
+	definitions.SetTenantRoleResolver(workflowE2ERoleResolver{members: members})
 	executorA := &workflowE2EExecutor{}
 	runsA := workflowapp.NewRunServiceWithRegistry(store, store, executorA, newID, zap.NewNop())
 	controls := workflowapp.NewControlService(store, newID)
@@ -362,10 +408,13 @@ func TestWorkflowDraftReadAndRollbackE2E(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, postgres.ProvisionTenantSchema(ctx, pool, tenantID))
 	defer func() { _, _ = pool.Exec(ctx, `DELETE FROM tenants WHERE id=$1`, tenantID) }()
+	seedWorkflowMember(t, ctx, pool, tenantID, workflowE2EAdminID, "admin")
 
 	store := workflowpersist.NewPgStore(pool)
 	newID := uuid.NewString
 	definitions := workflowapp.NewDefinitionService(store, store, newID)
+	members := iamapp.NewTenantService(iampersistence.NewTenantRepo(pool), zap.NewNop())
+	definitions.SetTenantRoleResolver(workflowE2ERoleResolver{members: members})
 	runs := workflowapp.NewRunServiceWithRegistry(store, store, &workflowE2EExecutor{}, newID, zap.NewNop())
 	controls := workflowapp.NewControlService(store, newID)
 	router := newWorkflowE2ERouter(tenantID, definitions, runs, controls)

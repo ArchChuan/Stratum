@@ -14,6 +14,14 @@ func workflowSafeProjection(d *domain.Definition) map[string]any {
 	return map[string]any{"id": d.ID, "name": d.Name, "description": d.Description}
 }
 
+// workflowSafeProjectionWithEditors 在基础投影上附加 editors 列表，供白名单
+// 管理变更的 before/after 审计渲染。
+func workflowSafeProjectionWithEditors(d *domain.Definition, editors []string) map[string]any {
+	p := workflowSafeProjection(d)
+	p["editors"] = editors
+	return p
+}
+
 // newWorkflowChangeAudit 构造 workflow 资源变更审计事件。actorID 来自 handler
 // 认证上下文（auth.sub），禁止从 request body 读取。
 func newWorkflowChangeAudit(resourceID, op, actorID string, before, after map[string]any) (*auditdomain.ResourceChangeAuditEvent, error) {

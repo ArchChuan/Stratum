@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	auditdomain "github.com/byteBuilderX/stratum/internal/audit/domain"
@@ -165,4 +166,41 @@ func TestDeleteDocumentCleansVectorsBeforeDocumentRecord(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestGetWorkspaceStatsReturnsEditors pins the stats detail response carrying
+// the granted editor whitelist (I-1): the front-end derives canEdit /
+// canRequestEditor from it, so the「申请编辑权限」按钮必须按 editors 回显。
+func TestGetWorkspaceStatsReturnsEditors(t *testing.T) {
+	repo := newFakeWorkspaceRepo()
+	ws := seedWorkspace(repo, "ws1")
+	editors := newStubKnowledgeEditorRepo()
+	editors.editors[ws.ID] = []string{"editor-a", "editor-b"}
+	svc, ki := buildWorkspaceService(repo)
+	svc.SetEditorRepo(editors)
+	rec := &recordingDocRepo{ids: []string{"d1"}}
+	rec.docs = []*domain.Document{{ID: "d1"}}
+	svc.SetDocRepo(rec)
+	ki.vectorStore = &fixedCountVectorStore{count: 0}
+
+	res, err := svc.GetWorkspaceStats(context.Background(), "t1", "ws1", "viewer-1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"editor-a", "editor-b"}, res.Editors)
+}
+
+// TestGetWorkspaceStatsEditorsNilWithoutRepo pins nil-safe editors when the
+// editor repo is not wired：JSON 层用 strSliceOrEmpty 渲染 []，前端 schema
+// .default([]) 兜底。
+func TestGetWorkspaceStatsEditorsNilWithoutRepo(t *testing.T) {
+	repo := newFakeWorkspaceRepo()
+	seedWorkspace(repo, "ws1")
+	svc, ki := buildWorkspaceService(repo)
+	rec := &recordingDocRepo{ids: []string{"d1"}}
+	rec.docs = []*domain.Document{{ID: "d1"}}
+	svc.SetDocRepo(rec)
+	ki.vectorStore = &fixedCountVectorStore{count: 0}
+
+	res, err := svc.GetWorkspaceStats(context.Background(), "t1", "ws1", "viewer-1")
+	require.NoError(t, err)
+	require.Nil(t, res.Editors)
 }

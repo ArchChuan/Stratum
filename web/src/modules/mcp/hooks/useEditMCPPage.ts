@@ -12,6 +12,7 @@ import {
   MCP_RETRY_MAX_DELAY_MS,
   MCP_RETRY_MAX_RETRIES,
 } from '@/constants';
+import { useAuth, useTenantRole } from '@/modules/iam';
 import { extractErrorMessage, isForbidden } from '@/shared/lib';
 
 const parseKV = (str?: string): Record<string, string> => {
@@ -122,6 +123,7 @@ export const useEditMCPPage = (id: string) => {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [initialValues, setInitialValues] = useState<ReturnType<typeof configToFormValues> | null>(null);
+  const [editors, setEditors] = useState<string[]>([]);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -129,7 +131,10 @@ export const useEditMCPPage = (id: string) => {
     (async () => {
       try {
         const cfg = await mcpApi.getConfig(id);
-        if (!cancelled) setInitialValues(configToFormValues(cfg));
+        if (!cancelled) {
+          setInitialValues(configToFormValues(cfg));
+          setEditors(cfg.editors);
+        }
       } catch (err) {
         if (!cancelled && !isForbidden(err)) {
           message.error({ content: extractErrorMessage(err, '加载配置失败'), duration: 3 });
@@ -156,5 +161,11 @@ export const useEditMCPPage = (id: string) => {
     }
   };
 
-  return { loading, submitting, initialValues, handleFinish };
+  // P2 白名单：canEdit = admin/owner/白名单成员（editors 命中当前用户）。mcp 无新建页，
+  // 编辑页始终有 id；非白名单普通成员进入后由页面级 readOnly + 申请按钮兜底。
+  const { user } = useAuth();
+  const { isAdmin, isOwner } = useTenantRole();
+  const canEdit = isAdmin || isOwner || editors.includes(user?.sub ?? '');
+
+  return { loading, submitting, initialValues, handleFinish, canEdit, editors };
 };

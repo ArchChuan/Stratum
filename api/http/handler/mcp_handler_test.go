@@ -128,7 +128,7 @@ func TestMCPHandlerGetServerStatus(t *testing.T) {
 	}
 }
 
-func TestMCPConfigRouteRequiresTenantAdmin(t *testing.T) {
+func TestMCPConfigRouteMemberOpen(t *testing.T) {
 	t.Parallel()
 
 	h := newTestMCPHandler(t)
@@ -141,12 +141,14 @@ func TestMCPConfigRouteRequiresTenantAdmin(t *testing.T) {
 	router.Use(middleware.ErrorHandler(zap.NewNop()))
 	h.RegisterRoutes(router, nil, nil, []gin.HandlerFunc{middleware.RequireTenantRole("admin")})
 
+	// Task 6 member-open：GET /mcp/servers/:id/config 从 adminMW 移到 write 组，
+	// 普通租户 member 也能读取完整配置（缺失 server 一律 404，证明到达 handler）。
 	tests := []struct {
 		name       string
 		role       string
 		wantStatus int
 	}{
-		{name: "member forbidden", role: "member", wantStatus: http.StatusForbidden},
+		{name: "member reaches handler", role: "member", wantStatus: http.StatusNotFound},
 		{name: "admin reaches handler", role: "admin", wantStatus: http.StatusNotFound},
 	}
 	for _, tt := range tests {

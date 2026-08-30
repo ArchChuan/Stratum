@@ -15,11 +15,13 @@ export const WorkflowCatalogPage = () => {
   const emptyText = query ? '没有找到匹配的工作流' : '工作流还是空的';
 
   return <section className="workflow-page-shell">
-    <WorkflowCatalogHeader query={query} canManage={isAdmin} onSearch={search} onCreate={() => navigate('/workflows/new')} />
+    <WorkflowCatalogHeader query={query} onSearch={search} onCreate={() => navigate('/workflows/new')} />
     <WorkflowCatalogTable
       workflows={workflows}
       loading={loading}
       emptyText={emptyText}
+      // 编辑放开给 member（白名单判定在 designer 页），删除保持 admin。
+      canEdit
       canManage={isAdmin}
       pagination={{ current: page, pageSize, total, showSizeChanger: true }}
       onPageChange={(nextPage, nextPageSize) => { setPage(nextPage); setPageSize(nextPageSize); }}

@@ -1,8 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { renderHook, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
+import { mcpApi } from '../api/mcp.api';
 import type { MCPServerConfigResponse } from '../model/mcp';
 
-import { buildMCPUpdateConfig, configToFormValues } from './useEditMCPPage';
+import { buildMCPUpdateConfig, configToFormValues, useEditMCPPage } from './useEditMCPPage';
+
+vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
+vi.mock('../api/mcp.api', () => ({ mcpApi: { getConfig: vi.fn(), update: vi.fn() } }));
+vi.mock('@/modules/iam', () => ({
+  useAuth: () => ({ user: { sub: 'u-1' } }),
+  useTenantRole: () => ({ role: 'member', isAdmin: false, isOwner: false, isMember: true, hasTenantRole: () => false }),
+}));
 
 const redactedConfig: MCPServerConfigResponse = {
   id: 'server-1',
@@ -58,5 +67,36 @@ describe('MCP edit credential handling', () => {
     });
 
     expect(payload.auth).toEqual({ type: 'bearer', token: 'replacement-value' });
+  });
+});
+
+const editorConfig = (editors: string[]): MCPServerConfigResponse => ({
+  id: 'server-1',
+  name: 'private server',
+  version: '1',
+  transport: 'http',
+  command: '',
+  args: [],
+  env: {},
+  url: 'https://mcp.example.com',
+  capabilities: [],
+  timeout: 30e9,
+  editors,
+});
+
+describe('useEditMCPPage canEdit', () => {
+  it('白名单成员（命中 config.editors）可编辑', async () => {
+    vi.mocked(mcpApi.getConfig).mockResolvedValue(editorConfig(['u-1']));
+    const { result } = renderHook(() => useEditMCPPage('server-1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.editors).toEqual(['u-1']);
+    expect(result.current.canEdit).toBe(true);
+  });
+
+  it('非白名单普通成员只读', async () => {
+    vi.mocked(mcpApi.getConfig).mockResolvedValue(editorConfig([]));
+    const { result } = renderHook(() => useEditMCPPage('server-1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.canEdit).toBe(false);
   });
 });

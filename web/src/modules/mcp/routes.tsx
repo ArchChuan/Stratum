@@ -29,7 +29,7 @@ export const mcpRoutes = [
     key="mcp-edit"
     path="/mcp/:id/edit"
     element={
-      <PrivateRoute requiredTenantRole="admin">
+      <PrivateRoute>
         <EditMCPPage />
       </PrivateRoute>
     }

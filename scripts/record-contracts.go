@@ -106,9 +106,15 @@ func buildDDDContainer(cfg *config.Config, key *rsa.PrivateKey, logger *zap.Logg
 			}
 		}(),
 		Workflow: &wiring.Workflow{
-			DefinitionService: workflowapp.NewDefinitionService(contractDefRepo{}, contractVerRepo{}, nextID),
-			RunService:        workflowapp.NewRunService(contractVerRepo{}, contractRunStore{}, contractAgtExec{}, nextID),
-			ControlService:    workflowapp.NewControlService(contractCtrlRepo{}, nextID),
+			DefinitionService: func() *workflowapp.DefinitionService {
+				svc := workflowapp.NewDefinitionService(contractDefRepo{}, contractVerRepo{}, nextID)
+				// 与 api/http/contract_test.go 的 buildDDDContainer 保持同一注入：
+				// 否则重新生成 golden 会固化 roles==nil 的 fail-closed 403。
+				svc.SetTenantRoleResolver(contractTenantRole{})
+				return svc
+			}(),
+			RunService:     workflowapp.NewRunService(contractVerRepo{}, contractRunStore{}, contractAgtExec{}, nextID),
+			ControlService: workflowapp.NewControlService(contractCtrlRepo{}, nextID),
 		},
 		Knowledge: &wiring.Knowledge{},
 		Evaluation: &wiring.Evaluation{
@@ -507,7 +513,7 @@ func (contractDefRepo) GetDefinition(_ context.Context, _ string, _ string) (*wo
 		UpdatedAt:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}, nil
 }
-func (contractDefRepo) UpdateDefinition(_ context.Context, _ string, _ *workflowdomain.Definition, _ int64, _ *auditdomain.ResourceChangeAuditEvent) error {
+func (contractDefRepo) UpdateDefinition(_ context.Context, _ string, _ *workflowdomain.Definition, _ int64, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
 	return nil
 }
 func (contractDefRepo) DeleteDefinition(_ context.Context, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {

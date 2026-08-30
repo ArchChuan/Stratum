@@ -56,8 +56,8 @@ func TestPgStoreStage1ALifecycleAndTenantIsolation(t *testing.T) {
 	require.False(t, loaded.CreatedAt.IsZero())
 	require.False(t, loaded.UpdatedAt.IsZero())
 	require.NoError(t, loaded.UpdateDraft("Research v2", "changed", spec, 1, inputSchema))
-	require.NoError(t, store.UpdateDefinition(ctxA, tenantA, loaded, 1, nil))
-	require.ErrorIs(t, store.UpdateDefinition(ctxA, tenantA, loaded, 1, nil), domain.ErrRevisionConflict)
+	require.NoError(t, store.UpdateDefinition(ctxA, tenantA, loaded, 1, "", nil))
+	require.ErrorIs(t, store.UpdateDefinition(ctxA, tenantA, loaded, 1, "", nil), domain.ErrRevisionConflict)
 	_, err = store.GetDefinition(ctxB, tenantB, def.ID)
 	require.ErrorIs(t, err, domain.ErrNotFound)
 

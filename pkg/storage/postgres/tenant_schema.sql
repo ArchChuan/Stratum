@@ -190,7 +190,7 @@ CREATE INDEX IF NOT EXISTS idx_rca_tenant
 -- editor-management endpoint and removed in the same transaction as the
 -- resource delete.
 CREATE TABLE IF NOT EXISTS resource_editors (
-    resource_kind TEXT NOT NULL,                -- agent|skill|mcp|knowledge
+    resource_kind TEXT NOT NULL,                -- agent|skill|mcp|knowledge|workflow
     resource_id  TEXT NOT NULL,
     editor_id    TEXT NOT NULL,
     created_by   TEXT NOT NULL DEFAULT '',      -- 授权人(creator/owner),审计溯源
@@ -1014,6 +1014,7 @@ CREATE TABLE IF NOT EXISTS workflow_definitions (
     id              UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),
     name            TEXT        NOT NULL,
     description     TEXT        NOT NULL DEFAULT '',
+    created_by      TEXT        NOT NULL DEFAULT '',   -- 创建者/creator，所有权矩阵 creator 语义
     -- 生效指针：指向 workflow_versions 当前生效版本（无 FK，与 agents.active_version_id 一致）
     active_version_id TEXT,
     draft_revision  BIGINT      NOT NULL DEFAULT 1,
@@ -1024,6 +1025,7 @@ CREATE TABLE IF NOT EXISTS workflow_definitions (
     UNIQUE (name)
 );
 ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
 ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS active_version_id TEXT;
 ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS draft_revision BIGINT NOT NULL DEFAULT 1;
 ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS draft_spec_json JSONB NOT NULL DEFAULT '{}';
