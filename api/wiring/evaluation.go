@@ -1,6 +1,7 @@
 package wiring
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -856,7 +857,7 @@ func parseJudgeResponse(content string) (evaldomain.AssertionResult, error) {
 		return evaldomain.AssertionResult{}, fmt.Errorf("LLM judge: parse verdict: %w", err)
 	}
 	confidence := 1.0
-	if len(verdict.Confidence) > 0 {
+	if len(verdict.Confidence) > 0 && !bytes.Equal(verdict.Confidence, []byte("null")) {
 		var c float64
 		if err := json.Unmarshal(verdict.Confidence, &c); err == nil && c >= 0 && c <= 1 {
 			confidence = c
