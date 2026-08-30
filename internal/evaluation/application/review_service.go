@@ -30,6 +30,9 @@ type ReviewServiceDeps struct {
 	Metrics  observability.MetricsProvider
 	Logger   *zap.Logger
 	Cfg      domain.ReviewConfig
+	// TenantIDs 枚举活动租户，供跨租户求和刷新 eval_review_backlog（spec §8.3）。
+	// nil 时退化为当前租户单租户语义（fail-open，未接线不 panic）。
+	TenantIDs func(ctx context.Context) ([]string, error)
 }
 
 type ReviewService struct {
@@ -387,13 +390,42 @@ func (s *ReviewService) firstLowConfidenceDimension(item *domain.ReviewItem) str
 	return ""
 }
 
-// RefreshBacklog 用待评审数刷新 eval_review_backlog Gauge（积压告警数据源）。
+// RefreshBacklog 刷新 eval_review_backlog Gauge（积压告警数据源，spec §8.3）。
+// 语义：跨租户求和。先 count 当前租户（保底——当前租户查询失败即返回，DB
+// 故障由此传播到 refreshBacklogFailOpen 的 Warn），再枚举活动租户累加其余
+// 租户 pending。非当前租户 count 失败（schema 未 provision 等）跳过计 0，
+// 跨租户求和 fail-open。
 func (s *ReviewService) RefreshBacklog(ctx context.Context, tenantID string) error {
-	n, err := s.deps.Repo.CountPending(ctx, tenantID)
+	if s.deps.TenantIDs == nil {
+		n, err := s.deps.Repo.CountPending(ctx, tenantID)
+		if err != nil {
+			return err
+		}
+		s.deps.Metrics.SetEvalReviewBacklog(n)
+		return nil
+	}
+	cur, err := s.deps.Repo.CountPending(ctx, tenantID)
 	if err != nil {
 		return err
 	}
-	s.deps.Metrics.SetEvalReviewBacklog(n)
+	ids, err := s.deps.TenantIDs(ctx)
+	if err != nil {
+		return err
+	}
+	total := cur
+	seen := map[string]bool{tenantID: true}
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		n, err := s.deps.Repo.CountPending(ctx, id)
+		if err != nil {
+			continue // 非当前租户失败跳过（缺表等），跨租户求和 fail-open
+		}
+		total += n
+	}
+	s.deps.Metrics.SetEvalReviewBacklog(total)
 	return nil
 }
 

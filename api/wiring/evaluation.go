@@ -572,6 +572,14 @@ func buildReviewService(
 			LowConfidenceThreshold: constants.ReviewLowConfidenceThreshold,
 			JudgePassThreshold:     constants.JudgeBelowThreshold,
 		},
+		// TenantIDs 供跨租户求和刷新 eval_review_backlog（spec §8.3）。IAM 未
+		// 装配时返回 nil（nil → ReviewService 退化为当前租户单租户语义）。
+		TenantIDs: func(ctx context.Context) ([]string, error) {
+			if c.IAM == nil || c.IAM.TenantRepo == nil {
+				return nil, nil // 无租户注册表：退化为当前租户（fail-open）
+			}
+			return c.IAM.TenantRepo.ListActiveTenantIDs(ctx)
+		},
 	})
 }
 

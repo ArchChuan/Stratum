@@ -130,6 +130,37 @@ func (r *countPendingErrRepo) CountPending(_ context.Context, _ string) (int64, 
 	return 0, errors.New("count pending down")
 }
 
+// perTenantPendingRepo 让 CountPending 按租户返回不同值/错误，用于跨租户求和刷新
+// eval_review_backlog（spec §8.3）。外层方法遮蔽嵌入 fakeReviewRepo 的 CountPending。
+type perTenantPendingRepo struct {
+	*fakeReviewRepo
+	pending map[string]int64
+	errOn   map[string]error
+}
+
+func (r *perTenantPendingRepo) CountPending(_ context.Context, tenantID string) (int64, error) {
+	if err := r.errOn[tenantID]; err != nil {
+		return 0, err
+	}
+	return r.pending[tenantID], nil
+}
+
+// newTestReviewServiceWithTenants 构造注入 TenantIDs 的 ReviewService（nil 时走
+// 单租户路径）。TenantIDs 枚举活动租户供跨租户求和。
+func newTestReviewServiceWithTenants(
+	repo port.ReviewRepository, metrics observability.MetricsProvider, tenantIDs []string,
+) *ReviewService {
+	return NewReviewService(ReviewServiceDeps{
+		Repo:    repo,
+		Metrics: metrics,
+		Logger:  zap.NewNop(),
+		Cfg:     domain.ReviewConfig{LowConfidenceThreshold: 0.6, JudgePassThreshold: 0.5},
+		TenantIDs: func(ctx context.Context) ([]string, error) {
+			return tenantIDs, nil
+		},
+	})
+}
+
 func observationForTest() *domain.EvalObservation {
 	return &domain.EvalObservation{
 		ID: "obs-1", TraceID: "t-1",
@@ -349,6 +380,68 @@ func TestRefreshBacklogPropagatesError(t *testing.T) {
 	svc := newTestReviewService(&fakeReviewRepo{err: errors.New("db down")})
 	if err := svc.RefreshBacklog(context.Background(), "t1"); err == nil {
 		t.Fatal("want error propagated")
+	}
+}
+
+func TestRefreshBacklogSumsAcrossTenants(t *testing.T) {
+	repo := &perTenantPendingRepo{
+		fakeReviewRepo: &fakeReviewRepo{},
+		pending:        map[string]int64{"t1": 3, "t2": 5, "t3": 2},
+	}
+	metrics := &stubReviewMetrics{}
+	svc := newTestReviewServiceWithTenants(repo, metrics, []string{"t2", "t3"})
+	if err := svc.RefreshBacklog(context.Background(), "t1"); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if len(metrics.backlog) != 1 || metrics.backlog[0] != 10 {
+		t.Fatalf("backlog = %v, want [10] (3+5+2 跨租户求和)", metrics.backlog)
+	}
+}
+
+func TestRefreshBacklogCurrentTenantErrorPropagates(t *testing.T) {
+	repo := &perTenantPendingRepo{
+		fakeReviewRepo: &fakeReviewRepo{},
+		pending:        map[string]int64{"t1": 3},
+		errOn:          map[string]error{"t1": errors.New("db down")},
+	}
+	metrics := &stubReviewMetrics{}
+	svc := newTestReviewServiceWithTenants(repo, metrics, []string{"t2", "t3"})
+	if err := svc.RefreshBacklog(context.Background(), "t1"); err == nil {
+		t.Fatal("want current-tenant error propagated")
+	}
+	if len(metrics.backlog) != 0 {
+		t.Fatalf("backlog = %v, want no Set on current-tenant error", metrics.backlog)
+	}
+}
+
+func TestRefreshBacklogSkipsOtherTenantFailure(t *testing.T) {
+	repo := &perTenantPendingRepo{
+		fakeReviewRepo: &fakeReviewRepo{},
+		pending:        map[string]int64{"t1": 3, "t2": 2},
+		errOn:          map[string]error{"t2": errors.New("no schema")},
+	}
+	metrics := &stubReviewMetrics{}
+	svc := newTestReviewServiceWithTenants(repo, metrics, []string{"t2"})
+	if err := svc.RefreshBacklog(context.Background(), "t1"); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if len(metrics.backlog) != 1 || metrics.backlog[0] != 3 {
+		t.Fatalf("backlog = %v, want [3] (t2 失败跳过计 0)", metrics.backlog)
+	}
+}
+
+func TestRefreshBacklogDeduplicatesCurrentTenant(t *testing.T) {
+	repo := &perTenantPendingRepo{
+		fakeReviewRepo: &fakeReviewRepo{},
+		pending:        map[string]int64{"t1": 3, "t2": 2},
+	}
+	metrics := &stubReviewMetrics{}
+	svc := newTestReviewServiceWithTenants(repo, metrics, []string{"t1", "t2"})
+	if err := svc.RefreshBacklog(context.Background(), "t1"); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if len(metrics.backlog) != 1 || metrics.backlog[0] != 5 {
+		t.Fatalf("backlog = %v, want [5] (t1 不重复 count)", metrics.backlog)
 	}
 }
 
