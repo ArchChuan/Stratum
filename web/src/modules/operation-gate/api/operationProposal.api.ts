@@ -11,6 +11,34 @@ import {
 import { DEFAULT_PAGE_SIZE } from '@/constants';
 import api from '@/services/client';
 
+// 六类资源的白名单自助申请：workflow/mcp/workspace 走统一 request-editor；
+// knowledge_doc 走 request-access（编辑/查看一体，保留原路由）。
+export type GrantableResourceType =
+  | 'agent'
+  | 'skill'
+  | 'knowledge_doc'
+  | 'mcp'
+  | 'knowledge_workspace'
+  | 'workflow';
+
+export interface RequestEditorAccessOptions {
+  workspaceName?: string;
+  resourceName?: string;
+}
+
+function requestAccessUrl(resourceType: GrantableResourceType, resourceId: string, workspaceName?: string): string {
+  switch (resourceType) {
+    case 'knowledge_doc':
+      return `/knowledge/workspaces/${workspaceName ?? ''}/documents/${resourceId}/request-access`;
+    case 'knowledge_workspace':
+      return `/knowledge/workspaces/${resourceId}/request-editor`;
+    case 'mcp':
+      return `/mcp/servers/${resourceId}/request-editor`;
+    default:
+      return `/${resourceType}s/${resourceId}/request-editor`;
+  }
+}
+
 export const operationProposalApi = {
   listPending: async (): Promise<OperationProposal[]> => {
     const response = await api.get('/operation-proposals');
@@ -38,19 +66,16 @@ export const operationProposalApi = {
     const response = await api.get('/operation-proposals/mine');
     return operationProposalListSchema.parse(response.data).proposals;
   },
-  // 白名单自助申请：agent/skill → POST /:kind/:id/request-editor；
-  // knowledge_doc → POST /knowledge/workspaces/:name/documents/:id/request-access。
+  // 白名单自助申请：六类资源统一入口，URL 按资源类型 switch（见 requestAccessUrl）。
   // resourceName 仅用于审批中心展示；knowledge_doc 需带 workspaceName 定位路由。
   requestEditorAccess: async (
-    resourceType: 'agent' | 'skill' | 'knowledge_doc',
+    resourceType: GrantableResourceType,
     resourceId: string,
-    opts?: { workspaceName?: string; resourceName?: string },
+    opts?: RequestEditorAccessOptions,
   ) => {
-    const url = resourceType === 'knowledge_doc'
-      ? `/knowledge/workspaces/${opts?.workspaceName ?? ''}/documents/${resourceId}/request-access`
-      : `/${resourceType}s/${resourceId}/request-editor`;
-    const response = await api.post(url, {
+    const response = await api.post(requestAccessUrl(resourceType, resourceId, opts?.workspaceName), {
       resourceType,
+      resourceId,
       resourceName: opts?.resourceName,
     });
     return pendingApprovalSchema.parse(response.data);
