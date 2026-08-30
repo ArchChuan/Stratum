@@ -11,6 +11,7 @@ import { EvaluationOverview } from '../components/EvaluationOverview';
 import { EvolutionCommandModal } from '../components/EvolutionCommandModal';
 import { ExperimentDrawer } from '../components/ExperimentDrawer';
 import { ResourceTable } from '../components/ResourceTable';
+import ReviewPoolPanel from '../components/ReviewPoolPanel';
 import { RunDrawer } from '../components/RunDrawer';
 import { TimelineDrawer } from '../components/TimelineDrawer';
 import { StatusTag, displayLabel, drawerWidth, runDisplayStatus } from '../components/evaluationView';
@@ -87,6 +88,7 @@ export const EvaluationCenterPage = () => {
       </> },
       { key: 'experiments', label: `金丝雀实验 ${center.experiments.items.length}`, children: <CompactList rows={center.experiments.items}
         empty="金丝雀实验还是空的" onOpen={(row) => setExperimentId(row.id)} /> },
+      { key: 'review', label: '人工评审池', children: <ReviewPoolPanel /> },
     ]} />
     <Drawer title="资源详情" open={!!resource} onClose={() => setResourceId('')} width={drawerWidth(isMobile)} destroyOnHidden>
       {resource && <><Typography.Title level={5}>观测事实</Typography.Title>
