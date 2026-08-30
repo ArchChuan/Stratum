@@ -161,6 +161,50 @@ func newTestReviewServiceWithTenants(
 	})
 }
 
+// promoteSuiteRepo 遮蔽 fakeSuiteRepo.AddDraftCases 记录 promote 沉淀的草稿
+// case（fake 原实现返回 nil 不记录，无法断言 promote 调用）。其余方法嵌入继承，
+// 其 CreateSuite 在惰性创建路径下会把 suite/revision 存进 fake 字段供断言。
+type promoteSuiteRepo struct {
+	*fakeSuiteRepo
+	added           []domain.EvalCase
+	addedRevisionID string
+}
+
+func (f *promoteSuiteRepo) AddDraftCases(_ context.Context, _ string, revisionID string, cases []domain.EvalCase) error {
+	f.addedRevisionID = revisionID
+	f.added = append(f.added, cases...)
+	return nil
+}
+
+// stubTraceEvidence 实现 port.TraceEvidenceReader，供 promote 的 observation
+// 来源解析 trace 构造 case（ResolveBatch 未被 promote 使用）。
+type stubTraceEvidence struct {
+	trace port.ObservedTrace
+}
+
+func (s *stubTraceEvidence) Resolve(_ context.Context, _, _ string) (port.ObservedTrace, error) {
+	return s.trace, nil
+}
+
+func (s *stubTraceEvidence) ResolveBatch(context.Context, string, []string) (map[string]port.ObservedTrace, error) {
+	return nil, nil
+}
+
+// newTestReviewServiceWithPromote 构造注入 Suites/Evidence 的 ReviewService，
+// 让 judge_misjudgment 决策触发 promote 沉淀评测集草稿（Suites 为 nil 时跳过）。
+func newTestReviewServiceWithPromote(
+	repo port.ReviewRepository, suites port.SuiteRepository, evidence port.TraceEvidenceReader,
+) *ReviewService {
+	return NewReviewService(ReviewServiceDeps{
+		Repo:     repo,
+		Suites:   suites,
+		Evidence: evidence,
+		Metrics:  observability.NoopMetrics{},
+		Logger:   zap.NewNop(),
+		Cfg:      domain.ReviewConfig{LowConfidenceThreshold: 0.6, JudgePassThreshold: 0.5},
+	})
+}
+
 func observationForTest() *domain.EvalObservation {
 	return &domain.EvalObservation{
 		ID: "obs-1", TraceID: "t-1",
@@ -280,6 +324,120 @@ func TestDecidePromoteSkippedWhenSuitesNil(t *testing.T) {
 	}
 	if repo.marked[item.ID] != domain.HumanVerdictJudgeMisjudgment {
 		t.Fatalf("not marked: %+v", repo.marked)
+	}
+}
+
+// TestDecidePromotesObservationToDraftSuite 覆盖 promote 成功路径（observation
+// 来源）：judge_misjudgment 决策后经 TraceEvidenceReader 解析 trace 构造
+// judge-mode 草稿 case 落专用评测集 review-promote-<tenant>（spec §9）。
+func TestDecidePromotesObservationToDraftSuite(t *testing.T) {
+	repo := &fakeReviewRepo{}
+	suites := &promoteSuiteRepo{fakeSuiteRepo: &fakeSuiteRepo{
+		revision: domain.EvalSuiteRevision{
+			ID: "rev-1", SuiteID: "review-promote-t1", Status: domain.SuiteRevisionDraft,
+			ResourceKind: domain.ResourceKindSkill,
+		},
+	}}
+	evidence := &stubTraceEvidence{trace: port.ObservedTrace{Input: "快递没更新", Output: "客服已回复"}}
+	svc := newTestReviewServiceWithPromote(repo, suites, evidence)
+	item := domain.ReviewItem{
+		ID: uuid.NewString(), SourceType: domain.ReviewSourceObservation,
+		SourceID: "obs-1", TraceID: "t-1", ResourceKind: domain.ResourceKindSkill, ResourceID: "s1",
+		TriggerReason: domain.TriggerLowConfidence, Status: domain.ReviewStatusPending,
+		Snapshot: map[string]any{"signals": observationForTest().Signals},
+	}
+	repo.inserted = append(repo.inserted, item)
+
+	if _, err := svc.Decide(context.Background(), "t1", item.ID, "reviewer@x",
+		domain.HumanVerdictJudgeMisjudgment, "judge 判错"); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	if repo.marked[item.ID] != domain.HumanVerdictJudgeMisjudgment {
+		t.Fatalf("not marked: %+v", repo.marked)
+	}
+	if len(suites.added) != 1 {
+		t.Fatalf("promoted cases = %d, want 1", len(suites.added))
+	}
+	c := suites.added[0]
+	if c.Name != "review-observation-obs-1" || c.Input != "快递没更新" {
+		t.Fatalf("case name/input mismatch: %+v", c)
+	}
+	if c.AssertionMode != domain.AssertionJudge || c.Enabled {
+		t.Fatalf("case must be judge-mode and disabled in draft: %+v", c)
+	}
+	if suites.addedRevisionID != "rev-1" {
+		t.Fatalf("revision = %q, want rev-1", suites.addedRevisionID)
+	}
+}
+
+// TestDecidePromotesObservationCreatesSuiteLazily 覆盖 promote 目标套件
+// review-promote-<tenant> 不存在时 draftRevisionForSuite 的惰性创建分支：
+// CreateSuite 后再 GetDraftRevision 取回新草稿 revision 落 case。
+func TestDecidePromotesObservationCreatesSuiteLazily(t *testing.T) {
+	repo := &fakeReviewRepo{}
+	suites := &promoteSuiteRepo{fakeSuiteRepo: &fakeSuiteRepo{}}
+	svc := newTestReviewServiceWithPromote(repo, suites, &stubTraceEvidence{
+		trace: port.ObservedTrace{Input: "订单被取消", Output: "已退款"},
+	})
+	item := domain.ReviewItem{
+		ID: uuid.NewString(), SourceType: domain.ReviewSourceObservation,
+		SourceID: "obs-2", TraceID: "t-2", ResourceKind: domain.ResourceKindSkill, ResourceID: "s1",
+		TriggerReason: domain.TriggerLowConfidence, Status: domain.ReviewStatusPending,
+		Snapshot: map[string]any{"signals": observationForTest().Signals},
+	}
+	repo.inserted = append(repo.inserted, item)
+
+	if _, err := svc.Decide(context.Background(), "t1", item.ID, "reviewer@x",
+		domain.HumanVerdictJudgeMisjudgment, "judge 判错"); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	if suites.suite.ID != "review-promote-t1" || suites.suite.Name != "Review Promote Pool" {
+		t.Fatalf("suite not lazily created: %+v", suites.suite)
+	}
+	if len(suites.added) != 1 || suites.added[0].Name != "review-observation-obs-2" {
+		t.Fatalf("promoted cases = %+v, want observation-obs-2", suites.added)
+	}
+	if suites.addedRevisionID == "" {
+		t.Fatal("revision id empty, promote must write into a real draft revision")
+	}
+}
+
+// TestDecidePromotesCaseResultToDraftSuite 覆盖 promote 成功路径（case_result
+// 来源）：从评审条目快照平铺字段重建 judge-mode 草稿 case（rebuiltCase）落
+// 专用评测集。
+func TestDecidePromotesCaseResultToDraftSuite(t *testing.T) {
+	repo := &fakeReviewRepo{}
+	suites := &promoteSuiteRepo{fakeSuiteRepo: &fakeSuiteRepo{
+		revision: domain.EvalSuiteRevision{
+			ID: "rev-1", SuiteID: "review-promote-t1", Status: domain.SuiteRevisionDraft,
+			ResourceKind: domain.ResourceKindSkill,
+		},
+	}}
+	svc := newTestReviewServiceWithPromote(repo, suites, nil)
+	item := domain.ReviewItem{
+		ID: uuid.NewString(), SourceType: domain.ReviewSourceCaseResult,
+		SourceID: "cr-1", ResourceKind: domain.ResourceKindSkill, ResourceID: "s1",
+		TriggerReason: domain.TriggerNeedsReview, Status: domain.ReviewStatusPending,
+		Snapshot: map[string]any{
+			"case_name": "物流分类", "input": "快递没更新", "expected": "物流",
+			"signals": observationForTest().Signals,
+		},
+	}
+	repo.inserted = append(repo.inserted, item)
+
+	if _, err := svc.Decide(context.Background(), "t1", item.ID, "reviewer@x",
+		domain.HumanVerdictJudgeMisjudgment, "judge 判错"); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	if len(suites.added) != 1 {
+		t.Fatalf("promoted cases = %d, want 1", len(suites.added))
+	}
+	c := suites.added[0]
+	if c.Name != "物流分类" || c.Input != "快递没更新" || c.ExpectedOutput != "物流" {
+		t.Fatalf("rebuilt case mismatch: %+v", c)
+	}
+	if c.AssertionMode != domain.AssertionJudge || c.Enabled {
+		t.Fatalf("case must be judge-mode and disabled in draft: %+v", c)
 	}
 }
 
