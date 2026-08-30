@@ -6,6 +6,7 @@ import {
   queryResultSchema,
   workspaceSchema,
   workspaceStatsSchema,
+  workspaceVersionSchema,
   type CreateWorkspaceInput,
   type DocumentAccessInput,
   type DocumentPreview,
@@ -13,6 +14,7 @@ import {
   type QueryResult,
   type Workspace,
   type WorkspaceStats,
+  type WorkspaceVersion,
 } from '../model/knowledge';
 
 import api from '@/services/client';
@@ -83,5 +85,13 @@ export const knowledgeApi = {
   query: async (data: QueryInput): Promise<QueryResult> => {
     const res = await api.post('/knowledge/query', data);
     return queryResultSchema.parse(res.data ?? {});
+  },
+  // 工作区产品版本历史（member 可见 GET，admin-only POST rollback）
+  listVersions: async (name: string): Promise<WorkspaceVersion[]> => {
+    const res = await api.get(`/knowledge/workspaces/${encodeURIComponent(name)}/versions`);
+    return z.array(workspaceVersionSchema).parse(res.data?.versions ?? []);
+  },
+  rollback: async (name: string, versionId: string): Promise<void> => {
+    await api.post(`/knowledge/workspaces/${encodeURIComponent(name)}/rollback`, { versionId });
   },
 };

@@ -27,6 +27,9 @@ type skillRevisionService interface {
 	ListRevisions(context.Context, string) ([]skillapp.SkillRevision, error)
 	RollbackRevision(context.Context, string, string, string) error
 	SetEditors(context.Context, string, string, []string) error
+	SaveDraft(context.Context, string, string, skillapp.SaveDraftInput) (skillapp.SkillWorkspaceView, error)
+	PublishDraft(context.Context, string, string, string) (skillapp.SkillWorkspaceView, error)
+	DiscardDraft(context.Context, string, string) (skillapp.SkillWorkspaceView, error)
 }
 
 func NewSkillHandler(service skillRevisionService, logger *zap.Logger) *SkillHandler {
@@ -101,6 +104,69 @@ func (h *SkillHandler) UpdateSkill(c *gin.Context) {
 			Name: req.Name, Description: req.Description, Instructions: req.Instructions,
 			ActorID: actorID,
 		})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, workspaceToResponse(view))
+}
+
+// SaveSkillDraft persists the skill's draft without making it effective.
+// expectedContentHash is the optimistic-concurrency baseline (current active
+// content hash); the saved draft becomes effective only after PublishSkillDraft.
+func (h *SkillHandler) SaveSkillDraft(c *gin.Context) {
+	var req gen.SaveSkillDraftRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	view, err := h.service.SaveDraft(c.Request.Context(), c.Param("id"), req.ExpectedContentHash,
+		skillapp.SaveDraftInput{
+			Name: req.Name, Description: req.Description, Instructions: req.Instructions,
+			ActorID: actorID,
+		})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, workspaceToResponse(view))
+}
+
+// PublishSkillDraft promotes the skill's draft to the new active published
+// version (immediately effective).
+func (h *SkillHandler) PublishSkillDraft(c *gin.Context) {
+	var req gen.PublishSkillDraftRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	view, err := h.service.PublishDraft(c.Request.Context(), c.Param("id"), req.ExpectedContentHash, actorID)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, workspaceToResponse(view))
+}
+
+// DiscardSkillDraft deletes the skill's draft and returns the workspace so the
+// client refills the form from the active version. No request body.
+func (h *SkillHandler) DiscardSkillDraft(c *gin.Context) {
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	view, err := h.service.DiscardDraft(c.Request.Context(), c.Param("id"), actorID)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -188,7 +254,10 @@ func productToResponse(value skillapp.SkillProduct) gen.SkillProductResponse {
 }
 
 func workspaceToResponse(value skillapp.SkillWorkspaceView) gen.SkillWorkspaceResponse {
-	return gen.SkillWorkspaceResponse{Skill: productToResponse(value.Skill), Active: revisionToResponse(value.Active), Editors: value.Editors}
+	return gen.SkillWorkspaceResponse{
+		Skill: productToResponse(value.Skill), Active: revisionToResponse(value.Active),
+		Editors: value.Editors, HasDraft: value.HasDraft,
+	}
 }
 
 func revisionToResponse(value skillapp.SkillRevision) gen.SkillRevisionResponse {

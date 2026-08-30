@@ -77,6 +77,43 @@ type carrierAgentSpec struct {
 	systemPrompt any
 }
 
+// resolveSkillID maps a skill display name to its tenant-scoped skill ID so the
+// carrier agent's allowedSkills references the product contract (agent_skill_links
+// FK -> skills(id)), not the display name. Fail-closed: zero or multiple matches
+// are dataset/tenant defects surfaced as infra errors, never a silent attach.
+func resolveSkillID(ctx context.Context, client *httpClient, skillName string) (string, error) {
+	status, data, err := client.roundtrip(ctx, http.MethodGet, "/skills", "", nil)
+	if err != nil {
+		return "", err
+	}
+	if err := classifyHTTP("/skills", status, string(data)); err != nil {
+		return "", err
+	}
+	var resp struct {
+		Skills []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"skills"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return "", &infraError{fmt.Errorf("decode /skills: %w", err)}
+	}
+	match := ""
+	for _, s := range resp.Skills {
+		if s.Name != skillName {
+			continue
+		}
+		if match != "" {
+			return "", &infraError{fmt.Errorf("skill name %q resolves to multiple skills", skillName)}
+		}
+		match = s.ID
+	}
+	if match == "" {
+		return "", &infraError{fmt.Errorf("skill %q not found in tenant skill catalog", skillName)}
+	}
+	return match, nil
+}
+
 // parseCarrierAgentSpec fails closed on dataset defects that would otherwise
 // produce a carrier agent without the skill (empty allowedSkills entry) or a
 // payload the server rejects with a generic binding 400 (null llmModel).
@@ -117,13 +154,22 @@ func createCarrierAgent(ctx context.Context, client *httpClient, p point) (strin
 	if err != nil {
 		return "", err
 	}
+	// allowedSkills must carry the tenant skill ID (agent_skill_links FK targets
+	// skills(id)); the point snapshot carries the display name, so resolve it
+	// against the tenant catalog before building the payload. Fail-closed on
+	// zero/multiple matches — a name that cannot be resolved must not silently
+	// create an agent that never had the skill.
+	skillID, err := resolveSkillID(ctx, client, spec.skillName)
+	if err != nil {
+		return "", err
+	}
 	payload := map[string]any{
 		"name":          "eval-carrier-" + p.Key,
 		"description":   spec.description,
 		"systemPrompt":  spec.systemPrompt,
 		"llmModel":      spec.model,
 		"maxIterations": DefaultCarrierAgentMaxIterations,
-		"allowedSkills": []string{spec.skillName},
+		"allowedSkills": []string{skillID},
 		"memoryScope":   DefaultCarrierAgentMemoryScope,
 	}
 	body, err := json.Marshal(payload)

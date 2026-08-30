@@ -40,6 +40,9 @@ export const skillWorkspaceSchema = z.object({
   // active 是当前生效版本;存量未发布 skill 首次保存前为空。
   active: skillRevisionSchema,
   editors: z.array(z.string()).default([]),
+  // hasDraft 标记存在未发布草稿(skills.draft_revision_id 非空);前端据此
+  // 展示草稿提示条并开启发布入口。
+  hasDraft: z.boolean().optional().default(false),
 }).passthrough();
 export type SkillWorkspace = z.infer<typeof skillWorkspaceSchema>;
 

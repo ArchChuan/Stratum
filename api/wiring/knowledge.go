@@ -6,6 +6,7 @@ import (
 
 	"go.uber.org/zap"
 
+	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
@@ -15,6 +16,7 @@ import (
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
+	versioningpersistence "github.com/byteBuilderX/stratum/internal/versioning/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/httpclient"
 	"github.com/byteBuilderX/stratum/pkg/observability"
@@ -120,6 +122,9 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 		c.Knowledge.WorkspaceService.SetVectorStore(vs)
 		c.Knowledge.WorkspaceService.SetEditorRepo(persistence.NewPgResourceEditorRepo(db))
 		c.Knowledge.WorkspaceService.SetFailureAuditRecorder(failureRecorderOf(c))
+		// 通用产品版本历史（read-only）+ created_by 昵称解析，未装配 fail-closed。
+		c.Knowledge.WorkspaceService.SetVersionRepo(versioningpersistence.NewPgVersionRepo(db))
+		c.Knowledge.WorkspaceService.SetActorNameResolver(iampersistence.NewPgActorNameResolver(db))
 	}
 	c.wireKnowledgeModelExists()
 	return nil

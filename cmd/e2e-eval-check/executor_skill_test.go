@@ -20,6 +20,8 @@ func TestSkillExecutorCreatesAndRunsCarrierAgent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/skills":
+			_, _ = w.Write([]byte(`{"skills":[{"id":"skill-1","name":"my-skill"}]}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/agents":
 			var payload map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -44,8 +46,8 @@ func TestSkillExecutorCreatesAndRunsCarrierAgent(t *testing.T) {
 				return
 			}
 			skills, _ := payload["allowedSkills"].([]any)
-			if len(skills) != 1 || skills[0] != "my-skill" {
-				http.Error(w, "allowedSkills must carry the skill name", http.StatusBadRequest)
+			if len(skills) != 1 || skills[0] != "skill-1" {
+				http.Error(w, "allowedSkills must carry the resolved skill ID", http.StatusBadRequest)
 				return
 			}
 			createdAgent = "carrier-1"
@@ -102,6 +104,8 @@ func TestSkillExecutorCleanupFailureSurfacesAsResidual(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/skills":
+			_, _ = w.Write([]byte(`{"skills":[{"id":"skill-1","name":"my-skill"}]}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/agents":
 			_, _ = w.Write([]byte(`{"id":"carrier-1"}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/agents/carrier-1/execute":
@@ -175,6 +179,35 @@ func TestCreateCarrierAgentRequiresSkillSnapshot(t *testing.T) {
 	}
 }
 
+// TestResolveSkillIDFailClosed pins the name->ID resolution guard: a skill
+// name absent from the tenant catalog (or matching multiple skills) must abort
+// the run as an infra defect, never silently attach a skill the agent cannot
+// actually use.
+func TestResolveSkillIDFailClosed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/skills" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"skills":[{"id":"a","name":"alpha"},{"id":"b","name":"alpha"}]}`))
+	}))
+	defer server.Close()
+
+	client := newHTTPClient(server.URL, "test-token")
+	if _, err := resolveSkillID(context.Background(), client, "missing"); err == nil {
+		t.Fatal("expected infra error for missing skill name, got nil")
+	}
+	if _, err := resolveSkillID(context.Background(), client, "alpha"); err == nil {
+		t.Fatal("expected infra error for ambiguous skill name, got nil")
+	}
+	id, err := resolveSkillID(context.Background(), client, "alpha")
+	if err == nil && id != "" {
+		// not reached: alpha is ambiguous
+		t.Fatalf("ambiguous resolve must fail, got id %q", id)
+	}
+}
+
 // TestCreateCarrierAgentRequiresAgentConfig pins the fail-closed guard for the
 // carrier agent config: a missing agent snapshot or model would marshal
 // llmModel:null and be rejected by the server with a generic binding 400, so
@@ -236,6 +269,8 @@ func TestSkillExecutorRunErrorStillDeletesCarrierAgent(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/skills":
+					_, _ = w.Write([]byte(`{"skills":[{"id":"skill-1","name":"my-skill"}]}`))
 				case r.Method == http.MethodPost && r.URL.Path == "/agents":
 					_, _ = w.Write([]byte(`{"id":"carrier-1"}`))
 				case r.Method == http.MethodDelete && r.URL.Path == "/agents/carrier-1":

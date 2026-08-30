@@ -1,4 +1,4 @@
-import { Button, Card, Col, Form, InputNumber, Row, Select, type FormInstance } from 'antd';
+import { Button, Card, Col, Form, InputNumber, Modal, Row, Select, type FormInstance } from 'antd';
 
 import {
   KNOWLEDGE_DEFAULT_CHUNK_OVERLAP,
@@ -43,6 +43,8 @@ interface WorkspaceConfigFormProps {
   form: FormInstance<ConfigValues>;
   loading: boolean;
   onSubmit: (values: ConfigValues) => void;
+  /** 撤销未保存的编辑（纯前端回填最近一次生效配置）；未注入则不渲染撤销按钮。 */
+  onUndo?: () => void;
 }
 
 // unset = undefined/null/''：知识库字段的 0 是显式合法值（score_threshold
@@ -53,7 +55,19 @@ const defaultPlaceholder = (unset: boolean, text: string): string | undefined =>
 
 const cardStyle = { borderRadius: 12, border: '1px solid #f0f0f0', marginBottom: 16 };
 
-export const WorkspaceConfigForm = ({ form, loading, onSubmit }: WorkspaceConfigFormProps) => {
+export const WorkspaceConfigForm = ({ form, loading, onSubmit, onUndo }: WorkspaceConfigFormProps) => {
+  // 撤销未保存的编辑：先确认，再交由页面回填最近一次生效配置。
+  const handleUndo = () => {
+    if (!onUndo) return;
+    Modal.confirm({
+      title: '撤销未保存的编辑？',
+      content: '表单将重置为最近一次生效的配置。',
+      okText: '撤销',
+      cancelText: '取消',
+      onOk: onUndo,
+    });
+  };
+
   const queryMode = Form.useWatch('query_mode', form);
   const chunkSize = Form.useWatch('chunk_size', form);
   const chunkOverlap = Form.useWatch('chunk_overlap', form);
@@ -211,6 +225,11 @@ export const WorkspaceConfigForm = ({ form, loading, onSubmit }: WorkspaceConfig
           <Button type="primary" htmlType="submit" size="small" loading={loading}>
             保存
           </Button>
+          {onUndo && (
+            <Button onClick={handleUndo} disabled={loading} style={{ marginLeft: 8 }}>
+              撤销
+            </Button>
+          )}
         </Form.Item>
       </Card>
     </Form>
