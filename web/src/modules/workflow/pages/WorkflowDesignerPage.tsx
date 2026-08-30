@@ -88,7 +88,7 @@ const WorkflowDesignerDesktop = () => {
       onValidate={designer.validate}
       onPublish={publish}
     />
-    {(designer.isAdmin || designer.isOwner) && (
+    {(designer.isAdmin || designer.isOwner) && id && (
       <WorkflowEditorsPanel editors={designer.editors} onSave={(ids) => designer.saveEditors(ids)} />
     )}
     <WorkflowValidationPanel validated={validated} />

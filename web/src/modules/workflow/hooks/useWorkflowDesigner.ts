@@ -123,8 +123,13 @@ export const useWorkflowDesigner = (workflowId?: string) => {
   const { requesting, request: requestEditor } = useRequestEditorAccess('workflow', workflowId ?? '', { resourceName: name });
   const saveEditors = async (editorIds: string[]): Promise<void> => {
     if (!workflowId) return;
-    await workflowApi.setWorkflowEditors(workflowId, editorIds);
-    message.success({ content: '可编辑人已更新', duration: 2 });
+    try {
+      await workflowApi.setWorkflowEditors(workflowId, editorIds);
+      message.success({ content: '可编辑人已更新', duration: 2 });
+    } catch (error: unknown) {
+      message.error({ content: extractErrorMessage(error, '操作失败'), duration: 3 });
+      throw error;
+    }
   };
 
   return {

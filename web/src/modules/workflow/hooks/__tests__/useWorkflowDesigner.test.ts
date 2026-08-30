@@ -1,4 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
+import { message } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { workflowApi } from '../../api/workflow.api';
@@ -12,6 +13,7 @@ vi.mock('../../api/workflow.api', () => ({
     updateWorkflowDraft: vi.fn(),
     validateWorkflow: vi.fn(),
     publishWorkflow: vi.fn(),
+    setWorkflowEditors: vi.fn(),
   },
 }));
 vi.mock('@/modules/iam', () => ({
@@ -59,5 +61,17 @@ describe('useWorkflowDesigner canEdit', () => {
   it('新建页（无 id）恒可编辑', async () => {
     const { result } = renderHook(() => useWorkflowDesigner());
     expect(result.current.canEdit).toBe(true);
+  });
+
+  it('saveEditors 失败时提示错误并向上抛错（不吞错）', async () => {
+    vi.mocked(workflowApi.getWorkflow).mockResolvedValue(definition(['u-9']));
+    vi.mocked(workflowApi.setWorkflowEditors).mockRejectedValue({ response: { data: { error: '白名单无效' } } });
+    const errorSpy = vi.spyOn(message, 'error').mockImplementation((() => {}) as unknown as typeof message.error);
+    const { result } = renderHook(() => useWorkflowDesigner('wf-1'));
+    await waitFor(() => expect(result.current.createdBy).toBe('u-2'));
+    await expect(result.current.saveEditors(['u-1'])).rejects.toBeDefined();
+    expect(workflowApi.setWorkflowEditors).toHaveBeenCalledWith('wf-1', ['u-1']);
+    expect(errorSpy).toHaveBeenCalledWith({ content: '白名单无效', duration: 3 });
+    errorSpy.mockRestore();
   });
 });
