@@ -93,3 +93,13 @@ const (
 	// FeedbackNegativeThreshold 是 feedback 负反馈判异阈值：score 低于该值视为放弃倾向。
 	FeedbackNegativeThreshold = 0.5
 )
+
+// Evaluation 人工评审池（P1c §6.6）阈值。
+const (
+	// ReviewLowConfidenceThreshold 是 judge 低置信触发评审池的阈值：任一维度
+	// confidence < 该值入池（low_confidence）。
+	ReviewLowConfidenceThreshold = 0.6
+	// ReviewBacklogAlertThreshold 是评审池积压告警阈值：eval_review_backlog
+	// 持续 > 该值触发 StratumEvalReviewBacklogHigh。
+	ReviewBacklogAlertThreshold = 50
+)

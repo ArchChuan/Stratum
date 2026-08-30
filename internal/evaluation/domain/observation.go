@@ -55,6 +55,8 @@ type JudgeSignal struct {
 	Dimension  string  `json:"dimension"`
 	Score      float64 `json:"score"`
 	Confidence float64 `json:"confidence"`
+	// Reason 是 judge 打分理由（评审池详情展示用；applyJudge 从 res.Message 填充）。
+	Reason string `json:"reason,omitempty"`
 }
 
 // BehaviorSignals 用户行为信号（P1b 填充）。

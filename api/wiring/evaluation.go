@@ -975,11 +975,19 @@ func mapEvaluationEvidence(evidence agentdomain.TraceEvidence) evalport.Observed
 			RevisionID: assignment.RevisionID, ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
 		}
 	}
+	tools := make([]evalport.ToolObservation, 0, len(evidence.Tools))
+	for _, tool := range evidence.Tools {
+		tools = append(tools, evalport.ToolObservation{
+			ToolName: tool.ToolName, ToolType: tool.ToolType, StepIndex: tool.StepIndex,
+			ProviderType: tool.ProviderType, CapabilityID: tool.CapabilityID,
+			Arguments: tool.Arguments, RawText: tool.RawText,
+		})
+	}
 	return evalport.ObservedTrace{
 		TraceID: evidence.TraceID, UserID: evidence.UserID, CostUSD: evidence.CostUSD, LatencyMs: evidence.LatencyMs,
 		Input: evidence.Input, Output: evidence.Output, TotalTokens: int64(evidence.TotalTokens), // TraceEvidence.TotalTokens(int) → ObservedTrace.TotalTokens(int64)
 		Success: evidence.Status == agentdomain.ExecStatusSuccess, SecurityViolation: evidence.SecurityViolation,
-		Assignments: assignments,
+		Assignments: assignments, Tools: tools,
 	}
 }
 
