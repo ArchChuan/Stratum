@@ -32,6 +32,7 @@ func TestEnforceWorkflowOwnershipMatrix(t *testing.T) {
 		{"whitelist member update", "member", "m-1", "u-1", []string{"m-1"}, OpEdit, nil},
 		{"whitelist member delete forbidden", "member", "m-1", "u-1", []string{"m-1"}, OpDelete, domain.ErrForbidden},
 		{"whitelist member rollback forbidden", "member", "m-1", "u-1", []string{"m-1"}, OpRollback, domain.ErrForbidden},
+		{"whitelist member access forbidden", "member", "m-1", "u-1", []string{"m-1"}, OpAccess, domain.ErrForbidden},
 		{"other member update forbidden", "member", "m-2", "u-1", []string{"m-1"}, OpEdit, domain.ErrForbidden},
 		{"other member delete forbidden", "member", "m-2", "u-1", []string{"m-1"}, OpDelete, domain.ErrForbidden},
 		{"other member rollback forbidden", "member", "m-2", "u-1", []string{"m-1"}, OpRollback, domain.ErrForbidden},

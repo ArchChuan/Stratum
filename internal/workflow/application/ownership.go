@@ -53,8 +53,8 @@ func enforceOwnership(role, actorID, createdBy string, editors []string, op Owne
 		}
 		return nil
 	case "member":
-		// Rollback 与 Delete 同属高破坏性：白名单 member 也无权回退版本。
-		if op == OpDelete || op == OpRollback {
+		// 高破坏性写操作与管理白名单：白名单 member 也无权执行/回退/管理。
+		if op == OpDelete || op == OpRollback || op == OpAccess {
 			return domain.ErrForbidden
 		}
 		if isGrantedEditor(actorID, editors) {
