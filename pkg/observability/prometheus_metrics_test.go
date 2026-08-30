@@ -108,6 +108,9 @@ func exerciseAllMetrics(m MetricsProvider) {
 	m.IncEvalBehaviorAnomaly("agent", "judge_below_threshold")
 	m.IncEvalGateAction("rule_guard", "block")
 	m.RecordEvalSampleCoverage("agent", 0.5)
+	// Evaluation observation（P1c §11.3）：评审池积压 Gauge + 升级失败 Counter。
+	m.SetEvalReviewBacklog(0)
+	m.IncEvalReviewEscalateFailure()
 	m.IncAuthFailure("invalid_token")
 }
 
@@ -174,6 +177,25 @@ func TestEvalObservationMetrics(t *testing.T) {
 	assertHistogramSum(t, families, "eval_judge_latency_seconds", 1.5)
 	assertCounterSum(t, families, "eval_judge_cost_total", 0.012)
 	assertGaugeVecSum(t, families, "eval_queue_backlog", "queue", "observation", 7)
+}
+
+func TestPrometheusMetricsReviewPool(t *testing.T) {
+	m := NewPrometheusMetrics(zap.NewNop())
+	m.SetEvalReviewBacklog(7)
+	m.IncEvalReviewEscalateFailure()
+
+	families, err := m.reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	// eval_review_backlog 是无标签 Gauge（P1c §11.3）：注册成功即可抓取，值为 Set 的 7。
+	fam := findFamily(families, "eval_review_backlog")
+	if fam == nil {
+		t.Fatalf("metric family %q not found", "eval_review_backlog")
+	}
+	assertFloatClose(t, "eval_review_backlog", fam.GetMetric()[0].GetGauge().GetValue(), 7)
+	// eval_review_escalate_failure_total 是无标签 Counter，Inc 一次值为 1。
+	assertCounterSum(t, families, "eval_review_escalate_failure_total", 1)
 }
 
 func findFamily(families []*dto.MetricFamily, name string) *dto.MetricFamily {
