@@ -98,12 +98,36 @@ func (r *raceReviewRepo) MarkReviewed(_ context.Context, _, id string, _ domain.
 }
 
 func newTestReviewService(repo port.ReviewRepository) *ReviewService {
+	return newTestReviewServiceWithMetrics(repo, observability.NoopMetrics{})
+}
+
+func newTestReviewServiceWithMetrics(repo port.ReviewRepository, metrics observability.MetricsProvider) *ReviewService {
 	return NewReviewService(ReviewServiceDeps{
 		Repo:    repo,
-		Metrics: observability.NoopMetrics{},
+		Metrics: metrics,
 		Logger:  zap.NewNop(),
 		Cfg:     domain.ReviewConfig{LowConfidenceThreshold: 0.6, JudgePassThreshold: 0.5},
 	})
+}
+
+// stubReviewMetrics 记录 SetEvalReviewBacklog 调用序列（嵌入 NoopMetrics 满足
+// MetricsProvider 全接口，只覆盖积压指标）。
+type stubReviewMetrics struct {
+	observability.NoopMetrics
+	backlog []int64
+}
+
+func (m *stubReviewMetrics) SetEvalReviewBacklog(count int64) {
+	m.backlog = append(m.backlog, count)
+}
+
+// countPendingErrRepo 让 CountPending 独立失败，用于验证积压刷新失败 fail-open。
+type countPendingErrRepo struct {
+	*fakeReviewRepo
+}
+
+func (r *countPendingErrRepo) CountPending(_ context.Context, _ string) (int64, error) {
+	return 0, errors.New("count pending down")
 }
 
 func observationForTest() *domain.EvalObservation {
@@ -325,5 +349,69 @@ func TestRefreshBacklogPropagatesError(t *testing.T) {
 	svc := newTestReviewService(&fakeReviewRepo{err: errors.New("db down")})
 	if err := svc.RefreshBacklog(context.Background(), "t1"); err == nil {
 		t.Fatal("want error propagated")
+	}
+}
+
+func TestEscalateObservationRefreshesBacklog(t *testing.T) {
+	repo := &fakeReviewRepo{}
+	metrics := &stubReviewMetrics{}
+	svc := newTestReviewServiceWithMetrics(repo, metrics)
+	obs := observationForTest()
+	obs.Signals.Judge[0].Confidence = 0.3
+	if err := svc.TryEscalateObservation(context.Background(), "t1", obs); err != nil {
+		t.Fatalf("escalate: %v", err)
+	}
+	if len(metrics.backlog) != 1 || metrics.backlog[0] != 1 {
+		t.Fatalf("backlog = %v, want [1]", metrics.backlog)
+	}
+}
+
+func TestEscalateCaseResultRefreshesBacklog(t *testing.T) {
+	repo := &fakeReviewRepo{}
+	metrics := &stubReviewMetrics{}
+	svc := newTestReviewServiceWithMetrics(repo, metrics)
+	result := domain.EvalCaseResult{ID: "cr-1", CaseID: "c1", TraceID: "t-1", Passed: true}
+	c := domain.EvalCase{ID: "c1", NeedsReview: true}
+	assertion := domain.AssertionResult{Passed: true, Confidence: 0.9}
+	if err := svc.TryEscalateCaseResult(context.Background(), "t1", "run-1", result, c, assertion); err != nil {
+		t.Fatalf("escalate: %v", err)
+	}
+	if len(metrics.backlog) != 1 || metrics.backlog[0] != 1 {
+		t.Fatalf("backlog = %v, want [1]", metrics.backlog)
+	}
+}
+
+func TestDecideRefreshesBacklog(t *testing.T) {
+	repo := &fakeReviewRepo{inserted: []domain.ReviewItem{{ID: "i1", Status: domain.ReviewStatusPending}}}
+	metrics := &stubReviewMetrics{}
+	svc := newTestReviewServiceWithMetrics(repo, metrics)
+	if _, err := svc.Decide(context.Background(), "t1", "i1", "admin", domain.HumanVerdictFail, "bad"); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	if len(metrics.backlog) != 1 {
+		t.Fatalf("backlog calls = %v, want 1 refresh after decision", metrics.backlog)
+	}
+}
+
+func TestEscalateBacklogRefreshFailureIsFailOpen(t *testing.T) {
+	repo := &countPendingErrRepo{fakeReviewRepo: &fakeReviewRepo{}}
+	svc := newTestReviewService(repo)
+	obs := observationForTest()
+	obs.Signals.Judge[0].Confidence = 0.3
+	// 积压刷新失败不得阻断升级主流程（fail-open）。
+	if err := svc.TryEscalateObservation(context.Background(), "t1", obs); err != nil {
+		t.Fatalf("escalate should succeed despite backlog refresh failure: %v", err)
+	}
+}
+
+func TestEscalateNoTriggerSkipsBacklogRefresh(t *testing.T) {
+	repo := &fakeReviewRepo{}
+	metrics := &stubReviewMetrics{}
+	svc := newTestReviewServiceWithMetrics(repo, metrics)
+	if err := svc.TryEscalateObservation(context.Background(), "t1", observationForTest()); err != nil {
+		t.Fatalf("escalate: %v", err)
+	}
+	if len(metrics.backlog) != 0 {
+		t.Fatalf("backlog calls = %v, want none", metrics.backlog)
 	}
 }

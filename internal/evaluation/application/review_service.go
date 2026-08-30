@@ -72,6 +72,7 @@ func (s *ReviewService) TryEscalateObservation(
 			return fmt.Errorf("escalate observation %s: %w", obs.ID, err)
 		}
 	}
+	s.refreshBacklogFailOpen(ctx, tenantID)
 	return nil
 }
 
@@ -101,6 +102,7 @@ func (s *ReviewService) TryEscalateCaseResult(
 			return fmt.Errorf("escalate case result %s: %w", result.ID, err)
 		}
 	}
+	s.refreshBacklogFailOpen(ctx, tenantID)
 	return nil
 }
 
@@ -162,6 +164,7 @@ func (s *ReviewService) Decide(
 	item.ReviewedAt = &now
 
 	s.applySideEffects(ctx, tenantID, item)
+	s.refreshBacklogFailOpen(ctx, tenantID)
 	return item, nil
 }
 
@@ -389,4 +392,11 @@ func (s *ReviewService) RefreshBacklog(ctx context.Context, tenantID string) err
 	}
 	s.deps.Metrics.SetEvalReviewBacklog(n)
 	return nil
+}
+
+// refreshBacklogFailOpen 刷新积压指标并 fail-open：失败仅记录日志，不阻断主流程。
+func (s *ReviewService) refreshBacklogFailOpen(ctx context.Context, tenantID string) {
+	if err := s.RefreshBacklog(ctx, tenantID); err != nil {
+		s.deps.Logger.Warn("review backlog refresh failed", zap.Error(err))
+	}
 }
