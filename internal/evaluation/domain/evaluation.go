@@ -25,6 +25,9 @@ const (
 type AssertionResult struct {
 	Passed  bool   `json:"passed"`
 	Message string `json:"message,omitempty"`
+	// Confidence 是 judge 判定置信度（0-1）。规则断言不产生该值；judge 解析
+	// 缺失/无效时由 parseJudgeResponse 回退 1.0（spec §6.2，本 domain 不静默改值）。
+	Confidence float64 `json:"confidence,omitempty"`
 }
 
 type EvalCase struct {
@@ -39,6 +42,9 @@ type EvalCase struct {
 	// parameters and the registered global rubric respectively. Persisted in
 	// the evaluator_config JSONB column (never written before Phase 3).
 	JudgeSpec *JudgeSpec `json:"judge_spec,omitempty"`
+	// NeedsReview 标记该 case 判定后必须进入人工评审池（spec §6.6 触发规则 4）。
+	// 仅对 assertion_mode=judge 生效；规则断言不触发评审池。
+	NeedsReview bool `json:"needs_review,omitempty"`
 	// Provenance fields link generated cases back to the production trace
 	// and feedback signal they were sampled from (Phase 3c). Populated only
 	// for LLM-generated cases; empty for hand-authored ones. Persisted in
@@ -133,6 +139,9 @@ type EvalSuite struct {
 }
 
 type EvalCaseResult struct {
+	// ID 是该结果行主键，与 eval_case_results.id 共用（评审池 source_id）。
+	// runCase 内生成稳定 ID，SaveRun 持久化直接采用（为空才回退生成）。
+	ID            string                 `json:"id,omitempty"`
 	CaseID        string                 `json:"case_id"`
 	Passed        bool                   `json:"passed"`
 	Message       string                 `json:"message,omitempty"`

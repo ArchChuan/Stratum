@@ -122,6 +122,9 @@ func buildDDDContainer(cfg *config.Config, key *rsa.PrivateKey, logger *zap.Logg
 			QueryService:      evalapp.NewQueryService(contractQueryRepo{}),
 			ExperimentService: evalapp.NewExperimentService(contractExpRepo{}),
 			CandidateService:  evalapp.NewCandidateCommandService(contractCandRepo{}),
+			ReviewService: evalapp.NewReviewService(evalapp.ReviewServiceDeps{
+				Repo: contractReviewRepo{}, Logger: logger,
+			}),
 		},
 		IAM: &wiring.IAM{
 			AdminService: iamapp.NewAdminService(
@@ -284,6 +287,10 @@ func recordDDDRoutes(ddRouter *gin.Engine, jwtSvc iamport.TokenService, outDir s
 func recordDDDRoute(router *gin.Engine, jwtSvc iamport.TokenService, method, routePath, filename string, evalWhitelist map[string]bool) {
 	routeKey := method + " " + routePath
 	switch {
+	case isReviewRoute(routeKey):
+		// 评审池 POST 决策请求体与 evalWhitelist 的通用 POST 不同（无 idempotency
+		// key），且 reviewed_at 是 live 时间戳需正则断言，故单独录制。
+		recordReviewRoute(router, jwtSvc, method, routePath, filename)
 	case evalWhitelist[routeKey]:
 		recordEvalRoute(router, jwtSvc, method, routePath, filename)
 	case routeKey == "POST /agents/:id/self-modify":
@@ -365,6 +372,51 @@ func recordEvalRoute(router http.Handler, tokens iamport.TokenService, method, r
 	router.ServeHTTP(rec, req)
 	c.WantStatus = rec.Code
 	if json.Valid(rec.Body.Bytes()) {
+		c.WantBody = json.RawMessage(rec.Body.Bytes())
+	}
+	out, _ := json.MarshalIndent([]Case{c}, "", "  ")
+	if err := os.WriteFile(outPath, out, 0o644); err != nil {
+		panic(err)
+	}
+}
+
+// isReviewRoute 判断是否为 P1c 评审池路由（查询 + 决策）。
+func isReviewRoute(routeKey string) bool {
+	return strings.HasPrefix(routeKey, "GET /evaluations/review") ||
+		strings.HasPrefix(routeKey, "POST /evaluations/review")
+}
+
+// recordReviewRoute 录制评审池查询/决策 golden。POST 决策的 reviewed_at 是 live
+// 时间戳，故决策 case 用 WantBodyRE 断言结构而非逐字节断言；GET 用例返回确定性
+// 条目，录精确 WantBody。
+func recordReviewRoute(router http.Handler, tokens iamport.TokenService, method, routePath, outPath string) {
+	path := strings.ReplaceAll(routePath, ":id", "review-1")
+	c := Case{Name: "authenticated-success", Method: method, Path: path}
+	if method == http.MethodPost {
+		c.Name = "authenticated-reviewed"
+		c.Body = json.RawMessage(`{"verdict":"pass","reason":"contract-approved"}`)
+	}
+	token, err := tokens.Sign(iamport.TokenClaims{Sub: "contract-admin", TenantID: "contract-tenant", Role: "admin"}, time.Hour)
+	if err != nil {
+		panic(err)
+	}
+	req := httptest.NewRequest(method, path, bytes.NewReader(c.Body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	c.WantStatus = rec.Code
+	if method == http.MethodPost {
+		// pending → reviewed 转换后 reviewed_at 为 live 时间戳：仅断言结构。
+		c.WantBodyRE = `\{"id":"review-1","source_type":"observation","source_id":"obs-1",` +
+			`"run_id":"run-1","trace_id":"trace-1","resource_kind":"agent","resource_id":"agent-1",` +
+			`"trigger_reason":"low_confidence","snapshot":\{"signals":\{"judge":\[\]\}\},` +
+			`"status":"reviewed","human_verdict":"pass","reviewer":"contract-admin",` +
+			`"review_reason":"contract-approved","created_at":"2026-01-01T00:00:00Z",` +
+			`"reviewed_at":"[^"]*"\}`
+	} else if json.Valid(rec.Body.Bytes()) {
 		c.WantBody = json.RawMessage(rec.Body.Bytes())
 	}
 	out, _ := json.MarshalIndent([]Case{c}, "", "  ")
@@ -738,6 +790,57 @@ type contractCandRepo struct{}
 
 func (contractCandRepo) Reject(context.Context, string, string, domain.CandidateCommand) (domain.CandidateSummary, error) {
 	return domain.CandidateSummary{}, domain.ErrCandidateCommandConflict
+}
+
+// contractReviewItem 是评审池 golden 的确定性条目：pending 状态使 Decide 走真实
+// pending → reviewed 转换（reviewed_at 为 live 时间戳，由 WantBodyRE 容错）。
+func contractReviewItem() *domain.ReviewItem {
+	return &domain.ReviewItem{
+		ID:            "review-1",
+		SourceType:    domain.ReviewSourceObservation,
+		SourceID:      "obs-1",
+		RunID:         "run-1",
+		TraceID:       "trace-1",
+		ResourceKind:  domain.ResourceKindAgent,
+		ResourceID:    "agent-1",
+		TriggerReason: domain.TriggerLowConfidence,
+		Snapshot:      map[string]any{"signals": map[string]any{"judge": []any{}}},
+		Status:        domain.ReviewStatusPending,
+		CreatedAt:     time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+}
+
+// contractReviewRepo 为评审池查询/决策 API 提供确定性响应（P1c；golden 文件与
+// 此 stub 的返回一一对应）。
+type contractReviewRepo struct{}
+
+func (contractReviewRepo) UpsertItem(_ context.Context, _ string, _ *domain.ReviewItem) (bool, error) {
+	return true, nil
+}
+
+func (contractReviewRepo) GetItem(_ context.Context, _, _ string) (*domain.ReviewItem, error) {
+	return contractReviewItem(), nil
+}
+
+func (contractReviewRepo) ListItems(_ context.Context, _ string, _ port.ReviewFilter,
+) ([]domain.ReviewItem, int64, error) {
+	return []domain.ReviewItem{*contractReviewItem()}, 1, nil
+}
+
+func (contractReviewRepo) MarkReviewed(_ context.Context, _, _ string, _ domain.HumanVerdict, _, _ string) error {
+	return nil
+}
+
+func (contractReviewRepo) CreateCalibrationSample(_ context.Context, _ string, _ *domain.CalibrationSample) error {
+	return nil
+}
+
+func (contractReviewRepo) CreateAttributionEntry(_ context.Context, _ string, _ *domain.AttributionEntry) error {
+	return nil
+}
+
+func (contractReviewRepo) CountPending(_ context.Context, _ string) (int64, error) {
+	return 0, nil
 }
 
 // ── Agent stubs ─────────────────────────────────────────────────────────

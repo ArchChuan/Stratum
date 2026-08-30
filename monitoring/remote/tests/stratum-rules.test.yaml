@@ -1282,3 +1282,54 @@ tests:
                 T4 红线级：按 runbook 立即人工确认并处置。
               dashboard_url: https://stratum.grafana/d/evaluation
               runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-rule-blocked
+
+  - name: evaluation review backlog alert fires after its for duration
+    interval: 1m
+    input_series:
+      - series: 'eval_review_backlog{environment="production"}'
+        values: '51x30'
+      - series: 'eval_review_backlog{environment="remote-test"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: StratumEvalReviewBacklogHigh
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: StratumEvalReviewBacklogHigh
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: StratumEvalReviewBacklogHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum-evaluation
+              component: review-pool
+              environment: production
+            exp_annotations:
+              summary: 人工评审池积压超过阈值（当前 51）
+              description: 待评审条目持续 > 50 达 15 分钟，低置信/判异样本滞留，需人工介入。
+              dashboard_url: ""
+              runbook_url: /docs/runbooks/stratum-eval-review-backlog.md#stratum-eval-review-backlog-high
+      - eval_time: 20m
+        alertname: StratumEvalReviewBacklogHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum-evaluation
+              component: review-pool
+              environment: production
+            exp_annotations:
+              summary: 人工评审池积压超过阈值（当前 51）
+              description: 待评审条目持续 > 50 达 15 分钟，低置信/判异样本滞留，需人工介入。
+              dashboard_url: ""
+              runbook_url: /docs/runbooks/stratum-eval-review-backlog.md#stratum-eval-review-backlog-high
+
+  - name: evaluation review backlog does not fire below threshold
+    interval: 1m
+    input_series:
+      - series: 'eval_review_backlog{environment="production"}'
+        values: '50x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: StratumEvalReviewBacklogHigh
+        exp_alerts: []

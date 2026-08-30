@@ -179,7 +179,8 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 		c.Evaluation.FeedbackService, c.Evaluation.QueryService, c.Evaluation.CandidateService,
 		c.Logger,
 	).WithBaselineService(c.Evaluation.BaselineService).WithAgentRevisionApplier(c.Evaluation.AgentRevisionApplier).
-		WithTestCaseGenerator(c.Evaluation.TestCaseGenerator).WithObservationService(c.Evaluation.ObservationService)
+		WithTestCaseGenerator(c.Evaluation.TestCaseGenerator).WithObservationService(c.Evaluation.ObservationService).
+		WithReviewService(c.Evaluation.ReviewService)
 	if c.Agent != nil && c.Agent.ApprovalService != nil {
 		// D4：member 写操作创建审批（缺装配时 handler 内部 fail closed 503）。
 		h = h.WithApprovalService(c.Agent.ApprovalService)
@@ -205,6 +206,10 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 		// handler 内部在观测服务未装配时 fail closed 503（Task 12 wiring 注入）。
 		evaluations.GET("/observations", h.ListObservations)
 		evaluations.GET("/observations/:id", h.GetObservation)
+		// P1c 评审池：人工评审结论暴露检索质量与产品缺陷，仅管理员可读/回写。
+		evaluations.GET("/review", requireAdmin, h.ListReviewItems)
+		evaluations.GET("/review/:id", requireAdmin, h.GetReviewItem)
+		evaluations.POST("/review/:id/decision", requireAdmin, h.DecideReviewItem)
 		// D4：11 个评测写端点放宽为 requireActive，handler 内按角色分流——
 		// member 创建 evaluation_action 审批返回 202，admin/owner 直接执行。
 		evaluations.POST("/resources/:kind/:id/baseline", requireActive, h.CreateBaseline)

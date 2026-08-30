@@ -154,6 +154,9 @@ func TestContracts(t *testing.T) {
 			ObservationService: evalapp.NewObservationService(evalapp.ObservationServiceDeps{
 				Repo: contractObservationRepo{}, Logger: logger,
 			}),
+			ReviewService: evalapp.NewReviewService(evalapp.ReviewServiceDeps{
+				Repo: contractReviewRepo{}, Logger: logger,
+			}),
 		},
 		IAM: &wiring.IAM{
 			AdminService: iamapp.NewAdminService(
@@ -714,6 +717,57 @@ func (contractObservationRepo) FindLatestByTrace(_ context.Context, _, _ string)
 
 func (contractObservationRepo) UpdateBehaviorSignals(_ context.Context, _, _ string, _ domain.BehaviorSignals) error {
 	return nil
+}
+
+// contractReviewItem 是评审池 golden 的确定性条目：pending 状态使 Decide 走真实
+// pending → reviewed 转换（reviewed_at 为 live 时间戳，由 WantBodyRE 容错）。
+func contractReviewItem() *domain.ReviewItem {
+	return &domain.ReviewItem{
+		ID:            "review-1",
+		SourceType:    domain.ReviewSourceObservation,
+		SourceID:      "obs-1",
+		RunID:         "run-1",
+		TraceID:       "trace-1",
+		ResourceKind:  domain.ResourceKindAgent,
+		ResourceID:    "agent-1",
+		TriggerReason: domain.TriggerLowConfidence,
+		Snapshot:      map[string]any{"signals": map[string]any{"judge": []any{}}},
+		Status:        domain.ReviewStatusPending,
+		CreatedAt:     time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+}
+
+// contractReviewRepo 为评审池查询/决策 API 提供确定性响应（P1c；golden 文件与
+// 此 stub 的返回一一对应）。
+type contractReviewRepo struct{}
+
+func (contractReviewRepo) UpsertItem(_ context.Context, _ string, _ *domain.ReviewItem) (bool, error) {
+	return true, nil
+}
+
+func (contractReviewRepo) GetItem(_ context.Context, _, _ string) (*domain.ReviewItem, error) {
+	return contractReviewItem(), nil
+}
+
+func (contractReviewRepo) ListItems(_ context.Context, _ string, _ port.ReviewFilter,
+) ([]domain.ReviewItem, int64, error) {
+	return []domain.ReviewItem{*contractReviewItem()}, 1, nil
+}
+
+func (contractReviewRepo) MarkReviewed(_ context.Context, _, _ string, _ domain.HumanVerdict, _, _ string) error {
+	return nil
+}
+
+func (contractReviewRepo) CreateCalibrationSample(_ context.Context, _ string, _ *domain.CalibrationSample) error {
+	return nil
+}
+
+func (contractReviewRepo) CreateAttributionEntry(_ context.Context, _ string, _ *domain.AttributionEntry) error {
+	return nil
+}
+
+func (contractReviewRepo) CountPending(_ context.Context, _ string) (int64, error) {
+	return 0, nil
 }
 
 // ── Audit stub ─────────────────────────────────────────────────────────────

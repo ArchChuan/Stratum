@@ -1,6 +1,7 @@
 package wiring
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -49,6 +50,7 @@ type Evaluation struct {
 	AgentRevisionApplier evalport.AgentRevisionApplier
 	TestCaseGenerator    *evalapp.TestCaseGenerator
 	ObservationService   *evalapp.ObservationService
+	ReviewService        *evalapp.ReviewService
 }
 
 type evaluationResourceRouter struct {
@@ -535,12 +537,12 @@ func (r gatewayPromptRewriter) Rewrite(
 }
 
 // judgeDefaultRubric is the built-in rubric used for LLM judge verdicts. It
-// asks for a binary verdict with a short justification.
+// asks for a binary verdict with a short justification and a 0-1 confidence.
 const judgeDefaultRubric = `你是一名严谨的评测法官。根据以下标准判断实际输出是否通过：
 1. 实际输出是否直接、完整地回答了输入要求；
 2. 与期望输出的一致性（期望输出为 null 或空时忽略该项）；
 3. 是否存在明显的事实错误或逻辑矛盾。
-只输出 JSON：{"passed": true 或 false, "reason": "一句话理由"}。`
+只输出 JSON：{"passed": true 或 false, "reason": "一句话理由", "confidence": 0-1 之间的小数表示判定置信度}。`
 
 // buildEvaluationJudge wires the optional LLM judge. It degrades to a
 // disabled judge when the gateway is unavailable (db not configured),
@@ -555,11 +557,39 @@ func buildEvaluationJudge(c *Container) evalport.LLMJudge {
 	}
 }
 
+// buildReviewService 装配评审池服务（P1c §6.6）：复用 suite 仓库做 promote 沉淀、
+// trace evidence reader 解析观测 trace。必须在 Service / ObservationService 注入前装配。
+func buildReviewService(
+	c *Container, db *pgxpool.Pool, suites evalport.SuiteRepository, traceReader evalport.TraceEvidenceReader,
+) *evalapp.ReviewService {
+	return evalapp.NewReviewService(evalapp.ReviewServiceDeps{
+		Repo:     evalpersist.NewPgReviewRepository(db),
+		Suites:   suites,
+		Evidence: traceReader,
+		Metrics:  c.platformMetrics(),
+		Logger:   c.Logger,
+		Cfg: evaldomain.ReviewConfig{
+			LowConfidenceThreshold: constants.ReviewLowConfidenceThreshold,
+			JudgePassThreshold:     constants.JudgeBelowThreshold,
+		},
+		// TenantIDs 供跨租户求和刷新 eval_review_backlog（spec §8.3）。IAM 未
+		// 装配时返回 nil（nil → ReviewService 退化为当前租户单租户语义）。
+		TenantIDs: func(ctx context.Context) ([]string, error) {
+			if c.IAM == nil || c.IAM.TenantRepo == nil {
+				return nil, nil // 无租户注册表：退化为当前租户（fail-open）
+			}
+			return c.IAM.TenantRepo.ListActiveTenantIDs(ctx)
+		},
+	})
+}
+
 // buildObservationService 装配运行态观测服务（P1b §4.2 路 A）：FeedbackService 依赖它
 // 作为行为信号 writer，NATS 消费 worker 复用同一实例（wireObservationPipeline），故
-// 必须在 FeedbackService 之前装配。
+// 必须在 FeedbackService 之前装配。review 为评审池升级器（P1c §6.6 内联触发），
+// 与 Service 共用同一 reviewSvc 实例。
 func buildObservationService(
 	c *Container, db *pgxpool.Pool, traceReader evalport.TraceEvidenceReader, judge evalport.LLMJudge,
+	review evalport.ReviewEscalator,
 ) *evalapp.ObservationService {
 	return evalapp.NewObservationService(evalapp.ObservationServiceDeps{
 		Enabled:    func(ctx context.Context) bool { return observationEnabled(ctx, c.Parameters.Service) },
@@ -570,7 +600,26 @@ func buildObservationService(
 		Metrics:    c.platformMetrics(),
 		Logger:     c.Logger,
 		TenantTier: tenantTierAdapter{repo: iampersistence.NewAdminTenantRepo(db)},
+		Review:     review,
 	})
+}
+
+// newEvaluationServiceWithReview 构造评测 Service 并把评审池升级器注入（P1c §6.6）：
+// 评审池服务先行装配（buildReviewService），NewService 后注入升级器与阈值配置。
+// 返回 reviewSvc 供观测服务与 Evaluation 结构复用同一实例。独立成函数保持
+// buildEvaluation 行数在质量门禁基线内。
+func newEvaluationServiceWithReview(
+	c *Container, db *pgxpool.Pool, adapter evalport.ResourceAdapter, repo evalport.RunRepository,
+	traceReader evalport.TraceEvidenceReader, judge evalport.LLMJudge, suiteRepo evalport.SuiteRepository,
+) (*evalapp.Service, *evalapp.ReviewService) {
+	reviewSvc := buildReviewService(c, db, suiteRepo, traceReader)
+	service := evalapp.NewService(adapter, repo, traceReader, judge, suiteRepo)
+	service.SetReviewEscalator(reviewSvc, evaldomain.ReviewConfig{
+		LowConfidenceThreshold: constants.ReviewLowConfidenceThreshold,
+		JudgePassThreshold:     constants.JudgeBelowThreshold,
+	})
+	service.SetObservability(c.Logger, c.platformMetrics())
+	return service, reviewSvc
 }
 
 // judgeAdapter implements evalport.LLMJudge over llmgateway's LLMCompleter.
@@ -796,8 +845,10 @@ func parseCaseGenResponse(content string) (evaldomain.GeneratedCase, error) {
 	}, nil
 }
 
-// parseJudgeResponse extracts {"passed": bool, "reason": string} from the
-// judge output, tolerating a markdown code fence around the JSON.
+// parseJudgeResponse extracts {"passed": bool, "reason": string, "confidence": number}
+// from the judge output, tolerating a markdown code fence around the JSON.
+// Confidence is optional and defaults to 1.0 (missing, non-numeric or outside
+// [0,1] are treated as "no confidence signal", spec §6.2).
 func parseJudgeResponse(content string) (evaldomain.AssertionResult, error) {
 	trimmed := strings.TrimSpace(content)
 	if strings.HasPrefix(trimmed, "```") {
@@ -806,13 +857,21 @@ func parseJudgeResponse(content string) (evaldomain.AssertionResult, error) {
 		trimmed = strings.TrimSuffix(strings.TrimSpace(trimmed), "```")
 	}
 	var verdict struct {
-		Passed bool   `json:"passed"`
-		Reason string `json:"reason"`
+		Passed     bool            `json:"passed"`
+		Reason     string          `json:"reason"`
+		Confidence json.RawMessage `json:"confidence"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(trimmed)), &verdict); err != nil {
 		return evaldomain.AssertionResult{}, fmt.Errorf("LLM judge: parse verdict: %w", err)
 	}
-	return evaldomain.AssertionResult{Passed: verdict.Passed, Message: verdict.Reason}, nil
+	confidence := 1.0
+	if len(verdict.Confidence) > 0 && !bytes.Equal(verdict.Confidence, []byte("null")) {
+		var c float64
+		if err := json.Unmarshal(verdict.Confidence, &c); err == nil && c >= 0 && c <= 1 {
+			confidence = c
+		}
+	}
+	return evaldomain.AssertionResult{Passed: verdict.Passed, Message: verdict.Reason, Confidence: confidence}, nil
 }
 
 func parsePromptRewritePatches(content string) ([]evaldomain.CandidatePatch, error) {
@@ -975,11 +1034,19 @@ func mapEvaluationEvidence(evidence agentdomain.TraceEvidence) evalport.Observed
 			RevisionID: assignment.RevisionID, ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
 		}
 	}
+	tools := make([]evalport.ToolObservation, 0, len(evidence.Tools))
+	for _, tool := range evidence.Tools {
+		tools = append(tools, evalport.ToolObservation{
+			ToolName: tool.ToolName, ToolType: tool.ToolType, StepIndex: tool.StepIndex,
+			ProviderType: tool.ProviderType, CapabilityID: tool.CapabilityID,
+			Arguments: tool.Arguments, RawText: tool.RawText,
+		})
+	}
 	return evalport.ObservedTrace{
 		TraceID: evidence.TraceID, UserID: evidence.UserID, CostUSD: evidence.CostUSD, LatencyMs: evidence.LatencyMs,
 		Input: evidence.Input, Output: evidence.Output, TotalTokens: int64(evidence.TotalTokens), // TraceEvidence.TotalTokens(int) → ObservedTrace.TotalTokens(int64)
 		Success: evidence.Status == agentdomain.ExecStatusSuccess, SecurityViolation: evidence.SecurityViolation,
-		Assignments: assignments,
+		Assignments: assignments, Tools: tools,
 	}
 }
 
@@ -1062,8 +1129,8 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		traceReader = evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider}
 	}
 	judge := buildEvaluationJudge(c)
-	service := evalapp.NewService(
-		evaluationResourceRouter{adapters: resourceAdapters}, runRepo, traceReader, judge, suiteRepo,
+	service, reviewSvc := newEvaluationServiceWithReview(
+		c, db, evaluationResourceRouter{adapters: resourceAdapters}, runRepo, traceReader, judge, suiteRepo,
 	)
 	jobService := evalapp.NewJobService(jobRepo, service)
 	var rewriter evalapp.PromptRewriter
@@ -1074,7 +1141,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		evaluationCandidateRouter{creators: candidateCreators}, rewriter, optimizationRepo,
 	)
 	experimentService := evalapp.NewExperimentService(experimentRepo)
-	observationSvc := buildObservationService(c, db, traceReader, judge)
+	observationSvc := buildObservationService(c, db, traceReader, judge, reviewSvc)
 	feedbackService := evalapp.NewFeedbackService(
 		feedbackRepo, experimentService, evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider},
 		observationSvc,
@@ -1098,6 +1165,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		AgentRevisionApplier: agentRevisionApplier,
 		TestCaseGenerator:    buildTestCaseGenerator(c, suiteRepo, db),
 		ObservationService:   observationSvc,
+		ReviewService:        reviewSvc,
 	}
 	if err := c.wireObservationPipeline(ctx, observationSvc); err != nil {
 		return err

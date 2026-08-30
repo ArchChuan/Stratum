@@ -124,3 +124,11 @@ message UpdateDraftCaseRequest {
   string assertion_mode = 4;
   optional bool enabled = 5;
 }
+
+// ReviewItemDecisionRequest 人工评审结论（spec §9 回写状态机）。
+message ReviewItemDecisionRequest {
+  // @binding: required,oneof=pass fail judge_misjudgment case_revision
+  string verdict = 1;
+  // @binding: required,max=2048
+  string reason = 2;
+}

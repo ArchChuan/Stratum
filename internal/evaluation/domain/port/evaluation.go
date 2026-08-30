@@ -234,6 +234,18 @@ type ObservedResourceAssignment struct {
 	Variant      string
 }
 
+// ToolObservation 是执行链路中一次工具调用的最小可观测摘要（评审池详情展示
+// 工具序列用；agent domain.ToolObservation 的 summary 投影，见 mapEvaluationEvidence）。
+type ToolObservation struct {
+	ToolName     string         `json:"tool_name"`
+	ToolType     string         `json:"tool_type"`
+	StepIndex    int            `json:"step_index"`
+	ProviderType string         `json:"provider_type"`
+	CapabilityID string         `json:"capability_id"`
+	Arguments    map[string]any `json:"arguments,omitempty"`
+	RawText      string         `json:"raw_text,omitempty"`
+}
+
 type ObservedTrace struct {
 	TraceID           string
 	UserID            string
@@ -245,6 +257,8 @@ type ObservedTrace struct {
 	Success           bool
 	SecurityViolation bool
 	Assignments       map[string]ObservedResourceAssignment
+	// Tools 是执行链路工具调用序列（P1c 评审详情用；证据后端不返回时为 nil）。
+	Tools []ToolObservation
 }
 
 type TraceEvidenceReader interface {

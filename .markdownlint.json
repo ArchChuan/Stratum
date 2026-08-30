@@ -10,6 +10,9 @@
   "MD055": false,
   "MD056": false,
   "MD060": false,
+  "MD010": {
+    "code_blocks": false
+  },
   "MD025": {
     "front_matter_title": ""
   }

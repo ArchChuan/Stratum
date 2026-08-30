@@ -1,0 +1,25 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "GET",
+    "path": "/evaluations/review/review-1",
+    "want_status": 200,
+    "want_body": {
+      "id": "review-1",
+      "source_type": "observation",
+      "source_id": "obs-1",
+      "run_id": "run-1",
+      "trace_id": "trace-1",
+      "resource_kind": "agent",
+      "resource_id": "agent-1",
+      "trigger_reason": "low_confidence",
+      "snapshot": {
+        "signals": {
+          "judge": []
+        }
+      },
+      "status": "pending",
+      "created_at": "2026-01-01T00:00:00Z"
+    }
+  }
+]

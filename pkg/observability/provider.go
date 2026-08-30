@@ -139,6 +139,9 @@ type MetricsProvider interface {
 	IncEvalGateAction(layer, action string)
 	// P1b：主动采样覆盖率（§11.1 eval_sample_coverage，Gauge [0,1]）。
 	RecordEvalSampleCoverage(resource string, ratio float64)
+	// P1c：评审池积压（eval_review_backlog，Gauge）与升级失败计数。
+	SetEvalReviewBacklog(count int64)
+	IncEvalReviewEscalateFailure()
 
 	// Auth
 	IncAuthFailure(reason string)
@@ -237,6 +240,8 @@ func (NoopMetrics) IncEvalRuleHit(_, _, _ string)                               
 func (NoopMetrics) IncEvalBehaviorAnomaly(_, _ string)                            {}
 func (NoopMetrics) IncEvalGateAction(_, _ string)                                 {}
 func (NoopMetrics) RecordEvalSampleCoverage(_ string, _ float64)                  {}
+func (NoopMetrics) SetEvalReviewBacklog(_ int64)                                  {}
+func (NoopMetrics) IncEvalReviewEscalateFailure()                                 {}
 func (NoopMetrics) IncAuthFailure(_ string)                                       {}
 func (NoopMetrics) RecordModelHealthTransition(_, _, _ string)                    {}
 func (NoopMetrics) SetMemoryMigrationProgress(_ string, _, _, _ string, _ int)    {}

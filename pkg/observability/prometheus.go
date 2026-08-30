@@ -147,6 +147,9 @@ type PrometheusMetrics struct {
 	evalBehaviorAnomalyTotal *prometheus.CounterVec
 	evalGateActionTotal      *prometheus.CounterVec
 	evalSampleCoverage       *prometheus.GaugeVec
+	// P1c：评审池积压 Gauge + 升级失败 Counter（§11.3）。
+	evalReviewBacklog         prometheus.Gauge
+	evalReviewEscalateFailure prometheus.Counter
 
 	// Auth
 	authFailuresTotal *prometheus.CounterVec
@@ -372,6 +375,13 @@ func (m *PrometheusMetrics) registerEvalObservationMetrics(factory promauto.Fact
 	m.evalSampleCoverage = factory.NewGaugeVec(
 		prometheus.GaugeOpts{Name: "eval_sample_coverage", Help: "主动采样覆盖率（§11.1）"},
 		[]string{"resource"},
+	)
+	// P1c：评审池积压 Gauge + 升级失败 Counter（§11.3）。
+	m.evalReviewBacklog = factory.NewGauge(
+		prometheus.GaugeOpts{Name: "eval_review_backlog", Help: "评审池待人工评审条目数（P1c 积压告警数据源）"},
+	)
+	m.evalReviewEscalateFailure = factory.NewCounter(
+		prometheus.CounterOpts{Name: "eval_review_escalate_failure_total", Help: "评审池升级失败次数（fail-open，不阻断主流程）"},
 	)
 }
 
@@ -965,6 +975,18 @@ func (m *PrometheusMetrics) IncEvalGateAction(layer, action string) {
 func (m *PrometheusMetrics) RecordEvalSampleCoverage(resource string, ratio float64) {
 	if m.evalSampleCoverage != nil {
 		m.evalSampleCoverage.WithLabelValues(resource).Set(ratio)
+	}
+}
+
+func (m *PrometheusMetrics) SetEvalReviewBacklog(count int64) {
+	if m.evalReviewBacklog != nil {
+		m.evalReviewBacklog.Set(float64(count))
+	}
+}
+
+func (m *PrometheusMetrics) IncEvalReviewEscalateFailure() {
+	if m.evalReviewEscalateFailure != nil {
+		m.evalReviewEscalateFailure.Inc()
 	}
 }
 

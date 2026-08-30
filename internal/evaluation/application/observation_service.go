@@ -29,6 +29,8 @@ type ObservationServiceDeps struct {
 	Metrics    observability.MetricsProvider
 	Logger     *zap.Logger
 	TenantTier port.TenantTierReader // P1b：租户 tier → stratum（nil 时 stratum 留空）
+	// Review 是评审池升级入口（P1c §6.6）；nil 时评审升级静默跳过（fail-open）。
+	Review port.ReviewEscalator
 }
 
 type ObservationService struct {
@@ -109,7 +111,24 @@ func (s *ObservationService) Process(ctx context.Context, evt domain.Observation
 	}
 	s.recordSampled(evt.ResourceKind)
 	s.deps.Metrics.IncEvalObservation(evt.ResourceKind, obs.Stratum)
+	// 评审池内联触发（P1c §6.6）：落库成功后按触发规则入池（fail-open，见 escalateToReview）。
+	s.escalateToReview(ctx, evt, &obs)
 	return nil
+}
+
+// escalateToReview 评审池内联触发（P1c §6.6）：落库成功后按触发规则入池。
+// fail-open——升级失败仅日志 + 指标，不阻断观测主流程、不改 verdict。
+func (s *ObservationService) escalateToReview(
+	ctx context.Context, evt domain.ObservationReferenceEvent, obs *domain.EvalObservation,
+) {
+	if s.deps.Review == nil {
+		return
+	}
+	if err := s.deps.Review.TryEscalateObservation(ctx, evt.TenantID, obs); err != nil {
+		s.deps.Logger.Warn("observation review escalation failed", zap.Error(err),
+			zap.String("trace_id", evt.TraceID))
+		s.deps.Metrics.IncEvalReviewEscalateFailure()
+	}
 }
 
 // recordArrival 累计某资源的采样候选到达并刷新采样覆盖率（分母）。
@@ -233,9 +252,8 @@ func (s *ObservationService) applyJudge(ctx context.Context, trace port.Observed
 		if err != nil {
 			return fmt.Errorf("judge dimension %s: %w", dimension, err)
 		}
-		// LLMJudge 契约返回 domain.AssertionResult{Passed, Message}：P1a 把维度
-		// 通过映射为 1.0 / 0.0。
-		// TODO(P1b)：judge 返回结构化 score/confidence 后填充真实置信度。
+		// LLMJudge 契约返回 domain.AssertionResult{Passed, Message, Confidence}：
+		// 维度通过映射为 1.0/0.0，Confidence/Reason 用 judge 真实输出（P1c §6.2）。
 		score := 0.0
 		if res.Passed {
 			score = 1.0
@@ -243,7 +261,8 @@ func (s *ObservationService) applyJudge(ctx context.Context, trace port.Observed
 		obs.Signals.Judge = append(obs.Signals.Judge, domain.JudgeSignal{
 			Dimension:  dimension,
 			Score:      score,
-			Confidence: 1.0,
+			Confidence: res.Confidence,
+			Reason:     res.Message,
 		})
 		s.deps.Metrics.RecordEvalJudgeScore(string(obs.Resource.Kind), dimension, score)
 	}
@@ -288,12 +307,11 @@ func (s *ObservationService) applyAnomalyVerdict(resource string, obs *domain.Ev
 }
 
 // judgeRubric 构造单维度 judge 提示词（与 judgeAdapter 的 Complete 输出契约
-// {"passed","reason"} 对齐：这里的 rubric 指示 LLM 按指定维度判定 pass/不通过，
-// 并钉死输出 JSON 形状，与评测系统主 rubric 逐字对齐，避免解析失败被当
-// judge_unavailable 系统性丢弃）。
+// {"passed","reason","confidence"} 对齐：指示 LLM 按指定维度判定 pass/不通过、
+// 给理由并给出 0-1 置信度，与评测系统主 rubric 逐字对齐）。
 func judgeRubric(dimension string) string {
-	return fmt.Sprintf("请按维度「%s」对助手回答判定通过/不通过，并给出理由。忠实于给定上下文、切题、覆盖全部关键点。"+
-		"只输出 JSON：{\"passed\": true 或 false, \"reason\": \"一句话理由\"}", dimension)
+	return fmt.Sprintf("请按维度「%s」对助手回答判定通过/不通过，给出理由与 0-1 置信度。忠实于给定上下文、切题、覆盖全部关键点。"+
+		"只输出 JSON：{\"passed\": true 或 false, \"reason\": \"一句话理由\", \"confidence\": 0-1 之间的小数表示判定置信度}", dimension)
 }
 
 func anyJudgeBelow(signals []domain.JudgeSignal, threshold float64) bool {

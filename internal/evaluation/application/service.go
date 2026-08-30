@@ -9,7 +9,9 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 type ExecutionResult = port.ExecutionResult
@@ -31,6 +33,14 @@ type Service struct {
 	// judge evaluates assertion_mode=judge cases; nil keeps rule assertions
 	// working and makes judge cases fail closed.
 	judge port.LLMJudge
+	// review 是人工评审池升级入口（P1c §6.6 内联触发）；nil 时评审升级静默跳过
+	// （fail-open，评审池未装配不阻断评测执行）。
+	review    port.ReviewEscalator
+	reviewCfg domain.ReviewConfig
+	logger    *zap.Logger
+	// metrics 记录平台指标（case_result 升级失败计数，spec §6.6）；nil 时升级
+	// 失败仅日志（fail-open，不 panic）。
+	metrics observability.MetricsProvider
 }
 
 func NewService(
@@ -44,7 +54,43 @@ func NewService(
 	if len(suites) > 0 {
 		suiteRepo = suites[0]
 	}
-	return &Service{adapter: adapter, repo: repo, suites: suiteRepo, traceReader: traceReader, judge: judge}
+	return &Service{adapter: adapter, repo: repo, suites: suiteRepo, traceReader: traceReader, judge: judge, logger: zap.NewNop()}
+}
+
+// SetReviewEscalator 注入评审池升级器（wiring 在 NewService 之后调用）。
+func (s *Service) SetReviewEscalator(e port.ReviewEscalator, cfg domain.ReviewConfig) {
+	s.review = e
+	s.reviewCfg = cfg
+}
+
+// SetObservability 注入真 logger 与平台指标（case_result 升级失败计数，spec §6.6）。
+// wiring 在 SetReviewEscalator 后调用；logger 为 nil 保留默认 Nop，metrics 为 nil
+// 时升级失败仅日志（fail-open，不 panic）。
+func (s *Service) SetObservability(logger *zap.Logger, metrics observability.MetricsProvider) {
+	if logger != nil {
+		s.logger = logger
+	}
+	s.metrics = metrics
+}
+
+// escalateCaseResult 通过评审池升级器判定评测集 judge 结果是否入池并幂等落条目
+// （fail-open：失败仅日志，不阻断评测流程）。
+func (s *Service) escalateCaseResult(
+	ctx context.Context, tenantID, runID string, result domain.EvalCaseResult, c domain.EvalCase, assertion domain.AssertionResult,
+) {
+	if s.review == nil {
+		return
+	}
+	if err := s.review.TryEscalateCaseResult(ctx, tenantID, runID, result, c, assertion); err != nil {
+		s.logReviewEscalateError(ctx, err)
+		if s.metrics != nil {
+			s.metrics.IncEvalReviewEscalateFailure()
+		}
+	}
+}
+
+func (s *Service) logReviewEscalateError(_ context.Context, err error) {
+	s.logger.Warn("evaluation review escalation failed", zap.Error(err))
 }
 
 func (s *Service) RunStored(
@@ -97,7 +143,7 @@ func (s *Service) Run(ctx context.Context, input RunInput) (domain.EvalRun, erro
 			continue
 		}
 		run.TotalCases++
-		result := s.runCase(ctx, input.TenantID, input.RequestedBy, input.Resource, testCase)
+		result := s.runCase(ctx, input.TenantID, input.RequestedBy, input.Resource, run.ID, testCase)
 		if result.Passed {
 			run.PassedCases++
 		} else {
@@ -113,10 +159,10 @@ func (s *Service) Run(ctx context.Context, input RunInput) (domain.EvalRun, erro
 }
 
 func (s *Service) runCase(
-	ctx context.Context, tenantID, requestedBy string, ref domain.ResourceRef, testCase domain.EvalCase,
+	ctx context.Context, tenantID, requestedBy string, ref domain.ResourceRef, runID string, testCase domain.EvalCase,
 ) domain.EvalCaseResult {
 	execution, err := s.adapter.ExecuteRevision(ctx, tenantID, requestedBy, ref, testCase)
-	result := domain.EvalCaseResult{CaseID: testCase.ID}
+	result := domain.EvalCaseResult{ID: uuid.Must(uuid.NewV7()).String(), CaseID: testCase.ID}
 	if err != nil {
 		result.Error = err.Error()
 		return result
@@ -143,7 +189,13 @@ func (s *Service) runCase(
 	// Judge assertions dispatch to the LLM judge port; rule assertions stay
 	// in the domain's pure EvaluateAssertion.
 	if testCase.AssertionMode == domain.AssertionJudge {
-		return s.judgeCase(ctx, testCase, result)
+		assertion, result := s.judgeCase(ctx, testCase, result)
+		// 评审池内联触发（P1c §6.6）：仅 judge 实际产出判定（result.Error 为空）时
+		// 才可能入池；judge 关闭/故障是基础设施失败，不是评审信号。
+		if result.Error == "" {
+			s.escalateCaseResult(ctx, tenantID, runID, result, testCase, assertion)
+		}
+		return result
 	}
 
 	assertion, err := domain.EvaluateAssertion(testCase.AssertionMode, execution.Output, testCase.ExpectedOutput)
@@ -158,26 +210,28 @@ func (s *Service) runCase(
 
 // judgeCase runs the LLM judge assertion for a judge case. Fail-closed: a
 // nil or disabled judge makes the case fail with an explicit error instead
-// of a silent pass.
-func (s *Service) judgeCase(ctx context.Context, testCase domain.EvalCase, result domain.EvalCaseResult) domain.EvalCaseResult {
+// of a silent pass. It returns the raw assertion (for review-pool escalation)
+// alongside the result.
+func (s *Service) judgeCase(ctx context.Context, testCase domain.EvalCase, result domain.EvalCaseResult) (domain.AssertionResult, domain.EvalCaseResult) {
+	var zero domain.AssertionResult
 	if s.judge == nil || !s.judge.Enabled(ctx) {
 		result.Error = "LLM judge disabled"
-		return result
+		return zero, result
 	}
 	inputJSON, err := json.Marshal(testCase.Input)
 	if err != nil {
 		result.Error = fmt.Errorf("judge: marshal input: %w", err).Error()
-		return result
+		return zero, result
 	}
 	expectedJSON, err := json.Marshal(testCase.ExpectedOutput)
 	if err != nil {
 		result.Error = fmt.Errorf("judge: marshal expected output: %w", err).Error()
-		return result
+		return zero, result
 	}
 	actualJSON, err := json.Marshal(result.Actual)
 	if err != nil {
 		result.Error = fmt.Errorf("judge: marshal actual output: %w", err).Error()
-		return result
+		return zero, result
 	}
 	var spec domain.JudgeSpec
 	if testCase.JudgeSpec != nil {
@@ -192,11 +246,11 @@ func (s *Service) judgeCase(ctx context.Context, testCase domain.EvalCase, resul
 	})
 	if err != nil {
 		result.Error = err.Error()
-		return result
+		return zero, result
 	}
 	result.Passed = assertion.Passed
 	result.Message = assertion.Message
-	return result
+	return assertion, result
 }
 
 func observedTraceToEvidence(t port.ObservedTrace) *domain.ObservedTraceEvidence {

@@ -27,6 +27,13 @@ const center = vi.hoisted(() => ({
 }));
 const useCenter = vi.hoisted(() => vi.fn(() => center));
 vi.mock('../hooks/useEvaluationCenter', () => ({ useEvaluationCenter: useCenter }));
+// 人工评审池 Tab 挂载后会在后台拉取评审池，页面测试只需关心中心记录簿，
+// 用空响应 mock 掉 review service，避免真实 axios 请求与异步状态更新。
+vi.mock('../services/review', () => ({
+  listReviewItems: vi.fn().mockResolvedValue({ items: [], total: 0 }),
+  getReviewItem: vi.fn(),
+  decideReviewItem: vi.fn(),
+}));
 // 组件创建/操作后调用 message.success/error,antd 的 rc-notification 定时器
 // (duration 2-3s)会在测试 teardown 后触发 setState → "window is not defined",
 // 造成 vitest 计 1 error 的偶发失败。mock 掉 message,避免真实 notification 定时器。
