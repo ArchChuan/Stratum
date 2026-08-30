@@ -9,6 +9,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -37,6 +38,9 @@ type Service struct {
 	review    port.ReviewEscalator
 	reviewCfg domain.ReviewConfig
 	logger    *zap.Logger
+	// metrics 记录平台指标（case_result 升级失败计数，spec §6.6）；nil 时升级
+	// 失败仅日志（fail-open，不 panic）。
+	metrics observability.MetricsProvider
 }
 
 func NewService(
@@ -59,6 +63,16 @@ func (s *Service) SetReviewEscalator(e port.ReviewEscalator, cfg domain.ReviewCo
 	s.reviewCfg = cfg
 }
 
+// SetObservability 注入真 logger 与平台指标（case_result 升级失败计数，spec §6.6）。
+// wiring 在 SetReviewEscalator 后调用；logger 为 nil 保留默认 Nop，metrics 为 nil
+// 时升级失败仅日志（fail-open，不 panic）。
+func (s *Service) SetObservability(logger *zap.Logger, metrics observability.MetricsProvider) {
+	if logger != nil {
+		s.logger = logger
+	}
+	s.metrics = metrics
+}
+
 // escalateCaseResult 通过评审池升级器判定评测集 judge 结果是否入池并幂等落条目
 // （fail-open：失败仅日志，不阻断评测流程）。
 func (s *Service) escalateCaseResult(
@@ -69,6 +83,9 @@ func (s *Service) escalateCaseResult(
 	}
 	if err := s.review.TryEscalateCaseResult(ctx, tenantID, runID, result, c, assertion); err != nil {
 		s.logReviewEscalateError(ctx, err)
+		if s.metrics != nil {
+			s.metrics.IncEvalReviewEscalateFailure()
+		}
 	}
 }
 

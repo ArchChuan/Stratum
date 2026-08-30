@@ -8,6 +8,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 
 func TestServiceRunEvaluatesEnabledCasesAndPersistsResults(t *testing.T) {
@@ -381,5 +382,58 @@ func TestServiceRuleAssertionDoesNotTouchJudge(t *testing.T) {
 	}
 	if judge.calls != 0 {
 		t.Fatalf("rule assertion must not call the judge, got %d calls", judge.calls)
+	}
+}
+
+// escalateFailureMetrics 记录 IncEvalReviewEscalateFailure 调用次数（嵌入
+// NoopMetrics 满足 MetricsProvider 全接口，只覆盖目标方法）。
+type escalateFailureMetrics struct {
+	observability.NoopMetrics
+	inc int
+}
+
+func (m *escalateFailureMetrics) IncEvalReviewEscalateFailure() { m.inc++ }
+
+// failingCaseEscalator 让 TryEscalateCaseResult 固定失败，验证 Service 侧 fail-open：
+// 升级失败仅日志 + IncEvalReviewEscalateFailure，不阻断评测主流程。
+type failingCaseEscalator struct{}
+
+func (failingCaseEscalator) TryEscalateObservation(context.Context, string, *domain.EvalObservation) error {
+	return nil
+}
+
+func (failingCaseEscalator) TryEscalateCaseResult(context.Context, string, string, domain.EvalCaseResult, domain.EvalCase, domain.AssertionResult) error {
+	return errors.New("escalate down")
+}
+
+func TestServiceEscalateCaseResultFailureCountsMetric(t *testing.T) {
+	svc := NewService(&fakeAdapter{}, &fakeRunRepo{}, nil, nil)
+	svc.SetReviewEscalator(failingCaseEscalator{}, domain.ReviewConfig{})
+	metrics := &escalateFailureMetrics{}
+	svc.SetObservability(nil, metrics)
+
+	svc.escalateCaseResult(context.Background(), "t1", "run-1",
+		domain.EvalCaseResult{ID: "cr-1", CaseID: "c1", TraceID: "t-1", Passed: true},
+		domain.EvalCase{ID: "c1", NeedsReview: true},
+		domain.AssertionResult{Passed: true, Confidence: 0.9})
+
+	if metrics.inc != 1 {
+		t.Fatalf("IncEvalReviewEscalateFailure calls = %d, want 1", metrics.inc)
+	}
+}
+
+func TestServiceEscalateCaseResultNilReviewDoesNotPanic(t *testing.T) {
+	svc := NewService(&fakeAdapter{}, &fakeRunRepo{}, nil, nil)
+	metrics := &escalateFailureMetrics{}
+	svc.SetObservability(nil, metrics)
+
+	// review 未注入（nil）：升级静默跳过，不得 panic，不得计指标（防回归）。
+	svc.escalateCaseResult(context.Background(), "t1", "run-1",
+		domain.EvalCaseResult{ID: "cr-1", CaseID: "c1", TraceID: "t-1", Passed: true},
+		domain.EvalCase{ID: "c1", NeedsReview: true},
+		domain.AssertionResult{Passed: true, Confidence: 0.9})
+
+	if metrics.inc != 0 {
+		t.Fatalf("IncEvalReviewEscalateFailure calls = %d, want 0", metrics.inc)
 	}
 }

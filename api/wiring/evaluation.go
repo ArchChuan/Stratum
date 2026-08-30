@@ -609,6 +609,7 @@ func newEvaluationServiceWithReview(
 		LowConfidenceThreshold: constants.ReviewLowConfidenceThreshold,
 		JudgePassThreshold:     constants.JudgeBelowThreshold,
 	})
+	service.SetObservability(c.Logger, c.platformMetrics())
 	return service, reviewSvc
 }
 
