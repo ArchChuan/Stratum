@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
@@ -624,5 +625,175 @@ func TestEvaluationCreateSuiteAdminExecutesDirectly(t *testing.T) {
 	}
 	if suites.created.ID != "suite-1" {
 		t.Fatalf("suite Create not executed directly: %+v", suites.created)
+	}
+}
+
+// fakeReviewService 实现 evaluationReviewService（P1c 评审池查询/决策 mock）。
+type fakeReviewService struct {
+	listItems []domain.ReviewItem
+	listTotal int64
+	listErr   error
+	filter    port.ReviewFilter
+
+	getItem *domain.ReviewItem
+	getErr  error
+
+	decideItem    *domain.ReviewItem
+	decideErr     error
+	decideTenant  string
+	decideID      string
+	decideActor   string
+	decideVerdict domain.HumanVerdict
+	decideReason  string
+}
+
+func (f *fakeReviewService) List(_ context.Context, tenantID string, filter port.ReviewFilter,
+) ([]domain.ReviewItem, int64, error) {
+	f.filter = filter
+	return f.listItems, f.listTotal, f.listErr
+}
+
+func (f *fakeReviewService) Get(_ context.Context, tenantID, id string) (*domain.ReviewItem, error) {
+	f.decideTenant, f.decideID = tenantID, id
+	return f.getItem, f.getErr
+}
+
+func (f *fakeReviewService) Decide(_ context.Context, tenantID, id, actor string,
+	verdict domain.HumanVerdict, reason string,
+) (*domain.ReviewItem, error) {
+	f.decideTenant, f.decideID, f.decideActor, f.decideVerdict, f.decideReason = tenantID, id, actor, verdict, reason
+	return f.decideItem, f.decideErr
+}
+
+func reviewItemFixture() domain.ReviewItem {
+	return domain.ReviewItem{
+		ID: "review-1", SourceType: domain.ReviewSourceObservation, SourceID: "obs-1",
+		RunID: "run-1", TraceID: "trace-1",
+		ResourceKind: domain.ResourceKindAgent, ResourceID: "agent-1",
+		TriggerReason: domain.TriggerLowConfidence,
+		Snapshot:      map[string]any{"signals": map[string]any{"judge": []any{}}},
+		Status:        domain.ReviewStatusPending,
+		CreatedAt:     time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+}
+
+// P1c：评审池分页查询透传过滤条件并返回 items/total 结构。
+func TestEvaluationHandlerListReview(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeReviewService{listItems: []domain.ReviewItem{reviewItemFixture()}, listTotal: 1}
+	h := NewEvaluationHandler(nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop()).
+		WithReviewService(svc)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.GET("/evaluations/review", withTenant("tenant-1"), h.ListReviewItems)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/evaluations/review?status=pending&trigger_reason=low_confidence"+
+			"&resource_kind=agent&resource_id=agent-1&page=2&page_size=10", nil))
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"total":1`) ||
+		!strings.Contains(rec.Body.String(), `"review-1"`) {
+		t.Fatalf("unexpected response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if svc.filter != (port.ReviewFilter{
+		Status: domain.ReviewStatusPending, TriggerReason: domain.TriggerLowConfidence,
+		ResourceKind: "agent", ResourceID: "agent-1", Limit: 10, Offset: 10,
+	}) {
+		t.Fatalf("filter not propagated: %+v", svc.filter)
+	}
+}
+
+// P1c：单条评审详情返回条目。
+func TestEvaluationHandlerGetReviewItem(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeReviewService{}
+	item := reviewItemFixture()
+	svc.getItem = &item
+	h := NewEvaluationHandler(nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop()).
+		WithReviewService(svc)
+	r := gin.New()
+	r.GET("/evaluations/review/:id", withTenant("tenant-1"), h.GetReviewItem)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/evaluations/review/review-1", nil))
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"review-1"`) {
+		t.Fatalf("unexpected response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if svc.decideID != "review-1" {
+		t.Fatalf("item id not propagated: %q", svc.decideID)
+	}
+}
+
+// P1c：人工决策回写，actor/verdict/reason 从请求安全传播。
+func TestEvaluationHandlerDecideReview(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeReviewService{}
+	item := reviewItemFixture()
+	item.Status = domain.ReviewStatusReviewed
+	item.HumanVerdict = domain.HumanVerdictPass
+	item.Reviewer = "user-1"
+	item.ReviewReason = "确认通过"
+	svc.decideItem = &item
+	h := NewEvaluationHandler(nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop()).
+		WithReviewService(svc)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.POST("/evaluations/review/:id/decision", withTenantAndUser("tenant-1", "user-1"), h.DecideReviewItem)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/evaluations/review/review-1/decision",
+		strings.NewReader(`{"verdict":"pass","reason":"确认通过"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"human_verdict":"pass"`) {
+		t.Fatalf("unexpected response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if svc.decideTenant != "tenant-1" || svc.decideID != "review-1" || svc.decideActor != "user-1" ||
+		svc.decideVerdict != domain.HumanVerdictPass || svc.decideReason != "确认通过" {
+		t.Fatalf("decision not propagated safely: tenant=%q id=%q actor=%q verdict=%q reason=%q",
+			svc.decideTenant, svc.decideID, svc.decideActor, svc.decideVerdict, svc.decideReason)
+	}
+}
+
+// P1c：非法 verdict 在绑定层被拒绝（400），不进入服务层。
+func TestEvaluationHandlerDecideReviewRejectsInvalidVerdict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeReviewService{}
+	h := NewEvaluationHandler(nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop()).
+		WithReviewService(svc)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.POST("/evaluations/review/:id/decision", withTenantAndUser("tenant-1", "user-1"), h.DecideReviewItem)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/evaluations/review/review-1/decision",
+		strings.NewReader(`{"verdict":"bogus","reason":"x"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid verdict, got status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if svc.decideID != "" {
+		t.Fatalf("invalid verdict must not reach service: %+v", svc)
+	}
+}
+
+// P1c：评审服务未装配时 fail closed 503。
+func TestEvaluationHandlerListReviewUnavailableWithoutService(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewEvaluationHandler(nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.GET("/evaluations/review", withTenant("tenant-1"), h.ListReviewItems)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/evaluations/review", nil))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 without review service, got status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

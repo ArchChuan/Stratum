@@ -111,6 +111,14 @@ type evaluationObservationQueryService interface {
 	GetObservation(ctx context.Context, tenantID, id string) (*domain.EvalObservation, error)
 }
 
+// evaluationReviewService 评审池查询与人工决策服务（P1c）。*evalapp.ReviewService 满足该接口。
+type evaluationReviewService interface {
+	List(ctx context.Context, tenantID string, f port.ReviewFilter) ([]domain.ReviewItem, int64, error)
+	Get(ctx context.Context, tenantID, id string) (*domain.ReviewItem, error)
+	Decide(ctx context.Context, tenantID, id, actor string, verdict domain.HumanVerdict,
+		reason string) (*domain.ReviewItem, error)
+}
+
 // policyVersionEvaluationAction 标记评测动作审批的策略版本（审批协议演进时的
 // 兼容性锚点；Digest 校验使其与创建时版本强绑定）。
 const policyVersionEvaluationAction = "action-v1"
@@ -130,6 +138,7 @@ type EvaluationHandler struct {
 	approvals    evaluationApprovalService
 	roles        evaluationRoleResolver
 	observations evaluationObservationQueryService
+	review       evaluationReviewService
 	logger       *zap.Logger
 }
 
@@ -180,6 +189,12 @@ func (h *EvaluationHandler) WithRoleResolver(roles evaluationRoleResolver) *Eval
 // WithObservationService 注入运行态观测查询服务（P1a 查询 API）。
 func (h *EvaluationHandler) WithObservationService(service evaluationObservationQueryService) *EvaluationHandler {
 	h.observations = service
+	return h
+}
+
+// WithReviewService 注入评审池查询与决策服务（P1c）。
+func (h *EvaluationHandler) WithReviewService(service evaluationReviewService) *EvaluationHandler {
+	h.review = service
 	return h
 }
 
@@ -848,4 +863,116 @@ func (h *EvaluationHandler) GetObservation(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, obs)
+}
+
+// ReviewListQuery 评审池分页查询参数（status/trigger_reason 为原始字符串，边界在
+// handler 内收敛为领域类型，避免绑定层自定义类型解析依赖）。
+type ReviewListQuery struct {
+	Status        string `form:"status"`
+	TriggerReason string `form:"trigger_reason"`
+	ResourceKind  string `form:"resource_kind"`
+	ResourceID    string `form:"resource_id"`
+	Page          int    `form:"page"`
+	PageSize      int    `form:"page_size"`
+}
+
+// ListReviewItems 返回评审池分页明细（spec §9 数据源）。
+func (h *EvaluationHandler) ListReviewItems(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	if h.review == nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusServiceUnavailable, errors.New("evaluation review unavailable")))
+		return
+	}
+	var req ReviewListQuery
+	if err := c.ShouldBindQuery(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	if req.Page < 1 {
+		req.Page = 1
+	}
+	if req.PageSize <= 0 || req.PageSize > constants.MaxPageSize {
+		req.PageSize = constants.DefaultPageSize
+	}
+	items, total, err := h.review.List(c.Request.Context(), tenantID, port.ReviewFilter{
+		Status:        domain.ReviewItemStatus(req.Status),
+		TriggerReason: domain.ReviewTriggerReason(req.TriggerReason),
+		ResourceKind:  req.ResourceKind,
+		ResourceID:    req.ResourceID,
+		Limit:         req.PageSize,
+		Offset:        (req.Page - 1) * req.PageSize,
+	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	if items == nil {
+		items = []domain.ReviewItem{}
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items, "total": total})
+}
+
+// GetReviewItem 返回单条评审明细。
+func (h *EvaluationHandler) GetReviewItem(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	if h.review == nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusServiceUnavailable, errors.New("evaluation review unavailable")))
+		return
+	}
+	item, err := h.review.Get(c.Request.Context(), tenantID, c.Param("id"))
+	if err != nil {
+		if errors.Is(err, evalapp.ErrReviewItemNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "review item not found"})
+			return
+		}
+		_ = c.Error(err)
+		return
+	}
+	if item == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "review item not found"})
+		return
+	}
+	c.JSON(http.StatusOK, item)
+}
+
+// DecideReviewItem 人工评审结论回写（spec §9 状态机：pending → reviewed）。
+func (h *EvaluationHandler) DecideReviewItem(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	if h.review == nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusServiceUnavailable, errors.New("evaluation review unavailable")))
+		return
+	}
+	actorID, ok := userIDFromCtx(c)
+	if !ok || actorID == "" {
+		respondMissingUser(c)
+		return
+	}
+	var req gen.ReviewItemDecisionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	item, err := h.review.Decide(c.Request.Context(), tenantID, c.Param("id"), actorID,
+		domain.HumanVerdict(req.Verdict), req.Reason)
+	if err != nil {
+		if errors.Is(err, evalapp.ErrReviewItemNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "review item not found"})
+			return
+		}
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, item)
 }

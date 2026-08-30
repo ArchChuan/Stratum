@@ -79,3 +79,8 @@ type UpdateDraftCaseRequest struct {
 	AssertionMode  string `json:"assertion_mode" binding:"required,oneof=exact contains regex"`
 	Enabled        *bool  `json:"enabled"`
 }
+
+type ReviewItemDecisionRequest struct {
+	Verdict string `json:"verdict" binding:"required,oneof=pass fail judge_misjudgment case_revision"`
+	Reason  string `json:"reason" binding:"required,max=2048"`
+}
