@@ -535,12 +535,12 @@ func (r gatewayPromptRewriter) Rewrite(
 }
 
 // judgeDefaultRubric is the built-in rubric used for LLM judge verdicts. It
-// asks for a binary verdict with a short justification.
+// asks for a binary verdict with a short justification and a 0-1 confidence.
 const judgeDefaultRubric = `你是一名严谨的评测法官。根据以下标准判断实际输出是否通过：
 1. 实际输出是否直接、完整地回答了输入要求；
 2. 与期望输出的一致性（期望输出为 null 或空时忽略该项）；
 3. 是否存在明显的事实错误或逻辑矛盾。
-只输出 JSON：{"passed": true 或 false, "reason": "一句话理由"}。`
+只输出 JSON：{"passed": true 或 false, "reason": "一句话理由", "confidence": 0-1 之间的小数表示判定置信度}。`
 
 // buildEvaluationJudge wires the optional LLM judge. It degrades to a
 // disabled judge when the gateway is unavailable (db not configured),
@@ -796,8 +796,10 @@ func parseCaseGenResponse(content string) (evaldomain.GeneratedCase, error) {
 	}, nil
 }
 
-// parseJudgeResponse extracts {"passed": bool, "reason": string} from the
-// judge output, tolerating a markdown code fence around the JSON.
+// parseJudgeResponse extracts {"passed": bool, "reason": string, "confidence": number}
+// from the judge output, tolerating a markdown code fence around the JSON.
+// Confidence is optional and defaults to 1.0 (missing, non-numeric or outside
+// [0,1] are treated as "no confidence signal", spec §6.2).
 func parseJudgeResponse(content string) (evaldomain.AssertionResult, error) {
 	trimmed := strings.TrimSpace(content)
 	if strings.HasPrefix(trimmed, "```") {
@@ -806,13 +808,21 @@ func parseJudgeResponse(content string) (evaldomain.AssertionResult, error) {
 		trimmed = strings.TrimSuffix(strings.TrimSpace(trimmed), "```")
 	}
 	var verdict struct {
-		Passed bool   `json:"passed"`
-		Reason string `json:"reason"`
+		Passed     bool            `json:"passed"`
+		Reason     string          `json:"reason"`
+		Confidence json.RawMessage `json:"confidence"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(trimmed)), &verdict); err != nil {
 		return evaldomain.AssertionResult{}, fmt.Errorf("LLM judge: parse verdict: %w", err)
 	}
-	return evaldomain.AssertionResult{Passed: verdict.Passed, Message: verdict.Reason}, nil
+	confidence := 1.0
+	if len(verdict.Confidence) > 0 {
+		var c float64
+		if err := json.Unmarshal(verdict.Confidence, &c); err == nil && c >= 0 && c <= 1 {
+			confidence = c
+		}
+	}
+	return evaldomain.AssertionResult{Passed: verdict.Passed, Message: verdict.Reason, Confidence: confidence}, nil
 }
 
 func parsePromptRewritePatches(content string) ([]evaldomain.CandidatePatch, error) {

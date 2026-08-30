@@ -47,6 +47,10 @@ func (r *PgRunRepository) SaveRun(ctx context.Context, tenantID string, run doma
 			return fmt.Errorf("evaluation run repository: insert run: %w", err)
 		}
 		for _, result := range run.Results {
+			id := result.ID
+			if id == "" {
+				id = uuid.Must(uuid.NewV7()).String()
+			}
 			actualJSON, err := json.Marshal(sanitizeValue(result.Actual))
 			if err != nil {
 				return fmt.Errorf("evaluation run repository: marshal actual output: %w", err)
@@ -56,7 +60,7 @@ func (r *PgRunRepository) SaveRun(ctx context.Context, tenantID string, run doma
 				 (id, run_id, case_id, passed, actual_output, message, error_message, trace_id,
 				  tokens, cost_usd, duration_ms)
 				 VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11)`,
-				uuid.Must(uuid.NewV7()).String(), run.ID, result.CaseID, result.Passed, string(actualJSON),
+				id, run.ID, result.CaseID, result.Passed, string(actualJSON),
 				result.Message, result.Error, result.TraceID, result.Tokens, result.CostUSD, result.DurationMs,
 			); err != nil {
 				return fmt.Errorf("evaluation run repository: insert case result: %w", err)
