@@ -721,7 +721,7 @@ spec:
           annotations:
             summary: "人工评审池积压超过阈值（当前 {{ $value }}）"
             description: "待评审条目持续 > 50 达 15 分钟，低置信/判异样本滞留，需人工介入。"
-            dashboard_url: "{{ .externalURL }}"
+            dashboard_url: "{{ $externalURL }}"
             runbook_url: /docs/runbooks/stratum-eval-review-backlog.md#stratum-eval-review-backlog-high
     - name: stratum-http-recording
       interval: 1m
