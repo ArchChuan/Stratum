@@ -134,9 +134,16 @@ func TestContracts(t *testing.T) {
 			}
 		}(),
 		Workflow: &wiring.Workflow{
-			DefinitionService: workflowapp.NewDefinitionService(contractDefRepo, contractVerRepo, nextID),
-			RunService:        workflowapp.NewRunService(contractVerRepo, contractRunStore, contractAgtExec, nextID),
-			ControlService:    workflowapp.NewControlService(contractCtrlRepo, nextID),
+			DefinitionService: func() *workflowapp.DefinitionService {
+				svc := workflowapp.NewDefinitionService(contractDefRepo, contractVerRepo, nextID)
+				// 所有权矩阵单事实源：契约 harness 固定 admin 角色，注入后
+				// admin 的 Update/Publish/Validate 走 OpEdit 放行，Delete 走
+				// createdBy==actorID 校验（stub 空 createdBy → 403，预期语义）。
+				svc.SetTenantRoleResolver(contractTenantRole{})
+				return svc
+			}(),
+			RunService:     workflowapp.NewRunService(contractVerRepo, contractRunStore, contractAgtExec, nextID),
+			ControlService: workflowapp.NewControlService(contractCtrlRepo, nextID),
 		},
 		Knowledge: &wiring.Knowledge{},
 		Evaluation: &wiring.Evaluation{

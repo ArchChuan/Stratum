@@ -1,11 +1,11 @@
 [
   {
-    "name": "authenticated-success",
+    "name": "authenticated-forbidden",
     "method": "DELETE",
     "path": "/workflows/contract-id",
-    "want_status": 200,
+    "want_status": 403,
     "want_body": {
-      "message": "workflow deleted"
+      "error": "workflow action forbidden"
     }
   }
 ]

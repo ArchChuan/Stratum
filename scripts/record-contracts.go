@@ -106,9 +106,15 @@ func buildDDDContainer(cfg *config.Config, key *rsa.PrivateKey, logger *zap.Logg
 			}
 		}(),
 		Workflow: &wiring.Workflow{
-			DefinitionService: workflowapp.NewDefinitionService(contractDefRepo{}, contractVerRepo{}, nextID),
-			RunService:        workflowapp.NewRunService(contractVerRepo{}, contractRunStore{}, contractAgtExec{}, nextID),
-			ControlService:    workflowapp.NewControlService(contractCtrlRepo{}, nextID),
+			DefinitionService: func() *workflowapp.DefinitionService {
+				svc := workflowapp.NewDefinitionService(contractDefRepo{}, contractVerRepo{}, nextID)
+				// 与 api/http/contract_test.go 的 buildDDDContainer 保持同一注入：
+				// 否则重新生成 golden 会固化 roles==nil 的 fail-closed 403。
+				svc.SetTenantRoleResolver(contractTenantRole{})
+				return svc
+			}(),
+			RunService:     workflowapp.NewRunService(contractVerRepo{}, contractRunStore{}, contractAgtExec{}, nextID),
+			ControlService: workflowapp.NewControlService(contractCtrlRepo{}, nextID),
 		},
 		Knowledge: &wiring.Knowledge{},
 		Evaluation: &wiring.Evaluation{
@@ -187,6 +193,9 @@ func (contractSchedResolver) GetVersion(context.Context, string, string) (*sched
 }
 func (contractSchedResolver) ValidateInput(context.Context, string, string, map[string]any) error {
 	return nil
+}
+func (contractSchedResolver) ResolveVersionNames(context.Context, string, []string) (map[string]schedport.VersionName, error) {
+	return nil, nil
 }
 
 func isDDDAuthOverride(routePath string) (bool, iamport.TokenClaims) {
@@ -525,6 +534,9 @@ func (contractVerRepo) GetVersion(_ context.Context, _ string, _ string) (*workf
 func (contractVerRepo) NextVersionNumber(_ context.Context, _ string, _ string) (int64, error) {
 	return 1, nil
 }
+func (contractVerRepo) SetActiveVersion(_ context.Context, _ string, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (contractVerRepo) ListVersions(_ context.Context, _ string, _ string, _ workflowport.VersionListQuery) ([]workflowdomain.Version, int, error) {
 	return nil, 0, nil
 }
@@ -576,7 +588,7 @@ func (contractCtrlRepo) ResolveEffect(_ context.Context, _ string, _ string, _ i
 
 type contractAgtExec struct{}
 
-func (contractAgtExec) ExecuteAgent(_ context.Context, _ string, _ string, _ string) (string, string, error) {
+func (contractAgtExec) ExecuteAgent(_ context.Context, _ string, _ string, _ string, _ string, _ string) (string, string, error) {
 	return "", "", errors.New("stub: agent execution unavailable")
 }
 
