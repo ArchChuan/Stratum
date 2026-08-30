@@ -6,7 +6,8 @@ import { SkillWorkspacePage } from './SkillWorkspacePage';
 
 const { skillApiMock, operationProposalApiMock, roleState } = vi.hoisted(() => ({
   skillApiMock: {
-    getWorkspace: vi.fn(), updateSkill: vi.fn(), listRevisions: vi.fn(), rollback: vi.fn(),
+    getWorkspace: vi.fn(), updateSkill: vi.fn(), saveDraft: vi.fn(), publishDraft: vi.fn(),
+    discardDraft: vi.fn(), listRevisions: vi.fn(), rollback: vi.fn(),
   },
   operationProposalApiMock: { requestEditorAccess: vi.fn() },
   roleState: { isAdmin: true },
@@ -52,23 +53,22 @@ it('展示版本化编辑面：指令/可编辑人/版本历史', async () => {
   expect(screen.queryByRole('button', { name: /发布当前 Revision/ })).not.toBeInTheDocument();
 });
 
-it('保存即生效：PATCH 携带当前生效版本基线，成功后头部版本号前进', async () => {
-  skillApiMock.updateSkill.mockResolvedValue({
-    ...workspace,
-    active: {
-      ...workspace.active, id: 'revision-2', revisionNo: 2, instructions: '更新后的步骤', contentHash: 'hash-v2',
-    },
-  });
+it('保存草稿：POST /skills/:id/draft 携带当前生效版本基线，成功后出现未发布提示', async () => {
+  skillApiMock.saveDraft.mockResolvedValue({ ...workspace, hasDraft: true });
+  // 首次加载为无草稿态；保存后重拉工作台，返回草稿态以显示「有未发布的草稿」提示条。
+  skillApiMock.getWorkspace
+    .mockResolvedValueOnce(workspace)
+    .mockResolvedValue({ ...workspace, hasDraft: true });
   renderWorkspace();
   const instructions = await screen.findByLabelText('执行指令');
   fireEvent.change(instructions, { target: { value: '更新后的步骤' } });
-  fireEvent.click(screen.getByRole('button', { name: /保存并立即生效/ }));
+  fireEvent.click(screen.getByRole('button', { name: /保存草稿/ }));
 
-  await waitFor(() => expect(skillApiMock.updateSkill).toHaveBeenCalledWith('skill-1', {
+  await waitFor(() => expect(skillApiMock.saveDraft).toHaveBeenCalledWith('skill-1', {
     name: '测试 Skill', description: '用于测试', instructions: '更新后的步骤',
     expectedContentHash: 'hash-v1',
   }));
-  expect(await screen.findByText(/当前版本：v2/)).toBeInTheDocument();
+  expect(await screen.findByText(/有未发布的草稿/)).toBeInTheDocument();
 });
 
 it('版本历史列出当前生效与历史版本，回滚历史版本需确认', async () => {
@@ -99,7 +99,8 @@ it('member 非白名单只读，可见「申请编辑权限」并提交 grant_ed
   renderWorkspace();
   const requestBtn = await screen.findByRole('button', { name: /申请编辑权限/ });
   expect(requestBtn).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: /保存并立即生效/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /保存草稿/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /发布/ })).not.toBeInTheDocument();
 
   fireEvent.click(requestBtn);
   await waitFor(() => expect(operationProposalApiMock.requestEditorAccess).toHaveBeenCalledWith(

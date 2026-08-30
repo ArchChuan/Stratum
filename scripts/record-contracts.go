@@ -188,6 +188,9 @@ func (contractSchedResolver) GetVersion(context.Context, string, string) (*sched
 func (contractSchedResolver) ValidateInput(context.Context, string, string, map[string]any) error {
 	return nil
 }
+func (contractSchedResolver) ResolveVersionNames(context.Context, string, []string) (map[string]schedport.VersionName, error) {
+	return nil, nil
+}
 
 func isDDDAuthOverride(routePath string) (bool, iamport.TokenClaims) {
 	adminClaims := iamport.TokenClaims{Sub: "contract-admin", TenantID: "contract-tenant", Role: "admin"}
@@ -525,6 +528,9 @@ func (contractVerRepo) GetVersion(_ context.Context, _ string, _ string) (*workf
 func (contractVerRepo) NextVersionNumber(_ context.Context, _ string, _ string) (int64, error) {
 	return 1, nil
 }
+func (contractVerRepo) SetActiveVersion(_ context.Context, _ string, _ string, _ string, _ *auditdomain.ResourceChangeAuditEvent) error {
+	return nil
+}
 func (contractVerRepo) ListVersions(_ context.Context, _ string, _ string, _ workflowport.VersionListQuery) ([]workflowdomain.Version, int, error) {
 	return nil, 0, nil
 }
@@ -576,7 +582,7 @@ func (contractCtrlRepo) ResolveEffect(_ context.Context, _ string, _ string, _ i
 
 type contractAgtExec struct{}
 
-func (contractAgtExec) ExecuteAgent(_ context.Context, _ string, _ string, _ string) (string, string, error) {
+func (contractAgtExec) ExecuteAgent(_ context.Context, _ string, _ string, _ string, _ string, _ string) (string, string, error) {
 	return "", "", errors.New("stub: agent execution unavailable")
 }
 

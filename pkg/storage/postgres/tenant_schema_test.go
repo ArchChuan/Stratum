@@ -984,6 +984,15 @@ func TestTenantSchemaContainsResourceVersionsProductHistory(t *testing.T) {
 		t.Fatal("agents.active_version_id backfill must follow table creation")
 	}
 
+	// 产品表生效版本指针:历史租户升级路径,IF NOT EXISTS 幂等。NULL=无版本记录。
+	workspacesAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS rag_workspaces")
+	ragActiveVersionAt := strings.Index(sql, "ALTER TABLE rag_workspaces ADD COLUMN IF NOT EXISTS active_version_id TEXT")
+	require.NotEqual(t, -1, workspacesAt, "rag_workspaces table DDL must exist")
+	require.NotEqual(t, -1, ragActiveVersionAt, "tenant_schema.sql missing rag_workspaces.active_version_id backfill")
+	if ragActiveVersionAt < workspacesAt {
+		t.Fatal("rag_workspaces.active_version_id backfill must follow table creation")
+	}
+
 	// 产品版本历史禁止被租户重放清理删除(与 resource_revisions 同语义)。
 	require.NotContains(t, sql, "DELETE FROM resource_versions")
 	require.NotContains(t, sql, "DROP TABLE IF EXISTS resource_versions")

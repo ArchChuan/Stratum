@@ -46,4 +46,24 @@ type VersionRepo interface {
 	// to deprecated, and records an audit event. It does not create a new version.
 	RollbackRevision(ctx context.Context, skillID, targetRevisionID, actorID string, audit *auditdomain.ResourceChangeAuditEvent) error
 	NextRevisionNo(ctx context.Context, skillID string) (int, error)
+	// SaveDraft persists the skill's single draft revision, overwriting any
+	// existing draft row (id kept) or inserting a fresh one, and repoints
+	// skills.draft_revision_id. The active revision and all published/deprecated
+	// revisions are untouched — saved content is NOT effective until PublishDraft.
+	// expectedContentHash is the optimistic-concurrency baseline against the
+	// current active revision (409 on mismatch). editorActor, when non-empty,
+	// re-validates the actor's editor qualification inside the write transaction.
+	SaveDraft(ctx context.Context, skillID, expectedContentHash string, draft domain.SkillRevision, editorActor string, audit *auditdomain.ResourceChangeAuditEvent) error
+	// PublishDraft promotes the skill's draft to the new active published version
+	// in one transaction: the old active is demoted to deprecated, revision_no /
+	// published_at / parent_revision_id are assigned, active_revision_id repoints
+	// and draft_revision_id clears. nextRevisionNo is taken by the caller;
+	// parentRevisionID is the old active's id ("" when the skill had none).
+	// expectedContentHash guards concurrent edits (409). ErrSkillDraftNotFound is
+	// returned when no draft exists.
+	PublishDraft(ctx context.Context, skillID, draftID, parentRevisionID string, nextRevisionNo int, expectedContentHash, editorActor string, audit *auditdomain.ResourceChangeAuditEvent) error
+	// DiscardDraft deletes the skill's draft row and clears skills.draft_revision_id
+	// — idempotent (a skill without a draft succeeds). editorActor, when non-empty,
+	// re-validates editor qualification inside the transaction.
+	DiscardDraft(ctx context.Context, skillID, editorActor string, audit *auditdomain.ResourceChangeAuditEvent) error
 }

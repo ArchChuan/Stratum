@@ -35,9 +35,21 @@ type SkillWorkspaceView struct {
 	// unpublished skill (no active_revision_id) is still to produce its first version.
 	Active  domain.SkillRevision
 	Editors []string
+	// HasDraft marks an unpublished draft revision existing for the skill
+	// (skills.draft_revision_id set). The frontend shows a draft banner and
+	// gates the publish entry.
+	HasDraft bool
 }
 
 type SaveRevisionInput struct {
+	Name         string
+	Description  string
+	Instructions string
+	// ActorID is the caller; ownership is checked against the skill's created_by.
+	ActorID string
+}
+
+type SaveDraftInput struct {
 	Name         string
 	Description  string
 	Instructions string
@@ -191,7 +203,7 @@ func (s *VersionService) GetWorkspace(ctx context.Context, skillID, actorID stri
 			return SkillWorkspaceView{}, fmt.Errorf("skill service get workspace: list editors: %w", err)
 		}
 	}
-	view := SkillWorkspaceView{Skill: skill, Editors: editors}
+	view := SkillWorkspaceView{Skill: skill, Editors: editors, HasDraft: skill.DraftRevisionID != ""}
 	// 存量未发布 skill(无 active_revision_id)兜底返回空 Active,前端可编辑,
 	// 首次保存生成第一版。
 	active, ok, err := s.repo.GetActiveRevision(ctx, skillID)
@@ -203,6 +215,19 @@ func (s *VersionService) GetWorkspace(ctx context.Context, skillID, actorID stri
 	}
 	if err := s.resolveNames(ctx, &view.Active); err != nil {
 		return SkillWorkspaceView{}, err
+	}
+	return view, nil
+}
+
+// workspaceView 组装写后视图:Skill 行 + active 版本(填充昵称)+ 空 editors。
+// HasDraft 由 skill 行 draft_revision_id 推导。供 SaveDraft/PublishDraft/DiscardDraft 复用。
+func (s *VersionService) workspaceView(ctx context.Context, skill port.SkillProductRow, active *domain.SkillRevision) (SkillWorkspaceView, error) {
+	view := SkillWorkspaceView{Skill: skill, Editors: []string{}, HasDraft: skill.DraftRevisionID != ""}
+	if active != nil {
+		view.Active = *active
+		if err := s.resolveNames(ctx, &view.Active); err != nil {
+			return SkillWorkspaceView{}, err
+		}
 	}
 	return view, nil
 }
@@ -538,6 +563,157 @@ func (s *VersionService) SaveRevision(
 		return SkillWorkspaceView{}, err
 	}
 	return SkillWorkspaceView{Skill: skill, Active: saved, Editors: []string{}}, nil
+}
+
+// SaveDraft persists (or overwrites) the skill's single draft revision without
+// touching the active revision — the saved content is NOT effective until an
+// explicit PublishDraft. expectedContentHash is the optimistic-concurrency
+// baseline taken from the current active revision (409 on mismatch). A legacy
+// unpublished skill (nil active) accepts any baseline and keeps an empty active.
+// Overwriting reuses skill.DraftRevisionID as the draft id (row id kept); a
+// fresh draft gets a new id and repoints skills.draft_revision_id.
+func (s *VersionService) SaveDraft(
+	ctx context.Context,
+	skillID, expectedContentHash string,
+	in SaveDraftInput,
+) (SkillWorkspaceView, error) {
+	skill, active, editorActor, err := s.loadOwnedActive(ctx, skillID, in.ActorID)
+	if err != nil {
+		return SkillWorkspaceView{}, err
+	}
+	if !contentHashMatches(expectedContentHash, active) {
+		return SkillWorkspaceView{}, domain.ErrSkillDraftStale
+	}
+	// before 投影在构造草稿前定格当前生效内容。
+	var beforeRev *domain.SkillRevision
+	if active != nil {
+		rev := *active
+		beforeRev = &rev
+	}
+	before := skillSafeProjection(skill, beforeRev)
+	draftID := skill.DraftRevisionID
+	if draftID == "" {
+		draftID = uuid.Must(uuid.NewV7()).String()
+	}
+	draft := domain.SkillRevision{
+		ID:                 draftID,
+		SkillID:            skillID,
+		Status:             domain.VersionStatusDraft,
+		Source:             "manual",
+		RevisionNo:         0, // 草稿不占版本号(insertSkillRevision NULLIF(0))
+		GenerationMetadata: map[string]any{},
+		Name:               strings.TrimSpace(in.Name),
+		Description:        strings.TrimSpace(in.Description),
+		Instructions:       strings.TrimSpace(in.Instructions),
+		CreatedBy:          in.ActorID,
+	}
+	hash, err := draft.ComputeContentHash()
+	if err != nil {
+		return SkillWorkspaceView{}, err
+	}
+	draft.ContentHash = hash
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindSkill, skillID, auditdomain.ChangeOpUpdate, in.ActorID,
+		before, skillSafeProjection(skill, &draft))
+	if err != nil {
+		return SkillWorkspaceView{}, err
+	}
+	if err := s.repo.SaveDraft(ctx, skillID, expectedContentHash, draft, editorActor, audit); err != nil {
+		s.recordFailure(ctx, skillID, "update", err)
+		return SkillWorkspaceView{}, err
+	}
+	skill.DraftRevisionID = draftID
+	return s.workspaceView(ctx, skill, active)
+}
+
+// PublishDraft promotes the skill's draft to the new active published version:
+// revision_no assigned, the old active deprecated, active_revision_id repointed
+// and draft_revision_id cleared — all inside the repository transaction.
+// expectedContentHash guards concurrent edits against the current active
+// revision (409 on mismatch). No draft → ErrSkillDraftNotFound. A draft failing
+// publish validation leaves the draft intact (ErrSkillNotPublishable, 400).
+func (s *VersionService) PublishDraft(
+	ctx context.Context,
+	skillID, expectedContentHash, actorID string,
+) (SkillWorkspaceView, error) {
+	skill, active, editorActor, err := s.loadOwnedActive(ctx, skillID, actorID)
+	if err != nil {
+		return SkillWorkspaceView{}, err
+	}
+	if !contentHashMatches(expectedContentHash, active) {
+		return SkillWorkspaceView{}, domain.ErrSkillDraftStale
+	}
+	if skill.DraftRevisionID == "" {
+		return SkillWorkspaceView{}, domain.ErrSkillDraftNotFound
+	}
+	draft, err := s.loadPublishableDraft(ctx, skillID, skill.DraftRevisionID)
+	if err != nil {
+		return SkillWorkspaceView{}, err
+	}
+	next, err := s.repo.NextRevisionNo(ctx, skillID)
+	if err != nil {
+		return SkillWorkspaceView{}, err
+	}
+	var parentID string
+	if active != nil {
+		parentID = active.ID
+	}
+	// before 定格当前 active + 草稿内容;after 定格转正后的草稿。
+	after := draft
+	after.Status = domain.VersionStatusPublished
+	after.RevisionNo = next
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindSkill, skillID, auditdomain.ChangeOpUpdate, actorID,
+		skillSafeProjection(skill, active), skillSafeProjection(skill, &after))
+	if err != nil {
+		return SkillWorkspaceView{}, err
+	}
+	if err := s.repo.PublishDraft(ctx, skillID, draft.ID, parentID, next, expectedContentHash, editorActor, audit); err != nil {
+		s.recordFailure(ctx, skillID, "publish", err)
+		return SkillWorkspaceView{}, err
+	}
+	skill.ActiveRevisionID = draft.ID
+	skill.DraftRevisionID = ""
+	after.IsCurrent = true
+	return s.workspaceView(ctx, skill, &after)
+}
+
+// loadPublishableDraft loads the skill's draft row and runs publish validation.
+// Missing or non-draft revision → ErrSkillDraftNotFound; a validation failure
+// (ErrSkillNotPublishable, 400) leaves the draft intact.
+func (s *VersionService) loadPublishableDraft(ctx context.Context, skillID, draftRevisionID string) (domain.SkillRevision, error) {
+	draft, ok, err := s.repo.GetRevision(ctx, skillID, draftRevisionID)
+	if err != nil {
+		return domain.SkillRevision{}, err
+	}
+	if !ok || draft.Status != domain.VersionStatusDraft {
+		return domain.SkillRevision{}, domain.ErrSkillDraftNotFound
+	}
+	if err := draft.ValidatePublishable(); err != nil {
+		return domain.SkillRevision{}, err
+	}
+	return draft, nil
+}
+
+// DiscardDraft deletes the skill's draft revision and clears
+// skills.draft_revision_id (idempotent), then returns the current effective
+// workspace so the client can refill the form from the active version.
+func (s *VersionService) DiscardDraft(ctx context.Context, skillID, actorID string) (SkillWorkspaceView, error) {
+	skill, active, editorActor, err := s.loadOwnedActive(ctx, skillID, actorID)
+	if err != nil {
+		return SkillWorkspaceView{}, err
+	}
+	beforeRev := active
+	skillAfter := skill
+	skillAfter.DraftRevisionID = ""
+	audit, err := newChangeAudit(ctx, auditdomain.ResourceKindSkill, skillID, auditdomain.ChangeOpUpdate, actorID,
+		skillSafeProjection(skill, beforeRev), skillSafeProjection(skillAfter, beforeRev))
+	if err != nil {
+		return SkillWorkspaceView{}, err
+	}
+	if err := s.repo.DiscardDraft(ctx, skillID, editorActor, audit); err != nil {
+		s.recordFailure(ctx, skillID, "discard", err)
+		return SkillWorkspaceView{}, err
+	}
+	return s.workspaceView(ctx, skillAfter, active)
 }
 
 // contentHashMatches reports whether the caller's expectedContentHash still

@@ -350,6 +350,73 @@ func (r *fakeVersionRepo) NextRevisionNo(_ context.Context, skillID string) (int
 	}
 	return next, nil
 }
+func (r *fakeVersionRepo) SaveDraft(_ context.Context, skillID, expected string, draft domain.SkillRevision, _ string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	r.recordAudit(audit)
+	skill, ok := r.skills[skillID]
+	if !ok {
+		return domain.ErrSkillNotFound
+	}
+	if expected != "" {
+		active, ok := r.revisions[skill.ActiveRevisionID]
+		if !ok || active.ContentHash != expected {
+			return domain.ErrSkillDraftStale
+		}
+	}
+	// 覆盖既有草稿(保持 id 不变)或首次插入。
+	if old, ok := r.revisions[skill.DraftRevisionID]; ok && old.SkillID == skillID && old.Status == domain.VersionStatusDraft {
+		old.Name, old.Description, old.Instructions = draft.Name, draft.Description, draft.Instructions
+		old.ContentHash = draft.ContentHash
+		r.revisions[old.ID] = old
+	} else {
+		r.revisions[draft.ID] = draft
+		skill.DraftRevisionID = draft.ID
+		r.skills[skillID] = skill
+	}
+	return nil
+}
+func (r *fakeVersionRepo) PublishDraft(_ context.Context, skillID, draftID, parentRevisionID string, next int, expected, _ string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	r.recordAudit(audit)
+	skill, ok := r.skills[skillID]
+	if !ok {
+		return domain.ErrSkillNotFound
+	}
+	if expected != "" {
+		active, ok := r.revisions[skill.ActiveRevisionID]
+		if !ok || active.ContentHash != expected {
+			return domain.ErrSkillDraftStale
+		}
+	}
+	draft, ok := r.revisions[draftID]
+	if !ok || draft.SkillID != skillID || draft.Status != domain.VersionStatusDraft {
+		return domain.ErrSkillDraftNotFound
+	}
+	// 顺序必须 demote→promote:旧生效版本先降级,再转正草稿。
+	if cur, ok := r.revisions[skill.ActiveRevisionID]; ok && cur.ID != draftID {
+		cur.Status = domain.VersionStatusDeprecated
+		r.revisions[cur.ID] = cur
+	}
+	draft.Status = domain.VersionStatusPublished
+	draft.RevisionNo = next
+	draft.ParentRevisionID = parentRevisionID
+	r.revisions[draftID] = draft
+	skill.ActiveRevisionID = draftID
+	skill.DraftRevisionID = ""
+	r.skills[skillID] = skill
+	return nil
+}
+func (r *fakeVersionRepo) DiscardDraft(_ context.Context, skillID, _ string, audit *auditdomain.ResourceChangeAuditEvent) error {
+	r.recordAudit(audit)
+	skill, ok := r.skills[skillID]
+	if !ok {
+		return domain.ErrSkillNotFound
+	}
+	if draft, ok := r.revisions[skill.DraftRevisionID]; ok && draft.SkillID == skillID && draft.Status == domain.VersionStatusDraft {
+		delete(r.revisions, draft.ID)
+	}
+	skill.DraftRevisionID = ""
+	r.skills[skillID] = skill
+	return nil
+}
 
 // seedSkill 直接注入 skill + revision 到 fake repo(绕过写路径,便于构造存量场景)。
 func seedSkill(repo *fakeVersionRepo, skill port.SkillProductRow, revision domain.SkillRevision) {
@@ -377,4 +444,100 @@ func seedRevision(t *testing.T, repo *fakeVersionRepo, skillID, revisionID strin
 	}
 	seedSkill(repo, skill, revision)
 	return skill, revision
+}
+
+func TestVersionServiceSaveDraft(t *testing.T) {
+	svc := NewVersionService(newFakeVersionRepo(), zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	view := mustCreateSkill(t, svc)
+
+	out, err := svc.SaveDraft(context.Background(), view.Skill.ID, view.Active.ContentHash,
+		SaveDraftInput{Name: "draft-name", Description: "draft-desc", Instructions: "draft-ins", ActorID: "user-1"})
+	require.NoError(t, err)
+	require.True(t, out.HasDraft)
+	// 保存草稿不改变当前生效版本。
+	require.Equal(t, view.Active.ID, out.Active.ID)
+	require.Equal(t, view.Active.ContentHash, out.Active.ContentHash)
+
+	// 再次保存 = 覆盖更新,草稿 id 复用(service 复用 skill.DraftRevisionID)。
+	out2, err := svc.SaveDraft(context.Background(), view.Skill.ID, view.Active.ContentHash,
+		SaveDraftInput{Name: "draft-2", Description: "draft-desc", Instructions: "draft-ins", ActorID: "user-1"})
+	require.NoError(t, err)
+	require.True(t, out2.HasDraft)
+	require.Equal(t, out.Skill.DraftRevisionID, out2.Skill.DraftRevisionID)
+}
+
+func TestVersionServiceSaveDraftStale(t *testing.T) {
+	svc := NewVersionService(newFakeVersionRepo(), zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	view := mustCreateSkill(t, svc)
+
+	_, err := svc.SaveDraft(context.Background(), view.Skill.ID, "stale-hash",
+		SaveDraftInput{Name: "n", Description: "d", Instructions: "i", ActorID: "user-1"})
+	require.ErrorIs(t, err, domain.ErrSkillDraftStale)
+}
+
+func TestVersionServicePublishDraft(t *testing.T) {
+	svc := NewVersionService(newFakeVersionRepo(), zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	view := mustCreateSkill(t, svc)
+	_, err := svc.SaveDraft(context.Background(), view.Skill.ID, view.Active.ContentHash,
+		SaveDraftInput{Name: "draft-name", Description: "draft-desc", Instructions: "draft-ins", ActorID: "user-1"})
+	require.NoError(t, err)
+
+	out, err := svc.PublishDraft(context.Background(), view.Skill.ID, view.Active.ContentHash, "user-1")
+	require.NoError(t, err)
+	require.False(t, out.HasDraft)
+	require.Equal(t, "draft-name", out.Active.Name)
+	require.Equal(t, view.Active.RevisionNo+1, out.Active.RevisionNo)
+	// 旧生效版本降级。
+	revisions, err := svc.ListRevisions(context.Background(), view.Skill.ID)
+	require.NoError(t, err)
+	require.Len(t, revisions, 2)
+	require.Equal(t, domain.VersionStatusDeprecated, revisions[1].Status)
+}
+
+func TestVersionServicePublishDraftNoDraft(t *testing.T) {
+	svc := NewVersionService(newFakeVersionRepo(), zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	view := mustCreateSkill(t, svc)
+
+	_, err := svc.PublishDraft(context.Background(), view.Skill.ID, view.Active.ContentHash, "user-1")
+	require.ErrorIs(t, err, domain.ErrSkillDraftNotFound)
+}
+
+func TestVersionServicePublishDraftNotPublishable(t *testing.T) {
+	svc := NewVersionService(newFakeVersionRepo(), zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	view := mustCreateSkill(t, svc)
+	// SaveDraft 允许空指令(草稿可半成品),发布时 ValidatePublishable 拒绝。
+	_, err := svc.SaveDraft(context.Background(), view.Skill.ID, view.Active.ContentHash,
+		SaveDraftInput{Name: "draft-name", Description: "draft-desc", Instructions: "", ActorID: "user-1"})
+	require.NoError(t, err)
+
+	_, err = svc.PublishDraft(context.Background(), view.Skill.ID, view.Active.ContentHash, "user-1")
+	require.ErrorIs(t, err, domain.ErrSkillNotPublishable)
+	// 校验失败不破坏既有草稿:再次发布仍报 NotPublishable 而非 NotFound。
+	_, err = svc.PublishDraft(context.Background(), view.Skill.ID, view.Active.ContentHash, "user-1")
+	require.ErrorIs(t, err, domain.ErrSkillNotPublishable)
+}
+
+func TestVersionServiceDiscardDraft(t *testing.T) {
+	svc := NewVersionService(newFakeVersionRepo(), zap.NewNop())
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	view := mustCreateSkill(t, svc)
+	_, err := svc.SaveDraft(context.Background(), view.Skill.ID, view.Active.ContentHash,
+		SaveDraftInput{Name: "draft-name", Description: "draft-desc", Instructions: "draft-ins", ActorID: "user-1"})
+	require.NoError(t, err)
+
+	out, err := svc.DiscardDraft(context.Background(), view.Skill.ID, "user-1")
+	require.NoError(t, err)
+	require.False(t, out.HasDraft)
+	// 表单回填当前生效版本。
+	require.Equal(t, view.Active.Name, out.Active.Name)
+	require.Equal(t, view.Active.ContentHash, out.Active.ContentHash)
+
+	// 幂等:无草稿再次撤销成功。
+	_, err = svc.DiscardDraft(context.Background(), view.Skill.ID, "user-1")
+	require.NoError(t, err)
 }

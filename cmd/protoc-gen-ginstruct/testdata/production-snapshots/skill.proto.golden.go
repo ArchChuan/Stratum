@@ -18,9 +18,10 @@ type UpdateSkillRequest struct {
 }
 
 type SkillWorkspaceResponse struct {
-	Editors []string              `json:"editors"`
-	Skill   SkillProductResponse  `json:"skill"`
-	Active  SkillRevisionResponse `json:"active"`
+	Editors  []string              `json:"editors"`
+	Skill    SkillProductResponse  `json:"skill"`
+	Active   SkillRevisionResponse `json:"active"`
+	HasDraft bool                  `json:"hasDraft"`
 }
 
 type SkillProductResponse struct {
@@ -59,4 +60,15 @@ type RollbackSkillRequest struct {
 type ErrorResponse struct {
 	Code    int32  `json:"code"`
 	Message string `json:"message"`
+}
+
+type SaveSkillDraftRequest struct {
+	Name                string `json:"name"`
+	Description         string `json:"description"`
+	Instructions        string `json:"instructions"`
+	ExpectedContentHash string `json:"expectedContentHash,omitempty"`
+}
+
+type PublishSkillDraftRequest struct {
+	ExpectedContentHash string `json:"expectedContentHash,omitempty"`
 }

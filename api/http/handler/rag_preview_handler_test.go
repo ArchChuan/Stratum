@@ -116,8 +116,14 @@ func (r *previewWorkspaceRepo) List(context.Context, string) ([]*knowledgedomain
 	return []*knowledgedomain.Workspace{r.ws}, nil
 }
 func (r *previewWorkspaceRepo) UpdateWorkspaceAll(
-	context.Context, string, string, *string, *string, knowledgedomain.WorkspaceConfig,
-	string, *auditdomain.ResourceChangeAuditEvent,
+	context.Context, string, string, *string, *string, knowledgedomain.KnowledgeWorkspaceSnapshot,
+	string, string, *auditdomain.ResourceChangeAuditEvent,
+) error {
+	return nil
+}
+func (r *previewWorkspaceRepo) RollbackWorkspace(
+	context.Context, string, string, knowledgedomain.KnowledgeWorkspaceSnapshot,
+	string, string, *auditdomain.ResourceChangeAuditEvent,
 ) error {
 	return nil
 }

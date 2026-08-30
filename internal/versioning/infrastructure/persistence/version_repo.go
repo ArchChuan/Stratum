@@ -97,7 +97,7 @@ func listVersionsSQL(kind domain.ResourceKind) (string, error) {
 	return fmt.Sprintf(`SELECT r.id, r.resource_kind, r.resource_id, COALESCE(r.parent_version_id, ''),
 			COALESCE(r.revision_no, 0), r.status, r.source, r.content_hash, r.payload, r.safe_summary,
 			r.created_by, r.created_at, r.published_at,
-			COALESCE((SELECT p.%s FROM %s p WHERE p.id = r.resource_id) = r.id, false) AS is_current
+			COALESCE((SELECT p.%s FROM %s p WHERE p.id::text = r.resource_id) = r.id, false) AS is_current
 		FROM resource_versions r
 		WHERE r.resource_kind=$1 AND r.resource_id=$2`, ref.ActiveColumn, ref.Table), nil
 }
