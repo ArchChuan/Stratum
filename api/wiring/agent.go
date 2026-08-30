@@ -539,6 +539,16 @@ func wireOperationGate(c *Container, a *Agent, metrics observability.MetricsProv
 				return fmt.Errorf("grant editor: knowledge doc repo not wired")
 			}
 			return c.Knowledge.DocRepo.AddAllowedUser(ctx, tenantID, resourceID, editorID)
+		case "mcp":
+			return resourceEditors.AddEditorForKind(ctx, tenantID, "mcp", resourceID, editorID, "operation-gate")
+		case "knowledge_workspace":
+			workspace, err := c.Knowledge.WorkspaceService.GetWorkspace(ctx, tenantID, resourceID)
+			if err != nil {
+				return err
+			}
+			return resourceEditors.AddEditorForKind(ctx, tenantID, "knowledge", workspace.ID, editorID, "operation-gate")
+		case "workflow":
+			return resourceEditors.AddEditorForKind(ctx, tenantID, "workflow", resourceID, editorID, "operation-gate")
 		default:
 			return fmt.Errorf("grant editor: unsupported resource type %q", resourceType)
 		}
