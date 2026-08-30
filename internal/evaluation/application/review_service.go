@@ -40,6 +40,9 @@ func NewReviewService(deps ReviewServiceDeps) *ReviewService {
 	if deps.Logger == nil {
 		deps.Logger = zap.NewNop()
 	}
+	if deps.Metrics == nil {
+		deps.Metrics = observability.NoopMetrics{}
+	}
 	return &ReviewService{deps: deps}
 }
 

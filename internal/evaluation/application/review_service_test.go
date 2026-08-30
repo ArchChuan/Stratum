@@ -415,3 +415,24 @@ func TestEscalateNoTriggerSkipsBacklogRefresh(t *testing.T) {
 		t.Fatalf("backlog calls = %v, want none", metrics.backlog)
 	}
 }
+
+// TestDecideNilMetricsDoesNotPanic 覆盖构造时未注入 Metrics（如 contract test /
+// record-contracts wiring）的场景：Decide 触发的积压刷新不得因 nil Metrics 空指针
+// panic，否则契约测试 500。回归 P1c 积压指标修复引入的缺陷。
+func TestDecideNilMetricsDoesNotPanic(t *testing.T) {
+	repo := &fakeReviewRepo{
+		inserted: []domain.ReviewItem{{ID: "i1", Status: domain.ReviewStatusPending}},
+	}
+	svc := NewReviewService(ReviewServiceDeps{
+		Repo:   repo,
+		Logger: zap.NewNop(),
+		// 刻意不注入 Metrics，复现 contract_test.go / record-contracts.go 的装配。
+	})
+	got, err := svc.Decide(context.Background(), "t1", "i1", "admin", domain.HumanVerdictFail, "bad")
+	if err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	if got.Status != domain.ReviewStatusReviewed || got.HumanVerdict != domain.HumanVerdictFail {
+		t.Fatalf("unexpected item: %+v", got)
+	}
+}
