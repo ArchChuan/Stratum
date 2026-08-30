@@ -5,6 +5,7 @@ import type { ColumnsType } from 'antd/es/table';
 import type { KnowledgeDocument } from '../model/knowledge';
 
 import { COMPACT_PAGE_SIZE } from '@/constants';
+import { RequestEditorButton } from '@/shared/components';
 import { ResponsiveDataView } from '@/shared/ui';
 
 const { Text } = Typography;
@@ -17,9 +18,8 @@ interface WorkspaceDocumentsTableProps {
   onDelete?: (documentID: string) => void;
   onPreview?: (document: KnowledgeDocument) => void;
   onSetAccess?: (document: KnowledgeDocument) => void;
-  // 成员自助「申请查看权限」：受限文档（restricted=true）显示申请入口。
-  onRequestAccess?: (document: KnowledgeDocument) => void;
-  requestingDocumentID?: string;
+  // 文档所属 workspace 名：RequestEditorButton 生成 knowledge_doc 路由的 workspaceName 段。
+  workspaceName: string;
 }
 
 const STATUS_META: Record<string, { color: string; label: string }> = {
@@ -169,11 +169,10 @@ export const WorkspaceDocumentsTable = ({
   onDelete = () => undefined,
   onPreview,
   onSetAccess,
-  onRequestAccess,
-  requestingDocumentID = '',
+  workspaceName,
 }: WorkspaceDocumentsTableProps) => {
-  // 申请查看权限：member 且当前 viewer 被锁定才显示。
-  const canRequestAccess = !isAdmin && Boolean(onRequestAccess);
+  // 申请查看权限：member（admin/owner 与平台库恒 false）且当前 viewer 被锁定才显示。
+  const canRequestAccess = !isAdmin;
   const actions: ColumnsType<KnowledgeDocument>[number] = {
     title: '操作',
     key: 'actions',
@@ -183,16 +182,12 @@ export const WorkspaceDocumentsTable = ({
       <Flex align="center" justify="center" gap={0}>
         {onPreview && previewButton(document, onPreview)}
         {canRequestAccess && isLocked(document) && (
-          <Tooltip title="申请查看权限">
-            <Button
-              type="link"
-              size="small"
-              loading={requestingDocumentID === document.id}
-              onClick={() => onRequestAccess?.(document)}
-            >
-              申请查看
-            </Button>
-          </Tooltip>
+          <RequestEditorButton
+            resourceType="knowledge_doc"
+            resourceId={document.id}
+            options={{ workspaceName, resourceName: `${workspaceName}/${document.source}` }}
+            buttonProps={{ type: 'link', size: 'small', style: { padding: '0 4px' } }}
+          />
         )}
         {isAdmin && onSetAccess && (
           <Tooltip title="设置访问权限">
@@ -240,14 +235,12 @@ export const WorkspaceDocumentsTable = ({
               </Text>
               {onPreview && previewButton(document, onPreview)}
               {canRequestAccess && isLocked(document) && (
-                <Button
-                  type="link"
-                  size="small"
-                  loading={requestingDocumentID === document.id}
-                  onClick={() => onRequestAccess?.(document)}
-                >
-                  申请查看
-                </Button>
+                <RequestEditorButton
+                  resourceType="knowledge_doc"
+                  resourceId={document.id}
+                  options={{ workspaceName, resourceName: `${workspaceName}/${document.source}` }}
+                  buttonProps={{ type: 'link', size: 'small', style: { padding: '0 4px' } }}
+                />
               )}
               {isAdmin && onSetAccess && (
                 <Button

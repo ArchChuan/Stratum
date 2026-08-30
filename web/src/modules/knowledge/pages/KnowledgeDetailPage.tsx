@@ -1,6 +1,3 @@
-import { message } from 'antd';
-import { useCallback, useState } from 'react';
-
 import { DocAccessModal } from '../components/DocAccessModal';
 import { DocPreviewDrawer } from '../components/DocPreviewDrawer';
 import { WorkspaceConfigForm } from '../components/WorkspaceConfigForm';
@@ -11,10 +8,6 @@ import { WorkspaceQueryPanel } from '../components/WorkspaceQueryPanel';
 import { WorkspaceStatsCard } from '../components/WorkspaceStatsCard';
 import { WorkspaceUploadZone } from '../components/WorkspaceUploadZone';
 import { useKnowledgeDetailPage } from '../hooks/useKnowledgeDetailPage';
-import type { KnowledgeDocument } from '../model/knowledge';
-
-import { operationProposalApi } from '@/modules/operation-gate';
-import { extractErrorMessage } from '@/shared/lib';
 
 export const KnowledgeDetailPage = () => {
   const {
@@ -53,24 +46,6 @@ export const KnowledgeDetailPage = () => {
     handlePreviewDocument,
   } = useKnowledgeDetailPage();
 
-  // 成员自助「申请查看权限」：受限文档发起 grant_editor（knowledge_doc）提案，
-  // 管理员在审批中心「权限审批」批准后加入该文档查看白名单，列表随即解锁。
-  const [requestingDocumentID, setRequestingDocumentID] = useState<string | null>(null);
-  const handleRequestAccess = useCallback(async (doc: KnowledgeDocument) => {
-    setRequestingDocumentID(doc.id);
-    try {
-      await operationProposalApi.requestEditorAccess('knowledge_doc', doc.id, {
-        workspaceName: name,
-        resourceName: `${name}/${doc.source}`,
-      });
-      message.success({ content: '已提交，等待管理员审批', duration: 3 });
-    } catch (err) {
-      message.error({ content: extractErrorMessage(err, '申请查看权限失败'), duration: 3 });
-    } finally {
-      setRequestingDocumentID(null);
-    }
-  }, [name]);
-
   if (statsLoading && !stats) {
     return <WorkspaceDetailSkeleton />;
   }
@@ -83,6 +58,7 @@ export const KnowledgeDetailPage = () => {
         onBack={() => navigate('/knowledge')}
         onDescriptionSave={isAdmin ? handleDescriptionSave : undefined}
         onNameSave={isAdmin ? handleNameSave : undefined}
+        canRequestEditor={!isAdmin}
       />
 
       <WorkspaceStatsCard stats={stats ?? undefined} docCount={documents.length || undefined} />
@@ -109,8 +85,7 @@ export const KnowledgeDetailPage = () => {
         onDelete={handleDeleteDocument}
         onPreview={handlePreviewDocument}
         onSetAccess={isAdmin ? handleOpenAccess : undefined}
-        onRequestAccess={isAdmin ? undefined : handleRequestAccess}
-        requestingDocumentID={requestingDocumentID ?? ''}
+        workspaceName={name}
       />
 
       <WorkspaceQueryPanel
