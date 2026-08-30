@@ -38,7 +38,7 @@ export default function ReviewPoolPanel() {
   const load = useCallback(async (page = 1, pageSize = 10) => {
     setLoading(true);
     try {
-      const data = await listReviewItems({ page, pageSize });
+      const data = await listReviewItems({ page, page_size: pageSize });
       setItems(data.items ?? []);
       setTotal(data.total ?? 0);
     } catch (err: any) {

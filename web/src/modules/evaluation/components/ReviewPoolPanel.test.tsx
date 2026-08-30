@@ -49,7 +49,7 @@ describe('ReviewPoolPanel', () => {
     expect(screen.getByText('待评审')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '详 情' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '评 审' })).toBeInTheDocument();
-    await waitFor(() => expect(mocks.listReviewItems).toHaveBeenCalledWith({ page: 1, pageSize: 10 }));
+    await waitFor(() => expect(mocks.listReviewItems).toHaveBeenCalledWith({ page: 1, page_size: 10 }));
   });
 
   it('shows a placeholder for empty case_result resource columns', async () => {

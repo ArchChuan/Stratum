@@ -4,9 +4,9 @@ import client from '@/services/client';
 
 export async function listReviewItems(params: {
   status?: string;
-  triggerReason?: string;
+  trigger_reason?: string;
   page?: number;
-  pageSize?: number;
+  page_size?: number;
 }): Promise<{ items: ReviewItem[]; total: number }> {
   const { data } = await client.get('/evaluations/review', { params });
   return data;
