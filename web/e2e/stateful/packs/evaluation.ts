@@ -370,7 +370,7 @@ export const executeEvaluationPack = async ({
     expect(detailStatus).toBe(200);
     expect((await reviewDetailResponse).status()).toBe(200);
 
-    await reviewRow.getByRole('button', { name: '评审' }).click();
+    await reviewRow.getByRole('button', { name: /评\s*审/ }).click();
     const reviewDialog = page.getByRole('dialog', { name: '人工评审' });
     await reviewDialog.getByRole('combobox', { name: '评审结论' }).click();
     await page.locator('.ant-select-item-option-content').filter({ hasText: /^通过/ }).click();
