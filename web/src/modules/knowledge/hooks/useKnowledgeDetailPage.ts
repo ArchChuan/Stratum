@@ -46,6 +46,11 @@ export const useKnowledgeDetailPage = () => {
 
   const [stats, setStats] = useState<WorkspaceStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
+  // stats 异步加载，stats===null 首帧 isEditor=false（与现状一致）。editors 为
+  // 白名单 member 集合，name/desc 编辑面对白名单 member 开放（I-1）。
+  const isEditor = (stats?.editors ?? []).includes(user?.sub ?? '');
+  const canEdit = isAdmin || isEditor;
+  const canRequestEditor = !isAdmin && !isEditor;
   const [configForm] = Form.useForm<ConfigValues>();
   const lastLoadedConfig = useRef<ConfigValues>({});
   const [configLoading, setConfigLoading] = useState(false);
@@ -391,6 +396,8 @@ export const useKnowledgeDetailPage = () => {
     name,
     navigate,
     isAdmin,
+    canEdit,
+    canRequestEditor,
     stats,
     statsLoading,
     configForm,

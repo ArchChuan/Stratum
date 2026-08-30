@@ -111,6 +111,10 @@ export const workflowDefinitionSchema = z.object({
   active_version_id: z.string().optional(),
   spec: workflowSpecSchema,
   input_schema: workflowInputSchemaSchema,
+  // P2 白名单：创建人（grant 提案通过后由服务层回填）与可编辑人列表。
+  // optional+default 兼容历史数据与旧版本后端（缺字段时按空白名单解析）。
+  created_by: z.string().optional().default(''),
+  editors: z.array(z.string()).optional().default([]),
   created_at: z.string(),
   updated_at: z.string(),
 });

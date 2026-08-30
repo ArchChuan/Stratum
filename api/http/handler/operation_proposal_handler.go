@@ -229,16 +229,22 @@ type requestEditorAccessBody struct {
 // resource kind it grants on. The type is derived from the route pattern,
 // never trusted from the client body, so a member cannot retarget a proposal
 // at a different resource kind (e.g. an agent request carrying knowledge_doc).
+// Keys must mirror the six routes registered in api/http/router.go; the map
+// test pins them together so adding a route without mapping fails CI.
 var grantRouteResourceType = map[string]string{
 	"/agents/:id/request-editor":                                       "agent",
 	"/skills/:id/request-editor":                                       "skill",
 	"/knowledge/workspaces/:name/documents/:documentID/request-access": "knowledge_doc",
+	"/mcp/servers/:id/request-editor":                                  "mcp",
+	"/knowledge/workspaces/:name/request-editor":                       "knowledge_workspace",
+	"/workflows/:id/request-editor":                                    "workflow",
 }
 
 // RequestEditorAccess raises a grant_editor proposal for the current resource:
-// an agent/skill editor request or a knowledge_doc view-access request. The
-// same handler serves all three resource kinds — the resource id is read from
-// the route param and the resource type from the route pattern.
+// agent / skill / mcp / workflow editor requests, knowledge_workspace editor
+// request, and the knowledge_doc view-access request. The same handler serves
+// all six resource kinds — the resource id is read from the route param
+// (:id, :documentID or :name) and the resource type from the route pattern.
 func (h *OperationProposalHandler) RequestEditorAccess(c *gin.Context) {
 	tenantID, actorID, ok := proposalIdentity(c)
 	if !ok {
@@ -261,6 +267,9 @@ func (h *OperationProposalHandler) RequestEditorAccess(c *gin.Context) {
 	resourceID := c.Param("id")
 	if resourceID == "" {
 		resourceID = c.Param("documentID")
+	}
+	if resourceID == "" {
+		resourceID = c.Param("name")
 	}
 	if err := h.service.ProposeGrantEditor(c.Request.Context(), tenantID, actorID, resourceType, resourceID, req.ResourceName); err != nil {
 		_ = c.Error(err)

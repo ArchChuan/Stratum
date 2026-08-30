@@ -13,7 +13,7 @@ import (
 
 func TestDefinitionServiceUpdate(t *testing.T) {
 	store, idgen := newMemoryStore(), &ids{}
-	svc := application.NewDefinitionService(store, store, idgen.NewID)
+	svc := newOwnerDefinitionService(store, idgen.NewID)
 	def, err := svc.Create(context.Background(), "t1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
 	require.NoError(t, err)
 
@@ -40,7 +40,7 @@ func TestDefinitionServiceUpdate(t *testing.T) {
 
 func TestDefinitionServiceValidate(t *testing.T) {
 	store, idgen := newMemoryStore(), &ids{}
-	svc := application.NewDefinitionService(store, store, idgen.NewID)
+	svc := newOwnerDefinitionService(store, idgen.NewID)
 	def, err := svc.Create(context.Background(), "t1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
 	require.NoError(t, err)
 
@@ -61,7 +61,7 @@ func TestDefinitionServiceValidate(t *testing.T) {
 
 func TestDefinitionServiceGetAndGetVersion(t *testing.T) {
 	store, idgen := newMemoryStore(), &ids{}
-	svc := application.NewDefinitionService(store, store, idgen.NewID)
+	svc := newOwnerDefinitionService(store, idgen.NewID)
 	def, err := svc.Create(context.Background(), "t1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
 	require.NoError(t, err)
 

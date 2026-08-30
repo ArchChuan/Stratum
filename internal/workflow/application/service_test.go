@@ -24,6 +24,9 @@ type memoryStore struct {
 	runs        map[string]*domain.Run
 	attempts    map[string][]domain.NodeAttempt
 	auditEvents []*auditdomain.ResourceChangeAuditEvent
+	// lastEditorActor 记录最近一次 UpdateDefinition 的 editorActor 参数，
+	// 供白名单 member 写路径行为测试断言 store 收到了非空 editorActor。
+	lastEditorActor string
 }
 
 func (s *memoryStore) DeleteDefinition(_ context.Context, _, id string, ev *auditdomain.ResourceChangeAuditEvent) error {
@@ -49,7 +52,8 @@ func (s *memoryStore) GetDefinition(_ context.Context, _, id string) (*domain.De
 	copy := *row
 	return &copy, nil
 }
-func (s *memoryStore) UpdateDefinition(_ context.Context, _ string, definition *domain.Definition, expected int64, ev *auditdomain.ResourceChangeAuditEvent) error {
+func (s *memoryStore) UpdateDefinition(_ context.Context, _ string, definition *domain.Definition, expected int64, editorActor string, ev *auditdomain.ResourceChangeAuditEvent) error {
+	s.lastEditorActor = editorActor
 	if s.definitions[definition.ID].Revision != expected {
 		return domain.ErrRevisionConflict
 	}
@@ -139,6 +143,30 @@ type ids struct{ n int }
 
 func (i *ids) NewID() string { i.n++; return "id-" + string(rune('0'+i.n)) }
 
+// stubTenantRole 固定角色解析器：非授权用例注入 owner 放行所有权矩阵。
+type stubTenantRole struct{ role string }
+
+func (s stubTenantRole) ResolveTenantRole(context.Context, string, string) (string, error) {
+	return s.role, nil
+}
+
+// defVersionStore 组合 DefinitionRepository 与 VersionRepository，供
+// newOwnerDefinitionService 接受任意嵌入 memoryStore 的测试 store（dagStore、
+// executeStore 等），同一值同时充当 definitions 与 versions 仓库。
+type defVersionStore interface {
+	port.DefinitionRepository
+	port.VersionRepository
+}
+
+// newOwnerDefinitionService 构造注入 owner 角色的服务，用于非授权相关测试。
+// newID 抽象为 func 以便同时覆盖 idgen 与固定 ID 两类构造点（机械替换全部
+// NewDefinitionService 站点，保证 Update/Publish/Delete 既有用例经 owner stub 放行）。
+func newOwnerDefinitionService(store defVersionStore, newID func() string) *application.DefinitionService {
+	svc := application.NewDefinitionService(store, store, newID)
+	svc.SetTenantRoleResolver(stubTenantRole{role: "owner"})
+	return svc
+}
+
 func adminActor() application.Actor {
 	return application.Actor{UserID: "admin", Role: "admin"}
 }
@@ -162,7 +190,7 @@ func workflowSpec() domain.Spec {
 
 func TestDefinitionServicePublishesVersion(t *testing.T) {
 	store, idgen := newMemoryStore(), &ids{}
-	svc := application.NewDefinitionService(store, store, idgen.NewID)
+	svc := newOwnerDefinitionService(store, idgen.NewID)
 	def, err := svc.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
 	require.NoError(t, err)
 	version, err := svc.Publish(context.Background(), "tenant-1", def.ID, "u-1")
@@ -173,7 +201,7 @@ func TestDefinitionServicePublishesVersion(t *testing.T) {
 
 func TestDefinitionService_Rollback_MovesActivePointer(t *testing.T) {
 	store, idgen := newMemoryStore(), &ids{}
-	svc := application.NewDefinitionService(store, store, idgen.NewID)
+	svc := newOwnerDefinitionService(store, idgen.NewID)
 	ctx := context.Background()
 	def, err := svc.Create(ctx, "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
 	require.NoError(t, err)
@@ -197,7 +225,7 @@ func TestDefinitionService_Rollback_MovesActivePointer(t *testing.T) {
 
 func TestDefinitionService_Rollback_RejectsForeignVersion(t *testing.T) {
 	store, idgen := newMemoryStore(), &ids{}
-	svc := application.NewDefinitionService(store, store, idgen.NewID)
+	svc := newOwnerDefinitionService(store, idgen.NewID)
 	ctx := context.Background()
 	def, err := svc.Create(ctx, "tenant-1", application.CreateDefinitionCommand{Name: "A", Spec: workflowSpec()}, "u-1")
 	require.NoError(t, err)
@@ -214,7 +242,7 @@ func TestDefinitionService_Rollback_RejectsForeignVersion(t *testing.T) {
 
 func TestDefinitionService_Rollback_MissingVersion(t *testing.T) {
 	store, idgen := newMemoryStore(), &ids{}
-	svc := application.NewDefinitionService(store, store, idgen.NewID)
+	svc := newOwnerDefinitionService(store, idgen.NewID)
 	ctx := context.Background()
 	def, err := svc.Create(ctx, "tenant-1", application.CreateDefinitionCommand{Name: "A", Spec: workflowSpec()}, "u-1")
 	require.NoError(t, err)
@@ -224,9 +252,48 @@ func TestDefinitionService_Rollback_MissingVersion(t *testing.T) {
 	require.Empty(t, store.definitions[def.ID].ActiveVersionID)
 }
 
+// TestDefinitionService_Rollback_RequiresOwnerOrAdmin pins the Rollback ownership
+// semantics: owner 放行、admin 无需本人为 creator 放行、member 一律拒绝，且被拒后
+// 生效指针不得被移动（fail-closed）。
+func TestDefinitionService_Rollback_RequiresOwnerOrAdmin(t *testing.T) {
+	cases := []struct {
+		name string
+		role string
+		want error
+	}{
+		{"owner passes", "owner", nil},
+		{"admin non-creator passes", "admin", nil},
+		{"member forbidden", "member", domain.ErrForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, idgen := newMemoryStore(), &ids{}
+			svc := newOwnerDefinitionService(store, idgen.NewID)
+			ctx := context.Background()
+			def, err := svc.Create(ctx, "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
+			require.NoError(t, err)
+			version, err := svc.Publish(ctx, "tenant-1", def.ID, "u-1")
+			require.NoError(t, err)
+			// 模拟发布后 active 指向最新版本。
+			store.definitions[def.ID].ActiveVersionID = version.ID
+
+			svc.SetTenantRoleResolver(stubTenantRole{role: tc.role})
+			before := store.definitions[def.ID].ActiveVersionID
+			_, err = svc.Rollback(ctx, "tenant-1", def.ID, version.ID, "actor-1")
+			if tc.want != nil {
+				require.ErrorIs(t, err, tc.want)
+				require.Equal(t, before, store.definitions[def.ID].ActiveVersionID,
+					"未授权回退不得移动生效指针")
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestDefinitionServiceDeletesDraft(t *testing.T) {
 	store, idgen := newMemoryStore(), &ids{}
-	svc := application.NewDefinitionService(store, store, idgen.NewID)
+	svc := newOwnerDefinitionService(store, idgen.NewID)
 	definition, err := svc.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{
 		Name: "Disposable", Spec: workflowSpec(),
 	}, "u-1")
@@ -239,7 +306,7 @@ func TestDefinitionServiceDeletesDraft(t *testing.T) {
 
 func TestRunServiceIdempotencyAndSequentialExecution(t *testing.T) {
 	store, idgen, agents := newMemoryStore(), &ids{}, &agentStub{}
-	defs := application.NewDefinitionService(store, store, idgen.NewID)
+	defs := newOwnerDefinitionService(store, idgen.NewID)
 	def, err := defs.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
 	require.NoError(t, err)
 	version, err := defs.Publish(context.Background(), "tenant-1", def.ID, "u-1")
@@ -268,7 +335,7 @@ func TestRunServiceIdempotencyAndSequentialExecution(t *testing.T) {
 
 func TestRunServiceStopsAfterUpstreamFailure(t *testing.T) {
 	store, idgen, agents := newMemoryStore(), &ids{}, &agentStub{fail: "agent-1"}
-	defs := application.NewDefinitionService(store, store, idgen.NewID)
+	defs := newOwnerDefinitionService(store, idgen.NewID)
 	def, _ := defs.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
 	version, _ := defs.Publish(context.Background(), "tenant-1", def.ID, "u-1")
 	runs := application.NewRunService(store, store, agents, idgen.NewID)
@@ -284,7 +351,7 @@ func TestRunServiceStopsAfterUpstreamFailure(t *testing.T) {
 
 func TestRunServiceStartAsyncOnlyPersistsQueuedRun(t *testing.T) {
 	store, idgen, agents := newMemoryStore(), &ids{}, &agentStub{}
-	defs := application.NewDefinitionService(store, store, idgen.NewID)
+	defs := newOwnerDefinitionService(store, idgen.NewID)
 	def, _ := defs.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
 	version, _ := defs.Publish(context.Background(), "tenant-1", def.ID, "u-1")
 	runs := application.NewRunService(store, store, agents, idgen.NewID)
@@ -330,7 +397,7 @@ func TestRunServiceFailRunPropagatesCheckpointFailure(t *testing.T) {
 	persistStore := &persistFailStore{memoryStore: store, failPersist: persistErr}
 	agentErr := errors.New("agent two exploded")
 	agents := &scriptedFailAgent{err: agentErr}
-	defs := application.NewDefinitionService(store, store, idgen.NewID)
+	defs := newOwnerDefinitionService(store, idgen.NewID)
 	def, err := defs.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
 	require.NoError(t, err)
 	version, err := defs.Publish(context.Background(), "tenant-1", def.ID, "u-1")
@@ -371,7 +438,7 @@ func (s *scriptedFailAgent) Execute(_ context.Context, request port.NodeExecutio
 
 func TestDefinitionService_Create_WritesChangeAudit(t *testing.T) {
 	store := newMemoryStore()
-	svc := application.NewDefinitionService(store, store, func() string { return "def-1" })
+	svc := newOwnerDefinitionService(store, func() string { return "def-1" })
 	created, err := svc.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{
 		Name: "n", Description: "d", Spec: workflowSpec(),
 	}, "u-1")
@@ -406,7 +473,7 @@ func skillSpec(skillID string) domain.Spec {
 
 func TestDefinitionService_Create_RejectsCyclicSpec(t *testing.T) {
 	store := newMemoryStore()
-	svc := application.NewDefinitionService(store, store, func() string { return "def-1" })
+	svc := newOwnerDefinitionService(store, func() string { return "def-1" })
 	cyclic := workflowSpec()
 	cyclic.Edges = append(cyclic.Edges, domain.Edge{From: "two", To: "one"})
 	_, err := svc.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "n", Spec: cyclic}, "u-1")
@@ -415,7 +482,7 @@ func TestDefinitionService_Create_RejectsCyclicSpec(t *testing.T) {
 
 func TestDefinitionService_Update_RejectsCyclicSpec(t *testing.T) {
 	store := newMemoryStore()
-	svc := application.NewDefinitionService(store, store, func() string { return "def-1" })
+	svc := newOwnerDefinitionService(store, func() string { return "def-1" })
 	created, err := svc.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "n", Spec: workflowSpec()}, "u-1")
 	require.NoError(t, err)
 	cyclic := workflowSpec()
@@ -426,7 +493,7 @@ func TestDefinitionService_Update_RejectsCyclicSpec(t *testing.T) {
 
 func TestDefinitionService_SkipsBindingCheckWithoutResolver(t *testing.T) {
 	store := newMemoryStore()
-	svc := application.NewDefinitionService(store, store, func() string { return "def-1" })
+	svc := newOwnerDefinitionService(store, func() string { return "def-1" })
 	// resolver 未注入（nil）时绑定校验跳过，skill 草稿可保存。
 	_, err := svc.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "n", Spec: skillSpec("skill-1")}, "u-1")
 	require.NoError(t, err)
@@ -447,7 +514,7 @@ func TestDefinitionService_ValidateSkillBindings(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			store := newMemoryStore()
-			svc := application.NewDefinitionService(store, store, func() string { return "def-1" })
+			svc := newOwnerDefinitionService(store, func() string { return "def-1" })
 			svc.SetSkillBindingResolver(&skillBindingStub{allowed: tc.allowed, err: tc.resolverErr})
 			_, err := svc.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "n", Spec: skillSpec("skill-1")}, "u-1")
 			if tc.wantErr {

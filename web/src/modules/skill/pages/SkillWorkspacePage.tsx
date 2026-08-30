@@ -8,7 +8,7 @@ import { skillApi } from '../api/skill.api';
 import type { SkillRevision, SkillWorkspace } from '../model/skill';
 
 import { useAuth, useEditorCandidates, useTenantRole } from '@/modules/iam';
-import { operationProposalApi } from '@/modules/operation-gate';
+import { RequestEditorButton } from '@/shared/components';
 import { extractErrorMessage, isForbidden } from '@/shared/lib';
 import { VersionHistory, type VersionRow } from '@/shared/ui';
 
@@ -26,7 +26,6 @@ export const SkillWorkspacePage = () => {
   const [activeTab, setActiveTab] = useState('instructions');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState('');
-  const [requesting, setRequesting] = useState(false);
   const [error, setError] = useState('');
   const [editorIDs, setEditorIDs] = useState<string[]>([]);
   const [refreshTick, setRefreshTick] = useState(0);
@@ -139,19 +138,6 @@ export const SkillWorkspacePage = () => {
     await reloadWorkspace();
     setRefreshTick((t) => t + 1);
   };
-  // 普通成员（非白名单）申请编辑权限 → grant_editor 提案，管理员审批后即授予。
-  const handleRequestEditor = async () => {
-    setRequesting(true);
-    try {
-      await operationProposalApi.requestEditorAccess('skill', skill.id, { resourceName: skill.name });
-      message.success({ content: '已提交，等待管理员审批', duration: 3 });
-    } catch (err) {
-      message.error({ content: extractErrorMessage(err, '提交申请失败'), duration: 3 });
-    } finally {
-      setRequesting(false);
-    }
-  };
-
   return <div>
     <div className="responsive-detail-header" style={{ marginBottom: 20 }}>
       <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/skills')} type="text">返回</Button>
@@ -175,7 +161,7 @@ export const SkillWorkspacePage = () => {
             <Button type="primary" disabled={!hasDraft} loading={saving === 'publish'} onClick={() => void publishDraft()} style={{ marginInlineStart: 8 }}>发布</Button>
           </ActionRow>}
         </Form>
-        {!canEdit && <ActionRow><Button type="primary" icon={<LockOutlined />} loading={requesting} onClick={() => void handleRequestEditor()}>申请编辑权限</Button></ActionRow>}
+        {!canEdit && <ActionRow><RequestEditorButton resourceType="skill" resourceId={skill.id} options={{ resourceName: skill.name }} buttonProps={{ type: 'primary', icon: <LockOutlined /> }} /></ActionRow>}
       </div> },
       { key: 'editors', label: '可编辑人', children: (
         <div style={{ maxWidth: 520 }}>

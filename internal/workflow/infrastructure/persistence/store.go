@@ -66,8 +66,14 @@ func (s *PgStore) CreateDefinition(ctx context.Context, tenantID string, d *doma
 		return err
 	}
 	return s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `INSERT INTO workflow_definitions (id,name,description,draft_revision,draft_spec_json,draft_input_schema_json) VALUES ($1,$2,$3,$4,$5,$6)`, d.ID, d.Name, d.Description, d.Revision, string(spec), string(inputSchema)); err != nil {
-			return err
+		if _, err := tx.Exec(ctx, `INSERT INTO workflow_definitions (id,name,description,created_by,draft_revision,draft_spec_json,draft_input_schema_json) VALUES ($1,$2,$3,$4,$5,$6,$7)`, d.ID, d.Name, d.Description, d.CreatedBy, d.Revision, string(spec), string(inputSchema)); err != nil {
+			return fmt.Errorf("create workflow definition: %w", err)
+		}
+		// 创建即把创建者授予为白名单成员：member 创建的工作流由创建者自持编辑权。
+		if d.CreatedBy != "" {
+			if err := insertEditors(ctx, tx, tenantID, resourceEditorKind, d.ID, []string{d.CreatedBy}, d.CreatedBy); err != nil {
+				return err
+			}
 		}
 		return insertChangeAudit(ctx, tx, ev)
 	})
@@ -77,7 +83,7 @@ func (s *PgStore) GetDefinition(ctx context.Context, tenantID, id string) (*doma
 	var d domain.Definition
 	var raw, rawInputSchema []byte
 	err := s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT id,name,description,draft_revision,COALESCE(active_version_id,''),draft_spec_json,draft_input_schema_json,created_at,updated_at FROM workflow_definitions WHERE id=$1`, id).Scan(&d.ID, &d.Name, &d.Description, &d.Revision, &d.ActiveVersionID, &raw, &rawInputSchema, &d.CreatedAt, &d.UpdatedAt)
+		return tx.QueryRow(ctx, `SELECT id,name,description,created_by,draft_revision,COALESCE(active_version_id,''),draft_spec_json,draft_input_schema_json,created_at,updated_at FROM workflow_definitions WHERE id=$1`, id).Scan(&d.ID, &d.Name, &d.Description, &d.CreatedBy, &d.Revision, &d.ActiveVersionID, &raw, &rawInputSchema, &d.CreatedAt, &d.UpdatedAt)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
@@ -128,7 +134,7 @@ func (s *PgStore) ListDefinitions(
 	return rows, total, err
 }
 
-func (s *PgStore) UpdateDefinition(ctx context.Context, tenantID string, d *domain.Definition, expected int64, ev *auditdomain.ResourceChangeAuditEvent) error {
+func (s *PgStore) UpdateDefinition(ctx context.Context, tenantID string, d *domain.Definition, expected int64, editorActor string, ev *auditdomain.ResourceChangeAuditEvent) error {
 	spec, err := json.Marshal(d.Spec)
 	if err != nil {
 		return err
@@ -138,6 +144,10 @@ func (s *PgStore) UpdateDefinition(ctx context.Context, tenantID string, d *doma
 		return err
 	}
 	return s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// 白名单成员编辑：事务内复查白名单仍在（TOCTOU 关闭）。
+		if err := revalidateEditorIfActor(ctx, tx, resourceEditorKind, d.ID, editorActor); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `UPDATE workflow_definitions SET name=$1,description=$2,draft_revision=$3,draft_spec_json=$4,draft_input_schema_json=$5,updated_at=NOW() WHERE id=$6 AND draft_revision=$7`, d.Name, d.Description, d.Revision, string(spec), string(inputSchema), d.ID, expected)
 		if err != nil {
 			return err
@@ -151,6 +161,10 @@ func (s *PgStore) UpdateDefinition(ctx context.Context, tenantID string, d *doma
 
 func (s *PgStore) DeleteDefinition(ctx context.Context, tenantID, id string, ev *auditdomain.ResourceChangeAuditEvent) error {
 	return s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// 同一事务内先删白名单，避免孤立 editors 行（resource_editors 无外键级联）。
+		if _, err := tx.Exec(ctx, `DELETE FROM resource_editors WHERE resource_kind=$1 AND resource_id=$2`, resourceEditorKind, id); err != nil {
+			return fmt.Errorf("delete workflow editors: %w", err)
+		}
 		tag, err := tx.Exec(ctx, `DELETE FROM workflow_definitions WHERE id=$1`, id)
 		if err != nil {
 			return err
@@ -241,7 +255,7 @@ func (s *PgStore) NextVersionNumber(ctx context.Context, tenantID, definitionID 
 	return number, err
 }
 
-func (s *PgStore) CreateNextVersion(ctx context.Context, tenantID string, definition *domain.Definition, versionID string, ev *auditdomain.ResourceChangeAuditEvent) (*domain.Version, error) {
+func (s *PgStore) CreateNextVersion(ctx context.Context, tenantID string, definition *domain.Definition, versionID, editorActor string, ev *auditdomain.ResourceChangeAuditEvent) (*domain.Version, error) {
 	if err := domain.ValidateSpec(definition.Spec); err != nil {
 		return nil, err
 	}
@@ -253,27 +267,16 @@ func (s *PgStore) CreateNextVersion(ctx context.Context, tenantID string, defini
 			}
 			return err
 		}
+		// 白名单成员发布：行锁后复查白名单仍在（TOCTOU 关闭）。
+		if err := revalidateEditorIfActor(ctx, tx, resourceEditorKind, definition.ID, editorActor); err != nil {
+			return err
+		}
 		var number int64
 		if err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(version_no),0)+1 FROM workflow_versions WHERE definition_id=$1`, definition.ID).Scan(&number); err != nil {
 			return err
 		}
-		version, err := definition.Publish(versionID, number)
+		version, err := insertPublishedVersionTx(ctx, tx, definition, versionID, number)
 		if err != nil {
-			return err
-		}
-		raw, err := json.Marshal(version.Spec)
-		if err != nil {
-			return err
-		}
-		inputSchema, err := json.Marshal(version.InputSchema)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO workflow_versions (id,definition_id,version_no,name,description,spec_json,input_schema_json) VALUES ($1,$2,$3,$4,$5,$6,$7)`, version.ID, version.DefinitionID, version.Number, version.Name, version.Description, string(raw), string(inputSchema)); err != nil {
-			return err
-		}
-		// 新发布即成为生效版本：事务内一并写入生效指针，避免发布成功但指针缺失。
-		if _, err := tx.Exec(ctx, `UPDATE workflow_definitions SET active_version_id=$1,updated_at=NOW() WHERE id=$2`, version.ID, version.DefinitionID); err != nil {
 			return err
 		}
 		if err := insertChangeAudit(ctx, tx, ev); err != nil {
@@ -283,6 +286,31 @@ func (s *PgStore) CreateNextVersion(ctx context.Context, tenantID string, defini
 		return nil
 	})
 	return created, err
+}
+
+// insertPublishedVersionTx publishes the next version row and sets the active
+// pointer inside the caller's write transaction：新发布即成为生效版本，事务内
+// 一并写入生效指针，避免发布成功但指针缺失。
+func insertPublishedVersionTx(ctx context.Context, tx pgx.Tx, definition *domain.Definition, versionID string, number int64) (*domain.Version, error) {
+	version, err := definition.Publish(versionID, number)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(version.Spec)
+	if err != nil {
+		return nil, err
+	}
+	inputSchema, err := json.Marshal(version.InputSchema)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO workflow_versions (id,definition_id,version_no,name,description,spec_json,input_schema_json) VALUES ($1,$2,$3,$4,$5,$6,$7)`, version.ID, version.DefinitionID, version.Number, version.Name, version.Description, string(raw), string(inputSchema)); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE workflow_definitions SET active_version_id=$1,updated_at=NOW() WHERE id=$2`, version.ID, version.DefinitionID); err != nil {
+		return nil, err
+	}
+	return version, nil
 }
 
 // SetActiveVersion 把生效指针指回历史已发布版本（回退，不产生新版本）；

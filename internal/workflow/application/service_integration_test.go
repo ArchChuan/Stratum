@@ -39,6 +39,7 @@ func TestStage1CConcurrentStartAndPublishAreAtomic(t *testing.T) {
 	tenantCtx := postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
 	store := workflowpersist.NewPgStore(pool)
 	definitions := application.NewDefinitionService(store, store, uuid.NewString)
+	definitions.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	definition, err := definitions.Create(tenantCtx, tenantID, application.CreateDefinitionCommand{Name: "Concurrent", Spec: domain.Spec{Nodes: []domain.Node{{ID: "one", Type: domain.NodeTypeAgent, AgentID: "a"}}}}, "u-int")
 	require.NoError(t, err)
 
@@ -139,6 +140,7 @@ func TestStage1ARealPostgresRunsTwoAgentNodesInOrder(t *testing.T) {
 	store, agents := workflowpersist.NewPgStore(pool), &agentStub{}
 	newID := uuid.NewString
 	definitions := application.NewDefinitionService(store, store, newID)
+	definitions.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	definition, err := definitions.Create(tenantCtx, tenantID, application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-int")
 	require.NoError(t, err)
 	version, err := definitions.Publish(tenantCtx, tenantID, definition.ID, "u-int")
@@ -176,6 +178,7 @@ func TestStage1BRealPostgresIndependentWorkerRunsDiamondAndPersistsEvents(t *tes
 	store, newID := workflowpersist.NewPgStore(pool), uuid.NewString
 	spec := domain.Spec{Nodes: []domain.Node{{ID: "start", Type: domain.NodeTypeAgent, AgentID: "a"}, {ID: "left", Type: domain.NodeTypeAgent, AgentID: "b"}, {ID: "right", Type: domain.NodeTypeAgent, AgentID: "c"}, {ID: "join", Type: domain.NodeTypeAgent, AgentID: "d"}}, Edges: []domain.Edge{{From: "start", To: "left"}, {From: "start", To: "right"}, {From: "left", To: "join"}, {From: "right", To: "join"}}, MaxConcurrency: 2}
 	definitions := application.NewDefinitionService(store, store, newID)
+	definitions.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	definition, err := definitions.Create(tenantCtx, tenantID, application.CreateDefinitionCommand{Name: "Diamond", Spec: spec}, "u-int")
 	require.NoError(t, err)
 	version, err := definitions.Publish(tenantCtx, tenantID, definition.ID, "u-int")
@@ -215,6 +218,7 @@ func TestStage1CPauseResumeAcrossWorkersUsesPostgresCheckpoint(t *testing.T) {
 	tenantCtx := postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
 	store, newID := workflowpersist.NewPgStore(pool), uuid.NewString
 	definitions := application.NewDefinitionService(store, store, newID)
+	definitions.SetTenantRoleResolver(stubTenantRole{role: "owner"})
 	definition, err := definitions.Create(tenantCtx, tenantID, application.CreateDefinitionCommand{Name: "Resume", Spec: domain.Spec{Nodes: []domain.Node{{ID: "one", Type: domain.NodeTypeAgent, AgentID: "a"}}}}, "u-int")
 	require.NoError(t, err)
 	version, err := definitions.Publish(tenantCtx, tenantID, definition.ID, "u-int")

@@ -110,3 +110,27 @@ func TestTenantSchemaHasReviewPoolTables(t *testing.T) {
 		}
 	}
 }
+
+func TestTenantSchemaWorkflowEditorsAndCreatedBy(t *testing.T) {
+	ddl, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(ddl)
+
+	// workflow_definitions 必须带 created_by（所有权矩阵 creator 语义的存储基线）。
+	if !strings.Contains(text, "workflow_definitions") {
+		t.Fatal("tenant schema missing workflow_definitions")
+	}
+	if !strings.Contains(text, "created_by TEXT NOT NULL DEFAULT ''") {
+		t.Fatal("workflow_definitions must carry created_by TEXT NOT NULL DEFAULT ''")
+	}
+	// 幂等 ALTER 用于升级历史租户。
+	if !strings.Contains(text, "ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';") {
+		t.Fatal("workflow_definitions must idempotently add created_by for historical tenants")
+	}
+	// resource_editors 注释声明 workflow kind（可申请编辑权的新资源类型）。
+	if !strings.Contains(text, "agent|skill|mcp|knowledge|workflow") {
+		t.Fatal("resource_editors kind comment must include workflow")
+	}
+}

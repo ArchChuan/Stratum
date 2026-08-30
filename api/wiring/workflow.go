@@ -229,6 +229,8 @@ func (c *Container) buildWorkflow(_ context.Context) error {
 	defService.SetFailureAuditRecorder(failureRecorderOf(c))
 	defService.SetLogger(c.Logger)
 	defService.SetSkillBindingResolver(workflowSkillBindingResolver{agents: c.Agent.Service})
+	defService.SetTenantRoleResolver(c.Agent.RoleResolver)
+	defService.SetEditorRepo(workflowpersist.NewPgWorkflowResourceEditorRepo(db))
 	c.Workflow = &Workflow{DefinitionService: defService, RunService: runs, ControlService: controlService}
 	c.Workflow.Worker = workflowapp.NewWorker("workflow-"+newID(), store, workflowRunAdvancer{runs: runs}, 30*time.Second, c.platformMetrics())
 	return nil

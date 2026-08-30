@@ -53,11 +53,12 @@ module.exports = {
             from: `./src/modules/${to}`,
             message: `iam 禁止依赖业务模块: iam -> ${to}`,
           })),
-          // shared 不能反向依赖 modules
+          // shared 不能反向依赖业务 modules（operation-gate 是横切能力模块，允许 shared 复用其申请入口）
           {
             target: './src/shared',
             from: './src/modules',
-            message: 'shared/ 禁止依赖 modules/',
+            except: ['./operation-gate'],
+            message: 'shared/ 禁止依赖业务 modules/（operation-gate 横切能力除外）',
           },
           // 跨模块只能走 index.ts —— 禁止深路径引用
           ...['agent', 'skill', 'mcp', 'knowledge', 'memory', 'iam', 'dashboard'].flatMap((m) =>

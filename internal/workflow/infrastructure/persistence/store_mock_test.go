@@ -62,7 +62,7 @@ func TestPgStore_CreateDefinition_success(t *testing.T) {
 
 	beginTenantTx(mock)
 	mock.ExpectExec("INSERT INTO workflow_definitions").
-		WithArgs("d1", "n", "desc", int64(3), `{"nodes":null,"edges":null}`, `{"task_label":""}`).
+		WithArgs("d1", "n", "desc", "", int64(3), `{"nodes":null,"edges":null}`, `{"task_label":""}`).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
@@ -76,7 +76,7 @@ func TestPgStore_CreateDefinition_fails(t *testing.T) {
 
 	beginTenantTx(mock)
 	mock.ExpectExec("INSERT INTO workflow_definitions").
-		WithArgs("", "", "", int64(0), `{"nodes":null,"edges":null}`, `{"task_label":""}`).
+		WithArgs("", "", "", "", int64(0), `{"nodes":null,"edges":null}`, `{"task_label":""}`).
 		WillReturnError(pgx.ErrTxClosed)
 	mock.ExpectRollback()
 
@@ -85,8 +85,36 @@ func TestPgStore_CreateDefinition_fails(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestPgStore_CreateDefinition_autoGrantsCreatorEditor(t *testing.T) {
+	mock := newStoreMock(t)
+	store := &PgStore{pool: mock}
+
+	beginTenantTx(mock)
+	// INSERT workflow_definitions（含 created_by 列，共 7 参数）。
+	mock.ExpectExec("INSERT INTO workflow_definitions \\(id,name,description,created_by,draft_revision,draft_spec_json,draft_input_schema_json\\)").
+		WithArgs("d1", "Research", "", "u-1", int64(1), `{"nodes":null,"edges":null}`, `{"task_label":"任务"}`).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	// insertEditors → EditorEligible 检查 creator 为租户成员。
+	mock.ExpectQuery("SELECT EXISTS\\(").
+		WithArgs("t1", "u-1", []string{"admin", "owner", "member"}).
+		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(true))
+	// insertEditors → INSERT resource_editors。
+	mock.ExpectExec("INSERT INTO resource_editors \\(resource_kind, resource_id, editor_id, created_by\\)").
+		WithArgs("workflow", "d1", "u-1", "u-1").
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	// ev=nil → 无变更审计。
+	mock.ExpectCommit()
+
+	err := store.CreateDefinition(context.Background(), "t1", &domain.Definition{
+		ID: "d1", Name: "Research", CreatedBy: "u-1", Revision: 1,
+		Spec: domain.Spec{}, InputSchema: domain.InputSchema{TaskLabel: "任务"},
+	}, nil)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 var definitionColumns = []string{
-	"id", "name", "description", "draft_revision", "active_version_id",
+	"id", "name", "description", "created_by", "draft_revision", "active_version_id",
 	"draft_spec_json", "draft_input_schema_json", "created_at", "updated_at",
 }
 
@@ -98,7 +126,7 @@ func TestPgStore_GetDefinition_found(t *testing.T) {
 	mock.ExpectQuery("FROM workflow_definitions WHERE id=\\$1").
 		WithArgs("d1").
 		WillReturnRows(pgxmock.NewRows(definitionColumns).AddRow(
-			"d1", "n", "desc", int64(3), "v9", []byte(`{"nodes":[]}`), []byte(`{}`),
+			"d1", "n", "desc", "", int64(3), "v9", []byte(`{"nodes":[]}`), []byte(`{}`),
 			time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 			time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		))
@@ -137,7 +165,7 @@ func TestPgStore_GetDefinition_unmarshalFails(t *testing.T) {
 	mock.ExpectQuery("FROM workflow_definitions WHERE id=\\$1").
 		WithArgs("d1").
 		WillReturnRows(pgxmock.NewRows(definitionColumns).AddRow(
-			"d1", "n", "desc", int64(3), "v9", []byte(`{invalid`), []byte(`{}`),
+			"d1", "n", "desc", "", int64(3), "v9", []byte(`{invalid`), []byte(`{}`),
 			time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 			time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		))
@@ -200,7 +228,7 @@ func TestPgStore_UpdateDefinition_success(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
-	require.NoError(t, store.UpdateDefinition(context.Background(), "t1", d, 3, nil))
+	require.NoError(t, store.UpdateDefinition(context.Background(), "t1", d, 3, "", nil))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -214,7 +242,7 @@ func TestPgStore_UpdateDefinition_staleRevision(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectRollback()
 
-	err := store.UpdateDefinition(context.Background(), "t1", &domain.Definition{ID: "d1", Revision: 1}, 9, nil)
+	err := store.UpdateDefinition(context.Background(), "t1", &domain.Definition{ID: "d1", Revision: 1}, 9, "", nil)
 	require.ErrorIs(t, err, domain.ErrRevisionConflict)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -224,6 +252,9 @@ func TestPgStore_DeleteDefinition_success(t *testing.T) {
 	store := &PgStore{pool: mock}
 
 	beginTenantTx(mock)
+	mock.ExpectExec("DELETE FROM resource_editors WHERE resource_kind=\\$1 AND resource_id=\\$2").
+		WithArgs("workflow", "d1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectExec("DELETE FROM workflow_definitions").
 		WithArgs("d1").
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
@@ -238,6 +269,9 @@ func TestPgStore_DeleteDefinition_notFound(t *testing.T) {
 	store := &PgStore{pool: mock}
 
 	beginTenantTx(mock)
+	mock.ExpectExec("DELETE FROM resource_editors WHERE resource_kind=\\$1 AND resource_id=\\$2").
+		WithArgs("workflow", "nope").
+		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectExec("DELETE FROM workflow_definitions").
 		WithArgs("nope").
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
@@ -373,7 +407,7 @@ func TestPgStore_CreateNextVersion_success(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
-	created, err := store.CreateNextVersion(context.Background(), "t1", definition, "v-new", nil)
+	created, err := store.CreateNextVersion(context.Background(), "t1", definition, "v-new", "", nil)
 	require.NoError(t, err)
 	require.NotNil(t, created)
 	require.Equal(t, int64(2), created.Number)
@@ -385,7 +419,7 @@ func TestPgStore_CreateNextVersion_invalidSpec(t *testing.T) {
 	store := &PgStore{pool: mock}
 
 	// Empty spec fails validation before any SQL runs.
-	_, err := store.CreateNextVersion(context.Background(), "t1", &domain.Definition{}, "v-new", nil)
+	_, err := store.CreateNextVersion(context.Background(), "t1", &domain.Definition{}, "v-new", "", nil)
 	require.ErrorIs(t, err, domain.ErrInvalidSpec)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -404,7 +438,7 @@ func TestPgStore_CreateNextVersion_definitionMissing(t *testing.T) {
 		ID:          "nope",
 		Spec:        domain.Spec{Nodes: []domain.Node{{ID: "n1", Type: domain.NodeTypeApproval}}},
 		InputSchema: domain.InputSchema{TaskLabel: "task"},
-	}, "v-new", nil)
+	}, "v-new", "", nil)
 	require.ErrorIs(t, err, domain.ErrNotFound)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

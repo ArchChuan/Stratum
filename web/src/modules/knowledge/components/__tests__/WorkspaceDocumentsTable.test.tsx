@@ -3,11 +3,24 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { WorkspaceDocumentsTable } from '../WorkspaceDocumentsTable';
 
+import { operationProposalApi } from '@/modules/operation-gate';
+
 let mobile = true;
 
 vi.mock('@/shared/hooks', () => ({
   useResponsive: () => ({ isMobile: mobile }),
 }));
+
+// RequestEditorButton 内部经 useRequestEditorAccess 调用 operationProposalApi；
+// 此处沿用 RequestEditorButton.test 的 mock 策略，验证「申请查看权限」点击真实触发请求。
+vi.mock('antd', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('antd')>();
+  return { ...mod, message: { success: vi.fn(), error: vi.fn() } };
+});
+vi.mock('@/modules/operation-gate', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('@/modules/operation-gate')>();
+  return { ...mod, operationProposalApi: { requestEditorAccess: vi.fn().mockResolvedValue({}) } };
+});
 
 beforeAll(() => {
   const getComputedStyle = window.getComputedStyle.bind(window);
@@ -40,7 +53,7 @@ describe('WorkspaceDocumentsTable', () => {
   });
 
   it('shows document identity, status, progress and time on mobile', () => {
-    render(<WorkspaceDocumentsTable documents={[documentRow]} loading={false} />);
+    render(<WorkspaceDocumentsTable documents={[documentRow]} loading={false} workspaceName="产品库" />);
 
     expect(screen.getByText('产品手册.pdf')).toBeInTheDocument();
     expect(screen.getByText('处理中')).toBeInTheDocument();
@@ -51,7 +64,7 @@ describe('WorkspaceDocumentsTable', () => {
 
   it('keeps the desktop table', () => {
     mobile = false;
-    render(<WorkspaceDocumentsTable documents={[documentRow]} loading={false} />);
+    render(<WorkspaceDocumentsTable documents={[documentRow]} loading={false} workspaceName="产品库" />);
 
     expect(document.querySelector('.ant-table')).toBeInTheDocument();
   });
@@ -64,6 +77,7 @@ describe('WorkspaceDocumentsTable', () => {
         isAdmin
         deletingDocumentID=""
         onDelete={vi.fn()}
+        workspaceName="产品库"
       />,
     );
 
@@ -79,11 +93,74 @@ describe('WorkspaceDocumentsTable', () => {
         isAdmin
         deletingDocumentID=""
         onDelete={onDelete}
+        workspaceName="产品库"
       />,
     );
 
     fireEvent.click(screen.getByRole('button', { name: '删除文档' }));
     fireEvent.click(screen.getByRole('button', { name: /^删\s*除$/ }));
     expect(onDelete).toHaveBeenCalledWith('doc-1');
+  });
+
+  it('member 受限文档显示「申请查看权限」，点击触发申请请求', async () => {
+    const restricted = {
+      ...documentRow,
+      restricted: true,
+      allowed_user_ids: ['u-1'],
+      allowed_role_ids: [],
+    };
+    render(
+      <WorkspaceDocumentsTable
+        documents={[restricted]}
+        loading={false}
+        workspaceName="产品库"
+      />,
+    );
+
+    const button = screen.getByRole('button', { name: '申请查看权限' });
+    expect(button).toBeInTheDocument();
+    fireEvent.click(button);
+    expect(operationProposalApi.requestEditorAccess).toHaveBeenCalledWith(
+      'knowledge_doc',
+      'doc-1',
+      { workspaceName: '产品库', resourceName: '产品库/产品手册.pdf' },
+    );
+  });
+
+  it('member 非受限文档不显示「申请查看权限」', () => {
+    render(<WorkspaceDocumentsTable documents={[documentRow]} loading={false} workspaceName="产品库" />);
+    expect(screen.queryByRole('button', { name: '申请查看权限' })).not.toBeInTheDocument();
+  });
+
+  it('admin 不显示「申请查看权限」', () => {
+    const restricted = {
+      ...documentRow,
+      restricted: true,
+      allowed_user_ids: ['u-1'],
+      allowed_role_ids: [],
+    };
+    render(
+      <WorkspaceDocumentsTable
+        documents={[restricted]}
+        loading={false}
+        isAdmin
+        workspaceName="产品库"
+        onDelete={vi.fn()}
+        onSetAccess={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: '申请查看权限' })).not.toBeInTheDocument();
+  });
+
+  it('desktop 表格行内同样渲染「申请查看权限」', () => {
+    mobile = false;
+    const restricted = {
+      ...documentRow,
+      restricted: true,
+      allowed_user_ids: ['u-1'],
+      allowed_role_ids: [],
+    };
+    render(<WorkspaceDocumentsTable documents={[restricted]} loading={false} workspaceName="产品库" />);
+    expect(screen.getByRole('button', { name: '申请查看权限' })).toBeInTheDocument();
   });
 });

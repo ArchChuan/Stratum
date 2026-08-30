@@ -31,6 +31,8 @@ const deferred = <T,>() => {
 const stats = {
   description: '知识库',
   config: { embedding_model: 'text-embedding-v1', chunking_strategy: 'fixed', top_k: 5 },
+  // workspaceStatsSchema 输出类型要求 editors（default([]) 后必填）；白名单回显字段。
+  editors: [],
 };
 const wrapper = ({ children }: PropsWithChildren) => <StrictMode>{children}</StrictMode>;
 

@@ -112,6 +112,9 @@ func registerOperationProposals(r *gin.Engine, c *wiring.Container, requireActiv
 	grant.POST("/agents/:id/request-editor", h.RequestEditorAccess)
 	grant.POST("/skills/:id/request-editor", h.RequestEditorAccess)
 	grant.POST("/knowledge/workspaces/:name/documents/:documentID/request-access", h.RequestEditorAccess)
+	grant.POST("/mcp/servers/:id/request-editor", h.RequestEditorAccess)
+	grant.POST("/knowledge/workspaces/:name/request-editor", h.RequestEditorAccess)
+	grant.POST("/workflows/:id/request-editor", h.RequestEditorAccess)
 }
 
 func registerResourceChangeProposals(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
@@ -136,16 +139,18 @@ func registerWorkflows(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 	member := protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))
 	admin := middleware.RequireTenantRole("admin")
 	definitions := r.Group("/workflows", member...)
+	edit := append(append([]gin.HandlerFunc{}, member...), requireActive)
 	definitions.GET("", h.ListDefinitions)
 	definitions.GET("/:id", h.GetDefinition)
 	definitions.GET("/:id/versions", h.ListVersions)
 	definitions.GET("/:id/versions/:versionID", h.GetVersion)
-	definitions.POST("", admin, requireActive, h.CreateDefinition)
-	definitions.PUT("/:id/draft", admin, requireActive, h.UpdateDefinition)
+	definitions.POST("", append(edit, h.CreateDefinition)...)
+	definitions.PUT("/:id/draft", append(edit, h.UpdateDefinition)...)
+	definitions.POST("/:id/publish", append(edit, h.PublishDefinition)...)
 	definitions.DELETE("/:id", admin, requireActive, h.DeleteDefinition)
 	definitions.POST("/:id/validate", admin, requireActive, h.ValidateDefinition)
-	definitions.POST("/:id/publish", admin, requireActive, h.PublishDefinition)
 	definitions.POST("/:id/rollback", admin, requireActive, h.RollbackDefinition)
+	definitions.PUT("/:id/editors", admin, requireActive, h.SetWorkflowEditors)
 	startRuns := r.Group("/workflow-runs", member...)
 	startRuns.POST("", requireActive, h.StartRun)
 	runs := r.Group("/workflow-runs", member...)
@@ -594,7 +599,10 @@ func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 
 		adminMW := []gin.HandlerFunc{middleware.RequireTenantRole("admin")}
 		knowledgeGroup.POST("/workspaces", append(adminMW, requireActive, ragHandler.CreateWorkspace)...)
-		knowledgeGroup.PATCH("/workspaces/:name", append(adminMW, requireActive, ragHandler.UpdateWorkspace)...)
+		// PATCH name/description 对白名单 member 开放（service UpdateWorkspace
+		// 所有权矩阵 fail-closed：owner/admin 放行，白名单 member 放行，其余 403）。
+		// config/upload/doc/access/delete 保持 admin 门禁。
+		knowledgeGroup.PATCH("/workspaces/:name", requireActive, ragHandler.UpdateWorkspace)
 		// 版本历史/回滚：历史 GET member 级（对齐 agent/skill），回滚写 admin
 		// （spec：入口仅 isAdmin 可见）。
 		knowledgeGroup.GET("/workspaces/:name/versions", requireActive, ragHandler.ListWorkspaceVersions)

@@ -47,6 +47,10 @@ export const workflowApi = {
     const response = await api.post(`/workflows/${workflowId}/rollback`, { versionId });
     return workflowDefinitionSchema.parse(response.data);
   },
+  // 白名单管理（admin/owner）：设置工作流可编辑人。
+  setWorkflowEditors: async (workflowId: string, editorIds: string[]): Promise<void> => {
+    await api.put(`/workflows/${workflowId}/editors`, { editorIds });
+  },
   listWorkflowVersions: async (workflowId: string, { page, pageSize }: { page: number; pageSize: number }) => {
     const response = await api.get(`/workflows/${workflowId}/versions`, { params: { page, page_size: pageSize } });
     return workflowVersionPageSchema.parse(response.data);

@@ -419,6 +419,7 @@ func (h *RAGHandler) GetWorkspaceStats(c *gin.Context) {
 		"description": res.Description,
 		"config":      toDTOConfig(res.Config),
 		"stats":       res.Stats,
+		"editors":     strSliceOrEmpty(res.Editors),
 	})
 }
 

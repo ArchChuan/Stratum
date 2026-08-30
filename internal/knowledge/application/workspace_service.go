@@ -58,11 +58,14 @@ type UpdateWorkspaceInput struct {
 }
 
 // WorkspaceStatsResult bundles the workspace metadata and milvus stats.
+// Editors 是当前白名单 member 集合（详情页据此回显「申请编辑权限」按钮状态；
+// ListEditors nil-safe，未装配 editorRepo 时为 nil）。
 type WorkspaceStatsResult struct {
 	Name        string
 	Description string
 	Config      domain.WorkspaceConfig
 	Stats       map[string]any
+	Editors     []string
 }
 
 // IngestUploadResult mirrors the JSON shape returned by POST /knowledge/ingest.
@@ -256,6 +259,9 @@ func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, tenantID, name s
 	if err != nil {
 		return nil, err
 	}
+	if err := s.rejectMemberConfigUpdate(editorActor, in); err != nil {
+		return nil, err
+	}
 	before := KnowledgeSafeProjection(current)
 
 	var renameTo *string
@@ -282,6 +288,17 @@ func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, tenantID, name s
 	}
 	// after is the merged copy; no further in-memory sync needed.
 	return after, nil
+}
+
+// rejectMemberConfigUpdate 拒绝白名单 member 携带 config 的更新：I-1 方案 a 下
+// member 编辑面仅限 name/description，config 属管理操作仅 owner/admin 可改。
+// 前端 isAdmin 门禁只是 UI，这里按 editorActor 判别 fail-closed——直连 API
+// 携带 config 的 member 请求整体 403（owner/admin 的 editorActor 为空，不受影响）。
+func (s *WorkspaceService) rejectMemberConfigUpdate(editorActor string, in UpdateWorkspaceInput) error {
+	if editorActor != "" && in.Config != nil {
+		return domain.ErrForbidden
+	}
+	return nil
 }
 
 // recordFailure 旁路记录一次失败的知识库工作区创建/更新（best-effort）。
@@ -431,11 +448,23 @@ func (s *WorkspaceService) GetWorkspaceStats(
 			stats["vector_count"] = 0
 		}
 	}
+	return s.buildStatsResult(ctx, tenantID, name, ws, stats)
+}
+
+// buildStatsResult loads the granted editor set (ListEditors nil-safe，未装配
+// editorRepo 时为 nil) 并组装 stats 响应。拆分出来以控制 GetWorkspaceStats 的
+// 圈复杂度（Ratchet：行为保持不变，仅等价重构）。
+func (s *WorkspaceService) buildStatsResult(ctx context.Context, tenantID, name string, ws *domain.Workspace, stats map[string]any) (*WorkspaceStatsResult, error) {
+	editors, err := s.ListEditors(ctx, tenantID, ws.ID)
+	if err != nil {
+		return nil, err
+	}
 	return &WorkspaceStatsResult{
 		Name:        name,
 		Description: ws.Description,
 		Config:      ws.Config,
 		Stats:       stats,
+		Editors:     editors,
 	}, nil
 }
 
