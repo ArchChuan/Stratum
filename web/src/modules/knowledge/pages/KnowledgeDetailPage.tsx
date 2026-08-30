@@ -1,6 +1,5 @@
 import { HistoryOutlined } from '@ant-design/icons';
-import { Button, message, Modal } from 'antd';
-import { useCallback, useState } from 'react';
+import { Button, Modal } from 'antd';
 
 import { DocAccessModal } from '../components/DocAccessModal';
 import { DocPreviewDrawer } from '../components/DocPreviewDrawer';
@@ -12,10 +11,7 @@ import { WorkspaceQueryPanel } from '../components/WorkspaceQueryPanel';
 import { WorkspaceStatsCard } from '../components/WorkspaceStatsCard';
 import { WorkspaceUploadZone } from '../components/WorkspaceUploadZone';
 import { useKnowledgeDetailPage } from '../hooks/useKnowledgeDetailPage';
-import type { KnowledgeDocument } from '../model/knowledge';
 
-import { operationProposalApi } from '@/modules/operation-gate';
-import { extractErrorMessage } from '@/shared/lib';
 import { VersionHistory } from '@/shared/ui';
 
 export const KnowledgeDetailPage = () => {
