@@ -296,6 +296,11 @@ func (s *DefinitionService) Rollback(ctx context.Context, tenantID, id, versionI
 	if err != nil {
 		return nil, err
 	}
+	// 回退生效指针与删除同属高破坏性写操作：仅 owner/admin 可执行（admin 无需本人
+	// 为 creator），白名单 member 一律拒绝。检查须在任何版本写入之前 fail-closed。
+	if err := s.checkOwnership(ctx, tenantID, actorID, definition.CreatedBy, nil, OpRollback); err != nil {
+		return nil, err
+	}
 	version, err := s.versions.GetVersion(ctx, tenantID, versionID)
 	if err != nil {
 		return nil, err

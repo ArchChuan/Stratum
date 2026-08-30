@@ -252,6 +252,45 @@ func TestDefinitionService_Rollback_MissingVersion(t *testing.T) {
 	require.Empty(t, store.definitions[def.ID].ActiveVersionID)
 }
 
+// TestDefinitionService_Rollback_RequiresOwnerOrAdmin pins the Rollback ownership
+// semantics: owner 放行、admin 无需本人为 creator 放行、member 一律拒绝，且被拒后
+// 生效指针不得被移动（fail-closed）。
+func TestDefinitionService_Rollback_RequiresOwnerOrAdmin(t *testing.T) {
+	cases := []struct {
+		name string
+		role string
+		want error
+	}{
+		{"owner passes", "owner", nil},
+		{"admin non-creator passes", "admin", nil},
+		{"member forbidden", "member", domain.ErrForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, idgen := newMemoryStore(), &ids{}
+			svc := newOwnerDefinitionService(store, idgen.NewID)
+			ctx := context.Background()
+			def, err := svc.Create(ctx, "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()}, "u-1")
+			require.NoError(t, err)
+			version, err := svc.Publish(ctx, "tenant-1", def.ID, "u-1")
+			require.NoError(t, err)
+			// 模拟发布后 active 指向最新版本。
+			store.definitions[def.ID].ActiveVersionID = version.ID
+
+			svc.SetTenantRoleResolver(stubTenantRole{role: tc.role})
+			before := store.definitions[def.ID].ActiveVersionID
+			_, err = svc.Rollback(ctx, "tenant-1", def.ID, version.ID, "actor-1")
+			if tc.want != nil {
+				require.ErrorIs(t, err, tc.want)
+				require.Equal(t, before, store.definitions[def.ID].ActiveVersionID,
+					"未授权回退不得移动生效指针")
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestDefinitionServiceDeletesDraft(t *testing.T) {
 	store, idgen := newMemoryStore(), &ids{}
 	svc := newOwnerDefinitionService(store, idgen.NewID)

@@ -18,6 +18,9 @@ const (
 	OpAccess
 	// OpDelete 破坏性删除（workflow）。仅 creator 与 owner 可执行。
 	OpDelete
+	// OpRollback 回退生效指针到历史版本（Rollback）。破坏性等价 Delete：
+	// owner 放行，admin 放行（无需本人为 creator），白名单 member 一律拒绝。
+	OpRollback
 )
 
 // isGrantedEditor reports whether actorID appears in the granted editor set
@@ -32,9 +35,10 @@ func isGrantedEditor(actorID string, editors []string) bool {
 }
 
 // enforceOwnership applies the workflow ownership matrix. Fail closed on
-// unknown role or empty actor. Delete stays with owner / creator-admin.
+// unknown role or empty actor. Delete/Rollback stay with owner / admin
+// （Rollback 不要求 admin 本人为 creator）。
 // 见 spec 矩阵：owner 全放行；admin 除 Delete 需 createdBy==actorID 外放行；
-// member 仅白名单成员且非 Delete；其余一律 403。
+// member 仅白名单成员且非 Delete/Rollback；其余一律 403。
 func enforceOwnership(role, actorID, createdBy string, editors []string, op OwnershipOp) error {
 	if actorID == "" {
 		return domain.ErrForbidden
@@ -43,12 +47,14 @@ func enforceOwnership(role, actorID, createdBy string, editors []string, op Owne
 	case "owner":
 		return nil
 	case "admin":
+		// admin 中仅破坏性删除要求 creator 本人；Rollback 属运维操作，不要求。
 		if op == OpDelete && createdBy != actorID {
 			return domain.ErrForbidden
 		}
 		return nil
 	case "member":
-		if op == OpDelete {
+		// Rollback 与 Delete 同属高破坏性：白名单 member 也无权回退版本。
+		if op == OpDelete || op == OpRollback {
 			return domain.ErrForbidden
 		}
 		if isGrantedEditor(actorID, editors) {
