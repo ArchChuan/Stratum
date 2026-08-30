@@ -56,6 +56,13 @@ func (f *streamingWorkflowRunFake) Events(_ context.Context, _, _ string, _ work
 type workflowDefinitionFake struct {
 	created   *workflowdomain.Definition
 	deletedID string
+	// setEditors 录制最近一次 SetEditors 调用参数，供白名单管理 handler 测试断言。
+	setEditors struct {
+		workflowID string
+		editorIDs  []string
+		actorID    string
+		calls      int
+	}
 }
 
 func (f *workflowDefinitionFake) Create(_ context.Context, _ string, cmd workflowapp.CreateDefinitionCommand, _ string) (*workflowdomain.Definition, error) {
@@ -86,6 +93,13 @@ func (*workflowDefinitionFake) ListVersions(context.Context, string, string, wor
 }
 func (f *workflowDefinitionFake) Delete(_ context.Context, _, id string, _ string) error {
 	f.deletedID = id
+	return nil
+}
+func (f *workflowDefinitionFake) SetEditors(_ context.Context, _, workflowID string, editorIDs []string, actorID string) error {
+	f.setEditors.calls++
+	f.setEditors.workflowID = workflowID
+	f.setEditors.editorIDs = editorIDs
+	f.setEditors.actorID = actorID
 	return nil
 }
 
@@ -422,4 +436,50 @@ func TestWorkflowSSEWaitsForLaterEventsOnSameConnection(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("SSE did not deliver event produced after connection")
 	}
+}
+
+func TestWorkflowHandlerSetEditors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	definitions := &workflowDefinitionFake{created: &workflowdomain.Definition{ID: "wf-1", Name: "Research"}}
+	h := handler.NewWorkflowHandler(definitions, &workflowRunFake{})
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), "tenant-1"))
+		c.Set(middleware.ContextKeySub, "admin-1")
+		c.Set(middleware.ContextKeyRole, "admin")
+		c.Next()
+	})
+	r.PUT("/workflows/:id/editors", h.SetWorkflowEditors)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/workflows/wf-1/editors", strings.NewReader(`{"editorIds":["m-1","m-2"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, 1, definitions.setEditors.calls)
+	require.Equal(t, "wf-1", definitions.setEditors.workflowID)
+	require.Equal(t, []string{"m-1", "m-2"}, definitions.setEditors.editorIDs)
+	require.Equal(t, "admin-1", definitions.setEditors.actorID)
+}
+
+func TestWorkflowHandlerSetEditorsRejectsMissingEditorIDs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	definitions := &workflowDefinitionFake{}
+	h := handler.NewWorkflowHandler(definitions, &workflowRunFake{})
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), "tenant-1"))
+		c.Set(middleware.ContextKeySub, "admin-1")
+		c.Set(middleware.ContextKeyRole, "admin")
+		c.Next()
+	})
+	r.PUT("/workflows/:id/editors", h.SetWorkflowEditors)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/workflows/wf-1/editors", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Zero(t, definitions.setEditors.calls)
 }

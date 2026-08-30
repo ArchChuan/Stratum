@@ -26,6 +26,7 @@ type workflowDefinitionService interface {
 	GetVersion(context.Context, string, string) (*workflowdomain.Version, error)
 	ListDefinitions(context.Context, string, workflowapp.ListDefinitionsQuery) (workflowapp.DefinitionPage, error)
 	ListVersions(context.Context, string, string, workflowapp.ListVersionsQuery) (workflowapp.VersionPage, error)
+	SetEditors(context.Context, string, string, []string, string) error
 }
 
 func (h *WorkflowHandler) ListDefinitions(c *gin.Context) {
@@ -260,6 +261,33 @@ func (h *WorkflowHandler) RollbackDefinition(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, definition)
+}
+
+// SetWorkflowEditors PUT /workflows/:id/editors —— owner/admin 管理白名单（member
+// 一律拒绝，语义在 service 所有权矩阵收敛）。actor 来自认证上下文。
+func (h *WorkflowHandler) SetWorkflowEditors(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	var req struct {
+		EditorIDs []string `json:"editorIds" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
+	if err := h.definitions.SetEditors(c.Request.Context(), tenantID, c.Param("id"), req.EditorIDs, actorID); err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "editors updated"})
 }
 
 func (h *WorkflowHandler) StartRun(c *gin.Context) {
