@@ -89,3 +89,24 @@ func TestTenantSchemaAuditProjectionsAreCredentialFreeColumns(t *testing.T) {
 		}
 	}
 }
+
+func TestTenantSchemaHasReviewPoolTables(t *testing.T) {
+	ddl, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(ddl)
+	for _, table := range []string{
+		"eval_review_items",
+		"eval_calibration_samples",
+		"eval_attribution_entries",
+	} {
+		if !strings.Contains(text, "CREATE TABLE IF NOT EXISTS "+table) {
+			t.Fatalf("tenant schema missing %s", table)
+		}
+		// 幂等：不允许裸 CREATE（无 IF NOT EXISTS）。
+		if strings.Contains(text, "CREATE TABLE "+table) {
+			t.Fatalf("tenant schema has non-idempotent %s DDL", table)
+		}
+	}
+}

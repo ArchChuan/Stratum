@@ -539,6 +539,69 @@ CREATE INDEX IF NOT EXISTS idx_eval_observations_resource_time
 CREATE INDEX IF NOT EXISTS idx_eval_observations_trace
     ON eval_observations (trace_id);
 
+-- 人工评审池（P1c §6.6）：观测/评测集判定低置信与判异信号入池，人工 4 分类回写。
+-- snapshot JSONB 保留入池时完整上下文（观测信号 / case 快照），评审详情免回查。
+CREATE TABLE IF NOT EXISTS eval_review_items (
+    id             TEXT PRIMARY KEY,
+    source_type    TEXT NOT NULL CHECK (source_type IN ('observation','case_result')),
+    source_id      TEXT NOT NULL,
+    run_id         TEXT NOT NULL DEFAULT '',
+    trace_id       TEXT NOT NULL DEFAULT '',
+    resource_kind  TEXT NOT NULL,
+    resource_id    TEXT NOT NULL,
+    trigger_reason TEXT NOT NULL CHECK (trigger_reason IN
+        ('low_confidence','dimension_split','judge_rule_conflict','needs_review')),
+    snapshot       JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status         TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','reviewed')),
+    human_verdict  TEXT NOT NULL DEFAULT '' CHECK (human_verdict IN
+        ('','pass','fail','judge_misjudgment','case_revision')),
+    reviewer       TEXT NOT NULL DEFAULT '',
+    review_reason  TEXT NOT NULL DEFAULT '',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reviewed_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_eval_review_items_status
+    ON eval_review_items(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_eval_review_items_source
+    ON eval_review_items(source_type, source_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_eval_review_items_dedupe
+    ON eval_review_items(source_type, source_id, trigger_reason);
+
+-- judge 误判校准样本（P1c §9）：判 judge_misjudgment 时沉淀，供模型/阈值校准。
+CREATE TABLE IF NOT EXISTS eval_calibration_samples (
+    id            TEXT PRIMARY KEY,
+    review_item_id TEXT NOT NULL REFERENCES eval_review_items(id) ON DELETE CASCADE,
+    source_type   TEXT NOT NULL CHECK (source_type IN ('observation','case_result')),
+    source_id     TEXT NOT NULL,
+    judge_model   TEXT NOT NULL DEFAULT '',
+    signals       JSONB NOT NULL DEFAULT '{}'::jsonb,
+    human_verdict TEXT NOT NULL CHECK (human_verdict IN
+        ('pass','fail','judge_misjudgment','case_revision')),
+    reviewer      TEXT NOT NULL,
+    reason        TEXT NOT NULL DEFAULT '',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_eval_calibration_samples_item
+    ON eval_calibration_samples(review_item_id);
+
+-- 产品缺陷归因条目（P1c §9 轻量记录）：fail/case_revision 落归因。
+CREATE TABLE IF NOT EXISTS eval_attribution_entries (
+    id             TEXT PRIMARY KEY,
+    review_item_id TEXT NOT NULL REFERENCES eval_review_items(id) ON DELETE CASCADE,
+    source_type    TEXT NOT NULL CHECK (source_type IN ('observation','case_result')),
+    source_id      TEXT NOT NULL,
+    resource_kind  TEXT NOT NULL,
+    resource_id    TEXT NOT NULL,
+    dimension      TEXT NOT NULL DEFAULT '',
+    snapshot       JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status         TEXT NOT NULL,
+    reviewer       TEXT NOT NULL,
+    reason         TEXT NOT NULL DEFAULT '',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_eval_attribution_entries_item
+    ON eval_attribution_entries(review_item_id);
+
 CREATE TABLE IF NOT EXISTS optimization_jobs (
     id                    TEXT PRIMARY KEY,
     resource_kind         TEXT NOT NULL,
