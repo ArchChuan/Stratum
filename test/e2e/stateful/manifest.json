@@ -1615,6 +1615,66 @@
       "coverage": "short"
     },
     {
+      "id": "evaluation.mutation.get.evaluations.review",
+      "domain": "evaluation",
+      "user_goal": "Load the review pool items as tenant_admin",
+      "route": "/evaluations",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "member",
+          "unauthenticated"
+        ]
+      },
+      "mutation": "GET /evaluations/review",
+      "browser_action_id": "evaluation.mutation.get.evaluations.review",
+      "http_evidence": "The browser observes the expected successful response for GET /evaluations/review",
+      "db_evidence": "Review items are read from the tenant review pool table",
+      "coverage": "short"
+    },
+    {
+      "id": "evaluation.mutation.get.evaluations.review.id",
+      "domain": "evaluation",
+      "user_goal": "Open one review item detail as tenant_admin",
+      "route": "/evaluations",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "member",
+          "unauthenticated"
+        ]
+      },
+      "mutation": "GET /evaluations/review/:id",
+      "browser_action_id": "evaluation.mutation.get.evaluations.review.id",
+      "http_evidence": "The browser observes the expected successful response for GET /evaluations/review/:id",
+      "db_evidence": "The single review item is read from the tenant review pool table",
+      "coverage": "short"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.review.id.decision",
+      "domain": "evaluation",
+      "user_goal": "Submit a human review decision as tenant_admin",
+      "route": "/evaluations",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "member",
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /evaluations/review/:id/decision",
+      "browser_action_id": "evaluation.mutation.post.evaluations.review.id.decision",
+      "http_evidence": "The browser observes the expected successful response for POST /evaluations/review/:id/decision",
+      "db_evidence": "The review item status and side-effect records are reconciled after the decision",
+      "coverage": "short"
+    },
+    {
       "id": "workflow.mutation.post.workflows",
       "domain": "workflow",
       "user_goal": "Complete POST /workflows",

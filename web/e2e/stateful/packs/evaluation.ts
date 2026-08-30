@@ -119,6 +119,7 @@ export const executeEvaluationPack = async ({
   let runID = '';
   let experimentID = '';
   let fixtureIDs: string[] = [];
+  let reviewID = '';
   try {
     await page.goto(`${webURL}/skills/create`);
     await page.getByLabel('名称').fill(skillName);
@@ -339,6 +340,58 @@ export const executeEvaluationPack = async ({
       await page.reload();
     }
 
+    // ── P1c 人工评审池：列表 / 详情 / 决策 3 端点 ─────────────────────────────
+    reviewID = `e2e-review-${suffix}`;
+    const reviewSourceID = `e2e-review-source-${suffix}`;
+    await mutate(pool, tenantID, `
+      INSERT INTO eval_review_items
+        (id,source_type,source_id,run_id,resource_kind,resource_id,trigger_reason,snapshot,status)
+      VALUES ($1,'observation',$2,$3,'skill',$4,'low_confidence',$5::jsonb,'pending')`,
+    [reviewID, reviewSourceID, runID, skillID,
+      JSON.stringify({ signals: { judge: [{ dimension: 'faithfulness', score: 0.6, confidence: 0.3 }] },
+        verdict: 'pass', stratum: 'evaluation', cost_usd: 0.0 })]);
+    const reviewListResponse = waitFor(page, '/evaluations/review', 'GET');
+    await page.getByRole('tab', { name: /人工评审池/ }).click();
+    const reviewList = await reviewListResponse;
+    expect(reviewList.status()).toBe(200);
+    const reviewListBody = await reviewList.json() as { items: Array<{ id: string }>; total: number };
+    expect(reviewListBody.items.some((item) => item.id === reviewID)).toBe(true);
+    expect(reviewListBody.total).toBeGreaterThanOrEqual(1);
+    const reviewRow = page.locator('.ant-tabs-tabpane-active .ant-table-row').filter({ hasText: skillID });
+    await expect(reviewRow).toHaveCount(1, { timeout: 15_000 });
+
+    // 详情 Drawer 仅展示行数据不发请求，端点用页面 fetch 直接覆盖（带 JWT，走真实浏览器）。
+    const reviewDetailResponse = waitFor(page, `/evaluations/review/${reviewID}`, 'GET');
+    const detailStatus = await page.evaluate(async ({ url, token }) => {
+      const res = await fetch(url, { method: 'GET', credentials: 'include',
+        headers: { Authorization: `Bearer ${token}` } });
+      return res.status;
+    }, { url: `${backendURL}/evaluations/review/${reviewID}`, token: actor.accessToken ?? '' });
+    expect(detailStatus).toBe(200);
+    expect((await reviewDetailResponse).status()).toBe(200);
+
+    await reviewRow.getByRole('button', { name: '评审' }).click();
+    const reviewDialog = page.getByRole('dialog', { name: '人工评审' });
+    await reviewDialog.getByRole('combobox', { name: '评审结论' }).click();
+    await page.locator('.ant-select-item-option-content').filter({ hasText: /^通过/ }).click();
+    await reviewDialog.getByLabel('评审理由').fill('E2E: 判定通过，无需修正');
+    const decisionResponse = waitFor(page, `/evaluations/review/${reviewID}/decision`, 'POST');
+    await reviewDialog.getByRole('button', { name: '提交评审' }).click();
+    const decision = await decisionResponse;
+    if (decision.status() !== 200) {
+      throw new Error(`review decision status ${decision.status()}: ${await decision.text()}`);
+    }
+    await expect(reviewDialog).toBeHidden();
+    const reviewed = (await rows<{ status: string; human_verdict: string; review_reason: string; reviewer: string }>(pool, tenantID, `
+      SELECT status, human_verdict, review_reason, reviewer FROM eval_review_items WHERE id=$1`, [reviewID]))[0];
+    expect(reviewed.status).toBe('reviewed');
+    expect(reviewed.human_verdict).toBe('pass');
+    expect(reviewed.review_reason).toBeTruthy();
+    expect(reviewed.reviewer).toBeTruthy();
+    evidence.ui.push('Review pool list, detail, and decision completed through Chromium');
+    evidence.http.push('Review pool GET list, GET detail, and POST decision returned successful browser-observed responses');
+    evidence.database.push('Review item reconciled to reviewed with verdict pass');
+
     expect(await rows<{ status: string }>(pool, tenantID,
       'SELECT status FROM optimization_candidates WHERE id=$1', [candidates[0].id])).toEqual([{ status: 'rejected' }]);
     expect(await rows<{ status: string }>(pool, tenantID,
@@ -375,6 +428,10 @@ export const executeEvaluationPack = async ({
           values: [skillID, `e2e-promote-%-${suffix}`, `e2e-rollback-%-${suffix}`] },
       ];
       cleanupTasks.push(...cleanup.map((query) => async () => mutate(pool, tenantID, query.text, query.values)));
+    }
+    if (reviewID) {
+      cleanupTasks.push(async () => mutate(pool, tenantID,
+        'DELETE FROM eval_review_items WHERE id=$1', [reviewID]));
     }
     cleanupTasks.push(
       async () => {
@@ -415,5 +472,8 @@ export const executeEvaluationPack = async ({
     'evaluation.mutation.post.evaluations.experiments.experimentid.pause',
     'evaluation.mutation.post.evaluations.experiments.experimentid.promote',
     'evaluation.mutation.post.evaluations.experiments.experimentid.rollback',
+    'evaluation.mutation.get.evaluations.review',
+    'evaluation.mutation.get.evaluations.review.id',
+    'evaluation.mutation.post.evaluations.review.id.decision',
   ];
 };
