@@ -49,6 +49,7 @@ type Evaluation struct {
 	AgentRevisionApplier evalport.AgentRevisionApplier
 	TestCaseGenerator    *evalapp.TestCaseGenerator
 	ObservationService   *evalapp.ObservationService
+	ReviewService        *evalapp.ReviewService
 }
 
 type evaluationResourceRouter struct {
@@ -555,11 +556,31 @@ func buildEvaluationJudge(c *Container) evalport.LLMJudge {
 	}
 }
 
+// buildReviewService 装配评审池服务（P1c §6.6）：复用 suite 仓库做 promote 沉淀、
+// trace evidence reader 解析观测 trace。必须在 Service / ObservationService 注入前装配。
+func buildReviewService(
+	c *Container, db *pgxpool.Pool, suites evalport.SuiteRepository, traceReader evalport.TraceEvidenceReader,
+) *evalapp.ReviewService {
+	return evalapp.NewReviewService(evalapp.ReviewServiceDeps{
+		Repo:     evalpersist.NewPgReviewRepository(db),
+		Suites:   suites,
+		Evidence: traceReader,
+		Metrics:  c.platformMetrics(),
+		Logger:   c.Logger,
+		Cfg: evaldomain.ReviewConfig{
+			LowConfidenceThreshold: constants.ReviewLowConfidenceThreshold,
+			JudgePassThreshold:     constants.JudgeBelowThreshold,
+		},
+	})
+}
+
 // buildObservationService 装配运行态观测服务（P1b §4.2 路 A）：FeedbackService 依赖它
 // 作为行为信号 writer，NATS 消费 worker 复用同一实例（wireObservationPipeline），故
-// 必须在 FeedbackService 之前装配。
+// 必须在 FeedbackService 之前装配。review 为评审池升级器（P1c §6.6 内联触发），
+// 与 Service 共用同一 reviewSvc 实例。
 func buildObservationService(
 	c *Container, db *pgxpool.Pool, traceReader evalport.TraceEvidenceReader, judge evalport.LLMJudge,
+	review evalport.ReviewEscalator,
 ) *evalapp.ObservationService {
 	return evalapp.NewObservationService(evalapp.ObservationServiceDeps{
 		Enabled:    func(ctx context.Context) bool { return observationEnabled(ctx, c.Parameters.Service) },
@@ -570,7 +591,25 @@ func buildObservationService(
 		Metrics:    c.platformMetrics(),
 		Logger:     c.Logger,
 		TenantTier: tenantTierAdapter{repo: iampersistence.NewAdminTenantRepo(db)},
+		Review:     review,
 	})
+}
+
+// newEvaluationServiceWithReview 构造评测 Service 并把评审池升级器注入（P1c §6.6）：
+// 评审池服务先行装配（buildReviewService），NewService 后注入升级器与阈值配置。
+// 返回 reviewSvc 供观测服务与 Evaluation 结构复用同一实例。独立成函数保持
+// buildEvaluation 行数在质量门禁基线内。
+func newEvaluationServiceWithReview(
+	c *Container, db *pgxpool.Pool, adapter evalport.ResourceAdapter, repo evalport.RunRepository,
+	traceReader evalport.TraceEvidenceReader, judge evalport.LLMJudge, suiteRepo evalport.SuiteRepository,
+) (*evalapp.Service, *evalapp.ReviewService) {
+	reviewSvc := buildReviewService(c, db, suiteRepo, traceReader)
+	service := evalapp.NewService(adapter, repo, traceReader, judge, suiteRepo)
+	service.SetReviewEscalator(reviewSvc, evaldomain.ReviewConfig{
+		LowConfidenceThreshold: constants.ReviewLowConfidenceThreshold,
+		JudgePassThreshold:     constants.JudgeBelowThreshold,
+	})
+	return service, reviewSvc
 }
 
 // judgeAdapter implements evalport.LLMJudge over llmgateway's LLMCompleter.
@@ -1080,8 +1119,8 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		traceReader = evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider}
 	}
 	judge := buildEvaluationJudge(c)
-	service := evalapp.NewService(
-		evaluationResourceRouter{adapters: resourceAdapters}, runRepo, traceReader, judge, suiteRepo,
+	service, reviewSvc := newEvaluationServiceWithReview(
+		c, db, evaluationResourceRouter{adapters: resourceAdapters}, runRepo, traceReader, judge, suiteRepo,
 	)
 	jobService := evalapp.NewJobService(jobRepo, service)
 	var rewriter evalapp.PromptRewriter
@@ -1092,7 +1131,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		evaluationCandidateRouter{creators: candidateCreators}, rewriter, optimizationRepo,
 	)
 	experimentService := evalapp.NewExperimentService(experimentRepo)
-	observationSvc := buildObservationService(c, db, traceReader, judge)
+	observationSvc := buildObservationService(c, db, traceReader, judge, reviewSvc)
 	feedbackService := evalapp.NewFeedbackService(
 		feedbackRepo, experimentService, evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider},
 		observationSvc,
@@ -1116,6 +1155,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		AgentRevisionApplier: agentRevisionApplier,
 		TestCaseGenerator:    buildTestCaseGenerator(c, suiteRepo, db),
 		ObservationService:   observationSvc,
+		ReviewService:        reviewSvc,
 	}
 	if err := c.wireObservationPipeline(ctx, observationSvc); err != nil {
 		return err

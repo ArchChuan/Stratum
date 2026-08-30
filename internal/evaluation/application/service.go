@@ -72,8 +72,7 @@ func (s *Service) escalateCaseResult(
 	}
 }
 
-func (s *Service) logReviewEscalateError(ctx context.Context, err error) {
-	_ = ctx
+func (s *Service) logReviewEscalateError(_ context.Context, err error) {
 	s.logger.Warn("evaluation review escalation failed", zap.Error(err))
 }
 

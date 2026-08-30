@@ -29,6 +29,8 @@ type ObservationServiceDeps struct {
 	Metrics    observability.MetricsProvider
 	Logger     *zap.Logger
 	TenantTier port.TenantTierReader // P1b：租户 tier → stratum（nil 时 stratum 留空）
+	// Review 是评审池升级入口（P1c §6.6）；nil 时评审升级静默跳过（fail-open）。
+	Review port.ReviewEscalator
 }
 
 type ObservationService struct {
@@ -109,7 +111,24 @@ func (s *ObservationService) Process(ctx context.Context, evt domain.Observation
 	}
 	s.recordSampled(evt.ResourceKind)
 	s.deps.Metrics.IncEvalObservation(evt.ResourceKind, obs.Stratum)
+	// 评审池内联触发（P1c §6.6）：落库成功后按触发规则入池（fail-open，见 escalateToReview）。
+	s.escalateToReview(ctx, evt, &obs)
 	return nil
+}
+
+// escalateToReview 评审池内联触发（P1c §6.6）：落库成功后按触发规则入池。
+// fail-open——升级失败仅日志 + 指标，不阻断观测主流程、不改 verdict。
+func (s *ObservationService) escalateToReview(
+	ctx context.Context, evt domain.ObservationReferenceEvent, obs *domain.EvalObservation,
+) {
+	if s.deps.Review == nil {
+		return
+	}
+	if err := s.deps.Review.TryEscalateObservation(ctx, evt.TenantID, obs); err != nil {
+		s.deps.Logger.Warn("observation review escalation failed", zap.Error(err),
+			zap.String("trace_id", evt.TraceID))
+		s.deps.Metrics.IncEvalReviewEscalateFailure()
+	}
 }
 
 // recordArrival 累计某资源的采样候选到达并刷新采样覆盖率（分母）。
