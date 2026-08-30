@@ -51,3 +51,17 @@ groups:
             T4 红线级：按 runbook 立即人工确认并处置。
           dashboard_url: https://stratum.grafana/d/evaluation
           runbook_url: /docs/operations/alerts/stratum-evaluation.md#stratum-eval-rule-blocked
+      - alert: StratumEvalReviewBacklogHigh
+        expr: |
+          eval_review_backlog > 50
+        for: 15m
+        labels:
+          severity: warning
+          service: stratum-evaluation
+          component: review-pool
+          environment: production
+        annotations:
+          summary: "人工评审池积压超过阈值（当前 {{ $value }}）"
+          description: "待评审条目持续 > 50 达 15 分钟，低置信/判异样本滞留，需人工介入。"
+          dashboard_url: "{{ .externalURL }}"
+          runbook_url: /docs/runbooks/stratum-eval-review-backlog.md#stratum-eval-review-backlog-high
