@@ -9,7 +9,7 @@ import type { AgentVersion } from '../model/agent';
 
 import { AGENT_DEFAULT_MAX_CONTEXT_TOKENS, AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
 import { useTenantRole } from '@/modules/iam';
-import { operationProposalApi } from '@/modules/operation-gate';
+import { RequestEditorButton } from '@/shared/components';
 import { extractErrorMessage } from '@/shared/lib';
 import { VersionHistory, type VersionRow } from '@/shared/ui';
 
@@ -22,7 +22,6 @@ export const EditAgentPage = () => {
     editorCandidates, editorCandidatesLoading,
   } = useEditAgentPage();
   const { isAdmin } = useTenantRole();
-  const [requesting, setRequesting] = useState(false);
   const [activeTab, setActiveTab] = useState('config');
   const [versions, setVersions] = useState<AgentVersion[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
@@ -45,20 +44,6 @@ export const EditAgentPage = () => {
     if (!agent) return;
     await agentApi.rollback(agent.id, row.id);
     await reloadAgent();
-  };
-
-  // P3：普通成员（非白名单）申请编辑权限 → grant_editor 提案，管理员审批后即授予。
-  const handleRequestEditor = async () => {
-    if (!agent) return;
-    setRequesting(true);
-    try {
-      await operationProposalApi.requestEditorAccess('agent', agent.id, { resourceName: agent.name });
-      message.success({ content: '已提交，等待管理员审批', duration: 3 });
-    } catch (err) {
-      message.error({ content: extractErrorMessage(err, '提交申请失败'), duration: 3 });
-    } finally {
-      setRequesting(false);
-    }
   };
 
   if (pageLoading) {
@@ -145,9 +130,12 @@ export const EditAgentPage = () => {
                 禁用表单内所有 antd 组件（含 Button），member 只读时须可点申请。 */}
             {readOnly && (
               <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                <Button type="primary" icon={<LockOutlined />} loading={requesting} onClick={() => void handleRequestEditor()}>
-                  申请编辑权限
-                </Button>
+                <RequestEditorButton
+                  resourceType="agent"
+                  resourceId={agent?.id ?? ''}
+                  options={{ resourceName: agent?.name ?? '' }}
+                  buttonProps={{ type: 'primary', icon: <LockOutlined /> }}
+                />
               </div>
             )}
           </>
