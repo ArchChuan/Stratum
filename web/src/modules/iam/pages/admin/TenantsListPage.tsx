@@ -10,6 +10,7 @@ import type { AdminTenant } from '../../model/auth';
 import { CreateTenantModal } from './CreateTenantModal';
 
 import { DEFAULT_PAGE_SIZE } from '@/constants';
+import { usePlatformAdminCanEdit } from '@/modules/iam';
 import { extractErrorMessage, isForbidden } from '@/shared/lib';
 import { DangerPopconfirm, ResponsiveDataView } from '@/shared/ui';
 
@@ -20,6 +21,8 @@ export const TenantsListPage = () => {
   // 租户删除是全局管理动作，仅超级管理员可执行（后端 DELETE /admin/tenants/:id 用
   // RequireGlobalAdmin 守卫）；system_admin 可查看/创建/启停，但删除按钮禁用。
   const isGlobalAdmin = user?.global_role === 'global_admin';
+  // 只读模式下写控件置灰（由路由级 PlatformAdminGate 提供）；后端中间件仍是强制点。
+  const canEdit = usePlatformAdminCanEdit();
   const [tenants, setTenants] = useState<AdminTenant[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleteLoadingId, setDeleteLoadingId] = useState<string | null>(null);
@@ -136,7 +139,7 @@ export const TenantsListPage = () => {
               okText={isActive ? '禁用' : '启用'}
               onConfirm={() => handleToggle(id, record.status)}
             >
-              <Button size="small" danger={isActive}>
+              <Button size="small" danger={isActive} disabled={!canEdit}>
                 {isActive ? '禁用' : '启用'}
               </Button>
             </DangerPopconfirm>
@@ -183,6 +186,7 @@ export const TenantsListPage = () => {
           type="primary"
           icon={<PlusOutlined />}
           aria-label="创建租户"
+          disabled={!canEdit}
           onClick={() => setCreateOpen(true)}
         >
           创建租户
@@ -229,7 +233,7 @@ export const TenantsListPage = () => {
                       okText={isActive ? '禁用' : '启用'}
                       onConfirm={() => handleToggle(id, tenant.status)}
                     >
-                      <Button size="small" danger={isActive}>{isActive ? '禁用' : '启用'}</Button>
+                      <Button size="small" danger={isActive} disabled={!canEdit}>{isActive ? '禁用' : '启用'}</Button>
                     </DangerPopconfirm>
                     <DangerPopconfirm
                       title={`确认删除租户「${tenant.name}」？此操作不可恢复，所有数据将被永久清除。`}

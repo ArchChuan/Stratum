@@ -3,6 +3,8 @@ import { beforeAll, beforeEach, expect, it, vi } from 'vitest';
 
 import { AdminsPage } from '../AdminsPage';
 
+import { PlatformAdminGate } from '@/modules/iam';
+
 const api = vi.hoisted(() => ({
   listAdmins: vi.fn(),
   removeAdminRole: vi.fn(),
@@ -10,8 +12,10 @@ const api = vi.hoisted(() => ({
   setAdminRole: vi.fn(),
 }));
 
+// 默认以 global_admin 运行（既有用例身份）；member 用例在测试内覆盖为 'user'。
+const authState = vi.hoisted(() => ({ user: { global_role: 'global_admin' } }));
 vi.mock('@/shared/hooks', () => ({ useResponsive: () => ({ isMobile: true }) }));
-vi.mock('@/modules/iam/components/AuthContext', () => ({ useAuth: () => ({}) }));
+vi.mock('@/modules/iam/components/AuthContext', () => ({ useAuth: () => authState }));
 vi.mock('@/modules/iam/api/tenant.api', () => ({ tenantApi: api }));
 
 beforeAll(() => {
@@ -20,6 +24,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  authState.user = { global_role: 'global_admin' };
 });
 
 it('renders platform admins with role tags and disables removal for super admins', async () => {
@@ -78,4 +83,21 @@ it('searches candidate users and adds a platform admin', async () => {
   await waitFor(() => expect(api.searchAdminCandidates).toHaveBeenCalledWith('new'));
   await waitFor(() => expect(api.setAdminRole).toHaveBeenCalledWith('u-new'));
   expect(screen.queryByRole('dialog', { name: '添加平台管理员' })).not.toBeInTheDocument();
+});
+
+it('disables add/remove controls for a plain member (readonly view)', async () => {
+  authState.user = { global_role: 'user' };
+  api.listAdmins.mockResolvedValue([
+    { user_id: 'u-admin', username: '林管理员', github_login: 'linadmin', avatar_url: '', global_role: 'system_admin' },
+  ]);
+  render(
+    <PlatformAdminGate minRole="global_admin">
+      <AdminsPage />
+    </PlatformAdminGate>,
+  );
+
+  expect(await screen.findByText('林管理员')).toBeInTheDocument();
+  expect(screen.getByText('只读模式')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '添加平台管理员' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: /移\s*除/ })).toBeDisabled();
 });

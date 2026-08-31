@@ -3,6 +3,8 @@ import { beforeAll, beforeEach, expect, it, vi } from 'vitest';
 
 import { TenantsListPage } from '../TenantsListPage';
 
+import { PlatformAdminGate } from '@/modules/iam';
+
 const api = vi.hoisted(() => ({
   listAllTenants: vi.fn(),
   setTenantEnabled: vi.fn(),
@@ -102,4 +104,34 @@ it('creates a tenant from the administrator modal and refreshes the current page
   }));
   await waitFor(() => expect(api.listAllTenants).toHaveBeenCalledTimes(2));
   expect(screen.queryByRole('dialog', { name: '创建租户' })).not.toBeInTheDocument();
+});
+
+it('disables all write controls for a plain member (readonly view)', async () => {
+  authState.user = { global_role: 'user' };
+  api.listAllTenants.mockResolvedValue({
+    tenants: [{
+      id: 'tenant-2',
+      name: '产品团队',
+      slug: 'product',
+      status: 'active',
+      member_count: 8,
+      created_at: '2026-07-10T00:00:00Z',
+      is_default: false,
+    }],
+    total: 1,
+    page: 1,
+    page_size: 20,
+  });
+  render(
+    <PlatformAdminGate minRole="system_admin">
+      <TenantsListPage />
+    </PlatformAdminGate>,
+  );
+
+  expect(await screen.findByText('产品团队')).toBeInTheDocument();
+  // 只读提示条 + 写控件置灰；member 对启停/删除均无权
+  expect(screen.getByText('只读模式')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '创建租户' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: /禁\s*用/ })).toBeDisabled();
+  expect(screen.getByRole('button', { name: '删除租户' })).toBeDisabled();
 });
