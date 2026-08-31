@@ -62,14 +62,18 @@ func (r *PgRunRepository) SaveRun(ctx context.Context, tenantID string, run doma
 			if string(dimensionsJSON) == "null" {
 				dimensionsJSON = []byte("[]")
 			}
+			traceJSON, err := json.Marshal(result.TraceEvidence)
+			if err != nil {
+				return fmt.Errorf("evaluation run repository: marshal trace evidence: %w", err)
+			}
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO eval_case_results
 				 (id, run_id, case_id, passed, actual_output, message, error_message, trace_id,
-				  tokens, cost_usd, duration_ms, dimensions, failure_reason)
-				 VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+				  tokens, cost_usd, duration_ms, dimensions, failure_reason, trace_evidence)
+				 VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 				id, run.ID, result.CaseID, result.Passed, string(actualJSON),
 				result.Message, result.Error, result.TraceID, result.Tokens, result.CostUSD, result.DurationMs,
-				string(dimensionsJSON), result.FailureReason,
+				string(dimensionsJSON), result.FailureReason, string(traceJSON),
 			); err != nil {
 				return fmt.Errorf("evaluation run repository: insert case result: %w", err)
 			}
@@ -107,7 +111,7 @@ func (r *PgRunRepository) GetRun(
 		run.Resource.Kind = domain.ResourceKind(kind)
 		rows, err := tx.Query(ctx,
 			`SELECT case_id, passed, actual_output, message, error_message, trace_id, tokens, cost_usd,
-			        duration_ms, dimensions, failure_reason
+			        duration_ms, dimensions, failure_reason, trace_evidence
 			 FROM eval_case_results WHERE run_id=$1 ORDER BY created_at, id`, runID)
 		if err != nil {
 			return err
@@ -117,14 +121,18 @@ func (r *PgRunRepository) GetRun(
 			var result domain.EvalCaseResult
 			var actualJSON []byte
 			var dimensionsJSON []byte
+			var traceJSON []byte
 			if err := rows.Scan(&result.CaseID, &result.Passed, &actualJSON, &result.Message, &result.Error,
 				&result.TraceID, &result.Tokens, &result.CostUSD, &result.DurationMs,
-				&dimensionsJSON, &result.FailureReason); err != nil {
+				&dimensionsJSON, &result.FailureReason, &traceJSON); err != nil {
 				return err
 			}
 			_ = json.Unmarshal(actualJSON, &result.Actual)
 			if len(dimensionsJSON) > 0 {
 				_ = json.Unmarshal(dimensionsJSON, &result.Dimensions)
+			}
+			if len(traceJSON) > 0 {
+				_ = json.Unmarshal(traceJSON, &result.TraceEvidence)
 			}
 			run.Results = append(run.Results, result)
 		}

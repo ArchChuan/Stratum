@@ -61,6 +61,10 @@ func TestPgRunRepository_dimensionsFailureReasonRoundTrip(t *testing.T) {
 				DurationMs:    2,
 				Dimensions:    []domain.DimensionScore{{Name: "correctness", Score: 1, Passed: true, Reason: "ok"}},
 				FailureReason: "assert failed",
+				TraceEvidence: &domain.ObservedTraceEvidence{
+					CostUSD: 0.05, LatencyMs: 250, Success: false, SecurityViolation: true,
+					ToolCallCount: 4, ToolErrorCount: 2,
+				},
 			},
 		},
 	}
@@ -72,7 +76,8 @@ func TestPgRunRepository_dimensionsFailureReasonRoundTrip(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	writeMock.ExpectExec("INSERT INTO eval_case_results").
 		WithArgs("case-rt", "run-rt", "case-1", true, `{"ok":true}`, "m", "", "tr-1", 5, 0.1, 2,
-			`[{"name":"correctness","score":1,"passed":true,"reason":"ok"}]`, "assert failed").
+			`[{"name":"correctness","score":1,"passed":true,"reason":"ok"}]`, "assert failed",
+			`{"cost_usd":0.05,"latency_ms":250,"success":false,"security_violation":true,"tool_call_count":4,"tool_error_count":2}`).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	writeMock.ExpectCommit()
 	writeRepo := &PgRunRepository{pool: writeMock}
@@ -91,9 +96,10 @@ func TestPgRunRepository_dimensionsFailureReasonRoundTrip(t *testing.T) {
 		WithArgs("run-rt").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"case_id", "passed", "actual_output", "message", "error_message", "trace_id",
-			"tokens", "cost_usd", "duration_ms", "dimensions", "failure_reason",
+			"tokens", "cost_usd", "duration_ms", "dimensions", "failure_reason", "trace_evidence",
 		}).AddRow("case-1", true, []byte(`{"ok":true}`), "m", "", "tr-1", 5, 0.1, 2,
-			[]byte(`[{"name":"correctness","score":1,"passed":true,"reason":"ok"}]`), "assert failed"))
+			[]byte(`[{"name":"correctness","score":1,"passed":true,"reason":"ok"}]`), "assert failed",
+			[]byte(`{"cost_usd":0.05,"latency_ms":250,"success":false,"security_violation":true,"tool_call_count":4,"tool_error_count":2}`)))
 	readMock.ExpectCommit()
 	readRepo := &PgRunRepository{pool: readMock}
 	got, found, err := readRepo.GetRun(context.Background(), "t1", "run-rt")
@@ -102,5 +108,6 @@ func TestPgRunRepository_dimensionsFailureReasonRoundTrip(t *testing.T) {
 	require.Len(t, got.Results, 1)
 	require.Equal(t, run.Results[0].Dimensions, got.Results[0].Dimensions)
 	require.Equal(t, run.Results[0].FailureReason, got.Results[0].FailureReason)
+	require.Equal(t, run.Results[0].TraceEvidence, got.Results[0].TraceEvidence)
 	require.NoError(t, readMock.ExpectationsWereMet())
 }

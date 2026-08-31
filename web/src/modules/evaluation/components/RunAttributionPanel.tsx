@@ -75,6 +75,15 @@ const CaseDrillDown = ({ result }: { result: NonNullable<EvaluationRun['results'
     )}
     <Descriptions bordered size="small" column={1}>
       <Descriptions.Item label="Trace">{result.trace_id || '无'}</Descriptions.Item>
+      {result.trace_evidence && (
+        <>
+          <Descriptions.Item label="工具调用">{result.trace_evidence.tool_call_count ?? 0}</Descriptions.Item>
+          <Descriptions.Item label="工具错误">{result.trace_evidence.tool_error_count ?? 0}</Descriptions.Item>
+          <Descriptions.Item label="Trace 延迟 (ms)">{result.trace_evidence.latency_ms ?? 0}</Descriptions.Item>
+          <Descriptions.Item label="Trace 成本 (USD)">{(result.trace_evidence.cost_usd ?? 0).toFixed(4)}</Descriptions.Item>
+          <Descriptions.Item label="Trace 成功">{result.trace_evidence.success ? '是' : '否'}</Descriptions.Item>
+        </>
+      )}
       <Descriptions.Item label="实际输出">{typeof result.actual === 'string' ? result.actual : JSON.stringify(result.actual)}</Descriptions.Item>
       <Descriptions.Item label="失败归因">{result.failure_reason}</Descriptions.Item>
     </Descriptions>

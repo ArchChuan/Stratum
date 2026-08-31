@@ -84,6 +84,19 @@ export const dimensionScoreSchema = z.object({
 });
 export type DimensionScore = z.infer<typeof dimensionScoreSchema>;
 
+// observedTraceEvidenceSchema parses the trace-level evidence (spec §6.3
+// component drill-down) the backend attaches to a failed case. All fields are
+// best-effort and optional: a nil backend TraceEvidence omits the whole key.
+export const observedTraceEvidenceSchema = z.object({
+  cost_usd: z.number().optional(),
+  latency_ms: z.number().optional(),
+  success: z.boolean().optional(),
+  security_violation: z.boolean().optional(),
+  tool_call_count: z.number().optional(),
+  tool_error_count: z.number().optional(),
+});
+export type ObservedTraceEvidence = z.infer<typeof observedTraceEvidenceSchema>;
+
 export const evaluationRunSchema = z.object({
   id: z.string(),
   resource: resourceRefSchema,
@@ -106,6 +119,7 @@ export const evaluationRunSchema = z.object({
       rag_evidence: ragEvidenceSchema.optional(),
       dimensions: z.array(dimensionScoreSchema).optional(),
       failure_reason: z.string().optional(),
+      trace_evidence: observedTraceEvidenceSchema.optional(),
     }),
   ),
 });
