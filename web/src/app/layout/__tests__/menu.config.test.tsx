@@ -63,7 +63,7 @@ describe('buildMenuItems', () => {
       current_tenant: { id: 'tenant-1', name: 'Test', role: 'admin' },
     }));
     render(<div>{adminLabels.map((label, index) => <div key={index}>{label}</div>)}</div>);
-    // 平台管理菜单对普通用户常显；访问权限由 PrivateRoute(403) 承担
+    // 平台管理菜单对普通用户常显；普通成员只读可见（编辑控件由 PlatformAdminGate 置灰）
     expect(screen.getByText('平台管理')).toBeInTheDocument();
     expect(screen.getByText('全局租户')).toBeInTheDocument();
     expect(screen.getByText('平台参数')).toBeInTheDocument();
@@ -79,7 +79,7 @@ describe('buildMenuItems', () => {
       current_tenant: { id: 'tenant-1', name: 'Test', role: 'member' },
     }));
     render(<div>{memberLabels.map((label, index) => <div key={index}>{label}</div>)}</div>);
-    // 平台管理组常显，member 点击会被 PrivateRoute 403 拦截
+    // 平台管理组常显，member 只读（Gate 置灰），写权限按角色
     expect(screen.getByText('平台管理')).toBeInTheDocument();
     expect(screen.getByText('模型管理')).toBeInTheDocument();
     // member 无顶层 /audit（canManageTenant=false），仅平台管理组内一个
