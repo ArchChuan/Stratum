@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   candidatePageSchema,
+  dimensionScoreSchema,
   errorResponseSchema,
   evaluationJobSchema,
+  evaluationRunSchema,
   experimentPageSchema,
   optimizationResponseSchema,
   resourcePageSchema,
@@ -166,4 +168,24 @@ describe('evaluation model', () => {
       expect(safeSummarySchema.parse({ note: value })).toEqual({ note: value });
     },
   );
+});
+
+describe('dimensionScoreSchema', () => {
+  it('parses a valid dimension', () => {
+    const dim = dimensionScoreSchema.parse({ name: 'faithfulness', score: 0.6, passed: true, confidence: 0.9 });
+    expect(dim).toEqual({ name: 'faithfulness', score: 0.6, passed: true, confidence: 0.9 });
+  });
+});
+
+describe('evaluationRunSchema', () => {
+  it('parses run results with dimensions and failure_reason', () => {
+    const run = evaluationRunSchema.parse({
+      id: 'r1', resource: { kind: 'skill', resource_id: 's1', revision_id: 'v1' },
+      suite_revision_id: 'rev-1', passed: false, total_cases: 1, passed_cases: 0,
+      metrics: { version: { suite_revision_id: 'rev-1', platform_seq: 3, resource_version: 'v1' } },
+      results: [{ case_id: 'c1', passed: false, dimensions: [{ name: 'faithfulness', score: 0.3, passed: false }], failure_reason: 'dimension:faithfulness' }],
+    });
+    expect(run.results[0].failure_reason).toBe('dimension:faithfulness');
+    expect(run.results[0].dimensions?.[0].score).toBe(0.3);
+  });
 });

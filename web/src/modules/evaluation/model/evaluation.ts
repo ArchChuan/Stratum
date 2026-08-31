@@ -75,6 +75,15 @@ export const ragEvidenceSchema = z.object({
 });
 export type RAGEvidence = z.infer<typeof ragEvidenceSchema>;
 
+export const dimensionScoreSchema = z.object({
+  name: z.string(),
+  score: z.number(),
+  passed: z.boolean(),
+  reason: z.string().optional(),
+  confidence: z.number().optional(),
+});
+export type DimensionScore = z.infer<typeof dimensionScoreSchema>;
+
 export const evaluationRunSchema = z.object({
   id: z.string(),
   resource: resourceRefSchema,
@@ -95,6 +104,8 @@ export const evaluationRunSchema = z.object({
       cost_usd: z.number().optional().default(0),
       duration_ms: z.number().optional().default(0),
       rag_evidence: ragEvidenceSchema.optional(),
+      dimensions: z.array(dimensionScoreSchema).optional(),
+      failure_reason: z.string().optional(),
     }),
   ),
 });
