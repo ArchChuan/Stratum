@@ -84,7 +84,7 @@ const CaseDrillDown = ({ result }: { result: NonNullable<EvaluationRun['results'
           <Descriptions.Item label="Trace 成功">{result.trace_evidence.success ? '是' : '否'}</Descriptions.Item>
         </>
       )}
-      <Descriptions.Item label="实际输出">{typeof result.actual === 'string' ? result.actual : JSON.stringify(result.actual)}</Descriptions.Item>
+      <Descriptions.Item label="实际输出">{result.actual == null ? '无' : (typeof result.actual === 'string' ? result.actual : JSON.stringify(result.actual))}</Descriptions.Item>
       <Descriptions.Item label="失败归因">{result.failure_reason}</Descriptions.Item>
     </Descriptions>
   </div>

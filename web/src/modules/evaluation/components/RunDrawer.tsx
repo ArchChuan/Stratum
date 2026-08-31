@@ -13,7 +13,7 @@ export const RunDrawer = ({ run, open, onClose, isMobile, runs }: {
   run: RunSummary | null; open: boolean; onClose: () => void; isMobile?: boolean; runs: RunSummary[];
 }) => {
   const [metrics, setMetrics] = useState<Record<string, unknown> | null>(null);
-  const [runResults, setRunResults] = useState<EvaluationRun['results']>([]);
+  const [runResults, setRunResults] = useState<EvaluationRun['results'] | null>(null);
 
   useEffect(() => {
     if (!open || !run) {
@@ -21,7 +21,7 @@ export const RunDrawer = ({ run, open, onClose, isMobile, runs }: {
     }
     let cancelled = false;
     setMetrics(null);
-    setRunResults([]);
+    setRunResults(null);
     void evaluationApi.getRun(run.id)
       .then((detail) => {
         if (!cancelled) {
@@ -69,7 +69,9 @@ export const RunDrawer = ({ run, open, onClose, isMobile, runs }: {
           {
             key: 'attribution',
             label: '归因',
-            children: <RunAttributionPanel results={runResults} />,
+            children: runResults === null
+              ? <Skeleton active paragraph={{ rows: 4 }} />
+              : <RunAttributionPanel results={runResults} />,
           },
           {
             key: 'compare',

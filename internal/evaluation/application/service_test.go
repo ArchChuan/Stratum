@@ -312,6 +312,9 @@ func TestServiceJudgeAssertionFailClosedWhenDisabled(t *testing.T) {
 	if run.Passed || run.Results[0].Error != "LLM judge disabled" {
 		t.Fatalf("expected fail-closed error, got %+v", run.Results[0])
 	}
+	if run.Results[0].FailureReason != "execution" {
+		t.Fatalf("judge infra failure must carry execution failure_reason, got %+v", run.Results[0])
+	}
 }
 
 func TestServiceJudgeAssertionDisabledJudgeFailsClosed(t *testing.T) {
@@ -334,6 +337,9 @@ func TestServiceJudgeAssertionDisabledJudgeFailsClosed(t *testing.T) {
 	}
 	if run.Passed || run.Results[0].Error != "LLM judge disabled" {
 		t.Fatalf("expected fail-closed error, got %+v", run.Results[0])
+	}
+	if run.Results[0].FailureReason != "execution" {
+		t.Fatalf("judge infra failure must carry execution failure_reason, got %+v", run.Results[0])
 	}
 }
 
@@ -358,6 +364,69 @@ func TestServiceJudgeAssertionPropagatesJudgeError(t *testing.T) {
 	}
 	if run.Passed || !strings.Contains(run.Results[0].Error, "completer timeout") {
 		t.Fatalf("expected judge error to propagate, got %+v", run.Results[0])
+	}
+	if run.Results[0].FailureReason != "execution" {
+		t.Fatalf("judge call failure must carry execution failure_reason, got %+v", run.Results[0])
+	}
+}
+
+func TestServiceJudgeCaseMarshalErrorsSetExecutionFailureReason(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      any
+		expected   any
+		output     any
+		wantSubstr string
+	}{
+		{
+			name:       "input marshal error",
+			input:      make(chan int),
+			expected:   "ok",
+			output:     "any",
+			wantSubstr: "marshal input",
+		},
+		{
+			name:       "expected marshal error",
+			input:      "x",
+			expected:   make(chan int),
+			output:     "any",
+			wantSubstr: "marshal expected output",
+		},
+		{
+			name:       "actual marshal error",
+			input:      "x",
+			expected:   "ok",
+			output:     make(chan int),
+			wantSubstr: "marshal actual output",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter := &fakeAdapter{outputs: map[string]any{"judge-1": tc.output}}
+			repo := &fakeRunRepo{}
+			svc := NewService(adapter, repo, nil, &fakeLLMJudge{enabled: true})
+
+			run, err := svc.Run(context.Background(), RunInput{
+				TenantID: "tenant-1",
+				Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
+				Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+					{ID: "judge-1", Input: tc.input, ExpectedOutput: tc.expected, AssertionMode: domain.AssertionJudge, Enabled: true},
+				}},
+			})
+			if err != nil {
+				t.Fatalf("Run returned error: %v", err)
+			}
+			got := run.Results[0]
+			if !strings.Contains(got.Error, tc.wantSubstr) {
+				t.Fatalf("error = %q, want substring %q", got.Error, tc.wantSubstr)
+			}
+			if got.FailureReason != "execution" {
+				t.Fatalf("failure_reason = %q, want execution", got.FailureReason)
+			}
+			if got.Passed {
+				t.Fatal("judge marshal failure must fail the case")
+			}
+		})
 	}
 }
 

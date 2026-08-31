@@ -92,7 +92,7 @@ export const RunMetricPanel = ({ metrics }: { metrics: Record<string, unknown> }
         <Descriptions.Item label="总成本 (USD)">{cost.total_usd?.toFixed(4)}</Descriptions.Item>
         <Descriptions.Item label="平均成本 (USD)">{cost.avg_usd?.toFixed(4)}</Descriptions.Item>
       </Descriptions>}
-      {latency && <Descriptions bordered size="small" column={1}>
+      {latency && Object.keys(latency).length > 0 && <Descriptions bordered size="small" column={1}>
         <Descriptions.Item label="P50 延迟 (ms)">{latency.p50_ms}</Descriptions.Item>
         <Descriptions.Item label="P95 延迟 (ms)">{latency.p95_ms}</Descriptions.Item>
         <Descriptions.Item label="最大延迟 (ms)">{latency.max_ms}</Descriptions.Item>

@@ -162,7 +162,13 @@ func (s *Service) Run(ctx context.Context, input RunInput) (domain.EvalRun, erro
 	}
 	seq := int64(0)
 	if s.platformVersion != nil {
-		if seqVal, ok, err := s.platformVersion(ctx); err == nil && ok {
+		seqVal, ok, err := s.platformVersion(ctx)
+		if err != nil {
+			// fail-open：版本锚点 unknown（记 0），不阻断落库；但必须留痕便于诊断。
+			if s.logger != nil {
+				s.logger.Warn("evaluation run: platform version", zap.Error(err))
+			}
+		} else if ok {
 			seq = seqVal
 		}
 	}
@@ -221,6 +227,7 @@ func (s *Service) runCase(
 	assertion, err := domain.EvaluateAssertion(testCase.AssertionMode, execution.Output, testCase.ExpectedOutput)
 	if err != nil {
 		result.Error = err.Error()
+		result.FailureReason = "execution"
 		return result
 	}
 	result.Passed = assertion.Passed
@@ -239,21 +246,25 @@ func (s *Service) judgeCase(ctx context.Context, testCase domain.EvalCase, resul
 	var zero domain.AssertionResult
 	if s.judge == nil || !s.judge.Enabled(ctx) {
 		result.Error = "LLM judge disabled"
+		result.FailureReason = "execution"
 		return zero, result
 	}
 	inputJSON, err := json.Marshal(testCase.Input)
 	if err != nil {
 		result.Error = fmt.Errorf("judge: marshal input: %w", err).Error()
+		result.FailureReason = "execution"
 		return zero, result
 	}
 	expectedJSON, err := json.Marshal(testCase.ExpectedOutput)
 	if err != nil {
 		result.Error = fmt.Errorf("judge: marshal expected output: %w", err).Error()
+		result.FailureReason = "execution"
 		return zero, result
 	}
 	actualJSON, err := json.Marshal(result.Actual)
 	if err != nil {
 		result.Error = fmt.Errorf("judge: marshal actual output: %w", err).Error()
+		result.FailureReason = "execution"
 		return zero, result
 	}
 	var spec domain.JudgeSpec
@@ -269,6 +280,7 @@ func (s *Service) judgeCase(ctx context.Context, testCase domain.EvalCase, resul
 	})
 	if err != nil {
 		result.Error = err.Error()
+		result.FailureReason = "execution"
 		return zero, result
 	}
 	result.Passed = assertion.Passed

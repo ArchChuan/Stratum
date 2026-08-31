@@ -29,32 +29,45 @@ export const CompareRunsPanel = ({ currentId, runs, getRun }: {
   const [target, setTarget] = useState<EvaluationRun | null>(null);
 
   // Same-resource invariant: base-run candidates must come from the current
-  // run's resource. center.runs.items is a cross-resource list, so without this
-  // filter other resources' runs would surface as meaningless comparison baselines.
-  const currentResourceId = runs.find((r) => r.id === currentId)?.resource_id;
+  // run's resource (and resource kind). center.runs.items is a cross-resource
+  // list, so without this filter other resources' runs would surface as
+  // meaningless comparison baselines.
+  const currentRun = runs.find((r) => r.id === currentId);
+  const currentResourceId = currentRun?.resource_id;
+  const currentKind = currentRun?.resource_kind;
 
   const candidates = useMemo(
-    () => runs.filter((r) => r.id !== currentId && r.resource_id === currentResourceId),
-    [runs, currentId, currentResourceId],
+    () => runs.filter((r) => r.id !== currentId && r.resource_kind === currentKind && r.resource_id === currentResourceId),
+    [runs, currentId, currentKind, currentResourceId],
   );
 
-  const load = useCallback(async (id: string) => {
-    const detail = await getRun(id);
-    if (id === currentId) {
-      setTarget(detail);
-    } else {
-      setBase(detail);
-    }
-  }, [currentId, getRun]);
+  const load = useCallback(async (id: string) => getRun(id), [getRun]);
 
   useEffect(() => {
-    void load(currentId);
+    let cancelled = false;
+    void load(currentId).then((detail) => {
+      if (!cancelled) {
+        setTarget(detail);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [currentId, load]);
 
   useEffect(() => {
-    if (baseId) {
-      void load(baseId);
+    if (!baseId) {
+      return;
     }
+    let cancelled = false;
+    void load(baseId).then((detail) => {
+      if (!cancelled) {
+        setBase(detail);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [baseId, load]);
 
   if (candidates.length === 0) {
