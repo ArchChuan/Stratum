@@ -13,15 +13,27 @@ message EvaluationResourceRef {
   string revision_id = 3;
 }
 
+// JudgeSpec configures LLM judge assertion for assertion_mode=judge cases.
+// Both fields are optional: empty Model/Rubric fall back to platform
+// parameters and the registered global rubric respectively. The spec is a
+// fact recorded when the case enters the draft; UpdateDraftCaseRequest
+// deliberately does not carry it, so editing a case never rewrites it.
+message JudgeSpec {
+  string model = 1;
+  string rubric = 2;
+}
+
 message EvaluationCaseRequest {
   string name = 1;
   // @binding: required
   google.protobuf.Value input = 2;
   // @binding: required
   google.protobuf.Value expected_output = 3;
-  // @binding: required,oneof=exact contains regex
+  // @binding: required,oneof=exact contains regex judge
   string assertion_mode = 4;
   optional bool enabled = 5; // 手写 *bool,json 无 omitempty
+  // 仅 assertion_mode=judge 时生效；规则断言 case 忽略该字段。
+  optional JudgeSpec judge_spec = 6;
 }
 
 message CreateEvaluationSuiteRequest {
@@ -112,7 +124,10 @@ message GenerateSuiteCasesRequest {
 }
 
 // UpdateDraftCaseRequest approves (enabled=true), edits (full field
-// replacement) or rejects (enabled=false) one draft case.
+// replacement) or rejects (enabled=false) one draft case. assertion_mode
+// accepts judge so a judge case can be edited (e.g. rename input) without
+// its recorded judge_spec being rewritten: judge_spec is deliberately not
+// carried here and stays immutable once the case entered the draft.
 message UpdateDraftCaseRequest {
   // @binding: required,max=255
   string name = 1;
@@ -120,7 +135,7 @@ message UpdateDraftCaseRequest {
   google.protobuf.Value input = 2;
   // @binding: required
   google.protobuf.Value expected_output = 3;
-  // @binding: required,oneof=exact contains regex
+  // @binding: required,oneof=exact contains regex judge
   string assertion_mode = 4;
   optional bool enabled = 5;
 }

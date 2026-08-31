@@ -261,17 +261,25 @@ func (h *EvaluationHandler) CreateSuite(c *gin.Context) {
 		if item.Enabled != nil {
 			enabled = *item.Enabled
 		}
-		cases = append(cases, domain.EvalCase{
+		testCase := domain.EvalCase{
 			Name: item.Name, Input: item.Input, ExpectedOutput: item.ExpectedOutput,
 			AssertionMode: domain.AssertionMode(item.AssertionMode), Enabled: enabled,
-		})
+		}
+		if item.JudgeSpec != nil {
+			testCase.JudgeSpec = &domain.JudgeSpec{Model: item.JudgeSpec.Model, Rubric: item.JudgeSpec.Rubric}
+		}
+		cases = append(cases, testCase)
 	}
 	caseArgs := make([]any, 0, len(cases))
 	for _, cs := range cases {
-		caseArgs = append(caseArgs, map[string]any{
+		caseArg := map[string]any{
 			"name": cs.Name, "input": cs.Input, "expected_output": cs.ExpectedOutput,
 			"assertion_mode": string(cs.AssertionMode), "enabled": cs.Enabled,
-		})
+		}
+		if cs.JudgeSpec != nil {
+			caseArg["judge_spec"] = map[string]any{"model": cs.JudgeSpec.Model, "rubric": cs.JudgeSpec.Rubric}
+		}
+		caseArgs = append(caseArgs, caseArg)
 	}
 	args := map[string]any{"operation": "create_suite", "name": req.Name, "description": req.Description,
 		"resource_kind": string(req.ResourceKind), "cases": caseArgs}

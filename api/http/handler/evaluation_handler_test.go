@@ -364,6 +364,7 @@ func (f *fakeOptimizationService) Generate(
 type fakeSuiteService struct {
 	created     domain.EvalSuite
 	revision    domain.EvalSuiteRevision
+	createInput application.CreateSuiteInput
 	getDraftErr error
 	updated     domain.EvalCase
 	updateErr   error
@@ -373,6 +374,7 @@ type fakeSuiteService struct {
 }
 
 func (f *fakeSuiteService) Create(_ context.Context, _ string, input application.CreateSuiteInput) (domain.EvalSuite, domain.EvalSuiteRevision, error) {
+	f.createInput = input
 	return f.created, f.revision, nil
 }
 
@@ -625,6 +627,72 @@ func TestEvaluationCreateSuiteAdminExecutesDirectly(t *testing.T) {
 	}
 	if suites.created.ID != "suite-1" {
 		t.Fatalf("suite Create not executed directly: %+v", suites.created)
+	}
+}
+
+// D4：admin 创建 judge case 时，judge_spec（model/rubric）绑定进 service 输入。
+func TestEvaluationCreateSuiteBindsJudgeSpec(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{created: domain.EvalSuite{ID: "suite-1"}}
+	approvals := &fakeApprovalRequests{}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop()).
+		WithApprovalService(approvals)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.POST("/evaluations/suites", withTenantAndUser("tenant-1", "admin-1"), withRole("admin"), h.CreateSuite)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/evaluations/suites",
+		strings.NewReader(`{"name":"S","resource_kind":"skill","cases":[{"name":"j1","input":"i","expected_output":"o","assertion_mode":"judge","judge_spec":{"model":"judge-v1","rubric":"faithfulness"}}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(suites.createInput.Cases) != 1 {
+		t.Fatalf("create input cases=%d, want 1", len(suites.createInput.Cases))
+	}
+	got := suites.createInput.Cases[0]
+	if got.AssertionMode != domain.AssertionJudge {
+		t.Fatalf("assertion mode=%q, want judge", got.AssertionMode)
+	}
+	if got.JudgeSpec == nil || got.JudgeSpec.Model != "judge-v1" || got.JudgeSpec.Rubric != "faithfulness" {
+		t.Fatalf("judge spec not bound: %+v", got.JudgeSpec)
+	}
+}
+
+// D4：member 创建 judge case 时，审批 payload 的 args 携带 judge_spec 供审批人审阅。
+func TestEvaluationCreateSuiteJudgeSpecInApprovalArgs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	suites := &fakeSuiteService{}
+	approvals := &fakeApprovalRequests{}
+	h := NewEvaluationHandler(suites, nil, nil, nil, nil, nil, nil, nil, zap.NewNop()).
+		WithApprovalService(approvals)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.POST("/evaluations/suites", withTenantAndUser("tenant-1", "member-1"), withRole("member"), h.CreateSuite)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/evaluations/suites",
+		strings.NewReader(`{"name":"S","resource_kind":"agent","cases":[{"name":"j1","input":"i","expected_output":"o","assertion_mode":"judge","judge_spec":{"model":"judge-v1"}}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 pending_approval, got status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	caseArgs, ok := approvals.args["cases"].([]any)
+	if !ok || len(caseArgs) != 1 {
+		t.Fatalf("approval cases args=%v, want 1 case", approvals.args["cases"])
+	}
+	caseArg, ok := caseArgs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("case arg type=%T, want map", caseArgs[0])
+	}
+	spec, ok := caseArg["judge_spec"].(map[string]any)
+	if !ok || spec["model"] != "judge-v1" {
+		t.Fatalf("approval judge_spec missing: %v", caseArg)
 	}
 }
 
