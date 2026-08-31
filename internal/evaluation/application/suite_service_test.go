@@ -32,6 +32,40 @@ func TestSuiteServiceCreatesDraftAndPublishesImmutableRevision(t *testing.T) {
 	}
 }
 
+// TestSuiteServiceCreateCarriesJudgeSpecIntoRevision verifies the judge
+// authoring path: a judge case's JudgeSpec set at create time survives the
+// service unchanged into the persisted revision (the repository's
+// insertEvalCase then writes it into evaluator_config via ToConfig).
+func TestSuiteServiceCreateCarriesJudgeSpecIntoRevision(t *testing.T) {
+	repo := &fakeSuiteRepo{}
+	svc := NewSuiteService(repo)
+
+	suite, revision, err := svc.Create(context.Background(), "tenant-1", CreateSuiteInput{
+		Name: "judge 基线", ResourceKind: domain.ResourceKindAgent,
+		Cases: []domain.EvalCase{{
+			Name: "j1", Input: "帮我总结", ExpectedOutput: "要点",
+			AssertionMode: domain.AssertionJudge, Enabled: true,
+			JudgeSpec: &domain.JudgeSpec{Model: "judge-v1", Rubric: "总结要点覆盖度"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if revision.Cases[0].AssertionMode != domain.AssertionJudge {
+		t.Fatalf("assertion mode=%q, want judge", revision.Cases[0].AssertionMode)
+	}
+	if got := revision.Cases[0].JudgeSpec; got == nil || got.Model != "judge-v1" || got.Rubric != "总结要点覆盖度" {
+		t.Fatalf("judge spec lost through Create: %+v", got)
+	}
+	// ToConfig must be non-nil so insertEvalCase persists the spec.
+	if cfg := revision.Cases[0].ToConfig(); cfg == nil || cfg.JudgeSpec == nil || cfg.JudgeSpec.Model != "judge-v1" {
+		t.Fatalf("ToConfig does not carry judge spec: %+v", cfg)
+	}
+	if suite.ID == "" || revision.Cases[0].ID == "" {
+		t.Fatalf("expected generated IDs, suite=%+v revision=%+v", suite, revision)
+	}
+}
+
 type fakeSuiteRepo struct {
 	suite    domain.EvalSuite
 	revision domain.EvalSuiteRevision

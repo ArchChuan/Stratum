@@ -7,12 +7,15 @@ import { evaluationApi } from '../api/evaluation.api';
 import { CandidateDrawer } from '../components/CandidateDrawer';
 import { CandidateEvaluationModal } from '../components/CandidateEvaluationModal';
 import { CreateEvaluationModal } from '../components/CreateEvaluationModal';
+import { CreateSuiteModal } from '../components/CreateSuiteModal';
 import { EvaluationOverview } from '../components/EvaluationOverview';
 import { EvolutionCommandModal } from '../components/EvolutionCommandModal';
 import { ExperimentDrawer } from '../components/ExperimentDrawer';
 import { ResourceTable } from '../components/ResourceTable';
 import ReviewPoolPanel from '../components/ReviewPoolPanel';
 import { RunDrawer } from '../components/RunDrawer';
+import { SuiteDrawer } from '../components/SuiteDrawer';
+import { SuitesPanel } from '../components/SuitesPanel';
 import { TimelineDrawer } from '../components/TimelineDrawer';
 import { StatusTag, displayLabel, drawerWidth, runDisplayStatus } from '../components/evaluationView';
 import { useEvaluationCenter } from '../hooks/useEvaluationCenter';
@@ -40,15 +43,18 @@ export const EvaluationCenterPage = () => {
   const [runId, setRunId] = useState('');
   const [candidateId, setCandidateId] = useState('');
   const [experimentId, setExperimentId] = useState('');
+  const [suiteId, setSuiteId] = useState('');
   const timeline = useEvaluationTimeline();
   const [createOpen, setCreateOpen] = useState(false);
   const [evolutionOpen, setEvolutionOpen] = useState(false);
   const [candidateEvaluationOpen, setCandidateEvaluationOpen] = useState(false);
+  const [suiteCreateOpen, setSuiteCreateOpen] = useState(false);
   const resource = useMemo(() => center.resources.items.find((item) => item.id === resourceId) || null,
     [center.resources.items, resourceId]);
   const run = center.runs.items.find((item) => item.id === runId) || null;
   const candidate = center.candidates.items.find((item) => item.id === candidateId) || null;
   const experiment = center.experiments.items.find((item) => item.id === experimentId) || null;
+  const suite = center.suites.items.find((item) => item.id === suiteId) || null;
 
   useEffect(() => { if (resourceId && !resource) setResourceId(''); }, [resource, resourceId]);
   const decide = async (action: () => Promise<unknown>, success: string) => {
@@ -88,6 +94,9 @@ export const EvaluationCenterPage = () => {
       </> },
       { key: 'experiments', label: `金丝雀实验 ${center.experiments.items.length}`, children: <CompactList rows={center.experiments.items}
         empty="金丝雀实验还是空的" onOpen={(row) => setExperimentId(row.id)} /> },
+      { key: 'suites', label: `套件 ${center.suites.items.length}`, children: <SuitesPanel suites={center.suites.items}
+        loading={center.loading} canManage={center.canManageEvaluation} onOpen={(row) => setSuiteId(row.id)}
+        onCreate={() => setSuiteCreateOpen(true)} /> },
       { key: 'review', label: '人工评审池', children: <ReviewPoolPanel /> },
     ]} />
     <Drawer title="资源详情" open={!!resource} onClose={() => setResourceId('')} width={drawerWidth(isMobile)} destroyOnHidden>
@@ -123,6 +132,24 @@ export const EvaluationCenterPage = () => {
       onRollback={(value) => void decide(() => center.rollbackExperiment(value.id, command(value.state_version, '管理员回滚实验')), '实验已回滚')} />
     <TimelineDrawer events={timeline.events} open={timeline.open} loading={timeline.loading} error={timeline.error}
       isMobile={isMobile} onClose={timeline.closeTimeline} />
+    <SuiteDrawer suite={suite} open={!!suite} onClose={() => setSuiteId('')} canManage={center.canManageEvaluation}
+      isMobile={isMobile} onChanged={() => void center.reload()} />
+    <CreateSuiteModal open={suiteCreateOpen} onClose={() => setSuiteCreateOpen(false)}
+      onSubmit={async (values) => {
+        try {
+          await evaluationApi.createSuite({ name: values.name, description: values.description || undefined,
+            resourceKind: values.resource_kind, cases: [{ name: values.case_name, input: values.input,
+              expected_output: values.expected_output, assertion_mode: values.assertion_mode,
+              judge_spec: values.assertion_mode === 'judge'
+                ? { model: values.judge_model, rubric: values.judge_rubric } : undefined,
+              enabled: values.enabled }] });
+          await center.reload();
+          message.success({ content: '套件已创建', duration: 2 });
+        } catch (error) {
+          message.error({ content: error instanceof Error ? error.message : '创建套件失败', duration: 3 });
+          throw error;
+        }
+      }} />
     <CreateEvaluationModal open={createOpen} resources={center.resources.items} onClose={() => {
       center.resetCreateEvaluation(); setCreateOpen(false);
     }}
@@ -131,7 +158,10 @@ export const EvaluationCenterPage = () => {
           await center.createEvaluation({ resource: { kind: value.resource_kind, resource_id: value.resource_id,
             revision_id: value.stable_revision_id || '' }, name: values.name, description: values.description,
           cases: [{ name: values.case_name, input: values.input, expected_output: values.expected_output,
-            assertion_mode: 'contains', enabled: true }] });
+            assertion_mode: values.assertion_mode,
+            judge_spec: values.assertion_mode === 'judge'
+              ? { model: values.judge_model, rubric: values.judge_rubric } : undefined,
+            enabled: true }] });
           message.success({ content: '评测已创建并进入运行队列', duration: 2 });
         } catch (error) {
           message.error({ content: error instanceof Error ? error.message : '创建评测失败', duration: 3 });

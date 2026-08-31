@@ -102,6 +102,20 @@ describe('EvaluationCenterPage', () => {
     })));
   });
 
+  it('exposes suite authoring through the suites tab for admins', () => {
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: '套件 0' }));
+    expect(screen.getByRole('button', { name: /新建套件/ })).toBeInTheDocument();
+    expect(screen.getByText('套件还是空的')).toBeInTheDocument();
+  });
+
+  it('hides suite authoring for members', () => {
+    center.canManageEvaluation = false;
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: '套件 0' }));
+    expect(screen.queryByRole('button', { name: /新建套件/ })).not.toBeInTheDocument();
+  });
+
   it('enables promotion from the real eligible experiment summary shape', () => {
     renderPage();
     fireEvent.click(screen.getByRole('tab', { name: '金丝雀实验 1' }));

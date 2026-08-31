@@ -9,12 +9,18 @@ type EvaluationResourceRef struct {
 	RevisionID string `json:"revision_id" binding:"required"`
 }
 
+type JudgeSpec struct {
+	Model  string `json:"model"`
+	Rubric string `json:"rubric"`
+}
+
 type EvaluationCaseRequest struct {
-	Name           string `json:"name"`
-	Input          any    `json:"input" binding:"required"`
-	ExpectedOutput any    `json:"expected_output" binding:"required"`
-	AssertionMode  string `json:"assertion_mode" binding:"required,oneof=exact contains regex"`
-	Enabled        *bool  `json:"enabled"`
+	Name           string     `json:"name"`
+	Input          any        `json:"input" binding:"required"`
+	ExpectedOutput any        `json:"expected_output" binding:"required"`
+	AssertionMode  string     `json:"assertion_mode" binding:"required,oneof=exact contains regex judge"`
+	Enabled        *bool      `json:"enabled"`
+	JudgeSpec      *JudgeSpec `json:"judge_spec"`
 }
 
 type CreateEvaluationSuiteRequest struct {
@@ -76,7 +82,7 @@ type UpdateDraftCaseRequest struct {
 	Name           string `json:"name" binding:"required,max=255"`
 	Input          any    `json:"input" binding:"required"`
 	ExpectedOutput any    `json:"expected_output" binding:"required"`
-	AssertionMode  string `json:"assertion_mode" binding:"required,oneof=exact contains regex"`
+	AssertionMode  string `json:"assertion_mode" binding:"required,oneof=exact contains regex judge"`
 	Enabled        *bool  `json:"enabled"`
 }
 
