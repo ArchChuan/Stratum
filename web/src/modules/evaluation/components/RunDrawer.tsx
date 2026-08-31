@@ -4,12 +4,13 @@ import { useEffect, useState } from 'react';
 import { evaluationApi } from '../api/evaluation.api';
 import type { EvaluationRun, RunSummary } from '../model/evaluation';
 
+import { CompareRunsPanel } from './CompareRunsPanel';
 import { RunAttributionPanel } from './RunAttributionPanel';
 import { RunMetricPanel } from './RunMetricPanel';
 import { drawerWidth, runDisplayStatus, StatusTag } from './evaluationView';
 
-export const RunDrawer = ({ run, open, onClose, isMobile }: {
-  run: RunSummary | null; open: boolean; onClose: () => void; isMobile?: boolean;
+export const RunDrawer = ({ run, open, onClose, isMobile, runs }: {
+  run: RunSummary | null; open: boolean; onClose: () => void; isMobile?: boolean; runs: RunSummary[];
 }) => {
   const [metrics, setMetrics] = useState<Record<string, unknown> | null>(null);
   const [runResults, setRunResults] = useState<EvaluationRun['results']>([]);
@@ -69,6 +70,11 @@ export const RunDrawer = ({ run, open, onClose, isMobile }: {
             key: 'attribution',
             label: '归因',
             children: <RunAttributionPanel results={runResults} />,
+          },
+          {
+            key: 'compare',
+            label: '版本对比',
+            children: <CompareRunsPanel currentId={run.id} runs={runs} getRun={evaluationApi.getRun} />,
           },
         ]}
       />}
