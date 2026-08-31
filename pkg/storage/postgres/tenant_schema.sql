@@ -516,9 +516,14 @@ CREATE TABLE IF NOT EXISTS eval_case_results (
     tokens          INT NOT NULL DEFAULT 0,
     cost_usd        DOUBLE PRECISION NOT NULL DEFAULT 0,
     duration_ms     INT NOT NULL DEFAULT 0,
+    dimensions      JSONB NOT NULL DEFAULT '{}'::jsonb,
+    failure_reason  TEXT NOT NULL DEFAULT '',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_eval_case_results_run ON eval_case_results(run_id);
+-- P3c 评测输出升级（spec §6.2）：case 级多维分数与失败归因，升级历史租户。
+ALTER TABLE eval_case_results ADD COLUMN IF NOT EXISTS dimensions JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE eval_case_results ADD COLUMN IF NOT EXISTS failure_reason TEXT NOT NULL DEFAULT '';
 
 -- 运行态观测明细（规格 §4.3 EvalObservation）。param_version/signals/cost_perf
 -- 为 JSONB 结构化字段，由 Go json.Marshal 后写入。
