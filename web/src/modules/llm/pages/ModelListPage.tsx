@@ -23,6 +23,7 @@ import { useModels } from '../hooks/useModels';
 import type { Model, ModelCapability, UpdateModelInput, UpdateModelPolicyInput } from '../model/llm';
 
 import { LLM_DEFAULT_PAGE_SIZE } from '@/constants';
+import { usePlatformAdminCanEdit } from '@/modules/iam';
 import { extractErrorMessage } from '@/shared/lib';
 
 const { Text } = Typography;
@@ -42,6 +43,7 @@ interface Props {
 
 export function ModelListPage({ refreshTick = 0 }: Props) {
   const { models, loading, refresh, toggleModel, updateModel, updateModelPolicy, deleteModel } = useModels();
+  const canEdit = usePlatformAdminCanEdit();
   const [capFilter, setCapFilter] = useState<ModelCapability | undefined>();
   const [editModel, setEditModel] = useState<Model | null>(null);
   const [editOpen, setEditOpen] = useState(false);
@@ -163,6 +165,7 @@ export function ModelListPage({ refreshTick = 0 }: Props) {
         <Switch
           size="small"
           checked={_enabled}
+          disabled={!canEdit}
           onChange={(checked) => toggleModel(record.id, checked)}
         />
       ),
@@ -173,11 +176,13 @@ export function ModelListPage({ refreshTick = 0 }: Props) {
       width: 200,
       render: (_: unknown, record: Model) => (
         <span style={{ display: 'flex', gap: 8 }}>
-          <Button size="small" onClick={() => handleEdit(record)}>
+          <Button size="small" aria-label="编辑" disabled={!canEdit} onClick={() => handleEdit(record)}>
             编辑
           </Button>
           <Button
             size="small"
+            aria-label="删除"
+            disabled={!canEdit}
             danger
             icon={<DeleteOutlined />}
             onClick={() => handleDelete(record)}
@@ -200,7 +205,7 @@ export function ModelListPage({ refreshTick = 0 }: Props) {
             onChange={(v) => setCapFilter(v)}
             style={{ width: 140 }}
           />
-          <Button icon={<ReloadOutlined />} onClick={refresh} loading={loading}>
+          <Button icon={<ReloadOutlined />} aria-label="刷新" onClick={refresh} loading={loading}>
             刷新
           </Button>
         </span>
