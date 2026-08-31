@@ -39,7 +39,7 @@ it('disables edit/delete and the enable toggle for a plain member', async () => 
   expect(await screen.findByText('测试模型')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '编辑' })).toBeDisabled();
   expect(screen.getByRole('button', { name: /删除/ })).toBeDisabled();
-  // 启停 Switch 置灰（antd Switch disabled 时无 button role，用 input[role=switch] 判定）
+  // 启停 Switch 置灰（antd v5 用 button[role="switch"].ant-switch-disabled 判定）
   const switches = document.querySelectorAll('button[role="switch"].ant-switch-disabled');
   expect(switches.length).toBe(1);
   expect(screen.getByRole('button', { name: '刷新' })).not.toBeDisabled();

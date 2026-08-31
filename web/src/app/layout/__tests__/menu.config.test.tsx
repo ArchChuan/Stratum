@@ -57,7 +57,7 @@ describe('buildMenuItems', () => {
     expect(resolveOpenKeys('/workflows/new')).toEqual(['workflow-group']);
   });
 
-  it('shows the platform admin group to tenant admins (access gated by route)', () => {
+  it('shows the platform admin group to tenant admins (read-only visible; controls role-gated)', () => {
     const adminLabels = collectLabels(buildMenuItems({
       sub: 'admin-1', tenant_id: 'tenant-1', role: 'admin', avatar_url: '', github_login: 'admin', username: '',
       current_tenant: { id: 'tenant-1', name: 'Test', role: 'admin' },
@@ -73,7 +73,7 @@ describe('buildMenuItems', () => {
     expect(screen.getByText('审批中心')).toBeInTheDocument();
   });
 
-  it('shows the platform admin group to members (access gated by route)', () => {
+  it('shows the platform admin group to members (read-only visible; controls role-gated)', () => {
     const memberLabels = collectLabels(buildMenuItems({
       sub: 'user-1', tenant_id: 'tenant-1', role: 'member', avatar_url: '', github_login: 'member', username: '',
       current_tenant: { id: 'tenant-1', name: 'Test', role: 'member' },
