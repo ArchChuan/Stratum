@@ -292,22 +292,28 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 	adminHandler := handler.NewAdminHandler(c.IAM.AdminService, c.Logger)
 	tenantHandler := handler.NewTenantHandler(c.IAM.TenantService, c.IAM.InvitationService, c.IAM.AdminService, c.Logger)
 
-	// /admin 常规后台：system_admin 及以上（租户管理、参数、memory DLQ）。
+	// 平台管理只读接口：所有登录租户成员可读（租户/参数/管理员名单），写接口见 adminGroup。
+	platformRead := r.Group("/admin", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
+	{
+		platformRead.GET("/tenants", adminHandler.ListTenants)
+		platformRead.GET("/tenants/:id", adminHandler.GetTenant)
+		registerParameterReadRoutes(platformRead, c)
+		platformRead.GET("/admins", adminHandler.ListAdmins)
+	}
+
+	// /admin 常规后台写接口：system_admin 及以上（租户管理、参数、memory DLQ）。
 	adminGroup := r.Group("/admin", jwtMW, middleware.RequireSystemAdmin())
 	{
-		adminGroup.GET("/tenants", adminHandler.ListTenants)
 		adminGroup.POST("/tenants", adminHandler.CreateTenant)
-		adminGroup.GET("/tenants/:id", adminHandler.GetTenant)
 		adminGroup.PATCH("/tenants/:id", adminHandler.UpdateTenant)
 		// 高敏感：删除租户仅 global_admin。
 		adminGroup.DELETE("/tenants/:id", middleware.RequireGlobalAdmin(), adminHandler.DeleteTenant)
-		registerParameterAdminRoutes(adminGroup, c)
+		registerParameterWriteRoutes(adminGroup, c)
 		registerMemoryDLQAdminRoutes(adminGroup, c)
 
 		// 平台管理员管理：仅 global_admin（system_admin 不可自我管理或管理同级）。
 		adminAdmins := adminGroup.Group("/admins", middleware.RequireGlobalAdmin())
 		{
-			adminAdmins.GET("", adminHandler.ListAdmins)
 			adminAdmins.POST("", adminHandler.SetAdminRole)
 			adminAdmins.DELETE("/:user_id", adminHandler.RemoveAdminRole)
 		}
@@ -330,18 +336,26 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 	r.GET("/tenant/list", jwtMW, tenantHandler.ListUserTenants)
 }
 
-// registerParameterAdminRoutes wires the unified parameter registry admin
-// endpoints (schema + platform values) when the registry is wired.
-func registerParameterAdminRoutes(adminGroup *gin.RouterGroup, c *wiring.Container) {
+// registerParameterReadRoutes wires the unified parameter registry read-only
+// endpoints (schema + platform values) for all tenant members.
+func registerParameterReadRoutes(readGroup *gin.RouterGroup, c *wiring.Container) {
 	if c.Parameters == nil || c.Parameters.Service == nil {
 		return
 	}
 	paramHandler := handler.NewParameterHandler(c.Parameters.Service, c.Logger)
-	adminGroup.GET("/parameters/schema", paramHandler.Schema)
-	adminGroup.GET("/parameters", paramHandler.List)
+	readGroup.GET("/parameters/schema", paramHandler.Schema)
+	readGroup.GET("/parameters", paramHandler.List)
+	readGroup.GET("/parameters/versions/:groupKey", paramHandler.Versions)
+}
+
+// registerParameterWriteRoutes wires the unified parameter registry write
+// endpoints, which remain gated by the parent group's system_admin middleware.
+func registerParameterWriteRoutes(adminGroup *gin.RouterGroup, c *wiring.Container) {
+	if c.Parameters == nil || c.Parameters.Service == nil {
+		return
+	}
+	paramHandler := handler.NewParameterHandler(c.Parameters.Service, c.Logger)
 	adminGroup.PUT("/parameters", paramHandler.Update)
-	// 版本化配置端点（版本历史 / 创建草稿 / 发布 / 回滚），同组 RequireGlobalAdmin。
-	adminGroup.GET("/parameters/versions/:groupKey", paramHandler.Versions)
 	adminGroup.POST("/parameters/versions/:groupKey", paramHandler.CreateDraft)
 	adminGroup.POST("/parameters/versions/:groupKey/:versionID/publish", paramHandler.Publish)
 	adminGroup.POST("/parameters/versions/:groupKey/:versionID/rollback", paramHandler.Rollback)
@@ -694,8 +708,7 @@ func registerAudit(r *gin.Engine, c *wiring.Container, requireActive gin.Handler
 			return
 		}
 		platformAudit := r.Group("/admin/audit/platform",
-			middleware.JWTMiddleware(c.Platform.JWTService, c.Platform.Metrics),
-			middleware.RequireSystemAdmin())
+			protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 		platformAudit.GET("/events", platformHandler.List)
 		platformAudit.GET("/events/:id", platformHandler.Get)
 	}
