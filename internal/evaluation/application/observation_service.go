@@ -29,6 +29,9 @@ type ObservationServiceDeps struct {
 	Metrics    observability.MetricsProvider
 	Logger     *zap.Logger
 	TenantTier port.TenantTierReader // P1b：租户 tier → stratum（nil 时 stratum 留空）
+	// PlatformVersion 解析平台配置组当前生效版本序号（Phase 2 §4.3 版本锚点）；
+	// nil 或解析失败时 fail-open：版本锚点标记 unknown（seq 0），不阻断落库。
+	PlatformVersion func(ctx context.Context) (int64, bool, error)
 	// Review 是评审池升级入口（P1c §6.6）；nil 时评审升级静默跳过（fail-open）。
 	Review port.ReviewEscalator
 }
@@ -171,13 +174,14 @@ func (s *ObservationService) buildObservation(ctx context.Context, evt domain.Ob
 			source = domain.ParamSourceResource
 		}
 	}
-	// TODO(P2)：平台层版本锚点随配置版本机制绑定后回填；当前未知。
+	// Phase 2 §4.3：平台层版本锚点绑定 evaluation 配置组当前生效版本序号；
+	// 解析失败 fail-open 标记 unknown（seq 0），不阻断落库（同 resolveStratum）。
 	obs := domain.EvalObservation{
 		ID:       uuid.NewString(),
 		TraceID:  evt.TraceID,
 		Resource: evt.ResourceRef(),
 		Param: domain.ParamVersion{
-			Platform: domain.PlatformParamVersion{VersionSeq: 0}, // P2 绑定
+			Platform: s.resolvePlatformVersion(ctx),
 			Resource: resourceVersion,
 			Source:   source,
 		},
@@ -232,6 +236,24 @@ func (s *ObservationService) resolveStratum(ctx context.Context, tenantID string
 		return ""
 	}
 	return tier
+}
+
+// resolvePlatformVersion 解析平台配置组当前生效版本序号（Phase 2 §4.3 版本锚点）。
+// fail-open：读取器 nil / 读取失败 / 无已发布版本时标记 unknown（seq 0）+ warn，
+// 不阻断落库——与 resolveStratum 的 unknown 语义等价（§14 缺失锚点标记 unknown）。
+func (s *ObservationService) resolvePlatformVersion(ctx context.Context) domain.PlatformParamVersion {
+	if s.deps.PlatformVersion == nil {
+		return domain.PlatformParamVersion{}
+	}
+	seq, ok, err := s.deps.PlatformVersion(ctx)
+	if err != nil {
+		s.deps.Logger.Warn("observation platform version resolve failed", zap.Error(err))
+		return domain.PlatformParamVersion{}
+	}
+	if !ok {
+		return domain.PlatformParamVersion{}
+	}
+	return domain.PlatformParamVersion{GroupKey: constants.PlatformGroupEvaluation, VersionSeq: seq}
 }
 
 // applyJudge 按三维度 rubric 调用 judge 并填充 signals；任一次失败返回错误

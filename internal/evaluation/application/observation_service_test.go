@@ -8,6 +8,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"go.uber.org/zap"
 )
@@ -316,6 +317,104 @@ func TestObservationServiceProcessStratumEmptyOnTierResolveFailure(t *testing.T)
 	}
 	if got := repo.saved[0].Stratum; got != "" {
 		t.Fatalf("stratum = %q, want empty on tier resolve failure", got)
+	}
+}
+
+// newObservationServiceWithPlatformVersion 构造带 PlatformVersion 读取器的观测服务。
+func newObservationServiceWithPlatformVersion(
+	seq int64, ok bool, err error,
+) (*ObservationService, *stubObservationRepo) {
+	repo := &stubObservationRepo{}
+	reader := &stubEvidenceReader{trace: port.ObservedTrace{
+		TraceID: "trace-1", Input: "q", Output: "a", Success: true,
+	}}
+	judge := &stubJudge{enabled: true, result: domain.AssertionResult{Passed: true}}
+	svc := NewObservationService(ObservationServiceDeps{
+		Enabled:    func(context.Context) bool { return true },
+		SampleRate: func(context.Context) float64 { return 1.0 },
+		Evidence:   reader, Judge: judge, Repo: repo,
+		Metrics: observability.NoopMetrics{}, Logger: zap.NewNop(),
+		PlatformVersion: func(context.Context) (int64, bool, error) { return seq, ok, err },
+	})
+	return svc, repo
+}
+
+func TestObservationServiceProcessPlatformVersionBound(t *testing.T) {
+	svc, repo := newObservationServiceWithPlatformVersion(3, true, nil)
+	evt := domain.ObservationReferenceEvent{
+		TenantID: "t1", TraceID: "trace-1", ResourceKind: "agent", ResourceID: "agent-1",
+	}
+	if err := svc.Process(context.Background(), evt); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if len(repo.saved) != 1 {
+		t.Fatalf("saved %d observations, want 1", len(repo.saved))
+	}
+	got := repo.saved[0].Param.Platform
+	if got.VersionSeq != 3 {
+		t.Fatalf("platform version_seq = %d, want 3", got.VersionSeq)
+	}
+	if got.GroupKey != constants.PlatformGroupEvaluation {
+		t.Fatalf("platform group_key = %q, want %q", got.GroupKey, constants.PlatformGroupEvaluation)
+	}
+}
+
+func TestObservationServiceProcessPlatformVersionUnknownWhenNil(t *testing.T) {
+	repo := &stubObservationRepo{}
+	reader := &stubEvidenceReader{trace: port.ObservedTrace{TraceID: "trace-1", Input: "q", Output: "a"}}
+	judge := &stubJudge{enabled: true, result: domain.AssertionResult{Passed: true}}
+	// PlatformVersion 未装配（nil）：fail-open 标记 unknown，不阻断落库。
+	svc := NewObservationService(ObservationServiceDeps{
+		Enabled:    func(context.Context) bool { return true },
+		SampleRate: func(context.Context) float64 { return 1.0 },
+		Evidence:   reader, Judge: judge, Repo: repo,
+		Metrics: observability.NoopMetrics{}, Logger: zap.NewNop(),
+	})
+	evt := domain.ObservationReferenceEvent{
+		TenantID: "t1", TraceID: "trace-1", ResourceKind: "agent", ResourceID: "agent-1",
+	}
+	if err := svc.Process(context.Background(), evt); err != nil {
+		t.Fatalf("nil platform version reader must not block observation: %v", err)
+	}
+	if len(repo.saved) != 1 {
+		t.Fatalf("saved %d observations, want 1", len(repo.saved))
+	}
+	if got := repo.saved[0].Param.Platform; got.VersionSeq != 0 || got.GroupKey != "" {
+		t.Fatalf("platform anchor = %+v, want unknown (seq 0, empty group)", got)
+	}
+}
+
+func TestObservationServiceProcessPlatformVersionUnknownOnResolveError(t *testing.T) {
+	svc, repo := newObservationServiceWithPlatformVersion(0, false, errors.New("config store down"))
+	evt := domain.ObservationReferenceEvent{
+		TenantID: "t1", TraceID: "trace-1", ResourceKind: "agent", ResourceID: "agent-1",
+	}
+	// 读取失败 fail-open：标记 unknown，不阻断落库（同 resolveStratum 语义）。
+	if err := svc.Process(context.Background(), evt); err != nil {
+		t.Fatalf("platform version resolve failure must not block observation: %v", err)
+	}
+	if len(repo.saved) != 1 {
+		t.Fatalf("saved %d observations, want 1", len(repo.saved))
+	}
+	if got := repo.saved[0].Param.Platform; got.VersionSeq != 0 || got.GroupKey != "" {
+		t.Fatalf("platform anchor = %+v, want unknown on resolve error", got)
+	}
+}
+
+func TestObservationServiceProcessPlatformVersionUnknownNoPublished(t *testing.T) {
+	// 无已发布版本（(0,false,nil)）：版本锚点 unknown，观测照常落库。
+	svc, repo := newObservationServiceWithPlatformVersion(0, false, nil)
+	evt := domain.ObservationReferenceEvent{
+		TenantID: "t1", TraceID: "trace-1", ResourceKind: "agent", ResourceID: "agent-1",
+	}
+	if err := svc.Process(context.Background(), evt); err != nil {
+		t.Fatalf("no published version must not block observation: %v", err)
+	}
+	if len(repo.saved) != 1 {
+		t.Fatalf("saved %d observations, want 1", len(repo.saved))
+	}
+	if got := repo.saved[0].Param.Platform; got.VersionSeq != 0 || got.GroupKey != "" {
+		t.Fatalf("platform anchor = %+v, want unknown (seq 0)", got)
 	}
 }
 

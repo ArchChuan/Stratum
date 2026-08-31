@@ -594,6 +594,10 @@ func buildObservationService(
 	return evalapp.NewObservationService(evalapp.ObservationServiceDeps{
 		Enabled:    func(ctx context.Context) bool { return observationEnabled(ctx, c.Parameters.Service) },
 		SampleRate: func(ctx context.Context) float64 { return observationSampleRate(ctx, c.Parameters.Service) },
+		// Phase 2 §4.3：平台层版本锚点绑定 evaluation 配置组当前生效版本序号。
+		PlatformVersion: func(ctx context.Context) (int64, bool, error) {
+			return observationPlatformVersion(ctx, c.Parameters.Service)
+		},
 		Evidence:   traceReader,
 		Judge:      judge,
 		Repo:       evalpersist.NewPgObservationRepository(db),
@@ -1254,6 +1258,27 @@ func observationSampleRate(ctx context.Context, params *parametersapp.Service) f
 		return rate
 	}
 	return constants.ObservationSampleRateDefault
+}
+
+// observationPlatformVersion 解析 evaluation 配置组当前生效版本序号（Phase 2
+// §4.3 版本锚点）。参数服务未装配 / 无已发布版本时返回 (0,false) fail-open：观测
+// 版本锚点标记 unknown，不阻断落库；DB 读取失败原样返回错误（service 层降级为
+// unknown + warn）。IsCurrent 由 platform_config_labels 生产 label 服务端推导，
+// 过滤即得当前生效版本。
+func observationPlatformVersion(ctx context.Context, params *parametersapp.Service) (int64, bool, error) {
+	if params == nil {
+		return 0, false, nil
+	}
+	versions, err := params.Versions(ctx, constants.PlatformGroupEvaluation)
+	if err != nil {
+		return 0, false, err
+	}
+	for _, v := range versions {
+		if v.IsCurrent {
+			return int64(v.VersionSeq), true, nil
+		}
+	}
+	return 0, false, nil
 }
 
 // newEvaluationWorker 构建评测周期 worker 并启动 + 注册关闭。独立成函数
