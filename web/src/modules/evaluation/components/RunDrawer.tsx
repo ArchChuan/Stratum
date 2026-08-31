@@ -2,45 +2,18 @@ import { Alert, Descriptions, Drawer, Progress, Skeleton, Tabs, Typography } fro
 import { useEffect, useState } from 'react';
 
 import { evaluationApi } from '../api/evaluation.api';
-import type { RunSummary } from '../model/evaluation';
+import type { EvaluationRun, RunSummary } from '../model/evaluation';
 
+import { CompareRunsPanel } from './CompareRunsPanel';
+import { RunAttributionPanel } from './RunAttributionPanel';
+import { RunMetricPanel } from './RunMetricPanel';
 import { drawerWidth, runDisplayStatus, StatusTag } from './evaluationView';
 
-// metricLabels maps aggregated run metrics (eval_runs.metrics keys produced by
-// the backend) to their user-visible Chinese labels; unknown keys fall back to
-// the raw key.
-const metricLabels: Record<string, string> = {
-  pass_rate: '通过率',
-  total_cases: '用例数',
-  total_tokens: '总 tokens',
-  total_cost_usd: '总成本 (USD)',
-  avg_tokens_per_case: '平均 tokens/用例',
-  avg_latency_ms: '平均延迟 (ms)',
-  p95_latency_ms: 'P95 延迟 (ms)',
-  avg_recall_at_5: '平均 Recall@5',
-  avg_precision_at_5: '平均 Precision@5',
-  avg_mrr: '平均 MRR',
-  avg_ndcg_at_5: '平均 nDCG@5',
-  rag_case_count: 'RAG 证据用例数',
-};
-
-function formatMetric(key: string, value: unknown): string {
-  if (typeof value !== 'number') {
-    return String(value ?? '');
-  }
-  if (key === 'pass_rate') {
-    return `${(value * 100).toFixed(1)}%`;
-  }
-  if (Number.isInteger(value)) {
-    return String(value);
-  }
-  return value.toFixed(4);
-}
-
-export const RunDrawer = ({ run, open, onClose, isMobile }: {
-  run: RunSummary | null; open: boolean; onClose: () => void; isMobile?: boolean;
+export const RunDrawer = ({ run, open, onClose, isMobile, runs }: {
+  run: RunSummary | null; open: boolean; onClose: () => void; isMobile?: boolean; runs: RunSummary[];
 }) => {
   const [metrics, setMetrics] = useState<Record<string, unknown> | null>(null);
+  const [runResults, setRunResults] = useState<EvaluationRun['results'] | null>(null);
 
   useEffect(() => {
     if (!open || !run) {
@@ -48,15 +21,18 @@ export const RunDrawer = ({ run, open, onClose, isMobile }: {
     }
     let cancelled = false;
     setMetrics(null);
+    setRunResults(null);
     void evaluationApi.getRun(run.id)
       .then((detail) => {
         if (!cancelled) {
           setMetrics(detail.metrics ?? {});
+          setRunResults(detail.results ?? []);
         }
       })
       .catch(() => {
         if (!cancelled) {
           setMetrics({});
+          setRunResults([]);
         }
       });
     return () => {
@@ -88,13 +64,19 @@ export const RunDrawer = ({ run, open, onClose, isMobile }: {
             label: '指标',
             children: metrics === null
               ? <Skeleton active paragraph={{ rows: 4 }} />
-              : <Descriptions bordered size="small" column={1}>
-                {Object.entries(metrics).map(([key, value]) => (
-                  <Descriptions.Item key={key} label={metricLabels[key] ?? key}>
-                    {formatMetric(key, value)}
-                  </Descriptions.Item>
-                ))}
-              </Descriptions>,
+              : <RunMetricPanel metrics={metrics} />,
+          },
+          {
+            key: 'attribution',
+            label: '归因',
+            children: runResults === null
+              ? <Skeleton active paragraph={{ rows: 4 }} />
+              : <RunAttributionPanel results={runResults} />,
+          },
+          {
+            key: 'compare',
+            label: '版本对比',
+            children: <CompareRunsPanel currentId={run.id} runs={runs} getRun={evaluationApi.getRun} />,
           },
         ]}
       />}

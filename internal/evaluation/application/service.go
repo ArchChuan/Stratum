@@ -41,6 +41,9 @@ type Service struct {
 	// metrics 记录平台指标（case_result 升级失败计数，spec §6.6）；nil 时升级
 	// 失败仅日志（fail-open，不 panic）。
 	metrics observability.MetricsProvider
+	// platformVersion 解析平台配置组当前生效版本序号（Phase 2 §4.3 版本锚点）。
+	// nil 时 run.metrics.version.platform_seq 记 0（unknown，fail-open）。
+	platformVersion func(ctx context.Context) (int64, bool, error)
 }
 
 func NewService(
@@ -71,6 +74,12 @@ func (s *Service) SetObservability(logger *zap.Logger, metrics observability.Met
 		s.logger = logger
 	}
 	s.metrics = metrics
+}
+
+// SetPlatformVersion 注入平台版本读取器（wiring 在 NewService 后调用）；nil
+// 表示未装配，run.metrics.version.platform_seq 记 0（unknown，fail-open）。
+func (s *Service) SetPlatformVersion(fn func(ctx context.Context) (int64, bool, error)) {
+	s.platformVersion = fn
 }
 
 // escalateCaseResult 通过评审池升级器判定评测集 judge 结果是否入池并幂等落条目
@@ -151,7 +160,23 @@ func (s *Service) Run(ctx context.Context, input RunInput) (domain.EvalRun, erro
 		}
 		run.Results = append(run.Results, result)
 	}
-	run.Metrics = aggregateRunMetrics(run)
+	seq := int64(0)
+	if s.platformVersion != nil {
+		seqVal, ok, err := s.platformVersion(ctx)
+		if err != nil {
+			// fail-open：版本锚点 unknown（记 0），不阻断落库；但必须留痕便于诊断。
+			if s.logger != nil {
+				s.logger.Warn("evaluation run: platform version", zap.Error(err))
+			}
+		} else if ok {
+			seq = seqVal
+		}
+	}
+	run.Metrics = aggregateRunMetrics(run, runVersionAnchor{
+		SuiteRevisionID: run.SuiteRevisionID,
+		PlatformSeq:     seq,
+		ResourceVersion: run.Resource.RevisionID,
+	})
 	if err := s.repo.SaveRun(ctx, input.TenantID, run); err != nil {
 		return domain.EvalRun{}, err
 	}
@@ -165,6 +190,7 @@ func (s *Service) runCase(
 	result := domain.EvalCaseResult{ID: uuid.Must(uuid.NewV7()).String(), CaseID: testCase.ID}
 	if err != nil {
 		result.Error = err.Error()
+		result.FailureReason = "execution"
 		return result
 	}
 	result.Actual = execution.Output
@@ -201,10 +227,14 @@ func (s *Service) runCase(
 	assertion, err := domain.EvaluateAssertion(testCase.AssertionMode, execution.Output, testCase.ExpectedOutput)
 	if err != nil {
 		result.Error = err.Error()
+		result.FailureReason = "execution"
 		return result
 	}
 	result.Passed = assertion.Passed
 	result.Message = assertion.Message
+	if !assertion.Passed {
+		result.FailureReason = "assert:" + string(testCase.AssertionMode)
+	}
 	return result
 }
 
@@ -216,21 +246,25 @@ func (s *Service) judgeCase(ctx context.Context, testCase domain.EvalCase, resul
 	var zero domain.AssertionResult
 	if s.judge == nil || !s.judge.Enabled(ctx) {
 		result.Error = "LLM judge disabled"
+		result.FailureReason = "execution"
 		return zero, result
 	}
 	inputJSON, err := json.Marshal(testCase.Input)
 	if err != nil {
 		result.Error = fmt.Errorf("judge: marshal input: %w", err).Error()
+		result.FailureReason = "execution"
 		return zero, result
 	}
 	expectedJSON, err := json.Marshal(testCase.ExpectedOutput)
 	if err != nil {
 		result.Error = fmt.Errorf("judge: marshal expected output: %w", err).Error()
+		result.FailureReason = "execution"
 		return zero, result
 	}
 	actualJSON, err := json.Marshal(result.Actual)
 	if err != nil {
 		result.Error = fmt.Errorf("judge: marshal actual output: %w", err).Error()
+		result.FailureReason = "execution"
 		return zero, result
 	}
 	var spec domain.JudgeSpec
@@ -246,11 +280,37 @@ func (s *Service) judgeCase(ctx context.Context, testCase domain.EvalCase, resul
 	})
 	if err != nil {
 		result.Error = err.Error()
+		result.FailureReason = "execution"
 		return zero, result
 	}
 	result.Passed = assertion.Passed
 	result.Message = assertion.Message
+	result.Dimensions = assertion.Dimensions
+	result.FailureReason = judgeFailureReason(assertion)
 	return assertion, result
+}
+
+// judgeFailureReason 从 judge 判定推导主要失败维度（spec §6.2）：优先取显式
+// 判负的维度，否则取 score 最低维度；无维度信息时回退 "judge"（保持归因可见）。
+func judgeFailureReason(assertion domain.AssertionResult) string {
+	if assertion.Passed {
+		return ""
+	}
+	for _, d := range assertion.Dimensions {
+		if !d.Passed {
+			return "dimension:" + d.Name
+		}
+	}
+	if len(assertion.Dimensions) > 0 {
+		worst := assertion.Dimensions[0]
+		for _, d := range assertion.Dimensions[1:] {
+			if d.Score < worst.Score {
+				worst = d
+			}
+		}
+		return "dimension:" + worst.Name
+	}
+	return "judge"
 }
 
 func observedTraceToEvidence(t port.ObservedTrace) *domain.ObservedTraceEvidence {

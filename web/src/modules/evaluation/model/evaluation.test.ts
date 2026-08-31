@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
   candidatePageSchema,
+  dimensionScoreSchema,
   errorResponseSchema,
   evaluationJobSchema,
+  evaluationRunSchema,
   experimentPageSchema,
   optimizationResponseSchema,
+  observedTraceEvidenceSchema,
   resourcePageSchema,
   resourceRefSchema,
   timelinePageSchema,
@@ -166,4 +169,32 @@ describe('evaluation model', () => {
       expect(safeSummarySchema.parse({ note: value })).toEqual({ note: value });
     },
   );
+});
+
+describe('dimensionScoreSchema', () => {
+  it('parses a valid dimension', () => {
+    const dim = dimensionScoreSchema.parse({ name: 'faithfulness', score: 0.6, passed: true, confidence: 0.9 });
+    expect(dim).toEqual({ name: 'faithfulness', score: 0.6, passed: true, confidence: 0.9 });
+  });
+});
+
+describe('evaluationRunSchema', () => {
+  it('parses run results with dimensions and failure_reason', () => {
+    const run = evaluationRunSchema.parse({
+      id: 'r1', resource: { kind: 'skill', resource_id: 's1', revision_id: 'v1' },
+      suite_revision_id: 'rev-1', passed: false, total_cases: 1, passed_cases: 0,
+      metrics: { version: { suite_revision_id: 'rev-1', platform_seq: 3, resource_version: 'v1' } },
+      results: [{ case_id: 'c1', passed: false, dimensions: [{ name: 'faithfulness', score: 0.3, passed: false }], failure_reason: 'dimension:faithfulness', trace_evidence: { cost_usd: 0.05, latency_ms: 200, success: false, tool_call_count: 3, tool_error_count: 1 } }],
+    });
+    expect(run.results[0].failure_reason).toBe('dimension:faithfulness');
+    expect(run.results[0].dimensions?.[0].score).toBe(0.3);
+    expect(run.results[0].trace_evidence?.latency_ms).toBe(200);
+  });
+});
+
+describe('observedTraceEvidenceSchema', () => {
+  it('parses a valid trace evidence object', () => {
+    const ev = observedTraceEvidenceSchema.parse({ cost_usd: 0.05, latency_ms: 200, success: false, tool_call_count: 3, tool_error_count: 1 });
+    expect(ev.tool_call_count).toBe(3);
+  });
 });
