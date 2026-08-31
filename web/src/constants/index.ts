@@ -80,6 +80,9 @@ export const SKILL_DEFAULT_MAX_TOKENS = 2048;
 export const SKILL_DEFAULT_TIMEOUT_SEC = 30;
 export const EVALUATION_JOB_POLL_INTERVAL_MS = 1000;
 export const EVALUATION_JOB_MAX_WAIT_MS = 120000;
+// 评测集生成采样上限（与后端 pkg/constants DefaultCaseSampleLimit/MaxCaseSampleLimit 一致）。
+export const EVALUATION_GENERATE_DEFAULT_MAX_CASES = 20;
+export const EVALUATION_GENERATE_MAX_CASES = 50;
 
 export const MEMORY_SEARCH_LIMIT = 20;
 // 记忆事实分类白名单（与后端 internal/memory/domain/fact.go factCategoryAllowSet 一致）。

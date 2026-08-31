@@ -232,6 +232,7 @@ export const suiteSummarySchema = z.object({
   id: z.string(), name: z.string(), description: z.string(), status: z.string(), created_at: z.string(),
 }).strict();
 export const suitePageSchema = page(suiteSummarySchema);
+export type SuiteSummary = z.infer<typeof suiteSummarySchema>;
 export type SuitePage = z.infer<typeof suitePageSchema>;
 
 export const runSummarySchema = z.object({
