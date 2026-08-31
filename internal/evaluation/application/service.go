@@ -41,6 +41,9 @@ type Service struct {
 	// metrics 记录平台指标（case_result 升级失败计数，spec §6.6）；nil 时升级
 	// 失败仅日志（fail-open，不 panic）。
 	metrics observability.MetricsProvider
+	// platformVersion 解析平台配置组当前生效版本序号（Phase 2 §4.3 版本锚点）。
+	// nil 时 run.metrics.version.platform_seq 记 0（unknown，fail-open）。
+	platformVersion func(ctx context.Context) (int64, bool, error)
 }
 
 func NewService(
@@ -71,6 +74,12 @@ func (s *Service) SetObservability(logger *zap.Logger, metrics observability.Met
 		s.logger = logger
 	}
 	s.metrics = metrics
+}
+
+// SetPlatformVersion 注入平台版本读取器（wiring 在 NewService 后调用）；nil
+// 表示未装配，run.metrics.version.platform_seq 记 0（unknown，fail-open）。
+func (s *Service) SetPlatformVersion(fn func(ctx context.Context) (int64, bool, error)) {
+	s.platformVersion = fn
 }
 
 // escalateCaseResult 通过评审池升级器判定评测集 judge 结果是否入池并幂等落条目
@@ -151,7 +160,17 @@ func (s *Service) Run(ctx context.Context, input RunInput) (domain.EvalRun, erro
 		}
 		run.Results = append(run.Results, result)
 	}
-	run.Metrics = aggregateRunMetrics(run)
+	seq := int64(0)
+	if s.platformVersion != nil {
+		if seqVal, ok, err := s.platformVersion(ctx); err == nil && ok {
+			seq = seqVal
+		}
+	}
+	run.Metrics = aggregateRunMetrics(run, runVersionAnchor{
+		SuiteRevisionID: run.SuiteRevisionID,
+		PlatformSeq:     seq,
+		ResourceVersion: run.Resource.RevisionID,
+	})
 	if err := s.repo.SaveRun(ctx, input.TenantID, run); err != nil {
 		return domain.EvalRun{}, err
 	}

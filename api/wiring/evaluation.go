@@ -629,6 +629,9 @@ func newEvaluationServiceWithReview(
 		JudgePassThreshold:     constants.JudgeBelowThreshold,
 	})
 	service.SetObservability(c.Logger, c.platformMetrics())
+	service.SetPlatformVersion(func(ctx context.Context) (int64, bool, error) {
+		return observationPlatformVersion(ctx, c.Parameters.Service)
+	})
 	return service, reviewSvc
 }
 
