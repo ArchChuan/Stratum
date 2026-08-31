@@ -537,12 +537,18 @@ func (r gatewayPromptRewriter) Rewrite(
 }
 
 // judgeDefaultRubric is the built-in rubric used for LLM judge verdicts. It
-// asks for a binary verdict with a short justification and a 0-1 confidence.
+// asks for a binary verdict with a short justification, a 0-1 confidence,
+// and per-dimension scores (faithfulness / relevance / completeness, spec
+// §6.2). Missing or invalid dimensions are tolerated by parseJudgeResponse
+// (fail-open), so older judges that return only passed/reason keep working.
 const judgeDefaultRubric = `你是一名严谨的评测法官。根据以下标准判断实际输出是否通过：
 1. 实际输出是否直接、完整地回答了输入要求；
 2. 与期望输出的一致性（期望输出为 null 或空时忽略该项）；
 3. 是否存在明显的事实错误或逻辑矛盾。
-只输出 JSON：{"passed": true 或 false, "reason": "一句话理由", "confidence": 0-1 之间的小数表示判定置信度}。`
+只输出 JSON：{"passed": true 或 false, "reason": "一句话理由", "confidence": 0-1 之间的小数表示判定置信度,
+"dimensions": [{"name": "faithfulness", "score": 0-1, "passed": true 或 false, "reason": "一句话理由", "confidence": 0-1},
+{"name": "relevance", "score": 0-1, "passed": true 或 false, "reason": "一句话理由", "confidence": 0-1},
+{"name": "completeness", "score": 0-1, "passed": true 或 false, "reason": "一句话理由", "confidence": 0-1}]}。`
 
 // buildEvaluationJudge wires the optional LLM judge. It degrades to a
 // disabled judge when the gateway is unavailable (db not configured),
@@ -849,10 +855,10 @@ func parseCaseGenResponse(content string) (evaldomain.GeneratedCase, error) {
 	}, nil
 }
 
-// parseJudgeResponse extracts {"passed": bool, "reason": string, "confidence": number}
+// parseJudgeResponse extracts {"passed","reason","confidence","dimensions"}
 // from the judge output, tolerating a markdown code fence around the JSON.
-// Confidence is optional and defaults to 1.0 (missing, non-numeric or outside
-// [0,1] are treated as "no confidence signal", spec §6.2).
+// Confidence and per-dimension scores are optional: missing, non-numeric or
+// out-of-[0,1] values default to 1.0 / are dropped (fail-open, spec §6.2).
 func parseJudgeResponse(content string) (evaldomain.AssertionResult, error) {
 	trimmed := strings.TrimSpace(content)
 	if strings.HasPrefix(trimmed, "```") {
@@ -861,21 +867,67 @@ func parseJudgeResponse(content string) (evaldomain.AssertionResult, error) {
 		trimmed = strings.TrimSuffix(strings.TrimSpace(trimmed), "```")
 	}
 	var verdict struct {
-		Passed     bool            `json:"passed"`
-		Reason     string          `json:"reason"`
-		Confidence json.RawMessage `json:"confidence"`
+		Passed     bool              `json:"passed"`
+		Reason     string            `json:"reason"`
+		Confidence json.RawMessage   `json:"confidence"`
+		Dimensions []json.RawMessage `json:"dimensions"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(trimmed)), &verdict); err != nil {
 		return evaldomain.AssertionResult{}, fmt.Errorf("LLM judge: parse verdict: %w", err)
 	}
 	confidence := 1.0
-	if len(verdict.Confidence) > 0 && !bytes.Equal(verdict.Confidence, []byte("null")) {
-		var c float64
-		if err := json.Unmarshal(verdict.Confidence, &c); err == nil && c >= 0 && c <= 1 {
+	if score, ok := parseScore01(verdict.Confidence); ok {
+		confidence = score
+	}
+	return evaldomain.AssertionResult{
+		Passed:     verdict.Passed,
+		Message:    verdict.Reason,
+		Confidence: confidence,
+		Dimensions: parseJudgeDimensions(verdict.Dimensions),
+	}, nil
+}
+
+// parseJudgeDimensions 解析 judge 返回的多维分数。单维度非法（name 空、score
+// 越界、JSON 无法解析）时丢弃该维度而非使整次判定失败（fail-open）；完全无
+// 合法维度返回 nil，聚合层自动跳过。confidence 缺失/越界回退 1.0。
+func parseJudgeDimensions(raw []json.RawMessage) []evaldomain.DimensionScore {
+	out := make([]evaldomain.DimensionScore, 0, len(raw))
+	for _, item := range raw {
+		var d struct {
+			Name       string          `json:"name"`
+			Score      json.RawMessage `json:"score"`
+			Passed     bool            `json:"passed"`
+			Reason     string          `json:"reason"`
+			Confidence json.RawMessage `json:"confidence"`
+		}
+		if err := json.Unmarshal(item, &d); err != nil || strings.TrimSpace(d.Name) == "" {
+			continue
+		}
+		score, ok := parseScore01(d.Score)
+		if !ok {
+			continue
+		}
+		confidence := 1.0
+		if c, ok := parseScore01(d.Confidence); ok {
 			confidence = c
 		}
+		out = append(out, evaldomain.DimensionScore{
+			Name: d.Name, Score: score, Passed: d.Passed, Reason: d.Reason, Confidence: confidence,
+		})
 	}
-	return evaldomain.AssertionResult{Passed: verdict.Passed, Message: verdict.Reason, Confidence: confidence}, nil
+	return out
+}
+
+// parseScore01 解析 [0,1] 内的 number；缺失/null/非数字/越界返回 ok=false。
+func parseScore01(raw json.RawMessage) (float64, bool) {
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return 0, false
+	}
+	var v float64
+	if err := json.Unmarshal(raw, &v); err != nil || v < 0 || v > 1 {
+		return 0, false
+	}
+	return v, true
 }
 
 func parsePromptRewritePatches(content string) ([]evaldomain.CandidatePatch, error) {
