@@ -30,7 +30,9 @@ func TestPgRunRepository_SaveRun_success(t *testing.T) {
 			{CaseID: "case-2", Passed: true, Actual: "plain", Tokens: 10, CostUSD: 0.5, DurationMs: 3,
 				Dimensions:    []domain.DimensionScore{{Name: "correctness", Score: 1, Passed: true, Reason: "ok"}},
 				FailureReason: "assert failed",
-				TraceEvidence: &domain.ObservedTraceEvidence{CostUSD: 0.2, LatencyMs: 150, Success: true, ToolCallCount: 3, ToolErrorCount: 1}},
+				TraceEvidence: &domain.ObservedTraceEvidence{
+					CostUSD: 0.2, LatencyMs: 150, Success: true, ToolCallCount: 3, ToolErrorCount: 1,
+				}},
 		},
 	}
 
@@ -40,12 +42,14 @@ func TestPgRunRepository_SaveRun_success(t *testing.T) {
 			`{"pass_rate":1,"total_tokens":10}`, now).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO eval_case_results").
-		WithArgs(pgxmock.AnyArg(), "run-1", "case-1", true, `{"token":"[REDACTED]"}`, "ok", "", "", 0, 0.0, 0, "[]", "", "null").
+		WithArgs(pgxmock.AnyArg(), "run-1", "case-1", true, `{"token":"[REDACTED]"}`, "ok", "", "",
+			0, 0.0, 0, "[]", "", "null").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO eval_case_results").
 		WithArgs(pgxmock.AnyArg(), "run-1", "case-2", true, `"plain"`, "", "", "", 10, 0.5, 3,
 			`[{"name":"correctness","score":1,"passed":true,"reason":"ok"}]`, "assert failed",
-			`{"cost_usd":0.2,"latency_ms":150,"success":true,"security_violation":false,"tool_call_count":3,"tool_error_count":1}`).
+			`{"cost_usd":0.2,"latency_ms":150,"success":true,`+
+				`"security_violation":false,"tool_call_count":3,"tool_error_count":1}`).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 

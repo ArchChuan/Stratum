@@ -77,7 +77,8 @@ func TestPgRunRepository_dimensionsFailureReasonRoundTrip(t *testing.T) {
 	writeMock.ExpectExec("INSERT INTO eval_case_results").
 		WithArgs("case-rt", "run-rt", "case-1", true, `{"ok":true}`, "m", "", "tr-1", 5, 0.1, 2,
 			`[{"name":"correctness","score":1,"passed":true,"reason":"ok"}]`, "assert failed",
-			`{"cost_usd":0.05,"latency_ms":250,"success":false,"security_violation":true,"tool_call_count":4,"tool_error_count":2}`).
+			`{"cost_usd":0.05,"latency_ms":250,"success":false,`+
+				`"security_violation":true,"tool_call_count":4,"tool_error_count":2}`).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	writeMock.ExpectCommit()
 	writeRepo := &PgRunRepository{pool: writeMock}
@@ -99,7 +100,8 @@ func TestPgRunRepository_dimensionsFailureReasonRoundTrip(t *testing.T) {
 			"tokens", "cost_usd", "duration_ms", "dimensions", "failure_reason", "trace_evidence",
 		}).AddRow("case-1", true, []byte(`{"ok":true}`), "m", "", "tr-1", 5, 0.1, 2,
 			[]byte(`[{"name":"correctness","score":1,"passed":true,"reason":"ok"}]`), "assert failed",
-			[]byte(`{"cost_usd":0.05,"latency_ms":250,"success":false,"security_violation":true,"tool_call_count":4,"tool_error_count":2}`)))
+			[]byte(`{"cost_usd":0.05,"latency_ms":250,"success":false,`+
+				`"security_violation":true,"tool_call_count":4,"tool_error_count":2}`)))
 	readMock.ExpectCommit()
 	readRepo := &PgRunRepository{pool: readMock}
 	got, found, err := readRepo.GetRun(context.Background(), "t1", "run-rt")
