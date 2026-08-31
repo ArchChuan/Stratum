@@ -103,3 +103,12 @@ const (
 	// 持续 > 该值触发 StratumEvalReviewBacklogHigh。
 	ReviewBacklogAlertThreshold = 50
 )
+
+// Evaluation 平台配置组（Phase 2 §4.3 版本锚点）。
+const (
+	// PlatformGroupEvaluation 是平台配置的 evaluation 分组 key：evaluation 配置组
+	// 当前生效版本序号写入观测 param_version.platform.version_seq。取值必须与
+	// internal/parameters/domain.GroupEvaluation 保持同步（后者是分组权威来源，
+	// evaluation 侧因 DDD 边界只读 pkg/constants）。
+	PlatformGroupEvaluation = "evaluation"
+)
