@@ -2,8 +2,9 @@ import { Alert, Descriptions, Drawer, Progress, Skeleton, Tabs, Typography } fro
 import { useEffect, useState } from 'react';
 
 import { evaluationApi } from '../api/evaluation.api';
-import type { RunSummary } from '../model/evaluation';
+import type { EvaluationRun, RunSummary } from '../model/evaluation';
 
+import { RunAttributionPanel } from './RunAttributionPanel';
 import { RunMetricPanel } from './RunMetricPanel';
 import { drawerWidth, runDisplayStatus, StatusTag } from './evaluationView';
 
@@ -11,6 +12,7 @@ export const RunDrawer = ({ run, open, onClose, isMobile }: {
   run: RunSummary | null; open: boolean; onClose: () => void; isMobile?: boolean;
 }) => {
   const [metrics, setMetrics] = useState<Record<string, unknown> | null>(null);
+  const [runResults, setRunResults] = useState<EvaluationRun['results']>([]);
 
   useEffect(() => {
     if (!open || !run) {
@@ -18,15 +20,18 @@ export const RunDrawer = ({ run, open, onClose, isMobile }: {
     }
     let cancelled = false;
     setMetrics(null);
+    setRunResults([]);
     void evaluationApi.getRun(run.id)
       .then((detail) => {
         if (!cancelled) {
           setMetrics(detail.metrics ?? {});
+          setRunResults(detail.results ?? []);
         }
       })
       .catch(() => {
         if (!cancelled) {
           setMetrics({});
+          setRunResults([]);
         }
       });
     return () => {
@@ -59,6 +64,11 @@ export const RunDrawer = ({ run, open, onClose, isMobile }: {
             children: metrics === null
               ? <Skeleton active paragraph={{ rows: 4 }} />
               : <RunMetricPanel metrics={metrics} />,
+          },
+          {
+            key: 'attribution',
+            label: '归因',
+            children: <RunAttributionPanel results={runResults} />,
           },
         ]}
       />}
