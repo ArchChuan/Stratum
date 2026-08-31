@@ -437,3 +437,88 @@ func TestServiceEscalateCaseResultNilReviewDoesNotPanic(t *testing.T) {
 		t.Fatalf("IncEvalReviewEscalateFailure calls = %d, want 0", metrics.inc)
 	}
 }
+
+func TestRunJudgeCasePopulatesDimensionsAndFailureReason(t *testing.T) {
+	adapter := &fakeAdapter{outputs: map[string]any{"judge-1": "回答不准确"}}
+	repo := &fakeRunRepo{}
+	judge := &fakeLLMJudge{enabled: true, result: domain.AssertionResult{
+		Passed: false, Message: "faithfulness 不足", Confidence: 0.6,
+		Dimensions: []domain.DimensionScore{
+			{Name: "faithfulness", Score: 0.3, Passed: false, Confidence: 0.7},
+			{Name: "relevance", Score: 0.9, Passed: true, Confidence: 0.8},
+		},
+	}}
+	svc := NewService(adapter, repo, nil, judge)
+
+	run, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
+		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+			{ID: "judge-1", Input: "问题", AssertionMode: domain.AssertionJudge, Enabled: true},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if run.Passed {
+		t.Fatal("judge failed verdict must fail the run")
+	}
+	got := run.Results[0]
+	if len(got.Dimensions) != 2 || got.Dimensions[0].Name != "faithfulness" {
+		t.Fatalf("dimensions = %+v", got.Dimensions)
+	}
+	if got.FailureReason != "dimension:faithfulness" {
+		t.Fatalf("failure_reason = %q, want dimension:faithfulness", got.FailureReason)
+	}
+}
+
+func TestRunRuleAssertionSetsAssertFailureReason(t *testing.T) {
+	adapter := &fakeAdapter{outputs: map[string]any{"case-1": "你好"}}
+	repo := &fakeRunRepo{}
+	svc := NewService(adapter, repo, nil, nil) // 规则断言不走 judge
+
+	run, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
+		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+			{ID: "case-1", Input: "问", ExpectedOutput: "找不到的关键词", AssertionMode: domain.AssertionContains, Enabled: true},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	got := run.Results[0]
+	if got.Passed {
+		t.Fatal("contains mismatch must fail")
+	}
+	if got.FailureReason != "assert:contains" {
+		t.Fatalf("failure_reason = %q, want assert:contains", got.FailureReason)
+	}
+	if len(got.Dimensions) != 0 {
+		t.Fatalf("rule assertions must not carry dimensions: %+v", got.Dimensions)
+	}
+}
+
+func TestRunExecutionErrorSetsExecutionFailureReason(t *testing.T) {
+	adapter := &fakeAdapter{outputs: map[string]any{"case-1": "ok"}, errCase: "case-1"}
+	repo := &fakeRunRepo{}
+	svc := NewService(adapter, repo, nil, nil)
+
+	run, err := svc.Run(context.Background(), RunInput{
+		TenantID: "tenant-1",
+		Resource: domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "v1"},
+		Suite: domain.EvalSuiteRevision{ID: "sv-1", Cases: []domain.EvalCase{
+			{ID: "case-1", Input: "问", ExpectedOutput: "答", AssertionMode: domain.AssertionContains, Enabled: true},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	got := run.Results[0]
+	if got.Error == "" {
+		t.Fatal("execution error must surface")
+	}
+	if got.FailureReason != "execution" {
+		t.Fatalf("failure_reason = %q, want execution", got.FailureReason)
+	}
+}

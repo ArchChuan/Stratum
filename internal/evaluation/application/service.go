@@ -165,6 +165,7 @@ func (s *Service) runCase(
 	result := domain.EvalCaseResult{ID: uuid.Must(uuid.NewV7()).String(), CaseID: testCase.ID}
 	if err != nil {
 		result.Error = err.Error()
+		result.FailureReason = "execution"
 		return result
 	}
 	result.Actual = execution.Output
@@ -205,6 +206,9 @@ func (s *Service) runCase(
 	}
 	result.Passed = assertion.Passed
 	result.Message = assertion.Message
+	if !assertion.Passed {
+		result.FailureReason = "assert:" + string(testCase.AssertionMode)
+	}
 	return result
 }
 
@@ -250,7 +254,32 @@ func (s *Service) judgeCase(ctx context.Context, testCase domain.EvalCase, resul
 	}
 	result.Passed = assertion.Passed
 	result.Message = assertion.Message
+	result.Dimensions = assertion.Dimensions
+	result.FailureReason = judgeFailureReason(assertion)
 	return assertion, result
+}
+
+// judgeFailureReason 从 judge 判定推导主要失败维度（spec §6.2）：优先取显式
+// 判负的维度，否则取 score 最低维度；无维度信息时回退 "judge"（保持归因可见）。
+func judgeFailureReason(assertion domain.AssertionResult) string {
+	if assertion.Passed {
+		return ""
+	}
+	for _, d := range assertion.Dimensions {
+		if !d.Passed {
+			return "dimension:" + d.Name
+		}
+	}
+	if len(assertion.Dimensions) > 0 {
+		worst := assertion.Dimensions[0]
+		for _, d := range assertion.Dimensions[1:] {
+			if d.Score < worst.Score {
+				worst = d
+			}
+		}
+		return "dimension:" + worst.Name
+	}
+	return "judge"
 }
 
 func observedTraceToEvidence(t port.ObservedTrace) *domain.ObservedTraceEvidence {
