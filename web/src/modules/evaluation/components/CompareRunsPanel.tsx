@@ -28,7 +28,15 @@ export const CompareRunsPanel = ({ currentId, runs, getRun }: {
   const [base, setBase] = useState<EvaluationRun | null>(null);
   const [target, setTarget] = useState<EvaluationRun | null>(null);
 
-  const candidates = useMemo(() => runs.filter((r) => r.id !== currentId), [runs, currentId]);
+  // Same-resource invariant: base-run candidates must come from the current
+  // run's resource. center.runs.items is a cross-resource list, so without this
+  // filter other resources' runs would surface as meaningless comparison baselines.
+  const currentResourceId = runs.find((r) => r.id === currentId)?.resource_id;
+
+  const candidates = useMemo(
+    () => runs.filter((r) => r.id !== currentId && r.resource_id === currentResourceId),
+    [runs, currentId, currentResourceId],
+  );
 
   const load = useCallback(async (id: string) => {
     const detail = await getRun(id);
