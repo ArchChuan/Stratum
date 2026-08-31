@@ -5,6 +5,8 @@ import { parametersApi } from '../../api/parameters.api';
 import type { ParameterDefinition } from '../../model/parameters';
 import { PlatformSettingsPage } from '../PlatformSettingsPage';
 
+import { PlatformAdminGate } from '@/modules/iam';
+
 vi.mock('../../api/parameters.api', () => ({
   parametersApi: {
     schema: vi.fn(),
@@ -23,6 +25,11 @@ vi.mock('@/modules/llm', () => ({
     listProviders: vi.fn().mockResolvedValue([]),
   },
 }));
+
+// 默认以普通成员（user）身份运行：Gate 内 canEdit=false，读/写控件置灰。
+// PlatformAdminGate → usePlatformRole → useAuth，必须 mock 才能解析平台角色。
+const authState = vi.hoisted(() => ({ user: { global_role: 'user' } }));
+vi.mock('@/modules/iam/components/AuthContext', () => ({ useAuth: () => authState }));
 
 // 平台 scope 定义：非 0 默认值由 List 回填，缺失键 = 0/''/nil 默认（0=unset）。
 const defs = (): ParameterDefinition[] => [
@@ -473,5 +480,43 @@ describe('PlatformSettingsPage', () => {
     await waitFor(() =>
       expect(vi.mocked(parametersApi.versions).mock.calls.length).toBeGreaterThan(before),
     );
+  });
+
+  // —— 只读成员：Gate 包 → canEdit=false → 写控件全部置灰 ——
+
+  it('disables the whole platform-parameter form for a plain member', async () => {
+    vi.mocked(parametersApi.schema).mockResolvedValue(defs());
+    vi.mocked(parametersApi.list).mockResolvedValue({ 'memory.enrich_temperature': 0.9 });
+
+    render(
+      <PlatformAdminGate minRole="system_admin">
+        <PlatformSettingsPage />
+      </PlatformAdminGate>,
+    );
+    await screen.findByText('记忆丰富温度');
+
+    // 只读提示条 + 表单级 disabled 级联（保存按钮与控件均置灰）
+    expect(screen.getByText('只读模式')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存记忆参数' })).toBeDisabled();
+  });
+
+  it('disables version publish/rollback for a plain member', async () => {
+    vi.mocked(parametersApi.schema).mockResolvedValue(memoryDefs());
+    vi.mocked(parametersApi.list).mockResolvedValue({ 'memory.enrich_temperature': 0.9 });
+    vi.mocked(parametersApi.versions).mockResolvedValue([
+      version(3, 3, 'draft', false, { 'memory.enrich_temperature': 0.7 }, 2, '草稿调温', 'admin-1'),
+      version(2, 2, 'published', true, { 'memory.enrich_temperature': 0.9 }, 1, '调高温度', 'admin-1'),
+      version(1, 1, 'published', false, { 'memory.enrich_temperature': 0.1 }, null, '初始化', 'system'),
+    ]);
+
+    render(
+      <PlatformAdminGate minRole="system_admin">
+        <PlatformSettingsPage />
+      </PlatformAdminGate>,
+    );
+    await screen.findByText('版本历史（配置变更审计）');
+
+    expect(screen.getByRole('button', { name: /发\s*布/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /回\s*滚/ })).toBeDisabled();
   });
 });
