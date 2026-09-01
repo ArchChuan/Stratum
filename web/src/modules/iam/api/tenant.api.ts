@@ -106,8 +106,7 @@ export const tenantApi = {
   createTenant: (data: CreateAdminTenantInput) => api.post('/admin/tenants', data),
   adminDeleteTenant: (tenantId: string) => api.delete(`/admin/tenants/${tenantId}`),
   deleteSelf: () => api.delete('/tenant'),
-  // 平台管理员管理（users.global_role）。写操作由后端 RequireGlobalAdmin 守卫，
-  // 前端仅 global_admin 可进入 AdminsPage，双重拦截。
+  // 平台管理员管理（users.global_role）。前端按角色置灰写控件；写操作由后端 RequireGlobalAdmin 守卫（fail-closed）。
   searchAdminCandidates: async (query: string, limit = ADMIN_USER_SEARCH_LIMIT): Promise<AdminUser[]> => {
     const res = await api.get('/admin/users', { params: { query, limit } });
     return z.object({ users: z.array(adminUserSchema) }).parse(res.data).users;

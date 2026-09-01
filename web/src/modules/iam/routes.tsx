@@ -2,6 +2,7 @@ import { Route } from 'react-router-dom';
 
 import { PlatformAuditPage } from '../audit/pages/PlatformAuditPage';
 
+import { PlatformAdminGate } from './components/PlatformAdminGate';
 import { PrivateRoute } from './components/PrivateRoute';
 import { ProfilePage } from './pages/ProfilePage';
 import { AdminsPage } from './pages/admin/AdminsPage';
@@ -52,8 +53,10 @@ export const iamPrivateRoutes = [
     key="admin-tenants"
     path="/admin/tenants"
     element={
-      <PrivateRoute requiredRole="system_admin">
-        <TenantsListPage />
+      <PrivateRoute>
+        <PlatformAdminGate minRole="system_admin">
+          <TenantsListPage />
+        </PlatformAdminGate>
       </PrivateRoute>
     }
   />,
@@ -61,8 +64,10 @@ export const iamPrivateRoutes = [
     key="admin-admins"
     path="/admin/admins"
     element={
-      <PrivateRoute requiredRole="global_admin">
-        <AdminsPage />
+      <PrivateRoute>
+        <PlatformAdminGate minRole="global_admin">
+          <AdminsPage />
+        </PlatformAdminGate>
       </PrivateRoute>
     }
   />,
@@ -70,7 +75,7 @@ export const iamPrivateRoutes = [
     key="admin-audit"
     path="/admin/audit"
     element={
-      <PrivateRoute requiredRole="system_admin">
+      <PrivateRoute>
         <PlatformAuditPage />
       </PrivateRoute>
     }

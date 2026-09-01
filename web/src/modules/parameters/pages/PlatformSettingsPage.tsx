@@ -11,6 +11,7 @@ import type {
   PlatformValues,
 } from '../model/parameters';
 
+import { usePlatformAdminCanEdit } from '@/modules/iam';
 import { extractErrorMessage, isForbidden } from '@/shared/lib';
 import { DefaultHint } from '@/shared/ui';
 
@@ -121,6 +122,7 @@ const PlatformTabPanel = ({
 }) => {
   const [form] = Form.useForm<PlatformSettingsFormValues>();
   const [saving, setSaving] = useState(false);
+  const canEdit = usePlatformAdminCanEdit();
 
   useEffect(() => {
     const initial: PlatformSettingsFormValues = {};
@@ -173,7 +175,7 @@ const PlatformTabPanel = ({
 
   return (
     <div>
-      <Form form={form} layout="vertical" onFinish={onFinish}>
+      <Form form={form} layout="vertical" onFinish={onFinish} disabled={!canEdit}>
         <Row gutter={[24, 8]}>
           {defs.map((def) => (
             <Col key={def.key} xs={24} md={12}>
@@ -182,7 +184,7 @@ const PlatformTabPanel = ({
           ))}
         </Row>
         <Form.Item style={{ marginBottom: 0, marginTop: 16 }}>
-          <Button type="primary" htmlType="submit" loading={saving}>
+          <Button type="primary" htmlType="submit" loading={saving} disabled={!canEdit}>
             {groupKey ? '保存草稿' : `保存${categoryLabel(category)}参数`}
           </Button>
         </Form.Item>
@@ -193,6 +195,7 @@ const PlatformTabPanel = ({
           labelMap={labelMap}
           refreshTick={refreshTick}
           onEffectiveChange={onEffectiveChange}
+          disabled={!canEdit}
         />
       ) : null}
     </div>

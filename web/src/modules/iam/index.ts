@@ -1,6 +1,7 @@
 export { authApi } from './api/auth.api';
 export { tenantApi } from './api/tenant.api';
 export { PrivateRoute } from './components/PrivateRoute';
+export { PlatformAdminGate, usePlatformAdminCanEdit } from './components/PlatformAdminGate';
 export { AuthProvider, useAuth } from './components/AuthContext';
 export { useTenantRole } from './hooks/useTenantRole';
 export type { TenantRoleInfo } from './hooks/useTenantRole';
