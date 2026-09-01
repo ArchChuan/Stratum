@@ -236,15 +236,9 @@ type ObservedResourceAssignment struct {
 
 // ToolObservation 是执行链路中一次工具调用的最小可观测摘要（评审池详情展示
 // 工具序列用；agent domain.ToolObservation 的 summary 投影，见 mapEvaluationEvidence）。
-type ToolObservation struct {
-	ToolName     string         `json:"tool_name"`
-	ToolType     string         `json:"tool_type"`
-	StepIndex    int            `json:"step_index"`
-	ProviderType string         `json:"provider_type"`
-	CapabilityID string         `json:"capability_id"`
-	Arguments    map[string]any `json:"arguments,omitempty"`
-	RawText      string         `json:"raw_text,omitempty"`
-}
+// 结构体由 domain 定义（§6.5 迁移），此处为真实别名：现有 evalport.ToolObservation{...}
+// 复合字面量与 []evalport.ToolObservation 切片照常编译（domain 不 import port）。
+type ToolObservation = domain.ToolObservation
 
 type ObservedTrace struct {
 	TraceID           string
