@@ -85,7 +85,7 @@ export const KnowledgeDetailPage = () => {
         </div>
       )}
 
-      {isAdmin && (
+      {canEdit && (
         <WorkspaceConfigForm
           form={configForm}
           loading={configLoading}
@@ -94,7 +94,7 @@ export const KnowledgeDetailPage = () => {
         />
       )}
 
-      {isAdmin && (
+      {canEdit && (
         <WorkspaceUploadZone
           loading={uploadLoading}
           userCandidates={userCandidates}

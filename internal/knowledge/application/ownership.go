@@ -11,7 +11,9 @@ import (
 type OwnershipOp int
 
 const (
-	// OpEdit 编辑内容（更新配置、上传文档、编辑/发布 draft）。admin 天然放行。
+	// OpEdit 编辑内容（更新 name/description/检索参数、上传文档、编辑/发布
+	// draft）。admin 天然放行；白名单 member（可编辑人）亦获得完整编辑权。
+	// embedding/chunk 等不可变字段由 domain applyImmutableSettings 兜底。
 	OpEdit OwnershipOp = iota
 	// OpAccess 管理白名单/访问权限（SetEditors、SetDocAccess），即成员申请通道的
 	// 审批入口。admin 天然放行。
