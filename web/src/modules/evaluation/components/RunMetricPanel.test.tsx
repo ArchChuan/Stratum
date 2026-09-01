@@ -24,4 +24,10 @@ describe('RunMetricPanel', () => {
     expect(screen.getByText('版本锚点')).toBeInTheDocument();
     expect(screen.getByText('rev-1')).toBeInTheDocument();
   });
+
+  it('labels process_pass_rate as a percentage', () => {
+    render(<RunMetricPanel metrics={{ overall_pass_rate: 0.5, process_pass_rate: 0.8 }} />);
+    expect(screen.getByText('过程通过率')).toBeInTheDocument();
+    expect(screen.getByText('80.0%')).toBeInTheDocument();
+  });
 });

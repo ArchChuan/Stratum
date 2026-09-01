@@ -17,6 +17,7 @@ const REASON_LABELS: Record<string, string> = {
   dimension_split: '维度分歧',
   judge_rule_conflict: '规则与 judge 冲突',
   needs_review: '需人工复核',
+  process_output_conflict: '输出通过但过程未通过',
 };
 
 const VERDICT_LABELS: Record<string, string> = {

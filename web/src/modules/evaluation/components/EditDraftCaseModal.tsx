@@ -52,8 +52,9 @@ export const EditDraftCaseModal = ({ open, draft, onClose, onSubmit }: {
       <Form.Item name="input" label="测试输入" rules={[{ required: true, message: '请输入测试输入' }]}><Input.TextArea aria-label="测试输入" /></Form.Item>
       <Form.Item name="expected_output" label="期望输出" rules={[{ required: true, message: '请输入期望输出' }]}><Input.TextArea aria-label="期望输出" /></Form.Item>
       <AssertionModeField />
-      {mode === 'judge' && <Alert type="info" showIcon style={{ marginBottom: 16 }}
-        message="AI 判定的模型与评分标准在 case 进入草稿时确定，编辑不可修改。" />}
+      {(mode === 'judge' || draft?.tool_spec || draft?.step_judge) && <Alert type="info" showIcon
+        style={{ marginBottom: 16 }}
+        message="AI 判定、工具序列与步骤判定在 case 进入草稿时确定，编辑不可修改。" />}
       <Form.Item name="enabled" label="包含在本版本" valuePropName="checked">
         <Switch aria-label="包含在本版本" />
       </Form.Item>

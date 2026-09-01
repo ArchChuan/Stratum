@@ -14,6 +14,11 @@ const results: EvaluationRun['results'] = [
     tokens: 0, cost_usd: 0, duration_ms: 0,
     dimensions: [{ name: 'faithfulness', score: 0.4, passed: false, confidence: 0.6 }] },
   { case_id: 'c3', passed: true, process_pass: true, tokens: 0, cost_usd: 0, duration_ms: 0 },
+  { case_id: 'c4', passed: false, process_pass: false, process_failure: 'process:must_not_call:delete',
+    failure_reason: 'process:must_not_call:delete',
+    tools: [{ tool_name: 'delete', tool_type: 'mcp', step_index: 2, provider_type: 'zhipu',
+      capability_id: 'cap-1', arguments: { query: 'secret' }, raw_text: '删除一行' }],
+    tokens: 0, cost_usd: 0, duration_ms: 0 },
 ];
 
 describe('RunAttributionPanel', () => {
@@ -27,7 +32,20 @@ describe('RunAttributionPanel', () => {
     expect(screen.getByText('工具调用')).toBeInTheDocument();
     expect(screen.getByText('Trace 延迟 (ms)')).toBeInTheDocument();
     expect(screen.getByText('200')).toBeInTheDocument();
+    expect(screen.getByText('输出未通过')).toBeInTheDocument();
+    expect(screen.getByText('过程通过')).toBeInTheDocument();
     expect(screen.queryByText('c3')).not.toBeInTheDocument();
+  });
+
+  it('shows the process failure and tool sequence in the drill-down', () => {
+    render(<RunAttributionPanel results={results} />);
+    fireEvent.click(screen.getByText('c4'));
+    expect(screen.getByText('过程未通过')).toBeInTheDocument();
+    expect(screen.getByText('过程失败')).toBeInTheDocument();
+    expect(screen.getAllByText('process:must_not_call:delete').length).toBeGreaterThan(0);
+    expect(screen.getByText('工具序列')).toBeInTheDocument();
+    expect(screen.getByText('delete')).toBeInTheDocument();
+    expect(screen.getByText('zhipu')).toBeInTheDocument();
   });
 
   it('hides the trace evidence block when a case has none', () => {

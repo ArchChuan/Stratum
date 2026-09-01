@@ -12,6 +12,17 @@ import { extractErrorMessage } from '@/shared/lib';
 
 const modeTag = (mode: string) => <Tag color="blue">{displayLabel(mode)}</Tag>;
 
+// toolSpecSummary 渲染工具序列确定性断言（§6.5）的紧凑摘要：必调用/禁调用/
+// 顺序/上限；全空时返回 '—'。
+const toolSpecSummary = (spec: NonNullable<EvaluationCase['tool_spec']>) => {
+  const parts: string[] = [];
+  if (spec.must_call?.length) parts.push(`必调用:${spec.must_call.join('/')}`);
+  if (spec.must_not_call?.length) parts.push(`禁调用:${spec.must_not_call.join('/')}`);
+  if (spec.order?.length) parts.push(`顺序:${spec.order.join('>')}`);
+  if (spec.max_calls) parts.push(`上限:${spec.max_calls}`);
+  return parts.join('；') || '—';
+};
+
 export const SuiteDrawer = ({ suite, open, onClose, canManage, onChanged, isMobile }: {
   suite: SuiteSummary | null; open: boolean; onClose: () => void; canManage: boolean;
   onChanged: () => void; isMobile?: boolean;
@@ -85,6 +96,14 @@ export const SuiteDrawer = ({ suite, open, onClose, canManage, onChanged, isMobi
       <Typography.Text type="secondary">AI 判定配置</Typography.Text><br />
       <Typography.Text>模型：{testCase.judge_spec.model || '—'}</Typography.Text><br />
       <Typography.Text>评分标准：{testCase.judge_spec.rubric || '—'}</Typography.Text>
+    </div>}
+    {(testCase.tool_spec || testCase.step_judge?.criteria) && <div style={{ marginTop: 8 }}>
+      <Typography.Text type="secondary">过程判定配置</Typography.Text><br />
+      {testCase.tool_spec && <Typography.Text>工具断言：{toolSpecSummary(testCase.tool_spec)}</Typography.Text>}
+      {testCase.step_judge?.criteria && <>
+        {testCase.tool_spec && <br />}
+        <Typography.Text>步骤判定：{testCase.step_judge.criteria}</Typography.Text>
+      </>}
     </div>}
     {provenanceOf(testCase) && <div style={{ marginTop: 8 }}>
       <Typography.Text type="secondary">生成来源</Typography.Text><br />{provenanceOf(testCase)}

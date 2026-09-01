@@ -7,6 +7,7 @@ import type { ColumnsType } from 'antd/es/table';
 const metricLabels: Record<string, string> = {
   pass_rate: '通过率',
   overall_pass_rate: '总体通过率',
+  process_pass_rate: '过程通过率',
   total_cases: '用例数',
   total_tokens: '总 tokens',
   total_cost_usd: '总成本 (USD)',
@@ -21,7 +22,7 @@ const metricLabels: Record<string, string> = {
 };
 
 function formatMetric(key: string, value: number): string {
-  if (key === 'pass_rate' || key === 'overall_pass_rate') {
+  if (key === 'pass_rate' || key === 'overall_pass_rate' || key === 'process_pass_rate') {
     return `${(value * 100).toFixed(1)}%`;
   }
   if (Number.isInteger(value)) {
