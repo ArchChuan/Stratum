@@ -86,9 +86,10 @@ func (s *ReviewService) TryEscalateObservation(
 // result.Error==""（judge 实际产出）由调用方 runCase 保证。按 AssertionMode 分支：
 // judge case 走完整 TriggersForCaseResult（含 needs_review / low_confidence）；
 // 规则 case 仅走 TriggersForProcessConflict——规则 case 无 judge 信号，low_confidence
-// 不得误触发，needs_review 也仅对 judge 生效（spec §6.6）。
+// 不得误触发，needs_review 也仅对 judge 生效（spec §6.6）。resource_kind/resource_id
+// 归因取自 ref（与观测路径 obs.Resource 对齐），保证资源维度评审池过滤可用。
 func (s *ReviewService) TryEscalateCaseResult(
-	ctx context.Context, tenantID, runID string,
+	ctx context.Context, tenantID, runID string, ref domain.ResourceRef,
 	result domain.EvalCaseResult, c domain.EvalCase, assertion domain.AssertionResult,
 	outputPass, processPass bool,
 ) error {
@@ -109,6 +110,8 @@ func (s *ReviewService) TryEscalateCaseResult(
 			SourceID:      result.ID,
 			RunID:         runID,
 			TraceID:       result.TraceID,
+			ResourceKind:  ref.Kind,
+			ResourceID:    ref.ResourceID,
 			TriggerReason: reason,
 			Snapshot:      snapshot,
 			Status:        domain.ReviewStatusPending,

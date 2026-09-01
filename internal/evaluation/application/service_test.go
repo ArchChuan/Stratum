@@ -484,7 +484,7 @@ func (failingCaseEscalator) TryEscalateObservation(context.Context, string, *dom
 }
 
 func (failingCaseEscalator) TryEscalateCaseResult(
-	context.Context, string, string, domain.EvalCaseResult, domain.EvalCase, domain.AssertionResult, bool, bool,
+	context.Context, string, string, domain.ResourceRef, domain.EvalCaseResult, domain.EvalCase, domain.AssertionResult, bool, bool,
 ) error {
 	return errors.New("escalate down")
 }
@@ -496,6 +496,7 @@ func TestServiceEscalateCaseResultFailureCountsMetric(t *testing.T) {
 	svc.SetObservability(nil, metrics)
 
 	svc.escalateCaseResult(context.Background(), "t1", "run-1",
+		domain.ResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1"},
 		domain.EvalCaseResult{ID: "cr-1", CaseID: "c1", TraceID: "t-1", Passed: true},
 		domain.EvalCase{ID: "c1", NeedsReview: true},
 		domain.AssertionResult{Passed: true, Confidence: 0.9}, true, true)
@@ -512,6 +513,7 @@ func TestServiceEscalateCaseResultNilReviewDoesNotPanic(t *testing.T) {
 
 	// review 未注入（nil）：升级静默跳过，不得 panic，不得计指标（防回归）。
 	svc.escalateCaseResult(context.Background(), "t1", "run-1",
+		domain.ResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1"},
 		domain.EvalCaseResult{ID: "cr-1", CaseID: "c1", TraceID: "t-1", Passed: true},
 		domain.EvalCase{ID: "c1", NeedsReview: true},
 		domain.AssertionResult{Passed: true, Confidence: 0.9}, true, true)
@@ -534,7 +536,7 @@ func (r *recordingCaseEscalator) TryEscalateObservation(context.Context, string,
 }
 
 func (r *recordingCaseEscalator) TryEscalateCaseResult(
-	_ context.Context, _, _ string, _ domain.EvalCaseResult, _ domain.EvalCase, _ domain.AssertionResult,
+	_ context.Context, _, _ string, _ domain.ResourceRef, _ domain.EvalCaseResult, _ domain.EvalCase, _ domain.AssertionResult,
 	outputPass, processPass bool,
 ) error {
 	r.calls++

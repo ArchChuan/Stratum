@@ -254,7 +254,8 @@ func TestTryEscalateCaseResultFiresOnNeedsReview(t *testing.T) {
 	c := domain.EvalCase{ID: "c1", NeedsReview: true, AssertionMode: domain.AssertionJudge}
 	assertion := domain.AssertionResult{Passed: true, Confidence: 0.9}
 	if err := svc.TryEscalateCaseResult(
-		context.Background(), "t1", "run-1", result, c, assertion, true, true,
+		context.Background(), "t1", "run-1",
+		domain.ResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1"}, result, c, assertion, true, true,
 	); err != nil {
 		t.Fatalf("escalate: %v", err)
 	}
@@ -280,7 +281,8 @@ func TestTryEscalateCaseResultRuleCaseOnlyConflict(t *testing.T) {
 	c := domain.EvalCase{ID: "c1", AssertionMode: domain.AssertionContains, NeedsReview: true}
 	assertion := domain.AssertionResult{Passed: true, Confidence: 0.3}
 	if err := svc.TryEscalateCaseResult(
-		context.Background(), "t1", "run-1", result, c, assertion, true, false,
+		context.Background(), "t1", "run-1",
+		domain.ResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1"}, result, c, assertion, true, false,
 	); err != nil {
 		t.Fatalf("escalate: %v", err)
 	}
@@ -301,7 +303,8 @@ func TestTryEscalateCaseResultRuleCaseNoConflictNoInsert(t *testing.T) {
 	c := domain.EvalCase{ID: "c1", AssertionMode: domain.AssertionContains}
 	assertion := domain.AssertionResult{Passed: true, Confidence: 0.9}
 	if err := svc.TryEscalateCaseResult(
-		context.Background(), "t1", "run-1", result, c, assertion, true, true,
+		context.Background(), "t1", "run-1",
+		domain.ResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1"}, result, c, assertion, true, true,
 	); err != nil {
 		t.Fatalf("escalate: %v", err)
 	}
@@ -699,7 +702,8 @@ func TestEscalateCaseResultRefreshesBacklog(t *testing.T) {
 	c := domain.EvalCase{ID: "c1", NeedsReview: true, AssertionMode: domain.AssertionJudge}
 	assertion := domain.AssertionResult{Passed: true, Confidence: 0.9}
 	if err := svc.TryEscalateCaseResult(
-		context.Background(), "t1", "run-1", result, c, assertion, true, true,
+		context.Background(), "t1", "run-1",
+		domain.ResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1"}, result, c, assertion, true, true,
 	); err != nil {
 		t.Fatalf("escalate: %v", err)
 	}

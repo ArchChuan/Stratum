@@ -84,16 +84,17 @@ func (s *Service) SetPlatformVersion(fn func(ctx context.Context) (int64, bool, 
 }
 
 // escalateCaseResult 通过评审池升级器判定评测集结果是否入池并幂等落条目
-// （fail-open：失败仅日志，不阻断评测流程）。outputPass/processPass 是输出断言与
-// 过程断言（§6.5）的通过结果，供 process_output_conflict 触发。
+// （fail-open：失败仅日志，不阻断评测流程）。ref 供条目 resource_kind/resource_id
+// 归因；outputPass/processPass 是输出断言与过程断言（§6.5）的通过结果，
+// 供 process_output_conflict 触发。
 func (s *Service) escalateCaseResult(
-	ctx context.Context, tenantID, runID string, result domain.EvalCaseResult, c domain.EvalCase,
-	assertion domain.AssertionResult, outputPass, processPass bool,
+	ctx context.Context, tenantID, runID string, ref domain.ResourceRef, result domain.EvalCaseResult,
+	c domain.EvalCase, assertion domain.AssertionResult, outputPass, processPass bool,
 ) {
 	if s.review == nil {
 		return
 	}
-	err := s.review.TryEscalateCaseResult(ctx, tenantID, runID, result, c, assertion, outputPass, processPass)
+	err := s.review.TryEscalateCaseResult(ctx, tenantID, runID, ref, result, c, assertion, outputPass, processPass)
 	if err != nil {
 		s.logReviewEscalateError(ctx, err)
 		if s.metrics != nil {
@@ -236,29 +237,31 @@ func (s *Service) runCase(
 	// 失败；FailureReason 保持输出归因，过程归因单独在 ProcessFailure。两个分支
 	// 都在判定后按新签名触发评审池升级（§6.5 process_output_conflict）。
 	if testCase.AssertionMode == domain.AssertionJudge {
-		return s.judgeCaseResult(ctx, tenantID, runID, testCase, result)
+		return s.judgeCaseResult(ctx, tenantID, runID, ref, testCase, result)
 	}
-	return s.ruleCaseResult(ctx, tenantID, runID, testCase, execution.Output, result)
+	return s.ruleCaseResult(ctx, tenantID, runID, ref, testCase, execution.Output, result)
 }
 
 // judgeCaseResult 走 LLM judge 输出断言并把过程断言并入最终 Passed；随后内联
-// 触发评审池升级（P1c §6.6，仅 judge 实际产出判定时）。
+// 触发评审池升级（P1c §6.6，仅 judge 实际产出判定时）。ref 供条目资源归因。
 func (s *Service) judgeCaseResult(
-	ctx context.Context, tenantID, runID string, testCase domain.EvalCase, result domain.EvalCaseResult,
+	ctx context.Context, tenantID, runID string, ref domain.ResourceRef, testCase domain.EvalCase,
+	result domain.EvalCaseResult,
 ) domain.EvalCaseResult {
 	assertion, result := s.judgeCase(ctx, testCase, result)
 	result.Passed = assertion.Passed && result.ProcessPass
 	if result.Error == "" {
-		s.escalateCaseResult(ctx, tenantID, runID, result, testCase, assertion, assertion.Passed, result.ProcessPass)
+		s.escalateCaseResult(ctx, tenantID, runID, ref, result, testCase, assertion, assertion.Passed, result.ProcessPass)
 	}
 	return result
 }
 
 // ruleCaseResult 走 domain 纯函数规则断言并把过程断言并入最终 Passed；随后内联
 // 触发评审池升级（§6.5）：规则 case 无 judge 信号，仅 process_output_conflict
-// 可能入池，low_confidence 不生效。
+// 可能入池，low_confidence 不生效。ref 供条目资源归因。
 func (s *Service) ruleCaseResult(
-	ctx context.Context, tenantID, runID string, testCase domain.EvalCase, actual any, result domain.EvalCaseResult,
+	ctx context.Context, tenantID, runID string, ref domain.ResourceRef, testCase domain.EvalCase, actual any,
+	result domain.EvalCaseResult,
 ) domain.EvalCaseResult {
 	assertion, err := domain.EvaluateAssertion(testCase.AssertionMode, actual, testCase.ExpectedOutput)
 	if err != nil {
@@ -271,7 +274,7 @@ func (s *Service) ruleCaseResult(
 	if !assertion.Passed {
 		result.FailureReason = "assert:" + string(testCase.AssertionMode)
 	}
-	s.escalateCaseResult(ctx, tenantID, runID, result, testCase, assertion, assertion.Passed, result.ProcessPass)
+	s.escalateCaseResult(ctx, tenantID, runID, ref, result, testCase, assertion, assertion.Passed, result.ProcessPass)
 	return result
 }
 
