@@ -57,6 +57,9 @@ type JudgeRequest struct {
 	Input          string
 	ExpectedOutput string
 	Actual         string
+	// ToolSequence 是执行链路工具调用序列文本（§6.5 step_judge 输入）；
+	// 空 = 无需步骤级评分。
+	ToolSequence string
 }
 
 type ResourceAdapter interface {

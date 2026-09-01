@@ -112,3 +112,32 @@ func TestJudgeAdapterJudgeBuildsRequestWithAllMaterial(t *testing.T) {
 	}
 	require.Equal(t, domain.AssertionResult{Passed: true, Message: "ok"}, domain.AssertionResult{Passed: true, Message: "ok"})
 }
+
+func TestJudgeAdapterJudgeAppendsToolSequenceWhenPresent(t *testing.T) {
+	completer := &fakeJudgeCompleter{
+		response: &llmgatewaydomain.CompletionResponse{Content: `{"passed": true, "reason": "ok"}`},
+	}
+	adapter := judgeAdapter{completer: completer}
+	_, err := adapter.Judge(context.Background(), evalport.JudgeRequest{
+		Input: "question", ExpectedOutput: "answer", Actual: "reply",
+		ToolSequence: "tool_a\ncall 1\ntool_b\ncall 2",
+	})
+	require.NoError(t, err)
+	require.Contains(t, completer.got.Messages[1].Content, "\n\nTool sequence:\ntool_a\ncall 1\ntool_b\ncall 2")
+}
+
+func TestJudgeAdapterJudgeOmitsToolSequenceWhenEmpty(t *testing.T) {
+	completer := &fakeJudgeCompleter{
+		response: &llmgatewaydomain.CompletionResponse{Content: `{"passed": true, "reason": "ok"}`},
+	}
+	adapter := judgeAdapter{completer: completer}
+	_, err := adapter.Judge(context.Background(), evalport.JudgeRequest{
+		Input: "question", ExpectedOutput: "answer", Actual: "reply",
+	})
+	require.NoError(t, err)
+	want := "Rubric:\n" + judgeDefaultRubric +
+		"\n\nInput:\nquestion" +
+		"\n\nExpected output:\nanswer" +
+		"\n\nActual output:\nreply"
+	require.Equal(t, want, completer.got.Messages[1].Content)
+}

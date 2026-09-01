@@ -701,16 +701,20 @@ func (j judgeAdapter) Judge(ctx context.Context, req evalport.JudgeRequest) (eva
 	if j.completer == nil {
 		return evaldomain.AssertionResult{}, errors.New("LLM judge: no LLM completer configured")
 	}
+	userContent := fmt.Sprintf(
+		"Rubric:\n%s\n\nInput:\n%s\n\nExpected output:\n%s\n\nActual output:\n%s",
+		j.judgeRubric(ctx, req.Rubric), req.Input, req.ExpectedOutput, req.Actual,
+	)
+	if req.ToolSequence != "" {
+		userContent += "\n\nTool sequence:\n" + req.ToolSequence
+	}
 	response, err := j.completer.Complete(ctx, &llmgatewaydomain.CompletionRequest{
 		Model:       j.judgeModel(ctx, req.Model),
 		Temperature: temperaturePtrOrNil(j.judgeTemperature(ctx)),
 		MaxTokens:   constants.JudgeMaxTokens,
 		Messages: []llmgatewaydomain.Message{
 			{Role: "system", Content: "你是评测法官。只输出 JSON，不输出其他内容。"},
-			{Role: "user", Content: fmt.Sprintf(
-				"Rubric:\n%s\n\nInput:\n%s\n\nExpected output:\n%s\n\nActual output:\n%s",
-				j.judgeRubric(ctx, req.Rubric), req.Input, req.ExpectedOutput, req.Actual,
-			)},
+			{Role: "user", Content: userContent},
 		},
 	})
 	if err != nil {
