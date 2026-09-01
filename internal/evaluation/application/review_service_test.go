@@ -212,7 +212,9 @@ func observationForTest() *domain.EvalObservation {
 		Resource: domain.ObservationResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "s1"},
 		Verdict:  domain.VerdictPass,
 		Signals: domain.ObservationSignals{Judge: []domain.JudgeSignal{
-			{Dimension: "faithfulness", Score: 1.0, Confidence: 0.9},
+			// 新置信度语义（§6.6）：空/过短理由 = 含糊 = 触发 low_confidence。默认夹具
+			// 须带实质 Reason，供"无触发"类测试保持不触发；低置信用例再显式改 Confidence。
+			{Dimension: "faithfulness", Score: 1.0, Confidence: 0.9, Reason: "理由充分，结果符合预期"},
 		}},
 	}
 }
@@ -253,7 +255,7 @@ func TestTryEscalateCaseResultFiresOnNeedsReview(t *testing.T) {
 	svc := newTestReviewService(repo)
 	result := domain.EvalCaseResult{ID: "cr-1", CaseID: "c1", TraceID: "t-1", Passed: true, ProcessPass: true}
 	c := domain.EvalCase{ID: "c1", NeedsReview: true, AssertionMode: domain.AssertionJudge}
-	assertion := domain.AssertionResult{Passed: true, Confidence: 0.9}
+	assertion := domain.AssertionResult{Passed: true, Confidence: 0.9, Message: "输出完全符合预期"}
 	if err := svc.TryEscalateCaseResult(
 		context.Background(), "t1", "run-1",
 		domain.ResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1"}, result, c, assertion, true, true,
@@ -326,7 +328,7 @@ func TestTryEscalateCaseResultJudgeConflict(t *testing.T) {
 		ProcessPass: false, ProcessFailure: "process:must_not_call:delete",
 	}
 	c := domain.EvalCase{ID: "c1", AssertionMode: domain.AssertionJudge}
-	assertion := domain.AssertionResult{Passed: true, Confidence: 0.9}
+	assertion := domain.AssertionResult{Passed: true, Confidence: 0.9, Message: "输出完全符合预期"}
 	if err := svc.TryEscalateCaseResult(
 		context.Background(), "t1", "run-1",
 		domain.ResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1"}, result, c, assertion, true, false,
@@ -373,7 +375,7 @@ func TestTryEscalateCaseResultSnapshotSanitized(t *testing.T) {
 		}},
 	}
 	c := domain.EvalCase{ID: "c1", Name: "搜索", AssertionMode: domain.AssertionJudge}
-	assertion := domain.AssertionResult{Passed: true, Confidence: 0.9}
+	assertion := domain.AssertionResult{Passed: true, Confidence: 0.9, Message: "输出完全符合预期"}
 	if err := svc.TryEscalateCaseResult(
 		context.Background(), "t1", "run-1",
 		domain.ResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1"}, result, c, assertion, true, false,
@@ -813,7 +815,7 @@ func TestEscalateCaseResultRefreshesBacklog(t *testing.T) {
 	svc := newTestReviewServiceWithMetrics(repo, metrics)
 	result := domain.EvalCaseResult{ID: "cr-1", CaseID: "c1", TraceID: "t-1", Passed: true, ProcessPass: true}
 	c := domain.EvalCase{ID: "c1", NeedsReview: true, AssertionMode: domain.AssertionJudge}
-	assertion := domain.AssertionResult{Passed: true, Confidence: 0.9}
+	assertion := domain.AssertionResult{Passed: true, Confidence: 0.9, Message: "输出完全符合预期"}
 	if err := svc.TryEscalateCaseResult(
 		context.Background(), "t1", "run-1",
 		domain.ResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1"}, result, c, assertion, true, true,
