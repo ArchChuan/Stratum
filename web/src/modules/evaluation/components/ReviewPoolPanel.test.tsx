@@ -28,6 +28,7 @@ const pendingItem = {
   resource_kind: 'skill',
   resource_id: 'skill-1',
   trigger_reason: 'low_confidence',
+  risk_level: 'medium',
   snapshot: { score: 0.42, dimension: 'accuracy' },
   status: 'pending',
   created_at: '2026-08-01T00:00:00Z',
@@ -52,6 +53,13 @@ describe('ReviewPoolPanel', () => {
     await waitFor(() => expect(mocks.listReviewItems).toHaveBeenCalledWith({ page: 1, page_size: 10 }));
   });
 
+  it('renders risk priority label from backend', async () => {
+    mocks.listReviewItems.mockResolvedValue({ items: [pendingItem], total: 1 });
+    render(<ReviewPoolPanel />);
+
+    expect(await screen.findByText('中')).toBeInTheDocument();
+  });
+
   it('shows a placeholder for empty case_result resource columns', async () => {
     mocks.listReviewItems.mockResolvedValue({
       items: [{
@@ -59,6 +67,7 @@ describe('ReviewPoolPanel', () => {
         source_type: 'case_result',
         source_id: 'case-1',
         trigger_reason: 'needs_review',
+        risk_level: 'medium',
         resource_kind: '',
         resource_id: '',
         snapshot: { input: 'hello' },
